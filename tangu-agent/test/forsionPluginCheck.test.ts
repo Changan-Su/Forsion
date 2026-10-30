@@ -11,7 +11,7 @@
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -219,5 +219,99 @@ describe('forsion-plugin 技能的 check-plugin.mjs', () => {
     expect(check(join(base, 'nope')).code).toBe(2);
     const empty = join(base, 'empty'); mkdirSync(empty);
     expect(check(empty).code).toBe(1);
+  });
+
+  it('--style:私有类名、写死的色 / 圆角 / 阴影、宿主没有的 token、多余兜底都报出来,但不改退出码', () => {
+    const css = [
+      '.x .ok { background: rgba(34,197,94,.14); color: #16a34a; }',
+      '.x .row:hover { background: var(--overlay-6, rgba(0,0,0,.06)); }',
+      '.x .card { border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); }',
+      '.x .t { font-size: var(--ui-font-title, 16px); transition: color var(--dur-fast); }',
+      '* { color: #fff; }',
+    ].join('\n');
+    const dir = plugin(`${VIEW}\nconst s = document.createElement('style'); s.textContent = \`${css}\`;\nconst m = 'ctx-menu amx-db-pop';`);
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 1, minAppVersion: '2.12.0', main: 'main.js' }));
+    symlinkSync(join(dir, 'gone'), join(dir, 'dangling.css'));
+    const r = check(dir, '--style');
+    expect(r.out).toContain('main.js:2  background: hard-coded color rgba(34,197,94,.14)');
+    expect(r.out).toContain('color: hard-coded color #16a34a');
+    expect(r.out).toContain('--overlay-6 is not a public host token (meant --overlay-subtle / --overlay-light');
+    expect(r.out).toContain('border-radius written by hand');
+    expect(r.out).toContain('box-shadow with a hard-coded color');
+    expect(r.out).toContain('var(--ui-font-title, …): every app this plugin supports defines --ui-font-title');
+    expect(r.out).toContain('--dur-fast is deprecated: use --duration-fast');
+    expect(r.out).toContain('.amx-db-pop is a private host class');
+    expect(r.out).not.toContain('.ctx-menu is a private');
+    expect(r.out).toContain('9 style note(s)');
+    expect(r.code).toBe(0);
+  });
+
+  it('--style:只用公开 token、自己的类名与变量、老宿主才需要的兜底、另一份文档的 CSS → 无可报', () => {
+    const css = [
+      '.x { --x-wash: color-mix(in srgb, var(--green) 14%, transparent); }',
+      '.x .ok { background: var(--x-wash); color: var(--green); border-radius: var(--radius-md); box-shadow: 0 0 0 1px var(--border); }',
+      '.x .t { font-size: var(--ui-font-title, 16px); line-height: var(--reading-line-height, 1.6); }',
+      '.fc-btn { border-radius: 2px; background: black; }',
+    ].join('\n');
+    const page = 'html,body{background:#0b0b0b;color:#e8e6e1} /* forsion-style: off */';
+    const dir = plugin(`${VIEW}\nconst s = document.createElement('style'); s.textContent = \`${css}\`;\nconst k = 'fc-btn';\n// .amx-x in a comment\nconst page = '${page}';`);
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 1, minAppVersion: '2.9.0', main: 'main.js' }));
+    const r = check(dir, '--style');
+    expect(r.out).toContain('Style: host classes and tokens checked');
+    expect(r.out).toContain('✓ nothing to report');
+    expect(r.code).toBe(0);
+    expect(check(dir).out).not.toContain('Style:');
+  });
+
+  // 10-29 插件开发体验 1B:插件自己画了宿主已有零件的东西(本机 31 个已装插件里 ForsionCFD 自造标签栏、Jupyter 34 个手写按钮 +
+  // 16 处自画菜单)。同一份 tools/ui-reinvent.mjs 也进 plugin_sandbox 的状态。只报不拦,退出码不变。
+  it('--style UI parts:自画下拉 / 菜单 / 对话框 / 标签栏 / fixed 浮层 / iframe / 往 head 塞 style / 手写按钮 → 每类一行点名零件,不改退出码', () => {
+    // 都写在视图的 mount 里:体检只求值文件体,不挂视图,替身 DOM 不会因为这些调用报错
+    const dir = plugin([
+      "ctx.registerView({ id: 'desk', title: 'Desk', mount(el) {",
+      "const sel = document.createElement('select')",
+      "const m = document.createElement('div'); m.className = 'rl-menu'",
+      "if (window.confirm('Delete?')) m.remove()",
+      "const h = (tag) => document.createElement(tag); const tab = h('button', { 'data-tab': 'a' })",
+      "m.style.position = 'fixed'",
+      "const f = document.createElement('iframe')",
+      "const st = document.createElement('style'); document.head.appendChild(st)",
+      "const b = document.createElement('button'); b.textContent = 'Go'",
+      "const page = '<select>' // forsion-style: off",
+      '} })',
+    ].join('\n'));
+    const r = check(dir, '--style');
+    for (const [what, part] of [
+      ['hand-made dropdown ×1 (main.js:2)', "ctx.ui.mountControl(el, { type: 'select'"],
+      ['hand-made menu ×1 (main.js:3)', 'ctx.ui.contextMenu('],
+      ['hand-made dialog ×1 (main.js:4)', 'ctx.ui.confirm('],
+      ['hand-made tab bar ×1 (main.js:5)', "type: 'segmented'"],
+      ['position: fixed overlay ×1 (main.js:6)', 'ctx.ui.popover('],
+      ['view drawn in an iframe ×1 (main.js:7)', 'draw the view with host parts'],
+      ['<style> added to document.head ×1 (main.js:8)', 'ctx.addStyle(css)'],
+      ['hand-styled button (no host .btn class anywhere) ×2 (main.js:5, main.js:9)', '.btn.primary'],
+    ]) expect(r.out.split('\n').find((l) => l.includes(`- ${what} → `)), what).toContain(part);
+    expect(r.out).toContain('8 UI note(s)');
+    expect(r.code).toBe(0);
+  });
+
+  it('--style UI parts:用了零件和公开 .btn、压缩过的库代码、宿主菜单外壳 → 无可报;官方样例全部 0 条(防模板退回手搓)', () => {
+    const lib = `var x=1;${'a.createElement("select");'.repeat(100)}`;
+    const dir = plugin([
+      VIEW,
+      "const b = document.createElement('button'); b.className = 'btn primary sm'",
+      "ctx.ui.contextMenu({ anchor: b }, [{ label: 'Rename', run() {} }])",
+      "const shell = document.createElement('div'); shell.className = 'ctx-menu'",
+      "const del = async () => { if (await ctx.ui.confirm({ title: 'Delete?' })) shell.remove() }",
+      lib,
+    ].join('\n'));
+    const r = check(dir, '--style');
+    expect(r.out).toContain('UI parts: what this plugin draws itself');
+    expect(r.out).not.toContain('UI note(s)');
+    const samples = fileURLToPath(new URL('../skills/forsion-plugin/samples/', import.meta.url));
+    for (const s of ['forsion-sample-bundle', 'forsion-sample-appearance']) {
+      const out = check(join(samples, s), '--style').out;
+      expect(out, s).not.toMatch(/(style|UI) note\(s\)/);
+    }
   });
 });

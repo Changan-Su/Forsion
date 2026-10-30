@@ -4,7 +4,7 @@
  * (注入已有会话 / 新会话执行)。嵌在「后台智能体」视图(AgentsDetailView)与 Muse Space 右栏使用,外层容器负责 padding/滚动。
  */
 import React, { useEffect, useState } from 'react'
-import { Sparkles, RefreshCw, Play, Check, X, XCircle, Crosshair, Trash2, ShieldCheck, ShieldQuestion, MessageSquarePlus, Repeat, FolderOpen } from 'lucide-react'
+import { Sparkles, RefreshCw, Play, Check, X, XCircle, Crosshair, Trash2, ShieldCheck, ShieldQuestion, MessageSquarePlus, Repeat, FolderOpen, Settings } from 'lucide-react'
 import { setActiveSpace, useWorkspace } from '@lcl/engine'
 import { syncAgentSpace } from '../builtins/agentSpaceSync'
 import {
@@ -204,7 +204,7 @@ export const MuseView: React.FC<{
         {pendingN > 0 && <span className="conn-pill" style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 400, color: 'var(--accent-ink)' }}>{t('special.muse.pending', { n: pendingN })}</span>}
         {/* 没开:一行「未开启 · 去设置」,不再是一颗两行的长胶囊(10-25 第四轮 4.1);status 还没回来时不说话。 */}
         {status && !status.enabled ? <span className="muse-off-line" data-state="disabled">
-          {t('special.muse.off')} · <button type="button" className="muse-off-link" data-action="muse-settings" onClick={() => useApp.getState().openSettings('agents/ag-special')}>{t('special.muse.goSettings')}</button>
+          {t('special.muse.off')} · <button type="button" className="muse-off-link" data-action="muse-settings" onClick={() => useApp.getState().openSettings('agents/ag-special/muse')}>{t('special.muse.goSettings')}</button>
         </span> : status && <span
           className="conn-pill"
           data-state={running ? 'running' : sleepUntil ? 'sleeping' : 'idle'}
@@ -216,6 +216,8 @@ export const MuseView: React.FC<{
         </span>}
         <button className="icon-btn" title={t('muse.openLibrary')} onClick={() => useWorkspace.getState().openView('muse-files', {}, 'main', { newTab: true })}><FolderOpen size={13} /></button>
         <button className="icon-btn" onClick={() => void load()}><RefreshCw size={13} /></button>
+        {/* Muse 开着时 Space 里唯一去设置的路;关着时上面那行「去设置」已经有了 */}
+        {status?.enabled && <button className="icon-btn" data-action="muse-settings" title={t('muse.settings')} aria-label={t('muse.settings')} onClick={() => useApp.getState().openSettings('agents/ag-special/muse')}><Settings size={13} /></button>}
       </div>
 
       {/* 待批准:ask/agent 档下 Muse 的越界写入 / 命令。批准 = 引擎按当时的原参数直接执行(写类先留检查点),不再经模型。 */}

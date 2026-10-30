@@ -17,6 +17,7 @@ import { ConfirmDialog } from '../components/Dialogs'
 import { flushUnifiedPath } from './lifecycle'
 import { restorePageVersion } from './pageHistory'
 import { shortWriteError } from './writeSafety'
+import { DialogOverlay } from '../components/DialogOverlay'
 import './pageHistory.css'
 
 /** 同聊天侧 toolDiff 的口径:再大就不算 diff(主线程同步算,卡界面)。 */
@@ -103,7 +104,7 @@ export default function PageHistoryPanel({ path, locked, onClose }: { path: stri
 
   return createPortal(
     <div className="am-app tangu-lovable" style={{ display: 'contents' }}>
-      <div className="dialog-overlay" onMouseDown={onClose}>
+      <DialogOverlay onMouseDown={onClose}>
         <div className="dialog amx-hist" role="dialog" aria-modal="true" aria-labelledby={titleId} data-testid="page-history" onMouseDown={(e) => e.stopPropagation()}>
           <div className="amx-hist-head">
             <div className="dialog-title" id={titleId}>{t('pghist.menu')}<span className="amx-hist-note">{noteName(path)}</span></div>
@@ -181,7 +182,7 @@ export default function PageHistoryPanel({ path, locked, onClose }: { path: stri
             </button>
           </div>
         </div>
-      </div>
+      </DialogOverlay>
       {confirming && entry && (
         <ConfirmDialog
           title={t('pghist.confirm.title', { time: formatDateTime(entry.at) })}

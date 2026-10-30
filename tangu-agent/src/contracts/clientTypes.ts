@@ -121,6 +121,19 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
 }
 
 /** GET /agent/special/approvals 的一行(引擎 pendingApprovals.PendingApprovalRow 镜像)。 */
+/** Muse 发进私聊、要用户点的卡(services/museCards.ts)。payload 按 kind 各一种形状,只有引擎写得进去。 */
+export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel' | 'settings' | 'intro' | 'summary'
+export interface MuseCardInfo {
+  id: string
+  kind: MuseCardKind
+  key: string | null
+  payload: Record<string, any>
+  status: 'pending' | 'done' | 'dismissed'
+  result: string | null
+  created_at: number
+  decided_at: number | null
+}
+
 export interface PendingApprovalInfo {
   id: string
   session_id: string
@@ -419,7 +432,7 @@ export interface MessageRecord {
   timestamp: number
   model_id: string | null
   is_error: boolean
-  /** Muse 主动发进私聊的消息:proactive / proactive:todo / proactive:approval;其余为空。 */
+  /** Muse 主动发进私聊的消息:proactive / proactive:todo / proactive:approval / proactive:card;其余为空。 */
   origin?: string | null
 }
 
@@ -452,6 +465,24 @@ export interface ModelInfo {
   fastTier?: string
 }
 
+/** GET /agent/models/quota 的 quota:直连来源的额度 / 余额(口径见 llm/providerQuota.ts)。 */
+export interface QuotaWindow {
+  /** 窗口长度(秒):18000 = 5 小时,604800 = 每周。客户端据此起名。 */
+  seconds: number;
+  usedPercent: number;
+  /** 重置时刻(毫秒时间戳)。 */
+  resetAt?: number;
+}
+
+export interface ProviderQuota {
+  providerId: string;
+  /** 订阅套餐名(Codex 的 plan_type),原样透传。 */
+  plan?: string;
+  windows?: QuotaWindow[];
+  balance?: { currency: string; amount: number };
+  fetchedAt: number;
+}
+
 export interface ModelsResponse {
   models: ModelInfo[]
   directProviders: Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; asrModelIds?: string[]; noVisionModelIds?: string[] }>
@@ -470,6 +501,8 @@ export interface ModelsResponse {
   translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>
   /** Forsion 云端的朗读模型(设置页「语音朗读」模型框的候选;老引擎不给 = 没有) */
   ttsModels?: Array<{ id: string; name: string; apiModelId?: string | null }>
+  /** Forsion 云端的补全(FIM)模型(设置页「补全」模型槽与插件 ctx.tangu.fim 的候选;只做补全的不在 models 里)。没有 = 云端没配 / 没登录 / 老引擎。 */
+  fimModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>
   /** 引擎的缺省上下文上限(272k):自动识别出的窗口超过它就封顶,本机覆盖才开更大。 */
   contextWindowCap?: number
   /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
@@ -491,6 +524,25 @@ export interface ProjectSettings {
   /** 项目图标:emoji,或 `icon.<ext>` = 导入的图片(存在项目的 `.tangu/` 里,经引擎读出)。 */
   icon?: string
 }
+
+/** 项目文件夹搬走后重新指向(引擎 services/projectRelink.ts)。同名文件夹候选:remoteMatch = 记下过的旧项目 git 远端对上了(界面只预选这种);
+ *  project = 这个文件夹已经是本人的哪个项目(重新指向过去要合并)。 */
+export interface RelinkCandidate { path: string; remote: string | null; remoteMatch: boolean; project: string | null }
+/** 重新指向对话框要的:会一起改的三样(几个会话、几条项目记忆、哪些默认项)和同名文件夹。 */
+export interface RelinkInfo {
+  from: string
+  sessions: number
+  memoryEntries: number
+  settings: Array<keyof ProjectSettings>
+  remote: string | null
+  candidates: RelinkCandidate[]
+}
+/** ok = 改好了(path = 会话现在的分组键;并进已有项目时 name = 那个项目名);already_project = 新位置已是项目 name,带 merge 再来才合并。 */
+export type RelinkResult =
+  | { ok: true; path: string; name: string | null; sessionIds: string[]; memory: 'none' | 'moved' | 'merged'
+      /** 改过的会话配置里那两项的新值(桌面拿它盖本地缓存:缓存是 local-wins,不换掉会把旧目录发回引擎)。 */
+      configs: Record<string, { cwd?: string; extraRoots?: string[] }> }
+  | { ok: false; error: 'already_project'; path: string; name: string }
 
 export const isProjectIconFile = (icon?: string): boolean => /^icon\.(png|jpe?g|gif|webp)$/i.test(icon || '')
 
@@ -640,6 +692,8 @@ export interface ToolsResponse {
     /** 插件自带的 server(引擎插件 manifest 的 mcpServers):不在 mcp.json 里,设置页只读展示。 */
     origin?: { pluginId: string; pluginName: string }
     tools: Array<{ name: string; description: string }>
+    /** 这个 server 的工具定义每个请求约占多少 token(名字 + 描述 + 参数 schema 的 JSON 按 4 字符 = 1 token 估)。旧引擎缺省。 */
+    approxTokens?: number
   }>
 }
 
@@ -717,6 +771,8 @@ export interface ToolEvent {
   contentOffset?: number
   /** 审批挂起(托盘 run):调用没跑,agent 先干别的;用户拍板后同一 id 的真结果到达即清掉。落库的占位结果重载后仍带着它。 */
   parked?: boolean
+  /** 发给模型前会被遮住的值(引擎 llm/outboundMask.ts):在 arguments / result 里的位置 + 类型 + 模型收到的占位符,不含原值。 */
+  masked?: Array<{ kind: string; ph: string; s: number; e: number; at: 'args' | 'result'; warn?: true }>
 }
 
 /** 助手一条消息的「顺序段」(直播归约期填充;新历史消息也可由工具锚点重建):
@@ -843,8 +899,11 @@ export interface UiMessage {
   /** system=客户端本地通知行(斜杠命令反馈等;不持久化,reload 会消失)。 */
   role: 'user' | 'assistant' | 'system'
   content: string
-  /** Muse 主动发进私聊的(引擎 chat_messages.origin):proactive / proactive:todo / proactive:approval。 */
+  /** Muse 主动发进私聊的(引擎 chat_messages.origin):proactive / proactive:todo / proactive:approval / proactive:card。 */
   origin?: string
+  /** 这一轮换了模型(引擎 status model_fallback;重载时从 origin 'fallback:quota' + model_id 还原):画「改用了」那一行。
+   *  reason 'quota' = 额度用完接力;缺省 = 服务端停用模型。重载后只剩 to。 */
+  fallback?: { to: string; toName?: string; from?: string; reason?: string; resetsAt?: number }
   reasoning?: string
   /** 思考累计用时(ms)与本段思考的起点:只在本次运行里由 appStore 记(引擎不落库),渲染成「思考 N 秒」。 */
   reasoningMs?: number
@@ -979,6 +1038,12 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   visionModelId?: string
   /** 辅助模型 · 翻译:笔记里的「翻译」与插件 ctx.tangu.translate 用;空=跟聊天当前模型。 */
   translateModelId?: string
+  /** 辅助模型 · 补全:插件 ctx.tangu.fim(行内补全)用;只能选补全(FIM)模型;空 = 目录里第一个补全模型。 */
+  fimModelId?: string
+  /** 额度用完时改用的模型(config.json models.quotaFallback);空 = 停下报错。 */
+  quotaFallbackModelId?: string
+  /** 换之前先问我(models.quotaFallbackAsk)。 */
+  quotaFallbackAsk?: boolean
   /** 上次用的审批档 / 思考档:**新会话据此起步**(模型走 modelId,已是全局键)。
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'

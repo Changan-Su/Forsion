@@ -21,7 +21,8 @@
  */
 import { useWorkspace } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import type { ListGroup, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
+import type { ListGroup, ListItem } from '@amadeus/plugins/types'
+import type { HostListSource } from '@amadeus/plugins/pluginText'
 import { translate } from '../../i18n'
 import { formatListTime } from '../../format/time'
 import { useApp } from '../../stores/appStore'
@@ -36,6 +37,7 @@ import { Inbox } from 'lucide-react'
 const [, SOURCE_OWNER, SOURCE_ID] = INBOX_WORKSPACE_MODE.split(':')
 const UNREAD = 'unread'
 const ARCHIVED = 'archived'
+const MUSE_READ = 'muse-read'
 
 type SourceKind = 'forsion' | 'automation' | 'agents' | 'system'
 // 图标按来源一处定:组头、搜索结果的行首用的是同一枚(阅读面板头部的 SenderGlyph 画的也是这几个字形)。
@@ -105,7 +107,8 @@ function toItem(m: InboxMessage, parent?: string): ListItem {
     key: m.id,
     title: m.title,
     ...(subtitle ? { subtitle } : {}),
-    hint: timeAgo(m.created_at),
+    // Muse 替你标的:行尾带一句,和时间同一种灰字
+    hint: m.read_by === 'muse' ? `${translate('inbox.readByMuse')} · ${timeAgo(m.created_at)}` : timeAgo(m.created_at),
     // 行首 = 谁发的:Agent 有头像用头像(iconUrl),没有就是 agent 那枚;其余按来源。组里的行宿主不画它。
     icon: SOURCE_ICON[sourceKind(m)],
     ...(avatar ? { iconUrl: avatar } : {}),
@@ -143,7 +146,7 @@ function grouped(list: InboxMessage[]): ListItem[] {
   return out
 }
 
-export const inboxListSource: ListSourceContribution = {
+export const inboxListSource: HostListSource = {
   id: SOURCE_ID,
   get title() { return translate('space.inbox') },
   search: true,
@@ -153,6 +156,7 @@ export const inboxListSource: ListSourceContribution = {
     // 未归档那份里可能有刚点了「归档」、PATCH 还没回来的行 —— 按字段立即挪走。
     let list = group === ARCHIVED ? st.archived : st.messages.filter((m) => !m.archived_at)
     if (group === UNREAD) list = list.filter((m) => !m.read_at)
+    if (group === MUSE_READ) list = list.filter((m) => m.read_by === 'muse')
     const q = f?.query?.trim().toLowerCase()
     // 搜索结果是平铺的(宿主搜索时不画层级):每行自己带上发信人
     if (q) return list.filter((m) => m.title.toLowerCase().includes(q) || (m.body || '').toLowerCase().includes(q) || senderOf(m).toLowerCase().includes(q)).map((m) => toItem(m))
@@ -160,9 +164,12 @@ export const inboxListSource: ListSourceContribution = {
   },
   groups(): ListGroup[] {
     const st = useInbox.getState()
+    const museRead = st.messages.filter((m) => m.read_by === 'muse' && !m.archived_at).length
     return [
       { key: UNREAD, title: translate('inbox.filter.unread'), count: st.unreadCount },
       { key: ARCHIVED, title: translate('inbox.filter.archived'), ...(st.archivedLoaded ? { count: st.archived.length } : {}) },
+      // Muse 标过才有这一项(手机收件箱在本地,永远没有)
+      ...(museRead ? [{ key: MUSE_READ, title: translate('inbox.filter.museRead'), count: museRead }] : []),
     ]
   },
   activeKey: () => useInbox.getState().selectedId,

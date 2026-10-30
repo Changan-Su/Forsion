@@ -30,6 +30,8 @@ export interface AnchorOpts {
   prefer?: 'below' | 'above'
   /** 水平以 x 为中心(行内工具栏那种居中浮条),缺省是左对齐 x。 */
   center?: boolean
+  /** 右缘对齐 x(「⋯」按钮下方往左展开的菜单),缺省是左缘对齐 x。 */
+  alignEnd?: boolean
   margin?: number
 }
 
@@ -47,8 +49,8 @@ export function clampMenu(
   vh: number,
   opts: AnchorOpts = {},
 ): { left: number; top: number } {
-  const { anchorTop = y, prefer = 'below', center = false, margin = 8 } = opts
-  const left = Math.max(margin, Math.min(center ? x - w / 2 : x, vw - w - margin))
+  const { anchorTop = y, prefer = 'below', center = false, alignEnd = false, margin = 8 } = opts
+  const left = Math.max(margin, Math.min(center ? x - w / 2 : alignEnd ? x - w : x, vw - w - margin))
   const fits = (t: number): boolean => t >= margin && t + h <= vh - margin
   const below = y
   const above = anchorTop - h
@@ -64,7 +66,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
   ref: RefObject<HTMLDivElement | null>
   style: CSSProperties
 } {
-  const { anchorTop, prefer, center, margin = 8 } = opts
+  const { anchorTop, prefer, center, alignEnd, margin = 8 } = opts
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: x, top: y, maxWidth: undefined as number | undefined })
   useLayoutEffect(() => {
@@ -75,7 +77,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
       // offsetWidth/Height = 未缩放局部 px(且不含 pop-in 的 scale 动画)→ ×z 换到视口 px 再比。
       const vw = window.innerWidth
       const wV = el.offsetWidth * z
-      const v = clampMenu(x, y, wV, el.offsetHeight * z, vw, window.innerHeight, { anchorTop, prefer, center, margin })
+      const v = clampMenu(x, y, wV, el.offsetHeight * z, vw, window.innerHeight, { anchorTop, prefer, center, alignEnd, margin })
       // 比视口还宽(窄屏 × 固定宽度浮层):夹取只能贴左边、右边照样被裁 → 给个局部 px 的上限。
       const maxWidth = wV > vw - 2 * margin ? (vw - 2 * margin) / z : undefined
       setPos((prev) => {
@@ -93,7 +95,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
       window.removeEventListener(UI_ZOOM_EVENT, apply)
       ro.disconnect()
     }
-  }, [x, y, anchorTop, prefer, center, margin])
+  }, [x, y, anchorTop, prefer, center, alignEnd, margin])
   return { ref, style: { left: pos.left, top: pos.top, maxWidth: pos.maxWidth } }
 }
 
@@ -311,6 +313,7 @@ export function OverlayAt({
   anchorTop,
   prefer,
   center,
+  alignEnd,
   margin,
   innerRef,
   className,
@@ -323,6 +326,7 @@ export function OverlayAt({
   anchorTop?: number
   prefer?: 'below' | 'above'
   center?: boolean
+  alignEnd?: boolean
   margin?: number
   /** 调用方也要拿这个 DOM(如判定「点在菜单外」)时传进来;内部定位仍用自己的 ref。 */
   innerRef?: (el: HTMLDivElement | null) => void
@@ -330,7 +334,7 @@ export function OverlayAt({
   style?: CSSProperties
   children?: ReactNode
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className' | 'children'>) {
-  const p = useClampedMenu(x, y, { anchorTop, prefer, center, margin })
+  const p = useClampedMenu(x, y, { anchorTop, prefer, center, alignEnd, margin })
   useExitGhost(p.ref)
   return (
     <div
@@ -345,4 +349,23 @@ export function OverlayAt({
       {children}
     </div>
   )
+}
+
+/** DOM-owned popovers share the same exit CSS as OverlayAt. Cleanup runs on the
+ * live surface immediately; only an inert visual copy survives until it fades. */
+export function removeOverlayWithExit(el: HTMLElement): void {
+  if (!el.isConnected) { el.remove(); return }
+  const ghost = el.cloneNode(true) as HTMLElement
+  const inputs = el.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')
+  ghost.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((g, i) => { g.value = inputs[i]?.value ?? g.value })
+  ghost.removeAttribute('id')
+  ghost.querySelectorAll('[id]').forEach((n) => n.removeAttribute('id'))
+  ghost.setAttribute('aria-hidden', 'true')
+  ghost.dataset.lclExit = ''
+  ghost.inert = true
+  ghost.style.pointerEvents = 'none'
+  el.replaceWith(ghost)
+  const animations = ghost.getAnimations?.() ?? []
+  if (!animations.length) ghost.remove()
+  else void Promise.allSettled(animations.map((a) => a.finished)).then(() => ghost.remove())
 }

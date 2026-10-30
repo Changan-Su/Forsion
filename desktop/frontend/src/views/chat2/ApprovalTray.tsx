@@ -23,6 +23,7 @@ import { TaskCards } from './TaskCards'
 import type { MessageHandlers } from './EditorialMessage'
 import { ApprovalCard as MuseApprovalCard } from '../inbox/InboxBody'
 import { MuseTodoCards, museApprovalSettled, type MuseApprovalItem } from './MuseDm'
+import { MuseDeckCard, type MuseCardItem } from './MuseCards'
 import '../../tangu/messages'
 import { useEnterMotion } from '../../components/AnimatedUI'
 
@@ -43,12 +44,12 @@ registerMessages({
 })
 
 /** 卡片堆里的一项:挡着 agent 的(审批 / 提问 / 计划,Muse 的后台审批)在前;不挡的(任务卡、协作请求、作品卡)垫底。 */
-export type DeckItem = TrayItem | MuseApprovalItem | PendingTask | PendingHuman | PendingCreation
+export type DeckItem = TrayItem | MuseApprovalItem | PendingTask | PendingHuman | PendingCreation | MuseCardItem
 
 /** 头行计数:Muse 的后台审批算审批。 */
-const countKind = (i: DeckItem): 'approval' | 'inquiry' | 'plan' | 'task' | 'human' | 'creation' => (i.kind === 'muse-approval' ? 'approval' : i.kind)
+const countKind = (i: DeckItem): 'approval' | 'inquiry' | 'plan' | 'task' | 'human' | 'creation' => (i.kind === 'muse-approval' ? 'approval' : i.kind === 'muse-card' ? 'task' : i.kind)
 /** 挡着 agent(或 Muse)往下走的:来了就顶到最上面、收着时展开一次。 */
-const blocks = (i: DeckItem): boolean => i.kind !== 'task' && i.kind !== 'human' && i.kind !== 'creation'
+const blocks = (i: DeckItem): boolean => i.kind !== 'task' && i.kind !== 'human' && i.kind !== 'creation' && i.kind !== 'muse-card'
 
 const ARM_MS = 350
 
@@ -160,7 +161,9 @@ export function ApprovalTray({ items, onDecide, onAnswer, onTask, sessionId }: {
           data-tray-msg={cur.messageId}
         >
           {(cur.kind === 'approval' || cur.kind === 'inquiry' || cur.kind === 'plan') && cur.agentName && <div className="t2c-apv-from">{cur.agentName}</div>}
-          {cur.kind === 'human' ? (
+          {cur.kind === 'muse-card' ? (
+            <MuseDeckCard key={cur.id} card={cur.card} sessionId={sessionId} />
+          ) : cur.kind === 'human' ? (
             // 「知道了」/ 撤销之后它离开卡片堆,流里那行收成「已知道 / 已撤销」
             <HumanUpdateCard key={cur.id} changes={cur.changes} cfg={cfg} sessionId={sessionId || ''} agentName={cur.agentName} inDeck />
           ) : cur.kind === 'creation' ? (

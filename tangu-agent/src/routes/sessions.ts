@@ -28,7 +28,8 @@ import { startChildSession } from '../services/childSessions.js';
 import { museDmSessionId } from '../services/museDm.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
-import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
+import { listCheckpoints, restoreCodeSince } from '../services/checkpoints.js';
+import { deleteSessionCascade } from '../services/sessionCleanup.js';
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
 import { isValidSlug } from '../agents/agentRegistry.js';
 import { isDelegateActive } from '../services/delegateTranscript.js';
@@ -163,13 +164,18 @@ router.get('/agent/sessions/attention', authMiddleware, async (req: AuthRequest,
   }
 });
 
-// 用户打开了这个会话:读到现在(只动 last_read_at,不动 updated_at —— 读一下不该把会话顶到列表最上面)。
+// 用户打开了这个会话:读到现在,收尾问句的「等你」也算看过(10-27:只清未读时点进去黄点不灭,要回一句才灭)。
+// 不动 updated_at —— 读一下不该把会话顶到列表最上面。真在等的审批 / 询问另有来源,不受影响。
+// 回报还没送回主会话的子会话(report_run_id)留着:送达时靠它告诉主会话 waiting_for_user(childSessions.deliverNow)。
 router.post('/agent/sessions/:id/read', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const s = await getOwnSession(req.params.id, req.user!.userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    await query(`UPDATE chat_sessions SET last_read_at = ? WHERE id = ?`, [Date.now(), s.id]);
-    res.json({ ok: true });
+    await query(
+      `UPDATE chat_sessions SET last_read_at = ?, awaiting_user = CASE WHEN report_run_id IS NULL THEN FALSE ELSE awaiting_user END WHERE id = ?`,
+      [Date.now(), s.id]);
+    const [r] = await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [s.id]);
+    res.json({ ok: true, awaiting: !!r?.awaiting_user });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'mark read failed' });
   }
@@ -293,7 +299,9 @@ router.post('/agent/sessions/:id/children', authMiddleware, async (req: AuthRequ
     if (!message || message.length > 20_000) return res.status(400).json({ detail: 'message required (max 20000 chars)' });
     const title = typeof req.body?.title === 'string' ? req.body.title : '';
     const remote = parseRemoteOrigin(req.headers);
-    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(remote ? { remote } : {}) });
+    // 任务卡的 `agent:` 是模型写的串:认得才用,认不得跟主会话走
+    const agent = typeof req.body?.agent === 'string' ? await getAgent(req.body.agent).catch(() => null) : null;
+    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(agent ? { agentSlug: agent.slug } : {}), ...(remote ? { remote } : {}) });
     res.json({ sessionId: r.sessionId, runId: r.runId, title: r.title });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'start child session failed' });
@@ -397,16 +405,7 @@ router.delete('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, re
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const sid = req.params.id;
-    // 显式级联(standalone schema 无外键 CASCADE;顺序:叶 → 根)。
-    await query(`DELETE FROM agent_run_events WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = ?)`, [sid]);
-    await query(`DELETE FROM agent_steps WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = ?)`, [sid]);
-    await query(`DELETE FROM agent_runs WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_messages WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_asides WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_sessions WHERE id = ?`, [sid]);
-    bumpHistoryRevision(sid); // 在飞的后台摘要落库前会复核版本 → 丢弃
-    await removeSessionCheckpoints(sid); // 代码快照跟着走,否则 home 无界增长
+    await deleteSessionCascade(req.params.id);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete session failed' });

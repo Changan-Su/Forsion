@@ -197,7 +197,7 @@ it('⚠️开发副本遮蔽期间卸载必须拒绝(否则删掉的是安装版
 it('没有开发副本时卸载照常执行(正对照:拒绝不是一刀切)', async () => {
   const pdir = await installed('demo', { id: 'demo', name: 'Demo', version: '1.0.0', apiVersion: 1, main: 'main.js' })
   await boot()
-  await expect(invoke('plugins:uninstall-forsion', 'demo')).resolves.toBeUndefined()
+  await expect(invoke('plugins:uninstall-forsion', 'demo')).resolves.toMatchObject({ dirName: 'demo' }) // 进回收站(trashWriter),回带条目
   await expect(fs.access(pdir)).rejects.toThrow()
 })
 

@@ -14,11 +14,11 @@ import { SETTINGS_SEARCH_INDEX } from './settingsSearchIndex'
 /** SettingsModal 的一级页 id(StaticTab 的唯一来源)。本端有没有这一页另由 SettingsModal 的 tabItems 门控。 */
 export const SETTINGS_TABS = [
   'general', 'connection', 'forsion', 'model', 'mcp', 'hooks', 'skills', 'agents', 'plugins', 'amadeus-plugins', 'agent-clis', 'browser', 'computer-use', 'channels',
-  'notes', 'sync', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about',
+  'notes', 'sync', 'spaces', 'theme', 'shortcuts', 'notifications', 'statusbar', 'trash', 'permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about',
 ] as const
 
 /** 允许的旧别名 → [一级页, 子页?]。一级页 id 必须是 SettingsModal 的 StaticTab。 */
-export const LEGACY_TARGETS: Readonly<Record<string, readonly [string, string?]>> = {
+export const LEGACY_TARGETS: Readonly<Record<string, readonly [string, string?, string?]>> = {
   // 连接合并进「常规」(general);Forsion 账号自成一级页(随 Extend 出现),旧的二级落点照样认
   connection: ['general', 'g-conn'],
   // 不带子页 = 落到第一个子页:Extend 自绘的「账号」(没装 Extend 0.5 时落到宿主的「同步」)
@@ -27,6 +27,8 @@ export const LEGACY_TARGETS: Readonly<Record<string, readonly [string, string?]>
   'sync/s-cloud': ['forsion', 'f-sync'],
   // Agent CLI 并进 Agents 页
   'agent-clis': ['agents', 'ag-clis'],
+  // 后台 Agent 页里直接选中 Muse(第三段 = 页内页签,只有这一条)
+  'agents/ag-special/muse': ['agents', 'ag-special', 'muse'],
   // 微信设置迁「通道」
   wechat: ['channels'],
   // 引擎插件页并进统一插件页。此前靠 SettingsModal 里一个 effect 重定向,但 'plugins' 不在 tabItems 里、
@@ -37,13 +39,15 @@ export const LEGACY_TARGETS: Readonly<Record<string, readonly [string, string?]>
 export interface ResolvedSettingsTarget {
   tab: string
   sub?: string
+  /** 子页里的页签(目前只有后台 Agent 的 Muse)。 */
+  pane?: string
 }
 
 /** 解析深链。空值 → general(调用方再按本端可用页兜底)。 */
 export function resolveSettingsTarget(target: string | null | undefined): ResolvedSettingsTarget {
   if (!target) return { tab: 'general' }
   const legacy = LEGACY_TARGETS[target]
-  if (legacy) return legacy[1] ? { tab: legacy[0], sub: legacy[1] } : { tab: legacy[0] }
+  if (legacy) return legacy[1] ? { tab: legacy[0], sub: legacy[1], ...(legacy[2] ? { pane: legacy[2] } : {}) } : { tab: legacy[0] }
   // 插件页的 id 可能含任意字符(含 `/`),前缀先放行,不拆。
   if (target.startsWith('plugin:') || target.startsWith('fplugin:')) return { tab: target }
   const slash = target.indexOf('/')

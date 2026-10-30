@@ -1,0 +1,10 @@
+{
+  "id": "pbase",
+  "name": { "zh": "基础样式", "en": "Base look" },
+  "icon": "list-checks",
+  "version": "1.0.0",
+  "layout": {
+    "main": [{ "type": "plugin:plugin-base-sample:bare", "pinned": true, "mainPage": true }],
+    "right": [{ "type": "plugin:plugin-base-sample:flaky" }]
+  }
+}

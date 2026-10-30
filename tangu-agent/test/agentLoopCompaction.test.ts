@@ -17,6 +17,7 @@ import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun, enqueueSteer, abortRun, TURN_INTERRUPTED_MARKER } from '../src/services/agentLoop.js';
 import { LlmError } from '../src/core/types.js';
+import { learnedWindow } from '../src/services/contextWindowStore.js';
 
 const USER = 'u1';
 const WINDOW = 40_000; // 触发线 = 40000 − max(2048, 5%) = 37952
@@ -318,6 +319,7 @@ describe('上游拒收超长输入 → 强制压缩一次后重进本轮', () =>
     const run = await launch('R1', 'A1', 'U1', 'CURRENT-ASK');
     expect(run.status).toBe('done');
     expect(overflowed).toBe(1);
+    expect(learnedWindow('m1')).toBe(40000); // 报错里的真实上限按本轮模型 id 学下来(预算按它查)
     expect(summaries).toHaveLength(1);
     const ctx = lastCtx();
     expect(String(ctx[1].content)).toContain('SUMMARY-1');

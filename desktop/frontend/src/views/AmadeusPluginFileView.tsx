@@ -3,6 +3,9 @@
  *  注册的 FileTypeContribution,调它的 mount(el, { filePath }) 把编辑器画进容器。插件晚于 boot 加载
  *  也没关系(挂载/重渲即查表;fileTypes 变化会触发重挂)。与 AmadeusDrawingView 同一套契约域包裹。 */
 import { useEffect, useRef } from 'react'
+import { amadeus } from '../amadeus/api'
+import { isHostPath } from '@amadeus-shared/pdfLink'
+import { externalPdfSurface } from '../amadeus/plugins/externalPdfSurface'
 import { useWorkspace, type ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { usePageStore, pageStoreFor } from '../amadeus/store/pageStore'
@@ -74,7 +77,9 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
     // (fileTypes 一变 ft 就换 → 本 effect 也会重跑,但那是下一拍,空窗期不能留)。
     const pluginId = usePluginStore.getState().fileTypes.find((o) => o.item === ft)?.pluginId ?? 'unknown'
     const vs = createPluginViewSurface(pluginId, `plug:${leaf.id}`, ft.extensions ?? [])
-    const dereg = addPluginViewTeardown(pluginId, vs.dispose)
+    const external = isHostPath(filePath) && amadeus ? externalPdfSurface(filePath, amadeus) : null
+    const disposeSurface = (): void => { external?.dispose(); vs.dispose() }
+    const dereg = addPluginViewTeardown(pluginId, disposeSurface)
     // 视图内跟车:插件经 surface.loadPage 在本视图里换到另一个同类型文件(或标题栏 renamePage 改名),本 scope
     // 的 activePage 一变,leaf 参数跟着换 —— 否则布局 / 重启还指着旧文件,插件拿 file.filePath 写的也是旧文件。
     // 与工作区 store 层的路径跟随(views/followPathGone.ts)对改名是重叠的,两边写同一个值,幂等。订阅住在主 effect 里与 surface 同源同灭 ——
@@ -110,23 +115,23 @@ export function AmadeusPluginFileView({ leaf }: ViewProps) {
       queueMicrotask(deliverGoto)
       return () => { gotoSubs.delete(cb) }
     }
-    let cleanup: (() => void) | void
+    let cleanup: (() => void | Promise<void>) | void
     try {
-      cleanup = ft.mount(el, { filePath, surface: vs.surface, onGoto })
+      cleanup = ft.mount(el, { filePath, ...(external ? { io: external.io } : {}), surface: vs.surface, onGoto })
     } catch (e) {
       console.error('[amadeus] 插件文件视图挂载失败', e)
     }
     return () => {
-      try {
-        cleanup?.()
-      } catch {
-        /* ignore */
-      }
+      let saving: void | Promise<void> = undefined
+      try { saving = cleanup?.() } catch { /* ignore */ }
       window.removeEventListener('amadeus:pdf-goto', onGotoEvent)
       gotoSubs.clear()
       unsub()
-      dereg()
-      vs.dispose()
+      // A file plugin may flush pending edits before returning its mount.
+      // Disable still revokes synchronously through addPluginViewTeardown.
+      vs.dispose() // Page surfaces still revoke synchronously on every close.
+      if (external && saving) void Promise.resolve(saving).catch(console.error).finally(() => { dereg(); external.dispose() })
+      else { dereg(); external?.dispose() }
       // 微任务后再摘容器:插件的延迟 unmount 还要在它身上跑一拍(直接 remove 会让 React 卸到
       // 已摘除的节点上,历史上会抛 removeChild 错)。
       queueMicrotask(() => queueMicrotask(() => el.remove()))

@@ -12,8 +12,10 @@ import type { ChatMessage } from '../core/types.js';
 import { estimateMessagesTokens, estimateTokensRough, modelContextWindow } from './contextBudget.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
 import { formatPageInstructions, PAGE_INSTRUCTIONS_MAX_CHARS } from './pageInstructions.js';
+import { fimUnsupportedError, isFimUnsupported } from '../seams/cloudBrain.js';
 
-export const INLINE_ACTIONS = ['improve', 'fix', 'shorter', 'longer', 'summarize', 'translate', 'continue', 'custom'] as const;
+/** fim = 行内补全(fill-in-the-middle,2026-10-26+):不走下面那套提示词,光标前后文原样交给补全模型(brain.llm.fimCompletion)。 */
+export const INLINE_ACTIONS = ['improve', 'fix', 'shorter', 'longer', 'summarize', 'translate', 'continue', 'custom', 'fim'] as const;
 export type InlineAction = typeof INLINE_ACTIONS[number];
 /** 这几档改写的是选区:没选中文字就无从下手(400)。 */
 const NEEDS_SELECTION: ReadonlySet<InlineAction> = new Set(['improve', 'fix', 'shorter', 'longer', 'summarize', 'translate']);
@@ -26,6 +28,13 @@ const TITLE_MAX = 200;
 const PAGE_PATH_MAX = 2_000;
 const LANGUAGE_MAX = 40;
 const ANSWER_MAX_TOKENS = 4_096;
+/** FIM 的上下文封顶与云端 /api/brain/llm/fim-stream 同尺:前文留**尾**(贴着光标那段)、后文留头。 */
+export const FIM_BEFORE_MAX = 16_000;
+export const FIM_AFTER_MAX = 8_000;
+export const FIM_MAX_TOKENS = 512;
+export const FIM_DEFAULT_MAX_TOKENS = 64;
+const FIM_STOP_COUNT = 4;
+const FIM_STOP_LEN = 32;
 
 export interface InlineInput {
   action: InlineAction
@@ -43,6 +52,9 @@ export interface InlineInput {
   pagePath?: string
   /** translate 的目标语言(自由文本,如 "English")。 */
   language?: string
+  /** fim:输出上限(已夹到 1..512)与停止串(≤4 个、每个 ≤32 字符)。 */
+  maxTokens?: number
+  stop?: string[]
 }
 
 const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -52,6 +64,7 @@ const line = (v: unknown, max: number): string => text(v, max).replace(/[\r\n]+/
 export function normalizeInlineInput(body: any): InlineInput | null {
   const action = String(body?.action ?? '') as InlineAction;
   if (!INLINE_ACTIONS.includes(action)) return null;
+  if (action === 'fim') return normalizeFimInput(body);
   const selection = text(body?.selection, SELECTION_MAX);
   const instruction = text(body?.instruction, INSTRUCTION_MAX).trim();
   const before = text(body?.before, BEFORE_MAX);
@@ -72,6 +85,24 @@ export function normalizeInlineInput(body: any): InlineInput | null {
   if (pageInstructions) out.pageInstructions = pageInstructions;
   const pagePath = line(body?.pagePath, PAGE_PATH_MAX);
   if (pagePath) out.pagePath = pagePath;
+  return out;
+}
+
+/** fim 的请求体:前后文**不 trim**(空白、缩进都是补全的依据),两边都空才拒;max_tokens / stop 逐项夹紧。 */
+function normalizeFimInput(body: any): InlineInput | null {
+  const before = typeof body?.before === 'string' ? body.before.slice(-FIM_BEFORE_MAX) : '';
+  const after = typeof body?.after === 'string' ? body.after.slice(0, FIM_AFTER_MAX) : '';
+  if (!before && !after) return null;
+  const n = Math.trunc(Number(body?.max_tokens));
+  const maxTokens = body?.max_tokens == null || !Number.isFinite(n) ? FIM_DEFAULT_MAX_TOKENS : Math.min(FIM_MAX_TOKENS, Math.max(1, n));
+  const stop = (Array.isArray(body?.stop) ? body.stop : [])
+    .filter((x: unknown): x is string => typeof x === 'string' && x.length > 0)
+    .slice(0, FIM_STOP_COUNT)
+    .map((x: string) => x.slice(0, FIM_STOP_LEN));
+  const out: InlineInput = { action: 'fim', maxTokens };
+  if (before) out.before = before;
+  if (after) out.after = after;
+  if (stop.length) out.stop = stop;
   return out;
 }
 
@@ -102,6 +133,8 @@ function taskOf(input: InlineInput): string {
     case 'custom': return input.selection
       ? 'Apply the user\'s instruction below to the text in <selection>. Return the resulting text that should replace it or be inserted next to it.'
       : 'Write what the user\'s instruction below asks for. It will be inserted at the cursor, between <text_before> and <text_after>.';
+    // fim 不经提示词(completeFim);这一档只为 switch 穷尽。
+    case 'fim': return 'Write the text that belongs between <text_before> and <text_after>.';
   }
 }
 
@@ -131,7 +164,7 @@ export function stripOuterFence(out: string, selection?: string): string {
 
 export interface InlineAnswer { content: string; toolCallText: boolean }
 
-export async function completeInline(opts: {
+interface InlineOpts {
   userId: string
   modelId: string
   appId: string
@@ -139,7 +172,60 @@ export async function completeInline(opts: {
   input: InlineInput
   signal: AbortSignal
   onToken: (delta: string) => void
-}): Promise<InlineAnswer> {
+}
+
+/**
+ * fim:prefix = before、suffix = after,**无系统提示、无消息包装**,交给 brain.llm.fimCompletion;返回模型原文(不 trim、不剥围栏)。
+ * brain 没有这个方法 / 模型或云端做不了 → 抛 fim_unsupported(路由写成 SSE error,插件据此落回 complete)。
+ * 额度与记账同其它动作:按 prefix+suffix 的粗估预检,结束按用量结算;中止 / 出错只在已出过字时按估算结算;fim_unsupported 是开流前就被拒,不结算。
+ * standalone 的 billing 是 no-op(云端那条路由自己扣),进程内(server 托管引擎)才真扣 —— 与聊天同一口径。
+ */
+async function completeFim(opts: InlineOpts): Promise<InlineAnswer> {
+  const llm = deps().brain.llm;
+  const billing = deps().billing;
+  if (!llm.fimCompletion) throw fimUnsupportedError();
+  const prefix = opts.input.before ?? '';
+  const suffix = opts.input.after ?? '';
+  const maxTokens = opts.input.maxTokens ?? FIM_DEFAULT_MAX_TOKENS;
+  const promptEst = estimateTokensRough(prefix + suffix);
+  const user = (await deps().brain.users.getUserById(opts.userId).catch(() => null)) ?? { id: opts.userId, username: 'local' };
+  const estCost = await billing.calculateCost(opts.modelId, promptEst, maxTokens);
+  if (!(await billing.canConsumeTokenPoints(user.id, estCost)).ok) throw new Error('token_quota_exceeded');
+  opts.signal.throwIfAborted();
+  const settle = async (promptTokens: number, completionTokens: number, cached: number, error?: string): Promise<void> => {
+    const cost = await billing.calculateCost(opts.modelId, promptTokens, completionTokens, undefined, cached);
+    await billing.consumeTokenPoints(user.id, cost).catch(() => {});
+    await (billing.logApiUsage as any)(
+      (user as any).username || 'local', opts.modelId, undefined, undefined,
+      promptTokens, completionTokens, !error, error, opts.appId, cost, cached, opts.client,
+    ).catch(() => {});
+  };
+  let streamed = '';
+  let res: any;
+  try {
+    res = await llm.fimCompletion({
+      modelId: opts.modelId, prefix, ...(suffix ? { suffix } : {}), maxTokens,
+      ...(opts.input.stop?.length ? { stop: opts.input.stop } : {}),
+      client: opts.client, usageSource: opts.appId, signal: opts.signal,
+      onToken: (d: string) => { streamed += d; opts.onToken(d); },
+    });
+  } catch (e: any) {
+    // 一个字没出就失败(解析模型 / 钥匙、上游拒绝、刚发就被掐)拿不到用量,不按估算扣 —— 与 server 聊天那条同口径;
+    // 出过字的才按已出的估算结算。
+    if (!isFimUnsupported(e) && streamed) {
+      const reason = opts.signal.aborted ? 'aborted' : String(e?.message || e || 'error').slice(0, 200);
+      await settle(promptEst, estimateTokensRough(streamed), 0, reason).catch(() => {});
+    }
+    throw e;
+  }
+  const content = typeof res?.content === 'string' && res.content ? res.content : streamed;
+  const usage: any = res?.usage || {};
+  await settle(Number(usage.prompt_tokens) || promptEst, Number(usage.completion_tokens) || estimateTokensRough(content), Number(usage.cached_tokens) || 0);
+  return { content, toolCallText: false };
+}
+
+export async function completeInline(opts: InlineOpts): Promise<InlineAnswer> {
+  if (opts.input.action === 'fim') return completeFim(opts);
   const llm = deps().brain.llm;
   const billing = deps().billing;
   const { model, apiKey, baseUrl, apiModelId } = await llm.resolveModelAndKey(opts.modelId);

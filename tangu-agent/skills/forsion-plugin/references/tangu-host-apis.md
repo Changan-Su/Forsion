@@ -219,6 +219,36 @@ const tr = ctx.tangu?.translate
 - 旧宿主没有这个方法,先特性探测再退回 `complete`(上面的写法);不要为它抬 `minAppVersion`。
 - 额度与用量按所用模型照常扣、记;插件被停用时在飞的请求被中止并 reject。
 
+### 行内补全:ctx.tangu.fim(2026-10-26 起)
+
+边打字边给灰字建议(ghost text)这类**按光标补中间**的活用 `fim`:光标前后的正文原样交给**补全模型**(FIM,fill-in-the-middle),
+没有提示词、没有指令,比 `complete` 快、便宜,也不会回一段「好的,以下是……」。模型取用户在「设置 → 模型 → 补全」选的那个,
+没选就用账号里第一个补全模型:
+
+```js
+let fimOff = false                                     // 本次会话里 fim 不可用过一次就别再试
+async function suggest(before, after, signal) {
+  if (ctx.tangu?.fim && !fimOff) {
+    try {
+      return (await ctx.tangu.fim({ before, after, maxTokens: 64, stop: ['\n\n'], signal })).text   // 模型原文,别 trim
+    } catch (e) {
+      if (e?.message !== 'fim_unavailable') throw e
+      fimOff = true
+    }
+  }
+  return (await ctx.tangu.complete({ prompt: 'Continue the text at the cursor. Output only the continuation.', before, after, signal })).text
+}
+```
+
+- `before` = 光标前的正文(引擎只留最后 16k 字符),`after` = 光标后的(只留前 8k);至少一个非空。空白、缩进、换行都是补全的依据,**别 trim**。
+- 返回 `{ text, model }`:`text` 是模型原文(不 trim、不剥围栏),`model` = 实际用的 `{ id, name }`。`modelId` 可点名本次用哪个(不改槽)。
+- `maxTokens` 夹到 1..512(缺省 64);`stop` 最多 4 个、每个 ≤32 字符。行内补全一般 32–64 就够。
+- 账号里没有补全模型、选的模型做不了 FIM、引擎 / 云端太老 → reject `Error('fim_unavailable')`。这时退回 `complete`,并**记住整场会话别再试**
+- 云端目录这次没拉到 → reject `Error('fim_catalog_unreachable')`:临时错误,**别**据此落回 complete,下次照常试 `fim`。
+  (上面的 `fimOff`),否则每敲一个键都白打一次。
+- 和 `complete` / `translate` 合计每个用户同时最多 3 个请求(超出 429):每次按键先 `abort` 上一次的 `signal`,停顿一会儿(200–400ms)再发。
+- 额度与用量按所用模型照常扣、记;插件被停用时在飞的请求被中止并 reject。旧宿主 / 非 Tangu 宿主没有:`ctx.tangu?.fim`,不要为它抬 `minAppVersion`。
+
 ## Agent Desk 伴随面:ctx.desk(2026-09-19 起)
 
 往 Tangu 聊天右侧的 **Agent Desk**(右栏那张卡片 + 展开后的侧板)里挂一块自绘区域,典型用法是会跟着 agent 状态做反应的 3D 形象:
@@ -264,13 +294,15 @@ const h = ctx.desk?.registerCompanion({
 ## 摘要栏插件卡:ctx.summary(2026-10-25 起)
 
 Tangu 聊天右侧的**摘要栏**是一叠卡片:进度、后台(后台进程)、产物、来源、工作范围、Agent Desk。插件可以加一张卡,和内置卡同一个栈 ——
-用户能折叠、拖动排序(悬停露拖动块,右键卡头有「移到最上 / 最下 / 恢复默认」),收起状态和顺序由宿主按卡片记住。插件卡按注册顺序排在 Agent Desk 前面。
+用户能拖动排序(鼠标停在卡头上,计数那一格换成拖动把手,按住卡头拖;右键卡头有「移到最上 / 最下 / 恢复默认」),顺序由宿主按卡片记住。
+插件卡按注册顺序排在 Agent Desk 前面。**开合跟着内容走(2026-10-29 起)**:`count` 变大 = 来了新东西,卡自己展开;用户手动开 / 收只管到这一轮对话结束,
+不落盘;车道放不下时宿主先收掉最久没来新东西的卡,只剩一张还放不下就缩它的正文封顶。
 
 ```js
 const h = ctx.summary?.registerCard({
-  id: 'today',                               // 宿主拼成 plugin:<pluginId>:today,收起状态与顺序按它记
+  id: 'today',                               // 宿主拼成 plugin:<pluginId>:today,顺序按它记
   title: { zh: '今天', en: 'Today' },        // 跟随界面语言;也可以给一个字符串
-  defaultCollapsed: false,                   // 用户没点过时收不收;缺省展开
+  defaultCollapsed: false,                   // 没有新内容时收不收(切到会话、或卡在 Agent 没跑时出现);count 变大照样自动展开;缺省展开
   mount(el, host) {                          // 每个会话的摘要栏各挂一份,返回卸载函数
     // host.sessionId: 这份挂在哪个会话(恒定:换会话 = 卸载重挂);host.cwd: 会话默认目录或 null
     // host.update({ count, hidden }): 只改这一份 —— 卡头计数(null = 不显示)、hidden = 先不画这张卡(仍挂着,之后可再亮出)
@@ -284,7 +316,8 @@ const h = ctx.summary?.registerCard({
 
 - **只在桌面 Tangu 上存在**(同 `ctx.desk`):web / 移动端 / 纯 Amadeus 壳整个没有 `ctx.summary`,一律可选链。
 - **挂载次数**:每个会话的摘要栏一份;同屏两个聊天面板(主区 + 右侧 chat-panel)就是两份;换会话卸载重挂。新对话草稿(还没有会话)不挂插件卡。
-- **正文高度上限 240px**,超出宿主内滚,底部自动渐隐;宽约 252px(卡宽 280 减内边距)。别在正文里再套一层滚动。
+- **想让卡在有新内容时自己展开,就让 `count` 跟着条数走**:宿主只看「比上一次多」,数字变小不会收起卡。没有计数的卡只按 `defaultCollapsed`。
+- **正文高度上限 240px**(车道放不下时宿主会再缩短,最低约 90px),超出宿主内滚,底部自动渐隐;宽约 252px(卡宽 280 减内边距)。别在正文里再套一层滚动。
 - **没内容就藏起来**:`host.update({ hidden: true })` 不画这张卡(栈里不留空位),有内容了再 `hidden: false`。不要靠渲染空 div 让卡片「消失」。
 - 摘要栏只在聊天列够宽(≥ 760px)时出现;窄了整栈收起,但你的 `mount` 仍挂着 —— 别在不可见时跑重活(`IntersectionObserver` 判)。
 - 正文是普通 DOM:用宿主的 CSS 变量(`--text` / `--text-muted` / `--ui-font-meta` …),行样式可以借 `.t2-tsum-row`(图标 + 文字的一行)。
@@ -325,3 +358,39 @@ void ctx.automation?.ensure([
 - 聊天里的 agent 经 `manage_automation` **不能改/删** `plugin:` 前缀的规则;用户能在自动化 Space 里看、编辑(构建器认得 where / rowFrom / match / skipIfEmpty)。
 - 动作字段速查:`db_row_add.skipIfEmpty`(cells 的一个键,展开为空则跳过本步);`db_row_edit` 目标行 `rowId` > `rowFrom`(触发行的关联列,多值逐行)> `match {column, value}`(目标表全部命中行)> 触发行;
   单元格值支持 `{{row.X}}` / `{{target.X}}` / `{{= 算术 }}`。形状正典 = `desktop/frontend/src/types.ts` 的 `MuseTriggerUpsert` / `AutomationActionSpec`。
+
+### `ctx.agent`:读写你自己的数据(2026-09-27 起,**只有 agent 自建 Space 有**)
+
+Space 应该**从数据渲染**,别把状态、时间、待办写死在 main.js 里、每个周期改一遍 —— 那既浪费你的额度,用户看到的也永远是旧的。
+`ctx.agent` 只在 `agent-<slug>` 插件上存在、只能碰你自己这个 agent(普通插件整个没有;今天只有 Muse 有数据源):
+
+| 成员 | 说明 |
+|---|---|
+| `slug` | 你的 agent slug(如 `'muse'`) |
+| `status()` | `{ running, lastCycleAt, sleepUntil, sleepReason, mode, heartbeatMinutes, pendingApprovals }` 或 null |
+| `todos(status?)` | 你提过的 TODO:`{ id, title, detail, status, createdAt }[]`;`status` 缺省 = 全部(`'pending'` / `'done'` / `'dismissed'` / `'injected'`) |
+| `updateTodo(id, 'done' \| 'dismissed')` | **只在用户刚在你自己的视图里点过之后生效**(在你 Space 上按钮的 click 处理函数里调;宿主只认本视图里 1.5 秒内的真实点击 / 按键),挂载时 / 定时器 / 订阅回调 / 借别处的点击调一律 reject;效果同 Muse 面板的按钮,会以「用户处理了」的 `[feedback]` 回到你的日志;只改仍是 pending 的 |
+| `schedule()` | 你 SCHEDULE.db 的条目:`{ id, name, date, repeat, auto, description, lastRun }[]` |
+| `library.list()` / `library.read(path)` | 你的 Library:目录树 / 读一个文本文件(相对路径如 `'Journal/2026-09-27.md'`,≤1MB;越界、隐藏文件、不存在 → reject) |
+| `subscribe(cb)` | 周期结束、睡醒、待批数或待办数变化、`updateTodo` 之后回调(宿主约 20 秒查一次);返回退订,禁用/重载宿主统一收 |
+
+数据调用(status / todos / schedule / library / updateTodo)是 Promise,后端没就绪会 reject —— 自己画空态,别让 mount 抛错(mount 抛错也会以 `[feedback]` 回到你);`subscribe` 同步返回退订。
+**挂载之后没接住的错也回到你**(2026-09-27 起):宿主给你当前这一版的代码打了 `sourceURL`,异步回调 / 事件处理 / 定时器 / 订阅回调里没接住的错,栈里有你的帧就以 `[feedback]` 回写、带 `main.js` 的行号(同一条只报一次,每版最多 3 条)—— 包括你 `await` 的宿主接口 reject 了你没接(异步栈里有你那一帧,行号落在 `await` 那行)。旧版漏清的定时器在重载后抛的不算。
+手势闸防的是「顺手写个定时器 / 挂载时就标掉」这类失误,**不是安全边界**(插件与宿主同一个渲染进程);审批队列不开放。
+
+```js
+ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
+  const draw = async () => {
+    const [st, todos] = await Promise.all([ctx.agent.status(), ctx.agent.todos('pending')]).catch(() => [null, []])
+    el.replaceChildren()
+    for (const t of todos) {
+      const b = document.createElement('button')
+      b.textContent = `✓ ${t.title}`
+      b.onclick = () => ctx.agent.updateTodo(t.id, 'done').then(draw, () => {}) // 只能在点击里调
+      el.append(b)
+    }
+  }
+  draw()
+  return ctx.agent.subscribe(draw) // 退订函数正好当 disposer
+} })
+```

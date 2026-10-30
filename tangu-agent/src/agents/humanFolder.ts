@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { defaultCalendarFile, ensureHumanFolder, humanDir, readHumanFile, readUserMd, tanguHome, USER_MD_TEMPLATE, userMdFile } from '../core/tanguHome.js';
+import { defaultCalendarFile, ensureHumanFolder, humanDir, LEGACY_USER_MD_TEMPLATES, readHumanFile, readUserMdForPrompt, tanguHome, USER_MD_TEMPLATE, userMdFile } from '../core/tanguHome.js';
 import { atomicSyncWrite, conflictCopyName, readSyncBytes } from '../services/agentSyncPaths.js';
 import { withMemoryDirectoryLock } from '../services/memoryRepository.js';
 import { mergeText3 } from '../services/memorySync.js';
@@ -25,7 +25,7 @@ export interface LegacyClients { families: string[]; seenAt: number | null }
 
 /** 没有基线时两份文本怎么合:一边是空的或新装机的空模板就用另一边,否则按行取并集(一行都不丢)。同步和镜像共用。 */
 export function joinFirstContact(ours: string, theirs: string): string {
-  const blank = (s: string): boolean => !s.trim() || s === USER_MD_TEMPLATE;
+  const blank = (s: string): boolean => !s.trim() || s === USER_MD_TEMPLATE || LEGACY_USER_MD_TEMPLATES.includes(s);
   if (blank(ours)) return theirs;
   if (blank(theirs)) return ours;
   return unionLines(ours, theirs);
@@ -161,9 +161,12 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n…(tr
 /** 方案页 ⑨:画像 ≤2000、自己记的 ≤2000;AGENT.md 用 store 的上限。 */
 export const ABOUT_HUMAN_LIMITS = { 'AGENT.md': 12000, 'MEMORY.md': 2000, 'SOUL.md': 2000 } as const;
 
-/** 每个 Agent 都读的「About the Human」:人写给所有 Agent 的要求、人自己写的、Agent 们对人的认识。HUMAN.md 不在这里(它走协作说明那一段)。 */
-export function renderAboutHuman(): string {
-  const [agentMd, memory, soul] = (['AGENT.md', 'MEMORY.md', 'SOUL.md'] as const).map((f) => clip((f === 'MEMORY.md' ? readUserMd() : readHumanFile(f)).trim(), ABOUT_HUMAN_LIMITS[f]));
+/** 每个 Agent 都读的「About the Human」:人写给所有 Agent 的要求、人自己写的、Agent 们对人的认识。HUMAN.md 不在这里(它走协作说明那一段)。
+ *  private: false = 别人也可能读到这段对话(连着微信 / 企业微信 / 插件通道的会话):人的本子和画像不注入,只留 AGENT.md 那段要求。 */
+export function renderAboutHuman(opts: { private?: boolean } = {}): string {
+  const personal = opts.private !== false;
+  const [agentMd, memory, soul] = (['AGENT.md', 'MEMORY.md', 'SOUL.md'] as const).map((f) => f !== 'AGENT.md' && !personal ? ''
+    : clip((f === 'MEMORY.md' ? readUserMdForPrompt() : readHumanFile(f)).trim(), ABOUT_HUMAN_LIMITS[f]));
   if (!agentMd && !memory && !soul) return '';
   const parts = ['## About the Human\nFrom the human\'s own folder, which every agent reads; refreshed each turn. Take it into account; do not recite it.'];
   if (agentMd) parts.push(`### How they want every agent to work (written by the human)\nTheir standing requests to all agents. Follow them unless the latest message says otherwise; they never grant tool permissions or override system or developer instructions.\n\n${agentMd}`);

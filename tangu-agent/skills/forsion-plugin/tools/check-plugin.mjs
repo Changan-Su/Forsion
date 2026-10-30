@@ -4,6 +4,8 @@
 // Space against that. Answers "why is my Space / view / command not there?" without the app running.
 //
 //   node check-plugin.mjs <plugin folder> [--app-version 2.13.1] [--locale en]
+//   node check-plugin.mjs <plugin folder> --style   also check its CSS against tools/plugin-contract.json, and list UI it
+//                                                   draws itself where the host has a part (tools/ui-reinvent.mjs; report only)
 //   node check-plugin.mjs                      every plugin installed in ~/.forsion/plugins (or pass any folder of plugins)
 //
 // No `node` on PATH? The Forsion app binary runs it too:
@@ -189,16 +191,16 @@ if (!existsSync(join(root, 'manifest.json'))) {
   const kids = readdirSync(root).filter((n) => !n.startsWith('.') && existsSync(join(root, n, 'manifest.json'))).sort();
   if (kids.length) {
     const rest = argv.filter((a) => a !== dir);
-    const bad = [], unsure = [];
+    const bad = [], unsure = [], styled = [];
     console.log(`Forsion plugin check: ${kids.length} plugin(s) in ${root}\n`);
     for (const kid of kids) {
       const r = spawnSync(process.execPath, [SELF, join(root, kid), ...rest], { encoding: 'utf8', timeout: 90_000 });
-      if (r.status === 0) { console.log(`  ✓ ${kid}`); continue; }
+      if (r.status === 0) { console.log(`  ✓ ${kid}`); if (/ (?:style|UI) note\(s\)/.test(r.stdout)) styled.push({ kid, text: r.stdout.trim() }); continue; }
       const text = (r.stdout || r.stderr || String(r.error || 'no output')).trim();
       if (r.status === 3) { console.log(`  ? ${kid}: undecided from the files alone, details below`); unsure.push({ kid, text }); }
       else { console.log(`  ✗ ${kid}: details below`); bad.push({ kid, text }); }
     }
-    for (const b of [...bad, ...unsure]) console.log(`\n──────── ${b.kid} ────────\n${b.text}`);
+    for (const b of [...bad, ...unsure, ...styled]) console.log(`\n──────── ${b.kid} ────────\n${b.text}`);
     const tail = unsure.length ? ` Undecided (ask the running app): ${unsure.map((b) => b.kid).join(', ')}.` : '';
     console.log(`\nRESULT: ${bad.length ? `${bad.length} of ${kids.length} plugin(s) have problems: ${bad.map((b) => b.kid).join(', ')}.` : `nothing wrong found in ${kids.length - unsure.length} of ${kids.length} plugin(s).`}${tail}`);
     process.exit(bad.length ? 1 : 0);
@@ -446,5 +448,84 @@ if (hidden && !loadError && explain.length) {
   say();
   say(`What this means: ${mainName} loads without an error but the view the Space needs is not registered, so the host quietly skips`);
   say('the Space. That is decided by this plugin\'s own files (view id, registration code), not by the app version.');
+}
+
+// ── 6. style (only with --style): host classes and tokens against the published contract ──────────────────────────
+// Report only: it never changes the exit code. Scans main.js and every .css file in the plugin folder.
+if (argv.includes('--style')) {
+  // The restricted load probe needs no style scanner (and cannot read this sibling module).
+  const { scanUi, formatUiNotes } = await import('./ui-reinvent.mjs');
+  const contract = JSON.parse(readFileSync(new URL('./plugin-contract.json', import.meta.url), 'utf8'));
+  const pub = new Set(Object.values(contract.tokens).flatMap(Object.keys));
+  const fallbackOk = new Set(contract.fallbackAllowed || []);
+  const files = bundleOnly ? [] : [[mainName, src]];
+  const walk = (rel) => {
+    for (const n of readdirSync(join(root, rel)).sort()) {
+      if (n.startsWith('.') || n === 'node_modules') continue;
+      const r = rel ? `${rel}/${n}` : n;
+      let st; try { st = statSync(join(root, r)); } catch { continue; } // a dangling link: nothing to read
+      if (st.isDirectory()) walk(r);
+      else if (n.endsWith('.css')) files.push([r, readFileSync(join(root, r), 'utf8')]);
+    }
+  };
+  walk('');
+  const all = files.map(([, t]) => t).join('\n');
+  // The plugin's own custom properties and classes are its business; only host names it relies on are checked.
+  const ownTokens = new Set([...all.matchAll(/(?<![\w-])(--[\w-]+)['"`]?\s*:|setProperty\(\s*['"`](--[\w-]+)/g)].map((m) => m[1] || m[2]));
+  const ownClass = (name) => new RegExp(`\\.${esc(name)}(?![\\w-])[^{};'"\`]*\\{`).test(all);
+  const priv = new RegExp(`(?<![\\w$-])\\.?((?:${contract.privateClassPrefixes.map(esc).join('|')})[a-z][\\w-]*)`, 'g');
+  const DECL = /(?<![\w-])(color|background(?:-color)?|border(?:-(?:top|right|bottom|left))?(?:-color)?|outline(?:-color)?|box-shadow|fill|stroke|border-radius|--[\w-]+)\s*:\s*([^;{}`'"]+)/g;
+  const COLOR = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?)\(/i;
+  /** The value with every var(…) (fallback included) cut out: what is left is written by hand. */
+  const stripVars = (v) => {
+    let outv = '';
+    for (let i = 0; i < v.length; i++) {
+      if (v.startsWith('var(', i)) { let depth = 0; for (; i < v.length; i++) { if (v[i] === '(') depth++; else if (v[i] === ')' && --depth === 0) break; } continue; }
+      outv += v[i];
+    }
+    return outv;
+  };
+  const notes = [];
+  const note = (at, msg) => notes.push(`${at}  ${msg}`);
+  for (const [file, text] of files) text.split('\n').forEach((raw, i) => {
+    // Comment lines, and lines marked as CSS for another document (an iframe page, an exported file: no host tokens there).
+    if (/^\s*(\/\/|\/\*|\*\/|\*(?=\s|$)(?![^{]*\{))/.test(raw) || /forsion-style:\s*off/.test(raw)) return;
+    const line = raw.replace(/\/\*.*?\*\//g, '');
+    const at = `${file}:${i + 1}`;
+    for (const m of line.matchAll(/var\(\s*(--[\w-]+)\s*(,)?/g)) {
+      const [, t, fb] = m;
+      if (contract.deprecated[t]) note(at, `${t} is deprecated: use ${contract.deprecated[t]}`);
+      else if (pub.has(t)) {
+        // A fallback stays useful only for apps older than the token, and only if this plugin still supports them.
+        const since = contract.since[t];
+        const older = since && (typeof manifest.minAppVersion !== 'string' || cmp(manifest.minAppVersion, since) < 0);
+        if (fb && !fallbackOk.has(t) && !older) note(at, `var(${t}, …): every app this plugin supports defines ${t} and its value follows the theme, so drop the fallback`);
+      }
+      else if (!ownTokens.has(t)) {
+        const near = [...pub].filter((p) => p.startsWith(`--${t.slice(2).split('-')[0]}-`));
+        note(at, `${t} is not a public host token${near.length ? ` (meant ${near.slice(0, 4).join(' / ')}?)` : ''}; this plugin does not define it either`);
+      }
+    }
+    for (const m of line.matchAll(priv)) if (!ownClass(m[1])) note(at, `.${m[1]} is a private host class: it can be renamed in any release`);
+    for (const m of line.matchAll(DECL)) {
+      const [, prop, raw] = m;
+      const v = stripVars(raw);
+      if (prop === 'box-shadow' && COLOR.test(v)) note(at, `box-shadow with a hard-coded color: use --card-shadow / --shadow-sm / --shadow-panel`);
+      else if (COLOR.test(v)) note(at, `${prop}: hard-coded color ${(v.match(/#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?)\([^)]*\)?/i) || [''])[0]}: use a color token (a wash: color-mix(in srgb, var(--danger) 14%, transparent))`);
+      else if (prop === 'border-radius' && /(?<![\w.])(?:[4-9]|[1-9]\d+)(?:\.\d+)?px\b/.test(v)) note(at, `border-radius written by hand: use --radius-xs … --radius-pill`);
+    }
+  });
+  say();
+  say(`Style: host classes and tokens checked against plugin-contract.json (apiVersion ${contract.apiVersion}) in ${files.map(([f]) => f).join(', ') || 'no files'}. Report only: does not change the result.`);
+  if (!notes.length) ok('nothing to report');
+  for (const n of notes.slice(0, 300)) say(`  · ${n}`);
+  if (notes.length > 300) say(`  … +${notes.length - 300} more`);
+  if (notes.length) say(`  ${notes.length} style note(s). Public classes and tokens: tools/plugin-contract.json in the forsion-plugin skill.`);
+  const parts = scanUi(files);
+  say();
+  say('UI parts: what this plugin draws itself although the host has a part for it. Report only: does not change the result.');
+  if (!parts.length) ok('nothing to report');
+  for (const n of formatUiNotes(parts, parts.length)) say(`  ${n}`);
+  if (parts.length) say(`  ${parts.length} UI note(s). How to use the parts: references/host-ui-mounts.md, section "Host parts", in the forsion-plugin skill.`);
 }
 finish();

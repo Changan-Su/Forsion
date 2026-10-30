@@ -100,3 +100,21 @@ describe('哪些信弹通知', () => {
     expect(inboxLetterPops({ sender_id: null, body: '```forsion-approvals\n```' })).toBe(false)
   })
 })
+
+describe('点开 Muse 已读的信', () => {
+  const mail = { id: 'm1', title: 'T', body: '', sender_kind: 'agent', sender_id: 'muse', origin_broadcast_id: null, read_at: '2026-10-30 01:00:00', read_by: 'muse', archived_at: null } as any
+  it('归属清掉并告诉引擎:之后 Muse 撤回已读不会把用户读过的信改回未读', () => {
+    h.patch.mockClear()
+    useInbox.setState({ messages: [mail] } as any)
+    useInbox.getState().select('m1')
+    expect(useInbox.getState().messages[0].read_by).toBeNull()
+    expect(h.patch).toHaveBeenCalledWith(expect.anything(), 'm1', { read: true })
+  })
+  it('用户自己读过的信:再点不发请求', () => {
+    h.patch.mockClear()
+    useInbox.setState({ messages: [{ ...mail, read_by: null }] } as any)
+    useInbox.getState().select('m1')
+    expect(h.patch).not.toHaveBeenCalled()
+  })
+})
+

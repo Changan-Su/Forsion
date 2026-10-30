@@ -3,9 +3,9 @@
  * 供 electron-builder extraResources 打进安装包 → 用户免装 Python、且与系统 Python 隔离。
  *
  *  - 由 build/beforeBuild.cjs 在打包前按目标 (platform, arch) 调用;也可 `node build/fetch-python.cjs` 手动跑。
- *  - 版本不写死:查 astral-sh/python-build-standalone 最新 release,挑匹配三元组的 `install_only` 资产。
+ *  - 版本与摘要固定于 runtime-manifest.json。
  *  - 解压用系统 tar(三平台 runner 均自带,含 Windows 的 bsdtar);tar 自动识别 gzip。
- *  - 解释器下载失败 → 降级为不打包(运行时回落系统 Python),强制内置设 TANGU_REQUIRE_PYTHON=1。
+ *  - 解释器下载失败默认中止;只有显式 FORSION_ALLOW_INCOMPLETE_DEV_BUILD=1 可降级。
  *    逃生阀 TANGU_SKIP_FETCH_PYTHON=1(仅打包非 Python 形态时);跳过时建空目录避免 extraResources 缺 from 报错。
  *  - 解释器到手后按 python-requirements.txt 预装办公/数据库(对标 DSH 桌面端开箱即用)。
  *    **装库失败硬报错、不降级**:提示词和内置技能按「库都在」写,有解释器没库的包比没 Python 更坑。
@@ -14,26 +14,7 @@ const { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } = require('n
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
-const REPO = 'astral-sh/python-build-standalone';
-// 优先内置的 Python 小版本(wheel 覆盖广、稳定);逐级回退。
-const PY_MINORS = ['3.12', '3.13', '3.11'];
-
-/** (platform, arch) → python-build-standalone 的目标三元组。 */
-function tripleFor(platformName, archName) {
-  const key = `${platformName}:${archName}`;
-  const map = {
-    'darwin:arm64': 'aarch64-apple-darwin',
-    'darwin:x64': 'x86_64-apple-darwin',
-    'win32:x64': 'x86_64-pc-windows-msvc',
-    'win32:arm64': 'aarch64-pc-windows-msvc',
-    'linux:x64': 'x86_64-unknown-linux-gnu',
-    'linux:arm64': 'aarch64-unknown-linux-gnu',
-  };
-  const t = map[key];
-  if (!t) throw new Error(`[fetch-python] 不支持的目标: ${key}`);
-  return t;
-}
-
+const { runtimeRequired, assertSkipAllowed, pinnedRuntime, verifyArchive } = require('./runtime-policy.cjs');
 /** build/ 目录(本脚本所在目录)。 */
 const buildDir = () => __dirname;
 /** 最终落点:build/python(tar 顶层目录就叫 python)。 */
@@ -59,16 +40,6 @@ async function ghJson(url) {
   throw new Error(`GitHub API failed @ ${url}: ${lastErr?.message || lastErr}`);
 }
 
-/** 在 assets 里挑匹配三元组的 install_only tar.gz(优先 PY_MINORS 顺序)。 */
-function pickAsset(assets, triple) {
-  for (const minor of PY_MINORS) {
-    const re = new RegExp(`^cpython-${minor.replace('.', '\\.')}\\.\\d+\\+\\d+-${triple}-install_only\\.tar\\.gz$`);
-    const hit = assets.find((a) => re.test(a.name));
-    if (hit) return hit;
-  }
-  return null;
-}
-
 /** 降级:建空 build/python 占位(extraResources 不缺 from;运行时 resolveBundledPython 返回 null → 回落系统 Python)。 */
 function degrade(dest, reason) {
   console.warn(`[fetch-python] ⚠ 未打包内置 Python(运行时回落系统 Python):${reason}`);
@@ -80,16 +51,11 @@ function degrade(dest, reason) {
 
 async function fetchPython({ platformName, archName }) {
   const dest = pythonDir();
-  if (process.env.TANGU_SKIP_FETCH_PYTHON) return degrade(dest, 'TANGU_SKIP_FETCH_PYTHON');
-  // 拉取失败**不阻断整包构建**(否则 GitHub API 限流/网络抖动就毁掉整个发布)——降级为不打包。
-  // 强制要求内置可设 TANGU_REQUIRE_PYTHON=1(本地校验用)。
+  if (process.env.TANGU_SKIP_FETCH_PYTHON) { assertSkipAllowed('python', platformName); return degrade(dest, 'TANGU_SKIP_FETCH_PYTHON'); }
   try {
-    const triple = tripleFor(platformName, archName);
-    const release = await ghJson(`https://api.github.com/repos/${REPO}/releases/latest`);
-    const asset = pickAsset(release.assets || [], triple);
-    if (!asset) throw new Error(`最新 release 无 ${triple} 的 install_only 资产(试过 ${PY_MINORS.join('/')})`);
-
-    console.log(`[fetch-python] ${asset.name}  (release ${release.tag_name})`);
+    const item = pinnedRuntime('python', platformName, archName);
+    const asset = { name: item.name, browser_download_url: item.url };
+    console.log(`[fetch-python] ${asset.name}`);
     let buf;
     for (let i = 0; ; i++) {
       try {
@@ -100,6 +66,7 @@ async function fetchPython({ platformName, archName }) {
       } catch (e) { if (i >= 3) throw e; await sleep(1500 * (i + 1)); }
     }
     const tmp = path.join(buildDir(), asset.name);
+    verifyArchive(buf, item);
     writeFileSync(tmp, buf);
     rmSync(dest, { recursive: true, force: true }); // 换 arch 重跑:先清旧
     // tar 自动识别 gzip(GNU tar / Windows bsdtar 均可);顶层目录名为 python → 落到 build/python。
@@ -110,7 +77,7 @@ async function fetchPython({ platformName, archName }) {
     }
     console.log(`[fetch-python] ✓ ${dest}`);
   } catch (e) {
-    if (process.env.TANGU_REQUIRE_PYTHON) throw e;
+    if (e.code === 'RUNTIME_INTEGRITY' || runtimeRequired('python', platformName)) throw e;
     return degrade(dest, e.message || String(e));
   }
   installPackages(dest); // 在 try 外:装库失败必须让构建挂掉,而不是把解释器也一起降级掉

@@ -21,7 +21,13 @@ import { Markdown } from './Markdown'
 import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, isDesktopOnlyItem, DESKTOP_ONLY_TAG, type InstalledItem } from '../services/marketService'
 import { forgetUserSpace, loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
-import { unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { pluginVaultFolder, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
+import type { AmadeusPlugin } from '@amadeus/plugins/types'
+import { AgentUninstallDialog, PluginUninstallDialog, SkillUninstallDialog } from './UninstallDialog'
+import { uninstallEnginePlugin, uninstallForsionPlugin } from './pluginUninstall'
+import { PanelNotice } from './PanelNotice'
+import { listSkillCatalog } from '../services/backendService'
+import { homeTarget } from '../services/engine/targets'
 import { announceExtensionsChanged, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { afterMarketInstall, canRestartBackend, restartBackend } from '../marketPostInstall'
 import { isGate, promptIfPending } from '../stores/pluginOnboardingStore'
@@ -33,6 +39,7 @@ import { PluginSettingsView } from './AmadeusPluginsTab'
 import { isPlacedSettingsView } from '../amadeus/plugins/display'
 import { MarketPluginAutoUpdate, useMarketPluginUpdates } from './MarketPluginAutoUpdate'
 import { compareMarketVersions } from '../../../shared/marketPluginUpdates'
+import { SkillAgentPicker, applySkillAgentChoice, skillAgentsSupported, useSkillAgents, type SkillAgentChoice } from './MarketSkillAgents'
 
 registerMessages({
   'market.submissionsDescription': { zh: '投稿内容，查看审核结果并管理版本更新。', en: 'Submit your work, view review results and manage version updates.' },
@@ -277,6 +284,9 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     useApp.getState().openSettings(`${info.realType === 'amadeus-plugin' ? 'fplugin' : 'plugin'}:${info.entry.id ?? c.installSlug}`)
   }
 
+  // 技能「装给哪些 Agent」:按条目记,缺省 null = 所有 Agent;只在首次安装时生效
+  const [skillChoice, setSkillChoice] = useState<Record<string, SkillAgentChoice>>({})
+  const skillAgents = useSkillAgents(true)
   const onInstall = async (c: MarketCard, version?: string): Promise<void> => {
     setInstalling((m) => ({ ...m, [c.id]: true }))
     setProgress((m) => omit(m, c.id))
@@ -286,6 +296,10 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     try {
       const res = await installMarket(c.id, version)
       const effectiveType = ((res?.type as MarketType) || c.type)
+      if (effectiveType === 'skill' && !wasInstalled && skillAgentsSupported()) {
+        await applySkillAgentChoice(res?.slug || c.installSlug, skillChoice[c.id] ?? null)
+          .catch((e) => toast(t('market.skillAgents.applyFailed', { e: e?.message || String(e) }), true))
+      }
       track('market.install')
       act('market.install', { id: c.id })
       // 本窗热重载 + 通知主窗等其余窗口(市场是独立浮窗)+ 判断要不要重启后端,与插件引导卡共用。
@@ -314,9 +328,46 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     }
   }
 
+  // Agent / 技能 / 插件走统一卸载确认框(components/UninstallDialog,10-28 手动卸载规范):逐项写去向、进回收站、6 秒内可撤销,
+  // 与设置页同一条路;Space 与主题没有留下的东西,照旧一句确认后删目录。
+  const [asking, setAsking] = useState<
+    | { kind: 'agent'; c: MarketCard; slug: string }
+    | { kind: 'skill'; c: MarketCard; slug: string; key: string }
+    | { kind: 'plugin'; c: MarketCard; id: string }
+    | { kind: 'amadeus-plugin'; c: MarketCard; plugin: AmadeusPlugin }
+    | null>(null)
+  const afterDialogUninstall = async (c: MarketCard, type: string, slug: string): Promise<void> => {
+    act('market.uninstall', { id: c.id })
+    if (type === 'agent' || type === 'skill') void window.tangu?.marketForget?.(type, slug).catch(() => {})
+    await scanCatalog()
+  }
+
   const onUninstall = async (c: MarketCard): Promise<void> => {
     const info = installedInfo(c)
     if (!info) return
+    const slug = c.installSlug
+    try {
+      if (info.realType === 'agent') { setAsking({ kind: 'agent', c, slug }); return }
+      if (info.realType === 'skill') {
+        // 商店技能装在用户技能目录的 <installSlug>/:按目录名找到它在技能目录里的那一行(确认框要 key)
+        const row = (await listSkillCatalog(homeTarget())).find((r) => r.scope === 'user' && r.slug === slug && r.provenance === 'user')
+        if (row) { setAsking({ kind: 'skill', c, slug, key: row.key }); return }
+      } else if (info.realType === 'plugin') {
+        const hit = (await window.tangu?.pluginsUserInstalled?.())?.find((p) => p.slug === slug)
+        if (hit) { setAsking({ kind: 'plugin', c, id: hit.id }); return }
+      } else if (info.realType === 'amadeus-plugin') {
+        const plugin = usePluginStore.getState().plugins.find((p) => p.bundle?.dir === slug || p.id === slug)
+        if (plugin) { setAsking({ kind: 'amadeus-plugin', c, plugin }); return }
+      }
+    } catch {
+      // 查不了(引擎还没起来等):报错别卸 —— 老路是直接删目录,不进回收站
+      toast(t('uninstall.engineDown'), true)
+      return
+    }
+    await legacyUninstall(c, info) // 查得到列表却没有这一份(目录多半已经不在):走老路撤记录
+  }
+
+  const legacyUninstall = async (c: MarketCard, info: NonNullable<ReturnType<typeof installedInfo>>): Promise<void> => {
     // agent 与 skill 落地后是**活体**(agent 带自己的 MEMORY/LOG,技能可能被用户改过),
     // 删目录 = 连用户数据一起没。确认文案对这两类单独加重,别用一句通用的「确定卸载吗」糊过去。
     const warn = info.realType === 'agent' ? t('market.uninstallWarnAgent')
@@ -608,6 +659,15 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           </div>
         )}
 
+        <PanelNotice />
+        {asking?.kind === 'agent' && <AgentUninstallDialog slug={asking.slug} name={asking.c.name} onClose={() => setAsking(null)} onDone={() => void afterDialogUninstall(asking.c, 'agent', asking.slug)} />}
+        {asking?.kind === 'skill' && <SkillUninstallDialog skillKey={asking.key} name={asking.c.name} onClose={() => setAsking(null)} onDone={() => void afterDialogUninstall(asking.c, 'skill', asking.slug)} />}
+        {asking?.kind === 'plugin' && <PluginUninstallDialog name={asking.c.name} onClose={() => setAsking(null)}
+          onConfirm={(opts) => { const a = asking; void uninstallEnginePlugin(a.id, a.c.name, opts).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'plugin', a.c.installSlug) }) }} />}
+        {asking?.kind === 'amadeus-plugin' && <PluginUninstallDialog name={asking.c.name} vaultFolder={pluginVaultFolder(asking.plugin.id, asking.plugin.name)}
+          skills={asking.plugin.bundle?.skills.length ?? 0} agents={asking.plugin.bundle?.agents ?? []} onClose={() => setAsking(null)}
+          onConfirm={(opts) => { const a = asking; void uninstallForsionPlugin(a.plugin, a.c.name, opts, { engine: true }).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'amadeus-plugin', a.c.installSlug) }) }} />}
+
         {!storeOnly && !detail && !detailLoading && !storeView && <div className="mk-upgrade-filters"><select aria-label={t('market.tagAll')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAll')}</option>{[...new Set(catalog.flatMap(c => c.tags || []))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><label><input type="checkbox" checked={compatibleOnly} onChange={e => setCompatibleOnly(e.target.checked)} />{t('market.compatibleOnly')}</label><span>Forsion {appVersion}</span></div>}
         <div className="settings-body mk-body">
           {detail ? (
@@ -620,6 +680,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
                 </main>
                 <aside className="mk-detail-sidebar">
                   <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{autoUpdate(detail)}</div>
+                  {detail.type === 'skill' && !isInstalled(detail) && <SkillAgentPicker hint agents={skillAgents} choice={skillChoice[detail.id] ?? null} disabled={!!installing[detail.id]} onChange={(next) => setSkillChoice((m) => ({ ...m, [detail.id]: next }))} />}
                   <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>
                   <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{navLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
                   {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}

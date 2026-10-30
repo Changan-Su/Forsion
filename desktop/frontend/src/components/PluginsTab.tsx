@@ -4,9 +4,10 @@
  * 插件清单与 agents 由 SettingsModal 统一持有并下传(避免双拉,启用态变更即时反映到 nav)。仅本地后端可用。
  */
 import React, { useEffect, useMemo, useState } from 'react'
-import { setPluginEnabled, uninstallPlugin, installPluginFromNpm, rescanPlugins, type PluginInfo } from '../services/backendService'
+import { setPluginEnabled, installPluginFromNpm, rescanPlugins, type PluginInfo } from '../services/backendService'
 import { panelToast } from './PanelNotice'
-import { ipcErrorText } from '../ipcError'
+import { PluginUninstallDialog } from './UninstallDialog'
+import { uninstallEnginePlugin } from './pluginUninstall'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
@@ -81,21 +82,10 @@ export const PluginsTab: React.FC<{
     } finally { setRescanning(false) }
   }
 
-  const uninstall = async (p: PluginInfo): Promise<void> => {
-    const deps = runningDependents(p)
-    const ask = t('settings.plugins.uninstallConfirm', { name: nm(p) })
-    if (!window.confirm(deps.length ? `${t('settings.plugins.uninstallDependents', { name: nm(p), list: deps.map(nm).join(sep) })}\n\n${ask}` : ask)) return
-    try {
-      const r = await uninstallPlugin(homeTarget(), p.id).catch(() => null) // 后端不在也继续:剩孤儿设置好过卸不掉
-      await window.tangu?.pluginsUninstall?.(p.id)
-      // 10-02 起的引擎在 DELETE 里就把工具 / 路由撤干净了(restartRequired:false);旧引擎或后端不在 → 照旧重启,
-      // 重启后 discoverPlugins 不再发现它。
-      if (r?.restartRequired !== false) await window.tangu?.backendRestart?.()
-      panelToast(t('settings.plugins.uninstalled', { name: nm(p) }))
-      onReload()
-    } catch (e: any) {
-      panelToast(ipcErrorText(e), true)
-    }
+  // 卸载走统一确认框(components/UninstallDialog):插件文件与设置由引擎挪进回收站(?trash=1;可勾「保留设置」),删完 6 秒内可撤销。
+  const [asking, setAsking] = useState<PluginInfo | null>(null)
+  const uninstall = async (p: PluginInfo, opts: { keepSettings: boolean }): Promise<void> => {
+    if (await uninstallEnginePlugin(p.id, nm(p), opts)) onReload()
   }
 
   const doInstall = async (): Promise<void> => {
@@ -186,7 +176,7 @@ export const PluginsTab: React.FC<{
               <button className="btn ghost sm" onClick={() => onOpenSettings(p.id)}>{t('settings.plugins.openSettings')}</button>
             )}
             {p.source === 'folder' && userIds.has(p.id) && (
-              <button className="btn ghost sm" style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall(p)}>
+              <button className="btn ghost sm" style={{ color: 'var(--danger, #c0392b)' }} onClick={() => setAsking(p)}>
                 {t('settings.plugins.uninstall')}
               </button>
             )}
@@ -201,6 +191,11 @@ export const PluginsTab: React.FC<{
           </div>
         </div>
       ))}
+      {asking && <PluginUninstallDialog
+        name={nm(asking)}
+        warning={asking.enabled && runningDependents(asking).length ? t('settings.plugins.uninstallDependents', { name: nm(asking), list: runningDependents(asking).map(nm).join(sep) }) : undefined}
+        onConfirm={(opts) => void uninstall(asking, opts)}
+        onClose={() => setAsking(null)} />}
     </div>
   )
 }

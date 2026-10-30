@@ -70,3 +70,11 @@
 /* Keep the save dock against the scroll viewport; generic Settings has 48px bottom padding. */
 .settings-body:has(.special-agents) { padding-bottom: 0; }
 .settings-page--mobile .special-save { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+
+/* Muse 替你标已读的类别:一个个小胶囊,点掉即撤回 */
+.special-inbox-auto { display: flex; flex-wrap: wrap; gap: 6px; }
+.special-inbox-auto > button {
+  display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border-radius: var(--radius-pill, 999px);
+  border: var(--border-width) solid var(--border); background: transparent; color: var(--text); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); cursor: pointer;
+}
+.special-inbox-auto > button:hover { background: var(--overlay-light, rgba(127,127,127,.1)); }

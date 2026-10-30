@@ -14,9 +14,9 @@
 .iui-block-text:has(> h4) + .iui-block:not(:has(> h4)):not(:has(.iui-list-head h4)):not(.iui-block-controls) { margin-top: 12px; }
 .iui-block-disclosure + .iui-block-disclosure { margin-top: 2px; }
 .iui-block-app-card + .iui-block-app-card { margin-top: 12px; }
-.intelligent-ui button:where(:not(.iui-app-card *, .t2-suggest-chip)), .intelligent-ui input, .intelligent-ui summary { font: inherit; }
-.intelligent-ui button:where(:not(.iui-app-card *, .t2-suggest-chip)), .intelligent-ui .iui-actions a { cursor: pointer; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); padding: 8px 12px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
-.intelligent-ui button:where(:not(.iui-app-card *, .t2-suggest-chip)):hover, .intelligent-ui .iui-actions a:hover { background: var(--bg-hover); }
+.intelligent-ui button:where(:not(.iui-app-card *, .t2-suggest-chip, .icon-btn)), .intelligent-ui input, .intelligent-ui summary { font: inherit; }
+.intelligent-ui button:where(:not(.iui-app-card *, .t2-suggest-chip, .icon-btn)), .intelligent-ui .iui-actions a { cursor: pointer; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md); background: transparent; color: var(--text); padding: 8px 12px; min-height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; text-decoration: none; }
+.intelligent-ui button:where(:not(.iui-app-card *, .t2-suggest-chip, .icon-btn)):hover, .intelligent-ui .iui-actions a:hover { background: var(--bg-hover); }
 .intelligent-ui button:where(:not(.iui-app-card *)):disabled { opacity: .4; cursor: default; }
 .intelligent-ui :is(button, input, summary, a):focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 2px; }
 .intelligent-ui p { margin: 8px 0; }
@@ -167,7 +167,9 @@
 .iui-source summary > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .iui-source details[open] > summary > span { display: block; }
 .iui-notice { display: flex; align-items: center; gap: 6px; margin-top: 12px; color: var(--text-muted); font-size: var(--ui-font-meta); }
-.intelligent-ui pre { display: block; max-width: 100%; overflow-x: auto; }
+/* Code fences look like the chat answer's (.t2-content pre): the card sits outside .t2-content, so that rule never reached it. */
+.intelligent-ui pre { display: block; max-width: 100%; overflow-x: auto; margin: 0 0 var(--chat-paragraph-gap, .7em); padding: 12px 14px; border-radius: var(--radius-md, 12px); background: var(--bg-card); }
+.iui-prose > :last-child pre { margin-bottom: 0; }
 /* Tables, written in markdown or computed (v2), use the chat answer's table: narrow tables stay narrow,
  * wide ones scroll, lighter rules, muted header without a fill; figures right-aligned in tabular digits. */
 .intelligent-ui table { border-collapse: collapse; font-size: .92em; margin: .2em 0 .85em; display: block; width: max-content; max-width: 100%; overflow-x: auto; }

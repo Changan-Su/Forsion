@@ -2973,7 +2973,7 @@ The plugin folder is `~/.forsion/plugins/`, one folder per plugin, and store ins
 |---|---|
 | A plugin you dropped in by hand does not show up | Click "Reload" on the plugin page; if it still does not appear, that folder is not a complete plugin package |
 | A greyed-out card badged "Requires app version ≥ …" | Update the app, then come back and check the box |
-| A panel reads "Plugin view failed to load (see console)" | Toggle the plugin off and on again, then check "Updates" in the store for a newer version |
+| A panel shows a "Plugin view failed to load" card | Click "Retry" on the card first; if that doesn't help, toggle the plugin off and on again, then check "Updates" in the store for a newer version |
 | You switched interface language but the plugin's `/` entries and command names are still in the old one | Toggle that plugin off and on, or restart the app. Those names are fixed at the moment the plugin is enabled and do not follow a mid-session language switch |
 | One plugin sends too many notifications | Settings → "Appearance" → "Notifications" → "Plugin notifications", and switch off its row |
 | An unwanted item in the status bar | Settings → "Appearance" → "Status bar", uncheck it; drag to reorder |
