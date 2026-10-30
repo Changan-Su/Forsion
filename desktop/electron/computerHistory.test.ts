@@ -631,6 +631,27 @@ describe('ComputerHistory × helper 订阅', () => {
     expect(await ch.recentApps()).toEqual([safari])
   })
 
+  it('落盘后才通知自动化:切 App / 系统事件 / 离开后的第一条动静;普通动静不吵', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const onSignal = vi.fn()
+    const { ch, root } = makeController(helper.sockPath, { onSignal })
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    const t = Date.now()
+    const file = path.join(root, 'events', `${localDay(t)}.jsonl`)
+    const safari = { name: 'Safari', bundleId: 'com.apple.Safari' }
+    helper.push({ t, kind: 'app', app: safari, title: 'Docs' })
+    await waitFor(() => onSignal.mock.calls.length === 1, 3_000)
+    expect(lines(file)).toHaveLength(1) // 通知时盘上已经有了:引擎重读得到
+    helper.push({ t: t + 1, kind: 'text', app: safari, text: 'hello' })
+    await waitFor(() => lines(file).length === 2, 3_000)
+    await ch.flush()
+    expect(onSignal).toHaveBeenCalledTimes(1) // 打字不算信号
+    helper.push({ t: t + 2, kind: 'system', state: 'locked' })
+    await waitFor(() => onSignal.mock.calls.length === 2, 3_000)
+  })
+
   it('断线 → disconnected → 退避后重连回到 recording', async () => {
     const helper = fakeHelper()
     await helper.listen()

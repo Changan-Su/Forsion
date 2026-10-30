@@ -2116,7 +2116,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2139,11 +2139,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -2897,7 +2905,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2920,11 +2928,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -3697,7 +3713,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3720,11 +3736,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -4841,7 +4865,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4864,11 +4888,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -6004,7 +6036,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6027,11 +6059,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -6744,7 +6784,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6767,11 +6807,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -7503,7 +7551,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7526,11 +7574,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -8647,7 +8703,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8670,11 +8726,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -9810,7 +9874,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9833,11 +9897,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [

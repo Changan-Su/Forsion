@@ -38,7 +38,7 @@ const nowUtc = (): string => new Date().toISOString().slice(0, 19).replace('T', 
 const ts = (v: any): string | null =>
   v == null ? null : v instanceof Date ? v.toISOString().slice(0, 19).replace('T', ' ') : String(v).slice(0, 19);
 
-const COLS = 'id, title, body, title_en, body_en, sender_kind, sender_id, origin_broadcast_id, read_at, archived_at, attachments, expires_at, thread, created_at';
+const COLS = 'id, title, body, title_en, body_en, sender_kind, sender_id, origin_broadcast_id, read_at, read_by, archived_at, attachments, expires_at, thread, created_at';
 
 /** thread 只认服务端广播落下来的行(sender_kind='server'):本地 POST /agent/inbox 与 agent 信永远没有它;
  *  形状只认 {kind:'feedback', ticketId:<uuid>}(客户端据此挂回复框、按 ticketId 打反馈 API),别的一律当无线程。 */
@@ -76,6 +76,7 @@ function serialize(r: any) {
     origin_broadcast_id: r.origin_broadcast_id ?? null,
     thread: parseThread(r),
     read_at: ts(r.read_at),
+    read_by: r.read_by ?? null,
     archived_at: ts(r.archived_at),
     attachments,
     expires_at: ts(r.expires_at),
@@ -188,7 +189,7 @@ router.patch('/agent/inbox/:id', authMiddleware, async (req: AuthRequest, res) =
     const sets: string[] = [];
     const params: any[] = [];
     if (typeof read === 'boolean') {
-      sets.push(`read_at = ?`);
+      sets.push(`read_at = ?`, `read_by = NULL`); // 用户自己碰过这封:不再算 Muse 标的
       params.push(read ? nowUtc() : null);
     }
     if (typeof archived === 'boolean') {

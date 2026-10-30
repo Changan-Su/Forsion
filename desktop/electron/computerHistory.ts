@@ -47,6 +47,8 @@ const HEALTHY_MS = 30_000
 const SUBSCRIBE_TIMEOUT_MS = 5_000
 /** `open -n` 的节流:helper 靠 flock 让多余实例自行退出,但也别每次重试都起一个进程。 */
 const LAUNCH_THROTTLE_MS = 30_000
+/** 隔了这么久才来的第一批事件也算信号(没锁屏的离开:回来的第一下是点击或打字,不是切 App)。 */
+const SIGNAL_IDLE_MS = 60_000
 /** 单行上限:helper 侧文本已封顶 500 字,远超此值 = 对端不是我们的 helper,直接断。 */
 const MAX_LINE_BYTES = 1024 * 1024
 const PAUSE_MAX_MS = 7 * DAY_MS
@@ -759,6 +761,8 @@ export interface ComputerHistoryDeps {
   openFolder?(dir: string): Promise<unknown>
   now?(): number
   onChanged?(view: ComputerHistoryView): void
+  /** 新的 App 切换 / 系统事件落了盘,或离开一阵后第一条动静落了盘:自动化的「电脑上」规则该看一眼了。主进程踢引擎,自己节流。 */
+  onSignal?(): void
 }
 
 export class ComputerHistory {
@@ -830,6 +834,7 @@ export class ComputerHistory {
   private lastLaunchAt = 0
 
   private buffer: ComputerHistoryEvent[] = []
+  private lastAppendAt = 0
   private flushTimer?: ReturnType<typeof setTimeout>
   private retryTimer?: ReturnType<typeof setTimeout>
   private pauseTimer?: ReturnType<typeof setTimeout>
@@ -1363,6 +1368,10 @@ export class ComputerHistory {
       this.storeFailing = false
       this.refresh()
     }
+    // 落盘之后才踢:引擎重读的就是这批文件,踢早了读到旧的。
+    const t = this.now()
+    if (t - this.lastAppendAt >= SIGNAL_IDLE_MS || batch.some((e) => e.kind === 'app' || e.kind === 'system')) this.d.onSignal?.()
+    this.lastAppendAt = t
   }
 
   // ── 状态 ──

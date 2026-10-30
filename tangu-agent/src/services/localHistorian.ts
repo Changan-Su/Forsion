@@ -1006,7 +1006,7 @@ async function startAssistDiscussion(opts: {
       (freshContext ? `[Current conversation]\n${freshContext}\n\n` : '') +
       `[Historian assist] Decide together whether ${topics} should be updated for this conversation (see the context above). ` +
       `Historian speaks first with its assessment; then ${mainDef.name} makes the final call and, if an update is warranted, ` +
-      'performs it ITSELF by calling log_event (one short sentence for what happened today) and/or remember (only what will still be true next month — user facts/preferences, stable environment facts, proven procedures; never progress, deliverables or dated status, those are log_event material, and never an instruction that holds for this conversation only; one present-tense sentence of at most 300 characters per fact; if the memory below already covers it, update that entry instead of adding another). ' +
+      'performs it ITSELF by calling log_event (one short sentence for what happened today) and/or remember (only what will still be true next month — user facts/preferences (facts about the person themself go to its "person" scope when offered), stable environment facts, proven procedures; never progress, deliverables or dated status, those are log_event material, and never an instruction that holds for this conversation only; one present-tense sentence of at most 300 characters per fact; if the memory below already covers it, update that entry instead of adding another). ' +
       'Do not do any other work. Keep it brief — one round is usually enough.\n\n' +
       // 全文注入(受 MEMORY_CHAR_BUDGET 帽):从前只给头 3000 字,最新条目看不见 → 主 Agent 重复记、写追加式「更正旧条目」。
       `[Current long-term MEMORY]\n${(mem || '(empty)').slice(0, MEMORY_CHAR_BUDGET)}\n\n` +
