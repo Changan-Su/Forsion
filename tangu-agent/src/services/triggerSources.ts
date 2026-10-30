@@ -31,7 +31,7 @@ const paramsOf = (t: MuseTrigger): Record<string, string | number> => (t.cond as
 const condParams = (c: MuseTriggerCond): Record<string, string | number> => (c as { params?: Record<string, string | number> }).params ?? {};
 
 /** 规则的事件起算点:规则建好之后 + 冷却结束之后 + 还算新鲜。 */
-function eventSince(t: MuseTrigger, io: TriggerEvalIo): number {
+export function eventSince(t: MuseTrigger, io: TriggerEvalIo): number {
   const fresh = t.actions?.length ? REMIND_FRESH_MS : WAKE_FRESH_MS;
   return Math.max(Date.parse(t.createdAt) || 0, io.lastMs ? io.lastMs + io.cooldownMs : 0, io.now.getTime() - fresh);
 }

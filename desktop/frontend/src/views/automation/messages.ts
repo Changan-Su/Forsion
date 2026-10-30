@@ -10,6 +10,7 @@ registerMessages({
   'automation.step.wake': { zh: '叫醒 Muse', en: 'Wake Muse' },
   'automation.step.wakeHint': { zh: '带这句话进 Muse 的下一个周期，由它判断怎么做。要花额度，你在跑别的会话时它会等。', en: 'Passes this line to Muse\u2019s next cycle and lets it decide. Uses your budget, and waits while you\u2019re running another session.' },
   'automation.step.remindHint': { zh: '不叫模型、不花额度：弹一条系统通知，在 Muse 私聊里写一行。Muse 运行时段外不提醒。', en: 'No model, no budget: a system notification and one line in your Muse chat. Skipped outside Muse\u2019s active hours.' },
+  'automation.cond.plugin': { zh: '插件事件 · {key}', en: 'Plugin event · {key}' },
   'automation.group.time': { zh: '时间', en: 'Time' },
   'automation.group.computer': { zh: '电脑上', en: 'On this computer' },
   'automation.group.forsion': { zh: 'Forsion 里', en: 'In Forsion' },

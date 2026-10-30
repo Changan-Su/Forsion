@@ -54,6 +54,17 @@ describe('ask / agent 档', () => {
     expect(h.upserts).toHaveLength(0);
   });
 
+  it('卡上只写得下一步:带两个动作的不提', async () => {
+    const out = await run({ ...remind, actions: [{ type: 'remind', title: 'a' }, { type: 'notify', title: 'b' }] });
+    expect(out).toMatch(/^Error/);
+    expect(h.cards).toHaveLength(0);
+  });
+
+  it('建卡时的目录随卡存', async () => {
+    await run(remind, { ...ask, cwd: '/proj' });
+    expect(h.cards[0].payload.cwd).toBe('/proj');
+  });
+
   it('list 照常;已有三张待回的规则卡就不再提', async () => {
     expect(await run({ action: 'list' })).not.toMatch(/^Error/);
     h.pending = [{ kind: 'rule' }, { kind: 'rule' }, { kind: 'rule' }, { kind: 'plugin' }];

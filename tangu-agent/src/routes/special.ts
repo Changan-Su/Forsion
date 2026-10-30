@@ -12,6 +12,9 @@
  *   POST     /agent/special/automation/triggers/:id/fire  立即执行(origin=manual 试跑 / button 按钮点击,不动 lastFiredAt)
  *   POST     /agent/special/automation/kick            唤醒巡检(桌面写完 .db 后踢一下,db_changed 从 5min 降到 ~2s;{scope:'computer'} = 电脑历史落盘后踢,没有电脑类规则就不醒)
  *   GET      /agent/special/automation/sources         触发源注册表(界面菜单;每源带 available / reason)
+ *   POST     /agent/special/automation/plugin-triggers  渲染层插件登记触发源(ctx.automation.registerTrigger;只在内存,重启后宿主补登)
+ *   DELETE   /agent/special/automation/plugin-triggers/:pluginId/:key       注销(插件停用 / 卸载 / 重载)
+ *   POST     /agent/special/automation/plugin-triggers/:pluginId/:key/emit  插件事件(ctx.automation.emit)
  *   GET      /agent/special/automation/actions          tool_call 动作目录(白名单+automationSafe)
  *   GET      /agent/special/automation/executions       动作链执行账本(?triggerId=&limit=)
  *   POST     /agent/special/muse/triggers              upsert 规则(带 id 改/无 id 建;桌面「自动化」构建器)
@@ -52,6 +55,7 @@ import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianCon
 import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
 import { getTriggerSource, listTriggerSources } from '../services/triggerRegistry.js';
+import { emitPluginTrigger, registerPluginTrigger, unregisterPluginTrigger } from '../plugins/automation.js';
 import { readDbOrNull } from '../services/amadeusDb.js';
 import { dropCursors } from '../services/dbCursors.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
@@ -530,6 +534,26 @@ router.post('/agent/special/automation/kick', authMiddleware, async (req: AuthRe
   }
   kickMuse();
   res.json({ ok: true });
+});
+
+router.post('/agent/special/automation/plugin-triggers', authMiddleware, (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    registerPluginTrigger(String(req.body?.pluginId ?? ''), req.body?.trigger);
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: 'bad_trigger', detail: e?.message }); }
+});
+router.delete('/agent/special/automation/plugin-triggers/:pluginId/:key', authMiddleware, (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  unregisterPluginTrigger(String(req.params.pluginId), String(req.params.key));
+  res.json({ ok: true });
+});
+router.post('/agent/special/automation/plugin-triggers/:pluginId/:key/emit', authMiddleware, (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    emitPluginTrigger(String(req.params.pluginId), String(req.params.key), req.body?.payload);
+    res.json({ ok: true });
+  } catch (e: any) { res.status(404).json({ error: 'unknown_trigger', detail: e?.message }); }
 });
 
 // 触发源目录(自动化画布的类型菜单直接从这里出)。电脑那组:本平台没有电脑历史 = 不给(Linux);关着 = 给但 available:false,界面灰掉。

@@ -41,6 +41,13 @@ import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOr
 
 const MAX_PENDING_RULE_CARDS = 3;
 
+/** 插件登记的触发源(没有就是空串,工具说明一个字不变)。只列校验过形状的 id 和参数名:显示名是插件写的文本,不进工具说明。 */
+function pluginTriggersNote(): string {
+  const list = listTriggerSources().filter((s) => s.group === 'plugin')
+    .map((s) => (s.params.length ? `${s.id} (params: ${s.params.map((p) => p.key).join(', ')})` : s.id));
+  return list.length ? ` Plugin triggers: ${list.join(', ')}.` : '';
+}
+
 function fmt(t: MuseTrigger): string {
   const act = t.actions?.length
     ? `, actions: ${t.actions.map((a) =>
@@ -54,10 +61,12 @@ function fmt(t: MuseTrigger): string {
 }
 
 /** ask / agent 档 Muse 的 set:发规则卡,不写规则。卡上存校验过的规则(画「当 · 只在 · 做」)和入参(点「好」时再校验一次建出来)。 */
-async function proposeRule(userId: string, args: Record<string, any>, v: ValidatedTrigger): Promise<string> {
+async function proposeRule(userId: string, cwd: string | undefined, args: Record<string, any>, v: ValidatedTrigger): Promise<string> {
   if (String(args.id || '').trim()) return 'Error: at your permission level you can only propose new rules, not change existing ones.';
-  if (v.agentSlug || v.actions?.some((a) => a.type !== 'remind' && a.type !== 'notify')) {
-    return 'Error: a proposed rule can only remind the user (actions remind or notify) or wake you (no actions). Ask the user to set up anything else in Automation.';
+  // 卡上「做」只有一行:只收一步,点「好」建出来的和卡上写的是一回事。
+  const steps = v.actions ?? [];
+  if (v.agentSlug || steps.length > 1 || steps.some((a) => a.type !== 'remind' && a.type !== 'notify')) {
+    return 'Error: a proposed rule does one thing: remind the user (one remind or notify action) or wake you (no actions). Ask the user to set up anything else in Automation.';
   }
   const pending = await listMuseCards(userId, 'pending');
   if (pending.filter((c) => c.kind === 'rule').length >= MAX_PENDING_RULE_CARDS) return `Error: ${MAX_PENDING_RULE_CARDS} rule proposals are already waiting for the user. Wait for an answer first.`;
@@ -65,7 +74,8 @@ async function proposeRule(userId: string, args: Record<string, any>, v: Validat
   const { action: _a, ...input } = args;
   const r = await postMuseCard(userId, {
     kind: 'rule',
-    payload: { rule: { desc, cond, prompt, cooldownHours, actions, only, maxPerDay }, input: { ...input, cooldown_hours: cooldownHours } },
+    // cwd 随卡存:入参里的相对路径点「好」时要按建卡时的目录解析,引擎自己的工作目录是另一回事。
+    payload: { rule: { desc, cond, prompt, cooldownHours, actions, only, maxPerDay }, input: { ...input, cooldown_hours: cooldownHours }, cwd },
     text: desc,
   });
   return r.ok ? 'Proposed. A rule card is at the end of your direct chat with the user; the rule exists only after they accept it. Do not ask again in text.' : r.error;
@@ -101,7 +111,8 @@ export const manageAutomationProvider: ToolProvider = {
             'Actions (in order, fail-stop): notify {title, body?} posts to the user inbox with push, zero cost — the right way to deliver timed reminders; ' +
             'remind {title, body?} shows a system notification and writes one line in the Muse chat — no model, nothing leaves this computer, skipped outside Muse active hours; ' +
             'agent_run {agentSlug, prompt} runs that agent unattended. Omit actions to instead wake Muse (legacy) or set `agent` as a shorthand for a single agent_run. ' +
-            'Rules are evaluated by code every few minutes at zero cost. A one-time (at) rule disables itself after firing.',
+            'Rules are evaluated by code every few minutes at zero cost. A one-time (at) rule disables itself after firing.' +
+            pluginTriggersNote(),
           parameters: {
             type: 'object',
             properties: {
@@ -214,7 +225,7 @@ export const manageAutomationProvider: ToolProvider = {
         if (ctx.muse && wakesMuse && !getTriggerSource(v.value.cond.type)?.selfWakeSafe) {
           return 'Error: Muse cannot create automations that wake itself from this kind of trigger (self-trigger loop). For your own timed follow-ups use manage_schedule; rules that wake you must use a computer.* or calendar.before trigger.';
         }
-        if (proposing) return proposeRule(ctx.userId, args, v.value);
+        if (proposing) return proposeRule(ctx.userId, ctx.cwd, args, v.value);
 
         if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
           return `Error: agent "${v.value.agentSlug}" not found (use manage_agent action=list to see agents)`;

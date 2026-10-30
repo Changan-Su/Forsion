@@ -37,6 +37,8 @@ export function condText(t: T, cond: MuseTriggerInfo['cond']): string {
     const wn = cond.where?.length ? ` · ${t('automation.cond.dbWhereN', { n: String(cond.where.length) })}` : ''
     return `${base}${eq}${wn}`
   }
+  const pluginKey = /^plugin:[^:]+:(.+)$/.exec(String(cond.type))?.[1]
+  if (pluginKey) return t('automation.cond.plugin', { key: pluginKey })
   return String((cond as any).type || '—')
 }
 
