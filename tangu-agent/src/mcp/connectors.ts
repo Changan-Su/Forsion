@@ -13,11 +13,14 @@ import { connectorCatalogFile } from '../core/tanguHome.js';
 export const USER_KEY = '{userKey}';
 export const isUserKeyUrl = (url: string | undefined): boolean => !!url && url.includes(USER_KEY);
 export const fillUserKey = (url: string, key: string): string => url.split(USER_KEY).join(encodeURIComponent(key));
-/** 文本里出现的 Key(原文与编码后两种形态)一律换回占位符。 */
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** 文本里出现的 Key 一律换回占位符。形态:原文、encodeURIComponent、URL 序列化再编码的 !'()*、JSON 转义;百分号编码不分大小写。 */
 export function redactKey(text: string, key: string | undefined): string {
   if (!key) return text;
-  for (const form of new Set([key, encodeURIComponent(key)])) text = text.split(form).join(USER_KEY);
-  return text;
+  const enc = encodeURIComponent(key);
+  const forms = [key, enc, enc.replace(/[!'()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`), JSON.stringify(key).slice(1, -1), key.replace(/\//g, '\\/')];
+  const re = new RegExp([...new Set(forms)].sort((a, b) => b.length - a.length).map(escapeRe).join('|'), 'gi'); // 不分大小写:%2f 与 %2F 同一个 Key(字母部分顺带也不分,多遮不漏)
+  return text.replace(re, USER_KEY);
 }
 
 /** 目录缓存里 id → alwaysAsk 名单;读不到 / 坏了 = null(不知道)。
@@ -38,16 +41,19 @@ export function catalogAlwaysAsk(): Map<string, string[]> | null {
 }
 
 /** 连接器条目上的这个远端工具要不要每次都问。 */
-export function connectorToolAlwaysAsk(connectorId: string, remoteName: string | undefined): boolean {
+/** remoteNames = 这个桥接名在本进程里指过的所有远端工具(工具列表变了、快照里冻着的还是旧的那个):任一被列进就算。 */
+export function connectorToolAlwaysAsk(connectorId: string, remoteNames: Iterable<string> | undefined): boolean {
   const list = catalogAlwaysAsk()?.get(connectorId);
-  if (!list || remoteName === undefined) return true;
-  return list.includes(remoteName);
+  const names = remoteNames ? [...remoteNames] : [];
+  if (!list || !names.length) return true;
+  return names.some((n) => list.includes(n));
 }
 
-let lookup: ((bridgedName: string) => 'always' | undefined) | undefined;
-/** manager 注册:桥接名 → 'always'(连接器 alwaysAsk)/ undefined。返回注销函数。 */
+const lookups = new Set<(bridgedName: string) => 'always' | undefined>();
+/** manager 注册:桥接名 → 'always'(连接器 alwaysAsk)/ undefined。返回注销函数。多个 manager 并存时任一说 always 就算(只收紧)。 */
 export function setMcpApprovalLookup(fn: (bridgedName: string) => 'always' | undefined): () => void {
-  lookup = fn;
-  return () => { if (lookup === fn) lookup = undefined; };
+  lookups.add(fn);
+  return () => { lookups.delete(fn); };
 }
-export const mcpDeclaredApproval = (name: string): 'always' | undefined => (name.startsWith('mcp__') ? lookup?.(name) : undefined);
+export const mcpDeclaredApproval = (name: string): 'always' | undefined =>
+  name.startsWith('mcp__') && [...lookups].some((f) => f(name) === 'always') ? 'always' : undefined;

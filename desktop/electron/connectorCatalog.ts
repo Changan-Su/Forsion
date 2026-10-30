@@ -94,13 +94,13 @@ export function syncMcpServers(servers: Record<string, any>, catalog: ConnectorE
   return next
 }
 
-/** 连接:已连着(带同一标记)就原样返回;名字被用户自己的条目占了就换 `<id>-connector`,再撞就报错(绝不覆盖用户的)。 */
-export function addConnector(servers: Record<string, any>, c: ConnectorEntry): { servers: Record<string, any>; name: string; added: boolean } {
+/** 连接:已连着(带同一标记)就原样返回;名字被用户自己的条目或插件自带的 server(taken,引擎报来的)占了就换 `<id>-connector`,再撞就报错(绝不覆盖用户的)。 */
+export function addConnector(servers: Record<string, any>, c: ConnectorEntry, taken: string[] = []): { servers: Record<string, any>; name: string; added: boolean } {
   if (c.kind !== 'remote-mcp' || !c.url) throw new Error('This connector needs a newer version of Forsion.')
   const existing = Object.entries(servers).find(([, cfg]) => cfg?.connector === c.id)
   if (existing) return { servers, name: existing[0], added: false }
   if (c.status !== 'published') throw new Error('This connector is no longer available.')
-  const name = [c.id, `${c.id}-connector`].find((n) => !Object.hasOwn(servers, n))
+  const name = [c.id, `${c.id}-connector`].find((n) => !Object.hasOwn(servers, n) && !taken.includes(n))
   if (!name) throw new Error(`An MCP server named "${c.id}" already exists. Rename it in Settings and try again.`)
   const next = { ...servers, [name]: validateMcpEntry({ ...managedFields(c), connector: c.id }, name) }
   checkMcpNames(next, servers)
@@ -157,13 +157,14 @@ export function createConnectorCatalog(deps: ConnectorDeps) {
       return inflight
     },
     readCache,
-    async connect(id: string): Promise<{ name: string; added: boolean }> {
+    async connect(id: string, taken: unknown = []): Promise<{ name: string; added: boolean }> {
+      const names = Array.isArray(taken) ? taken.filter((x): x is string => typeof x === 'string') : []
       if (typeof id !== 'string' || !CONNECTOR_ID_RE.test(id)) throw new Error('Invalid connector')
       const c = (await readCache()).connectors.find((x) => x.id === id)
       if (!c) throw new Error('This connector is no longer available.')
       let result!: { name: string; added: boolean }
       await deps.updateMcpServers((servers) => {
-        const r = addConnector(servers, c)
+        const r = addConnector(servers, c, names)
         result = { name: r.name, added: r.added }
         return r.added ? r.servers : undefined
       })

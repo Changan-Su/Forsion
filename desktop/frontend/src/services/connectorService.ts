@@ -18,10 +18,11 @@ export async function connectorRows(): Promise<Map<string, McpRow>> {
 }
 
 /** 等引擎接上刚写的条目、首次连接落定。有回复正在生成时引擎不重载配置(不在 run 中途换工具),等不到就如实报。 */
-async function settled(name: string): Promise<McpRow | undefined> {
+async function settled(name: string, id: string): Promise<McpRow | undefined> {
   const end = Date.now() + 30_000
   for (;;) {
-    const row = (await listTools(homeTarget())).mcp?.find((r) => r.server === name)
+    // 只认 mcp.json 里带这个标记的那条:插件自带的同名 server 不算
+    const row = (await listTools(homeTarget())).mcp?.find((r) => r.server === name && !r.origin && r.connector === id)
     if ((row && row.status !== 'connecting') || Date.now() > end) return row
     await new Promise((r) => setTimeout(r, 500))
   }
@@ -35,8 +36,9 @@ export type ConnectResult =
   | { kind: 'error'; name: string; message: string }
 
 export async function connectConnector(c: ConnectorEntry): Promise<ConnectResult> {
-  const { name } = await window.tangu!.connectorsConnect!(c.id)
-  const row = await settled(name)
+  const plugins = ((await listTools(homeTarget())).mcp ?? []).filter((r) => r.origin).map((r) => r.server) // 插件占着的名字不能用
+  const { name } = await window.tangu!.connectorsConnect!(c.id, plugins)
+  const row = await settled(name, c.id)
   if (!row) return { kind: 'pending', name }
   if (row.status === 'connected') return { kind: 'connected', name }
   if (row.auth === 'user-key') return { kind: 'needs-key', name }

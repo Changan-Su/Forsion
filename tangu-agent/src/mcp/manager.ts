@@ -95,6 +95,8 @@ interface ServerEntry {
   authHint?: AuthHint;
   loginUrl?: string; // 登录进行中:授权页地址(再点一次登录 = 重新打开它)
   userKey?: string; // 本次连接填进地址的 Key:只用来连接和脱敏,不出这个对象
+  /** 桥接名 → 它在本进程里指过的远端工具名(只增):alwaysAsk 按这份判,工具列表变了旧快照照样拦得住。 */
+  boundRemote: Map<string, Set<string>>;
   origin?: McpServerStatus['origin'];
 }
 
@@ -206,14 +208,13 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     const serverName = owner.get(bridged);
     const entry = serverName === undefined ? undefined : servers.find((s) => s.name === serverName && !s.origin);
     if (!entry?.cfg.connector) return undefined;
-    const tool = entry.tools.find((t) => t.name === bridged);
-    return connectorToolAlwaysAsk(entry.cfg.connector, tool?.remoteName) ? 'always' : undefined;
+    return connectorToolAlwaysAsk(entry.cfg.connector, entry.boundRemote.get(bridged)) ? 'always' : undefined;
   });
 
   function newEntry(name: string, c: McpServerConfig, origin?: ServerEntry['origin']): ServerEntry {
     const entry: ServerEntry = {
       name, cfg: c, transport: inferTransport(c), client: null, tools: [], status: 'connecting',
-      connecting: null, pendingClient: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false, needsLogin: false,
+      connecting: null, pendingClient: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false, needsLogin: false, boundRemote: new Map(),
       ...(origin ? { origin } : {}),
     };
     let rejected: string | undefined;
@@ -315,7 +316,13 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       const sorted = [...(r.tools ?? [])].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
       for (const t of sorted) {
         const bridged = bridgeTool(entry.name, t as any, used);
-        if (bridged) tools.push(bridged);
+        if (!bridged) continue;
+        // 工具描述 / 参数 schema 也是喂给模型的:server 回显了带 Key 的地址也要换回模板
+        if (entry.userKey) bridged.definition = JSON.parse(red(entry, JSON.stringify(bridged.definition)));
+        let seen = entry.boundRemote.get(bridged.name);
+        if (!seen) entry.boundRemote.set(bridged.name, (seen = new Set()));
+        seen.add(bridged.remoteName);
+        tools.push(bridged);
       }
       entry.tools = tools;
       if (started) claimTools(entry); // 首批由 start() 按名字典序统一认领
@@ -454,6 +461,9 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       const added = Object.entries(raw).filter(([name, c]) => c.enabled !== false && !servers.some(s => !s.origin && s.name === name && !gone.includes(s)));
       // Remove before awaiting close. A stale run snapshot must fail, never dispatch to a replacement endpoint.
       for (const s of gone) { servers.splice(servers.indexOf(s), 1); s.configError = true; }
+      // 连接器的地址被目录改了(同名、同标记、换了地址):旧地址的令牌 / Key 作废,不留在本机
+      // ponytail: 引擎没在跑时发生的改动看不见,旧记录留到用户断开 / 重新登录;要补就让宿主对账时一并记下旧地址
+      for (const s of gone) if (!s.origin && s.cfg.connector && s.cfg.url && raw[s.name]?.connector === s.cfg.connector && raw[s.name]?.url && raw[s.name].url !== s.cfg.url) forgetServer(s.cfg.url);
       reloading = (async () => {
         await Promise.all(gone.map(closeEntry));
         if (disposed) return;
@@ -581,7 +591,14 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
 
     async logout(name) {
       const entry = servers.find((s) => s.name === name && !s.origin);
-      if (!entry?.cfg.url) throw new Error(`"${name}" is not a remote MCP server in your MCP config`);
+      if (!entry) {
+        // 停用的条目不在运行表里:按保存的配置删令牌 / Key(不然断开后配置删了、凭据还在)
+        const saved = loadRawMcpServers(configFile)[name];
+        if (!saved?.url || nameOwner.get(name)) throw new Error(`"${name}" is not a remote MCP server in your MCP config`);
+        forgetServer(saved.url);
+        return;
+      }
+      if (!entry.cfg.url) throw new Error(`"${name}" is not a remote MCP server in your MCP config`);
       forgetServer(entry.cfg.url);
       clearRetry(entry);
       markNeedsLogin(entry);

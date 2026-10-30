@@ -17,6 +17,8 @@ vi.mock('../hooks/index.js', () => ({ runHooks: vi.fn(async () => ({})) }));
 import { createMcpManager, type McpManager } from './manager.js';
 import type { LoadedMcpTool } from './toolBridge.js';
 import { connectorAuthFile, connectorCatalogFile } from '../core/tanguHome.js';
+import { redactKey, connectorToolAlwaysAsk } from './connectors.js';
+import { saveUserKey, loadUserKey } from './oauth.js';
 import { declaredApproval } from '../tools/toolRegistry.js';
 import { gateToolCall, resolveApproval } from '../services/approvals.js';
 import type { ToolCall } from '../core/types.js';
@@ -117,6 +119,30 @@ describe('用户自带 Key', () => {
     expect(r.text).toMatch(/needs the user's key/);
   });
 
+  it('脱敏覆盖 URL 序列化 / 小写百分号 / JSON 转义几种形态', () => {
+    const k = "ab'c/d+e";
+    const text = `raw ${k} | enc ${encodeURIComponent(k)} | url ${new URL(`https://x/?key=${encodeURIComponent(k)}`).href} | lower ${encodeURIComponent(k).toLowerCase()} | json ${JSON.stringify({ u: k }).slice(6, -2)}`;
+    const out = redactKey(text, k);
+    expect(out).not.toMatch(/ab'c|ab%27c|c%2fd|c%2Fd|c\\\/d/i);
+    expect(out.match(/\{userKey\}/g)?.length).toBe(5);
+  });
+
+  it('停用的条目断开也删 Key;目录换了地址模板,旧模板的 Key 随重载删掉', async () => {
+    const s = await keyServer();
+    const m = await manager({ amap: { url: s.url, connector: 'amap', enabled: false } });
+    saveUserKey(s.url, KEY);
+    await m.logout('amap');
+    expect(loadUserKey(s.url)).toBeUndefined();
+    await m.dispose();
+
+    const live = await manager({ amap: { url: s.url, connector: 'amap' } });
+    await live.setKey('amap', KEY);
+    writeFileSync(join(dir, 'mcp.json'), JSON.stringify({ mcpServers: { amap: { url: `${s.url}&v=2`, connector: 'amap' } } }));
+    await live.reloadConfig();
+    expect(loadUserKey(s.url)).toBeUndefined();
+    expect(statusOf(live, 'amap')).toMatchObject({ status: 'needs-login', auth: 'user-key' });
+  });
+
   it('普通条目(没有 {userKey})不受影响,setKey 拒收', async () => {
     const mcp = await startHttpServer({ tag: 'p' });
     stops.push(() => mcp.stop());
@@ -152,6 +178,19 @@ describe('alwaysAsk(目录条目里的「每次都问」)', () => {
     writeCatalog([{ id: 'other', alwaysAsk: [] }]);
     expect(declaredApproval('mcp__didi__pid')).toBe('always');
     expect(declaredApproval('mcp__mine__pid')).toBeUndefined();
+  });
+
+  it('第二个 manager 起来 / 关掉都不摘掉第一个的判定;桥接名指过的任一远端工具被列进就算', async () => {
+    writeCatalog([{ id: 'didi', kind: 'remote-mcp', status: 'published', alwaysAsk: ['echo'] }]);
+    await connected();
+    const other = createMcpManager(join(dir, 'none.json'), FAST);
+    await other.start();
+    expect(declaredApproval('mcp__didi__echo')).toBe('always');
+    await other.dispose();
+    expect(declaredApproval('mcp__didi__echo')).toBe('always');
+    writeCatalog([{ id: 'didi', alwaysAsk: ['place_order'] }]);
+    expect(connectorToolAlwaysAsk('didi', new Set(['place.order', 'place_order']))).toBe(true); // 工具列表变了、快照里还是旧的那个
+    expect(connectorToolAlwaysAsk('didi', new Set(['place.order']))).toBe(false);
   });
 
   it('完全通行档弹卡,「总是允许」之后照样弹;无人值守、Muse 代批直接拒', async () => {

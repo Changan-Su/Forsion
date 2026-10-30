@@ -3560,9 +3560,9 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     return refresh ? connectorCatalog.refresh() : connectorCatalog.readCache()
   })
-  ipcMain.handle('connectors:connect', (e, id: string) => {
+  ipcMain.handle('connectors:connect', (e, id: string, taken?: string[]) => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
-    return connectorCatalog.connect(id)
+    return connectorCatalog.connect(id, taken)
   })
   ipcMain.handle('connectors:remove', (e, name: string) => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')

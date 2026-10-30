@@ -729,7 +729,7 @@ declare global {
       /** 连接器目录:refresh = 现拉(拉不到回缓存,offline: true);否则只读本机缓存。只在桌面有。 */
       connectorsList?(refresh?: boolean): Promise<ConnectorCatalog>
       /** 把目录条目写进 MCP 配置(带 connector 标记);已连着就原样返回。登录 / 填 Key 另走引擎。 */
-      connectorsConnect?(id: string): Promise<{ name: string; added: boolean }>
+      connectorsConnect?(id: string, taken?: string[]): Promise<{ name: string; added: boolean }>
       /** 断开的最后一步:从 MCP 配置删掉这条(只删带连接器标记的)。 */
       connectorsRemove?(name: string): Promise<void>
       connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }> }>

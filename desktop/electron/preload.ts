@@ -369,7 +369,7 @@ const api = {
   importMcpConfig: (cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => ipcRenderer.invoke('mcp:import', cfg),
   // 连接器目录(connectorCatalog.ts):只在桌面(有本机引擎)出现 —— 商店的「连接器」分类与设置页那一块按这组键门控
   connectorsList: (refresh?: boolean): Promise<any> => ipcRenderer.invoke('connectors:list', refresh),
-  connectorsConnect: (id: string): Promise<{ name: string; added: boolean }> => ipcRenderer.invoke('connectors:connect', id),
+  connectorsConnect: (id: string, taken?: string[]): Promise<{ name: string; added: boolean }> => ipcRenderer.invoke('connectors:connect', id, taken),
   connectorsRemove: (name: string): Promise<void> => ipcRenderer.invoke('connectors:remove', name),
   readMcpConfig: (): Promise<{ mcpServers: Record<string, any> }> => ipcRenderer.invoke('mcp:read'),
   writeMcpConfig: (cfg: { mcpServers: Record<string, any>; base?: Record<string, any> }): Promise<{ mcpServers: Record<string, any> }> =>
