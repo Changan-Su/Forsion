@@ -7,14 +7,16 @@
  * 面板挂在行容器里、行容器**不定位** —— 包含块仍是 `.composer-menu--mode`,genesis-glass 已为它的二级浮面走 ::before 材质代理。
  */
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Bot, Check, ChevronRight } from 'lucide-react'
+import { Bot, Check, ChevronRight, ChevronLeft } from 'lucide-react'
 import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, useEdgeNudge, zoomOf, type NestedPanelPlacement, type SheetMenuItem } from '@lcl/engine'
+import { composerMenuHasFocus } from '../../components/ComposerMenuSurface'
 import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { AgentAvatar } from '../../components/AgentAvatar'
 import type { NormalAgentDef } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 interface NormalModeProps {
+  inline?: boolean
   active: boolean
   disabled?: boolean
   agents: NormalAgentDef[]
@@ -46,14 +48,14 @@ export function normalModeItems(p: NormalModeProps, t: ReturnType<typeof useI18n
 }
 
 export function NormalModeItem(props: NormalModeProps): React.ReactElement {
-  const { currentAgentSlug, agents } = props
+  const { currentAgentSlug, agents, inline } = props
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [placement, setPlacement] = useState<NestedPanelPlacement>('right')
   const [subTop, setSubTop] = useState(0)
   const rowRef = useRef<HTMLDivElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
-  const subFix = useEdgeNudge(open ? placement : '', { boundary: '.t2-chat-view' })
+  const subFix = useEdgeNudge(open && !inline ? placement : '', { boundary: '.t2-chat-view' })
   const items = normalModeItems(props, t)
   const openSub = items.agentSwitch ? () => setOpen(true) : undefined
   const current = agents.find((a) => a.slug === currentAgentSlug)
@@ -64,7 +66,7 @@ export function NormalModeItem(props: NormalModeProps): React.ReactElement {
     const row = rowRef.current
     const sub = subRef.current
     const menu = row?.closest<HTMLElement>('.composer-menu')
-    if (!open || !row || !sub || !menu) return
+    if (inline || !open || !row || !sub || !menu) return
     const update = (): void => {
       const menuRect = menu.getBoundingClientRect()
       const boundaryRect = (menu.closest('.t2c-card') || menu.closest('.t2-chat-view'))?.getBoundingClientRect()
@@ -90,7 +92,7 @@ export function NormalModeItem(props: NormalModeProps): React.ReactElement {
       window.removeEventListener(UI_ZOOM_EVENT, update)
       ro.disconnect()
     }
-  }, [open])
+  }, [open, inline])
 
   // 指针移到 / Tab 到菜单里别的行就收起:审批行的说明浮层也从右侧出,两层不能叠。行与面板之间的空隙不是「行」,不算离开。
   useEffect(() => {
@@ -108,15 +110,27 @@ export function NormalModeItem(props: NormalModeProps): React.ReactElement {
     }
   }, [open])
 
+  useEffect(() => {
+    if (!open || !inline) return
+    const back = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      if (!composerMenuHasFocus(subRef.current, rowRef.current)) return
+      e.preventDefault(); e.stopImmediatePropagation(); setOpen(false)
+      rowRef.current?.querySelector<HTMLElement>('[data-agent-switch]')?.focus()
+    }
+    document.addEventListener('keydown', back, true)
+    return () => document.removeEventListener('keydown', back, true)
+  }, [open, inline])
+
   return (
-    <div ref={rowRef} className="mode-normal-row" onPointerEnter={openSub}>
+    <div ref={rowRef} className="mode-normal-row" data-inline={inline || undefined} onPointerEnter={inline ? undefined : openSub}>
       <button className={`menu-item${items.normal.checked ? ' active' : ''}`} data-normal-work disabled={items.normal.disabled} onClick={items.normal.run}>
         {items.normal.icon}<span className="grow">{items.normal.label}</span>
         {items.normal.checked && <Check size={13} />}
       </button>
       {openSub && (
         <button className="menu-item mode-agent-trigger" data-agent-switch aria-haspopup="menu" aria-expanded={open}
-          title={t('input.agentSwitch.section')} onFocus={openSub} onClick={openSub}>
+          title={t('input.agentSwitch.section')} onFocus={inline ? undefined : openSub} onClick={openSub}>
           {current && <span className="mode-agent-name">{current.name}</span>}
           <ChevronRight size={13} />
         </button>
@@ -124,11 +138,12 @@ export function NormalModeItem(props: NormalModeProps): React.ReactElement {
       {open && openSub && (
         <div
           ref={(el) => { subRef.current = el; subFix.ref.current = el }}
-          className={`cm-sub ${placement}`}
+          className={`cm-sub ${inline ? 'cm-sub--inline' : placement}`}
           data-pane="agents"
           role="menu"
           style={{ ...subFix.style, '--cm-sub-top': `${subTop}px` } as React.CSSProperties}
         >
+          {inline && <button type="button" className="menu-item" onClick={() => { setOpen(false); rowRef.current?.querySelector<HTMLElement>('[data-agent-switch]')?.focus() }}><ChevronLeft size={13} />{t('common.back')}</button>}
           <div className="menu-section">{t('input.agentSwitch.section')}</div>
           {items.agents.map((it) => {
             const slug = it.id.slice('agent:'.length)

@@ -220,6 +220,8 @@
     "check:ctxring": "node scripts/ctxring.check.cjs",
     "check:ctxusage": "node scripts/e2e-editor.cjs --check=ctxusage --shot",
     "check:connect": "node scripts/connect-preview.check.cjs",
+    "check:composernarrow:electron": "node scripts/composer-narrow.electron.cjs",
+    "check:composernarrow": "node scripts/e2e-editor.cjs --check=composer-narrow",
     "check:modelmenu": "node scripts/model-menu.check.cjs",
     "check:menutap": "node scripts/menu-tap.check.cjs",
     "check:settingsui": "node scripts/settings-ui.check.cjs",

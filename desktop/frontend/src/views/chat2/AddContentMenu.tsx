@@ -10,6 +10,7 @@ import {
   AppWindow, PanelsTopLeft, Paperclip, Plus, Search, UserPlus,
 } from 'lucide-react'
 import { allViews, getView, label, nestedPanelPlacement, openNativeSheetMenu, UI_ZOOM_EVENT, useEdgeNudge, useExitGhost, useWorkspace, zoomOf, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
+import { ComposerMenuSurface, ComposerMenuHeader, composerMenuHasFocus, useComposerLayout } from '../../components/ComposerMenuSurface'
 import { registerMessages, useI18n } from '../../i18n'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { useRecentViews } from '../../recentViews'
@@ -93,23 +94,35 @@ export const AddContentMenu: React.FC<{
   onPickPaths: (items: Array<{ path: string; isDirectory: boolean }>) => void | Promise<void>
   onPickFiles: (files: FileList | null) => void | Promise<void>
   onAddReference: (ref: AddContentReference) => void
+  overflowControls?: React.ReactNode
+  triggerRef?: React.RefObject<HTMLSpanElement | null>
 }> = ({
   open, disabled, activeSessionId, canUsePathPicker, onOpenChange, onNewSession, onAddAgent,
-  onPickPaths, onPickFiles, onAddReference,
+  onPickPaths, onPickFiles, onAddReference, overflowControls, triggerRef,
 }) => {
   const { t } = useI18n()
+  const localRef = useRef<HTMLSpanElement>(null)
+  const anchorRef = triggerRef ?? localRef
+  const { compact } = useComposerLayout(anchorRef)
   const [pane, setPane] = useState<'conversation' | 'view' | 'app' | null>(null)
   /** 电脑上可引用的窗口和应用:打开「添加应用或窗口」那一格时现问一次(只在桌面 macOS 宿主上有)。 */
   const [appList, setAppList] = useState<AppRefList | null>(null)
   const [query, setQuery] = useState('')
+  const returnPaneFocus = useRef<typeof pane>(null)
   const [placement, setPlacement] = useState<'right' | 'left' | 'stacked'>('right')
   const [stackOffset, setStackOffset] = useState(0)
   const menuRef = useRef<HTMLDivElement>(null)
   const subRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  useLayoutEffect(() => {
+    if (pane || !returnPaneFocus.current) return
+    const previous = returnPaneFocus.current
+    returnPaneFocus.current = null
+    menuRef.current?.querySelector<HTMLElement>(`[data-add-pane="${previous}"]`)?.focus()
+  }, [pane])
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const menuFix = useEdgeNudge(open, { boundary: '.t2-chat-view' })
-  const subFix = useEdgeNudge(pane ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
+  const menuFix = useEdgeNudge(open && !compact, { boundary: '.t2-chat-view' })
+  const subFix = useEdgeNudge(pane && !compact ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
   // 关掉时留替身放 80ms 退场(走查续八 8.4;.composer-menu 在 base.css 的退场名单上)。
   useExitGhost(menuRef, open)
   useExitGhost(subRef, open && !!pane)
@@ -143,7 +156,7 @@ export const AddContentMenu: React.FC<{
   useLayoutEffect(() => {
     const menu = menuRef.current
     const sub = subRef.current
-    if (!pane || !menu || !sub) return
+    if (compact || !pane || !menu || !sub) return
     const update = (): void => {
       const menuRect = menu.getBoundingClientRect()
       const boundaryRect = (menu.closest('.t2c-card') || menu.closest('.t2-chat-view'))?.getBoundingClientRect()
@@ -167,7 +180,24 @@ export const AddContentMenu: React.FC<{
       window.removeEventListener(UI_ZOOM_EVENT, update)
       ro.disconnect()
     }
-  }, [pane])
+  }, [pane, compact])
+
+  const close = (): void => { onOpenChange(false); anchorRef.current?.querySelector('button')?.focus({ preventScroll: true }) }
+  const back = (): void => {
+    returnPaneFocus.current = pane
+    setPane(null)
+  }
+  useEffect(() => {
+    if (!open || !compact) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || document.querySelector('[data-keep-menus]')) return
+      if (!composerMenuHasFocus(menuRef.current, anchorRef.current)) return
+      e.preventDefault(); e.stopImmediatePropagation()
+      if (pane) back(); else close()
+    }
+    document.addEventListener('keydown', onKey, true)
+    return () => document.removeEventListener('keydown', onKey, true)
+  }, [open, compact, pane])
 
   const allSessions = useMemo(() => {
     const seen = new Set<string>()
@@ -353,30 +383,7 @@ export const AddContentMenu: React.FC<{
     )
   })
 
-  return (
-    <span className={`add-pill-wrap t2c-capsule-peer${open ? ' is-open' : ''}`} data-cmenu>
-      <button
-        className={`t2c-pill add-pill-btn${open ? ' is-open' : ''}`}
-        title={t('input.addContent')}
-        aria-expanded={open}
-        disabled={disabled}
-        onClick={() => {
-          // Android:原生半屏;没有原生宿主(桌面 / 网页)照旧展开 Web 菜单,宿主呈现失败也回落 Web。
-          if (!open && openNativeSheetMenu(nativeMenu, { onFallback: () => onOpenChange(true) })) return
-          onOpenChange(!open)
-        }}
-      >
-        <Plus size={16} className="add-pill-plus" />
-        <span className="add-pill-label">{t('addMenu.label')}</span>
-        <ChevronDown size={10} className="add-pill-chevron" />
-      </button>
-
-      {open && (
-        <div
-          ref={(el) => { menuRef.current = el; menuFix.ref.current = el }}
-          className="composer-menu composer-menu--add"
-          style={menuFix.style}
-        >
+  const mainContent = <>
           <button className="menu-item" onClick={newChatItem.run}>
             {newChatItem.icon}
             <span className="grow">{newChatItem.label}</span>
@@ -390,9 +397,9 @@ export const AddContentMenu: React.FC<{
           </button>
           <button
             className={`menu-item add-menu-parent${pane === 'conversation' ? ' active' : ''}`}
-            aria-expanded={pane === 'conversation'}
-            onPointerEnter={() => setPane('conversation')}
-            onFocus={() => setPane('conversation')}
+            aria-expanded={pane === 'conversation'} data-add-pane="conversation"
+            onPointerEnter={compact ? undefined : () => setPane('conversation')}
+            onFocus={compact ? undefined : () => setPane('conversation')}
             onClick={() => setPane('conversation')}
           >
             <MessagesSquare size={14} />
@@ -401,9 +408,9 @@ export const AddContentMenu: React.FC<{
           </button>
           <button
             className={`menu-item add-menu-parent${pane === 'view' ? ' active' : ''}`}
-            aria-expanded={pane === 'view'}
-            onPointerEnter={() => setPane('view')}
-            onFocus={() => setPane('view')}
+            aria-expanded={pane === 'view'} data-add-pane="view"
+            onPointerEnter={compact ? undefined : () => setPane('view')}
+            onFocus={compact ? undefined : () => setPane('view')}
             onClick={() => setPane('view')}
           >
             <PanelsTopLeft size={14} />
@@ -413,10 +420,10 @@ export const AddContentMenu: React.FC<{
           {window.tangu?.appRefs && (
             <button
               className={`menu-item add-menu-parent${pane === 'app' ? ' active' : ''}`}
-              aria-expanded={pane === 'app'}
+              aria-expanded={pane === 'app'} data-add-pane="app"
               data-add-app
-              onPointerEnter={() => setPane('app')}
-              onFocus={() => setPane('app')}
+              onPointerEnter={compact ? undefined : () => setPane('app')}
+              onFocus={compact ? undefined : () => setPane('app')}
               onClick={() => setPane('app')}
             >
               <AppWindow size={14} />
@@ -425,19 +432,9 @@ export const AddContentMenu: React.FC<{
             </button>
           )}
 
-        </div>
-      )}
-
-      {open && pane && (
-        <div
-          ref={(el) => { subRef.current = el; subFix.ref.current = el }}
-          className={`composer-menu add-menu-sub ${placement}`}
-          data-pane={pane}
-          style={{
-            ...subFix.style,
-            bottom: placement === 'stacked' ? `calc(100% + ${stackOffset}px)` : undefined,
-          }}
-        >
+          {overflowControls}
+  </>
+  const paneContent = <>
           <label className="add-menu-search">
             <Search size={13} />
             <input
@@ -514,6 +511,39 @@ export const AddContentMenu: React.FC<{
               </>
             )}
           </div>
+  </>
+
+  return (
+    <span ref={anchorRef} data-compact={compact || undefined} className={`add-pill-wrap t2c-capsule-peer${open ? ' is-open' : ''}`} data-cmenu>
+      <button
+        className={`t2c-pill add-pill-btn${open ? ' is-open' : ''}`}
+        title={t('input.addContent')}
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => {
+          // Android:原生半屏;没有原生宿主(桌面 / 网页)照旧展开 Web 菜单,宿主呈现失败也回落 Web。
+          if (!open && openNativeSheetMenu(nativeMenu, { onFallback: () => onOpenChange(true) })) return
+          onOpenChange(!open)
+        }}
+      >
+        <Plus size={16} className="add-pill-plus" />
+        <span className="add-pill-label">{t('addMenu.label')}</span>
+        <ChevronDown size={10} className="add-pill-chevron" />
+      </button>
+
+      {open && (
+        <ComposerMenuSurface portal={compact} anchorRef={anchorRef}
+          innerRef={el => { menuRef.current = el; menuFix.ref.current = el }}
+          className="composer-menu composer-menu--add" style={menuFix.style}>
+          {compact && <ComposerMenuHeader title={pane ? t(pane === 'conversation' ? 'addMenu.conversation' : pane === 'app' ? 'addMenu.app' : 'addMenu.view') : t('addMenu.label')} onBack={pane ? back : undefined} onClose={close} />}
+          {compact && pane ? paneContent : mainContent}
+        </ComposerMenuSurface>
+      )}
+      {open && pane && !compact && (
+        <div ref={el => { subRef.current = el; subFix.ref.current = el }}
+          className={`composer-menu add-menu-sub ${placement}`} data-pane={pane}
+          style={{ ...subFix.style, bottom: placement === 'stacked' ? `calc(100% + ${stackOffset}px)` : undefined }}>
+          {paneContent}
         </div>
       )}
 

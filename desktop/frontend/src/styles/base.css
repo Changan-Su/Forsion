@@ -5688,3 +5688,49 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 :where([data-plugin-view-host] h2:not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-heading); line-height: var(--ui-line-heading); }
 :where([data-plugin-view-host] :is(h3, h4):not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-body); line-height: var(--ui-line-body); }
 /* plugin-view-base:end */
+
+/* Compact Chat Box: menu size never changes the trigger's layout width. */
+.model-pill-compact { display: none; }
+.model-pill-wrap[data-compact], .model-pill-wrap[data-compact].is-open { min-width: 0; flex: 0 1 auto; max-width: 180px; }
+.model-pill-wrap[data-compact] .composer-chip.model-pill-btn {
+  display: flex; width: auto; max-width: 100%; min-width: 0; gap: 4px; padding: 4px 8px;
+}
+.model-pill-wrap[data-compact] .model-pill-btn > .pill-marquee,
+.model-pill-wrap[data-compact] .model-pill-btn > .pill-ultra-label,
+.model-pill-wrap[data-compact] .model-pill-btn > svg:first-of-type { display: none; }
+.model-pill-wrap[data-compact] .model-pill-compact { display: inline-flex; min-width: 0; overflow: hidden; white-space: nowrap; }
+.model-pill-compact > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.model-pill-compact > span:not(:first-child) { flex: none; }
+.model-pill-wrap[data-compact] .model-pill-btn > svg:last-of-type { flex: none; }
+.cm-main { display: contents; }
+.cm-main[hidden] { display: none; }
+.composer-menu.composer-menu--compact, .t2c-ctxring-pop.composer-menu--compact {
+  position: fixed; right: auto; bottom: auto; margin: 0; width: var(--menu-select-width);
+  min-width: 0; overflow: auto; overscroll-behavior: contain; pointer-events: auto;
+  font-family: var(--font-ui); color: var(--text); scrollbar-width: thin;
+}
+.composer-menu--compact .cm-sub--inline {
+  position: static; width: 100%; max-width: none; max-height: none; min-width: 0;
+  padding: 0; border: 0; box-shadow: none; background: none; animation: none;
+}
+.composer-menu--compact .add-menu-sub-scroll { max-height: none; overflow: visible; }
+.composer-menu--compact .cm-advanced-reveal { transition: none; }
+.composer-menu-header {
+  position: sticky; top: calc(-1 * var(--menu-shell-padding, 5px)); z-index: 1;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 32px; padding: 4px 6px 7px; background: var(--bg-card); color: var(--text-muted);
+  font-size: var(--ui-font-meta); line-height: var(--ui-line-meta);
+}
+.composer-menu-header > span { min-width: 0; }
+.composer-menu-header button { display: inline-flex; align-items: center; gap: 4px; padding: 3px; color: inherit; border: 0; background: none; cursor: pointer; }
+.composer-menu-header > button:last-child { flex: none; margin-left: auto; }
+.composer-menu--compact .approval-item { flex-wrap: wrap; }
+.composer-menu--compact .approval-hover-desc {
+  display: none; position: static; width: 100%; max-width: none; padding: 5px 0 0 22px;
+  border: 0; box-shadow: none; background: none; transform: none; transition: none;
+  opacity: 1; visibility: visible;
+}
+.composer-menu--compact .approval-item:hover .approval-hover-desc,
+.composer-menu--compact .approval-item:focus-visible .approval-hover-desc { display: block; transform: none; }
+.mode-normal-row[data-inline] { flex-wrap: wrap; }
+.mode-normal-row[data-inline] > .cm-sub--inline { flex-basis: 100%; }

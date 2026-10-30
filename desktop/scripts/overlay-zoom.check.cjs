@@ -28,7 +28,7 @@ function findChromium() {
   throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
 }
 
-const ORIGIN = process.env.HARNESS_ORIGIN || 'http://localhost:5173'
+const ORIGIN = process.env.HARNESS_ORIGIN || (process.env.HARNESS_URL ? new URL(process.env.HARNESS_URL).origin : 'http://localhost:5173')
 const ZOOMS = [1, 0.85, 1.1, 1.15]
 const TOL = 1.5 // px:亚像素舍入容差
 
@@ -116,7 +116,11 @@ async function appOverlay(browser, z) {
   await setZoom(page, z)
   await page.waitForTimeout(400)
 
-  const tab = await page.locator('.wb-tab').first().boundingBox()
+  // 固定侧栏和最后一个固定 View 都没有菜单；先经 ＋ 打开可关闭的启动器。
+  await page.locator('.dv-new-tab').first().click()
+  const menuTab = page.locator('.wb-tab').filter({ has: page.locator('.wb-tab-close') }).first()
+  await menuTab.waitFor({ state: 'visible' })
+  const tab = await menuTab.boundingBox()
   const cx = Math.round(tab.x + tab.width / 2)
   const cy = Math.round(tab.y + tab.height / 2)
   await page.mouse.move(cx, cy)
