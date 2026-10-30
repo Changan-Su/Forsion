@@ -260,7 +260,8 @@ it('installs only trusted releases, refuses protected or required plugins, and k
 
   const dependentPath = JSON.parse(beforeBroken).plugins[2].path as string
   await run('uninstall', 'dependent')
-  if (process.getuid?.() !== 0) {
+  // Directory modes do not stop writes on Windows or for root; there the write cannot be made to fail.
+  if (process.platform !== 'win32' && process.getuid?.() !== 0) {
     // unit.json cannot be replaced: the uninstall is undone in the running Unit, with its entry intact.
     const unchanged = await readFile(file, 'utf8'), worker = (await (await fetch(`http://127.0.0.1:${port}/api/service`)).json()).threadId
     await chmod(join(scratch, 'state'), 0o500)
