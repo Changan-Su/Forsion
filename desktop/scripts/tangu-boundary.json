@@ -143,6 +143,7 @@
       "desktop/frontend/src/components/Markdown.tsx",
       "desktop/frontend/src/components/MarketPluginCards.tsx",
       "desktop/frontend/src/components/ModelGroupList.tsx",
+      "desktop/frontend/src/components/ComposerMenuSurface.tsx",
       "desktop/frontend/src/components/ModelPill.tsx",
       "desktop/frontend/src/components/ModelSelect.tsx",
       "desktop/frontend/src/components/MuseView.tsx",
