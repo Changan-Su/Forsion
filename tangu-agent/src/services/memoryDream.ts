@@ -254,7 +254,7 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
       if (portrait) {
         const { channelHub } = await import('../channels/hub.js');
         const viaChannel = new Set<string>();
-        for (const c of raw) if (c.sessionId && await channelHub.isChannelSession(userId, c.sessionId)) viaChannel.add(c.id);
+        for (const c of raw) if (c.sessionId && (await channelHub.channelBinding(userId, c.sessionId)) !== false) viaChannel.add(c.id);
         // 提议里的来源是短别名(c1…),按 realId 对回候选
         for (const s of sources) if (s.kind === 'candidate' && viaChannel.has(realId.get(s.id) ?? s.id)) noPortrait.add(s.id);
         check();

@@ -385,6 +385,7 @@ describe('Dream routes facts about the person into the portrait', () => {
   /** 每个来源一组;候选那几组标 to:'person',已有记忆那组也标上(代码应当去掉它的 to,照旧留在记忆里) */
   const toPerson = (sources: any[]) => ({ groups: sources.map((s) => ({ fact: s.fact, sourceIds: [s.id], to: 'person' })), discarded: [] });
   beforeEach(() => {
+    vi.spyOn(channelHub, 'channelBinding').mockResolvedValue(false); // 这里没有数据库:查不出来会按连着通道算
     provider = async (p) => p.messages[0].content.startsWith('Consolidate') ? result(toPerson(JSON.parse(p.messages[1].content))) : result({ ok: true });
   });
 
@@ -406,7 +407,7 @@ describe('Dream routes facts about the person into the portrait', () => {
   });
 
   it('a candidate from a session connected to a chat channel stays in this Agent\'s memory', async () => {
-    const spy = vi.spyOn(channelHub, 'isChannelSession').mockResolvedValue(true);
+    const spy = vi.spyOn(channelHub, 'channelBinding').mockResolvedValue(true);
     try {
       seedCandidate('alpha', 'You live in Hangzhou.');
       startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');

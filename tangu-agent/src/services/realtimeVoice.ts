@@ -103,7 +103,7 @@ export async function buildVoiceInstructions(sessionId: string, agentSlug: strin
   ];
   if (def?.soul?.trim()) sections.push(`## Your persona\n${clip(def.soul.trim(), 2000)}`);
   // 连着聊天通道的会话不放这两份(同 agentLoop 的 renderAboutHuman({ private }))
-  const own = !cloud && !(await channelHub.isChannelSession(userId, sessionId));
+  const own = !cloud && (await channelHub.channelBinding(userId, sessionId)) === false;
   const user = own ? readUserMdForPrompt().trim() : '';
   if (user) sections.push(`## About the user\n${clip(user, 2000)}`);
   const portrait = own ? readHumanFile('SOUL.md').trim() : ''; // 画像:Agent 们对这个人的认识,同 renderAboutHuman 只取前 2000 字

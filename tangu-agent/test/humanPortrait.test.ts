@@ -146,7 +146,7 @@ describe('remember: person scope', () => {
     expect(local.parameters.required).toEqual(['action', 'fact']); // 不带 scope 的旧调用照旧按 agent
     expect(t.definitionFor({ ...ctx(), projectScoped: true }).function.parameters.properties.scope.enum).toEqual(['agent', 'project', 'person']);
     expect(t.definitionFor(ctx())).toBe(t.definitionFor(ctx())); // 同一份对象:逐轮字节一致
-    for (const off of [{ channelSession: true }, { subAgentDepth: 1 }, { ephemeral: true }, { remote: { marked: true } }, { profile: createAiStudioProfile() }]) {
+    for (const off of [{ channelSession: true }, { channelUnknown: true }, { subAgentDepth: 1 }, { ephemeral: true }, { remote: { marked: true } }, { profile: createAiStudioProfile() }]) {
       expect(t.definitionFor(ctx({ execMode: 'sandbox', ...off })), JSON.stringify(Object.keys(off))).toBe(t.definition);
     }
   });

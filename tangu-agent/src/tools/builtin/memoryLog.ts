@@ -103,7 +103,7 @@ const REMEMBER = {
  *  定义和执行同一个判定:定义里没有 person 时,执行收到 person 明确报错,绝不降级记进 Agent 自己的记忆。 */
 export function personAllowed(ctx: ToolContext): boolean {
   const profile = ctx.profile ?? deps().profile;
-  return !!profile?.capabilities?.hostExec && !effectiveRemote(ctx) && !ctx.ephemeral && !ctx.subAgentDepth && !ctx.channelSession;
+  return !!profile?.capabilities?.hostExec && !effectiveRemote(ctx) && !ctx.ephemeral && !ctx.subAgentDepth && !ctx.channelSession && !ctx.channelUnknown;
 }
 /** 有没有工作笔记这个工具:本机引擎的 profile、本机直连(host)、不是 chat 面,且 profile 的内置工具名单里有它
  *  (manageHarness.isEnabledFor + preset 的 host 族整族拒 + toolLoadout.builtins)。
