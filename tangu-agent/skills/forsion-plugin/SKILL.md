@@ -243,7 +243,7 @@ A Space that should also open as a small floating window gets a `mini` block in 
 
 ## 智能体(samples/forsion-sample-agent)
 
-文件夹式:`config.toml`(模型/工具/技能开关)+ `SOUL.md`(人设,英文写给模型)+ `Library/`(参考资料)+ 每-agent 记忆。装 `~/.forsion/agents/<slug>/`。
+文件夹式:`config.toml`(名字 `name_zh` / `name_en`、模型/工具/技能开关)+ `SOUL.md`(人设,英文写给模型)+ `Library/`(参考资料)+ 每-agent 记忆。装 `~/.forsion/agents/<slug>/`。
 
 ## 捆绑包(samples/forsion-sample-bundle)—— 默认起点
 

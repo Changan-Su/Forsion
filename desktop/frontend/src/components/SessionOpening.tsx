@@ -6,6 +6,7 @@ import { showDetails } from '../stores/detailsSubject'
 import { getAgentHarness, getAgentMemorySnapshot } from '../services/backendService'
 import { openingSummary } from '../services/selfUpdates'
 import { homeTarget } from '../services/engine/targets'
+import { agentName } from '../agentName'
 import './SelfUpdateReceipt' // 复用「记住了 N 件事 / 进化记录更新 N 处」
 import './selfUpdates.css'
 
@@ -31,7 +32,7 @@ const markSeen = (slug: string): void => {
  *  第一次遇到一个 Agent 只记下时刻、什么都不显示 —— 否则升级后第一眼就是「进化记录更新 47 处」。 */
 export function SessionOpening({ slug }: { slug: string }) {
   const { t } = useI18n()
-  const name = useApp((s) => s.agentDefs.find((a) => a.slug === slug)?.name || slug)
+  const name = useApp((s) => agentName(s.agentDefs.find((a) => a.slug === slug)) || slug)
   const [sum, setSum] = useState<{ remembered: number; evolved: number } | null>(null)
   const shown = useRef(false)
   useEffect(() => {

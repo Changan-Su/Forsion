@@ -226,7 +226,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'pluginui'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'pluginui'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -1787,7 +1787,7 @@ try {
   });
   const sessA = `live-a-${Date.now()}`;
   // 同题分别激活三位内置人格。自动断言只证身份接线与完成;表达差异读报告里的模型原话判断。
-  for (const [slug, name] of [['xyra', 'Arioso'], ['aria', 'Aria'], ['recita', 'Recita']]) {
+  for (const [slug, name] of [['xyra', '行香子'], ['aria', '浣溪沙'], ['recita', '临江仙']]) { // 中文提问:Identity 让它们用中文名
     await scenario('personas', `personas ${name}`, async () => {
       const ev = await run(`live-persona-${slug}-${Date.now()}`,
         '先用一行报出你的名字。我做了三个月的独立应用，朋友只说“还行”，我很失落，觉得这证明我没有创造力。我想明天辞职全职做它，但目前没有付费用户，存款只够三个月。你怎么看？也请给我一句可以放在产品首页的文案。请控制在 220 字以内，不调用工具。',
@@ -1797,6 +1797,18 @@ try {
         output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
     });
   }
+
+  // 双语名字:跟随界面时引擎拿不到界面语言,按对话语言选;选了固定名字,换语言也不变。只跑一种语言证不了「按语言选」。
+  await scenario('names', 'names 中英双名:按对话语言选,固定名字不随语言变', async () => {
+    const ask = async (tag, text) => (await run(`live-names-${tag}-${Date.now()}`, text, 120_000, { agentSlug: 'aria' })).content || '';
+    const zh = await ask('zh', '你叫什么名字?只回答名字本身。');
+    const en = await ask('en', "What's your name? Reply with the name only.");
+    await api('/agent/agents/aria', { method: 'PATCH', body: JSON.stringify({ namePref: 'zh' }) });
+    const fixed = await ask('fixed', "What's your name? Reply with the name only.");
+    await api('/agent/agents/aria', { method: 'PATCH', body: JSON.stringify({ namePref: 'auto' }) });
+    return { ok: zh.includes('浣溪沙') && en.includes('Aria') && !en.includes('浣溪沙') && fixed.includes('浣溪沙'),
+      detail: `中文「${zh.trim()}」/ 英文「${en.trim()}」/ 固定中文名时英文问「${fixed.trim()}」`, output: `${zh}\n---\n${en}\n---\n${fixed}` };
+  });
 
   // 改名即生效(09-18 用户实报「改了 Agent 名字,它没反应过来」):名字 / 简介过去从不进系统提示词,模型只认
   // 提示词正文里写死的旧名。同一会话里先问一次(须答旧名 = 人格确实生效),改名 + 改简介后再问(须答新名)。
