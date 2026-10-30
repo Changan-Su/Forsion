@@ -13,6 +13,7 @@ import { ChatView } from '../ChatView'
 import { useDeskGrip } from './AgentDesk'
 import { subChatRows, type SubChatRow } from './subChatRows'
 import { BtwPanel } from './BtwPanel'
+import { agentName, agentNames } from '../../agentName'
 import './childChat.css'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
@@ -30,10 +31,10 @@ registerMessages({
  *  通用子代理 / 头脑风暴座位查不到,仍画 Bot(Bot 专属 Tangu 本体)。团队成员行直接带 slug。
  *  ponytail: 同名 Agent 取第一个;要精确就让引擎在 subchat 事件里带 agentSlug(旧引擎照样只能按名认)。 */
 function SubAgentGlyph({ title, slug, working }: { title: string; slug?: string; working?: boolean }) {
-  const def = useApp((s) => s.agentDefs.find((a) => (slug ? a.slug === slug : a.name === title)))
+  const def = useApp((s) => s.agentDefs.find((a) => (slug ? a.slug === slug : agentNames(a).includes(title))))
   const url = useApp((s) => (def ? s.agentAvatars[def.slug] : undefined))
   if (!def) return <Bot size={16} />
-  return <AgentAvatar name={def.name} url={url} size={18} className={`t2o-bar-avatar${working ? ' is-working' : ''}`} initialClassName="t2o-bar-avatar-text" data-subagent-avatar={def.slug} />
+  return <AgentAvatar name={agentName(def)} url={url} size={18} className={`t2o-bar-avatar${working ? ' is-working' : ''}`} initialClassName="t2o-bar-avatar-text" data-subagent-avatar={def.slug} />
 }
 
 /** Both persisted background work and live delegate events appear in the same compact list.
@@ -129,7 +130,7 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
         void listMessages(targetForSession(sessionId), sessionId).then((records) => {
           if (disposed) return
           useApp.setState((state) => {
-            const restored = records.map((r) => recordToUi(r, undefined, (slug) => state.agentDefs.find((a) => a.slug === slug)?.name))
+            const restored = records.map((r) => recordToUi(r, undefined, (slug) => agentName(state.agentDefs.find((a) => a.slug === slug))))
             const ids = new Set(restored.map((m) => m.id))
             return { messagesBySession: { ...state.messagesBySession, [sessionId]: [...restored, ...(state.messagesBySession[sessionId] || []).filter((m) => !ids.has(m.id))].sort((a, b) => a.timestamp - b.timestamp) } }
           })

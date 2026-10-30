@@ -10,6 +10,7 @@ import type {
   NormalAgentDef,
 } from '../../types'
 import { formatMonthDay, formatTime, toDate } from '../../format/time'
+import { agentName } from '../../agentName'
 
 type T = (key: string, vars?: Record<string, string>) => string
 
@@ -96,7 +97,7 @@ export function isFinishedTrigger(tr: MuseTriggerInfo): boolean {
 /** 执行者显示名:agentSlug 缺省=Muse(品牌名不进 i18n);有 slug 找 defs 显示名,找不到回落 slug。 */
 export function runnerName(defs: NormalAgentDef[], agentSlug?: string): string {
   if (!agentSlug) return 'Muse'
-  return defs.find((d) => d.slug === agentSlug)?.name || agentSlug
+  return agentName(defs.find((d) => d.slug === agentSlug)) || agentSlug
 }
 
 /**

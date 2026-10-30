@@ -92,7 +92,7 @@ async function run() {
       return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi)
     }) }
     if (p === '/agent/agents' && method === 'POST') {
-      const input = await body(); const slug = String(input.name).trim().toLowerCase().replace(/[^a-z0-9]+/g, '-')
+      const input = await body(); const slug = input.slug
       const agent = { ...agents[1], ...input, slug, createdBy: 'user', libraryDir: path.join(home, slug, 'Library') }
       agents.push(agent); return { agent }
     }
@@ -680,11 +680,17 @@ async function run() {
     assert.equal(await roster.locator('.agents-roster-heading button').count(), 0, 'Roster heading no longer duplicates the create entry')
     await roster.locator('.agents-roster-create').click()
     const agentForm = win.locator('.agent-create-form')
-    await agentForm.getByLabel('名称', { exact: true }).fill('Analyst')
+    await agentForm.getByLabel('英文名', { exact: true }).fill('Analyst')
+    assert.equal(await agentForm.getByLabel('ID（文件夹名）', { exact: true }).inputValue(), 'analyst', 'the id follows the English name')
+    await agentForm.getByLabel('英文名', { exact: true }).fill('分析')
+    assert.equal(await agentForm.getByRole('button', { name: '创建 Agent', exact: true }).isDisabled(), true, 'a Chinese character in the English name disables create')
+    assert.equal(await agentForm.getByRole('alert').first().textContent(), '英文名不能有汉字')
+    await agentForm.getByLabel('英文名', { exact: true }).fill('Analyst')
+    await agentForm.getByLabel('中文名', { exact: true }).fill('分析员')
     await agentForm.getByLabel('简介', { exact: true }).fill('Checks calculations')
     await agentForm.getByLabel('工作指令', { exact: true }).fill('Verify each result.')
     await agentForm.getByRole('button', { name: '创建 Agent', exact: true }).click()
-    const analystRow = roster.locator('.agents-roster-row').filter({ hasText: 'Analyst' })
+    const analystRow = roster.locator('.agents-roster-row').filter({ hasText: '分析员' })
     await analystRow.waitFor()
     await analystRow.locator('.agents-roster-more').click()
     await win.getByRole('menuitem', { name: '设为默认', exact: true }).click()

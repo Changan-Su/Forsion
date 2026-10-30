@@ -48,6 +48,7 @@ import './chat2/orbits.css'
 import { homeTarget, useRemoteCapability } from '../services/engine/targets'
 import { openAgentCreation } from './agentProfileNav'
 import { askString } from '../amadeus/components/askString'
+import { agentName } from '../agentName'
 
 registerMessages({
   'orbits.filter.label': { zh: '筛选列表', en: 'Filter list' },
@@ -310,7 +311,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     ...tipProps(() => [name, rowTipLine(kindKey, identKey)], { focus: true }),
     'aria-description': rowTipLine(kindKey, identKey),
   })
-  const agentNames = useMemo(() => agents.map((a) => a.name || a.slug), [agents])
+  const agentNames = useMemo(() => agents.map((a) => agentName(a)), [agents])
 
   // 高亮源 = 当前会话的轨道身份,不另造通道(§3.2)。
   const activeCfg = s.activeId ? s.configBySession[s.activeId] : undefined
@@ -416,7 +417,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const orbitRows: Array<{ key: string; at: number; node: React.ReactNode }> = []
   if (showOrbitBlock) {
     const at = (key: string): number => activityByIdent.get(key) || 0
-    for (const a of agents) orbitRows.push({ key: `agent:${a.slug}`, at: at(`agent:${a.slug}`), node: agentRow(a.slug, a.name) })
+    for (const a of agents) orbitRows.push({ key: `agent:${a.slug}`, at: at(`agent:${a.slug}`), node: agentRow(a.slug, agentName(a)) })
     for (const e of installedEngines) {
       orbitRows.push({ key: `engine:${e.id}`, at: at(`engine:${e.id}`), node: orbitRow({
         rowKey: `engine:${e.id}`, entryKey: `row:engine:${e.id}`, kind: 'engine', slug: e.id, active: activeCfg?.soloEngineId === e.id,
@@ -435,7 +436,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         name: tm.name, sub: t('orbits.tip.team'), at: at(`team:${tm.slug}`), onOpen: () => openTeam(tm.slug),
         lead: (
           <AvatarStack
-            items={tm.members.map((m) => ({ slug: m.slug, name: s.agentDefs.find((a) => a.slug === m.slug)?.name || m.slug, avatarUrl: s.agentAvatars[m.slug] }))}
+            items={tm.members.map((m) => ({ slug: m.slug, name: agentName(s.agentDefs.find((a) => a.slug === m.slug)) || m.slug, avatarUrl: s.agentAvatars[m.slug] }))}
             emoji={isTeamImageAvatar(tm.avatar) ? undefined : tm.avatar || undefined}
             imageUrl={s.teamAvatars[tm.slug]}
             size={avatarSize}
@@ -642,7 +643,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       )}
       {agentRemoving && (
         // 删掉的正是当前私聊的 Agent → 换到新对话,别让人继续往已删的 Agent 发消息(同删团队)
-        <AgentUninstallDialog slug={agentRemoving.slug} name={agentRemoving.name} onClose={() => setAgentRemoving(null)}
+        <AgentUninstallDialog slug={agentRemoving.slug} name={agentName(agentRemoving)} onClose={() => setAgentRemoving(null)}
           onDone={() => { if (s.activeId && s.configBySession[s.activeId]?.soloAgentSlug === agentRemoving.slug) openNewChat() }} />
       )}
       {teamEditor && (

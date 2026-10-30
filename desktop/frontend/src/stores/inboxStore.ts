@@ -16,6 +16,7 @@ import {
 } from '../services/backendService'
 import { currentClientId } from '../services/agentRunService'
 import { homeTarget } from '../services/engine/targets'
+import { agentName } from '../agentName'
 
 export type { InboxMessage, InboxFilter }
 
@@ -42,7 +43,7 @@ export function senderOf(m: Pick<InboxMessage, 'sender_kind' | 'sender_id'>): st
   if (m.sender_kind === 'system') return inboxCardOf(m)?.sender?.() || translate('inbox.sender.system')
   if (isAutomationSender(m)) return translate('inbox.sender.automation')
   const a = homeAgentDefs().find((x) => x.slug === m.sender_id) // 收件箱是本端的:焦点在我的电脑时也按本端的 Agent 认发件人
-  return a?.name || m.sender_id || 'agent'
+  return agentName(a) || m.sender_id || 'agent'
 }
 
 /** 解析后端 UTC 'YYYY-MM-DD HH:MM:SS'(无后缀)为本地 Date;坏值回 null。 */

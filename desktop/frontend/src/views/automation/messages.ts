@@ -22,7 +22,7 @@ registerMessages({
   'automation.ux.blank': { zh: "自定义流程", en: "Custom workflow" },
   'automation.ux.draftHint': { zh: "模板只填入草稿。保存前，你可以修改所有配置。", en: "Templates only fill a draft. Review and change anything before saving." },
   'automation.ux.native': { zh: "和 Forsion 一起工作", en: "Works with Forsion" },
-  'automation.ux.nativeHint': { zh: "笔记按钮负责手动启动，多维表提供触发数据，Agent 处理任务，通知送达收件箱。Muse 和 Historian 的系统自动化也可在左侧单独管理。", en: "Note buttons start manual workflows, databases supply trigger data, agents handle tasks, and notifications arrive in your inbox. Manage Muse and Historian separately in the sidebar." },
+  'automation.ux.nativeHint': { zh: "笔记按钮负责手动启动，多维表提供触发数据，Agent 处理任务，通知送达收件箱。Muse 和史官的系统自动化也可在左侧单独管理。", en: "Note buttons start manual workflows, databases supply trigger data, agents handle tasks, and notifications arrive in your inbox. Manage Muse and Historian separately in the sidebar." },
   'automation.ux.reminder.name': { zh: "每日提醒", en: "Daily reminder" },
   'automation.ux.reminder.hint': { zh: "每天固定时间，把提醒送进收件箱。", en: "Send a reminder to your inbox at a set time each day." },
   'automation.ux.reminder.flow': { zh: "每天 09:00 → 发通知", en: "Daily at 09:00 \u2192 Notify" },
