@@ -30,7 +30,9 @@ const check = (name, ok, detail) => { ok ? pass++ : fail++; console.log(`${ok ? 
     const pick = items.nth(Math.floor((await items.count()) / 3))
     const want = await pick.getAttribute('title')
     await pick.click(); await win.mouse.move(900, 500); await sleep(2500)
+    await win.locator('.lcl-ftoc').first().hover(); await sleep(400) // 行只在展开时才有
     const now = await win.evaluate(() => document.querySelector('.lcl-ftoc-item[aria-current="location"]')?.title || '')
+    await win.mouse.move(900, 500); await sleep(600)
     check('② 点目录里靠前的一项,落地后它是当前项', now === want, { want, now, ...(await st()) })
 
     // ④ 前一跳的补正还没完就点下一项:落在后点的那项(每个滚动容器只留一个补正)
@@ -38,7 +40,9 @@ const check = (name, ok, detail) => { ok ? pass++ : fail++; console.log(`${ok ? 
     const a = items.nth(Math.floor((await items.count()) / 4)), b = items.nth(Math.floor((await items.count()) * 3 / 4))
     const wantB = await b.getAttribute('title')
     await a.click(); await b.click(); await win.mouse.move(900, 500); await sleep(2500)
+    await win.locator('.lcl-ftoc').first().hover(); await sleep(400)
     const nowB = await win.evaluate(() => document.querySelector('.lcl-ftoc-item[aria-current="location"]')?.title || '')
+    await win.mouse.move(900, 500); await sleep(600)
     check('④ 连点两项,落在后点的那项', nowB === wantB, { wantB, nowB })
 
     // ⑤ 点完目录马上点「回到底部」:跳转那边的补正不许再把人拉回去

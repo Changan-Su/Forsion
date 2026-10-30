@@ -125,7 +125,7 @@ async function launch(opts = {}) {
     if (opts.overrideHome) env.HOME = home
     try {
       // opts.recordVideo:Playwright 录屏(看动效手感用,{ dir, size }),缺省不录
-      app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT, env, ...(opts.recordVideo ? { recordVideo: opts.recordVideo } : {}) })
+      app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT, env, ...(opts.recordVideo ? { recordVideo: opts.recordVideo } : {}), ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}) }) // 走查用的单独身份 Electron,见 gui-verify §4.2
     } catch (e) {
       console.error('启动失败:多半是已有 dev 版 Electron 占着单实例锁。自己关掉那个实例再跑(本仪器不代为 pkill)。')
       throw e

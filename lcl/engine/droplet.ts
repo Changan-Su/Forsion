@@ -12,7 +12,8 @@
  *  ⚠️ 真面板不能早于液体停稳出现(10-29 打回:0.28D 显形的硬边框盖住了拉丝,「没有灵动感了」)。
  *  不回弹(10-29 用户试过四档定的「无回弹」)。
  *
- *  用法:面板挂上、定好位之后 `const d = emergeDroplet(按钮, 面板)`;要收时 `await d.retract()` 再卸载面板;
+ *  用法:面板挂上、定好位之后 `const d = emergeDroplet(按钮, 面板)`;要收时 `await d.retract()` 再卸载面板
+ *  (retract 结束时面板已 visibility: hidden,卸载晚一帧也不闪;不卸载就调 `d.cancel()` 还原);
  *  组件卸载时 `d.cancel()`。源与面板之间的缝要 ≤ 12px,再远丝连不上。减少动态效果时只淡入 / 淡出。 */
 import { zoomOf } from './menuAnchor'
 import { reducedMotion } from './spring'
@@ -43,11 +44,11 @@ function ensureFilter(): void {
 
 // token 从 :root 读(base.css 一份),读不到用同值兜底 —— 引擎不依赖宿主的 motionTokens.ts。
 const root = (): CSSStyleDeclaration => getComputedStyle(document.documentElement)
-function ms(name: string, fallback: number): number {
+export function ms(name: string, fallback: number): number {
   const m = /^(-?[\d.]+)(ms|s)$/.exec(root().getPropertyValue(name).trim())
   return m ? parseFloat(m[1]) * (m[2] === 's' ? 1000 : 1) : fallback
 }
-const curve = (name: string, fallback: string): string => root().getPropertyValue(name).trim() || fallback
+export const curve = (name: string, fallback: string): string => root().getPropertyValue(name).trim() || fallback
 
 type Box = { x: number; y: number; w: number; h: number; r: number }
 const inset = (b: Box, p: Box, z: number): string =>
@@ -58,15 +59,17 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet 
   if (reducedMotion() || typeof panel.animate !== 'function' || !panel.parentElement) {
     // 减少动态效果:留反馈、去点缀(DESIGN §3 规矩 8)—— 只淡入 / 淡出,不形变
     const fade = (from: number, to: number, duration: number): Animation =>
-      panel.animate([{ opacity: from }, { opacity: to }], { duration, easing: curve('--ease-calm', 'ease'), fill: 'forwards' })
-    fade(0, 1, ms('--duration-fast', 150)).finished.then((a) => a.cancel?.(), () => {})
+      panel.animate([{ opacity: from }, { opacity: to }], { duration, easing: curve('--ease-calm', 'ease') })
+    panel.style.visibility = ''
+    fade(0, 1, ms('--duration-fast', 150))
     let closing: Promise<void> | null = null
     return {
-      retract: () => (closing ??= fade(1, 0, ms('--menu-exit-duration', 80)).finished.then(() => undefined, () => undefined)),
-      cancel: () => { panel.getAnimations().forEach((a) => a.cancel()) },
+      retract: () => (closing ??= fade(1, 0, ms('--menu-exit-duration', 80)).finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined)),
+      cancel: () => { panel.getAnimations().forEach((a) => a.cancel()); panel.style.visibility = '' },
     }
   }
   ensureFilter()
+  panel.style.visibility = ''
   const D = ms('--droplet-duration', 420)
   const surface = curve('--ease-surface', 'cubic-bezier(0.22, 1, 0.36, 1)')
   const calm = curve('--ease-calm', 'cubic-bezier(0.33, 1, 0.68, 1)')
@@ -96,6 +99,12 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet 
     left: `${ux / z}px`, top: `${uy / z}px`,
     width: `${(Math.max(s.right, pr.right) + PAD - ux) / z}px`, height: `${(Math.max(s.bottom, pr.bottom) + PAD - uy) / z}px`,
   })
+  // 祖先带 transform 时 fixed 的坐标系不是视口。目录挂在插件的容器里,管不到祖先:量一次差值补回去
+  const at = layer.getBoundingClientRect()
+  if (Math.abs(at.left - ux) > 0.5 || Math.abs(at.top - uy) > 0.5) {
+    layer.style.left = `${(2 * ux - at.left) / z}px`
+    layer.style.top = `${(2 * uy - at.top) / z}px`
+  }
   const blob = (b: { x: number; y: number; w: number; h: number }, r: number): HTMLElement => {
     const el = document.createElement('i')
     Object.assign(el.style, { left: `${(b.x - ux) / z}px`, top: `${(b.y - uy) / z}px`, width: `${b.w / z}px`, height: `${b.h / z}px`, borderRadius: `${r / z}px`, background: pcs.backgroundColor })
@@ -136,8 +145,9 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet 
   const cancel = (): void => {
     for (const a of [swell, grow, handoff, ...shows]) a.cancel()
     clip?.cancel()
-    panel.getAnimations().forEach((a) => a.cancel())
+    panel.getAnimations({ subtree: true }).forEach((a) => a.cancel()) // 带 subtree:收到一半又展开时,内容的淡出还在跑
     panel.classList.remove(POURING)
+    panel.style.visibility = ''
     layer.remove()
     restoreSource()
   }
@@ -153,9 +163,11 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet 
       clip = pour(panel, pz)
       clip.currentTime = t
       const rate = -1 / 0.7
-      kids().forEach((k) => k.animate([{ opacity: 1 }, { opacity: 0 }], { duration: D * 0.7 * 0.3, fill: 'forwards' }))
+      // 别用 fill: forwards:面板不卸载时,取消填充动画和隐藏面板撞在同一帧,Chromium 会把内容的透明度留在 0,
+      // 元素上已没有动画,再展开就是空屏(10-30 用户报,连开 33 次空 16 次)。所以写成保持到结束,收完由下面藏起面板
+      kids().forEach((k) => k.animate([{ opacity: 1 }, { opacity: 0, offset: 0.3 }, { opacity: 0 }], { duration: D * 0.7 }))
       for (const a of [swell, grow, clip]) { a.updatePlaybackRate(rate); a.play() }
-      closing = grow.finished.then(() => undefined, () => undefined).finally(() => { layer.remove(); restoreSource() })
+      closing = grow.finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined).finally(() => { layer.remove(); restoreSource() })
       return closing
     },
     cancel,

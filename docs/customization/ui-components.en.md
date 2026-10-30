@@ -116,6 +116,26 @@ ctx.tangu?.mountChat?.(el, { agent, folder, title })
 
 `ctx.ui.mount*`, `ctx.tangu.mountChat`, `ctx.table.mount`, `ctx.dashboard.mount`, `ctx.app.mountBlocks` and a file view's `mountNoteView` all render inside a layer the host adds to `el` (`display:contents`: it generates no box, so the element's height and flex still apply to the content). `dispose()` removes that layer synchronously and the element is the plugin's again at once: clear it, put your own content in, or mount on it again without waiting. Mounting again creates a fresh instance; use the handle's `update()` to change data or options in place. One element holds one host mount at a time: mounting on an element whose previous mount was not disposed retires that mount first, fully, as if it had been disposed; its handle goes inert, and the later call wins. `mountFloatingToc` is the exception: it overlays `shell` without taking it over, so it neither retires nor is retired by other mounts. Do not reach host nodes through `el > .x` or `el.firstElementChild`. Hosts up to 2.12.2 do not give this guarantee: to support them, mount into a child element you create and replace that child when the content changes.
 
+### Leaving room for the floating TOC (2026-10-30)
+
+The ticks of `ctx.ui.mountFloatingToc` live in a gutter on the left of the scroll area, as wide as the CSS variable `--lcl-ftoc-gutter` (36px). When the space left of your text is narrower than that, move your content aside yourself, or the ticks sit on top of the text.
+
+The host sets a `data-lcl-ftoc` attribute on the `scrollContainer` you pass (its value is `side`). The attribute goes away when the scroll area is too narrow to show the TOC, so you only make room when it is needed. It does not depend on whether there are headings, so text does not jump sideways when a second heading appears.
+
+```css
+.my-article[data-lcl-ftoc] { padding-left: max(24px, var(--lcl-ftoc-gutter)); }
+```
+
+If your content is centered with space on both sides already, add only the difference, so wide windows get no extra indent (replace `720px` with your content width):
+
+```css
+.my-article[data-lcl-ftoc] > .column {
+  padding-left: max(24px, calc(var(--lcl-ftoc-gutter) - max(0px, (100% - 720px) / 2)));
+}
+```
+
+The `.lcl-ftoc-item` rows exist only while the list is open (after a 120 ms hover, or keyboard focus). These class names are not public API; don't rely on them. Older hosts have neither the variable nor the attribute, so the rules above simply don't apply and nothing breaks.
+
 ### Following the host's appearance switches (2026-10-05)
 
 Settings → Appearance has three switches the user turns on or off one by one ("Relaxed text" and "Gentle transitions" are on by default, "Dim surroundings" is off by default; which are on is up to the user): "Dim surroundings" (ribbon icons, inactive tabs and left-sidebar text recede while the user works, and return on pointer or keyboard focus), "Relaxed text" (looser line and paragraph spacing in note and chat bodies), and "Gentle transitions" (a slower view fade-in and a slower return of the surroundings). A plugin calls no API for these; it follows them by writing its styles this way:
