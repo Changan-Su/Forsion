@@ -729,8 +729,6 @@ export function buildCycleMessages(
     tierKickoff(cfg) + ' ' +
     `Avoid the "TODOs you have already proposed" below; use add_muse_todo only for genuinely new, high-value todos (at most ${cfg.maxTodosPerWindow} this period — spend the quota sparingly). ` +
     'Use manage_schedule to plan your own follow-ups (auto=true entries wake you up when due; remove them when done). ' +
-    'For what should fire on a condition (they open an app, an event nears), call manage_automation set' +
-    (cfg.mode === 'auto' ? ' and tell the user. ' : ': it only shows the user a rule card to accept, so do not ask in text first. ') +
     'Pace yourself — every cycle spends the user\'s background budget: when nothing needs you soon (the user is away, or it is outside their usual hours per the user rhythm below), ' +
     'finish briefly and call set_next_wake to sleep until they are likely back; their activity ends the sleep, and your rules and due schedule still wake you meanwhile. ' +
     spaceKickoff() + ' ' +
@@ -740,6 +738,9 @@ export function buildCycleMessages(
     // 10-18 live:「写对比给我以后看」被存进 Library、或 display_file 给周期会话看,都没发信 —— 点明这两条都送不到。
     '(todos and approval requests already post there); finished work for them to read later (a report, research, a comparison) goes to their inbox via inbox_send — saving it in your Library or showing it with display_file does not reach them' +
     (cfg.notify === 'digest' ? '; your journal also reaches them as a daily digest, so routine progress needs no message. ' : '. ') +
+    // 10-30 live:写在节奏规矩前面时,Muse 有一半周期收尾忘了 set_next_wake(同代码去掉这句 4/4 睡,带着 2/4),所以放在「怎么找用户」之后。
+    'A rule that should fire on a condition (they open an app, an event nears): call manage_automation set' +
+    (cfg.mode === 'auto' ? ' and tell the user. ' : ', which only shows the user a rule card to accept; do not ask in text first. ') +
     'You may use remember to record durable insights about the user (what they value, accept, or dismiss). When done, briefly say what you did and what you deferred.';
   const ephemeralHint =
     (dyn.quietSince ? '\n\n(No new user messages or in-app activity since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers, and so is set_next_wake.)' : '') +
