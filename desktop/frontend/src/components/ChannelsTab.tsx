@@ -15,6 +15,7 @@ import { QrImage } from './QrImage'
 import type { ChannelKind, TanguDesktopConfig } from '../types'
 import { SettingsState } from './SettingsPrimitives'
 import { homeTarget } from '../services/engine/targets'
+import { agentName } from '../agentName'
 
 const ICONS: Partial<Record<ChannelKind, React.ReactNode>> = {
   wechat: <MessageCircle size={16} />,
@@ -107,7 +108,7 @@ export function ChannelsTab(p: { cfg: TanguDesktopConfig }) {
 
   // 收件箱转发 senders 的全量候选(agent slugs + 系统 + 云端)。
   const senderOptions: Array<{ id: string; label: string }> = [
-    ...agentDefs.map((a) => ({ id: a.slug, label: a.name || a.slug })),
+    ...agentDefs.map((a) => ({ id: a.slug, label: agentName(a) })),
     { id: 'system', label: t('channels.senderSystem') },
     { id: 'server', label: t('channels.senderServer') },
   ]
@@ -297,7 +298,7 @@ export function ChannelsTab(p: { cfg: TanguDesktopConfig }) {
                   <label>{t('channels.defaultAgent')}</label>
                   <select value={ch.agentSlug} onChange={(e) => save(kind, { agentSlug: e.target.value })}>
                     <option value="">{t('channels.followDefault')}</option>
-                    {agentDefs.map((a) => <option key={a.slug} value={a.slug}>{a.name || a.slug}</option>)}
+                    {agentDefs.map((a) => <option key={a.slug} value={a.slug}>{agentName(a)}</option>)}
                   </select>
                 </div>
                 <div className="chan-row">

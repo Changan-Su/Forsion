@@ -37,7 +37,6 @@
     "frontend/src/views/dashGrid.css": 12,
     "frontend/src/views/homepage.css": 17,
     "frontend/src/views/imageStudio/imageStudio.css": 2,
-    "frontend/src/views/projectProfile.css": 6,
     "frontend/src/views/teamProfile.css": 6,
     "../lcl/components/chatBox.css": 2,
     "../lcl/engine/engine.css": 16,

@@ -27,7 +27,7 @@ import { deps } from '../seams/runtime.js';
 import { createRun } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { agentCapOf, getAgent, listAgents, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
-import { resolveBackgroundModelId } from './specialAgentsConfig.js';
+import { isWithinActiveHours, loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
 import { condSummary, cursorMismatch, disableTrigger, loadTriggers, normalizeVaultRel, replaceKeyPart, sameVault, watchedCols, type MuseTrigger, type ActionSpec, type TriggerContext, type DbLike } from './museTriggers.js';
 import { mutateDb, readDbOrNull, type DbFile } from './amadeusDb.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
@@ -38,6 +38,7 @@ import { loadSchedule, entriesOf, dueHere, markEntryFired, type ScheduleEntry } 
 import { executeTool } from '../tools/registry.js';
 import { declaredApproval, declaredAutomationSafe } from '../tools/toolRegistry.js';
 import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
+import { postMuseDm } from './museDm.js';
 import { backgroundClientTag } from '../core/version.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 
@@ -278,6 +279,20 @@ async function runActionsInner(t: MuseTrigger, origin: ActionOrigin, tctx?: Trig
         const r = await sendInboxMessage(userId, { title, body, senderId: `automation:${t.id}` });
         steps.push({ type: 'notify', ok: r.ok, summary: r.ok ? `notified: ${title}` : String(r.error || 'failed').slice(0, 300) });
         if (!r.ok) { error = r.error || 'notify failed'; break; }
+      } else if (a.type === 'remind') {
+        // 运行时段外不提醒,也不攒着补发:过时就算了(方案细节 2)。试跑例外,点了就要看到。
+        if (origin === 'auto' && !isWithinActiveHours(loadSpecialAgentsConfig().muse, new Date().getHours())) {
+          steps.push({ type: 'remind', ok: true, skipped: true, summary: 'outside active hours' });
+          continue;
+        }
+        const title = expandTemplate(a.title, tctx);
+        const body = a.body ? expandTemplate(a.body, tctx) : undefined;
+        // 系统通知借收件箱这条路(桌面对 automation: 发件人才弹,窗口在后台也弹);forward:false = 不转发到通道,提醒不离开这台电脑。
+        const r = await sendInboxMessage(userId, { title, body, senderId: `automation:${t.id}`, forward: false });
+        const dm = await postMuseDm(userId, body ? `${title}\n${body}` : title, 'proactive:remind');
+        steps.push({ type: 'remind', ok: r.ok, summary: r.ok ? `reminded: ${title}` : String(r.error || 'failed').slice(0, 300) });
+        if (!r.ok) { error = r.error || 'remind failed'; break; }
+        if (!dm.ok) log(`规则 ${t.id} 提醒写进私聊失败:${dm.error}`);
       } else if (a.type === 'agent_run') {
         const ok = await launchUnattendedRun({ agentSlug: a.agentSlug, triggerKey: t.id, title: String(t.desc), message: automationMessage(t, a.prompt) });
         steps.push({ type: 'agent_run', ok, summary: ok ? `run started (${a.agentSlug})` : `agent "${a.agentSlug}" busy/unavailable` });
@@ -458,12 +473,17 @@ export async function launchAutomationTriggers(hits: TriggerHit[], io: LaunchIo 
   const launched: string[] = [];
   const touched: Record<string, TouchedDbs> = {};
   if (!hits.length) return { launched, touched };
+  let runnable = hits;
   try {
-    if (await anyUserRunActive()) { log('用户有进行中的 run,本轮让位'); return { launched, touched }; }
+    if (await anyUserRunActive()) {
+      // 让位是为了不抢模型账号;直接提醒不叫模型,该响就响。
+      runnable = hits.filter((h) => h.t.actions?.length && h.t.actions.every((a) => a.type === 'remind'));
+      if (!runnable.length) { log('用户有进行中的 run,本轮让位'); return { launched, touched }; }
+    }
   } catch { return { launched, touched }; }
   const busy = new Set<string>();
   const ran = new Set<string>();
-  for (const { t, ctx } of hits) {
+  for (const { t, ctx } of runnable) {
     if (busy.has(t.id)) continue; // 同规则前一个 hit 已 busy:余下不跑,整条留到下轮
     try {
       if (t.actions?.length) {

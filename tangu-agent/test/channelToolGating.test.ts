@@ -18,6 +18,7 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
+import { channelHub } from '../src/channels/hub.js';
 
 const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } });
 
@@ -120,6 +121,13 @@ describe('loop 级:真 DB 绑定行 → isChannelSession → 最终 payload', ()
     expect(got.system).not.toContain('GitHub-flavored');
     // 引擎级契约段由 agentLoop 直接注入(不经可覆盖的 guidance),最终提示里必在场
     expect(got.system).toContain('## When a Tool Call Fails');
+  });
+
+  it('查不出绑定:工具门禁照「没连」,隐私边界拿到 null 按连着算', async () => {
+    await runOnce(false);
+    await query('DROP TABLE tangu_wechat_bindings');
+    expect(await channelHub.isChannelSession('u1', 'S')).toBe(false);
+    expect(await channelHub.channelBinding('u1', 'S')).toBeNull();
   });
 
   it('无绑定:channel_send_* 不进 payload,回复风格段=markdown 变体', async () => {

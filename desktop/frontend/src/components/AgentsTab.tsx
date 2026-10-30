@@ -16,6 +16,7 @@ import { track } from '../achievements/store'
 import { act } from '../activity/log'
 import { agentDescription } from './builtinAgentDescriptions'
 import { homeTarget } from '../services/engine/targets'
+import { agentName } from '../agentName'
 
 registerMessages({
   'agentstab.userMdTemplate': {
@@ -158,7 +159,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
   }
 
   const remove = async (a: NormalAgentDef): Promise<void> => {
-    if (!window.confirm(t('settings.agents.deleteConfirm', { name: a.name }))) return
+    if (!window.confirm(t('settings.agents.deleteConfirm', { name: agentName(a) }))) return
     try { await deleteAgentDef(homeTarget(), a.slug); load() } catch { /* ignore */ }
   }
 
@@ -411,7 +412,7 @@ export const AgentsTab: React.FC<{ cfg: TanguDesktopConfig; onEditingChange?: (e
               style={{ cursor: 'grab', opacity: dragSlug === a.slug ? 0.45 : 1 }}>
               <GripVertical size={13} style={{ color: 'var(--text-faint)', flexShrink: 0 }} />
               <span className="file-name" style={{ flex: 1 }}>
-                <b>{a.name}</b>
+                <b>{agentName(a)}</b>
                 {a.slug === defaultSlug && <span style={{ color: 'var(--accent-ink)', marginLeft: 8, fontSize: 'var(--ui-font-caption, 11px)' }}>· {t('settings.agents.isDefault')}</span>}
                 {a.createdBy === 'agent' && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-caption, 11px)' }}>· {t('settings.agents.byAgent')}</span>}
                 {a.createdBy === 'system' && <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-caption, 11px)' }}>· {t('agent.badge.system')}</span>}

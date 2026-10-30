@@ -7,6 +7,7 @@ import type { NormalAgentDef, TanguDesktopConfig } from '../types'
 import type { PluginInfo } from '../services/backendService'
 import { useI18n } from '../i18n'
 import { PluginSettingsForm } from './PluginSettingsForm'
+import { agentName } from '../agentName'
 
 export const PluginSettingsPage: React.FC<{ cfg: TanguDesktopConfig; plugin: PluginInfo; agents: NormalAgentDef[] }> = ({ cfg, plugin, agents }) => {
   const { t } = useI18n()
@@ -28,7 +29,7 @@ export const PluginSettingsPage: React.FC<{ cfg: TanguDesktopConfig; plugin: Plu
           {scopeMode === 'agent' && (
             <select value={agentSlug} onChange={(e) => setAgentSlug(e.target.value)}>
               {agents.length === 0 && <option value="">{t('settings.plugins.selectAgent')}</option>}
-              {agents.map((a) => <option key={a.slug} value={a.slug}>{a.name}</option>)}
+              {agents.map((a) => <option key={a.slug} value={a.slug}>{agentName(a)}</option>)}
             </select>
           )}
         </div>

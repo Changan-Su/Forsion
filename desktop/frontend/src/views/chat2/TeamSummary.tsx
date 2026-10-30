@@ -3,7 +3,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 registerMessages({
-  'team.summary': { zh: 'Historian · 团队总结', en: 'Historian · Team summary' },
+  'team.summary': { zh: '史官 · 团队总结', en: 'Historian · Team summary' },
 })
 
 export function TeamSummary({ message }: { message: UiMessage }) {

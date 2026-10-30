@@ -333,6 +333,17 @@ async function calendars(be: AmadeusBackend): Promise<Cal[]> {
   }
   return out;
 }
+/** 本机全部日历事件(给自动化「日历事件开始前」用:rel + 行 + 解析好的时间;整张表读不了的跳过)。 */
+export async function localCalendarRows(): Promise<Array<{ rel: string; columns: DbColumn[]; row: DbRow; start: string; allDay: boolean }>> {
+  const out: Array<{ rel: string; columns: DbColumn[]; row: DbRow; start: string; allDay: boolean }> = [];
+  for (const c of await calendars(localBackend)) {
+    for (const row of c.db.rows) {
+      const d = decodeCalDate(row.cells[c.cal.id]);
+      if (d) out.push({ rel: c.rel, columns: c.db.columns, row, start: d.start, allDay: d.allDay });
+    }
+  }
+  return out;
+}
 async function findCalendar(be: AmadeusBackend, nameOrPath?: string): Promise<Cal> {
   const cals = await calendars(be);
   if (!cals.length) {

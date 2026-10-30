@@ -99,14 +99,28 @@ export function readUserMd(): string {
   try { return readFileSync(join(humanDir(), 'MEMORY.md'), 'utf8'); } catch { /* 还没迁 */ }
   try { return readFileSync(userMdFile(), 'utf8'); } catch { return ''; }
 }
-/** 新装机播种的 USER.md 模板(全局用户画像,供用户发现并填写)。第一次见面的合并认得它:一边是这份空模板就用另一边,别把模板行混进真画像。 */
-export const USER_MD_TEMPLATE =
+/** 新装机播种的 USER.md 模板(全局用户画像,供用户发现并填写)。第一次见面的合并认得它:一边是这份空模板就用另一边,别把模板行混进真画像。
+ *  10-29 去掉了「Agents may also add to it」:这份是人自己的本子,Agent 认识到的写进 human/SOUL.md(画像)。旧装机留下的旧模板见 LEGACY_USER_MD_TEMPLATES。 */
+const userMdTemplate = (lead: string): string =>
   '# User Profile (USER.md)\n\n' +
-  '> Every Agent reads this profile. Record long-term information about yourself here; Agents may also add to it based on conversations.\n\n' +
+  `> Every Agent reads this profile. ${lead}\n\n` +
   '## Name / What to call you\n\n' +
   '## Preferences\n- \n\n' +
   '## Level / Background\n\n' +
   '## Long-term needs / Goals\n';
+export const USER_MD_TEMPLATE = userMdTemplate('Record long-term information about yourself here.');
+/** 以前发出去的空模板:同步 / 镜像的第一次见面和提示词都要认得,不然旧装机那份空模板会被当成真资料合并、注入。 */
+export const LEGACY_USER_MD_TEMPLATES: readonly string[] = [userMdTemplate('Record long-term information about yourself here; Agents may also add to it based on conversations.')];
+/** 是不是没人动过的空模板(新旧都算;忽略换行风格与首尾空白)。 */
+export function isUserMdTemplate(s: string): boolean {
+  const t = s.replace(/\r\n/g, '\n').trim();
+  return [USER_MD_TEMPLATE, ...LEGACY_USER_MD_TEMPLATES].some((tpl) => tpl.trim() === t);
+}
+/** 给提示词读的那份:还是空模板就当空(别把一页空标题每轮注入)。镜像 / 首次见面照旧用 readUserMd 读原文。 */
+export function readUserMdForPrompt(): string {
+  const s = readUserMd();
+  return isUserMdTemplate(s) ? '' : s;
+}
 /** 默认日历的旧位置:老版本种在默认笔记库根上的 Calendar.db(新用户没有),还在就和 human/CALENDAR.db 双向镜像。
  *  桌面经 FORSION_DEFAULT_CALENDAR 告诉引擎;没给(台架、云端、命令行)就不碰任何笔记库。 */
 export const defaultCalendarFile = (): string | null => process.env.FORSION_DEFAULT_CALENDAR?.trim() || null;
