@@ -2,7 +2,7 @@
  * 模式胶囊 / 审批档位菜单的布局契约检查(真 Chromium 断言)。
  *
  * 契约:
- *  A 模式胶囊像 ModelPill 一样平滑展开到 224px,与菜单等宽、右缘对齐、文案居中。
+ *  A 宽栏模式胶囊像 ModelPill 一样直接展开到 224px,与菜单等宽、右缘对齐、文案居中。
  *  B 审批档位行只放图标 / 标题 / 勾,说明不占菜单布局。
  *  C hover 时说明作为侧边 tooltip 出现,并保留 aria-describedby 键盘/读屏关系；窄 View 改叠到行上方且不越界。
  *
@@ -34,6 +34,7 @@ function check(name, ok, detail) {
 }
 
 const BASE_CSS = fs.readFileSync(path.join(__dirname, '../frontend/src/styles/base.css'), 'utf8')
+const CHATBOX_CSS = fs.readFileSync(path.join(__dirname, '../../lcl/components/chatBox.css'), 'utf8')
 const COMPOSER_CSS = fs.readFileSync(path.join(__dirname, '../frontend/src/views/chat2/composer2.css'), 'utf8')
 
 // 复刻 Composer2 的真实结构与文案。
@@ -51,6 +52,7 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
           --accent-ink:#3b5bdb; --danger:#e03131; --font-ui:system-ui; }
   body { margin:0; font-family:var(--font-ui); }
   ${BASE_CSS}
+  ${CHATBOX_CSS}
   ${COMPOSER_CSS}
   /* 药丸容器:菜单是它的 absolute 定位子级。 */
   .approval-stage { position:fixed; inset:0; padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; }
@@ -106,12 +108,12 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
   const opening = await trace(true)
   const openW = opening.at(-1)[1]
   const mids = (frames) => frames.filter(([t, w]) => t > 35 && t < 155 && w > closedW + 8 && w < openW - 8).length
-  check('模式胶囊展开有连续宽度动画', mids(opening) >= 3, `${closedW.toFixed(1)} → ${openW.toFixed(1)},中间帧 ${mids(opening)}`)
+  check('宽栏模式胶囊展开直接到位，不补宽度', mids(opening) === 0, `${closedW.toFixed(1)} → ${openW.toFixed(1)},中间帧 ${mids(opening)}`)
   const menuXs = opening.map((frame) => frame[2])
   const menuDrift = Math.max(...menuXs) - Math.min(...menuXs)
   check('胶囊展开时菜单锚点不横移（只从下方向上弹）', menuDrift < 8, `横向漂移 ${menuDrift.toFixed(1)}px`)
   const closing = await trace(false)
-  check('模式胶囊收回也有连续宽度动画', mids(closing) >= 3, `${openW.toFixed(1)} → ${closedW.toFixed(1)},中间帧 ${mids(closing)}`)
+  check('宽栏模式胶囊收回直接到位，不补宽度', mids(closing) === 0, `${openW.toFixed(1)} → ${closedW.toFixed(1)},中间帧 ${mids(closing)}`)
   await page.evaluate(() => {
     document.querySelector('.mode-pill-wrap').classList.add('is-open')
     document.querySelector('.mode-pill-btn').classList.add('is-open')

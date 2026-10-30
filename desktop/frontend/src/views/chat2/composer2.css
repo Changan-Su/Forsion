@@ -251,12 +251,12 @@
 /* 窄 Chat View 的排他展开：当前胶囊完整保留，其他胶囊 / 次要控制直接退出布局。
    发送（以及运行时停止）永远保留，避免为了观感牺牲核心动作。 */
 @container (max-width: 600px) {
-  .t2c-row:has(> .add-pill-wrap.is-open) > .t2c-capsule-peer:not(.add-pill-wrap),
-  .t2c-row:has(> .mode-pill-wrap.is-open) > .t2c-capsule-peer:not(.mode-pill-wrap),
-  .t2c-row:has(> .model-pill-wrap.is-open) > .t2c-capsule-peer:not(.model-pill-wrap),
-  .t2c-row:has(> .add-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
-  .t2c-row:has(> .mode-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
-  .t2c-row:has(> .model-pill-wrap.is-open) > .t2c-collapse-on-capsule-open {
+  .t2c-row:not([data-compact]):has(> .add-pill-wrap.is-open) > .t2c-capsule-peer:not(.add-pill-wrap),
+  .t2c-row:not([data-compact]):has(> .mode-pill-wrap.is-open) > .t2c-capsule-peer:not(.mode-pill-wrap),
+  .t2c-row:not([data-compact]):has(> .model-pill-wrap.is-open) > .t2c-capsule-peer:not(.model-pill-wrap),
+  .t2c-row:not([data-compact]):has(> .add-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
+  .t2c-row:not([data-compact]):has(> .mode-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
+  .t2c-row:not([data-compact]):has(> .model-pill-wrap.is-open) > .t2c-collapse-on-capsule-open {
     display: none;
   }
 }
@@ -539,3 +539,25 @@
 
 /* 发送动效:输入框里的字影子上移淡出那 200ms 先不露占位提示,两行字不叠(views/chat2/sendFlight.ts) */
 .t2c-ta[data-send-ghost]::placeholder { color: transparent; }
+
+/* A: stable single-row controls. Native phone cards retain their own layout. */
+.t2c-row[data-compact] { gap: 6px; }
+.t2c-row[data-compact] .mode-pill-wrap,
+.t2c-row[data-compact] .mode-pill-wrap.is-open { flex: none; width: 28px; }
+.t2c-row[data-compact] .t2c-pill.mode-pill-btn,
+.t2c-row[data-compact] .t2c-pill.mode-pill-btn.is-open { display: flex; width: 28px; height: 28px; padding: 0; justify-content: center; }
+.t2c-row[data-compact] .mode-pill-btn > .t2c-pill-label,
+.t2c-row[data-compact] .mode-pill-btn > svg:last-child { display: none; }
+.add-pill-wrap[data-compact] .t2c-pill.add-pill-btn.is-open {
+  width: 28px; padding: 0; display: flex; justify-content: center;
+}
+.add-pill-wrap[data-compact] .add-pill-label,
+.add-pill-wrap[data-compact] .add-pill-chevron { display: none; }
+/* Override the old exclusive-open rule: opening a menu does not remove its peers. */
+.t2c-row[data-compact] > .t2c-capsule-peer,
+.t2c-row[data-compact] > .t2c-collapse-on-capsule-open { display: inline-flex; }
+.t2c-row[data-compact] .t2c-stop { width: 32px; padding-inline: 0; justify-content: center; }
+.t2c-row[data-compact] .t2c-stop-label { display: none; }
+.t2c-row[data-tight] > .model-pill-wrap { flex: 1 1 auto; }
+.t2c-overflow-ring { width: 14px; height: 14px; border: 2px solid var(--text-faint); border-radius: 50%; flex: none; }
+.t2c-ctxring-pop.composer-menu--compact { display: flex; flex-direction: column; padding: 8px; width: 320px; }

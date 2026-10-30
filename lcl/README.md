@@ -24,6 +24,7 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - `desktop/frontend/src/components/chatbox`：接入共享 `ModelPill` 与宿主实时模型目录的 ChatBox、`useChatBoxSelection`。草稿选择局部保存，用户排序 / 隐藏偏好和模型思考档复用现有选择器。
 - `Composer2`：聊天会话编排器，组合上述基础组件并接入附件、引用、命令、语音、运行状态。首页复用该编排器；Coding 项目创建使用提示表单组件，在创建成功后显式移交模型与思考档。
 - 插件：`ctx.ui.mountChatBox`；详见 [公共契约](../docs/customization/ui-components.md)。
+- 桌面 / Web 卡内容宽 ≤480px 时，模型显示短名称与档位，模型 / 添加 / 模式入口展开不改变宽度；≤260px 时上下文与语音通过添加菜单访问。窄菜单用同层返回并保留完整模型名、审批说明和额度；原生手机沿用自身布局。`desktop` 的 `check:composernarrow` 与 `check:composernarrow:electron` 覆盖真实组件 / 构建后 ChatView。
 
 ## 划线条(Selection bar)
 
@@ -64,6 +65,10 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - `engine/dropIndicator.ts`:落点提示(拖动排序 / 拖入时的那根线、那圈「放进去」描边)的唯一真源。换落点 = 旧的原地淡出 90ms、新的在新位置淡入 130ms 并从近端展开;同一个落点只是坐标变了(自动滚动、重排)就直接跟。新代码用 `createDropIndicator()`(视口坐标,fixed 包含块与祖先 zoom 已补偿);已经自己画线的地方在定位前调 `dropRetarget(el, key)`、藏之前调 `dropHide(el)`(Amadeus 编辑器三根线、标签条竖线);每行自带伪元素线的列表用 `dropIndicator.css` 的 `--lcl-drop-enter` / `--lcl-drop-leave` / `--lcl-drop-fade`(写法见该文件顶注)。颜色一律 `--signal-line`。插件:`ctx.ui.dropIndicator`。入场只动 `opacity` 和独立的 `scale`,不碰 `transform`(各处靠内联 transform 定位)。方案页:仓根 `docs/ToBeImproved/落点过渡动效方案_2026-10-24/`(选 B 原地淡入)。**松手落位**(2026-10-25,借鉴 Comma 方案 2.5):`land(el, from, { with?, unclip? })` 让被拖的那一个从松手处(`releasePoint(dropEvent, dragGrab(el, dragstartEvent))`)滑进新位置,160ms(`--land-duration`,LCL 兜底 `--lcl-land`)× `--lcl-drop-ease`,阴影淡出,邻居不让位;FLIP 用内联 transform + `transition` 回 0,不写关键帧;缩放按 `currentCSSZoom` 补偿;减少动态效果直接到位。重渲要等(写盘 / 插件回调)用 `landWhenMoved(find, from)`:每次 DOM 有增删就问一次,等元素重新挂载或换了父节点 / 前一个兄弟才落。宿主调用处:Tangu 会话档项目组、插件列表行、内置待办视图换组(日历插件自带的待办视图不经这里);插件走 `ctx.ui.dropIndicator().land`。台架 `npm run check:dropland`,单测 `dropLand.test.ts`。
 
 ## English contract
+
+Compact desktop/Web Chat Boxes keep trigger widths stable and show a short model/effort label. At a content width of 260px or less, Context/quota and voice remain available in Add. Compact submenus replace their parent, support keyboard entry/return, and keep full model names in the picker and accessible label. Native phone layouts retain their existing presentation. Regression commands: `desktop` → `check:composernarrow` and, after a build, `check:composernarrow:electron`.
+
+`OverlayAt` and `useClampedMenu` accept an optional DOM `boundary`. Portalled menus are clamped to its intersection with the viewport, with width/height caps and the existing cumulative zoom compensation. Callers provide scrolling on constrained surfaces. Omit it to retain viewport placement. Resize and scroll observers are removed on unmount.
 
 `engine/lineSelection.ts` provides opt-in `mountLineSelection(root, options)`. It paints continuous visual-line bands outside the content DOM while preserving native Selection, focus and clipboard behavior. Chat and watched plugin readers mount it through ViewSelectionBar; Markdown editors also supply composition suspension and pending AI ranges. Dispose the handle with its owning view. Custom selection layers and coarse pointers keep native paint. Regression: `desktop` → `npm run check:selectionlines` at 100% and 110% zoom after a fresh build.
 

@@ -28,7 +28,7 @@ function findChromium() {
   throw new Error('找不到 chromium,设 CHROMIUM_EXE 环境变量')
 }
 
-const ORIGIN = process.env.HARNESS_ORIGIN || 'http://localhost:5173'
+const ORIGIN = process.env.HARNESS_ORIGIN || (process.env.HARNESS_URL ? new URL(process.env.HARNESS_URL).origin : 'http://localhost:5173')
 const ZOOMS = [1, 0.85, 1.1, 1.15]
 const TOL = 1.5 // px:亚像素舍入容差
 

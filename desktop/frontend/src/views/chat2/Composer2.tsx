@@ -7,7 +7,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  */
 import React, { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, Users, Sparkles,
+  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, ChevronRight, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, CircleAlert, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
@@ -38,6 +38,7 @@ import { useUploads } from '../../services/uploads'
 import { addDraftFile, isInWorkspace, previewOf, release, removeDraftFile, uploadIdOf } from './composerUploads'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, getModelQuota, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
+import { ComposerMenuSurface, ComposerMenuHeader, useComposerLayout } from '../../components/ComposerMenuSurface'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem, normalModeItems } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
@@ -117,6 +118,7 @@ const TOUCH_TIP_KEYS = [STEER_TIP, 'input.tip.wikiRef']
 registerMessages({
   'input.quote.group': { zh: '引用', en: 'Quotes' },
   'input.tip': { zh: '小贴士：{tip}', en: 'Tip: {tip}' },
+  'input.placeholderCompact': { zh: '输入消息…', en: 'Message…' },
   'input.runningPlaceholder': { zh: '运行中，可继续输入…', en: 'Working… You can keep typing' },
   'input.steer.queuedHint': { zh: '排队项在本轮结束后依次执行 · ↑ 取回编辑', en: 'Queued items run in order after this turn · ↑ to recall' },
   'input.tip.steer': { zh: '运行中也能继续发消息，会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
@@ -591,6 +593,10 @@ export const Composer2: React.FC<{
   }, [draftKey])
   const taRef = useRef<HTMLTextAreaElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+  const layout = useComposerLayout(cardRef)
+  const addAnchorRef = useRef<HTMLSpanElement>(null)
+  const modeAnchorRef = useRef<HTMLSpanElement>(null)
+  const ctxAnchorRef = useRef<HTMLSpanElement>(null)
   useLayoutEffect(() => {
     const card = cardRef.current
     if (!card) return
@@ -822,11 +828,11 @@ export const Composer2: React.FC<{
   }
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
-  const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
+  const modeFix = useEdgeNudge(openMenu === 'mode' && !layout.compact, { boundary: '.t2-chat-view' })
   useExitGhost(modeFix.ref, openMenu === 'mode') // 关掉时留替身放 80ms 退场(走查续八 8.4)
   // 上下文占比的详情浮层:同款 absolute + 固定宽,窄屏也会捅出边缘。
   // 右边缘贴输入卡右边缘,不越出输入卡(走查 5.13):边界 = 输入卡、边距 0。
-  const ctxPopFix = useEdgeNudge(openMenu === 'ctx', { boundary: '.t2c-card', margin: 0 })
+  const ctxPopFix = useEdgeNudge(openMenu === 'ctx' && !layout.compact, { boundary: '.t2c-card', margin: 0 })
 
   useEffect(() => {
     if (!openMenu) return
@@ -836,14 +842,20 @@ export const Composer2: React.FC<{
       setOpenMenu(null)
     }
     // 确认框开着时 Esc 只关确认框(焦点被 Tab 到背景也一样),不连带关菜单
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('[data-keep-menus]')) setOpenMenu(null) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || document.querySelector('[data-keep-menus]')) return
+      const surface = openMenu === 'mode' ? modeFix.ref.current : openMenu === 'ctx' ? ctxPopFix.ref.current : null
+      if (!cardRef.current?.contains(document.activeElement) && !surface?.contains(document.activeElement)) return
+      const trigger = openMenu === 'ctx' && layout.tight ? addAnchorRef.current?.querySelector('button') : cardRef.current?.querySelector<HTMLElement>('.t2c-row button[aria-expanded="true"]')
+      setOpenMenu(null); trigger?.focus({ preventScroll: true })
+    }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [openMenu])
+  }, [openMenu, layout.tight])
 
   const autoGrow = () => {
     const ta = taRef.current
@@ -1796,6 +1808,23 @@ export const Composer2: React.FC<{
     <ChatBoxSubmit onClick={send} disabled={disabled || !!uploadGate || (!draft.trim() && !allRefChips.length && !quotedNote && !pastes.length && !elements.length)} title={t('input.send')} aria-label={t('input.send')} />
   )
 
+  const showContext = !isChat && !!ringWindow && ringWindow > 0
+  const contextUsage = (
+    <ContextUsagePop
+      open={openMenu === 'ctx'}
+      contextWindow={ringWindow ?? 0}
+      ctxTokens={ctxTokens}
+      sessionTokens={sessionTokens}
+      runCost={runCost}
+      costLimit={costLimit}
+      ctxInfo={ringCtxInfo}
+      onCompact={onCompact ? () => { onCompact(); setOpenMenu(null) } : undefined}
+      directModel={!isEngine && modelId && isDirectModelId(modelId, models, modelsResponse)
+        // 新对话还没会话:按焦点设备查(新对话就跑在那里,模型目录也来自那里),别固定问本机
+        ? { id: modelId, load: () => getModelQuota(sessionId ? targetForSession(sessionId) : focusTarget(), modelId).then((r) => r.quota) } : undefined}
+                    />
+  )
+
   return (
     <div className="t2c">
       {groupSetupOpen && (
@@ -1898,7 +1927,8 @@ export const Composer2: React.FC<{
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
+            title={layout.compact ? t('input.placeholder') : undefined}
+            placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(layout.compact ? 'input.placeholderCompact' : touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
             data-suggestion={showSuggestion || undefined}
             data-tip-fade={(running && !compactCard && tipFade) || undefined}
             data-tip-tall={(running && !compactCard && tipTall) || (showSuggestion && suggestTall) || undefined}
@@ -2096,8 +2126,17 @@ export const Composer2: React.FC<{
             </div>
           )}
 
-          <ChatBoxToolbar>
+          <ChatBoxToolbar data-compact={layout.compact || undefined} data-tight={layout.tight || undefined}>
             <AddContentMenu
+              triggerRef={addAnchorRef}
+              overflowControls={layout.tight ? <>
+                {showContext && <button type="button" className="menu-item" data-composer-overflow="context" onClick={() => setOpenMenu('ctx')}>
+                  <span className="t2c-overflow-ring" aria-hidden="true" /><span className="grow">{t('input.ctxLabel')}</span>
+                  <span>{Math.min(100, Math.round(((ctxTokens || 0) / ringWindow!) * 100))}%</span><ChevronRight size={13} />
+                </button>}
+                <button type="button" className="menu-item" data-composer-overflow="voice" disabled={disabled || voice.busy || !voice.supported}
+                  onClick={() => { setOpenMenu(null); void voice.toggle() }}><Mic size={14} /><span className="grow">{t('input.micStart')}</span></button>
+              </> : undefined}
               open={openMenu === 'add'}
               disabled={disabled}
               activeSessionId={activeSessionId}
@@ -2113,7 +2152,7 @@ export const Composer2: React.FC<{
               <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} onSend={voiceSend} t={t} />
             ) : (<>
             {showModeChip && !modeMerged && (
-              <span className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
+              <span ref={modeAnchorRef} className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
                 <button
                   className={`t2c-pill mode-pill-btn${openMenu === 'mode' ? ' is-open' : ''}${planMode && !isChat ? ' active' : ''}`}
                   data-danger={dangerPill || undefined}
@@ -2130,8 +2169,9 @@ export const Composer2: React.FC<{
                   <ChevronDown size={10} />
                 </button>
                 {openMenu === 'mode' && (
-                  <div ref={modeFix.ref} className="composer-menu composer-menu--mode" style={modeFix.style}>
-                    {onNormalWork && !isChat && <NormalModeItem {...normalProps} />}
+                  <ComposerMenuSurface portal={layout.compact} anchorRef={modeAnchorRef} innerRef={el => { modeFix.ref.current = el }} className="composer-menu composer-menu--mode" style={modeFix.style}>
+                    {layout.compact && <ComposerMenuHeader title={t('input.modeSheetTitle')} onClose={() => { setOpenMenu(null); modeAnchorRef.current?.querySelector('button')?.focus() }} />}
+                    {onNormalWork && !isChat && <NormalModeItem {...normalProps} inline={layout.compact} />}
                     {[planSection, groupSection].map((sec) => sec && (
                       <React.Fragment key={sec.items[0].id}>
                         <div className="menu-section">{sec.title}</div>
@@ -2173,7 +2213,7 @@ export const Composer2: React.FC<{
                         )}
                       </>
                     )}
-                  </div>
+                  </ComposerMenuSurface>
                 )}
               </span>
             )}
@@ -2184,14 +2224,14 @@ export const Composer2: React.FC<{
                 {t(uploadGate === 'failed' ? 'input.upload.failedGate' : 'input.upload.busyGate')}
               </span>
             )}
-            {!isChat && !!ringWindow && ringWindow > 0 && (() => {
+            {showContext && !layout.tight && (() => {
               const pct = Math.min(100, Math.round(((ctxTokens || 0) / ringWindow) * 100))
               // 预警跟着压缩线走:设置里把自动压缩调到 30% 时,环永远到不了 80%,按窗口判就再也不亮了
               const warn = ringCtxInfo?.compactAt ? (ctxTokens || 0) >= ringCtxInfo.compactAt * 0.8 : pct >= 80
               const R = 9
               const CIRC = 2 * Math.PI * R
               return (
-                <span className={`t2c-ctxring t2c-collapse-on-capsule-open${openMenu === 'ctx' ? ' is-open' : ''}`} data-warn={warn || undefined} data-cmenu>
+                <span ref={ctxAnchorRef} className={`t2c-ctxring t2c-collapse-on-capsule-open${openMenu === 'ctx' ? ' is-open' : ''}`} data-warn={warn || undefined} data-cmenu>
                   <button
                     type="button"
                     className="t2c-ctxring-btn"
@@ -2208,21 +2248,9 @@ export const Composer2: React.FC<{
                     </svg>
                   </button>
                   {/* 点击详情(09-26 对标 Claude 的 Context window 面板):分段条 + 分项 + 登录后的 Forsion 额度,见 ContextUsagePop */}
-                  <span ref={ctxPopFix.ref} className="t2c-ctxring-pop" style={ctxPopFix.style}>
-                    <ContextUsagePop
-                      open={openMenu === 'ctx'}
-                      contextWindow={ringWindow}
-                      ctxTokens={ctxTokens}
-                      sessionTokens={sessionTokens}
-                      runCost={runCost}
-                      costLimit={costLimit}
-                      ctxInfo={ringCtxInfo}
-                      onCompact={onCompact ? () => { onCompact(); setOpenMenu(null) } : undefined}
-                      directModel={!isEngine && modelId && isDirectModelId(modelId, models, modelsResponse)
-                        // 新对话还没会话:按焦点设备查(新对话就跑在那里,模型目录也来自那里),别固定问本机
-                        ? { id: modelId, load: () => getModelQuota(sessionId ? targetForSession(sessionId) : focusTarget(), modelId).then((r) => r.quota) } : undefined}
-                    />
-                  </span>
+                  {!layout.compact && <span ref={ctxPopFix.ref} className="t2c-ctxring-pop" style={ctxPopFix.style}>
+                    {contextUsage}
+                  </span>}
                 </span>
               )
             })()}
@@ -2264,17 +2292,22 @@ export const Composer2: React.FC<{
                 footnote={!isEngine && !isHost && !models?.some((m) => m.source === 'direct') ? t('input.cloudModelHint') : undefined}
               />
             )}
-            <button
+            {!layout.tight && <button
               className={`t2c-iconbtn t2c-mic-control t2c-collapse-on-capsule-open${voice.recording ? ' recording' : ''}`}
               title={voice.busy ? t('input.micBusy') : voice.recording ? t('input.micStop') : voice.error || t('input.micStart')}
               disabled={disabled || voice.busy || !voice.supported}
               onClick={voice.toggle}
             >
               {voice.busy ? <Loader2 size={14} className="spin" /> : <Mic size={14} />}
-            </button>
+            </button>}
             {!phoneCard && submitKeys}
             </>)}
           </ChatBoxToolbar>
+          {layout.compact && openMenu === 'ctx' && showContext && <ComposerMenuSurface portal
+            anchorRef={layout.tight ? addAnchorRef : ctxAnchorRef} innerRef={el => { ctxPopFix.ref.current = el }} className="t2c-ctxring-pop">
+            <ComposerMenuHeader title={t('input.ctxLabel')} onClose={() => { setOpenMenu(null); (layout.tight ? addAnchorRef : ctxAnchorRef).current?.querySelector('button')?.focus() }} />
+            {contextUsage}
+          </ComposerMenuSurface>}
           {voice.error && !voice.recording && !voice.busy && (
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{voice.error}</div>
           )}
