@@ -1824,7 +1824,9 @@ try {
     const slug = created?.agent?.slug;
     if (!slug) throw new Error(`建 agent 失败:${JSON.stringify(created).slice(0, 200)}`);
     const cfg = { agentSlug: slug, debugSystemPrompt: true };
-    const calRows = () => JSON.parse(readFileSync(SELF_SCHED_CAL, 'utf8')).rows.length;
+    // 用户的日历 = 库里那本 + 默认日历 human/CALENDAR.db(不带名字新建落这里,第一次写才有文件)
+    const humanCal = join(home, 'human', 'CALENDAR.db');
+    const calRows = () => [SELF_SCHED_CAL, humanCal].filter((f) => existsSync(f)).reduce((n, f) => n + JSON.parse(readFileSync(f, 'utf8')).rows.length, 0);
     const mine = async () => asList(await api('/agent/special/schedule'), 'schedules').filter((x) => x.slug === slug).flatMap((x) => x.entries || []);
     const tomorrow = actDay(new Date(Date.now() + 86_400_000));
     const sess = `live-selfsched-${Date.now()}`;
@@ -1836,7 +1838,7 @@ try {
     const entries = await mine();
     const hit = entries.find((e) => String(e.date || '').startsWith(`${tomorrow}T20:00`));
     const tools = turns.flatMap((t) => t.toolCalls);
-    const promptOk = (t1.systemPrompt || '').includes('SCHEDULE.db');
+    const promptOk = (t1.systemPrompt || '').includes('CALENDAR.db');
     const denies = /没有[^。,，]{0,6}日历|没有[^。,，]{0,6}日程|no calendar|don't have a calendar/i.test(turns.map((t) => t.content).join('\n'));
     const userCalBefore = calRows();
     const turnErr = turns.find((t) => t.error)?.error;
@@ -1844,7 +1846,7 @@ try {
     const neg = await run(`live-selfsched-neg-${Date.now()}`, '明晚8点我要和朋友看电影,帮我记进我的日历。', 180_000, cfg);
     const negOk = !neg.error && neg.toolCalls.includes('amadeus_create_event') && calRows() === userCalBefore + 1 && (await mine()).length === entries.length;
     return { ok: posOk && negOk, inconclusive: posOk && negOk && !proactive,
-      detail: turnErr || neg.error || `提示段${promptOk ? '含' : '缺'} SCHEDULE.db;T1 ${proactive ? '已主动排进自己的日程' : '未主动排(不计红)'};三轮后${hit ? `自己的日程有 ${hit.date}` : `自己的日程无明晚 20:00 条目(共 ${entries.length} 条)`};用户日历 ${userCalBefore === 1 ? '未被动' : `被写了 ${userCalBefore - 1} 条`}${denies ? ';**否认自己有日历**' : ''};负对照 ${negOk ? '走 amadeus 进用户日历' : `未走对(工具 ${neg.toolCalls.join('/') || '无'},日历 ${calRows()} 行)`}`,
+      detail: turnErr || neg.error || `提示段${promptOk ? '含' : '缺'} CALENDAR.db;T1 ${proactive ? '已主动排进自己的日程' : '未主动排(不计红)'};三轮后${hit ? `自己的日程有 ${hit.date}` : `自己的日程无明晚 20:00 条目(共 ${entries.length} 条)`};用户日历 ${userCalBefore === 1 ? '未被动' : `被写了 ${userCalBefore - 1} 条`}${denies ? ';**否认自己有日历**' : ''};负对照 ${negOk ? '走 amadeus 进用户日历' : `未走对(工具 ${neg.toolCalls.join('/') || '无'},日历 ${calRows()} 行)`}`,
       output: `T1:${t1.content}\nT2:${t2.content}\nT3:${t3.content}\n负对照:${neg.content}`, ttftMs: ttft(t3), tokens: tokensOf(t3), toolCalls: [...tools, '|neg:', ...neg.toolCalls] };
   });
 

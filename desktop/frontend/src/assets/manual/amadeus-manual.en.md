@@ -310,7 +310,7 @@ Pick any folder to be your vault, and everything under it — Markdown notes, at
 | Command palette `⌘/Ctrl + K` | Anywhere | "Open vault…" |
 
 - The folder picker is desktop only; on the web the same footer button opens the "Cloud vault" panel instead.
-- The first launch does not ask which folder you want — it creates `Forsion/Amadeus` in your home folder as the default vault and seeds a `Calendar.db` in it.
+- The first launch does not ask which folder you want — it creates `Forsion/Amadeus` in your home folder as the default vault. The default calendar isn't in the vault; it's `human/CALENDAR.db` in the engine's home folder.
 - Every launch after that reopens the last vault and returns to the note you last had open. If that folder is gone, the main area reads "Open a vault folder to get started."
 - Switching vaults flushes unsaved edits back to the old vault before the root changes, so nothing leaks between libraries.
 - After you switch vaults by hand you land on the first note alphabetically, not where you left off — that is normal for a switch, as opposed to a restore on launch.

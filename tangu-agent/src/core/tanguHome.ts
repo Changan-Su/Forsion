@@ -107,7 +107,7 @@ export const USER_MD_TEMPLATE =
   '## Preferences\n- \n\n' +
   '## Level / Background\n\n' +
   '## Long-term needs / Goals\n';
-/** 默认日历:默认笔记库根上的 Calendar.db(首启播种的「我的日历」),搬家后和 human/CALENDAR.db 双向镜像。
+/** 默认日历的旧位置:老版本种在默认笔记库根上的 Calendar.db(新用户没有),还在就和 human/CALENDAR.db 双向镜像。
  *  桌面经 FORSION_DEFAULT_CALENDAR 告诉引擎;没给(台架、云端、命令行)就不碰任何笔记库。 */
 export const defaultCalendarFile = (): string | null => process.env.FORSION_DEFAULT_CALENDAR?.trim() || null;
 /** human/ 里一份的原文;缺文件 / 读失败给空串。给提示词读:不建目录、不碰修改记录。 */

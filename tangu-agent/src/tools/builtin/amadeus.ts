@@ -23,6 +23,10 @@ import type { ToolCapabilities, ToolContext } from '../toolTypes.js';
 import { deps, isConfigured } from '../../seams/runtime.js';
 import { AmadeusConflictError, AmadeusNotFoundError, type AmadeusBrain } from '../../seams/cloudBrain.js';
 import { pageInstructionsForFile } from '../../services/pageInstructions.js';
+import { defaultCalendarFile, ensureHumanFolder, humanDir, tanguHome } from '../../core/tanguHome.js';
+import { atomicSyncWrite, readSyncBytes } from '../../services/agentSyncPaths.js';
+import { withMemoryDirectoryLock } from '../../services/memoryRepository.js';
+import { detectZh } from '../../tui/i18n.js';
 
 // ── vault 定位 ────────────────────────────────────────────────────────────
 // 解析优先级:① FORSION_AMADEUS_VAULT 显式覆盖(standalone CLI 直指) → ② desktop 注入的
@@ -255,10 +259,70 @@ function toCal(rel: string, db: DbFile, seq?: number): Cal | null {
   const cal = db.columns.find((c) => c.type === 'calendarDate');
   return cal && !db.source ? { rel, db, cal, seq } : null;
 }
-/** 全库经典多维表里含 calendarDate 列的(note-view 库 v1 跳过)。 */
+
+// 默认日历 human/CALENDAR.db 不在笔记库里:只有本机后端有,排第一,不带名字新建就落这里。云端 `__human__` 那半在 server。
+/** 和桌面 dbStore 同一个 ref;不是笔记库路径,读写走下面两个函数。 */
+const HUMAN_CAL = 'human://CALENDAR.db';
+const humanCalFile = (): string => path.join(humanDir(), 'CALENDAR.db');
+/** 文件还没有 = 新用户的空日历,第一次写才落盘。列 id 固定,和桌面 humanCalendarIo 的 emptyCalendar 一致:
+ *  两边同时首次建时,后写的重读后列还对得上。 */
+function emptyHumanCal(): DbFile {
+  const zh = detectZh();
+  return {
+    version: 2,
+    name: zh ? '我的日历' : 'My calendar',
+    columns: [
+      { id: 'name', name: zh ? '名称' : 'Name', type: 'text' },
+      { id: 'date', name: zh ? '日期' : 'Date', type: 'calendarDate' },
+      { id: 'done', name: zh ? '完成' : 'Done', type: 'checkbox' },
+    ],
+    rows: [],
+  };
+}
+/** 坏文件在这里抛:绝不能当成「还没有」,新建一份把人的日历盖掉。 */
+function readHumanCal(): Cal | null {
+  const bytes = readSyncBytes(tanguHome(), humanCalFile());
+  const db = bytes ? (JSON.parse(bytes.toString('utf8')) as DbFile) : emptyHumanCal();
+  if (!db || !Array.isArray(db.columns) || !Array.isArray(db.rows)) throw new Error('human/CALENDAR.db is not a valid .db file');
+  return toCal(HUMAN_CAL, db);
+}
+/** 读—改—写整段在 human/ 那把锁里,写完当场镜像:和日历视图的 PUT /agent/human/CALENDAR.db 同一个写法。 */
+async function mutateHumanCal(apply: CalMutation): Promise<string> {
+  ensureHumanFolder();
+  const r = withMemoryDirectoryLock(humanDir(), () => {
+    const cal = readHumanCal();
+    if (!cal) throw new Error('human/CALENDAR.db has no calendarDate column');
+    const res = apply(cal);
+    if (res.ok) atomicSyncWrite(tanguHome(), humanCalFile(), serializeDb(cal.db));
+    return res;
+  });
+  if (r.ok) {
+    // 动态 import:humanFolder → amadeusDb → 本文件,静态引入成环
+    const { mirrorLegacyHuman } = await import('../../agents/humanFolder.js');
+    try { await mirrorLegacyHuman(); } catch (e) { console.warn('[human mirror]', e instanceof Error ? e.message : e); }
+  }
+  return r.msg;
+}
+/** 默认笔记库根上的 Calendar.db 是 human/ 的旧位置镜像,不算第二本日历(和日历视图的 withHumanCal 同一个口径)。 */
+function isHumanMirror(rel: string): boolean {
+  const legacy = defaultCalendarFile();
+  return !!legacy && path.resolve(legacy) === inVault(rel);
+}
+
+/** 本机:默认日历 + 全库日历;云端:全库日历。全库 = 经典多维表里含 calendarDate 列的(note-view 库 v1 跳过)。 */
 async function calendars(be: AmadeusBackend): Promise<Cal[]> {
   const out: Cal[] = [];
+  let human: Cal | null = null;
+  if (be === localBackend) {
+    try {
+      human = readHumanCal();
+      if (human) out.push(human);
+    } catch {
+      /* 跳过损坏的,同下 */
+    }
+  }
   for (const rel of await be.list((n) => n.toLowerCase().endsWith('.db'))) {
+    if (human && isHumanMirror(rel)) continue; // human/ 读不出来时,库里这份就是唯一能用的
     try {
       const { db, seq } = await readDbBe(be, rel);
       const c = toCal(rel, db, seq);
@@ -297,6 +361,7 @@ async function mutateCalendar(be: AmadeusBackend, nameOrPath: string | undefined
     return r.msg;
   };
   const cal = await findCalendar(be, nameOrPath);
+  if (cal.rel === HUMAN_CAL) return mutateHumanCal(apply);
   try {
     return await attempt(cal);
   } catch (e) {

@@ -6,6 +6,7 @@ import { amadeusProvider, amadeusVaultPath } from './amadeus.js';
 import { configureTangu } from '../../seams/runtime.js';
 import { createTanguProfile } from '../../profiles/index.js';
 import { AmadeusConflictError, AmadeusNotFoundError, type AmadeusBrain } from '../../seams/cloudBrain.js';
+import { humanDir } from '../../core/tanguHome.js';
 
 const tools = Object.fromEntries(amadeusProvider.tools().map((t) => [t.name, t]));
 // host 路径(本地磁盘 vault):双后端化后工具按 ctx.execMode 选后端,host 测试显式给 'host'。
@@ -13,9 +14,14 @@ const run = (name: string, args: Record<string, any> = {}): Promise<string> =>
   Promise.resolve(tools[name].execute(args, { execMode: 'host' } as any));
 
 let vault: string;
+let home: string;
+const prevHome = process.env.TANGU_HOME;
 beforeAll(async () => {
   vault = await fs.mkdtemp(path.join(os.tmpdir(), 'amadeus-test-'));
+  home = await fs.mkdtemp(path.join(os.tmpdir(), 'amadeus-test-home-'));
   process.env.FORSION_AMADEUS_VAULT = vault;
+  process.env.TANGU_HOME = home; // 日历工具会读写 human/CALENDAR.db,不能碰到本机真的家目录
+  process.env.TANGU_LANG = 'en';
   const db = {
     version: 1,
     name: '我的日历',
@@ -30,7 +36,10 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   await fs.rm(vault, { recursive: true, force: true });
+  await fs.rm(home, { recursive: true, force: true });
   delete process.env.FORSION_AMADEUS_VAULT;
+  delete process.env.TANGU_LANG;
+  if (prevHome === undefined) delete process.env.TANGU_HOME; else process.env.TANGU_HOME = prevHome;
 });
 
 describe('amadeus vault path', () => {
@@ -57,15 +66,64 @@ describe('amadeus vault path', () => {
 });
 
 describe('calendar tools', () => {
-  it('list_calendars finds the seeded calendar', async () => {
+  it('list_calendars puts the default calendar first, then calendars in the vault', async () => {
     const out = JSON.parse(await run('amadeus_list_calendars'));
-    expect(out).toHaveLength(1);
-    expect(out[0].name).toBe('我的日历');
-    expect(out[0].events).toBe(1);
+    expect(out.map((c: any) => c.path)).toEqual(['human://CALENDAR.db', 'Calendar.db']);
+    expect(out[1].name).toBe('我的日历');
+    expect(out[1].events).toBe(1);
+  });
+
+  it('a new user has no calendar file: the first event creates human/CALENDAR.db, the vault stays as it was', async () => {
+    const file = path.join(humanDir(), 'CALENDAR.db');
+    const before = await fs.readFile(path.join(vault, 'Calendar.db'), 'utf8');
+    await expect(fs.access(file)).rejects.toThrow();
+    const created = await run('amadeus_create_event', { title: 'Dentist', start: '2026-07-10T09:00' });
+    expect(created).toContain('in "My calendar"');
+    const db = JSON.parse(await fs.readFile(file, 'utf8'));
+    expect(db.columns.map((c: any) => c.id)).toEqual(['name', 'date', 'done']); // 和桌面 emptyCalendar 一致,见 humanCalendarIo
+    expect(db.rows).toHaveLength(1);
+    expect(db.rows[0].cells).toMatchObject({ name: 'Dentist', date: '2026-07-10T09:00' });
+    expect(await fs.readFile(path.join(vault, 'Calendar.db'), 'utf8')).toBe(before);
+    const id = /id=(\w+)/.exec(created)![1];
+    await run('amadeus_edit_event', { calendar: 'human://CALENDAR.db', eventId: id, title: 'Dentist moved' });
+    expect(JSON.parse(await run('amadeus_list_events')).find((e: any) => e.id === id).title).toBe('Dentist moved');
+    expect(await run('amadeus_delete_event', { calendar: 'My calendar', eventId: id })).toContain('Deleted');
+    expect(JSON.parse(await fs.readFile(file, 'utf8')).rows).toEqual([]);
+  });
+
+  it('a corrupt human/CALENDAR.db is left alone: skipped when listing, never replaced by a new one', async () => {
+    const file = path.join(humanDir(), 'CALENDAR.db');
+    const good = await fs.readFile(file, 'utf8');
+    await fs.writeFile(file, '{not json');
+    try {
+      expect(JSON.parse(await run('amadeus_list_calendars')).map((c: any) => c.path)).toEqual(['Calendar.db']);
+      await run('amadeus_create_event', { title: 'Falls back to the vault', start: '2026-07-11', allDay: true });
+      expect(await fs.readFile(file, 'utf8')).toBe('{not json');
+    } finally {
+      await fs.writeFile(file, good);
+    }
+  });
+
+  it('the legacy mirror of the default calendar is not listed as a second calendar', async () => {
+    process.env.FORSION_DEFAULT_CALENDAR = path.join(vault, 'Calendar.db');
+    try {
+      expect(JSON.parse(await run('amadeus_list_calendars')).map((c: any) => c.path)).toEqual(['human://CALENDAR.db']);
+      // human/ 读不出来时库里这份就是唯一能用的,不能跟着藏掉
+      const file = path.join(humanDir(), 'CALENDAR.db');
+      const good = await fs.readFile(file, 'utf8');
+      await fs.writeFile(file, '{not json');
+      try {
+        expect(JSON.parse(await run('amadeus_list_calendars')).map((c: any) => c.path)).toEqual(['Calendar.db']);
+      } finally {
+        await fs.writeFile(file, good);
+      }
+    } finally {
+      delete process.env.FORSION_DEFAULT_CALENDAR;
+    }
   });
 
   it('create → list → edit → delete round-trips + git-diffable serialization', async () => {
-    const created = await run('amadeus_create_event', { title: '新会议', start: '2026-07-09T10:00', end: '2026-07-09T10:30' });
+    const created = await run('amadeus_create_event', { calendar: 'Calendar.db', title: '新会议', start: '2026-07-09T10:00', end: '2026-07-09T10:30' });
     const id = /id=(\w+)/.exec(created)?.[1];
     expect(id).toBeTruthy();
 
@@ -91,7 +149,7 @@ describe('calendar tools', () => {
   });
 
   it('all-day event + date-range filter', async () => {
-    await run('amadeus_create_event', { title: '全天', start: '2026-08-01', allDay: true });
+    await run('amadeus_create_event', { calendar: 'Calendar.db', title: '全天', start: '2026-08-01', allDay: true });
     const aug = JSON.parse(await run('amadeus_list_events', { from: '2026-08-01', to: '2026-08-31' }));
     expect(aug.some((e: any) => e.title === '全天' && e.allDay === true)).toBe(true);
     const jul = JSON.parse(await run('amadeus_list_events', { from: '2026-07-01', to: '2026-07-31' }));

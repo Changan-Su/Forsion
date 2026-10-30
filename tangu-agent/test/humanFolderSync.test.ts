@@ -356,6 +356,15 @@ describe('human/ in the cloud — two devices', () => {
     for (const d of [a, b]) { d.use(); expect(d.human('MEMORY.md')).toBe('Name: Lin Xia\nLikes: tea\nGoal: ship the app'); }
   });
 
+  it('a corrupt vault Calendar.db is not copied into human/, where it would take the default calendar down with it', async () => {
+    const [a] = two();
+    a.use();
+    writeFileSync(a.calendar, '{broken');
+    await mirrorLegacyHuman();
+    expect(existsSync(join(humanDir(), 'CALENDAR.db'))).toBe(false);
+    expect(readFileSync(a.calendar, 'utf8')).toBe('{broken');
+  });
+
   it('a corrupt human/CALENDAR.db never overwrites the vault calendar', async () => {
     const [a] = two();
     a.use();
