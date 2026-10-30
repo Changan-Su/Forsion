@@ -18,7 +18,7 @@ import { uninstallForsionPlugin } from './pluginUninstall'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
-import { pluginDataSyncUserOff, setPluginDataSyncUserOff } from '../amadeus/plugins/pluginDataSync'
+import { pluginDataSyncOn, pluginDataSyncUserOff, setPluginDataSyncUserOff } from '../amadeus/plugins/pluginDataSync'
 import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
 import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, isPlacedSettingsView } from '../amadeus/plugins/display'
@@ -707,6 +707,7 @@ const PluginDetail: React.FC<{
           name={pluginDisplayName(p, locale)}
           warning={runningDependents(p.id).length ? t('settings.amadeusPlugins.uninstallDependents', { name: pluginDisplayName(p, locale), list: runningDependents(p.id).map((x) => pluginDisplayName(x, locale)).join(t('common.listSep')) }) : undefined}
           vaultFolder={pluginVaultFolder(p.id, p.name)}
+          cloudData={pluginDataSyncOn(p)}
           skills={p.bundle?.skills.length ?? 0}
           agents={p.bundle?.agents ?? []}
           onConfirm={(opts) => void uninstall(opts)}

@@ -26,12 +26,13 @@ export async function trashEnginePlugin(id: string, opts: { files?: boolean; kee
   }
   let entry: TrashEntry | null;
   try {
-    entry = await moveToTrash({ kind: 'plugin', ref: id, name: String(d?.manifest.name || id), paths, extra: { engine: true, ...(global !== undefined ? { global } : {}) } });
+    // 捆绑包内嵌的设置多半只在 config 里:没文件也留条目,否则 global 快照丢了,恢复捆绑包时设置回不来
+    entry = await moveToTrash({ kind: 'plugin', ref: id, name: String(d?.manifest.name || id), paths, extra: { engine: true, ...(global !== undefined ? { global } : {}) }, keepEmpty: !!d?.bundled && global !== undefined });
   } catch (e) {
     if (global !== undefined) restorePluginGlobal(id, global); // 没挪成:设置快照写回去,别跟着丢
     throw e;
   }
-  // 一件文件都没有(旧版桌面不带 trash=1、设置只在 config 里)= 照旧只清设置,不留空条目
+  // 用户目录里的一件文件都没有(旧版桌面不带 trash=1、设置只在 config 里)= 照旧只清设置,不留空条目
   return { entry, ...(own ? { dirName: path.basename(d!.dir) } : {}) };
 }
 

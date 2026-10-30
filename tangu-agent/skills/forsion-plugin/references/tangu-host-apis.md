@@ -354,7 +354,7 @@ void ctx.automation?.ensure([
 - `vault` 由宿主绑**当前库**,规则只在那个库里触发;`path` 归一与引擎同口径(反斜杠→正斜杠、去首尾斜杠与空段),
   拼法要稳定 —— path 一变引擎就认为条件变了、重新播种游标,期间新增的行不再触发。
 - **恒 `enabled:true`**:用户在自动化面板里单独关掉你的某条规则,下次插件重载 ensure 会把它开回来;要"可关"就把开关做成自己的设置项、按设置项决定发不发。
-- 用户**禁用插件** → 宿主把 `plugin:<id>:` 前缀的规则全部 `enabled=false`(不删);再启用时 ensure 置回 true,引擎重新播种游标(停用期间加的行**不会**一次性爆发)。
+- 用户**禁用或卸载插件** → 宿主把 `plugin:<id>:` 前缀的规则全部 `enabled=false`(不删;引擎不在时下次启动补上);再启用 / 恢复 / 重装时 setup 里的 ensure 置回 true,所以 ensure 要放在 setup 里,引擎重新播种游标(停用期间加的行**不会**一次性爆发)。
 - 聊天里的 agent 经 `manage_automation` **不能改/删** `plugin:` 前缀的规则;用户能在自动化 Space 里看、编辑(构建器认得 where / rowFrom / match / skipIfEmpty)。
 - 动作字段速查:`db_row_add.skipIfEmpty`(cells 的一个键,展开为空则跳过本步);`db_row_edit` 目标行 `rowId` > `rowFrom`(触发行的关联列,多值逐行)> `match {column, value}`(目标表全部命中行)> 触发行;
   单元格值支持 `{{row.X}}` / `{{target.X}}` / `{{= 算术 }}`。形状正典 = `desktop/frontend/src/types.ts` 的 `MuseTriggerUpsert` / `AutomationActionSpec`。

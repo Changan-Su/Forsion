@@ -13,6 +13,8 @@ const LOAD_WAIT_MS = 3000
 const INDEX_TTL_MS = 60_000
 const stateKey = (id: string) => `forsion.pluginSync.${id}`
 const offKey = (id: string) => `forsion.pluginSync.off.${id}`
+/** 这个插件在 localStorage 里的同步键:卸载不留设置时随偏好一起收走。留着的话状态记着 v=N,重装后本机没文件也不会去拉云端那份。 */
+export const pluginSyncKeys = (id: string): string[] => [stateKey(id), offKey(id)]
 /** 蓬洲云「同步」页「插件数据」那一行:这台设备上所有插件一起关(每个插件自己的开关照旧,两个都开才同步)。 */
 export const PLUGIN_SYNC_ALL_OFF_KEY = 'forsion.pluginSync.off'
 
@@ -122,6 +124,19 @@ export function pushPluginData(id: string, local: LocalData): Promise<void> {
   const next = (chains.get(id) ?? Promise.resolve()).then(run, run)
   chains.set(id, next)
   return next
+}
+
+/**
+ * 卸载且不留设置:清掉云端那份。**要在 dropPluginPrefs 之前调**(同步状态在这里同步读走)。
+ * 带 base / owner:云端比本机新(别的设备写过)或换了账号就不删 —— 恢复只靠回收站里的本机那份,它不比云端旧才删得起。
+ * 恢复后 loadSyncedPluginData 看到云端没了,按第一次上传推回去;别的设备还装着时同样会推回来,这是预期(插件按设备装)。
+ * 失败(离线 / 没登录 / 老服务端 404)= 副本留着,重装时会拉回来。
+ */
+export function dropPluginCloudData(id: string): Promise<void> {
+  const st = readState(id)
+  if (!st.owner || !st.v) return Promise.resolve() // 没对上过云端:这台设备不替别处决定
+  index = null
+  return cloud(`${itemPath(id)}?base=${st.v}&owner=${encodeURIComponent(st.owner)}`, 'DELETE').then(() => {})
 }
 
 /**

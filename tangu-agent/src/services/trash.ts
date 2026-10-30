@@ -57,10 +57,10 @@ async function move(from: string, to: string): Promise<void> {
 
 /** 挪进回收站;一件都不在就不留条目(返回 null)。先写记录再挪:挪到一半断电 / 跨盘删源失败,条目照样列得出、恢复得了。
  *  中途失败把已挪的挪回去再抛;有一件没挪回去(或失败那件已整份进来)就留着条目,不删唯一的那份。 */
-export async function moveToTrash(input: { kind: TrashKind; ref: string; name: string; paths: Array<{ path: string; role?: string }>; extra?: Record<string, unknown>; restorer?: 'engine' | 'desktop' }): Promise<TrashEntry | null> {
+export async function moveToTrash(input: { kind: TrashKind; ref: string; name: string; paths: Array<{ path: string; role?: string }>; extra?: Record<string, unknown>; restorer?: 'engine' | 'desktop'; keepEmpty?: boolean }): Promise<TrashEntry | null> {
   const present: Array<{ path: string; role?: string }> = [];
   for (const p of input.paths) if (await fs.lstat(p.path).catch(() => null)) present.push(p);
-  if (!present.length) return null;
+  if (!present.length && !input.keepEmpty) return null;
   const id = `${input.kind}-${input.ref.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, 80)}-${Date.now()}-${randomUUID().slice(0, 8)}`;
   await fs.mkdir(trashDir(), { recursive: true });
   if (!(await realRoot())) throw new Error('Trash is not a regular directory');

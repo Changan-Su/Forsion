@@ -62,7 +62,7 @@ import { MUTATE_DB_RETRIES, mutateDbCas, mutateHumanCalendar } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
 import { createDatabasesApi, createNoteTasksApi, pluginDatabasePath } from './pluginData'
-import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
+import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pluginSyncKeys, pushPluginData, type LocalData } from './pluginDataSync'
 import { createCalendarApi } from './pluginCalendar'
 import { createCalendarEventsApi } from './pluginCalendarEvents'
 import { createSpacesApi } from './pluginSpaces'
@@ -131,6 +131,8 @@ export const PLUGIN_ENABLE_STAMP_KEY = 'amadeus.plugins.enableStamp'
 /** 主窗欠这些捆绑包内嵌引擎插件一个 true:宿主自己关掉的(父插件被关 / 在等前置),或用户明确开了捆绑包。
  *  父插件跑起来时**只**补开这些 —— 用户在别处(TUI / CLI)关掉的不在里面,不会被翻回来(Codex 10-02)。只主窗读写。 */
 const OWED_KEY = 'amadeus.plugins.bundleEngineOwed'
+/** 规则还没停用成功的插件(pendingDisable 的落盘那份):引擎不在时卸载,关掉 App 再开,没这份就没人记得要关,规则一直跑。 */
+const RULES_OWED_KEY = 'amadeus.plugins.rulesOwed'
 
 /** 外置插件来源:**unit 设备页**(B 端渲染,方案 §11.4 —— 本页就是某台设备曝出来的网页)从该设备的
  *  `unit/plugins` 面拉(相对 base:局域网直连与 server 隧道子路径同一写法);其余环境走
@@ -252,13 +254,13 @@ export function pluginVaultFolder(pluginId: string, name: string): string | null
   return (custom ? [v] : [`${PLUGINS_ROOT}/${sanitizeFolderName(name, pluginId)}`, defaultWorkFolder(pluginId)]).find((f) => folders.includes(f)) ?? null
 }
 
-/** 卸载时插件存在 localStorage 里的偏好(`plugin.<id>.*`)的快照,交给回收站、恢复时原样写回;卸载成功后再 dropPluginPrefs 摘掉。 */
+/** 卸载时插件存在 localStorage 里的偏好(`plugin.<id>.*` + 同步状态与开关)的快照,交给回收站、恢复时原样写回;卸载成功后再 dropPluginPrefs 摘掉。 */
 export function pluginPrefs(pluginId: string): Record<string, string> {
   const out: Record<string, string> = {}
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i)
-      if (k?.startsWith(`plugin.${pluginId}.`)) out[k] = localStorage.getItem(k) ?? ''
+      if (k && (k.startsWith(`plugin.${pluginId}.`) || pluginSyncKeys(pluginId).includes(k))) out[k] = localStorage.getItem(k) ?? ''
     }
   } catch { /* 存储不可用:没有可摘的 */ }
   return out
@@ -709,19 +711,19 @@ function writeDisabled(ids: string[]): void {
 
 /** 读持久化的禁用插件 id(直读 localStorage,不依赖 store 是否已 init)。
  *  供 userSpaces 在启动装载时过滤「被禁用插件的内嵌 Space」——那一刻插件宿主可能还没装配。 */
-function readOwed(): Set<string> {
+function readOwed(key = OWED_KEY): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(OWED_KEY) || '[]') as string[])
+    return new Set(JSON.parse(localStorage.getItem(key) || '[]') as string[])
   } catch {
     return new Set()
   }
 }
-// ponytail: 同步读改写,绝不跨 await 攥着旧副本;只主窗写,没有跨窗口竞写。
-function editOwed(fn: (owed: Set<string>) => void): void {
-  const owed = readOwed()
+// ponytail: 同步读改写,绝不跨 await 攥着旧副本;RULES_OWED_KEY 设置浮窗也写,两窗同一拍写才会丢一条,丢了最坏再发一次停用。
+function editOwed(fn: (owed: Set<string>) => void, key = OWED_KEY): void {
+  const owed = readOwed(key)
   fn(owed)
   try {
-    localStorage.setItem(OWED_KEY, JSON.stringify([...owed]))
+    localStorage.setItem(key, JSON.stringify([...owed]))
   } catch {
     /* ignore */
   }
@@ -944,7 +946,7 @@ export interface PluginDisableState {
   /** 正在飞(原始 disable 或重放尚未结束)→ 边沿来了也不叠一次。 */
   pending: boolean
 }
-// ponytail: 墓碑住内存,重启即丢 —— 落 localStorage + 装配时重放是下一步,本轮先把就绪边沿这条路接上。
+// 只看本次运行;跨重启那份在 RULES_OWED_KEY,主窗 loadExternal 后重放。
 const pendingDisable = new Map<string, PluginDisableState>()
 /** 非 null = 这个插件的自动化规则**还没停用**(供设置页/排障露出;与 getPluginEnsureState 同一条路)。 */
 export function getPluginDisableState(pluginId: string): PluginDisableState | null {
@@ -1193,6 +1195,7 @@ async function disablePluginRules(pluginId: string, replay = false): Promise<voi
   const prev = replay ? pendingDisable.get(pluginId) : null
   const st: PluginDisableState = { at: Date.now(), errors: [], replays: prev?.replays ?? 0, lastReplayAt: prev?.lastReplayAt ?? 0, pending: true }
   pendingDisable.set(pluginId, st)
+  editOwed((o) => o.add(pluginId), RULES_OWED_KEY)
   const errors: string[] = []
   const cfg = (await readTangu()?.waitBackend?.(ENSURE_WAIT_MS)) ?? null
   if (!cfg) errors.push('引擎后端未就绪(等待超时),规则尚未停用')
@@ -1220,7 +1223,10 @@ async function disablePluginRules(pluginId: string, replay = false): Promise<voi
   // 身份守卫(同 ensure):等待期间墓碑被换人(第二次 disable)或作废(enable)→ 这份结果不许覆盖它。
   if (pendingDisable.get(pluginId) !== st) return
   if (errors.length) Object.assign(st, { at: Date.now(), errors, pending: false })
-  else pendingDisable.delete(pluginId) // 关成了 = 没有欠账
+  else { // 关成了 = 没有欠账
+    pendingDisable.delete(pluginId)
+    editOwed((o) => o.delete(pluginId), RULES_OWED_KEY)
+  }
 }
 
 /** 待停用墓碑的重放:节流同 ensure(≥30s/插件),但**刻意不封顶** —— 与 ensure 语义不对称:
@@ -2667,6 +2673,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     // 上一轮停用留下的「待停用」欠账作废:插件又跑起来了,再让边沿去关它的规则就是倒着走。
     pendingDisable.delete(id)
+    editOwed((o) => o.delete(id), RULES_OWED_KEY)
     pendingRulesOff.delete(id)
     return true
   }
@@ -2808,7 +2815,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       reconcile() // 依赖它的先停,再停它
       // 连带停掉的依赖方也要收:它们的预设已撤,选中的图标 / 开屏不能留着。
       for (const stopped of new Set([id, ...before])) if (!get().activeIds.includes(stopped)) clearPluginAppearance(stopped)
-      // 用户明确禁用 → 它种下的自动化规则一并停(只此一条路;非 Tangu 宿主没有探针就没有规则可关)。
+      // 用户明确禁用 → 它种下的自动化规则一并停(卸载走 applySources 那条;非 Tangu 宿主没有探针就没有规则可关)。
       if (wasOn && automationHost()) {
         void disablePluginRules(id).catch((e) => console.warn(`[amadeus] plugin "${id}" 停用自动化规则失败`, e))
       }
@@ -2839,6 +2846,12 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return // 读不到来源 ≠ 来源都没了:保持现状
       }
       applySources(sources)
+      // 上次运行没关成的规则(走到这里在跑的都已被 start 销账)
+      if (windowKind() === 'main' && automationHost()) {
+        for (const id of readOwed(RULES_OWED_KEY)) {
+          if (!pendingDisable.has(id)) void disablePluginRules(id).catch((e) => console.warn(`[amadeus] plugin "${id}" 停用规则重放失败`, e))
+        }
+      }
       const appearance = useAppearance.getState().value
       for (const asset of [appearance.icon, appearance.splash]) {
         if (asset?.pluginId && !get().activeIds.includes(asset.pluginId)) clearPluginAppearance(asset.pluginId)

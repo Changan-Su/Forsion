@@ -77,6 +77,7 @@ registerMessages({
   'uninstall.plugin.files': { zh: '插件文件', en: 'Plugin files' },
   'uninstall.plugin.settings': { zh: '插件的设置与偏好', en: 'Plugin settings and preferences' },
   'uninstall.plugin.keepSettings': { zh: '保留设置，重装后接着用', en: 'Keep settings for a reinstall' },
+  'uninstall.plugin.settingsCloud': { zh: '含同步到账号的那份', en: 'Including the copy synced to your account' },
   'uninstall.plugin.vault': { zh: '智库里的 {folder}/', en: '{folder}/ in your vault' },
   'uninstall.plugin.vaultSub': { zh: '你的数据', en: 'Your data' },
   'uninstall.plugin.moveVault': { zh: '一并移到回收站', en: 'Move to Trash too' },
@@ -171,11 +172,13 @@ export async function afterRestore(kind: TrashEntry['kind'], desktopExtra?: Reco
       await reloadPluginsAndAnnounce().catch(() => {})
       void loadUserSpaces()
     }
-    // 卸载时关掉的内嵌引擎插件:文件夹回来后重扫,再按卸载前的开关开回来
-    const engineEnabled = Array.isArray(desktopExtra?.engineEnabled) ? desktopExtra.engineEnabled.filter((x): x is string => typeof x === 'string') : []
-    if (engineEnabled.length) {
+    // 内嵌引擎插件:文件夹回来后重扫,再放回一起进回收站的设置。engineEnabled 是 10-30 之前的条目(卸载时把它们关了),按原样开回来
+    const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
+    const engineTrash = strings(desktopExtra?.engineTrash), engineEnabled = strings(desktopExtra?.engineEnabled)
+    if (engineTrash.length || engineEnabled.length) {
       const { rescanPlugins, setPluginEnabled } = await import('../services/backendService')
       await rescanPlugins(homeTarget()).catch(() => {})
+      for (const id of engineTrash) await restoreTrashEntry(homeTarget(), id).catch(() => {})
       for (const id of engineEnabled) await setPluginEnabled(homeTarget(), id, true).catch(() => {})
     }
   }
@@ -296,11 +299,13 @@ export function SkillUninstallDialog({ skillKey, agentSlug, name: fallbackName, 
 
 /** 卸载插件(Forsion 插件与引擎插件;设置页与商店共用)。框只收集选择,真正的卸载(停内嵌引擎插件、重载、重扫)由调用方做。
  *  vaultFolder:库里的工作文件夹(pluginStore.pluginVaultFolder 算出,库里没有就不传);skills / agents:捆绑包里带的。 */
-export function PluginUninstallDialog({ name, warning, vaultFolder, skills = 0, agents = [], onConfirm, onClose }: {
+export function PluginUninstallDialog({ name, warning, vaultFolder, cloudData, skills = 0, agents = [], onConfirm, onClose }: {
   name: string
   /** 还有别的插件依赖它时的提醒,排在正文前面。 */
   warning?: string
   vaultFolder?: string | null
+  /** 这个插件的数据正随账号同步(pluginDataSyncOn):不留设置时云端那份也清。 */
+  cloudData?: boolean
   skills?: number
   agents?: string[]
   onConfirm: (opts: { keepSettings: boolean; moveVault: boolean }) => void
@@ -310,7 +315,7 @@ export function PluginUninstallDialog({ name, warning, vaultFolder, skills = 0, 
   const ic = { size: 15, strokeWidth: 1.8 }
   const rows: UninstallRow[] = [
     { icon: <Box {...ic} />, title: t('uninstall.plugin.files'), dest: t('uninstall.trash30') },
-    { icon: <SlidersHorizontal {...ic} />, title: t('uninstall.plugin.settings'), dest: t('uninstall.trash30'), check: { key: 'keepSettings', label: t('uninstall.plugin.keepSettings'), checkedDest: t('uninstall.keep'), checkedTone: 'keep' } },
+    { icon: <SlidersHorizontal {...ic} />, title: t('uninstall.plugin.settings'), ...(cloudData ? { sub: t('uninstall.plugin.settingsCloud') } : {}), dest: t('uninstall.trash30'), check: { key: 'keepSettings', label: t('uninstall.plugin.keepSettings'), checkedDest: t('uninstall.keep'), checkedTone: 'keep' } },
     ...(vaultFolder ? [{ icon: <FolderClosed {...ic} />, title: t('uninstall.plugin.vault', { folder: vaultFolder }), sub: t('uninstall.plugin.vaultSub'), dest: t('uninstall.keep'), tone: 'keep' as const, check: { key: 'moveVault', label: t('uninstall.plugin.moveVault'), checkedDest: t('uninstall.trash30') } }] : []),
     ...(skills ? [{ icon: <Sparkles {...ic} />, title: t('uninstall.plugin.skills', { n: skills }), dest: t('uninstall.plugin.skillsGo') }] : []),
     ...agents.map((a) => ({ icon: <Bot {...ic} />, title: t('uninstall.plugin.agent', { name: a }), sub: t('uninstall.plugin.agentSub'), dest: t('uninstall.keep'), tone: 'keep' as const })),

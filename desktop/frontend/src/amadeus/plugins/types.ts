@@ -2089,7 +2089,8 @@ export interface PluginContext {
    *  - **异步等待**:后端就绪(cfg 已加载且连通)且库已恢复才发,最多等 60s;超时 / 没开库 → 整批不发,
    *    errors 里 `No vault is open`;单条坏规则(key 形态 / path / where / actions)只拒那一条,其余照发;
    *  - 恒传 `enabled:true`:用户在自动化面板里单独关掉的插件规则,下次插件重载会被开回来;
-   *  - 插件被用户**禁用** → 本插件全部规则 `enabled=false`(不删);再启用时引擎重新播种游标(停用期间的行不爆发)。
+   *  - 插件被用户**禁用或卸载** → 本插件全部规则 `enabled=false`(不删,引擎不在时下次启动补上);再启用 / 恢复 / 重装时
+   *    setup 里的 ensure 把规则开回来,引擎重新播种游标(停用期间的行不爆发)。所以 ensure 要放在 setup 里,别只放在一次性操作里。
    *  ⚠️**非 Tangu 宿主上整个 `ctx.automation` 不存在**(纯 Amadeus 壳 / unit 设备页 / 云端 / 台架)——一律
    *  `void ctx.automation?.ensure(rules)`(别 await 阻塞 setup)。 */
   automation?: {

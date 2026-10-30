@@ -856,7 +856,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // 卸载 Forsion 插件:按 manifest id 定位目录(id 可与目录名不同;与 listPlugins 同一 pluginIdOf 门禁)整删。
   // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
-  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineEnabled?: string[] }) => {
+  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }) => {
     if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     // ⚠️开发副本正遮蔽同 id 的安装版时必须拒绝:这里只扫全局目录,删掉的是**安装版**,而跑着的是开发副本 ——
     // 用户看到「已卸载」,插件却还在;等哪天撤下开发副本,它才凭空消失(且没有任何提示)。先撤开发副本再卸载。
@@ -907,9 +907,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       ? Object.fromEntries(Object.entries(opts.prefs).filter(([k, v]) => typeof k === 'string' && typeof v === 'string')) : undefined
     let name = id
     try { name = String((JSON.parse(await fs.readFile(path.join(target, 'manifest.json'), 'utf8')) as { name?: unknown }).name || id) } catch { /* 用 id */ }
-    // engineEnabled:卸载前开着的内嵌引擎插件(卸载时先关了它们),恢复时渲染层重扫后再开回来
-    const engineEnabled = Array.isArray(opts?.engineEnabled) ? opts.engineEnabled.filter((x): x is string => typeof x === 'string').slice(0, 50) : []
-    const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineEnabled.length ? { engineEnabled } : {}) } })
+    // engineTrash:内嵌引擎插件的设置在引擎那边的回收站条目,恢复时渲染层连带放回
+    const engineTrash = Array.isArray(opts?.engineTrash) ? opts.engineTrash.filter((x): x is string => typeof x === 'string').slice(0, 50) : []
+    const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}) } })
     vault.setPluginFileExtensions(collectPluginExts()) // 重算(含墓碑):保护不随卸载失效
     return { ...(entry ? { trashId: entry.id } : {}), dirName: path.basename(target) }
   })
