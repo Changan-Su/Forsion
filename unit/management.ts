@@ -5,14 +5,13 @@ import { join } from 'node:path'
 import { randomUUID, createPublicKey } from 'node:crypto'
 import type { BackendAccount } from './backendTypes'
 import { validId } from './packages'
+import { OperationError } from './errors'
 import { listReleases, resolveRelease, validReleaseId, releaseSignature, UNTRUSTED_RELEASE, type ReleaseSignature } from './releases'
 
 export const MANAGEMENT_PATH = '/api/admin/unit'
 const actions = ['enable', 'disable', 'restart', 'update', 'migrate', 'install', 'uninstall'] as const
 /** Remote install / update apply a staged release; both name it by releaseId. */
 const releaseActions: readonly string[] = ['update', 'install']
-/** A rule violation whose message is safe to show in the job record (ids only, never paths). */
-export class OperationError extends Error {}
 interface PluginStatus { id: string; state: string; requires: string[]; protected?: boolean }
 export type ManagementCommand = { action: typeof actions[number]; id: string; path?: string; releaseDigest?: string }
 interface Job {
@@ -185,8 +184,6 @@ export async function createManagement(options: {
               job.phase = 'verifying-release'; await save()
               const verified = await resolveRelease(options.dataDir, input.releaseId, input.pluginId, options.version)
               if (verified.item.sha256 !== release.item.sha256) throw new Error('Staged release changed during installation')
-              // The submission check used a cached verdict; verify the bytes whose digest was just checked.
-              if (await releaseSignature(verified.path, trustedKeys) !== 'trusted') throw new OperationError(UNTRUSTED_RELEASE)
               await authorize()
             }
             job.phase = 'applying'; await save()

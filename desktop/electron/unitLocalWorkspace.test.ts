@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { startBasicUnit, type PluginInstallation } from '../../unit/host'
+import { RollbackIncomplete } from '../../unit/errors'
 import { IPC } from '../shared/amadeus/ipc'
 
 type Unit = Awaited<ReturnType<typeof startBasicUnit>>
@@ -27,9 +28,10 @@ async function fixture(id: string, options: FixtureOptions = {}, existing?: stri
   await writeFile(join(root, 'main.js'), `ctx.registerCommand({id: '${id}-hello', title: 'Hello', run() {}})`)
   await writeFile(join(root, 'spaces', id, 'space.json'), JSON.stringify({ id, layout: { main: [] } }))
   await writeFile(join(root, 'runtime.mjs'), `
-    import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+    import { access, appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
     import { join } from 'node:path';
     import http from 'node:http';
+    const marked = (name) => access(join(${JSON.stringify(scratch)}, name)).then(() => true, () => false);
     const version = ${JSON.stringify(version)};
     const id = ${JSON.stringify(id)};
     await appendFile(${JSON.stringify(join(scratch, 'imports.log'))}, id + ':' + version + '\\n');
@@ -55,8 +57,15 @@ async function fixture(id: string, options: FixtureOptions = {}, existing?: stri
       return {
         vault,
         engine: server ? { endpoint: () => ({ url:'http://127.0.0.1:' + server.address().port, token:'PRIVATE_ENGINE_TOKEN' }), status: () => ({running:true}) } : undefined,
-        setPackages: async roots => event('packages', roots),
-        close: async () => { await event('stop'); if (server) await new Promise(resolve => server.close(resolve)); },
+        setPackages: async roots => {
+          if (await marked('fail-sync')) throw new Error('fixture sync failure');
+          if (await marked('fail-sync-once')) { await rm(join(${JSON.stringify(scratch)}, 'fail-sync-once')); throw new Error('fixture sync failure'); }
+          await event('packages', roots);
+        },
+        close: async () => {
+          await event('stop'); if (server) await new Promise(resolve => server.close(resolve));
+          if (await marked('fail-close')) throw new Error('fixture close failure');
+        },
       };
     };
   `)
@@ -168,6 +177,54 @@ describe('explicit local Unit workspace boundary', () => {
     expect((await events()).filter((e) => e.name === 'packages').at(-1).detail).toEqual([await realpath(base)])
     await unit.disable('storage')
     expect(await (await request('unit/meta')).json()).toMatchObject({ localCapabilities: { vault: false, engine: false, host: false } })
+  })
+
+  it('puts a plugin back when an uninstall cannot finish, so the same uninstall can be retried', async () => {
+    const { unit } = await start([await fixture('keeper'), await fixture('target'), await fixture('tail')])
+    const before = unit.status()
+    await writeFile(join(scratch, 'fail-sync'), '')
+    await expect(unit.uninstall('target')).rejects.toThrow('fixture sync failure')
+    expect(unit.status()).toEqual(before) // record, order and running state, with the runtime still refusing
+    expect((await events()).filter((e) => e.id === 'target').slice(-2).map((e) => e.name)).toEqual(['stop', 'start'])
+    await rm(join(scratch, 'fail-sync'))
+    await unit.uninstall('target')
+    expect(unit.status().map((plugin) => plugin.id)).toEqual(['keeper', 'tail'])
+  })
+
+  it('restores an uninstall whose removal could not be persisted, in its previous state', async () => {
+    const { unit } = await start([await fixture('keeper'), await fixture('running'), await fixture('stopped')])
+    await unit.disable('stopped')
+    const before = unit.status()
+    for (const id of ['running', 'stopped']) {
+      const restore = await unit.uninstall(id)
+      expect(unit.status().map((plugin) => plugin.id)).not.toContain(id)
+      await restore()
+      expect(unit.status()).toEqual(before)
+    }
+  })
+
+  it('always takes a rolled-back install out of the Unit and says when its directory cannot be released', async () => {
+    const { unit } = await start([await fixture('keeper')])
+    const guest = await fixture('guest'), ids = () => unit.status().map((plugin) => plugin.id)
+    await writeFile(join(scratch, 'fail-sync'), '')
+    await expect(unit.install(guest)).rejects.toBeInstanceOf(RollbackIncomplete) // activation and its rollback both failed to resync
+    expect(ids()).toEqual(['keeper'])
+    await rm(join(scratch, 'fail-sync'))
+    const synced = await unit.install(guest) // no leftover record blocks the same id
+    await writeFile(join(scratch, 'fail-sync'), '')
+    await expect(synced.remove()).rejects.toBeInstanceOf(RollbackIncomplete)
+    expect(ids()).toEqual(['keeper'])
+    await rm(join(scratch, 'fail-sync'))
+    const stuck = await unit.install(guest)
+    await writeFile(join(scratch, 'fail-close'), '')
+    await expect(stuck.remove()).rejects.toThrow('version directory was kept')
+    expect(ids()).toEqual(['keeper'])
+    await writeFile(join(scratch, 'fail-sync-once'), '') // activation fails once and its cleanup fails too; the resync afterwards is fine
+    await expect(unit.install(guest)).rejects.toBeInstanceOf(RollbackIncomplete)
+    await rm(join(scratch, 'fail-close'))
+    expect(ids()).toEqual(['keeper'])
+    await (await unit.install(guest)).remove()
+    expect(ids()).toEqual(['keeper'])
   })
 
   it('validates runtime entry paths before update and restores the prior runtime after a failed replacement', async () => {

@@ -1,12 +1,13 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
-import { chmod, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, cp, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
 import { randomUUID, type KeyObject } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { build } from 'esbuild'
 import { sendControl } from '../../unit/control'
+import { packageDigest } from '../../unit/releases'
 import { signDir, testKeyPair } from './bundleSignature.testutil'
 
 const exec = promisify(execFile)
@@ -70,14 +71,14 @@ async function stop(child: ChildProcess) {
   }
   children.delete(child)
 }
-async function fixture(id: string, version: string, failStart = false, requires?: string[]) {
+async function fixture(id: string, version: string, failStart = false, requires?: string[], hooks: { start?: string; stop?: string } = {}) {
   const dir = join(scratch, `${id}-${version}`)
   await mkdir(dir)
   await writeFile(join(dir, 'manifest.json'), JSON.stringify({ id, version, apiVersion: 1, ...(requires ? { requires } : {}),
     backend: { apiVersion: 1, main: 'backend.mjs' } }))
   await writeFile(join(dir, 'service.mjs'), `export const version = ${JSON.stringify(version)};`)
   await writeFile(join(dir, 'backend.mjs'), `
-    import { appendFile, readFile } from 'node:fs/promises';
+    import { access, appendFile, chmod, readFile } from 'node:fs/promises';
     import { join } from 'node:path';
     import { threadId } from 'node:worker_threads';
     import { version } from './service.mjs';
@@ -93,7 +94,8 @@ async function fixture(id: string, version: string, failStart = false, requires?
           return { userId: token, username: token, role: token === 'admin' && !demoted ? 'ADMIN' : 'USER' };
         }
       } : undefined,
-      start() { if (${failStart}) throw new Error('Rejected CLI fixture activation'); },
+      async start() { if (${failStart}) throw new Error('Rejected CLI fixture activation'); ${hooks.start ?? ''} },
+      async stop() { ${hooks.stop ?? ''} },
       migrate() { return appendFile(join(ctx.dataDir, 'migration-ran'), 'ran'); },
       handle(req, res) {
         res.setHeader('Content-Type', 'application/json');
@@ -253,6 +255,30 @@ it('installs only trusted releases, refuses protected or required plugins, and k
   const servicePath = saved.plugins[1].path as string
   expect(relative(join(scratch, 'state/plugins/service'), servicePath)).toMatch(/^1\.0\.0-/)
   await rejected(await operate('install', 'service', service), 409, 'already installed; use update')
+
+  // A concurrent writer: the verdict was earned by signed bytes, the digest then matches different ones.
+  const swap = async (releaseId: string) => {
+    const release = join(config.dataDir, 'releases', releaseId), unsigned = join(scratch, 'unsigned-' + releaseId)
+    await cp(join(release, 'package'), unsigned, { recursive: true })
+    await writeFile(join(unsigned, 'service.mjs'), 'export const version = "unsigned";')
+    const item = JSON.parse(await readFile(join(release, 'release.json'), 'utf8'))
+    await writeFile(join(release, 'release.json'), JSON.stringify({ ...item, sha256: await packageDigest(unsigned) }))
+    const listed = (await (await request('releases')).json()).releases.find((entry: { releaseId: string }) => entry.releaseId === releaseId)
+    expect(listed.signature).toBe('trusted')
+    await rm(join(release, 'package'), { recursive: true })
+    await cp(unsigned, join(release, 'package'), { recursive: true })
+  }
+  const swapped = await stage(await signed(await fixture('swapped', '1.0.0')))
+  const swappedUpdate = await stage(await signed(await fixture('service', '1.1.0')))
+  await swap(swapped); await swap(swappedUpdate)
+  const beforeSwap = await readFile(file, 'utf8')
+  expect((await run('install', 'swapped', swapped, 'failed')).error).toBe('Release is not signed by a trusted key')
+  expect((await run('update', 'service', swappedUpdate, 'failed')).error).toBe('Release is not signed by a trusted key')
+  expect(await readFile(file, 'utf8')).toBe(beforeSwap)
+  expect(await readdir(join(scratch, 'state/plugins/swapped'))).toEqual([])
+  expect((await status()).plugins.map((p: { id: string }) => p.id)).not.toContain('swapped')
+  expect((await (await fetch(`http://127.0.0.1:${port}/api/service`)).json()).version).toBe('1.0.0')
+
   await run('install', 'dependent', dependent)
   await run('disable', 'dependent')
   await rejected(await operate('uninstall', 'service'), 409, 'require it first: dependent')
@@ -262,6 +288,30 @@ it('installs only trusted releases, refuses protected or required plugins, and k
   expect(await readFile(file, 'utf8')).toBe(beforeBroken)
   expect((await status()).plugins.map((p: { id: string }) => p.id)).not.toContain('broken')
   expect(await readdir(join(scratch, 'state/plugins/broken'))).toEqual([]) // the failed version directory is removed
+
+  if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+    // The plugin activates, then unit.json cannot be replaced; its stop hook frees the directory again.
+    const flagged = (name: string) => `await access(join(ctx.dataDir, ${JSON.stringify(name)})).then(() => true, () => false)`
+    const stateDir = `join(ctx.dataDir, '../../..')`
+    const saboteur = await stage(await signed(await fixture('saboteur', '1.0.0', false, undefined, {
+      start: `if (${flagged('lock-state')}) await chmod(${stateDir}, 0o500);`,
+      stop: `await chmod(${stateDir}, 0o700); if (${flagged('fail-stop')}) throw new Error('Rejected CLI fixture stop');`,
+    })))
+    const data = join(config.dataDir, 'plugins/saboteur'), versions = join(scratch, 'state/plugins/saboteur')
+    const unchanged = await readFile(file, 'utf8')
+    await mkdir(data, { recursive: true })
+    await writeFile(join(data, 'lock-state'), '')
+    await run('install', 'saboteur', saboteur, 'failed')
+    expect(await readdir(versions)).toEqual([]) // stopped and removed: nothing can still use the directory
+    await writeFile(join(data, 'fail-stop'), '')
+    expect((await run('install', 'saboteur', saboteur, 'failed')).error).toContain('its version directory was kept')
+    expect(await readdir(versions)).toHaveLength(1)
+    expect(await readFile(file, 'utf8')).toBe(unchanged)
+    expect((await status()).plugins.map((p: { id: string }) => p.id)).not.toContain('saboteur')
+    await rm(join(data, 'lock-state')); await rm(join(data, 'fail-stop'))
+    await run('install', 'saboteur', saboteur) // the same id is not blocked by a leftover record
+    await run('uninstall', 'saboteur')
+  }
 
   const dependentPath = JSON.parse(beforeBroken).plugins[2].path as string
   await run('uninstall', 'dependent')

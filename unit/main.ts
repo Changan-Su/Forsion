@@ -10,8 +10,9 @@ import { installPackage } from './install'
 import { migrateBackend } from './backendRunner'
 import { sendControl, startControl, unitIsOffline, type ControlCommand } from './control'
 import desktop from '../desktop/package.json'
-import { stageRelease } from './releases'
+import { stageRelease, releaseSignature, UNTRUSTED_RELEASE } from './releases'
 import type { ManagementCommand } from './management'
+import { OperationError } from './errors'
 
 const dist = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
@@ -121,12 +122,12 @@ async function run() {
       if (command.action === 'install') {
         if (!command.path) throw new Error('An install package path is required')
         // The host validates and activates first; unit.json gains the entry only once the plugin runs.
-        const id = await unit!.install(command.path), added: PluginInstallation = { path: resolve(command.path), enabled: true }
+        const installed = await unit!.install(command.path), added: PluginInstallation = { path: resolve(command.path), enabled: true }
         config.plugins.push(added)
         try { await writeConfig(file, config) }
         catch (error) {
           config.plugins.splice(config.plugins.indexOf(added), 1)
-          await unit!.uninstall(id).catch(() => console.error(`[unit] Could not remove ${id} after unit.json was not written`))
+          await installed.remove() // RollbackIncomplete keeps the version directory and reaches the job record.
           throw error
         }
         return status()
@@ -134,13 +135,12 @@ async function run() {
       const entry = await findInstallation(config, command.id)
       if (command.action === 'uninstall') {
         // Files stay on disk: the version directory and dataDir/plugins/<id> survive an uninstall.
-        const index = config.plugins.indexOf(entry), wasActive = unit!.status().find((plugin) => plugin.id === command.id)?.state === 'active'
-        await unit!.uninstall(command.id!)
+        const index = config.plugins.indexOf(entry), restore = await unit!.uninstall(command.id!)
         config.plugins.splice(index, 1)
         try { await writeConfig(file, config) }
         catch (error) {
           config.plugins.splice(index, 0, entry)
-          await unit!.install(entry.path, { activate: wasActive, installation: entry }).catch(() => console.error(`[unit] Could not restore ${command.id} after unit.json was not written`))
+          await restore()
           throw error
         }
         return status()
@@ -169,10 +169,14 @@ async function run() {
     }
     executeManagement = async (command, authorize) => {
       const apply = (action: ControlCommand) => enqueue(async () => { await authorize(); return dispatch(action) })
-      if (command.action === 'update') return installPackage(file, command.path!, { updateId: command.id,
+      // Both remote paths verify the private version directory, the bytes that actually get activated.
+      const verify = async (root: string) => {
+        if (await releaseSignature(root, config.management?.trustedKeys ?? []) !== 'trusted') throw new OperationError(UNTRUSTED_RELEASE)
+      }
+      if (command.action === 'update') return installPackage(file, command.path!, { updateId: command.id, verify,
         releaseDigest: command.releaseDigest, applyUpdate: (id, path) => apply({ action: 'update', id, path }) })
       // Same immutable version directory as update; the owner's dispatch is the only unit.json writer.
-      if (command.action === 'install') return installPackage(file, command.path!, { installId: command.id,
+      if (command.action === 'install') return installPackage(file, command.path!, { installId: command.id, verify,
         releaseDigest: command.releaseDigest, applyInstall: (id, path) => apply({ action: 'install', id, path }) })
       return apply({ action: command.action, id: command.id })
     }

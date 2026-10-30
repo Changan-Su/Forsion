@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import { readPackage, packagePath } from './packages'
 import { readConfig, writeConfig, installations } from './config'
 import { sendControl, unitIsOffline } from './control'
+import { OperationError, RollbackIncomplete } from './errors'
 
 async function inspectTree(dir: string, root: string, seen = new Set<string>()): Promise<void> {
   const actual = await realpath(dir)
@@ -57,8 +58,11 @@ async function installDependencies(root: string, backendMain: string): Promise<v
 /**
  * updateId requires an existing plugin and a live owner; ordinary installs also work offline.
  * applyInstall hands a new plugin to the live owner (remote management), which activates it and writes unit.json.
+ * verify runs on the private version directory, the bytes that will be activated: a check on the staged
+ * release alone proves nothing about what a concurrent writer left there when it was copied.
  */
 export async function installPackage(configPath: string, source: string, options: { updateId?: string; installId?: string; releaseDigest?: string;
+  verify?: (root: string) => Promise<void>
   applyUpdate?: (id: string, path: string) => Promise<unknown>; applyInstall?: (id: string, path: string) => Promise<unknown> } = {}) {
   const file = resolve(configPath), root = dirname(file)
   const lockPath = resolve(root, '.install.lock')
@@ -78,7 +82,7 @@ export async function installPackage(configPath: string, source: string, options
     }
     if (options.applyInstall) {
       if (options.installId !== undefined && pack.manifest.id !== options.installId) throw new Error('Release changes plugin identity')
-      if (existing) throw new Error('Plugin is already installed; use update')
+      if (existing) throw new OperationError('Plugin is already installed; use update')
     }
     await inspectTree(sourceRoot, sourceRoot)
     stage = resolve(root, 'plugins', pack.manifest.id, `${pack.manifest.version}-${randomUUID()}`)
@@ -90,6 +94,7 @@ export async function installPackage(configPath: string, source: string, options
       if (pack.manifest.backend?.dependencies?.mode === 'npm-ci' || pack.manifest.runtime?.dependencies?.mode === 'npm-ci'
         || await packageDigest(stage) !== options.releaseDigest) throw new Error('Staged release changed during installation')
     }
+    await options.verify?.(stage)
     if (pack.manifest.backend?.dependencies?.mode === 'npm-ci') await installDependencies(stage, pack.manifest.backend.main)
     const ready = await readPackage(stage, config.version)
     if (existing) {
@@ -111,7 +116,8 @@ export async function installPackage(configPath: string, source: string, options
       existing.entry.path = stage
     } else if (options.applyInstall) {
       // The in-process owner either activated it and persisted unit.json, or rolled back before throwing.
-      await options.applyInstall(pack.manifest.id, stage)
+      try { await options.applyInstall(pack.manifest.id, stage) }
+      catch (error) { if (error instanceof RollbackIncomplete) committed = true; throw error }
       committed = true
       return { id: ready.manifest.id, version: ready.manifest.version, path: stage }
     } else {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, writeFile, readFile, rm, symlink, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installPackage } from '../../unit/install'
@@ -7,6 +7,7 @@ import { readPackage } from '../../unit/packages'
 import { writeConfig, readConfig, installations } from '../../unit/config'
 import { controlAddress, startControl, sendControl } from '../../unit/control'
 import { stageRelease, resolveRelease, releaseSignature } from '../../unit/releases'
+import { RollbackIncomplete } from '../../unit/errors'
 import { signDir, testKeyPair } from './bundleSignature.testutil'
 
 async function fixture() {
@@ -106,6 +107,25 @@ describe('portable Unit installation', () => {
       await rm(join(source, 'backend/node_modules/alias.mjs'))
       await writeFile(join(source, 'backend/index.mjs'), 'export default () => ({ tampered: true })')
       expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted')
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it('verifies the private version directory before activation and keeps it only when a rollback is unconfirmed', async () => {
+    const { root, source, file } = await fixture()
+    const versions = join(root, 'state/plugins/fixture'), before = await readFile(file, 'utf8')
+    try {
+      let verified = '', applied = false
+      await expect(installPackage(file, source, {
+        verify: async (dir) => { verified = dir; expect(await readFile(join(dir, 'main.js'), 'utf8')).toBe('ui v1'); throw new Error('Rejected bytes') },
+        applyInstall: async () => { applied = true },
+      })).rejects.toThrow('Rejected bytes')
+      expect(verified.startsWith(versions + '/')).toBe(true) // the copy that would run, not the release it came from
+      expect(applied).toBe(false)
+      expect(await readdir(versions)).toEqual([])
+      await expect(installPackage(file, source, { applyInstall: async () => { throw new Error('Activation failed') } })).rejects.toThrow('Activation failed')
+      expect(await readdir(versions)).toEqual([])
+      await expect(installPackage(file, source, { applyInstall: async () => { throw new RollbackIncomplete('Still referenced') } })).rejects.toThrow('Still referenced')
+      expect(await readdir(versions)).toHaveLength(1)
+      expect(await readFile(file, 'utf8')).toBe(before)
     } finally { await rm(root, { recursive: true, force: true }) }
   })
   it('uses a short owner-only socket even when the data path is long', async () => {

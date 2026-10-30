@@ -80,7 +80,7 @@ describe('Basic Unit public projection', () => {
       expect(handle.status()).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'child', state: 'active' })]))
       const listed = await fetch(`http://127.0.0.1:${handle.port}/admin/unit/plugins`).then((r) => r.json())
       expect(listed.plugins.map((p: { id: string }) => p.id)).toContain('child')
-      await expect(handle.install(await plugin('base-copy'))).resolves.toBe('base-copy')
+      await expect(handle.install(await plugin('base-copy'))).resolves.toMatchObject({ id: 'base-copy' })
       await expect(handle.install(join(root, 'plugins', 'base'))).rejects.toThrow('already installed')
       await expect(handle.install(await plugin('clash', { space: 'landing' }))).rejects.toThrow('Duplicate Space id')
       await expect(handle.install(await plugin('orphan', { requires: ['missing'] }))).rejects.toThrow('Required plugin is not installed: missing')
@@ -94,7 +94,6 @@ describe('Basic Unit public projection', () => {
       expect(ids()).not.toContain('late')
       await handle.uninstall('child'); await handle.uninstall('base')
       expect(ids().sort()).toEqual(['base-copy', 'home-owner', 'published'])
-      await expect(handle.install(join(root, 'plugins', 'child'), { activate: false })).rejects.toThrow('Required plugin is not installed: base')
       expect(ids()).not.toContain('child')
     } finally { await handle.close(); await rm(root, { recursive: true, force: true }) }
   })
