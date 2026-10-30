@@ -20,7 +20,7 @@ import { loadSpecialAgentsConfig, resolveBackgroundModelId } from '../services/s
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
 import { listAgents, resolveMemorySlug } from './agentRegistry.js';
 import { HumanError, readHuman } from './humanStore.js';
-import { isPortraitFactForgotten, mutatePortrait, PERSON_IS, PORTRAIT_SCOPE, portraitEntries, portraitEntryId } from './humanPortrait.js';
+import { isPortraitFactForgotten, mutatePortrait, PERSON_IS, PORTRAIT_LIMIT, PORTRAIT_SCOPE, portraitEntries } from './humanPortrait.js';
 
 export interface PortraitMoveItem {
   id: string;
@@ -233,7 +233,10 @@ export const movePortraitItem = (userId: string, id: string): Promise<PortraitMo
   const item = need(f, id);
   if (item.state === 'moved') return viewOf(f);
   const doc = await readHuman(PORTRAIT_SCOPE);
-  item.alreadyThere = portraitHas(doc.content, item.fact);
+  const same = portraitEntries(doc.content).find((e) => normalizeMemoryFact(e.content) === normalizeMemoryFact(item.fact));
+  // 画像里已经有这句、但排在 Agent 读得到的范围之外:删了原条目,哪个 Agent 都看不到了
+  if (same && doc.content.trim().indexOf(same.content) + same.content.length > PORTRAIT_LIMIT) throw new HumanError('PORTRAIT_FULL', 'That sentence sits past the part of the portrait agents read.');
+  item.alreadyThere = !!same;
   item.state = 'moving'; writeFile(f);
   try {
     // actor agent:算进 2000 字的额度。人点的也一样,否则挪过去的话落在 Agent 读不到的那一截,还从记忆里拿掉了
@@ -257,20 +260,20 @@ export const keepPortraitItem = (userId: string, id: string): Promise<PortraitMo
 });
 
 /** 挪错了:原句放回记忆,再从画像拿掉(次序反过来,同样不会两边都没有)。之后算「留着」。
- *  挪之前画像里就有的那句不删;人后来改过的话按编号找不到,也不删。 */
+ *  挪之前画像里就有的那句不删;人后来改过的不删。 */
 export const undoPortraitMove = (userId: string, id: string): Promise<PortraitMoveView> => serial(async () => {
   const f = readFile(); await settle(f, userId);
   const item = need(f, id);
   if (item.state !== 'moved') throw new HumanError('PORTRAIT_MOVE_GONE', 'This entry has not been moved.');
   if (!existsSync(memoryDir(item.memorySlug))) throw new HumanError('PORTRAIT_MOVE_GONE', 'That agent no longer exists.');
   createMemoryRepository(memoryDir(item.memorySlug)).mutate({ action: 'add', fact: item.content, source: { kind: 'manual' }, cap: 0 }); // cap 0:Dream 整理过的记忆可能超过手写额度,放回原句不该被它挡
+  scheduleAgentFilesSync(userId, item.memorySlug);
+  // 只删这次写进去的、一字没改的那句;别的 Agent 挪来的同一句还靠它,也留着。这里失败记录还在,可以再点一次撤销(放回原句是幂等的)
+  const shared = f.items.some((i) => i !== item && i.state === 'moved' && normalizeMemoryFact(i.fact) === normalizeMemoryFact(item.fact));
+  const line = portraitEntries((await readHuman(PORTRAIT_SCOPE)).content).find((e) => e.content === item.fact);
+  if (line && !item.alreadyThere && !shared) await mutatePortrait({ action: 'forget', id: line.id, actor: 'user', source: { kind: 'user' } });
   f.kept = [...new Set([...f.kept, memoryFactFingerprint(item.content)])].slice(-2000);
   f.items = f.items.filter((i) => i !== item);
   writeFile(f);
-  scheduleAgentFilesSync(userId, item.memorySlug);
-  if (!item.alreadyThere) {
-    await mutatePortrait({ action: 'forget', id: portraitEntryId(item.fact), actor: 'user', source: { kind: 'user' } })
-      .catch((e) => { if (!(e instanceof HumanError && e.code === 'PORTRAIT_NOT_FOUND')) throw e; });
-  }
   return viewOf(f);
 });

@@ -183,6 +183,49 @@ describe('deciding', () => {
   });
 });
 
+describe('Codex review (10-30)', () => {
+  it('undo leaves a sentence whose capitalization the user changed', async () => {
+    answer = picksOf({ [NAME]: 'You like to be called Qing.' });
+    const [item] = (await scanned()).items;
+    await movePortraitItem('owner', item.id);
+    const doc = await readHuman({ kind: 'human', file: 'SOUL.md' });
+    await writeHuman({ kind: 'human', file: 'SOUL.md' }, { content: doc.content.replace('You like to be called Qing.', 'you like to be called qing.'), summary: 'mine', expectedVersion: doc.version }, 'user');
+    await undoPortraitMove('owner', item.id);
+    expect(await soul()).toContain('you like to be called qing.');
+  });
+  it('two agents moved the same sentence: undoing one keeps it for the other', async () => {
+    await saveAgent({ slug: 'mira', name: 'Mira', systemPrompt: 'x' } as any, true);
+    repo('mira').add(NAME);
+    const { items } = await scanned();
+    expect(items).toHaveLength(2);
+    await movePortraitItem('owner', items[0].id); await movePortraitItem('owner', items[1].id);
+    await undoPortraitMove('owner', items[0].id);
+    expect(await soul()).toContain(FACT);
+    expect(repo(items[1].memorySlug).snapshot().content).not.toContain(NAME);
+    expect(repo(items[0].memorySlug).snapshot().content).toContain(NAME);
+  });
+  it('the sentence already sits past what agents read: the original stays', async () => {
+    const [item] = (await scanned()).items;
+    const doc = await readHuman({ kind: 'human', file: 'SOUL.md' });
+    await writeHuman({ kind: 'human', file: 'SOUL.md' }, { content: `${'人写的段落。'.repeat(400)}\n\n- ${FACT}\n`, summary: 'mine', expectedVersion: doc.version }, 'user');
+    await expect(movePortraitItem('owner', item.id)).rejects.toMatchObject({ code: 'PORTRAIT_FULL' });
+    expect(repo().snapshot().content).toContain(NAME);
+    expect((await readPortraitMove('owner')).items[0].state).toBe('pending');
+  });
+  it('undo that fails on the portrait keeps its record, so it can be retried', async () => {
+    const [item] = (await scanned()).items;
+    await movePortraitItem('owner', item.id);
+    const soulPath = join(home, 'human', 'SOUL.md'); const good = readFileSync(soulPath, 'utf8');
+    rmSync(soulPath); mkdirSync(soulPath);
+    await expect(undoPortraitMove('owner', item.id)).rejects.toThrow();
+    rmSync(soulPath, { recursive: true }); writeFileSync(soulPath, good);
+    expect((await readPortraitMove('owner')).items.map((i) => i.state)).toEqual(['moved']);
+    await undoPortraitMove('owner', item.id);
+    expect(await soul()).not.toContain(FACT);
+    expect(repo().snapshot().content.split(NAME).length - 1).toBe(1);
+  });
+});
+
 describe('picking up an interrupted move (read portrait × read memory)', () => {
   it('written, original still there: finishes the forget', async () => {
     await mutatePortrait({ action: 'add', fact: FACT, actor: 'agent', source: { kind: 'move', agent: 'nori' } });
