@@ -101,7 +101,7 @@ type SpecialDraft = { conf: SpecialAgentsConfig; baseline: SpecialAgentsConfig; 
 const specialDrafts = new Map<string, SpecialDraft>()
 
 /** Explicit, field-level saves keep text editing stable and preserve unrelated backend changes. */
-export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktopConfig; localHost?: boolean }) {
+export function SpecialAgentsTab({ cfg, localHost = false, initialRole = 'historian' }: { cfg: TanguDesktopConfig; localHost?: boolean; initialRole?: 'historian' | 'muse' }) {
   const { t } = useI18n()
   const draftKey = connectionKey(cfg)
   const [conf, setConf] = useState<SpecialAgentsConfig | null>(null)
@@ -112,7 +112,7 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
   const [models, setModels] = useState<ModelInfo[]>([])
   const [agents, setAgents] = useState<NormalAgentDef[]>([])
   const [slotDefault, setSlotDefault] = useState('')
-  const [active, setActive] = useState<'historian' | 'muse'>('historian')
+  const [active, setActive] = useState<'historian' | 'muse'>(initialRole)
   // 云端(web/安卓):引擎只有按轮 Historian 的四项(开关 / 模型 / 轮数 / 首轮),Muse、模式、提示词都是本地特性。
   const [cloud, setCloud] = useState(false)
   // 远程来源(设备页)只拿到开关摘要:不渲染编辑器(远端本就写不进去),只读显示开关状态(P1-K10b)
