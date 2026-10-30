@@ -6,6 +6,7 @@ import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
 import { registerStartupAppearance } from './startupAppearance'
 import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
+import { createConnectorCatalog } from './connectorCatalog'
 import { buildUnitScopeGuard, openUnitHostRegularFile, withVerifiedUnitPath } from './unitHostScope'
 import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, registerPickedDirectory, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
@@ -3536,6 +3537,38 @@ app.whenReady().then(async () => {
     // The engine reconciles MCP settings at idle via /agent/tools or run settlement; never restart an active reply.
     return { mcpServers: servers }
   })
+  // ── 连接器目录(connectorCatalog.ts):公开端点、不要登录;拉到就对账 mcp 段里带标记的条目 ──
+  const connectorCatalog = createConnectorCatalog({
+    base: marketBase,
+    cacheFile: () => join(tanguDataDir(), 'connector-catalog.json'),
+    updateMcpServers: async (fn) => {
+      const fallback = await readMcpServers()
+      let servers: Record<string, any> = {}
+      await configQueue(() => updateHomeConfig((c) => {
+        const sec = c.mcp
+        const current = sec === undefined ? fallback : sec?.mcpServers ?? {}
+        const next = fn(current)
+        servers = next ?? current
+        if (!next) return undefined
+        c.mcp = { ...sec, mcpServers: next }
+        return c
+      }))
+      return servers
+    },
+  })
+  ipcMain.handle('connectors:list', (e, refresh?: boolean) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    return refresh ? connectorCatalog.refresh() : connectorCatalog.readCache()
+  })
+  ipcMain.handle('connectors:connect', (e, id: string, taken?: string[]) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    return connectorCatalog.connect(id, taken)
+  })
+  ipcMain.handle('connectors:remove', (e, name: string) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    return connectorCatalog.remove(name)
+  })
+  void connectorCatalog.refresh().catch(() => {}) // 启动时拉一次:离线 / 没配云端地址就留着缓存(refresh 自己不抛)
   ipcMain.handle('mcp:import', async (_e, cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => {
     const incoming = parseMcpInput(cfg?.config, cfg?.name)
     if (cfg.replaceNames !== undefined && (!Array.isArray(cfg.replaceNames) || cfg.replaceNames.some(n => typeof n !== 'string'))) throw new Error('Invalid MCP replacement names')

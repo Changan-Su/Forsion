@@ -678,6 +678,10 @@ export interface ToolsResponse {
     error: string | null
     /** 远端 server 在本机存着 OAuth 令牌(可「断开」)。旧引擎缺省。 */
     signedIn?: boolean
+    /** 地址里带 `{userKey}`:待登录时要用户填 Key(POST /agent/mcp/:name/key),不走 OAuth。旧引擎缺省。 */
+    auth?: 'user-key'
+    /** 连接器目录 id(mcp.json 的 connector 标记)。旧引擎缺省。 */
+    connector?: string
     /** 插件自带的 server(引擎插件 manifest 的 mcpServers):不在 mcp.json 里,设置页只读展示。 */
     origin?: { pluginId: string; pluginName: string }
     tools: Array<{ name: string; description: string }>

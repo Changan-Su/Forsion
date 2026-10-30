@@ -24,6 +24,8 @@ import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled,
 import { useApp, defaultModelOf } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import { listClientSurfaces } from '../services/clientSurfaces'
+import { ConnectorSettingsBlock } from './Connectors'
+import { connectorsSupported } from '../services/connectorService'
 import {
   fetchProviderModels,
   listModels, listTools, mcpLogin, mcpLogout, setModelContextWindow,
@@ -2583,6 +2585,7 @@ export const SettingsModal: React.FC<{
                 {tab === 'mcp' && (
                   <>
                     {showMcpImport && <McpImportDialog draft={mcpImportDraft} onDraft={setMcpImportDraft} pluginNames={(mcpStatus || []).filter(s => s.origin).map(s => s.server)} onClose={() => setShowMcpImport(false)} onSaved={r => { setMcpServers(r.mcpServers); setMcpMsg(t('mcpImport.saved', { added: r.added.length, replaced: r.replaced.length })); setShowMcpImport(false); setMcpImportDraft({ json: '', name: '' }); refreshMcp() }} />}
+                    {connectorsSupported() && <ConnectorSettingsBlock servers={mcpServers} rows={mcpStatus} onLogin={loginMcp} onMsg={setMcpMsg} onChanged={refreshMcp} />}
                     <div className="field">
                       <div className="mcp-settings-heading"><label>{t('settings.mcp.label')}</label>
                       {!editMcp && (
@@ -2601,7 +2604,7 @@ export const SettingsModal: React.FC<{
                       {mcpTotalSummary()}
                       {Object.keys(mcpServers).length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
-                          {Object.entries(mcpServers).map(([name, sc]) => {
+                          {Object.entries(mcpServers).filter(([, sc]) => !sc.connector).map(([name, sc]) => { // 连接器在上面那一块
                             const st = mcpStatus?.find((s) => s.server === name)
                             const stLabel = sc.enabled === false
                               ? t('settings.mcp.statusDisabled')

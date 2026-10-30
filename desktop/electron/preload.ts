@@ -367,6 +367,10 @@ const api = {
   deleteProvider: (providerId: string): Promise<any[]> => ipcRenderer.invoke('providers:delete', providerId),
   // ── MCP server 管理(~/.tangu/mcp.json;保存后托管后端重启重连)──
   importMcpConfig: (cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => ipcRenderer.invoke('mcp:import', cfg),
+  // 连接器目录(connectorCatalog.ts):只在桌面(有本机引擎)出现 —— 商店的「连接器」分类与设置页那一块按这组键门控
+  connectorsList: (refresh?: boolean): Promise<any> => ipcRenderer.invoke('connectors:list', refresh),
+  connectorsConnect: (id: string, taken?: string[]): Promise<{ name: string; added: boolean }> => ipcRenderer.invoke('connectors:connect', id, taken),
+  connectorsRemove: (name: string): Promise<void> => ipcRenderer.invoke('connectors:remove', name),
   readMcpConfig: (): Promise<{ mcpServers: Record<string, any> }> => ipcRenderer.invoke('mcp:read'),
   writeMcpConfig: (cfg: { mcpServers: Record<string, any>; base?: Record<string, any> }): Promise<{ mcpServers: Record<string, any> }> =>
     ipcRenderer.invoke('mcp:write', cfg),
@@ -693,6 +697,7 @@ const AGENT_KEYS = [
   'submitFeedback',
   'listProviders', 'saveProvider', 'deleteProvider', 'scanLocalProviders', 'importLocalProviders',
   'readMcpConfig', 'writeMcpConfig', 'importMcpConfig',
+  'connectorsList', 'connectorsConnect', 'connectorsRemove',
   'discoveryScan', 'discoveryImportSkills', 'discoveryImportMcp',
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',

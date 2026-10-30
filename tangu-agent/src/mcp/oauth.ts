@@ -35,6 +35,8 @@ interface AuthRecord {
   client?: OAuthClientInformationMixed;
   tokens?: OAuthTokens;
   discovery?: OAuthDiscoveryState;
+  /** 「用户自带 Key」型连接器的 Key(按地址模板存:模板一变就对不上 = 作废,同令牌)。 */
+  userKey?: string;
 }
 
 export const CALLBACK_PATH = '/mcp/callback';
@@ -86,6 +88,12 @@ function updateRecord(key: string, fn: (cur: AuthRecord | undefined) => AuthReco
 
 export function hasTokens(serverUrl: string): boolean {
   try { return !!loadRecord(serverKey(serverUrl))?.tokens; } catch { return false; }
+}
+export function loadUserKey(templateUrl: string): string | undefined {
+  try { const k = loadRecord(serverKey(templateUrl))?.userKey; return typeof k === 'string' && k ? k : undefined; } catch { return undefined; }
+}
+export function saveUserKey(templateUrl: string, userKey: string): void {
+  updateRecord(serverKey(templateUrl), (cur) => ({ ...cur, userKey }));
 }
 /** 断开 = 删掉本机这条记录。ponytail: 不调授权服务器的撤销端点(方案「顺手」那条),要做在这里补 revocation_endpoint。 */
 export function forgetServer(serverUrl: string): void {

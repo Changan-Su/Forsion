@@ -11,6 +11,8 @@ export interface McpConfigEntry {
   cwd?: string;
   /** 远端 server 要预注册 OAuth client 时写;其余靠动态登记,不用写。 */
   oauth?: { clientId?: string; scopes?: string[] };
+  /** 由连接器目录(后台录入)连上的条目:目录 id。宿主据此同步地址、显示「已下线」,引擎据此读目录里的 alwaysAsk。 */
+  connector?: string;
 }
 export type McpServerMap = Record<string, McpConfigEntry>;
 export class McpInputError extends Error {
@@ -19,7 +21,9 @@ export class McpInputError extends Error {
   }
 }
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-const FIELDS = new Set(['command', 'args', 'env', 'url', 'transport', 'type', 'headers', 'timeoutMs', 'enabled', 'cwd', 'oauth']);
+const FIELDS = new Set(['command', 'args', 'env', 'url', 'transport', 'type', 'headers', 'timeoutMs', 'enabled', 'cwd', 'oauth', 'connector']);
+/** 与 server 连接器模块的 ID_RE 一致。 */
+export const CONNECTOR_ID_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 export const mcpNameKey = (name: string): string => name.replace(/[^a-zA-Z0-9_-]/g, '_');
 export const reservedMcpName = (name: string): boolean => `mcp__${mcpNameKey(name)}__`.toLowerCase().startsWith('mcp__dev_');
 export function validateMcpName(name: string): void {
@@ -49,6 +53,7 @@ export function validateMcpEntry(value: unknown, name: string): McpConfigEntry {
     if (Object.hasOwn(o, 'clientId') && (typeof o.clientId !== 'string' || !o.clientId.trim() || o.clientId.length > 512)) throw new McpInputError('invalid', `${name}.oauth.clientId`);
     if (Object.hasOwn(o, 'scopes') && (!Array.isArray(o.scopes) || o.scopes.some(x => typeof x !== 'string' || !x.trim()))) throw new McpInputError('invalid', `${name}.oauth.scopes`);
   }
+  if (Object.hasOwn(v, 'connector') && (typeof v.connector !== 'string' || !CONNECTOR_ID_RE.test(v.connector) || !v.url)) throw new McpInputError('invalid', `${name}.connector`);
   if (Object.hasOwn(v, 'enabled') && typeof v.enabled !== 'boolean') throw new McpInputError('invalid', `${name}.enabled`);
   if (Object.hasOwn(v, 'timeoutMs') && (typeof v.timeoutMs !== 'number' || !Number.isInteger(v.timeoutMs) || v.timeoutMs < 1 || v.timeoutMs > 2_147_483_647)) throw new McpInputError('invalid', `${name}.timeoutMs`);
   return v as McpConfigEntry;

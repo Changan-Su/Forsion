@@ -217,6 +217,8 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
             status: s.status,
             error: s.error || null,
             ...(s.signedIn ? { signedIn: true } : {}),
+            ...(s.auth ? { auth: s.auth } : {}),
+            ...(s.connector ? { connector: s.connector } : {}),
             ...(s.origin ? { origin: s.origin } : {}),
             tools: tools.map((t) => ({
               name: t.name,
@@ -249,12 +251,15 @@ async function mcpAuthAction(req: AuthRequest, res: any, act: (mcp: NonNullable<
   const mcp = deps().mcp;
   if (!mcp) return res.status(404).json({ detail: 'MCP is not available in this engine' });
   try {
+    await mcp.reloadConfig?.(); // 宿主刚写进来的条目(商店连接器)先接上;有 run 在跑时 reload 自己会让开
     res.json(await act(mcp, String(req.params.name)));
   } catch (e: any) {
     res.status(400).json({ detail: String(e?.message || e).slice(0, 500) });
   }
 }
 router.post('/agent/mcp/:name/login', authMiddleware, (req: AuthRequest, res) => mcpAuthAction(req, res, (mcp, name) => mcp.login(name)));
+// 「用户自带 Key」:Key 只进本机 connector-auth.json,不回显、不进日志(报错里也只给模板)
+router.post('/agent/mcp/:name/key', authMiddleware, (req: AuthRequest, res) => mcpAuthAction(req, res, (mcp, name) => mcp.setKey(name, String(req.body?.key ?? ''))));
 router.post('/agent/mcp/:name/logout', authMiddleware, (req: AuthRequest, res) => mcpAuthAction(req, res, async (mcp, name) => { await mcp.logout(name); return {}; }));
 
 export default router;

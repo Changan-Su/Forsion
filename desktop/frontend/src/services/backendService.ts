@@ -634,6 +634,9 @@ export const listTools = (t: EngineTarget) =>
 /** 远端 MCP 的 OAuth 登录:返回授权页地址(交给宿主开浏览器);刷新就成了 = 不带 url。之后引擎在后台等回调、重连。 */
 export const mcpLogin = (t: EngineTarget, name: string) =>
   request<{ url?: string }>(t, `/agent/mcp/${encodeURIComponent(name)}/login`, { method: 'POST' })
+/** 「用户自带 Key」型连接器:Key 只存本机 connector-auth.json;返回重连后的状态。 */
+export const mcpSetKey = (t: EngineTarget, name: string, key: string) =>
+  request<{ status: string; error?: string }>(t, `/agent/mcp/${encodeURIComponent(name)}/key`, { method: 'POST', body: JSON.stringify({ key }) })
 /** 断开:删掉本机令牌。 */
 export const mcpLogout = (t: EngineTarget, name: string) =>
   request<Record<string, never>>(t, `/agent/mcp/${encodeURIComponent(name)}/logout`, { method: 'POST' })

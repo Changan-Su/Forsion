@@ -44,7 +44,7 @@ export function protectedHostPaths(): string[] {
     // config.json / provider-auth.json 的 .bak 与读坏时留下的 .bad-*(core/config.ts):改了 = 下次恢复成模型写的版本。
     // provider-auth.json 可能是软链,备份落在真身旁边。
     configBackupDir(configFile()), providerAuthBackupDir(),
-    ...['.env', 'plugins', 'mcp.json', 'engines.json', 'engine-prefs.json', 'providers.json', 'muse-state.json'].map((name) => path.join(tanguHome(), name)),
+    ...['.env', 'plugins', 'mcp.json', 'engines.json', 'engine-prefs.json', 'providers.json', 'muse-state.json', 'connector-catalog.json'].map((name) => path.join(tanguHome(), name)),
   ];
   for (const slug of new Set([currentAgentSlug() || DEFAULT_AGENT_SLUG, currentDisplayAgentSlug()].filter(Boolean))) {
     original.push(...['SOUL.md', 'config.toml', 'HARNESS.md', '.harness-refinements.jsonl', '.harness-raw.md', '.cloudsync-accounts.json', '.memory-state.json', '.memory-tombstones.json', '.memory-dream.json', '.memory-raw.md', '.memory.lock'].map((name) => path.join(agentsDir(), slug!, name)));
@@ -68,7 +68,7 @@ const CREDENTIAL_FILE_NAMES = ['auth.json', 'provider-auth.json', 'connector-aut
  *  ⚠️ 不含 plugins/:本表也是**本机**「每次都问」的那张(protectedLocalWrite),整个插件目录进来 = 本机完全通行地开发
  *  引擎插件、插件自己放在那里的数据每写一次都要批(评审 B#6)。远程那半不靠它:remoteForbiddenRoot 整片禁引擎 home,
  *  protectedHostPaths 也列着 tanguHome/plugins。 */
-const TANGU_CONFIG_NAMES = ['.env', 'mcp.json', 'engines.json', 'engine-prefs.json', 'providers.json', 'muse-state.json', 'special-agents.json'];
+const TANGU_CONFIG_NAMES = ['.env', 'mcp.json', 'engines.json', 'engine-prefs.json', 'providers.json', 'muse-state.json', 'special-agents.json', 'connector-catalog.json'];
 
 /** 当前共享域 + 正式 / dev 两个家目录:同一台机器上两套并存,dev 引擎的 run 同样不许碰正式那套(反之亦然)。 */
 function forsionDomains(): string[] {
