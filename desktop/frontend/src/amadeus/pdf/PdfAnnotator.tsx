@@ -5,6 +5,7 @@
  * 文件名与 `pdfa-` 类名沿用旧称:台架的选择器和各处 mock 都认它们。
  */
 import { useEffect, useRef, useState, type ReactElement } from 'react'
+import { readFileView, writeFileView } from '../lib/fileViewMemory'
 // ⚠️必须用 legacy 构建:pdf.js 5.7 用了 TC39 `Map.prototype.getOrInsertComputed`(upsert 提案),
 // Electron 40 的 V8 未提供 → 非 legacy 版运行时崩「getOrInsertComputed is not a function」(主线程 + worker 都用到)。
 // legacy 版内置 core-js polyfill(主/worker 各自打)。故 core/viewer/worker/css 全部走 legacy 路径。
@@ -106,7 +107,7 @@ async function readHostPdfBytes(p: string): Promise<Uint8Array> {
 }
 
 /** embed:笔记内嵌预览形态 —— 没有工具条和侧栏,不抢宿主(笔记编辑器)的焦点。 */
-export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pdfPath: string; initialPage?: number; initialQuote?: string; embed?: boolean }) {
+export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed, memoryKey = '', onLocationConsumed }: { pdfPath: string; initialPage?: number; initialQuote?: string; embed?: boolean; memoryKey?: string; onLocationConsumed?: () => void }) {
   // 库外的 PDF(引用条给的是绝对路径):字节走主进程 fs 直读;文件监听只盯库内,所以不订阅重载;
   // 「复制本页链接」也不给 —— 笔记链接按库内文件名解析,库外的落不了地。
   const { t } = useI18n()
@@ -134,12 +135,26 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
   const [, setDocVersion] = useState(0) // swapDoc 后催重渲染拿新 doc;不作 key——重挂会把缩略图清白闪一下
   const [copied, setCopied] = useState(false)
   const [reloadNonce, setReloadNonce] = useState(0) // 重试:重建 viewer 重新读字节(自愈瞬时失败)
+  const consumed = useRef(onLocationConsumed)
+  consumed.current = onLocationConsumed
 
   useEffect(() => {
     ensureScopedCss()
     const container = containerRef.current
     if (!container) return
     let dead = false
+    const saved = readFileView('pdf', memoryKey)
+    let remembering = false
+    let restoreFrame = 0
+    let interacted = false
+    const interactionRoot = container.closest('.pdfa-root') ?? container
+    const cancelRestore = (): void => { interacted = true }
+    for (const type of ['pointerdown', 'wheel', 'keydown', 'touchstart']) interactionRoot.addEventListener(type, cancelRestore, { capture: true, passive: true })
+    const remember = (event: { location: { pageNumber: number; top: number; left: number } }): void => {
+      if (dead || !remembering || !container.isConnected || !container.clientWidth) return
+      const loc = event.location
+      writeFileView('pdf', memoryKey, { page: loc.pageNumber, scale: curScale, top: loc.top, left: loc.left })
+    }
     setStatus('loading')
 
     const eventBus = new EventBus()
@@ -161,7 +176,8 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
     const state: Engine = { viewer, linkService, eventBus, doc: null }
     eng.current = state
 
-    let curScale = 'page-width' // 用户当前缩放(scalechanging 维护);换档恢复只信它,不读 viewer(见 swapDoc 注释)
+    let curScale = saved?.scale ?? 'page-width' // 用户当前缩放(scalechanging 维护);换档恢复只信它,不读 viewer(见 swapDoc 注释)
+    eventBus.on('updateviewarea', remember)
 
     /** 临时高亮一段引语:pdf.js find(只在文本层画高亮,绝不写盘)。空串 = 清掉上一次的高亮。 */
     const runFind = (q: string): void => {
@@ -182,6 +198,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
      *  keep={page}(初载):跳到目标页;pagesloaded 且用户没翻页时再钉一次(pagesinit 的页高还是占位值)。 */
     let offAttach: (() => void) | null = null
     const attach = (doc: any, keep: { page: number } | 'preserve'): void => {
+      remembering = false
       offAttach?.() // 连续换档时上一轮 attach 的 once 监听可能还没触发,不摘会拿着旧 keep 在新文档上乱跳
       // ⚠️pdf.js 的 setDocument 在「替换已有文档」那一支里把编辑器模式无条件重置成 NONE(pdf_viewer.mjs 5.7),
       // 重载之后就会建出编辑器(每页一层 .annotationEditorLayer;拖进 / 粘贴一张图 = 插入一个存不下来的图章),
@@ -215,11 +232,18 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
       const onLoaded = (): void => {
         if (dead) return
         const want = wanted()
+        const restoreSaved = keep !== 'preserve' && saved && !initialPage && pendingGoto.current == null
+          && !interacted && viewer.currentPageNumber === target
         pendingGoto.current = null
         if (keep === 'preserve') container.dispatchEvent(new Event('scroll'))
         else if (want > 1 && viewer.currentPageNumber === want) viewer.currentPageNumber = want // 占位高→真实高,再钉一次;用户已翻页则不打扰
         // 页码先落位再找:pdf.js 从当前页往后找第一处,先跳页才不会命中前面几章的同名句子。
         if (pendingFind.current) { runFind(pendingFind.current); pendingFind.current = null }
+        if (keep !== 'preserve') {
+          if (restoreSaved) viewer.scrollPageIntoView({ pageNumber: saved.page, destArray: [null, { name: 'XYZ' }, saved.left, saved.top, null], allowNegativeOffset: true })
+          consumed.current?.()
+        }
+        restoreFrame = requestAnimationFrame(() => { remembering = true; container.dispatchEvent(new Event('scroll')) })
       }
       eventBus.on('pagesinit', onInit, { once: true })
       eventBus.on('pagesloaded', onLoaded, { once: true })
@@ -467,7 +491,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
         if (dead) { void doc.destroy(); return }
         state.doc = doc
         diskBytes = bytes
-        attach(doc, { page: initialPage || 1 })
+        attach(doc, { page: initialPage || saved?.page || 1 })
         setStatus('ready')
       } catch (e) {
         if (!dead) { console.error('[pdf] 加载失败', e); setStatus('error') }
@@ -476,6 +500,8 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
 
     return () => {
       dead = true
+      cancelAnimationFrame(restoreFrame)
+      for (const type of ['pointerdown', 'wheel', 'keydown', 'touchstart']) interactionRoot.removeEventListener(type, cancelRestore, { capture: true })
       if (reloadTimer) clearTimeout(reloadTimer)
       offChange?.()
       ro.disconnect()
@@ -487,7 +513,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
       state.doc = null
       if (eng.current === state) eng.current = null
     }
-  }, [pdfPath, reloadNonce, embed]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pdfPath, reloadNonce, embed, memoryKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 已开着的 tab 被要求跳页:openPdf 激活既有 tab 后广播 amadeus:pdf-goto(避免 remount 重下 PDF)。
   useEffect(() => {

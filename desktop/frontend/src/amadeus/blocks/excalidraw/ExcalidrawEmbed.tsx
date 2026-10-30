@@ -9,6 +9,8 @@ import { useVisualTheme as useTheme } from '../../../stores/themeStore'
 import { registerMessages, useI18n } from '../../../i18n'
 import { amadeus } from '../../api'
 import type { BoardSettings } from '@amadeus-shared/excalidraw/board'
+import { usePageStore } from '../../store/pageStore'
+import { fileViewKey, readFileView, writeFileView } from '../../lib/fileViewMemory'
 
 // 必须在 @excalidraw/excalidraw 的模块体执行之前设好这两个全局:
 // - ASSET_PATH:它默认去 CDN(esm.sh)现拉字体 —— 本 App 的 CSP 是 default-src 'self',且桌面端要能离线用
@@ -72,14 +74,18 @@ export function ExcalidrawEmbed({ target, pagePath, readOnly = false }: { target
       </div>
     )
   }
-  return <Board key={`${generation}:${entry.identity ?? target}`} target={entry.identity ?? fileReferenceKey(pagePath, target)} settings={entry.settings} generation={generation} readOnly={readOnly} />
+  return <Board key={`${generation}:${entry.identity ?? target}`} target={entry.identity ?? fileReferenceKey(pagePath, target)} settings={entry.settings} context={pagePath === entry.path ? '' : pagePath} generation={generation} readOnly={readOnly} />
 }
 
 /** 只在 entry 成 ok 后挂载,好把 initialData 一次性定种:<Excalidraw> 挂载后自持编辑态,
  *  initialData 之后再变它也不看。种子必须取 seedFor(最新落盘态,含防抖窗内的 pending)——
  *  取初次载入的旧 scene 就是「白板关掉重开回到旧内容」,旧种子再画一笔还会盖掉磁盘新内容。 */
-function Board({ target, settings, generation, readOnly = false }: { target: string; settings: BoardSettings; generation: number; readOnly?: boolean }): React.JSX.Element {
+function Board({ target, settings, context, generation, readOnly = false }: { target: string; settings: BoardSettings; context: string; generation: number; readOnly?: boolean }): React.JSX.Element {
   const [seed] = useState(() => useDrawStore.getState().seedFor(target) ?? {})
+  const root = usePageStore((s) => s.vaultRoot)
+  const path = useDrawStore((s) => s.entries[target]?.path ?? '')
+  const memoryKey = fileViewKey('drawing', root, path, context)
+  const [viewport] = useState(() => readFileView('drawing', memoryKey))
   // 卸载即冲刷:防抖里的最后一笔立即落盘,scene 种子随之推进,下次挂载才拿得到最新内容。
   // 只读(分享页)一笔都没写过,不冲刷也不接任何写回调 —— 桥的 writeDrawing 本就会拒,这里在源头就不发。
   useEffect(() => () => {
@@ -92,6 +98,8 @@ function Board({ target, settings, generation, readOnly = false }: { target: str
       <Suspense fallback={<div className="amx-draw-state">{t('drawembed.loadingEditor')}</div>}>
         <ExcalidrawCanvas
           initialData={seed}
+          initialViewport={viewport}
+          onViewportChange={(view) => { if (!readOnly && useDrawStore.getState().gen === generation) writeFileView('drawing', memoryKey, view) }}
           theme={mode}
           // ⚠️ 画布加载语言包时会伸手改 `document.documentElement` 的 lang 与 dir(它自己的全局约定)。
           // 而本 App 的 i18n(i18n.tsx:1910)也在写 html[lang] —— 必须喂同一个 locale,两边才不打架。

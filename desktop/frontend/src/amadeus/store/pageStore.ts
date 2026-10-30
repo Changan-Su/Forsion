@@ -28,6 +28,7 @@ import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
 import { flushUnifiedScopes, holdUnifiedPath, pathHit, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
 import { remapNotePageStylePrefix, remapNoteViewMemory } from '../unified/viewMemory'
+import { remapFileViews } from '../lib/fileViewMemory'
 import { mergeMovedText, toastRenameCopy, toastSaveFailed, writeConflictCopy } from '../unified/writeSafety'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
@@ -1911,6 +1912,7 @@ export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'pref
   // 只由发起的窗口搬:localStorage 各窗共用,转播过来的窗口再搬一遍会拿自己缓存里的旧条目盖掉刚搬好的新条目。
   if (!relayingRemote) {
     const root = usePageStore.getState().vaultRoot
+    remapFileViews(root, oldP, newP, kind === 'prefix')
     if (kind === 'file') remapNoteViewMemory(root, oldP, newP)
     else remapNotePageStylePrefix(root, oldP, newP)
   }

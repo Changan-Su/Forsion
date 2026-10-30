@@ -65,6 +65,12 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 
 ## English contract
 
+File reading state in Genesis is stored locally by vault, path and view kind in
+`desktop/frontend/src/amadeus/lib/fileViewMemory.ts`, separately from document content.
+After changing file-view mount/restoration behavior, build Desktop and run
+`npm run check:fileviewmemory` (isolated Electron: Space switches, reload, drawing zoom/pan,
+Markdown scroll, image size/pan, PDF page/zoom across pane widths, media position/rate).
+
 `engine/lineSelection.ts` provides opt-in `mountLineSelection(root, options)`. It paints continuous visual-line bands outside the content DOM while preserving native Selection, focus and clipboard behavior. Chat and watched plugin readers mount it through ViewSelectionBar; Markdown editors also supply composition suspension and pending AI ranges. Dispose the handle with its owning view. Custom selection layers and coarse pointers keep native paint. Regression: `desktop` → `npm run check:selectionlines` at 100% and 110% zoom after a fresh build.
 
 Space owns layout; View owns a navigable feature; UI components compose the inside of a View. Amadeus document Blocks and Dashboard Cards have different responsibilities. Use `@lcl/components` for host-independent primitives and application adapters for services. Inputs and callbacks are explicit; a component must not implicitly target the active session. DOM plugins consume `ctx.ui` mounts, with lifecycle cleanup owned by the host. Settings parts (panels, rows, switches, buttons, inputs, meters, steppers, sheets) currently live in the application layer (`components/SettingsPrimitives`, `components/SettingsPage`) because their CSS source of truth is `base.css`; plugins reach them through `ctx.ui.mountSettingsPage` / `mountSettingsItem`. Keep types, documentation, consumers, and lifecycle coverage together when changing public APIs.
