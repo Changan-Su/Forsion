@@ -301,7 +301,8 @@ export async function renameRemote(unitId: string, sessionId: string, title: str
   if (!t || bindingConflict(sessionId, ref)) return
   const apply = (x: SessionRecord): SessionRecord => (x.id === sessionId ? { ...x, title } : x)
   const e = useDeviceSessions.getState().byUnit[ref.unitId]
-  if (e?.sessions.some((x) => x.id === sessionId && (x.title || '') === title)) return // 没改字:不算改名(同 renameSession)
+  const cur = e?.sessions.find((x) => x.id === sessionId) ?? useApp.getState().sessions.find((x) => x.id === sessionId)
+  if (cur && (cur.title || '') === title) return // 没改字:不算改名(同 renameSession)
   if (e) patchEntry(ref.unitId, { sessions: e.sessions.map(apply) })
   useApp.setState((s) => ({ sessions: s.sessions.map((x) => (x.location?.kind === 'unit' ? apply(x) : x)) }))
   try { await updateSession(t, sessionId, { title, title_source: 'user' }) } catch (err: any) {

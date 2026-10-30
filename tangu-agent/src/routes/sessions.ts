@@ -358,9 +358,9 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     const params: any[] = [];
     if (typeof title === 'string') {
       const nextTitle = title.trim().slice(0, 200);
-      sets.push('title = ?'); params.push(nextTitle);
-      // 只有用户自己的改名入口带 title_source:'user';前端发出第一句后写的占位标题不带(tanguSlice 里 auto 那路),不算手动。
-      // 手动 = Historian 此后不再动这个标题;用户把标题清空 = 交还给 Historian。
+      // 只有用户自己的改名入口带 title_source:'user'。手动 = Historian 此后不再动这个标题;用户把标题清空 = 交还给 Historian。
+      // 前端发出第一句后写的占位标题带 'auto':不算手动,也盖不掉手动标题(本机列表可能还没刷到别的设备刚改的名字)。
+      sets.push(title_source === 'auto' ? 'title = CASE WHEN title_manual THEN title ELSE ? END' : 'title = ?'); params.push(nextTitle);
       if (title_source === 'user') sets.push(`title_manual = ${nextTitle ? 'TRUE' : 'FALSE'}`);
     }
     if (typeof archived === 'boolean') { sets.push('archived = ?'); params.push(archived); }

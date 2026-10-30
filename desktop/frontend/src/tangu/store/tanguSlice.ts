@@ -2454,7 +2454,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, title } : x)),
       archivedSessions: s.archivedSessions.map((x) => (x.id === id ? { ...x, title } : x)),
     }))
-    try { await api.updateSession(targetForSession(id), id, { title, ...(auto ? {} : { title_source: 'user' as const }) }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
+    try { await api.updateSession(targetForSession(id), id, { title, title_source: auto ? 'auto' : 'user' }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
   },
 
   setSessionEmoji: async (id, value) => {

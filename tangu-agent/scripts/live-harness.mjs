@@ -4537,7 +4537,7 @@ Then reply with only the command output.`,
 
   await scenario('titlemanual', 'title 用户手改过的标题 / 动过的图标 Historian 不再碰', async () => {
     // 10-30:到点轮 Historian 把用户亲手起的标题盖掉,用户清空的图标下一轮又被填上。话题一路换,标题本该跟着变:
-    //   对照:只有前端那条占位 PATCH(不带来源)→ 后面几轮标题照样被改、图标照样填;
+    //   对照:只有前端那条占位 PATCH → 后面几轮标题照样被改、图标照样填;
     //   手动:第 1 轮后亲手改名 + 清空图标 → 之后两轮标题 / 图标都不动,判官照常跑(有新记录),run 起点也不再发 session_title;
     //   交还:同一个会话亲手把标题清空 → 下一轮 Historian 重新起名,图标仍不填(清标题不解图标)。
     // 手动标题故意和对话毫不相干:首帧提示词让模型「标题合适就原样保留」,起得像样的话没修也可能是绿的。
@@ -4569,7 +4569,7 @@ Then reply with only the command output.`,
     };
 
     const ctrl = await mk();
-    await patch(ctrl, { title: PLACEHOLDER }); // 前端发出第一句后写的占位标题:不带来源
+    await patch(ctrl, { title: PLACEHOLDER, title_source: 'auto' }); // 前端发出第一句后写的占位标题
     await turn(ctrl, TOPICS[0]);
     const c1 = await detail(ctrl);
     await turn(ctrl, TOPICS[1]);

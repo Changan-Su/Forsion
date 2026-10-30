@@ -49,13 +49,19 @@ else describe('手动标记 × 真 sqlite', async () => {
     expect(r.status).toBe(200);
   };
 
-  it('占位标题不带来源:不算手动,不解已有标记', async () => {
+  it('占位标题(auto):不算手动,也盖不掉手动标题', async () => {
     const id = mk();
-    await patch(id, { title: '发出去的前 30 字' });
+    await patch(id, { title: '发出去的前 30 字', title_source: 'auto' });
     expect(flags(id)).toMatchObject({ title: '发出去的前 30 字', title_manual: 0 });
     await patch(id, { title: '亲手改的', title_source: 'user' });
-    await patch(id, { title: '别的来源' });
-    expect(flags(id).title_manual).toBe(1);
+    await patch(id, { title: '另一台的占位', title_source: 'auto' });
+    expect(flags(id)).toMatchObject({ title: '亲手改的', title_manual: 1 });
+  });
+
+  it('老客户端不带来源:照写标题,不动标记', async () => {
+    const id = mk();
+    await patch(id, { title: '老桌面改的' });
+    expect(flags(id)).toMatchObject({ title: '老桌面改的', title_manual: 0 });
   });
 
   it('用户改名 = 手动;用户清空 = 交还;不认别的来源值', async () => {
