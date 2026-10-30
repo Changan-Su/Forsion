@@ -562,7 +562,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
           <input className="agent-character-altname" aria-label={t(NAME_LABEL[altKey])} placeholder={t(NAME_LABEL[altKey])} title={t(NAME_LABEL[altKey])} value={draft[altKey] ?? ''} maxLength={120} disabled={busy} onChange={(e) => patch({ [altKey]: e.target.value })} />
           <span aria-hidden="true">·</span>
           <CapabilityMenu label={t('agentProfile.nameDisplay')} className="agent-character-pref" selection disabled={busy} items={NAME_PREFS.map(([id, key]) => ({ id, label: t(key), selected: (draft.namePref || 'auto') === id, onSelect: () => patch({ namePref: id }) }))}>
-            <span>{t('agentProfile.nameDisplayValue', { value: t(NAME_PREFS.find(([id]) => id === (draft.namePref || 'auto'))![1]) })}</span>
+            <span>{t('agentProfile.nameDisplayValue', { value: t(NAME_PREFS.find(([id]) => id === (draft.namePref || 'auto'))![1]) })}</span><ChevronDown size={11} />
           </CapabilityMenu>
         </div>
         {enHan && <p className="agent-profile-error" role="alert">{t('agentProfile.nameEnHan')}</p>}
