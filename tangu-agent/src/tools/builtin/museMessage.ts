@@ -8,7 +8,8 @@
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import { MUSE_DM_MAX_CHARS, MUSE_DM_PER_HOUR, postMuseDm } from '../../services/museDm.js';
-import { MUSE_FEATURES, postMuseCard, recommendBlocked } from '../../services/museCards.js';
+import { MUSE_FEATURES, inboxAskBlocked, inboxListBlocked, inboxListItems, postMuseCard, recommendBlocked } from '../../services/museCards.js';
+import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
 import { deps } from '../../seams/runtime.js';
 import { marketplaceId, marketplaceItemsOf } from '../../shared/marketplace.js';
 
@@ -35,6 +36,25 @@ async function sendCard(userId: string, text: string, card: any, signal?: AbortS
     if (block) return block;
     const r = await postMuseCard(userId, { kind: 'feature', key: `feature:${feature}`, payload: { feature, title, why: text }, text });
     return r.ok ? 'Sent. The card is at the end of your direct chat with them.' : r.error;
+  }
+  if (card?.type === 'inbox_ask') {
+    const category = String(card.category || '');
+    const block = await inboxAskBlocked(userId, category, loadSpecialAgentsConfig().muse);
+    if (block) return block;
+    const r = await postMuseCard(userId, { kind: 'inbox-ask', key: `inbox-ask:${category}`, payload: { category, question: text }, text });
+    return r.ok ? 'Sent. Their answer shows up in your log.' : r.error;
+  }
+  if (card?.type === 'inbox_list') {
+    const block = await inboxListBlocked(userId);
+    if (block) return block;
+    const items = await inboxListItems(userId, Array.isArray(card.items) ? card.items : []);
+    if (!items.length) return 'Error: none of those are unread messages that need the user to act.';
+    const r = await postMuseCard(userId, { kind: 'inbox-list', key: 'inbox-list', payload: { items, lead: text }, text });
+    return r.ok ? `Sent a list of ${items.length}.` : r.error;
+  }
+  if (card?.type === 'channel') {
+    const r = await postMuseCard(userId, { kind: 'channel', key: 'channel', payload: { why: text }, text });
+    return r.ok ? 'Sent.' : r.error;
   }
   return 'Error: unknown card type.';
 }
@@ -67,10 +87,12 @@ export const museMessageProvider: ToolProvider = {
                 type: 'object',
                 description: 'Attach one card to this message. Use it only as your cycle brief describes.',
                 properties: {
-                  type: { type: 'string', enum: ['plugin', 'feature'] },
+                  type: { type: 'string', enum: ['plugin', 'feature', 'inbox_ask', 'inbox_list', 'channel'] },
                   plugin_id: { type: 'string', description: 'plugin: the id from search_marketplace.' },
                   feature: { type: 'string', enum: [...MUSE_FEATURES], description: 'feature: the settings page to open.' },
                   title: { type: 'string', description: 'feature: short title, in the user\'s language.' },
+                  category: { type: 'string', description: 'inbox_ask: the mail category.' },
+                  items: { type: 'array', description: 'inbox_list: what needs the user.', items: { type: 'object', properties: { id: { type: 'string' }, note: { type: 'string' } }, required: ['id'] } },
                 },
                 required: ['type'],
               },

@@ -6,11 +6,14 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { create } from 'zustand'
-import { ArrowDown, CircleCheck, CircleX, Puzzle, Settings } from 'lucide-react'
+import { ArrowDown, CircleCheck, CircleX, Gift, Inbox, MessageCircle, Puzzle, Settings } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useAttention } from '../../stores/attentionStore'
-import { decideMuseCard, getMuseCard, listMuseCards } from '../../services/backendService'
+import { claimOnEngine, decideMuseCard, getMuseCard, listMuseCards } from '../../services/backendService'
+import { currentClientId } from '../../services/agentRunService'
+import { useInbox } from '../../stores/inboxStore'
+import { setActiveSpace, useWorkspace } from '@lcl/engine'
 import { targetForSession } from '../../services/engine/targets'
 import type { MuseCardInfo, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { MarketPluginCards } from '../../components/MarketPluginCards'
@@ -23,6 +26,24 @@ registerMessages({
   'museCard.feature': { zh: '功能推荐', en: 'Feature suggestion' },
   'museCard.dismissed': { zh: '不感兴趣，之后不再提', en: 'Not interested. It won’t come up again.' },
   'museCard.opened': { zh: '已打开设置', en: 'Opened in Settings' },
+  'museCard.yes': { zh: '好', en: 'Yes' },
+  'museCard.later': { zh: '先不用', en: 'Not now' },
+  'museCard.ignore': { zh: '这类以后都别管', en: 'Ignore this kind' },
+  'museCard.askDefault': { zh: '这类以后帮你直接标已读？', en: 'Mark these as read for you from now on?' },
+  'museCard.ask': { zh: '收件箱：这类信怎么办', en: 'Inbox: what to do with these' },
+  'museCard.askYes': { zh: '这类以后替你标已读', en: 'These get marked as read for you from now on' },
+  'museCard.askLater': { zh: '先不用，还是你自己看', en: 'Not now. You’ll keep reading these yourself.' },
+  'museCard.askIgnore': { zh: '这类以后不提醒也不标', en: 'These won’t be flagged or marked from now on' },
+  'museCard.list': { zh: '收件箱里要你动手的 {n} 件', en: '{n} inbox items need you' },
+  'museCard.expires': { zh: '{date} 过期', en: 'Expires {date}' },
+  'museCard.claim': { zh: '领取', en: 'Claim' },
+  'museCard.openMail': { zh: '打开', en: 'Open' },
+  'museCard.gotIt': { zh: '知道了', en: 'Got it' },
+  'museCard.listDone': { zh: '收件箱清单已处理', en: 'Inbox list handled' },
+  'museCard.channel': { zh: '连一个通道', en: 'Connect a channel' },
+  'museCard.connect': { zh: '去连接', en: 'Connect' },
+  'museCard.noThanks': { zh: '不用', en: 'Keep as is' },
+  'museCard.channelOpened': { zh: '已打开通道设置', en: 'Opened channel settings' },
   'museCard.failed': { zh: '没处理成：{e}', en: 'Couldn’t do that: {e}' },
 })
 
@@ -97,14 +118,88 @@ export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionI
       </div></div>
     )
   }
+  if (card.kind === 'inbox-ask') {
+    return (
+      <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="inbox-ask">
+        <div className="t2-taskcard-head"><Inbox size={14} /><b>{card.payload.question || t('museCard.askDefault')}</b></div>
+        <div className="t2-taskcard-actions">
+          <button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'yes')}>{t('museCard.yes')}</button>
+          <button type="button" disabled={busy} onClick={() => void decide(card, 'later')}>{t('museCard.later')}</button>
+          <button type="button" disabled={busy} onClick={() => void decide(card, 'ignore')}>{t('museCard.ignore')}</button>
+        </div>
+      </div></div>
+    )
+  }
+  if (card.kind === 'inbox-list') return <InboxListCard card={card} sessionId={sessionId} />
+  if (card.kind === 'channel') {
+    return (
+      <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="channel">
+        <div className="t2-taskcard-head"><MessageCircle size={14} /><b>{t('museCard.channel')}</b></div>
+        {!!card.payload.why && <div className="t2-taskcard-tldr">{card.payload.why}</div>}
+        <div className="t2-taskcard-actions">
+          <button type="button" className="primary" disabled={busy} onClick={() => { void decide(card, 'open').then((ok) => { if (ok) openSettingsTab('channels') }) }}>{t('museCard.connect')}</button>
+          <button type="button" disabled={busy} onClick={() => void decide(card, 'dismiss')}>{t('museCard.noThanks')}</button>
+        </div>
+      </div></div>
+    )
+  }
   return null
 }
 
-const cardTitle = (card: MuseCardInfo, t: (k: string) => string): string => (card.kind === 'feature' ? t('museCard.feature') : card.payload.title || '')
+/** 收件箱清单:每条一个按钮,「领取」走现成的领取接口,都处理完这张卡自己收起。Muse 不替你领。 */
+function InboxListCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: string }) {
+  const { t } = useI18n()
+  const { busy, decide } = useDecide(sessionId)
+  const items: Array<{ id: string; title: string; note?: string; claimable?: boolean; expires?: string; handled?: boolean }> = card.payload.items || []
+  const claim = async (id: string): Promise<void> => {
+    if (!sessionId) return
+    const app = useApp.getState()
+    try {
+      const r = await claimOnEngine(targetForSession(sessionId), id, currentClientId())
+      app.toast(app.tr(r.alreadyClaimed ? 'inbox.claim.already' : 'inbox.claim.ok'))
+      await decide(card, 'item', { messageId: id })
+      void useInbox.getState().refreshList()
+    } catch (e: any) {
+      app.toast(e?.code === 'claim_requirements_unmet' ? app.tr('inbox.claim.unmet') : e?.message || app.tr('inbox.claim.fail'), true)
+    }
+  }
+  const open = (id: string): void => {
+    void decide(card, 'item', { messageId: id })
+    setActiveSpace('inbox')
+    useInbox.getState().select(id)
+    useWorkspace.getState().openView('inbox-reader', {}, 'main')
+  }
+  return (
+    <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="inbox-list">
+      <div className="t2-taskcard-head"><Inbox size={14} /><b>{t('museCard.list', { n: items.length })}</b></div>
+      {!!card.payload.lead && <div className="t2-taskcard-tldr">{card.payload.lead}</div>}
+      {items.map((i) => (
+        <div key={i.id} className="t2-musecard-row" data-inbox-item={i.id}>
+          <div><b>{i.title}</b>{(i.note || i.expires) && <span>{[i.note, i.expires && t('museCard.expires', { date: i.expires })].filter(Boolean).join(' · ')}</span>}</div>
+          {i.handled ? <CircleCheck size={14} /> : <div className="t2-taskcard-actions">{i.claimable
+            ? <button type="button" className="primary" disabled={busy} onClick={() => void claim(i.id)}><Gift size={13} />{t('museCard.claim')}</button>
+            : !window.tangu?.mobile && <button type="button" disabled={busy} onClick={() => open(i.id)}>{t('museCard.openMail')}</button>}</div>}
+        </div>
+      ))}
+      <div className="t2-taskcard-actions"><button type="button" disabled={busy} onClick={() => void decide(card, 'ack')}>{t('museCard.gotIt')}</button></div>
+    </div></div>
+  )
+}
+
+const cardTitle = (card: MuseCardInfo, t: (k: string, v?: Record<string, unknown>) => string): string => {
+  if (card.kind === 'feature') return t('museCard.feature')
+  if (card.kind === 'inbox-ask') return t('museCard.ask')
+  if (card.kind === 'inbox-list') return t('museCard.list', { n: (card.payload.items || []).length })
+  if (card.kind === 'channel') return t('museCard.channel')
+  return ''
+}
 
 /** 处理完留在流里的那一行。 */
 function receipt(card: MuseCardInfo, t: (k: string) => string): { ok: boolean; text: string } {
   if (card.status === 'dismissed') return { ok: false, text: t('museCard.dismissed') }
+  if (card.kind === 'inbox-ask') return { ok: card.result === 'yes', text: t(card.result === 'yes' ? 'museCard.askYes' : card.result === 'ignore' ? 'museCard.askIgnore' : 'museCard.askLater') }
+  if (card.kind === 'inbox-list') return { ok: true, text: t('museCard.listDone') }
+  if (card.kind === 'channel') return { ok: true, text: t('museCard.channelOpened') }
   return { ok: true, text: t('museCard.opened') }
 }
 

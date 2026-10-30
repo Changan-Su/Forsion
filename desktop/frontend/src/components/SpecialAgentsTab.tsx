@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import { Check, ChevronRight, FolderPlus, History, Loader2, Sparkles } from 'lucide-react'
+import { Check, ChevronRight, FolderPlus, History, Loader2, Sparkles, X } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { getSpecialConfig, saveSpecialConfig, listModels, listAgents } from '../services/backendService'
 import type { HistorianConfig, ModelInfo, MuseConfig, NormalAgentDef, SpecialAgentsConfig, SpecialAgentsSummary, TanguDesktopConfig } from '../types'
@@ -29,6 +29,9 @@ registerMessages({
   'specialUi.advanced': { zh: '高级设置', en: 'Advanced settings' },
   'specialUi.memory': { zh: '记忆与进化', en: 'Memory and growth' },
   'specialUi.resetPrompt': { zh: '恢复默认提示词', en: 'Restore default prompt' },
+  'specialUi.inboxAuto': { zh: 'Muse 替你标已读', en: 'Muse marks as read' },
+  'specialUi.inboxAutoHint': { zh: '点一下就不再替你标。', en: 'Click one to stop.' },
+  'specialUi.inboxCat.muse': { zh: 'Muse 自己发的信', en: 'Mail from Muse' },
   'specialUi.addFolder': { zh: '添加文件夹', en: 'Add folder' },
   'specialUi.startHour': { zh: '开始时间（小时）', en: 'Start time (hour)' },
   'specialUi.endHour': { zh: '结束时间（小时）', en: 'End time (hour)' },
@@ -202,7 +205,7 @@ export function SpecialAgentsTab({ cfg, localHost = false, initialRole = 'histor
               {m.activeHours && <div className="special-hours"><NumberField label={t('specialUi.startHour')} value={m.activeHours.start} min={0} max={23} onChange={(start) => changeMuse({ activeHours: { ...m.activeHours!, start } })} /><NumberField label={t('specialUi.endHour')} value={m.activeHours.end} min={0} max={23} onChange={(end) => changeMuse({ activeHours: { ...m.activeHours!, end } })} /></div>}
             </Field></div>
           <BackgroundQuotaSection museModelId={m.modelId} modelLabel={(id) => models.find((item) => item.id === id)?.name || id} />
-          <details className="special-disclosure"><summary>{t('settings.special.m.notify')}</summary><div className="special-field-grid"><Field label={t('settings.special.m.notifyMode')}>{choice(t('settings.special.m.notifyMode'), m.notify || 'immediate', [{ id: 'digest', label: t('settings.special.m.notifyDigest') }, { id: 'immediate', label: t('settings.special.m.notifyImmediate') }], (notify) => changeMuse({ notify: notify as MuseConfig['notify'] }))}</Field><Field label={t('settings.special.m.escalateTo')}>{choice(t('settings.special.m.escalateTo'), m.escalateTo || '', [{ id: '', label: t('settings.special.m.escalateNone') }, ...escalation], (escalateTo) => changeMuse({ escalateTo }))}</Field></div></details>
+          <details className="special-disclosure"><summary>{t('settings.special.m.notify')}</summary><div className="special-field-grid"><Field label={t('settings.special.m.notifyMode')}>{choice(t('settings.special.m.notifyMode'), m.notify || 'immediate', [{ id: 'digest', label: t('settings.special.m.notifyDigest') }, { id: 'immediate', label: t('settings.special.m.notifyImmediate') }], (notify) => changeMuse({ notify: notify as MuseConfig['notify'] }))}</Field><Field label={t('settings.special.m.escalateTo')}>{choice(t('settings.special.m.escalateTo'), m.escalateTo || '', [{ id: '', label: t('settings.special.m.escalateNone') }, ...escalation], (escalateTo) => changeMuse({ escalateTo }))}</Field></div>{!!m.inboxAutoRead?.length && <Field label={t('specialUi.inboxAuto')} hint={t('specialUi.inboxAutoHint')}><div className="special-inbox-auto">{m.inboxAutoRead.map((c) => <button type="button" key={c} data-inbox-auto={c} onClick={() => changeMuse({ inboxAutoRead: m.inboxAutoRead!.filter((x) => x !== c) })}>{t('specialUi.inboxCat.muse')}<X size={12} aria-hidden="true" /></button>)}</div></Field>}</details>
           <details className="special-disclosure"><summary>{t('settings.special.m.budget')}</summary><div className="special-field-grid">
             <NumberField label={t('settings.special.m.budgetWindow')} value={m.restartWindowHours} min={1} max={24} onChange={(restartWindowHours) => changeMuse({ restartWindowHours })} />
             <NumberField label={t('settings.special.m.maxCycles')} value={m.maxRestartsPerWindow} min={0} max={100} onChange={(maxRestartsPerWindow) => changeMuse({ maxRestartsPerWindow })} />

@@ -255,6 +255,8 @@ export async function runMigration(): Promise<void> {
   // 广播英文版(2026-10-23,服务端 title_en/body_en):title/body 仍是中文;读端按界面语言挑,空则回落中文。
   await addColumnIfMissing('inbox_messages', 'title_en TEXT');
   await addColumnIfMissing('inbox_messages', 'body_en TEXT');
+  // 谁标的已读:'muse' = Muse 替用户标的(收件箱行尾「Muse 已读」、撤回只认这个);用户自己碰过就清掉。
+  await addColumnIfMissing('inbox_messages', 'read_by VARCHAR(16)');
 
   // 自动化动作链执行账本(本地特性,同 inbox 纪律直连 query())。真源在此;常驻 automation 会话里的
   // role='model' 合成消息只是它的人读投影。steps=JSON 数组 [{type,tool?,ok,summary}](TEXT,方言无关)。

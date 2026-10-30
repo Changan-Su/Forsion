@@ -7,11 +7,13 @@ const h = vi.hoisted(() => ({
   dms: [] as Array<{ text: string; origin: string }>,
   memory: [] as string[],
   logs: [] as string[],
+  muse: { inboxAutoRead: [] as string[], inboxIgnored: [] as string[] } as any,
 }));
 
 vi.mock('../core/db.js', async () => {
   const { default: Database } = await import('better-sqlite3');
   h.db = new Database(':memory:');
+  h.db.exec(`CREATE TABLE inbox_messages (id TEXT, user_id TEXT, title TEXT, body TEXT, sender_kind TEXT, sender_id TEXT, thread TEXT, attachments TEXT, expires_at TEXT, read_at TEXT, archived_at TEXT, deleted_at TEXT, deliver_at TEXT)`);
   h.db.exec(`CREATE TABLE muse_cards (id TEXT PRIMARY KEY, user_id TEXT, kind TEXT, target_key TEXT, payload TEXT, status TEXT DEFAULT 'pending', result TEXT, created_at BIGINT, decided_at BIGINT)`);
   return { query: async (sql: string, params: any[] = []) => { const st = h.db.prepare(sql); return st.reader ? st.all(...params) : (st.run(...params), []); } };
 });
@@ -27,8 +29,9 @@ vi.mock('../seams/runtime.js', () => ({
   deps: () => ({ brain: { memory: { appendMemoryEntry: async (_u: string, t: string) => { h.memory.push(t); }, appendLogEntry: async (_u: string, t: string) => { h.logs.push(t); } } } }),
 }));
 vi.mock('../agents/agentRegistry.js', () => ({ MUSE_AGENT_SLUG: 'muse' }));
+vi.mock('./specialAgentsConfig.js', () => ({ updateMuseConfig: (fn: any) => { const patch = fn(h.muse); Object.assign(h.muse, patch); return { muse: h.muse }; } }));
 
-import { decideMuseCard, getMuseCard, listMuseCards, postMuseCard, recommendBlocked, recommendHint } from './museCards.js';
+import { decideMuseCard, getMuseCard, inboxAskBlocked, inboxListBlocked, inboxHint, listMuseCards, postMuseCard, recommendBlocked, recommendHint } from './museCards.js';
 
 const DAY = 86_400_000;
 const plugin = (id = 'better-pdf') => ({ kind: 'plugin' as const, key: `plugin:${id}`, payload: { item: { id, name: 'Better PDF' } }, text: '你这周开了 9 份 PDF。' });
@@ -36,6 +39,7 @@ const plugin = (id = 'better-pdf') => ({ kind: 'plugin' as const, key: `plugin:$
 beforeEach(() => {
   h.db.exec('DELETE FROM muse_cards');
   h.dmOk = true; h.dms.length = 0; h.memory.length = 0; h.logs.length = 0;
+  h.muse.inboxAutoRead = []; h.muse.inboxIgnored = [];
 });
 
 describe('postMuseCard', () => {
@@ -104,5 +108,70 @@ describe('decideMuseCard', () => {
     await decideMuseCard('u', r.id, 'open');
     expect((await getMuseCard('u', r.id))?.status).toBe('done');
     expect(h.memory).toEqual([]);
+  });
+});
+
+describe('收件箱卡', () => {
+  const ask = () => postMuseCard('u', { kind: 'inbox-ask', key: 'inbox-ask:muse', payload: { category: 'muse', question: '这类以后帮你直接标已读？' }, text: '这类以后帮你直接标已读？' });
+  const mail = (id: string, m: Record<string, unknown> = {}) => h.db.prepare(`INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, attachments) VALUES (?, 'u', ?, ?, ?, ?, ?)`)
+    .run(id, id, '', m.kind ?? 'agent', m.sender ?? 'muse', m.attachments ?? null);
+  beforeEach(() => { h.db.exec('DELETE FROM inbox_messages'); });
+
+  it('问一次:只能问点头过才能自动标的类别;问过、答过都不再问', async () => {
+    expect(await inboxAskBlocked('u', 'official', h.muse)).toMatch(/only ask about muse/);
+    expect(await inboxAskBlocked('u', 'reward', h.muse)).toMatch(/only ask about muse/);
+    expect(await inboxAskBlocked('u', 'muse', h.muse)).toBeNull();
+    await ask();
+    expect(await inboxAskBlocked('u', 'muse', h.muse)).toMatch(/already asked/);
+  });
+  it('「好」写进 inboxAutoRead,「这类以后都别管」写进 inboxIgnored,「先不用」两边都不写', async () => {
+    const a = await ask(); if (!a.ok) throw new Error('x');
+    await decideMuseCard('u', a.id, 'yes');
+    expect(h.muse.inboxAutoRead).toEqual(['muse']);
+    h.db.exec('DELETE FROM muse_cards'); h.muse.inboxAutoRead = [];
+    const b = await ask(); if (!b.ok) throw new Error('x');
+    await decideMuseCard('u', b.id, 'ignore');
+    expect(h.muse.inboxIgnored).toEqual(['muse']);
+    expect(h.muse.inboxAutoRead).toEqual([]);
+    h.db.exec('DELETE FROM muse_cards'); h.muse.inboxIgnored = [];
+    const c = await ask(); if (!c.ok) throw new Error('x');
+    await decideMuseCard('u', c.id, 'later');
+    expect(h.muse).toMatchObject({ inboxAutoRead: [], inboxIgnored: [] });
+    expect((await getMuseCard('u', c.id))?.result).toBe('later');
+  });
+  it('清单:一条条处理,都处理完自己收起;一天一张', async () => {
+    const r = await postMuseCard('u', { kind: 'inbox-list', key: 'inbox-list', payload: { items: [{ id: 'a' }, { id: 'b' }] }, text: '两件' });
+    if (!r.ok) throw new Error('x');
+    expect(await inboxListBlocked('u')).toMatch(/last 24 hours/);
+    expect(await inboxListBlocked('u', Date.now() + DAY + 1000)).toBeNull();
+    await decideMuseCard('u', r.id, 'item', { messageId: 'a' });
+    const mid = await getMuseCard('u', r.id);
+    expect(mid?.status).toBe('pending');
+    expect(mid?.payload.items[0].handled).toBe(true);
+    await decideMuseCard('u', r.id, 'item', { messageId: 'b' });
+    expect((await getMuseCard('u', r.id))?.status).toBe('done');
+    expect(await decideMuseCard('u', r.id, 'item', { messageId: 'b' })).toMatchObject({ ok: false, status: 409 });
+  });
+  it('简报:按类计数,被「别管」的不算;清单规矩只在有要动手的信时才写', async () => {
+    mail('m');
+    let hint = await inboxHint('u', h.muse);
+    expect(hint).toContain('Unread: muse 1');
+    expect(hint).not.toContain('inbox_list');
+    expect(hint).toContain('inbox_ask');
+    mail('r', { kind: 'server', sender: null, attachments: JSON.stringify({ items: [{}], claimed: false }) });
+    hint = await inboxHint('u', h.muse);
+    expect(hint).toContain('reward 1');
+    expect(hint).toContain('inbox_list');
+    expect(await inboxHint('u', { ...h.muse, inboxIgnored: ['muse', 'reward'] })).toBe('');
+    expect(await inboxHint('u', { ...h.muse, inboxAutoRead: ['muse'] })).toContain('mark muse mail as read');
+  });
+  it('清单挂了两天没人理,简报才提连通道;提过不再提', async () => {
+    mail('r', { kind: 'server', sender: null, attachments: JSON.stringify({ items: [{}], claimed: false }) });
+    await postMuseCard('u', { kind: 'inbox-list', key: 'inbox-list', payload: { items: [] }, text: 'x' });
+    expect(await inboxHint('u', h.muse)).not.toContain('channel');
+    const later = Date.now() + 2 * DAY + 1000;
+    expect(await inboxHint('u', h.muse, later)).toContain('card {type:"channel"}');
+    await postMuseCard('u', { kind: 'channel', key: 'channel', payload: {}, text: 'x' });
+    expect(await inboxHint('u', h.muse, later)).not.toContain('card {type:"channel"}');
   });
 });

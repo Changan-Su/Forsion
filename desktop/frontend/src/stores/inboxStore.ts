@@ -181,7 +181,7 @@ export const useInbox = create<InboxState>((set, get) => ({
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
     const counted = !findAny(get(), id)?.archived_at
     set((s) => ({
-      ...mapBoth(s, (x) => (x.id === id ? { ...x, read_at: read ? now : null } : x)),
+      ...mapBoth(s, (x) => (x.id === id ? { ...x, read_at: read ? now : null, read_by: null } : x)),
       unreadCount: counted ? Math.max(0, s.unreadCount + (read ? -1 : 1)) : s.unreadCount,
     }))
     setBadge(get().unreadCount)

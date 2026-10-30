@@ -1305,6 +1305,8 @@ export interface InboxMessage {
   origin_broadcast_id: string | null
   thread?: InboxThread | string | null
   read_at: string | null
+  /** 'muse' = Muse 替用户标的已读(手机本地收件箱没有)。 */
+  read_by?: string | null
   archived_at: string | null
   attachments?: { items: InboxAttachmentItem[]; claimed: boolean; requires?: InboxClaimRequirements } | null
   expires_at?: string | null
@@ -1345,6 +1347,10 @@ export const pullInbox = (t: EngineTarget) =>
     : request<{ pulled: boolean; added: number; detail?: string }>(t, '/agent/inbox/pull', { method: 'POST' })
 
 /** 领取广播附件(发放全在服务端)。client=`desktop/2.10.1`,服务端按它判最低版本。移动端本地收件箱无广播,不承载。 */
+/** Muse 私聊清单里的「领取」:信在 Muse 所在的那台引擎上,手机点它也打那台(手机本地收件箱领不了,所以不走下面那条)。 */
+export const claimOnEngine = (t: EngineTarget, id: string, client?: string) =>
+  request<{ ok: boolean; alreadyClaimed: boolean }>(t, `/agent/inbox/${encodeURIComponent(id)}/claim`, { method: 'POST', body: JSON.stringify({ client }) })
+
 export const claimInboxAttachment = (t: EngineTarget, id: string, client?: string) =>
   window.tangu?.mobile
     ? Promise.reject(new Error('not supported on mobile'))

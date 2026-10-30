@@ -122,7 +122,7 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
 
 /** GET /agent/special/approvals 的一行(引擎 pendingApprovals.PendingApprovalRow 镜像)。 */
 /** Muse 发进私聊、要用户点的卡(services/museCards.ts)。payload 按 kind 各一种形状,只有引擎写得进去。 */
-export type MuseCardKind = 'plugin' | 'feature'
+export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel'
 export interface MuseCardInfo {
   id: string
   kind: MuseCardKind

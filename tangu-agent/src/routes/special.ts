@@ -643,7 +643,7 @@ router.get('/agent/special/muse/cards/:id', authMiddleware, async (req: AuthRequ
 router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    const r = await decideMuseCard(req.user!.userId, req.params.id, String(req.body?.action || ''));
+    const r = await decideMuseCard(req.user!.userId, req.params.id, String(req.body?.action || ''), { messageId: typeof req.body?.messageId === 'string' ? req.body.messageId : undefined });
     if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
     res.json({ ok: true, card: r.card });
   } catch (e: any) { res.status(500).json({ detail: e?.message || 'decide failed' }); }

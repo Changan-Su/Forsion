@@ -77,6 +77,10 @@ export interface MuseConfig {
   notify?: 'immediate' | 'digest'
   /** 难活升级给哪个 agent(slug;空=不指定)。 */
   escalateTo?: string
+  /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
+  inboxAutoRead?: string[]
+  /** 用户点过「这类以后都别管」的类别。 */
+  inboxIgnored?: string[]
 }
 
 /** GET /agent/special/muse/library 的一项(Library 相对路径;dir=目录)。 */

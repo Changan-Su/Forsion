@@ -43,7 +43,7 @@ import { loadSchedule, entriesOf, dueHere, markEntryFired, ensureEntry, validate
 import { L } from '../tui/i18n.js';
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
-import { recommendHint } from './museCards.js';
+import { inboxHint, recommendHint } from './museCards.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
 import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
@@ -232,7 +232,12 @@ async function sendDailyDigestIfDue(cfg: MuseConfig, userId: string): Promise<vo
     let body = '';
     try { body = await fs.readFile(museJournalPath(y), 'utf8'); } catch { /* 那天没跑 → 不标记,明天再看(空日不发) */ }
     if (!body.trim()) return;
-    const r = await sendInboxMessage(userId, { title: `Muse · ${y}`, body: stripTodoHeaders(body).slice(0, 4000), senderId: MUSE_SENDER_ID, urgent: true });
+    // 替用户标已读不单独发消息,日报里一行带过(方案:自动标不打扰)
+    const cut = new Date(Date.now() - 86_400_000).toISOString().slice(0, 19).replace('T', ' ');
+    const marked = await query<any[]>(`SELECT COUNT(*) AS n FROM inbox_messages WHERE user_id = ? AND read_by = 'muse' AND read_at >= ?`, [userId, cut]).catch(() => []);
+    const n = Number(marked?.[0]?.n) || 0;
+    const line = n ? `\n\nMarked ${n} inbox message${n > 1 ? 's' : ''} as read for you.` : '';
+    const r = await sendInboxMessage(userId, { title: `Muse · ${y}`, body: (stripTodoHeaders(body).slice(0, 3900) + line), senderId: MUSE_SENDER_ID, urgent: true });
     if (r.ok) await fs.writeFile(marker, y, 'utf8'); // 频控/落库失败不标记,下个 tick 重试
   } catch (e: any) {
     log(`日报投递失败:${e?.message || e}`);
@@ -758,6 +763,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await existingTodoHint(userId)) +
     (await museDmHint(userId)) +
     (await recommendHint(userId)) +
+    (await inboxHint(userId, cfg)) +
     (await rhythmHint());
   const pending = await countPendingApprovals(userId).catch(() => 0);
   const sleep = await getMuseSleep().catch(() => null);
