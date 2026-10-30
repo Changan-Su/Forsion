@@ -2,7 +2,7 @@ import { mkdir, readFile, open, rm } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { startBasicUnit, type UnitConfig } from './host'
+import { startBasicUnit, type UnitConfig, type PluginInstallation } from './host'
 import { readConfig, writeConfig, installations } from './config'
 import { readPackage, validId } from './packages'
 import { localOwnerToken } from './localWorkspace'
@@ -117,8 +117,34 @@ async function run() {
         if (!command.path) throw new Error('A prepared package is required')
         return stageRelease(config.dataDir!, command.path, config.version)
       }
-      if (!['enable', 'disable', 'restart', 'update', 'migrate'].includes(command.action)) throw new Error('Unknown Unit command')
+      if (!['enable', 'disable', 'restart', 'update', 'migrate', 'install', 'uninstall'].includes(command.action)) throw new Error('Unknown Unit command')
+      if (command.action === 'install') {
+        if (!command.path) throw new Error('An install package path is required')
+        // The host validates and activates first; unit.json gains the entry only once the plugin runs.
+        const id = await unit!.install(command.path), added: PluginInstallation = { path: resolve(command.path), enabled: true }
+        config.plugins.push(added)
+        try { await writeConfig(file, config) }
+        catch (error) {
+          config.plugins.splice(config.plugins.indexOf(added), 1)
+          await unit!.uninstall(id).catch(() => console.error(`[unit] Could not remove ${id} after unit.json was not written`))
+          throw error
+        }
+        return status()
+      }
       const entry = await findInstallation(config, command.id)
+      if (command.action === 'uninstall') {
+        // Files stay on disk: the version directory and dataDir/plugins/<id> survive an uninstall.
+        const index = config.plugins.indexOf(entry), wasActive = unit!.status().find((plugin) => plugin.id === command.id)?.state === 'active'
+        await unit!.uninstall(command.id!)
+        config.plugins.splice(index, 1)
+        try { await writeConfig(file, config) }
+        catch (error) {
+          config.plugins.splice(index, 0, entry)
+          await unit!.install(entry.path, { activate: wasActive, installation: entry }).catch(() => console.error(`[unit] Could not restore ${command.id} after unit.json was not written`))
+          throw error
+        }
+        return status()
+      }
       const previous = { ...entry }
       if (command.action === 'update') {
         if (!command.path) throw new Error('An update package path is required')
@@ -145,6 +171,9 @@ async function run() {
       const apply = (action: ControlCommand) => enqueue(async () => { await authorize(); return dispatch(action) })
       if (command.action === 'update') return installPackage(file, command.path!, { updateId: command.id,
         releaseDigest: command.releaseDigest, applyUpdate: (id, path) => apply({ action: 'update', id, path }) })
+      // Same immutable version directory as update; the owner's dispatch is the only unit.json writer.
+      if (command.action === 'install') return installPackage(file, command.path!, { installId: command.id,
+        releaseDigest: command.releaseDigest, applyInstall: (id, path) => apply({ action: 'install', id, path }) })
       return apply({ action: command.action, id: command.id })
     }
     control = await startControl(config.dataDir!, (command) => enqueue(() => dispatch(command)))

@@ -54,9 +54,12 @@ async function installDependencies(root: string, backendMain: string): Promise<v
     child.once('exit', (code) => code === 0 ? done() : reject(new Error(`Plugin dependency installation failed (${code})`)))
   })
 }
-/** updateId requires an existing plugin and a live owner; ordinary installs also work offline. */
-export async function installPackage(configPath: string, source: string, options: { updateId?: string; releaseDigest?: string;
-  applyUpdate?: (id: string, path: string) => Promise<unknown> } = {}) {
+/**
+ * updateId requires an existing plugin and a live owner; ordinary installs also work offline.
+ * applyInstall hands a new plugin to the live owner (remote management), which activates it and writes unit.json.
+ */
+export async function installPackage(configPath: string, source: string, options: { updateId?: string; installId?: string; releaseDigest?: string;
+  applyUpdate?: (id: string, path: string) => Promise<unknown>; applyInstall?: (id: string, path: string) => Promise<unknown> } = {}) {
   const file = resolve(configPath), root = dirname(file)
   const lockPath = resolve(root, '.install.lock')
   const lock = await open(lockPath, 'wx', 0o600).catch(() => { throw new Error('Another install is in progress') })
@@ -72,6 +75,10 @@ export async function installPackage(configPath: string, source: string, options
       if (!existing) throw new Error(`Plugin is not installed: ${options.updateId}`)
       try { await sendControl(config.dataDir!, { action: 'status' }) }
       catch (error) { if (unitIsOffline(error)) throw new Error('Unit is not running; start it before updating'); throw error }
+    }
+    if (options.applyInstall) {
+      if (options.installId !== undefined && pack.manifest.id !== options.installId) throw new Error('Release changes plugin identity')
+      if (existing) throw new Error('Plugin is already installed; use update')
     }
     await inspectTree(sourceRoot, sourceRoot)
     stage = resolve(root, 'plugins', pack.manifest.id, `${pack.manifest.version}-${randomUUID()}`)
@@ -102,6 +109,11 @@ export async function installPackage(configPath: string, source: string, options
         if (options.updateId !== undefined) throw new Error('Unit is not running; start it before updating')
       }
       existing.entry.path = stage
+    } else if (options.applyInstall) {
+      // The in-process owner either activated it and persisted unit.json, or rolled back before throwing.
+      await options.applyInstall(pack.manifest.id, stage)
+      committed = true
+      return { id: ready.manifest.id, version: ready.manifest.version, path: stage }
     } else {
       try {
         await sendControl(config.dataDir!, { action: 'status' })

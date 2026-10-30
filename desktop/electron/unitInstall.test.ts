@@ -6,7 +6,8 @@ import { installPackage } from '../../unit/install'
 import { readPackage } from '../../unit/packages'
 import { writeConfig, readConfig, installations } from '../../unit/config'
 import { controlAddress, startControl, sendControl } from '../../unit/control'
-import { stageRelease, resolveRelease } from '../../unit/releases'
+import { stageRelease, resolveRelease, releaseSignature } from '../../unit/releases'
+import { signDir, testKeyPair } from './bundleSignature.testutil'
 
 async function fixture() {
   const root = await mkdtemp(join(tmpdir(), 'unit-install-'))
@@ -75,6 +76,26 @@ describe('portable Unit installation', () => {
       await expect(readPackage(source)).rejects.toThrow('different OS')
       await writeFile(join(source, 'manifest.json'), JSON.stringify({ ...manifest, apiVersion: 2 }))
       await expect(readPackage(source)).rejects.toThrow('unsupported plugin API')
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it('classifies release signatures for remote management: covered entries, trusted keys, untouched bytes', async () => {
+    const { root, source } = await fixture()
+    const trusted = testKeyPair(), stranger = testKeyPair()
+    try {
+      await mkdir(join(source, 'backend'))
+      await writeFile(join(source, 'backend/index.mjs'), 'export default () => ({})')
+      await writeFile(join(source, 'manifest.json'), JSON.stringify({ id: 'fixture', version: '1.0.0', apiVersion: 1, main: 'main.js',
+        backend: { apiVersion: 1, main: './backend/index.mjs' } }))
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('missing')
+      await signDir(source, trusted.privateKey)
+      expect(await releaseSignature(source, [stranger.publicKeyPem, trusted.publicKeyPem])).toBe('trusted')
+      expect(await releaseSignature(source, [])).toBe('untrusted')
+      expect(await releaseSignature(source, [stranger.publicKeyPem])).toBe('untrusted')
+      await signDir(source, trusted.privateKey, ['manifest.json', 'main.js'])
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted') // backend entry not covered
+      await signDir(source, trusted.privateKey)
+      await writeFile(join(source, 'backend/index.mjs'), 'export default () => ({ tampered: true })')
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted')
     } finally { await rm(root, { recursive: true, force: true }) }
   })
   it('uses a short owner-only socket even when the data path is long', async () => {

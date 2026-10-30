@@ -12,7 +12,7 @@ import { startBackend, migrateBackend } from './backendRunner'
 import { createAccountHttp } from './accountHttp'
 import { createLocalWorkspace } from './localWorkspace'
 import type { LocalRuntime, RuntimeFactory } from './runtimeTypes'
-import { createManagement, MANAGEMENT_PATH, type ManagementCommand } from './management'
+import { createManagement, MANAGEMENT_PATH, OperationError, type ManagementCommand } from './management'
 import { validateWebEntries, type WebEntry } from './webEntries'
 export { loadPackages } from './packages'
 
@@ -22,7 +22,8 @@ export interface UnitConfig {
   basePath: string; webDist: string; plugins: Array<string | PluginInstallation>
   defaultSpace?: string; dataDir?: string; workerFile?: string
   workspace?: { mode: 'local'; path?: string }
-  management?: { enabled: boolean }
+  /** trustedKeys: ed25519 public keys (PEM) whose signed releases remote install / update accept. */
+  management?: { enabled: boolean; trustedKeys?: string[] }
   webEntries?: WebEntry[]
 }
 type Backend = Awaited<ReturnType<typeof startBackend>>
@@ -224,10 +225,14 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   const accountHttp = createAccountHttp({ dataDir, provider: accountProvider,
     pluginActive: (id) => { const rec = records.get(id); return !!rec && usable(rec) } })
   const management = await createManagement({ enabled: config.management?.enabled === true, dataDir, version: config.version,
-    provider: accountProvider, execute: managementOptions.execute,
-    status: () => ({ instanceId: config.instanceId, version: config.version, pid: process.pid,
-      plugins: [...records.values()].map((r) => ({ id: r.package.manifest.id, version: r.package.manifest.version, state: r.state,
-        requires: r.package.manifest.requires || [] })) }) })
+    provider: accountProvider, execute: managementOptions.execute, trustedKeys: config.management?.trustedKeys,
+    status: () => {
+      // The account authority hosts this administration surface; remote disable / uninstall of it is refused.
+      const authority = accountProvider()?.id
+      return { instanceId: config.instanceId, version: config.version, pid: process.pid,
+        plugins: [...records.values()].map((r) => ({ id: r.package.manifest.id, version: r.package.manifest.version, state: r.state,
+          requires: r.package.manifest.requires || [], protected: r.package.manifest.id === authority })) }
+    } })
   const mountedEntries = await Promise.all(webEntries.map(async (entry) => ({ entry, web: await startUnitWeb({
     account: { metadata: () => accountProvider()?.account.metadata, handle: (path, req, res) => {
       if (path.startsWith('/unit/plugin-data/') && !entry.plugins.includes(path.slice('/unit/plugin-data/'.length))) {
@@ -311,6 +316,54 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
         throw error
       }
       finally { refreshProduct() }
+    }),
+    /**
+     * Adds a new plugin from an installed version directory and activates it in dependency order.
+     * installation / activate:false only restore an entry whose uninstall could not be persisted
+     * (its private config and env, and whether it was running). Any failure removes the record again,
+     * so the running Unit matches unit.json.
+     */
+    install: (path: string, installOptions: { activate?: boolean; installation?: PluginInstallation } = {}) => serialize(async () => {
+      if (closing) throw new Error('Unit is stopping')
+      const next = await readPackage(path, config.version), id = next.manifest.id, activateNow = installOptions.activate !== false
+      if (records.has(id)) throw new OperationError('Plugin is already installed; use update')
+      for (const dep of next.manifest.requires || []) {
+        if (!records.has(dep)) throw new OperationError(`Required plugin is not installed: ${dep}`)
+        if (activateNow && mustGet(dep).state !== 'active') throw new OperationError(`Required plugin is not active: ${dep}`)
+      }
+      for (const other of records.values()) for (const space of next.spaceIds) if (other.package.spaceIds.has(space)) throw new OperationError('Duplicate Space id')
+      const previousOrder = [...ordered]
+      records.set(id, { package: next, installation: { ...installOptions.installation, path: next.root, enabled: activateNow }, state: 'disabled', mounts: [] })
+      try {
+        try {
+          const nextOrder = dependencyOrder()
+          validateFeatures()
+          validateWebEntries(config.webEntries, config.basePath, !!local, new Map([...records].map(([candidate, r]) => [candidate, { requires: r.package.manifest.requires, spaces: r.package.spaceIds }])))
+          ordered.splice(0, ordered.length, ...nextOrder)
+        } catch (error) { throw new OperationError(error instanceof Error ? error.message : 'Invalid plugin set') }
+        if (activateNow) await activate(id)
+        else refreshProduct()
+        return id
+      } catch (error) {
+        records.delete(id); ordered.splice(0, ordered.length, ...previousOrder); refreshProduct()
+        if (started && !closing) await syncRuntimes().catch(() => console.error(`[unit] Plugin runtimes did not resync after ${id} was removed`))
+        throw error
+      }
+    }),
+    /**
+     * Stops (if needed) and removes a plugin record. Files stay: the version directory and dataDir/plugins/<id>.
+     * Refuses while any installed plugin requires it, or while unit.json still names it, because the
+     * next Unit start would fail.
+     */
+    uninstall: (id: string) => serialize(async () => {
+      const rec = mustGet(id)
+      const dependents = [...records.entries()].filter(([candidate, r]) => candidate !== id && r.package.manifest.requires?.includes(id)).map(([candidate]) => candidate)
+      if (dependents.length) throw new OperationError(`Uninstall the plugins that require it first: ${dependents.join(', ')}`)
+      if (config.webEntries?.some((entry) => entry.plugins.includes(id))) throw new OperationError('A web entry in unit.json publishes this plugin; remove it there first')
+      if (config.defaultSpace && rec.package.spaceIds.has(config.defaultSpace)) throw new OperationError('This plugin supplies the Unit default Space; change defaultSpace in unit.json first')
+      await deactivate(id)
+      records.delete(id); ordered.splice(ordered.indexOf(id), 1); refreshProduct()
+      if (started && !closing) await syncRuntimes()
     }),
     migrate: (id: string) => serialize(async () => {
       const rec = mustGet(id)

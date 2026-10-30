@@ -54,6 +54,51 @@ describe('Basic Unit public projection', () => {
     } finally { await handle.close(); await rm(root, { recursive: true, force: true }) }
   })
 
+  it('installs and uninstalls plugins live without leaving a configuration the next start would reject', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'basic-unit-install-'))
+    await mkdir(join(root, 'web'))
+    await writeFile(join(root, 'web/index.html'), '<html><head></head><body></body></html>')
+    const plugin = async (id: string, options: { requires?: string[]; space?: string } = {}) => {
+      const dir = join(root, 'plugins', id)
+      await mkdir(dir, { recursive: true })
+      await writeFile(join(dir, 'manifest.json'), JSON.stringify({ id, version: '1.0.0', apiVersion: 1, main: 'main.js', ...(options.requires ? { requires: options.requires } : {}) }))
+      await writeFile(join(dir, 'main.js'), `ctx.registerView({id:${JSON.stringify(id)}})`)
+      if (options.space) {
+        await mkdir(join(dir, 'spaces', options.space), { recursive: true })
+        await writeFile(join(dir, 'spaces', options.space, 'space.json'), JSON.stringify({ id: options.space, layout: { main: [] } }))
+      }
+      return dir
+    }
+    const home = await plugin('home-owner', { space: 'landing' }), published = await plugin('published')
+    const handle = await startBasicUnit({ instanceId: 'install-unit', name: 'Install', version: '3.0.0', dataDir: join(root, 'data'), port: 0,
+      basePath: '/admin/', plugins: [home, published], webDist: join(root, 'web'), defaultSpace: 'landing',
+      webEntries: [{ basePath: '/site/', plugins: ['published'] }] })
+    const ids = () => handle.status().map((p) => p.id)
+    try {
+      await handle.install(await plugin('base'))
+      await handle.install(await plugin('child', { requires: ['base'] }))
+      expect(handle.status()).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'child', state: 'active' })]))
+      const listed = await fetch(`http://127.0.0.1:${handle.port}/admin/unit/plugins`).then((r) => r.json())
+      expect(listed.plugins.map((p: { id: string }) => p.id)).toContain('child')
+      await expect(handle.install(await plugin('base-copy'))).resolves.toBe('base-copy')
+      await expect(handle.install(join(root, 'plugins', 'base'))).rejects.toThrow('already installed')
+      await expect(handle.install(await plugin('clash', { space: 'landing' }))).rejects.toThrow('Duplicate Space id')
+      await expect(handle.install(await plugin('orphan', { requires: ['missing'] }))).rejects.toThrow('Required plugin is not installed: missing')
+      await handle.disable('child')
+      // A disabled dependent still blocks: the next start would fail on its missing requirement.
+      await expect(handle.uninstall('base')).rejects.toThrow('require it first: child')
+      await expect(handle.uninstall('published')).rejects.toThrow('web entry')
+      await expect(handle.uninstall('home-owner')).rejects.toThrow('default Space')
+      await handle.disable('base')
+      await expect(handle.install(await plugin('late', { requires: ['base'] }))).rejects.toThrow('Required plugin is not active: base')
+      expect(ids()).not.toContain('late')
+      await handle.uninstall('child'); await handle.uninstall('base')
+      expect(ids().sort()).toEqual(['base-copy', 'home-owner', 'published'])
+      await expect(handle.install(join(root, 'plugins', 'child'), { activate: false })).rejects.toThrow('Required plugin is not installed: base')
+      expect(ids()).not.toContain('child')
+    } finally { await handle.close(); await rm(root, { recursive: true, force: true }) }
+  })
+
   it('rejects a plugin entry that escapes the installed package, including symlinks', async () => {
     const root = await mkdtemp(join(tmpdir(), 'unit-plugin-'))
     await mkdir(join(root, 'plugin'))
