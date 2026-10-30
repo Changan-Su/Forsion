@@ -167,8 +167,8 @@ const SPACE_NAMES = {
 
 /** 点 ribbon 上某个 Space,返回**是否真的切到了它**(活动 Space == id)。
  *  定位优先级(Codex 第一轮 F-1):① 条上格子的 data-id="space:<id>" ② 可访问名 aria-label(收起态 Ribbon 只有它,
- *  没有 title 也没有 .rb-label —— 以前只认后两者,默认收起的 Ribbon 上一个都点不中)③ 展开态的 .rb-label ④ 点「…」展开上区再找一遍
- *  (10-02 起「…」= 展开,不再弹浮层;点中后收起,展开时命令区让出来)。按名字找时 aria-label / title / .rb-label **各自**比对 —— 有未读时 aria-label 是
+ *  没有 title 也没有 .rb-label —— 以前只认后两者,默认收起的 Ribbon 上一个都点不中)③ 展开态的 .rb-label ④ 点「+N」从侧边流出浮层再找一遍
+ *  (10-30 起「+N」= 侧边浮层,条本身不动;点中浮层里的行即收起)。按名字找时 aria-label / title / .rb-label **各自**比对 —— 有未读时 aria-label 是
  *  「收件箱,3 条未读」,不等于显示名,不能让它用 || 挡掉后面准确的 .rb-label(Codex 第三轮 H2-2)。
  *  real=true 走真鼠标(hit-test 在内);否则 element.click()。 */
 async function enterSpace(win, id, { real = false, timeout = 4000 } = {}) {
@@ -188,13 +188,13 @@ async function enterSpace(win, id, { real = false, timeout = 4000 } = {}) {
     const more = win.locator('.rb-top .rb-more').first()
     if (await more.count().catch(() => 0)) {
       await more.click()
-      await sleep(300)
-      hit = (await win.evaluate(find(null, true))) || (await win.evaluate(find('.rb-top', false)))
+      await sleep(700) // 液滴倾倒 420ms:流完、真面板接手后真鼠标才点得中
+      hit = (await win.evaluate(find(null, true))) || (await win.evaluate(find('.rb-more-fly', false)))
     }
   }
   if (!hit) return false
-  if (real) await win.mouse.click(hit.x, hit.y) // 点 Ribbon 图标不会收起展开态,真鼠标点完照样在原位
-  await win.evaluate(`document.querySelector('.rb-open-top .rb-more')?.click()`)
+  if (real) await win.mouse.click(hit.x, hit.y)
+  await win.evaluate(`document.querySelector('.rb-open-top .rb-more')?.click()`) // 点了行浮层已在收,这下被忽略;没点中时收起
   const end = Date.now() + timeout
   while (Date.now() < end) {
     if ((await activeSpace(win)) === id) return true
