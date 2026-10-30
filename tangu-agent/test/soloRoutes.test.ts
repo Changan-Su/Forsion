@@ -69,7 +69,7 @@ describe('POST /agent/solo/:kind/:id/open', () => {
     expect(a.body.created).toBe(true);
     const s = a.body.session;
     expect(s.projectless).toBe(true);
-    expect(s.title).toBe('Tangu Ario');
+    expect(s.title).toBe('New Chat'); // 名字不落库,桌面按 soloAgentSlug 现取
     expect(s.agent_config).toEqual({ soloAgentSlug: 'ario', agentSlug: 'ario', execMode: 'host', cwd: libDirOf('ario'), preset: null });
     expect(validSessionFacts(s.agent_config)).toBeNull();
     expect(existsSync(libDirOf('ario'))).toBe(true);

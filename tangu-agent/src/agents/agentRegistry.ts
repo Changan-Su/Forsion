@@ -47,10 +47,18 @@ export const BACKGROUND_MAX_ITERATIONS = 90;
 /** agent 定义里的思考档位。`''` = 未声明(跟随会话默认),其余同 core 的 ThinkingLevel 七档。 */
 export type ThinkLevel = ThinkingLevel | '';
 export type ApprovalMode = 'readonly' | 'auto-edit' | 'full-auto' | 'custom' | '';
+/** 显示哪个名字:'auto' = 跟随界面语言(落盘时省略)。 */
+export type AgentNamePref = 'auto' | 'zh' | 'en';
 
 export interface NormalAgentDef {
   slug: string;
+  /** 当前显示名,留给老版本与引擎内部读;只由 resolveAgentNames 算,真源是下面两个名字。 */
   name: string;
+  /** 中文名(什么字都能填)。 */
+  nameZh?: string;
+  /** 英文名(不许有汉字)。 */
+  nameEn?: string;
+  namePref?: AgentNamePref;
   /** 版本号(来自 config.toml version,缺省 1.0.0);市场「可更新」检查用。 */
   version: string;
   description: string;
@@ -116,6 +124,20 @@ export function slugify(name: string): string {
 
 export function isValidSlug(slug: string): boolean {
   return SLUG_RE.test(slug);
+}
+
+/** 新建时由名字推 id:取第一个带 ASCII 字母数字的名字。全是中文 → ''(调用方让用户填 id,不转拼音,也不落到 slugify 兜底的 agent)。 */
+export function slugFromNames(...names: unknown[]): string {
+  const src = names.find((n) => /[a-z0-9]/i.test(String(n ?? '')));
+  return src == null ? '' : slugify(String(src));
+}
+
+const HAN_RE = /\p{Script=Han}/u;
+export const hasHan = (s: string): boolean => HAN_RE.test(s);
+
+/** 这个 Agent 的全部名字(去重去空):给模型看的名册、@ 匹配共用。 */
+export function agentNames(a: Pick<NormalAgentDef, 'name' | 'nameZh' | 'nameEn'>): string[] {
+  return [...new Set([a.nameZh, a.nameEn, a.name].map((n) => (n || '').trim()).filter(Boolean))];
 }
 
 const THINK: ThinkLevel[] = [...THINKING_LEVELS];
@@ -235,9 +257,14 @@ export function parseAgentConfig(slug: string, tomlRaw: string, soul: string): N
     ? unparsedApprovalMode(slug, tomlRaw)
     : normalizeApprovalMode(trimApproval(meta.approval_mode), `agent ${slug} config.toml`) ?? '';
   const maxIter = Number(meta.max_iterations);
+  const name = str(meta.name) || slug;
+  const nameZh = str(meta.name_zh).trim();
+  const nameEn = str(meta.name_en).trim();
   return {
     slug,
-    name: str(meta.name) || slug,
+    name,
+    ...(nameZh || nameEn ? { nameZh, nameEn } : legacyAgentNames(slug, name)),
+    ...(meta.name_pref === 'zh' || meta.name_pref === 'en' ? { namePref: meta.name_pref as AgentNamePref } : {}),
     version: str(meta.version) || '1.0.0', // 市场「可更新」检查用;缺省 1.0.0
     description: str(meta.description),
     model: str(meta.model),
@@ -278,6 +305,9 @@ export async function parseAgentFolder(slug: string, dir: string): Promise<Norma
 /** 序列化 def 为 config.toml 内容(SOUL/MEMORY/LOG/Library 不在此,各自单独落盘)。 */
 export function serializeAgentConfig(def: NormalAgentDef): string {
   const obj: Record<string, unknown> = { name: def.name };
+  if (def.nameZh) obj.name_zh = def.nameZh;
+  if (def.nameEn) obj.name_en = def.nameEn;
+  if (def.namePref) obj.name_pref = def.namePref;
   if (def.version) obj.version = def.version;
   if (def.description) obj.description = def.description;
   if (def.model) obj.model = def.model;
@@ -360,6 +390,8 @@ export const MUSE_AGENT_SLUG = 'muse';
 const MUSE_AGENT_PRESET: BuiltinAgentPreset = {
   slug: MUSE_AGENT_SLUG,
   name: 'Muse',
+  nameZh: '卜算子',
+  nameEn: 'Muse',
   description: 'A quiet background observer that finds worthwhile next steps',
   createdBy: 'system',
   systemPrompt: DEFAULT_MUSE_PROMPT,
@@ -374,19 +406,19 @@ const MUSE_AGENT_PRESET: BuiltinAgentPreset = {
 /** 内置名册共五位。xyra 保持既有标识,以延续 Arioso 的会话、记忆与日志。 */
 export const DEFAULT_AGENTS: BuiltinAgentPreset[] = [
   {
-    slug: DEFAULT_AGENT_SLUG, name: 'Arioso', version: '1.1.0',
+    slug: DEFAULT_AGENT_SLUG, name: 'Arioso', nameZh: '行香子', nameEn: 'Arioso', version: '1.1.0',
     description: 'Quiet warmth and clear judgment, with memory of what matters to you',
     // 思考档统一 medium(09-19 用户拍板):从前 Arioso / Aria 预设 low,而会话没指定档位时 agentActivation 用 Agent 的档位 ——
     // 默认 Agent 实际跑 low,输入区药丸却按「未指定 = 中」显示。老装机由 migrateDefaultEffortOnce 翻一次。
     thinkingLevel: 'medium', systemPrompt: ARIOSO_SYSTEM_PROMPT, soul: ARIOSO_SOUL,
   },
   {
-    slug: 'aria', name: 'Aria',
+    slug: 'aria', name: 'Aria', nameZh: '浣溪沙', nameEn: 'Aria',
     description: 'Emotional insight, expressive writing, and imaginative collaboration',
     thinkingLevel: 'medium', systemPrompt: ARIA_SYSTEM_PROMPT, soul: ARIA_SOUL,
   },
   {
-    slug: 'recita', name: 'Recita',
+    slug: 'recita', name: 'Recita', nameZh: '临江仙', nameEn: 'Recita',
     description: 'Critical thinking, grounded decisions, and practical next steps',
     thinkingLevel: 'medium', systemPrompt: RECITA_SYSTEM_PROMPT, soul: RECITA_SOUL,
   },
@@ -395,6 +427,7 @@ export const DEFAULT_AGENTS: BuiltinAgentPreset[] = [
     // .ts/.tsx/.jsx(sucrase,vite-dev 式,无打包/无 npm install),裸依赖走 importmap→esm.sh。
     slug: 'coding',
     name: 'Coding',
+    nameEn: 'Coding',
     version: CODING_AGENT_VERSION, // 提示词更新即 bump → refreshBuiltinAgent 覆盖旧版(保留用户 model/thinking)
     description: 'Build and refine working web apps with a project brief, live preview, Forsion AI, and verified repairs',
     thinkingLevel: 'medium',
@@ -404,13 +437,23 @@ export const DEFAULT_AGENTS: BuiltinAgentPreset[] = [
   MUSE_AGENT_PRESET,
 ];
 
+/** 只有 name 的旧定义 → 两个名字(解析时现算,所以云端读路径、老版本存过一次的文件都走这里;本地另由 migrateAgentNamesOnce 落盘一次)。
+ *  内置:名字没改过 = 预设的两个名字;改过 = 用户起的进中文名,英文名用缺省。「改过」没有标记,只能比值,与 upgradeAriosoPersona 同口径。
+ *  自己建的:原名进中文名,英文名留空。 */
+function legacyAgentNames(slug: string, name: string): Pick<NormalAgentDef, 'nameZh' | 'nameEn'> {
+  const preset = DEFAULT_AGENTS.find((a) => a.slug === slug);
+  if (!preset) return { nameZh: name, nameEn: '' };
+  const stock = slug === DEFAULT_AGENT_SLUG ? [preset.name, LEGACY_PERSONAS[0].name, 'Tangu Xyra'] : [preset.name];
+  return { nameZh: stock.includes(name) ? preset.nameZh || '' : name, nameEn: preset.nameEn || '' };
+}
+
 /** 内置预设的完整 def(纯内存,不落盘):云端虚拟条目(cloudAgentStore 列表合成)与 run 侧
  *  水合兜底(agentActivation)共用。非预设 slug → null。 */
 export function builtinAgentDef(slug: string): NormalAgentDef | null {
   const a = DEFAULT_AGENTS.find((x) => x.slug === slug);
   if (!a) return null;
   return { ...buildAgentDef(a.slug, null, {
-    slug: a.slug, name: a.name, description: a.description, model: a.model, tools: a.tools,
+    slug: a.slug, name: a.name, nameZh: a.nameZh, nameEn: a.nameEn, description: a.description, model: a.model, tools: a.tools,
     thinkingLevel: a.thinkingLevel, maxIterations: a.maxIterations, approvalMode: a.approvalMode,
     systemPrompt: a.systemPrompt, soul: a.soul, createdBy: a.createdBy || 'user',
   }), version: a.version || '1.0.0', avatar: builtinAgentAvatar(a.slug) ? 'avatar.jpg' : undefined };
@@ -423,7 +466,7 @@ async function writeAgentScaffold(a: (typeof DEFAULT_AGENTS)[number]): Promise<v
   mkdirSync(path.join(adir, 'Library'), { recursive: true }); // 建 agent 目录 + Library(头像/资料)
   if (!existsSync(path.join(adir, 'config.toml'))) {
     const def: NormalAgentDef = {
-      slug: a.slug, name: a.name, version: a.version || '1.0.0', description: a.description || '', model: a.model || '',
+      slug: a.slug, name: a.name, nameZh: a.nameZh, nameEn: a.nameEn, version: a.version || '1.0.0', description: a.description || '', model: a.model || '',
       tools: a.tools || [], thinkingLevel: a.thinkingLevel || '', maxIterations: a.maxIterations ?? null,
       approvalMode: a.approvalMode || '', createdBy: a.createdBy || 'user', createdAt: new Date().toISOString(),
       systemPrompt: a.systemPrompt, soul: a.soul || '', libraryOrder: [],
@@ -436,7 +479,7 @@ async function writeAgentScaffold(a: (typeof DEFAULT_AGENTS)[number]): Promise<v
 }
 
 /** 内置(系统维护)agent 的提示词升级:磁盘版本 ≠ 预设版本时,用预设覆盖 systemPrompt/soul/version/描述,
- *  但**保留全部用户配置**(含工具权限、头像、同步与记忆作用域)。仅对预设声明了 version 的 agent 生效。 */
+ *  但**保留全部用户配置**(含名字、工具权限、头像、同步与记忆作用域)。仅对预设声明了 version 的 agent 生效。 */
 async function refreshBuiltinAgent(a: (typeof DEFAULT_AGENTS)[number]): Promise<void> {
   if (!a.version) return;
   const adir = path.join(agentsDir(), a.slug);
@@ -446,8 +489,8 @@ async function refreshBuiltinAgent(a: (typeof DEFAULT_AGENTS)[number]): Promise<
   const cur = parseAgentConfig(a.slug, txt, '');
   if (cur.version === a.version) return; // 已是最新
   const def: NormalAgentDef = {
-    ...cur, // 白名单覆盖维护字段，避免未来新增用户配置在升级时被静默清空。
-    slug: a.slug, name: a.name, version: a.version, description: a.description || '',
+    ...cur, // 白名单覆盖维护字段，避免未来新增用户配置在升级时被静默清空。名字也是用户配置,不在此列。
+    slug: a.slug, version: a.version, description: a.description || '',
     systemPrompt: a.systemPrompt, soul: a.soul || '',
   };
   await fs.writeFile(cfgPath, serializeAgentConfig(def), 'utf-8');
@@ -561,6 +604,26 @@ export async function migrateDefaultEffortOnce(): Promise<void> {
   await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
 }
 
+/** 双语名字的一次性迁移:把 legacyAgentNames 算出的两个名字写进每个 agent 的 config.toml(内置、自建都算)。
+ *  插在文件开头而不是 parse 再 serialize:手写的注释和白名单外的键原样留着;解析不了的文件不碰(读失败 ≠ 空)。 */
+export async function migrateAgentNamesOnce(): Promise<void> {
+  const marker = path.join(agentsDir(), '.agent-names-v1');
+  if (existsSync(marker)) return;
+  for (const e of await fs.readdir(agentsDir(), { withFileTypes: true })) {
+    if (!e.isDirectory() || !isValidSlug(e.name)) continue;
+    const file = path.join(agentsDir(), e.name, 'config.toml');
+    const raw = await fs.readFile(file, 'utf-8').catch(() => null);
+    if (raw === null) continue;
+    let meta: Record<string, unknown>;
+    try { meta = parseToml(raw) as Record<string, unknown>; } catch { continue; }
+    if (meta.name_zh || meta.name_en) continue;
+    const { nameZh, nameEn } = parseAgentConfig(e.name, raw, '');
+    await fs.writeFile(file, stringifyToml({ ...(nameZh ? { name_zh: nameZh } : {}), ...(nameEn ? { name_en: nameEn } : {}) }) + raw, 'utf-8');
+  }
+  await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
+  cache = null;
+}
+
 /** Arioso/Coding 保持原来的补齐语义;Aria/Recita/Muse 独立播种标记让已有安装也能获得新名册,
  *  此后尊重用户删除。Muse 的身份可见不代表开启后台功能。 */
 async function seedDefaultAgentsOnce(): Promise<void> {
@@ -586,6 +649,7 @@ async function seedDefaultAgentsOnce(): Promise<void> {
     await fs.writeFile(marker, new Date().toISOString(), 'utf-8');
   }
   await migrateDefaultEffortOnce();
+  await migrateAgentNamesOnce();
   for (const slug of [DEFAULT_AGENT_SLUG, 'aria', 'recita']) await ensureBuiltinAvatar(slug);
   const oldMarker = path.join(agentsDir(), '.seeded');
   if (!existsSync(oldMarker)) await fs.writeFile(oldMarker, new Date().toISOString(), 'utf-8');
@@ -775,7 +839,12 @@ export class AgentExistsError extends Error {
 
 export interface SaveAgentInput {
   slug?: string;
+  /** 现在显示的名字。两个名字都没提交时,它不同于已有的任一名字 = 改名(见 resolveAgentNames)。 */
   name: string;
+  /** 缺省保留已有;'' = 清空(至少留一个名字)。 */
+  nameZh?: string;
+  nameEn?: string;
+  namePref?: AgentNamePref;
   description?: string;
   model?: string;
   tools?: string[];
@@ -842,9 +911,31 @@ export function agentCapOf(def: Pick<NormalAgentDef, 'slug' | 'maxIterations'>):
   return v;
 }
 
+/** 算出落盘的三个名字字段 + name(唯一算 name 的地方)。只给了 name(老客户端、manage_agent、插件)时,改的是现在显示的那一格:
+ *  它是英文名且新名字没汉字 → 英文名;其余 → 中文名(中文名什么字都能填)。
+ *  英文名只校验提交了的:磁盘上手写的旧值不能让换头像这类保存失败(同 clampAgentMaxIterations)。 */
+function resolveAgentNames(existing: NormalAgentDef | null, input: SaveAgentInput): Pick<NormalAgentDef, 'name' | 'nameZh' | 'nameEn' | 'namePref'> {
+  const clip = (v: unknown): string => String(v ?? '').trim().slice(0, 120);
+  const given = clip(input.name);
+  let nameZh = input.nameZh !== undefined ? clip(input.nameZh) : existing?.nameZh || '';
+  let nameEn = input.nameEn !== undefined ? clip(input.nameEn) : existing?.nameEn || '';
+  if (input.nameZh === undefined && input.nameEn === undefined && given && given !== nameZh && given !== nameEn) {
+    if (existing?.name === nameEn && !hasHan(given)) nameEn = given;
+    else nameZh = given;
+  }
+  if (input.nameEn !== undefined && hasHan(nameEn)) throw new Error('name_en must not contain Chinese characters');
+  if (!nameZh && !nameEn) throw new Error('name required');
+  const pref = input.namePref !== undefined ? input.namePref : existing?.namePref;
+  const namePref = pref === 'zh' || pref === 'en' ? pref : undefined;
+  // 跟随界面时引擎不知道界面语言:用客户端报的显示名,没报就留原值,都不是这两个名字才退回中文名
+  const name = namePref === 'zh' ? nameZh || nameEn
+    : namePref === 'en' ? nameEn || nameZh
+      : [given, existing?.name].find((n) => n && (n === nameZh || n === nameEn)) || nameZh || nameEn;
+  return { name, nameZh, nameEn, namePref };
+}
+
 export function buildAgentDef(slug: string, existing: NormalAgentDef | null, input: SaveAgentInput): NormalAgentDef {
   if (!isValidSlug(slug)) throw new Error('invalid slug');
-  if (!input.name?.trim()) throw new Error('name required');
   // systemPrompt 仅**新建**必填;更新已有 agent(含上传头像 saveAgentAvatar 走的就是这条)允许空/省略 → 保留原值。
   // 否则 systemPrompt 恰为空(或配置损坏读成空)的 agent 会被彻底锁死,连头像都改不了。
   if (!existing && !input.systemPrompt?.trim()) throw new Error('systemPrompt required');
@@ -852,7 +943,7 @@ export function buildAgentDef(slug: string, existing: NormalAgentDef | null, inp
     slug,
     enabledSkillIds: input.enabledSkillIds === undefined ? existing?.enabledSkillIds : input.enabledSkillIds === null ? undefined : [...new Set(input.enabledSkillIds.filter((v) => typeof v === 'string' && v.trim()))].slice(0, 500),
     enabledMcpServers: input.enabledMcpServers === undefined ? existing?.enabledMcpServers : input.enabledMcpServers === null ? undefined : [...new Set(input.enabledMcpServers.filter((v) => typeof v === 'string' && v.trim()))].slice(0, 200),
-    name: input.name.trim().slice(0, 120),
+    ...resolveAgentNames(existing, input),
     version: existing?.version || '1.0.0', // 保留原版本;新建默认 1.0.0
     description: (input.description || '').trim().slice(0, 300),
     model: (input.model || '').trim(),
