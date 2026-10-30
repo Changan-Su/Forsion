@@ -573,7 +573,8 @@ export async function recentSessionTitles(userId: string): Promise<string> {
 }
 
 /** 用户长期记忆快照(默认 agent 的 MEMORY.md)。Muse 绑定自己的记忆域后,注入 run 的「长期记忆」
- *  是 Muse 自己的,故用户画像须在此显式带入(runWithAgentSlug 临时切域读取)。 */
+ *  是 Muse 自己的,故用户画像须在此显式带入(runWithAgentSlug 临时切域读取)。
+ *  human/ 的画像(SOUL.md)和人的本子不在这里拼:周期 run 走 agentLoop,系统提示里已有「About the Human」那一段,再拼一份就是每个周期重复两千字。 */
 async function userMemoryHint(userId: string): Promise<string> {
   try {
     const m = await runWithAgentSlug(DEFAULT_AGENT_SLUG, () => deps().brain.memory.getMemory(userId));
@@ -741,7 +742,7 @@ export function buildCycleMessages(
     // 10-30 live:写在节奏规矩前面时,Muse 有一半周期收尾忘了 set_next_wake(同代码去掉这句 4/4 睡,带着 2/4),所以放在「怎么找用户」之后。
     'A rule that should fire on a condition (they open an app, an event nears): call manage_automation set' +
     (cfg.mode === 'auto' ? ' and tell the user. ' : ', which only shows the user a rule card to accept; do not ask in text first. ') +
-    'You may use remember to record durable insights about the user (what they value, accept, or dismiss). When done, briefly say what you did and what you deferred.';
+    'You may use remember for durable insights: what the user values, accepts or dismisses goes to your memory, facts about them as a person to scope "person". When done, briefly say what you did and what you deferred.';
   const ephemeralHint =
     (dyn.quietSince ? '\n\n(No new user messages or in-app activity since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers, and so is set_next_wake.)' : '') +
     (dyn.sleepNote || '') +

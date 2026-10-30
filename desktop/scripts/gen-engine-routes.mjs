@@ -88,6 +88,9 @@ export const CLASSIFICATION = {
   'GET /agent/human/:file': [D, 'host human folder (HUMAN / AGENT / SOUL / MEMORY)'],
   'PUT /agent/human/:file': [D, 'host human folder write'],
   'POST /agent/human/:file/undo': [D, 'host human folder undo'],
+  'GET /agent/human/SOUL.md/entries': [D, 'host portrait entries (human/SOUL.md; the route itself also refuses remote origin)'],
+  'POST /agent/human/SOUL.md/entries': [D, 'host portrait entry write (receipt undo; the route itself also refuses remote origin)'],
+  'POST /agent/agents/:slug/memory/promote': [D, 'moves an Agent memory entry into host human/AGENT.md (the route itself also refuses remote origin)'],
 
   // ── workspace.ts ──
   'GET /agent/workspace/list': [A, 'session workspace listing'],
