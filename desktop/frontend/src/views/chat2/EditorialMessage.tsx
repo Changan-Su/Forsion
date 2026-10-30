@@ -74,7 +74,7 @@ import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
-import { MuseCardLine, museCardRef } from './MuseCards'
+import { MuseCardLine, MuseFeedbackRow, museCardRef } from './MuseCards'
 import { FallbackLine, FallbackModelName, QuotaChips, QuotaRemindChip, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
@@ -810,6 +810,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             : <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />)}
         {museApprovals.map((id) => <MuseApprovalLine key={id} id={id} />)}
         {museCard && <MuseCardLine id={museCard.id} sessionId={runSid || undefined} onJump={handlers?.onJumpDeck} />}
+        {(msg.origin === 'proactive' || museTodo) && !!runSid && <MuseFeedbackRow messageId={msg.id} sessionId={runSid} />}
         {/* 作品卡:把这条对话里做的东西变成「造物」(点了宿主才建文件夹 / 复制)。同样只在 done 上渲染。 */}
         {!!creations.length && msg.status === 'done' && <CreationCards cards={creations} sessionId={runSid} onJump={handlers?.onJumpDeck} createdAt={msg.timestamp || undefined} />}
 

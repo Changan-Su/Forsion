@@ -30,6 +30,7 @@
  *   GET      /agent/special/muse/cards?status=          Muse 私聊里要用户点的卡(services/museCards.ts)
  *   GET      /agent/special/muse/cards/:id              单张卡(流里那一行按 id 读)
  *   POST     /agent/special/muse/cards/:id/decide { action }  用户点卡:效果在引擎里按 kind 白名单执行,CAS pending,不符 409
+ *   POST     /agent/special/muse/messages/:id/feedback { verdict }  主动消息下面的「有用 / 少来点这种」
  *
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
  * 远程来源(x-forsion-remote)读 /agent/special/config 只拿最小投影(开关 + 两个节奏值,remote:true;P1 · K10b)。
@@ -60,7 +61,7 @@ import { listApprovals, decideApproval, getApproval } from '../services/pendingA
 import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
 import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
-import { appendMuseFeedback, decideMuseCard, getMuseCard, listMuseCards } from '../services/museCards.js';
+import { appendMuseFeedback, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -373,7 +374,7 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
 const remoteMuseStatusView = (s: Awaited<ReturnType<typeof museStatus>>) => ({
   enabled: s.enabled, running: s.running, lastCycleAt: s.lastCycleAt, sessionId: s.sessionId,
   mode: s.mode, heartbeatMinutes: s.heartbeatMinutes, pendingApprovals: s.pendingApprovals,
-  spaceStamp: s.spaceStamp, sleepUntil: s.sleepUntil, sleepReason: s.sleepReason,
+  spaceStamp: s.spaceStamp, sleepUntil: s.sleepUntil, sleepReason: s.sleepReason, feedbackUntil: s.feedbackUntil,
 });
 
 router.get('/agent/special/muse/status', authMiddleware, async (req: AuthRequest, res) => {
@@ -643,10 +644,29 @@ router.get('/agent/special/muse/cards/:id', authMiddleware, async (req: AuthRequ
 router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
   try {
-    const r = await decideMuseCard(req.user!.userId, req.params.id, String(req.body?.action || ''), { messageId: typeof req.body?.messageId === 'string' ? req.body.messageId : undefined });
+    const b = req.body || {};
+    const r = await decideMuseCard(req.user!.userId, req.params.id, String(b.action || ''), {
+      messageId: typeof b.messageId === 'string' ? b.messageId : undefined,
+      answers: b.answers && typeof b.answers === 'object' ? { when: String(b.answers.when || ''), pace: String(b.answers.pace || ''), focus: Array.isArray(b.answers.focus) ? b.answers.focus.map(String) : [] } : undefined,
+      index: typeof b.index === 'number' ? b.index : undefined,
+      text: typeof b.text === 'string' ? b.text : undefined,
+    });
     if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
+    if (r.card.kind === 'settings' || r.card.kind === 'intro') kickMuse(); // 心跳 / 作息变了:巡检节奏下一轮就跟上
     res.json({ ok: true, card: r.card });
   } catch (e: any) { res.status(500).json({ detail: e?.message || 'decide failed' }); }
+});
+
+// 主动消息下面的「有用 / 少来点这种」(磨合期两周)。和 /muse/feedback 同一条 [feedback] 通道,但只收一个枚举 + 消息 id、行文引擎自己拼:
+// 这条对远端放行(手机私聊同一排按钮),而 /muse/feedback 收任意文本、拒远端 —— 那是往自治 Agent 的 LOG 里写字。
+router.post('/agent/special/muse/messages/:id/feedback', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const verdict = String(req.body?.verdict || '');
+  if (verdict !== 'up' && verdict !== 'down') return res.status(400).json({ detail: 'verdict must be up or down' });
+  try {
+    if (!(await recordMessageFeedback(req.user!.userId, req.params.id, verdict))) return res.status(404).json({ detail: 'message not found' });
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'feedback failed' }); }
 });
 
 // ── 异步审批(pending_approvals;Muse ask/agent 档的越界动作) ──────────────

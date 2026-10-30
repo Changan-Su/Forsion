@@ -14,7 +14,8 @@ import { runWithAgentSlug } from '../seams/runContext.js';
 import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { postMuseDm } from './museDm.js';
 import type { MuseCardInfo, MuseCardKind } from '../contracts/clientTypes.js';
-import { updateMuseConfig, type MuseConfig } from './specialAgentsConfig.js';
+import { loadSpecialAgentsConfig, updateMuseConfig, type MuseConfig } from './specialAgentsConfig.js';
+import { patchMuseOnboarding } from './museState.js';
 import { AUTO_READ_CATEGORIES, NEEDS_USER, inboxCategory, unclaimedAttachment, type InboxCategory } from './inboxCategory.js';
 
 export type { MuseCardInfo, MuseCardKind };
@@ -70,14 +71,14 @@ const fence = (id: string): string => '```forsion-muse-card\n' + JSON.stringify(
 /** 建卡 + 发私聊。私聊发不出去就撤掉这一行:卡片堆里不留一张说不清来路的卡。 */
 export async function postMuseCard(
   userId: string,
-  card: { kind: MuseCardKind; key?: string; payload: Record<string, unknown>; text: string },
+  card: { kind: MuseCardKind; key?: string; payload: Record<string, unknown>; text: string; uncapped?: boolean },
 ): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
   const id = uuidv4();
   await query(
     `INSERT INTO muse_cards (id, user_id, kind, target_key, payload, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
     [id, userId, card.kind, card.key ?? null, JSON.stringify(card.payload), Date.now()],
   );
-  const dm = await postMuseDm(userId, `${card.text.trim()}\n\n${fence(id)}`, 'proactive:card');
+  const dm = await postMuseDm(userId, `${card.text.trim()}\n\n${fence(id)}`, 'proactive:card', { uncapped: card.uncapped });
   if (dm.ok) return { ok: true, id };
   await query(`DELETE FROM muse_cards WHERE id = ?`, [id]).catch(() => {});
   return { ok: false, error: dm.error };
@@ -163,10 +164,89 @@ export async function inboxHint(userId: string, cfg: MuseConfig, now = Date.now(
   }
 }
 
+/** 设置变更卡能碰的字段。这张表是唯一的放行名单:权限档、文件夹、预算不在里面,模型写什么、payload 里有什么都到不了配置。 */
+const SETTINGS_FIELDS = ['heartbeatMinutes', 'activeHours', 'notify', 'maxDmPerDay'] as const;
+type SettingsField = typeof SETTINGS_FIELDS[number];
+
+/** 按名单挑出真的有变化的字段(纯函数)。 */
+export function pickMuseSettings(cur: MuseConfig, wanted: Record<string, unknown>): { patch: Partial<MuseConfig>; changes: Array<{ field: SettingsField; from: unknown; to: unknown }> } {
+  const patch: Record<string, unknown> = {};
+  const changes: Array<{ field: SettingsField; from: unknown; to: unknown }> = [];
+  for (const field of SETTINGS_FIELDS) {
+    if (!(field in wanted)) continue;
+    const to = wanted[field];
+    if (JSON.stringify(to) === JSON.stringify(cur[field])) continue;
+    patch[field] = to;
+    changes.push({ field, from: cur[field], to });
+  }
+  return { patch: patch as Partial<MuseConfig>, changes };
+}
+
+/** 第一次见面的三问:选项 → 设置 / 记忆。能对应到设置的改设置,其余记进 Muse 自己的记忆(下个周期是新会话,只读得到这些)。 */
+export const INTRO_WHEN = ['anytime', 'daytime', 'open'] as const;
+export const INTRO_PACE = ['as-needed', 'daily', 'free'] as const;
+export const INTRO_FOCUS = ['schedule', 'study', 'projects', 'inbox'] as const;
+async function applyIntro(userId: string, a: { when?: string; pace?: string; focus?: string[] }): Promise<void> {
+  const patch: Partial<MuseConfig> = {};
+  if (a.when === 'anytime') patch.activeHours = null;
+  if (a.when === 'daytime') patch.activeHours = { start: 9, end: 21 };
+  if (a.pace === 'daily') patch.maxDmPerDay = 1;
+  if (a.pace === 'free') patch.maxDmPerDay = 0;
+  if (Object.keys(patch).length) updateMuseConfig(() => patch);
+  if (a.when === 'open') await rememberForMuse(userId, 'Only reach out to the user while they have Forsion open.');
+  if (a.pace === 'as-needed') await rememberForMuse(userId, 'The user wants you to speak up only when something matters.');
+  const focus = (a.focus || []).filter((f) => (INTRO_FOCUS as readonly string[]).includes(f));
+  if (focus.length) await rememberForMuse(userId, `The user most wants you to keep an eye on: ${focus.join(', ')}.`);
+}
+
+/** 小结里的一条对应一条 Muse 记忆:改 / 删跟着动记忆。按内容找(卡发出时就是这句话写进去的);找不到就只改卡,改写的内容补记一条。 */
+async function editMuseMemory(userId: string, oldText: string, newText: string | null): Promise<void> {
+  await runWithAgentSlug(MUSE_AGENT_SLUG, async () => {
+    const m = deps().brain.memory;
+    const entry = (await m.getMemorySnapshot?.(userId))?.entries.find((e) => e.content.trim() === oldText.trim());
+    if (entry && m.mutateMemory) await m.mutateMemory(userId, newText ? { action: 'update', id: entry.id, fact: newText } : { action: 'forget', id: entry.id });
+    else if (newText) await m.appendMemoryEntry(userId, newText, { dedup: true });
+  }).catch(() => { /* 记忆写失败不阻断卡片 */ });
+}
+
 const dismissedFact = (card: MuseCardInfo): string => {
   const what = card.kind === 'plugin' ? `the plugin "${card.payload?.item?.name || card.key}"` : `the Forsion feature "${card.payload?.feature || card.key}"`;
   return `The user is not interested in ${what}. Do not recommend it again.`;
 };
+
+/** 第一次见面:引擎自己发,不等模型、不花 token。可跳过。 */
+export async function postIntroCard(userId: string): Promise<boolean> {
+  const r = await postMuseCard(userId, { kind: 'intro', key: 'intro', payload: {}, text: '', uncapped: true });
+  if (r.ok) await patchMuseOnboarding({ introAt: Date.now() });
+  return r.ok;
+}
+
+/** 第 14 天小结:模型写内容,一条对应一条记忆;只发一次。 */
+export async function postSummaryCard(userId: string, text: string, lines: unknown[]): Promise<string> {
+  const items = lines.map((x) => String(x || '').replace(/\s+/g, ' ').trim().slice(0, 300)).filter(Boolean).slice(0, 5);
+  if (!items.length) return 'Error: a summary needs items, 3 to 5 short lines.';
+  const seen = await query<any[]>(`SELECT 1 FROM muse_cards WHERE user_id = ? AND kind = 'summary' LIMIT 1`, [userId]);
+  if (seen?.length) return 'Error: you already sent the summary.';
+  for (const i of items) await rememberForMuse(userId, i);
+  const r = await postMuseCard(userId, { kind: 'summary', key: 'summary', payload: { items, lead: text }, text, uncapped: true });
+  if (!r.ok) return r.error;
+  await patchMuseOnboarding({ summaryAt: Date.now() });
+  return 'Sent. Each line is now in your memory; the user can correct or delete them, and your memory follows.';
+}
+
+/** 主动消息下面的「有用 / 少来点这种」:一条 [feedback] 进 Muse 的 LOG,下个周期 read_log 读得到。只认这个用户的主动消息,行文引擎自己拼。 */
+export async function recordMessageFeedback(userId: string, messageId: string, verdict: 'up' | 'down'): Promise<boolean> {
+  const rows = await query<any[]>(
+    `SELECT m.content FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id WHERE m.id = ? AND s.user_id = ? AND m.origin LIKE 'proactive%' LIMIT 1`,
+    [messageId, userId],
+  );
+  if (!rows?.[0]) return false;
+  const excerpt = String(rows[0].content || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  await appendMuseFeedback(userId, verdict === 'up'
+    ? `[feedback] the user found your message useful: "${excerpt}"`
+    : `[feedback] the user tapped "less of this" on your message: "${excerpt}". Take it as feedback on that kind of message (reminder, suggestion, finished result or recommendation), not just this one.`);
+  return true;
+}
 
 export type DecideResult = { ok: true; card: MuseCardInfo } | { ok: false; status: number; error: string; detail: string };
 
@@ -180,7 +260,10 @@ async function settle(userId: string, id: string, status: 'done' | 'dismissed', 
 }
 
 /** 用户点卡。action 按 kind 白名单,认不得 → 400;效果在 CAS 成功之后才做(同一张卡点两次只生效一次)。 */
-export async function decideMuseCard(userId: string, id: string, action: string, opts: { messageId?: string } = {}): Promise<DecideResult> {
+export async function decideMuseCard(
+  userId: string, id: string, action: string,
+  opts: { messageId?: string; answers?: { when?: string; pace?: string; focus?: string[] }; index?: number; text?: string } = {},
+): Promise<DecideResult> {
   const card = await getMuseCard(userId, id);
   if (!card) return { ok: false, status: 404, error: 'card_not_found', detail: 'card not found' };
   const bad: DecideResult = { ok: false, status: 400, error: 'bad_action', detail: `${card.kind} card has no action ${action}` };
@@ -230,6 +313,45 @@ export async function decideMuseCard(userId: string, id: string, action: string,
         if (!(await settle(userId, id, 'dismissed', 'dismissed'))) return gone;
         await rememberForMuse(userId, 'The user does not want to connect a chat channel for reminders. Do not suggest it again.');
       } else return bad;
+      break;
+    }
+    case 'settings': {
+      if (action === 'apply') {
+        // 再过一遍名单:payload 是这张卡发出时存的,配置可能已经变了,也别信它里面只有这几个键。
+        // 先写配置再收卡:写失败时卡还在、能再点;同一张卡被连点两下,第二下写的是同一份值
+        const wanted = pickMuseSettings(loadSpecialAgentsConfig().muse, card.payload?.patch || {});
+        if (wanted.changes.length) updateMuseConfig(() => wanted.patch);
+        if (!(await settle(userId, id, 'done', 'applied'))) return gone;
+        await appendMuseFeedback(userId, `[feedback] settings change applied by user: ${wanted.changes.map((c) => `${c.field} → ${JSON.stringify(c.to)}`).join(', ') || 'already in place'}`);
+      } else if (action === 'dismiss') {
+        if (!(await settle(userId, id, 'dismissed', 'dismissed'))) return gone;
+        await appendMuseFeedback(userId, '[feedback] settings change turned down by user: keep things as they are');
+      } else return bad;
+      break;
+    }
+    case 'intro': {
+      if (action !== 'answer' && action !== 'skip') return bad;
+      if (!(await settle(userId, id, 'done', action))) return gone;
+      if (action === 'answer') await applyIntro(userId, opts.answers || {});
+      await appendMuseFeedback(userId, action === 'answer' ? `[feedback] first-week questions answered: ${JSON.stringify(opts.answers || {}).slice(0, 200)}` : '[feedback] first-week questions skipped; use the defaults');
+      break;
+    }
+    case 'summary': {
+      const items: string[] = Array.isArray(card.payload?.items) ? card.payload.items : [];
+      if (action === 'ok') {
+        if (!(await settle(userId, id, 'done', 'ok'))) return gone;
+        await appendMuseFeedback(userId, '[feedback] two-week summary confirmed by user');
+        break;
+      }
+      const at = Number(opts.index);
+      if ((action !== 'edit' && action !== 'remove') || !Number.isInteger(at) || at < 0 || at >= items.length) return bad;
+      const text = action === 'edit' ? String(opts.text || '').replace(/\s+/g, ' ').trim().slice(0, 300) : '';
+      if (action === 'edit' && !text) return bad;
+      await editMuseMemory(userId, items[at], text || null);
+      const next = action === 'edit' ? items.map((x, i) => (i === at ? text : x)) : items.filter((_, i) => i !== at);
+      await query(`UPDATE muse_cards SET payload = ? WHERE id = ? AND user_id = ?`, [JSON.stringify({ ...card.payload, items: next }), id, userId]);
+      if (!next.length && !(await settle(userId, id, 'done', 'ok'))) return gone;
+      await appendMuseFeedback(userId, `[feedback] user ${action === 'edit' ? 'corrected' : 'removed'} a line of your two-week summary: "${items[at].slice(0, 120)}"${text ? ` → "${text.slice(0, 120)}"` : ''}`);
       break;
     }
     default: return bad;

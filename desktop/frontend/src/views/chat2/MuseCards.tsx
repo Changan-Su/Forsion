@@ -6,11 +6,11 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { create } from 'zustand'
-import { ArrowDown, CircleCheck, CircleX, Gift, Inbox, MessageCircle, Puzzle, Settings } from 'lucide-react'
+import { ArrowDown, CircleCheck, CircleX, Gift, Inbox, MessageCircle, Puzzle, Settings, Sparkles } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useAttention } from '../../stores/attentionStore'
-import { claimOnEngine, decideMuseCard, getMuseCard, listMuseCards } from '../../services/backendService'
+import { claimOnEngine, decideMuseCard, getMuseCard, getMuseStatus, listMuseCards, museMessageFeedback } from '../../services/backendService'
 import { currentClientId } from '../../services/agentRunService'
 import { useInbox } from '../../stores/inboxStore'
 import { setActiveSpace, useWorkspace } from '@lcl/engine'
@@ -45,6 +45,51 @@ registerMessages({
   'museCard.noThanks': { zh: '不用', en: 'Keep as is' },
   'museCard.channelOpened': { zh: '已打开通道设置', en: 'Opened channel settings' },
   'museCard.failed': { zh: '没处理成：{e}', en: 'Couldn’t do that: {e}' },
+  'museCard.change': { zh: '改', en: 'Change' },
+  'museCard.settingsDone': { zh: '已改成 {list}', en: 'Changed to {list}' },
+  'museCard.settingsKept': { zh: '设置没改', en: 'Settings kept as they were' },
+  'museCard.field.heartbeatMinutes': { zh: '心跳间隔', en: 'Heartbeat' },
+  'museCard.field.activeHours': { zh: '作息时段', en: 'Active hours' },
+  'museCard.field.notify': { zh: '通知方式', en: 'Notifications' },
+  'museCard.field.maxDmPerDay': { zh: '每天最多主动找你', en: 'Daily message limit' },
+  'museCard.val.scheduleOnly': { zh: '只在定时和规则时醒', en: 'Only for schedules and rules' },
+  'museCard.val.minutes': { zh: '每 {n} 分钟', en: 'Every {n} min' },
+  'museCard.val.hours': { zh: '每 {n} 小时', en: 'Every {n} h' },
+  'museCard.val.allDay': { zh: '全天', en: 'All day' },
+  'museCard.val.hourRange': { zh: '{start}–{end} 点', en: '{start}:00–{end}:00' },
+  'museCard.val.immediate': { zh: '即时', en: 'Right away' },
+  'museCard.val.digest': { zh: '日报', en: 'Daily digest' },
+  'museCard.val.noLimit': { zh: '不限', en: 'No limit' },
+  'museCard.val.perDay': { zh: '{n} 条', en: '{n} a day' },
+  'museCard.intro': { zh: '先认识一下', en: 'Getting to know you' },
+  'museCard.introBody': { zh: '我是 Muse。我在后台替你盯事情、整理东西，有要紧的才来找你。先问三句，不答就按缺省来。', en: 'I’m Muse. I work in the background, keeping an eye on things and tidying up, and come to you when something matters. Three quick questions; skip them and I’ll use the defaults.' },
+  'museCard.q.when': { zh: '什么时候能找你', en: 'When can I reach you?' },
+  'museCard.when.anytime': { zh: '随时', en: 'Anytime' },
+  'museCard.when.daytime': { zh: '白天 9–21 点', en: 'Daytime, 9:00–21:00' },
+  'museCard.when.open': { zh: '只在我开着 Forsion 时', en: 'Only while Forsion is open' },
+  'museCard.q.pace': { zh: '多久说一次', en: 'How often should I speak up?' },
+  'museCard.pace.as-needed': { zh: '有事才说', en: 'Only when it matters' },
+  'museCard.pace.daily': { zh: '每天一条', en: 'Once a day' },
+  'museCard.pace.free': { zh: '想到就说', en: 'Whenever something comes up' },
+  'museCard.q.focus': { zh: '最想让我盯什么（可多选）', en: 'What should I watch most? (pick any)' },
+  'museCard.focus.schedule': { zh: '日程', en: 'Schedule' },
+  'museCard.focus.study': { zh: '学习', en: 'Study' },
+  'museCard.focus.projects': { zh: '项目', en: 'Projects' },
+  'museCard.focus.inbox': { zh: '收件箱', en: 'Inbox' },
+  'museCard.done': { zh: '好了', en: 'Done' },
+  'museCard.skip': { zh: '跳过', en: 'Skip' },
+  'museCard.introDone': { zh: '记下了，就按你说的来', en: 'Got it. I’ll work that way.' },
+  'museCard.introSkipped': { zh: '跳过了，按缺省来', en: 'Skipped. Using the defaults.' },
+  'museCard.summary': { zh: '这两周学到的配合方式', en: 'What I’ve learned in two weeks' },
+  'museCard.edit': { zh: '改', en: 'Edit' },
+  'museCard.remove': { zh: '删', en: 'Delete' },
+  'museCard.save': { zh: '保存', en: 'Save' },
+  'museCard.allGood': { zh: '都对', en: 'All good' },
+  'museCard.summaryDone': { zh: '两周小结已确认', en: 'Two-week summary confirmed' },
+  'museCard.helpful': { zh: '有用', en: 'Helpful' },
+  'museCard.lessOfThis': { zh: '少来点这种', en: 'Less of this' },
+  'museCard.noted': { zh: '记下了', en: 'Got it' },
+  'museCard.notedLess': { zh: '记下了：这类少来', en: 'Got it: fewer of these' },
 })
 
 /** 点完一张:流里那行与卡片堆一起重读(同一张卡的两处视图不共享组件状态)。 */
@@ -131,6 +176,23 @@ export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionI
     )
   }
   if (card.kind === 'inbox-list') return <InboxListCard card={card} sessionId={sessionId} />
+  if (card.kind === 'intro') return <IntroCard card={card} sessionId={sessionId} />
+  if (card.kind === 'summary') return <SummaryCard card={card} sessionId={sessionId} />
+  if (card.kind === 'settings') {
+    const changes: SettingChange[] = card.payload.changes || []
+    return (
+      <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="settings">
+        <div className="t2-taskcard-head"><Settings size={14} /><b>{t('muse.settings')}</b></div>
+        {changes.map((c) => (
+          <div key={c.field} className="t2-musecard-row"><div><b>{t(`museCard.field.${c.field}`)}</b><span>{settingValue(c.field, c.from, t)} → {settingValue(c.field, c.to, t)}</span></div></div>
+        ))}
+        <div className="t2-taskcard-actions">
+          <button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'apply')}>{t('museCard.change')}</button>
+          <button type="button" disabled={busy} onClick={() => void decide(card, 'dismiss')}>{t('museCard.noThanks')}</button>
+        </div>
+      </div></div>
+    )
+  }
   if (card.kind === 'channel') {
     return (
       <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="channel">
@@ -186,16 +248,99 @@ function InboxListCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: st
   )
 }
 
-const cardTitle = (card: MuseCardInfo, t: (k: string, v?: Record<string, unknown>) => string): string => {
+type Tr = (k: string, v?: Record<string, unknown>) => string
+type SettingChange = { field: string; from: unknown; to: unknown }
+
+/** 设置项的值怎么念(卡上和回执共用)。 */
+function settingValue(field: string, v: any, t: Tr): string {
+  if (field === 'heartbeatMinutes') return !v ? t('museCard.val.scheduleOnly') : v % 60 ? t('museCard.val.minutes', { n: v }) : t('museCard.val.hours', { n: v / 60 })
+  if (field === 'activeHours') return v ? t('museCard.val.hourRange', { start: v.start, end: v.end }) : t('museCard.val.allDay')
+  if (field === 'notify') return t(v === 'digest' ? 'museCard.val.digest' : 'museCard.val.immediate')
+  return v ? t('museCard.val.perDay', { n: v }) : t('museCard.val.noLimit')
+}
+
+/** 第一次见面的三问:可跳过、都不必答全。能对应到设置的引擎改设置,其余记进 Muse 的记忆。 */
+function IntroCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: string }) {
+  const { t } = useI18n()
+  const { busy, decide } = useDecide(sessionId)
+  const [when, setWhen] = useState('')
+  const [pace, setPace] = useState('')
+  const [focus, setFocus] = useState<string[]>([])
+  const row = (q: string, ids: string[], on: (id: string) => boolean, tap: (id: string) => void) => (
+    <div className="t2-musecard-q">
+      <span>{t(`museCard.q.${q}`)}</span>
+      <div className="t2-taskcard-actions">{ids.map((id) => <button key={id} type="button" aria-pressed={on(id)} className={on(id) ? 'primary' : undefined} onClick={() => tap(id)}>{t(`museCard.${q}.${id}`)}</button>)}</div>
+    </div>
+  )
+  return (
+    <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="intro">
+      <div className="t2-taskcard-head"><Sparkles size={14} /><b>{t('museCard.intro')}</b></div>
+      <div className="t2-taskcard-tldr">{t('museCard.introBody')}</div>
+      {row('when', ['anytime', 'daytime', 'open'], (id) => when === id, (id) => setWhen(when === id ? '' : id))}
+      {row('pace', ['as-needed', 'daily', 'free'], (id) => pace === id, (id) => setPace(pace === id ? '' : id))}
+      {row('focus', ['schedule', 'study', 'projects', 'inbox'], (id) => focus.includes(id), (id) => setFocus(focus.includes(id) ? focus.filter((f) => f !== id) : [...focus, id]))}
+      <div className="t2-taskcard-actions">
+        <button type="button" className="primary" disabled={busy || !(when || pace || focus.length)} onClick={() => void decide(card, 'answer', { answers: { when, pace, focus } })}>{t('museCard.done')}</button>
+        <button type="button" disabled={busy} onClick={() => void decide(card, 'skip')}>{t('museCard.skip')}</button>
+      </div>
+    </div></div>
+  )
+}
+
+/** 第 14 天的小结:每条能改能删,记忆跟着动;「都对」收起。 */
+function SummaryCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: string }) {
+  const { t } = useI18n()
+  const { busy, decide } = useDecide(sessionId)
+  const items: string[] = card.payload.items || []
+  const [editing, setEditing] = useState<{ index: number; text: string } | null>(null)
+  const save = async (): Promise<void> => {
+    if (!editing) return
+    const text = editing.text.trim()
+    if (!text || text === items[editing.index] || await decide(card, 'edit', { index: editing.index, text })) setEditing(null)
+  }
+  return (
+    <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="summary">
+      <div className="t2-taskcard-head"><Sparkles size={14} /><b>{t('museCard.summary')}</b></div>
+      {!!card.payload.lead && <div className="t2-taskcard-tldr">{card.payload.lead}</div>}
+      {items.map((text, index) => (
+        <div key={`${index}:${text}`} className="t2-musecard-row">
+          {editing?.index === index
+            ? <input autoFocus aria-label={t('museCard.edit')} value={editing.text} onChange={(e) => setEditing({ index, text: e.target.value })}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) void save(); if (e.key === 'Escape') setEditing(null) }} />
+            : <div><span className="t2-musecard-text">{text}</span></div>}
+          <div className="t2-taskcard-actions">{editing?.index === index
+            ? <button type="button" className="primary" disabled={busy} onClick={() => void save()}>{t('museCard.save')}</button>
+            : <>
+                <button type="button" disabled={busy} onClick={() => setEditing({ index, text })}>{t('museCard.edit')}</button>
+                <button type="button" disabled={busy} onClick={() => void decide(card, 'remove', { index })}>{t('museCard.remove')}</button>
+              </>}</div>
+        </div>
+      ))}
+      <div className="t2-taskcard-actions"><button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'ok')}>{t('museCard.allGood')}</button></div>
+    </div></div>
+  )
+}
+
+const cardTitle = (card: MuseCardInfo, t: Tr): string => {
   if (card.kind === 'feature') return t('museCard.feature')
   if (card.kind === 'inbox-ask') return t('museCard.ask')
   if (card.kind === 'inbox-list') return t('museCard.list', { n: (card.payload.items || []).length })
   if (card.kind === 'channel') return t('museCard.channel')
+  if (card.kind === 'settings') return t('muse.settings')
+  if (card.kind === 'intro') return t('museCard.intro')
+  if (card.kind === 'summary') return t('museCard.summary')
   return ''
 }
 
 /** 处理完留在流里的那一行。 */
-function receipt(card: MuseCardInfo, t: (k: string) => string): { ok: boolean; text: string } {
+function receipt(card: MuseCardInfo, t: Tr): { ok: boolean; text: string } {
+  if (card.kind === 'settings') {
+    if (card.status === 'dismissed') return { ok: false, text: t('museCard.settingsKept') }
+    const list = ((card.payload.changes || []) as SettingChange[]).map((c) => settingValue(c.field, c.to, t)).join(t('common.listSep'))
+    return { ok: true, text: t('museCard.settingsDone', { list }) }
+  }
+  if (card.kind === 'intro') return { ok: card.result === 'answer', text: t(card.result === 'answer' ? 'museCard.introDone' : 'museCard.introSkipped') }
+  if (card.kind === 'summary') return { ok: true, text: t('museCard.summaryDone') }
   if (card.status === 'dismissed') return { ok: false, text: t('museCard.dismissed') }
   if (card.kind === 'inbox-ask') return { ok: card.result === 'yes', text: t(card.result === 'yes' ? 'museCard.askYes' : card.result === 'ignore' ? 'museCard.askIgnore' : 'museCard.askLater') }
   if (card.kind === 'inbox-list') return { ok: true, text: t('museCard.listDone') }
@@ -229,5 +374,52 @@ export function MuseCardLine({ id, sessionId, onJump }: { id: string; sessionId?
     <button type="button" className="t2-dim t2-tasktrace t2-tasktrace-jump" data-muse-card-line="pending" onClick={onJump}>
       <Puzzle size={13} /><span>{t('museCard.inDeck', { title: cardTitle(card, t) })}</span><ArrowDown size={12} />
     </button>
+  )
+}
+
+const VOTES_KEY = 'forsion_muse_feedback'
+type Vote = 'up' | 'down'
+function readVotes(): Record<string, Vote> {
+  try { return JSON.parse(localStorage.getItem(VOTES_KEY) || '{}') || {} } catch { return {} }
+}
+function saveVote(id: string, v: Vote): void {
+  try { localStorage.setItem(VOTES_KEY, JSON.stringify(Object.fromEntries([...Object.entries(readVotes()).slice(-199), [id, v]]))) } catch { /* 记不住只是按钮会再出现 */ }
+}
+
+/** 反馈按钮开到什么时候。开始之后这个数不变,读到一次就留着;没读到(还没跑过周期)下一条再问。 */
+let feedbackUntil: number | null = null
+const readFeedbackUntil = async (sessionId: string): Promise<number> => {
+  feedbackUntil ??= (await getMuseStatus(targetForSession(sessionId)).catch(() => null))?.feedbackUntil ?? null
+  return feedbackUntil ?? 0
+}
+
+/** 磨合期两周,主动消息下面一行轻按钮。点了进 Muse 的 LOG([feedback]),周期里 read_log 读得到。 */
+export function MuseFeedbackRow({ messageId, sessionId }: { messageId: string; sessionId: string }) {
+  const { t } = useI18n()
+  const [until, setUntil] = useState(feedbackUntil ?? 0)
+  const [vote, setVote] = useState<Vote | undefined>(() => readVotes()[messageId])
+  useEffect(() => {
+    let alive = true
+    void readFeedbackUntil(sessionId).then((u) => { if (alive) setUntil(u) })
+    return () => { alive = false }
+  }, [sessionId])
+  if (Date.now() >= until) return null
+  const send = (v: Vote): void => {
+    setVote(v)
+    saveVote(messageId, v)
+    museMessageFeedback(targetForSession(sessionId), messageId, v).catch((e) => {
+      setVote(undefined)
+      useApp.getState().toast(t('museCard.failed', { e: e?.message || String(e) }), true)
+    })
+  }
+  return (
+    <div className="t2-musefb" data-muse-feedback={vote || 'open'}>
+      {vote
+        ? <span>{t(vote === 'up' ? 'museCard.noted' : 'museCard.notedLess')}</span>
+        : <>
+            <button type="button" onClick={() => send('up')}>{t('museCard.helpful')}</button>
+            <button type="button" onClick={() => send('down')}>{t('museCard.lessOfThis')}</button>
+          </>}
+    </div>
   )
 }

@@ -43,7 +43,8 @@ import { loadSchedule, entriesOf, dueHere, markEntryFired, ensureEntry, validate
 import { L } from '../tui/i18n.js';
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
-import { inboxHint, recommendHint } from './museCards.js';
+import { inboxHint, postIntroCard, recommendHint } from './museCards.js';
+import { MUSE_ONBOARDING_DAILY_CAP, MUSE_ONBOARDING_MS, ensureMuseOnboarding, onboardingActive, readMuseOnboarding } from './museState.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
 import { museStateFile, readLastCycleAt, readMuseSessionId, patchMuseState, getMuseSleep, setMuseSleep, type MuseSleep } from './museState.js';
@@ -696,6 +697,7 @@ export function museChatSection(): string {
     'Your next cycle starts in a fresh session and will not see this conversation. So when the user tells you how to work in the background ' +
     '(what to watch, what to stop suggesting, when to stay quiet), save it before you reply: remember for a lasting preference, log_event for a one-off request. ' +
     'Actions here follow this conversation\'s approval setting, with the user present to confirm; your background permission tier applies to your cycles only. ' +
+    'When they want to change when or how often you work, use propose_muse_settings; they confirm on a card. ' +
     // 聊天里先装技能再动手(10-14 实测:沿用周期那句「只在不够用时才装」,3 次里 2 次没装就写 main.js,用了不存在的 render、
     // 其中 1 次连 manifest.json 都没写;没有这段说明的构建每次都先装技能、4 次都对)。周期那份的措辞不动。
     spaceKickoff(
@@ -715,7 +717,7 @@ export function museChatSection(): string {
  */
 export function buildCycleMessages(
   cfg: MuseConfig,
-  dyn: { extraKickoff?: string; hint?: string; pending?: number; quietSince?: boolean; sleepNote?: string },
+  dyn: { extraKickoff?: string; hint?: string; pending?: number; quietSince?: boolean; sleepNote?: string; onboardingNote?: string },
 ): { message: string; ephemeralHint: string } {
   const message =
     'Start this round: first use read_log to review your own recent cycles, the [feedback] entries showing how the user handled your previous todos, and any [approval] entries about actions you deferred earlier. ' +
@@ -740,14 +742,30 @@ export function buildCycleMessages(
   const ephemeralHint =
     (dyn.quietSince ? '\n\n(No new user messages or in-app activity since your last cycle — this is a heartbeat; maintenance, preparation or simply "nothing to do" are all fine answers, and so is set_next_wake.)' : '') +
     (dyn.sleepNote || '') +
+    (dyn.onboardingNote || '') +
     (dyn.pending ? `\n\n(${dyn.pending} of your earlier actions are still waiting for the user's approval — do not re-request them.)` : '') +
     (dyn.extraKickoff || '') +
     (dyn.hint || '');
   return { message, ephemeralHint: ephemeralHint.replace(/^\n+/, '') };
 }
 
+/** 磨合期:第一个周期引擎发三问的卡(不花 token,周期照常干活);头两周简报里一句「有话就说」;第 14 天让模型写小结。失败不挡周期。 */
+async function onboardingTurn(userId: string, hadCycle: boolean, now = Date.now()): Promise<string> {
+  try {
+    const ob = await ensureMuseOnboarding(hadCycle, now);
+    if (ob.fresh && !ob.introAt) await postIntroCard(userId).catch((e: any) => log(`第一次见面的卡没发出去:${e?.message || e}`));
+    if (ob.fresh && !ob.summaryAt && now >= ob.startedAt + MUSE_ONBOARDING_MS) {
+      return '\n\n[Two-week summary] You have worked with this user for two weeks. Send your summary now: message_user with card {type:"summary", items:[...]}, 3 to 5 short lessons about how to work with them, one line each, in their language; the text is one line of introduction.';
+    }
+    return onboardingActive(ob, now)
+      ? `\n\n(You are in your first two weeks with this user. When you have something worth saying, say it instead of preparing quietly; at most ${MUSE_ONBOARDING_DAILY_CAP} messages a day. The buttons under your messages tell you what landed.)`
+      : '';
+  } catch { return ''; }
+}
+
 async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbeat', quietSince = false): Promise<string> {
   const userId = museUserId();
+  const hadCycle = lastCycleAt > 0;
   const sessionId = await ensureMuseSession(userId, cfg.modelId);
   await ensureMuseDirs().catch(() => {});
   // 动态上下文全部走 ephemeralHint(每周期新鲜数据,不落库);静态身份(developer_instructions + SOUL + Muse 自己
@@ -767,7 +785,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await rhythmHint());
   const pending = await countPendingApprovals(userId).catch(() => 0);
   const sleep = await getMuseSleep().catch(() => null);
-  const { message, ephemeralHint } = buildCycleMessages(cfg, { extraKickoff, hint, pending, quietSince, sleepNote: sleepNote(sleep, trigger) });
+  const { message, ephemeralHint } = buildCycleMessages(cfg, { extraKickoff, hint, pending, quietSince, sleepNote: sleepNote(sleep, trigger), onboardingNote: await onboardingTurn(userId, hadCycle) });
   const agentThinking = (await getAgent(MUSE_AGENT_SLUG).catch(() => null))?.thinkingLevel;
   const runId = uuidv4();
   await createRun({
@@ -1046,6 +1064,8 @@ export interface MuseStatus {
   /** Muse 自己定的休眠(set_next_wake):心跳暂停到这个时刻(epoch ms);null = 醒着。 */
   sleepUntil: number | null;
   sleepReason: string | null;
+  /** 主动消息下面的反馈按钮开到这个时刻(磨合期 14 天;epoch ms)。null = 还没开始。 */
+  feedbackUntil: number | null;
 }
 
 export async function museStatus(): Promise<MuseStatus> {
@@ -1063,6 +1083,7 @@ export async function museStatus(): Promise<MuseStatus> {
   try { pendingApprovals = await countPendingApprovals(museUserId()); } catch { /* 表未建/DB 不可用 */ }
   if (!spaceStamp) spaceStamp = await spaceDirStamp().catch(() => 0); // 引擎刚起还没跑过周期 → 按磁盘现状算一次
   const sleep = await getMuseSleep().catch(() => null);
+  const onboarding = await readMuseOnboarding().catch(() => null);
   return {
     enabled: !!cfg?.enabled,
     hasModel: !!cfg?.modelId,
@@ -1080,6 +1101,7 @@ export async function museStatus(): Promise<MuseStatus> {
     spaceStamp,
     sleepUntil: sleep?.until ?? null,
     sleepReason: sleep?.reason ?? null,
+    feedbackUntil: onboarding ? onboarding.startedAt + MUSE_ONBOARDING_MS : null,
   };
 }
 

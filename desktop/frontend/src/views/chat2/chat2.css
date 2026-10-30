@@ -1686,3 +1686,12 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-musecard-row span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); overflow-wrap: anywhere; }
 .t2-musecard-row > svg { flex: none; color: var(--green); }
 .t2-musecard-row > .t2-taskcard-actions { flex: none; margin-top: 0; }
+.t2-musecard-row .t2-musecard-text { color: var(--text); font-size: inherit; }
+.t2-musecard-row > input { flex: 1; min-width: 0; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); font: inherit; padding: 4px 8px; outline: none; }
+.t2-musecard-row > input:focus { border-color: var(--accent-ink); }
+.t2-musecard-q { display: flex; flex-direction: column; gap: 4px; }
+.t2-musecard-q > span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+/* 磨合期主动消息下面的一行轻按钮:只是字,不抢正文 */
+.t2-musefb { display: flex; align-items: center; gap: 12px; margin-top: 4px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.t2-musefb button { border: none; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+.t2-musefb button:hover { color: var(--text); }

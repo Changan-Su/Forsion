@@ -324,6 +324,7 @@ export const CLASSIFICATION = {
   'GET /agent/special/muse/cards': [A, 'Muse cards waiting in the direct chat'],
   'GET /agent/special/muse/cards/:id': [A, 'one Muse card'],
   'POST /agent/special/muse/cards/:id/decide': [A, 'answer a Muse card (D1/D2); the action is a whitelisted enum and the engine applies the effect from its own row'],
+  'POST /agent/special/muse/messages/:id/feedback': [A, 'helpful / less-of-this under a Muse DM; an enum plus a message id, the engine writes the log line itself'],
   'GET /agent/special/approvals': [A, 'pending async approvals'],
   'GET /agent/special/approvals/:id': [A, 'pending async approval'],
   'POST /agent/special/approvals/:id/approve': [A, 'answer an async approval (D1/D2)'],

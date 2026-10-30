@@ -237,6 +237,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/special/muse/feedback', access: 'deny-remote', src: 'routes/special.ts', why: 'appends to Muse LOG (memory write into an autonomous Agent)' },
   { method: 'GET', path: '/agent/special/muse/library', access: 'allow', src: 'routes/special.ts', why: 'Muse library' },
   { method: 'GET', path: '/agent/special/muse/library/file', access: 'allow', src: 'routes/special.ts', why: 'Muse library file (read-only, realpath-bounded to the Library)' },
+  { method: 'POST', path: '/agent/special/muse/messages/:id/feedback', access: 'allow', src: 'routes/special.ts', why: 'helpful / less-of-this under a Muse DM; an enum plus a message id, the engine writes the log line itself' },
   { method: 'GET', path: '/agent/special/muse/status', access: 'allow', src: 'routes/special.ts', why: 'Muse status; remote callers get the fields the Muse view / Space read, no absolute paths, budgets or last error (P1-M1A projection)' },
   { method: 'GET', path: '/agent/special/muse/todos', access: 'allow', src: 'routes/special.ts', why: 'Muse todos' },
   { method: 'GET', path: '/agent/special/muse/todos/:id', access: 'allow', src: 'routes/special.ts', why: 'Muse todo' },

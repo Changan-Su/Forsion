@@ -1055,6 +1055,9 @@ export const getMuseCard = (t: EngineTarget, id: string) =>
 export const decideMuseCard = (t: EngineTarget, id: string, action: string, extra?: Record<string, unknown>) =>
   request<{ ok: boolean; card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: JSON.stringify({ ...extra, action }) })
 
+export const museMessageFeedback = (t: EngineTarget, id: string, verdict: 'up' | 'down') =>
+  request<{ ok: boolean }>(t, `/agent/special/muse/messages/${encodeURIComponent(id)}/feedback`, { method: 'POST', body: JSON.stringify({ verdict }) })
+
 export const postMuseFeedback = (t: EngineTarget, text: string) =>
   request<{ ok: boolean }>(t, '/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text }) })
 

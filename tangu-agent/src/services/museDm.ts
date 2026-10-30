@@ -11,6 +11,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { endsWithQuestion } from './childSessions.js';
+import { isWithinActiveHours, loadSpecialAgentsConfig } from './specialAgentsConfig.js';
+import { MUSE_ONBOARDING_DAILY_CAP, onboardingActive, readMuseOnboarding } from './museState.js';
 
 /** proactive = message_user;todo / approval = 引擎替 add_muse_todo / 审批入队发的;card = 要用户点的卡(services/museCards.ts)。后三种各有自己的配额,不占每小时 3 条。 */
 export type ProactiveOrigin = 'proactive' | 'proactive:todo' | 'proactive:approval' | 'proactive:card';
@@ -26,7 +28,8 @@ export function asksUser(text: string): boolean {
   return endsWithQuestion(text) || /[?？][^?？]{1,40}$/.test(text.trim()); // 尾巴另起一行也算
 }
 
-export async function postMuseDm(userId: string, content: string, origin: ProactiveOrigin = 'proactive'): Promise<MuseDmResult> {
+/** uncapped = 不是 Muse 自己要开口的(用户要的设置卡、引擎发的第一次见面 / 小结),不占今天的额度。 */
+export async function postMuseDm(userId: string, content: string, origin: ProactiveOrigin = 'proactive', opts: { uncapped?: boolean } = {}): Promise<MuseDmResult> {
   const text = String(content || '').trim();
   if (!text) return { ok: false, error: 'Error: the message is empty' };
   // 动态导入:routes/solo → routes/sessions → agentLoop → 工具注册表 → 本文件,静态导入会成环。
@@ -41,6 +44,20 @@ export async function postMuseDm(userId: string, content: string, origin: Proact
     );
     if ((Number(r?.n) || 0) >= MUSE_DM_PER_HOUR) {
       return { ok: false, error: `Error: you already sent the user ${MUSE_DM_PER_HOUR} messages in the last hour. Fold this into your next message, or write it in your journal.` };
+    }
+  }
+  if ((origin === 'proactive' || origin === 'proactive:card') && !opts.uncapped) {
+    // 一天的上限来自配置(0 = 不限);磨合期再封一道,作息外也不发(周期被规则 / 日程叫醒时会走到这里)
+    const muse = loadSpecialAgentsConfig().muse;
+    const onboarding = onboardingActive(await readMuseOnboarding().catch(() => null));
+    if (onboarding && !isWithinActiveHours(muse, new Date().getHours())) return { ok: false, error: 'Error: it is outside the user\'s active hours. Keep this for your next cycle.' };
+    const cap = onboarding ? Math.min(muse.maxDmPerDay || MUSE_ONBOARDING_DAILY_CAP, MUSE_ONBOARDING_DAILY_CAP) : muse.maxDmPerDay;
+    if (cap) {
+      const [r] = await query<any[]>(
+        `SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ? AND origin IN ('proactive', 'proactive:card') AND timestamp >= ?`,
+        [s.id, now - 86_400_000],
+      );
+      if ((Number(r?.n) || 0) >= cap) return { ok: false, error: `Error: you already reached the user ${cap} times in the last 24 hours. Save this for your journal or the next day.` };
     }
   }
   const id = uuidv4();

@@ -7,13 +7,18 @@ const h = vi.hoisted(() => ({
   dms: [] as Array<{ text: string; origin: string }>,
   memory: [] as string[],
   logs: [] as string[],
+  entries: [] as Array<{ id: string; content: string }>,
+  mutations: [] as any[],
   muse: { inboxAutoRead: [] as string[], inboxIgnored: [] as string[] } as any,
+  onboarding: {} as any,
 }));
 
 vi.mock('../core/db.js', async () => {
   const { default: Database } = await import('better-sqlite3');
   h.db = new Database(':memory:');
   h.db.exec(`CREATE TABLE inbox_messages (id TEXT, user_id TEXT, title TEXT, body TEXT, sender_kind TEXT, sender_id TEXT, thread TEXT, attachments TEXT, expires_at TEXT, read_at TEXT, archived_at TEXT, deleted_at TEXT, deliver_at TEXT)`);
+  h.db.exec(`CREATE TABLE chat_sessions (id TEXT, user_id TEXT)`);
+  h.db.exec(`CREATE TABLE chat_messages (id TEXT, session_id TEXT, content TEXT, origin TEXT)`);
   h.db.exec(`CREATE TABLE muse_cards (id TEXT PRIMARY KEY, user_id TEXT, kind TEXT, target_key TEXT, payload TEXT, status TEXT DEFAULT 'pending', result TEXT, created_at BIGINT, decided_at BIGINT)`);
   return { query: async (sql: string, params: any[] = []) => { const st = h.db.prepare(sql); return st.reader ? st.all(...params) : (st.run(...params), []); } };
 });
@@ -26,12 +31,21 @@ vi.mock('./museDm.js', () => ({
 }));
 vi.mock('../seams/runContext.js', () => ({ runWithAgentSlug: (_s: string, f: () => any) => f() }));
 vi.mock('../seams/runtime.js', () => ({
-  deps: () => ({ brain: { memory: { appendMemoryEntry: async (_u: string, t: string) => { h.memory.push(t); }, appendLogEntry: async (_u: string, t: string) => { h.logs.push(t); } } } }),
+  deps: () => ({ brain: { memory: {
+    appendMemoryEntry: async (_u: string, t: string) => { h.memory.push(t); },
+    appendLogEntry: async (_u: string, t: string) => { h.logs.push(t); },
+    getMemorySnapshot: async () => ({ entries: h.entries }),
+    mutateMemory: async (_u: string, m: any) => { h.mutations.push(m); },
+  } } }),
 }));
 vi.mock('../agents/agentRegistry.js', () => ({ MUSE_AGENT_SLUG: 'muse' }));
-vi.mock('./specialAgentsConfig.js', () => ({ updateMuseConfig: (fn: any) => { const patch = fn(h.muse); Object.assign(h.muse, patch); return { muse: h.muse }; } }));
+vi.mock('./specialAgentsConfig.js', () => ({
+  loadSpecialAgentsConfig: () => ({ muse: h.muse }),
+  updateMuseConfig: (fn: any) => { const patch = fn(h.muse); Object.assign(h.muse, patch); return { muse: h.muse }; },
+}));
+vi.mock('./museState.js', () => ({ patchMuseOnboarding: async (p: any) => { Object.assign(h.onboarding, p); } }));
 
-import { decideMuseCard, getMuseCard, inboxAskBlocked, inboxListBlocked, inboxHint, listMuseCards, postMuseCard, recommendBlocked, recommendHint } from './museCards.js';
+import { decideMuseCard, getMuseCard, inboxAskBlocked, inboxListBlocked, inboxHint, listMuseCards, pickMuseSettings, postIntroCard, postMuseCard, postSummaryCard, recommendBlocked, recommendHint, recordMessageFeedback } from './museCards.js';
 
 const DAY = 86_400_000;
 const plugin = (id = 'better-pdf') => ({ kind: 'plugin' as const, key: `plugin:${id}`, payload: { item: { id, name: 'Better PDF' } }, text: '你这周开了 9 份 PDF。' });
@@ -40,6 +54,8 @@ beforeEach(() => {
   h.db.exec('DELETE FROM muse_cards');
   h.dmOk = true; h.dms.length = 0; h.memory.length = 0; h.logs.length = 0;
   h.muse.inboxAutoRead = []; h.muse.inboxIgnored = [];
+  for (const k of ['heartbeatMinutes', 'activeHours', 'notify', 'maxDmPerDay', 'mode', 'grantedFolders']) delete h.muse[k];
+  h.entries = []; h.mutations.length = 0; h.onboarding = {};
 });
 
 describe('postMuseCard', () => {
@@ -173,5 +189,128 @@ describe('收件箱卡', () => {
     expect(await inboxHint('u', h.muse, later)).toContain('card {type:"channel"}');
     await postMuseCard('u', { kind: 'channel', key: 'channel', payload: {}, text: 'x' });
     expect(await inboxHint('u', h.muse, later)).not.toContain('card {type:"channel"}');
+  });
+});
+
+describe('设置变更卡', () => {
+  const base = { heartbeatMinutes: 120, activeHours: null, notify: 'immediate', maxDmPerDay: 0, mode: 'ask' };
+  const post = async (patch: Record<string, unknown>) => {
+    Object.assign(h.muse, base);
+    const { changes } = pickMuseSettings(h.muse, patch);
+    const r = await postMuseCard('u', { kind: 'settings', payload: { patch, changes }, text: '', uncapped: true });
+    return (r as any).card?.id ?? (await listMuseCards('u'))[0].id;
+  };
+  it('pickMuseSettings 只挑放行名单里、真的变了的字段', () => {
+    const r = pickMuseSettings(base as any, { heartbeatMinutes: 120, notify: 'digest', mode: 'auto', grantedFolders: ['/'] });
+    expect(r.patch).toEqual({ notify: 'digest' });
+    expect(r.changes).toEqual([{ field: 'notify', from: 'immediate', to: 'digest' }]);
+  });
+  it('点「改」写进设置;payload 里夹带的权限档、文件夹写不进去', async () => {
+    const id = await post({ activeHours: { start: 9, end: 23 }, mode: 'auto', grantedFolders: ['/'] });
+    expect((await decideMuseCard('u', id, 'apply')).ok).toBe(true);
+    expect(h.muse.activeHours).toEqual({ start: 9, end: 23 });
+    expect(h.muse.mode).toBe('ask');
+    expect(h.muse.grantedFolders).toBeUndefined();
+    expect((await getMuseCard('u', id))!.status).toBe('done');
+  });
+  it('点「不用」什么都不改,Muse 下个周期读得到', async () => {
+    const id = await post({ notify: 'digest' });
+    await decideMuseCard('u', id, 'dismiss');
+    expect(h.muse.notify).toBe('immediate');
+    expect((await getMuseCard('u', id))!.status).toBe('dismissed');
+    expect(h.logs.join('\n')).toMatch(/turned down/);
+  });
+  it('一张卡只认一次:第二下 409,不再写配置', async () => {
+    const id = await post({ notify: 'digest' });
+    await decideMuseCard('u', id, 'apply');
+    h.muse.notify = 'immediate';
+    const again = await decideMuseCard('u', id, 'apply');
+    expect(again).toMatchObject({ ok: false, status: 409 });
+    expect(h.muse.notify).toBe('immediate');
+  });
+});
+
+describe('第一次见面', () => {
+  it('答案落两处:作息 / 频率改设置,其余进记忆', async () => {
+    Object.assign(h.muse, { activeHours: null, maxDmPerDay: 0 });
+    await postIntroCard('u');
+    expect(h.onboarding.introAt).toBeGreaterThan(0);
+    const [card] = await listMuseCards('u');
+    await decideMuseCard('u', card.id, 'answer', { answers: { when: 'daytime', pace: 'daily', focus: ['study', 'bogus'] } });
+    expect(h.muse.activeHours).toEqual({ start: 9, end: 21 });
+    expect(h.muse.maxDmPerDay).toBe(1);
+    expect(h.memory.join('\n')).toMatch(/study/);
+    expect(h.memory.join('\n')).not.toMatch(/bogus/);
+  });
+  it('「只在开着 Forsion 时」「有事才说」对不上设置项:只进记忆', async () => {
+    Object.assign(h.muse, { activeHours: { start: 8, end: 20 }, maxDmPerDay: 2 });
+    await postIntroCard('u');
+    const [card] = await listMuseCards('u');
+    await decideMuseCard('u', card.id, 'answer', { answers: { when: 'open', pace: 'as-needed' } });
+    expect(h.muse.activeHours).toEqual({ start: 8, end: 20 });
+    expect(h.muse.maxDmPerDay).toBe(2);
+    expect(h.memory).toHaveLength(2);
+  });
+  it('跳过:设置和记忆都不动', async () => {
+    Object.assign(h.muse, { activeHours: null });
+    await postIntroCard('u');
+    const [card] = await listMuseCards('u');
+    await decideMuseCard('u', card.id, 'skip');
+    expect(h.muse.activeHours).toBeNull();
+    expect(h.memory).toEqual([]);
+    expect((await getMuseCard('u', card.id))!.status).toBe('done');
+  });
+});
+
+describe('第 14 天小结', () => {
+  const setup = async () => {
+    await postSummaryCard('u', '两周下来：', ['晚上别提代码', '日报只要三条', '']);
+    h.entries = [{ id: 'm1', content: '晚上别提代码' }, { id: 'm2', content: '日报只要三条' }];
+    return (await listMuseCards('u'))[0];
+  };
+  it('只发一次;每条写进记忆', async () => {
+    const card = await setup();
+    expect(card.payload.items).toEqual(['晚上别提代码', '日报只要三条']);
+    expect(h.memory).toEqual(['晚上别提代码', '日报只要三条']);
+    expect(h.onboarding.summaryAt).toBeGreaterThan(0);
+    expect(await postSummaryCard('u', 'again', ['x'])).toMatch(/already/);
+  });
+  it('改一条:记忆跟着改,卡还在', async () => {
+    const card = await setup();
+    await decideMuseCard('u', card.id, 'edit', { index: 0, text: '十点以后别提代码' });
+    expect(h.mutations).toEqual([{ action: 'update', id: 'm1', fact: '十点以后别提代码' }]);
+    const after = await getMuseCard('u', card.id);
+    expect(after!.status).toBe('pending');
+    expect(after!.payload.items[0]).toBe('十点以后别提代码');
+  });
+  it('删到空:记忆跟着删,卡自己收起', async () => {
+    const card = await setup();
+    await decideMuseCard('u', card.id, 'remove', { index: 1 });
+    await decideMuseCard('u', card.id, 'remove', { index: 0 });
+    expect(h.mutations.map((m) => [m.action, m.id])).toEqual([['forget', 'm2'], ['forget', 'm1']]);
+    expect((await getMuseCard('u', card.id))!.status).toBe('done');
+  });
+  it('序号越界不碰记忆', async () => {
+    const card = await setup();
+    expect(await decideMuseCard('u', card.id, 'remove', { index: 9 })).toMatchObject({ ok: false, status: 400 });
+    expect(h.mutations).toEqual([]);
+  });
+});
+
+describe('消息反馈', () => {
+  beforeEach(() => {
+    h.db.exec('DELETE FROM chat_sessions; DELETE FROM chat_messages');
+    h.db.prepare('INSERT INTO chat_sessions VALUES (?, ?)').run('s1', 'u');
+    h.db.prepare('INSERT INTO chat_messages VALUES (?, ?, ?, ?)').run('m1', 's1', '记得交周报', 'proactive');
+    h.db.prepare('INSERT INTO chat_messages VALUES (?, ?, ?, ?)').run('m2', 's1', '用户自己说的', null);
+  });
+  it('「少来点这种」按这类消息记,不只这一条', async () => {
+    expect(await recordMessageFeedback('u', 'm1', 'down')).toBe(true);
+    expect(h.logs[0]).toMatch(/\[feedback\].*记得交周报.*that kind of message/);
+  });
+  it('只认这个用户的主动消息', async () => {
+    expect(await recordMessageFeedback('u', 'm2', 'up')).toBe(false);
+    expect(await recordMessageFeedback('other', 'm1', 'up')).toBe(false);
+    expect(h.logs).toEqual([]);
   });
 });

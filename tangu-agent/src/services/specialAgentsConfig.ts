@@ -90,6 +90,8 @@ export interface MuseConfig {
   inboxAutoRead: string[];
   /** 用户点过「这类以后都别管」的类别:不提醒也不标。 */
   inboxIgnored: string[];
+  /** 一天最多主动找用户几次(message_user 与 Muse 自己发起的卡;0=不限,每小时 3 条照旧)。 */
+  maxDmPerDay: number;
 }
 // 注:旧字段 compactAtRatio(声明后从未被读)与 prompt(人格已迁入 ~/.tangu/agents/muse/ 文件夹,
 // 见 legacyMusePrompt 的一次性迁移)已移除;旧 config.json 里的残留键被 normalize 静默丢弃。
@@ -151,6 +153,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     escalateTo: '',
     inboxAutoRead: [],
     inboxIgnored: [],
+    maxDmPerDay: 0,
   },
 };
 
@@ -214,6 +217,7 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       escalateTo: asStr(m.escalateTo, d.muse.escalateTo).trim().slice(0, 64),
       inboxAutoRead: asCategories(m.inboxAutoRead),
       inboxIgnored: asCategories(m.inboxIgnored),
+      maxDmPerDay: clampInt(m.maxDmPerDay, d.muse.maxDmPerDay, 0, 24),
     },
   };
 }
