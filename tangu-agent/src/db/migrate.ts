@@ -131,6 +131,22 @@ export async function runMigration(): Promise<void> {
   `));
   await query(`CREATE INDEX IF NOT EXISTS idx_muse_starters_user ON muse_starters(user_id, status)`);
 
+  // Muse 发进私聊、要用户点的卡(services/museCards.ts):状态住引擎,手机与桌面看到同一份。target_key = 'plugin:<id>' / 'feature:<名>' 等,判「提过没」用。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS muse_cards (
+      id VARCHAR(36) PRIMARY KEY,
+      user_id VARCHAR(36) NOT NULL,
+      kind VARCHAR(16) NOT NULL,
+      target_key VARCHAR(160),
+      payload TEXT NOT NULL,
+      status VARCHAR(16) NOT NULL DEFAULT 'pending',
+      result TEXT,
+      created_at BIGINT NOT NULL,
+      decided_at BIGINT
+    )
+  `));
+  await query(`CREATE INDEX IF NOT EXISTS idx_muse_cards_user ON muse_cards(user_id, status, created_at)`);
+
   // 无人值守 run 的**异步审批**清单(2026-09-10,Muse 权限档 ask/agent):越界写 / 跑命令不再卡死 run,
   // 而是落这里 → 用户(或代批 agent)裁决 → 引擎按**原参数**直接执行(services/pendingApprovals.ts)。
   // 本地特性,云端建空表零写入(同 muse_todos 纪律)。args=工具参数 JSON 原文;cwd=当时的工作目录(相对路径同解)。
@@ -256,6 +272,9 @@ export async function runMigration(): Promise<void> {
   // 广播英文版(2026-10-23,服务端 title_en/body_en):title/body 仍是中文;读端按界面语言挑,空则回落中文。
   await addColumnIfMissing('inbox_messages', 'title_en TEXT');
   await addColumnIfMissing('inbox_messages', 'body_en TEXT');
+  // 谁标的已读:'muse' = Muse 替用户标的(收件箱行尾「Muse 已读」、撤回只认这个);用户自己碰过就清掉。
+  await addColumnIfMissing('inbox_messages', 'read_by VARCHAR(16)');
+  await addColumnIfMissing('inbox_messages', 'broadcast_kind VARCHAR(16)');
 
   // 自动化动作链执行账本(本地特性,同 inbox 纪律直连 query())。真源在此;常驻 automation 会话里的
   // role='model' 合成消息只是它的人读投影。steps=JSON 数组 [{type,tool?,ok,summary}](TEXT,方言无关)。
@@ -327,7 +346,7 @@ export async function runMigration(): Promise<void> {
     ['chat_messages', 'display_files JSONB'],
     // 产出该消息的 agent slug(客户端据此还原头像/昵称;旧消息 NULL → 回退会话 agent)。
     ['chat_messages', 'agent_slug VARCHAR(64)'],
-    // 消息来源:NULL = 一轮对话里产出的;'proactive' / 'proactive:todo' / 'proactive:approval' = Agent 在后台主动发来的(客户端头上标「主动发来」)。
+    // 消息来源:NULL = 一轮对话里产出的;'proactive' / 'proactive:todo' / 'proactive:approval' / 'proactive:card' / 'proactive:notice' = Agent 在后台主动发来的(客户端头上标「主动发来」)。
     ['chat_messages', 'origin VARCHAR(24)'],
     // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。
     ['tangu_wechat_accounts', `channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`],

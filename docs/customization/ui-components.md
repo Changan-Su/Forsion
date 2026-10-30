@@ -175,6 +175,7 @@ if (!bar) drawOwnMenu(el)                           // 2.13.3 及更早的宿主
 ```
 
 - 缺省由宿主看 `root` 里的 DOM 选区:松开鼠标时出;选区收起、内容滚动或尺寸变了、点到别处时收。输入框和可编辑区里的选区不出。
+- 普通 DOM 阅读选区与聊天、笔记、翻译预览共用连续行带底色；公式按整体测量，保持原生拖选、键盘扩选和复制。绘制层在内容 DOM 外，滚动与缩放后重算，`dispose()` 清理；触屏、PDF 与代码编辑器的专用选区保留原生显示，`watch: false` 继续由插件自己绘制。
 - 宿主看不到的内容(iframe、画布、自己定位的 PDF 文字层)传 `watch: false`,自己调 `bar.show({ text, rect })` 和 `bar.hide()`。`rect` 是选区外接矩形的视口像素(`range.getBoundingClientRect()` 原样给;界面缩放由宿主抵消,不要自己除)。
 - `tools` 是声明式的:一个图标钮(`icon` 取插件图标词表里的名字;为此加了 `highlight`、`underline`、`strikethrough`、`annotate`、`copy`、`cite`),或一个颜色点(`color`)。宿主只画按钮,做什么由 `run` 决定;工具用掉了选区就在 `run` 里清掉选区或调 `bar.hide()`。没有下拉,要更多界面就在 `run` 里开自己的。
 - `ask` 接管「问 Tangu」点了之后做什么(比如带上页码),`false` 去掉这一格;不写就由宿主把文字和 `source` 交给侧栏对话(没有侧栏对话的宿主不画这一枚)。
@@ -420,3 +421,19 @@ color-mix(in srgb, var(--green) 14%, transparent)
 - 检查：`node check-plugin.mjs <插件目录> --style` 在「UI parts」下列出插件还在自己画、而宿主有零件的地方，每类一行，带位置和该换成哪个零件；Tangu 用插件沙箱（`plugin_sandbox`）验插件时，每次回来的状态后面也附同一份。只报告，不改退出码，也不拦安装和上架；界面本身是网页（iframe）的插件照样可以，那份页面的 CSS 在同一行写 `/* forsion-style: off */`。
 - 规则在 `forsion-plugin` 技能的 `tools/ui-reinvent.mjs`，按写法认：`<select>` / `role="listbox"`、自定 `menu` / `dropdown` / `popup` 类名或 `role="menu"`、`<dialog>` / `showModal` / `window.confirm`、`tab` 类名或 `data-tab` / `role="tab"`、`position: fixed`、`<iframe>` / `<webview>`、`document.head.append…`，以及整个插件没用过 `.btn` 时的手写按钮。压缩成一行的库代码（超过 2000 字的行）整行跳过。
 - 捆绑包模板 `samples/forsion-sample-bundle` 的计数器视图是照这张表写的（视图头、工具栏下拉、⋯ 菜单、确认框、空状态、`.btn`），可以照抄。
+
+### 裸写的控件跟着宿主，挂载失败有卡片 (2026-10-29)
+
+插件视图的挂载点里，没写 `class` 的 `<button>`、`<table>`、`<h1>`–`<h4>` 不写样式也是宿主的样子：按钮同不带修饰的 `.btn`（描边、悬停转墨色、禁用变淡）；表格同笔记和会话里的 Markdown 表格（表头灰字、中等字重、不垫底，格线淡一半）；`<h1>` / `<h2>` / `<h3>`、`<h4>` 分别用界面的 title / heading / body 字号档，半粗。`<input>`、`<select>`、`<textarea>` 本来就走宿主的表单控件基线。
+
+```js
+el.innerHTML = '<h2>本周</h2><button>新建</button> <input placeholder="搜索">' +
+  '<table><thead><tr><th>任务</th><th>状态</th></tr></thead><tbody><tr><td>导出</td><td>进行中</td></tr></tbody></table>'
+```
+
+- 你写的样式优先：写了 `class` 的元素这一层不管；没写 `class` 的，你写的任何规则都压得过它，哪怕是零权重的 `:where(…)`——这一层整条是零权重，`ctx.addStyle` 的样式又排在宿主后面。
+- 主按钮、危险按钮仍写 `.btn.primary` / `.btn.danger`，工具栏小按钮写 `.btn.sm`。视图头（`setViewHead` / `setViewModes`）里的按钮不在挂载点里，不吃这一层。
+- 宿主替你画的零件（`ctx.ui.mount*`、`ctx.table.mount` 等）里面、你自己搭的 `.ctx-menu` 里面不受影响；iframe / webview 里的页面拿不到。
+- 实现在 `desktop/frontend/src/styles/base.css` 末尾的 `plugin-view-base` 一段，只用公开 token（`pluginContract.test.ts` 逐个核对）。仪器：`desktop/scripts/plugin-base-shots.cjs`（真 Electron，装 `scripts/fixtures/plugin-base-sample`，明 / 暗拍图并量计算样式）。
+
+**挂载失败卡**：`mount` 同步抛错，或返回的 Promise 被 reject 时，视图里显示一张卡：「插件视图加载失败」、报错的第一行（完整堆栈在控制台）和「重试」。重试只重新运行这一个视图的 `mount`，不重载插件，同一插件的其它视图和面板照常运行。所以 `mount` 要能再跑一次：抛错之前挂上的监听和定时器宿主收不到，你自己收好，或者放到可能出错的步骤之后再挂。改了代码照旧走插件重载或沙箱热重载。

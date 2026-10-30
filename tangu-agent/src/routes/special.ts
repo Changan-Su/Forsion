@@ -29,6 +29,11 @@
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
  *   GET      /agent/special/muse/starters               新对话页的开场建议(Muse 关着 / chatStarters 关着 → 空)
  *   PATCH    /agent/special/muse/starters/:id { status: dismissed|used, mute? }  用户点了 × / 点行发出去了(只认 active,写回 Muse 的 LOG)
+ *   GET      /agent/special/muse/cards?status=          Muse 私聊里要用户点的卡(services/museCards.ts)
+ *   GET      /agent/special/muse/cards/:id              单张卡(流里那一行按 id 读)
+ *   POST     /agent/special/muse/cards/:id/decide { action }  用户点卡:效果在引擎里按 kind 白名单执行,CAS pending,不符 409
+ *   POST     /agent/special/muse/cards/:id/summary-edit { index, expected, text }  改小结里的一条(记忆跟着改)
+ *   POST     /agent/special/muse/messages/:id/feedback { verdict }  主动消息下面的「有用 / 少来点这种」
  *
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
  * 远程来源(x-forsion-remote)读 /agent/special/config 只拿最小投影(开关 + 两个节奏值,remote:true;P1 · K10b)。
@@ -56,11 +61,11 @@ import { resolveTools, declaredApproval } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { loadSchedule, entriesOf, validateEntryInput, upsertEntry, ensureEntry, removeEntry } from '../services/agentSchedule.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, isValidSlug } from '../agents/agentRegistry.js';
-import { runWithAgentSlug } from '../seams/runContext.js';
 import { listApprovals, decideApproval, getApproval } from '../services/pendingApprovals.js';
 import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
 import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
+import { appendMuseFeedback, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -72,13 +77,6 @@ function ensureLocal(res: any): boolean {
     return false;
   }
   return true;
-}
-
-/** 用户对 TODO 的处理写进 Muse 自己的 LOG(英文——下周期 read_log 喂给模型)——反馈闭环。绝不抛。 */
-async function appendMuseFeedback(userId: string, line: string): Promise<void> {
-  try {
-    await runWithAgentSlug(MUSE_AGENT_SLUG, () => deps().brain.memory.appendLogEntry(userId, line));
-  } catch { /* 反馈写失败不阻断主流程 */ }
 }
 
 /** 云端(web/安卓)只有按轮 Historian,每用户一份。回完整形状(Muse 等取缺省)让前端 dirty 判定稳定;cloud:true 让前端只露 Historian 的五项。 */
@@ -371,6 +369,7 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
  *   enabled / mode / running / sleepUntil / sleepReason —— MuseView 的状态药丸与「休眠中」提示;
  *   sessionId / running —— MuseView 取最近几条思考、自动化 Space 的「运行记录」;lastCycleAt —— 自动化详情卡「上次运行」;
  *   spaceStamp —— Muse Space 按戳热重载(builtins/muse.tsx、MuseView → syncAgentSpace);
+ *   feedbackUntil —— 手机上 Muse 私聊的「有用 / 少来点这种」到什么时候收起(MuseCards.tsx MuseFeedbackRow);
  *   running / lastCycleAt / sleepUntil / sleepReason / mode / heartbeatMinutes / pendingApprovals —— Muse 自建 Space 的
  *     ctx.agent.status() 契约(tanguProbe.museSelf;手机整端切到这台电脑时它的请求就打到这里)。
  * 不回:libraryDir / spaceDir(本机绝对路径,渲染层没有读者)、hasModel、restartsThisWindow / maxRestartsPerWindow(次数预算)、
@@ -380,7 +379,7 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
 const remoteMuseStatusView = (s: Awaited<ReturnType<typeof museStatus>>) => ({
   enabled: s.enabled, running: s.running, lastCycleAt: s.lastCycleAt, sessionId: s.sessionId,
   mode: s.mode, heartbeatMinutes: s.heartbeatMinutes, pendingApprovals: s.pendingApprovals,
-  spaceStamp: s.spaceStamp, sleepUntil: s.sleepUntil, sleepReason: s.sleepReason,
+  spaceStamp: s.spaceStamp, sleepUntil: s.sleepUntil, sleepReason: s.sleepReason, feedbackUntil: s.feedbackUntil,
 });
 
 router.get('/agent/special/muse/status', authMiddleware, async (req: AuthRequest, res) => {
@@ -657,6 +656,67 @@ router.patch('/agent/special/muse/starters/:id', authMiddleware, async (req: Aut
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'starter update failed' });
   }
+});
+
+// 私聊里的卡:读与点。点卡对远端放行(手机私聊同一张卡),客户端只传 action,改什么在引擎里定。
+router.get('/agent/special/muse/cards', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    res.json({ cards: await listMuseCards(req.user!.userId, status) });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'cards failed' }); }
+});
+
+router.get('/agent/special/muse/cards/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const card = await getMuseCard(req.user!.userId, req.params.id);
+    if (!card) return res.status(404).json({ detail: 'card not found' });
+    res.json({ card });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'card failed' }); }
+});
+
+router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const b = req.body || {};
+    const r = await decideMuseCard(req.user!.userId, req.params.id, String(b.action || ''), {
+      messageId: typeof b.messageId === 'string' ? b.messageId : undefined,
+      answers: b.answers && typeof b.answers === 'object' ? { when: String(b.answers.when || ''), pace: String(b.answers.pace || ''), focus: Array.isArray(b.answers.focus) ? b.answers.focus.map(String) : [] } : undefined,
+      index: typeof b.index === 'number' ? b.index : undefined,
+      expected: typeof b.expected === 'string' ? b.expected : undefined,
+    });
+    if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
+    if (r.card.kind === 'settings' || r.card.kind === 'intro') kickMuse(); // 心跳 / 作息变了:巡检节奏下一轮就跟上
+    res.json({ ok: true, card: r.card });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'decide failed' }); }
+});
+
+// 改小结里的一条 = 往 Muse 的长期记忆写用户的原话,拒远端(同 /muse/feedback);上面的 decide 对远端放行,所以不收文本。
+router.post('/agent/special/muse/cards/:id/summary-edit', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const b = req.body || {};
+    const r = await decideMuseCard(req.user!.userId, req.params.id, 'edit', {
+      index: typeof b.index === 'number' ? b.index : undefined,
+      expected: typeof b.expected === 'string' ? b.expected : undefined,
+      text: typeof b.text === 'string' ? b.text : undefined,
+    });
+    if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
+    res.json({ ok: true, card: r.card });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'edit failed' }); }
+});
+
+// 主动消息下面的「有用 / 少来点这种」(磨合期两周)。和 /muse/feedback 同一条 [feedback] 通道,但只收一个枚举 + 消息 id、行文引擎自己拼:
+// 这条对远端放行(手机私聊同一排按钮),而 /muse/feedback 收任意文本、拒远端 —— 那是往自治 Agent 的 LOG 里写字。
+router.post('/agent/special/muse/messages/:id/feedback', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const verdict = String(req.body?.verdict || '');
+  if (verdict !== 'up' && verdict !== 'down') return res.status(400).json({ detail: 'verdict must be up or down' });
+  try {
+    if (!(await recordMessageFeedback(req.user!.userId, req.params.id, verdict))) return res.status(404).json({ detail: 'message not found' });
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'feedback failed' }); }
 });
 
 // ── 异步审批(pending_approvals;Muse ask/agent 档的越界动作) ──────────────

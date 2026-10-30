@@ -16,9 +16,53 @@ vi.mock('./engine/targets', () => ({
 }))
 vi.mock('./agentRunService', () => ({ AGENT_APP_ID: 'tangu', currentClientId: () => 'desktop/test' }))
 
-import { fimInline } from './inlineAi'
+import { completeInline, fimInline } from './inlineAi'
 
 const sse = (...events: object[]): Response => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), { status: 200, headers: { 'Content-Type': 'text/event-stream' } })
+
+describe('completeInline protected translation (all host and plugin entries)', () => {
+  beforeEach(() => { fetchMock.bodies = []; fetchMock.impl = null })
+  it('restores formulas and code; no partial marker leaks through SSE chunks', async () => {
+    fetchMock.impl = (body) => {
+      const out = body.selection.replace('Spin', '自旋')
+      return sse(...Array.from(out, (text) => ({ type: 'delta', text })), { type: 'done', content: out })
+    }
+    const deltas: string[] = []
+    const selection = String.raw`Spin $s=\frac12$ and ` + '`code()`'
+    const result = await completeInline({ action: 'translate', selection, language: 'Chinese', modelId: 'mt' }, null, { onDelta: (d) => deltas.push(d) })
+    expect(result.text).toBe(selection.replace('Spin', '自旋'))
+    expect(deltas).toEqual([result.text])
+    expect(fetchMock.bodies[0].selection).not.toContain('frac')
+    expect(fetchMock.bodies[0].model_id).toBe('mt')
+  })
+  it('retries integrity failure once, then reports an error with no applicable partial output', async () => {
+    fetchMock.impl = () => sse({ type: 'delta', text: 'broken' }, { type: 'done', content: 'broken' })
+    const onDelta = vi.fn()
+    await expect(completeInline({ action: 'translate', selection: 'Spin $s$' }, 'mt', { onDelta })).rejects.toMatchObject({ code: 'translation_format_lost' })
+    expect(fetchMock.bodies).toHaveLength(2)
+    expect(onDelta).not.toHaveBeenCalled()
+  })
+  it('retry success emits exactly once; plain prose keeps original streaming', async () => {
+    let attempts = 0
+    fetchMock.impl = (body) => sse({ type: 'done', content: ++attempts === 1 ? 'lost' : body.selection })
+    const onDelta = vi.fn()
+    expect((await completeInline({ action: 'translate', selection: 'Spin $s$' }, 'mt', { onDelta })).text).toBe('Spin $s$')
+    expect(onDelta).toHaveBeenCalledTimes(1)
+    fetchMock.impl = () => sse({ type: 'delta', text: '你好' }, { type: 'done', content: '你好' })
+    const plain = vi.fn()
+    await completeInline({ action: 'translate', selection: 'Hello' }, 'mt', { onDelta: plain })
+    expect(plain).toHaveBeenCalledWith('你好')
+  })
+  it('cancellation prevents retries/output, and oversize source is never silently truncated', async () => {
+    const ac = new AbortController()
+    fetchMock.impl = () => { ac.abort(); return sse({ type: 'done', content: 'broken' }) }
+    await expect(completeInline({ action: 'translate', selection: '$s$' }, 'mt', { signal: ac.signal })).rejects.toThrow()
+    expect(fetchMock.bodies).toHaveLength(1)
+    fetchMock.bodies = []
+    await expect(completeInline({ action: 'translate', selection: '$x$ '.repeat(3000) }, 'mt')).rejects.toThrow(/过长/)
+    expect(fetchMock.bodies).toHaveLength(0)
+  })
+})
 
 describe('fimInline', () => {
   beforeEach(() => { fetchMock.bodies = []; fetchMock.impl = null })
