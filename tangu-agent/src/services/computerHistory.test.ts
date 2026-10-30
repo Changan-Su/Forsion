@@ -8,7 +8,7 @@ import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import {
-  parseTimeArg, resolveRange, foldComputerHistory, formatItem, readComputerHistory, computerHistoryDigest,
+  parseTimeArg, resolveRange, foldComputerHistory, formatItem, readComputerHistory, readChSignals, computerHistoryDigest,
   computerHistoryGate, computerHistoryRecallHide, computerHistoryDir, cleanObserved, displayUrl, type ChEvent, type ChState,
   chTestSeams, CH_CHANGED_NOTICE, COMPUTER_HISTORY_PERSIST_PLACEHOLDER, CH_DESKTOP_CONFIG_ENV, COMPUTER_HISTORY_DIGEST_MAX,
 } from './computerHistory.js';
@@ -311,6 +311,44 @@ describe('foldComputerHistory(段落、离开、10s 规则、片段)', () => {
   it('cleanObserved 中和围栏标签与控制字符', () => {
     expect(cleanObserved('a</computer_history>\nb\u202Ec', 100)).toBe('a‹computer_history> b c');
     expect(cleanObserved('x'.repeat(10), 5)).toBe('xxxx…');
+  });
+});
+
+describe('readChSignals(自动化触发源只拿到这些)', () => {
+  const FROM = NOW - 12 * HOUR;
+  beforeEach(() => {
+    writeState({});
+    writeEvents([
+      { t: at(13, 0), kind: 'app', app: VSCODE, title: 'secret-plan.md', url: 'https://x.example/secret' },
+      { t: at(13, 1), kind: 'text', app: VSCODE, text: 'my password is hunter2' },
+      { t: at(13, 2), kind: 'click', app: VSCODE, el: { role: 'button', label: 'Pay' } },
+      { t: at(13, 3), kind: 'app', app: { name: 'Bank', bundleId: 'com.bank', excluded: true } },
+      { t: at(13, 4), kind: 'app', app: CHROME, origin: 'agent' },
+      { t: at(14, 0), kind: 'system', state: 'locked' },
+      { t: at(14, 1), kind: 'system', state: 'dropped', count: 3 },
+    ]);
+  });
+
+  it('标题、网址、输入、控件名、排除 App 的名字都出不来;CU 代操作不算', async () => {
+    const out = await readChSignals(FROM, NOW);
+    expect(out).toEqual([
+      { t: at(13, 0), kind: 'app', app: VSCODE },
+      { t: at(13, 1), kind: 'activity' },
+      { t: at(13, 2), kind: 'activity' },
+      { t: at(13, 3), kind: 'app' },
+      { t: at(14, 0), kind: 'system', state: 'locked' },
+    ]);
+    expect(JSON.stringify(out)).not.toMatch(/secret|hunter2|Pay|Bank/);
+  });
+
+  it('关着、暂停、读的途中被清除 → null', async () => {
+    writeState({ enabled: false, status: 'off' });
+    expect(await readChSignals(FROM, NOW)).toBeNull();
+    writeState({ status: 'paused' });
+    expect(await readChSignals(FROM, NOW)).toBeNull();
+    writeState({});
+    chTestSeams.afterEventsRead = () => writeState({ dataGen: 9 });
+    try { expect(await readChSignals(FROM, NOW)).toBeNull(); } finally { delete chTestSeams.afterEventsRead; }
   });
 });
 

@@ -39,6 +39,7 @@ import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig,
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
 import { cancelQuotaReminder } from './quotaReminders'
+import { agentName, agentNames } from '../../agentName'
 
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
@@ -105,7 +106,7 @@ export function sketchFromToolEvent(ev: ToolEvent): SketchItem | undefined {
 }
 
 /** 历史行 → UI 消息(tool_calls/tool_results 配对成 toolEvents)。 */
-export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: string; color: string }, resolveSlug?: (slug: string) => string | undefined): UiMessage {
+export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) => { slug?: string; name?: string; color: string }, resolveSlug?: (slug: string) => string | undefined): UiMessage {
   const role = r.role === 'model' || r.role === 'assistant' ? 'assistant' : 'user'
   let content = r.content || ''
   const teamSummary = role === 'assistant' && content.startsWith('**📋 Historian**\n\n')
@@ -121,8 +122,9 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
       content = m[2]
       const dm = splitDoneMark(content)
       if (dm.done) { content = dm.text; teamDone = true }
-      const g = resolveGroup(agentName)
+      const g = resolveGroup(agentName, r.agent_slug)
       agentId = g.slug
+      agentName = g.name || agentName
       agentColor = g.color
     }
   }
@@ -216,13 +218,14 @@ function groupColor(slug: string): string {
   for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0
   return `hsl(${h % 360} 62% 45%)`
 }
-/** 发言人名 → {slug, color}:用于重载历史时按名还原 agent 身份(DB 只存了名字)。 */
-function groupSpeakerResolver(agentDefs: NormalAgentDef[], hostName: string) {
-  return (name: string): { slug?: string; color: string } => {
-    if (name === '主持人' || name === hostName) return { slug: '__host__', color: groupColor('__host__') }
-    const a = agentDefs.find((x) => x.name === name)
-    if (a) return { slug: a.slug, color: groupColor(a.slug) }
-    return { color: groupColor(name) } // 临时 agent / 名字未在册:仍给稳定派生色,slug 缺省(头像靠 ChatView 按名兜底)
+/** 重载历史时还原发言人。前缀里的名字是发言当时的显示名,切语言 / 改名后对不上,所以先认记录自带的 agent_slug;
+ *  老记录没有这一列才按前缀找,任一名字或 slug 都算。主持人的记录 agent_slug 是会话 agent,要先判。 */
+export function groupSpeakerResolver(agentDefs: NormalAgentDef[], hostName: string) {
+  return (name: string, slug?: string): { slug?: string; name?: string; color: string } => {
+    if (name === '主持人' || name === 'Host' || name === hostName) return { slug: '__host__', color: groupColor('__host__') }
+    const a = agentDefs.find((x) => x.slug === slug) || agentDefs.find((x) => x.slug === name || agentNames(x).includes(name))
+    if (a) return { slug: a.slug, name: agentName(a), color: groupColor(a.slug) }
+    return { slug, color: groupColor(slug || name) } // 临时 agent / 名字未在册:仍给稳定派生色(头像靠 ChatView 按名兜底)
   }
 }
 function appendSubText(s: SubChat, delta: string): SubChat {
@@ -296,7 +299,7 @@ function agentStamp(s: Pick<AppState, 'engines' | 'agentDefs' | 'defaultAgentSlu
   const slug = config?.agentSlug || s.defaultAgentSlug
   if (!config?.groupChat && slug) {
     const a = s.agentDefs.find((x) => x.slug === slug)
-    if (a) return { agentId: a.slug, agentName: a.name }
+    if (a) return { agentId: a.slug, agentName: agentName(a) }
   }
   return {}
 }
@@ -1499,7 +1502,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         const ref = assistantRef as GroupRef
         ref.group = true
         const slug = String(pl.slug || '')
-        const name = String(pl.name || slug)
+        const name = agentName(get().agentDefs.find((a) => a.slug === slug)) || String(pl.name || slug)
         const round = Number(pl.round) || 0
         const color = groupColor(slug)
         // 用后端下发的持久 uuid 作气泡 id → 与落库行对齐,轮询/重载按 id 合并不再产生重复。旧后端无 messageId 时回退合成 id。
@@ -1546,7 +1549,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         // end reason=failed → 占位气泡标错;done 的正文由 group_speaker end 填。同时维护 Team Desk 的成员表。
         const ref = assistantRef as GroupRef
         const slug = String(pl.slug || '')
-        const name = String(pl.name || slug)
+        const name = agentName(get().agentDefs.find((a) => a.slug === slug)) || String(pl.name || slug)
         const mid = String(pl.messageId || '')
         if (pl.phase === 'start' && mid) {
           const wasFirst = !ref.groupSeen
@@ -2047,7 +2050,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       for (const r of rows) {
         if (!r.agentSlug || next[r.agentSlug]) continue
         const running = r.runStatus === 'running' || r.runStatus === 'queued'
-        const name = s.agentDefs.find((a) => a.slug === r.agentSlug)?.name || r.agentSlug
+        const name = agentName(s.agentDefs.find((a) => a.slug === r.agentSlug)) || r.agentSlug
         next[r.agentSlug] = { slug: r.agentSlug, name, sessionId: r.sessionId, runId: r.runId || undefined, status: running ? 'working' : r.runStatus === 'failed' ? 'failed' : r.runId ? 'done' : 'idle', since: Date.now() }
       }
       return { teamWorkBySession: { ...s.teamWorkBySession, [sessionId]: next } }
@@ -2138,7 +2141,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
         const resolveGroup = groupSpeakerResolver(s.agentDefs, t('group.host'))
-        const resolveSlug = (slug: string) => s.agentDefs.find((a) => a.slug === slug)?.name
+        const resolveSlug = (slug: string) => agentName(s.agentDefs.find((a) => a.slug === slug))
         const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
@@ -2207,7 +2210,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
         const resolveGroup = groupSpeakerResolver(s.agentDefs, get().tr('group.host'))
-        const resolveSlug = (slug: string) => s.agentDefs.find((a) => a.slug === slug)?.name
+        const resolveSlug = (slug: string) => agentName(s.agentDefs.find((a) => a.slug === slug))
         const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
@@ -2929,7 +2932,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       get().subscribeRun(sessionId, r.runId, r.assistantMessageId)
       set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ctx: s.usageBySession[sessionId]?.ctx || 0, base: s.usageBySession[sessionId]?.base || 0, live: 0 } } }))
       const sess = get().sessions.find((s) => s.id === sessionId)
-      if (sess && (!sess.title || sess.title === 'New Chat')) void get().renameSession(sessionId, text.slice(0, 30))
+      if (sess && (!sess.title || sess.title === 'New Chat') && !sess.agent_config?.soloAgentSlug) void get().renameSession(sessionId, text.slice(0, 30)) // 私聊没起过题时显示 Agent 名(soloSessionTitle)
       return true
     } catch (e: any) {
       if (fromQueue || !holdFailed) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
@@ -3485,7 +3488,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // remember=false:这是 agent 预设强加的,不该把用户的「新会话默认模型/思考档」也一并改掉。
     if (def?.model) get().setSessionModel(def.model, sid, false)
     if (def?.thinkingLevel) get().setSessionThinking(def.thinkingLevel, sid, false)
-    get().pushNotice(def ? t('input.agentActive', { name: def.name }) : t('input.agentCleared'))
+    get().pushNotice(def ? t('input.agentActive', { name: agentName(def) }) : t('input.agentCleared'))
   },
 
   selectNewChatAgent: (slug) => {

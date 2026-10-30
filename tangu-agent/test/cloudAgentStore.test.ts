@@ -163,7 +163,7 @@ describe('cloudDeleteAgent', () => {
     expect(agentFiles.store.size).toBe(0);
     // PATCH 路由语义:cur=cloudGetAgent(虚拟预设兜底命中),未传字段用 cur 回填
     const cur = await cloudGetAgent('u1', 'recita');
-    expect(cur?.systemPrompt).toContain('You are Recita');
+    expect(cur?.systemPrompt).toContain('clear-eyed, critical, and pragmatic');
     const updated = await cloudSaveAgent('u1', 'recita', {
       slug: 'recita', name: '我的审查员', systemPrompt: cur!.systemPrompt,
     });

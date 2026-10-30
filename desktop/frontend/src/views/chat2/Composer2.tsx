@@ -62,6 +62,7 @@ import { isDirectModelId } from '../chatModelCatalog'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
 import { focusTarget, homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
+import { agentName, agentNames } from '../../agentName'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
@@ -1157,7 +1158,7 @@ export const Composer2: React.FC<{
   const mentionMatches = useMemo<NormalAgentDef[]>(() => {
     if (!mention) return []
     const q = mention.query.toLowerCase()
-    return mentionPool.filter((a) => !q || a.name.toLowerCase().includes(q) || a.slug.toLowerCase().includes(q)).slice(0, 10)
+    return mentionPool.filter((a) => !q || a.slug.toLowerCase().includes(q) || agentNames(a).some((n) => n.toLowerCase().includes(q))).slice(0, 10)
   }, [mention, mentionPool])
   const mentionActive = !!mention && mentionMatches.length > 0
   useEffect(() => { setMentionIndex(0) }, [mention?.start, mention?.query])
@@ -1165,10 +1166,10 @@ export const Composer2: React.FC<{
   const pickMention = (a: NormalAgentDef) => {
     if (!mention) return
     const before = draft.slice(0, mention.start)
-    const insert = `@${a.name} `
+    const insert = `@${agentName(a)} `
     const next = before + insert + draft.slice(cursorPos)
     setDraft(next)
-    if (projectMode) setMentionedProjects((prev) => (prev.some((p) => p.path === a.slug) ? prev : [...prev, { name: a.name, path: a.slug }]))
+    if (projectMode) setMentionedProjects((prev) => (prev.some((p) => p.path === a.slug) ? prev : [...prev, { name: agentName(a), path: a.slug }]))
     else if (inGroup) setMentionedSlug(a.slug)
     else setMentionAgents((prev) => (prev.includes(a.slug) ? prev : [...prev, a.slug]))
     const caret = before.length + insert.length
@@ -2052,7 +2053,7 @@ export const Composer2: React.FC<{
                   onMouseEnter={() => setMentionIndex(i)}
                   onClick={() => pickMention(a)}
                 >
-                  <span className="t2c-menu-cmd">@{a.name}</span>
+                  <span className="t2c-menu-cmd">@{agentNames(a).join(' · ')}</span>
                   <span className="t2c-menu-desc">{a.description || a.slug}</span>
                 </button>
               ))}

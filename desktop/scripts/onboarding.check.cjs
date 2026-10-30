@@ -180,8 +180,8 @@ async function main() {
         await next()
         await win.waitForSelector('.ob-background-layout[aria-busy="false"]')
         await geometry(`${prefix}-background`)
-        const historian = win.getByRole('switch', { name: 'Historian', exact: true })
-        const muse = win.getByRole('switch', { name: 'Muse', exact: true })
+        const historian = win.getByRole('switch', { name: locale === 'zh' ? '史官' : 'Historian', exact: true })
+        const muse = win.getByRole('switch', { name: locale === 'zh' ? '卜算子' : 'Muse', exact: true })
         if (locale === 'zh' && dimensions[0] === 1280) {
           assert.equal(await historian.getAttribute('aria-checked'), 'true')
           assert.equal(await muse.getAttribute('aria-checked'), 'true')
@@ -190,8 +190,8 @@ async function main() {
           assert.equal(await historian.getAttribute('aria-checked'), 'true', 'failed save retains the current choice')
           await geometry(`${prefix}-background-save-failure`)
           failSpecialSave = false
-          await historian.click(); await win.waitForFunction(() => document.querySelector('[aria-label="Historian"][role="switch"]')?.getAttribute('aria-checked') === 'false')
-          await muse.click(); await win.waitForFunction(() => document.querySelector('[aria-label="Muse"][role="switch"]')?.getAttribute('aria-checked') === 'false')
+          await historian.click(); await win.waitForFunction(() => document.querySelector('[aria-label="史官"][role="switch"]')?.getAttribute('aria-checked') === 'false')
+          await muse.click(); await win.waitForFunction(() => document.querySelector('[aria-label="卜算子"][role="switch"]')?.getAttribute('aria-checked') === 'false')
           assert.deepEqual(specialWrites, [{ historian: { enabled: false } }, { historian: { enabled: false } }, { muse: { enabled: false } }])
           assert.deepEqual(specialConfig.historian, { ...originalConfig.historian, enabled: false })
           assert.deepEqual(specialConfig.muse, { ...originalConfig.muse, enabled: false })

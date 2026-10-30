@@ -5,6 +5,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { type TeamWorkMember } from '../../tangu/store/tanguSlice'
 import { useChildChat } from '../../stores/childChatStore'
+import { agentName } from '../../agentName'
 
 registerMessages({
   'teamdesk.title': { zh: '团队工作台', en: 'Team Desk' },
@@ -32,7 +33,7 @@ function useTeamMembers(sessionId: string): TeamWorkMember[] {
     const slugs: string[] = Array.isArray(s.cfg?.groupAgents) ? s.cfg!.groupAgents!.map(String) : []
     return slugs.map((slug) => {
       const w = s.work?.[slug]
-      const name = s.agentDefs.find((a) => a.slug === slug)?.name || w?.name || slug
+      const name = agentName(s.agentDefs.find((a) => a.slug === slug)) || w?.name || slug
       // A user can continue a member independently after the parent team has finished.
       const childRunning = w?.sessionId && s.childRuns[w.sessionId]
       const status = childRunning ? (w?.status === 'waiting' ? 'waiting' : 'working') : w ? (!s.running && (w.status === 'working' || w.status === 'waiting') ? 'idle' : w.status) : 'idle'

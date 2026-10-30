@@ -15,8 +15,9 @@ import { isWithinActiveHours, loadSpecialAgentsConfig } from './specialAgentsCon
 import { MUSE_ONBOARDING_DAILY_CAP, onboardingActive, readMuseOnboarding } from './museState.js';
 
 /** proactive = message_user;todo / approval = 引擎替 add_muse_todo / 审批入队发的;card = Muse 发起的、要用户点的卡(services/museCards.ts);
- *  notice = 不是 Muse 自己要开口的卡(用户要的设置卡、引擎发的第一次见面 / 小结),不计今天的额度。 */
-export type ProactiveOrigin = 'proactive' | 'proactive:todo' | 'proactive:approval' | 'proactive:card' | 'proactive:notice';
+ *  notice = 不是 Muse 自己要开口的卡(用户要的设置卡、引擎发的第一次见面 / 小结),不计今天的额度;
+ *  remind = 规则的「直接提醒」(用户自己定的,不叫模型),同样不计今天的额度。 */
+export type ProactiveOrigin = 'proactive' | 'proactive:todo' | 'proactive:approval' | 'proactive:card' | 'proactive:notice' | 'proactive:remind';
 export const MUSE_DM_PER_HOUR = 3;
 export const MUSE_DM_MAX_CHARS = 1500;
 

@@ -1183,6 +1183,8 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
   background: var(--overlay-light, rgba(127,127,127,.1)); color: var(--text-muted);
 }
 .t2-taskcard-tldr { color: var(--text-muted); overflow-wrap: anywhere; }
+.t2-rulecard-row { display: grid; grid-template-columns: 2.5em minmax(0, 1fr); gap: 8px; overflow-wrap: anywhere; }
+.t2-rulecard-row > span:first-child { color: var(--text-muted); }
 .t2-taskcard-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .t2-taskcard-actions > button {
   border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-pill, 999px); background: transparent; color: var(--text);

@@ -362,6 +362,7 @@
     "fix:zhpunct": "node scripts/zh-punct.codemod.cjs",
     "shot:walk": "node scripts/uiux-walk.shot.cjs",
     "check:agentprofile": "node scripts/agent-profile.check.cjs",
+    "check:agentnames": "node scripts/agent-names.check.cjs",
     "check:r5views": "node scripts/r5-views.check.cjs",
     "check:emptystates": "node scripts/empty-states.check.cjs",
     "check:r5narrow": "node scripts/r5-names-narrow.check.cjs",

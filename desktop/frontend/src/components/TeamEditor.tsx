@@ -10,6 +10,7 @@ import { useApp } from '../stores/appStore'
 import * as api from '../services/backendService'
 import { isTeamImageAvatar, type NormalAgentDef, type TeamDef } from '../types'
 import { homeTarget } from '../services/engine/targets'
+import { agentName } from '../agentName'
 
 registerMessages({
   'team.editor.titleNew': { zh: '新建团队', en: 'New team' },
@@ -60,7 +61,7 @@ export const TeamEditor: React.FC<{
   const presentCount = members.filter((m) => candidateSlugs.has(m.slug)).length
   // 名称可空:新建时缺省 = 成员名相连(引擎 defaultTeamName 生成,前端只把同款算出来当占位符);编辑时留空 = 保留原名(PATCH 空白不改名)。
   // 名称一律原样交给服务端,前端不替它补缺省 —— 否则编辑时清空会把团队意外改名成缺省名(Codex 09-16 r3 #7)。
-  const defaultName = members.map((m) => candidates.find((a) => a.slug === m.slug)?.name || m.slug).join(' & ')
+  const defaultName = members.map((m) => agentName(candidates.find((a) => a.slug === m.slug)) || m.slug).join(' & ')
   const namePlaceholder = team ? team.name : (defaultName || t('team.editor.namePlaceholder'))
   const canSave = presentCount >= 2 && !busy
 
@@ -143,7 +144,7 @@ export const TeamEditor: React.FC<{
                   <label style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 160, cursor: 'pointer' }}>
                     <input type="checkbox" checked={on} onChange={() => toggle(a.slug)} />
                     {on && <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-muted)', minWidth: 14 }}>{idx + 1}</span>}
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{agentName(a)}</span>
                   </label>
                   {on && (
                     <input type="text" value={members[idx].role} placeholder={t('team.editor.rolePlaceholder')} style={{ flex: 1 }}

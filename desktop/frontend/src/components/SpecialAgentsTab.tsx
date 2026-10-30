@@ -9,6 +9,7 @@ import { CapabilityMenu } from './CapabilityMenu'
 import { subscribeAccountQuota, type AccountQuotaView } from '../services/accountQuota'
 import './specialAgents.css'
 import { homeTarget, connectionKey } from '../services/engine/targets'
+import { agentName } from '../agentName'
 
 registerMessages({
   'specialUi.intro': { zh: '管理在后台整理记忆与推进工作的 Agent。选择一个 Agent 调整它的工作方式。', en: 'Manage the agents that organize memory and work in the background. Choose one to adjust how it works.' },
@@ -174,7 +175,7 @@ export function SpecialAgentsTab({ cfg, localHost = false, initialRole = 'histor
     ...(value && !models.some((item) => item.id === value) ? [{ id: value, label: value }] : []),
   ], onChange, t('specialUi.searchModels'))
   const toggleRow = (label: string, value: boolean, onChange: (v: boolean) => void, hint?: string) => <div className="special-toggle-row"><div><strong>{label}</strong>{hint && <p>{hint}</p>}</div><Toggle label={label} value={value} onChange={onChange} /></div>
-  const escalation = agents.filter((a) => a.slug !== 'muse').map((a) => ({ id: a.slug, label: a.name || a.slug }))
+  const escalation = agents.filter((a) => a.slug !== 'muse').map((a) => ({ id: a.slug, label: agentName(a) }))
   if (m.escalateTo && !escalation.some((a) => a.id === m.escalateTo)) escalation.push({ id: m.escalateTo, label: m.escalateTo })
   return <div className="special-agents">
     {!cloud && <p className="special-intro">{t('specialUi.intro')}</p>}
