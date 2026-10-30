@@ -156,7 +156,7 @@ export function ConnectorStore({ query, onNotice }: { query: string; onNotice: (
   }
   return (
     <div className="mk-webapps" data-connector-store>
-      <p className="mk-web-hint">{catalog?.offline ? t('connectors.offline') : t('connectors.subtitle')}</p>
+      {catalog?.offline && <p className="mk-web-hint">{t('connectors.offline')}</p>}
       <div className="mk-grid">
         {shown.map((c) => {
           const row = rows.get(c.id)
