@@ -64,7 +64,7 @@ export const PLUGIN_AWARENESS_SECTION =
   '## Forsion Plugins\n' +
   'Check the store first. When the user describes something they do repeatedly (every day, every week, each time, by hand) or wants a capability Forsion lacks, your first action is search_marketplace with a few keywords, before you write any answer or suggest a workflow or automation. A plugin may already do it, and the results appear as cards they can install from.\n' +
   'If nothing fits, still help as best you can, and end your reply with this task card offering to build a plugin, even if you also suggest an automation. The work starts only if they pick it:\n' +
-  '```forsion-task\ntitle: Build a plugin that …\nagent: coding\n---\nLoad the forsion-plugin skill, then build … (a self-contained brief: what it does, for whom, how to verify).\n```\n' +
+  '```forsion-task\ntitle: Build a plugin that …\nagent: coding\nskill: forsion-plugin\n---\nA self-contained brief: what it does, for whom, how to verify.\n```\n' +
   'For a one-off question or task (a calculation, a translation, a fact, a single edit), skip all of this: do not search the store, just help.';
 
 export const PERSISTENCE_SECTION =

@@ -130,6 +130,7 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
   let todo = ''
   let id = ''
   let agent = ''
+  let skill = ''
   let ask = false
   let withdraw = ''
   let reason = ''
@@ -143,6 +144,7 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
     else if (k === 'todo') todo = m[2]
     else if (k === 'id') id = m[2]
     else if (k === 'agent') agent = m[2]
+    else if (k === 'skill') skill = m[2]
     else if (k === 'ask') ask = /^(true|yes|1)$/i.test(m[2])
     else if (k === 'withdraw') withdraw = m[2]
     else if (k === 'reason') reason = m[2]
@@ -154,7 +156,9 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
     const r = reason || (/^\s*reason\s*:\s*(.*?)\s*$/i.exec(lines.find((l) => /^\s*reason\s*:/i.test(l)) || '')?.[1] ?? '')
     return { title: '', prompt: '', withdraw: w, ...(r ? { reason: r.slice(0, TLDR_MAX) } : {}) }
   }
-  const prompt = body.join('\n').trim().slice(0, PROMPT_MAX)
+  // `skill:` 头:任务书开头固定一句。模型抄头部很稳,让它在正文里写这句它会改写或省掉(10-30 live:3 次里 2 次)
+  const brief = body.join('\n').trim()
+  const prompt = (brief && APPROVAL_ID_RE.test(skill) ? `Load the ${skill} skill first.\n\n${brief}` : brief).slice(0, PROMPT_MAX)
   if (!title) title = (body.find((l) => l.trim()) || '').trim()
   title = title.trim().slice(0, TITLE_MAX)
   if (!title || !prompt) return null
