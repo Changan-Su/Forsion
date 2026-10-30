@@ -13,6 +13,7 @@
  * 否则 → deps().brain.amadeus(httpBrain 调 server /api/amadeus/vaults/default/*,thin worker
  * 云端 Tangu 读写用户云 vault)。facet 未装配(microserver 进程内/纯本地 sandbox)→ 工具隐藏。
  * .db 读-改-写在云端带 baseSeq 乐观锁,409 冲突用服务端回带的最新内容重放一次。
+ * 默认日历 human/CALENDAR.db 两个后端都有:本机是引擎家目录里的文件,云端是 server 的 `__human__`(版本比对写,409 重读重放一次)。
  */
 import { promises as fs, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -21,7 +22,7 @@ import type { ToolProvider, ToolDef } from '../toolRegistry.js';
 import type { AppProfile } from '../../seams/appProfile.js';
 import type { ToolCapabilities, ToolContext } from '../toolTypes.js';
 import { deps, isConfigured } from '../../seams/runtime.js';
-import { AmadeusConflictError, AmadeusNotFoundError, type AmadeusBrain } from '../../seams/cloudBrain.js';
+import { AmadeusConflictError, AmadeusNotFoundError, HumanCalendarConflictError, type AmadeusBrain } from '../../seams/cloudBrain.js';
 import { pageInstructionsForFile } from '../../services/pageInstructions.js';
 import { defaultCalendarFile, ensureHumanFolder, humanDir, tanguHome } from '../../core/tanguHome.js';
 import { atomicSyncWrite, readSyncBytes } from '../../services/agentSyncPaths.js';
@@ -154,6 +155,10 @@ interface AmadeusBackend {
   read(rel: string): Promise<{ content: string; seq?: number }>;
   /** 写文本;overwrite=无条件覆盖(cloud force),否则带 baseSeq 乐观锁(local 忽略、永不冲突)。 */
   write(rel: string, content: string, opts?: { baseSeq?: number; overwrite?: boolean }): Promise<void>;
+  /** 默认日历 + 「这个库路径是它的旧位置镜像」的判定;这里没有默认日历 / 文件坏了 = null(退回全库日历)。 */
+  human(): Promise<{ cal: Cal; isMirror(rel: string): boolean } | null>;
+  /** 默认日历的读-改-写;文件还没有时第一次写才建。 */
+  mutateHuman(apply: CalMutation): Promise<string>;
 }
 
 const localBackend: AmadeusBackend = {
@@ -172,6 +177,15 @@ const localBackend: AmadeusBackend = {
     await fs.writeFile(tmp, content, 'utf8');
     await fs.rename(tmp, abs);
   },
+  human: async () => {
+    try {
+      const cal = readHumanCal();
+      return cal && { cal, isMirror: isHumanMirror };
+    } catch {
+      return null; // 跳过损坏的,同全库 .db
+    }
+  },
+  mutateHuman: (apply) => mutateHumanCal(apply),
 };
 
 function cloudAmadeus(): AmadeusBrain | null {
@@ -179,8 +193,32 @@ function cloudAmadeus(): AmadeusBrain | null {
   return deps().brain.amadeus ?? null;
 }
 
-function cloudBackend(facet: AmadeusBrain): AmadeusBackend {
+function cloudBackend(facet: AmadeusBrain, locale?: string): AmadeusBackend {
+  const human: AmadeusBackend['human'] = async () => {
+    const r = await facet.readHumanCalendar?.();
+    if (!r) return null;
+    // worker 容器的系统语言不代表用户:第一次新建时的名字跟这次 run 客户端报的界面语言
+    const db = (r.data as DbFile | null) ?? emptyHumanCal(locale ? locale === 'zh' : undefined);
+    const cal = toCal(HUMAN_CAL, db);
+    return cal && { cal: { ...cal, version: r.version }, isMirror: (rel) => !!r.legacy?.endsWith(`/${rel}`) };
+  };
   return {
+    human,
+    // 409 = 读过之后被网页 / 桌面同步改了:重读再重放一次,再冲突上抛。apply 就地改 db,每轮都要新读一份
+    mutateHuman: async (apply) => {
+      for (let replayed = false; ; replayed = true) {
+        const h = await human();
+        if (!h) throw new Error('human/CALENDAR.db is not available');
+        const r = apply(h.cal);
+        if (!r.ok) return r.msg;
+        try {
+          await facet.writeHumanCalendar!(h.cal.db, h.cal.version ?? null);
+          return r.msg;
+        } catch (e) {
+          if (replayed || !(e instanceof HumanCalendarConflictError)) throw e;
+        }
+      }
+    },
     exists: () => true,
     ensureVault: async () => {},
     list: async (pred) => {
@@ -237,7 +275,7 @@ const hostUseFileTools =
 function backendFor(ctx: ToolContext | undefined): AmadeusBackend | null {
   if (ctx?.execMode === 'host') return localBackend;
   const facet = cloudAmadeus();
-  return facet ? cloudBackend(facet) : null;
+  return facet ? cloudBackend(facet, ctx?.uiSettings?.locale?.value) : null;
 }
 
 // ── 日历装配(后端无关)────────────────────────────────────────────────────
@@ -247,6 +285,8 @@ interface Cal {
   cal: DbColumn;
   /** cloud 读到的乐观锁票据(local 无)。 */
   seq?: number;
+  /** cloud 默认日历的版本票据;null = 文件还没有。 */
+  version?: string | null;
 }
 async function readDbBe(be: AmadeusBackend, rel: string): Promise<{ db: DbFile; seq?: number }> {
   const { content, seq } = await be.read(rel);
@@ -260,14 +300,13 @@ function toCal(rel: string, db: DbFile, seq?: number): Cal | null {
   return cal && !db.source ? { rel, db, cal, seq } : null;
 }
 
-// 默认日历 human/CALENDAR.db 不在笔记库里:只有本机后端有,排第一,不带名字新建就落这里。云端 `__human__` 那半在 server。
-/** 和桌面 dbStore 同一个 ref;不是笔记库路径,读写走下面两个函数。 */
+// 默认日历 human/CALENDAR.db 不在笔记库里:排第一,不带名字新建就落这里。下面是本机那半,云端那半在 cloudBackend。
+/** 和桌面 dbStore 同一个 ref;不是笔记库路径,读写走 be.human / be.mutateHuman。 */
 const HUMAN_CAL = 'human://CALENDAR.db';
 const humanCalFile = (): string => path.join(humanDir(), 'CALENDAR.db');
 /** 文件还没有 = 新用户的空日历,第一次写才落盘。列 id 固定,和桌面 humanCalendarIo 的 emptyCalendar 一致:
  *  两边同时首次建时,后写的重读后列还对得上。 */
-function emptyHumanCal(): DbFile {
-  const zh = detectZh();
+function emptyHumanCal(zh = detectZh()): DbFile {
   return {
     version: 2,
     name: zh ? '我的日历' : 'My calendar',
@@ -309,20 +348,12 @@ function isHumanMirror(rel: string): boolean {
   return !!legacy && path.resolve(legacy) === inVault(rel);
 }
 
-/** 本机:默认日历 + 全库日历;云端:全库日历。全库 = 经典多维表里含 calendarDate 列的(note-view 库 v1 跳过)。 */
+/** 默认日历 + 全库日历。全库 = 经典多维表里含 calendarDate 列的(note-view 库 v1 跳过)。 */
 async function calendars(be: AmadeusBackend): Promise<Cal[]> {
-  const out: Cal[] = [];
-  let human: Cal | null = null;
-  if (be === localBackend) {
-    try {
-      human = readHumanCal();
-      if (human) out.push(human);
-    } catch {
-      /* 跳过损坏的,同下 */
-    }
-  }
+  const human = await be.human();
+  const out: Cal[] = human ? [human.cal] : [];
   for (const rel of await be.list((n) => n.toLowerCase().endsWith('.db'))) {
-    if (human && isHumanMirror(rel)) continue; // human/ 读不出来时,库里这份就是唯一能用的
+    if (human?.isMirror(rel)) continue; // human/ 读不出来时,库里这份就是唯一能用的
     try {
       const { db, seq } = await readDbBe(be, rel);
       const c = toCal(rel, db, seq);
@@ -361,7 +392,7 @@ async function mutateCalendar(be: AmadeusBackend, nameOrPath: string | undefined
     return r.msg;
   };
   const cal = await findCalendar(be, nameOrPath);
-  if (cal.rel === HUMAN_CAL) return mutateHumanCal(apply);
+  if (cal.rel === HUMAN_CAL) return be.mutateHuman(apply);
   try {
     return await attempt(cal);
   } catch (e) {

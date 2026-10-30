@@ -207,6 +207,7 @@ import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
 import { webPublishLive, startConnectLocal } from './lib/webpublish-live.mjs';
+import { cloudCalLive } from './lib/cloudcal-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
@@ -271,6 +272,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
+KEYS.push('cloudcal');
 KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
@@ -322,6 +324,7 @@ OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startu
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
+OPT_IN.add('cloudcal'); // --only cloudcal:三个 run;云端 run 的默认日历 × 真路由。要 TANGU_LIVE_CLOUD_URL / TOKEN 指向 server scripts/calendar-local.mts,判据与负对照见 lib/cloudcal-live.mjs。
 OPT_IN.add('webpublish'); // --only webpublish:三个 run,同用 account 那个假云端(Forsion Connect 的列表 / 发布 / 下线也在里面)。
 // --only webpublishreal --connect-server <server 检出> [--extend-pkg <签好的 Extend 包目录>]:同 webpublish 三个 run + 公开链接实开,
 // 但 Connect 换成本地真 server(scripts/connect-local.mts:PGlite + 真 Connect 模块,文件走 bytea、不经蓬洲);给了 --extend-pkg 再加一段
@@ -6995,6 +6998,12 @@ Then reply with only the command output.`,
   await scenario('account', 'account 「我还剩多少」:账号额度 + 本对话余量,账号动作逐次确认', async () => {
     if (!FAKE_CLOUD) return { ok: false, detail: '给了 TANGU_LIVE_CLOUD_URL:这个场景要用台架自带的假云端(数是已知的),去掉那个环境变量再跑' };
     return accountLive({ run, api, sleep, cloud: FAKE_CLOUD });
+  });
+  // cloudcal(10-30):云端 run(sandbox 形态)经真路由读写默认日历 human/CALENDAR.db。判据与负对照见 lib/cloudcal-live.mjs。
+  await scenario('cloudcal', 'cloudcal 云端 Agent 的默认日历:新用户首建、新会话改、老库种子不动不列', async () => {
+    const cloud = process.env.TANGU_LIVE_CLOUD_URL;
+    if (!cloud) return { ok: false, detail: '要 TANGU_LIVE_CLOUD_URL / TANGU_LIVE_CLOUD_TOKEN 指向 server scripts/calendar-local.mts(打印的 url 与 token)' };
+    return cloudCalLive({ run, cloud, token: TOKEN });
   });
   // webpublish(10-23):publish_web_page 从工作会话(本机文件)和聊天会话(会话沙箱里刚写的页)各发一次,逐次弹卡;再问「发过哪些」只读列出。判据与负对照见 lib/webpublish-live.mjs。
   await scenario('webpublish', 'webpublish 「发布成网页」:工作 / 聊天会话各发一次,逐次确认,再列出已发布', async () => {

@@ -1,11 +1,11 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { amadeusProvider, amadeusVaultPath } from './amadeus.js';
 import { configureTangu } from '../../seams/runtime.js';
 import { createTanguProfile } from '../../profiles/index.js';
-import { AmadeusConflictError, AmadeusNotFoundError, type AmadeusBrain } from '../../seams/cloudBrain.js';
+import { AmadeusConflictError, AmadeusNotFoundError, HumanCalendarConflictError, type AmadeusBrain } from '../../seams/cloudBrain.js';
 import { humanDir } from '../../core/tanguHome.js';
 
 const tools = Object.fromEntries(amadeusProvider.tools().map((t) => [t.name, t]));
@@ -363,4 +363,149 @@ describe('note tools', () => {
   });
 
   // 云端路径已由上面「cloud backend」那组覆盖(write_note force 覆盖 + read_note 剥标记)。
+});
+
+describe('cloud default calendar (brain.amadeus → /agent/human/CALENDAR.db)', () => {
+  const cloudCal = (rows: unknown[] = []) => ({
+    version: 1,
+    name: 'Work',
+    columns: [{ id: 'n', name: 'Name', type: 'text' }, { id: 'd', name: 'Date', type: 'calendarDate' }],
+    rows,
+  });
+  let vault: Map<string, { content: string; seq: number }>;
+  let human: { data: any; version: string | null; legacy: string | null } | null;
+  let readError: Error | null;
+  let writes: Array<{ data: any; version: string | null }>;
+  /** 每次写之前跑一次,模拟别处抢先写;抛 HumanCalendarConflictError = 这次写 409。 */
+  let beforeWrite: () => void;
+  const facet: AmadeusBrain = {
+    list: async () => [...vault.entries()].map(([p, v]) => ({ path: p, size: v.content.length })),
+    read: async (p) => {
+      const f = vault.get(p);
+      if (!f) throw new AmadeusNotFoundError(p);
+      return { ...f };
+    },
+    write: async (p, content) => {
+      const seq = (vault.get(p)?.seq ?? 0) + 1;
+      vault.set(p, { content, seq });
+      return { seq };
+    },
+    readHumanCalendar: async () => {
+      if (readError) throw readError;
+      return human && structuredClone(human);
+    },
+    writeHumanCalendar: async (data, version) => {
+      writes.push({ data: structuredClone(data), version });
+      beforeWrite();
+      if (version !== human!.version) throw new HumanCalendarConflictError();
+      human = { ...human!, data: structuredClone(data), version: `v${writes.length}` };
+    },
+  };
+  const runCloud = (name: string, args: Record<string, any> = {}, ctx: Record<string, unknown> = {}): Promise<string> =>
+    Promise.resolve(tools[name].execute(args, { execMode: 'sandbox', ...ctx } as any));
+  const calendarsListed = async (): Promise<string[]> => JSON.parse(await runCloud('amadeus_list_calendars')).map((c: any) => c.path);
+
+  beforeEach(() => {
+    vault = new Map();
+    human = { data: null, version: null, legacy: null };
+    readError = null;
+    writes = [];
+    beforeWrite = () => {};
+    configureTangu({ host: {} as any, brain: { amadeus: facet } as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'docker' }) });
+  });
+
+  it('a new user has no calendar file: the first event creates it with the fixed column ids, the vault stays empty', async () => {
+    expect(await calendarsListed()).toEqual(['human://CALENDAR.db']);
+    expect(writes).toEqual([]);
+    const created = await runCloud('amadeus_create_event', { title: 'Dentist', start: '2026-12-03T10:00' });
+    expect(created).toContain('in "My calendar"');
+    expect(writes).toHaveLength(1);
+    expect(writes[0].version).toBeNull();
+    expect(writes[0].data.columns.map((c: any) => c.id)).toEqual(['name', 'date', 'done']);
+    expect(writes[0].data.rows[0].cells).toMatchObject({ name: 'Dentist', date: '2026-12-03T10:00' });
+    expect(vault.size).toBe(0);
+  });
+
+  it('the name of a new calendar follows the language the client reported, not the worker', async () => {
+    await runCloud('amadeus_create_event', { title: '看牙', start: '2026-12-03' }, { uiSettings: { locale: { value: 'zh' } } });
+    expect(human!.data.name).toBe('我的日历');
+    expect(human!.data.columns.map((c: any) => c.name)).toEqual(['名称', '日期', '完成']);
+  });
+
+  it('edit and delete go through the version check, by name or by ref', async () => {
+    const id = /id=(\w+)/.exec(await runCloud('amadeus_create_event', { title: 'Dentist', start: '2026-12-03' }))![1];
+    await runCloud('amadeus_edit_event', { calendar: 'human://CALENDAR.db', eventId: id, title: 'Dentist moved' });
+    expect(writes[1].version).toBe('v1');
+    expect(JSON.parse(await runCloud('amadeus_list_events'))[0]).toMatchObject({ id, title: 'Dentist moved', path: 'human://CALENDAR.db' });
+    expect(await runCloud('amadeus_delete_event', { calendar: 'My calendar', eventId: id })).toContain('Deleted');
+    expect(human!.data.rows).toEqual([]);
+    const before = writes.length;
+    expect(await runCloud('amadeus_delete_event', { calendar: 'My calendar', eventId: 'nope' })).toContain('not found');
+    expect(writes).toHaveLength(before); // ok:false 不写
+  });
+
+  it('409: rereads and replays once, keeping what the other writer added', async () => {
+    human = { data: cloudCal(), version: 'v0', legacy: null };
+    beforeWrite = () => {
+      beforeWrite = () => {};
+      human = { ...human!, data: cloudCal([{ id: 'other', cells: { n: 'From the web', d: '2026-12-01' } }]), version: 'other-1' };
+    };
+    expect(await runCloud('amadeus_create_event', { title: 'Dentist', start: '2026-12-03' })).toContain('Created event');
+    expect(writes.map((w) => w.version)).toEqual(['v0', 'other-1']);
+    expect(human!.data.rows.map((r: any) => r.cells.n)).toEqual(['From the web', 'Dentist']);
+  });
+
+  it('two people creating the file at once: the second replays onto the first one\'s file', async () => {
+    beforeWrite = () => {
+      beforeWrite = () => {};
+      human = { ...human!, data: cloudCal([{ id: 'first', cells: { n: 'First', d: '2026-12-01' } }]), version: 'first-1' };
+    };
+    await runCloud('amadeus_create_event', { title: 'Second', start: '2026-12-03' });
+    expect(writes.map((w) => w.version)).toEqual([null, 'first-1']);
+    expect(human!.data.rows).toHaveLength(2);
+  });
+
+  it('a second 409 surfaces instead of looping', async () => {
+    human = { data: cloudCal(), version: 'v0', legacy: null };
+    beforeWrite = () => { throw new HumanCalendarConflictError(); };
+    await expect(runCloud('amadeus_create_event', { title: 'Dentist', start: '2026-12-03' })).rejects.toThrow(HumanCalendarConflictError);
+    expect(writes).toHaveLength(2);
+    expect(human!.data.rows).toEqual([]);
+  });
+
+  it('the old location of the default calendar is hidden; a same-named file in a folder is not', async () => {
+    const seed = JSON.stringify(cloudCal([{ id: 'stale', cells: { n: 'Stale', d: '2026-07-06' } }]));
+    vault.set('Calendar.db', { content: seed, seq: 1 });
+    vault.set('Archive/Calendar.db', { content: seed, seq: 1 });
+    vault.set('Work.db', { content: seed, seq: 1 });
+    human = { data: null, version: null, legacy: 'cloud://vault-1/Calendar.db' };
+    expect(await calendarsListed()).toEqual(['human://CALENDAR.db', 'Archive/Calendar.db', 'Work.db']);
+    await runCloud('amadeus_create_event', { title: 'Dentist', start: '2026-12-03' });
+    expect(vault.get('Calendar.db')!.content).toBe(seed); // 老云库的文件不动
+  });
+
+  it('old cloud or corrupt file (null): falls back to the calendars in the vault, nothing is hidden', async () => {
+    vault.set('Calendar.db', { content: JSON.stringify(cloudCal()), seq: 1 });
+    human = null;
+    expect(await calendarsListed()).toEqual(['Calendar.db']);
+    await runCloud('amadeus_create_event', { title: 'Dentist', start: '2026-12-03' });
+    expect(JSON.parse(vault.get('Calendar.db')!.content).rows).toHaveLength(1);
+    expect(writes).toEqual([]);
+  });
+
+  it('a cloud without the facet methods behaves as before', async () => {
+    const { readHumanCalendar: _r, writeHumanCalendar: _w, ...old } = facet;
+    configureTangu({ host: {} as any, brain: { amadeus: old } as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'docker' }) });
+    vault.set('Calendar.db', { content: JSON.stringify(cloudCal()), seq: 1 });
+    expect(await calendarsListed()).toEqual(['Calendar.db']);
+  });
+
+  it('a failed read is not an empty calendar: the tool errors and nothing lands in the vault', async () => {
+    vault.set('Work.db', { content: JSON.stringify(cloudCal()), seq: 1 });
+    readError = new Error('human calendar read 503');
+    await expect(runCloud('amadeus_list_calendars')).rejects.toThrow('503');
+    await expect(runCloud('amadeus_create_event', { title: 'Dentist', start: '2026-12-03' })).rejects.toThrow('503');
+    expect(JSON.parse(vault.get('Work.db')!.content).rows).toEqual([]);
+    expect(writes).toEqual([]);
+  });
 });
