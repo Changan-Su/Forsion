@@ -222,7 +222,7 @@ export async function requireTrust(cwd: string, level: 'read' | 'write', trust: 
   throw new GitActionError('untrusted_config', 'This repository has its own git configuration that runs programs', blocked.risks.join('\n'));
 }
 
-/** 默认工作区(常在笔记库里的 Sessions/)是所有「不在项目里」的对话共用的大目录;它和它的上级都不建仓、不整目录提交 ——
+/** 默认工作区(新用户 ~/Forsion/Sessions,老用户常在笔记库里的 Sessions/)是所有「不在项目里」的对话共用的大目录;它和它的上级都不建仓、不整目录提交 ——
  *  一次 `add -A` 就把整片笔记收进仓里。桌面也不给这里露写按钮,这里是第二道。 */
 async function assertNotSharedWorkspace(cwd: string): Promise<void> {
   const shared = await fs.realpath(defaultWorkspaceDir()).catch(() => null);
