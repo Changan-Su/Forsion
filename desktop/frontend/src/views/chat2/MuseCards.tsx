@@ -189,7 +189,7 @@ export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionI
         {row(t('museCard.ruleDo'), act)}
         <div className="t2-taskcard-actions">
           <button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'accept')}>{t('museCard.ruleOk')}</button>
-          <button type="button" disabled={busy} onClick={() => { void decide(card, 'edit').then((id) => { if (typeof id === 'string') { setActiveSpace('automation'); useAutomation.getState().openBuilder(id) } }) }}>{t('museCard.ruleEdit')}</button>
+          <button type="button" disabled={busy} onClick={() => { void decide(card, 'edit').then((id) => { if (typeof id === 'string') { setActiveSpace('automation'); void useAutomation.getState().openRule(id) } }) }}>{t('museCard.ruleEdit')}</button>
           <button type="button" disabled={busy} onClick={() => void decide(card, 'dismiss')}>{t('museCard.ruleNo')}</button>
         </div>
       </div></div>

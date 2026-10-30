@@ -172,7 +172,7 @@ export const MuseView: React.FC<{
       setTriggers((p) => p.map((x) => (x.id === tg.id ? { ...x, ...saved } : x)))
     } catch (e) { fail(e) }
   }
-  const openRule = (id: string): void => { useApp.getState().closeSettings(); setActiveSpace('automation'); useAutomation.getState().openBuilder(id) }
+  const openRule = (id: string): void => { useApp.getState().closeSettings(); setActiveSpace('automation'); void useAutomation.getState().openRule(id) }
   const condText = (tg: MuseTriggerInfo): string =>
     'params' in tg.cond ? ruleCondText(t, tg.cond) : tg.cond.type === 'file_chars_gte'
       ? t('special.muse.trigFile', { path: tg.cond.path.split(/[\\/]/).pop() || tg.cond.path, n: tg.cond.n })

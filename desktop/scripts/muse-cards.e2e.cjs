@@ -70,7 +70,7 @@ async function main() {
       if (p === '/agent/special/approvals') return { approvals: [] }
       if (p === '/agent/special/muse/triggers') return { triggers: [{ ...RULE, id: 'w-rule', enabled: false, lastFiredAt: null, createdAt: new Date(T0).toISOString() }] }
       if (p === '/agent/special/automation/actions') return { tools: [] }
-      if (p === '/agent/special/automation/sources') return { sources: [] }
+      if (p === '/agent/special/automation/sources') return { sources: [{ id: 'computer.app_opened', group: 'computer', name: { zh: '打开了 App', en: 'Opened an app' }, params: [{ key: 'app', type: 'app', name: { zh: 'App', en: 'App' }, required: true }], eventSource: 'computer', defaultCooldownHours: 2, requires: [], available: true }] }
       if (p === '/agent/special/automation/executions') return { executions: [] }
       if (p === '/agent/special/automation/sessions') return { sessions: [] }
       if (p === '/agent/special/schedule') return { schedules: [] }
@@ -200,7 +200,9 @@ async function main() {
     await win.waitForSelector('.auto-canvas', { timeout: 10_000 }).catch(() => {})
     await win.waitForTimeout(600)
     await win.screenshot({ path: path.join(dir, 'rule-canvas.png') })
-    r.check('R8b 「改一下」发 edit,打开画布', last().id === 'rule' && last().action === 'edit' && await win.locator('.auto-canvas').count() === 1, JSON.stringify(last()))
+    const firstNode = await win.locator('.auto-flow-node').first().innerText().catch(() => '')
+    const saveLine = await win.locator('.auto-save-status').innerText().catch(() => '')
+    r.check('R8b 「改一下」发 edit,画布里是这条规则,不是空白草稿', last().id === 'rule' && last().action === 'edit' && /打开了 App|Opened an app/.test(firstNode) && !/名称|name/i.test(saveLine), JSON.stringify({ firstNode, saveLine }))
     r.check('R8c 卡片堆清空', byId('rule').status === 'done', JSON.stringify(byId('rule')))
     await win.screenshot({ path: path.join(dir, 'done.png') })
 
