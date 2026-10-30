@@ -2038,6 +2038,7 @@ try {
 
   // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
   //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目
+  //     (10-30 有了 person 档后,关于这个人的习惯归画像、所有 Agent 都读;这里要证 Agent 之间不共用,第二件改成对这位 Agent 的要求)
   //     → 前者落项目记忆(本机、按项目路径存,项目目录里不多任何文件),后者落 A 自己的记忆,两边互不串;
   //  ② 另一个 agent B 在同一个项目开新会话:项目那条在它的提示里、答得出;A 自己那条不在(agent 之间不共用);
   //  ③ A 换到项目二:项目那条不在提示里、答不出,自己那条还在;在项目一说过的原话也不在这一轮喂给模型的召回里
@@ -2055,7 +2056,7 @@ try {
     const branch = `release-${randomUUID().slice(0, 6)}`, habit = `结论先行-${randomUUID().slice(0, 6)}`;
     const listing = () => readdirSync(p1).sort().join(',');
     const before = listing();
-    const ev = await run(await mkS(a, p1, 'Project memory write'), `记两件事。第一件只在这个项目里成立:这个项目的发布分支叫 ${branch},发版只从它打包。第二件不分项目:我看汇报的习惯代号是「${habit}」,意思是先给结论再给过程。`, 180_000, cfgOf(a, p1));
+    const ev = await run(await mkS(a, p1, 'Project memory write'), `记两件事。第一件只在这个项目里成立:这个项目的发布分支叫 ${branch},发版只从它打包。第二件不分项目:你以后给我写汇报,开头都带上代号「${habit}」。`, 180_000, cfgOf(a, p1));
     const calls = ev.toolArgs.filter((t) => t.name === 'remember').map((t) => { try { return JSON.parse(t.arguments); } catch { return {}; } });
     const scopeOf = (mark) => calls.find((c) => String(c.fact || '').includes(mark))?.scope || null;
     const agentMem = String((await api(`/agent/memory?slug=${a}`)).content || '');
