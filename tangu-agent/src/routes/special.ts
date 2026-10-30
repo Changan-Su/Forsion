@@ -365,6 +365,7 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
  *   enabled / mode / running / sleepUntil / sleepReason —— MuseView 的状态药丸与「休眠中」提示;
  *   sessionId / running —— MuseView 取最近几条思考、自动化 Space 的「运行记录」;lastCycleAt —— 自动化详情卡「上次运行」;
  *   spaceStamp —— Muse Space 按戳热重载(builtins/muse.tsx、MuseView → syncAgentSpace);
+ *   feedbackUntil —— 手机上 Muse 私聊的「有用 / 少来点这种」到什么时候收起(MuseCards.tsx MuseFeedbackRow);
  *   running / lastCycleAt / sleepUntil / sleepReason / mode / heartbeatMinutes / pendingApprovals —— Muse 自建 Space 的
  *     ctx.agent.status() 契约(tanguProbe.museSelf;手机整端切到这台电脑时它的请求就打到这里)。
  * 不回:libraryDir / spaceDir(本机绝对路径,渲染层没有读者)、hasModel、restartsThisWindow / maxRestartsPerWindow(次数预算)、

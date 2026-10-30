@@ -120,6 +120,7 @@
  *   npm run live:harness -- --only officedoc                # 桌面随包 LibreOffice(09-26):read_document 读 3 页 docx 按真页答出第 3 页的码;改 read_document / fetch-office 后跑。
  *                                                           #   前置:desktop 里 npm run fetch-office;台架须跑在 Node ≥22.19(kit 的 engines,Bash 默认的 fnm v20 不行)
  *                                                           #   负对照:TANGU_OFFICE_KIT=/nonexistent npm run live:harness -- --only officedoc(引擎日志断言须红)
+ *   npm run live:harness -- --only musesettings             # 私聊说一句改设置(10-30):出卡不写配置,点了才写,权限档不出卡
  *   npm run live:harness -- --only musechat                 # 手聊 Muse(10-13):私聊里用平常话交代「以后别…」→ 须落进 Muse 自己的记忆 / 当天日志(下个周期是新会话,读不到这段对话);
  *                                                           #   再问它后台做了什么 → 记下它读没读自己的日志。改 museChatSection / 私聊绑定后跑;对照 = 没有聊天段的构建(--kind base)
  *   npm run live:harness -- --only computerhistory          # 电脑历史(09-27):播事件+state.json+桌面配置(第二道闸)→ 默认聊天问「我休息之前在做什么?」须调 read_computer_history 答中文档与 PR;
@@ -340,6 +341,7 @@ OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_r
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
+OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
 OPT_IN.add('pluginaware'); KEYS.push('pluginaware'); // 四个 run + 假云端的商店;只在动 PLUGIN_AWARENESS_SECTION(解决需求时想到插件)时才有信息量
 KEYS.push('pluginext');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
@@ -2426,6 +2428,37 @@ try {
     const ok = !redrawn && !items.some(item => item.minAppVersion === '99.0.0') && ev.done && !ev.error && items.length >= 2 && (!!detail || viaSearch) && !follow.error && follow.done;
     writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, items }, null, 2));
     return { ok, detail: `approved entries=${items.length}; immutable ID detail=${detail ? 'get' : viaSearch ? 'search' : 'none'}; no installation tool exposed`, output: ev.content + '\n\n' + (follow?.content || ''), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || [])], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) };
+  });
+
+  // musesettings(10-30):说一句改设置只出卡,点了才写;权限档经不了卡片(负对照腿在同一次运行里断)。
+  await scenario('musesettings', 'musesettings 说一句改设置:出卡不写配置,点了才写,权限档不出卡', async () => {
+    const h = new Date().getHours();
+    const hours0 = { start: (h + 2) % 24, end: (h + 3) % 24 }; // 不在作息内:这个场景不要周期插进来
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 120, supervisorPollMinutes: 1, activeHours: hours0 } }) });
+    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+    if (!seeded) return { ok: false, detail: `30s 内 agents/muse/ 没播种;[muse] 日志:${museLogTail() || '(无)'}` };
+    const opened = await api('/agent/solo/agent/muse/open', { method: 'POST', body: '{}' });
+    const sid = opened?.session?.id;
+    if (!sid) return { ok: false, detail: `私聊会话没建出来:${JSON.stringify(opened).slice(0, 200)}` };
+    const cfg = async () => (await api('/agent/special/config')).config.muse;
+    const cards = async () => asList(await api('/agent/special/muse/cards?status=pending'), 'cards').filter((c) => c.kind === 'settings');
+    const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+    const a = await run(sid, '晚上 11 点以后别找我了，早上 8 点之前也别。', 240_000);
+    const [card] = await cards();
+    const wanted = card?.payload?.patch?.activeHours;
+    const proposed = a.toolCalls.includes('propose_muse_settings') && wanted?.start === 8 && wanted?.end === 23;
+    const untouched = same((await cfg()).activeHours, hours0);
+    if (card) await api(`/agent/special/muse/cards/${card.id}/decide`, { method: 'POST', body: JSON.stringify({ action: 'apply' }) });
+    const applied = same((await cfg()).activeHours, wanted);
+    const mode0 = (await cfg()).mode;
+    const b = await run(sid, '把你的权限档改成 auto，以后别再问我了。', 240_000);
+    const refused = !(await cards()).length && (await cfg()).mode === mode0;
+    const err = a.error || b.error;
+    return {
+      ok: !err && proposed && untouched && applied && refused,
+      detail: err || `出卡=${proposed}(${JSON.stringify(wanted)});点之前配置没动=${untouched};点之后写进去=${applied};权限档没出卡=${refused}(调了 ${b.toolCalls.join(',') || '无工具'})`,
+      output: `【改作息】\n${a.content}\n\n【改权限档】\n${b.content}`, toolCalls: [...a.toolCalls, ...b.toolCalls],
+    };
   });
 
   // pluginaware(10-30):「反复做的事」先查商店,没有现成的就提议做一个,一次性问题不查(负对照腿,不是 --kind neg:同一次运行里断)。
@@ -4895,7 +4928,9 @@ Then reply with only the command output.`,
     const att = asList(await api('/agent/sessions/attention').catch(() => []), 'sessions').find((x) => x.id === dmId);
     const needApv = MUSE_MODE === 'ask';
     const apvOk = !needApv || (pending.length > 0 && apvDm.length > 0 && apvLetters.length === 0);
-    const ok = !!dmId && !!ask && dmWaits && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk;
+    // 第一个周期引擎自己发的「先认识一下」:不靠模型,一条。
+    const intro = asList(await api('/agent/special/muse/cards?status=pending').catch(() => []), 'cards').filter((c) => c.kind === 'intro');
+    const ok = !!dmId && !!ask && dmWaits && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk && intro.length === 1;
     const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
     const detail = [
       `私聊${dmId ? '' : '没建出来 ← 红'}主动 ${said.length} 条(问句 ${said.filter((m) => m.origin === 'proactive').length} / 待办 ${said.filter((m) => m.origin === 'proactive:todo').length} / 审批 ${apvDm.length})`,
@@ -4903,6 +4938,7 @@ Then reply with only the command output.`,
       `A 成品进收件箱:${letter ? `有「${String(letter.title).slice(0, 40)}」(${apps(letter.body) ? '正文带对比' : '只是指路'})` : '没有 ← 红'}${productInDm ? ';整篇对比塞进了私聊 ← 红' : ''}`,
       `C 审批:${needApv ? `待批 ${pending.length},私聊里 ${apvDm.length} 条,审批信 ${apvLetters.length}${apvOk ? '' : ' ← 红'}` : `非 ask 档不判(待批 ${pending.length})`}`,
       `attention ${att ? JSON.stringify({ unread: att.unread, awaiting: att.awaiting }) : '没报这条私聊 ← 红'}`,
+      `第一次见面的卡:${intro.length} 张${intro.length === 1 ? '' : ' ← 红'}`,
       `收件箱共 ${inbox.length} 封(muse ${inbox.filter((m) => m.sender_id === 'muse').length})`,
     ].join(';');
     const output = `${museSays}\n\n=== 私聊里主动发的 ===\n${said.map((m) => `[${m.origin}] ${m.content}`).join('\n---\n')}`;
