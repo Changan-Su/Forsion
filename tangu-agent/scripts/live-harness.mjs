@@ -206,6 +206,7 @@ import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 import { realUseLive } from './lib/real-use-live.mjs';
 import { humanRealLive } from './lib/human-real-live.mjs';
 import { humanPortraitLive } from './lib/human-portrait-live.mjs';
+import { portraitMoveLive } from './lib/portrait-move-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
@@ -249,6 +250,7 @@ KEYS.push('musereview');
 KEYS.push('realuse');
 KEYS.push('humanreal');
 KEYS.push('humanportrait');
+KEYS.push('portraitmove');
 KEYS.push('projmem');
 KEYS.push('skillcreate');
 KEYS.push('projdedupe');
@@ -337,6 +339,7 @@ OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanportrait'); // 画像(human/SOUL.md)写没写:每轮 4 个 run + 另一个 agent 读一次;只在动 remember 的 person 档 / 画像注入时才有信息量。
+OPT_IN.add('portraitmove'); // 搬家的后台模型挑得准不准(10-30):不跑对话,只有人点的那几个接口;动了 agents/portraitMove.ts 的提示才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
@@ -2038,6 +2041,10 @@ try {
   // ── 关于这个人的事写进画像、跨档取代旧说法(10-29);设计见 lib/human-portrait-live.mjs ──
   await scenario('humanportrait', `humanportrait 画像:称呼 / 在做的事进 human/SOUL.md、旧说法被取代 ×${SELF_ROUNDS} 轮`, () =>
     humanPortraitLive({ run, api, workspace, OUT, MODEL, AGENT_CONFIG, rounds: SELF_ROUNDS }));
+
+  // ── 搬家:后台模型从 agent 记忆里挑「关于这个人」的条目、写成第二人称(10-30);设计见 lib/portrait-move-live.mjs ──
+  await scenario('portraitmove', `portraitmove 搬家:该挑的全挑、对 Agent 的要求和项目的事一条不挑 ×${SELF_ROUNDS} 轮`, () =>
+    portraitMoveLive({ api, OUT, MODEL, home, rounds: SELF_ROUNDS }));
 
   // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
   //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目

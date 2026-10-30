@@ -875,6 +875,13 @@ export interface HumanPortrait { version: string; entries: Array<{ id: string; c
 export const getHumanPortrait = (t: EngineTarget) => request<HumanPortrait>(t, '/agent/human/SOUL.md/entries')
 export const mutateHumanPortraitEntry = (t: EngineTarget, body: { action: 'add' | 'forget'; id?: string; fact?: string; expectedVersion: string }) =>
   request<{ version: string; entries: HumanPortrait['entries']; entry?: { id: string; content: string } }>(t, '/agent/human/SOUL.md/entries', { method: 'POST', body: JSON.stringify(body) })
+// 搬家卡:把各 Agent 记忆里关于这个人的事挪进画像。人点了才扫(scan 立刻返回,进度看 scanning);只在宿主本机。
+export interface PortraitMoveItem { id: string; memorySlug: string; agents: string[]; content: string; fact: string; state: 'pending' | 'moving' | 'moved' }
+export interface PortraitMoveView { items: PortraitMoveItem[]; scannedAt: number | null; missed: string[]; scanning: { done: number; total: number } | null; scanError: string | null }
+export const getPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t, '/agent/human/SOUL.md/move')
+export const scanPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t, '/agent/human/SOUL.md/move/scan', { method: 'POST' })
+export const decidePortraitMove = (t: EngineTarget, id: string, decision: 'move' | 'keep' | 'undo') =>
+  request<PortraitMoveView>(t, `/agent/human/SOUL.md/move/items/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ decision }) })
 export const listAgentMemoryRevisions = (t: EngineTarget, slug: string) =>
   request<{ revisions: AgentMemoryRevision[] }>(t, `${agentMemoryPath(slug)}/revisions`).then((r) => r.revisions)
 export const restoreAgentMemory = (t: EngineTarget, slug: string, version: string, expectedVersion: string) =>
