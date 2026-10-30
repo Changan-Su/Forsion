@@ -10,7 +10,11 @@
  *   GET      /agent/special/muse/status                Muse 运行态 + 本窗口预算余量
  *   GET      /agent/special/muse/triggers              自动化规则列表(manage_automation 工具/构建器写入;附 nextRunAt)
  *   POST     /agent/special/automation/triggers/:id/fire  立即执行(origin=manual 试跑 / button 按钮点击,不动 lastFiredAt)
- *   POST     /agent/special/automation/kick            唤醒巡检(桌面写完 .db 后踢一下,db_changed 从 5min 降到 ~2s)
+ *   POST     /agent/special/automation/kick            唤醒巡检(桌面写完 .db 后踢一下,db_changed 从 5min 降到 ~2s;{scope:'computer'} = 电脑历史落盘后踢,没有电脑类规则就不醒)
+ *   GET      /agent/special/automation/sources         触发源注册表(界面菜单;每源带 available / reason)
+ *   POST     /agent/special/automation/plugin-triggers  渲染层插件登记触发源(ctx.automation.registerTrigger;只在内存,重启后宿主补登)
+ *   DELETE   /agent/special/automation/plugin-triggers/:pluginId/:key       注销(插件停用 / 卸载 / 重载)
+ *   POST     /agent/special/automation/plugin-triggers/:pluginId/:key/emit  插件事件(ctx.automation.emit)
  *   GET      /agent/special/automation/actions          tool_call 动作目录(白名单+automationSafe)
  *   GET      /agent/special/automation/executions       动作链执行账本(?triggerId=&limit=)
  *   POST     /agent/special/muse/triggers              upsert 规则(带 id 改/无 id 建;桌面「自动化」构建器)
@@ -49,7 +53,9 @@ import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS, type SpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
-import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, type DbLike } from '../services/museTriggers.js';
+import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
+import { getTriggerSource, listTriggerSources } from '../services/triggerRegistry.js';
+import { emitPluginTrigger, registerPluginTrigger, unregisterPluginTrigger } from '../plugins/automation.js';
 import { readDbOrNull } from '../services/amadeusDb.js';
 import { dropCursors } from '../services/dbCursors.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
@@ -397,8 +403,12 @@ router.get('/agent/special/muse/triggers', authMiddleware, async (_req: AuthRequ
     const list = await loadTriggers();
     // notice = 引擎侧**不停用**的暂时性状态位(库不符 / 表暂时读不到 / where 列按名解析不到);
     // 与 disabledReason 互补:那条是「已经停了,为什么」,这条是「还开着,但为什么不动」(H3)。
+    // 暂停原因(触发源没了 / 电脑历史关了)现算,关掉的那一刻面板就写明,不等下一 tick。
     const notices = getAutomationNotices();
-    res.json({ triggers: list.map((t) => ({ ...t, nextRunAt: nextRunAt(t), ...(notices[t.id] ? { notice: notices[t.id] } : {}) })) });
+    res.json({ triggers: list.map((t) => {
+      const notice = (t.enabled ? triggerUnmet(t) : null) ?? notices[t.id];
+      return { ...t, nextRunAt: nextRunAt(t), ...(notice ? { notice } : {}) };
+    }) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'triggers failed' });
   }
@@ -515,10 +525,48 @@ router.post('/agent/special/automation/triggers/:id/fire', authMiddleware, async
  * 刻意不收任何业务 payload:唤醒之后仍由引擎自己重读磁盘做权威判定,绝不信客户端传来的行内容
  * (否则「谁能发这个请求」就变成了「谁能伪造表格变化」)。调用方自己节流。
  */
-router.post('/agent/special/automation/kick', authMiddleware, async (_req: AuthRequest, res) => {
+router.post('/agent/special/automation/kick', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
+  // 电脑历史每次切 App 都来一下(主进程节流 5s):没有电脑类规则的用户不该为此跑整个 tick。
+  if (req.body?.scope === 'computer') {
+    const list = await loadTriggers().catch(() => []);
+    if (!list.some((t) => t.enabled && getTriggerSource(t.cond?.type)?.eventSource === 'computer')) { res.json({ ok: true, skipped: true }); return; }
+  }
   kickMuse();
   res.json({ ok: true });
+});
+
+router.post('/agent/special/automation/plugin-triggers', authMiddleware, (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    registerPluginTrigger(String(req.body?.pluginId ?? ''), req.body?.trigger);
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: 'bad_trigger', detail: e?.message }); }
+});
+router.delete('/agent/special/automation/plugin-triggers/:pluginId/:key', authMiddleware, (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  unregisterPluginTrigger(String(req.params.pluginId), String(req.params.key));
+  res.json({ ok: true });
+});
+router.post('/agent/special/automation/plugin-triggers/:pluginId/:key/emit', authMiddleware, (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    emitPluginTrigger(String(req.params.pluginId), String(req.params.key), req.body?.payload);
+    res.json({ ok: true });
+  } catch (e: any) { res.status(404).json({ error: 'unknown_trigger', detail: e?.message }); }
+});
+
+// 触发源目录(自动化画布的类型菜单直接从这里出)。电脑那组:本平台没有电脑历史 = 不给(Linux);关着 = 给但 available:false,界面灰掉。
+router.get('/agent/special/automation/sources', authMiddleware, async (_req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const supported = process.platform === 'darwin' || process.platform === 'win32';
+  const sources = listTriggerSources()
+    .filter((s) => supported || !s.requires?.includes('computer_history'))
+    .map((s) => {
+      const reason = triggerUnmet({ cond: { type: s.id } as MuseTrigger['cond'] });
+      return { id: s.id, group: s.group, name: s.name, params: s.params, requires: s.requires ?? [], eventSource: s.eventSource, defaultCooldownHours: s.defaultCooldownHours, timed: !!s.timed, available: !reason, ...(reason ? { reason } : {}) };
+    });
+  res.json({ sources });
 });
 
 // 动作目录:tool_call 步骤选择器的数据源(白名单内置 + automationSafe 插件工具;参数 JSON schema 供表单生成)。
@@ -655,7 +703,7 @@ router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: 
     });
     if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
     if (r.card.kind === 'settings' || r.card.kind === 'intro') kickMuse(); // 心跳 / 作息变了:巡检节奏下一轮就跟上
-    res.json({ ok: true, card: r.card });
+    res.json({ ok: true, card: r.card, ...(r.trigger ? { trigger: r.trigger } : {}) });
   } catch (e: any) { res.status(500).json({ detail: e?.message || 'decide failed' }); }
 });
 

@@ -122,7 +122,7 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
 
 /** GET /agent/special/approvals 的一行(引擎 pendingApprovals.PendingApprovalRow 镜像)。 */
 /** Muse 发进私聊、要用户点的卡(services/museCards.ts)。payload 按 kind 各一种形状,只有引擎写得进去。 */
-export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel' | 'settings' | 'intro' | 'summary'
+export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel' | 'settings' | 'intro' | 'summary' | 'rule'
 export interface MuseCardInfo {
   id: string
   kind: MuseCardKind
@@ -164,6 +164,8 @@ export interface HistorianActivityItem {
 /** 自动化动作链步骤(引擎 museTriggers.ActionSpec 镜像;tool_call 只能在构建器创建)。 */
 export type AutomationActionSpec =
   | { type: 'notify'; title: string; body?: string }
+  /** 直接提醒:系统通知 + Muse 私聊一行,不叫模型。 */
+  | { type: 'remind'; title: string; body?: string }
   | { type: 'agent_run'; agentSlug: string; prompt: string }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
   /** Amadeus 多维表写入(cells 键=列 id 或列名;值可含 {{row.X}} / {{= 算术 }} 模板)。
@@ -197,6 +199,8 @@ export interface MuseTriggerInfo {
     /** Amadeus 多维表变化(vault 钉住建规则时那个库;columnId 存列 id——列名不唯一也会改)。
      *  columnIds:多列监听(引擎归一:≥2 列才有此键,columnId=首列;任一列变化即命中)。读端一律经 lib.watchedColumnIds 取并集。 */
     | { type: 'db_changed'; path: string; vault: string; event: 'row_added' | 'cell_changed'; columnId?: string; columnIds?: string[]; equals?: string; where?: AutomationWhere[] }
+    /** 新触发源(电脑上 / 日历 / 插件):参数按注册表走,见 GET /agent/special/automation/sources。 */
+    | { type: `${string}.${string}` | `plugin:${string}`; params: Record<string, string | number> }
   prompt?: string
   cooldownHours: number
   lastFiredAt: string | null
@@ -208,8 +212,13 @@ export interface MuseTriggerInfo {
   agentSlug?: string
   /** 动作链(有则取代 agentSlug/Muse 旧语义)。 */
   actions?: AutomationActionSpec[]
+  /** 只在这些时段 / 星期触发(weekdays 0=周日;start > end = 跨夜)。 */
+  only?: { hours?: { start: number; end: number }; weekdays?: number[] }
+  maxPerDay?: number
   /** 服务端权威计算的下次应触时刻(ISO;事件/文件类或已禁用 → null)。 */
   nextRunAt?: string | null
+  /** 规则开着但这会儿不动的原因:`trigger:*` code(桌面翻译)或引擎的暂时性状态文案。 */
+  notice?: string
 }
 
 /** agent 日程条目(agents/<slug>/SCHEDULE.db;引擎 entriesOf 的结构化输出)。 */

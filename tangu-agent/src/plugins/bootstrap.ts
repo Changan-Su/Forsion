@@ -212,7 +212,11 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       if (live('通道')) inst.runtimeDisposers.push(channelHub.registerChannel(spec)); // 停用时 stopEntry 跑 runtimeDisposers 摘掉
     },
     sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
-      automation: { ...automation, save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }) },
+      automation: {
+        ...automation,
+        save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }),
+        registerTrigger: (spec) => { const off = automation.registerTrigger(spec); inst.runtimeDisposers.push(off); return off; }, // 停用时 stopEntry 注销
+      },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     // 只有官方插件(签名捆绑包,./official.ts)有这个键;其余插件的 ctx 上根本没有它(不是一个返回错误的空壳)。
     ...(official ? { cloud: createOfficialCloud(() => !inst.disposed) } : {}),
