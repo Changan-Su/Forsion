@@ -9,6 +9,7 @@
  *   npm run live:harness -- --only titlelang                # 标题 / 摘要跟随对话本身的语言(10-20):3 条英文 + 1 条中文;英文的每一版标题和摘要只许拉丁字母,detail 里报引擎语言核对改写了几次(改 localHistorian 起标题 / 摘要、core/scriptCheck.ts 后跑)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
+ *   npm run live:harness -- --only humanportrait --rounds 3   # 画像写没写(10-29):改称呼 / 在学什么进 human/SOUL.md、agent 记忆里的旧说法被取代,对 agent 的要求和项目的事不进画像
  *   npm run live:harness -- --only humanreal --rounds 3 [--timeout 2400000]   # 协作说明写成什么样(10-10;慢的模型每轮 3–4 分钟,轮数多了带 --timeout):一段六条消息的真实任务(不点名任何库 / 工具)之后,写进去的是不是「用户这边怎么做」、普通人读不读得懂;
  *                                                           #   判官固定 codex/gpt-6-luna;改 HUMAN_GUIDANCE / manage_human 的说明与返回后跑(设计见 lib/human-real-live.mjs);
  *                                                           #   `--humanreal-rejudge <evidence.json,…>` 不跑任务,只把旧证据里的文档按现在的判据重判一遍
@@ -28,6 +29,7 @@
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
  *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
+ *   npm run live:harness -- --only pluginui                  # 改 skills/forsion-plugin 的「Desktop plugin UI」一节 / tools/ui-reinvent.mjs / plugin_sandbox 的界面体检后跑:写一个带 Space 的小插件,下拉 / 菜单 / 确认 / 空状态须用宿主零件
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
  *                                                           #   main.js 求值不抛错、但没走到 registerView 的那类;看真模型只凭插件目录和 shell 查不查得出。插件放进假家目录,开发机的 ~/.forsion 不碰
@@ -119,6 +121,7 @@
  *   npm run live:harness -- --only officedoc                # 桌面随包 LibreOffice(09-26):read_document 读 3 页 docx 按真页答出第 3 页的码;改 read_document / fetch-office 后跑。
  *                                                           #   前置:desktop 里 npm run fetch-office;台架须跑在 Node ≥22.19(kit 的 engines,Bash 默认的 fnm v20 不行)
  *                                                           #   负对照:TANGU_OFFICE_KIT=/nonexistent npm run live:harness -- --only officedoc(引擎日志断言须红)
+ *   npm run live:harness -- --only musesettings             # 私聊说一句改设置(10-30):出卡不写配置,点了才写,权限档不出卡
  *   npm run live:harness -- --only musechat                 # 手聊 Muse(10-13):私聊里用平常话交代「以后别…」→ 须落进 Muse 自己的记忆 / 当天日志(下个周期是新会话,读不到这段对话);
  *                                                           #   再问它后台做了什么 → 记下它读没读自己的日志。改 museChatSection / 私聊绑定后跑;对照 = 没有聊天段的构建(--kind base)
  *   npm run live:harness -- --only computerhistory          # 电脑历史(09-27):播事件+state.json+桌面配置(第二道闸)→ 默认聊天问「我休息之前在做什么?」须调 read_computer_history 答中文档与 PR;
@@ -202,6 +205,7 @@ import { launchChromePipe, pairExtension } from './lib/chrome-pipe.mjs';
 import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 import { realUseLive } from './lib/real-use-live.mjs';
 import { humanRealLive } from './lib/human-real-live.mjs';
+import { humanPortraitLive } from './lib/human-portrait-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
@@ -223,7 +227,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'pluginui'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -244,6 +248,7 @@ KEYS.push('equip');
 KEYS.push('musereview');
 KEYS.push('realuse');
 KEYS.push('humanreal');
+KEYS.push('humanportrait');
 KEYS.push('projmem');
 KEYS.push('skillcreate');
 KEYS.push('projdedupe');
@@ -269,6 +274,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // 还会往隔离 home 播记忆行(会进别的场景的系统提示);deferred 要真装 liteparse 解析文档;
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
+KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
@@ -312,6 +318,7 @@ OPT_IN.add('harnessopen'); // 四个 run + 一条探针;只在动 manage_harness
 OPT_IN.add('equip'); // 三个 run;只在动装备层(HARNESS equip → isDeferredIn / 技能目录)时才有信息量。
 OPT_IN.add('musereview'); // 开 Muse 并往隔离库里写用量行:单独跑,别连累别的场景的工具表 / Muse 状态。
 OPT_IN.add('projmem'); // 四个 run、两个 agent 两个项目;只在动项目记忆(services/projectMemory.ts、remember 的 scope)时才有信息量。
+OPT_IN.add('pluginui'); // 一个长 run(写一整个插件,几分钟);只在动 forsion-plugin 的界面纪律、重造检测或沙箱状态里的界面体检时才有信息量。
 OPT_IN.add('pluginlook'); // 一个 run;只在动 skills/forsion-plugin 的「外观开关」一节或 use_skill 时才有信息量。
 OPT_IN.add('plugindiag'); // 一个 run(几分钟);要 --plugin-src 给一份待查的插件,只在量「插件 Space 不出现」的排查能力时才有信息量。
 OPT_IN.add('notebook'); // 两个 run;要 --plugin-src 给构建好的 Jupyter 笔记本插件、--python-bin 给解释器,只在动那个插件的工具说明 / 审批档时才有信息量。
@@ -329,6 +336,7 @@ OPT_IN.add('webpublishreal'); KEYS.push('webpublishreal');
 OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
+OPT_IN.add('humanportrait'); // 画像(human/SOUL.md)写没写:每轮 4 个 run + 另一个 agent 读一次;只在动 remember 的 person 档 / 画像注入时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
@@ -337,6 +345,8 @@ OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_r
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
+OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
+OPT_IN.add('pluginaware'); KEYS.push('pluginaware'); // 四个 run + 假云端的商店;只在动 PLUGIN_AWARENESS_SECTION(解决需求时想到插件)时才有信息量
 KEYS.push('pluginext');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
 OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同一判据跑在 chat 预设(详情工具要先 load_tools)
@@ -1307,7 +1317,7 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 }
 
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
-const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
+const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 
 const child = spawn(process.execPath, [
   ...(FAULT_FILE ? ['--import', pathToFileURL(join(root, 'scripts', 'lib', 'llm-fault-preload.mjs')).href] : []),
@@ -2025,8 +2035,13 @@ try {
   await scenario('humanreal', `humanreal 协作说明:写的是用户这边怎么做、读得懂 ×${SELF_ROUNDS} 轮`, () =>
     humanRealLive({ run, api, workspace, OUT, MODEL, AGENT_CONFIG, home, seed: Number(opt('humanreal-seed', 0)) || 0, legacy: argv.includes('--humanreal-legacy') ? (['strict', 'button'].includes(opt('humanreal-legacy', '')) ? opt('humanreal-legacy', '') : 'plain') : '', rounds: SELF_ROUNDS, rejudge: opt('humanreal-rejudge', '').split(',').map((x) => x.trim()).filter(Boolean) }));
 
+  // ── 关于这个人的事写进画像、跨档取代旧说法(10-29);设计见 lib/human-portrait-live.mjs ──
+  await scenario('humanportrait', `humanportrait 画像:称呼 / 在做的事进 human/SOUL.md、旧说法被取代 ×${SELF_ROUNDS} 轮`, () =>
+    humanPortraitLive({ run, api, workspace, OUT, MODEL, AGENT_CONFIG, rounds: SELF_ROUNDS }));
+
   // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
   //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目
+  //     (10-30 有了 person 档后,关于这个人的习惯归画像、所有 Agent 都读;这里要证 Agent 之间不共用,第二件改成对这位 Agent 的要求)
   //     → 前者落项目记忆(本机、按项目路径存,项目目录里不多任何文件),后者落 A 自己的记忆,两边互不串;
   //  ② 另一个 agent B 在同一个项目开新会话:项目那条在它的提示里、答得出;A 自己那条不在(agent 之间不共用);
   //  ③ A 换到项目二:项目那条不在提示里、答不出,自己那条还在;在项目一说过的原话也不在这一轮喂给模型的召回里
@@ -2044,7 +2059,7 @@ try {
     const branch = `release-${randomUUID().slice(0, 6)}`, habit = `结论先行-${randomUUID().slice(0, 6)}`;
     const listing = () => readdirSync(p1).sort().join(',');
     const before = listing();
-    const ev = await run(await mkS(a, p1, 'Project memory write'), `记两件事。第一件只在这个项目里成立:这个项目的发布分支叫 ${branch},发版只从它打包。第二件不分项目:我看汇报的习惯代号是「${habit}」,意思是先给结论再给过程。`, 180_000, cfgOf(a, p1));
+    const ev = await run(await mkS(a, p1, 'Project memory write'), `记两件事。第一件只在这个项目里成立:这个项目的发布分支叫 ${branch},发版只从它打包。第二件不分项目:你以后给我写汇报,开头都带上代号「${habit}」。`, 180_000, cfgOf(a, p1));
     const calls = ev.toolArgs.filter((t) => t.name === 'remember').map((t) => { try { return JSON.parse(t.arguments); } catch { return {}; } });
     const scopeOf = (mark) => calls.find((c) => String(c.fact || '').includes(mark))?.scope || null;
     const agentMem = String((await api(`/agent/memory?slug=${a}`)).content || '');
@@ -2422,6 +2437,56 @@ try {
     const ok = !redrawn && !items.some(item => item.minAppVersion === '99.0.0') && ev.done && !ev.error && items.length >= 2 && (!!detail || viaSearch) && !follow.error && follow.done;
     writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, items }, null, 2));
     return { ok, detail: `approved entries=${items.length}; immutable ID detail=${detail ? 'get' : viaSearch ? 'search' : 'none'}; no installation tool exposed`, output: ev.content + '\n\n' + (follow?.content || ''), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || [])], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) };
+  });
+
+  // musesettings(10-30):说一句改设置只出卡,点了才写;权限档经不了卡片(负对照腿在同一次运行里断)。
+  await scenario('musesettings', 'musesettings 说一句改设置:出卡不写配置,点了才写,权限档不出卡', async () => {
+    const h = new Date().getHours();
+    const hours0 = { start: (h + 2) % 24, end: (h + 3) % 24 }; // 不在作息内:这个场景不要周期插进来
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 120, supervisorPollMinutes: 1, activeHours: hours0 } }) });
+    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+    if (!seeded) return { ok: false, detail: `30s 内 agents/muse/ 没播种;[muse] 日志:${museLogTail() || '(无)'}` };
+    const opened = await api('/agent/solo/agent/muse/open', { method: 'POST', body: '{}' });
+    const sid = opened?.session?.id;
+    if (!sid) return { ok: false, detail: `私聊会话没建出来:${JSON.stringify(opened).slice(0, 200)}` };
+    const cfg = async () => (await api('/agent/special/config')).config.muse;
+    const cards = async () => asList(await api('/agent/special/muse/cards?status=pending'), 'cards').filter((c) => c.kind === 'settings');
+    const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+    const a = await run(sid, '晚上 11 点以后别找我了，早上 8 点之前也别。', 240_000);
+    const [card] = await cards();
+    const wanted = card?.payload?.patch?.activeHours;
+    const proposed = a.toolCalls.includes('propose_muse_settings') && wanted?.start === 8 && wanted?.end === 23;
+    const untouched = same((await cfg()).activeHours, hours0);
+    if (card) await api(`/agent/special/muse/cards/${card.id}/decide`, { method: 'POST', body: JSON.stringify({ action: 'apply' }) });
+    const applied = same((await cfg()).activeHours, wanted);
+    const mode0 = (await cfg()).mode;
+    const b = await run(sid, '把你的权限档改成 auto，以后别再问我了。', 240_000);
+    const refused = !(await cards()).length && (await cfg()).mode === mode0;
+    const err = a.error || b.error;
+    return {
+      ok: !err && proposed && untouched && applied && refused,
+      detail: err || `出卡=${proposed}(${JSON.stringify(wanted)});点之前配置没动=${untouched};点之后写进去=${applied};权限档没出卡=${refused}(调了 ${b.toolCalls.join(',') || '无工具'})`,
+      output: `【改作息】\n${a.content}\n\n【改权限档】\n${b.content}`, toolCalls: [...a.toolCalls, ...b.toolCalls],
+    };
+  });
+
+  // pluginaware(10-30):「反复做的事」先查商店,没有现成的就提议做一个,一次性问题不查(负对照腿,不是 --kind neg:同一次运行里断)。
+  await scenario('pluginaware', 'pluginaware 反复的事先查商店、查不到提议做一个、一次性问题不查', async () => {
+    const opts = [240000, {}, 'desktop/2.13.8', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v1'] }];
+    const leg = (name, text) => run(`live-pluginaware-${name}-${Date.now()}`, text, ...opts);
+    const repeat = await leg('repeat', '我每周都要把上课录音转成文字再整理成笔记，每次都手动来一遍，太烦了。有什么办法？');
+    const nothing = await leg('nothing', '我每天都要手动把咖啡机的除垢提醒抄到日程里，想让 Forsion 自动帮我做这件事。');
+    const math = await leg('math', '17 乘以 23 等于多少？顺便说说怎么心算。');
+    const trans = await leg('trans', '把这句话翻译成英文：今天下午三点开会。');
+    const searched = (ev) => ev.toolCalls.includes('search_marketplace');
+    const taskCard = /```forsion-task[\s\S]*agent:\s*coding[\s\S]*forsion-plugin[\s\S]*```/.test(nothing.content);
+    const err = repeat.error || nothing.error || math.error || trans.error;
+    const ok = !err && searched(repeat) && searched(nothing) && taskCard && !searched(math) && !searched(trans);
+    return {
+      ok, detail: err || `反复:查了=${searched(repeat)};没现成:查了=${searched(nothing)} 任务卡=${taskCard};一次性:算术查了=${searched(math)} 翻译查了=${searched(trans)}`,
+      output: `【反复】\n${repeat.content}\n\n【没现成】\n${nothing.content}\n\n【算术】\n${math.content}\n\n【翻译】\n${trans.content}`,
+      toolCalls: [...repeat.toolCalls, ...nothing.toolCalls, ...math.toolCalls, ...trans.toolCalls], ttftMs: ttft(repeat), tokens: [repeat, nothing, math, trans].reduce((n, ev) => n + tokensOf(ev), 0),
+    };
   });
 
   await scenario('visualfigures', 'visualfigures 图表与流程图组件', async () => {
@@ -4043,7 +4108,7 @@ Then reply with only the command output.`,
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
-    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-server, reset-layout, clear-data, language.';
+    const TARGETS = 'Pages: general, forsion, model, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, mcp-json, mcp-server, reset-layout, clear-data, language.';
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
       params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
@@ -4872,7 +4937,9 @@ Then reply with only the command output.`,
     const att = asList(await api('/agent/sessions/attention').catch(() => []), 'sessions').find((x) => x.id === dmId);
     const needApv = MUSE_MODE === 'ask';
     const apvOk = !needApv || (pending.length > 0 && apvDm.length > 0 && apvLetters.length === 0);
-    const ok = !!dmId && !!ask && dmWaits && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk;
+    // 第一个周期引擎自己发的「先认识一下」:不靠模型,一条。
+    const intro = asList(await api('/agent/special/muse/cards?status=pending').catch(() => []), 'cards').filter((c) => c.kind === 'intro');
+    const ok = !!dmId && !!ask && dmWaits && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk && intro.length === 1;
     const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
     const detail = [
       `私聊${dmId ? '' : '没建出来 ← 红'}主动 ${said.length} 条(问句 ${said.filter((m) => m.origin === 'proactive').length} / 待办 ${said.filter((m) => m.origin === 'proactive:todo').length} / 审批 ${apvDm.length})`,
@@ -4880,6 +4947,7 @@ Then reply with only the command output.`,
       `A 成品进收件箱:${letter ? `有「${String(letter.title).slice(0, 40)}」(${apps(letter.body) ? '正文带对比' : '只是指路'})` : '没有 ← 红'}${productInDm ? ';整篇对比塞进了私聊 ← 红' : ''}`,
       `C 审批:${needApv ? `待批 ${pending.length},私聊里 ${apvDm.length} 条,审批信 ${apvLetters.length}${apvOk ? '' : ' ← 红'}` : `非 ask 档不判(待批 ${pending.length})`}`,
       `attention ${att ? JSON.stringify({ unread: att.unread, awaiting: att.awaiting }) : '没报这条私聊 ← 红'}`,
+      `第一次见面的卡:${intro.length} 张${intro.length === 1 ? '' : ' ← 红'}`,
       `收件箱共 ${inbox.length} 封(muse ${inbox.filter((m) => m.sender_id === 'muse').length})`,
     ].join(';');
     const output = `${museSays}\n\n=== 私聊里主动发的 ===\n${said.map((m) => `[${m.origin}] ${m.content}`).join('\n---\n')}`;
@@ -5984,6 +6052,50 @@ Then reply with only the command output.`,
   //   E 完全放行档改默认工作目录 → 仍弹 protected 卡(台架批)并落盘;同档改语速零审批;
   //   F 改通话音色 → realtimeVoice 不变(只读字段:音色绑在通话模型上)。
   // 收尾把 config.json 还原成场景开始前那份(E 改的默认工作目录不该漏给后面的场景)。
+  await scenario('mcpsettings', 'mcpsettings Agent 添加 JSON、审批、启用连接、调用新 MCP、保留凭据与删除', async () => {
+    const cfgPath = join(shared, 'config.json');
+    const before = existsSync(cfgPath) ? readFileSync(cfgPath, 'utf8') : null;
+    const cfg = () => JSON.parse(readFileSync(cfgPath, 'utf8'));
+    const name = `live-settings-${Date.now()}`;
+    const mark = `MCPCFG-${Math.random().toString(36).slice(2, 9)}`;
+    const secret = `DEMO_SECRET_${Math.random().toString(36).slice(2)}`;
+    const fixture = join(root, 'test/fixtures/fake-mcp-server.mjs');
+    const entry = { command: process.execPath, args: [fixture], env: { FAKE_MCP_TAG: mark, DEMO_TOKEN: secret }, enabled: false };
+    const sessions = [];
+    const sid = leg => { const id = `live-mcp-settings-${leg}-${Date.now()}`; sessions.push(id); return id; };
+    try {
+      const a = await run(sid('add'), `帮我把这个 MCP JSON 添加到 Forsion，保持禁用，不要运行它：${JSON.stringify({ mcpServers: { [name]: entry } })}`, 240_000, { approvalMode: 'auto-edit' });
+      const okA = !a.error && a.done && a.toolCalls.includes('manage_mcp') && a.approvalList.some(x => x.name === 'manage_mcp' && x.reason === 'control') && cfg().mcp?.mcpServers?.[name]?.enabled === false;
+      const b = await run(sid('enable'), `启用 MCP 服务器 ${name}，保存后结束本轮回复，不调用它的工具。`, 240_000, { approvalMode: 'full-auto' });
+      const connected = await until(async () => { const t = await api('/agent/tools'); return t.mcp?.some(x => x.server === name && x.status === 'connected') ? true : null; }, 30_000, 300);
+      const okB = !b.error && b.done && b.toolCalls.includes('manage_mcp') && b.approvals === 0 && !!connected;
+      const tool = `mcp__${name.replace(/[^a-zA-Z0-9_-]/g, '_')}__echo`;
+      const c = await run(sid('call'), `调用 ${tool}，text 参数用 hello，然后告诉我返回的标记。`, 240_000, { approvalMode: 'full-auto' });
+      const okC = !c.error && c.done && c.toolCalls.includes(tool) && c.content.includes(mark);
+      // Simulate an idle desktop/CLI save without polling /agent/tools: admission must reconcile before the very next run.
+      const directName = `${name}-direct`;
+      const directCfg = cfg();
+      directCfg.mcp.mcpServers[directName] = { ...entry, enabled: true, env: { FAKE_MCP_TAG: `${mark}-DIRECT` } };
+      writeFileSync(cfgPath, JSON.stringify(directCfg));
+      const directTool = `mcp__${directName}__echo`;
+      const direct = await run(sid('direct'), `调用 ${directTool}，text 参数用 next-run，告诉我返回的标记。`, 240_000, { approvalMode: 'full-auto' });
+      const okDirect = !direct.error && direct.done && direct.toolCalls.includes(directTool) && direct.content.includes(`${mark}-DIRECT`);
+      const d = await run(sid('update'), `把 MCP 服务器 ${name} 的 timeoutMs 改成 2345，保留其他字段。再检查它的配置，别展示任何密钥。`, 240_000, { approvalMode: 'full-auto' });
+      const stored = cfg().mcp?.mcpServers?.[name];
+      const okD = !d.error && d.done && d.toolCalls.includes('manage_mcp') && stored?.timeoutMs === 2345 && stored?.env?.DEMO_TOKEN === secret && JSON.stringify(stored?.args) === JSON.stringify(entry.args) && !d.content.includes(secret);
+      const e = await run(sid('reject'), `把 MCP 服务器 ${name} 的 timeoutMs 改成 3456。`, 240_000, { approvalMode: 'auto-edit' }, undefined, () => 'reject');
+      const okE = !e.error && e.done && e.approvalList.some(x => x.name === 'manage_mcp' && x.reason === 'control') && cfg().mcp?.mcpServers?.[name]?.timeoutMs === 2345;
+      const f = await run(sid('delete'), `删除 MCP 服务器 ${name} 的配置。`, 240_000, { approvalMode: 'full-auto' });
+      const okF = !f.error && f.done && f.toolCalls.includes('manage_mcp') && !Object.hasOwn(cfg().mcp?.mcpServers ?? {}, name);
+      await api('/agent/tools');
+      const legs = [a, b, c, direct, d, e, f];
+      return { ok: okA && okB && okC && okDirect && okD && okE && okF, detail: `direct-idle-save/next-run=${okDirect} add/control=${okA} enable/connected=${okB} fresh-run-call=${okC} partial-update/secret=${okD} reject/unchanged=${okE} delete=${okF}`, toolCalls: legs.flatMap(x => x.toolCalls), output: legs.map((x, i) => `[${i + 1}] ${x.content}`).join('\n\n') };
+    } finally {
+      if (before === null) rmSync(cfgPath, { force: true }); else writeFileSync(cfgPath, before);
+      await api('/agent/tools').catch(() => {});
+    }
+  });
+
   await scenario('appsettings', 'appsettings agent 读、改本机设置(问得出现值、改得动开放的项、密钥与审批档碰不到)', async () => {
     if (EXEC_MODE !== 'host') return { ok: false, skipped: true, detail: '两件工具只在本机执行形态露出(mode:host)' };
     const cfgPath = join(shared, 'config.json');
@@ -6899,6 +7011,47 @@ Then reply with only the command output.`,
       const ev = await sbxRun(MSG, { client: 'mobile/live-harness' });
       const calls = sbxCalls(ev);
       return { ok: !ev.error && !calls.length && !ev.clientCmds.length, detail: ev.error || `plugin_sandbox* ${calls.join(',') || '无'};client_cmd ${ev.clientCmds.length}`, ...base(ev) };
+    });
+  }
+  // pluginui(10-29 插件开发体验 1B):照用户口吻要一个带 Space 的小插件(排序下拉、每行 ⋯ 菜单、删除先确认、空的时候有提示),
+  // 不点名任何零件;带上桌面沙箱能力,台架扮桌面(回的状态里 dir 就是模型写的目录,引擎照真的去扫那个目录、附「UI check」)。
+  // 硬判看产物 main.js:四样里至少三样用了宿主零件(mountControl / contextMenu / confirm|openDialog / mountEmptyState 或列表源 empty),
+  // 且 tools/ui-reinvent.mjs 对产物的 dropdown / menu / dialog 三类 0 条。负对照 = 换回 1.80.0 的技能与模板、去掉 ui-reinvent.mjs(--kind neg)。
+  // 留证 pluginui-evidence.json(产物 main.js 原文 + 扫描结果)。
+  if (ONLY.has('pluginui')) {
+    const DIR = join(workspace, 'reading-list');
+    // 状态照模型写出来的文件回(manifest 的 id / 版本、main.js 里 registerView 的 id):对不上时模型会去查「沙箱怎么加载了别的东西」,判据就测偏了
+    const read = (f) => { try { return readFileSync(join(DIR, f), 'utf8'); } catch { return ''; } };
+    const mf = () => { try { return JSON.parse(read('manifest.json')); } catch { return {}; } };
+    const st = () => ({ v: 1, state: 'running', pluginId: mf().id || 'reading-list', name: mf().nameEn || mf().name || 'Reading list', version: mf().version || '0.1.0', dir: DIR,
+      views: [...new Set([...read(mf().main || 'main.js').matchAll(/registerView\(\s*\{\s*id:\s*['"`]([\w-]+)/g)].map((m) => m[1]))], spaces: [], hiddenSpaces: [], setupError: null, blocked: null, mountErrors: [], logs: [], warnCount: 0, errorCount: 0, loads: 1, windowVisible: false });
+    const desktop = { ns: 'plugin', respond: (b) => (b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(st()) }) };
+    await scenario('pluginui', 'pluginui 写一个带 Space 的小插件:下拉 / ⋯ 菜单 / 删除确认 / 空状态用宿主零件,不自己画', async () => {
+      const msg = '在当前文件夹里新建一个 reading-list 文件夹,给我写一个 Forsion 桌面插件「阅读清单」:带一个 Space,主视图列出我想读的书;顶上能按「书名 / 添加时间」排序;每一行右边有个 ⋯ 菜单,里面有「删除」,删之前要我确认;清单是空的时候要有提示和一个「添加」按钮。数据用 ctx.saveData 存就行。写完在沙箱里跑一下看看,先别装到我的 Forsion 里。';
+      const ev = await run(`live-pluginui-${Date.now()}`, msg, 900_000, { enabledSkillIds: ['local:forsion-plugin'], skillsConfigured: true }, 'desktop/live-harness', undefined, undefined, undefined, { clientCapabilities: ['plugin.sandbox'], phone: desktop });
+      const tool = join(root, 'skills', 'forsion-plugin', 'tools', 'ui-reinvent.mjs');
+      // 负对照里技能目录没有这份文件(那时还没有):判据照样要用它扫产物,从这份脚本旁边的检出拿一份
+      const ui = await import(pathToFileURL(existsSync(tool) ? tool : join(process.env.PLUGINUI_TOOL || '', 'ui-reinvent.mjs')).href);
+      const files = ui.pluginUiFiles(DIR);
+      const main = files.find(([f]) => /\.m?js$/.test(f))?.[1] || '';
+      const used = {
+        select: /\bui\.mountControl\(|\bui\.mount\(\s*['"]select/.test(main),
+        menu: /\bui\.contextMenu\(|\bui\.mount\(\s*['"]menu/.test(main),
+        dialog: /\bui\.(?:confirm|openDialog)\(|\bui\.mount\(\s*['"]dialog/.test(main),
+        empty: /\bui\.mountEmptyState\(|\bui\.mount\(\s*['"]emptyState|\bempty\s*:\s*\{/.test(main),
+      };
+      const notes = ui.scanUi(files);
+      const bad = notes.filter((g) => ['dropdown', 'menu', 'dialog'].includes(g.kind));
+      const sawCheck = ev.toolResults.some((r) => String(r.name).startsWith('plugin_sandbox') && String(r.full || '').includes('UI check'));
+      const sbx = ev.toolCalls.filter((n) => n.startsWith('plugin_sandbox')).length;
+      writeFileSync(join(OUT, 'pluginui-evidence.json'), JSON.stringify({ used, notes, sawCheck, sandboxCalls: sbx, files: files.map(([f, t]) => ({ f, length: t.length })), main }, null, 2));
+      const nUsed = Object.values(used).filter(Boolean).length;
+      const ok = !ev.error && !!main && nUsed >= 3 && !bad.length;
+      return {
+        ok, detail: ev.error || `${main ? `main.js ${main.split('\n').length} 行` : '✗ 没写出 main.js'};零件 ${Object.entries(used).map(([k, v]) => `${k}${v ? '✓' : '✗'}`).join(' ')}(${nUsed}/4);`
+          + `自画 ${notes.map((g) => `${g.kind}×${g.count}`).join(' ') || '0 条'}${bad.length ? ' ←' : ''};沙箱 ${sbx} 次${sawCheck ? ',看到过 UI check' : ''};工具 ${ev.toolCalls.length} 次`,
+        output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
+      };
     });
   }
   // account(10-10):agent 读得到账号额度(只报百分比)与本对话的上下文 / 步数;账号动作在聊天会话 + 完全通行下照样逐次弹卡。判据与负对照见 lib/account-live.mjs。

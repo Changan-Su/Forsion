@@ -6,12 +6,15 @@
 import { registerMessages, translate } from '../i18n'
 import { engineFetch, homeTarget } from './engine/targets'
 import { AGENT_APP_ID, currentClientId } from './agentRunService'
+import { protectTranslation } from './translationContent'
 import type { TanguCompleteOptions, TanguCompleteRequest, TanguCompleteResult, TanguFimRequest } from '../amadeus/plugins/tanguSeam'
 
 registerMessages({
   'inlineai.errUnsupported': { zh: '当前引擎版本不支持正文 AI，请更新 Tangu', en: 'This engine version does not support in-note AI. Update Tangu.' },
   'inlineai.errNoModel': { zh: '还没有可用的模型，先在聊天里选一个', en: 'No model is available yet. Pick one in the chat first.' },
   'inlineai.errEmpty': { zh: '模型没有返回内容', en: 'The model returned nothing' },
+  'inlineai.errFormat': { zh: '译文中的公式或格式内容未完整保留，请重试。原文未改动。', en: 'The translation did not preserve all formulas or formatting. Please retry. The original is unchanged.' },
+  'inlineai.errTooLong': { zh: '选中的内容过长，请分段翻译', en: 'The selection is too long. Please translate it in smaller sections.' },
 })
 
 type InlineEvent = { type: 'delta'; text?: string } | { type: 'done'; content?: string; toolCallText?: boolean } | { type: 'error'; error?: string }
@@ -23,6 +26,23 @@ export async function completeInline(req: TanguCompleteRequest, modelId: string 
   const model = req.modelId || modelId
   if (!model) throw new Error(translate('inlineai.errNoModel'))
   const { modelId: _drop, ...body } = req
+  if (req.action === 'translate' && req.selection) {
+    const content = protectTranslation(req.selection)
+    // The engine caps selection at 20,000 characters. Never let that cap cut a source span or marker in half.
+    if (content.text.length > 20_000) throw new Error(translate('inlineai.errTooLong'))
+    if (content.protected) {
+      // Buffer protected translations: neither partial markers nor a failed attempt may become copyable/applicable.
+      // Plain prose keeps streaming. A format failure gets one retry on the same explicitly selected model.
+      for (let attempt = 0; attempt < 2; attempt++) {
+        opts.signal?.throwIfAborted()
+        const result = await streamInline({ ...body, selection: content.text }, model, { signal: opts.signal })
+        opts.signal?.throwIfAborted()
+        const text = content.restore(result.text)
+        if (text != null) { opts.onDelta?.(text); return { ...result, text } }
+      }
+      throw Object.assign(new Error(translate('inlineai.errFormat')), { code: 'translation_format_lost' })
+    }
+  }
   return streamInline(body, model, opts)
 }
 

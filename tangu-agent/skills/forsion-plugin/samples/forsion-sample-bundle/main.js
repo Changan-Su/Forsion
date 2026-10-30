@@ -55,35 +55,75 @@ ctx.registerCommand({
 
 // Mini Panel example: both surfaces use the same data and entity parameter.
 // Current hosts supply live per-view params; all optional context methods are feature-detected.
+// The view is drawn from host parts (2026-10-26+): view head, toolbar select, ⋯ menu, confirm dialog, empty state and
+// the public .btn classes. They follow theme, language and zoom, so don't hand-make <select>, menus, dialogs or tab bars:
+// check-plugin.mjs --style and the plugin sandbox list any you do. Labels are { zh, en } so a language switch applies at once.
+// Both views (main and Mini) share one store: every change reads the stored counts, applies itself and saves, one at a
+// time, so a view's stale copy never overwrites a number the other view just saved.
+let queue = Promise.resolve()
+const readCounts = (data) => data?.counts || { daily: Number(data?.count) || 0 } // 1.2.0 kept one number under `count`
+const change = (fn) => (queue = queue.catch(() => {}).then(async () => {
+  const counts = { ...readCounts(await ctx.loadData()) }
+  fn(counts)
+  await ctx.saveData({ counts })
+  return counts
+}))
+const COUNTERS = [{ value: 'daily', label: { zh: '每天', en: 'Daily' } }, { value: 'weekly', label: { zh: '每周', en: 'Weekly' } }]
 for (const id of ['counter', 'mini-counter']) {
   ctx.registerView({
     id,
-    title: 'Counter',
+    title: isZh() ? '计数器' : 'Counter',
     mount(el, view) {
-      const zh = document.documentElement.lang.startsWith('zh')
+      // One guard for apps older than the parts; below it the parts are called directly (no hand-made fallback).
+      if (!ctx.ui?.setViewHead) { el.textContent = isZh() ? '请把 Forsion 更新到最新版。' : 'Update Forsion to use this view.'; return }
       let disposed = false
-      let count = 0
-      const root = document.createElement('section')
-      root.style.cssText = 'padding:16px;color:var(--text);font:13px var(--font-ui);display:grid;gap:12px;'
-      const label = document.createElement('label')
-      label.textContent = zh ? '计数器名称' : 'Counter name'
-      const input = document.createElement('input')
-      input.value = String(view?.getParams?.().counterId || 'daily')
-      input.addEventListener('input', () => view?.setParams?.({ counterId: input.value }))
-      label.append(input)
-      const value = document.createElement('output')
-      const button = document.createElement('button')
-      button.textContent = zh ? '加一' : 'Add one'
-      const render = () => { value.textContent = String(count) }
-      button.onclick = async () => {
-        button.disabled = true
-        try { await ctx.saveData({ count: count + 1 }); count++; if (!disposed) render() }
-        finally { if (!disposed) button.disabled = false }
+      let counts = {}
+      let empty = null
+      const counter = () => String(view?.getParams?.().counterId || 'daily')
+      const head = ctx.ui.setViewHead(el, { title: { zh: '计数器', en: 'Counter' } })
+      const pick = document.createElement('span')
+      const picker = ctx.ui.mountControl(pick, {
+        type: 'select', size: 'toolbar', value: counter(), label: { zh: '计数器', en: 'Counter' }, options: COUNTERS,
+        onChange: (value) => { view?.setParams?.({ counterId: value }); render() },
+      })
+      const add = document.createElement('button')
+      add.className = 'btn primary sm'
+      add.textContent = isZh() ? '加一' : 'Add one'
+      const more = document.createElement('button')
+      more.className = 'btn ghost sm'
+      more.setAttribute('aria-label', isZh() ? '更多' : 'More')
+      more.append(ctx.ui.icon('more', { size: 16 }))
+      head.actions.append(pick, add, more)
+      const body = el.appendChild(document.createElement('div'))
+      body.style.cssText = 'padding:16px;font:var(--ui-font-display) var(--font-ui);color:var(--text);'
+      const save = async (fn) => { const next = await change(fn); if (!disposed) { counts = next; render() } }
+      const inc = async () => {
+        const c = counter()
+        add.disabled = true
+        try { await save((all) => { all[c] = (all[c] || 0) + 1 }) } finally { if (!disposed) add.disabled = false }
       }
-      root.append(label, value, button); el.append(root); render()
-      const off = view?.onParamsChanged?.((params) => { input.value = String(params.counterId || 'daily') })
-      Promise.resolve(ctx.loadData()).then((data) => { if (!disposed) { count = Number(data?.count) || 0; render() } })
-      return () => { disposed = true; off?.(); root.remove() }
+      const reset = async () => {
+        const c = counter()
+        if (await ctx.ui.confirm({ title: { zh: '把这个计数器清零?', en: 'Reset this counter?' }, ok: { zh: '清零', en: 'Reset' }, danger: true })) await save((all) => { all[c] = 0 })
+      }
+      add.onclick = inc
+      more.onclick = () => ctx.ui.contextMenu({ anchor: more, align: 'end' }, [
+        { label: { zh: '清零', en: 'Reset' }, icon: 'trash-2', danger: true, run: reset },
+      ])
+      function render() {
+        const n = counts[counter()] || 0
+        empty?.dispose(); empty = null
+        body.textContent = n ? String(n) : ''
+        if (!n) empty = ctx.ui.mountEmptyState(body, { icon: 'plus', title: { zh: '还没开始计数', en: 'Nothing counted yet' }, action: { label: { zh: '加一', en: 'Add one' }, run: inc } })
+      }
+      const off = view?.onParamsChanged?.((params) => { picker.update({ value: String(params.counterId || 'daily') }); render() })
+      Promise.resolve(ctx.loadData()).then((data) => {
+        if (disposed) return
+        counts = readCounts(data)
+        render()
+      })
+      render()
+      return () => { disposed = true; off?.(); empty?.dispose(); picker.dispose(); head.dispose(); body.remove() }
     },
   })
 }

@@ -8,7 +8,7 @@ import type { ViewProps } from '@lcl/engine/types'
 import { useApp } from '../stores/appStore'
 import { useI18n } from '../i18n'
 import { deleteAgentAvatar, fetchAgentAvatar, getAgentHarness, listAgents, listSkills, listTools, putAgentsMeta, renameAgentDef, saveAgentDef, uploadAgentAvatar } from '../services/backendService'
-import { openAgentProfile, openHumanProfile } from './agentProfileNav'
+import { openAgentCreation, openAgentProfile, openHumanProfile } from './agentProfileNav'
 import { HumanProfile, useMeIdentity } from './HumanProfile'
 import { AgentMemoryPanel } from '../components/AgentMemoryPanel'
 import { AgentLogPanel } from '../components/AgentLogPanel'
@@ -168,7 +168,7 @@ export function AgentsRosterView() {
   const agent = agents.find((a) => a.slug === selected.slug) || agents[0]
   const creating = selected.creating
   const viewing = (slug: string) => !creating && !selected.me && agent?.slug === slug
-  const setCreating = () => useWorkspace.getState().openView('agent-profile', { reuseKey: 'primary', creating: true, me: false }, 'main')
+  const setCreating = openAgentCreation
   const selectAgent = (slug: string) => { setRosterError(''); openAgentProfile(slug) }
   const emitAgentsChange = () => { window.dispatchEvent(new Event('forsion:agents-changed')); window.tangu?.requestMainAction?.('agents-changed') }
   const filtered = useMemo(() => agents.filter((a) => `${a.name} ${agentDescription(a, t)} ${a.slug}`.toLowerCase().includes(query.toLowerCase())), [agents, query, t])
@@ -501,7 +501,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
     <ProfileSelectField field="thinking" label={t('agentProfile.thinking')} value={draft.thinkingLevel || ''} options={thinkingOptions(t)} onChange={(v) => patch({ thinkingLevel: v as NormalAgentDef['thinkingLevel'] })} />
     <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={draft.approvalMode || ''} options={approvalOptions(t)} onChange={(v) => patch({ approvalMode: v as NormalAgentDef['approvalMode'] })} />
     {/* Muse 有两个档:这里的只管和它聊天时;后台周期按「权限档」(设置 › Agent › 后台 Agent)。两处互相指路(10-13 用户反馈「放权了还要批」)。 */}
-    {agent.slug === 'muse' && <button type="button" className="agent-profile-link" data-act="muse-tier-link" onClick={() => useApp.getState().openSettings('agents')}>{t('agentProfile.museApprovalScope')}<ExternalLink size={13} /></button>}
+    {agent.slug === 'muse' && <button type="button" className="agent-profile-link" data-act="muse-tier-link" onClick={() => useApp.getState().openSettings('agents/ag-special/muse')}>{t('agentProfile.museApprovalScope')}<ExternalLink size={13} /></button>}
   </>
   const agentConfiguration = <>
     <ProfileGroup title={t('agentProfile.instructions')} hint={t('agentProfile.instructionsHint')}>

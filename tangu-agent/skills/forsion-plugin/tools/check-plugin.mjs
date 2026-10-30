@@ -4,7 +4,8 @@
 // Space against that. Answers "why is my Space / view / command not there?" without the app running.
 //
 //   node check-plugin.mjs <plugin folder> [--app-version 2.13.1] [--locale en]
-//   node check-plugin.mjs <plugin folder> --style   also check its CSS against tools/plugin-contract.json (report only)
+//   node check-plugin.mjs <plugin folder> --style   also check its CSS against tools/plugin-contract.json, and list UI it
+//                                                   draws itself where the host has a part (tools/ui-reinvent.mjs; report only)
 //   node check-plugin.mjs                      every plugin installed in ~/.forsion/plugins (or pass any folder of plugins)
 //
 // No `node` on PATH? The Forsion app binary runs it too:
@@ -194,7 +195,7 @@ if (!existsSync(join(root, 'manifest.json'))) {
     console.log(`Forsion plugin check: ${kids.length} plugin(s) in ${root}\n`);
     for (const kid of kids) {
       const r = spawnSync(process.execPath, [SELF, join(root, kid), ...rest], { encoding: 'utf8', timeout: 90_000 });
-      if (r.status === 0) { console.log(`  ✓ ${kid}`); if (/ style note\(s\)/.test(r.stdout)) styled.push({ kid, text: r.stdout.trim() }); continue; }
+      if (r.status === 0) { console.log(`  ✓ ${kid}`); if (/ (?:style|UI) note\(s\)/.test(r.stdout)) styled.push({ kid, text: r.stdout.trim() }); continue; }
       const text = (r.stdout || r.stderr || String(r.error || 'no output')).trim();
       if (r.status === 3) { console.log(`  ? ${kid}: undecided from the files alone, details below`); unsure.push({ kid, text }); }
       else { console.log(`  ✗ ${kid}: details below`); bad.push({ kid, text }); }
@@ -452,6 +453,8 @@ if (hidden && !loadError && explain.length) {
 // ── 6. style (only with --style): host classes and tokens against the published contract ──────────────────────────
 // Report only: it never changes the exit code. Scans main.js and every .css file in the plugin folder.
 if (argv.includes('--style')) {
+  // The restricted load probe needs no style scanner (and cannot read this sibling module).
+  const { scanUi, formatUiNotes } = await import('./ui-reinvent.mjs');
   const contract = JSON.parse(readFileSync(new URL('./plugin-contract.json', import.meta.url), 'utf8'));
   const pub = new Set(Object.values(contract.tokens).flatMap(Object.keys));
   const fallbackOk = new Set(contract.fallbackAllowed || []);
@@ -518,5 +521,11 @@ if (argv.includes('--style')) {
   for (const n of notes.slice(0, 300)) say(`  · ${n}`);
   if (notes.length > 300) say(`  … +${notes.length - 300} more`);
   if (notes.length) say(`  ${notes.length} style note(s). Public classes and tokens: tools/plugin-contract.json in the forsion-plugin skill.`);
+  const parts = scanUi(files);
+  say();
+  say('UI parts: what this plugin draws itself although the host has a part for it. Report only: does not change the result.');
+  if (!parts.length) ok('nothing to report');
+  for (const n of formatUiNotes(parts, parts.length)) say(`  ${n}`);
+  if (parts.length) say(`  ${parts.length} UI note(s). How to use the parts: references/host-ui-mounts.md, section "Host parts", in the forsion-plugin skill.`);
 }
 finish();

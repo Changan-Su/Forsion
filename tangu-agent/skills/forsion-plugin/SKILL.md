@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.78.0
+  version: 1.82.0
   author: Forsion
   category: Forsion
 ---
@@ -28,8 +28,10 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 
 Tool results are capped, so this skill keeps long, API-by-API details in `references/` next to it. When a section below says 见下「…」 or names an API listed here, read that file before writing code:
 
-- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
-- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation
+- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
+- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:ctx.agent
+- [references/mini-panel.md](references/mini-panel.md): a Space's small floating window (`mini` in `space.json`)
+- [references/bundle-mcp-hooks.md](references/bundle-mcp-hooks.md): stdio MCP servers and observe-only hooks a bundle declares in its manifest
 - [references/work-folder-migration.md](references/work-folder-migration.md): one-time upgrade of old plugin data into the working folder (Identity and destination; Request and result; Upgrade sequence; Acceptance cases; Ordinary writes after upgrade)
 
 ## Troubleshooting an installed plugin: Space missing, view blank, "stopped working after an update" (2026-10-10)
@@ -51,7 +53,7 @@ node "<Skill folder>/tools/check-plugin.mjs" <plugin folder> --style   # also: i
 How the host behaves, so you can read the result and explain it:
 
 - A bundled Space (`spaces/<slug>/space.json`) is shown only if **every view it names is registered once the plugin has loaded**. Otherwise the host skips it without an error: the Space is simply not on the Ribbon.
-- `main.js` that throws → the plugin card in Settings → Plugins shows "failed to load". `main.js` that loads **without an error but registers nothing** → the plugin looks healthy and switched on; apps up to 2.13.1 show no badge and no message at all, later builds put a "Space hidden" badge with the reason on the card. When the checker marks that `✗`, it is a bug in the plugin's own `main.js`, not an app / plugin-API incompatibility: the registration code is not on any path that runs at load. Usual shapes: the file is wrapped in `function setup(ctx) { … }`; an earlier function lost its closing brace and swallowed the rest of the file (a stray `}` at the very end keeps it parseable). The checker names the function and its line range — read those lines next.
+- `main.js` that throws → the plugin card in Settings → Plugins shows "failed to load". `main.js` that loads **without an error but registers nothing** → the plugin looks healthy and switched on; builds after 2.13.1 put a "Space hidden" badge with the reason on the card. When the checker marks that `✗`, it is a bug in the plugin's own `main.js`, not an app / plugin-API incompatibility: the registration code is not on any path that runs at load. Usual shapes: the file is wrapped in `function setup(ctx) { … }`; an earlier function lost its closing brace and swallowed the rest of the file (a stray `}` at the very end keeps it parseable). The checker names the function and its line range — read those lines next.
 - **The running app's own record.** If `list_ui_commands` lists a `plugin-status` command (desktop builds after 2.13.1), also call `run_ui_command` with `{"id":"plugin-status","args":{"id":"<manifest id>"}}` (omit `args` to get whatever is wrong right now). It answers in one line what the checker cannot see from the files: whether the plugin is turned off, blocked by the host, failed to load in the real app (with the error), or waiting for a required plugin, which views it registered, and which bundled Space is hidden and why. When it and the checker disagree, the app's record is what actually happened; the checker only says what the files on disk would do. Not listed (older app, or a session without the desktop window)? Then a `✗` from the checker still stands on its own; for a `?`, say what is undecided and ask the user to look at the plugin's card in Settings → Plugins.
 - Do not send the user to the developer console or ask for "host logs" first. End users cannot easily get them, and for a `✗` they hold nothing the checker does not print. Ask only after the checker and `plugin-status` have both come back without an answer.
 - A diagnostic file a plugin writes for itself under `~/.forsion/plugins-data/` is a hint, not proof of where loading stopped.
@@ -78,6 +80,46 @@ No `plugin_sandbox` (mobile, web, cloud sessions, older desktop builds)? Fall ba
 3. **Stable English IDs**: external plugin manifest IDs must match `^[a-z0-9][a-z0-9-]{0,63}$` (lowercase ASCII letters, digits and hyphens, 1–64 characters). Use an English name for new IDs; keep existing published IDs stable. Localized `name` / `nameEn` are display labels, never storage identities. Namespace command/slash/tool IDs because they share global registries; a theme ID is its `data-theme` value. Store installs use the host's immutable `market-<UUID>` effective ID; do not replace it with the manifest ID or rename historical install-folder aliases.
 4. **交付=能跑+能回归**:非平凡逻辑留一个 `check.mjs`(`node check.mjs` 一条命令),范式见 `forsion-plugin-mindmap` / activitywatch 的 check 模式。
 5. **动作性能力住引擎侧,渲染端命令只做导航**(2026-08-24 拍板):注册任何入口前先问一句——这是**导航**(开视图/切面板)还是**动作**(带参数、可 headless 完成的活,比如「分析这条链接」)?动作**不要**做成命令面板命令:`Command.run(): void` 类型上就没有参数位,而且命令表活在渲染进程,聊天 agent 与自动化都够不着。正确做法=把能力做成捆绑包的**引擎侧资产**,零通道基建。**先选对形态**:靠引擎已有工具就能复现的动作 → 包根 `skills/<slug>/SKILL.md`(**全局技能,默认选它**,进所有 agent 的技能目录,`use_skill` 直接用);要专属人设 / 独立上下文预算 / 稳定的自动化入口 → 才建 `agents/<slug>/` 具名 agent(+ 它自己的 `skills/`),聊天 agent 经 `delegate(agentSlug)`、自动化经 `agent_run` 调用(⚠️`agent_run` **必须指名 agentSlug**,只发全局技能的 bundle 靠被指名的那个 agent 身上带着这份技能来够到)。需要桌面主进程能力时引擎侧已有桥工具(如 `transcribe_audio` 语音转写)。范式=青鸟收藏夹:工作台 UI 归渲染端插件,分析管线归 bundle 内嵌的 `bluebird` agent+技能,两个入口(人点工作台 / agent 委派)共用同一条引擎管线。
+
+## Desktop plugin UI: use the host's parts (2026-10-29+)
+
+A view that draws its own dropdowns, menus, dialogs or tab bars looks foreign in Forsion and stops following the user's theme, language, UI zoom and every later host fix. The host draws these for you: reach for a part first, and hand-draw only what no part covers (your content itself: rows, cards, charts, canvases).
+
+| You need | Use | Not |
+|---|---|---|
+| Several panes or tabs in a Space | native Panels in `space.json`; several views in one panel = native tabs (见下「布局:原生 Panel 优先」) | a tab bar inside one view |
+| A title row with buttons | `ctx.ui.setViewHead(el, { title, actions })` | your own header bar |
+| A dropdown (sort, filter, pick one) / 2–5 modes | `ctx.ui.mountControl(el, { type: 'select' })` / `{ type: 'segmented' }` | `<select>`, a listbox you position |
+| A ⋯ or right-click menu | `ctx.ui.contextMenu({ anchor, align: 'end' }, entries)` | a `.my-menu` div |
+| Confirm / ask for a name / a small form | `ctx.ui.confirm({ title, danger })`; `ctx.ui.openDialog({ title, mount, actions })` with your input in `mount` | `window.prompt` (does nothing in the desktop app), `window.confirm`, `<dialog>`, a modal div |
+| A panel anchored to a button | `ctx.ui.popover(anchor, { mount })` | `position: fixed` and your own math |
+| Nothing yet | `ctx.ui.mountEmptyState(el, { icon, title, line, action })`; a list source's `empty` | a centered line of text |
+| A sidebar list | `ctx.registerListSource` (见下「统一左栏列表源」) | a list view in the left pane |
+| Buttons and icons | classes `.btn` `.btn.primary` `.btn.ghost` `.btn.danger` `.btn.sm`; `ctx.ui.icon(name, { size })` | hand-styled `<button>`, pasted SVGs |
+| CSS and labels | `ctx.addStyle(css)` with public tokens only (样式契约, next); labels as `{ zh, en }` or `ctx.i18n.define` | `<style>` in `document.head`; strings frozen at registration |
+| Settings, chat box, Markdown editor, table, board | `ctx.registerSetting` / `ctx.ui.mountSettingsPage`, `mountChatBox`, `mountMarkdownEditor`, `ctx.table.mount`, `ctx.ui.mountBoard` | your own copy |
+
+Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts.md), section "Host parts" and the one for each mount. The bundle template's counter view (`samples/forsion-sample-bundle/main.js`) uses the parts; copy from it.
+
+**Check it.** `node tools/check-plugin.mjs <plugin folder> --style` lists, under "UI parts", what the plugin still draws itself where a part exists, and `plugin_sandbox` adds the same list to every status it returns. It reports, never blocks: fix what you can and keep the rest only on purpose. A plugin whose UI is a web page in an iframe is still allowed (host tokens and theme don't reach it); mark that page's CSS lines `/* forsion-style: off */`.
+
+### 样式契约:能依赖的宿主类名与 token(2026-10-26 起)
+
+宿主把插件可以依赖的类名和 CSS 变量发布在 `tools/plugin-contract.json`(每个带用途,随 `apiVersion` 升级)。清单外的宿主类名 / 变量
+随时可能改名或删掉:不报错,只是某天界面塌了或变了色。
+
+- **公开类名**:`.btn`(`.primary` / `.ghost` / `.danger` / `.sm`)、`.ctx-menu` 外壳(直接子 `<button>` 是菜单项,`button.danger`、
+  `.ctx-separator`、`.ctx-shortcut`、`.ctx-head`、`.ctx-menu-scroll`)、`.empty-state` / `.empty-title`。私有前缀 `.amx-*`(编辑器、数据库浮层、⌘P)、
+  `.fc-*`(内置日历)、`.t2-*` 别借;自己的类名用自己的前缀。
+- **公开 token**:色、圆角 `--radius-*`、阴影、菜单尺寸 `--menu-*`、界面字号 `--ui-font-*` / `--ui-line-*`、动效 `--duration-*` / `--ease-*`,
+  外加 `--focus-ring`。契约只列名字不列值:值跟着设计语言 / 主题色 / 背景色走。`--ease-out`、`--ease-spring`、`--ease-apple`、`--dur-*` 已弃用。
+- **不写兜底**:`var(--radius-md)`,不是 `var(--radius-md, 10px)`。宿主定义着的变量兜底永远不生效,抄来的值迟早和宿主对不上。例外:token
+  比你的 `minAppVersion` 新(契约的 `since` 表),兜底留给老宿主;`--reading-*` 两个本来就带兜底。
+- **不写死颜色、阴影、圆角**:浅底用 `color-mix(in srgb, var(--green) 14%, transparent)`,别抄 Tailwind 色板。画面本身要固定的色(视频黑边、
+  压在画面上的白字)写关键字 `black` / `white`,一看就知道是故意的;检查只认 `#hex` / `rgb()` / `hsl()`。
+- **体检**:`check-plugin.mjs <插件目录> --style` 扫 main.js 和目录里的 `.css`,报私有类名、清单外 / 已弃用的 token、多余兜底、写死的色、
+  ≥4px 的圆角、带色阴影。**只报不拦**,不改退出码。给另一份文档用的 CSS(iframe 里的页面、导出文件,那里没有宿主变量)在同一行写
+  `/* forsion-style: off */` 跳过;打包把一个模块压成一行时,一个标记管整行。
 
 ## 引擎插件(samples/forsion-sample-plugin)
 
@@ -197,37 +239,7 @@ mod+J、布局记忆和移动端抽屉,自造的一样都没有,还和别的 Spa
 
 ### Mini Panel 适配
 
-Space 需要显式声明 `mini` 才会出现在 Mini Panel。它是一块扩展面板：默认 320×420，用户可拖卡片的边和角在 260×160 到 640×900 之间改大小（自动弹出的临时 Mini 固定 320×420），单层宿主栏提供 Space 切换、在主面板显示、关闭；只设计本能力的快捷交互，不复制应用导航、设置、标签管理或移动端抽屉。
-
-Computer Use 占用外部应用前台时，宿主可临时打开 Tangu Mini 观察当前运行会话，无需用户先打开 Mini。自动窗口的焦点、跟随、会话同步与收起由宿主管理，不覆盖手动 Mini 的状态；插件无需监听前台信号或新增适配字段。
-
-```json
-"mini": {
-  "name": { "zh": "快捷记录", "en": "Quick capture" },
-  "view": { "type": "plugin:my-bundle:quick", "params": { "itemId": "today" } },
-  "mainView": { "type": "plugin:my-bundle:detail" }
-}
-```
-
-- `view` 与 `mainView` 都是 `{type, params?}`；必须使用**不同的已注册视图类型**。缺少适配或视图未注册时不显示在 Mini 中，完整 Space 仍可用。不要把可选 Mini 类型放进 `requires.views`，否则旧宿主会拒绝整个配方。
-- 在 `mount(el, view)` 中用 `view.surface === 'mini'` 识别容器；老宿主这些字段可缺省。Mini 不提供 `extendView`。
-- `view.getParams()` 读当前实体/筛选参数，`view.setParams(patch)` 合并更新，`view.onParamsChanged(fn)` 订阅后返回取消函数。参数更新不重挂 DOM；自己更新需要变化的内容，避免丢失正在输入的草稿。
-- `view.showInMainPanel?.()` 打开 `mini.mainView`，同一份当前参数覆盖 `mainView.params`。两边使用相同实体键（如 `itemId`/`notePath`），不要另建一份业务数据。宿主顶部已有按钮，不必重复绘制。
-- `mount` 返回清理函数，停止订阅/计时器并保存必要内容。旧实例的 context 在关闭、切换 Space 或禁用后失效，异步回调不得继续调用。
-- 插件级清理:`main.js` 就是 `setup(ctx)` 的函数体,末尾 `return () => { … }`(async 时 resolve 出函数)就是整个插件的清理,停用 / 重载 / setup 失败时宿主调用。`ctx.register*`、`ctx.ui.*`、`ctx.addStyle`、`ctx.subscribeLocale` 这些宿主自己收;只有你自己挂到 `window` / `document` 上的监听、定时器、元素才需要写在这里。
-- 布局跟随容器，不要写死 320×420：窄到 260、矮到 160 时内容自己滚动或省略，不撑出横向滚动条。
-- 按中英、亮暗、320×420 与最小 260×160、实体定位与插件启停验证。参考捆绑包模板的 `mini-counter` / `counter` 视图及 `spaces/sample-bundle-mini/space.json`；Genesis 回归命令为 `desktop` 下 `npm run check:minicard`。
-
-插件只有一块快捷视图、不值得为它建完整 Space 时，直接调用开放接口：
-
-```js
-ctx.openMiniPanel?.('mini-counter', {
-  title: 'Counter', params: { itemId: 'today' },
-  mainViewId: 'counter', mainViewParams: { section: 'inbox' },
-})
-```
-
-`viewId` / `mainViewId` 都写**本插件相对 id**，宿主自动加 `plugin:<pluginId>:`，省略 `mainViewId` 就把同一视图交回主面板。仍须先 `registerView`；Web/mobile 或旧宿主可能没有原生 Mini，务必可选链并保留 `ctx.openView()` 回退。
+A Space that should also open as a small floating window gets a `mini` block in `space.json`: read [references/mini-panel.md](references/mini-panel.md) before you add one.
 
 ## 智能体(samples/forsion-sample-agent)
 
@@ -260,26 +272,7 @@ ctx.openMiniPanel?.('mini-counter', {
 
 ### 插件自带的 MCP server 与 hooks(2026-10-17 起;只收 stdio MCP、只开观察档 hooks)
 
-两样都写在**包里引擎插件的 `tangu-plugin.json`**(不是包根的 `manifest.json`),开关就跟着引擎插件走:捆绑包在桌面上拨开关时级联到引擎插件,所以「停用插件 → 它的 MCP 进程和 hooks 一起停」是现成的。两样都要在插件**进入运行态之后**才登记,启动时随即休眠的插件不会拉起子进程。入口里照常 `ctx.registerPlugin({ id, name, … })` 登记一次 —— **没登记的引擎插件没有开关**(引擎当它常开),桌面停用捆绑包时级联关不到它,MCP 进程就一直开着;只想带 MCP / hooks 的插件不注册工具也行,但这一步不能省。
-
-```json
-{
-  "id": "my-plugin", "name": "My plugin", "version": "1.0.0", "apiVersion": 1, "entry": "dist/index.js",
-  "mcpServers": {
-    "mytools": { "command": "node", "args": ["${pluginDir}/mcp/server.js"], "env": { "DATA": "${pluginDir}/data" } }
-  },
-  "hooks": {
-    "PostToolUse": [{ "matcher": "write_file", "hooks": [{ "type": "command", "command": "node ${pluginDir}/hooks/audit.js" }] }],
-    "Stop": [{ "hooks": [{ "type": "command", "command": "node ${pluginDir}/hooks/archive.js" }] }]
-  }
-}
-```
-
-- **MCP 只收 stdio**(随包发的静态 server):要有 `command`,`url` / `headers` 不收 —— 远端 server 的地址与令牌是运行期数据,写不进 manifest。能力在某台服务端的,照旧让**服务端自己出 MCP 端点**、插件只做「接入卡」(先例 = server-admin 的「接入 Agent(MCP)」+ server `microserver/admin-mcp/`)。
-- `${pluginDir}` 在 command / args / env 里展开成插件目录的绝对路径;stdio 子进程的工作目录就是插件目录。子进程拿不到引擎凭据(同用户自己配的 MCP)。
-- 工具名照常是 `mcp__<server 名>__<工具>`,server 名用你声明的那个(≤32 字符,字母数字 `_` `-`),取得短而独特;**和用户自己配的 server 撞名时你这份不起**,在设置 → MCP 里显示成错误。设置 → MCP 只读列出插件自带的 server(写着来自哪个插件),用户要关就停用插件。只在本机引擎上生效,云端 worker 没有 MCP。
-- **hooks 只开观察档**:`SessionStart` / `PostToolUse` / `Stop` / `SubagentStart` / `SubagentStop`。hook 照常跑、照常从 stdin 收事件 JSON,但**输出一律不进判定**:`decision: block`、退出码 2、`continue: false`、`additionalContext` 都没有效果 —— 拦不住工具、停不了循环、也往对话里加不了东西。`PreToolUse` / `PermissionRequest` / `UserPromptSubmit` / `PreCompact` 不收(那是审批面的一部分)。适合审计、会话归档、写完文件跑一下自己的索引。设置 → Hooks 只读列出它们(「来自插件 X · 只观察」),排在用户自己的 hook 之后。
-- hook 和 MCP server 都是插件自己的代码,信任级别与引擎插件相同,装上即生效、不走「需审阅」;**别在 hook 里做慢事**(它在 run 的关键路径上,会拖慢每一次工具调用),也别把用户数据往外发。
+A bundle can declare stdio MCP servers and observe-only hooks in its manifest: read [references/bundle-mcp-hooks.md](references/bundle-mcp-hooks.md) before you add either.
 
 ### 把动作搬进引擎侧:三档路由(通用纪律 5 的落地写法)
 
@@ -331,39 +324,7 @@ Forsion Android App 也跑 Forsion 插件(同一份 `pluginStore`、同一个 `c
 
 ### `ctx.agent`:读写你自己的数据(2026-09-27 起,**只有 agent 自建 Space 有**)
 
-Space 应该**从数据渲染**,别把状态、时间、待办写死在 main.js 里、每个周期改一遍 —— 那既浪费你的额度,用户看到的也永远是旧的。
-`ctx.agent` 只在 `agent-<slug>` 插件上存在、只能碰你自己这个 agent(普通插件整个没有;今天只有 Muse 有数据源):
-
-| 成员 | 说明 |
-|---|---|
-| `slug` | 你的 agent slug(如 `'muse'`) |
-| `status()` | `{ running, lastCycleAt, sleepUntil, sleepReason, mode, heartbeatMinutes, pendingApprovals }` 或 null |
-| `todos(status?)` | 你提过的 TODO:`{ id, title, detail, status, createdAt }[]`;`status` 缺省 = 全部(`'pending'` / `'done'` / `'dismissed'` / `'injected'`) |
-| `updateTodo(id, 'done' \| 'dismissed')` | **只在用户刚在你自己的视图里点过之后生效**(在你 Space 上按钮的 click 处理函数里调;宿主只认本视图里 1.5 秒内的真实点击 / 按键),挂载时 / 定时器 / 订阅回调 / 借别处的点击调一律 reject;效果同 Muse 面板的按钮,会以「用户处理了」的 `[feedback]` 回到你的日志;只改仍是 pending 的 |
-| `schedule()` | 你 SCHEDULE.db 的条目:`{ id, name, date, repeat, auto, description, lastRun }[]` |
-| `library.list()` / `library.read(path)` | 你的 Library:目录树 / 读一个文本文件(相对路径如 `'Journal/2026-09-27.md'`,≤1MB;越界、隐藏文件、不存在 → reject) |
-| `subscribe(cb)` | 周期结束、睡醒、待批数或待办数变化、`updateTodo` 之后回调(宿主约 20 秒查一次);返回退订,禁用/重载宿主统一收 |
-
-数据调用(status / todos / schedule / library / updateTodo)是 Promise,后端没就绪会 reject —— 自己画空态,别让 mount 抛错(mount 抛错也会以 `[feedback]` 回到你);`subscribe` 同步返回退订。
-**挂载之后没接住的错也回到你**(2026-09-27 起):宿主给你当前这一版的代码打了 `sourceURL`,异步回调 / 事件处理 / 定时器 / 订阅回调里没接住的错,栈里有你的帧就以 `[feedback]` 回写、带 `main.js` 的行号(同一条只报一次,每版最多 3 条)—— 包括你 `await` 的宿主接口 reject 了你没接(异步栈里有你那一帧,行号落在 `await` 那行)。旧版漏清的定时器在重载后抛的不算。
-手势闸防的是「顺手写个定时器 / 挂载时就标掉」这类失误,**不是安全边界**(插件与宿主同一个渲染进程);审批队列不开放。
-
-```js
-ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
-  const draw = async () => {
-    const [st, todos] = await Promise.all([ctx.agent.status(), ctx.agent.todos('pending')]).catch(() => [null, []])
-    el.replaceChildren()
-    for (const t of todos) {
-      const b = document.createElement('button')
-      b.textContent = `✓ ${t.title}`
-      b.onclick = () => ctx.agent.updateTodo(t.id, 'done').then(draw, () => {}) // 只能在点击里调
-      el.append(b)
-    }
-  }
-  draw()
-  return ctx.agent.subscribe(draw) // 退订函数正好当 disposer
-} })
-```
+Your Space renders your own status, TODOs, schedule and Library from `ctx.agent` instead of hardcoding them: the member table, the click-only `updateTodo` rule and an example are in [references/tangu-host-apis.md](references/tangu-host-apis.md), section `ctx.agent`. Read it before the Space shows any of that data.
 
 ## 桌面插件:贡献点全表(动手前先看这张表)
 
@@ -622,24 +583,6 @@ createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一�
   (里面只套一层,箭头 `data-motion="chevron"`,React 用 `@lcl/components` 的 `AnimatedCollapse`),别自己量高度补间。细则见 references/host-ui-mounts.md「Motion the host applies for you」。
 - **这三个开关是用户的**:不读、不写 `forsion_calm_*` 与 `<html data-calm-*>`,不提供同类的私有开关,也不在自己的视图里用 `:hover`
   去点亮或压暗宿主的外围。iframe / webview 里的页面拿不到宿主变量、不会跟着淡,导航类内容别装进 iframe 再放到左栏。
-
-### 样式契约:能依赖的宿主类名与 token(2026-10-26 起)
-
-宿主把插件可以依赖的类名和 CSS 变量发布在 `tools/plugin-contract.json`(每个带用途,随 `apiVersion` 升级)。清单外的宿主类名 / 变量
-随时可能改名或删掉:不报错,只是某天界面塌了或变了色。
-
-- **公开类名**:`.btn`(`.primary` / `.ghost` / `.danger` / `.sm`)、`.ctx-menu` 外壳(直接子 `<button>` 是菜单项,`button.danger`、
-  `.ctx-separator`、`.ctx-shortcut`、`.ctx-head`、`.ctx-menu-scroll`)、`.empty-state` / `.empty-title`。私有前缀 `.amx-*`(编辑器、数据库浮层、⌘P)、
-  `.fc-*`(内置日历)、`.t2-*` 别借;自己的类名用自己的前缀。
-- **公开 token**:色、圆角 `--radius-*`、阴影、菜单尺寸 `--menu-*`、界面字号 `--ui-font-*` / `--ui-line-*`、动效 `--duration-*` / `--ease-*`,
-  外加 `--focus-ring`。契约只列名字不列值:值跟着设计语言 / 主题色 / 背景色走。`--ease-out`、`--ease-spring`、`--ease-apple`、`--dur-*` 已弃用。
-- **不写兜底**:`var(--radius-md)`,不是 `var(--radius-md, 10px)`。宿主定义着的变量兜底永远不生效,抄来的值迟早和宿主对不上。例外:token
-  比你的 `minAppVersion` 新(契约的 `since` 表),兜底留给老宿主;`--reading-*` 两个本来就带兜底。
-- **不写死颜色、阴影、圆角**:浅底用 `color-mix(in srgb, var(--green) 14%, transparent)`,别抄 Tailwind 色板。画面本身要固定的色(视频黑边、
-  压在画面上的白字)写关键字 `black` / `white`,一看就知道是故意的;检查只认 `#hex` / `rgb()` / `hsl()`。
-- **体检**:`check-plugin.mjs <插件目录> --style` 扫 main.js 和目录里的 `.css`,报私有类名、清单外 / 已弃用的 token、多余兜底、写死的色、
-  ≥4px 的圆角、带色阴影。**只报不拦**,不改退出码。给另一份文档用的 CSS(iframe 里的页面、导出文件,那里没有宿主变量)在同一行写
-  `/* forsion-style: off */` 跳过;打包把一个模块压成一行时,一个标记管整行。
 
 ### 宿主挂载接口的 dispose 契约(2026-10-04 起)
 
@@ -1248,6 +1191,7 @@ const dispose = ctx.app.mountBlocks(el, {
   - **带落点的打开也归你(2.13.2 之后的桌面版本)**:笔记里的 `[[x.pdf#page=3]]`、聊天里的引用(带页码,常常还带一段引语)同样进你的视图,落点经 `mount(el, file)` 的 `file.onGoto?.(cb)` 交给你:`cb({ page, quote? })`,`page` 从 1 起,`quote` 是要在那一页标出来的原文。订阅之后,如果这次打开本身带落点,回调会马上来一次(异步,不在 `onGoto()` 调用里面);视图已经开着时再点别的链接,回调再来,视图不重挂。返回值是退订函数,视图关掉时宿主也会替你收掉。**回调到的时候你多半还没准备好**:文件可能还在加载,或者你的标签刚从后台切回来、还没按新尺寸排过版(这时滚动不生效)—— 把落点记下,等能滚了再跳。不订阅也不报错,只是文件开在你自己的默认位置。2.13.2 及更早没有 `onGoto`:这类跳转(以及笔记里不带页码的 `[[x.pdf]]`)进的是内置阅读器,所以一律 `file.onGoto?.(…)` 探测着用。
   - **换标签、新标签页、对话引用都是宿主管(2.13.3 之后的桌面版本;所有文件类型视图和主区插件视图一样)**:你的标签被换到后台时,宿主把视图的 DOM 从文档里摘下来(不调 unmount,状态都在),换回来原样挂回 —— 摘下期间量到的尺寸和滚动位置都是 0,别在这时候记「看到哪儿」,也别拿这时候的 0 去排版。换回来时宿主把视图里每个滚动容器的位置写回去(更早的版本一律回到顶上),不用自己存;你要是自己也在恢复位置,两边写的是同一个值,不冲突。⌘ / Ctrl + 点击文件树、双链、聊天引用这些入口 = 在新标签页打开你的视图(更早的版本里指向文件的双链会就地顶掉当前标签)。视图在主区显示时,侧栏对话自动把这份文件挂成引用(发给模型的是绝对路径),不用你做什么。
   - **不接管的**:`![[x.pdf]]` 嵌入仍由内置阅读器画(`registerEmbedRenderer` 对 `.pdf` 不会被问到);文件树右键「用内置阅读器打开」是用户点名要内置。
+  - **库外 PDF（2026-10-29，功能分支）**：另写 `external: true` 才接系统「用 Forsion 打开」的外部 PDF；默认打开器偏好照旧。`file.io` 只在库外挂载时出现：`readBytes(path)` 读当前 PDF / 隐藏旁挂批注，`writeBytes(path, bytes)` 只写 `.<文件名>.annot.json` 或 `.broken-<时间戳>` 恢复副本，`saveCopy(name, bytes)` 经原生另存为保存带批注副本（取消 null、拒绝覆写原 PDF）。不要把外部绝对路径交给库内的 `ctx.app`。mount 清理可返回 Promise，关标签等保存后吊销、停用仍立即吊销；共享文档别留住已关闭标签的 io。旧宿主缺接口时不接库外文件。
   - **读写走字节**:`ctx.app.readBytes?.(file.filePath)` 读、`ctx.app.writeBytes?.(…)` 存。`file.surface.loadPage` 和 `ctx.app.loadPage` 都只收 `.md` 笔记,对 PDF(以及白板)调用会被拒并打告警(那是笔记管线,放行就把文件写成 markdown);`ctx.app.openNote` 收到非笔记路径会改走 `openFile` 开对的视图。
   - **manifest 不要写 `fileExtensions: ['.pdf']`**:那个字段只保护 `.md` 类文件不被当笔记改写,PDF 用不着;写了反而让开发副本被判 `dev-fileext` 拒载。不写的话可以直接从 Sandbox 加载着测(开发副本只是不能注册 `.md` 类后缀)。
   - **内置阅读器只读(2026-10-05 起不再批注)**,文件一变就原地重载:你 `writeBytes` 之后,已经开着的内置标签页和 `![[x.pdf]]` 嵌入会跟上,不用你通知。`ctx.app.watchFile?.()` 对 `.pdf` 也会回调(外部工具改了文件、另一个插件写了它),但事件不比内容 —— 你自己写的那次也会来,回调里先比一下字节再决定要不要重载。

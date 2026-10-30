@@ -11,6 +11,7 @@ import { blockLabel, type BlockNode } from './blockTriggers'
 import { editContextAt, editContextOf, slashAvailable, toolbarShape, type EditContext, type ToolbarShape } from './menuContext'
 import { registerMessages, translate } from '../../../i18n'
 import { AT_BLOCKED_BEFORE } from '@amadeus-shared/mdMarks'
+import { mountLineSelection } from '@lcl/engine/lineSelection'
 
 registerMessages({
   'wikiac.multiBlocks': { zh: '多个块', en: 'Multiple blocks' },
@@ -368,7 +369,10 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
           },
         },
       },
-      view: () => ({ update: compute }),
+      view: (view) => {
+        const paint = mountLineSelection(view.dom, { editable: true, suspended: () => view.composing })
+        return { update: (next) => { compute(next); paint.refresh() }, destroy: paint.dispose }
+      },
     })
   })
 }

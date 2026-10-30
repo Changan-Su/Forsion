@@ -23,7 +23,7 @@ import type { CtxItem } from '../../components/RightPanel'
 import { DeskChromeContext, DeskMenuButton, DeskMoreButton, type DeskChrome } from './deskChrome'
 import { DeskToolCardPane } from './DeskToolCardPane'
 import { CardAction, SummaryCard } from './TaskSummary'
-import { setCardOpen, useSummaryPrefs } from './summaryPrefs'
+import { bumpOpen, openOf, setUserOpen, useSummaryOpen } from './summaryOpen'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
@@ -398,7 +398,8 @@ export function deskCardPlan(o: { mode: string | undefined; itemCount: number; c
  *  正文 pointer-events:none —— 卡片是"预览",点正文=放大成侧板;点卡头 = 折叠,卡头的放大钮是键盘入口。
  *  卡片不可关闭(用户裁决),但 **2026-10-25 用户改为空着时折叠**(09-26 撤回过的「零条目缩成小坞」那条不再适用):
  *  零条目且无伴随面 = 收起只剩卡头,点开看空态;有新条目上台(顶格 key 变了)自动展开,换会话不算。
- *  收起状态按卡片种类全局记(summaryPrefs 'desk')。
+ *  开合按会话放在内存里(summaryOpen.ts,10-29 第三轮):新条目上台算「来了新东西」;手动开 / 收只管到这一轮结束,
+ *  不再按卡片种类全局记(用户否了:收过一次就再也看不到新内容)。
  *  ChatView 在首条消息出现后才挂载本组件;切换已开始的会话不挂 key,伴随面按自己的 key 挂载。 */
 export function DeskCard({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
@@ -415,7 +416,7 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
   const expand = plan.expandable ? () => useApp.getState().patchDesk(sessionId, { mode: 'open' }) : undefined
   const companion = plan.showCompanion ? comp : null
   const hasContent = items.length > 0 || !!companion
-  const pref = useSummaryPrefs((s) => s.open.desk)
+  const pref = useSummaryOpen((s) => openOf(s.by[sessionId], 'desk', true))
   const [peek, setPeek] = useState(false) // 空着时手动点开看一眼;不记
   const top = own[0]?.key ?? null
   const seen = useRef({ sessionId, top })
@@ -423,11 +424,11 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     const s = seen.current
     if (s.sessionId !== sessionId) { seen.current = { sessionId, top }; reveal.current = false; return }
-    if (top && top !== s.top) { setCardOpen('desk', true); reveal.current = true }
+    if (top && top !== s.top) { bumpOpen(sessionId, 'desk'); reveal.current = true }
     s.top = top
   }, [sessionId, top])
   useEffect(() => { if (hasContent) setPeek(false) }, [hasContent])
-  const open = hasContent ? pref !== false : peek
+  const open = hasContent ? pref : peek
   // 新条目自动展开后,卡在栈底时那 380px 落在栈的下沿外:等它真画出来(侧板开着时卡是 gone)、展开过渡走完,
   // 只滚栈本身把它露出来(scrollIntoView 会连带滚 overflow:hidden 的祖先)
   useEffect(() => {
@@ -449,7 +450,7 @@ export function DeskCard({ sessionId }: { sessionId: string }) {
       className={`agent-desk-card${gone ? ' gone' : ''}${hasContent ? '' : ' empty'}`}
       rootProps={{ 'data-desk-session': sessionId }}
       open={open}
-      onToggle={(o) => (hasContent ? setCardOpen('desk', o) : setPeek(o))}
+      onToggle={(o) => (hasContent ? setUserOpen(sessionId, 'desk', o) : setPeek(o))}
       head={<>
         <Sparkles size={13} className="agent-desk-spark" />
         <span>{t('desk.title')}</span>
