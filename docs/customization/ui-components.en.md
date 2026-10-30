@@ -421,3 +421,19 @@ A plugin view that draws its own dropdowns, menus, dialogs or tab bars looks for
 - Check: `node check-plugin.mjs <plugin folder> --style` lists, under "UI parts", what the plugin still draws itself where the host has a part: one line per kind, with locations and the part to switch to. When Tangu verifies a plugin in the plugin sandbox (`plugin_sandbox`), every status it gets back carries the same list. It only reports: the exit code doesn't change, and nothing blocks installing or publishing. Plugins whose UI is a web page in an iframe stay allowed; put `/* forsion-style: off */` on that page's CSS lines.
 - The rules live in the `forsion-plugin` skill's `tools/ui-reinvent.mjs` and go by how the code is written: `<select>` / `role="listbox"`, own `menu` / `dropdown` / `popup` class names or `role="menu"`, `<dialog>` / `showModal` / `window.confirm`, `tab` class names or `data-tab` / `role="tab"`, `position: fixed`, `<iframe>` / `<webview>`, `document.head.append…`, and hand-made buttons when the plugin never uses `.btn`. Library code minified onto one line (lines over 2000 characters) is skipped whole.
 - The bundle template's counter view (`samples/forsion-sample-bundle`) follows this table (view head, toolbar select, ⋯ menu, confirm dialog, empty state, `.btn`); copy from it.
+
+### Bare controls look native; a failed mount shows a card (2026-10-29)
+
+Inside a plugin view's mount element, a `<button>`, `<table>` or `<h1>`–`<h4>` without a `class` takes the host's look with no CSS of yours: a button looks like a plain `.btn` (outline, ink on hover, dimmed when disabled); a table looks like a Markdown table in notes and chat (muted medium-weight header with no fill, half-strength rules); `<h1>` / `<h2>` / `<h3>` and `<h4>` use the UI title / heading / body sizes, semibold. `<input>`, `<select>` and `<textarea>` already follow the host's form baseline.
+
+```js
+el.innerHTML = '<h2>This week</h2><button>New</button> <input placeholder="Search">' +
+  '<table><thead><tr><th>Task</th><th>Status</th></tr></thead><tbody><tr><td>Export</td><td>In progress</td></tr></tbody></table>'
+```
+
+- Your styles win: an element with a `class` is left alone, and for one without, any rule you write beats this layer, even a zero-weight `:where(…)`: the whole layer has zero specificity and `ctx.addStyle` styles come after the host's.
+- Main and destructive buttons stay `.btn.primary` / `.btn.danger`; small toolbar buttons `.btn.sm`. Buttons in the view head (`setViewHead` / `setViewModes`) are outside the mount element and don't get this layer.
+- Host-drawn parts inside your view (`ctx.ui.mount*`, `ctx.table.mount` and so on) and a `.ctx-menu` you build yourself are not affected; pages inside an iframe or webview don't get it.
+- It lives in the `plugin-view-base` block at the end of `desktop/frontend/src/styles/base.css` and uses public tokens only (`pluginContract.test.ts` checks each one). Instrument: `desktop/scripts/plugin-base-shots.cjs` (real Electron: installs `scripts/fixtures/plugin-base-sample`, shoots light and dark, measures computed styles).
+
+**Failed mount card**: when `mount` throws, or the Promise it returns rejects, the view shows a card: "Plugin view failed to load", the first line of the error (the full stack is in the console) and "Retry". Retry runs only this view's `mount` again; the plugin isn't reloaded and its other views and panels keep running. So make `mount` safe to run twice: the host can't clean up listeners or timers you set before the throw, so clean them up yourself or set them after the step that can fail. Code changes still go through a plugin reload or the sandbox's hot reload.
