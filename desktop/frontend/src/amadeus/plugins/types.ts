@@ -2092,9 +2092,19 @@ export interface PluginContext {
    *  - 插件被用户**禁用或卸载** → 本插件全部规则 `enabled=false`(不删,引擎不在时下次启动补上);再启用 / 恢复 / 重装时
    *    setup 里的 ensure 把规则开回来,引擎重新播种游标(停用期间的行不爆发)。所以 ensure 要放在 setup 里,别只放在一次性操作里。
    *  ⚠️**非 Tangu 宿主上整个 `ctx.automation` 不存在**(纯 Amadeus 壳 / unit 设备页 / 云端 / 台架)——一律
-   *  `void ctx.automation?.ensure(rules)`(别 await 阻塞 setup)。 */
+   *  `void ctx.automation?.ensure(rules)`(别 await 阻塞 setup)。
+   *
+   *  `registerTrigger` / `emit`(2026-10-30+)= 给「当…」加一种插件自己的事件,用户在自动化画布的「外部 · 插件」组里用,
+   *  规则怎么写由用户定(和 ensure 种规则是两回事):
+   *  - `id` 只是 key(`[a-z0-9-]+`),宿主拼成 `plugin:<pluginId>:<id>`,碰不到别家;`name` 中英都要有;
+   *  - `params` 是规则要填的参数表;规则填了的参数要和事件 payload 同名字段相等才算命中,payload 没这个字段不比;
+   *  - `emit(id, payload)`:payload 只留字符串 / 数字 / 布尔(至多 20 个字段),动作模板里用 `{{row.字段}}`;
+   *    事件只在内存里,引擎重启丢掉还没被规则看到的;Muse 能提醒用户,但不能建「叫醒自己」的插件规则;
+   *  - 插件停用 / 卸载 = 注销,相关规则不删,暂停并写明原因,装回来自动恢复。 */
   automation?: {
     ensure(rules: PluginAutomationRule[]): Promise<{ ok: boolean; errors: string[] }>
+    registerTrigger(trigger: PluginAutomationTrigger): Promise<{ ok: boolean; error?: string }>
+    emit(id: string, payload?: Record<string, unknown>): void
   }
   /** 日历成员登记(2026-09-02+)。Calendar Space 是显式成员制 —— 插件种下的任务表不会自动进日历,
    *  用这条把 `dbPath`(库相对路径)以 `dateColId` 为日期锚(可选 `checkboxColId` 为完成勾选)登记进去。
@@ -2343,6 +2353,24 @@ export interface TableAction {
   attrs?: Record<string, string>
   disabled?: boolean
   title?: string
+}
+
+/** `ctx.automation.registerTrigger` 的入参。 */
+export interface PluginAutomationTrigger {
+  id: string
+  name: { zh: string; en: string }
+  params?: Array<{
+    key: string
+    /** `app` = 选 App;`number` / `text` = 输入框。 */
+    type: 'app' | 'number' | 'text'
+    name: { zh: string; en: string }
+    required?: boolean
+    min?: number
+    max?: number
+    default?: string | number
+  }>
+  /** `computer_history` = 电脑历史关着时这个触发源灰掉、已有规则暂停。 */
+  requires?: Array<'computer_history'>
 }
 
 /** `ctx.automation.ensure` 的一条规则 = 引擎 upsert 入参的**子集**(只有 db_changed 触发;id / vault /

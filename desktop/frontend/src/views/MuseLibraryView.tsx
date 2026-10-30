@@ -177,7 +177,7 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
         {ordered.length === 0 && !err ? <div className="muse-lib-empty" style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, overflowY: 'auto' }}>
           {enabled === false
             ? <EmptyState icon={Sparkles} title={t('muse.lib.offTitle')} line={t('muse.lib.offLine')} data-state="off"
-              action={{ label: t('muse.lib.turnOn'), icon: Settings, action: 'muse-settings', onClick: () => useApp.getState().openSettings('agents/ag-special') }} />
+              action={{ label: t('muse.lib.turnOn'), icon: Settings, action: 'muse-settings', onClick: () => useApp.getState().openSettings('agents/ag-special/muse') }} />
             : enabled === true ? <EmptyState icon={Sparkles} title={t('muse.lib.emptyTitle')} line={t('muse.lib.emptyLine')} data-state="empty" /> : null}
         </div> : <div style={{ overflowY: 'auto', flex: 1, padding: '14px 24px 40px' }}>
           {err && <div className="hint" style={{ color: 'var(--danger)' }}>{err}</div>}

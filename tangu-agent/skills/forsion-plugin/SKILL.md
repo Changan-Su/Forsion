@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.83.0
+  version: 1.84.0
   author: Forsion
   category: Forsion
 ---
@@ -243,7 +243,7 @@ A Space that should also open as a small floating window gets a `mini` block in 
 
 ## 智能体(samples/forsion-sample-agent)
 
-文件夹式:`config.toml`(模型/工具/技能开关)+ `SOUL.md`(人设,英文写给模型)+ `Library/`(参考资料)+ 每-agent 记忆。装 `~/.forsion/agents/<slug>/`。
+文件夹式:`config.toml`(名字 `name_zh` / `name_en`、模型/工具/技能开关)+ `SOUL.md`(人设,英文写给模型)+ `Library/`(参考资料)+ 每-agent 记忆。装 `~/.forsion/agents/<slug>/`。
 
 ## 捆绑包(samples/forsion-sample-bundle)—— 默认起点
 
@@ -524,7 +524,7 @@ ctx.registerCommand({
 | `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `mountComposer` 把「新对话」输入区整块挂进来、发送归宿主(2026-10-18 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.summary` | Tangu 聊天右侧**摘要栏**加一张卡(`registerCard`,和进度 / 后台 / 产物 / Agent Desk 同一个栈,用户可折叠、拖动排序) | 2026-10-25 起;⚠️**只在桌面 Tangu 上存在**(同 `ctx.desk`)→ `ctx.summary?.`;见下「摘要栏插件卡」 |
-| `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
+| `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`);给「当…」加插件自己的事件(`registerTrigger` / `emit`,2026-10-30 起) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`,人人有)+ 叠加源与日历设置(`subscribe` / `setColor` / `setHidden` / `setDefault` / `setMember` / `removeMember`)+ .ics 订阅管理(`ics.add` / `importText` / `rename` / `remove` / `refresh`) | `ensureMember` 2026-09-02 起;其余 2026-10-17 起,⚠️**声明 `"calendar"` 才有**(没声明时这几个成员不存在,不是空壳)→ `ctx.calendar?.subscribe`;见下「日历叠加源与设置」 |
 | `ctx.spaces` | Space 列表 / 打开 / 图标 / 近况那一行 + 商店、成就两格 + Ribbon 上区的收纳架(顺序、收纳夹) | 2026-10-18 起;⚠️**声明 `"spaces"` 才存在**(收纳架改的是用户的 Ribbon);见下「Space 与 Ribbon 收纳架」 |
 | `ctx.databases` | 全库多维表的实时聚合(`subscribe`)+ 按行按格读写(`setCell` / `addRow` / `duplicateRow` / `deleteRow`) | 2026-10-16 起;⚠️**manifest `capabilities` 声明 `"databases"` 才存在**;见下「全库多维表与笔记任务」 |
@@ -800,7 +800,11 @@ ctx.registerToolResultRenderer?.({
 ### 前置插件 requiresPlugins 与生命周期(2026-10-02 起)
 
 - manifest `"requiresPlugins": ["other-id", { "id": "x", "minVersion": "1.2.0", "market": "x-slug", "name": "X" }]`(≤8 条;
-  `market` = 商店 installSlug,新上架的条目是 `market-<商店 ID>`;设置页「在商店中查找」拿它预填搜索;`name` = 前置没装时显示的名字)。
+  `market` = 商店 installSlug,新上架的条目是 `market-<商店 ID>`;`name` = 前置没装时显示的名字)。
+  **想让用户一键装上前置,就写 `market`(2026-10-30 起)**:用户在商店装完依赖方后,提示条和详情页给「安装前置插件」,前置自己缺的也一路装完,装好依赖方自动开始运行。
+  宿主只按 slug 精确对上商店条目:先 `market`,再 `id`(老条目 slug = manifest id 时才对得上),绝不按显示名猜。对不上时界面写「商店里没有」,
+  留「在商店中查找」,所以前置是新上架的条目却不写 `market`,用户就只能自己搜。只有 Forsion 插件的前置支持;引擎插件 `tangu-plugin.json` 里的 `market` 不生效,
+  装之前商店也看不到你的前置。设置页「在商店中查找」同样拿 `market` 预填搜索。
   前置算齐 ⇔ 已安装、没被门禁挡、版本 ≥ `minVersion`、**正在运行**。没齐时:用户关着 → 开关灰掉开不了;用户开着 → 「等待前置插件」,
   前置就位自动激活;前置停用 / 卸载 → 自动暂停(依赖方先停),回来自动恢复。互相依赖成环的永不激活。
 - 前置的意思是「我要它注册的东西在」(视图 / 命令 / 文件类型),**不是**「我能 import 它」—— 插件之间仍然不直接互调。
@@ -844,6 +848,7 @@ ctx.registerToolResultRenderer?.({
 - Agent Desk 伴随面:ctx.desk(2026-09-19 起)
 - 摘要栏插件卡:ctx.summary(2026-10-25 起)
 - 自动化规则播种:ctx.automation(2026-09-02 起)
+- 插件自己的触发事件:ctx.automation.registerTrigger / emit(2026-10-30 起)
 
 
 ## 日历成员登记:ctx.calendar(2026-09-02 起)

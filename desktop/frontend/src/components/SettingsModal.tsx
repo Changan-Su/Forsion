@@ -2751,7 +2751,7 @@ export const SettingsModal: React.FC<{
                   else openAgentProfile(slug)
                   p.onClose()
                 }} />}
-                {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} localHost={!!(isDesktop && stored?.mode === 'managed')} />}
+                {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} localHost={!!(isDesktop && stored?.mode === 'managed')} initialRole={initialTarget.pane === 'muse' ? 'muse' : undefined} />}
                 {tab === 'hooks' && <HooksTab cfg={p.cfg} />}
                 {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。
                     设备页(unitPage)与 Android App 不传级联三件套:cfg 缺省=cascadeAfterToggle 不级联 —— 否则捆绑包

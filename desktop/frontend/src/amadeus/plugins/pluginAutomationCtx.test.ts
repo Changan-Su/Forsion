@@ -17,6 +17,9 @@ const calls = {
   listOf: null as null | (() => MuseTriggerInfo[]),
   /** 给交错用:挂住**第一笔** save(用完即清),模拟 ensure 正发到一半。 */
   hold: null as null | Promise<void>,
+  /** 插件触发源的下发顺序:+ 登记、- 注销、! 事件。 */
+  triggers: [] as string[],
+  failDrop: false,
 }
 vi.mock('../api', () => ({ amadeus: { listPlugins: async () => [] } }))
 vi.mock('../../services/backendService', () => ({
@@ -27,6 +30,19 @@ vi.mock('../../services/backendService', () => ({
     return { ...input }
   }),
   getMuseTriggers: vi.fn(async () => calls.listOf?.() ?? calls.list),
+  registerAutomationTrigger: vi.fn(async (_cfg: unknown, pluginId: string, trigger: { id: string }) => {
+    calls.triggers.push(`+${pluginId}:${trigger.id}`)
+    return { ok: true }
+  }),
+  unregisterAutomationTrigger: vi.fn(async (_cfg: unknown, pluginId: string, key: string) => {
+    if (calls.failDrop) throw new Error('HTTP 500')
+    calls.triggers.push(`-${pluginId}:${key}`)
+    return { ok: true }
+  }),
+  emitAutomationTrigger: vi.fn(async (_cfg: unknown, pluginId: string, key: string, payload: unknown) => {
+    calls.triggers.push(`!${pluginId}:${key}:${JSON.stringify(payload)}`)
+    return { ok: true }
+  }),
 }))
 
 const { usePluginStore, getPluginDisableState } = await import('./pluginStore')
@@ -55,6 +71,8 @@ const rule = (over: Partial<Rule> = {}): Rule => ({
 })
 
 beforeEach(() => {
+  calls.triggers = []
+  calls.failDrop = false
   calls.save = []
   calls.list = []
   calls.failIds = new Set()
@@ -580,5 +598,79 @@ describe('ctx.notify 的 action / key(10-17)', () => {
     usePluginStore.getState().disable('ntf')
     item.action!.run()
     expect(run).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ctx.automation.registerTrigger / emit', () => {
+  const trigger = { id: 'ping', name: { zh: '收到', en: 'Ping' } }
+
+  it('登记后事件跟在登记后面发;停用插件按 key 注销,之后 emit 不再发', async () => {
+    setTanguProbe(probe(async () => CFG))
+    const ctx = ctxOf('demo-trig')
+    const auto = ctx.automation!
+    const res = auto.registerTrigger(trigger)
+    auto.emit('ping', { room: 'a' })
+    expect(await res).toEqual({ ok: true })
+    await vi.waitFor(() => expect(calls.triggers).toEqual(['+demo-trig:ping', '!demo-trig:ping:{"room":"a"}']))
+    usePluginStore.getState().disable('demo-trig')
+    await vi.waitFor(() => expect(calls.triggers.at(-1)).toBe('-demo-trig:ping'))
+    const before = calls.triggers.length
+    auto.emit('ping')
+    expect(await auto.registerTrigger(trigger)).toEqual({ ok: false, error: 'plugin disabled' })
+    await new Promise((r) => setTimeout(r, 5))
+    expect(calls.triggers).toHaveLength(before)
+  })
+
+  it('后端重启(就绪边沿)补登还活着的;停用过的不补', async () => {
+    let fire = (): void => {}
+    setTanguProbe(probe(async () => CFG, (cb) => { fire = cb; return () => {} }))
+    const ctx = ctxOf('demo-trig2')
+    await ctx.automation!.registerTrigger(trigger)
+    calls.triggers = []
+    fire()
+    await vi.waitFor(() => expect(calls.triggers).toEqual(['+demo-trig2:ping']))
+    usePluginStore.getState().disable('demo-trig2')
+    await vi.waitFor(() => expect(calls.triggers.at(-1)).toBe('-demo-trig2:ping'))
+    calls.triggers = []
+    fire()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(calls.triggers).toEqual([])
+  })
+
+  it('注销没成:下次就绪边沿补;再登记回来就不欠了', async () => {
+    let fire = (): void => {}
+    setTanguProbe(probe(async () => CFG, (cb) => { fire = cb; return () => {} }))
+    const ctx = ctxOf('demo-trig4')
+    await ctx.automation!.registerTrigger(trigger)
+    calls.failDrop = true
+    usePluginStore.getState().disable('demo-trig4')
+    await new Promise((r) => setTimeout(r, 5))
+    calls.failDrop = false
+    calls.triggers = []
+    fire()
+    await vi.waitFor(() => expect(calls.triggers).toEqual(['-demo-trig4:ping']))
+    calls.triggers = []
+    fire()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(calls.triggers).toEqual([])
+
+    const again = ctxOf('demo-trig5')
+    await again.automation!.registerTrigger(trigger)
+    calls.failDrop = true
+    usePluginStore.getState().disable('demo-trig5')
+    await new Promise((r) => setTimeout(r, 5))
+    calls.failDrop = false
+    const back = ctxOf('demo-trig5')
+    await back.automation!.registerTrigger(trigger)
+    calls.triggers = []
+    fire()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(calls.triggers).toEqual(['+demo-trig5:ping'])
+  })
+
+  it('后端没起来 → 返回失败不抛,不阻塞', async () => {
+    setTanguProbe(probe(async () => null))
+    expect(await ctxOf('demo-trig3').automation!.registerTrigger(trigger)).toEqual({ ok: false, error: 'engine not ready' })
+    expect(calls.triggers).toEqual([])
   })
 })

@@ -9,7 +9,7 @@ export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
 export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
-import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, MuseTriggerInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
 /** 带时间戳的转写结果(仅在调用方显式要 timestamps 时返回;segments 缺席 = 上游给不了)。 */
 export interface AsrTimedResult { text: string; segments?: Array<{ start: number; end: number; text: string }> }
@@ -77,6 +77,12 @@ export interface MuseConfig {
   notify?: 'immediate' | 'digest'
   /** 难活升级给哪个 agent(slug;空=不指定)。 */
   escalateTo?: string
+  /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
+  inboxAutoRead?: string[]
+  /** 用户点过「这类以后都别管」的类别。 */
+  inboxIgnored?: string[]
+  /** 一天最多主动找用户几次(0 = 不限)。 */
+  maxDmPerDay?: number
 }
 
 /** GET /agent/special/muse/library 的一项(Library 相对路径;dir=目录)。 */
@@ -113,6 +119,8 @@ export interface MuseStatusInfo {
   lastCycleAt: number | null
   lastError?: string | null
   sessionId: string | null
+  /** 主动消息下面的反馈按钮开到这个时刻(磨合期 14 天,epoch ms)。旧引擎 / 还没跑过周期 = 没有。 */
+  feedbackUntil?: number | null
   /** 旧引擎没有下面四个字段(可选,读端兜底)。 */
   mode?: 'ask' | 'agent' | 'auto'
   heartbeatMinutes?: number
@@ -138,7 +146,12 @@ export interface MuseTriggerUpsert {
    *  那正是「用户重新启用插件 → setup 再 ensure 一次 → 规则复活」这条既有生命周期,别给它加 actor。 */
   actor?: 'plugin-ensure' | 'user'
   desc: string
-  cond_type: 'file_chars_gte' | 'event_seen' | 'daily_at' | 'at' | 'every' | 'manual' | 'db_changed'
+  cond_type: MuseTriggerInfo['cond']['type']
+  /** 新触发源的参数(按 GET /agent/special/automation/sources 的表)。 */
+  params?: Record<string, string | number>
+  /** 「只在」:undefined=保留,null=清空。 */
+  only?: MuseTriggerInfo['only'] | null
+  max_per_day?: number | null
   path?: string
   n?: number
   match?: string
@@ -159,6 +172,20 @@ export interface MuseTriggerUpsert {
   agent_slug?: string
   enabled?: boolean
   actions?: AutomationActionSpec[] | null
+}
+/** GET /agent/special/automation/sources 的一行:触发源注册表投影(类型菜单直接从这里出)。 */
+export interface TriggerSourceInfo {
+  id: string
+  group: 'time' | 'computer' | 'forsion' | 'external' | 'plugin'
+  name: { zh: string; en: string }
+  params: Array<{ key: string; type: 'app' | 'number' | 'text'; name: { zh: string; en: string }; required?: boolean; hidden?: boolean; min?: number; max?: number; default?: string | number }>
+  requires: string[]
+  eventSource: string
+  defaultCooldownHours?: number
+  timed?: boolean
+  available: boolean
+  /** available=false 时的 notice code。 */
+  reason?: string
 }
 /** GET /agent/special/automation/actions 的目录项(tool_call 步骤选择器+参数表单生成)。 */
 export interface AutomationActionCatalogItem {

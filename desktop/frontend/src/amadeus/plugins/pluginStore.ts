@@ -56,7 +56,7 @@ import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHap
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
-import { getMuseTriggers, listPlugins, patchInboxMessage, postInboxMessage, saveMuseTrigger, setPluginEnabled } from '../../services/backendService'
+import { emitAutomationTrigger, getMuseTriggers, listPlugins, patchInboxMessage, postInboxMessage, registerAutomationTrigger, saveMuseTrigger, setPluginEnabled, unregisterAutomationTrigger } from '../../services/backendService'
 import { buildPluginTriggerUpserts, isPluginOwnedRule, normalizeVaultRel } from './pluginAutomation'
 import { MUTATE_DB_RETRIES, mutateDbCas, mutateHumanCalendar } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
@@ -98,6 +98,7 @@ import type {
   ViewContribution,
   ListSourceContribution,
   PluginAutomationRule,
+  PluginAutomationTrigger,
   TableSpec,
   PluginViewLocation,
 } from './types'
@@ -984,10 +985,71 @@ function ensureReadySubscription(): void {
   readySub = { probe, off: probe.subscribeReady(onBackendReadyEdge) }
 }
 
+/** 渲染层插件登记的触发源(引擎只放内存,后端重启后在就绪边沿补登)。只主窗登记:别的窗口拆插件不该注销主窗的。 */
+const liveTriggers = new Map<string, Map<string, PluginAutomationTrigger>>()
+// 插件重载 = 注销 + 登记,乱序就成了登记完又被注销:同一条链上发。
+let triggerOps: Promise<unknown> = Promise.resolve()
+function triggerOp<T>(send: (target: ReturnType<typeof connectionTarget>) => Promise<T>): Promise<T | null> {
+  const op = async (): Promise<T | null> => {
+    const cfg = (await readTangu()?.waitBackend?.(ENSURE_WAIT_MS)) ?? null
+    return cfg ? send(connectionTarget(cfg)) : null
+  }
+  const next = triggerOps.then(op, op)
+  triggerOps = next.catch(() => {})
+  return next
+}
+
+// 没注销成的(后端没起来 / 请求失败):源还在引擎里,规则就不会暂停。下次就绪边沿补;再登记回来就不欠了。
+const owedTriggerDrops = new Set<string>()
+const dropKey = (pluginId: string, key: string): string => JSON.stringify([pluginId, key])
+
+function sendTriggerDrop(pluginId: string, key: string): void {
+  const owed = dropKey(pluginId, key)
+  owedTriggerDrops.add(owed)
+  void triggerOp((target) => unregisterAutomationTrigger(target, pluginId, key))
+    .then((r) => { if (r) owedTriggerDrops.delete(owed) })
+    .catch((e) => console.warn(`[amadeus] plugin "${pluginId}" 注销触发源失败`, e))
+}
+
+async function registerPluginTrigger(pluginId: string, trigger: PluginAutomationTrigger): Promise<{ ok: boolean; error?: string }> {
+  if (windowKind() !== 'main') return { ok: true }
+  ensureReadySubscription()
+  owedTriggerDrops.delete(dropKey(pluginId, trigger.id))
+  const mine = liveTriggers.get(pluginId) ?? new Map<string, PluginAutomationTrigger>()
+  mine.set(trigger.id, trigger)
+  liveTriggers.set(pluginId, mine)
+  try {
+    return (await triggerOp((target) => registerAutomationTrigger(target, pluginId, trigger))) ? { ok: true } : { ok: false, error: 'engine not ready' }
+  } catch (e) {
+    return { ok: false, error: errMsg(e) }
+  }
+}
+
+function dropPluginTriggers(pluginId: string): void {
+  const mine = liveTriggers.get(pluginId)
+  liveTriggers.delete(pluginId)
+  for (const key of mine?.keys() ?? []) sendTriggerDrop(pluginId, key)
+}
+
+function emitPluginTrigger(pluginId: string, key: string, payload?: Record<string, unknown>): void {
+  void triggerOp((target) => emitAutomationTrigger(target, pluginId, key, payload)).catch((e) => console.warn(`[amadeus] plugin "${pluginId}" 触发事件失败`, e))
+}
+
+function replayPluginTriggers(): void {
+  for (const owed of [...owedTriggerDrops]) {
+    const [pluginId, key] = JSON.parse(owed) as [string, string]
+    sendTriggerDrop(pluginId, key)
+  }
+  for (const [pluginId, mine] of liveTriggers) {
+    for (const trigger of mine.values()) void registerPluginTrigger(pluginId, trigger).then((r) => { if (!r.ok) console.warn(`[amadeus] plugin "${pluginId}" 补登触发源失败`, r.error) })
+  }
+}
+
 /** 后端 !ok→ok 边沿的唯一入口:欠账都在这里补 —— 没种下的规则(ensure)、没停用的规则(disable)、
- *  没关掉的捆绑包内嵌引擎插件。 */
+ *  没关掉的捆绑包内嵌引擎插件、引擎重启丢掉的插件触发源。 */
 function onBackendReadyEdge(): void {
   replayFailedEnsures()
+  replayPluginTriggers()
   replayPendingDisables()
   void syncBundleEngines().catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件对齐失败', e))
 }
@@ -2281,6 +2343,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       ? {
           automation: {
             ensure: (rules: PluginAutomationRule[]) => ensurePluginAutomation(pluginId, rules),
+            registerTrigger: async (trigger: PluginAutomationTrigger) => (ctxAlive() ? registerPluginTrigger(pluginId, trigger) : { ok: false, error: 'plugin disabled' }),
+            emit: (id: string, payload?: Record<string, unknown>) => { if (ctxAlive()) emitPluginTrigger(pluginId, id, payload) },
           },
         }
       : {}),
@@ -2612,6 +2676,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     releasePopupsOf(`plugin:${id}:`) // 排着的 / 正在显示的弹窗号一并让出,别堵住队列
     closeSpotlight(id) // 圈注同理
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
+    dropPluginTriggers(id) // 注销触发源;相关规则暂停并写明原因,再启用时 setup 登记回来就恢复
     set((s) => ({
       ...dropSlices(s, id),
       activeIds: s.activeIds.filter((x) => x !== id),

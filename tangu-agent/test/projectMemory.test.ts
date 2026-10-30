@@ -87,9 +87,10 @@ describe('项目级记忆', () => {
     expect(await call('s-alpha', { action: 'update', fact: 'Tests run with "npm run test:unit".', id, expectedVersion: 'stale', scope: 'project' }).catch((e) => String(e))).toMatch(/changed since it was read/);
     const updated = JSON.parse(await call('s-alpha', { action: 'update', fact: 'Tests run with "npm run test:unit".', id, expectedVersion: before.version, scope: 'project' }));
     expect(updated).toMatchObject({ ok: true, scope: 'project', entry: { id, content: 'Tests run with "npm run test:unit".' }, count: 1 });
-    // 同一个 id 拿去 agent 级改 → 找不到(两个库的条目互不相通)
+    // 同一个 id 指定 agent 级 = 跨档挪动,要带它所在那一档的版本:拿 agent 级的版本不算数,什么都不写
     const agentVersion = JSON.parse(await call('s-alpha', { action: 'list', fact: null, scope: 'agent' })).version;
-    expect(await call('s-alpha', { action: 'update', fact: 'x', id, expectedVersion: agentVersion, scope: 'agent' }).catch((e) => String(e))).toMatch(/not found/i);
+    expect(await call('s-alpha', { action: 'update', fact: 'x', id, expectedVersion: agentVersion, scope: 'agent' }).catch((e) => String(e))).toMatch(/^Error: expectedVersion is not current\. Nothing was written/);
+    expect(JSON.parse(await call('s-alpha', { action: 'list', fact: null, scope: 'project' })).project.entries.map((e: any) => e.id)).toContain(id);
     // 塞满
     const filler = (n: number) => `Convention ${n}: ${'this project keeps generated files out of the source tree. '.repeat(4)}`.slice(0, 290);
     let full = '';

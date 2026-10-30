@@ -17,7 +17,8 @@ import { processOriginOf } from '../processRegistry.js';
  *   ① 名字必须是可授予的管理工具正典名(旧别名 muse_watch 先归一);
  *   ② 父代理**此刻**自己解析得出该工具 —— 判据就是主 registry 的 resolveTools(与 executeTool
  *      解析工具用的同一份口径:profile 取 ctx.profile ?? deps().profile)。云端 / 沙箱 / chat 正向面 /
- *      toolsMode 黑名单 / Muse 非 full-auto 档下,父代理本就拿不到 manage_*,自然也授不出去。
+ *      toolsMode 黑名单下,父代理本就拿不到 manage_*,自然也授不出去。
+ *      Muse 非 full-auto 档看得见 manage_automation,但只能提规则卡(不写规则),写的权限更无从授予。
  * 第三条(engine × grantTools 互斥)不在本函数:它要先知道 engineId 合法,见 execute 里的 engine 分支。
  * 返回 { names } 或 { error }(错误措辞面向模型,英文)。
  */
@@ -36,7 +37,8 @@ function validateGrants(raw: unknown, ctx: ToolContext): { names: string[]; erro
     }
     // 懒解析:只在真有待校验名字时算一次(resolveTools 要遍历全部 provider)。
     if (!available) available = resolveTools(ctx.profile ?? deps().profile, ctx) as unknown as Map<string, unknown>;
-    if (!available.has(name)) return { error: `Error: cannot grant "${name}": it is not available to you in this run` };
+    const proposeOnly = name === 'manage_automation' && ctx.muse && ctx.approvalMode !== 'full-auto';
+    if (proposeOnly || !available.has(name)) return { error: `Error: cannot grant "${name}": it is not available to you in this run` };
     if (!out.includes(name)) out.push(name); // 去重,保持给出顺序
   }
   return { names: out };

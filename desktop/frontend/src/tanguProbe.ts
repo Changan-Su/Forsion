@@ -43,6 +43,7 @@ import { openSession } from './sessionNav'
 import { connectionTarget } from './services/engine/targets'
 import { catalogFor, ensureCatalog } from './services/engine/catalog'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
+import { agentName } from './agentName'
 
 /** 这次翻译用哪个模型。「翻译」模型槽(设置 → 模型;config.json models.translate)设了、**本机引擎**的目录里也还有 → 用它。
  *  没设、读不到、或目录里已经没有这个模型(下架 / 换了账号)→ 目录里有机器翻译模型(translateModels)就自动用第一个
@@ -148,7 +149,7 @@ export async function modelCatalog(kind: import('../../shared/pluginModelPicker'
  *  (`NormalAgentDef.createdBy` 的注释也是这么写的)。另外两处**会**过滤的是聊天中途的「换 Agent」菜单
  *  (Composer2)与团队成员候选(TeamEditor),那是「谁能被指派干活」的口径,不是「会话归谁」。
  *  归属侧(agentStatus.agentSlug)一样不过滤,两边必须对得上:Muse 的会话也报 muse,插件才挑得出形象。 */
-const readAgents = (): TanguAgentInfo[] => useApp.getState().agentDefs.map((a) => ({ slug: a.slug, name: a.name || a.slug }))
+const readAgents = (): TanguAgentInfo[] => useApp.getState().agentDefs.map((a) => ({ slug: a.slug, name: agentName(a) }))
 
 const readActiveSpace = (): string | null => useSpaceStore.getState().activeSpaceId || null
 

@@ -8,6 +8,7 @@ import { ackHumanChanges, getHumanDocument, humanAcked, humanAckVersion, humanUn
 import { TASK_CARD_TTL_MS } from '../views/chat2/pendingTasks'
 import type { TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { targetForSession, type EngineTarget } from '../services/engine/targets'
+import { agentName } from '../agentName'
 import './humanMessages'
 import './humanCollaboration.css'
 import './selfUpdates.css'
@@ -91,7 +92,7 @@ export function HumanUpdateCard({ changes, cfg, sessionId, agentName, inDeck = f
 function HumanUpdate({ change, engine, cfg, sessionId }: { change: HumanChange; engine: EngineTarget; cfg: TanguDesktopConfig; sessionId: string }) {
   const { t } = useI18n()
   const scope = change.scope
-  const name = useApp(s => scope.kind === 'agent' ? s.agentDefs.find(a => a.slug === scope.slug)?.name || scope.slug : scope.kind === 'project' ? scope.cwd.split(/[\\/]/).filter(Boolean).at(-1) : '')
+  const name = useApp(s => scope.kind === 'agent' ? agentName(s.agentDefs.find(a => a.slug === scope.slug)) || scope.slug : scope.kind === 'project' ? scope.cwd.split(/[\\/]/).filter(Boolean).at(-1) : '')
   const projectPath = useApp(s => [...s.sessions, ...s.archivedSessions].find(x => x.id === sessionId)?.project_path)
   const [doc, setDoc] = useState<HumanDocument | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false)
   const target = targetOf(change, sessionId)
