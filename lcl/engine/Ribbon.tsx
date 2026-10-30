@@ -581,13 +581,19 @@ export function Ribbon() {
       closeMore()
     }
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') closeMore() }
+    // 窗口 / 缩放变了:按钮已挪走,浮层和液滴的几何都是旧的,倒放只会从旧位置飞一下 → 直接撤
+    const onLayout = (): void => { droplet.current?.cancel(); droplet.current = null; setMoreFly(null) }
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('keydown', onKey)
     window.addEventListener('blur', closeMore)
+    window.addEventListener('resize', onLayout)
+    window.addEventListener(UI_ZOOM_EVENT, onLayout)
     return () => {
       window.removeEventListener('pointerdown', onDown, true)
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('blur', closeMore)
+      window.removeEventListener('resize', onLayout)
+      window.removeEventListener(UI_ZOOM_EVENT, onLayout)
     }
   }, [moreFly]) // eslint-disable-line react-hooks/exhaustive-deps
   // 定位 + 开液滴:浮层挂上后量高度,上区顶对齐「+N」往下长(碰底往上推),命令区底对齐「+N」往上长。
@@ -784,7 +790,7 @@ export function Ribbon() {
         if (folder && folder.zone === d.zone) {
           const row = hit.closest<HTMLElement>('[data-rb-folder-index]')
           setOver(null); setOverFolder(folder.id); setOverId(row?.dataset.id ?? null)
-          if (!row) openFly(folder.id, folder.zone, hit.closest<HTMLElement>('[data-rb-folder]')!, folder.id)
+          if (!row && !moreRef.current?.contains(hit)) openFly(folder.id, folder.zone, hit.closest<HTMLElement>('[data-rb-folder]')!, folder.id)
           return { kind: 'folder', folder, at: row ? Number(row.dataset.rbFolderIndex) : undefined }
         }
         const more = hit.closest<HTMLElement>('[data-rb-more]')?.dataset.rbMore
@@ -825,6 +831,7 @@ export function Ribbon() {
     e.stopPropagation()
     pointerCancel.current?.()
     const source = e.currentTarget as HTMLElement, d = { id, zone, from }
+    geom.current = null // 上次只是点了一下(没拖)留下的快照,别带到这次
     if (!from && geo) snapGeom(source, e.clientY)
     let target: PointerTarget = { kind: 'cancel' }
     pointerCancel.current = beginRibbonPointerDrag(e.nativeEvent, source, {
@@ -1082,12 +1089,23 @@ export function Ribbon() {
   )
 
   // ---- 「+N」浮层的行:条上那一格原样搬进来(同一个按钮,带名字)。拖回条上 = 常驻;右键菜单同条上;点开一项即缩回。
-  //      收纳夹在这里摊开成小标题 + 成员行(flyRow:拖拽 / 右键 / 放入照收纳夹浮层那套)。
-  //      data-id 同条上格子(台架按稳定 id 认行),刻意不用 .rb-slot:拖拽量槽、台架数「露出的格子」都按它。 ----
+  //      收纳夹在这里摊开成标题 + 成员行(flyRow 同收纳夹浮层);标题就是条上那颗夹按钮的替身:
+  //      右键、整夹拖回条上、拖入(空夹没有成员行,只能拖到这里)都认它。 ----
   const moreRow = (e: Entry, zone: RibbonZone): React.ReactNode => {
     if (e.kind === 'folder') return (
       <div key={e.id} className="rb-fly-group">
-        <div className="rb-fly-sub">{e.folder.name}</div>
+        <div
+          data-id={e.id}
+          data-rb-folder={e.folder.id}
+          className={`rb-fly-sub rb-fly-folderhead${drag?.id === e.id ? ' dragging' : ''}${overFolder === e.folder.id ? ' drag-into' : ''}`}
+          draggable
+          onDragStart={(ev) => { ev.stopPropagation(); startDrag(ev, e.id, zone, null) }}
+          onDragEnd={finishDrag}
+          onContextMenu={folderCtx(e.folder)}
+          onDragOver={(ev) => acceptOver(ev, !!drag && drag.zone === zone && !drag.id.startsWith('folder:'), () => { setOver(null); setOverFolder(e.folder.id) })}
+          onDragLeave={() => { if (overFolder === e.folder.id) setOverFolder(null) }}
+          onDrop={(ev) => { if (!drag || drag.id.startsWith('folder:')) return; ev.preventDefault(); ev.stopPropagation(); dropIntoFolder(e.folder) }}
+        >{e.folder.name}</div>
         {e.folder.items.map((id, i) => { const m = byId.get(id); return m ? flyRow(m, e.folder, i, e.folder.items) : null })}
       </div>
     )
