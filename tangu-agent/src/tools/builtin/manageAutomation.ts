@@ -3,9 +3,11 @@
  *
  * 规则落 ~/.tangu/agents/muse/triggers.json,由 supervisor tick 零 token 评估(见 services/museTriggers.ts):
  * 命中 → 动作链(runActions)或旧式 agentSlug 无人值守 run,两者皆无则唤醒 Muse。
- * 可见性:本地限定(hostExec,照 inbox_send);不进 PLAN_MODE_TOOLS(写操作)。Muse(2026-09-10 起按权限档
- * 工作,不再 planMode)能看见本工具,但**只能建目标为其它 agent 的规则**(execute 里拒 agent 为空/muse):
- * 唤醒自己的规则=自激回路,Muse 自己的定时工作走 manage_schedule(回灌周期、过预算闸)。
+ * 可见性:本地限定(hostExec,照 inbox_send);不进 PLAN_MODE_TOOLS(写操作)。Muse 三档都看得见本工具:
+ *   ask / agent 档 set = 只提规则卡(services/museCards,用户点「好」才建),只许直接提醒 / 通知 / 叫醒自己,list 之外别的动作都拒;
+ *   auto 档直接建,工具结果提醒它在私聊里说一声。
+ * 唤醒自己的规则:只有事件不是 Muse 自己造得出来的触发源(selfWakeSafe:电脑上 / 日历)才行,否则是自激回路,
+ * Muse 自己的定时工作走 manage_schedule(回灌周期、过预算闸)。
  * **tool_call 步骤刻意不在本工具开放**(validateTriggerInput allowToolCall=false):
  * 聊天 agent 在 full-auto 下能自建规则,放开=自授权 run_bash 提权链;tool_call 只走桌面构建器(人工预批)。
  * 旧名 muse_watch 在 registry.executeTool 留静默别名(不进 defs/快照,只兜升级瞬间的存量调用)。
@@ -27,13 +29,17 @@ import {
   triggerUnmet,
   type MuseTrigger,
   type DbLike,
+  type ValidatedTrigger,
 } from '../../services/museTriggers.js';
-import { listTriggerSources } from '../../services/triggerRegistry.js';
+import { getTriggerSource, listTriggerSources } from '../../services/triggerRegistry.js';
+import { listMuseCards, postMuseCard } from '../../services/museCards.js';
 import { readDbOrNull } from '../../services/amadeusDb.js';
 import { dropCursors } from '../../services/dbCursors.js';
 import { getAgent } from '../../agents/agentRegistry.js';
 import { amadeusVaultPath } from './amadeus.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
+
+const MAX_PENDING_RULE_CARDS = 3;
 
 function fmt(t: MuseTrigger): string {
   const act = t.actions?.length
@@ -47,15 +53,33 @@ function fmt(t: MuseTrigger): string {
   return `${t.id}${t.enabled ? '' : ' (disabled)'} — ${t.desc} [${condSummary(t.cond)}]${act}${cd}, last fired ${t.lastFiredAt || 'never'}`;
 }
 
+/** ask / agent 档 Muse 的 set:发规则卡,不写规则。卡上存校验过的规则(画「当 · 只在 · 做」)和入参(点「好」时再校验一次建出来)。 */
+async function proposeRule(userId: string, args: Record<string, any>, v: ValidatedTrigger): Promise<string> {
+  if (String(args.id || '').trim()) return 'Error: at your permission level you can only propose new rules, not change existing ones.';
+  if (v.agentSlug || v.actions?.some((a) => a.type !== 'remind' && a.type !== 'notify')) {
+    return 'Error: a proposed rule can only remind the user (actions remind or notify) or wake you (no actions). Ask the user to set up anything else in Automation.';
+  }
+  const pending = await listMuseCards(userId, 'pending');
+  if (pending.filter((c) => c.kind === 'rule').length >= MAX_PENDING_RULE_CARDS) return `Error: ${MAX_PENDING_RULE_CARDS} rule proposals are already waiting for the user. Wait for an answer first.`;
+  const { desc, cond, prompt, cooldownHours, actions, only, maxPerDay } = v;
+  const { action: _a, ...input } = args;
+  const r = await postMuseCard(userId, {
+    kind: 'rule',
+    payload: { rule: { desc, cond, prompt, cooldownHours, actions, only, maxPerDay }, input: { ...input, cooldown_hours: cooldownHours } },
+    text: desc,
+  });
+  return r.ok ? 'Proposed. A rule card is at the end of your direct chat with the user; the rule exists only after they accept it. Do not ask again in text.' : r.error;
+}
+
 export const manageAutomationProvider: ToolProvider = {
   id: 'builtin:manage_automation',
   tools: () => [
     {
       name: 'manage_automation',
       mode: 'both',
-      // 本地限定(云端 no-op)。Muse 只在 auto 档可见:ask/agent 档的 Muse 若能建 agent_run 规则,到期起跑的是对方 agent 的
-      // full-auto 会话 —— 等于把自己的审批档洗成别人的全开(Codex 09-10 P0-2);它自己的定时工作走 manage_schedule。
-      isEnabledFor: (profile, ctx) => !!profile.capabilities.hostExec && !((ctx as any).muse && ctx.approvalMode !== 'full-auto'),
+      // 本地限定(云端 no-op)。ask/agent 档的 Muse 也看得见,但 execute 只让它提规则卡:它若能直接建 agent_run 规则,
+      // 到期起跑的是对方 agent 的 full-auto 会话 —— 等于把自己的审批档洗成别人的全开(Codex 09-10 P0-2)。
+      isEnabledFor: (profile) => !!profile.capabilities.hostExec,
 
       deferred: true, // P0-2:3.3KB 大 schema,低频管理面 → 按需装载(Muse/自动化 run 例外全量可见)
       deferHint: 'Set up/list/remove automations: reminders ("remind me at 9am"), event watchers, scheduled or recurring agent tasks.',
@@ -165,6 +189,9 @@ export const manageAutomationProvider: ToolProvider = {
           const list = await loadTriggers();
           return list.length ? `${list.length} automation rule(s):\n${list.map(fmt).join('\n')}` : '(no automation rules)';
         }
+        // ask / agent 档的 Muse:只能看、只能提。
+        const proposing = !!ctx.muse && ctx.approvalMode !== 'full-auto';
+        if (proposing && action !== 'set') return 'Error: at your permission level you can list rules and propose new ones (action=set); the user changes or removes rules.';
         if (action === 'remove') {
           const id = String(args.id || '').trim();
           if (!id) return 'Error: id is required (use list to see ids).';
@@ -181,10 +208,13 @@ export const manageAutomationProvider: ToolProvider = {
         // 工具参数名是 agent(对模型友好),校验层键是 agent_slug——这里显式映射(修 muse_watch 时代静默掉落的 bug)。
         const v = validateTriggerInput({ ...args, agent_slug: args.agent_slug ?? args.agent } as any, { cwd: ctx.cwd, vaultPath: amadeusVaultPath() });
         if (!v.ok) return `Error: ${v.error}`;
-        // Muse 自激防线:没有 agent(=唤醒 Muse)或 agent=muse 的规则一律拒;含 agent_run→muse 的动作链在 validate 里已拒。
-        if (ctx.muse && (!v.value.agentSlug || v.value.agentSlug === 'muse')) {
-          return 'Error: Muse cannot create automations that wake itself (self-trigger loop). For your own timed follow-ups use manage_schedule; automations you create must target another agent (agent=<slug>).';
+        // Muse 自激防线:没有动作、也没有 agent 的规则 = 唤醒 Muse。事件它自己造不出来的触发源(电脑上 / 日历)才行;
+        // 含 agent_run→muse 的动作链在 validate 里已拒。
+        const wakesMuse = !v.value.actions?.length && (!v.value.agentSlug || v.value.agentSlug === 'muse');
+        if (ctx.muse && wakesMuse && !getTriggerSource(v.value.cond.type)?.selfWakeSafe) {
+          return 'Error: Muse cannot create automations that wake itself from this kind of trigger (self-trigger loop). For your own timed follow-ups use manage_schedule; rules that wake you must use a computer.* or calendar.before trigger.';
         }
+        if (proposing) return proposeRule(ctx.userId, args, v.value);
 
         if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
           return `Error: agent "${v.value.agentSlug}" not found (use manage_agent action=list to see agents)`;
@@ -221,7 +251,9 @@ export const manageAutomationProvider: ToolProvider = {
               : ' (evaluated by Muse about every 5 minutes; Muse must be enabled in Settings)';
         const state = v.value.enabled ? '' : ' [disabled]';
         const paused = v.value.enabled && triggerUnmet(r.trigger) ? ' It stays paused until Computer History is turned on in Settings.' : '';
-        return `${r.created ? 'Created' : 'Updated'} automation ${r.trigger.id}${state}: "${v.value.desc}" [${condSummary(c)}]${note}${paused}`;
+        // auto 档的 Muse 直接建,用户不会自己翻到这条规则。
+        const tell = ctx.muse && r.created ? ' Tell the user in one short message_user line what you set up and how to turn it off.' : '';
+        return `${r.created ? 'Created' : 'Updated'} automation ${r.trigger.id}${state}: "${v.value.desc}" [${condSummary(c)}]${note}${paused}${tell}`;
       },
     },
   ],

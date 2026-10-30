@@ -4,11 +4,11 @@
  * (注入已有会话 / 新会话执行)。嵌在「后台智能体」视图(AgentsDetailView)与 Muse Space 右栏使用,外层容器负责 padding/滚动。
  */
 import React, { useEffect, useState } from 'react'
-import { Sparkles, RefreshCw, Play, Check, XCircle, Crosshair, Trash2, ShieldCheck, ShieldX, MessageSquarePlus, Repeat, FolderOpen, Settings } from 'lucide-react'
+import { Sparkles, RefreshCw, Play, Check, XCircle, Crosshair, Trash2, ShieldCheck, ShieldX, MessageSquarePlus, Repeat, FolderOpen, Settings, Pause, Pencil } from 'lucide-react'
 import { setActiveSpace, useWorkspace } from '@lcl/engine'
 import { syncAgentSpace } from '../builtins/agentSpaceSync'
 import {
-  getMuseStatus, getMuseTodos, patchMuseTodo, injectMuseTodos, listMessages, getMuseTriggers, deleteMuseTrigger,
+  getMuseStatus, getMuseTodos, patchMuseTodo, injectMuseTodos, listMessages, getMuseTriggers, deleteMuseTrigger, saveMuseTrigger,
   listMuseApprovals, decideMuseApproval, getAgentSchedules, deleteAgentScheduleEntry, postMuseFeedback,
 } from '../services/backendService'
 import { useApp } from '../stores/appStore'
@@ -20,6 +20,8 @@ import { fmtCalDateYL } from '@amadeus/lib/calDateFmt'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { useAutomation } from '../stores/automationStore'
 import { deleteWithUndo, isPendingDelete } from '../views/automation/automationListSource'
+import { condText as ruleCondText, nextHeartbeatAt, noticeText, onlyText, triggerToUpsert } from '../views/automation/lib'
+import '../views/automation/messages'
 import { homeTarget, targetForSession } from '../services/engine/targets'
 import { previewNeedsScrollHint } from './approvalText'
 
@@ -27,6 +29,14 @@ registerMessages({
   'special.muse.off': { zh: '未开启', en: 'Off' },
   'special.muse.goSettings': { zh: '去设置', en: 'Settings' },
   'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
+  'special.muse.nextHeartbeat': { zh: '下次心跳 · {time}', en: 'Next heartbeat · {time}' },
+  'special.muse.heartbeatOff': { zh: '心跳关着，只有下面的规则和日程会叫醒我', en: 'Heartbeat is off. Only the rules below and my schedule wake me' },
+  'special.muse.heartbeatSleep': { zh: 'Muse 自己定的：{reason}', en: 'Muse set this itself: {reason}' },
+  'special.muse.heartbeatEvery': { zh: '每 {n} 分钟，或你一有动静', en: 'Every {n} min, or when you\u2019re active' },
+  'special.muse.rulePause': { zh: '暂停', en: 'Pause' },
+  'special.muse.ruleResume': { zh: '恢复', en: 'Resume' },
+  'special.muse.ruleEdit': { zh: '在画布里打开', en: 'Open in canvas' },
+  'special.muse.rulePaused': { zh: '已暂停', en: 'Paused' },
   'special.muse.sleepingTitle': {
     zh: 'Muse 判断暂时没事可做，跳过心跳到这个时刻；你一有动作、规则命中或日程到期都会提前叫醒它。理由：{reason}',
     en: 'Muse found nothing to do and skips its heartbeat until then; your activity, a rule or a due schedule wakes it earlier. Reason: {reason}',
@@ -56,10 +66,10 @@ export const MuseView: React.FC<{
   const [target, setTarget] = useState<string>('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState<string>('') // 正在裁决的审批 id(approve 会同步执行工具)
-  // 本面板只管 Muse 唤醒式规则(无动作链/无执行者;legacy 落盘可能有显式 agentSlug:'muse'=同义);
-  // 带动作的自动化在自动化 Space 统一管理
+  // 本面板只列 Muse 的时机:叫醒它的规则(无动作链/无执行者;legacy 落盘可能有显式 agentSlug:'muse'=同义)
+  // 和只做直接提醒的规则;别的自动化在自动化 Space 统一管理
   useAutomation((s) => s.refreshNonce) // 删除进入 / 撤出撤销窗口时重渲
-  const museTriggers = triggers.filter((tg) => !tg.actions?.length && (!tg.agentSlug || tg.agentSlug === 'muse') && !isPendingDelete({ kind: 'trigger', triggerId: tg.id }))
+  const museTriggers = triggers.filter((tg) => (!tg.actions?.length || tg.actions.every((a) => a.type === 'remind')) && (!tg.agentSlug || tg.agentSlug === 'muse') && !isPendingDelete({ kind: 'trigger', triggerId: tg.id }))
   const shownTracks = tracks.filter((e) => !isPendingDelete({ kind: 'schedule', slug: 'muse', rowId: e.id }))
 
   const load = async (): Promise<void> => {
@@ -156,8 +166,15 @@ export const MuseView: React.FC<{
       setBusy('')
     }
   }
+  const toggleRule = async (tg: MuseTriggerInfo): Promise<void> => {
+    try {
+      const saved = await saveMuseTrigger(homeTarget(), { ...triggerToUpsert({ ...tg, enabled: !tg.enabled }), actor: 'user' })
+      setTriggers((p) => p.map((x) => (x.id === tg.id ? { ...x, ...saved } : x)))
+    } catch (e) { fail(e) }
+  }
+  const openRule = (id: string): void => { useApp.getState().closeSettings(); setActiveSpace('automation'); useAutomation.getState().openBuilder(id) }
   const condText = (tg: MuseTriggerInfo): string =>
-    tg.cond.type === 'file_chars_gte'
+    'params' in tg.cond ? ruleCondText(t, tg.cond) : tg.cond.type === 'file_chars_gte'
       ? t('special.muse.trigFile', { path: tg.cond.path.split(/[\\/]/).pop() || tg.cond.path, n: tg.cond.n })
 
       : tg.cond.type === 'event_seen'
@@ -175,6 +192,7 @@ export const MuseView: React.FC<{
   const running = !!status?.running
   // Muse 自己定的休眠(set_next_wake):醒着 / 跑着时不显示;过期的休眠引擎侧已当醒着,这里再兜一次。
   const sleepUntil = !running && status?.sleepUntil && status.sleepUntil > Date.now() ? status.sleepUntil : 0
+  const nextHeartbeat = nextHeartbeatAt(status)
   const pendingN = approvals.length || status?.pendingApprovals || 0
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -269,15 +287,28 @@ export const MuseView: React.FC<{
             {t('special.muse.watchesAll')}
           </a>
         </label>
+        {status?.enabled && (
+          <div className="file-row" data-next-heartbeat style={{ cursor: 'default', alignItems: 'flex-start' }}>
+            <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
+              <b>{nextHeartbeat ? t('special.muse.nextHeartbeat', { time: formatDateTime(nextHeartbeat) }) : t('special.muse.heartbeatOff')}</b>
+              {nextHeartbeat ? <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
+                {sleepUntil ? t('special.muse.heartbeatSleep', { reason: status.sleepReason || '—' }) : t('special.muse.heartbeatEvery', { n: status.heartbeatMinutes })}
+              </div> : null}
+            </span>
+          </div>
+        )}
         {museTriggers.length === 0 && <div className="hint">{t('special.muse.watchesHint')}</div>}
         {museTriggers.map((tg) => (
-          <div key={tg.id} className="file-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
+          <div key={tg.id} className="file-row muse-rule-row" data-rule-id={tg.id} style={{ cursor: 'default', alignItems: 'flex-start' }}>
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{tg.desc}</b>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
-                {condText(tg)}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: formatDateTime(tg.lastFiredAt) })}` : ''}
+                {[condText(tg), onlyText(t, tg), tg.actions?.length ? t('automation.step.remind') : t('automation.step.wake'), tg.enabled ? '' : t('special.muse.rulePaused')].filter(Boolean).join(' · ')}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: formatDateTime(tg.lastFiredAt) })}` : ''}
               </div>
+              {tg.enabled && tg.notice && <div className="hint">{noticeText(t, tg.notice)}</div>}
             </span>
+            <button className="icon-btn" title={t(tg.enabled ? 'special.muse.rulePause' : 'special.muse.ruleResume')} onClick={() => void toggleRule(tg)}>{tg.enabled ? <Pause size={13} /> : <Play size={13} />}</button>
+            <button className="icon-btn" title={t('special.muse.ruleEdit')} onClick={() => openRule(tg.id)}><Pencil size={13} /></button>
             <button className="icon-btn" title={t('special.muse.watchDelete')} onClick={() => removeTrigger(tg.id, tg.desc)}><Trash2 size={13} /></button>
           </div>
         ))}

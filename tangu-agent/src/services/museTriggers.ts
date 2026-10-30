@@ -1599,7 +1599,7 @@ registerTriggerSource({
 });
 
 registerTriggerSource({
-  id: 'manual', group: 'forsion', name: { zh: '手动', en: 'Manual' }, eventSource: 'manual',
+  id: 'manual', group: 'time', name: { zh: '手动', en: 'Manual' }, eventSource: 'manual',
   params: [],
   parse: (): ParsedCond => ({ ok: true, cond: { type: 'manual' } }),
   evaluate: async () => {}, // 手动类只由 fire 端点起跑,巡检永不命中

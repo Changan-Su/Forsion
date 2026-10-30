@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { create } from 'zustand'
-import { ArrowDown, CircleCheck, CircleX, Gift, Inbox, MessageCircle, Puzzle, Settings, Sparkles } from 'lucide-react'
+import { AlarmClock, ArrowDown, CircleCheck, CircleX, Gift, Inbox, MessageCircle, Puzzle, Settings, Sparkles } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useAttention } from '../../stores/attentionStore'
@@ -18,6 +18,9 @@ import { HOME_REF, sameRef, targetForSession } from '../../services/engine/targe
 import type { MuseCardInfo, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { MarketPluginCards } from '../../components/MarketPluginCards'
 import { SETTINGS_TABS } from '../../components/settingsTarget'
+import { useAutomation } from '../../stores/automationStore'
+import { condText, onlyText } from '../automation/lib'
+import '../automation/messages'
 
 registerMessages({
   'museCard.inDeck': { zh: '{title} · 在对话最下面', en: '{title} · at the end of the chat' },
@@ -90,6 +93,20 @@ registerMessages({
   'museCard.lessOfThis': { zh: '少来点这种', en: 'Less of this' },
   'museCard.noted': { zh: '记下了', en: 'Got it' },
   'museCard.notedLess': { zh: '记下了：这类少来', en: 'Got it: fewer of these' },
+  'museCard.rule': { zh: '新的醒来时机', en: 'New wake-up rule' },
+  'museCard.ruleWhen': { zh: '当', en: 'When' },
+  'museCard.ruleOnly': { zh: '只在', en: 'Only' },
+  'museCard.ruleDo': { zh: '做', en: 'Do' },
+  'museCard.ruleRemind': { zh: '直接提醒「{text}」（不叫模型、不花额度）', en: 'Remind you: “{text}” (no model, no budget)' },
+  'museCard.ruleNotify': { zh: '发通知「{text}」', en: 'Send a notification: “{text}”' },
+  'museCard.ruleWake': { zh: '叫醒 Muse', en: 'Wake Muse' },
+  'museCard.ruleWakeWith': { zh: '叫醒 Muse：{text}', en: 'Wake Muse: {text}' },
+  'museCard.ruleOk': { zh: '好', en: 'OK' },
+  'museCard.ruleEdit': { zh: '改一下', en: 'Change it' },
+  'museCard.ruleNo': { zh: '不用', en: 'No thanks' },
+  'museCard.ruleDone': { zh: '规则已建好', en: 'Rule created' },
+  'museCard.ruleEditing': { zh: '已打开画布，规则暂停着', en: 'Opened in the canvas, rule paused' },
+  'museCard.ruleDeclined': { zh: '不用这条规则', en: 'Rule declined' },
 })
 
 /** 点完一张:流里那行与卡片堆一起重读(同一张卡的两处视图不共享组件状态)。 */
@@ -140,7 +157,12 @@ function useDecide(sessionId: string | undefined) {
       return false
     } finally { setBusy(false) }
   }
-  const decide = (card: MuseCardInfo, action: string, extra?: Record<string, unknown>): Promise<boolean> => send((target) => decideMuseCard(target, card.id, action, extra))
+  /** 规则卡的「改一下」要拿到建出来的规则 id 去开画布;别的卡只看成没成。 */
+  const decide = async (card: MuseCardInfo, action: string, extra?: Record<string, unknown>): Promise<boolean | string> => {
+    let trigger: string | undefined
+    const ok = await send(async (target) => { trigger = (await decideMuseCard(target, card.id, action, extra)).trigger?.id })
+    return ok && (trigger ?? true)
+  }
   return { busy, decide, send }
 }
 
@@ -152,6 +174,28 @@ const openSettingsTab = (tab: string): void => {
 export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: string }) {
   const { t } = useI18n()
   const { busy, decide } = useDecide(sessionId)
+  if (card.kind === 'rule') {
+    const r = card.payload.rule ?? {}
+    const only = onlyText(t, r, true)
+    const step = r.actions?.[0]
+    const act = step?.type === 'remind' ? t('museCard.ruleRemind', { text: step.title })
+      : step?.type === 'notify' ? t('museCard.ruleNotify', { text: step.title })
+      : r.prompt ? t('museCard.ruleWakeWith', { text: r.prompt }) : t('museCard.ruleWake')
+    const row = (k: string, v: string) => <div className="t2-rulecard-row"><span>{k}</span><span>{v}</span></div>
+    return (
+      <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="rule">
+        <div className="t2-taskcard-head"><AlarmClock size={14} /><b>{r.desc || t('museCard.rule')}</b></div>
+        {row(t('museCard.ruleWhen'), r.cond ? condText(t, r.cond) : '—')}
+        {!!only && row(t('museCard.ruleOnly'), only)}
+        {row(t('museCard.ruleDo'), act)}
+        <div className="t2-taskcard-actions">
+          <button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'accept')}>{t('museCard.ruleOk')}</button>
+          <button type="button" disabled={busy} onClick={() => { void decide(card, 'edit').then((id) => { if (typeof id === 'string') { setActiveSpace('automation'); useAutomation.getState().openBuilder(id) } }) }}>{t('museCard.ruleEdit')}</button>
+          <button type="button" disabled={busy} onClick={() => void decide(card, 'dismiss')}>{t('museCard.ruleNo')}</button>
+        </div>
+      </div></div>
+    )
+  }
   if (card.kind === 'feature') {
     return (
       <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="feature">
@@ -333,7 +377,8 @@ const cardTitle = (card: MuseCardInfo, t: Tr): string => {
   if (card.kind === 'settings') return t('muse.settings')
   if (card.kind === 'intro') return t('museCard.intro')
   if (card.kind === 'summary') return t('museCard.summary')
-  return ''
+  if (card.kind === 'rule') return t('museCard.rule')
+  return card.payload.title || ''
 }
 
 /** 处理完留在流里的那一行。 */
@@ -344,6 +389,7 @@ function receipt(card: MuseCardInfo, t: Tr): { ok: boolean; text: string } {
     return { ok: true, text: t('museCard.settingsDone', { list }) }
   }
   if (card.kind === 'intro') return { ok: card.result === 'answer', text: t(card.result === 'answer' ? 'museCard.introDone' : 'museCard.introSkipped') }
+  if (card.kind === 'rule') return card.status === 'dismissed' ? { ok: false, text: t('museCard.ruleDeclined') } : { ok: true, text: t(card.result === 'editing' ? 'museCard.ruleEditing' : 'museCard.ruleDone') }
   if (card.kind === 'summary') return { ok: true, text: t('museCard.summaryDone') }
   if (card.status === 'dismissed') return { ok: false, text: t('museCard.dismissed') }
   if (card.kind === 'inbox-ask') return { ok: card.result === 'yes', text: t(card.result === 'yes' ? 'museCard.askYes' : card.result === 'ignore' ? 'museCard.askIgnore' : 'museCard.askLater') }

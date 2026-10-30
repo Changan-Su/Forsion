@@ -19,7 +19,7 @@ import { fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } f
 import { useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
 import { useDbStore } from '../../amadeus/store/dbStore'
-import { actionsText, condText, fmtTime, isFinishedTrigger, noticeText, watchedColumnIds, whereText } from './lib'
+import { actionsText, condText, fmtTime, isFinishedTrigger, noticeText, onlyText, watchedColumnIds, whereText } from './lib'
 import { AutomationBuilder } from './AutomationBuilder'
 import { AutomationHome } from './AutomationHome'
 import { AutomationRunsView } from './AutomationRunsView'
@@ -338,6 +338,7 @@ const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns
           {tr.cond.type === 'db_changed' && !!tr.cond.where?.length && (
             <span className="auto-fact"><b>{t('automation.fact.where')}</b>{whereText(t, tr.cond.where)}</span>
           )}
+          {!!onlyText(t, tr) && <span className="auto-fact"><b>{t('automation.only.fact')}</b>{onlyText(t, tr)}</span>}
           <span className="auto-fact"><b>{t('automation.fact.actions')}</b>{actionsText(t, agentDefs, tr)}</span>
           {tr.prompt && <span className="auto-fact"><b>{t('automation.fact.prompt')}</b>{tr.prompt.slice(0, 80)}</span>}
           {/* db_changed 的 0 = 「不冷却」是有意义的配置(链式规则),别藏;其它触发类型 0 只是引擎默认,照旧不显示。 */}

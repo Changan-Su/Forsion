@@ -679,7 +679,7 @@ router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: 
     });
     if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
     if (r.card.kind === 'settings' || r.card.kind === 'intro') kickMuse(); // 心跳 / 作息变了:巡检节奏下一轮就跟上
-    res.json({ ok: true, card: r.card });
+    res.json({ ok: true, card: r.card, ...(r.trigger ? { trigger: r.trigger } : {}) });
   } catch (e: any) { res.status(500).json({ detail: e?.message || 'decide failed' }); }
 });
 

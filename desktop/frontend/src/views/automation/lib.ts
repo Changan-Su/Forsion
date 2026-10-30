@@ -8,6 +8,7 @@ import type {
   MuseTriggerInfo,
   MuseTriggerUpsert,
   NormalAgentDef,
+  TriggerSourceInfo,
 } from '../../types'
 import { formatMonthDay, formatTime, toDate } from '../../format/time'
 
@@ -173,7 +174,7 @@ export function triggerToUpsert(t: MuseTriggerInfo): MuseTriggerUpsert {
 
 export interface StepDraft {
   key: number
-  type: 'notify' | 'agent_run' | 'tool_call' | 'db_row_add' | 'db_row_edit'
+  type: 'notify' | 'remind' | 'agent_run' | 'tool_call' | 'db_row_add' | 'db_row_edit'
   title: string
   body: string
   agentSlug: string
@@ -210,12 +211,13 @@ export const MAX_WHERE = 10
 
 /** 本版构建器能编辑的全部步骤类型(2.8 起含 DB 动作)。 */
 export function isEditableStep(a: AutomationActionSpec): boolean {
-  return a.type === 'notify' || a.type === 'agent_run' || a.type === 'tool_call' || a.type === 'db_row_add' || a.type === 'db_row_edit'
+  return a.type === 'notify' || a.type === 'remind' || a.type === 'agent_run' || a.type === 'tool_call' || a.type === 'db_row_add' || a.type === 'db_row_edit'
 }
 
 /** 每种动作/条件本版表单认识的键。不在表里的键 = 表单表达不了 → 打开即只读(见 hasUnsupportedParts)。 */
 const KNOWN_ACTION_KEYS: Record<StepDraft['type'], readonly string[]> = {
   notify: ['type', 'title', 'body'],
+  remind: ['type', 'title', 'body'],
   agent_run: ['type', 'agentSlug', 'prompt'],
   tool_call: ['type', 'tool', 'args'],
   db_row_add: ['type', 'path', 'cells', 'skipIfEmpty'],
@@ -237,12 +239,16 @@ const hasUnknownKeys = (o: object, known: readonly string[]): boolean =>
  *  用户点开看一眼、按保存就把动作抹了:draft↔spec 是白名单重建,不认的字段一进一出即蒸发)。 */
 export function hasUnsupportedParts(t?: MuseTriggerInfo): boolean {
   if (!t) return false
-  if (t.actions?.some((a) => !isEditableStep(a) || hasUnknownKeys(a, KNOWN_ACTION_KEYS[a.type as StepDraft['type']]))) return true
+  if (t.actions?.some((a) => !isEditableStep(a) || hasUnknownKeys(a, KNOWN_ACTION_KEYS[a.type]))) return true
   const cond = t.cond as { type?: string } | undefined
   if (!cond || typeof cond !== 'object') return false
-  const known = KNOWN_COND_KEYS[String(cond.type)]
+  // 新触发源统一是 { type, params }:表单按注册表的参数表出,任何插件源都编辑得了。
+  const known = isParamCond(cond) ? ['type', 'params'] : KNOWN_COND_KEYS[String(cond.type)]
   return !known || hasUnknownKeys(cond, known)
 }
+
+/** 新触发源(电脑上 / 日历 / 插件),对应的表单是通用参数表。 */
+export const isParamCond = (cond: { type?: string } | undefined): boolean => /\.|^plugin:/.test(String(cond?.type ?? ''))
 
 let stepKey = 1
 export const blankStep = (type: StepDraft['type']): StepDraft => ({
@@ -255,8 +261,8 @@ export function stepsFrom(editing?: MuseTriggerInfo): StepDraft[] {
   if (editing?.actions?.length) {
     return editing.actions.filter(isEditableStep).map((a) => ({
       ...blankStep(a.type as StepDraft['type']),
-      title: a.type === 'notify' ? a.title : '',
-      body: a.type === 'notify' ? a.body || '' : '',
+      title: a.type === 'notify' || a.type === 'remind' ? a.title : '',
+      body: a.type === 'notify' || a.type === 'remind' ? a.body || '' : '',
       agentSlug: a.type === 'agent_run' ? a.agentSlug : '',
       prompt: a.type === 'agent_run' ? a.prompt : '',
       tool: a.type === 'tool_call' ? a.tool : '',
@@ -300,7 +306,7 @@ const cellsOf = (s: StepDraft): Record<string, string> =>
  *  往返测试才能用 toEqual 钉「一个不丢」)。match.value 不 trim(可能是纯模板,与 cells 值口径一致)。 */
 export function toSpec(steps: StepDraft[], catalog: AutomationActionCatalogItem[]): AutomationActionSpec[] {
   return steps.map((s): AutomationActionSpec => {
-    if (s.type === 'notify') return { type: 'notify', title: s.title.trim(), ...(s.body.trim() ? { body: s.body.trim() } : {}) }
+    if (s.type === 'notify' || s.type === 'remind') return { type: s.type, title: s.title.trim(), ...(s.body.trim() ? { body: s.body.trim() } : {}) }
     if (s.type === 'agent_run') return { type: 'agent_run', agentSlug: s.agentSlug, prompt: s.prompt.trim() }
     if (s.type === 'db_row_add') {
       return { type: 'db_row_add', path: s.dbPath.trim(), cells: cellsOf(s), ...(s.skipIfEmpty.trim() ? { skipIfEmpty: s.skipIfEmpty.trim() } : {}) }
@@ -336,9 +342,9 @@ export function whereToUpsert(rows: WhereDraft[]): AutomationWhere[] | undefined
 
 /** 冷却输入框初值:服务端存的 0 必须显示成 '0'(`|| 24` 会把 ERP 那类 0 冷却规则改成 24h)。
  *  新建规则按触发类型给默认:db_changed 起 '0'(引擎对纯动作链的默认;不然手建「订单新增→通知」
- *  会静默变成一天一次),其余 '24'。 */
-export const initialCooldown = (editing?: Pick<MuseTriggerInfo, 'cooldownHours'> | null, kind?: string): string =>
-  editing ? String(editing.cooldownHours ?? 24) : kind === 'db_changed' ? '0' : '24'
+ *  会静默变成一天一次),新触发源用注册表的缺省,其余 '24'。 */
+export const initialCooldown = (editing?: Pick<MuseTriggerInfo, 'cooldownHours'> | null, kind?: string, sourceDefault?: number): string =>
+  editing ? String(editing.cooldownHours ?? 24) : kind === 'db_changed' ? '0' : String(sourceDefault ?? 24)
 
 /** 冷却输入 → upsert 的 cooldown_hours:timer/manual 没有冷却;其余 ≥0 的有限数原样送(**0 放行**,
  *  db_changed 纯动作链 0 = 不冷却;引擎对别的触发类型自己抬下限),非法输入不送=引擎默认。 */
@@ -346,4 +352,88 @@ export function cooldownPayload(kind: string, raw: string): number | undefined {
   if (kind === 'timer' || kind === 'manual') return undefined
   const n = Number(raw)
   return raw.trim() !== '' && Number.isFinite(n) && n >= 0 ? n : undefined
+}
+
+// ── 触发类型菜单 + 「只在」──────────────────────────────────────────────────────
+
+export type TriggerMenuGroup = 'time' | 'computer' | 'forsion' | 'external'
+/** 菜单一项:老类型指向构建器的专用表单(kind),新类型指向通用参数表(source)。 */
+export interface TriggerMenuItem {
+  id: string
+  kind: 'timer' | 'event_seen' | 'file_chars_gte' | 'manual' | 'db_changed' | 'param'
+  source?: TriggerSourceInfo
+}
+
+const LEGACY_KINDS: Record<string, TriggerMenuItem['kind']> = {
+  daily_at: 'timer', at: 'timer', every: 'timer', event_seen: 'event_seen', file_chars_gte: 'file_chars_gte', manual: 'manual', db_changed: 'db_changed',
+}
+const LEGACY_MENU: Array<[TriggerMenuGroup, TriggerMenuItem]> = [
+  ['time', { id: 'timer', kind: 'timer' }], ['time', { id: 'manual', kind: 'manual' }],
+  ['forsion', { id: 'db_changed', kind: 'db_changed' }], ['forsion', { id: 'event_seen', kind: 'event_seen' }], ['forsion', { id: 'file_chars_gte', kind: 'file_chars_gte' }],
+]
+
+/** 注册表 → 菜单分组:定时三种合成一个「定时」(子模式在表单里),外部与插件并成一组。老引擎没有目录 → 老的五项。 */
+export function triggerMenu(sources: TriggerSourceInfo[]): Array<{ group: TriggerMenuGroup; items: TriggerMenuItem[] }> {
+  const groups: TriggerMenuGroup[] = ['time', 'computer', 'forsion', 'external']
+  const entries: Array<[TriggerMenuGroup, TriggerMenuItem]> = sources.length ? [] : [...LEGACY_MENU]
+  for (const s of sources) {
+    const group: TriggerMenuGroup = s.group === 'plugin' ? 'external' : s.group
+    const kind = LEGACY_KINDS[s.id]
+    if (kind === 'timer') {
+      if (!entries.some(([, i]) => i.kind === 'timer')) entries.push([group, { id: 'timer', kind }])
+    } else {
+      entries.push([group, { id: s.id, kind: kind ?? 'param', source: s }])
+    }
+  }
+  return groups.map((group) => ({ group, items: entries.filter(([g]) => g === group).map(([, i]) => i) })).filter((g) => g.items.length)
+}
+
+/** 表单态的「只在」(全字符串;小时空 = 全天)。 */
+export interface OnlyDraft { start: string; end: string; weekdays: number[]; maxPerDay: string }
+
+export const onlyDraftFrom = (t?: Pick<MuseTriggerInfo, 'only' | 'maxPerDay'>): OnlyDraft => ({
+  start: t?.only?.hours ? String(t.only.hours.start) : '',
+  end: t?.only?.hours ? String(t.only.hours.end) : '',
+  weekdays: t?.only?.weekdays ?? [],
+  maxPerDay: t?.maxPerDay ? String(t.maxPerDay) : '',
+})
+
+const hourOk = (s: string): boolean => Number.isInteger(Number(s)) && Number(s) >= 0 && Number(s) <= 24
+
+/** 小时要么都空要么都填对,每天次数要么空要么 1–50。 */
+export function onlyDraftValid(d: OnlyDraft): boolean {
+  const s = d.start.trim(); const e = d.end.trim()
+  if (!!s !== !!e || (s && !(hourOk(s) && hourOk(e)))) return false
+  const m = d.maxPerDay.trim()
+  return !m || (Number.isInteger(Number(m)) && Number(m) >= 1 && Number(m) <= 50)
+}
+
+/** 表单 → upsert:全空发 null(显式清空),不发 undefined(那是「保留旧值」)。 */
+export function onlyToUpsert(d: OnlyDraft): Pick<MuseTriggerUpsert, 'only' | 'max_per_day'> {
+  const hours = d.start.trim() ? { start: Number(d.start), end: Number(d.end) } : undefined
+  const weekdays = d.weekdays.length ? d.weekdays : undefined
+  return { only: hours || weekdays ? { ...(hours ? { hours } : {}), ...(weekdays ? { weekdays } : {}) } : null, max_per_day: d.maxPerDay.trim() ? Number(d.maxPerDay) : null }
+}
+
+const sameDays = (a: number[], b: number[]): boolean => a.length === b.length && a.every((d, i) => d === b[i])
+export const WEEKDAYS = [1, 2, 3, 4, 5]
+export const WEEKEND = [0, 6]
+
+/** 「只在」的白话(详情页、Muse 右栏、规则卡共用)。 */
+export function onlyText(t: T, r: Pick<MuseTriggerInfo, 'only' | 'maxPerDay' | 'cooldownHours'>, withCooldown = false): string {
+  const days = r.only?.weekdays ?? []
+  const parts: string[] = []
+  if (days.length) parts.push(sameDays(days, WEEKDAYS) ? t('automation.only.workdays') : sameDays(days, WEEKEND) ? t('automation.only.weekend') : days.map((d) => t(`automation.only.day${d}`)).join(' '))
+  if (r.only?.hours) parts.push(`${String(r.only.hours.start).padStart(2, '0')}:00–${String(r.only.hours.end).padStart(2, '0')}:00`)
+  if (r.maxPerDay) parts.push(t('automation.only.maxPerDay', { n: String(r.maxPerDay) }))
+  if (withCooldown && r.cooldownHours > 0) parts.push(t('automation.only.cooldown', { n: String(r.cooldownHours) }))
+  return parts.join(' · ')
+}
+
+/** 下次心跳(ms):Muse 自己定的休眠优先;没开心跳 / 没记录 → null。 */
+export function nextHeartbeatAt(s: { sleepUntil?: number | null; lastCycleAt?: number | null; heartbeatMinutes?: number } | null, now = Date.now()): number | null {
+  if (!s) return null
+  if (s.sleepUntil && s.sleepUntil > now) return s.sleepUntil
+  if (!s.heartbeatMinutes || !s.lastCycleAt) return null
+  return Math.max(now, s.lastCycleAt + s.heartbeatMinutes * 60_000)
 }

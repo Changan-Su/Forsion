@@ -173,6 +173,20 @@ export interface MuseTriggerUpsert {
   enabled?: boolean
   actions?: AutomationActionSpec[] | null
 }
+/** GET /agent/special/automation/sources 的一行:触发源注册表投影(类型菜单直接从这里出)。 */
+export interface TriggerSourceInfo {
+  id: string
+  group: 'time' | 'computer' | 'forsion' | 'external' | 'plugin'
+  name: { zh: string; en: string }
+  params: Array<{ key: string; type: 'app' | 'number' | 'text'; name: { zh: string; en: string }; required?: boolean; hidden?: boolean; min?: number; max?: number; default?: string | number }>
+  requires: string[]
+  eventSource: string
+  defaultCooldownHours?: number
+  timed?: boolean
+  available: boolean
+  /** available=false 时的 notice code。 */
+  reason?: string
+}
 /** GET /agent/special/automation/actions 的目录项(tool_call 步骤选择器+参数表单生成)。 */
 export interface AutomationActionCatalogItem {
   name: string

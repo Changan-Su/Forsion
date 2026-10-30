@@ -13,6 +13,10 @@ const h = vi.hoisted(() => ({
   mutations: [] as any[],
   muse: { inboxAutoRead: [] as string[], inboxIgnored: [] as string[] } as any,
   onboarding: {} as any,
+  valid: true,
+  upsert: { ok: true, trigger: { id: 'w-1' } } as any,
+  upserts: [] as any[],
+  cwds: [] as unknown[],
 }));
 
 vi.mock('../core/db.js', async () => {
@@ -47,6 +51,11 @@ vi.mock('./specialAgentsConfig.js', () => ({
   updateMuseConfig: (fn: any) => { if (h.configFails) throw new Error('config lock timeout'); const patch = fn(h.muse); Object.assign(h.muse, patch); return { muse: h.muse }; },
 }));
 vi.mock('./museState.js', () => ({ patchMuseOnboarding: async (p: any) => { Object.assign(h.onboarding, p); } }));
+vi.mock('../tools/builtin/amadeus.js', () => ({ amadeusVaultPath: () => '' }));
+vi.mock('./museTriggers.js', () => ({
+  validateTriggerInput: (input: any, opts: any) => { h.cwds.push(opts?.cwd); return h.valid ? { ok: true, value: { desc: 'r', enabled: input.enabled } } : { ok: false, error: 'bad' }; },
+  upsertTrigger: async (v: any, _id: unknown, opts: any) => { if (h.upsert instanceof Error) throw h.upsert; h.upserts.push({ v, opts }); return h.upsert; },
+}));
 
 import { decideMuseCard, getMuseCard, inboxAskBlocked, inboxListBlocked, inboxHint, listMuseCards, pickMuseSettings, postIntroCard, postMuseCard, postSummaryCard, recommendBlocked, recommendHint, recordMessageFeedback } from './museCards.js';
 
@@ -59,6 +68,7 @@ beforeEach(() => {
   h.muse.inboxAutoRead = []; h.muse.inboxIgnored = [];
   for (const k of ['heartbeatMinutes', 'activeHours', 'notify', 'maxDmPerDay', 'mode', 'grantedFolders']) delete h.muse[k];
   h.entries = []; h.mutations.length = 0; h.onboarding = {}; h.configFails = false; h.memoryFails = false;
+  h.valid = true; h.upsert = { ok: true, trigger: { id: 'w-1' } }; h.upserts.length = 0; h.cwds.length = 0;
 });
 
 describe('postMuseCard', () => {
@@ -380,5 +390,66 @@ describe('收件箱询问按类型', () => {
   it('更新 / 商店 / 维护能问,促销和其余官方信不能问', async () => {
     for (const c of ['update', 'store', 'maintenance', 'muse']) expect(await inboxAskBlocked('u', c, h.muse)).toBeNull();
     for (const c of ['promo', 'official', 'other']) expect(await inboxAskBlocked('u', c, h.muse)).toMatch(/only ask about/);
+  });
+});
+
+describe('规则卡:点了才建', () => {
+  const rule = async (): Promise<string> => {
+    const r = await postMuseCard('u', { kind: 'rule', payload: { rule: { desc: 'r' }, input: { desc: 'r', cond_type: 'computer.app_opened' }, cwd: '/proj' }, text: 'r' });
+    if (!r.ok) throw new Error(r.error);
+    return r.id;
+  };
+
+  it('好 = 建好开着,按用户身份;同一张卡点两次只建一条', async () => {
+    const id = await rule();
+    const r = await decideMuseCard('u', id, 'accept');
+    expect(r).toMatchObject({ ok: true, trigger: { id: 'w-1' }, card: { status: 'done', result: 'accepted' } });
+    expect(h.upserts).toHaveLength(1);
+    expect(h.upserts[0].v.enabled).toBe(true);
+    expect(h.upserts[0].opts).toEqual({ actor: 'user' });
+    expect((await decideMuseCard('u', id, 'accept')).ok).toBe(false);
+    expect(h.upserts).toHaveLength(1);
+  });
+
+  it('改一下 = 建成暂停的,回规则 id 给客户端开画布', async () => {
+    const r = await decideMuseCard('u', await rule(), 'edit');
+    expect(r).toMatchObject({ ok: true, trigger: { id: 'w-1' }, card: { result: 'editing' } });
+    expect(h.upserts[0].v.enabled).toBe(false);
+  });
+
+  it('不用 = 不建,反馈进记忆', async () => {
+    const r = await decideMuseCard('u', await rule(), 'dismiss');
+    expect(r).toMatchObject({ ok: true, card: { status: 'dismissed' } });
+    expect(h.upserts).toHaveLength(0);
+    expect([...h.memory, ...h.logs].join()).toContain('declined');
+  });
+
+  it('建失败把卡退回待处理,用户还能再点', async () => {
+    h.upsert = { ok: false, error: 'too many rules' };
+    const id = await rule();
+    const r = await decideMuseCard('u', id, 'accept');
+    expect(r).toMatchObject({ ok: false, status: 409, detail: 'too many rules' });
+    expect(await getMuseCard('u', id)).toMatchObject({ status: 'pending', result: null, decided_at: null });
+  });
+
+  it('写盘抛错同样退回待处理,不留一张说「建好了」的卡', async () => {
+    h.upsert = new Error('ENOSPC');
+    const id = await rule();
+    expect(await decideMuseCard('u', id, 'accept')).toMatchObject({ ok: false, status: 409, detail: 'ENOSPC' });
+    expect((await getMuseCard('u', id))?.status).toBe('pending');
+  });
+
+  it('按建卡时的目录校验,相对路径不随引擎工作目录走', async () => {
+    await decideMuseCard('u', await rule(), 'accept');
+    expect(h.cwds).toEqual(['/proj']);
+  });
+
+  it('卡放久了校验不过:不建,卡不动;认不得的动作 400', async () => {
+    const id = await rule();
+    expect(await decideMuseCard('u', id, 'open')).toMatchObject({ ok: false, status: 400 });
+    h.valid = false;
+    expect(await decideMuseCard('u', id, 'accept')).toMatchObject({ ok: false, status: 400, error: 'bad_rule' });
+    expect((await getMuseCard('u', id))?.status).toBe('pending');
+    expect(h.upserts).toHaveLength(0);
   });
 });

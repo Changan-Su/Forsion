@@ -115,7 +115,8 @@ describe('C1a 预算口径:跨全部 Muse 会话', () => {
 // 10-18 放到 4000:加一句「要回话 / 拍板的进私聊(message_user)、成品进收件箱」(Muse 私聊方案 B),实测约 3880。
 // 同日 live 首跑后放到 4100:补半句「存进 Library 或 display_file 都送不到」(成品被存进 Library、没发信),实测约 4010。
 // 10-19 放到 4300:ask / agent 档补一句「看 / 读 / 搜文件用免审批的工具,run_bash 每条都要批」(Windows 上 dir / findstr 排成一串审批卡),实测约 4200。
-const MAX_KICKOFF = 4300;
+// 10-30 放到 4400:加一句「按条件触发的用 manage_automation,用户在规则卡上点头」(触发源注册表),实测约 4330。
+const MAX_KICKOFF = 4400;
 
 describe('C1b kickoff 拆分', () => {
   const cfg = { ...SPECIAL_AGENTS_DEFAULTS.muse, mode: 'ask' as const, escalateTo: '', notify: 'immediate' as const };
