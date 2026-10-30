@@ -314,6 +314,7 @@ export const CLASSIFICATION = {
   'POST /agent/special/automation/triggers/:id/fire': [D, 'fires an automation (design appendix C)'],
   'POST /agent/special/automation/kick': [D, 'kicks automations (design appendix C)'],
   'GET /agent/special/automation/actions': [A, 'automation action catalog'],
+  'GET /agent/special/automation/sources': [A, 'automation trigger source catalog'],
   'GET /agent/special/automation/executions': [A, 'automation executions'],
   'GET /agent/special/automation/sessions': [A, 'automation sessions'],
   'GET /agent/special/automation/runs': [A, 'automation runs'],

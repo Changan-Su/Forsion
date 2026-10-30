@@ -24,9 +24,11 @@ import {
   isPluginTriggerId,
   precheckWatchCols,
   MAX_ACTIONS,
+  triggerUnmet,
   type MuseTrigger,
   type DbLike,
 } from '../../services/museTriggers.js';
+import { listTriggerSources } from '../../services/triggerRegistry.js';
 import { readDbOrNull } from '../../services/amadeusDb.js';
 import { dropCursors } from '../../services/dbCursors.js';
 import { getAgent } from '../../agents/agentRegistry.js';
@@ -39,7 +41,7 @@ function fmt(t: MuseTrigger): string {
         a.type === 'tool_call' ? `tool_call(${a.tool})`
         : a.type === 'agent_run' ? `agent_run(${a.agentSlug})`
         : a.type === 'db_row_add' || a.type === 'db_row_edit' ? `${a.type}(${a.path})`
-        : 'notify').join(' → ')}`
+        : a.type).join(' → ')}`
     : t.agentSlug ? `, runs agent "${t.agentSlug}"` : '';
   const cd = t.cooldownHours ? `, cooldown ${t.cooldownHours}h` : '';
   return `${t.id}${t.enabled ? '' : ' (disabled)'} — ${t.desc} [${condSummary(t.cond)}]${act}${cd}, last fired ${t.lastFiredAt || 'never'}`;
@@ -67,8 +69,13 @@ export const manageAutomationProvider: ToolProvider = {
             'Triggers: at (one-time local datetime), every (recurring interval like "30m"/"2h"/"1d"), daily_at (once a day after HH:MM), ' +
             'event_seen (a new in-app activity line contains `match`), file_chars_gte (file reaches n non-whitespace chars), ' +
             'manual (never fires on its own — the user runs it by clicking a button block in a note; use this when asked for "a button that does X"), ' +
-            'db_changed (a row was added to, or a column changed in, an Amadeus database file — needs path + event; cell_changed watches one column via column_id or several via column_ids, any of them changing fires). ' +
+            'db_changed (a row was added to, or a column changed in, an Amadeus database file — needs path + event; cell_changed watches one column via column_id or several via column_ids, any of them changing fires), ' +
+            'computer.app_opened (params.app: app name or bundle id — the user switched to it), computer.app_used (params.app + params.minutes — continuous use), ' +
+            'computer.returned (params.minutes — the user came back after being away at least that long), computer.unlocked (screen unlocked or the computer woke), ' +
+            'calendar.before (params.minutes — before a timed calendar event starts). computer.* rules need Computer History on and are matched on this machine; only the fact that one fired is shared. ' +
+            'Restrict any rule with only {hours:{start,end}, weekdays:[0-6, 0=Sunday]} and max_per_day. ' +
             'Actions (in order, fail-stop): notify {title, body?} posts to the user inbox with push, zero cost — the right way to deliver timed reminders; ' +
+            'remind {title, body?} shows a system notification and writes one line in the Muse chat — no model, nothing leaves this computer, skipped outside Muse active hours; ' +
             'agent_run {agentSlug, prompt} runs that agent unattended. Omit actions to instead wake Muse (legacy) or set `agent` as a shorthand for a single agent_run. ' +
             'Rules are evaluated by code every few minutes at zero cost. A one-time (at) rule disables itself after firing.',
           parameters: {
@@ -77,7 +84,17 @@ export const manageAutomationProvider: ToolProvider = {
               action: { type: 'string', enum: ['set', 'list', 'remove'], description: 'set=add/update a rule, list=show rules, remove=delete by id' },
               id: { type: 'string', description: 'set: update this rule instead of creating; remove: rule id (from list)' },
               desc: { type: 'string', description: 'set: human-readable description of the rule (shown to the user)' },
-              cond_type: { type: 'string', enum: ['at', 'every', 'daily_at', 'event_seen', 'file_chars_gte', 'manual', 'db_changed'], description: 'set: trigger type' },
+              cond_type: { type: 'string', enum: listTriggerSources().map((s) => s.id), description: 'set: trigger type' },
+              params: { type: 'object', description: 'set(computer.*, calendar.before, plugin triggers): trigger parameters, see the trigger list above' },
+              only: {
+                type: 'object',
+                description: 'set: fire only in these local hours and weekdays',
+                properties: {
+                  hours: { type: 'object', properties: { start: { type: 'number' }, end: { type: 'number' } }, description: '0-24; start > end spans midnight' },
+                  weekdays: { type: 'array', items: { type: 'number' }, description: '0=Sunday … 6=Saturday' },
+                },
+              },
+              max_per_day: { type: 'number', description: 'set: at most this many firings a day' },
               event: { type: 'string', enum: ['row_added', 'cell_changed'], description: 'set(db_changed): which change to watch' },
               column_id: { type: 'string', description: 'set(db_changed + cell_changed): the column ID (NOT its name — names are neither unique nor stable). Read the .db JSON to find it.' },
               column_ids: { type: 'array', items: { type: 'string' }, description: 'set(db_changed + cell_changed): watch several columns at once (column IDs; the rule fires when ANY of them changes; max 10). May be combined with column_id — the union is watched. Prefer this over creating one rule per column.' },
@@ -106,6 +123,7 @@ export const manageAutomationProvider: ToolProvider = {
                 description:
                   `set: ordered action steps. Max ${MAX_ACTIONS}. Each item is one of: ` +
                   '{type:"notify", title, body?} — inbox message; ' +
+                  '{type:"remind", title, body?} — system notification plus one line in the Muse chat, no model; ' +
                   '{type:"agent_run", agentSlug, prompt} — run that agent unattended; ' +
                   '{type:"db_row_add", path, cells, skipIfEmpty?} — append a row to an Amadeus database (skipIfEmpty = a cells key; the step is skipped when that value expands to empty); ' +
                   '{type:"db_row_edit", path, cells, rowId? | rowFrom? | match?} — update rows: rowId = one row; rowFrom = a relation column of the trigger row (each linked row is edited, available as {{target.X}}); match = {column, value} edits every row whose column equals value (value may be a template like {{row.id}}); none = the row the trigger matched. ' +
@@ -115,9 +133,9 @@ export const manageAutomationProvider: ToolProvider = {
                 items: {
                   type: 'object',
                   properties: {
-                    type: { type: 'string', enum: ['notify', 'agent_run', 'db_row_add', 'db_row_edit'] },
-                    title: { type: 'string', description: 'notify: inbox message title' },
-                    body: { type: 'string', description: 'notify: optional message body' },
+                    type: { type: 'string', enum: ['notify', 'remind', 'agent_run', 'db_row_add', 'db_row_edit'] },
+                    title: { type: 'string', description: 'notify/remind: message title' },
+                    body: { type: 'string', description: 'notify/remind: optional message body' },
                     agentSlug: { type: 'string', description: 'agent_run: agent to run unattended' },
                     prompt: { type: 'string', description: 'agent_run: task prompt for the agent' },
                     path: { type: 'string', description: 'db_row_add/db_row_edit: vault-relative .db path' },
@@ -202,7 +220,8 @@ export const manageAutomationProvider: ToolProvider = {
               ? ' (fires at the first check after that time each day; if Muse has active hours set, a firing outside them is delivered once they begin)'
               : ' (evaluated by Muse about every 5 minutes; Muse must be enabled in Settings)';
         const state = v.value.enabled ? '' : ' [disabled]';
-        return `${r.created ? 'Created' : 'Updated'} automation ${r.trigger.id}${state}: "${v.value.desc}" [${condSummary(c)}]${note}`;
+        const paused = v.value.enabled && triggerUnmet(r.trigger) ? ' It stays paused until Computer History is turned on in Settings.' : '';
+        return `${r.created ? 'Created' : 'Updated'} automation ${r.trigger.id}${state}: "${v.value.desc}" [${condSummary(c)}]${note}${paused}`;
       },
     },
   ],

@@ -1,6 +1,14 @@
 import { registerMessages } from '../../i18n'
 
 registerMessages({
+  'automation.cond.appOpened': { zh: '打开了 {app}', en: 'Opened {app}' },
+  'automation.cond.appUsed': { zh: '{app} 连续用了 {n} 分钟', en: '{app} used for {n} min' },
+  'automation.cond.returned': { zh: '离开电脑 {n} 分钟后回来', en: 'Back after {n} min away' },
+  'automation.cond.unlocked': { zh: '解锁或唤醒电脑', en: 'Computer unlocked or woke up' },
+  'automation.cond.calendarBefore': { zh: '日历事件开始前 {n} 分钟', en: '{n} min before a calendar event' },
+  'automation.step.remind': { zh: '直接提醒', en: 'Remind me directly' },
+  'automation.notice.computerOff': { zh: '电脑历史关了，这条规则暂停中。打开后自动恢复。', en: 'Computer history is off, so this rule is paused. It resumes when you turn it back on.' },
+  'automation.notice.sourceMissing': { zh: '触发来源不在了（插件可能已卸载），这条规则暂停中。', en: 'This trigger is no longer available (its plugin may be uninstalled), so the rule is paused.' },
   'automation.deleted': { zh: '已删除「{name}」', en: 'Deleted \u201c{name}\u201d' },
   'automation.deleteConfirm': { zh: '删除「{name}」？此操作无法撤销。', en: 'Delete \u201c{name}\u201d? This can\u2019t be undone.' },
   'automation.undo': { zh: '撤销', en: 'Undo' },

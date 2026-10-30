@@ -227,6 +227,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/special/automation/kick', access: 'deny-remote', src: 'routes/special.ts', why: 'kicks automations (design appendix C)' },
   { method: 'GET', path: '/agent/special/automation/runs', access: 'allow', src: 'routes/special.ts', why: 'automation runs' },
   { method: 'GET', path: '/agent/special/automation/sessions', access: 'allow', src: 'routes/special.ts', why: 'automation sessions' },
+  { method: 'GET', path: '/agent/special/automation/sources', access: 'allow', src: 'routes/special.ts', why: 'automation trigger source catalog' },
   { method: 'POST', path: '/agent/special/automation/triggers/:id/fire', access: 'deny-remote', src: 'routes/special.ts', why: 'fires an automation (design appendix C)' },
   { method: 'GET', path: '/agent/special/config', access: 'allow', src: 'routes/special.ts', why: 'renderer auth probe; remote callers get only on/off + two cadence values (P1-K10b projection)' },
   { method: 'POST', path: '/agent/special/config', access: 'deny-remote', src: 'routes/special.ts', why: 'special-agent config write (design appendix C)' },

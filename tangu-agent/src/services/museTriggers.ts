@@ -10,6 +10,7 @@
  *   at / every     —— 一次性本地时刻 / 锚点算术滚动间隔(只补最近一次)。定时类不吃 cooldown gate。
  * lastFiredAt 只在 Muse 周期真正启动后写回——被预算/让位闸挡住不烧 cooldown。
  * 该文件不进云同步(agentFileSync 白名单不含它)、不影响 agent 名册缓存(dirStamp 只看 config/SOUL)。
+ * 「当…」的校验 / 求值 / 摘要 / 下次时刻都查 triggerRegistry;老七种注册在本文件末尾,新源在 triggerSources.ts。
  */
 import { promises as fs } from 'node:fs';
 import { randomUUID, createHash } from 'node:crypto';
@@ -21,6 +22,9 @@ import { dropCursors, CURSOR_V, type DbCursor } from './dbCursors.js';
 import type { CellValue, DbColumn, DbFile, DbRow } from './amadeusDb.js';
 import { computeRowLookups, isBackLookup } from './dbLookup.js';
 import { evalRowFormulas } from './dbFormula.js';
+import { chSignalsVersion, computerHistoryOn, readChSignals, readComputerHistoryState, type ChSignal } from './computerHistory.js';
+import { getTriggerSource, listTriggerSources, NOTICE_COMPUTER_HISTORY_OFF, NOTICE_SOURCE_MISSING, registerTriggerSource, type ParsedCond, type TriggerEvalIo } from './triggerRegistry.js';
+import { CH_LOOKBACK_MS, registerLocalTriggerSources, type CalendarEventHit } from './triggerSources.js';
 
 export type MuseTriggerCond =
   | { type: 'file_chars_gte'; path: string; n: number }
@@ -62,7 +66,9 @@ export type MuseTriggerCond =
       equals?: string;
       /** 附加条件(与 equals AND;row_added / cell_changed 都可用),比的是**物化后**的模板字符串值(rowVars)。 */
       where?: DbWhere[];
-    };
+    }
+  /** 新触发源(电脑上 / 日历 / 插件):参数按注册表的 params 走,id 带点或 `plugin:` 前缀,和上面七种不相交。 */
+  | { type: `${string}.${string}` | `plugin:${string}`; params: Record<string, string | number> };
 
 /** db_changed 的附加条件一条:column = 列 id 或列名;eq/ne 要 value,empty/notempty 不要。
  *  比对的是行的模板字符串图(rowVars):数组列(多选/多选关联)是 `'a, b'` 形,eq 要按这个写。
@@ -132,6 +138,8 @@ export function parseLocalMinute(raw: string): Date | null {
  */
 export type ActionSpec =
   | { type: 'notify'; title: string; body?: string }
+  /** 直接提醒:不叫模型,弹系统通知 + Muse 私聊写一行;不转发到通道(「什么都不离开这台电脑」);Muse 运行时段外跳过、不补发。 */
+  | { type: 'remind'; title: string; body?: string }
   | { type: 'agent_run'; agentSlug: string; prompt: string }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
   /**
@@ -174,6 +182,11 @@ function parseActionsInput(raw: unknown, allowToolCall: boolean):
       if (!title) return { ok: false, error: 'notify 步骤需要 title' };
       const body = String(a.body || '').trim().slice(0, 4000);
       out.push({ type: 'notify', title, body: body || undefined });
+    } else if (type === 'remind') {
+      const title = String(a.title || '').trim().slice(0, 200);
+      if (!title) return { ok: false, error: 'remind needs a title' };
+      const body = String(a.body || '').trim().slice(0, 1000);
+      out.push({ type: 'remind', title, ...(body ? { body } : {}) });
     } else if (type === 'agent_run') {
       const slug = String(a.agentSlug || a.agent_slug || '').trim();
       const prompt = String(a.prompt || '').trim().slice(0, 500);
@@ -222,7 +235,7 @@ function parseActionsInput(raw: unknown, allowToolCall: boolean):
         });
       }
     } else {
-      return { ok: false, error: 'action.type 须为 notify/agent_run/tool_call/db_row_add/db_row_edit' };
+      return { ok: false, error: 'action.type 须为 notify/remind/agent_run/tool_call/db_row_add/db_row_edit' };
     }
   }
   return { ok: true, value: out };
@@ -279,6 +292,17 @@ export interface MuseTrigger {
   lastEventCursor?: EventCursor;
   /** 动作链(有则取代 agentSlug/Muse 旧语义;undefined=老路,兼容零迁移)。 */
   actions?: ActionSpec[];
+  /** 「只在」:时段 / 星期(可选,老规则没有)。 */
+  only?: TriggerOnly;
+  /** 每天最多触发几次(可选);firedDay 是当天计数,markTriggersFired 写。 */
+  maxPerDay?: number;
+  firedDay?: { day: string; n: number };
+}
+
+/** 时段是本地小时 [start, end),start > end = 跨夜;weekdays 0=周日(Date.getDay 口径)。 */
+export interface TriggerOnly {
+  hours?: { start: number; end: number };
+  weekdays?: number[];
 }
 
 export const triggersFile = (): string => join(agentsDir(), MUSE_AGENT_SLUG, 'triggers.json');
@@ -338,6 +362,10 @@ export async function markTriggersFired(ids: string[], at = new Date(), cursors?
       if (!ids.includes(t.id)) continue;
       t.lastFiredAt = iso;
       if (cursors?.[t.id]) t.lastEventCursor = cursors[t.id];
+      if (t.maxPerDay) {
+        const day = localDayKey(at);
+        t.firedDay = { day, n: t.firedDay?.day === day ? t.firedDay.n + 1 : 1 };
+      }
       if (t.cond?.type === 'at') t.enabled = false; // 一次性:触发即熄(留痕;改期+启用即复用)
     }
     await saveTriggers(list);
@@ -376,6 +404,10 @@ export interface TriggerInput {
   agent_slug?: unknown;
   enabled?: unknown;
   actions?: unknown;
+  /** 新触发源的参数(按注册表校验)。 */
+  params?: unknown;
+  only?: unknown;
+  max_per_day?: unknown;
 }
 
 export interface ValidatedTrigger {
@@ -387,6 +419,9 @@ export interface ValidatedTrigger {
   enabled: boolean;
   /** undefined=未提交(更新时保留旧值);null=显式清空;数组=设置。 */
   actions?: ActionSpec[] | null;
+  /** 同 actions:undefined=保留,null=清空(老客户端的整量 upsert 不带这两个键,不能抹掉)。 */
+  only?: TriggerOnly | null;
+  maxPerDay?: number | null;
 }
 
 const MAX_WHERE = 10;
@@ -437,60 +472,17 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
   const desc = String(input.desc || '').trim().slice(0, 200);
   if (!desc) return { ok: false, error: 'desc 必填(一句人话描述盯什么)' };
   const condType = String(input.cond_type || '');
+  const src = getTriggerSource(condType);
   let cond: MuseTriggerCond;
-  if (condType === 'file_chars_gte') {
-    const p = String(input.path || '').trim();
-    const n = Math.floor(Number(input.n));
-    if (!p || !Number.isFinite(n) || n <= 0) return { ok: false, error: 'file_chars_gte 需要 path 和正整数 n' };
-    cond = { type: 'file_chars_gte', path: resolveTriggerPath(p, opts.cwd), n };
-  } else if (condType === 'event_seen') {
-    const match = String(input.match || '').trim().slice(0, 120);
-    if (!match) return { ok: false, error: 'event_seen 需要 match 子串' };
-    cond = { type: 'event_seen', match };
-  } else if (condType === 'daily_at') {
-    const time = String(input.time || '').trim();
-    if (!/^\d{1,2}:\d{2}$/.test(time)) return { ok: false, error: 'daily_at 需要 time "HH:MM"' };
-    cond = { type: 'daily_at', time };
-  } else if (condType === 'at') {
-    const raw = String(input.datetime || '').trim().replace(' ', 'T');
-    const d = parseLocalMinute(raw);
-    if (!d) return { ok: false, error: 'at 需要 datetime "YYYY-MM-DD HH:mm"(本地时区)' };
-    if (d.getTime() < Date.now() - 5 * 60_000) return { ok: false, error: 'at 时刻已过去' };
-    if (d.getTime() > Date.now() + 366 * 86_400_000) return { ok: false, error: 'at 最远一年内' };
-    cond = { type: 'at', datetime: raw };
-  } else if (condType === 'every') {
-    const interval = String(input.interval || '').trim();
-    if (!parseEveryInterval(interval)) return { ok: false, error: 'every 需要 interval 如 "30m"/"2h"/"1d"(≥15m ≤365d)' };
-    cond = { type: 'every', interval };
-  } else if (condType === 'manual') {
-    cond = { type: 'manual' };
-  } else if (condType === 'db_changed') {
-    const p = normalizeVaultRel(String(input.path || ''));
-    if (!p || !/\.db$/i.test(p)) return { ok: false, error: 'db_changed 需要 path(vault 相对的 .db 文件)' };
-    if (p.split('/').includes('..')) return { ok: false, error: 'db_changed 的 path 不能越出 vault' };
-    const event = String(input.event || '');
-    if (event !== 'row_added' && event !== 'cell_changed') return { ok: false, error: 'db_changed 的 event 须为 row_added/cell_changed' };
-    const vault = String(input.vault || '').trim() || opts.vaultPath || '';
-    if (!vault) return { ok: false, error: 'db_changed 需要 vault(建规则时的库根路径)' };
-    const pw = parseWhereInput(input.where);
-    if (!pw.ok) return pw;
-    const whereExtra = pw.value ? { where: pw.value } : {};
-    if (event === 'cell_changed') {
-      const pc = parseColumnIds(input.column_id, input.column_ids);
-      if (!pc.ok) return pc;
-      const ids = pc.value;
-      const equals = String(input.equals ?? '').trim().slice(0, 200);
-      // 单列只落 columnId(存量形状不变);多列 columnId=首列 + columnIds=全部。
-      cond = {
-        type: 'db_changed', path: p, vault, event, columnId: ids[0],
-        ...(ids.length > 1 ? { columnIds: ids } : {}),
-        equals: equals || undefined, ...whereExtra,
-      };
-    } else {
-      cond = { type: 'db_changed', path: p, vault, event, ...whereExtra };
-    }
+  if (src) {
+    const pc = src.parse(input, opts);
+    if (!pc.ok) return pc;
+    cond = pc.cond;
+  } else if (/^plugin:/.test(condType) && input.params && typeof input.params === 'object') {
+    // 插件卸载后规则还在:启停是整量 upsert,校验不许挡(关规则永远不许被挡住),原样留着,插件回来即恢复。
+    cond = { type: condType as `plugin:${string}`, params: input.params as Record<string, string | number> };
   } else {
-    return { ok: false, error: 'cond_type 须为 file_chars_gte/event_seen/daily_at/at/every/manual/db_changed' };
+    return { ok: false, error: `cond_type 须为 ${listTriggerSources().map((x) => x.id).join('/')}` };
   }
   let agentSlug = String(input.agent_slug || '').trim() || undefined;
   if (agentSlug === MUSE_AGENT_SLUG) agentSlug = undefined; // 'muse' 归一为缺省=老路
@@ -507,13 +499,13 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
   const pureDbChain = cond.type === 'db_changed' && !hasLLM && !!actions?.length;
   let cooldownHours = pureDbChain
     ? (Number.isFinite(rawCd) && rawCd >= 0 ? Math.min(24 * 30, rawCd) : 0)
-    : (Number.isFinite(rawCd) && rawCd > 0 ? Math.min(24 * 30, rawCd) : 24);
+    : (Number.isFinite(rawCd) && rawCd > 0 ? Math.min(24 * 30, rawCd) : src?.defaultCooldownHours ?? 24);
   if (hasLLM) cooldownHours = Math.max(1, cooldownHours);
   else if (actions?.length && !pureDbChain) cooldownHours = Math.max(0.25, cooldownHours);
   if (cond.type === 'manual') {
     // 用户点一次跑一次;冷却会把第二次点击静默吞成「没反应」。防重入由服务端单飞锁负责,不是冷却。
     cooldownHours = 0;
-  } else if (cond.type === 'at' || cond.type === 'every' || cond.type === 'daily_at') {
+  } else if (src?.timed) {
     // 定时类自带节奏(at 一次性/every 锚点算术/daily_at 每日钉锚),cooldown 反而会吞触发
     // (如 every 30m × cooldown 24h;daily_at × 24h 会把"每天"吞成隔天)。evaluate 侧同款豁免兜存量。
     cooldownHours = 0;
@@ -521,6 +513,10 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
       return { ok: false, error: 'agent 动作的 every 下限 1h(无人值守自激护栏)' };
     }
   }
+  const po = parseOnlyInput(input.only);
+  if (!po.ok) return po;
+  const pm = parseMaxPerDay(input.max_per_day);
+  if (!pm.ok) return pm;
   return {
     ok: true,
     value: {
@@ -531,8 +527,40 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
       agentSlug,
       enabled: input.enabled === undefined ? true : !!input.enabled,
       actions,
+      ...(po.value !== undefined ? { only: po.value } : {}),
+      ...(pm.value !== undefined ? { maxPerDay: pm.value } : {}),
     },
   };
+}
+
+/** only 入参:缺席 → 保留;null / 空 → 清空。小时 0–24 整数,星期 0–6 去重排序(排序让整量 upsert 的 JSON 稳定)。 */
+function parseOnlyInput(raw: unknown): { ok: true; value: TriggerOnly | null | undefined } | { ok: false; error: string } {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (raw === null) return { ok: true, value: null };
+  if (typeof raw !== 'object' || Array.isArray(raw)) return { ok: false, error: 'only must be an object' };
+  const o = raw as { hours?: any; weekdays?: any };
+  const out: TriggerOnly = {};
+  if (o.hours !== undefined && o.hours !== null) {
+    const [start, end] = [Number(o.hours.start), Number(o.hours.end)];
+    const ok = (n: number): boolean => Number.isInteger(n) && n >= 0 && n <= 24;
+    if (!ok(start) || !ok(end)) return { ok: false, error: 'only.hours needs start and end (integers 0-24)' };
+    out.hours = { start, end };
+  }
+  if (o.weekdays !== undefined && o.weekdays !== null) {
+    if (!Array.isArray(o.weekdays) || o.weekdays.some((d: unknown) => !Number.isInteger(d) || (d as number) < 0 || (d as number) > 6)) {
+      return { ok: false, error: 'only.weekdays must be integers 0-6 (0=Sunday)' };
+    }
+    if (o.weekdays.length) out.weekdays = [...new Set<number>(o.weekdays)].sort((a, b) => a - b);
+  }
+  return { ok: true, value: Object.keys(out).length ? out : null };
+}
+
+function parseMaxPerDay(raw: unknown): { ok: true; value: number | null | undefined } | { ok: false; error: string } {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (raw === null || raw === 0) return { ok: true, value: null };
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 50) return { ok: false, error: 'max_per_day must be an integer 1-50' };
+  return { ok: true, value: n };
 }
 
 /**
@@ -621,6 +649,11 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
       // actions 缺席=保留(旧客户端启停翻转是整量 upsert,不带此键——不加保留会把动作链抹掉,saveAgent 同款教训);
       // null=显式清空;数组=覆写。
       if (v.actions !== undefined) cur.actions = v.actions ?? undefined;
+      if (v.only !== undefined) cur.only = v.only ?? undefined;
+      if (v.maxPerDay !== undefined) {
+        cur.maxPerDay = v.maxPerDay ?? undefined;
+        if (!cur.maxPerDay) delete cur.firedDay;
+      }
       await saveTriggers(list);
       return { ok: true as const, trigger: cur, created: false };
     }
@@ -640,6 +673,8 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
       createdAt: new Date().toISOString(),
       agentSlug: v.agentSlug,
       actions: v.actions ?? undefined,
+      ...(v.only ? { only: v.only } : {}),
+      ...(v.maxPerDay ? { maxPerDay: v.maxPerDay } : {}),
     };
     list.push(rule);
     await saveTriggers(list);
@@ -739,6 +774,14 @@ export interface EvaluateEnv {
   outNotices?: Record<string, string>;
   /** 单规则评估失败的留痕(缺 = 不打)。 */
   log?: (msg: string) => void;
+  /** 电脑历史开关(测试注入;缺 = 现读 state.json + 桌面配置两道闸)。 */
+  computerHistoryOn?: boolean;
+  /** 电脑历史信号(测试注入;缺 = readChSignals)。 */
+  readChSignals?: (from: number, to: number) => Promise<ChSignal[] | null>;
+  /** 信号的版本(测试注入;缺 = chSignalsVersion)。 */
+  chSignalsVersion?: () => string;
+  /** 日历事件(测试注入;缺 = 现读本机库)。 */
+  calendarEvents?: () => Promise<CalendarEventHit[]>;
 }
 
 /** 评估只需要表的这一点结构(避免 museTriggers 依赖引擎的 db 模块,单测好注入)。
@@ -1057,6 +1100,137 @@ export function cursorFor(c: DbChangedCond, db: DbLike): DbCursor | null {
   return { ...idy, event: 'cell_changed', cols, cells };
 }
 
+/** db_changed 的求值(搬自 evaluateTriggers,逻辑不变;`continue` 换成 return)。 */
+async function evaluateDbChanged(t: MuseTrigger, io: TriggerEvalIo): Promise<void> {
+  const c = t.cond as DbChangedCond;
+  const env = io.env;
+  // 切库保护:规则文件是全局的,path 却是库内相对路径——不钉 vault 就会静默作用到另一个库
+  // 里同名的表。不一致时整条跳过(不评估、不推游标),换回原库即照常工作。
+  // ⚠️ H3(2026-09-02):从前是**静默** continue —— 无日志、无状态位,面板照显示「已启用」。
+  // 而 vault 取的是配置里的原样字符串:用户把库改名/移动后重开、或换一种写法(多一个尾斜杠)
+  // → 全部 db_changed 规则永久冻死且零信号,在面板里编辑或启停都修不好(构建器钉回建规则时的 vault),
+  // 只能删了重建。现在:sameVault 做一次温和归一(尾斜杠/反斜杠),仍不符则给**不停用**的可见状态位。
+  if (env.currentVault && c.vault && !sameVault(env.currentVault, c.vault)) {
+    if (env.outNotices) env.outNotices[t.id] = `本规则钉的库是「${c.vault}」,当前打开的是「${env.currentVault}」—— 暂停评估(切回该库即恢复)`;
+    return;
+  }
+  const db = env.readDbFile ? await env.readDbFile(c.path) : null; // 坏文件 → 抛 → 下面 catch 留痕、不推游标
+  if (!db) { // 表没了(可能只是暂时不在:同步中 / 刚被移走)
+    if (env.outNotices) env.outNotices[t.id] = `表「${c.path}」当前读不到 —— 暂停评估(表回来即恢复)`;
+    return;
+  }
+  if (db.source) { // 「笔记视图」(行是笔记不是 JSON 行),不是能盯的多维表
+    if (env.outNotices) env.outNotices[t.id] = `「${c.path}」是笔记视图(行来自文件夹),不能作为 db_changed 的数据源`;
+    return;
+  }
+  // where 的列先按当前 schema 解析成列 id:解析不到 = **配置性**错误 → 抛(整条跳过、游标冻住)。
+  // 从前折成 '' 比对:empty/ne 失败开放、eq/notempty 静默拒绝,两种都把事件当成已消费。
+  // where 的 column 允许写列名(工具描述也这么写),所以用户改个列名就会走到这里 —— 冻住的规则由
+  // TriggerConfigError 带出去、停用+写 disabledReason,不再只进引擎日志(P3 的不对称由信号覆盖)。
+  const where: DbWhere[] = (c.where ?? []).map((w) => {
+    try { return { ...w, column: resolveLikeColumn(db, w.column).id }; }
+    // ⚠️ M7(2026-09-02 订正上一轮):这里是**暂时性**错误,不是配置性错误 —— 不许自动停用。
+    // resolveLikeColumn 对「两列同名」也抛,而「先加新名列、灌完数据再删旧列」是最常见的列迁移手法:
+    // 重名窗口内任意一次 tick 就会把所有按列名写 where 的规则永久停用,迁移做完也不自愈。
+    // 仍然 fail-closed(整条跳过、游标冻住、绝不误触发),只是改成给可见状态位而非拉闸。
+    catch (e: any) { throw new TriggerTransientError(`where 引用的列暂时解析不到:${e?.message || e}`); }
+  });
+  const cur = env.dbCursors?.[t.id];
+  const full = cursorFor(c, db);
+  // cell_changed 的监听列必须**全部**还在、且**全是落盘列**(见 invalidWatchCols)。
+  // 少一列 = 配置错误(与「where 引用的列无效」同一条教义),抛 → 下面 catch 留痕 + 整条跳过 + **游标冻住**。
+  // 从前只要求「至少一列还在」(codex 抓的):盯 [A,B] 删掉 B,游标 cols 没变仍判相符,而所有原先 B 非空的行
+  // key 从「a␟b」塌成「a␟」→ 无 equals 时整表成候选,纯 DB 动作链一次跑完全表。
+  // ⚠️ **不再是「冻住等列回来」**:DatabaseEmbed 的 delCol 连 cell 一起删、addCol 生成随机新 id,被盯的列 id
+  // 永远回不来 —— 上一轮「列是迁移中间态,列回来就续上」的理由被证伪。fail-closed 的方向保留(绝不误触发),
+  // 但错误经 env.outIssues 带给 drain → 停用 + disabledReason,用户在面板看得见(不看引擎日志也能发现)。
+  if (c.event === 'cell_changed') {
+    const bad = invalidWatchCols(c, db);
+    if (bad) throw new TriggerConfigError(bad);
+  }
+  // 游标身份不符(换表/换事件/换库/换列/旧版本)一律只重播种:拿旧快照比新配置,每行都「变了」,
+  // 那是满表误触发不是事件。**所有 event 都过这道闸**(row_added 从前只判「有没有 rowIds」)。
+  const mismatch = cursorMismatch(cur, c);
+  if (mismatch) {
+    env.log?.(`规则 ${t.id} 的游标与当前条件不符(${mismatch}),已重播种(本轮不触发)`);
+    if (env.outDbCursors && full) env.outDbCursors[t.id] = full;
+    return;
+  }
+  // 候选行 = 相对游标「新增」(row_added)/「那列变了」(cell_changed)的**全部**行;
+  // 再按 equals + where(物化后的字符串值)过滤成命中行。
+  let candidates: DbLike['rows'];
+  if (c.event === 'row_added') {
+    if (!cur?.rowIds) {
+      // 首次见到这条规则:只播种,绝不把满表现有行当成"刚加的"
+      if (env.outDbCursors && full) env.outDbCursors[t.id] = full;
+      return;
+    }
+    const known = new Set(cur.rowIds);
+    candidates = db.rows.filter((r) => !known.has(r.id));
+  } else {
+    const cols = watchedCols(c);
+    if (!cur?.cells) { // 首次:只播种
+      if (env.outDbCursors && full) env.outDbCursors[t.id] = full;
+      return;
+    }
+    const nowCells = full?.cells ?? {};
+    candidates = db.rows.filter((r) => {
+      const now2 = nowCells[r.id];
+      const was = cur!.cells?.[r.id];
+      if (was === undefined) return false; // 新行归 row_added 管,不在这儿重复报
+      if (now2 === was) return false;
+      if (!c.equals) return true;
+      // equals 按**列**比:某个变了的列新值恰等于 equals 才算(复合串整体比 equals 永远不等)。
+      const a = keyParts(was, cols.length);
+      const b = keyParts(now2, cols.length);
+      return b.some((k, i) => k !== a[i] && k === c.equals);
+    });
+  }
+  if (!candidates.length) {
+    // 没有候选 = 纯基线推进(已删行掉出游标);推了才不会下一轮拿更旧的快照比。
+    if (env.outDbCursors && full) env.outDbCursors[t.id] = full;
+    return;
+  }
+  // 依赖表读进缓存:缺/坏 → 抛 → 本轮**什么都不推、什么都不报**(失败即关),下轮原样重试。
+  const cache = await preloadLookupDbs(db, env.readDbFile ?? (async () => null));
+  const getDb = (p: string): DbLike | null => cache.get(p) ?? null;
+  const today = env.today;
+  const hits: TriggerRow[] = [];
+  for (const r of candidates) {
+    const mat = materializeRowSync(db, r, getDb, today ? { today } : {});
+    const trow = triggerRowOf(db, r.id, mat);
+    if (where.length && !where.every((w) => whereHolds(w, trow.cells))) continue;
+    hits.push(trow);
+  }
+  // 游标消费:
+  //   纯动作链 / Muse 唤醒类 —— 一次消费**全部**候选行(命中与否):没命中的行是「变了但条件不符」,不推的话下一轮
+  //   拿更旧的快照比,结论必错;命中的行每行 push 一次,同一 tick 里全部跑动作(E7 单 tick 排空)。
+  //   含 LLM 的规则(旧式 agentSlug / 动作链含 agent_run)—— **每 tick 只取一行、游标只消费那一行**:
+  //   第一个 hit 起了常驻会话后,余下 hit 会因 isRunning 被拒;若游标已把整表吞了,那 N-1 行就永久丢了。
+  //   其余命中行留在游标外(row_added 剔出 rowIds;cell_changed 回填旧值),下一 tick 再成候选。
+  // 调用方拿到的游标是 pending 的:动作被接受才提交(muse.ts / automationDrain 的 S0 语义)。
+  const hasLLM = (!!t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG) || !!t.actions?.some((a) => a.type === 'agent_run');
+  const taken = hasLLM ? hits.slice(0, 1) : hits;
+  /** 没轮到处理的命中行 id(只可能出自「含 LLM 每 tick 一行」那条闸)—— 必须留在游标外,下个 tick 再成候选。 */
+  const restIds = hits.slice(taken.length).map((h) => h.id);
+  if (env.outDbCursors && full) {
+    let next = full;
+    if (restIds.length) {
+      const rest = new Set(restIds);
+      // ⚠️ 身份三件套(path/event/vault)与 cols 必须原样跟着走:少写一个字段 = 下一轮 cursorMismatch 判不符 → 白重播种。
+      if (c.event === 'row_added') next = { ...full, rowIds: (full.rowIds ?? []).filter((id) => !rest.has(id)) };
+      else {
+        const cells = { ...(full.cells ?? {}) };
+        for (const id of rest) cells[id] = cur?.cells?.[id] ?? '';
+        next = { ...full, cells };
+      }
+    }
+    env.outDbCursors[t.id] = next;
+  }
+  // ⚠️ hit 里 push 的必须是同一个 t 对象引用(muse.ts 按 `includes` 引用相等分流 agentFired/museFired)。
+  for (const trow of taken) io.hit({ dbPath: c.path, row: trow });
+}
+
 /** 行内容 hash(游标用;截 12 位够区分同分钟内的不同行)。 */
 function lineHash(line: string): string {
   return createHash('sha1').update(line).digest('hex').slice(0, 12);
@@ -1082,201 +1256,88 @@ function toActivityTs(d: Date): string {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}${p(d.getHours())}${p(d.getMinutes())}`;
 }
 
+/** 本地日期键(每天最多几次按它数)。 */
+function localDayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** 「只在」这道闸:时段(支持跨夜,与 Muse 运行时段同口径)、星期、每天最多几次。没填 = 放行。 */
+function onlyAllows(t: MuseTrigger, now: Date): boolean {
+  const o = t.only;
+  if (o?.weekdays?.length && !o.weekdays.includes(now.getDay())) return false;
+  if (o?.hours && o.hours.start !== o.hours.end) {
+    const h = now.getHours();
+    const { start, end } = o.hours;
+    if (!(start < end ? h >= start && h < end : h >= start || h < end)) return false;
+  }
+  return !(t.maxPerDay && t.firedDay?.day === localDayKey(now) && t.firedDay.n >= t.maxPerDay);
+}
+
+/** 规则为什么暂停着(不停用,条件回来自愈):触发源没了 / 电脑历史关了。返回 notice code,没事 = null。
+ *  ⚠️ 不走 disableTriggers:那是引擎拉的刹车,要用户手动松;这里开回来就该接着跑。 */
+export function triggerUnmet(t: Pick<MuseTrigger, 'cond'>, computerOn?: boolean): string | null {
+  const src = getTriggerSource(t.cond?.type);
+  if (!src) return NOTICE_SOURCE_MISSING;
+  if (src.requires?.includes('computer_history') && !(computerOn ?? computerHistoryOn(readComputerHistoryState()))) return NOTICE_COMPUTER_HISTORY_OFF;
+  return null;
+}
+
+/** 单次评估内只读一次(同一轮所有电脑 / 日历规则共用)。 */
+function once<T>(fn: () => Promise<T>): () => Promise<T> {
+  let p: Promise<T> | undefined;
+  return () => (p ??= fn());
+}
+
+async function defaultCalendarEvents(): Promise<CalendarEventHit[]> {
+  const { localCalendarRows } = await import('../tools/builtin/amadeus.js');
+  const out: CalendarEventHit[] = [];
+  for (const e of await localCalendarRows()) {
+    const start = e.allDay ? null : parseLocalMinute(e.start);
+    if (!start) continue; // 全天事件没有「开始前」
+    const row = triggerRowOf({ columns: e.columns, rows: [] }, e.row.id, e.row.cells);
+    out.push({ key: `${e.rel}#${e.row.id}`, startMs: start.getTime(), ctx: { dbPath: e.rel, row } });
+  }
+  return out;
+}
+
 /** 评估到期规则(纯读,不写回)。返回本轮命中的规则列表。 */
 export async function evaluateTriggers(triggers: MuseTrigger[], env: EvaluateEnv = {}): Promise<MuseTrigger[]> {
   const now = env.now ?? new Date();
-  const readChars = env.readFileChars ?? defaultReadFileChars;
-  const lines = env.activityLines ?? [];
   const fired: MuseTrigger[] = [];
-  // 非 db 规则一次命中一条(ctx 空);db 规则在自己的分支里逐行 push(带 ctx)。两种都进 outHits,与 fired 一一对应。
-  const hit = (t: MuseTrigger): void => { fired.push(t); env.outHits?.push({ id: t.id, ctx: {} }); };
+  const computerOn = env.computerHistoryOn;
+  // 本轮共用一次读取,但清除 / 关闭 / 改排除表之后不许接着用:别的规则读库、读日历的间隙里用户可能刚清完。
+  let chRead: { version: string; signals: Promise<ChSignal[] | null> } | null = null;
+  const signals = (): Promise<ChSignal[] | null> => {
+    const version = (env.chSignalsVersion ?? chSignalsVersion)();
+    if (chRead?.version !== version) chRead = { version, signals: (env.readChSignals ?? readChSignals)(now.getTime() - CH_LOOKBACK_MS, now.getTime()) };
+    return chRead.signals;
+  };
+  const calendarEvents = once(env.calendarEvents ?? defaultCalendarEvents);
   for (const t of triggers) {
     if (!t.enabled) continue;
+    const unmet = triggerUnmet(t, computerOn);
+    if (unmet) {
+      if (env.outNotices) env.outNotices[t.id] = unmet;
+      continue;
+    }
+    const src = getTriggerSource(t.cond.type)!;
     const lastMs = t.lastFiredAt ? Date.parse(t.lastFiredAt) : 0;
-    const c = t.cond;
-    if (c.type === 'manual') continue; // 手动类只由 fire 端点起跑,巡检永不命中
     // cooldown 只约束事件/文件类;定时类自带时刻语义,gate 会吞触发
     // (存量规则可能带 cooldown=24 的 daily_at——validate 已改强制 0,这里兜旧数据)。
-    const timed = c.type === 'daily_at' || c.type === 'at' || c.type === 'every';
     const cooldownMs = Math.max(0, Number(t.cooldownHours) || 0) * 3600_000;
-    if (!timed && lastMs && now.getTime() - lastMs < cooldownMs) continue;
+    if (!src.timed && lastMs && now.getTime() - lastMs < cooldownMs) continue;
+    if (!onlyAllows(t, now)) continue;
+    // 一次命中一条;db 规则逐行 hit(带 ctx)。fired 与 outHits 一一对应。
+    // 每日次数按规则写回、一轮记一次,所以设了上限的规则一轮只认第一次命中,否则同轮多行就越过上限了。
+    let hits = 0;
+    const hit = (ctx?: TriggerContext): void => {
+      if (t.maxPerDay && hits++) return;
+      fired.push(t);
+      if (ctx && env.outContexts) env.outContexts[t.id] = ctx;
+      env.outHits?.push({ id: t.id, ctx: ctx ?? {} });
+    };
     try {
-      if (c.type === 'file_chars_gte') {
-        const chars = await readChars(c.path);
-        if (chars !== null && chars >= c.n) hit(t);
-      } else if (c.type === 'event_seen') {
-        // 只看「上次触发(或规则创建)之后」的行——不吃存量旧事件。
-        const sinceIso = t.lastFiredAt || t.createdAt || '';
-        const since = sinceIso ? toActivityTs(new Date(sinceIso)) : '';
-        const cur = t.lastEventCursor;
-        const hits = lines.filter((l) => {
-          if (!l.includes(c.match)) return false;
-          if (since && lineTs(l) < since) return false;
-          // 精确游标:since 是分钟粒度,冷却结束后同分钟旧行会被重复消费——按上次消费行的 ts+hash 排除。
-          if (cur && (lineTs(l) < cur.ts || (lineTs(l) === cur.ts && lineHash(l) === cur.hash))) return false;
-          // 自激防护:本规则自己的无人值守 run 产生的活动行带 o=<规则id>,不吃。
-          if (l.includes(` o=${t.id}`)) return false;
-          return true;
-        });
-        if (hits.length) {
-          hit(t);
-          const last = hits[hits.length - 1];
-          if (env.outCursors) env.outCursors[t.id] = { ts: lineTs(last), hash: lineHash(last) };
-        }
-      } else if (c.type === 'daily_at') {
-        const m = /^(\d{1,2}):(\d{2})$/.exec(String(c.time || ''));
-        if (!m) continue;
-        const due = new Date(now);
-        due.setHours(Number(m[1]), Number(m[2]), 0, 0);
-        // 钉锚:今天已过点、今天这个锚点还没触过、且规则在锚点前已存在。
-        // (旧「距上次>20h」窗会让触发时刻按 lastFired 漂移;createdAt 闸防"晚上建每天早8点"当场补发。)
-        const createdMs = Date.parse(t.createdAt || '') || 0;
-        if (now >= due && lastMs < due.getTime() && createdMs < due.getTime()) hit(t);
-      } else if (c.type === 'at') {
-        const due = parseLocalMinute(c.datetime);
-        // 一次性:过点且从未在点后触过(markTriggersFired 会顺手 enabled=false,这里的 lastMs 判断兜双保险)。
-        if (due && now.getTime() >= due.getTime() && lastMs < due.getTime()) hit(t);
-      } else if (c.type === 'db_changed') {
-        // 切库保护:规则文件是全局的,path 却是库内相对路径——不钉 vault 就会静默作用到另一个库
-        // 里同名的表。不一致时整条跳过(不评估、不推游标),换回原库即照常工作。
-        // ⚠️ H3(2026-09-02):从前是**静默** continue —— 无日志、无状态位,面板照显示「已启用」。
-        // 而 vault 取的是配置里的原样字符串:用户把库改名/移动后重开、或换一种写法(多一个尾斜杠)
-        // → 全部 db_changed 规则永久冻死且零信号,在面板里编辑或启停都修不好(构建器钉回建规则时的 vault),
-        // 只能删了重建。现在:sameVault 做一次温和归一(尾斜杠/反斜杠),仍不符则给**不停用**的可见状态位。
-        if (env.currentVault && c.vault && !sameVault(env.currentVault, c.vault)) {
-          if (env.outNotices) env.outNotices[t.id] = `本规则钉的库是「${c.vault}」,当前打开的是「${env.currentVault}」—— 暂停评估(切回该库即恢复)`;
-          continue;
-        }
-        const db = env.readDbFile ? await env.readDbFile(c.path) : null; // 坏文件 → 抛 → 下面 catch 留痕、不推游标
-        if (!db) { // 表没了(可能只是暂时不在:同步中 / 刚被移走)
-          if (env.outNotices) env.outNotices[t.id] = `表「${c.path}」当前读不到 —— 暂停评估(表回来即恢复)`;
-          continue;
-        }
-        if (db.source) { // 「笔记视图」(行是笔记不是 JSON 行),不是能盯的多维表
-          if (env.outNotices) env.outNotices[t.id] = `「${c.path}」是笔记视图(行来自文件夹),不能作为 db_changed 的数据源`;
-          continue;
-        }
-        // where 的列先按当前 schema 解析成列 id:解析不到 = **配置性**错误 → 抛(整条跳过、游标冻住)。
-        // 从前折成 '' 比对:empty/ne 失败开放、eq/notempty 静默拒绝,两种都把事件当成已消费。
-        // where 的 column 允许写列名(工具描述也这么写),所以用户改个列名就会走到这里 —— 冻住的规则由
-        // TriggerConfigError 带出去、停用+写 disabledReason,不再只进引擎日志(P3 的不对称由信号覆盖)。
-        const where: DbWhere[] = (c.where ?? []).map((w) => {
-          try { return { ...w, column: resolveLikeColumn(db, w.column).id }; }
-          // ⚠️ M7(2026-09-02 订正上一轮):这里是**暂时性**错误,不是配置性错误 —— 不许自动停用。
-          // resolveLikeColumn 对「两列同名」也抛,而「先加新名列、灌完数据再删旧列」是最常见的列迁移手法:
-          // 重名窗口内任意一次 tick 就会把所有按列名写 where 的规则永久停用,迁移做完也不自愈。
-          // 仍然 fail-closed(整条跳过、游标冻住、绝不误触发),只是改成给可见状态位而非拉闸。
-          catch (e: any) { throw new TriggerTransientError(`where 引用的列暂时解析不到:${e?.message || e}`); }
-        });
-        const cur = env.dbCursors?.[t.id];
-        const full = cursorFor(c, db);
-        // cell_changed 的监听列必须**全部**还在、且**全是落盘列**(见 invalidWatchCols)。
-        // 少一列 = 配置错误(与「where 引用的列无效」同一条教义),抛 → 下面 catch 留痕 + 整条跳过 + **游标冻住**。
-        // 从前只要求「至少一列还在」(codex 抓的):盯 [A,B] 删掉 B,游标 cols 没变仍判相符,而所有原先 B 非空的行
-        // key 从「a␟b」塌成「a␟」→ 无 equals 时整表成候选,纯 DB 动作链一次跑完全表。
-        // ⚠️ **不再是「冻住等列回来」**:DatabaseEmbed 的 delCol 连 cell 一起删、addCol 生成随机新 id,被盯的列 id
-        // 永远回不来 —— 上一轮「列是迁移中间态,列回来就续上」的理由被证伪。fail-closed 的方向保留(绝不误触发),
-        // 但错误经 env.outIssues 带给 drain → 停用 + disabledReason,用户在面板看得见(不看引擎日志也能发现)。
-        if (c.event === 'cell_changed') {
-          const bad = invalidWatchCols(c, db);
-          if (bad) throw new TriggerConfigError(bad);
-        }
-        // 游标身份不符(换表/换事件/换库/换列/旧版本)一律只重播种:拿旧快照比新配置,每行都「变了」,
-        // 那是满表误触发不是事件。**所有 event 都过这道闸**(row_added 从前只判「有没有 rowIds」)。
-        const mismatch = cursorMismatch(cur, c);
-        if (mismatch) {
-          env.log?.(`规则 ${t.id} 的游标与当前条件不符(${mismatch}),已重播种(本轮不触发)`);
-          if (env.outDbCursors && full) env.outDbCursors[t.id] = full;
-          continue;
-        }
-        // 候选行 = 相对游标「新增」(row_added)/「那列变了」(cell_changed)的**全部**行;
-        // 再按 equals + where(物化后的字符串值)过滤成命中行。
-        let candidates: DbLike['rows'];
-        if (c.event === 'row_added') {
-          if (!cur?.rowIds) {
-            // 首次见到这条规则:只播种,绝不把满表现有行当成"刚加的"
-            if (env.outDbCursors && full) env.outDbCursors[t.id] = full;
-            continue;
-          }
-          const known = new Set(cur.rowIds);
-          candidates = db.rows.filter((r) => !known.has(r.id));
-        } else {
-          const cols = watchedCols(c);
-          if (!cur?.cells) { // 首次:只播种
-            if (env.outDbCursors && full) env.outDbCursors[t.id] = full;
-            continue;
-          }
-          const nowCells = full?.cells ?? {};
-          candidates = db.rows.filter((r) => {
-            const now2 = nowCells[r.id];
-            const was = cur!.cells?.[r.id];
-            if (was === undefined) return false; // 新行归 row_added 管,不在这儿重复报
-            if (now2 === was) return false;
-            if (!c.equals) return true;
-            // equals 按**列**比:某个变了的列新值恰等于 equals 才算(复合串整体比 equals 永远不等)。
-            const a = keyParts(was, cols.length);
-            const b = keyParts(now2, cols.length);
-            return b.some((k, i) => k !== a[i] && k === c.equals);
-          });
-        }
-        if (!candidates.length) {
-          // 没有候选 = 纯基线推进(已删行掉出游标);推了才不会下一轮拿更旧的快照比。
-          if (env.outDbCursors && full) env.outDbCursors[t.id] = full;
-          continue;
-        }
-        // 依赖表读进缓存:缺/坏 → 抛 → 本轮**什么都不推、什么都不报**(失败即关),下轮原样重试。
-        const cache = await preloadLookupDbs(db, env.readDbFile ?? (async () => null));
-        const getDb = (p: string): DbLike | null => cache.get(p) ?? null;
-        const today = env.today;
-        const hits: TriggerRow[] = [];
-        for (const r of candidates) {
-          const mat = materializeRowSync(db, r, getDb, today ? { today } : {});
-          const trow = triggerRowOf(db, r.id, mat);
-          if (where.length && !where.every((w) => whereHolds(w, trow.cells))) continue;
-          hits.push(trow);
-        }
-        // 游标消费:
-        //   纯动作链 / Muse 唤醒类 —— 一次消费**全部**候选行(命中与否):没命中的行是「变了但条件不符」,不推的话下一轮
-        //   拿更旧的快照比,结论必错;命中的行每行 push 一次,同一 tick 里全部跑动作(E7 单 tick 排空)。
-        //   含 LLM 的规则(旧式 agentSlug / 动作链含 agent_run)—— **每 tick 只取一行、游标只消费那一行**:
-        //   第一个 hit 起了常驻会话后,余下 hit 会因 isRunning 被拒;若游标已把整表吞了,那 N-1 行就永久丢了。
-        //   其余命中行留在游标外(row_added 剔出 rowIds;cell_changed 回填旧值),下一 tick 再成候选。
-        // 调用方拿到的游标是 pending 的:动作被接受才提交(muse.ts / automationDrain 的 S0 语义)。
-        const hasLLM = (!!t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG) || !!t.actions?.some((a) => a.type === 'agent_run');
-        const taken = hasLLM ? hits.slice(0, 1) : hits;
-        /** 没轮到处理的命中行 id(只可能出自「含 LLM 每 tick 一行」那条闸)—— 必须留在游标外,下个 tick 再成候选。 */
-        const restIds = hits.slice(taken.length).map((h) => h.id);
-        if (env.outDbCursors && full) {
-          let next = full;
-          if (restIds.length) {
-            const rest = new Set(restIds);
-            // ⚠️ 身份三件套(path/event/vault)与 cols 必须原样跟着走:少写一个字段 = 下一轮 cursorMismatch 判不符 → 白重播种。
-            if (c.event === 'row_added') next = { ...full, rowIds: (full.rowIds ?? []).filter((id) => !rest.has(id)) };
-            else {
-              const cells = { ...(full.cells ?? {}) };
-              for (const id of rest) cells[id] = cur?.cells?.[id] ?? '';
-              next = { ...full, cells };
-            }
-          }
-          env.outDbCursors[t.id] = next;
-        }
-        for (const trow of taken) {
-          // ⚠️ push 的必须是同一个 t 对象引用(muse.ts 按 `includes` 引用相等分流 agentFired/museFired)。
-          fired.push(t);
-          const ctx: TriggerContext = { dbPath: c.path, row: trow };
-          if (env.outContexts) env.outContexts[t.id] = ctx;
-          env.outHits?.push({ id: t.id, ctx });
-        }
-      } else if (c.type === 'every') {
-        const ivl = parseEveryInterval(c.interval);
-        const anchor = Date.parse(t.createdAt || '');
-        if (!ivl || !Number.isFinite(anchor)) continue;
-        const k = Math.floor((now.getTime() - anchor) / ivl);
-        if (k < 1) continue; // 首触=锚+1 个间隔(创建当刻不触)
-        const latest = anchor + k * ivl;
-        // 与日程 repeat 同款:停机再久只补最近一次;时钟回拨时 latest≤last,静默等待。
-        if (lastMs < latest) hit(t);
-      }
+      await src.evaluate(t, { env, now, lastMs, cooldownMs, hit, signals, calendarEvents });
     } catch (e: any) {
       // 单规则失败不阻断其余;但必须留痕 —— 物化读不到依赖表之类的错会让这条规则**整轮**的命中行静默消失,
       // 游标也不推进,下一轮原样再错,不打日志就永远查不出来。
@@ -1293,23 +1354,7 @@ export async function evaluateTriggers(triggers: MuseTrigger[], env: EvaluateEnv
 
 /** cond → 人读英文摘要(kickoff/automation message/工具回执共用单源)。 */
 export function condSummary(c: MuseTriggerCond): string {
-  switch (c.type) {
-    case 'file_chars_gte': return `file ${c.path} reached ${c.n}+ non-whitespace chars`;
-    case 'event_seen': return `activity matched "${c.match}"`;
-    case 'daily_at': return `daily at ${c.time}`;
-    case 'at': return `at ${c.datetime.replace('T', ' ')}`;
-    case 'every': return `every ${c.interval}`;
-    case 'manual': return 'manual (clicked by the user)';
-    case 'db_changed': {
-      const cols = watchedCols(c);
-      const colText = cols.length > 1 ? `any of columns ${cols.join(', ')}` : `column ${cols[0]}`;
-      return (c.event === 'row_added'
-        ? `a row was added to ${c.path}`
-        : `${colText} changed${c.equals ? ` to "${c.equals}"` : ''} in ${c.path}`) +
-        (c.where?.length ? ` where ${c.where.map((w) => `${w.column} ${w.op}${w.value !== undefined ? ` "${w.value}"` : ''}`).join(' and ')}` : '');
-    }
-    default: return 'unknown condition';
-  }
+  return getTriggerSource(c.type)?.summary(c) ?? 'unknown condition';
 }
 
 /**
@@ -1318,34 +1363,7 @@ export function condSummary(c: MuseTriggerCond): string {
  */
 export function nextRunAt(t: MuseTrigger, from: Date = new Date()): string | null {
   if (!t.enabled) return null;
-  const c = t.cond;
-  if (c.type === 'at') {
-    const due = parseLocalMinute(c.datetime);
-    return due ? due.toISOString() : null;
-  }
-  if (c.type === 'every') {
-    const ivl = parseEveryInterval(c.interval);
-    const anchor = Date.parse(t.createdAt || '');
-    if (!ivl || !Number.isFinite(anchor)) return null;
-    const k = Math.floor((from.getTime() - anchor) / ivl);
-    const latest = anchor + Math.max(1, k) * ivl;
-    const lastMs = t.lastFiredAt ? Date.parse(t.lastFiredAt) : 0;
-    // 有欠账(latest 未触)→ 下个 tick 就补,报 latest;否则报下一格。
-    return new Date(k >= 1 && lastMs < latest ? latest : anchor + (Math.max(1, k) + 1) * ivl).toISOString();
-  }
-  if (c.type === 'daily_at') {
-    const m = /^(\d{1,2}):(\d{2})$/.exec(String(c.time || ''));
-    if (!m) return null;
-    const due = new Date(from);
-    due.setHours(Number(m[1]), Number(m[2]), 0, 0);
-    const lastMs = t.lastFiredAt ? Date.parse(t.lastFiredAt) : 0;
-    const createdMs = Date.parse(t.createdAt || '') || 0;
-    // 与 evaluate 钉锚同判:今天的锚点还欠着 → 就是"现在";否则明天。
-    if (from >= due && lastMs < due.getTime() && createdMs < due.getTime()) return due.toISOString();
-    if (from >= due) due.setDate(due.getDate() + 1);
-    return due.toISOString();
-  }
-  return null;
+  return getTriggerSource(t.cond?.type)?.nextRunAt?.(t, from) ?? null;
 }
 
 /** 命中规则 → Muse kickoff 附加段(英文,进模型)。 */
@@ -1390,3 +1408,200 @@ export async function resumeAgentTriggers(ids: string[]): Promise<void> {
     if (hit) await saveTriggers(list);
   });
 }
+
+// ── 老七种触发源(存盘形状不变;新源见 triggerSources.ts)────────────────────────────
+
+const flat = (key: string, type: 'number' | 'text', required = true) => ({ key, type, required, name: { zh: key, en: key } });
+const typed = <K extends MuseTriggerCond['type']>(t: MuseTrigger): Extract<MuseTriggerCond, { type: K }> => t.cond as Extract<MuseTriggerCond, { type: K }>;
+
+registerTriggerSource({
+  id: 'daily_at', group: 'time', name: { zh: '每天几点', en: 'Every day at' }, eventSource: 'clock', timed: true,
+  params: [flat('time', 'text')],
+  parse: (input): ParsedCond => {
+    const time = String(input.time || '').trim();
+    if (!/^\d{1,2}:\d{2}$/.test(time)) return { ok: false, error: 'daily_at 需要 time "HH:MM"' };
+    return { ok: true, cond: { type: 'daily_at', time } };
+  },
+  evaluate: async (t, io) => {
+    const c = typed<'daily_at'>(t);
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(c.time || ''));
+    if (!m) return;
+    const due = new Date(io.now);
+    due.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    // 钉锚:今天已过点、今天这个锚点还没触过、且规则在锚点前已存在。
+    // (旧「距上次>20h」窗会让触发时刻按 lastFired 漂移;createdAt 闸防"晚上建每天早8点"当场补发。)
+    const createdMs = Date.parse(t.createdAt || '') || 0;
+    if (io.now >= due && io.lastMs < due.getTime() && createdMs < due.getTime()) io.hit();
+  },
+  summary: (c) => `daily at ${(c as { time: string }).time}`,
+  nextRunAt: (t, from) => {
+    const c = typed<'daily_at'>(t);
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(c.time || ''));
+    if (!m) return null;
+    const due = new Date(from);
+    due.setHours(Number(m[1]), Number(m[2]), 0, 0);
+    const lastMs = t.lastFiredAt ? Date.parse(t.lastFiredAt) : 0;
+    const createdMs = Date.parse(t.createdAt || '') || 0;
+    // 与 evaluate 钉锚同判:今天的锚点还欠着 → 就是"现在";否则明天。
+    if (from >= due && lastMs < due.getTime() && createdMs < due.getTime()) return due.toISOString();
+    if (from >= due) due.setDate(due.getDate() + 1);
+    return due.toISOString();
+  },
+});
+
+registerTriggerSource({
+  id: 'at', group: 'time', name: { zh: '某个时刻', en: 'At a set time' }, eventSource: 'clock', timed: true,
+  params: [flat('datetime', 'text')],
+  parse: (input): ParsedCond => {
+    const raw = String(input.datetime || '').trim().replace(' ', 'T');
+    const d = parseLocalMinute(raw);
+    if (!d) return { ok: false, error: 'at 需要 datetime "YYYY-MM-DD HH:mm"(本地时区)' };
+    if (d.getTime() < Date.now() - 5 * 60_000) return { ok: false, error: 'at 时刻已过去' };
+    if (d.getTime() > Date.now() + 366 * 86_400_000) return { ok: false, error: 'at 最远一年内' };
+    return { ok: true, cond: { type: 'at', datetime: raw } };
+  },
+  evaluate: async (t, io) => {
+    const due = parseLocalMinute(typed<'at'>(t).datetime);
+    // 一次性:过点且从未在点后触过(markTriggersFired 会顺手 enabled=false,这里的 lastMs 判断兜双保险)。
+    if (due && io.now.getTime() >= due.getTime() && io.lastMs < due.getTime()) io.hit();
+  },
+  summary: (c) => `at ${(c as { datetime: string }).datetime.replace('T', ' ')}`,
+  nextRunAt: (t) => {
+    const due = parseLocalMinute(typed<'at'>(t).datetime);
+    return due ? due.toISOString() : null;
+  },
+});
+
+registerTriggerSource({
+  id: 'every', group: 'time', name: { zh: '每隔多久', en: 'Every so often' }, eventSource: 'clock', timed: true,
+  params: [flat('interval', 'text')],
+  parse: (input): ParsedCond => {
+    const interval = String(input.interval || '').trim();
+    if (!parseEveryInterval(interval)) return { ok: false, error: 'every 需要 interval 如 "30m"/"2h"/"1d"(≥15m ≤365d)' };
+    return { ok: true, cond: { type: 'every', interval } };
+  },
+  evaluate: async (t, io) => {
+    const ivl = parseEveryInterval(typed<'every'>(t).interval);
+    const anchor = Date.parse(t.createdAt || '');
+    if (!ivl || !Number.isFinite(anchor)) return;
+    const k = Math.floor((io.now.getTime() - anchor) / ivl);
+    if (k < 1) return; // 首触=锚+1 个间隔(创建当刻不触)
+    const latest = anchor + k * ivl;
+    // 与日程 repeat 同款:停机再久只补最近一次;时钟回拨时 latest≤last,静默等待。
+    if (io.lastMs < latest) io.hit();
+  },
+  summary: (c) => `every ${(c as { interval: string }).interval}`,
+  nextRunAt: (t, from) => {
+    const ivl = parseEveryInterval(typed<'every'>(t).interval);
+    const anchor = Date.parse(t.createdAt || '');
+    if (!ivl || !Number.isFinite(anchor)) return null;
+    const k = Math.floor((from.getTime() - anchor) / ivl);
+    const latest = anchor + Math.max(1, k) * ivl;
+    const lastMs = t.lastFiredAt ? Date.parse(t.lastFiredAt) : 0;
+    // 有欠账(latest 未触)→ 下个 tick 就补,报 latest;否则报下一格。
+    return new Date(k >= 1 && lastMs < latest ? latest : anchor + (Math.max(1, k) + 1) * ivl).toISOString();
+  },
+});
+
+registerLocalTriggerSources();
+
+registerTriggerSource({
+  id: 'db_changed', group: 'forsion', name: { zh: '数据库变化', en: 'Database changed' }, eventSource: 'poll',
+  params: [flat('path', 'text'), flat('event', 'text'), flat('vault', 'text', false), flat('column_id', 'text', false), flat('column_ids', 'text', false), flat('equals', 'text', false), flat('where', 'text', false)],
+  parse: (input, opts): ParsedCond => {
+    const p = normalizeVaultRel(String(input.path || ''));
+    if (!p || !/\.db$/i.test(p)) return { ok: false, error: 'db_changed 需要 path(vault 相对的 .db 文件)' };
+    if (p.split('/').includes('..')) return { ok: false, error: 'db_changed 的 path 不能越出 vault' };
+    const event = String(input.event || '');
+    if (event !== 'row_added' && event !== 'cell_changed') return { ok: false, error: 'db_changed 的 event 须为 row_added/cell_changed' };
+    const vault = String(input.vault || '').trim() || opts.vaultPath || '';
+    if (!vault) return { ok: false, error: 'db_changed 需要 vault(建规则时的库根路径)' };
+    const pw = parseWhereInput(input.where);
+    if (!pw.ok) return pw;
+    const whereExtra = pw.value ? { where: pw.value } : {};
+    if (event !== 'cell_changed') return { ok: true, cond: { type: 'db_changed', path: p, vault, event, ...whereExtra } };
+    const pc = parseColumnIds(input.column_id, input.column_ids);
+    if (!pc.ok) return pc;
+    const ids = pc.value;
+    const equals = String(input.equals ?? '').trim().slice(0, 200);
+    // 单列只落 columnId(存量形状不变);多列 columnId=首列 + columnIds=全部。
+    return {
+      ok: true,
+      cond: {
+        type: 'db_changed', path: p, vault, event, columnId: ids[0],
+        ...(ids.length > 1 ? { columnIds: ids } : {}),
+        equals: equals || undefined, ...whereExtra,
+      },
+    };
+  },
+  evaluate: evaluateDbChanged,
+  summary: (raw) => {
+    const c = raw as DbChangedCond;
+    const cols = watchedCols(c);
+    const colText = cols.length > 1 ? `any of columns ${cols.join(', ')}` : `column ${cols[0]}`;
+    return (c.event === 'row_added'
+      ? `a row was added to ${c.path}`
+      : `${colText} changed${c.equals ? ` to "${c.equals}"` : ''} in ${c.path}`) +
+      (c.where?.length ? ` where ${c.where.map((w) => `${w.column} ${w.op}${w.value !== undefined ? ` "${w.value}"` : ''}`).join(' and ')}` : '');
+  },
+});
+
+registerTriggerSource({
+  id: 'event_seen', group: 'forsion', name: { zh: '活动日志出现某行', en: 'Activity log line' }, eventSource: 'poll',
+  params: [flat('match', 'text')],
+  parse: (input): ParsedCond => {
+    const match = String(input.match || '').trim().slice(0, 120);
+    if (!match) return { ok: false, error: 'event_seen 需要 match 子串' };
+    return { ok: true, cond: { type: 'event_seen', match } };
+  },
+  evaluate: async (t, io) => {
+    const c = typed<'event_seen'>(t);
+    // 只看「上次触发(或规则创建)之后」的行——不吃存量旧事件。
+    const sinceIso = t.lastFiredAt || t.createdAt || '';
+    const since = sinceIso ? toActivityTs(new Date(sinceIso)) : '';
+    const cur = t.lastEventCursor;
+    const hits = (io.env.activityLines ?? []).filter((l) => {
+      if (!l.includes(c.match)) return false;
+      if (since && lineTs(l) < since) return false;
+      // 精确游标:since 是分钟粒度,冷却结束后同分钟旧行会被重复消费——按上次消费行的 ts+hash 排除。
+      if (cur && (lineTs(l) < cur.ts || (lineTs(l) === cur.ts && lineHash(l) === cur.hash))) return false;
+      // 自激防护:本规则自己的无人值守 run 产生的活动行带 o=<规则id>,不吃。
+      if (l.includes(` o=${t.id}`)) return false;
+      return true;
+    });
+    if (hits.length) {
+      io.hit();
+      const last = hits[hits.length - 1];
+      if (io.env.outCursors) io.env.outCursors[t.id] = { ts: lineTs(last), hash: lineHash(last) };
+    }
+  },
+  summary: (c) => `activity matched "${(c as { match: string }).match}"`,
+});
+
+registerTriggerSource({
+  id: 'file_chars_gte', group: 'forsion', name: { zh: '文件字数够了', en: 'File reaches a length' }, eventSource: 'poll',
+  params: [flat('path', 'text'), flat('n', 'number')],
+  parse: (input, opts): ParsedCond => {
+    const p = String(input.path || '').trim();
+    const n = Math.floor(Number(input.n));
+    if (!p || !Number.isFinite(n) || n <= 0) return { ok: false, error: 'file_chars_gte 需要 path 和正整数 n' };
+    return { ok: true, cond: { type: 'file_chars_gte', path: resolveTriggerPath(p, opts.cwd), n } };
+  },
+  evaluate: async (t, io) => {
+    const c = typed<'file_chars_gte'>(t);
+    const chars = await (io.env.readFileChars ?? defaultReadFileChars)(c.path);
+    if (chars !== null && chars >= c.n) io.hit();
+  },
+  summary: (raw) => {
+    const c = raw as { path: string; n: number };
+    return `file ${c.path} reached ${c.n}+ non-whitespace chars`;
+  },
+});
+
+registerTriggerSource({
+  id: 'manual', group: 'forsion', name: { zh: '手动', en: 'Manual' }, eventSource: 'manual',
+  params: [],
+  parse: (): ParsedCond => ({ ok: true, cond: { type: 'manual' } }),
+  evaluate: async () => {}, // 手动类只由 fire 端点起跑,巡检永不命中
+  summary: () => 'manual (clicked by the user)',
+});

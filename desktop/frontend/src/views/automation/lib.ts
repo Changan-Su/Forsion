@@ -22,6 +22,11 @@ export function condText(t: T, cond: MuseTriggerInfo['cond']): string {
   if (cond.type === 'every') return t('automation.cond.every', { ivl: cond.interval })
   if (cond.type === 'file_chars_gte') return t('automation.cond.file', { path: shortPath(cond.path), n: String(cond.n) })
   if (cond.type === 'manual') return t('automation.cond.manual')
+  if (cond.type === 'computer.app_opened') return t('automation.cond.appOpened', { app: paramText(cond.params, 'appName', 'app') })
+  if (cond.type === 'computer.app_used') return t('automation.cond.appUsed', { app: paramText(cond.params, 'appName', 'app'), n: paramText(cond.params, 'minutes') })
+  if (cond.type === 'computer.returned') return t('automation.cond.returned', { n: paramText(cond.params, 'minutes') })
+  if (cond.type === 'computer.unlocked') return t('automation.cond.unlocked')
+  if (cond.type === 'calendar.before') return t('automation.cond.calendarBefore', { n: paramText(cond.params, 'minutes') })
   if (cond.type === 'db_changed') {
     const base = cond.event === 'row_added'
       ? t('automation.cond.dbRow', { path: shortPath(cond.path) })
@@ -32,6 +37,16 @@ export function condText(t: T, cond: MuseTriggerInfo['cond']): string {
     return `${base}${eq}${wn}`
   }
   return String((cond as any).type || '—')
+}
+
+const paramText = (params: Record<string, string | number> | undefined, ...keys: string[]): string =>
+  String(keys.map((k) => params?.[k]).find((v) => v !== undefined && v !== '') ?? '—')
+
+/** 引擎状态位 → 界面文案:`trigger:*` 是 code;其余是引擎写好的暂时性说明,原样显示。 */
+export function noticeText(t: T, notice: string | undefined): string {
+  if (notice === 'trigger:computer_history_off') return t('automation.notice.computerOff')
+  if (notice === 'trigger:source_missing') return t('automation.notice.sourceMissing')
+  return notice || ''
 }
 
 /** cell_changed 实际监听的列 id:columnIds ∪ columnId,去重保序(引擎 watchedCols 同口径;两键只带一个也能取到)。 */
@@ -64,6 +79,7 @@ export function actionsText(t: T, defs: NormalAgentDef[], tr: MuseTriggerInfo): 
     return tr.actions
       .map((a) =>
         a.type === 'notify' ? t('automation.step.notify')
+        : a.type === 'remind' ? t('automation.step.remind')
         : a.type === 'agent_run' ? runnerName(defs, a.agentSlug)
         : a.type === 'db_row_add' ? `＋ ${shortPath(a.path)}${a.skipIfEmpty ? ` (?${a.skipIfEmpty})` : ''}`
         : a.type === 'db_row_edit' ? `✎ ${shortPath(a.path)}${a.rowFrom ? ` →${a.rowFrom}` : a.match ? ` →${a.match.column}` : ''}`
@@ -124,6 +140,10 @@ export function triggerToUpsert(t: MuseTriggerInfo): MuseTriggerUpsert {
     id: t.id,
     desc: t.desc,
     cond_type: t.cond.type,
+    // 新触发源的参数整包带回;「只在」没设也要发 null / 不发由引擎保留,这里原样回传。
+    params: 'params' in t.cond ? t.cond.params : undefined,
+    only: t.only,
+    max_per_day: t.maxPerDay,
     // ⚠️ cond 的每个字段都必须原样带回:upsert 是**整量**语义,漏一个后端就 400。
     // db_changed 的 path/event/vault/column_id 漏掉过一次——表现是「DB 规则的启停开关点不动」;
     // where 是同一个坑的第二次候选:漏了=点一下启停开关就把附加条件抹光(且 cond 变化还会重置游标)。
@@ -217,7 +237,7 @@ const hasUnknownKeys = (o: object, known: readonly string[]): boolean =>
  *  用户点开看一眼、按保存就把动作抹了:draft↔spec 是白名单重建,不认的字段一进一出即蒸发)。 */
 export function hasUnsupportedParts(t?: MuseTriggerInfo): boolean {
   if (!t) return false
-  if (t.actions?.some((a) => !isEditableStep(a) || hasUnknownKeys(a, KNOWN_ACTION_KEYS[a.type]))) return true
+  if (t.actions?.some((a) => !isEditableStep(a) || hasUnknownKeys(a, KNOWN_ACTION_KEYS[a.type as StepDraft['type']]))) return true
   const cond = t.cond as { type?: string } | undefined
   if (!cond || typeof cond !== 'object') return false
   const known = KNOWN_COND_KEYS[String(cond.type)]

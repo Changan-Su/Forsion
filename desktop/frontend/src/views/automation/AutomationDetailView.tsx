@@ -19,7 +19,7 @@ import { fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } f
 import { useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
 import { useDbStore } from '../../amadeus/store/dbStore'
-import { actionsText, condText, fmtTime, isFinishedTrigger, watchedColumnIds, whereText } from './lib'
+import { actionsText, condText, fmtTime, isFinishedTrigger, noticeText, watchedColumnIds, whereText } from './lib'
 import { AutomationBuilder } from './AutomationBuilder'
 import { AutomationHome } from './AutomationHome'
 import { AutomationRunsView } from './AutomationRunsView'
@@ -326,6 +326,7 @@ const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns
           <CapabilityMenu label={t('automation.ux.actions')} items={(automationListSource.itemMenu?.({ key: JSON.stringify({ kind: 'trigger', triggerId: tr.id }), title: tr.desc }) || [])
             .filter((a) => a.id !== 'edit').map((a) => ({ id: a.id, label: a.label, danger: a.danger, onSelect: a.run }))} />
         </div>
+        {tr.enabled && tr.notice && <p className="auto-hint auto-fact-warn" data-rule-notice>{noticeText(t, tr.notice)}</p>}
         <details className="auto-properties"><summary>{t('automation.ux.properties')}</summary><div className="auto-facts">
           {isFinishedTrigger(tr) && <span className="auto-fact"><b>{t('automation.fact.status')}</b>{t('automation.finishedHint')}</span>}
           {/* 引擎自动停用(排空封顶断环 / tool_call 不可用)会写 disabledReason;用户手动启用即清。不显示的话用户只能从日志感知「规则怎么停了」 */}
