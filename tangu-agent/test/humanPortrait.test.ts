@@ -211,12 +211,20 @@ describe('remember: person scope', () => {
     expect(agentMemory('second').content).toBe('In our role-play the user is Captain.');
   });
 
+  it('a version copied with a typo after its first 8 characters still moves the entry', async () => {
+    const old = JSON.parse(await remember({ action: 'add', fact: 'The user is an early bird.' }));
+    const garbled = `${old.version.slice(0, 9)}0000-0000-0000-000000000000`;
+    const moved = JSON.parse(await remember({ action: 'update', scope: 'person', id: old.entry.id, expectedVersion: garbled, fact: 'You get up early.' }));
+    expect(moved).toMatchObject({ ok: true, scope: 'person', moved: { from: 'agent', id: old.entry.id } });
+    expect(readSoul()).toContain('You get up early.');
+  });
+
   it('a move whose old entry cannot be forgotten undoes the new sentence and reports a conflict', async () => {
     const old = JSON.parse(await remember({ action: 'add', fact: 'The user is a night owl.' }));
     // 读的时候版本已经不对:什么都不写
     const stale = await remember({ action: 'update', scope: 'person', id: old.entry.id, expectedVersion: '00000000-0000-4000-8000-000000000000', fact: 'You work late at night.' });
-    expect(stale).toMatch(/^Error: that is not the current version of scope "agent"\. Nothing was written\./);
-    expect(stale).toContain(`repeat this update with scope "person" and expectedVersion ${old.version}`); // 版本抄错了也能原样重发,别退回原档
+    expect(stale).toMatch(/^Error: expectedVersion is not current\. Nothing was written\./);
+    expect(stale).toContain(`keeping scope "person", with expectedVersion ${old.version}`); // 版本过期了也能原样重发,别退回原档
     const noted = JSON.parse(await remember({ action: 'add', scope: 'person', fact: 'You like tea.' }));
     expect(noted.note).toMatch(/your own memory/); // 自己记忆里有东西:提醒拿掉矛盾的旧说法
     await remember({ action: 'forget', scope: 'person', id: noted.entry.id, expectedVersion: noted.version });

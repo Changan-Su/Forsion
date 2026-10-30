@@ -218,9 +218,10 @@ async function moveMemoryEntry(i: { from: MemoryScope; scope: MemoryScope; id: s
   let listed: Awaited<ReturnType<ScopeStore['read']>>;
   try { listed = await source.read(); } catch (e) { return failed(e); }
   const old = listed.entries.find((e) => e.id === i.id);
-  // 10-30 live:36 位版本号被抄错一段,「list again」之后模型退回原档就地改了。报错里给当前版本和那条的原文,让它重发同一次挪动
-  if (i.expectedVersion !== listed.version && i.expectedVersion !== listed.full) {
-    return `Error: that is not the current version of scope "${i.from}". Nothing was written.${old ? ` The entry now reads ${JSON.stringify(old.content)}; if that is still what you meant to replace, repeat this update with scope "${i.scope}" and expectedVersion ${listed.version}.` : ' List again and use the new version and IDs.'}`;
+  // 10-30 live:36 位版本号 15 轮里抄错 3 次(前 8 位都对),报错之后模型两次退回原档就地改。比前 8 位(同 manage_human 只认前 12 位):
+  // 版本是随机 UUID,真被别处改过前 8 位就不一样,比对交换照样拦得住;对不上时才报错,报错里给当前版本和原文,让它重发同一次挪动
+  if (i.expectedVersion.slice(0, 8) !== listed.version.slice(0, 8) && i.expectedVersion !== listed.full) {
+    return `Error: expectedVersion is not current. Nothing was written.${old ? ` The entry now reads ${JSON.stringify(old.content)}; if that is still what you meant to replace, send this same update again, keeping scope "${i.scope}", with expectedVersion ${listed.version}.` : ' List again and use the new version and IDs.'}`;
   }
   if (!old) return `Error: there is no entry with id ${JSON.stringify(i.id)} in scope "${i.from}". Nothing was written; list again and use an ID from it.`;
   let added: Awaited<ReturnType<ScopeStore['add']>>;
