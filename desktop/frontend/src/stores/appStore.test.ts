@@ -325,6 +325,7 @@ describe('appStore.reduceEvent', () => {
       [second, 'assistant', 'second answer'],
     ])
     expect(messages.find((m) => m.id === second)?.status).toBe('done')
+    expect(useApp.getState().subChatsBySession.s1.find((x) => x.id === 'c1')?.segs.map((seg) => (seg as any).text)).toEqual(['first answer', 'second answer'])
   })
 
   it('run 收尾(done / error)把本 run 挂在**更早段**上的待批审批与询问一并置过期,别的 run 的不碰', () => {

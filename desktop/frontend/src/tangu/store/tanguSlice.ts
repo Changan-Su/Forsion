@@ -1812,7 +1812,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         }
         if (pl.phase === 'token' && pl.delta) upsertSubChat(id, (s) => appendSubText(s, String(pl.delta)))
         else if (pl.phase === 'tool') upsertSubChat(id, (s) => ({ ...s, segs: [...s.segs, { t: 'tool', name: String(pl.name || ''), args: pl.args, preview: pl.preview, error: !!pl.isError }] }))
-        else if (pl.phase === 'start') upsertSubChat(id, (s) => ({ ...s, title: pl.label || s.title, streaming: true, messageId: pl.messageId || s.messageId }), { kind: 'subagent', title: pl.label })
+        else if (pl.phase === 'start') upsertSubChat(id, (s) => ({ ...s, title: pl.label || s.title, streaming: true, messageId: pl.messageId || s.messageId, segs: pl.userMessageId ? [...s.segs, { t: 'text', text: '' }] : s.segs }), { kind: 'subagent', title: pl.label }) // 续用另起一段,没调工具时两轮回答不拼在一起
         else if (pl.phase === 'done') upsertSubChat(id, (s) => ({ ...s, streaming: false }))
         break
       }
