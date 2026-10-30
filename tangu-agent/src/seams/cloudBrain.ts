@@ -407,7 +407,7 @@ export interface AmadeusBrain {
   /** 写文本文件;baseSeq=乐观锁(409 → AmadeusConflictError 带最新 seq+content),force=无条件覆盖。 */
   write(path: string, content: string, opts?: { baseSeq?: number; force?: boolean }): Promise<{ seq: number }>;
   /** 读默认日历 human/CALENDAR.db(对端 /api/agent/human/CALENDAR.db)。data=null = 还没有这个文件;legacy = 它的旧位置
-   *  (`cloud://<vault>/Calendar.db`),那份不算第二本日历。返回 null = 用不了(旧云端 / 文件坏了);其余失败抛错,不当成没有。 */
+   *  (`cloud://<vault>/Calendar.db`)。返回 null = 用不了(旧云端 / 文件坏了);其余失败抛错,不当成没有。 */
   readHumanCalendar?(): Promise<{ data: unknown; version: string | null; legacy: string | null } | null>;
   /** 比对交换写;version=null = 新建。409 → HumanCalendarConflictError。 */
   writeHumanCalendar?(data: unknown, version: string | null): Promise<void>;

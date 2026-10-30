@@ -24,6 +24,7 @@ import type { ToolCapabilities, ToolContext } from '../toolTypes.js';
 import { deps, isConfigured } from '../../seams/runtime.js';
 import { AmadeusConflictError, AmadeusNotFoundError, HumanCalendarConflictError, type AmadeusBrain } from '../../seams/cloudBrain.js';
 import { pageInstructionsForFile } from '../../services/pageInstructions.js';
+import { isUntouchedCalendarSeed } from '../../contracts/dbRowMerge.js';
 import { defaultCalendarFile, ensureHumanFolder, humanDir, tanguHome } from '../../core/tanguHome.js';
 import { atomicSyncWrite, readSyncBytes } from '../../services/agentSyncPaths.js';
 import { withMemoryDirectoryLock } from '../../services/memoryRepository.js';
@@ -155,8 +156,8 @@ interface AmadeusBackend {
   read(rel: string): Promise<{ content: string; seq?: number }>;
   /** 写文本;overwrite=无条件覆盖(cloud force),否则带 baseSeq 乐观锁(local 忽略、永不冲突)。 */
   write(rel: string, content: string, opts?: { baseSeq?: number; overwrite?: boolean }): Promise<void>;
-  /** 默认日历 + 「这个库路径是它的旧位置镜像」的判定;这里没有默认日历 / 文件坏了 = null(退回全库日历)。 */
-  human(): Promise<{ cal: Cal; isMirror(rel: string): boolean } | null>;
+  /** 默认日历 + 「库里这份只是它的旧位置」的判定;这里没有默认日历 / 文件坏了 = null(退回全库日历)。 */
+  human(): Promise<{ cal: Cal; isMirror(rel: string, db: DbFile): boolean } | null>;
   /** 默认日历的读-改-写;文件还没有时第一次写才建。 */
   mutateHuman(apply: CalMutation): Promise<string>;
 }
@@ -200,7 +201,13 @@ function cloudBackend(facet: AmadeusBrain, locale?: string): AmadeusBackend {
     // worker 容器的系统语言不代表用户:第一次新建时的名字跟这次 run 客户端报的界面语言
     const db = (r.data as DbFile | null) ?? emptyHumanCal(locale ? locale === 'zh' : undefined);
     const cal = toCal(HUMAN_CAL, db);
-    return cal && { cal: { ...cal, version: r.version }, isMirror: (rel) => !!r.legacy?.endsWith(`/${rel}`) };
+    if (!cal) return null;
+    const ids = new Set(db.rows.map((row) => row.id));
+    return {
+      cal: { ...cal, version: r.version },
+      // 云端没有镜像,旧位置是首读抄走那一刻的快照:里面有默认日历没有的行(抄走之后旧 worker 写的)就还算一本日历,事件不能从 Agent 眼前消失
+      isMirror: (rel, old) => !!r.legacy?.endsWith(`/${rel}`) && (old.rows.every((row) => ids.has(row.id)) || isUntouchedCalendarSeed(serializeDb(old))),
+    };
   };
   return {
     human,
@@ -353,9 +360,9 @@ async function calendars(be: AmadeusBackend): Promise<Cal[]> {
   const human = await be.human();
   const out: Cal[] = human ? [human.cal] : [];
   for (const rel of await be.list((n) => n.toLowerCase().endsWith('.db'))) {
-    if (human?.isMirror(rel)) continue; // human/ 读不出来时,库里这份就是唯一能用的
     try {
       const { db, seq } = await readDbBe(be, rel);
+      if (human?.isMirror(rel, db)) continue; // human/ 读不出来时,库里这份就是唯一能用的
       const c = toCal(rel, db, seq);
       if (c) out.push(c);
     } catch {
@@ -600,10 +607,12 @@ export const amadeusProvider: ToolProvider = {
         const from = String(args.from ?? '').slice(0, 10);
         const to = String(args.to ?? '').slice(0, 10);
         const events = [];
+        const seen = new Set<string>(); // 默认日历排在前:旧位置还列着时,抄过来的行只算默认日历那条
         for (const cal of all) {
           for (const r of cal.db.rows) {
             const ev = rowToEvent(cal, r);
-            if (!ev) continue;
+            if (!ev || seen.has(ev.id)) continue;
+            seen.add(ev.id);
             const d = ev.start.slice(0, 10);
             if (from && d < from) continue;
             if (to && d > to) continue;

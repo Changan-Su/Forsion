@@ -5,8 +5,8 @@
  *  Needs the real thing: TANGU_LIVE_CLOUD_URL / TANGU_LIVE_CLOUD_TOKEN from `server scripts/calendar-local.mts`, whose token is a
  *  dispatch token, so the dispatch allowlist is exercised too.
  *  Negative controls (run them when touching this): remove the /api/agent/human/CALENDAR.db line from server dispatchToken.ts →
- *  legs 1-3 go red (the worker falls back to the vault and finds no calendar); in amadeus.ts make cloudBackend's human() return
- *  null → same; drop the `isMirror` check in calendars() → leg 3 goes red (the stale seed is listed). */
+ *  the scenario stops at its first read (401); in amadeus.ts make cloudBackend's human() return null → leg 1 goes red (no calendar
+ *  to write to); drop the `isMirror` check in calendars() → leg 3 goes red (the stale seed is listed). */
 const CLOUD = { execMode: 'sandbox', cwd: undefined };
 const ZH = { ui: { locale: { value: 'zh', allowed: ['zh', 'en'] } } };
 const called = (ev, name) => ev.toolCalls.includes(name) && ev.toolResults.some((r) => r.name === name && !r.isError && !/^Error/.test(r.full || ''));

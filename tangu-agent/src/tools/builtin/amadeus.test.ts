@@ -89,7 +89,7 @@ describe('calendar tools', () => {
     expect(JSON.parse(await run('amadeus_list_events')).find((e: any) => e.id === id).title).toBe('Dentist moved');
     expect(await run('amadeus_delete_event', { calendar: 'My calendar', eventId: id })).toContain('Deleted');
     expect(JSON.parse(await fs.readFile(file, 'utf8')).rows).toEqual([]);
-  });
+  }, 30_000); // 写完动态 import 镜像模块,高负载时单这一步就过 5 秒
 
   it('a corrupt human/CALENDAR.db is left alone: skipped when listing, never replaced by a new one', async () => {
     const file = path.join(humanDir(), 'CALENDAR.db');
@@ -473,15 +473,52 @@ describe('cloud default calendar (brain.amadeus → /agent/human/CALENDAR.db)', 
     expect(human!.data.rows).toEqual([]);
   });
 
-  it('the old location of the default calendar is hidden; a same-named file in a folder is not', async () => {
-    const seed = JSON.stringify(cloudCal([{ id: 'stale', cells: { n: 'Stale', d: '2026-07-06' } }]));
-    vault.set('Calendar.db', { content: seed, seq: 1 });
-    vault.set('Archive/Calendar.db', { content: seed, seq: 1 });
-    vault.set('Work.db', { content: seed, seq: 1 });
-    human = { data: null, version: null, legacy: 'cloud://vault-1/Calendar.db' };
+  // 没动过的云端种子:日期固定在 2026-07,不算用户数据
+  const seedFile = () => `${JSON.stringify({
+    version: 1,
+    name: '我的日历',
+    columns: [{ id: 'n', name: '名称', type: 'text' }, { id: 'd', name: '日期', type: 'calendarDate' }, { id: 't', name: '完成', type: 'todo' }],
+    rows: [
+      { id: 's1', cells: { n: '欢迎使用 Calendar Space', d: '2026-07-06T10:00/2026-07-06T11:00', t: true } },
+      { id: 's2', cells: { n: '整理本周任务', d: '2026-07-07' } },
+      { id: 's3', cells: { n: '项目评审', d: '2026-07-08T14:00/2026-07-08T15:30' } },
+    ],
+  }, null, 2)}\n`;
+  const legacy = 'cloud://vault-1/Calendar.db';
+
+  it('an untouched seed at the old location is hidden and left alone; a same-named file in a folder is not hidden', async () => {
+    vault.set('Calendar.db', { content: seedFile(), seq: 1 });
+    vault.set('Archive/Calendar.db', { content: seedFile(), seq: 1 });
+    vault.set('Work.db', { content: JSON.stringify(cloudCal()), seq: 1 });
+    human = { data: null, version: null, legacy };
     expect(await calendarsListed()).toEqual(['human://CALENDAR.db', 'Archive/Calendar.db', 'Work.db']);
     await runCloud('amadeus_create_event', { title: 'Dentist', start: '2026-12-03' });
-    expect(vault.get('Calendar.db')!.content).toBe(seed); // 老云库的文件不动
+    expect(vault.get('Calendar.db')!.content).toBe(seedFile()); // 老云库的文件不动
+  });
+
+  it('the old location is hidden while the default calendar holds all of its rows', async () => {
+    const row = { id: 'a', cells: { n: 'Adopted', d: '2026-12-01' } };
+    vault.set('Calendar.db', { content: JSON.stringify(cloudCal([row])), seq: 1 });
+    human = { data: cloudCal([row, { id: 'b', cells: { n: 'Newer', d: '2026-12-02' } }]), version: 'v0', legacy };
+    expect(await calendarsListed()).toEqual(['human://CALENDAR.db']);
+  });
+
+  it('a row only the old location has keeps it listed: nothing disappears from the agent, and copied rows are not doubled', async () => {
+    const copied = { id: 'a', cells: { n: 'Moved on the web', d: '2026-12-09' } };
+    const before = { id: 'a', cells: { n: 'Adopted', d: '2026-12-01' } };
+    const mine = { id: 'late', cells: { n: 'Written by an old worker', d: '2026-12-02' } };
+    const content = JSON.stringify(cloudCal([before, mine]));
+    vault.set('Calendar.db', { content, seq: 1 });
+    human = { data: cloudCal([copied]), version: 'v0', legacy };
+    expect(await calendarsListed()).toEqual(['human://CALENDAR.db', 'Calendar.db']);
+    const events = JSON.parse(await runCloud('amadeus_list_events'));
+    expect(events.map((e: any) => [e.id, e.title, e.path])).toEqual([
+      ['late', 'Written by an old worker', 'Calendar.db'],
+      ['a', 'Moved on the web', 'human://CALENDAR.db'],
+    ]);
+    expect(await runCloud('amadeus_create_event', { title: 'Dentist', start: '2026-12-03' })).toContain('in "Work"'); // 新事件仍进默认日历
+    expect(human!.data.rows).toHaveLength(2);
+    expect(vault.get('Calendar.db')!.content).toBe(content);
   });
 
   it('old cloud or corrupt file (null): falls back to the calendars in the vault, nothing is hidden', async () => {
