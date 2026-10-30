@@ -111,6 +111,7 @@ import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
+import { syncVaultRoot } from './amadeus/vaultList'
 import { registerRemoteSync } from './remotesyncIpc'
 import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
@@ -599,21 +600,23 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   disabledBundles: [],
 }
 
-/** 默认工作区目录(配置未填时兜底):优先落在本地笔记库(Vault)内的 Sessions/ ——
- *  会话工作区与笔记同库,agent 产物可直接被笔记引用(2026-08-03 起)。没有本地库时维持旧口径:
- *  新用户 ~/Forsion(dev→~/Forsion-Dev),仅当存在**真实** ~/Tangu 目录(老用户,迁移软链不算)
- *  才沿用 ~/Tangu。best-effort 创建。 */
+/** 默认工作区目录(配置未填时兜底)。10-29 起会话目录和智库分开:新用户落 `~/Forsion/Sessions`
+ *  (dev→~/Forsion-Dev/Sessions)。老用户不动:08-03 起旧版把会话放在本地库的 Sessions/ 并每次建好它,
+ *  库里已有这个文件夹就照旧用(看第一个库,不跟切库走);再老的、存在**真实** ~/Tangu 目录(迁移软链不算)
+ *  的沿用 ~/Tangu。best-effort 创建。 */
 async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<string> {
   let dir = stored.defaultWorkspaceDir?.trim()
   if (!dir) {
-    // 取 localVault 而非 lastVault:活动侧可能是云镜像,Sessions 落进去会整个被当笔记同步上云。
-    const vault = (await readAmadeusConfig()).localVault
-    if (vault && (await stat(vault).then((s) => s.isDirectory()).catch(() => false))) dir = join(vault, 'Sessions')
+    // 取本地同步库而非 lastVault:活动侧可能是云镜像。
+    // ponytail: 新用户自己在库里建了个叫 Sessions 的文件夹会被当成老用户,真撞上再记标记位
+    const vault = syncVaultRoot(await readAmadeusConfig())
+    const old = vault && join(vault, 'Sessions')
+    if (old && (await stat(old).then((s) => s.isDirectory()).catch(() => false))) dir = old
   }
   if (!dir) {
     const legacy = join(app.getPath('home'), 'Tangu')
     const isRealLegacyDir = await lstat(legacy).then((s) => s.isDirectory() && !s.isSymbolicLink()).catch(() => false)
-    dir = isRealLegacyDir ? legacy : forsionWorkspaceDir()
+    dir = isRealLegacyDir ? legacy : join(forsionWorkspaceDir(), 'Sessions')
   }
   await mkdir(dir, { recursive: true }).catch(() => {})
   return dir
@@ -2737,7 +2740,7 @@ app.whenReady().then(async () => {
         roots: async () => {
           const cfg=await readAmadeusConfig()
           return [{prefix:'',root:forsionWorkspaceDir()},{prefix:'agents',root:join(tanguDataDir(),'agents')},
-            {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:cfg.localVault??join(forsionWorkspaceDir(),'Amadeus')}]
+            {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:syncVaultRoot(cfg)??join(forsionWorkspaceDir(),'Amadeus')}] // 切库不换同步根(vaultList.ts)
         },
         claim: async (owned) => {
           await ensureBackend()

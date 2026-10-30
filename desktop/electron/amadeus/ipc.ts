@@ -17,7 +17,7 @@ export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig, type AmadeusConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
@@ -28,6 +28,7 @@ import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
 import { fetchLinkMeta, searchImages } from './linkMeta'
 import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir } from './cloudPaths'
+import { forgetPatch, normalizeLocal, samePath, switchPatch, syncVaultRoot, vaultDirName, vaultList } from './vaultList'
 import type { AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
 import { mt } from '../mainI18n'
@@ -219,6 +220,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // A detached renderer may still hold a document from a previous cloud root.
   // Its late relative-path IPC must fail instead of targeting the new root.
   const rendererRoots = new Map<number, string | null>()
+  const BINDS_ROOT = new Set<string>([IPC.restoreVault, IPC.openVault, IPC.switchVault, IPC.createVault])
   const remoteRoots = new Map<string, string | null>()
   const pendingVaultWrites = new Set<Promise<unknown>>()
   const writesVault = (channel: string): boolean => !!VAULT_WRITE_EVENTS[channel] ||
@@ -228,7 +230,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const handle = (channel: string, fn: (e: unknown, ...args: any[]) => unknown): void => {
     vaultHandlers.set(channel, fn)
     ipcMain.handle(channel, async (e, ...a) => {
-      const mayBind = channel === IPC.restoreVault || channel === IPC.openVault
+      const mayBind = BINDS_ROOT.has(channel)
       if (!mayBind && rendererRoots.has(e.sender.id) && rendererRoots.get(e.sender.id) !== vault.getRoot()) {
         throw new Error('The active vault changed; reload the current account before editing')
       }
@@ -314,11 +316,69 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     return activateRoot(root, false)
   }
 
+  const localConfig = async (): Promise<AmadeusConfig> => normalizeLocal(await readConfig(), isManagedCloudVault)
+  /** 本地侧换库:校验 → 记清单、钉同步库(vaultList.ts)→ 等在途写落盘 → 换根。
+   *  ⚠️ 等写的循环退出到 activateRoot 里的 setRoot 之间不许有 await:否则旧窗口的写能在空档里通过根校验,
+   *  读的是旧库、落盘时根已换成新库(Codex 评审 P0)。setRoot 之后旧窗口的写一律被 handle() 的根校验拒掉。 */
+  const switchLocalVault = async (root: string): Promise<Awaited<ReturnType<typeof activateRoot>>> => {
+    if (isManagedCloudVault(root)) throw new Error('cloud-vault-forbidden')
+    if (!(await fs.stat(root).then((s) => s.isDirectory(), () => false))) throw new Error('vault-missing')
+    await updateConfig((cfg) => { Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root)) })
+    while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites])
+    return activateRoot(root, true) // 同步跑到 vault.setRoot
+  }
+
   handle(IPC.openVault, async () => {
     const root = await vault.openDialog()
-    if (!root) return null
-    await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
-    return activateRoot(root, false)
+    return root ? switchLocalVault(root) : null
+  })
+
+  handle(IPC.switchVault, async (_e, root: unknown) => {
+    const listed = vaultList(await localConfig()).find((v) => typeof root === 'string' && samePath(v.root, root))
+    if (!listed) throw new Error('vault-not-listed')
+    return switchLocalVault(listed.root)
+  })
+
+  // 新建 = <工作区>/Vaults/<名>;同名文件夹已在就报错,不悄悄并进别人的文件夹。
+  handle(IPC.createVault, async (_e, name: unknown) => {
+    const dir = vaultDirName(name)
+    if (!dir) throw new Error('invalid-name')
+    const parent = path.join(defaultWorkspaceDir(), 'Vaults')
+    await fs.mkdir(parent, { recursive: true })
+    const root = path.join(parent, dir)
+    await fs.mkdir(root)
+    return switchLocalVault(root)
+  })
+
+  // 清单 / 移出 / 显示不绑根:别的窗口还停在旧库时也要能看菜单。
+  ipcMain.handle(IPC.listVaults, async () => {
+    const cfg = await localConfig()
+    const pinned = syncVaultRoot(cfg)
+    const owned = contentSyncOwned(currentCloudAccountId())
+    const home = app.getPath('home')
+    return Promise.all(vaultList(cfg).filter((v) => !isManagedCloudVault(v.root)).map(async (v) => ({
+      root: v.root,
+      name: path.basename(v.root),
+      display: v.root.startsWith(home + path.sep) ? `~${v.root.slice(home.length)}` : v.root,
+      current: samePath(v.root, cfg.localVault),
+      sync: owned && samePath(v.root, pinned),
+      pinned: samePath(v.root, pinned),
+      exists: await fs.stat(v.root).then((s) => s.isDirectory(), () => false),
+    })))
+  })
+  ipcMain.handle(IPC.forgetVault, async (_e, root: unknown) => {
+    let ok = false
+    if (typeof root === 'string') await updateConfig((cfg) => {
+      const patch = forgetPatch(normalizeLocal(cfg, isManagedCloudVault), root)
+      if (!patch) return false
+      Object.assign(cfg, patch)
+      ok = true
+    })
+    return ok
+  })
+  ipcMain.handle(IPC.revealVault, async (_e, root: unknown) => {
+    const listed = vaultList(await localConfig()).find((v) => typeof root === 'string' && samePath(v.root, root))
+    if (listed) shell.showItemInFolder(listed.root)
   })
 
   handle(IPC.restoreVault, async () => {
@@ -1000,7 +1060,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         const fn = vaultHandlers.get(channel)
         if (!fn) throw new Error(`unknown vault channel: ${channel}`)
         const key = origin ?? 'remote'
-        const mayBind = channel === IPC.restoreVault || channel === IPC.openVault
+        const mayBind = BINDS_ROOT.has(channel)
         if (!mayBind && remoteRoots.has(key) && remoteRoots.get(key) !== vault.getRoot()) {
           throw new Error('The active vault changed; reload the current account before editing')
         }

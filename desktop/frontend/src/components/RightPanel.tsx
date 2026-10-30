@@ -149,7 +149,11 @@ function useSelection(orderedPaths: string[]) {
   return { selected, onClick, only, clear }
 }
 
-export interface CtxItem { label: string; icon?: React.ReactNode; danger?: boolean; disabled?: boolean; separatorBefore?: boolean; shortcut?: string; run: () => void }
+export interface CtxItem {
+  label: string; icon?: React.ReactNode; danger?: boolean; disabled?: boolean; separatorBefore?: boolean; shortcut?: string; run: () => void
+  /** 第二行小字(路径 / 状态);checked = 行尾打勾(当前项);onSecondary = 在这一行上右键(关掉本菜单,坐标交给调用方再弹一个)。原生半屏菜单只认 label。 */
+  detail?: string; checked?: boolean; onSecondary?: (at: { x: number; y: number }) => void
+}
 /** anchorTop:从一颗按钮弹出时给按钮上沿 —— 下面放不下就翻到它上面(而不是盖住按钮);右键菜单不用给。 */
 export type CtxMenu = { x: number; y: number; anchorTop?: number; items: CtxItem[] } | null
 
@@ -216,8 +220,16 @@ export const ContextMenu: React.FC<{ menu: NonNullable<CtxMenu>; onClose: () => 
       {menu.items.map((it, i) => (
         <React.Fragment key={i}>
           {it.separatorBefore && <div className="ctx-separator" role="separator" />}
-          <button ref={i === menu.items.findIndex(item => !item.disabled) ? firstItem : undefined} role="menuitem" aria-label={it.label} disabled={it.disabled} className={`ctx-item${it.danger ? ' danger' : ''}`} onClick={() => { onClose(); it.run() }}>
-            {it.icon}<span>{it.label}</span>{it.shortcut && <kbd className="ctx-shortcut" aria-hidden="true">{it.shortcut}</kbd>}
+          <button
+            ref={i === menu.items.findIndex(item => !item.disabled) ? firstItem : undefined}
+            role={it.checked === undefined ? 'menuitem' : 'menuitemradio'} aria-checked={it.checked} aria-label={it.label} title={it.detail}
+            disabled={it.disabled} className={`ctx-item${it.danger ? ' danger' : ''}`} onClick={() => { onClose(); it.run() }}
+            onContextMenu={it.onSecondary && ((e) => { e.preventDefault(); e.stopPropagation(); onClose(); it.onSecondary!({ x: e.clientX, y: e.clientY }) })}
+          >
+            {it.icon}
+            {it.detail ? <span className="ctx-text"><span>{it.label}</span><span className="ctx-detail">{it.detail}</span></span> : <span>{it.label}</span>}
+            {it.shortcut && <kbd className="ctx-shortcut" aria-hidden="true">{it.shortcut}</kbd>}
+            {it.checked && <Check size={14} className="ctx-check" aria-hidden="true" />}
           </button>
         </React.Fragment>
       ))}

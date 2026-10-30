@@ -33,6 +33,7 @@ import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle,
 import { editorModeOf, useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
+import { LocalVaultButton } from './amadeusVaultMenu'
 import { UnifiedPage, type UnifiedHistory } from '@amadeus/unified/UnifiedPage'
 import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
 import { NoteFloatingToc } from '@amadeus/unified/NoteFloatingToc'
@@ -124,7 +125,7 @@ registerMessages({
   'amxv.trash.emptyHint': { zh: '回收站是空的。', en: 'The trash is empty.' },
 
   'amxv.missing.title': { zh: '当前库里没有这篇笔记', en: 'This note is not in the current vault' },
-  'amxv.missing.sub': { zh: '「{path}」在这一侧不存在 —— 它可能属于另一侧（本地/云端）、已改名或已删除。这里不会替你新建同名空文件。', en: '“{path}” does not exist on this side. It may belong to the other side (local/cloud), or it was renamed or deleted. No empty file is created in its place.' },
+  'amxv.missing.sub': { zh: '「{path}」不在当前库里 —— 它可能属于另一个智库或另一侧（本地/云端）、已改名或已删除。这里不会替你新建同名空文件。', en: '“{path}” is not in the current vault. It may belong to another vault or the other side (local/cloud), or it was renamed or deleted. No empty file is created in its place.' },
   'amxv.missing.close': { zh: '关闭标签页', en: 'Close tab' },
   'amxv.pluginFile.title': { zh: '这个文件归插件管理', en: 'This file belongs to a plugin' },
   'amxv.pluginFile.sub': { zh: '「{path}」是某个插件的专属格式，而那个插件没有安装或没有启用。当成笔记来编辑会改坏它的格式，所以这里不打开；启用对应的插件后再打开它。', en: '“{path}” is in a plugin’s own format, and that plugin is not installed or not enabled. Editing it as a note would break the format, so it is not opened here. Enable the plugin, then open the file again.' },
@@ -1706,14 +1707,14 @@ export function AmadeusPagesView() {
   const foot = (
     <div className="t2s-foot">
       <TrashSection />
-      <button
+      {!cloudLib && amadeus?.listVaults ? <LocalVaultButton vaultRoot={vaultRoot} /> : <button
         className="t2s-special"
         onClick={() => (cloudLib ? setCloudPanel(true) : void ps().openVault())}
         title={cloudLib ? t('amxv.cloudVaultTip') : vaultRoot || undefined}
       >
         <span className="t2s-special-ic"><FolderOpen /></span>
         <span className="t2s-special-title">{cloudLib ? t('amxv.cloudVault') : vaultRoot ? t('amxv.vaultNamed', { name: baseName(vaultRoot) }) : t('amxv.openVault')}</span>
-      </button>
+      </button>}
     </div>
   )
 

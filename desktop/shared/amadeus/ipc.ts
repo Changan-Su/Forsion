@@ -7,6 +7,12 @@ import { isDesktopPermissionId, type DesktopPermissionId } from '../desktopPermi
 export const IPC = {
   openVault: 'vault:open',
   restoreVault: 'vault:restore',
+  // 本机多智库(第 1 步):清单 / 切换 / 新建 / 移出清单 / 在访达中显示
+  listVaults: 'vaults:list',
+  switchVault: 'vaults:switch',
+  createVault: 'vaults:create',
+  forgetVault: 'vaults:forget',
+  revealVault: 'vaults:reveal',
   listPages: 'vault:list',
   listFiles: 'vault:files',
   loadPage: 'page:load',
@@ -589,6 +595,21 @@ export interface TagCount {
   count: number
 }
 
+/** One row of the bottom vault menu. `current` = open on the local side. */
+export interface LocalVaultRow {
+  root: string
+  name: string
+  /** root with the home folder shown as ~ */
+  display: string
+  current: boolean
+  /** Content sync is on and bound to this vault (shown as 云同步). */
+  sync: boolean
+  /** The vault sync stays bound to, on or off; it can't be removed from the list. */
+  pinned: boolean
+  /** False when the folder was moved or deleted outside Forsion (row stays, greyed out). */
+  exists: boolean
+}
+
 export interface VaultInfo {
   root: string
   /** Page paths relative to the vault root, e.g. "main.md", "Notes/ideas.md". */
@@ -632,6 +653,15 @@ export interface AmadeusApi {
   openVault(): Promise<VaultInfo | null>
   /** Re-open the last vault (persisted across launches), or null if none/unavailable. */
   restoreVault(): Promise<VaultInfo | null>
+  /** Local vault list (optional: web / mobile hosts have one vault). */
+  listVaults?(): Promise<LocalVaultRow[]>
+  /** Open a listed local vault; throws when the folder is gone. */
+  switchVault?(root: string): Promise<VaultInfo>
+  /** Create `<workspace>/Vaults/<name>` and open it; throws on a bad name or an existing folder. */
+  createVault?(name: string): Promise<VaultInfo>
+  /** Drop a row from the list (files stay). False for the open vault or the sync vault. */
+  forgetVault?(root: string): Promise<boolean>
+  revealVault?(root: string): Promise<void>
   listPages(): Promise<string[]>
   /** All non-page files (attachments/.db/…), vault-relative — for the vault tree. */
   listFiles(): Promise<string[]>

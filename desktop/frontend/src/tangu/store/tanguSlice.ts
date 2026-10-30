@@ -2289,8 +2289,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const { defaultWsDir, homeDir, sessions, archivedSessions, cloudProjects, channelWorkspaces, tr: t } = get()
     const defPath = defaultWsDir || homeDir || null
     const defaultName = t('app.defaultWorkspace')
-    // 默认工作区是逻辑身份，不是某次启动算出的路径。首启时 Amadeus Vault 可能在用户已经
-    // 从旧默认目录建好会话后才就位，下次 config:get 会把默认目录切到 Vault/Sessions。
+    // 默认工作区是逻辑身份，不是某次启动算出的路径：它在版本之间换过（~/Tangu → Vault/Sessions →
+    // 10-29 起新用户 ~/Forsion/Sessions），老会话记的还是当时的路径。
     // 保留会话的真实 project_path，但把各语言下以「默认工作区」创建过的路径都收为同组别名。
     const defaultNames = new Set([defaultName, ...translationValues('app.defaultWorkspace')])
     // P1-K7a(K7 §3.4):只看本端会话 —— 已注入的「我的电脑」上的会话带着 Mac 的路径,并进来就是手机上的「幽灵本地项目」
