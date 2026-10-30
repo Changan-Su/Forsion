@@ -219,7 +219,8 @@ it('installs only trusted releases, refuses protected or required plugins, and k
     return (await (await request('operations/' + id)).json())
   }
   const rejected = async (response: Response, status: number, message: string) => {
-    expect(response.status).toBe(status); expect((await response.json()).error).toContain(message)
+    const body = await response.json()
+    expect(response.status).toBe(status); expect(body.error).toContain(message); expect(body.detail).toBe(body.error)
   }
   const unit = await (await request('status')).json()
   expect(unit.management.actions).toEqual(['enable', 'disable', 'restart', 'update', 'migrate', 'install', 'uninstall'])

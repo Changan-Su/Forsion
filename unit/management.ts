@@ -215,7 +215,9 @@ export async function createManagement(options: {
         else json(res, 202, job)
       } catch (error) { busy = false; throw error }
     } catch (error) {
-      json(res, error instanceof HttpError ? error.status : 503, { error: error instanceof HttpError ? error.message : 'Unit management is temporarily unavailable' })
+      const message = error instanceof HttpError ? error.message : 'Unit management is temporarily unavailable'
+      // detail is what the admin plugin's fetch reads; error stays for MCP and older callers.
+      json(res, error instanceof HttpError ? error.status : 503, { error: message, detail: message })
     } finally { res.off('close', cancel) }
   }
   return {
