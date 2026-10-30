@@ -21,7 +21,8 @@
 }
 @keyframes lcl-ftoc-in { from { opacity: 0; } }
 @keyframes lcl-ftoc-out { to { opacity: 0; } }
-.lcl-ftoc[data-lcl-exit] { animation: lcl-ftoc-out var(--duration-fast, 0.15s) var(--ease-exit, ease) forwards; }
+.lcl-ftoc-rail { position: absolute; inset: 0; }
+.lcl-ftoc-rail[data-lcl-exit] { animation: lcl-ftoc-out var(--duration-fast, 0.15s) var(--ease-exit, ease) forwards; }
 .lcl-ftoc-frame.is-sticky .lcl-ftoc { top: 0; }
 .lcl-ftoc-frame[data-side='right'] .lcl-ftoc { left: auto; right: 2px; }
 .lcl-ftoc-hit {

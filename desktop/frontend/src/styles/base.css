@@ -5540,7 +5540,7 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
    关掉那一下会把进场再放一遍、「弹」出来一次。这里列的 = 所有写了 [data-lcl-exit] 退场规则的类(上面的菜单名单 + 遮罩 +
    8.4 补的几处);新加退场规则必须加进来,否则退场被这条吃掉。check:motion 钉着。
    不写成 html:root :is(…) 开头:那是 check:motion 读进场 / 退场名单的格式。 */
-[data-lcl-exit]:not(.lcl-ftoc, .ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
+[data-lcl-exit]:not(.lcl-ftoc-rail, .ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
   .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar,
   .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, [data-motion~='toast']) { animation: none !important; }

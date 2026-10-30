@@ -212,6 +212,7 @@ export function FloatingToc({
   const lastActive = useRef(-1)
   const droplet = useRef<Droplet | null>(null)
   const navRef = useRef<HTMLElement | null>(null)
+  const railRef = useRef<HTMLSpanElement | null>(null)
   const hitRef = useRef<HTMLButtonElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
   const sourceRef = useRef<HTMLElement | null>(null)
@@ -407,10 +408,13 @@ export function FloatingToc({
   }, [])
 
   const visible = items.length >= Math.max(1, minItems) && !tooNarrow
-  useExitGhost(navRef, visible)
+  // Only the ticks fade out as a ghost: a clone of the panel would lose its running clip and show whole.
+  useExitGhost(railRef, visible)
 
   useEffect(() => {
     if (visible) return
+    clearHoverTimer()
+    hovered.current = false
     droplet.current?.cancel()
     droplet.current = null
     setPhase('closed')
@@ -450,13 +454,21 @@ export function FloatingToc({
     const outside = (event: PointerEvent): void => {
       if (!navRef.current?.contains(event.target as Node)) close()
     }
+    // The list is placed once per opening, so a resized surface closes it rather than leaving it over the composer.
+    const scroller = resolveElement(scrollContainer)
+    const width = scroller?.clientWidth, height = scroller?.clientHeight
+    const resized = typeof ResizeObserver === 'undefined' || !scroller ? null : new ResizeObserver(() => {
+      if (scroller.clientWidth !== width || scroller.clientHeight !== height) close()
+    })
+    if (scroller) resized?.observe(scroller)
     document.addEventListener('pointerdown', outside)
     window.addEventListener('blur', close)
     return () => {
+      resized?.disconnect()
       document.removeEventListener('pointerdown', outside)
       window.removeEventListener('blur', close)
     }
-  }, [close, phase])
+  }, [close, phase, scrollContainer])
 
   const activeIndex = items.findIndex((item) => item.key === activeKey)
 
@@ -512,7 +524,11 @@ export function FloatingToc({
     if (event.pointerType === 'touch') return
     hovered.current = false
     clearHoverTimer()
-    hoverTimer.current = window.setTimeout(close, CLOSE_DELAY)
+    hoverTimer.current = window.setTimeout(() => {
+      // Keyboard users keep the list when the mouse wanders off. A mouse click also leaves focus on a row, so ask :focus-visible.
+      const focused = document.activeElement
+      if (!navRef.current?.contains(focused) || !focused?.matches(':focus-visible')) close()
+    }, CLOSE_DELAY)
   }
 
   if (!visible) return null
@@ -542,20 +558,22 @@ export function FloatingToc({
         }}
         aria-label={label}
       >
-        {rail.ticks}
-        {active && (
-          <span
-            className="lcl-ftoc-mark"
-            style={{
-              '--my': `${(activeIndex + 0.5) * rail.gap}px`,
-              '--ml': ((tickLength(active.level) + ACTIVE_BUMP) / TICK_WIDTH).toFixed(3),
-            } as CSSProperties}
-          >
-            <i className="lcl-ftoc-pin" />
-            <i ref={beadRef} className="lcl-ftoc-bead" />
-            <i ref={sourceRef} className="lcl-ftoc-source" />
-          </span>
-        )}
+        <span ref={railRef} className="lcl-ftoc-rail">
+          {rail.ticks}
+          {active && (
+            <span
+              className="lcl-ftoc-mark"
+              style={{
+                '--my': `${(activeIndex + 0.5) * rail.gap}px`,
+                '--ml': ((tickLength(active.level) + ACTIVE_BUMP) / TICK_WIDTH).toFixed(3),
+              } as CSSProperties}
+            >
+              <i className="lcl-ftoc-pin" />
+              <i ref={beadRef} className="lcl-ftoc-bead" />
+              <i ref={sourceRef} className="lcl-ftoc-source" />
+            </span>
+          )}
+        </span>
         <button
           ref={hitRef}
           type="button"
