@@ -86,6 +86,12 @@ export interface MuseConfig {
   notify: 'immediate' | 'digest';
   /** 难活升级给哪个 agent(slug;空=由 developer_instructions 自行决定/不升级)。经 delegate 按该 agent 的模型跑。 */
   escalateTo: string;
+  /** 收件箱里用户点过「好」、Muse 可以自动标已读的类别(services/inboxCategory.ts)。这是一次总的授权,「询问」档也不再逐封弹审批。 */
+  inboxAutoRead: string[];
+  /** 用户点过「这类以后都别管」的类别:不提醒也不标。 */
+  inboxIgnored: string[];
+  /** 一天最多主动找用户几次(message_user 与 Muse 自己发起的卡;0=不限,每小时 3 条照旧)。 */
+  maxDmPerDay: number;
 }
 // 注:旧字段 compactAtRatio(声明后从未被读)与 prompt(人格已迁入 ~/.tangu/agents/muse/ 文件夹,
 // 见 legacyMusePrompt 的一次性迁移)已移除;旧 config.json 里的残留键被 normalize 静默丢弃。
@@ -145,6 +151,9 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     heartbeatMinutes: 120,
     notify: 'immediate',
     escalateTo: '',
+    inboxAutoRead: [],
+    inboxIgnored: [],
+    maxDmPerDay: 0,
   },
 };
 
@@ -156,6 +165,8 @@ const clampInt = (v: any, def: number, min: number, max: number): number => {
 };
 const asStr = (v: any, def = ''): string => (typeof v === 'string' ? v : def);
 const asBool = (v: any, def: boolean): boolean => (typeof v === 'boolean' ? v : def);
+
+const asCategories = (v: any): string[] => (Array.isArray(v) ? [...new Set(v.filter((x: any) => typeof x === 'string' && /^[a-z-]{1,32}$/.test(x)))].slice(0, 16) as string[] : []);
 
 function normalizeActiveHours(v: any): { start: number; end: number } | null {
   if (!v || typeof v !== 'object') return null;
@@ -204,6 +215,9 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       ),
       notify: m.notify === 'digest' ? 'digest' : d.muse.notify,
       escalateTo: asStr(m.escalateTo, d.muse.escalateTo).trim().slice(0, 64),
+      inboxAutoRead: asCategories(m.inboxAutoRead),
+      inboxIgnored: asCategories(m.inboxIgnored),
+      maxDmPerDay: clampInt(m.maxDmPerDay, d.muse.maxDmPerDay, 0, 24),
     },
   };
 }
@@ -244,6 +258,14 @@ export function saveSpecialAgentsConfig(patch: SpecialAgentsPatch): SpecialAgent
       historian: { ...cur.historian, ...(patch.historian || {}) },
       muse: { ...cur.muse, ...(patch.muse || {}) },
     });
+  })!;
+}
+
+/** 在配置锁里按当前值算出 Muse 的改动:用户点卡要往列表里加一项,读改写不能隔着锁。 */
+export function updateMuseConfig(fn: (cur: MuseConfig) => Partial<MuseConfig>): SpecialAgentsConfig {
+  return updateSection('specialAgents', (sec): SpecialAgentsConfig => {
+    const cur = specialAgentsFrom(sec);
+    return normalizeConfig({ ...cur, muse: { ...cur.muse, ...fn(cur.muse) } });
   })!;
 }
 

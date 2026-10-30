@@ -19,6 +19,12 @@ const RAW = [81_337, 30_219, 406_685, 2_033, 16_267, 40_668].flatMap((n) => [Str
  *  `connect` (webpublishreal): a real Forsion Connect server (server scripts/connect-local.mts) — /api/connect/* and /apps/*
  *  are passed through to it untouched (Authorization and Host included, so its publicUrl / publicBase name this front),
  *  and `apps` follows what it accepted, so the legs read the same way against the real routes. */
+/** pluginaware:两条真实上架过的插件,够「反复的事查得到」;咖啡机除垢那条腿故意查不到。 */
+const MARKET = [
+  { id: 'diting', name: '谛听', type: 'plugin', source: 'zip', author: 'Forsion', installSlug: 'diting', latestVersion: '0.3.0', summary: '上课或开会时实时听写，把录音转成文字并整理成笔记。', description: 'Live transcription for lectures and meetings; turns recordings into structured notes.', tags: ['transcription', 'notes', 'lecture', '录音', '笔记'] },
+  { id: 'better-pdf', name: 'Better PDF', type: 'plugin', source: 'zip', author: 'Forsion', installSlug: 'better-pdf', latestVersion: '1.2.0', summary: '读 PDF 时划线、摘录，一键存进笔记。', description: 'Highlight PDFs and clip passages into notes.', tags: ['pdf', 'notes'] },
+];
+
 export async function startFakeCloud(token, { connect } = {}) {
   const seen = [];
   const apps = new Map(); // Forsion Connect(webpublish 场景):slug → 发布体;形状照 server microserver/connect 的响应
@@ -45,6 +51,8 @@ export async function startFakeCloud(token, { connect } = {}) {
       const key = `${req.method} ${path}`;
       // 台架自查用:前置收到过几次「发布」(含被拒的)—— 真机那段判「批准前一个字节都没发」看这个
       if (key === 'GET /__harness/connect-posts') return send(200, { n: seen.filter((r) => r.method === 'POST' && r.path === '/api/connect/apps').length });
+      if (key === 'GET /api/market/items') return send(200, { items: MARKET });
+      if (req.method === 'GET' && path.startsWith('/api/market/items/')) { const hit = MARKET.find((i) => i.id === decodeURIComponent(path.slice('/api/market/items/'.length))); return hit ? send(200, hit) : send(404, { detail: 'not found' }); }
       if (key === 'GET /api/token-quota/my') return send(200, QUOTA);
       if (key === 'GET /api/brain/users/me') return send(200, { id: 'u-live', username: 'livetester', nickname: 'Live Tester', membershipTier: 'pro' });
       if (key === 'GET /api/membership/my') return send(200, { membership: { tier: 'pro', status: 'active', expiresAt: '2026-11-03T00:00:00.000Z', autoRenew: true, plan: { name: 'Pro' } } });

@@ -77,6 +77,12 @@ export interface MuseConfig {
   notify?: 'immediate' | 'digest'
   /** 难活升级给哪个 agent(slug;空=不指定)。 */
   escalateTo?: string
+  /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
+  inboxAutoRead?: string[]
+  /** 用户点过「这类以后都别管」的类别。 */
+  inboxIgnored?: string[]
+  /** 一天最多主动找用户几次(0 = 不限)。 */
+  maxDmPerDay?: number
 }
 
 /** GET /agent/special/muse/library 的一项(Library 相对路径;dir=目录)。 */
@@ -113,6 +119,8 @@ export interface MuseStatusInfo {
   lastCycleAt: number | null
   lastError?: string | null
   sessionId: string | null
+  /** 主动消息下面的反馈按钮开到这个时刻(磨合期 14 天,epoch ms)。旧引擎 / 还没跑过周期 = 没有。 */
+  feedbackUntil?: number | null
   /** 旧引擎没有下面四个字段(可选,读端兜底)。 */
   mode?: 'ask' | 'agent' | 'auto'
   heartbeatMinutes?: number

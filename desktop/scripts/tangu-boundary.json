@@ -207,6 +207,7 @@
       "desktop/frontend/src/stores/codeStudioStore.ts",
       "desktop/frontend/src/stores/deskPlan.ts",
       "desktop/frontend/src/stores/deviceSessionsStore.ts",
+      "desktop/frontend/src/stores/inboxStore.ts",
       "desktop/frontend/src/stores/notificationStore.ts",
       "desktop/frontend/src/stores/notificationWiring.ts",
       "desktop/frontend/src/stores/projectSettings.ts",

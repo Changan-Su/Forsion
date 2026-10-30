@@ -16,7 +16,7 @@ import { localInbox, localizeInboxMessage } from './localInbox' // 移动端(win
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 import { saveResponseAs } from './nativeDownload'
-import type { RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
+import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -261,7 +261,7 @@ export const getBackgroundSessions = (t: EngineTarget, sessionId: string, kind?:
   ).then((r) => r.background)
 
 /** 任务卡「开个子会话」:在这个会话下开一个可见子会话,任务书当第一条消息(做完送回主会话)。 */
-export const startChildSession = (t: EngineTarget, parentId: string, body: { title: string; message: string }) =>
+export const startChildSession = (t: EngineTarget, parentId: string, body: { title: string; message: string; agent?: string }) =>
   request<{ sessionId: string; runId: string; title: string }>(t, `/agent/sessions/${encodeURIComponent(parentId)}/children`, { method: 'POST', body: JSON.stringify(body) })
 
 export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
@@ -1046,6 +1046,21 @@ export const decideMuseApproval = (t: EngineTarget, id: string, decision: 'appro
   }, { timeoutMs: 120000 }) // approve 会同步执行工具(写文件通常毫秒级;bash 可能要跑一会)
 
 /** 往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等;下周期 read_log 即见)。 */
+export const listMuseCards = (t: EngineTarget, status?: string) =>
+  request<{ cards: MuseCardInfo[] }>(t, `/agent/special/muse/cards${status ? `?status=${encodeURIComponent(status)}` : ''}`).then((r) => r.cards)
+
+export const getMuseCard = (t: EngineTarget, id: string) =>
+  request<{ card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}`).then((r) => r.card)
+
+export const decideMuseCard = (t: EngineTarget, id: string, action: string, extra?: Record<string, unknown>) =>
+  request<{ ok: boolean; card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: JSON.stringify({ ...extra, action }) })
+
+export const editMuseSummary = (t: EngineTarget, id: string, body: { index: number; expected: string; text: string }) =>
+  request<{ ok: boolean; card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}/summary-edit`, { method: 'POST', body: JSON.stringify(body) })
+
+export const museMessageFeedback = (t: EngineTarget, id: string, verdict: 'up' | 'down') =>
+  request<{ ok: boolean }>(t, `/agent/special/muse/messages/${encodeURIComponent(id)}/feedback`, { method: 'POST', body: JSON.stringify({ verdict }) })
+
 export const postMuseFeedback = (t: EngineTarget, text: string) =>
   request<{ ok: boolean }>(t, '/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text }) })
 
@@ -1296,6 +1311,8 @@ export interface InboxMessage {
   origin_broadcast_id: string | null
   thread?: InboxThread | string | null
   read_at: string | null
+  /** 'muse' = Muse 替用户标的已读(手机本地收件箱没有)。 */
+  read_by?: string | null
   archived_at: string | null
   attachments?: { items: InboxAttachmentItem[]; claimed: boolean; requires?: InboxClaimRequirements } | null
   expires_at?: string | null
@@ -1336,6 +1353,10 @@ export const pullInbox = (t: EngineTarget) =>
     : request<{ pulled: boolean; added: number; detail?: string }>(t, '/agent/inbox/pull', { method: 'POST' })
 
 /** 领取广播附件(发放全在服务端)。client=`desktop/2.10.1`,服务端按它判最低版本。移动端本地收件箱无广播,不承载。 */
+/** Muse 私聊清单里的「领取」:信在 Muse 所在的那台引擎上,手机点它也打那台(手机本地收件箱领不了,所以不走下面那条)。 */
+export const claimOnEngine = (t: EngineTarget, id: string, client?: string) =>
+  request<{ ok: boolean; alreadyClaimed: boolean }>(t, `/agent/inbox/${encodeURIComponent(id)}/claim`, { method: 'POST', body: JSON.stringify({ client }) })
+
 export const claimInboxAttachment = (t: EngineTarget, id: string, client?: string) =>
   window.tangu?.mobile
     ? Promise.reject(new Error('not supported on mobile'))

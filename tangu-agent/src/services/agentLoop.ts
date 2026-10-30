@@ -36,7 +36,7 @@ import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
-import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
+import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, PLUGIN_AWARENESS_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
 import { canonicalToolName, resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
 import { LEGACY_HTML_CARD_TOOL, SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
@@ -1627,6 +1627,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, ps.noPreamble ? { noPreamble: true } : undefined));
     // 应用 / 窗口引用(`[[app://…]]` / `[[window://…]]`):紧跟输出风格段(它是「标识符进反引号」的例外);通道会话是纯文本,不注入。
     if (!channelSession) systemParts.push(APP_REF_SECTION);
+    // 想到插件:有商店面才说(同 search_marketplace 的门)。计划模式没有这个工具;通道会话画不出插件卡与任务卡。
+    if (deps().brain.marketplace && !planMode && !channelSession) systemParts.push(PLUGIN_AWARENESS_SECTION);
     // 发给模型前脱敏开着:告诉模型占位符能直接用(否则真模型会拒绝「看不到的 key」,live 台架 10-28 实测)。随设置静态,不碎前缀缓存。
     { const ms = maskSettings(); if (ms.action === 'mask' && (ms.secrets || ms.personal) && !maskSkipped) systemParts.push(MASKING_SECTION); }
     // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段);
