@@ -55,7 +55,7 @@ const sess = (id: string, o: Partial<SessionRecord> = {}): SessionRecord => ({ i
 type Handler = (url: string, init: RequestInit) => Response | Promise<Response>
 let roster: UnitInfo[] = []
 let handler: Handler = () => new Response('{"sessions":[]}', { status: 200 })
-const calls: Array<{ method: string; url: string }> = []
+const calls: Array<{ method: string; url: string; body?: unknown }> = []
 const store = new Map<string, string>()
 const setItem = vi.fn((k: string, v: string) => { store.set(k, v) })
 
@@ -76,7 +76,7 @@ beforeEach(() => {
     },
   })
   vi.stubGlobal('fetch', vi.fn(async (u: string, init: RequestInit = {}) => {
-    calls.push({ method: init.method || 'GET', url: String(u) })
+    calls.push({ method: init.method || 'GET', url: String(u), body: init.body })
     return handler(String(u), init)
   }))
   fakeApp.setState({ sessions: [], archivedSessions: [], configBySession: {}, activeId: null, cfg: { backendUrl: API, token: JWT } })
@@ -294,6 +294,7 @@ describe('S4: remote rows only ever get PATCH', () => {
     handler = (u, init) => (init.method === 'PATCH' ? Response.json({ session: sess('r1') }) : Response.json({ sessions: [sess('r1')] }))
     await S.useDeviceSessions.getState().refresh()
     await S.renameRemote(MAC, 'r1', 'New name')
+    expect(JSON.parse(String(calls.find((c) => c.method === 'PATCH')?.body))).toEqual({ title: 'New name', title_source: 'user' })
     await S.archiveRemote(MAC, 'r1')
     const writes = calls.filter((c) => c.method !== 'GET')
     expect(writes.map((c) => `${c.method} ${c.url}`)).toEqual([

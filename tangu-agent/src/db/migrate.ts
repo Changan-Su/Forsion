@@ -297,6 +297,9 @@ export async function runMigration(): Promise<void> {
     // 会话级 agent 配置 + emoji(桌面端会话设置)。
     ['chat_sessions', 'agent_config JSONB'],
     ['chat_sessions', 'emoji VARCHAR(32)'],
+    // 用户亲手改过标题 / 动过图标:Historian 不再碰。放独立列不放 agent_config:配置写入是按键合并 / 整对象回落,会连带冲掉。
+    ['chat_sessions', 'title_manual BOOLEAN NOT NULL DEFAULT FALSE'],
+    ['chat_sessions', 'emoji_manual BOOLEAN NOT NULL DEFAULT FALSE'],
     // todo 工具(builtin:todo)的会话级任务清单。
     ['chat_sessions', 'todos JSONB'],
     // 项目工作区(本地/Cloud Project/无根会话显式分型)。projectless 不能拿 project_path/
