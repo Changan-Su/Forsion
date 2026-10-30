@@ -17,7 +17,6 @@ import { setActiveSpace, useWorkspace } from '@lcl/engine'
 import { HOME_REF, sameRef, targetForSession } from '../../services/engine/targets'
 import type { MuseCardInfo, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { MarketPluginCards } from '../../components/MarketPluginCards'
-import { SETTINGS_TABS } from '../../components/settingsTarget'
 
 registerMessages({
   'museCard.inDeck': { zh: '{title} · 在对话最下面', en: '{title} · at the end of the chat' },
@@ -144,9 +143,8 @@ function useDecide(sessionId: string | undefined) {
   return { busy, decide, send }
 }
 
-const openSettingsTab = (tab: string): void => {
-  if ((SETTINGS_TABS as readonly string[]).includes(tab)) useApp.getState().openSettings(tab as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])
-}
+/** 功能卡的 feature 引擎发卡时已按 MUSE_FEATURES 校验过(都是设置页 id)。 */
+const openSettingsTab = (tab: string): void => useApp.getState().openSettings(tab as Parameters<ReturnType<typeof useApp.getState>['openSettings']>[0])
 
 /** 卡片堆里的一张。 */
 export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: string }) {
