@@ -34,7 +34,7 @@ const MSGS = [
   dm('c-feature', 6, 'proactive:card', `你常问昨天看过什么。\n\n${fence('feature')}`),
 ]
 const card = (id, kind, payload) => ({ id, kind, key: null, payload, status: 'pending', result: null, created_at: T0, decided_at: null })
-const ITEM = { id: 'better-pdf', name: 'Better PDF', description: '批注与对比', type: 'plugin', tags: [], version: '1.0.0' }
+const ITEM = { id: 'better-pdf', name: 'Better PDF', author: 'Forsion', summary: '批注与对比', type: 'plugin', installSlug: 'better-pdf', latestVersion: '1.0.0', tags: [] }
 
 async function main() {
   const r = makeReporter()
@@ -112,6 +112,7 @@ async function main() {
     const s0 = await state()
     r.check('R1a 主动消息下面有反馈按钮,卡片消息没有', s0.fb === 'open' && !s0.fbOnCards, JSON.stringify(s0))
     r.check('R2 插件卡留在消息里,不进卡片堆;卡片堆 4 张', s0.pluginBtn && !s0.pluginInDeck && s0.deckN === '4', JSON.stringify(s0))
+    await win.screenshot({ path: path.join(dir, 'plugin.png') })
     r.check('R3 围栏不进正文;待处理的卡流里一行指路', !s0.leak && s0.pointer === 'pending', JSON.stringify(s0))
     await win.screenshot({ path: path.join(dir, 'intro.png') })
 
@@ -119,6 +120,11 @@ async function main() {
     await win.waitForSelector('#tocmsg-p1 [data-muse-feedback="down"]', { timeout: 5000 }).catch(() => {})
     const s1 = await state()
     r.check('R1b 点「少来点这种」发 down,按钮变回执', seen.feedback[0]?.id === 'p1' && seen.feedback[0]?.verdict === 'down' && /记下了：这类少来|fewer of these/.test(s1.fbText), JSON.stringify({ s1, f: seen.feedback }))
+
+    // ── 插件卡 ──
+    await win.locator('#tocmsg-c-plugin .mk-chat-card-actions button', { hasText: /不感兴趣|Not interested/ }).click()
+    await win.waitForSelector('#tocmsg-c-plugin [data-muse-card-line="dismissed"]', { timeout: 5000 }).catch(() => {})
+    r.check('R2b 插件卡「不感兴趣」发 dismiss,流里留回执', last().id === 'plugin' && last().action === 'dismiss' && await win.locator('#tocmsg-c-plugin [data-muse-card-line="dismissed"]').count() === 1, JSON.stringify(last()))
 
     // ── 三问 ──
     const q = (n) => win.locator(`${inCard('intro')} .t2-musecard-q`).nth(n).locator('button')
@@ -137,6 +143,7 @@ async function main() {
     // ── 设置 ──
     const rows = await win.locator(`${inCard('settings')} .t2-musecard-row`).allInnerTexts()
     r.check('R5a 旧值 → 新值', /全天 → 9–23 点|All day → 9:00–23:00/.test(rows[0] || '') && /即时 → 日报|Right away → Daily digest/.test(rows[1] || ''), JSON.stringify(rows))
+    await win.waitForTimeout(600) // 卡片入场过渡
     await win.screenshot({ path: path.join(dir, 'settings.png') })
     await win.locator(`${inCard('settings')} button.primary`).click()
     await win.waitForSelector(inCard('summary'), { timeout: 5000 }).catch(() => {})
@@ -145,6 +152,7 @@ async function main() {
     r.check('R5b 点「改」只传 action,回执写新值', JSON.stringify(last()) === JSON.stringify({ id: 'settings', action: 'apply' }) && /已改成 9–23 点、日报|Changed to 9:00–23:00, Daily digest/.test(line), JSON.stringify({ last: last(), line }))
 
     // ── 小结 ──
+    await win.waitForTimeout(600) // 卡片入场过渡
     await win.screenshot({ path: path.join(dir, 'summary.png') })
     const sRow = (n) => win.locator(`${inCard('summary')} .t2-musecard-row`).nth(n)
     await sRow(0).locator('button').first().click()
@@ -161,6 +169,7 @@ async function main() {
     r.check('R6c 「都对」收起', last().action === 'ok', JSON.stringify(last()))
 
     // ── 功能卡 ──
+    await win.waitForTimeout(600) // 卡片入场过渡
     await win.screenshot({ path: path.join(dir, 'feature.png') })
     await win.locator(`${inCard('feature')} button`).nth(1).click()
     await win.waitForFunction(() => !document.querySelector('[data-pending-deck] .t2c-apv'), null, { timeout: 5000 }).catch(() => {})
