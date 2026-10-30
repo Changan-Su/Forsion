@@ -158,12 +158,12 @@ async function main() {
       const w = wrap.getBoundingClientRect(), t = ta.getBoundingClientRect(), b = badge.getBoundingClientRect()
       return { visible: b.left >= w.left - 1 && b.right <= w.right + 1 && b.bottom <= w.bottom + 1, covers: t.height >= w.height - 1, lines: w.height / parseFloat(getComputedStyle(el).lineHeight) }
     })
-    await ta.evaluate(el => { el.parentElement.style.width = '220px' })
+    await ta.evaluate(el => { el.closest('.t2c-card').style.width = '280px' })
     await win.waitForTimeout(200)
     const narrow = await geometry()
     check('窄输入框长建议可完整换行,胶囊可见且可点击输入', narrow.visible && narrow.covers && narrow.lines >= 2, JSON.stringify(narrow))
     await win.locator('.t2c-card:visible').first().screenshot({ path: path.join(os.tmpdir(), 'forsion-promptsuggest-narrow.png') })
-    await ta.evaluate(el => { el.parentElement.style.width = '' })
+    await ta.evaluate(el => { el.closest('.t2c-card').style.width = '' })
 
     // ── ② 设置 → 高级 → 界面与会话:缺省勾着;取消 / 再勾上(真点) ──
     // 设置是一扇单独的浮窗(另一个渲染进程):开关写的是共用的 localStorage,主窗每次现读、经 storage 事件撤灰字。
@@ -207,9 +207,11 @@ async function main() {
 
     if (!NEGATIVE_CONTROL) {
       const box = win.locator('.t2c-card, .t2c').first()
+      await win.screenshot({ path: path.join(os.tmpdir(), 'forsion-promptsuggest-window-light.png') })
       await box.screenshot({ path: SHOTS.light }).catch(() => win.screenshot({ path: SHOTS.light }))
       await win.evaluate(() => { document.documentElement.classList.add('dark'); document.documentElement.dataset.mode = 'dark' })
       await win.waitForTimeout(250)
+      await win.screenshot({ path: path.join(os.tmpdir(), 'forsion-promptsuggest-window-dark.png') })
       await box.screenshot({ path: SHOTS.dark }).catch(() => win.screenshot({ path: SHOTS.dark }))
       await win.evaluate(() => { document.documentElement.classList.remove('dark'); delete document.documentElement.dataset.mode })
     }
