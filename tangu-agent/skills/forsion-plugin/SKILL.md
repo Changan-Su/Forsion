@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.82.0
+  version: 1.83.0
   author: Forsion
   category: Forsion
 ---
@@ -524,7 +524,7 @@ ctx.registerCommand({
 | `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `mountComposer` 把「新对话」输入区整块挂进来、发送归宿主(2026-10-18 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.summary` | Tangu 聊天右侧**摘要栏**加一张卡(`registerCard`,和进度 / 后台 / 产物 / Agent Desk 同一个栈,用户可折叠、拖动排序) | 2026-10-25 起;⚠️**只在桌面 Tangu 上存在**(同 `ctx.desk`)→ `ctx.summary?.`;见下「摘要栏插件卡」 |
-| `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
+| `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`);给「当…」加插件自己的事件(`registerTrigger` / `emit`,2026-10-30 起) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`,人人有)+ 叠加源与日历设置(`subscribe` / `setColor` / `setHidden` / `setDefault` / `setMember` / `removeMember`)+ .ics 订阅管理(`ics.add` / `importText` / `rename` / `remove` / `refresh`) | `ensureMember` 2026-09-02 起;其余 2026-10-17 起,⚠️**声明 `"calendar"` 才有**(没声明时这几个成员不存在,不是空壳)→ `ctx.calendar?.subscribe`;见下「日历叠加源与设置」 |
 | `ctx.spaces` | Space 列表 / 打开 / 图标 / 近况那一行 + 商店、成就两格 + Ribbon 上区的收纳架(顺序、收纳夹) | 2026-10-18 起;⚠️**声明 `"spaces"` 才存在**(收纳架改的是用户的 Ribbon);见下「Space 与 Ribbon 收纳架」 |
 | `ctx.databases` | 全库多维表的实时聚合(`subscribe`)+ 按行按格读写(`setCell` / `addRow` / `duplicateRow` / `deleteRow`) | 2026-10-16 起;⚠️**manifest `capabilities` 声明 `"databases"` 才存在**;见下「全库多维表与笔记任务」 |
@@ -844,6 +844,7 @@ ctx.registerToolResultRenderer?.({
 - Agent Desk 伴随面:ctx.desk(2026-09-19 起)
 - 摘要栏插件卡:ctx.summary(2026-10-25 起)
 - 自动化规则播种:ctx.automation(2026-09-02 起)
+- 插件自己的触发事件:ctx.automation.registerTrigger / emit(2026-10-30 起)
 
 
 ## 日历成员登记:ctx.calendar(2026-09-02 起)

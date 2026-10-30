@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   GitIdentity, GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -1061,7 +1061,7 @@ export const getMuseCard = (t: EngineTarget, id: string) =>
   request<{ card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}`).then((r) => r.card)
 
 export const decideMuseCard = (t: EngineTarget, id: string, action: string, extra?: Record<string, unknown>) =>
-  request<{ ok: boolean; card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: JSON.stringify({ ...extra, action }) })
+  request<{ ok: boolean; card: MuseCardInfo; trigger?: { id: string } }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: JSON.stringify({ ...extra, action }) })
 
 export const editMuseSummary = (t: EngineTarget, id: string, body: { index: number; expected: string; text: string }) =>
   request<{ ok: boolean; card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}/summary-edit`, { method: 'POST', body: JSON.stringify(body) })
@@ -1087,6 +1087,22 @@ export const getMuseLibraryFile = (t: EngineTarget, path: string) =>
 // 后端半死时一笔永不 settle 的请求会把整条链焊住 —— 停用永远排不上,等于 codex 抓的那条 bug 换了触发条件。
 export const getMuseTriggers = (t: EngineTarget) =>
   request<{ triggers: MuseTriggerInfo[] }>(t, '/agent/special/muse/triggers', undefined, { timeoutMs: 30000 }).then((r) => r.triggers)
+
+/** 触发源目录;老引擎没这条路由 → 空,构建器退回老的五个按钮。 */
+export const getTriggerSources = (t: EngineTarget) =>
+  request<{ sources: TriggerSourceInfo[] }>(t, '/agent/special/automation/sources', undefined, { timeoutMs: 30000 }).then((r) => r.sources).catch(() => [] as TriggerSourceInfo[])
+
+const pluginTriggerPath = (pluginId: string, key: string): string =>
+  `/agent/special/automation/plugin-triggers/${encodeURIComponent(pluginId)}/${encodeURIComponent(key)}`
+
+export const registerAutomationTrigger = (t: EngineTarget, pluginId: string, trigger: unknown) =>
+  request<{ ok: boolean }>(t, '/agent/special/automation/plugin-triggers', { method: 'POST', body: JSON.stringify({ pluginId, trigger }) })
+
+export const unregisterAutomationTrigger = (t: EngineTarget, pluginId: string, key: string) =>
+  request<{ ok: boolean }>(t, pluginTriggerPath(pluginId, key), { method: 'DELETE' })
+
+export const emitAutomationTrigger = (t: EngineTarget, pluginId: string, key: string, payload?: Record<string, unknown>) =>
+  request<{ ok: boolean }>(t, `${pluginTriggerPath(pluginId, key)}/emit`, { method: 'POST', body: JSON.stringify({ payload }) })
 
 export const deleteMuseTrigger = (t: EngineTarget, id: string) =>
   request<{ ok: boolean }>(t, `/agent/special/muse/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' })

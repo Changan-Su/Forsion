@@ -478,7 +478,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
   if (name === 'manage_automation') {
     const act = String(args.action ?? '');
     if (act !== 'set') return `manage_automation ${act}${args.id ? ` ${full(args.id)}` : ''}`;
-    const when = [args.cond_type, args.datetime || args.interval || args.time || args.match || args.path || args.event]
+    const when = [args.cond_type, args.datetime || args.interval || args.time || args.match || args.path || args.event || (args.params ? JSON.stringify(args.params) : '')]
       .filter(Boolean).map(full).join(' ');
     // 本次写入的动作链 / 旧式 prompt 取校验后的那份(见 savedText)。cond 换成 manual 只为绕开这里给不了的 cwd / vault
     // (file_chars_gte / db_changed 要),动作与 prompt 的校验与 cond 无关;与工具同样 allowToolCall=false。
