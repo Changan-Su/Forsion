@@ -10,20 +10,17 @@ import { translate } from '../i18n'
 import { ipcErrorText } from '../ipcError'
 import { reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { loadUserSpaces } from '../userSpaces'
-import { listPlugins, rescanPlugins, restoreTrashEntry, uninstallPlugin } from '../services/backendService'
+import { rescanPlugins, restoreTrashEntry, uninstallPlugin } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import { panelToast } from './PanelNotice'
 import { notifyUninstalled } from './UninstallDialog'
 
-/** 不留设置时把内嵌引擎插件的设置(可能有密钥)交给引擎收进回收站,返回条目 id,恢复时连带放回。只收捆绑包自己管的:
- *  用户目录同 id 覆盖的、首方内置同 id 的不归它(同 syncBundleEngines)。引擎不在就收不了,设置留在 config.json。 */
-async function trashBundleEngineSettings(ids: string[]): Promise<string[]> {
-  if (!ids.length) return []
-  const userOwned = new Set(((await window.tangu?.pluginsUserInstalled?.().catch(() => [])) ?? []).map((x) => x.id))
+/** 不留设置时把内嵌引擎插件的设置(可能有密钥)交给引擎收进回收站,返回条目 id,恢复时连带放回。带 bundle:同 id 的
+ *  若不是这个捆绑包里的(用户目录覆盖、首方内置),引擎不动它。引擎不在就收不了,设置留在 config.json。 */
+async function trashBundleEngineSettings(p: AmadeusPlugin): Promise<string[]> {
   const trashIds: string[] = []
-  for (const e of await listPlugins(homeTarget())) {
-    if (!ids.includes(e.id) || e.source === 'builtin' || userOwned.has(e.id)) continue
-    const r = await uninstallPlugin(homeTarget(), e.id).catch(() => null)
+  for (const id of p.bundle?.enginePlugins ?? []) {
+    const r = await uninstallPlugin(homeTarget(), id, { bundle: p.bundle!.dir }).catch(() => null)
     if (r?.trashId) trashIds.push(r.trashId)
   }
   return trashIds
@@ -34,14 +31,14 @@ async function trashBundleEngineSettings(ids: string[]): Promise<string[]> {
 export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opts: { keepSettings: boolean; moveVault: boolean }, hooks: { engine: boolean; onGone?: () => void; onEngineReload?: () => void }): Promise<boolean> {
   const ids = p.bundle?.enginePlugins ?? []
   // ⚠️这里别写 enabled:false:写进 config.json 的「关」不随目录走,重装后内嵌引擎插件就一直关着。工具靠下面的重扫撤。
-  const engineTrash = hooks.engine && !opts.keepSettings ? await trashBundleEngineSettings(ids) : []
+  const engineTrash = hooks.engine && !opts.keepSettings ? await trashBundleEngineSettings(p) : []
   const prefs = opts.keepSettings ? {} : pluginPrefs(p.id)
   const vaultFolder = opts.moveVault ? pluginVaultFolder(p.id, p.name) : null
   let r: { trashId?: string; dirName?: string } | void
   try {
     r = await amadeus.uninstallPlugin?.(p.id, { keepSettings: opts.keepSettings, ...(vaultFolder ? { vaultFolder } : {}), ...(Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}) })
   } catch (e: any) {
-    for (const id of engineTrash) await restoreTrashEntry(homeTarget(), id).catch(() => {}) // 没卸成:设置接回去
+    for (const id of engineTrash) await restoreTrashEntry(homeTarget(), id).catch(() => {}) // 没卸成:设置接回去(接不回的留在回收站里)
     // 主进程的开发副本守卫用机器码开头(见 electron/amadeus/ipc.ts 的 uninstallPlugin):用户真会撞上(开发副本可能是别的窗口 /
     // 上一次会话开的),按当前语言说人话;其余原因码交给 ipcErrorText(它已剥掉 invoke 前缀,不认识的码原样透传)。
     const text = ipcErrorText(e)

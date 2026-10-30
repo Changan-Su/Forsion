@@ -13,8 +13,6 @@ const LOAD_WAIT_MS = 3000
 const INDEX_TTL_MS = 60_000
 const stateKey = (id: string) => `forsion.pluginSync.${id}`
 const offKey = (id: string) => `forsion.pluginSync.off.${id}`
-/** 这个插件在 localStorage 里的同步键:卸载不留设置时随偏好一起收走。留着的话状态记着 v=N,重装后本机没文件也不会去拉云端那份。 */
-export const pluginSyncKeys = (id: string): string[] => [stateKey(id), offKey(id)]
 /** 蓬洲云「同步」页「插件数据」那一行:这台设备上所有插件一起关(每个插件自己的开关照旧,两个都开才同步)。 */
 export const PLUGIN_SYNC_ALL_OFF_KEY = 'forsion.pluginSync.off'
 
@@ -35,6 +33,18 @@ function readState(id: string): SyncState {
 }
 function writeState(id: string, s: SyncState): void {
   try { localStorage.setItem(stateKey(id), JSON.stringify(s)) } catch { /* 配额满:下次按没对过处理,最坏多拉一次 */ }
+}
+
+/** 卸载不留设置时随偏好收走的同步键(状态、开关);留着的话状态记着 v=N,重装后本机没文件也不会去拉云端那份。
+ *  快照里版本号清零:云端那份可能被删后又被别的设备重建,版本号从 1 重来会撞上(同号不同内容),恢复后要和云端重新比一次。 */
+export function pluginSyncSnapshot(id: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  try {
+    if (localStorage.getItem(stateKey(id)) != null) out[stateKey(id)] = JSON.stringify({ ...readState(id), v: 0 })
+    const off = localStorage.getItem(offKey(id))
+    if (off != null) out[offKey(id)] = off
+  } catch { /* 没有 localStorage:没东西可收 */ }
+  return out
 }
 
 const LAST_OK_KEY = 'forsion.pluginSync.lastOk'

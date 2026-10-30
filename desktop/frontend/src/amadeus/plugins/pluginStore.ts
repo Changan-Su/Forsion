@@ -62,7 +62,7 @@ import { MUTATE_DB_RETRIES, mutateDbCas, mutateHumanCalendar } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
 import { createDatabasesApi, createNoteTasksApi, pluginDatabasePath } from './pluginData'
-import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pluginSyncKeys, pushPluginData, type LocalData } from './pluginDataSync'
+import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pluginSyncSnapshot, pushPluginData, type LocalData } from './pluginDataSync'
 import { createCalendarApi } from './pluginCalendar'
 import { createCalendarEventsApi } from './pluginCalendarEvents'
 import { createSpacesApi } from './pluginSpaces'
@@ -260,10 +260,10 @@ export function pluginPrefs(pluginId: string): Record<string, string> {
   try {
     for (let i = 0; i < localStorage.length; i++) {
       const k = localStorage.key(i)
-      if (k && (k.startsWith(`plugin.${pluginId}.`) || pluginSyncKeys(pluginId).includes(k))) out[k] = localStorage.getItem(k) ?? ''
+      if (k?.startsWith(`plugin.${pluginId}.`)) out[k] = localStorage.getItem(k) ?? ''
     }
   } catch { /* 存储不可用:没有可摘的 */ }
-  return out
+  return { ...out, ...pluginSyncSnapshot(pluginId) }
 }
 export function dropPluginPrefs(prefs: Record<string, string>): void {
   for (const k of Object.keys(prefs)) try { localStorage.removeItem(k) } catch { /* ignore */ }
@@ -718,10 +718,13 @@ function readOwed(key = OWED_KEY): Set<string> {
     return new Set()
   }
 }
-// ponytail: 同步读改写,绝不跨 await 攥着旧副本;RULES_OWED_KEY 设置浮窗也写,两窗同一拍写才会丢一条,丢了最坏再发一次停用。
+// ponytail: 同步读改写,绝不跨 await 攥着旧副本;没变化不写,start 销账才不会拿旧副本盖掉别的窗口刚记的。
+//   两窗同一拍都改了才会丢一条;要根治就让主进程当唯一写者。
 function editOwed(fn: (owed: Set<string>) => void, key = OWED_KEY): void {
   const owed = readOwed(key)
+  const before = owed.size
   fn(owed)
+  if (owed.size === before) return
   try {
     localStorage.setItem(key, JSON.stringify([...owed]))
   } catch {

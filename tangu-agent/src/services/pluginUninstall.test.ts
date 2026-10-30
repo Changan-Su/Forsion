@@ -1,4 +1,4 @@
-/** 捆绑包内嵌引擎插件的设置只在 config 里时也要有回收站条目:没有的话 global 快照丢了,恢复捆绑包时设置回不来。 */
+/** 捆绑包内嵌引擎插件:设置只在 config 里时也要有回收站条目(否则 global 快照丢了,恢复捆绑包时设置回不来);bundle 参数只认这个捆绑包里的那份。 */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -26,7 +26,7 @@ beforeAll(async () => {
 afterAll(async () => { delete process.env.TANGU_HOME; await fs.rm(home, { recursive: true, force: true }); });
 
 describe('trashEnginePlugin', () => {
-  it('bundled, settings only in config: keeps a hidden entry, files stay, restore brings the settings back', async () => {
+  it('bundled, settings only in config: keeps an entry, files stay, restore brings the settings back', async () => {
     const { setScopeSettings, getScopeSettings } = await import('../plugins/settingsStore.js');
     const { trashEnginePlugin, restoreEnginePlugin } = await import('./pluginUninstall.js');
     const { listTrash } = await import('./trash.js');
@@ -35,9 +35,22 @@ describe('trashEnginePlugin', () => {
     expect(entry).not.toBeNull();
     expect(getScopeSettings('embedded', 'global').apiKey).toBeUndefined();
     expect(await fs.stat(path.join(home, 'plugins', 'bundle', 'tangu-plugins', 'embedded'))).toBeTruthy();
-    expect((await listTrash()).some((e) => e.id === entry!.id)).toBe(false); // 没文件的条目不占回收站一行
-    await restoreEnginePlugin(entry!);
+    expect((await listTrash()).some((e) => e.id === entry!.id)).toBe(true); // 捆绑包恢复时放不回,用户还能在回收站手动恢复
+    await restoreEnginePlugin(entry!, { rescan: false });
     expect(getScopeSettings('embedded', 'global').apiKey).toBe('sk-x');
+    expect((await listTrash()).some((e) => e.id === entry!.id)).toBe(false);
+  }, 30000); // 第一次动态 import 引擎模块图,高负载时超过缺省 5 秒
+
+  it('bundle check: a same-id plugin resolved elsewhere, or another bundle, is left alone', async () => {
+    const { setScopeSettings, getScopeSettings } = await import('../plugins/settingsStore.js');
+    const { trashEnginePlugin } = await import('./pluginUninstall.js');
+    await setScopeSettings('plain', 'global', { k: 1 });
+    expect((await trashEnginePlugin('plain', { bundle: 'bundle' })).entry).toBeNull();
+    expect(getScopeSettings('plain', 'global').k).toBe(1);
+    await setScopeSettings('embedded', 'global', { k: 2 });
+    expect((await trashEnginePlugin('embedded', { bundle: 'other' })).entry).toBeNull();
+    expect(getScopeSettings('embedded', 'global').k).toBe(2);
+    expect((await trashEnginePlugin('embedded', { bundle: 'bundle' })).entry).not.toBeNull();
   });
 
   it('nothing in config: no entry for a bundled plugin; a user plugin without trash=1 still leaves none', async () => {

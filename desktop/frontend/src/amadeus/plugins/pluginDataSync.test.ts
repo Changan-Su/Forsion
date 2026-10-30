@@ -149,7 +149,7 @@ describe('pluginDataSync', () => {
   it('卸载清云端:本机是最新的就删;回收站放回本机文件和同步状态后,按第一次上传推回去', async () => {
     const a = await device()
     await a.save('mine')
-    const synced = new Map(a.ls), kept = a.file // 回收站收走的那两样
+    const synced = new Map(Object.entries(a.m.pluginSyncSnapshot('p'))), kept = a.file // 回收站收走的那两样
     await a.m.dropPluginCloudData('p')
     expect(cloudValue()).toBeUndefined()
     step(61_000)
@@ -157,6 +157,22 @@ describe('pluginDataSync', () => {
     expect(await restored.load()).toBe('mine')
     await restored.settle()
     expect(cloudValue()).toMatchObject({ value: 'mine', version: 1 })
+  })
+
+  it('卸载清云端后别的设备重建了同号版本:恢复后不把旧数据当最新,拉云端那份', async () => {
+    const a = await device()
+    await a.save('old')
+    const b = await device()
+    await b.load()
+    a.use()
+    const synced = new Map(Object.entries(a.m.pluginSyncSnapshot('p'))), kept = a.file
+    await a.m.dropPluginCloudData('p')
+    b.use()
+    await b.save('newer-from-b') // 云端没了:按新建重传,版本号又是 1
+    expect(cloudValue()).toMatchObject({ value: 'newer-from-b', version: 1 })
+    step(61_000)
+    const restored = await device({ ls: synced, file: kept })
+    expect(await restored.load()).toBe('newer-from-b')
   })
 
   it('卸载清云端:别的设备写过更新的一版 → 不删(回收站里这份已不是最新,删了找不回来)', async () => {

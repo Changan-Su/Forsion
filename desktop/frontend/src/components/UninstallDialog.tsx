@@ -172,15 +172,13 @@ export async function afterRestore(kind: TrashEntry['kind'], desktopExtra?: Reco
       await reloadPluginsAndAnnounce().catch(() => {})
       void loadUserSpaces()
     }
-    // 内嵌引擎插件:文件夹回来后重扫,再放回一起进回收站的设置。engineEnabled 是 10-30 之前的条目(卸载时把它们关了),按原样开回来
+    // 内嵌引擎插件:设置先放回、再重扫激活(先激活的话它建的空目录会占住原位,数据落到 -2)。放不回的条目留在回收站里,用户能手动恢复。
+    // engineEnabled 是 10-30 之前的条目(卸载时把它们关了),按原样开回来。
     const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [])
-    const engineTrash = strings(desktopExtra?.engineTrash), engineEnabled = strings(desktopExtra?.engineEnabled)
-    if (engineTrash.length || engineEnabled.length) {
-      const { rescanPlugins, setPluginEnabled } = await import('../services/backendService')
-      await rescanPlugins(homeTarget()).catch(() => {})
-      for (const id of engineTrash) await restoreTrashEntry(homeTarget(), id).catch(() => {})
-      for (const id of engineEnabled) await setPluginEnabled(homeTarget(), id, true).catch(() => {})
-    }
+    const { rescanPlugins, setPluginEnabled } = await import('../services/backendService')
+    for (const id of strings(desktopExtra?.engineTrash)) await restoreTrashEntry(homeTarget(), id, { rescan: false }).catch(() => {})
+    await rescanPlugins(homeTarget()).catch(() => {})
+    for (const id of strings(desktopExtra?.engineEnabled)) await setPluginEnabled(homeTarget(), id, true).catch(() => {})
   }
 }
 

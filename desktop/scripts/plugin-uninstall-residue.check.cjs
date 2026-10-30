@@ -183,7 +183,7 @@ async function main() {
     check('② 撤销后:内嵌引擎插件开着', await waitFor(async () => (await enginePlugin())?.enabled === true, 20000), JSON.stringify(await enginePlugin()))
     check('② 撤销后:引擎插件设置回来', await waitFor(async () => JSON.stringify(await api(`/agent/plugins/${ENGINE_ID}/settings?scope=global`)).includes('sk-residue')))
     check('② 撤销后:数据文件回来', fs.existsSync(dataFile))
-    check('② 撤销后:偏好与同步状态回来', await waitFor(async () => { const ls = await lsDump(win); return ls[`plugin.${ID}.mode`] === 'on' && ls[`forsion.pluginSync.off.${ID}`] === '1' && JSON.parse(ls[`forsion.pluginSync.${ID}`] || '{}').v === 3 }))
+    check('② 撤销后:偏好与同步状态回来', await waitFor(async () => { const ls = await lsDump(win); return ls[`plugin.${ID}.mode`] === 'on' && ls[`forsion.pluginSync.off.${ID}`] === '1' && JSON.parse(ls[`forsion.pluginSync.${ID}`] || '{}').owner === 'u1' }))
     check('② 撤销后:回收站没这一条', (await api('/agent/trash')).entries.every((e) => e.ref !== ID))
     await fl.close().catch(() => {})
 
@@ -215,6 +215,14 @@ async function main() {
     await app.close().catch(() => {})
     ;({ app, main: win } = await launch())
     await waitFor(async () => (await rule())?.enabled === true, 20000)
+
+    // ── ③d 勾「保留设置」卸载再恢复:内嵌引擎插件要被重新发现
+    fl = await openPlugins(app, win)
+    await uninstall(fl, ['keepSettings'])
+    check('③d 卸载后内嵌引擎插件撤了', await waitFor(async () => !fs.existsSync(pluginDir) && !(await enginePlugin()), 20000))
+    await restoreFromTrash(fl)
+    check('③d 恢复后内嵌引擎插件开着、设置还在', await waitFor(async () => (await enginePlugin())?.enabled === true && JSON.stringify(await api(`/agent/plugins/${ENGINE_ID}/settings?scope=global`)).includes('sk-kept'), 20000))
+    await fl.close().catch(() => {})
 
     // ── ③c 停用状态下卸载:规则本来就停着;停用记录留着,恢复后仍是停用
     fl = await openPlugins(app, win)

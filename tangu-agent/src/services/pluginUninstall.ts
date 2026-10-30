@@ -12,8 +12,10 @@ import { moveToTrash, restoreTrashItems, type TrashEntry } from './trash.js';
 
 const inside = (root: string, p: string): boolean => { const rel = path.relative(root, p); return !!rel && !rel.startsWith('..') && !path.isAbsolute(rel); };
 
-export async function trashEnginePlugin(id: string, opts: { files?: boolean; keepSettings?: boolean } = {}): Promise<{ entry: TrashEntry | null; dirName?: string }> {
+/** opts.bundle = 只收这个捆绑包(目录名)内嵌的那份:同 id 解析到别处(用户目录、首方)时什么都不动。 */
+export async function trashEnginePlugin(id: string, opts: { files?: boolean; keepSettings?: boolean; bundle?: string } = {}): Promise<{ entry: TrashEntry | null; dirName?: string }> {
   const d = discoverPlugins().find((x) => x.manifest.id === id);
+  if (opts.bundle !== undefined && !(d?.bundled && path.basename(path.dirname(path.dirname(d.dir))) === opts.bundle)) return { entry: null };
   const { removePluginLive } = await import('../plugins/bootstrap.js');
   await removePluginLive(id); // 先注销:清完设置后 isPluginEnabledSync 不会落回 defaultEnabled=true
   const own = !!d && !d.bundled && inside(pluginsDir(), d.dir);
@@ -39,7 +41,8 @@ export async function trashEnginePlugin(id: string, opts: { files?: boolean; kee
 /** 重装过的(原处又有同 id 的插件)不恢复:文件会落到 -2 成两份同 id,设置还会盖掉新装那份的。 */
 export class PluginReinstalledError extends Error { code = 'plugin_reinstalled'; }
 
-export async function restoreEnginePlugin(entry: TrashEntry): Promise<{ id: string }> {
+/** opts.rescan:false = 先不重扫:捆绑包连着放几条时全放回再扫一次,否则第一条的重扫就把后面的激活了,它们建的空目录会占住原位。 */
+export async function restoreEnginePlugin(entry: TrashEntry, opts: { rescan?: boolean } = {}): Promise<{ id: string }> {
   const files = entry.items.find((i) => i.role === 'files');
   if (files && !files.placed && (await fs.lstat(files.from).then(() => true, () => false) || discoverPlugins().some((x) => x.manifest.id === entry.ref))) throw new PluginReinstalledError('The plugin is installed again; uninstall that copy first');
   await restoreTrashItems(entry, async () => {
@@ -48,6 +51,6 @@ export async function restoreEnginePlugin(entry: TrashEntry): Promise<{ id: stri
   });
   const { forgetUninstalled, rescanPlugins } = await import('../plugins/bootstrap.js');
   forgetUninstalled(entry.ref);
-  await rescanPlugins();
+  if (opts.rescan !== false) await rescanPlugins();
   return { id: entry.ref };
 }

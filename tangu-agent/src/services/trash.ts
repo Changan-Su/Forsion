@@ -95,14 +95,15 @@ export async function readTrash(id: string): Promise<TrashEntry | null> {
   } catch { return null; }
 }
 
-/** 东西全被别处挪走了(旧版桌面勾「同时删除相关文件」会把条目里的目录再移进系统废纸篓)的条目不列。 */
+/** 东西全被别处挪走了(旧版桌面勾「同时删除相关文件」会把条目里的目录再移进系统废纸篓)的条目不列。
+ *  本来就没文件、设置快照在 extra.global 里的(捆绑包内嵌引擎插件)要列:捆绑包恢复时放不回,用户才找得到。 */
 export async function listTrash(): Promise<TrashEntry[]> {
   if (!(await realRoot())) return [];
   const ids = await fs.readdir(trashDir()).catch(() => [] as string[]);
   const out: TrashEntry[] = [];
   for (const id of ids) {
     const e = await readTrash(id);
-    if (e && (await Promise.all(e.items.map((it) => exists(path.join(trashDir(), id, it.stored))))).some(Boolean)) out.push(e);
+    if (e && (!e.items.length ? e.extra?.global !== undefined : (await Promise.all(e.items.map((it) => exists(path.join(trashDir(), id, it.stored))))).some(Boolean))) out.push(e);
   }
   return out.sort((a, b) => b.deletedAt - a.deletedAt);
 }
