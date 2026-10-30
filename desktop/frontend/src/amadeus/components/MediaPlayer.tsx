@@ -6,6 +6,7 @@ import { getAttachmentPrefs } from '../lib/attachments'
 import { amadeus } from '../api'
 import { registerMessages, useI18n } from '../../i18n'
 import { BROKEN_MEDIA_ICON } from '../blocks/markdown/brokenMedia'
+import { readFileView, writeFileView } from '../lib/fileViewMemory'
 
 registerMessages({
   'mediaplayer.grabTitle': { zh: '把当前画面存成图片，并在下方插入回源时间戳', en: 'Save the current frame as an image and insert a timestamp link back to this moment' },
@@ -25,17 +26,44 @@ registerMessages({
  *     同名视频,而时间码看着还挺合理。纪律与聊天引用条一致 —— 宁可不认领,让派发方走回落。
  *  3. **连点同一条引用要能再跳**:goto 处理器无条件 seek,**不做「和上次一样就跳过」的去重** ——
  *     去重会让「读了一半往回跳同一条引用」失灵。 */
-export function MediaPlayer({ kind, url, name, pagePath, loc, insertAfter }: {
+export function MediaPlayer({ kind, url, name, pagePath, loc, insertAfter, memoryKey = '', onLocationConsumed }: {
   kind: 'video' | 'audio'
   url: string
   name: string
   pagePath: string
   loc: MediaLoc | null
   insertAfter?: (md: string) => void
+  memoryKey?: string
+  onLocationConsumed?: () => void
 }): ReactElement {
   const { t } = useI18n()
   const files = usePageStore((s) => s.files)
   const ref = useRef<HTMLMediaElement | null>(null)
+  const consumed = useRef(onLocationConsumed)
+  consumed.current = onLocationConsumed
+  // Metadata must exist before setting currentTime. Explicit timestamp links win over memory.
+  useEffect(() => {
+    const el = ref.current
+    if (!el || !memoryKey) return
+    const saved = readFileView('media', memoryKey)
+    const restore = (): void => {
+      if (saved) {
+        el.playbackRate = saved.rate
+        if (!loc) el.currentTime = Math.min(saved.time, Number.isFinite(el.duration) ? el.duration : saved.time)
+      }
+      consumed.current?.()
+    }
+    const remember = (): void => {
+      if (el.readyState >= 1) writeFileView('media', memoryKey, { time: el.currentTime, rate: el.playbackRate })
+    }
+    if (el.readyState >= 1) restore()
+    else el.addEventListener('loadedmetadata', restore, { once: true })
+    for (const event of ['timeupdate', 'ratechange', 'seeked', 'pause']) el.addEventListener(event, remember)
+    return () => {
+      el.removeEventListener('loadedmetadata', restore)
+      for (const event of ['timeupdate', 'ratechange', 'seeked', 'pause']) el.removeEventListener(event, remember)
+    }
+  }, [url, memoryKey]) // eslint-disable-line react-hooks/exhaustive-deps
   // ⚠️ 存的是**键**不是文案:存翻译好的字符串会在切换语言时冻在旧语言里。
   const [shot, setShot] = useState<string | null>(null)
   // crossOrigin 是**截帧**要的(canvas 不被污染);协议端已回 ACAO:*。万一某端没这个头,
@@ -73,11 +101,12 @@ export function MediaPlayer({ kind, url, name, pagePath, loc, insertAfter }: {
   //    播放器再收到一条带区间的引用时 props 不会变(Agent Desk 的 leaf 只按 key memo,params 到不了
   //    已挂载的视图)—— 只 seek 不更新 to = 到点不暂停,静默(Codex 二审)。
   //    收到不带 to 的 goto 时要清掉,否则上一条区间引用的暂停点会赖着不走。
-  const [gotoTo, setGotoTo] = useState<number | undefined>(undefined)
+  // undefined = use the prop's range; null = an explicit plain-open/no-endpoint override.
+  const [gotoTo, setGotoTo] = useState<number | null | undefined>(undefined)
   useEffect(() => { setGotoTo(undefined) }, [loc?.at, loc?.to, url]) // props 的锚变了 → 以 props 为准
 
   // 区间锚 `#t=95,120`:到点暂停。原生 `loop` 不认片段(W3C bug 12426 WONTFIX),只能自己看。
-  const stopAt = gotoTo ?? loc?.to
+  const stopAt = gotoTo === undefined ? loc?.to : gotoTo
   useEffect(() => {
     const el = ref.current
     if (!el || !stopAt) return
@@ -97,10 +126,10 @@ export function MediaPlayer({ kind, url, name, pagePath, loc, insertAfter }: {
       if ((d.path ?? '').replace(/\\/g, '/').toLowerCase() !== vaultPath.replace(/\\/g, '/').toLowerCase()) return
       // 普通打开(不带锚)同一份媒体:只清掉上一条区间锚的暂停点,**不动播放位置** ——
       // 用户没要求跳,别把他正在看的地方冲掉(WsFileView 的 `clear` 同款语义,Codex 四审)。
-      if (d.clear) { setGotoTo(undefined); d.handled = true; return }
+      if (d.clear) { setGotoTo(null); d.handled = true; return }
       if (typeof d.at !== 'number') return
       seek(d.at)
-      setGotoTo(typeof d.to === 'number' && d.to > d.at ? d.to : undefined)
+      setGotoTo(typeof d.to === 'number' && d.to > d.at ? d.to : null)
       void (ref.current as HTMLVideoElement | null)?.play?.().catch(() => {})
       d.handled = true
     }

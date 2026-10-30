@@ -1,11 +1,11 @@
 /**
  * 白板打开 / 查看 / 禅模式 / 右键悬停 —— 真 Electron + 隔离库里种的三张白板(远离原点 / A4 纸张 / 空白)。
- *   F 打开时适配全图(放大 ≤ 2;视口不进文件;再次打开不改写文件)
+ *   F 首开 100%,远处内容居中;视口不进文件;再次打开恢复本机视口且不改写文件
  *   V Option+R 查看模式真能开关,画布右键菜单里有「查看模式」(受控 prop 会让这两样一起失效)
  *   Z 禅模式:工具岛连同数字角标淡出,「退出禅模式」在底部正中、不压缩放条、是胶囊(亮 / 暗)
  *   C 右键菜单悬停行的字看得见(亮 / 暗)
- *   P 纸张白板适配到第一页,随后的视口钳制是空操作(不拉扯);E 空白板仍是原点 100%
- *   H 后台(隐藏)挂载的白板露出来时才适配,不按窗口尺寸算
+ *   P 纸张白板从第一页 100% 打开,随后的视口钳制是空操作(不拉扯);E 空白板仍是原点 100%
+ *   H 后台(隐藏)挂载的白板露出来时才恢复视口,不按窗口尺寸算
  * 截图(亮暗各一张)落 OUT_DIR,缺省系统临时目录,观感自己看(DESIGN §8)。
  *
  * 跑(先在本检出 `npm run build`;devlock 路径按仓根算):
@@ -103,7 +103,7 @@ async function main() {
     await open('远处白板.excalidraw')
     const v0 = await view()
     check('F1 打开远处白板:内容全部在视口内', v0.inView, JSON.stringify(v0))
-    check('F2 适配放大不超过 2', v0.zoom <= 2 + 1e-6 && v0.zoom > 0.1, `zoom=${v0.zoom}`)
+    check('F2 首开比例是 100%', v0.zoom === 1, `zoom=${v0.zoom}`)
     check('F4 适配避开浮动 UI:内容不钻到顶部工具岛 / 侧栏钮下面,也不压底栏(走查 P2-4)', v0.clear.ok, JSON.stringify(v0.clear))
     await win.waitForTimeout(2500)
     const txt1 = fs.readFileSync(farFile, 'utf8'), mt1 = fs.statSync(farFile).mtimeMs
@@ -111,10 +111,10 @@ async function main() {
     console.log('  [F3 首开] 改写了:', mt1 !== mt0, ' appState 键:', Object.keys(j.appState || {}).join(','))
     check('F3a 视口没写进文件', !('scrollX' in (j.appState || {})) && !('zoom' in (j.appState || {})))
     await open('空白板.excalidraw'); await open('远处白板.excalidraw'); await win.waitForTimeout(2500)
-    check('F3b 再次打开(又适配一次)不改写文件', fs.statSync(farFile).mtimeMs === mt1, `mt1=${mt1} now=${fs.statSync(farFile).mtimeMs}`)
+    check('F3b 再次打开(恢复本机视口)不改写文件', fs.statSync(farFile).mtimeMs === mt1, `mt1=${mt1} now=${fs.statSync(farFile).mtimeMs}`)
     await open('竖长白板.excalidraw')
     const tall = await view()
-    check('F5 竖长内容(适配被高度卡住)也不钻到顶部工具岛下面、不压底栏', tall.inView && tall.clear.ok, JSON.stringify({ zoom: tall.zoom, ...tall.clear }))
+    check('F5 竖长内容也以 100% 打开,不自动缩到全图', tall.zoom === 1, JSON.stringify({ zoom: tall.zoom, ...tall.clear }))
     await shot('fit-far-light')
 
     // ── 1 查看模式 ──
@@ -184,8 +184,8 @@ async function main() {
     // A4 = 794×1123;第一页在场景 (0,0)
     const pw = 794, ph = 1123
     const page = { x1: (0 + p1.scrollX) * p1.zoom, y1: (0 + p1.scrollY) * p1.zoom, x2: (pw + p1.scrollX) * p1.zoom, y2: (ph + p1.scrollY) * p1.zoom }
-    check('P1 纸张白板:第一页整页在视口内', page.x1 >= 0 && page.y1 >= 0 && page.x2 <= p1.w + 0.5 && page.y2 <= p1.h + 0.5, JSON.stringify({ page, w: p1.w, h: p1.h, zoom: p1.zoom }))
-    check('P2 第一页撑满一个方向(真适配,不是原样 100%)', Math.abs((page.y2 - page.y1) - p1.h / 1.12) < 2 || Math.abs((page.x2 - page.x1) - p1.w / 1.12) < 2, `页 ${(page.x2 - page.x1).toFixed(0)}×${(page.y2 - page.y1).toFixed(0)}`)
+    check('P1 纸张白板:第一页顶部在视口内', page.y1 >= 0 && page.y1 < p1.h / 2, JSON.stringify({ page, w: p1.w, h: p1.h, zoom: p1.zoom }))
+    check('P2 纸张白板默认 100%', p1.zoom === 1, `页 ${(page.x2 - page.x1).toFixed(0)}×${(page.y2 - page.y1).toFixed(0)}`)
     check('P3 钳制不再改视口(不拉扯)', p1.scrollX === p2.scrollX && p1.scrollY === p2.scrollY && p1.zoom === p2.zoom, JSON.stringify({ p1: [p1.scrollX, p1.scrollY, p1.zoom], p2: [p2.scrollX, p2.scrollY, p2.zoom] }))
     await shot('fit-paper-light')
 

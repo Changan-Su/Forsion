@@ -10,7 +10,7 @@
  *  `amadeus:media-goto` 认领三件事都在里面,别在这儿另写一份)。
  *  多实例:`params.path` 认领文件(**字段名必须是 path**:appStore.deskShowFile 的 fileKeyOf
  *  只认 `pdfPath ?? path`,换个名字 Agent Desk 里每次点都会重挂一个新播放器)。 */
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import type { ViewProps } from '@lcl/engine'
 import { VIDEO_EXT_RE, type MediaLoc } from '@amadeus-shared/pdfLink'
 import { toAssetUrl } from '@amadeus-shared/assets'
@@ -18,6 +18,7 @@ import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { useVaultRelParam } from './vaultRelParam'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { MediaPlayer } from '@amadeus/components/MediaPlayer'
+import { fileViewKey } from '@amadeus/lib/fileViewMemory'
 
 const baseOf = (p: string): string => p.split(/[\\/]/).pop() || p
 
@@ -28,12 +29,18 @@ export function AmadeusMediaView({ leaf }: ViewProps) {
   const mode = useTheme((s) => s.mode)
   // 同 PDF/图片:asset:// 按「当前打开的 vault」解析,启动恢复 tab 时 vault 可能还没 open →
   // 先不挂播放器(否则加载失败,且 vault 就绪后 src 不变不会自愈)。vaultRoot 落地即重渲。
-  const vaultReady = usePageStore((s) => !!s.vaultRoot)
+  const vaultRoot = usePageStore((s) => s.vaultRoot)
+  const vaultReady = !!vaultRoot
+  return <MediaFile key={fileViewKey('media', vaultRoot, path)} {...{ leaf, path, at, to, mode, vaultReady, vaultRoot }} />
+}
+
+function MediaFile({ leaf, path, at, to, mode, vaultReady, vaultRoot }: { leaf: ViewProps['leaf']; path: string; at: number | null; to?: number; mode: string; vaultReady: boolean; vaultRoot: string | null }) {
   useEffect(() => { if (path) leaf.setTitle(baseOf(path)) }, [path]) // eslint-disable-line react-hooks/exhaustive-deps
-  if (!path) return <div className="amx-db amx-db-state">未指定媒体文件。</div>
   // ⚠️ loc 必须是**新对象也无所谓、但 at 变了要能重跳**:MediaPlayer 的 seek effect 依赖 loc?.at,
   //    冷挂载走这里,已挂载后的第二条引语走 amadeus:media-goto(params 到不了已挂载的视图)。
-  const loc: MediaLoc | null = at != null ? { at, ...(to ? { to } : {}) } : null
+  const [loc, setLoc] = useState<MediaLoc | null>(() => at != null ? { at, ...(to ? { to } : {}) } : null)
+  useEffect(() => { if (at != null) setLoc({ at, ...(to ? { to } : {}) }) }, [at, to])
+  if (!path) return <div className="amx-db amx-db-state">未指定媒体文件。</div>
   return (
     <div className="am-app tangu-lovable amx-pane amx-mediaview" data-mode={mode}>
       {vaultReady ? (
@@ -47,6 +54,8 @@ export function AmadeusMediaView({ leaf }: ViewProps) {
             name={path}
             pagePath=""
             loc={loc}
+            memoryKey={fileViewKey('media', vaultRoot, path)}
+            onLocationConsumed={() => { if (at != null) leaf.setParams({ at: undefined, to: undefined }) }}
           />
         </div>
       ) : (

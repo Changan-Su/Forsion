@@ -9,6 +9,7 @@ import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { useVaultRelParam } from './vaultRelParam'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { isHostPath } from '@amadeus-shared/pdfLink'
+import { fileViewKey } from '@amadeus/lib/fileViewMemory'
 
 const PdfAnnotator = lazyRetry(() => import('@amadeus/pdf/PdfAnnotator').then((m) => ({ default: m.PdfAnnotator })))
 
@@ -36,7 +37,9 @@ export function AmadeusPdfView({ leaf }: ViewProps) {
     <div className="am-app tangu-lovable amx-pane amx-pdfview" data-mode={mode} style={{ height: '100%' }}>
       {vaultReady ? (
         <Suspense fallback={<Skeleton variant="document" />}>
-          <PdfAnnotator key={isHostPath(pdfPath) ? 'host' : vaultRoot ?? ''} pdfPath={pdfPath} initialPage={page} initialQuote={quote} />
+          <PdfAnnotator key={`${isHostPath(pdfPath) ? 'host' : vaultRoot}:${pdfPath}`} pdfPath={pdfPath} initialPage={page} initialQuote={quote}
+            memoryKey={fileViewKey('pdf', isHostPath(pdfPath) ? 'host' : vaultRoot, pdfPath)}
+            onLocationConsumed={() => { if (page !== undefined || quote !== undefined) leaf.setParams({ page: undefined, q: undefined }) }} />
         </Suspense>
       ) : (
         <div style={{ padding: 24, color: 'var(--text-muted, #888)' }}>等待 Vault 打开…</div>

@@ -271,6 +271,7 @@
     "check:board": "node scripts/board-paper.check.cjs",
     "check:boardlive": "node scripts/e2e-editor.cjs --check=board-live",
     "check:boardpen": "node scripts/e2e-editor.cjs --check=board-pen",
+    "check:fileviewmemory": "node scripts/file-view-memory.electron.cjs",
     "check:boardview": "node scripts/board-view.electron.cjs",
     "check:scrollbar": "node scripts/scrollbar-overlay.check.cjs",
     "check:callout": "node scripts/callout-fold.check.cjs",
