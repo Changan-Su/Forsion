@@ -11,6 +11,7 @@ import type {
   TriggerSourceInfo,
 } from '../../types'
 import { formatMonthDay, formatTime, toDate } from '../../format/time'
+import './messages'
 
 type T = (key: string, vars?: Record<string, string>) => string
 

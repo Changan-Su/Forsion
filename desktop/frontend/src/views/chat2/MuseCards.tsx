@@ -20,7 +20,6 @@ import { MarketPluginCards } from '../../components/MarketPluginCards'
 import { SETTINGS_TABS } from '../../components/settingsTarget'
 import { useAutomation } from '../../stores/automationStore'
 import { condText, onlyText } from '../automation/lib'
-import '../automation/messages'
 
 registerMessages({
   'museCard.inDeck': { zh: '{title} · 在对话最下面', en: '{title} · at the end of the chat' },
