@@ -102,7 +102,7 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
     if (explicit && (await getDef(b.slug))) return res.status(409).json({ detail: 'An agent with this id already exists', error: 'exists' });
     let slug: string = explicit ? b.slug : slugFromNames(b.nameEn, name);
     if (!slug) return res.status(400).json({ detail: 'A Chinese-only name needs an explicit agent id', error: 'slug_required' });
-    if (await getDef(slug)) {
+    if (!explicit && (await getDef(slug))) {
       const base = slug.slice(0, 60);
       let n = 2;
       while (await getDef(`${base}-${n}`)) n++;

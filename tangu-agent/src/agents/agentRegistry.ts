@@ -616,7 +616,7 @@ export async function migrateAgentNamesOnce(): Promise<void> {
     if (raw === null) continue;
     let meta: Record<string, unknown>;
     try { meta = parseToml(raw) as Record<string, unknown>; } catch { continue; }
-    if (meta.name_zh || meta.name_en) continue;
+    if ('name_zh' in meta || 'name_en' in meta) continue; // 看键不看值:空串也在,再插一行就是重复键,整份 TOML 坏掉
     const { nameZh, nameEn } = parseAgentConfig(e.name, raw, '');
     await fs.writeFile(file, stringifyToml({ ...(nameZh ? { name_zh: nameZh } : {}), ...(nameEn ? { name_en: nameEn } : {}) }) + raw, 'utf-8');
   }
@@ -912,16 +912,19 @@ export function agentCapOf(def: Pick<NormalAgentDef, 'slug' | 'maxIterations'>):
 }
 
 /** 算出落盘的三个名字字段 + name(唯一算 name 的地方)。只给了 name(老客户端、manage_agent、插件)时,改的是现在显示的那一格:
- *  它是英文名且新名字没汉字 → 英文名;其余 → 中文名(中文名什么字都能填)。
+ *  显示的是英文名且新名字没汉字 → 英文名;显示的是中文名、或英文名放不下 → 中文名(什么字都能填);两格同名就一起改。
+ *  提交了 namePref 的 name 只是客户端报的显示名,可能是读旧了的,不算改名(否则改偏好会把别处刚改的名字盖回去)。
  *  英文名只校验提交了的:磁盘上手写的旧值不能让换头像这类保存失败(同 clampAgentMaxIterations)。 */
 function resolveAgentNames(existing: NormalAgentDef | null, input: SaveAgentInput): Pick<NormalAgentDef, 'name' | 'nameZh' | 'nameEn' | 'namePref'> {
   const clip = (v: unknown): string => String(v ?? '').trim().slice(0, 120);
   const given = clip(input.name);
   let nameZh = input.nameZh !== undefined ? clip(input.nameZh) : existing?.nameZh || '';
   let nameEn = input.nameEn !== undefined ? clip(input.nameEn) : existing?.nameEn || '';
-  if (input.nameZh === undefined && input.nameEn === undefined && given && given !== nameZh && given !== nameEn) {
-    if (existing?.name === nameEn && !hasHan(given)) nameEn = given;
-    else nameZh = given;
+  if (input.nameZh === undefined && input.nameEn === undefined && input.namePref === undefined && given && given !== nameZh && given !== nameEn) {
+    const shownEn = existing?.name === nameEn;
+    const toEn = shownEn && !hasHan(given);
+    if (toEn) nameEn = given;
+    if (!toEn || existing?.name === nameZh) nameZh = given;
   }
   if (input.nameEn !== undefined && hasHan(nameEn)) throw new Error('name_en must not contain Chinese characters');
   if (!nameZh && !nameEn) throw new Error('name required');

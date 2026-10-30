@@ -75,6 +75,15 @@ describe('算名字', () => {
     const zh = buildAgentDef('x', base, { name: '夜猫', systemPrompt: 'p' });
     expect(buildAgentDef('x', zh, { name: 'Hawk', systemPrompt: 'p' })).toMatchObject({ name: 'Hawk', nameZh: 'Hawk', nameEn: 'Owl' });
   });
+  it('两格同名:一起改;新名字有汉字只改中文名', () => {
+    const same = buildAgentDef('x', null, { name: 'Alex', nameZh: 'Alex', nameEn: 'Alex', namePref: 'zh', systemPrompt: 'p' });
+    expect(buildAgentDef('x', same, { name: 'Bob', systemPrompt: 'p' })).toMatchObject({ name: 'Bob', nameZh: 'Bob', nameEn: 'Bob' });
+    expect(buildAgentDef('x', same, { name: '阿明', systemPrompt: 'p' })).toMatchObject({ name: '阿明', nameZh: '阿明', nameEn: 'Alex' });
+  });
+  it('改偏好时带的 name 读旧了:不算改名,不盖掉别处刚改的', () => {
+    const hawk = buildAgentDef('x', base, { name: 'Hawk', systemPrompt: 'p' });
+    expect(buildAgentDef('x', hawk, { name: 'Owl', namePref: 'en', systemPrompt: 'p' })).toMatchObject({ name: 'Hawk', nameEn: 'Hawk', namePref: 'en' });
+  });
   it('新建只给 name:进中文名(同迁移)', () => {
     expect(buildAgentDef('x', null, { name: 'Reviewer', systemPrompt: 'p' })).toMatchObject({ nameZh: 'Reviewer', nameEn: '' });
   });
@@ -127,6 +136,7 @@ describe('本地迁移(旧安装升级)', () => {
     write('recita', toml('Recita'));
     write('coding', toml('码农', 'version = "1.0.0"\n'));
     write('broken', 'approval_mode = readonly\nname = "坏"\n');
+    write('emptykey', `name_zh = ""\n${toml('Helper')}`);
     write('helper', toml('Helper'));
     await listAgents();
   });
@@ -150,6 +160,10 @@ describe('本地迁移(旧安装升级)', () => {
   });
   it('解析不了的文件一个字不动', () => {
     expect(read('broken')).toBe('approval_mode = readonly\nname = "坏"\n');
+  });
+  it('键在但是空串:不再插一行(重复键 = 整份 TOML 坏掉),读时照样算出名字', async () => {
+    expect(read('emptykey').match(/name_zh/g)).toHaveLength(1);
+    expect(await getAgent('emptykey')).toMatchObject({ nameZh: 'Helper', systemPrompt: 'p' });
   });
   it('Coding 版本刷新只换提示词,名字留着', async () => {
     const coding = await getAgent('coding');
