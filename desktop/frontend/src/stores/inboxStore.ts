@@ -174,6 +174,10 @@ export const useInbox = create<InboxState>((set, get) => ({
       }))
       setBadge(get().unreadCount)
       void patchInboxMessage(homeTarget(), id, { read: true }).catch(() => void get().refreshUnread())
+    } else if (m?.read_by) {
+      // Muse 替你标过的信,你点开就是你读的了:清掉归属,之后 Muse 撤回已读不会动它
+      set((s) => mapBoth(s, (x) => (x.id === id ? { ...x, read_by: null } : x)))
+      void patchInboxMessage(homeTarget(), id, { read: true }).catch(() => {})
     }
   },
 

@@ -293,14 +293,15 @@ function SummaryCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: stri
   const { t } = useI18n()
   const { busy, decide, send } = useDecide(sessionId)
   const items: string[] = card.payload.items || []
-  const [editing, setEditing] = useState<{ index: number; text: string } | null>(null)
+  // 编辑态按原文认条目,不按下标:编辑中途别的设备删了一条,列表会移位
+  const [editing, setEditing] = useState<{ original: string; text: string } | null>(null)
   // 改写是往 Muse 记忆写用户的原话,引擎拒远端:手机上这张卡能删、能确认,改回电脑上改
   const editable = !!sessionId && sameRef(targetForSession(sessionId).ref, HOME_REF)
   const save = async (): Promise<void> => {
     if (!editing) return
     const text = editing.text.trim()
-    const { index } = editing
-    if (!text || text === items[index] || await send((target) => editMuseSummary(target, card.id, { index, expected: items[index], text }))) setEditing(null)
+    const index = items.indexOf(editing.original)
+    if (index < 0 || !text || text === editing.original || await send((target) => editMuseSummary(target, card.id, { index, expected: editing.original, text }))) setEditing(null)
   }
   return (
     <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="summary">
@@ -308,14 +309,14 @@ function SummaryCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: stri
       {!!card.payload.lead && <div className="t2-taskcard-tldr">{card.payload.lead}</div>}
       {items.map((text, index) => (
         <div key={`${index}:${text}`} className="t2-musecard-row">
-          {editing?.index === index
-            ? <input autoFocus aria-label={t('museCard.edit')} value={editing.text} onChange={(e) => setEditing({ index, text: e.target.value })}
+          {editing?.original === text
+            ? <input autoFocus aria-label={t('museCard.edit')} value={editing.text} onChange={(e) => setEditing({ original: text, text: e.target.value })}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) void save(); if (e.key === 'Escape') setEditing(null) }} />
             : <div><span className="t2-musecard-text">{text}</span></div>}
-          <div className="t2-taskcard-actions">{editing?.index === index
+          <div className="t2-taskcard-actions">{editing?.original === text
             ? <button type="button" className="primary" disabled={busy} onClick={() => void save()}>{t('museCard.save')}</button>
             : <>
-                {editable && <button type="button" disabled={busy} onClick={() => setEditing({ index, text })}>{t('museCard.edit')}</button>}
+                {editable && <button type="button" disabled={busy} onClick={() => setEditing({ original: text, text })}>{t('museCard.edit')}</button>}
                 <button type="button" disabled={busy} onClick={() => void decide(card, 'remove', { index, expected: text })}>{t('museCard.remove')}</button>
               </>}</div>
         </div>

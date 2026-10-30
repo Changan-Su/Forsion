@@ -369,12 +369,14 @@ export async function decideMuseCard(
       if (opts.expected !== items[at]) return gone; // 下标来自点的那一刻的卡面:别的设备改过了,按旧下标会改到另一条
       const next = action === 'edit' ? items.map((x, i) => (i === at ? text : x)) : items.filter((_, i) => i !== at);
       const before = JSON.stringify(card.payload);
-      const moved = await query<any[]>(`UPDATE muse_cards SET payload = ? WHERE id = ? AND user_id = ? AND status = 'pending' AND payload = ? RETURNING id`, [JSON.stringify({ ...card.payload, items: next }), id, userId, before]);
+      const after = JSON.stringify({ ...card.payload, items: next });
+      const moved = await query<any[]>(`UPDATE muse_cards SET payload = ? WHERE id = ? AND user_id = ? AND status = 'pending' AND payload = ? RETURNING id`, [after, id, userId, before]);
       if (!moved?.length) return gone;
       try {
         await editMuseMemory(userId, items[at], text || null);
       } catch (e) {
-        await query(`UPDATE muse_cards SET payload = ? WHERE id = ? AND user_id = ?`, [before, id, userId]);
+        // ponytail: 只在卡面还是这一步的结果时退回,不盖别的设备刚成功的改动;那种情形下这一条的卡面与记忆会差一步,两台设备同时改、记忆又写失败才碰得到
+        await query(`UPDATE muse_cards SET payload = ? WHERE id = ? AND user_id = ? AND payload = ?`, [before, id, userId, after]);
         throw e;
       }
       if (!next.length && !(await settle(userId, id, 'done', 'ok'))) return gone;

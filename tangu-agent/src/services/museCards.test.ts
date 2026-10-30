@@ -350,6 +350,20 @@ describe('第 14 天小结', () => {
     await decideMuseCard('u', card.id, 'remove', { index: 0, expected: 'Keep daily reports short' });
     expect(h.mutations).toEqual([{ action: 'forget', id: 'm9' }]);
   });
+  it('记忆写失败时只退回自己这一步:别的设备已经改过的卡面不被盖掉', async () => {
+    const card = await setup();
+    const realPrepare = h.db.prepare.bind(h.db);
+    h.memoryFails = true;
+    const spy = vi.spyOn(h.db, 'prepare').mockImplementation((sql: string) => {
+      if (/SET payload = \? WHERE id = \? AND user_id = \? AND payload = \?/.test(sql) && !/status/.test(sql)) {
+        realPrepare(`UPDATE muse_cards SET payload = ? WHERE id = ?`).run(JSON.stringify({ items: ['另一台改的'] }), card.id); // 回滚之前,别的设备先落了一笔
+      }
+      return realPrepare(sql);
+    });
+    await expect(decideMuseCard('u', card.id, 'edit', { index: 0, expected: '晚上别提代码', text: '新' })).rejects.toThrow();
+    spy.mockRestore();
+    expect((await getMuseCard('u', card.id))!.payload.items).toEqual(['另一台改的']);
+  });
   it('记忆写失败:卡面退回原样,不显示改了', async () => {
     const card = await setup();
     h.memoryFails = true;
