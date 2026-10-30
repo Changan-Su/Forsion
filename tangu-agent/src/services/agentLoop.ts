@@ -1554,9 +1554,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
     // 通道会话判定(每 run 一次):channel_send_* 只在「连接着通道的会话」暴露(P0-3),
     // 回复风格段也据此分裁(通道端纯文本渲染)。绑定可中途建立/解除 → 按 run 重查;非 host 恒 false。
-    const channelSession = profile.capabilities.hostExec
-      ? await channelHub.isChannelSession(userId, sessionId)
-      : false;
+    const channelBinding = profile.capabilities.hostExec ? await channelHub.channelBinding(userId, sessionId) : false;
+    const channelSession = channelBinding === true;
+    const channelUnknown = channelBinding === null; // 工具和回复风格照「没连」走,隐私边界按「连着」走
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
     const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset, sandboxExec: profile.features.sandbox });
     // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
@@ -1662,8 +1662,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     ctxMark('guidance');
     // 4) 人的文件夹 human/(所有 agent 可见,半稳定):人写给所有 Agent 的 AGENT.md、人自己写的 MEMORY.md(原 USER.md)、
     //    Agent 们对人的认识 SOUL.md。替换原来那段 USER.md,不并排加(提示词体量)。HUMAN.md 共识走下面协作说明那段。读失败不阻断。
+    //    连着聊天通道的会话(别人也可能在读)不注入人的本子和画像,只留 AGENT.md 那段要求(10-29 画像写入方案 细节 5)。
     try {
-      const aboutHuman = renderAboutHuman();
+      const aboutHuman = renderAboutHuman({ private: channelBinding === false });
       if (aboutHuman) systemParts.push(aboutHuman);
     } catch { /* ignore */ }
     ctxMark('profile');
@@ -1795,7 +1796,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const projectScoped = projectRef ? true : undefined;
     const projectPath = projectRef?.project;
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped, projectPath,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, channelUnknown, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped, projectPath,
       visuals: visualsPref, // run 冻结的可视化档位:与上面拼提示用的同一个值,set_ui_setting 中途改了也到下一次 run 才生效
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
