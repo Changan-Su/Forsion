@@ -16,7 +16,7 @@ const h = vi.hoisted(() => ({
 vi.mock('../core/db.js', async () => {
   const { default: Database } = await import('better-sqlite3');
   h.db = new Database(':memory:');
-  h.db.exec(`CREATE TABLE inbox_messages (id TEXT, user_id TEXT, title TEXT, body TEXT, sender_kind TEXT, sender_id TEXT, thread TEXT, attachments TEXT, expires_at TEXT, read_at TEXT, archived_at TEXT, deleted_at TEXT, deliver_at TEXT)`);
+  h.db.exec(`CREATE TABLE inbox_messages (id TEXT, user_id TEXT, title TEXT, body TEXT, sender_kind TEXT, sender_id TEXT, thread TEXT, attachments TEXT, expires_at TEXT, read_at TEXT, broadcast_kind TEXT, archived_at TEXT, deleted_at TEXT, deliver_at TEXT)`);
   h.db.exec(`CREATE TABLE chat_sessions (id TEXT, user_id TEXT)`);
   h.db.exec(`CREATE TABLE chat_messages (id TEXT, session_id TEXT, content TEXT, origin TEXT)`);
   h.db.exec(`CREATE TABLE muse_cards (id TEXT PRIMARY KEY, user_id TEXT, kind TEXT, target_key TEXT, payload TEXT, status TEXT DEFAULT 'pending', result TEXT, created_at BIGINT, decided_at BIGINT)`);
@@ -312,5 +312,12 @@ describe('消息反馈', () => {
     expect(await recordMessageFeedback('u', 'm2', 'up')).toBe(false);
     expect(await recordMessageFeedback('other', 'm1', 'up')).toBe(false);
     expect(h.logs).toEqual([]);
+  });
+});
+
+describe('收件箱询问按类型', () => {
+  it('更新 / 商店 / 维护能问,促销和其余官方信不能问', async () => {
+    for (const c of ['update', 'store', 'maintenance', 'muse']) expect(await inboxAskBlocked('u', c, h.muse)).toBeNull();
+    for (const c of ['promo', 'official', 'other']) expect(await inboxAskBlocked('u', c, h.muse)).toMatch(/only ask about/);
   });
 });

@@ -10,7 +10,7 @@ import { AUTO_READ_CATEGORIES, NEEDS_USER, inboxCategory, unclaimedAttachment } 
 import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
 
 const nowUtc = (): string => new Date().toISOString().slice(0, 19).replace('T', ' ');
-const COLS = 'id, title, body, sender_kind, sender_id, thread, attachments, expires_at, read_at, read_by, created_at';
+const COLS = 'id, title, body, sender_kind, sender_id, thread, attachments, expires_at, read_at, read_by, broadcast_kind, created_at';
 const stamp = (v: unknown): string | null => (v == null ? null : v instanceof Date ? v.toISOString().slice(0, 19).replace('T', ' ') : String(v).slice(0, 19));
 const visible = `user_id = ? AND deleted_at IS NULL AND archived_at IS NULL AND (deliver_at IS NULL OR deliver_at <= ?)`;
 const isMuse = (ctx: { agentSlug?: string; subAgentDepth?: number }): boolean => ctx.agentSlug === MUSE_AGENT_SLUG && !((ctx.subAgentDepth || 0) >= 1);

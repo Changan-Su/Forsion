@@ -119,7 +119,7 @@ export async function inboxListItems(userId: string, items: Array<{ id?: unknown
   const ids = items.map((i) => String(i?.id || '')).filter(Boolean).slice(0, MAX_LIST_ITEMS);
   if (!ids.length) return [];
   const rows = await query<any[]>(
-    `SELECT id, title, body, sender_kind, sender_id, thread, attachments, expires_at FROM inbox_messages WHERE user_id = ? AND deleted_at IS NULL AND archived_at IS NULL AND read_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`,
+    `SELECT id, title, body, sender_kind, sender_id, thread, attachments, expires_at, broadcast_kind FROM inbox_messages WHERE user_id = ? AND deleted_at IS NULL AND archived_at IS NULL AND read_at IS NULL AND id IN (${ids.map(() => '?').join(',')})`,
     [userId, ...ids],
   );
   return (rows || []).filter((r) => NEEDS_USER.has(inboxCategory(r))).map((r) => {
@@ -139,7 +139,7 @@ export async function inboxHint(userId: string, cfg: MuseConfig, now = Date.now(
   try {
     const nowUtc = new Date(now).toISOString().slice(0, 19).replace('T', ' ');
     const rows = await query<any[]>(
-      `SELECT body, sender_kind, sender_id, thread, attachments FROM inbox_messages WHERE user_id = ? AND deleted_at IS NULL AND archived_at IS NULL AND read_at IS NULL AND (deliver_at IS NULL OR deliver_at <= ?) LIMIT 300`,
+      `SELECT body, sender_kind, sender_id, thread, attachments, broadcast_kind FROM inbox_messages WHERE user_id = ? AND deleted_at IS NULL AND archived_at IS NULL AND read_at IS NULL AND (deliver_at IS NULL OR deliver_at <= ?) LIMIT 300`,
       [userId, nowUtc],
     );
     const counts = new Map<InboxCategory, number>();

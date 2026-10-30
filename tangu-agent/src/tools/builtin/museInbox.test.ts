@@ -5,7 +5,7 @@ const h = vi.hoisted(() => ({ db: null as any, autoRead: [] as string[] }));
 vi.mock('../../core/db.js', async () => {
   const { default: Database } = await import('better-sqlite3');
   h.db = new Database(':memory:');
-  h.db.exec(`CREATE TABLE inbox_messages (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, body TEXT, sender_kind TEXT, sender_id TEXT, thread TEXT, attachments TEXT, expires_at TEXT, read_at TEXT, read_by TEXT, archived_at TEXT, deleted_at TEXT, deliver_at TEXT, created_at TEXT)`);
+  h.db.exec(`CREATE TABLE inbox_messages (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, body TEXT, sender_kind TEXT, sender_id TEXT, thread TEXT, attachments TEXT, expires_at TEXT, read_at TEXT, read_by TEXT, broadcast_kind TEXT, archived_at TEXT, deleted_at TEXT, deliver_at TEXT, created_at TEXT)`);
   return { query: async (sql: string, params: any[] = []) => { const st = h.db.prepare(sql); return st.reader ? st.all(...params) : (st.run(...params), []); } };
 });
 vi.mock('../../services/specialAgentsConfig.js', () => ({ loadSpecialAgentsConfig: () => ({ muse: { inboxAutoRead: h.autoRead } }) }));
@@ -19,9 +19,9 @@ const read = tools.find((t) => t.name === 'inbox_read');
 const mark = tools.find((t) => t.name === 'inbox_mark');
 const ctx = { userId: 'u', agentSlug: 'muse' } as any;
 const seed = (id: string, m: Record<string, unknown>) => {
-  const r = { user_id: 'u', title: id, body: '', sender_kind: 'agent', sender_id: 'muse', thread: null, attachments: null, read_at: null, read_by: null, created_at: `2026-10-30 0${h.db.prepare('SELECT COUNT(*) n FROM inbox_messages').get().n}:00:00`, ...m };
-  h.db.prepare(`INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, thread, attachments, read_at, read_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-    .run(id, r.user_id, r.title, r.body, r.sender_kind, r.sender_id, r.thread, r.attachments, r.read_at, r.read_by, r.created_at);
+  const r = { user_id: 'u', title: id, body: '', sender_kind: 'agent', sender_id: 'muse', thread: null, attachments: null, read_at: null, read_by: null, broadcast_kind: null, created_at: `2026-10-30 0${h.db.prepare('SELECT COUNT(*) n FROM inbox_messages').get().n}:00:00`, ...m };
+  h.db.prepare(`INSERT INTO inbox_messages (id, user_id, title, body, sender_kind, sender_id, thread, attachments, read_at, read_by, broadcast_kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(id, r.user_id, r.title, r.body, r.sender_kind, r.sender_id, r.thread, r.attachments, r.read_at, r.read_by, r.broadcast_kind, r.created_at);
 };
 const row = (id: string) => h.db.prepare('SELECT read_at, read_by FROM inbox_messages WHERE id = ?').get(id);
 const reward = JSON.stringify({ items: [{ type: 'points', amount: 200 }], claimed: false });
@@ -34,7 +34,15 @@ describe('类别', () => {
     [{ sender_kind: 'server', attachments: reward }, 'reward'],
     [{ sender_kind: 'server', attachments: JSON.stringify({ items: [{}], claimed: true }) }, 'official'], // 领过了就是普通官方信
     [{ sender_kind: 'server', thread: '{"kind":"feedback"}' }, 'feedback'],
-    [{ sender_kind: 'server' }, 'official'],
+    [{ sender_kind: 'server' }, 'official'], // 老服务端没有 kind
+    [{ sender_kind: 'server', broadcast_kind: 'other' }, 'official'],
+    [{ sender_kind: 'server', broadcast_kind: 'whatever' }, 'official'],
+    [{ sender_kind: 'server', broadcast_kind: 'update' }, 'update'],
+    [{ sender_kind: 'server', broadcast_kind: 'store' }, 'store'],
+    [{ sender_kind: 'server', broadcast_kind: 'maintenance' }, 'maintenance'],
+    [{ sender_kind: 'server', broadcast_kind: 'promo' }, 'promo'],
+    [{ sender_kind: 'server', broadcast_kind: 'update', thread: '{"kind":"feedback"}' }, 'feedback'],
+    [{ sender_kind: 'server', broadcast_kind: 'store', attachments: reward }, 'reward'], // 没领的奖励优先:类型挡不掉「要你动手」
     [{ sender_kind: 'system', sender_id: 'desktop' }, 'system'],
     [{ sender_kind: 'agent', sender_id: 'automation:r1' }, 'automation'],
     [{ sender_kind: 'agent', sender_id: 'xyra' }, 'agent'],
@@ -100,5 +108,24 @@ describe('inbox_mark', () => {
     h.autoRead = ['muse'];
     seed('x', { user_id: 'other' });
     expect(await mark.execute({ ids: ['x'], read: true }, ctx)).toMatch(/Marked as read: 0\. Not found: 1/);
+  });
+});
+
+describe('按广播类型放行', () => {
+  const marked = async (id: string, kind: string | null, allowed: string[]) => {
+    seed(id, { sender_kind: 'server', sender_id: 'forsion', broadcast_kind: kind });
+    h.autoRead = allowed;
+    await mark.execute({ ids: [id], read: true }, ctx);
+    return row(id).read_by;
+  };
+  it.each(['update', 'store', 'maintenance'])('%s:用户点过头才标', async (k) => {
+    expect(await marked(`${k}-no`, k, [])).toBeNull();
+    expect(await marked(`${k}-yes`, k, [k])).toBe('muse');
+  });
+  it.each([['promo'], ['other'], [null]])('%s 只提醒,哪怕 inboxAutoRead 里有', async (k) => {
+    expect(await marked(`x-${k}`, k, ['promo', 'other', 'official'])).toBeNull();
+  });
+  it('点过 update 不等于点过 store', async () => {
+    expect(await marked('s1', 'store', ['update'])).toBeNull();
   });
 });
