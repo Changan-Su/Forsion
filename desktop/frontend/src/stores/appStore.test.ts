@@ -306,6 +306,27 @@ describe('appStore.reduceEvent', () => {
     expect(state.subChatsBySession.s1[0].segs).toHaveLength(2)
   })
 
+  it('子代理续用:同一 subId 的第二轮写进新气泡,追问也画出来,第一轮原样不动', () => {
+    const emit = (type: string, payload: any) => useApp.getState().reduceEvent('s1', 'r1', { current: 'a1' }, { seq: 1, type, payload } as AgentRunEvent)
+    const first = 'delegate:c1'
+    const second = 'delegate:c1:t2'
+    emit('subchat', { id: 'c1', kind: 'subagent', sessionId: 'c1', title: 'Worker' })
+    emit('subagent', { subId: 'c1', sessionId: 'c1', phase: 'start', label: 'Worker', messageId: first, task: 'task one' })
+    emit('subagent', { subId: 'c1', phase: 'token', delta: 'first answer' })
+    emit('subagent', { subId: 'c1', phase: 'done' })
+    emit('subagent', { subId: 'c1', sessionId: 'c1', phase: 'start', label: 'Worker', messageId: second, task: 'follow up', userMessageId: 'u2' })
+    expect(useApp.getState().subChatsBySession.s1.find((x) => x.id === 'c1')).toMatchObject({ streaming: true })
+    emit('subagent', { subId: 'c1', phase: 'token', delta: 'second answer' })
+    emit('subagent', { subId: 'c1', phase: 'done' })
+    const messages = useApp.getState().messagesBySession.c1
+    expect(messages.map((m) => [m.id, m.role, m.content])).toEqual([
+      [first, 'assistant', 'first answer'],
+      ['u2', 'user', 'follow up'],
+      [second, 'assistant', 'second answer'],
+    ])
+    expect(messages.find((m) => m.id === second)?.status).toBe('done')
+  })
+
   it('run 收尾(done / error)把本 run 挂在**更早段**上的待批审批与询问一并置过期,别的 run 的不碰', () => {
     const pend = (id: string, runId: string) => ({ approvalId: id, runId, name: 'run_bash', preview: `$ ${id}`, status: 'pending' as const })
     for (const terminal of ['done', 'error'] as const) {

@@ -823,7 +823,7 @@ export function sessionHasActiveRun(sessionId: string): boolean {
  * 首帧;窗口起点每 HYDRATE_BLOCK 行才挪一次,所以约每 5 个 run 才多一次摘要调用(增量,带上一检查点)。
  * 分步回放(agent_steps)与 hydrate 同源,故窗口算术只数 DB 行。无 run 上下文 → 用量台账静默跳过(与手动 /compact 同)。
  */
-async function checkpointRowsOutsideWindow(
+export async function checkpointRowsOutsideWindow(
   sessionId: string, modelId: string, appId: string, settings: CompactionSettings, runThinking: ThinkingLevel,
 ): Promise<void> {
   if (!settings.enabled || !modelId) return;
@@ -2201,7 +2201,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const directive =
           '## Mentioned Agents for This Turn\n' +
           'The user @-mentioned the following agents for this message. When their expertise fits the request, involve them and then synthesize the result into your reply. Two ways, pick per the task:\n' +
-          '- `delegate` with the matching `agentSlug` — a quick one-shot subtask (the subagent runs with that agent\'s persona and returns a single report). Use for fetch/search/analysis you just need an answer to.\n' +
+          '- `delegate` with the matching `agentSlug` — a quick subtask (the subagent runs with that agent\'s persona and returns a report). Use for fetch/search/analysis you just need an answer to.\n' +
           '- `start_discussion` with `peer` = the matching slug — a genuine back-and-forth deliberation (a fork of you debates them until both sides are done; collect it with `wait_discussion`). Use when the question benefits from real discussion/disagreement.\n' +
           'Mentioned agents:\n' +
           mentioned.map((a) => `- ${a.name} (slug: \`${a.slug}\`)${a.description ? ` — ${a.description}` : ''}`).join('\n');

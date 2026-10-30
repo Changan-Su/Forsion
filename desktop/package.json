@@ -115,6 +115,7 @@
     "check:btw": "node scripts/btw.check.cjs",
     "check:browserpick": "node scripts/browser-pick.check.cjs",
     "check:childpill": "node scripts/child-pill.check.cjs",
+    "check:delegateresume": "node scripts/delegate-resume.check.cjs",
     "check:commapolish": "node scripts/chat-comma-polish.check.cjs",
     "check:selectionbar": "node scripts/selection-bar.check.cjs",
     "check:selectionlines": "node scripts/selection-lines.check.cjs",
