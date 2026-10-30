@@ -126,6 +126,7 @@ async function run() {
         config.plugins.push(added)
         try { await writeConfig(file, config) }
         catch (error) {
+          console.error(`[unit] Could not save unit.json after installing ${installed.id}:`, error) // remove() may replace this error in the job record
           config.plugins.splice(config.plugins.indexOf(added), 1)
           await installed.remove() // RollbackIncomplete keeps the version directory and reaches the job record.
           throw error
@@ -139,6 +140,7 @@ async function run() {
         config.plugins.splice(index, 1)
         try { await writeConfig(file, config) }
         catch (error) {
+          console.error(`[unit] Could not save unit.json after uninstalling ${command.id}:`, error) // restore() may replace this error in the job record
           config.plugins.splice(index, 0, entry)
           await restore()
           throw error

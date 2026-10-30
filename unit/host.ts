@@ -353,7 +353,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
         throw new OperationError(error instanceof Error ? error.message : 'Invalid plugin set')
       }
       try { await activate(id) }
-      catch (error) { await discard(id); throw error }
+      catch (error) { console.error(`[unit] Plugin ${id} failed to activate during install:`, error); await discard(id); throw error }
       return { id, remove: () => serialize(() => discard(id)) }
     }),
     /**
@@ -376,7 +376,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
         rec.installation.enabled = before.enabled
         let running = true
         // Without its own resync: a runtime that just refused one must not fail the plugin being restored.
-        if (before.state === 'active') await activate(id, false).catch(() => { running = false })
+        if (before.state === 'active') await activate(id, false).catch((error) => { running = false; console.error(`[unit] Plugin ${id} did not restart after an undone uninstall:`, error) })
         else rec.state = before.state
         refreshProduct()
         if (started && !closing) await syncRuntimes().catch(() => console.error(`[unit] Plugin runtimes did not resync after ${id} was restored`))
