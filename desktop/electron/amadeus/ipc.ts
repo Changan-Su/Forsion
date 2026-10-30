@@ -1,4 +1,5 @@
 import { contentSyncOwned } from '../contentSyncHost'
+import { readExternalPdf, writeExternalPdfAnnotations, exportExternalPdfCopy } from './externalPdf'
 import { promises as fs, readdirSync, readFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
@@ -794,6 +795,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     await fs.mkdir(dir, { recursive: true })
     await shell.openPath(dir)
   })
+
+  // Desktop-only file-view bridge; deliberately absent from Unit's remote vault allowlist.
+  handle(IPC.exportExternalPdf, async (e, p: string, name: string, bytes: Uint8Array) => {
+    await readExternalPdf(p) // validate the source before showing a save dialog
+    const options = { defaultPath: path.join(path.dirname(p), path.basename(name)), filters: [{ name: 'PDF', extensions: ['pdf'] }] }
+    const win = e ? BrowserWindow.fromWebContents((e as Electron.IpcMainInvokeEvent).sender) : null
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    await exportExternalPdfCopy(p, result.filePath, bytes)
+    return path.basename(result.filePath)
+  })
+  handle(IPC.readExternalPdf, (_e, p: string, annotations?: boolean) => readExternalPdf(p, annotations))
+  handle(IPC.writeExternalPdfAnnotations, (_e, p: string, bytes: Uint8Array, backup?: number) => writeExternalPdfAnnotations(p, bytes, backup))
 
   // ── 插件私有数据 blob(ctx.loadData / ctx.saveData)。~/.forsion/plugins-data/<id>.json。
   // 为什么不复用 registerSetting:那是「每键一个字符串塞 localStorage」,装不下几十 KB 的

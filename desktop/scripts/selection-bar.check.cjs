@@ -169,18 +169,20 @@ async function pickMore(win, id) {
  *  ⚠️ 连接配置要写进 `<user-data-dir>-dev`:未打包的构建把 userData 改成了它(electron/main.ts),只写在 userdata/ 里应用读不到,
  *  外部令牌是空的 —— 开机不连(boot 要有令牌),只有点掉首启引导那一下不看令牌连一次,之后主窗一重载就停在「先在设置里连接后端」
  *  (10-14 取证:两边都写之后重载四次都连得回)。换语言 / 明暗仍然另起一个实例,首帧就按新偏好起。 */
-async function launch(stubUrl, prefs) {
+async function launch(stubUrl, prefs, fixture = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-selbar-'))
   const userdata = path.join(home, 'userdata'); fs.mkdirSync(userdata)
   const vault = path.join(home, 'vault'); fs.mkdirSync(vault)
+  for (const [name, content] of Object.entries(fixture.notes || {})) fs.writeFileSync(path.join(vault, name), content)
   const plugin = path.join(home, 'plugins', 'selprobe'); fs.mkdirSync(plugin, { recursive: true })
-  fs.writeFileSync(path.join(plugin, 'main.js'), PLUGIN_MAIN)
+  fs.writeFileSync(path.join(plugin, 'main.js'), fixture.pluginMain || PLUGIN_MAIN)
   fs.writeFileSync(path.join(plugin, 'manifest.json'), JSON.stringify({ id: 'selprobe', name: 'selprobe', version: '1.0.0', minAppVersion: '0.0.1', description: '台架用的划线条探针,不是产品插件' }))
   fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
   const token = ['test', Buffer.from(JSON.stringify({ sub: 'test-selbar', exp: Math.floor(Date.now() / 1000) + 86400 * 10 })).toString('base64url'), 'test'].join('.')
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: stubUrl, token }))
   for (const dir of [userdata, `${userdata}-dev`]) {
     fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stubUrl, cloudUrl: stubUrl, token }))
   }
   const app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl } })
@@ -214,7 +216,7 @@ async function main() {
         const b = await body()
         inline.push(b)
         if (failMt && b.model_id === 'qwen-mt') return { __code: 500, body: { detail: 'mt upstream down' } }
-        const answer = `译文<${b.language}>:${String(b.selection).slice(0, 8)}`
+        const answer = `译文（${b.language}）:${String(b.selection).slice(0, 8)}`
         return sse([...answer.match(/[\s\S]{1,5}/g).map((text) => ({ type: 'delta', text })), { type: 'done', content: answer, toolCallText: false }])
       }
     },
@@ -297,7 +299,7 @@ async function main() {
     const req1 = inline.at(-1)
     check('翻译请求:action=translate、选中的文字、中文界面下中文译成英文', req1?.action === 'translate' && req1.selection === '重构解析器的词法阶段' && req1.language === 'English', JSON.stringify(req1))
     check('没在设置里选过翻译模型 → 自动用目录里的机器翻译模型', req1?.model_id === 'qwen-mt', `model_id=${req1?.model_id}`)
-    check('结果卡是只读的:复制 / 重试 / 关闭,没有「替换」「插入下方」', !!c1 && c1.readonly && c1.phase === 'done' && c1.acts.join(',') === 'copy,retry,discard' && c1.preview === '译文<English>:重构解析器的词法', JSON.stringify(c1))
+    check('结果卡是只读的:复制 / 重试 / 关闭,没有「替换」「插入下方」', !!c1 && c1.readonly && c1.phase === 'done' && c1.acts.join(',') === 'copy,retry,discard' && c1.preview === '译文（English）:重构解析器的词法', JSON.stringify(c1))
     check('卡头:目标语言下拉 + 写明是机器翻译', c1.lang === 'English' && /机器翻译.*Qwen MT Flash/.test(c1.hint || '') && c1.title === '翻译', JSON.stringify(c1))
     check('卡贴着选区(下面放不下才翻到上面)、不越出视口;条已收起、选区还在', ((c1.top >= sel2.bottom - 1 && c1.top - sel2.bottom < 16) || (c1.bottom <= sel2.top + 1 && sel2.top - c1.bottom < 16)) && c1.left >= 0 && c1.right <= (await win.evaluate(() => innerWidth)) && !(await barState(win)) && !(await win.evaluate(() => window.getSelection().isCollapsed)), JSON.stringify({ c1, sel2 }))
     await settle(win)
@@ -312,7 +314,7 @@ async function main() {
     await win.locator('[data-testid="inline-ai-lang"]').selectOption('Japanese')
     await until(async () => inline.length >= 2 && inline.at(-1).language === 'Japanese', 5000)
     const c2 = await cardDone(win)
-    check('卡头换语言 = 重译一次', inline.at(-1)?.language === 'Japanese' && c2?.lang === 'Japanese' && c2.preview === '译文<Japanese>:重构解析器的词法', JSON.stringify({ last: inline.at(-1), c2 }))
+    check('卡头换语言 = 重译一次', inline.at(-1)?.language === 'Japanese' && c2?.lang === 'Japanese' && c2.preview === '译文（Japanese）:重构解析器的词法', JSON.stringify({ last: inline.at(-1), c2 }))
     await input.click()
     check('点卡外面卡就收', (await until(async () => !(await card(win)), 3000)) === true)
 
@@ -445,4 +447,5 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+module.exports = { launch, dragSelect, barReady, cardDone, shot, until, pickMore }
+if (require.main === module) main().catch((e) => { console.error(e); process.exit(1) })

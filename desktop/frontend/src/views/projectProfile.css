@@ -1,7 +1,7 @@
 /* PROJECT 详情:骨架整份复用 TEAM 详情(teamProfile.css 的头部 / 导航 / 滚动体 / 成员卡 / 保存栏),
  * 这里只加项目专有的卡片、列表与 git 摘要。同特异性的覆盖块放文件末尾(DESIGN §7.2)。 */
 .project-profile-path { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.project-profile-path > button { min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; transition: color 160ms ease; }
+.project-profile-path > button { min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; transition: color var(--duration-fast) ease; }
 .project-profile-path > button:hover { color: var(--accent-ink); }
 .project-profile-path > .project-creation-action { flex: none; margin-left: auto; display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
 .project-profile-path > .project-creation-action:disabled { opacity: .45; cursor: default; }
@@ -26,7 +26,7 @@
 .project-chip.ok { color: var(--accent-ink); }
 .project-chip.warn { color: var(--danger); }
 .project-list { display: grid; gap: 2px; }
-.project-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; width: 100%; padding: 7px 8px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text); text-align: left; cursor: pointer; font: inherit; transition: background 160ms ease; }
+.project-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px; align-items: center; width: 100%; padding: 7px 8px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text); text-align: left; cursor: pointer; font: inherit; transition: background var(--duration-fast) ease; }
 .project-row:hover { background: var(--overlay-medium); }
 /* 项目记忆:一条一行,正文完整折行(不省略:它就是内容本身),右侧一个删除键 */
 .project-memory-list { margin: 0; padding: 0; list-style: none; }
@@ -76,14 +76,14 @@
 /* 行内动作(执行者卡的两个动作 / Git 卡的四个动作):无边框小字按钮,窄栏里换行也不显重。 */
 .project-inline-actions { display: flex; flex-wrap: wrap; gap: 2px; justify-content: flex-end; padding-top: 6px; }
 .project-inline-actions.start { justify-content: flex-start; padding-top: 0; margin: 0 -7px; }
-.project-inline-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); cursor: pointer; transition: background 160ms ease, color 160ms ease; }
+.project-inline-actions button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); cursor: pointer; transition: background var(--duration-fast) ease, color var(--duration-fast) ease; }
 .project-inline-actions button:hover:not(:disabled) { background: var(--overlay-medium); color: var(--text); }
 .project-inline-actions button:disabled { opacity: .45; cursor: default; }
 .project-inline-actions button.is-default { color: var(--accent-ink); }
 .project-field { display: grid; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .project-field select { width: 100%; min-width: 0; padding: 6px 8px; font-size: var(--ui-font-meta, 12px); color: var(--text); }
 .project-card .profile-model-field { margin: 0; }
-.project-skill-form { display: grid; gap: 8px; animation: profile-enter 160ms ease both; }
+.project-skill-form { display: grid; gap: 8px; animation: profile-enter var(--duration-fast) ease both; }
 .project-skill-form label { display: grid; gap: 4px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .project-skill-form input, .project-skill-form textarea { width: 100%; min-width: 0; padding: 7px 8px; font-size: var(--ui-font-meta, 12px); }
 .project-skill-form > div { display: flex; justify-content: flex-end; gap: 6px; }
@@ -92,7 +92,7 @@
 .project-git-empty { display: grid; gap: 8px; }
 .project-git-empty p { margin: 0; }
 .project-git-commit-confirm { display: flex; gap: 6px; margin-left: auto; }
-.project-git-commit-form { animation: profile-enter 160ms ease both; }
+.project-git-commit-form { animation: profile-enter var(--duration-fast) ease both; }
 .project-git-identity { display: flex; align-items: center; gap: 6px; min-width: 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .project-git-identity > svg { flex: 0 0 auto; }
 .project-git-identity > span { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

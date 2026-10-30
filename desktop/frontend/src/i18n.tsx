@@ -255,6 +255,8 @@ const zh: Dict = {
   'inbox.reader': '收件箱',
   'inbox.filter.unread': '未读',
   'inbox.filter.archived': '已归档',
+  'inbox.filter.museRead': 'Muse 已读的',
+  'inbox.readByMuse': 'Muse 已读',
   'inbox.reader.empty': '选择一封消息开始阅读',
   'inbox.sender.system': '系统',
   'inbox.sender.automation': '自动化',
@@ -1096,6 +1098,7 @@ const zh: Dict = {
   'command.zoomIn': '放大页面',
   'command.zoomOut': '缩小页面',
   'command.zoomReset': '重置页面缩放',
+  'zoomHud.reset': '重置',
 
   // 引导 - 主题 / 工作区(新增步骤)
   'onboarding.brand.caption': 'AI 工作台',
@@ -1677,6 +1680,7 @@ const zh: Dict = {
   'view.museLibrary': 'Muse 工作区',
   'view.museHome': 'Muse',
   'muse.openLibrary': '打开 Muse 工作区',
+  'muse.settings': 'Muse 设置',
   'view.musePanel': 'Muse',
   'muse.lib.empty': 'Muse 还没写任何东西。开启 Muse 后，它的笔记、草稿和每日工作日志会出现在这里。',
   'muse.lib.refresh': '刷新',
@@ -2057,6 +2061,8 @@ const en: Dict = {
   'inbox.reader': 'Inbox',
   'inbox.filter.unread': 'Unread',
   'inbox.filter.archived': 'Archived',
+  'inbox.filter.museRead': 'Read by Muse',
+  'inbox.readByMuse': 'Read by Muse',
   'inbox.reader.empty': 'Select a message to read',
   'inbox.sender.system': 'System',
   'inbox.sender.automation': 'Automation',
@@ -2892,6 +2898,7 @@ const en: Dict = {
   'command.zoomIn': 'Zoom in',
   'command.zoomOut': 'Zoom out',
   'command.zoomReset': 'Reset zoom',
+  'zoomHud.reset': 'Reset',
 
   // Onboarding - theme / workspace (new steps)
   'onboarding.brand.caption': 'AI workspace',
@@ -3468,6 +3475,7 @@ const en: Dict = {
   'view.museLibrary': 'Muse workspace',
   'view.museHome': 'Muse',
   'muse.openLibrary': 'Open Muse workspace',
+  'muse.settings': 'Muse settings',
   'view.musePanel': 'Muse',
   'muse.lib.empty': 'Muse has not written anything yet. Once enabled, its notes, drafts and daily journal appear here.',
   'muse.lib.refresh': 'Refresh',

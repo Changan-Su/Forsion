@@ -11,7 +11,7 @@ import { inheritBinding, inheritChildRows, refForSession, targetForSession } fro
 import { registerMessages, useI18n } from '../../i18n'
 import { ChatView } from '../ChatView'
 import { useDeskGrip } from './AgentDesk'
-import { subChatRows } from './subChatRows'
+import { subChatRows, type SubChatRow } from './subChatRows'
 import { BtwPanel } from './BtwPanel'
 import './childChat.css'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
@@ -22,6 +22,8 @@ registerMessages({
   'childchat.notStarted': { zh: '正在打开成员子会话…', en: 'Opening the member’s conversation…' },
   'childchat.legacy': { zh: '这条旧子任务没有保存独立会话。新任务会保留完整记录。', en: 'This older task has no saved child conversation. New tasks retain their full history.' },
   'childchat.retry': { zh: '重新载入', en: 'Reload' },
+  'childchat.doneMore': { zh: '已完成 {n} 个', en: '{n} finished' },
+  'childchat.doneLess': { zh: '收起已完成', en: 'Hide finished' },
 })
 
 /** 委派给具名 Agent 的子会话标题就是它的 name(引擎 label = def.name),按名反查头像 —— 同 ChatView 消息头像的口径;
@@ -34,7 +36,9 @@ function SubAgentGlyph({ title, slug, working }: { title: string; slug?: string;
   return <AgentAvatar name={def.name} url={url} size={18} className={`t2o-bar-avatar${working ? ' is-working' : ''}`} initialClassName="t2o-bar-avatar-text" data-subagent-avatar={def.slug} />
 }
 
-/** Both persisted background work and live delegate events appear in the same compact list. */
+/** Both persisted background work and live delegate events appear in the same compact list.
+ *  在跑的一律列出;跑完的收进一行「已完成 N 个」(默认收着,点开就地展开)—— 引擎给的是这个会话历来全部子会话(最多 100 条),
+ *  全列出来会把进度卡塞满、把计划挤到下面(10-25 用户报)。换会话收回。 */
 export function SubChatStatus({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
@@ -42,9 +46,11 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
   // Historian 开着时它的子会话由 HistorianStatus 那一行代表(U-04);合并 / 去重口径见 subChatRows。
   const historianOn = useApp((s) => !!s.specialEnabled.historian)
   const [saved, setSaved] = useState<BackgroundSessionInfo[]>([])
+  const [showDone, setShowDone] = useState(false)
   useEffect(() => {
     let disposed = false
     setSaved([])
+    setShowDone(false)
     const load = () => void getBackgroundSessions(targetForSession(sessionId), sessionId).then((rows) => {
       const kept = inheritChildRows(rows, sessionId) // S4:子会话跟父会话在同一台上;撞上本端会话 / 别处的行丢掉(R-16)
       if (!disposed) setSaved(kept)
@@ -56,12 +62,19 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
   }, [cfg, sessionId])
   const rows = subChatRows(saved, live, historianOn)
   if (!rows.length) return null
+  const running = rows.filter((r) => r.streaming)
+  const done = rows.filter((r) => !r.streaming)
+  const row = (r: SubChatRow) => <button key={r.id} type="button" className="t2o-desk-row" onClick={() => useChildChat.getState().open(sessionId, r)}>
+    <SubAgentGlyph title={r.title} working={r.streaming} /><span className="t2o-desk-name">{r.title}</span>
+    <span className="t2o-desk-activity">{t(r.streaming ? 'teamdesk.status.working' : 'teamdesk.status.done')}</span>
+    <ChevronRight size={12} />
+  </button>
   return <div className="t2o-team-status" data-subchat-status>
-    {rows.map((r) => <button key={r.id} type="button" className="t2o-desk-row" onClick={() => useChildChat.getState().open(sessionId, r)}>
-      <SubAgentGlyph title={r.title} working={r.streaming} /><span className="t2o-desk-name">{r.title}</span>
-      <span className="t2o-desk-activity">{t(r.streaming ? 'teamdesk.status.working' : 'teamdesk.status.done')}</span>
-      <ChevronRight size={12} />
-    </button>)}
+    {running.map(row)}
+    {done.length > 0 && <button type="button" className="t2-tsum-more" data-subchat-done aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}>
+      {showDone ? t('childchat.doneLess') : t('childchat.doneMore', { n: done.length })}
+    </button>}
+    {showDone && done.map(row)}
   </div>
 }
 

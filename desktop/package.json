@@ -11,6 +11,7 @@
     "predev": "node scripts/dev-version.check.cjs && node build/copy-excalidraw-assets.cjs",
     "dev": "electron-vite dev --noSandbox",
     "check:marketplace-upgrade": "node scripts/marketplace-upgrade.e2e.cjs",
+    "check:portrait-receipt": "node scripts/portrait-receipt.check.cjs",
     "check:visualize": "node scripts/visualize.check.cjs",
     "check:intelligent-ui": "node scripts/intelligent-ui.e2e.cjs",
     "e2e:intelligent-live": "cd ../tangu-agent && node scripts/live-harness.mjs --only intelligentusers --model codex/gpt-6-luna --timeout 1800000",
@@ -63,6 +64,7 @@
     "e2e:anchors": "node scripts/branch-anchors.e2e.cjs",
     "e2e:chatcanvas": "node scripts/chat-canvas.e2e.cjs",
     "e2e:musedm": "node scripts/muse-dm.e2e.cjs",
+    "e2e:musecards": "node scripts/muse-cards.e2e.cjs",
     "e2e:qfcontent": "node scripts/quickfind-content.e2e.cjs",
     "e2e:computerhistory": "node scripts/computer-history.e2e.cjs",
     "e2e:appdock": "node scripts/app-dock.e2e.cjs",
@@ -117,6 +119,7 @@
     "check:childpill": "node scripts/child-pill.check.cjs",
     "check:commapolish": "node scripts/chat-comma-polish.check.cjs",
     "check:selectionbar": "node scripts/selection-bar.check.cjs",
+    "check:selectionlines": "node scripts/selection-lines.check.cjs",
     "check:chatfeel": "node scripts/chat-feel.check.cjs",
     "check:promptsuggest": "node scripts/prompt-suggest.check.cjs",
     "check:chatlayout": "node scripts/chat-layout.check.cjs",
@@ -350,6 +353,7 @@
     "check:facade": "node scripts/facade-scope.check.cjs",
     "check:sessionmode": "node scripts/session-mode.check.cjs",
     "check:orbitside": "node scripts/orbitside.check.cjs",
+    "check:orbit-create": "node scripts/orbit-create.check.cjs",
     "check:sidewidth": "node scripts/side-width.check.cjs",
     "check:mainsplitwidth": "node scripts/main-split-sidewidth.electron.cjs",
     "check:firstclick": "node scripts/first-click.check.cjs",
@@ -433,7 +437,9 @@
     "test:security-deps": "node --test scripts/dependency-security.test.cjs build/runtime-policy.test.cjs scripts/release-security.test.cjs",
     "check:critical": "node scripts/critical-contracts.cjs",
     "bench:baseline": "node scripts/e2e-editor.cjs --script=performance-baseline.check.cjs",
-    "check:vault-integrity": "node scripts/vault-integrity.electron.cjs"
+    "check:vault-integrity": "node scripts/vault-integrity.electron.cjs",
+    "check:translationrich": "node scripts/translation-rich.check.cjs",
+    "check:translationlive": "node scripts/translation-rich.live.cjs"
   },
   "dependencies": {
     "@astryxdesign/core": "^0.1.4",

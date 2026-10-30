@@ -88,6 +88,9 @@ export const CLASSIFICATION = {
   'GET /agent/human/:file': [D, 'host human folder (HUMAN / AGENT / SOUL / MEMORY)'],
   'PUT /agent/human/:file': [D, 'host human folder write'],
   'POST /agent/human/:file/undo': [D, 'host human folder undo'],
+  'GET /agent/human/SOUL.md/entries': [D, 'host portrait entries (human/SOUL.md; the route itself also refuses remote origin)'],
+  'POST /agent/human/SOUL.md/entries': [D, 'host portrait entry write (receipt undo; the route itself also refuses remote origin)'],
+  'POST /agent/agents/:slug/memory/promote': [D, 'moves an Agent memory entry into host human/AGENT.md (the route itself also refuses remote origin)'],
 
   // ── workspace.ts ──
   'GET /agent/workspace/list': [A, 'session workspace listing'],
@@ -321,6 +324,11 @@ export const CLASSIFICATION = {
   'POST /agent/special/schedule/:slug/entries': [D, 'creates persistent follow-up execution (design appendix C)'],
   'DELETE /agent/special/schedule/:slug/entries/:id': [D, 'schedule write'],
   'POST /agent/special/muse/feedback': [D, 'appends to Muse LOG (memory write into an autonomous Agent)'],
+  'GET /agent/special/muse/cards': [A, 'Muse cards waiting in the direct chat'],
+  'GET /agent/special/muse/cards/:id': [A, 'one Muse card'],
+  'POST /agent/special/muse/cards/:id/decide': [A, 'answer a Muse card (D1/D2); the action is a whitelisted enum and the engine applies the effect from its own row'],
+  'POST /agent/special/muse/cards/:id/summary-edit': [D, 'rewrite a line of the two-week summary; writes free text into Muse memory'],
+  'POST /agent/special/muse/messages/:id/feedback': [A, 'helpful / less-of-this under a Muse DM; an enum plus a message id, the engine writes the log line itself'],
   'GET /agent/special/approvals': [A, 'pending async approvals'],
   'GET /agent/special/approvals/:id': [A, 'pending async approval'],
   'POST /agent/special/approvals/:id/approve': [A, 'answer an async approval (D1/D2)'],

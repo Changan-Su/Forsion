@@ -32,6 +32,7 @@ import { useHumanAckVersion } from '../components/HumanUpdateCard'
 import { creationCardsSupported, useSessionCreation } from './chat2/CreationCards'
 import { TodoList } from '../components/InquiryCard'
 import { useMusePendingApprovals, useMusePendingTodos } from './chat2/MuseDm'
+import { useMusePendingCards } from './chat2/MuseCards'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { CHILD_UPDATE_OPEN, ChildFromLine, ChildSessionsPill } from './chat2/ChildSessions'
 import { RunStatsLine } from './chat2/RunStatsLine'
@@ -637,13 +638,15 @@ export function ChatView({ leaf, params }: ViewProps) {
   useEffect(() => { if (!railOut) return; const t = setTimeout(() => setRailOut(false), 450); return () => clearTimeout(t) }, [railOut])
   // Muse 私聊:它后台排队的审批也进卡片堆(排在本会话的审批 / 提问之后、任务卡之前)
   const museApprovals = useMusePendingApprovals(mvCfg.soloAgentSlug === 'muse' && !params.childSurface)
+  const museCards = useMusePendingCards(mvCfg.soloAgentSlug === 'muse' && !params.childSurface, activeId, `${activeMessages.length}:${running}`)
   const deckItems = useMemo<DeckItem[]>(() => [
     ...pendingApprovals,
     ...museApprovals.map((info) => ({ kind: 'muse-approval' as const, id: `muse:${info.id}`, messageId: '', info })),
     ...pendingTasks,
     ...pendingHuman.map((h) => (h.agentName || !chatAgentName ? h : { ...h, agentName: chatAgentName })), // 同流里那张的署名
     ...pendingCreations,
-  ], [pendingApprovals, museApprovals, pendingTasks, pendingHuman, pendingCreations, chatAgentName])
+    ...museCards.map((card) => ({ kind: 'muse-card' as const, id: `muse-card:${card.id}`, messageId: '', card })),
+  ], [pendingApprovals, museApprovals, pendingTasks, pendingHuman, pendingCreations, museCards, chatAgentName])
   const deck = deckItems.length ? (
     <ApprovalTray
       // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来

@@ -174,6 +174,10 @@ export const useInbox = create<InboxState>((set, get) => ({
       }))
       setBadge(get().unreadCount)
       void patchInboxMessage(homeTarget(), id, { read: true }).catch(() => void get().refreshUnread())
+    } else if (m?.read_by) {
+      // Muse 替你标过的信,你点开就是你读的了:清掉归属,之后 Muse 撤回已读不会动它
+      set((s) => mapBoth(s, (x) => (x.id === id ? { ...x, read_by: null } : x)))
+      void patchInboxMessage(homeTarget(), id, { read: true }).catch(() => {})
     }
   },
 
@@ -181,7 +185,7 @@ export const useInbox = create<InboxState>((set, get) => ({
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
     const counted = !findAny(get(), id)?.archived_at
     set((s) => ({
-      ...mapBoth(s, (x) => (x.id === id ? { ...x, read_at: read ? now : null } : x)),
+      ...mapBoth(s, (x) => (x.id === id ? { ...x, read_at: read ? now : null, read_by: null } : x)),
       unreadCount: counted ? Math.max(0, s.unreadCount + (read ? -1 : 1)) : s.unreadCount,
     }))
     setBadge(get().unreadCount)

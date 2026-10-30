@@ -196,6 +196,8 @@ list.addEventListener('drop', async (e) => {
 
 ### Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
 
+Watched ordinary DOM reading surfaces share continuous line selection bands with chat, notes and result previews. Math is measured as a unit, while native Selection, keyboard extension and copying remain intact. Paint is outside the content DOM and is removed on dispose. Touch pointers and custom PDF/code-editor selection layers retain native paint; `watch: false` continues to use the plugin's own paint and manual `show()` / `hide()`.
+
 The **selection bar** is the strip that appears over selected text. Chat, notes and any plugin view that opts in
 show the same one: the view's own tools plus three shared actions — **Ask Tangu** (hands the text to the side chat
 as a quote), **Translate** (result in a card under the selection) and **⋯** (selection actions from plugins). Which
@@ -359,6 +361,8 @@ ctx.registerView({ id: 'main', title: { zh: '清单', en: 'Items' }, mount(el) {
   ```
 - **View head.** `ctx.ui.setViewHead(el, { title?, actions? })` → `{ update, actions, dispose }`: the same 32 px row `setViewModes` draws, without needing view modes. Title left (after the mode switch if any), your buttons right (`handle.actions` or `actions: [el, …]`). Both can be used together; the switch comes first.
 - **Styles.** `ctx.addStyle(css)` → `{ update(css), dispose }` instead of `document.head.append(style)`: removed on disable / reload.
+- **Bare elements (2026-10-29+).** Inside a view's mount element, a `<button>`, `<table>` or `<h1>`–`<h4>` with no `class` takes the host look with no CSS of yours: a button looks like a plain `.btn` (outline, ink on hover, dimmed when disabled), a table like the Markdown table of notes and chat (muted medium-weight header, half-strength rules), headings use the UI title / heading / body sizes. `<input>` / `<select>` / `<textarea>` already followed the host's form baseline. Your styles always win: a classed element is left alone, and the layer has zero specificity, so any rule from `ctx.addStyle` (even `:where(button)`) beats it. Main and destructive actions stay `.btn.primary` / `.btn.danger`. Not covered: buttons in the view head (outside the mount element), anything inside a host part or a `.ctx-menu` you build, iframe / webview pages.
+- **Failed mount card (2026-10-29+).** When a view's `mount` throws, or the Promise it returns rejects, the host shows a card in that view: "Plugin view failed to load", the error's first line (the full stack is in the console) and Retry. Retry runs only that view's `mount` again; the plugin isn't reloaded and its other views and panels keep running. The host can't clean up listeners or timers you set before the throw, so clean them up yourself or set them after the step that can fail.
 - **Messages.** `ctx.i18n.define({ zh, en })` → `t(key, vars)`: current language → Chinese → the key (the host's chain), `{name}` placeholders from `vars`; keys present in `zh` but missing in `en` are reported once. Pass `() => t('key')` wherever a PluginText is taken; read `t()` in your own drawing code and redraw from `ctx.subscribeLocale`. Before 2026-10-26 list-source titles, action names and view titles took strings only, frozen at registration.
 - **React / Vue plugins: `ctx.ui.mount(name, el, props)`** → `{ update(patch), dispose() }` for `'menu' | 'popover' | 'dialog' | 'segmented' | 'select' | 'emptyState' | 'webCard' | 'icon'`, with props typed by `PluginUiParts`. Mount on a ref and dispose in the effect cleanup:
 

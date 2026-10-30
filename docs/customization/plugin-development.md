@@ -187,7 +187,7 @@ ctx.registerAppearance?.({ id, label, labelEn, icon, splash })
 
 ## 摘要栏卡片
 
-Tangu 聊天右侧的摘要栏(2.13.8-beta.1 之后的桌面版本)是一叠卡片:进度、后台、产物、来源、工作范围和 Agent Desk。插件可以用 `ctx.summary?.registerCard` 加一张卡,和内置卡在同一个栈里:用户能折叠、拖动排序,收起状态和顺序由宿主记住;插件卡默认排在 Agent Desk 前面。`mount` 在每个会话的摘要栏里各调用一次(换会话会卸载重挂),`host.sessionId` 是这份所在的会话;`host.update({ count, hidden })` 改卡头的计数、或者先不显示这张卡。正文最高 240px,超出由宿主滚动。只有桌面 Tangu 有摘要栏,所以用可选链;更早的版本没有 `ctx.summary`。接口细节见插件开发技能「摘要栏插件卡」一节。
+Tangu 聊天右侧的摘要栏(2.13.8-beta.1 之后的桌面版本)是一叠卡片:进度、后台、产物、来源、工作范围和 Agent Desk。插件可以用 `ctx.summary?.registerCard` 加一张卡,和内置卡在同一个栈里;插件卡默认排在 Agent Desk 前面,用户拖动排的顺序由宿主记住。卡片的开合跟着内容走:`count` 变大就自动展开;用户手动展开或收起只管到这一轮对话结束,不会被记住;`defaultCollapsed` 决定没有新内容时收不收。车道放不下时,宿主会先收起最久没有新内容的卡,或者把最后一张的正文缩短,所以别假定正文一定有 240px。`mount` 在每个会话的摘要栏里各调用一次(换会话会卸载重挂),`host.sessionId` 是这份所在的会话;`host.update({ count, hidden })` 改卡头的计数、或者先不显示这张卡。正文最高 240px(放不下时会更矮),超出由宿主滚动。只有桌面 Tangu 有摘要栏,所以用可选链;更早的版本没有 `ctx.summary`。接口细节见插件开发技能「摘要栏插件卡」一节。
 
 ```js
 ctx.summary?.registerCard({ id, title: { zh, en }, defaultCollapsed, mount(el, host) })
@@ -298,6 +298,14 @@ ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})
 默认目录使用稳定的英文插件 ID，不随显示名称或语言变化。外部 manifest 的 ID 必须匹配 `^[a-z0-9][a-z0-9-]{0,63}$`，新 ID 用英文词，已发布 ID 保持稳定。商店安装以不变的 `market-<UUID>` 为生效 ID，可能不同于 manifest ID 或历史安装目录别名；请调用 `workFolder()`，不要自行拼身份目录。未接入迁移的插件继续读取已有的显示名目录；接入者先检测两项 API，再通过 `workFolder({ preferId: true })` 取得新默认目录，校验自身数据后等待迁移完成。用户手动指定的目录优先。
 
 无 plan 的状态查询可核验上一版显示名目录的迁移日志；旧目标的写入计划仍被拒绝，手动偏好和智库 / 撤销检查照样生效。迁移前按原智库实际解析裸媒体链接，保留用户放在笔记旁边的附件的位置，而不是假定都在 `assets/` 下。
+
+### 库外 PDF 文件视图（2026-10-29，功能分支）
+
+文件类型写 `external: true` 并保留 `override: true`，即可在具备此接口的桌面宿主上接管系统「用 Forsion 打开」的库外 PDF；仍遵循「默认打开方式」。冷启动等插件首次装载后再分流。旧宿主和未声明 `external` 的插件继续使用内置预览。
+
+`mount(el, file)` 的 `file.io` 仅在库外 PDF 上提供：`readBytes(path)` 读取当前 PDF 或同目录的 `.<文件名>.annot.json`，`writeBytes(path, bytes)` 只写该批注文件或 `.broken-<时间戳>` 恢复副本；源 PDF 只读。`saveCopy(name, bytes)` 打开原生另存为，返回保存名称，取消返回 `null`，拒绝覆盖原 PDF。`ctx.app` 的文件接口仍只接受库内路径；不要把绝对路径交给它们。原目录没有写权限时显示保存错误，不把失败当成已保存。
+
+文件类型的清理函数可以返回 `Promise<void>`：普通关标签时宿主等最后一次保存完成再吊销 `file.io`；插件停用时仍立即吊销。多个标签读同一 PDF 时，不要永久保留已关闭标签的句柄。库外文件不导入库，不通过笔记写盘管线。
 
 ### 个人日历（Desktop 2.13.6+）
 
