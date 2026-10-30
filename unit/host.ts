@@ -135,7 +135,13 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   let chain = Promise.resolve(), closing = false, started = false
   const syncRuntimes = async () => {
     const roots = [...records.values()].filter(usable).map((r) => r.package.root)
-    for (const rec of records.values()) if (usable(rec)) await rec.runtime?.setPackages?.(roots, [...records.values()].map((r) => r.package.root))
+    // Every runtime gets its turn: one refusing must not leave a later one waiting for packages forever.
+    let failure: { error: unknown } | undefined
+    for (const rec of records.values()) if (usable(rec)) {
+      try { await rec.runtime?.setPackages?.(roots, [...records.values()].map((r) => r.package.root)) }
+      catch (error) { failure ??= { error } }
+    }
+    if (failure) throw failure.error
   }
   const serialize = <T>(action: () => Promise<T>): Promise<T> => {
     const job = chain.then(action)

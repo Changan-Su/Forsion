@@ -58,7 +58,7 @@ async function fixture(id: string, options: FixtureOptions = {}, existing?: stri
         vault,
         engine: server ? { endpoint: () => ({ url:'http://127.0.0.1:' + server.address().port, token:'PRIVATE_ENGINE_TOKEN' }), status: () => ({running:true}) } : undefined,
         setPackages: async roots => {
-          if (await marked('fail-sync')) throw new Error('fixture sync failure');
+          if (await marked('fail-sync') || await marked('fail-sync-' + id)) throw new Error('fixture sync failure');
           if (await marked('fail-sync-once')) { await rm(join(${JSON.stringify(scratch)}, 'fail-sync-once')); throw new Error('fixture sync failure'); }
           await event('packages', roots);
         },
@@ -189,6 +189,14 @@ describe('explicit local Unit workspace boundary', () => {
     await rm(join(scratch, 'fail-sync'))
     await unit.uninstall('target')
     expect(unit.status().map((plugin) => plugin.id)).toEqual(['keeper', 'tail'])
+  })
+
+  it('still hands packages to a restored plugin when an earlier runtime keeps refusing the resync', async () => {
+    const { unit } = await start([await fixture('stubborn'), await fixture('target')])
+    await writeFile(join(scratch, 'fail-sync-stubborn'), '')
+    await expect(unit.uninstall('target')).rejects.toThrow('fixture sync failure')
+    await rm(join(scratch, 'fail-sync-stubborn'))
+    expect((await events()).filter((e) => e.id === 'target').slice(-2).map((e) => e.name)).toEqual(['start', 'packages'])
   })
 
   it('restores an uninstall whose removal could not be persisted, in its previous state', async () => {
