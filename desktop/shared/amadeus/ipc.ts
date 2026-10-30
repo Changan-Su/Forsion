@@ -272,7 +272,8 @@ export interface PluginDependency {
   id: string
   /** Lowest acceptable version, compared with cmpVersion (e.g. "1.2.0"). */
   minVersion?: string
-  /** Market install slug (install_slug ≠ id). Present → the host offers a one-click install. */
+  /** Market install slug (install_slug ≠ id). The store's one-click install matches listings by this, then by `id`,
+   *  never by display name. New listings' slug is `market-<ID>`: without this field they can't be matched. */
   market?: string
   /** Display-name fallback while the prerequisite isn't installed (the host only knows its id then). */
   name?: string
