@@ -97,3 +97,22 @@ export function dependentsOf<T extends DepNode>(id: string, all: readonly T[]): 
   const byId = pluginDependencyIndex(all)
   return all.filter((x) => x.id !== id && (x.requiresPlugins ?? []).some((d) => reaches(d.id, id, byId)))
 }
+
+/** p 还差的前置,连同这些前置自己还差的(一路往下):A 等 B、B 等 C 时,让 A 跑起来要的是 C。每个 id 只出现一次,环不会绕回来。 */
+export function unmetClosure<T extends DepNode>(p: T, all: readonly T[], unmetOf: (x: T) => UnmetDependency[]): UnmetDependency[] {
+  const byId = pluginDependencyIndex(all)
+  const seen = new Set([p.id])
+  const out: UnmetDependency[] = []
+  const walk = (node: T): void => {
+    for (const u of unmetOf(node)) {
+      const next = byId.get(u.dep.id)
+      const id = next?.id ?? u.dep.id
+      if (seen.has(id)) continue
+      seen.add(id)
+      out.push(u)
+      if (next) walk(next)
+    }
+  }
+  walk(p)
+  return out
+}
