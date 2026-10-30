@@ -101,6 +101,7 @@
     ],
     "tanguHostDeps": [
       "desktop/frontend/src/achievements/store.ts",
+      "desktop/frontend/src/agentName.ts",
       "desktop/frontend/src/amadeus/blocks/sketch/format.ts",
       "desktop/frontend/src/amadeus/chrome/pageChrome.tsx",
       "desktop/frontend/src/amadeus/components/Dialogs.tsx",
