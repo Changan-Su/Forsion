@@ -651,6 +651,12 @@ if (new URLSearchParams(location.search).has('dock')) {
       },
       split: (): string | null => useWorkspace.getState().splitActive('right')?.id ?? null,
       activate: (leafId: string): void => useWorkspace.getState().activateLeaf(leafId),
+      /** 把 leafId 所在的组整组挪到 toId 那组的右边(真实拖组走的同一个 moveTo)。 */
+      moveGroupRightOf: (leafId: string, toId: string): void => {
+        const api = useWorkspace.getState().api
+        const to = api?.getPanel(toId)?.group
+        if (to) api?.getPanel(leafId)?.group.api.moveTo({ group: to, position: 'right' })
+      },
       stack: (leafId: string): { keys: string[]; idx: number } => {
         const st = useNav.getState().stacks[leafId]
         return { keys: st?.entries.map((e) => e.key) ?? [], idx: st?.idx ?? -1 }
