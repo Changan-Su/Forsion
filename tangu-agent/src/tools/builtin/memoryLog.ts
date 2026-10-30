@@ -276,7 +276,7 @@ export const memoryLogProvider: ToolProvider = {
         if (args.scope === 'person' && !personAllowed(ctx)) {
           return `Error: scope "person" (the portrait every agent reads) is not available in this session${ctx.channelSession ? ': it is connected to a chat channel, where other people may read along' : ''}. Nothing was written.`;
         }
-        const scope: MemoryScope = args.scope === 'project' ? 'project' : args.scope === 'person' ? 'person' : 'agent';
+        let scope: MemoryScope = args.scope === 'project' ? 'project' : args.scope === 'person' ? 'person' : 'agent';
         if (scope === 'project' && !projectRef) {
           return 'Error: this session has no project, so there is no project memory. Use scope "agent", and name the project in the sentence if the fact is about one. Nothing was written.';
         }
@@ -296,6 +296,7 @@ export const memoryLogProvider: ToolProvider = {
         // 画像和跨档挪必须在下面那个分支之前接住:没有 mutateMemory 的后端会走到最后的 append,把它悄悄记进 Agent 自己的记忆
         // 跨档取代:模型只说新句子归哪一档,旧条目在哪一档由 id 查(10-30 live:单独的 from 参数被写反,报错又把它引回原档改)
         const from = action === 'update' ? await scopeHolding(String(args.id), scope, ctx, projectRef) : scope;
+        if (!args.scope) scope = from; // 没说归哪一档 = 就地改:缺省的 agent 不能把画像里的条目挪进私有记忆
         if (from !== scope) return moveMemoryEntry({ from, scope, id: String(args.id), expectedVersion: String(args.expectedVersion), fact, ctx, projectRef });
         if (scope === 'person') return rememberPerson(action as 'add' | 'update' | 'forget', fact, args, ctx);
         if (brain.mutateMemory || scope === 'project') {

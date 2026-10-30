@@ -211,6 +211,14 @@ describe('remember: person scope', () => {
     expect(agentMemory('second').content).toBe('In our role-play the user is Captain.');
   });
 
+  it('an update that names no scope stays where the entry is listed', async () => {
+    const added = JSON.parse(await remember({ action: 'add', scope: 'person', fact: 'You like tea.' }));
+    const r = JSON.parse(await remember({ action: 'update', id: added.entry.id, expectedVersion: added.version, fact: 'You like green tea.' }));
+    expect(r).toMatchObject({ ok: true, scope: 'person' });
+    expect(r.moved).toBeUndefined();
+    expect(readSoul()).toContain('You like green tea.');
+  });
+
   it('a version copied with a typo after its first 8 characters still moves the entry', async () => {
     const old = JSON.parse(await remember({ action: 'add', fact: 'The user is an early bird.' }));
     const garbled = `${old.version.slice(0, 9)}0000-0000-0000-000000000000`;
