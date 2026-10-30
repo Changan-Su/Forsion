@@ -1660,8 +1660,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     ctxMark('guidance');
     // 4) 人的文件夹 human/(所有 agent 可见,半稳定):人写给所有 Agent 的 AGENT.md、人自己写的 MEMORY.md(原 USER.md)、
     //    Agent 们对人的认识 SOUL.md。替换原来那段 USER.md,不并排加(提示词体量)。HUMAN.md 共识走下面协作说明那段。读失败不阻断。
+    //    连着聊天通道的会话(别人也可能在读)不注入人的本子和画像,只留 AGENT.md 那段要求(10-29 画像写入方案 细节 5)。
     try {
-      const aboutHuman = renderAboutHuman();
+      const aboutHuman = renderAboutHuman({ private: !channelSession });
       if (aboutHuman) systemParts.push(aboutHuman);
     } catch { /* ignore */ }
     ctxMark('profile');

@@ -24,6 +24,7 @@
  * 转写落库、改正、重连)是同一份代码。网关上人设从云端取(cloudAgentStore / brain.memory),不读本机文件。
  */
 import type { IncomingMessage, Server } from 'node:http';
+import { channelHub } from '../channels/hub.js';
 import type { Duplex } from 'node:stream';
 import path from 'node:path';
 import WebSocket, { WebSocketServer } from 'ws';
@@ -35,7 +36,7 @@ import { enqueueRun } from './agentLoop.js';
 import { subscribe } from './eventBus.js';
 import { getAgent, readAgentsMeta, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { cloudAgentsEnabled, cloudGetAgent, cloudReadAgentsMeta } from '../agents/cloudAgentStore.js';
-import { agentsDir, readUserMd } from '../core/tanguHome.js';
+import { agentsDir, readHumanFile, readUserMdForPrompt } from '../core/tanguHome.js';
 import { createMemoryRepository } from './memoryRepository.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
 import { wellFormed } from '../llm/wellFormedJson.js';
@@ -101,8 +102,12 @@ export async function buildVoiceInstructions(sessionId: string, agentSlug: strin
     `The user may also type messages during the call; answer those by voice in the same way.`,
   ];
   if (def?.soul?.trim()) sections.push(`## Your persona\n${clip(def.soul.trim(), 2000)}`);
-  const user = cloud ? '' : readUserMd().trim();
+  // 连着聊天通道的会话不放这两份(同 agentLoop 的 renderAboutHuman({ private }))
+  const own = !cloud && !(await channelHub.isChannelSession(userId, sessionId));
+  const user = own ? readUserMdForPrompt().trim() : '';
   if (user) sections.push(`## About the user\n${clip(user, 2000)}`);
+  const portrait = own ? readHumanFile('SOUL.md').trim() : ''; // 画像:Agent 们对这个人的认识,同 renderAboutHuman 只取前 2000 字
+  if (portrait) sections.push(`## How agents see the human\n${clip(portrait, 2000)}`);
   if (memory.trim()) sections.push(`## Your memory\n${clip(memory.trim(), 3000)}`);
   if (history) sections.push(`## Recent messages in this chat\n${history}`);
   return sections.join('\n\n');

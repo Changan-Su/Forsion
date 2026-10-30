@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { setTimeout as realDelay } from 'node:timers/promises';
@@ -13,6 +13,10 @@ import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
+import { readHuman, writeHuman } from '../src/agents/humanStore.js';
+import { mutatePortrait, portraitEntryId } from '../src/agents/humanPortrait.js';
+import { channelHub } from '../src/channels/hub.js';
+import { readFileSync } from 'node:fs';
 
 let home: string;
 let oldHome: string | undefined;
@@ -374,3 +378,68 @@ describe('Agent-private, bounded Dream memory', () => {
     expect(calls).toHaveLength(2);
   });
 });
+
+// 10-29 画像写入:Dream 把关于这个人本身的候选写进画像(human/SOUL.md),已有记忆条目不动,通道里来的候选不去
+describe('Dream routes facts about the person into the portrait', () => {
+  const soul = () => { try { return readFileSync(join(home, 'human', 'SOUL.md'), 'utf8'); } catch { return ''; } };
+  /** 每个来源一组;候选那几组标 to:'person',已有记忆那组也标上(代码应当去掉它的 to,照旧留在记忆里) */
+  const toPerson = (sources: any[]) => ({ groups: sources.map((s) => ({ fact: s.fact, sourceIds: [s.id], to: 'person' })), discarded: [] });
+  beforeEach(() => {
+    provider = async (p) => p.messages[0].content.startsWith('Consolidate') ? result(toPerson(JSON.parse(p.messages[1].content))) : result({ ok: true });
+  });
+
+  it('a candidate about the person goes to the portrait and leaves this memory; an existing entry marked for it stays put', async () => {
+    repo().add('已有事实'); seedCandidate('alpha', '你希望被叫作林夏');
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
+    expect(soul()).toBe('## 最近认识的\n\n- 你希望被叫作林夏\n');
+    expect(repo().snapshot().content).toBe('- 已有事实');
+    expect(readCandidates('alpha')).toHaveLength(0);
+    expect((await readHuman({ kind: 'human', file: 'SOUL.md' })).history[0].source).toEqual({ kind: 'dream', agent: 'alpha', action: 'add' });
+    // 本机能写画像时,提议和核验都多一句怎么分、怎么核
+    expect(calls[0].payload.messages[0].content).toContain('"to":"person"');
+    expect(calls[1].payload.messages[0].content).toContain('reject if it is not about the human themself');
+    // 再跑一轮同样的候选(上一轮记忆没提交成的情形):画像那边已有同一句,不重复、也不进记忆
+    seedCandidate('alpha', '你希望被叫作林夏', 'session-again');
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
+    expect(soul()).toBe('## 最近认识的\n\n- 你希望被叫作林夏\n');
+    expect(repo().snapshot().content).toBe('- 已有事实');
+  });
+
+  it('a candidate from a session connected to a chat channel stays in this Agent\'s memory', async () => {
+    const spy = vi.spyOn(channelHub, 'isChannelSession').mockResolvedValue(true);
+    try {
+      seedCandidate('alpha', 'You live in Hangzhou.');
+      startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
+      expect(spy).toHaveBeenCalledWith('u', 'session-alpha');
+    } finally { spy.mockRestore(); }
+    expect(soul()).toBe('');
+    expect(repo().snapshot().content).toBe('- You live in Hangzhou.');
+  });
+
+  it('a full portrait sends the fact back into memory; one the human forgot from the portrait is written nowhere', async () => {
+    mkdirSync(join(home, 'human'), { recursive: true });
+    const doc = await readHuman({ kind: 'human', file: 'SOUL.md' });
+    await writeHuman({ kind: 'human', file: 'SOUL.md' }, { content: `${'w'.repeat(1990)}\n`, summary: 'fixture', expectedVersion: doc.version }, 'user');
+    seedCandidate('alpha', 'You like long walks after dinner.');
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
+    expect(soul()).not.toContain('walks');
+    expect(repo().snapshot().content).toBe('- You like long walks after dinner.');
+    // 人从画像里删掉的一句(墓碑):整理时不再写回画像,也不改记进这个 Agent 的记忆
+    const now = await readHuman({ kind: 'human', file: 'SOUL.md' });
+    await writeHuman({ kind: 'human', file: 'SOUL.md' }, { content: '- You drink tea.\n', summary: 'fixture', expectedVersion: now.version }, 'user');
+    await mutatePortrait({ action: 'forget', id: portraitEntryId('You drink tea.'), actor: 'user', source: { kind: 'user' } });
+    seedCandidate('alpha', 'You drink tea.', 'session-tea');
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
+    expect(soul()).toBe('');
+    expect(repo().snapshot().content).not.toContain('tea');
+    expect(readCandidates('alpha')).toHaveLength(0);
+  });
+
+  it('validation strips the portrait mark from a group that holds existing memory, a channel candidate, or when the portrait is off', () => {
+    const sources: any[] = [{ id: 'm1', fact: 'old', kind: 'memory' }, { id: 'c1', fact: 'new', kind: 'candidate', evidence: 'user: new' }, { id: 'c2', fact: 'chan', kind: 'candidate', evidence: 'user: chan' }];
+    const raw = () => ({ groups: [{ fact: 'old', sourceIds: ['m1'], to: 'person' }, { fact: 'new', sourceIds: ['c1'], to: 'person' }, { fact: 'chan', sourceIds: ['c2'], to: 'person' }], discarded: [] });
+    expect(validateDreamProposal(raw(), sources, { portrait: true, noPortrait: new Set(['c2']) }).groups.map((g) => g.to)).toEqual([undefined, 'person', undefined]);
+    expect(validateDreamProposal(raw(), sources).groups.map((g) => g.to)).toEqual([undefined, undefined, undefined]);
+  });
+});
+
