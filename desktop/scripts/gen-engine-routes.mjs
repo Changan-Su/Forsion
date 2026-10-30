@@ -274,6 +274,7 @@ export const CLASSIFICATION = {
   'POST /agent/project-context/git/publish-github': [D, 'creates a GitHub repository with the linked account, adds a remote and pushes'],
   'POST /agent/project-context/git/remote': [D, 'writes the repo config and contacts the remote (may send the signed-in account credentials)'],
   'GET /agent/project-context/git/hosting': [D, 'host-only: whether this project can be published to Forsion Git (the publish action is host-only)'],
+  'GET /agent/project-context/git/reviews': [D, 'host-only: asks Forsion Git with the signed-in account credentials (merge requests awaiting review)'],
   'POST /agent/project-context/git/pending': [D, 'may run trusted repo filters (trust=true)'],
   'POST /agent/project-context/git/message': [D, 'spends model quota; may run trusted repo filters'],
   'POST /agent/git/clone': [D, 'clones a repository onto the host disk with the signed-in account credentials'],

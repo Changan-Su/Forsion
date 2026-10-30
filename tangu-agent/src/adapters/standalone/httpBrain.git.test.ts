@@ -89,6 +89,25 @@ describe('httpBrain.git', () => {
     }
   });
 
+  it('orgs:带登录头;只留开了 Forsion Git 的组织(站上组织名 + 显示名);旧云端 404 / 没开 503 → 没有;5xx / 连不上 → 抛', async () => {
+    const { git, fetch } = brainWith(async (url) => {
+      if (url.endsWith('/api/org/me')) return json({ orgs: [{ id: 'o1', name: '星河工作室' }, { id: 'o2', name: 'No git' }, { id: '../x', name: 'bad id' }, { id: 'o3', name: 'Off' }] });
+      if (url.endsWith('/api/git/orgs/o1')) return json({ linked: true, name: 'xinghe', url: 'https://git.forsion.test/xinghe' });
+      if (url.endsWith('/api/git/orgs/o2')) return json({ linked: false });
+      if (url.endsWith('/api/git/orgs/o3')) return json({ code: 'GIT_NOT_CONFIGURED' }, 503);
+      throw new Error(`unexpected ${url}`);
+    });
+    expect(await git.orgs!()).toEqual([{ gitName: 'xinghe', name: '星河工作室' }]);
+    expect(fetch.mock.calls.map(([u]) => u)).not.toContain('https://server.example/api/git/orgs/../x');
+    expect(JSON.stringify((fetch.mock.calls[0] as [string, RequestInit])[1].headers)).toContain('forsion-session');
+    expect(await brainWith(async () => json({ detail: 'Not found' }, 404)).git.orgs!()).toEqual([]);
+    expect((await failure(brainWith(async () => json({}, 500)).git.orgs!())).status).toBe(500);
+    // 半截 / 形状不对的 200 = 读不到(抛),不是「没有组织」
+    expect((await failure(brainWith(async () => new Response('{"orgs":[', { status: 200 })).git.orgs!())).code).toBe('BAD_RESPONSE');
+    expect((await failure(brainWith(async () => json({ launched: false })).git.orgs!())).code).toBe('BAD_RESPONSE');
+    expect((await failure(brainWith(async () => { throw new TypeError('fetch failed'); }).git.orgs!())).status).toBe(0);
+  });
+
   it('credential:连不上 → status 0;200 但没有用户名 / 令牌 → 502 BAD_RESPONSE', async () => {
     expect((await failure(brainWith(async () => { throw new TypeError('fetch failed'); }).git.credential('m'))).status).toBe(0);
     const bad = await failure(brainWith(async () => json({ webUrl: 'https://git.forsion.test', username: 'dave' })).git.credential('m'));

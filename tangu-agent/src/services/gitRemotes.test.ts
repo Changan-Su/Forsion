@@ -68,6 +68,16 @@ describe('describeRemote', () => {
     const off = describeRemote('x', `${FORSION}/parmer/notes.git`, '', null);
     expect([off.host, off.auth]).toEqual(['other', 'local']);
   });
+
+  it('组织仓库:Forsion Git 上路径第一段是当前用户所在组织的站上组织名(不分大小写)→ org = 显示名;个人仓库 / 别的站 / 名单不知道 → 没有', () => {
+    const orgs = new Map([['xinghe', '星河工作室']]);
+    expect(describeRemote('o', `${FORSION}/XingHe/app.git`, '', FORSION, orgs).org).toBe('星河工作室');
+    expect(describeRemote('o', 'git@git.forsion.test:xinghe/app.git', '', FORSION, orgs).org).toBe('星河工作室'); // ssh 也认
+    expect(describeRemote('o', `${FORSION}/lin/app.git`, '', FORSION, orgs)).not.toHaveProperty('org');
+    expect(describeRemote('o', 'https://github.com/xinghe/app.git', '', FORSION, orgs)).not.toHaveProperty('org');
+    expect(describeRemote('o', `${FORSION}/xinghe/app.git`, '', FORSION, null)).not.toHaveProperty('org');
+    expect(describeRemote('o', `${FORSION}/xinghe`, '', FORSION, orgs)).not.toHaveProperty('org'); // 只有一段:不是仓库路径
+  });
 });
 
 describe('pushRemoteOf / remoteNameFor', () => {

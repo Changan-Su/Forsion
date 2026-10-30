@@ -155,6 +155,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/project-context/git/push', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'git push with local credentials' },
   { method: 'POST', path: '/agent/project-context/git/push-target', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'git repository config write (which remote the current branch pushes to)' },
   { method: 'POST', path: '/agent/project-context/git/remote', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'writes the repo config and contacts the remote (may send the signed-in account credentials)' },
+  { method: 'GET', path: '/agent/project-context/git/reviews', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'host-only: asks Forsion Git with the signed-in account credentials (merge requests awaiting review)' },
   { method: 'POST', path: '/agent/project-context/git/trust', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'trusts repo-provided executable git config' },
   { method: 'DELETE', path: '/agent/project-context/icon', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'project icon write' },
   { method: 'GET', path: '/agent/project-context/icon', access: 'allow', src: 'routes/projectContext.ts', why: 'project icon' },
