@@ -15,6 +15,8 @@ describe('resolveSettingsTarget', () => {
     ['forsion/fx:forsion-extend:quota', { tab: 'forsion', sub: 'fx:forsion-extend:quota' }], // Extend 自绘子页的深链
     ['connection', { tab: 'general', sub: 'g-conn' }],
     ['agent-clis', { tab: 'agents', sub: 'ag-clis' }],
+    ['agents/ag-special', { tab: 'agents', sub: 'ag-special' }],
+    ['agents/ag-special/muse', { tab: 'agents', sub: 'ag-special', pane: 'muse' }], // 文案说「后台 Agent」的两处链接,落到 Muse 页签
     ['wechat', { tab: 'channels' }],
     ['plugins', { tab: 'amadeus-plugins' }], // `/plugins`:旧引擎插件页并进统一插件页(此前落在「常规」)
     ['model/m-providers', { tab: 'model', sub: 'm-providers' }], // ReloginChip(订阅登录按钮在提供方)

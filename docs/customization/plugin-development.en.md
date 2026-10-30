@@ -163,6 +163,12 @@ Plugins can also receive file events in your vault: files created, deleted, rena
 
 An engine plugin can bring in another chat app (WeCom, for example) and reuse everything the built-in WeChat, Telegram and QQ channels have: a fresh session on connect, remote approvals, commands such as `/new` and `/model`, inbox forwarding, and the channel folder in the sidebar. Once installed, Settings → Channels shows a card for it; fill in the credentials the plugin asks for and click Connect. Disabling the plugin stops the channel and keeps the sessions it was bound to. For the API, see `ctx.registerChannel` in the engine plugin section of the plugin development skill; the WeCom plugin is a working example.
 
+## Automation triggers
+
+A plugin can add its own "when" to automations: register it with `ctx.automation.registerTrigger`, then call `ctx.automation.emit` when the event happens. Once registered it appears in the "External and plugins" group of the automation canvas trigger node. Users write the rules themselves and can restrict them by hours, weekdays, cooldown and a daily limit. "Remind me directly" costs no budget; "Wake Muse" goes through the usual budget checks.
+
+You can only register inside your own namespace: `id` is a key, and the host builds `plugin:<plugin id>:<key>`. Names need both zh and en. When the plugin is disabled or uninstalled the trigger is unregistered; its rules are kept, paused with a stated reason, and resume once it is back. Events are not saved to disk, so an engine restart loses any a rule has not seen yet. Engine plugins use the same methods on `ctx.sdk.automation`. See `references/tangu-host-apis.md` in the plugin development skill for the code.
+
 ## Plugin data sync across devices
 
 A plugin that sets `"syncData": true` in its manifest has the data it saves with `ctx.saveData` synced to your other computers and phones through your Forsion account. When you are signed out or offline, the data stays on this device as before and is uploaded once you are back online. If two devices both changed it, the later change wins. The plugin's detail page has a "Sync plugin data across devices" switch to turn it off on one device. The web version does not sync yet. For the API, see the `loadData/saveData` notes in the editor section of the plugin development skill.

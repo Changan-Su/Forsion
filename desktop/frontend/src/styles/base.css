@@ -322,7 +322,9 @@ body {
   overflow: hidden;
   transition: background var(--duration-slow), color var(--duration-slow);
 }
-button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+/* 插件视图里没写 class 的按钮让给文件末尾的 plugin-view-base(那边零权重,插件自己写的规则才都压得过);:where 不加特异性,别处照旧 (0,0,1)。
+ * 括号里那串与 plugin-view-base 的按钮选择器逐字一致(pluginContract.test.ts 核对),改一处两处一起改。 */
+button:where(:not([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *))) { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 input, textarea, select { font: inherit; color: var(--text); }
 /* 多选的勾选框(状态栏条目、导入勾选、待办完成…)跟主题的墨色走,不用系统蓝;二态设置一律是 SettingsSwitch(走查续五 5.1)。 */
 input[type='checkbox'] { accent-color: var(--accent-ink); }
@@ -5646,3 +5648,46 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 .ui-zoom-hud-reset:hover { background: var(--border); }
 .ui-zoom-hud-reset[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .ui-zoom-hud { transition: none; translate: none; } }
+
+/* plugin-view-base:start —— 插件视图的基础样式(2026-10-29,插件开发体验 1B)。
+ * 插件在自己的视图里裸写(没写 class)的 <button> / <table> / <h1>–<h4>,不写样式也是宿主那一份的样子:
+ * 按钮同裸 .btn(描边成形、悬停转墨色),表格同笔记 / 会话的 Markdown 表格(DESIGN §6:表头不垫底、格线淡一半),
+ * 标题按界面字号档。<input> / <select> / <textarea> 由上面的「表单控件基线」管,这里不另写。
+ * · 权重:整条包在 :where() 里 = (0,0,0),插件自己写的任何规则(哪怕也是零权重,ctx.addStyle 排在后面)都压得过。
+ *   按钮能零权重,是因为文件头的全局重置 `button {…}`(0,0,1)把这些按钮让了出来 —— 重置里那串选择器与下面逐字一致。
+ *   零权重之间靠顺序:这块必须在 `*` 重置与表单基线之后(DESIGN §7.2,别往上挪)。
+ * · 只管没写 class 的:写了 class 就当插件在自己管样式(公开类 .btn 等的观感也就不动)。宿主替插件画的零件
+ *   (mountHostReact 那一层 data-host-mount)和插件自建的 .ctx-menu 里面一概不碰。
+ *   ponytail: 插件视图套插件视图、中间隔着一层宿主零件时,里面那份也不碰;真遇到再按最近的祖先判。
+ * · 视图头(setViewHead / setViewModes 的按钮)不在挂载点里,不吃这层,那里用 .btn.sm。
+ * · 值只用 plugin-contract.json 的公开 token、不写兜底(pluginContract.test.ts 按这对标记逐个对)。 */
+:where([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *)) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: var(--ui-font-body);
+  color: var(--text);
+  background: none;
+  border: 1px solid var(--overlay-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), color var(--duration-fast);
+}
+:where([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *):hover:not(:disabled)) { border-color: var(--accent-ink); color: var(--accent-ink); }
+:where([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *):disabled) { opacity: 0.5; cursor: not-allowed; }
+:where([data-plugin-view-host] table:not([class], [data-plugin-view-host] [data-host-mount] *)) { border-collapse: collapse; }
+:where([data-plugin-view-host] table:not([class], [data-plugin-view-host] [data-host-mount] *) > :is(thead, tbody, tfoot) > tr > :is(th, td)) {
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+:where([data-plugin-view-host] table:not([class], [data-plugin-view-host] [data-host-mount] *) > :is(thead, tbody, tfoot) > tr > th) { font-weight: 500; color: var(--text-muted); }
+:where([data-plugin-view-host] :is(h1, h2, h3, h4):not([class], [data-plugin-view-host] [data-host-mount] *)) { font-weight: 600; color: var(--text); }
+:where([data-plugin-view-host] h1:not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-title); line-height: var(--ui-line-title); }
+:where([data-plugin-view-host] h2:not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-heading); line-height: var(--ui-line-heading); }
+:where([data-plugin-view-host] :is(h3, h4):not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-body); line-height: var(--ui-line-body); }
+/* plugin-view-base:end */

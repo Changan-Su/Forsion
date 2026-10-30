@@ -35,7 +35,38 @@ interface MuseStateShape {
    *  本地 SQLite 的 created_at 只到秒,同一秒建的两个会话按时间排不出先后。 */
   sessionId?: string;
   sleep?: MuseSleep | null;
+  onboarding?: MuseOnboarding;
 }
+
+/** 磨合期(10-30 方案 C):从 Muse 第一次开起来算 14 天。fresh = 新用户(有第一天三问和第 14 天小结);
+ *  升级上来的老用户 fresh=false,只有两周的反馈按钮。住这里而不是对话:Muse 每个周期都是新会话,记不住自己发过什么。 */
+export interface MuseOnboarding { startedAt: number; fresh: boolean; introAt?: number; summaryAt?: number }
+export const MUSE_ONBOARDING_MS = 14 * 86_400_000;
+/** 磨合期里一天最多主动找几次。 */
+export const MUSE_ONBOARDING_DAILY_CAP = 3;
+
+export async function readMuseOnboarding(): Promise<MuseOnboarding | null> {
+  const o = (await readRaw()).onboarding;
+  const startedAt = Number(o?.startedAt);
+  return o && Number.isFinite(startedAt) && startedAt > 0 ? { ...o, startedAt, fresh: !!o.fresh } : null;
+}
+
+/** 第一次见到就记下起点;之后只读。hadCycle = 之前跑过周期(老用户)。 */
+export async function ensureMuseOnboarding(hadCycle: boolean, now = Date.now()): Promise<MuseOnboarding> {
+  const cur = await readMuseOnboarding();
+  if (cur) return cur;
+  const next: MuseOnboarding = { startedAt: now, fresh: !hadCycle };
+  await patchMuseState({ onboarding: next });
+  return next;
+}
+
+export async function patchMuseOnboarding(patch: Partial<MuseOnboarding>): Promise<void> {
+  const cur = await readMuseOnboarding();
+  if (cur) await patchMuseState({ onboarding: { ...cur, ...patch } });
+}
+
+/** 磨合期里(只算新用户):门槛低一档,一天封顶。 */
+export const onboardingActive = (o: MuseOnboarding | null, now = Date.now()): boolean => !!o?.fresh && now < o.startedAt + MUSE_ONBOARDING_MS;
 
 export function museStateFile(): string {
   return path.join(tanguHome(), 'muse-state.json');

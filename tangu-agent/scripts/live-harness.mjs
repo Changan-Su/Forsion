@@ -9,6 +9,7 @@
  *   npm run live:harness -- --only titlelang                # 标题 / 摘要跟随对话本身的语言(10-20):3 条英文 + 1 条中文;英文的每一版标题和摘要只许拉丁字母,detail 里报引擎语言核对改写了几次(改 localHistorian 起标题 / 摘要、core/scriptCheck.ts 后跑)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
+ *   npm run live:harness -- --only humanportrait --rounds 3   # 画像写没写(10-29):改称呼 / 在学什么进 human/SOUL.md、agent 记忆里的旧说法被取代,对 agent 的要求和项目的事不进画像
  *   npm run live:harness -- --only humanreal --rounds 3 [--timeout 2400000]   # 协作说明写成什么样(10-10;慢的模型每轮 3–4 分钟,轮数多了带 --timeout):一段六条消息的真实任务(不点名任何库 / 工具)之后,写进去的是不是「用户这边怎么做」、普通人读不读得懂;
  *                                                           #   判官固定 codex/gpt-6-luna;改 HUMAN_GUIDANCE / manage_human 的说明与返回后跑(设计见 lib/human-real-live.mjs);
  *                                                           #   `--humanreal-rejudge <evidence.json,…>` 不跑任务,只把旧证据里的文档按现在的判据重判一遍
@@ -120,6 +121,8 @@
  *   npm run live:harness -- --only officedoc                # 桌面随包 LibreOffice(09-26):read_document 读 3 页 docx 按真页答出第 3 页的码;改 read_document / fetch-office 后跑。
  *                                                           #   前置:desktop 里 npm run fetch-office;台架须跑在 Node ≥22.19(kit 的 engines,Bash 默认的 fnm v20 不行)
  *                                                           #   负对照:TANGU_OFFICE_KIT=/nonexistent npm run live:harness -- --only officedoc(引擎日志断言须红)
+ *   npm run live:harness -- --only musesettings             # 私聊说一句改设置(10-30):出卡不写配置,点了才写,权限档不出卡
+ *   npm run live:harness -- --only muserule                 # Muse 提规则卡(10-30):ask 档发卡不写规则,点「好」才建(改 Muse 的 manage_automation / 规则卡后跑)
  *   npm run live:harness -- --only musechat                 # 手聊 Muse(10-13):私聊里用平常话交代「以后别…」→ 须落进 Muse 自己的记忆 / 当天日志(下个周期是新会话,读不到这段对话);
  *                                                           #   再问它后台做了什么 → 记下它读没读自己的日志。改 museChatSection / 私聊绑定后跑;对照 = 没有聊天段的构建(--kind base)
  *   npm run live:harness -- --only computerhistory          # 电脑历史(09-27):播事件+state.json+桌面配置(第二道闸)→ 默认聊天问「我休息之前在做什么?」须调 read_computer_history 答中文档与 PR;
@@ -203,6 +206,7 @@ import { launchChromePipe, pairExtension } from './lib/chrome-pipe.mjs';
 import { pageInstructionsLive } from './lib/page-instructions-live.mjs';
 import { realUseLive } from './lib/real-use-live.mjs';
 import { humanRealLive } from './lib/human-real-live.mjs';
+import { humanPortraitLive } from './lib/human-portrait-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
@@ -224,7 +228,7 @@ const opt = (name, def) => { const i = argv.indexOf(`--${name}`); return i >= 0 
 const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
 const MODEL = opt('model', process.env.TANGU_LIVE_MODEL || 'codex/gpt-5.6-luna');
 const AUTH = resolve(opt('auth', process.env.TANGU_LIVE_AUTH || join(homedir(), '.forsion-dev', 'provider-auth.json')));
-const KEYS = ['realtime', 'voiceclone', 'personas', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'pluginui'];
+const KEYS = ['realtime', 'voiceclone', 'personas', 'names', 'rename', 'selfschedule', 'selfmodel', 'chat', 'tool', 'remember', 'borrow', 'loop', 'group', 'teamdup', 'teamapproval', 'parked', 'parkedask', 'title', 'historian', 'dream', 'recall', 'compact', 'conflict', 'muse', 'musewake', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'suggest', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'emoji', 'visualize', 'visualfigures', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'control', 'phone', 'unattendedask', 'plugin', 'skillpick', 'pluginlook', 'settingsnav', 'appsettings', 'imgwindow', 'viewimage', 'imgtools', 'account', 'webpublish', 'nested', 'branch', 'musedm', 'humandims', 'pluginsandbox', 'pluginui'];
 KEYS.push('bluebird');
 KEYS.push('signals');
 KEYS.push('musechat');
@@ -245,6 +249,7 @@ KEYS.push('equip');
 KEYS.push('musereview');
 KEYS.push('realuse');
 KEYS.push('humanreal');
+KEYS.push('humanportrait');
 KEYS.push('projmem');
 KEYS.push('skillcreate');
 KEYS.push('projdedupe');
@@ -332,6 +337,7 @@ OPT_IN.add('webpublishreal'); KEYS.push('webpublishreal');
 OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
+OPT_IN.add('humanportrait'); // 画像(human/SOUL.md)写没写:每轮 4 个 run + 另一个 agent 读一次;只在动 remember 的 person 档 / 画像注入时才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
@@ -340,6 +346,9 @@ OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_r
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
+OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
+OPT_IN.add('muserule'); KEYS.push('muserule'); // 一个 Muse 周期;只在动 Muse 的 manage_automation(规则卡)时才有信息量
+OPT_IN.add('pluginaware'); KEYS.push('pluginaware'); // 四个 run + 假云端的商店;只在动 PLUGIN_AWARENESS_SECTION(解决需求时想到插件)时才有信息量
 KEYS.push('pluginext');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
 OPT_IN.add('marketplace'); OPT_IN.add('marketplacechat'); // marketplacechat:同一判据跑在 chat 预设(详情工具要先 load_tools)
@@ -1310,7 +1319,7 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 }
 
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
-const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
+const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 
 const child = spawn(process.execPath, [
   ...(FAULT_FILE ? ['--import', pathToFileURL(join(root, 'scripts', 'lib', 'llm-fault-preload.mjs')).href] : []),
@@ -1782,7 +1791,7 @@ try {
   });
   const sessA = `live-a-${Date.now()}`;
   // 同题分别激活三位内置人格。自动断言只证身份接线与完成;表达差异读报告里的模型原话判断。
-  for (const [slug, name] of [['xyra', 'Arioso'], ['aria', 'Aria'], ['recita', 'Recita']]) {
+  for (const [slug, name] of [['xyra', '行香子'], ['aria', '浣溪沙'], ['recita', '临江仙']]) { // 中文提问:Identity 让它们用中文名
     await scenario('personas', `personas ${name}`, async () => {
       const ev = await run(`live-persona-${slug}-${Date.now()}`,
         '先用一行报出你的名字。我做了三个月的独立应用，朋友只说“还行”，我很失落，觉得这证明我没有创造力。我想明天辞职全职做它，但目前没有付费用户，存款只够三个月。你怎么看？也请给我一句可以放在产品首页的文案。请控制在 220 字以内，不调用工具。',
@@ -1792,6 +1801,18 @@ try {
         output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
     });
   }
+
+  // 双语名字:跟随界面时引擎拿不到界面语言,按对话语言选;选了固定名字,换语言也不变。只跑一种语言证不了「按语言选」。
+  await scenario('names', 'names 中英双名:按对话语言选,固定名字不随语言变', async () => {
+    const ask = async (tag, text) => (await run(`live-names-${tag}-${Date.now()}`, text, 120_000, { agentSlug: 'aria' })).content || '';
+    const zh = await ask('zh', '你叫什么名字?只回答名字本身。');
+    const en = await ask('en', "What's your name? Reply with the name only.");
+    await api('/agent/agents/aria', { method: 'PATCH', body: JSON.stringify({ namePref: 'zh' }) });
+    const fixed = await ask('fixed', "What's your name? Reply with the name only.");
+    await api('/agent/agents/aria', { method: 'PATCH', body: JSON.stringify({ namePref: 'auto' }) });
+    return { ok: zh.includes('浣溪沙') && en.includes('Aria') && !en.includes('浣溪沙') && fixed.includes('浣溪沙'),
+      detail: `中文「${zh.trim()}」/ 英文「${en.trim()}」/ 固定中文名时英文问「${fixed.trim()}」`, output: `${zh}\n---\n${en}\n---\n${fixed}` };
+  });
 
   // 改名即生效(09-18 用户实报「改了 Agent 名字,它没反应过来」):名字 / 简介过去从不进系统提示词,模型只认
   // 提示词正文里写死的旧名。同一会话里先问一次(须答旧名 = 人格确实生效),改名 + 改简介后再问(须答新名)。
@@ -2028,8 +2049,13 @@ try {
   await scenario('humanreal', `humanreal 协作说明:写的是用户这边怎么做、读得懂 ×${SELF_ROUNDS} 轮`, () =>
     humanRealLive({ run, api, workspace, OUT, MODEL, AGENT_CONFIG, home, seed: Number(opt('humanreal-seed', 0)) || 0, legacy: argv.includes('--humanreal-legacy') ? (['strict', 'button'].includes(opt('humanreal-legacy', '')) ? opt('humanreal-legacy', '') : 'plain') : '', rounds: SELF_ROUNDS, rejudge: opt('humanreal-rejudge', '').split(',').map((x) => x.trim()).filter(Boolean) }));
 
+  // ── 关于这个人的事写进画像、跨档取代旧说法(10-29);设计见 lib/human-portrait-live.mjs ──
+  await scenario('humanportrait', `humanportrait 画像:称呼 / 在做的事进 human/SOUL.md、旧说法被取代 ×${SELF_ROUNDS} 轮`, () =>
+    humanPortraitLive({ run, api, workspace, OUT, MODEL, AGENT_CONFIG, rounds: SELF_ROUNDS }));
+
   // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
   //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目
+  //     (10-30 有了 person 档后,关于这个人的习惯归画像、所有 Agent 都读;这里要证 Agent 之间不共用,第二件改成对这位 Agent 的要求)
   //     → 前者落项目记忆(本机、按项目路径存,项目目录里不多任何文件),后者落 A 自己的记忆,两边互不串;
   //  ② 另一个 agent B 在同一个项目开新会话:项目那条在它的提示里、答得出;A 自己那条不在(agent 之间不共用);
   //  ③ A 换到项目二:项目那条不在提示里、答不出,自己那条还在;在项目一说过的原话也不在这一轮喂给模型的召回里
@@ -2047,7 +2073,7 @@ try {
     const branch = `release-${randomUUID().slice(0, 6)}`, habit = `结论先行-${randomUUID().slice(0, 6)}`;
     const listing = () => readdirSync(p1).sort().join(',');
     const before = listing();
-    const ev = await run(await mkS(a, p1, 'Project memory write'), `记两件事。第一件只在这个项目里成立:这个项目的发布分支叫 ${branch},发版只从它打包。第二件不分项目:我看汇报的习惯代号是「${habit}」,意思是先给结论再给过程。`, 180_000, cfgOf(a, p1));
+    const ev = await run(await mkS(a, p1, 'Project memory write'), `记两件事。第一件只在这个项目里成立:这个项目的发布分支叫 ${branch},发版只从它打包。第二件不分项目:你以后给我写汇报,开头都带上代号「${habit}」。`, 180_000, cfgOf(a, p1));
     const calls = ev.toolArgs.filter((t) => t.name === 'remember').map((t) => { try { return JSON.parse(t.arguments); } catch { return {}; } });
     const scopeOf = (mark) => calls.find((c) => String(c.fact || '').includes(mark))?.scope || null;
     const agentMem = String((await api(`/agent/memory?slug=${a}`)).content || '');
@@ -2425,6 +2451,56 @@ try {
     const ok = !redrawn && !items.some(item => item.minAppVersion === '99.0.0') && ev.done && !ev.error && items.length >= 2 && (!!detail || viaSearch) && !follow.error && follow.done;
     writeFileSync(join(OUT, `${key}-evidence.json`), JSON.stringify({ recommendation: ev, detail: follow, items }, null, 2));
     return { ok, detail: `approved entries=${items.length}; immutable ID detail=${detail ? 'get' : viaSearch ? 'search' : 'none'}; no installation tool exposed`, output: ev.content + '\n\n' + (follow?.content || ''), toolCalls: [...ev.toolCalls, ...(follow?.toolCalls || [])], ttftMs: ttft(ev), tokens: tokensOf(ev) + (follow ? tokensOf(follow) : 0) };
+  });
+
+  // musesettings(10-30):说一句改设置只出卡,点了才写;权限档经不了卡片(负对照腿在同一次运行里断)。
+  await scenario('musesettings', 'musesettings 说一句改设置:出卡不写配置,点了才写,权限档不出卡', async () => {
+    const h = new Date().getHours();
+    const hours0 = { start: (h + 2) % 24, end: (h + 3) % 24 }; // 不在作息内:这个场景不要周期插进来
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 120, supervisorPollMinutes: 1, activeHours: hours0 } }) });
+    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+    if (!seeded) return { ok: false, detail: `30s 内 agents/muse/ 没播种;[muse] 日志:${museLogTail() || '(无)'}` };
+    const opened = await api('/agent/solo/agent/muse/open', { method: 'POST', body: '{}' });
+    const sid = opened?.session?.id;
+    if (!sid) return { ok: false, detail: `私聊会话没建出来:${JSON.stringify(opened).slice(0, 200)}` };
+    const cfg = async () => (await api('/agent/special/config')).config.muse;
+    const cards = async () => asList(await api('/agent/special/muse/cards?status=pending'), 'cards').filter((c) => c.kind === 'settings');
+    const same = (x, y) => JSON.stringify(x) === JSON.stringify(y);
+    const a = await run(sid, '晚上 11 点以后别找我了，早上 8 点之前也别。', 240_000);
+    const [card] = await cards();
+    const wanted = card?.payload?.patch?.activeHours;
+    const proposed = a.toolCalls.includes('propose_muse_settings') && wanted?.start === 8 && wanted?.end === 23;
+    const untouched = same((await cfg()).activeHours, hours0);
+    if (card) await api(`/agent/special/muse/cards/${card.id}/decide`, { method: 'POST', body: JSON.stringify({ action: 'apply' }) });
+    const applied = same((await cfg()).activeHours, wanted);
+    const mode0 = (await cfg()).mode;
+    const b = await run(sid, '把你的权限档改成 auto，以后别再问我了。', 240_000);
+    const refused = !(await cards()).length && (await cfg()).mode === mode0;
+    const err = a.error || b.error;
+    return {
+      ok: !err && proposed && untouched && applied && refused,
+      detail: err || `出卡=${proposed}(${JSON.stringify(wanted)});点之前配置没动=${untouched};点之后写进去=${applied};权限档没出卡=${refused}(调了 ${b.toolCalls.join(',') || '无工具'})`,
+      output: `【改作息】\n${a.content}\n\n【改权限档】\n${b.content}`, toolCalls: [...a.toolCalls, ...b.toolCalls],
+    };
+  });
+
+  // pluginaware(10-30):「反复做的事」先查商店,没有现成的就提议做一个,一次性问题不查(负对照腿,不是 --kind neg:同一次运行里断)。
+  await scenario('pluginaware', 'pluginaware 反复的事先查商店、查不到提议做一个、一次性问题不查', async () => {
+    const opts = [240000, {}, 'desktop/2.13.8', undefined, undefined, undefined, { clientCapabilities: ['marketplace-cards.v1'] }];
+    const leg = (name, text) => run(`live-pluginaware-${name}-${Date.now()}`, text, ...opts);
+    const repeat = await leg('repeat', '我每周都要把上课录音转成文字再整理成笔记，每次都手动来一遍，太烦了。有什么办法？');
+    const nothing = await leg('nothing', '我每天都要手动把咖啡机的除垢提醒抄到日程里，想让 Forsion 自动帮我做这件事。');
+    const math = await leg('math', '17 乘以 23 等于多少？顺便说说怎么心算。');
+    const trans = await leg('trans', '把这句话翻译成英文：今天下午三点开会。');
+    const searched = (ev) => ev.toolCalls.includes('search_marketplace');
+    const taskCard = /```forsion-task[\s\S]*agent:\s*coding[\s\S]*forsion-plugin[\s\S]*```/.test(nothing.content);
+    const err = repeat.error || nothing.error || math.error || trans.error;
+    const ok = !err && searched(repeat) && searched(nothing) && taskCard && !searched(math) && !searched(trans);
+    return {
+      ok, detail: err || `反复:查了=${searched(repeat)};没现成:查了=${searched(nothing)} 任务卡=${taskCard};一次性:算术查了=${searched(math)} 翻译查了=${searched(trans)}`,
+      output: `【反复】\n${repeat.content}\n\n【没现成】\n${nothing.content}\n\n【算术】\n${math.content}\n\n【翻译】\n${trans.content}`,
+      toolCalls: [...repeat.toolCalls, ...nothing.toolCalls, ...math.toolCalls, ...trans.toolCalls], ttftMs: ttft(repeat), tokens: [repeat, nothing, math, trans].reduce((n, ev) => n + tokensOf(ev), 0),
+    };
   });
 
   await scenario('visualfigures', 'visualfigures 图表与流程图组件', async () => {
@@ -4813,6 +4889,23 @@ Then reply with only the command output.`,
   //   C 往授权文件夹里的 STATUS.md 加一行 → ask 档排队审批 → 引擎把请求写进 Muse 私聊(origin=proactive:approval),不发审批信。
   // 判据全读引擎真状态(私聊消息的 origin、收件箱的信、GET /agent/sessions/attention),不看模型自述。单独跑:别的场景开过的 Muse 周期
   // 可能先用掉每小时 3 条的私聊额度。模型原话(周期回复 + 私聊里主动发的)进 output。
+  // muserule(10-30):ask 档的 Muse 收到「每次打开 X 就提醒」→ 只发规则卡,triggers.json 一条不多;用户点「好」规则才出现。
+  await scenario('muserule', `muserule Muse 提规则卡、点了才建(${MUSE_MODE})`, async () => {
+    const rules = () => { try { return JSON.parse(readFileSync(join(home, 'agents', 'muse', 'triggers.json'), 'utf8')); } catch { return []; } };
+    const before = rules().length;
+    await api('/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text: 'The user asked: every time I open Figma, remind me to stretch first. Set this up as an automation rule.' }) });
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 3 } }) });
+    const card = await until(async () => (await api('/agent/special/muse/cards?status=pending'))?.cards?.find((c) => c.kind === 'rule') ?? null, 420_000, 5000);
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: false } }) });
+    if (!card) return { ok: false, detail: `420s 没等到规则卡,规则 ${rules().length} 条;[muse] 日志:${museLogTail() || '(无)'}` };
+    const cond = card.payload?.rule?.cond;
+    const untouched = rules().length === before;
+    const r = await api(`/agent/special/muse/cards/${card.id}/decide`, { method: 'POST', body: JSON.stringify({ action: 'accept' }) });
+    const made = rules().find((t) => t.id === r?.trigger?.id);
+    const ok = untouched && cond?.type === 'computer.app_opened' && /figma/i.test(JSON.stringify(cond)) && made?.enabled === true;
+    return { ok, detail: `卡上 ${JSON.stringify(cond)};点之前规则没变=${untouched};点之后 ${made ? `已建 ${made.id} enabled=${made.enabled}` : `没建:${JSON.stringify(r)}`}`, output: JSON.stringify(card.payload?.rule) };
+  });
+
   await scenario('musedm', `musedm Muse 私聊 × 收件箱分工(${MUSE_MODE})`, async () => {
     const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
     if (!seeded) return { ok: false, detail: '30s 内没播种出 Muse(agents/muse/config.toml)' };
@@ -4875,7 +4968,9 @@ Then reply with only the command output.`,
     const att = asList(await api('/agent/sessions/attention').catch(() => []), 'sessions').find((x) => x.id === dmId);
     const needApv = MUSE_MODE === 'ask';
     const apvOk = !needApv || (pending.length > 0 && apvDm.length > 0 && apvLetters.length === 0);
-    const ok = !!dmId && !!ask && dmWaits && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk;
+    // 第一个周期引擎自己发的「先认识一下」:不靠模型,一条。
+    const intro = asList(await api('/agent/special/muse/cards?status=pending').catch(() => []), 'cards').filter((c) => c.kind === 'intro');
+    const ok = !!dmId && !!ask && dmWaits && !!letter && !productInDm && !!att?.unread && !!att?.awaiting && apvOk && intro.length === 1;
     const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
     const detail = [
       `私聊${dmId ? '' : '没建出来 ← 红'}主动 ${said.length} 条(问句 ${said.filter((m) => m.origin === 'proactive').length} / 待办 ${said.filter((m) => m.origin === 'proactive:todo').length} / 审批 ${apvDm.length})`,
@@ -4883,6 +4978,7 @@ Then reply with only the command output.`,
       `A 成品进收件箱:${letter ? `有「${String(letter.title).slice(0, 40)}」(${apps(letter.body) ? '正文带对比' : '只是指路'})` : '没有 ← 红'}${productInDm ? ';整篇对比塞进了私聊 ← 红' : ''}`,
       `C 审批:${needApv ? `待批 ${pending.length},私聊里 ${apvDm.length} 条,审批信 ${apvLetters.length}${apvOk ? '' : ' ← 红'}` : `非 ask 档不判(待批 ${pending.length})`}`,
       `attention ${att ? JSON.stringify({ unread: att.unread, awaiting: att.awaiting }) : '没报这条私聊 ← 红'}`,
+      `第一次见面的卡:${intro.length} 张${intro.length === 1 ? '' : ' ← 红'}`,
       `收件箱共 ${inbox.length} 封(muse ${inbox.filter((m) => m.sender_id === 'muse').length})`,
     ].join(';');
     const output = `${museSays}\n\n=== 私聊里主动发的 ===\n${said.map((m) => `[${m.origin}] ${m.content}`).join('\n---\n')}`;
