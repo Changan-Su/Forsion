@@ -94,6 +94,16 @@ describe('portable Unit installation', () => {
       await signDir(source, trusted.privateKey, ['manifest.json', 'main.js'])
       expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted') // backend entry not covered
       await signDir(source, trusted.privateKey)
+      await mkdir(join(source, 'backend/node_modules/empty'), { recursive: true }) // directories carry no bytes to sign
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('trusted')
+      // Complete packages only: an unsigned file could shadow a signed module during resolution.
+      await writeFile(join(source, 'backend/node_modules/shadow.js'), 'module.exports = "unsigned"')
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted')
+      await rm(join(source, 'backend/node_modules/shadow.js'))
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('trusted')
+      await symlink('../index.mjs', join(source, 'backend/node_modules/alias.mjs'))
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted') // links cannot be signed
+      await rm(join(source, 'backend/node_modules/alias.mjs'))
       await writeFile(join(source, 'backend/index.mjs'), 'export default () => ({ tampered: true })')
       expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted')
     } finally { await rm(root, { recursive: true, force: true }) }

@@ -77,6 +77,9 @@ const MAX_SIGNED_RELEASE_FILES = 200_000
  * Remote management installs code only from packages signed by the key pinned for that id in
  * builtinBundles.json or by one of the private unit.json management.trustedKeys. The signature must
  * cover manifest.json and every declared entry; the local CLI does not use this gate.
+ * Unlike desktop bundles (one esbuild file), a bundled Server plugin resolves modules from its own
+ * node_modules, where an unsigned extra file or link could shadow a signed one. So the package must be
+ * complete: every regular file besides SIGNATURE is signed, and links or special files are refused.
  */
 export async function releaseSignature(root: string, trustedKeys: readonly string[]): Promise<ReleaseSignature> {
   try { await lstat(join(root, SIGNATURE_FILE)) }
@@ -88,7 +91,20 @@ export async function releaseSignature(root: string, trustedKeys: readonly strin
   const required = ['manifest.json', ...entries.map((entry) => posix.normalize(entry.replace(/\\/g, '/')))]
   const pinned = bundles.find((bundle) => bundle.id === manifest.id)?.desktop?.signingKey
   for (const key of [...(pinned ? [pinned] : []), ...trustedKeys]) {
-    if ((await verifyBundleSignature(root, key, required, MAX_SIGNED_RELEASE_FILES)).ok) return 'trusted'
+    const verdict = await verifyBundleSignature(root, key, required, MAX_SIGNED_RELEASE_FILES)
+    // One SIGNATURE file: once a key verifies it, the file table is the same for every other key.
+    if (verdict.ok) return await signsEveryFile(root, new Set(verdict.files)) ? 'trusted' : 'untrusted'
   }
   return 'untrusted'
+}
+async function signsEveryFile(root: string, signed: ReadonlySet<string>): Promise<boolean> {
+  const visit = async (dir: string, prefix: string): Promise<boolean> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const relative = prefix + entry.name
+      if (entry.isDirectory()) { if (!await visit(join(dir, entry.name), relative + '/')) return false }
+      else if (!entry.isFile() || (relative !== SIGNATURE_FILE && !signed.has(relative))) return false
+    }
+    return true
+  }
+  try { return await visit(root, '') } catch { return false }
 }
