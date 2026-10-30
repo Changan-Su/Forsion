@@ -299,7 +299,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   /** p 缺的前置(连前置自己缺的)逐条对到商店上。读 getState:一键补前置的循环要拿到上一步装完之后的状态。 */
   const depPlan = (p: AmadeusPlugin): DepPlan[] => {
     const s = usePluginStore.getState()
-    return planDeps(unmetClosure(p, s.plugins, (x) => unmetPluginDeps(x, s)), catalog, { appVersion, platform: marketPlatform(), isInstalled: (c) => !!installedInfo(c) })
+    return planDeps(unmetClosure(p, s.plugins, (x) => unmetPluginDeps(x, s)), catalog, { appVersion, platform: marketPlatform(), isInstalled: (c) => (installed['amadeus-plugin'] || []).some((x) => x.slug === c.installSlug) })
   }
   const depLabel = (x: DepPlan): string => x.card?.name || x.unmet.dep.name || x.unmet.dep.id
   // 目录没拉到插件这一类(离线 / 这一类请求失败)时不知道有没有,不能说「商店里没有」。
@@ -385,15 +385,20 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const onInstallDeps = async (p: AmadeusPlugin): Promise<void> => {
     const name = pluginDisplayName(p, locale)
     const tried = new Set<string>() // 同一条目一轮只试一次:装上了前置却还是不齐(条目不是它要的包)时不能原地打转
+    const live = (): AmadeusPlugin | undefined => usePluginStore.getState().plugins.find((x) => x.id === p.id)
+    // 不盖掉并发安装还挂着的失败(同 toast);自己这条链的错误(带 deps)可以被下一步换掉。
+    const say = (next: NonNullable<typeof notice>): void => setNotice((cur) => (cur?.error && cur.deps !== p.id ? cur : next))
     let restart = false
     for (;;) {
-      const todo = installableDeps(depPlan(p)).filter((c) => !tried.has(c.id))
+      const self = live() // 每步重读:装的途中它可能被别的窗口卸载或换了版本
+      if (!self) break
+      const todo = installableDeps(depPlan(self)).filter((c) => !tried.has(c.id))
       const card = todo[0]
       if (!card) break
       tried.add(card.id)
       const step = { n: tried.size, total: tried.size + todo.length - 1 }
       setDepsRun({ pluginId: p.id, card, ...step })
-      setNotice({ text: t('market.deps.installing', { name: card.name, n: String(step.n), total: String(step.total) }), error: false, hint: t('market.deps.willRun', { name }), deps: p.id })
+      say({ text: t('market.deps.installing', { name: card.name, n: String(step.n), total: String(step.total) }), error: false, hint: t('market.deps.willRun', { name }), deps: p.id })
       const r = await onInstall(card, undefined, true)
       if (!r.ok) { // onInstall 已报错(常驻);这颗按钮此时是「重试」
         setDepsRun(null)
@@ -403,16 +408,17 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
       restart ||= r.restart
     }
     setDepsRun(null)
-    const s = usePluginStore.getState()
-    if (s.activeIds.includes(p.id)) { // 只有真跑起来才这么说
+    const self = live()
+    if (!self) { setNotice((cur) => (cur?.deps === p.id ? null : cur)); return } // 它自己没了,这条提示也没有意义了
+    if (usePluginStore.getState().activeIds.includes(p.id)) { // 只有真跑起来才这么说
       if (restart) offerRestart(t('market.pluginInstalledRestartHint'))
-      else setNotice({ text: t('market.deps.ready', { name }), error: false })
-      if (isGate(p)) void promptIfPending(p.id) // 和普通安装同一条:装完 = 注意力在场
+      else say({ text: t('market.deps.ready', { name }), error: false })
+      if (isGate(self)) void promptIfPending(p.id) // 和普通安装同一条:装完 = 注意力在场
       return
     }
-    const left = depPlan(p)
-    if (left.length) setNotice({ text: t('market.deps.notReady', { name, list: left.map(depLabel).join(t('common.listSep')) }), error: false, hint: depsHint(left), deps: p.id })
-    else setNotice({ text: t('market.deps.notRunning', { name }), error: false, deps: p.id })
+    const left = depPlan(self)
+    if (left.length) say({ text: t('market.deps.notReady', { name, list: left.map(depLabel).join(t('common.listSep')) }), error: false, hint: depsHint(left), deps: p.id })
+    else say({ text: t('market.deps.notRunning', { name }), error: false, deps: p.id })
   }
 
   // Agent / 技能 / 插件走统一卸载确认框(components/UninstallDialog,10-28 手动卸载规范):逐项写去向、进回收站、6 秒内可撤销,

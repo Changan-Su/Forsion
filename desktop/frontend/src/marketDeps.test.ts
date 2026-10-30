@@ -70,6 +70,15 @@ describe('unmetClosure', () => {
     expect(unmetClosure(app, [app, lib], unmetOf([app, lib], [])).map((u) => [u.dep.id, u.reason])).toEqual([['lib', 'waiting'], ['base', 'missing']])
   })
 
+  it('keeps the strictest minVersion when several plugins require the same one', () => {
+    const app = { id: 'app', version: '1.0.0', requiresPlugins: [{ id: 'lib' }, { id: 'core', minVersion: '2.0.0' }] }
+    const lib = { id: 'lib', version: '1.0.0', requiresPlugins: [{ id: 'core', minVersion: '1.0.0' }] }
+    const out = unmetClosure(app, [app, lib], unmetOf([app, lib], []))
+    expect(out.map((u) => [u.dep.id, u.dep.minVersion])).toEqual([['lib', undefined], ['core', '2.0.0']])
+    const plan = planDeps(out.slice(1), [card({ installSlug: 'core', latestVersion: '1.5.0' })], ctx)
+    expect(plan[0].skip).toBe('low')
+  })
+
   it('terminates on a cycle and lists each id once', () => {
     const a = { id: 'a', version: '1.0.0', requiresPlugins: [{ id: 'b' }, { id: 'c' }] }
     const b = { id: 'b', version: '1.0.0', requiresPlugins: [{ id: 'a' }, { id: 'c' }] }
