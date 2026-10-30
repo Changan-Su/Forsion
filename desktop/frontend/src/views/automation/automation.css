@@ -57,6 +57,10 @@
 }
 .auto-node textarea { min-height: 68px; resize: vertical; font-family: inherit; }
 .auto-seg { display: flex; gap: 6px; }
+.auto-trigger-group + .auto-trigger-group { margin-top: 8px; }
+.auto-group-label { display: block; margin-bottom: 4px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.auto-only-hours { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 6px; }
+.auto-only-hours input { min-width: 0; }
 .auto-seg button {
   flex: 1; padding: 6px 4px; border-radius: var(--radius-sm, 6px); border: var(--border-width) solid var(--border);
   background: none; color: var(--text-light); font-size: var(--ui-font-meta, 12px); cursor: pointer;

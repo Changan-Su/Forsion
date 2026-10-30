@@ -353,7 +353,7 @@ describe('loop 级:preset 是会话事实(空白会话锁,替换 D9)', () => {
     expect(lastSystem().split('\n').filter((l) => l.includes('apply_patch')).every((l) => l.includes('not available'))).toBe(true); // 只准出现在覆盖句里
     // 默认人格保留(persona:'keep'),其 systemPrompt 明文要求调 remember/log_event → 记忆指引里的「不适用」句必须在人格之后压过它
     const sys = lastSystem();
-    const personaAt = sys.indexOf('Tangu Arioso');
+    const personaAt = sys.indexOf("the user's default assistant in Forsion");
     const overrideAt = sys.indexOf('do not apply in this conversation');
     expect(personaAt).toBeGreaterThan(-1);
     expect(overrideAt).toBeGreaterThan(personaAt);

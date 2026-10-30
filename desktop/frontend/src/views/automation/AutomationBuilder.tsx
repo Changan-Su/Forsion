@@ -9,11 +9,12 @@ import { useApp } from '../../stores/appStore'
 import { track } from '../../achievements/store'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
 import { useAutomation } from '../../stores/automationStore'
-import { saveMuseTrigger } from '../../services/backendService'
-import { useI18n } from '../../i18n'
+import { getTriggerSources, saveMuseTrigger } from '../../services/backendService'
+import { currentLocale, useI18n } from '../../i18n'
 import {
-  BUILTIN_EVENTS, MAX_WHERE, WHERE_OPS, blankStep, cooldownPayload, hasUnsupportedParts, initialCooldown,
-  isFinishedTrigger, parseLocalDatetime, stepsFrom, toSpec, watchedColumnIds, whereDraftFrom, whereToUpsert, type StepDraft, type WhereDraft,
+  BUILTIN_EVENTS, MAX_WHERE, WEEKDAYS, WEEKEND, WHERE_OPS, blankStep, cooldownPayload, hasUnsupportedParts, initialCooldown, isParamCond,
+  isFinishedTrigger, noticeText, onlyDraftFrom, onlyDraftValid, onlyToUpsert, parseLocalDatetime, stepsFrom, toSpec, triggerMenu, watchedColumnIds, whereDraftFrom, whereToUpsert,
+  type OnlyDraft, type StepDraft, type TriggerMenuItem, type WhereDraft,
 } from './lib'
 import { listPluginAutomationEvents } from '../../amadeus/plugins/pluginStore'
 import { useShallow } from 'zustand/react/shallow'
@@ -25,14 +26,15 @@ import { ArrowLeft, HelpCircle, Plus } from 'lucide-react'
 import { CapabilityMenu } from '../../components/CapabilityMenu'
 import { SelectField } from '../../components/SelectField'
 import { AutomationExtension } from './AutomationExtension'
-import type { MuseTriggerInfo } from '../../types'
+import type { MuseTriggerInfo, MuseTriggerUpsert, TriggerSourceInfo } from '../../types'
 import { starterSteps, stepIssue, type Starter } from './experience'
 import { WorkflowCanvas, type FlowNode } from './WorkflowCanvas'
 import { TemplateField } from './TemplateField'
 import './messages'
 import { homeTarget } from '../../services/engine/targets'
+import { agentName } from '../../agentName'
 
-type TriggerKind = 'timer' | 'event_seen' | 'file_chars_gte' | 'manual' | 'db_changed'
+type TriggerKind = 'timer' | 'event_seen' | 'file_chars_gte' | 'manual' | 'db_changed' | 'param'
 type TimerMode = 'daily_at' | 'at' | 'every'
 
 /** 嵌入用法(Amadeus 按钮块的配置弹层):固定手动触发 + 保存后把规则交回调用方,不碰自动化 Space 的选中态。 */
@@ -77,8 +79,25 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     : initCond.type === 'file_chars_gte' ? 'file_chars_gte'
     : initCond.type === 'manual' ? 'manual'
     : initCond.type === 'db_changed' ? 'db_changed'
+    : isParamCond(initCond) ? 'param'
     : 'timer',
   )
+  const [sources, setSources] = useState<TriggerSourceInfo[]>([])
+  useEffect(() => {
+    let alive = true
+    void getTriggerSources(homeTarget()).then((s) => { if (alive) setSources(s) })
+    return () => { alive = false }
+  }, [])
+  const [sourceId, setSourceId] = useState(initCond && isParamCond(initCond) ? initCond.type : '')
+  const source = sources.find((s) => s.id === sourceId)
+  const [paramValues, setParamValues] = useState<Record<string, string>>(() =>
+    initCond && 'params' in initCond ? Object.fromEntries(Object.entries(initCond.params).map(([k, v]) => [k, String(v)])) : {})
+  const [recentApps, setRecentApps] = useState<Array<{ name: string; bundleId: string }>>([])
+  useEffect(() => {
+    if (kind !== 'param' || recentApps.length) return
+    void window.tangu?.computerHistory?.recentApps().then(setRecentApps).catch(() => {})
+  }, [kind, recentApps.length])
+  const [onlyDraft, setOnlyDraft] = useState<OnlyDraft>(() => onlyDraftFrom(editing))
   const [timerMode, setTimerMode] = useState<TimerMode>(
     initCond?.type === 'at' ? 'at' : initCond?.type === 'every' ? 'every' : 'daily_at',
   )
@@ -123,12 +142,14 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   const dbCols = useMemo(() => dbColsRaw?.filter((c) => c.type !== 'formula' && c.type !== 'lookup'), [dbColsRaw])
   const [steps, setSteps] = useState<StepDraft[]>(() => editing ? stepsFrom(editing) : starterSteps(starter, t))
   const [musePrompt, setMusePrompt] = useState(editing && !editing.actions?.length && !editing.agentSlug ? editing.prompt || '' : '')
+  // 「叫醒 Muse」是没有动作链的规则:和步骤互斥,选了就把步骤清掉。
+  const [wakeMuse, setWakeMuse] = useState(!!editing && !editing.actions?.length && !editing.agentSlug)
   const [cooldown, setCooldown] = useState(() => initialCooldown(editing, kind))
-  // 新建规则时切触发类型,冷却初值跟着换(db_changed → 0);用户已亲手改过的值不动。
+  // 新建规则时切触发类型,冷却初值跟着换(db_changed → 0,新触发源按注册表);用户已亲手改过的值不动。
   const cooldownTouched = useRef(false)
   useEffect(() => {
-    if (!editing && !cooldownTouched.current) setCooldown(initialCooldown(null, kind))
-  }, [kind, editing])
+    if (!editing && !cooldownTouched.current) setCooldown(initialCooldown(null, kind, kind === 'param' ? source?.defaultCooldownHours : undefined))
+  }, [kind, editing, source?.defaultCooldownHours])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -136,7 +157,17 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     if (steps.length >= 24) return
     const step = blankStep(type)
     setSteps((ss) => [...ss, step])
+    setWakeMuse(false)
     setSelected(String(step.key))
+  }
+  const chooseWakeMuse = (): void => {
+    setSteps([])
+    setWakeMuse(true)
+    setSelected('muse')
+  }
+  const pickTrigger = (item: TriggerMenuItem): void => {
+    setKind(item.kind)
+    if (item.kind === 'param') { setSourceId(item.id); setParamValues({}) }
   }
   const hasAgentStep = steps.some((s) => s.type === 'agent_run')
   const patchStep = (key: number, patch: Partial<StepDraft>): void =>
@@ -174,6 +205,15 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     }
     if (kind === 'event_seen' && !match.trim()) return false
     if (kind === 'file_chars_gte' && (!path.trim() || !(Number(n) > 0))) return false
+    if (!onlyDraftValid(onlyDraft)) return false
+    if (kind === 'param') {
+      for (const p of source?.params ?? []) {
+        const v = (paramValues[p.key] ?? '').trim()
+        if (p.required && !v) return false
+        if (v && p.type === 'number' && !(Number(v) >= (p.min ?? -Infinity) && Number(v) <= (p.max ?? Infinity))) return false
+      }
+      // 目录还没回来 / 这个源已经没了:改不了参数,也不算填错(保存时引擎按现值校验)。
+    }
     if (kind === 'db_changed') {
       if (!/\.db$/i.test(dbPath.trim())) return false
       if (dbEvent === 'cell_changed' && !dbColumnIds.length) return false
@@ -186,19 +226,20 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   const issues: { node: string; text: string }[] = []
   if (!desc.trim()) issues.push({ node: 'trigger', text: t('automation.ux.issue.name') })
   if (!triggerValid) issues.push({ node: 'trigger', text: t('automation.ux.issue.trigger') })
-  if (!steps.length && (!editing || kind === 'manual')) issues.push({ node: 'review', text: t('automation.ux.issue.steps') })
+  if (!steps.length && !wakeMuse && (!editing || kind === 'manual')) issues.push({ node: 'review', text: t('automation.ux.issue.steps') })
   steps.forEach((step, i) => {
     const issue = stepIssue(step, kind, catalog)
     if (issue) issues.push({ node: String(step.key), text: `${i + 1}. ${t(`automation.ux.issue.${issue}`)}` })
   })
-  if (kind !== 'timer' && kind !== 'manual' && (!cooldown.trim() || !Number.isFinite(Number(cooldown)) || Number(cooldown) < 0)) {
+  const showCooldown = kind !== 'timer' && kind !== 'manual' && !source?.timed
+  if (showCooldown && (!cooldown.trim() || !Number.isFinite(Number(cooldown)) || Number(cooldown) < 0)) {
     issues.push({ node: 'review', text: t('automation.ux.issue.cooldown') })
   }
   const canSave = issues.length === 0
 
   const save = async (): Promise<void> => {
     if (!canSave || busy) return
-    const condType = kind === 'timer' ? timerMode : kind
+    const condType = (kind === 'timer' ? timerMode : kind === 'param' ? sourceId : kind) as MuseTriggerUpsert['cond_type']
     // 预检:编辑器开久了 at 时刻悄悄过期(mount 时的 expiredAt 不会重算)——引擎同口径(5min 容忍)本地先拒
     if (condType === 'at' && (parseLocalDatetime(datetime)?.getTime() ?? 0) < Date.now() - 5 * 60_000) {
       setError(t('automation.builder.atPast'))
@@ -224,6 +265,8 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         actor: 'user',
         desc: desc.trim(),
         cond_type: condType,
+        params: kind === 'param' ? paramValues : undefined,
+        ...onlyToUpsert(onlyDraft),
         time: condType === 'daily_at' ? time : undefined,
         datetime: condType === 'at' ? datetime : undefined,
         interval: condType === 'every' ? `${Math.floor(Number(ivlN))}${ivlUnit}` : undefined,
@@ -240,7 +283,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         // 编辑既有 db 规则:钉回建规则时的 vault(省略会被引擎重钉到**当前** vault,切库编辑会静默改靶)。
         vault: condType === 'db_changed' && editing?.cond.type === 'db_changed' ? editing.cond.vault : undefined,
         prompt: steps.length ? undefined : musePrompt.trim() || undefined,
-        cooldown_hours: cooldownPayload(kind, cooldown), // 0 放行(db_changed 纯动作链 = 不冷却)
+        cooldown_hours: cooldownPayload(showCooldown ? kind : 'timer', cooldown), // 0 放行(db_changed 纯动作链 = 不冷却)
         // 新 builder 不再产旧式单动作;0 步骤 = 显式清空(actions:null)回到唤醒 Muse 旧语义
         actions: steps.length ? actions : null,
         enabled,
@@ -257,21 +300,26 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
   }
 
   const stepIcon = (ty: StepDraft['type']): React.ReactNode =>
-    ty === 'notify' ? <Bell size={14} /> : ty === 'agent_run' ? <Bot size={14} />
+    ty === 'notify' || ty === 'remind' ? <Bell size={14} /> : ty === 'agent_run' ? <Bot size={14} />
     : ty === 'db_row_add' || ty === 'db_row_edit' ? <Database size={14} /> : <Wrench size={14} />
 
+  const sourceName = (s: TriggerSourceInfo): string => s.name[currentLocale() === 'zh' ? 'zh' : 'en']
+  const kindLabel = (k: TriggerKind): string => t(`automation.builder.${k === 'timer' ? 'condTimer' : k === 'manual' ? 'condManual' : k === 'db_changed' ? 'condDb' : k === 'event_seen' ? 'condEvent' : 'condFile'}`)
   const flowNodes: FlowNode[] = [
-    { id: 'trigger', title: t('automation.builder.trigger'), subtitle: t(`automation.builder.${kind === 'timer' ? 'condTimer' : kind === 'manual' ? 'condManual' : kind === 'db_changed' ? 'condDb' : kind === 'event_seen' ? 'condEvent' : 'condFile'}`), icon: <Zap size={17} />, ready: triggerValid && !!desc.trim() },
+    { id: 'trigger', title: t('automation.builder.trigger'), subtitle: kind === 'param' ? (source ? sourceName(source) : sourceId) : kindLabel(kind), icon: <Zap size={17} />, ready: triggerValid && !!desc.trim() },
     ...steps.map((step, i) => ({ id: String(step.key), title: `${i + 1}. ${t(`automation.step.${step.type}`)}`, subtitle: step.title || step.prompt || step.dbPath || step.tool || t('automation.ux.setupHint'), icon: stepIcon(step.type), ready: !stepIssue(step, kind, catalog) })),
-    ...(!steps.length && editing && kind !== 'manual' ? [{ id: 'muse', title: t('automation.builder.museFallback'), subtitle: musePrompt || t('automation.builder.museFallbackHint'), icon: <Sparkles size={17} />, ready: true }] : []),
+    ...(!steps.length && wakeMuse && kind !== 'manual' ? [{ id: 'muse', title: t('automation.step.wake'), subtitle: musePrompt || t('automation.step.wakeHint'), icon: <Sparkles size={17} />, ready: true }] : []),
     { id: 'review', title: t('automation.ux.finish'), subtitle: canSave ? t('automation.ux.allReady') : t('automation.ux.finishHint'), icon: <CheckCircle2 size={17} />, ready: canSave },
   ]
   const additions = <>
     <CapabilityMenu label={t('automation.ux.addStep')} className="btn ghost sm" disabled={busy || steps.length >= 24}
-      items={(['notify', 'agent_run', 'db_row_add', 'db_row_edit', 'tool_call'] as const).map((type) => ({
-        id: type, label: t(`automation.step.${type}`), icon: stepIcon(type), disabled: type === 'tool_call' && !catalog.length,
-        onSelect: () => addStep(type),
-      }))}><Plus size={14} />{t('automation.ux.addStep')}</CapabilityMenu>
+      items={[
+        ...(['remind', 'notify', 'agent_run', 'db_row_add', 'db_row_edit', 'tool_call'] as const).map((type) => ({
+          id: type, label: t(`automation.step.${type}`), icon: stepIcon(type), disabled: type === 'tool_call' && !catalog.length,
+          onSelect: () => addStep(type),
+        })),
+        ...(kind !== 'manual' ? [{ id: 'wake', label: t('automation.step.wake'), icon: <Sparkles size={14} />, disabled: false, onSelect: chooseWakeMuse }] : []),
+      ]}><Plus size={14} />{t('automation.ux.addStep')}</CapabilityMenu>
     <button className="icon-btn" title={t('automation.ux.help')} onClick={() => setSelected('help')}><HelpCircle size={15} /></button>
   </>
 
@@ -297,15 +345,44 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         {!fixedManual && (
           <div className="field">
             <label>{t('automation.builder.condType')}</label>
-            <div className="auto-seg">
-              <button className={kind === 'timer' ? 'active' : ''} onClick={() => setKind('timer')}>{t('automation.builder.condTimer')}</button>
-              <button className={kind === 'event_seen' ? 'active' : ''} onClick={() => setKind('event_seen')}>{t('automation.builder.condEvent')}</button>
-              <button className={kind === 'file_chars_gte' ? 'active' : ''} onClick={() => setKind('file_chars_gte')}>{t('automation.builder.condFile')}</button>
-              <button className={kind === 'db_changed' ? 'active' : ''} onClick={() => setKind('db_changed')}>{t('automation.builder.condDb')}</button>
-              <button className={kind === 'manual' ? 'active' : ''} onClick={() => setKind('manual')}>{t('automation.builder.condManual')}</button>
-            </div>
+            {triggerMenu(sources).map(({ group, items }) => {
+              const off = items.every((i) => i.source && !i.source.available)
+              return (
+                <div className="auto-trigger-group" data-trigger-group={group} key={group}>
+                  <span className="auto-group-label">{t(`automation.group.${group}`)}</span>
+                  <div className="auto-seg" title={off ? t('automation.group.computerOff') : undefined}>
+                    {items.map((item) => (
+                      <button key={item.id} data-trigger={item.id} disabled={!!item.source && !item.source.available} title={item.source?.reason ? noticeText(t, item.source.reason) : undefined}
+                        className={(item.kind === 'param' ? sourceId === item.id && kind === 'param' : kind === item.kind) ? 'active' : ''} onClick={() => pickTrigger(item)}>
+                        {item.kind === 'param' && item.source ? sourceName(item.source) : kindLabel(item.kind)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+            {editing?.enabled && editing.notice && <div className="auto-hint auto-fact-warn">{noticeText(t, editing.notice)}</div>}
           </div>
         )}
+        {kind === 'param' && source?.params.filter((p) => !p.hidden).map((p) => (
+          <div className="field" key={p.key}>
+            <label>{p.name[currentLocale() === 'zh' ? 'zh' : 'en']}</label>
+            {p.type === 'app' ? (
+              <>
+                {/* 选到最近用过的 App 存它的 ID(改名不失效);手输的按名字认。 */}
+                <input type="text" list="auto-recent-apps" aria-label={p.key} value={paramValues.appName ?? paramValues[p.key] ?? ''} placeholder={t('automation.param.pickApp')}
+                  onChange={(e) => {
+                    const name = e.target.value
+                    const hit = recentApps.find((a) => a.name === name)
+                    setParamValues((v) => ({ ...v, [p.key]: hit?.bundleId ?? name, appName: name }))
+                  }} />
+                <datalist id="auto-recent-apps">{recentApps.map((a) => <option key={a.bundleId} value={a.name} />)}</datalist>
+              </>
+            ) : (
+              <input type={p.type === 'number' ? 'number' : 'text'} aria-label={p.key} min={p.min} max={p.max} value={paramValues[p.key] ?? ''} onChange={(e) => setParamValues((v) => ({ ...v, [p.key]: e.target.value }))} />
+            )}
+          </div>
+        ))}
         {kind === 'db_changed' && (
           <>
             <div className="field">
@@ -452,6 +529,21 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
             </div>
           </>
         )}
+        {!fixedManual && kind !== 'manual' && (
+          <div className="field" data-rule-only>
+            <label>{t('automation.only.title')}</label>
+            <div className="auto-seg">
+              {([['everyday', []], ['workdays', WEEKDAYS], ['weekend', WEEKEND]] as const).map(([k, days]) => (
+                <button key={k} className={onlyDraft.weekdays.join() === days.join() ? 'active' : ''} onClick={() => setOnlyDraft((d) => ({ ...d, weekdays: [...days] }))}>{t(`automation.only.${k}`)}</button>
+              ))}
+            </div>
+            <div className="auto-only-hours">
+              <input type="number" aria-label={t('automation.only.from')} placeholder={t('automation.only.from')} min={0} max={24} value={onlyDraft.start} onChange={(e) => setOnlyDraft((d) => ({ ...d, start: e.target.value }))} />
+              <input type="number" aria-label={t('automation.only.to')} placeholder={t('automation.only.to')} min={0} max={24} value={onlyDraft.end} onChange={(e) => setOnlyDraft((d) => ({ ...d, end: e.target.value }))} />
+              <input type="number" aria-label={t('automation.only.maxLabel')} placeholder={t('automation.only.maxLabel')} min={1} max={50} value={onlyDraft.maxPerDay} onChange={(e) => setOnlyDraft((d) => ({ ...d, maxPerDay: e.target.value }))} />
+            </div>
+          </div>
+        )}
       </div>
 
       {steps.map((s, i) => {
@@ -467,8 +559,9 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
                 <button className="icon-btn" title={t('common.delete')} onClick={() => { setSteps((ss) => ss.filter((x) => x.key !== s.key)); setSelected('trigger') }}><Trash2 size={12} /></button>
               </span>
             </div>
-            {s.type === 'notify' && (
+            {(s.type === 'notify' || s.type === 'remind') && (
               <>
+                {s.type === 'remind' && <div className="auto-hint">{t('automation.step.remindHint')}</div>}
                 <TemplateField label={t('automation.builder.notifyTitle')} value={s.title} maxLength={200} placeholder={t('automation.builder.notifyTitlePh')} onChange={(title) => patchStep(s.key, { title })} columns={dbCols} hasRow={kind === 'db_changed'} />
                 <TemplateField label={t('automation.builder.notifyBody')} value={s.body} multiline onChange={(body) => patchStep(s.key, { body })} columns={dbCols} hasRow={kind === 'db_changed'} />
                 <div className="auto-hint">{t('automation.builder.notifyHint')}</div>
@@ -479,7 +572,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
                 <div className="field">
                   <label>{t('automation.builder.runner')}</label>
                   <SelectField size="sm" field="automation-runner" ariaLabel={t('automation.builder.runner')} value={s.agentSlug} onChange={(agentSlug) => patchStep(s.key, { agentSlug })}
-                    options={[{ value: '', label: t('automation.builder.runnerPick') }, ...agentDefs.filter((d) => d.slug !== 'muse').map((d) => ({ value: d.slug, label: d.name }))]} />
+                    options={[{ value: '', label: t('automation.builder.runnerPick') }, ...agentDefs.filter((d) => d.slug !== 'muse').map((d) => ({ value: d.slug, label: agentName(d) }))]} />
                 </div>
                 <div className="field">
                   <label>{t('automation.builder.prompt')}</label>
@@ -629,10 +722,10 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         )
       })}
 
-      {steps.length === 0 && editing && kind !== 'manual' && (
+      {steps.length === 0 && wakeMuse && kind !== 'manual' && (
         <div className="auto-node auto-node-muse" hidden={selected !== 'muse'}>
-          <div className="auto-node-head"><span className="auto-ic"><Sparkles size={14} /></span>{t('automation.builder.museFallback')}</div>
-          <div className="auto-hint">{t('automation.builder.museFallbackHint')}</div>
+          <div className="auto-node-head"><span className="auto-ic"><Sparkles size={14} /></span>{t('automation.step.wake')}</div>
+          <div className="auto-hint">{t('automation.step.wakeHint')}</div>
           <div className="field">
             <label>{t('automation.builder.prompt')}</label>
             <textarea value={musePrompt} maxLength={500} placeholder={t('automation.builder.promptPh')} onChange={(e) => setMusePrompt(e.target.value)} />
@@ -646,7 +739,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         <label className="auto-check"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />{t('automation.ux.enabledLabel')}</label>
         {issues.length ? <div className="auto-validation" role="status"><strong>{t('automation.ux.checklist')}</strong>{issues.map((issue, i) => <button key={i} onClick={() => setSelected(issue.node)}>{issue.text}</button>)}</div>
           : <p className="auto-ready"><CheckCircle2 size={14} />{t('automation.ux.allReady')}</p>}
-      {kind !== 'timer' && kind !== 'manual' && (
+      {showCooldown && (
         <div className="auto-guard">
           <label>{t('automation.builder.cooldown')}</label>
           {/* E6:多维表触发的纯动作链下限 0(链式规则要能不冷却);含 agent 步仍 1h。 */}

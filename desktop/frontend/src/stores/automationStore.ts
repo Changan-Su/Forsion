@@ -50,6 +50,8 @@ interface AutomationState {
   refresh(cfg: TanguDesktopConfig): Promise<void>
   setSel(sel: AutomationSel | null): void
   openBuilder(editingId?: string, starter?: Starter): void
+  /** 从 Automation Space 以外打开一条规则。构建器在 triggers 里找规则,找不到就是空白草稿,保存会把规则盖掉,所以先拉到再开。 */
+  openRule(id: string): Promise<void>
   acceptSaved(trigger: MuseTriggerInfo): void
   closeBuilder(): void
   bump(): void
@@ -94,6 +96,10 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   },
   openBuilder(editingId, starter) {
     set({ builder: { editingId, starter } })
+  },
+  async openRule(id) {
+    const triggers = get().triggers.some((t) => t.id === id) ? get().triggers : await getMuseTriggers(homeTarget()).catch(() => [])
+    if (triggers.some((t) => t.id === id)) set({ triggers, builder: { editingId: id } })
   },
   acceptSaved(trigger) {
     set((s) => ({ triggers: [...s.triggers.filter((t) => t.id !== trigger.id), trigger],

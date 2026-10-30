@@ -101,6 +101,7 @@
     ],
     "tanguHostDeps": [
       "desktop/frontend/src/achievements/store.ts",
+      "desktop/frontend/src/agentName.ts",
       "desktop/frontend/src/amadeus/blocks/sketch/format.ts",
       "desktop/frontend/src/amadeus/chrome/pageChrome.tsx",
       "desktop/frontend/src/amadeus/components/Dialogs.tsx",
@@ -166,6 +167,7 @@
       "desktop/frontend/src/components/chatbox/index.tsx",
       "desktop/frontend/src/components/phoneList.tsx",
       "desktop/frontend/src/components/selectionBar/ViewSelectionBar.tsx",
+      "desktop/frontend/src/components/settingsTarget.ts",
       "desktop/frontend/src/components/thinkingLabel.ts",
       "desktop/frontend/src/components/wikiChat.ts",
       "desktop/frontend/src/features/runtime.ts",
@@ -204,6 +206,7 @@
       "desktop/frontend/src/sessionTitle.ts",
       "desktop/frontend/src/stores/appStore.ts",
       "desktop/frontend/src/stores/attentionStore.ts",
+      "desktop/frontend/src/stores/automationStore.ts",
       "desktop/frontend/src/stores/channelsStore.ts",
       "desktop/frontend/src/stores/childChatStore.ts",
       "desktop/frontend/src/stores/codeStudioStore.ts",

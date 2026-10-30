@@ -3,9 +3,11 @@
  *
  * 规则落 ~/.tangu/agents/muse/triggers.json,由 supervisor tick 零 token 评估(见 services/museTriggers.ts):
  * 命中 → 动作链(runActions)或旧式 agentSlug 无人值守 run,两者皆无则唤醒 Muse。
- * 可见性:本地限定(hostExec,照 inbox_send);不进 PLAN_MODE_TOOLS(写操作)。Muse(2026-09-10 起按权限档
- * 工作,不再 planMode)能看见本工具,但**只能建目标为其它 agent 的规则**(execute 里拒 agent 为空/muse):
- * 唤醒自己的规则=自激回路,Muse 自己的定时工作走 manage_schedule(回灌周期、过预算闸)。
+ * 可见性:本地限定(hostExec,照 inbox_send);不进 PLAN_MODE_TOOLS(写操作)。Muse 三档都看得见本工具:
+ *   ask / agent 档 set = 只提规则卡(services/museCards,用户点「好」才建),只许直接提醒 / 通知 / 叫醒自己,list 之外别的动作都拒;
+ *   auto 档直接建,工具结果提醒它在私聊里说一声。
+ * 唤醒自己的规则:只有事件不是 Muse 自己造得出来的触发源(selfWakeSafe:电脑上 / 日历)才行,否则是自激回路,
+ * Muse 自己的定时工作走 manage_schedule(回灌周期、过预算闸)。
  * **tool_call 步骤刻意不在本工具开放**(validateTriggerInput allowToolCall=false):
  * 聊天 agent 在 full-auto 下能自建规则,放开=自授权 run_bash 提权链;tool_call 只走桌面构建器(人工预批)。
  * 旧名 muse_watch 在 registry.executeTool 留静默别名(不进 defs/快照,只兜升级瞬间的存量调用)。
@@ -24,14 +26,27 @@ import {
   isPluginTriggerId,
   precheckWatchCols,
   MAX_ACTIONS,
+  triggerUnmet,
   type MuseTrigger,
   type DbLike,
+  type ValidatedTrigger,
 } from '../../services/museTriggers.js';
+import { getTriggerSource, listTriggerSources } from '../../services/triggerRegistry.js';
+import { listMuseCards, postMuseCard } from '../../services/museCards.js';
 import { readDbOrNull } from '../../services/amadeusDb.js';
 import { dropCursors } from '../../services/dbCursors.js';
 import { getAgent } from '../../agents/agentRegistry.js';
 import { amadeusVaultPath } from './amadeus.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
+
+const MAX_PENDING_RULE_CARDS = 3;
+
+/** 插件登记的触发源(没有就是空串,工具说明一个字不变)。只列校验过形状的 id 和参数名:显示名是插件写的文本,不进工具说明。 */
+function pluginTriggersNote(): string {
+  const list = listTriggerSources().filter((s) => s.group === 'plugin')
+    .map((s) => (s.params.length ? `${s.id} (params: ${s.params.map((p) => p.key).join(', ')})` : s.id));
+  return list.length ? ` Plugin triggers: ${list.join(', ')}.` : '';
+}
 
 function fmt(t: MuseTrigger): string {
   const act = t.actions?.length
@@ -39,10 +54,31 @@ function fmt(t: MuseTrigger): string {
         a.type === 'tool_call' ? `tool_call(${a.tool})`
         : a.type === 'agent_run' ? `agent_run(${a.agentSlug})`
         : a.type === 'db_row_add' || a.type === 'db_row_edit' ? `${a.type}(${a.path})`
-        : 'notify').join(' → ')}`
+        : a.type).join(' → ')}`
     : t.agentSlug ? `, runs agent "${t.agentSlug}"` : '';
   const cd = t.cooldownHours ? `, cooldown ${t.cooldownHours}h` : '';
   return `${t.id}${t.enabled ? '' : ' (disabled)'} — ${t.desc} [${condSummary(t.cond)}]${act}${cd}, last fired ${t.lastFiredAt || 'never'}`;
+}
+
+/** ask / agent 档 Muse 的 set:发规则卡,不写规则。卡上存校验过的规则(画「当 · 只在 · 做」)和入参(点「好」时再校验一次建出来)。 */
+async function proposeRule(userId: string, cwd: string | undefined, args: Record<string, any>, v: ValidatedTrigger): Promise<string> {
+  if (String(args.id || '').trim()) return 'Error: at your permission level you can only propose new rules, not change existing ones.';
+  // 卡上「做」只有一行:只收一步,点「好」建出来的和卡上写的是一回事。
+  const steps = v.actions ?? [];
+  if (v.agentSlug || steps.length > 1 || steps.some((a) => a.type !== 'remind' && a.type !== 'notify')) {
+    return 'Error: a proposed rule does one thing: remind the user (one remind or notify action) or wake you (no actions). Ask the user to set up anything else in Automation.';
+  }
+  const pending = await listMuseCards(userId, 'pending');
+  if (pending.filter((c) => c.kind === 'rule').length >= MAX_PENDING_RULE_CARDS) return `Error: ${MAX_PENDING_RULE_CARDS} rule proposals are already waiting for the user. Wait for an answer first.`;
+  const { desc, cond, prompt, cooldownHours, actions, only, maxPerDay } = v;
+  const { action: _a, ...input } = args;
+  const r = await postMuseCard(userId, {
+    kind: 'rule',
+    // cwd 随卡存:入参里的相对路径点「好」时要按建卡时的目录解析,引擎自己的工作目录是另一回事。
+    payload: { rule: { desc, cond, prompt, cooldownHours, actions, only, maxPerDay }, input: { ...input, cooldown_hours: cooldownHours }, cwd },
+    text: desc,
+  });
+  return r.ok ? 'Proposed. A rule card is at the end of your direct chat with the user; the rule exists only after they accept it. Do not ask again in text.' : r.error;
 }
 
 export const manageAutomationProvider: ToolProvider = {
@@ -51,9 +87,9 @@ export const manageAutomationProvider: ToolProvider = {
     {
       name: 'manage_automation',
       mode: 'both',
-      // 本地限定(云端 no-op)。Muse 只在 auto 档可见:ask/agent 档的 Muse 若能建 agent_run 规则,到期起跑的是对方 agent 的
-      // full-auto 会话 —— 等于把自己的审批档洗成别人的全开(Codex 09-10 P0-2);它自己的定时工作走 manage_schedule。
-      isEnabledFor: (profile, ctx) => !!profile.capabilities.hostExec && !((ctx as any).muse && ctx.approvalMode !== 'full-auto'),
+      // 本地限定(云端 no-op)。ask/agent 档的 Muse 也看得见,但 execute 只让它提规则卡:它若能直接建 agent_run 规则,
+      // 到期起跑的是对方 agent 的 full-auto 会话 —— 等于把自己的审批档洗成别人的全开(Codex 09-10 P0-2)。
+      isEnabledFor: (profile) => !!profile.capabilities.hostExec,
 
       deferred: true, // P0-2:3.3KB 大 schema,低频管理面 → 按需装载(Muse/自动化 run 例外全量可见)
       deferHint: 'Set up/list/remove automations: reminders ("remind me at 9am"), event watchers, scheduled or recurring agent tasks.',
@@ -67,17 +103,33 @@ export const manageAutomationProvider: ToolProvider = {
             'Triggers: at (one-time local datetime), every (recurring interval like "30m"/"2h"/"1d"), daily_at (once a day after HH:MM), ' +
             'event_seen (a new in-app activity line contains `match`), file_chars_gte (file reaches n non-whitespace chars), ' +
             'manual (never fires on its own — the user runs it by clicking a button block in a note; use this when asked for "a button that does X"), ' +
-            'db_changed (a row was added to, or a column changed in, an Amadeus database file — needs path + event; cell_changed watches one column via column_id or several via column_ids, any of them changing fires). ' +
+            'db_changed (a row was added to, or a column changed in, an Amadeus database file — needs path + event; cell_changed watches one column via column_id or several via column_ids, any of them changing fires), ' +
+            'computer.app_opened (params.app: app name or bundle id — the user switched to it), computer.app_used (params.app + params.minutes — continuous use), ' +
+            'computer.returned (params.minutes — the user came back after being away at least that long), computer.unlocked (screen unlocked or the computer woke), ' +
+            'calendar.before (params.minutes — before a timed calendar event starts). computer.* rules need Computer History on and are matched on this machine; only the fact that one fired is shared. ' +
+            'Restrict any rule with only {hours:{start,end}, weekdays:[0-6, 0=Sunday]} and max_per_day. ' +
             'Actions (in order, fail-stop): notify {title, body?} posts to the user inbox with push, zero cost — the right way to deliver timed reminders; ' +
+            'remind {title, body?} shows a system notification and writes one line in the Muse chat — no model, nothing leaves this computer, skipped outside Muse active hours; ' +
             'agent_run {agentSlug, prompt} runs that agent unattended. Omit actions to instead wake Muse (legacy) or set `agent` as a shorthand for a single agent_run. ' +
-            'Rules are evaluated by code every few minutes at zero cost. A one-time (at) rule disables itself after firing.',
+            'Rules are evaluated by code every few minutes at zero cost. A one-time (at) rule disables itself after firing.' +
+            pluginTriggersNote(),
           parameters: {
             type: 'object',
             properties: {
               action: { type: 'string', enum: ['set', 'list', 'remove'], description: 'set=add/update a rule, list=show rules, remove=delete by id' },
               id: { type: 'string', description: 'set: update this rule instead of creating; remove: rule id (from list)' },
               desc: { type: 'string', description: 'set: human-readable description of the rule (shown to the user)' },
-              cond_type: { type: 'string', enum: ['at', 'every', 'daily_at', 'event_seen', 'file_chars_gte', 'manual', 'db_changed'], description: 'set: trigger type' },
+              cond_type: { type: 'string', enum: listTriggerSources().map((s) => s.id), description: 'set: trigger type' },
+              params: { type: 'object', description: 'set(computer.*, calendar.before, plugin triggers): trigger parameters, see the trigger list above' },
+              only: {
+                type: 'object',
+                description: 'set: fire only in these local hours and weekdays',
+                properties: {
+                  hours: { type: 'object', properties: { start: { type: 'number' }, end: { type: 'number' } }, description: '0-24; start > end spans midnight' },
+                  weekdays: { type: 'array', items: { type: 'number' }, description: '0=Sunday … 6=Saturday' },
+                },
+              },
+              max_per_day: { type: 'number', description: 'set: at most this many firings a day' },
               event: { type: 'string', enum: ['row_added', 'cell_changed'], description: 'set(db_changed): which change to watch' },
               column_id: { type: 'string', description: 'set(db_changed + cell_changed): the column ID (NOT its name — names are neither unique nor stable). Read the .db JSON to find it.' },
               column_ids: { type: 'array', items: { type: 'string' }, description: 'set(db_changed + cell_changed): watch several columns at once (column IDs; the rule fires when ANY of them changes; max 10). May be combined with column_id — the union is watched. Prefer this over creating one rule per column.' },
@@ -106,6 +158,7 @@ export const manageAutomationProvider: ToolProvider = {
                 description:
                   `set: ordered action steps. Max ${MAX_ACTIONS}. Each item is one of: ` +
                   '{type:"notify", title, body?} — inbox message; ' +
+                  '{type:"remind", title, body?} — system notification plus one line in the Muse chat, no model; ' +
                   '{type:"agent_run", agentSlug, prompt} — run that agent unattended; ' +
                   '{type:"db_row_add", path, cells, skipIfEmpty?} — append a row to an Amadeus database (skipIfEmpty = a cells key; the step is skipped when that value expands to empty); ' +
                   '{type:"db_row_edit", path, cells, rowId? | rowFrom? | match?} — update rows: rowId = one row; rowFrom = a relation column of the trigger row (each linked row is edited, available as {{target.X}}); match = {column, value} edits every row whose column equals value (value may be a template like {{row.id}}); none = the row the trigger matched. ' +
@@ -115,9 +168,9 @@ export const manageAutomationProvider: ToolProvider = {
                 items: {
                   type: 'object',
                   properties: {
-                    type: { type: 'string', enum: ['notify', 'agent_run', 'db_row_add', 'db_row_edit'] },
-                    title: { type: 'string', description: 'notify: inbox message title' },
-                    body: { type: 'string', description: 'notify: optional message body' },
+                    type: { type: 'string', enum: ['notify', 'remind', 'agent_run', 'db_row_add', 'db_row_edit'] },
+                    title: { type: 'string', description: 'notify/remind: message title' },
+                    body: { type: 'string', description: 'notify/remind: optional message body' },
                     agentSlug: { type: 'string', description: 'agent_run: agent to run unattended' },
                     prompt: { type: 'string', description: 'agent_run: task prompt for the agent' },
                     path: { type: 'string', description: 'db_row_add/db_row_edit: vault-relative .db path' },
@@ -147,6 +200,9 @@ export const manageAutomationProvider: ToolProvider = {
           const list = await loadTriggers();
           return list.length ? `${list.length} automation rule(s):\n${list.map(fmt).join('\n')}` : '(no automation rules)';
         }
+        // ask / agent 档的 Muse:只能看、只能提。
+        const proposing = !!ctx.muse && ctx.approvalMode !== 'full-auto';
+        if (proposing && action !== 'set') return 'Error: at your permission level you can list rules and propose new ones (action=set); the user changes or removes rules.';
         if (action === 'remove') {
           const id = String(args.id || '').trim();
           if (!id) return 'Error: id is required (use list to see ids).';
@@ -163,10 +219,13 @@ export const manageAutomationProvider: ToolProvider = {
         // 工具参数名是 agent(对模型友好),校验层键是 agent_slug——这里显式映射(修 muse_watch 时代静默掉落的 bug)。
         const v = validateTriggerInput({ ...args, agent_slug: args.agent_slug ?? args.agent } as any, { cwd: ctx.cwd, vaultPath: amadeusVaultPath() });
         if (!v.ok) return `Error: ${v.error}`;
-        // Muse 自激防线:没有 agent(=唤醒 Muse)或 agent=muse 的规则一律拒;含 agent_run→muse 的动作链在 validate 里已拒。
-        if (ctx.muse && (!v.value.agentSlug || v.value.agentSlug === 'muse')) {
-          return 'Error: Muse cannot create automations that wake itself (self-trigger loop). For your own timed follow-ups use manage_schedule; automations you create must target another agent (agent=<slug>).';
+        // Muse 自激防线:没有动作、也没有 agent 的规则 = 唤醒 Muse。事件它自己造不出来的触发源(电脑上 / 日历)才行;
+        // 含 agent_run→muse 的动作链在 validate 里已拒。
+        const wakesMuse = !v.value.actions?.length && (!v.value.agentSlug || v.value.agentSlug === 'muse');
+        if (ctx.muse && wakesMuse && !getTriggerSource(v.value.cond.type)?.selfWakeSafe) {
+          return 'Error: Muse cannot create automations that wake itself from this kind of trigger (self-trigger loop). For your own timed follow-ups use manage_schedule; rules that wake you must use a computer.* or calendar.before trigger.';
         }
+        if (proposing) return proposeRule(ctx.userId, ctx.cwd, args, v.value);
 
         if (v.value.agentSlug && !(await getAgent(v.value.agentSlug))) {
           return `Error: agent "${v.value.agentSlug}" not found (use manage_agent action=list to see agents)`;
@@ -202,7 +261,10 @@ export const manageAutomationProvider: ToolProvider = {
               ? ' (fires at the first check after that time each day; if Muse has active hours set, a firing outside them is delivered once they begin)'
               : ' (evaluated by Muse about every 5 minutes; Muse must be enabled in Settings)';
         const state = v.value.enabled ? '' : ' [disabled]';
-        return `${r.created ? 'Created' : 'Updated'} automation ${r.trigger.id}${state}: "${v.value.desc}" [${condSummary(c)}]${note}`;
+        const paused = v.value.enabled && triggerUnmet(r.trigger) ? ' It stays paused until Computer History is turned on in Settings.' : '';
+        // auto 档的 Muse 直接建,用户不会自己翻到这条规则。
+        const tell = ctx.muse && r.created ? ' Tell the user in one short message_user line what you set up and how to turn it off.' : '';
+        return `${r.created ? 'Created' : 'Updated'} automation ${r.trigger.id}${state}: "${v.value.desc}" [${condSummary(c)}]${note}${paused}${tell}`;
       },
     },
   ],

@@ -13,6 +13,8 @@ import { deps } from '../seams/runtime.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { postMuseDm } from './museDm.js';
+import { upsertTrigger, validateTriggerInput, type TriggerInput } from './museTriggers.js';
+import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import type { MuseCardInfo, MuseCardKind } from '../contracts/clientTypes.js';
 import { loadSpecialAgentsConfig, updateMuseConfig, type MuseConfig } from './specialAgentsConfig.js';
 import { patchMuseOnboarding } from './museState.js';
@@ -255,7 +257,7 @@ export async function recordMessageFeedback(userId: string, messageId: string, v
   return true;
 }
 
-export type DecideResult = { ok: true; card: MuseCardInfo } | { ok: false; status: number; error: string; detail: string };
+export type DecideResult = { ok: true; card: MuseCardInfo; trigger?: { id: string } } | { ok: false; status: number; error: string; detail: string };
 
 /** 状态 CAS:pending → 终态。别的设备已处理 → 409,调用方按真状态重拉。 */
 async function settle(userId: string, id: string, status: 'done' | 'dismissed', result: string): Promise<boolean> {
@@ -276,6 +278,27 @@ async function settleThen(userId: string, id: string, status: 'done' | 'dismisse
     throw e;
   }
   return true;
+}
+
+/** 规则卡三个按钮:好 = 建好开着;改一下 = 建成暂停的,客户端打开画布;不用 = 不建,写进反馈让 Muse 别再提。
+ *  入参在工具入口校验过,这里按当前环境再校验一次(卡可能放了几天)。建失败(比如到 50 条上限)把卡退回待处理,别让用户以为建上了。 */
+async function decideRuleCard(userId: string, card: MuseCardInfo, action: string, gone: DecideResult, bad: DecideResult): Promise<DecideResult> {
+  if (action === 'dismiss') {
+    if (!(await settle(userId, card.id, 'dismissed', 'dismissed'))) return gone;
+    await appendMuseFeedback(userId, `[feedback] proposed automation "${card.payload?.rule?.desc}" declined by user`);
+    return { ok: true, card: (await getMuseCard(userId, card.id)) ?? card };
+  }
+  if (action !== 'accept' && action !== 'edit') return bad;
+  const v = validateTriggerInput({ ...(card.payload?.input as TriggerInput), enabled: action === 'accept' }, { cwd: card.payload?.cwd, vaultPath: amadeusVaultPath() });
+  if (!v.ok) return { ok: false, status: 400, error: 'bad_rule', detail: v.error };
+  if (!(await settle(userId, card.id, 'done', action === 'accept' ? 'accepted' : 'editing'))) return gone;
+  const r = await upsertTrigger(v.value, undefined, { actor: 'user' }).catch((e) => ({ ok: false as const, error: String(e?.message || e) }));
+  if (!r.ok) {
+    await query(`UPDATE muse_cards SET status = 'pending', result = NULL, decided_at = NULL WHERE id = ?`, [card.id]);
+    return { ok: false, status: 409, error: 'rule_not_created', detail: r.error };
+  }
+  await appendMuseFeedback(userId, `[feedback] proposed automation "${v.value.desc}" ${action === 'accept' ? 'accepted' : 'taken to the canvas'} by user`);
+  return { ok: true, card: (await getMuseCard(userId, card.id)) ?? card, trigger: { id: r.trigger.id } };
 }
 
 /** 用户点卡。action 按 kind 白名单,认不得 → 400;效果在 CAS 成功之后才做(同一张卡点两次只生效一次)。 */
@@ -383,6 +406,7 @@ export async function decideMuseCard(
       await appendMuseFeedback(userId, `[feedback] user ${action === 'edit' ? 'corrected' : 'removed'} a line of your two-week summary: "${items[at].slice(0, 120)}"${text ? ` → "${text.slice(0, 120)}"` : ''}`);
       break;
     }
+    case 'rule': return decideRuleCard(userId, card, action, gone, bad);
     default: return bad;
   }
   return { ok: true, card: (await getMuseCard(userId, id)) ?? card };
