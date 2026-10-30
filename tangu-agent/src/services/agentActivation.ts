@@ -18,7 +18,15 @@ export interface AgentActivation {
   profile?: AgentProfile;
 }
 
-export interface AgentProfile { name: string; description: string }
+export interface AgentProfile extends Pick<NormalAgentDef, 'name' | 'nameZh' | 'nameEn' | 'namePref'> { description: string }
+
+/** 两个名字都有时写清用哪个:引擎拿不到桌面的界面语言,跟随界面时按对话语言选。 */
+function identityName({ name, nameZh, nameEn, namePref }: AgentProfile): string {
+  if (!nameZh || !nameEn || nameZh === nameEn) return name;
+  if (namePref === 'zh') return `${nameZh}, in every language (you also answer to ${nameEn})`;
+  if (namePref === 'en') return `${nameEn}, in every language (you also answer to ${nameZh})`;
+  return `${nameZh} when the conversation is in Chinese, ${nameEn} in any other language (you answer to both)`;
+}
 
 /**
  * 身份段:名字 / 简介是用户随时可改的展示信息,人格正文里却常写死名字(内置 "You are Aria…"、引导建的
@@ -27,7 +35,7 @@ export interface AgentProfile { name: string; description: string }
  */
 export function agentIdentitySection(profile: AgentProfile): string {
   return '## Identity\n' +
-    `- Name: ${profile.name}\n` +
+    `- Name: ${identityName(profile)}\n` +
     (profile.description ? `- Description (shown to the user): ${profile.description}\n` : '') +
     'The user can change these in the app at any time; they are current. Introduce yourself by this name, and if the instructions above call you by a different name, treat that name as outdated.';
 }
@@ -68,7 +76,7 @@ export async function applyAgentActivation(
       activeAgentSlug = resolveActiveSlug(agentConfig.agentSlug);
       memScopeSlug = resolveMemorySlug(def);
       const name = String(def.name || '').trim();
-      if (name) profile = { name, description: String(def.description || '').trim() };
+      if (name) profile = { name, nameZh: def.nameZh, nameEn: def.nameEn, namePref: def.namePref, description: String(def.description || '').trim() };
       if (!agentConfig.systemPrompt && def.systemPrompt) agentConfig.systemPrompt = def.systemPrompt;
       if (!agentConfig.soul && def.soul) agentConfig.soul = def.soul;
       if (!agentConfig.libraryOrder && def.libraryOrder?.length) agentConfig.libraryOrder = def.libraryOrder;

@@ -95,6 +95,10 @@ export interface StreamOpts {
   signal?: AbortSignal;
   /** 模型 provider:anthropic/claude 时 server 侧走原生 /v1/messages;httpBrain 路径由 brain-api 自行解析,可省略。 */
   provider?: string;
+  /** 发给模型前脱敏(llm/outboundMask.ts):记录归到哪个会话;不传 = 后台调用,只记不报。 */
+  maskScope?: string;
+  /** 这一轮发出前遮住了哪些值(不含原值)。action = warn 时是「找到了、原样发出」。 */
+  onMasked?: (hits: Array<{ kind: string; ph: string; head: string; len: number }>, action: 'mask' | 'warn' | 'block') => void;
 }
 
 export interface LlmBrain {
@@ -499,6 +503,8 @@ export interface InboxBrain {
     claim_requirements?: string | null;
     /** 线程判别 JSON 原文(服务端 inboxNotify.ts:{kind:'feedback',ticketId,event});普通广播为空。原样落进 inbox_messages.thread。 */
     thread?: string | null;
+    /** 广播类型:update / store / maintenance / promo / other;老服务端不给(入库时按 other)。 */
+    kind?: string | null;
   }>>;
   /** 领取广播附件(对端 POST /api/brain/inbox/broadcasts/:id/claim;发放全在服务端)。
    *  client=领取端自报的 `desktop/2.10.1`(服务端按它判最低版本)。

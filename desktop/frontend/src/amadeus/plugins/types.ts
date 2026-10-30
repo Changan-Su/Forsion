@@ -895,6 +895,15 @@ export interface ListDropTarget {
  *  process keeps these files out of the note/page list (its compiler would otherwise rewrite = corrupt them).
  *  The host opens one shared engine view (`amadeus-plugin-file`) that re-derives the type from the file path
  *  at mount time — so a plugin loading after boot still works. */
+/** Per-mounted-file access. External PDFs permit reads of the source and reads/writes
+ * of .<filename>.annot.json (plus timestamped .broken-* recovery copies) only. */
+export interface PluginFileIO {
+  /** Native Save As for an annotated copy; cancel returns null. Never overwrites the source. */
+  saveCopy?(name: string, bytes: Uint8Array): Promise<string | null>
+  readBytes(path: string): Promise<Uint8Array | null>
+  writeBytes(path: string, bytes: Uint8Array): Promise<void>
+}
+
 export interface FileTypeContribution {
   /** Type id, unique within the plugin (kebab-case recommended). */
   id: string
@@ -931,6 +940,9 @@ export interface FileTypeContribution {
    *  Other built-in suffixes (`.excalidraw.md`, `.db`, images) cannot be overridden. Older hosts
    *  ignore this field and return `false` from registerFileType — stand down as documented there. */
   override?: boolean
+  /** Opt in to external desktop PDFs. Use file.io for the source and its annotation sidecar;
+   * ctx.app remains vault-scoped. Older hosts ignore this field. */
+  external?: boolean
   /** Build the editor for one file into the host element; called once per opened instance. Return a
    *  cleanup (flush/save-on-close, clear timers here). Read/write the file via ctx.app.readFile/writeFile.
    *  `file.surface` (2026-08-14, when present): a per-view page surface scoped to this tab — prefer it
@@ -943,8 +955,8 @@ export interface FileTypeContribution {
    *  unsubscribe; the host also drops the subscription when the view closes. */
   mount(
     el: HTMLElement,
-    file: { filePath: string; surface?: PluginPageSurface; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
-  ): (() => void) | void
+    file: { filePath: string; io?: PluginFileIO; surface?: PluginPageSurface; onGoto?: (cb: (target: FileGotoTarget) => void) => () => void },
+  ): (() => void | Promise<void>) | void
 }
 
 /** A place inside a file that a link or citation points at (`[[x.pdf#page=3]]`). Only PDFs carry one today. */
@@ -1263,7 +1275,9 @@ export interface PluginSelectionBarOptions {
   source?(sel: PluginSelectionBarSelection): { title?: string; path?: string; page?: number } | undefined
   /** Default `true`: the host watches the DOM selection inside the element you passed (bar on mouse-up; gone when
    *  the selection collapses, the element scrolls or resizes, or the user clicks elsewhere). Set `false` when the
-   *  text lives where the host cannot see it (an iframe, a canvas) and drive the bar with `show()` / `hide()`. */
+   *  text lives where the host cannot see it (an iframe, a canvas) and drive the bar with `show()` / `hide()`.
+   *  Watched reading surfaces share the host's continuous line selection paint; native Selection/copy are preserved.
+   *  Custom PDF/code-editor layers and coarse pointers retain native paint. `watch:false` keeps custom paint. */
   watch?: boolean
 }
 
@@ -2024,8 +2038,10 @@ export interface PluginContext {
     registerCompanion(def: import('./deskCompanion').DeskCompanionContribution): import('./deskCompanion').DeskCompanionHandle
   }
   /** 摘要栏插件卡(2026-10-25+,**只在桌面 Tangu 上存在**,同 `ctx.desk`)。往聊天右侧的摘要栏加一张卡,与内置卡
-   *  (进度 / 后台 / 产物 / 来源 / 工作范围 / Agent Desk)同一个栈:用户可折叠、拖动排序,收起状态与顺序由宿主按卡记住;
-   *  插件卡按注册顺序排在 Agent Desk 前面。`title` 给 `{ zh, en }` 跟随界面语言;`defaultCollapsed` 缺省 false。
+   *  (进度 / 后台 / 产物 / 来源 / 工作范围 / Agent Desk)同一个栈:开合跟着内容走(2026-10-29 起)—— `count` 变大就自动展开;
+   *  用户手动开 / 收只管到这一轮对话结束,不落盘;车道放不下时宿主先收掉最久没来新东西的卡、或缩短最后一张的正文。
+   *  顺序由宿主按卡记住(用户拖动 / 右键排序),插件卡按注册顺序排在 Agent Desk 前面。`title` 给 `{ zh, en }` 跟随界面语言;
+   *  `defaultCollapsed` = 没有新内容时收不收(切到一个会话、或卡片在 Agent 没跑的时候出现),缺省 false。
    *  `mount(el, host)` 每个会话的摘要栏各挂一份(换会话 = 卸载重挂,`host.sessionId` 恒定;同屏两个聊天面板挂两份),
    *  返回卸载函数;正文高度上限 240px,超出宿主内滚。`host.update({ count, hidden })` 只改这一份:卡头计数(null = 不显示)、
    *  先不画这张卡(仍挂着,之后可再亮出)。返回 handle 的 `dispose()` 撤卡;禁用 / 重载宿主统一收。
@@ -2075,9 +2091,19 @@ export interface PluginContext {
    *  - 恒传 `enabled:true`:用户在自动化面板里单独关掉的插件规则,下次插件重载会被开回来;
    *  - 插件被用户**禁用** → 本插件全部规则 `enabled=false`(不删);再启用时引擎重新播种游标(停用期间的行不爆发)。
    *  ⚠️**非 Tangu 宿主上整个 `ctx.automation` 不存在**(纯 Amadeus 壳 / unit 设备页 / 云端 / 台架)——一律
-   *  `void ctx.automation?.ensure(rules)`(别 await 阻塞 setup)。 */
+   *  `void ctx.automation?.ensure(rules)`(别 await 阻塞 setup)。
+   *
+   *  `registerTrigger` / `emit`(2026-10-30+)= 给「当…」加一种插件自己的事件,用户在自动化画布的「外部 · 插件」组里用,
+   *  规则怎么写由用户定(和 ensure 种规则是两回事):
+   *  - `id` 只是 key(`[a-z0-9-]+`),宿主拼成 `plugin:<pluginId>:<id>`,碰不到别家;`name` 中英都要有;
+   *  - `params` 是规则要填的参数表;规则填了的参数要和事件 payload 同名字段相等才算命中,payload 没这个字段不比;
+   *  - `emit(id, payload)`:payload 只留字符串 / 数字 / 布尔(至多 20 个字段),动作模板里用 `{{row.字段}}`;
+   *    事件只在内存里,引擎重启丢掉还没被规则看到的;Muse 能提醒用户,但不能建「叫醒自己」的插件规则;
+   *  - 插件停用 / 卸载 = 注销,相关规则不删,暂停并写明原因,装回来自动恢复。 */
   automation?: {
     ensure(rules: PluginAutomationRule[]): Promise<{ ok: boolean; errors: string[] }>
+    registerTrigger(trigger: PluginAutomationTrigger): Promise<{ ok: boolean; error?: string }>
+    emit(id: string, payload?: Record<string, unknown>): void
   }
   /** 日历成员登记(2026-09-02+)。Calendar Space 是显式成员制 —— 插件种下的任务表不会自动进日历,
    *  用这条把 `dbPath`(库相对路径)以 `dateColId` 为日期锚(可选 `checkboxColId` 为完成勾选)登记进去。
@@ -2326,6 +2352,24 @@ export interface TableAction {
   attrs?: Record<string, string>
   disabled?: boolean
   title?: string
+}
+
+/** `ctx.automation.registerTrigger` 的入参。 */
+export interface PluginAutomationTrigger {
+  id: string
+  name: { zh: string; en: string }
+  params?: Array<{
+    key: string
+    /** `app` = 选 App;`number` / `text` = 输入框。 */
+    type: 'app' | 'number' | 'text'
+    name: { zh: string; en: string }
+    required?: boolean
+    min?: number
+    max?: number
+    default?: string | number
+  }>
+  /** `computer_history` = 电脑历史关着时这个触发源灰掉、已有规则暂停。 */
+  requires?: Array<'computer_history'>
 }
 
 /** `ctx.automation.ensure` 的一条规则 = 引擎 upsert 入参的**子集**(只有 db_changed 触发;id / vault /

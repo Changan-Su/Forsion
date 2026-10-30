@@ -9,7 +9,7 @@ export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
 export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
-import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, MuseTriggerInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
 /** 带时间戳的转写结果(仅在调用方显式要 timestamps 时返回;segments 缺席 = 上游给不了)。 */
 export interface AsrTimedResult { text: string; segments?: Array<{ start: number; end: number; text: string }> }
@@ -77,6 +77,12 @@ export interface MuseConfig {
   notify?: 'immediate' | 'digest'
   /** 难活升级给哪个 agent(slug;空=不指定)。 */
   escalateTo?: string
+  /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
+  inboxAutoRead?: string[]
+  /** 用户点过「这类以后都别管」的类别。 */
+  inboxIgnored?: string[]
+  /** 一天最多主动找用户几次(0 = 不限)。 */
+  maxDmPerDay?: number
 }
 
 /** GET /agent/special/muse/library 的一项(Library 相对路径;dir=目录)。 */
@@ -113,6 +119,8 @@ export interface MuseStatusInfo {
   lastCycleAt: number | null
   lastError?: string | null
   sessionId: string | null
+  /** 主动消息下面的反馈按钮开到这个时刻(磨合期 14 天,epoch ms)。旧引擎 / 还没跑过周期 = 没有。 */
+  feedbackUntil?: number | null
   /** 旧引擎没有下面四个字段(可选,读端兜底)。 */
   mode?: 'ask' | 'agent' | 'auto'
   heartbeatMinutes?: number
@@ -138,7 +146,12 @@ export interface MuseTriggerUpsert {
    *  那正是「用户重新启用插件 → setup 再 ensure 一次 → 规则复活」这条既有生命周期,别给它加 actor。 */
   actor?: 'plugin-ensure' | 'user'
   desc: string
-  cond_type: 'file_chars_gte' | 'event_seen' | 'daily_at' | 'at' | 'every' | 'manual' | 'db_changed'
+  cond_type: MuseTriggerInfo['cond']['type']
+  /** 新触发源的参数(按 GET /agent/special/automation/sources 的表)。 */
+  params?: Record<string, string | number>
+  /** 「只在」:undefined=保留,null=清空。 */
+  only?: MuseTriggerInfo['only'] | null
+  max_per_day?: number | null
   path?: string
   n?: number
   match?: string
@@ -159,6 +172,20 @@ export interface MuseTriggerUpsert {
   agent_slug?: string
   enabled?: boolean
   actions?: AutomationActionSpec[] | null
+}
+/** GET /agent/special/automation/sources 的一行:触发源注册表投影(类型菜单直接从这里出)。 */
+export interface TriggerSourceInfo {
+  id: string
+  group: 'time' | 'computer' | 'forsion' | 'external' | 'plugin'
+  name: { zh: string; en: string }
+  params: Array<{ key: string; type: 'app' | 'number' | 'text'; name: { zh: string; en: string }; required?: boolean; hidden?: boolean; min?: number; max?: number; default?: string | number }>
+  requires: string[]
+  eventSource: string
+  defaultCooldownHours?: number
+  timed?: boolean
+  available: boolean
+  /** available=false 时的 notice code。 */
+  reason?: string
 }
 /** GET /agent/special/automation/actions 的目录项(tool_call 步骤选择器+参数表单生成)。 */
 export interface AutomationActionCatalogItem {
@@ -253,6 +280,19 @@ export interface DirectProviderConfig {
   asrModelIds?: string[]
   /** 该 provider 里**没有**多模态的模型(黑名单;默认都算能看图)。命中的模型遇图转交辅助视觉模型。 */
   noVisionModelIds?: string[]
+  /** 推理协议;缺省 OpenAI 兼容 /chat/completions。从 Claude Code / Codex 导入的连接带 anthropic-messages / openai-responses。 */
+  protocol?: 'openai' | 'anthropic-messages' | 'openai-responses'
+}
+
+/** 导入本机配置的一行(主进程给的,不含 key)。 */
+export interface LocalProviderCandidate {
+  id: string
+  source: 'cc-switch' | 'claude-code' | 'codex'
+  name: string
+  host: string
+  keyTail: string
+  models: string[]
+  exists: boolean
 }
 
 /** 「设置 → Git」(引擎 config.json 的 git 段):PROJECT 详情的 git 动作与 agent 自己建分支 / 写提交时都照它。 */
@@ -307,6 +347,7 @@ export interface MirrorTestResult {
 
 /** ~/.tangu/mcp.json 一项。 */
 export interface McpServerConfigEntry {
+  cwd?: string
   command?: string
   args?: string[]
   env?: Record<string, string>
@@ -456,6 +497,9 @@ declare global {
       /** Verified Extend renderer is bundled with the mobile host. */
       extendMobile?: boolean
       getConfig(): Promise<StoredDesktopConfig>
+      /** config.json / provider-auth.json 读坏后从 .bak 恢复过:最近一次的时刻与恢复到的版本时刻(epoch ms);没有 = null。 */
+      configRecoveryNotice?(): Promise<{ at: number; version: number } | null>
+      clearConfigRecoveryNotice?(): Promise<void>
       documentTasks?: import('../../shared/documentTasks').DocumentTaskClaimsApi
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>
@@ -735,6 +779,9 @@ declare global {
       }
       listProviders?(): Promise<DirectProviderConfig[]>
       saveProvider?(provider: DirectProviderConfig): Promise<DirectProviderConfig[]>
+      /** 本机 CC Switch / Claude Code / Codex 里能导入的连接(electron/discovery/providers.ts;只有 key 末 4 位)。 */
+      scanLocalProviders?(force?: boolean): Promise<LocalProviderCandidate[]>
+      importLocalProviders?(ids: string[]): Promise<DirectProviderConfig[]>
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
       /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */
@@ -777,8 +824,9 @@ declare global {
       asrLocalDownload?(): Promise<{ ok: boolean; ready: boolean }>
       asrLocalRemove?(): Promise<{ ok: boolean }>
       onAsrLocalProgress?(cb: (ev: { received: number; total: number }) => void): () => void
+      importMcpConfig?(cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry>; added: string[]; replaced: string[]; skipped: string[] }>
       readMcpConfig?(): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
-      writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
+      writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry>; base?: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
       discoveryScan?(): Promise<DiscoveryResult>
       discoveryImportSkills?(ids: string[]): Promise<{ imported: string[] }>
       discoveryImportMcp?(names: string[]): Promise<{ imported: string[]; reserved?: string[] }>

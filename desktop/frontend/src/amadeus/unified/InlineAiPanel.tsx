@@ -9,6 +9,8 @@ import { OverlayAt } from '../lib/clampMenu'
 import { registerMessages, useI18n } from '../../i18n'
 import { TRANSLATE_LANGUAGES } from '../../translateTarget'
 import type { AiApply } from './inlineAi'
+import { Markdown } from '../../components/Markdown'
+import { mountLineSelection } from '@lcl/engine/lineSelection'
 import './inlineAiPanel.css'
 
 registerMessages({
@@ -79,8 +81,15 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
   const lastInstruction = useRef<string | undefined>(undefined)
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const panelRef = useRef<HTMLDivElement | null>(null)
+  const previewRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef(editorEl)
   editorRef.current = editorEl
+  const asking = phase === 'ask'
+  useEffect(() => {
+    if (!previewRef.current) return
+    const zIndex = panelRef.current ? parseInt(getComputedStyle(panelRef.current).zIndex) || 100 : 100
+    return mountLineSelection(previewRef.current, { zIndex: zIndex + 1 }).dispose
+  }, [asking])
 
   const start = (instr: string | undefined): void => {
     ac.current?.abort()
@@ -216,7 +225,7 @@ export function InlineAiPanel({ x, y, anchorTop, title, hasSelection, askFirst, 
       )}
       {phase !== 'ask' && (
         <>
-          <div className="am-ai-preview" data-testid="inline-ai-preview">{text || (phase === 'running' ? '…' : '')}</div>
+          <div ref={previewRef} className="am-ai-preview md-body" data-testid="inline-ai-preview"><Markdown content={text || (phase === 'running' ? '…' : '')} allowRun={false} /></div>
           {phase === 'error' && <div className="am-ai-error" role="alert">{error}</div>}
           {toolText && phase === 'done' && <div className="am-ai-error">{t('inlineai.toolText')}</div>}
           <div className="am-ai-actions">

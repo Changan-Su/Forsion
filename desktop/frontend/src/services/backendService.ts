@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   GitIdentity, GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -16,6 +16,7 @@ import { localInbox, localizeInboxMessage } from './localInbox' // 移动端(win
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 import { saveResponseAs } from './nativeDownload'
+import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -260,7 +261,7 @@ export const getBackgroundSessions = (t: EngineTarget, sessionId: string, kind?:
   ).then((r) => r.background)
 
 /** 任务卡「开个子会话」:在这个会话下开一个可见子会话,任务书当第一条消息(做完送回主会话)。 */
-export const startChildSession = (t: EngineTarget, parentId: string, body: { title: string; message: string }) =>
+export const startChildSession = (t: EngineTarget, parentId: string, body: { title: string; message: string; agent?: string }) =>
   request<{ sessionId: string; runId: string; title: string }>(t, `/agent/sessions/${encodeURIComponent(parentId)}/children`, { method: 'POST', body: JSON.stringify(body) })
 
 export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
@@ -866,6 +867,14 @@ export const putAgentMemory = (t: EngineTarget, slug: string, content: string, e
   request<AgentMemorySnapshot>(t, agentMemoryPath(slug), { method: 'PUT', body: JSON.stringify({ content, expectedVersion }) })
 export const mutateAgentMemoryEntry = (t: EngineTarget, slug: string, body: { action: 'add' | 'update' | 'forget'; id?: string; fact?: string; expectedVersion: string }) =>
   request<AgentMemorySnapshot>(t, `${agentMemoryPath(slug)}/entries`, { method: 'POST', body: JSON.stringify(body) })
+/** 把一条 Agent 记忆交给所有 Agent:原句追加进 human/AGENT.md,写成后才从这位的记忆里拿掉;409 = 读出之后改过(两边都没动)。只在宿主本机。 */
+export const promoteAgentMemoryEntry = (t: EngineTarget, slug: string, body: { id: string; expectedVersion: string }) =>
+  request<{ agentMd: { version: string }; memoryVersion: string }>(t, `${agentMemoryPath(slug)}/promote`, { method: 'POST', body: JSON.stringify(body) })
+// 画像(human/SOUL.md)的条目:列表项一行一条;version 是前 12 位。只在宿主本机(远端 403 HUMAN_REMOTE_DENIED,云端 404 HUMAN_LOCAL_ONLY)。
+export interface HumanPortrait { version: string; entries: Array<{ id: string; content: string }>; chars: number; limit: number }
+export const getHumanPortrait = (t: EngineTarget) => request<HumanPortrait>(t, '/agent/human/SOUL.md/entries')
+export const mutateHumanPortraitEntry = (t: EngineTarget, body: { action: 'add' | 'forget'; id?: string; fact?: string; expectedVersion: string }) =>
+  request<{ version: string; entries: HumanPortrait['entries']; entry?: { id: string; content: string } }>(t, '/agent/human/SOUL.md/entries', { method: 'POST', body: JSON.stringify(body) })
 export const listAgentMemoryRevisions = (t: EngineTarget, slug: string) =>
   request<{ revisions: AgentMemoryRevision[] }>(t, `${agentMemoryPath(slug)}/revisions`).then((r) => r.revisions)
 export const restoreAgentMemory = (t: EngineTarget, slug: string, version: string, expectedVersion: string) =>
@@ -1045,6 +1054,21 @@ export const decideMuseApproval = (t: EngineTarget, id: string, decision: 'appro
   }, { timeoutMs: 120000 }) // approve 会同步执行工具(写文件通常毫秒级;bash 可能要跑一会)
 
 /** 往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等;下周期 read_log 即见)。 */
+export const listMuseCards = (t: EngineTarget, status?: string) =>
+  request<{ cards: MuseCardInfo[] }>(t, `/agent/special/muse/cards${status ? `?status=${encodeURIComponent(status)}` : ''}`).then((r) => r.cards)
+
+export const getMuseCard = (t: EngineTarget, id: string) =>
+  request<{ card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}`).then((r) => r.card)
+
+export const decideMuseCard = (t: EngineTarget, id: string, action: string, extra?: Record<string, unknown>) =>
+  request<{ ok: boolean; card: MuseCardInfo; trigger?: { id: string } }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: JSON.stringify({ ...extra, action }) })
+
+export const editMuseSummary = (t: EngineTarget, id: string, body: { index: number; expected: string; text: string }) =>
+  request<{ ok: boolean; card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}/summary-edit`, { method: 'POST', body: JSON.stringify(body) })
+
+export const museMessageFeedback = (t: EngineTarget, id: string, verdict: 'up' | 'down') =>
+  request<{ ok: boolean }>(t, `/agent/special/muse/messages/${encodeURIComponent(id)}/feedback`, { method: 'POST', body: JSON.stringify({ verdict }) })
+
 export const postMuseFeedback = (t: EngineTarget, text: string) =>
   request<{ ok: boolean }>(t, '/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text }) })
 
@@ -1063,6 +1087,22 @@ export const getMuseLibraryFile = (t: EngineTarget, path: string) =>
 // 后端半死时一笔永不 settle 的请求会把整条链焊住 —— 停用永远排不上,等于 codex 抓的那条 bug 换了触发条件。
 export const getMuseTriggers = (t: EngineTarget) =>
   request<{ triggers: MuseTriggerInfo[] }>(t, '/agent/special/muse/triggers', undefined, { timeoutMs: 30000 }).then((r) => r.triggers)
+
+/** 触发源目录;老引擎没这条路由 → 空,构建器退回老的五个按钮。 */
+export const getTriggerSources = (t: EngineTarget) =>
+  request<{ sources: TriggerSourceInfo[] }>(t, '/agent/special/automation/sources', undefined, { timeoutMs: 30000 }).then((r) => r.sources).catch(() => [] as TriggerSourceInfo[])
+
+const pluginTriggerPath = (pluginId: string, key: string): string =>
+  `/agent/special/automation/plugin-triggers/${encodeURIComponent(pluginId)}/${encodeURIComponent(key)}`
+
+export const registerAutomationTrigger = (t: EngineTarget, pluginId: string, trigger: unknown) =>
+  request<{ ok: boolean }>(t, '/agent/special/automation/plugin-triggers', { method: 'POST', body: JSON.stringify({ pluginId, trigger }) })
+
+export const unregisterAutomationTrigger = (t: EngineTarget, pluginId: string, key: string) =>
+  request<{ ok: boolean }>(t, pluginTriggerPath(pluginId, key), { method: 'DELETE' })
+
+export const emitAutomationTrigger = (t: EngineTarget, pluginId: string, key: string, payload?: Record<string, unknown>) =>
+  request<{ ok: boolean }>(t, `${pluginTriggerPath(pluginId, key)}/emit`, { method: 'POST', body: JSON.stringify({ payload }) })
 
 export const deleteMuseTrigger = (t: EngineTarget, id: string) =>
   request<{ ok: boolean }>(t, `/agent/special/muse/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' })
@@ -1295,6 +1335,8 @@ export interface InboxMessage {
   origin_broadcast_id: string | null
   thread?: InboxThread | string | null
   read_at: string | null
+  /** 'muse' = Muse 替用户标的已读(手机本地收件箱没有)。 */
+  read_by?: string | null
   archived_at: string | null
   attachments?: { items: InboxAttachmentItem[]; claimed: boolean; requires?: InboxClaimRequirements } | null
   expires_at?: string | null
@@ -1335,6 +1377,10 @@ export const pullInbox = (t: EngineTarget) =>
     : request<{ pulled: boolean; added: number; detail?: string }>(t, '/agent/inbox/pull', { method: 'POST' })
 
 /** 领取广播附件(发放全在服务端)。client=`desktop/2.10.1`,服务端按它判最低版本。移动端本地收件箱无广播,不承载。 */
+/** Muse 私聊清单里的「领取」:信在 Muse 所在的那台引擎上,手机点它也打那台(手机本地收件箱领不了,所以不走下面那条)。 */
+export const claimOnEngine = (t: EngineTarget, id: string, client?: string) =>
+  request<{ ok: boolean; alreadyClaimed: boolean }>(t, `/agent/inbox/${encodeURIComponent(id)}/claim`, { method: 'POST', body: JSON.stringify({ client }) })
+
 export const claimInboxAttachment = (t: EngineTarget, id: string, client?: string) =>
   window.tangu?.mobile
     ? Promise.reject(new Error('not supported on mobile'))
@@ -1499,6 +1545,20 @@ export const getGitSettings = (t: EngineTarget) =>
 /** 逐键改;某键给 null = 恢复缺省。 */
 export const setGitSettings = (t: EngineTarget, patch: { [K in keyof GitSettings]?: GitSettings[K] | null }) =>
   request<{ settings: GitSettings }>(t, '/agent/git-settings', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings)
+/** 「设置 → 模型 → 提供方 → 发给模型之前」(引擎 routes/masking.ts)。writable=false = 引擎不在这台电脑上,不显示这一节。 */
+export interface MaskingSettings { secrets: boolean; personal: boolean; action: 'mask' | 'warn' | 'block' }
+export interface MaskAllowEntry { hash: string; kind: string; len: number; at: number }
+export interface MaskingState { writable: boolean; settings?: MaskingSettings; allow?: MaskAllowEntry[]; recent?: { values: number; sessions: number } }
+export interface MaskLogLine { t: number; sid: string; action: MaskingSettings['action']; hits: Array<{ kind: string; ph: string; head: string; len: number }> }
+export const getMasking = (t: EngineTarget) => request<MaskingState>(t, '/agent/masking')
+export const setMasking = (t: EngineTarget, patch: Partial<MaskingSettings>) =>
+  request<{ settings: MaskingSettings }>(t, '/agent/masking', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings)
+/** 加进「从不遮住」:引擎只存这个值的 HMAC。 */
+export const addMaskAllow = (t: EngineTarget, value: string, kind: string) =>
+  request<{ entry: MaskAllowEntry }>(t, '/agent/masking/allow', { method: 'POST', body: JSON.stringify({ value, kind }) }).then((r) => r.entry)
+export const removeMaskAllow = (t: EngineTarget, hash: string) =>
+  request<{ allow: MaskAllowEntry[] }>(t, `/agent/masking/allow/${encodeURIComponent(hash)}`, { method: 'DELETE' }).then((r) => r.allow)
+export const getMaskLog = (t: EngineTarget) => request<{ lines: MaskLogLine[] }>(t, '/agent/masking/log').then((r) => r.lines)
 /** 删一条项目记忆。409 = 记忆在读出之后被别处改过(没有删除);调用方重载后再删。 */
 export const forgetProjectMemory = (t: EngineTarget, sessionId: string, id: string, expectedVersion: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory', { method: 'DELETE', body: JSON.stringify({ sessionId, id, expectedVersion }) }).then((r) => r.memory)
@@ -1508,6 +1568,15 @@ export const resolveProjectCandidate = (t: EngineTarget, sessionId: string, id: 
 /** 把写满压缩时合并 / 去掉的一句原样记回项目记忆。404 = 那一句已经不在记录里;放不下 → err.code 'MEMORY_FULL'。 */
 export const restoreProjectMemoryFact = (t: EngineTarget, sessionId: string, id: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/restore', { method: 'POST', body: JSON.stringify({ sessionId, id }) }).then((r) => r.memory)
+// ── 项目文件夹搬走后重新指向(引擎 services/projectRelink.ts;只在本机引擎上,手机 / 网页拿到的是空表)──
+/** 本人会话里出现过、现在不在原处的本地项目路径(外接盘没挂上也算 —— 只拿来打标记)。 */
+export const getMissingProjects = (t: EngineTarget) =>
+  request<{ missing: string[] }>(t, '/agent/project-context/missing').then((r) => (Array.isArray(r?.missing) ? r.missing : []))
+/** 旧路径只从会话行取(sessionId = 这个项目里的任一会话)。 */
+export const getRelinkInfo = (t: EngineTarget, sessionId: string) =>
+  request<RelinkInfo>(t, `/agent/project-context/relink?sessionId=${encodeURIComponent(sessionId)}`)
+export const relinkProject = (t: EngineTarget, sessionId: string, path: string, merge = false) =>
+  request<RelinkResult>(t, '/agent/project-context/relink', { method: 'POST', body: JSON.stringify({ sessionId, path, merge }) })
 export const initProjectContext = (t: EngineTarget, sessionId: string) =>
   request<{ createdDir: boolean; createdDoc: boolean; context: ProjectContext }>(t, '/agent/project-context/init', { method: 'POST', body: JSON.stringify({ sessionId }) }).then((r) => ({ ...r, context: projectContextShape(r.context) }))
 /** 409 = 文件在读出之后被别处改过(没有写入);调用方提示用户重载。 */

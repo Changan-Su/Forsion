@@ -1,3 +1,4 @@
+import { mcpSettingsPreview } from './mcpSettings.js';
 /**
  * 进程内工具审批登记表（host-exec 模式 / TUI 专用）。
  *
@@ -33,7 +34,7 @@ import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.
 import { isUnattendedRun } from './remoteActivity.js';
 export type { AnswerBy } from './pendingPromptIndex.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
-import { MUSE_AGENT_SLUG, AGENT_MAX_ITERATIONS_MIN, buildAgentDef, getAgent, isValidSlug, slugify, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { MUSE_AGENT_SLUG, AGENT_MAX_ITERATIONS_MIN, buildAgentDef, getAgent, isValidSlug, slugFromNames, type NormalAgentDef } from '../agents/agentRegistry.js';
 // 控制面预览按**落盘前的校验结果**渲染(见 savedText)。两个校验都是纯同步函数;museTriggers 只在函数体里用 agentRegistry 的导出,
 // 与本文件 ↔ agentRegistry 的既有互引同理,求值顺序无关。
 import { validateEntryInput } from './agentSchedule.js';
@@ -162,6 +163,7 @@ export function controlPlaneCall(
   const a: Record<string, any> = args && typeof args === 'object' ? (args as Record<string, any>) : {};
   const action = String(a.action ?? '');
   if (name === 'manage_agent') return action === 'create' || action === 'update';
+  if (name === 'manage_mcp') return !['list', 'check'].includes(action);
   if (name === 'update_app_settings') return true;
   if (name === 'manage_schedule') {
     if (action !== 'set' || !(a.auto === true || a.auto === 'true')) return false;
@@ -188,7 +190,7 @@ export function controlPlaneCall(
 }
 
 /** controlPlaneCall 可能为真的工具(闸门据此决定要不要为非 host 调用解析参数)。 */
-const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation', 'update_app_settings']);
+const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation', 'update_app_settings', 'manage_mcp']);
 
 /*
  * 审批预览的排版(Codex 09-25 二轮 #2)。控制面审批卡的待批内容**一个字都不省**:无人值守要跑的提示词、tool_call 的参数、
@@ -340,6 +342,8 @@ function savedAgentFields(args: any): NormalAgentDef | undefined {
   try {
     return buildAgentDef('preview', null, {
       name: String(args.name ?? ''),
+      nameZh: args.name_zh != null ? String(args.name_zh) : undefined,
+      nameEn: args.name_en != null ? String(args.name_en) : undefined,
       description: args.description != null ? String(args.description) : undefined,
       model: args.model != null ? String(args.model) : undefined,
       tools: Array.isArray(args.tools) ? args.tools.map((t: unknown) => String(t)) : undefined,
@@ -423,6 +427,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
   }
   if (name === 'forsion_account_action') return accountActionPreview(args);
   if (name === 'publish_web_page') return webPublishPreview(args);
+  if (name === 'manage_mcp') return mcpSettingsPreview(args);
   if (name === 'update_app_settings') {
     const v = args.values && typeof args.values === 'object' && !Array.isArray(args.values) ? (args.values as Record<string, unknown>) : {};
     const parts = Object.entries(v).map(([k, x]) => `${String(args.section ?? '')}.${k} → ${JSON.stringify(x)}`);
@@ -475,7 +480,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
   if (name === 'manage_automation') {
     const act = String(args.action ?? '');
     if (act !== 'set') return `manage_automation ${act}${args.id ? ` ${full(args.id)}` : ''}`;
-    const when = [args.cond_type, args.datetime || args.interval || args.time || args.match || args.path || args.event]
+    const when = [args.cond_type, args.datetime || args.interval || args.time || args.match || args.path || args.event || (args.params ? JSON.stringify(args.params) : '')]
       .filter(Boolean).map(full).join(' ');
     // 本次写入的动作链 / 旧式 prompt 取校验后的那份(见 savedText)。cond 换成 manual 只为绕开这里给不了的 cwd / vault
     // (file_chars_gte / db_changed 要),动作与 prompt 的校验与 cond 无关;与工具同样 allowToolCall=false。
@@ -1051,9 +1056,9 @@ async function controlPreview(call: ToolCall): Promise<string> {
       return approvalPreview(call, { keptActions: cur ? (cur.actions ?? null) : undefined });
     }
     if (name === 'manage_agent') {
-      // slug 归一与 manageAgent.execute 同口径(非法 slug → slugify(name)),否则预览说的和实际写的不是同一个 agent
+      // slug 归一与 manageAgent.execute 同口径(非法 slug → 由名字推),否则预览说的和实际写的不是同一个 agent
       const requested = args.slug ? String(args.slug) : '';
-      const slug = requested && isValidSlug(requested) ? requested : slugify(String(args.name ?? ''));
+      const slug = requested && isValidSlug(requested) ? requested : slugFromNames(args.name_en, args.name);
       const existing = slug ? await getAgent(slug) : null;
       const create = String(args.action) === 'create';
       const what = existing

@@ -1,3 +1,4 @@
+import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpConfig'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
 import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
@@ -25,7 +26,7 @@ import { basename, dirname, isAbsolute, join, relative } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
-import { createSerialQueue, lockedUpdateJson, writePrivateJson } from './configWrite'
+import { clearRecoveryNotice, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
 import { existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
@@ -49,6 +50,7 @@ import { randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
+import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller } from './updater'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
@@ -210,15 +212,14 @@ async function loadTanguEnvFile(): Promise<void> {
 // ── ~/.tangu/config.json:与包内 core/config.ts 同格式的「唯一真源」。桌面读写各段(providers/mcp/
 //    cloud/browser/wechat/sandbox/workspace)落此文件;后端(standalone)同读。段存在即权威,缺失回落 legacy。
 const homeConfigPath = (): string => join(tanguHomeDir(), 'config.json')
-async function readHomeConfig(): Promise<Record<string, any>> {
-  try {
-    const p = JSON.parse(await readFile(homeConfigPath(), 'utf8'))
-    if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('Invalid config.json: expected an object')
-    return p
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    throw error // Never overwrite an unreadable security configuration with defaults.
-  }
+/** 坏文件(零字节 / 半截)先从 config-backup/config.json.bak 恢复;恢复不了抛 —— Never overwrite an unreadable security configuration with defaults. */
+const readHomeConfig = (): Promise<Record<string, any>> => readJsonRecovering(homeConfigPath())
+/** 会写恢复标记的两份(config.json、引擎写的 provider-auth.json;后者可能是软链,标记在真身旁边)。 */
+const recoverableConfigFiles = (): string[] => {
+  const auth = join(forsionHomeDir(), 'provider-auth.json')
+  let real = auth
+  try { real = realpathSync(auth) } catch { /* 还没登录过 */ }
+  return [homeConfigPath(), real]
 }
 /** config.json 的读改写:引擎 / CLI 同写这份,持跨进程写锁在写入那一刻的内容上改(configWrite.ts 的 lockedUpdateJson;
  *  mutate 必须同步,返回 undefined = 不写)。原子落位(唯一临时名 + rename,0600 含 token/apiKey):截断直写或共用 .tmp 名
@@ -439,6 +440,10 @@ interface TanguStoredConfig {
   translateModelId: string
   /** 辅助模型 · 补全(插件 ctx.tangu.fim 的行内补全用;落 config.json models.fim;缺省 = 目录里第一个补全模型)。 */
   fimModelId: string
+  /** 额度用完时改用的模型(落 config.json models.quotaFallback;空 = 停下报错)。引擎 llm/quotaRelay.ts 读。 */
+  quotaFallbackModelId: string
+  /** 换之前先问我(models.quotaFallbackAsk):开着时停在失败卡上让人选。 */
+  quotaFallbackAsk: boolean
   /** 默认语音识别模型 id(语音输入转写用;持久化到 config.json asr.modelId;缺省=跟随 app 级 asr 默认)。 */
   asrModelId: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=自带-key/Forsion 云端。缺省 cloud。 */
@@ -547,6 +552,8 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   visionMode: 'auto',
   translateModelId: '',
   fimModelId: '',
+  quotaFallbackModelId: '',
+  quotaFallbackAsk: false,
   asrModelId: '',
   asrBackend: 'cloud',
   lastApprovalMode: 'auto-edit',
@@ -796,6 +803,8 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       visionModelId: auxModels.vision || '',
       translateModelId: auxModels.translate || '',
       fimModelId: auxModels.fim || '',
+      quotaFallbackModelId: typeof auxModels.quotaFallback === 'string' ? auxModels.quotaFallback : '',
+      quotaFallbackAsk: auxModels.quotaFallbackAsk === true,
       visionMode: auxModels.visionMode === 'always' || auxModels.visionMode === 'off' ? auxModels.visionMode : 'auto',
     } : {}),
   }
@@ -869,6 +878,8 @@ function applyHomePatch(home: Record<string, any>, patch: Partial<TanguStoredCon
   if ('visionMode' in patch) { auxModels.visionMode = patch.visionMode; mT = true }
   if ('translateModelId' in patch) { auxModels.translate = patch.translateModelId; mT = true }
   if ('fimModelId' in patch) { auxModels.fim = patch.fimModelId; mT = true }
+  if ('quotaFallbackModelId' in patch) { auxModels.quotaFallback = patch.quotaFallbackModelId; mT = true }
+  if ('quotaFallbackAsk' in patch) { auxModels.quotaFallbackAsk = patch.quotaFallbackAsk === true; mT = true }
   if ('sandbox' in patch) { home.sandbox = patch.sandbox; oT = true }
   if ('hostSandbox' in patch) { home.hostSandbox = normalizeHostSandboxConfig(patch.hostSandbox); oT = true }
   if ('defaultWorkspaceDir' in patch) { home.workspace = patch.defaultWorkspaceDir; oT = true }
@@ -1993,6 +2004,28 @@ let miniSession: MiniSessionContext = { sessionId: null, runId: null }
 let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
 /** 电脑历史控制器(只在带 agent 后端的形态建;见 electron/computerHistory.ts)。 */
 let computerHistory: ComputerHistory | null = null
+
+/** 电脑历史落盘后踢一下引擎巡检:「打开 Steam 时」不用等 5 分钟。不带任何内容,引擎自己重读磁盘判定;窗口关着也要到,所以不经渲染层。
+ *  ≥5s 节流(切 App 很频繁),最后一次不丢;失败无所谓,下一个巡检周期照样看到。 */
+const COMPUTER_KICK_MS = 5_000
+let computerKickAt = 0
+let computerKickTimer: ReturnType<typeof setTimeout> | null = null
+function kickAutomationForComputer(): void {
+  if (computerKickTimer) return
+  computerKickTimer = setTimeout(() => {
+    computerKickTimer = null
+    computerKickAt = Date.now()
+    const st = backend.getStatus()
+    if (st.state !== 'ready' || !st.url) return
+    void fetch(`${st.url.replace(/\/+$/, '')}/agent/special/automation/kick`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${backend.getToken()}`, 'Content-Type': 'application/json' },
+      body: '{"scope":"computer"}',
+      signal: AbortSignal.timeout(5_000),
+    }).catch(() => {})
+  }, Math.max(0, computerKickAt + COMPUTER_KICK_MS - Date.now()))
+  computerKickTimer.unref?.()
+}
 let autoMiniWindow: BrowserWindow | null = null
 let autoMiniSessionId: string | null = null
 /** 最后获焦的 Forsion 窗口(自动 Mini 除外);自动 Mini 开场时快照成 autoMiniReturnTo,本轮跑完还给用户。 */
@@ -2463,6 +2496,7 @@ app.whenReady().then(async () => {
         for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('computerHistory:changed', view)
         refreshTrayMenu()
       },
+      onSignal: kickAutomationForComputer,
     })
     registerComputerHistoryIpc(computerHistory, isTrustedSender)
   }
@@ -2908,6 +2942,8 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
+  ipcMain.handle('config:recoveryNotice', (e) => (isTrustedSender(e) ? readRecoveryNotice(recoverableConfigFiles()) : null))
+  ipcMain.handle('config:clearRecoveryNotice', (e) => (isTrustedSender(e) ? clearRecoveryNotice(recoverableConfigFiles()) : undefined))
   registerDocumentTaskIpc(ipcMain, join(app.getPath('userData'), 'document-task-receipts.json'), isTrustedSender)
   deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing / relaunch
   registerRemoteSessionsIpc(ipcMain, remoteSessions, isTrustedSender) // P1-K4:remoteSessions:get / setEnabled / setMaxApprovalMode / revoke
@@ -3510,15 +3546,29 @@ app.whenReady().then(async () => {
     }
   }
   ipcMain.handle('mcp:read', async () => ({ mcpServers: await readMcpServers() }))
-  ipcMain.handle('mcp:write', async (_e, cfg: { mcpServers: Record<string, any> }) => {
-    if (!cfg || typeof cfg.mcpServers !== 'object') throw new Error('非法 MCP 配置')
-    // dev / dev_* 是设备 MCP 的保留命名空间(shared/mcpNames.ts):新加的一律拒,盘上存量的放行(引擎加载时跳过、状态报错)
-    const reserved = newReservedMcpNames(cfg.mcpServers, await readMcpServers())
-    if (reserved.length) throw new Error(`${MCP_NAME_RESERVED}: ${reserved.join(', ')}`)
-    await saveHomeSection('mcp', { mcpServers: cfg.mcpServers }) // 唯一真源:config.json mcp 段(chmod 600)
-    const stored = await loadConfig()
-    if (stored.mode === 'managed') void ensureBackend() // 重启后端重连 MCP(进程级冻结语义)
-    return { mcpServers: cfg.mcpServers }
+  ipcMain.handle('mcp:write', async (_e, cfg: { mcpServers: Record<string, any>; base?: Record<string, any> }) => {
+    const fallback = await readMcpServers()
+    let servers: Record<string, any> = {}
+    await saveHomeSection('mcp', (sec: any) => {
+      const current = sec === undefined ? fallback : sec?.mcpServers ?? {}
+      const reserved = cfg?.mcpServers && typeof cfg.mcpServers === 'object' ? newReservedMcpNames(cfg.mcpServers, current) : []
+      if (reserved.length) throw new Error(`${MCP_NAME_RESERVED}: ${reserved.join(', ')}`)
+      servers = applyMcpSnapshot(current, cfg?.mcpServers, cfg?.base ?? current)
+      return { ...sec, mcpServers: servers }
+    })
+    // The engine reconciles MCP settings at idle via /agent/tools or run settlement; never restart an active reply.
+    return { mcpServers: servers }
+  })
+  ipcMain.handle('mcp:import', async (_e, cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => {
+    const incoming = parseMcpInput(cfg?.config, cfg?.name)
+    if (cfg.replaceNames !== undefined && (!Array.isArray(cfg.replaceNames) || cfg.replaceNames.some(n => typeof n !== 'string'))) throw new Error('Invalid MCP replacement names')
+    const fallback = await readMcpServers()
+    let result!: ReturnType<typeof mergeMcpImport>
+    await saveHomeSection('mcp', (sec: any) => {
+      result = mergeMcpImport(sec === undefined ? fallback : sec?.mcpServers ?? {}, incoming, cfg.replaceNames, cfg.expected)
+      return { ...sec, mcpServers: result.servers }
+    })
+    return { mcpServers: result.servers, added: result.added, replaced: result.replaced, skipped: result.skipped }
   })
 
   // ── 拖入式主题(~/.tangu/themes/<id>/{theme.json,theme.css}):主进程读盘 → 渲染端 <style> 注入 ──
@@ -3607,6 +3657,26 @@ app.whenReady().then(async () => {
       else cur.push(provider)
       return cur
     })
+    const stored = await loadConfig()
+    if (stored.mode === 'managed') void ensureBackend()
+    return list
+  })
+  // 导入本机配置(electron/discovery/providers.ts):打开提供方页时查,最多一分钟一次;导入按 id 在主进程重读,key 不经渲染端
+  let localScan: { at: number; list: LocalProviderCandidate[] } | null = null
+  const localScanOpts = async () => { const u = (await loadConfig()).cloudUrl; try { return { skipHosts: u ? [new URL(u).hostname] : [] } } catch { return {} } }
+  ipcMain.handle('providers:scanLocal', async (_e, force?: boolean) => {
+    if (!force && localScan && Date.now() - localScan.at < 60_000) return localScan.list
+    localScan = { at: Date.now(), list: await scanLocalProviders(await readProvidersFile(), await localScanOpts()) }
+    return localScan.list
+  })
+  ipcMain.handle('providers:importLocal', async (_e, ids: string[]) => {
+    const opts = await localScanOpts()
+    const add = await localProvidersFor(Array.isArray(ids) ? ids : [], await readProvidersFile(), opts)
+    localScan = null
+    // 选的那几条在原来的应用里刚改过(指纹变了)或已经加过:一条都没取到就如实报,界面重扫一遍让人重选
+    if (!add.length) throw new Error('import_stale')
+    const list = await updateProvidersFile((cur) => [...cur, ...add.filter((a) => !cur.some((p) => p.providerId === a.providerId))])
+    localScan = null
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend()
     return list

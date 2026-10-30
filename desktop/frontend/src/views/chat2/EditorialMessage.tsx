@@ -64,6 +64,7 @@ import { playSendFlight } from './sendFlight'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
+import { agentName, agentNames } from '../../agentName'
 import { isHtmlCardTool } from '../../tangu/store/tanguSlice'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
@@ -74,6 +75,8 @@ import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
+import { MuseCardLine, MuseFeedbackRow, museCardRef } from './MuseCards'
+import { FallbackLine, FallbackModelName, QuotaChips, QuotaRemindChip, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
 import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
@@ -180,6 +183,9 @@ const ERR_RULES: Array<[RegExp, string]> = [
   // 引擎自家错误码(agentLoop publish 的 error 字段是裸码):精确规则放前面
   [SUB_EXPIRED_RE, 'chat.err.subExpired'], // 比下面通用的 401 更具体,必须排在它前面
   [/token_quota_exceeded/i, 'chat.err.quota'],
+  [/masking_failed/, 'chat.err.maskFailed'], // 引擎 llm/outboundMask.ts:开着却跑不了 → 这一轮不发
+  [/masking_blocked/, 'chat.err.maskBlocked'],
+  [QUOTA_RE, 'chat.err.quotaUsed'], // 订阅额度 / 账单配额用完:几小时才重置,不是限流(必须排在 429 前面)
   [/engine_unavailable_remote/i, 'chat.err.engineRemote'], // 契约 C6:远程污点 run 不进外部引擎
   [/run_cost_exceeded/i, 'chat.err.runCost'],
   [/input_too_large/i, 'chat.err.inputTooLarge'],
@@ -189,12 +195,17 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/terminated|ECONNRESET|socket hang up|premature close/i, 'chat.err.dropped'],
   [/ETIMEDOUT|timed? ?out/i, 'chat.err.timeout'],
   [/(^|\D)(401|403)(\D|$)|unauthorized|invalid[ _-]?api[ _-]?key/i, 'chat.err.auth'],
-  [/(^|\D)429(\D|$)|rate[ _-]?limit|insufficient[ _-]?quota/i, 'chat.err.rate'],
+  [/(^|\D)429(\D|$)|rate[ _-]?limit|per ?minute|allocated quota exceeded/i, 'chat.err.rate'],
   [/(^|\D)5\d\d(\D|$)|bad gateway|overloaded/i, 'chat.err.server'],
 ]
 export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string): string {
   if (!raw) return t('chat.error')
-  const hit = ERR_RULES.find(([re]) => re.test(raw))
+  raw = stripQuotaAsk(raw)
+  const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
+  if (hit?.[1] === 'chat.err.quotaUsed') {
+    const time = quotaResetFromError(raw)
+    return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`
+  }
   return hit ? `${t(hit[1])}(${raw})` : raw
 }
 
@@ -421,6 +432,8 @@ export const EditorialMessage = memo(EditorialMessageView)
 
 function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer, onBringBack, todoInTail = false }: { /** 这条的任务清单画在对话末尾(ChatView 只给最新那份传):这里不再画。 */ todoInTail?: boolean; /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; /** 分支里最后一条回答:「带回这里」把它作为引用挂进来源那支的输入框(ChatView 只给这一条传)。 */ onBringBack?: (text: string) => void; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   const forkScope = useContext(ForkScope)
+  // 消息里的 agentName 是收到时的显示名:现取,切语言 / 改名后旧消息也跟着变。重载时名册可能晚到,老记录那时认不出 slug,这里按名字再认一次
+  const speakerName = useApp((s) => agentName(s.agentDefs.find((a) => (msg.agentId ? a.slug === msg.agentId : !!msg.agentName && agentNames(a).includes(msg.agentName)))))
   // shell 代码块「运行」的回传:结果作为用户消息发回**这条消息所在**的会话(run 活着自动变 steer)。
   // cwd 跟会话走(agent 的工作目录),没有就家目录。对象按会话 memo,别每次渲染新造一个(Markdown 是 React.memo)。
   const runSid = fileCtx?.sessionId
@@ -666,7 +679,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const museTodo = msg.origin === 'proactive:todo'
   const museApproval = msg.origin === 'proactive:approval'
   const fenceKinds: FenceKind[] = [...(window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] as FenceKind[] : ['suggest', 'task'] as FenceKind[]), ...(museApproval ? ['approval'] as FenceKind[] : [])]
-  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds, todo: museTodo })
+  const museCard = msg.origin === 'proactive:card' || msg.origin === 'proactive:notice' ? museCardRef(msg.content) : null
+  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : msg.content, { streaming, kinds: fenceKinds, todo: museTodo })
   const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
   // sketch 卡 → 笔记里的交互块(```forsion-sketch 围栏,嵌入层按同一沙箱渲染);与回答的「插入笔记」同一条写口。
   const sketchActions = handlers?.onInsertNote
@@ -695,10 +709,12 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   })
 
   return (
+    <>
+    {msg.fallback && <FallbackLine fb={msg.fallback} />}
     <div ref={setAsst} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
-      <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
+      <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(speakerName || msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
-        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
+        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{speakerName || msg.agentName || agentNameFallback || 'Tangu'}{msg.fallback && <FallbackModelName fb={msg.fallback} />}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
         {isProactive(msg) && <ProactiveMark at={msg.timestamp} />}
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {(() => {
@@ -735,7 +751,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, k) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} />
                     : part.t === 'marketplace'
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
                     : part.t === 'sandbox'
@@ -752,11 +768,11 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 </Fragment>
               ) : null
             })
-            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(nodes.every((n) => n == null))} />
+            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(nodes.every((n) => n == null))} />
             return <>{head}{nodes}</>
           }
           // 老序:插件卡片挪到尾部(trailingCards),不在这一行里再列一遍
-          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(!body)} />
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(!body)} />
           return (
             <>
               {head}
@@ -796,12 +812,14 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             ? <MuseTodoCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />
             : <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />)}
         {museApprovals.map((id) => <MuseApprovalLine key={id} id={id} />)}
+        {museCard && <MuseCardLine id={museCard.id} sessionId={runSid || undefined} onJump={handlers?.onJumpDeck} />}
+        {(msg.origin === 'proactive' || museTodo) && !!runSid && <MuseFeedbackRow messageId={msg.id} sessionId={runSid} />}
         {/* 作品卡:把这条对话里做的东西变成「造物」(点了宿主才建文件夹 / 复制)。同样只在 done 上渲染。 */}
         {!!creations.length && msg.status === 'done' && <CreationCards cards={creations} sessionId={runSid} onJump={handlers?.onJumpDeck} createdAt={msg.timestamp || undefined} />}
 
         {/* Agent 自己写了东西:记忆 / 进化记录并成一行回执;协作说明是说给用户听的,单独一张请求卡。 */}
         {fileCtx && <SelfUpdateReceipt events={msg.toolEvents} sessionId={fileCtx.sessionId} agentSlug={msg.agentId} />}
-        {fileCtx && <HumanUpdateCard changes={humanChanges(msg.toolEvents)} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} agentName={msg.agentName || agentNameFallback} onJump={handlers?.onJumpDeck} createdAt={msg.timestamp || undefined} />}
+        {fileCtx && <HumanUpdateCard changes={humanChanges(msg.toolEvents)} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} agentName={speakerName || msg.agentName || agentNameFallback} onJump={handlers?.onJumpDeck} createdAt={msg.timestamp || undefined} />}
 
         {msg.planProposal && (
 
@@ -874,7 +892,9 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {msg.status === 'error' && (
           <div className="t2-tool err">
             <span className="t2-status-err">✕ {humanizeRunError(msg.error, t)}</span>
-            <ReloginChip error={msg.error} modelId={modelId} />
+            <ReloginChip error={msg.error} modelId={msg.fallback?.to ?? modelId} />
+            <QuotaRemindChip error={msg.error} sessionId={runSid} modelId={msg.fallback?.to ?? modelId} />
+            <QuotaChips error={msg.error} messageId={msg.id} sessionId={runSid} modelId={msg.fallback?.to ?? modelId} />
           </div>
         )}
         {msg.status === 'stopped' && <div className="t2-dim">⏹ {t('chat.aborted')}</div>}
@@ -898,6 +918,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         )}
       </div>
     </div>
+    </>
   )
 }
 

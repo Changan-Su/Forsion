@@ -480,7 +480,10 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
       title = cleanTitle(await inConversationLanguage(userId, modelId, title, `${priorT.userText}\n${message.trim()}`));
       if (unusable(title)) return false; // 改写没成 / 改写出来的不像标题 → 交 done 判官兜底(它也过这道核对)
       // CAS:用户这期间手改过标题就不覆盖,也不报「已更新」(query 无 affectedRows,靠 RETURNING 判命中)。
-      const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ? RETURNING id`, [title, sessionId, current]);
+      // 起点是 New Chat 时,前端发出第一句后会写占位标题 = 原话前 30 字(tanguSlice renameSession,PATCH 再 trim),
+      // 常落在这次模型调用途中 —— 那不算用户改名,照写(10-29)。起点已有标题的轮次不放宽。
+      const placeholder = !current || current === 'New Chat' ? message.slice(0, 30).trim() : current;
+      const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') IN (?, ?) RETURNING id`, [title, sessionId, current, placeholder]);
       if (!hit.length) return true;
       await logActivity(userId, 'title_updated', title, sessionId);
       log(`首帧标题(第 ${round} 轮,只看用户消息): ${title}`);
@@ -999,7 +1002,7 @@ async function startAssistDiscussion(opts: {
       (freshContext ? `[Current conversation]\n${freshContext}\n\n` : '') +
       `[Historian assist] Decide together whether ${topics} should be updated for this conversation (see the context above). ` +
       `Historian speaks first with its assessment; then ${mainDef.name} makes the final call and, if an update is warranted, ` +
-      'performs it ITSELF by calling log_event (one short sentence for what happened today) and/or remember (only what will still be true next month — user facts/preferences, stable environment facts, proven procedures; never progress, deliverables or dated status, those are log_event material, and never an instruction that holds for this conversation only; one present-tense sentence of at most 300 characters per fact; if the memory below already covers it, update that entry instead of adding another). ' +
+      'performs it ITSELF by calling log_event (one short sentence for what happened today) and/or remember (only what will still be true next month — user facts/preferences (facts about the person themself go to its "person" scope when offered), stable environment facts, proven procedures; never progress, deliverables or dated status, those are log_event material, and never an instruction that holds for this conversation only; one present-tense sentence of at most 300 characters per fact; if the memory below already covers it, update that entry instead of adding another). ' +
       'Do not do any other work. Keep it brief — one round is usually enough.\n\n' +
       // 全文注入(受 MEMORY_CHAR_BUDGET 帽):从前只给头 3000 字,最新条目看不见 → 主 Agent 重复记、写追加式「更正旧条目」。
       `[Current long-term MEMORY]\n${(mem || '(empty)').slice(0, MEMORY_CHAR_BUDGET)}\n\n` +

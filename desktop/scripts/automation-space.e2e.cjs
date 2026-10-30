@@ -32,6 +32,16 @@ async function main() {
         if (at < 0) rules.push(tr); else rules[at] = tr
         return { trigger: tr, created: at < 0 }
       }
+      if (p === '/agent/special/automation/sources') {
+        const src = (id, group, zh, extra = {}) => ({ id, group, name: { zh, en: zh }, params: [], eventSource: 'poll', timed: false, defaultCooldownHours: 24, requires: [], available: true, ...extra })
+        return { sources: [
+          src('at', 'time', '指定时间'), src('every', 'time', '每隔'), src('daily_at', 'time', '每天'), src('manual', 'time', '手动'),
+          src('computer.app_opened', 'computer', '打开了 App', { params: [{ key: 'app', type: 'app', name: { zh: 'App', en: 'App' }, required: true }], defaultCooldownHours: 2, eventSource: 'computer' }),
+          src('computer.unlocked', 'computer', '解锁 / 唤醒', { available: false, reason: 'trigger:computer_history_off', eventSource: 'computer' }),
+          src('event_seen', 'forsion', '活动日志'),
+          src('plugin:demo:ping', 'plugin', '示例插件事件', { eventSource: 'plugin' }),
+        ] }
+      }
       if (p === '/agent/special/automation/executions') return failExecutions ? { __code: 500, body: { error: 'fixture failure' } } : { executions }
       if (/\/automation\/triggers\/.+\/fire$/.test(p)) {
         const b = await body(); check('test run uses manual origin', b.origin === 'manual')
@@ -133,7 +143,8 @@ async function main() {
       return x.right <= y.left || y.right <= x.left || x.bottom <= y.top || y.bottom <= x.top
     })))
     check('structural edits reflow previously dragged nodes without overlap', noOverlap)
-    check('step choices are collected in the shared menu', await win.locator('[role=menuitem]').count() === 0 && await win.locator('.auto-canvas-tools button').count() === 2)
+    await win.locator('[role=menuitem]').first().waitFor({ state: 'detached' }) // 菜单有退场动画
+    check('step choices are collected in the shared menu', await win.locator('.auto-canvas-tools button').count() === 2)
     check('canvas controls do not scroll out of their viewport after editing', await win.locator('.auto-canvas').evaluate((el) => {
       const stage = el.getBoundingClientRect(), tools = el.querySelector('.auto-canvas-tools').getBoundingClientRect()
       return el.scrollTop === 0 && el.scrollLeft === 0 && tools.top >= stage.top && tools.left >= stage.left
@@ -183,6 +194,22 @@ async function main() {
     await visibleNode.locator('select').first().selectOption('writer')
     check('selecting an agent completes the template', await win.getByRole('button', { name: '保存为暂停', exact: true }).isEnabled())
     await win.getByRole('button', { name: '取消', exact: true }).click()
+    await showGuide()
+    await win.locator('.auto-starter').first().click()
+    await win.locator('.auto-flow-node').first().click()
+    await win.getByRole('textbox', { name: '名称', exact: true }).fill('Registry rule')
+    await win.locator('[data-trigger-group]').first().waitFor()
+    check('trigger menu is grouped from the registry', (await win.locator('[data-trigger-group]').evaluateAll((els) => els.map((e) => e.dataset.triggerGroup))).join() === 'time,computer,forsion,external')
+    check('three timers stay one menu item and plugin sources join External', await win.locator('[data-trigger="timer"]').count() === 1 && await win.locator('[data-trigger-group="external"] [data-trigger="plugin:demo:ping"]').count() === 1)
+    check('a source without its permission is listed but disabled', await win.locator('[data-trigger="computer.unlocked"]').isDisabled())
+    await win.locator('[data-trigger="computer.app_opened"]').click()
+    await win.locator('input[aria-label="app"]').fill('Figma')
+    await win.locator('[data-rule-only]').getByRole('button', { name: '工作日', exact: true }).click()
+    await win.screenshot({ path: path.join(OUT, 'trigger-menu-zh.png') })
+    await win.getByRole('button', { name: '保存为暂停', exact: true }).click()
+    await win.locator('.auto-detail .auto-card-title').filter({ hasText: 'Registry rule' }).waitFor()
+    const saved = requests.at(-1)
+    check('a registry source saves its params and only-conditions', saved.cond_type === 'computer.app_opened' && saved.params?.app === 'Figma' && saved.only?.weekdays?.join() === '1,2,3,4,5')
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme', 'dark') })
     await win.reload({ waitUntil: 'domcontentloaded' })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 1000))

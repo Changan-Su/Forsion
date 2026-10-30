@@ -27,6 +27,8 @@ let installed = false
  *  交错的话,先读到旧磁盘快照的那一个后落定,会把刚装的插件从本窗 store 里抹掉(Codex 评审)。
  *  监听先于初次装载注册,所以启动中的窗口收到的广播一定排在它自己的首次装载之后。 */
 let reconcileQueue: Promise<unknown> = Promise.resolve()
+let pluginsReady: Promise<void> = Promise.resolve()
+export const whenAmadeusPluginsReady = (): Promise<void> => pluginsReady
 function enqueueReconcile<T>(job: () => Promise<T>): Promise<T> {
   const next = reconcileQueue.then(job, job)
   reconcileQueue = next.catch(() => {})
@@ -81,7 +83,7 @@ export function installAmadeusPlugins(): void {
   })
   const store = usePluginStore.getState()
   store.init(amadeusAvailable() ? [calloutBlocks, wordCount] : [])
-  void enqueueReconcile(() => store.loadExternal()).then(() => {
+  pluginsReady = enqueueReconcile(() => store.loadExternal()).then(() => {
     // 捆绑包内嵌的 Space 引用插件自己的视图,必须等插件装完(视图已注册)才过得了 parseSpaceJson 的
     // isViewRegistered 闸 —— bootstrapEngine 那次 loadUserSpaces 跑在插件之前,注定被「未注册视图」跳过。
     // 补跑一次:装了带 Space 的插件,ribbon 顶部(Space 区)末尾即自动出现,无需进设置页或重启。

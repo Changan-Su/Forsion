@@ -3,6 +3,7 @@ import { FileCode2, History, Loader2, MoreHorizontal, Pencil, RefreshCw, Undo2 }
 import { Markdown } from './Markdown'
 import { CapabilityMenu } from './CapabilityMenu'
 import { useI18n } from '../i18n'
+import { useApp } from '../stores/appStore'
 import { formatRelative, formatDateTime } from '../format/time'
 import type { TanguDesktopConfig } from '../../../../tangu-agent/src/contracts/clientTypes'
 import type { EngineTarget } from '../services/engine/targets'
@@ -19,8 +20,16 @@ export function HumanCollaborationPanel(props: Props) {
   const key = JSON.stringify([props.engine.key, props.engine.base, props.cfg.token, humanTargetKey(props.target)])
   return <HumanBody key={key} {...props} draftKey={key} />
 }
+/** 引擎 renderAboutHuman 给画像的上限(ABOUT_HUMAN_LIMITS['SOUL.md'],按去掉首尾空白后的长度截)。 */
+const PORTRAIT_LIMIT = 2000
+const SOURCE_KEYS = { remember: 'human.source.remember', dream: 'human.source.dream', move: 'human.source.move', promote: 'human.source.promote', user: 'human.source.user' } as const
 function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }: Props & { draftKey: string }) {
   const { t, locale } = useI18n()
+  const agentDefs = useApp((s) => s.agentDefs)
+  const sourceText = (source: HumanChange['source']) => {
+    const key = source && SOURCE_KEYS[source.kind]
+    return key ? t(key, { agent: agentDefs.find((a) => a.slug === source.agent)?.name || source.agent || '' }) : ''
+  }
   // human/ 的四份各有自己的标题和空态;起手模板是 Agent 口吻的协作说明,只给 Agent / 项目那两份
   const file = target.kind === 'human' ? target.file.slice(0, -3).toLowerCase() : null
   const template = file ? '' : t('human.template')
@@ -76,6 +85,7 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
     {notice && <p className="human-notice" role="status">{notice}</p>}
     {doc && !draft && !file && humanLegacy(doc) && <p className="human-notice" data-human-legacy>{t('human.legacy')} {onRewrite && <button type="button" className="profile-text-action" disabled={!!running} onClick={rewrite}><RefreshCw size={12} />{t('human.rewrite')}</button>}</p>}
     {!doc && !error && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('human.loading')}</p>}
+    {doc && file === 'soul' && doc.content.trim().length > PORTRAIT_LIMIT && <p className="human-notice" data-portrait-over-budget>{t('human.portraitOverBudget')}</p>}
     {doc?.updatedAt && <p className="human-date">{t('human.updatedAt', { time: formatRelative(doc.updatedAt, { locale }) })}</p>}
     {draft ? <div className="human-editor"><textarea aria-label={file ? t('human.editFile', { name: t(`human.file.${file}.title`) }) : t('human.editLabel')} value={draft.content} maxLength={doc?.maxLength || 12000} rows={15} onChange={e => changeDraft({ ...draft, content: e.target.value })} disabled={busy} />
       <div className="human-actions"><button type="button" className="btn primary sm" disabled={busy || conflict} onClick={() => void save()}>{busy && <Loader2 size={13} className="spin" />}{t('human.save')}</button><button type="button" className="btn sm" disabled={busy} onClick={() => { changeDraft(null); setConflict(false); setLatest(null); setError('') }}>{t('human.cancel')}</button></div>
@@ -86,6 +96,7 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
     {history && doc && <section className="human-history"><h4>{t('human.history')}</h4>{!doc.history.length && <p>{t('human.noHistory')}</p>}
       {doc.history.map(change => <article key={change.id} data-human-change={change.id} className={change.id === jump?.changeId ? 'human-highlight' : undefined}>
         <strong>{change.summary}</strong><time dateTime={change.at}>{formatDateTime(change.at, { locale })}</time>
+        {sourceText(change.source) && <p data-human-source={change.source!.kind}>{sourceText(change.source)}</p>}
         {change.evidence && <p>{change.evidence}</p>}
         {change.canUndo && <button type="button" className="profile-text-action" disabled={busy || !!draft} onClick={() => void undo(change)}><Undo2 size={12} />{t('human.undo')}</button>}
       </article>)}

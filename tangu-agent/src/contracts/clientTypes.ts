@@ -121,6 +121,19 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
 }
 
 /** GET /agent/special/approvals 的一行(引擎 pendingApprovals.PendingApprovalRow 镜像)。 */
+/** Muse 发进私聊、要用户点的卡(services/museCards.ts)。payload 按 kind 各一种形状,只有引擎写得进去。 */
+export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel' | 'settings' | 'intro' | 'summary' | 'rule'
+export interface MuseCardInfo {
+  id: string
+  kind: MuseCardKind
+  key: string | null
+  payload: Record<string, any>
+  status: 'pending' | 'done' | 'dismissed'
+  result: string | null
+  created_at: number
+  decided_at: number | null
+}
+
 export interface PendingApprovalInfo {
   id: string
   session_id: string
@@ -151,6 +164,8 @@ export interface HistorianActivityItem {
 /** 自动化动作链步骤(引擎 museTriggers.ActionSpec 镜像;tool_call 只能在构建器创建)。 */
 export type AutomationActionSpec =
   | { type: 'notify'; title: string; body?: string }
+  /** 直接提醒:系统通知 + Muse 私聊一行,不叫模型。 */
+  | { type: 'remind'; title: string; body?: string }
   | { type: 'agent_run'; agentSlug: string; prompt: string }
   | { type: 'tool_call'; tool: string; args: Record<string, unknown> }
   /** Amadeus 多维表写入(cells 键=列 id 或列名;值可含 {{row.X}} / {{= 算术 }} 模板)。
@@ -184,6 +199,8 @@ export interface MuseTriggerInfo {
     /** Amadeus 多维表变化(vault 钉住建规则时那个库;columnId 存列 id——列名不唯一也会改)。
      *  columnIds:多列监听(引擎归一:≥2 列才有此键,columnId=首列;任一列变化即命中)。读端一律经 lib.watchedColumnIds 取并集。 */
     | { type: 'db_changed'; path: string; vault: string; event: 'row_added' | 'cell_changed'; columnId?: string; columnIds?: string[]; equals?: string; where?: AutomationWhere[] }
+    /** 新触发源(电脑上 / 日历 / 插件):参数按注册表走,见 GET /agent/special/automation/sources。 */
+    | { type: `${string}.${string}` | `plugin:${string}`; params: Record<string, string | number> }
   prompt?: string
   cooldownHours: number
   lastFiredAt: string | null
@@ -195,8 +212,13 @@ export interface MuseTriggerInfo {
   agentSlug?: string
   /** 动作链(有则取代 agentSlug/Muse 旧语义)。 */
   actions?: AutomationActionSpec[]
+  /** 只在这些时段 / 星期触发(weekdays 0=周日;start > end = 跨夜)。 */
+  only?: { hours?: { start: number; end: number }; weekdays?: number[] }
+  maxPerDay?: number
   /** 服务端权威计算的下次应触时刻(ISO;事件/文件类或已禁用 → null)。 */
   nextRunAt?: string | null
+  /** 规则开着但这会儿不动的原因:`trigger:*` code(桌面翻译)或引擎的暂时性状态文案。 */
+  notice?: string
 }
 
 /** agent 日程条目(agents/<slug>/SCHEDULE.db;引擎 entriesOf 的结构化输出)。 */
@@ -242,7 +264,12 @@ export const isTeamImageAvatar = (avatar?: string): boolean => /^avatar\.(png|jp
 
 export interface NormalAgentDef {
   slug: string
+  /** 引擎写给老版本的显示名;界面一律走 agentName()。 */
   name: string
+  nameZh?: string
+  nameEn?: string
+  /** 显示哪个名字;缺省 = 跟随界面语言。 */
+  namePref?: 'auto' | 'zh' | 'en'
   /** 版本号(config.toml version,缺省 1.0.0);市场「可更新」检查用。 */
   version?: string
   description: string
@@ -419,7 +446,7 @@ export interface MessageRecord {
   timestamp: number
   model_id: string | null
   is_error: boolean
-  /** Muse 主动发进私聊的消息:proactive / proactive:todo / proactive:approval;其余为空。 */
+  /** Muse 主动发进私聊的消息:proactive / proactive:todo / proactive:approval / proactive:card;其余为空。 */
   origin?: string | null
 }
 
@@ -511,6 +538,25 @@ export interface ProjectSettings {
   /** 项目图标:emoji,或 `icon.<ext>` = 导入的图片(存在项目的 `.tangu/` 里,经引擎读出)。 */
   icon?: string
 }
+
+/** 项目文件夹搬走后重新指向(引擎 services/projectRelink.ts)。同名文件夹候选:remoteMatch = 记下过的旧项目 git 远端对上了(界面只预选这种);
+ *  project = 这个文件夹已经是本人的哪个项目(重新指向过去要合并)。 */
+export interface RelinkCandidate { path: string; remote: string | null; remoteMatch: boolean; project: string | null }
+/** 重新指向对话框要的:会一起改的三样(几个会话、几条项目记忆、哪些默认项)和同名文件夹。 */
+export interface RelinkInfo {
+  from: string
+  sessions: number
+  memoryEntries: number
+  settings: Array<keyof ProjectSettings>
+  remote: string | null
+  candidates: RelinkCandidate[]
+}
+/** ok = 改好了(path = 会话现在的分组键;并进已有项目时 name = 那个项目名);already_project = 新位置已是项目 name,带 merge 再来才合并。 */
+export type RelinkResult =
+  | { ok: true; path: string; name: string | null; sessionIds: string[]; memory: 'none' | 'moved' | 'merged'
+      /** 改过的会话配置里那两项的新值(桌面拿它盖本地缓存:缓存是 local-wins,不换掉会把旧目录发回引擎)。 */
+      configs: Record<string, { cwd?: string; extraRoots?: string[] }> }
+  | { ok: false; error: 'already_project'; path: string; name: string }
 
 export const isProjectIconFile = (icon?: string): boolean => /^icon\.(png|jpe?g|gif|webp)$/i.test(icon || '')
 
@@ -660,6 +706,8 @@ export interface ToolsResponse {
     /** 插件自带的 server(引擎插件 manifest 的 mcpServers):不在 mcp.json 里,设置页只读展示。 */
     origin?: { pluginId: string; pluginName: string }
     tools: Array<{ name: string; description: string }>
+    /** 这个 server 的工具定义每个请求约占多少 token(名字 + 描述 + 参数 schema 的 JSON 按 4 字符 = 1 token 估)。旧引擎缺省。 */
+    approxTokens?: number
   }>
 }
 
@@ -737,6 +785,8 @@ export interface ToolEvent {
   contentOffset?: number
   /** 审批挂起(托盘 run):调用没跑,agent 先干别的;用户拍板后同一 id 的真结果到达即清掉。落库的占位结果重载后仍带着它。 */
   parked?: boolean
+  /** 发给模型前会被遮住的值(引擎 llm/outboundMask.ts):在 arguments / result 里的位置 + 类型 + 模型收到的占位符,不含原值。 */
+  masked?: Array<{ kind: string; ph: string; s: number; e: number; at: 'args' | 'result'; warn?: true }>
 }
 
 /** 助手一条消息的「顺序段」(直播归约期填充;新历史消息也可由工具锚点重建):
@@ -863,8 +913,11 @@ export interface UiMessage {
   /** system=客户端本地通知行(斜杠命令反馈等;不持久化,reload 会消失)。 */
   role: 'user' | 'assistant' | 'system'
   content: string
-  /** Muse 主动发进私聊的(引擎 chat_messages.origin):proactive / proactive:todo / proactive:approval。 */
+  /** Muse 主动发进私聊的(引擎 chat_messages.origin):proactive / proactive:todo / proactive:approval / proactive:card。 */
   origin?: string
+  /** 这一轮换了模型(引擎 status model_fallback;重载时从 origin 'fallback:quota' + model_id 还原):画「改用了」那一行。
+   *  reason 'quota' = 额度用完接力;缺省 = 服务端停用模型。重载后只剩 to。 */
+  fallback?: { to: string; toName?: string; from?: string; reason?: string; resetsAt?: number }
   reasoning?: string
   /** 思考累计用时(ms)与本段思考的起点:只在本次运行里由 appStore 记(引擎不落库),渲染成「思考 N 秒」。 */
   reasoningMs?: number
@@ -1001,6 +1054,10 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   translateModelId?: string
   /** 辅助模型 · 补全:插件 ctx.tangu.fim(行内补全)用;只能选补全(FIM)模型;空 = 目录里第一个补全模型。 */
   fimModelId?: string
+  /** 额度用完时改用的模型(config.json models.quotaFallback);空 = 停下报错。 */
+  quotaFallbackModelId?: string
+  /** 换之前先问我(models.quotaFallbackAsk)。 */
+  quotaFallbackAsk?: boolean
   /** 上次用的审批档 / 思考档:**新会话据此起步**(模型走 modelId,已是全局键)。
    *  在任意会话里改这三样都会写回这里 —— 用户的口径是「换过一次就一直是它」,不是每建一个会话重设一次。 */
   lastApprovalMode?: 'readonly' | 'auto-edit' | 'full-auto' | 'custom'

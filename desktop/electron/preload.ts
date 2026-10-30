@@ -64,6 +64,8 @@ const api = {
     },
   } satisfies ComputerHistoryApi,
   getConfig: (): Promise<any> => ipcRenderer.invoke('config:get'),
+  configRecoveryNotice: (): Promise<{ at: number; version: number } | null> => ipcRenderer.invoke('config:recoveryNotice'),
+  clearConfigRecoveryNotice: (): Promise<void> => ipcRenderer.invoke('config:clearRecoveryNotice'),
   documentTasks: {
     claim: (key, signature) => ipcRenderer.invoke('documentTasks:claim', key, signature),
     complete: (key, token, sessionId) => ipcRenderer.invoke('documentTasks:complete', key, token, sessionId),
@@ -359,10 +361,14 @@ const api = {
   // ── 直连 provider 管理(~/.tangu/providers.json;managed 模式保存后自动重启后端加载)──
   listProviders: (): Promise<any[]> => ipcRenderer.invoke('providers:list'),
   saveProvider: (provider: Record<string, any>): Promise<any[]> => ipcRenderer.invoke('providers:save', provider),
+  /** 本机 CC Switch / Claude Code / Codex 里能导入的连接(只有 key 末 4 位)。 */
+  scanLocalProviders: (force?: boolean): Promise<any[]> => ipcRenderer.invoke('providers:scanLocal', force),
+  importLocalProviders: (ids: string[]): Promise<any[]> => ipcRenderer.invoke('providers:importLocal', ids),
   deleteProvider: (providerId: string): Promise<any[]> => ipcRenderer.invoke('providers:delete', providerId),
   // ── MCP server 管理(~/.tangu/mcp.json;保存后托管后端重启重连)──
+  importMcpConfig: (cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => ipcRenderer.invoke('mcp:import', cfg),
   readMcpConfig: (): Promise<{ mcpServers: Record<string, any> }> => ipcRenderer.invoke('mcp:read'),
-  writeMcpConfig: (cfg: { mcpServers: Record<string, any> }): Promise<{ mcpServers: Record<string, any> }> =>
+  writeMcpConfig: (cfg: { mcpServers: Record<string, any>; base?: Record<string, any> }): Promise<{ mcpServers: Record<string, any> }> =>
     ipcRenderer.invoke('mcp:write', cfg),
   // ── 跨生态 agent 资产发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu)──
   discoveryScan: (): Promise<any> => ipcRenderer.invoke('discovery:scan'),
@@ -685,8 +691,8 @@ const AGENT_KEYS = [
   'connectMeta', 'connectList', 'connectPublish', 'connectUnpublish',
   'connectListingApply', 'connectListingWithdraw', 'connectStore',
   'submitFeedback',
-  'listProviders', 'saveProvider', 'deleteProvider',
-  'readMcpConfig', 'writeMcpConfig',
+  'listProviders', 'saveProvider', 'deleteProvider', 'scanLocalProviders', 'importLocalProviders',
+  'readMcpConfig', 'writeMcpConfig', 'importMcpConfig',
   'discoveryScan', 'discoveryImportSkills', 'discoveryImportMcp',
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
