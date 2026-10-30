@@ -6,6 +6,7 @@ name: build-desktop
 # 触发(刻意收紧——日常 push / PR 一律不触发,只在发布时跑):
 #   - 推送 v* 版本 tag:测试与构建同时跑 → 两者都绿才自动创建/更新该 tag 的 GitHub Release 并附六个桌面安装包。
 #   - 手动(Actions 页 Run workflow):测试与构建同时跑,产物在 Artifacts 里,不发 Release。
+#     build_target=tests 只跑完整门禁,跳过桌面与 Android 打包。
 # 测试是**发布**的门禁,不再是构建的前置:测试不过照样会打包(白花那几十分钟机器时间),但 release 不跑、
 # 不发出任何包。推 tag 前本地已按 forsion-release 技能跑过同一套测试,串行等它只是让整轮多 12 分钟(10-25 实测)。
 
@@ -16,7 +17,7 @@ on:
         description: Candidate platform scope (all release gates still run)
         type: choice
         default: all
-        options: [all, desktop, android]
+        options: [all, desktop, android, tests]
   push:
     tags:
       - 'v*'
@@ -84,7 +85,7 @@ jobs:
           npm test
 
   build:
-    if: github.event_name != 'workflow_dispatch' || inputs.build_target != 'android'
+    if: github.event_name != 'workflow_dispatch' || (inputs.build_target != 'android' && inputs.build_target != 'tests')
     name: ${{ matrix.os }} (${{ matrix.distribution }})
     runs-on: ${{ matrix.os }}
     env:
@@ -327,7 +328,7 @@ jobs:
   # 未配 → debug 签名包(文件名带 -debug,可直接安装)。versionCode=run_number(升级安装恒递增),
   # versionName=tag 去 v 前缀。
   build-android:
-    if: github.event_name != 'workflow_dispatch' || inputs.build_target != 'desktop'
+    if: github.event_name != 'workflow_dispatch' || (inputs.build_target != 'desktop' && inputs.build_target != 'tests')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
