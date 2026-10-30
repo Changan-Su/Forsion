@@ -14,8 +14,9 @@ import { endsWithQuestion } from './childSessions.js';
 import { isWithinActiveHours, loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { MUSE_ONBOARDING_DAILY_CAP, onboardingActive, readMuseOnboarding } from './museState.js';
 
-/** proactive = message_user;todo / approval = 引擎替 add_muse_todo / 审批入队发的;card = 要用户点的卡(services/museCards.ts)。后三种各有自己的配额,不占每小时 3 条。 */
-export type ProactiveOrigin = 'proactive' | 'proactive:todo' | 'proactive:approval' | 'proactive:card';
+/** proactive = message_user;todo / approval = 引擎替 add_muse_todo / 审批入队发的;card = Muse 发起的、要用户点的卡(services/museCards.ts);
+ *  notice = 不是 Muse 自己要开口的卡(用户要的设置卡、引擎发的第一次见面 / 小结),不计今天的额度。 */
+export type ProactiveOrigin = 'proactive' | 'proactive:todo' | 'proactive:approval' | 'proactive:card' | 'proactive:notice';
 export const MUSE_DM_PER_HOUR = 3;
 export const MUSE_DM_MAX_CHARS = 1500;
 
@@ -28,8 +29,7 @@ export function asksUser(text: string): boolean {
   return endsWithQuestion(text) || /[?？][^?？]{1,40}$/.test(text.trim()); // 尾巴另起一行也算
 }
 
-/** uncapped = 不是 Muse 自己要开口的(用户要的设置卡、引擎发的第一次见面 / 小结),不占今天的额度。 */
-export async function postMuseDm(userId: string, content: string, origin: ProactiveOrigin = 'proactive', opts: { uncapped?: boolean } = {}): Promise<MuseDmResult> {
+export async function postMuseDm(userId: string, content: string, origin: ProactiveOrigin = 'proactive'): Promise<MuseDmResult> {
   const text = String(content || '').trim();
   if (!text) return { ok: false, error: 'Error: the message is empty' };
   // 动态导入:routes/solo → routes/sessions → agentLoop → 工具注册表 → 本文件,静态导入会成环。
@@ -46,7 +46,7 @@ export async function postMuseDm(userId: string, content: string, origin: Proact
       return { ok: false, error: `Error: you already sent the user ${MUSE_DM_PER_HOUR} messages in the last hour. Fold this into your next message, or write it in your journal.` };
     }
   }
-  if ((origin === 'proactive' || origin === 'proactive:card') && !opts.uncapped) {
+  if (origin === 'proactive' || origin === 'proactive:card') {
     // 一天的上限来自配置(0 = 不限);磨合期再封一道,作息外也不发(周期被规则 / 日程叫醒时会走到这里)
     const muse = loadSpecialAgentsConfig().muse;
     const onboarding = onboardingActive(await readMuseOnboarding().catch(() => null));

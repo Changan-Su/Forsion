@@ -30,6 +30,7 @@
  *   GET      /agent/special/muse/cards?status=          Muse 私聊里要用户点的卡(services/museCards.ts)
  *   GET      /agent/special/muse/cards/:id              单张卡(流里那一行按 id 读)
  *   POST     /agent/special/muse/cards/:id/decide { action }  用户点卡:效果在引擎里按 kind 白名单执行,CAS pending,不符 409
+ *   POST     /agent/special/muse/cards/:id/summary-edit { index, expected, text }  改小结里的一条(记忆跟着改)
  *   POST     /agent/special/muse/messages/:id/feedback { verdict }  主动消息下面的「有用 / 少来点这种」
  *
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
@@ -650,12 +651,27 @@ router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: 
       messageId: typeof b.messageId === 'string' ? b.messageId : undefined,
       answers: b.answers && typeof b.answers === 'object' ? { when: String(b.answers.when || ''), pace: String(b.answers.pace || ''), focus: Array.isArray(b.answers.focus) ? b.answers.focus.map(String) : [] } : undefined,
       index: typeof b.index === 'number' ? b.index : undefined,
-      text: typeof b.text === 'string' ? b.text : undefined,
+      expected: typeof b.expected === 'string' ? b.expected : undefined,
     });
     if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
     if (r.card.kind === 'settings' || r.card.kind === 'intro') kickMuse(); // 心跳 / 作息变了:巡检节奏下一轮就跟上
     res.json({ ok: true, card: r.card });
   } catch (e: any) { res.status(500).json({ detail: e?.message || 'decide failed' }); }
+});
+
+// 改小结里的一条 = 往 Muse 的长期记忆写用户的原话,拒远端(同 /muse/feedback);上面的 decide 对远端放行,所以不收文本。
+router.post('/agent/special/muse/cards/:id/summary-edit', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const b = req.body || {};
+    const r = await decideMuseCard(req.user!.userId, req.params.id, 'edit', {
+      index: typeof b.index === 'number' ? b.index : undefined,
+      expected: typeof b.expected === 'string' ? b.expected : undefined,
+      text: typeof b.text === 'string' ? b.text : undefined,
+    });
+    if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
+    res.json({ ok: true, card: r.card });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'edit failed' }); }
 });
 
 // 主动消息下面的「有用 / 少来点这种」(磨合期两周)。和 /muse/feedback 同一条 [feedback] 通道,但只收一个枚举 + 消息 id、行文引擎自己拼:

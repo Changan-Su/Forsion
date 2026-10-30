@@ -72,9 +72,15 @@ async function main() {
         const c = byId(m[1])
         const body = await readBody()
         seen.decide.push({ id: m[1], ...body })
-        if (body.action === 'edit') c.payload = { ...c.payload, items: c.payload.items.map((x, i) => (i === body.index ? body.text : x)) }
-        else if (body.action === 'remove') c.payload = { ...c.payload, items: c.payload.items.filter((_, i) => i !== body.index) }
+        if (body.action === 'remove') c.payload = { ...c.payload, items: c.payload.items.filter((_, i) => i !== body.index) }
         else { c.status = body.action === 'dismiss' ? 'dismissed' : 'done'; c.result = body.action }
+        return { ok: true, card: c }
+      }
+      m = /^\/agent\/special\/muse\/cards\/([^/]+)\/summary-edit$/.exec(p)
+      if (m && method === 'POST') {
+        const c = byId(m[1]), body = await readBody()
+        seen.decide.push({ id: m[1], action: 'edit', ...body })
+        c.payload = { ...c.payload, items: c.payload.items.map((x, i) => (i === body.index ? body.text : x)) }
         return { ok: true, card: c }
       }
       m = /^\/agent\/special\/muse\/messages\/([^/]+)\/feedback$/.exec(p)
@@ -159,11 +165,11 @@ async function main() {
     await sRow(0).locator('input').fill('晚上十一点以后别提工作')
     await sRow(0).locator('input').press('Enter')
     await win.waitForFunction(() => !document.querySelector('[data-muse-card="summary"] input'), null, { timeout: 5000 }).catch(() => {})
-    r.check('R6a 改一条发 index + text', last().action === 'edit' && last().index === 0 && last().text === '晚上十一点以后别提工作', JSON.stringify(last()))
+    r.check('R6a 改一条发 index + text', last().action === 'edit' && last().index === 0 && last().expected === '晚上十点以后别提工作' && last().text === '晚上十一点以后别提工作', JSON.stringify(last()))
     await win.waitForFunction(() => /十一点/.test(document.querySelector('[data-muse-card="summary"]')?.textContent || ''), null, { timeout: 5000 }).catch(() => {})
     await sRow(1).locator('button').nth(1).click()
     await win.waitForFunction(() => document.querySelectorAll('[data-muse-card="summary"] .t2-musecard-row').length === 2, null, { timeout: 5000 }).catch(() => {})
-    r.check('R6b 删一条发 index;卡还在', last().action === 'remove' && last().index === 1 && await sRow(0).count() === 1, JSON.stringify(last()))
+    r.check('R6b 删一条发 index;卡还在', last().action === 'remove' && last().index === 1 && last().expected === '日报只要三条' && await sRow(0).count() === 1, JSON.stringify(last()))
     await win.locator(`${inCard('summary')} > .t2-taskcard-actions button.primary`).click()
     await win.waitForSelector(inCard('feature'), { timeout: 5000 }).catch(() => {})
     r.check('R6c 「都对」收起', last().action === 'ok', JSON.stringify(last()))

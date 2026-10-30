@@ -16,6 +16,7 @@ import { postMuseDm } from './museDm.js';
 import type { MuseCardInfo, MuseCardKind } from '../contracts/clientTypes.js';
 import { loadSpecialAgentsConfig, updateMuseConfig, type MuseConfig } from './specialAgentsConfig.js';
 import { patchMuseOnboarding } from './museState.js';
+import { normalizeMemoryFact } from './memoryRepository.js';
 import { AUTO_READ_CATEGORIES, NEEDS_USER, inboxCategory, unclaimedAttachment, type InboxCategory } from './inboxCategory.js';
 
 export type { MuseCardInfo, MuseCardKind };
@@ -78,7 +79,7 @@ export async function postMuseCard(
     `INSERT INTO muse_cards (id, user_id, kind, target_key, payload, status, created_at) VALUES (?, ?, ?, ?, ?, 'pending', ?)`,
     [id, userId, card.kind, card.key ?? null, JSON.stringify(card.payload), Date.now()],
   );
-  const dm = await postMuseDm(userId, `${card.text.trim()}\n\n${fence(id)}`, 'proactive:card', { uncapped: card.uncapped });
+  const dm = await postMuseDm(userId, `${card.text.trim()}\n\n${fence(id)}`, card.uncapped ? 'proactive:notice' : 'proactive:card');
   if (dm.ok) return { ok: true, id };
   await query(`DELETE FROM muse_cards WHERE id = ?`, [id]).catch(() => {});
   return { ok: false, error: dm.error };
@@ -186,7 +187,13 @@ export function pickMuseSettings(cur: MuseConfig, wanted: Record<string, unknown
 export const INTRO_WHEN = ['anytime', 'daytime', 'open'] as const;
 export const INTRO_PACE = ['as-needed', 'daily', 'free'] as const;
 export const INTRO_FOCUS = ['schedule', 'study', 'projects', 'inbox'] as const;
-async function applyIntro(userId: string, a: { when?: string; pace?: string; focus?: string[] }): Promise<void> {
+type IntroAnswers = { when?: string; pace?: string; focus?: string[] };
+/** 答案只认选项里有的值:这张卡对远端放行,不能经它往 LOG 写任意文本。 */
+function introAnswers(a: IntroAnswers = {}): Required<IntroAnswers> {
+  const one = (list: readonly string[], v?: string): string => (v && list.includes(v) ? v : '');
+  return { when: one(INTRO_WHEN, a.when), pace: one(INTRO_PACE, a.pace), focus: (a.focus || []).filter((f) => (INTRO_FOCUS as readonly string[]).includes(f)) };
+}
+async function applyIntro(userId: string, a: Required<IntroAnswers>): Promise<void> {
   const patch: Partial<MuseConfig> = {};
   if (a.when === 'anytime') patch.activeHours = null;
   if (a.when === 'daytime') patch.activeHours = { start: 9, end: 21 };
@@ -195,18 +202,18 @@ async function applyIntro(userId: string, a: { when?: string; pace?: string; foc
   if (Object.keys(patch).length) updateMuseConfig(() => patch);
   if (a.when === 'open') await rememberForMuse(userId, 'Only reach out to the user while they have Forsion open.');
   if (a.pace === 'as-needed') await rememberForMuse(userId, 'The user wants you to speak up only when something matters.');
-  const focus = (a.focus || []).filter((f) => (INTRO_FOCUS as readonly string[]).includes(f));
-  if (focus.length) await rememberForMuse(userId, `The user most wants you to keep an eye on: ${focus.join(', ')}.`);
+  if (a.focus.length) await rememberForMuse(userId, `The user most wants you to keep an eye on: ${a.focus.join(', ')}.`);
 }
 
-/** 小结里的一条对应一条 Muse 记忆:改 / 删跟着动记忆。按内容找(卡发出时就是这句话写进去的);找不到就只改卡,改写的内容补记一条。 */
+/** 小结里的一条对应一条 Muse 记忆:改 / 删跟着动记忆。按归一后的内容找(写入时的去重也是这个口径,可能并进了写法不同的旧条目);
+ *  找不到就只改卡,改写的内容补记一条。写失败往外抛:卡不能显示改了、记忆却没动。 */
 async function editMuseMemory(userId: string, oldText: string, newText: string | null): Promise<void> {
   await runWithAgentSlug(MUSE_AGENT_SLUG, async () => {
     const m = deps().brain.memory;
-    const entry = (await m.getMemorySnapshot?.(userId))?.entries.find((e) => e.content.trim() === oldText.trim());
+    const entry = (await m.getMemorySnapshot?.(userId))?.entries.find((e) => normalizeMemoryFact(e.content) === normalizeMemoryFact(oldText));
     if (entry && m.mutateMemory) await m.mutateMemory(userId, newText ? { action: 'update', id: entry.id, fact: newText } : { action: 'forget', id: entry.id });
     else if (newText) await m.appendMemoryEntry(userId, newText, { dedup: true });
-  }).catch(() => { /* 记忆写失败不阻断卡片 */ });
+  });
 }
 
 const dismissedFact = (card: MuseCardInfo): string => {
@@ -259,10 +266,22 @@ async function settle(userId: string, id: string, status: 'done' | 'dismissed', 
   return !!rows?.length;
 }
 
+/** 先 CAS 收卡再做效果(并发时只有一边能生效);效果失败把卡放回待处理,用户能再点一次。 */
+async function settleThen(userId: string, id: string, status: 'done' | 'dismissed', result: string, effect: () => void | Promise<void>): Promise<boolean> {
+  if (!(await settle(userId, id, status, result))) return false;
+  try {
+    await effect();
+  } catch (e) {
+    await query(`UPDATE muse_cards SET status = 'pending', result = NULL, decided_at = NULL WHERE id = ? AND user_id = ?`, [id, userId]);
+    throw e;
+  }
+  return true;
+}
+
 /** 用户点卡。action 按 kind 白名单,认不得 → 400;效果在 CAS 成功之后才做(同一张卡点两次只生效一次)。 */
 export async function decideMuseCard(
   userId: string, id: string, action: string,
-  opts: { messageId?: string; answers?: { when?: string; pace?: string; focus?: string[] }; index?: number; text?: string } = {},
+  opts: { messageId?: string; answers?: IntroAnswers; index?: number; expected?: string; text?: string } = {},
 ): Promise<DecideResult> {
   const card = await getMuseCard(userId, id);
   if (!card) return { ok: false, status: 404, error: 'card_not_found', detail: 'card not found' };
@@ -285,9 +304,11 @@ export async function decideMuseCard(
     case 'inbox-ask': {
       const category = String(card.payload?.category || '');
       if (action !== 'yes' && action !== 'later' && action !== 'ignore') return bad;
-      if (!(await settle(userId, id, 'done', action))) return gone;
-      if (action === 'yes') updateMuseConfig((m) => ({ inboxAutoRead: [...m.inboxAutoRead, category] }));
-      if (action === 'ignore') updateMuseConfig((m) => ({ inboxIgnored: [...m.inboxIgnored, category] }));
+      const answered = await settleThen(userId, id, 'done', action, () => {
+        if (action === 'yes') updateMuseConfig((m) => ({ inboxAutoRead: [...m.inboxAutoRead, category] }));
+        if (action === 'ignore') updateMuseConfig((m) => ({ inboxIgnored: [...m.inboxIgnored, category] }));
+      });
+      if (!answered) return gone;
       await appendMuseFeedback(userId, `[feedback] inbox question about ${category} mail answered by user: ${action === 'yes' ? 'mark it as read from now on' : action === 'ignore' ? 'ignore this kind, neither remind nor mark' : 'not now'}`);
       break;
     }
@@ -317,11 +338,9 @@ export async function decideMuseCard(
     }
     case 'settings': {
       if (action === 'apply') {
-        // 再过一遍名单:payload 是这张卡发出时存的,配置可能已经变了,也别信它里面只有这几个键。
-        // 先写配置再收卡:写失败时卡还在、能再点;同一张卡被连点两下,第二下写的是同一份值
+        // 再过一遍名单:payload 是这张卡发出时存的,配置可能已经变了,也别信它里面只有这几个键
         const wanted = pickMuseSettings(loadSpecialAgentsConfig().muse, card.payload?.patch || {});
-        if (wanted.changes.length) updateMuseConfig(() => wanted.patch);
-        if (!(await settle(userId, id, 'done', 'applied'))) return gone;
+        if (!(await settleThen(userId, id, 'done', 'applied', () => { if (wanted.changes.length) updateMuseConfig(() => wanted.patch); }))) return gone;
         await appendMuseFeedback(userId, `[feedback] settings change applied by user: ${wanted.changes.map((c) => `${c.field} → ${JSON.stringify(c.to)}`).join(', ') || 'already in place'}`);
       } else if (action === 'dismiss') {
         if (!(await settle(userId, id, 'dismissed', 'dismissed'))) return gone;
@@ -331,9 +350,9 @@ export async function decideMuseCard(
     }
     case 'intro': {
       if (action !== 'answer' && action !== 'skip') return bad;
-      if (!(await settle(userId, id, 'done', action))) return gone;
-      if (action === 'answer') await applyIntro(userId, opts.answers || {});
-      await appendMuseFeedback(userId, action === 'answer' ? `[feedback] first-week questions answered: ${JSON.stringify(opts.answers || {}).slice(0, 200)}` : '[feedback] first-week questions skipped; use the defaults');
+      const answers = introAnswers(opts.answers);
+      if (!(await settleThen(userId, id, 'done', action, () => (action === 'answer' ? applyIntro(userId, answers) : undefined)))) return gone;
+      await appendMuseFeedback(userId, action === 'answer' ? `[feedback] first-week questions answered: ${JSON.stringify(answers)}` : '[feedback] first-week questions skipped; use the defaults');
       break;
     }
     case 'summary': {
@@ -347,9 +366,17 @@ export async function decideMuseCard(
       if ((action !== 'edit' && action !== 'remove') || !Number.isInteger(at) || at < 0 || at >= items.length) return bad;
       const text = action === 'edit' ? String(opts.text || '').replace(/\s+/g, ' ').trim().slice(0, 300) : '';
       if (action === 'edit' && !text) return bad;
-      await editMuseMemory(userId, items[at], text || null);
+      if (opts.expected !== items[at]) return gone; // 下标来自点的那一刻的卡面:别的设备改过了,按旧下标会改到另一条
       const next = action === 'edit' ? items.map((x, i) => (i === at ? text : x)) : items.filter((_, i) => i !== at);
-      await query(`UPDATE muse_cards SET payload = ? WHERE id = ? AND user_id = ?`, [JSON.stringify({ ...card.payload, items: next }), id, userId]);
+      const before = JSON.stringify(card.payload);
+      const moved = await query<any[]>(`UPDATE muse_cards SET payload = ? WHERE id = ? AND user_id = ? AND status = 'pending' AND payload = ? RETURNING id`, [JSON.stringify({ ...card.payload, items: next }), id, userId, before]);
+      if (!moved?.length) return gone;
+      try {
+        await editMuseMemory(userId, items[at], text || null);
+      } catch (e) {
+        await query(`UPDATE muse_cards SET payload = ? WHERE id = ? AND user_id = ?`, [before, id, userId]);
+        throw e;
+      }
       if (!next.length && !(await settle(userId, id, 'done', 'ok'))) return gone;
       await appendMuseFeedback(userId, `[feedback] user ${action === 'edit' ? 'corrected' : 'removed'} a line of your two-week summary: "${items[at].slice(0, 120)}"${text ? ` → "${text.slice(0, 120)}"` : ''}`);
       break;

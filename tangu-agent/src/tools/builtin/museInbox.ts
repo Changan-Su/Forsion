@@ -78,7 +78,7 @@ export const museInboxProvider: ToolProvider = {
           const cat = inboxCategory(r);
           if (!read) {
             if (r.read_by !== 'muse') { refused.push(`${r.id}: you did not mark this one`); continue; }
-            await query(`UPDATE inbox_messages SET read_at = NULL, read_by = NULL WHERE id = ? AND user_id = ?`, [r.id, ctx.userId]);
+            await query(`UPDATE inbox_messages SET read_at = NULL, read_by = NULL WHERE id = ? AND user_id = ? AND read_by = 'muse'`, [r.id, ctx.userId]); // 这期间用户可能已经自己读了
           } else if (NEEDS_USER.has(cat)) {
             refused.push(`${r.id}: ${cat} needs the user's own action; list it for them instead`);
             continue;

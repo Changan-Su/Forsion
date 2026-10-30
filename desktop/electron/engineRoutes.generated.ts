@@ -234,6 +234,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'GET', path: '/agent/special/muse/cards', access: 'allow', src: 'routes/special.ts', why: 'Muse cards waiting in the direct chat' },
   { method: 'GET', path: '/agent/special/muse/cards/:id', access: 'allow', src: 'routes/special.ts', why: 'one Muse card' },
   { method: 'POST', path: '/agent/special/muse/cards/:id/decide', access: 'allow', src: 'routes/special.ts', why: 'answer a Muse card (D1/D2); the action is a whitelisted enum and the engine applies the effect from its own row' },
+  { method: 'POST', path: '/agent/special/muse/cards/:id/summary-edit', access: 'deny-remote', src: 'routes/special.ts', why: 'rewrite a line of the two-week summary; writes free text into Muse memory' },
   { method: 'POST', path: '/agent/special/muse/feedback', access: 'deny-remote', src: 'routes/special.ts', why: 'appends to Muse LOG (memory write into an autonomous Agent)' },
   { method: 'GET', path: '/agent/special/muse/library', access: 'allow', src: 'routes/special.ts', why: 'Muse library' },
   { method: 'GET', path: '/agent/special/muse/library/file', access: 'allow', src: 'routes/special.ts', why: 'Muse library file (read-only, realpath-bounded to the Library)' },

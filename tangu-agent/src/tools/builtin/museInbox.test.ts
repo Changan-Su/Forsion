@@ -129,3 +129,16 @@ describe('按广播类型放行', () => {
     expect(await marked('s1', 'store', ['update'])).toBeNull();
   });
 });
+
+describe('撤回已读', () => {
+  it('只撤自己标的:UPDATE 本身带 read_by 条件,读完到写之间用户读了不会被改回未读', async () => {
+    seed('r1', { read_at: '2026-10-30 01:00:00', read_by: 'muse' });
+    const spy = vi.spyOn(h.db, 'prepare');
+    await mark.execute({ ids: ['r1'], read: false }, ctx);
+    const sql = spy.mock.calls.map((c) => String(c[0])).find((q) => /read_at = NULL/.test(q));
+    spy.mockRestore();
+    expect(sql).toMatch(/AND read_by = 'muse'/);
+    expect(row('r1').read_at).toBeNull();
+  });
+});
+

@@ -10,11 +10,11 @@ import { ArrowDown, CircleCheck, CircleX, Gift, Inbox, MessageCircle, Puzzle, Se
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useAttention } from '../../stores/attentionStore'
-import { claimOnEngine, decideMuseCard, getMuseCard, getMuseStatus, listMuseCards, museMessageFeedback } from '../../services/backendService'
+import { claimOnEngine, decideMuseCard, editMuseSummary, getMuseCard, getMuseStatus, listMuseCards, museMessageFeedback } from '../../services/backendService'
 import { currentClientId } from '../../services/agentRunService'
 import { useInbox } from '../../stores/inboxStore'
 import { setActiveSpace, useWorkspace } from '@lcl/engine'
-import { targetForSession } from '../../services/engine/targets'
+import { HOME_REF, sameRef, targetForSession } from '../../services/engine/targets'
 import type { MuseCardInfo, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { MarketPluginCards } from '../../components/MarketPluginCards'
 import { SETTINGS_TABS } from '../../components/settingsTarget'
@@ -124,14 +124,14 @@ export function useMusePendingCards(on: boolean, sessionId: string | null, sig: 
   return on ? items : NO_CARDS
 }
 
-function useDecide(sessionId: string | undefined): { busy: boolean; decide: (card: MuseCardInfo, action: string, extra?: Record<string, unknown>) => Promise<boolean> } {
+function useDecide(sessionId: string | undefined) {
   const { t } = useI18n()
   const [busy, setBusy] = useState(false)
-  const decide = async (card: MuseCardInfo, action: string, extra?: Record<string, unknown>): Promise<boolean> => {
+  const send = async (call: (target: ReturnType<typeof targetForSession>) => Promise<unknown>): Promise<boolean> => {
     if (!sessionId || busy) return false
     setBusy(true)
     try {
-      await decideMuseCard(targetForSession(sessionId), card.id, action, extra)
+      await call(targetForSession(sessionId))
       useDecided.getState().bump()
       return true
     } catch (e: any) {
@@ -140,7 +140,8 @@ function useDecide(sessionId: string | undefined): { busy: boolean; decide: (car
       return false
     } finally { setBusy(false) }
   }
-  return { busy, decide }
+  const decide = (card: MuseCardInfo, action: string, extra?: Record<string, unknown>): Promise<boolean> => send((target) => decideMuseCard(target, card.id, action, extra))
+  return { busy, decide, send }
 }
 
 const openSettingsTab = (tab: string): void => {
@@ -290,13 +291,16 @@ function IntroCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: string
 /** 第 14 天的小结:每条能改能删,记忆跟着动;「都对」收起。 */
 function SummaryCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: string }) {
   const { t } = useI18n()
-  const { busy, decide } = useDecide(sessionId)
+  const { busy, decide, send } = useDecide(sessionId)
   const items: string[] = card.payload.items || []
   const [editing, setEditing] = useState<{ index: number; text: string } | null>(null)
+  // 改写是往 Muse 记忆写用户的原话,引擎拒远端:手机上这张卡能删、能确认,改回电脑上改
+  const editable = !!sessionId && sameRef(targetForSession(sessionId).ref, HOME_REF)
   const save = async (): Promise<void> => {
     if (!editing) return
     const text = editing.text.trim()
-    if (!text || text === items[editing.index] || await decide(card, 'edit', { index: editing.index, text })) setEditing(null)
+    const { index } = editing
+    if (!text || text === items[index] || await send((target) => editMuseSummary(target, card.id, { index, expected: items[index], text }))) setEditing(null)
   }
   return (
     <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="summary">
@@ -311,8 +315,8 @@ function SummaryCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: stri
           <div className="t2-taskcard-actions">{editing?.index === index
             ? <button type="button" className="primary" disabled={busy} onClick={() => void save()}>{t('museCard.save')}</button>
             : <>
-                <button type="button" disabled={busy} onClick={() => setEditing({ index, text })}>{t('museCard.edit')}</button>
-                <button type="button" disabled={busy} onClick={() => void decide(card, 'remove', { index })}>{t('museCard.remove')}</button>
+                {editable && <button type="button" disabled={busy} onClick={() => setEditing({ index, text })}>{t('museCard.edit')}</button>}
+                <button type="button" disabled={busy} onClick={() => void decide(card, 'remove', { index, expected: text })}>{t('museCard.remove')}</button>
               </>}</div>
         </div>
       ))}

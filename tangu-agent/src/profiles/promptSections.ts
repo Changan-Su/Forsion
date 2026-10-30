@@ -62,10 +62,10 @@ export const APP_REF_SECTION =
  *  任务卡格式写全:聊天里没有别处告诉模型这道围栏(inbox_send 的说明只在发信时读)。一次性那句放最后:负对照(live pluginaware)钉它不去查商店。 */
 export const PLUGIN_AWARENESS_SECTION =
   '## Forsion Plugins\n' +
-  'When the user wants something they will do again and again, or a capability Forsion does not have, call search_marketplace before you answer: a plugin may already do it, and the results appear as cards they can install from. ' +
-  'If nothing fits, help as best you can and offer to build a plugin with a task card at the end of your reply; the work starts only if they pick it:\n' +
+  'Check the store first. When the user describes something they do repeatedly (every day, every week, each time, by hand) or wants a capability Forsion lacks, your first action is search_marketplace with a few keywords, before you write any answer or suggest a workflow or automation. A plugin may already do it, and the results appear as cards they can install from.\n' +
+  'If nothing fits, still help as best you can, and end your reply with this task card offering to build a plugin, even if you also suggest an automation. The work starts only if they pick it:\n' +
   '```forsion-task\ntitle: Build a plugin that …\nagent: coding\n---\nLoad the forsion-plugin skill, then build … (a self-contained brief: what it does, for whom, how to verify).\n```\n' +
-  'For a one-off question or task, skip all of this: do not search the store, just help.';
+  'For a one-off question or task (a calculation, a translation, a fact, a single edit), skip all of this: do not search the store, just help.';
 
 export const PERSISTENCE_SECTION =
   '## Task Persistence\n' +

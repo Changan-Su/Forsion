@@ -46,10 +46,13 @@ describe('一天上限', () => {
     seed(1, 25 * HOUR);
     expect((await postMuseDm('u', 'hi')).ok).toBe(true);
   });
-  it('uncapped 不占额度', async () => {
+  it('notice(第一次见面 / 设置卡)不受闸,也不占额度:答完三问选「每天一条」,第一条普通消息照发', async () => {
     h.muse.maxDmPerDay = 1;
     seed(1);
-    expect((await postMuseDm('u', 'card', 'proactive:card', { uncapped: true })).ok).toBe(true);
+    expect((await postMuseDm('u', 'card', 'proactive:notice')).ok).toBe(true);
+    h.db.exec('DELETE FROM chat_messages');
+    await postMuseDm('u', 'hello', 'proactive:notice');
+    expect((await postMuseDm('u', 'hi')).ok).toBe(true);
   });
   it('待办 / 审批自有配额,不受这道闸', async () => {
     h.muse.maxDmPerDay = 1;

@@ -329,7 +329,7 @@ export async function runMigration(): Promise<void> {
     ['chat_messages', 'display_files JSONB'],
     // 产出该消息的 agent slug(客户端据此还原头像/昵称;旧消息 NULL → 回退会话 agent)。
     ['chat_messages', 'agent_slug VARCHAR(64)'],
-    // 消息来源:NULL = 一轮对话里产出的;'proactive' / 'proactive:todo' / 'proactive:approval' / 'proactive:card' = Agent 在后台主动发来的(客户端头上标「主动发来」)。
+    // 消息来源:NULL = 一轮对话里产出的;'proactive' / 'proactive:todo' / 'proactive:approval' / 'proactive:card' / 'proactive:notice' = Agent 在后台主动发来的(客户端头上标「主动发来」)。
     ['chat_messages', 'origin VARCHAR(24)'],
     // 多通道:账号/绑定表补 channel 列(存量行默认 wechat;telegram/qq 复用同两张表)。
     ['tangu_wechat_accounts', `channel VARCHAR(16) NOT NULL DEFAULT 'wechat'`],
