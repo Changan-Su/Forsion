@@ -6,6 +6,7 @@
  * 模型原话进 report.md 供人读(「实际体验」只能靠这个感知,几何断言看不出来)。
  *
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
+ *   npm run live:harness -- --only titlemanual              # 用户手改过的标题 / 动过的图标 Historian 不再碰,清空标题交还(10-30):对照 3 轮 + 手动 4 轮(改 PATCH 会话标题、localHistorian 写标题 / 图标后跑)
  *   npm run live:harness -- --only titlelang                # 标题 / 摘要跟随对话本身的语言(10-20):3 条英文 + 1 条中文;英文的每一版标题和摘要只许拉丁字母,detail 里报引擎语言核对改写了几次(改 localHistorian 起标题 / 摘要、core/scriptCheck.ts 后跑)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
@@ -259,6 +260,7 @@ KEYS.push('forkcache');
 KEYS.push('appref');
 KEYS.push('imageedit');
 KEYS.push('titlelang');
+KEYS.push('titlemanual');
 KEYS.push('windowscmd');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
@@ -285,6 +287,7 @@ OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('imgtools'); // --only imgtools:历史里带图 → 改图 / 生图在 run 起点就在工具面里,不靠中途 load_tools(三个短 run)
 OPT_IN.add('imageedit'); // --only imageedit:edit_image 跨轮取图 + 改自己的产出(三个 run,同一会话;假生图后端)
+OPT_IN.add('titlemanual'); // --only titlemanual:两个会话 7 个 run,改手动标题 / 图标标记后跑
 OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英文对话被起成中文标题);4 个会话 5 个 run,改起标题 / 摘要的提示词、transcript、scriptCheck 后跑
 OPT_IN.add('windowscmd'); // Windows Issue #77: exact cmd reads and rejected negative controls through real model/tool/SSE.
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
@@ -4606,6 +4609,78 @@ Then reply with only the command output.`,
       details.push(`${mode}: ${pass ? 'PASS' : 'FAIL'} icon=${emoji || '(none)'} activity=${activity?.map((r) => r.action).join('/') || '(none)'}`);
     }
     return { ok, detail: details.join('; ') };
+  });
+
+  await scenario('titlemanual', 'title 用户手改过的标题 / 动过的图标 Historian 不再碰', async () => {
+    // 10-30:到点轮 Historian 把用户亲手起的标题盖掉,用户清空的图标下一轮又被填上。话题一路换,标题本该跟着变:
+    //   对照:只有前端那条占位 PATCH → 后面几轮标题照样被改、图标照样填;
+    //   手动:第 1 轮后亲手改名 + 清空图标 → 之后两轮标题 / 图标都不动,判官照常跑(有新记录),run 起点也不再发 session_title;
+    //   交还:同一个会话亲手把标题清空 → 下一轮 Historian 重新起名,图标仍不填(清标题不解图标)。
+    // 手动标题故意和对话毫不相干:首帧提示词让模型「标题合适就原样保留」,起得像样的话没修也可能是绿的。
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent', autoEmoji: true } }) });
+    const MANUAL = 'ZQX-7741 档案';
+    const TOPICS = [
+      '请用约 200 字解释 SQLite 的 WAL 模式如何工作和适用场景,不需要调用工具。',
+      '换个完全不同的话题:请用约 200 字讲讲 Rust 的所有权和借用规则,不需要调用工具。',
+      '再换个话题:请用约 200 字讲讲 TCP 为什么要三次握手而不是两次,不需要调用工具。',
+      '最后换个话题:请用约 200 字讲讲手冲咖啡的水温和研磨度怎么配合,不需要调用工具。',
+    ];
+    const PLACEHOLDER = TOPICS[0].slice(0, 30).trim();
+    const actOf = async (sid) => { const a = await api(`/agent/special/historian/activity?sessionId=${encodeURIComponent(sid)}&limit=100`); return { rows: a.activity || [], running: !!a.running }; };
+    const count = (rows, action) => rows.filter((r) => r.action === action).length;
+    const detail = (sid) => api(`/agent/sessions/${sid}/detail`).then((r) => r.session);
+    const patch = (sid, body) => api(`/agent/sessions/${sid}`, { method: 'PATCH', body: JSON.stringify(body) });
+    const mk = async () => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'New Chat', model_id: MODEL, agent_config: AGENT_CONFIG }) })).session.id;
+    const outs = [];
+    let tokens = 0;
+    // 一轮:跑完等 done 判官写下新记录、不在跑了(标题是 run 起点那一路写的,早落了)
+    const turn = async (sid, text) => {
+      const judged0 = (await actOf(sid)).rows.filter((r) => r.action !== 'title_updated').length;
+      const ev = await run(sid, text, 180_000);
+      tokens += tokensOf(ev) || 0;
+      outs.push(`${text}\n→ ${ev.content.slice(0, 200)}`);
+      if (ev.error) throw new Error(ev.error);
+      const judged = await until(async () => { const a = await actOf(sid); return a.rows.filter((r) => r.action !== 'title_updated').length > judged0 && !a.running; }, 90_000, 2000);
+      return { ev, judged: !!judged };
+    };
+
+    const ctrl = await mk();
+    await patch(ctrl, { title: PLACEHOLDER, title_source: 'auto' }); // 前端发出第一句后写的占位标题
+    await turn(ctrl, TOPICS[0]);
+    const c1 = await detail(ctrl);
+    await turn(ctrl, TOPICS[1]);
+    await turn(ctrl, TOPICS[2]);
+    const c3 = await detail(ctrl);
+    const ctrlRows = (await actOf(ctrl)).rows;
+    const ctrlOk = c1.title !== PLACEHOLDER && c3.title !== c1.title && !!c3.emoji && count(ctrlRows, 'title_updated') >= 2;
+
+    const man = await mk();
+    await turn(man, TOPICS[0]);
+    const m0 = await detail(man); // 先让 Historian 起好标题和图标,用户再动手
+    await patch(man, { title: MANUAL, title_source: 'user' });
+    await patch(man, { emoji: null });
+    const base = (await actOf(man)).rows;
+    const t2 = await turn(man, TOPICS[1]);
+    const t3 = await turn(man, TOPICS[2]);
+    const m3 = await detail(man);
+    const rows3 = (await actOf(man)).rows;
+    const titlesAdded = count(rows3, 'title_updated') - count(base, 'title_updated');
+    const iconsAdded = count(rows3, 'icon_updated') - count(base, 'icon_updated');
+    const manOk = !!m0.emoji && m3.title === MANUAL && !m3.emoji && titlesAdded === 0 && iconsAdded === 0 && t2.judged && t3.judged && !t2.ev.sessionTitle && !t3.ev.sessionTitle;
+
+    await patch(man, { title: '', title_source: 'user' });
+    await turn(man, TOPICS[3]);
+    const m4 = await detail(man);
+    const backAdded = count((await actOf(man)).rows, 'title_updated') - count(rows3, 'title_updated');
+    const backOk = !!m4.title && m4.title !== MANUAL && backAdded >= 1 && !m4.emoji;
+
+    return {
+      ok: ctrlOk && manOk && backOk,
+      detail: `对照 ${ctrlOk ? '过' : '红'}:「${PLACEHOLDER.slice(0, 12)}…」→「${c1.title}」→「${c3.title}」,改了 ${count(ctrlRows, 'title_updated')} 次,图标 ${c3.emoji || '无'};` +
+        `手动 ${manOk ? '过' : '红'}:Historian 先起「${m0.title}」${m0.emoji || ''},手改后两轮标题「${m3.title}」图标「${m3.emoji || ''}」,新增改名 ${titlesAdded} / 图标 ${iconsAdded},判官 ${[t2, t3].map((t) => (t.judged ? '跑了' : '没跑')).join('/')},首帧事件 ${[t2, t3].filter((t) => t.ev.sessionTitle).length} 次;` +
+        `交还 ${backOk ? '过' : '红'}:清空后「${m4.title}」图标「${m4.emoji || ''}」`,
+      output: outs.join('\n\n'), tokens,
+    };
   });
 
   const sessB = `live-b-${Date.now()}`;

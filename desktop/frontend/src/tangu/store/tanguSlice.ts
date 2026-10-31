@@ -950,7 +950,8 @@ export interface TanguState {
   addLocalWorkspace(): Promise<void>
   /** 从 Git 克隆:弹克隆对话框,克隆成功后把那个文件夹加成项目(同 addLocalWorkspace 的落点)。 */
   cloneGitProject(): Promise<void>
-  renameSession(id: string, title: string): Promise<void>
+  /** 缺省是用户亲手改名(Historian 此后不再动,清空 = 交还);auto = 发出第一句后的占位标题,不算手动。 */
+  renameSession(id: string, title: string, auto?: boolean): Promise<void>
   setSessionEmoji(id: string, emoji: string | null): Promise<boolean>
   archiveSession(id: string, archived: boolean): Promise<void>
   deleteSession(id: string): Promise<void>
@@ -2449,12 +2450,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
   },
 
-  renameSession: async (id, title) => {
+  renameSession: async (id, title, auto) => {
+    const cur = [...get().sessions, ...get().archivedSessions].find((x) => x.id === id)
+    if (cur && (cur.title || '') === title) return // 改名框没改字就失焦:不算改名,不然只是点开看看就把标题锁住了
     set((s) => ({
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, title } : x)),
       archivedSessions: s.archivedSessions.map((x) => (x.id === id ? { ...x, title } : x)),
     }))
-    try { await api.updateSession(targetForSession(id), id, { title }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
+    try { await api.updateSession(targetForSession(id), id, { title, title_source: auto ? 'auto' : 'user' }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
   },
 
   setSessionEmoji: async (id, value) => {
@@ -2932,7 +2935,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       get().subscribeRun(sessionId, r.runId, r.assistantMessageId)
       set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ctx: s.usageBySession[sessionId]?.ctx || 0, base: s.usageBySession[sessionId]?.base || 0, live: 0 } } }))
       const sess = get().sessions.find((s) => s.id === sessionId)
-      if (sess && (!sess.title || sess.title === 'New Chat') && !sess.agent_config?.soloAgentSlug) void get().renameSession(sessionId, text.slice(0, 30)) // 私聊没起过题时显示 Agent 名(soloSessionTitle)
+      if (sess && (!sess.title || sess.title === 'New Chat') && !sess.agent_config?.soloAgentSlug) void get().renameSession(sessionId, text.slice(0, 30), true) // 私聊没起过题时显示 Agent 名(soloSessionTitle)
       return true
     } catch (e: any) {
       if (fromQueue || !holdFailed) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }

@@ -211,7 +211,7 @@ export const updateSession = (
   t: EngineTarget,
   id: string,
   patch: {
-    title?: string; archived?: boolean; model_id?: string; emoji?: string | null
+    title?: string; title_source?: 'user' | 'auto'; archived?: boolean; model_id?: string; emoji?: string | null
     project_path?: string | null; project_name?: string | null; projectless?: boolean
   },
 ) =>
