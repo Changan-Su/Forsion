@@ -90,9 +90,9 @@ node main.mjs logout /absolute/path/my-unit/unit.json
 
 Credentials, the relay pairing and sync state live in `data/cloud/` with mode 0600 and without encryption, since a headless device has no keychain. Only the owner can operate them, through the local control channel; neither the Web UI nor the local engine can read them. A file that cannot be read counts as unknown: it stays as it is, writes are refused, and the owner repairs or removes it.
 
-**笔记同步**：Unit 只有一个智库，所以它只能是一个账号的云镜像。第一个登录的账号绑定它，前提是智库为空（隐藏文件不算），或者 `unit.json` 里设了 `"cloud": { "syncVault": true }`。已有笔记不会被悄悄上传。没绑定时同步落在 `data/cloud` 里的私有镜像，网页和引擎看不到；之后登录的其他账号也一样，一个账号的笔记不会进另一个账号的云端。解绑要先停 Unit，再删 `data/cloud/vault-account.json`。
+**笔记同步**：Unit 只有一个智库，所以它只能是一个账号的云镜像。第一个登录的账号绑定它，前提是智库为空（隐藏文件也算内容，只有 `.DS_Store` 不算），或者 `unit.json` 里设了 `"cloud": { "syncVault": true }`。已有笔记不会被悄悄上传。没绑定时同步落在 `data/cloud` 里的私有镜像，网页和引擎看不到；之后登录的其他账号也一样，一个账号的笔记不会进另一个账号的云端。解绑要先停 Unit，再删 `data/cloud/vault-account.json`。
 
-**Note sync**: a Unit has one vault, so it can mirror exactly one account. The first account to sign in binds it, provided the vault is empty (hidden files aside) or `unit.json` sets `"cloud": { "syncVault": true }`. Existing notes are never uploaded silently. Without a binding, sync goes to a private mirror under `data/cloud`, which the Web UI and the engine do not see; the same applies to any later account, so one account's notes never reach another's cloud. To unbind, stop the Unit and delete `data/cloud/vault-account.json`.
+**Note sync**: a Unit has one vault, so it can mirror exactly one account. The first account to sign in binds it, provided the vault is empty (hidden files count as content, only `.DS_Store` does not) or `unit.json` sets `"cloud": { "syncVault": true }`. Existing notes are never uploaded silently. Without a binding, sync goes to a private mirror under `data/cloud`, which the Web UI and the engine do not see; the same applies to any later account, so one account's notes never reach another's cloud. To unbind, stop the Unit and delete `data/cloud/vault-account.json`.
 
 **设备中转**：登录后默认打开，`"cloud": { "relay": false }` 关闭。中转来的请求算另一台设备，不算工作区主人：引擎只放基础档并盖远端标记，不可逆删除只许本机。进程恢复（SIGCONT，或定时器迟到）和网络地址变化时立刻重连并重启同步，不等 45 秒看门狗。目前经中转能用 `/unit`、`/vault`、`/engine` 这些接口；经中转打开 Unit 自己的网页还不支持。
 
