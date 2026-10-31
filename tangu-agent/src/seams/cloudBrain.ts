@@ -451,6 +451,9 @@ export interface GitHostingBrain {
   info(opts?: { signal?: AbortSignal }): Promise<GitHostingInfo>;
   /** 给当前用户发一枚这台设备专用的访问令牌(password)。同一个设备名再要一次,旧的那枚作废;服务端对同一用户限次。 */
   credential(device: string, opts?: { signal?: AbortSignal }): Promise<{ webUrl: string; username: string; password: string }>;
+  /** 当前用户所在、开了 Forsion Git 的商业版组织(`/api/org/me` + `/api/git/orgs/:id`):gitName = 站上的组织名,name = 组织显示名。
+   *  云端没有商业版 / 没开 Forsion Git → [];连不上 / 5xx → 抛 GitHostingError(调用方当作读不到,不是「没有」)。 */
+  orgs?(opts?: { signal?: AbortSignal }): Promise<Array<{ gitName: string; name: string }>>;
 }
 
 // ── 绑定的 GitHub 账号(对端 server microserver/github 的 /api/github/{status,credential};绑定 / 解绑只在账户中心做)──

@@ -13,7 +13,7 @@ import { ArrowDownToLine, Check, ExternalLink, GitBranch, GitCommitHorizontal, L
 import type { GitRemoteInfo, GitSummary, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { registerMessages, useI18n } from '../../i18n'
 import { UI_MODE } from '@lcl/engine'
-import { generateGitCommitMessage, getGitHosting, getProjectContext, gitCommitProject, gitPendingProject, gitPullProject, gitPushProject } from '../../services/backendService'
+import { generateGitCommitMessage, getGitHosting, getGitReviews, getProjectContext, gitCommitProject, gitPendingProject, gitPullProject, gitPushProject, type GitReviews } from '../../services/backendService'
 import { homeTarget, refForSession } from '../../services/engine/targets'
 import { showDetails } from '../../stores/detailsSubject'
 import { useApp } from '../../stores/appStore'
@@ -52,6 +52,10 @@ registerMessages({
   'gitCard.inSync': { zh: '已同步', en: 'Up to date' },
   'gitCard.inSyncHint': { zh: '和 {upstream} 一致，没有未提交的改动', en: 'Matches {upstream}, nothing uncommitted' },
   'gitCard.nowState': { zh: '现在：{state}', en: 'Now: {state}' },
+  'gitCard.reviews': { zh: '等你审的合并请求（{count}）', en: 'Merge requests awaiting your review ({count})' },
+  'gitCard.reviewsOne': { zh: '等你审的合并请求（{count}）', en: 'Merge request awaiting your review ({count})' },
+  'gitCard.reviewsMore': { zh: '还有 {count} 个，在 Forsion Git 查看', en: '{count} more on Forsion Git' },
+  'gitCard.reviewOpen': { zh: '在 Forsion Git 打开这个合并请求', en: 'Open this merge request on Forsion Git' },
   'gitCard.apv.commit': { zh: '提交到 {branch}', en: 'Commit to {branch}' },
   'gitCard.apv.push': { zh: '推送到 {site}', en: 'Push to {site}' },
   'gitCard.apv.pull': { zh: '从 {upstream} 拉取', en: 'Pull from {upstream}' },
@@ -71,6 +75,7 @@ export function gitStatusSuperseded(run: ToolEvent[], all: ToolEvent[] | undefin
 }
 
 const FILES_SHOWN = 8
+const REVIEWS_SHOWN = 5
 /** 英文要分单复数的几句(中文同一句):count 为 1 时取 <key>One。 */
 const countKey = (key: string, count: unknown): string => (Number(count) === 1 ? `${key}One` : key)
 
@@ -93,9 +98,9 @@ function canReach(sessionId: string | null | undefined): boolean {
   return !!sessionId && UI_MODE !== 'mobile' && !window.tangu?.mobile && !window.tangu?.remoteCaller && refForSession(sessionId).kind !== 'unit'
 }
 
-interface Live { git: GitSummary | null; login: string | null | undefined; name: string }
+interface Live { git: GitSummary | null; login: string | null | undefined; name: string; reviews: GitReviews | null }
 
-/** 此刻的状况(项目上下文的 git 一段)+ 绑定的 GitHub 账号(只在有 GitHub 远端时多问一趟)。 */
+/** 此刻的状况(项目上下文的 git 一段)+ 绑定的 GitHub 账号(只在有 GitHub 远端时多问一趟)+ 等你审的合并请求(只在有 Forsion Git 远端时问)。 */
 function useLiveGit(sessionId: string | null | undefined, refreshKey: string) {
   const [live, setLive] = useState<Live | null>(null)
   const [tick, setTick] = useState(0)
@@ -107,9 +112,12 @@ function useLiveGit(sessionId: string | null | undefined, refreshKey: string) {
       const git = ctx?.git ?? null
       const name = ctx?.cwd ? ctx.cwd.split(/[\\/]/).filter(Boolean).pop() || '' : ''
       const needLogin = git?.remoteList?.some((r) => r.auth === 'github')
-      const hosting = needLogin ? await getGitHosting(homeTarget(), sessionId).catch(() => null) : null
+      const [hosting, reviews] = await Promise.all([
+        needLogin ? getGitHosting(homeTarget(), sessionId).catch(() => null) : null,
+        git?.remoteList?.some((r) => r.host === 'forsion') ? getGitReviews(homeTarget(), sessionId) : null,
+      ])
       const login = hosting?.github ? (hosting.github.linked ? hosting.github.login ?? undefined : null) : undefined
-      if (alive) setLive({ git, login, name })
+      if (alive) setLive({ git, login, name, reviews })
     }, () => { if (alive) setLive(null) })
     return () => { alive = false }
   }, [reach, sessionId, refreshKey, tick])
@@ -133,6 +141,28 @@ function RemoteRow({ r, login, tag }: { r: GitRemoteInfo; login: string | null |
       <strong>{r.path || r.url}</strong>
       <small>{`${siteName(r, t)} · ${remoteAuthText(r, login, t)}`}{tag && <span className="git-card-tag">{t('gitRemotes.pushHere')}</span>}</small>
     </div>
+  </div>
+}
+
+/** 链接只往这个项目的 Forsion Git 站上开:工具结果存在对话里,别的设备照着它画卡。site = 那个远端网页的 origin。 */
+export function onForsionSite(url: unknown, site: string | null): url is string {
+  if (!site || typeof url !== 'string') return false
+  try { const u = new URL(url); return u.protocol === 'https:' && u.origin === site } catch { return false }
+}
+const originOf = (web: unknown): string | null => { try { return typeof web === 'string' ? new URL(web).origin : null } catch { return null } }
+
+/** 状态卡的「等你审的合并请求」:Forsion Git 上的,不按项目筛(个人仓库加了协作者也算);点一条打开站上那个合并请求。没有就不画。 */
+function Reviews({ reviews, site, open }: { reviews: GitReviews | null | undefined; site: string | null; open: (url: string) => void }) {
+  const { t } = useI18n()
+  const items = (reviews?.items ?? []).filter((r) => onForsionSite(r.url, site))
+  if (!reviews || !items.length) return null
+  const more = onForsionSite(reviews.web, site) ? Math.max(0, reviews.total - Math.min(items.length, REVIEWS_SHOWN)) : 0
+  return <div className="git-card-reviews" data-git-card-reviews>
+    <div className="git-card-faint">{t(countKey('gitCard.reviews', reviews.total), { count: reviews.total })}</div>
+    <ul className="git-card-commits">
+      {items.slice(0, REVIEWS_SHOWN).map((r) => <li key={r.url}><button type="button" title={t('gitCard.reviewOpen')} onClick={() => open(r.url)}><span className="git-card-sha">{`${r.repo}#${r.number}`}</span>{r.title}</button></li>)}
+      {more > 0 && <li className="git-card-faint"><button type="button" onClick={() => open(reviews.web)}>{t('gitCard.reviewsMore', { count: more })}</button></li>}
+    </ul>
   </div>
 }
 
@@ -291,6 +321,7 @@ export function GitToolCard({ events, sessionId }: { events: ToolEvent[]; sessio
         {!writes.length && (shown?.repo ? <StateBlock git={shown} files /> : <p className="git-card-err">{errText(parseGitResult(events[events.length - 1])?.data.error, parseGitResult(events[events.length - 1])?.data.note || parseGitResult(events[events.length - 1])?.data.message)}</p>)}
         {!writes.length && git?.repo && (remote ? <RemoteRow r={remote} login={live?.login} tag={(git.remoteList?.length ?? 0) > 1} /> : !git.remoteList?.length && <div className="git-card-faint">{t('gitCard.noRemote')}</div>)}
         {!writes.length && (git?.remoteList?.length ?? 0) > 1 && <div className="git-card-faint">{t('gitCard.moreRemotes', { count: git!.remoteList!.length })}</div>}
+        {!writes.length && <Reviews reviews={live ? live.reviews : fromTool?.reviewRequests} site={originOf((git ?? { remoteList: fromTool?.remotes })?.remoteList?.find((r: { host?: string }) => r.host === 'forsion')?.web)} open={openPage} />}
         {actErr && <p className="git-card-err">{actErr}</p>}
         {form && canAct && sessionId ? <CommitForm sessionId={sessionId} onCancel={() => setForm(false)} onDone={() => { setForm(false); reload() }} /> : (reach || writes.length > 0) && <div className="git-card-acts">
           {canAct && !!total && <button type="button" className="btn sm primary" data-git-card-act="commit" onClick={() => setForm(true)}><GitCommitHorizontal size={13} />{t('projectProfile.git.commit')}</button>}

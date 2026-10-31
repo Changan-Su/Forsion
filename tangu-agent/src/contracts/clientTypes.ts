@@ -591,6 +591,8 @@ export interface GitRemoteInfo {
   /** 仓库网页。 */
   web: string | null
   auth: 'forsion' | 'github' | 'local'
+  /** Forsion Git 上商业版组织的仓库 → 组织显示名。 */
+  org?: string
 }
 export interface GitCommitInfo { sha: string; short: string; at: number; subject: string }
 

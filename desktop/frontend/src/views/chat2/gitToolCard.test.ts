@@ -2,10 +2,13 @@
  * Git 卡读工具结果的那一半(tangu-agent tools/builtin/git.ts 的结果形状)与工具行的说法:
  *   - 成功 = 整段 JSON;失败 = `Error: …` 一行 + 带机器码的 JSON(卡按 projectProfile.git.err.<code> 本地化);老格式的纯文字失败也认得出是失败
  *   - 工具行:提交那行带信息首行,不再是 `git_commit {"message":…}`
+ *   - 远端那行「用谁的账号」:Forsion Git 上组织的仓库写「<组织>组织」,个人仓库照旧写「你的 Forsion 账号」
  */
 import { describe, expect, it } from 'vitest'
-import { gitStatusSuperseded, parseGitResult, isGitTool } from './GitToolCard'
+import { gitStatusSuperseded, onForsionSite, parseGitResult, isGitTool } from './GitToolCard'
 import { describeTool } from '../../components/ToolGroup'
+import { remoteAuthText } from '../ProjectGitRemotes'
+import { translateFor } from '../../i18n'
 
 describe('Git 卡', () => {
   it('成功的结果是 JSON', () => {
@@ -28,6 +31,25 @@ describe('Git 卡', () => {
     expect(gitStatusSuperseded([all[0]], all)).toBe(true)
     expect(gitStatusSuperseded([all[0]], all.slice(0, 2))).toBe(false)
     expect(gitStatusSuperseded([all[2]], all)).toBe(false) // 结果卡照画
+  })
+
+  it('Forsion Git 上组织的仓库写组织,不写个人账号', () => {
+    const r = { name: 'origin', url: '', host: 'forsion' as const, hostname: 'git.forsion.test', path: 'xinghe/app', web: null, auth: 'forsion' as const }
+    const zh = (k: string, v?: Record<string, unknown>) => translateFor('zh', k, v)
+    const en = (k: string, v?: Record<string, unknown>) => translateFor('en', k, v)
+    expect(remoteAuthText({ ...r, org: '星河工作室' }, undefined, zh)).toBe('星河工作室组织')
+    expect(remoteAuthText({ ...r, org: 'Xinghe Studio' }, undefined, en)).toBe('Xinghe Studio organization')
+    expect(remoteAuthText(r, undefined, zh)).toBe('你的 Forsion 账号')
+  })
+
+  it('等你审的合并请求只往项目的 Forsion Git 站上开(存下的工具结果在别的设备上照着画)', () => {
+    const site = 'https://git.forsion.test'
+    expect(onForsionSite('https://git.forsion.test/xinghe/app/pulls/12', site)).toBe(true)
+    expect(onForsionSite('https://evil.example/phish', site)).toBe(false)
+    expect(onForsionSite('http://git.forsion.test/xinghe/app/pulls/12', site)).toBe(false)
+    expect(onForsionSite('https://git.forsion.test.evil.example/x', site)).toBe(false)
+    expect(onForsionSite('https://git.forsion.test/x', null)).toBe(false)
+    expect(onForsionSite(42, site)).toBe(false)
   })
 
   it('认得四个 git 工具,工具行带信息首行', () => {

@@ -15,6 +15,13 @@
  *   forsion_git_rate_limited 取凭据太频繁(429):这一次照没有凭据跑,git 自己认证失败时才报它;一段时间内不再向服务端要。
  *   forsion_git_unavailable  暂时取不到(够不着 / 5xx / Forsion 登录失效):同上。
  * 服务端说「这里不发凭据」(503)→ 不认领,照现状。
+ *
+ * 另外两样给 Git 卡 / git_status 看的(都不报错,读不到就不显示):
+ *   - orgs():当前用户所在、开了 Forsion Git 的商业版组织(站上组织名 → 显示名),远端路径第一段是其中之一 = 组织仓库。
+ *     缓存同站点信息;读不到 → 上一次读到的,从没读到过 → null(不知道,不是「没有」)。
+ *   - reviewRequests():Forsion Git 上等这个人审的合并请求(Gitea `/api/v1/repos/issues/search?type=pulls&review_requested=true`,
+ *     用上面同一枚推拉凭据,要 read:issue 权限;个人仓库加了协作者也算)。缓存一分钟;拿不到凭据 / 站上没账号 / 够不着 / 形状不对 → null
+ *     并退避一阵(期间也是 null,不拿旧单子充数:旧的里面可能已经合了 / 关了)。
  */
 import os from 'node:os';
 import { GitHostingError, type GitHostingBrain } from '../seams/cloudBrain.js';
@@ -26,9 +33,15 @@ const INFO_TTL_MS = 10 * 60_000;
 const INFO_RETRY_MS = 60_000;
 const UNAVAILABLE_BACKOFF_MS = 30_000;
 const RATE_LIMIT_BACKOFF_MS = 2 * 60_000;
+const REVIEWS_TTL_MS = 60_000;
+const REVIEWS_TIMEOUT_MS = 5_000;
+const REVIEWS_LISTED = 20;
 
 export interface ForsionGitHosting { /** 站点地址,没有尾斜杠。 */ webUrl: string; origin: string }
 export interface ForsionGitAccount extends ForsionGitHosting { username: string }
+export interface ForsionGitReview { repo: string; number: number; title: string; url: string }
+/** 等你审的合并请求:items 最多 REVIEWS_LISTED 条(站上默认按更新时间倒序),total = 站上一共几条,web = 站上的「待我审」列表。 */
+export interface ForsionGitReviews { items: ForsionGitReview[]; total: number; web: string }
 
 export interface ForsionGit {
   provider: GitCredentialProvider;
@@ -38,6 +51,10 @@ export interface ForsionGit {
   account(): Promise<ForsionGitAccount | null>;
   /** 手里那枚凭据对应的站上用户名(没取过 / 作废了 → null)。只读缓存,不去取。 */
   knownUsername(): string | null;
+  /** 站上组织名(小写)→ 商业版组织显示名;不知道 → null。 */
+  orgs(): Promise<Map<string, string> | null>;
+  /** 等这个人审的合并请求;拿不到 → null(不显示,不是「一条都没有」)。 */
+  reviewRequests(): Promise<ForsionGitReviews | null>;
 }
 
 export interface ForsionGitOptions { device?: string; now?: () => number; infoTtlMs?: number; infoRetryMs?: number }
@@ -95,8 +112,73 @@ export function createForsionGit(brain: GitHostingBrain, opts: ForsionGitOptions
     }).finally(() => { flight = null; });
   };
 
+  // ── 商业版组织(同站点信息的缓存口径;读不到 ≠ 没有)──
+  let orgsKnown: { value: Map<string, string>; at: number } | null = null;
+  let orgsFailedAt = Number.NEGATIVE_INFINITY;
+  let orgsFlight: Promise<Map<string, string> | null> | null = null;
+  const orgs = async (): Promise<Map<string, string> | null> => {
+    if (!brain.orgs) return null;
+    if (orgsKnown && now() - orgsKnown.at < infoTtlMs) return orgsKnown.value;
+    if (now() - orgsFailedAt < infoRetryMs) return orgsKnown?.value ?? null;
+    const pending = orgsFlight ??= brain.orgs().then((list) => {
+      orgsKnown = { value: new Map(list.map((o) => [o.gitName.toLowerCase(), o.name])), at: now() };
+      return orgsKnown.value;
+    }, () => { orgsFailedAt = now(); return orgsKnown?.value ?? null; }).finally(() => { orgsFlight = null; });
+    return orgsKnown ? orgsKnown.value : pending;
+  };
+
+  // ── 等你审的合并请求 ──
+  let reviews: { value: ForsionGitReviews | null; at: number } | null = null;
+  let reviewsBlockedUntil = Number.NEGATIVE_INFINITY;
+  let reviewsFlight: Promise<ForsionGitReviews | null> | null = null;
+  const readReviews = async (): Promise<ForsionGitReviews | null> => {
+    const site = await hosting();
+    if (!site) return null;
+    const ask = (c: GitCredential) => fetch(`${site.webUrl}/api/v1/repos/issues/search?type=pulls&review_requested=true&state=open&limit=${REVIEWS_LISTED}`, {
+      headers: { Accept: 'application/json', Authorization: `Basic ${Buffer.from(`${c.username}:${c.password}`).toString('base64')}` },
+      redirect: 'manual', signal: AbortSignal.timeout(REVIEWS_TIMEOUT_MS),
+    });
+    let c = await credential(site);
+    if (!c) return null;
+    let r = await ask(c);
+    if (r.status === 401) { // 这枚被别的进程用同一个设备名换掉了:作废后重取,只这一次
+      if (cached === c) cached = null;
+      c = await credential(site);
+      if (!c) return null;
+      r = await ask(c);
+    }
+    if (!r.ok) throw new Error(`Forsion Git answered ${r.status}`); // 403 多半是凭据没有 read:issue(老 server 发的):不为它换凭据,退避
+    const list: unknown = await r.json().catch(() => undefined);
+    if (!Array.isArray(list)) throw new Error('Forsion Git sent a malformed review list');
+    // 链接自己拼(只往站上开),不照搬响应里的地址
+    const items = list.flatMap((it): ForsionGitReview[] => {
+      const repo = typeof it?.repository?.full_name === 'string' ? it.repository.full_name : '';
+      const number = Number(it?.number);
+      if (!/^[^/\s]+\/[^/\s]+$/.test(repo) || !Number.isInteger(number) || number <= 0) return [];
+      return [{ repo, number, title: String(it?.title ?? '').slice(0, 200), url: `${site.webUrl}/${repo.split('/').map(encodeURIComponent).join('/')}/pulls/${number}` }];
+    });
+    const total = Number(r.headers.get('x-total-count'));
+    return { items, total: Number.isFinite(total) && total >= items.length ? total : items.length, web: `${site.webUrl}/pulls?type=review_requested&state=open` };
+  };
+  const reviewRequests = async (): Promise<ForsionGitReviews | null> => {
+    if (reviews && now() - reviews.at < REVIEWS_TTL_MS) return reviews.value;
+    if (now() < reviewsBlockedUntil) return null;
+    return reviewsFlight ??= readReviews().then((value) => {
+      if (value) reviews = { value, at: now() };
+      else { reviews = null; reviewsBlockedUntil = now() + infoTtlMs; } // 这里没有 Forsion Git / 不发凭据:过一阵再看
+      return value;
+    }, (e: unknown) => {
+      // 站上还没账号:取凭据那里不退避(用户去网页登录后推送要马上能用),这里自己退避,不让每张卡都去要一次凭据
+      reviews = null;
+      reviewsBlockedUntil = now() + (e instanceof GitCredentialError && e.code === 'forsion_git_needs_setup' ? infoTtlMs : UNAVAILABLE_BACKOFF_MS);
+      return null;
+    }).finally(() => { reviewsFlight = null; });
+  };
+
   return {
     hosting,
+    orgs,
+    reviewRequests,
     provider: {
       credentials: async (origin) => {
         const site = await hosting();

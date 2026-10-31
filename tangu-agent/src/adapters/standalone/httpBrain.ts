@@ -691,6 +691,28 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         if (typeof j?.username !== 'string' || !j.username || typeof j?.password !== 'string' || !j.password) throw new GitHostingError(502, 'BAD_RESPONSE');
         return { webUrl: String(j.webUrl || ''), username: j.username, password: j.password };
       },
+      // 商业版组织 ↔ Forsion Git 组织(对端 microserver/business 的 /api/org/me + microserver/git 的 /api/git/orgs/:id)。
+      // 404 = 旧云端没这个模块 / 不是成员,503 = 没开 Forsion Git:都当没有;别的失败抛,调用方留着上一次读到的
+      orgs: async (opts?: { signal?: AbortSignal }) => {
+        const signal = opts?.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(GIT_INFO_TIMEOUT_MS)]) : AbortSignal.timeout(GIT_INFO_TIMEOUT_MS);
+        const get = async (path: string): Promise<any> => {
+          const r = await fetch(`${base}${path}`, { headers: authHeaders(), signal }).catch(() => { throw new GitHostingError(0, 'NETWORK'); });
+          if (r.status === 404 || r.status === 503) return null;
+          if (!r.ok) throw new GitHostingError(r.status, '');
+          const j = await r.json().catch(() => undefined);
+          if (!j || typeof j !== 'object') throw new GitHostingError(502, 'BAD_RESPONSE'); // 半截 / 形状不对 = 读不到,不是「没有」
+          return j;
+        };
+        const me = await get('/api/org/me');
+        if (me && !Array.isArray(me.orgs)) throw new GitHostingError(502, 'BAD_RESPONSE');
+        const orgs: any[] = me ? me.orgs.filter((o: any) => typeof o?.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(o.id)) : [];
+        const linked = await Promise.all(orgs.map(async (o) => {
+          const g = await get(`/api/git/orgs/${o.id}`);
+          if (g && typeof g.linked !== 'boolean') throw new GitHostingError(502, 'BAD_RESPONSE');
+          return g?.linked === true && typeof g.name === 'string' && g.name ? { gitName: g.name, name: typeof o.name === 'string' && o.name ? o.name : g.name } : null;
+        }));
+        return linked.filter((x): x is { gitName: string; name: string } => !!x);
+      },
     },
     // ── 绑定的 GitHub 账号:绑没绑 + 推拉凭据(对端 server microserver/github/routes/user.ts)。超时与失败的口径同上。
     //    取凭据必须带 X-Forsion-Git-Credential 头:对端靠它把这个接口和下面那个通用出口(带不了自定义头)分开。──

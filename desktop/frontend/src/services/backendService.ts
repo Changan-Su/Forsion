@@ -1506,6 +1506,12 @@ export const getGitHosting = (t: EngineTarget, sessionId: string): Promise<GitHo
       github: r.github && typeof r.github.linked === 'boolean' ? { linked: r.github.linked, login: typeof r.github.login === 'string' ? r.github.login : undefined, remote: r.github.remote === true, name: typeof r.github.name === 'string' ? r.github.name : '' } : null,
       connect: r.connect === true,
     })).catch(() => null)
+/** Forsion Git 上等这个人审的合并请求(Git 卡的一行;引擎用 Forsion 发的推拉凭据去问站上)。读不到 / 老引擎没有这条 → null。 */
+export interface GitReviews { items: Array<{ repo: string; number: number; title: string; url: string }>; total: number; web: string }
+export const getGitReviews = (t: EngineTarget, sessionId: string): Promise<GitReviews | null> =>
+  request<{ reviews?: GitReviews | null }>(t, `/agent/project-context/git/reviews?sessionId=${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 8000 })
+    .then((r) => (r.reviews && Array.isArray(r.reviews.items) && typeof r.reviews.web === 'string' ? r.reviews : null))
+    .catch(() => null)
 /** 发布到 GitHub:Forsion 账号绑了 GitHub 时,在那个 GitHub 账号下建一个私有仓库,加成远端并推送当前分支。
  *  没有远端时它叫 origin;已经有了叫 github(不碰原来的)。target = 以后推送到这里(缺省 true);false = 只推这一次。
  *  err.code:invalid_repo_name / no_commits / github_not_linked / github_relink_required / github_repo_exists(同名的非私有仓库已在,没往里推)
