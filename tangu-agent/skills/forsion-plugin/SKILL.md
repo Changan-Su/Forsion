@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.88.0
+  version: 1.89.0
   author: Forsion
   category: Forsion
 ---
@@ -134,9 +134,14 @@ Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts
 - **生命周期**:关掉插件时宿主调 `deactivate()`(限时 5s)并撤掉它注册的工具 / 命令 / 路由(meta 留着,设置页照样列出);再打开会在**同一个模块对象**上再调一次 `activate(ctx)`。所以 activate 可能跑多次 —— 别依赖模块级「只做一次」的状态,activate 里起的定时器 / 子进程 / 监听(含 `process.once`)一律在 deactivate 里收掉。
 - **限时**:import + `activate` 合计限时 30s,超时按激活失败处理(设置页显示错因);超时的 `activate` / `deactivate` 宿主不会再等,但在它真正结束前**不会**再激活同一个插件(防止迟到的收尾清掉新实例),结束后自动补上。activate 里别等永远不回的连接 —— 连不上就先返回、后台重试。
 - **工具 provider id 用自己的命名空间**(`plugin:<你的 id>`):两个插件撞了同一个 id,后注册的覆盖前者。
+- **账号权益**:manifest `"requires": { "entitlement": "<name>" }`(2026-10-31 起;也可再写 `"plugins": [...]`,那是 Unit 的包依赖,同数组写法,桌面和手机不读,桌面前置继续写 `requiresPlugins`)。插件照常激活,自己画引导页:`const { granted } = await ctx.account?.entitlements?.() ?? { granted: null }`。`true` 有,`false` 服务端明确说没有,`null` 不知道(离线、没登录、老服务端),**`null` 别当成没有**。没声明 = `true`。真正的闸在服务端。商店标签写 `entitlement:<name>`,卡片上画成一枚标记,不挡安装。老 Unit 读到对象写法会报 `Invalid plugin dependencies`,`minAppVersion` 写到含这项的版本。
 - **前置插件**:manifest `"requiresPlugins": ["other-id", { "id": "x", "minVersion": "1.2.0" }]`。前置没装 / 版本低 / 关着 / 没在跑时本插件休眠(列出但不运行),前置就位后自动激活;互相依赖成环的永不激活。
 - **Putting a view on the Agent Desk**: inside a tool's `execute(args, ctx)`, `ctx.presentDesk?.({ views: [{ type: 'view', view: 'plugin:<plugin id>:<view id>' }], size: 'half' })` does what the model's `desk_present` does, but code guarantees it instead of the model remembering (computer-use presents its live view this way after the first successful action). Use optional chaining: TUI and cloud runs have no Desk. Present once per run, tracked by `ctx.runId` (fall back to `ctx.sessionId`). Leave out `name` and the host uses the view's registered title, which follows the interface language (the engine does not know it). After the user closes the Desk the host keeps it closed until their next message.
 - **IM 通道:`ctx.registerChannel(spec)`(2026-10-25 起;老宿主没有,先判 `if (!ctx.registerChannel)`)**。写一个通道驱动(传输层:`kind` / `start(onMessage)` / `stop` / `status` / `send`,可选 `sendMedia` / `setTyping`,外加设置页「连接」调的 `verify()`),宿主给它内置通道的整条管线:连接即新会话、审批、`/new` `/model` 等通道命令、收件箱转发、侧栏工作区(`~/Tangu/<kind>bot`)、`channel_send_image` / `channel_send_file`,以及「设置 → 通道」里的一张卡。`spec` 里写双语 `name` / `hint` 和 `fields`(凭据,键只能是 `appId` / `appSecret` / `botToken`,`secret: true` 的不回显,全部填齐才启动);驱动经 `ctx.sdk.channelSettings(kind)` 每次现读凭据。`kind`:小写字母开头、`[a-z0-9-]`、2–16 字符、不能与 `wechat` / `telegram` / `qq` 撞,非法或撞名 activate 抛错。`onMessage` 恒立即回 `''`,回复都经 `send` 推(可能晚到几分钟,别依赖「回复这一条」的时效窗口);`peerId` 由驱动编码、同一聊天恒定。停用插件 = 宿主完全停止该通道(挂起的审批按拒绝),绑定保留。只在本机引擎生效。实例:Forsion-Instrumentality-Project `forsion-plugin-wecom`(企业微信长连接;Node 自带 WebSocket 连不上企业微信网关,`ws` 用 esbuild 打进 dist)。
+- **一个账号多个联系人:`spec.multiPeer: true`(2026-10-31 起)**。每个 `peerId` 一条绑定 + 一个会话 + 一个工作目录(`<工作区>/peers/<哈希>`),互不相通;`peerId` ≤ 128 字符。连接后第一个 peer 接手连接时建的会话,之后各开各的;重复连接幂等,不断开已有 peer。**准入归驱动**:它交上来的 peer 都会开会话,跑在连接这个账号的用户身份下,不想放进来的别交上来。这些 peer 不是通道主人,所以只有 `/stop` 算命令(其余 `/x` 当普通消息),收件箱不转发,桌面也切换不了连接的会话。Agent 记忆是按 Agent 的,同一个 Agent 钉给多个 peer 时记忆是共用的。**老引擎会静默忽略这个键**,退回单联系人认领(别的 peer 全被拒),必须先判:`if (!ctx.channelCapabilities?.multiPeer) throw new Error('This engine is too old for this channel')`。引擎走 npm 热更新,别只看桌面版本。
+- **钉 Agent:入站带 `agentSlug`(2026-10-31 起)**。`onMessage({ accountId, peerId, text, agentSlug: 'xyra' })`:这个 peer 的会话用这个 Agent,优先于会话存值与通道默认;写法不合法的忽略。
+- **结构化审批卡:`driver.sendApproval(accountId, peerId, card, respond)`(2026-10-31 起,可选)**。有它就不发文字卡。`card = { approvalId, runId, toolName, arguments, preview, localOnly }`,`arguments` 是工具参数的 JSON 原串;怎么画、谁能批由驱动决定。`respond('approve' | 'reject')` 同步回布尔:`true` = 生效;`false` = 卡已结束,或此刻批不了(`sendApproval` 的结果还没回来 / `localOnly` / 这台电脑锁定了远程)。`reject` 除了卡已结束都能生效。回 `{ ok: false }` 或抛错 = 没送达,按拒绝兑现。同一 peer 一次一张,答完才出下一张;10 分钟从显示起算,超时按拒绝。文字消息不碰这张卡:「好」批不了,新消息也不作废它(新任务排在后面)。可选的 `driver.settleApproval(accountId, peerId, approvalId, outcome)`:交出去的卡结束时回调(`respond` 回 `true` 的那次除外),`outcome` 是 `approved` / `rejected`(别处答的)、`timeout`、`cancelled`(run 结束 / 被停 / 通道停止)、`undelivered`;有它时超时等提示由你写,没有就宿主发文字。询问(`ask_user`)仍是文字卡;run 的结束文本仍走 `driver.send`。
+- **界面半身替用户连接自己的通道:`ctx.tangu?.connectChannel?.(kind, fields)`(2026-10-31 起,只在桌面)**。存凭据 → `verify()` → 绑定,回 `{ ok: true, accountId, label, sessionId }` 或 `{ ok: false, error }`,不抛。只认本包捆绑的引擎插件注册的 `kind`,`fields` 只收 `spec.fields` 声明过的键,两条都由宿主判。
 - **只给官方插件的三样(2026-10-27 起;第三方插件写了也没用)**:`ctx.cloud`(以用户的 Forsion 账号请求云端,只放 `GET /api/market/mine` 与 `POST /api/market/mine/<id>/update[?dryRun=1]`)、工具的 `capabilities.approvalPreview(args) => string`(自己写审批卡文案)、以及进聊天(Chat 预设)会话的工具面。「官方」= 插件在 Forsion 签名的捆绑包里(包根 `SIGNATURE` 用引擎钉死的公钥验过,插件的 `tangu-plugin.json` 和入口都签在里面);其余插件拿到的 `ctx.cloud` 是 `undefined`、`approvalPreview` 被忽略(卡上照旧是参数原文)、工具进不了聊天会话。别为第三方插件设计依赖它们的功能。
 - 类型契约 `types/tangu-agent.d.ts` 是 apiVersion 1 的 API 拷贝,随模板分发;宿主升 apiVersion 时替换它并同步 manifest 的 `apiVersion`。
 
@@ -217,6 +222,8 @@ mod+J、布局记忆和移动端抽屉,自造的一样都没有,还和别的 Spa
 - 配方里写了 `layout.bottom` 就**默认展开**;用户收起后 mod+J 照配方开回来(关掉最后一个标签也一样)。
 - 底部横跨哪几列用 `layout.bottomSpan`:缺省 `right`(主区+右栏,左栏满高)/ `left`(左栏+主区,右栏满高)/ `full`(通栏)/ `main`(只在主区下方,左右栏都满高)。时间线要通栏就写 `full`;旧宿主忽略该字段、按缺省摆。
   改了 `layout` 要**抬 `version`**,否则用过这个 Space 的人永远停在旧布局。
+- **Ribbon 落点 `"ribbon": { "after": "<spaceId>" }`**(2026-10-31 起):图标第一次出现时排在那个 Space 后面;用户已经摆过的位置不动,那个 Space 不在就按缺省排到末尾。
+- **手机先落左栏 `"mobile": { "listFirst": true }`**(2026-10-31 起):左栏确实是「点一项进主区」的列表才写;缺省主区是第一层、左栏是抽屉。老宿主忽略这两个键。
 - **默认主页 `"mainPage": true`**(2026-10-18 起):写在 `layout.main` 的一条上(至多一条;写在别处或写两条,配方被拒)。
   进这个 Space —— 从别的 Space 切进来、冷启动、人已在里面再点一次它的图标 —— 前台先是这个视图,不是上次离开时的前台;
   别的标签照旧留着,只退到后台;主区里没有它就开一个。不写 = 缺省「还原上次离开时的样子」。通常和 `"pinned": true` 一起写:
