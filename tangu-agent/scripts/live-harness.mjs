@@ -321,6 +321,7 @@ OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsion
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
 OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
 KEYS.push('visualask', 'visualsdial', 'visualplan');
+OPT_IN.add('visualform'); KEYS.push('visualform'); // --only visualform:Luna 真机上的倒数日卡用 <form> 添加;产物 visualform.html 喂 desktop 的 LIVE_FORM_HTML=… npm run check:visualize 真点一次
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
 OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
 OPT_IN.add('dispatch');
@@ -2772,6 +2773,16 @@ try {
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
     const contract = /type=["']range["']/.test(html) && /forsion(?:IntelligentUi|Sketch)\b/.test(html) && html.includes('setState') && /<svg|<canvas/.test(html);
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};interactive/state=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // visualform(10-31):沙箱加 allow-forms 后,模型写的 <form> 该能用。这里只取真模型的成品 html;点没点得动在 check:visualize 里验。
+  await scenario('visualform', 'visualform 真模型 <form> 卡', async () => {
+    const ev = await run(`live-visualform-${Date.now()}`, '做个倒数日小组件：11 月 20 日交论文、12 月 26 日考试、2027 年 2 月 5 日回家过年。按日子近远排，还能自己加新的。用 HTML 卡画，新增那块用 <form>。', 240_000, {}, 'desktop/2.13.0');
+    const cards = ev.toolArgs.filter((c) => c.name === 'intelligent_ui_html' || c.name === 'sketch').map((c) => JSON.parse(c.arguments || '{}'));
+    const html = cards.map((c) => c.html || '').join('\n');
+    writeFileSync(join(OUT, 'visualform.html'), html);
+    const contract = /<form\b/i.test(html);
+    return { ok: !ev.error && ev.done && ev.toolResults.some((r) => !r.isError) && contract, detail: ev.error || `cards=${cards.length};form=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
 
   // visualask(10-09,对标 ChatGPT Intelligent UI「控件回头改答案」):卡里的按钮经 window.forsionSketch.ask(text) 把一句话当用户的

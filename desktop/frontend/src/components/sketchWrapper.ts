@@ -1,8 +1,11 @@
 /**
  * sketch 卡片的宿主包装文档 + 主题桥(单测钉住安全边界 —— sketchWrapper.test.ts)。
  * 隔离配方(2026-08-21 真 Chromium 实证,勿凭 spec 推理改动):
- * - iframe sandbox **仅 allow-scripts**:绝不加 allow-same-origin(加了=模型 HTML 跑进宿主
- *   origin,拿到 DOM/localStorage);不加 allow-forms/allow-popups/allow-top-navigation。
+ * - iframe sandbox **仅 allow-scripts + allow-forms**:绝不加 allow-same-origin(加了=模型 HTML 跑进宿主
+ *   origin,拿到 DOM/localStorage);不加 allow-popups/allow-top-navigation。
+ * - allow-forms(10-31 真 Chromium 实证)与内层 CSP 的 form-action 'none' **必须成对**:没有前者,浏览器在派发
+ *   submit 之前就拦下提交,卡里的 submit 监听、回车、requestSubmit() 全部静默无反应;没有后者,default-src 管不到
+ *   form-action,而桌面宿主 frame-src 放行本机端口,form.submit() 能把数据带出去。
  * - 裸 sandbox 挡不住网络:宿主 CSP 有 connect-src/img-src https:,srcdoc 继承之,卡内可以
  *   fetch 任意 https —— 必须注入内层 CSP default-src 'none' 才真断网,且 meta 须是 head 首元素。
  * - 刻意不给 'unsafe-eval':桌面宿主 CSP 有它而 web/mobile 没有,统一禁掉三端行为才一致。
@@ -21,10 +24,10 @@ import sketchRuntime from './sketchRuntime.js?raw'
 import sketchFigures from './sketchFigures.js?raw'
 import { serializeSketchState } from './sketchState'
 
-/** 内层 CSP:inline JS/CSS 可跑;无网络、无 eval、无外链资源;图片/媒体/字体仅 data:/blob:。 */
+/** 内层 CSP:inline JS/CSS 可跑;无网络、无 eval、无外链资源;图片/媒体/字体仅 data:/blob:;表单只在卡内派发 submit、发不出去。 */
 export const SKETCH_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:"
-export const SKETCH_SANDBOX = 'allow-scripts'
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; form-action 'none'"
+export const SKETCH_SANDBOX = 'allow-scripts allow-forms'
 export const SKETCH_MIN_H = 40
 export const SKETCH_MAX_H = 2400
 /** iframe 初始高度:内容高度上报前的占位(定值防 ChatView 贴底 ResizeObserver 抖滚动)。 */

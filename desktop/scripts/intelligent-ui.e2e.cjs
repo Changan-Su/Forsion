@@ -150,7 +150,7 @@ async function main() {
     await media.locator('.iui-image-toggle').first().click()
     check('image source is an ordinary attributed link', await media.getByRole('link', { name: 'github.com', exact: true }).first().getAttribute('href') === 'https://github.com/sachinchoolur/lightGallery')
     await reveal(win, media); await win.screenshot({ path: path.join(OUT, 'media-light.png') })
-    check('historical Sketch is still sandboxed', await win.locator('iframe.sketch-frame').getAttribute('sandbox') === 'allow-scripts')
+    check('historical Sketch is still sandboxed', await win.locator('iframe.sketch-frame').getAttribute('sandbox') === 'allow-scripts allow-forms')
     const sources = win.locator('[data-document-id="research"]')
     await reveal(win, sources); await win.screenshot({ path: path.join(OUT, 'research-light.png') })
     const brief = sources.locator('.iui-source summary > span').first()
