@@ -2884,6 +2884,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       void publish(runId, 'status', { phase: 'compaction_budget', iteration, beforeTokens, afterTokens, changed: afterTokens < beforeTokens });
       return changed;
     };
+    let modelFallbackNoted = false; // 服务端「停用模型已改用 X」的提示,一个 run 只记一次
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
       runStat.iteration = iteration + 1;
@@ -3042,6 +3043,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             },
             onToken: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
             onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
+            // 会话钉着的模型已被 admin 停用、服务端改用了别的:记进时间线(诊断导出可见),每个 run 只记一次。
+            onNotice: (n) => {
+              if (n.kind !== 'model_fallback' || modelFallbackNoted) return;
+              modelFallbackNoted = true;
+              console.warn(`[agent-core] run=${runId} 模型 ${n.from} 已停用,服务端改用 ${n.to}`);
+              void publish(runId, 'status', { phase: 'model_fallback', from: n.from, to: n.to, toName: n.toName });
+            },
             onToolCallDelta: (info) => {
               if (sampling.signal.aborted) return;
               emitted = turnStarted = true;

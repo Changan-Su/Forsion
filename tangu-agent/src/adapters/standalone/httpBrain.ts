@@ -321,6 +321,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
             // 不会红 —— 只是 historyReplay 写侧在整条托管链路上恒空,跨 run 思考延续性永远为零。
             // 老服务端不发这个字段(与「空组」同义):保持 undefined,绝不造一个空数组。
             if (Array.isArray(ev.outputItems) && ev.outputItems.length) result.outputItems = ev.outputItems;
+          } else if (ev.t === 'notice' && typeof ev.kind === 'string') {
+            opts.onNotice?.({ kind: ev.kind, from: ev.from, to: ev.to, toName: ev.toName });
           } else if (ev.t === 'error') {
             throw new LlmError(ev.status || 502, ev.message || 'brain stream error');
           }

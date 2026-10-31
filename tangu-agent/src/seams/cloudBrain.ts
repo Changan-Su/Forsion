@@ -92,6 +92,8 @@ export interface StreamOpts {
   }) => void;
   /** 响应头已到达(请求体上传完毕、上游/服务端已受理),早于首帧。agentLoop 据此拆分「上传」与「等首帧」两段耗时。 */
   onResponseStart?: () => void;
+  /** 托管面的提示帧(`t:'notice'`)。目前只有 model_fallback:请求的模型已被 admin 停用,服务端改用了 to(按 to 计费)。 */
+  onNotice?: (notice: { kind: string; from?: string; to?: string; toName?: string }) => void;
   signal?: AbortSignal;
   /** 模型 provider:anthropic/claude 时 server 侧走原生 /v1/messages;httpBrain 路径由 brain-api 自行解析,可省略。 */
   provider?: string;
