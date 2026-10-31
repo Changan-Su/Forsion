@@ -42,7 +42,7 @@ export function readMcpSettings(name?: string): string {
       ...(c?.timeoutMs ? { timeoutMs: c.timeoutMs } : {}),
       credentialKeys: { env: Object.keys(c?.env ?? {}), headers: Object.keys(c?.headers ?? {}) },
       toolCount: s?.toolCount ?? 0,
-      ...(s?.error ? { error: 'Connection failed. Open MCP settings for details.' } : {}),
+      ...(s?.status === 'needs-login' ? { note: 'The user must sign in to this server under Settings → MCP servers.' } : s?.error ? { error: 'Connection failed. Open MCP settings for details.' } : {}),
       ...(s?.origin ? { origin: s.origin } : {}),
     };
   });

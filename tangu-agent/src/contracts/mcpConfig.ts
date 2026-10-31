@@ -9,6 +9,8 @@ export interface McpConfigEntry {
   timeoutMs?: number;
   enabled?: boolean;
   cwd?: string;
+  /** 远端 server 要预注册 OAuth client 时写;其余靠动态登记,不用写。 */
+  oauth?: { clientId?: string; scopes?: string[] };
 }
 export type McpServerMap = Record<string, McpConfigEntry>;
 export class McpInputError extends Error {
@@ -17,7 +19,7 @@ export class McpInputError extends Error {
   }
 }
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-const FIELDS = new Set(['command', 'args', 'env', 'url', 'transport', 'type', 'headers', 'timeoutMs', 'enabled', 'cwd']);
+const FIELDS = new Set(['command', 'args', 'env', 'url', 'transport', 'type', 'headers', 'timeoutMs', 'enabled', 'cwd', 'oauth']);
 export const mcpNameKey = (name: string): string => name.replace(/[^a-zA-Z0-9_-]/g, '_');
 export const reservedMcpName = (name: string): boolean => `mcp__${mcpNameKey(name)}__`.toLowerCase().startsWith('mcp__dev_');
 export function validateMcpName(name: string): void {
@@ -41,6 +43,12 @@ export function validateMcpEntry(value: unknown, name: string): McpConfigEntry {
   if (Object.hasOwn(v, 'args') && (!Array.isArray(v.args) || [...v.args].some(a => typeof a !== 'string'))) throw new McpInputError('invalid', `${name}.args`);
   for (const k of ['env', 'headers']) if (Object.hasOwn(v, k) && (!object(v[k]) || Object.values(v[k] as object).some(x => typeof x !== 'string'))) throw new McpInputError('invalid', `${name}.${k}`);
   if (v.transport !== undefined && (!['stdio', 'http', 'sse'].includes(String(v.transport)) || (v.transport === 'stdio' ? !v.command : !v.url))) throw new McpInputError('invalid', `${name}.transport`);
+  if (Object.hasOwn(v, 'oauth')) {
+    const o = v.oauth;
+    if (!object(o) || Object.keys(o).some(k => k !== 'clientId' && k !== 'scopes') || v.command) throw new McpInputError('invalid', `${name}.oauth`);
+    if (Object.hasOwn(o, 'clientId') && (typeof o.clientId !== 'string' || !o.clientId.trim() || o.clientId.length > 512)) throw new McpInputError('invalid', `${name}.oauth.clientId`);
+    if (Object.hasOwn(o, 'scopes') && (!Array.isArray(o.scopes) || o.scopes.some(x => typeof x !== 'string' || !x.trim()))) throw new McpInputError('invalid', `${name}.oauth.scopes`);
+  }
   if (Object.hasOwn(v, 'enabled') && typeof v.enabled !== 'boolean') throw new McpInputError('invalid', `${name}.enabled`);
   if (Object.hasOwn(v, 'timeoutMs') && (typeof v.timeoutMs !== 'number' || !Number.isInteger(v.timeoutMs) || v.timeoutMs < 1 || v.timeoutMs > 2_147_483_647)) throw new McpInputError('invalid', `${name}.timeoutMs`);
   return v as McpConfigEntry;

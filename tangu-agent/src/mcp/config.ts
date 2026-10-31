@@ -27,6 +27,8 @@ export interface McpServerConfig {
   timeoutMs?: number;
   /** false=配置保留但不连接(导入的外来配置默认 false,用户显式启用)。缺省 true。 */
   enabled?: boolean;
+  /** 远端 server 要预注册 OAuth client 时写(oauth.ts);其余靠 DCR,不用写。 */
+  oauth?: { clientId?: string; scopes?: string[] };
   /** stdio 子进程的工作目录。只由插件自带的 server 设(= 插件目录,见 pluginServers.ts);mcp.json 里写了也照用。 */
   cwd?: string;
 }

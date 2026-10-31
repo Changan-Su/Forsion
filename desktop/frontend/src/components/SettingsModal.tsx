@@ -26,7 +26,7 @@ import { testConnection } from '../services/agentRunService'
 import { listClientSurfaces } from '../services/clientSurfaces'
 import {
   fetchProviderModels,
-  listModels, listTools, setModelContextWindow,
+  listModels, listTools, mcpLogin, mcpLogout, setModelContextWindow,
   testProviderConnection, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
   listPlugins, listAgents, type PluginInfo, type SyncStatusResult,
   getLocalWebSearch, type LocalWebSearchRedacted,
@@ -128,6 +128,17 @@ registerMessages({
   'settingsmodal.configRecovered': { zh: '上次的设置文件损坏，已恢复到 {time} 的版本', en: 'Your settings file was damaged. Restored the version from {time}.' },
   'settingsmodal.mcp.tokens': { zh: '每个请求约 {n} token', en: '~{n} tokens per request' },
   'settingsmodal.mcp.notConnected': { zh: '未连接', en: 'Not connected' },
+  'settingsmodal.mcp.needsLogin': { zh: '需要登录', en: 'Sign-in required' },
+  'settingsmodal.mcp.loggingIn': { zh: '登录中…', en: 'Signing in…' },
+  'settingsmodal.mcp.login': { zh: '登录', en: 'Sign in' },
+  'settingsmodal.mcp.loginHint': { zh: '在浏览器里登录这个服务，完成后自动连接', en: 'Sign in to this service in your browser. It connects when you finish.' },
+  'settingsmodal.mcp.loginOpened': { zh: '已在浏览器打开「{name}」的登录页，完成后会自动连接', en: 'Opened the sign-in page for "{name}" in your browser. It connects when you finish.' },
+  'settingsmodal.mcp.loginFailed': { zh: '登录没有开始：', en: 'Couldn’t start sign-in: ' },
+  'settingsmodal.mcp.logout': { zh: '断开', en: 'Sign out' },
+  'settingsmodal.mcp.logoutConfirm': { zh: '断开「{name}」？本机保存的登录会删掉，下次要重新登录。', en: 'Sign out of "{name}"? The sign-in saved on this computer will be removed.' },
+  'settingsmodal.mcp.loggedOut': { zh: '已断开「{name}」', en: 'Signed out of "{name}"' },
+  'settingsmodal.mcp.loggedIn': { zh: '已登录「{name}」，新工具从下一轮对话起可用', en: 'Signed in to "{name}". Its tools are available from your next message.' },
+  'settingsmodal.mcp.loginNotDone': { zh: '「{name}」没有登录成功：', en: 'Sign-in to "{name}" didn’t finish: ' },
   'settingsmodal.mcp.total': { zh: 'MCP 工具定义合计每个请求约 {n} token，占当前默认模型窗口的 {pct}%', en: 'MCP tool definitions take ~{n} tokens per request, {pct}% of the default model’s context window' },
   'settingsmodal.mcp.totalNoWindow': { zh: 'MCP 工具定义合计每个请求约 {n} token', en: 'MCP tool definitions take ~{n} tokens per request' },
   'settingsmodal.mcp.heavyNote': { zh: '不常用的可以关掉。按约 4 个字符 = 1 token 估算。', en: 'Turn off the ones you rarely use. Estimated at about 4 characters per token.' },
@@ -820,6 +831,8 @@ export const SettingsModal: React.FC<{
   const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
   const mcpStatusLabel = (st: McpStatusRow): string =>
     st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length })
+      : st.status === 'needs-login' ? t('settingsmodal.mcp.needsLogin')
+      : st.status === 'logging-in' ? t('settingsmodal.mcp.loggingIn')
       : st.status === 'error' ? t('settings.mcp.statusError')
         : st.status === 'disabled' ? t('settings.mcp.statusDisabled')
           : t('settingsmodal.mcp.notConnected')
@@ -848,6 +861,35 @@ export const SettingsModal: React.FC<{
   const refreshMcp = (): void => {
     void window.tangu?.readMcpConfig?.().then((c) => setMcpServers(c.mcpServers)).catch(() => setMcpServers({}))
     void listTools(homeTarget()).then((t) => setMcpStatus(t.mcp ?? [])).catch(() => setMcpStatus([]))
+  }
+
+  // 正在等浏览器那头的 server:状态轮询看到它连上 / 退回待登录时,把「已打开登录页」那句换成结果
+  // started:见过「登录中 / 连接中」之后的待登录才算失败(点之前发出的那次轮询可能还带着上一次的待登录)
+  const mcpLoginPending = useRef<{ name: string; started: boolean } | null>(null)
+  useEffect(() => {
+    const pending = mcpLoginPending.current
+    const st = pending ? mcpStatus?.find((s) => s.server === pending.name) : undefined
+    if (!pending || !st) return
+    if (st.status === 'logging-in' || st.status === 'connecting') { pending.started = true; return }
+    if (st.status !== 'connected' && !pending.started) return
+    mcpLoginPending.current = null
+    if (st.status === 'connected') setMcpMsg(t('settingsmodal.mcp.loggedIn', { name: pending.name }))
+    else if (st.error) setMcpMsg(`${t('settingsmodal.mcp.loginNotDone', { name: pending.name })}${st.error}`)
+  }, [mcpStatus]) // eslint-disable-line react-hooks/exhaustive-deps
+  const loginMcp = (name: string): void => {
+    void mcpLogin(homeTarget(), name).then(async (r) => {
+      mcpLoginPending.current = { name, started: false }
+      if (r.url) {
+        await window.tangu?.openExternal?.(r.url)
+        setMcpMsg(t('settingsmodal.mcp.loginOpened', { name }))
+      }
+      refreshMcp()
+    }).catch((e) => setMcpMsg(`${t('settingsmodal.mcp.loginFailed')}${e instanceof Error ? e.message : String(e)}`))
+  }
+  const logoutMcp = (name: string): void => {
+    if (!window.confirm(t('settingsmodal.mcp.logoutConfirm', { name }))) return
+    void mcpLogout(homeTarget(), name).then(() => { setMcpMsg(t('settingsmodal.mcp.loggedOut', { name })); refreshMcp() })
+      .catch((e) => setMcpMsg(`${t('settings.toast.saveFailed')}${e instanceof Error ? e.message : String(e)}`))
   }
 
   const writeMcp = async (next: Record<string, McpServerConfigEntry>, msg: string, base = mcpServers): Promise<boolean> => {
@@ -2574,6 +2616,16 @@ export const SettingsModal: React.FC<{
                                 </span>
                                 {sc.enabled !== false && mcpTokensLabel(st)}
                                 <span className="file-size" title={st?.error || undefined}>{stLabel}</span>
+                                {sc.enabled !== false && (st?.status === 'needs-login' || st?.status === 'logging-in') && (
+                                  <button className="btn ghost sm" title={t('settingsmodal.mcp.loginHint')} onClick={() => loginMcp(name)}>
+                                    <LogIn size={13} /> {t('settingsmodal.mcp.login')}
+                                  </button>
+                                )}
+                                {st?.signedIn && (
+                                  <button className="icon-btn" title={t('settingsmodal.mcp.logout')} onClick={() => logoutMcp(name)}>
+                                    <LogOut size={13} />
+                                  </button>
+                                )}
                                 <button
                                   className="icon-btn"
                                   title={sc.enabled === false ? t('settings.mcp.enable') : t('settings.mcp.disable')}
