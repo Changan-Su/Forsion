@@ -125,6 +125,9 @@
  *                                                           #   负对照:TANGU_OFFICE_KIT=/nonexistent npm run live:harness -- --only officedoc(引擎日志断言须红)
  *   npm run live:harness -- --only musesettings             # 私聊说一句改设置(10-30):出卡不写配置,点了才写,权限档不出卡
  *   npm run live:harness -- --only muserule                 # Muse 提规则卡(10-30):ask 档发卡不写规则,点「好」才建(改 Muse 的 manage_automation / 规则卡后跑)
+ *   npm run live:harness -- --only muselogdm                # 到期日程撞上 LOG 里的活(10-31):私聊存下的交代,第一个周期就得办。要新 home,和别的 Muse 场景分开跑(改周期提示词 / 日程文案后跑)
+ *   npm run live:harness -- --only muselogspace             # 同上,换成 Space 报错回写的 [feedback]
+ *   npm run live:harness -- --only muserulechat             # 私聊直说规则(10-31):Muse 当场建好,不经过周期(改 museChatSection / manage_automation 后跑)
  *   npm run live:harness -- --only musechat                 # 手聊 Muse(10-13):私聊里用平常话交代「以后别…」→ 须落进 Muse 自己的记忆 / 当天日志(下个周期是新会话,读不到这段对话);
  *                                                           #   再问它后台做了什么 → 记下它读没读自己的日志。改 museChatSection / 私聊绑定后跑;对照 = 没有聊天段的构建(--kind base)
  *   npm run live:harness -- --only computerhistory          # 电脑历史(09-27):播事件+state.json+桌面配置(第二道闸)→ 默认聊天问「我休息之前在做什么?」须调 read_computer_history 答中文档与 PR;
@@ -360,6 +363,8 @@ const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记�
 KEYS.push('marketplace', 'marketplacechat');
 OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
 OPT_IN.add('muserule'); KEYS.push('muserule'); // 一个 Muse 周期;只在动 Muse 的 manage_automation(规则卡)时才有信息量
+OPT_IN.add('muselogdm'); KEYS.push('muselogdm'); OPT_IN.add('muselogspace'); KEYS.push('muselogspace'); // 各一个 Muse 周期:第一个周期必撞每周装备巡检,看 LOG 里的活有没有被挤掉;动周期提示词 / 日程文案时跑
+OPT_IN.add('muserulechat'); KEYS.push('muserulechat'); // 一个私聊 run:直说规则当场建好,不经过周期
 OPT_IN.add('pluginaware'); KEYS.push('pluginaware'); // 四个 run + 假云端的商店;只在动 PLUGIN_AWARENESS_SECTION(解决需求时想到插件)时才有信息量
 KEYS.push('pluginext');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
@@ -5037,21 +5042,83 @@ Then reply with only the command output.`,
   //   C 往授权文件夹里的 STATUS.md 加一行 → ask 档排队审批 → 引擎把请求写进 Muse 私聊(origin=proactive:approval),不发审批信。
   // 判据全读引擎真状态(私聊消息的 origin、收件箱的信、GET /agent/sessions/attention),不看模型自述。单独跑:别的场景开过的 Muse 周期
   // 可能先用掉每小时 3 条的私聊额度。模型原话(周期回复 + 私聊里主动发的)进 output。
+  /** 用户在 Muse 私聊里说一句(真实用户的来路):走长期私聊会话 + 真 run,Muse 自己决定当场办还是存进 LOG 留给周期。 */
+  const askMuseInDm = async (text) => {
+    if (!(await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500))) throw new Error('30s 内没播种出 Muse');
+    const { session } = await api('/agent/solo/agent/muse/open', { method: 'POST', body: '{}' });
+    return run(session.id, text, 180_000);
+  };
+  const museRules = () => { try { return JSON.parse(readFileSync(join(home, 'agents', 'muse', 'triggers.json'), 'utf8')); } catch { return []; } };
   // muserule(10-30):ask 档的 Muse 收到「每次打开 X 就提醒」→ 只发规则卡,triggers.json 一条不多;用户点「好」规则才出现。
+  // 10-31 递话改走私聊:原来往 /muse/feedback 写「The user asked: …」,产品里没有这样的发送方([feedback] 只有回执和 Space 报错),
+  // 这样递第一个周期漏掉 7/20(含 ruleobserve),同一句话走私聊 0/14(汇总 harness-runs/2026-10-31/Muse周期漏请求-live汇总.md)。
   await scenario('muserule', `muserule Muse 提规则卡、点了才建(${MUSE_MODE})`, async () => {
-    const rules = () => { try { return JSON.parse(readFileSync(join(home, 'agents', 'muse', 'triggers.json'), 'utf8')); } catch { return []; } };
-    const before = rules().length;
-    await api('/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text: 'The user asked: every time I open Figma, remind me to stretch first. Set this up as an automation rule.' }) });
+    const before = museRules().length;
+    const chat = await askMuseInDm('Every time I open Figma, remind me to stretch first. Set this up as an automation rule in your next background round, not now in this chat.');
+    if (museRules().length !== before) return { ok: false, detail: `不算数:私聊里当场建了规则,没留到周期(工具 ${chat.toolCalls.join(',')})`, output: chat.content };
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 3 } }) });
     const card = await until(async () => (await api('/agent/special/muse/cards?status=pending'))?.cards?.find((c) => c.kind === 'rule') ?? null, 420_000, 5000);
+    const st = await api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x)).catch(() => null);
+    const cycle = Number(st?.restartsThisWindow) || 0;
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: false } }) });
-    if (!card) return { ok: false, detail: `420s 没等到规则卡,规则 ${rules().length} 条;[muse] 日志:${museLogTail() || '(无)'}` };
+    if (!card) return { ok: false, detail: `420s 没等到规则卡,规则 ${museRules().length} 条;[muse] 日志:${museLogTail() || '(无)'}` };
     const cond = card.payload?.rule?.cond;
-    const untouched = rules().length === before;
+    const untouched = museRules().length === before;
     const r = await api(`/agent/special/muse/cards/${card.id}/decide`, { method: 'POST', body: JSON.stringify({ action: 'accept' }) });
-    const made = rules().find((t) => t.id === r?.trigger?.id);
-    const ok = untouched && cond?.type === 'computer.app_opened' && /figma/i.test(JSON.stringify(cond)) && made?.enabled === true;
-    return { ok, detail: `卡上 ${JSON.stringify(cond)};点之前规则没变=${untouched};点之后 ${made ? `已建 ${made.id} enabled=${made.enabled}` : `没建:${JSON.stringify(r)}`}`, output: JSON.stringify(card.payload?.rule) };
+    const made = museRules().find((t) => t.id === r?.trigger?.id);
+    // 10-31:第一个周期漏了、第二个周期才补上算红:漏掉之后 Muse 多半睡到第二天,台架里的 1 分钟心跳才救得回来。
+    const ok = cycle === 1 && untouched && cond?.type === 'computer.app_opened' && /figma/i.test(JSON.stringify(cond)) && made?.enabled === true;
+    return { ok, detail: `第 ${cycle || '?'} 个周期出卡;卡上 ${JSON.stringify(cond)};点之前规则没变=${untouched};点之后 ${made ? `已建 ${made.id} enabled=${made.enabled}` : `没建:${JSON.stringify(r)}`}`, output: JSON.stringify(card.payload?.rule) };
+  });
+
+  // muselogdm / muselogspace(10-31):下个周期要接着办的事只躺在 Muse 的 LOG 里,这是两条真实来路 —— 私聊时存下的交代、Space 报错回写的 [feedback]
+  // (文案照抄 desktop agentSpaceSync.ts)。新 home 的第一个周期必撞到期的每周装备巡检,正好量「到期日程把 LOG 里的活挤掉」。
+  // 心跳 60 分钟,不给第二个周期补救的机会;判据看磁盘上的成品,不看模型自述。
+  const museFirstCycle = async () => {
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    if (Number((await status()).lastCycleAt) > 0) throw new Error('这个 home 已经跑过周期:每周装备巡检撞不上了,这个场景单独跑');
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 60, supervisorPollMinutes: 1, maxIterationsPerCycle: 16, maxRestartsPerWindow: 3 } }) });
+    const started = await until(async () => { const x = await status(); return x.running || Number(x.lastCycleAt) > 0 ? x : null; }, 120_000, 3000);
+    const done = started && await until(async () => { const x = await status(); return !x.running ? x : null; }, 420_000, 3000);
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: false } }) });
+    const collided = /触发 schedule:Weekly loadout review/.test(readFileSync(engineLog, 'utf8'));
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+    let said = '';
+    try { said = db.prepare(`SELECT m.content FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id WHERE s.kind = 'muse' AND m.role = 'model' ORDER BY m.timestamp DESC LIMIT 1`).get()?.content || ''; } finally { db.close(); }
+    return { done: !!done, collided, said, error: done?.lastError || '', restarts: Number(done?.restartsThisWindow) || 0 };
+  };
+  // muserulechat:用户平常就这么说,不提「下一轮」。Muse 当场在私聊里建规则,不经过周期,到期日程挤不到它。
+  await scenario('muserulechat', 'muserulechat 私聊直说规则,当场建好', async () => {
+    const before = new Set(museRules().map((t) => t.id));
+    const chat = await askMuseInDm('Every time I open Figma, remind me to stretch first.');
+    const made = museRules().find((t) => !before.has(t.id) && t.cond?.type === 'computer.app_opened' && /figma/i.test(JSON.stringify(t.cond)));
+    return { ok: !!made, detail: `私聊工具 ${chat.toolCalls.join(',') || '无'};规则 ${made ? JSON.stringify(made.cond) : '没建'}`, output: chat.content };
+  });
+  await scenario('muselogdm', `muselogdm 私聊存下的交代撞上到期日程(${MUSE_MODE})`, async () => {
+    const file = join(home, 'agents', 'muse', 'Library', 'to-try.md');
+    const chat = await askMuseInDm('Next time you do your background round, add a file to-try.md in your Library listing three note-taking apps worth trying. No rush: not now in this chat, leave it for your next round.');
+    if (existsSync(file)) return { ok: false, detail: `不算数:私聊里当场做了,没留到周期(工具 ${chat.toolCalls.join(',')})`, output: chat.content };
+    const saved = chat.toolCalls.includes('log_event') || chat.toolCalls.includes('remember');
+    const c = await museFirstCycle();
+    const made = existsSync(file) && readFileSync(file, 'utf8').trim().length > 20;
+    const ok = made && c.done && c.collided && !c.error;
+    return { ok, detail: `私聊工具 ${chat.toolCalls.join(',') || '无'}(存下了=${saved});第一个周期撞上巡检=${c.collided};周期收尾=${c.done}${c.error ? `,错误 ${c.error}` : ''};to-try.md ${made ? '做了' : '没做'}`, output: c.said };
+  });
+  await scenario('muselogspace', `muselogspace Space 报错回写撞上到期日程(${MUSE_MODE})`, async () => {
+    const seeded = await until(() => existsSync(join(home, 'agents', 'muse', 'config.toml')), 30_000, 500);
+    if (!seeded) return { ok: false, detail: '30s 内没播种出 Muse' };
+    const dir = join(home, 'agents', 'muse', 'Space');
+    mkdirSync(dir, { recursive: true });
+    const broken = `ctx.registerView({ id: 'home', title: 'Home', mount(el) { el.append(renderStatus()); } });\n`;
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'agent-muse', name: 'Muse', version: '0.1.0', main: 'main.js' }));
+    writeFileSync(join(dir, 'main.js'), broken);
+    await api('/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text: 'Space view "home" registered but its mount() threw, so the user sees "Plugin view failed to load": renderStatus is not defined' }) });
+    const c = await museFirstCycle();
+    const now = readFileSync(join(dir, 'main.js'), 'utf8');
+    const fixed = now !== broken && (!/renderStatus\(/.test(now) || /(function\s+renderStatus|renderStatus\s*=)/.test(now)); // 只加注释不算修
+    const ok = fixed && c.done && c.collided && !c.error;
+    return { ok, detail: `第一个周期撞上巡检=${c.collided};周期收尾=${c.done}${c.error ? `,错误 ${c.error}` : ''};main.js ${fixed ? '改了' : '没动'}`, output: c.said };
   });
 
   await scenario('musedm', `musedm Muse 私聊 × 收件箱分工(${MUSE_MODE})`, async () => {
