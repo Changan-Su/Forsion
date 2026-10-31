@@ -13399,13 +13399,6 @@
                   "type": "integer",
                   "description": "The rev you last saw. A stale rev saves nothing and returns the latest version."
                 },
-                "scope": {
-                  "type": "string",
-                  "enum": [
-                    "user"
-                  ],
-                  "description": "New widget: only when the user asks for it to be available to all their agents."
-                },
                 "sizes": {
                   "type": "array",
                   "items": {
@@ -13624,13 +13617,6 @@
                 "expectedRev": {
                   "type": "integer",
                   "description": "The rev you last saw. A stale rev saves nothing and returns the latest version."
-                },
-                "scope": {
-                  "type": "string",
-                  "enum": [
-                    "user"
-                  ],
-                  "description": "New widget: only when the user asks for it to be available to all their agents."
                 },
                 "sizes": {
                   "type": "array",

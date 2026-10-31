@@ -41,7 +41,6 @@ export const WIDGET_PARAMS = {
       name: { type: 'string', description: 'New widget: lowercase slug, e.g. "tokyo-ledger".' },
       id: { type: 'string', description: 'Existing widget id, e.g. "w_7f3a1c9e0b12".' },
       expectedRev: { type: 'integer', description: 'The rev you last saw. A stale rev saves nothing and returns the latest version.' },
-      scope: { type: 'string', enum: ['user'], description: 'New widget: only when the user asks for it to be available to all their agents.' },
       sizes: { type: 'array', items: { type: 'string', enum: ['sm', 'md', 'lg'] }, description: 'New widget: dashboard sizes it fits.' },
       rail: { type: 'boolean', description: 'New widget: it stays useful at 226px wide.' },
     },
@@ -67,7 +66,8 @@ Change: never create a second widget to change one. Call the same tool with \`wi
 
 To record an entry for the user (记一笔), call \`manage_widget\` with \`set_record\`; records stay when the card changes.`;
 
-/** 存 / 改原件。返回给模型的回执;失败以 Error 开头,什么都没落盘。content 未给 = 只发 edits。 */
+/** 存 / 改原件。返回给模型的回执;失败以 Error 开头,什么都没落盘。content 未给 = 只发 edits。
+ *  ⚠️不给模型选层级:Luna 在项目会话里自己带上 scope:user(live 10-31),一张项目卡落到了所有 Agent 都看得到的地方。用户级要等搬家(开工顺序的管理页那步)。 */
 export async function saveCardWidget(args: Record<string, any>, ctx: ToolContext, card: { entry: WidgetEntry; content?: string; title?: string; edits?: WidgetEdit[] }): Promise<string> {
   const widget = parseArg(args.widget);
   if (!widget || typeof widget !== 'object') return 'Error: widget must be { name } or { id, expectedRev }.';
@@ -88,7 +88,7 @@ export async function saveCardWidget(args: Record<string, any>, ctx: ToolContext
     }
     if (typeof widget.name !== 'string') return 'Error: widget must be { name } or { id, expectedRev }.';
     if (card.content === undefined) return 'Error: a new widget needs its full content.';
-    const r = await createWidget(place, { name: widget.name, title, entry: card.entry, content: card.content, summary, scope: widget.scope === 'user' ? 'user' : undefined, sizes: Array.isArray(widget.sizes) ? widget.sizes.filter((s: unknown) => s === 'sm' || s === 'md' || s === 'lg') : undefined, rail: widget.rail === true });
+    const r = await createWidget(place, { name: widget.name, title, entry: card.entry, content: card.content, summary, sizes: Array.isArray(widget.sizes) ? widget.sizes.filter((s: unknown) => s === 'sm' || s === 'md' || s === 'lg') : undefined, rail: widget.rail === true });
     if (!r.created) return `Error: a widget named "${widget.name}" already exists: ${describe(r.widget)}${r.widget.manifest.deletedAt ? ', deleted, restore it with manage_widget' : ''}. Nothing was saved. To change it use widget { id, expectedRev }; to keep a separate one pick another name.`;
     return `Saved widget ${describe(r.widget)}.`;
   } catch (e) { return fail(e); }
