@@ -7,7 +7,7 @@
  *  R3 围栏不进正文;待处理的卡流里一行指向对话最下面
  *  R4 三问:没选时「好了」不可点;选完发 answers;流里变回执
  *  R5 设置卡:旧值 → 新值;点「改」只传 action;回执「已改成 …」
- *  R6 小结:改一条(index + text)、删一条、「都对」,记忆跟着动由引擎单测钉
+ *  R6 小结:提议采纳行 + 升档问句,「去设置」落到 Muse 设置页、不写卡;改一条(index + text)、删一条、「都对」,记忆跟着动由引擎单测钉
  *  R7 功能卡点「不感兴趣」发 dismiss
  *  R8 规则卡写清当 · 只在 · 做;点「改一下」发 edit,打开画布定位到建好的规则;卡片堆清空
  * 量的是 out/ 产物:改了源码先 `npx electron-vite build`。
@@ -46,7 +46,7 @@ async function main() {
     card('plugin', 'plugin', { item: ITEM }),
     card('intro', 'intro', {}),
     card('settings', 'settings', { patch: { activeHours: { start: 9, end: 23 } }, changes: [{ field: 'activeHours', from: null, to: { start: 9, end: 23 } }, { field: 'notify', from: 'immediate', to: 'digest' }] }),
-    card('summary', 'summary', { lead: '两周下来，我记住了这几条。', items: ['晚上十点以后别提工作', '日报只要三条', '论文先给提纲再给全文'] }),
+    card('summary', 'summary', { lead: '两周下来，我记住了这几条。', items: ['晚上十点以后别提工作', '日报只要三条', '论文先给提纲再给全文'], proposals: { proposed: 11, adopted: 8, askUpgrade: true } }),
     card('feature', 'feature', { feature: 'computer-history', title: '电脑历史', why: '打开后我能回答「昨天看过什么」。' }),
     card('rule', 'rule', { rule: RULE }),
   ]
@@ -63,7 +63,7 @@ async function main() {
       if (p === `/agent/sessions/${MUSE}/read`) return { ok: true }
       if (p === '/agent/runs') return { runs: [] }
       if (p === '/agent/solo/agent/muse/open') return { session: sess, created: false }
-      if (p === '/agent/special/config') return { config: { historian: { enabled: false }, muse: { enabled: true, mode: 'ask' } } }
+      if (p === '/agent/special/config') return { config: { historian: { enabled: false }, muse: { enabled: true, mode: 'ask', allowedFolders: [] } } }
       if (p === '/agent/special/muse/status') return { status: { enabled: true, running: false, lastCycleAt: T0, sessionId: null, feedbackUntil: Date.now() + 86_400_000 } }
       if (p === '/agent/special/muse/library') return { root: LIB, files: [] }
       if (p === '/agent/special/muse/todos') return { todos: [] }
@@ -170,6 +170,17 @@ async function main() {
     // ── 小结 ──
     await win.waitForTimeout(600) // 卡片入场过渡
     await win.screenshot({ path: path.join(dir, 'summary.png') })
+    const proposalsLine = await win.locator(`${inCard('summary')} [data-muse-proposals]`).textContent().catch(() => '')
+    const upgradeAsk = await win.locator(`${inCard('summary')} [data-muse-upgrade]`).textContent().catch(() => '')
+    r.check('R6d 小结多一行提议采纳数,采纳率高时问升档', /提了 11 条，你采纳了 8 条|Proposals in the last two weeks: 11\. You accepted 8/.test(proposalsLine) && /代批|Agent approves/.test(upgradeAsk), `${proposalsLine} | ${upgradeAsk}`)
+    const decidedBefore = seen.decide.length
+    const settingsOpened = ctx.app.waitForEvent('window', { timeout: 10_000 }).catch(() => null)
+    await win.locator(`${inCard('summary')} button[data-action="muse-settings"]`).click()
+    const settings = await settingsOpened
+    await settings?.locator('#special-muse-tab[aria-selected="true"]').waitFor({ timeout: 10_000 }).catch(() => {})
+    const onMuseTab = await settings?.locator('#special-muse-tab[aria-selected="true"]').count().catch(() => 0)
+    r.check('R6e 「去设置」落到 Muse 设置页,不写卡、不改档', onMuseTab === 1 && seen.decide.length === decidedBefore, `muse 页签=${onMuseTab};decide ${decidedBefore}→${seen.decide.length}`)
+    await settings?.close().catch(() => {})
     const sRow = (n) => win.locator(`${inCard('summary')} .t2-musecard-row`).nth(n)
     await sRow(0).locator('button').first().click()
     await sRow(0).locator('input').fill('晚上十一点以后别提工作')
