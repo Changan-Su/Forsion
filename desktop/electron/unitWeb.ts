@@ -270,6 +270,10 @@ export function attachmentDisposition(name: string): string {
 const isLoopback = (addr: string | undefined): boolean =>
   addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
 
+/** 本机连本机:绑在具体局域网地址上时,隧道只能走那个地址,对端不是回环,两端地址相同。 */
+const isSelf = (socket: { remoteAddress?: string; localAddress?: string }): boolean =>
+  isLoopback(socket.remoteAddress) || (!!socket.remoteAddress && socket.remoteAddress === socket.localAddress)
+
 /** 内部密钥头比对(定长比较;缺头 / 多值头 / 长度不符一律不等)。 */
 const secretEq = (got: string | string[] | undefined, want: string): boolean => {
   if (typeof got !== 'string' || !want) return false
@@ -302,10 +306,12 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   const proxyCallerKey = randomBytes(32).toString('hex')
   /** 调用方断言的重放表:派发 id → 过期时刻(gc() 清理)。只记验签全过的,表长 ≤ 合法请求速率 × 120s。 */
   const seenCallerDispatch = new Map<string, number>()
-  /** 便携 Unit 的本地投影(projection local)里,唯一能过鉴权的是工作区主人的访问密钥 —— 那是主人自己的界面,
-   *  不是「另一台设备」:/engine 维持直通、不盖远端标记,不可逆 vault 删除照常可用。桌面(main.ts)从不传 projection,
+  /** 便携 Unit 的本地投影(projection local)里,工作区主人的访问密钥是主人自己的界面,不是「另一台设备」:
+   *  /engine 维持直通、不盖远端标记,不可逆 vault 删除照常可用。Unit 接上云账号后还多一条隧道来路:那是另一台设备,
+   *  照常走允许清单与远端标记(ownerRequest 只认 via=lan)。桌面(main.ts)从不传 projection,
    *  所以桌面的三条远端通路恒走允许清单(unitWeb.test 两个方向都钉住)。 */
   const ownerProjection = deps.projection?.mode === 'local'
+  const ownerRequest = (via: UnitIngress | null): boolean => ownerProjection && via === 'lan'
   const { pending, byIp: pendingByIp } = opts.pairs ?? newPairStore()
   // 短时资源令牌(<img>/EventSource 带不了 Authorization → ?at= 查询串;照 amadeus-cloud 先例)。
   // 记发行者的配对 hash:配对被回收后,它签发过的资源令牌立即失效(Codex P2——否则被回收设备
@@ -325,10 +331,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     gcSeenCallers(seenCallerDispatch, now)
   }
 
-  /** 鉴权:配对令牌(hash 比对)或「loopback + 内部密钥」(隧道 / P2P 各一把,server 已验 owner / 信令来路背书)。
+  /** 鉴权:配对令牌(hash 比对)或「本机连接 + 内部密钥」(隧道 / P2P 各一把,server 已验 owner / 信令来路背书)。
    *  返回来路:via=哪条通路;pairHash=命中的配对记录(回收后再验即失败;隧道与 P2P 为 null)。 */
   const authInfo = (req: http.IncomingMessage): { ok: boolean; pairHash: string | null; via: UnitIngress | null } => {
-    if (isLoopback(req.socket.remoteAddress)) {
+    if (isSelf(req.socket)) {
       if (secretEq(req.headers[UNIT_INTERNAL_HEADER], internalSecret)) return { ok: true, pairHash: null, via: 'tunnel' }
       if (secretEq(req.headers[UNIT_P2P_HEADER], p2pSecret)) return { ok: true, pairHash: null, via: 'p2p' }
     }
@@ -557,7 +563,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     if (opts.doorbell && !DOORBELL_PATHS.has(plainPath(req))) { json(res, 503, HOST_OFF_BODY); return }
     // P1-K2 顶层锁定闸(routeRequest 之前,INTEGRATION §2.3):/engine 与 /vault/rpc 各在分支里按更细的表判,工作区主人不受影响。
-    if (!ownerProjection && lockedNow()) {
+    if (!ownerRequest(authInfo(req).via) && lockedNow()) {
       const p = plainPath(req)
       if (!(p === '/engine' || p.startsWith('/engine/')) && p !== '/vault/rpc' && !lockedRequestAllowed(req.method || 'GET', p)) {
         json(res, 423, REMOTE_LOCKED_BODY)
@@ -751,7 +757,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         if (!engineTarget(url.slice('/engine'.length))) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
         json(res, 403, LOCAL_ONLY_BODY); return
       }
-      if (ownerProjection) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null, null); return }
+      if (ownerRequest(info.via)) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null, null); return }
       // default-deny 允许清单:规整后的路径既用来判,也原样转给引擎(query 不动)。判的是**整个请求目标**
       // (url,不是按 `?` 切过的 path):`#` 可能藏在 query 之后,也可能藏在路径里。
       const target = engineTarget(url.slice('/engine'.length))
@@ -776,14 +782,15 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       const assetAuthed = (): boolean => (at !== '' && assetTokenLive(at)) || authed(req)
 
       if (path === '/vault/rpc' && req.method === 'POST') {
-        if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+        const info = authInfo(req)
+        if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
         let body: { ch?: string; args?: unknown[]; client?: unknown }
         // 32MB:附件上传按 b64 膨胀 ~4/3;隧道路径另受 server 信封 10MB 顶(见方案 §9,LAN 不受限)。
         try { body = JSON.parse(await readBody(req, 32 * 1024 * 1024)) } catch { json(res, 400, { detail: 'bad body' }); return }
         const ch = String(body.ch || '')
         if (!VAULT_RPC_ALLOW.has(ch)) { json(res, 400, { detail: `通道不可远程调用: ${ch}`, code: 'VAULT_CH_DENIED' }); return }
-        if (!ownerProjection && VAULT_RPC_LOCAL_ONLY.has(ch)) { json(res, 403, LOCAL_ONLY_BODY); return }
-        if (!ownerProjection && lockedNow() && !VAULT_RPC_READ.has(ch)) { json(res, 423, REMOTE_LOCKED_BODY); return } // P1-K2:锁定只剩只读通道
+        if (!ownerRequest(info.via) && VAULT_RPC_LOCAL_ONLY.has(ch)) { json(res, 403, LOCAL_ONLY_BODY); return }
+        if (!ownerRequest(info.via) && lockedNow() && !VAULT_RPC_READ.has(ch)) { json(res, 423, REMOTE_LOCKED_BODY); return } // P1-K2:锁定只剩只读通道
         // 远端客户端自报 clientId → 事件 origin(回声按 origin 判);走 body 因为隧道信封不带自定义头;限长防注水。
         const origin = String(body.client || '').slice(0, 64) || null
         try {
