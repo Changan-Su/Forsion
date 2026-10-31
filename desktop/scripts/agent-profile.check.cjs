@@ -98,6 +98,7 @@ async function run() {
     }
     if (p === '/agent/agents-meta' && method === 'GET') return agentMeta
     if (p === '/agent/agents-meta' && method === 'PUT') { Object.assign(agentMeta, await body()); return agentMeta }
+    if (/^\/agent\/agents\/[^/]+\/uninstall-preview$/.test(p) && method === 'GET') { const slug = p.split('/')[3]; return { slug, name: slug, blocked: null, size: 1024, chats: 1, cloud: false, teams: [], automations: [] } }
     if (/^\/agent\/agents\/[^/]+$/.test(p) && method === 'DELETE') { const slug = p.split('/')[3]; const i = agents.findIndex((a) => a.slug === slug); if (i < 0) return { ok: false }; agents.splice(i, 1); return { ok: true } }
     if (p === '/agent/skills/catalog' && method === 'GET') return { skills: skillCatalog.filter((entry) => entry.scope === 'user' || entry.owner === catalogAgent).map(catalogView) }
     if (p === '/agent/skills/catalog' && method === 'POST') {
@@ -110,6 +111,7 @@ async function run() {
       const key = decodeURIComponent(rawKey)
       const entry = skillCatalog.find((item) => item.key === key)
       if (!entry) return { status: 404, json: { detail: 'Skill missing' } }
+      if (action === 'uninstall-preview' && method === 'GET') return { key, name: entry.name, slug: entry.slug, scope: entry.scope, owner: entry.owner ?? null, size: 1024, mode: 'delete', picks: [], disabled: false }
       if (action === 'disabled' && method === 'PUT') {
         const input = await body(); const target = entry.scope === 'user' && input.agentSlug ? `${input.agentSlug}:${key}` : key
         if (input.disabled) skillDisabled.add(target); else skillDisabled.delete(target)
@@ -658,11 +660,18 @@ async function run() {
     await win.waitForTimeout(220)
     await win.screenshot({ path: path.join(home, 'compact-skills-unsaved.png') })
     await compact.getByRole('button', { name: '放弃修改', exact: true }).click()
+    // 选中底在选中格自己的 ::before 上,换格时由 FLIP(WAAPI)滑过来;减弱动效下不起这段。不用事后 getAnimations 查:
+    // 那里会数到 DESIGN §3 规矩 8 特意留着的颜色淡变,而且点击到查询常已 160ms+,200ms 的 FLIP 一跑完就数不到(负对照实测假绿)。
+    // 所以在点之前记 animate 调用;先在不减弱时要求记到一次,证明这根探针是活的。
+    await win.evaluate(() => { window.__navFlips = 0; const animate = Element.prototype.animate; Element.prototype.animate = function (...args) { if (this.closest('.agent-section-nav')) window.__navFlips++; return animate.apply(this, args) } })
+    await compact.getByRole('tab', { name: '配置', exact: true }).click()
+    assert.equal(await win.evaluate(() => window.__navFlips), 1, 'The selected pill slides between tabs')
+    await compact.getByRole('tab', { name: '技能', exact: true }).click()
     await win.emulateMedia({ reducedMotion: 'reduce' })
+    await win.evaluate(() => { window.__navFlips = 0 })
     await compact.getByRole('tab', { name: '配置', exact: true }).click()
     assert.equal(await compact.locator('.profile-section-enter').evaluate((el) => getComputedStyle(el).animationName), 'none')
-    // 选中底在选中格自己的 ::before 上,换格时由 FLIP 滑过来;减弱动效下不起这段动画
-    assert.equal(await compact.locator('.agent-section-nav button.selected').evaluate((el) => el.getAnimations({ subtree: true }).length), 0)
+    assert.equal(await win.evaluate(() => window.__navFlips), 0, 'Reduced motion switches the selected pill without the slide')
     await win.emulateMedia({ reducedMotion: 'no-preference' })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1500, 1000))
 
@@ -707,10 +716,9 @@ async function run() {
     assert.equal(agentMeta.defaultSlug, 'xyra')
     await analystRow.locator('.agents-roster-more').click()
     await win.getByRole('menuitem', { name: '删除 Agent', exact: true }).click()
-    // 与侧栏同一个删除确认(RemoveDialog):本机 Agent 带「同时删除相关文件」勾选项,缺省不勾 → 只从名册移除、文件留在 .removed
-    const removeDialog = win.locator('[data-remove-dialog] .dialog')
-    await removeDialog.waitFor()
-    assert.equal(await removeDialog.locator('.dialog-check input:not(:checked)').count(), 1)
+    // 与侧栏 / 商店同一个卸载确认框(10-28 规范 A,细节归 check:uninstall):有私聊时「一并删除这些私聊」缺省不勾
+    const removeDialog = win.locator('[data-uninstall-dialog] .un-dlg')
+    await removeDialog.locator('.dialog-check input:not(:checked)').waitFor()
     await removeDialog.locator('.dialog-btn[data-danger]').click()
     await analystRow.waitFor({ state: 'detached' })
     assert.equal(agents.length, 2)
@@ -757,8 +765,8 @@ async function run() {
     await skillDetail('agent:research:analysis').locator('.agent-skill-editor').getByRole('button', { name: '保存', exact: true }).click()
     await skillDetail('agent:research:analysis').locator('.agent-skill-content').filter({ hasText: 'Compare primary evidence.' }).waitFor()
     assert.equal(skillCatalog.find((entry) => entry.key === 'agent:research:analysis').content, 'Compare primary evidence.')
-    win.once('dialog', (dialog) => dialog.accept())
     await skillDetail('agent:research:analysis').getByRole('button', { name: '删除技能', exact: true }).click()
+    await win.locator('[data-uninstall-dialog] .un-dlg .dialog-btn[data-danger]:not(:disabled)').click()
     await profile.locator('[data-skill-key="agent:research:analysis"]').waitFor({ state: 'detached' })
     await profile.locator('[data-skill-key="user:git-workflow"] .agent-skill-summary').click()
     await skillDetail('user:git-workflow').getByRole('button', { name: '复制为此 Agent 专属', exact: true }).click()
