@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { accountApiPath, createDesktopAccount, desktopAccount } from './desktopAccount'
 
 type Reply = { status: number; json?: unknown; error?: string }
+const switchStart = vi.hoisted(() => ({ cb: (() => {}) as () => void }))
+vi.mock('../../services/accountTransition', () => ({ onAccountWillChange: (cb: () => void) => { switchStart.cb = cb; return () => {} } }))
+
 function bridge(reply: Reply | Promise<Reply> = { status: 200, json: { ok: true } }) {
   let changed: (() => void) | undefined
   const cloudFetch = vi.fn(async () => reply)
@@ -149,6 +152,29 @@ describe('accountApiPath', () => {
     const { t, cloudFetch } = bridge()
     await expect(createDesktopAccount(t).request('https://other.example/api/x')).rejects.toThrow(/inside the account API/)
     expect(cloudFetch).not.toHaveBeenCalled()
+  })
+})
+
+describe('account switch', () => {
+  it('revokes when the switch starts, not when it ends, and recovers afterwards', async () => {
+    let answer!: (r: Reply) => void
+    const { t, cloudFetch, authChanged } = bridge(new Promise<Reply>((r) => { answer = r }))
+    const account = createDesktopAccount(t)
+    const seen: boolean[] = []
+    account.subscribe((s) => seen.push(s.loggedIn))
+    const inFlight = account.request('/me')
+    await vi.waitFor(() => expect(cloudFetch).toHaveBeenCalledOnce())
+    switchStart.cb()
+    await expect(inFlight).rejects.toMatchObject({ name: 'AbortError' })
+    expect(seen).toEqual([false])
+    await expect(account.request('/me')).rejects.toMatchObject({ name: 'AbortError' })
+    expect(cloudFetch).toHaveBeenCalledOnce()
+    expect(await account.status()).toEqual({ loggedIn: false })
+    answer({ status: 200, json: { ok: true } })
+    authChanged()
+    await vi.waitFor(() => expect(seen.at(-1)).toBe(true))
+    expect((await account.status()).loggedIn).toBe(true)
+    await expect(account.request('/me')).resolves.toBeInstanceOf(Response)
   })
 })
 

@@ -6,7 +6,8 @@
  *
  * 负对照(实跑见红,逐条改 service.ts 跑本文件):新 peer 复用已有会话;删 findBinding 的 multiPeer 分支;默认强开;
  * 文字批到结构化卡;新消息作废结构化卡;peer 能跑斜杠命令;收件箱发给最后说话的 peer;重复连接断开别的 peer;
- * respond 去掉送达闸;respond 去掉本机闸 —— 十条都红。
+ * respond 去掉送达闸;respond 去掉本机闸;目录哈希不带账号;peer 键改回拼接;账号前缀改回拼接;两处 projectless 去掉;
+ * 去掉 INSERT 后的锚点复查 —— 都红。
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -14,6 +15,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import type { ChannelApprovalCard, ChannelDriver, ChannelInbound } from './types.js';
+import { resolveProjectMemory } from '../services/projectMemory.js';
 
 const state = vi.hoisted(() => {
   const listeners = new Map<string, Set<(ev: any) => void>>();
@@ -27,6 +29,7 @@ const state = vi.hoisted(() => {
     settings: {} as Record<string, any>,
     runs: [] as any[],
     aborted: [] as string[],
+    beforeBindingInsert: null as null | (() => Promise<unknown>),
     approvals: [] as Array<[string, any, any]>,
     resolveOk: true,
     locked: false,
@@ -36,6 +39,11 @@ const state = vi.hoisted(() => {
 
 vi.mock('../core/db.js', () => ({
   query: vi.fn(async (sql: string, params: any[] = []) => {
+    if (state.beforeBindingInsert && sql.includes('INSERT INTO tangu_wechat_bindings')) {
+      const hook = state.beforeBindingInsert;
+      state.beforeBindingInsert = null;
+      await hook();
+    }
     const stmt = state.db.prepare(sql);
     if (stmt.reader) return stmt.all(...params);
     stmt.run(...params);
@@ -139,7 +147,7 @@ beforeEach(() => {
   state.db.exec(`
     CREATE TABLE tangu_wechat_bindings (id TEXT PRIMARY KEY, user_id TEXT, channel TEXT, account_id TEXT, peer_id TEXT, session_id TEXT, remote_approval_mode TEXT, is_active BOOLEAN DEFAULT TRUE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
     CREATE TABLE tangu_wechat_accounts (id TEXT PRIMARY KEY, user_id TEXT, wx_user_id TEXT, channel TEXT, status TEXT, created_at TIMESTAMP, updated_at TIMESTAMP);
-    CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, model_id TEXT, agent_config TEXT, project_path TEXT, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+    CREATE TABLE chat_sessions (id TEXT PRIMARY KEY, user_id TEXT, title TEXT, model_id TEXT, agent_config TEXT, project_path TEXT, projectless BOOLEAN NOT NULL DEFAULT FALSE, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
   `);
   state.settings = { enabled: true, sessions: true, agentSlug: '', modelId: 'model-1', imageModelId: '', ttsModelId: '', ttsVoice: '', approvalMode: 'auto-edit', inboxForward: { enabled: false, senders: 'all' } };
   state.runs = [];
@@ -157,6 +165,62 @@ afterEach(() => {
 });
 
 describe('multiPeer: one binding and session per peer', () => {
+  it('keeps the same peer id on two accounts apart', async () => {
+    const { svc, say } = harness({ multiPeer: true });
+    await svc.bindAccount({ userId: 'u1', accountId: 'acc' });
+    await svc.bindAccount({ userId: 'u1', accountId: 'acc2' });
+    await say('same', 'one');
+    const first = lastRun().input.agentConfig.cwd;
+    await say('same', 'two', { accountId: 'acc2' });
+    expect(lastRun().input.agentConfig.cwd).not.toBe(first);
+  });
+
+  it('does not merge contacts whose ids only look alike once joined', async () => {
+    const { svc, say } = harness({ multiPeer: true, approvals: true });
+    await svc.bindAccount({ userId: 'u1', accountId: 'a' });
+    await svc.bindAccount({ userId: 'u1', accountId: 'a:b' });
+    await say('c', 'one', { accountId: 'a:b' });
+    const run = lastRun();
+    state.emit(run.id, 'approval_request', approvalEvent());
+    await flush();
+    await say('b:c', 'stop that', { accountId: 'a' });
+    await say('b:c', '/stop', { accountId: 'a' });
+    expect(state.aborted).not.toContain(run.id);
+  });
+
+  it('finds every key of an account and none of another account', () => {
+    const svc = harness({ multiPeer: true }).svc as any;
+    expect(svc.peerKey('a', 'x').startsWith(svc.peerKeyPrefix('a'))).toBe(true);
+    expect(svc.peerKey('a:b', 'x').startsWith(svc.peerKeyPrefix('a'))).toBe(false);
+    expect(svc.peerKey('ab', 'x').startsWith(svc.peerKeyPrefix('a'))).toBe(false);
+  });
+
+  it('gives peer sessions no project memory, so one contact\'s facts stay out of the next one\'s context', async () => {
+    const { svc, say } = harness({ multiPeer: true });
+    await svc.bindAccount({ userId: 'u1', accountId: 'acc' });
+    await say('conv-1/a', 'claims the first session');
+    await say('conv-2/a', 'opens its own');
+    const sessions = bindings().map((r) => r.session_id);
+    expect(sessions).toHaveLength(2);
+    expect(await Promise.all(sessions.map((id) => resolveProjectMemory('u1', id)))).toEqual([null, null]);
+  });
+
+  it('leaves project memory on a single-contact channel alone', async () => {
+    const { svc, say } = harness();
+    await svc.bindAccount({ userId: 'u1', accountId: 'acc' });
+    await say('conv-1/a', 'hello');
+    expect(await resolveProjectMemory('u1', bindings()[0].session_id)).not.toBeNull();
+  });
+
+  it('does not resurrect a binding when the account disconnects during its insert', async () => {
+    const { svc, say } = harness({ multiPeer: true });
+    await svc.bindAccount({ userId: 'u1', accountId: 'acc' });
+    await say('conv-1/a', 'claims the first session');
+    state.beforeBindingInsert = () => svc.disconnect('u1');
+    await say('conv-2/a', 'lands during the disconnect');
+    expect(bindings().filter((r) => r.is_active)).toEqual([]);
+  });
+
   it('gives every peer its own session and keeps later messages there', async () => {
     const { svc, say } = harness({ multiPeer: true });
     await svc.bindAccount({ userId: 'u1', accountId: 'acc' });

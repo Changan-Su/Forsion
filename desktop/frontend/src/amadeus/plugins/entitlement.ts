@@ -11,6 +11,6 @@ export async function readEntitlement(
     const response = await request('/org/entitlements')
     if (!response.ok) { await response.body?.cancel(); return { granted: null } }
     const list = ((await response.json()) as { entitlements?: unknown } | null)?.entitlements
-    return { granted: Array.isArray(list) ? list.includes(name) : null }
+    return { granted: Array.isArray(list) && list.every((item) => typeof item === 'string') ? list.includes(name) : null }
   } catch { return { granted: null } }
 }

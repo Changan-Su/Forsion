@@ -335,11 +335,14 @@ export class ChannelService {
     await fsp.mkdir(dir, { recursive: true }).catch(() => {});
     return dir;
   }
-  /** multiPeer:每 peer 自己的工作目录(入站文件落在这里,别的 peer 的 run 用相对路径够不着)。peerId 由驱动编码,哈希后才进路径。 */
-  private peerWorkspaceDir(peerId: string): string {
-    return path.join(this.workspaceDir(), 'peers', createHash('sha256').update(peerId).digest('hex').slice(0, 16));
+  /** multiPeer:每 peer 自己的工作目录,入站文件落在这里。只是分开放,不是沙箱:host 工具走 `..` 照样够得着隔壁。
+   *  账号一起哈希:不同账号可以有同一个 peerId;peerId 由驱动编码,哈希后才进路径。 */
+  private peerWorkspaceDir(accountId: string, peerId: string): string {
+    return path.join(this.workspaceDir(), 'peers', createHash('sha256').update(JSON.stringify([accountId, peerId])).digest('hex').slice(0, 16));
   }
-  private peerKey(accountId: string, peerId: string): string { return `${accountId}:${peerId}`; }
+  // multiPeer 的 id 由驱动编,可以带冒号:拼接会撞车(a:b + c 与 a + b:c),审批队列和 /stop 就串到别人头上了。
+  private peerKey(accountId: string, peerId: string): string { return this.multiPeer ? JSON.stringify([accountId, peerId]) : `${accountId}:${peerId}`; }
+  private peerKeyPrefix(accountId: string): string { return this.multiPeer ? `${JSON.stringify([accountId]).slice(0, -1)},` : `${accountId}:`; }
 
   /**
    * 通道**完全停止**(禁用 / 断开 / 凭据清空 / 引擎退出):**中止**本通道发起的全部 run(在跑 + 排队),再结束所有挂起等待 +
@@ -388,7 +391,7 @@ export class ChannelService {
       this.runs.delete(st.runId);
       this.runsByPeer.delete(st.addr.key);
     }
-    for (const key of [...this.expiredApprovalAt.keys()]) if (key.startsWith(`${accountId}:`)) this.expiredApprovalAt.delete(key);
+    for (const key of [...this.expiredApprovalAt.keys()]) if (key.startsWith(this.peerKeyPrefix(accountId))) this.expiredApprovalAt.delete(key);
     this.settleDropped(dropped);
   }
 
@@ -553,10 +556,11 @@ export class ChannelService {
    * gone:建会话期间账号断开 / 通道停止,就不再写绑定(断开已作废全部绑定,这条写进去就成了复活)。
    */
   private async bindPeer(known: BindingRow, peerId: string, agentSlug: string | undefined, gone: () => boolean): Promise<BindingRow | null> {
-    const cwd = this.peerWorkspaceDir(peerId);
+    const cwd = this.peerWorkspaceDir(known.account_id, peerId);
     if (!known.peer_id) {
       await fsp.mkdir(cwd, { recursive: true }).catch(() => {});
       await patchSessionAgentConfig(known.session_id, { cwd });
+      await query(`UPDATE chat_sessions SET projectless = TRUE WHERE id = ?`, [known.session_id]);
       if (gone()) return null;
       await query(`UPDATE tangu_wechat_bindings SET peer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [peerId, known.id]);
       return { ...known, peer_id: peerId };
@@ -569,6 +573,12 @@ export class ChannelService {
        VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [id, known.user_id, this.kind, known.account_id, peerId, sessionId, known.remote_approval_mode],
     );
+    // 断开可能夹在上面的检查和 INSERT 之间:断开那条 UPDATE 作废了 known,没碰到还没落库的这行。
+    const anchor = await query<any[]>(`SELECT id FROM tangu_wechat_bindings WHERE id = ? AND is_active = TRUE LIMIT 1`, [known.id]);
+    if (!anchor[0]) {
+      await query(`UPDATE tangu_wechat_bindings SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [id]);
+      return null;
+    }
     return { ...known, id, peer_id: peerId, session_id: sessionId };
   }
 
@@ -582,7 +592,8 @@ export class ChannelService {
     const id = uuidv4();
     await deps().state.autoCreateSession({ id, userId, appId: profile.appId, title: title || this.opts.sessionTitle, modelId: mid });
     // project_path 让桌面侧栏把它归入通道工作区组;cwd 让 host 执行有真实工作目录。
-    await query(`UPDATE chat_sessions SET project_path = ? WHERE id = ?`, [ws, id]);
+    // peer 会话 projectless:项目记忆按 project_path 算,不关的话 A 记下的项目事实会进 B 的上下文。
+    await query(`UPDATE chat_sessions SET project_path = ?${peer ? ', projectless = TRUE' : ''} WHERE id = ?`, [ws, id]);
     const cfg: any = {
       execMode: 'host',
       approvalMode: st.approvalMode,

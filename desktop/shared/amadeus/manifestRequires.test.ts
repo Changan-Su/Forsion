@@ -18,8 +18,12 @@ describe('parseManifestRequires', () => {
     expect(parseManifestRequires(null)).toEqual({ plugins: [] })
   })
 
-  it.each([['a string', 'tangu'], ['a number', 1], ['plugins not a list', { plugins: 'tangu' }], ['an entitlement that is not a name', { entitlement: 'Business Plan' }], ['an entitlement that is not a string', { entitlement: 1 }]])('rejects %s', (_name, raw) => {
+  it.each([['a string', 'tangu'], ['a number', 1], ['plugins not a list', { plugins: 'tangu' }]])('rejects %s', (_name, raw) => {
     expect(parseManifestRequires(raw)).toBeNull()
+  })
+
+  it.each([['not a name', 'Business Plan'], ['not a string', 1], ['null', null]])('reads an entitlement that is %s as none, keeping the plugins', (_name, entitlement) => {
+    expect(parseManifestRequires({ plugins: ['tangu'], entitlement })).toEqual({ plugins: ['tangu'] })
   })
 })
 

@@ -23,6 +23,7 @@ describe('readEntitlement', () => {
     ['the reply is not JSON', async () => new Response('<html>')],
     ['the reply has no body', async () => new Response(null)],
     ['the shape is wrong', async () => json({ entitlements: 'business' })],
+    ['an entry is unreadable', async () => json({ entitlements: [null] })],
     ['the reply is null', async () => json(null)],
   ])('is unknown, not false, when %s', async (_name, request) => {
     expect(await readEntitlement(request, 'business')).toEqual({ granted: null })

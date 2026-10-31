@@ -32,6 +32,12 @@ describe('readPackage requires', () => {
     expect(p.manifest.requires).toEqual([])
   })
 
+  it('loads a package whose entitlement is malformed: one bad optional field cannot stop Unit starting', async () => {
+    const p = await readPackage(await pack({ requires: { plugins: ['tangu'], entitlement: null } }))
+    expect(p.manifest.requires).toEqual(['tangu'])
+    expect(p.ui?.entitlement).toBeUndefined()
+  })
+
   it('publishes the entitlement through the UI whitelist, so the page can ask about it', async () => {
     const p = await readPackage(await pack({ requires: { entitlement: 'business' } }))
     expect(p.ui?.entitlement).toBe('business')
@@ -48,7 +54,6 @@ describe('readPackage requires', () => {
     ['plugins not a list', { plugins: 'tangu' }],
     ['a bad plugin id', { plugins: ['Not Valid'] }],
     ['a bad array entry', ['Not Valid']],
-    ['a bad entitlement', { entitlement: 'Not Valid' }],
   ])('refuses %s', async (_name, requires) => {
     await expect(readPackage(await pack({ requires }))).rejects.toThrow('Invalid plugin dependencies')
   })

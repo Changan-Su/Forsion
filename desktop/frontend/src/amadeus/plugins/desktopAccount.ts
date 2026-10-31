@@ -5,6 +5,7 @@
  *  ponytail: cloud:fetch is JSON over IPC. Request bodies must be JSON strings, replies are JSON, custom headers do not
  *  travel, and an abort only drops the result: the main process runs that fetch until it answers or hits the 120s cap. */
 import { leaseAccountResponse } from './accountResponse'
+import { onAccountWillChange } from '../../services/accountTransition'
 import type { PluginAccount, PluginAccountStatus } from './types'
 
 type Bridge = NonNullable<typeof window.tangu>
@@ -45,21 +46,29 @@ function toResponse(result: { status: number; json?: unknown; error?: string } |
 
 export function createDesktopAccount(t: Bridge): PluginAccount {
   let epoch = 0
+  let switching = false // Credentials change well before auth:changed. The host sends that event even when a switch fails.
   const pending = new Set<AbortController>()
   const listeners = new Set<(s: PluginAccountStatus) => void>()
   const status = async (): Promise<PluginAccountStatus> => {
     const generation = epoch
+    if (switching) return { loggedIn: false }
     const raw = await t.authStatus!()
     if (generation !== epoch) return { loggedIn: false }
     // No userId: `accountId` here is the local account record, not the server's user id.
     return { loggedIn: raw.loggedIn === true, cloudUrl: apiBase(raw.cloudUrl),
       ...(typeof raw.username === 'string' ? { username: raw.username } : {}) }
   }
-  t.onAuthChanged!(() => {
+  const revoke = (): number => {
     const generation = ++epoch
     pending.forEach((ctl) => ctl.abort()); pending.clear()
     // Revoke rendered account data immediately; refresh only the current generation.
     listeners.forEach((cb) => { try { cb({ loggedIn: false }) } catch { /* one subscriber cannot block the rest */ } })
+    return generation
+  }
+  onAccountWillChange(() => { switching = true; revoke() })
+  t.onAuthChanged!(() => {
+    switching = false
+    const generation = revoke()
     void status().then((s) => { if (generation === epoch) listeners.forEach((cb) => { try { cb(s) } catch { /* isolated */ } }) }).catch(() => {})
   })
   return {
@@ -75,7 +84,7 @@ export function createDesktopAccount(t: Bridge): PluginAccount {
       if (outer?.aborted) abort(); else outer?.addEventListener('abort', abort, { once: true })
       pending.add(ctl)
       const cleanup = () => { pending.delete(ctl); outer?.removeEventListener('abort', abort) }
-      const current = () => { if (ctl.signal.aborted || generation !== epoch) throw new DOMException('Account changed or request aborted', 'AbortError') }
+      const current = () => { if (switching || ctl.signal.aborted || generation !== epoch) throw new DOMException('Account changed or request aborted', 'AbortError') }
       try {
         current()
         const aborted = new Promise<never>((_, reject) => {
