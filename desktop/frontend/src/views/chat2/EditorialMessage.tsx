@@ -167,7 +167,7 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
 }
 
 /** 头像回退:无图时取昵称首字(支持 CJK/emoji),对齐 desktop1.0。 */
-function firstChar(s?: string): string {
+export function firstChar(s?: string): string {
   const t = (s || '').trim()
   return t ? Array.from(t)[0].toUpperCase() : '?'
 }

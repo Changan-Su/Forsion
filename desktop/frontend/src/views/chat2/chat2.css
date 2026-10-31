@@ -1705,3 +1705,23 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-musefb { display: flex; align-items: center; gap: 12px; margin-top: 4px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .t2-musefb button { border: none; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; }
 .t2-musefb button:hover { color: var(--text); }
+
+/* 编辑重发:提问原地变可改的气泡(EditBubble.tsx,方案 编辑重发分支与编辑框方案_2026-10-28 A)。同气泡底色 / 圆角 / 字号,
+   宽度撑到提问最大宽、不随字缩;高 12 行后内部滚;不加描边、不加焦点框。放文件末尾:要压过上面 520px 断点里的 .t2-user-col。 */
+.t2-user-col.t2-edit { width: 76%; align-items: stretch; }
+.t2-edit > .t2-username { align-self: flex-end; }
+.t2-edit-bubble { width: 100%; white-space: normal; }
+.t2-edit-ta {
+  display: block; width: 100%; min-height: 3.2em; max-height: calc(12 * 1.6em); field-sizing: content; overflow-y: auto;
+  resize: none; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; padding: 0;
+}
+.t2-edit-foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; font-family: var(--font-ui); }
+.t2-edit-hint { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.t2-edit-grow { flex: 1; }
+.t2-edit-key { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); margin-right: -2px; }
+.t2-edit-foot .t2-btn:disabled { opacity: .45; cursor: default; filter: none; }
+@container (max-width: 520px) {
+  .t2-user-col.t2-edit { width: 100%; }
+  .t2-edit-key { display: none; } /* 窄栏 / 手机:没有键盘可提示,只留两颗按钮 */
+}
+.mb-shell .t2-edit-foot .t2-btn { min-height: 36px; padding-inline: 16px; }
