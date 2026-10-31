@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Sparkles } from 'lucide-react'
 import { useI18n } from '../../i18n'
+import { SelectField } from '../../components/SelectField'
 import { useApp } from '../../stores/appStore'
 import { useImageStudio } from '../../stores/imageStudioStore'
 import type { ImageBoard, StudioImage } from './model'
@@ -45,16 +46,14 @@ export function AIEditPanel({ board, images }: { board: ImageBoard; images: Stud
     </div>
     <p className="ims-caption">{t(`imageStudio.ai.hint.${mode}`)}</p>
     <textarea aria-label={t('imageStudio.ai.instruction')} placeholder={t('imageStudio.ai.placeholder')} value={instruction} onChange={e => setInstruction(e.target.value)} maxLength={8000} rows={3} disabled={busy || running} />
-    <label className="ims-ai-source">{t('imageStudio.ai.source')}<select aria-label={t('imageStudio.ai.source')} value={mode === 'expand' ? 'current' : source} onChange={e => setSource(e.target.value as ImageSourceMode)} disabled={busy || running || mode === 'expand'}>
-      <option value="current">{t('imageStudio.ai.source.current')}</option><option value="original">{t('imageStudio.ai.source.original')}</option>
-    </select></label>
-    <div className="ims-fields"><label>{t('imageStudio.ai.ratio')}<select aria-label={t('imageStudio.ai.ratio')} value={ratio} onChange={e => setRatio(e.target.value)} disabled={busy || running}>
-      <option value="original">{t('imageStudio.ai.ratio.original', { ratio: ratioPlan.originalLabel })}</option>{EDIT_RATIOS.map(r => <option key={r} value={r}>{r}</option>)}
-    </select></label>
-      <label>{t('imageStudio.ai.count')}<select aria-label={t('imageStudio.ai.count')} value={count} onChange={e => setCount(Number(e.target.value))} disabled={busy || running}>{[1, 2, 3, 4].map(n => <option key={n}>{n}</option>)}</select></label>
-      <label>{t('imageStudio.ai.quality')}<select aria-label={t('imageStudio.ai.quality')} value={quality} onChange={e => setQuality(e.target.value)} disabled={busy || running}>
-        <option value="">{t('imageStudio.ai.quality.default')}</option>{EDIT_QUALITIES.map(q => <option key={q} value={q}>{t(`imageStudio.ai.quality.${q}`)}</option>)}
-      </select></label></div>
+    <label className="ims-ai-source">{t('imageStudio.ai.source')}<SelectField size="sm" field="ims-ai-source" ariaLabel={t('imageStudio.ai.source')} value={mode === 'expand' ? 'current' : source} onChange={v => setSource(v as ImageSourceMode)} disabled={busy || running || mode === 'expand'}
+      options={[{ value: 'current', label: t('imageStudio.ai.source.current') }, { value: 'original', label: t('imageStudio.ai.source.original') }]} /></label>
+    <div className="ims-fields"><label>{t('imageStudio.ai.ratio')}<SelectField size="sm" field="ims-ai-ratio" ariaLabel={t('imageStudio.ai.ratio')} value={ratio} onChange={setRatio} disabled={busy || running}
+      options={[{ value: 'original', label: t('imageStudio.ai.ratio.original', { ratio: ratioPlan.originalLabel }) }, ...EDIT_RATIOS.map(r => ({ value: r, label: r }))]} /></label>
+      <label>{t('imageStudio.ai.count')}<SelectField size="sm" field="ims-ai-count" ariaLabel={t('imageStudio.ai.count')} value={String(count)} onChange={v => setCount(Number(v))} disabled={busy || running}
+        options={[1, 2, 3, 4].map(n => ({ value: String(n), label: String(n) }))} /></label>
+      <label>{t('imageStudio.ai.quality')}<SelectField size="sm" field="ims-ai-quality" ariaLabel={t('imageStudio.ai.quality')} value={quality} onChange={setQuality} disabled={busy || running}
+        options={[{ value: '', label: t('imageStudio.ai.quality.default') }, ...EDIT_QUALITIES.map(q => ({ value: q, label: t(`imageStudio.ai.quality.${q}`) }))]} /></label></div>
     {ratioPlan.requested !== ratioPlan.engine && <p className="ims-caption ims-ai-ratio-note">{t('imageStudio.ai.ratioFit', { ratio: ratioPlan.requested, engineRatio: ratioPlan.engine })}</p>}
     {(quality === 'xhigh' || quality === 'max') && <p className="ims-caption">{t('imageStudio.ai.qualityNote')}</p>}
     {mode === 'expand' && <label>{t('imageStudio.ai.margin')}<input aria-label={t('imageStudio.ai.margin')} type="range" min=".1" max="1" step=".1" value={margin} onChange={e => setMargin(Number(e.target.value))} /><output>{Math.round(margin * 100)}%</output></label>}

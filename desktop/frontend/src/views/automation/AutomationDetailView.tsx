@@ -11,12 +11,13 @@ import type { ViewProps } from '@lcl/engine'
 import { CapabilityMenu } from '../../components/CapabilityMenu'
 import { AutomationExtension } from './AutomationExtension'
 import { automationListSource, subscribeAutomation } from './automationListSource'
-import { CalendarClock, History, Pencil, Play, Settings, Sparkles, Zap } from 'lucide-react'
+import { CalendarClock, ChevronRight, History, Pencil, Play, Settings, Sparkles, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
 import { useAutomation, sessionForTrigger } from '../../stores/automationStore'
 import { fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } from '../../services/backendService'
 import { useI18n } from '../../i18n'
+import { formatRepeat } from '../../format/repeat'
 import { Markdown } from '../../components/Markdown'
 import { useDbStore } from '../../amadeus/store/dbStore'
 import { actionsText, condText, fmtTime, isFinishedTrigger, noticeText, onlyText, watchedColumnIds, whereText } from './lib'
@@ -206,7 +207,7 @@ const ScheduleDetail: React.FC<{ slug: string; rowId: string; onRuns: () => void
             <CapabilityMenu label={t('automation.ux.actions')} items={menu.map((a) => ({ id: a.id, label: a.label, danger: a.danger, onSelect: a.run }))} />
           </div>
           <div className="auto-facts">
-            <span className="auto-fact"><b>{t('automation.fact.trigger')}</b>{en.date.replace('/', ' → ').replace(/T/g, ' ')}{en.repeat ? ` · ${t('automation.schedule.every', { ivl: en.repeat })}` : ` · ${t('automation.schedule.once')}`}</span>
+            <span className="auto-fact"><b>{t('automation.fact.trigger')}</b>{en.date.replace('/', ' → ').replace(/T/g, ' ')}{en.repeat ? ` · ${formatRepeat(t, en.repeat)}` : ` · ${t('automation.schedule.once')}`}</span>
             <span className="auto-fact"><b>{t('automation.fact.runner')}</b>{sched.name}</span>
             {en.prompt && <span className="auto-fact"><b>{t('automation.fact.prompt')}</b>{en.prompt.slice(0, 80)}</span>}
             {en.description && <span className="auto-fact"><b>{t('automation.fact.desc')}</b>{en.description.slice(0, 80)}</span>}
@@ -327,7 +328,7 @@ const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns
             .filter((a) => a.id !== 'edit').map((a) => ({ id: a.id, label: a.label, danger: a.danger, onSelect: a.run }))} />
         </div>
         {tr.enabled && tr.notice && <p className="auto-hint auto-fact-warn" data-rule-notice>{noticeText(t, tr.notice)}</p>}
-        <details className="auto-properties"><summary>{t('automation.ux.properties')}</summary><div className="auto-facts">
+        <details className="auto-properties"><summary><ChevronRight size={13} aria-hidden />{t('automation.ux.properties')}</summary><div className="auto-facts">
           {isFinishedTrigger(tr) && <span className="auto-fact"><b>{t('automation.fact.status')}</b>{t('automation.finishedHint')}</span>}
           {/* 引擎自动停用(排空封顶断环 / tool_call 不可用)会写 disabledReason;用户手动启用即清。不显示的话用户只能从日志感知「规则怎么停了」 */}
           {!tr.enabled && tr.disabledReason && <span className="auto-fact auto-fact-warn"><b>{t('automation.fact.status')}</b>{t('automation.fact.disabledReason', { reason: tr.disabledReason })}</span>}

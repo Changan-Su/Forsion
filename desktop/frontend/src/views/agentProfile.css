@@ -223,19 +223,6 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .compact .agent-current-session { padding: 12px; }
 .agent-profile-team { padding: 12px 18px; }
 .agent-profile-team h3 { display: flex; align-items: center; gap: 8px; font-size: var(--ui-font-body, 13px); }
-.profile-model-trigger { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 38px; padding: 9px 11px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--bg); color: var(--text); cursor: pointer; }
-.profile-model-trigger > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.profile-model-trigger svg { flex-shrink: 0; transition: transform 160ms ease; }
-.profile-model-trigger[aria-expanded=true] svg { transform: rotate(180deg); }
-.profile-model-options { padding: 8px; background: var(--overlay-light); border-radius: var(--radius-sm, 8px); animation: profile-enter 160ms ease both; }
-.profile-model-results { max-height: 220px; overflow: auto; margin-top: 6px; }
-.profile-model-results button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 9px 8px; color: var(--text); background: transparent; border: 0; border-radius: var(--radius-sm, 8px); text-align: left; cursor: pointer; font-size: var(--ui-font-meta, 12px); overflow-wrap: anywhere; }
-.profile-model-results button:hover, .profile-model-results button[aria-pressed=true], .profile-model-results button[aria-selected=true] { background: var(--overlay-medium); }
-.profile-select-options .profile-model-results { margin-top: 0; }
-.profile-model-results button > span { flex: 1; min-width: 0; display: grid; gap: 3px; }
-.profile-model-results strong { font-size: var(--ui-font-meta, 12px); font-weight: 500; }
-.profile-model-results small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
-.profile-model-results svg { flex-shrink: 0; color: var(--accent-ink); }
 .profile-text-editor { display: grid; gap: 8px; min-width: 0; }
 .profile-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 .profile-text-editor > textarea { width: 100%; min-width: 0; min-height: 150px; padding: 12px; resize: vertical; font-size: var(--ui-font-body, 13px); line-height: 1.75; tab-size: 2; }
@@ -356,8 +343,8 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 @keyframes profile-enter { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 @media (hover: none) { .agents-roster-more { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .profile-section-enter, .profile-model-options { animation: none; }
-  .agent-section-nav button, .agent-equipment-item, .profile-segment > button, .equipment-group > summary::before, .profile-model-trigger svg, .agent-portrait-badge, .agent-portrait-remove, .agent-character-name, .agent-character-desc { transition: none; }
+  .profile-section-enter { animation: none; }
+  .agent-section-nav button, .agent-equipment-item, .profile-segment > button, .equipment-group > summary::before, .agent-portrait-badge, .agent-portrait-remove, .agent-character-name, .agent-character-desc { transition: none; }
 }
 
 /* The roster is a native docked panel. Detail width follows its own host, never the window. */
@@ -375,7 +362,7 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 .agent-portrait { width: 68px; height: 76px; border-radius: var(--radius-md); }
 .agent-profile-content { padding-block: 20px; }
 .agent-profile .agent-field > input:not([type=checkbox]), .agent-profile .agent-field > select { max-width: 460px; }
-.agent-skill-summary, .agent-skill-row, .profile-model-trigger { transition: background 140ms ease, color 140ms ease; }
+.agent-skill-summary, .agent-skill-row { transition: background 140ms ease, color 140ms ease; }
 .agent-skill-detail, .agent-skill-editor { animation: profile-enter 160ms ease; }
 @container agent-detail (max-width: 540px) {
   .agent-profile { padding-inline: 16px; }
@@ -402,11 +389,10 @@ div.agent-equipment-item > label { display: flex; align-items: flex-start; gap: 
 }
 @media (prefers-reduced-motion: reduce) {
   .agent-skill-detail, .agent-skill-editor { animation: none; }
-  .agents-roster-item, .agent-skill-summary, .agent-skill-row, .profile-model-trigger { transition: none; }
+  .agents-roster-item, .agent-skill-summary, .agent-skill-row { transition: none; }
 }
 
 .profile-list-controls > .capability-menu-trigger { flex: 0 1 auto; max-width: 46%; font-size: var(--ui-font-meta); }
-.profile-model-results button { font-size: var(--menu-text-size); line-height: var(--menu-line-height); }
 .agents-roster .agents-roster-create { justify-content: flex-start; }
 .agent-profile .profile-model-field { max-width: 460px; }
 
