@@ -89,6 +89,16 @@ function writeAtomicSync(file: string, text: string, mine: () => boolean): void 
   }
 }
 
+/** 坏文件原样复制进备份目录(0600),返回留存路径;留不下就抛。
+ *  Windows 文件名不许冒号;EXCL + 随机后缀:同一毫秒两次也不会盖掉前一份坏文件。 */
+export function keepBadCopy(file: string): string {
+  const bad = join(configBackupDir(file), `${basename(file)}.bad-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`)
+  mkdirSync(dirname(bad), { recursive: true })
+  copyFileSync(file, bad, fsConstants.COPYFILE_EXCL)
+  try { chmodSync(bad, 0o600) } catch { /* Windows 无此语义 */ }
+  return bad
+}
+
 /** 锁内:.bak 有效 → 坏的复制留存、.bak 换回、记标记,返回恢复后的内容;否则 null 且什么都不动。
  *  先复制再 rename 换回:中途死掉原位仍是那份坏文件,下次再恢复,原位永远不会变成「不存在」。 */
 function restoreFromBackup(file: string, mine: () => boolean): Record<string, any> | null {
@@ -98,10 +108,7 @@ function restoreFromBackup(file: string, mine: () => boolean): Record<string, an
   try { bakRaw = readFileSync(bak, 'utf8'); version = statSync(bak).mtimeMs } catch { return null }
   const restored = parseObject(bakRaw)
   if (!restored) return null
-  // Windows 文件名不许冒号;EXCL + 随机后缀:同一毫秒两次恢复也不会盖掉前一份坏文件
-  const bad = join(configBackupDir(file), `${basename(file)}.bad-${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID().slice(0, 8)}`)
-  copyFileSync(file, bad, fsConstants.COPYFILE_EXCL)
-  try { chmodSync(bad, 0o600) } catch { /* Windows 无此语义 */ }
+  const bad = keepBadCopy(file)
   writeAtomicSync(file, bakRaw, mine)
   try {
     writeFileSync(recoveryMarkerOf(file), JSON.stringify({ at: Date.now(), version, bad: basename(bad) }), { encoding: 'utf8', mode: 0o600 })
