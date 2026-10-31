@@ -16,7 +16,7 @@ import { capsForRef } from '../../services/engine/targetCaps'
 import { healthOf, isTerminal } from '../../services/engine/health'
 import { isProjectWorkspace, newSessionConfig, projectDefaultsForNewSession, settleModes, settlePlanMode } from '../../stores/projectSettings'
 import { abortRunAndWait, cancelSteer, currentPlatform, expediteSteer, listActiveRuns, resolveApproval, resolveInquiry, startRun, steerRun, subscribeRunEvents } from '../../services/agentRunService'
-import { speakMessage, stopSpeaking, ttsState } from '../../services/ttsService'
+import { effectiveTtsConfig, speakMessage, stopSpeaking, ttsState } from '../../services/ttsService'
 import { splitSuggestions } from '../../views/chat2/suggest'
 import { clearSuggestion, requestSuggestion } from '../../views/chat2/promptSuggest'
 import type { ChatRef } from '../../components/chatDragRef'
@@ -1724,9 +1724,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         // 自动朗读:仅当前活跃会话的新完成回复(历史加载走 loadSessionHistory 不经本 reducer,无误触发)。
         // 每次 done 实时拉 config 而非用 store 缓存:设置模态开着改的开关/音色立即生效(store 副本只在关模态时刷新)。
         if (sessionId === get().activeId && window.tangu?.getConfig) {
-          void window.tangu.getConfig().then((dc) => {
-            if (!dc?.ttsAutoSpeak || !dc?.ttsModelId) return
+          void window.tangu.getConfig().then((raw) => {
             const st = get()
+            const dc = effectiveTtsConfig(raw, st.modelsResp, !!st.authInfo?.loggedIn && st.authInfo.tokenValid !== false)
+            if (!dc?.ttsAutoSpeak || !dc?.ttsModelId) return
             const msg = (st.messagesBySession[sessionId] || []).find((m) => m.id === assistantId)
             // 摘掉自动化建议围栏再念:手动朗读走的是 EditorialMessage 传来的 body,这里不摘就会
             // 把「forsion-suggest」和反引号念出来 —— 同一条消息两个入口读出两样东西。

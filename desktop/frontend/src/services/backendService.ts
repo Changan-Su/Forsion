@@ -118,6 +118,16 @@ export const designTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey:
   request<{ voice: string; targetModel: string; previewAudio?: { data: string; sampleRate: number; format: string } }>(t, '/agent/tts/voices/design', { method: 'POST', body: JSON.stringify(body) })
 export const deleteTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; voice: string; kind: TtsVoiceKind }) =>
   request<{ ok: boolean }>(t, '/agent/tts/voices/delete', { method: 'POST', body: JSON.stringify(body) })
+/** Forsion 账号代管的通话音色(云端复刻):key 住云端,按用户隔离。modelId = 云端通话模型的 id。 */
+export interface CloudVoice { id: string; voice: string; name: string; modelId: string; hasSample: boolean }
+export const listCloudVoices = (t: EngineTarget) =>
+  request<{ voices: CloudVoice[]; limit: number }>(t, '/agent/tts/cloud-voices/list', { method: 'POST', body: '{}' })
+export const cloneCloudVoice = (t: EngineTarget, body: { modelId: string; name: string; audioData: string; text?: string; language?: string }) =>
+  request<CloudVoice>(t, '/agent/tts/cloud-voices/clone', { method: 'POST', body: JSON.stringify(body) })
+export const deleteCloudVoice = (t: EngineTarget, id: string) =>
+  request<{ ok: boolean }>(t, '/agent/tts/cloud-voices/delete', { method: 'POST', body: JSON.stringify({ id }) })
+export const cloudVoiceSample = (t: EngineTarget, id: string) =>
+  request<{ data: string; mime: string }>(t, '/agent/tts/cloud-voices/sample', { method: 'POST', body: JSON.stringify({ id }) })
 /** 引擎握手时认的子协议名(tangu-agent services/realtimeVoice.ts 的 REALTIME_BEARER_PROTOCOL)。 */
 export const REALTIME_BEARER_PROTOCOL = 'forsion.bearer'
 /**

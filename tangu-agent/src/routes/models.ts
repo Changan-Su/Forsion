@@ -67,6 +67,8 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       realtimeModel: cat.realtimeModel, // Forsion 云端的实时语音通话模型(设置页「语音通话」与输入框通话键的云端缺省)
       translateModels: cat.translateModels, // Forsion 云端的机器翻译模型(设置页「翻译」模型槽的候选;不在 models 里)
       ttsModels: cat.ttsModels, // Forsion 云端的朗读模型(设置页「语音朗读」模型框的候选;不在 models 里)
+      ttsModelId: cat.ttsModelId, // 后台的朗读项目默认
+      ttsVoice: cat.ttsVoice,
       fimModels: cat.fimModels, // Forsion 云端的补全(FIM)模型(设置页「补全」模型槽与插件 ctx.tangu.fim 的候选)
       contextWindowCap: CONTEXT_WINDOW_TOKENS, // 缺省上限:模型菜单「默认」档显示 min(maxContextWindow, 它)
       // Ultra 的 run 不受缺省上限约束(09-27,agentLoop 按 ultraRequested 传 uncapped)。客户端只在引擎声明了它时才按拉满显示窗口:

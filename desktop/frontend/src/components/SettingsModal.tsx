@@ -1267,10 +1267,8 @@ export const SettingsModal: React.FC<{
       ['m-models', t('modelsettings.defaults')],
       ['m-display', t('modelsettings.display')],
       ...(isDesktop ? [['m-providers', t('modelsettings.providers')] as [string, string]] : []),
-      ...(isDesktop ? ([
-        ...(wsRed ? [['m-websearch', t('settings.sub.webSearch')] as [string, string]] : []),
-        ...(stored ? [['m-voice', t('settings.sub.voice')] as [string, string]] : []),
-      ] as Array<[string, string]>) : []),
+      ...(isDesktop && wsRed ? [['m-websearch', t('settings.sub.webSearch')] as [string, string]] : []),
+      ...((isDesktop || window.tangu?.mobile) && stored ? [['m-voice', t('settings.sub.voice')] as [string, string]] : []),
     ],
     // 主题**刻意不设中分类**(用户拍板):设计语言/配色/明暗/界面大小/阴影/玻璃/光标 各自一张小卡就够,
     // 硬分成三栏反而把「换个主题顺手调下明暗」拆成两次点击。别再加回来。
@@ -2526,10 +2524,10 @@ export const SettingsModal: React.FC<{
 
                 {/* 语音页三张卡(10-25 走查续 4.5),各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
                     语音通话 = 空输入框的发送键 / 本地语音识别 = 麦克风键 / 朗读 = 回复的朗读(TTS:OpenAI 兼容 /audio/speech)。 */}
-                {tab === 'model' && isDesktop && activeSub === 'm-voice' && (
+                {tab === 'model' && activeSub === 'm-voice' && (
                   <VoiceSettingsPage cfg={p.cfg} stored={stored} setStored={setStored} providers={customProviders}
                     remoteExternal={stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1')}
-                    cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={realtimeSignedIn}
+                    cloudModel={models?.realtimeModel} ttsDefault={models} cloudAccount={cloudAccount} signedIn={realtimeSignedIn}
                     edit={edit} commitEdits={commitEdits} commitErrorHint={commitErrorHint}
                     onOpen={(target) => {
                       if (target === 'providers') { openSubPage('model', 'm-providers'); return }
