@@ -113,14 +113,23 @@ function nextApprovalId(): string {
 // 远程污点 run 的持久化后续执行入口(manage_automation / manage_schedule,§6.6)与 Agent / 技能管理面不走审批档:
 // 写动作在 gateToolCall 入口按 remoteManagementDenied 硬拒(按 D1 远端能批自己的卡,「要审批」挡不住),list 与本机同档。
 
-export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefined, opts?: { userBrowser?: boolean }): boolean {
+/** 这次调用会把小组件写进磁盘(存 / 改原件、记一笔、删):工具本身是无副作用的,所以按参数判,否则绕过只读档。参数解析不了时按写算。 */
+export function widgetWrite(call: ToolCall): boolean {
+  const name = call.function.name;
+  if (name !== 'intelligent_ui_html' && name !== 'sketch' && name !== 'intelligent_ui' && name !== 'manage_widget') return false;
+  const args: any = parseCallArgs(call);
+  if (name === 'manage_widget') return !['list', 'read'].includes(String(args?.action ?? ''));
+  return args?.widget != null || args?.edits != null;
+}
+
+export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefined, opts?: { userBrowser?: boolean; widgetWrite?: boolean }): boolean {
   const declared = declaredApproval(name);
   if (declared === 'always') return true; // 每次都问那一档:不看档位(空档 / 完全通行也问)
   let mode = normalizeApprovalMode(rawMode, 'toolNeedsApproval');
   if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
   // git_commit 同写文件档:只动本机仓库、可撤回(10-28 用户定「有权限就直接做」;push / pull 经 capabilities.approval:'command' 进跑命令档)
-  const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch' || name === 'git_commit';
+  const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch' || name === 'git_commit' || opts?.widgetWrite === true;
   // 跑命令档(auto-edit 也要批):run_bash / kill_process / MCP 任意能力 / 后台起进程 / 给进程喂 stdin。
   // run_background + write_process_input = 启动任意 shell 进程并向其喂输入,危险性同 run_bash,纳入此档。
   // browser_task = 自主 agent 以用户身份操作已登录网站(点按/提交),危险性同档。
@@ -393,6 +402,11 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
   if (name === 'edit_file') return `edit ${pathLine(args.path)}`;
   if (name === 'multi_edit') return `multi_edit ${pathLine(args.path)} (${Array.isArray(args.edits) ? args.edits.length : '?'} edits)`;
   if (name === 'run_background') return `bg$ ${String(args.command ?? '').trim()}`;
+  // 带 widget 的卡:不把整份 HTML 铺到卡上
+  if (widgetWrite(call) && name !== 'manage_widget') {
+    const w = args.widget && typeof args.widget === 'object' ? args.widget : {};
+    return w.id ? `change widget ${pathLine(w.id)} from rev ${pathLine(w.expectedRev)}${Array.isArray(args.edits) ? ` (${args.edits.length} edits)` : ''}` : `save widget ${pathLine(w.name ?? '')}`;
+  }
   if (name === 'write_process_input') {
     // 与 run_bash 同档,写全不截(Codex 09-25 三轮 #3:旧口径截到 80 字,`echo ok` + 80 个空格 + `\nrm -rf ~` 卡上只剩 echo ok)。
     // 取值与工具同口径:input 不是字符串 = 空 = 只轮询。
@@ -1212,7 +1226,7 @@ export async function gateToolCall(
     // 无人值守 run 本就不接管,也就不因此排队审批
     // 扩展那一路:动的是 Tangu 标签组里它自己开的页 → 不批;动用户自己的标签 → 批
     const userBrowser = mode !== 'full-auto' && USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserActionGated(ctx.sessionId);
-    if (!toolNeedsApproval(name, mode, { userBrowser })) return { action: 'approve' };
+    if (!toolNeedsApproval(name, mode, { userBrowser, widgetWrite: widgetWrite(call) })) return { action: 'approve' };
     // 改参重闸不走「总允许」捷径:同会话另一张卡刚点了总允许,也不能让这次改过的参数跳过下面的 hook(Codex 09-27 复审)。
     // 远程污点 run 也不走:本机在这个会话里点过的「总允许 run_bash」会让远程 run 越过上限档(C3)。
     if (!editedOnCard && !remote && isAlwaysAllowed(ctx.sessionId, name)) return { action: 'approve' };
@@ -1316,5 +1330,5 @@ async function capWouldAsk(
   if (name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) return false;
   if (ctx.execMode === 'host' && writeEscalationNeeded(call, { cwd: ctx.cwd, remote })) return true; // 远程不认额外可写根,也不认 C8 禁用的 cwd
   const userBrowser = USER_BROWSER_ACTIONS.has(name) && !ctx.approvalDeferral && await userBrowserActionGated(ctx.sessionId || '');
-  return toolNeedsApproval(name, cap, { userBrowser });
+  return toolNeedsApproval(name, cap, { userBrowser, widgetWrite: widgetWrite(call) });
 }

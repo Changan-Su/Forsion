@@ -63,11 +63,20 @@ describe('getToolDefinitions snapshot (behavior-preserving)', () => {
         (t) => !(ENV_GATED.includes(t?.function?.name) && !got.has(t?.function?.name)),
       );
     }
+    // 小组件(10-31):与 scripts/dump-tooldefs.mjs 的同名块逐字同改。
+    {
+      const p = createTanguProfile({ sandboxMode: 'none' });
+      configureTangu({ host: stub, brain: stub, billing: stub, profile: p });
+      all['tangu-none:host+gui+widget'] = getToolDefinitions({
+        userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {},
+        execMode: 'host', cwd: '/tmp', approvalMode: 'auto-edit', client: 'desktop/0.0.0', uiCommands: [],
+        clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2', 'widget.v1'],
+      } as any);
+    }
     // 按**用户本机状态**门控的工具(read_computer_history 看 <共享域>/computer-history/state.json):只有 `tangu-none:host+gui`
     // (本机引擎 + desktop 客户端)过得了门禁,开过电脑历史的开发机上它会多出这一条 —— **只**从这一个键的实跑里剔
     // (与 dump-tooldefs.mjs 同改;基线里本就没有)。漏进任何别的键(云端 / 无客户端)照样红;定义字节由 src/services/computerHistory.test.ts 的哈希钉。
-    const USER_STATE_GATED_KEY = 'tangu-none:host+gui';
-    all[USER_STATE_GATED_KEY] = (all[USER_STATE_GATED_KEY] as any[]).filter((t) => t?.function?.name !== 'read_computer_history');
+    for (const key of ['tangu-none:host+gui', 'tangu-none:host+gui+widget']) all[key] = (all[key] as any[]).filter((t) => t?.function?.name !== 'read_computer_history');
     expect(all).toEqual(expected);
   });
 });
