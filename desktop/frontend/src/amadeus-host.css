@@ -419,6 +419,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 }
 .amx-sharestat-chip:hover { color: var(--text); background: var(--overlay-med, rgba(127, 127, 127, 0.16)); }
 .amx-sharestat-chip svg { flex: 0 0 auto; }
+.amx-sharestat-chip.is-static { cursor: default; }
+.amx-sharestat-chip.is-static:hover { color: var(--text-muted); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 .amx-sharestat-chip.is-pub { color: var(--accent-ink, var(--accent)); background: var(--accent-light, rgba(127, 127, 127, 0.14)); }
 
 /* ── Callout 标注(> [!note] …,Obsidian 语法;纯装饰,序列化零影响) ── */
@@ -1967,6 +1969,8 @@ html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-f
 .amxc-row.on { background: var(--accent-light); color: var(--accent-ink, var(--accent)); }
 .amxc-row.static { cursor: default; }
 .amxc-row.dim { opacity: 0.75; }
+.amxc-row-ic { flex: 0 0 auto; display: inline-flex; color: var(--text-muted); }
+.amxc-row-ck { flex: 0 0 13px; display: inline-flex; }
 .amxc-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .amxc-tag { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); background: var(--overlay-light); border-radius: var(--radius-pill, 999px); padding: 1px 8px; }
 .amxc-ic { flex-shrink: 0; border: 0; background: none; color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm, 6px); padding: 3px; display: inline-flex; }

@@ -7,6 +7,7 @@
 import { getApiBase, getToken, installWebShim, redirectToLogin, requireLoginForPage } from './webShim'
 import { createCloudAmadeusBridge, setCloudNotify } from './amadeus/cloudBridge'
 import { installCloudCollab } from './amadeus/cloudCollab'
+import { openTargetWhenReady, takeOpenTarget } from './openTarget'
 import { showUnitBootError } from './unitBootError'
 import { unitProjectionRoute } from './unitProjectionRoute'
 import type { UnitCloudCapabilities } from './unitCloudTransport'
@@ -47,7 +48,9 @@ async function bootstrap(): Promise<void> {
         if (!visitor.account.getIdentity()) { await visitor.login(); return }
         const { mountInvitePage } = await import('./invitePage')
         mountInvitePage(route.token, { apiBase, getToken: visitor.account.getToken,
-          request: visitor.capability.request, appBase: projectionBase.href })
+          request: visitor.capability.request, appBase: projectionBase.href,
+          accountName: visitor.account.getIdentity()?.nickname || visitor.account.getIdentity()?.username,
+          switchAccount: () => { void visitor.capability.logout?.() } })
       }
       return
     }
@@ -55,6 +58,7 @@ async function bootstrap(): Promise<void> {
     void import('./unitShim')
       .then(async (m) => {
         if (!(await m.installUnitShim())) return
+        const target = takeOpenTarget()
         // 手机开设备页装 Mobile 壳(与下方 web 主线同一判定:index 内联脚本按视口写 lcl.uiMode,
         // ?ui= 可强制)—— 与移动 App 同源码,小屏体验对齐(2026-08-25 用户拍板);桌面视口照旧。
         let uiMobile = false
@@ -63,6 +67,7 @@ async function bootstrap(): Promise<void> {
         } catch { /* private mode → 桌面布局 */ }
         await loadApp(uiMobile)
         if (meta.capabilities?.amadeus) await wireToast()
+        if (target) void openTargetWhenReady(target)
       })
       .catch((e) => { console.error('[unit-page] bootstrap failed:', e); showUnitBootError() })
   } else if (path.startsWith('/share/')) {
@@ -78,6 +83,7 @@ async function bootstrap(): Promise<void> {
         .catch((e) => console.error('[tangu-web] invite page failed:', e))
     }
   } else if (await installWebShim()) {
+    const target = takeOpenTarget()
     // 已登录:同步工厂,不发网络请求;首个 Amadeus/Calendar 视图挂载时经 ensureAmadeusReady →
     // restoreVault 才真正连云(GET /vaults → tree → SSE → asset-token)。
     window.amadeus = createCloudAmadeusBridge({
@@ -102,6 +108,7 @@ async function bootstrap(): Promise<void> {
     } catch { /* private mode → 桌面布局 */ }
     void loadApp(uiMobile)
       .then(wireToast)
+      .then(() => { if (target) void openTargetWhenReady(target) })
       .catch((e) => console.error('[tangu-web] bootstrap failed:', e))
   }
   // 未登录:installWebShim 已 location.replace 跳登录,不挂载。

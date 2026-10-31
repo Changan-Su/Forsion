@@ -5,15 +5,15 @@
  * 配额随套餐(服务端强制;此处仅展示与报错透传):free 共享不可用/发布3;plus 2/10;pro 10/∞。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { X, Copy, Check, Link2, Globe2, Trash2, RotateCw, Cloud, CloudOff } from 'lucide-react'
+import { X, Copy, Check, Link2, Globe2, Trash2, RotateCw, Cloud, CloudOff, FileText, Paperclip } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useEntrySync, isSyncedEntry, cloudPathFor } from '../stores/entrySyncStore'
 import { openCloudSyncDialog } from './CloudSyncDialog'
 import { OverlayAt } from '@lcl/engine'
-import { publishStateFor, type PublishState } from '../amadeus/lib/shareState'
+import { daysUntil, publishStateFor, type PublishState } from '../amadeus/lib/shareState'
 import { registerMessages, translate, useI18n } from '../i18n'
-import type { AmadeusPageShare, AmadeusCollabQuota } from '../types'
+import type { AmadeusPageShare, AmadeusCollabQuota, AmadeusRelatedItem } from '../types'
 
 registerMessages({
   'share.unlimited': { zh: '无限制', en: 'unlimited' },
@@ -42,6 +42,14 @@ registerMessages({
   'share.passwordOptional': { zh: '可选', en: 'Optional' },
   'share.setPassword': { zh: '设置', en: 'Set password' },
   'share.passwordSaved': { zh: '已设置密码', en: 'Password set' },
+  'share.along': { zh: '一起共享 · 已选 {n} / {total}', en: 'Share along · {n} of {total} selected' },
+  'share.alongNew': { zh: '新', en: 'New' },
+  'share.alongFile': { zh: '附件', en: 'Attachment' },
+  'share.alongLink': { zh: '双链', en: 'Linked page' },
+  'share.alongHint': { zh: '已包含 {n} 个子页面和这一页同目录的附件。', en: 'Already includes {n} subpages and attachments in this folder.' },
+  'share.alongHintPlain': { zh: '已包含这一页同目录的附件。', en: 'Already includes attachments in this folder.' },
+  'share.endsToday': { zh: '今天到期', en: 'Ends today' },
+  'share.daysLeft': { zh: '还剩 {n} 天', en: '{n} days left' },
   'share.participants': { zh: '参与者 · {n}', en: 'Participants · {n}' },
   'share.noParticipants': { zh: '还没有人加入。把邀请链接发给对方，登录并同意后出现在这里。', en: 'Nobody has joined yet. Send someone the invite link — they appear here once they sign in and accept.' },
   'share.removeParticipant': { zh: '移除', en: 'Remove' },
@@ -102,6 +110,8 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
   const [copied, setCopied] = useState<string | null>(null)
   const [pwDraft, setPwDraft] = useState('')
   const [notOwner, setNotOwner] = useState(false)
+  const [related, setRelated] = useState<{ items: AmadeusRelatedItem[]; subpages: number } | null>(null)
+  const [fresh, setFresh] = useState<string[]>([])
 
   const refresh = (): void => {
     if (!alive.current || !collab || !path) return
@@ -127,6 +137,23 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
     return () => { alive.current = false; requestSequence.current++ }
   }, [collab, path]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const shareId = share?.id
+  useEffect(() => {
+    if (!collab || !shareId) { setRelated(null); return }
+    let live = true
+    void collab.relatedItems(shareId).then((next) => {
+      if (!live) return
+      // 后加的引用不自动带上,只标「新」排最前。第一次打开没有比较的基准,都不算新。
+      const seenKey = `amx.share.seen.${shareId}`
+      let seen: string[] | null = null
+      try { seen = JSON.parse(localStorage.getItem(seenKey) ?? 'null') } catch { /* 当作第一次打开 */ }
+      setFresh(seen ? next.items.filter((i) => !i.included && !seen.includes(i.path)).map((i) => i.path) : [])
+      try { localStorage.setItem(seenKey, JSON.stringify(next.items.map((i) => i.path))) } catch { /* 私有模式:下次全部不算新 */ }
+      setRelated(next)
+    }).catch(() => { if (live) setRelated(null) }) // 旧服务端没有这个接口:分区不显示
+    return () => { live = false }
+  }, [collab, shareId])
+
   if (!collab) return null
 
   const copy = (text: string, key: string): void => {
@@ -143,10 +170,22 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
   }
   const run = (p: Promise<unknown>, ok?: string, fallback = t('share.opFailed')): void => {
     setBusy(true)
-    void p.then(() => { if (alive.current) { if (ok) toast(ok); refresh() } })
+    void p.then(() => {
+      window.dispatchEvent(new Event('amadeus:shares-changed'))
+      if (alive.current) { if (ok) toast(ok); refresh() }
+    })
       .catch((e) => { if (alive.current) err(e, fallback) })
       .finally(() => { if (alive.current) setBusy(false) })
   }
+
+  const toggleAlong = (item: AmadeusRelatedItem): void => {
+    const flip = (included: boolean): void => setRelated((r) => r && { ...r, items: r.items.map((i) => (i.path === item.path ? { ...i, included } : i)) })
+    flip(!item.included)
+    setFresh((list) => list.filter((p) => p !== item.path))
+    void collab.setShareItem(share!.id, item.path, !item.included).catch((e) => { if (alive.current) { flip(item.included); err(e, t('share.opFailed')) } })
+  }
+  const along = related ? [...related.items].sort((a, b) => Number(fresh.includes(b.path)) - Number(fresh.includes(a.path))) : []
+  const left = share ? daysUntil(share.expiresAt) : null
 
   return (
     <div className="amxc-cardwrap" onClick={onClose}>
@@ -167,7 +206,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
             <div className="amxc-body">
               <div className="amxc-hint">{t('share.intro')}</div>
               <button className="amxc-primary" disabled={busy || (quota ? quota.collab <= 0 : false)}
-                onClick={() => run(collab.createPageShare(path, { role: 'editor', expiresDays: 7 }), t('share.enabled'))}>
+                onClick={() => run(collab.createPageShare(path, { role: 'editor', expiresDays: 7, attachments: true }), t('share.enabled'))}>
                 <Link2 size={13} /> {t('share.enable')}
               </button>
               {quota && (quota.collab <= 0
@@ -193,9 +232,10 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
                 </select>
                 <span className="amxc-lbl">{t('share.openFor')}</span>
                 <select
-                  value={share.expiresAt === null ? 'forever' : '7'}
+                  value={left === null ? 'forever' : 'left'}
                   onChange={(e) => run(collab.updatePageShare(share.id, { expiresDays: e.target.value === 'forever' ? null : Number(e.target.value) }))}
                 >
+                  {left !== null && <option value="left" hidden>{left <= 0 ? t('share.endsToday') : t('share.daysLeft', { n: left })}</option>}
                   <option value="7">{t('share.days7')}</option>
                   <option value="30">{t('share.days30')}</option>
                   <option value="forever">{t('share.forever')}</option>
@@ -218,6 +258,21 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
                   </>
                 )}
               </div>
+              {along.length > 0 && (
+                <>
+                  <div className="amxc-sec">{t('share.along', { n: along.filter((i) => i.included).length, total: along.length })}</div>
+                  {along.map((item) => (
+                    <button key={item.path} className={`amxc-row${item.included ? ' on' : ''}`} title={item.path} onClick={() => toggleAlong(item)}>
+                      <span className="amxc-row-ic">{item.kind === 'page' ? <FileText size={13} /> : <Paperclip size={13} />}</span>
+                      <span className="amxc-row-name">{item.title}</span>
+                      {fresh.includes(item.path) && <span className="amxc-tag">{t('share.alongNew')}</span>}
+                      <span className="amxc-tag">{t(item.kind === 'page' ? 'share.alongLink' : 'share.alongFile')}</span>
+                      <span className="amxc-row-ck">{item.included && <Check size={13} />}</span>
+                    </button>
+                  ))}
+                  <div className="amxc-hint">{related?.subpages ? t('share.alongHint', { n: related.subpages }) : t('share.alongHintPlain')}</div>
+                </>
+              )}
               <div className="amxc-sec">{t('share.participants', { n: share.participants.length })}</div>
               {share.participants.length === 0 && <div className="amxc-hint">{t('share.noParticipants')}</div>}
               {share.participants.map((m) => (
