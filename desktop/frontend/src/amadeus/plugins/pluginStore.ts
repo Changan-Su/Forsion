@@ -2062,7 +2062,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
       mountChatBox: (el, opts) => {
-        if (!ctxAlive()) return { update() {}, focus() {}, dispose() {} }
+        if (!ctxAlive()) return { update() {}, focus() {}, insertText() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
         if (typeof opts?.onSubmit !== 'function') throw new TypeError('mountChatBox needs onSubmit')
         let mounted: import('../../../../shared/chatBox').PluginChatBoxHandle | null = null
@@ -2079,6 +2079,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return {
           update(patch) { if (!cancelled) { Object.assign(pending, patch); mounted?.update(patch) } },
           focus() { if (!cancelled) { focusPending = true; mounted?.focus() } },
+          insertText(text) {
+            if (cancelled) return
+            if (mounted) mounted.insertText(text)
+            else { pending.value = (pending.value ?? '') + String(text); focusPending = true }
+          },
           dispose,
         }
       },

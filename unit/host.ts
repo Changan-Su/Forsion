@@ -15,6 +15,7 @@ import type { LocalRuntime, RuntimeFactory } from './runtimeTypes'
 import { createManagement, MANAGEMENT_PATH, type ManagementCommand } from './management'
 import { OperationError, RollbackIncomplete } from './errors'
 import { validateWebEntries, type WebEntry } from './webEntries'
+import { cloudBundle, createCloudRuntime } from './cloudHost'
 export { loadPackages } from './packages'
 
 export interface PluginInstallation { path: string; enabled?: boolean; publish?: boolean; config?: Record<string, unknown>; env?: Record<string, string> }
@@ -23,6 +24,8 @@ export interface UnitConfig {
   basePath: string; webDist: string; plugins: Array<string | PluginInstallation>
   defaultSpace?: string; dataDir?: string; workerFile?: string
   workspace?: { mode: 'local'; path?: string }
+  /** relay defaults on once signed in; syncVault also publishes an existing, non-empty vault to the first account. */
+  cloud?: { relay?: boolean; syncVault?: boolean }
   /** trustedKeys: ed25519 public keys (PEM) whose signed releases remote install / update accept. */
   management?: { enabled: boolean; trustedKeys?: string[] }
   webEntries?: WebEntry[]
@@ -100,7 +103,8 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   validateFeatures()
   const usable = (rec: RecordState): boolean => rec.state === 'active'
     && (rec.package.manifest.requires || []).every((id) => usable(mustGet(id)))
-  const visible = (rec: RecordState): boolean => usable(rec) && rec.installation.publish !== false
+  // On a local Unit the account bundle is a host service: its pages need account channels the owner's page does not have.
+  const visible = (rec: RecordState): boolean => usable(rec) && rec.installation.publish !== false && !(local && cloudBundle(rec.package.manifest.id))
     && (rec.package.manifest.requires || []).every((id) => !mustGet(id).package.manifest.frontend || visible(mustGet(id)))
   const published = () => [...records.values()].filter(visible)
   const product = resolveProduct(undefined, { ...basic, market: false, onboarding: false, nativeFeatures: [] })
@@ -174,6 +178,12 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
         runtime = await factory({ packageDir: rec.package.root, dataDir: resolve(dataDir, 'plugins', id), workspaceDir, config: rec.installation.config || {}, log: (m) => console.log(`[plugin:${id}] ${m}`) })
         if (!runtime || typeof runtime.close !== 'function') throw new Error('Invalid local runtime')
         if ((runtime.vault && runtimeVault()) || (runtime.engine && runtimeEngine())) throw new Error('Local capability already has a provider')
+      }
+      if (local && cloudBundle(id)) {
+        runtime = await createCloudRuntime({ packageDir: rec.package.root, dataDir, workspaceDir, version: config.version,
+          relay: config.cloud?.relay !== false, syncVault: config.cloud?.syncVault === true, vault: () => runtimeVault(), engine: () => runtimeEngine(),
+          web: () => ({ url: `http://${localHost}:${web.port}`, internalSecret: web.internalSecret, proxyCallerKey: web.proxyCallerKey }),
+          log: (m) => console.log(`[plugin:${id}] ${m}`) })
       }
       if (rec.package.backendEntry) {
         await mkdir(resolve(dataDir, 'plugins', id), { recursive: true, mode: 0o700 })
@@ -306,6 +316,11 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   return { ...web,
     closeManagement: management.close,
     status: () => [...records.values()].map((r) => ({ id: r.package.manifest.id, version: r.package.manifest.version, state: r.state })),
+    account: () => {
+      const account = [...records.values()].find((r) => usable(r) && r.runtime?.account)?.runtime?.account
+      if (!account) throw new Error('Install and enable the Forsion account bundle first')
+      return account
+    },
     enable: (id: string) => serialize(() => activate(id)), disable: (id: string) => serialize(() => deactivate(id)),
     restart: (id: string) => serialize(() => restart(id)),
     update: (id: string, path: string) => serialize(async () => {

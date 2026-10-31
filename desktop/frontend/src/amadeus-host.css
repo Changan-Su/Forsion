@@ -339,10 +339,43 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 
 /* ── 标签面板 ── */
 .amx-tag { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.amx-tag.active { color: var(--accent-ink, var(--accent, var(--text))); }
 .amx-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .amx-tag-count { flex: 0 0 auto; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
-.amx-tag-page { padding-left: 24px; }
+/* 标签树(方案 T2):一行 = 箭头 + 名字 + 含子标签的计数。箭头和名字是两个按钮,点名字跳 tag: 搜索。 */
+.amx-tagtree-search { margin-top: 8px; }
+.amx-tagtree-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.amx-tagtree-sort { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); text-transform: none; letter-spacing: 0; }
+.amx-tagtree-sort button {
+  border: none; background: transparent; color: var(--text-muted); font: inherit;
+  padding: 1px 8px; border-radius: var(--radius-pill, 999px); cursor: pointer;
+}
+.amx-tagtree-sort button:hover { color: var(--text); }
+.amx-tagtree-sort button.on { background: var(--bg-card); color: var(--text); }
+.amx-tagtree-row { display: flex; align-items: center; gap: 2px; padding-left: calc(var(--amx-tag-depth, 0) * 14px); }
+.amx-tagtree-row > .amx-list-item { flex: 1 1 auto; min-width: 0; }
+.amx-tagtree-chev, .amx-tagtree-gap { flex: 0 0 18px; width: 18px; height: 18px; }
+.amx-tagtree-chev {
+  display: inline-flex; align-items: center; justify-content: center; padding: 0; border: none; background: transparent;
+  color: var(--text-muted); border-radius: var(--radius-sm, 6px); cursor: pointer;
+}
+.amx-tagtree-chev svg { transition: transform var(--collapse-duration) var(--collapse-ease); }
+.amx-tagtree-chev.open svg { transform: rotate(90deg); }
+.amx-tagtree-chev:hover:not(:disabled) { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
+.amx-tagtree-chev:disabled { cursor: default; }
+
+/* tag: 搜索的逐行结果:文件名 + 处数,下面一行一处命中。 */
+.amx-taghit-cap { padding: 2px 10px 4px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
+.amx-taghit-group { display: flex; flex-direction: column; gap: 1px; margin-bottom: 6px; }
+.amx-taghit-file { font-weight: 500; }
+.amx-taghit-line { padding: 3px 8px; margin-left: 10px; width: calc(100% - 10px); white-space: normal; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
+.amx-taghit-line:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); }
+.amx-taghit-pill {
+  white-space: nowrap;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
+  border-radius: var(--radius-pill, 999px);
+  padding: 0 0.35em;
+}
 
 /* ── 局部关系图(右栏 tab;可拖节点/平移/缩放,hover 高亮相邻) ── */
 .amx-graph { display: block; width: 100%; height: auto; touch-action: none; cursor: grab; }

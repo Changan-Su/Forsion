@@ -4,9 +4,18 @@ import { create } from 'zustand'
 import { noteOf, usePageStore } from '@amadeus/store/pageStore'
 import { setRecentsProvider } from '@amadeus/lib/recents'
 import { slashRel } from '@amadeus/lib/vaultFiles'
+import type { TagTreeSort } from '@amadeus-shared/tagQuery'
 
 export interface Collection { name: string; query: string }
-interface Prefs { starred: string[]; recents: string[]; collections: Collection[]; pins: string[] }
+interface Prefs {
+  starred: string[]
+  recents: string[]
+  collections: Collection[]
+  pins: string[]
+  /** 标签树展开着的节点(tagTreeKey);筛选时自动展开的不进这里。 */
+  tagExpanded: string[]
+  tagSort: TagTreeSort
+}
 interface PrefsState extends Prefs {
   toggleStar(path: string): void
   /** 置顶(每 vault 一份,不进 frontmatter:fm 会随云同步跟文件走,导致本地/云端两侧共享置顶)。 */
@@ -15,6 +24,8 @@ interface PrefsState extends Prefs {
   /** 集合 = 保存的全文搜索(同名覆盖)。 */
   saveCollection(name: string, query: string): void
   removeCollection(name: string): void
+  toggleTagExpanded(key: string): void
+  setTagSort(sort: TagTreeSort): void
 }
 
 const RECENT_CAP = 20
@@ -39,10 +50,12 @@ const load = (): Prefs => {
         recents: rel(p.recents),
         collections: Array.isArray(p.collections) ? p.collections : [],
         pins: rel(p.pins),
+        tagExpanded: Array.isArray(p.tagExpanded) ? p.tagExpanded.filter((x): x is string => typeof x === 'string') : [],
+        tagSort: p.tagSort === 'name' ? 'name' : 'count',
       }
     }
   } catch { /* ignore */ }
-  return { starred: [], recents: [], collections: [], pins: [] }
+  return { starred: [], recents: [], collections: [], pins: [], tagExpanded: [], tagSort: 'count' }
 }
 const persist = (p: Prefs): void => {
   try {
@@ -51,13 +64,15 @@ const persist = (p: Prefs): void => {
   } catch { /* ignore */ }
 }
 
-const snapshot = (s: PrefsState): Prefs => ({ starred: s.starred, recents: s.recents, collections: s.collections, pins: s.pins })
+const snapshot = (s: PrefsState): Prefs => ({ starred: s.starred, recents: s.recents, collections: s.collections, pins: s.pins, tagExpanded: s.tagExpanded, tagSort: s.tagSort })
 
 export const useAmadeusPrefs = create<PrefsState>((set, get) => ({
   starred: [],
   recents: [],
   collections: [],
   pins: [],
+  tagExpanded: [],
+  tagSort: 'count',
   toggleStar: (path) => {
     const starred = get().starred.includes(path) ? get().starred.filter((p) => p !== path) : [...get().starred, path]
     set({ starred })
@@ -82,6 +97,15 @@ export const useAmadeusPrefs = create<PrefsState>((set, get) => ({
     const collections = get().collections.filter((c) => c.name !== name)
     set({ collections })
     persist({ ...snapshot(get()), collections })
+  },
+  toggleTagExpanded: (key) => {
+    const tagExpanded = get().tagExpanded.includes(key) ? get().tagExpanded.filter((k) => k !== key) : [...get().tagExpanded, key]
+    set({ tagExpanded })
+    persist({ ...snapshot(get()), tagExpanded })
+  },
+  setTagSort: (tagSort) => {
+    set({ tagSort })
+    persist({ ...snapshot(get()), tagSort })
   },
 }))
 

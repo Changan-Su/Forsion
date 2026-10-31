@@ -5,7 +5,7 @@ import { resolve, dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
 
-export interface ControlCommand { action: 'stage' | 'status' | 'enable' | 'disable' | 'restart' | 'update' | 'migrate' | 'install' | 'uninstall'; id?: string; path?: string; remote?: boolean }
+export interface ControlCommand { action: 'stage' | 'status' | 'enable' | 'disable' | 'restart' | 'update' | 'migrate' | 'install' | 'uninstall' | 'login' | 'logout' | 'account'; id?: string; path?: string; remote?: boolean; cloudUrl?: string }
 export const controlAddress = (dataDir: string) => process.platform === 'win32'
   ? `\\\\.\\pipe\\forsion-unit-${createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 24)}`
   : resolve(tmpdir(), `forsion-unit-${process.getuid?.() ?? 'user'}`, createHash('sha256').update(resolve(dataDir)).digest('hex').slice(0, 24) + '.sock')

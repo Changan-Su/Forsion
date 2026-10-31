@@ -113,6 +113,9 @@ describe('事件', () => {
     emitPluginTrigger('demo', 'ping');
     emitPluginTrigger('demo', 'ping');
     await settle();
+    // The kick follows a real file read, which can outlast the fixed ticks above on a slow runner.
+    await vi.waitFor(() => expect(h.kick).toHaveBeenCalled());
+    await settle();
     expect(h.kick).toHaveBeenCalledTimes(1);
     await saveTriggers([]);
   });
