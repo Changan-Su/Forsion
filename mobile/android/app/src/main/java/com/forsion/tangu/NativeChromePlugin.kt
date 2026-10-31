@@ -40,6 +40,8 @@ import kotlin.math.roundToInt
  * has arrived, and the page is told how far and how fast (`ime` event) so what stands at its bottom edge travels with
  * the keyboard instead of jumping to where it is going.
  * The dock holds a handful of Spaces; with more than fit, its last cell reports `spacesAll` and JS shows the rest.
+ * Going to a detail page and back, the dock sinks and fades instead of vanishing (`dockMotion`): the view stays up until
+ * it has gone, takes no touches on the way, and the page moves the blur behind it along (`motion` on the dock's plate).
  * Wide windows (2026-10-20, mock-up A2; the page's own wide line, judged here on the whole window): the same view is a
  * rail at the left edge instead (gravity START, full height, opaque), the WebView starts right of it, and it stays up
  * while the keyboard is (it is beside the keyboard, not on it). The verdict goes to the page with every `layout` event
@@ -110,6 +112,8 @@ class NativeChromePlugin : Plugin() {
     private val parentListener = View.OnLayoutChangeListener { v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
         if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) v.post { layout() }
     }
+    /** The dock is on its way out ("out") or back ("in"); null at rest. Only for a change of page: see dockChange. */
+    private var dockMotion: String? = null
     /** The Spaces stand in the rail (wide windows) rather than the dock; read by the views' content. */
     private val rail = mutableStateOf(false)
     private val readerListener = AccessibilityManager.TouchExplorationStateChangeListener { scheduleLayoutReport() }
@@ -125,6 +129,7 @@ class NativeChromePlugin : Plugin() {
         }
         activity.runOnUiThread {
             attach()
+            dockChange(state.value, parsed)
             state.value = parsed
             WindowCompat.getInsetsController(activity.window, activity.window.decorView).apply {
                 isAppearanceLightStatusBars = !parsed.theme.dark
@@ -207,10 +212,12 @@ class NativeChromePlugin : Plugin() {
             view.setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnDetachedFromWindow)
             view.setContent {
                 val current = state.value
-                if (current != null && current.spaceBar) {
-                    if (rail.value) NativeSpaceRail(current, insets.value, onAll = { emit("spacesAll") }, onAccount = { emit("account") }) { id, long -> emitSpace(id, long) }
-                    else NativeSpaceBar(current, insets.value, ::onPlate, onAll = { emit("spacesAll") }) { id, long -> emitSpace(id, long) }
-                }
+                if (rail.value) {
+                    if (current != null && current.spaceBar) NativeSpaceRail(current, insets.value, onAll = { emit("spacesAll") }, onAccount = { emit("account") }) { id, long -> emitSpace(id, long) }
+                } else NativeDockHost(
+                    current, insets.value, ::onPlate, onAll = { emit("spacesAll") }, onSpace = { id, long -> emitSpace(id, long) },
+                    animated = { dockMotion != null }, onSettled = ::dockSettled,
+                )
             }
             // Own listener (the WebView's is only hooked where Capacitor adjusts margins): keyboard up → bar away,
             // and — edge-to-edge only, see layout() — the WebView ends at the keyboard's top edge.
@@ -255,6 +262,23 @@ class NativeChromePlugin : Plugin() {
         return wide
     }
 
+    /**
+     * Does this state change take the dock away or bring it back, and is that one to play? Not with the keyboard up
+     * (where the system resizes the window the dock would ride up on it) and not without the frosted page behind it
+     * (a strip's WebView is laid out around the dock at once); those stay a cut, as does the first state of all.
+     */
+    private fun dockChange(before: ChromeState?, after: ChromeState) {
+        if (before == null || before.spaceBar == after.spaceBar) return
+        val floats = if (after.spaceBar) after.floating else before.floating
+        dockMotion = if (!floats || imeVisible || wideWindow()) null else if (after.spaceBar) "in" else "out"
+    }
+
+    private fun dockSettled() {
+        if (dockMotion == null) return
+        dockMotion = null
+        layout()
+    }
+
     private fun barVisible() = bar != null && state.value?.visible == true
     private fun spacesShown() = spaceBar != null && state.value?.spaceBar == true
     /** The rail: wide windows, keyboard or not. */
@@ -295,7 +319,8 @@ class NativeChromePlugin : Plugin() {
             }
         }
         spaceBar?.let { view ->
-            view.visibility = if (spacesVisible || railOn) View.VISIBLE else View.GONE
+            if ((imeVisible || railOn) && dockMotion != null) dockMotion = null // nothing rides on the keyboard; the rail took over
+            view.visibility = if (spacesVisible || railOn || dockMotion == "out") View.VISIBLE else View.GONE
             // the same view is the dock (a strip at the bottom) or the rail (a column at the left edge, past the side cutout)
             val params = view.layoutParams as CoordinatorLayout.LayoutParams
             val gravity = if (railOn) Gravity.START else Gravity.BOTTOM
@@ -354,9 +379,11 @@ class NativeChromePlugin : Plugin() {
         val list = JSArray()
         if (floating) for ((id, r) in plates) {
             // the dock's plate outlives the dock while the keyboard is up (the view is only hidden, not disposed)
-            if (id == "dock" && !spacesVisible()) continue
+            val leaving = id == "dock" && dockMotion == "out"
+            if (id == "dock" && !spacesVisible() && !leaving) continue
             list.put(JSObject().apply {
                 put("id", id); put("x", dp(r.left - origin[0])); put("y", dp(r.top - origin[1])); put("w", dp(r.width)); put("h", dp(r.height))
+                if (id == "dock") dockMotion?.let { put("motion", it) }
             })
         }
         data.put("plates", list)
@@ -401,6 +428,7 @@ class NativeChromePlugin : Plugin() {
 
     /** Remove the bars and give the WebView back the margins Capacitor would have set. */
     private fun teardown() {
+        dockMotion = null
         state.value = null
         bar?.let { view -> (view.parent as? ViewGroup)?.removeView(view); view.disposeComposition() }
         bar = null

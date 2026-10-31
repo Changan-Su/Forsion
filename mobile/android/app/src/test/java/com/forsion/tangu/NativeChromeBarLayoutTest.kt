@@ -7,9 +7,12 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.test.assertContentDescriptionEquals
 import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.assertIsNotSelected
@@ -21,6 +24,7 @@ import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -268,5 +272,115 @@ class NativeChromeBarLayoutTest {
         compose.waitForIdle()
         assertTrue("a short title keeps its own width", widthOf("nativeChrome.capLeft").value < 150f)
         assertEquals("not a sane number: no cap", 0, shell(extra = ""","capLeftMax":-5""").capLeftMax)
+    }
+
+    // ---- the droplet: touches. The motion itself is DockDropletTest; a frame of it is a screenshot on the emulator. ----
+
+    /** A finger along the dock over these cells, left down: while it is the dock runs frames, so the clock is ours. */
+    private fun slide(vararg tags: String) {
+        compose.mainClock.autoAdvance = false
+        val dock = compose.onNodeWithTag("nativeChrome.dock").getUnclippedBoundsInRoot()
+        val y = (dock.bottom - dock.top).value / 2
+        val xs = tags.map { tag -> compose.onNodeWithTag(tag).getUnclippedBoundsInRoot().let { (it.left + it.right).value / 2 - dock.left.value } }
+        compose.onNodeWithTag("nativeChrome.dock").performTouchInput {
+            down(Offset(xs[0], y))
+            for ((a, b) in xs.zipWithNext()) for (i in 1..8) moveTo(Offset(a + (b - a) * i / 8, y))
+        }
+        compose.mainClock.advanceTimeBy(64)
+    }
+    private fun lift(cancel: Boolean = false) {
+        compose.onNodeWithTag("nativeChrome.dock").performTouchInput { if (cancel) cancel() else up() }
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+    }
+    private fun selected(tag: String) = compose.onNodeWithTag(tag).fetchSemanticsNode().config.getOrNull(SemanticsProperties.Selected) == true
+
+    @Test fun aTapSelectsAtOnceWithoutWaitingForThePage() {
+        val asked = mutableListOf<String>()
+        dock(400, shell(spaces = spaces(4, 1)), asked)
+        compose.onNodeWithTag("nativeChrome.space.s3").performClick()
+        compose.onNodeWithTag("nativeChrome.space.s3").assertIsSelected()
+        compose.onNodeWithTag("nativeChrome.space.s1").assertIsNotSelected()
+        assertEquals(listOf("s3"), asked)
+    }
+
+    @Test fun aTapThePageNeverConfirmsGoesBack() {
+        dock(400, shell(spaces = spaces(4, 1)))
+        compose.onNodeWithTag("nativeChrome.space.s3").performClick()
+        compose.waitUntil(DOCK_PENDING_MS + 3000) { selected("nativeChrome.space.s1") }
+    }
+
+    @Test fun slidingAlongTheDockPicksOnReleaseAndOnlyThen() {
+        val asked = mutableListOf<String>()
+        dock(400, shell(spaces = spaces(4, 0)), asked)
+        slide("nativeChrome.space.s0", "nativeChrome.space.s2")
+        assertEquals("a finger still down has not chosen yet", emptyList<String>(), asked)
+        compose.onNodeWithTag("nativeChrome.space.s2").assertIsSelected() // the cell under it lights up all the same
+        lift()
+        assertEquals("one switch, and no tap on the way", listOf("s2"), asked)
+        compose.onNodeWithTag("nativeChrome.space.s2").assertIsSelected()
+    }
+
+    @Test fun slidingBackToWhereItStartedSwitchesNothing() {
+        val asked = mutableListOf<String>()
+        dock(400, shell(spaces = spaces(4, 1)), asked)
+        slide("nativeChrome.space.s1", "nativeChrome.space.s3", "nativeChrome.space.s1")
+        lift()
+        assertEquals(emptyList<String>(), asked)
+    }
+
+    @Test fun aSlideTheSystemTakesAwayPicksNothing() {
+        val asked = mutableListOf<String>()
+        dock(400, shell(spaces = spaces(4, 0)), asked)
+        slide("nativeChrome.space.s0", "nativeChrome.space.s3")
+        lift(cancel = true)
+        assertEquals(emptyList<String>(), asked)
+        compose.onNodeWithTag("nativeChrome.space.s0").assertIsSelected()
+    }
+
+    @Test fun slidingToAllOpensItAndLeavesTheSelectionAlone() {
+        val asked = mutableListOf<String>()
+        dock(400, shell(spaces = spaces(9, 1, pinned = setOf(0, 1, 2, 3))), asked)
+        slide("nativeChrome.space.s1", "nativeChrome.spacesAll")
+        lift()
+        assertEquals(listOf("all"), asked)
+        compose.onNodeWithTag("nativeChrome.space.s1").assertIsSelected()
+    }
+
+    @Test fun aFingerGoingUpTheDockIsNotASlide() {
+        val asked = mutableListOf<String>()
+        dock(400, shell(spaces = spaces(4, 0)), asked)
+        compose.onNodeWithTag("nativeChrome.dock").performTouchInput {
+            val c = center
+            down(c)
+            for (i in 1..6) moveTo(Offset(c.x + i, c.y - i * 12))
+            up()
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag("nativeChrome.space.s0").assertIsSelected()
+        assertTrue("no switch: $asked", asked.none { it == "s0" || it == "s2" || it == "s3" })
+    }
+
+    @Test fun aLeavingDockStaysOnScreenWithoutTakingTouchesAndThenGoes() {
+        var wanted by mutableStateOf(shell(spaces = spaces(4, 0)))
+        var settled by mutableIntStateOf(0)
+        val asked = mutableListOf<String>()
+        compose.setContent {
+            Box(Modifier.width(400.dp).height(NATIVE_SPACE_BAR_HEIGHT)) {
+                NativeDockHost(wanted, Insets.NONE, { _, _ -> }, onAll = {}, onSpace = { id, _ -> asked += id }, animated = { true }, onSettled = { settled++ })
+            }
+        }
+        compose.waitForIdle()
+        val before = settled
+        compose.mainClock.autoAdvance = false
+        compose.runOnUiThread { wanted = wanted.copy(spaces = emptyList()); Snapshot.sendApplyNotifications() }
+        compose.mainClock.advanceTimeBy(100)
+        assertEquals("it does not vanish with the page's state", before, settled)
+        compose.onNodeWithTag("nativeChrome.dock").assertDoesNotExist() // what a screen reader or a test can reach: nothing
+        compose.mainClock.advanceTimeBy(600)
+        compose.mainClock.autoAdvance = true
+        compose.waitForIdle()
+        assertEquals(before + 1, settled)
+        assertEquals(emptyList<String>(), asked)
     }
 }
