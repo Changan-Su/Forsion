@@ -29,7 +29,7 @@ async function main() {
         const b = await body(); requests.push(b)
         const prev = rules.find((r) => r.id === b.id)
         const observe = b.observe ?? prev?.observe // 缺席 = 保留,和引擎 upsertTrigger 同口径
-        const tr = { id: b.id || `auto-${rules.length + 1}`, desc: b.desc, enabled: b.enabled, cond: { type: b.cond_type, ...(b.time ? { time: b.time } : {}) }, actions: b.actions, cooldownHours: b.cooldown_hours || 0, lastFiredAt: null, ...(observe ? { observe, observeSince: new Date(Date.now() - 2 * 86_400_000).toISOString(), observeHits: 1 } : {}) }
+        const tr = { id: b.id || `auto-${rules.length + 1}`, desc: b.desc, enabled: b.enabled, cond: { type: b.cond_type, ...(b.time ? { time: b.time } : {}), ...(b.params ? { params: b.params } : {}) }, actions: b.actions, cooldownHours: b.cooldown_hours || 0, lastFiredAt: null, ...(observe ? { observe, observeSince: new Date(Date.now() - 2 * 86_400_000).toISOString(), observeHits: 1 } : {}) }
         const at = rules.findIndex((r) => r.id === tr.id)
         if (at < 0) rules.push(tr); else rules[at] = tr
         return { trigger: tr, created: at < 0 }
