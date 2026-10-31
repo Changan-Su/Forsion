@@ -110,6 +110,7 @@
     "e2e:cloudvoice": "node scripts/cloud-voice-default.e2e.cjs",
     "e2e:voicestudio": "node scripts/voice-studio.e2e.cjs",
     "e2e:dashdrag": "node scripts/dash3-drag.e2e.cjs",
+    "probe:dashdrag": "node scripts/dash3-drag.probe.cjs",
     "e2e:pathgone": "node scripts/vault-pathgone.e2e.cjs",
     "check:pillbar": "node scripts/pillbar-overflow.check.cjs",
     "check:feedback": "node scripts/feedback.check.cjs",
