@@ -14,6 +14,7 @@ import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { assetKey, assetRefs } from '@amadeus-shared/assets'
 import type { BacklinkHit, BacklinkRef, SearchHit, TagCount, UnlinkedMention } from '@amadeus-shared/ipc'
 import { parseMdMarks, type MdMark } from '@amadeus-shared/mdMarks'
+import { hasTagFilter, parseSearchQuery, tagCounts, tagSearch } from '@amadeus-shared/tagQuery'
 import type { VaultManager } from './vaultManager'
 import { vaultRel } from './vaultRel'
 
@@ -29,6 +30,8 @@ interface Entry {
   links: string[] // distinct outgoing [[link]] targets(正文 + fm 属性值里的,代码里的不算)
   embeds: string[] // distinct raw `![[note#id]]` targets this note embeds
   tags: string[] // 正文 #标签 + fm `tags:`(L-14)
+  /** 只在 fm `tags:` 里的那份:`tag:` 搜索要把它们列成 line 0 那一条。 */
+  fmTags: string[]
   /** fm `aliases:`(L-13 补全 / L-16 未链接提及)。 */
   aliases: string[]
   /** fm 里值带 `[[ ]]` 的属性(C-19):反链逐处命中要把它们列成「属性」那一条。 */
@@ -181,6 +184,7 @@ export class VaultIndex {
       links: mergeCi(noteLinkTargets(plain), meta.links.flatMap((l) => l.targets)),
       embeds: parseEmbeds(raw), // raw `note#id` targets (matched note-scoped on demand)
       tags: mergeCi(parseTags(plain), meta.tags),
+      fmTags: meta.tags,
       aliases: meta.aliases,
       fmLinks: meta.links,
       blocks,
@@ -334,6 +338,12 @@ export class VaultIndex {
   }
 
   search(query: string): SearchHit[] {
+    const parsed = parseSearchQuery(query)
+    if (hasTagFilter(parsed)) {
+      const text = parsed.text.toLowerCase()
+      const textTerms = text ? searchTerms(text) : []
+      return tagSearch(this.entries.values(), parsed, (e) => this.textHit(e, text, textTerms), textTerms)
+    }
     const q = query.trim().toLowerCase()
     if (!q) return []
     // 多词 = **模糊到词一级**:全部词都出现即命中,顺序不论、隔着什么符号也不论
@@ -341,46 +351,52 @@ export class VaultIndex {
     const terms = searchTerms(q)
     const hits: SearchHit[] = []
     for (const e of this.entries.values()) {
-      const title = e.title.toLowerCase()
-      if (!terms.every((t) => e.lower.includes(t) || title.includes(t))) continue
-      // 摘要/行号锚在**第一个能在正文里找到的词**上(整串找不到时退到词)。
-      const bodyIdx = e.lower.indexOf(q) >= 0 ? e.lower.indexOf(q) : terms.map((t) => e.lower.indexOf(t)).find((i) => i >= 0) ?? -1
-      const titleHit = title.includes(q) || terms.every((t) => title.includes(t))
-      if (bodyIdx < 0 && !titleHit) continue
-
-      let snippet = ''
-      let line = 1
-      let score = 0
-
-      if (bodyIdx >= 0) {
-        const anchor = e.lower.startsWith(q, bodyIdx) ? q : (terms.find((t) => e.lower.startsWith(t, bodyIdx)) ?? q)
-        const start = Math.max(0, bodyIdx - 40)
-        const end = Math.min(e.plain.length, bodyIdx + anchor.length + 80)
-        snippet =
-          (start > 0 ? '…' : '') +
-          e.plain.slice(start, end).replace(/\s+/g, ' ').trim() +
-          (end < e.plain.length ? '…' : '')
-        line = countNewlines(e.plain, bodyIdx) + 1
-        score += 5 - Math.min(4, bodyIdx / 200)
-        let n = 0
-        let from = 0
-        while ((from = e.lower.indexOf(anchor, from)) >= 0) {
-          n++
-          from += anchor.length
-          if (n > 20) break
-        }
-        score += Math.min(5, n)
-      }
-      if (titleHit) {
-        score += 12
-        if (terms.length > 1 && !title.includes(q)) score -= 4 // 分词命中不如整串命中
-        if (!snippet) snippet = e.plain.replace(/\s+/g, ' ').trim().slice(0, 120)
-        if (e.title.toLowerCase() === q) score += 8
-      }
-      hits.push({ path: e.path, title: e.title, snippet, line, score })
+      const hit = this.textHit(e, q, terms)
+      if (hit) hits.push(hit)
     }
     hits.sort((a, b) => b.score - a.score)
     return hits.slice(0, 50)
+  }
+
+  /** 一篇对普通关键词的命中:算摘要、行号、分数。q 是整串小写,terms 是切好的词。 */
+  private textHit(e: Entry, q: string, terms: string[]): SearchHit | null {
+    const title = e.title.toLowerCase()
+    if (!terms.every((t) => e.lower.includes(t) || title.includes(t))) return null
+    // 摘要/行号锚在**第一个能在正文里找到的词**上(整串找不到时退到词)。
+    const bodyIdx = e.lower.indexOf(q) >= 0 ? e.lower.indexOf(q) : terms.map((t) => e.lower.indexOf(t)).find((i) => i >= 0) ?? -1
+    const titleHit = title.includes(q) || terms.every((t) => title.includes(t))
+    if (bodyIdx < 0 && !titleHit) return null
+
+    let snippet = ''
+    let line = 1
+    let score = 0
+
+    if (bodyIdx >= 0) {
+      const anchor = e.lower.startsWith(q, bodyIdx) ? q : (terms.find((t) => e.lower.startsWith(t, bodyIdx)) ?? q)
+      const start = Math.max(0, bodyIdx - 40)
+      const end = Math.min(e.plain.length, bodyIdx + anchor.length + 80)
+      snippet =
+        (start > 0 ? '…' : '') +
+        e.plain.slice(start, end).replace(/\s+/g, ' ').trim() +
+        (end < e.plain.length ? '…' : '')
+      line = countNewlines(e.plain, bodyIdx) + 1
+      score += 5 - Math.min(4, bodyIdx / 200)
+      let n = 0
+      let from = 0
+      while ((from = e.lower.indexOf(anchor, from)) >= 0) {
+        n++
+        from += anchor.length
+        if (n > 20) break
+      }
+      score += Math.min(5, n)
+    }
+    if (titleHit) {
+      score += 12
+      if (terms.length > 1 && !title.includes(q)) score -= 4 // 分词命中不如整串命中
+      if (!snippet) snippet = e.plain.replace(/\s+/g, ' ').trim().slice(0, 120)
+      if (e.title.toLowerCase() === q) score += 8
+    }
+    return { path: e.path, title: e.title, snippet, line, score }
   }
 
   backlinks(targetPathIn: string): BacklinkRef[] {
@@ -456,16 +472,7 @@ export class VaultIndex {
   }
 
   listTags(): TagCount[] {
-    const counts = new Map<string, TagCount>()
-    for (const e of this.entries.values()) {
-      for (const t of e.tags) {
-        const k = t.toLowerCase()
-        const c = counts.get(k)
-        if (c) c.count++
-        else counts.set(k, { tag: t, count: 1 })
-      }
-    }
-    return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
+    return tagCounts(this.entries.values())
   }
 
   /** 带该标签的笔记。嵌套标签按前缀(L-14,Obsidian 口径):查 `work` 也命中 `work/urgent`。 */

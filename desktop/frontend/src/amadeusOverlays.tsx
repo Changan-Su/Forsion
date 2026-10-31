@@ -89,7 +89,7 @@ export function AmadeusOverlays() {
     window.addEventListener('amadeus:toast', onToast)
     return () => window.removeEventListener('amadeus:toast', onToast)
   }, [])
-  // 正文 #标签 胶囊点击(编辑器 tagPill 发事件解耦,L-14)→ 左栏标签视图定位该标签。
+  // 正文 #标签 胶囊点击(编辑器 tagPill 发事件解耦,L-14)→ 左栏全文搜索按这个标签找。
   useEffect(() => {
     const onOpenTag = (e: Event): void => {
       const tag = (e as CustomEvent<{ tag?: string }>).detail?.tag

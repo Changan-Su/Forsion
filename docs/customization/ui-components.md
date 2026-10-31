@@ -10,7 +10,7 @@ Chat Box 的卡面、输入、操作栏和提交按钮由 `@lcl/components` 维�
 
 ## 插件使用
 
-`ctx.ui?.mountChatBox` 可挂到插件自己的 View 中，不需要 React。当前支持文本输入、模型选择、思考档、键盘提交；附件、命令、审批和运行控制属于会话编排器，未接线的行为不显示。
+`ctx.ui?.mountChatBox` 可挂到插件自己的 View 中，不需要 React。当前支持文本输入、模型选择、思考档、键盘提交，以及工具栏、补全和插入文字三个插槽；附件、命令、审批和运行控制属于会话编排器，未接线的行为不显示。
 
 要整块「新对话」输入区（主页那一套：附件、模式、项目栏、运行位置、语音、通话）时用 `ctx.tangu?.mountComposer`：宿主组件是 `desktop/frontend/src/views/newChatComposer.tsx` 的 `NewChatComposer`，内置主页和插件挂的是同一份，发送一律由宿主建会话、切到 Tangu。
 
@@ -45,6 +45,40 @@ ctx.registerView({
 | `onChange(draft)` | 文本或模型选择变化时返回 `{ text, modelId, thinkingLevel }`。只通知本组件的宿主。 |
 | `onSubmit(draft)` | 返回 true 清空已提交文本；false 或异常保留草稿。等待期间防重复提交；异常显示可重试提示。 |
 | `update(patch)`, `focus()`, `dispose()` | 更新、聚焦、幂等卸载。卸载后的异步回调不再修改 UI；宿主在插件禁用、重载、setup 失败时统一回收。 |
+| `modelPicker` | 默认 true。设为 `false` 时不画模型和思考档，也不解析默认模型。回调里 `modelId` 是你传的值（没传是 `''`），`thinkingLevel` 同理（没传是 `'medium'`）。 |
+| `toolbar(el)` | 卡片底排左侧的插槽，排在模型药丸前面。把自己的 DOM 放进 `el`，可返回清理函数；清理函数在 dispose 时调用，update 传入另一个函数时也会先清理再重挂。两处抛错都由宿主记录，不影响输入框。 |
+| `suggest` | `{ trigger, items(query) }`，光标旁的宿主补全浮层，外观和键盘行为与笔记里的 `#` 补全一致。 |
+| `insertText(text)` | handle 方法。在光标处插入，有选区时替换选区，并聚焦输入框。给「#」按钮、语音转写用，不会弹补全；用户接着打字才会弹。 |
+
+`toolbar` 的 `el` 在宿主挂载层里，不吃插件视图的基础样式，里面的按钮要写 class，比如 `.btn.sm`。
+
+### 补全 suggest
+
+`trigger` 是非空字符串；光标前紧挨「`trigger` + 查询」时触发，`trigger` 前面须是行首或空白，查询非空，字符集是字母、数字、`_`、`/`、`-`。`items` 可以返回数组或 Promise，每项是 `{ label, hint?, value }`，最多显示 8 项；空数组不显示浮层，reject 只关闭浮层。新一次输入会作废还没返回的结果。
+
+```js
+const box = ctx.ui?.mountChatBox?.(el, {
+  modelPicker: false,
+  submitOn: 'enter',
+  toolbar(slot) {
+    const hash = slot.appendChild(document.createElement('button'))
+    hash.className = 'btn sm'
+    hash.textContent = '#'
+    const onClick = () => box.insertText('#')
+    hash.addEventListener('click', onClick)
+    return () => hash.removeEventListener('click', onClick)
+  },
+  suggest: {
+    trigger: '#',
+    items: (query) => myTags(query).map((tag) => ({ label: `#${tag.name}`, hint: String(tag.count), value: `#${tag.name}` })),
+  },
+  onSubmit: ({ text }) => saveMemo(text),
+})
+```
+
+↑↓ 移动，Enter 或 Tab 选中，Esc 关闭。选中后把「`trigger` + 查询」换成 `value` 加一个空格，这次 Enter 不会提交；浮层开着时 ⌘/Ctrl+Enter 同样是选中。只在用户打字时弹：把光标挪到已有的 `#标签` 后面不弹，输入法组字时不弹，组字结束后再判断。Esc 之后，同一个词继续打字不再弹。
+
+这四项一起加入。旧宿主会忽略三个选项，也没有 `insertText`，所以用 handle 探测：`typeof box.insertText === 'function'`。不支持时自己隐藏 `#` 按钮，或者接受模型药丸照常显示。
 
 模型目录与聊天共用，主模型只展示 LLM，遵守用户的排序和隐藏设置，不额外按品牌限制。选择停留在此组件，不修改全局默认或当前会话。提交回调拿到的是当次选择；插件必须将它们传给自己的业务流程，不能展示了选择却丢弃它。挂载和编辑不发起模型请求、不自动创建会话。旧宿主必须 feature-detect，不复制内部 CSS 伪装支持。
 

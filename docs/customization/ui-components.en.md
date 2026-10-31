@@ -10,7 +10,7 @@ The Chat Box's card surface, input, action bar and submit button are maintained 
 
 ## Using it in plugins
 
-`ctx.ui?.mountChatBox` mounts into your plugin's own View and needs no React. It currently supports text input, model selection, thinking level and keyboard submission. Attachments, commands, approvals and run controls belong to the session orchestrator; behaviour that isn't wired up is not shown.
+`ctx.ui?.mountChatBox` mounts into your plugin's own View and needs no React. It currently supports text input, model selection, thinking level and keyboard submission, plus three slots: a toolbar, suggestions and text insertion. Attachments, commands, approvals and run controls belong to the session orchestrator; behaviour that isn't wired up is not shown.
 
 For the whole "new chat" composer (the Home one: attachments, mode, project bar, run location, voice, calls), use `ctx.tangu?.mountComposer`. The host component is `NewChatComposer` in `desktop/frontend/src/views/newChatComposer.tsx`; the built-in Home and plugin mounts use the same one, and sending always has the host create the session and switch to Tangu.
 
@@ -45,6 +45,40 @@ Canonical types: `desktop/shared/chatBox.ts`.
 | `onChange(draft)` | Returns `{ text, modelId, thinkingLevel }` when the text or model selection changes. Notifies only this component's host. |
 | `onSubmit(draft)` | Return true to clear the submitted text; false or an exception keeps the draft. Repeat submissions are blocked while pending; an exception shows a retryable error. |
 | `update(patch)`, `focus()`, `dispose()` | Update, focus, idempotent unmount. Async callbacks after unmount no longer touch the UI; the host cleans up on plugin disable, reload or setup failure. |
+| `modelPicker` | Defaults to true. With `false` the model and thinking pill is not drawn and no default model is resolved. Callbacks then carry the `modelId` you passed (`''` if none) and the `thinkingLevel` you passed (`'medium'` if none). |
+| `toolbar(el)` | A slot at the left of the bottom row, before the model pill. Put your own DOM in `el` and optionally return a cleanup function. The cleanup runs on dispose, and before remounting when update passes a different function. The host logs exceptions from either and the input keeps working. |
+| `suggest` | `{ trigger, items(query) }`: a host menu beside the caret that looks and behaves like the `#` completion in notes. |
+| `insertText(text)` | Handle method. Inserts at the caret, replaces any selection, and focuses the input. Use it for a "#" button or voice transcription. It doesn't open the menu; the menu opens when the user keeps typing. |
+
+The toolbar's `el` sits inside the host mount layer and doesn't get the plugin view base styles, so give buttons in it a class such as `.btn.sm`.
+
+### Suggestions
+
+`trigger` is a non-empty string. The menu opens when the text directly before the caret is `trigger` plus a query. The trigger must be at the start of a line or after whitespace, and the query must be non-empty and made of letters, digits, `_`, `/` or `-`. `items` returns an array or a Promise of `{ label, hint?, value }`; up to 8 are shown. An empty array shows no menu, a rejection only closes it, and newer typing discards results that haven't arrived yet.
+
+```js
+const box = ctx.ui?.mountChatBox?.(el, {
+  modelPicker: false,
+  submitOn: 'enter',
+  toolbar(slot) {
+    const hash = slot.appendChild(document.createElement('button'))
+    hash.className = 'btn sm'
+    hash.textContent = '#'
+    const onClick = () => box.insertText('#')
+    hash.addEventListener('click', onClick)
+    return () => hash.removeEventListener('click', onClick)
+  },
+  suggest: {
+    trigger: '#',
+    items: (query) => myTags(query).map((tag) => ({ label: `#${tag.name}`, hint: String(tag.count), value: `#${tag.name}` })),
+  },
+  onSubmit: ({ text }) => saveMemo(text),
+})
+```
+
+↑↓ moves, Enter or Tab picks, Esc closes. Picking replaces the trigger and query with `value` plus one space, and that Enter doesn't submit. While the menu is open, ⌘/Ctrl+Enter picks too. The menu opens only while typing: moving the caret to the end of an existing `#tag` doesn't open it, and neither does IME composition, which is checked once it ends. After Esc, the menu stays closed for the rest of that word.
+
+These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. If it's missing, hide your `#` button or accept that the model pill is shown.
 
 The model catalog is shared with chat: the main model list shows only LLMs, follows the user's sorting and hiding settings, and adds no brand restrictions. The selection stays in this component and changes neither the global default nor the current conversation. The submit callback receives the choices made for that submission; your plugin must pass them into its own flow rather than showing a choice and discarding it. Mounting and editing never send a model request or create a session. Feature-detect on older hosts; don't copy internal CSS to fake support.
 
