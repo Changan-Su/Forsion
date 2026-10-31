@@ -151,7 +151,7 @@ registerMessages({
   'mdblock.placeholder': { zh: '输入文字，或按 “/” 选择类型…', en: 'Type something, or press “/” to pick a block…' },
   // slash 菜单 / 移动端块面板的分组名
   'mdblock.group.ai': { zh: 'AI', en: 'AI' },
-  'mdblock.category.basic': { zh: '基本', en: 'Basic' },
+  'mdblock.category.basic': { zh: '基础', en: 'Basic' },
   'mdblock.category.ai': { zh: 'AI', en: 'AI' },
   'mdblock.category.plugin': { zh: '插件', en: 'Plugins' },
   'mdblock.category.label': { zh: '命令分类', en: 'Command categories' },
@@ -1877,6 +1877,8 @@ export function MilkdownInner({
           left={toolbar.left}
           top={toolbar.top}
           bottom={toolbar.bottom}
+          paneLeft={toolbar.paneLeft}
+          paneRight={toolbar.paneRight}
           kind={toolbar.kind}
           active={toolbar.active}
           align={toolbar.align}

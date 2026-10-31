@@ -154,6 +154,8 @@ export function InlineToolbar({
   left,
   top,
   bottom,
+  paneLeft,
+  paneRight,
   kind,
   active,
   align,
@@ -174,6 +176,9 @@ export function InlineToolbar({
   top: number
   /** 选区行下沿(视口 px):上方没空间时翻到它之下 */
   bottom: number
+  /** 编辑器面板左右边(视口 px):横向夹在面板里、各留 8px(走查续六 6.8);缺省按视口。 */
+  paneLeft?: number
+  paneRight?: number
   /** 选区所在块的当前类型名(selectionToolbarPlugin 实时算);此前这里写死「正文」。 */
   kind: string
   /** 选区**全覆盖**的格式名(schema mark name);半覆盖不算,按钮显示未激活。 */
@@ -299,7 +304,7 @@ export function InlineToolbar({
     // 摆位一律交给 OverlayAt:默认浮在选区上方,上面没地方才翻到下方(同 slash)。
     // ⚠️别改回「CSS transform: translate(-50%,-100%)」那套 —— pop-in 动画也动 transform,
     // 会把摆位覆盖掉 120ms:工具栏先出现在选区右下、动画结束才跳到文字上方(用户实报)。
-    <OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center role="toolbar" aria-label={t('itb.aria')} data-testid="inline-toolbar" data-dir={enterDir} data-order={actionsFirst ? 'actions' : 'tools'} innerRef={(el) => { rootRef.current = el }} onKeyDown={onNav}>
+    <OverlayAt className="inline-toolbar" x={left} y={bottom + 8} anchorTop={top - 8} prefer="above" center boundLeft={paneLeft} boundRight={paneRight} role="toolbar" aria-label={t('itb.aria')} data-testid="inline-toolbar" data-dir={enterDir} data-order={actionsFirst ? 'actions' : 'tools'} innerRef={(el) => { rootRef.current = el }} onKeyDown={onNav}>
       <div className="itb-row">
         {actionsFirst && actionZone && <>{actionZone}<span className="itb-sep" /></>}
         {ai && ai.items.length > 0 && (

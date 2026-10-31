@@ -544,7 +544,7 @@ async function slashScreenshots(browser) {
           })
           return { tabs, rows, left: box.left, right: box.right, viewport: window.innerWidth, oldCapsules: menu.querySelectorAll('.slash-ai-capsule').length }
         })
-        const expectedTabs = mode === 'english' ? ['Basic', 'AI', 'Plugins'] : ['基本', 'AI', '插件']
+        const expectedTabs = mode === 'english' ? ['Basic', 'AI', 'Plugins'] : ['基础', 'AI', '插件']
         check(`V1 ${suffix} has three category capsules and four full command rows`, geometry.tabs.map((tab) => tab.text).join(',') === expectedTabs.join(',') && geometry.tabs.every((tab) => Math.abs(tab.top - geometry.tabs[0].top) < 1 && tab.scroll <= tab.client + 1) && geometry.rows.length === 4 && geometry.rows.every((row, index) => row.role === 'menuitem' && !row.categoryTab && row.width > geometry.tabs[0].width * 2 && (index === 0 || row.top >= geometry.rows[index - 1].top + geometry.rows[index - 1].height - 1)) && geometry.left >= -1 && geometry.right <= geometry.viewport + 1 && geometry.oldCapsules === 0, geometry)
         await screenshot(page, `slash-ai-${suffix}`, false)
         if (mode === 'light' && width === 1200) {

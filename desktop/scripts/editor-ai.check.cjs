@@ -22,7 +22,8 @@
 //       代码块工具条收掉、打开不写盘);对话 sketch 卡「插入笔记」→ 围栏落盘 + 笔记里出卡;整段对话「整理成笔记」→
 //       complete 收到对话记录 + 指令,新建以模型一级标题命名的笔记(标题剥出正文)、重名加 -2、没有 complete 时入口不出现。
 //   H = 划线条(2026-10-13):工具栏 = 本视图的工具 + 动作区(问 Tangu、翻译、⋯ 里的插件动作);翻译进同一张预览卡、
-//       目标语言按界面语言定且卡头能换、卡上写明谁译的;排法设置(工具在前 / 动作在前);插件动作的 scope / when / output。
+//       目标语言按界面语言定且卡头能换、卡上写明谁译的;排法设置(工具在前 / 动作在前);插件动作的 scope / when / output;
+//       H4 选两行时工具栏按选区各行的并集居中(走查续六 6.8;夹在编辑器面板内由 lcl menuAnchor.test 的 boundLeft/Right 钉)。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
 // 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
@@ -1221,6 +1222,38 @@ async function groupH(browser) {
     await page.waitForTimeout(400)
     const st = await page.evaluate(() => ({ ran: window.__ran.slice(), panel: !!document.querySelector('[data-testid="inline-ai-panel"]'), writes: window.__upage.writes.length, target: !!document.querySelector('.am-ai-target') }))
     check("H3d output:'none':run 被调用、不出卡、不标目标、零写入", st.ran.length === 1 && st.ran[0] === 'stays in English|note|Unified.md' && !st.panel && !st.target && st.writes === 0, `${JSON.stringify(st)} tb=${tb5.join(',')} more=${more5.join(',')}`)
+    await page.close()
+  }
+  // H4 走查续六 6.8:选一整段(第一行满、末行只有几个字)→ 工具栏按选区各行矩形的并集居中。
+  //   旧算法取首尾两个光标的中点,末行很短时中点落在左边、菜单伸到文件树上(负对照:改回 (a.left+b.left)/2 即红)。
+  {
+    const long = '这一段要写得足够长才会换行。'.repeat(12) + '尾巴'
+    const page = await open(browser, `# 周报\n\n${long}\n`)
+    await installProbe(page, { complete: true })
+    const pts = await page.evaluate(({ PM, text }) => {
+      const w = document.createTreeWalker(document.querySelector(PM), NodeFilter.SHOW_TEXT)
+      let n
+      while ((n = w.nextNode())) {
+        const i = n.data.indexOf(text)
+        if (i < 0) continue
+        const at = (k) => { const r = document.createRange(); r.setStart(n, k); r.setEnd(n, k + 1); return r.getBoundingClientRect() }
+        const a = at(i), b = at(i + text.length - 1)
+        return { x0: a.left + 1, y0: a.top + a.height / 2, x1: b.right - 1, y1: b.top + b.height / 2 }
+      }
+      return null
+    }, { PM, text: long })
+    await page.mouse.move(pts.x0, pts.y0)
+    await page.mouse.down()
+    await page.mouse.move(pts.x1, pts.y1, { steps: 8 })
+    await page.mouse.up()
+    await page.waitForTimeout(500)
+    const g = await page.evaluate(() => {
+      const rs = [...window.getSelection().getRangeAt(0).getClientRects()].filter((x) => x.width)
+      const l = Math.min(...rs.map((x) => x.left)), r = Math.max(...rs.map((x) => x.right))
+      const tb = document.querySelector('[data-testid="inline-toolbar"]')?.getBoundingClientRect()
+      return { lines: new Set(rs.map((x) => Math.round(x.top))).size, union: Math.round((l + r) / 2), tb: tb ? Math.round(tb.left + tb.width / 2) : null }
+    })
+    check('H4 选两行以上:划线菜单按各行矩形的并集居中(不按首尾两点的中点)', g.lines >= 2 && g.tb !== null && Math.abs(g.tb - g.union) <= 2, JSON.stringify(g))
     await page.close()
   }
 }

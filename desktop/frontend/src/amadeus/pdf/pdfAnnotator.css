@@ -184,7 +184,10 @@
 }
 .pdfa-bottombar .pdfa-btn { border-color: transparent; }
 .pdfa-zoomsel {
-  height: 24px;
+  /* 全局 :where(select) 的 padding 7px 10px 在 24px 高里把字顶出去,只剩下半截(走查续六 6.13):这里自己定高、内边距与行高,右边留出系统下拉箭头。 */
+  height: 26px;
+  padding: 0 22px 0 8px;
+  line-height: 22px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm, 6px);
   background: transparent;

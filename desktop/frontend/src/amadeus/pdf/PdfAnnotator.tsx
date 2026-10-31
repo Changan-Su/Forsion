@@ -18,7 +18,7 @@ import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url'
 // 输入弹窗配色不对」。故不 import 副作用版,改注入 @scope 关进阅读器内。见 ensureScopedCss。
 import pdfViewerCss from 'pdfjs-dist/legacy/web/pdf_viewer.css?inline'
 import './pdfAnnotator.css'
-import { PanelLeft } from 'lucide-react'
+import { Minus, PanelLeft, Plus } from 'lucide-react'
 import { isHostPath, buildPdfLink } from '@amadeus-shared/pdfLink'
 import { amadeus } from '../api'
 import { registerMessages, useI18n } from '../../i18n'
@@ -579,7 +579,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
           </div>
           {ready && (
             <div className="pdfa-bottombar">
-              <button className="pdfa-btn" onClick={() => zoom(-1)} title={t('pdfa.zoomOut')}>−</button>
+              <button className="pdfa-btn" onClick={() => zoom(-1)} title={t('pdfa.zoomOut')} aria-label={t('pdfa.zoomOut')}><Minus size={14} /></button>
               <select
                 className="pdfa-zoomsel"
                 value={zoomSel}
@@ -589,7 +589,7 @@ export function PdfAnnotator({ pdfPath, initialPage, initialQuote, embed }: { pd
                 {!ZOOMS.some((z) => z.v === zoomSel) && <option value={zoomSel}>{fmtZoom(zoomSel)}</option>}
                 {ZOOMS.map((z) => <option key={z.v} value={z.v}>{z.k ? t(z.k) : z.label}</option>)}
               </select>
-              <button className="pdfa-btn" onClick={() => zoom(1)} title={t('pdfa.zoomIn')}>＋</button>
+              <button className="pdfa-btn" onClick={() => zoom(1)} title={t('pdfa.zoomIn')} aria-label={t('pdfa.zoomIn')}><Plus size={14} /></button>
               <span className="pdfa-sep" />
               <button className="pdfa-btn" onClick={() => go(-1)} disabled={info.page <= 1} title={t('pdfa.prevPage')}>‹</button>
               <input

@@ -865,6 +865,25 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
    → 表头 140 / 数据行 161·187 错位(2026-09-02 实报)。外层单列 grid minmax(max-content, 1fr):列宽按最宽的那一行只算一次,
    每行被拉到同一个定宽,行内 1fr 对同一份剩余空间解析 → 轨道逐像素相同;不溢出时仍填满容器。仪器:check:erp E9/E9b。 */
 .amx-db-scroll { overflow-x: auto; display: grid; grid-template-columns: minmax(max-content, 1fr); }
+/* 横向放不下时两侧边缘淡出(走查续六 6.12):右边还有列 → 右缘 64px 渐隐,收到约 18%(被切的那列还看得见一点);
+   滚到最右收掉右边那条,滚离最左才出左边那条。mask 不铺色(背景色、主题色一换就穿帮,同 DESIGN「悬浮输入区」为什么用 mask)。
+   滚动驱动的动画,和手机聊天表格那条(chat2.css t2-table-edges)同一做法:不溢出时时间线不活动 = 变量停在 0 = 没有渐隐。
+   ⚠️ mask 也作用于 fixed 定位的后代、出了盒子就看不见 —— 格子里的弹层(关联行选择器等)开着时收掉(:has 点名类,不是通配结尾)。 */
+@property --amx-db-fade-l { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --amx-db-fade-r { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@keyframes amx-db-scroll-edges {
+  0% { --amx-db-fade-l: 0px; --amx-db-fade-r: 64px; }
+  6%, 94% { --amx-db-fade-l: 64px; --amx-db-fade-r: 64px; }
+  100% { --amx-db-fade-l: 64px; --amx-db-fade-r: 0px; }
+}
+@supports (animation-timeline: scroll()) {
+  .amx-db-scroll:not(:has(.amx-db-popwrap)) {
+    -webkit-mask-image: linear-gradient(to right, rgb(0 0 0 / .18), #000 var(--amx-db-fade-l), #000 calc(100% - var(--amx-db-fade-r)), rgb(0 0 0 / .18));
+    mask-image: linear-gradient(to right, rgb(0 0 0 / .18), #000 var(--amx-db-fade-l), #000 calc(100% - var(--amx-db-fade-r)), rgb(0 0 0 / .18));
+    animation: amx-db-scroll-edges linear both;
+    animation-timeline: scroll(self inline);
+  }
+}
 /* 行线常驻;表头行同样吃 border-top → 上下各一条(首个数据行的 border-top 即表头下缘线) */
 .amx-db-row { display: grid; align-items: stretch; border-top: 1px solid var(--border); }
 /* 列分隔线弱化;最后一列数据列(其后是加列按钮列)不画 */
@@ -1372,6 +1391,10 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-card { display: flex; flex-direction: column; gap: 5px; background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow); padding: 8px 10px; cursor: pointer; user-select: none; }
 .amx-db-card-title { font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); word-break: break-word; }
 .amx-db-card-prop { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+/* 卡片属性行的列名(走查续六 6.10):淡字、定宽 3.2em 让值对齐,过长省略;带列名的行不折行,值占剩下的宽。 */
+.amx-db-card-prop[data-named] { flex-wrap: nowrap; align-items: baseline; gap: 6px; }
+.amx-db-card-key { flex: 0 0 3.2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint, var(--text-muted)); font-size: var(--db-meta-size, var(--ui-font-meta, 12px)); }
+.amx-db-card-prop[data-named] > .amx-db-card-text { flex: 1 1 0; min-width: 0; }
 .amx-db-card-text { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
 .amx-db-card-check { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .amx-db-card-add { flex-direction: row; align-items: center; justify-content: center; gap: 4px; border: 1px solid transparent; box-shadow: none; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); }
