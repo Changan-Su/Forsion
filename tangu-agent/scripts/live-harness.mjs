@@ -321,6 +321,8 @@ OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsion
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
 OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
 KEYS.push('visualask', 'visualsdial', 'visualplan');
+OPT_IN.add('iuilibs'); KEYS.push('iuilibs'); // --only iuilibs:HTML 卡的随包库(intelligent-ui-libs.v1)3D / 力导图 / 柱状图 × 不报能力 / 报能力;改 sketch.ts 的库说明 / visualize 技能后跑
+OPT_IN.add('iuilibsmore'); KEYS.push('iuilibsmore'); // --only iuilibsmore:同样两条腿看 chart.js / gsap / d3 树状图的效果,只记录、不当门禁
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
 OPT_IN.add('plugin'); // 隔离 home 里放夹具插件 —— 只在显式跑它时放,别让多出来的工具改了别的场景的工具表。
 OPT_IN.add('dispatch');
@@ -2802,6 +2804,55 @@ try {
     const copy = /forsion(?:IntelligentUi|Sketch)\.copy\(/.test(html); // 10-20 改名:新名 forsionIntelligentUi,旧名照样能用
     return { ok: !ev.error && ev.done && success && scale && checklist && copy, detail: ev.error || `cards=${cards.length};scale=${scale};fs-checklist=${checklist};copy=${copy}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
   });
+
+  // 每问两条腿;libsOk 为 null = 只记录不判(iuilibsmore 看效果用)。plain 腿一律不许 import 库。证据写 <name>-evidence.json。
+  const LIB = /^(three|d3|chart\.js|gsap)\b/;
+  const iuiLibLegs = async (name, CASES) => {
+    const base = ['marketplace-cards.v1', 'intelligent-ui.v1', 'intelligent-ui.v2'];
+    const rows = [];
+    for (const [key, Q, libsOk] of CASES) {
+      for (const [leg, caps] of [['plain', base], ['libs', [...base, 'intelligent-ui-libs.v1']]]) {
+        const ev = await run(`live-${name}-${key}-${leg}-${Date.now()}`, Q, 480_000, {}, 'desktop/2.13.8', undefined, undefined, undefined, { clientCapabilities: caps });
+        const calls = ev.toolArgs.filter((c) => c.name === 'sketch' || c.name === 'intelligent_ui_html');
+        const htmls = calls.map((c) => { try { return JSON.parse(c.arguments || '{}').html || ''; } catch { return ''; } });
+        htmls.forEach((h, i) => writeFileSync(join(OUT, `${name}-${key}-${leg}-${i}.html`), h));
+        const html = htmls.join('\n');
+        const imports = [...new Set([...html.matchAll(/(?:from\s*|import\(\s*|import\s+)['"]([^'"]+)['"]/g)].map((m) => m[1]))];
+        const pass = !ev.error && ev.done && calls.length > 0 && (leg === 'plain' ? !imports.some((m) => LIB.test(m)) : !libsOk || libsOk(imports));
+        rows.push({ id: leg, case: key, pass, q: Q, content: ev.content, done: ev.done, error: ev.error, toolCalls: ev.toolCalls, tokens: tokensOf(ev), wallMs: ev.wallMs, htmlChars: html.length, imports,
+          fsColors: /getComputedStyle[\s\S]{0,400}--fs-|--fs-[\s\S]{0,400}getComputedStyle/.test(html),
+          views: calls.map((c) => ({ id: c.id, name: c.name, offset: Number((ev.toolOffsets || []).find((o) => o.id === c.id)?.offset) || 0, arguments: c.arguments })) });
+      }
+    }
+    writeFileSync(join(OUT, `${name}-evidence.json`), JSON.stringify(rows, null, 2));
+    return { ok: rows.every((r) => r.pass), detail: rows.map((r) => `${r.pass ? '✓' : '✗'} ${r.case}/${r.id}: 卡 ${r.views.length} 张, import [${r.imports.join(', ') || '无'}]${r.fsColors ? ', 颜色取 --fs-*' : ''}${r.error ? `, 错误 ${r.error}` : ''}`).join(' | '),
+      output: rows.map((r) => `【${r.case}/${r.id}】工具:${r.toolCalls.join(',') || '无'}\n${r.content}`).join('\n\n'), toolCalls: rows.flatMap((r) => r.toolCalls), tokens: rows.reduce((n, r) => n + (r.tokens || 0), 0) };
+  };
+
+  // iuilibs(10-28,方案页 docs/ToBeImproved/IntelligentUI卡内库方案_2026-10-27):HTML 卡能不能用随包的 three / d3 / chart.js / gsap。
+  // 三问各跑两条腿 —— plain = 今天的客户端能力(说明里写着不许用库),libs = 多报 intelligent-ui-libs.v1(说明换成「可 import 这几个」)。
+  // 判据只看成品 html,两条腿都得出卡;plain 腿一律不许 import 库(没报能力就别指望客户端有库)。libs 腿:
+  //   3d    = 飞机三轴,必须 import three;
+  //   force = 力导图,必须 import d3(只测过 d3 能加载,没测过模型该用时会不会用);
+  //   bars  = 四个数的柱状图,不许 import 任何库(说明里「simple charts stay inline SVG」压不压得住滥用)。
+  // 负对照 = 引擎不认这个能力的旧代码:libs 腿拿到同一份「不许用库」的说明,3d / force 不 import → 须红。
+  // fsColors 只记不判:说明要求 WebGL / canvas 颜色取 --fs-*,模型照不照做看报告。3d 排第一:落地出图脚本取第一条 libs 行。
+  await scenario('iuilibs', 'iuilibs 卡内随包库:3D / 力导图 / 柱状图 × 不报能力 / 报能力', async () => {
+    const CASES = [
+      ['3d', '用 3D 给我演示飞机的俯仰、横滚和偏航：每个轴一个滑杆和一个「演示」按钮，能拖动转视角，再给一个复位按钮。', (im) => im.some((m) => /^three\b/.test(m))],
+      ['force', '画一张力导图，展示 JavaScript 生态里 15 个常见库之间的依赖关系：节点能拖动，悬停显示一句说明。', (im) => im.some((m) => /^d3\b/.test(m))],
+      ['bars', '用柱状图对比今年四个季度的销售额：Q1 120 万、Q2 150 万、Q3 98 万、Q4 180 万。', (im) => !im.some((m) => LIB.test(m))],
+    ];
+    return iuiLibLegs('iuilibs', CASES);
+  });
+
+  // iuilibsmore(10-28,看效果、不当门禁):chart.js / gsap / d3 非力导图各一问,同样两条腿。libs 腿用没用库只记录 ——
+  // 想知道的是「模型在这种题上会不会用、用了是不是更好」,好坏看真桌面端回放拍的卡(方案文件夹 instrument/shoot-landed.cjs --cards)。
+  await scenario('iuilibsmore', 'iuilibsmore 随包库看效果:密集折线 / 排序动画 / 矩形树图 × 不报能力 / 报能力', async () => iuiLibLegs('iuilibsmore', [
+    ['temps', '把一年 365 天的每日最高气温、最低气温和降水量画在一张图里，悬停看当天数值，可以切换显示哪几条线。数据可以模拟。', null],
+    ['sort', '用动画演示快速排序：每一步高亮正在比较的两个数，交换时有移动动画，能暂停、单步。', null],
+    ['treemap', '用矩形树图展示一个前端项目 node_modules 里各个包的体积占比，点一块能下钻看它里面的子包。数据可以模拟。', null],
+  ]));
 
   // visualsdial(10-09):用户把可视化调到 less / off(渲染端 ui_settings 快照,键 visuals)。off → 工具与段都不在(系统提示里没有
   // 「## Visual cards」、模型调不到 sketch);less → 段还在、另注一句「只认明确要求」,一道「比较」题(隐式信号)模型不该画。

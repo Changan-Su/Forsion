@@ -433,7 +433,7 @@ async function main() {
           'setInterval(function(){var at=Number(document.body.dataset.stealAt||0);if(!at||Date.now()<at||document.body.dataset.steal)return;' +
           'var i=document.createElement("input");document.body.appendChild(i);i.focus();parent.postMessage({type:"sketch-ask",text:"STEAL-ASK"},"*");' +
           'var r="sent";try{window.forsionSketch.ask("STEAL-ASK")}catch(e){r=e.message}' +
-          'document.body.dataset.steal=JSON.stringify({viaRuntime:r,nonceVisible:new RegExp("NON"+"CE = \'").test(document.documentElement.outerHTML),scripts:document.head.querySelectorAll("script").length})},100)</script>',
+          'document.body.dataset.steal=JSON.stringify({viaRuntime:r,nonceVisible:new RegExp("NON"+"CE = \'").test(document.documentElement.outerHTML),scripts:document.head.querySelectorAll("script:not([type=importmap])").length})},100)</script>',
       }) } },
       { type: 'tool_result', payload: { id: 'sk5', result: 'Sketch card rendered in the conversation.' } },
       { type: 'token', payload: { delta: '按钮卡在最后。' } },
@@ -689,6 +689,56 @@ async function main() {
     check('F11c ⚠️卡内抢焦点冒充点击(父文档 5s 内刚有输入):裸 postMessage 没 nonce、经运行时子帧没激活、outerHTML 里找不到 nonce → 都发不出去',
       !stolen && stub.seen.runs.length === stealBefore && !!steal && /user gesture/.test(steal.viaRuntime) && steal.nonceVisible === false && steal.scripts === 0,
       JSON.stringify({ stolen, runs: stub.seen.runs.length - stealBefore, steal }))
+
+
+    // ── 场景 FL(10-28):HTML 卡的随包库 three / d3 / chart.js / gsap(forsion-iui: 协议 + 两层 CSP + importmap)。
+    // 钉三件:① 流式上卡(先半截、后终稿,和 sk1 同路)后 module 脚本真的 import 到五个裸名、WebGL 真出画面(读回红色像素);
+    // ② 卡里照样断网:CDN 的 fetch / import、连库协议本身的 fetch 都被挡(库只能当脚本 import,不是数据通道);
+    // ③ 协议夹在库目录里:主进程 net.fetch 一条编码过的 ../ 必须 403,而真库文件 200 且带 ACAO(卡是无源 iframe,没有它 import 不过)。
+    const libArgs = JSON.stringify({
+      title: '随包库',
+      html: '<div id="lib3d">LIB-PLACEHOLDER</div><canvas id="libc" width="120" height="80"></canvas>' +
+        '<script type="module">import * as THREE from "three";import { OrbitControls } from "three/addons/controls/OrbitControls.js";' +
+        'import * as d3 from "d3";import Chart from "chart.js/auto";import gsap from "gsap";const el=document.getElementById("lib3d");' +
+        'try{const r=new THREE.WebGLRenderer({canvas:document.getElementById("libc"),preserveDrawingBuffer:true});const scene=new THREE.Scene();' +
+        'scene.background=new THREE.Color(0xff0000);const cam=new THREE.PerspectiveCamera(50,1.5,0.1,10);new OrbitControls(cam,r.domElement);r.render(scene,cam);' +
+        'const gl=r.getContext(),px=new Uint8Array(4);gl.readPixels(60,40,1,1,gl.RGBA,gl.UNSIGNED_BYTE,px);' +
+        'el.textContent=["LIB-OK",THREE.REVISION,typeof d3.forceSimulation,typeof Chart,typeof gsap.to,px[0]>200&&px[1]<60?"RED":"px"+px.join(",")].join(" ")}' +
+        'catch(e){el.textContent="LIB-ERR "+e.message}</script>',
+    })
+    stub.script([
+      { type: 'token', payload: { delta: '随包库的卡。' } },
+      { type: 'tool_stream', payload: { id: 'sklib', name: 'intelligent_ui_html', delta: libArgs.slice(0, libArgs.indexOf('<script') + 4) } },
+      { type: 'tool_call', payload: { id: 'sklib', name: 'intelligent_ui_html', arguments: libArgs }, delay: 1500 },
+      { type: 'tool_result', payload: { id: 'sklib', result: 'Sketch card rendered in the conversation.' } },
+      { type: 'tool_call', payload: { id: 'sklibnet', name: 'intelligent_ui_html', arguments: JSON.stringify({
+        html: '<div id="libnet">NET-?</div><script type="module">const out=[];' +
+          'const t=async(k,f)=>{try{await f();out.push(k+":open")}catch{out.push(k+":blocked")}};' +
+          'await t("fetch-cdn",()=>fetch("https://esm.sh/three@0.186.1"));await t("import-cdn",()=>import("https://esm.sh/gsap@3.15.0"));' +
+          'await t("fetch-lib",()=>fetch("forsion-iui://lib/d3@7/d3.js"));document.getElementById("libnet").textContent=out.join(" ")</script>',
+      }) } },
+      { type: 'tool_result', payload: { id: 'sklibnet', result: 'Sketch card rendered in the conversation.' } },
+      { type: 'token', payload: { delta: '随包库两张卡画完。' } },
+    ])
+    await send(win, '画一张 3D 卡')
+    const libText = {}
+    for (let i = 0; i < 30 && !(/^LIB-(OK|ERR)/.test(libText.lib || '') && /blocked|open/.test(libText.net || '')); i++) {
+      await win.waitForTimeout(500)
+      for (const [k, id] of [['lib', 'lib3d'], ['net', 'libnet']]) {
+        const fr = await probeFrames(id)
+        if (fr) libText[k] = (await fr.locator(`#${id}`).textContent().catch(() => '')) || ''
+      }
+    }
+    check('FL1 随包库:流式终稿后五个裸名都 import 到,WebGL 真出画面(读回红色像素)',
+      /^LIB-OK \d+ function function function RED$/.test(libText.lib || ''), JSON.stringify(libText))
+    check('FL2 ⚠️带库的卡照样断网:CDN 的 fetch / import、库协议的 fetch 都被挡',
+      libText.net === 'fetch-cdn:blocked import-cdn:blocked fetch-lib:blocked', JSON.stringify(libText))
+    const libProto = await app.evaluate(async ({ net }) => {
+      const probe = async (u) => { try { const r = await net.fetch(u); return [r.status, r.headers.get('access-control-allow-origin')] } catch (e) { return [String(e.message)] } }
+      return { ok: await probe('forsion-iui://lib/three@0.186/three.module.js'), escape: await probe('forsion-iui://lib/..%2f..%2fmain%2findex.js'), nonJs: await probe('forsion-iui://lib/.version') }
+    })
+    check('FL3 ⚠️库协议只读库目录里的 .js:真库 200 + ACAO *,编码的 ../ 与非 .js 一律 403',
+      libProto.ok[0] === 200 && libProto.ok[1] === '*' && libProto.escape[0] === 403 && libProto.nonJs[0] === 403, JSON.stringify(libProto))
 
 
     // ── 场景 D:审批卡的「为什么问你」(B3)+ 工作区外写入警示仍在(台账里挂着的那条未验)

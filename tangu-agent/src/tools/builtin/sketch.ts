@@ -257,6 +257,7 @@ const SKETCH_DEFINITION: Tool = {
     // 它们是 SKETCH_SECTION 的正文,而段与工具同门禁(sketchEnabledFor),工具在场 ⟺ 段在场。
     // ponytail: 上限≈1.6KB(10-09 二轮加 PARTS / copy 后靠删 fs-eyebrow / fs-chip / fs-panel / 折叠那句抵回来)。`--fs-*` 变量表与
     //           `fs-*` 类名表留全(§六 P08:SKETCH_SECTION 里没有这两张表,SKETCH_SECTION 反过来让模型「从工具描述取 .fs-* 类」)。
+    //           报了 intelligent-ui-libs.v1 的客户端那份再多 ~420 字符(随包库那句,见下方 WITH_LIBS),知情超过,只发给能用库的客户端。
     description:
       'Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, ' +
       'timelines, layouts, small interactive widgets. The "Visual cards" section of your instructions ' +
@@ -297,6 +298,26 @@ const SKETCH_WIDGETS = 'charts, diagrams, comparisons, timelines, layouts, small
 const SKETCH_COMPUTED_DEFINITION: Tool = { ...SKETCH_DEFINITION, function: { ...SKETCH_DEFINITION.function, description: SKETCH_DEFINITION.function.description!.replace(SKETCH_WIDGETS, 'charts, diagrams, timelines, layouts, animated simulations and games; calculators, step guides and other cards that only compute from inputs are intelligent_ui documents.') } };
 /** intelligent-ui.v2 without importing intelligentUi.ts (it imports this file). */
 const intelligentUiComputedFor = (ctx: ToolContext): boolean => !!ctx.clientCapabilities?.includes('intelligent-ui.v1') && !!ctx.clientCapabilities?.includes('intelligent-ui.v2');
+// 随包库(10-28):客户端随包带了 three / d3 / chart.js / gsap(仍然断网;桌面 forsion-iui:,网页本站 /iui-lib/,
+// importmap 在 desktop/frontend/src/components/sketchWrapper.ts,两边列的库要一致)才报这个能力;只换说明里的一句,不加新段落。
+// 占位那句给旧客户端:它们取不到库,那块至少还剩一行字。
+// 「3D 用 three、别手算投影」是 10-28 live 量出来的:只写「use them for 3D」时 7 次里 3 次模型在 canvas / SVG 里自己算投影。
+// 力导图那半句同理:只写「d3 suits force layouts」时 3 次全是 SVG + requestAnimationFrame 手写力模拟。
+// 不再写「canvas/WebGL 颜色用 getComputedStyle 取 --fs-*」:17 次里模型照做的 4 次全没用 three(改走 canvas 2D / SVG),
+// 用了 three 的 13 次一次没照做 —— 只拉偏、没收益。主题色仍由下面 THEME 那句管。
+// 点名两句别合成通则:试过「When one already does the hard part (3D rendering, force physics, treemap…), import it — never
+// re-implement it by hand」,3 次里 3D 掉到 2/3、力导图 1/3(树状图也只 1/3)。按库点名、动词式禁止才压得住。
+export const IUI_LIBS_CAP = 'intelligent-ui-libs.v1';
+const NO_LIBS = 'no external scripts/styles/fonts or charting libraries (draw with inline SVG or divs)';
+const WITH_LIBS = 'no external scripts/styles/fonts. Bundled libraries (still no network): a <script type="module"> may import ' +
+  "three (and 'three/addons/…', e.g. controls/OrbitControls.js), d3, chart.js/auto and gsap. 3D scenes use three — never " +
+  "hand-project 3D into canvas or SVG; force-directed graphs use d3's forceSimulation — never hand-write the physics; " +
+  'chart.js suits dense charts, gsap choreographed motion; simple charts ' +
+  'stay inline SVG or the parts below. Put a one-line text fallback in ' +
+  "a library's container for your script to replace";
+const withLibs = (t: Tool): Tool => ({ ...t, function: { ...t.function, description: t.function.description!.replace(NO_LIBS, WITH_LIBS) } });
+const SKETCH_LIBS_DEFINITION = withLibs(SKETCH_DEFINITION);
+const SKETCH_COMPUTED_LIBS_DEFINITION = withLibs(SKETCH_COMPUTED_DEFINITION);
 
 export const sketchProvider: ToolProvider = {
   id: 'builtin:sketch',
@@ -308,7 +329,11 @@ export const sketchProvider: ToolProvider = {
       capabilities: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 5_000 },
       definition: SKETCH_DEFINITION,
       // A client that renders computed Intelligent UI documents gets calculators routed there.
-      definitionFor: (ctx) => intelligentUiComputedFor(ctx) ? SKETCH_COMPUTED_DEFINITION : SKETCH_DEFINITION,
+      definitionFor: (ctx) => {
+        const libs = !!ctx.clientCapabilities?.includes(IUI_LIBS_CAP);
+        if (intelligentUiComputedFor(ctx)) return libs ? SKETCH_COMPUTED_LIBS_DEFINITION : SKETCH_COMPUTED_DEFINITION;
+        return libs ? SKETCH_LIBS_DEFINITION : SKETCH_DEFINITION;
+      },
       execute: (args): string => {
         const html = typeof args.html === 'string' ? args.html : '';
         if (!html.trim()) return 'Error: html is required';

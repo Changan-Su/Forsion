@@ -8,7 +8,7 @@ import { runInNewContext } from 'node:vm'
 vi.mock('./sketch.css?raw', async () => ({
   default: (await import('node:fs')).readFileSync(new URL('./sketch.css', import.meta.url), 'utf8'),
 }))
-import { buildSketchDoc, SKETCH_CSP, SKETCH_SANDBOX, SKETCH_STATIC_VARS, SKETCH_VARS } from './sketchWrapper'
+import { buildSketchDoc, IUI_LIB_IMPORTS, SKETCH_CSP, SKETCH_SANDBOX, SKETCH_STATIC_VARS, SKETCH_VARS } from './sketchWrapper'
 
 describe('sketch 包装器安全不变式', () => {
   it('sandbox 恒为仅 allow-scripts(绝不 allow-same-origin/forms/popups)', () => {
@@ -70,6 +70,66 @@ describe('sketch 包装器安全不变式', () => {
     expect(ready).toHaveLength(2)
     ready[1]()
     expect(register.mock.calls.map(([name]) => name)).toEqual(['fs-chart', 'fs-flow', 'fs-compare', 'fs-choice', 'fs-checklist'])
+  })
+})
+
+// 随包库(10-28,方案页 docs/ToBeImproved/IntelligentUI卡内库方案_2026-10-27):卡能 import three / d3 / chart.js / gsap,
+// 但仍然断网 —— 内层 CSP 相对基线只许多 script-src 一个来源,connect-src 一个字都不许出现。
+describe('sketch 随包库', () => {
+  const policyOf = (doc: string) => doc.match(/Content-Security-Policy" content="([^"]*)"/)![1]
+  const directives = (csp: string) => Object.fromEntries(csp.split(';').map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v]))
+  const importMapOf = (doc: string) => JSON.parse(doc.match(/<script type="importmap">([^<]*)<\/script>/)?.[1] ?? 'null')
+  const onPlatform = (tangu: object | undefined, fn: () => void) => {
+    vi.stubGlobal('window', { tangu }); vi.stubGlobal('document', { baseURI: 'https://web.example/chat/s1' })
+    try { fn() } finally { vi.unstubAllGlobals() }
+  }
+  const expectOnlyExtraScriptSource = (doc: string, source: string) => {
+    const got = directives(policyOf(doc)), base = directives(SKETCH_CSP)
+    expect(got['script-src']).toEqual([...base['script-src'], source])
+    expect({ ...got, 'script-src': base['script-src'] }).toEqual(base)
+    expect(policyOf(doc)).not.toMatch(/connect-src|unsafe-eval|https:(?!\/\/web\.example\/iui-lib\/)/)
+  }
+
+  it('桌面:只多 forsion-iui:,importmap 指向应用自己的协议', () => {
+    onPlatform({}, () => {
+      const doc = buildSketchDoc('')
+      expectOnlyExtraScriptSource(doc, 'forsion-iui:')
+      expect(importMapOf(doc).imports.three).toBe('forsion-iui://lib/three@0.186/three.module.js')
+    })
+  })
+
+  it('网页:只多本站带路径的 /iui-lib/(不是整站、更不是 https:)', () => {
+    onPlatform({ cloudWeb: true }, () => {
+      const doc = buildSketchDoc('')
+      expectOnlyExtraScriptSource(doc, 'https://web.example/iui-lib/')
+      expect(importMapOf(doc).imports.d3).toBe('https://web.example/iui-lib/d3@7/d3.js')
+    })
+  })
+
+  it('手机原生包没带库:CSP 与今天逐字相同,没有 importmap', () => {
+    onPlatform({ mobile: true }, () => {
+      const doc = buildSketchDoc('')
+      expect(policyOf(doc)).toBe(SKETCH_CSP)
+      expect(importMapOf(doc)).toBeNull()
+    })
+  })
+
+  it('importmap 在封堵脚本之后、运行时和模型 HTML 之前;键正好是引擎说明里列的那几个', () => {
+    const doc = buildSketchDoc('<script type="module">import * as THREE from "three"</script>')
+    const [guard, runtime] = [...doc.matchAll(/<script>/g)].map((m) => m.index)
+    const map = doc.indexOf('<script type="importmap">')
+    expect(guard).toBeLessThan(map) // sketchGuard 必须是第一个脚本
+    expect(map).toBeLessThan(runtime)
+    expect(runtime).toBeLessThan(doc.indexOf('<script type="module">'))
+    expect(Object.keys(importMapOf(doc).imports).sort()).toEqual(['chart.js', 'chart.js/auto', 'd3', 'gsap', 'three', 'three/addons/'])
+  })
+
+  it('importmap 指的文件都已生成(build/copy-iui-libs.cjs 的目录名与这里一致)', async () => {
+    const { existsSync } = await import('node:fs')
+    for (const rel of Object.values(IUI_LIB_IMPORTS)) {
+      const p = new URL(`../../public/iui-lib/${rel}${rel.endsWith('/') ? 'controls/OrbitControls.js' : ''}`, import.meta.url)
+      expect(existsSync(p), rel).toBe(true)
+    }
   })
 })
 

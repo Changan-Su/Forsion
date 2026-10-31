@@ -164,7 +164,7 @@ export async function startRun(
       approval_tray: true,
       // Native UI is declarative; this capability advertises a renderer, not a client command surface.
       // 引擎据此 default-deny `clientCapability` 工具;请求时现算(移动端开关随时会变)。
-      client_capabilities: [...collectClientCapabilities(), 'marketplace-cards.v1', ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1', 'intelligent-ui.v2'] : [])],
+      client_capabilities: [...collectClientCapabilities(), 'marketplace-cards.v1', ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1', 'intelligent-ui.v2', 'intelligent-ui-libs.v1'] : [])],
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},

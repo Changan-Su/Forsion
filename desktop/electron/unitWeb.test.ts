@@ -376,6 +376,8 @@ describe('unitWeb', () => {
       `<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'" /></head><body>shell</body></html>`)
     await mkdir(join(dist, 'assets'))
     await writeFile(join(dist, 'assets', 'app-abc123.js'), 'console.log(1)')
+    await mkdir(join(dist, 'iui-lib', 'd3@7'), { recursive: true })
+    await writeFile(join(dist, 'iui-lib', 'd3@7', 'd3.js'), 'export const d3 = 1')
     const b = await boot(dist)
     try {
       const homeRes = await fetch(`${b.base}/`)
@@ -383,6 +385,10 @@ describe('unitWeb', () => {
       expect(homeRes.headers.get('cache-control')).toBe('no-cache')
       expect((await fetch(`${b.base}/some/route`)).headers.get('cache-control')).toBe('no-cache')
       expect((await fetch(`${b.base}/assets/app-abc123.js`)).headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+      // Intelligent UI 卡的随包库:卡是无源 iframe,module 脚本按 CORS 取 → 必须带 ACAO;assets 之外的文件不带
+      const lib = await fetch(`${b.base}/iui-lib/d3@7/d3.js`)
+      expect([lib.status, lib.headers.get('access-control-allow-origin'), lib.headers.get('content-type')]).toEqual([200, '*', 'text/javascript'])
+      expect((await fetch(`${b.base}/assets/app-abc123.js`)).headers.get('access-control-allow-origin')).toBeNull()
       const home = await homeRes.text()
       expect(home).toContain('__FORSION_UNIT_PAGE__')
       expect(home).toContain('inst-1')

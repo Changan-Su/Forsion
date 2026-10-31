@@ -117,7 +117,8 @@ Escape a literal `<` in JSON string data as `\u003c` so labels cannot close the 
 ## Runtime contract
 
 No network, external scripts/fonts/styles, navigation, eval or host APIs. Use inline SVG, canvas
-or semantic HTML; do not request D3, Chart.js, Lucide, React or other globals that are not supplied.
+or semantic HTML; do not request D3, Chart.js, Lucide, React or other globals that are not supplied —
+unless the tool description lists bundled libraries: then import exactly those, in a module script.
 Use a unique root ID and `document.getElementById`. Keep CSS selectors local to that root.
 
 Colors: `--fs-text`, `--fs-muted`, `--fs-faint`, `--fs-accent`, `--fs-accent-soft`, `--fs-surface`,

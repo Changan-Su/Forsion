@@ -37,7 +37,7 @@ function loadWrapper() {
   new Function('module', 'exports', 'require', code)(mod, mod.exports, require)
   return mod.exports
 }
-const { buildSketchDoc, SKETCH_SANDBOX, SKETCH_CSP } = loadWrapper()
+const { buildSketchDoc, sketchCsp, SKETCH_SANDBOX, SKETCH_CSP } = loadWrapper()
 const guardTag = `<script>${fs.readFileSync(path.join(COMPONENTS, 'sketchGuard.js'), 'utf8')}</script>`
 const realDoc = (body) => {
   const doc = buildSketchDoc(body, {}, null, 'nonce')
@@ -172,7 +172,7 @@ async function checkRealCard(app, win, port) {
   const frame = await (await card.elementHandle()).contentFrame()
   const inner = await frame.evaluate(() => ({ rtc: typeof RTCPeerConnection, frames: window.length, text: document.getElementById('ui-ok')?.textContent }))
   const failed = []
-  if (attrs.sandbox !== SKETCH_SANDBOX || attrs.csp !== SKETCH_CSP) failed.push(`真卡 iframe 属性不对: ${JSON.stringify(attrs)}`)
+  if (attrs.sandbox !== SKETCH_SANDBOX || attrs.csp !== sketchCsp('forsion-iui://lib/')) failed.push(`真卡 iframe 属性不对: ${JSON.stringify(attrs)}`)
   if (inner.rtc !== 'undefined' || inner.frames !== 0 || inner.text !== 'rendered') failed.push(`真卡内部不对: ${JSON.stringify(inner)}`)
   if (seen.size) failed.push(`真卡外泄: ${[...seen].join(', ')}`)
   console.log(`\n真 SketchCard: ${JSON.stringify({ ...attrs, csp: attrs.csp === SKETCH_CSP, ...inner, leaks: seen.size })}`)

@@ -35,6 +35,8 @@ COPY desktop/CHANGELOG.md desktop/CHANGELOG.en.md ./desktop/
 COPY desktop/build/copy-excalidraw-assets.cjs ./desktop/build/copy-excalidraw-assets.cjs
 # 同理:UI 字体预设的裁剪脚本(web 的 prepare-fonts 调它,产物 public/fonts 也不入库)。
 COPY desktop/build/gen-fonts.cjs ./desktop/build/gen-fonts.cjs
+# 同理:Intelligent UI 卡的随包库(web 的 prepare-iui-libs 调它,产物 public/iui-lib 也不入库)。
+COPY desktop/build/copy-iui-libs.cjs ./desktop/build/copy-iui-libs.cjs
 # web/vite.config.ts 顶层 import '../unit/releasePolicy.mjs'(Unit 发行时校验打包输入;镜像里不启用,但顶层 import 照样求值,
 # 缺了它 vite 连配置都加载不了 → 整个 build 红)。只拷这一个文件,别把 unit/ 整目录带进上下文。
 COPY unit/releasePolicy.mjs ./unit/releasePolicy.mjs

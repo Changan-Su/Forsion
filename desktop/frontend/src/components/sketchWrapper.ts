@@ -22,10 +22,33 @@ import sketchGuard from './sketchGuard.js?raw'
 import sketchRuntime from './sketchRuntime.js?raw'
 import sketchFigures from './sketchFigures.js?raw'
 import { serializeSketchState } from './sketchState'
+import { currentPlatform } from '../services/platform'
 
 /** 内层 CSP:inline JS/CSS 可跑;无网络、无 eval、无外链资源;图片/媒体/字体仅 data:/blob:。 */
 export const SKETCH_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:"
+/** 随包库(build/copy-iui-libs.cjs 生成,目录名逐字一致):键是模型写的裸名,值相对库根。引擎那句说明在
+ *  tangu-agent/src/tools/builtin/sketch.ts(IUI_LIBS_CAP),两边列的库要一致。 */
+export const IUI_LIB_IMPORTS: Record<string, string> = {
+  three: 'three@0.186/three.module.js', 'three/addons/': 'three@0.186/addons/',
+  d3: 'd3@7/d3.js', 'chart.js/auto': 'chart.js@4/auto.js', 'chart.js': 'chart.js@4/auto.js', gsap: 'gsap@3/gsap.js',
+}
+/** 库根:桌面走应用自己的 forsion-iui: 协议,网页走本站同一份;手机原生包没带这份文件 → null(卡照旧不能用库)。
+ *  网页按 document.baseURI 解析:静态站 base 是 '/',Unit 投影(正式网页 /web/、设备页隧道)是 './' + 注入的 <base href>。 */
+export function iuiLibBase(): string | null {
+  const p = currentPlatform()
+  return p === 'desktop' ? 'forsion-iui://lib/' : p === 'web' ? new URL(`${import.meta.env.BASE_URL}iui-lib/`, document.baseURI).href : null
+}
+/** 内层 CSP 只多一个来源:script-src 放行库根(桌面整个 scheme,网页带路径只认 /iui-lib/);connect-src 仍是 'none'。 */
+export function sketchCsp(base: string | null = iuiLibBase()): string {
+  if (!base) return SKETCH_CSP
+  return SKETCH_CSP.replace("script-src 'unsafe-inline'", `script-src 'unsafe-inline' ${base.startsWith('forsion-iui:') ? 'forsion-iui:' : base}`)
+}
+function iuiImportMap(base: string | null): string {
+  if (!base) return ''
+  const imports = Object.fromEntries(Object.entries(IUI_LIB_IMPORTS).map(([k, v]) => [k, base + v]))
+  return `<script type="importmap">${JSON.stringify({ imports }).replace(/</g, '\\u003c')}</script>`
+}
 export const SKETCH_SANDBOX = 'allow-scripts'
 export const SKETCH_MIN_H = 40
 export const SKETCH_MAX_H = 2400
@@ -112,12 +135,15 @@ export function buildSketchDoc(html: string, vars: Record<string, string> = {}, 
   const initial = (serializeSketchState(state) ?? 'null')
     .replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
   // nonce 是宿主生成的随机串(ask / copy 的授权令牌,见 sketchRuntime.js 头注);只允许 [A-Za-z0-9-],拼不出提前闭合的引号
+  const libBase = iuiLibBase()
   const runtime = sketchRuntime.replace('__SKETCH_INITIAL_STATE__', () => initial).replace('__SKETCH_NONCE__', () => nonce.replace(/[^A-Za-z0-9-]/g, ''))
   // 属性位置的 shadowrootmode 改掉,初始解析就建不出 shadow 树(值可以写成字符引用,不能按值匹配)。
   // ponytail: 不做 HTML 分词,脚本里恰好写 `shadowrootmode =` 也会被改到;真碰上再换分词。
   return '<!doctype html><html><head>' +
-    `<meta http-equiv="Content-Security-Policy" content="${SKETCH_CSP}">` +
+    `<meta http-equiv="Content-Security-Policy" content="${sketchCsp(libBase)}">` +
     `<script>${sketchGuard}</script>` +
+    // importmap 必须早于卡里任何 module 脚本:跟在封堵脚本(它必须是第一个脚本)后面,在运行时脚本和模型 HTML 之前
+    iuiImportMap(libBase) +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
     `<style>${varsBlock(vars)}${SKETCH_SERIES_CSS}${sketchCss}</style>` +
     `<script>${runtime};\n${sketchFigures}</script>` +
