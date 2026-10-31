@@ -18,7 +18,7 @@
   const remove = Element.prototype.remove
   new MutationObserver(() => {
     if (!apply(frameCount, window, [])) return
-    const found = apply(query, document, ['iframe,frame'])
+    const found = apply(query, document, ['iframe,frame,object,embed'])
     for (let i = apply(listSize, found, []) - 1; i >= 0; i--) apply(remove, found[i], [])
   }).observe(document, { childList: true, subtree: true })
   deleteProperty(Element.prototype, 'attachShadow')
