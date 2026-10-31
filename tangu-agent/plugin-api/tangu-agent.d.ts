@@ -182,6 +182,14 @@ export interface PluginRunStart {
   parentSessionId?: string; sessionId?: string; requestId?: string; title?: string;
   readOnly?: boolean; toolNames?: string[]; resumeSessionId?: string;
 }
+/** Saved metadata of a session owned by the authenticated user; never includes messages. */
+export interface PluginRunContext {
+  sessionId: string;
+  cwd: string | null;
+  modelId: string | null;
+  thinkingLevel: string | null;
+  approvalMode: 'readonly' | 'auto-edit' | 'full-auto' | 'custom' | null;
+}
 export interface PluginRunStatus {
   runId: string; sessionId: string; status: string; error?: string | null;
   tokens: number; summary: string; waiting: string[];
@@ -215,6 +223,8 @@ export interface TanguSdk {
     archive(id: string, userId: string): Promise<PluginWorkspace>;
   };
   runs: {
+    /** Local only. Use req.user.userId, never a body owner. Missing/foreign sessions throw. */
+    context(sessionId: string, userId: string): Promise<PluginRunContext>;
     followupParent(childSessionId: string, userId: string, requestId: string, message: string): Promise<{delivered:boolean}>;
     start(input: PluginRunStart): Promise<{ sessionId: string; runId: string }>;
     sessionRuns(sessionId: string, userId: string): Promise<Array<{runId:string; status:string; createdAt:string}>>;

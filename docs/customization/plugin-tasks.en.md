@@ -12,6 +12,7 @@ These APIs run locally on desktop. They require a host build that contains this 
 | `ctx.tangu.openSession(id)` | Loads the hidden task session's real model and configuration, then opens native chat; it does not start a run. |
 | `ctx.registerScopedRoutes(register)` | Routes are mounted at `/extensions/<bundle install folder name>/<engineId>` (the folder name on disk wins, not the id the bundle declares). The host checks for a local origin and a signed-in user, and revokes the routes when the plugin is disabled. Use `req.user.userId` as the owner, never an owner supplied in the request body. |
 | `ctx.paths.dataDir` | A stable, host-assigned plugin data directory, separate from the installed code. |
+| `sdk.runs.context(sessionId,userId)` | Reads saved `sessionId/cwd/modelId/thinkingLevel/approvalMode` metadata from an existing session owned by that user; missing values are `null`. Never reads chat messages. Missing, foreign or empty session/user IDs throw. Disabled plugins, non-local engines and remotely initiated runs are denied. |
 | `sdk.runs.start(options)` | Creates a hidden `kind=task` session owned by the plugin. Save your intent first, then submit with a fixed `requestId`; if the outcome is unknown, retry with the same ID. Native approvals and questions remain active. |
 | `runs.status/sessionRuns/events/subscribe/stop` | All check plugin and user ownership. `sessionRuns` includes native continuations, events are bounded, and subscriptions are cleaned up when the plugin is disabled. |
 | `runs.usage(sessionId,userId)` | Token totals plus the number of unreported runs; missing telemetry from external engines must not be treated as zero. |
@@ -19,6 +20,18 @@ These APIs run locally on desktop. They require a host build that contains this 
 | `sdk.engines.list()` | Lists local external engines and their availability; availability does not prove the CLI is signed in. |
 
 `runs.start` accepts `readOnly`, `toolNames` and an external `resumeSessionId`. The tool list may contain only tools owned by the plugin plus an explicit `ask_user`. Native read-only tasks use an exact allowlist of read tools, and native continuations cannot lift it. External read-only mode accepts only explicitly adapted Claude Code/Codex ACP identities and capabilities; unknown adapters are rejected. For Claude, built-in tools and the user's tool configuration are disabled, and scoped MCP calls still go through host approval one by one (including argument edits made while approving); Codex uses its native read-only sandbox. Resuming an external session requires the same engine and working directory, and an adapter that supports session/load.
+
+## Reusing the current session's project and model
+
+Read the active session ID from `ctx.tangu?.agentStatus?.()?.sessionId` in the renderer and pass it through `ctx.tangu.request` to your bundle's engine route. That route must call `ctx.sdk.runs.context` with the host-authenticated `req.user.userId`, never a user ID from the request body:
+
+```js
+// Inside a handler registered with ctx.registerScopedRoutes:
+const context = await ctx.sdk.runs.context(req.body.sessionId, req.user.userId)
+res.json(context)
+```
+
+Feature-detect `typeof ctx.sdk.runs?.context === 'function'` on older hosts. A new-chat draft has no session ID. If no ID exists or `cwd` is `null`, ask the user to select a project; never guess a home or default working directory. This is a saved session snapshot, excluding unsaved composer drafts. Missing model, thinking or approval settings stay `null`; an unknown nonempty approval mode is restricted to `readonly` under the host's rules. Reading a normal session's metadata grants no permission to run in it or read its messages. Create a separate task with `runs.start`; do not reuse the source ID as the task's `sessionId`. `approvalMode` is informational and grants no authorization to a new task; execution still uses `runs.start`'s project approval settings and native approval flow.
 
 ## Workspaces and automation
 
