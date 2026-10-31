@@ -109,6 +109,7 @@ import { createEffectScope, type EffectRecord, type EffectScope } from './effect
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
 import { windowKind } from '../../windowKind'
+import { addRibbonAction } from './ribbonAction'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
 import { connectionTarget, homeTarget } from '../../services/engine/targets'
@@ -415,6 +416,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   // 文件订阅与语言订阅同一条纪律:插件自己能退订,但最终责任人是宿主 —— 停用时统一收掉,
   // 否则被禁用的插件还在被外部改动唤醒(它的回调里往往就是一次 readFile + 重建内部状态)。
   const fileUnsubs = new Set<() => void>()
+  const ribbonActions = new Set<() => void>()
   const api: PluginAppApi = {
     // 两条路由通用(v4 不设 activePage;正文也不进 store —— 一律取块表面那份统一派生,别再各写各的)。
     getActivePage: () => noteOf(usePageStore.getState()),
@@ -613,6 +615,13 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // Ribbon 上自己那个 Space 图标的进度环(2026-10-18,蓬洲云传文件):只认这个插件自己带的 Space;拆插件时 teardown 收掉
     setSpaceProgress: (spaceId, progress) => (ok() && typeof spaceId === 'string' ? setSpaceProgress(pluginId, spaceId, progress) : false),
     setSpaceDot: (spaceId, on) => (ok() && typeof spaceId === 'string' ? setSpaceDot(pluginId, spaceId, on) : false),
+    // Ribbon 下区一格(2026-10-31,活动中心):同 runCommand 只给首方包;插件停用时 revokeSurface 收掉
+    registerRibbonAction: (opts) => {
+      if (!ok() || !opts || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return () => {}
+      const off = addRibbonAction(opts)
+      ribbonActions.add(off)
+      return () => { ribbonActions.delete(off); off() }
+    },
     // 同步总开关(2026-10-20,蓬洲云「同步」页):只给首方包(同 spotlight 认 locked)、只在有本地库远程同步的桌面
     ...(typeof window !== 'undefined' && window.remoteSync && !hostTangu()?.mobile ? { sync: syncSeam(pluginId, ok) } : {}),
     // 自己弹出来的弹窗排队(2026-10-19,Extend 公告):同一时间只露一个,插件排在宿主的协议更新 / What's new 后面;停用时 teardown 收掉
@@ -621,7 +630,10 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       if (!ok()) return false
       const [{ parseDeepLink }, { resolveDeepLink }] = await Promise.all([import('../../deepLinkPlan'), import('../../deepLinkInstall')])
       const intent = parseDeepLink(String(url ?? ''))
-      return intent ? resolveDeepLink(intent).catch(() => false) : false
+      if (!intent) return false
+      // 浮窗里 resolveDeepLink 不落地(deep link 只在主窗):转给主窗,这里只知道发出去了
+      if (windowKind() !== 'main' && hostTangu()?.requestMainAction) { hostTangu()?.requestMainAction?.('open-link', String(url)); return true }
+      return resolveDeepLink(intent).catch(() => false)
     },
     // 在系统文件管理器里定位库内路径(2026-08-29+)。桥缺席时**整条方法不挂**,同 watchFile 的
     // 纪律 —— 挂个空壳会让插件的「有这个方法就画按钮」分支画出一颗点了没反应的按钮。
@@ -671,6 +683,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   return {
     api,
     revokeSurface: () => {
+      ribbonActions.forEach((off) => off())
+      ribbonActions.clear()
       alive = false
       surface.revoke()
       for (const u of Array.from(fileUnsubs)) {

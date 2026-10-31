@@ -331,6 +331,16 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  和收件箱未读角标同一种红;和进度环同时有时只画红点。别的插件的 Space / 内置 Space → false。
    *  插件停用时宿主自己收掉。旧宿主没有:`ctx.app.setSpaceDot?.(…)`。 */
   setSpaceDot?(spaceId: string, on: boolean): boolean
+  /** Ribbon 下区加一格(2026-10-31+,活动中心):落在「商店」上面,主页入口排同时显示;手机在「⋯」底单里。只对首方内置包生效,
+   *  别的插件调了什么都不发生。`id` 拼成 `rb-plugin-<id>`;`icon` 只认宿主给这个接缝的词(现为 `gift`)。返回反注册,
+   *  插件停用时宿主也收。下区只常驻 5 格,这一格在时「反馈」会收进「更多」。旧宿主没有:`ctx.app.registerRibbonAction?.(…)`。 */
+  registerRibbonAction?(opts: {
+    id: string
+    icon: string
+    title: string | (() => string)
+    run(): void
+    dot?: { get(): boolean; subscribe(cb: () => void): () => void; label?: () => string }
+  }): () => void
   /** 同步总开关(2026-10-20+,蓬洲云「同步」页):笔记库 / Agents 与记忆 / 插件数据三样的开关与状态,宿主
    *  services/syncSetup.ts 是真身。只给首方内置包、只在有本地库远程同步的桌面挂;别的插件 get() 恒 null、set 恒失败。
    *  旧宿主没有:`ctx.app.sync?.get()`。 */
