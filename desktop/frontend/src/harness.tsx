@@ -63,7 +63,8 @@ import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import { parseTags, stripForIndex } from '@amadeus-shared/links'
-import { tagCounts, tagDocFromRaw } from '@amadeus-shared/tagQuery'
+import { hasTagFilter, parseSearchQuery, tagCounts, tagDocFromRaw, tagSearch, type TagSearchDoc } from '@amadeus-shared/tagQuery'
+import type { SearchHit } from '@amadeus-shared/ipc'
 import { noteFmMeta } from '@amadeus-shared/linkIndex'
 import { setRecentsProvider } from './amadeus/lib/recents'
 import { parseBody } from '@amadeus-shared/compiler/markers'
@@ -1732,6 +1733,41 @@ if (new URLSearchParams(location.search).has('dock')) {
     },
   }
   createRoot(document.getElementById('root')!).render(<CanvasPlugHarness />)
+} else if (new URLSearchParams(location.search).has('tagpanels')) {
+  // 标签树 + tag: 搜索的真面板(scripts/tag-tree.check.cjs):内存库走与主进程同一份 tagCounts / tagSearch,界面是生产组件。
+  const g = window as unknown as { amadeus: Record<string, unknown>; __vault: Map<string, string> }
+  const seed: Record<string, string> = {
+    'Plan.md': '---\ntags: [产品/路线图]\n---\n这一季先做 #产品/路线图 里的三件事\n',
+    '2026-10.md': '# 2026-10\n\n### 2026-10-29T22:05:00\n\nMini 窗只放输入框 #产品/路线图\n\n### 2026-10-24T07:45:00\n\n回顾卡可以像抽牌 #产品/路线图 #设计\n\n### 2026-10-19T19:12:00\n\n别的事 #产品/用户\n',
+    'Design.md': '暗色下卡片只比主区亮一档 #设计\n\n好的动效是看不见的 #设计\n',
+    'Forsion.md': '更新日志 #Forsion/发版\n\n标签重命名 #Forsion/闪念盒\n\n`#代码` 里的不算\n',
+    'Read.md': '第三章 #读书\n',
+  }
+  for (const [p, text] of Object.entries(seed)) g.__vault.set(p, text)
+  const docs = (): TagSearchDoc[] => [...g.__vault].filter(([p]) => p.endsWith('.md')).map(([p, text]) => tagDocFromRaw(p, text))
+  Object.assign(g.amadeus, {
+    listTags: () => Promise.resolve(tagCounts(docs())),
+    search: (query: string) => {
+      const parsed = parseSearchQuery(query)
+      const text = hasTagFilter(parsed) ? parsed.text.toLowerCase() : query.trim().toLowerCase()
+      const textHit = (d: TagSearchDoc): SearchHit | null => (d.plain.toLowerCase().includes(text) ? { path: d.path, title: d.title, snippet: d.plain.slice(0, 80), line: 1, score: 1 } : null)
+      if (hasTagFilter(parsed)) return Promise.resolve(tagSearch(docs(), parsed, textHit, text ? [text] : []))
+      return Promise.resolve(docs().flatMap((d) => textHit(d) ?? []))
+    },
+  })
+  usePageStore.setState({ vaultRoot: '/harness', status: 'ready' })
+  const dark = new URLSearchParams(location.search).has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), dark ? 'dark' : 'light')
+  void import('./amadeusPanels').then(({ AmadeusSearchView, AmadeusTagsView }) => {
+    createRoot(document.getElementById('root')!).render(
+      <HostLocaleProvider>
+        <div className="amadeus-root am-app tangu-lovable" data-mode={dark ? 'dark' : 'light'} style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'row', gap: 12, padding: 12, background: 'var(--sidebar-bg)' }}>
+          <div data-panel="tags" style={{ width: 280, height: '100%' }}><AmadeusTagsView /></div>
+          <div data-panel="search" style={{ width: 300, height: '100%' }}><AmadeusSearchView /></div>
+        </div>
+      </HostLocaleProvider>,
+    )
+  })
 } else if (new URLSearchParams(location.search).has('plugview')) {
   // 种一页真块:插件若用块表面(getPage/mountBlocks/insertBlockAfter)在台架里也成立。
   const iso = new Date().toISOString()

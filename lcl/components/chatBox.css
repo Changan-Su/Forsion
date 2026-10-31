@@ -26,6 +26,8 @@
      (根治「首启引导后输入区塌成 0、须刷新才有」)。 */
   min-height: 1.6em; max-height: 200px; display: block;
 }
+/* 输入框本身不画焦点框:卡片就是输入区(`.am-app :focus-visible` 下挂载的插件卡片会被加一圈)。 */
+.t2c-card .t2c-ta:focus-visible { outline: none; }
 .t2c-ta::placeholder { color: var(--text-faint, var(--text-muted)); transition: opacity .3s ease; }
 /* 等待期间小贴士换条:先淡出再换字(Composer2 tipFade) */
 .t2c-ta[data-tip-fade]::placeholder { opacity: 0; }
