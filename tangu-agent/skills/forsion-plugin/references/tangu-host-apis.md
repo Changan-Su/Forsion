@@ -20,6 +20,18 @@ const s = ctx.tangu?.session?.()       // {contextWindow, contextTokens, session
 - **能力探测,不是权限闸**:模型名不敏感,**不用**写 manifest `capabilities`(那道双闸给 `system.activeWindow` 那类)。
 - 只读。要换模型,走引擎侧 agent(通用纪律 5),别指望这里;要**开一个对话**见下「开新对话」。
 
+### Saved project/model context: engine sdk.runs.context (2026-10-31)
+
+For a third-party panel that reuses the current native session's project and model:
+
+1. Read `ctx.tangu?.agentStatus?.()?.sessionId` in the renderer; a draft may have no ID.
+2. Send the ID through `ctx.tangu.request(engineId, path, options)` to a route in the same bundle registered with `ctx.registerScopedRoutes`.
+3. In that authenticated engine handler call `await ctx.sdk.runs.context(req.body.sessionId, req.user.userId)`. Never trust a user ID from the request body.
+
+Feature-detect `typeof ctx.sdk.runs?.context === 'function'`. The result is exactly `{sessionId, cwd, modelId, thinkingLevel, approvalMode}`; the last four fields are nullable saved metadata. It does not read chat messages or expose the full agent config. Missing/foreign sessions and empty IDs throw. Disabled plugins, non-local engines and remotely initiated runs are denied; disabling during the lookup also rejects it. Unknown nonempty approval modes become `readonly` under the native rules.
+
+No session ID or `cwd: null` means the user must select a project; never infer home. Unsaved composer selections are not included. Context access does not make the original session a plugin-owned task. Create a separate task via `sdk.runs.start`, without reusing the source `sessionId`; approval metadata is informational and cannot grant a new task authorization. Task creation continues to use project settings and native approvals. Full API contract: `plugin-api/tangu-agent.d.ts`; author guide: `docs/customization/plugin-tasks.en.md` in the Genesis repository.
+
 ### Agent 状态:agentStatus / subscribeAgentStatus(2026-09-19 起)
 
 「跟着 agent 做反应」的插件(Desk 伴随形象、状态栏小宠物)用这一对:

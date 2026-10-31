@@ -220,6 +220,22 @@ export async function revealTextWhenReady(path: string, needles: string[], opts?
   return false
 }
 
+/** `tag:` 搜索点到一行:先按这行的文字找(nth = 它前面有几条逐字相同的行),找不到(行里有链接,摘录和正文对不上)
+ *  退到这行实际命中的标签第 tagNth 处。两个找法在同一拍试,文字对不上时不用白等完重试。v3 同 revealTextWhenReady。 */
+export async function revealLineWhenReady(path: string, line: { text: string; nth: number; tag: string | null; tagNth: number }): Promise<boolean> {
+  const attempt = (flash?: boolean): boolean =>
+    unifiedRevealText(path, [line.text], { nth: line.nth, flash }) ||
+    (!!line.tag && unifiedRevealText(path, [`#${line.tag}`], { tag: true, nth: line.tagNth, flash }))
+  for (let tries = 0; tries < 5; tries++) {
+    if (attempt()) {
+      setTimeout(() => attempt(true), 600)
+      return true
+    }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  return false
+}
+
 /** 打开独立 .db 数据库视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openNote 的简版)。 */
 export function openDb(dbPath: string, opts?: OpenWhere): void {
   actThrottled('view.open', { f: dbPath }, `view.open|${dbPath}`)
