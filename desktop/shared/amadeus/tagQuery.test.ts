@@ -77,6 +77,9 @@ describe('tagLineHits', () => {
     expect(hits(month, 'tag:a cake', [], ['cake']).map((h) => h.line)).toEqual([3])
     expect(hits('one #a\ntwo cake\n', 'tag:a cake', [], ['cake']).map((h) => h.line)).toEqual([1])
   })
+  it('counts earlier uses of the tag over the whole note, even for lines narrowed away', () => {
+    expect(hits('earlier #a\n[[Target]] #a #b\n', 'tag:a tag:b')).toEqual([{ line: 2, text: 'Target #a #b', tagIndex: 1 }])
+  })
   it('keeps the tag visible when a long line is clipped, as a substring of the line', () => {
     const long = `${'字'.repeat(400)} #a ${'尾'.repeat(400)}`
     const [hit] = hits(long, 'tag:a')

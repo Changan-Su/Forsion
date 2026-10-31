@@ -476,6 +476,9 @@ export interface SearchHit {
 export interface SearchHitLine {
   line: number
   text: string
+  /** How many times this line's first target tag appears earlier in the note, counted over the whole note even when the
+   *  list was narrowed. Absent = 0. Lets the UI locate the line by tag when its text can't be found in the editor. */
+  tagIndex?: number
 }
 
 /** 反链 / 提及的一处命中(L-16)。line = 清洗文本(剥 fm 与注释)里的 1-based 行号,0 = 属性区;

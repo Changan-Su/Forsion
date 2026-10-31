@@ -293,6 +293,14 @@ describe('public Chat Box slots', () => {
     expect(onSubmit).toHaveBeenCalledTimes(2)
     await act(async () => { done(false) })
   })
+  it('turning modelPicker back on resolves the default instead of keeping the empty draft model', async () => {
+    const onSubmit = vi.fn(() => false)
+    await act(async () => { box = mountPluginChatBox(el, { value: 'a', modelPicker: false, onSubmit }) })
+    await typeText('ab')
+    await act(async () => { box!.update({ modelPicker: true }) })
+    await submit()
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ text: 'ab', modelId: 'original' }))
+  })
   it('insertText in the same tick as update keeps the new model', async () => {
     const onSubmit = vi.fn(() => false)
     await act(async () => { box = mountPluginChatBox(el, { value: 'a', modelId: 'old', onSubmit }) })

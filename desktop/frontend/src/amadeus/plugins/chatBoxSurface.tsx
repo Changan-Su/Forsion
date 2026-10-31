@@ -137,9 +137,11 @@ function PluginChatBox(props: BoxProps) {
     caretAfter.current = null
   })
   const change = (draft: ChatBoxSubmission) => {
-    setText(draft.text); setSelection(draft); setError(false)
+    setText(draft.text); setError(false)
     // The mount retains the draft across update() calls that only change presentation.
-    options.value = draft.text; options.modelId = draft.modelId; options.thinkingLevel = draft.thinkingLevel
+    options.value = draft.text
+    // Without a picker the draft's model is a placeholder, not a choice: remembering it would blank the pill if it returns.
+    if (picker) { setSelection(draft); options.modelId = draft.modelId; options.thinkingLevel = draft.thinkingLevel }
     options.onChange?.(draft)
   }
   const replace = (match: { from: number; to: number }, inserted: string) => {

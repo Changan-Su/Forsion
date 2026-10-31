@@ -146,7 +146,7 @@ describe('T2 tag: 行级搜索与标签计数(真 VaultIndex)', () => {
     expect(hits.map((h) => h.path)).toEqual(['2026-10.md', 'Plan.md'])
     expect(hits[0].hits).toEqual([
       { line: 5, text: 'Mini 窗只放输入框 #产品/路线图' },
-      { line: 9, text: '回顾卡可以像抽牌 #产品/路线图 #设计' },
+      { line: 9, text: '回顾卡可以像抽牌 #产品/路线图 #设计', tagIndex: 1 },
     ])
     expect(hits[1].hits).toEqual([{ line: 0, text: 'tags: #产品/路线图' }, { line: 1, text: '这一季先做 #产品/路线图 里的三件事' }])
     expect(ix.search('tag:产品').find((h) => h.path === '2026-10.md')?.hits).toHaveLength(3)
@@ -154,7 +154,7 @@ describe('T2 tag: 行级搜索与标签计数(真 VaultIndex)', () => {
   it('多标签取交集,-tag: 排除,再套普通关键词;大小写不敏感', async () => {
     const ix = await setup({ ...TAG_VAULT, 'Up.md': 'x #Work/A\n' })
     expect(ix.search('tag:产品 tag:设计').map((h) => h.path)).toEqual(['2026-10.md'])
-    expect(ix.search('tag:产品 tag:设计')[0].hits).toEqual([{ line: 9, text: '回顾卡可以像抽牌 #产品/路线图 #设计' }])
+    expect(ix.search('tag:产品 tag:设计')[0].hits).toEqual([{ line: 9, text: '回顾卡可以像抽牌 #产品/路线图 #设计', tagIndex: 1 }])
     expect(ix.search('tag:设计 -tag:产品').map((h) => h.path)).toEqual(['Design.md'])
     expect(ix.search('tag:产品 三件事').map((h) => h.path)).toEqual(['Plan.md'])
     expect(ix.search('TAG:#work').map((h) => h.path)).toEqual(['Up.md'])

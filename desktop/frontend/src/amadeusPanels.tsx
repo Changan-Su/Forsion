@@ -114,12 +114,10 @@ export function AmadeusSearchView() {
     void openNote(h.path, nt).then(() => {
       if (line.line === 0) return // 只在 frontmatter:打开就到了,正文里没有这一处
       const tag = matchedTagInLine(line.text, parsed.tags)
-      const before = lines.slice(0, i)
-      const nth = before.filter((l) => l.text === line.text).length
-      const tagNth = tag ? before.flatMap((l) => (l.line ? splitTagText(l.text) : [])).filter((p) => p.tag?.toLowerCase() === tag.toLowerCase()).length : 0
+      const nth = lines.slice(0, i).filter((l) => l.text === line.text).length
       requestAnimationFrame(() => {
         if (flashBlockWith(line.text.toLowerCase(), nth) || (tag && flashBlockWith(`#${tag}`.toLowerCase()))) return
-        void revealLineWhenReady(h.path, { text: line.text, nth, tag, tagNth })
+        void revealLineWhenReady(h.path, { text: line.text, nth, tag, tagNth: line.tagIndex ?? 0 })
       })
     })
   }

@@ -76,7 +76,7 @@ const box = ctx.ui?.mountChatBox?.(el, {
 })
 ```
 
-↑↓ 移动，Enter 或 Tab 选中，Esc 关闭。选中后把「`trigger` + 查询」换成 `value` 加一个空格，这次 Enter 不会提交。只在用户打字时弹：把光标挪到已有的 `#标签` 后面不弹，输入法组字时不弹，组字结束后再判断。Esc 之后，同一个词继续打字不再弹。
+↑↓ 移动，Enter 或 Tab 选中，Esc 关闭。选中后把「`trigger` + 查询」换成 `value` 加一个空格，这次 Enter 不会提交；浮层开着时 ⌘/Ctrl+Enter 同样是选中。只在用户打字时弹：把光标挪到已有的 `#标签` 后面不弹，输入法组字时不弹，组字结束后再判断。Esc 之后，同一个词继续打字不再弹。
 
 这四项一起加入。旧宿主会忽略三个选项，也没有 `insertText`，所以用 handle 探测：`typeof box.insertText === 'function'`。不支持时自己隐藏 `#` 按钮，或者接受模型药丸照常显示。
 

@@ -76,7 +76,7 @@ const box = ctx.ui?.mountChatBox?.(el, {
 })
 ```
 
-↑↓ moves, Enter or Tab picks, Esc closes. Picking replaces the trigger and query with `value` plus one space, and that Enter doesn't submit. The menu opens only while typing: moving the caret to the end of an existing `#tag` doesn't open it, and neither does IME composition, which is checked once it ends. After Esc, the menu stays closed for the rest of that word.
+↑↓ moves, Enter or Tab picks, Esc closes. Picking replaces the trigger and query with `value` plus one space, and that Enter doesn't submit. While the menu is open, ⌘/Ctrl+Enter picks too. The menu opens only while typing: moving the caret to the end of an existing `#tag` doesn't open it, and neither does IME composition, which is checked once it ends. After Esc, the menu stays closed for the rest of that word.
 
 These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. If it's missing, hide your `#` button or accept that the model pill is shown.
 

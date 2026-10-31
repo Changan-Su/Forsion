@@ -93,16 +93,25 @@ export function tagLineHits(plain: string, fmTags: string[], q: ParsedSearch, te
   if (fmHit.length) rows.push({ line: 0, text: `tags: ${fmHit.map((t) => `#${t}`).join(' ')}`, strict: !terms.length && coversAll(fmTags) })
   const masked = maskCode(plain).split('\n')
   const lines = plain.split('\n')
+  const seen = new Map<string, number>() // 收窄前就数:列表收窄后,定位时再数就和全文对不上了
   for (let i = 0; i < masked.length; i++) {
     if (!masked[i].includes('#')) continue
     const found = tagsInLine(masked[i])
     const hit = matching(found)
-    if (!hit.length) continue
-    const lower = lines[i].toLowerCase()
-    rows.push({ line: i + 1, text: clipAround(plainSnippet(lines[i]), hit[0]), strict: coversAll(found) && terms.every((t) => lower.includes(t)) })
+    if (hit.length) {
+      const lower = lines[i].toLowerCase()
+      const tagIndex = seen.get(hit[0].toLowerCase()) ?? 0
+      rows.push({
+        line: i + 1,
+        text: clipAround(plainSnippet(lines[i]), hit[0]),
+        ...(tagIndex ? { tagIndex } : {}),
+        strict: coversAll(found) && terms.every((t) => lower.includes(t)),
+      })
+    }
+    for (const t of found) seen.set(t.toLowerCase(), (seen.get(t.toLowerCase()) ?? 0) + 1)
   }
   const strict = rows.filter((r) => r.strict)
-  return (strict.length ? strict : rows).slice(0, TAG_LINE_HITS_MAX).map(({ line, text }) => ({ line, text }))
+  return (strict.length ? strict : rows).slice(0, TAG_LINE_HITS_MAX).map(({ strict: _strict, ...hit }) => hit)
 }
 
 export interface TagSearchDoc {
