@@ -354,6 +354,25 @@ export interface TtsBrain {
   synthesize(req: SpeechRequest): Promise<SpeechResult>;
 }
 
+/** 决策模型的一次提问。questions 的键是自己起的题号;题型 choice(criteria = 选项名 → 说明)/ noul(是非)/ score(criteria = 由低到高的档位说明)。
+ *  只发文本:云端中继不收图。modelId 缺省 = 云端排序最前、已启用的决策模型。 */
+export interface DecisionRequest {
+  state: unknown;
+  questions: Record<string, { type: 'choice' | 'noul' | 'score'; instructions?: string; criteria?: unknown }>;
+  modelId?: string;
+  signal?: AbortSignal;
+}
+/** answers 与 questions 同键:noul = P(是),choice = 选中的选项,score = 概率加权的期望档位;confidence / probabilities 照上游。 */
+export interface DecisionResult {
+  model: string;
+  answers: Record<string, { type: string; noul?: number; choice?: string; score?: number; confidence?: number; probabilities?: Record<string, number> }>;
+  usage?: { input_tokens?: number };
+  latency_ms?: number;
+}
+export interface DecisionBrain {
+  decide(req: DecisionRequest): Promise<DecisionResult>;
+}
+
 /** 实时语音(speech-to-speech)上游:给出 WebSocket 地址与鉴权头,连接与转发归调用方(services/realtimeVoice)。 */
 export interface RealtimeBrain {
   /** model = `<providerId>/<model>`(自带百炼 key 直连)或 Forsion 云端的实时模型 id(经云端中转,计费在云端)。 */
@@ -487,6 +506,9 @@ export interface CloudBrainServices {
   tts?: TtsBrain;
   /** 实时语音;可选:standalone 实现(multiBrain 自带 key 直连百炼,否则 httpBrain 走 Forsion 云端中转);云端 worker 未注入 → /agent/realtime 拒连。 */
   realtime?: RealtimeBrain;
+  /** 决策模型(System One:选择 / 是非 / 打分的概率,不生成文字);可选:仅 httpBrain 实现(Forsion 云端中转 /api/brain/decision,Key 住云端)。
+   *  未注入 / 没登录 → 调用方退回自己的启发式(services/judgeSignals.ts 的纠正判定)。 */
+  decision?: DecisionBrain;
   /** 每-agent 云文件(Phase 2);可选:旧云端/纯本地未注入 → 同步/水合调用方跳过。 */
   agentFiles?: AgentFilesBrain;
   /** 每-agent 人格(Phase 2 云端运行水合);可选:未注入 → agentLoop 回落本地 getAgent。 */
