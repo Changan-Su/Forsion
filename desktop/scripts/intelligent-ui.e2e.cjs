@@ -238,11 +238,16 @@ async function main() {
     const fold = win.locator('[data-document-id="dinner"] [data-block-id="steps"] details'), tick = win.locator('[data-document-id="dinner"] .iui-check-rows input').first()
     check('a fold opens and closes by height, a tick settles in', await fold.evaluate(el => getComputedStyle(el, '::details-content').transitionProperty.includes('block-size'))
       && await tick.evaluate(el => getComputedStyle(el, '::after').transitionProperty.includes('scale')))
+    // Clicked and read in one turn: a 150ms glide could end before a second evaluate arrives.
+    const chevronTurns = () => win.locator('[data-document-id="dinner"] [data-block-id="steps"] summary').evaluate(el => {
+      el.click(); const turns = el.querySelector('svg').getAnimations().some(a => a.transitionProperty === 'transform'); el.click(); return turns })
+    check('a fold chevron turns', await chevronTurns())
     await win.emulateMedia({ reducedMotion: 'reduce' })
     await reveal(win, pick); await cards.nth(0).hover(); await cards.nth(0).getByRole('button', { name: '展开原图', exact: true }).click()
     check('reduced motion: a picture changes size without gliding', await pick.locator('.iui-pick-card[data-expanded]').count() === 1 && await gliding() === 0)
     await cards.nth(0).getByRole('button', { name: '收起原图', exact: true }).click()
-    check('reduced motion removes chevron transitions', await win.locator('[data-document-id="dinner"] [data-block-id="steps"] summary svg').evaluate(el => parseFloat(getComputedStyle(el).transitionDuration) <= 0.00001))
+    // base.css keeps color and opacity fades under reduced motion, so a duration above zero is expected here; what must go is the turn.
+    check('reduced motion removes chevron transitions', !await chevronTurns())
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme_pref', 'dark') })
     await win.reload(); await openSession(win); await media.scrollIntoViewIfNeeded()
     check('English native controls', await win.getByRole('button', { name: 'Copy list', exact: true }).count() >= 1)

@@ -221,7 +221,7 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
     else await stopSync()
   }
   const accounts = createAccountCore({
-    loadCreds: creds.load, saveCreds: creds.save, saveConfig: async () => undefined, loadConfig: async () => ({}), ensureBackend: async () => {},
+    loadCreds: creds.load, saveCreds: creds.save, assertCredsWritable: creds.assertWritable, saveConfig: async () => undefined, loadConfig: async () => ({}), ensureBackend: async () => {},
     refreshUnitHost: refreshHub, renderers: () => [], events: { on() {}, removeListener() {} },
     broadcast: () => {}, stopSync, restartSync, log,
   })
