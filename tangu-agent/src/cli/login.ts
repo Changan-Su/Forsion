@@ -3,7 +3,7 @@
  *   POST /api/auth/cli/start → 出链接 + user_code → 开浏览器 → 轮询 /api/auth/cli/poll → 拿 token 存本地。
  * 用户只需点链接、在浏览器登录批准;token 自动回到 CLI,不用手动复制。
  */
-import { saveCreds, loadCreds } from '../standalone/credStore.js';
+import { assertCredsWritable, saveCreds } from '../standalone/credStore.js';
 import { openBrowser } from '../utils/openBrowser.js';
 
 const cyan = (s: string) => `\x1b[36m${s}\x1b[0m`;
@@ -13,6 +13,13 @@ const red = (s: string) => `\x1b[31m${s}\x1b[0m`;
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 export async function loginFlow(cloudUrl: string): Promise<void> {
+  // 在开浏览器之前查:走完授权才发现存不下,用户白批准一次
+  try {
+    assertCredsWritable();
+  } catch (e: any) {
+    console.error(red(`  ${e?.message || e}`));
+    process.exit(1);
+  }
   if (!cloudUrl) {
     console.error(red('  首次登录需指定 --cloud-url(如 --cloud-url https://api.forsion.net)'));
     process.exit(1);
@@ -46,7 +53,7 @@ export async function loginFlow(cloudUrl: string): Promise<void> {
     if (resp.status === 410) { console.error(red('\n  登录码已过期,请重试 `tangu login`')); process.exit(1); }
     const j: any = await resp.json().catch(() => ({ status: 'pending' }));
     if (j.status === 'approved' && j.token) {
-      saveCreds({ ...loadCreds(), cloudUrl: base, token: j.token }); // 保留已记住的 model
+      saveCreds({ cloudUrl: base, token: j.token }); // 保留已记住的 model
       console.log(green('\n  ✓ 已登录') + dim(',凭证存于 ~/.tangu/auth.json'));
       console.log(dim('  现在直接 `tangu` 进入 TUI(无需 --token / --cloud-url;进去用 /model 选模型)。\n'));
       return;

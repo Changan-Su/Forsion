@@ -71,7 +71,7 @@ export const recoveryMarkerOf = (file: string): string => join(configBackupDir(f
 /** 唯一临时名 + 0600 + fsync + rename;commit 之前核 stillMine(同 updateConfigFile 的提交纪律)。
  *  rename 前先 fsync 临时文件:不刷盘的话断电后可能留下长度对、内容全是 0x00 的文件(magpie #1505,Windows)。
  *  .bak 管坏了能恢复,fsync 管尽量不坏。ponytail: 不 fsync 目录 —— 断电丢的是这次 rename,原位仍是上一份好的。 */
-function writeAtomic(file: string, text: string, stillMine: () => boolean): void {
+export function writeAtomic(file: string, text: string, stillMine: () => boolean): void {
   mkdirSync(dirname(file), { recursive: true });
   const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`;
   let fd: number | undefined;
@@ -257,6 +257,12 @@ export function updateSection<T>(name: string, fn: (cur: any) => T | undefined):
   return out;
 }
 
+/** auth.json 的形状。判据与 desktop/electron/forsionAuth.ts 一致,改一边必须改另一边。 */
+export function isCreds(v: unknown): v is Record<string, any> {
+  const c = v as Record<string, unknown> | null;
+  return !!c && typeof c === 'object' && !Array.isArray(c) && [c.cloudUrl, c.token].every((x) => x == null || typeof x === 'string');
+}
+
 /** 读一个 JSON 文件,失败返回 undefined。 */
 function readJson(path: string): any {
   try { return JSON.parse(readFileSync(path, 'utf8')); } catch { return undefined; }
@@ -273,7 +279,7 @@ export function migrateLegacyConfig(): void {
   const c: Record<string, any> = {};
 
   const auth = readJson(authFile()); // { cloudUrl, token, model }
-  if (auth && typeof auth === 'object') {
+  if (isCreds(auth)) {
     c.cloud = { url: auth.cloudUrl || '', token: auth.token || '', defaultModel: auth.model || '' };
   }
 
@@ -298,8 +304,10 @@ export function migrateLegacyConfig(): void {
   // 锁内再确认一次仍不存在:并发的桌面 / CLI 抢先建了文件就以它为准、不迁移(同开头「已存在则跳过」)
   if (!updateConfigFile((cur) => (cur === null ? c : undefined))) return;
 
-  // 旧文件 → .bak(停止被读、可恢复,不删)。
-  for (const f of [authFile(), providersFile(), mcpConfigFile(), enginesFile(), enginePrefsFile(), specialAgentsConfigFile()]) {
+  // 旧文件 → .bak(停止被读、可恢复,不删)。读不出来的 auth.json 留在原位:桌面和 CLI 还在读它,挪走 = 不存在 = 当已登出。
+  const legacy = [providersFile(), mcpConfigFile(), enginesFile(), enginePrefsFile(), specialAgentsConfigFile()];
+  if (isCreds(auth)) legacy.push(authFile());
+  for (const f of legacy) {
     try { if (existsSync(f)) renameSync(f, `${f}.bak`); } catch { /* best-effort */ }
   }
 }
