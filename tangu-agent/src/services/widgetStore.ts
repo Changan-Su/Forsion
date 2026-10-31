@@ -90,6 +90,7 @@ export function listWidgets(place: WidgetPlace): WidgetListing {
   return out;
 }
 export function findWidgetByName(place: WidgetPlace, name: string): WidgetInfo | null {
+  if (!NAME_RE.test(name)) throw new WidgetError(`invalid widget name "${name}"`);
   for (const level of levels(place)) { const w = load(level, name); if (w) return w; }
   return null;
 }
@@ -159,8 +160,9 @@ export function applyEdits(text: string, edits: WidgetEdit[]): string {
 }
 
 export type UpdateResult = { ok: true; widget: WidgetInfo; fromRev: number } | { ok: false; widget: WidgetInfo; content: string };
-export interface UpdateWidgetInput { id: string; expectedRev: number; edits?: WidgetEdit[]; content?: string; title?: string; summary?: string }
-/** 版本对不上不落盘,交回最新版让模型重新决定。旧版进 .history/(不同步,本机留最近 20 版);manifest 最后写,rev 是提交点。 */
+export interface UpdateWidgetInput { id: string; expectedRev: number; entry?: WidgetEntry; edits?: WidgetEdit[]; content?: string; title?: string; summary?: string }
+/** 版本对不上不落盘,交回最新版让模型重新决定。旧版进 .history/(不同步,本机留最近 20 版)。
+ *  ⚠️先写 manifest 再写正文:断在中间时 rev 偏高、正文是旧的,下一次改原件只会报过期重读。反过来,没提交的正文会顶着旧 rev 成为下一次 edits 的基线。 */
 export async function updateWidget(place: WidgetPlace, input: UpdateWidgetInput): Promise<UpdateResult> {
   const { level, manifest: { name } } = locate(place, input.id);
   return withMemoryDirectoryLockRetry(level.lock, () => {
@@ -168,6 +170,7 @@ export async function updateWidget(place: WidgetPlace, input: UpdateWidgetInput)
     if (!cur || cur.manifest.id !== input.id) throw new WidgetError(`widget ${input.id} changed while saving; try again`);
     const m = cur.manifest;
     if (m.deletedAt) throw new WidgetError(`widget "${name}" is deleted; restore it first`);
+    if (input.entry && input.entry !== m.entry) throw new WidgetError(`widget "${name}" is ${m.entry}; change it with the matching card tool`);
     const old = readWidgetContent(cur);
     if (m.rev !== input.expectedRev) return { ok: false, widget: cur, content: old };
     const content = input.edits ? applyEdits(old, input.edits) : input.content;
@@ -179,8 +182,8 @@ export async function updateWidget(place: WidgetPlace, input: UpdateWidgetInput)
     const kept = readdirSync(history).filter((f) => /^\d+\./.test(f)).sort((a, b) => parseInt(b, 10) - parseInt(a, 10));
     for (const f of kept.slice(HISTORY_KEEP)) rmSync(join(history, f), { force: true });
     const next: WidgetManifest = { ...m, rev: m.rev + 1, updatedAt: nowIso(), ...(input.title?.trim() ? { title: input.title.trim() } : {}), ...(input.summary ? { summary: input.summary } : {}) };
-    atomicSyncWrite(level.root, join(cur.dir, m.entry), content);
     atomicSyncWrite(level.root, join(cur.dir, 'manifest.json'), manifestText(next));
+    atomicSyncWrite(level.root, join(cur.dir, m.entry), content);
     return { ok: true, widget: { ...cur, manifest: next } as Located, fromRev: m.rev };
   });
 }
@@ -263,7 +266,8 @@ export async function softDeleteWidget(place: WidgetPlace, id: string): Promise<
   });
 }
 /** 恢复时给每份同步的文件都改一个字节(行尾空行,内容不变):离线的另一台设备过了 30 天、还没拉到这次恢复就清掉了本地文件,
- *  它的删除要撞上这里新的版本才会输(两条同步都是编辑胜删除);不改的话没动过的正文和记录会被它从云端删掉。 */
+ *  它的删除要撞上这里新的版本才会输(两条同步都是编辑胜删除);不改的话没动过的正文和记录会被它从云端删掉。
+ *  ponytail: 恢复的这台没有 data.db 就改不了字节,记录挡不住那次过期清理;要等清理改成先看云端(软删除状态)才算全堵上。 */
 export async function restoreWidget(place: WidgetPlace, id: string): Promise<WidgetInfo> {
   const w = locate(place, id);
   if (!w.manifest.deletedAt) return w;

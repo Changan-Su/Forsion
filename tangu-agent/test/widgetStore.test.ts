@@ -7,9 +7,16 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const state = vi.hoisted(() => ({ publish: vi.fn(async (..._a: any[]) => 1) }));
+const state = vi.hoisted(() => ({ publish: vi.fn(async (..._a: any[]) => 1), writesBeforeCut: null as number | null }));
 vi.mock('../src/services/eventBus.js', async (orig) => ({ ...(await orig<any>()), publish: state.publish }));
 vi.mock('../src/hooks/index.js', () => ({ runHooks: vi.fn(async () => ({})) }));
+vi.mock('../src/services/agentSyncPaths.js', async (orig) => {
+  const real = await orig<any>();
+  return { ...real, atomicSyncWrite: (root: string, file: string, data: unknown) => {
+    if (state.writesBeforeCut !== null && !file.includes('.history') && state.writesBeforeCut-- <= 0) throw new Error('power cut');
+    return real.atomicSyncWrite(root, file, data);
+  } };
+});
 
 import { agentsDir, humanDir } from '../src/core/tanguHome.js';
 import { applyEdits, createWidget, deleteRecord, findWidgetByName, listWidgets, purgeExpiredWidgets, readRecords, readWidget, readWidgetContent, restoreWidget, setRecord, softDeleteWidget, updateWidget, WIDGET_DEF_MAX_BYTES, WidgetError, type WidgetPlace } from '../src/services/widgetStore.js';
@@ -26,7 +33,7 @@ const place = (): WidgetPlace => ({ agentSlug: 'tester' });
 const inProject = (): WidgetPlace => ({ agentSlug: 'tester', projectDir: project });
 const html = '<h1>Ledger</h1>';
 const make = (over: Partial<Parameters<typeof createWidget>[1]> = {}, p = place()) => createWidget(p, { name: 'ledger', entry: 'widget.html', content: html, ...over });
-beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'tangu-widget-')); project = mkdtempSync(join(tmpdir(), 'tangu-widget-project-')); process.env.TANGU_HOME = home; });
+beforeEach(() => { home = mkdtempSync(join(tmpdir(), 'tangu-widget-')); project = mkdtempSync(join(tmpdir(), 'tangu-widget-project-')); process.env.TANGU_HOME = home; state.writesBeforeCut = null; });
 afterEach(() => { delete process.env.TANGU_HOME; rmSync(home, { recursive: true, force: true }); rmSync(project, { recursive: true, force: true }); });
 
 describe('where a widget lives', () => {
@@ -83,6 +90,13 @@ describe('where a widget lives', () => {
     writeFileSync(join(dir, 'manifest.json'), manifest(widget.manifest.id));
     await expect(setRecord(inProject(), widget.manifest.id, { note: 'x' })).rejects.toThrow(/two copies/);
     expect(() => readWidget(inProject(), widget.manifest.id)).toThrow(/two copies/);
+    expect(await manageWidgetProvider.tools()[0].execute({ action: 'read', name: 'planted' }, { agentSlug: 'tester', projectScoped: true, projectPath: project } as any)).toMatch(/two copies/);
+  });
+
+  it('a lookup by name stays inside the widget folder', async () => {
+    mkdirSync(join(agentsDir(), 'tester', 'escape'), { recursive: true });
+    expect(() => findWidgetByName(place(), '../../escape')).toThrow(/invalid widget name/);
+    expect(await manageWidgetProvider.tools()[0].execute({ action: 'read', name: '../../escape' }, { agentSlug: 'tester' } as any)).toMatch(/^Error: invalid widget name/);
   });
 });
 
@@ -132,6 +146,23 @@ describe('changing the original', () => {
     expect(readWidget(place(), id).manifest.rev).toBe(1);
     expect(readWidgetContent(readWidget(place(), id))).toContain('one');
     expect(applyEdits('ab', [{ find: 'a', replace: 'b' }, { find: 'bb', replace: 'c' }])).toBe('c'); // 后一条看得到前一条的结果
+  });
+
+  it('a power cut between the two writes never leaves new content under the old rev', async () => {
+    const { widget: { manifest: { id } } } = await make();
+    state.writesBeforeCut = 1;
+    await expect(updateWidget(place(), { id, expectedRev: 1, content: '<p>half saved</p>' })).rejects.toThrow('power cut');
+    state.writesBeforeCut = null;
+    const after = readWidget(place(), id);
+    expect([after.manifest.rev, readWidgetContent(after)]).toEqual([2, html]); // rev 偏高,正文是旧的
+    expect(await updateWidget(place(), { id, expectedRev: 1, edits: [{ find: 'half', replace: 'x' }] })).toMatchObject({ ok: false, content: html }); // 下一次先读到真实内容
+  });
+
+  it('refuses to put one card type into a widget of the other', async () => {
+    const { widget: { manifest: { id } } } = await make();
+    await expect(updateWidget(place(), { id, expectedRev: 1, entry: 'widget.json', content: '{}' })).rejects.toThrow(/is widget\.html/);
+    expect(readWidgetContent(readWidget(place(), id))).toBe(html);
+    expect(readWidget(place(), id).manifest.rev).toBe(1);
   });
 
   it('refuses a definition over the cap and a rewrite of records', async () => {
@@ -242,6 +273,21 @@ describe('tools', () => {
     expect(stale).toMatch(/^Error: widget .* is at rev 2, not 1\. Nothing was saved\. Latest version:\n<script>/);
     expect(await card.execute({ html: '<p>new</p>', widget: { id, expectedRev: 2 } }, ctx())).toMatch(/^HTML card rendered in the conversation\. Updated widget/);
     expect(await card.execute({ widget: 'nonsense', html }, ctx())).toMatch(/^Error: widget must be/);
+  });
+
+  it('a remote run reads but cannot write: it can approve its own card', async () => {
+    await card.execute({ html, widget: { name: 'ledger' } }, ctx());
+    const id = findWidgetByName(place(), 'ledger')!.manifest.id;
+    const remote = ctx({ remote: { marked: true, via: 'tunnel' } });
+    const denied = /^Error: remote sessions cannot change widgets/;
+    expect(await card.execute({ html, widget: { name: 'other' } }, remote)).toMatch(denied);
+    expect(await card.execute({ widget: { id, expectedRev: 1 }, edits: [{ find: 'Ledger', replace: 'x' }] }, remote)).toMatch(denied);
+    for (const action of ['set_record', 'delete_record', 'delete', 'restore']) expect(await manage.execute({ action, id, fields: { a: 1 }, record_id: 'r_1' }, remote)).toMatch(denied);
+    expect(await manage.execute({ action: 'list' }, remote)).toContain(id);
+    expect(await manage.execute({ action: 'read', id }, remote)).toContain('Ledger');
+    expect(findWidgetByName(place(), 'other')).toBeNull();
+    expect(readWidget(place(), id).manifest).toMatchObject({ rev: 1 });
+    expect(readWidget(place(), id).manifest.deletedAt).toBeUndefined();
   });
 
   it('manage_widget lists, reads, records, deletes and restores', async () => {

@@ -4,12 +4,14 @@
  * 门禁 widgetsEnabledFor:客户端握手 widget.v1 ∧ 本机执行。⚠️桌面要等 WidgetHost 接好(开工顺序第 3 步)才上报这个能力:
  * 只发 edits 的更新没有 html,现在的 SketchCard 画不出来;云沙箱没有 agents/ 文件夹,带 widget 只会把卡写进一个即将消失的工作区。
  * 审批:这些工具本身 sideEffect none,带 widget 的调用按写文件档走(approvals.widgetWrite),否则绕过只读档。
+ * 远程污点 run 只能读:远端能批自己的审批卡,审批拦不住它。手机上记一笔怎么走留给手机那一步。
  * 本文件不 import sketch.ts / intelligentUi.ts:那两个模块加载时就要用这里的 WIDGET_PARAMS。
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
 import { currentDisplayAgentSlug } from '../../seams/runContext.js';
+import { effectiveRemote } from '../../services/remoteOrigin.js';
 import { createWidget, deleteRecord, findWidgetByName, listWidgets, readRecords, readWidget, readWidgetContent, restoreWidget, setRecord, softDeleteWidget, updateWidget, WidgetError, type WidgetEdit, type WidgetEntry, type WidgetInfo, type WidgetPlace } from '../../services/widgetStore.js';
 
 export const WIDGET_CAPABILITY = 'widget.v1';
@@ -28,6 +30,7 @@ const placeOf = (ctx: ToolContext): WidgetPlace => ({
 const SCOPE_LABEL = { project: 'saved to this project', agent: 'saved to you', user: 'available to all agents' } as const;
 const describe = (w: WidgetInfo): string => `"${w.manifest.name}" (id ${w.manifest.id}, rev ${w.manifest.rev}, ${SCOPE_LABEL[w.scope]})`;
 const parseArg = (v: unknown): any => { if (typeof v !== 'string') return v; try { return JSON.parse(v); } catch { return v; } };
+const REMOTE_DENIED = 'Error: remote sessions cannot change widgets on the host computer. Tell the user to do it there.';
 const fail = (e: unknown): string => {
   if (e instanceof WidgetError) return `Error: ${e.message}`;
   throw e;
@@ -69,6 +72,7 @@ To record an entry for the user (记一笔), call \`manage_widget\` with \`set_r
 /** 存 / 改原件。返回给模型的回执;失败以 Error 开头,什么都没落盘。content 未给 = 只发 edits。
  *  ⚠️不给模型选层级:Luna 在项目会话里自己带上 scope:user(live 10-31),一张项目卡落到了所有 Agent 都看得到的地方。用户级要等搬家(开工顺序的管理页那步)。 */
 export async function saveCardWidget(args: Record<string, any>, ctx: ToolContext, card: { entry: WidgetEntry; content?: string; title?: string; edits?: WidgetEdit[] }): Promise<string> {
+  if (effectiveRemote(ctx)) return REMOTE_DENIED;
   const widget = parseArg(args.widget);
   if (!widget || typeof widget !== 'object') return 'Error: widget must be { name } or { id, expectedRev }.';
   const place = placeOf(ctx);
@@ -79,7 +83,7 @@ export async function saveCardWidget(args: Record<string, any>, ctx: ToolContext
       if (!Number.isInteger(widget.expectedRev)) return 'Error: changing a widget needs expectedRev.';
       if (card.edits && card.content !== undefined) return 'Error: send edits or the whole content, not both.';
       if (!card.edits && card.content === undefined) return 'Error: send edits or the whole content.';
-      const r = await updateWidget(place, { id: widget.id, expectedRev: widget.expectedRev, edits: card.edits, content: card.content, title, summary });
+      const r = await updateWidget(place, { id: widget.id, expectedRev: widget.expectedRev, entry: card.entry, edits: card.edits, content: card.content, title, summary });
       if (!r.ok) {
         const clipped = r.content.length > STALE_CONTENT_CHARS ? `${r.content.slice(0, STALE_CONTENT_CHARS)}\n[truncated]` : r.content;
         return `Error: widget ${widget.id} is at rev ${r.widget.manifest.rev}, not ${widget.expectedRev}. Nothing was saved. Latest version:\n${clipped}`;
@@ -142,12 +146,14 @@ export const manageWidgetProvider: ToolProvider = {
         try {
           if (action === 'list') return listing(place);
           if (action === 'read') {
-            const w = args.name ? findWidgetByName(place, String(args.name)) : readWidget(place, id);
-            if (!w) return `Error: widget "${String(args.name)}" not found`;
+            const named = args.name ? findWidgetByName(place, String(args.name)) : null;
+            if (args.name && !named) return `Error: widget "${String(args.name)}" not found`;
+            const w = readWidget(place, named?.manifest.id ?? id); // 按名字找到的也过一遍 id:两层同 id 时不读记录
             const r = readRecords(w);
             const rows = r.status === 'none' ? 'No records on this device.' : `${r.rows.length} records${r.rows.length > RECORD_PREVIEW ? `, last ${RECORD_PREVIEW}` : ''}:\n${JSON.stringify(r.rows.slice(-RECORD_PREVIEW))}`;
             return `Widget ${describe(w)}${w.manifest.deletedAt ? `, deleted ${w.manifest.deletedAt}` : ''}\n${rows}\n${w.manifest.entry}:\n${readWidgetContent(w)}`;
           }
+          if (effectiveRemote(ctx)) return REMOTE_DENIED;
           if (!id) return 'Error: id is required (use list to see ids)';
           if (action === 'set_record') {
             const r = await setRecord(place, id, parseArg(args.fields), args.record_id === undefined ? undefined : String(args.record_id));
