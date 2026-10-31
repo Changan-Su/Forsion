@@ -55,6 +55,15 @@ describe('Plugin companions use the same shell sizing contract as file splits', 
       expect(companion.group === owner.group).toBe(!visible)
     }
   })
+  it('lets a pending pin land when a plugin folds its companions during mount', async () => {
+    const { owner, left } = await setup()
+    useWorkspace.getState().repinSides()
+    left.group.api.setSize({ width: 700 }) // Dockview's birth width for a new side group
+    setPluginCompanions('split-probe', owner.id, def, false)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(left.group.api.width).toBe(345)
+    expect(localStorage.getItem('lcl.sideWidth2.companions-probe')).toBeNull()
+  })
   it('keeps narrow layouts inside the container', async () => {
     const { owner } = await setup(880, 400)
     setPluginCompanions('split-probe', owner.id, def, true)

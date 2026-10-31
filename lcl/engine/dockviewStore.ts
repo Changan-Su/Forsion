@@ -264,7 +264,8 @@ const lockOtherSide = (api: DockviewApi, side: 'left' | 'right'): (() => void) =
  * redistributes the shell widths and captureSideWidths records them as user resizes.
  * New horizontal groups must still fit within the container's minimum-size budget. */
 export function withPreservedSideWidths<T>(api: DockviewApi, change: () => T, newColumns = 0): T {
-  const release = lockSides(api, ['left', 'right'], true)
+  // 钉宽还没落地时「此刻的宽」是过渡态(刚建的侧栏约占一半):锁它会把 pinSides 挡在外面,侧栏就停在过渡宽上。
+  const release = lockSides(api, ['left', 'right'], !pinPending)
   if (api.minimumWidth + newColumns * DV_GROUP_MIN > api.width) {
     release()
     // A previous mutation may still own a lease for these groups. Minimum sizes
