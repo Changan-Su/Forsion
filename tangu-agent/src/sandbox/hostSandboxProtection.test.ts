@@ -38,13 +38,13 @@ describe('C4:<userData>/device-secrets.json 在凭据读清单里', () => {
   });
 });
 
-describe('C4:config-backup/(config.json / provider-auth.json 的 .bak 与 .bad-*)在凭据读清单与受保护清单里', () => {
+describe('C4:config-backup/(config.json / provider-auth.json 的 .bak 与 .bad-*,auth.json 的 .bad-*)在凭据读清单与受保护清单里', () => {
   it('共享域 config-backup 下的备份命中 credentialReadTarget、protectedHostPaths、forsionConfigPaths', async () => {
     const { configFile } = await import('../core/tanguHome.js');
     const { configBackupDir } = await import('../core/config.js');
     const { protectedHostPaths, forsionConfigPaths, matchProtected } = await import('./hostSandboxProtection.js');
     const dir = configBackupDir(configFile());
-    for (const n of ['provider-auth.json.bak', 'config.json.bak', 'provider-auth.json.bad-2026-10-28T09-00-00-000Z']) {
+    for (const n of ['provider-auth.json.bak', 'config.json.bak', 'provider-auth.json.bad-2026-10-28T09-00-00-000Z', 'auth.json.bad-2026-10-31T20-00-00-000Z-abcd1234']) {
       expect(credentialReadTarget(join(dir, n))).not.toBeNull();
       expect(matchProtected(join(dir, n), protectedHostPaths())).not.toBeNull();
       expect(matchProtected(join(dir, n), forsionConfigPaths())).not.toBeNull();

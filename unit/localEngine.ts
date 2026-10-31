@@ -18,7 +18,7 @@ export interface LocalEngineOptions {
 
 export interface LocalEngine {
   readonly configFile: string
-  endpoint(): { url: string | null; token: string }
+  endpoint(): { url: string | null; token: string; remoteMark?: string }
   status(): { state: 'stopped' | 'starting' | 'ready' | 'crashed'; pid: number | null; lastError: string | null }
   start(packageRoots: string[]): Promise<void>
   /** Restart discards registered tools/routes from removed packages. Agents already
@@ -34,6 +34,8 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
   let child: ChildProcess | null = null
   let url: string | null = null
   let token = ''
+  // Lets the engine tell relayed requests from the owner's own; the owner's page never carries it.
+  const remoteMark = randomBytes(32).toString('base64url')
   let state: ReturnType<LocalEngine['status']>['state'] = 'stopped'
   let lastError: string | null = null
   let fingerprint = ''
@@ -77,7 +79,7 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('TANGU_') && key !== 'DATABASE_URL'))
     token = randomBytes(32).toString('base64url')
     Object.assign(env, {
-      TANGU_HOME: join(dataDir, 'tangu'), TANGU_LOCAL_TOKEN: token,
+      TANGU_HOME: join(dataDir, 'tangu'), TANGU_LOCAL_TOKEN: token, TANGU_REMOTE_MARK_SECRET: remoteMark,
       TANGU_DATABASE_URL: '', TANGU_DATA_DIR: join(dataDir, 'tangu/state.db'),
       TANGU_HOST: '127.0.0.1', TANGU_PORT: '0', TANGU_USER_ID: 'local',
       TANGU_BUNDLE_DIRS: JSON.stringify(roots),
@@ -127,7 +129,7 @@ export function createLocalEngine(options: LocalEngineOptions): LocalEngine {
 
   return {
     configFile,
-    endpoint: () => ({ url, token }),
+    endpoint: () => (url ? { url, token, remoteMark } : { url, token }),
     status: () => ({ state, pid: child?.pid ?? null, lastError }),
     start: (roots) => serialize(() => run(roots)),
     setPackages: (roots, force) => serialize(() => run(roots, force)),

@@ -18,7 +18,7 @@ const args = process.argv.slice(2)
 const referenceFlag = args.indexOf('--reference')
 const reference = referenceFlag >= 0
 if (reference) args.splice(referenceFlag, 1)
-const commands = ['init', 'install', 'stage', 'update', 'run', 'migrate', 'enable', 'disable', 'restart', 'status', 'access']
+const commands = ['init', 'install', 'stage', 'update', 'run', 'migrate', 'enable', 'disable', 'restart', 'status', 'access', 'login', 'logout', 'account']
 const action = commands.includes(args[0]) ? args.shift()! : 'run'
 const configArgument = args.shift()
 const file = resolve(configArgument || (action === 'init' ? 'forsion-unit' : 'unit.json'))
@@ -65,6 +65,19 @@ async function run() {
     if (config.workspace?.mode !== 'local') throw new Error('Public sites use their Account provider')
     const token = await localOwnerToken(config.dataDir!)
     print({ url: `http://${config.bindHost || '127.0.0.1'}:${config.port}${config.basePath}#unit-owner=${token}` }); return
+  }
+  if (action === 'login' || action === 'logout' || action === 'account') {
+    const request = (command: ControlCommand) => sendControl(config.dataDir!, command).catch((error) => { throw unitIsOffline(error) ? new Error('Unit is not running') : error })
+    if (action !== 'login') { print(await request({ action })); return }
+    const started = await request({ action, cloudUrl: args[0] }) as { url?: string; userCode?: string }
+    print(started)
+    if (!started.url) return
+    console.error('Open the link in any browser and confirm the code. Waiting for approval...')
+    for (const deadline = Date.now() + 600_000; Date.now() < deadline; await new Promise((done) => setTimeout(done, 2000))) {
+      const account = await request({ action: 'account' }) as { loggedIn?: boolean }
+      if (account.loggedIn) { print(account); return }
+    }
+    throw new Error('Sign-in timed out')
   }
   if (action !== 'run') {
     try { print(await sendControl(config.dataDir!, { action: action as ControlCommand['action'], id: args[0] })); return }
@@ -120,6 +133,11 @@ async function run() {
         if (command.remote && config.management?.enabled !== true) throw new Error('Remote Unit management is disabled')
         if (!command.path) throw new Error('A prepared package is required')
         return stageRelease(config.dataDir!, command.path, config.version)
+      }
+      if (command.action === 'login' || command.action === 'logout' || command.action === 'account') {
+        if (command.remote) throw new Error('The account is managed from this device only')
+        const account = unit!.account()
+        return command.action === 'login' ? account.login(command.cloudUrl) : command.action === 'logout' ? account.logout() : account.status()
       }
       if (!['enable', 'disable', 'restart', 'update', 'migrate'].includes(command.action)) throw new Error('Unknown Unit command')
       const entry = await findInstallation(config, command.id)
