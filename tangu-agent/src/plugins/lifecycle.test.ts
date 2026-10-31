@@ -27,6 +27,7 @@ interface Host {
 }
 
 interface PluginSpec {
+  skills?: boolean;
   version?: string;
   requires?: unknown;
   defaultEnabled?: boolean;
@@ -130,6 +131,7 @@ export default {
     ${spec.noMeta
       ? `ctx.registerToolProvider(${provider});`
       : `ctx.registerPlugin({ id: '${id}', name: '${id}', description: 'x', defaultEnabled: ${spec.defaultEnabled ?? true}, toolProvider: ${provider} });`}
+    ${spec.skills ? `g.__skillCtx = ctx; ctx.registerSkillProvider({ id: 'external', list: async () => [{ id: 'release', name: 'Release', description: 'Release fixture', content: tag }] });` : ''}
     ${spec.route ? `ctx.registerRoutes((r) => r.userRouter.get('${spec.route}', (_req, res) => res.json({ tag })));` : ''}
     ${spec.throwInActivate ? "throw new Error('boom');" : ''}
     ${spec.hangActivateOnce ? `if (!g.__hung['a:${id}']) { g.__hung['a:${id}'] = 1; return new Promise((r) => { g.__release['${id}'] = r; }); }` : ''}
@@ -164,6 +166,35 @@ async function listen(app: any): Promise<{ base: string; server: Server }> {
   await new Promise((r) => server.once('listening', r));
   return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, server };
 }
+
+describe('plugin skill sources', () => {
+  it('owns marketplace namespaces and revokes registrations on disable, re-enable and uninstall', async () => {
+    writePlugin('lc-skills', { skills: true });
+    const ids = ['market-11111111-1111-4111-8111-111111111111', 'market-22222222-2222-4222-8222-222222222222'];
+    for (const id of ids) cpSync(path.join(pluginsRoot, 'lc-skills'), path.join(pluginsRoot, id), { recursive: true });
+    rmSync(path.join(pluginsRoot, 'lc-skills'), { recursive: true });
+    const h = await host();
+    await h.boot.activateAllPlugins();
+    const { listPluginSkills } = await import('../skills/pluginSkills.js');
+    expect((await listPluginSkills()).map(skill => skill.id)).toEqual(ids.map(id => `local:plugin/${id}/external/release`));
+    const stale = (globalThis as any).__skillCtx;
+    await h.boot.setPluginEnabledLive(ids[1], false);
+    stale.registerSkillProvider({ id: 'late', list: async () => [{ id: 'release', name: 'Late', description: '', content: 'stale' }] });
+    expect((await listPluginSkills()).map(skill => skill.id)).toEqual([`local:plugin/${ids[0]}/external/release`]);
+    await h.boot.setPluginEnabledLive(ids[1], true);
+    expect(await listPluginSkills()).toHaveLength(2);
+    await h.boot.removePluginLive(ids[1]);
+    expect((await listPluginSkills()).map(skill => skill.id)).toEqual([`local:plugin/${ids[0]}/external/release`]);
+  });
+
+  it('rolls back a source registered by a failed activation', async () => {
+    writePlugin('lc-bad-skills', { skills: true, throwInActivate: true });
+    const h = await host();
+    await h.boot.activateAllPlugins();
+    const { listPluginSkills } = await import('../skills/pluginSkills.js');
+    expect(await listPluginSkills()).toEqual([]);
+  });
+});
 
 describe('UUID marketplace engine identity', () => {
   it('keeps same-manifest metadata and tools separate, while SDK calls accept their declared names', async () => {

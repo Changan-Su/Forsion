@@ -22,6 +22,16 @@ export interface AppProfile {
   capabilities: { hostExec: boolean; groupChat: boolean; memory: boolean; log: boolean };
 }
 
+/** ToolContext.presentDesk 的参数:最多两格,size 是形态(card 收回卡片 / half / wide 展开侧板;不带 = 保持现状)。 */
+export interface DeskPresentSpec {
+  views: Array<
+    | { type: 'file'; path: string; name?: string }
+    | { type: 'view'; view: string; params?: Record<string, unknown>; name?: string }
+  >;
+  size?: 'card' | 'half' | 'wide';
+  note?: string;
+}
+
 export interface ToolContext {
   userId: string;
   sessionId: string;
@@ -30,7 +40,55 @@ export interface ToolContext {
   execMode?: 'sandbox' | 'host';
   cwd?: string;
   agentSlug?: string;
+  /** 工具产出图片的回流闸(view_image / computer-use observe 用):把图片 data URL 交回 loop,
+   *  loop 在本轮工具执行完后物化成一条 user 图像消息追加到对话尾部,让模型"看见"图片。
+   *  缺省(未装配此闸)时工具应优雅降级,不要假定一定可用。 */
+  collectImage?: (img: { url: string; name?: string }) => void;
   displayFile?: (item: { name: string; mime?: string; path?: string; dataUrl?: string }) => void;
+  /** 本次 run 的 id(一条用户消息引起的那一整轮)。拿来做「每轮只做一次」;缺省时按 sessionId 兜底。 */
+  runId?: string;
+  /** Agent Desk 演出闸(同 desk_present 工具):把文件或已注册的视图(插件视图写 `plugin:<插件 id>:<视图 id>`)
+   *  摆到聊天右侧的 Agent Desk。不落库、不回灌上下文;每个 run 有次数上限;用户关掉 Desk 后到下一条用户消息前不再弹。
+   *  view 不带 name 时宿主用注册时的视图标题。缺省(TUI / 云端等没有 Desk 的环境)时工具应优雅降级。 */
+  presentDesk?: (spec: DeskPresentSpec) => void;
+  /** 发起端(手机)自报的客户端能力,如 'phone.intents'(run 内冻结)。契约 tangu-agent/docs/phone-control.md §2。 */
+  clientCapabilities?: readonly string[];
+  /** 让发起端原生层执行一个动作:发 `client_cmd` → 原生 claim → 执行 → 回执。闭包已绑定本 run,只在
+   *  clientCapabilities 非空时存在(缺省时工具应优雅降级),且**只给声明了 `clientCapability` 的工具**:
+   *  没声明的工具(以及任何工具的 isEnabledFor)拿到 undefined;声明了的只能发自己能力的 ns
+   *  ('phone.intents' → 'phone'),别的 ns 立即 {ok:false, code:'undeclared'}、什么都不发。
+   *  `opts.signal` 传 ctx.signal;run 级中止总会一并监听。
+   *  ⚠️ 若工具声明了 capabilities.defaultTimeoutMs,它必须 ≥ claimMs + execMs —— 否则工具先被判超时,
+   *  手机那边却可能在稍后照样执行。 */
+  requestClientAction?: (req: ClientActionRequest, opts?: ClientActionOptions) => Promise<ClientActionResult>;
+}
+
+/** 客户端动作。ns 必须命中本 run 已声明的 `<ns>.*` 能力(否则立即 {ok:false, code:'undeclared'});op 由原生 verb 表解释。 */
+export interface ClientActionRequest {
+  ns: string;
+  op: string;
+  args?: Record<string, unknown>;
+}
+
+/** claimMs:等原生 claim(缺省 15s,钳 3–30s);execMs:claim 之后等结果(缺省 20s,钳 5–120s)。 */
+export interface ClientActionOptions {
+  claimMs?: number;
+  execMs?: number;
+  signal?: AbortSignal;
+}
+
+/** 原生回执(已消毒)或引擎自产的失败。code 恒匹配 /^[a-z_]{1,32}$/:原生码见契约 §3.4,
+ *  引擎自产 undeclared / not_picked_up(没接,什么都没发生)/ no_report(接了没回,可能发生了)/
+ *  aborted(没接就被中止,什么都没发生)/ aborted_claimed(接了之后被中止,可能发生了)。 */
+export interface ClientActionResult {
+  ok: boolean;
+  code?: string;
+  error?: string;
+  text?: string;
+  image?: string;
+  app?: string;
+  handoff?: boolean;
+  verified?: boolean;
 }
 
 export interface ToolCapabilities {
@@ -38,6 +96,18 @@ export interface ToolCapabilities {
   parallel?: boolean;
   concurrencyKey?: string;
   defaultTimeoutMs?: number;
+  /** 声明本工具的审批档:'command' = 与 run_bash 同档(readonly/auto-edit 下需用户批准)。
+   *  缺省=只读语义,不触发审批。核心据此把插件工具并入审批,无需硬编码工具名。
+   *  'always' = 每次都问用户本人:任何档位(含完全通行)、任何执行形态都弹审批,不进「总允许」,
+   *  用户写的 allow 规则与 PermissionRequest hook 的 allow 也不放行;自动化 / Muse / 远程会话里直接拒。
+   *  给花掉用户资产、对外发出内容这类「每次都该本人点头」的动作用;读写要拆成两个工具名。 */
+  approval?: 'command' | 'always';
+  /** 正向声明:允许作为自动化 tool_call 动作(不经 LLM、参数在规则里冻结、full-auto 直执行)。
+   *  缺省 false——不声明就不进桌面自动化构建器的动作目录。只给参数可完整预填、
+   *  无会话交互依赖、副作用可控的工具声明。 */
+  automationSafe?: boolean;
+  /** Explicitly expose this plugin tool through Desktop MCP. Writes require native approval. */
+  externalMcp?: boolean;
 }
 
 export interface ToolDef {
@@ -47,6 +117,16 @@ export interface ToolDef {
   mode?: 'sandbox' | 'host' | 'both';
   capabilities?: ToolCapabilities;
   isEnabledFor?(profile: AppProfile, ctx: ToolContext): boolean;
+  /** 按需装载:true = 定义默认不进工具面,系统提示「Additional Tools」目录里只留一行,模型经 load_tools 解锁。 */
+  deferred?: boolean;
+  /** 同组连坐解锁:解锁组内任一即整组解锁。 */
+  deferGroup?: string;
+  /** 目录行文案(英文一句话,带典型触发意图;缺省取 description 首行截断)。 */
+  deferHint?: string;
+  /** 客户端能力(如 'phone.intents'):本工具经 ctx.requestClientAction 让发起端原生层执行。声明后由核心中央闸
+   *  default-deny(手机端发起 + 本 run 声明了该能力 + 非子代理 / 计划 / 通道 / 讨论),且工具名必须以 `<ns>_` 开头
+   *  ('phone.intents' → phone_*),否则永不可见。chat 预设按能力放行,内置与插件等价。 */
+  clientCapability?: string;
 }
 
 export interface ToolProvider {
@@ -58,7 +138,7 @@ export type SettingsScope = 'global' | 'agent';
 
 export type SettingsField =
   | { key: string; type: 'toggle'; label: string; labelEn?: string; help?: string; helpEn?: string; default?: boolean }
-  | { key: string; type: 'text' | 'textarea'; label: string; labelEn?: string; help?: string; helpEn?: string; default?: string; placeholder?: string }
+  | { key: string; type: 'text' | 'textarea'; label: string; labelEn?: string; help?: string; helpEn?: string; default?: string; placeholder?: string; secret?: boolean }
   | { key: string; type: 'number'; label: string; labelEn?: string; help?: string; helpEn?: string; default?: number; min?: number; max?: number }
   | { key: string; type: 'select'; label: string; labelEn?: string; help?: string; helpEn?: string; default?: string; options: Array<{ value: string; label: string; labelEn?: string }> }
   | { key: string; type: 'image-list'; label: string; labelEn?: string; help?: string; helpEn?: string; itemFields: SettingsField[] };
@@ -92,8 +172,56 @@ export interface PluginStore {
   deletePluginFile(id: string, scope: Scope, name: string): Promise<void>;
 }
 
+/** Local task sessions owned by the calling engine plugin. requestId makes submission idempotent. */
+export interface PluginRunStart {
+  userId: string; prompt: string; cwd: string; modelId?: string; thinkingLevel?: string;
+  agentSlug?: string; engineId?: string; engineModelId?: string; planMode?: boolean;
+  parentSessionId?: string; sessionId?: string; requestId?: string; title?: string;
+  readOnly?: boolean; toolNames?: string[]; resumeSessionId?: string;
+}
+export interface PluginRunStatus {
+  runId: string; sessionId: string; status: string; error?: string | null;
+  tokens: number; summary: string; waiting: string[];
+  externalSessionId?: string;
+}
+export interface PluginWorkspace {
+  id: string; userId: string; project: string; cwd: string; branch: string; base: string;
+  state: 'preparing' | 'active' | 'archiving' | 'archived'; mergedSha?: string;
+}
+/** Minimal Express surface; authentication and the bundle/engine prefix are host-owned. */
+export interface ScopedPluginRouter {
+  get(path: string, handler: (req: any, res: any) => any): unknown;
+  post(path: string, handler: (req: any, res: any) => any): unknown;
+  put(path: string, handler: (req: any, res: any) => any): unknown;
+  patch(path: string, handler: (req: any, res: any) => any): unknown;
+  delete(path: string, handler: (req: any, res: any) => any): unknown;
+}
+
 /** 运行时句柄(按引用传入,核心同一模块实例)。只列稳定公开成员。 */
 export interface TanguSdk {
+  automation: {
+    list(): Promise<Array<{id:string;desc:string;enabled:boolean;nextRunAt:string|null;[key:string]:any}>>;
+    save(key:string,input:{description:string;type:'at'|'every'|'daily_at';datetime?:string;interval?:string;time?:string;tool:string;args:Record<string,unknown>;enabled:boolean}):Promise<{id:string;[key:string]:any}>;
+    remove(key:string):Promise<boolean>;
+    notify(userId:string,title:string,body:string):Promise<{ok:boolean;error?:string}>;
+  };
+  workspaces: {
+    prepare(input: { id: string; userId: string; cwd: string; baseRef?: string; trust?: boolean }): Promise<PluginWorkspace>;
+    inspect(id: string, userId: string): Promise<PluginWorkspace & { sourceHead: string; targetHead: string; targetBranch: string; revision: string; diff: string; truncated: boolean; dirty: boolean; untracked: string[] }>;
+    merge(id: string, userId: string, revision: string): Promise<{sha: string; branch: string}>;
+    archive(id: string, userId: string): Promise<PluginWorkspace>;
+  };
+  runs: {
+    followupParent(childSessionId: string, userId: string, requestId: string, message: string): Promise<{delivered:boolean}>;
+    start(input: PluginRunStart): Promise<{ sessionId: string; runId: string }>;
+    sessionRuns(sessionId: string, userId: string): Promise<Array<{runId:string; status:string; createdAt:string}>>;
+    usage(sessionId: string, userId: string): Promise<{runs:number;tokens:number|null;completed:number;unreportedRuns:number}>;
+    status(runId: string, userId: string): Promise<PluginRunStatus>;
+    events(runId: string, userId: string, cursor?: number): Promise<Array<{ seq: number; type: string; payload: any }>>;
+    subscribe(runId: string, userId: string, onChange: () => void): Promise<() => void>;
+    stop(runId: string, userId: string): Promise<void>;
+  };
+  engines: { list(): Array<{ id: string; name: string; available: boolean; reason?: string }> };
   pluginStore: PluginStore;
   sendWechatMedia(
     userId: string,
@@ -104,16 +232,66 @@ export interface TanguSdk {
   ): Promise<{ ok: boolean; error?: string }>;
 }
 
+/** 插件注册的 CLI 子命令(`tangu <name> ...`)。 */
+export interface PluginCommand {
+  name: string;
+  summary: string;
+  /** 命令名之后的 argv;返回退出码(或 void=保持进程存活,由其打开的句柄决定)。 */
+  run(argv: string[]): Promise<number | void>;
+}
+
+/** One read-only skill currently enabled at the external source. */
+export interface PluginSkillEntry {
+  /** Provider-local kebab-case slug, 1–64 characters. The host assigns the full id. */
+  id: string;
+  name: string;
+  description: string;
+  /** Markdown instructions without YAML frontmatter. */
+  content: string;
+  /** Optional absolute directory for relative resources; does not grant file access. */
+  dir?: string;
+}
+export interface PluginSkillListContext {
+  cwd?: string;
+  /** Always supplied by this host; aborted after 5 seconds or on provider revocation. */
+  signal?: AbortSignal;
+}
+export interface PluginSkillProvider {
+  /** Provider-local kebab-case slug, 1–64 characters. */
+  id: string;
+  /** Re-read current source state. Return only enabled skills; no persistent copy is made. */
+  list(context: PluginSkillListContext): Promise<readonly PluginSkillEntry[]>;
+}
+
 export interface TanguPluginContext {
   registerPlugin(meta: PluginMeta): void;
   registerToolProvider(p: ToolProvider): void;
+  /** Live read-only source; IDs are local:plugin/<engineId>/<providerId>/<entryId>.
+   * Automatically revoked on disable, unload, failed activation or replacement. */
+  registerSkillProvider(provider: PluginSkillProvider): void;
+  /** 注册 `tangu <name>` 子命令(如 computer-use 的 doctor/setup)。 */
+  registerCommand(cmd: PluginCommand): void;
+  registerScopedRoutes(mount: (router: ScopedPluginRouter) => void): void;
   sdk: TanguSdk;
   log(msg: string): void;
-  paths: { pluginDir: string };
+  paths: { pluginDir: string; dataDir: string };
+  /** 发用户活动事件(宿主强制加 `plugin:<id>:` 前缀)——自动化 event_seen 可盯;云端 worker no-op。 */
+  activity: { append(event: string, detail?: Record<string, unknown>): void };
 }
 
+/**
+ * 生命周期:启动时每个插件都 activate 一次,未启用 / 前置没齐的随即 deactivate 休眠(仍列在设置页)。
+ * 停用、卸载、原地升级、前置消失时宿主调 `deactivate()`(限时 5s),再撤掉本次激活注册的一切(工具、命令、路由;meta 留着休眠)。
+ * 再启用会在**同一个模块对象**上再调一次 `activate(ctx)`:别依赖模块级「只做一次」的状态,activate 里起的定时器 /
+ * 子进程 / 监听都要在 deactivate 里收掉。activate 抛错则本次激活作废(回滚 + 调一次 deactivate 收尾),插件休眠不自动重试。
+ */
 export interface TanguPlugin {
-  manifest?: { id: string; name: string; version: string; apiVersion: number; entry: string; commands?: string[]; description?: string };
+  manifest?: {
+    id: string; name: string; version: string; apiVersion: number; entry: string; commands?: string[]; description?: string;
+    /** 前置插件:`"id"` 或 `{ id, minVersion? }`。前置已启用且在跑(版本 ≥ minVersion)时本插件才激活;否则休眠,就位后自动激活。 */
+    requiresPlugins?: Array<string | { id: string; minVersion?: string }>;
+  };
   activate(ctx: TanguPluginContext): void | Promise<void>;
+  /** 停用 / 卸载 / 原地升级时调用(限时 5s):停掉 activate 里起的后台工作。启动期那次早于引擎装配完成,只做自身收尾。 */
   deactivate?(): void | Promise<void>;
 }

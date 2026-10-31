@@ -6,6 +6,12 @@ import { describe, it, expect } from 'vitest';
 import { skillSummary } from './assets.js';
 
 describe('skillSummary', () => {
+  it('preserves plugin ownership without exposing its content or resource directory', () => {
+    const summary = skillSummary({ id: 'local:plugin/engine/dsh/release', name: 'Release', source: 'plugin', sourcePluginId: 'engine', sourceProviderId: 'dsh', readOnly: true, origin: null, content: 'private instructions', dir: '/external' });
+    expect(summary).toMatchObject({ source: 'plugin', readOnly: true, sourcePluginId: 'engine', sourceProviderId: 'dsh', origin: null, builtin: false });
+    expect(summary).not.toHaveProperty('content');
+    expect(summary).not.toHaveProperty('dir');
+  });
   it('透传 origin:agent;其余(没有 / 伪造成别的值)归 null', () => {
     expect(skillSummary({ id: 'local:a', name: 'A', origin: 'agent', source: 'local' })).toMatchObject({ id: 'local:a', origin: 'agent', source: 'local', description: '', icon: null, category: null });
     expect(skillSummary({ id: 'local:b', name: 'B', source: 'local' }).origin).toBeNull();

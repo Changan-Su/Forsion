@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.59.0
+  version: 1.60.0
   author: Forsion
   category: Forsion
 ---
@@ -72,6 +72,31 @@ Plugin authors: run the same checker before every release. It is the generic hal
 - 类型契约 `types/tangu-agent.d.ts` 是 apiVersion 1 的 API 拷贝,随模板分发;宿主升 apiVersion 时替换它并同步 manifest 的 `apiVersion`。
 
 装本机:整夹拷到 `~/.forsion/plugins/<id>/` → 设置页重扫即生效,不用重启。同 id 覆盖升级也是重扫即热换代:单文件入口(esbuild 打成一个 bundle,推荐)直接换;多文件的**纯 ESM** 包(`"type": "module"`,入口相对 import 同包文件)在 Node ≥ 22.15 上也能整包换代。宿主证明不了整张模块图都会换代的,如实标「需重启」:包里有 CommonJS(`.cjs`、`require('./x')`、`createRequire` 造的函数)、原生 `.node`、任一层自带 `node_modules`、软链、`import(变量)`、引到插件目录外的文件,或运行时太旧。同一进程里热换代满 20 次后也一律「需重启」(旧模块卸不掉,省内存)。
+
+### Live external skills (engine API, 2026-10-31)
+
+Use `ctx.registerSkillProvider` to expose skills managed by an external system without copying them into the user's skills directory. Feature-detect it on older hosts. Do not import the engine at runtime.
+
+```js
+if (typeof ctx.registerSkillProvider === 'function') {
+  ctx.registerSkillProvider({
+    id: 'external',
+    async list({ cwd, signal }) {
+      const entries = await externalSource.list({ cwd, signal });
+      return entries.filter(s => s.enabled).map(s => ({
+        id: s.slug, name: s.name, description: s.description,
+        content: s.body, ...(s.absoluteDir ? { dir: s.absoluteDir } : {}),
+      }));
+    },
+  });
+}
+```
+
+Provider and entry IDs must match `[a-z0-9][a-z0-9-]{0,63}`. The host assigns `local:plugin/<engineId>/<providerId>/<entryId>`; never construct user-owned `local:<slug>` IDs. The engine ID is the host's canonical installed identity, including marketplace ownership. Duplicate provider IDs in one activation are rejected. `content` is Markdown instructions without YAML frontmatter; optional `dir` must be absolute and grants no file permissions.
+
+Each list/read calls the source again, including native `use_skill`. Return only enabled, model-invocable skills. Each call has a 5-second deadline and receives an abort signal; errors/timeouts omit that source while preserving other skills. Disable/unload/failed activation revokes providers and discards pending results. Re-enabling calls `activate` again, so register again there.
+
+These are read-only source entries: manage per-skill enable/delete in the external system. The user-directory file catalog does not list or mutate them. `/agent/skills` exposes `source: 'plugin'`, `origin: null`, `readOnly: true`, `sourcePluginId` and `sourceProviderId`; keep this ownership in any management UI. Discovery does not bypass the agent's selected-skill allowance or tool approvals.
 
 ## 主题(samples/forsion-sample-theme)
 
