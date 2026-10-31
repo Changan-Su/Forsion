@@ -2455,13 +2455,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -2496,6 +2496,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -3263,13 +3267,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -3304,6 +3308,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -4244,13 +4252,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -4285,6 +4293,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -5415,13 +5427,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -5456,6 +5468,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -6334,13 +6350,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -6375,6 +6391,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -7101,13 +7121,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -7142,6 +7162,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -8082,13 +8106,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -8123,6 +8147,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -9253,13 +9281,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -9294,6 +9322,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -10405,13 +10437,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -10446,6 +10478,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
