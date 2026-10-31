@@ -14,6 +14,7 @@
     "check:portrait-receipt": "node scripts/portrait-receipt.check.cjs",
     "check:visualize": "node scripts/visualize.check.cjs",
     "check:intelligent-ui": "node scripts/intelligent-ui.e2e.cjs",
+    "check:sketchrtc": "node scripts/sketch-rtc.check.cjs",
     "e2e:intelligent-live": "cd ../tangu-agent && node scripts/live-harness.mjs --only intelligentusers --model codex/gpt-6-luna --timeout 1800000",
     "demo:intelligent-ui": "node scripts/intelligent-ui.e2e.cjs --preview",
     "replay:intelligent-ui": "node scripts/intelligent-ui-replay.cjs",
