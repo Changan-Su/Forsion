@@ -1,6 +1,6 @@
 /** 凭据文件那半(宿主留下的):auth.json 私有权限、按账号的云同步设置。device flow / 多账号记忆的用例随代码搬去了 Forsion Extend(test/auth.test.ts)。 */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createAccountCore, type AccountCoreDeps } from './accountCore'
@@ -68,6 +68,59 @@ describe('desktop account credential files', () => {
     expect(loadTanguCreds()).toEqual({})
     expect(() => saveTanguCreds({ cloudUrl: cloud, token: jwt('a') })).toThrow(/unreadable/)
     expect(readFileSync(file, 'utf8')).toBe('')
+  })
+
+  describe('明确登录能救回来', () => {
+    const core = (): ReturnType<typeof createAccountCore> => createAccountCore({
+      loadCreds: loadTanguCreds, saveCreds: saveTanguCreds, assertCredsWritable: assertTanguCredsWritable,
+      saveConfig: async () => {}, loadConfig: async () => ({ mode: 'external' }), refreshUnitHost: () => {},
+      renderers: () => [], broadcast: () => {}, stopSync: () => null, restartSync: () => null, log: () => {},
+    } as unknown as AccountCoreDeps)
+    const kept = (): string[] => readdirSync(join(dir, 'config-backup')).filter((name) => name.startsWith('auth.json.bad-'))
+
+    it('启动时就是坏文件:登录走完整条链,坏文件原样另存(0600),auth.json 换成新凭据', async () => {
+      const file = join(dir, 'auth.json')
+      for (const [i, bad] of ['', '{"token":"half'].entries()) {
+        writeFileSync(file, bad)
+        await core().commit({ cloudUrl: cloud, token: jwt('b') })
+        expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual({ cloudUrl: cloud, token: jwt('b') })
+        expect(statSync(file).mode & 0o777).toBe(0o600)
+        expect(kept()).toHaveLength(i + 1)
+      }
+      const contents = kept().map((name) => readFileSync(join(dir, 'config-backup', name), 'utf8'))
+      expect(contents.sort()).toEqual(['', '{"token":"half'])
+      for (const name of kept()) expect(statSync(join(dir, 'config-backup', name)).mode & 0o777).toBe(0o600)
+      expect(() => saveTanguCreds({ cloudUrl: cloud })).not.toThrow() // 修好了:之后的普通保存不再被拒
+    })
+
+    it('运行中坏了:登录保留上次读到的 model', async () => {
+      saveTanguCreds({ cloudUrl: cloud, token: jwt('a'), model: 'local-choice' })
+      writeFileSync(join(dir, 'auth.json'), '')
+      await core().commit({ cloudUrl: cloud, token: jwt('b') })
+      expect(loadTanguCreds()).toEqual({ cloudUrl: cloud, token: jwt('b'), model: 'local-choice' })
+    })
+
+    it('好文件上登录不留 .bad-*', async () => {
+      saveTanguCreds({ cloudUrl: cloud, token: jwt('a') })
+      await core().commit({ cloudUrl: cloud, token: jwt('b') })
+      expect(existsSync(join(dir, 'config-backup'))).toBe(false)
+    })
+
+    it('坏文件留不下来就整次失败(读本身就失败的目录),不覆盖', () => {
+      const file = join(dir, 'auth.json')
+      mkdirSync(file)
+      expect(() => saveTanguCreds({ cloudUrl: cloud, token: jwt('b') }, { signIn: true })).toThrow()
+      expect(statSync(file).isDirectory()).toBe(true)
+    })
+
+    it('登出不放行:clear 仍然拒,坏文件原样,不留 .bad-*', async () => {
+      const file = join(dir, 'auth.json')
+      saveTanguCreds({ cloudUrl: cloud, token: jwt('a') })
+      writeFileSync(file, '')
+      await expect(core().clear()).rejects.toThrow(/unreadable/)
+      expect(readFileSync(file, 'utf8')).toBe('')
+      expect(existsSync(join(dir, 'config-backup'))).toBe(false)
+    })
   })
 
   it('改 loadTanguCreds 的返回值不影响下一次读(登出 delete token 的就是它)', () => {

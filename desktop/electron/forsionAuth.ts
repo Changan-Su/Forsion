@@ -8,6 +8,7 @@
  */
 import { readFileSync, writeFileSync, mkdirSync, chmodSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
+import { keepBadCopy } from './configWrite'
 import { forsionHomeDir } from './forsionHome'
 import { forsionAccountId } from '../shared/forsionAccount'
 export { forsionAccountId } from '../shared/forsionAccount'
@@ -86,11 +87,14 @@ export function loadTanguCreds(): TanguCreds {
 }
 
 export function assertTanguCredsWritable(): void {
-  if (!readCreds().readable) throw new Error(`${credsFile()} is unreadable. Repair or remove it, then sign in again.`)
+  if (!readCreds().readable) throw new Error(`${credsFile()} is unreadable. Sign in again to replace it, or repair or remove the file.`)
 }
 
-/** 只写 auth.json;读不出来时拒写。多账号记忆(auth-accounts.json)由 Extend 在换号 / 登录 / 续期时自己维护。 */
-export function saveTanguCreds(c: TanguCreds): void {
-  assertTanguCredsWritable()
+/** 只写 auth.json;读不出来时拒写。signIn = 明确登录:新凭据不是从失败的那次读算出来的,坏文件另存 `config-backup/auth.json.bad-*` 后换上,
+ *  否则断电留下的零字节文件会让人再也登不上(同引擎对 provider-auth.json 的做法)。留不下坏文件就整次失败。
+ *  多账号记忆(auth-accounts.json)由 Extend 在换号 / 登录 / 续期时自己维护。 */
+export function saveTanguCreds(c: TanguCreds, opts: { signIn?: boolean } = {}): void {
+  if (!opts.signIn) assertTanguCredsWritable()
+  else if (!readCreds().readable) console.warn(`[auth] unreadable auth.json kept at ${keepBadCopy(credsFile())}`)
   writePrivateJson(credsFile(), c)
 }

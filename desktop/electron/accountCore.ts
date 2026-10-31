@@ -30,8 +30,8 @@ interface AckEvents {
 
 export interface AccountCoreDeps {
   loadCreds(): TanguCreds
-  /** 只写 auth.json(多账号记忆归 Extend)。 */
-  saveCreds(c: TanguCreds): void
+  /** 只写 auth.json(多账号记忆归 Extend)。读不出来时拒写;signIn = 明确登录,坏文件另存后换上。 */
+  saveCreds(c: TanguCreds, opts?: { signIn?: boolean }): void
   /** auth.json 读不出来时抛。 */
   assertCredsWritable(): void
   saveConfig(patch: { cloudUrl?: string }): Promise<unknown>
@@ -81,8 +81,6 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
     lastAuthCreds = d.loadCreds()
     lastAuthKey = credKey(lastAuthCreds.cloudUrl || '', lastAuthCreds.token || '')
   }
-  /** 每道关口连 auth.json 能不能写一起查:握手要等,文件可能在等待期间坏掉,提交点的忘账号 / 吊销不能先做了才被拒。 */
-  const andWritable = (assertCurrent: () => void) => (): void => { assertCurrent(); d.assertCredsWritable() }
   let authTransitions: Promise<unknown> = Promise.resolve()
   const runAuthTransition = <T,>(fn: () => Promise<T>): Promise<T> => {
     const task = authTransitions.then(fn, fn)
@@ -114,7 +112,6 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
     transition: runAuthTransition,
     currentAuthKey,
     async commit(creds, assertCurrent = () => {}, onCommitPoint?: () => void) {
-      assertCurrent = andWritable(assertCurrent)
       assertCurrent()
       await withPreparedAccount(async () => {
         assertCurrent()
@@ -123,7 +120,7 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
         await d.saveConfig({ cloudUrl: creds.cloudUrl })
         assertCurrent()
         onCommitPoint?.()
-        d.saveCreds({ ...d.loadCreds(), ...creds })
+        d.saveCreds({ ...d.loadCreds(), ...creds }, { signIn: true })
         updateLastAuth()
         const stored = await d.loadConfig()
         if (stored.mode === 'managed') await d.ensureBackend()
@@ -131,10 +128,11 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
       })
     },
     async clear(assertCurrent = () => {}, onCommitPoint?: () => void) {
-      assertCurrent = andWritable(assertCurrent)
-      assertCurrent()
+      // 每道关口连 auth.json 能不能写一起查:握手要等,文件可能在等待期间坏掉,提交点的忘账号 / 吊销不能先做了才被拒。
+      const assertReady = (): void => { assertCurrent(); d.assertCredsWritable() }
+      assertReady()
       await withPreparedAccount(async () => {
-        assertCurrent()
+        assertReady()
         onCommitPoint?.()
         const c = d.loadCreds()
         delete c.token // 登出:只清 token(保留 cloudUrl/model 记忆)

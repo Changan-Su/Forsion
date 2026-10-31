@@ -58,13 +58,20 @@ describe('accountCore', () => {
     expect(h.deps.broadcast).toHaveBeenLastCalledWith('auth:changed', { loggedIn: true })
   })
 
-  it('auth.json 读不出来:commit / clear 在任何副作用之前就拒(握手、停同步、提交点都不发生,Extend 不会忘账号 / 发吊销)', async () => {
+  it('auth.json 读不出来:clear 在任何副作用之前就拒(握手、停同步、提交点都不发生,Extend 不会忘账号 / 发吊销)', async () => {
     const h = harness({ credsUnreadable: true })
     const onCommitPoint = vi.fn()
-    await expect(h.core.commit({ cloudUrl: b.cloudUrl!, token: b.token! }, undefined, onCommitPoint)).rejects.toThrow('unreadable')
     await expect(h.core.clear(undefined, onCommitPoint)).rejects.toThrow('unreadable')
     expect(onCommitPoint).not.toHaveBeenCalled()
     expect(h.order).toEqual([])
+  })
+
+  it('auth.json 读不出来:commit 是明确登录,照常走完并带 signIn 写;writeCreds(续期)不带', async () => {
+    const h = harness({ credsUnreadable: true })
+    await h.core.commit({ cloudUrl: b.cloudUrl!, token: b.token! })
+    expect(h.deps.saveCreds).toHaveBeenLastCalledWith({ cloudUrl: b.cloudUrl, token: b.token, model: 'm' }, { signIn: true })
+    h.core.writeCreds({ token: 'tok-b-fresh' })
+    expect(h.deps.saveCreds).toHaveBeenLastCalledWith({ cloudUrl: b.cloudUrl, token: 'tok-b-fresh', model: 'm' })
   })
 
   it('auth.json 在握手等待期间坏掉:提交点同样不跑,同步照常恢复', async () => {
