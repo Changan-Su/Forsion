@@ -1,18 +1,29 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, cp, mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join, relative, resolve } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, type KeyObject } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { build } from 'esbuild'
 import { sendControl } from '../../unit/control'
+import { packageDigest } from '../../unit/releases'
+import { signDir, testKeyPair } from './bundleSignature.testutil'
 
 const exec = promisify(execFile)
 let root: string, scratch: string, main: string, file: string
 const children = new Set<ChildProcess>()
 const env = { ...process.env }
 delete env.UNIT_PORT
+// Generated per run; only the public half is written into the fixture unit.json.
+const trusted = testKeyPair(), stranger = testKeyPair()
+const signed = async (dir: string, key: KeyObject = trusted.privateKey) => { await signDir(dir, key); return dir }
+const enableManagement = async () => {
+  const config = JSON.parse(await readFile(file, 'utf8'))
+  config.management = { enabled: true, trustedKeys: [trusted.publicKeyPem] }
+  await writeFile(file, JSON.stringify(config))
+  return config
+}
 
 beforeAll(async () => {
   root = await mkdtemp(join(tmpdir(), 'unit-cli-test-'))
@@ -60,14 +71,14 @@ async function stop(child: ChildProcess) {
   }
   children.delete(child)
 }
-async function fixture(id: string, version: string, failStart = false) {
+async function fixture(id: string, version: string, failStart = false, requires?: string[], hooks: { start?: string; stop?: string } = {}) {
   const dir = join(scratch, `${id}-${version}`)
   await mkdir(dir)
-  await writeFile(join(dir, 'manifest.json'), JSON.stringify({ id, version, apiVersion: 1,
+  await writeFile(join(dir, 'manifest.json'), JSON.stringify({ id, version, apiVersion: 1, ...(requires ? { requires } : {}),
     backend: { apiVersion: 1, main: 'backend.mjs' } }))
   await writeFile(join(dir, 'service.mjs'), `export const version = ${JSON.stringify(version)};`)
   await writeFile(join(dir, 'backend.mjs'), `
-    import { appendFile, readFile } from 'node:fs/promises';
+    import { access, appendFile, chmod, readFile } from 'node:fs/promises';
     import { join } from 'node:path';
     import { threadId } from 'node:worker_threads';
     import { version } from './service.mjs';
@@ -83,7 +94,8 @@ async function fixture(id: string, version: string, failStart = false) {
           return { userId: token, username: token, role: token === 'admin' && !demoted ? 'ADMIN' : 'USER' };
         }
       } : undefined,
-      start() { if (${failStart}) throw new Error('Rejected CLI fixture activation'); },
+      async start() { if (${failStart}) throw new Error('Rejected CLI fixture activation'); ${hooks.start ?? ''} },
+      async stop() { ${hooks.stop ?? ''} },
       migrate() { return appendFile(join(ctx.dataDir, 'migration-ran'), 'ran'); },
       handle(req, res) {
         res.setHeader('Content-Type', 'application/json');
@@ -107,9 +119,7 @@ it('authorizes Unit jobs and survives independent updates, bad releases and auth
   const privateConfig = JSON.parse(await readFile(file, 'utf8'))
   await expect(sendControl(privateConfig.dataDir, { action: 'stage', path: scratch, remote: true })).rejects.toThrow('Remote Unit management is disabled')
   await stop(child)
-  const config = JSON.parse(await readFile(file, 'utf8'))
-  config.management = { enabled: true }
-  await writeFile(file, JSON.stringify(config))
+  const config = await enableManagement()
   child = await start(); port = (await status()).port
   const original = await status(), authorityBefore = await service(port, 'authority')
   expect((await request('status', undefined, 'forged')).status).toBe(401)
@@ -118,7 +128,7 @@ it('authorizes Unit jobs and survives independent updates, bad releases and auth
   expect((await request('status', undefined, 'auditor')).status).toBe(200)
   expect((await request('status', undefined, 'scopeless')).status).toBe(403)
   expect((await fetch(`http://127.0.0.1:${port}/admin/unit/config`, { headers: { Authorization: 'Bearer operator' } })).status).toBe(403)
-  const next = await fixture('service', '2.0.0')
+  const next = await signed(await fixture('service', '2.0.0'))
   const staged = JSON.parse(await cli('stage', file, next))
   await rm(next, { recursive: true })
   const releases = await (await request('releases')).text()
@@ -144,7 +154,7 @@ it('authorizes Unit jobs and survives independent updates, bad releases and auth
   expect((await service(port, 'authority')).threadId).toBe(authorityBefore.threadId)
   expect((await status()).pid).toBe(original.pid)
   expect((await request('operations', { ...input, action: 'restart', releaseId: undefined })).status).toBe(409)
-  const bad = JSON.parse(await cli('stage', file, await fixture('service', '3.0.0', true)))
+  const bad = JSON.parse(await cli('stage', file, await signed(await fixture('service', '3.0.0', true))))
   const saved = await readFile(file, 'utf8'), failedId = randomUUID()
   expect((await request('operations', { ...input, releaseId: bad.releaseId, requestId: failedId })).status).toBe(202)
   await waitJob(failedId, 'failed')
@@ -162,7 +172,7 @@ it('authorizes Unit jobs and survives independent updates, bad releases and auth
   await action('migrate', 'failed')
   await action('disable'); await action('migrate'); await action('enable'); await action('restart')
   expect((await request('operations', { action: 'disable', pluginId: 'authority', requestId: randomUUID(), confirm: true })).status).toBe(409)
-  const replacement = JSON.parse(await cli('stage', file, await fixture('authority', '2.0.0')))
+  const replacement = JSON.parse(await cli('stage', file, await signed(await fixture('authority', '2.0.0'))))
   const authorityJob = randomUUID()
   expect((await request('operations', { ...input, pluginId: 'authority', releaseId: replacement.releaseId, requestId: authorityJob })).status).toBe(202)
   await waitJob(authorityJob)
@@ -190,3 +200,143 @@ it('authorizes Unit jobs and survives independent updates, bad releases and auth
   expect((await status()).plugins.find((p: any) => p.id === 'service').state).toBe('active')
   await stop(child)
 }, 40_000)
+
+it('installs only trusted releases, refuses protected or required plugins, and keeps files after uninstall', async () => {
+  await cli('install', file, await fixture('authority', '1.0.0'))
+  const config = await enableManagement()
+  let child = await start(), port = (await status()).port
+  const request = (path: string, body?: unknown) => fetch(`http://127.0.0.1:${port}/api/admin/unit/${path}`, {
+    method: body ? 'POST' : 'GET', headers: { Authorization: 'Bearer admin', 'Content-Type': 'application/json' },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  })
+  const operate = (action: string, pluginId: string, releaseId?: string) =>
+    request('operations', { action, pluginId, ...(releaseId ? { releaseId } : {}), requestId: randomUUID(), confirm: true })
+  const run = async (action: string, pluginId: string, releaseId?: string, expected = 'succeeded') => {
+    const response = await operate(action, pluginId, releaseId)
+    expect(response.status).toBe(202)
+    const { id } = await response.json()
+    await expect.poll(async () => (await (await request('operations/' + id)).json()).state, { timeout: 12_000 }).toBe(expected)
+    return (await (await request('operations/' + id)).json())
+  }
+  const rejected = async (response: Response, status: number, message: string) => {
+    const body = await response.json()
+    expect(response.status).toBe(status); expect(body.error).toContain(message); expect(body.detail).toBe(body.error)
+  }
+  const unit = await (await request('status')).json()
+  expect(unit.management.actions).toEqual(['enable', 'disable', 'restart', 'update', 'migrate', 'install', 'uninstall'])
+  expect(unit.plugins).toEqual([expect.objectContaining({ id: 'authority', state: 'active', requires: [], protected: true })])
+  const stage = async (dir: string) => JSON.parse(await cli('stage', file, dir)).releaseId as string
+  const service = await stage(await signed(await fixture('service', '1.0.0')))
+  const dependent = await stage(await signed(await fixture('dependent', '1.0.0', false, ['service'])))
+  const broken = await stage(await signed(await fixture('broken', '1.0.0', true)))
+  const foreign = await stage(await signed(await fixture('foreign', '1.0.0'), stranger.privateKey))
+  const bare = await stage(await fixture('bare', '1.0.0'))
+  const padded = await signed(await fixture('padded', '1.0.0'))
+  await writeFile(join(padded, 'unsigned.mjs'), 'export const added = true') // added after signing
+  const incomplete = await stage(padded)
+  const authorityUpdate = await stage(await fixture('authority', '1.1.0'))
+  const releases: Array<{ releaseId: string; installed: boolean; signature: string }> = (await (await request('releases')).json()).releases
+  const release = (id: string) => releases.find((item) => item.releaseId === id)
+  expect(release(service)).toMatchObject({ pluginId: 'service', installed: false, signature: 'trusted' })
+  expect(release(foreign)).toMatchObject({ installed: false, signature: 'untrusted' })
+  expect(release(bare)).toMatchObject({ installed: false, signature: 'missing' })
+  expect(release(incomplete)).toMatchObject({ installed: false, signature: 'untrusted' })
+  expect(release(authorityUpdate)).toMatchObject({ installed: true, signature: 'missing' })
+  await rejected(await operate('install', 'foreign', foreign), 400, 'Release is not signed by a trusted key')
+  await rejected(await operate('install', 'bare', bare), 400, 'Release is not signed by a trusted key')
+  await rejected(await operate('install', 'padded', incomplete), 400, 'Release is not signed by a trusted key')
+  await rejected(await operate('update', 'authority', authorityUpdate), 400, 'Release is not signed by a trusted key')
+  expect((await operate('install', 'service')).status).toBe(400)
+  await rejected(await operate('install', 'dependent', dependent), 409, 'Required plugins are not active: service')
+  await rejected(await operate('uninstall', 'service'), 404, 'not installed')
+
+  await run('install', 'service', service)
+  expect((await (await fetch(`http://127.0.0.1:${port}/api/service`)).json()).version).toBe('1.0.0')
+  let saved = JSON.parse(await readFile(file, 'utf8'))
+  const servicePath = saved.plugins[1].path as string
+  expect(relative(join(scratch, 'state/plugins/service'), servicePath)).toMatch(/^1\.0\.0-/)
+  await rejected(await operate('install', 'service', service), 409, 'already installed; use update')
+
+  // A concurrent writer: the verdict was earned by signed bytes, the digest then matches different ones.
+  const swap = async (releaseId: string) => {
+    const release = join(config.dataDir, 'releases', releaseId), unsigned = join(scratch, 'unsigned-' + releaseId)
+    await cp(join(release, 'package'), unsigned, { recursive: true })
+    await writeFile(join(unsigned, 'service.mjs'), 'export const version = "unsigned";')
+    const item = JSON.parse(await readFile(join(release, 'release.json'), 'utf8'))
+    await writeFile(join(release, 'release.json'), JSON.stringify({ ...item, sha256: await packageDigest(unsigned) }))
+    const listed = (await (await request('releases')).json()).releases.find((entry: { releaseId: string }) => entry.releaseId === releaseId)
+    expect(listed.signature).toBe('trusted')
+    await rm(join(release, 'package'), { recursive: true })
+    await cp(unsigned, join(release, 'package'), { recursive: true })
+  }
+  const swapped = await stage(await signed(await fixture('swapped', '1.0.0')))
+  const swappedUpdate = await stage(await signed(await fixture('service', '1.1.0')))
+  await swap(swapped); await swap(swappedUpdate)
+  const beforeSwap = await readFile(file, 'utf8')
+  expect((await run('install', 'swapped', swapped, 'failed')).error).toBe('Release is not signed by a trusted key')
+  expect((await run('update', 'service', swappedUpdate, 'failed')).error).toBe('Release is not signed by a trusted key')
+  expect(await readFile(file, 'utf8')).toBe(beforeSwap)
+  expect(await readdir(join(scratch, 'state/plugins/swapped'))).toEqual([])
+  expect((await status()).plugins.map((p: { id: string }) => p.id)).not.toContain('swapped')
+  expect((await (await fetch(`http://127.0.0.1:${port}/api/service`)).json()).version).toBe('1.0.0')
+
+  await run('install', 'dependent', dependent)
+  await run('disable', 'dependent')
+  await rejected(await operate('uninstall', 'service'), 409, 'require it first: dependent')
+  await rejected(await operate('uninstall', 'authority'), 409, 'account authority')
+  const beforeBroken = await readFile(file, 'utf8')
+  await run('install', 'broken', broken, 'failed')
+  expect(await readFile(file, 'utf8')).toBe(beforeBroken)
+  expect((await status()).plugins.map((p: { id: string }) => p.id)).not.toContain('broken')
+  expect(await readdir(join(scratch, 'state/plugins/broken'))).toEqual([]) // the failed version directory is removed
+
+  if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+    // The plugin activates, then unit.json cannot be replaced; its stop hook frees the directory again.
+    const flagged = (name: string) => `await access(join(ctx.dataDir, ${JSON.stringify(name)})).then(() => true, () => false)`
+    const stateDir = `join(ctx.dataDir, '../../..')`
+    const saboteur = await stage(await signed(await fixture('saboteur', '1.0.0', false, undefined, {
+      start: `if (${flagged('lock-state')}) await chmod(${stateDir}, 0o500);`,
+      stop: `await chmod(${stateDir}, 0o700); if (${flagged('fail-stop')}) throw new Error('Rejected CLI fixture stop');`,
+    })))
+    const data = join(config.dataDir, 'plugins/saboteur'), versions = join(scratch, 'state/plugins/saboteur')
+    const unchanged = await readFile(file, 'utf8')
+    await mkdir(data, { recursive: true })
+    await writeFile(join(data, 'lock-state'), '')
+    await run('install', 'saboteur', saboteur, 'failed')
+    expect(await readdir(versions)).toEqual([]) // stopped and removed: nothing can still use the directory
+    await writeFile(join(data, 'fail-stop'), '')
+    expect((await run('install', 'saboteur', saboteur, 'failed')).error).toContain('its version directory was kept')
+    expect(await readdir(versions)).toHaveLength(1)
+    expect(await readFile(file, 'utf8')).toBe(unchanged)
+    expect((await status()).plugins.map((p: { id: string }) => p.id)).not.toContain('saboteur')
+    await rm(join(data, 'lock-state')); await rm(join(data, 'fail-stop'))
+    await run('install', 'saboteur', saboteur) // the same id is not blocked by a leftover record
+    await run('uninstall', 'saboteur')
+  }
+
+  const dependentPath = JSON.parse(beforeBroken).plugins[2].path as string
+  await run('uninstall', 'dependent')
+  // Directory modes do not stop writes on Windows or for root; there the write cannot be made to fail.
+  if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+    // unit.json cannot be replaced: the uninstall is undone in the running Unit, with its entry intact.
+    const unchanged = await readFile(file, 'utf8'), worker = (await (await fetch(`http://127.0.0.1:${port}/api/service`)).json()).threadId
+    await chmod(join(scratch, 'state'), 0o500)
+    try { await run('uninstall', 'service', undefined, 'failed') } finally { await chmod(join(scratch, 'state'), 0o700) }
+    expect(await readFile(file, 'utf8')).toBe(unchanged)
+    expect((await status()).plugins.find((p: { id: string }) => p.id === 'service')?.state).toBe('active')
+    const restored = await (await fetch(`http://127.0.0.1:${port}/api/service`)).json()
+    expect(restored.version).toBe('1.0.0'); expect(restored.threadId).not.toBe(worker) // stopped, then restored
+  }
+  await run('uninstall', 'service')
+  saved = JSON.parse(await readFile(file, 'utf8'))
+  expect(saved.plugins.map((p: { path: string }) => p.path)).toEqual([JSON.parse(beforeBroken).plugins[0].path])
+  for (const kept of [join(config.dataDir, 'plugins/service'), join(config.dataDir, 'plugins/dependent'), servicePath, dependentPath]) {
+    expect((await stat(kept)).isDirectory()).toBe(true)
+  }
+  expect((await (await request('status')).json()).plugins.map((p: { id: string }) => p.id)).toEqual(['authority'])
+  await stop(child); child = await start(); port = (await status()).port
+  expect((await status()).plugins.map((p: { id: string }) => p.id)).toEqual(['authority'])
+  await run('install', 'service', service)
+  expect((await (await request('releases')).json()).releases.find((item: { releaseId: string }) => item.releaseId === service).installed).toBe(true)
+  await stop(child)
+}, 60_000)

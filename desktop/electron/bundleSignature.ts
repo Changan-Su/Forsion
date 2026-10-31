@@ -35,8 +35,12 @@ export type SignatureVerdict = { ok: true; files: string[]; digests: Record<stri
 
 const SAFE_REL = /^(?!\/)(?!.*(^|\/)\.\.(\/|$))[^\0]+$/
 
-/** 核对 dir 下的 SIGNATURE。require = 必须被签到的文件(相对路径)。任何一条不满足都返回 ok:false + 原因。 */
-export async function verifyBundleSignature(dir: string, publicKeyPem: string, require: readonly string[] = []): Promise<SignatureVerdict> {
+/**
+ * 核对 dir 下的 SIGNATURE。require = 必须被签到的文件(相对路径)。任何一条不满足都返回 ok:false + 原因。
+ * maxFiles = SIGNATURE 最多可列的文件数;桌面端的捆绑包是 esbuild 单文件,一律用缺省 5000。
+ * Unit 远程安装的 Server 插件带 bundled 依赖(整份 node_modules),由调用方给一个有界的大值。
+ */
+export async function verifyBundleSignature(dir: string, publicKeyPem: string, require: readonly string[] = [], maxFiles = MAX_FILES): Promise<SignatureVerdict> {
   let parsed: Partial<BundleSignature>
   try {
     parsed = JSON.parse(await fs.readFile(path.join(dir, SIGNATURE_FILE), 'utf8')) as Partial<BundleSignature>
@@ -47,7 +51,7 @@ export async function verifyBundleSignature(dir: string, publicKeyPem: string, r
     return { ok: false, reason: `${SIGNATURE_FILE} is malformed` }
   }
   const entries = Object.entries(parsed.files)
-  if (entries.length === 0 || entries.length > MAX_FILES) return { ok: false, reason: `${SIGNATURE_FILE} lists ${entries.length} files` }
+  if (entries.length === 0 || entries.length > maxFiles) return { ok: false, reason: `${SIGNATURE_FILE} lists ${entries.length} files` }
   for (const [rel, digest] of entries) {
     if (!SAFE_REL.test(rel) || rel === SIGNATURE_FILE || !/^[0-9a-f]{64}$/.test(digest)) return { ok: false, reason: `bad entry ${JSON.stringify(rel)}` }
   }

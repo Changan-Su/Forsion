@@ -76,6 +76,17 @@ describe('verifyBundleSignature', () => {
   })
 })
 
+describe('verifyBundleSignature 文件数上限', () => {
+  it('缺省 5000(桌面端口径不变);调用方放宽后同一个包能验过', async () => {
+    await Promise.all(Array.from({ length: 5001 }, (_, i) => write(`node_modules/dep/f${i}.js`, String(i))))
+    await signDir(dir, key.privateKey)
+    const capped = await verifyBundleSignature(dir, key.publicKeyPem, ['manifest.json'])
+    expect(capped.ok).toBe(false)
+    if (!capped.ok) expect(capped.reason).toContain('lists 5004 files')
+    expect(await verifyBundleSignature(dir, key.publicKeyPem, ['manifest.json'], 10_000)).toMatchObject({ ok: true })
+  })
+})
+
 // 公钥换成另一对时上面的「换公钥」用例才有意义:这里确认两对不同
 describe('testKeyPair', () => {
   it('每次生成不同的密钥', () => {

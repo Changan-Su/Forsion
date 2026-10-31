@@ -204,8 +204,10 @@ Admin Panel MCP 新增 `unit_status`、`unit_releases`、`unit_operations`、`un
 需同时更新 Unit 与 Server，并在实例私有 `unit.json` 顶层开启：
 
 ```json
-{"management": {"enabled": true}}
+{"management": {"enabled": true, "trustedKeys": ["-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----\n"]}}
 ```
+
+`trustedKeys` 可选：远程安装 / 更新接受的 ed25519 公钥（PEM 字符串数组，最多 32 把）；开启管理时这一项格式不对，Unit 拒绝启动。只放公钥，私钥由发包方自己保管、不进任何仓库或 `unit.json`。
 
 默认关闭。重启 Unit 后生效；该配置不下发浏览器。Unit 自己接管 `/api/admin/unit/*`，使用活动账户提供者重新验证原 Bearer、当前 ADMIN 账户与令牌权限，拒绝普通用户/伪造身份，并在提交与实际执行前再次验证。服务端校验不依赖模型传入的角色。
 
@@ -219,6 +221,15 @@ Admin Panel MCP 新增 `unit_status`、`unit_releases`、`unit_operations`、`un
 stage 将包复制到 Unit 私有发行目录并保存 SHA256；安装前与安装副本都会检查摘要。源目录移动不影响已登记包。MCP 不接受包路径、下载 URL 或 shell 命令；npm-ci 包先在目标平台安装依赖并封装，远程任务不执行 npm 安装。发行目录最多保留 200 项，满后由本机运维归档不用的条目。
 
 任务由 Unit 主进程持有，状态为 queued/running/succeeded/failed/interrupted，更新还显示 verifying-release/applying 阶段；保存操作人、目标、发行编号与时间；不持久化 Bearer、私有配置或完整包路径。最近 100 条任务持久化，幂等检查限于这些保留记录；同一编号换参数或换操作人会被拒绝。Unit 重启将未完成任务标为 interrupted，须先检查实际状态再决定是否重试。当前串行执行，一个任务运行时其他新任务返回 409。
+
+### 远程安装 / 卸载与签名
+
+`POST /api/admin/unit/operations` 另有两个动作（`GET /status` 的 `management.actions` 会列出，面板据此探测）：
+
+- `install`：带 `releaseId`，release 的 `pluginId` 须与请求一致，且该 id 未安装（已装 → 409，改用 update）；`requires` 须全部 active（否则 409）。Space id 不重复、原生功能依赖与 `webEntries` 校验通过后，包装进不可变版本目录、按依赖序激活，成功后才写进 `unit.json` 的 `plugins`；激活失败撤掉记录与版本目录，`unit.json` 不变，任务 failed。若撤销时停不下来或 runtime 同步失败，记录照样移除，但版本目录保留，任务 error 写明回滚不完整，重启 Unit 清掉。远程安装不改 `defaultSpace`。权限同 update（`unit.update`）。
+- `uninstall`：账户提供者（`/status` 里 `protected: true` 的插件）一律 409；任何已安装插件（不论是否 active）`requires` 它 → 409 并列出这些插件；`unit.json` 的 `webEntries` 发布它、或它提供 `defaultSpace` 时任务 failed（否则下次启动会失败，先在 `unit.json` 改）。先停用再从 `plugins` 移除；`dataDir/plugins/<id>` 与已装的版本目录都保留，不删任何文件。停用、runtime 同步或写 `unit.json` 失败时整步撤回：记录、顺序与原运行状态恢复，任务 failed，可直接重试。权限同启停（`unit.lifecycle`）。
+
+签名只针对远程 `install` 与 `update`：release 包根须带 `SIGNATURE`，格式同 `desktop/electron/bundleSignature.ts`（ed25519，列包内文件的 sha256），且须签到 `manifest.json` 与所有声明的入口（`main`、`backend.main`、`runtime.main`）。包还必须完整：除 `SIGNATURE` 外每个普通文件都在签名表里且摘要一致，多一个没签的文件、或包内有符号链接 / 特殊文件，都判 `untrusted`（Server 插件从自带的 node_modules 解析模块，没签的文件可能顶替已签的模块）。桌面端 Extend 播种 / 装载的口径不变。公钥依次试 `desktop/electron/builtinBundles.json` 里该 id 钉死的 `signingKey`、再试 `management.trustedKeys` 里任意一把；都不过 → 400 `Release is not signed by a trusted key`。提交时核一次；任务执行时把包复制进私有版本目录、摘要复核之后，对这个最终目录再做一次完整校验，通过才激活，update 同样如此。Server 插件带 bundled 依赖，这条路径的 SIGNATURE 文件数上限放宽到 200000（桌面端仍是 5000）。`GET /releases` 每项另给 `installed`（该 pluginId 当前是否已装）与 `signature`（`trusted` / `untrusted` / `missing`，按 release 摘要缓存到 Unit 重启）。本地 CLI 的 `install` / `stage` / `update` 不要求签名。
 
 `unit_plugin_action` 支持 enable/disable/restart/migrate。迁移须先停用目标模块；更新不自动迁移，失败尝试恢复旧代码，不回滚数据库。为保持远程恢复入口，停用或迁移账户提供者本身只能用本地 CLI；允许重启和更新账户提供者。Server 自身更新时其 MCP 连接可能断开，账户服务恢复前查询可能短暂失败，恢复后可继续查 Unit 保存的任务。
 
