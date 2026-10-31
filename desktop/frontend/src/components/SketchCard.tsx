@@ -12,7 +12,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   buildSketchDoc, readSketchTheme, subscribeThemeChange,
-  SKETCH_SANDBOX, SKETCH_MIN_H, SKETCH_MAX_H, SKETCH_INITIAL_H,
+  sketchCsp, SKETCH_SANDBOX, SKETCH_MIN_H, SKETCH_MAX_H, SKETCH_INITIAL_H,
 } from './sketchWrapper'
 import { useI18n } from '../i18n'
 import { readSketchState, saveSketchState, serializeSketchState, sketchStateKey } from './sketchState'
@@ -48,6 +48,10 @@ export function userTouchedFrame(frame: HTMLIFrameElement | null): boolean {
   const activation = (navigator as Navigator & { userActivation?: { isActive?: boolean } }).userActivation
   return activation?.isActive === true
 }
+// iframe 的 csp 属性:卡自导航到 frame-src 放行的本机页时,响应没声明接受这份 CSP 就拒显,否则新 realm 不受 sketchGuard 和内层 CSP 管。
+// 只有 Chromium 认它;Firefox / Safari 忽略,网页端靠宿主 frame-src 只放行同源。
+// 要和文档里那份一致(sketchCsp,带随包库来源):Chromium 把这个属性也强制到 srcdoc 上,写成 SKETCH_CSP 库就全被拦,卡只剩占位。
+const frameCsp = () => ({ csp: sketchCsp() }) as React.IframeHTMLAttributes<HTMLIFrameElement>
 const newNonce = (): string => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join(''))
 
 const SketchFrame: React.FC<{ item: SketchItem; actions?: SketchActions; stateScope?: string; onAsk?: SketchAsk }> = ({ item, actions, stateScope, onAsk }) => {
@@ -194,7 +198,7 @@ const SketchFrame: React.FC<{ item: SketchItem; actions?: SketchActions; stateSc
       <div ref={clipRef} className={`sketch-clip${open ? ' open' : ''}${over && !open ? ' faded' : ''}`}>
         {/* webhost-ok: sketch 卡的能力包络就是规格本身(JS 可跑、无网络无宿主 API,内层 CSP default-src 'none' 收口,
             见 sketchWrapper.ts 实证注);webview 反而错配:Electron-only(web/mobile 没有)且每卡一个 OS 进程。 */}
-        {vars && <iframe ref={frameRef} className="sketch-frame" sandbox={SKETCH_SANDBOX} srcDoc={doc} style={{ height: h }} title={item.title || 'Intelligent UI'} onLoad={onFrameLoad} />}
+        {vars && <iframe ref={frameRef} className="sketch-frame" sandbox={SKETCH_SANDBOX} {...frameCsp()} srcDoc={doc} style={{ height: h }} title={item.title || 'Intelligent UI'} onLoad={onFrameLoad} />}
       </div>
       {over && (
         <button type="button" className="sketch-card-toggle" onClick={() => setOpen((v) => !v)}>

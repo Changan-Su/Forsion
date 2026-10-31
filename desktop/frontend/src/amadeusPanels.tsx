@@ -1,14 +1,16 @@
 /** Amadeus 侧栏面板(Tangu 原生 amx- 外观,只复用 vendored 组件的逻辑):全文搜索 / 标签 / 局部关系图。 */
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
-import { Search } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
+import { ChevronRight, Search } from 'lucide-react'
+import { AnimatedCollapse } from '@lcl/components'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { amadeus } from '@amadeus/api'
 import type { SearchHit, TagCount } from '@amadeus-shared/ipc'
 import { decodeCharRefs, resolvePageName } from '@amadeus-shared/links'
 import { noteLinkTargets } from '@amadeus-shared/linkIndex'
+import { TAG_LINE_HITS_MAX, buildTagTree, filterTagTree, hasTagFilter, matchedTagInLine, parseSearchQuery, sortTagTree, splitTagText, tagTreeKey, type TagTreeNode, type TagTreeSort } from '@amadeus-shared/tagQuery'
 import { stripFrontmatter } from '@amadeus-shared/compiler'
 import { resolveFileLink } from '@amadeus/lib/vaultFiles'
-import { openNote, revealTextWhenReady } from './amadeusNav'
+import { openNote, revealLineWhenReady, revealTextWhenReady } from './amadeusNav'
 import { newTabOf } from './views/itemSelect'
 import { create } from 'zustand'
 import { useAmadeusPrefs } from './amadeusPrefs'
@@ -26,7 +28,13 @@ registerMessages({
   'amxpanel.noVault': { zh: '先打开一个智库。', en: 'Open a vault first.' },
   'amxpanel.searchEmpty': { zh: '输入关键词，搜遍全部笔记内容。', en: 'Type a keyword to search the contents of every note.' },
   'amxpanel.noResults': { zh: '无结果', en: 'No results' },
-  'amxpanel.tagsHead': { zh: '标签 · {n}', en: 'Tags · {n}' },
+  'amxpanel.tagHitsHead': { zh: '{files} 个文件 · {lines} 处', en: 'Files: {files} · Matches: {lines}' },
+  'amxpanel.tagsHead': { zh: '标签 · {n} 组', en: 'Tags · {n}' },
+  'amxpanel.tagsFilter': { zh: '筛选标签', en: 'Filter tags' },
+  'amxpanel.tagsSortCount': { zh: '按数量', en: 'By count' },
+  'amxpanel.tagsSortName': { zh: '按名称', en: 'By name' },
+  'amxpanel.tagExpand': { zh: '展开 {tag}', en: 'Expand {tag}' },
+  'amxpanel.tagCollapse': { zh: '收起 {tag}', en: 'Collapse {tag}' },
   'amxpanel.tagsEmpty': { zh: '还没有 #标签。在笔记里写 #灵感 这样的行内标签即可出现在这里。', en: 'No #tags yet. Write an inline tag like #idea in a note and it will show up here.' },
   'amxpanel.graphHead': { zh: '关系图 · 当前笔记', en: 'Graph · current note' },
   'amxpanel.graphNoNote': { zh: '未打开笔记', en: 'No note open' },
@@ -54,6 +62,10 @@ export function AmadeusSearchView() {
   }, [seed])
   const [hits, setHits] = useState<SearchHit[]>([])
   const seq = useRef(0)
+  const parsed = useMemo(() => parseSearchQuery(query), [query])
+  const tagged = hasTagFilter(parsed)
+  // 普通查询这串就是输入框原文;带 tag 条件时只留关键词,定位和高亮找的是它们,不是 `tag:#x`。
+  const textQuery = tagged ? parsed.text : query.trim()
 
   // 挂载先落盘当前编辑,让最新内容可检索(vendored SearchPanel 同款)。
   useEffect(() => { void ps().flushSave() }, [])
@@ -65,22 +77,26 @@ export function AmadeusSearchView() {
     return () => clearTimeout(timer)
   }, [query])
 
+  // v3 笔记的定位:首个含 needle 的块滚到中间并短暂高亮。找不到块 / 块不在 DOM 里 → false。
+  // 与索引同口径解字符引用:`**注意：**&#x540E;面` 能被「后面」搜到,就也得能滚到。
+  const flashBlockWith = (needle: string, nth = 0): boolean => {
+    const hit = Object.values(ps().blocks).filter((b) => decodeCharRefs(b.content).toLowerCase().includes(needle))[nth]
+    const el = hit ? document.querySelector(`[data-block-id="${hit.id}"]`) : null
+    if (!el) return false
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.classList.add('amx-block-flash')
+    setTimeout(() => el.classList.remove('amx-block-flash'), 1300)
+    return true
+  }
+
   // 命中 → 打开笔记 → 滚到首个含关键词的块并短暂高亮。
   // SearchHit.line 是对 strip 后文本的行号(不可靠),按块内容匹配定位更稳。
   const choose = (h: SearchHit, nt?: { newTab: true }): void => {
-    const q = query.trim().toLowerCase()
+    const q = textQuery.toLowerCase()
     void openNote(h.path, nt).then(() => {
       if (!q) return
-      // 与索引同口径解字符引用:`**注意：**&#x540E;面` 能被「后面」搜到,就也得能滚到。
-      const hit = Object.values(ps().blocks).find((b) => decodeCharRefs(b.content).toLowerCase().includes(q))
       requestAnimationFrame(() => {
-        const el = hit ? document.querySelector(`[data-block-id="${hit.id}"]`) : null
-        if (el) {
-          el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-          el.classList.add('amx-block-flash')
-          setTimeout(() => el.classList.remove('amx-block-flash'), 1300)
-          return
-        }
+        if (flashBlockWith(q)) return
         // v4(评审 G4-01):正文不进 pageStore —— blocks 要么空,要么是 v4 文件打开途中被临时水合的 v3 快照
         // (DOM 里没有 data-block-id)。不能拿「此刻有没有 unified 实例」当分流判据:openNote 在那份临时快照上
         // 就已经放行了,实例可能还没挂上。一律交给实例的 revealText 接缝(自带重试;v3 笔记自然放弃)。
@@ -90,6 +106,22 @@ export function AmadeusSearchView() {
       })
     })
   }
+
+  // 点一行定位到这一行。hits 是文档序,行号落在清洗文本上,和编辑器的块对不上,所以按文字找(同上)。
+  const chooseLine = (h: SearchHit, i: number, nt?: { newTab: true }): void => {
+    const lines = h.hits ?? []
+    const line = lines[i]
+    void openNote(h.path, nt).then(() => {
+      if (line.line === 0) return // 只在 frontmatter:打开就到了,正文里没有这一处
+      const tag = matchedTagInLine(line.text, parsed.tags)
+      const nth = lines.slice(0, i).filter((l) => l.text === line.text).length
+      requestAnimationFrame(() => {
+        if (flashBlockWith(line.text.toLowerCase(), nth) || (tag && flashBlockWith(`#${tag}`.toLowerCase()))) return
+        void revealLineWhenReady(h.path, { text: line.text, nth, tag, tagNth: line.tagIndex ?? 0 })
+      })
+    })
+  }
+  const lineTotal = hits.reduce((n, h) => n + (h.hits?.length ?? 0), 0)
 
   return (
     <div className="amx-panel">
@@ -120,10 +152,23 @@ export function AmadeusSearchView() {
         <div className="amx-panel-empty">{t('amxpanel.noResults')}</div>
       ) : (
         <div className="amx-list">
-          {hits.map((h) => (
+          {lineTotal > 0 && <div className="amx-taghit-cap">{t('amxpanel.tagHitsHead', { files: hits.length, lines: lineTotal })}</div>}
+          {hits.map((h) => h.hits?.length ? (
+            <div key={h.path} className="amx-taghit-group">
+              <button className="amx-list-item amx-tag amx-taghit-file" onClick={(e) => void openNote(h.path, newTabOf(e))} title={h.path}>
+                <span className="amx-tag-name">{h.title}</span>
+                <span className="amx-tag-count">{h.hits.length >= TAG_LINE_HITS_MAX ? `${TAG_LINE_HITS_MAX}+` : h.hits.length}</span>
+              </button>
+              {h.hits.map((line, i) => (
+                <button key={i} className="amx-list-item amx-taghit-line" onClick={(e) => chooseLine(h, i, newTabOf(e))} title={line.text}>
+                  {splitTagText(line.text).map((p, k) => p.tag ? <span key={k} className="amx-taghit-pill">{p.text}</span> : p.text)}
+                </button>
+              ))}
+            </div>
+          ) : (
             <button key={h.path} className="amx-list-item" onClick={(e) => choose(h, newTabOf(e))} title={h.path}>
               {h.title}
-              {h.snippet && <span className="amx-backlink-snippet amx-search-snippet">{highlight(h.snippet, query.trim())}</span>}
+              {h.snippet && <span className="amx-backlink-snippet amx-search-snippet">{highlight(h.snippet, textQuery)}</span>}
             </button>
           ))}
         </div>
@@ -147,35 +192,66 @@ function highlight(snippet: string, q: string): ReactNode {
 
 // ─────────────────────────────── 标签(左栏 tab;#tag 计数 + 展开跳转) ───────────────────────────────
 
-/** 正文胶囊点击 → 标签视图定位到该标签(singleton 视图,经种子 store 解耦;n 自增以重触发同一标签)。L-14。 */
-export const useTagSeed = create<{ seed: { tag: string; n: number } | null; request(tag: string): void }>((set) => ({
-  seed: null,
-  request: (tag) => set((s) => ({ seed: { tag, n: (s.seed?.n ?? 0) + 1 } })),
-}))
-
-/** 打开(或聚焦)左栏标签视图并展开 tag(编辑器 `amadeus:open-tag` 事件的落点,见 amadeusOverlays)。 */
+/** 按标签找:切到左栏全文搜索,种子 `tag:#全名`。标签树的行和正文胶囊(`amadeus:open-tag`,见 amadeusOverlays)都走这里。 */
 export function openTagView(tag: string): void {
-  useTagSeed.getState().request(tag.replace(/^#/, ''))
+  useSearchSeed.getState().request(`tag:#${tag.replace(/^#/, '')}`)
   const ws = useWorkspace.getState()
-  ws.showSideView('left', 'amadeus-tags')
+  ws.showSideView('left', 'amadeus-search')
   const st = useWorkspace.getState()
   const api = (st as unknown as { api?: { panels: Array<{ params?: Record<string, unknown> }> } }).api
-  if (st.leftVisible && !api?.panels.some((p) => p.params?.__type === 'amadeus-tags')) ws.openView('amadeus-tags', {}, 'left')
+  if (st.leftVisible && !api?.panels.some((p) => p.params?.__type === 'amadeus-search')) ws.openView('amadeus-search', {}, 'left')
 }
+
+function TagTreeRows({ nodes, depth, isOpen, locked }: { nodes: TagTreeNode[]; depth: number; isOpen(key: string): boolean; locked: boolean }) {
+  const { t } = useI18n()
+  return (
+    <>
+      {nodes.map((node) => {
+        const key = tagTreeKey(node.tag)
+        const hasChildren = node.children.length > 0
+        const open = hasChildren && isOpen(key)
+        return (
+          <div key={key}>
+            <div className="amx-tagtree-row" style={{ '--amx-tag-depth': depth } as CSSProperties}>
+              {hasChildren ? (
+                <button
+                  className={`amx-tagtree-chev${open ? ' open' : ''}`}
+                  disabled={locked}
+                  aria-expanded={open}
+                  aria-label={t(open ? 'amxpanel.tagCollapse' : 'amxpanel.tagExpand', { tag: node.tag })}
+                  onClick={() => useAmadeusPrefs.getState().toggleTagExpanded(key)}
+                >
+                  <ChevronRight size={12} />
+                </button>
+              ) : <span className="amx-tagtree-gap" />}
+              <button className="amx-list-item amx-tag" title={`#${node.tag}`} onClick={() => openTagView(node.tag)}>
+                <span className="amx-tag-name">{node.name}</span>
+                <span className="amx-tag-count">{node.total}</span>
+              </button>
+            </div>
+            {hasChildren && (
+              <AnimatedCollapse open={open}>{open && <TagTreeRows nodes={node.children} depth={depth + 1} isOpen={isOpen} locked={locked} />}</AnimatedCollapse>
+            )}
+          </div>
+        )
+      })}
+    </>
+  )
+}
+
+const TAG_SORTS: Array<{ id: TagTreeSort; label: 'amxpanel.tagsSortCount' | 'amxpanel.tagsSortName' }> = [
+  { id: 'count', label: 'amxpanel.tagsSortCount' },
+  { id: 'name', label: 'amxpanel.tagsSortName' },
+]
 
 export function AmadeusTagsView() {
   const { t } = useI18n()
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const version = usePageStore((s) => s.linkGraphVersion)
+  const expanded = useAmadeusPrefs((s) => s.tagExpanded)
+  const sort = useAmadeusPrefs((s) => s.tagSort)
   const [tags, setTags] = useState<TagCount[]>([])
-  const [openTag, setOpenTag] = useState<string | null>(null)
-  const [tagPages, setTagPages] = useState<string[]>([])
-  const seed = useTagSeed((s) => s.seed)
-  useEffect(() => { if (seed) setOpenTag(seed.tag) }, [seed])
-  // 定位的标签可能不在列表里(只有 `#work/urgent`,点的是父级 `#work`)→ 置顶补一行;列表按嵌套前缀查页面。
-  const shown: TagCount[] = openTag && !tags.some((tc) => tc.tag.toLowerCase() === openTag.toLowerCase())
-    ? [{ tag: openTag, count: tagPages.length }, ...tags]
-    : tags
+  const [filter, setFilter] = useState('')
 
   useEffect(() => {
     let live = true
@@ -183,45 +259,38 @@ export function AmadeusTagsView() {
     void amadeus.listTags().then((list) => { if (live) setTags(list) })
     return () => { live = false }
   }, [vaultRoot, version])
-  useEffect(() => {
-    let live = true
-    if (!openTag) { setTagPages([]); return }
-    void amadeus.pagesByTag(openTag).then((p) => { if (live) setTagPages(p) })
-    return () => { live = false }
-  }, [openTag, version])
+
+  const tree = useMemo(() => sortTagTree(buildTagTree(tags), sort), [tags, sort])
+  const shown = useMemo(() => filterTagTree(tree, filter), [tree, filter])
+  const filtering = !!filter.trim()
+  // 筛选时展开什么由匹配决定(不落盘),此时箭头不响应,否则点了也看不出变化。
+  const isOpen = (key: string): boolean => (filtering ? shown.open.has(key) : expanded.includes(key))
 
   return (
     <div className="amx-panel">
-      <div className="amx-panel-head">{t('amxpanel.tagsHead', { n: tags.length })}</div>
+      <div className="t2s-search amx-search-box amx-tagtree-search">
+        <Search size={13} className="t2s-dim" />
+        <input value={filter} placeholder={t('amxpanel.tagsFilter')} aria-label={t('amxpanel.tagsFilter')} onChange={(e) => setFilter(e.target.value)} />
+      </div>
+      <div className="amx-panel-head amx-tagtree-head">
+        <span>{t('amxpanel.tagsHead', { n: tree.length })}</span>
+        <span className="amx-tagtree-sort" role="group">
+          {TAG_SORTS.map((s) => (
+            <button key={s.id} className={sort === s.id ? 'on' : undefined} aria-pressed={sort === s.id} onClick={() => useAmadeusPrefs.getState().setTagSort(s.id)}>
+              {t(s.label)}
+            </button>
+          ))}
+        </span>
+      </div>
       {!vaultRoot ? (
         <div className="amx-panel-empty">{t('amxpanel.noVault')}</div>
-      ) : shown.length === 0 ? (
+      ) : tree.length === 0 ? (
         <div className="amx-panel-empty">{t('amxpanel.tagsEmpty')}</div>
+      ) : shown.nodes.length === 0 ? (
+        <div className="amx-panel-empty">{t('amxpanel.noResults')}</div>
       ) : (
         <div className="amx-list">
-          {shown.map((tc) => (
-            <div key={tc.tag}>
-              <button
-                className={`amx-list-item amx-tag${openTag === tc.tag ? ' active' : ''}`}
-                ref={openTag === tc.tag && seed ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
-                onClick={() => setOpenTag((cur) => (cur === tc.tag ? null : tc.tag))}
-              >
-                <span className="amx-tag-name">#{tc.tag}</span>
-                <span className="amx-tag-count">{tc.count}</span>
-              </button>
-              {openTag === tc.tag && tagPages.map((p) => (
-                <button
-                  key={p}
-                  className="amx-list-item amx-tag-page"
-                  // 打开后定位到这个标签第一次出现的地方(评审 G4-01「标签面板同」;标签只在 frontmatter 里时就停在文首)。
-                  onClick={(e) => void openNote(p, newTabOf(e)).then(() => revealTextWhenReady(p, [`#${tc.tag}`], { tag: true }))}
-                  title={p}
-                >
-                  {baseName(p)}
-                </button>
-              ))}
-            </div>
-          ))}
+          <TagTreeRows nodes={shown.nodes} depth={0} isOpen={isOpen} locked={filtering} />
         </div>
       )}
     </div>

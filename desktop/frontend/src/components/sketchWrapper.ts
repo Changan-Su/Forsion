@@ -8,6 +8,7 @@
  * - 刻意不给 'unsafe-eval':桌面宿主 CSP 有它而 web/mobile 没有,统一禁掉三端行为才一致。
  * - srcdoc 的 event.origin 是字符串 "null":高度消息只认 event.source === iframe.contentWindow。
  * - 包装脚本放 <head>(模型 HTML 之前):残缺的模型标记吞不掉它。
+ * - CSP 和 sandbox 都挡不住 WebRTC,卡内由 sketchGuard.js 封堵(三端共用,头注写了为什么不用 setWebRTCIPHandlingPolicy)。
  *
  * 主题桥(08-21 二轮):把宿主的语义 token 以 --fs-* 注进卡内。首帧走 srcdoc 内联(无闪),
  * 之后换肤走 postMessage 就地改 documentElement.style —— **不重建 srcdoc**,否则 iframe 重载、
@@ -17,6 +18,7 @@
  */
 
 import sketchCss from './sketch.css?raw'
+import sketchGuard from './sketchGuard.js?raw'
 import sketchRuntime from './sketchRuntime.js?raw'
 import sketchFigures from './sketchFigures.js?raw'
 import { serializeSketchState } from './sketchState'
@@ -135,12 +137,15 @@ export function buildSketchDoc(html: string, vars: Record<string, string> = {}, 
   // nonce 是宿主生成的随机串(ask / copy 的授权令牌,见 sketchRuntime.js 头注);只允许 [A-Za-z0-9-],拼不出提前闭合的引号
   const libBase = iuiLibBase()
   const runtime = sketchRuntime.replace('__SKETCH_INITIAL_STATE__', () => initial).replace('__SKETCH_NONCE__', () => nonce.replace(/[^A-Za-z0-9-]/g, ''))
+  // 属性位置的 shadowrootmode 改掉,初始解析就建不出 shadow 树(值可以写成字符引用,不能按值匹配)。
+  // ponytail: 不做 HTML 分词,脚本里恰好写 `shadowrootmode =` 也会被改到;真碰上再换分词。
   return '<!doctype html><html><head>' +
     `<meta http-equiv="Content-Security-Policy" content="${sketchCsp(libBase)}">` +
-    // importmap 必须早于卡里任何 module 脚本:紧跟 CSP,在运行时脚本和模型 HTML 之前
+    `<script>${sketchGuard}</script>` +
+    // importmap 必须早于卡里任何 module 脚本:跟在封堵脚本(它必须是第一个脚本)后面,在运行时脚本和模型 HTML 之前
     iuiImportMap(libBase) +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
     `<style>${varsBlock(vars)}${SKETCH_SERIES_CSS}${sketchCss}</style>` +
     `<script>${runtime};\n${sketchFigures}</script>` +
-    `</head><body>${html}</body></html>`
+    `</head><body>${html.replace(/([\s/"'])shadowrootmode(?=\s*=)/gi, '$1data-shadowrootmode')}</body></html>`
 }
