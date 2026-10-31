@@ -1952,7 +1952,9 @@ function syncSessionPanels(): void {
   }
 }
 
-/** Floating Panel is a normal child window: movable/minimizable/closable, but kept above its main window. */
+/** 普通 Floating Panel(设置 / 商店…)是独立顶层窗口:主窗最小化 / 关到托盘时它照样留在桌面上,点它也不会把主窗一起拽到前面 ——
+ *  设置里「拖扩展文件夹进 Chrome 扩展页」这类跨应用拖放靠的就是这一点。别改回 parent: mainWindow(macOS 子窗随父窗隐藏 / 最小化)。
+ *  只有会话级面板(旁聊)仍挂主窗当子窗:它本来就跟着主窗的当前会话走。 */
 function openFloatingPanel(raw: unknown): { id: string } | undefined {
   const target = normalizeFloatingPanelOpenOptions(raw)
   if (!target) return undefined
@@ -1964,6 +1966,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
   if (existing && !existing.isDestroyed()) {
     existing.setTitle(target.title)
     existing.setMinimizable(!target.sessionId) // 先以普通面板开过、后被主窗绑上会话的,也收回最小化
+    if (target.sessionId && !existing.getParentWindow() && mainWindow && !mainWindow.isDestroyed()) existing.setParentWindow(mainWindow)
     if (existing.isMinimized()) existing.restore()
     present(existing)
     // 还在载入:渲染层可能已经 floatingReady 拿走了上一份 target,这份得等载入完补发(发最新的;同一份重复到达不会重挂 —— 面板按 params 做 key,设置的带落点请求靠 params.nonce 区分先后)
@@ -1973,8 +1976,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
     return { id: target.id }
   }
   const win = new BrowserWindow({
-    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
-    modal: false,
+    parent: target.sessionId && mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
     show: false,
     width: target.width,
     height: target.height,
