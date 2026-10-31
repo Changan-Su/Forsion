@@ -387,6 +387,55 @@ export function compactContext(msgs: ChatMessage[]): CompactResult {
   return { changed: savedChars > 0, savedChars, breakdown };
 }
 
+const TRIM_MARKER = '[Context trimmed: ';
+const trimMarker = (n: number): ChatMessage => ({
+  role: 'system',
+  content: `${TRIM_MARKER}${n} earlier messages were dropped from this working context because they could not be summarized in time. ` +
+    'They are still in the saved conversation; ask the user or re-read files if you need something from them.]',
+}) as ChatMessage;
+
+/**
+ * 摘要失败、机械折叠也压不下时的最后一道兜底(借 Codex:压缩请求超窗口就从最旧一条起删,直到放得下):
+ * 从最旧处成段丢掉工作上下文,直到估算 ≤ targetTokens。只改 run 内存(DB 原样,下个 run 照常 hydrate)。
+ * 段 = 一条非 tool 消息 + 紧随其后的 tool 结果:工具调用与结果绝不拆开,不产出孤立 role:tool。
+ * 不丢:开头的 system 块(含摘要)、锚定消息、最近一条 user 消息(任务本身)、最后一段(模型正要用的结果)。
+ * isRealUser:哪些 user 算「用户说的」(工具截图 / 恢复提示也是 role:user);缺省全算,没有一条认得上时退回最近的 user。
+ * 丢过就在 system 块末尾留一条标记(再丢只改计数),让模型知道前面有东西没了。
+ * 调用方负责:本 run 不再推进持久检查点(之后的摘要没见过被丢的那几条)。
+ * ponytail: 逐段线性估算,消息上千条时改前缀和。
+ */
+export function trimOldestToFit(msgs: ChatMessage[], targetTokens: number, overheadTokens = 0, isRealUser: (m: ChatMessage) => boolean = () => true): { dropped: number } {
+  let head = 0;
+  while (head < msgs.length && (msgs[head] as any).role === 'system') head++;
+  const segments: Array<{ start: number; end: number }> = [];
+  for (let i = head; i < msgs.length; i++) {
+    if ((msgs[i] as any).role === 'tool' && segments.length) segments[segments.length - 1].end = i + 1;
+    else segments.push({ start: i, end: i + 1 });
+  }
+  const lastUserWhere = (ok: (m: ChatMessage) => boolean) => {
+    for (let i = msgs.length - 1; i >= head; i--) if ((msgs[i] as any).role === 'user' && ok(msgs[i])) return i;
+    return -1;
+  };
+  let lastUser = lastUserWhere(isRealUser);
+  if (lastUser < 0) lastUser = lastUserWhere(() => true);
+  let total = estimateMessagesTokens(msgs) + Math.max(0, overheadTokens);
+  const drop = new Set<number>();
+  for (let s = 0; s < segments.length - 1 && total > targetTokens; s++) {
+    const { start, end } = segments[s];
+    let keep = start <= lastUser && lastUser < end;
+    for (let i = start; i < end && !keep; i++) keep = pinnedMessages.has(msgs[i] as object);
+    if (keep) continue;
+    for (let i = start; i < end; i++) { drop.add(i); total -= estimateMessageTokens(msgs[i]); }
+  }
+  if (!drop.size) return { dropped: 0 };
+  const markerAt = msgs.findIndex((m, i) => i < head && typeof m.content === 'string' && m.content.startsWith(TRIM_MARKER));
+  const before = markerAt >= 0 ? Number(/\d+/.exec(String(msgs[markerAt].content))?.[0]) || 0 : 0;
+  const system = msgs.slice(0, head).filter((_, i) => i !== markerAt);
+  const rest = msgs.slice(head).filter((_, i) => !drop.has(head + i));
+  msgs.splice(0, msgs.length, ...system, trimMarker(before + drop.size), ...rest);
+  return { dropped: drop.size };
+}
+
 /**
  * 超帽工具结果全文落盘,返回路径(落不下去返回 '' —— 只退化为纯截断,绝不因此报错)。
  * 文件名取内容 sha256:**确定性**是硬要求 —— capToolResult 也跑在 historyReplay 的重建路径上,

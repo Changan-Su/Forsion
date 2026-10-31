@@ -49,7 +49,7 @@ import { resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
 import {
   effectiveContextWindowInfo, INPUT_HARD_RATIO, INPUT_WARN_RATIO, compactionThreshold,
-  estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
+  estimateTokensRough, estimateMessagesTokens, compactContext, trimOldestToFit, capToolResult, capHistoryContent, pinMessage,
   ContextUsageTracker, CompactionAttemptGuard, assistantTurnOf, markLossy, HISTORY_MSG_MAX_CHARS,
 } from './contextBudget.js';
 import {
@@ -1992,11 +1992,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       throughTs: number; throughRowId?: string; partial: boolean;
       pending?: { summary: string; toolCallId: string; messageId: string };
     } = { throughTs: checkpointThrough.ts, throughRowId: checkpointThrough.rowId, partial: checkpointThrough.partial };
+    // 本 run 兜底裁剪丢过消息(trimOldestToFit):之后的摘要都没见过那几条,边界却可能越过它们 → 本 run 起不再推进
+    // 持久检查点(否则下个 run 的 hydrate 永远跳过那几行,Codex 10-26 #1)。下个 run 从 DB 原样 hydrate,照常落。
+    let trimmedThisRun = false;
     /** 一次成功的 run 内压缩 → 按边界落检查点。返回本次是否已落库(pending 的算未落)。 */
     const recordBoundary = async (summary: string, b?: CompactBoundary): Promise<boolean> => {
       if (!b) return false;
       // 范围里有机械折叠过 / 按硬帽截过的消息:摘要没见过原文,只留在本 run 内存里,不推进持久检查点
-      if (b.lossy) { checkpoint.pending = undefined; return false; }
+      if (b.lossy || trimmedThisRun) { checkpoint.pending = undefined; return false; }
       if (b.pendingToolCallId) {
         checkpoint.pending = { summary, toolCallId: b.pendingToolCallId, messageId: currentAssistantId };
         return false;
@@ -2835,6 +2838,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const compactAt = compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens, compactionCfg.thresholdPercent, compactionCfg.keepRecentTokens);
     let hookVetoedCompaction = false; // PreCompact hook 否决过 → 不再按估算拦请求,交给 provider 裁决
     let overflowRecovered = false; // 上游报「输入超窗口」后压缩重试:每 run 一次
+    let overBudgetNotified = false; // 压缩后仍超成本封顶、按真实窗口照发:每 run 提示一次
     let reasoningStripped = false; // 回灌的加密推理被拒后拿掉重发:每 run 一次
     let toolsOverhead = 0; // 本轮工具定义头的粗估 token(只在没有实测基准时计入,见 ContextUsageTracker.estimate)
     // 登记给 GET /agent/sessions/:id/status:必须在 contextUsage / compactAt / toolsOverhead 都初始化之后 —— getRunStatus 读它们,
@@ -2869,12 +2873,28 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const persisted = await recordBoundary(cr.summary, cr.boundary);
         void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration });
       } else {
+        // 上游拒收时实测的下界 = 窗口(与摘要那边同一口径):估算可能还在触发线下,但 provider 已经说装不下了 → 照裁。
+        const floor = reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured;
+        const rough = estimateMessagesTokens(workingMessages) + toolsOverhead; // 折叠前:与 measured 同一份消息
+        const scale = floor && rough > 0 ? Math.max(1, floor / rough) : 1;
         const r = compactContext(workingMessages);
-        if (r.changed) {
+        if (r.changed) contextUsage.invalidate();
+        // 机械折叠也压不下(最近 20 条受保护、折过的不再折):从最旧处成段丢,直到回到触发线的 70% 以下。
+        // 实测比粗估大(截图按定额估)时目标按比例收紧。没有这一步,摘要一失败就只剩「估算 ≥ 窗口 → 报废」
+        // (10-26 生产:Opus / DeepSeek 两个长会话都是摘要撞输出上限后死在这里)。
+        // ponytail: 70% 是给后续几轮留的余量,不是算出来的最优值。
+        // 「最近一条 user」只认落过库的真消息:工具截图 / 恢复提示也是 role:user,按它保护会把真正的任务裁掉(Codex 10-26 #2)。
+        const trim = reason === 'overflow' || contextUsage.estimate(workingMessages, toolsOverhead) > compactAt
+          ? trimOldestToFit(workingMessages, Math.floor((compactAt * 0.7) / scale), toolsOverhead, (m) => !!messageSource(m))
+          : { dropped: 0 };
+        if (trim.dropped) { contextUsage.invalidate(); trimmedThisRun = true; }
+        if (r.changed || trim.dropped) {
           changed = true;
-          contextUsage.invalidate();
-          // 只在真折叠了才宣告,且带 savedChars:fallback 是机械折叠,不许对用户谎称「已生成摘要」
-          void publish(runId, 'status', { phase: 'compacted', forced: true, fallback: true, reason, savedChars: r.savedChars, iteration });
+          // 只在真改动了才宣告,且带 savedChars / trimmed:fallback 是机械兜底,不许对用户谎称「已生成摘要」
+          void publish(runId, 'status', {
+            phase: 'compacted', forced: true, fallback: true, reason, savedChars: r.savedChars, iteration,
+            ...(trim.dropped ? { trimmed: trim.dropped } : {}),
+          });
         } else {
           console.warn(`[agent-core] run=${runId} 压缩未改动上下文: ${cr.reason}`);
         }
@@ -2941,8 +2961,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const effectiveToolsText = lastIter || !toolDefs?.length ? '' : toolsJson;
       const effectiveToolsBytes = Buffer.byteLength(effectiveToolsText, 'utf8');
       // 末轮说明不在 workingMessages 里,预算检查给它留 ~80 token,别让本该优雅收尾的最后一发撞 provider 输入上限(Codex 09-13 #8)。
-      if (!hookVetoedCompaction && contextUsage.estimate(workingMessages, lastIter ? 0 : toolsOverhead) + (lastIter ? 80 : 0) >= ctxWindowTokens) {
+      // 硬墙在模型**真实**窗口(ctxWindowMax;人填的覆盖更大时取覆盖):272k 是成本封顶(09-22),不是 provider 的上限。
+      // 压缩 + 兜底裁剪之后仍在封顶之上,只剩裁不掉的最新内容 → 照常发请求、提示一次,不在自己设的线上报废(10-26)。
+      const sendTokens = contextUsage.estimate(workingMessages, lastIter ? 0 : toolsOverhead) + (lastIter ? 80 : 0);
+      if (!hookVetoedCompaction && sendTokens >= Math.max(ctxWindowTokens, ctxWindowMax)) {
         throw new Error('Context remains over the model input budget after compaction. Reduce large attachments or use a larger-context model; the original conversation has been preserved.');
+      }
+      if (!hookVetoedCompaction && sendTokens >= ctxWindowTokens && !overBudgetNotified) {
+        overBudgetNotified = true;
+        void publish(runId, 'status', { phase: 'context_over_budget', warning: 'context_over_budget', estTokens: sendTokens, budgetTokens: ctxWindowTokens, windowTokens: ctxWindowMax, iteration });
       }
 
       // attachments 恒传空:图片已由 hydrateHistory 物化进最新 user 消息的 parts(每轮字节一致,
