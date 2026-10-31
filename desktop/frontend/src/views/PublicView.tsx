@@ -308,6 +308,7 @@ export function PublicView(_: ViewProps) {
           else collab.switchVault(vaultId, path)
           return
         }
+        if (localPath) await usePageStore.getState().switchVaultSide('cloud') // 共享镜像在云端侧
         const { vaultRoot, vaultSide } = usePageStore.getState()
         const target = localPath ?? localPathFor(useEntrySync.getState().vaults, vaultRoot, vaultSide, path)
         const { resolveDeepLink } = await import('../deepLinkInstall')

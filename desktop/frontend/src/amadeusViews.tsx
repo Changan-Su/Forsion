@@ -704,8 +704,8 @@ function SharedWithMeSection() {
   }, [ctx])
   if (!collab || items.length === 0) return null
   const open = (s: AmadeusSharedItem, newTab?: { newTab?: boolean }): void => {
-    // 桌面:localPath=镜像内路径(与我共享/<slug>/…),本地直开(离线可用);web:同库直开,跨库切过去再开。
-    if (s.localPath) void openNote(s.localPath, newTab)
+    // 桌面:localPath=镜像内路径(与我共享/<slug>/…),镜像在云端侧,本地库侧要先切过去(离线可用);web:同库直开,跨库切过去再开。
+    if (s.localPath) void usePageStore.getState().switchVaultSide('cloud').then(() => openNote(s.localPath!, newTab))
     else if (s.vaultId === activeVault) void openNote(s.path, newTab)
     else collab.switchVault(s.vaultId, s.path)
   }
