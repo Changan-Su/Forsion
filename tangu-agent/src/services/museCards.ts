@@ -17,7 +17,7 @@ import { upsertTrigger, validateTriggerInput, type TriggerInput } from './museTr
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import type { MuseCardInfo, MuseCardKind } from '../contracts/clientTypes.js';
 import { loadSpecialAgentsConfig, updateMuseConfig, type MuseConfig } from './specialAgentsConfig.js';
-import { patchMuseOnboarding } from './museState.js';
+import { MUSE_ONBOARDING_MS, patchMuseOnboarding } from './museState.js';
 import { normalizeMemoryFact } from './memoryRepository.js';
 import { AUTO_READ_CATEGORIES, NEEDS_USER, inboxCategory, unclaimedAttachment, type InboxCategory } from './inboxCategory.js';
 
@@ -230,14 +230,32 @@ export async function postIntroCard(userId: string): Promise<boolean> {
   return r.ok;
 }
 
-/** 第 14 天小结:模型写内容,一条对应一条记忆;只发一次。 */
+/** 问升档的门槛:样本要够(1/1 不算数),采纳率要高;方案页的例子 11 提 8 采正好过线。 */
+const UPGRADE_MIN_PROPOSED = 5;
+const UPGRADE_MIN_RATE = 0.7;
+
+/** 最近两周 Muse 提了多少、用户采纳了多少。提议 = 待办 + 规则卡,没理的算提了、不算采纳;待办批准 / 注入 / 标完成算采纳,规则卡建成了算采纳(按 status 不按 result,先观察、改一下都在内)。
+ *  读状态列不解析 [feedback] 行:那些行只记用户动过的,数不出没理的。没提过 → null。只有 ask 档才问升档;引擎从不替用户升。 */
+export async function proposalStats(userId: string, mode: string, now = Date.now()): Promise<{ proposed: number; adopted: number; askUpgrade: boolean } | null> {
+  const since = now - MUSE_ONBOARDING_MS;
+  // 两列格式不同:muse_todos 是 CURRENT_TIMESTAMP 文本,muse_cards 是毫秒
+  const todos = await query<any[]>(`SELECT status FROM muse_todos WHERE user_id = ? AND created_at >= ?`, [userId, new Date(since).toISOString().slice(0, 19).replace('T', ' ')]);
+  const rules = await query<any[]>(`SELECT status FROM muse_cards WHERE user_id = ? AND kind = 'rule' AND created_at >= ?`, [userId, since]);
+  const proposed = todos.length + rules.length;
+  if (!proposed) return null;
+  const adopted = todos.filter((t) => t.status === 'injected' || t.status === 'done').length + rules.filter((r) => r.status === 'done').length;
+  return { proposed, adopted, askUpgrade: mode === 'ask' && proposed >= UPGRADE_MIN_PROPOSED && adopted / proposed >= UPGRADE_MIN_RATE };
+}
+
+/** 第 14 天小结:模型写内容,一条对应一条记忆;只发一次。采纳数引擎自己数,数不出来只是少这一行,小结照发。 */
 export async function postSummaryCard(userId: string, text: string, lines: unknown[]): Promise<string> {
   const items = lines.map((x) => String(x || '').replace(/\s+/g, ' ').trim().slice(0, 300)).filter(Boolean).slice(0, 5);
   if (!items.length) return 'Error: a summary needs items, 3 to 5 short lines.';
   const seen = await query<any[]>(`SELECT 1 FROM muse_cards WHERE user_id = ? AND kind = 'summary' LIMIT 1`, [userId]);
   if (seen?.length) return 'Error: you already sent the summary.';
   for (const i of items) await rememberForMuse(userId, i);
-  const r = await postMuseCard(userId, { kind: 'summary', key: 'summary', payload: { items, lead: text }, text, uncapped: true });
+  const proposals = await proposalStats(userId, loadSpecialAgentsConfig().muse.mode).catch(() => null);
+  const r = await postMuseCard(userId, { kind: 'summary', key: 'summary', payload: { items, lead: text, ...(proposals ? { proposals } : {}) }, text, uncapped: true });
   if (!r.ok) return r.error;
   await patchMuseOnboarding({ summaryAt: Date.now() });
   return 'Sent. Each line is now in your memory; the user can correct or delete them, and your memory follows.';

@@ -87,6 +87,10 @@ registerMessages({
   'museCard.save': { zh: '保存', en: 'Save' },
   'museCard.allGood': { zh: '都对', en: 'All good' },
   'museCard.summaryDone': { zh: '两周小结已确认', en: 'Two-week summary confirmed' },
+  'museCard.proposals': { zh: '这两周提了 {proposed} 条，你采纳了 {adopted} 条。', en: 'Proposals in the last two weeks: {proposed}. You accepted {adopted}.' },
+  'museCard.upgradeAsk': { zh: '要不要把 Muse 升到「代批」档？', en: 'Move Muse up to the Agent approves tier?' },
+  'museCard.upgradeAskRemote': { zh: '想把 Muse 升到「代批」档，请到电脑上的设置里改。', en: 'To move Muse up to the Agent approves tier, change it in Settings on your computer.' },
+  'museCard.upgradeOpen': { zh: '去设置', en: 'Open settings' },
   'museCard.helpful': { zh: '有用', en: 'Helpful' },
   'museCard.lessOfThis': { zh: '少来点这种', en: 'Less of this' },
   'museCard.noted': { zh: '记下了', en: 'Got it' },
@@ -334,6 +338,7 @@ function SummaryCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: stri
   const { t } = useI18n()
   const { busy, decide, send } = useDecide(sessionId)
   const items: string[] = card.payload.items || []
+  const proposals: { proposed: number; adopted: number; askUpgrade: boolean } | undefined = card.payload.proposals
   // 编辑态按原文认条目,不按下标:编辑中途别的设备删了一条,列表会移位
   const [editing, setEditing] = useState<{ original: string; text: string } | null>(null)
   // 改写是往 Muse 记忆写用户的原话,引擎拒远端:手机上这张卡能删、能确认,改回电脑上改
@@ -362,12 +367,18 @@ function SummaryCard({ card, sessionId }: { card: MuseCardInfo; sessionId?: stri
               </>}</div>
         </div>
       ))}
-      <div className="t2-taskcard-actions"><button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'ok')}>{t('museCard.allGood')}</button></div>
+      {!!proposals && <div className="t2-taskcard-tldr" data-muse-proposals>{t('museCard.proposals', { proposed: proposals.proposed, adopted: proposals.adopted })}</div>}
+      {/* 升档只问不改:权限档只在设置页改(引擎拒远端),卡片不写档位 */}
+      {proposals?.askUpgrade && <div className="t2-taskcard-tldr" data-muse-upgrade>{t(editable ? 'museCard.upgradeAsk' : 'museCard.upgradeAskRemote')}</div>}
+      <div className="t2-taskcard-actions">
+        <button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'ok')}>{t('museCard.allGood')}</button>
+        {proposals?.askUpgrade && editable && <button type="button" data-action="muse-settings" onClick={() => useApp.getState().openSettings('agents/ag-special/muse')}>{t('museCard.upgradeOpen')}</button>}
+      </div>
     </div></div>
   )
 }
 
-const cardTitle = (card: MuseCardInfo, t: Tr): string => {
+const cardTitle =(card: MuseCardInfo, t: Tr): string => {
   if (card.kind === 'feature') return t('museCard.feature')
   if (card.kind === 'inbox-ask') return t('museCard.ask')
   if (card.kind === 'inbox-list') return t('museCard.list', { n: (card.payload.items || []).length })
