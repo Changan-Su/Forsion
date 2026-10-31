@@ -3,10 +3,15 @@
  * 适合大范围搜索/批量分析——中间过程不占父上下文。仅 hostExec profile(本地形态)暴露;
  * 深度上限 1(子代理内本工具不可见,见 ToolContext.subAgentDepth)。
  *
+ * 回报带 subagent id,resume 参数据此接着同一个子代理干(subAgent.ts 的 resumedMessages)。
+ * id 就是子会话 id 的前 8 位,不另设名册:回报在父上下文里,模型不需要也不该去「查子代理状态」。
+ *
  * 子代理后端可换成外部 agent CLI(engine 参数,借 DSH 的 subagent-provider 思路):
  * 复用已有的 deps().engines(ACP 管理器),不新建注册表。装了引擎才暴露该参数。
  */
-import { runSubAgent, SUB_MAX_ITERATIONS } from '../../services/subAgent.js';
+import { runSubAgent, SUB_MAX_ITERATIONS, type SubAgentParams } from '../../services/subAgent.js';
+import { claimDelegate, findDelegate, releaseDelegate } from '../../services/delegateTranscript.js';
+import { query } from '../../core/db.js';
 import { deps } from '../../seams/runtime.js';
 import { resolveTools, canonicalToolName, SUB_AGENT_GRANTABLE_TOOLS, type ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
@@ -42,6 +47,32 @@ function validateGrants(raw: unknown, ctx: ToolContext): { names: string[]; erro
     if (!out.includes(name)) out.push(name); // 去重,保持给出顺序
   }
   return { names: out };
+}
+
+/** 这些在第一次委派时就定了,续用时改不了(尤其 grantTools:续用不是加权限的入口)。 */
+const RESUME_FIXED = ['agentSlug', 'instructions', 'name', 'grantTools', 'engine'];
+
+/**
+ * 续用校验:通过则**占位**并返回原人设 + 授予(调用方负责放开占位),否则返回面向模型的错误。
+ * 授予按**当前**口径重验,不信落库值:委派之后父代理可能已失去该工具(换了档位、Muse 降档…),
+ * 失效就拒绝而不是悄悄少给 —— 子代理的历史里用过它,模型得知道这次用不了。
+ */
+async function resumeParams(handle: string, args: Record<string, unknown>, ctx: ToolContext): Promise<Partial<SubAgentParams> | string> {
+  const fixed = RESUME_FIXED.find((k) => args[k] !== undefined && args[k] !== null);
+  if (fixed) return `Error: ${fixed} cannot be combined with resume: a resumed subagent keeps what it was first given. Omit ${fixed}, or delegate a new subagent instead.`;
+  const found = await findDelegate(handle, ctx);
+  if (!found) return `Error: no subagent with id "${handle}" can be resumed in this conversation. Delegate a new subagent with a self-contained task instead.`;
+  if (found.engineId) return `Error: subagent "${handle}" ran on the external engine '${found.engineId}', which cannot be resumed. Delegate a new subagent with a self-contained task instead.`;
+  const grant = validateGrants(found.grants, ctx);
+  if (grant.error !== undefined) return `${grant.error}. Subagent "${handle}" cannot be resumed with its original permissions; delegate a new subagent instead.`;
+  const busy = `Error: subagent "${handle}" is still running; only one resume of it at a time. Wait for its report, then resume it.`;
+  if (!claimDelegate(found.id)) return busy;
+  // 用户可能正在子会话里和它聊(那是独立 run,不在 activeDelegates 里);两边同时写同一份历史会串。
+  // 先占位再查:占位之后新的用户 run 在 runs 路由就被挡了,反过来查完才占位的话,查询途中进来的那轮两边都看不见(Codex 10-30)。
+  const inflight = await query<any[]>(`SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`, [found.id])
+    .catch((e) => { releaseDelegate(found.id); throw e; });
+  if (inflight.length) { releaseDelegate(found.id); return busy; }
+  return { resume: found.id, agentSlug: found.agentSlug, instructions: found.instructions, name: found.title, grantTools: grant.names };
 }
 
 /** 已登录可直接用的外部引擎。云端/未装 CLI → 空数组 → 不暴露 engine 参数(零噪音)。 */
@@ -88,16 +119,17 @@ export const delegateProvider: ToolProvider = {
             // 「reduced tool set」仍是实情(防递归的 delegate/start_discussion/self_brainstorm 在子代理内不可见),
             // 但 deferred 那一半已经可取回:子代理有自己的解锁集 + 目录段(subAgent.ts),故这里要说清楚。
             description:
-              `Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to ${SUB_MAX_ITERATIONS} turns) and return its final report. ` +
-              'One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. ' +
+              `Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to ${SUB_MAX_ITERATIONS} turns per call) and return its final report. ` +
+              'For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. ' +
               'Several calls in one turn run in parallel (keep their write scopes disjoint). ' +
               'The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. ' +
+              'Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent\'s work ("ask it…", "also have it check…"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. ' +
               'For multi-round deliberation with a peer, use start_discussion instead. '
               + 'For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.',
             parameters: {
               type: 'object',
               properties: {
-                task: { type: 'string', description: 'Subtask description (self-contained, clear goal, stating what to return)' },
+                task: { type: 'string', description: 'Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up.' },
                 context: { type: 'string', description: 'Optional: background information the subagent needs (relevant paths, known conclusions, etc.)' },
                 forkContext: { type: 'boolean', description: 'Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean.' },
                 agentSlug: { type: 'string', description: 'Optional: delegate to a specific named agent by its slug (runs with that agent\'s persona). Pick a slug from the "Other Agents" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent.' },
@@ -112,6 +144,13 @@ export const delegateProvider: ToolProvider = {
                     'Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. ' +
                     'Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules.',
                 },
+                // 同一条位置铁律:排在 grantTools 之后、engineProp 之前。定义里恒有这一项、从不随会话状态增减,用不用它前缀都不变。
+                resume: {
+                  type: 'string',
+                  description:
+                    'The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent\'s work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. ' +
+                    'It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task.',
+                },
                 ...engineProp,
               },
               required: ['task'],
@@ -123,6 +162,9 @@ export const delegateProvider: ToolProvider = {
           if (!task) return 'Error: task is required';
           const modelId = ctx.modelId || ctx.profile?.defaultModelId || '';
           if (!modelId) return 'Error: no model available (parent run carries no modelId)';
+          const handle = args.resume ? String(args.resume).trim().toLowerCase() : '';
+          const resumed = handle ? await resumeParams(handle, args, ctx) : null;
+          if (typeof resumed === 'string') return resumed;
           // 名字校验放在 engine 分支**之前**:写错的名字是模型的错误认知,两条路都该当场纠正而不是静默丢掉。
           const grant = validateGrants(args.grantTools, ctx);
           if (grant.error !== undefined) return grant.error; // `!== undefined` 而非真值判断:后者不收窄联合
@@ -156,6 +198,7 @@ export const delegateProvider: ToolProvider = {
               name: args.name ? String(args.name) : undefined,
               engineId: engineId || undefined,
               ...(grantTools.length ? { grantTools } : {}),
+              ...resumed,
             });
           } catch (e: any) {
             // 中止(父 run 停止/registry 超时)必须重抛:registry 据 scopedCtx.signal 区分
@@ -165,6 +208,8 @@ export const delegateProvider: ToolProvider = {
             // 否则超时/父停会被吞成一条普通结论。判据同 externalEngineLoop(err.name / signal.aborted)。
             if (e?.message === 'aborted' || e?.name === 'AbortError' || ctx.signal?.aborted) throw e;
             return `Error: subagent failed: ${e?.message || e}`;
+          } finally {
+            if (resumed?.resume) releaseDelegate(resumed.resume);
           }
         },
       },

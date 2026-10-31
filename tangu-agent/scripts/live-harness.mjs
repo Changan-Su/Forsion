@@ -59,6 +59,7 @@
  *   npm run live:harness -- --only forkcache                 # 尾部分叉调用读没读到主循环的前缀缓存(10-10):Historian 分身判官(fork 模式)与 self_brainstorm 第一轮的分身,逐次列 输入 / 缓存;改 localHistorian.ts 的 forkJudge、selfBrainstorm.ts 或 llm/openaiCompat.ts 的 resolveCacheKey 后跑
  *   npm run live:harness -- --only recall-unprompted --ab-memory   # B1 行为闸:记忆易变段走 tail vs system 各跑一遍(两次引擎启动,顺序)
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
+ *   npm run live:harness -- --only subresume                 # 改 delegate 续用后跑:追问时模型真带 resume、落在同一个子代理、不重新探索(点明 / 平常说话两条腿)
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
  *   npm run live:harness -- --only branch                     # 分支(10-18,方案「Chat 画布分支」第一步):主线两轮 → 从第一条回答分出一支 → 分支里问一轮、再问「和主线比」:分支挂主线下记分叉点、系统提示有 <branches> 列主线、比之前 read_session 读了主线的 id;负对照 = 分叉前没有 <branches>。改 services/branchContext.ts / 分支路由后跑
  *   npm run live:harness -- --only nested                     # 父子会话(10-17,方案「子会话与任务卡」):让它分头开子会话查三个模块 → start_session ≥2、子会话各自跑完、
@@ -280,6 +281,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('cloudcal');
+KEYS.push('subresume'); OPT_IN.add('subresume'); // --only subresume:改 delegate.resume / 子代理续用后跑(两条腿共五个 run)
 KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
@@ -4369,6 +4371,62 @@ Then reply with only the command output.`,
     const mainList = asList(await api('/agent/sessions?limit=100'), 'sessions');
     const ok = !follow.error && parent.toolCalls.includes('delegate') && serialized.includes(MARKER) && before.some((m) => m.role === 'user') && before.some((m) => m.tool_calls?.length) && follow.content.includes(MARKER) && after.length > before.length && parentBefore.length === parentAfter.length && !mainList.some((s) => s.id === child.sessionId) && detail.agent_config.delegatedFrom === parentId;
     return { ok, detail: follow.error || `child ${child.sessionId}; messages ${before.length}→${after.length}; parent ${parentBefore.length}→${parentAfter.length}; recall ${follow.content.includes(MARKER)}; retained link ${detail.agent_config.delegatedFrom === parentId}`, output: JSON.stringify({ before, follow: follow.content }, null, 2), ttftMs: ttft(follow), tokens: tokensOf(parent) + tokensOf(follow), toolCalls: parent.toolCalls };
+  });
+
+  // 子代理续用(delegate.resume):第一轮让子代理查清一件事,第二轮追问它。判据:模型真带了上一份回报里的 id、落在同一个子代理上、
+  // 子代理没有重新搜索、答案里有上一轮没说过的数。两条腿:点明「同一个子代理」/ 平常说话(只说「问问它」)。
+  // ⚠️ 第一轮只让回报**数值**,不要路径:路径只在子代理的记忆里。父代理若知道路径,空白子代理照样 read_file 一次就答对,分不出有没有记忆(负对照实测)。
+  // 放宽:允许一次 list_dir 和一次 read_file(真模型读文件前常顺手列一下目录,这不算找东西);search / glob / shell 一次都不许。
+  // 第三轮(只在平常说话那条腿)问不相干的事:记录模型是续用还是新开,不作判据 —— 那是模型的取舍,不是引擎的对错。
+  await scenario('subresume', 'subresume 子代理续用:追问时接着原上下文,不重新探索', async () => {
+    const n = () => 1000 + Math.floor(Math.random() * 8000);
+    // 两条腿各一份夹具、各问各的:会话搜索跨会话可见,问同一件事时第二条腿会去翻第一条腿的记录(实测)。
+    const fixture = (name, file, constants) => {
+      const dir = join(workspace, name); mkdirSync(join(dir, 'src', 'core'), { recursive: true }); mkdirSync(join(dir, 'src', 'ui'), { recursive: true }); mkdirSync(dirname(join(dir, file)), { recursive: true });
+      writeFileSync(join(dir, file), `${constants.map(([k, v]) => `export const ${k} = ${v}`).join('\n')}\n\nexport function run() { return null }\n`);
+      for (const f of ['src/core/dns.ts', 'src/core/socket.ts', 'src/ui/button.ts', 'src/ui/list.ts', 'src/ui/modal.ts', 'src/index.ts', 'src/config.ts']) writeFileSync(join(dir, f), `export const ${f.replace(/\W/g, '_').toUpperCase()}_VERSION = ${n()}\n`);
+      writeFileSync(join(dir, 'LICENSE'), 'MIT License\n');
+      return { ...AGENT_CONFIG, cwd: dir };
+    };
+    const [TIMEOUT, BACKOFF, PARALLEL, WINDOW] = [n(), n(), n(), n()];
+    const namedConfig = fixture('subresume-named', 'src/net/client.ts', [['CONNECT_TIMEOUT_MS', TIMEOUT], ['RETRY_LIMIT', n()], ['BACKOFF_CAP_MS', BACKOFF]]);
+    const plainConfig = fixture('subresume-plain', 'src/storage/uploader.ts', [['MAX_PARALLEL_UPLOADS', PARALLEL], ['UPLOAD_CHUNK_BYTES', n()], ['RESUME_WINDOW_SEC', WINDOW]]);
+    const resumeArgs = (ev) => ev.toolArgs.filter((t) => t.name === 'delegate').map((t) => { try { return String(JSON.parse(t.arguments).resume || ''); } catch { return ''; } });
+    const reportId = (ev) => /\[subagent id: ([0-9a-f]{8}) /.exec(ev.toolResults.find((r) => r.name === 'delegate')?.full || '')?.[1] || '';
+    const fmtSub = (ev) => ev.subTools.map((t) => `${t.name}${t.isError ? '(err)' : ''}`).join(' → ') || '无';
+    const grade = (first, second, want) => {
+      const id = reportId(first);
+      const searched = second.subTools.filter((t) => /glob_files|search_files|run_bash|grep/.test(t.name));
+      const count = (name) => second.subTools.filter((t) => t.name === name).length;
+      const checks = {
+        firstDelegated: !first.error && first.toolCalls.includes('delegate') && first.subTools.length > 0 && !!id,
+        firstHidNeighbours: !want.some((v) => first.content.includes(String(v))),
+        resumedThatId: resumeArgs(second).includes(id),
+        sameSubagent: second.subStarts.length >= 1 && second.subStarts.every((s) => s.subId.startsWith(id)),
+        noReexplore: searched.length === 0 && count('list_dir') <= 1 && count('read_file') <= 1,
+        parentStayedOut: second.toolCalls.every((t) => t === 'delegate' || t === 'load_tools'),
+        answered: !second.error && want.every((v) => second.content.includes(String(v))),
+      };
+      return { ok: Object.values(checks).every(Boolean), checks, id };
+    };
+    const sidA = `live-subresume-a-${Date.now()}`;
+    const named1 = await run(sidA, 'Delegate this to one subagent and do not search yourself: in this project, what is the HTTP client retry limit? Have it report only the number, nothing else, then tell me that number.', 240_000, namedConfig);
+    const named2 = await run(sidA, 'Ask that same subagent, not a new one: which other constants are defined right next to the retry limit, and what are their values?', 240_000, namedConfig);
+    const sidB = `live-subresume-b-${Date.now()}`;
+    const plain1 = await run(sidB, '这个项目里上传的分片大小是多少?派个子代理查一下(不用单开会话),让它只回报数值。', 240_000, plainConfig);
+    const plain2 = await run(sidB, '再问问它,紧挨着分片大小定义的还有哪些常量,值分别是多少?', 240_000, plainConfig);
+    const plain3 = await run(sidB, '另外派个子代理看一下这个项目用的什么许可证,跟刚才的事无关。', 240_000, plainConfig);
+    const named = grade(named1, named2, [TIMEOUT, BACKOFF]);
+    const plain = grade(plain1, plain2, [PARALLEL, WINDOW]);
+    const fmt = (g, first, second) => `${g.ok ? '过' : '没过'}:${Object.entries(g.checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '全部判据满足'};第一轮子代理 [${fmtSub(first)}];第二轮 resume [${resumeArgs(second).join(',') || '无'}],子代理 [${fmtSub(second)}]`;
+    return {
+      ok: named.ok && plain.ok,
+      detail: `点明:${fmt(named, named1, named2)}。平常说话:${fmt(plain, plain1, plain2)}。不相干的第三轮(只记录):resume [${resumeArgs(plain3).join(',') || '无'}]`,
+      output: JSON.stringify({ named: named2.content, plain: plain2.content, unrelated: plain3.content, want: { TIMEOUT, BACKOFF, PARALLEL, WINDOW } }, null, 2),
+      toolSequences: { named1: named1.toolCalls, named2: named2.toolCalls, plain1: plain1.toolCalls, plain2: plain2.toolCalls, plain3: plain3.toolCalls },
+      tokens: [named1, named2, plain1, plain2, plain3].reduce((sum, ev) => sum + tokensOf(ev), 0),
+      toolCalls: [...named2.toolCalls, ...plain2.toolCalls],
+    };
   });
 
   // 并行团队(新工作区 × 轨道体系,09-16 第四轮:成员各自在自己的工作会话里并行干活、全员起头、被 @ 者优先、成员各自以 DONE 表态,

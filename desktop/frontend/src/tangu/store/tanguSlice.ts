@@ -1790,11 +1790,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         const child = get().subChatsBySession[sessionId]?.find((x) => x.id === id)
         const childId = String(pl.sessionId || child?.sessionId || '')
         if (childId) {
-          const mid = `delegate:${childId}`
+          // 续用时同一 subId 再跑一轮:start 带这一轮自己的 messageId,否则新内容会流进上一轮的气泡。
+          const mid = String(pl.messageId || child?.messageId || `delegate:${childId}`)
           set((state) => {
             const messages = state.messagesBySession[childId] || []
             if (messages.some((m) => m.id === mid)) return {}
-            return { messagesBySession: { ...state.messagesBySession, [childId]: [...messages, { id: mid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), agentName: pl.label || child?.title }] } }
+            const followUp: UiMessage[] = pl.userMessageId ? [{ id: String(pl.userMessageId), role: 'user', content: String(pl.task || ''), status: 'done', timestamp: Date.now() }] : []
+            return { messagesBySession: { ...state.messagesBySession, [childId]: [...messages, ...followUp, { id: mid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), agentName: pl.label || child?.title }] } }
           })
           // These events belong to the parent run; a child has no independent run until a follow-up.
           if (pl.phase === 'token') patchMessage(childId, mid, (m) => ({ ...m, content: capContent(m.content + (pl.delta || '')), segments: pushTextSeg(m.segments, pl.delta || ''), status: 'streaming' }))
@@ -1814,7 +1816,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         }
         if (pl.phase === 'token' && pl.delta) upsertSubChat(id, (s) => appendSubText(s, String(pl.delta)))
         else if (pl.phase === 'tool') upsertSubChat(id, (s) => ({ ...s, segs: [...s.segs, { t: 'tool', name: String(pl.name || ''), args: pl.args, preview: pl.preview, error: !!pl.isError }] }))
-        else if (pl.phase === 'start') upsertSubChat(id, (s) => ({ ...s, title: pl.label || s.title, streaming: true }), { kind: 'subagent', title: pl.label })
+        else if (pl.phase === 'start') upsertSubChat(id, (s) => ({ ...s, title: pl.label || s.title, streaming: true, messageId: pl.messageId || s.messageId, segs: pl.userMessageId ? [...s.segs, { t: 'text', text: '' }] : s.segs }), { kind: 'subagent', title: pl.label }) // 续用另起一段,没调工具时两轮回答不拼在一起
         else if (pl.phase === 'done') upsertSubChat(id, (s) => ({ ...s, streaming: false }))
         break
       }
