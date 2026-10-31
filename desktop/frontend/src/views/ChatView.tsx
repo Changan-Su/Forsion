@@ -58,7 +58,7 @@ import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
 import { openBtw, quoteInMainChat } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
-import { ChatCanvas, armCanvasEnter, chatAnchor, useChatCanvasPref, type CanvasAnchor } from './chat2/ChatCanvas'
+import { ChatCanvas, armCanvasEnter, chatAnchor, useCanvasKids, useChatCanvasPref, type CanvasAnchor } from './chat2/ChatCanvas'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
@@ -628,7 +628,13 @@ export function ChatView({ leaf, params }: ViewProps) {
   const teamDesk = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2
   // 画布(方案「Chat 画布分支」第二步):同一棵会话树的另一种看法。偏好按树根记 —— 在画布里点到别的支,不会翻回对话。
   // 不给画布的地方:团队 / 群聊、私聊 Agent / 引擎、子会话面板、小窗、钉住会话的分屏、Coding 工作台、手机(没有这条标签栏)。
-  const treeRoot = activeSession?.fork_message_id ? (activeSession.parent_session_id || activeId) : activeId
+  // 画布开着「显示子会话」时,子会话也是那棵树上的一支(单击它的卡会把主区切过来,画布得留在原来那棵树上):
+  // 父会话是树根 → 树根;父会话是一支 → 那一支的树根;父会话自己是子会话(孙会话不画)→ 照旧自成一棵
+  const canvasKids = useCanvasKids()
+  const kidParent = useApp((s) => (canvasKids && activeSession && !activeSession.fork_message_id && activeSession.parent_session_id
+    ? s.sessions.find((x) => x.id === activeSession.parent_session_id) : undefined))
+  const kidRoot = kidParent ? (kidParent.fork_message_id ? kidParent.parent_session_id : kidParent.parent_session_id ? undefined : kidParent.id) : undefined
+  const treeRoot = activeSession?.fork_message_id ? (activeSession.parent_session_id || activeId) : kidRoot || activeId
   const canvasAllowed = !!activeId && followActive && leaf.loc === 'main' && !inSingleColumnShell() && !params.childSurface && !params.miniSurface && !params.readOnly && !studioChat
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
