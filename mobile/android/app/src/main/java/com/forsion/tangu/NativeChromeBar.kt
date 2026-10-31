@@ -2,11 +2,15 @@ package com.forsion.tangu
 
 import android.graphics.BitmapFactory
 import android.util.Base64
+import android.provider.Settings
 import android.view.HapticFeedbackConstants
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -15,6 +19,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -37,25 +43,45 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.compositeOver
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
@@ -68,6 +94,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.toSize
 import androidx.core.graphics.Insets
+import kotlin.math.abs
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Room the top capsules take below the status-bar inset: 6dp + the 46dp capsules + 6dp. Floating (shell pages), the
@@ -299,6 +330,8 @@ internal val NATIVE_SPACE_BAR_HEIGHT = 80.dp
 private val DOCK_HEIGHT = 68.dp
 private val DOCK_GAP = 6.dp
 private val DOCK_CELL_HEIGHT = 56.dp
+/** Between the capsule and a cell, all round: (68 − 56) / 2, so the selection's corners run parallel to the capsule's. */
+private val DOCK_INSET = 6.dp
 /** A cell is a fifth of the dock at most: with fewer Spaces the dock is as wide as they are, centred. */
 private val DOCK_CELL_MAX = 84.dp
 private val DOCK_ICON = 26.dp
@@ -308,7 +341,10 @@ private val DOCK_ICON = 26.dp
  * the user found the icon-only dock too small and wanted the names back under the icons). Every Space while they fit
  * (ChromeState.DOCK_CELLS), otherwise the pinned ones and a last cell for all of them — nothing scrolls, so every
  * cell is where it was the last time. The cell you are in is tinted; in a Space that is not in the dock that is "all".
- * Tap = switch (with a light tick when it really switches), long-press on a Space = pin to the launcher.
+ * Tap = switch (with a light tick when it really switches), long-press on a Space = pin to the launcher, a finger
+ * going sideways along the dock = pick a cell by sliding to it, switching on release (ticks at every cell it crosses).
+ * The selection is one droplet under the cells, fully round so it sits concentric in the capsule. It answers the finger
+ * at once: the page's confirmation only corrects it (see rememberSelected).
  * A cell may carry a badge: a dot at its icon's top-right corner (see ChromeBadge); "all" shows the most pressing
  * one of the Spaces behind it.
  * Test anchors: `nativeChrome.spaces` (the strip), `nativeChrome.dock` (the capsule), `nativeChrome.space.<id>`,
@@ -316,18 +352,34 @@ private val DOCK_ICON = 26.dp
  */
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onPlate: PlateSink, onAll: () -> Unit, onSpace: (id: String, long: Boolean) -> Unit) {
+internal fun NativeSpaceBar(
+    state: ChromeState, insets: Insets, onPlate: PlateSink, onAll: () -> Unit,
+    shown: () -> Float = { 1f }, interactive: Boolean = true, onSpace: (id: String, long: Boolean) -> Unit,
+) {
     val theme = state.theme
     val density = LocalDensity.current
+    val view = LocalView.current
     val scheme = remember(theme) { theme.colorScheme() }
     val look = remember(theme, state.frosted) { CapsuleLook(theme, state.frosted) }
     val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.surface))
+    val motion = motionOn()
+    val keys = state.dock.map { cellKey(it) } + if (state.more.isNotEmpty()) listOf(ALL_CELL) else emptyList()
+    // the gesture reads this one: restarting it for a page that changed underneath would drop a finger still on the dock
+    val cells by rememberUpdatedState(keys)
+    val active = activeKey(state.dock, state.more)
+    val selected = rememberSelected(active)
+    val scope = rememberCoroutineScope()
+    val drop = remember { DockDrop() }
+    val dp = density.density
+    val hover = drop.hover.takeIf { it in keys.indices }?.let { keys[it] }
+    val target = keys.indexOf(selected.key)
+    val grown = animateFloatAsState(if (drop.scrubbing && motion) DOCK_GROWN else 1f, tween(DOCK_MOTION_MS, easing = DOCK_EASE), label = "dockGrown")
+    LaunchedEffect(target, drop.width, keys.size, drop.scrubbing, drop.settling) { drop.follow(target, keys.size, dp, motion) }
     DisposableEffect(Unit) { onDispose { onPlate("dock", null) } }
     MaterialTheme(colorScheme = scheme) { Box(
         Modifier.fillMaxSize()
             .then(if (state.floating) Modifier else Modifier.background(Color(theme.background)))
-            .semantics { testTagsAsResourceId = true }
-            .testTag("nativeChrome.spaces"),
+            .then(if (interactive) Modifier.semantics { testTagsAsResourceId = true }.testTag("nativeChrome.spaces") else Modifier.clearAndSetSemantics {}),
         contentAlignment = Alignment.TopCenter,
     ) {
         Row(
@@ -336,17 +388,277 @@ internal fun NativeSpaceBar(state: ChromeState, insets: Insets, onPlate: PlateSi
                 start = with(density) { insets.left.toDp() } + CAPSULE_SIDE, end = with(density) { insets.right.toDp() } + CAPSULE_SIDE,
             )
                 .height(DOCK_HEIGHT)
+                // before the graphicsLayer: the page's plate stays where the dock rests, whatever the dock is doing on top of it
                 .onGloballyPositioned { onPlate("dock", Rect(it.positionInWindow(), it.size.toSize())) }
-                .testTag("nativeChrome.dock")
-                .pointerInput(Unit) {} // as the top capsules: the dock keeps its touches, the strip beside it does not
+                .then(if (interactive) Modifier.testTag("nativeChrome.dock") else Modifier)
+                // as the top capsules: the dock keeps its touches, the strip beside it does not. Leaving, it takes none
+                // at all: a ComposeView only takes what one of its pointer inputs was hit by, the rest falls through to the page
+                .then(if (interactive) Modifier.pointerInput(Unit) {
+                    val inset = DOCK_INSET.toPx()
+                    val cross = { n: Int -> view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); drop.hover = n }
+                    awaitEachGesture {
+                        val down = awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+                        val slop = viewConfiguration.touchSlop
+                        val longAt = down.uptimeMillis + viewConfiguration.longPressTimeoutMillis
+                        var scrubbing = false
+                        var done = false
+                        // A cancelled gesture (the system took it) leaves the selection where it was; only a lift picks.
+                        try {
+                            while (true) {
+                                val change = awaitPointerEvent(PointerEventPass.Initial).changes.firstOrNull { it.id == down.id } ?: break
+                                val x = change.position.x - inset
+                                val moved = change.position - down.position
+                                if (!change.pressed) {
+                                    // what Compose makes of a cancel: a lift that is already consumed. Only a real one picks
+                                    if (scrubbing && !change.isConsumed) {
+                                        change.consume()
+                                        done = true
+                                        val key = cells.getOrNull(cellAt(x, drop.width, cells.size))
+                                        val moves = key != null && key != ALL_CELL && key != selected.key
+                                        if (moves) { selected.pick(key!!); onSpace(key.removePrefix(SPACE_CELL), false) }
+                                        // "all" only opens the sheet: the selection stays with what is selected
+                                        drop.release(scope, cells.indexOf(selected.key), motion)
+                                        if (key == ALL_CELL) onAll()
+                                    }
+                                    break
+                                }
+                                if (scrubbing) { change.consume(); drop.drag(x, cells.size, cross); continue }
+                                // past that the cell's long-press has it. Going up or down: not a slide along the dock
+                                if (change.uptimeMillis >= longAt) break
+                                if (abs(moved.y) > slop && abs(moved.y) >= abs(moved.x)) break
+                                if (abs(moved.x) > slop) {
+                                    change.consume()
+                                    scrubbing = true
+                                    drop.begin(scope, x, cells.indexOf(selected.key), cells.size, dp, motion)
+                                }
+                            }
+                        } finally {
+                            if (scrubbing && !done) drop.release(scope, cells.indexOf(selected.key), motion)
+                        }
+                    }
+                } else Modifier)
+                .graphicsLayer {
+                    val p = shown()
+                    alpha = p
+                    translationY = if (motion) (1f - p) * DOCK_SINK.toPx() else 0f
+                    scaleX = grown.value; scaleY = grown.value
+                    transformOrigin = TransformOrigin(drop.pivot, 0.5f)
+                }
                 .clip(CircleShape).background(look.fill).border(1.dp, look.edge, CircleShape)
-                .padding(horizontal = 6.dp),
+                .padding(horizontal = DOCK_INSET)
+                .onSizeChanged { drop.width = it.width.toFloat(); drop.height = it.height.toFloat() }
+                .drawBehind { drop.draw(this, cell.accent.copy(alpha = SELECTED_ALPHA), keys.size, DOCK_CELL_HEIGHT.toPx()) },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            SpaceCells(state, state.dock, state.more, cell, Modifier.weight(1f, fill = false).widthIn(max = DOCK_CELL_MAX).fillMaxWidth().height(DOCK_CELL_HEIGHT), onAll, onSpace)
+            SpaceCells(
+                state, state.dock, state.more, cell, Modifier.weight(1f, fill = false).widthIn(max = DOCK_CELL_MAX).fillMaxWidth().height(DOCK_CELL_HEIGHT),
+                hover ?: selected.key, pill = false, interactive = interactive, motion = motion, onPick = selected::pick, onAll = onAll, onSpace = onSpace,
+            )
         }
     } }
 }
+
+/**
+ * The dock on its way: it follows the page's wish ([state] says `spaceBar`), but stays on screen as long as it takes to
+ * leave. It sinks and fades while the page slides, and comes back the same way (2026-10-31; before, it went away between
+ * two frames with the page still moving). [animated] = this change is one to play (the plugin knows: not with the keyboard,
+ * not without the frosted page behind it). [onSettled] = it has arrived or is gone.
+ */
+@Composable
+internal fun NativeDockHost(
+    state: ChromeState?, insets: Insets, onPlate: PlateSink, onAll: () -> Unit, onSpace: (id: String, long: Boolean) -> Unit,
+    animated: () -> Boolean, onSettled: () -> Unit,
+) {
+    val wanted = state?.spaceBar == true
+    var last by remember { mutableStateOf(state.takeIf { wanted }) }
+    if (wanted) last = state
+    var stays by remember { mutableStateOf(wanted) }
+    val shown = remember { Animatable(if (wanted) 1f else 0f) }
+    val motion = motionOn()
+    LaunchedEffect(wanted) {
+        if (wanted) stays = true
+        val to = if (wanted) 1f else 0f
+        if (shown.value != to) {
+            if (animated()) shown.animateTo(to, tween(if (motion) DOCK_MOTION_MS else DOCK_QUIET_MS, easing = DOCK_EASE)) else shown.snapTo(to)
+        }
+        stays = wanted
+        onSettled()
+    }
+    val held = last
+    if (held != null && (wanted || stays)) NativeSpaceBar(
+        held, insets, onPlate, onAll, interactive = wanted,
+        // a dock that appears without playing is simply there, not at 0 for the frame before the effect below it runs
+        shown = { if (wanted && !animated()) 1f else shown.value }, onSpace = onSpace,
+    )
+}
+
+private const val SELECTED_ALPHA = 0.15f
+private const val DOCK_GROWN = 1.019f
+private const val DOCK_MOTION_MS = 380
+private const val DOCK_QUIET_MS = 120
+private val DOCK_SINK = 40.dp
+private const val SPACE_CELL = "space."
+private const val ALL_CELL = "spacesAll"
+private fun cellKey(space: ChromeSpace) = SPACE_CELL + space.id
+private fun activeKey(cells: List<ChromeSpace>, more: List<ChromeSpace>): String? =
+    cells.firstOrNull { it.active }?.let(::cellKey) ?: ALL_CELL.takeIf { more.any { it.active } }
+
+/** The system's "remove animations" (Android: accessibility → remove animations). */
+@Composable
+private fun motionOn(): Boolean {
+    val resolver = LocalContext.current.contentResolver
+    return remember(resolver) { Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) != 0f }
+}
+
+/**
+ * What the bar shows as selected: [pending] (the finger's last word) until the page says the same, or for
+ * [DOCK_PENDING_MS] at most. A switch goes the long way round through JS, and the selection used to wait for it.
+ */
+private class Selected {
+    var pending by mutableStateOf<String?>(null)
+    var page: String? = null
+    val key: String? get() = pending ?: page
+    fun pick(key: String) { pending = key.takeIf { it != page } }
+}
+
+@Composable
+private fun rememberSelected(active: String?): Selected {
+    val selected = remember { Selected() }
+    selected.page = active
+    val pending = selected.pending
+    if (pending != null && pending == active) SideEffect { selected.pending = null }
+    // keyed on the tap alone: an answer to an earlier tap does not buy this one more time
+    LaunchedEffect(pending) {
+        if (pending == null) return@LaunchedEffect
+        delay(DOCK_PENDING_MS) // the page refused or never answered: back to what it says
+        selected.pending = null
+    }
+    return selected
+}
+
+/**
+ * The droplet's moving parts. Reads of [shape], [width] and the rest happen in the draw phase (and in the layer's block),
+ * so a frame of it redraws the dock and recomposes nothing; only crossing into another cell ([hover]) does.
+ */
+private class DockDrop {
+    var width by mutableFloatStateOf(0f)
+    var height by mutableFloatStateOf(0f)
+    /** The cell the droplet rests on (-1 none); while [shape] is set that shape is what is drawn instead. */
+    private var rest by mutableIntStateOf(-1)
+    private var shape by mutableStateOf<DropShape?>(null)
+    var scrubbing by mutableStateOf(false)
+    var hover by mutableIntStateOf(-1)
+    var pivot by mutableFloatStateOf(0.5f)
+    /** Let go, on the way to where it lands. */
+    var settling by mutableStateOf(false)
+        private set
+    private var flow: Job? = null
+    private var finger = 0f
+    private var tail = 0f
+    private var head = 0f
+    private var offset = 0f
+    private var count = 0
+    private var dp = 1f
+
+    private fun cell() = if (count > 0) width / count else 0f
+    private fun centre(i: Int) = (i + 0.5f) * cell()
+    private fun cellH() = DOCK_CELL_HEIGHT.value * dp
+    private fun clampX(x: Float) = x.coerceIn(centre(0), centre(count - 1))
+
+    /** The selection moved: pour it over, unless a finger has it. */
+    suspend fun follow(target: Int, cells: Int, density: Float, motion: Boolean) {
+        count = cells; dp = density
+        if (scrubbing || settling || width <= 0f) return
+        if (target == rest && shape == null) return
+        val from = shape
+        if (rest < 0 || target < 0 || !motion) { rest = target; shape = null; return }
+        val x0 = from?.headX ?: centre(rest)
+        val w0 = from?.headW ?: cell()
+        val h0 = from?.headH ?: cellH()
+        val x1 = centre(target)
+        rest = target
+        val start = withFrameNanos { it }
+        while (true) {
+            val t = withFrameNanos { (it - start) / 1_000_000f } / DROP_FLOW_MS
+            if (t >= 1f) break
+            shape = flowShape(t, x0, x1, w0, h0, cell(), cellH(), dp)
+        }
+        shape = null
+    }
+
+    fun begin(scope: CoroutineScope, x: Float, from: Int, cells: Int, density: Float, motion: Boolean) {
+        flow?.cancel()
+        settling = false
+        count = cells; dp = density
+        finger = x
+        val fromX = shape?.headX ?: centre(from.coerceAtLeast(0))
+        rest = from
+        scrubbing = true
+        pivot = if (width > 0f) (x / width).coerceIn(0f, 1f) else 0.5f
+        head = fromX; tail = fromX
+        offset = fromX - clampX(x)
+        hover = from
+        flow = scope.launch {
+            val start = withFrameNanos { it }
+            var last = start
+            while (scrubbing) {
+                withFrameNanos { now ->
+                    val dt = (now - last) / 1_000_000f
+                    last = now
+                    if (!motion) { head = clampX(finger); tail = head; shape = dragShape(head, head, cell(), cellH(), dp); return@withFrameNanos }
+                    head = clampX(finger) + offset * (1f - settleAt((now - start) / 1_000_000f))
+                    tail = tailAfter(tail, head, dt)
+                    shape = dragShape(head, tail, cell(), cellH(), dp)
+                }
+            }
+        }
+    }
+
+    fun drag(x: Float, cells: Int, onCross: (Int) -> Unit) {
+        finger = x
+        val n = cellAt(x, width, cells)
+        if (n != hover) onCross(n)
+    }
+
+    /** The finger left: it settles on the cell [to], from wherever it was. */
+    fun release(scope: CoroutineScope, to: Int, motion: Boolean) {
+        flow?.cancel()
+        scrubbing = false
+        hover = -1
+        if (!motion || to < 0) { rest = to; shape = null; return }
+        settling = true
+        val from = head
+        val x = centre(to)
+        flow = scope.launch {
+            val start = withFrameNanos { it }
+            var last = start
+            var ms = 0f
+            while (ms < DROP_SETTLE_MS) {
+                withFrameNanos { now ->
+                    ms = (now - start) / 1_000_000f
+                    val dt = (now - last) / 1_000_000f
+                    last = now
+                    head = from + (x - from) * settleAt(ms)
+                    tail = tailAfter(tail, head, dt)
+                    shape = dragShape(head, tail, cell(), cellH(), dp)
+                }
+            }
+            rest = to
+            shape = null
+            settling = false
+        }
+    }
+
+    fun draw(scope: DrawScope, color: Color, cells: Int, cellHeight: Float) = with(scope) {
+        val now = shape
+        if (now != null) { drawPath(now.path(center.y), color); return@with }
+        if (rest !in 0 until cells || cells <= 0) return@with
+        val w = size.width / cells
+        drawRoundRect(color, Offset(rest * w, center.y - cellHeight / 2), Size(w, cellHeight), CornerRadius(cellHeight / 2))
+    }
+}
+
+private const val DROP_SETTLE_MS = 420f
 
 /** Width of the Space rail at the left edge of a wide window (2026-10-20, mock-up A2), where it stands instead of the dock. */
 internal val NATIVE_RAIL_WIDTH = 76.dp
@@ -383,8 +695,13 @@ internal fun NativeSpaceRail(state: ChromeState, insets: Insets, onAll: () -> Un
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.TopCenter) {
                 val fit = ((maxHeight + RAIL_CELL_GAP) / (RAIL_CELL_HEIGHT + RAIL_CELL_GAP)).toInt()
                 val (cells, more) = state.railCells(fit)
+                val selected = rememberSelected(activeKey(cells, more))
+                val motion = motionOn()
                 Column(verticalArrangement = Arrangement.spacedBy(RAIL_CELL_GAP)) {
-                    SpaceCells(state, cells, more, cell, Modifier.size(RAIL_CELL_WIDTH, RAIL_CELL_HEIGHT), onAll, onSpace)
+                    SpaceCells(
+                        state, cells, more, cell, Modifier.size(RAIL_CELL_WIDTH, RAIL_CELL_HEIGHT),
+                        selected.key, pill = true, interactive = true, motion = motion, onPick = selected::pick, onAll = onAll, onSpace = onSpace,
+                    )
                 }
             }
             state.account?.let { AvatarButton(it, Color(theme.accent), onAccount) }
@@ -393,19 +710,26 @@ internal fun NativeSpaceRail(state: ChromeState, insets: Insets, onAll: () -> Un
     } }
 }
 
-/** The Space cells of the dock and of the rail: [cells], then "all" while [more] is not empty. [cellModifier] sizes one cell. */
+/**
+ * The Space cells of the dock and of the rail: [cells], then "all" while [more] is not empty. [cellModifier] sizes one cell,
+ * [selected] is the key of the one to show as selected, [pill] = it wears its own pill (the dock has one droplet under all
+ * of them instead), [interactive] = false while the dock is leaving: it takes no touches any more. A tap says [onPick]
+ * first: the selection answers it before the page has heard of it.
+ */
 @Composable
 private fun SpaceCells(
     state: ChromeState, cells: List<ChromeSpace>, more: List<ChromeSpace>, colors: CellColors, cellModifier: Modifier,
+    selected: String?, pill: Boolean, interactive: Boolean, motion: Boolean, onPick: (String) -> Unit,
     onAll: () -> Unit, onSpace: (id: String, long: Boolean) -> Unit,
 ) {
     val view = LocalView.current
     for (space in cells) SpaceCell(
-        cellModifier, "space.${space.id}", space.label, space.active, colors, space.badge,
+        cellModifier, cellKey(space), space.label, selected == cellKey(space), colors, space.badge, pill, interactive, motion,
         onClick = {
             // A light tick when the tap really switches Space. The system's own effect: the user's touch-feedback
             // setting applies and no VIBRATE permission is involved. (The long-press ticks by itself.)
-            if (!space.active) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            if (selected != cellKey(space)) view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK)
+            onPick(cellKey(space))
             onSpace(space.id, false)
         },
         onLongClick = { onSpace(space.id, true) },
@@ -421,7 +745,7 @@ private fun SpaceCells(
         } else if (space.icon != null) NativeIconView(space.icon, tint, DOCK_ICON)
     }
     if (more.isNotEmpty()) SpaceCell(
-        cellModifier, "spacesAll", state.allLabel, more.any { it.active }, colors, ChromeState.pressing(more), onClick = onAll, onLongClick = null,
+        cellModifier, ALL_CELL, state.allLabel, selected == ALL_CELL, colors, ChromeState.pressing(more), pill, interactive, motion, onClick = onAll, onLongClick = null,
     ) { tint -> state.icons.all?.let { NativeIconView(it, tint, DOCK_ICON) } }
 }
 
@@ -433,16 +757,28 @@ private class CellColors(val accent: Color, val muted: Color, val warning: Color
 @Composable
 private fun SpaceCell(
     modifier: Modifier, tag: String, label: String, active: Boolean, colors: CellColors, badge: ChromeBadge?,
+    ownPill: Boolean, interactive: Boolean, motion: Boolean,
     onClick: () -> Unit, onLongClick: (() -> Unit)?, icon: @Composable (tint: Color) -> Unit,
 ) {
-    // The pill and the colour move over to the new cell (spring, Compose's default) instead of jumping there: the
-    // switch a tap makes reads as one motion (2026-10-14, "no linear / sudden animation, native liveliness").
+    // The colour moves over to the new cell (spring, Compose's default) instead of jumping there: the switch a tap
+    // makes reads as one motion (2026-10-14, "no linear / sudden animation, native liveliness").
     val tint by animateColorAsState(if (active) colors.accent else colors.muted, label = "cellTint")
-    val pill by animateColorAsState(if (active) colors.accent.copy(alpha = 0.15f) else colors.accent.copy(alpha = 0f), label = "cellPill")
+    val pill by animateColorAsState(if (active && ownPill) colors.accent.copy(alpha = SELECTED_ALPHA) else colors.accent.copy(alpha = 0f), label = "cellPill")
+    // The icon of the cell that just got selected gives a little (it has no filled form to turn into).
+    val iconScale = remember { Animatable(1f) }
+    var wasActive by remember { mutableStateOf(active) }
+    LaunchedEffect(active) {
+        val selectedNow = active && !wasActive && motion
+        wasActive = active
+        if (selectedNow) {
+            iconScale.snapTo(0.84f)
+            iconScale.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = ICON_STIFFNESS))
+        } else iconScale.snapTo(1f) // a finger passing over: the spring it was cut off in must not stay behind
+    }
     val badgeLabel = badge?.label.orEmpty()
     Column(
-        modifier.clip(RoundedCornerShape(18.dp)).background(pill)
-            .combinedClickable(role = Role.Tab, onClick = onClick, onLongClick = onLongClick)
+        modifier.clip(if (ownPill) RoundedCornerShape(18.dp) else RoundedCornerShape(DOCK_CELL_HEIGHT / 2)).background(pill)
+            .then(if (interactive) Modifier.combinedClickable(role = Role.Tab, onClick = onClick, onLongClick = onLongClick) else Modifier)
             .semantics {
                 selected = active
                 if (badgeLabel.isNotBlank()) stateDescription = badgeLabel
@@ -451,7 +787,7 @@ private fun SpaceCell(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Box(Modifier.size(30.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(30.dp).graphicsLayer { scaleX = iconScale.value; scaleY = iconScale.value }, contentAlignment = Alignment.Center) {
             icon(tint)
             // The 26dp icon sits at 2..28 of this box and its strokes fill about 23dp of that: the dot's centre goes on the
             // glyph's top-right corner. The ring is the colour under it, so the dot reads as cut out of the icon.

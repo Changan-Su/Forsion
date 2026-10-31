@@ -1006,6 +1006,45 @@ const tabCountText = (list) => {
     assert.ok(got.length === 1 && near(got[0][0], Math.round(dock.rect.left / 2), 3), `a tap beside the dock reached the page as ${JSON.stringify(got)}`)
   })
 
+  // The selection is drawn, not a node: the switches are read from the tree, the droplet from frames (shots dock-*).
+  await check('dock droplet: a slide along the dock switches once and only on release; it sinks away and comes back with its plate', async () => {
+    await goHome()
+    let list = await waitDock()
+    const cells = dockCells(list)
+    assert.ok(cells.length >= 3, `three cells to slide over (${cells.length})`)
+    const from = cells.find(isOn) || cells[0]
+    const to = cells.filter((c) => c !== from).pop()
+    const y = from.rect.cy
+    const swipe = new Promise((resolve, reject) => require('node:child_process').execFile(process.env.ADB || 'adb', ['shell', 'input', 'swipe', String(from.rect.cx), String(y), String(to.rect.cx), String(y), '2200'], (e) => (e ? reject(e) : resolve())))
+    await h.pause(1000)
+    shot('dock-1-sliding')
+    assert.ok(isOn(h.byId(list, from['resource-id'])), 'the slide started somewhere else')
+    await swipe
+    await h.pause(1200)
+    list = ui()
+    assert.ok(isOn(h.byId(list, to['resource-id'])), `the slide did not land on ${to['resource-id']}`)
+    shot('dock-2-landed')
+    await goHome()
+    const track = `(() => { const log = window.__plates = []; const t0 = performance.now(); const tick = () => { const el = document.querySelector('.nc-plate[data-plate="dock"]'); const s = el && getComputedStyle(el); log.push(el ? [Math.round(performance.now() - t0), +(+s.opacity).toFixed(2), s.transform] : [Math.round(performance.now() - t0), null]); if (performance.now() - t0 < 2500) requestAnimationFrame(tick) }; tick(); return true })()`
+    await tanguDrawer()
+    await cdp.eval(track)
+    await openChat('E2E Session One')
+    await h.pause(1800)
+    const out = await cdp.eval('window.__plates')
+    assert.ok(out.some((f) => f[1] !== null && f[1] > 0.04 && f[1] < 0.96), `the plate did not fade on its way out: ${JSON.stringify(out.slice(0, 12))}`)
+    assert.equal(out[out.length - 1][1], null, 'a plate stayed behind after the dock left')
+    assert.ok(!h.byId(ui(), 'nativeChrome.spaces'), 'the dock stayed up on a detail page')
+    shot('dock-3-gone')
+    await cdp.eval(track)
+    await tanguDrawer()
+    await h.pause(1800)
+    const back = await cdp.eval('window.__plates')
+    const last = back[back.length - 1]
+    assert.ok(back.some((f) => f[1] !== null && f[1] < 0.96), `the plate did not come back through a fade: ${JSON.stringify(back.slice(0, 12))}`)
+    assert.ok(last[1] === 1 && last[2] === 'none', `the plate did not come to rest: ${JSON.stringify(last)}`)
+    assert.ok(sameRect((await chromeOnPage()).plates.find((p) => p.id === 'dock').rect, h.byId(await waitDock(), 'nativeChrome.dock').rect), 'the plate is not under the dock')
+  })
+
   await check('floating chrome is the shell\'s only: a page (settings) and a covering overlay keep the WebView between two strips; glass off → solid capsules, no blur', async () => {
     await accountItem('rb-settings')
     assert.ok(await h.waitPage(cdp, settingsOpen, 5000), 'settings did not open')

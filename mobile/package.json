@@ -46,7 +46,7 @@
     "emu:nativeshell": "node scripts/native-shell-emu.cjs",
     "emu:perf": "node scripts/perf-emu.cjs",
     "emu:treecompare": "node scripts/uitree-compare.cjs",
-    "test:nativebar": "./android/gradlew -p android :app:testDebugUnitTest --tests '*NativeChromeBarLayoutTest'",
+    "test:nativebar": "./android/gradlew -p android :app:testDebugUnitTest --tests '*NativeChromeBarLayoutTest' --tests '*DockDropletTest'",
     "stage:phone": "node scripts/phone-stage.cjs",
     "check:calendar-phone": "node scripts/calendar-phone.check.cjs",
     "check:calendar-create": "node scripts/calendar-create.check.cjs",
