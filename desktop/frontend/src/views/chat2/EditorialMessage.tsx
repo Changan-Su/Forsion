@@ -215,6 +215,8 @@ registerMessages({
     en: 'Your direct-connection sign-in has expired — please sign in again',
   },
   'chat.err.relogin': { zh: '重新登录 {provider}', en: 'Sign in to {provider} again' },
+  'chat.retry': { zh: '重试', en: 'Retry' },
+  'chat.copyError': { zh: '复制错误', en: 'Copy error' },
   'rewind.title': { zh: '回退到这条消息', en: 'Rewind to this message' },
   'rewind.counting': { zh: '正在统计改动…', en: 'Counting changes…' },
   'rewind.codeOnly': { zh: '仅回退代码（{n} 个文件）', en: 'Code only ({n} file(s))' },
@@ -283,6 +285,30 @@ export interface MessageHandlers {
   onInsertNote?: (text: string) => void
   /** 插件结果卡片的 call.quote:挂成这块输入框上方的引用卡(同划线「引用」)。不传 → 退回主对话的输入框。 */
   onQuote?: (text: string) => void
+  /** 回答失败后「重试」:同 /retry(从最后一条用户消息重发)。只读视图不传 → 不出按钮。 */
+  onRetry?: () => void
+}
+
+/** 失败那一行 + 下面「重试 · 复制错误」(走查续六 6.3)。只在会话最后一条、且没在跑时给重试:重试后新一轮接上,按钮自然消失。 */
+function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; sessionId?: string; modelId?: string; handlers?: MessageHandlers }) {
+  const { t } = useI18n()
+  const canRetry = useApp((s) => !!handlers?.onRetry && !!sessionId && !s.runningBySession[sessionId] && s.messagesBySession[sessionId]?.at(-1)?.id === msg.id)
+  return (
+    <>
+      <div className="t2-tool err">
+        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t)}</span>
+        <ReloginChip error={msg.error} modelId={modelId} />
+        <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />
+        <QuotaChips error={msg.error} messageId={msg.id} sessionId={sessionId} modelId={modelId} />
+      </div>
+      {(canRetry || (handlers?.onCopy && msg.error)) && (
+        <div className="t2-retry-row">
+          {canRetry && <button type="button" className="t2-retry-btn lead" data-testid="msg-retry" onClick={() => handlers!.onRetry!()}><RotateCcw size={13} />{t('chat.retry')}</button>}
+          {handlers?.onCopy && msg.error && <button type="button" className="t2-retry-btn" onClick={() => handlers.onCopy!(msg.error!)}><Copy size={13} />{t('chat.copyError')}</button>}
+        </div>
+      )}
+    </>
+  )
 }
 
 type RewindMode = 'code' | 'conversation' | 'both'
@@ -743,7 +769,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
-                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards /></div>
+                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead /></div>
                   : null
               }
               const skip = i === firstIdx && headEvents ? 1 : 0
@@ -779,7 +805,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards /></div>
+                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead /></div>
               )}
             </>
           )
@@ -889,14 +915,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {msg.inquiries?.filter((q) => q !== planInq && q.status !== 'pending').map((q) => (q.status === 'expired' && handlers?.onJumpDeck
           ? <div key={q.inquiryId} className="t2-dim t2-apv-pointer" data-inquiry-expired={q.inquiryId}><CircleX size={12} /><span>{t('chat.inquiry.expiredLine', { q: q.question })}</span></div>
           : <InquiryCard key={q.inquiryId} req={q} onAnswer={() => {}} />))}
-        {msg.status === 'error' && (
-          <div className="t2-tool err">
-            <span className="t2-status-err">✕ {humanizeRunError(msg.error, t)}</span>
-            <ReloginChip error={msg.error} modelId={msg.fallback?.to ?? modelId} />
-            <QuotaRemindChip error={msg.error} sessionId={runSid} modelId={msg.fallback?.to ?? modelId} />
-            <QuotaChips error={msg.error} messageId={msg.id} sessionId={runSid} modelId={msg.fallback?.to ?? modelId} />
-          </div>
-        )}
+        {msg.status === 'error' && <RunErrorRow msg={msg} sessionId={runSid} modelId={msg.fallback?.to ?? modelId} handlers={handlers} />}
         {msg.status === 'stopped' && <div className="t2-dim">⏹ {t('chat.aborted')}</div>}
         {/* run 统计行放操作条之前:流式 → 完成时它原地不动,悬停出现的操作条长在下面,不会把它顶走。 */}
         {footer}

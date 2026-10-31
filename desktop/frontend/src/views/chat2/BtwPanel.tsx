@@ -45,7 +45,7 @@ function TurnView({ turn, onQuoted }: { turn: BtwTurn; onQuoted?: () => void }) 
       )}
       <div className="btw-turn-q">{turn.question}</div>
       {turn.answer
-        ? <div className="t2-content btw-turn-a"><Markdown content={turn.answer} /></div>
+        ? <div className="t2-content btw-turn-a"><Markdown content={turn.answer} codeHead /></div>
         : turn.status === 'streaming' && <div className="btw-note"><Loader2 className="spin" size={13} /> {t(turn.describing ? 'btw.describing' : 'btw.thinking')}</div>}
       {turn.status === 'error' && <div className="btw-error" role="alert">{turn.error}</div>}
       {turn.status === 'stopped' && <div className="btw-note">{t('btw.stopped')}</div>}

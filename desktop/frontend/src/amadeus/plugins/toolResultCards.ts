@@ -50,8 +50,9 @@ export function claimToolCard(
 /** 只有跑完且成功的调用画卡片;运行中、出错、挂起等审批的都留通用记录。历史里中断的调用也是 done,但没有结果 —— 不画。 */
 export const cardEligible = (ev: ToolEvent): boolean => ev.done && !ev.isError && !ev.parked && ev.result !== undefined
 
-/** 引擎插件 id → 名下工具名。loaded 之前与拉失败时都是空表(不认领)。 */
-export const useEngineTools = create<{ byEngine: Record<string, string[]>; official: string[] }>(() => ({ byEngine: {}, official: [] }))
+/** 引擎插件 id → 名下工具名。loaded 之前与拉失败时都是空表(不认领)。
+ *  toolOwner:工具名 → 所属引擎插件的显示名(过程行把插件工具写成「插件名 · 工具」,走查续六 6.4)。 */
+export const useEngineTools = create<{ byEngine: Record<string, string[]>; official: string[]; toolOwner: Record<string, { name: string; nameEn?: string }>; loaded?: boolean }>(() => ({ byEngine: {}, official: [], toolOwner: {} }))
 
 let inflight: Promise<void> | null = null
 let again = false
@@ -62,17 +63,21 @@ export function refreshEngineTools(): Promise<void> {
     // 拉不到(后端没起、请求失败)就清空:引擎重载后工具可能换了主人,留着旧表 = 让旧插件接着认领(Codex 评审)
     let byEngine: Record<string, string[]> = {}
     let official: string[] = []
+    const toolOwner: Record<string, { name: string; nameEn?: string }> = {}
+    let loaded = false
     try {
       const cfg = await readTangu()?.waitBackend?.(15_000)
       if (cfg) {
         const list = (await listPlugins(homeTarget())).filter((p) => p.enabled && p.active !== false)
         byEngine = Object.fromEntries(list.filter((p) => p.tools?.length).map((p) => [p.id, p.tools!]))
         official = list.filter((p) => p.official === true).map((p) => p.id)
+        for (const p of list) for (const tool of p.tools ?? []) toolOwner[tool] = { name: p.name, nameEn: p.nameEn }
+        loaded = true
       }
     } catch (e) {
       console.warn('[amadeus] 拉引擎插件名下工具失败', e)
     } finally {
-      useEngineTools.setState({ byEngine, official })
+      useEngineTools.setState((s) => ({ byEngine, official, toolOwner, loaded: s.loaded || loaded }))
       inflight = null
       if (again) { again = false; void refreshEngineTools() }
     }
@@ -122,6 +127,15 @@ export function useToolCardOf(): (ev: ToolEvent) => ToolCardClaim | undefined {
   )
 }
 
+/** 过程行见到认不出主人的工具时补拉名单(名单平时只在有插件结果卡片时才拉)。只补到第一次拉成功为止:之后认不出的
+ *  多半是核心工具(ask_user、delegate…),不为它们反复打 /agent/plugins;会话中途才启用的插件等下一次后端就绪再认。 */
+let ownerKick = 0
+export function kickToolOwners(): void {
+  if (useEngineTools.getState().loaded || Date.now() - ownerKick < STALE_GAP_MS) return
+  ownerKick = Date.now()
+  void refreshEngineTools()
+}
+
 /** 非渲染期(工具结果到达时决定要不要直接进 Desk)。 */
 export function toolCardOf(ev: ToolEvent): ToolCardClaim | undefined {
   const s = usePluginStore.getState()
@@ -156,5 +170,6 @@ export function toolCardTitle(item: ToolResultRendererContribution): string {
 export const __resetToolCards = (): void => {
   cardStates.clear()
   lastStaleKick = 0
-  useEngineTools.setState({ byEngine: {} })
+  ownerKick = 0
+  useEngineTools.setState({ byEngine: {}, official: [], toolOwner: {}, loaded: false })
 }

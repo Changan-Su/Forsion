@@ -132,6 +132,18 @@ function selectedCanvasSessionId(): string | undefined {
   return k?.includes(':') ? k.slice(0, k.indexOf(':')) : undefined
 }
 
+/** 失败行 / 右栏失败卡的「重试」(走查续六 6.3)只送一次:删消息到新 run 起来之间 running 还没置上,连点或两处各点一下
+ *  会排两次 /retry,第二次把第一次的回答删掉重跑(Codex 评审)。run 起来或 30 秒后放开。 */
+const retrying = new Set<string>()
+function retryOnce(sid: string | null | undefined): void {
+  if (!sid || retrying.has(sid)) return
+  retrying.add(sid)
+  const done = (): void => { retrying.delete(sid); off(); clearTimeout(timer) }
+  const off = useApp.subscribe((s) => { if (s.runningBySession[sid]) done() })
+  const timer = setTimeout(done, 30_000)
+  void useApp.getState().retry(sid)
+}
+
 export function ChatView({ leaf, params }: ViewProps) {
   const { t } = useI18n()
   const showWaitDetails = useChatWaitDetailsEnabled()
@@ -577,6 +589,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     const h: MessageHandlers = {
       onCopy: (text) => env().copy(text),
       onRegenerate: readOnly ? undefined : () => env().s.regenerate(id, env().activeId),
+      onRetry: readOnly ? undefined : () => retryOnce(env().activeId),
       onBranch: childSurface ? undefined : () => void env().s.branchFromMessage(id, env().activeId),
       // 顺便问(挂在这条回答上):开在右边那块面板,不进对话
       onAside: childSurface ? undefined : () => { const e = env(); if (e.activeId) openBtw({ sessionId: e.activeId, title: e.activeSession?.title, modelId: e.mvModelId || undefined, messageId: id }) },
@@ -900,6 +913,8 @@ export function ChatView({ leaf, params }: ViewProps) {
       {/* 输入区整簇(新对话的两条选择器 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
           正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
           新加与输入卡同簇的东西请一并放进来 —— 高度由 anchor 统一量成 --t2-composer-h。 */}
+      {/* 聊天里弹的 toast(成就 / 引导任务)挂到这里:输入卡上方 12px、同一条中线(lib/chatToastDock,走查续六 6.5) */}
+      <div className="t2-toast-dock" />
       <div className="composer-anchor" data-kb-rise ref={composerRef}>
         {/* Chat 固定使用创建时的当前默认 Agent，不露选择器；Work 的云会话仍可选 Agent，外部引擎仍 host-only。
             轨道方案 §4:门控去掉 `!groupChat`(06-25 那道「群聊态无单一主 agent」门的理由随选择条消失 ——
@@ -1094,6 +1109,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       {!params.childSurface && (!canvasOn || railOut) && <div className="t2-rail" data-off={canvasOn ? '' : undefined}>
         <TaskSummary
           sessionId={activeId}
+          onRetry={params.readOnly ? undefined : () => retryOnce(activeId)}
           desk={deskEnabled && activeId ? <DeskCard key="desk" sessionId={activeId} /> : null}
           teamStatus={activeId ? <>
             {teamDesk && <TeamStatus sessionId={activeId} />}

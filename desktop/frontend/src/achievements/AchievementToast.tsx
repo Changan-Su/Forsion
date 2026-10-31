@@ -7,11 +7,13 @@
  * 全程单时间轴(所有元素共用 4.6s,keyframes 百分比对齐),无弹簧无整卡弹出。
  * 出队双保险 = wrapper animationend + 5.2s timeout(最小化节流/reduced-motion 兜底),幂等。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { Trophy } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { medalTier, seriesPoints } from './definitions'
 import { findAchievement, useAchievements } from './store'
+import { chatToastDock } from '../lib/chatToastDock'
 import './achievements.css'
 
 /** `onOpen` 由挂载点(Root / MobileRoot)注入 —— achievements/ 是零反向依赖的核心模块,
@@ -25,7 +27,14 @@ export function AchievementToast({ onOpen }: { onOpen?: () => void } = {}): Reac
    *  这一下会落到下面的界面上(点开某个 Space 之类)。CSS 那边同步 animation-play-state: paused。 */
   const [held, setHeld] = useState(false)
 
-  useEffect(() => { setHeld(false) }, [id]) // 换了一条 toast 就解冻,别把上一条的悬停状态带过来
+  useEffect(() => { setHeld(false) }, [id])
+  const dock = useMemo(() => (id ? chatToastDock() : null), [id]) // 聊天列可见就挂在输入卡上方(6.5)
+  // 悬停冻住时聊天列被关掉:落点脱离文档,鼠标移出事件不会再来 —— 放开冻结,照常出队,别把后面的成就堵住(Codex 评审)
+  useEffect(() => {
+    if (!held || !dock) return
+    const tick = setInterval(() => { if (!dock.isConnected || !dock.offsetWidth) setHeld(false) }, 1000)
+    return () => clearInterval(tick)
+  }, [held, dock]) // 换了一条 toast 就解冻,别把上一条的悬停状态带过来
 
   useEffect(() => {
     if (!id || held) return
@@ -39,7 +48,7 @@ export function AchievementToast({ onOpen }: { onOpen?: () => void } = {}): Reac
   const tier = medalTier(hit.series, seriesPoints(hit.series, claimed))
   const Icon = hit.series.icon || Trophy // 系列共用徽章 = 系列图标 + 当前等级色
 
-  return (
+  const toast = (
     <div key={id} className="ach-toast" data-tier={tier ?? 'off'} role="status"
       onAnimationEnd={(e) => { if (e.animationName === 'ach-t-wrap') shiftToast(id) }}>
       {/* 点击整条打开成就面板。浮层本体是 pointer-events:none(不挡下面的输入区),只让这一层可点;
@@ -66,4 +75,5 @@ export function AchievementToast({ onOpen }: { onOpen?: () => void } = {}): Reac
       </div>
     </div>
   )
+  return dock ? createPortal(toast, dock) : toast
 }

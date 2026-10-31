@@ -1,7 +1,9 @@
 /** Amadeus 全局浮层(Root 级挂载):左栏折叠会卸载面板,浮层不能住在面板/侧栏里。
  *  复用 engine 命令面板的 cmd-* 外观;cmd-row/cmd-path 两个补充类在 amadeus-host.css。
  *  组件随 overlay 状态整体卸载 → 每次打开都是干净的输入态,无需重置。 */
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
+import { chatToastDock } from './lib/chatToastDock'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { ConfirmDialog } from '@amadeus/components/Dialogs'
@@ -59,6 +61,8 @@ export function AmadeusOverlays() {
   const overlay = useUiOverlay((s) => s.overlay)
   const templateCtx = useUiOverlay((s) => s.templateCtx)
   const toast = useUiStore((s) => s.toast) // 插件 notify / 字数统计等的全局吐司(自动 2.6s 消失)
+  // 聊天列可见时挂到输入卡上方(走查续六 6.5,见 lib/chatToastDock);每条新吐司查一次落点
+  const toastDock = useMemo(() => (toast ? chatToastDock() : null), [toast])
   // 斜杠菜单「模板」经 CustomEvent 解耦触发(vendored MarkdownBlock 不 import 桌面 store)。
   useEffect(() => {
     const onPick = (e: Event): void => {
@@ -195,7 +199,7 @@ export function AmadeusOverlays() {
       <NewDrawingHost />
       <CloudSyncDialogHost />
       <AutomationBuilderHost />
-      {toast && <BottomToast key={toast} text={toast} />}
+      {toast && (toastDock ? createPortal(<BottomToast key={toast} text={toast} />, toastDock) : <BottomToast key={toast} text={toast} />)}
     </>
   )
 }
