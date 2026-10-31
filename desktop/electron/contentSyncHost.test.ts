@@ -23,3 +23,8 @@ it('uses the real row merger for two independently edited calendars',()=>{
  const result=mergeSyncContent('human/CALENDAR.db',db(['base','E']),db(['base']),db(['base','F']))!
  expect(result.conflict).toBe(false);expect(JSON.parse(result.content).rows.map((r:any)=>r.id).sort()).toEqual(['E','F','base'])
 })
+it('new sync merges widget records by rows and never guesses a matching column',()=>{
+ const db=(id:string,field:string)=>JSON.stringify({version:2,name:'Ledger',columns:[{id:field,name:field,type:'text'}],rows:[{id,cells:{[field]:id}}]})
+ const result=mergeSyncContent('agents/xyra/WidgetData/w_1/data.db',db('E','place'),null,db('F','mood'))!
+ expect(result.conflict).toBe(false);expect(JSON.parse(result.content).rows.map((r:any)=>r.cells)).toEqual([{mood:'F'},{place:'E'}])
+})

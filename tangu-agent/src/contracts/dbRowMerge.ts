@@ -100,14 +100,15 @@ export function isUntouchedCalendarSeed(text: string | null): boolean {
   return !!X && (untouchedSeed(X) || (seedHeader(X) && (X.rows as Obj[]).length === 0));
 }
 
-export function mergeDbFile(ours: string, base: string | null, theirs: string): DbMergeResult | null {
+/** fieldColumns:列 id 就是字段名(小组件的记录),两边不一样就是两列,不做日历那种对列 —— 猜错了会把一个字段的值改记到另一个字段上。 */
+export function mergeDbFile(ours: string, base: string | null, theirs: string, opts: { fieldColumns?: boolean } = {}): DbMergeResult | null {
   const T = parse(theirs), O0 = parse(ours);
   if (!O0 || !T) return null;
   let B = parse(base);
   if (B && (replaced(O0, B) || replaced(T, B))) B = null;
   if (!B && untouchedSeed(O0)) return { content: theirs, conflict: false };
   if (!B && untouchedSeed(T)) return { content: ours, conflict: false };
-  const map = columnMap(O0, T, !B);
+  const map = opts.fieldColumns ? new Map<string, string>() : columnMap(O0, T, !B);
   const O = parse(remap(ours, map));
   if (B) B = parse(remap(base!, map));
   if (!O) return null;
