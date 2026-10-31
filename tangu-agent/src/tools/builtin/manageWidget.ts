@@ -63,7 +63,9 @@ Keep a card as a widget when the user asks for a widget / 小组件, asks to kee
 
 Create: add \`widget: { name }\` to \`intelligent_ui_html\` or \`intelligent_ui\`. The result gives the id and rev.
 
-Change: never create a second widget to change one. Call the same tool with \`widget: { id, expectedRev }\` and \`summary\`. For HTML send \`edits\` rather than the whole page; for \`intelligent_ui\` send the whole document. Changing a widget keeps its records. If the name is taken, the result gives the existing id: change that one unless the user wants a separate widget. If you lost the id, \`manage_widget\` lists them.`;
+Change: never create a second widget to change one. Call the same tool with \`widget: { id, expectedRev }\` and \`summary\`. For HTML send \`edits\` rather than the whole page; for \`intelligent_ui\` send the whole document. Changing a widget keeps its records. If the name is taken, the result gives the existing id: change that one unless the user wants a separate widget. If you lost the id, \`manage_widget\` lists them.
+
+To record an entry for the user (记一笔), call \`manage_widget\` with \`set_record\`; records stay when the card changes.`;
 
 /** 存 / 改原件。返回给模型的回执;失败以 Error 开头,什么都没落盘。content 未给 = 只发 edits。 */
 export async function saveCardWidget(args: Record<string, any>, ctx: ToolContext, card: { entry: WidgetEntry; content?: string; title?: string; edits?: WidgetEdit[] }): Promise<string> {

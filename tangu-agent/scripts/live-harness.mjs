@@ -195,7 +195,7 @@
  */
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdirSync, writeFileSync, readFileSync, existsSync, symlinkSync, cpSync, appendFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync, cpSync, appendFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
 import { randomUUID, createHash } from 'node:crypto';
@@ -319,6 +319,7 @@ OPT_IN.add('iuiparity'); KEYS.push('iuiparity'); // --only iuiparity:和 ChatGPT
 OPT_IN.add('visualize'); // --only visualize: real model -> sketch controls/state; HTML can feed desktop check:visualize.
 OPT_IN.add('visualask'); // --only visualask:卡内按钮回头改答案(forsionSketch.ask);改 sketch.ts 的 INTERACTION / SKETCH_SECTION 那段后跑
 OPT_IN.add('visualsdial'); // --only visualsdial:可视化档位 less / off(ui_settings 快照):off 工具与段都不在、less 隐式信号不触发;两个 run
+OPT_IN.add('widget'); KEYS.push('widget'); // --only widget:小组件存原件、记一笔、改原件(带版本号,记录留住)、别的设备先改过时重试、该出不该出、项目里落项目级(10-31);改 services/widgetStore.ts / tools/builtin/manageWidget.ts / 卡片工具的 widget 参数后跑
 OPT_IN.add('visualplan'); // --only visualplan:统一部件拼一张「可用的工具卡」(滑块 + fs-checklist + copy);改 sketch.ts 的部件表 / SKILL 后跑
 KEYS.push('visualask', 'visualsdial', 'visualplan');
 OPT_IN.add('emoji'); // Three real-model rounds; run explicitly when session icons change.
@@ -2772,6 +2773,74 @@ try {
     const success = ev.toolResults.some((r) => r.name === 'sketch' && !r.isError);
     const contract = /type=["']range["']/.test(html) && /forsion(?:IntelligentUi|Sketch)\b/.test(html) && html.includes('setState') && /<svg|<canvas/.test(html);
     return { ok: !ev.error && ev.done && success && contract, detail: ev.error || `cards=${cards.length};interactive/state=${contract}`, output: ev.content, toolCalls: ev.toolCalls, ttftMs: ttft(ev), tokens: tokensOf(ev) };
+  });
+
+  // widget(10-31,小组件第 2 步):第 3 步之前没有客户端上报 widget.v1,这里替它上报。真机说「小组件」曾先去搜商店、做插件,所以直接用这个词。
+  await scenario('widget', 'widget 小组件存原件、改原件、记录留住', async () => {
+    const opts = { clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2', 'widget.v1'], ui: { visuals: { value: 'auto', allowed: ['auto', 'less', 'off'] } } };
+    const ask = (sid, text, cfg = {}) => run(sid, text, 300_000, cfg, 'desktop/2.14.0', undefined, undefined, undefined, opts);
+    const isCard = (c) => ['intelligent_ui_html', 'intelligent_ui', 'sketch'].includes(c.name);
+    const cards = (ev) => ev.toolArgs.filter(isCard).map((c) => { try { return JSON.parse(c.arguments || '{}'); } catch { return {}; } });
+    const widgetArgs = (ev) => cards(ev).map((c) => (typeof c.widget === 'string' ? JSON.parse(c.widget) : c.widget)).filter(Boolean);
+    const agentWidgets = () => readdirSync(join(home, 'agents')).flatMap((slug) => {
+      const defs = join(home, 'agents', slug, 'Library', 'Widgets');
+      return existsSync(defs) ? readdirSync(defs).filter((n) => !n.startsWith('.')).map((name) => ({ slug, name, dir: join(defs, name), manifest: JSON.parse(readFileSync(join(defs, name, 'manifest.json'), 'utf8')) })) : [];
+    });
+    const dataFile = (w) => join(home, 'agents', w.slug, 'WidgetData', w.manifest.id, 'data.db');
+    const results = (ev) => ev.toolResults.filter((r) => isCard(r)).map((r) => r.result);
+    const sid = `live-widget-${Date.now()}`;
+    const checks = {};
+
+    const t1 = await ask(sid, '帮我做个小组件，记这次东京旅行的账，能看总数。');
+    const [w0] = agentWidgets();
+    checks.created = !t1.error && !!widgetArgs(t1).some((w) => w.name) && !!w0 && results(t1).some((r) => /Saved widget/.test(r));
+    checks.noDetour = !t1.toolCalls.some((n) => /marketplace|plugin/.test(n)); // 没去搜商店、没去做插件
+
+    const t2 = await ask(sid, '记一笔：午饭 38 元');
+    const before = w0 && existsSync(dataFile(w0)) ? readFileSync(dataFile(w0), 'utf8') : '';
+    checks.recorded = !t2.error && (before ? JSON.parse(before).rows.length : 0) === 1;
+
+    const t3 = await ask(sid, '把标题改成「东京账本」，再加一行显示换算成人民币的总数');
+    const up = widgetArgs(t3).find((w) => w.id) ?? {};
+    const w1 = agentWidgets().find((w) => w.manifest.id === w0?.manifest.id);
+    checks.changed = !t3.error && up.id === w0?.manifest.id && up.expectedRev === 1 && w1?.manifest.rev === 2 && agentWidgets().length === 1;
+    checks.usedEdits = cards(t3).some((c) => Array.isArray(c.edits) && c.edits.length > 0);
+    checks.recordsKept = !!before && readFileSync(dataFile(w0), 'utf8') === before;
+
+    // 别的设备先改过一版:模型手里的 rev 过期了,要读回最新版重做,不能把那一版盖掉
+    const OTHER = '<!-- changed on another device -->';
+    if (w1) {
+      const file = join(w1.dir, w1.manifest.entry);
+      writeFileSync(file, `${readFileSync(file, 'utf8')}\n${OTHER}`);
+      writeFileSync(join(w1.dir, 'manifest.json'), JSON.stringify({ ...w1.manifest, rev: 3 }, null, 2));
+    }
+    const t4 = await ask(sid, '把总数的字号调大一点');
+    const w2 = agentWidgets().find((w) => w.manifest.id === w0?.manifest.id);
+    const staleSeen = results(t4).some((r) => /is at rev 3, not 2/.test(r));
+    checks.staleRetried = !t4.error && staleSeen && w2?.manifest.rev === 4 && readFileSync(join(w2.dir, w2.manifest.entry), 'utf8').includes(OTHER);
+    checks.recordsKeptAfterRetry = !!before && readFileSync(dataFile(w0), 'utf8') === before;
+
+    const plainSid = `live-widget-plain-${Date.now()}`;
+    const t5 = await ask(plainSid, '画张图比较东京、大阪、京都的人口');
+    checks.plainCardIsNotWidget = !t5.error && cards(t5).length > 0 && !widgetArgs(t5).length && agentWidgets().length === 1;
+    const t6 = await ask(plainSid, '这张图不错，留着以后还要用');
+    checks.keptOnRequest = !t6.error && agentWidgets().length === 2;
+
+    const proj = mkdtempSync(join(tmpdir(), 'live-widget-project-'));
+    const projSid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'widget', model_id: MODEL, project_path: proj, agent_config: { execMode: 'host', cwd: proj } }) })).session.id;
+    const t7 = await ask(projSid, '做个小组件，记这个项目每周发版的次数', { cwd: proj });
+    const defs = join(proj, '.tangu', 'widgets');
+    const projName = existsSync(defs) ? readdirSync(defs).find((n) => !n.startsWith('.')) : undefined;
+    checks.projectLevel = !t7.error && !!projName && agentWidgets().length === 2;
+    const t8 = await ask(projSid, '记一笔：本周发了 2 次');
+    const projId = projName ? JSON.parse(readFileSync(join(defs, projName, 'manifest.json'), 'utf8')).id : '';
+    checks.projectRecordsWithPerson = !t8.error && !!projId && existsSync(join(home, 'human', 'WidgetData', projId, 'data.db')) && !existsSync(join(defs, projName, 'data.db'));
+    rmSync(proj, { recursive: true, force: true });
+
+    const turns = [t1, t2, t3, t4, t5, t6, t7, t8];
+    writeFileSync(join(OUT, 'widget-evidence.json'), JSON.stringify({ checks, turns: turns.map((t) => ({ tools: t.toolCalls, cards: cards(t).map(({ html, document, ...rest }) => ({ ...rest, htmlChars: html?.length, documentChars: document?.length })), results: t.toolResults.map((r) => ({ name: r.name, isError: r.isError, result: String(r.result).slice(0, 300) })), reply: t.content })) }, null, 2));
+    const { usedEdits, ...must } = checks;
+    return { ok: Object.values(must).every(Boolean), detail: JSON.stringify(checks), output: t4.content, toolCalls: turns.flatMap((t) => t.toolCalls), ttftMs: ttft(t1), tokens: turns.reduce((n, t) => n + (tokensOf(t) || 0), 0) };
   });
 
   // visualask(10-09,对标 ChatGPT Intelligent UI「控件回头改答案」):卡里的按钮经 window.forsionSketch.ask(text) 把一句话当用户的
