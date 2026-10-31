@@ -46,6 +46,11 @@ export interface SpaceSpec {
    *  `bottomSpan` (optional) = which columns the bottom panel spans (SpaceDefinition.bottomSpan; default 'right'). */
   layout: { main: SpacePanelSpec[]; left: SpacePanelSpec[]; right: SpacePanelSpec[]; bottom?: SpacePanelSpec[]; bottomSpan?: (typeof BOTTOM_SPANS)[number] }
   requires?: { views?: string[]; plugin?: string | null }
+  /** `after`: a Space id. A newly added icon sits right after that Space; a position the user already chose stays. */
+  ribbon?: { after: string }
+  /** `listFirst`: on a phone the left panel is the first level and picking an item opens the main view. Only for a
+   *  left panel that really is such a list; by default the main view is the first level and the left panel a drawer. */
+  mobile?: { listFirst: boolean }
 }
 
 export interface ParseOpts {
@@ -217,6 +222,19 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
     // Optional adapter availability is checked dynamically; older/mobile hosts can still load the full Space.
   }
 
+  let ribbon: SpaceSpec['ribbon']
+  if (d.ribbon !== undefined) {
+    const after = (d.ribbon as { after?: unknown } | null)?.after
+    if (typeof after !== 'string' || !SLUG_RE.test(after)) return { ok: false, error: 'ribbon.after 必须是 Space id' }
+    ribbon = { after }
+  }
+  let mobile: SpaceSpec['mobile']
+  if (d.mobile !== undefined) {
+    const listFirst = (d.mobile as { listFirst?: unknown } | null)?.listFirst
+    if (typeof listFirst !== 'boolean') return { ok: false, error: 'mobile.listFirst 必须是布尔值' }
+    mobile = { listFirst }
+  }
+
   const req = d.requires as { views?: unknown } | undefined
   const reqViews = Array.isArray(req?.views) ? (req!.views as unknown[]).filter((v): v is string => typeof v === 'string') : []
   const allTypes = [main, left, right, bottom].flatMap((side) => side as SpacePanelSpec[]).map((p) => p.type).concat(reqViews)
@@ -239,6 +257,8 @@ export function parseSpaceJson(raw: string, opts: ParseOpts): ParseResult {
         ...(lay.bottomSpan ? { bottomSpan: lay.bottomSpan as (typeof BOTTOM_SPANS)[number] } : {}),
       },
       requires: reqViews.length ? { views: reqViews } : undefined,
+      ...(ribbon ? { ribbon } : {}),
+      ...(mobile ? { mobile } : {}),
     },
   }
 }

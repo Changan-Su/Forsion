@@ -160,10 +160,10 @@ function specToDefinition(spec: SpaceSpec, iconUrl?: string): SpaceDefinition {
     mini: spec.mini ? { ...spec.mini, name: spec.mini.name ? specName({ ...spec, name: spec.mini.name }) : undefined } : undefined,
     name: specName(spec),
     icon: iconUrl ? imageIcon(iconUrl, glyph) : glyph,
-    // 手机两级导航(引擎 listFirstNow):配方 Space 一律**主区即第一层**、左栏是抽屉。配方是照桌面的三栏写的,
+    // 手机两级导航(引擎 listFirstNow):配方 Space 缺省**主区即第一层**、左栏是抽屉。配方是照桌面的三栏写的,
     // 它的左栏未必是「点一项进主区」的列表(常常只是文件树 / 筛选栏),当成第一层就可能根本进不了主区。
-    // ponytail: 没有按配方开关 —— 哪个插件的左栏确实是这种列表、想在手机上先落它,再给 space.json 加一个键。
-    listFirst: false,
+    // 左栏确实是这种列表的配方写 mobile.listFirst。
+    listFirst: spec.mobile?.listFirst === true,
     sidebarDefaults: sides,
     // 配方条目上的 pinned:true → 固定 View(引擎按 Space 声明现判,不进布局存档)
     pinned: { main: toPanels(spec.layout.main.filter((p) => p.pinned)), left: toPanels(spec.layout.left.filter((p) => p.pinned)), right: toPanels(spec.layout.right.filter((p) => p.pinned)) },
@@ -203,6 +203,8 @@ function specToDefinition(spec: SpaceSpec, iconUrl?: string): SpaceDefinition {
   }
 }
 
+const ribbonPlacement = (spec: SpaceSpec): { after?: string } => (spec.ribbon ? { after: `space:${spec.ribbon.after}` } : {})
+
 function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id, iconUrl?: string): void {
   migrateRecipeLayout(spec)
   const def = specToDefinition(spec, iconUrl)
@@ -211,6 +213,7 @@ function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id, iconUrl?: 
   addRibbonIcon({
     id: `space:${spec.id}`,
     side: 'top',
+    ...ribbonPlacement(spec),
     component: ({ expanded }) => <SpaceButton space={def} expanded={expanded} />,
     // 右键项(Ribbon 把「在新窗口中打开」排在它前面)。原先是右键直接弹删除确认,现在先过一层菜单。
     menu: () => [{
@@ -231,6 +234,7 @@ function installPluginSpace(spec: SpaceSpec, pluginId: string, iconUrl?: string)
   addRibbonIcon({
     id: `space:${spec.id}`,
     side: 'top',
+    ...ribbonPlacement(spec),
     component: ({ expanded }) => <SpaceButton space={def} expanded={expanded} />,
   })
 }

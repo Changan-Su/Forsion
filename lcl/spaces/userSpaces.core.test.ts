@@ -17,6 +17,26 @@ const VALID = {
   layout: { main: [{ type: 'chat' }], left: [{ type: 'workspace', params: { mode: 'files' } }], right: [{ type: 'outline' }] },
 }
 
+describe('ribbon 与 mobile 键', () => {
+  const parse = (extra: Record<string, unknown>) => parseSpaceJson(JSON.stringify({ ...VALID, ...extra }), opts())
+
+  it('写了就带出来', () => {
+    const r = parse({ ribbon: { after: 'tangu' }, mobile: { listFirst: true } })
+    expect(r.ok && r.spec.ribbon).toEqual({ after: 'tangu' })
+    expect(r.ok && r.spec.mobile).toEqual({ listFirst: true })
+  })
+
+  it('没写就没有这两个键(旧配方解析结果不变)', () => {
+    const r = parse({})
+    expect(r.ok && 'ribbon' in r.spec).toBe(false)
+    expect(r.ok && 'mobile' in r.spec).toBe(false)
+  })
+
+  it.each([['ribbon 不是对象', { ribbon: 'tangu' }], ['ribbon 为空', { ribbon: null }], ['after 不是 id', { ribbon: { after: 'Not Valid' } }], ['after 缺失', { ribbon: {} }], ['listFirst 不是布尔', { mobile: { listFirst: 'yes' } }], ['mobile 为空', { mobile: null }]])('%s:配方写坏了,报错', (_name, extra) => {
+    expect(parse(extra).ok).toBe(false)
+  })
+})
+
 describe('parseSpaceJson', () => {
   it('合法配方解析成功,params 保留', () => {
     const r = parseSpaceJson(JSON.stringify(VALID), opts())
