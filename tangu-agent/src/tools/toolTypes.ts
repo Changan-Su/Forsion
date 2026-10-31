@@ -83,6 +83,8 @@ export interface ToolContext {
   muse?: boolean;
   /** 本会话属于一个本机项目(agentLoop 按会话存档的 project_path 定;可信,模型给不了)。remember 据此露出「项目级」。 */
   projectScoped?: boolean;
+  /** 同上那个项目的 canonical 目录(git_* 工具只在这里动手,不认 cwd:运行目录可被别处改,而 Git 页 / 卡片 / 审批卡读的是项目)。 */
+  projectPath?: string;
   /** 无人值守 run 的异步审批档(仅引擎内部按 run 来源设定;delegate 子代理从父 ctx 继承,否则子代理越界会挂在同步审批上)。 */
   approvalDeferral?: 'queue' | 'agent';
 
@@ -98,6 +100,8 @@ export interface ToolContext {
   /** 本会话是否连接着聊天通道(微信/TG/QQ 活跃绑定):channel_send_* 仅此时暴露。loop 每 run 预查一次。
    *  ⚠️ 会话级旗标,不是 run 的来源:同一会话里用户在桌面敲的 run 也为真。判「这条 run 从哪来」用 runOrigin。 */
   channelSession?: boolean;
+  /** 这一轮查不出会话连没连通道:隐私边界按连着算(不写画像)。 */
+  channelUnknown?: boolean;
   /** P1 · K2:这条 run 自己的来源(= remoteActivity.runCategory(input),只看引擎自写字段;loop 每 run 算一次,子代理随 parentCtx 继承)。
    *  后台进程据此打来源标签;中途被远端染色另由 effectiveRemote(ctx) 现判。 */
   runOrigin?: 'remote' | 'channel' | 'unattended' | 'local';

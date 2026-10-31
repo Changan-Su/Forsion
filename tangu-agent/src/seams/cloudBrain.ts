@@ -95,6 +95,10 @@ export interface StreamOpts {
   signal?: AbortSignal;
   /** 模型 provider:anthropic/claude 时 server 侧走原生 /v1/messages;httpBrain 路径由 brain-api 自行解析,可省略。 */
   provider?: string;
+  /** 发给模型前脱敏(llm/outboundMask.ts):记录归到哪个会话;不传 = 后台调用,只记不报。 */
+  maskScope?: string;
+  /** 这一轮发出前遮住了哪些值(不含原值)。action = warn 时是「找到了、原样发出」。 */
+  onMasked?: (hits: Array<{ kind: string; ph: string; head: string; len: number }>, action: 'mask' | 'warn' | 'block') => void;
 }
 
 export interface LlmBrain {
@@ -387,6 +391,13 @@ export class AmadeusTooLargeError extends Error {
     this.name = 'AmadeusTooLargeError';
   }
 }
+/** 默认日历写冲突(409):版本已前进,响应不带内容,调用方重读再重放。 */
+export class HumanCalendarConflictError extends Error {
+  constructor() {
+    super('human calendar write conflict');
+    this.name = 'HumanCalendarConflictError';
+  }
+}
 
 export interface AmadeusBrain {
   /** 全 vault 文件清单(GET tree 的 pages+files 合并;path=vault 相对路径)。 */
@@ -395,6 +406,11 @@ export interface AmadeusBrain {
   read(path: string): Promise<{ content: string; seq: number }>;
   /** 写文本文件;baseSeq=乐观锁(409 → AmadeusConflictError 带最新 seq+content),force=无条件覆盖。 */
   write(path: string, content: string, opts?: { baseSeq?: number; force?: boolean }): Promise<{ seq: number }>;
+  /** 读默认日历 human/CALENDAR.db(对端 /api/agent/human/CALENDAR.db)。data=null = 还没有这个文件;legacy = 它的旧位置
+   *  (`cloud://<vault>/Calendar.db`)。返回 null = 用不了(旧云端 / 文件坏了);其余失败抛错,不当成没有。 */
+  readHumanCalendar?(): Promise<{ data: unknown; version: string | null; legacy: string | null } | null>;
+  /** 比对交换写;version=null = 新建。409 → HumanCalendarConflictError。 */
+  writeHumanCalendar?(data: unknown, version: string | null): Promise<void>;
 }
 
 /** cloud.request 的一次请求。path 以 /api/ 开头(可带查询串);body 按 JSON 发。 */
@@ -499,6 +515,8 @@ export interface InboxBrain {
     claim_requirements?: string | null;
     /** 线程判别 JSON 原文(服务端 inboxNotify.ts:{kind:'feedback',ticketId,event});普通广播为空。原样落进 inbox_messages.thread。 */
     thread?: string | null;
+    /** 广播类型:update / store / maintenance / promo / other;老服务端不给(入库时按 other)。 */
+    kind?: string | null;
   }>>;
   /** 领取广播附件(对端 POST /api/brain/inbox/broadcasts/:id/claim;发放全在服务端)。
    *  client=领取端自报的 `desktop/2.10.1`(服务端按它判最低版本)。

@@ -2,12 +2,12 @@ import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
 import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Upload, UserRound, Users, X } from 'lucide-react'
+import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Trash2, Upload, UserRound, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitHosting, type GitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
+import { createProjectSkill, deleteProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitHosting, type GitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
 import { addToCreations } from './chat2/CreationCards'
@@ -23,16 +23,18 @@ import { projectExecutors, shortenPath, type ProjectExecutor } from './projectPr
 import { formatRelative } from '../format/time'
 import { ProjectGitRemotes, siteName } from './ProjectGitRemotes'
 import { askAddRemote } from '../components/GitAddRemoteDialog'
-import './projectProfileMessages'
+import { GIT_ERROR_CODES } from './projectProfileMessages'
 import './teamProfile.css'
 import './projectProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { ProjectIcon } from '../components/ProjectIcon'
+import { UninstallDialog, notifyUninstalled } from '../components/UninstallDialog'
 import { IconPicker } from '@amadeus/chrome/pageChrome'
 import { thinkingLabel } from '../components/thinkingLabel'
 import { APPROVAL_MODE_ORDER, MODE_KEY } from '../approvalReason'
 import { freshJump, revealRecords, type RecordJump } from '../services/recordJump'
 import { homeTarget } from '../services/engine/targets'
+import { agentName, agentNames } from '../agentName'
 
 type Tab = 'agents' | 'settings' | 'git' | 'human'
 const TABS: Array<{ id: Tab; icon: typeof Users }> = [{ id: 'agents', icon: Users }, { id: 'human', icon: FileText }, { id: 'settings', icon: Settings2 }, { id: 'git', icon: GitBranch }]
@@ -47,6 +49,8 @@ type Props = {
   humanJump?: HumanJump
   /** 对话里「复盘时记进项目记忆」之类的留痕点「查看」:落到「设置 › 项目记忆」里那几条。 */
   recordJump?: RecordJump
+  /** 对话里的 Git 卡点「在项目详情中打开」:落到「Git」页(值是一次性令牌,变了就再落一次)。 */
+  gitJump?: number
   currentSessionId?: string | null
 }
 
@@ -83,15 +87,6 @@ export function useProjectSubject(path: string | null): { workspace: ProjectWork
   }, [signature])
 }
 
-/** 引擎 git 动作的机器码(services/gitActions.ts);有词条的按当前语言说,没有的回落引擎原文。 */
-const GIT_ERROR_CODES = new Set([
-  'git_unavailable', 'git_timeout', 'git_failed', 'not_repo', 'already_repo', 'nothing_to_commit', 'empty_message', 'message_too_long',
-  'embedded_repo', 'too_many_files', 'large_files', 'no_identity', 'invalid_branch', 'detached', 'no_remote', 'ambiguous_remote', 'no_model', 'quota_exceeded',
-  'shared_workspace', 'nested_repo', 'untrusted_config', 'credential_files', 'git_too_old', 'changes_changed', 'hook_changed_commit',
-  'no_upstream', 'diverged', 'dirty_worktree', 'untrusted_transport', 'forsion_git_needs_setup', 'forsion_git_rate_limited', 'forsion_git_unavailable',
-  'has_remote', 'invalid_repo_name', 'no_commits', 'github_not_linked', 'github_relink_required', 'github_unavailable',
-  'github_repo_exists', 'github_api_failed', 'github_unreachable', 'invalid_remote_url', 'remote_unreachable', 'credential_denied',
-])
 /** link = 这条失败要用户去的网页(Forsion Git 还没开通 → 站点地址);只收 https,交给统一的外链出口。
  *  linkGithub = 这条失败的出路是去账户中心绑定 / 重新绑定 GitHub 账号。 */
 type GitErr = { message: string; info?: string; retry?: () => void; link?: string; linkGithub?: boolean }
@@ -105,7 +100,7 @@ const githubRepoPage = (remote?: string | null): string | null => {
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
  *  Agents(谁在这里工作过)/ 配置(指令文件 · 项目技能 · 计划 · 本机默认项)/ Git(现场 + 用户点的建仓 / 提交 / 建分支 / 拉取 / 推送)。数据全部来自引擎的 project-context,
  *  它读到什么就显示什么 —— 这个面板存在的意义就是回答「Tangu 到底看没看见这个项目的约定」。 */
-export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump, recordJump }: Props) {
+export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump, recordJump, gitJump }: Props) {
   const { t, locale } = useI18n()
   const s = useApp(useShallow((a) => ({
     cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars, teams: a.teams, teamAvatars: a.teamAvatars, engines: a.engines, models: a.modelsResp?.models,
@@ -118,9 +113,10 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [ctx, setCtx] = useState<ProjectContext | null>(null)
   const [loadError, setLoadError] = useState('')
   const [reloadAt, setReloadAt] = useState(0)
-  const [tab, setTab] = useState<Tab>(humanJump ? 'human' : freshJump(recordJump) ? 'settings' : 'agents')
+  const [tab, setTab] = useState<Tab>(gitJump ? 'git' : humanJump ? 'human' : freshJump(recordJump) ? 'settings' : 'agents')
   const navRef = useSectionNavSlide(tab)
   useEffect(() => { if (humanJump?.at) setTab('human') }, [humanJump?.at])
+  useEffect(() => { if (gitJump) setTab('git') }, [gitJump])
   // 落点要等「设置」页连同项目记忆画出来:引擎回来之前 ctx 是 null。已经开着这个项目时手里的 ctx 可能是旧的(后台刚记下的那条还没读到):
   // 令牌一变先重读,读回来的那份才拿来落。点开着的执行者详情会盖住主区,一并收起(同「返回」)。
   const rootRef = useRef<HTMLElement>(null)
@@ -148,6 +144,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [settingsDraft, setSettingsDraft] = useState<ProjectSettings>({})
   const [settingsDirty, setSettingsDirty] = useState(false)
   const [skillForm, setSkillForm] = useState<{ slug: string; name: string; description: string; content: string } | null>(null)
+  const [deletingSkill, setDeletingSkill] = useState<ProjectContext['skills'][number] | null>(null)
   const [iconPick, setIconPick] = useState<{ x: number; y: number } | null>(null)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
@@ -602,24 +599,24 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     ? [...new Set(config.groupAgents || s.teams.find(team => team.slug === config.teamSlug)?.members.map(m => m.slug) || [])]
     : [config.agentSlug || s.defaultSlug]
   const teamOf = (slug: string) => s.teams.find((team) => team.slug === slug)
-  const executorLabel = (ex: ProjectExecutor): string => ex.kind === 'agent' ? agentOf(ex.id)?.name || ex.id
+  const executorLabel = (ex: ProjectExecutor): string => ex.kind === 'agent' ? agentName(agentOf(ex.id)) || ex.id
     : ex.kind === 'team' ? teamOf(ex.id)?.name || ex.id
     : ex.kind === 'party' ? ex.sessions[0]?.title || t('projectProfile.party')
     : s.engines.find((e) => e.id === ex.id)?.name || ex.id
   const executorPortrait = (ex: ProjectExecutor): ReactNode => {
-    if (ex.kind === 'agent') return <AgentAvatar name={agentOf(ex.id)?.name || ex.id} url={s.avatars[ex.id]} fill />
+    if (ex.kind === 'agent') return <AgentAvatar name={agentName(agentOf(ex.id)) || ex.id} url={s.avatars[ex.id]} fill />
     if (ex.kind === 'engine') return <TerminalSquare size={26} strokeWidth={1.2} />
     const team = ex.kind === 'team' ? teamOf(ex.id) : undefined
     if (team && s.teamAvatars[team.slug] && isTeamImageAvatar(team.avatar)) return <img src={s.teamAvatars[team.slug]} alt="" />
     if (team?.avatar && !isTeamImageAvatar(team.avatar)) return <span aria-hidden="true">{team.avatar}</span>
     const cfg = s.configBySession[ex.sessions[0]?.id] || ex.sessions[0]?.agent_config
     const slugs = team ? team.members.map((m) => m.slug) : cfg?.groupAgents || []
-    return slugs.length ? <AvatarStack size={38} items={slugs.map((slug) => ({ slug, name: agentOf(slug)?.name || slug, avatarUrl: s.avatars[slug] }))} /> : <Users size={26} strokeWidth={1.2} />
+    return slugs.length ? <AvatarStack size={38} items={slugs.map((slug) => ({ slug, name: agentName(agentOf(slug)) || slug, avatarUrl: s.avatars[slug] }))} /> : <Users size={26} strokeWidth={1.2} />
   }
   const isDefault = (ex: ProjectExecutor) => (ex.kind === 'agent' && ctx?.settings?.defaultAgent === ex.id) || (ex.kind === 'team' && ctx?.settings?.defaultTeam === ex.id)
   const q = query.trim().toLowerCase()
   const listed = new Set(executors.map((ex) => ex.key))
-  const agentCandidates = s.agents.filter((a) => a.createdBy !== 'system' && !listed.has(`agent:${a.slug}`) && `${a.name} ${a.description} ${a.slug}`.toLowerCase().includes(q))
+  const agentCandidates = s.agents.filter((a) => a.createdBy !== 'system' && !listed.has(`agent:${a.slug}`) && `${agentNames(a).join(' ')} ${a.description} ${a.slug}`.toLowerCase().includes(q))
   const teamCandidates = s.teams.filter((team) => !listed.has(`team:${team.slug}`) && team.members.length >= 2 && `${team.name} ${team.description} ${team.slug}`.toLowerCase().includes(q))
   const git = ctx?.git
   const changeCount = git?.repo ? git.changesTotal ?? 0 : 0
@@ -683,8 +680,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
         {loadError && <p className="agent-profile-error" role="alert" style={{ paddingTop: 16 }}>{loadError} <button className="profile-text-action" onClick={() => setReloadAt((n) => n + 1)}>{t('projectProfile.retry')}</button></p>}
         {tab === 'human' && <>
           <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'project', sessionId: session.id }} name={workspace.name} running={running} jump={humanJump} onRewrite={rewriteHuman('projectPrompt')} />
-          {collaborationSlugs.map(slug => <details className="human-inherited" key={slug}><summary>{t('human.inherited', { name: agentOf(slug)?.name || slug })}</summary>
-            <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug }} name={agentOf(slug)?.name || slug} running={running} onRewrite={slug === carrierSlug ? rewriteHuman('agentPrompt') : undefined} />
+          {collaborationSlugs.map(slug => <details className="human-inherited" key={slug}><summary>{t('human.inherited', { name: agentName(agentOf(slug)) || slug })}</summary>
+            <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug }} name={agentName(agentOf(slug)) || slug} running={running} onRewrite={slug === carrierSlug ? rewriteHuman('agentPrompt') : undefined} />
           </details>)}
         </>}
         {tab === 'agents' && <>
@@ -692,8 +689,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           {picker && <div className="team-candidate-picker"><div className="team-candidate-heading"><label className="agents-search"><Search size={13} /><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t('agentProfile.search')} placeholder={t('agentProfile.search')} /></label><button aria-label={t('projectProfile.closePicker')} onClick={() => setPicker(false)}><X size={14} /></button></div>
             <p className="team-profile-caption">{t('projectProfile.addHint')}</p>
             <div className="team-candidates project-candidates">
-              {agentCandidates.map((a) => <button key={a.slug} onClick={() => startWith({ kind: 'agent', slug: a.slug })}><AgentAvatar name={a.name || a.slug} url={s.avatars[a.slug]} size={16} className="agent-avatar-mini" /><span><strong>{a.name}</strong><small>{a.description}</small></span><MessageSquarePlus size={14} /></button>)}
-              {teamCandidates.map((team) => <button key={team.slug} onClick={() => startWith({ kind: 'team', team })}><Users size={16} /><span><strong>{team.name}</strong><small>{team.description || team.members.map((m) => agentOf(m.slug)?.name || m.slug).join(' · ')}</small></span><MessageSquarePlus size={14} /></button>)}
+              {agentCandidates.map((a) => <button key={a.slug} onClick={() => startWith({ kind: 'agent', slug: a.slug })}><AgentAvatar name={agentName(a)} url={s.avatars[a.slug]} size={16} className="agent-avatar-mini" /><span><strong>{agentName(a)}</strong><small>{a.description}</small></span><MessageSquarePlus size={14} /></button>)}
+              {teamCandidates.map((team) => <button key={team.slug} onClick={() => startWith({ kind: 'team', team })}><Users size={16} /><span><strong>{team.name}</strong><small>{team.description || team.members.map((m) => agentName(agentOf(m.slug)) || m.slug).join(' · ')}</small></span><MessageSquarePlus size={14} /></button>)}
               {!agentCandidates.length && !teamCandidates.length && <p className="agent-profile-muted">{t('projectProfile.noCandidates')}</p>}
             </div></div>}
           <div className="team-lineup">{executors.map((ex) => {
@@ -729,9 +726,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               </>}
           </section>
           <section className="project-card" data-project-skills>
+            {deletingSkill && <UninstallDialog title={t('uninstall.skill.title', { name: deletingSkill.name })} confirmLabel={t('uninstall.delete')} note={t('uninstall.note')}
+              rows={[{ icon: <Folder size={15} strokeWidth={1.8} />, title: t('uninstall.skill.folder'), sub: shortenPath(deletingSkill.path, s.homeDir), dest: t('uninstall.trash30') }]}
+              onClose={() => setDeletingSkill(null)}
+              onConfirm={() => { const sk = deletingSkill; void deleteProjectSkill(homeTarget(), session.id, sk.path).then((r) => { notifyUninstalled(t('uninstall.skill.done', { name: sk.name }), sk.name, { id: r.trashId, kind: 'skill', restorer: 'engine' }); return getProjectContext(homeTarget(), session.id).then(setCtx) }).catch((e: any) => setError(String(e?.message || e))) }} />}
             <div className="project-card-head"><div><h3><Sparkles size={13} style={{ verticalAlign: -2, marginRight: 5 }} />{t('projectProfile.skills')}</h3><small>{t('projectProfile.skillsHint', { dir: skillsDir })}</small></div>
               <button type="button" title={t('projectProfile.openSkills')} aria-label={t('projectProfile.openSkills')} onClick={() => void (ctx.skills.length || busy ? Promise.resolve() : initProjectContext(homeTarget(), session.id).then((r) => setCtx(r.context))).then(() => reveal(`${ctx.workspaceDir}/skills`))}><FolderOpen size={14} /></button></div>
-            {ctx.skills.length ? <div className="project-list">{ctx.skills.map((skill) => <button type="button" key={`${skill.id}:${skill.legacy}`} className="project-row" title={skill.path} onClick={() => reveal(`${skill.path}/SKILL.md`)}><strong>{skill.name}</strong>{skill.legacy && <small className="project-chip warn">{t('projectProfile.legacySkill')}</small>}<span style={{ gridColumn: '1 / -1' }}>{skill.description || skill.id}</span></button>)}</div>
+            {ctx.skills.length ? <div className="project-list">{ctx.skills.map((skill) => <div key={`${skill.id}:${skill.legacy}`} className="project-skill-row"><button type="button" className="project-row" title={skill.path} onClick={() => reveal(`${skill.path}/SKILL.md`)}><strong>{skill.name}</strong>{skill.legacy && <small className="project-chip warn">{t('projectProfile.legacySkill')}</small>}<span style={{ gridColumn: '1 / -1' }}>{skill.description || skill.id}</span></button>
+              <button type="button" className="project-skill-del" title={t('uninstall.delete')} aria-label={t('uninstall.delete')} disabled={!!busy} onClick={() => setDeletingSkill(skill)}><Trash2 size={13} /></button></div>)}</div>
               : <p className="agent-profile-muted">{t('projectProfile.noSkills')}</p>}
             {skillForm ? <form className="project-skill-form" onSubmit={(e) => { e.preventDefault(); void submitSkill() }}>
               <label>{t('projectProfile.skillFolder')}<input required autoFocus pattern="[a-z0-9][a-z0-9-]*" placeholder="my-skill" value={skillForm.slug} onChange={(e) => setSkillForm({ ...skillForm, slug: e.target.value })} /></label>
@@ -776,7 +778,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             <div className="project-card-head"><div><h3>{t('projectProfile.defaults')}</h3><small>{t('projectProfile.defaultsHint')}</small></div></div>
             <label className="project-field">{t('projectProfile.defaultExecutor')}<select value={execValue} onChange={(e) => setExec(e.target.value)}>
               <option value="">{t('projectProfile.defaultNone')}</option>
-              <optgroup label={t('projectProfile.agents')}>{s.agents.filter((a) => a.createdBy !== 'system').map((a) => <option key={a.slug} value={`agent:${a.slug}`}>{a.name}</option>)}</optgroup>
+              <optgroup label={t('projectProfile.agents')}>{s.agents.filter((a) => a.createdBy !== 'system').map((a) => <option key={a.slug} value={`agent:${a.slug}`}>{agentName(a)}</option>)}</optgroup>
               {s.teams.length > 0 && <optgroup label={t('projectProfile.teams')}>{s.teams.map((team) => <option key={team.slug} value={`team:${team.slug}`}>{team.name}</option>)}</optgroup>}
             </select></label>
             <label className="project-field">{t('agentProfile.approval')}<select value={settingsDraft.approvalMode || ''} onChange={(e) => patchSettings({ approvalMode: (e.target.value || undefined) as ProjectSettings['approvalMode'] })}>

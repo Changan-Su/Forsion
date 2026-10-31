@@ -3,9 +3,14 @@
  * 免得用户回滚聊天记录去找。数据来自 taskFacts.ts 的确定性投影 + processStore(后台进程)。
  *
  * 2026-10-25 用户改为多卡片栈(方案 A,仓根 docs/ToBeImproved/后台任务与服务面板方案_2026-10-24/round2.html):
- * 每段一张卡,Agent Desk 也是栈里的一张(ChatView 经 `desk` 递进来);卡片可折叠(收起状态按种类全局记住)、
- * 悬停露拖动块换顺序(顺序全局记住,右键卡头有「移到最上 / 最下 / 恢复默认」)、没内容的卡不画,
+ * 每段一张卡,Agent Desk 也是栈里的一张(ChatView 经 `desk` 递进来);没内容的卡不画,
  * 插件经 ctx.summary.registerCard 加卡(amadeus/plugins/summaryCards.ts)。
+ * 10-29 第三轮(round3.html,用户选 A + 限长 2 + 补齐过渡 + 把手 3):
+ * - 开合跟着内容走(summaryOpen.ts):有新东西就开、安静了就收,手动的只管到这一轮结束,不再按种类全局记住;
+ *   车道放不下时收掉最久没来新内容的那张(fitCards,在下面的 useLayoutEffect 里量 DOM)。
+ * - 卡头:标题 → 紧挨着的折叠箭头 …… 右边计数;鼠标停在卡头上时计数那一格换成拖动把手,整张卡头按住移动 4px 起拖。
+ * - 卡片 / 行的出现与离开、松手后其他卡让位都有过渡(summaryMotion.ts)。
+ * 顺序照旧全局记住(右键卡头有「移到最上 / 最下 / 恢复默认」)。
  * 出现/收起仍是纯 CSS(容器查询 + 过渡,见 chat2.css `.t2-tsum`);窄了整栈收掉,后台进程退到输入框上方那一行。
  */
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -19,7 +24,9 @@ import type { DisplayFile, UiMessage } from '../../../../../tangu-agent/src/cont
 import { findLiveEdit } from '../../stores/deskPlan'
 import { hasFacts, summarizeTask } from './taskFacts'
 import { ChatWebLink } from '../../components/ChatWikiLink'
-import { fullOrder, moveCard, orderCards, setCardOpen, setCardOrder, useSummaryPrefs } from './summaryPrefs'
+import { fullOrder, moveCard, orderCards, setCardOrder, useSummaryElevation, useSummaryPrefs } from './summaryPrefs'
+import { fitCards, setUserOpen, stepOpen, syncOpen, useSummaryOpen, type CardSig, type FitCard } from './summaryOpen'
+import { flipSiblings, watchStackMotion } from './summaryMotion'
 import { useSummaryCards, type SummaryCardEntry } from '../../amadeus/plugins/summaryCards'
 import { refreshProcesses, useProcessPolling, useSessionProcesses } from './processStore'
 import { BgRow, PROCESS_CAP } from './BackgroundProcs'
@@ -60,6 +67,9 @@ registerMessages({
 /** dockview 搬完主区 DOM 后多久才放开摘要栏的进出场:盖住新分栏 setSize + 右栏补间(200 ms)。 */
 const MOVE_HOLD_MS = 600
 
+/** 列表卡正文的封顶高度,和 chat2.css `.t2-card-body` 的 max-height 同值(限长量高度用)。 */
+const BODY_MAX = 240
+
 /** 来源图标按类别分:文件 / 目录 / 网页 / 搜索。 */
 const SRC_ICON = { file: FileText, dir: FolderOpen, web: Globe, search: Search } as const
 
@@ -68,9 +78,11 @@ interface RailApi { grip(id: string, e: React.PointerEvent): void; menu(id: stri
 const RailCtx = createContext<RailApi | null>(null)
 
 /** 一张卡:原生 <details>(折叠语义、键盘可达、读屏全白拿)。点卡头折叠;卡头里的按钮自己拦住事件,不顺带折叠。
- *  计数 / 动作 / 折叠箭头收在卡头末尾同一个 .t2-card-end 里,只有它带 margin-left:auto ——
- *  两个 auto 会平分剩余空间把计数推到中间(第二轮 demo 被用户点名「放在中间太丑」)。 */
-export function SummaryCard({ id, head, count, countTitle, actions, open, onToggle, className = '', bodyClassName = '', bodyProps, rootProps, children }: {
+ *  卡头(10-29 用户定):标题 → 紧挨着的折叠箭头;动作 + 计数收在卡头末尾的 .t2-card-end(只有它带 margin-left:auto ——
+ *  两个 auto 会平分剩余空间把计数推到中间,第二轮被用户点名「太丑」)。计数和拖动把手叠在同一格(.t2-card-slot):
+ *  鼠标停在卡头上时计数淡出、把手淡入;整张卡头都能拖(按住移动 4px 才起拖,没动就是开合)。
+ *  ⚠️ 别改回「箭头在右、把手贴卡片左缘」—— 那版压着圆角描边,用户嫌丑。 */
+export function SummaryCard({ id, head, count, countTitle, actions, open, onToggle, bodyCap, squeezed, className = '', bodyClassName = '', bodyProps, rootProps, children }: {
   id: string
   head: React.ReactNode
   count?: React.ReactNode
@@ -78,6 +90,10 @@ export function SummaryCard({ id, head, count, countTitle, actions, open, onTogg
   actions?: React.ReactNode
   open: boolean
   onToggle: (open: boolean) => void
+  /** 车道放不下、只剩这一张开着时,正文封顶从 240 缩到这么高(fitCards)。 */
+  bodyCap?: number
+  /** 被限长收起(不是用户收的):data-squeezed,排查和台架用。 */
+  squeezed?: boolean
   className?: string
   bodyClassName?: string
   bodyProps?: React.HTMLAttributes<HTMLDivElement>
@@ -91,25 +107,23 @@ export function SummaryCard({ id, head, count, countTitle, actions, open, onTogg
       {...rootProps}
       className={`t2-card ${className}`}
       data-card={id}
+      data-squeezed={squeezed || undefined}
       open={open}
       onToggle={(e) => { const now = (e.currentTarget as HTMLDetailsElement).open; if (now !== open) onToggle(now) }}
     >
-      <summary className="t2-card-head" onContextMenu={rail ? (e) => rail.menu(id, e) : undefined}>
-        {rail && (
-          <span className="t2-card-grip" aria-hidden title={t('tsum.card.drag')}
-            onPointerDown={(e) => rail.grip(id, e)}
-            onClick={(e) => { e.preventDefault(); e.stopPropagation() }}>
-            <GripVertical size={12} />
-          </span>
-        )}
-        <span className="t2-card-title">{head}</span>
+      <summary className="t2-card-head" onContextMenu={rail ? (e) => rail.menu(id, e) : undefined}
+        onPointerDown={rail ? (e) => rail.grip(id, e) : undefined}>
+        <span className="t2-card-title">{head}<ChevronRight size={12} className="t2-tsum-chev" /></span>
         <span className="t2-card-end">
-          {count !== undefined && count !== null && <span className="t2-tsum-count" title={countTitle}>{count}</span>}
           {actions}
-          <ChevronRight size={12} className="t2-tsum-chev" />
+          <span className="t2-card-slot">
+            {/* key = 值:数字一变就重挂,统一入场那一档淡入换上(栈 data-still 时不播) */}
+            {count !== undefined && count !== null && <span key={String(count)} className="t2-tsum-count" title={countTitle} data-motion="enter">{count}</span>}
+            {rail && <span className="t2-card-grip" aria-hidden title={t('tsum.card.drag')}><GripVertical size={13} /></span>}
+          </span>
         </span>
       </summary>
-      <div {...bodyProps} className={`t2-card-body ${bodyClassName}`}>{children}</div>
+      <div {...bodyProps} className={`t2-card-body ${bodyClassName}`} style={bodyCap ? { ...bodyProps?.style, maxHeight: bodyCap } : bodyProps?.style}>{children}</div>
     </details>
   )
 }
@@ -124,24 +138,34 @@ export function CardAction({ icon, label, run, className = 't2-tsum-secact' }: {
   )
 }
 
-/** 拖卡片换位:真卡跟着指针走(独立 translate 属性,不碰布局),落点线走 LCL createDropIndicator(--signal-line,
- *  换落点原地淡入淡出 —— DESIGN §6 拖入提示那条)。线挂在车道上,不挂在会滚动的栈里。
- *  松手落位走 LCL land:卡从松手处滑进新位置(换了位置等重排后再落);原地放下 / 取消也从松手处滑回去,不硬跳。
+/** 按住卡头移动这么多(视口 px)才算拖;没动就是普通的点一下(开合)。 */
+const DRAG_START_PX = 4
+
+/** 拖卡片换位:整张卡头都能按住拖(移动 4px 起拖)。真卡跟着指针走(独立 translate 属性,不碰布局),
+ *  落点线走 LCL createDropIndicator(--signal-line,换落点原地淡入淡出 —— DESIGN §6 拖入提示那条)。线挂在车道上,不挂在会滚动的栈里。
+ *  松手落位走 LCL land:卡从松手处滑进新位置(换了位置等重排后再落),其他卡同一条曲线让位(flipSiblings);
+ *  原地放下 / 取消也从松手处滑回去,不硬跳。拖过之后吃掉紧跟的那次 click,不顺带开合。
  *  ponytail: 栈超出车道时拖到边上不自动滚;真有人卡在这再加。 */
 function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, drop: (before: string | null) => void): (() => void) | undefined {
   if (!stack || e.button !== 0) return
+  // 卡头里的按钮(＋ / 清空 / 放大)自己处理,不起拖
+  if ((e.target as HTMLElement).closest('button, a, input, [role="button"]')) return
   const card = [...stack.children].find((c) => (c as HTMLElement).dataset.card === id) as HTMLElement | undefined
   if (!card) return
-  e.preventDefault()
   const shown = [...stack.children].filter((c): c is HTMLElement => c instanceof HTMLElement && !!c.dataset.card && c.offsetParent !== null)
   const others = shown.filter((c) => c !== card)
   const after = shown[shown.indexOf(card) + 1]?.dataset.card ?? null // 原地 = 落在自己后面那张前面
   const z = (card as HTMLElement & { currentCSSZoom?: number }).currentCSSZoom || 1
   const y0 = e.clientY
-  const ind = createDropIndicator({ host: stack.parentElement ?? undefined })
+  let ind: ReturnType<typeof createDropIndicator> | null = null
   let before: string | null | undefined
-  card.classList.add('t2-card-lifted')
   const move = (ev: PointerEvent): void => {
+    if (!ind) {
+      if (Math.abs(ev.clientY - y0) < DRAG_START_PX) return
+      ind = createDropIndicator({ host: stack.parentElement ?? undefined })
+      card.classList.add('t2-card-lifted')
+    }
+    window.getSelection()?.removeAllRanges() // pointerdown 不再 preventDefault(要留给 <summary> 开合),拖过正文时别顺带选中文字
     card.style.translate = `0 ${(ev.clientY - y0) / z}px`
     const next = others.find((c) => { const r = c.getBoundingClientRect(); return ev.clientY < r.top + r.height / 2 })
     before = next ? next.dataset.card! : null
@@ -151,7 +175,7 @@ function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, 
     ind.line({ x: s.left + 10 * z, y, w: s.width - 20 * z }, { key: String(before) })
   }
   let done = false
-  const end = (commit: boolean): void => {
+  const end = (commit: boolean, held = false): void => {
     if (done) return
     done = true
     window.removeEventListener('pointermove', move)
@@ -159,6 +183,14 @@ function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, 
     window.removeEventListener('pointercancel', cancel)
     window.removeEventListener('keydown', esc, true)
     window.removeEventListener('blur', cancel)
+    if (!ind) return // 没拖起来:就是一次点击,交给 <summary> 开合
+    // 拖过了:松手后紧跟的那次 click 落在卡头上会顺带开合,吃掉它(松手在卡外就没有 click,下一拍撤掉)。
+    // Esc 取消时指针还按着(held):等这次松手之后再撤,不然松手那下照样开合
+    const eat = (ce: MouseEvent): void => { ce.preventDefault(); ce.stopPropagation() }
+    window.addEventListener('click', eat, { capture: true, once: true })
+    const unEat = (): void => { window.setTimeout(() => window.removeEventListener('click', eat, { capture: true }), 0) }
+    if (held) window.addEventListener('pointerup', unEat, { capture: true, once: true })
+    else unEat()
     card.classList.remove('t2-card-lifted')
     // 真卡就是拖影:撤掉拿起时的 scale、还带着拖动位移时的左上角 = 落位起点(带 scale 量会横向偏 2px)
     const r = card.getBoundingClientRect()
@@ -166,15 +198,16 @@ function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, 
     card.style.translate = ''
     ind.destroy()
     if (commit && before !== undefined && before !== after) {
-      // 在重排提交之前布置:等这张卡换了前一个兄弟再落,新位置一帧都不先画出来
+      // 在重排提交之前布置:等这张卡换了前一个兄弟再落,新位置一帧都不先画出来;其他卡从原位滑到新位置
       landWhenMoved(() => [...stack.children].find((c) => (c as HTMLElement).dataset.card === id) as HTMLElement | undefined, from, { timeout: 400 })
+      flipSiblings(stack, others)
       drop(before)
     } else land(card, from)
   }
   const up = (): void => end(true)
   const cancel = (): void => end(false)
-  const esc = (ev: KeyboardEvent): void => { if (ev.key === 'Escape') { ev.preventDefault(); end(false) } }
-  if (!others.length) { end(false); return }
+  const esc = (ev: KeyboardEvent): void => { if (ev.key === 'Escape') { ev.preventDefault(); end(false, true) } }
+  if (!others.length) return
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
   window.addEventListener('pointercancel', cancel)
@@ -186,8 +219,12 @@ function dragCard(stack: HTMLElement | null, id: string, e: React.PointerEvent, 
 
 /** 插件卡:换会话 = 卸载重挂(mount 拿到的 sessionId 恒定)。update({count, hidden}) 只改这一份,状态由栈托管
  *  (栈要知道它藏没藏,才判得出「还有没有卡在场」)。 */
-function PluginCard({ entry, sessionId, cwd, state, setState }: {
+function PluginCard({ entry, sessionId, cwd, state, setState, open, onToggle, bodyCap, squeezed }: {
   entry: SummaryCardEntry
+  open: boolean
+  onToggle: (open: boolean) => void
+  bodyCap?: number
+  squeezed?: boolean
   sessionId: string
   cwd: string | null
   state: { count?: number | null; hidden?: boolean } | undefined
@@ -195,7 +232,6 @@ function PluginCard({ entry, sessionId, cwd, state, setState }: {
 }) {
   const { locale } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
-  const open = useSummaryPrefs((s) => s.open[entry.key]) ?? !entry.defaultCollapsed
   useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -224,7 +260,7 @@ function PluginCard({ entry, sessionId, cwd, state, setState }: {
   const title = typeof entry.title === 'string' ? entry.title : locale === 'en' ? entry.title.en : entry.title.zh
   return (
     <SummaryCard id={entry.key} head={<span>{title}</span>} count={state?.count ?? undefined} open={open}
-      onToggle={(o) => setCardOpen(entry.key, o)} bodyClassName="t2-card-plugin"
+      onToggle={onToggle} bodyCap={bodyCap} squeezed={squeezed} bodyClassName="t2-card-plugin"
       rootProps={state?.hidden ? { hidden: true } : undefined}>
       <div ref={ref} className="t2-card-plugin-root" />
     </SummaryCard>
@@ -290,8 +326,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   const patchPlugin = useMemo(() => (key: string, patch: { count?: number | null; hidden?: boolean }) =>
     setPluginState((s) => ({ ...s, [key]: { ...s[key], ...patch } })), [])
   const prefs = useSummaryPrefs()
-  const isOpen = (id: string, dflt: boolean): boolean => prefs.open[id] ?? dflt
-  const toggle = (id: string) => (o: boolean) => setCardOpen(id, o)
+  const sessKey = sessionId ?? ''
 
   const elapsed = running && f.startedAt ? now - f.startedAt : 0
   const done = f.todos.filter((x) => x.status === 'completed').length
@@ -305,10 +340,32 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   const showState = !((f.state === 'idle' || f.state === 'done') && !messages.some((m) => m.role === 'assistant'))
   const runningProcs = procs.filter((p) => p.status === 'running').length
 
+  // 开合(summaryOpen.ts):每张在场的卡报一次「现在有几条」,变多了就开;在渲染里按存着的上一份推一步,提交后写回
+  const sigs: CardSig[] = []
+  if (hasFacts(f) || teamStatus) sigs.push({ id: 'progress', count: f.todos.length + f.attention.length, dflt: true })
+  if (sessionId && procs.length) sigs.push({ id: 'bg', count: procs.length, live: runningProcs > 0, dflt: runningProcs > 0 })
+  if (f.outputs.length > 0) sigs.push({ id: 'outputs', count: f.outputs.length, dflt: true })
+  if (f.sources.length > 0) sigs.push({ id: 'sources', count: f.sources.length, dflt: false })
+  // 只数用户自己加的:笔记库根是系统并进来的(异步加载完才到),不算「来了新东西」
+  if (cwd) sigs.push({ id: 'scope', count: 1 + extraRoots.filter((r) => !lockedRoots.includes(r)).length, dflt: false })
+  if (sessionId) for (const p of plugins) if (!pluginState[p.key]?.hidden) sigs.push({ id: p.key, count: pluginState[p.key]?.count ?? 0, dflt: !p.defaultCollapsed })
+  const stored = useSummaryOpen((st) => st.by[sessKey])
+  const sess = stepOpen(stored, sigs, running)
+  useLayoutEffect(() => syncOpen(sessKey, sigs, running))
+  // 指针停着的那张:开着就先别自动收(读到一半被收走),指针离开再按规则来
+  // 带上会话:换会话时指针没动,上一个会话停着的那张不能把新会话的同名卡撑开
+  const [hoverAt, setHover] = useState<{ k: string; id: string } | null>(null)
+  const hover = hoverAt?.k === sessKey ? hoverAt.id : null
+  const shownOpen = useRef<Record<string, boolean>>({})
+  const [fit, setFit] = useState<{ squeezed: string[]; cap: Record<string, number> }>({ squeezed: [], cap: {} })
+  const isOpen = (id: string, dflt: boolean): boolean =>
+    sess.user[id] ?? ((hover === id && !!shownOpen.current[id]) || ((sess.auto[id] ?? dflt) && !fit.squeezed.includes(id)))
+  const toggle = (id: string) => (o: boolean) => setUserOpen(sessKey, id, o)
+
   const cards: Record<string, React.ReactNode> = {}
   if (hasFacts(f) || teamStatus) {
     cards.progress = (
-      <SummaryCard key="progress" id="progress" className="t2-tsum-in" open={isOpen('progress', true)} onToggle={toggle('progress')}
+      <SummaryCard key="progress" id="progress" className="t2-tsum-in" bodyCap={fit.cap.progress} squeezed={fit.squeezed.includes('progress')} open={isOpen('progress', true)} onToggle={toggle('progress')}
         head={showState ? (
           <span className={`t2-tsum-state ${f.state}`} role="status" aria-live="polite">
             {StateIcon && <StateIcon size={14} />}
@@ -338,7 +395,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
         )}
         {f.todos.map((td, i) => (
           <div key={i} className={`t2-tsum-todo ${td.status}`}>
-            <span className="t2-tsum-todo-mark">{td.status === 'completed' ? '✓' : td.status === 'in_progress' ? '●' : '○'}</span>
+            <span key={td.status} className="t2-tsum-todo-mark">{td.status === 'completed' ? '✓' : td.status === 'in_progress' ? '●' : '○'}</span>
             <span className="t2-tsum-todo-tx">{td.content}</span>
           </div>
         ))}
@@ -350,7 +407,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
     const full = runningProcs >= PROCESS_CAP
     cards.bg = (
       // 有在跑的才默认展开(用户点过就按用户的);满 10 个时计数换成 10/10,提示新的会被拒
-      <SummaryCard key="bg" id="bg" open={isOpen('bg', runningProcs > 0)} onToggle={toggle('bg')} head={<span>{t('tsum.bg')}</span>}
+      <SummaryCard key="bg" id="bg" bodyCap={fit.cap.bg} squeezed={fit.squeezed.includes('bg')} open={isOpen('bg', runningProcs > 0)} onToggle={toggle('bg')} head={<span>{t('tsum.bg')}</span>}
         count={full ? `${runningProcs}/${PROCESS_CAP}` : procs.length} countTitle={full ? t('tsum.bg.cap', { n: PROCESS_CAP }) : undefined}>
         {procs.map((p) => <BgRow key={p.id} p={p} sessionId={sessionId} />)}
       </SummaryCard>
@@ -359,7 +416,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
 
   if (f.outputs.length > 0) {
     cards.outputs = (
-      <SummaryCard key="outputs" id="outputs" open={isOpen('outputs', true)} onToggle={toggle('outputs')} head={<span>{t('tsum.outputs')}</span>} count={f.outputs.length}>
+      <SummaryCard key="outputs" id="outputs" bodyCap={fit.cap.outputs} squeezed={fit.squeezed.includes('outputs')} open={isOpen('outputs', true)} onToggle={toggle('outputs')} head={<span>{t('tsum.outputs')}</span>} count={f.outputs.length}>
         {f.outputs.map((o) => {
           const label = baseName(o.name || o.path || '')
           const body = <><FileText size={14} /><span className="t2-tsum-row-tx">{label}</span></>
@@ -378,7 +435,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
 
   if (f.sources.length > 0) {
     cards.sources = (
-      <SummaryCard key="sources" id="sources" open={isOpen('sources', false)} onToggle={toggle('sources')} head={<span>{t('tsum.sources')}</span>} count={f.sources.length}>
+      <SummaryCard key="sources" id="sources" bodyCap={fit.cap.sources} squeezed={fit.squeezed.includes('sources')} open={isOpen('sources', false)} onToggle={toggle('sources')} head={<span>{t('tsum.sources')}</span>} count={f.sources.length}>
         {f.sources.map((sc) => {
           const Icon = SRC_ICON[sc.kind]
           const key = `${sc.kind}:${sc.id}`
@@ -413,7 +470,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
 
   if (cwd) {
     cards.scope = (
-      <SummaryCard key="scope" id="scope" open={isOpen('scope', false)} onToggle={toggle('scope')} head={<span>{t('tsum.scope')}</span>}
+      <SummaryCard key="scope" id="scope" bodyCap={fit.cap.scope} squeezed={fit.squeezed.includes('scope')} open={isOpen('scope', false)} onToggle={toggle('scope')} head={<span>{t('tsum.scope')}</span>}
         count={1 + extraRoots.length}
         actions={onAddRoot ? <CardAction icon={<Plus size={13} />} label={`${t('tsum.scope.add')} — ${t('tsum.scope.hint')}`} run={onAddRoot} /> : undefined}>
         {/* 默认目录永远排头 —— 它是相对路径的解析基准,不是可有可无的一行。 */}
@@ -438,7 +495,8 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
 
   if (sessionId) {
     for (const p of plugins) {
-      cards[p.key] = <PluginCard key={`${p.key}:${sessionId}`} entry={p} sessionId={sessionId} cwd={cwd ?? null} state={pluginState[p.key]} setState={patchPlugin} />
+      cards[p.key] = <PluginCard key={`${p.key}:${sessionId}`} entry={p} sessionId={sessionId} cwd={cwd ?? null} state={pluginState[p.key]} setState={patchPlugin}
+        open={isOpen(p.key, !p.defaultCollapsed)} onToggle={toggle(p.key)} bodyCap={fit.cap[p.key]} squeezed={fit.squeezed.includes(p.key)} />
     }
   }
   if (desk) cards.desk = desk
@@ -449,10 +507,10 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   const show = ordered.some((k) => k !== 'desk' && !pluginState[k]?.hidden)
 
   const stackRef = useRef<HTMLElement>(null)
+  const elevation = useSummaryElevation((st) => st.elevation)
   // 8.9(DESIGN §3 动效规矩 6):挂上 / 换会话之后、用户还没动过之前,栈与 Desk 卡直接到位 ——
   // ⌘J 开底栏会把聊天视图整个重挂一次,不能让摘要栏「又进场一遍」。用户在这个会话里点过 / 按过键之后,
   // 因内容出现的栈、新到的卡才进场。草稿发出第一条变成会话不算换会话。
-  const sessKey = sessionId ?? ''
   const [movedIn, setMovedIn] = useState<string | null>(null)
   if (movedIn === '' && sessKey) setMovedIn(sessKey)
   const still = movedIn !== sessKey
@@ -480,28 +538,56 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
     mo.observe(document.body, { childList: true, subtree: true })
     return () => { mo.disconnect(); window.clearTimeout(t) }
   }, [])
-  // 栈已在场时新到的卡:错开 20 ms 淡入上来(第 6 张起与第 5 张同时),已经在的不动;整栈刚出现时随栈一起进。
-  const prevCards = useRef<{ keys: Set<string>; show: boolean } | null>(null)
-  useLayoutEffect(() => {
-    const prev = prevCards.current
-    prevCards.current = { keys: new Set(ordered), show }
-    if (still || !prev?.show || !show) return
-    let i = 0
-    for (const k of ordered) {
-      if (prev.keys.has(k) || k === 'desk') continue // Desk 卡有自己的进出场
-      const el = stackRef.current?.querySelector<HTMLElement>(`:scope > [data-card="${CSS.escape(k)}"]`)
-      if (!el) continue
-      el.style.animationDelay = `${Math.min(i++, 4) * 20}ms`
-      el.dataset.motion = 'enter'
-      const done = (e: AnimationEvent): void => {
-        if (e.target !== el) return
-        el.removeEventListener('animationend', done)
-        delete el.dataset.motion
-        el.style.animationDelay = ''
+  // 卡片 / 行的长出与缩回(summaryMotion.ts;栈 data-still / data-moved 时不播)
+  useLayoutEffect(() => { const st = stackRef.current; return st ? watchStackMotion(st) : undefined }, [])
+  // 限长(第三轮第 3 节的 2):整栈不超出车道。量每张卡收着的高度和开着时多出来的高度,放不下就收掉最久没来新东西的那张,
+  // 只剩一张还放不下就缩它的正文封顶。收着的卡量不到正文(内容区跳过排版),用它上次开着时的高度,没开过按行数估。
+  const bodyH = useRef<Record<string, number>>({})
+  const live = useRef({ sess, hover, fit })
+  live.current = { sess, hover, fit }
+  const measure = useRef<() => void>(() => {})
+  measure.current = () => {
+    const st = stackRef.current
+    const rail = st?.parentElement
+    if (!st || !rail || st.offsetParent === null) return
+    const { sess: s, hover: hv, fit: cur } = live.current
+    const px = (v: string): number => parseFloat(v) || 0
+    const rcs = getComputedStyle(rail), scs = getComputedStyle(st)
+    const avail = rail.clientHeight - px(rcs.paddingTop) - px(rcs.paddingBottom) - px(scs.paddingTop) - px(scs.paddingBottom)
+    const list: FitCard[] = []
+    const mts: Record<string, number> = {}
+    for (const el of st.children) {
+      if (!(el instanceof HTMLDetailsElement) || !el.dataset.card || el.offsetParent === null) continue
+      const id = el.dataset.card
+      shownOpen.current[id] = el.open
+      const head = el.querySelector<HTMLElement>(':scope > summary')
+      const body = el.querySelector<HTMLElement>(':scope > .t2-card-body')
+      const cs = getComputedStyle(el)
+      const headH = (head?.offsetHeight ?? 0) + px(cs.paddingTop) + px(cs.paddingBottom) + px(cs.borderTopWidth) + px(cs.borderBottomWidth)
+      let extra = 0
+      if (body && getComputedStyle(body).display !== 'none') {
+        const mt = mts[id] = px(getComputedStyle(body).marginTop)
+        if (el.open) bodyH.current[id] = extra = mt + (id === 'desk' ? body.offsetHeight : Math.min(body.scrollHeight, BODY_MAX))
+        else extra = bodyH.current[id] ?? mt + Math.min(BODY_MAX, body.childElementCount * 30)
       }
-      el.addEventListener('animationend', done)
+      const want = id === 'desk' ? el.open : (s.user[id] ?? ((hv === id && el.open) || (s.auto[id] ?? el.open)))
+      list.push({ id, open: want, squeezable: id !== 'progress' && id !== 'desk' && s.user[id] === undefined && hv !== id, last: s.last[id] ?? 0, head: headH, body: extra })
     }
-  })
+    const next = fitCards(list, avail, px(scs.rowGap), cur.squeezed)
+    for (const id in next.cap) next.cap[id] -= mts[id] ?? 0 // fitCards 按「开着多出来的高度」(含正文上边距)算,封顶写在正文自己的 max-height 上
+    if (JSON.stringify(next) !== JSON.stringify(cur)) setFit(next)
+  }
+  useLayoutEffect(() => measure.current())
+  const ro = useRef<ResizeObserver | null>(null)
+  useLayoutEffect(() => {
+    const st = stackRef.current
+    if (!st) return
+    // 车道变高变矮(窗口、底栏)、卡片自己变高(插件卡正文、行增删)都重量一次
+    ro.current = new ResizeObserver(() => measure.current())
+    if (st.parentElement) ro.current.observe(st.parentElement)
+    return () => { ro.current?.disconnect(); ro.current = null }
+  }, [])
+  useLayoutEffect(() => { for (const c of stackRef.current?.children ?? []) if ((c as HTMLElement).dataset.card) ro.current?.observe(c) })
   const defaultsRef = useRef(defaults)
   defaultsRef.current = defaults
   const [menu, setMenu] = useState<CtxMenu>(null)
@@ -537,7 +623,10 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
 
   return (
     <RailCtx.Provider value={api}>
-      <aside ref={stackRef} className={`t2-tsum${show ? ' show' : ''}`} data-still={still || undefined} aria-hidden={!show && !desk} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
+      <aside ref={stackRef} className={`t2-tsum${show ? ' show' : ''}`}
+        onPointerOver={(e) => { const id = (e.target as Element).closest<HTMLElement>('[data-card]')?.dataset.card ?? null; if (id !== hover) setHover(id ? { k: sessKey, id } : null) }}
+        onPointerLeave={() => setHover(null)}
+        data-elev={elevation} data-still={still || undefined} aria-hidden={!show && !desk} aria-busy={f.state === 'running'} aria-label={t('tsum.title')}>
         {ordered.map((k) => cards[k])}
       </aside>
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} autoFocus />}

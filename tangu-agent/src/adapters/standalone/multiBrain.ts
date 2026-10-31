@@ -17,6 +17,7 @@ import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, 
 import { streamAnthropicMessages } from '../../llm/anthropicMessages.js';
 import { streamOpenAiResponses } from '../../llm/openaiResponses.js';
 import { fetchProviderQuota } from '../../llm/providerQuota.js';
+import { MASKED_FROM } from '../../llm/outboundMask.js';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 
@@ -358,7 +359,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           const send = () => p[PROTOCOL_MARK] === 'anthropic-messages' ? streamAnthropicMessages(opts)
             : p[PROTOCOL_MARK] === 'openai-responses' ? streamOpenAiResponses(opts)
             : streamOpenAiCompat(opts);
-          const tag = llmDebug.get(p);
+          const tag = llmDebug.get(p[MASKED_FROM] ?? p);
           if (!tag) return send();
           const t0 = Date.now();
           const res = await send();

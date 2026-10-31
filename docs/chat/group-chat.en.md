@@ -29,7 +29,7 @@ Approval requests and public outputs return to the main conversation. Review the
 
 Team mode has no plan mode: members work on their own and are not bound by it. Entering team mode turns plan mode off, and the item is unavailable in the mode menu.
 
-Add context or `@mention` a member with new work at any time. Completed members stop speaking until another request arrives; the team finishes when every member is done. **v2.11 uses parallel teams in place of the earlier turn-taking and voting model.**
+Add context or `@mention` a member with new work at any time (a member's Chinese or English name both work). Completed members stop speaking until another request arrives; the team finishes when every member is done. **v2.11 uses parallel teams in place of the earlier turn-taking and voting model.**
 
 ## Keep work in its project
 

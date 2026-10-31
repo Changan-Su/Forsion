@@ -3,7 +3,7 @@ import { installUnitAccount } from '../../../../web/src/unitAccount'
 import { installUnitCloudTransport, type UnitCloudCapabilities } from '../../../../web/src/unitCloudTransport'
 import { installUnitShim } from '../../../../web/src/unitShim'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
-import { seedCalendarDb, serializeDb } from '@amadeus-shared/db/schema'
+import { emptyDb, serializeDb } from '@amadeus-shared/db/schema'
 
 const base = new URL('https://unit.test/web/')
 const account = { apiBase: '/api', loginPath: '/auth' }
@@ -28,7 +28,7 @@ beforeEach(() => {
   stops = []; sse = []; files = new Map()
   for (const user of ['a', 'b']) {
     files.set(`${user}:private.md`, `# ${user} private note`)
-    const calendar = seedCalendarDb(new Date('2026-09-09T12:00:00Z'))
+    const calendar = emptyDb('Calendar')
     calendar.rows.push({ id: `${user}-event`, cells: { title: `${user} event` } })
     files.set(`${user}:Calendar.db`, serializeDb(calendar))
   }

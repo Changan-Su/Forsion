@@ -192,7 +192,7 @@ cards (a streaming prefix cannot trigger plugin subscriptions or native writes).
 
 Native Calendar and Todo reuse their existing compact Dashboard components and stores.
 Installed plugins opt existing `registerListSource` contributions in with
-`intelligent: { description, viewId }`; full contract: `docs/customization/plugins.md`.
+`intelligent: { description, viewId }`; full contract: `docs/customization/plugin-development.md`.
 Catalogs are normalized at ingress and run assembly, limited to 64 entries, with no user
 records. The renderer resolves current availability again and tears down on disable.
 Displaying a card is not model access to records, nor a save operation. Completed tasks

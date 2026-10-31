@@ -33,7 +33,7 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 ### 原生悬浮目录 ctx.ui.mountFloatingToc(2026-09-07 起)
 
 长内容视图不用复制 Chat View 的目录实现。`ctx.ui.mountFloatingToc(shell, opts)` 在插件自己的
-`shell` 上叠一层宿主原生 Floating TOC(默认左侧刻度条、hover / 键盘聚焦展开),正文 DOM 与滚动仍归插件。
+`shell` 上叠一层宿主原生 Floating TOC(默认左侧刻度条,悬停 120ms 或键盘聚焦时从当前项流出列表),正文 DOM 与滚动仍归插件。
 宿主负责 MutationObserver 增量扫描、当前段高亮、平滑跳转、窄栏隐藏、明暗 / 配色 / 扁平模式与键盘可达性。
 
 ```js
@@ -72,6 +72,10 @@ ctx.registerView({ id: 'manual', title: 'Manual', mount(el) {
   懒挂的重件(代码高亮、嵌入体)可以包在带 `data-lcl-toc-ignore` 的元素里,里面的变化不触发重扫。
   跳转落地后宿主会再量一次、差得多就补,正文用了 `content-visibility: auto` 也落得准。
   `dispose()` 幂等,同步摘掉宿主加在 `shell` 里的那层(你的正文不动);插件禁用 / 重载时宿主也会统一卸载。
+- 刻度住在滚动区左边一条 `--lcl-ftoc-gutter`(36px)宽的沟里(2026-10-30 起)。正文左边空白比沟窄时要自己让开,否则刻度压字:
+  宿主在 `scrollContainer` 上打 `data-lcl-ftoc`(值是 `side`,窄到目录隐藏时摘掉,和有没有标题无关),写
+  `.my-article[data-lcl-ftoc] { padding-left: max(24px, var(--lcl-ftoc-gutter)); }`。内容居中时的写法见手册 `ui-components.md`。
+- 行节点 `.lcl-ftoc-item` 只在展开时存在,这些类名不是公共接口。
 - 旧宿主整个 `ctx.ui` 不存在,一律 `ctx.ui?.mountFloatingToc(...)`;缺席时可继续显示正文,不必仿一份目录。
 
 ### View modes: ctx.ui.setViewModes (2026-10-19+)
@@ -195,6 +199,8 @@ list.addEventListener('drop', async (e) => {
   the plugin cancels pending and in-flight landings. Feature-detect `drop.land` — older hosts lack it.
 
 ### Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
+
+Watched ordinary DOM reading surfaces share continuous line selection bands with chat, notes and result previews. Math is measured as a unit, while native Selection, keyboard extension and copying remain intact. Paint is outside the content DOM and is removed on dispose. Touch pointers and custom PDF/code-editor selection layers retain native paint; `watch: false` continues to use the plugin's own paint and manual `show()` / `hide()`.
 
 The **selection bar** is the strip that appears over selected text. Chat, notes and any plugin view that opts in
 show the same one: the view's own tools plus three shared actions — **Ask Tangu** (hands the text to the side chat
@@ -348,10 +354,21 @@ ctx.registerView({ id: 'main', title: { zh: '清单', en: 'Items' }, mount(el) {
 - **Popovers.** `ctx.ui.popover(anchor, { mount(el), side?, align?, label?, onClose? })` → `{ update, dispose }`: the host's `.ui-popover` surface (same material as menus, including the Glass theme), placed under / above the anchor, kept on screen, UI zoom handled, Escape / click outside / window blur close it, one open at a time. `update()` re-measures the anchor. Don't position overlays yourself: `OverlayAt` / `clampMenu` are host internals a plugin can't import.
 - **Icons.** One vocabulary (`PluginIconName` in the types) for Spaces (`space.json` `icon`), list rows and actions, menus, settings groups, view tabs, view modes, toolbar controls, empty states and `ctx.ui.icon(name, { size })`, which returns a fresh `<svg>` in `currentColor`. It now includes the Space names (`bot`, `inbox`, `book-open`, `calendar-days`, `file-text`, `folder-open`, `layout-grid`, `sparkles`, `boxes`, `list-todo`, `server`, …) and `pencil`, `trash-2`, `download`, `upload`, `search`, `check`, `x`, `settings`, `external-link`. An unknown name falls back where it is used and is reported once per plugin in the console (`[my-plugin] unknown icon "list-check" (did you mean list-checks?)`). Before 2026-10-26 `space.json` only knew 30 names of its own and fell back to a stack of boxes silently.
 - **Empty states.** `ListSourceContribution.empty = { icon?, title, line?, action?: { label, icon?, run } }`: on a desktop the sidebar then writes nothing while one of your Spaces is open (your main view explains it — draw the same with `ctx.ui.mountEmptyState(el, { icon?, title, line?, action?, secondary?: { label, run } })`); on a phone, where the list is the whole page, the host draws this empty state in the list. Without it the sidebar says "Nothing here yet". Don't borrow the host's `.empty-state` class names: they only look right when some host view happened to load that CSS first.
+- **Web page card (2026-10-28+).** `ctx.ui.mountWebCard(el, { name, status?: { label, tone?: 'neutral' | 'ok' | 'muted' | 'danger', dot?: 'running' | 'stopped' | 'failed' }, address?: { text, icon?: 'globe' | 'file', struck?, muted? }, note?, thumbnail?: { url, version? } | null, placeholderIcon?, actions?, trailing?, menu?, layout?: 'card' | 'row' })` → `{ update, dispose }`: the body the host draws for HTML files and local servers in chat (thumbnail, name with a status pill, one address line, one note line, buttons left and right, a ⋯ menu). Buttons are `{ label, icon?, variant?: 'primary' | 'danger', disabled?, run }` (at most 6 per side); `menu` takes `contextMenu` entries. The host captures `thumbnail.url` (http(s) only) in a hidden window and caches it by `url` + `version` — change `version` when the page changes; without a picture it draws `placeholderIcon`. `layout: 'row'` is one list row (small thumbnail, two lines, ⋯; no note or buttons). `update(patch)` merges: a key you pass with `undefined`, `[]` or `null` clears it (drop the ⋯ with `menu: undefined`). Use it inside a tool result card, a view or a list rather than copying its look.
+  ```js
+  const card = ctx.ui.mountWebCard?.(body, {
+    name: page.name, status: { label: T('live'), tone: 'ok' }, address: { text: page.url },
+    thumbnail: { url: page.url, version: page.updatedAt },
+    actions: [{ label: T('open'), icon: 'external-link', run: () => open(page.url) }],
+    menu: [{ label: T('takeDown'), icon: 'trash-2', danger: true, run: takeDown }],
+  })
+  ```
 - **View head.** `ctx.ui.setViewHead(el, { title?, actions? })` → `{ update, actions, dispose }`: the same 32 px row `setViewModes` draws, without needing view modes. Title left (after the mode switch if any), your buttons right (`handle.actions` or `actions: [el, …]`). Both can be used together; the switch comes first.
 - **Styles.** `ctx.addStyle(css)` → `{ update(css), dispose }` instead of `document.head.append(style)`: removed on disable / reload.
+- **Bare elements (2026-10-29+).** Inside a view's mount element, a `<button>`, `<table>` or `<h1>`–`<h4>` with no `class` takes the host look with no CSS of yours: a button looks like a plain `.btn` (outline, ink on hover, dimmed when disabled), a table like the Markdown table of notes and chat (muted medium-weight header, half-strength rules), headings use the UI title / heading / body sizes. `<input>` / `<select>` / `<textarea>` already followed the host's form baseline. Your styles always win: a classed element is left alone, and the layer has zero specificity, so any rule from `ctx.addStyle` (even `:where(button)`) beats it. Main and destructive actions stay `.btn.primary` / `.btn.danger`. Not covered: buttons in the view head (outside the mount element), anything inside a host part or a `.ctx-menu` you build, iframe / webview pages.
+- **Failed mount card (2026-10-29+).** When a view's `mount` throws, or the Promise it returns rejects, the host shows a card in that view: "Plugin view failed to load", the error's first line (the full stack is in the console) and Retry. Retry runs only that view's `mount` again; the plugin isn't reloaded and its other views and panels keep running. The host can't clean up listeners or timers you set before the throw, so clean them up yourself or set them after the step that can fail.
 - **Messages.** `ctx.i18n.define({ zh, en })` → `t(key, vars)`: current language → Chinese → the key (the host's chain), `{name}` placeholders from `vars`; keys present in `zh` but missing in `en` are reported once. Pass `() => t('key')` wherever a PluginText is taken; read `t()` in your own drawing code and redraw from `ctx.subscribeLocale`. Before 2026-10-26 list-source titles, action names and view titles took strings only, frozen at registration.
-- **React / Vue plugins: `ctx.ui.mount(name, el, props)`** → `{ update(patch), dispose() }` for `'menu' | 'popover' | 'dialog' | 'segmented' | 'select' | 'emptyState' | 'icon'`, with props typed by `PluginUiParts`. Mount on a ref and dispose in the effect cleanup:
+- **React / Vue plugins: `ctx.ui.mount(name, el, props)`** → `{ update(patch), dispose() }` for `'menu' | 'popover' | 'dialog' | 'segmented' | 'select' | 'emptyState' | 'webCard' | 'icon'`, with props typed by `PluginUiParts`. Mount on a ref and dispose in the effect cleanup:
 
   ```tsx
   const ref = useRef<HTMLSpanElement>(null)

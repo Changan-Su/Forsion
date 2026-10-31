@@ -84,6 +84,8 @@ const sdk: Omit<TanguSdk, 'runs' | 'engines' | 'workspaces' | 'automation'> = {
 /** 一次激活的效果台账。停用时据此逐条撤销;撤销后 disposed=true,旧 ctx 的迟到注册一律忽略。 */
 interface Instance {
   plugin?: TanguPlugin;
+  /** 本次激活的官方判定(startEntry 里定,之后不变)。 */
+  official?: boolean;
   disposed: boolean;
   runtimeDisposers: (() => void)[];
   /** activate 已成功返回:此后 registerRoutes 立即挂;之前先攒着(激活失败就不必挂)。 */
@@ -210,7 +212,11 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       if (live('通道')) inst.runtimeDisposers.push(channelHub.registerChannel(spec)); // 停用时 stopEntry 跑 runtimeDisposers 摘掉
     },
     sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
-      automation: { ...automation, save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }) },
+      automation: {
+        ...automation,
+        save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }),
+        registerTrigger: (spec) => { const off = automation.registerTrigger(spec); inst.runtimeDisposers.push(off); return off; }, // 停用时 stopEntry 注销
+      },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     // 只有官方插件(签名捆绑包,./official.ts)有这个键;其余插件的 ctx 上根本没有它(不是一个返回错误的空壳)。
     ...(official ? { cloud: createOfficialCloud(() => !inst.disposed) } : {}),
@@ -302,6 +308,8 @@ export interface PluginStatus {
   settling?: boolean;
   /** 此刻在跑的实例名下注册的工具名(模型看到的名字),不含和核心工具或别的插件撞名的。桌面据此只让插件给自己引擎半身的工具挂结果卡片。 */
   tools?: string[];
+  /** 在跑的实例过了官方签名判定(见 official.ts)。桌面据此放行官方插件给少数核心工具画结果卡(toolResultCards.ts)。 */
+  official?: boolean;
 }
 
 /** 生命周期限时(测试改小)。超时只是不再等,对方仍在后台跑 —— 见 withDeadline。 */
@@ -435,6 +443,7 @@ async function startEntry(e: Entry): Promise<boolean> {
         e.pluginOfficial = verified;
       }
       inst.plugin = e.plugin;
+      inst.official = official;
       await e.plugin.activate(makeContext(e.d, inst, official));
     });
     inst.activated = true;
@@ -712,6 +721,9 @@ export function removePluginLive(id: string): Promise<void> {
   });
 }
 
+/** 从回收站放回来的同一份代码:撤掉卸载墓碑,下一次重扫照常加载。 */
+export function forgetUninstalled(id: string): void { uninstalled.delete(id); }
+
 /** 列表用的运行态(同步读,不进串行队列)。没进生命周期的 meta(编进 app 的 builtin 等):active = 启用态,无 version。 */
 export function pluginStatus(id: string): PluginStatus {
   const e = entries.get(id) ?? [...entries.values()].find((x) => x.metaIds.has(id));
@@ -734,6 +746,7 @@ export function pluginStatus(id: string): PluginStatus {
     }
     const tools = [...owners].filter(([, o]) => o.size === 1 && o.has(e.d.manifest.id)).map(([name]) => name);
     if (tools.length) out.tools = tools;
+    if (e.inst.official) out.official = true;
   }
   return out;
 }

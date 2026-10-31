@@ -1,3 +1,4 @@
+import { mcpSettingsPreview } from './mcpSettings.js';
 /**
  * 进程内工具审批登记表（host-exec 模式 / TUI 专用）。
  *
@@ -33,7 +34,7 @@ import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.
 import { isUnattendedRun } from './remoteActivity.js';
 export type { AnswerBy } from './pendingPromptIndex.js';
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
-import { MUSE_AGENT_SLUG, AGENT_MAX_ITERATIONS_MIN, buildAgentDef, getAgent, isValidSlug, slugify, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { MUSE_AGENT_SLUG, AGENT_MAX_ITERATIONS_MIN, buildAgentDef, getAgent, isValidSlug, slugFromNames, type NormalAgentDef } from '../agents/agentRegistry.js';
 // 控制面预览按**落盘前的校验结果**渲染(见 savedText)。两个校验都是纯同步函数;museTriggers 只在函数体里用 agentRegistry 的导出,
 // 与本文件 ↔ agentRegistry 的既有互引同理,求值顺序无关。
 import { validateEntryInput } from './agentSchedule.js';
@@ -118,7 +119,8 @@ export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefine
   let mode = normalizeApprovalMode(rawMode, 'toolNeedsApproval');
   if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
-  const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch';
+  // git_commit 同写文件档:只动本机仓库、可撤回(10-28 用户定「有权限就直接做」;push / pull 经 capabilities.approval:'command' 进跑命令档)
+  const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch' || name === 'git_commit';
   // 跑命令档(auto-edit 也要批):run_bash / kill_process / MCP 任意能力 / 后台起进程 / 给进程喂 stdin。
   // run_background + write_process_input = 启动任意 shell 进程并向其喂输入,危险性同 run_bash,纳入此档。
   // browser_task = 自主 agent 以用户身份操作已登录网站(点按/提交),危险性同档。
@@ -161,6 +163,7 @@ export function controlPlaneCall(
   const a: Record<string, any> = args && typeof args === 'object' ? (args as Record<string, any>) : {};
   const action = String(a.action ?? '');
   if (name === 'manage_agent') return action === 'create' || action === 'update';
+  if (name === 'manage_mcp') return !['list', 'check'].includes(action);
   if (name === 'update_app_settings') return true;
   if (name === 'manage_schedule') {
     if (action !== 'set' || !(a.auto === true || a.auto === 'true')) return false;
@@ -187,7 +190,7 @@ export function controlPlaneCall(
 }
 
 /** controlPlaneCall 可能为真的工具(闸门据此决定要不要为非 host 调用解析参数)。 */
-const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation', 'update_app_settings']);
+const CONTROL_PLANE_TOOLS = new Set(['manage_agent', 'manage_schedule', 'manage_automation', 'update_app_settings', 'manage_mcp']);
 
 /*
  * 审批预览的排版(Codex 09-25 二轮 #2)。控制面审批卡的待批内容**一个字都不省**:无人值守要跑的提示词、tool_call 的参数、
@@ -339,6 +342,8 @@ function savedAgentFields(args: any): NormalAgentDef | undefined {
   try {
     return buildAgentDef('preview', null, {
       name: String(args.name ?? ''),
+      nameZh: args.name_zh != null ? String(args.name_zh) : undefined,
+      nameEn: args.name_en != null ? String(args.name_en) : undefined,
       description: args.description != null ? String(args.description) : undefined,
       model: args.model != null ? String(args.model) : undefined,
       tools: Array.isArray(args.tools) ? args.tools.map((t: unknown) => String(t)) : undefined,
@@ -422,6 +427,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
   }
   if (name === 'forsion_account_action') return accountActionPreview(args);
   if (name === 'publish_web_page') return webPublishPreview(args);
+  if (name === 'manage_mcp') return mcpSettingsPreview(args);
   if (name === 'update_app_settings') {
     const v = args.values && typeof args.values === 'object' && !Array.isArray(args.values) ? (args.values as Record<string, unknown>) : {};
     const parts = Object.entries(v).map(([k, x]) => `${String(args.section ?? '')}.${k} → ${JSON.stringify(x)}`);
@@ -474,7 +480,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
   if (name === 'manage_automation') {
     const act = String(args.action ?? '');
     if (act !== 'set') return `manage_automation ${act}${args.id ? ` ${full(args.id)}` : ''}`;
-    const when = [args.cond_type, args.datetime || args.interval || args.time || args.match || args.path || args.event]
+    const when = [args.cond_type, args.datetime || args.interval || args.time || args.match || args.path || args.event || (args.params ? JSON.stringify(args.params) : '')]
       .filter(Boolean).map(full).join(' ');
     // 本次写入的动作链 / 旧式 prompt 取校验后的那份(见 savedText)。cond 换成 manual 只为绕开这里给不了的 cwd / vault
     // (file_chars_gte / db_changed 要),动作与 prompt 的校验与 cond 无关;与工具同样 allowToolCall=false。
@@ -982,6 +988,8 @@ export function customVerdict(call: ToolCall, rules: CustomApprovalRules): 'allo
 
 export interface GateCtx {
   sessionId: string; execMode?: string; approvalMode?: ApprovalMode; cwd?: string; extraRoots?: string[]; profile?: AppProfile;
+  /** 会话所属项目的目录(git_* 的审批说明按它读,和执行同一个目录)。 */
+  projectPath?: string;
   /** 审批档跟这个会话**此刻**存的设置走(run 中途在输入区切档当场生效;团队成员 = 团队会话);没存才用 approvalMode 快照。
    *  只给「档位本就来自会话设置」的 run(见 agentLoop.approvalModeSessionId),通道 / Muse / 自动化各自定档,不给。 */
   modeSessionId?: string;
@@ -1048,9 +1056,9 @@ async function controlPreview(call: ToolCall): Promise<string> {
       return approvalPreview(call, { keptActions: cur ? (cur.actions ?? null) : undefined });
     }
     if (name === 'manage_agent') {
-      // slug 归一与 manageAgent.execute 同口径(非法 slug → slugify(name)),否则预览说的和实际写的不是同一个 agent
+      // slug 归一与 manageAgent.execute 同口径(非法 slug → 由名字推),否则预览说的和实际写的不是同一个 agent
       const requested = args.slug ? String(args.slug) : '';
-      const slug = requested && isValidSlug(requested) ? requested : slugify(String(args.name ?? ''));
+      const slug = requested && isValidSlug(requested) ? requested : slugFromNames(args.name_en, args.name);
       const existing = slug ? await getAgent(slug) : null;
       const create = String(args.action) === 'create';
       const what = existing
@@ -1231,7 +1239,9 @@ export async function gateToolCall(
   if (editedOnCard && !escalate && !forceAsk && !protectedAsk) return { action: 'approve' };
 
   // 控制面调用因保护配置而问(完全放行档改默认工作目录)时,卡上同样先放引擎自己读到的事实,不只是模型写的那句。
-  const base = control || (protectedAsk && isControl) ? await controlPreview(call) : approvalPreview(call, { profile: ctx.profile });
+  const base = control || (protectedAsk && isControl) ? await controlPreview(call)
+    : name === 'git_commit' || name === 'git_push' || name === 'git_pull' ? await gitPreview(call, ctx.projectPath, ctx.profile)
+    : approvalPreview(call, { profile: ctx.profile });
   const preview = protectedAsk
     ? '⚠ Protected config or credentials · ' + base
     : escalate ? '⚠ Write outside the workspace · ' + base : base;
@@ -1280,6 +1290,18 @@ export async function gateToolCall(
   });
   if (ctx.park) return { action: 'park', decided, preview };
   return decided;
+}
+
+/** git_commit / git_push / git_pull 的卡面:提交哪些文件、推到哪个站哪个仓库用谁的账号(tools/builtin/git.ts gitApprovalPreview)。
+ *  限时 3 秒(它挡在审批卡前面),读不到 / 出错退回参数。动态 import:git 工具模块经 registry 回连这里。 */
+async function gitPreview(call: ToolCall, cwd: string | undefined, profile: AppProfile | undefined): Promise<string> {
+  try {
+    const { gitApprovalPreview } = await import('../tools/builtin/git.js');
+    const timeout = new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3000).unref(); });
+    const text = await Promise.race([gitApprovalPreview(call.function.name, parseCallArgs(call), cwd), timeout]);
+    if (text) return previewText(text);
+  } catch { /* 退回参数 */ }
+  return approvalPreview(call, { profile });
 }
 
 /** 这次调用若按上限档 cap 判,需不需要问人(custom 的 allow 规则对远程污点 run 不许越过它)。 */

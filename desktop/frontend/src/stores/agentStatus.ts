@@ -23,6 +23,7 @@ import type { AppState } from './appStore'
 import type { UiMessage } from '../types'
 import { inRunWindow } from './runStats'
 import { idleAgentStatus, type TanguAgentStatus } from '../amadeus/plugins/tanguSeam'
+import { agentName } from '../agentName'
 
 /** 成功结束后保持 done 的时长,之后回落 idle。 */
 export const DONE_HOLD_MS = 4000
@@ -66,7 +67,7 @@ function agentOf(s: AgentStatusSlice, sid: string | null): { agentSlug?: string;
   if (cfg?.engineId) return {}
   const slug = cfg?.agentSlug || s.defaultAgentSlug
   if (!slug) return {}
-  const name = s.agentDefs.find((a) => a.slug === slug)?.name
+  const name = agentName(s.agentDefs.find((a) => a.slug === slug))
   return name ? { agentSlug: slug, agentName: name } : { agentSlug: slug }
 }
 

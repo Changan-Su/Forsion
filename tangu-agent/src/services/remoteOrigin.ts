@@ -255,9 +255,10 @@ export function applyRemoteConfigWrite(stored: unknown, next: Record<string, any
 // log_event 同理(P1 · M1A,G7):每日日志按天进 Muse 周期提示词的活动摘要,远端写一条 = 把原话送进无人值守的 Muse;
 // HTTP 的 POST /agent/log 本就是 deny-remote。它没有 action 参数,恒拒。
 // update_app_settings 同理(10-05):本机 config.json 里的默认模型 / 语音 / 联网搜索 / 默认工作目录对之后每个本机会话生效;没有 action 参数,恒拒(读走 app_settings)。
-const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_harness', 'manage_automation', 'manage_schedule', 'remember', 'log_event', 'update_app_settings']);
+const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_harness', 'manage_automation', 'manage_schedule', 'remember', 'log_event', 'update_app_settings', 'manage_mcp']);
 export function remoteManagementDenied(tool: string, action: unknown): string | null {
   if (!REMOTE_READONLY_MANAGEMENT.has(tool) || action === 'list') return null;
+  if (tool === 'manage_mcp') return action === 'check' ? null : 'Remote sessions cannot change MCP settings on the host computer. Use list/check, or ask the user to configure MCP locally.';
   if (tool === 'log_event') return 'Remote sessions cannot write to the daily log: it feeds background agents on the host computer. Tell the user the result in your reply instead.';
   if (tool === 'update_app_settings') return 'Remote sessions cannot change app settings on the host computer. Tell the user to change it in Settings there.';
   return `Remote sessions cannot create, change or delete agents, skills, the evolution record, long-term memory, automations or schedules (${tool} action "${String(action ?? '')}"): they take effect in later runs on the host computer. Only action "list" is available here; ask the user to make this change on the host computer.`;

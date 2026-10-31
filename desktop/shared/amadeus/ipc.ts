@@ -18,6 +18,9 @@ export const IPC = {
   saveAsset: 'asset:save',
   saveVaultBytes: 'vault:save-bytes',
   readVaultBytes: 'vault:read-bytes',
+  readExternalPdf: 'pdf:external-read',
+  exportExternalPdf: 'pdf:external-export',
+  writeExternalPdfAnnotations: 'pdf:external-annotations',
   saveAttachment: 'attachment:save',
   openAttachment: 'attachment:open',
   copyAttachment: 'attachment:copy',
@@ -60,6 +63,7 @@ export const IPC = {
   openPluginsFolder: 'plugins:open-folder',
   scaffoldPlugin: 'plugins:scaffold',
   uninstallPlugin: 'plugins:uninstall-forsion',
+  trashRestore: 'trash:restore-desktop',
   bundleAgentOwned: 'plugins:bundle-agent-owned',
   revealInFileManager: 'shell:reveal',
   dbRead: 'db:read',
@@ -268,7 +272,8 @@ export interface PluginDependency {
   id: string
   /** Lowest acceptable version, compared with cmpVersion (e.g. "1.2.0"). */
   minVersion?: string
-  /** Market install slug (install_slug ≠ id). Present → the host offers a one-click install. */
+  /** Market install slug (install_slug ≠ id). The store's one-click install matches listings by this, then by `id`,
+   *  never by display name. New listings' slug is `market-<ID>`: without this field they can't be matched. */
   market?: string
   /** Display-name fallback while the prerequisite isn't installed (the host only knows its id then). */
   name?: string
@@ -519,7 +524,7 @@ export interface EmbedResolved {
 /** `db:read` 的结果:错误是数据不是异常(前端按 status 分支渲染,不用 try/catch 猜原因)。 */
 /** 写回票据:文件内容的短哈希。渲染端把它随 dbWriteCas 带回,主进程比对不上就拒写 ——
  *  防的是「渲染端 500ms 防抖里握着旧快照,期间引擎/自动化改了同一张表,防抖一落盘把人家整行抹掉」。
- *  云端/移动端桥不提供 version(也没有 dbWriteCas),渲染端据此退回无条件写,行为与从前一致。 */
+ *  云端桥使用所读原文的 seq 作为票据;旧宿主未提供 version 时保留兼容写入路径。 */
 export type DbReadResult =
   | { status: 'ok'; path: string; data: DbFile; version?: string } // path = 解析后的 vault 相对路径,后续写回用它
   | { status: 'missing' }
@@ -664,6 +669,10 @@ export interface AmadeusApi {
   /** Read a vault file's raw bytes by vault-relative path (PDF 阅读器 getDocument({data}) 等;避免自定义
    *  scheme 的跨源 XHR 限制——dev 渲染器是 http://localhost 源,XHR 到 amadeus-asset:// 会被 Chromium 拦)。 */
   readVaultBytes(path: string): Promise<Uint8Array>
+  /** Desktop file-view access; external PDFs are read-only, only their annotation sidecar is writable. */
+  readExternalPdf?(path: string, annotations?: boolean): Promise<Uint8Array | null>
+  exportExternalPdf?(path: string, name: string, bytes: Uint8Array): Promise<string | null>
+  writeExternalPdfAnnotations?(path: string, bytes: Uint8Array, backup?: number): Promise<void>
   /** Import a dragged-in file to the configured attachment location (keeps its name, de-duped).
    *  Returns the page-relative path (for `[name](rel)` links) + final basename (for `![[base]]`). */
   saveAttachment(
@@ -780,8 +789,12 @@ export interface AmadeusApi {
   openPluginsFolder(): Promise<void>
   /** Write a runnable sample plugin into the plugins folder. */
   scaffoldSamplePlugin(): Promise<void>
-  /** 卸载 ~/.forsion/plugins 下的一个 Forsion 插件(按 manifest id 定位目录整删;可选:桌面实现)。 */
-  uninstallPlugin?(id: string): Promise<void>
+  /** 卸载 ~/.forsion/plugins 下的一个 Forsion 插件(按 manifest id 定位目录),挪进回收站(30 天可恢复;可选:桌面实现)。
+   *  keepSettings:插件设置原地留着;vaultFolder:库里的工作文件夹(相对库根)一起进回收站;prefs:渲染层摘下的 localStorage 偏好,
+   *  恢复时原样交回。旧调用只传 id = 文件 + 设置进回收站。 */
+  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }): Promise<{ trashId?: string; dirName?: string } | void>
+  /** 恢复主进程写的回收站条目(Forsion 插件);extra.prefs 由渲染层写回 localStorage。 */
+  trashRestore?(id: string): Promise<{ kind: string; ref: string; extra?: Record<string, unknown> }>
   /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。
    *  ctx.tangu.startChat 的 send:true 只认它;可选:只有本机桌面实现,缺席(web / 移动 / Unit / 台架)= 一律降级为预填。 */
   bundleAgentOwned?(pluginId: string, slug: string): Promise<boolean>
@@ -800,7 +813,7 @@ export interface AmadeusApi {
   /** Excalidraw 画板(`.excalidraw.md` / 裸 `.excalidraw`)读原文;ref 与附件同一 basename 语义。 */
   readDrawing(pagePath: string, ref: string): Promise<DrawingReadResult>
   /** 按 `drawing:read` 返回的确切 vault 相对路径原子写回(记自写账本,watcher 不把自己的写当外部改动)。 */
-  writeDrawing(drawingPath: string, source: string): Promise<void>
+  writeDrawing(drawingPath: string, source: string, base?: string): Promise<void | TextWriteResult>
   /** 读取 vault 内确切相对路径的 UTF-8 文本(供插件文件类型);越界/不存在返回 null。 */
   readTextFile(path: string): Promise<string | null>
   /** 原子写回 vault 内确切相对路径的 UTF-8 文本(供插件文件类型;记自写账本,同 writeDrawing)。

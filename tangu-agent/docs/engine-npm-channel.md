@@ -26,6 +26,21 @@ npm  @forsion/tangu-agent@2.13.5          ~/.forsion/engine/2.13.5/        安�
   下次生效。每个桌面版本只做一次(记号 `<userData>/core-prefetch-version`),实现在 `desktop/electron/corePluginUpdates.ts` 的 `prefetchOnFirstBoot`。
 - **关掉:** 环境变量 `TANGU_ENGINE_OVERLAY=off` 只跑自带的;`=verbose` 让终端里的 `tangu` 也把挑选过程打出来。
 
+### 按安装包线分发(2026-10-28 起)
+
+每一版桌面是一条「线」,只收给自己做的热更新:npm dist-tag `desktop-<桌面版本>`(`+build.N` 修订与原版同线)指向这条线上最新的引擎。
+
+- **更新器只查本线标签,不看 `latest`。** `latest` 上可能是别的线的引擎:号更高,建表文件碰巧相同时 `checkOverlay` 也会放行,新壳就跑上了旧线的代码。本线标签不存在 = 还没给这一版发过热更新,显示「已是最新」。
+- **一次发布只打一个标签**(trusted publishing 只管 `npm publish`,不能另跑 `npm dist-tag add`)。门禁 `scripts/engine-release-gate.mjs` 按基线桌面 tag 里有没有 `desktop/shared/engineLine.mjs` 来选:
+  | 基线安装包 | 打哪个标签 |
+  |---|---|
+  | 带 `engineLine.mjs`(更新器查本线) | `desktop-<基线版本>`,`latest` 不动 |
+  | 更早的正式版(更新器只读 `latest`,≤ 2.13.7) | `latest`,同一时间只能喂一条这样的线 |
+  | 更早的预发布(≤ 2.13.8-beta.2) | 门禁拒发:打 `latest` 会抢走正式版那条线,只能等下个桌面版 |
+- 因此 `latest` 从此只服务更早的安装包。要退掉它得用带令牌的 `npm dist-tag`,CI 里没有。
+- `minDesktop` 取基线的整条线(`v8.1.0+build.2` 拉的 hotfix 写 `8.1.0`),原版与各修订都能收;建表 / 依赖照旧由 `checkOverlay` 把关。基线安装包自带的引擎得是正式版号,否则启动器不收任何热更新,门禁拒发。
+- 本机 `engine/` 目录是各安装包共用的。桌面启动时(`cleanEngineOverlays`)会删掉 `minDesktop` 不在本线上的旧引擎:那只能是换装前的安装包下的,号可能更高,建表碰巧相同时启动器会挑中它。换装后若先在终端跑 `tangu`、还没打开桌面,会挑到它一次,这个窗口不管。
+
 ## 什么样的新版会被收下
 
 判定只有一份实现:`src/boot/overlay.ts` 的 `checkOverlay`。更新器落盘前、启动器每次拉起前跑的是同一个函数。五条全过才收:
@@ -42,12 +57,12 @@ npm  @forsion/tangu-agent@2.13.5          ~/.forsion/engine/2.13.5/        安�
 
 ## 发一次引擎热更新
 
-一次热更新 = 从它所针对的那个桌面正式版拉出来的修复分支。**不要从 main 的最新提交发**:main 上有没随安装包发出去的功能、依赖和迁移。
+一次热更新 = 从它所针对的那个桌面版本(正式版或预发布)拉出来的修复分支。**不要从 main 的最新提交发**:main 上有没随安装包发出去的功能、依赖和迁移。
 
 1. 从目标桌面 tag 开分支:`git switch -c hotfix/tangu-2.13.5 v2.13.4`,把修复放进去(只动引擎,不动依赖、不动迁移)。
 2. 把 `tangu-agent/package.json` 与 lock 的版本号抬到新的引擎版本（`desktop/package.json` 不动）。**桌面和引擎独立编号**：引擎须高于目标桌面自带的引擎，以及 npm 已发布的引擎版本；无需高于桌面版本号。桌面 `v2.13.6` 与引擎 `tangu-v2.13.6` 可同时存在。
 3. 本机验证:`npm run build && npm run e2e:overlay`,再跑这次修复相关的测试。发 npm 前的验证不能比发安装包松:npm 版本撤不回,坏版本只能向前修。
-4. 推分支,推 tag `tangu-v2.13.5`。`publish-engine.yml` 构建、过门禁、签名、端到端核对,然后发 npm。
+4. 推分支,推 tag `tangu-v2.13.5`。`publish-engine.yml` 构建、过门禁、签名、端到端核对,然后按门禁选的 dist-tag 发 npm(见上文「按安装包线分发」;Actions 日志里那行 `dist-tag …` 就是它)。
 5. 把修复照常合进 main。
 
 `forsion.minDesktop` 缺省就是它所基于的那个桌面版本(CI 用最近的 `v*` tag 填),兼容该版本及更高版本的壳，仍须通过依赖、迁移和签名检查。
@@ -102,7 +117,8 @@ ed25519。公钥编在 `src/boot/signingKey.ts`,随每一份安装包发出去�
 | `npm run e2e:overlay`(tangu-agent) | 真启动器 + 真引擎(签名用当场生成的测试钥匙,不需要发版私钥):选中新版、上层野 `node_modules` 不干扰、终端入口同样选中、改一个字节 / 多一个文件 / 依赖不同 / 壳太旧 / 记成坏版本都退回自带的 |
 | `node scripts/engine-overlay-packaged.check.cjs`(desktop) | 同一套核对,换成打包后的 Electron 与安装包里的原生依赖;build-desktop 在三个平台上各跑一遍 |
 | `src/boot/overlay.test.ts` | 判定函数的每一条 |
-| `desktop/electron/engineUpdates.test.ts` | 下载、只落签名表里的文件、落位、启动时收拾目录 |
+| `desktop/electron/engineUpdates.test.ts` | 只查本线标签、下载、只落签名表里的文件、落位、启动时收拾目录 |
+| `scripts/engine-release-gate.test.mjs`(tangu-agent) | 版本号身份、依赖 / 迁移守卫、按基线安装包选 dist-tag |
 | `desktop/electron/backendManager.test.ts` | 新版起不来 / 一用就崩时停用并退回 |
 
 ## 已知的边界

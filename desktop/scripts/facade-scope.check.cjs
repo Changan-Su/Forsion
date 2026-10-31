@@ -69,8 +69,8 @@ async function main() {
       active: [...document.querySelectorAll('.dv-tab.dv-active-tab')].filter(vis).map((e) => (e.textContent || '').trim()),
       row: [...document.querySelectorAll('.t2s-srow.active')].map((e) => (e.textContent || '').trim()),
       chars: [...document.querySelectorAll('.sb-plain, .status-item')].map((e) => (e.textContent || '').trim()).filter((t) => /字|chars/i.test(t)),
-      groups: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-nav-btn')).length,
-      byGroup: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-nav-btn'))
+      groups: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-new-tab')).length,
+      byGroup: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-new-tab'))
         .map((g) => [...g.querySelectorAll('.wb-tab-name')].map((e) => (e.textContent || '').trim())),
       welcome: /从左栏选一篇笔记开始/.test(document.body.innerText),
     }

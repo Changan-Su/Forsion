@@ -60,7 +60,7 @@ export {
 } from './layoutPersist'
 export type { PersistedPanel, LayoutBlob } from './layoutPersist'
 /** 视口锚定的 fixed 浮层(右键菜单/补全/弹出层):自带 CSS zoom 反补偿 + 越界翻面。别再手写 left/top。 */
-export { OverlayAt, useExitGhost, useClampedMenu, clampMenu, useEdgeNudge, nestedPanelPlacement, nestedPanelTop, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
+export { OverlayAt, useExitGhost, removeOverlayWithExit, useClampedMenu, clampMenu, useEdgeNudge, nestedPanelPlacement, nestedPanelTop, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
 export type { NestedPanelPlacement } from './menuAnchor'
 export type { AnchorOpts } from './menuAnchor'
 /** 落点提示(拖动时的落点线 / 放进去的描边):换落点原地淡出淡入。见 dropIndicator.ts 顶注。 */
@@ -89,6 +89,8 @@ export type { ExtendViewController, ExtendViewOptions, ExtendViewHandle, ExtendV
 export { ExtendViewHost } from './ExtendViewHost'
 
 export { contentStorageKey } from './contentStorageScope'
+export { mountLineSelection } from './lineSelection'
+export type { LineSelectionOptions, LineSelectionHandle } from './lineSelection'
 
 export { switchSpace, setSpaceBarOrder, spaceSwitchDirection, type SpaceSwitchMotion } from './spaceTransition'
 export { SPRING_PAGE, SPRING_ROW, reducedMotion, springAt, springEasing, springMotion, type Spring } from './spring'

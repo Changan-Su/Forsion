@@ -651,6 +651,12 @@ if (new URLSearchParams(location.search).has('dock')) {
       },
       split: (): string | null => useWorkspace.getState().splitActive('right')?.id ?? null,
       activate: (leafId: string): void => useWorkspace.getState().activateLeaf(leafId),
+      /** 把 leafId 所在的组整组挪到 toId 那组的右边(真实拖组走的同一个 moveTo)。 */
+      moveGroupRightOf: (leafId: string, toId: string): void => {
+        const api = useWorkspace.getState().api
+        const to = api?.getPanel(toId)?.group
+        if (to) api?.getPanel(leafId)?.group.api.moveTo({ group: to, position: 'right' })
+      },
       stack: (leafId: string): { keys: string[]; idx: number } => {
         const st = useNav.getState().stacks[leafId]
         return { keys: st?.entries.map((e) => e.key) ?? [], idx: st?.idx ?? -1 }
@@ -1171,7 +1177,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     writeDatabase: (p: string, data: unknown) => { mem.set(p, JSON.stringify(data)); return Promise.resolve() },
   })
   const STOCK = '库存表.db', OUT = '出库记录.db', ORDER = '订单总表.db', TASK = '任务表.db'
-  // 任务表的日期相对今天算(seedCalendarDb 同款):甘特轴恒含今天,写死 2026-03 会让轴拉到半年宽、今日线在屏外
+  // 任务表的日期相对今天算:甘特轴恒含今天,写死 2026-03 会让轴拉到半年宽、今日线在屏外
   const erpDay = (n: number): string => {
     const t = new Date()
     const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + n)
@@ -1537,7 +1543,9 @@ if (new URLSearchParams(location.search).has('dock')) {
     })
   }
   registerView({ type: 'amadeus-pdf', kind: 'entity', embeddable: true, idParam: 'probePath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'], displayName: 'File Probe', icon: Square, factory: (p) => <DashFileProbe {...p} /> })
-  const gridIds = ['1', '2', '3', '4', '5', '6', '7']
+  // `&cards=4x3,6x5`:换成这组尺寸的文本卡,给探针复现具体几何。
+  const sized = new URLSearchParams(location.search).get('cards')?.split(',').map((s) => s.split('x').map(Number))
+  const gridIds = sized ? sized.map((_, i) => String(i + 1)) : ['1', '2', '3', '4', '5', '6', '7']
   usePageStore.setState({
     activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE, '笔记甲.md'], files: ['手册.pdf', '图.png'],
     manifest: {
@@ -1550,11 +1558,13 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 钉「手调=硬值 / 未动=可弹」的分界(2026-08-31 打回后收窄)。
       fmExtra: [
         'tags: [harness]', 'dashboard3:',
-        '  "1": [0, 12, 1]', '  "2": [1, 3, 2]', '  "3": [2, 3, 2]', '  "4": [3, 6, 5]',
-        '  "5": [4, 12, 1]', '  "6": [5, 6, 3]', '  "7": [6, 6, 3]',
+        ...(sized ? sized.map(([w, h], i) => `  "${i + 1}": [${i}, ${w}, ${h}]`) : [
+          '  "1": [0, 12, 1]', '  "2": [1, 3, 2]', '  "3": [2, 3, 2]', '  "4": [3, 6, 5]',
+          '  "5": [4, 12, 1]', '  "6": [5, 6, 3]', '  "7": [6, 6, 3]',
+        ]),
       ].join('\n'),
     },
-    blocks: {
+    blocks: sized ? Object.fromEntries(gridIds.map((id) => [id, { id, type: 'markdown', content: `卡片 ${id}` }])) : {
       1: { id: '1', type: 'markdown', content: '```section\ntitle: 今天\n```' },
       2: { id: '2', type: 'markdown', content: '```clock\ntz: Asia/Shanghai\n```' },
       3: { id: '3', type: 'markdown', content: '随手记：把常看的东西摆成一页。' },

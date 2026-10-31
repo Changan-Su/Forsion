@@ -141,6 +141,8 @@ export async function startRun(
     modelId?: string
     attachments?: Attachment[]
     agentConfig?: AgentConfig
+    /** 额度用完「先问我」卡上点了「改用 X」:这一轮直接用设置里的后备模型。 */
+    quotaFallback?: boolean
   },
 ): Promise<StartRunResult> {
   // 模型:目标不带模型,回退链只在调用方(appStore.send 的 sessionModelId:会话的 → 按目标的缺省 → 目录 defaultModelId,
@@ -166,6 +168,7 @@ export async function startRun(
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},
+      ...(params.quotaFallback ? { quota_fallback: true } : {}),
     }),
   })
   // 远端拒绝码(设备页的工作目录落在受保护位置 → REMOTE_CWD_FORBIDDEN 等)换成本地化提示;其余照旧取 detail / 原文

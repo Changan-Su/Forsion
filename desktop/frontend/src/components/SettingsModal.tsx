@@ -1,3 +1,5 @@
+import { publicMcpUrl } from '../../../shared/mcpConfig'
+import { McpImportDialog, type McpImportDraft } from './McpImportDialog'
 import { PRODUCT } from '../product'
 import { ModelPickerSettings } from './ModelPickerSettings'
 import { WebSearchSettings } from './WebSearchSettings'
@@ -19,7 +21,7 @@ import { StartupAppearanceSettings } from './StartupAppearanceSettings'
 import { backgroundSwatch, listLanguages, listSkins, skinSwatch, forcedSchemeForLanguage, SIGNALS } from '../theme/registry'
 import { customAccentVars } from '../theme/lcl/lovableData'
 import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled, useWorkspace } from '@lcl/engine' // 工作区引擎:恢复默认布局 + 移动预览模式;原生顶栏(Android 可选宿主)
-import { useApp } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
+import { useApp, defaultModelOf } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import { listClientSurfaces } from '../services/clientSurfaces'
 import {
@@ -83,6 +85,7 @@ import { likelyMainlandChina } from './OnboardingWizard'
 import { EnvProbeSection } from './EnvProbeSection'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { ComputerHistorySettings, computerHistoryApi } from './ComputerHistorySettings'
+import { TrashSettings } from './TrashSettings'
 import { RemoteSessionsSettings, remoteSessionsApi } from './RemoteSessionsSettings' // P1-K4
 import { UnitSettings } from './UnitSwitcher'
 import { debugFireToast } from '../achievements/store'
@@ -115,11 +118,20 @@ import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, 
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
+import { MaskingSettingsSection } from './MaskingSettingsSection'
 import './settingsModal.css'
-import { connectionTarget, homeTarget } from '../services/engine/targets'
+import { LocalProviderImport } from './LocalProviderImport'
+import { connectionTarget, homeTarget, HOME_REF } from '../services/engine/targets'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
+  'settingsmodal.configRecovered': { zh: '上次的设置文件损坏，已恢复到 {time} 的版本', en: 'Your settings file was damaged. Restored the version from {time}.' },
+  'settingsmodal.mcp.tokens': { zh: '每个请求约 {n} token', en: '~{n} tokens per request' },
+  'settingsmodal.mcp.notConnected': { zh: '未连接', en: 'Not connected' },
+  'settingsmodal.mcp.total': { zh: 'MCP 工具定义合计每个请求约 {n} token，占当前默认模型窗口的 {pct}%', en: 'MCP tool definitions take ~{n} tokens per request, {pct}% of the default model’s context window' },
+  'settingsmodal.mcp.totalNoWindow': { zh: 'MCP 工具定义合计每个请求约 {n} token', en: 'MCP tool definitions take ~{n} tokens per request' },
+  'settingsmodal.mcp.heavyNote': { zh: '不常用的可以关掉。按约 4 个字符 = 1 token 估算。', en: 'Turn off the ones you rarely use. Estimated at about 4 characters per token.' },
+  'settingsmodal.mcp.estimateNote': { zh: '按约 4 个字符 = 1 token 估算。', en: 'Estimated at about 4 characters per token.' },
   'settingsmodal.mcp.fromPlugin': { zh: '来自插件「{name}」', en: 'From plugin "{name}"' },
   'settingsmodal.mcp.fromPluginHint': { zh: '这个 server 随插件启用和停用；要关掉它，请在插件设置里停用这个插件。', en: 'This server starts and stops with its plugin. To turn it off, disable the plugin in plugin settings.' },
   'settingsmodal.selectionBar': { zh: '划线菜单', en: 'Selection menu' },
@@ -142,7 +154,8 @@ registerMessages({
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
   'settingsmodal.cloudAccountDescription': { zh: 'Forsion 云端 · 管理个人主页、登录资料和账号安全。', en: 'Forsion Cloud · Your profile, sign-in details and account security.' },
   'settingsmodal.cloudMembershipDescription': { zh: 'Forsion 云端 · 查看会员、额度、积分与用量记录。', en: 'Forsion Cloud · Membership, quota, points and usage.' },
-  'settingsmodal.cloudHelpDescription': { zh: 'Forsion 云端 · 提交反馈、查看回复与管理诊断数据。', en: 'Forsion Cloud · Feedback, replies and diagnostic data.' },
+  'settingsmodal.cloudHelpDescription': { zh: 'Forsion 云端 · 提交反馈、查看回复。', en: 'Forsion Cloud · Feedback and replies.' },
+  'settingsmodal.cloudPrivacyDescription': { zh: 'Forsion 云端 · 帮助改进 Forsion，管理诊断数据。', en: 'Forsion Cloud · Help improve Forsion and manage diagnostic data.' },
   'settingsmodal.cloudAdvancedConnection': { zh: '高级连接', en: 'Advanced connection' },
   'settings.forsionCloud.noteSyncOn': { zh: '与云端智库同步', en: 'Sync with the cloud vault' },
   'settings.forsionCloud.address': { zh: '地址', en: 'Address' },
@@ -287,6 +300,9 @@ export type Tab = StaticTab | `plugin:${string}` | `fplugin:${string}`
 export type SettingsTarget = Tab | 'wechat' | `${StaticTab}/${string}`
 
 const DEV_MODE_KEY = 'forsion_tangu_dev_mode'
+/** 摘要栏卡片立体感(开发者选项)。读的一方是 Tangu 的 views/chat2/summaryPrefs,宿主不 import 它(Tangu 边界):
+ *  写同一个 key,再在本窗口派一次 storage 事件 —— 设置开在独立窗口时浏览器自己给主窗派,和主窗同窗时靠这一次。 */
+const SUMMARY_ELEVATION_KEY = 'forsion.summaryElevation'
 /** 「Forsion 云端 → 账号」:Extend 渲染半身自绘的子页(registerSettingsView category 'forsion',id 'account')。 */
 const ACCOUNT_SUB = 'fx:forsion-extend:account'
 /** 引擎插件「电脑操作」的 id:它的设置页是固定的一级页 'computer-use'。 */
@@ -306,6 +322,7 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   sync: <RefreshCw size={14} />,
   'amadeus-plugins': <Puzzle size={14} />,
   advanced: <Wrench size={14} />,
+  trash: <Trash2 size={14} />,
   permissions: <MonitorCog size={14} />,
   units: <Laptop size={14} />,
   'remote-sessions': <MonitorSmartphone size={14} />, // P1-K4
@@ -474,6 +491,15 @@ export const SettingsModal: React.FC<{
     writeFont(slot, v)
     applyUiFonts()
   }
+  // 开发者「摘要栏卡片立体感」(见 SUMMARY_ELEVATION_KEY)。
+  const [summaryElevation, setSummaryElevationState] = useState<string>(() => {
+    try { const v = localStorage.getItem(SUMMARY_ELEVATION_KEY); return v === 'float' || v === 'flat' ? v : 'half' } catch { return 'half' }
+  })
+  const setSummaryElevation = (v: string) => {
+    setSummaryElevationState(v)
+    try { localStorage.setItem(SUMMARY_ELEVATION_KEY, v) } catch { /* 存不进就不同步 */ }
+    window.dispatchEvent(new StorageEvent('storage', { key: SUMMARY_ELEVATION_KEY }))
+  }
   // 开发者「移动端 UI 预览命令」开关(localStorage;bootstrapEngine 启动时据此注册 switch-ui-mode 命令)。
   const [mobileUiCmd, setMobileUiCmd] = useState<boolean>(() => {
     try { return localStorage.getItem(MOBILE_UI_KEY) === '1' } catch { return false }
@@ -539,6 +565,8 @@ export const SettingsModal: React.FC<{
     ['notifications', t('settings.tab.notifications')],
     ...(phoneShell ? [] : ([['statusbar', t('settings.tab.statusbar')]] as Array<[Tab, string]>)),
     ['advanced', t('settings.tab.advanced')],
+    // 回收站(卸载的 Agent / 技能 / 插件放 30 天):只在本机引擎有,手机原生外壳同一页;放「系统」组、设备权限上面。
+    ...(isDesktop || window.tangu?.mobile ? ([['trash', t('trash.tab')]] as Array<[Tab, string]>) : []),
     ...(hasDesktopPermissions() ? ([['permissions', t('desktopPermissions.title')]] as Array<[Tab, string]>) : []),
     // 设置 › 设备(原 Ribbon 胶囊菜单,10-17 搬进来):只在有 Unit 主进程桥的真桌面列。
     ...(window.tangu?.unitHostStatus || window.tangu?.unitsList ? ([['units', t('unit.tab')]] as Array<[Tab, string]>) : []),
@@ -728,8 +756,13 @@ export const SettingsModal: React.FC<{
   // MCP 配置(~/.tangu/mcp.json)+ 后端实际连接状态(GET /agent/tools 的 mcp 分区)
   const [mcpServers, setMcpServers] = useState<Record<string, McpServerConfigEntry>>({})
   const [mcpStatus, setMcpStatus] = useState<ToolsResponse['mcp']>(undefined)
-  const [editMcp, setEditMcp] = useState<{ name: string; isNew: boolean; command: string; argsText: string; url: string; transport: 'auto' | 'stdio' | 'http' | 'sse'; envText: string } | null>(null)
+  // MCP 页页头合计的分母:本机新对话会用的那个模型(MCP 状态与 models 都来自本机引擎;焦点在别的电脑时也按本机算),
+  // 没选过就落到本机目录的 defaultModelId(渲染处)
+  const defaultChatModelId = useApp((s) => defaultModelOf(s, HOME_REF) || '')
+  const [editMcp, setEditMcp] = useState<{ name: string; isNew: boolean; command: string; argsText: string; url: string; transport: 'auto' | 'stdio' | 'http' | 'sse'; envText: string; original?: McpServerConfigEntry } | null>(null)
   const [mcpMsg, setMcpMsg] = useState('')
+  const [showMcpImport, setShowMcpImport] = useState(false)
+  const [mcpImportDraft, setMcpImportDraft] = useState<McpImportDraft>({ json: '', name: '' })
 
   // Obsidian 式插件:清单 + 每插件设置页(已启用且有 settings 的插件在「扩展」组下成一级 nav 项)。
   const [pluginAgents, setPluginAgents] = useState<NormalAgentDef[]>([])
@@ -781,17 +814,60 @@ export const SettingsModal: React.FC<{
 
   // 旧「Tangu → 插件」独立入口已并入统一插件页:旧深链/持久化 tab 一律重定向。
 
+  // MCP 页:每个已连接的 server 每个请求约占多少 token(引擎按工具定义 JSON / 4 估),页头合计占默认模型窗口的比例。
+  // 不出金额、不按会话算 —— 只说体量,让人决定关哪个。没连上的不给数字。
+  type McpStatusRow = NonNullable<ToolsResponse['mcp']>[number]
+  const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
+  const mcpStatusLabel = (st: McpStatusRow): string =>
+    st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length })
+      : st.status === 'error' ? t('settings.mcp.statusError')
+        : st.status === 'disabled' ? t('settings.mcp.statusDisabled')
+          : t('settingsmodal.mcp.notConnected')
+  const mcpTokensLabel = (st: McpStatusRow | undefined): React.ReactNode =>
+    st?.status === 'connected' && typeof st.approxTokens === 'number'
+      ? <span className="mcp-tokens">{t('settingsmodal.mcp.tokens', { n: fmtTok(st.approxTokens) })}</span>
+      : null
+  const mcpTotalSummary = (): React.ReactNode => {
+    // 插件自带的照算;mcp.json 里的要还在、且没停用(刚删 / 刚停的,状态快照在页面刷新前还是 connected)
+    const live = (mcpStatus || []).filter((s) => s.status === 'connected' && typeof s.approxTokens === 'number' && (s.origin || (mcpServers[s.server] && mcpServers[s.server].enabled !== false)))
+    if (!live.length) return null
+    const total = live.reduce((n, s) => n + s.approxTokens!, 0)
+    const win = models?.models.find((m) => m.id === (defaultChatModelId || models.defaultModelId))?.contextWindow
+    const pct = win ? (total / win) * 100 : undefined
+    return (
+      <div className="mcp-token-summary" data-mcp-token-summary>
+        <Info size={14} />
+        <div>
+          {pct === undefined ? t('settingsmodal.mcp.totalNoWindow', { n: fmtTok(total) }) : t('settingsmodal.mcp.total', { n: fmtTok(total), pct: pct.toFixed(1) })}
+          <small>{t(pct !== undefined && pct > 5 ? 'settingsmodal.mcp.heavyNote' : 'settingsmodal.mcp.estimateNote')}</small>
+        </div>
+      </div>
+    )
+  }
+
   const refreshMcp = (): void => {
     void window.tangu?.readMcpConfig?.().then((c) => setMcpServers(c.mcpServers)).catch(() => setMcpServers({}))
     void listTools(homeTarget()).then((t) => setMcpStatus(t.mcp ?? [])).catch(() => setMcpStatus([]))
   }
 
-  const writeMcp = (next: Record<string, McpServerConfigEntry>, msg: string): void => {
-    void window.tangu!.writeMcpConfig!({ mcpServers: next }).then((c) => {
+  const writeMcp = async (next: Record<string, McpServerConfigEntry>, msg: string, base = mcpServers): Promise<boolean> => {
+    return window.tangu!.writeMcpConfig!({ mcpServers: next, base }).then((c) => {
       setMcpServers(c.mcpServers)
       setMcpMsg(msg)
-    }).catch((e) => setMcpMsg(`${t('settings.toast.saveFailed')}${ipcErrorText(e)}`)) // 原因码(如 mcp-name-reserved)译成当前语言
+      return true
+    }).catch((e) => { setMcpMsg(`${t('settings.toast.saveFailed')}${ipcErrorText(e)}`); return false }) // 原因码(如 mcp-name-reserved)译成当前语言
   }
+
+  useEffect(() => {
+    if (!p.open || tab !== 'mcp' || !window.tangu?.readMcpConfig) return
+    let alive = true
+    const poll = () => {
+      void window.tangu!.readMcpConfig!().then(c => { if (alive) setMcpServers(c.mcpServers) }).catch(() => {})
+      void listTools(homeTarget()).then(r => { if (alive) setMcpStatus(r.mcp ?? []) }).catch(() => {})
+    }
+    const timer = setInterval(poll, 2000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [p.open, tab])
 
   const refreshAuth = (): void => {
     if (!window.tangu?.authStatus) return
@@ -1087,7 +1163,7 @@ export const SettingsModal: React.FC<{
   }
 
   useEffect(() => {
-    if (p.open && tab === 'model' && !models && !modelsLoading) void loadModels()
+    if (p.open && (tab === 'model' || tab === 'mcp') && !models && !modelsLoading) void loadModels() // mcp:页头合计要默认模型的窗口
     if (p.open && tab === 'mcp') refreshMcp()
     // appVersion 一打开就取(不只 about tab):高级→导出日志也要带版本号,否则导出里恒为 null。
     if (p.open && !appVersion) void window.tangu?.appVersion?.().then((v) => setAppVersion(v || '')).catch(() => {})
@@ -1153,6 +1229,7 @@ export const SettingsModal: React.FC<{
     'computer-use': 'settings.page.computerUseDescription',
     'amadeus-plugins': PRODUCT.nativeFeatures !== undefined ? 'settings.amadeusPlugins.unitIntro' : 'settings.page.pluginsDescription',
     advanced: 'settings.page.advancedDescription',
+    trash: 'trash.page',
     permissions: 'desktopPermissions.description',
     units: 'unit.page',
     'remote-sessions': 'remoteSessions.page', // P1-K4
@@ -1243,7 +1320,8 @@ export const SettingsModal: React.FC<{
     : subItemsForTab(id).filter(([key]) => cloudSettingsParent(cloudViews, key) === key && (!groupedCloud || key !== 'f-conn'))
   const cloudDescription = cloudNavKey === ACCOUNT_SUB ? 'settingsmodal.cloudAccountDescription'
     : cloudNavKey === 'fx:forsion-extend:quota' ? 'settingsmodal.cloudMembershipDescription'
-      : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription' : ''
+      : cloudNavKey === 'fx:forsion-extend:feedback' ? 'settingsmodal.cloudHelpDescription'
+        : cloudNavKey === 'fx:forsion-extend:privacy' ? 'settingsmodal.cloudPrivacyDescription' : ''
   const activeSubLabel = subItems.find(([k]) => k === activeSub)?.[1] ?? ''
   const modelSubDescriptions: Record<string, string> = { 'm-models': 'modelsettings.defaultsHint', 'm-display': 'modelsettings.displayHint', 'm-providers': 'modelsettings.providersHint', 'm-websearch': 'modelsettings.searchHint', 'm-voice': 'modelsettings.voiceHint' }
   // 换页/换子页面后:①选中项滚到可见；②正文回到顶部 —— ⚠️ 滚动容器是**外层**
@@ -1278,7 +1356,7 @@ export const SettingsModal: React.FC<{
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
       { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'computer-use'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
-      { key: 'system', label: t('settings.group.system'), tabs: ['permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
+      { key: 'system', label: t('settings.group.system'), tabs: ['trash', 'permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
   ]
   const navItemsForGroup = (grp: { key: string; tabs: Tab[] }): Array<[Tab, string]> => {
@@ -1626,6 +1704,7 @@ export const SettingsModal: React.FC<{
         </div>
         {/* 设置住在独立浮窗(桌面)/ 覆盖层(web)里,全局通知两处都看不见 —— 插件装卸、重扫、Space 卸载等结果画在这条上。 */}
         <PanelNotice />
+        <ConfigRecoveryNotice />
         <div className="settings-body">
           {cloudTabs.length > 0 && <div className="settings-cloud-tabs" role="tablist" aria-label={cloudPageLabel}>
             {cloudTabs.map((view, index) => {
@@ -1646,6 +1725,7 @@ export const SettingsModal: React.FC<{
           {/* 每个子页一个崩溃兜底:一页渲染抛错只占正文区,左侧导航照常能切走(原先只有整窗那一层,一页崩了整个设置窗就废了)。 */}
           <ErrorBoundary key={`${tab}:${activeSub}`}>
           <div key={`${tab}:${activeSub}`} className={`settings-sub settings-sub--${tab}`} id={cloudTabs.length ? 'settings-cloud-panel' : undefined} role={cloudTabs.length ? 'tabpanel' : undefined} aria-labelledby={cloudTabs.length ? `settings-cloud-tab-${activeSub}` : undefined} data-dir={subDir} data-settings-sub={activeSub || undefined}>
+                {tab === 'trash' && <TrashSettings />}
                 {tab === 'permissions' && hasDesktopPermissions() && <DesktopPermissions mode={p.themeMode} />}
                 {tab === 'computer-history' && <ComputerHistorySettings mode={p.themeMode} anchor="computer-history" />}
                 {tab === 'units' && <UnitSettings />}
@@ -2345,6 +2425,7 @@ export const SettingsModal: React.FC<{
                               baseUrl: ep.baseUrl.replace(/\/+$/, ''),
                               apiKey: ep.apiKey || undefined,
                               ...providerFieldsFromRows(ep.rows, ep.base),
+                              ...(ep.base.protocol ? { protocol: ep.base.protocol } : {}), // 导入的 Anthropic / Responses 连接:编辑器不画协议,保存时留住
                             }).then((list) => {
                               // 改了名字 = 另存一条,旧的留着(与旧表单一致):各处存着的「旧名/模型」引用不会一下子全失效
                               setCustomProviders(list)
@@ -2420,9 +2501,14 @@ export const SettingsModal: React.FC<{
                           </React.Fragment>
                         })}
                         {editProvider?.isNew && editor}
-                        {!editProvider?.isNew && <div className="provider-add"><button className="btn ghost sm" onClick={() => startEdit(null)}><Plus size={13} /> {t('prov.add')}</button></div>}
+                        {!editProvider?.isNew && <LocalProviderImport providers={customProviders} onManual={() => startEdit(null)} onImported={(list) => {
+                          setCustomProviders(list)
+                          void loadModels()
+                          setProviderSaveMsg(t('settings.customProvider.savedReloading'))
+                        }} />}
                         {providerSaveMsg && !editProvider && <div className="hint provider-editor-hint">{providerSaveMsg}</div>}
                       </SettingsPanel>
+                      <MaskingSettingsSection />
                     {stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1') && (
                       <div className="hint" style={{ marginTop: 10 }}>
                         {t('settings.customProvider.externalWarning')}
@@ -2454,28 +2540,39 @@ export const SettingsModal: React.FC<{
 
                 {tab === 'mcp' && (
                   <>
+                    {showMcpImport && <McpImportDialog draft={mcpImportDraft} onDraft={setMcpImportDraft} pluginNames={(mcpStatus || []).filter(s => s.origin).map(s => s.server)} onClose={() => setShowMcpImport(false)} onSaved={r => { setMcpServers(r.mcpServers); setMcpMsg(t('mcpImport.saved', { added: r.added.length, replaced: r.replaced.length })); setShowMcpImport(false); setMcpImportDraft({ json: '', name: '' }); refreshMcp() }} />}
                     <div className="field">
-                      <label>{t('settings.mcp.label')}</label>
+                      <div className="mcp-settings-heading"><label>{t('settings.mcp.label')}</label>
+                      {!editMcp && (
+                        <div className="mcp-settings-actions"><button
+                          className="btn ghost sm"
+                          onClick={() => setEditMcp({ name: '', isNew: true, command: '', argsText: '', url: '', transport: 'auto', envText: '' })}
+                        >
+                          <Plus size={13} /> {t('settings.mcp.add')}
+                        </button>{window.tangu?.importMcpConfig && <button className="btn primary sm" onClick={() => setShowMcpImport(true)}>{t('mcpImport.open')}</button>}</div>
+                      )}
+                      </div>
                       <div className="hint" style={{ marginBottom: 8 }}>
                         {t('settings.mcp.intro').split(/(\{path\}|\{tool\})/).map((part, i) => part === '{path}' ? <code key={i}>~/.forsion/mcp.json</code> : part === '{tool}' ? <code key={i}>{t('settings.mcp.toolPattern')}</code> : part)}
                       </div>
+                      <div className="hint" style={{ marginBottom: 8 }}>{t('mcpImport.agentHint')}</div>
+                      {mcpTotalSummary()}
                       {Object.keys(mcpServers).length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
                           {Object.entries(mcpServers).map(([name, sc]) => {
                             const st = mcpStatus?.find((s) => s.server === name)
                             const stLabel = sc.enabled === false
                               ? t('settings.mcp.statusDisabled')
-                              : st
-                                ? st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length }) : st.status === 'error' ? t('settings.mcp.statusError') : st.status
-                                : t('settings.mcp.statusNotLoaded')
+                              : st ? mcpStatusLabel(st) : t('settings.mcp.statusNotLoaded')
                             return (
                               <div key={name} className="file-row" style={{ cursor: 'default' }}>
                                 <span className="file-name">
                                   <b>{name}</b>
                                   <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
-                                    {sc.command ? `${sc.command} ${(sc.args || []).join(' ')}` : sc.url}
+                                    {sc.command ? `${sc.command} ${(sc.args || []).join(' ')}` : publicMcpUrl(sc.url)}
                                   </span>
                                 </span>
+                                {sc.enabled !== false && mcpTokensLabel(st)}
                                 <span className="file-size" title={st?.error || undefined}>{stLabel}</span>
                                 <button
                                   className="icon-btn"
@@ -2492,6 +2589,7 @@ export const SettingsModal: React.FC<{
                                   title={t('settings.btn.edit')}
                                   onClick={() => setEditMcp({
                                     name,
+                                    original: sc,
                                     isNew: false,
                                     command: sc.command || '',
                                     argsText: (sc.args || []).join(' '),
@@ -2533,22 +2631,13 @@ export const SettingsModal: React.FC<{
                                     {t('settingsmodal.mcp.fromPlugin', { name: st.origin!.pluginName })}
                                   </span>
                                 </span>
-                                <span className="file-size" title={st.error || undefined}>
-                                  {st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length }) : st.status === 'error' ? t('settings.mcp.statusError') : st.status}
-                                </span>
+                                {mcpTokensLabel(st)}
+                                <span className="file-size" title={st.error || undefined}>{mcpStatusLabel(st)}</span>
                               </div>
                             ))}
                           </div>
                         )
                       })()}
-                      {!editMcp && (
-                        <button
-                          className="btn ghost sm"
-                          onClick={() => setEditMcp({ name: '', isNew: true, command: '', argsText: '', url: '', transport: 'auto', envText: '' })}
-                        >
-                          <Plus size={13} /> {t('settings.mcp.add')}
-                        </button>
-                      )}
                       {mcpMsg && !editMcp && <div className="hint" style={{ marginTop: 6 }}>{mcpMsg}</div>}
                     </div>
 
@@ -2618,7 +2707,7 @@ export const SettingsModal: React.FC<{
                           <button
                             className="btn primary sm"
                             disabled={!editMcp.name || (!editMcp.command && !editMcp.url)}
-                            onClick={() => {
+                            onClick={async () => {
                               // 设备 MCP 保留命名空间(dev / dev_*):新名字当场拦下,盘上存量的放行(同主进程口径)
                               if (newReservedMcpNames({ [editMcp.name]: true }, mcpServers).length) {
                                 setMcpMsg(t('ipcerr.mcpNameReserved', { detail: editMcp.name }))
@@ -2630,14 +2719,20 @@ export const SettingsModal: React.FC<{
                                 if (i > 0) env[line.slice(0, i).trim()] = line.slice(i + 1).trim()
                               }
                               const entry: McpServerConfigEntry = {
-                                ...(editMcp.command ? { command: editMcp.command.trim(), args: editMcp.argsText.split(/\s+/).filter(Boolean) } : {}),
+                                ...editMcp.original,
+                                ...(editMcp.command ? { command: editMcp.command.trim(), args: editMcp.original && editMcp.argsText === (editMcp.original.args || []).join(' ') ? (editMcp.original.args || []) : editMcp.argsText.split(/\s+/).filter(Boolean) } : {}),
                                 ...(editMcp.url ? { url: editMcp.url } : {}),
                                 ...(editMcp.transport !== 'auto' ? { transport: editMcp.transport } : {}),
-                                ...(Object.keys(env).length ? { env } : {}),
+                                ...(Object.keys(env).length ? { env: editMcp.original && editMcp.envText === Object.entries(editMcp.original.env || {}).map(([k, v]) => `${k}=${v}`).join('\n') ? editMcp.original.env : env } : {}),
                                 enabled: mcpServers[editMcp.name]?.enabled !== false,
                               }
-                              writeMcp({ ...mcpServers, [editMcp.name]: entry }, t('settings.mcp.savedReconnecting'))
-                              setEditMcp(null)
+                              if (!editMcp.command) { delete entry.command; delete entry.args }
+                              if (!editMcp.url) delete entry.url
+                              if (editMcp.transport === 'auto') delete entry.transport
+                              if (!Object.keys(env).length) delete entry.env
+                              const base = editMcp.original ? { ...mcpServers, [editMcp.name]: editMcp.original } : { ...mcpServers }
+                              if (editMcp.isNew) delete base[editMcp.name]
+                              if (await writeMcp({ ...mcpServers, [editMcp.name]: entry }, t('settings.mcp.savedReconnecting'), base)) setEditMcp(null)
                             }}
                           >
                             {t('settings.btn.save')}
@@ -2656,7 +2751,7 @@ export const SettingsModal: React.FC<{
                   else openAgentProfile(slug)
                   p.onClose()
                 }} />}
-                {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} localHost={!!(isDesktop && stored?.mode === 'managed')} />}
+                {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} localHost={!!(isDesktop && stored?.mode === 'managed')} initialRole={initialTarget.pane === 'muse' ? 'muse' : undefined} />}
                 {tab === 'hooks' && <HooksTab cfg={p.cfg} />}
                 {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。
                     设备页(unitPage)与 Android App 不传级联三件套:cfg 缺省=cascadeAfterToggle 不级联 —— 否则捆绑包
@@ -3474,6 +3569,14 @@ export const SettingsModal: React.FC<{
                       }} />} />
                     </div>
                     <div className="field">
+                      <SettingsRow fit="wrap" label={t('settings.developer.summaryElevation')} description={t('settings.developer.summaryElevationHint')} control={
+                        <div className="seg" role="group" aria-label={t('settings.developer.summaryElevation')}>
+                          {([['float', t('settings.developer.summaryElevationFloat')], ['half', t('settings.developer.summaryElevationHalf')], ['flat', t('settings.developer.summaryElevationFlat')]] as const).map(([v, label]) => (
+                            <button key={v} type="button" aria-pressed={summaryElevation === v} className={summaryElevation === v ? 'active' : ''} onClick={() => setSummaryElevation(v)}>{label}</button>
+                          ))}
+                        </div>} />
+                    </div>
+                    <div className="field">
                       <label>{t('settings.developer.testUpdateLabel')}</label>
                       <div>
                         <button className="btn ghost sm" onClick={() => { openWhatsNew(); p.onClose() }}>
@@ -3705,6 +3808,22 @@ export const SettingsModal: React.FC<{
           </ErrorBoundary>
         </div>
       </section>
+    </div>
+  )
+}
+
+/** config.json / provider-auth.json 读坏后从 .bak 恢复过(引擎或主进程写的恢复标记):提示一次,点掉删标记(坏文件与备份都留着)。 */
+function ConfigRecoveryNotice() {
+  const { t } = useI18n()
+  const [notice, setNotice] = useState<{ at: number; version: number } | null>(null)
+  useEffect(() => { void window.tangu?.configRecoveryNotice?.().then(setNotice).catch(() => {}) }, [])
+  if (!notice) return null
+  const time = formatDateTime(notice.version)
+  return (
+    <div className="mk-notice" role="status" data-config-recovered>
+      <Info size={15} />
+      <div className="mk-notice-body"><span>{t('settingsmodal.configRecovered', { time })}</span></div>
+      <button className="mk-notice-close" onClick={() => { setNotice(null); void window.tangu?.clearConfigRecoveryNotice?.().catch(() => {}) }} aria-label={t('common.close')}><X size={13} /></button>
     </div>
   )
 }

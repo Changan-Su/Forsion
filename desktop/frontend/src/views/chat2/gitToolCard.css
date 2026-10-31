@@ -1,0 +1,41 @@
+/* 对话里的 Git 卡(GitToolCard.tsx)。外壳是插件结果卡那一个(.sketch-card.plugin-tool-card),卡身的块派生自项目详情 › Git 页;
+ * 只用 token,不另起配色。高亮(已暂存的字母 / 推送去向标记 / 已同步)用 --accent-ink 的字色,不画框、不铺色块。 */
+.git-card-wrap { margin: 12px 0 4px; }
+.git-card { display: grid; gap: 10px; min-width: 0; font-size: var(--ui-font-body); color: var(--text); }
+.git-card-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-width: 0; }
+.git-card-branch { display: inline-flex; align-items: center; gap: 5px; font-weight: 600; }
+.git-card-faint { color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-meta, 12px); }
+.git-card-chip { display: inline-flex; align-items: center; padding: 2px 7px; border-radius: var(--radius-pill, 999px); background: var(--overlay-medium); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
+.git-card-chip.staged, .git-card-chip.ok { color: var(--accent-ink); }
+.git-card-files, .git-card-commits { display: grid; gap: 2px; margin: 0; padding: 6px 8px; list-style: none; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); font-size: var(--ui-font-meta, 12px); }
+.git-card-files li { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 4px; min-width: 0; }
+.git-card-files li span, .git-card-commits li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-card-files code { color: var(--text-muted); font-family: var(--font-mono); }
+.git-card-files code.staged { color: var(--accent-ink); }
+.git-card-files code.untracked { color: var(--text-faint, var(--text-muted)); }
+.git-card-remote { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 8px; align-items: start; }
+.git-card-remote .project-git-host { display: inline-grid; place-items: center; width: 24px; height: 24px; border-radius: 7px; background: var(--surface-2, var(--bg-card)); box-shadow: inset 0 0 0 1px var(--overlay-medium); color: var(--text); font-size: var(--ui-font-meta, 12px); font-weight: 700; }
+.git-card-rt { display: grid; gap: 1px; min-width: 0; }
+.git-card-rt strong { font-size: var(--ui-font-meta, 12px); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-card-rt small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+.git-card-tag { display: inline-flex; align-items: center; height: 16px; padding: 0 6px; margin-left: 6px; border-radius: var(--radius-pill, 999px); background: var(--overlay-medium); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); font-weight: 500; }
+.git-card-acts { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.git-card-acts .btn { display: inline-flex; align-items: center; gap: 5px; min-height: 28px; }
+.git-card-end { margin-left: auto; display: inline-flex; gap: 6px; }
+.git-card-form { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--overlay-medium); }
+.git-card-msg { width: 100%; min-width: 0; box-sizing: border-box; padding: 7px 8px; font: inherit; font-size: var(--ui-font-meta, 12px); line-height: 1.6; resize: vertical; color: var(--text); background: var(--overlay-medium); border: none; outline: none; box-shadow: none; border-radius: var(--radius-sm, 8px); }
+.git-card-msg:focus, .git-card-msg:focus-visible { outline: none; box-shadow: none; background: var(--overlay-strong, var(--overlay-medium)); }
+.git-card-id { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.git-card-steps { display: grid; gap: 6px; }
+.git-card-step { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: start; }
+.git-card-step > svg { margin-top: 3px; color: var(--text-muted); }
+.git-card-step.bad > svg { color: var(--danger); }
+.git-card-t { min-width: 0; }
+.git-card-t b { font-weight: 600; }
+.git-card-sha { margin-right: 6px; font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.git-card-err { margin: 2px 0 0; color: var(--danger); font-size: var(--ui-font-meta, 12px); }
+.git-card-pre { margin: 6px 0 0; padding: 6px 8px; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); white-space: pre-wrap; overflow-wrap: anywhere; }
+/* 审批卡里的卡身 */
+.git-apv { display: grid; gap: 8px; margin: 6px 0 2px; font-size: var(--ui-font-meta, 12px); }
+.git-apv-msg { padding: 7px 9px; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); white-space: pre-wrap; line-height: 1.6; overflow-wrap: anywhere; }
+.git-apv-msg b { font-weight: 600; }

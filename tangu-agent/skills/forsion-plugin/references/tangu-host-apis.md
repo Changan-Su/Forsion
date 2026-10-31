@@ -294,13 +294,15 @@ const h = ctx.desk?.registerCompanion({
 ## 摘要栏插件卡:ctx.summary(2026-10-25 起)
 
 Tangu 聊天右侧的**摘要栏**是一叠卡片:进度、后台(后台进程)、产物、来源、工作范围、Agent Desk。插件可以加一张卡,和内置卡同一个栈 ——
-用户能折叠、拖动排序(悬停露拖动块,右键卡头有「移到最上 / 最下 / 恢复默认」),收起状态和顺序由宿主按卡片记住。插件卡按注册顺序排在 Agent Desk 前面。
+用户能拖动排序(鼠标停在卡头上,计数那一格换成拖动把手,按住卡头拖;右键卡头有「移到最上 / 最下 / 恢复默认」),顺序由宿主按卡片记住。
+插件卡按注册顺序排在 Agent Desk 前面。**开合跟着内容走(2026-10-29 起)**:`count` 变大 = 来了新东西,卡自己展开;用户手动开 / 收只管到这一轮对话结束,
+不落盘;车道放不下时宿主先收掉最久没来新东西的卡,只剩一张还放不下就缩它的正文封顶。
 
 ```js
 const h = ctx.summary?.registerCard({
-  id: 'today',                               // 宿主拼成 plugin:<pluginId>:today,收起状态与顺序按它记
+  id: 'today',                               // 宿主拼成 plugin:<pluginId>:today,顺序按它记
   title: { zh: '今天', en: 'Today' },        // 跟随界面语言;也可以给一个字符串
-  defaultCollapsed: false,                   // 用户没点过时收不收;缺省展开
+  defaultCollapsed: false,                   // 没有新内容时收不收(切到会话、或卡在 Agent 没跑时出现);count 变大照样自动展开;缺省展开
   mount(el, host) {                          // 每个会话的摘要栏各挂一份,返回卸载函数
     // host.sessionId: 这份挂在哪个会话(恒定:换会话 = 卸载重挂);host.cwd: 会话默认目录或 null
     // host.update({ count, hidden }): 只改这一份 —— 卡头计数(null = 不显示)、hidden = 先不画这张卡(仍挂着,之后可再亮出)
@@ -314,7 +316,8 @@ const h = ctx.summary?.registerCard({
 
 - **只在桌面 Tangu 上存在**(同 `ctx.desk`):web / 移动端 / 纯 Amadeus 壳整个没有 `ctx.summary`,一律可选链。
 - **挂载次数**:每个会话的摘要栏一份;同屏两个聊天面板(主区 + 右侧 chat-panel)就是两份;换会话卸载重挂。新对话草稿(还没有会话)不挂插件卡。
-- **正文高度上限 240px**,超出宿主内滚,底部自动渐隐;宽约 252px(卡宽 280 减内边距)。别在正文里再套一层滚动。
+- **想让卡在有新内容时自己展开,就让 `count` 跟着条数走**:宿主只看「比上一次多」,数字变小不会收起卡。没有计数的卡只按 `defaultCollapsed`。
+- **正文高度上限 240px**(车道放不下时宿主会再缩短,最低约 90px),超出宿主内滚,底部自动渐隐;宽约 252px(卡宽 280 减内边距)。别在正文里再套一层滚动。
 - **没内容就藏起来**:`host.update({ hidden: true })` 不画这张卡(栈里不留空位),有内容了再 `hidden: false`。不要靠渲染空 div 让卡片「消失」。
 - 摘要栏只在聊天列够宽(≥ 760px)时出现;窄了整栈收起,但你的 `mount` 仍挂着 —— 别在不可见时跑重活(`IntersectionObserver` 判)。
 - 正文是普通 DOM:用宿主的 CSS 变量(`--text` / `--text-muted` / `--ui-font-meta` …),行样式可以借 `.t2-tsum-row`(图标 + 文字的一行)。
@@ -351,7 +354,70 @@ void ctx.automation?.ensure([
 - `vault` 由宿主绑**当前库**,规则只在那个库里触发;`path` 归一与引擎同口径(反斜杠→正斜杠、去首尾斜杠与空段),
   拼法要稳定 —— path 一变引擎就认为条件变了、重新播种游标,期间新增的行不再触发。
 - **恒 `enabled:true`**:用户在自动化面板里单独关掉你的某条规则,下次插件重载 ensure 会把它开回来;要"可关"就把开关做成自己的设置项、按设置项决定发不发。
-- 用户**禁用插件** → 宿主把 `plugin:<id>:` 前缀的规则全部 `enabled=false`(不删);再启用时 ensure 置回 true,引擎重新播种游标(停用期间加的行**不会**一次性爆发)。
+- 用户**禁用或卸载插件** → 宿主把 `plugin:<id>:` 前缀的规则全部 `enabled=false`(不删;引擎不在时下次启动补上);再启用 / 恢复 / 重装时 setup 里的 ensure 置回 true,所以 ensure 要放在 setup 里,引擎重新播种游标(停用期间加的行**不会**一次性爆发)。
 - 聊天里的 agent 经 `manage_automation` **不能改/删** `plugin:` 前缀的规则;用户能在自动化 Space 里看、编辑(构建器认得 where / rowFrom / match / skipIfEmpty)。
 - 动作字段速查:`db_row_add.skipIfEmpty`(cells 的一个键,展开为空则跳过本步);`db_row_edit` 目标行 `rowId` > `rowFrom`(触发行的关联列,多值逐行)> `match {column, value}`(目标表全部命中行)> 触发行;
   单元格值支持 `{{row.X}}` / `{{target.X}}` / `{{= 算术 }}`。形状正典 = `desktop/frontend/src/types.ts` 的 `MuseTriggerUpsert` / `AutomationActionSpec`。
+
+## 插件自己的触发事件:ctx.automation.registerTrigger / emit(2026-10-30 起)
+
+`ensure` 替用户种规则;这一对是给用户一种新的「当…」:登记之后,它出现在自动化画布触发节点的「外部 · 插件」组,规则怎么写由用户定。
+
+```js
+// setup 里,别 await:宿主会等后端就绪(最多 60s)
+void ctx.automation?.registerTrigger({
+  id: 'build-finished',                     // [a-z0-9-]+;宿主拼成 plugin:<pluginId>:build-finished
+  name: { zh: '构建完成', en: 'Build finished' },  // 中英都要有
+  params: [                                 // 规则要填的参数,可省略;至多 8 个
+    { key: 'project', type: 'text', name: { zh: '项目', en: 'Project' } },   // type: app / number / text
+  ],
+  // requires: ['computer_history'],        // 电脑历史关着时灰掉、已有规则暂停
+})
+
+ctx.automation?.emit('build-finished', { project: 'site', status: 'ok' })
+```
+
+- **命名空间**:`id` 只是 key,带冒号或别家前缀直接被拒,碰不到别的插件。
+- **命中**:规则里填了的参数要和 payload 同名字段相等,payload 没这个字段不比。payload 只留字符串 / 数字 / 布尔,至多 20 个字段,每个值 500 字以内;动作模板里写 `{{row.status}}`。
+- **节奏**:规则缺省冷却 1 小时,用户可改,也可加时段、星期、每天几次。连发的事件 2 秒内合并,一次巡检只认最新一条。没有启用的插件规则时不起巡检,`emit` 没有成本,但也别在循环里发。
+- **内存**:事件不落盘,引擎重启丢掉还没被规则看到的。登记宿主会在后端重启后自动补,不用自己盯。
+- **卸载**:插件停用或卸载 = 注销,相关规则不删,暂停并写明原因;装回来自动恢复。
+- **Muse**:Muse 能提议在你的事件上提醒用户,不能建「叫醒自己」的规则(工具能发事件,等于它能自己叫醒自己)。
+- **返回**:`registerTrigger` 返回 `{ ok, error? }`,永不抛;`emit` 无返回,登记失败或没登记时只在控制台记一行。
+- **引擎插件**:用 `ctx.sdk.automation.registerTrigger(spec)` / `ctx.sdk.automation.emit(id, payload)`,形状相同;`registerTrigger` 校验不过会抛错,插件停用时宿主自动注销。
+
+### `ctx.agent`:读写你自己的数据(2026-09-27 起,**只有 agent 自建 Space 有**)
+
+Space 应该**从数据渲染**,别把状态、时间、待办写死在 main.js 里、每个周期改一遍 —— 那既浪费你的额度,用户看到的也永远是旧的。
+`ctx.agent` 只在 `agent-<slug>` 插件上存在、只能碰你自己这个 agent(普通插件整个没有;今天只有 Muse 有数据源):
+
+| 成员 | 说明 |
+|---|---|
+| `slug` | 你的 agent slug(如 `'muse'`) |
+| `status()` | `{ running, lastCycleAt, sleepUntil, sleepReason, mode, heartbeatMinutes, pendingApprovals }` 或 null |
+| `todos(status?)` | 你提过的 TODO:`{ id, title, detail, status, createdAt }[]`;`status` 缺省 = 全部(`'pending'` / `'done'` / `'dismissed'` / `'injected'`) |
+| `updateTodo(id, 'done' \| 'dismissed')` | **只在用户刚在你自己的视图里点过之后生效**(在你 Space 上按钮的 click 处理函数里调;宿主只认本视图里 1.5 秒内的真实点击 / 按键),挂载时 / 定时器 / 订阅回调 / 借别处的点击调一律 reject;效果同 Muse 面板的按钮,会以「用户处理了」的 `[feedback]` 回到你的日志;只改仍是 pending 的 |
+| `schedule()` | 你 SCHEDULE.db 的条目:`{ id, name, date, repeat, auto, description, lastRun }[]` |
+| `library.list()` / `library.read(path)` | 你的 Library:目录树 / 读一个文本文件(相对路径如 `'Journal/2026-09-27.md'`,≤1MB;越界、隐藏文件、不存在 → reject) |
+| `subscribe(cb)` | 周期结束、睡醒、待批数或待办数变化、`updateTodo` 之后回调(宿主约 20 秒查一次);返回退订,禁用/重载宿主统一收 |
+
+数据调用(status / todos / schedule / library / updateTodo)是 Promise,后端没就绪会 reject —— 自己画空态,别让 mount 抛错(mount 抛错也会以 `[feedback]` 回到你);`subscribe` 同步返回退订。
+**挂载之后没接住的错也回到你**(2026-09-27 起):宿主给你当前这一版的代码打了 `sourceURL`,异步回调 / 事件处理 / 定时器 / 订阅回调里没接住的错,栈里有你的帧就以 `[feedback]` 回写、带 `main.js` 的行号(同一条只报一次,每版最多 3 条)—— 包括你 `await` 的宿主接口 reject 了你没接(异步栈里有你那一帧,行号落在 `await` 那行)。旧版漏清的定时器在重载后抛的不算。
+手势闸防的是「顺手写个定时器 / 挂载时就标掉」这类失误,**不是安全边界**(插件与宿主同一个渲染进程);审批队列不开放。
+
+```js
+ctx.registerView({ id: 'home', title: 'Muse', mount(el) {
+  const draw = async () => {
+    const [st, todos] = await Promise.all([ctx.agent.status(), ctx.agent.todos('pending')]).catch(() => [null, []])
+    el.replaceChildren()
+    for (const t of todos) {
+      const b = document.createElement('button')
+      b.textContent = `✓ ${t.title}`
+      b.onclick = () => ctx.agent.updateTodo(t.id, 'done').then(draw, () => {}) // 只能在点击里调
+      el.append(b)
+    }
+  }
+  draw()
+  return ctx.agent.subscribe(draw) // 退订函数正好当 disposer
+} })
+```

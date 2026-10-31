@@ -13,6 +13,7 @@ registerMessages({
   'group.setup.selfPacedHint': { zh: '发消息后成员同时开工，可相互 @ 交接；每位成员自己决定何时收尾，全员完成即结束，没有轮数上限。', en: 'After you send, members work in parallel and can @-mention each other; each decides when they are done, and the team stops once everyone is — no round limit.' },
 })
 import type { ModelInfo, NormalAgentDef, ThinkingLevel } from '../../../../tangu-agent/src/contracts/clientTypes'
+import { agentName } from '../agentName'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 export interface GroupSetupResult {
@@ -174,7 +175,7 @@ export const GroupChatSetup: React.FC<{
                           {on && <Check size={12} color="var(--on-accent-ink, var(--on-accent))" />}
                         </span>
                         <span style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: 'var(--ui-font-body, 13px)', fontWeight: 600 }}>{a.name}</div>
+                          <div style={{ fontSize: 'var(--ui-font-body, 13px)', fontWeight: 600 }}>{agentName(a)}</div>
                           {a.description && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-dim)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.description}</div>}
                         </span>
                       </button>
@@ -192,7 +193,7 @@ export const GroupChatSetup: React.FC<{
                   <div key={a.slug} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 'var(--radius-sm, 6px)', border: '1px solid var(--accent-ink)', background: 'var(--accent-soft)' }}>
                     <UserPlus size={14} style={{ flexShrink: 0, opacity: 0.8 }} />
                     <span style={{ flex: 1, minWidth: 0 }}>
-                      <span style={{ fontSize: 'var(--ui-font-body, 13px)', fontWeight: 600 }}>{a.name}</span>
+                      <span style={{ fontSize: 'var(--ui-font-body, 13px)', fontWeight: 600 }}>{agentName(a)}</span>
                       <span style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-dim)', marginLeft: 6 }}>{t('group.setup.tempBadge')}</span>
                     </span>
                     <button className="icon-btn" title={t('common.edit')} onClick={() => setEditingTemp({ slug: a.slug, name: a.name, description: a.description, model: a.model, systemPrompt: a.systemPrompt, thinkingLevel: a.thinkingLevel, maxIterations: a.maxIterations != null ? String(a.maxIterations) : '', approvalMode: a.approvalMode })}><Pencil size={13} /></button>

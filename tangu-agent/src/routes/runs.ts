@@ -198,7 +198,7 @@ export function normalizeUiValues(v: unknown): Record<string, string> | undefine
 router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint, ui_cards } = req.body || {};
+    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint, ui_cards, quota_fallback } = req.body || {};
     if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
       return res.status(400).json({ detail: 'agent_config must be an object' });
     }
@@ -291,6 +291,8 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
         // 客户端原生能力(phone.intents 等):只从本路由进 —— 派生 run(团队 / 讨论 / 子代理)自建 input,不继承。
         ...(clientCapsNorm ? { clientCapabilities: clientCapsNorm } : {}),
         ...(voiceHint ? { ephemeralHint: voiceHint } : {}),
+        // 「换之前先问我」卡上点了「改用 X」:这一轮直接用设置里的后备模型(llm/quotaRelay.ts)
+        ...(quota_fallback === true ? { quotaFallbackNow: true } : {}),
         ...(clientCapsNorm?.includes('intelligent-ui.v1') ? { uiCards: normalizeUIAppCards(ui_cards) } : {}),
       },
     });

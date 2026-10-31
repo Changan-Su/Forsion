@@ -35,9 +35,11 @@ import { normalizeSessionEmoji } from '../../../../../tangu-agent/src/contracts/
 import { DEFAULT_APPROVAL, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 export { DEFAULT_APPROVAL, DEFAULT_THINKING, applyPreset, stickyDefaults, withAmadeusWorkspace } from '../../../../../tangu-agent/src/contracts/sessionDefaults'
 import type { StoreApi } from 'zustand'
-import { defaultModelOf, newChatModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
+import { defaultModelOf, newChatModelId, rememberedModelId, reloadDesktopConfig, writeFocusModel, type AppState } from '../../stores/appStore'
 import '../messages' // Tangu 自己的文案片段(核心插件化 2c)
 import { failReason, landedAnyway, type FailedSend } from './failedSend'
+import { cancelQuotaReminder } from './quotaReminders'
+import { agentName, agentNames } from '../../agentName'
 
 
 // 本文件自带的词条片段(命名空间 `appstore.*`,与其它文件不重叠)。
@@ -104,7 +106,7 @@ export function sketchFromToolEvent(ev: ToolEvent): SketchItem | undefined {
 }
 
 /** 历史行 → UI 消息(tool_calls/tool_results 配对成 toolEvents)。 */
-export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: string; color: string }, resolveSlug?: (slug: string) => string | undefined): UiMessage {
+export function recordToUi(r: any, resolveGroup?: (name: string, slug?: string) => { slug?: string; name?: string; color: string }, resolveSlug?: (slug: string) => string | undefined): UiMessage {
   const role = r.role === 'model' || r.role === 'assistant' ? 'assistant' : 'user'
   let content = r.content || ''
   const teamSummary = role === 'assistant' && content.startsWith('**📋 Historian**\n\n')
@@ -120,8 +122,9 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
       content = m[2]
       const dm = splitDoneMark(content)
       if (dm.done) { content = dm.text; teamDone = true }
-      const g = resolveGroup(agentName)
+      const g = resolveGroup(agentName, r.agent_slug)
       agentId = g.slug
+      agentName = g.name || agentName
       agentColor = g.color
     }
   }
@@ -141,6 +144,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
     ...(teamSummary ? { teamSummary: true } : {}),
     // Muse 自己开口发进私聊的(引擎 museDm.ts:proactive / proactive:todo / proactive:approval):消息头上画「主动发来 · 时间」。
     ...(role === 'assistant' && typeof r.origin === 'string' && r.origin.startsWith('proactive') ? { origin: r.origin } : {}),
+    ...(role === 'assistant' && r.origin === 'fallback:quota' && r.model_id ? { fallback: { to: String(r.model_id), reason: 'quota' } } : {}),
   }
   if (role === 'assistant' && Array.isArray(r.tool_calls) && r.tool_calls.length) {
     const results = new Map<string, any>((Array.isArray(r.tool_results) ? r.tool_results : []).map((t: any) => [t.tool_call_id, t]))
@@ -150,6 +154,7 @@ export function recordToUi(r: any, resolveGroup?: (name: string) => { slug?: str
       return {
         id: c.id, name: c.function?.name || c.name || 'tool', arguments: c.function?.arguments,
         result: res ? String(res.content ?? '') : undefined, isError: res?.isError || false,
+        ...(Array.isArray(res?.masked) && res.masked.length ? { masked: res.masked } : {}),
         startedAt: res?.startedAt, elapsedMs: res?.elapsedMs, outputChars: res?.outputChars,
         parallelGroup: res?.parallelGroup, artifactPath: res?.artifactPath, done: true,
         ...(res?.parked === true ? { parked: true } : {}),
@@ -213,13 +218,14 @@ function groupColor(slug: string): string {
   for (let i = 0; i < slug.length; i++) h = (h * 31 + slug.charCodeAt(i)) >>> 0
   return `hsl(${h % 360} 62% 45%)`
 }
-/** 发言人名 → {slug, color}:用于重载历史时按名还原 agent 身份(DB 只存了名字)。 */
-function groupSpeakerResolver(agentDefs: NormalAgentDef[], hostName: string) {
-  return (name: string): { slug?: string; color: string } => {
-    if (name === '主持人' || name === hostName) return { slug: '__host__', color: groupColor('__host__') }
-    const a = agentDefs.find((x) => x.name === name)
-    if (a) return { slug: a.slug, color: groupColor(a.slug) }
-    return { color: groupColor(name) } // 临时 agent / 名字未在册:仍给稳定派生色,slug 缺省(头像靠 ChatView 按名兜底)
+/** 重载历史时还原发言人。前缀里的名字是发言当时的显示名,切语言 / 改名后对不上,所以先认记录自带的 agent_slug;
+ *  老记录没有这一列才按前缀找,任一名字或 slug 都算。主持人的记录 agent_slug 是会话 agent,要先判。 */
+export function groupSpeakerResolver(agentDefs: NormalAgentDef[], hostName: string) {
+  return (name: string, slug?: string): { slug?: string; name?: string; color: string } => {
+    if (name === '主持人' || name === 'Host' || name === hostName) return { slug: '__host__', color: groupColor('__host__') }
+    const a = agentDefs.find((x) => x.slug === slug) || agentDefs.find((x) => x.slug === name || agentNames(x).includes(name))
+    if (a) return { slug: a.slug, name: agentName(a), color: groupColor(a.slug) }
+    return { slug, color: groupColor(slug || name) } // 临时 agent / 名字未在册:仍给稳定派生色(头像靠 ChatView 按名兜底)
   }
 }
 function appendSubText(s: SubChat, delta: string): SubChat {
@@ -293,13 +299,16 @@ function agentStamp(s: Pick<AppState, 'engines' | 'agentDefs' | 'defaultAgentSlu
   const slug = config?.agentSlug || s.defaultAgentSlug
   if (!config?.groupChat && slug) {
     const a = s.agentDefs.find((x) => x.slug === slug)
-    if (a) return { agentId: a.slug, agentName: a.name }
+    if (a) return { agentId: a.slug, agentName: agentName(a) }
   }
   return {}
 }
 
 const runAborts = new Map<string, AbortController>()
 const subscribedRuns = new Set<string>()
+/** 「换之前先问我」卡上点了「改用 X」:regenerate 过了门槛才记,紧接着那一次 send 带上 quota_fallback(引擎这一轮直接用后备)。
+ *  只认几秒内的:重发半路失败没走到 send,也不会漏到之后哪条消息上。 */
+const quotaFallbackNext = new Map<string, number>()
 const stoppedRuns = new Set<string>()
 const stopRequests = new Map<string, Promise<boolean>>()
 const stopTerminals = new Map<string, { assistantId: string; event: AgentRunEvent }>()
@@ -941,7 +950,8 @@ export interface TanguState {
   addLocalWorkspace(): Promise<void>
   /** 从 Git 克隆:弹克隆对话框,克隆成功后把那个文件夹加成项目(同 addLocalWorkspace 的落点)。 */
   cloneGitProject(): Promise<void>
-  renameSession(id: string, title: string): Promise<void>
+  /** 缺省是用户亲手改名(Historian 此后不再动,清空 = 交还);auto = 发出第一句后的占位标题,不算手动。 */
+  renameSession(id: string, title: string, auto?: boolean): Promise<void>
   setSessionEmoji(id: string, emoji: string | null): Promise<boolean>
   archiveSession(id: string, archived: boolean): Promise<void>
   deleteSession(id: string): Promise<void>
@@ -952,8 +962,9 @@ export interface TanguState {
   moveSessionToProject(sessionId: string, dir: string, name: string): Promise<'moved' | 'locked' | 'running' | 'failed'>
   /** deleteFiles = 同时把项目里的 `.tangu/` 移进系统废纸篓(项目文件夹本身不动)。 */
   removeWorkspace(ws: WorkspaceDescriptor, opts?: { deleteFiles?: boolean }): Promise<void>
-  /** 删除 Agent(侧栏 / 名册共用);deleteFiles = 连它的文件(记忆、Library)一起移进系统废纸篓,否则留在引擎的 agents/.removed/。失败抛错。 */
-  removeAgent(agent: NormalAgentDef, deleteFiles: boolean): Promise<void>
+  /** 删除 Agent(卸载确认框;侧栏 / 名册 / 商店共用):本机引擎整份挪进回收站(返回 trashId,撤销 / 回收站页恢复用),
+   *  私聊缺省归档、deleteChats 一并删。失败抛错。 */
+  removeAgent(slug: string, opts?: { deleteChats?: boolean }): Promise<{ trashId?: string }>
   /** holdFailed:没发出去的那条留在会话末尾(借 Comma 的失败气泡)并当作「收下了」返回 true —— 只给输入框里手打的那条用;
    *  其余调用方(编辑重发、插件、文档任务……)靠 false 回滚 / 报错,照旧 toast + false。 */
   send(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean, holdFailed?: boolean): Promise<boolean>
@@ -969,7 +980,7 @@ export interface TanguState {
   /** /retry:重跑最后一条用户消息。运行中 / 有排队项时排到本轮结束后,到时再取「最后一条」。 */
   retry(sessionId?: string | null, fromQueue?: boolean): Promise<boolean>
   editUserMessage(messageId: string, newText: string, sessionId?: string | null): void
-  regenerate(messageId: string, sessionId?: string | null): void
+  regenerate(messageId: string, sessionId?: string | null, opts?: { quotaFallback?: boolean }): void
   /** 返回新分支的会话 id;没建成(没有可分的回答 / 引擎拒绝)= null,已 toast。 */
   branchFromMessage(messageId?: string, sessionId?: string | null): Promise<string | null>
   /** 回退到某条消息的时刻(借 Claude Code rewind):'code'=只回滚 agent 写工具改过的文件,
@@ -1287,6 +1298,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
               startedAt: pl.startedAt ?? evs[i].startedAt, elapsedMs: pl.elapsedMs, outputChars: pl.outputChars,
               parallelGroup: pl.parallelGroup ?? evs[i].parallelGroup, artifactPath: pl.artifactPath,
               parked: pl.parked === true || undefined,
+              masked: Array.isArray(pl.masked) && pl.masked.length ? pl.masked : undefined,
             }
             // sketch 完成即上卡(挂 tool_result 不挂 tool_call:引擎尺寸闸拒掉的不画;callId 去重防 SSE 重放双画)
             const sk = sketchFromToolEvent(evs[i])
@@ -1491,7 +1503,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         const ref = assistantRef as GroupRef
         ref.group = true
         const slug = String(pl.slug || '')
-        const name = String(pl.name || slug)
+        const name = agentName(get().agentDefs.find((a) => a.slug === slug)) || String(pl.name || slug)
         const round = Number(pl.round) || 0
         const color = groupColor(slug)
         // 用后端下发的持久 uuid 作气泡 id → 与落库行对齐,轮询/重载按 id 合并不再产生重复。旧后端无 messageId 时回退合成 id。
@@ -1538,7 +1550,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         // end reason=failed → 占位气泡标错;done 的正文由 group_speaker end 填。同时维护 Team Desk 的成员表。
         const ref = assistantRef as GroupRef
         const slug = String(pl.slug || '')
-        const name = String(pl.name || slug)
+        const name = agentName(get().agentDefs.find((a) => a.slug === slug)) || String(pl.name || slug)
         const mid = String(pl.messageId || '')
         if (pl.phase === 'start' && mid) {
           const wasFirst = !ref.groupSeen
@@ -1778,11 +1790,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         const child = get().subChatsBySession[sessionId]?.find((x) => x.id === id)
         const childId = String(pl.sessionId || child?.sessionId || '')
         if (childId) {
-          const mid = `delegate:${childId}`
+          // 续用时同一 subId 再跑一轮:start 带这一轮自己的 messageId,否则新内容会流进上一轮的气泡。
+          const mid = String(pl.messageId || child?.messageId || `delegate:${childId}`)
           set((state) => {
             const messages = state.messagesBySession[childId] || []
             if (messages.some((m) => m.id === mid)) return {}
-            return { messagesBySession: { ...state.messagesBySession, [childId]: [...messages, { id: mid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), agentName: pl.label || child?.title }] } }
+            const followUp: UiMessage[] = pl.userMessageId ? [{ id: String(pl.userMessageId), role: 'user', content: String(pl.task || ''), status: 'done', timestamp: Date.now() }] : []
+            return { messagesBySession: { ...state.messagesBySession, [childId]: [...messages, ...followUp, { id: mid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), agentName: pl.label || child?.title }] } }
           })
           // These events belong to the parent run; a child has no independent run until a follow-up.
           if (pl.phase === 'token') patchMessage(childId, mid, (m) => ({ ...m, content: capContent(m.content + (pl.delta || '')), segments: pushTextSeg(m.segments, pl.delta || ''), status: 'streaming' }))
@@ -1802,7 +1816,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         }
         if (pl.phase === 'token' && pl.delta) upsertSubChat(id, (s) => appendSubText(s, String(pl.delta)))
         else if (pl.phase === 'tool') upsertSubChat(id, (s) => ({ ...s, segs: [...s.segs, { t: 'tool', name: String(pl.name || ''), args: pl.args, preview: pl.preview, error: !!pl.isError }] }))
-        else if (pl.phase === 'start') upsertSubChat(id, (s) => ({ ...s, title: pl.label || s.title, streaming: true }), { kind: 'subagent', title: pl.label })
+        else if (pl.phase === 'start') upsertSubChat(id, (s) => ({ ...s, title: pl.label || s.title, streaming: true, messageId: pl.messageId || s.messageId, segs: pl.userMessageId ? [...s.segs, { t: 'text', text: '' }] : s.segs }), { kind: 'subagent', title: pl.label }) // 续用另起一段,没调工具时两轮回答不拼在一起
         else if (pl.phase === 'done') upsertSubChat(id, (s) => ({ ...s, streaming: false }))
         break
       }
@@ -1877,6 +1891,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
           }))
           break
         }
+        // 这一轮换了模型(额度用完接力 / 服务端停用):回答前面画「改用了」那一行
+        if (pl.phase === 'model_fallback' && pl.to) {
+          patchMessage(sessionId, assistantId, (m) => ({ ...m, fallback: {
+            to: String(pl.to), ...(pl.toName ? { toName: String(pl.toName) } : {}), ...(pl.from ? { from: String(pl.from) } : {}),
+            ...(pl.reason ? { reason: String(pl.reason) } : {}), ...(Number(pl.resetsAt) > 0 ? { resetsAt: Number(pl.resetsAt) } : {}),
+          } }))
+          break
+        }
         // 引擎的其余 status(generating 进度等)对桌面 UI 无用,只取网络重试提示。
         if (pl.phase === 'llm_retry') {
           set((s) => ({
@@ -1898,6 +1920,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (subscribedRuns.has(runId)) return
     subscribedRuns.add(runId)
     clearSuggestion(sessionId) // 输入建议只活到下一轮起跑;在这里作废,不看这个会话的输入框此刻挂没挂着
+    cancelQuotaReminder(sessionId) // 这个会话又跑了一轮(重试 / 接着聊 / 别的窗口发的):「到时提醒我」挂的那一轮已不是最后失败的那轮
     const ac = new AbortController()
     runAborts.set(runId, ac)
     const assistantRef = { current: assistantId }
@@ -2030,7 +2053,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       for (const r of rows) {
         if (!r.agentSlug || next[r.agentSlug]) continue
         const running = r.runStatus === 'running' || r.runStatus === 'queued'
-        const name = s.agentDefs.find((a) => a.slug === r.agentSlug)?.name || r.agentSlug
+        const name = agentName(s.agentDefs.find((a) => a.slug === r.agentSlug)) || r.agentSlug
         next[r.agentSlug] = { slug: r.agentSlug, name, sessionId: r.sessionId, runId: r.runId || undefined, status: running ? 'working' : r.runStatus === 'failed' ? 'failed' : r.runId ? 'done' : 'idle', since: Date.now() }
       }
       return { teamWorkBySession: { ...s.teamWorkBySession, [sessionId]: next } }
@@ -2121,7 +2144,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
         const resolveGroup = groupSpeakerResolver(s.agentDefs, t('group.host'))
-        const resolveSlug = (slug: string) => s.agentDefs.find((a) => a.slug === slug)?.name
+        const resolveSlug = (slug: string) => agentName(s.agentDefs.find((a) => a.slug === slug))
         const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
@@ -2190,7 +2213,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       set((s) => {
         const existing = s.messagesBySession[sessionId] || []
         const resolveGroup = groupSpeakerResolver(s.agentDefs, get().tr('group.host'))
-        const resolveSlug = (slug: string) => s.agentDefs.find((a) => a.slug === slug)?.name
+        const resolveSlug = (slug: string) => agentName(s.agentDefs.find((a) => a.slug === slug))
         const ui = records.map((r) => recordToUi(r, resolveGroup, resolveSlug))
         const byId = new Map(ui.map((m) => [m.id, m] as const))
         for (const m of existing) byId.set(m.id, m)
@@ -2429,12 +2452,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
   },
 
-  renameSession: async (id, title) => {
+  renameSession: async (id, title, auto) => {
+    const cur = [...get().sessions, ...get().archivedSessions].find((x) => x.id === id)
+    if (cur && (cur.title || '') === title) return // 改名框没改字就失焦:不算改名,不然只是点开看看就把标题锁住了
     set((s) => ({
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, title } : x)),
       archivedSessions: s.archivedSessions.map((x) => (x.id === id ? { ...x, title } : x)),
     }))
-    try { await api.updateSession(targetForSession(id), id, { title }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
+    try { await api.updateSession(targetForSession(id), id, { title, title_source: auto ? 'auto' : 'user' }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
   },
 
   setSessionEmoji: async (id, value) => {
@@ -2553,23 +2578,19 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
   },
 
-  removeAgent: async (agent, deleteFiles) => {
+  removeAgent: async (slug, opts) => {
     const t = get().tr
-    // 本机 Agent(有 libraryDir):先让引擎把整个目录挪进 agents/.removed/,勾了「同时删除相关文件」再移进系统废纸篓 ——
-    // 先挪后删,引擎拒删(默认 Agent / 启用中的 Muse)时文件不会先没了;废纸篓失败文件还在 .removed,只提示。
-    // 没有废纸篓接口时退回引擎直接删;云端 Agent 没有本机文件,直接删。
-    const trash = window.tangu?.trashHostPath
-    const keep = !!agent.libraryDir && (!deleteFiles || !!trash)
-    const r = await api.deleteAgentDef(homeTarget(), agent.slug, keep ? { keepFiles: true } : undefined)
+    const r = await api.deleteAgentDef(homeTarget(), slug, opts)
     if (!r?.ok) throw new Error(t('agentProfile.deleteFailed'))
-    if (keep && deleteFiles && r.keptAt) await trash!(r.keptAt).catch(() => get().toast(t('app.agentTrashFail', { path: r.keptAt! }), true))
     set((s) => {
-      const agentDefs = s.agentDefs.filter((a) => a.slug !== agent.slug)
-      return { agentDefs, defaultAgentSlug: s.defaultAgentSlug === agent.slug ? (agentDefs[0]?.slug || 'xyra') : s.defaultAgentSlug }
+      const agentDefs = s.agentDefs.filter((a) => a.slug !== slug)
+      return { agentDefs, defaultAgentSlug: s.defaultAgentSlug === slug ? (agentDefs[0]?.slug || 'xyra') : s.defaultAgentSlug }
     })
     get().refreshAgents()
+    void get().refreshSessions(get().cfg).catch(() => {}) // 引擎已把它的私聊归档:挪进归档区,工作区不留「已删除」那行
     window.dispatchEvent(new Event('forsion:agents-changed'))
     window.tangu?.requestMainAction?.('agents-changed')
+    return { trashId: r.trashId }
   },
 
   // ── Agent Desk:聊天右侧演出面板。会话级快照落 localStorage(persistDeskSoon),
@@ -2896,8 +2917,10 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const sessionModelId = wasNewChat
       ? (implicitModelId || newChatModelId(get()))
       : (get().sessions.find((s) => s.id === sessionId)?.model_id || useChildChat.getState().sessions[sessionId]?.model_id || defaultModelOf(get(), refForSession(sessionId)) || get().modelsResp?.defaultModelId || undefined)
+    const quotaFallback = Date.now() - (quotaFallbackNext.get(sessionId) ?? 0) < 15_000
+    quotaFallbackNext.delete(sessionId)
     try {
-      const r = await startRun(targetForSession(sessionId), { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig })
+      const r = await startRun(targetForSession(sessionId), { sessionId, message: text, modelId: sessionModelId, attachments, agentConfig, ...(quotaFallback ? { quotaFallback } : {}) })
       uiActionOwnedRuns.add(r.runId) // G2:本窗口是这条 run 的发起者 → 只有本窗口执行它的界面动作
       if (seedFrom) set((st) => { const next = { ...st.seedOnceBySession }; delete next[sessionId]; return { seedOnceBySession: next } })
       // 助手身份盖章:外部引擎名 / Normal Agent / 群聊由 group_speaker 逐发言人盖(见 agentStamp)。
@@ -2914,7 +2937,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       get().subscribeRun(sessionId, r.runId, r.assistantMessageId)
       set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ctx: s.usageBySession[sessionId]?.ctx || 0, base: s.usageBySession[sessionId]?.base || 0, live: 0 } } }))
       const sess = get().sessions.find((s) => s.id === sessionId)
-      if (sess && (!sess.title || sess.title === 'New Chat')) void get().renameSession(sessionId, text.slice(0, 30))
+      if (sess && (!sess.title || sess.title === 'New Chat') && !sess.agent_config?.soloAgentSlug) void get().renameSession(sessionId, text.slice(0, 30), true) // 私聊没起过题时显示 Agent 名(soloSessionTitle)
       return true
     } catch (e: any) {
       if (fromQueue || !holdFailed) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }
@@ -3038,7 +3061,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     void get().truncateAndResend(idx, newText, list[idx].attachments || [], sid)
   },
 
-  regenerate: (messageId, targetSessionId) => {
+  regenerate: (messageId, targetSessionId, opts) => {
     const t = get().tr
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid || get().runningBySession[sid]) return
@@ -3048,6 +3071,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     let u = idx - 1
     while (u >= 0 && list[u].role !== 'user') u--
     if (u < 0) { get().toast(t('app.regenNoUser'), true); return }
+    if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
     void get().truncateAndResend(u, list[u].content, list[u].attachments || [], sid)
   },
 
@@ -3250,7 +3274,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       // S4:按会话所在的位置记(空白新对话 = 焦点),不再一律看焦点。
       const where = sid ? refForSession(sid) : focusRef()
       if (where.kind === 'unit') { writeFocusModel(where, modelId); if (sameRef(where, focusRef())) set({ focusModelId: modelId }) }
-      else set((s) => { void window.tangu?.setConfig?.({ modelId }); return { cfg: { ...s.cfg, modelId } } })
+      else set((s) => { const remembered = rememberedModelId(modelId, s.modelsResp); void window.tangu?.setConfig?.({ modelId: remembered }); return { cfg: { ...s.cfg, modelId: remembered } } })
       // 这次选的就是「新会话用哪个模型」的最新答案:空白新对话草稿里更早定下的那个(newChatModel 排在记忆前面,发出去之后也不清)
       // 不能再压着它 —— 否则经归档 / 切 Space / /sessions 回到空白新对话时,药丸还是旧的那个,发出去也是。
       if (sid && sameRef(where, focusRef())) set({ newChatModel: null })
@@ -3469,7 +3493,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     // remember=false:这是 agent 预设强加的,不该把用户的「新会话默认模型/思考档」也一并改掉。
     if (def?.model) get().setSessionModel(def.model, sid, false)
     if (def?.thinkingLevel) get().setSessionThinking(def.thinkingLevel, sid, false)
-    get().pushNotice(def ? t('input.agentActive', { name: def.name }) : t('input.agentCleared'))
+    get().pushNotice(def ? t('input.agentActive', { name: agentName(def) }) : t('input.agentCleared'))
   },
 
   selectNewChatAgent: (slug) => {

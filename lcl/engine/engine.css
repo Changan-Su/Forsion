@@ -94,10 +94,15 @@
 /* 开合时框高与列位移必须同速，命令区底部图标才不会先跳再滑。 */
 @media (prefers-reduced-motion: reduce) { .rb-strip, .rb-strip-in { transition: none; } }
 .rb-pinned { flex-shrink: 0; margin-top: 4px; }
-/* 「…」展开(10-02):展开区铺满整条,另一区不渲染。上区展开时命令区没了,margin-top:auto 改由账号卡接着贴底;
-   命令区展开时主位槽(属于 Space 那一侧)一起让出来 —— 用 CSS 藏不卸载,home 件的状态留着。 */
-.rb-open-top .rb-pinned { margin-top: auto; }
-.rb-open-bottom .rb-home { display: none; }
+/* 「+N」溢出入口(2026-10-30,取代 10-02 的「…」铺满整条):数字就是这一区藏了几个;开着 = 按下的底色;
+   当前 Space 藏在里面 = 当前 Space 的强调底(同 .rb-space.on)。浮层(.rb-more-fly)复用收纳夹浮层 .rb-fly。 */
+.rb-more-n { font-size: var(--ui-font-meta, 12px); font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1; }
+.rb-expanded .rb-more-n { flex: none; width: 18px; text-align: center; }
+.rb-more.is-open { background: var(--overlay-medium, rgba(127, 127, 127, 0.14)); color: var(--text); }
+.rb-more.is-current:not(.is-open) { background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12))); color: var(--accent-ink, var(--accent, var(--text))); }
+.rb-more-fly .rb-key { position: absolute; right: 10px; top: 50%; translate: 0 -50%; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums; pointer-events: none; }
+.rb-more-fly .rb-fly-row:has(> .rb-key) .rb-btn { padding-right: 36px; }
+.rb-fly-hint { padding: 6px 8px 2px; }
 /* ＋ 号:比图标钮更淡,悬停才显形(不喧宾夺主)。 */
 .rb-plus { opacity: 0.4; }
 .rb-plus:hover { opacity: 1; }
@@ -227,6 +232,11 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
   box-shadow: var(--card-shadow, 0 12px 40px rgba(0, 0, 0, 0.25));
   -webkit-app-region: no-drag;
 }
+/* 液滴展开(droplet.ts,DESIGN §3「液滴展开」):液体层是面板前面的兄弟节点、比面板低一档;阴影跟着液体形状走,
+   与真面板的 --card-shadow 同一档(浅 / 暗两份在 base.css)。pouring 期间面板只留内容,底色 / 描边 / 阴影交给液体。 */
+.lcl-droplet { position: fixed; pointer-events: none; filter: url(#lcl-droplet-goo) var(--droplet-shadow, drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.03)) drop-shadow(0 6px 12px rgba(0, 0, 0, 0.06))); }
+.lcl-droplet > i { position: absolute; display: block; }
+.lcl-droplet-pouring { background: transparent !important; border-color: transparent !important; box-shadow: none !important; }
 .rb-fly-head { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); padding: 2px 8px 6px; font-weight: 600; }
 .rb-fly-sub { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); padding: 6px 8px 2px; text-transform: uppercase; letter-spacing: 0.04em; }
 /* 「…」里溢出的收纳夹标题:可拖出重排 + 可放入(codex#6)。 */

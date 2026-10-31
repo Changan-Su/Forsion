@@ -20,9 +20,9 @@
  * 「读 → 改 → 写临时文件 → rename」;读不加锁(rename 原子替换,读者看不到半截 JSON)。
  * 段级读改写用 `updateSection(name, fn)`(fn 在锁内拿最新段值);锁外读段、改完再 saveSection 会盖掉别的进程同时的改动。
  */
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync, rmSync, openSync, closeSync, writeSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, statSync, rmSync, openSync, closeSync, writeSync, copyFileSync, chmodSync, fsyncSync, constants as fsConstants } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { dirname } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import {
   configFile, authFile, providersFile, mcpConfigFile,
   enginesFile, enginePrefsFile, specialAgentsConfigFile,
@@ -33,14 +33,122 @@ export function configExists(): boolean {
   return existsSync(configFile());
 }
 
-/** 读整个 config.json;不存在 / 坏 JSON → null(坏 JSON 由桌面编辑器另行提示)。 */
+/** 读整个 config.json;不存在 → null。读到坏文件(零字节 / 半截 / 不是对象)先在锁内从 .bak 恢复(见 restoreFromBackup),
+ *  恢复不了照旧 null(坏 JSON 由桌面编辑器另行提示)。 */
 export function loadRawConfig(): Record<string, any> | null {
+  return loadJsonRecovering(configFile(), updateConfigFile);
+}
+
+/** 读一份锁写的 JSON 对象文件:能解析直接返回;坏了就跑一次空的锁内读改写(`update(() => undefined)`,恢复在它的读侧做)再读。
+ *  不存在 / 恢复不了 → null。只在文件坏的时候才抢锁。 */
+export function loadJsonRecovering(file: string, update: (mutate: () => undefined) => unknown): Record<string, any> | null {
+  let raw: string;
+  try { raw = readFileSync(file, 'utf8'); } catch { return null; }
+  const parsed = parseObject(raw);
+  if (parsed) return parsed;
+  try { update(() => undefined); } catch { return null; }
+  try { return parseObject(readFileSync(file, 'utf8')); } catch { return null; }
+}
+
+function parseObject(raw: string): Record<string, any> | null {
   try {
-    const parsed = JSON.parse(readFileSync(configFile(), 'utf8'));
-    return parsed && typeof parsed === 'object' ? parsed : null;
-  } catch {
-    return null;
+    const v = JSON.parse(raw);
+    return v && typeof v === 'object' && !Array.isArray(v) ? v : null;
+  } catch { return null; }
+}
+
+// ── 写前备份 / 读坏恢复(借 magpie:读失败 = 不知道,不等于空)。与 desktop/electron/configWrite.ts 同一协议,改一边必须改另一边。
+//    `<目录>/config-backup/<名>.bak` = 上一次写盘前那份好的(原样字节,0600;写不进去整次拒写);`<名>.bad-<时间>-<随机>` = 读坏时留下的坏文件(不删);
+//    `<名>.recovered` = 恢复标记,桌面设置页读它提示「已恢复到 {时间} 的版本」、点掉就删。
+//    整个目录进凭据 / 受保护清单(hostSandboxProtection):provider-auth.json 的备份同样带 token。
+//    .bak 只在恢复时读,平时不是第二条读路径(config.json 仍是唯一真源)。
+/** 某个配置文件的备份目录(与它同目录,rename 不跨盘)。 */
+export const configBackupDir = (file: string): string => join(dirname(file), 'config-backup');
+const backupOf = (file: string): string => join(configBackupDir(file), `${basename(file)}.bak`);
+/** 恢复标记:`{ at: 恢复时刻, version: 恢复到的那份 .bak 的写入时刻, bad: 坏文件留存名 }`(epoch ms)。 */
+export const recoveryMarkerOf = (file: string): string => join(configBackupDir(file), `${basename(file)}.recovered`);
+
+/** 唯一临时名 + 0600 + fsync + rename;commit 之前核 stillMine(同 updateConfigFile 的提交纪律)。
+ *  rename 前先 fsync 临时文件:不刷盘的话断电后可能留下长度对、内容全是 0x00 的文件(magpie #1505,Windows)。
+ *  .bak 管坏了能恢复,fsync 管尽量不坏。ponytail: 不 fsync 目录 —— 断电丢的是这次 rename,原位仍是上一份好的。 */
+function writeAtomic(file: string, text: string, stillMine: () => boolean): void {
+  mkdirSync(dirname(file), { recursive: true });
+  const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`;
+  let fd: number | undefined;
+  try {
+    fd = openSync(tmp, 'wx', 0o600);
+    writeFileSync(fd, text, 'utf8');
+    fsyncSync(fd);
+    const closing = fd; fd = undefined; closeSync(closing); // 先放手再关:close 报错时 catch 里不会再关一次(那个号可能已被别处复用)
+    if (!stillMine()) throw new Error(`写锁在持有期间被当作陈旧锁回收(进程被挂起超过 ${LOCK_STALE_MS / 1000}s?),放弃本次写入:${file}`);
+    renameSync(tmp, file);
+  } catch (e) {
+    if (fd !== undefined) try { closeSync(fd); } catch { /* ignore */ }
+    try { rmSync(tmp, { force: true }); } catch { /* 清不掉就留着,别盖掉原始错误 */ }
+    throw e;
   }
+}
+
+/** 坏文件原样另存到 `config-backup/<名>.bad-<时间>-<随机>`(复制,不挪走 —— 原位一直有东西;EXCL + 随机后缀,同一毫秒两次恢复
+ *  也不会盖掉前一份坏文件),返回留存路径。 */
+function keepBadCopy(file: string): string {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-'); // Windows 文件名不许冒号
+  const bad = join(configBackupDir(file), `${basename(file)}.bad-${stamp}-${randomUUID().slice(0, 8)}`);
+  mkdirSync(dirname(bad), { recursive: true });
+  copyFileSync(file, bad, fsConstants.COPYFILE_EXCL);
+  try { chmodSync(bad, 0o600); } catch { /* Windows 无此语义 */ }
+  return bad;
+}
+
+/** 锁内:file 读到的是坏的。.bak 有效 → 坏文件留一份 `.bad-<时间>`、.bak 原子换回原位、记恢复标记,返回恢复后的内容;
+ *  .bak 也坏 / 没有 → null,什么都不动。顺序:先复制留坏的、再 rename 换回 —— 中途死掉原位仍是那份坏文件,
+ *  下次读再恢复,原位永远不会变成「不存在」(不存在 = 各 loader 当全新安装往下走)。 */
+function restoreFromBackup(file: string, stillMine: () => boolean): Record<string, any> | null {
+  const bak = backupOf(file);
+  let bakRaw: string;
+  let version: number;
+  try { bakRaw = readFileSync(bak, 'utf8'); version = statSync(bak).mtimeMs; } catch { return null; }
+  const restored = parseObject(bakRaw);
+  if (!restored) return null;
+  const bad = keepBadCopy(file);
+  writeAtomic(file, bakRaw, stillMine);
+  try {
+    writeFileSync(recoveryMarkerOf(file), JSON.stringify({ at: Date.now(), version, bad: basename(bad) }), { encoding: 'utf8', mode: 0o600 });
+  } catch { /* 只是提示用的标记,写不进去不影响恢复本身 */ }
+  console.warn(`[config] ${basename(file)} 读到坏文件,已从备份恢复(坏文件留在 ${bad})`);
+  return restored;
+}
+
+export interface LockedRead {
+  /** 不存在 = null。 */
+  cur: Record<string, any> | null;
+  /** 能拿来做 .bak 的那份原文(恢复出来的不再备份 —— .bak 已经就是它)。 */
+  raw: string | null;
+  /** 坏了、没有可用备份、调用方选了 'empty':cur 当空,提交时先把坏文件另存。 */
+  broken?: true;
+}
+
+/** 锁内读一份 JSON 对象文件:不存在 → cur=null;坏了先 restoreFromBackup。恢复不了:
+ *  'throw'(缺省)= 抛错拒写 —— 读失败不等于空,当空往下写会把整份配置换成只剩这一次改的;
+ *  'empty' = 当空、标 broken(provider-auth.json:重新登录要能救回来,坏文件在提交时另存 `.bad-*` 不删)。 */
+export function readLockedJson(file: string, stillMine: () => boolean, label: string, onBroken: 'throw' | 'empty' = 'throw'): LockedRead {
+  let raw: string | null = null;
+  try { raw = readFileSync(file, 'utf8'); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+  if (raw === null) return { cur: null, raw: null };
+  const cur = parseObject(raw);
+  if (cur) return { cur, raw };
+  const restored = restoreFromBackup(file, stillMine);
+  if (restored) return { cur: restored, raw: null };
+  if (onBroken === 'empty') return { cur: null, raw: null, broken: true };
+  throw new Error(`${label} 解析失败且没有可用的备份,拒绝写入(以免其余配置被整份覆盖):${file}`);
+}
+
+/** 锁内提交:旧的好文件先存成 .bak(坏文件先另存 .bad-*),再原子换上新内容。备份失败 = 整次失败,原文件不动。 */
+export function commitLockedJson(file: string, next: unknown, read: LockedRead, stillMine: () => boolean): void {
+  if (read.broken) keepBadCopy(file);
+  // 备份写不进去(盘满 / 备份目录没权限)就整次拒写:.bak 缺了或停在更旧的版本,下次读坏时就救不回 / 救回更旧的,丢的比协议承诺的多。
+  if (read.raw !== null) writeAtomic(backupOf(file), read.raw, stillMine);
+  writeAtomic(file, JSON.stringify(next, null, 2), stillMine);
 }
 
 /**
@@ -115,34 +223,19 @@ export function withConfigLock<T>(file: string, fn: (stillMine: () => boolean) =
 /**
  * config.json 的读改写(唯一写入口,saveSection / migrateLegacyConfig 都走这里)。持跨进程写锁,
  * mutate 恰好执行一次;返回 undefined = 不写。临时文件唯一命名、建出来就是 0600,rename 原子落位(不对目录 fsync)。
- * ⚠️ **文件存在但解析不了 → 拒绝写入**:若当空配置兜底就会把整份 config.json 重写成只剩这一段 ——
- * providers 的 apiKey、云端 token、mcp 配置全没了,且不可撤销。宁可报错让人去修那个文件。
+ * 换上新内容前把旧的那份好的存成 config-backup/config.json.bak。
+ * ⚠️ **文件存在但解析不了**:有可用的 .bak 就先恢复(坏的另存不删),没有就**拒绝写入** —— 若当空配置兜底就会把整份
+ * config.json 重写成只剩这一段:providers 的 apiKey、云端 token、mcp 配置全没了,且不可撤销。宁可报错让人去修那个文件。
  */
 export function updateConfigFile(
   mutate: (cur: Record<string, any> | null) => Record<string, any> | undefined,
 ): Record<string, any> | undefined {
   const file = configFile();
   return withConfigLock(file, (stillMine) => {
-    let raw: string | null = null;
-    try { raw = readFileSync(file, 'utf8'); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
-    let cur: Record<string, any> | null = null;
-    if (raw !== null) {
-      try { cur = JSON.parse(raw); } catch { /* 下面统一拒写 */ }
-      if (!cur || typeof cur !== 'object' || Array.isArray(cur)) {
-        throw new Error(`config.json 解析失败,拒绝写入(以免其余配置被整份覆盖):${file}`);
-      }
-    }
-    const next = mutate(cur);
+    const read = readLockedJson(file, stillMine, 'config.json');
+    const next = mutate(read.cur);
     if (next === undefined) return undefined;
-    const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`;
-    try {
-      writeFileSync(tmp, JSON.stringify(next, null, 2), { encoding: 'utf8', mode: 0o600 });
-      if (!stillMine()) throw new Error(`config.json 的写锁在持有期间被当作陈旧锁回收(进程被挂起超过 ${LOCK_STALE_MS / 1000}s?),放弃本次写入:${file}`);
-      renameSync(tmp, file);
-    } catch (e) {
-      try { rmSync(tmp, { force: true }); } catch { /* 清不掉就留着,别盖掉原始错误 */ }
-      throw e;
-    }
+    commitLockedJson(file, next, read, stillMine);
     return next;
   });
 }
