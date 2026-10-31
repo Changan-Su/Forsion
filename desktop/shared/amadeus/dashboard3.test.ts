@@ -6,7 +6,7 @@ import {
   DASH3_COLS, DASH3_COL_STEPS, DASH3_FM_KEY, DASH3_GAP_PX, DASH3_MAX_ROWS, DASH3_MIN_COL_PX,
   DASH3_ROW_PX, clampCell, colsForWidth, composeDash3Rows, fitDash3Cell, grid3IsStale, migrateCanvasToGrid, moveCard, orderedIds,
   packDash3Rows, readDash3Layout, readDashMode, reconcileGrid, renumber, setDash3InFm, setDashModeInFm, spanFor,
-  DASH3_PIN_KEY, colFor, dropIntoRow, fitRow, layoutDash3Rows, nextPinRow, readDash3Pins, reconcilePins, setDash3PinsInFm,
+  DASH3_PIN_KEY, colFor, dropIntoRow, fitRow, layoutDash3Rows, moveBeside, nextPinRow, readDash3Pins, reconcilePins, setDash3PinsInFm,
 } from './dashboard3'
 
 describe('dashboard3 读写往返', () => {
@@ -349,5 +349,21 @@ describe('手工行位(dashboard3x:)', () => {
   it('pin 自愈只清孤儿;行号稀疏无所谓(同值才算同行)', () => {
     expect(reconcilePins({ '1': { row: 3, col: 0 } }, ['1'])).toBe(null)
     expect(reconcilePins({ '1': { row: 3, col: 0 }, '9': { row: 3, col: 6 } }, ['1'])).toEqual({ '1': { row: 3, col: 0 } })
+  })
+})
+
+describe('moveBeside', () => {
+  it('同一目标算两次结果不变,不再 AB→BA→AB', () => {
+    const once = moveBeside(['a', 'b', 'c'], 'a', 'b', true)
+    expect(once).toEqual(['b', 'a', 'c'])
+    expect(moveBeside(once, 'a', 'b', true)).toEqual(once)
+  })
+  it('换到目标前面就能回到原位', () => {
+    expect(moveBeside(['b', 'a', 'c'], 'a', 'b', false)).toEqual(['a', 'b', 'c'])
+  })
+  it('自己或不存在的目标原样返回', () => {
+    const seq = ['a', 'b']
+    expect(moveBeside(seq, 'a', 'a', true)).toBe(seq)
+    expect(moveBeside(seq, 'a', 'x', true)).toBe(seq)
   })
 })
