@@ -259,6 +259,16 @@ async function main() {
     // Compare to the actual chosen content size. Mixed-DPI Chromium pointer-up coordinates
     // can round the last gesture; exact resize deltas are checked above, independently.
     check('reopened card keeps the size the user chose', reopened.width === kept.width && reopened.height === kept.height && kept.width > 260 && kept.height > 160, JSON.stringify({ kept, reopened }))
+    const reopenCycles = []
+    for (let cycle = 0; cycle < 5; cycle++) {
+      await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
+      for (let i = 0; i < 100 && app.windows().some(w => w.url().includes('window=mini')); i++) await pause(50)
+      await win.evaluate(() => window.tangu.openMini({ spaceId: 'calendar' }))
+      for (let i = 0; i < 200; i++) { mini = app.windows().find(w => w.url().includes('window=mini')); if (mini) break; await pause(50) }
+      await mini.waitForSelector('.mini-todo .amx-todo', { timeout: 30000 })
+      reopenCycles.push(await bounds())
+    }
+    check('five close/open cycles never accumulate fractional-DPI size drift', reopenCycles.every(b => b.width === kept.width && b.height === kept.height), JSON.stringify({ kept, reopenCycles }))
     await mini.screenshot({ path: path.join(shots, 'todo-reopened.png') })
     await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
     check('no renderer errors', errors.length === 0, JSON.stringify(errors))

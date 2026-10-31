@@ -2144,6 +2144,10 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     show: !QUIET_WINDOWS,
     webPreferences: satelliteWebPreferences(),
   })
+  // The transparent Windows HWND can start a few DIP larger than constructor
+  // width/height at fractional DPI. Restore the remembered CONTENT rect after
+  // native creation, just as the resize path does, before the renderer paints.
+  if (process.platform === 'win32') miniWindow.setContentBounds({ x: wa.x + wa.width - width - 24, y: wa.y + 24, width, height })
   if (QUIET_WINDOWS) miniWindow.showInactive()
   miniWindow.setAlwaysOnTop(true, 'floating')
   miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))

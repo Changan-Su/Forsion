@@ -17,7 +17,7 @@ async function main() {
   }
   let app
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', '--remote-debugging-port=9451', ROOT], cwd: ROOT,
+    app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', `--remote-debugging-port=${process.env.MINI_CDP_PORT || 9451}`, ROOT], cwd: ROOT,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '0', FORSION_TEST_DESKTOP: '', PI_CU_SOCKET_PATH: path.join(home, 'no-helper.sock') } })
     const win = await app.firstWindow()
     if (!await skipOnboarding(win)) throw new Error('Onboarding did not close')
@@ -38,6 +38,13 @@ async function main() {
       const mini = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('window=mini'))
       const primary = screen.getPrimaryDisplay().workArea
       const originalTop = mini.isAlwaysOnTop()
+      globalThis.__acceptanceShapes = []; globalThis.__acceptanceLastShape = []
+      const setShape = mini.setShape.bind(mini)
+      mini.setShape = rects => {
+        setShape(rects)
+        globalThis.__acceptanceLastShape = rects
+        globalThis.__acceptanceShapes.push({ at: Date.now(), rects, bounds: mini.getContentBounds(), scale: screen.getDisplayMatching(mini.getContentBounds()).scaleFactor })
+      }
       globalThis.__acceptanceTopEvents = []
       mini.on('always-on-top-changed', (_e, top) => globalThis.__acceptanceTopEvents.push({ top, at: Date.now() }))
       mini.setContentBounds({ x: primary.x + 300, y: primary.y + 200, width: 360, height: 400 })
@@ -58,15 +65,18 @@ async function main() {
       const command = path.join(home, 'command.json')
       if (fs.existsSync(command)) {
         const input = JSON.parse(fs.readFileSync(command, 'utf8')); fs.unlinkSync(command)
-        const output = await app.evaluate(({ BrowserWindow, screen }, input) => {
+        const output = await app.evaluate(async ({ BrowserWindow, screen }, input) => {
           const mini = BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('window=mini'))
           if (input.bounds) mini.setContentBounds(input.bounds)
           if (input.activate) { mini.show(); mini.focus() }
           if (typeof input.top === 'boolean') { mini.setAlwaysOnTop(input.top, 'floating'); if (input.top) mini.moveTop() }
           if (input.backdrop) globalThis.__acceptanceBackdrop?.setBounds(input.backdrop)
-          return { bounds: mini.getContentBounds(), displays: screen.getAllDisplays(), visible: mini.isVisible(), focused: mini.isFocused(), top: mini.isAlwaysOnTop(), topEvents: globalThis.__acceptanceTopEvents }
+          return { requestId: input.id, bounds: mini.getContentBounds(), displays: screen.getAllDisplays(), visible: mini.isVisible(), focused: mini.isFocused(), top: mini.isAlwaysOnTop(), topEvents: globalThis.__acceptanceTopEvents,
+            shape: globalThis.__acceptanceLastShape, shapes: globalThis.__acceptanceShapes,
+            renderer: await mini.webContents.executeJavaScript('({ dpr: devicePixelRatio, width: innerWidth, height: innerHeight, radius: getComputedStyle(document.querySelector(".mini-card-shell")).borderTopLeftRadius, nativeEvents: window.__nativeEvents })') }
         }, input)
         fs.writeFileSync(path.join(home, 'receipt.json'), JSON.stringify(output, null, 2))
+        if (typeof input.id === 'string' && /^[a-z0-9-]{1,80}$/.test(input.id)) fs.writeFileSync(path.join(home, input.id + '.json'), JSON.stringify(output, null, 2))
       }
       await new Promise(r => setTimeout(r, 150))
     }
