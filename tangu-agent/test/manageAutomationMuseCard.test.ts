@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   cards: [] as any[],
   pending: [] as any[],
   upserts: [] as any[],
+  opts: [] as any[],
 }));
 
 vi.mock('../src/services/museCards.js', () => ({
@@ -13,9 +14,11 @@ vi.mock('../src/services/museCards.js', () => ({
 }));
 vi.mock('../src/services/museTriggers.js', async (orig) => ({
   ...(await orig<any>()),
-  upsertTrigger: async (v: any) => { h.upserts.push(v); return { ok: true, created: true, trigger: { id: 'w-1', cond: v.cond } }; },
+  upsertTrigger: async (v: any, _id: string, o: any) => { h.upserts.push(v); h.opts.push(o); return { ok: true, created: true, trigger: { id: 'w-1', cond: v.cond, observe: v.observe } }; },
   loadTriggers: async () => [],
 }));
+
+vi.mock('../src/agents/agentRegistry.js', async (orig) => ({ ...(await orig<any>()), getAgent: async () => ({ slug: 'default' }) }));
 
 import { manageAutomationProvider } from '../src/tools/builtin/manageAutomation.js';
 
@@ -25,7 +28,7 @@ const auto = { ...ask, approvalMode: 'full-auto' };
 const run = (a: Record<string, unknown>, ctx: any = ask): Promise<string> => tool.execute(a, ctx) as Promise<string>;
 const remind = { action: 'set', desc: 'stretch', cond_type: 'computer.app_opened', params: { app: 'Figma' }, actions: [{ type: 'remind', title: 'stretch' }] };
 
-beforeEach(() => { h.cards.length = 0; h.pending = []; h.upserts.length = 0; });
+beforeEach(() => { h.cards.length = 0; h.pending = []; h.upserts.length = 0; h.opts.length = 0; });
 
 describe('ask / agent 档', () => {
   it('提醒规则 = 只发卡,不写规则;卡上带校验过的规则和入参', async () => {
@@ -80,5 +83,21 @@ describe('auto 档', () => {
     expect(out).toContain('message_user');
     expect(h.upserts).toHaveLength(1);
     expect(h.cards).toHaveLength(0);
+  });
+
+  it('自己建的规则会跑 Agent、调工具或写表:缺省先观察,工具结果说明白', async () => {
+    const out = await run({ action: 'set', desc: 'd', cond_type: 'daily_at', time: '09:00', actions: [{ type: 'agent_run', agentSlug: 'default', prompt: 'x' }] }, auto);
+    expect(out).toContain('observing');
+    expect(h.upserts[0].observe).toBe(true);
+    expect(h.opts[0]).toMatchObject({ observeBy: 'muse' });
+  });
+
+  it('只发提醒、明说不观察、一次性规则、改已有规则:不缺省观察', async () => {
+    const agent = [{ type: 'agent_run', agentSlug: 'default', prompt: 'x' }];
+    await run(remind, auto);
+    await run({ action: 'set', desc: 'd', cond_type: 'daily_at', time: '09:00', actions: agent, observe: false }, auto);
+    await run({ action: 'set', desc: 'd', cond_type: 'at', datetime: new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 16).replace('T', ' '), actions: agent }, auto);
+    await run({ action: 'set', id: 'w-1', desc: 'd', cond_type: 'daily_at', time: '09:00', actions: agent }, auto);
+    expect(h.upserts.map((v) => v.observe)).toEqual([undefined, false, undefined, undefined]);
   });
 });

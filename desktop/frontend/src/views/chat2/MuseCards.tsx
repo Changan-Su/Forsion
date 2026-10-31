@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import { create } from 'zustand'
-import { AlarmClock, ArrowDown, CircleCheck, CircleX, Gift, Inbox, MessageCircle, Puzzle, Settings, Sparkles } from 'lucide-react'
+import { AlarmClock, ArrowDown, CircleCheck, CircleX, Eye, Gift, Inbox, MessageCircle, Puzzle, Settings, Sparkles } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useAttention } from '../../stores/attentionStore'
@@ -18,7 +18,7 @@ import { HOME_REF, sameRef, targetForSession } from '../../services/engine/targe
 import type { MuseCardInfo, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { MarketPluginCards } from '../../components/MarketPluginCards'
 import { useAutomation } from '../../stores/automationStore'
-import { condText, onlyText } from '../automation/lib'
+import { canObserve, condText, onlyText } from '../automation/lib'
 
 registerMessages({
   'museCard.inDeck': { zh: '{title} · 在对话最下面', en: '{title} · at the end of the chat' },
@@ -105,6 +105,18 @@ registerMessages({
   'museCard.ruleDone': { zh: '规则已建好', en: 'Rule created' },
   'museCard.ruleEditing': { zh: '已打开画布，规则暂停着', en: 'Opened in the canvas, rule paused' },
   'museCard.ruleDeclined': { zh: '不用这条规则', en: 'Rule declined' },
+  'museCard.ruleObserve': { zh: '先观察', en: 'Observe first' },
+  'museCard.ruleObserving': { zh: '规则已建好，先观察', en: 'Rule created. It only observes for now.' },
+  'museCard.ruleObserved': { zh: '规则观察结果', en: 'Rule observation results' },
+  'museCard.observedLine': { zh: '观察了 {days} 天，命中 {hits} 次，都只做了记录。', en: 'Observed for {days} d with {hits} matches. Nothing ran.' },
+  'museCard.observedEnable': { zh: '启用', en: 'Enable' },
+  'museCard.observedExtend': { zh: '再看 7 天', en: 'Watch 7 more days' },
+  'museCard.observedPause': { zh: '暂停规则', en: 'Pause rule' },
+  'museCard.observedView': { zh: '查看记录', en: 'View records' },
+  'museCard.observedEnabled': { zh: '规则已启用', en: 'Rule enabled' },
+  'museCard.observedExtended': { zh: '再观察 7 天', en: 'Observing for 7 more days' },
+  'museCard.observedPaused': { zh: '规则已暂停', en: 'Rule paused' },
+  'museCard.observedGone': { zh: '这条规则已不在观察中', en: 'This rule is no longer being observed' },
 })
 
 /** 点完一张:流里那行与卡片堆一起重读(同一张卡的两处视图不共享组件状态)。 */
@@ -187,8 +199,24 @@ export function MuseDeckCard({ card, sessionId }: { card: MuseCardInfo; sessionI
         {row(t('museCard.ruleDo'), act)}
         <div className="t2-taskcard-actions">
           <button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'accept')}>{t('museCard.ruleOk')}</button>
+          {!!r.cond && canObserve(r.cond.type) && <button type="button" disabled={busy} onClick={() => void decide(card, 'observe')}>{t('museCard.ruleObserve')}</button>}
           <button type="button" disabled={busy} onClick={() => { void decide(card, 'edit').then((id) => { if (typeof id === 'string') { setActiveSpace('automation'); void useAutomation.getState().openRule(id) } }) }}>{t('museCard.ruleEdit')}</button>
           <button type="button" disabled={busy} onClick={() => void decide(card, 'dismiss')}>{t('museCard.ruleNo')}</button>
+        </div>
+      </div></div>
+    )
+  }
+  if (card.kind === 'rule-observed') {
+    const { triggerId, desc, days, hits } = card.payload
+    return (
+      <div className="t2-tasks"><div className="t2-taskcard" data-muse-card="rule-observed">
+        <div className="t2-taskcard-head"><Eye size={14} /><b>{desc}</b></div>
+        <div className="t2-taskcard-tldr">{t('museCard.observedLine', { days, hits })}</div>
+        <div className="t2-taskcard-actions">
+          <button type="button" className="primary" disabled={busy} onClick={() => void decide(card, 'enable')}>{t('museCard.observedEnable')}</button>
+          <button type="button" disabled={busy} onClick={() => void decide(card, 'extend')}>{t('museCard.observedExtend')}</button>
+          <button type="button" disabled={busy} onClick={() => void decide(card, 'pause')}>{t('museCard.observedPause')}</button>
+          <button type="button" disabled={busy} onClick={() => { setActiveSpace('automation'); void useAutomation.getState().openRule(triggerId) }}>{t('museCard.observedView')}</button>
         </div>
       </div></div>
     )
@@ -376,6 +404,7 @@ const cardTitle = (card: MuseCardInfo, t: Tr): string => {
   if (card.kind === 'intro') return t('museCard.intro')
   if (card.kind === 'summary') return t('museCard.summary')
   if (card.kind === 'rule') return t('museCard.rule')
+  if (card.kind === 'rule-observed') return t('museCard.ruleObserved')
   return card.payload.title || ''
 }
 
@@ -387,7 +416,8 @@ function receipt(card: MuseCardInfo, t: Tr): { ok: boolean; text: string } {
     return { ok: true, text: t('museCard.settingsDone', { list }) }
   }
   if (card.kind === 'intro') return { ok: card.result === 'answer', text: t(card.result === 'answer' ? 'museCard.introDone' : 'museCard.introSkipped') }
-  if (card.kind === 'rule') return card.status === 'dismissed' ? { ok: false, text: t('museCard.ruleDeclined') } : { ok: true, text: t(card.result === 'editing' ? 'museCard.ruleEditing' : 'museCard.ruleDone') }
+  if (card.kind === 'rule') return card.status === 'dismissed' ? { ok: false, text: t('museCard.ruleDeclined') } : { ok: true, text: t(card.result === 'editing' ? 'museCard.ruleEditing' : card.result === 'observing' ? 'museCard.ruleObserving' : 'museCard.ruleDone') }
+  if (card.kind === 'rule-observed') return { ok: card.result === 'enable' || card.result === 'extend', text: t(card.result === 'enable' ? 'museCard.observedEnabled' : card.result === 'extend' ? 'museCard.observedExtended' : card.result === 'pause' ? 'museCard.observedPaused' : 'museCard.observedGone') }
   if (card.kind === 'summary') return { ok: true, text: t('museCard.summaryDone') }
   if (card.status === 'dismissed') return { ok: false, text: t('museCard.dismissed') }
   if (card.kind === 'inbox-ask') return { ok: card.result === 'yes', text: t(card.result === 'yes' ? 'museCard.askYes' : card.result === 'ignore' ? 'museCard.askIgnore' : 'museCard.askLater') }

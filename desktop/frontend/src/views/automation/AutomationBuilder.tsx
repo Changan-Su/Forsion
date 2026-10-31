@@ -12,7 +12,7 @@ import { useAutomation } from '../../stores/automationStore'
 import { getTriggerSources, saveMuseTrigger } from '../../services/backendService'
 import { currentLocale, useI18n } from '../../i18n'
 import {
-  BUILTIN_EVENTS, MAX_WHERE, WEEKDAYS, WEEKEND, WHERE_OPS, blankStep, cooldownPayload, hasUnsupportedParts, initialCooldown, isParamCond,
+  BUILTIN_EVENTS, MAX_WHERE, WEEKDAYS, WEEKEND, WHERE_OPS, blankStep, canObserve, cooldownPayload, hasUnsupportedParts, initialCooldown, isParamCond,
   isFinishedTrigger, noticeText, onlyDraftFrom, onlyDraftValid, onlyToUpsert, parseLocalDatetime, stepsFrom, toSpec, triggerMenu, watchedColumnIds, whereDraftFrom, whereToUpsert,
   type OnlyDraft, type StepDraft, type TriggerMenuItem, type WhereDraft,
 } from './lib'
@@ -235,10 +235,12 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     issues.push({ node: 'review', text: t('automation.ux.issue.cooldown') })
   }
   const canSave = issues.length === 0
+  const condType = (kind === 'timer' ? timerMode : kind === 'param' ? sourceId : kind) as MuseTriggerUpsert['cond_type']
+  // 编辑观察中的规则:保存后还是观察,转成启用只走规则卡头的三段控件,不会被顺手转正。
+  const keepsObserving = !!editing?.observe && enabled && canObserve(condType)
 
-  const save = async (): Promise<void> => {
+  const save = async (mode?: 'observe'): Promise<void> => {
     if (!canSave || busy) return
-    const condType = (kind === 'timer' ? timerMode : kind === 'param' ? sourceId : kind) as MuseTriggerUpsert['cond_type']
     // 预检:编辑器开久了 at 时刻悄悄过期(mount 时的 expiredAt 不会重算)——引擎同口径(5min 容忍)本地先拒
     if (condType === 'at' && (parseLocalDatetime(datetime)?.getTime() ?? 0) < Date.now() - 5 * 60_000) {
       setError(t('automation.builder.atPast'))
@@ -285,7 +287,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
         cooldown_hours: cooldownPayload(showCooldown ? kind : 'timer', cooldown), // 0 放行(db_changed 纯动作链 = 不冷却)
         // 新 builder 不再产旧式单动作;0 步骤 = 显式清空(actions:null)回到唤醒 Muse 旧语义
         actions: steps.length ? actions : null,
-        enabled,
+        ...(mode === 'observe' ? { enabled: true, observe: true } : { enabled }),
       })
       if (!editing?.id) track('automation.create') // 只计新建,编辑保存不算
       if (onSaved) { st.bump(); onSaved(saved); return }
@@ -765,7 +767,8 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
           {error ? <span role="alert">{error}</span> : issues.length ? <button onClick={() => setSelected(issues[0].node)}>{issues[0].text}{issues.length > 1 ? ` (+${issues.length - 1})` : ''}</button> : <span>{t('automation.ux.allReady')}</span>}
         </div>
         <button className="btn ghost sm" onClick={() => setSelected('review')}>{t('automation.ux.review')}</button>
-        <button className="btn sm" disabled={!canSave || busy} onClick={() => void save()}>{busy ? '…' : t(enabled ? 'automation.ux.saveEnabled' : 'automation.ux.savePaused')}</button>
+        {canObserve(condType) && !keepsObserving && <button className="btn ghost sm" disabled={!canSave || busy} onClick={() => void save('observe')}>{t('automation.ux.saveObserve')}</button>}
+        <button className="btn sm" disabled={!canSave || busy} onClick={() => void save()}>{busy ? '…' : t(keepsObserving ? 'automation.ux.saveObserve' : enabled ? 'automation.ux.saveEnabled' : 'automation.ux.savePaused')}</button>
       </div>
     </div>
   )

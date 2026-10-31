@@ -13,7 +13,7 @@ import { deps } from '../seams/runtime.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { postMuseDm } from './museDm.js';
-import { upsertTrigger, validateTriggerInput, type TriggerInput } from './museTriggers.js';
+import { loadTriggers, updateObservation, upsertTrigger, validateTriggerInput, type MuseTrigger, type TriggerInput } from './museTriggers.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import type { MuseCardInfo, MuseCardKind } from '../contracts/clientTypes.js';
 import { loadSpecialAgentsConfig, updateMuseConfig, type MuseConfig } from './specialAgentsConfig.js';
@@ -32,6 +32,8 @@ const RECOMMEND_WINDOW_MS = 7 * 86_400_000;
 const INBOX_LIST_WINDOW_MS = 86_400_000;
 const CHANNEL_AFTER_MS = 2 * 86_400_000;
 const MAX_LIST_ITEMS = 8;
+/** Muse 建的规则观察满这么久,发一张结果卡。 */
+const OBSERVE_REPORT_AFTER_MS = 7 * 86_400_000;
 
 /** 反馈写进 Muse 的 LOG(英文:下周期 read_log 喂给模型)。绝不抛。 */
 export async function appendMuseFeedback(userId: string, line: string): Promise<void> {
@@ -223,6 +225,32 @@ const dismissedFact = (card: MuseCardInfo): string => {
   return `The user is not interested in ${what}. Do not recommend it again.`;
 };
 
+/** 这一段观察命中了几次。账本的 user_id 是自动化自己的口径,规则 id 本机唯一,不按用户筛。 */
+export async function countObservedHits(triggerId: string, since: string | undefined): Promise<number> {
+  const from = new Date(since || 0).toISOString().slice(0, 19).replace('T', ' ');
+  const rows = await query<any[]>(`SELECT COUNT(*) AS n FROM automation_executions WHERE trigger_id = ? AND status = 'observed' AND created_at >= ?`, [triggerId, from]);
+  return Number(rows?.[0]?.n) || 0;
+}
+
+/** Muse 建的规则观察满 7 天、至少命中 1 次:引擎发结果卡,不花 token、不占额度。一段观察只发一张,没命中就接着看。 */
+export async function postObservedRuleCards(userId: string, now = Date.now()): Promise<void> {
+  const due = (await loadTriggers()).filter((t) => t.enabled && t.observe && t.observeBy === 'muse' && !t.observeReportedAt
+    && now - Date.parse(t.observeSince || '') >= OBSERVE_REPORT_AFTER_MS);
+  for (const t of due) {
+    const hits = await countObservedHits(t.id, t.observeSince);
+    if (!hits) continue;
+    const key = `rule-observed:${t.id}:${t.observeSince}`;
+    const seen = await query<any[]>(`SELECT 1 FROM muse_cards WHERE user_id = ? AND target_key = ? LIMIT 1`, [userId, key]);
+    const days = Math.floor((now - Date.parse(t.observeSince!)) / 86_400_000);
+    const posted = seen?.length ? true : (await postMuseCard(userId, { kind: 'rule-observed', key, payload: { triggerId: t.id, desc: t.desc, hits, days }, text: '', uncapped: true })).ok;
+    if (posted) await updateObservation(t.id, 'reported');
+  }
+}
+
+/** 规则到点会无人值守地跑 agent 或工具。这种规则不从手机启用:规则起的 run 是全放行,不带远程污点。 */
+const runsUnattended = (t: MuseTrigger): boolean =>
+  (!!t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG) || !!t.actions?.some((a) => a.type === 'agent_run' || a.type === 'tool_call');
+
 /** 第一次见面:引擎自己发,不等模型、不花 token。可跳过。 */
 export async function postIntroCard(userId: string): Promise<boolean> {
   const r = await postMuseCard(userId, { kind: 'intro', key: 'intro', payload: {}, text: '', uncapped: true });
@@ -280,7 +308,7 @@ async function settleThen(userId: string, id: string, status: 'done' | 'dismisse
   return true;
 }
 
-/** 规则卡三个按钮:好 = 建好开着;改一下 = 建成暂停的,客户端打开画布;不用 = 不建,写进反馈让 Muse 别再提。
+/** 规则卡四个按钮:好 = 建好开着;先观察 = 建好只记录;改一下 = 建成暂停的,客户端打开画布;不用 = 不建,写进反馈让 Muse 别再提。
  *  入参在工具入口校验过,这里按当前环境再校验一次(卡可能放了几天)。建失败(比如到 50 条上限)把卡退回待处理,别让用户以为建上了。 */
 async function decideRuleCard(userId: string, card: MuseCardInfo, action: string, gone: DecideResult, bad: DecideResult): Promise<DecideResult> {
   if (action === 'dismiss') {
@@ -288,23 +316,24 @@ async function decideRuleCard(userId: string, card: MuseCardInfo, action: string
     await appendMuseFeedback(userId, `[feedback] proposed automation "${card.payload?.rule?.desc}" declined by user`);
     return { ok: true, card: (await getMuseCard(userId, card.id)) ?? card };
   }
-  if (action !== 'accept' && action !== 'edit') return bad;
-  const v = validateTriggerInput({ ...(card.payload?.input as TriggerInput), enabled: action === 'accept' }, { cwd: card.payload?.cwd, vaultPath: amadeusVaultPath() });
+  if (action !== 'accept' && action !== 'edit' && action !== 'observe') return bad;
+  const observing = action === 'observe';
+  const v = validateTriggerInput({ ...(card.payload?.input as TriggerInput), enabled: action !== 'edit', ...(observing ? { observe: true } : {}) }, { cwd: card.payload?.cwd, vaultPath: amadeusVaultPath() });
   if (!v.ok) return { ok: false, status: 400, error: 'bad_rule', detail: v.error };
-  if (!(await settle(userId, card.id, 'done', action === 'accept' ? 'accepted' : 'editing'))) return gone;
-  const r = await upsertTrigger(v.value, undefined, { actor: 'user' }).catch((e) => ({ ok: false as const, error: String(e?.message || e) }));
+  if (!(await settle(userId, card.id, 'done', action === 'edit' ? 'editing' : observing ? 'observing' : 'accepted'))) return gone;
+  const r = await upsertTrigger(v.value, undefined, { actor: 'user', ...(observing ? { observeBy: 'muse' as const } : {}) }).catch((e) => ({ ok: false as const, error: String(e?.message || e) }));
   if (!r.ok) {
     await query(`UPDATE muse_cards SET status = 'pending', result = NULL, decided_at = NULL WHERE id = ?`, [card.id]);
     return { ok: false, status: 409, error: 'rule_not_created', detail: r.error };
   }
-  await appendMuseFeedback(userId, `[feedback] proposed automation "${v.value.desc}" ${action === 'accept' ? 'accepted' : 'taken to the canvas'} by user`);
+  await appendMuseFeedback(userId, `[feedback] proposed automation "${v.value.desc}" ${action === 'edit' ? 'taken to the canvas' : observing ? 'accepted to observe first' : 'accepted'} by user`);
   return { ok: true, card: (await getMuseCard(userId, card.id)) ?? card, trigger: { id: r.trigger.id } };
 }
 
 /** 用户点卡。action 按 kind 白名单,认不得 → 400;效果在 CAS 成功之后才做(同一张卡点两次只生效一次)。 */
 export async function decideMuseCard(
   userId: string, id: string, action: string,
-  opts: { messageId?: string; answers?: IntroAnswers; index?: number; expected?: string; text?: string } = {},
+  opts: { messageId?: string; answers?: IntroAnswers; index?: number; expected?: string; text?: string; remote?: boolean } = {},
 ): Promise<DecideResult> {
   const card = await getMuseCard(userId, id);
   if (!card) return { ok: false, status: 404, error: 'card_not_found', detail: 'card not found' };
@@ -312,6 +341,22 @@ export async function decideMuseCard(
   const gone: DecideResult = { ok: false, status: 409, error: 'card_not_pending', detail: 'card is already handled' };
   if (card.status !== 'pending') return gone;
   switch (card.kind) {
+    case 'rule-observed': {
+      if (action !== 'enable' && action !== 'extend' && action !== 'pause') return bad;
+      const triggerId = String(card.payload?.triggerId || '');
+      const rule = (await loadTriggers()).find((t) => t.id === triggerId);
+      if (action === 'enable' && opts.remote && rule && runsUnattended(rule)) {
+        return { ok: false, status: 403, error: 'local_only', detail: 'this rule runs unattended, so it can only be enabled on the computer' };
+      }
+      // 卡放了几天:规则已经删了,或者在面板改过状态。卡收掉,别让用户点一个不存在的东西。
+      if (!rule?.observe) {
+        if (!(await settle(userId, id, 'dismissed', 'gone'))) return gone;
+        break;
+      }
+      if (!(await settleThen(userId, id, 'done', action, async () => { await updateObservation(triggerId, action); }))) return gone;
+      await appendMuseFeedback(userId, `[feedback] observed automation "${rule.desc}": ${action} chosen by user`);
+      break;
+    }
     case 'plugin':
     case 'feature': {
       if (action === 'dismiss') {

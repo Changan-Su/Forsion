@@ -9,8 +9,9 @@ import { homeAgentDefs, subscribeHomeAgents } from '../../stores/homeCatalog'
 import { notifyApp } from '../../stores/notificationStore'
 import { windowKind } from '../../windowKind'
 import { useAutomation, type AutomationSel } from '../../stores/automationStore'
+import type { MuseTriggerInfo } from '../../types'
 import { deleteMuseTrigger, saveMuseTrigger, saveSpecialConfig, deleteAgentScheduleEntry, saveAgentScheduleEntry } from '../../services/backendService'
-import { actionsText, condText, isFinishedTrigger, triggerToUpsert } from './lib'
+import { actionsText, condText, isFinishedTrigger, ruleState, triggerToUpsert, type RuleState } from './lib'
 import './messages'
 import { homeTarget } from '../../services/engine/targets'
 
@@ -59,6 +60,12 @@ export function deleteWithUndo(sel: AutomationSel, name: string, run: () => Prom
     action: { label: t('automation.undo'), run() { if (!decided) { decided = true; settle() } } } })
   if (!shown) setTimeout(commit, UNDO_MS) // 没有通知栈可挂(不该发生):照旧给出撤销时长再删
 }
+/** Only user actions come here: `observe: false` is the one way an observing rule goes live. */
+export const saveRuleState = (tr: MuseTriggerInfo, next: RuleState): Promise<boolean> => mutate(() => saveMuseTrigger(homeTarget(), {
+  ...triggerToUpsert(tr), actor: 'user', ...(next === 'off' ? { enabled: false } : { enabled: true, observe: next === 'observe' }),
+}))
+export const RULE_STATE_LABEL: Record<RuleState, string> = { off: 'automation.ux.off', observe: 'automation.ux.observing', on: 'automation.ux.on' }
+
 let readers = 0
 let stopPolling: (() => void) | undefined
 /** Shared polling survives a hidden sidebar; each mounted consumer releases its subscription. */
@@ -86,7 +93,7 @@ export const automationListSource: HostListSource = {
     const rows: Array<ListItem & { category: string; searchText?: string }> = state.triggers.map((tr) => ({
       key: keyOf({ kind: 'trigger', triggerId: tr.id })!, title: tr.desc, icon: 'today',
       category: isFinishedTrigger(tr) ? 'finished' : tr.cond.type === 'manual' ? 'buttons' : 'rules',
-      hint: t(isFinishedTrigger(tr) ? 'automation.finished' : tr.enabled ? 'automation.ux.on' : 'automation.ux.off'),
+      hint: t(isFinishedTrigger(tr) ? 'automation.finished' : RULE_STATE_LABEL[ruleState(tr)]),
       searchText: `${condText(t, tr.cond)} ${actionsText(t, defs, tr)}`,
     }))
     for (const schedule of state.schedules) for (const en of schedule.entries) {
@@ -115,7 +122,8 @@ export const automationListSource: HostListSource = {
       if (!tr) return []
       return [
         { id: 'edit', label: t('common.edit'), run() { state.openBuilder(tr.id); openDetail() } },
-        { id: 'toggle', label: t(tr.enabled ? 'automation.ux.pause' : 'automation.ux.enable'), run() { void mutate(() => saveMuseTrigger(homeTarget(), { ...triggerToUpsert(tr), enabled: !tr.enabled, actor: 'user' })) } },
+        { id: 'toggle', label: t(tr.enabled ? 'automation.ux.pause' : tr.observe ? 'automation.ux.observe' : 'automation.ux.enable'), run() { void saveRuleState(tr, tr.enabled ? 'off' : tr.observe ? 'observe' : 'on') } },
+        ...(tr.observe ? [{ id: 'enable', label: t('automation.ux.enable'), run() { void saveRuleState(tr, 'on') } }] : []),
         { id: 'delete', label: t('common.delete'), danger: true, run() { deleteWithUndo(sel, tr.desc, () => deleteMuseTrigger(homeTarget(), tr.id)) } },
       ]
     }

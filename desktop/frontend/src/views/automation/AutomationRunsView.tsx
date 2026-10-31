@@ -7,7 +7,7 @@
  * 行只带元信息(时间/状态/摘要),不按 run 切片消息——主区恒显完整会话尾部。
  */
 import React, { useEffect, useState } from 'react'
-import { CheckCircle2, CircleAlert } from 'lucide-react'
+import { CheckCircle2, CircleAlert, Eye } from 'lucide-react'
 import { Skeleton } from '@lcl/engine'
 import './messages'
 import { useApp } from '../../stores/appStore'
@@ -20,7 +20,7 @@ import './automation.css'
 import { homeTarget, connectionKey } from '../../services/engine/targets'
 
 const dotClass = (status: string): string =>
-  status === 'running' || status === 'queued' ? 'running' : status === 'completed' || status === 'done' ? 'on' : 'off'
+  status === 'observed' ? 'observed' : status === 'running' || status === 'queued' ? 'running' : status === 'completed' || status === 'done' ? 'on' : 'off'
 
 /** 执行账本的模块级缓存(U-39,stale-while-revalidate):面板重建 / 在规则间来回切时先画上次的记录,后台照常轮询。
  *  按**连接 + 账号**分桶(executionsScope):换账号 / 换后端 = 换桶,旧环境的记录绝不先画出来;
@@ -84,6 +84,7 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
   const accountId = useApp((s) => s.authInfo?.accountId ?? s.authInfo?.username ?? null)
   const scope = executionsScope(cfg, accountId)
   const nonce = useAutomation((s) => s.refreshNonce)
+  const rule = useAutomation((s) => s.triggers.find((x) => x.id === triggerId))
   const [rows, setRows] = useState<AutomationExecutionInfo[]>(() => peek(scope, triggerId) ?? [])
   const [loading, setLoading] = useState(() => !peek(scope, triggerId))
   const [failed, setFailed] = useState(false)
@@ -107,22 +108,25 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
   if (loading) return <div className="auto-runs-loading"><Skeleton variant="list" /><span className="auto-sr-only" role="status">{t('automation.ux.runLoading')}</span></div>
   if (failed) return <div className="auto-runs-empty" role="alert">{t('automation.ux.runError')} <button className="btn ghost sm" onClick={() => setRetry((n) => n + 1)}>{t('automation.ux.retry')}</button></div>
   if (!rows.length) return <div className="auto-runs-empty">{t('automation.ux.runEmpty')}</div>
-  return <div className="auto-executions">{rows.map((r, index) => (
+  return <>{rule?.observe && <div className="auto-hint">{t('automation.ux.observeSummary', {
+    days: String(Math.max(1, Math.ceil((Date.now() - Date.parse(rule.observeSince || '')) / 86_400_000)) || 1), hits: String(rule.observeHits ?? 0),
+  })}</div>}<div className="auto-executions">{rows.map((r, index) => (
     <details key={r.id} className="auto-execution" open={index === 0 ? true : undefined}>
       <summary>
         <span className={`auto-dot ${dotClass(r.status)}`} />
         <time>{fmtTime(r.created_at)}</time>
-        <span className="auto-execution-status">{['done', 'failed', 'running', 'queued'].includes(r.status) ? t(`automation.ux.${r.status}`) : r.status}</span>
-        <span className="auto-hint">{t(r.origin === 'auto' ? 'automation.ux.autoOrigin' : 'automation.ux.manualOrigin')}</span>
+        <span className="auto-execution-status">{['done', 'failed', 'running', 'queued', 'observed'].includes(r.status) ? t(`automation.ux.${r.status}`) : r.status}</span>
+        <span className="auto-hint">{t(r.status === 'observed' ? 'automation.ux.observeOrigin' : r.origin === 'auto' ? 'automation.ux.autoOrigin' : 'automation.ux.manualOrigin')}</span>
       </summary>
       {r.error && <p className="auto-execution-error">{r.error}</p>}
       <ol>{r.steps.map((step, i) => <li key={i}>
-        {step.ok ? <CheckCircle2 size={14} /> : <CircleAlert size={14} />}
-        <div><strong>{t('automation.ux.stepResult', { n: String(i + 1), type: t(`automation.step.${step.type}`) })}{step.tool ? ` · ${step.tool}` : ''}</strong><p>{step.summary}</p></div>
+        {step.observed ? <Eye size={14} /> : step.ok ? <CheckCircle2 size={14} /> : <CircleAlert size={14} />}
+        <div><strong>{t('automation.ux.stepResult', { n: String(i + 1), type: t(`automation.step.${step.type}`) })}{step.tool ? ` · ${step.tool}` : ''}</strong><p>{[step.row && t('automation.ux.hitRow', { row: step.row }), step.target, step.summary].filter(Boolean).join(' · ')}</p></div>
       </li>)}</ol>
+      {r.status === 'observed' && <p className="auto-hint">{t(r.steps.some((s) => s.type.startsWith('db_row')) ? 'automation.ux.observedNoteDb' : 'automation.ux.observedNote')}</p>}
       {!r.steps.length && <p className="auto-hint">{t('automation.ux.noSteps')}</p>}
     </details>
-  ))}</div>
+  ))}</div></>
 }
 
 const RunsList: React.FC<{ sessionId: string }> = ({ sessionId }) => {
@@ -190,7 +194,7 @@ export const AutomationRunsView: React.FC<{ renderSession?: (sessionId: string) 
     body = <HistorianList />
   } else if (sel?.kind === 'trigger') {
     const tr = st.triggers.find((x) => x.id === sel.triggerId)
-    if (tr?.actions?.length) {
+    if (tr?.actions?.length || tr?.observe) { // 观察的记录都在账本里,叫醒 Muse 的规则也一样
       body = <ExecutionsList key={tr.id} triggerId={tr.id} />
     } else if (tr?.agentSlug) {
       const sid = sessionForTrigger(st.autoSessions, tr.id)

@@ -22,6 +22,7 @@ import {
   removeTrigger,
   validateTriggerInput,
   upsertTrigger,
+  canObserve,
   condSummary,
   isPluginTriggerId,
   precheckWatchCols,
@@ -57,8 +58,12 @@ function fmt(t: MuseTrigger): string {
         : a.type).join(' → ')}`
     : t.agentSlug ? `, runs agent "${t.agentSlug}"` : '';
   const cd = t.cooldownHours ? `, cooldown ${t.cooldownHours}h` : '';
-  return `${t.id}${t.enabled ? '' : ' (disabled)'} — ${t.desc} [${condSummary(t.cond)}]${act}${cd}, last fired ${t.lastFiredAt || 'never'}`;
+  return `${t.id}${t.enabled ? (t.observe ? ' (observing)' : '') : ' (disabled)'} — ${t.desc} [${condSummary(t.cond)}]${act}${cd}, last fired ${t.lastFiredAt || 'never'}`;
 }
+
+/** 规则命中后会跑 agent、调工具或写表格(只发提醒、通知、叫醒 Muse 的不算)。 */
+const rewritesThings = (v: ValidatedTrigger): boolean =>
+  (!!v.agentSlug && v.agentSlug !== 'muse') || !!v.actions?.some((a) => a.type !== 'notify' && a.type !== 'remind');
 
 /** ask / agent 档 Muse 的 set:发规则卡,不写规则。卡上存校验过的规则(画「当 · 只在 · 做」)和入参(点「好」时再校验一次建出来)。 */
 async function proposeRule(userId: string, cwd: string | undefined, args: Record<string, any>, v: ValidatedTrigger): Promise<string> {
@@ -111,7 +116,8 @@ export const manageAutomationProvider: ToolProvider = {
             'Actions (in order, fail-stop): notify {title, body?} posts to the user inbox with push, zero cost — the right way to deliver timed reminders; ' +
             'remind {title, body?} shows a system notification and writes one line in the Muse chat — no model, nothing leaves this computer, skipped outside Muse active hours; ' +
             'agent_run {agentSlug, prompt} runs that agent unattended. Omit actions to instead wake Muse (legacy) or set `agent` as a shorthand for a single agent_run. ' +
-            'Rules are evaluated by code every few minutes at zero cost. A one-time (at) rule disables itself after firing.' +
+            'Rules are evaluated by code every few minutes at zero cost. A one-time (at) rule disables itself after firing. ' +
+            'A rule with observe:true only records what it would have done and runs nothing until the user enables it.' +
             pluginTriggersNote(),
           parameters: {
             type: 'object',
@@ -130,6 +136,7 @@ export const manageAutomationProvider: ToolProvider = {
                 },
               },
               max_per_day: { type: 'number', description: 'set: at most this many firings a day' },
+              observe: { type: 'boolean', description: 'set: true = record each firing without running its actions (not for at or manual rules); false = run them. Omit unless the user asked for one or the other.' },
               event: { type: 'string', enum: ['row_added', 'cell_changed'], description: 'set(db_changed): which change to watch' },
               column_id: { type: 'string', description: 'set(db_changed + cell_changed): the column ID (NOT its name — names are neither unique nor stable). Read the .db JSON to find it.' },
               column_ids: { type: 'array', items: { type: 'string' }, description: 'set(db_changed + cell_changed): watch several columns at once (column IDs; the rule fires when ANY of them changes; max 10). May be combined with column_id — the union is watched. Prefer this over creating one rule per column.' },
@@ -236,6 +243,9 @@ export const manageAutomationProvider: ToolProvider = {
           }
         }
         const id = String(args.id || '').trim() || undefined;
+        // auto 档 Muse 自己新建的、会动东西的规则缺省先观察:没有用户看过的规则,不直接放权。
+        const startsObserving = !!ctx.muse && !id && args.observe === undefined && canObserve(v.value.cond) && rewritesThings(v.value);
+        if (startsObserving) v.value.observe = true;
         // 插件种子规则(plugin:<插件id>:<key>)归插件的 ensure 管:聊天 agent 不能改也不能借它的 id 凭空建(伪插件规则绕 50 条帽)。
         if (id && isPluginTriggerId(id)) return `Error: rule ${id} is managed by a plugin and cannot be changed with this tool.`;
         // 监听列必须是落盘列:公式/引用/投影列的值不落盘,游标恒空 → 规则一次都不触发、零日志、面板正常。
@@ -248,7 +258,7 @@ export const manageAutomationProvider: ToolProvider = {
           if (badCol) return `Error: ${badCol}`;
         }
         // actor='user':agent 经本工具的启停是**显式**操作(与面板同档),不是插件 ensure 那种幂等重放。
-        const r = await upsertTrigger(v.value, id, { actor: 'user' });
+        const r = await upsertTrigger(v.value, id, { actor: 'user', ...(ctx.muse ? { observeBy: 'muse' as const } : {}) });
         if (!r.ok) return `Error: ${r.error}`;
         const c = v.value.cond;
         const note = c.type === 'manual'
@@ -260,7 +270,7 @@ export const manageAutomationProvider: ToolProvider = {
             : c.type === 'daily_at'
               ? ' (fires at the first check after that time each day; if Muse has active hours set, a firing outside them is delivered once they begin)'
               : ' (evaluated by Muse about every 5 minutes; Muse must be enabled in Settings)';
-        const state = v.value.enabled ? '' : ' [disabled]';
+        const state = v.value.enabled ? (r.trigger.observe ? ' [observing: it records what it would do and runs nothing until the user enables it]' : '') : ' [disabled]';
         const paused = v.value.enabled && triggerUnmet(r.trigger) ? ' It stays paused until Computer History is turned on in Settings.' : '';
         // auto 档的 Muse 直接建,用户不会自己翻到这条规则。
         const tell = ctx.muse && r.created ? ' Tell the user in one short message_user line what you set up and how to turn it off.' : '';

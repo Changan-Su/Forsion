@@ -297,6 +297,18 @@ export interface MuseTrigger {
   /** 每天最多触发几次(可选);firedDay 是当天计数,markTriggersFired 写。 */
   maxPerDay?: number;
   firedDay?: { day: string; n: number };
+  /**
+   * 观察:规则开着时照常判定、照常走冷却和游标,命中只记「本应执行」,动作一律不做(automation.recordObserved)。
+   * 和 enabled 是两位:enabled=false 时这一位留着,恢复后还是观察。一次性 / 手动规则没有观察(canObserve)。
+   * 只有用户能把观察改成启用,引擎绝不自动转正。
+   */
+  observe?: boolean;
+  /** 这一段观察从何时算(结果卡的 7 天、面板的累计)。 */
+  observeSince?: string;
+  /** Muse 建的规则才发结果卡:用户自己写的规则,写下来就是授权,不催。 */
+  observeBy?: 'muse';
+  /** 这一段观察的结果卡发过了;「再看 7 天」清掉。 */
+  observeReportedAt?: string;
 }
 
 /** 时段是本地小时 [start, end),start > end = 跨夜;weekdays 0=周日(Date.getDay 口径)。 */
@@ -408,6 +420,7 @@ export interface TriggerInput {
   params?: unknown;
   only?: unknown;
   max_per_day?: unknown;
+  observe?: unknown;
 }
 
 export interface ValidatedTrigger {
@@ -422,7 +435,12 @@ export interface ValidatedTrigger {
   /** 同 actions:undefined=保留,null=清空(老客户端的整量 upsert 不带这两个键,不能抹掉)。 */
   only?: TriggerOnly | null;
   maxPerDay?: number | null;
+  /** undefined=保留(启停开关和插件 ensure 的重放都不带这个键)。 */
+  observe?: boolean;
 }
+
+/** 一次性和手动规则没有观察:前者命中一次就结束,后者本来就要人点。 */
+export const canObserve = (cond: Pick<MuseTriggerCond, 'type'>): boolean => cond.type !== 'at' && cond.type !== 'manual';
 
 const MAX_WHERE = 10;
 /** where 入参:缺席/null → 无;数组 → 逐条校验(≤10 条,column 非空 ≤200,op 白名单,eq/ne 的 value ≤200)。 */
@@ -517,6 +535,7 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
   if (!po.ok) return po;
   const pm = parseMaxPerDay(input.max_per_day);
   if (!pm.ok) return pm;
+  if (input.observe === true && !canObserve(cond)) return { ok: false, error: 'observe is not available for one-time (at) or manual rules' };
   return {
     ok: true,
     value: {
@@ -529,6 +548,7 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
       actions,
       ...(po.value !== undefined ? { only: po.value } : {}),
       ...(pm.value !== undefined ? { maxPerDay: pm.value } : {}),
+      ...(input.observe !== undefined ? { observe: input.observe === true } : {}),
     },
   };
 }
@@ -586,7 +606,7 @@ export const isPluginTriggerId = (id: string): boolean => id.startsWith('plugin:
  * **只有 HTTP 路由传 true**;manage_automation 工具不传——否则聊天 agent 能凭空造出伪装成插件的规则,
  * 还绕过 50 条帽(这条路照样过 MAX_TRIGGERS)。
  */
-export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { allowPluginCreate?: boolean; actor?: UpsertActor } = {}):
+export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { allowPluginCreate?: boolean; actor?: UpsertActor; observeBy?: 'muse' } = {}):
   Promise<{ ok: true; trigger: MuseTrigger; created: boolean } | { ok: false; error: string }> {
   return withTriggersLock(async () => {
     const list = await loadTriggers();
@@ -654,6 +674,9 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
         cur.maxPerDay = v.maxPerDay ?? undefined;
         if (!cur.maxPerDay) delete cur.firedDay;
       }
+      // 观察改成启用不动游标:观察期间游标照走,转成启用后只响应之后的事件,不补做(和 reEnabled 那条是两回事)。
+      if (!canObserve(cur.cond) || v.observe === false) clearObservation(cur);
+      else if (v.observe && !cur.observe) startObservation(cur, opts.observeBy);
       await saveTriggers(list);
       return { ok: true as const, trigger: cur, created: false };
     }
@@ -676,9 +699,44 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
       ...(v.only ? { only: v.only } : {}),
       ...(v.maxPerDay ? { maxPerDay: v.maxPerDay } : {}),
     };
+    if (v.observe) startObservation(rule, opts.observeBy);
     list.push(rule);
     await saveTriggers(list);
     return { ok: true as const, trigger: rule, created: true };
+  });
+}
+
+function startObservation(t: MuseTrigger, by?: 'muse'): void {
+  t.observe = true;
+  t.observeSince = new Date().toISOString();
+  delete t.observeReportedAt;
+  if (by) t.observeBy = by; else delete t.observeBy;
+}
+
+function clearObservation(t: MuseTrigger): void {
+  delete t.observe;
+  delete t.observeSince;
+  delete t.observeBy;
+  delete t.observeReportedAt;
+}
+
+/**
+ * 结果卡的三个按钮和发卡记账。读当前规则再写,放在锁里:卡可能放了好几天,规则也许已经删了或改成启用了。
+ * 返回 false = 这条规则已经不在观察,调用方把卡收掉。
+ */
+export async function updateObservation(id: string, op: 'enable' | 'extend' | 'pause' | 'reported'): Promise<boolean> {
+  return withTriggersLock(async () => {
+    const list = await loadTriggers();
+    const t = list.find((x) => x.id === id);
+    if (!t?.observe) return false;
+    if (op === 'enable') clearObservation(t);
+    else if (op === 'extend') startObservation(t, t.observeBy);
+    else if (op === 'pause') {
+      t.enabled = false;
+      t.disabledBy = 'user';
+    } else t.observeReportedAt = new Date().toISOString();
+    await saveTriggers(list);
+    return true;
   });
 }
 
