@@ -18,6 +18,7 @@ import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import type { Tool } from '../../core/types.js';
 import { presetOf } from '../../core/presetTable.js';
+import { saveCardWidget, WIDGET_EDITS_PARAM, WIDGET_PARAMS, widgetsEnabledFor } from './manageWidget.js';
 
 /** GUI 客户端面(routes/runs.ts CLIENT_TAG_RE 的子集;移动原生 App 见头注刻意排除)。 */
 const GUI_CLIENT_RE = /^(desktop|web)\//;
@@ -32,6 +33,7 @@ export const LEGACY_HTML_CARD_TOOL = 'sketch';
 const CARD_API = 'forsionIntelligentUi', LEGACY_CARD_API = 'forsionSketch';
 export const isHtmlCardTool = (name: string): boolean => name === HTML_CARD_TOOL || name === LEGACY_HTML_CARD_TOOL;
 type Call = { function: { name: string; arguments: string } };
+const toCardName = (s: unknown): any => typeof s === 'string' ? s.replaceAll(LEGACY_CARD_API, CARD_API) : s;
 const toModel = <C extends Call>(c: C): C => c.function?.name === LEGACY_HTML_CARD_TOOL
   ? { ...c, function: { ...c.function, name: HTML_CARD_TOOL, arguments: String(c.function.arguments ?? '').replaceAll(LEGACY_CARD_API, CARD_API) } } : c;
 /** 模型产出的一次 HTML 卡调用改成线上的样子(原地改):工具名回 sketch,HTML 里的新接口名换成旧名(新渲染层两个名字是同一个对象)。
@@ -295,6 +297,18 @@ const SKETCH_DEFINITION: Tool = {
 };
 const SKETCH_WIDGETS = 'charts, diagrams, comparisons, timelines, layouts, small interactive widgets.';
 const SKETCH_COMPUTED_DEFINITION: Tool = { ...SKETCH_DEFINITION, function: { ...SKETCH_DEFINITION.function, description: SKETCH_DEFINITION.function.description!.replace(SKETCH_WIDGETS, 'charts, diagrams, timelines, layouts, animated simulations and games; calculators, step guides and other cards that only compute from inputs are intelligent_ui documents.') } };
+/** 握手了 widget.v1 的本机客户端(见 manageWidget.ts)多三个参数;别的客户端的定义逐字节不变。 */
+const SKETCH_WIDGET_DEFINITION: Tool = {
+  ...SKETCH_COMPUTED_DEFINITION,
+  function: {
+    ...SKETCH_COMPUTED_DEFINITION.function,
+    description: `${SKETCH_COMPUTED_DEFINITION.function.description}\nWIDGET: with widget this saves a card the user keeps (小组件), or changes one; see the "Widgets" section.`,
+    parameters: {
+      type: 'object',
+      properties: { ...SKETCH_DEFINITION.function.parameters.properties, ...WIDGET_PARAMS, edits: WIDGET_EDITS_PARAM },
+    },
+  },
+};
 /** intelligent-ui.v2 without importing intelligentUi.ts (it imports this file). */
 const intelligentUiComputedFor = (ctx: ToolContext): boolean => !!ctx.clientCapabilities?.includes('intelligent-ui.v1') && !!ctx.clientCapabilities?.includes('intelligent-ui.v2');
 
@@ -308,13 +322,23 @@ export const sketchProvider: ToolProvider = {
       capabilities: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 5_000 },
       definition: SKETCH_DEFINITION,
       // A client that renders computed Intelligent UI documents gets calculators routed there.
-      definitionFor: (ctx) => intelligentUiComputedFor(ctx) ? SKETCH_COMPUTED_DEFINITION : SKETCH_DEFINITION,
-      execute: (args): string => {
+      definitionFor: (ctx) => !intelligentUiComputedFor(ctx) ? SKETCH_DEFINITION : widgetsEnabledFor(ctx) ? SKETCH_WIDGET_DEFINITION : SKETCH_COMPUTED_DEFINITION,
+      execute: (args, ctx): string | Promise<string> => {
         const html = typeof args.html === 'string' ? args.html : '';
+        const wantsWidget = args.widget != null || args.edits != null;
+        // 定义里没有也挡得住:模型可能照着历史或别处的写法自己带上这几个参数
+        if (wantsWidget && !widgetsEnabledFor(ctx)) return 'Error: widgets cannot be saved in this session. Draw the card without widget and edits.';
+        if (args.edits != null) {
+          if (!Array.isArray(args.edits)) return 'Error: edits must be a list of { find, replace }.';
+          if (html.trim()) return 'Error: send edits or html, not both.';
+          // agentLoop 已把参数换成线上旧接口名,原件和模型读到的历史都用新名,find 才对得上
+          return saveCardWidget(args, ctx, { entry: 'widget.html', title: args.title, edits: args.edits.map((e: any) => ({ find: toCardName(e?.find), replace: toCardName(e?.replace) })) });
+        }
         if (!html.trim()) return 'Error: html is required';
         if (html.length > MAX_SKETCH_HTML_CHARS) {
           return `Error: html too large (${html.length} chars, max ${MAX_SKETCH_HTML_CHARS}). Slim the card down or split it into multiple intelligent_ui_html calls.`;
         }
+        if (wantsWidget) return saveCardWidget(args, ctx, { entry: 'widget.html', title: args.title, content: toCardName(html) }).then((r) => r.startsWith('Error') ? r : `HTML card rendered in the conversation. ${r}`);
         // 渲染发生在前端:tool_result 事件(done 且非 Error)触发 SketchCard 从本调用的参数取 HTML 画卡。
         return 'HTML card rendered in the conversation.';
       },

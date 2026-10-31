@@ -12346,5 +12346,1330 @@
         }
       }
     }
+  ],
+  "tangu-none:host+gui+widget": [
+    {
+      "type": "function",
+      "function": {
+        "name": "get_datetime",
+        "description": "Get the current date and time (server timezone).",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "remember",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "add",
+                "list",
+                "update",
+                "forget"
+              ],
+              "description": "The operation to perform. List before update/forget to obtain the current entry ID and version."
+            },
+            "fact": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "For add/update: the non-empty durable sentence to save (max 300 characters). For list/forget: null. An update without fact fails."
+            },
+            "id": {
+              "type": "string",
+              "description": "An entry ID returned by list; required for update/forget."
+            },
+            "expectedVersion": {
+              "type": "string",
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            }
+          },
+          "required": [
+            "action",
+            "fact"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "log_event",
+        "description": "Append one thing that happened in this interaction to today's log (kept by date; the user can read it). Use it for completed work, conclusions reached, files produced, where a task stands; not for trivial chit-chat, and not for lasting facts (those go to remember).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string",
+              "description": "A one-sentence event/progress to record in today's log"
+            }
+          },
+          "required": [
+            "text"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_log",
+        "description": "Read the user's activity log for a given day (markdown). Date format YYYY-MM-DD; defaults to today.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "date": {
+              "type": "string",
+              "description": "Date YYYY-MM-DD; defaults to today"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_search",
+        "description": "Search the web and return summaries of relevant web pages. Use it to look up real-time or external information. When you then tell the user something you learned here, link the source inline as an ordinary markdown link — `[a short phrase from the result snippet](https://example.com/page)`. Prefer wording copied verbatim from the snippet as the link text: in the desktop app the page opens beside the conversation and scrolls straight to that phrase, highlighted. A phrase that is not on the page just opens it at the top, so never invent one — use a plain descriptive label when you have no verbatim wording.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search keywords"
+            },
+            "max_results": {
+              "type": "number",
+              "description": "Number of results to return, default 5"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_bash",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The shell command to run"
+            },
+            "timeout_ms": {
+              "type": "number",
+              "description": "Timeout in milliseconds (default 120000)"
+            }
+          },
+          "required": [
+            "command"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_file",
+        "description": "Read the text content of a file on the machine (path resolved relative to the current working directory) — prefer this over cat/sed in run_bash. For large files, paginate by line with offset/limit; when you need the whole file, keep continuing with the offset given in the truncation note until the final window. Output is cat -n style: every line is prefixed with its line number and a tab. When you later feed text to edit_file/multi_edit, strip that \"<number>\\t\" prefix — old_string must match the file's RAW text, not the numbered view. When you tell the user something you read here, cite the exact spot as a wikilink — copy the `[[...]]` anchor printed on this tool's final output line and only change the line number / heading. Keep BOTH pairs of square brackets and the path verbatim: `[[<path>#L12]]`, not `[<path>#L12]`. Write the link on its own, never wrapped in other brackets. In the desktop app it renders as a small clickable chip (the long path is never shown to the user) that opens the file right at that spot.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path (relative to cwd or absolute)"
+            },
+            "offset": {
+              "type": "number",
+              "description": "Starting line (0-based), default 0"
+            },
+            "limit": {
+              "type": "number",
+              "description": "Maximum number of lines to return (default reads to the end, capped by an upper limit)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "write_file",
+        "description": "Write/overwrite a text file on the machine (intermediate directories are created automatically, path relative to the current working directory). Use this ONLY to create a new file or when replacing essentially all of an existing one. To change part of an existing file, use edit_file / multi_edit / apply_patch and touch only the affected lines — do NOT re-read a file and re-emit the whole thing just to make a small change. If the file changed on disk after you last read it (e.g. the user kept editing it), the write is refused so their changes are not lost — read it again and apply your change to the current content.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path (relative to cwd or absolute)"
+            },
+            "content": {
+              "type": "string",
+              "description": "File text content"
+            }
+          },
+          "required": [
+            "path",
+            "content"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "edit_file",
+        "description": "Make an exact string replacement in a file on the machine: replace the single occurrence of old_string with new_string (indentation/whitespace must match exactly). old_string must appear **exactly once** in the file, otherwise it errors — this keeps changes safe and controlled. Keep old_string as small as possible while still unique — do not pad it with large unchanged regions. Prefer this over rewriting a whole file: to change part of an existing file, edit only the affected lines. For several regions of one file use multi_edit; to create a new file, use write_file. old_string matches the RAW file text — do NOT include the leading \"<number>\\t\" prefix that read_file shows.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path (relative to cwd or absolute)"
+            },
+            "old_string": {
+              "type": "string",
+              "description": "The original text to replace (must match uniquely)"
+            },
+            "new_string": {
+              "type": "string",
+              "description": "The new text to replace it with"
+            }
+          },
+          "required": [
+            "path",
+            "old_string",
+            "new_string"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_dir",
+        "description": "List the files and subdirectories under a directory on the machine (path relative to the current working directory, defaults to listing cwd itself).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Directory path (relative to cwd or absolute), defaults to the current directory"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "multi_edit",
+        "description": "Make multiple exact replacements in a single file on the machine (atomic: writes only if all match, leaves the file untouched if any fails). Each edit's old_string must appear exactly once in the text after the preceding edits have been applied in order (matching the RAW text — do NOT include read_file's \"<number>\\t\" line prefix). Keep each old_string minimal but unique; merge overlapping or adjacent changes into one edit instead of emitting edits whose regions touch. Use this to change several regions of an existing file in one shot instead of rewriting the whole file; it is safer and saves turns versus firing off several edit_file calls.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File path (relative to cwd or absolute)"
+            },
+            "edits": {
+              "type": "array",
+              "description": "List of replacements to apply in order",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "old_string": {
+                    "type": "string",
+                    "description": "The original text to replace (must match uniquely)"
+                  },
+                  "new_string": {
+                    "type": "string",
+                    "description": "The new text to replace it with"
+                  }
+                },
+                "required": [
+                  "old_string",
+                  "new_string"
+                ]
+              }
+            }
+          },
+          "required": [
+            "path",
+            "edits"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "view_image",
+        "description": "View an image file on the machine: provides the image as visual content for you to \"see\", for recognizing screenshots, analyzing charts/photos/design mockups/UI, etc. Supports png/jpg/jpeg/gif/webp/bmp; path resolved relative to the current working directory. Use this tool when you need to \"look at / read an image\"; do not use read_file (it only returns a text hint for images).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_files",
+        "description": "Search file contents by regex (grep-style) under the working directory, returning file:line:content. Supports an include glob to restrict files (e.g. *.ts, src/**/*.py). Automatically skips .git/node_modules/binary files.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Search regular expression (JS syntax; matched per line)"
+            },
+            "include": {
+              "type": "string",
+              "description": "Optional: filename glob filter, e.g. *.ts or src/**/*.py"
+            },
+            "case_sensitive": {
+              "type": "boolean",
+              "description": "Case-sensitive (default false)"
+            }
+          },
+          "required": [
+            "pattern"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "glob_files",
+        "description": "List file paths under the working directory matching a glob pattern (e.g. **/*.test.ts, src/*.py). Use this to find files; use search_files to search contents.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "pattern": {
+              "type": "string",
+              "description": "Glob pattern: ** across directories, * within a segment, ? single character, {a,b} alternation"
+            }
+          },
+          "required": [
+            "pattern"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "web_fetch",
+        "description": "Fetch the content of a public web page / text / JSON and convert it to readable text (HTML tags are stripped automatically, links are kept). Good for reading links found by web_search, documentation pages, or API responses. Only http/https public addresses. When you later tell the user something you read here, link it as an ordinary markdown link whose LINK TEXT is a short phrase copied verbatim from the page: `[the aim of this project is to](https://example.com/page)`. In the desktop app that opens the page beside the conversation and scrolls straight to that phrase, highlighted. A phrase that does not appear on the page simply opens the page at the top, so copy it exactly and never invent one; use a plain descriptive label when you are citing the page as a whole rather than one sentence.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "The full URL to fetch (http/https)"
+            },
+            "max_chars": {
+              "type": "number",
+              "description": "Max number of characters to return (default 20000, capped at 60000)"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "browser_search",
+        "description": "Open a search engine in the local lightweight browser and return a page snapshot. Use this as a fallback when web_search is unavailable or you need to interact with the results page — it is slower and may hit captchas. To act on the @eN refs in the results, load the browser control tools (browser_click/browser_type/...) with load_tools when they appear in the \"Additional Tools\" catalog; they are not offered in plan mode.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Search keywords"
+            },
+            "engine": {
+              "type": "string",
+              "enum": [
+                "duckduckgo",
+                "bing",
+                "google",
+                "baidu"
+              ],
+              "description": "Optional search engine, defaults to the configured value"
+            }
+          },
+          "required": [
+            "query"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "browser_navigate",
+        "description": "Open a public http/https URL in the local lightweight browser and return the title, final URL, and a compact snapshot.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "url": {
+              "type": "string",
+              "description": "Full URL"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "todo_write",
+        "description": "Maintain this session's todo list (replaces the whole list). Write a list before planning a multi-step task; update the status after each step before continuing. status ∈ pending | in_progress | completed; at most one item in_progress at a time.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "todos": {
+              "type": "array",
+              "description": "The complete todo list (replaces the old list in full)",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "content": {
+                    "type": "string",
+                    "description": "Task description (imperative)"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed"
+                    ],
+                    "description": "Task status"
+                  }
+                },
+                "required": [
+                  "content",
+                  "status"
+                ]
+              }
+            }
+          },
+          "required": [
+            "todos"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "todo_read",
+        "description": "Read this session's current todo list (use it to restore context or check remaining steps).",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_background",
+        "description": "Start a long-running shell command in the background on this machine (dev server, watch, long test, etc.) and return a process_id immediately. Use read_process_output to view output, list_processes to check status, kill_process to terminate. Use run_bash for one-off commands; only use this for things that must keep running or must not block subsequent steps. You can also start **interactive** processes (such as `python3 -i`, `node`, a question-and-answer CLI), then feed input to their stdin with write_process_input. Note: this is a pipe, not a real TTY — it supports line-based input (REPL/debugger/line-by-line prompts), but not full-screen TUIs (vim/top), programs that only become interactive when isatty is detected, or reading passwords from /dev/tty (sudo/ssh).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "command": {
+              "type": "string",
+              "description": "The shell command to run in the background"
+            }
+          },
+          "required": [
+            "command"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_processes",
+        "description": "List the background processes started in this session (id/command/status/uptime).",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_process_output",
+        "description": "Read the accumulated output of a background process (stdout+stderr merged). offset is a character offset; omit it to read the tail.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "process_id": {
+              "type": "string",
+              "description": "The process id returned by run_background"
+            },
+            "offset": {
+              "type": "number",
+              "description": "Starting character offset (defaults to the most recent 20000 characters)"
+            }
+          },
+          "required": [
+            "process_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "kill_process",
+        "description": "Terminate a background process (SIGTERM→3s→SIGKILL).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "process_id": {
+              "type": "string",
+              "description": "The id of the process to terminate"
+            }
+          },
+          "required": [
+            "process_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delegate",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "task": {
+              "type": "string",
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
+            },
+            "context": {
+              "type": "string",
+              "description": "Optional: background information the subagent needs (relevant paths, known conclusions, etc.)"
+            },
+            "forkContext": {
+              "type": "boolean",
+              "description": "Optional: give the subagent a read-only transcript of this conversation so far (user and assistant messages only — no tool calls/results). Use when the subtask refers to things discussed above; default false starts clean."
+            },
+            "agentSlug": {
+              "type": "string",
+              "description": "Optional: delegate to a specific named agent by its slug (runs with that agent's persona). Pick a slug from the \"Other Agents\" list in the system prompt or one the user @-mentioned; omit for a generic or ad-hoc subagent."
+            },
+            "instructions": {
+              "type": "string",
+              "description": "Optional: inline instructions/role for an ad-hoc subagent you create on the fly (used when no agentSlug is given) — define its focus and how to work."
+            },
+            "name": {
+              "type": "string",
+              "description": "Optional: a short display name for the ad-hoc subagent."
+            },
+            "grantTools": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "manage_agent",
+                  "manage_skill",
+                  "manage_automation",
+                  "manage_schedule",
+                  "manage_harness"
+                ]
+              },
+              "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
+            }
+          },
+          "required": [
+            "task"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "ask_user",
+        "description": "Ask the user a question and wait for an answer (optionally with candidate options; the user can also type freely). Only use this when **user decision is truly needed**: the requirement is ambiguous, multiple reasonable approaches need a trade-off, or an operation has broad impact and needs confirmation. Do not ask about things you can infer from context/code.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "question": {
+              "type": "string",
+              "description": "The full question (end with a question mark, give enough context)"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Candidate options (may be empty; at most 6, one sentence each; put the recommended one first)"
+            }
+          },
+          "required": [
+            "question"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "apply_patch",
+        "description": "Make structured patch edits to one or more files (context-anchored, better than full overwrite / single-string replace; multiple files and multiple edits in one atomic commit). The patch parameter is a block of patch text, in the format:\n*** Begin Patch\n*** Update File: relative path\n@@ optional locating context (class/function name)\n unchanged context line (leading space)\n-line to delete\n+line to add\n*** Add File: relative path\n+every line of the new file (each starts with +)\n*** Delete File: relative path\n*** End Patch\nKey points: always include a few unchanged context lines (starting with a space) around each change to locate it; use Add to create, Delete to remove, and to rename put a line \"*** Move to: new path\" right under Update File. The cloud workspace currently supports only Add/Update.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "patch": {
+              "type": "string",
+              "description": "Complete patch text (*** Begin Patch … *** End Patch)"
+            }
+          },
+          "required": [
+            "patch"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "display_file",
+        "description": "Show a workspace file to the USER inline in the chat (NOT for you to read it). Images render as a clickable thumbnail the user can click to enlarge/zoom; other file types render as a clickable file card that opens a preview. Use this when you want the user to see a file you created or found (an image, a generated chart, a document, etc.). This is also how you hand a file to the user: the card lets them open or download it, including from their phone. Put deliverables under the working directory. To read/analyze an image yourself, use view_image instead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Workspace file path to display (relative to cwd, or absolute on local sessions)."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "inbox_send",
+        "description": "Send the user a message in their inbox (the app's notification center) — results, reminders or follow-ups they should notice outside this conversation, not a substitute for replying here. The body (max 4000 chars) renders as an Amadeus note: a short document leading with the conclusion, full markdown (tables, callouts, math, code), `![[note]]` vault embeds, absolute paths for other files. For a one-click follow-up, end the body with up to two task cards (run in a new session, hand to Muse, or ignore):\n```forsion-task\ntitle: Short task title\ntldr: One line for the user (optional)\n---\nSelf-contained brief for a fresh session: paths, symptoms, acceptance criteria.\n```\nAdd `track: true` when it needs follow-up over days rather than now. A ```forsion-button block can reference a manual automation rule id.\nDelivery is immediate — for a future or recurring reminder use manage_automation instead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Concise message title shown in the inbox list"
+            },
+            "body": {
+              "type": "string",
+              "description": "Optional message body (markdown; rendered by the Amadeus note renderer, see above)"
+            }
+          },
+          "required": [
+            "title"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "browser_task",
+        "description": "Delegate a whole multi-step web task to an autonomous browser agent (browser-use) that starts its own Chrome window and uses vision + reasoning, then returns the final result. That window normally uses a copy of the user's Chrome profile (their logins), but falls back to a fresh profile without logins when that is unavailable. It cannot see the tabs the user already has open — for those, use browser_tabs. Use this for goals that need several page interactions or the user's existing logins — e.g. \"check my inbox for X\", \"book the cheapest flight on <site>\", \"fill and submit this form\", \"research <topic> across these pages\". It runs its own loop end-to-end (no step-by-step driving from you). For a single navigate/click/read, prefer the lighter browser_navigate/browser_click tools instead. It acts as the user on logged-in sites — scope it with allowed_domains when possible.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "task": {
+              "type": "string",
+              "description": "The full natural-language goal to accomplish in the browser."
+            },
+            "start_url": {
+              "type": "string",
+              "description": "Optional URL to open first before pursuing the task."
+            },
+            "max_steps": {
+              "type": "number",
+              "description": "Optional cap on the agent's browser steps (default 50)."
+            },
+            "allowed_domains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Optional domain allowlist to scope where the agent may navigate (e.g. [\"*.github.com\"])."
+            }
+          },
+          "required": [
+            "task"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "amadeus_list_notes",
+        "description": "List the user's Amadeus notes (markdown files in the vault). Optionally filter by a substring of the note path/name.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Optional case-insensitive substring to filter note paths."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "load_tools",
+        "description": "Load the full definitions of tools listed in the \"Additional Tools (load on demand)\" section. Call once with ALL the tool names you need, wait for the result, then call those tools normally. Already-loaded or unknown names are harmless.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "names": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Exact tool names from the Additional Tools catalog, e.g. [\"browser_snapshot\"]"
+            }
+          },
+          "required": [
+            "names"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "desk_present",
+        "description": "Present one or two things in the Agent Desk — a stage panel the user watches beside the chat while you work. Items: {type:\"file\", path} or {type:\"view\", view} (a registered desktop view type id such as \"calendar\", plus optional params). Vault files open in Forsion's NATIVE editors; Amadeus notes ARE plain .md there — pass the vault-relative or absolute path, never an exported copy. Other files get a generic preview (HTML live). size: \"card\" collapses to the preview card; \"half\"/\"wide\" expand it. Use it for deliberate presentation, not after every edit; an unavailable panel is not an error.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "views": {
+              "type": "array",
+              "description": "Items to show, top to bottom (max 2).",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "file",
+                      "view"
+                    ],
+                    "description": "\"file\" shows a local file; \"view\" opens a registered desktop view."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "For \"file\": path — absolute, relative to cwd, or an Amadeus vault-relative note path."
+                  },
+                  "view": {
+                    "type": "string",
+                    "description": "For \"view\": the registered view type id."
+                  },
+                  "params": {
+                    "type": "object",
+                    "description": "For \"view\": optional params passed to the view."
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            },
+            "size": {
+              "type": "string",
+              "enum": [
+                "card",
+                "half",
+                "wide"
+              ],
+              "description": "Presentation mode: \"card\" collapses to the preview card; \"half\"/\"wide\" expand the side panel at that width (width ignored once the user resized it)."
+            },
+            "note": {
+              "type": "string",
+              "description": "One short sentence shown in the panel header: why you are showing this."
+            }
+          },
+          "required": [
+            "views"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "read_session",
+        "description": "Read the transcript of ANOTHER chat session belonging to this Agent and the current user, by its id. When the user's message contains a reference like `[[session:<id>|title]]`, that is a pointer to a past conversation — call this tool with that id to actually see what was said there, instead of guessing from the title. Returns the session title plus messages oldest-first, one per line, with long bodies truncated. Other Agents' sessions are inaccessible, including when their ids are supplied. If the user refers to a past conversation WITHOUT giving a link or id, find it first with `search_sessions`.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "session_id": {
+              "type": "string",
+              "description": "Session id, e.g. the `<id>` inside a `[[session:<id>|title]]` reference"
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max messages returned, newest kept (default 60, max 300)"
+            },
+            "chars_per_message": {
+              "type": "number",
+              "description": "Truncate each message body to this many chars (default 600, max 4000)"
+            },
+            "message_id": {
+              "type": "string",
+              "description": "Read exactly this message from a search hit; it must belong to the requested session."
+            },
+            "char_offset": {
+              "type": "number",
+              "description": "Character offset within each message body (default 0, max 1000000); use to read beyond a truncated excerpt."
+            },
+            "before_message_id": {
+              "type": "string",
+              "description": "Page older messages before this message id in the same session."
+            }
+          },
+          "required": [
+            "session_id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_sessions",
+        "description": "List or search this Agent's PAST chat sessions with the current user in this app (the current session is excluded). Use it whenever the user refers to an earlier conversation (\"last time\", \"that chat about X\") or asks what has been discussed before. Without `query` it returns the most recent sessions; with `query` it keyword-searches session titles, summaries and message contents (space-separated terms, all must match — use distinctive content words like topics or project names, not meta-words like \"yesterday\" or \"discussed\"; put time anchors in `before`/`after` instead). Each result line is a `[[session:<id>|title]]` reference plus last-active date and a summary or matched snippet — pass the id to `read_session` to read the full transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords to search for (space-separated, matched against title/summary/message text). Omit to just list the most recent sessions."
+            },
+            "limit": {
+              "type": "number",
+              "description": "Max sessions returned (default 10, max 20)"
+            },
+            "before": {
+              "type": "string",
+              "description": "Only sessions last active BEFORE this date, exclusive (YYYY-MM-DD, UTC). Also the pagination cursor: pass the oldest date from the previous result to get older sessions."
+            },
+            "after": {
+              "type": "string",
+              "description": "Only sessions last active ON or AFTER this date (YYYY-MM-DD, UTC)."
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_human",
+        "description": "Read or update HUMAN.md, the note you write to the human about what THEY can do so that working with you goes better (they see it as the collaboration handbook). First read to obtain content and version, then update with the full revised Markdown and expectedVersion. Changes are applied immediately; the user receives a card and may edit or undo. Three complementary notes, none overriding another; pick the note for each item by what it is about. A read also returns the other two notes (others) so each point goes in one note only. Items that belong to different notes take one update per note. Preserve user edits. If an update takes existing lines out, the tool first lists them and saves nothing: resend with removed saying where each went. The human is the reader. Each item is one thing THEY can do, never something you will do. When what prompts you is the human correcting you or telling you how they want you to work, that is about what you do: save it with remember and leave this note as it is, even when the note already covers a related point. Say each item to them as \"you\", in their language, in plain sentences rather than a form of labelled fields, with an example from your work together and what it saves them. Use the words they used themselves and do not bring in category or specialist terms of your own: write \"which orders do not count\", not \"exclusion criteria\"; \"who will read it\", not \"target audience\". Keep word for word anything the human asked you to keep, such as a name they gave an item. Leave out your own commitments, even as a closing reassurance (say those in your reply), and tool names, file names and labels the human did not give you. Use specific evidence; avoid personality judgments, permissions, transient tool failures and unsolicited homework. Keep it concise; batch related changes within one note. Never write this file using generic file or shell tools.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "read",
+                "update"
+              ]
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "project",
+                "shared"
+              ],
+              "description": "Every note holds things the human does. agent: hangs on your role or way of working, whoever works with you (anyone who works with you reads it; no names). project: hangs on this project. shared: hangs on this person, whichever agent they work with; every agent reads it."
+            },
+            "content": {
+              "type": "string",
+              "description": "The complete updated Markdown, written to the human in their language; at most 12000 characters. Preserve unrelated sections."
+            },
+            "expectedVersion": {
+              "type": "string",
+              "description": "Exact version from the most recent read."
+            },
+            "summary": {
+              "type": "string",
+              "description": "Shown to the user on the change card: what changed, in their language and everyday words (at most 240 characters)."
+            },
+            "evidence": {
+              "type": "string",
+              "description": "Shown to the user as the reason: what happened in your work together that shows this would help them, in their language and everyday words (at most 600 characters)."
+            },
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Only after the tool listed lines your update takes out: one string per line number, \"<n> memory: <sentence to save>\", \"<n> reworded\" or \"<n> dropped: <reason>\"."
+            }
+          },
+          "required": [
+            "action",
+            "scope"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "manage_harness",
+        "description": "Your Evolution Record (HARNESS.md): what you have worked out yourself about HOW you work, loaded into your system prompt on every run. You own it: changes apply at once and the user gets a card to undo, so do not ask permission or wait for /refine. Use it the moment you work something out yourself that will hold in any project: a technique or delegation pattern that proved itself, a pitfall and the way around it, a standard you set for your own work. Elsewhere: anything the user told, corrected or required of you, and facts about the user, a project or the world → remember; what you would like the human to do differently → manage_human; a reusable procedure → manage_skill (scope \"agent\"). One lesson, one place: if you are saving a point with remember or manage_human, do not repeat it here. Never record environment/setup failures, \"tool X is broken\", transient errors or one-off task stories; they harden into refusals. upsert without id creates an entry (title, body and evidence of what actually happened are required); with id it revises. rollback restores the previous version. propose (agent + candidates) drops suggestions into ANOTHER agent's candidate inbox; you never write its record. propose with tools / skills passes on a usage review's equipment suggestion for that agent. Limits: title ≤80, body ≤300, evidence ≤200 chars, 30 entries; at the cap, merge or delete weaker ones. kind \"note\" = working method (default); \"recipe\" = a delegation pattern that worked; \"equip\" = shelve tools/skills you rarely use to keep your context lean (pass tools / skills): a shelved tool moves to the load-on-demand catalog (load_tools brings it back), a shelved skill leaves your skill list (use_skill by id still works). Shelving never removes or grants a capability; shelve on evidence such as a usage review, and revise or delete the entry to undo.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": {
+              "type": "string",
+              "enum": [
+                "upsert",
+                "delete",
+                "list",
+                "rollback",
+                "propose"
+              ],
+              "description": "The operation"
+            },
+            "agent": {
+              "type": "string",
+              "description": "propose: target agent slug"
+            },
+            "candidates": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "propose: 1-3 one-line lessons (leave out when passing tools / skills)"
+            },
+            "id": {
+              "type": "string",
+              "description": "Entry id, e.g. \"h-x3k9\" (delete / rollback / revise)"
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "note",
+                "recipe",
+                "equip"
+              ],
+              "description": "Entry type (default \"note\")"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact tool names to shelve (replaces the list on revise). propose: the tools a usage review listed for that agent"
+            },
+            "skills": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "equip: exact skill ids to shelve, e.g. \"local:pptx\" (replaces the list on revise)"
+            },
+            "title": {
+              "type": "string",
+              "description": "Short label"
+            },
+            "body": {
+              "type": "string",
+              "description": "The lesson itself"
+            },
+            "evidence": {
+              "type": "string",
+              "description": "What actually happened that justifies it"
+            }
+          },
+          "required": [
+            "action"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "intelligent_ui_html",
+        "description": "Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, timelines, layouts, animated simulations and games; calculators, step guides and other cards that only compute from inputs are intelligent_ui documents. The \"Visual cards\" section of your instructions covers when to draw and how to compose.\nSANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, embed images as data: URIs, no external scripts/styles/fonts or charting libraries (draw with inline SVG or divs), no eval/new Function. Links and form submits do nothing.\nTHEME: use the injected CSS variables, never hardcode colors — they track the live theme: --fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, --fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, --fs-radius, --fs-font, --fs-mono, and the series ramp --fs-s1..--fs-s5 (s1 = accent for the focus value; s2..s5 fade for context). body inherits background/color/font.\nPARTS: fs-chart, fs-flow, fs-compare, fs-choice, fs-checklist (JSON-driven, see the visualize skill); classes fs-header, fs-title, fs-subtitle, fs-plot, fs-source, fs-stat-grid, fs-stat, fs-value, fs-label, fs-row, fs-grid, fs-actions, fs-callout, fs-bar-track; no inline style attributes.\nSIZE: ~700px wide, auto height. It streams in while you write (markup first, scripts last). Each call appends a NEW card; the result is only a confirmation, the user sees the card.\nINTERACTION: click handlers may call window.forsionIntelligentUi.ask(text) (sends that follow-up as the user's next message) or .copy(text).\nNot for source code, files, or one-number answers — those stay in prose.\nWIDGET: with widget this saves a card the user keeps (小组件), or changes one; see the \"Widgets\" section.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "html": {
+              "type": "string",
+              "description": "Self-contained HTML for the card (body content; the host wraps it in a sandboxed document with a strict CSP and the theme variables)."
+            },
+            "title": {
+              "type": "string",
+              "description": "Optional short label for the card, e.g. \"Revenue chart\"."
+            },
+            "widget": {
+              "type": "object",
+              "description": "Keep this card as a widget (小组件). New: { name }. Change an existing one: { id, expectedRev }.",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "New widget: lowercase slug, e.g. \"tokyo-ledger\"."
+                },
+                "id": {
+                  "type": "string",
+                  "description": "Existing widget id, e.g. \"w_7f3a1c9e0b12\"."
+                },
+                "expectedRev": {
+                  "type": "integer",
+                  "description": "The rev you last saw. A stale rev saves nothing and returns the latest version."
+                },
+                "sizes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "sm",
+                      "md",
+                      "lg"
+                    ]
+                  },
+                  "description": "New widget: dashboard sizes it fits."
+                },
+                "rail": {
+                  "type": "boolean",
+                  "description": "New widget: it stays useful at 226px wide."
+                }
+              }
+            },
+            "summary": {
+              "type": "string",
+              "description": "One line: what this version changed."
+            },
+            "edits": {
+              "type": "array",
+              "description": "Changing a widget: replacements instead of the whole HTML. Each find must match exactly once; if any fails, nothing is saved.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "find": {
+                    "type": "string"
+                  },
+                  "replace": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "find",
+                  "replace"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "transcribe_audio",
+        "description": "Transcribe a local audio file via the Forsion Desktop speech-recognition pipeline (local offline model or the ASR provider configured in desktop settings). Returns JSON {text, segments?}. Use this when a transcription script reports the media has no subtitle track and hands back an audio_path (e.g. source:\"needs_asr\"). Requires the Forsion desktop app to be running. With timestamps:true you can cite a moment back to the user as [[<media path>#t=<seconds>|<mm:ss>]] — see the line printed after the transcript.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "Absolute path to a local audio file (wav/mp3/m4a/ogg/flac/webm…)."
+            },
+            "timestamps": {
+              "type": "boolean",
+              "description": "Also return timed segments [{start,end,text}] when the backend can provide them."
+            },
+            "language": {
+              "type": "string",
+              "description": "Optional language hint, e.g. \"zh\" or \"en\"."
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "list_ui_commands",
+        "description": "List what you can change in the user's Forsion interface right now: the current value of every interface setting, plus the commands this client exposes to you. The list differs per device — desktop exposes plugin commands that web and mobile do not — so read it instead of assuming. Values reflect the latest set_ui_setting / run_ui_command you made in this run. Call this before `run_ui_command` when you do not already know a command id.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "run_ui_command",
+        "description": "Run one of the commands this Forsion client exposes to you — for example opening a note you just wrote so the user can see it, switching Space, or opening a settings page. Only ids returned by `list_ui_commands` work; anything else is refused. This acts on the window the user is talking to you from. Use it to finish a task in front of the user, not to move their interface around unasked.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "Command id, exactly as returned by list_ui_commands."
+            },
+            "args": {
+              "type": "object",
+              "description": "Arguments, matching that command's declared params. Omit for commands that take none."
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "browser_tabs",
+        "description": "See the tabs open in the user's own Chrome and read one of them. Use this whenever the user refers to something already open in their browser (\"this page\", \"the video I have open\") — not browser_task, which starts a separate browser without the user's tabs. Without `select`, lists the open tabs (id, title, URL). With `select` — a tab id such as \"t3\", or text found in exactly one tab's title or URL — reads that tab and returns its text plus element refs (eN) that the browser_* control tools then act on. The tab the user is looking at is marked focused when that is known; otherwise match what they describe, and ask if several tabs fit. Tabs Tangu opened itself are marked tangu. If Tangu is not connected, the result explains the one-time setup to relay to the user.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "select": {
+              "type": "string",
+              "description": "Tab id (e.g. \"t3\") or text from the tab title/URL; omit to just list the tabs"
+            }
+          },
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "search_marketplace",
+        "description": "Search the Forsion store (plugins, skills, themes, agents, spaces) to find or recommend extensions. Results already appear as plugin cards the user installs from; do not redraw them.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Keywords in any language; empty string browses."
+            },
+            "type": {
+              "type": "string",
+              "enum": [
+                "plugin",
+                "amadeus-plugin",
+                "skill",
+                "theme",
+                "agent",
+                "space"
+              ],
+              "description": "plugin covers amadeus-plugin (UI/bundle only)."
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Entries must have all of these."
+            },
+            "include_incompatible": {
+              "type": "boolean",
+              "description": "Also list entries incompatible with this Forsion version or platform."
+            },
+            "limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 12
+            }
+          },
+          "required": [
+            "query"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "get_marketplace_plugin",
+        "description": "Get a Forsion store entry by the ID from search_marketplace (names can repeat): description, README, tags, version requirements.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "id"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "intelligent_ui",
+        "description": "Render a native interactive answer: plans, images, sources, comparisons, checklists, and computed cards (calculators, step guides, flashcards, quizzes) that recompute locally. Follow the schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId, not in a gallery. No HTML/JS/CSS. Use intelligent_ui_html for charts, diagrams and animations, prose for simple answers. With widget it saves a card the user keeps (小组件), or changes one with the whole new document; see the \"Widgets\" section.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "document": {
+              "type": "string",
+              "description": "JSON-encoded document, version 1 or 2 (computed). Order: version, id, title, inputs, state, derived, resources, blocks. Max 64 KiB."
+            },
+            "widget": {
+              "type": "object",
+              "description": "Keep this card as a widget (小组件). New: { name }. Change an existing one: { id, expectedRev }.",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "New widget: lowercase slug, e.g. \"tokyo-ledger\"."
+                },
+                "id": {
+                  "type": "string",
+                  "description": "Existing widget id, e.g. \"w_7f3a1c9e0b12\"."
+                },
+                "expectedRev": {
+                  "type": "integer",
+                  "description": "The rev you last saw. A stale rev saves nothing and returns the latest version."
+                },
+                "sizes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "sm",
+                      "md",
+                      "lg"
+                    ]
+                  },
+                  "description": "New widget: dashboard sizes it fits."
+                },
+                "rail": {
+                  "type": "boolean",
+                  "description": "New widget: it stays useful at 226px wide."
+                }
+              }
+            },
+            "summary": {
+              "type": "string",
+              "description": "One line: what this version changed."
+            }
+          },
+          "required": [
+            "document"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "start_session",
+        "description": "Start a child session: a separate, user-visible conversation (listed under this one in the session list) that works on one self-contained task on its own, in the same project and with your settings, while this conversation stays free. When it finishes or stops to ask something, its result comes back to you automatically in a <child_sessions_update> message (once no other child is still running) — you never need to poll or wait. Use it for independent pieces of work that take a while (research one option each, try an approach, do a separate change); use delegate instead for a quick lookup whose answer you need right now. One call per independent piece. The child cannot see this conversation, so the message must be a complete brief.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "title": {
+              "type": "string",
+              "description": "Short title shown in the session list, in the user's language (max ~60 chars)."
+            },
+            "message": {
+              "type": "string",
+              "description": "The complete brief: goal, the context it needs, constraints, and what done looks like."
+            }
+          },
+          "required": [
+            "title",
+            "message"
+          ]
+        }
+      }
+    }
   ]
 }

@@ -16,7 +16,7 @@ export function contentSyncOwned(account:string|null):boolean {
   try{return JSON.parse(readFileSync(join(forsionHomeDir(),'content-sync',name),'utf8')).owned===true}catch{return false}
 }
 export function mergeSyncContent(path:string,ours:string,base:string|null,theirs:string):{content:string;conflict:boolean}|null {
-  if(path.toLowerCase().endsWith('.db'))return mergeDbFile(ours,base,theirs)
+  if(path.toLowerCase().endsWith('.db'))return mergeDbFile(ours,base,theirs,{fieldColumns:/(^|\/)WidgetData\/[^/]+\/data\.db$/.test(path)})
   if(/\/LOG\/\d{4}-\d{2}-\d{2}\.md$/.test(path)){
     const a=splitLogBlocks(ours),b=splitLogBlocks(theirs),blocks=mergeBlocks(a.blocks,b.blocks).merged,header=mergeLogHeaders(a.header,b.header).header
     return {content:header.trimEnd()+'\n\n'+blocks.map(x=>x+'\n').join('\n'),conflict:false}

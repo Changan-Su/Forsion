@@ -550,7 +550,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     agentFiles: {
       getManifest: async (_userId: string, opts?: { signal?: AbortSignal }) => {
         // device / client:服务端按设备记版本,回答这个账号还有没有旧客户端在用 USER.md(新版据此停镜像)
-        const q = `paths=human,human-folder,agent-calendar&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
+        const q = `paths=human,human-folder,agent-calendar,widget-data&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
         const r = await getJson<{ agents: any[]; paths?: string[]; legacy?: string[]; legacySeenAt?: number | null }>(`/api/brain/agents/manifest?${q}`, opts?.signal);
         return Object.assign(r?.agents ?? [], Array.isArray(r?.paths) ? { paths: r.paths } : {},
           Array.isArray(r?.legacy) ? { legacy: r.legacy.filter((x): x is string => typeof x === 'string'), legacySeenAt: typeof r?.legacySeenAt === 'number' ? r.legacySeenAt : null } : {});

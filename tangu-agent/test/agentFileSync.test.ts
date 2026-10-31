@@ -11,7 +11,8 @@ import { agentSyncScope, setAgentSyncDefault, setAgentSyncPermission } from '../
 import { deleteAgent, listAgents, trashAgent, saveAgent } from '../src/agents/agentRegistry.js';
 import { listTrash, trashDir } from '../src/services/trash.js';
 import { restoreAgent } from '../src/services/agentUninstall.js';
-import { agentsDir } from '../src/core/tanguHome.js';
+import { agentsDir, humanDir } from '../src/core/tanguHome.js';
+import { createWidget, deleteRecord, findWidgetByName, purgeExpiredWidgets, readRecords, restoreWidget, setRecord, softDeleteWidget, type WidgetPlace } from '../src/services/widgetStore.js';
 import { createHash } from 'node:crypto';
 import { AgentFileConflictError, type AgentFilesBrain } from '../src/seams/cloudBrain.js';
 
@@ -519,5 +520,146 @@ describe('agentFileSync — deleting an agent from the app (10-28)', () => {
     await runAgentFilesSync(cloud, 'u');
     expect(existsSync(tDir('tester'))).toBe(false);
     expect(live(cloud, 'tester')).toEqual([]);
+  });
+});
+
+describe('agentFileSync — widget records', () => {
+  const place: WidgetPlace = { agentSlug: 'tester' };
+  const dataOf = (id: string) => join(tDir('tester'), 'WidgetData', id, 'data.db');
+  const rowsOf = (id: string) => (JSON.parse(readFileSync(dataOf(id), 'utf8')).rows as Array<{ cells: { note?: string } }>).map((r) => r.cells.note).sort();
+  const conflictCopies = (id: string) => readdirSync(join(tDir('tester'), 'WidgetData', id)).filter((f) => f.includes('conflict'));
+  const sync = async (cloud: any) => { const r = await runAgentFilesSync(cloud, 'u', { onlySlug: 'tester' }); expect(r).toMatchObject({ ok: true }); return r; };
+  const ledger = async () => (await createWidget(place, { name: 'ledger', entry: 'widget.html', content: '<p>ledger</p>' })).widget.manifest.id;
+  /** 两台设备共用一个云:homeB 是第二台,定义和记录都从云端拉下来。 */
+  async function twoDevices(cloud: any, id: string, run: (on: (h: string) => void, homeA: string, homeB: string) => Promise<void>) {
+    const homeA = home, homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
+    const on = (h: string) => { process.env.TANGU_HOME = h; };
+    try {
+      await sync(cloud);
+      on(homeB);
+      await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'be helpful', cloudSync: true });
+      setAgentSyncPermission('tester', agentSyncScope(cloud, 'u')!, true, true);
+      await sync(cloud);
+      expect(existsSync(dataOf(id))).toBe(true);
+      await run(on, homeA, homeB);
+    } finally { on(homeA); rmSync(homeB, { recursive: true, force: true }); }
+  }
+  async function cloudWithLedger() {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'be helpful', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    cloud._paths = ['human', 'human-folder', 'agent-calendar', 'widget-data'];
+    const id = await ledger();
+    await setRecord(place, id, { note: 'base' });
+    return { cloud, id };
+  }
+
+  it('keeps both rows when two devices record offline, with no conflict copy', async () => {
+    const { cloud, id } = await cloudWithLedger();
+    await twoDevices(cloud, id, async (on, homeA, homeB) => {
+      on(homeA); await setRecord(place, id, { note: 'from A' });
+      on(homeB); await setRecord(place, id, { note: 'from B' });
+      for (const h of [homeA, homeB, homeA, homeB]) { on(h); await sync(cloud); }
+      for (const h of [homeA, homeB]) { on(h); expect(rowsOf(id)).toEqual(['base', 'from A', 'from B']); expect(conflictCopies(id)).toEqual([]); }
+      expect(cloud._rows.get(`tester\0WidgetData/${id}/data.db`)).toMatchObject({ isBinary: false });
+    });
+  });
+
+  it('lets a row deleted on one device stay deleted while the other device records', async () => {
+    const { cloud, id } = await cloudWithLedger();
+    const row = await setRecord(place, id, { note: 'typo' });
+    await twoDevices(cloud, id, async (on, homeA, homeB) => {
+      on(homeA); expect(await deleteRecord(place, id, row.id)).toBe(true);
+      on(homeB); await setRecord(place, id, { note: 'from B' });
+      for (const h of [homeA, homeB, homeA, homeB]) { on(h); await sync(cloud); }
+      for (const h of [homeA, homeB]) { on(h); expect(rowsOf(id)).toEqual(['base', 'from B']); }
+    });
+  });
+
+  it('keeps the local row in a conflict copy when both devices change the same row', async () => {
+    const { cloud, id } = await cloudWithLedger();
+    const row = await setRecord(place, id, { note: 'shared' });
+    await twoDevices(cloud, id, async (on, homeA, homeB) => {
+      on(homeA); await setRecord(place, id, { note: 'A says' }, row.id); await sync(cloud);
+      on(homeB); await setRecord(place, id, { note: 'B says' }, row.id); await sync(cloud);
+      expect(rowsOf(id)).toEqual(['A says', 'base']);
+      const [copy] = conflictCopies(id);
+      expect(readFileSync(join(tDir('tester'), 'WidgetData', id, copy), 'utf8')).toContain('B says');
+    });
+  });
+
+  it('never puts records on a server that does not declare widget-data, and keeps them locally', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'be helpful', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    cloud._paths = ['human', 'human-folder', 'agent-calendar'];
+    const id = await ledger();
+    await setRecord(place, id, { note: 'stays here' });
+    const r = await sync(cloud);
+    expect(r.error).toBeUndefined();
+    expect([...cloud._puts.keys()].filter((k) => k.includes('WidgetData'))).toEqual([]);
+    expect([...cloud._puts.keys()]).toContain('tester/Library/Widgets/ledger/manifest.json'); // 定义照常走 Library
+    expect(rowsOf(id)).toEqual(['stays here']);
+  });
+
+  it('merges by rows on first contact when the server starts declaring widget-data after both devices recorded', async () => {
+    const { cloud, id } = await cloudWithLedger();
+    await twoDevices(cloud, id, async (on, homeA, homeB) => {
+      cloud._paths = ['human', 'human-folder', 'agent-calendar'];
+      for (const h of [homeA, homeB]) { on(h); rmSync(join(tDir('tester'), `.cloudsync-${agentSyncScope(cloud, 'u')}.json`), { force: true }); }
+      cloud._rows.delete(`tester\0WidgetData/${id}/data.db`);
+      on(homeA); await setRecord(place, id, { note: 'from A', place: 'Tokyo' }); // 两边各多一列、类型相同:日历那条「按类型对列」会把 mood 的值记到 place 上
+      on(homeB); await setRecord(place, id, { note: 'from B', mood: 'ok' });
+      cloud._paths = ['human', 'human-folder', 'agent-calendar', 'widget-data'];
+      for (const h of [homeA, homeB, homeA, homeB]) { on(h); await sync(cloud); }
+      const db = JSON.parse(readFileSync(dataOf(id), 'utf8'));
+      expect(db.rows.map((r: any) => r.cells).sort((a: any, b: any) => String(a.note).localeCompare(String(b.note)))).toEqual([{ note: 'base' }, { note: 'from A', place: 'Tokyo' }, { note: 'from B', mood: 'ok' }]);
+    });
+  });
+
+  it('syncs records of user and project widgets through the human slot, by rows', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'be helpful', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    cloud._paths = ['human', 'human-folder', 'agent-calendar', 'widget-data'];
+    setAgentSyncDefault(agentSyncScope(cloud, 'u')!, true);
+    const { widget } = await createWidget(place, { name: 'shared', scope: 'user', entry: 'widget.html', content: '<p>x</p>' });
+    const id = widget.manifest.id, rel = `WidgetData/${id}/data.db`;
+    await setRecord(place, id, { note: 'base' });
+    await sync(cloud);
+    expect(cloud._rows.get(`__human__\0${rel}`)).toMatchObject({ isBinary: false });
+    const homeA = home, homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
+    const on = (h: string) => { process.env.TANGU_HOME = h; };
+    const rows = () => (JSON.parse(readFileSync(join(humanDir(), rel), 'utf8')).rows as any[]).map((r) => r.cells.note).sort();
+    try {
+      on(homeB);
+      await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'be helpful', cloudSync: true });
+      setAgentSyncPermission('tester', agentSyncScope(cloud, 'u')!, true, true);
+      setAgentSyncDefault(agentSyncScope(cloud, 'u')!, true);
+      await sync(cloud);
+      expect(rows()).toEqual(['base']);
+      const addOffline = (note: string) => { const db = JSON.parse(readFileSync(join(humanDir(), rel), 'utf8')); db.rows.push({ id: `r_${note}`, cells: { note } }); writeFileSync(join(humanDir(), rel), JSON.stringify(db)); };
+      addOffline('from B');
+      on(homeA); addOffline('from A');
+      for (const h of [homeA, homeB, homeA, homeB]) { on(h); await sync(cloud); }
+      for (const h of [homeA, homeB]) { on(h); expect(rows()).toEqual(['base', 'from A', 'from B']); }
+    } finally { on(homeA); rmSync(homeB, { recursive: true, force: true }); }
+  });
+
+  it('a restore on one device beats a stale purge on another that never saw it', async () => {
+    const { cloud, id } = await cloudWithLedger();
+    await twoDevices(cloud, id, async (on, homeA, homeB) => {
+      on(homeA); await softDeleteWidget(place, id); await sync(cloud);
+      on(homeB); await sync(cloud);
+      expect(findWidgetByName(place, 'ledger')?.manifest.deletedAt).toBeTruthy();
+      on(homeA); await restoreWidget(place, id); await sync(cloud); // 这台在第 29 天恢复
+      on(homeB); expect(await purgeExpiredWidgets(Date.now() + 31 * 24 * 3600_000)).toBe(1); // 那台离线,第 31 天清掉了
+      expect(findWidgetByName(place, 'ledger')).toBeNull();
+      await sync(cloud);
+      for (const h of [homeA, homeB]) {
+        on(h); await sync(cloud);
+        const w = findWidgetByName(place, 'ledger')!;
+        expect(w.manifest.deletedAt).toBeUndefined();
+        expect(readFileSync(join(w.dir, 'widget.html'), 'utf8')).toContain('<p>ledger</p>');
+        expect(readRecords(w).rows.map((r) => r.cells.note)).toEqual(['base']);
+      }
+    });
   });
 });

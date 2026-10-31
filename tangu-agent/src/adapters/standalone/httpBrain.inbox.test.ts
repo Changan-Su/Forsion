@@ -38,7 +38,7 @@ describe('agent file manifest path negotiation', () => {
     // 顺带报上设备号和引擎版本:服务端按设备记版本,回答这个账号还有没有旧客户端在用 USER.md
     const url = new URL((fetch.mock.calls[0] as any)[0]);
     expect(url.pathname).toBe('/api/brain/agents/manifest');
-    expect(url.searchParams.get('paths')).toBe('human,human-folder,agent-calendar');
+    expect(url.searchParams.get('paths')).toBe('human,human-folder,agent-calendar,widget-data');
     expect(url.searchParams.get('device')).toBe(getDeviceId());
     expect(url.searchParams.get('client')).toMatch(/^tangu\/[0-9]/);
     expect([...manifest]).toEqual([{ slug: 'fixture', files: [] }]);
