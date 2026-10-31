@@ -41,7 +41,9 @@ async function main() {
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
     res.end('<!doctype html><title>Forsion browser history acceptance</title><body style="font:24px sans-serif;padding:30px"><h1>Forsion browser history acceptance</h1><label>Test text <input id="plain" style="font:24px sans-serif;width:90%"></label><p>Local disposable fixture. No form submission.</p>')
   })
-  await new Promise(resolve => browserServer.listen(0, '127.0.0.1', resolve))
+  const port = process.env.HISTORY_BROWSER_PORT === undefined ? 0 : Number(process.env.HISTORY_BROWSER_PORT)
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw Error('Invalid loopback fixture port')
+  await new Promise((resolve, reject) => { browserServer.once('error', reject); browserServer.listen(port, '127.0.0.1', resolve) })
   const browserUrl = `http://127.0.0.1:${browserServer.address().port}/`
   let allowApps = [], excludeTarget = false
   try {
