@@ -6,6 +6,7 @@
  * 模型原话进 report.md 供人读(「实际体验」只能靠这个感知,几何断言看不出来)。
  *
  *   npm run build && npm run live:harness                    # 全部场景(约 5-10 分钟,真烧订阅额度)
+ *   npm run live:harness -- --only titlemanual              # 用户手改过的标题 / 动过的图标 Historian 不再碰,清空标题交还(10-30):对照 3 轮 + 手动 4 轮(改 PATCH 会话标题、localHistorian 写标题 / 图标后跑)
  *   npm run live:harness -- --only titlelang                # 标题 / 摘要跟随对话本身的语言(10-20):3 条英文 + 1 条中文;英文的每一版标题和摘要只许拉丁字母,detail 里报引擎语言核对改写了几次(改 localHistorian 起标题 / 摘要、core/scriptCheck.ts 后跑)
  *   npm run live:harness -- --only personas                 # 三位音乐人格的同题实测(身份自动验,表达读原话)
  *   npm run live:harness -- --only human --human-ui        # HUMAN.md 双作用域、真模型写入/读取/撤销 + 真 Electron 卡片与编辑;先构建 desktop
@@ -58,6 +59,7 @@
  *   npm run live:harness -- --only forkcache                 # 尾部分叉调用读没读到主循环的前缀缓存(10-10):Historian 分身判官(fork 模式)与 self_brainstorm 第一轮的分身,逐次列 输入 / 缓存;改 localHistorian.ts 的 forkJudge、selfBrainstorm.ts 或 llm/openaiCompat.ts 的 resolveCacheKey 后跑
  *   npm run live:harness -- --only recall-unprompted --ab-memory   # B1 行为闸:记忆易变段走 tail vs system 各跑一遍(两次引擎启动,顺序)
  *   npm run live:harness -- --only deferred                  # E2 按需装载:load_tools 先于 read_document + 子代理 read_document 直通 + 子代理自己 load_tools 解锁 browser_snapshot
+ *   npm run live:harness -- --only subresume                 # 改 delegate 续用后跑:追问时模型真带 resume、落在同一个子代理、不重新探索(点明 / 平常说话两条腿)
  *   npm run live:harness -- --only grant                     # 改 delegate.grantTools / 子代理管理面闸后跑:授予时子代理用得上 manage_schedule,不授予时照旧被拒(正负两跑,均 action=list 无副作用)
  *   npm run live:harness -- --only branch                     # 分支(10-18,方案「Chat 画布分支」第一步):主线两轮 → 从第一条回答分出一支 → 分支里问一轮、再问「和主线比」:分支挂主线下记分叉点、系统提示有 <branches> 列主线、比之前 read_session 读了主线的 id;负对照 = 分叉前没有 <branches>。改 services/branchContext.ts / 分支路由后跑
  *   npm run live:harness -- --only nested                     # 父子会话(10-17,方案「子会话与任务卡」):让它分头开子会话查三个模块 → start_session ≥2、子会话各自跑完、
@@ -164,6 +166,7 @@
  *                                                           #   留在 <场景>-evidence/。--cu-jev-mode auto|vision|elements(缺省 auto)、--cu-jev-threshold(缺省 = 插件缺省)、--cu-timeout(cusend 缺省 900)。
  *                                                           #   捆绑包同 cuvision:以装着的那份为底,另外把插件仓的 scripts/ 也覆盖进去。会真的动鼠标,走 devlock。
  *                                                           #   cuambig:收件人有歧义先问;cuscroll(反馈 d995c9a2):播放「我喜欢的音乐」第 18 首,要先滚(滚动交给 Jev,不许 act_ui 滚)。
+ *   npm run live:harness -- --only cuweb,cuwebdead --cu-plugin <捆绑包目录>   # 网页按钮的后台 AXPress(10-31):一次性 Electron 窗口;cuweb 全程不许抢前台,cuwebdead 用只认真实悬停的按钮验「再按一次走真实点击」。
  *   npm run live:harness -- --only inline                    # 正文生成式 AI(09-28,G3-07):POST /agent/inline 润色保事实 / 翻译 / 续写 / 选区里的注入不照做 / 缺字段 400 / 不落会话;改 services/inlineAi.ts 提示词后跑
  *   npm run live:harness -- --only pageinstructions         # 页级 Instructions:分页读带本页约束、下一页不继承、inline 约束与用户当前要求优先
  *   npm run live:harness -- --only tool,stalewrite           # G3-02(09-28):读后被用户改过的文件,write_file 须拒写 → 模型重读 → 终稿留着用户那行;改 write_file / read_file / 读后指纹(readState)后跑
@@ -211,10 +214,12 @@ import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
 import { webPublishLive, startConnectLocal } from './lib/webpublish-live.mjs';
+import { cloudCalLive } from './lib/cloudcal-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
 import { CU_JEV_KEYS, JEV_REQUESTS_DIR, cuJevSetup, cuJevConfig, cuJevLive } from './lib/cu-jev-live.mjs';
+import { CU_WEB_KEYS, cuWebLive } from './lib/cu-web-live.mjs';
 import { appRefLive, appRefSelftest } from './lib/app-ref-live.mjs';
 import { taskOutcomesLive } from './lib/task-outcomes-live.mjs';
 
@@ -237,6 +242,7 @@ KEYS.push('novision');
 KEYS.push('cuoff');
 KEYS.push('cuvision');
 KEYS.push(...CU_JEV_KEYS);
+KEYS.push(...CU_WEB_KEYS);
 KEYS.push('dreamseed');
 KEYS.push('layers');
 KEYS.push('pageinstructions', 'dispatch');
@@ -259,6 +265,7 @@ KEYS.push('forkcache');
 KEYS.push('appref');
 KEYS.push('imageedit');
 KEYS.push('titlelang');
+KEYS.push('titlemanual');
 KEYS.push('windowscmd');
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
@@ -276,6 +283,8 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 // grant 是两个委派 run(慢),且只在动过 delegate.grantTools / 子代理管理面闸时才有信息量。
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
+KEYS.push('cloudcal');
+KEYS.push('subresume'); OPT_IN.add('subresume'); // --only subresume:改 delegate.resume / 子代理续用后跑(两条腿共五个 run)
 KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
 OPT_IN.add('signals');
@@ -285,10 +294,12 @@ OPT_IN.add('imgwindow');
 OPT_IN.add('viewimage');
 OPT_IN.add('imgtools'); // --only imgtools:历史里带图 → 改图 / 生图在 run 起点就在工具面里,不靠中途 load_tools(三个短 run)
 OPT_IN.add('imageedit'); // --only imageedit:edit_image 跨轮取图 + 改自己的产出(三个 run,同一会话;假生图后端)
+OPT_IN.add('titlemanual'); // --only titlemanual:两个会话 7 个 run,改手动标题 / 图标标记后跑
 OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英文对话被起成中文标题);4 个会话 5 个 run,改起标题 / 摘要的提示词、transcript、scriptCheck 后跑
 OPT_IN.add('windowscmd'); // Windows Issue #77: exact cmd reads and rejected negative controls through real model/tool/SSE.
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
+for (const k of CU_WEB_KEYS) OPT_IN.add(k); // --only cuweb,cuwebdead:Electron 窗口上的后台 AXPress(cuwebdead 会动真鼠标;要 --cu-plugin)
 for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cuscroll,cusearch:Jev 真实案例,自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
 OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
@@ -327,6 +338,7 @@ OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startu
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
+OPT_IN.add('cloudcal'); // --only cloudcal:三个 run;云端 run 的默认日历 × 真路由。要 TANGU_LIVE_CLOUD_URL / TOKEN 指向 server scripts/calendar-local.mts,判据与负对照见 lib/cloudcal-live.mjs。
 OPT_IN.add('webpublish'); // --only webpublish:三个 run,同用 account 那个假云端(Forsion Connect 的列表 / 发布 / 下线也在里面)。
 // --only webpublishreal --connect-server <server 检出> [--extend-pkg <签好的 Extend 包目录>]:同 webpublish 三个 run + 公开链接实开,
 // 但 Connect 换成本地真 server(scripts/connect-local.mts:PGlite + 真 Connect 模块,文件走 bytea、不经蓬洲);给了 --extend-pkg 再加一段
@@ -985,7 +997,7 @@ if (ONLY.has('dispatch')) {
 const CU_FIXTURE = opt('cu-fixture', cuDefaultFixture());
 if (ONLY.has('cuvision')) cuVisionSetup({ bundle: opt('cu-plugin', ''), fixture: CU_FIXTURE, shared });
 const CU_JEV = CU_JEV_KEYS.some((k) => ONLY.has(k));
-if (CU_JEV) cuJevSetup({ bundle: opt('cu-plugin', ''), shared });
+if (CU_JEV || CU_WEB_KEYS.some((k) => ONLY.has(k))) cuJevSetup({ bundle: opt('cu-plugin', ''), shared });
 
 // selfschedule:隔离的 Amadeus 笔记库(一个带 calendarDate 列的日历,一行既有事件)。不设 FORSION_AMADEUS_VAULT 引擎会落到
 // 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
@@ -1845,7 +1857,9 @@ try {
     const slug = created?.agent?.slug;
     if (!slug) throw new Error(`建 agent 失败:${JSON.stringify(created).slice(0, 200)}`);
     const cfg = { agentSlug: slug, debugSystemPrompt: true };
-    const calRows = () => JSON.parse(readFileSync(SELF_SCHED_CAL, 'utf8')).rows.length;
+    // 用户的日历 = 库里那本 + 默认日历 human/CALENDAR.db(不带名字新建落这里,第一次写才有文件)
+    const humanCal = join(home, 'human', 'CALENDAR.db');
+    const calRows = () => [SELF_SCHED_CAL, humanCal].filter((f) => existsSync(f)).reduce((n, f) => n + JSON.parse(readFileSync(f, 'utf8')).rows.length, 0);
     const mine = async () => asList(await api('/agent/special/schedule'), 'schedules').filter((x) => x.slug === slug).flatMap((x) => x.entries || []);
     const tomorrow = actDay(new Date(Date.now() + 86_400_000));
     const sess = `live-selfsched-${Date.now()}`;
@@ -1857,7 +1871,7 @@ try {
     const entries = await mine();
     const hit = entries.find((e) => String(e.date || '').startsWith(`${tomorrow}T20:00`));
     const tools = turns.flatMap((t) => t.toolCalls);
-    const promptOk = (t1.systemPrompt || '').includes('SCHEDULE.db');
+    const promptOk = (t1.systemPrompt || '').includes('CALENDAR.db');
     const denies = /没有[^。,，]{0,6}日历|没有[^。,，]{0,6}日程|no calendar|don't have a calendar/i.test(turns.map((t) => t.content).join('\n'));
     const userCalBefore = calRows();
     const turnErr = turns.find((t) => t.error)?.error;
@@ -1865,7 +1879,7 @@ try {
     const neg = await run(`live-selfsched-neg-${Date.now()}`, '明晚8点我要和朋友看电影,帮我记进我的日历。', 180_000, cfg);
     const negOk = !neg.error && neg.toolCalls.includes('amadeus_create_event') && calRows() === userCalBefore + 1 && (await mine()).length === entries.length;
     return { ok: posOk && negOk, inconclusive: posOk && negOk && !proactive,
-      detail: turnErr || neg.error || `提示段${promptOk ? '含' : '缺'} SCHEDULE.db;T1 ${proactive ? '已主动排进自己的日程' : '未主动排(不计红)'};三轮后${hit ? `自己的日程有 ${hit.date}` : `自己的日程无明晚 20:00 条目(共 ${entries.length} 条)`};用户日历 ${userCalBefore === 1 ? '未被动' : `被写了 ${userCalBefore - 1} 条`}${denies ? ';**否认自己有日历**' : ''};负对照 ${negOk ? '走 amadeus 进用户日历' : `未走对(工具 ${neg.toolCalls.join('/') || '无'},日历 ${calRows()} 行)`}`,
+      detail: turnErr || neg.error || `提示段${promptOk ? '含' : '缺'} CALENDAR.db;T1 ${proactive ? '已主动排进自己的日程' : '未主动排(不计红)'};三轮后${hit ? `自己的日程有 ${hit.date}` : `自己的日程无明晚 20:00 条目(共 ${entries.length} 条)`};用户日历 ${userCalBefore === 1 ? '未被动' : `被写了 ${userCalBefore - 1} 条`}${denies ? ';**否认自己有日历**' : ''};负对照 ${negOk ? '走 amadeus 进用户日历' : `未走对(工具 ${neg.toolCalls.join('/') || '无'},日历 ${calRows()} 行)`}`,
       output: `T1:${t1.content}\nT2:${t2.content}\nT3:${t3.content}\n负对照:${neg.content}`, ttftMs: ttft(t3), tokens: tokensOf(t3), toolCalls: [...tools, '|neg:', ...neg.toolCalls] };
   });
 
@@ -3404,6 +3418,12 @@ try {
       cuJevLive({ key, api, run, OUT, bundle: opt('cu-plugin', ''), timeoutMs: Number(opt('cu-timeout', key === 'cusend' || key === 'cusearch' ? '900' : '420')) * 1000, tokensOf, ttft }));
   }
 
+  // cuweb / cuwebdead(10-31):网页按钮的后台 AXPress。说明和判据在 lib/cu-web-live.mjs。
+  for (const key of CU_WEB_KEYS) {
+    await scenario(key, { cuweb: 'cuweb 网页按钮后台按下,不抢前台', cuwebdead: 'cuwebdead AXPress 没反应时再按一次走真实点击' }[key], () =>
+      cuWebLive({ key, api, run, OUT, electron: process.env.CU_ELECTRON || join(root, '..', 'desktop', 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron'), timeoutMs: Number(opt('cu-timeout', '420')) * 1000, tokensOf, ttft }));
+  }
+
   // 审批档只归用户(09-27,设备能力 MCP 方案 P0 ②):旧版 manage_agent 收 approval_mode,模型一句话就能把 agent(含自己)调成
   // 完全放行,下次激活填进 run = 免审批。判据:用户预设的 readonly 原样保留;模型没调 manage_agent 记 inconclusive(没试 ≠ 挡住了)。
   // 负对照 = 修复前的 dist 跑,须红(approvalMode 变 full-auto)。
@@ -4363,6 +4383,62 @@ Then reply with only the command output.`,
     return { ok, detail: follow.error || `child ${child.sessionId}; messages ${before.length}→${after.length}; parent ${parentBefore.length}→${parentAfter.length}; recall ${follow.content.includes(MARKER)}; retained link ${detail.agent_config.delegatedFrom === parentId}`, output: JSON.stringify({ before, follow: follow.content }, null, 2), ttftMs: ttft(follow), tokens: tokensOf(parent) + tokensOf(follow), toolCalls: parent.toolCalls };
   });
 
+  // 子代理续用(delegate.resume):第一轮让子代理查清一件事,第二轮追问它。判据:模型真带了上一份回报里的 id、落在同一个子代理上、
+  // 子代理没有重新搜索、答案里有上一轮没说过的数。两条腿:点明「同一个子代理」/ 平常说话(只说「问问它」)。
+  // ⚠️ 第一轮只让回报**数值**,不要路径:路径只在子代理的记忆里。父代理若知道路径,空白子代理照样 read_file 一次就答对,分不出有没有记忆(负对照实测)。
+  // 放宽:允许一次 list_dir 和一次 read_file(真模型读文件前常顺手列一下目录,这不算找东西);search / glob / shell 一次都不许。
+  // 第三轮(只在平常说话那条腿)问不相干的事:记录模型是续用还是新开,不作判据 —— 那是模型的取舍,不是引擎的对错。
+  await scenario('subresume', 'subresume 子代理续用:追问时接着原上下文,不重新探索', async () => {
+    const n = () => 1000 + Math.floor(Math.random() * 8000);
+    // 两条腿各一份夹具、各问各的:会话搜索跨会话可见,问同一件事时第二条腿会去翻第一条腿的记录(实测)。
+    const fixture = (name, file, constants) => {
+      const dir = join(workspace, name); mkdirSync(join(dir, 'src', 'core'), { recursive: true }); mkdirSync(join(dir, 'src', 'ui'), { recursive: true }); mkdirSync(dirname(join(dir, file)), { recursive: true });
+      writeFileSync(join(dir, file), `${constants.map(([k, v]) => `export const ${k} = ${v}`).join('\n')}\n\nexport function run() { return null }\n`);
+      for (const f of ['src/core/dns.ts', 'src/core/socket.ts', 'src/ui/button.ts', 'src/ui/list.ts', 'src/ui/modal.ts', 'src/index.ts', 'src/config.ts']) writeFileSync(join(dir, f), `export const ${f.replace(/\W/g, '_').toUpperCase()}_VERSION = ${n()}\n`);
+      writeFileSync(join(dir, 'LICENSE'), 'MIT License\n');
+      return { ...AGENT_CONFIG, cwd: dir };
+    };
+    const [TIMEOUT, BACKOFF, PARALLEL, WINDOW] = [n(), n(), n(), n()];
+    const namedConfig = fixture('subresume-named', 'src/net/client.ts', [['CONNECT_TIMEOUT_MS', TIMEOUT], ['RETRY_LIMIT', n()], ['BACKOFF_CAP_MS', BACKOFF]]);
+    const plainConfig = fixture('subresume-plain', 'src/storage/uploader.ts', [['MAX_PARALLEL_UPLOADS', PARALLEL], ['UPLOAD_CHUNK_BYTES', n()], ['RESUME_WINDOW_SEC', WINDOW]]);
+    const resumeArgs = (ev) => ev.toolArgs.filter((t) => t.name === 'delegate').map((t) => { try { return String(JSON.parse(t.arguments).resume || ''); } catch { return ''; } });
+    const reportId = (ev) => /\[subagent id: ([0-9a-f]{8}) /.exec(ev.toolResults.find((r) => r.name === 'delegate')?.full || '')?.[1] || '';
+    const fmtSub = (ev) => ev.subTools.map((t) => `${t.name}${t.isError ? '(err)' : ''}`).join(' → ') || '无';
+    const grade = (first, second, want) => {
+      const id = reportId(first);
+      const searched = second.subTools.filter((t) => /glob_files|search_files|run_bash|grep/.test(t.name));
+      const count = (name) => second.subTools.filter((t) => t.name === name).length;
+      const checks = {
+        firstDelegated: !first.error && first.toolCalls.includes('delegate') && first.subTools.length > 0 && !!id,
+        firstHidNeighbours: !want.some((v) => first.content.includes(String(v))),
+        resumedThatId: resumeArgs(second).includes(id),
+        sameSubagent: second.subStarts.length >= 1 && second.subStarts.every((s) => s.subId.startsWith(id)),
+        noReexplore: searched.length === 0 && count('list_dir') <= 1 && count('read_file') <= 1,
+        parentStayedOut: second.toolCalls.every((t) => t === 'delegate' || t === 'load_tools'),
+        answered: !second.error && want.every((v) => second.content.includes(String(v))),
+      };
+      return { ok: Object.values(checks).every(Boolean), checks, id };
+    };
+    const sidA = `live-subresume-a-${Date.now()}`;
+    const named1 = await run(sidA, 'Delegate this to one subagent and do not search yourself: in this project, what is the HTTP client retry limit? Have it report only the number, nothing else, then tell me that number.', 240_000, namedConfig);
+    const named2 = await run(sidA, 'Ask that same subagent, not a new one: which other constants are defined right next to the retry limit, and what are their values?', 240_000, namedConfig);
+    const sidB = `live-subresume-b-${Date.now()}`;
+    const plain1 = await run(sidB, '这个项目里上传的分片大小是多少?派个子代理查一下(不用单开会话),让它只回报数值。', 240_000, plainConfig);
+    const plain2 = await run(sidB, '再问问它,紧挨着分片大小定义的还有哪些常量,值分别是多少?', 240_000, plainConfig);
+    const plain3 = await run(sidB, '另外派个子代理看一下这个项目用的什么许可证,跟刚才的事无关。', 240_000, plainConfig);
+    const named = grade(named1, named2, [TIMEOUT, BACKOFF]);
+    const plain = grade(plain1, plain2, [PARALLEL, WINDOW]);
+    const fmt = (g, first, second) => `${g.ok ? '过' : '没过'}:${Object.entries(g.checks).filter(([, v]) => !v).map(([k]) => k).join(',') || '全部判据满足'};第一轮子代理 [${fmtSub(first)}];第二轮 resume [${resumeArgs(second).join(',') || '无'}],子代理 [${fmtSub(second)}]`;
+    return {
+      ok: named.ok && plain.ok,
+      detail: `点明:${fmt(named, named1, named2)}。平常说话:${fmt(plain, plain1, plain2)}。不相干的第三轮(只记录):resume [${resumeArgs(plain3).join(',') || '无'}]`,
+      output: JSON.stringify({ named: named2.content, plain: plain2.content, unrelated: plain3.content, want: { TIMEOUT, BACKOFF, PARALLEL, WINDOW } }, null, 2),
+      toolSequences: { named1: named1.toolCalls, named2: named2.toolCalls, plain1: plain1.toolCalls, plain2: plain2.toolCalls, plain3: plain3.toolCalls },
+      tokens: [named1, named2, plain1, plain2, plain3].reduce((sum, ev) => sum + tokensOf(ev), 0),
+      toolCalls: [...named2.toolCalls, ...plain2.toolCalls],
+    };
+  });
+
   // 并行团队(新工作区 × 轨道体系,09-16 第四轮:成员各自在自己的工作会话里并行干活、全员起头、被 @ 者优先、成员各自以 DONE 表态,
   // 没有会议/协作之分、没有投票、没有缺省轮数上限)。判三件事:① **真并行** —— 两名成员的激活区间交叠(team_member start/end 的事件 seq,见 activationsOverlap);
   // ② 模型配合团队规则 —— Beta 等 Alpha 派活时 @Alpha 且不写 DONE(等人规则),派到活后完成并写 DONE(自己的提示词里没写 DONE);
@@ -4606,6 +4682,78 @@ Then reply with only the command output.`,
       details.push(`${mode}: ${pass ? 'PASS' : 'FAIL'} icon=${emoji || '(none)'} activity=${activity?.map((r) => r.action).join('/') || '(none)'}`);
     }
     return { ok, detail: details.join('; ') };
+  });
+
+  await scenario('titlemanual', 'title 用户手改过的标题 / 动过的图标 Historian 不再碰', async () => {
+    // 10-30:到点轮 Historian 把用户亲手起的标题盖掉,用户清空的图标下一轮又被填上。话题一路换,标题本该跟着变:
+    //   对照:只有前端那条占位 PATCH → 后面几轮标题照样被改、图标照样填;
+    //   手动:第 1 轮后亲手改名 + 清空图标 → 之后两轮标题 / 图标都不动,判官照常跑(有新记录),run 起点也不再发 session_title;
+    //   交还:同一个会话亲手把标题清空 → 下一轮 Historian 重新起名,图标仍不填(清标题不解图标)。
+    // 手动标题故意和对话毫不相干:首帧提示词让模型「标题合适就原样保留」,起得像样的话没修也可能是绿的。
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent', autoEmoji: true } }) });
+    const MANUAL = 'ZQX-7741 档案';
+    const TOPICS = [
+      '请用约 200 字解释 SQLite 的 WAL 模式如何工作和适用场景,不需要调用工具。',
+      '换个完全不同的话题:请用约 200 字讲讲 Rust 的所有权和借用规则,不需要调用工具。',
+      '再换个话题:请用约 200 字讲讲 TCP 为什么要三次握手而不是两次,不需要调用工具。',
+      '最后换个话题:请用约 200 字讲讲手冲咖啡的水温和研磨度怎么配合,不需要调用工具。',
+    ];
+    const PLACEHOLDER = TOPICS[0].slice(0, 30).trim();
+    const actOf = async (sid) => { const a = await api(`/agent/special/historian/activity?sessionId=${encodeURIComponent(sid)}&limit=100`); return { rows: a.activity || [], running: !!a.running }; };
+    const count = (rows, action) => rows.filter((r) => r.action === action).length;
+    const detail = (sid) => api(`/agent/sessions/${sid}/detail`).then((r) => r.session);
+    const patch = (sid, body) => api(`/agent/sessions/${sid}`, { method: 'PATCH', body: JSON.stringify(body) });
+    const mk = async () => (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title: 'New Chat', model_id: MODEL, agent_config: AGENT_CONFIG }) })).session.id;
+    const outs = [];
+    let tokens = 0;
+    // 一轮:跑完等 done 判官写下新记录、不在跑了(标题是 run 起点那一路写的,早落了)
+    const turn = async (sid, text) => {
+      const judged0 = (await actOf(sid)).rows.filter((r) => r.action !== 'title_updated').length;
+      const ev = await run(sid, text, 180_000);
+      tokens += tokensOf(ev) || 0;
+      outs.push(`${text}\n→ ${ev.content.slice(0, 200)}`);
+      if (ev.error) throw new Error(ev.error);
+      const judged = await until(async () => { const a = await actOf(sid); return a.rows.filter((r) => r.action !== 'title_updated').length > judged0 && !a.running; }, 90_000, 2000);
+      return { ev, judged: !!judged };
+    };
+
+    const ctrl = await mk();
+    await patch(ctrl, { title: PLACEHOLDER, title_source: 'auto' }); // 前端发出第一句后写的占位标题
+    await turn(ctrl, TOPICS[0]);
+    const c1 = await detail(ctrl);
+    await turn(ctrl, TOPICS[1]);
+    await turn(ctrl, TOPICS[2]);
+    const c3 = await detail(ctrl);
+    const ctrlRows = (await actOf(ctrl)).rows;
+    const ctrlOk = c1.title !== PLACEHOLDER && c3.title !== c1.title && !!c3.emoji && count(ctrlRows, 'title_updated') >= 2;
+
+    const man = await mk();
+    await turn(man, TOPICS[0]);
+    const m0 = await detail(man); // 先让 Historian 起好标题和图标,用户再动手
+    await patch(man, { title: MANUAL, title_source: 'user' });
+    await patch(man, { emoji: null });
+    const base = (await actOf(man)).rows;
+    const t2 = await turn(man, TOPICS[1]);
+    const t3 = await turn(man, TOPICS[2]);
+    const m3 = await detail(man);
+    const rows3 = (await actOf(man)).rows;
+    const titlesAdded = count(rows3, 'title_updated') - count(base, 'title_updated');
+    const iconsAdded = count(rows3, 'icon_updated') - count(base, 'icon_updated');
+    const manOk = !!m0.emoji && m3.title === MANUAL && !m3.emoji && titlesAdded === 0 && iconsAdded === 0 && t2.judged && t3.judged && !t2.ev.sessionTitle && !t3.ev.sessionTitle;
+
+    await patch(man, { title: '', title_source: 'user' });
+    await turn(man, TOPICS[3]);
+    const m4 = await detail(man);
+    const backAdded = count((await actOf(man)).rows, 'title_updated') - count(rows3, 'title_updated');
+    const backOk = !!m4.title && m4.title !== MANUAL && backAdded >= 1 && !m4.emoji;
+
+    return {
+      ok: ctrlOk && manOk && backOk,
+      detail: `对照 ${ctrlOk ? '过' : '红'}:「${PLACEHOLDER.slice(0, 12)}…」→「${c1.title}」→「${c3.title}」,改了 ${count(ctrlRows, 'title_updated')} 次,图标 ${c3.emoji || '无'};` +
+        `手动 ${manOk ? '过' : '红'}:Historian 先起「${m0.title}」${m0.emoji || ''},手改后两轮标题「${m3.title}」图标「${m3.emoji || ''}」,新增改名 ${titlesAdded} / 图标 ${iconsAdded},判官 ${[t2, t3].map((t) => (t.judged ? '跑了' : '没跑')).join('/')},首帧事件 ${[t2, t3].filter((t) => t.ev.sessionTitle).length} 次;` +
+        `交还 ${backOk ? '过' : '红'}:清空后「${m4.title}」图标「${m4.emoji || ''}」`,
+      output: outs.join('\n\n'), tokens,
+    };
   });
 
   const sessB = `live-b-${Date.now()}`;
@@ -7089,6 +7237,12 @@ Then reply with only the command output.`,
   await scenario('account', 'account 「我还剩多少」:账号额度 + 本对话余量,账号动作逐次确认', async () => {
     if (!FAKE_CLOUD) return { ok: false, detail: '给了 TANGU_LIVE_CLOUD_URL:这个场景要用台架自带的假云端(数是已知的),去掉那个环境变量再跑' };
     return accountLive({ run, api, sleep, cloud: FAKE_CLOUD });
+  });
+  // cloudcal(10-30):云端 run(sandbox 形态)经真路由读写默认日历 human/CALENDAR.db。判据与负对照见 lib/cloudcal-live.mjs。
+  await scenario('cloudcal', 'cloudcal 云端 Agent 的默认日历:新用户首建、新会话改、老库种子不动不列', async () => {
+    const cloud = process.env.TANGU_LIVE_CLOUD_URL;
+    if (!cloud) return { ok: false, detail: '要 TANGU_LIVE_CLOUD_URL / TANGU_LIVE_CLOUD_TOKEN 指向 server scripts/calendar-local.mts(打印的 url 与 token)' };
+    return cloudCalLive({ run, cloud, token: TOKEN });
   });
   // webpublish(10-23):publish_web_page 从工作会话(本机文件)和聊天会话(会话沙箱里刚写的页)各发一次,逐次弹卡;再问「发过哪些」只读列出。判据与负对照见 lib/webpublish-live.mjs。
   await scenario('webpublish', 'webpublish 「发布成网页」:工作 / 聊天会话各发一次,逐次确认,再列出已发布', async () => {

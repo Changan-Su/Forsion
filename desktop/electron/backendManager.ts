@@ -390,7 +390,7 @@ export class BackendManager {
       // agent 的 amadeus_* 工具直连磁盘读写。给它 amadeus-config.json 的路径,让它 **实时读** 桌面当前
       // 的 lastVault —— 不再瞎猜默认路径(用户的 vault 常是自定义路径,且运行时可切换 vault)。
       env.FORSION_AMADEUS_CONFIG = amadeusConfigPath()
-      // 默认日历 = 默认笔记库根上首启播种的 Calendar.db(和 amadeus/ipc.ts ensureDefaultVault 同一个路径);引擎把它和 human/CALENDAR.db 双向镜像。
+      // 老版本种在默认笔记库根上的 Calendar.db(和 amadeus/ipc.ts defaultVaultRoot 同一个路径),还在就由引擎和 human/CALENDAR.db 双向镜像。
       // 家目录和工作区要么都是默认的、要么都被台架重定向了才给:一边真一边假就会把台架的日历合进真的 human/ 和账号云端,
       // 或者把台架的 human/ 合进真库(打包版的 defaultWorkspaceDir 不认 FORSION_WORKSPACE_DIR)。外面已经给了(含空串 = 关)就照用。
       const real = (p: string): string => { try { return realpathSync(p) } catch { return p } }

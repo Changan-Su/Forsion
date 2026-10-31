@@ -18,6 +18,7 @@ import {
   AmadeusNotFoundError,
   AmadeusTooLargeError,
   GitHostingError,
+  HumanCalendarConflictError,
 } from '../../seams/cloudBrain.js';
 import { LlmError } from '../../core/types.js';
 import { streamIdleGuard, mapStreamAbort } from '../../llm/streamIdle.js';
@@ -643,6 +644,23 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         if (!r.ok) throw new Error(`amadeus write ${r.status}: ${await r.text().catch(() => '')}`);
         const j: any = await r.json().catch(() => ({}));
         return { seq: Number(j?.seq) || 0 };
+      },
+      readHumanCalendar: async () => {
+        const r = await fetch(`${base}/api/agent/human/CALENDAR.db`, { headers: authHeaders(), signal: reqSignal() });
+        // 401/403/404 = 旧云端(没这条路由、派发票没登记):worker 先于 server 上线那段窗口,退回库里的日历。422 = 文件坏了,同本机跳过
+        if ([401, 403, 404, 422].includes(r.status)) return null;
+        if (!r.ok) throw new Error(`human calendar read ${r.status}: ${await r.text().catch(() => '')}`);
+        const j: any = await r.json();
+        const legacy = typeof j?.legacy === 'string' ? j.legacy : null;
+        return j?.status === 'ok' ? { data: j.data, version: String(j.version), legacy } : { data: null, version: null, legacy };
+      },
+      writeHumanCalendar: async (data: unknown, version: string | null) => {
+        const body = JSON.stringify({ data, version });
+        if (Buffer.byteLength(body, 'utf-8') > AMADEUS_MAX_FILE_BYTES) throw new AmadeusTooLargeError('human/CALENDAR.db');
+        const r = await fetch(`${base}/api/agent/human/CALENDAR.db`, { method: 'PUT', headers: authHeaders(), body, signal: reqSignal() });
+        if (r.status === 409) throw new HumanCalendarConflictError();
+        if (r.status === 413) throw new AmadeusTooLargeError('human/CALENDAR.db');
+        if (!r.ok) throw new Error(`human calendar write ${r.status}: ${await r.text().catch(() => '')}`);
       },
     },
     // ── Forsion Git:站点信息 + 当前用户的推拉凭据(对端 server microserver/git/routes/user.ts)。

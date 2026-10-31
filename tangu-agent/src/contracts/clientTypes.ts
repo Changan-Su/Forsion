@@ -72,6 +72,8 @@ export interface SubChat {
   kind: 'discussion' | 'subagent'
   title: string
   sessionId?: string
+  /** subagent 当前这一轮在子会话里的消息 id(续用时每轮一枚,start 事件带来)。 */
+  messageId?: string
   runId?: string             // discussion:要订阅的 run(= id)
   /** 由 /background 并进来的行:引擎给的后台会话 kind(historian / discussion …);实时 subagent 行没有。
    *  右栏按它(而不是标题)认出 Historian 的旧 run —— 普通子会话也可能叫「Historian」。 */

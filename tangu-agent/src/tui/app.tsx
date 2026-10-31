@@ -1024,7 +1024,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         try {
           await ensureSession(sessionIdRef.current, cfgRef.current.model);
           // 与 PATCH /agent/sessions/:id 同口径:只改 title,不动 updated_at(那是消息活动时间)。
-          await query(`UPDATE chat_sessions SET title = ? WHERE id = ? AND user_id = ?`, [title, sessionIdRef.current, userId]);
+          await query(`UPDATE chat_sessions SET title = ?, title_manual = TRUE WHERE id = ? AND user_id = ?`, [title, sessionIdRef.current, userId]);
           notice(L(`会话已重命名为「${title}」`, `Session renamed to "${title}"`), 'success');
         } catch (e: any) {
           notice(L(`重命名失败：${e?.message || e}`, `Rename failed: ${e?.message || e}`), 'error');

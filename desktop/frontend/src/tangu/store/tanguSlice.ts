@@ -950,7 +950,8 @@ export interface TanguState {
   addLocalWorkspace(): Promise<void>
   /** 从 Git 克隆:弹克隆对话框,克隆成功后把那个文件夹加成项目(同 addLocalWorkspace 的落点)。 */
   cloneGitProject(): Promise<void>
-  renameSession(id: string, title: string): Promise<void>
+  /** 缺省是用户亲手改名(Historian 此后不再动,清空 = 交还);auto = 发出第一句后的占位标题,不算手动。 */
+  renameSession(id: string, title: string, auto?: boolean): Promise<void>
   setSessionEmoji(id: string, emoji: string | null): Promise<boolean>
   archiveSession(id: string, archived: boolean): Promise<void>
   deleteSession(id: string): Promise<void>
@@ -1789,11 +1790,13 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         const child = get().subChatsBySession[sessionId]?.find((x) => x.id === id)
         const childId = String(pl.sessionId || child?.sessionId || '')
         if (childId) {
-          const mid = `delegate:${childId}`
+          // 续用时同一 subId 再跑一轮:start 带这一轮自己的 messageId,否则新内容会流进上一轮的气泡。
+          const mid = String(pl.messageId || child?.messageId || `delegate:${childId}`)
           set((state) => {
             const messages = state.messagesBySession[childId] || []
             if (messages.some((m) => m.id === mid)) return {}
-            return { messagesBySession: { ...state.messagesBySession, [childId]: [...messages, { id: mid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), agentName: pl.label || child?.title }] } }
+            const followUp: UiMessage[] = pl.userMessageId ? [{ id: String(pl.userMessageId), role: 'user', content: String(pl.task || ''), status: 'done', timestamp: Date.now() }] : []
+            return { messagesBySession: { ...state.messagesBySession, [childId]: [...messages, ...followUp, { id: mid, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now(), agentName: pl.label || child?.title }] } }
           })
           // These events belong to the parent run; a child has no independent run until a follow-up.
           if (pl.phase === 'token') patchMessage(childId, mid, (m) => ({ ...m, content: capContent(m.content + (pl.delta || '')), segments: pushTextSeg(m.segments, pl.delta || ''), status: 'streaming' }))
@@ -1813,7 +1816,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         }
         if (pl.phase === 'token' && pl.delta) upsertSubChat(id, (s) => appendSubText(s, String(pl.delta)))
         else if (pl.phase === 'tool') upsertSubChat(id, (s) => ({ ...s, segs: [...s.segs, { t: 'tool', name: String(pl.name || ''), args: pl.args, preview: pl.preview, error: !!pl.isError }] }))
-        else if (pl.phase === 'start') upsertSubChat(id, (s) => ({ ...s, title: pl.label || s.title, streaming: true }), { kind: 'subagent', title: pl.label })
+        else if (pl.phase === 'start') upsertSubChat(id, (s) => ({ ...s, title: pl.label || s.title, streaming: true, messageId: pl.messageId || s.messageId, segs: pl.userMessageId ? [...s.segs, { t: 'text', text: '' }] : s.segs }), { kind: 'subagent', title: pl.label }) // 续用另起一段,没调工具时两轮回答不拼在一起
         else if (pl.phase === 'done') upsertSubChat(id, (s) => ({ ...s, streaming: false }))
         break
       }
@@ -2449,12 +2452,14 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
   },
 
-  renameSession: async (id, title) => {
+  renameSession: async (id, title, auto) => {
+    const cur = [...get().sessions, ...get().archivedSessions].find((x) => x.id === id)
+    if (cur && (cur.title || '') === title) return // 改名框没改字就失焦:不算改名,不然只是点开看看就把标题锁住了
     set((s) => ({
       sessions: s.sessions.map((x) => (x.id === id ? { ...x, title } : x)),
       archivedSessions: s.archivedSessions.map((x) => (x.id === id ? { ...x, title } : x)),
     }))
-    try { await api.updateSession(targetForSession(id), id, { title }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
+    try { await api.updateSession(targetForSession(id), id, { title, title_source: auto ? 'auto' : 'user' }) } catch (e: any) { get().toast(get().tr('app.renameFail', { e: e?.message || e }), true) }
   },
 
   setSessionEmoji: async (id, value) => {
@@ -2932,7 +2937,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       get().subscribeRun(sessionId, r.runId, r.assistantMessageId)
       set((s) => ({ usageBySession: { ...s.usageBySession, [sessionId]: { ctx: s.usageBySession[sessionId]?.ctx || 0, base: s.usageBySession[sessionId]?.base || 0, live: 0 } } }))
       const sess = get().sessions.find((s) => s.id === sessionId)
-      if (sess && (!sess.title || sess.title === 'New Chat') && !sess.agent_config?.soloAgentSlug) void get().renameSession(sessionId, text.slice(0, 30)) // 私聊没起过题时显示 Agent 名(soloSessionTitle)
+      if (sess && (!sess.title || sess.title === 'New Chat') && !sess.agent_config?.soloAgentSlug) void get().renameSession(sessionId, text.slice(0, 30), true) // 私聊没起过题时显示 Agent 名(soloSessionTitle)
       return true
     } catch (e: any) {
       if (fromQueue || !holdFailed) { get().toast(t('app.sendFail', { e: e?.message || e }), true); return false }

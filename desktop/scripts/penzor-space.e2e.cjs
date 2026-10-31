@@ -148,6 +148,11 @@ function startFakeCloud() {
       { id: 'f-prompt', name: 'prompt 记录.txt', fileType: 'file', fileSize: 12 * 1024, updatedAt: day(9, 10), parentId: 'ROOT' },
     ],
     penzor: [], // 我的云盘:装好是空的,下面的场景往里传
+    connect: [ // 在线网页的文件:server 标 managed,文件夹名是 app id、displayName 才是网页名
+      { id: 'd-page', name: '0b9f2c1e-7a44-4a6e-9d0a-2f1c6c0e51aa', displayName: '下午茶接龙', managed: true, fileType: 'directory', fileSize: 0, updatedAt: day(1), parentId: 'ROOT' },
+      { id: 'f-page', name: 'index.html', managed: true, fileType: 'file', fileSize: 4096, updatedAt: day(1), parentId: 'd-page' },
+      { id: 'f-stray', name: 'stray.bin', fileType: 'file', fileSize: 512, updatedAt: day(4), parentId: 'd-page' },
+    ],
   }
   const driveBytes = () => appFiles.penzor.filter((f) => f.fileType === 'file').reduce((n, f) => n + f.fileSize, 0)
   const trash = [
@@ -173,6 +178,7 @@ function startFakeCloud() {
       { appId: 'ai-studio', canManage: false, bytes: 1160 * MB + live, files: 214, trashBytes: 9.4 * MB, trashFiles: 1 },
       { appId: 'photo-studio', bytes: 642 * MB, files: 88, trashBytes: 64 * MB, trashFiles: 2 },
       { appId: 'notebase', bytes: 34 * MB, files: 41, trashBytes: 2.1 * MB, trashFiles: 1 },
+      { appId: 'connect', bytes: 4608, files: 2, trashBytes: 0, trashFiles: 0 },
       { appId: 'penzor', bytes: driveBytes(), files: appFiles.penzor.filter((f) => f.fileType === 'file').length, trashBytes: 0, trashFiles: 0 },
     ]
   }
@@ -472,6 +478,35 @@ async function main() {
     check('③ 应用文件仅下载', (await win.locator('.ctx-menu.pz-menu button').allTextContents()).join('|') === '下载')
     await win.keyboard.press('Escape')
     await shot('app-readonly')
+
+    // 在线网页的文件夹显示网页名、只读;没人引用的孤儿照常能管
+    await win.locator('.t2s-srow-title', { hasText: /^Forsion Connect$/ }).first().click()
+    const pageRow = win.locator('.pz-table tbody tr', { hasText: '下午茶接龙' }).first()
+    await pageRow.waitFor()
+    check('③ 网页文件夹显示网页名,不露 app id', !(await win.locator('.pz-table').textContent()).includes('0b9f2c1e'))
+    check('③ 有去「我的网页」的入口', await win.locator('.pz-chip', { hasText: '管理我的网页' }).count() === 1)
+    await pageRow.click({ button: 'right' })
+    await win.waitForTimeout(300)
+    check('③ 网页文件夹没有改名 / 移动 / 删除', await win.locator('.ctx-menu.pz-menu').count() === 0)
+    await win.keyboard.press('Escape')
+    await pageRow.dblclick()
+    const pageFile = win.locator('.pz-table tbody tr', { hasText: 'index.html' }).first()
+    await pageFile.waitFor()
+    await pageFile.click({ button: 'right' })
+    await win.waitForSelector('.ctx-menu.pz-menu')
+    check('③ 网页文件只能下载', (await win.locator('.ctx-menu.pz-menu button').allTextContents()).join('|') === '下载')
+    await win.keyboard.press('Escape')
+    await pageFile.click()
+    check('③ 右栏写明去哪管', /已发布网页/.test(await win.locator('.pz-side .pz-tip').textContent().catch(() => '')))
+    await shot('hosted-page-file')
+    await win.locator('.pz-table tbody tr', { hasText: 'stray.bin' }).first().click({ button: 'right' })
+    await win.waitForSelector('.ctx-menu.pz-menu')
+    check('③ 没人引用的孤儿能删', (await win.locator('.ctx-menu.pz-menu button').allTextContents()).includes('移到回收站'))
+    await win.keyboard.press('Escape')
+    await win.locator('.pz-top .pz-ibtn').first().click()
+    await pageRow.waitFor()
+    await pageRow.click()
+    await shot('hosted-page-list')
 
     // New sources use real views and native selection, not injected DOM.
     for (const [label, file] of [['Agents','tangu'], ['我的资料','HUMAN.md'], ['插件数据','calendar']]) {

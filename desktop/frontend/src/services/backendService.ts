@@ -211,7 +211,7 @@ export const updateSession = (
   t: EngineTarget,
   id: string,
   patch: {
-    title?: string; archived?: boolean; model_id?: string; emoji?: string | null
+    title?: string; title_source?: 'user' | 'auto'; archived?: boolean; model_id?: string; emoji?: string | null
     project_path?: string | null; project_name?: string | null; projectless?: boolean
   },
 ) =>
@@ -805,8 +805,9 @@ export interface TrashEntry {
   restorer: 'engine' | 'desktop'; items: Array<{ from: string; stored: string; role?: string }>; extra?: Record<string, unknown>
 }
 export const listTrash = (t: EngineTarget) => request<{ entries: TrashEntry[]; days: number }>(t, '/agent/trash')
-export const restoreTrashEntry = (t: EngineTarget, id: string) =>
-  request<{ ok: boolean; slug?: string; renamed?: boolean; path?: string; id?: string }>(t, `/agent/trash/${encodeURIComponent(id)}/restore`, { method: 'POST' })
+/** opts.rescan:false = 引擎插件的条目放回后先不重扫(连着放几条时,全放回再重扫一次)。 */
+export const restoreTrashEntry = (t: EngineTarget, id: string, opts?: { rescan?: boolean }) =>
+  request<{ ok: boolean; slug?: string; renamed?: boolean; path?: string; id?: string }>(t, `/agent/trash/${encodeURIComponent(id)}/restore${opts?.rescan === false ? '?rescan=0' : ''}`, { method: 'POST' })
 export const purgeTrashEntry = (t: EngineTarget, id: string) => request<{ ok: boolean }>(t, `/agent/trash/${encodeURIComponent(id)}`, { method: 'DELETE' })
 export const emptyTrash = (t: EngineTarget) => request<{ ok: boolean; removed: number }>(t, '/agent/trash', { method: 'DELETE' })
 
@@ -979,9 +980,12 @@ export const setPluginEnabled = (t: EngineTarget, id: string, enabled: boolean) 
   request<{ ok: boolean; enabled: boolean; active?: boolean; plugins?: PluginInfo[] }>(t, `/agent/plugins/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
 /** 卸载:引擎先停掉在跑的实例(依赖者先休眠)、注销 meta、清设置/blob;文件夹由桌面侧 IPC 删。
  *  restartRequired:false(10-02 起)= 已运行期撤干净,不用重启;旧引擎给 true / 不给。 */
-/** opts.trash:插件文件(用户目录里的)也由引擎挪进回收站,回带 dirName 给主进程撤商店记录;keepSettings:设置原地不动。 */
-export const uninstallPlugin = (t: EngineTarget, id: string, opts?: { trash?: boolean; keepSettings?: boolean }) =>
-  request<{ ok: boolean; restartRequired: boolean; trashId?: string; dirName?: string }>(t, `/agent/plugins/${encodeURIComponent(id)}${opts?.trash ? `?trash=1${opts.keepSettings ? '&keepSettings=1' : ''}` : ''}`, { method: 'DELETE' })
+/** opts.trash:插件文件(用户目录里的)也由引擎挪进回收站,回带 dirName 给主进程撤商店记录;keepSettings:设置原地不动;
+ *  bundle:只收这个捆绑包(目录名)内嵌的那份的设置,解析到别处的同 id 不动。 */
+export const uninstallPlugin = (t: EngineTarget, id: string, opts?: { trash?: boolean; keepSettings?: boolean; bundle?: string }) => {
+  const q = new URLSearchParams({ ...(opts?.trash ? { trash: '1' } : {}), ...(opts?.trash && opts.keepSettings ? { keepSettings: '1' } : {}), ...(opts?.bundle ? { bundle: opts.bundle } : {}) }).toString()
+  return request<{ ok: boolean; restartRequired: boolean; trashId?: string; dirName?: string }>(t, `/agent/plugins/${encodeURIComponent(id)}${q ? `?${q}` : ''}`, { method: 'DELETE' })
+}
 export const getPluginSettings = (t: EngineTarget, id: string, scope: string) =>
   request<{ values: Record<string, any> }>(t, `/agent/plugins/${encodeURIComponent(id)}/settings?scope=${encodeURIComponent(scope)}`).then((r) => r.values)
 export const putPluginSettings = (t: EngineTarget, id: string, scope: string, patch: Record<string, any>) =>

@@ -40,7 +40,7 @@ interface MirrorPair { key: string; legacy: string; legacyRoot: string; human: s
  *    还没有基线(第一次)时取并集:.md 是 human/ 那份加上旧位置独有的行,.db 是两边的行都留下。
  *  什么时候停(方案页同目录「镜像何时停与Agent日历上云.md」):同步时把服务端的回答(opts.legacy)记进镜像状态,启动、改画像这些
  *  不经过同步的调用也读它。只有明确收到「没有旧客户端在用 USER.md」才停 USER.md 那一对,而且只停「human/ → 旧位置」:
- *  旧位置自己变了照样并进来。不是永久停:旧客户端再出现,下一次同步就恢复,拿停之前的基线三方合并。日历那一对每次都镜像:新版桌面自己的日历视图、网页、手机都还读库里那份。
+ *  旧位置自己变了照样并进来。不是永久停:旧客户端再出现,下一次同步就恢复,拿停之前的基线三方合并。日历那一对每次都镜像:新版都读 human/,但老用户库里的 Calendar.db 还在,旧版客户端也只认它;新用户没有这份文件,这一对什么都不做。
  *  返回出了几份冲突副本。 */
 export async function mirrorLegacyHuman(opts: { legacy?: LegacyClients | null } = {}): Promise<{ conflicts: number }> {
   ensureHumanFolder();
@@ -130,8 +130,12 @@ function mirrorPair(p: MirrorPair, state: Record<string, string>, home: string, 
   const keepLegacyCopy = (): void => keepCopy(L!, basename(p.legacy));
   const settle = (text: string): void => { state[p.key] = text; };
 
+  const parses = (t: string): boolean => { try { JSON.parse(t); return true; } catch { return false; } };
   if (L === null && H === null) { delete state[p.key]; return 0; }
-  if (H === null) { writeHuman(L!); settle(L!); return 0; }
+  if (H === null) {
+    if (p.db && !parses(L!)) return 0; // 损坏的文件不搬进 human/:搬过去连默认日历都打不开,库里那份留着
+    writeHuman(L!); settle(L!); return 0;
+  }
   if (L === null) {
     if (!p.db) { writeLegacy(H); settle(H); return 0; }
     // 库里的 Calendar.db 删了就让它删着;基线也丢掉 —— 桌面重新播种出的新文件(行 id 全新)回来时按并集合,别把 human/ 的行当成「那边删了」
@@ -146,7 +150,6 @@ function mirrorPair(p: MirrorPair, state: Record<string, string>, home: string, 
   const merged = p.db ? mergeDbFile(L, B, H) : text === null ? null : { content: text, conflict: false };
   if (!merged) {
     // 合不了:哪边坏了(解析不了)就把哪边存成副本、用好的那份;都能读(比如 id 重复)就 human/ 赢
-    const parses = (t: string): boolean => { try { JSON.parse(t); return true; } catch { return false; } };
     if (p.db && parses(L) && !parses(H)) { keepCopy(H, basename(p.human)); writeHuman(L); settle(L); return 1; }
     keepLegacyCopy(); writeLegacy(H); settle(H); return 1;
   }

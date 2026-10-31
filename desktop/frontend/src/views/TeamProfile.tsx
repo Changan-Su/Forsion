@@ -141,7 +141,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
         // (如刚移除的工作范围、刚切的审批档)退回旧值
         useApp.setState((a) => ({ configBySession: { ...a.configBySession, [session.id]: teamSessionConfig(a.configBySession[session.id] || savedConfig, nextDraft) }, sessions: a.sessions.map((v) => v.id === session.id ? { ...v, agent_config: teamSessionConfig(v.agent_config || savedConfig, nextDraft) } : v) }))
         if (!config.teamSlug && nextDraft.name.trim() !== session.title) {
-          const updated = await updateSession(targetForSession(session.id), session.id, { title: nextDraft.name.trim() })
+          const updated = await updateSession(targetForSession(session.id), session.id, { title: nextDraft.name.trim(), title_source: 'user' })
           useApp.setState((a) => ({ sessions: a.sessions.map((v) => v.id === session.id ? { ...v, title: updated.title } : v) }))
         }
       } else {

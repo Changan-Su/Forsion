@@ -8,9 +8,9 @@ import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
-import { serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
+import { trashSeedCalendar } from './fs/seedCalendar'
 import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from './fs/vaultHandlers'
 import { createPageHistory } from './fs/pageHistory'
 export type { VaultFace } from './fs/vaultHandlers'
@@ -281,11 +281,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   )
 
   const rememberPage = (pagePath: string): Promise<void> => writeConfig({ lastPage: vaultRel(pagePath) })
+  const defaultVaultRoot = (): string => path.join(defaultWorkspaceDir(), 'Amadeus')
 
   /** 切到某个根:统一收口(setRoot + watcher + index + 返回渲染端所需载荷)。 */
   const activateRoot = async (root: string, keepLastPage: boolean): Promise<{ root: string; pages: string[]; folders: string[]; lastPage?: string }> => {
     vault.setRoot(root)
     watcher.start(root)
+    // 只有默认库是我们种过的;失败不挡开库,下次再试
+    if (path.resolve(root) === defaultVaultRoot()) await trashSeedCalendar(vault).catch((e) => console.warn('[amadeus] seed calendar cleanup failed', e))
     const pages = await vault.listPages()
     const folders = await vault.listFolders()
     await index.build()
@@ -299,17 +302,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     }
   }
 
-  /** 首启无 lastVault:自带默认工作区 ~/Forsion/Amadeus(dev→~/Forsion-Dev/Amadeus)+ 种子 Calendar.db。
-   *  幂等:目录已存在不动,Calendar.db 已存在不覆盖(用户后来选过别的 vault 则走不到这里)。 */
+  /** 首启无 lastVault:自带默认工作区 ~/Forsion/Amadeus(dev→~/Forsion-Dev/Amadeus)。不种日历,默认日历是引擎的 human/CALENDAR.db。
+   *  幂等:目录已存在不动(用户后来选过别的 vault 则走不到这里)。 */
   const ensureDefaultVault = async (): Promise<{ root: string; pages: string[]; folders: string[] }> => {
-    const root = path.join(defaultWorkspaceDir(), 'Amadeus')
+    const root = defaultVaultRoot()
     await fs.mkdir(root, { recursive: true })
-    vault.setRoot(root)
-    try {
-      await fs.access(path.join(root, 'Calendar.db'))
-    } catch {
-      await vault.writeTextFile('Calendar.db', serializeDb(seedCalendarDb()))
-    }
     await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
     return activateRoot(root, false)
   }
@@ -323,7 +320,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
 
   handle(IPC.restoreVault, async () => {
     let { lastVault } = await readConfig()
-    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区 + 种子多维表(不再落欢迎页)
+    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
     // A saved cloud root may belong to a previous account (or the old unowned
     // mirror). Never mount it for a different account, including signed-out boot.
     if (isManagedCloudVault(lastVault) && (!cloud || !currentCloudAccountId() || lastVault !== cloudVaultDir())) {
@@ -856,7 +853,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // 卸载 Forsion 插件:按 manifest id 定位目录(id 可与目录名不同;与 listPlugins 同一 pluginIdOf 门禁)整删。
   // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
-  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineEnabled?: string[] }) => {
+  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }) => {
     if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     // ⚠️开发副本正遮蔽同 id 的安装版时必须拒绝:这里只扫全局目录,删掉的是**安装版**,而跑着的是开发副本 ——
     // 用户看到「已卸载」,插件却还在;等哪天撤下开发副本,它才凭空消失(且没有任何提示)。先撤开发副本再卸载。
@@ -907,9 +904,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       ? Object.fromEntries(Object.entries(opts.prefs).filter(([k, v]) => typeof k === 'string' && typeof v === 'string')) : undefined
     let name = id
     try { name = String((JSON.parse(await fs.readFile(path.join(target, 'manifest.json'), 'utf8')) as { name?: unknown }).name || id) } catch { /* 用 id */ }
-    // engineEnabled:卸载前开着的内嵌引擎插件(卸载时先关了它们),恢复时渲染层重扫后再开回来
-    const engineEnabled = Array.isArray(opts?.engineEnabled) ? opts.engineEnabled.filter((x): x is string => typeof x === 'string').slice(0, 50) : []
-    const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineEnabled.length ? { engineEnabled } : {}) } })
+    // engineTrash:内嵌引擎插件的设置在引擎那边的回收站条目,恢复时渲染层连带放回
+    const engineTrash = Array.isArray(opts?.engineTrash) ? opts.engineTrash.filter((x): x is string => typeof x === 'string').slice(0, 50) : []
+    const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}) } })
     vault.setPluginFileExtensions(collectPluginExts()) // 重算(含墓碑):保护不随卸载失效
     return { ...(entry ? { trashId: entry.id } : {}), dirName: path.basename(target) }
   })

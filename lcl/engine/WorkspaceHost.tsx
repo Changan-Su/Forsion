@@ -3,9 +3,10 @@
  * 从 panel props 造 Leaf 再调 def.factory)。onReady 恢复上次布局,否则调 buildDefault;
  * 布局变更持久化。主题叠 dockview-theme-light|dark + .dockview-theme-lcl(--dv-* → LCL token)。
  */
-import { Suspense, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { Suspense, useEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import {
   DockviewReact,
+  type DockviewApi,
   type DockviewReadyEvent,
   type IDockviewPanelProps,
   type IDockviewPanelHeaderProps,
@@ -256,25 +257,36 @@ function isMainGroup(panels: IDockviewHeaderActionsProps['panels']): boolean {
   return panels.some((p) => { const loc = (p.params as { __loc?: string } | undefined)?.__loc; return !loc || loc === 'main' })
 }
 
-/** 主区组标签栏左侧前缀:左栏折叠钮(在左panel右缘)。主区常驻 →
- *  折叠左栏后此钮仍在原处(左panel右缘=主区左缘),可重开。 */
+/** 这一组是不是主区最靠左(同列取最上)的组。分屏时前缀只渲这一组,按屏幕位置算:组可以被拖到另一边,
+ *  api.groups 的顺序不等于视觉顺序。 */
+function isFirstMainGroup(api: DockviewApi, group: IDockviewHeaderActionsProps['group']): boolean {
+  const rects = api.groups
+    .filter((g) => isMainGroup(g.panels))
+    .map((g) => ({ g, r: g.element.getBoundingClientRect() }))
+    .sort((a, b) => a.r.left - b.r.left || a.r.top - b.r.top)
+  return rects[0]?.g === group
+}
+
+/** 主区标签栏左侧前缀:前进后退 + 左栏折叠钮(在左panel右缘)。主区常驻 →
+ *  折叠左栏后此钮仍在原处(左panel右缘=主区左缘),可重开。分屏也只有最左上那组有一份。 */
 function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
-  return function PrefixActions({ panels, activePanel }) {
+  return function PrefixActions({ panels, containerApi, group }) {
     // 左栏收起后,主区组成为最左 → 折叠钮要躲开 mac 交通灯(加 --edge,见 engine.css)。
     const leftCollapsed = !useWorkspace((s) => s.leftVisible)
     const { t } = useEngineI18n()
     useShortcuts((s) => s.overrides) // 设置里改了键 → tooltip 里的快捷键跟着变
-    // per-tab 历史:箭头作用于**本组自己**的活动 tab。订阅 mainTabs(激活变化)与 stacks 重渲。
-    // ⚠️ 别用全局 activeMainPanel:这套箭头每个主区组各渲一份,分屏后左右两套都会指向同一个
-    //    全局活动 tab —— 点左边那套动的是右边那个 tab(用户实报的「控制别的 tabs」),而本组的栈
-    //    没人走、箭头恒灰(「失效」)。props.activePanel 就是本组当前显示的 panel,天然 per-group。
+    // 组被拖到另一边、关掉一组时 tab 集合可能不变,mainTabs 不刷 → 单独跟布局变化重算「谁是最左上」。
+    const [, relayout] = useReducer((n: number) => n + 1, 0)
+    useEffect(() => { const d = containerApi.onDidLayoutChange(relayout); return () => d.dispose() }, [containerApi])
+    // per-tab 历史:全窗只有这一套箭头,作用于**当前聚焦**的主区 tab(用户 08-17 定的语义);分屏时右组靠它走历史。
+    // 订阅 mainTabs(激活变化)与 stacks 重渲。
     useWorkspace((s) => s.mainTabs)
     const stacks = useNav((s) => s.stacks)
-    const amId = activePanel?.id ?? null
+    const amId = activeMainPanel(containerApi)?.id ?? null
     const st = amId ? stacks[amId] : undefined
     const canBack = !!st && st.idx > 0
     const canFwd = !!st && st.idx >= 0 && st.idx < st.entries.length - 1
-    if (!isMainGroup(panels)) return null
+    if (!isMainGroup(panels) || !isFirstMainGroup(containerApi, group)) return null
     return (
       <div className={`dv-prefix${leftCollapsed ? ' dv-prefix--edge' : ''}`}>
         {/* 主面板常驻前进/后退(per-tab 历史,只走当前 tab 的栈;由各 feature recordNav(leafId,…) 喂)。 */}

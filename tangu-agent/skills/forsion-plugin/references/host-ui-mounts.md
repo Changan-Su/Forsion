@@ -33,7 +33,7 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 ### 原生悬浮目录 ctx.ui.mountFloatingToc(2026-09-07 起)
 
 长内容视图不用复制 Chat View 的目录实现。`ctx.ui.mountFloatingToc(shell, opts)` 在插件自己的
-`shell` 上叠一层宿主原生 Floating TOC(默认左侧刻度条、hover / 键盘聚焦展开),正文 DOM 与滚动仍归插件。
+`shell` 上叠一层宿主原生 Floating TOC(默认左侧刻度条,悬停 120ms 或键盘聚焦时从当前项流出列表),正文 DOM 与滚动仍归插件。
 宿主负责 MutationObserver 增量扫描、当前段高亮、平滑跳转、窄栏隐藏、明暗 / 配色 / 扁平模式与键盘可达性。
 
 ```js
@@ -72,6 +72,10 @@ ctx.registerView({ id: 'manual', title: 'Manual', mount(el) {
   懒挂的重件(代码高亮、嵌入体)可以包在带 `data-lcl-toc-ignore` 的元素里,里面的变化不触发重扫。
   跳转落地后宿主会再量一次、差得多就补,正文用了 `content-visibility: auto` 也落得准。
   `dispose()` 幂等,同步摘掉宿主加在 `shell` 里的那层(你的正文不动);插件禁用 / 重载时宿主也会统一卸载。
+- 刻度住在滚动区左边一条 `--lcl-ftoc-gutter`(36px)宽的沟里(2026-10-30 起)。正文左边空白比沟窄时要自己让开,否则刻度压字:
+  宿主在 `scrollContainer` 上打 `data-lcl-ftoc`(值是 `side`,窄到目录隐藏时摘掉,和有没有标题无关),写
+  `.my-article[data-lcl-ftoc] { padding-left: max(24px, var(--lcl-ftoc-gutter)); }`。内容居中时的写法见手册 `ui-components.md`。
+- 行节点 `.lcl-ftoc-item` 只在展开时存在,这些类名不是公共接口。
 - 旧宿主整个 `ctx.ui` 不存在,一律 `ctx.ui?.mountFloatingToc(...)`;缺席时可继续显示正文,不必仿一份目录。
 
 ### View modes: ctx.ui.setViewModes (2026-10-19+)

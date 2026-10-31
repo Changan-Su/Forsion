@@ -15,7 +15,7 @@
  *
  * 落盘防线与前两版同源:换页不写 / 坏 YAML 冻结 / 布局与块全不相交停手 / 迁移绝不自动跑。
  */
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react'
 import {
   BarChart3, Check, Clock, CloudSun, ExternalLink, Hash, Heading, LayoutGrid,
   MoreHorizontal, Pencil, Pin, Plus, Trash2, Type,
@@ -23,8 +23,8 @@ import {
 import type { DashboardCardSize, DashboardCardSurface, ViewProps } from '@lcl/engine'
 import { allViews, getView, label, useEdgeNudge, useWorkspace } from '@lcl/engine'
 import {
-  DndContext, DragOverlay, MeasuringStrategy, MouseSensor, TouchSensor, pointerWithin, useSensor, useSensors,
-  type Announcements, type DragMoveEvent, type DragOverEvent, type DragStartEvent, type UniqueIdentifier,
+  DndContext, DragOverlay, MouseSensor, TouchSensor, pointerWithin, useSensor, useSensors,
+  type Announcements, type DragEndEvent, type DragMoveEvent, type DragStartEvent, type UniqueIdentifier,
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, type SortingStrategy } from '@dnd-kit/sortable'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
@@ -37,7 +37,7 @@ import { dashBaseName, parseWidget, webviewUrlAllowed, widgetSource } from '@ama
 import {
   DASH3_COLS, DASH3_DEFAULT, DASH3_DEFAULT_MINI, DASH3_DEFAULT_TEXT, DASH3_GAP_PX,
   DASH3_MAX_ROWS, DASH3_ROW_PX, DASH3_SIZES, colsForWidth, dash3BucketOf, dash3MinCell, dash3Size,
-  dropIntoRow, grid3IsStale, layoutDash3Rows, nextPinRow, orderedIds, readDash3Layout, readDash3Pins,
+  dropIntoRow, grid3IsStale, layoutDash3Rows, moveBeside, nextPinRow, orderedIds, readDash3Layout, readDash3Pins,
   reconcileGrid, reconcilePins, renumber, setDash3InFm, setDash3PinsInFm, setDashModeInFm, spanFor,
   type Cell, type Dash3Layout, type Dash3Pins, type Dash3SizeKey,
 } from '@amadeus-shared/dashboard3'
@@ -244,18 +244,21 @@ const cellForSize = (key: Dash3SizeKey, order = 0): Cell => {
 
 /** dnd-kit 的排序 strategy 一律关掉:`rectSortingStrategy` 假设「等尺寸槽位换座」,对
  *  变尺寸卡片 + DP 行编排的预测精度是零(上游 issue #720 的场景)。让位动画的真身是
- *  「onDragOver 实时改预览序 → 重跑编排 → framer layout FLIP」,与 RGL/HA 同一条路。 */
+ *  「拖动中实时改预览序 → 重跑编排 → useCellSpring 走到新格」,与 RGL/HA 同一条路。 */
 const NO_SORT: SortingStrategy = () => null
 
-/** 列表拖拽的通用直觉:往后拖 = 落在目标之后,往前拖 = 落在目标之前。预览与落笔共用这一个函数。 */
-function reorderSeq(seq: string[], from: string, over: string): string[] {
-  const a = seq.indexOf(from)
-  const b = seq.indexOf(over)
-  if (a < 0 || b < 0 || a === b) return seq
-  const next = seq.filter((x) => x !== from)
-  next.splice(a < b ? next.indexOf(over) + 1 : next.indexOf(over), 0, from)
-  return next
+/** 换位的两道闸:同一落点停够这么久、离上次换位走够这么远。手不动,布局就不动。 */
+const DRAG_DWELL_MS = 90
+const DRAG_TRAVEL_PX = 14
+
+/** 一笔拖动算出来的落点:新的顺序与行位。`route` 记走的哪条路(卡上 = 排序,空白 = 行位)。 */
+interface DragPlan { seq: string[]; pins: Dash3Pins; route: 'order' | 'row'; key: string }
+/** 排定的行带与各卡位置:内容盒 CSS px,外加 12 列参考位。 */
+interface DragGeom {
+  bands: Array<{ top: number; h: number; ids: string[]; used: number }>
+  byId: Map<string, { col: number; w: number; x: number; y: number; pxW: number; pxH: number; solo: boolean }>
 }
+const planKey = (seq: string[], pins: Dash3Pins): string => `${seq.join('\n')}|${JSON.stringify(pins)}`
 
 /** 几何 → 摘要面 bucket:自由格下尺寸多半不等于任何具名档,取**最近**那档喂给卡片面。 */
 const sizeOfCell = (cell: Cell, allowed: readonly Dash3SizeKey[]): Dash3SizeKey =>
@@ -460,9 +463,9 @@ function GridInner({ leaf }: ViewProps) {
     applyLayout({ ...cur, [id]: { ...cur[id], w, h } })
   }
 
-  // ── 拖拽重排:拖动中 onDragOver 实时改**预览序**,编排重跑、其它卡由 framer layout FLIP
-  //    真实让位(RGL/Home Assistant 同款);跟手的是 DragOverlay 里的壳,原卡降透明度当落点
-  //    占位。松手才落盘 —— 预览与最终布局同源,零跳变。
+  // ── 拖拽重排:拖动中按指针实时改**预览序**,编排重跑、其它卡由弹簧真实让位(RGL/Home Assistant
+  //    同款);跟手的是 DragOverlay 里的壳,原卡降透明度当落点占位。松手才落盘 —— 预览与最终布局
+  //    走同一份编排输入,零跳变。
   // 鼠标 4px 起拖;触屏按住 150ms 才起拖(Home Assistant 的 delayOnTouchOnly 口径)——
   // 手指第一职责是滚页面,不加延迟就会和滚动抢手指。
   const sensors = useSensors(
@@ -478,14 +481,27 @@ function GridInner({ leaf }: ViewProps) {
   const previewRef = useRef<string[] | null>(null)
   const [previewPins, setPreviewPins] = useState<Dash3Pins | null>(null)
   const previewPinsRef = useRef<Dash3Pins | null>(null)
-  /** 这一笔拖拽新占的行号(拖动全程恒定,否则每帧换号 = pin 抖动);落点格的滞回也在这。 */
+  /** 这一笔拖拽新占的行号(拖动全程恒定,否则每帧换号 = pin 抖动)。 */
   const dragRowKeyRef = useRef(0)
-  const dropRef = useRef<{ band: number; col: number } | null>(null)
-  /** 渲染算好的行带与各卡的 12 列参考位 —— 坐标路要读它把指针换成 (行, 列)。 */
-  const geomRef = useRef<{ bands: Array<{ top: number; h: number; ids: string[] }>; byId: Map<string, { col: number; w: number }> }>({ bands: [], byId: new Map() })
-  /** 拖起那一刻冻结各卡的观感档位当 preferred:预览重排时 DP 少改档,画面噪声小。 */
-  const dragCellsRef = useRef<Map<string, Cell> | null>(null)
+  /** 渲染算好的格子位 —— 判定只读它,不读动画途中的 DOM。 */
+  const geomRef = useRef<DragGeom>({ bands: [], byId: new Map() })
+  /** 在途一笔:视口指针(原生事件直接记)、抓点(指针到卡左沿)、换算用的内容盒留白;
+   *  当前指针(内容盒坐标)、上次换位时的指针、走过哪条路、等闸的落点。 */
+  const gestureRef = useRef<{
+    clientX: number; clientY: number; grab: number; padX: number; padY: number; untrack: () => void
+    x: number; y: number; ax: number; ay: number
+    route: DragPlan['route'] | null
+    pending: { plan: DragPlan; at: number } | null
+    timer: number
+  } | null>(null)
+  /** 刚松手的那张:DragOverlay 自己飞向落点,卡再走一遍弹簧就成了两张。只活一次提交。 */
+  const landingRef = useRef<string | null>(null)
+  useEffect(() => { landingRef.current = null })
   const dragNonce = useRef<unknown>(null)
+  useEffect(() => () => {
+    if (gestureRef.current) window.clearTimeout(gestureRef.current.timer)
+    gestureRef.current?.untrack()
+  }, [])
   /** ⚠️ body 端级 zoom ≠ 1 时 DragOverlay 的 fixed 坐标整体被再乘一次 zoom(壳脱离指针,
    *  探针实测 ×1.25 漂移)。反补偿 = 给 overlay 包一层 1/zoom;倍率用实测 rect/offsetWidth
    *  比值(本仓惯用法,勿用 zoomOf)。 */
@@ -493,13 +509,40 @@ function GridInner({ leaf }: ViewProps) {
   const onDragStart = (e: DragStartEvent): void => {
     dragNonce.current = identity()
     setInteractId(null) // 起拖 = 回到排版语境,别让一张卡还开着交互态
-    dragCellsRef.current = new Map(visualCellsRef.current)
     const el = gridRef.current
     const z = el && el.offsetWidth > 0 ? el.getBoundingClientRect().width / el.offsetWidth : 1
     overlayZoomRef.current = Math.abs(z - 1) < 0.005 ? 1 : z
     dragRowKeyRef.current = nextPinRow(pins)
-    dropRef.current = null
     previewPinsRef.current = null
+    const self = geomRef.current.byId.get(String(e.active.id))
+    gestureRef.current = null
+    if (el && self) {
+      const grid = el.getBoundingClientRect()
+      const cs = getComputedStyle(el)
+      const act = e.activatorEvent as { clientX?: number; clientY?: number; touches?: ArrayLike<{ clientX: number; clientY: number }> } | null
+      const clientX = act?.clientX ?? act?.touches?.[0]?.clientX ?? grid.left // 触屏是 TouchEvent
+      const clientY = act?.clientY ?? act?.touches?.[0]?.clientY ?? grid.top
+      const padX = parseFloat(cs.paddingLeft || '0')
+      const padY = parseFloat(cs.paddingTop || '0')
+      const x = (clientX - grid.left) / overlayZoomRef.current - padX
+      const y = (clientY - grid.top) / overlayZoomRef.current - padY
+      // ⚠️ 指针自己记,不靠 onDragMove:它排在 React 渲染之后,主线程一忙,松手时最后几步还没算进来,
+      //    卡就落在手几十毫秒前的位置(G25 偶发红)。e.delta 也不用:它含滚动,而滚动量是 CSS px、指针是视觉 px。
+      const track = (ev: MouseEvent | TouchEvent): void => {
+        const p = 'touches' in ev ? ev.touches[0] : ev
+        const g = gestureRef.current
+        if (g && p) { g.clientX = p.clientX; g.clientY = p.clientY }
+      }
+      window.addEventListener('mousemove', track, true)
+      window.addEventListener('touchmove', track, { capture: true, passive: true })
+      gestureRef.current = {
+        clientX, clientY, grab: x - self.x, padX, padY, x, y, ax: x, ay: y, route: null, pending: null, timer: 0,
+        untrack: () => {
+          window.removeEventListener('mousemove', track, true)
+          window.removeEventListener('touchmove', track, true)
+        },
+      }
+    }
     setDragId(String(e.active.id))
   }
   const setPreviewPinsIfNew = (next: Dash3Pins): void => {
@@ -507,87 +550,141 @@ function GridInner({ leaf }: ViewProps) {
     previewPinsRef.current = next
     setPreviewPins(next)
   }
-  const onDragOver = (e: DragOverEvent): void => {
-    const from = String(e.active.id)
-    const over = e.over ? String(e.over.id) : null
-    if (!over || over === from) return
-    // 落在别的卡身上 = 老的顺序重排语义(G19 七条押着,一个字节不改)。被拖的那张顺势
-    // **退出手工行**回自动流 —— 它已经离开原来那一行了,留着 pin 就是两条路打架。
-    dropRef.current = null
-    const cleared = { ...pins }
-    delete cleared[from]
-    setPreviewPinsIfNew(cleared)
-    // diff 短路:目标序没变就不 setState(实时重排的 re-render 风暴由这一行挡住)。
-    const seq = previewRef.current ?? ordered
-    const next = reorderSeq(seq, from, over)
-    if (next.join('\n') === seq.join('\n')) return
-    previewRef.current = next
-    setPreviewSeq(next)
-  }
-  /** 空白落点(这轮新增):指针不在任何卡上时,把它换算成 (行带, 列) 摆进那一行,同行邻居
-   *  实时让位、行尾放不下的退回自动流 = 视觉上挤到下一行(用户拍板三条)。
-   *  ⚠️ 两个坐标系:cellW 来自 contentRect(CSS px),rect 来自 getBoundingClientRect(视觉 px)。
-   *  端级 zoom ≠ 1 时混算就是 DragOverlay 那次 ×1.25 漂移的同族 —— 一律先除掉起手实测的倍率。 */
-  const onDragMove = (e: DragMoveEvent): void => {
-    const id = String(e.active.id)
-    if (e.over && String(e.over.id) !== id) return // 卡上归 order 路(自己的占位不算)
-    if (isChrome(parseWidget(blocks[id]?.content ?? '')?.kind)) return // 分区标题恒整行,给它记行位是死键
-    if (!readPins.ok) return // 行位读不懂 = 这一笔落不了盘;别让手势看着能用、松手弹回
-    const rect = e.active.rect.current.translated
-    const host = gridRef.current
-    const grid = host?.getBoundingClientRect()
-    const self = geomRef.current.byId.get(id)
-    if (!rect || !host || !grid || !self || cellW <= 0) return
-    // 行/列的原点是**内容盒**,不是边框盒:`.dash3-grid` 两侧有页面留白(gridW 也是扣掉它量的)。
-    const cs = getComputedStyle(host)
-    const z = overlayZoomRef.current
-    // 列锚 = 卡片左沿(它就是要落进的那一格),行锚 = **指针**:高卡的几何中心离手指能有两百多像素,
-    // 拿中心判行会挑中手指根本没在的那一行(探针实证)。指针也正是 pointerWithin 判「在不在卡上」
-    // 用的点 —— 两条路同一个锚才不会互相打架。
-    const act = e.activatorEvent as { clientY?: number; touches?: ArrayLike<{ clientY: number }> } | null
-    const startY = typeof act?.clientY === 'number' ? act.clientY : act?.touches?.[0]?.clientY // 触屏是 TouchEvent
-    const pointerY = typeof startY === 'number' ? startY + e.delta.y : rect.top + rect.height / 2
-    const x = (rect.left - grid.left) / z - parseFloat(cs.paddingLeft || '0')
-    const y = (pointerY - grid.top) / z - parseFloat(cs.paddingTop || '0')
+  /** 指针 → 落点,整笔只这一条路。判定读排定的格子位:动画途中的 DOM 位置和 dnd-kit 的 over 都靠不住
+   *  (over 的 rect 只在顺序变时重量,行位预览不换序就过期)。返回 null = 这里不换。 */
+  const planDrop = (id: string, { bands, byId }: DragGeom, seq: string[], curPins: Dash3Pins): DragPlan | null => {
+    const g = gestureRef.current
+    if (!g) return null
+    const self = byId.get(id)
+    if (!self) return null
+    // 指针 = 落在谁身上;列锚 = 卡片左沿(它就是要落进的那一格)。高卡的几何中心离手指能有两百多像素,
+    // 拿中心判行会挑中手指根本没在的那一行(探针实证)。
+    const { x, y } = g
+    const plan = (nextSeq: string[], nextPins: Dash3Pins, route: DragPlan['route']): DragPlan | null => {
+      if (nextSeq.join('\n') === seq.join('\n') && samePins(curPins, nextPins)) return null
+      return { seq: nextSeq, pins: nextPins, route, key: planKey(nextSeq, nextPins) }
+    }
+    // 卡片间的缝算卡上,按「半条缝」归给两边:穿缝时不该绕去空白那条路摆行位。
+    const halfGap = DASH3_GAP_PX / 2
+    let over: string | null = null
+    for (const [cardId, c] of byId) {
+      if (x >= c.x - halfGap && x < c.x + c.pxW + halfGap && y >= c.y - halfGap && y < c.y + c.pxH + halfGap) {
+        over = cardId
+        if (cardId !== id) break
+      }
+    }
+    if (over && over !== id) {
+      // 落在别的卡身上 = 顺序重排。被拖的那张顺势**退出手工行**回自动流 —— 它已经离开原来那一行了,
+      // 留着 pin 就是两条路打架。过中线才换:换位后邻居挪开、指针还压在同一半边,不会立刻翻回去;
+      // 门槛只看起手序,同一位置算出同一结果,又能拖回原位。独占一行的卡看上下。
+      const c = byId.get(over)!
+      const frac = c.solo ? (y - c.y) / c.pxH : (x - c.x) / c.pxW
+      const nextSeq = moveBeside(seq, id, over, frac >= (ordered.indexOf(id) < ordered.indexOf(over) ? 0.45 : 0.55))
+      if (nextSeq.join('\n') !== seq.join('\n')) {
+        const cleared = { ...pins }
+        delete cleared[id]
+        return plan(nextSeq, cleared, 'order')
+      }
+      // 这一侧本来就是它的位置,顺序没得换,也就不算离开手工行。同一行里接着往邻居身上推 = 行内摆放(排斥)。
+      if (!bands.some((b) => b.ids.includes(id) && b.ids.includes(over as string))) return null
+    }
+    // 空白落点:把指针换算成 (行带, 列) 摆进那一行,同行邻居实时让位、行尾放不下的退回自动流 =
+    // 视觉上挤到下一行(用户拍板三条)。指针还在卡上(over 非空)时不一定是要摆行位:刚换过位的卡,
+    // 壳和占位本来就不对齐;排满的行没有空白可摆,一动就会把行尾挤下去。
+    if (isChrome(parseWidget(blocks[id]?.content ?? '')?.kind)) return null // 分区标题恒整行,给它记行位是死键
+    if (!readPins.ok || cellW <= 0) return null // 行位读不懂 = 这一笔落不了盘;别让手势看着能用、松手弹回
     const unit = DASH3_ROW_PX + DASH3_GAP_PX
-    const band = geomRef.current.bands.findIndex((b) => y >= b.top && y < b.top + b.h * unit)
-    if (band < 0) return
-    const actual = Math.round(x / (cellW + DASH3_GAP_PX))
+    const band = bands.findIndex((b) => y >= b.top && y < b.top + b.h * unit)
+    if (band < 0) return null
+    if (over && (g.route === 'order' || bands[band].used >= cols)) return null
+    const actual = Math.round((x - g.grab) / (cellW + DASH3_GAP_PX))
     const col = Math.max(0, Math.min(DASH3_COLS - self.w, Math.round((actual * DASH3_COLS) / cols)))
-    // 滞回:落点格没变就不重算(band 边界会随预览重排移动,不挡就是 A↔B 振荡 —— closestCenter
-    // 当年 Maximum update depth 的同族,坐标路里没有 pointerWithin 的自稳性可借)。
-    if (dropRef.current && dropRef.current.band === band && dropRef.current.col === col) return
-    dropRef.current = { band, col }
-    const members = geomRef.current.bands[band].ids.filter((m) => m !== id)
-    if (members.some((m) => isChrome(parseWidget(blocks[m]?.content ?? '')?.kind))) return // 分区标题恒整行
-    // ⚠️ 基线取**上一帧的预览**而不是磁盘那份:被顶出行尾的卡下一帧就不在这个 band 里了,
+    if (over && col === self.col) return null
+    const members = bands[band].ids.filter((m) => m !== id)
+    if (members.some((m) => isChrome(parseWidget(blocks[m]?.content ?? '')?.kind))) return null // 分区标题恒整行
+    // ⚠️ 同一行里基线取**上一帧的预览**而不是磁盘那份:被顶出行尾的卡下一帧就不在这个 band 里了,
     //    拿磁盘基线重算等于把它的旧行位又发回去 —— 渲染上它已经在下一行,存的却还是老列位
     //    (仪器实证:pin 该没了却还是 [1,6])。逐出是累积的,与「松手即定」同向。
-    const next = dropIntoRow(previewRef.current ?? ordered, previewPinsRef.current ?? pins, [
+    //    换到别的行则回起手状态:这一笔只有一个行号,上一行的预览留着,两行就并成一行了(G25 实证)。
+    const stay = bands[band].ids.includes(id)
+    const next = dropIntoRow(stay ? seq : ordered, stay ? curPins : pins, [
       { id, col, w: self.w }, // 正在拖的放首位:平手时「我挤进来、你让开」
-      ...members.map((m) => ({ id: m, col: geomRef.current.byId.get(m)?.col ?? 0, w: geomRef.current.byId.get(m)?.w ?? 1 })),
+      ...members.map((m) => ({ id: m, col: byId.get(m)?.col ?? 0, w: byId.get(m)?.w ?? 1 })),
     ], dragRowKeyRef.current)
-    setPreviewPinsIfNew(next.pins)
-    if (next.ids.join('\n') === (previewRef.current ?? ordered).join('\n')) return
-    previewRef.current = next.ids
-    setPreviewSeq(next.ids)
+    return plan(next.ids, next.pins, 'row')
   }
-  /** Esc 取消拖拽:预览序整份丢弃,卡片 FLIP 回原位;不清 dragId 的话那张卡会一直挂着
+  const applyPlan = (next: DragPlan): void => {
+    const g = gestureRef.current
+    if (g) { g.ax = g.x; g.ay = g.y; g.route = next.route; g.pending = null }
+    setPreviewPinsIfNew(next.pins)
+    if (next.seq.join('\n') === (previewRef.current ?? ordered).join('\n')) return
+    previewRef.current = next.seq
+    setPreviewSeq(next.seq)
+  }
+  /** ⚠️ 变尺寸卡片换一次位,整段能错开好几行,指针就压到另一张卡上,算出来又是上一态 —— 两道闸只能限速,
+   *  拦不住这种互翻(格点扫实证)。所以换之前先算一步:换完指针落在哪,会翻回现在这一态就不走。 */
+  const flipsBack = (id: string, next: DragPlan): boolean =>
+    planDrop(id, placeRows(composeRows(next.seq, next.pins)), next.seq, next.pins)?.key
+      === planKey(previewRef.current ?? ordered, previewPinsRef.current ?? pins)
+  /** 过闸就换。闸没过的落点留着,手再动时重算(onDragMove)。 */
+  const stepDrag = (id: string, dwelled: boolean): void => {
+    const g = gestureRef.current
+    if (!g?.pending) return
+    if (!dwelled && performance.now() - g.pending.at < DRAG_DWELL_MS) return
+    if (Math.hypot(g.x - g.ax, g.y - g.ay) < DRAG_TRAVEL_PX) return
+    const next = g.pending.plan
+    if (flipsBack(id, next)) { g.pending = null; return }
+    applyPlan(next)
+  }
+  /** 视口指针 → 内容盒坐标。原点每次现量:页面在滚、拖动中窗口变宽(居中的网格会横移)都算进去。 */
+  const syncPointer = (): void => {
+    const g = gestureRef.current
+    const grid = gridRef.current?.getBoundingClientRect()
+    if (!g || !grid) return
+    g.x = (g.clientX - grid.left) / overlayZoomRef.current - g.padX
+    g.y = (g.clientY - grid.top) / overlayZoomRef.current - g.padY
+  }
+  const onDragMove = (e: DragMoveEvent): void => {
+    const g = gestureRef.current
+    if (!g) return
+    syncPointer()
+    const id = String(e.active.id)
+    const next = planDrop(id, geomRef.current, previewRef.current ?? ordered, previewPinsRef.current ?? pins)
+    if (next && next.key === g.pending?.plan.key) { stepDrag(id, false); return }
+    window.clearTimeout(g.timer)
+    g.pending = next && { plan: next, at: performance.now() }
+    if (next) g.timer = window.setTimeout(() => stepDrag(id, true), DRAG_DWELL_MS)
+  }
+  /** Esc 取消拖拽:预览序整份丢弃,卡片弹回原位;不清 dragId 的话那张卡会一直挂着
    *  data-dragging 的透明度与层级(Codex 评审)。 */
   const endDrag = (): { nonce: unknown; seq: string[] | null; pins: Dash3Pins | null } => {
     const out = { nonce: dragNonce.current, seq: previewRef.current, pins: previewPinsRef.current }
     dragNonce.current = null
     previewRef.current = null
     previewPinsRef.current = null
-    dragCellsRef.current = null
-    dropRef.current = null
+    if (gestureRef.current) {
+      window.clearTimeout(gestureRef.current.timer)
+      gestureRef.current.untrack()
+    }
+    gestureRef.current = null
     setDragId(null)
     setPreviewSeq(null)
     setPreviewPins(null)
     return out
   }
   const onDragCancel = (): void => { endDrag() }
-  const onDragEnd = (): void => {
+  const onDragEnd = (e: DragEndEvent): void => {
+    // 按手最后的位置再算一次。新落点和还在停留窗口里的落点算数(快甩就松手不等);等够了还没换的是被闸挡下的,
+    // 不算,防回摆拒掉的也不算 —— 屏幕上是什么就落什么。
+    const g = gestureRef.current
+    const id = String(e.active.id)
+    if (g) {
+      syncPointer()
+      const next = planDrop(id, geomRef.current, previewRef.current ?? ordered, previewPinsRef.current ?? pins)
+      const fresh = next && (next.key !== g.pending?.plan.key || performance.now() - g.pending.at < DRAG_DWELL_MS)
+      if (next && fresh && Math.hypot(g.x - g.ax, g.y - g.ay) >= DRAG_TRAVEL_PX && !flipsBack(id, next)) applyPlan(next)
+    }
+    landingRef.current = id
     const { nonce, seq, pins: nextPins } = endDrag()
     // ⚠️ 「行内平移」这一支顺序压根没变(previewSeq 恒 null),不能被 `if (!seq) return` 吞掉 ——
     //    实证:第一版就是这样把 pin 落盘整个丢了(探针里 frontmatter 一个字节没动)。
@@ -803,12 +900,10 @@ function GridInner({ leaf }: ViewProps) {
 
   a11yRef.current = { seq: displaySeq, name: (id: string) => { const c = cardOf(id); return c.title || c.widget?.opts.title || c.widget?.opts.label || t('dashgrid.a11y.untitled') } }
 
-  const effPins = previewPins ?? pins
-  const composedRows = layoutDash3Rows(displaySeq.map((id) => {
+  const composeRows = (seq: string[], rowPins: Dash3Pins) => layoutDash3Rows(seq.map((id) => {
     const profile = profileOf(blocks[id]?.content ?? '')
-    const stored = layout[id] ?? cellForSize(profile.defaultSize)
-    const frozen = dragCellsRef.current?.get(id)
-    const base = frozen ? { ...stored, w: frozen.w, h: frozen.h } : stored
+    // ⚠️ 拖动中不冻结档位:预览与落盘必须吃同一份输入,否则松手时 DP 重排,卡会再跳一次(探针实证 6×3 → 3×2)。
+    const base = layout[id] ?? cellForSize(profile.defaultSize)
     const live = sizing?.id === id ? { ...base, ...sizing } : base
     const chrome = isChrome(parseWidget(blocks[id]?.content ?? '')?.kind)
     // ⚠️ 自定义档必须夹每轴下界:存量布局里低于最小声明档的尺寸(旧文件/手写)不许被
@@ -821,38 +916,46 @@ function GridInner({ leaf }: ViewProps) {
     // 还在默认档的卡(从没动过/模板刚落)保留具名档备选,自动拼行照旧(拍板保留的 DP 观感)。
     // 摆过位置(有 pin)同样蕴含「尺寸是铁的」:DP 换档会当场把手工行的列位算错。
     const def = dash3Size(profile.defaultSize)
-    const untouched = !effPins[id] && (!layout[id] || (layout[id].w === def.w && layout[id].h === def.h))
+    const untouched = !rowPins[id] && (!layout[id] || (layout[id].w === def.w && layout[id].h === def.h))
     const choices = sizing?.id === id || !untouched
       ? [custom]
       : [custom, ...profile.sizes.map((key) => dash3Size(key)).filter((s) => s.w !== custom.w || s.h !== custom.h)]
     return { id, preferred: live, choices, chrome }
-  }), effPins, cols)
+  }), rowPins, cols)
 
   /** 编排行 → 单一 CSS Grid 的显式坐标。**只有一个 grid 容器、卡片永不换父** —— 跨行移动
-   *  因此是同一实例的位移,framer layout FLIP 天然成立(多行容器时代的「淡出+淡入」与
+   *  因此是同一实例的位移,useCellSpring 天然成立(多行容器时代的「淡出+淡入」与
    *  退场残影都是 reparent 的产物)。两轴都显式定位,不留任何 auto-flow。 */
-  const placed: Array<{ id: string; rowStart: number; rowSpan: number; colStart: number; colSpan: number; size: DashboardCardSize; cell: Cell; chrome?: boolean }> = []
-  {
+  const stepX = cellW + DASH3_GAP_PX
+  const stepY = DASH3_ROW_PX + DASH3_GAP_PX
+  const placeRows = (rows: ReturnType<typeof composeRows>) => {
+    const slots: Array<{ id: string; rowStart: number; rowSpan: number; colStart: number; colSpan: number; size: DashboardCardSize; cell: Cell; chrome?: boolean }> = []
+    const geom: DragGeom = { bands: [], byId: new Map() }
     let unit = 1
-    const bands: Array<{ top: number; h: number; ids: string[] }> = []
-    const byId = new Map<string, { col: number; w: number }>()
-    for (const row of composedRows) {
+    for (const row of rows) {
       let cursor = 1
       const members: string[] = []
       for (const item of row.items) {
         const colStart = item.start ?? cursor
         // ⚠️ rowSpan 用**每卡自己的** h,不是行高:手工行允许不等高并排(band 高 = 最高那张,
         //    矮卡下方留白),这一条是「6×5 大卡右边塞得下 3×2 小挂件」的全部落点。
-        placed.push({ id: item.id, rowStart: unit, rowSpan: item.h, colStart, colSpan: item.span, size: item.size, cell: item.cell, chrome: item.chrome })
+        slots.push({ id: item.id, rowStart: unit, rowSpan: item.h, colStart, colSpan: item.span, size: item.size, cell: item.cell, chrome: item.chrome })
         cursor = colStart + item.span
         members.push(item.id)
-        byId.set(item.id, { col: Math.round(((colStart - 1) * DASH3_COLS) / cols), w: item.cell.w })
+        geom.byId.set(item.id, {
+          col: Math.round(((colStart - 1) * DASH3_COLS) / cols), w: item.cell.w,
+          x: (colStart - 1) * stepX, y: (unit - 1) * stepY,
+          pxW: item.span * stepX - DASH3_GAP_PX, pxH: item.h * stepY - DASH3_GAP_PX,
+          solo: row.items.length === 1,
+        })
       }
-      bands.push({ top: (unit - 1) * (DASH3_ROW_PX + DASH3_GAP_PX), h: row.h, ids: members })
+      geom.bands.push({ top: (unit - 1) * stepY, h: row.h, ids: members, used: row.items.reduce((sum, item) => sum + item.span, 0) })
       unit += row.h
     }
-    geomRef.current = { bands, byId }
+    return { slots, ...geom }
   }
+  const { slots: placed, ...geom } = placeRows(composeRows(displaySeq, previewPins ?? pins))
+  geomRef.current = geom
   visualCellsRef.current = new Map(placed.map((f) => [f.id, f.cell]))
 
   /** DragOverlay 的跟手壳:只画外壳与标题,**绝不二次挂载活视图**(嵌卡带 PageScope/loadPage
@@ -988,18 +1091,14 @@ function GridInner({ leaf }: ViewProps) {
       {/* 页面级筛选下发接缝:卡里的多维表 chart 视图经 DashFiltersCtx 消费(围栏数据卡走
           WidgetCard 的 filters prop,两条都吃 —— 一处改、全页跟随)。 */}
       <DashFiltersCtx.Provider value={dashFilters}>
-      <motion.div layoutScroll ref={hostRef} className="dash3-host" data-locked={locked || undefined} onPointerMove={onGripMove} onPointerUp={onGripUp} onPointerCancel={onGripUp}>
+      <div ref={hostRef} className="dash3-host" data-locked={locked || undefined} onPointerMove={onGripMove} onPointerUp={onGripUp} onPointerCancel={onGripUp}>
         <DndContext
           sensors={sensors}
-          // ⚠️ 必须 pointerWithin,不是 closestCenter:预览让位后各卡中心全变,closestCenter 会在
-          //    两个邻居间来回翻转 → 布局 A↔B 振荡直到 React 掐死(Maximum update depth,实测)。
-          //    「指针落在谁身上才算 over」则重排后指针落在占位卡自己身上,天然自稳。
+          // over 不再决定落点(见 planDrop)。留 pointerWithin:closestCenter 在让位时每帧都要算一遍全部卡的中心。
           collisionDetection={pointerWithin}
           accessibility={accessibility}
-          measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
           onDragStart={onDragStart}
           onDragMove={onDragMove}
-          onDragOver={onDragOver}
           onDragEnd={onDragEnd}
           onDragCancel={onDragCancel}
         >
@@ -1023,6 +1122,9 @@ function GridInner({ leaf }: ViewProps) {
                         rowSpan={rowSpan}
                         colStart={colStart}
                         colSpan={colSpan}
+                        stepX={stepX}
+                        stepY={stepY}
+                        snap={!!reduceMotion || landingRef.current === id}
                         locked={locked}
                         chrome={isChrome(meta.widget?.kind)}
                         kind={meta.widget?.kind ?? 'text'}
@@ -1083,7 +1185,7 @@ function GridInner({ leaf }: ViewProps) {
             </div>
           </div>
         )}
-      </motion.div>
+      </div>
       </DashFiltersCtx.Provider>
 
       {cardMenu && !locked && (
@@ -1149,10 +1251,62 @@ function GridInner({ leaf }: ViewProps) {
   )
 }
 
+/** 卡换格时的弹簧(临界阻尼,不回弹):从当前位置、当前大小,带着当前速度走向新格。
+ *  不用 framer 的 layout 动画:它每次打断都从零速重启(`velocity: 0` 写死),连续让位时卡走走停停;
+ *  它量视觉 px 再写 CSS px,body zoom 110% 时换位第一帧先往反方向跳约 5%(实测);改档时靠 scale,内容会被压扁。
+ *  这里按格子算,不量 DOM;位置走 transform,大小走真实宽高。写在内层卡上:外层 slot 的 transform 归 framer。 */
+const SPRING_K = 420
+const SPRING_D = 41
+function useCellSpring(ref: RefObject<HTMLElement | null>, cell: string, box: readonly number[], snap: boolean): void {
+  const s = useRef({ cell, box, off: [0, 0, 0, 0], vel: [0, 0, 0, 0], raf: 0, last: 0 }).current
+  const [x, y, w, h] = box
+  useLayoutEffect(() => {
+    const el = ref.current
+    const delta = s.box.map((v, i) => v - box[i])
+    const moved = s.cell !== cell
+    s.cell = cell
+    s.box = box // 窗宽变化只改像素不换格:记下新基线,不算走位
+    if (!el) return
+    const paint = (): void => {
+      const [ox, oy, ow, oh] = s.off
+      el.style.transform = ox || oy ? `translate(${ox}px, ${oy}px)` : ''
+      el.style.width = ow ? `calc(100% + ${ow}px)` : ''
+      el.style.height = oh ? `calc(100% + ${oh}px)` : ''
+    }
+    const rest = (): void => {
+      s.off = [0, 0, 0, 0]
+      s.vel = [0, 0, 0, 0]
+      s.raf = 0
+      paint()
+    }
+    if (snap) {
+      cancelAnimationFrame(s.raf)
+      rest()
+      return
+    }
+    if (!moved) return
+    s.off = s.off.map((v, i) => v + delta[i])
+    paint()
+    if (s.raf) return
+    s.last = performance.now()
+    const tick = (t: number): void => {
+      const dt = Math.min(32, t - s.last) / 1000
+      s.last = t
+      s.vel = s.vel.map((v, i) => v + (-SPRING_K * s.off[i] - SPRING_D * v) * dt)
+      s.off = s.off.map((v, i) => v + s.vel[i] * dt)
+      if (Math.max(...s.off.map(Math.abs)) < 0.3 && Math.max(...s.vel.map(Math.abs)) < 8) { rest(); return }
+      paint()
+      s.raf = requestAnimationFrame(tick)
+    }
+    s.raf = requestAnimationFrame(tick)
+  }, [ref, cell, x, y, w, h, snap, s]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => cancelAnimationFrame(s.raf), [s])
+}
+
 /** 统一外壳。**卡片长什么样只由这里决定** —— 圆角、描边、内边距、标题条、把手全在这一层,
  *  卡里装的是日历还是笔记都一个样。这是「统一」的唯一来源。 */
 function GridCard({
-  id, rowStart, rowSpan, colStart, colSpan, locked, chrome, kind, surface, size, dragging, sizing, interact, reduceMotion, title, Icon, children,
+  id, rowStart, rowSpan, colStart, colSpan, stepX, stepY, snap, locked, chrome, kind, surface, size, dragging, sizing, interact, reduceMotion, title, Icon, children,
   onOpen, onInteract, onDelete, onMenu, onGripDown,
 }: {
   id: string
@@ -1160,6 +1314,9 @@ function GridCard({
   rowSpan: number
   colStart: number
   colSpan: number
+  stepX: number
+  stepY: number
+  snap: boolean
   locked: boolean
   chrome: boolean
   kind: string
@@ -1179,9 +1336,10 @@ function GridCard({
   onGripDown: (e: React.PointerEvent) => void
 }) {
   const { t } = useI18n()
-  // transition: null = 把 transform 的主权整个交给 framer(dnd-kit 官方混用示例的铁律);
-  // strategy 恒 null,所以这里也不再消费 transform —— 位移一律是真实布局变化 + layout FLIP。
+  // transition: null + strategy 恒 null:dnd-kit 不碰 transform,位移一律是真实布局变化 + useCellSpring。
   const { attributes, listeners, setNodeRef, isDragging } = useSortable({ id, disabled: locked, transition: null })
+  const cardRef = useRef<HTMLDivElement>(null)
+  useCellSpring(cardRef, `${rowStart}/${colStart}/${rowSpan}/${colSpan}`, [(colStart - 1) * stepX, (rowStart - 1) * stepY, colSpan * stepX - DASH3_GAP_PX, rowSpan * stepY - DASH3_GAP_PX], snap)
   const slotStyle: React.CSSProperties = {
     gridRow: `${rowStart} / span ${rowSpan}`,
     gridColumn: `${colStart} / span ${colSpan}`,
@@ -1189,18 +1347,15 @@ function GridCard({
   return (
     <motion.div
       ref={setNodeRef}
-      // 一切几何变化(重排/改档/在途 resize 的每次落格)都走 FLIP。在途 resize 用更短的补间:
-      // 首版「瞬时落格」被用户报「太生硬」(2026-08-31)—— 指针数学始终对起手几何算(onGripMove
-      // 不读 DOM rect),补间不会形成反馈环。
-      layout
       className="dash3-card-slot"
       style={slotStyle}
       initial={reduceMotion ? false : { opacity: 0, scale: 0.97, y: 8 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={reduceMotion ? { opacity: 0 } : { opacity: 0, scale: 0.96, y: -6 }}
-      transition={{ duration: reduceMotion ? 0 : sizing ? 0.16 : 0.28, ease: [0.16, 1, 0.3, 1] }}
+      transition={{ duration: reduceMotion ? 0 : 0.28, ease: [0.16, 1, 0.3, 1] }}
     >
       <div
+        ref={cardRef}
         className={`dash3-card${chrome ? ' dash3-card--chrome' : ''}`}
         data-key={id}
         data-kind={kind}

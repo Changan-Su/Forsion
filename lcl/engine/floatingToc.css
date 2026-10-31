@@ -1,4 +1,6 @@
-/* Shared LCL floating TOC: Chat, Amadeus, and ctx.ui.mountFloatingToc use this exact skin. */
+/* Shared LCL floating TOC: Chat, Amadeus, and ctx.ui.mountFloatingToc use this exact skin.
+ * 外观和动效的口径在 DESIGN §6「悬浮目录」。折叠态是刻度,展开态从当前项的刻度里流出一张面板(液滴,DESIGN §3)。 */
+:root { --lcl-ftoc-gutter: 36px; } /* 目录占的那条沟。正文要让开就读它,见 ui-components.md */
 .lcl-ftoc-mount-layer { position: absolute; inset: 0; pointer-events: none; }
 .lcl-ftoc-frame {
   z-index: 20;
@@ -6,93 +8,141 @@
 }
 .lcl-ftoc-frame.is-overlay { position: absolute; inset: 0; }
 .lcl-ftoc-frame.is-sticky { position: sticky; top: 50%; height: 0; width: 100%; }
+/* 根就是刻度的命中区。⚠️ 别用 transform 居中:液体层是 fixed,transform 会变成它的包含块 */
 .lcl-ftoc {
   position: absolute;
   top: 50%;
-  left: 8px;
-  transform: translateY(-50%);
+  left: 2px;
+  width: 32px;
+  height: calc(var(--rail-h) + 16px);
+  margin-top: calc(var(--rail-h) / -2 - 8px);
   pointer-events: auto;
-  box-sizing: border-box;
-  width: 28px;
-  max-height: 70vh;
-  overflow: clip;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding: 6px;
-  border: var(--border-width, 1px) solid transparent;
-  border-radius: var(--radius-md, 12px);
-  background: transparent;
-  transition: width var(--duration-fast, 0.2s) ease;
-  will-change: width;
+  animation: lcl-ftoc-in var(--menu-enter-duration, 180ms) var(--ease-surface, ease) backwards;
 }
-.lcl-ftoc-frame[data-side='right'] .lcl-ftoc { left: auto; right: 8px; }
+@keyframes lcl-ftoc-in { from { opacity: 0; } }
+@keyframes lcl-ftoc-out { to { opacity: 0; } }
+.lcl-ftoc-rail { position: absolute; inset: 0; }
+.lcl-ftoc-rail[data-lcl-exit] { animation: lcl-ftoc-out var(--duration-fast, 0.15s) var(--ease-exit, ease) forwards; }
 .lcl-ftoc-frame.is-sticky .lcl-ftoc { top: 0; }
-.lcl-ftoc:not(.open) .lcl-ftoc-item { flex: 1 1 0; min-height: 0; }
-.lcl-ftoc.open {
-  width: min(248px, calc(100% - 16px));
-  max-height: 56vh;
-  gap: 2px;
-  padding: 8px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  background: var(--bg-card, var(--bg));
-  border-color: var(--border);
-  box-shadow: var(--card-shadow);
-  backdrop-filter: blur(8px);
-}
-[data-glass='off'] .lcl-ftoc.open { backdrop-filter: none; }
-.lcl-ftoc-item {
-  display: flex;
-  align-items: center;
-  gap: 0;
-  width: 100%;
-  min-height: 2px;
+.lcl-ftoc-frame[data-side='right'] .lcl-ftoc { left: auto; right: 2px; }
+.lcl-ftoc-hit {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
   padding: 0;
   border: 0;
-  text-align: start;
-  white-space: nowrap;
-  overflow: hidden;
-  cursor: pointer;
-  color: var(--text-muted);
-  background: transparent;
-  font: inherit;
-  font-size: var(--ui-font-caption, 11px);
-  line-height: 1.35;
   border-radius: var(--radius-sm, 8px);
+  background: none;
+  cursor: pointer;
 }
-.lcl-ftoc.open .lcl-ftoc-item { gap: 8px; padding-block: 5px; padding-inline-end: 8px; }
-.lcl-ftoc.open .lcl-ftoc-item:hover { background: var(--overlay-light); color: var(--text); }
-.lcl-ftoc.open .lcl-ftoc-item.active {
-  background: var(--accent-light, var(--overlay-light));
-  color: var(--accent-ink);
-  font-weight: 600;
-}
-.lcl-ftoc-bar {
-  height: 2px;
-  width: 4px;
-  flex: none;
+.lcl-ftoc-hit:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: -2px; }
+.lcl-ftoc-tick {
+  position: absolute;
+  left: 6px;
+  top: 8px;
+  width: 20px;
+  height: var(--th, 2px);
   border-radius: var(--radius-pill, 9999px);
-  transform-origin: left;
   background: var(--text-muted);
-  opacity: 0.35;
-  transition: transform var(--duration-fast, 0.2s) ease, background var(--duration-fast, 0.2s) ease, opacity var(--duration-fast, 0.2s) ease;
-  will-change: transform;
+  transform-origin: left;
+  transform: translateY(var(--y)) translateY(-50%) scaleX(var(--l));
+  opacity: calc(var(--o) * 0.6);
+  transition: opacity var(--duration-slow, 0.25s) linear;
 }
-.lcl-ftoc-frame[data-side='right'] .lcl-ftoc-bar { transform-origin: right; }
-.lcl-ftoc-item.active .lcl-ftoc-bar { background: var(--signal-mark, var(--accent-ink)); }
-.lcl-ftoc-item.primary .lcl-ftoc-bar { opacity: 0.6; }
-.lcl-ftoc.open .lcl-ftoc-item.primary .lcl-ftoc-text { font-weight: 600; }
-.lcl-ftoc-text {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0;
-  transition: opacity var(--duration-fast, 0.15s) ease;
-  will-change: opacity;
+.lcl-ftoc.awake .lcl-ftoc-tick,
+.lcl-ftoc.hot .lcl-ftoc-tick { opacity: var(--o); }
+/* 当前项:一个标记沿着刻度滑,不是旧刻度缩回去、新刻度长出来。水珠是液滴的源 */
+.lcl-ftoc-mark {
+  position: absolute;
+  z-index: 3;
+  left: 6px;
+  top: 8px;
+  width: 0;
+  height: 0;
+  transform: translateY(var(--my));
+  transition: transform var(--duration-fast, 0.15s) var(--ease-calm, ease);
 }
-.lcl-ftoc.open .lcl-ftoc-text { opacity: 1; }
+.lcl-ftoc-pin {
+  position: absolute;
+  left: 0;
+  top: -1px;
+  width: 20px;
+  height: 2px;
+  border-radius: var(--radius-pill, 9999px);
+  background: var(--accent-ink);
+  transform-origin: left;
+  transform: scaleX(var(--ml));
+  transition: transform var(--duration-fast, 0.15s) var(--ease-calm, ease);
+}
+.lcl-ftoc-bead {
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-ink);
+}
+.lcl-ftoc-source { position: absolute; left: -5px; top: -9px; width: 34px; height: 18px; border-radius: 9px; }
+.lcl-ftoc-frame[data-side='right'] :is(.lcl-ftoc-tick, .lcl-ftoc-mark) { left: auto; right: 6px; }
+.lcl-ftoc-frame[data-side='right'] :is(.lcl-ftoc-tick, .lcl-ftoc-pin) { transform-origin: right; }
+.lcl-ftoc-frame[data-side='right'] .lcl-ftoc-pin { left: auto; right: 0; }
+.lcl-ftoc-frame[data-side='right'] .lcl-ftoc-bead { left: auto; right: -4px; }
+.lcl-ftoc-frame[data-side='right'] .lcl-ftoc-source { left: auto; right: -5px; }
+.lcl-ftoc-panel {
+  position: absolute;
+  z-index: 2;
+  left: 40px;
+  box-sizing: border-box;
+  width: fit-content;
+  min-width: 168px;
+  max-width: 248px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none; /* 展开时定位到当前项会闪一下系统滚动条,贴着液体的边很硬;位置已由刻度表示 */
+  background: var(--bg-card, var(--bg));
+  border: var(--border-width, 1px) solid var(--border);
+  border-radius: var(--radius-md, 12px);
+  box-shadow: var(--card-shadow);
+}
+.lcl-ftoc-frame[data-side='right'] .lcl-ftoc-panel { left: auto; right: 40px; }
+.lcl-ftoc-list { position: relative; display: flex; flex-direction: column; padding: 6px; }
+.lcl-ftoc-hl {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  top: 6px;
+  height: 28px;
+  border-radius: var(--radius-sm, 8px);
+  background: var(--accent-light, var(--overlay-light));
+  transform: translateY(var(--hy));
+  transition: transform var(--duration-fast, 0.15s) var(--ease-calm, ease);
+}
+.lcl-ftoc-item {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--radius-sm, 8px);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--ui-font-body, 13px);
+  text-align: start;
+  cursor: pointer;
+}
+.lcl-ftoc-item.primary { color: var(--text); }
+.lcl-ftoc-item:hover { background: var(--overlay-light); color: var(--text); }
+.lcl-ftoc-item:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: -2px; }
+.lcl-ftoc-item.active { color: var(--accent-ink); font-weight: 500; }
+.lcl-ftoc-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) {
-  .lcl-ftoc,
-  .lcl-ftoc-bar,
-  .lcl-ftoc-text { transition: none; }
+  .lcl-ftoc { animation: none; }
+  .lcl-ftoc-mark,
+  .lcl-ftoc-pin,
+  .lcl-ftoc-hl { transition: none; }
 }
