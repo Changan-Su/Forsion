@@ -1,7 +1,7 @@
 /** Calendar Space UIUX 真 Electron 回归：隔离 Vault，不碰用户数据。
  *  2026-10-16 方案 B + 方向 1(docs/ToBeImproved/Calendar交互与待办右栏方案_2026-10-16/):左栏小月历 + 日历列表、右栏待办;
  *  同日用户改口:编辑事件在事件旁的浮卡、草稿的选日历 / 保存在草稿块旁的草稿卡,右栏不再换成详情 / 草稿面板;
- *  单击空白 = 草稿(不落盘)、按住拖 = 时长、全天行横拖 = 多天;拖动吸附 + ⌘Z;待办拖进时间格;快速添加认自然语言日期。
+ *  双击空白 = 30 分钟草稿(不落盘,单击不建)、按住拖 = 时长、全天行横拖 = 多天;拖动吸附 + ⌘Z;待办拖进时间格;快速添加认自然语言日期。
  *  夹具拆成两张表:「产品日历」只有日期列(日程),「待办」带勾选列(待办来源)—— 只有日期的待办不进全天行。
  *  插件档(10-17,日历核心插件化方案 B 并行双跑):CALENDAR_PLUGIN_DIR=<Forsion-Calendar 检出> 时先把打好的插件
  *  (manifest.json / main.js / spaces/)装进隔离 home,内置日历应当让位,下面同一套检查对插件版跑;Astryx 作用域那几条插件版不适用(插件不用 Astryx),跳过。 */
@@ -419,14 +419,20 @@ async function main() {
     check('待办行显示今天/逾期等日期状态', dueLabels.some((x) => x.startsWith('今天')) && dueLabels.some((x) => x.startsWith('逾期')), JSON.stringify(dueLabels))
     check('来源配置只保留一个主“添加日历”入口', (await win.getByRole('button', { name: /添加日历/ }).count()) === 1)
 
-    // ── 新建:单击 = 草稿(不落盘);Esc / 没写标题就点别处 = 丢弃;按住拖 = 时长;全天行横拖 = 多天 ──
+    // ── 新建:双击 = 30 分钟草稿(不落盘),单击不建;Esc / 没写标题就点别处 = 丢弃;按住拖 = 时长;全天行横拖 = 多天 ──
     await win.keyboard.press('Escape')
     await alignWeekGrid(win, 7)
     await win.waitForTimeout(1200) // 上一步「删除 → 撤销」的写盘落地后再取基线
     const eventsBefore = readRows(EVENTS_DB).length
     const p13 = await slotPoint(win, d1, 13 * 60)
     await win.mouse.click(p13.x, p13.y)
+    await win.waitForTimeout(500)
+    const afterClick = await win.evaluate(() => ({ draft: [...document.querySelectorAll('.amx-cal-draft')].map((d) => d.className), hoverslot: document.querySelectorAll('.amx-cal-hoverslot').length }))
+    check('单击空白不建草稿,也没有悬停预览块', !afterClick.draft.length && !afterClick.hoverslot, JSON.stringify(afterClick))
+    await win.mouse.dblclick(p13.x, p13.y)
     await win.waitForSelector('.amx-cal-event.amx-cal-draft', { timeout: 3000 })
+    const draftSpan = await win.evaluate(() => ({ h: document.querySelector('.amx-cal-event.amx-cal-draft').offsetHeight, hour: document.querySelector('.amx-cal-hour').offsetHeight }))
+    check('双击建的草稿默认 30 分钟', Math.abs(draftSpan.h - draftSpan.hour / 2) <= 3, JSON.stringify(draftSpan))
     const draftGeo = () => win.evaluate(() => {
       const c = document.querySelector('.amx-cal-draftcard')?.getBoundingClientRect()
       const b = document.querySelector('.amx-cal-event.amx-cal-draft')?.getBoundingClientRect()
@@ -435,7 +441,7 @@ async function main() {
     })
     await win.waitForTimeout(250) // 卡片的弹出动画(0.16s,自上方 6px 落下)走完再量
     const draftUi = await draftGeo()
-    check('单击空白 = 草稿:标题光标在格子里,草稿块旁弹出草稿卡,右栏照旧是待办', draftUi.focus && draftUi.card && draftUi.beside && draftUi.inMain && draftUi.todo, JSON.stringify(draftUi))
+    check('双击空白 = 草稿:标题光标在格子里,草稿块旁弹出草稿卡,右栏照旧是待办', draftUi.focus && draftUi.card && draftUi.beside && draftUi.inMain && draftUi.todo, JSON.stringify(draftUi))
     // 草稿卡跟着草稿块走:时间格竖着滚一段,卡片与块的相对位置不变
     // 往能滚的方向滚 40(滚到底时 += 40 是空操作),量完原样还回去 —— 后面的落点是滚动前取的
     const scrolled = await win.evaluate(() => { const sc = document.querySelector('.amx-cal-tscroll'); const st0 = sc.scrollTop; sc.scrollTop = st0 > 60 ? st0 - 40 : st0 + 40; return { st0, d: sc.scrollTop - st0 } })
@@ -457,14 +463,14 @@ async function main() {
     await win.waitForTimeout(300)
     const afterEsc = { draft: await hasDraft(win), rows: readRows(EVENTS_DB).length, before: eventsBefore }
     check('草稿 Esc 丢弃,表里不多一行', !afterEsc.draft && afterEsc.rows === eventsBefore, JSON.stringify(afterEsc))
-    await win.mouse.click(p13.x, p13.y)
+    await win.mouse.dblclick(p13.x, p13.y)
     await win.waitForSelector('.amx-cal-event.amx-cal-draft', { timeout: 3000 })
     const p18 = await slotPoint(win, d1, 18 * 60)
     await win.mouse.click(p18.x, p18.y)
     await win.waitForTimeout(400)
     const afterAway = { draft: await hasDraft(win), rows: readRows(EVENTS_DB).length, before: eventsBefore }
     check('没写标题就点到别处 = 丢弃;这一下只用来退出,不另起草稿', !afterAway.draft && afterAway.rows === eventsBefore, JSON.stringify(afterAway))
-    await win.mouse.click(p13.x, p13.y)
+    await win.mouse.dblclick(p13.x, p13.y)
     await win.waitForSelector('.amx-cal-event.amx-cal-draft', { timeout: 3000 })
     await win.keyboard.press('Enter')
     await win.waitForTimeout(500)
@@ -476,7 +482,7 @@ async function main() {
       return [...document.querySelectorAll('.amx-cal-daycol2')].filter((c) => { const r = c.getBoundingClientRect(); return r.left >= v.left - 1 && r.right <= v.right + 1 }).at(-1)?.dataset.date ?? null
     })
     const pEdge = await slotPoint(win, lastDay, 18 * 60)
-    await win.mouse.click(pEdge.x, pEdge.y)
+    await win.mouse.dblclick(pEdge.x, pEdge.y)
     await win.waitForSelector('.amx-cal-event.amx-cal-draft', { timeout: 3000 }).catch(() => {})
     await win.waitForTimeout(250)
     const edgeUi = await draftGeo()
@@ -579,8 +585,8 @@ async function main() {
     await win.keyboard.press('Escape')
     check('当日日程列表支持 Esc 关闭', (await win.locator('.amx-cal-agenda').count()) === 0)
     const mcell = await win.evaluate((iso) => { const c = document.querySelector(`.amx-cal-mcell[data-date="${iso}"]`)?.getBoundingClientRect(); return c ? { x: c.left + c.width / 2, y: c.bottom - 6 } : null }, d2)
-    await win.mouse.click(mcell.x, mcell.y)
-    check('月视图单击空白格 = 当天全天草稿', await win.waitForSelector('.amx-cal-mcell .amx-cal-draft', { timeout: 3000 }).then(() => true, () => false))
+    await win.mouse.dblclick(mcell.x, mcell.y)
+    check('月视图双击空白格 = 当天全天草稿', await win.waitForSelector('.amx-cal-mcell .amx-cal-draft', { timeout: 3000 }).then(() => true, () => false))
     await win.keyboard.press('Escape')
     await win.keyboard.press('w')
     await win.waitForSelector('.amx-cal-tscroll', { timeout: 5000 })
@@ -602,7 +608,7 @@ async function main() {
       return { x: rect.left + rect.width / 2, y: rect.top + ((min / 60) * hourPx + 4) * zoom, zoom }
     })
     if (!createPoint) throw new Error('无法计算 125% 缩放下的创建落点')
-    await win.mouse.click(createPoint.x, createPoint.y)
+    await win.mouse.dblclick(createPoint.x, createPoint.y)
     await win.waitForSelector('.amx-cal-event.amx-cal-draft', { timeout: 5000 })
     const draftDelta = await win.evaluate(({ zoom }) => {
       const d = document.querySelector('.amx-cal-event.amx-cal-draft')
@@ -622,7 +628,7 @@ async function main() {
       const hourPx = timerow ? parseFloat(getComputedStyle(timerow).getPropertyValue('--amx-hour-px')) || 44 : 44
       return er && cr ? { eventDelta: Math.abs(er.top - (cr.top + 14.25 * hourPx * zoom)) } : null
     }, createPoint)
-    check('125% 缩放下单击建的草稿与保存后的事件都命中鼠标所在的刻', draftDelta !== null && draftDelta <= 2.5 && createLanding && createLanding.eventDelta <= 2.5, JSON.stringify({ draftDelta, ...createLanding }))
+    check('125% 缩放下双击建的草稿与保存后的事件都命中鼠标所在的刻', draftDelta !== null && draftDelta <= 2.5 && createLanding && createLanding.eventDelta <= 2.5, JSON.stringify({ draftDelta, ...createLanding }))
     await win.keyboard.press('Escape')
 
     await alignWeekGrid(win, 7)
@@ -759,7 +765,7 @@ async function main() {
       return [...document.querySelectorAll('.amx-cal-daycol2')].filter((c) => { const r = c.getBoundingClientRect(); return r.left >= v.left - 1 && r.right <= v.right + 1 }).at(-1)?.dataset.date ?? null
     })
     const pShot = await slotPoint(win, edgeDay, 11 * 60)
-    await win.mouse.click(pShot.x, pShot.y)
+    await win.mouse.dblclick(pShot.x, pShot.y)
     await win.waitForSelector('.amx-cal-draftcard', { timeout: 3000 }).catch(() => {})
     await win.keyboard.type('评审会')
     await win.waitForTimeout(300)

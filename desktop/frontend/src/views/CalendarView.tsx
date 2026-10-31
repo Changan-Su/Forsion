@@ -4,7 +4,7 @@
  *  颜色/显隐/默认库/成员映射来自 calendarConfigStore;数据经 calendarMembers 汇成员库(+ agent 只读源)。
  *
  *  2026-10-16 用户定方案 B(docs/ToBeImproved/Calendar交互与待办右栏方案_2026-10-16/):
- *  · 桌面:单击空白 = 草稿(默认 1 小时),按住拖 = 拖出时长,全天行 / 月视图横拖 = 多天;草稿不落盘,标题在格子里打,
+ *  · 桌面:双击空白 = 草稿(默认 30 分钟),按住拖 = 拖出时长,全天行 / 月视图横拖 = 多天;草稿不落盘,标题在格子里打,
  *    Enter / 点别处保存,Esc / 没写标题就点走 = 丢弃。
  *  · 同日用户改口:编辑事件在事件旁的浮卡(EventCard),草稿的选日历 / 保存也是草稿块旁的浮卡(DraftCard),右栏只放待办。
  *  · 2026-10-20 第二轮方案:桌面右键动作 + 非模态浮卡;手机贴底抽屉、错位起止圆点,轻点空白先建草稿。 */
@@ -102,8 +102,8 @@ registerMessages({
   'calview.sunday': { zh: '周日', en: 'Sunday' },
   'calview.monday': { zh: '周一', en: 'Monday' },
   'calview.empty': {
-    zh: '还没有日历事件。单击时间格新建，按住拖出时长，或按 C。',
-    en: 'No calendar events yet. Click a time slot to add one, drag to set its length, or press C.',
+    zh: '还没有日历事件。双击时间格新建，按住拖出时长，或按 C。',
+    en: 'No calendar events yet. Double-click a time slot to add one, drag to set its length, or press C.',
   },
   // 还没有可写的日历时:点格子建不出东西,空态别再叫人点它(W-12)
   'calview.emptyNoDb': {
@@ -645,7 +645,7 @@ export function CalendarView({ leafId }: { leafId?: string } = {}) {
         }
       }}>
       <AstryxScope>
-        {/* 左:看法胶囊(日 / 周 / 3 日 / 月)+ 月份 + 周数;右:今天 ‹ › 「…」(密度、一周开始)。新建 = 单击格子 / 按 C。 */}
+        {/* 左:看法胶囊(日 / 周 / 3 日 / 月)+ 月份 + 周数;右:今天 ‹ › 「…」(密度、一周开始)。新建 = 双击格子 / 按 C。 */}
         <header className="amx-cal-bar">
           <div className="amx-cal-nav">
             <ViewModeSwitch leafId={leafId} />
@@ -758,6 +758,18 @@ function DraftChip({ day, colorOf }: { day: Date; colorOf: GridProps['colorOf'] 
     </div>
   )
 }
+/** 时间格里的块上下各收 1px:首尾相接的两条之间留一道缝(左右的 2px 缝在 left / width 里)。 */
+const EV_INSET = 1
+/** 空白处双击才建草稿。按下就 setPointerCapture,原生 dblclick 会被改投到网格本身、认不出点在哪格,
+ *  所以自己数:同一格、400ms 内、离第一下不到 6px 的第二下没拖动的点击。 */
+let lastClick: { key: string; t: number; x: number; y: number } | null = null
+function secondClick(key: string, x: number, y: number): boolean {
+  const now = performance.now()
+  const p = lastClick
+  const hit = !!p && p.key === key && now - p.t < 400 && Math.hypot(x - p.x, y - p.y) < 6
+  lastClick = hit ? null : { key, t: now, x, y }
+  return hit
+}
 function DraftBlock({ hourPx, colorOf }: { hourPx: number; colorOf: GridProps['colorOf'] }) {
   const draft = useCalendarNav((s) => s.draft)
   if (!draft || draft.startMin === null) return null
@@ -765,7 +777,7 @@ function DraftBlock({ hourPx, colorOf }: { hourPx: number; colorOf: GridProps['c
   return (
     <div
       className={`amx-cal-event amx-cal-draft selected${h < SHORT_PX ? ' short' : ''}`}
-      style={{ ...eventColorStyle(colorOf(draft.dbPath)), top: (draft.startMin / 60) * hourPx, height: Math.max(14, h), left: 2, width: 'calc(100% - 4px)' }}
+      style={{ ...eventColorStyle(colorOf(draft.dbPath)), top: (draft.startMin / 60) * hourPx + EV_INSET, height: Math.max(14, h - 2 * EV_INSET), left: 2, width: 'calc(100% - 4px)' }}
       {...draftShell}
     >
       <DraftInput />
@@ -809,8 +821,6 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
   const lastTitle = useRef('')
   const lastRangeI = useRef(-1)
   const makeEl = useRef<HTMLDivElement>(null) // 拖出新建时的预览块(命令式定位,松手后换成草稿)
-  const hoverEl = useRef<HTMLDivElement>(null) // 悬停时「点下去会建在哪」
-  const hideHover = (): void => { if (hoverEl.current) hoverEl.current.style.display = 'none' }
   const dragRef = useRef<{
     mode: 'move' | 'start' | 'end'
     ev: CalEvent      // 拖拽中实时反算时间文本用
@@ -964,7 +974,6 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     e.stopPropagation()
     cancelDrag() // 上一次拖动没收尾(松手丢了)就先撤掉它的预览,别留下两份
     if (ev.readonly || e.button !== 0 || (!DESK && selectedKey !== ev.key)) return
-    hideHover()
     const el = (e.currentTarget as HTMLElement).closest<HTMLElement>('.amx-cal-event')!
     const rect = el.getBoundingClientRect()
     const zoom = zoomOf(el) || 1
@@ -972,11 +981,11 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     const hit = Math.min(EDGE, rect.height / zoom / 4)
     const mode: 'move' | 'start' | 'end' = edge ?? (DESK && selectedKey === ev.key ? offY < hit ? 'start' : rect.height / zoom - offY < hit ? 'end' : 'move' : 'move')
     const box = eventBox(ev.start, ev.end, hourPx)
-    const h0 = Math.max(14, box.height)
+    const h0 = Math.max(14, box.height - 2 * EV_INSET) // 与渲染时的内缩一致:松手 / 取消时按它还原
     const tEl = el.querySelector('.amx-cal-event-t') as HTMLElement | null
     el.setPointerCapture(e.pointerId)
     dragRef.current = {
-      mode, ev, el, tEl, t0: tEl?.textContent ?? '', pid: e.pointerId, x0: e.clientX, y0: e.clientY, zoom, top0: box.top, h0, grabOffY: offY,
+      mode, ev, el, tEl, t0: tEl?.textContent ?? '', pid: e.pointerId, x0: e.clientX, y0: e.clientY, zoom, top0: box.top + EV_INSET, h0, grabOffY: offY + EV_INSET, // 按事件起点量,不按内缩后的块顶,否则横拖也会吸到下一刻
       durMin: ev.end ? (ev.end.getTime() - ev.start.getTime()) / 60000 : 60, msDur: ev.end ? ev.end.getTime() - ev.start.getTime() : 0,
       col0: diffDays(startOfDay(ev.start), days[0]), min0: ev.start.getHours() * 60 + ev.start.getMinutes(),
       dup: DESK && mode === 'move' && e.altKey && !ev.db.readonly, shadow: null,
@@ -1169,22 +1178,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     onPick(ev.key, rectOf(e))
   }
 
-  // ── 空白处:悬停提示、单击 = 1 小时草稿、按住拖 = 拖出时长;全天行单击 / 横拖 = 全天草稿(只在桌面,手指不触发)──
-  const hover = (e: ReactPointerEvent): void => {
-    const h = hoverEl.current
-    if (!h) return
-    const tgt = e.target as HTMLElement
-    const nav = useCalendarNav.getState()
-    if (!DESK || !canCreate || e.pointerType === 'touch' || dragRef.current || nav.draft || nav.selection || !colw
-      || !tgt.closest('.amx-cal-daycol2') || tgt.closest('.amx-cal-event, .amx-cal-draft')) { hideHover(); return }
-    const p = locate(e)
-    const [s, en] = draftRange(p.min, p.min, true)
-    h.style.display = 'block'
-    h.style.left = `${p.col * colw + 2}px`
-    h.style.width = `${colw - 4}px`
-    h.style.top = `${bodyTop + (s / 60) * hourPx}px`
-    h.style.height = `${((en - s) / 60) * hourPx}px`
-  }
+  // ── 空白处:双击 = 30 分钟草稿、按住拖 = 拖出时长;全天行双击 / 横拖 = 全天草稿(只在桌面,手指不触发)──
   const rangeOf = (m: NonNullable<typeof makeRef.current>): [number, number] =>
     m.moved ? draftRange(Math.min(m.min, m.cur.min), Math.max(m.min, m.cur.min) + 15, false) : draftRange(m.min, m.min, true)
   const gridDown = (e: ReactPointerEvent): void => {
@@ -1193,7 +1187,6 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     if (tgt.closest('.amx-cal-event, .amx-cal-chip-ev, .amx-cal-draft')) return
     const zone = tgt.closest('.amx-cal-allday2') ? 'all' : tgt.closest('.amx-cal-daycol2') ? 'time' : null
     if (!zone || !colw) return
-    hideHover()
     const had = onDismiss() // 先收草稿(它的输入框随后失焦时就没东西可收了),再把焦点拿回日历
     ;(wrap.current?.closest('.amx-cal') as HTMLElement | null)?.focus({ preventScroll: true })
     if (had || !canCreate) return
@@ -1204,7 +1197,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
   }
   const gridMove = (e: ReactPointerEvent): void => {
     const m = makeRef.current
-    if (!m) { hover(e); return }
+    if (!m) return
     if (e.pointerId !== m.pid) return
     if (e.pointerType === 'mouse' && e.buttons === 0) { gridUp(); return } // 松手没送到:同 move()
     if (!m.moved && Math.hypot(e.clientX - m.x0, e.clientY - m.y0) < 4) return
@@ -1217,8 +1210,8 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
       const [s, en] = rangeOf(m)
       el.style.left = `${m.col * colw + 2}px`
       el.style.width = `${colw - 4}px`
-      el.style.top = `${bodyTop + (s / 60) * hourPx}px`
-      el.style.height = `${((en - s) / 60) * hourPx}px`
+      el.style.top = `${bodyTop + (s / 60) * hourPx + EV_INSET}px`
+      el.style.height = `${((en - s) / 60) * hourPx - 2 * EV_INSET}px`
       el.textContent = `${fmtMin(s)}–${fmtMin(en)} · ${fmtDur(en - s)}`
     } else {
       const c0 = Math.min(m.col, m.cur.col)
@@ -1235,7 +1228,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     if (m && e && e.pointerId !== m.pid) return
     makeRef.current = null
     if (makeEl.current) makeEl.current.style.display = 'none'
-    if (!m) return
+    if (!m || (!m.moved && !secondClick(`${m.zone}:${m.col}`, m.x0, m.y0))) return
     if (m.zone === 'time') {
       const [s, en] = rangeOf(m)
       onDraft({ day: iso(days[m.col]), endDay: iso(days[m.col]), startMin: s, endMin: en })
@@ -1322,7 +1315,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
           </div>
         </div>
       </div>
-      <div className="amx-cal-tscroll" ref={wrap} onScroll={() => { updateTitle(); syncGutter() }} onPointerLeave={hideHover}>
+      <div className="amx-cal-tscroll" ref={wrap} onScroll={() => { updateTitle(); syncGutter() }}>
       <div
         className="amx-cal-tgrid2"
         style={{ gridTemplateColumns: `repeat(${days.length}, ${colw}px)`, gridTemplateRows: `${HEAD_H + 14}px auto ${HOURS.length * hourPx}px` }}
@@ -1399,8 +1392,8 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                     className={`amx-cal-event${e.readonly ? ' readonly' : ''}${cutKey === e.key ? ' cut' : ''}${selectedKey === e.key ? ' selected' : ''}${short ? ' short' : ''}${past ? ' past' : ''}${e.check ? ' todo' : ''}${e.done ? ' done' : ''}`}
                     style={{
                       ...eventColorStyle(e.color),
-                      top: box.top,
-                      height: Math.max(14, box.height),
+                      top: box.top + EV_INSET,
+                      height: Math.max(14, box.height - 2 * EV_INSET),
                       left: `calc(${layout.leftPct}% + 2px)`,
                       width: `calc(${layout.widthPct}% - 4px)`,
                     }}
@@ -1441,8 +1434,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
             <div className={`amx-cal-nowline${sameDay(d, today) ? ' today' : ''}`} style={{ top: (nowMin / 60) * hourPx }} />
           </div>
         ))}
-        {/* 悬停提示 + 拖出新建的预览块:命令式定位(唯一两个持久元素,默认隐藏)。 */}
-        <div className="amx-cal-hoverslot" ref={hoverEl} />
+        {/* 拖出新建的预览块:命令式定位(唯一的持久元素,默认隐藏)。 */}
         <div className="amx-cal-making" ref={makeEl} style={eventColorStyle(colorOf(null))} />
       </div>
       </div>
@@ -1475,7 +1467,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
   const [agenda, setAgenda] = useState<{ day: Date; events: CalEvent[]; at: Anchor } | null>(null)
   const lastTitle = useRef('')
   const lastRangeI = useRef(-1)
-  const makeRef = useRef<{ pid: number; a: string; b: string; moved: boolean } | null>(null)
+  const makeRef = useRef<{ pid: number; a: string; b: string; x0: number; y0: number; moved: boolean } | null>(null)
   useEffect(() => () => setVisibleRange(null, null), [setVisibleRange])
 
   const idxOfMonth = (y: number, m: number): number => Math.round(diffDays(startOfWeek(new Date(y, m, 1)), weeks[0]) / 7)
@@ -1568,7 +1560,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     onPick(ev.key, rect)
   }
 
-  // 空白处单击 = 当天全天草稿,横拖 / 竖拖跨格 = 多天(只在桌面,手指不触发)。拖动中命令式给经过的格子挂 making。
+  // 空白处双击 = 当天全天草稿,横拖 / 竖拖跨格 = 多天(只在桌面,手指不触发)。拖动中命令式给经过的格子挂 making。
   const cellAt = (e: { clientX: number; clientY: number }): string | null =>
     (document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null)?.closest('.amx-cal-mcell')?.getAttribute('data-date') ?? null
   const paint = (lo: string | null, hi: string | null): void => {
@@ -1588,7 +1580,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     if (had || !canCreate) return
     e.preventDefault()
     ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
-    makeRef.current = { pid: e.pointerId, a: day, b: day, moved: false }
+    makeRef.current = { pid: e.pointerId, a: day, b: day, x0: e.clientX, y0: e.clientY, moved: false }
   }
   const gridMove = (e: ReactPointerEvent): void => {
     const m = makeRef.current
@@ -1604,7 +1596,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     const m = makeRef.current
     if (m && e && e.pointerId !== m.pid) return
     makeRef.current = null
-    if (!m) return
+    if (!m || (!m.moved && !secondClick(`month:${m.a}`, m.x0, m.y0))) return
     if (m.moved) paint(null, null)
     const [lo, hi] = m.a < m.b ? [m.a, m.b] : [m.b, m.a]
     onDraft({ day: lo, endDay: hi, startMin: null, endMin: 0 })

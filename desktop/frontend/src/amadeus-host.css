@@ -1585,7 +1585,6 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-cal-tscroll { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; }
 .amx-cal-tgrid2 { display: grid; position: relative; }
 /* 悬停时「点下去会建在哪」(默认 1 小时)与按住拖出时的预览块:命令式定位,默认隐藏,不挡指针。 */
-.amx-cal-hoverslot { position: absolute; display: none; z-index: 3; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--overlay-medium, var(--bg-hover)); pointer-events: none; }
 .amx-cal-making { position: absolute; display: none; z-index: 6; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--amx-event-color); color: #fff; box-shadow: 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); padding: 3px 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.3; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; pointer-events: none; }
 .amx-cal-thead2 { position: sticky; top: 0; z-index: 8; background: var(--bg); border-left: 1px solid var(--amx-cal-line, var(--border)); border-bottom: 1px solid var(--amx-cal-line, var(--border)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
 .amx-cal-thead2.today .amx-cal-tdate { color: var(--accent-ink, var(--accent, #6c5ce7)); }
