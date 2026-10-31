@@ -68,7 +68,7 @@ import { listApprovals, decideApproval, getApproval } from '../services/pendingA
 import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
 import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
-import { appendMuseFeedback, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
+import { appendMuseFeedback, countObservedHits, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -405,9 +405,10 @@ router.get('/agent/special/muse/triggers', authMiddleware, async (_req: AuthRequ
     // 与 disabledReason 互补:那条是「已经停了,为什么」,这条是「还开着,但为什么不动」(H3)。
     // 暂停原因(触发源没了 / 电脑历史关了)现算,关掉的那一刻面板就写明,不等下一 tick。
     const notices = getAutomationNotices();
+    const observed = new Map(await Promise.all(list.filter((t) => t.observe).map(async (t) => [t.id, await countObservedHits(t.id, t.observeSince)] as const)));
     res.json({ triggers: list.map((t) => {
       const notice = (t.enabled ? triggerUnmet(t) : null) ?? notices[t.id];
-      return { ...t, nextRunAt: nextRunAt(t), ...(notice ? { notice } : {}) };
+      return { ...t, nextRunAt: nextRunAt(t), ...(notice ? { notice } : {}), ...(observed.has(t.id) ? { observeHits: observed.get(t.id) } : {}) };
     }) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'triggers failed' });
@@ -700,6 +701,7 @@ router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: 
       answers: b.answers && typeof b.answers === 'object' ? { when: String(b.answers.when || ''), pace: String(b.answers.pace || ''), focus: Array.isArray(b.answers.focus) ? b.answers.focus.map(String) : [] } : undefined,
       index: typeof b.index === 'number' ? b.index : undefined,
       expected: typeof b.expected === 'string' ? b.expected : undefined,
+      remote: !!parseRemoteOrigin(req.headers),
     });
     if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
     if (r.card.kind === 'settings' || r.card.kind === 'intro') kickMuse(); // 心跳 / 作息变了:巡检节奏下一轮就跟上

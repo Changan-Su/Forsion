@@ -124,6 +124,7 @@
  *                                                           #   前置:desktop 里 npm run fetch-office;台架须跑在 Node ≥22.19(kit 的 engines,Bash 默认的 fnm v20 不行)
  *                                                           #   负对照:TANGU_OFFICE_KIT=/nonexistent npm run live:harness -- --only officedoc(引擎日志断言须红)
  *   npm run live:harness -- --only musesettings             # 私聊说一句改设置(10-30):出卡不写配置,点了才写,权限档不出卡
+ *   npm run live:harness -- --only ruleobserve --muse-mode auto  # 规则观察(10-31):真引擎命中只记账不起 run;Muse 自建的动作规则缺省观察(改观察分支 / manage_automation 后跑)
  *   npm run live:harness -- --only muserule                 # Muse 提规则卡(10-30):ask 档发卡不写规则,点「好」才建(改 Muse 的 manage_automation / 规则卡后跑)
  *   npm run live:harness -- --only musechat                 # 手聊 Muse(10-13):私聊里用平常话交代「以后别…」→ 须落进 Muse 自己的记忆 / 当天日志(下个周期是新会话,读不到这段对话);
  *                                                           #   再问它后台做了什么 → 记下它读没读自己的日志。改 museChatSection / 私聊绑定后跑;对照 = 没有聊天段的构建(--kind base)
@@ -360,6 +361,7 @@ const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记�
 KEYS.push('marketplace', 'marketplacechat');
 OPT_IN.add('musesettings'); KEYS.push('musesettings'); // 两个 run:私聊说一句改设置 → 出卡不写配置、点了才写,权限档不出卡;动 propose_muse_settings 时跑
 OPT_IN.add('muserule'); KEYS.push('muserule'); // 一个 Muse 周期;只在动 Muse 的 manage_automation(规则卡)时才有信息量
+OPT_IN.add('ruleobserve'); KEYS.push('ruleobserve'); // 一个 Muse 周期(--muse-mode auto):真引擎命中只记账不起 run;Muse 自建的动作规则缺省观察并如实告诉用户
 OPT_IN.add('pluginaware'); KEYS.push('pluginaware'); // 四个 run + 假云端的商店;只在动 PLUGIN_AWARENESS_SECTION(解决需求时想到插件)时才有信息量
 KEYS.push('pluginext');
 OPT_IN.add('pluginext'); // 夹具插件在 tangu-plugin.json 里声明 stdio MCP + Stop hook(10-17);只在动 mcp/pluginServers、hooks/pluginHooks、bootstrap 的 attachManifestExtras 时跑
@@ -5052,6 +5054,44 @@ Then reply with only the command output.`,
     const made = rules().find((t) => t.id === r?.trigger?.id);
     const ok = untouched && cond?.type === 'computer.app_opened' && /figma/i.test(JSON.stringify(cond)) && made?.enabled === true;
     return { ok, detail: `卡上 ${JSON.stringify(cond)};点之前规则没变=${untouched};点之后 ${made ? `已建 ${made.id} enabled=${made.enabled}` : `没建:${JSON.stringify(r)}`}`, output: JSON.stringify(card.payload?.rule) };
+  });
+
+  await scenario('ruleobserve', 'ruleobserve 观察中的规则只记账,Muse 自建规则缺省观察', async () => {
+    if (MUSE_MODE !== 'auto') return { ok: false, detail: '这个场景要 --muse-mode auto' };
+    const rules = () => { try { return JSON.parse(readFileSync(join(home, 'agents', 'muse', 'triggers.json'), 'utf8')); } catch { return []; } };
+    const slug = asList(await api('/agent/agents'), 'agents').find((a) => a.slug !== 'muse')?.slug;
+    if (!slug) return { ok: false, detail: '没有可用的普通 Agent' };
+    // A 腿:真判定 → 只记账。动作是一个写文件的 agent_run,泄漏了 = 文件出现 / 账本出现别的状态
+    const src = join(workspace, 'observe-src.md'), leak = join(workspace, 'observe-leak.txt');
+    writeFileSync(src, 'x'.repeat(300));
+    const made = await api('/agent/special/muse/triggers', { method: 'POST', body: JSON.stringify({ actor: 'user', desc: 'Observe leg', cond_type: 'file_chars_gte', path: src, n: 100, cooldown_hours: 1, enabled: true, observe: true,
+      actions: [{ type: 'agent_run', agentSlug: slug, prompt: `Write the word LEAK into ${leak}.` }] }) });
+    const id = made?.trigger?.id;
+    if (!id) return { ok: false, detail: `建规则失败:${JSON.stringify(made).slice(0, 300)}` };
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: false, supervisorPollMinutes: 1 } }) });
+    const ledger = async () => asList(await api(`/agent/special/automation/executions?triggerId=${encodeURIComponent(id)}`), 'executions');
+    const hit = await until(async () => (await ledger()).find((e) => e.status === 'observed') ?? null, 200_000, 3000);
+    await sleep(20_000); // 给泄漏留出时间:agent_run 起跑后才会写文件
+    const rows = await ledger();
+    const seen = rules().find((t) => t.id === id);
+    const legA = !!hit && hit.steps?.[0]?.observed === true && rows.every((e) => e.status === 'observed') && !existsSync(leak) && !!seen?.lastFiredAt;
+    await api(`/agent/special/muse/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    // B 腿:模型配不配合。auto 档 Muse 自己建会跑 Agent 的规则,引擎缺省观察,模型要如实告诉用户
+    const before = new Set(rules().map((t) => t.id));
+    await api('/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text: `The user asked: whenever ${join(workspace, 'reading.md')} passes 2000 characters, have the ${slug} agent write a short summary into summary.md next to it. Set this up as an automation rule.` }) });
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 12, maxRestartsPerWindow: 3 } }) });
+    const rule = await until(() => rules().find((t) => !before.has(t.id) && t.actions?.some((a) => a.type === 'agent_run')) ?? null, 420_000, 5000);
+    const status = () => api('/agent/special/muse/status').then((x) => (x && typeof x.status === 'object' ? x.status : x));
+    await until(async () => !(await status()).running, 240_000, 5000);
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: false } }) });
+    if (!rule) return { ok: false, detail: `A 腿=${legA};420s 没等到规则,[muse] 日志:${museLogTail() || '(无)'}` };
+    const { default: Database } = await import('better-sqlite3');
+    const db = new Database(join(home, 'state.db'), { readonly: true, fileMustExist: true });
+    let said = '';
+    try { said = db.prepare(`SELECT m.content FROM chat_messages m JOIN chat_sessions s ON s.id = m.session_id WHERE m.role = 'model' AND json_valid(s.agent_config) AND json_extract(s.agent_config, '$.soloAgentSlug') = 'muse' ORDER BY m.timestamp DESC LIMIT 1`).get()?.content || ''; } finally { db.close(); }
+    const toldUser = /observ|观察|only record|won.?t run|not run|只记/i.test(said);
+    const ok = legA && rule.observe === true && rule.observeBy === 'muse' && toldUser;
+    return { ok, detail: `A 腿=${legA}(账本 ${rows.length} 行,状态 ${[...new Set(rows.map((e) => e.status))].join()},泄漏文件=${existsSync(leak)});B 腿 observe=${rule.observe} observeBy=${rule.observeBy} 告诉用户=${toldUser}`, output: said.slice(0, 600) };
   });
 
   await scenario('musedm', `musedm Muse 私聊 × 收件箱分工(${MUSE_MODE})`, async () => {

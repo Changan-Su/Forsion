@@ -124,7 +124,7 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
 
 /** GET /agent/special/approvals 的一行(引擎 pendingApprovals.PendingApprovalRow 镜像)。 */
 /** Muse 发进私聊、要用户点的卡(services/museCards.ts)。payload 按 kind 各一种形状,只有引擎写得进去。 */
-export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel' | 'settings' | 'intro' | 'summary' | 'rule'
+export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel' | 'settings' | 'intro' | 'summary' | 'rule' | 'rule-observed'
 export interface MuseCardInfo {
   id: string
   kind: MuseCardKind
@@ -207,6 +207,11 @@ export interface MuseTriggerInfo {
   cooldownHours: number
   lastFiredAt: string | null
   enabled: boolean
+  /** 观察:开着时命中只记录本应执行的动作。暂停时这一位留着,恢复后还是观察。 */
+  observe?: boolean
+  observeSince?: string
+  /** 这一段观察命中了几次(GET 时现算)。 */
+  observeHits?: number
   createdAt: string
   /** 引擎自动停用的原因(排空封顶断环 / tool_call 不可用);用户手动启用时引擎清掉。缺席 = 用户自己停的或在跑。 */
   disabledReason?: string
