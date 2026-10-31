@@ -21,13 +21,14 @@ import { Markdown } from './Markdown'
 import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, isDesktopOnlyItem, DESKTOP_ONLY_TAG, type InstalledItem } from '../services/marketService'
 import { forgetUserSpace, loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
-import { pluginVaultFolder, pluginWanted, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
-import { unmetClosure } from '@amadeus/plugins/pluginDeps'
+import { pluginVaultFolder, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { dependentsOf, unmetClosure } from '@amadeus/plugins/pluginDeps'
+import { pluginDataSyncOn } from '@amadeus/plugins/pluginDataSync'
 import type { AmadeusPlugin } from '@amadeus/plugins/types'
 import { AgentUninstallDialog, PluginUninstallDialog, SkillUninstallDialog } from './UninstallDialog'
 import { uninstallEnginePlugin, uninstallForsionPlugin } from './pluginUninstall'
 import { PanelNotice } from './PanelNotice'
-import { listSkillCatalog } from '../services/backendService'
+import { listPlugins, listSkillCatalog } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import { announceExtensionsChanged, installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { afterMarketInstall, canRestartBackend, restartBackend } from '../marketPostInstall'
@@ -426,9 +427,12 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const [asking, setAsking] = useState<
     | { kind: 'agent'; c: MarketCard; slug: string }
     | { kind: 'skill'; c: MarketCard; slug: string; key: string }
-    | { kind: 'plugin'; c: MarketCard; id: string }
-    | { kind: 'amadeus-plugin'; c: MarketCard; plugin: AmadeusPlugin }
+    | { kind: 'plugin'; c: MarketCard; id: string; warning?: string }
+    | { kind: 'amadeus-plugin'; c: MarketCard; plugin: AmadeusPlugin; warning?: string }
     | null>(null)
+  // 设置页两处同一句:还在跑、依赖它的插件写进确认框
+  const dependentsWarning = (name: string, dependents: Array<Parameters<typeof pluginDisplayName>[0]>): string | undefined =>
+    dependents.length ? t('settings.plugins.uninstallDependents', { name, list: dependents.map((x) => pluginDisplayName(x, locale)).join(t('common.listSep')) }) : undefined
   const afterDialogUninstall = async (c: MarketCard, type: string, slug: string): Promise<void> => {
     act('market.uninstall', { id: c.id })
     if (type === 'agent' || type === 'skill') void window.tangu?.marketForget?.(type, slug).catch(() => {})
@@ -447,10 +451,16 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
         if (row) { setAsking({ kind: 'skill', c, slug, key: row.key }); return }
       } else if (info.realType === 'plugin') {
         const hit = (await window.tangu?.pluginsUserInstalled?.())?.find((p) => p.slug === slug)
-        if (hit) { setAsking({ kind: 'plugin', c, id: hit.id }); return }
+        if (hit) {
+          const engine = await listPlugins(homeTarget())
+          const dependents = dependentsOf(hit.id, engine.map((x) => ({ id: x.id, version: x.version ?? '', requiresPlugins: x.requiresPlugins })))
+            .map((n) => engine.find((x) => x.id === n.id)!).filter((x) => x.active ?? x.enabled)
+          setAsking({ kind: 'plugin', c, id: hit.id, warning: dependentsWarning(c.name, dependents) })
+          return
+        }
       } else if (info.realType === 'amadeus-plugin') {
         const plugin = usePluginStore.getState().plugins.find((p) => p.bundle?.dir === slug || p.id === slug)
-        if (plugin) { setAsking({ kind: 'amadeus-plugin', c, plugin }); return }
+        if (plugin) { setAsking({ kind: 'amadeus-plugin', c, plugin, warning: dependentsWarning(c.name, runningDependents(plugin.id)) }); return }
       }
     } catch {
       // 查不了(引擎还没起来等):报错别卸 —— 老路是直接删目录,不进回收站
@@ -803,9 +813,9 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
         <PanelNotice />
         {asking?.kind === 'agent' && <AgentUninstallDialog slug={asking.slug} name={asking.c.name} onClose={() => setAsking(null)} onDone={() => void afterDialogUninstall(asking.c, 'agent', asking.slug)} />}
         {asking?.kind === 'skill' && <SkillUninstallDialog skillKey={asking.key} name={asking.c.name} onClose={() => setAsking(null)} onDone={() => void afterDialogUninstall(asking.c, 'skill', asking.slug)} />}
-        {asking?.kind === 'plugin' && <PluginUninstallDialog name={asking.c.name} onClose={() => setAsking(null)}
+        {asking?.kind === 'plugin' && <PluginUninstallDialog name={asking.c.name} warning={asking.warning} onClose={() => setAsking(null)}
           onConfirm={(opts) => { const a = asking; void uninstallEnginePlugin(a.id, a.c.name, opts).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'plugin', a.c.installSlug) }) }} />}
-        {asking?.kind === 'amadeus-plugin' && <PluginUninstallDialog name={asking.c.name} vaultFolder={pluginVaultFolder(asking.plugin.id, asking.plugin.name)}
+        {asking?.kind === 'amadeus-plugin' && <PluginUninstallDialog name={asking.c.name} warning={asking.warning} vaultFolder={pluginVaultFolder(asking.plugin.id, asking.plugin.name)} cloudData={pluginDataSyncOn(asking.plugin)}
           skills={asking.plugin.bundle?.skills.length ?? 0} agents={asking.plugin.bundle?.agents ?? []} onClose={() => setAsking(null)}
           onConfirm={(opts) => { const a = asking; void uninstallForsionPlugin(a.plugin, a.c.name, opts, { engine: true }).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'amadeus-plugin', a.c.installSlug) }) }} />}
 

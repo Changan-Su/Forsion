@@ -35,6 +35,18 @@ function writeState(id: string, s: SyncState): void {
   try { localStorage.setItem(stateKey(id), JSON.stringify(s)) } catch { /* 配额满:下次按没对过处理,最坏多拉一次 */ }
 }
 
+/** 卸载不留设置时随偏好收走的同步键(状态、开关);留着的话状态记着 v=N,重装后本机没文件也不会去拉云端那份。
+ *  快照里版本号清零:云端那份可能被删后又被别的设备重建,版本号从 1 重来会撞上(同号不同内容),恢复后要和云端重新比一次。 */
+export function pluginSyncSnapshot(id: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  try {
+    if (localStorage.getItem(stateKey(id)) != null) out[stateKey(id)] = JSON.stringify({ ...readState(id), v: 0 })
+    const off = localStorage.getItem(offKey(id))
+    if (off != null) out[offKey(id)] = off
+  } catch { /* 没有 localStorage:没东西可收 */ }
+  return out
+}
+
 const LAST_OK_KEY = 'forsion.pluginSync.lastOk'
 const markOk = (): void => { try { localStorage.setItem(LAST_OK_KEY, String(Date.now())) } catch { /* ignore */ } }
 /** 蓬洲云同步页「插件数据」那一行:几个插件改了还没传上去、上次和云端对上是什么时候。
@@ -122,6 +134,19 @@ export function pushPluginData(id: string, local: LocalData): Promise<void> {
   const next = (chains.get(id) ?? Promise.resolve()).then(run, run)
   chains.set(id, next)
   return next
+}
+
+/**
+ * 卸载且不留设置:清掉云端那份。**要在 dropPluginPrefs 之前调**(同步状态在这里同步读走)。
+ * 带 base / owner:云端比本机新(别的设备写过)或换了账号就不删 —— 恢复只靠回收站里的本机那份,它不比云端旧才删得起。
+ * 恢复后 loadSyncedPluginData 看到云端没了,按第一次上传推回去;别的设备还装着时同样会推回来,这是预期(插件按设备装)。
+ * 失败(离线 / 没登录 / 老服务端 404)= 副本留着,重装时会拉回来。
+ */
+export function dropPluginCloudData(id: string): Promise<void> {
+  const st = readState(id)
+  if (!st.owner || !st.v) return Promise.resolve() // 没对上过云端:这台设备不替别处决定
+  index = null
+  return cloud(`${itemPath(id)}?base=${st.v}&owner=${encodeURIComponent(st.owner)}`, 'DELETE').then(() => {})
 }
 
 /**

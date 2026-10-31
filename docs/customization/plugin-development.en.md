@@ -171,7 +171,7 @@ You can only register inside your own namespace: `id` is a key, and the host bui
 
 ## Plugin data sync across devices
 
-A plugin that sets `"syncData": true` in its manifest has the data it saves with `ctx.saveData` synced to your other computers and phones through your Forsion account. When you are signed out or offline, the data stays on this device as before and is uploaded once you are back online. If two devices both changed it, the later change wins. The plugin's detail page has a "Sync plugin data across devices" switch to turn it off on one device. The web version does not sync yet. For the API, see the `loadData/saveData` notes in the editor section of the plugin development skill.
+A plugin that sets `"syncData": true` in its manifest has the data it saves with `ctx.saveData` synced to your other computers and phones through your Forsion account. When you are signed out or offline, the data stays on this device as before and is uploaded once you are back online. If two devices both changed it, the later change wins. The plugin's detail page has a "Sync plugin data across devices" switch to turn it off on one device. If someone uninstalls the plugin without ticking "Keep settings", the copy in the cloud is cleared too; restoring from the Trash uploads this device's copy again, and any other device that still has the plugin uploads its copy as well. The web version does not sync yet. For the API, see the `loadData/saveData` notes in the editor section of the plugin development skill.
 
 ## Startup and icons
 

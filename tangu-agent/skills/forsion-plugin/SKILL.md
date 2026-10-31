@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.83.0
+  version: 1.84.0
   author: Forsion
   category: Forsion
 ---
@@ -1257,6 +1257,7 @@ const off = ctx.app.watchFile?.('Snippets/latex.js', () => reload())
   另一份服务端留一版。单份 ≤512 KB、每个账号 ≤100 个插件。用户可以在插件详情页逐台设备关掉。
   内容服务端只存不读,不进任何模型上下文;但**别往里放密钥 / 令牌**(它会出现在用户的每台设备上)。
   `loadData` 只在调用时对一次账,**运行中别的设备改了不会推给你** —— 要实时互通的数据别走这条。
+  用户卸载时没勾「保留设置」,云端那份一起清掉(本机那份进回收站);恢复后本机这份重传,别的设备还装着时也会把它的传回来。
 - **`watchFile` 缺位时整条方法不挂**(不是空壳):`if (ctx.app.watchFile) … else 轮询` 才走得对。
   它只报「内容变了」,新建/删除/改名不报;自己 `writeFile` 落的盘不会回声。
 
