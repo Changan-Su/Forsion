@@ -2,13 +2,13 @@
  *  - 折叠(默认)= 纯图标;展开 = 图标 + 名称(宽条)。切换钮常驻顶部。
  *  - 上区 = Spaces,下区 = 命令(二级面板同属命令);区内可拖拽改序,跨区禁止(均持久化)。
  *  - 收纳夹:同区图标拖到夹上收入;悬停夹图标在右侧浮层展开(icon + 文字),浮层内可重排/拖出。
- *  - 区内放不下时尾部收进「…」;点「…」= 本区铺满整条(另一区让出来),点 Ribbon 图标以外任意处收回。
+ *  - 区内放不下时尾部收进「+N」;点「+N」= 条右侧浮层列出藏着的(液滴从按钮里流出来,droplet.ts),再点 / 点别处 / Esc 缩回。
  *    两区高度弹性分配,都挤时各保一半。
  *  - 右键空白/两区 + 号 = 新建 Space / 添加命令(从命令面板选)/ 新建收纳夹;账号卡(pinned)钉死最底。
  *  - 左面板收起时,指针停在 Space 图标上 → 右侧浮出那个 Space 的左面板(SpacePeek),可直接操作;移开即收。 */
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, ChevronDown, ChevronUp, ChevronsLeft, ChevronsRight, CircleMinus, Folder as FolderIcon, FolderMinus, FolderOutput, FolderPlus, LayoutGrid, MoreHorizontal, Pencil, Plus, Shapes, Zap } from 'lucide-react'
+import { AppWindow, ChevronsLeft, ChevronsRight, CircleMinus, Folder as FolderIcon, FolderMinus, FolderOutput, FolderPlus, LayoutGrid, Pencil, Plus, Shapes, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useRibbonStore, useDotted, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
@@ -28,6 +28,7 @@ import { useWorkspace } from './workspaceStore'
 import { getView, subscribeViews } from './viewRegistry'
 import { computeSideWidth } from './sideWidth'
 import { SpacePeek } from './SpacePeek'
+import { emergeDroplet, type Droplet } from './droplet'
 import { PEEK_CLOSE_DELAY, PEEK_OPEN_DELAY, peekShouldClose, peekViews, type PeekZone } from './spacePeekRules'
 import type { PersistedPanel } from './layoutPersist'
 
@@ -120,6 +121,7 @@ export function Ribbon() {
   const commandIcons = useRibbonStore((s) => s.commandIcons)
   const recentCount = useRibbonStore((s) => s.recentCount)
   const recentIds = useSpaceStore((s) => s.recent)
+  const activeSpaceId = useSpaceStore((s) => s.activeSpaceId)
   const commands = useCommandStore((s) => s.commands)
   useShortcuts((s) => s.overrides) // 设置里改了键 → 槽位上的快捷键提示当场跟着变
   const { t } = useEngineI18n()
@@ -146,33 +148,36 @@ export function Ribbon() {
   const geom = useRef<{ top: number; pitch: number; grabDy: number } | null>(null) // 落点几何(dragstart 拍一次)
   // 滚轮翻看(10-02 用户要求,类 Agent 选择条):各区露出的那一窗往后挪了几格。不持久化,越界在 cut() 里夹回。
   const [scrollOff, setScrollOff] = useState<Record<RibbonZone, number>>({ top: 0, bottom: 0 })
-  // 「…」展开(10-02 用户要求):该区铺满整条,另一区(连同它那侧的 ＋ /「…」)让出来;点 Ribbon 图标以外任意处收回。
-  const [openZone, setOpenZone] = useState<RibbonZone | null>(null)
+  // 「+N」溢出浮层(2026-10-30 用户定,取代 10-02 的「本区铺满整条」):条右侧列出藏着的那几项,条本身一格不动。
+  // 开合走液滴(droplet.ts):开 = 从「+N」里流出来,收 = 倒放缩回;closing 期间再点不重开。
+  const [moreFly, setMoreFly] = useState<RibbonZone | null>(null)
+  const moreRef = useRef<HTMLDivElement>(null)
+  const droplet = useRef<Droplet | null>(null)
+  const moreClosing = useRef(false)
   // 滑动中(滚轮手势 + 吸附)的区:窗外格子临时画出图标(进场/离场看得见),吸附完清掉,DOM 回到「只有露出的那一窗」。
   const [live, setLive] = useState<Partial<Record<RibbonZone, boolean>>>({})
   // 手势进行中的连续位置(px,窗口起点 × 槽高)直写 .rb-strip-in 的 transform,不走 setState(每秒几十发,整条重渲太重)。
   const glide = useRef<Partial<Record<RibbonZone, { px: number; from: number; timer: number; at?: number }>>>({})
   const stripRefs = useRef<Partial<Record<RibbonZone, HTMLDivElement | null>>>({})
   useEffect(() => () => { for (const g of Object.values(glide.current)) window.clearTimeout(g?.timer) }, [])
-  // 开合期间保留离场图标，等裁切框与内部位移一起走完再清空窗外占位。
-  const [resizing, setResizing] = useState(false)
-  const resizeTimer = useRef<number | undefined>(undefined)
-  useEffect(() => () => window.clearTimeout(resizeTimer.current), [])
-  const changeOpenZone = (zone: RibbonZone | null): void => {
-    for (const z of ['top', 'bottom'] as const) {
-      const g = glide.current[z]
-      if (!g) continue
-      window.clearTimeout(g.timer)
-      const el = stripRefs.current[z]
-      if (el) el.style.transform = g.from ? `translateY(${-g.from * slotH}px)` : ''
-      delete glide.current[z]
-    }
-    setLive({})
-    window.clearTimeout(resizeTimer.current)
-    const animate = !window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    setResizing(animate)
-    if (animate) resizeTimer.current = window.setTimeout(() => setResizing(false), 240)
-    setOpenZone(zone)
+  const closeMore = (): void => {
+    if (moreClosing.current) return
+    const d = droplet.current
+    if (!d) { setMoreFly(null); return }
+    moreClosing.current = true
+    void d.retract().then(() => {
+      moreClosing.current = false
+      if (droplet.current === d) droplet.current = null
+      setMoreFly(null)
+    })
+  }
+  const toggleMore = (zone: RibbonZone): void => {
+    if (moreClosing.current) return
+    if (moreFly === zone) { closeMore(); return }
+    droplet.current?.cancel() // 开着另一区的:直接让位,不叠两滴
+    droplet.current = null
+    setFly(null)
+    setMoreFly(zone)
   }
 
   // ---- 收起态浮签(取代原生 title):LCL 提示框(hoverSurface.ts)根上事件委托,认 [data-rb-tip];时序 / 接力同全应用。
@@ -199,7 +204,7 @@ export function Ribbon() {
     cancelPeekClose()
     setPeek(null)
   }
-  const blockHard = !!drag || !!menu || !!iconPick || !!fly
+  const blockHard = !!drag || !!menu || !!iconPick || !!fly || !!moreFly
   // 左面板展开着也弹 —— 弹别的 Space 的(2026-10-14 用户定:悬停本来就是为了呼出别的侧边栏)。
   // 只有当前 Space 不弹:它的左栏就在眼前。
   const onScreen = (id: string): boolean => useWorkspace.getState().leftVisible && id === useSpaceStore.getState().activeSpaceId
@@ -309,7 +314,7 @@ export function Ribbon() {
       : { left: ((rb?.right ?? 44) + 4) / z, top: top / z, height: Math.max(160, bottom - top) / z, width }
   }
 
-  const blockTip = !!drag || !!menu || !!iconPick || !!fly || !!peek
+  const blockTip = !!drag || !!menu || !!iconPick || !!fly || !!moreFly || !!peek
   tipBlocked.current = blockTip || expanded
   useEffect(() => { if (blockTip || expanded) hideTooltip() }, [blockTip, expanded])
   useEffect(() => {
@@ -386,7 +391,7 @@ export function Ribbon() {
     // Conditional pinned controls (for example a ready update) change height without resizing the ribbon.
     if (pinnedRef.current) ro.observe(pinnedRef.current)
     return () => ro.disconnect()
-  }, [expanded, slotH, items.length, folders.length, commandItems.length, openZone]) // openZone:命令区展开时主位槽让出来
+  }, [expanded, slotH, items.length, folders.length, commandItems.length])
   // 两区各常驻 5 项，头像与其他 pinned 件不在 botE 里，不占名额。
   // 写成 `len ≤ N ? len : N + 1`,cut() 留一格给「…」后正好露 N 个。命令区从头吃起。
   // ponytail: 用户钉进命令区的命令与收纳夹也占名额,钉多了会把明暗挤进「…」;要按项豁免再给 RibbonItem 加标记。
@@ -395,11 +400,7 @@ export function Ribbon() {
   const wantB = cap(botE.length, BOTTOM_VISIBLE)
   let capT = wantT
   let capB = wantB
-  if (openZone) {
-    // 展开区独占两区合计的槽数(另一区的 ＋ 也让出来了,正好留给「收起」钮);仍放不下就照旧滚轮翻看。
-    if (openZone === 'top') capT = slots
-    else capB = slots
-  } else if (capT + capB > slots) {
+  if (capT + capB > slots) {
     // 窗口矮到连上限都放不下:按高度两区分配(只会比上限更少)。
     // 空区给 0(否则 max(1,…) 白占一格,挤掉另一区,见 codex#5);两区都非空时各保至少一半。
     if (topE.length === 0) { capT = 0; capB = slots }
@@ -423,16 +424,16 @@ export function Ribbon() {
     const start = fromFront ? list.length - n - o : o
     return { shown: list.slice(start, start + n), tail: [...list.slice(0, start), ...list.slice(start + n)], start, max }
   }
-  const top = cut(topE, capT, false, scrollOff.top, openZone === 'top' ? Infinity : TOP_VISIBLE)
-  const bot = cut(botE, capB, true, scrollOff.bottom, openZone === 'bottom' ? Infinity : BOTTOM_VISIBLE)
+  const top = cut(topE, capT, false, scrollOff.top, TOP_VISIBLE)
+  const bot = cut(botE, capB, true, scrollOff.bottom, BOTTOM_VISIBLE)
   // ---- 中间那段空当:最近使用的 Space(10-05 用户要求),最近的在上。个数 = 设置的上限(缺省 3,最多 5)与中间还放得下的
-  //      格数取小,窗口矮了就一个个减到没有;有一区展开(铺满整条)时不露。只是快捷入口:不进拖拽 / 溢出 / 快捷键编号,
+  //      格数取小,窗口矮了就一个个减到没有。只是快捷入口:不进拖拽 / 溢出 / 快捷键编号,
   //      也不是 .rb-slot(拖拽量槽、台架数格子都按它)。
   //      照字面列(10-05 用户定):最近用过的都列,当前的、已经露在条上的也照列 —— 同一个 Space 的图标会在条上出现两处。
   const recentItems = recentIds
     .map((id) => items.find((i) => i.id === `space:${id}`))
     .filter((i): i is RibbonItem => !!i)
-    .slice(0, recentRoom(recentCount, slots, capT, capB, !!openZone))
+    .slice(0, recentRoom(recentCount, slots, capT, capB, false))
   /** 滚轮在区上 = 平移露出的那一窗(DOM 不滚,拖拽落点、「…」、快捷键都照旧按条目算)。
    *  10-02 第二版「丝滑 + 吸附」:手势中按像素连续跟手(CSS 过渡把每发 delta 抹平),停手 120ms 后吸附到最近的整格,
    *  吸附完才把新窗口提交进 scrollOff。两区同一坐标:px = 窗口起点 × 槽高,往下滚 px 变大(内容跟着滚轮走:
@@ -569,27 +570,49 @@ export function Ribbon() {
     window.addEventListener('mousedown', onDown)
     return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('mousedown', onDown) }
   }, [flyOpen])
-  // 展开的「…」:左键点 Ribbon 上的按钮(图标、＋、收起钮本身)以外的任何地方就收回,Esc 也收。
-  // 点进 iframe / webview 的视图时事件到不了本窗口 → 靠窗口 blur 兜。右键不收(空白处右键要弹区菜单)。
+  // 「+N」浮层:左键点浮层与「+N」以外的地方就缩回,Esc 也收;点进 iframe / webview 的视图时事件到不了本窗口 → 窗口 blur 兜。
+  // 浮层里的条目自带浮层(设备互联胶囊的菜单挂在 body 上,带 data-rb-overlay)、右键菜单、图标选择器:点它们不收。右键不收。
   useEffect(() => {
-    if (!openZone) return
-    const close = (): void => changeOpenZone(null)
+    if (!moreFly) return
     const onDown = (e: PointerEvent): void => {
       if (e.button !== 0) return
       const t = e.target as Element | null
-      if (t?.closest?.('.rb-menu, .rb-iconpick, .rb-fly, [data-rb-overlay]') || (t && rootRef.current?.contains(t) && t.closest('button'))) return
-      close()
+      if (t?.closest?.('.rb-menu, .rb-iconpick, [data-rb-overlay], [data-rb-more]') || (t && moreRef.current?.contains(t))) return
+      closeMore()
     }
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close() }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') closeMore() }
+    // 窗口 / 缩放变了:按钮已挪走,浮层和液滴的几何都是旧的,倒放只会从旧位置飞一下 → 直接撤
+    const onLayout = (): void => { droplet.current?.cancel(); droplet.current = null; setMoreFly(null) }
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('keydown', onKey)
-    window.addEventListener('blur', close)
+    window.addEventListener('blur', closeMore)
+    window.addEventListener('resize', onLayout)
+    window.addEventListener(UI_ZOOM_EVENT, onLayout)
     return () => {
       window.removeEventListener('pointerdown', onDown, true)
       window.removeEventListener('keydown', onKey)
-      window.removeEventListener('blur', close)
+      window.removeEventListener('blur', closeMore)
+      window.removeEventListener('resize', onLayout)
+      window.removeEventListener(UI_ZOOM_EVENT, onLayout)
     }
-  }, [openZone, slotH]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [moreFly]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 定位 + 开液滴:浮层挂上后量高度,上区顶对齐「+N」往下长(碰底往上推),命令区底对齐「+N」往上长。
+  // left / top 直接写 DOM,不经 style 属性 —— 行数一变 React 重渲时不会把位置冲回去;行数变了重新对齐。
+  const moreTail = moreFly ? (moreFly === 'top' ? top : bot).tail : []
+  useLayoutEffect(() => {
+    const el = moreRef.current
+    const btn = moreFly ? rootRef.current?.querySelector<HTMLElement>(`[data-rb-more="${moreFly}"]`) : null
+    if (!el || !btn || !moreFly) return
+    const z = zoomOf(el)
+    const b = btn.getBoundingClientRect(), h = el.getBoundingClientRect().height
+    const y = moreFly === 'top' ? Math.max(8, Math.min(b.top - 6, window.innerHeight - h - 8)) : Math.max(8, b.bottom + 6 - h)
+    el.style.left = `${((rootRef.current?.getBoundingClientRect().right ?? 44) + 4) / z}px`
+    el.style.top = `${y / z}px`
+    if (!droplet.current) droplet.current = emergeDroplet(btn, el)
+  }, [moreFly, moreTail.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { droplet.current?.cancel(); droplet.current = null }, [])
+  // 藏着的都被拖回条上了(或窗口变高全露出来了):浮层没东西可列,缩回
+  useEffect(() => { if (moreFly && !moreTail.length) closeMore() }, [moreFly, moreTail.length]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Space 快捷键:mod+1..9 = 上区第 N 个条目,**纯按当前排序**(拖动改序,号跟着走)。
   //      收纳夹同样占一个号,按下 = 弹它的浮层;溢出进「…」的条目也按得到(没有按钮锚点就贴条顶)。 ----
@@ -649,11 +672,12 @@ export function Ribbon() {
     if (!r) return true
     const inRect = (b: DOMRect): boolean => x >= b.left - TEAR_MARGIN && x <= b.right + TEAR_MARGIN && y >= b.top - TEAR_MARGIN && y <= b.bottom + TEAR_MARGIN
     const f = flyRef.current?.getBoundingClientRect()
-    return inRect(r) || (!!f && inRect(f))
+    const m = moreRef.current?.getBoundingClientRect()
+    return inRect(r) || (!!f && inRect(f)) || (!!m && inRect(m))
   }
   const onBar = (e: DragEvent): boolean => {
     const t = e.target as Node | null
-    return !!t && (!!rootRef.current?.contains(t) || !!flyRef.current?.contains(t))
+    return !!t && (!!rootRef.current?.contains(t) || !!flyRef.current?.contains(t) || !!moreRef.current?.contains(t))
   }
   useLayoutEffect(() => { // layout:要赶在 dragstart 之后的第一发拖放事件之前挂上
     if (!tearId) return
@@ -759,14 +783,14 @@ export function Ribbon() {
   pointerActions.current = {
     target: (e, d) => {
       const hit = document.elementFromPoint(e.clientX, e.clientY)
-      const own = !!hit && (!!rootRef.current?.contains(hit) || !!flyRef.current?.contains(hit))
+      const own = !!hit && (!!rootRef.current?.contains(hit) || !!flyRef.current?.contains(hit) || !!moreRef.current?.contains(hit))
       if (own) {
         const folderId = hit.closest<HTMLElement>('[data-rb-folder]')?.dataset.rbFolder
         const folder = folders.find((f) => f.id === folderId)
         if (folder && folder.zone === d.zone) {
           const row = hit.closest<HTMLElement>('[data-rb-folder-index]')
           setOver(null); setOverFolder(folder.id); setOverId(row?.dataset.id ?? null)
-          if (!row) openFly(folder.id, folder.zone, hit.closest<HTMLElement>('[data-rb-folder]')!, folder.id)
+          if (!row && !moreRef.current?.contains(hit)) openFly(folder.id, folder.zone, hit.closest<HTMLElement>('[data-rb-folder]')!, folder.id)
           return { kind: 'folder', folder, at: row ? Number(row.dataset.rbFolderIndex) : undefined }
         }
         const more = hit.closest<HTMLElement>('[data-rb-more]')?.dataset.rbMore
@@ -801,12 +825,14 @@ export function Ribbon() {
       }
     },
   }
-  const pointerDown = (e: React.PointerEvent, id: string, zone: RibbonZone, from: string | null): void => {
+  /** geo = false:从「+N」浮层拖出来的 —— 别拿浮层的行距当条上的槽距,落点几何到了条上当场量(measure)。 */
+  const pointerDown = (e: React.PointerEvent, id: string, zone: RibbonZone, from: string | null, geo = true): void => {
     if (!getDetachApi()?.ribbonPointerDrag || !spaceIdOf(id) || e.button !== 0 || !e.isPrimary) return
     e.stopPropagation()
     pointerCancel.current?.()
     const source = e.currentTarget as HTMLElement, d = { id, zone, from }
-    if (!from) snapGeom(source, e.clientY)
+    geom.current = null // 上次只是点了一下(没拖)留下的快照,别带到这次
+    if (!from && geo) snapGeom(source, e.clientY)
     let target: PointerTarget = { kind: 'cancel' }
     pointerCancel.current = beginRibbonPointerDrag(e.nativeEvent, source, {
       start: () => { hideTooltip(); cancelClose(); setDrag(d) },
@@ -921,27 +947,30 @@ export function Ribbon() {
       </button>
     )
   }
-  /** 「…」= 展开 / 收起本区。收起钮的箭头指向收回的方向:上区的钮在列下面(↑),命令区的在列上面(↓)。 */
+  /** 「+N」= 这一区藏着几个(N 直接写在按钮上);点开 / 再点缩回(2026-10-30,取代「…」)。当前 Space 藏在里面时
+   *  按钮带当前 Space 的强调底 —— 不然切过去之后条上找不到自己在哪。拖到它上面 = 收进去(挪到它吃的那一端)。 */
   const renderMoreBtn = (zone: RibbonZone): React.ReactNode => {
-    const open = openZone === zone
-    const name = t(open ? 'lcl.ribbon.less' : 'lcl.ribbon.more')
-    const Icon = !open ? MoreHorizontal : zone === 'top' ? ChevronUp : ChevronDown
+    const open = moreFly === zone
+    const tail = (zone === 'top' ? top : bot).tail
+    const name = t('lcl.ribbon.moreCount', { label: t(zone === 'top' ? 'lcl.ribbon.moreSpaces' : 'lcl.ribbon.moreCommands'), n: tail.length })
+    const holdsActive = zone === 'top' && !!activeSpaceId && tail.some((e) => e.id === `space:${activeSpaceId}` || (e.kind === 'folder' && e.folder.items.includes(`space:${activeSpaceId}`)))
     return (
       <button
-        className={`rb-btn rb-more${open ? ' is-open' : ''}${overFolder === `more:${zone}` ? ' drag-into' : ''}`}
+        className={`rb-btn rb-more${open ? ' is-open' : ''}${holdsActive ? ' is-current' : ''}${overFolder === `more:${zone}` ? ' drag-into' : ''}`}
         data-rb-more={zone}
         aria-label={name}
         aria-expanded={open}
-        data-rb-tip={expanded ? undefined : name}
-        onClick={() => changeOpenZone(open ? null : zone)}
+        aria-haspopup="true"
+        data-rb-tip={expanded || open ? undefined : name}
+        onClick={() => toggleMore(zone)}
         onDragOver={(e) => acceptOver(e, !!drag && drag.zone === zone, () => { setOver(null); setOverFolder(`more:${zone}`) })}
         onDragLeave={() => { if (overFolder === `more:${zone}`) setOverFolder(null) }}
-        // 收进「…」= 挪到它吃的那一端:上区 = 区末尾,命令区 = 区开头。
+        // 收进「+N」= 挪到它吃的那一端:上区 = 区末尾,命令区 = 区开头。
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOnBar(zone, zone === 'bottom' ? (botE[0]?.id ?? null) : null) }}
       >
-        <Icon size={18} />
-        {!open && (zone === 'top' ? top : bot).tail.some((e) => e.kind === 'item' ? dotted.has(e.id) : e.kind === 'folder' && e.folder.items.some((id) => dotted.has(id))) && <span className="rb-badge rb-dot" aria-hidden="true" />}
-        {expanded && <span className="rb-label">{name}</span>}
+        <span className="rb-more-n" aria-hidden="true">+{tail.length}</span>
+        {tail.some((e) => e.kind === 'item' ? dotted.has(e.id) : e.kind === 'folder' && e.folder.items.some((id) => dotted.has(id))) && <span className="rb-badge rb-dot" aria-hidden="true" />}
+        {expanded && <span className="rb-label">{t(zone === 'top' ? 'lcl.ribbon.moreSpaces' : 'lcl.ribbon.moreCommands')}</span>}
       </button>
     )
   }
@@ -1014,7 +1043,7 @@ export function Ribbon() {
          * 还没 render 就松手时让提示≠落点 —— 那正是本次要根治的病。 */
         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); dropOnBar(zone, (over?.zone === zone ? ids[over.index] : null) ?? null) }}
       >
-        {zone === 'bottom' && <>{renderPlusBtn(zone)}{(part.tail.length > 0 || openZone === zone) && renderMoreBtn(zone)}</>}
+        {zone === 'bottom' && <>{renderPlusBtn(zone)}{(part.tail.length > 0 || moreFly === zone) && renderMoreBtn(zone)}</>}
         {/* 滑动框(滚轮翻看的平滑动画):整区条目排成一列,框只露 n 格高,列按窗口起点 translateY,过渡 0.2s。
             窗外的是等高空占位 .rb-cell(不是 .rb-slot:拖拽量槽、台架按 .rb-slot 认「露出的格子」都不受影响),
             只在滑动中(手势 + 吸附)临时画出图标(inert:滑动中也别让 Tab 落进去,Codex 评审)。 */}
@@ -1023,11 +1052,11 @@ export function Ribbon() {
             {(zone === 'top' ? topE : botE).map((en, k) => {
               const i = k - part.start
               if (i >= 0 && i < part.shown.length) return renderSlot(en, zone, i, preview, !preview && over?.zone === zone && over.index === i, k)
-              return <div key={en.id} className="rb-cell" aria-hidden inert style={{ height: slotH - GAP }}>{(live[zone] || resizing) && renderEntry(en)}</div>
+              return <div key={en.id} className="rb-cell" aria-hidden inert style={{ height: slotH - GAP }}>{live[zone] && renderEntry(en)}</div>
             })}
           </div>
         </div>
-        {zone === 'top' && <>{(part.tail.length > 0 || openZone === zone) && renderMoreBtn(zone)}{renderPlusBtn(zone)}</>}
+        {zone === 'top' && <>{(part.tail.length > 0 || moreFly === zone) && renderMoreBtn(zone)}{renderPlusBtn(zone)}</>}
       </div>
     )
   }
@@ -1059,12 +1088,55 @@ export function Ribbon() {
     </div>
   )
 
+  // ---- 「+N」浮层的行:条上那一格原样搬进来(同一个按钮,带名字)。拖回条上 = 常驻;右键菜单同条上;点开一项即缩回。
+  //      收纳夹在这里摊开成标题 + 成员行(flyRow 同收纳夹浮层);标题就是条上那颗夹按钮的替身:
+  //      右键、整夹拖回条上、拖入(空夹没有成员行,只能拖到这里)都认它。 ----
+  const moreRow = (e: Entry, zone: RibbonZone): React.ReactNode => {
+    if (e.kind === 'folder') return (
+      <div key={e.id} className="rb-fly-group">
+        <div
+          data-id={e.id}
+          data-rb-folder={e.folder.id}
+          className={`rb-fly-sub rb-fly-folderhead${drag?.id === e.id ? ' dragging' : ''}${overFolder === e.folder.id ? ' drag-into' : ''}`}
+          draggable
+          onDragStart={(ev) => { ev.stopPropagation(); startDrag(ev, e.id, zone, null) }}
+          onDragEnd={finishDrag}
+          onContextMenu={folderCtx(e.folder)}
+          onDragOver={(ev) => acceptOver(ev, !!drag && drag.zone === zone && !drag.id.startsWith('folder:'), () => { setOver(null); setOverFolder(e.folder.id) })}
+          onDragLeave={() => { if (overFolder === e.folder.id) setOverFolder(null) }}
+          onDrop={(ev) => { if (!drag || drag.id.startsWith('folder:')) return; ev.preventDefault(); ev.stopPropagation(); dropIntoFolder(e.folder) }}
+        >{e.folder.name}</div>
+        {e.folder.items.map((id, i) => { const m = byId.get(id); return m ? flyRow(m, e.folder, i, e.folder.items) : null })}
+      </div>
+    )
+    const at = zone === 'top' ? topE.indexOf(e) : -1
+    const hint = at >= 0 ? slotHint(at) : ''
+    return (
+      <div
+        key={e.id}
+        data-id={e.id}
+        // 也挂 rb-slot:各台架按 `.rb-slot[data-id=…]` 找格子,藏进 +N 的照样找得到(组内量槽只认 .rb-group 里的)
+        className={`rb-slot rb-fly-row${drag?.id === e.id ? ' dragging' : ''}`}
+        data-menu-open={menuOpenFor(e)}
+        draggable={nativeDraggable(e.id)}
+        onPointerDown={(ev) => pointerDown(ev, e.id, zone, null, false)}
+        onDragStart={(ev) => { ev.stopPropagation(); startDrag(ev, e.id, zone, null) }}
+        onDragEnd={finishDrag}
+        onContextMenu={e.kind === 'cmd' ? cmdCtx(e.cmd.id) : itemCtx(e.item)}
+      >
+        {renderEntry(e, true)}
+        {hint && <span className="rb-key">{hint}</span>}
+      </div>
+    )
+  }
+
   return (
     // rb-dragging 只在拖动中挂:让位动画的 transition 也只在这期间生效。松手时 DOM 顺序变了、
     // transform 归零,若还带着 transition 就会从错误的偏移飞回来(旧位移是相对旧布局的)。
     <div
       ref={rootRef}
-      className={`rb${expanded ? ' rb-expanded' : ''}${drag ? ' rb-dragging' : ''}${openZone ? ` rb-open-${openZone}` : ''}`}
+      // rb-open-<zone> 只是标记(无样式):老台架以它判「已展开」、点 `.rb-open-top .rb-more` 收起
+      className={`rb${expanded ? ' rb-expanded' : ''}${drag ? ' rb-dragging' : ''}${moreFly ? ` rb-open-${moreFly}` : ''}`}
       onContextMenu={onRootCtx}
       onMouseOver={onPeekOver}
       onMouseLeave={() => { window.clearTimeout(peekOpenTimer.current); peekFor.current = null }}
@@ -1098,12 +1170,11 @@ export function Ribbon() {
         </button>
         {headItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
-      {/* 主位槽:**恒渲染**(空着也留),排在 Space 区最前。没有 home 件的宿主(如 Tangu Web)高度为 0。
-          它属于 Space 那一侧:命令区展开时跟上区一起让出来(CSS 藏,不卸载)。 */}
+      {/* 主位槽:**恒渲染**(空着也留),排在 Space 区最前。没有 home 件的宿主(如 Tangu Web)高度为 0。 */}
       <div ref={homeRef} className="rb-group rb-home">
         {homeItems.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
-      {openZone !== 'bottom' && renderZone('top', top)}
+      {renderZone('top', top)}
       {recentItems.length > 0 && (
         <div className="rb-group rb-recent" role="group" aria-label={t('lcl.ribbon.recentSpaces')}>
           {recentItems.map((i) => (
@@ -1113,7 +1184,7 @@ export function Ribbon() {
           ))}
         </div>
       )}
-      {openZone !== 'top' && renderZone('bottom', bot)}
+      {renderZone('bottom', bot)}
       <div ref={pinnedRef} className="rb-group rb-pinned">
         {pinned.map((i) => <RibbonItemView key={i.id} item={i} expanded={expanded} />)}
       </div>
@@ -1133,6 +1204,20 @@ export function Ribbon() {
           <div className="rb-fly-head">{flyFolder.name}</div>
           {liveCount(flyFolder) === 0 && <div className="rb-fly-empty">{t('lcl.ribbon.folderEmpty')}</div>}
           {flyFolder.items.map((id, i) => { const e = byId.get(id); return e ? flyRow(e, flyFolder, i, flyFolder.items) : null })}
+        </div>
+      )}
+
+      {moreFly && (
+        <div
+          ref={moreRef}
+          className="rb-fly rb-more-fly"
+          data-rb-more-fly={moreFly}
+          // 点开一项(普通按钮)就缩回;自带浮层的组件条目(设备互联胶囊)不是 .rb-btn,点它不收。
+          onClick={(e) => { if (!drag && (e.target as Element).closest('.rb-btn')) closeMore() }}
+        >
+          <div className="rb-fly-head">{t('lcl.ribbon.moreCount', { label: t(moreFly === 'top' ? 'lcl.ribbon.moreSpaces' : 'lcl.ribbon.moreCommands'), n: moreTail.length })}</div>
+          {moreTail.map((e) => moreRow(e, moreFly))}
+          <div className="rb-fly-empty rb-fly-hint">{t('lcl.ribbon.dragToPin')}</div>
         </div>
       )}
 
