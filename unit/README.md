@@ -72,9 +72,9 @@ The default listener is loopback-only. The owner key stays in private instance d
 
 ## 云账号 / Cloud account
 
-本地模式（`--mode local`）的 Unit 可以托管 Forsion Extend 的 Node 层，不需要 Electron：同一份签名包、同一个 `registerCloud` 入口。装上它之后，这台 Unit 就能登录账号、同步笔记，并通过云端中转被同账号的其他设备访问。Extend 不随发行包提供，从 npm 取，装载时用桌面同一把固定公钥验签。
+本地模式（`--mode local`）的 Unit 可以托管 Forsion Extend 的 Node 层，不需要 Electron：同一份签名包、同一个 `registerCloud` 入口。装上它之后，这台 Unit 就能登录账号、同步笔记，并通过云端中转被同账号的其他设备访问。它在这里只是宿主服务，不进主人的网页。Extend 不随发行包提供，从 npm 取，装载时用桌面同一把固定公钥验签。
 
-A local-mode Unit can host the Node half of Forsion Extend without Electron: the same signed package and the same `registerCloud` entry. Once installed, the Unit can sign in, sync notes, and be reached by the account's other devices through the cloud relay. Extend is not part of the release; take it from npm. It is verified against the same pinned key as the desktop.
+A local-mode Unit can host the Node half of Forsion Extend without Electron: the same signed package and the same `registerCloud` entry. Once installed, the Unit can sign in, sync notes, and be reached by the account's other devices through the cloud relay. Here it is a host service and adds nothing to the owner's page. Extend is not part of the release; take it from npm. It is verified against the same pinned key as the desktop.
 
 ```sh
 npm pack @forsion/extend && tar -xzf forsion-extend-*.tgz

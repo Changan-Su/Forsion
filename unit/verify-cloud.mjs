@@ -100,6 +100,10 @@ try {
   check('the empty vault binds to the account', accounts.every((s) => s.vaultBound))
   check('credentials are owner-only', units.every((unit) => (statSync(join(dirname(unit.config), 'data/cloud/auth.json')).mode & 0o077) === 0))
 
+  const page = async (path) => (await fetch(`http://127.0.0.1:${a.port}/web${path}`, { headers: { Authorization: `Bearer ${a.owner}` } })).json()
+  const [plugins, spaces] = await Promise.all([page('/unit/plugins'), page('/unit/spaces')])
+  check('the owner page shows no account bundle', Array.isArray(plugins.plugins) && !plugins.plugins.some((p) => p.id === 'forsion-extend') && !spaces.spaces.some((p) => p.plugin === 'forsion-extend'))
+
   const ids = await Promise.all(units.map(async (unit) => { await until(async () => (await unit.account()).relay?.connected); return (await unit.account()).relay?.unitId }))
   registered = ids.filter(Boolean)
   const roster = (await hub('/units')).json?.units ?? []

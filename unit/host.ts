@@ -101,7 +101,8 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   validateFeatures()
   const usable = (rec: RecordState): boolean => rec.state === 'active'
     && (rec.package.manifest.requires || []).every((id) => usable(mustGet(id)))
-  const visible = (rec: RecordState): boolean => usable(rec) && rec.installation.publish !== false
+  // On a local Unit the account bundle is a host service: its pages need account channels the owner's page does not have.
+  const visible = (rec: RecordState): boolean => usable(rec) && rec.installation.publish !== false && !(local && cloudBundle(rec.package.manifest.id))
     && (rec.package.manifest.requires || []).every((id) => !mustGet(id).package.manifest.frontend || visible(mustGet(id)))
   const published = () => [...records.values()].filter(visible)
   const product = resolveProduct(undefined, { ...basic, market: false, onboarding: false, nativeFeatures: [] })
