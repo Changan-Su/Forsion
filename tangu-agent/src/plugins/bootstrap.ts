@@ -5,6 +5,7 @@ import { createPluginRuns, pluginEngines } from './runs.js';
 import { createPluginWorkspaces } from './workspaces.js';
 import { createPluginAutomation } from './automation.js';
 import { registerPluginSkillProvider } from '../skills/pluginSkills.js';
+import { registerPluginModelProvider } from '../llm/pluginModels.js';
 import { authMiddleware } from '../core/http.js';
 import path from 'node:path';
 /**
@@ -159,6 +160,11 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
     registerSkillProvider: (provider) => {
       if (!live('技能')) return;
       inst.runtimeDisposers.push(registerPluginSkillProvider(id, provider));
+    },
+    registerModelProvider: (provider) => {
+      if (!live('模型来源')) return;
+      if (!deps().profile.capabilities.hostExec) throw new Error('Plugin model providers require a local engine');
+      inst.runtimeDisposers.push(registerPluginModelProvider(id, provider));
     },
     // folder 插件进统一注册表；图标只信宿主读到的包根 icon.png。
     // 捆绑包内嵌的引擎插件默认跟随捆绑包(桌面上捆绑包缺省即启用,且只给捆绑包一个开关、拨动时级联):

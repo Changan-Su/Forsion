@@ -326,12 +326,78 @@ export interface PluginSkillProvider {
   list(context: PluginSkillListContext): Promise<readonly PluginSkillEntry[]>;
 }
 
+export type PluginModelThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export interface PluginModel {
+  /** Source-local ID (1–240 characters); the host percent-encodes and namespaces it. */
+  id: string;
+  name: string;
+  contextWindow?: number;
+  /** Default false. Declare true only when the source accepts image parts. */
+  supportsVision?: boolean;
+  thinkingLevels?: PluginModelThinkingLevel[];
+}
+export interface PluginModelReadContext { signal: AbortSignal }
+/** Host-bound local adapter isolation. Never send these identities upstream. */
+export interface PluginModelCallContext {
+  readonly sessionId: string;
+  readonly userId: string;
+  readonly cwd: string | null;
+}
+export interface PluginModelToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+export interface PluginModelMessage {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string | any[] | null;
+  tool_calls?: PluginModelToolCall[];
+  tool_call_id?: string;
+  reasoning_content?: string;
+}
+export interface PluginModelRequest {
+  /** The source-local model ID, not its namespaced host ID. */
+  modelId: string;
+  messages: PluginModelMessage[];
+  tools?: Tool[];
+  toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  temperature?: number;
+  maxTokens?: number;
+  thinkingLevel?: PluginModelThinkingLevel;
+  cacheKey?: string;
+  /** Absent outside a bound native run. Never inferred from cacheKey or payload fields. */
+  readonly context?: PluginModelCallContext;
+  signal: AbortSignal;
+  onToken?: (delta: string) => void;
+  onReasoning?: (delta: string) => void;
+  onToolCallDelta?: (info: { id: string; name: string; argsLen: number; args: string; argsDelta: string }) => void;
+  onResponseStart?: () => void;
+}
+export interface PluginModelResult {
+  content: string;
+  reasoning: string;
+  toolCalls: PluginModelToolCall[];
+  usage: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number };
+  finishReason?: string;
+}
+export interface PluginModelProvider {
+  /** Provider-local kebab-case slug, 1–64 characters. */
+  id: string;
+  listModels(context: PluginModelReadContext): Promise<readonly PluginModel[]>;
+  resolveModel(modelId: string, context: PluginModelReadContext): Promise<PluginModel | null>;
+  /** Exactly one inference; return tool calls to the host without executing them. */
+  stream(input: PluginModelRequest): Promise<PluginModelResult>;
+}
+
 export interface TanguPluginContext {
   registerPlugin(meta: PluginMeta): void;
   registerToolProvider(p: ToolProvider): void;
   /** Live read-only source; IDs are local:plugin/<engineId>/<providerId>/<entryId>.
    * Automatically revoked on disable, unload, failed activation or replacement. */
   registerSkillProvider(provider: PluginSkillProvider): void;
+  /** Local single-inference source. Full IDs: plugin:<engineId>/<providerId>/<encodedModelId>.
+   * Automatically revoked, including in-flight requests, when this activation is disposed. */
+  registerModelProvider(provider: PluginModelProvider): void;
   /** 注册 `tangu <name>` 子命令(如 computer-use 的 doctor/setup)。 */
   registerCommand(cmd: PluginCommand): void;
   registerScopedRoutes(mount: (router: ScopedPluginRouter) => void): void;

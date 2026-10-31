@@ -11,6 +11,7 @@ import type { ToolProvider, ToolDef } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import type { PluginSkillProvider } from '../skills/pluginSkills.js';
+import type { PluginModelProvider } from '../llm/pluginModels.js';
 import type { PluginChannelSpec } from '../channels/types.js';
 
 type Assert<T extends true> = T;
@@ -27,6 +28,8 @@ type _PluginOk = Assert<Extends<Pub.TanguPlugin, TanguPlugin>>;
 type _ProviderOk = Assert<Extends<Pub.ToolProvider, ToolProvider>>;
 type _SkillProviderOk = Assert<Extends<Pub.PluginSkillProvider, PluginSkillProvider>>;
 type _PublicSkillProviderOk = Assert<Extends<PluginSkillProvider, Pub.PluginSkillProvider>>;
+type _ModelProviderOk = Assert<Extends<Pub.PluginModelProvider, PluginModelProvider>>;
+type _PublicModelProviderOk = Assert<Extends<PluginModelProvider, Pub.PluginModelProvider>>;
 type _MetaOk = Assert<Extends<Pub.PluginMeta, PluginMeta>>;
 type _ToolDefOk = Assert<Extends<Pub.ToolDef, ToolDef>>;
 type _ChannelOk = Assert<Extends<Pub.PluginChannelSpec, PluginChannelSpec>>;

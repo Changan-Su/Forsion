@@ -28,6 +28,7 @@ interface Host {
 
 interface PluginSpec {
   skills?: boolean;
+  models?: boolean;
   version?: string;
   requires?: unknown;
   defaultEnabled?: boolean;
@@ -132,6 +133,7 @@ export default {
       ? `ctx.registerToolProvider(${provider});`
       : `ctx.registerPlugin({ id: '${id}', name: '${id}', description: 'x', defaultEnabled: ${spec.defaultEnabled ?? true}, toolProvider: ${provider} });`}
     ${spec.skills ? `g.__skillCtx = ctx; ctx.registerSkillProvider({ id: 'external', list: async () => [{ id: 'release', name: 'Release', description: 'Release fixture', content: tag }] });` : ''}
+    ${spec.models ? `g.__modelCtx = ctx; ctx.registerModelProvider({ id: 'source', listModels: async () => [{ id: 'model', name: tag }], resolveModel: async () => ({ id: 'model', name: tag }), stream: async () => ({ content: tag, reasoning: '', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }) });` : ''}
     ${spec.route ? `ctx.registerRoutes((r) => r.userRouter.get('${spec.route}', (_req, res) => res.json({ tag })));` : ''}
     ${spec.throwInActivate ? "throw new Error('boom');" : ''}
     ${spec.hangActivateOnce ? `if (!g.__hung['a:${id}']) { g.__hung['a:${id}'] = 1; return new Promise((r) => { g.__release['${id}'] = r; }); }` : ''}
@@ -193,6 +195,46 @@ describe('plugin skill sources', () => {
     await h.boot.activateAllPlugins();
     const { listPluginSkills } = await import('../skills/pluginSkills.js');
     expect(await listPluginSkills()).toEqual([]);
+  });
+});
+
+describe('plugin model sources', () => {
+  it('removes native catalog entries on disable, ignores stale registrations and restores on re-enable', async () => {
+    writePlugin('lc-models', { models: true });
+    const h = await host();
+    const { configureTangu } = await import('../seams/runtime.js');
+    const { createTanguProfile } = await import('../profiles/index.js');
+    const { withPluginModelProviders } = await import('../llm/pluginModels.js');
+    const brain = withPluginModelProviders({ models: { listGlobalModels: async () => [] }, llm: {} } as any);
+    const profile = createTanguProfile({ sandboxMode: 'none' });
+    configureTangu({ host: {} as any, brain, billing: {} as any, profile });
+    await h.boot.activateAllPlugins();
+    const { listModelCatalog } = await import('../services/modelCatalog.js');
+    expect((await listModelCatalog(profile)).models.map(m => m.id)).toEqual(['plugin:lc-models/source/model']);
+    const stale = (globalThis as any).__modelCtx;
+    await h.boot.setPluginEnabledLive('lc-models', false);
+    stale.registerModelProvider({ id: 'late' });
+    expect((await listModelCatalog(profile)).models).toEqual([]);
+    await h.boot.setPluginEnabledLive('lc-models', true);
+    expect((await listModelCatalog(profile)).models.map(m => m.id)).toEqual(['plugin:lc-models/source/model']);
+    await h.boot.removePluginLive('lc-models');
+    expect((await listModelCatalog(profile)).models).toEqual([]);
+  });
+
+  it('rolls back failed activations and refuses non-local registration', async () => {
+    writePlugin('lc-bad-models', { models: true, throwInActivate: true });
+    const h = await host();
+    const { configureTangu } = await import('../seams/runtime.js');
+    const { createTanguProfile } = await import('../profiles/index.js');
+    const { listPluginModels } = await import('../llm/pluginModels.js');
+    const profile = createTanguProfile({ sandboxMode: 'none' });
+    configureTangu({ host: {} as any, brain: {} as any, billing: {} as any, profile });
+    await h.boot.activateAllPlugins();
+    expect(await listPluginModels()).toEqual([]);
+    writePlugin('lc-cloud-models', { models: true });
+    profile.capabilities.hostExec = false;
+    await h.boot.rescanPlugins();
+    expect(await listPluginModels()).toEqual([]);
   });
 });
 

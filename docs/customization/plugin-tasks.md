@@ -33,6 +33,8 @@ res.json(context)
 
 旧宿主先检测 `typeof ctx.sdk.runs?.context === 'function'`。新对话草稿没有会话 ID，或返回的 `cwd` 为 `null`，应让用户选择项目，不可猜测 home 或默认工作目录。结果是保存的会话快照，不含未保存的输入栏草稿；没有值时不自动补模型、思考档或审批档，未知非空审批档按宿主规则收紧到 `readonly`。读取普通会话元数据不授予插件执行或读取该会话正文的权限；新任务仍经 `runs.start` 创建独立会话，不可把来源 ID 当成插件任务的 `sessionId`。`approvalMode` 仅供展示，不会给新任务授权；执行沿用 `runs.start` 自身的项目审批设置与原生审批。
 
+如果要让外部来源提供推理并保留原生循环，请注册[插件模型来源](plugin-model-providers.md)，再在 `runs.start` 选择它的完整模型 ID。
+
 ## 工作区与自动化
 
 `sdk.workspaces.prepare` 创建插件拥有的 Git worktree；`inspect(id,userId)` 返回 diff 和 revision；`merge(id,userId,revision)` 仅合并用户检查过的内容，要求干净且未变化的目标，冲突留在任务 worktree 里；`archive(id,userId)` 移动工作区并保留忽略/未跟踪文件，移动中断后可以恢复。合并和归档在源目录与目标目录取得原生任务维护锁，无法取得就拒绝。本机多个引擎进程之间不构成分布式锁。

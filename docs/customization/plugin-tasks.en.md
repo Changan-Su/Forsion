@@ -33,6 +33,8 @@ res.json(context)
 
 Feature-detect `typeof ctx.sdk.runs?.context === 'function'` on older hosts. A new-chat draft has no session ID. If no ID exists or `cwd` is `null`, ask the user to select a project; never guess a home or default working directory. This is a saved session snapshot, excluding unsaved composer drafts. Missing model, thinking or approval settings stay `null`; an unknown nonempty approval mode is restricted to `readonly` under the host's rules. Reading a normal session's metadata grants no permission to run in it or read its messages. Create a separate task with `runs.start`; do not reuse the source ID as the task's `sessionId`. `approvalMode` is informational and grants no authorization to a new task; execution still uses `runs.start`'s project approval settings and native approval flow.
 
+To supply inference through an external source while retaining the native loop, register a [plugin model provider](plugin-model-providers.en.md), then select its namespaced model ID in `runs.start`.
+
 ## Workspaces and automation
 
 `sdk.workspaces.prepare` creates a Git worktree owned by the plugin; `inspect(id,userId)` returns the diff and revision; `merge(id,userId,revision)` merges only what the user inspected and requires a clean, unchanged destination, and conflicts stay in the task worktree; `archive(id,userId)` moves the workspace aside, keeps ignored and untracked files, and can recover after an interrupted move. Merge and archive take the native task maintenance lock on both the source and destination directories and refuse if they cannot get it. These locks are not distributed across multiple engine processes on the same machine.

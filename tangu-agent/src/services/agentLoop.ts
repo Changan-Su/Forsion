@@ -25,7 +25,7 @@ import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd } from '../seams/runContext.js';
+import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
@@ -992,6 +992,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const clientTag = typeof input.client === 'string' ? input.client : undefined;
   // 远程污点(契约 C1/C3/C5):只认 input.remote(路由解析 / 派生 run 显式抄写),审批档据此钳到上限。
   const remote = remoteOf(input);
+  setRunSessionContext(sessionId, !!remote || !!input.remoteTainted);
   const remoteCap = remote ? remoteApprovalCap() : undefined;
   // 界面面(set_ui_setting / run_ui_command / list_ui_commands)的能力握手 + 目录快照。
   // 与 clientTag 同源同链;run 内冻结(prompt 缓存纪律,同 mcpTools)。
@@ -2039,6 +2040,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // protocol 同理必须带上:anthropic-messages 直连的 legacy claude,少了它会报 off 生效而 wire 实发预算。
     const thinkingEffective = clampThinkingLevel(
       resolveModelCapability({
+        thinkingLevels: model?.pluginThinkingLevels,
         baseUrl: (model as any)?.defaultBaseUrl || baseUrl,
         provider: model?.provider,
         modelId: apiModelId || modelId,
