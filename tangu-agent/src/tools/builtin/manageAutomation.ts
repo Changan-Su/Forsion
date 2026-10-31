@@ -136,7 +136,7 @@ export const manageAutomationProvider: ToolProvider = {
                 },
               },
               max_per_day: { type: 'number', description: 'set: at most this many firings a day' },
-              observe: { type: 'boolean', description: 'set: true = record each firing without running its actions (not for at or manual rules); false = run them. Omit unless the user asked for one or the other.' },
+              observe: { type: 'boolean', description: 'set: true = record each firing without running its actions (not for at or manual rules). Only the user can turn an observing rule on.' },
               event: { type: 'string', enum: ['row_added', 'cell_changed'], description: 'set(db_changed): which change to watch' },
               column_id: { type: 'string', description: 'set(db_changed + cell_changed): the column ID (NOT its name — names are neither unique nor stable). Read the .db JSON to find it.' },
               column_ids: { type: 'array', items: { type: 'string' }, description: 'set(db_changed + cell_changed): watch several columns at once (column IDs; the rule fires when ANY of them changes; max 10). May be combined with column_id — the union is watched. Prefer this over creating one rule per column.' },
@@ -243,9 +243,8 @@ export const manageAutomationProvider: ToolProvider = {
           }
         }
         const id = String(args.id || '').trim() || undefined;
-        // auto 档 Muse 自己新建的、会动东西的规则缺省先观察:没有用户看过的规则,不直接放权。
-        const startsObserving = !!ctx.muse && !id && args.observe === undefined && canObserve(v.value.cond) && rewritesThings(v.value);
-        if (startsObserving) v.value.observe = true;
+        // auto 档 Muse 自己新建的、会动东西的规则一律先观察,传 observe:false 也一样:没有用户看过的规则,不放权。
+        if (ctx.muse && !id && canObserve(v.value.cond) && rewritesThings(v.value)) v.value.observe = true;
         // 插件种子规则(plugin:<插件id>:<key>)归插件的 ensure 管:聊天 agent 不能改也不能借它的 id 凭空建(伪插件规则绕 50 条帽)。
         if (id && isPluginTriggerId(id)) return `Error: rule ${id} is managed by a plugin and cannot be changed with this tool.`;
         // 监听列必须是落盘列:公式/引用/投影列的值不落盘,游标恒空 → 规则一次都不触发、零日志、面板正常。
@@ -253,6 +252,10 @@ export const manageAutomationProvider: ToolProvider = {
         // ⚠️ H2 同款闸(与 HTTP 路由对齐):只在新建 / cond 实质变化 / 本次要置为 enabled:true 时体检。
         // set 是**整量** upsert,agent 要「把这条规则关掉」也走这里 —— 关规则永远不许被预检挡住。
         const prev = id ? (await loadTriggers()).find((x) => x.id === id) : undefined;
+        // 观察转启用只有用户能做(面板和结果卡):改成一次性条件也等于转成启用。
+        if (prev?.observe && (v.value.observe === false || !canObserve(v.value.cond))) {
+          return 'Error: only the user can turn an observing rule on. Tell them to enable it in Automation.';
+        }
         if (!prev || JSON.stringify(prev.cond) !== JSON.stringify(v.value.cond) || (v.value.enabled && !prev.enabled)) {
           const badCol = await precheckWatchCols(v.value.cond, (rel) => readDbOrNull(rel) as Promise<DbLike | null>, amadeusVaultPath());
           if (badCol) return `Error: ${badCol}`;

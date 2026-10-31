@@ -17,7 +17,7 @@ import { launchAutomationTriggers, listExecutions, observedSteps } from '../src/
 import { drainAutomation, type DrainDeps } from '../src/services/automationDrain.js';
 import { decideMuseCard, getMuseCard, postMuseCard, postObservedRuleCards } from '../src/services/museCards.js';
 import { evaluateTriggers, loadTriggers, removeTrigger, upsertTrigger, validateTriggerInput, type DbLike, type MuseTrigger, type TriggerInput } from '../src/services/museTriggers.js';
-import type { DbCursor } from '../src/services/dbCursors.js';
+import { loadCursors, setCursors, type DbCursor } from '../src/services/dbCursors.js';
 
 const { dms } = vi.hoisted(() => ({ dms: [] as string[] }));
 vi.mock('../src/services/museDm.js', async (orig) => ({ ...(await orig<any>()), postMuseDm: async (_u: string, text: string) => { dms.push(text); return { ok: true, id: 'm' }; } }));
@@ -57,6 +57,7 @@ describe('规则状态', () => {
     expect(validateTriggerInput({ desc: 'x', cond_type: 'at', datetime: soon, observe: true }).ok).toBe(false);
     expect(validateTriggerInput({ desc: 'x', cond_type: 'manual', observe: true, actions: [{ type: 'notify', title: 'n' }] }).ok).toBe(false);
     expect(validateTriggerInput({ ...daily, observe: true }).ok).toBe(true);
+    expect(validateTriggerInput({ ...daily, observe: 'true' }).ok).toBe(false);
     expect(validateTriggerInput({ desc: 'x', cond_type: 'at', datetime: soon, observe: false }).ok).toBe(true);
   });
 
@@ -177,6 +178,36 @@ describe('排空循环', () => {
     expect(w.ran).toEqual([w.t.id]);
   });
 
+  it('含 Agent 的规则一轮只吃一行:观察期余下的行转成启用后也不跑', async () => {
+    const w = world({ actions: [{ type: 'agent_run', agentSlug: 'writer', prompt: 'x' }], cooldownHours: 0 });
+    w.add('r1'); w.add('r2'); w.add('r3');
+    await drainAutomation(w.deps);
+    expect(await listExecutions(w.t.id)).toHaveLength(1);
+    expect(w.cursors[w.t.id].rowIds).toEqual(['r1']); // 余下两行还在游标外
+    // 转启用走真 upsert 清游标;world 的游标跟着清,下一轮按当前表重播种
+    const saved = await save({ desc: 'rows', cond_type: 'daily_at', time: '09:00', observe: true });
+    await setCursors({ [saved.id]: w.cursors[w.t.id] });
+    await save({ desc: 'rows', cond_type: 'daily_at', time: '09:00', observe: false }, saved.id);
+    expect((await loadCursors())[saved.id]).toBeUndefined();
+    delete w.cursors[w.t.id];
+    delete w.t.observe;
+    await drainAutomation(w.deps);
+    expect(w.ran).toEqual([]);
+    w.add('r4');
+    await drainAutomation(w.deps);
+    expect(w.ran).toEqual([w.t.id]);
+  });
+
+  it('活动行:观察期冷却中没消费的行转成启用后不算', async () => {
+    const t = await save({ desc: 'seen', cond_type: 'event_seen', match: 'build failed', observe: true });
+    const live = await save({ desc: 'seen', cond_type: 'event_seen', match: 'build failed', observe: false }, t.id);
+    expect(live.lastEventCursor?.ts).toBeTruthy();
+    const env = { now: new Date(), activityLines: ['202001021000 build failed'], log: () => {} } as any;
+    const old = { ...live, createdAt: '2020-01-01T00:00:00.000Z' };
+    expect(await evaluateTriggers([{ ...old, lastEventCursor: undefined }], env)).toHaveLength(1); // 没有截断时这行会命中
+    expect(await evaluateTriggers([old], env)).toEqual([]);
+  });
+
   it('撞到轮数上限时,只停真写表的规则,不停观察的', async () => {
     const live = obs({ id: 'w-live', observe: undefined, actions: [{ type: 'notify', title: 'n' }] }), watching = obs({ id: 'w-obs', actions: [{ type: 'notify', title: 'n' }] });
     const off: string[][] = [];
@@ -257,6 +288,17 @@ describe('结果卡', () => {
     expect((await rule(c.t.id))).toMatchObject({ enabled: false, observe: true, disabledBy: 'user' });
   });
 
+  it('暂停了的规则:旧卡收掉,不假装启用了', async () => {
+    const t = await byMuse();
+    await hit(t.id, 'a');
+    await postObservedRuleCards(USER, later(t, 7));
+    const [{ id }] = await cards(t);
+    await save({ ...daily, enabled: false, actions: agentStep }, t.id);
+    expect((await decideMuseCard(USER, id, 'enable')).ok).toBe(true);
+    expect(await getMuseCard(USER, id)).toMatchObject({ status: 'dismissed', result: 'gone' });
+    expect(await rule(t.id)).toMatchObject({ enabled: false, observe: true });
+  });
+
   it('手机上不能启用无人值守的规则,其他按钮和只发提醒的规则可以', async () => {
     const t = await byMuse();
     await hit(t.id, 'a');
@@ -281,6 +323,14 @@ describe('结果卡', () => {
     await removeTrigger(t.id);
     expect((await decideMuseCard(USER, id, 'enable')).ok).toBe(true);
     expect(await getMuseCard(USER, id)).toMatchObject({ status: 'dismissed', result: 'gone' });
+  });
+
+  it('规则卡的「好」就是启用:模型在入参里塞 observe 也不算', async () => {
+    const r = await postMuseCard(USER, { kind: 'rule', payload: { input: { ...daily, observe: true, actions: [{ type: 'notify', title: 'n' }] }, rule: { desc: 'digest' } }, text: 'x' });
+    if (!r.ok) throw new Error(r.error);
+    const d = await decideMuseCard(USER, r.id, 'accept');
+    if (!d.ok) throw new Error(d.error);
+    expect((await rule(d.trigger!.id))?.observe).toBeUndefined();
   });
 
   it('规则卡的「先观察」建成观察中,算 Muse 建的', async () => {

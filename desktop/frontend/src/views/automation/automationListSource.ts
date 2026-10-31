@@ -64,7 +64,7 @@ export function deleteWithUndo(sel: AutomationSel, name: string, run: () => Prom
 export const saveRuleState = (tr: MuseTriggerInfo, next: RuleState): Promise<boolean> => mutate(() => saveMuseTrigger(homeTarget(), {
   ...triggerToUpsert(tr), actor: 'user', ...(next === 'off' ? { enabled: false } : { enabled: true, observe: next === 'observe' }),
 }))
-export const RULE_STATE_LABEL: Record<RuleState, string> = { off: 'automation.ux.off', observe: 'automation.ux.observing', on: 'automation.ux.on' }
+const RULE_STATE_LABEL: Record<RuleState, string> = { off: 'automation.ux.off', observe: 'automation.ux.observing', on: 'automation.ux.on' }
 
 let readers = 0
 let stopPolling: (() => void) | undefined

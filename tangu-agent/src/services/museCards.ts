@@ -13,7 +13,7 @@ import { deps } from '../seams/runtime.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { postMuseDm } from './museDm.js';
-import { loadTriggers, updateObservation, upsertTrigger, validateTriggerInput, type MuseTrigger, type TriggerInput } from './museTriggers.js';
+import { ObservationEnableRefused, loadTriggers, updateObservation, upsertTrigger, validateTriggerInput, type MuseTrigger, type TriggerInput } from './museTriggers.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import type { MuseCardInfo, MuseCardKind } from '../contracts/clientTypes.js';
 import { loadSpecialAgentsConfig, updateMuseConfig, type MuseConfig } from './specialAgentsConfig.js';
@@ -318,7 +318,7 @@ async function decideRuleCard(userId: string, card: MuseCardInfo, action: string
   }
   if (action !== 'accept' && action !== 'edit' && action !== 'observe') return bad;
   const observing = action === 'observe';
-  const v = validateTriggerInput({ ...(card.payload?.input as TriggerInput), enabled: action !== 'edit', ...(observing ? { observe: true } : {}) }, { cwd: card.payload?.cwd, vaultPath: amadeusVaultPath() });
+  const v = validateTriggerInput({ ...(card.payload?.input as TriggerInput), enabled: action !== 'edit', observe: observing || undefined }, { cwd: card.payload?.cwd, vaultPath: amadeusVaultPath() });
   if (!v.ok) return { ok: false, status: 400, error: 'bad_rule', detail: v.error };
   if (!(await settle(userId, card.id, 'done', action === 'edit' ? 'editing' : observing ? 'observing' : 'accepted'))) return gone;
   const r = await upsertTrigger(v.value, undefined, { actor: 'user', ...(observing ? { observeBy: 'muse' as const } : {}) }).catch((e) => ({ ok: false as const, error: String(e?.message || e) }));
@@ -345,15 +345,18 @@ export async function decideMuseCard(
       if (action !== 'enable' && action !== 'extend' && action !== 'pause') return bad;
       const triggerId = String(card.payload?.triggerId || '');
       const rule = (await loadTriggers()).find((t) => t.id === triggerId);
-      if (action === 'enable' && opts.remote && rule && runsUnattended(rule)) {
-        return { ok: false, status: 403, error: 'local_only', detail: 'this rule runs unattended, so it can only be enabled on the computer' };
-      }
-      // 卡放了几天:规则已经删了,或者在面板改过状态。卡收掉,别让用户点一个不存在的东西。
-      if (!rule?.observe) {
+      // 卡放了几天:规则已经删了、暂停了,或者在面板改过状态。卡收掉,别让用户点一个对不上的东西。
+      if (!rule?.observe || !rule.enabled) {
         if (!(await settle(userId, id, 'dismissed', 'gone'))) return gone;
         break;
       }
-      if (!(await settleThen(userId, id, 'done', action, async () => { await updateObservation(triggerId, action); }))) return gone;
+      try {
+        const applied = settleThen(userId, id, 'done', action, async () => { await updateObservation(triggerId, action, opts.remote ? (t) => !runsUnattended(t) : undefined); });
+        if (!(await applied)) return gone;
+      } catch (e) {
+        if (!(e instanceof ObservationEnableRefused)) throw e;
+        return { ok: false, status: 403, error: 'local_only', detail: 'this rule runs unattended, so it can only be enabled on the computer' };
+      }
       await appendMuseFeedback(userId, `[feedback] observed automation "${rule.desc}": ${action} chosen by user`);
       break;
     }

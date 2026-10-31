@@ -109,7 +109,7 @@ export const ExecutionsList: React.FC<{ triggerId: string }> = ({ triggerId }) =
   if (failed) return <div className="auto-runs-empty" role="alert">{t('automation.ux.runError')} <button className="btn ghost sm" onClick={() => setRetry((n) => n + 1)}>{t('automation.ux.retry')}</button></div>
   if (!rows.length) return <div className="auto-runs-empty">{t('automation.ux.runEmpty')}</div>
   return <>{rule?.observe && <div className="auto-hint">{t('automation.ux.observeSummary', {
-    days: String(Math.max(1, Math.ceil((Date.now() - Date.parse(rule.observeSince || '')) / 86_400_000)) || 1), hits: String(rule.observeHits ?? 0),
+    days: String(Math.max(1, Math.floor((Date.now() - Date.parse(rule.observeSince || '')) / 86_400_000) || 1)), hits: String(rule.observeHits ?? 0),
   })}</div>}<div className="auto-executions">{rows.map((r, index) => (
     <details key={r.id} className="auto-execution" open={index === 0 ? true : undefined}>
       <summary>

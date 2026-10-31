@@ -159,7 +159,7 @@ async function main() {
     await win.locator('.auto-detail').getByRole('button', { name: '试跑', exact: true }).click()
     await win.locator('.auto-extension .auto-execution-error').waitFor()
     check('run results expose every step and full failure text', (await win.locator('.auto-extension .auto-executions').innerText()).includes('Could not deliver the second notification'))
-    await win.waitForFunction(() => document.querySelector('.wb-extend')?.getBoundingClientRect().width >= 300)
+    await win.waitForFunction(() => [...document.querySelectorAll('.wb-extend')].some((e) => e.getBoundingClientRect().width >= 280))
     await win.screenshot({ path: path.join(OUT, 'results-zh.png') })
     failExecutions = true
     await win.locator('.auto-detail').getByRole('button', { name: '试跑', exact: true }).click()
@@ -171,7 +171,7 @@ async function main() {
     check('ledger retry restores the execution results', true)
     await win.getByRole('button', { name: '更多操作', exact: true }).click()
     await win.getByRole('menuitem', { name: '启用', exact: true }).click()
-    await win.waitForFunction(() => document.querySelector('.auto-detail .auto-status-label')?.textContent === '已启用')
+    await win.waitForFunction(() => document.querySelector('.auto-detail [role="radio"][aria-checked="true"]')?.textContent === '启用')
     check('enabling preserves the complete action chain', requests.at(-1).enabled && requests.at(-1).actions.length === 2)
     await win.locator('.t2sw-plug .t2s-search input').fill('not-a-rule')
     check('sidebar search filters saved rules', await win.locator('.t2sw-plug-list .t2s-srow').filter({ hasText: 'Canvas regression' }).count() === 0)
@@ -182,7 +182,7 @@ async function main() {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 820))
     await win.screenshot({ path: path.join(OUT, 'canvas-narrow-flow-zh.png') })
     await win.locator('.auto-flow-node').nth(1).click()
-    await win.waitForFunction(() => document.querySelector('.wb-extend')?.getBoundingClientRect().width >= 240)
+    await win.waitForFunction(() => [...document.querySelectorAll('.wb-extend')].some((e) => e.getBoundingClientRect().width >= 240))
     const geometry = await win.locator('.auto-workflow-builder').evaluate((el) => ({ width: el.clientWidth, scroll: el.scrollWidth, visible: !!document.querySelector('.wb-extend .auto-inspector input') }))
     check('narrow canvas uses the native configuration panel without horizontal overflow', geometry.scroll <= geometry.width + 1 && geometry.visible)
     check('narrow configuration labels remain readable', await visibleNode.locator('.auto-node-head').evaluate((el) => el.getBoundingClientRect().height < 65))
@@ -214,7 +214,7 @@ async function main() {
     check('a registry source saves its params and only-conditions', saved.cond_type === 'computer.app_opened' && saved.params?.app === 'Figma' && saved.only?.weekdays?.join() === '1,2,3,4,5')
     // 观察档:规则卡头三段控件 → 运行结果「本应执行」→ 编辑不转正 → 只有用户点启用才转正
     const state = win.locator('.auto-card-head [role="radiogroup"]')
-    const pick = async (name) => { const n = requests.length; await state.getByRole('radio', { name, exact: true }).click(); while (requests.length === n) await win.waitForTimeout(50); await state.locator('[aria-checked="true"]').filter({ hasText: name }).waitFor() }
+    const pick = async (name) => { const n = requests.length; await state.getByRole('radio', { name, exact: true }).click(); for (let i = 0; requests.length === n && i < 100; i++) await win.waitForTimeout(50); await state.locator('[aria-checked="true"]').filter({ hasText: name }).waitFor() }
     check('a rule offers pause, observe and enable', (await state.getByRole('radio').allInnerTexts()).join() === '暂停,观察,启用')
     await pick('观察')
     check('observe keeps the rule on and sends observe', requests.at(-1).enabled === true && requests.at(-1).observe === true)

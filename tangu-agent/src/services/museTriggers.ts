@@ -535,6 +535,8 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
   if (!po.ok) return po;
   const pm = parseMaxPerDay(input.max_per_day);
   if (!pm.ok) return pm;
+  // 模型传来的字符串不能被读成 false:那会把本该观察的规则直接转成启用。
+  if (input.observe != null && typeof input.observe !== 'boolean') return { ok: false, error: 'observe must be true or false' };
   if (input.observe === true && !canObserve(cond)) return { ok: false, error: 'observe is not available for one-time (at) or manual rules' };
   return {
     ok: true,
@@ -548,7 +550,7 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
       actions,
       ...(po.value !== undefined ? { only: po.value } : {}),
       ...(pm.value !== undefined ? { maxPerDay: pm.value } : {}),
-      ...(input.observe !== undefined ? { observe: input.observe === true } : {}),
+      ...(typeof input.observe === 'boolean' ? { observe: input.observe } : {}),
     },
   };
 }
@@ -646,7 +648,8 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
       // **先清游标再存规则** —— 反过来的话中途崩溃会留下「新 cond + 旧游标」这一种最坏组合。
       // 这一步只是快速路径:真正与时序无关的防线是读端的 cursorMismatch(drain 的 setCursors 会把
       // 刚删掉的键合并写回,这里删不干净;换表那类身份变化由游标自证兜住)。
-      if (condChanged || reEnabled) await dropCursors([cur.id]).catch(() => {});
+      const goesLive = !!cur.observe && (v.observe === false || !canObserve(v.cond));
+      if (condChanged || reEnabled || goesLive) await dropCursors([cur.id]).catch(() => {});
       cur.desc = v.desc;
       cur.cond = v.cond;
       cur.prompt = v.prompt;
@@ -674,8 +677,7 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
         cur.maxPerDay = v.maxPerDay ?? undefined;
         if (!cur.maxPerDay) delete cur.firedDay;
       }
-      // 观察改成启用不动游标:观察期间游标照走,转成启用后只响应之后的事件,不补做(和 reEnabled 那条是两回事)。
-      if (!canObserve(cur.cond) || v.observe === false) clearObservation(cur);
+      if (goesLive) endObservation(cur);
       else if (v.observe && !cur.observe) startObservation(cur, opts.observeBy);
       await saveTriggers(list);
       return { ok: true as const, trigger: cur, created: false };
@@ -706,6 +708,8 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
   });
 }
 
+export class ObservationEnableRefused extends Error {}
+
 function startObservation(t: MuseTrigger, by?: 'muse'): void {
   t.observe = true;
   t.observeSince = new Date().toISOString();
@@ -713,7 +717,12 @@ function startObservation(t: MuseTrigger, by?: 'muse'): void {
   if (by) t.observeBy = by; else delete t.observeBy;
 }
 
-function clearObservation(t: MuseTrigger): void {
+/**
+ * 转成启用:观察期还没轮到的命中不补做。表的游标由调用方先清(含 agent 的规则一轮只吃一行,余下的行还在游标外),
+ * 活动行这里截断(冷却中的行没消费)。
+ */
+function endObservation(t: MuseTrigger): void {
+  t.lastEventCursor = { ts: toActivityTs(new Date()), hash: '' };
   delete t.observe;
   delete t.observeSince;
   delete t.observeBy;
@@ -722,15 +731,18 @@ function clearObservation(t: MuseTrigger): void {
 
 /**
  * 结果卡的三个按钮和发卡记账。读当前规则再写,放在锁里:卡可能放了好几天,规则也许已经删了或改成启用了。
- * 返回 false = 这条规则已经不在观察,调用方把卡收掉。
+ * 返回 false = 这条规则已经不在观察或被暂停了。mayEnable 在锁里判,判完到写之间规则改不了。
  */
-export async function updateObservation(id: string, op: 'enable' | 'extend' | 'pause' | 'reported'): Promise<boolean> {
+export async function updateObservation(id: string, op: 'enable' | 'extend' | 'pause' | 'reported', mayEnable?: (t: MuseTrigger) => boolean): Promise<boolean> {
   return withTriggersLock(async () => {
     const list = await loadTriggers();
     const t = list.find((x) => x.id === id);
-    if (!t?.observe) return false;
-    if (op === 'enable') clearObservation(t);
-    else if (op === 'extend') startObservation(t, t.observeBy);
+    if (!t?.observe || !t.enabled) return false;
+    if (op === 'enable') {
+      if (mayEnable && !mayEnable(t)) throw new ObservationEnableRefused();
+      await dropCursors([t.id]).catch(() => {});
+      endObservation(t);
+    } else if (op === 'extend') startObservation(t, t.observeBy);
     else if (op === 'pause') {
       t.enabled = false;
       t.disabledBy = 'user';
