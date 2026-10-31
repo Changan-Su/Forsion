@@ -339,7 +339,6 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 
 /* ── 标签面板 ── */
 .amx-tag { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.amx-tag.active { color: var(--accent-ink, var(--accent, var(--text))); }
 .amx-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .amx-tag-count { flex: 0 0 auto; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
 /* 标签树(方案 T2):一行 = 箭头 + 名字 + 含子标签的计数。箭头和名字是两个按钮,点名字跳 tag: 搜索。 */

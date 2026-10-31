@@ -1,5 +1,5 @@
 /** DOM plugin adapter for the same Chat Box used by first-party prompt Views. */
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChatBox, useChatBoxSelection, type ChatBoxSelection, type ChatBoxSubmission } from '../../components/chatbox'
 import { textareaCaretRect } from '../../components/chatbox/textareaCaret'
@@ -80,7 +80,13 @@ function useChatBoxSuggest({ options, host }: BoxProps, replace: (match: ChatBox
           left={menu.left}
           top={menu.top}
           anchorTop={menu.anchorTop}
-          onPick={i => { const m = menu.match; close(); replace(m, `${menu.items[i].value} `) }}
+          onPick={i => {
+            const m = menu.match
+            const typed = `${options.suggest?.trigger ?? ''}${m.query}`
+            close()
+            // update({ value }) may have swapped the draft since the menu opened: the range no longer means anything.
+            if (host.input.current?.value.slice(m.from, m.to) === typed) replace(m, `${menu.items[i].value} `)
+          }}
           onClose={() => { dismissedAt.current = menu.match.from; close() }}
           focused={() => document.activeElement === host.input.current}
         />
@@ -88,74 +94,6 @@ function useChatBoxSuggest({ options, host }: BoxProps, replace: (match: ChatBox
       document.body,
     ),
   }
-}
-
-/** Draft, submit and suggest behaviour, independent of whether a model pill is drawn. */
-function usePluginDraft(props: BoxProps, selection: ChatBoxSelection, setSelection: (next: ChatBoxSelection) => void) {
-  const { options, revision, host, isAlive } = props
-  const { t } = useI18n()
-  const [text, setText] = useState(options.value || '')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState(false)
-  const sending = useRef(false)
-  const caretAfter = useRef<number | null>(null)
-  useEffect(() => { if (options.value !== undefined) setText(options.value) }, [options.value, revision])
-  // A controlled value change sends the caret to the end; put it back where the edit ended.
-  useLayoutEffect(() => {
-    const el = host.input.current
-    if (caretAfter.current === null || !el) return
-    el.selectionStart = el.selectionEnd = caretAfter.current
-    caretAfter.current = null
-  })
-  const change = (draft: ChatBoxSubmission) => {
-    setText(draft.text); setSelection(draft); setError(false)
-    // The mount retains the draft across update() calls that only change presentation.
-    options.value = draft.text; options.modelId = draft.modelId; options.thinkingLevel = draft.thinkingLevel
-    options.onChange?.(draft)
-  }
-  const replace = (match: { from: number; to: number }, inserted: string) => {
-    const value = options.value ?? text
-    caretAfter.current = match.from + inserted.length
-    change({ ...selection, text: value.slice(0, match.from) + inserted + value.slice(match.to) })
-  }
-  const suggest = useChatBoxSuggest(props, replace)
-  host.insertText = inserted => {
-    const el = host.input.current
-    const start = caretAfter.current ?? el?.selectionStart ?? text.length
-    const end = caretAfter.current ?? el?.selectionEnd ?? text.length
-    replace({ from: start, to: end }, inserted)
-    el?.focus()
-  }
-  const box: Omit<BaseChatBoxProps, 'controls'> = {
-    value: text,
-    onValueChange: value => { change({ ...selection, text: value }); suggest.evaluate(value) },
-    inputRef: host.input,
-    inputProps: { ...suggest.inputProps, 'aria-label': options.label || t('chatbox.label'), placeholder: options.placeholder },
-    disabled: options.disabled || busy,
-    submitDisabled: !text.trim(),
-    submitOn: options.submitOn,
-    submitLabel: options.submitLabel || t('input.send'),
-    afterInput: <>
-      {error ? <p role="alert">{t('chatbox.submitFailed')}</p> : undefined}
-      {suggest.menu}
-    </>,
-    onSubmit: () => {
-      if (sending.current || !text.trim() || !isAlive()) return
-      sending.current = true; setBusy(true); setError(false)
-      const submitted = { ...selection, text }
-      void Promise.resolve().then(() => options.onSubmit(submitted)).then(accepted => {
-        if (isAlive() && accepted && options.value === submitted.text) change({
-          modelId: options.modelId ?? selection.modelId,
-          thinkingLevel: options.thinkingLevel ?? selection.thinkingLevel,
-          text: '',
-        })
-      }).catch(() => { if (isAlive()) setError(true) }).finally(() => {
-        sending.current = false
-        if (isAlive()) setBusy(false)
-      })
-    },
-  }
-  return { box, change, text }
 }
 
 /** Plugin DOM inside the card. React only owns the slot element, so it never touches what the plugin put in it. */
@@ -173,28 +111,87 @@ function ToolbarSlot({ toolbar }: { toolbar: NonNullable<PluginChatBoxOptions['t
   return <span ref={slot} className="t2c-plugin-toolbar" />
 }
 
-function PickerChatBox(props: BoxProps) {
-  const { options } = props
-  const [selection, setSelection] = useChatBoxSelection(options.agentSlug)
-  const effective = {
-    modelId: options.modelId ?? selection.modelId,
-    thinkingLevel: options.thinkingLevel ?? selection.thinkingLevel,
-  }
-  const { box, change, text } = usePluginDraft(props, effective, setSelection)
-  return <ChatBox {...box} selection={effective} onSelectionChange={value => change({ ...value, text })} leadingControls={toolbarOf(options)} />
-}
-
-function BareChatBox(props: BoxProps) {
-  const { options } = props
-  const selection: ChatBoxSelection = { modelId: options.modelId ?? '', thinkingLevel: options.thinkingLevel ?? 'medium' }
-  const { box } = usePluginDraft(props, selection, () => {})
-  return <ChatBoxBase {...box} controls={toolbarOf(options)} />
-}
-
-const toolbarOf = (options: PluginChatBoxOptions): ReactNode => (options.toolbar ? <ToolbarSlot toolbar={options.toolbar} /> : null)
-
 function PluginChatBox(props: BoxProps) {
-  return props.options.modelPicker === false ? <BareChatBox {...props} /> : <PickerChatBox {...props} />
+  const { options, revision, host, isAlive } = props
+  const { t } = useI18n()
+  const [text, setText] = useState(options.value || '')
+  // Always called: both forms share this state, so update({ modelPicker }) can't drop a draft or a pending submit lock.
+  const [selection, setSelection] = useChatBoxSelection(options.agentSlug)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState(false)
+  const sending = useRef(false)
+  const caretAfter = useRef<number | null>(null)
+  const picker = options.modelPicker !== false
+  /** Read fresh: update() writes options before the next render, and a call in the same tick must see it. */
+  const selected = (): ChatBoxSelection => ({
+    modelId: options.modelId ?? (picker ? selection.modelId : ''),
+    thinkingLevel: options.thinkingLevel ?? (picker ? selection.thinkingLevel : 'medium'),
+  })
+  const effective = selected()
+  useEffect(() => { if (options.value !== undefined) setText(options.value) }, [options.value, revision])
+  // A controlled value change sends the caret to the end; put it back where the edit ended.
+  useLayoutEffect(() => {
+    const el = host.input.current
+    if (caretAfter.current === null || !el) return
+    el.selectionStart = el.selectionEnd = caretAfter.current
+    caretAfter.current = null
+  })
+  const change = (draft: ChatBoxSubmission) => {
+    setText(draft.text); setSelection(draft); setError(false)
+    // The mount retains the draft across update() calls that only change presentation.
+    options.value = draft.text; options.modelId = draft.modelId; options.thinkingLevel = draft.thinkingLevel
+    options.onChange?.(draft)
+  }
+  const replace = (match: { from: number; to: number }, inserted: string) => {
+    const value = options.value ?? text
+    const next = value.slice(0, match.from) + inserted + value.slice(match.to)
+    const caret = match.from + inserted.length
+    const el = host.input.current
+    if (next === value) { if (el) el.selectionStart = el.selectionEnd = caret; return } // no render will come to do it
+    caretAfter.current = caret
+    change({ ...selected(), text: next })
+  }
+  const suggest = useChatBoxSuggest(props, replace)
+  host.insertText = inserted => {
+    const el = host.input.current
+    const start = caretAfter.current ?? el?.selectionStart ?? text.length
+    const end = caretAfter.current ?? el?.selectionEnd ?? text.length
+    replace({ from: start, to: end }, inserted)
+    el?.focus()
+  }
+  const box: Omit<BaseChatBoxProps, 'controls'> = {
+    value: text,
+    onValueChange: value => { change({ ...selected(), text: value }); suggest.evaluate(value) },
+    inputRef: host.input,
+    inputProps: { ...suggest.inputProps, 'aria-label': options.label || t('chatbox.label'), placeholder: options.placeholder },
+    disabled: options.disabled || busy,
+    submitDisabled: !text.trim(),
+    submitOn: options.submitOn,
+    submitLabel: options.submitLabel || t('input.send'),
+    afterInput: <>
+      {error ? <p role="alert">{t('chatbox.submitFailed')}</p> : undefined}
+      {suggest.menu}
+    </>,
+    onSubmit: () => {
+      if (sending.current || !text.trim() || !isAlive()) return
+      sending.current = true; setBusy(true); setError(false)
+      const submitted = { ...effective, text }
+      void Promise.resolve().then(() => options.onSubmit(submitted)).then(accepted => {
+        if (isAlive() && accepted && options.value === submitted.text) change({
+          modelId: options.modelId ?? effective.modelId,
+          thinkingLevel: options.thinkingLevel ?? effective.thinkingLevel,
+          text: '',
+        })
+      }).catch(() => { if (isAlive()) setError(true) }).finally(() => {
+        sending.current = false
+        if (isAlive()) setBusy(false)
+      })
+    },
+  }
+  const toolbar = options.toolbar ? <ToolbarSlot toolbar={options.toolbar} /> : null
+  return picker
+    ? <ChatBox {...box} selection={effective} onSelectionChange={value => change({ ...value, text })} leadingControls={toolbar} />
+    : <ChatBoxBase {...box} controls={toolbar} />
 }
 
 export function mountPluginChatBox(el: HTMLElement, initial: PluginChatBoxOptions): PluginChatBoxHandle {

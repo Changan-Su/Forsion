@@ -1129,7 +1129,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       const base = `/amadeus/vaults/${encodeURIComponent(vid())}`
       return tagSearchRemote(parsed, {
         listTags: () => http.get<TagCount[]>(`${base}/tags`),
-        pagesByTag: async (tag) => (await http.get<{ paths: string[] }>(`${base}/tags/pages`, { tag })).paths,
+        pagesByTag: async (tag) => (await http.get<{ paths: string[] }>(`${base}/tags/pages`, { tag })).paths.filter(visiblePath),
         allPages: async () => (await fetchTree()).pages.filter(visiblePage),
         textSearch,
         readText: async (p) => (await getFile(p)).content,

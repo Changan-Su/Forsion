@@ -15,6 +15,8 @@ export const TAG_LINE_HITS_MAX = 100
 export const TAG_SEARCH_FILES_MAX = 200
 /** 云端要逐篇读原文才列得出行,回合数比本地索引贵,先封得小一点。 */
 export const CLOUD_TAG_SEARCH_FILES_MAX = 50
+/** 带关键词时云端最多读这么多篇来凑结果。 */
+const REMOTE_READS_MAX = 300
 /** 一行太长时只留标签前后这一截;留的是原文的子串,定位时能拿它当查找串。 */
 const LINE_TEXT_MAX = 200
 const LINE_TEXT_LEAD = 60
@@ -159,7 +161,7 @@ export interface TagSearchSource {
   /** 精确标签名 → 路径(云端 /tags/pages 不认前缀,前缀在这里用 listTags 展开)。 */
   pagesByTag(tag: string): Promise<string[]>
   allPages(): Promise<string[]>
-  /** 普通关键词搜索,给 tag + 关键词混用时取分和摘要。 */
+  /** 普通关键词搜索。只在没有正向标签时用来圈候选:它只回前 50 条,拿来和标签取交集会漏。 */
   textSearch(text: string): Promise<SearchHit[]>
   /** 读不到回 null,那篇跳过。 */
   readText(path: string): Promise<string | null>
@@ -177,18 +179,29 @@ export async function tagSearchRemote(q: ParsedSearch, src: TagSearchSource, lim
   let paths = groups.length ? [...groups[0]] : await src.allPages()
   for (const g of groups.slice(1)) paths = paths.filter((p) => g.has(p))
   paths = paths.filter((p) => !banned.some((g) => g.has(p)))
-  const textHits = q.text ? new Map((await src.textSearch(q.text)).map((h) => [h.path, h])) : null
+  const textHits = q.text && !groups.length ? new Map((await src.textSearch(q.text)).map((h) => [h.path, h])) : null
   if (textHits) paths = paths.filter((p) => textHits.has(p))
-  const picked = paths.sort().slice(0, limit)
+  const terms = q.text.toLowerCase().split(/\s+/).filter(Boolean)
+  const textHit = (d: TagSearchDoc): SearchHit | null => {
+    const known = textHits?.get(d.path)
+    if (known) return known
+    const hay = `${d.title}\n${d.plain}`.toLowerCase()
+    return !textHits && terms.every((t) => hay.includes(t)) ? { path: d.path, title: d.title, snippet: headOf(d.plain), line: 1, score: 1 } : null
+  }
+  // 关键词只有读到原文才判得出,所以按「凑够 limit 篇命中」读,读数另有上限。
   const docs: TagSearchDoc[] = []
   const READ_CONCURRENCY = 8
-  for (let i = 0; i < picked.length; i += READ_CONCURRENCY) {
+  const picked = paths.sort().slice(0, q.text ? REMOTE_READS_MAX : limit)
+  for (let i = 0; i < picked.length && docs.length < limit; i += READ_CONCURRENCY) {
     const slice = picked.slice(i, i + READ_CONCURRENCY)
     const raws = await Promise.all(slice.map((p) => src.readText(p).catch(() => null)))
-    raws.forEach((raw, k) => { if (raw != null) docs.push(tagDocFromRaw(slice[k], raw)) })
+    raws.forEach((raw, k) => {
+      if (raw == null) return
+      const doc = tagDocFromRaw(slice[k], raw)
+      if (!q.text || textHit(doc)) docs.push(doc)
+    })
   }
-  const terms = q.text.toLowerCase().split(/\s+/).filter(Boolean)
-  return tagSearch(docs, q, (d) => textHits?.get(d.path) ?? null, terms, limit)
+  return tagSearch(docs, q, textHit, terms, limit)
 }
 
 // ─────────────────────────────── 计数 ───────────────────────────────

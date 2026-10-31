@@ -28,8 +28,8 @@ registerMessages({
   'amxpanel.noVault': { zh: '先打开一个智库。', en: 'Open a vault first.' },
   'amxpanel.searchEmpty': { zh: '输入关键词，搜遍全部笔记内容。', en: 'Type a keyword to search the contents of every note.' },
   'amxpanel.noResults': { zh: '无结果', en: 'No results' },
-  'amxpanel.tagHitsHead': { zh: '{files} 个文件 · {lines} 处', en: '{files} files · {lines} matches' },
-  'amxpanel.tagsHead': { zh: '标签 · {n} 组', en: 'Tags · {n} groups' },
+  'amxpanel.tagHitsHead': { zh: '{files} 个文件 · {lines} 处', en: 'Files: {files} · Matches: {lines}' },
+  'amxpanel.tagsHead': { zh: '标签 · {n} 组', en: 'Tags · {n}' },
   'amxpanel.tagsFilter': { zh: '筛选标签', en: 'Filter tags' },
   'amxpanel.tagsSortCount': { zh: '按数量', en: 'By count' },
   'amxpanel.tagsSortName': { zh: '按名称', en: 'By name' },
@@ -79,8 +79,8 @@ export function AmadeusSearchView() {
 
   // v3 笔记的定位:首个含 needle 的块滚到中间并短暂高亮。找不到块 / 块不在 DOM 里 → false。
   // 与索引同口径解字符引用:`**注意：**&#x540E;面` 能被「后面」搜到,就也得能滚到。
-  const flashBlockWith = (needle: string): boolean => {
-    const hit = Object.values(ps().blocks).find((b) => decodeCharRefs(b.content).toLowerCase().includes(needle))
+  const flashBlockWith = (needle: string, nth = 0): boolean => {
+    const hit = Object.values(ps().blocks).filter((b) => decodeCharRefs(b.content).toLowerCase().includes(needle))[nth]
     const el = hit ? document.querySelector(`[data-block-id="${hit.id}"]`) : null
     if (!el) return false
     el.scrollIntoView({ behavior: 'smooth', block: 'center' })
@@ -118,7 +118,7 @@ export function AmadeusSearchView() {
       const nth = before.filter((l) => l.text === line.text).length
       const tagNth = tag ? before.flatMap((l) => (l.line ? splitTagText(l.text) : [])).filter((p) => p.tag?.toLowerCase() === tag.toLowerCase()).length : 0
       requestAnimationFrame(() => {
-        if (flashBlockWith(line.text.toLowerCase()) || (tag && flashBlockWith(`#${tag}`.toLowerCase()))) return
+        if (flashBlockWith(line.text.toLowerCase(), nth) || (tag && flashBlockWith(`#${tag}`.toLowerCase()))) return
         void revealLineWhenReady(h.path, { text: line.text, nth, tag, tagNth })
       })
     })

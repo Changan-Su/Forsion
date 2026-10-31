@@ -139,6 +139,11 @@ describe('tagSearchRemote', () => {
     expect((await tagSearchRemote(parseSearchQuery('tag:q second'), src)).map((h) => h.path)).toEqual(['b.md'])
     expect((await tagSearchRemote(parseSearchQuery('-tag:p'), src)).map((h) => h.path)).toEqual(['c.md'])
   })
+  it('does not intersect with the capped keyword search when a positive tag gives the candidates', async () => {
+    const out = await tagSearchRemote(parseSearchQuery('tag:q second'), { ...src, textSearch: async () => [] })
+    expect(out.map((h) => h.path)).toEqual(['b.md'])
+    expect(out[0].hits).toEqual([{ line: 2, text: 'second #q' }])
+  })
   it('skips a note that cannot be read', async () => {
     const out = await tagSearchRemote(parseSearchQuery('tag:q'), { ...src, readText: async (p) => (p === 'b.md' ? null : files[p]) })
     expect(out.map((h) => h.path)).toEqual(['c.md'])

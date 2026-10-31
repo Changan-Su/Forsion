@@ -271,6 +271,43 @@ describe('public Chat Box slots', () => {
     await act(async () => { box!.insertText('x'); box!.insertText('y') })
     expect(input().value).toBe('a#xyd')
   })
+  it('does not write a stale pick over a draft the plugin replaced', async () => {
+    await act(async () => { box = mountPluginChatBox(el, { suggest: { trigger: '#', items: () => [{ label: 'alpha', value: '#alpha' }] }, onSubmit: () => false }) })
+    await typeText('#a')
+    await act(async () => { box!.update({ value: 'OK' }) })
+    await press('Enter')
+    expect(input().value).toBe('OK')
+  })
+  it('switching modelPicker keeps the draft and the submit lock', async () => {
+    let done!: (accepted: boolean) => void
+    const onSubmit = vi.fn(() => new Promise<boolean>(resolve => { done = resolve }))
+    await act(async () => { box = mountPluginChatBox(el, { value: 'Draft', onSubmit }) })
+    await submit()
+    await act(async () => { box!.update({ modelPicker: false }) })
+    expect(input().value).toBe('Draft')
+    expect(el.querySelector('.model-pill-btn')).toBeNull()
+    await submit()
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+    await act(async () => { done(false) })
+    await submit()
+    expect(onSubmit).toHaveBeenCalledTimes(2)
+    await act(async () => { done(false) })
+  })
+  it('insertText in the same tick as update keeps the new model', async () => {
+    const onSubmit = vi.fn(() => false)
+    await act(async () => { box = mountPluginChatBox(el, { value: 'a', modelId: 'old', onSubmit }) })
+    await act(async () => { box!.update({ modelId: 'new' }); box!.insertText('b') })
+    await submit()
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ text: 'ab', modelId: 'new' }))
+  })
+  it('an insert that leaves the text unchanged does not pin a stale caret', async () => {
+    await act(async () => { box = mountPluginChatBox(el, { value: 'abc', onSubmit: () => false }) })
+    input().selectionStart = 1; input().selectionEnd = 2
+    await act(async () => { box!.insertText('b') })
+    input().selectionStart = input().selectionEnd = 3
+    await act(async () => { box!.insertText('X') })
+    expect(input().value).toBe('abcX')
+  })
   it('the public ctx handle queues insertText until the mount lands', async () => {
     await act(async () => {
       usePluginStore.getState().init([{ id: 'chatbox-insert', name: 'Insert', version: '1', setup(ctx) {
