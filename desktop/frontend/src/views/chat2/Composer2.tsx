@@ -1795,7 +1795,7 @@ export const Composer2: React.FC<{
 
   return (
     <div className="t2c">
-      <CallHint ready={callable && inputEmpty && !running && !inCall} />
+      <CallHint ready={callable && inputEmpty && !running && !inCall} cloud={realtimeModel === cloudCallModel?.id} />
       {groupSetupOpen && (
         <GroupChatSetup
           agents={agents || []}
