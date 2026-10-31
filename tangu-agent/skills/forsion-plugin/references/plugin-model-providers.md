@@ -2,7 +2,7 @@
 
 Feature-detect `ctx.registerModelProvider` in an engine plugin. Register `{id, listModels({signal}), resolveModel(modelId,{signal}), stream(input)}`. This local-engine-only API contributes selectable native models; it never starts a second agent loop. Tangu owns history, tool execution, approvals and usage recording.
 
-The host assigns `plugin:<actual-engine-owner>/<provider-id>/<encodeURIComponent(local-model-id)>`. Provider IDs are kebab-case (1–64); local model IDs are 1–240 characters without controls and may contain `/`. Never assume a manifest alias equals a marketplace installation identity. Duplicate owner/provider registrations throw; another owner's namespace cannot be replaced.
+The host assigns `plugin:<actual-engine-owner>/<provider-id>/<encodeURIComponent(local-model-id)>`. Provider IDs are kebab-case (1–64); local model IDs are 1–240 characters without controls and may contain `/`. Never assume a manifest alias equals a marketplace installation identity. Duplicate owner/provider registrations throw; another owner's namespace cannot be replaced. Omit `thinkingLevels` when unknown; the host then omits `thinkingLevel` and preserves source defaults.
 
 `PluginModel` = `{id,name,contextWindow?,supportsVision?,thinkingLevels?}`. Vision defaults false; optional contextWindow is a positive integer. Thinking levels are a nonempty subset of `off/minimal/low/medium/high/xhigh/max`; the host clamps requests to declared support. `listModels` returns currently enabled metadata (max 512). `resolveModel` rechecks one local ID and returns matching metadata or null. Both receive a five-second timeout/revocation signal; failed listing hides that source without writing back empty state. Resolution failure never falls through to a different provider.
 
