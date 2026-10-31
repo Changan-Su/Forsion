@@ -181,8 +181,8 @@ async function main() {
     }
     const cfgRt = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).tts?.realtimeModel
     check('R1 设置 → 模型 → 默认模型里选得到实时模型,落进 config.json', picked === RT_MODEL && cfgRt === RT_MODEL, `选后 ${picked || '-'};config.tts.realtimeModel=${cfgRt}`)
-    check('R1b 语音页三张卡「语音通话 / 本地语音识别 / 朗读」;没选通话模型时不出音色,选「未开启」只清模型不丢音色',
-      sections.join('|') === '语音通话|本地语音识别|朗读' && offCfg.selBefore === 0 && !offCfg.realtimeModel && offCfg.realtimeVoice === 'Cindy',
+    check('R1b 语音页三张卡「语音通话 / 本地语音识别 / 朗读」;有百炼连接、没动过时默认开,看得到音色;选「未开启」只清模型不丢音色',
+      sections.join('|') === '语音通话|本地语音识别|朗读' && offCfg.selBefore === 1 && !offCfg.realtimeModel && offCfg.realtimeVoice === 'Cindy',
       JSON.stringify({ sections, offCfg }))
     const btn = liveBtn().first()
     const shown = await until(() => btn.isVisible().catch(() => false), 8000)
