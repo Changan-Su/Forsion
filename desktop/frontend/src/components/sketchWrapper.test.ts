@@ -8,7 +8,7 @@ import { runInNewContext } from 'node:vm'
 vi.mock('./sketch.css?raw', async () => ({
   default: (await import('node:fs')).readFileSync(new URL('./sketch.css', import.meta.url), 'utf8'),
 }))
-import { buildSketchDoc, SKETCH_CSP, SKETCH_SANDBOX, SKETCH_STATIC_VARS, SKETCH_VARS } from './sketchWrapper'
+import { buildSketchDoc, buildSketchShell, SKETCH_CSP, SKETCH_SANDBOX, SKETCH_SHELL_CSP, SKETCH_STATIC_VARS, SKETCH_VARS } from './sketchWrapper'
 
 describe('sketch 包装器安全不变式', () => {
   it('sandbox 恒为 allow-scripts + allow-forms(绝不 allow-same-origin/popups/top-navigation)', () => {
@@ -46,13 +46,34 @@ describe('sketch 包装器安全不变式', () => {
     const ready: Function[] = []
     const register = vi.fn()
     runInNewContext(script, {
-      window: { addEventListener() {} }, HTMLElement: class {},
+      window: { addEventListener() {} }, HTMLElement: class {}, HTMLFormElement: class {},
       document: { readyState: 'loading', addEventListener: (name: string, cb: Function) => { if (name === 'DOMContentLoaded') ready.push(cb) } },
       customElements: { get: () => undefined, define: register },
     })
     expect(ready).toHaveLength(2)
     ready[1]()
     expect(register.mock.calls.map(([name]) => name)).toEqual(['fs-chart', 'fs-flow', 'fs-compare', 'fs-choice', 'fs-checklist'])
+  })
+})
+
+describe('sketch 导航壳', () => {
+  it('壳的 CSP 只收紧 frame-src:别的指令会被卡片继承,self 又放行宿主地址', () => {
+    expect(SKETCH_SHELL_CSP).toBe("frame-src 'none'")
+    const shell = buildSketchShell('<p>card</p>')
+    expect(shell.indexOf('<meta http-equiv="Content-Security-Policy"')).toBe(shell.indexOf('<head>') + '<head>'.length)
+  })
+
+  it('子帧也带同一份 sandbox,卡片文档只出现在 srcdoc 属性里', () => {
+    const card = buildSketchDoc('<a href="x">a & b</a><script>"\'</script>')
+    const shell = buildSketchShell(card)
+    expect(shell).toContain(`<iframe sandbox="${SKETCH_SANDBOX}"`)
+    const srcdoc = shell.match(/srcdoc="([^"]*)"/)![1]
+    expect(srcdoc.replace(/&quot;/g, '"').replace(/&amp;/g, '&')).toBe(card)
+    expect(shell.slice(shell.indexOf('</iframe>'))).not.toContain('a &amp; b')
+  })
+
+  it('color-scheme 是半可信输入:闭合不了壳的 style', () => {
+    expect(buildSketchShell('', 'dark</style><script>alert(1)</script>')).not.toContain('</style><script>alert')
   })
 })
 

@@ -46,6 +46,10 @@ const workspaceEnv = exports.workspaceEnv = (env) => {
   return { ...env, FORSION_WORKSPACE_DIR: `${root}-workspace` }
 }
 
+/** Intelligent UI 卡片嵌在壳里(sketchWrapper.ts),两层都是沙箱帧。默认进程隔离下 Playwright 认不到第二层,frameLocator / win.frames()
+ *  进不去(10-31 实测;应用里 --disable-features=IsolateSandboxedIframes 不起作用)。要摸卡内元素的台架加上这个参数。 */
+exports.NESTED_SANDBOX_ARGS = ['--disable-site-isolation-trials']
+
 exports.launch = (opts = {}) => {
   const env = workspaceEnv(opts.env)
   const desktop = env?.FORSION_TEST_DESKTOP === 'left' && process.platform === 'win32'

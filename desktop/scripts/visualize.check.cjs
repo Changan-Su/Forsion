@@ -45,7 +45,45 @@ document.getElementById('bypass').onclick = () => {
   document.getElementById('leak').requestSubmit()
 }
 </script>`
-  const messages = [message('wave', html), message('wave-other', html), message('figures', figuresHtml), message('parts', partsHtml), message('form', formHtml)]
+  // 自身导航:内层 CSP 管不到,没有壳时这些写法都能到探针。load 之后一直报 77 高(运行时自己也会量,报一次会被盖掉),再走:卡片确实跑到了这一步,没跑到的不算拦住,也顺带验中转。
+  const NAV_EXTERNAL = ['https://www.youtube-nocookie.com/*', 'https://player.bilibili.com/*']
+  const navCard = (via, go, markup = '') => `${markup}<script>window.addEventListener('load', () => { setInterval(() => parent.postMessage({ type: 'sketch-height', height: 77 }, '*'), 100); setTimeout(() => { ${go} }, 100) })</script>`
+  const anchorBypass = `window.addEventListener('click', (event) => event.stopImmediatePropagation(), true); document.getElementById('go')`
+  const navVectors = (u) => [
+    ['href', `location.href = '${u}?via=href'`],
+    ['replace', `location.replace('${u}?via=replace')`],
+    ['assign', `location.assign('${u}?via=assign')`],
+    ['open-self', `window.open('${u}?via=open-self', '_self')`],
+    ['navigation', `navigation.navigate('${u}?via=navigation')`],
+    ['meta-script', `const m = document.createElement('meta'); m.httpEquiv = 'refresh'; m.content = '0;url=${u}?via=meta-script'; document.head.append(m)`],
+    ['meta', '', `<meta http-equiv="refresh" content="3;url=${u}?via=meta">`],
+    ['a-click', `document.getElementById('go').click()`, `<a id="go" href="${u}?via=a-click">go</a>`],
+    ['a-bypass', `${anchorBypass}.click()`, `<a id="go" href="${u}?via=a-bypass">go</a>`],
+    ['a-dispatch', `${anchorBypass}.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))`, `<a id="go" href="${u}?via=a-dispatch">go</a>`],
+    ['svg-a', `document.getElementById('go').dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))`, `<svg><a id="go" xlink:href="${u}?via=svg-a"><text y="20">go</text></a></svg>`],
+    ['area', `document.getElementById('go').click()`, `<map name="m"><area id="go" shape="rect" coords="0,0,9,9" href="${u}?via=area"></map>`],
+  ]
+  const navMessages = [
+    ...navVectors(sinkUrl).map(([via, go, markup]) => message(`nav-${via}`, navCard(via, go, markup))),
+    ...['https://www.youtube-nocookie.com/embed/x', 'https://player.bilibili.com/player.html'].flatMap((u, i) => navVectors(u).filter(([via]) => ['href', 'meta', 'a-bypass'].includes(via)).map(([via, go, markup]) => message(`nav-${i}-${via}`, navCard(via, go, markup)))),
+  ]
+  // 下面两张给默认进程模型那一段用:卡里的结果经 postMessage 报给宿主,不靠 Playwright 进帧。
+  const typingHtml = `<form id="typing"><input id="typing-input" style="display:block;box-sizing:border-box;width:240px;height:36px;margin:0"></form>
+<script>document.getElementById('typing').addEventListener('submit', () => parent.postMessage({ type: 'probe-typed', value: document.getElementById('typing-input').value }, '*'))</script>`
+  const gestureHtml = `<button id="ask" type="button" style="display:block;width:240px;height:36px;margin:0" onclick="window.forsionIntelligentUi.ask('ASK-REAL')">ask</button>
+<script>
+addEventListener('message', (event) => {
+  if (event.data?.type !== 'probe-steal') return
+  const input = document.createElement('input')
+  document.body.append(input)
+  input.focus()
+  parent.postMessage({ type: 'sketch-ask', text: 'STEAL-RAW' }, '*')
+  let viaRuntime = 'sent'
+  try { window.forsionIntelligentUi.ask('STEAL-RUNTIME') } catch (error) { viaRuntime = error.message }
+  parent.postMessage({ type: 'probe-stolen', viaRuntime, nonceVisible: new RegExp('NON' + "CE = '").test(document.documentElement.outerHTML) }, '*')
+})
+</script>`
+  const messages = [message('wave', html), message('wave-other', html), message('figures', figuresHtml), message('parts', partsHtml), message('form', formHtml), ...navMessages, message('typing', typingHtml), message('gesture', gestureHtml)]
   if (process.env.LIVE_SKETCH_HTML) messages.push(message('live', fs.readFileSync(process.env.LIVE_SKETCH_HTML, 'utf8')))
   if (process.env.LIVE_FIGURES_HTML) messages.push(message('live-figures', fs.readFileSync(process.env.LIVE_FIGURES_HTML, 'utf8')))
   if (process.env.LIVE_FORM_HTML) messages.push(message('live-form', fs.readFileSync(process.env.LIVE_FORM_HTML, 'utf8')))
@@ -59,20 +97,28 @@ document.getElementById('bypass').onclick = () => {
       fs.mkdirSync(dir, { recursive: true })
       fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'test' }))
     }
-    app = await electron.launch({ args: [`--user-data-dir=${ud}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
-    win = await app.firstWindow()
-    win.setDefaultTimeout(20000)
     const errors = []
-    win.on('pageerror', (e) => { errors.push(String(e)); console.error('RENDER ERROR', String(e)) })
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1400, 1100))
-    await win.waitForSelector('#root')
-    await win.waitForTimeout(1800)
-    for (const label of ['跳过引导', 'Skip']) {
-      const button = win.getByText(label, { exact: true }).first()
-      if (await button.count()) { await button.click(); break }
+    const boot = async (extraArgs) => {
+      app = await electron.launch({ args: [`--user-data-dir=${ud}`, '--lang=zh-CN', ...extraArgs, ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
+      // 外网地址记下就取消,不真发(应用自己没用 onBeforeRequest,一个 session 只能挂一个)。
+      await app.evaluate(({ session }, urls) => {
+        globalThis.__navOut = []
+        session.defaultSession.webRequest.onBeforeRequest({ urls }, (details, cb) => { globalThis.__navOut.push(details.url); cb({ cancel: true }) })
+      }, NAV_EXTERNAL)
+      win = await app.firstWindow()
+      win.setDefaultTimeout(20000)
+      win.on('pageerror', (e) => { errors.push(String(e)); console.error('RENDER ERROR', String(e)) })
+      await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1400, 1100))
+      await win.waitForSelector('#root')
+      await win.waitForTimeout(1800)
+      for (const label of ['跳过引导', 'Skip']) {
+        const button = win.getByText(label, { exact: true }).first()
+        if (await button.count()) { await button.click(); break }
+      }
+      await win.evaluate(() => localStorage.setItem('forsion_default_space', 'tangu'))
+      await win.reload()
     }
-    await win.evaluate(() => localStorage.setItem('forsion_default_space', 'tangu'))
-    await win.reload()
+    await boot(electron.NESTED_SANDBOX_ARGS)
     const releaseScrollAnchor = async () => {
       const box = await win.locator('[data-chat-surface="chat"] .t2-stream').boundingBox()
       if (!box) throw new Error('Chat stream is missing')
@@ -89,8 +135,8 @@ document.getElementById('bypass').onclick = () => {
     }
     await open()
     const card = win.locator('[data-sketch-call-id="wave"]')
-    const frame = card.frameLocator('iframe')
-    const other = win.locator('[data-sketch-call-id="wave-other"]').frameLocator('iframe')
+    const frame = card.frameLocator('iframe').frameLocator('iframe')
+    const other = win.locator('[data-sketch-call-id="wave-other"]').frameLocator('iframe').frameLocator('iframe')
     await win.waitForTimeout(600)
     await card.scrollIntoViewIfNeeded()
     assert.equal(await frame.locator('#wave-amplitude').inputValue(), '40')
@@ -123,6 +169,16 @@ document.getElementById('bypass').onclick = () => {
     const afterColor = await frame.locator('.wave-line').first().evaluate((el) => getComputedStyle(el).stroke)
     assert.notEqual(afterColor, beforeColor)
     await card.screenshot({ path: path.join(out, 'dark.png') })
+    // 壳和卡片的 color-scheme 对不上时浏览器铺一层不透明底,DOM 上什么也量不出来:比卡边内外的像素(卡片画布是透明的,里外同色)。
+    const box = await card.boundingBox()
+    const edge = (await win.screenshot({ clip: { x: box.x - 8, y: box.y + box.height / 2, width: 16, height: 2 } })).toString('base64')
+    const [outside, inside] = await app.evaluate(({ nativeImage }, png) => {
+      const image = nativeImage.createFromBuffer(Buffer.from(png, 'base64'))
+      const bitmap = image.toBitmap()
+      const width = image.getSize().width
+      return [0, width - 1].map((x) => [...bitmap.subarray(x * 4, x * 4 + 3)])
+    }, edge)
+    assert.ok(outside.every((value, i) => Math.abs(value - inside[i]) <= 2), `dark card canvas is transparent: ${outside} vs ${inside}`)
     console.log('PASS reload restores only this card; live theme preserves state and geometry')
 
     // Exact embedded width catches label/control overflow even with app-level narrow columns.
@@ -143,7 +199,7 @@ document.getElementById('bypass').onclick = () => {
 
     const figures = win.locator('[data-sketch-call-id="figures"]')
     if (await figures.locator('.sketch-card-toggle').count()) await figures.locator('.sketch-card-toggle').click()
-    const ff = figures.frameLocator('iframe')
+    const ff = figures.frameLocator('iframe').frameLocator('iframe')
     await ff.locator('.fs-chart-bar').first().waitFor()
     assert.equal(await ff.locator('.fs-chart-bar').count(), 3)
     assert.equal(await ff.locator('.fs-flow-step').count(), 4)
@@ -188,7 +244,7 @@ document.getElementById('bypass').onclick = () => {
       const live = win.locator('[data-sketch-call-id="live"]')
       const toggle = live.locator('.sketch-card-toggle')
       if (await toggle.count()) await toggle.click()
-      const lf = live.frameLocator('iframe')
+      const lf = live.frameLocator('iframe').frameLocator('iframe')
       const slider = lf.locator('input[type="range"]').first()
       await slider.waitFor()
       const initial = await slider.inputValue()
@@ -208,7 +264,7 @@ document.getElementById('bypass').onclick = () => {
     {
       const pc = win.locator('[data-sketch-call-id="parts"]')
       await pc.scrollIntoViewIfNeeded()
-      const pf = pc.frameLocator('iframe')
+      const pf = pc.frameLocator('iframe').frameLocator('iframe')
       await pf.locator('.fs-option').first().waitFor()
       assert.equal(await pf.locator('.fs-option').count(), 3)
       assert.equal(await pf.locator('.fs-option .fs-button').count(), 3)
@@ -232,7 +288,7 @@ document.getElementById('bypass').onclick = () => {
       const live = win.locator('[data-sketch-call-id="live-figures"]')
       const toggle = live.locator('.sketch-card-toggle')
       if (await toggle.count()) await toggle.click()
-      const lf = live.frameLocator('iframe')
+      const lf = live.frameLocator('iframe').frameLocator('iframe')
       await lf.locator('.fs-chart-bar').first().waitFor()
       assert.equal(await lf.locator('.fs-chart-bar').count(), 3)
       assert.equal(await lf.locator('.fs-flow-step').count(), 4)
@@ -247,7 +303,9 @@ document.getElementById('bypass').onclick = () => {
     assert.deepEqual(errors, [])
     // <form> 卡:提交有反应(点击 / 回车 / requestSubmit / required 校验都是原生的),但任何写法都发不出去。
     const form = win.locator('[data-sketch-call-id="form"]')
-    const fm = form.frameLocator('iframe')
+    const fm = form.frameLocator('iframe').frameLocator('iframe')
+    await releaseScrollAnchor()
+    await form.scrollIntoViewIfNeeded()
     await fm.locator('#add-btn').click()
     assert.equal(await fm.locator('#items li').count(), 0, 'required 空值不提交')
     await fm.locator('#title').fill('交论文')
@@ -259,15 +317,31 @@ document.getElementById('bypass').onclick = () => {
     assert.deepEqual(await fm.locator('#items li').allTextContents(), ['交论文', '考试', '回家'])
     await fm.locator('#title').fill('secret')
     await fm.locator('#raw').click()
-    await fm.locator('#bypass').click({ timeout: 2000 }).catch(() => {}) // form.submit() 若已带走卡片,这里点不到,由下面的探针判红
+    await win.waitForTimeout(200)
+    assert.deepEqual(await fm.locator('#items li').allTextContents(), ['交论文', '考试', '回家'], 'form.submit() 不动卡片,状态还在')
+    await fm.locator('#bypass').click()
     await win.waitForTimeout(400)
     assert.deepEqual(sinkHits, [], 'form.submit() 与绕过 runtime 监听都发不出去')
-    assert.equal(await fm.locator('#add').count(), 1, '卡片没有被导航走')
     console.log('PASS <form> card responds to submit; form.submit() and listener bypass reach nothing')
+
+    // 每张探针卡都得真跑到导航那一行(高度 77 经壳中转回来),否则下面的「没到探针」不算数。
+    const assertNavBlocked = async () => {
+      const unfinished = () => win.locator('[data-sketch-call-id^="nav-"] iframe').evaluateAll((els) => els.map((el) => [el.closest('[data-sketch-call-id]').dataset.sketchCallId, el.style.height]).filter(([, height]) => height !== '77px'))
+      for (let i = 0; i < 50 && (await unfinished()).length; i++) await win.waitForTimeout(200)
+      assert.equal(await win.locator('[data-sketch-call-id^="nav-"] iframe').count(), navMessages.length)
+      assert.deepEqual(await unfinished(), [], 'every navigation card reached its navigation')
+      await win.waitForTimeout(3000) // 等 meta refresh;它要晚于 load 后的探针,不然卡片报不出 77
+      assert.deepEqual(sinkHits, [], 'self-navigation must not reach a loopback port')
+      assert.deepEqual(await app.evaluate(() => globalThis.__navOut), [], 'self-navigation must not reach the allowed embed hosts')
+    }
+    await assertNavBlocked()
+    await win.locator('[data-sketch-call-id="nav-href"]').scrollIntoViewIfNeeded()
+    await win.locator('[data-sketch-call-id="nav-href"]').screenshot({ path: path.join(out, 'nav-blocked.png') })
+    console.log(`PASS ${navMessages.length} self-navigation cards ran and reached nothing`)
 
     if (process.env.LIVE_FORM_HTML) {
       // 真模型写的表单:每个可见输入框填上,点提交,新内容要出现在卡里。
-      const lf = win.locator('[data-sketch-call-id="live-form"]').frameLocator('iframe')
+      const lf = win.locator('[data-sketch-call-id="live-form"]').frameLocator('iframe').frameLocator('iframe')
       assert.ok(await lf.locator('form').count(), 'model used <form>')
       const inputs = lf.locator('form input:visible')
       for (let i = 0; i < await inputs.count(); i++) {
@@ -284,6 +358,62 @@ document.getElementById('bypass').onclick = () => {
       await win.locator('[data-sketch-call-id="live-form"]').screenshot({ path: path.join(out, 'live-form.png') })
       console.log('PASS real-model <form> card adds an entry')
     }
+
+    // 第二段:默认进程模型,和用户跑的一样。沙箱帧各在自己的进程里,Playwright 进不去第二层,这里只用真实鼠标键盘和宿主看得到的结果。
+    await app.close()
+    await boot(process.env.VISUALIZE_NEG_GESTURE ? electron.NESTED_SANDBOX_ARGS : [])
+    await open()
+    await assertNavBlocked()
+    await win.evaluate(() => {
+      window.__probe = []
+      window.addEventListener('message', (event) => { if (String(event.data?.type).startsWith('probe-')) window.__probe.push(event.data) })
+    })
+    const probe = async (type) => {
+      await win.waitForFunction((t) => window.__probe.some((m) => m.type === t), type)
+      return win.evaluate((t) => window.__probe.find((m) => m.type === t), type)
+    }
+    const typing = win.locator('[data-sketch-call-id="typing"]')
+    await typing.scrollIntoViewIfNeeded()
+    await win.waitForTimeout(300)
+    const typingBox = await typing.locator('iframe').boundingBox()
+    await win.mouse.click(typingBox.x + 60, typingBox.y + 32) // 卡片 body 有内边距
+    await win.keyboard.type('hello')
+    await win.keyboard.press('Enter')
+    assert.equal((await probe('probe-typed')).value, 'hello')
+
+    // 滚轮要穿过两层帧传回对话流,否则鼠标停在卡上滚不动。
+    const stream = win.locator('[data-chat-surface="chat"] .t2-stream')
+    const scrollTop = () => stream.evaluate((el) => el.scrollTop)
+    const scrolledFrom = await scrollTop()
+    await win.mouse.wheel(0, -240)
+    await win.waitForTimeout(400)
+    assert.notEqual(await scrollTop(), scrolledFrom, 'wheel over a card scrolls the chat')
+
+    // 用户刚在输入框敲过键,卡内脚本抢走焦点再冒充点击:裸 postMessage 没有 nonce,经运行时过不了卡内手势判定,outerHTML 里也找不到 nonce。
+    // 只能在这里测:帧同进程时(NESTED_SANDBOX_ARGS)宿主的激活会传进卡片,判定被放过去(VISUALIZE_NEG_GESTURE 是这条的负对照)。
+    const gesture = win.locator('[data-sketch-call-id="gesture"]')
+    const runsBefore = stub.seen.runs.length
+    await win.locator('.t2c-ta').first().click()
+    await win.keyboard.type('x')
+    await gesture.locator('iframe').evaluate((el) => el.contentWindow.postMessage({ type: 'probe-steal' }, '*'))
+    const stolen = await probe('probe-stolen')
+    assert.match(stolen.viaRuntime, /user gesture/)
+    assert.equal(stolen.nonceVisible, false)
+    await win.waitForTimeout(600)
+    assert.deepEqual(stub.seen.runs.slice(runsBefore).map((r) => r.message), [], 'stolen focus cannot send as the user')
+    await win.locator('.t2c-ta').first().click()
+    await win.keyboard.press('ControlOrMeta+A')
+    await win.keyboard.press('Backspace')
+
+    await gesture.scrollIntoViewIfNeeded()
+    await win.waitForTimeout(300)
+    const askBox = await gesture.locator('iframe').boundingBox()
+    await win.mouse.click(askBox.x + 60, askBox.y + 32)
+    await win.waitForFunction(() => document.activeElement?.classList.contains('sketch-frame'))
+    for (let i = 0; i < 20 && stub.seen.runs.length === runsBefore; i++) await win.waitForTimeout(200)
+    assert.deepEqual(stub.seen.runs.slice(runsBefore).map((r) => r.message), ['ASK-REAL'], 'a real click still asks')
+    assert.deepEqual(errors, [])
+    console.log('PASS default process model: navigation blocked, real input, wheel, and the ask gesture gate')
 
     fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify({ ok: true, liveModel: !!process.env.LIVE_SKETCH_HTML, liveFigures: !!process.env.LIVE_FIGURES_HTML, screenshots: ['light.png', 'dark.png', 'narrow.png', ...['light', 'dark', 'narrow'].flatMap((mode) => ['bar', 'line', 'flow'].map((name) => `${name}-${mode}.png`))], errors }, null, 2))
     console.log(`PASS Visualize acceptance: ${out}`)

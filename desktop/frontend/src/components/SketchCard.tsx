@@ -11,7 +11,7 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  buildSketchDoc, readSketchTheme, subscribeThemeChange,
+  buildSketchDoc, buildSketchShell, readSketchTheme, subscribeThemeChange,
   SKETCH_SANDBOX, SKETCH_MIN_H, SKETCH_MAX_H, SKETCH_INITIAL_H,
 } from './sketchWrapper'
 import { useI18n } from '../i18n'
@@ -180,7 +180,7 @@ const SketchFrame: React.FC<{ item: SketchItem; actions?: SketchActions; stateSc
     return () => ro.disconnect()
   }, [h, open])
 
-  const doc = useMemo(() => (vars ? buildSketchDoc(mountHtml.current, vars, mountState.current, nonce.current) : ''), [vars])
+  const doc = useMemo(() => (vars ? buildSketchShell(buildSketchDoc(mountHtml.current, vars, mountState.current, nonce.current), vars['color-scheme']) : ''), [vars])
   // 草稿不给头部操作(「插入笔记」插半截没意义)。
   const headActions = item.draft ? undefined : actions
   return (

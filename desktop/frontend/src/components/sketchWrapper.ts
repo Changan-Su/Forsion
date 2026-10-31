@@ -11,6 +11,10 @@
  * - 刻意不给 'unsafe-eval':桌面宿主 CSP 有它而 web/mobile 没有,统一禁掉三端行为才一致。
  * - srcdoc 的 event.origin 是字符串 "null":高度消息只认 event.source === iframe.contentWindow。
  * - 包装脚本放 <head>(模型 HTML 之前):残缺的模型标记吞不掉它。
+ * - 卡片不直接挂在宿主下面,中间隔一层壳(buildSketchShell,10-31 真 Chromium 实证):帧的自身导航(location.* / meta refresh /
+ *   绕开 runtime 监听的 <a>)只由**父文档**的 frame-src 裁决,内层 CSP 管不到,而宿主 frame-src 要给别的 iframe 放行本机端口、
+ *   YouTube、B 站,卡片能把数据带到这些地址。壳的 frame-src 'none' 不挡 srcdoc,只挡导航。
+ *   试过不行的:Navigation API 在不透明源帧里不触发 navigate;宿主等 iframe 再次 load 时请求已经到了;iframe 的 csp 属性在响应时才判。
  *
  * 主题桥(08-21 二轮):把宿主的语义 token 以 --fs-* 注进卡内。首帧走 srcdoc 内联(无闪),
  * 之后换肤走 postMessage 就地改 documentElement.style —— **不重建 srcdoc**,否则 iframe 重载、
@@ -28,6 +32,9 @@ import { serializeSketchState } from './sketchState'
 export const SKETCH_CSP =
   "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; form-action 'none'"
 export const SKETCH_SANDBOX = 'allow-scripts allow-forms'
+/** 壳的 CSP。⚠️只能写这一条:srcdoc 子文档继承父文档的 CSP,多写 default-src 就把卡片的内联脚本也禁了;
+ *  ⚠️不能换成 'self':srcdoc 的 self 是宿主地址,卡片照样导航得过去(10-31 实测)。 */
+export const SKETCH_SHELL_CSP = "frame-src 'none'"
 export const SKETCH_MIN_H = 40
 export const SKETCH_MAX_H = 2400
 /** iframe 初始高度:内容高度上报前的占位(定值防 ChatView 贴底 ResizeObserver 抖滚动)。 */
@@ -120,4 +127,25 @@ export function buildSketchDoc(html: string, vars: Record<string, string> = {}, 
     `<style>${varsBlock(vars)}${SKETCH_SERIES_CSS}${sketchCss}</style>` +
     `<script>${runtime};\n${sketchFigures}</script>` +
     `</head><body>${html}</body></html>`
+}
+
+/** 壳里只有这段中转:宿主和卡片两边都照旧 postMessage,event.source 对宿主来说就是壳。卡片的明暗跟着改,
+ *  不然壳和卡片的 color-scheme 不一致时浏览器给卡片铺一层不透明底。 */
+const SKETCH_SHELL_RELAY = `
+const frame = document.querySelector('iframe')
+addEventListener('message', (event) => {
+  if (event.source === parent) {
+    const scheme = event.data?.type === 'sketch-theme' && event.data.vars?.['color-scheme']
+    if (scheme) document.documentElement.style.colorScheme = scheme
+    frame.contentWindow?.postMessage(event.data, '*')
+  } else if (event.source === frame.contentWindow) parent.postMessage(event.data, '*')
+})`
+
+/** 卡片文档(buildSketchDoc)→ 宿主 iframe 的 srcdoc。两层都要带 sandbox:子帧的权限不会超过父帧。 */
+export function buildSketchShell(card: string, colorScheme = 'light'): string {
+  const srcdoc = card.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  return '<!doctype html><html><head>' +
+    `<meta http-equiv="Content-Security-Policy" content="${SKETCH_SHELL_CSP}">` +
+    `<style>:root{color-scheme:${sanitizeVar(colorScheme)}}html,body,iframe{display:block;width:100%;height:100%;margin:0;border:0;overflow:hidden;background:transparent}</style>` +
+    `</head><body><iframe sandbox="${SKETCH_SANDBOX}" title="Intelligent UI" srcdoc="${srcdoc}"></iframe><script>${SKETCH_SHELL_RELAY}</script></body></html>`
 }
