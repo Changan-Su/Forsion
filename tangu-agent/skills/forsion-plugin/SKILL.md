@@ -2,14 +2,14 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.85.0
+  version: 1.88.0
   author: Forsion
   category: Forsion
 ---
 
 # Forsion 扩展开发
 
-Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 起口径):一个 Forsion 插件目录内嵌 UI / 引擎插件 / Agent / 技能 / Space,装一处全就位 —— 哪怕当下只有一类内容,bundle 布局也让之后追加其它层零迁移。四类单体形态仍完整支持、互不影响(纯数据内容如主题、单个 Space 可以更轻)。每类都有一份官方模板放在本技能的 `samples/` 下 —— **先复制对应模板再改**,别从零搭。
+扩展**默认按 bundle 发行**：一个 Forsion 插件目录内嵌 UI / 引擎插件 / Agent / 技能 / Space，后续追加其他层无需迁移。四类单体形态仍支持，纯数据主题或 Space 可单独发行。**先复制 `samples/` 中对应的官方模板再改。**
 
 | 类型 | 是什么 | 模板 | 最小产物 |
 |------|--------|------|----------|
@@ -26,10 +26,12 @@ Forsion / Tangu 的扩展**默认按捆绑包(bundle)形态发行**(2026-07-25 �
 
 ## Reference files (read the one you need)
 
-Tool results are capped, so this skill keeps long, API-by-API details in `references/` next to it. When a section below says 见下「…」 or names an API listed here, read that file before writing code:
+Read the matching `references/` file before using an API listed below or following a section's reference:
 
 - [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
-- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:ctx.agent
+- [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:section `ctx.agent`
+- [references/plugin-skill-providers.md](references/plugin-skill-providers.md): engine `ctx.registerSkillProvider` for live external skills.
+- [references/plugin-model-providers.md](references/plugin-model-providers.md): engine `ctx.registerModelProvider` for native single-inference sources.
 - [references/mini-panel.md](references/mini-panel.md): a Space's small floating window (`mini` in `space.json`)
 - [references/bundle-mcp-hooks.md](references/bundle-mcp-hooks.md): stdio MCP servers and observe-only hooks a bundle declares in its manifest
 - [references/work-folder-migration.md](references/work-folder-migration.md): one-time upgrade of old plugin data into the working folder (Identity and destination; Request and result; Upgrade sequence; Acceptance cases; Ordinary writes after upgrade)
@@ -681,6 +683,7 @@ The full contracts, examples and old-host fallbacks for these mounts live in [re
     数组顺序就是显示顺序。文件夹点一下开合、不调 `open()`;开合由宿主记(文件夹缺省收起,`activeKey()` 那一行
     所在的文件夹自动展开);搜索时宿主不画层级,只平铺匹配的行 —— 所以子行最好也写上 `group`。
     静态分组头(`group`)同样可以点开合,缺省展开。`itemMenu(文件夹)` 里带 `primary` 的那一项画成行尾的「+」。
+  - 文件夹可选中(2026-10-31 起;探测 `ctx.listCapabilities?.includes('folderOpen')`):文件夹行写 `opensOnClick: true`,点名字调 `open()` 并展开,行首箭头开合,`activeKey` 指向它时高亮;探测不到要留一行子项。
   - 组头(2026-10-14 起;探测 `ctx.listCapabilities?.includes('group')`):最上面一级的文件夹再写 `folderStyle: 'group'`,
     就画成 Tangu 左栏里 Agent / 项目那种一级行 —— 40px 高,前面一个 30px 的前导(有 `iconUrl` 是圆头像,有 `icon` 是方块里的图标,
     都没有就画标题的首字),名字后面一个开合箭头,`hint` 画成行尾的小胶囊(放未读数这类数字)。用在「这些行是谁的」这种分法上

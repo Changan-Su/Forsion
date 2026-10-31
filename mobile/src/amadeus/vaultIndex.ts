@@ -5,6 +5,7 @@ import { backlinkHits, mentionHits, noteFmMeta, noteLinkTargets, type FmLinkProp
 import { parseBody, stripFrontmatter } from '@amadeus-shared/compiler'
 import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import type { BacklinkHit, BacklinkRef, SearchHit, TagCount, UnlinkedMention } from '@amadeus-shared/ipc'
+import { hasTagFilter, parseSearchQuery, tagCounts, tagSearch } from '@amadeus-shared/tagQuery'
 import type { VaultManager } from './vaultManager'
 
 interface Entry {
@@ -18,6 +19,8 @@ interface Entry {
   links: string[]
   embeds: string[]
   tags: string[]
+  /** 只在 fm `tags:` 里的那份(desktop vaultIndex 同款):`tag:` 搜索的 line 0。 */
+  fmTags: string[]
   /** fm `aliases:` / 带 `[[ ]]` 的 fm 属性(desktop vaultIndex 同款,口径在 shared/amadeus/linkIndex)。 */
   aliases: string[]
   fmLinks: FmLinkProp[]
@@ -100,6 +103,7 @@ export class VaultIndex {
       links: mergeCi(noteLinkTargets(plain), meta.links.flatMap((l) => l.targets)),
       embeds: parseEmbeds(raw),
       tags: mergeCi(parseTags(plain), meta.tags),
+      fmTags: meta.tags,
       aliases: meta.aliases,
       fmLinks: meta.links,
       blocks,
@@ -162,36 +166,17 @@ export class VaultIndex {
   }
 
   search(query: string): SearchHit[] {
+    const parsed = parseSearchQuery(query)
+    if (hasTagFilter(parsed)) {
+      const text = parsed.text.toLowerCase()
+      return tagSearch(this.entries.values(), parsed, (e) => textHit(e, text), text ? [text] : [])
+    }
     const q = query.trim().toLowerCase()
     if (!q) return []
     const hits: SearchHit[] = []
     for (const e of this.entries.values()) {
-      const bodyIdx = e.lower.indexOf(q)
-      const titleHit = e.title.toLowerCase().includes(q)
-      if (bodyIdx < 0 && !titleHit) continue
-      let snippet = ''
-      let line = 1
-      let score = 0
-      if (bodyIdx >= 0) {
-        const start = Math.max(0, bodyIdx - 40)
-        const end = Math.min(e.plain.length, bodyIdx + q.length + 80)
-        snippet =
-          (start > 0 ? '…' : '') +
-          e.plain.slice(start, end).replace(/\s+/g, ' ').trim() +
-          (end < e.plain.length ? '…' : '')
-        line = countNewlines(e.plain, bodyIdx) + 1
-        score += 5 - Math.min(4, bodyIdx / 200)
-        let n = 0
-        let from = 0
-        while ((from = e.lower.indexOf(q, from)) >= 0) { n++; from += q.length; if (n > 20) break }
-        score += Math.min(5, n)
-      }
-      if (titleHit) {
-        score += 12
-        if (!snippet) snippet = e.plain.replace(/\s+/g, ' ').trim().slice(0, 120)
-        if (e.title.toLowerCase() === q) score += 8
-      }
-      hits.push({ path: e.path, title: e.title, snippet, line, score })
+      const hit = textHit(e, q)
+      if (hit) hits.push(hit)
     }
     hits.sort((a, b) => b.score - a.score)
     return hits.slice(0, 50)
@@ -231,16 +216,7 @@ export class VaultIndex {
   }
 
   listTags(): TagCount[] {
-    const counts = new Map<string, TagCount>()
-    for (const e of this.entries.values()) {
-      for (const t of e.tags) {
-        const k = t.toLowerCase()
-        const c = counts.get(k)
-        if (c) c.count++
-        else counts.set(k, { tag: t, count: 1 })
-      }
-    }
-    return [...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag))
+    return tagCounts(this.entries.values())
   }
 
   /** 嵌套标签按前缀(desktop 同款):查 `work` 也命中 `work/urgent`。 */
@@ -251,6 +227,36 @@ export class VaultIndex {
     }
     return out.sort()
   }
+}
+
+/** 一篇对普通关键词的命中。q 是小写整串。 */
+function textHit(e: Entry, q: string): SearchHit | null {
+  const bodyIdx = e.lower.indexOf(q)
+  const titleHit = e.title.toLowerCase().includes(q)
+  if (bodyIdx < 0 && !titleHit) return null
+  let snippet = ''
+  let line = 1
+  let score = 0
+  if (bodyIdx >= 0) {
+    const start = Math.max(0, bodyIdx - 40)
+    const end = Math.min(e.plain.length, bodyIdx + q.length + 80)
+    snippet =
+      (start > 0 ? '…' : '') +
+      e.plain.slice(start, end).replace(/\s+/g, ' ').trim() +
+      (end < e.plain.length ? '…' : '')
+    line = countNewlines(e.plain, bodyIdx) + 1
+    score += 5 - Math.min(4, bodyIdx / 200)
+    let n = 0
+    let from = 0
+    while ((from = e.lower.indexOf(q, from)) >= 0) { n++; from += q.length; if (n > 20) break }
+    score += Math.min(5, n)
+  }
+  if (titleHit) {
+    score += 12
+    if (!snippet) snippet = e.plain.replace(/\s+/g, ' ').trim().slice(0, 120)
+    if (e.title.toLowerCase() === q) score += 8
+  }
+  return { path: e.path, title: e.title, snippet, line, score }
 }
 
 function countNewlines(s: string, end: number): number {

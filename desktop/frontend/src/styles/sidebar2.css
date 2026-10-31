@@ -422,6 +422,7 @@
    当前是主题色底 + 左侧色条,同时成立时两者叠加也读得出来(与文件树 .t2sf-row.sel 同一档灰)。 */
 .t2s-srow.sel { background: var(--overlay-medium); }
 .t2s-srow.active { background: color-mix(in srgb, var(--accent-ink) 12%, transparent); }
+.t2s-folder-row.active { background: color-mix(in srgb, var(--accent-ink) 12%, transparent); }
 .t2s-srow.active::before {
   content: '';
   position: absolute;
