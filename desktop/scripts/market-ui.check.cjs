@@ -132,7 +132,28 @@ async function main() {
     check('并进来的卡片仍标着自己的类型', kinds['Research Companion'] === 'Agent' && kinds['Longform Writing'] === 'Space' && kinds['LaTeX Suite'] === '插件', JSON.stringify(kinds))
     const pluginsSubtitle = (await page.locator('.mk-title-subtitle').textContent()) || ''
     check('插件分类的说明点名 Space 与 Agent', pluginsSubtitle.includes('Space') && pluginsSubtitle.includes('Agent'), pluginsSubtitle)
+    // 保留标签 entitlement:<name>:卡片上一枚标记,不当普通标签,不挡安装;长文案不能撑破卡片的眼眉行。
+    const badged = await page.evaluate(() => {
+      const badge = document.querySelector('[data-market-entitlement="calendar-tools"]')
+      const line = badge?.closest('.mk-card-eyeline')
+      const card = badge?.closest('.mk-card')
+      return { text: badge?.textContent?.trim(), fits: !!line && line.scrollWidth <= line.clientWidth && badge.getBoundingClientRect().right <= card.getBoundingClientRect().right,
+        raw: document.body.textContent?.includes('entitlement:business') }
+    })
+    check('权益标签画成标记,不露原始标签,不撑破卡片', badged.text === '需要 Forsion 商业版' && badged.fits && !badged.raw, JSON.stringify(badged))
     await page.screenshot({ path: SHOTS.plugins, fullPage: true })
+    await page.locator('[data-market-entitlement="calendar-tools"]').screenshot({ path: shot('entitlement-badge') })
+    await page.locator('.mk-grid .mk-card-title', { hasText: 'Calendar Tools' }).click()
+    await page.locator('.mk-detail-sidebar').waitFor()
+    const access = await page.evaluate(() => ({
+      fact: [...document.querySelectorAll('.mk-facts dd')].map((d) => d.textContent?.trim()).includes('需要 Forsion 商业版'),
+      raw: document.body.textContent?.includes('entitlement:business'),
+      install: !!document.querySelector('[data-market-install="calendar-tools"]:not([disabled])'),
+    }))
+    check('详情页写明权益,照样能装', access.fact && !access.raw && access.install, JSON.stringify(access))
+    await page.screenshot({ path: shot('entitlement-detail'), fullPage: true })
+    await page.locator('.mk-detail-back').click()
+    await page.locator('.mk-grid').waitFor()
     // 详情页的类型名不跟着归并:从「插件」分类点进 Space 条目,类型一栏仍是 Space。
     await page.locator('.mk-grid .mk-card-title', { hasText: 'Longform Writing' }).click()
     await page.locator('.mk-detail-sidebar').waitFor()
@@ -299,6 +320,8 @@ async function main() {
     check('英文「Plugins」分类下也列出 agent / space 条目', enPlugins.names.includes('Research Companion') && enPlugins.names.includes('Longform Writing') && enPlugins.names.length === 5, enPlugins.names.join(' / '))
     check('英文卡片类型字样与说明成对', enPlugins.kinds.join() === 'Agents,Plugins,Spaces' && /Spaces and Agents/.test(enPlugins.subtitle), `${enPlugins.kinds.join()} | ${enPlugins.subtitle}`)
     check('英文界面的导航、标题区与卡片按钮不含汉字', !/[\u4e00-\u9fff]/.test(enPlugins.chrome), (enPlugins.chrome.match(/[\u4e00-\u9fff]+/g) || []).slice(0, 5).join(' / '))
+    const enBadge = await en.locator('[data-market-entitlement="calendar-tools"]').textContent()
+    check('英文权益标记成对', enBadge?.trim() === 'Requires Forsion Business', enBadge || '')
     await en.screenshot({ path: SHOTS.pluginsEn, fullPage: true })
     await en.close()
 

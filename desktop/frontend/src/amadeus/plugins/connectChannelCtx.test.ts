@@ -1,6 +1,6 @@
 // ctx.tangu.connectChannel: a plugin's UI connects a channel from its own bundle. Whose channel it is comes from the
 // engine's plugin discovery and is checked here in the host; nothing the plugin passes can widen it.
-// Negative control (run, went red): dropping the owner comparison in ownedChannelPatch fails the two "refuses" cases.
+// Negative control (run, went red): dropping the owner comparison in ownedChannelPatch fails 5 tests, every "refuses" case that depends on ownership.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { TanguDesktopConfig } from '../../types'
 

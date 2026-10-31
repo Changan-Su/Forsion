@@ -829,7 +829,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           skills={asking.plugin.bundle?.skills.length ?? 0} agents={asking.plugin.bundle?.agents ?? []} onClose={() => setAsking(null)}
           onConfirm={(opts) => { const a = asking; void uninstallForsionPlugin(a.plugin, a.c.name, opts, { engine: true }).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'amadeus-plugin', a.c.installSlug) }) }} />}
 
-        {!storeOnly && !detail && !detailLoading && !storeView && <div className="mk-upgrade-filters"><select aria-label={t('market.tagAll')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAll')}</option>{[...new Set(catalog.flatMap(c => c.tags || []))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><label><input type="checkbox" checked={compatibleOnly} onChange={e => setCompatibleOnly(e.target.checked)} />{t('market.compatibleOnly')}</label><span>Forsion {appVersion}</span></div>}
+        {!storeOnly && !detail && !detailLoading && !storeView && <div className="mk-upgrade-filters"><select aria-label={t('market.tagAll')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAll')}</option>{[...new Set(catalog.flatMap(c => shownTags(c)))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><label><input type="checkbox" checked={compatibleOnly} onChange={e => setCompatibleOnly(e.target.checked)} />{t('market.compatibleOnly')}</label><span>Forsion {appVersion}</span></div>}
         <div className="settings-body mk-body">
           {detail ? (
             <div className="mk-detail">
