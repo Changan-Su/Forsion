@@ -2,14 +2,14 @@
  * CLI 凭证存储:~/.tangu/auth.json { cloudUrl, token }。
  * `tangu login` 写入,`tangu chat` / standalone 在未显式传 --token 时读取(去掉手动塞 token)。
  *
- * 这份文件和桌面共写(desktop/electron/forsionAuth.ts),「读不出来 = 不知道,拒写」是同一契约,改一边必须改另一边。
+ * 这份文件和桌面共写(desktop/electron/forsionAuth.ts),「读不出来 = 不知道,拒写,只有明确登录放行」是同一契约,改一边必须改另一边。
  * ⚠️ 不走 readLockedJson 的 .bak 恢复:桌面写它时不留备份,.bak 可能停在别的账号,甚至是用户已登出的 token,
- * 恢复等于悄悄换号。这里也不留备份,坏文件等人修好或删掉。
+ * 恢复等于悄悄换号。这里也不留 .bak。
  * ponytail: 锁只挡 CLI 之间的读改写,桌面写这份文件不抢锁。要真互斥得桌面也走 withConfigLock。
  */
 import { readFileSync } from 'node:fs';
 import { authFile } from '../core/tanguHome.js';
-import { isCreds, withConfigLock, writeAtomic } from '../core/config.js';
+import { isCreds, keepBadCopy, withConfigLock, writeAtomic } from '../core/config.js';
 
 export interface Creds {
   cloudUrl?: string;
@@ -29,26 +29,25 @@ function readCreds(): Creds | null {
   }
 }
 
-function writableCreds(): Creds {
-  const c = readCreds();
-  if (!c) throw new Error(`${file()} is unreadable. Repair or remove it, then sign in again.`);
-  return c;
-}
+const unreadable = (): string => `${file()} is unreadable. Sign in again to replace it, or repair or remove the file.`;
 
 export function loadCreds(): Creds {
   const c = readCreds();
-  if (!c) console.error(`[auth] ${file()} is unreadable; running signed out and refusing writes until it is repaired or removed`);
+  if (!c) console.error(`[auth] ${unreadable()}`);
   return c ?? {};
 }
 
-export function assertCredsWritable(): void {
-  writableCreds();
-}
-
-/** 合并写入(读改写在同一把锁里);auth.json 读不出来时抛,原文件不动。 */
-export function saveCreds(patch: Creds): void {
+/** 合并写入(读改写在同一把锁里);auth.json 读不出来时抛,原文件不动。
+ *  signIn = 明确登录:新凭据不是从失败的那次读算出来的,坏文件另存 `config-backup/auth.json.bad-*` 后换上,
+ *  否则断电留下的零字节文件要人手动去删才登得上。留不下坏文件就整次失败。 */
+export function saveCreds(patch: Creds, opts: { signIn?: boolean } = {}): void {
   withConfigLock(file(), (stillMine) => {
-    writeAtomic(file(), JSON.stringify({ ...writableCreds(), ...patch }, null, 2), stillMine);
+    const cur = readCreds();
+    if (!cur) {
+      if (!opts.signIn) throw new Error(unreadable());
+      console.warn(`[auth] unreadable auth.json kept at ${keepBadCopy(file())}`);
+    }
+    writeAtomic(file(), JSON.stringify({ ...cur, ...patch }, null, 2), stillMine);
   });
 }
 

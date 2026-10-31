@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { authFile } from '../core/tanguHome.js';
 import { loginFlow } from './login.js';
 
@@ -22,6 +22,7 @@ describe('tangu login × auth.json', () => {
     fetchMock.mockClear();
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     vi.spyOn(process, 'exit').mockImplementation(((code?: number) => { throw new Error(`exit ${code}`); }) as never);
   });
@@ -32,12 +33,21 @@ describe('tangu login × auth.json', () => {
     rmSync(home, { recursive: true, force: true });
   });
 
-  it('坏文件:开始授权之前就拒绝,不发请求,文件不动', async () => {
+  it('坏文件:登录能救回来,另存坏文件后换上新凭据', async () => {
     writeFileSync(authFile(), '{"cloudUrl":');
-    await expect(loginFlow('https://a.test')).rejects.toThrow('exit 1');
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(readFileSync(authFile(), 'utf8')).toBe('{"cloudUrl":');
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining('unreadable'));
+    await loginFlow('https://a.test');
+    expect(JSON.parse(readFileSync(authFile(), 'utf8'))).toEqual({ cloudUrl: 'https://a.test', token: 'new-token' });
+    const backups = join(dirname(authFile()), 'config-backup');
+    const kept = readdirSync(backups);
+    expect(kept).toHaveLength(1);
+    expect(kept[0]).toMatch(/^auth\.json\.bad-/);
+    expect(readFileSync(join(backups, kept[0]!), 'utf8')).toBe('{"cloudUrl":');
+  });
+
+  it('坏文件留不下来:登录失败,原文件不动', async () => {
+    mkdirSync(authFile());
+    await expect(loginFlow('https://a.test')).rejects.toThrow();
+    expect(statSync(authFile()).isDirectory()).toBe(true);
   });
 
   it('好文件:写入新 token,保留记住的 model', async () => {

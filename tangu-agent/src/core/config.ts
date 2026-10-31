@@ -91,7 +91,7 @@ export function writeAtomic(file: string, text: string, stillMine: () => boolean
 
 /** 坏文件原样另存到 `config-backup/<名>.bad-<时间>-<随机>`(复制,不挪走 —— 原位一直有东西;EXCL + 随机后缀,同一毫秒两次恢复
  *  也不会盖掉前一份坏文件),返回留存路径。 */
-function keepBadCopy(file: string): string {
+export function keepBadCopy(file: string): string {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-'); // Windows 文件名不许冒号
   const bad = join(configBackupDir(file), `${basename(file)}.bad-${stamp}-${randomUUID().slice(0, 8)}`);
   mkdirSync(dirname(bad), { recursive: true });

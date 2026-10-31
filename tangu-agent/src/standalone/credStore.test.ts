@@ -1,11 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { authFile } from '../core/tanguHome.js';
-import { assertCredsWritable, loadCreds, saveCreds, saveModel } from './credStore.js';
+import { loadCreds, saveCreds, saveModel } from './credStore.js';
 
 const BAD = ['', '{"cloudUrl":"https://a.test","token":"t",', '[]', 'null', '{"token":1}'];
+const backups = (): string => join(dirname(authFile()), 'config-backup');
 
 describe('auth.json 读不出来 ≠ 没有', () => {
   let home: string;
@@ -13,6 +14,7 @@ describe('auth.json 读不出来 ≠ 没有', () => {
     home = mkdtempSync(join(tmpdir(), 'tangu-creds-'));
     vi.stubEnv('TANGU_HOME', home);
     vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -41,13 +43,38 @@ describe('auth.json 读不出来 ≠ 没有', () => {
     writeFileSync(authFile(), '');
     expect(loadCreds()).toEqual({});
     expect(console.error).toHaveBeenCalledTimes(1);
-    expect(() => assertCredsWritable()).toThrow(/unreadable/);
 
     rmSync(authFile());
     vi.mocked(console.error).mockClear();
     expect(loadCreds()).toEqual({});
     expect(console.error).not.toHaveBeenCalled();
-    expect(() => assertCredsWritable()).not.toThrow();
+  });
+
+  it('明确登录:坏文件原样另存(0600),auth.json 换成新凭据,之后普通写入恢复', () => {
+    const bad = (): string[] => readdirSync(backups()).filter((n) => n.startsWith('auth.json.bad-'));
+    for (const [i, raw] of BAD.entries()) {
+      writeFileSync(authFile(), raw);
+      saveCreds({ cloudUrl: 'https://a.test', token: 'new' }, { signIn: true });
+      expect(JSON.parse(readFileSync(authFile(), 'utf8'))).toEqual({ cloudUrl: 'https://a.test', token: 'new' });
+      if (process.platform !== 'win32') expect(statSync(authFile()).mode & 0o777).toBe(0o600);
+      expect(bad()).toHaveLength(i + 1);
+    }
+    expect(bad().map((n) => readFileSync(join(backups(), n), 'utf8')).sort()).toEqual([...BAD].sort());
+    if (process.platform !== 'win32') for (const n of bad()) expect(statSync(join(backups(), n)).mode & 0o777).toBe(0o600);
+    expect(() => saveModel('m')).not.toThrow();
+  });
+
+  it('明确登录:坏文件留不下来就整次失败,不覆盖', () => {
+    mkdirSync(authFile());
+    expect(() => saveCreds({ token: 'new' }, { signIn: true })).toThrow();
+    expect(statSync(authFile()).isDirectory()).toBe(true);
+  });
+
+  it('好文件上登录不留 .bad-*', () => {
+    writeFileSync(authFile(), JSON.stringify({ token: 'old', model: 'm' }));
+    saveCreds({ token: 'new' }, { signIn: true });
+    expect(loadCreds()).toEqual({ token: 'new', model: 'm' });
+    expect(existsSync(backups())).toBe(false);
   });
 
   it('修好或删掉坏文件后恢复写入', () => {
