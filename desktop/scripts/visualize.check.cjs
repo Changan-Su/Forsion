@@ -45,9 +45,9 @@ document.getElementById('bypass').onclick = () => {
   document.getElementById('leak').requestSubmit()
 }
 </script>`
-  // 自身导航:内层 CSP 管不到,没有壳时这些写法都能到探针。load 之后一直报 77 高(运行时自己也会量,报一次会被盖掉),再走:卡片确实跑到了这一步,没跑到的不算拦住,也顺带验中转。
+  // 自身导航:内层 CSP 管不到,没有壳时这些写法都能到探针。load 之后一直报 77 高,报一阵再走(运行时自己也会量,报一次或者报完立刻走都会被盖掉):卡片确实跑到了这一步,没跑到的不算拦住,也顺带验中转。
   const NAV_EXTERNAL = ['https://www.youtube-nocookie.com/*', 'https://player.bilibili.com/*']
-  const navCard = (via, go, markup = '') => `${markup}<script>window.addEventListener('load', () => { setInterval(() => parent.postMessage({ type: 'sketch-height', height: 77 }, '*'), 100); setTimeout(() => { ${go} }, 100) })</script>`
+  const navCard = (via, go, markup = '') => `${markup}<script>window.addEventListener('load', () => { setInterval(() => parent.postMessage({ type: 'sketch-height', height: 77 }, '*'), 50); setTimeout(() => { ${go} }, 400) })</script>`
   const anchorBypass = `window.addEventListener('click', (event) => event.stopImmediatePropagation(), true); document.getElementById('go')`
   const navVectors = (u) => [
     ['href', `location.href = '${u}?via=href'`],
