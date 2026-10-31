@@ -605,7 +605,7 @@ function attachHostRouters(r: PluginRouters): void {
  * 只有激活后才知道,所以照旧先全部激活一次,再收敛:未启用或前置没齐的立即 deactivate 休眠。
  * 返回把插件路由接到三组 router 的函数——**须在 `createTanguModule` 之后调用**（彼时 `configureTangu`/`deps()` 才就绪;
  * 路由挂载器内部可能读 `deps()`）。之后运行期激活的插件路由经分发器即时生效,不再需要重启。
- * tool provider 注册是无状态的静态写入，先于 createTanguModule 也安全。
+ * standalone/TUI 先 createTanguModule 再激活:模型来源等注册需要真实 host/profile 做能力校验。
  */
 export async function activateAllPlugins(onActivate?: (id: string) => void): Promise<(r: PluginRouters) => void> {
   await serial(async () => {

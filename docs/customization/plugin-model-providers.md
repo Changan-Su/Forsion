@@ -8,6 +8,8 @@ description: 将单次推理接入 Tangu 原生模型边界，历史、工具执
 
 先检测 `typeof ctx.registerModelProvider === 'function'`。注册要求本地引擎；它不是云端模型提供方的注册入口。类型正典为 `tangu-agent/plugin-api/tangu-agent.d.ts`。
 
+宿主必须先装配原生运行时，再激活插件。在 `tangu-agent` 运行 `npm run test:plugin-model-boot`，会构建并在隔离 home 内验证真实 standalone 冷启动、模型目录及停用/重启用生命周期。
+
 ```ts
 ctx.registerModelProvider({
   id: 'source',

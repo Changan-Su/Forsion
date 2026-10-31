@@ -8,6 +8,8 @@ A local engine plugin can register a model source with `ctx.registerModelProvide
 
 Feature-detect `typeof ctx.registerModelProvider === 'function'`. Registration requires a local engine; it is not a cloud-provider registration API. Use the canonical `tangu-agent/plugin-api/tangu-agent.d.ts` types.
 
+Host startup must configure the native runtime before activating plugins. Run `npm run test:plugin-model-boot` in `tangu-agent` to build and verify the real standalone cold boot, model catalog and disable/re-enable lifecycle in an isolated home.
+
 ```ts
 ctx.registerModelProvider({
   id: 'source',
