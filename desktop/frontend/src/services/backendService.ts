@@ -724,6 +724,10 @@ export interface ChannelStatus {
     name: { zh: string; en: string }
     hint: { zh: string; en: string } | null
     fields: Array<{ key: 'appId' | 'appSecret' | 'botToken'; label: { zh: string; en: string }; secret: boolean }>
+    /** 每 peer 一条绑定 + 一个会话。旧引擎没有这个字段。 */
+    multiPeer?: boolean
+    /** 通道归属(引擎按发现目录记,不是插件自报)。旧引擎没有这个字段。 */
+    owner?: { engine: string; bundle: string | null } | null
   }
 }
 
