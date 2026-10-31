@@ -2,6 +2,7 @@
 import type { VaultFace } from '../desktop/electron/amadeus/ipc'
 
 export interface RuntimeContext {
+  /** May be read-only and shared with other instances: write under dataDir, never here. */
   packageDir: string
   dataDir: string
   workspaceDir: string

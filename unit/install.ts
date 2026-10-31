@@ -1,4 +1,4 @@
-/** Installation copies a trusted local package into an immutable version directory. */
+/** Installation copies a trusted local package into an immutable version directory, or references one in place. */
 import { cp, mkdir, readdir, realpath, rm, lstat, open, readlink, symlink } from 'node:fs/promises'
 import { dirname, resolve, sep, relative, isAbsolute } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -58,10 +58,12 @@ async function installDependencies(root: string, backendMain: string): Promise<v
 /**
  * updateId requires an existing plugin and a live owner; ordinary installs also work offline.
  * applyInstall hands a new plugin to the live owner (remote management), which activates it and writes unit.json.
- * verify runs on the private version directory, the bytes that will be activated: a check on the staged
- * release alone proves nothing about what a concurrent writer left there when it was copied.
+ * verify runs on the bytes that will be activated: a check on the staged release alone proves nothing about
+ * what a concurrent writer left there when it was copied.
+ * reference records the package's own path instead of copying it: nothing is written there, so several
+ * instances can share one read-only directory. Packages that install dependencies still get a private copy.
  */
-export async function installPackage(configPath: string, source: string, options: { updateId?: string; installId?: string; releaseDigest?: string;
+export async function installPackage(configPath: string, source: string, options: { updateId?: string; installId?: string; releaseDigest?: string; reference?: boolean;
   verify?: (root: string) => Promise<void>
   applyUpdate?: (id: string, path: string) => Promise<unknown>; applyInstall?: (id: string, path: string) => Promise<unknown> } = {}) {
   const file = resolve(configPath), root = dirname(file)
@@ -85,24 +87,29 @@ export async function installPackage(configPath: string, source: string, options
       if (existing) throw new OperationError('Plugin is already installed; use update')
     }
     await inspectTree(sourceRoot, sourceRoot)
-    stage = resolve(root, 'plugins', pack.manifest.id, `${pack.manifest.version}-${randomUUID()}`)
-    await mkdir(dirname(stage), { recursive: true, mode: 0o700 })
-    await cp(sourceRoot, stage, { recursive: true, verbatimSymlinks: true })
-    await relocateLinks(stage, sourceRoot, stage)
+    // stage stays unset for a reference: the cleanup below may only ever remove a private copy.
+    if (!options.reference || pack.manifest.backend?.dependencies?.mode === 'npm-ci') {
+      stage = resolve(root, 'plugins', pack.manifest.id, `${pack.manifest.version}-${randomUUID()}`)
+      await mkdir(dirname(stage), { recursive: true, mode: 0o700 })
+      await cp(sourceRoot, stage, { recursive: true, verbatimSymlinks: true })
+      await relocateLinks(stage, sourceRoot, stage)
+    }
+    const target = stage ?? sourceRoot
     if (options.releaseDigest) {
       const { packageDigest } = await import('./releases')
       if (pack.manifest.backend?.dependencies?.mode === 'npm-ci' || pack.manifest.runtime?.dependencies?.mode === 'npm-ci'
-        || await packageDigest(stage) !== options.releaseDigest) throw new Error('Staged release changed during installation')
+        || await packageDigest(target) !== options.releaseDigest) throw new Error('Staged release changed during installation')
     }
-    await options.verify?.(stage)
-    if (pack.manifest.backend?.dependencies?.mode === 'npm-ci') await installDependencies(stage, pack.manifest.backend.main)
-    const ready = await readPackage(stage, config.version)
+    await options.verify?.(target)
+    if (pack.manifest.backend?.dependencies?.mode === 'npm-ci') await installDependencies(target, pack.manifest.backend.main)
+    const ready = await readPackage(target, config.version)
+    const installed = { id: ready.manifest.id, version: ready.manifest.version, path: target, ...(options.reference ? { reference: !stage } : {}) }
     if (existing) {
       try {
-        if (options.applyUpdate) await options.applyUpdate(pack.manifest.id, stage)
-        else await sendControl(config.dataDir!, { action: 'update', id: pack.manifest.id, path: stage })
+        if (options.applyUpdate) await options.applyUpdate(pack.manifest.id, target)
+        else await sendControl(config.dataDir!, { action: 'update', id: pack.manifest.id, path: target })
         committed = true // The running owner persists the update before acknowledging.
-        return { id: ready.manifest.id, version: ready.manifest.version, path: stage }
+        return installed
       }
       catch (error) {
         if (!unitIsOffline(error)) {
@@ -113,24 +120,24 @@ export async function installPackage(configPath: string, source: string, options
         // The owner may have stopped while the package was copied or dependencies installed.
         if (options.updateId !== undefined) throw new Error('Unit is not running; start it before updating')
       }
-      existing.entry.path = stage
+      existing.entry.path = target
     } else if (options.applyInstall) {
       // The in-process owner either activated it and persisted unit.json, or rolled back before throwing.
-      try { await options.applyInstall(pack.manifest.id, stage) }
+      try { await options.applyInstall(pack.manifest.id, target) }
       catch (error) { if (error instanceof RollbackIncomplete) committed = true; throw error }
       committed = true
-      return { id: ready.manifest.id, version: ready.manifest.version, path: stage }
+      return installed
     } else {
       try {
         await sendControl(config.dataDir!, { action: 'status' })
         throw new Error('Stop the Unit before installing a new plugin; updates can run live')
       } catch (error) { if (!unitIsOffline(error)) throw error }
-      entries.push({ path: stage, enabled: true })
+      entries.push({ path: target, enabled: true })
     }
     if (!config.defaultSpace && ready.spaceIds.size) config.defaultSpace = [...ready.spaceIds][0]
     await writeConfig(file, config)
     committed = true
-    return { id: ready.manifest.id, version: ready.manifest.version, path: stage }
+    return installed
   } finally {
     await lock.close(); await rm(lockPath, { force: true })
     if (!committed && stage) await rm(stage, { recursive: true, force: true })

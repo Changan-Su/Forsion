@@ -36,7 +36,7 @@ import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
-import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
+import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, PLUGIN_AWARENESS_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
 import { canonicalToolName, resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
 import { LEGACY_HTML_CARD_TOOL, SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
@@ -823,7 +823,7 @@ export function sessionHasActiveRun(sessionId: string): boolean {
  * 首帧;窗口起点每 HYDRATE_BLOCK 行才挪一次,所以约每 5 个 run 才多一次摘要调用(增量,带上一检查点)。
  * 分步回放(agent_steps)与 hydrate 同源,故窗口算术只数 DB 行。无 run 上下文 → 用量台账静默跳过(与手动 /compact 同)。
  */
-async function checkpointRowsOutsideWindow(
+export async function checkpointRowsOutsideWindow(
   sessionId: string, modelId: string, appId: string, settings: CompactionSettings, runThinking: ThinkingLevel,
 ): Promise<void> {
   if (!settings.enabled || !modelId) return;
@@ -1554,9 +1554,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
     // 通道会话判定(每 run 一次):channel_send_* 只在「连接着通道的会话」暴露(P0-3),
     // 回复风格段也据此分裁(通道端纯文本渲染)。绑定可中途建立/解除 → 按 run 重查;非 host 恒 false。
-    const channelSession = profile.capabilities.hostExec
-      ? await channelHub.isChannelSession(userId, sessionId)
-      : false;
+    const channelBinding = profile.capabilities.hostExec ? await channelHub.channelBinding(userId, sessionId) : false;
+    const channelSession = channelBinding === true;
+    const channelUnknown = channelBinding === null; // 工具和回复风格照「没连」走,隐私边界按「连着」走
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
     const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset, sandboxExec: profile.features.sandbox });
     // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
@@ -1627,6 +1627,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, ps.noPreamble ? { noPreamble: true } : undefined));
     // 应用 / 窗口引用(`[[app://…]]` / `[[window://…]]`):紧跟输出风格段(它是「标识符进反引号」的例外);通道会话是纯文本,不注入。
     if (!channelSession) systemParts.push(APP_REF_SECTION);
+    // 想到插件:有商店面才说(同 search_marketplace 的门)。计划模式没有这个工具;通道会话画不出插件卡与任务卡。
+    if (deps().brain.marketplace && !planMode && !channelSession) systemParts.push(PLUGIN_AWARENESS_SECTION);
     // 发给模型前脱敏开着:告诉模型占位符能直接用(否则真模型会拒绝「看不到的 key」,live 台架 10-28 实测)。随设置静态,不碎前缀缓存。
     { const ms = maskSettings(); if (ms.action === 'mask' && (ms.secrets || ms.personal) && !maskSkipped) systemParts.push(MASKING_SECTION); }
     // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段);
@@ -1660,8 +1662,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     ctxMark('guidance');
     // 4) 人的文件夹 human/(所有 agent 可见,半稳定):人写给所有 Agent 的 AGENT.md、人自己写的 MEMORY.md(原 USER.md)、
     //    Agent 们对人的认识 SOUL.md。替换原来那段 USER.md,不并排加(提示词体量)。HUMAN.md 共识走下面协作说明那段。读失败不阻断。
+    //    连着聊天通道的会话(别人也可能在读)不注入人的本子和画像,只留 AGENT.md 那段要求(10-29 画像写入方案 细节 5)。
     try {
-      const aboutHuman = renderAboutHuman();
+      const aboutHuman = renderAboutHuman({ private: channelBinding === false });
       if (aboutHuman) systemParts.push(aboutHuman);
     } catch { /* ignore */ }
     ctxMark('profile');
@@ -1793,7 +1796,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const projectScoped = projectRef ? true : undefined;
     const projectPath = projectRef?.project;
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped, projectPath,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, channelUnknown, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped, projectPath,
       visuals: visualsPref, // run 冻结的可视化档位:与上面拼提示用的同一个值,set_ui_setting 中途改了也到下一次 run 才生效
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
@@ -2201,7 +2204,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const directive =
           '## Mentioned Agents for This Turn\n' +
           'The user @-mentioned the following agents for this message. When their expertise fits the request, involve them and then synthesize the result into your reply. Two ways, pick per the task:\n' +
-          '- `delegate` with the matching `agentSlug` — a quick one-shot subtask (the subagent runs with that agent\'s persona and returns a single report). Use for fetch/search/analysis you just need an answer to.\n' +
+          '- `delegate` with the matching `agentSlug` — a quick subtask (the subagent runs with that agent\'s persona and returns a report). Use for fetch/search/analysis you just need an answer to.\n' +
           '- `start_discussion` with `peer` = the matching slug — a genuine back-and-forth deliberation (a fork of you debates them until both sides are done; collect it with `wait_discussion`). Use when the question benefits from real discussion/disagreement.\n' +
           'Mentioned agents:\n' +
           mentioned.map((a) => `- ${a.name} (slug: \`${a.slug}\`)${a.description ? ` — ${a.description}` : ''}`).join('\n');

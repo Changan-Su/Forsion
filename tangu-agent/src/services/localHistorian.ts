@@ -447,8 +447,8 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
   void (async () => {
     const cfg = loadSpecialAgentsConfig().historian;
     if (!cfg.enabled) return;
-    const s = (await query<any[]>(`SELECT kind, title FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]))[0];
-    if (!s || (s.kind && s.kind !== 'user')) return;
+    const s = (await query<any[]>(`SELECT kind, title, title_manual FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]))[0];
+    if (!s || (s.kind && s.kind !== 'user') || s.title_manual) return;
     const n = await query<any[]>(`SELECT COUNT(*) AS n FROM agent_runs WHERE session_id = ? AND status = 'done'`, [sessionId]);
     const round = (Number(n[0]?.n) || 0) + 1;
     if (!isRoundDue(round, cfg.everyRounds, cfg.firstRoundTrigger)) return;
@@ -476,14 +476,14 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
       const unusable = (t: string) => t.length < 2 || (/\s/.test(t) ? t.split(/\s+/).length > 8 : t.length > 40) || t.toUpperCase() === 'NOTHING';
       let title = cleanTitle(res?.content);
       if (unusable(title)) return false;
-      if (title === current) return true; // 原样保留(含用户手改的标题)不核语言
+      if (title === current) return true; // 原样保留不核语言
       title = cleanTitle(await inConversationLanguage(userId, modelId, title, `${priorT.userText}\n${message.trim()}`));
       if (unusable(title)) return false; // 改写没成 / 改写出来的不像标题 → 交 done 判官兜底(它也过这道核对)
       // CAS:用户这期间手改过标题就不覆盖,也不报「已更新」(query 无 affectedRows,靠 RETURNING 判命中)。
       // 起点是 New Chat 时,前端发出第一句后会写占位标题 = 原话前 30 字(tanguSlice renameSession,PATCH 再 trim),
       // 常落在这次模型调用途中 —— 那不算用户改名,照写(10-29)。起点已有标题的轮次不放宽。
       const placeholder = !current || current === 'New Chat' ? message.slice(0, 30).trim() : current;
-      const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') IN (?, ?) RETURNING id`, [title, sessionId, current, placeholder]);
+      const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') IN (?, ?) AND title_manual = FALSE RETURNING id`, [title, sessionId, current, placeholder]);
       if (!hit.length) return true;
       await logActivity(userId, 'title_updated', title, sessionId);
       log(`首帧标题(第 ${round} 轮,只看用户消息): ${title}`);
@@ -590,7 +590,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
   try {
     // 仅用户会话；并发安全：roundN 由 done run 计数推出（幂等）。app_id/model_id/agent_config 供辅助模式讨论用。
     const skRows = await query<any[]>(
-      `SELECT kind, title, summary, emoji, app_id, model_id, agent_config FROM chat_sessions WHERE id = ? LIMIT 1`,
+      `SELECT kind, title, title_manual, summary, emoji, emoji_manual, app_id, model_id, agent_config FROM chat_sessions WHERE id = ? LIMIT 1`,
       [sessionId],
     );
     const sk = skRows[0];
@@ -617,7 +617,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const earlyKey = `${sessionId}:${roundN}`;
     const early = opts?.force ? undefined : earlyTitles.get(earlyKey);
     earlyTitles.delete(earlyKey);
-    const titleDue = cadenceDue && !(early && (await early));
+    const titleDue = cadenceDue && !sk.title_manual && !(early && (await early)); // 用户亲手改过的标题不再动
     // 远程来源的一轮不写长期记忆(09-27 终审 P1 延伸):记忆会注入之后每一次会话(含本机 full-auto),远端 run 自己的
     // remember 已硬拒;Historian 的独立判官(候选 → Dream)与辅助讨论(主 Agent 自己 remember)是同一条旁路。标题 / 摘要照常(会话自有资产)。
     // 日志(LOG)与工作笔记候选同样不写(P1 · M1A,G7):LOG 按日进 Muse 周期提示词的活动摘要、read_log,远端原话经它流进 Muse;
@@ -634,7 +634,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const memoryDue = due && !remoteRound;
     const logDue = cadenceDue && !remoteRound;
     const summaryDue = cadenceDue; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
-    const emojiDue = cadenceDue && cfg.autoEmoji !== false && !String(sk.emoji || '').trim();
+    const emojiDue = cadenceDue && cfg.autoEmoji !== false && !sk.emoji_manual && !String(sk.emoji || '').trim();
 
     // 实质增量地板:自上次维护以来新增内容太少 → 跳过整次判断(避免琐碎轮重复总结 / 反复重写记忆侵蚀)。
     // 带信号的一轮不看这道地板:纠正往往只有一句话,正是地板会筛掉的那种。
@@ -754,9 +754,13 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           ? cleanTitle(await inConversationLanguage(userId, cfg.modelId, title, transcriptSnapshot.userText)) : title;
         if (titleDue && okShort(fixedTitle)) {
           historianSignal.getStore()?.throwIfAborted();
-          await query(`UPDATE chat_sessions SET title = ? WHERE id = ?`, [fixedTitle, sessionId]).catch((e: any) => log(`更新标题失败: ${e?.message || e}`));
-          await logActivity(userId, 'title_updated', fixedTitle, sessionId);
-          log(`已更新标题: ${fixedTitle}`);
+          // 判官跑的这几十秒里用户可能亲手改了标题:带上标记,没写成就不报「已更新」。
+          const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND title_manual = FALSE RETURNING id`, [fixedTitle, sessionId])
+            .catch((e: any) => { log(`更新标题失败: ${e?.message || e}`); return []; });
+          if (hit.length) {
+            await logActivity(userId, 'title_updated', fixedTitle, sessionId);
+            log(`已更新标题: ${fixedTitle}`);
+          }
         }
         // 会话摘要(人读,chat_sessions.summary):空串=模型裁定旧摘要仍适用,不动。
         // 活动日志只在 UPDATE 真成功后写,否则工作视图会报告不存在的更新(Codex 评审 08-03 Minor)。
@@ -1002,7 +1006,7 @@ async function startAssistDiscussion(opts: {
       (freshContext ? `[Current conversation]\n${freshContext}\n\n` : '') +
       `[Historian assist] Decide together whether ${topics} should be updated for this conversation (see the context above). ` +
       `Historian speaks first with its assessment; then ${mainDef.name} makes the final call and, if an update is warranted, ` +
-      'performs it ITSELF by calling log_event (one short sentence for what happened today) and/or remember (only what will still be true next month — user facts/preferences, stable environment facts, proven procedures; never progress, deliverables or dated status, those are log_event material, and never an instruction that holds for this conversation only; one present-tense sentence of at most 300 characters per fact; if the memory below already covers it, update that entry instead of adding another). ' +
+      'performs it ITSELF by calling log_event (one short sentence for what happened today) and/or remember (only what will still be true next month — user facts/preferences (facts about the person themself go to its "person" scope when offered), stable environment facts, proven procedures; never progress, deliverables or dated status, those are log_event material, and never an instruction that holds for this conversation only; one present-tense sentence of at most 300 characters per fact; if the memory below already covers it, update that entry instead of adding another). ' +
       'Do not do any other work. Keep it brief — one round is usually enough.\n\n' +
       // 全文注入(受 MEMORY_CHAR_BUDGET 帽):从前只给头 3000 字,最新条目看不见 → 主 Agent 重复记、写追加式「更正旧条目」。
       `[Current long-term MEMORY]\n${(mem || '(empty)').slice(0, MEMORY_CHAR_BUDGET)}\n\n` +

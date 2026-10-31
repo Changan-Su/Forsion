@@ -61,6 +61,7 @@ import { isDirectModelId } from '../chatModelCatalog'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
 import { focusTarget, homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
+import { agentName, agentNames } from '../../agentName'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
@@ -724,7 +725,7 @@ export const Composer2: React.FC<{
   // 这个会话正在 Mini 里通话 → 纯文字送进电话(见 sendMessage)
   const callSessionId = useSyncExternalStore(subscribeCallPresence, getCallPresence)
   const inCall = !!activeSessionId && callSessionId === activeSessionId
-  // 输入建议(promptSuggest.ts,默认关):一轮结束后猜的下一句,当占位文字显示在空输入框里,Tab 采用。
+  // 输入建议(promptSuggest.ts,默认开):一轮结束后猜的下一句,空输入框里显示,Tab 填入。
   // 只认明确给了 sessionId 的输入框(聊天视图)。和占位文字一样常驻:只有新一轮起跑才作废(appStore subscribeRun),
   // 打字 / Tab 采用都只是因为输入框不空而藏起来,删空了还在。
   const suggestion = usePromptSuggest((st) => (sessionId ? st.bySession[sessionId] : undefined) || '')
@@ -881,14 +882,6 @@ export const Composer2: React.FC<{
     const ta = taRef.current
     if (running && !compactCard && !tipTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setTipTall(true)
   }, [running, tipIdx, locale, tipTall, draft, compactCard])
-  // 输入建议同理:末尾带着「⇥ Tab」提示,折行时一行高会把提示裁掉 → 撑到两行(换一句建议重量)。
-  const [suggestTall, setSuggestTall] = useState(false)
-  useLayoutEffect(() => setSuggestTall(false), [suggestion, locale])
-  useLayoutEffect(() => {
-    const ta = taRef.current
-    if (showSuggestion && !suggestTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setSuggestTall(true)
-  }, [showSuggestion, suggestion, suggestTall, locale, draft])
-
   // 历史召回:older=true→↑ 取更旧、false→↓ 取更新;越过最新回到暂存草稿。光标置末尾。
   const recallHistory = (older: boolean) => {
     if (older && histPos === 0) histStash.current = draft // 首次进入:暂存当前草稿
@@ -1156,7 +1149,7 @@ export const Composer2: React.FC<{
   const mentionMatches = useMemo<NormalAgentDef[]>(() => {
     if (!mention) return []
     const q = mention.query.toLowerCase()
-    return mentionPool.filter((a) => !q || a.name.toLowerCase().includes(q) || a.slug.toLowerCase().includes(q)).slice(0, 10)
+    return mentionPool.filter((a) => !q || a.slug.toLowerCase().includes(q) || agentNames(a).some((n) => n.toLowerCase().includes(q))).slice(0, 10)
   }, [mention, mentionPool])
   const mentionActive = !!mention && mentionMatches.length > 0
   useEffect(() => { setMentionIndex(0) }, [mention?.start, mention?.query])
@@ -1164,10 +1157,10 @@ export const Composer2: React.FC<{
   const pickMention = (a: NormalAgentDef) => {
     if (!mention) return
     const before = draft.slice(0, mention.start)
-    const insert = `@${a.name} `
+    const insert = `@${agentName(a)} `
     const next = before + insert + draft.slice(cursorPos)
     setDraft(next)
-    if (projectMode) setMentionedProjects((prev) => (prev.some((p) => p.path === a.slug) ? prev : [...prev, { name: a.name, path: a.slug }]))
+    if (projectMode) setMentionedProjects((prev) => (prev.some((p) => p.path === a.slug) ? prev : [...prev, { name: agentName(a), path: a.slug }]))
     else if (inGroup) setMentionedSlug(a.slug)
     else setMentionAgents((prev) => (prev.includes(a.slug) ? prev : [...prev, a.slug]))
     const caret = before.length + insert.length
@@ -1891,7 +1884,7 @@ export const Composer2: React.FC<{
             </div>
           )}
           {((field: React.ReactNode) => phoneCard ? <div className="t2c-field">{field}{!voiceActive && submitKeys}</div> : field)(
-          <><ChatBoxInput
+          <><div className="t2c-input-wrap" data-suggestion={showSuggestion || undefined}><ChatBoxInput
             autoSize={false}
             ref={taRef}
             className="t2c-ta"
@@ -1901,7 +1894,7 @@ export const Composer2: React.FC<{
             placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
             data-suggestion={showSuggestion || undefined}
             data-tip-fade={(running && !compactCard && tipFade) || undefined}
-            data-tip-tall={(running && !compactCard && tipTall) || (showSuggestion && suggestTall) || undefined}
+            data-tip-tall={(running && !compactCard && tipTall) || undefined}
             disabled={disabled}
             onChange={(e) => {
               setDraft(e.target.value)
@@ -2020,7 +2013,8 @@ export const Composer2: React.FC<{
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
             }}
           />
-          <InlineRefMirror text={draft} runs={inlineRuns} chipOf={(run) => runChips.get(run)} /></>)}
+          <InlineRefMirror text={draft} runs={inlineRuns} chipOf={(run) => runChips.get(run)} />
+          {showSuggestion && <div className="t2c-suggestion" aria-hidden="true"><span>{suggestion}</span>{' '}<span className="t2c-suggestion-key">{t('input.suggestionHint')}</span></div>}</div></>)}
           {slashOpen && (
             <div className="t2c-menu">
               {slashMatches.map((it, i) => (
@@ -2048,7 +2042,7 @@ export const Composer2: React.FC<{
                   onMouseEnter={() => setMentionIndex(i)}
                   onClick={() => pickMention(a)}
                 >
-                  <span className="t2c-menu-cmd">@{a.name}</span>
+                  <span className="t2c-menu-cmd">@{agentNames(a).join(' · ')}</span>
                   <span className="t2c-menu-desc">{a.description || a.slug}</span>
                 </button>
               ))}

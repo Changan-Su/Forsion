@@ -60,11 +60,18 @@
   margin: 0 auto;
   /* 底部留白 = 输入卡实高:滚到底时最后一条完整浮在卡**上方**(用户选的)。渐隐带在视图最底边、
      整条压在卡后面,够不着末行,故不必再加它。 */
-  padding: 28px 28px calc(var(--t2-composer-h, 96px) + 8px);
+  --t2-pad: 28px;
+  padding: 28px var(--t2-pad) calc(var(--t2-composer-h, 96px) + 8px);
   display: flex;
   flex-direction: column;
   gap: 26px;
   min-height: 100%; /* 撑满滚动视口 → 空状态 .t2-empty 的 flex:1 才能真正垂直居中(否则贴顶) */
+}
+
+/* 目录的沟(DESIGN §6「悬浮目录」):左边的空白不够 --lcl-ftoc-gutter 时,正文自己让开。百分比按 .t2-stream 的
+   内容宽算,右栏车道占掉的 padding-right 自动扣掉。属性由 FloatingToc 打,所以目录藏起来的窄栏不让。 */
+.t2-stream[data-lcl-ftoc] .t2-stream-inner {
+  padding-left: max(var(--t2-pad), calc(var(--lcl-ftoc-gutter) - max(0px, (100% - 820px) / 2)));
 }
 
 /* ====== 助手消息(纸面流动) ====== */
@@ -432,7 +439,7 @@
 /* 划线后的那一条不在这里了:全应用共用 lcl/components/selectionBar.css(外壳 .ui-popover.selbar,挂在 body 下)。 */
 
 @media (max-width: 1040px) {
-  .t2-stream-inner { padding-inline: 18px; }
+  .t2-stream-inner { --t2-pad: 18px; }
   .t2c-inner { padding-inline: 18px; }
   .t2-toolbar-title { max-width: 220px; }
   .t2-toolbar-pill { max-width: 110px; }
@@ -1143,6 +1150,8 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
   background: var(--overlay-light, rgba(127,127,127,.1)); color: var(--text-muted);
 }
 .t2-taskcard-tldr { color: var(--text-muted); overflow-wrap: anywhere; }
+.t2-rulecard-row { display: grid; grid-template-columns: 2.5em minmax(0, 1fr); gap: 8px; overflow-wrap: anywhere; }
+.t2-rulecard-row > span:first-child { color: var(--text-muted); }
 .t2-taskcard-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
 .t2-taskcard-actions > button {
   border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-pill, 999px); background: transparent; color: var(--text);
@@ -1678,3 +1687,21 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-remind-set { flex: none; color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-caption, 11px); }
 .t2-remind-set button { border: 0; background: none; padding: 0; color: inherit; font: inherit; cursor: pointer; text-decoration: underline; text-underline-offset: 2px; }
 .t2-remind-set button:hover { color: var(--text); }
+
+/* Muse 卡:收件箱清单的一行(标题 + 一句说明 + 右边一个按钮) */
+.t2-musecard-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; min-width: 0; }
+.t2-musecard-row > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.t2-musecard-row b { font-weight: 600; overflow-wrap: anywhere; }
+.t2-musecard-row span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); overflow-wrap: anywhere; }
+.t2-musecard-row > svg { flex: none; color: var(--green); }
+.t2-musecard-row > .t2-taskcard-actions { flex: none; flex-direction: row; flex-wrap: nowrap; margin-top: 0; }
+.t2-musecard-row .t2-musecard-text { color: var(--text); font-size: inherit; }
+.t2-musecard-row > input { flex: 1; min-width: 0; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); font: inherit; padding: 4px 8px; outline: none; }
+.t2-musecard-row > input:focus { border-color: var(--accent-ink); }
+.t2-musecard-q { display: flex; flex-direction: column; gap: 4px; }
+.t2-musecard-q > span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.t2-musecard-q ~ .t2-taskcard-actions > button:disabled { opacity: .45; cursor: not-allowed; }
+/* 磨合期主动消息下面的一行轻按钮:只是字,不抢正文 */
+.t2-musefb { display: flex; align-items: center; gap: 12px; margin-top: 4px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.t2-musefb button { border: none; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; }
+.t2-musefb button:hover { color: var(--text); }

@@ -190,11 +190,10 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
           setMenu(null)
           const inline = (): void => { setDraft(row?.title || ''); setRenaming({ unitId: m.unitId, id: m.id }) }
           if (!nativeSheetPresenter()) { inline(); return }
-          // 原生半屏输入与行内输入同一条提交规则:trim 后非空才改。
+          // 原生半屏输入与行内输入同一条提交规则:清空 = 把标题交还给 Historian。
           void presentNativePrompt({ title: t('sidebar.rename'), initial: row?.title || '', confirm: t('common.confirm'), cancel: t('common.cancel') }).then((out) => {
             if (!out.handled) { inline(); return }
-            const next = out.value?.text.trim()
-            if (next) void renameRemote(m.unitId, m.id, next)
+            if (out.value) void renameRemote(m.unitId, m.id, out.value.text.trim())
           })
         },
       },
@@ -217,7 +216,7 @@ export function DeviceSessionSections(p: Props): React.ReactElement | null {
     })
   }
   const commitRename = (): void => {
-    if (renaming && draft.trim()) void renameRemote(renaming.unitId, renaming.id, draft.trim())
+    if (renaming) void renameRemote(renaming.unitId, renaming.id, draft.trim())
     setRenaming(null)
   }
 

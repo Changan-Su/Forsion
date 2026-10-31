@@ -96,6 +96,13 @@ export function Root() {
     if (action === 'unit-route' && payload) runUnitRoutePayload(payload)
     // 设置浮窗里「在蓬洲云中查看」:切到那个 Space(只认已注册的;选中哪个库由 Extend 自己接,见 RemoteSyncSection)
     if (action === 'open-space' && payload && useSpaceStore.getState().spaces.some((x) => x.id === payload)) setActiveSpace(payload)
+    // 插件浮窗(活动面板「去完成」)点的链接:deep link 只在主窗落地,经同一道解析和白名单
+    if (action === 'open-link' && payload) {
+      void Promise.all([import('./deepLinkPlan'), import('./deepLinkInstall')]).then(([{ parseDeepLink }, { resolveDeepLink }]) => {
+        const intent = parseDeepLink(payload)
+        return intent ? resolveDeepLink(intent) : false
+      }).catch(() => {})
+    }
   }), [])
   const theme = useTheme()
   const visualTheme = useVisualTheme()

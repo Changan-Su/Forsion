@@ -10,6 +10,9 @@ import { buildUnitScopeGuard, openUnitHostRegularFile, withVerifiedUnitPath } fr
 import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, registerPickedDirectory, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniPassThrough, readComputerUseForeground, topRightPosition } from './miniForeground'
+import { createMiniResizeQueue } from './miniResizeQueue'
+import { miniResizeShape } from './miniResizeShape'
+import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { createPluginSandbox, type PluginSandboxUiSeed } from './pluginSandbox'
 import { sandboxSelf, startSandboxChild, sandboxForward } from './sandboxChild'
@@ -1728,6 +1731,15 @@ function createWindow(): void {
 
   mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
   hardenNav(mainWindow.webContents)
+  // The audio graph runs in this renderer. Protecting only the browser process
+  // leaves the renderer's Windows timer policy at its system-managed default.
+  const audioContents = mainWindow.webContents
+  audioContents.on('did-finish-load', () => {
+    if (audioContents.isDestroyed()) return
+    void protectWindowsAudioClock(audioContents.getOSProcessId()).then(result => {
+      if (result.detail) console.warn('[audio-clock] Windows timer protection unavailable:', result.detail)
+    })
+  })
   // deep link 推送门:reload(Cmd+R)换掉渲染层监听者但 webContents 不变 → 每次开载都翻回「未就绪」,
   // 等新一代渲染层来 drain(否则 push 进虚空,URL 丢失)。
   mainWindow.webContents.on('did-start-loading', () => {
@@ -2004,6 +2016,28 @@ let miniSession: MiniSessionContext = { sessionId: null, runId: null }
 let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
 /** 电脑历史控制器(只在带 agent 后端的形态建;见 electron/computerHistory.ts)。 */
 let computerHistory: ComputerHistory | null = null
+
+/** 电脑历史落盘后踢一下引擎巡检:「打开 Steam 时」不用等 5 分钟。不带任何内容,引擎自己重读磁盘判定;窗口关着也要到,所以不经渲染层。
+ *  ≥5s 节流(切 App 很频繁),最后一次不丢;失败无所谓,下一个巡检周期照样看到。 */
+const COMPUTER_KICK_MS = 5_000
+let computerKickAt = 0
+let computerKickTimer: ReturnType<typeof setTimeout> | null = null
+function kickAutomationForComputer(): void {
+  if (computerKickTimer) return
+  computerKickTimer = setTimeout(() => {
+    computerKickTimer = null
+    computerKickAt = Date.now()
+    const st = backend.getStatus()
+    if (st.state !== 'ready' || !st.url) return
+    void fetch(`${st.url.replace(/\/+$/, '')}/agent/special/automation/kick`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${backend.getToken()}`, 'Content-Type': 'application/json' },
+      body: '{"scope":"computer"}',
+      signal: AbortSignal.timeout(5_000),
+    }).catch(() => {})
+  }, Math.max(0, computerKickAt + COMPUTER_KICK_MS - Date.now()))
+  computerKickTimer.unref?.()
+}
 let autoMiniWindow: BrowserWindow | null = null
 let autoMiniSessionId: string | null = null
 /** 最后获焦的 Forsion 窗口(自动 Mini 除外);自动 Mini 开场时快照成 autoMiniReturnTo,本轮跑完还给用户。 */
@@ -2037,8 +2071,15 @@ const MINI_MAX = { width: 640, height: 900 }
 /** 用户拉过的尺寸:关掉再开沿用(只记在本次运行里)。ponytail: 不落盘,要跨重启记住时照 detached-windows.json 的写法加。 */
 let miniSize = { width: MINI_CARD_WIDTH, height: MINI_CARD_HEIGHT }
 /** 正在拖缩放边:起手时的窗口与光标;null = 没在拖。 */
-let miniResizeFrom: { bounds: Rect; cursor: Electron.Point } | null = null
+let miniResizeFrom: { bounds: Rect; cursor: Electron.Point; radius: number } | null = null
 let miniResizeDock: MiniDockState | null = null
+let miniResizeMaskActive = false
+const miniResizeUpdates = createMiniResizeQueue(bounds => setMiniBounds(bounds, false))
+function clearIdleMiniResizeMask(): void {
+  if (!miniResizeMaskActive || miniResizeFrom || miniDock || !miniWindow || miniWindow.isDestroyed()) return
+  miniResizeMaskActive = false
+  miniWindow.setShape([])
+}
 const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细线难发现
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
@@ -2103,11 +2144,16 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     show: !QUIET_WINDOWS,
     webPreferences: satelliteWebPreferences(),
   })
+  // The transparent Windows HWND can start a few DIP larger than constructor
+  // width/height at fractional DPI. Restore the remembered CONTENT rect after
+  // native creation, just as the resize path does, before the renderer paints.
+  if (process.platform === 'win32') miniWindow.setContentBounds({ x: wa.x + wa.width - width - 24, y: wa.y + 24, width, height })
   if (QUIET_WINDOWS) miniWindow.showInactive()
   miniWindow.setAlwaysOnTop(true, 'floating')
   miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
   hardenNav(miniWindow.webContents)
   miniWindow.webContents.on('did-finish-load', () => {
+    miniResizeUpdates.cancel()
     miniResizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
     miniResizeDock = null
     if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
@@ -2119,11 +2165,18 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
   if (process.platform === 'win32') miniDockMotion = createMiniDockMotion(miniWindow)
   miniWindow.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (!isMainFrame || isInPlace) return // SketchCard/media iframe loads are not Mini reloads
+    miniResizeUpdates.cancel(); miniResizeFrom = null; miniResizeDock = null
     if (miniDock && !miniDockMotion) setMiniBounds(expandedBounds(miniBounds(), miniDock.edge, miniDock.workArea), false)
     miniDockMotion?.reset(false); miniDock = null; stopMiniPoll()
   })
   miniWindow.on('move', onMiniMoved)
+  // Chromium stores this region in physical pixels. Drop it BEFORE ordinary
+  // native dragging can cross to a monitor with another scale.
+  miniWindow.on('will-move', clearIdleMiniResizeMask)
+  miniWindow.on('resize', clearIdleMiniResizeMask)
   miniWindow.on('closed', () => {
+    miniResizeUpdates.cancel()
+    miniResizeMaskActive = false
     console.log('[win] mini closed'); stopMiniPassThrough?.(); stopMiniPassThrough = null
     miniDockMotion?.stop(); miniDockMotion = null
     if (miniSettleTimer) clearTimeout(miniSettleTimer)
@@ -2254,7 +2307,17 @@ function setMiniBounds(r: Rect, animate = true): void {
   suppressMiniMoved = true
   // Partial setBounds reuses the rounded OUTER size on Windows, growing it on each move
   // at 125% DPI. Write the complete CONTENT rect instead; its size remains stable.
-  if (process.platform === 'win32') miniWindow.setContentBounds(r)
+  if (process.platform === 'win32') {
+    // Keep BOTH the old and new HWND extents rounded between the native calls.
+    // Growing a rounded region before its HWND would clip halfway down the old
+    // height and briefly expose square corners, just like shrinking stale paint.
+    if (miniResizeFrom) miniWindow.setShape(miniResizeShape(Math.min(previous.width, r.width), Math.min(previous.height, r.height), miniResizeFrom.radius))
+    miniWindow.setContentBounds(r)
+    if (miniResizeFrom) {
+      miniWindow.setShape(miniResizeShape(r.width, r.height, miniResizeFrom.radius))
+      miniResizeMaskActive = true
+    }
+  }
   else miniWindow.setBounds(changed, animate && process.platform === 'darwin')
   // 单个定时器:连发(拖缩放边)时后一次顺延,前一次的定时器不会提前放开抑制
   if (miniMovedTimer) clearTimeout(miniMovedTimer)
@@ -2264,6 +2327,7 @@ function setMiniBounds(r: Rect, animate = true): void {
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
 function onMiniMoved(): void {
   if (!miniWindow || suppressMiniMoved || miniResizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
+  clearIdleMiniResizeMask()
   if (miniDock) { miniDockMotion?.reset(); miniDock = null; stopMiniPoll() }
   miniDragging = true
   if (miniSettleTimer) clearTimeout(miniSettleTimer)
@@ -2474,6 +2538,7 @@ app.whenReady().then(async () => {
         for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('computerHistory:changed', view)
         refreshTrayMenu()
       },
+      onSignal: kickAutomationForComputer,
     })
     registerComputerHistoryIpc(computerHistory, isTrustedSender)
   }
@@ -4255,6 +4320,7 @@ app.whenReady().then(async () => {
   ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown, point: unknown) => {
     if (!isTrustedSender(e) || !miniWindow || miniWindow.isDestroyed() || e.sender !== miniWindow.webContents) return
     if (typeof edge !== 'string' || !/^(?=.)[ns]?[ew]?$/.test(edge)) {
+      miniResizeUpdates.flush()
       const dock = miniResizeDock
       miniResizeFrom = null
       miniResizeDock = null
@@ -4272,22 +4338,23 @@ app.whenReady().then(async () => {
       return
     }
     if (miniDock && !miniDock.expanded) return // 折叠在屏幕边上时不改大小:缩窄会把露在屏内的那条把手也带出去
-    const p = point as Partial<Electron.Point> | null
+    const p = point as (Partial<Electron.Point> & { radius?: number }) | null
     const cursor = p && Number.isFinite(p.x) && Number.isFinite(p.y)
       ? { x: Math.round(p.x!), y: Math.round(p.y!) } : screen.getCursorScreenPoint()
     if (start === true || !miniResizeFrom) {
+      miniResizeUpdates.flush()
       // 刚拖到边上、还没判贴边就开始拉:那次判定作废,免得拉到一半被折叠
       if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
       miniDragging = false
       miniResizeDock = miniDock ? { ...miniDock } : null
       miniDockMotion?.reset(); miniDock = null; stopMiniPoll()
-      miniResizeFrom = { bounds: miniBounds(), cursor }
+      miniResizeFrom = { bounds: miniBounds(), cursor, radius: p && Number.isFinite(p.radius) ? Math.max(0, Math.min(64, p.radius!)) : 16 }
     }
     const from = miniResizeFrom
     const next = resizeFromEdge(from.bounds, edge, cursor.x - from.cursor.x, cursor.y - from.cursor.y, MINI_MIN, MINI_MAX,
       screen.getDisplayMatching(from.bounds).workArea)
     miniSize = { width: next.width, height: next.height }
-    setMiniBounds(next, false)
+    miniResizeUpdates.push(next)
   })
   ipcMain.on('window:miniSession', (e, raw: unknown) => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return
@@ -4323,7 +4390,7 @@ app.whenReady().then(async () => {
     if (!req) return
     // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿 / 引用去聊天、打开 Agent、设置 › 设备里选了去处、设置里点「在蓬洲云中查看」(open-space)。其余(⌘K 重算、测试通知卡、恢复布局、
     // 成就弹窗、撤 Space)用户还在设置浮窗里,别打断。
-    if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote' || req.action === 'open-agents' || req.action === 'open-agent' || req.action === 'unit-route' || req.action === 'open-space') showMainWindow()
+    if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote' || req.action === 'open-agents' || req.action === 'open-agent' || req.action === 'unit-route' || req.action === 'open-space' || req.action === 'open-link') showMainWindow()
     const deliver = (): void => {
       // extensions-changed 也要到两扇 mini(手开的 / 自动弹的):它们和分离窗一样各握一份插件实例(见 amadeusPlugins.ts)。
       const recipients = req.action === 'skills-changed' || req.action === 'agents-changed' || req.action === 'extensions-changed'
@@ -4343,6 +4410,9 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) return
     const state = normalizeUiSync(raw)
     if (!state) return
+    // An idle resize mask belongs to the old CSS radius/zoom. No HWND resize is
+    // pending now, so let the card paint the new theme's corners itself.
+    clearIdleMiniResizeMask()
     // ⚠️ 不从 prefs['tangu_locale'] 取主进程语言(P1-KF):那是手选键,任何字体 / 缩放广播都带着它的 null → 曾把中文界面的主进程文案重置成系统英文。
     // 语言走下面的 ui:locale(发方窗口自己切语言时 i18n.tsx 会报;收方重放后也会再报一次同值,主进程同值不动)。
     for (const w of BrowserWindow.getAllWindows()) {

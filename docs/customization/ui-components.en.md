@@ -116,6 +116,26 @@ ctx.tangu?.mountChat?.(el, { agent, folder, title })
 
 `ctx.ui.mount*`, `ctx.tangu.mountChat`, `ctx.table.mount`, `ctx.dashboard.mount`, `ctx.app.mountBlocks` and a file view's `mountNoteView` all render inside a layer the host adds to `el` (`display:contents`: it generates no box, so the element's height and flex still apply to the content). `dispose()` removes that layer synchronously and the element is the plugin's again at once: clear it, put your own content in, or mount on it again without waiting. Mounting again creates a fresh instance; use the handle's `update()` to change data or options in place. One element holds one host mount at a time: mounting on an element whose previous mount was not disposed retires that mount first, fully, as if it had been disposed; its handle goes inert, and the later call wins. `mountFloatingToc` is the exception: it overlays `shell` without taking it over, so it neither retires nor is retired by other mounts. Do not reach host nodes through `el > .x` or `el.firstElementChild`. Hosts up to 2.12.2 do not give this guarantee: to support them, mount into a child element you create and replace that child when the content changes.
 
+### Leaving room for the floating TOC (2026-10-30)
+
+The ticks of `ctx.ui.mountFloatingToc` live in a gutter on the left of the scroll area, as wide as the CSS variable `--lcl-ftoc-gutter` (36px). When the space left of your text is narrower than that, move your content aside yourself, or the ticks sit on top of the text.
+
+The host sets a `data-lcl-ftoc` attribute on the `scrollContainer` you pass (its value is `side`). The attribute goes away when the scroll area is too narrow to show the TOC, so you only make room when it is needed. It does not depend on whether there are headings, so text does not jump sideways when a second heading appears.
+
+```css
+.my-article[data-lcl-ftoc] { padding-left: max(24px, var(--lcl-ftoc-gutter)); }
+```
+
+If your content is centered with space on both sides already, add only the difference, so wide windows get no extra indent (replace `720px` with your content width):
+
+```css
+.my-article[data-lcl-ftoc] > .column {
+  padding-left: max(24px, calc(var(--lcl-ftoc-gutter) - max(0px, (100% - 720px) / 2)));
+}
+```
+
+The `.lcl-ftoc-item` rows exist only while the list is open (after a 120 ms hover, or keyboard focus). These class names are not public API; don't rely on them. Older hosts have neither the variable nor the attribute, so the rules above simply don't apply and nothing breaks.
+
 ### Following the host's appearance switches (2026-10-05)
 
 Settings → Appearance has three switches the user turns on or off one by one ("Relaxed text" and "Gentle transitions" are on by default, "Dim surroundings" is off by default; which are on is up to the user): "Dim surroundings" (ribbon icons, inactive tabs and left-sidebar text recede while the user works, and return on pointer or keyboard focus), "Relaxed text" (looser line and paragraph spacing in note and chat bodies), and "Gentle transitions" (a slower view fade-in and a slower return of the surroundings). A plugin calls no API for these; it follows them by writing its styles this way:
@@ -421,3 +441,19 @@ A plugin view that draws its own dropdowns, menus, dialogs or tab bars looks for
 - Check: `node check-plugin.mjs <plugin folder> --style` lists, under "UI parts", what the plugin still draws itself where the host has a part: one line per kind, with locations and the part to switch to. When Tangu verifies a plugin in the plugin sandbox (`plugin_sandbox`), every status it gets back carries the same list. It only reports: the exit code doesn't change, and nothing blocks installing or publishing. Plugins whose UI is a web page in an iframe stay allowed; put `/* forsion-style: off */` on that page's CSS lines.
 - The rules live in the `forsion-plugin` skill's `tools/ui-reinvent.mjs` and go by how the code is written: `<select>` / `role="listbox"`, own `menu` / `dropdown` / `popup` class names or `role="menu"`, `<dialog>` / `showModal` / `window.confirm`, `tab` class names or `data-tab` / `role="tab"`, `position: fixed`, `<iframe>` / `<webview>`, `document.head.append…`, and hand-made buttons when the plugin never uses `.btn`. Library code minified onto one line (lines over 2000 characters) is skipped whole.
 - The bundle template's counter view (`samples/forsion-sample-bundle`) follows this table (view head, toolbar select, ⋯ menu, confirm dialog, empty state, `.btn`); copy from it.
+
+### Bare controls look native; a failed mount shows a card (2026-10-29)
+
+Inside a plugin view's mount element, a `<button>`, `<table>` or `<h1>`–`<h4>` without a `class` takes the host's look with no CSS of yours: a button looks like a plain `.btn` (outline, ink on hover, dimmed when disabled); a table looks like a Markdown table in notes and chat (muted medium-weight header with no fill, half-strength rules); `<h1>` / `<h2>` / `<h3>` and `<h4>` use the UI title / heading / body sizes, semibold. `<input>`, `<select>` and `<textarea>` already follow the host's form baseline.
+
+```js
+el.innerHTML = '<h2>This week</h2><button>New</button> <input placeholder="Search">' +
+  '<table><thead><tr><th>Task</th><th>Status</th></tr></thead><tbody><tr><td>Export</td><td>In progress</td></tr></tbody></table>'
+```
+
+- Your styles win: an element with a `class` is left alone, and for one without, any rule you write beats this layer, even a zero-weight `:where(…)`: the whole layer has zero specificity and `ctx.addStyle` styles come after the host's.
+- Main and destructive buttons stay `.btn.primary` / `.btn.danger`; small toolbar buttons `.btn.sm`. Buttons in the view head (`setViewHead` / `setViewModes`) are outside the mount element and don't get this layer.
+- Host-drawn parts inside your view (`ctx.ui.mount*`, `ctx.table.mount` and so on) and a `.ctx-menu` you build yourself are not affected; pages inside an iframe or webview don't get it.
+- It lives in the `plugin-view-base` block at the end of `desktop/frontend/src/styles/base.css` and uses public tokens only (`pluginContract.test.ts` checks each one). Instrument: `desktop/scripts/plugin-base-shots.cjs` (real Electron: installs `scripts/fixtures/plugin-base-sample`, shoots light and dark, measures computed styles).
+
+**Failed mount card**: when `mount` throws, or the Promise it returns rejects, the view shows a card: "Plugin view failed to load", the first line of the error (the full stack is in the console) and "Retry". Retry runs only this view's `mount` again; the plugin isn't reloaded and its other views and panels keep running. So make `mount` safe to run twice: the host can't clean up listeners or timers you set before the throw, so clean them up yourself or set them after the step that can fail. Code changes still go through a plugin reload or the sandbox's hot reload.

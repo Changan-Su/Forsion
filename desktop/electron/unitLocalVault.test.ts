@@ -10,9 +10,9 @@ import { IPC, type DbReadResult } from '@amadeus-shared/ipc'
 import type { LoadedPage } from '@amadeus-shared/compiler'
 import { createLocalVault, type LocalVault } from '../../unit/localVault'
 import { createRuntime } from '../../unit/plugins/amadeus/runtime'
-import { VaultWatcher } from './amadeus/fs/watcher'
 
 const execute = promisify(execFile)
+const EVENTS = JSON.stringify({ version: 2, name: 'Events', columns: [{ id: 'title', name: 'Title', type: 'text' }, { id: 'when', name: 'When', type: 'calendarDate' }], rows: [] })
 let scratch: string
 const live = new Set<LocalVault>()
 beforeEach(async () => { scratch = await mkdtemp(join(tmpdir(), 'unit-local-vault-')) })
@@ -32,13 +32,15 @@ describe('standalone local Amadeus capability', () => {
     const page = await vault.call(IPC.newPage, ['Notes/Offline.md']) as LoadedPage
     const id = Object.keys(page.blocks)[0]
     await vault.call(IPC.savePage, ['Notes/Offline.md', page.manifest, { [id]: 'Offline note #local' }], 'tab-a')
-    const saved = await vault.call(IPC.dbRead, ['', 'Calendar.db']) as Extract<DbReadResult, { status: 'ok' }>
+    expect(await vault.call(IPC.dbRead, ['', 'Calendar.db'])).toMatchObject({ status: 'missing' }) // 默认日历在引擎的 human/,库里不种
+    await vault.call(IPC.writeTextFile, ['Events.db', EVENTS], 'tab-a')
+    const saved = await vault.call(IPC.dbRead, ['', 'Events.db']) as Extract<DbReadResult, { status: 'ok' }>
     expect(saved.status).toBe('ok')
     expect(saved.data.rows).toEqual([])
     const name = saved.data.columns.find((c) => c.type === 'text')!.id
     const date = saved.data.columns.find((c) => c.type === 'calendarDate')!.id
     saved.data.rows.push({ id: 'offline-event', cells: { [name]: 'Local appointment', [date]: '2026-09-09T10:00/2026-09-09T11:00' } })
-    expect(await vault.call(IPC.dbWriteCas, ['Calendar.db', saved.data, saved.version], 'tab-a')).toMatchObject({ ok: true })
+    expect(await vault.call(IPC.dbWriteCas, ['Events.db', saved.data, saved.version], 'tab-a')).toMatchObject({ ok: true })
     await vault.call(IPC.pluginDataWrite, ['bluebird', '{"collection":"offline"}'])
     await vault.call(IPC.writeTextFile, ['Bluebird/collection.json', '{"links":["https://example.test"]}'])
     const asset = await vault.call(IPC.saveAsset, ['Notes/Offline.md', 'image.png', new Uint8Array([1, 2, 3])]) as string
@@ -50,7 +52,7 @@ describe('standalone local Amadeus capability', () => {
     expect(await vault.call(IPC.search, ['Offline note'])).toHaveLength(1)
     expect(await vault.call(IPC.pluginDataRead, ['bluebird'])).toBe('{"collection":"offline"}')
     expect(await vault.call(IPC.readTextFile, ['Bluebird/collection.json'])).toContain('https://example.test')
-    expect(await vault.call(IPC.dbRead, ['', 'Calendar.db'])).toMatchObject({ status: 'ok', data: { rows: [{ id: 'offline-event' }] } })
+    expect(await vault.call(IPC.dbRead, ['', 'Events.db'])).toMatchObject({ status: 'ok', data: { rows: [{ id: 'offline-event' }] } })
     expect(await readFile((await vault.assetAbs('Notes/Offline.md', asset))!)).toEqual(Buffer.from([1, 2, 3]))
   })
 
@@ -162,11 +164,12 @@ describe('standalone local Amadeus capability', () => {
     const beforeTextConflict = reloads()
     expect(await vault.call(IPC.writeTextFile, ['Observed.md', 'stale', { base: 'not-the-current-fingerprint' }], 'stale-tab')).toMatchObject({ ok: false, current: 'initial' })
     expect(reloads()).toBe(beforeTextConflict)
-    const saved = await vault.call(IPC.dbRead, ['', 'Calendar.db']) as Extract<DbReadResult, { status: 'ok' }>
+    await vault.call(IPC.writeTextFile, ['Events.db', EVENTS], 'tab-a')
+    const saved = await vault.call(IPC.dbRead, ['', 'Events.db']) as Extract<DbReadResult, { status: 'ok' }>
     const data = { ...saved.data, name: 'Changed calendar' }
-    expect(await vault.call(IPC.dbWriteCas, ['Calendar.db', data, saved.version], 'tab-a')).toMatchObject({ ok: true })
+    expect(await vault.call(IPC.dbWriteCas, ['Events.db', data, saved.version], 'tab-a')).toMatchObject({ ok: true })
     const beforeConflict = events.filter((e) => e.channel === IPC.dbChange).length
-    expect(await vault.call(IPC.dbWriteCas, ['Calendar.db', saved.data, saved.version], 'stale-tab')).toMatchObject({ ok: false })
+    expect(await vault.call(IPC.dbWriteCas, ['Events.db', saved.data, saved.version], 'stale-tab')).toMatchObject({ ok: false })
     expect(events.filter((e) => e.channel === IPC.dbChange)).toHaveLength(beforeConflict)
     await writeFile(join(options().root, 'Observed.md'), 'Changed by a local task #engine')
     // 等的是**操作系统的文件监听事件**(chokidar,ignoreInitial)。⚠️本用例打开库之后立刻外部写盘,并不等监听器 ready:
@@ -186,25 +189,16 @@ describe('standalone local Amadeus capability', () => {
     await expect(vault.call(IPC.writeTextFile, ['AfterClose.md', 'bad'])).rejects.toThrow('closed')
   })
 
-  it('treats a late file event for the Calendar it seeded as its own write, not an external change', async () => {
-    // 要钉的是「收到一次文件事件时怎么判」,不是事件什么时候到:真监听根本不启动(否则它自己在途的处理会掺进来),
-    // 事件由这里一次次递给监听器并等它处理完。
-    const start = vi.spyOn(VaultWatcher.prototype, 'start').mockImplementation(() => {})
-    const vault = await open()
-    const watcher = start.mock.contexts[0] as VaultWatcher
-    const root = start.mock.calls[0][0]
-    start.mockRestore()
-    const dbChanges: unknown[] = []
-    vault.onEvent((channel, payload) => { if (channel === IPC.dbChange) dbChanges.push(payload) })
-    const file = join(root, 'Calendar.db')
-    const fileEvent = (): Promise<void> => watcher['handle'](file, root)
-    // 迟到的事件 = 字节没变、监听器却被叫起来一次(开库后几毫秒内,负载下偶发:2026-10-09 加压 10 次里 5 次)。
-    await fileEvent()
-    expect(dbChanges).toEqual([])
-    // 别人真改了照报 —— 上面那条不是因为事件没递到才空的。
-    await writeFile(file, `${await readFile(file, 'utf8')}\n`)
-    await fileEvent()
-    expect(dbChanges).toEqual(['Calendar.db'])
+  it('moves an empty Calendar.db seeded by an older version to the trash, and keeps one with events', async () => {
+    const seeded = { version: 1, name: 'Calendar', columns: [{ id: 'n', name: 'Name', type: 'text' }, { id: 'd', name: 'Date', type: 'calendarDate' }, { id: 'k', name: 'Done', type: 'checkbox' }], rows: [] as unknown[] }
+    await mkdir(options('old').root, { recursive: true })
+    await writeFile(join(options('old').root, 'Calendar.db'), JSON.stringify(seeded))
+    const old = await open('old')
+    expect(await old.call(IPC.dbRead, ['', 'Calendar.db'])).toMatchObject({ status: 'missing' })
+    expect(await old.call(IPC.listTrash, [])).toMatchObject([{ original: 'Calendar.db' }])
+    await mkdir(options('used').root, { recursive: true })
+    await writeFile(join(options('used').root, 'Calendar.db'), JSON.stringify({ ...seeded, rows: [{ id: 'r', cells: { n: 'Mine' } }] }))
+    expect(await (await open('used')).call(IPC.dbRead, ['', 'Calendar.db'])).toMatchObject({ status: 'ok', data: { rows: [{ id: 'r' }] } })
   })
 
   it('bundles and starts in a fresh Node process without Electron, Server or runtime node_modules', async () => {

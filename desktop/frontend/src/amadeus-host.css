@@ -102,6 +102,11 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
  * 拖拽手柄绝对定位到左侧留白、悬浮显示;右侧操作留在 22px 右列。
  * 「拖到行两侧边缘裂出新列」的投放区不再牺牲:拖拽中经 .stack[data-dnd] 绝对定位浮回页边距(见文末)。 */
 .am-app .page-view { padding-left: 48px; padding-right: 48px; }
+/* 目录的沟(DESIGN §6「悬浮目录」):窄时正文右移,目录 + 块手柄(50)排在正文左边,不再叠在一起。
+   属性由 FloatingToc 打,Mini / 触屏 / 源码 / 画布没有目录就不让;全宽时 --amx-page-max 是 100%,括号里自然是 0。 */
+.amx-pane[data-lcl-ftoc] :is(.page-view, .amx-doc) {
+  padding-left: max(48px, calc(var(--lcl-ftoc-gutter) + 50px - max(0px, (100% - var(--amx-page-max, 920px)) / 2)));
+}
 .am-app .edge-zone { flex-basis: 0; }
 .am-app .column { padding-left: 0; padding-right: 0; }
 .am-app .block-body { padding-left: 2px; }

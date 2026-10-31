@@ -45,7 +45,7 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
 
   // 1) 源会话 + owner/app 校验
   const srcRows = await query<any[]>(
-    `SELECT id, user_id, app_id, title, model_id, emoji, agent_config, project_path, project_name, projectless
+    `SELECT id, user_id, app_id, title, title_manual, model_id, emoji, emoji_manual, agent_config, project_path, project_name, projectless
      FROM chat_sessions WHERE id = ? LIMIT 1`,
     [sourceSessionId],
   );
@@ -70,9 +70,10 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
     cfgText = JSON.stringify({ ...(base && typeof base === 'object' && !Array.isArray(base) ? base : {}), ...configOverlay });
   }
   await query(
-    `INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, emoji, agent_config, project_path, project_name, projectless, kind, parent_session_id, fork_message_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [newId, userId, appId, newTitle, src.model_id, src.emoji,
+    `INSERT INTO chat_sessions (id, user_id, app_id, title, title_manual, model_id, emoji, emoji_manual, agent_config, project_path, project_name, projectless, kind, parent_session_id, fork_message_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    // 手动标记跟着值走:沿用源标题才算手动(/branch 缺省叫 New Chat,要由 Historian 起名),图标原样复制。
+    [newId, userId, appId, newTitle, !!src.title_manual && newTitle === src.title, src.model_id, src.emoji, !!src.emoji_manual,
      cfgText, src.project_path, src.project_name, !!src.projectless, kind || 'user', parentSessionId || null, forkMessageId || null],
   );
 

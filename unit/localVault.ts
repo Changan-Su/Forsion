@@ -4,11 +4,11 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { IPC } from '@amadeus-shared/ipc'
-import { seedCalendarDb, serializeDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from '../desktop/electron/amadeus/fs/vaultManager'
 import { VaultIndex } from '../desktop/electron/amadeus/fs/vaultIndex'
 import { VaultWatcher } from '../desktop/electron/amadeus/fs/watcher'
+import { trashSeedCalendar } from '../desktop/electron/amadeus/fs/seedCalendar'
 import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from '../desktop/electron/amadeus/fs/vaultHandlers'
 import { fetchLinkMeta, searchImages } from '../desktop/electron/amadeus/linkMeta'
 
@@ -17,7 +17,6 @@ export interface LocalVaultOptions {
   /** Private plugin state, outside the files exposed through the vault API. */
   stateDir: string
   pluginFileExtensions?: string[]
-  locale?: 'zh' | 'en'
   log?: (message: string) => void
 }
 
@@ -89,19 +88,7 @@ export async function createLocalVault(options: LocalVaultOptions): Promise<Loca
   } catch { /* Rebuild from current packages. */ }
   await setExtensions(options.pluginFileExtensions ?? [])
 
-  if (!await vault.pathExists('Calendar.db')) {
-    const calendar = seedCalendarDb()
-    const labels = options.locale === 'zh' ? ['我的日历', '名称', '日期', '完成'] : ['Calendar', 'Name', 'Date', 'Done']
-    calendar.name = labels[0]
-    calendar.columns.forEach((column, i) => { column.name = labels[i + 1] })
-    calendar.rows = []
-    // Exclusive create leaves an existing calendar intact even during simultaneous starts.
-    // Through the vault, not raw fs: the seed has to be in the self-write ledger, or the watcher started
-    // below reports a late file event for it as an external edit (a `dbChange` nobody made).
-    await vault.createTextFile('Calendar.db', serializeDb(calendar)).catch((error: any) => {
-      if (error?.code !== 'EEXIST') throw error
-    })
-  }
+  await trashSeedCalendar(vault).catch(report)
   await index.build()
   const handle = (channel: string, handler: (event: unknown, ...args: any[]) => unknown): void => { handlers.set(channel, handler) }
   registerVaultHandlers({

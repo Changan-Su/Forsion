@@ -6,12 +6,12 @@ import { installPackage } from '../../unit/install'
 import { readPackage } from '../../unit/packages'
 import { writeConfig, readConfig, installations } from '../../unit/config'
 import { controlAddress, startControl, sendControl } from '../../unit/control'
-import { stageRelease, resolveRelease, releaseSignature } from '../../unit/releases'
+import { stageRelease, resolveRelease, releaseSignature, packageDigest } from '../../unit/releases'
 import { RollbackIncomplete } from '../../unit/errors'
 import { signDir, testKeyPair } from './bundleSignature.testutil'
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'unit-install-'))
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'unit-install-')))
   const source = join(root, 'source'), file = join(root, 'state/unit.json')
   await mkdir(source)
   await writeFile(join(source, 'main.js'), 'ui v1')
@@ -45,6 +45,7 @@ describe('portable Unit installation', () => {
     try {
       await symlink(join(source, 'main.js'), join(source, 'alias.js'))
       const first = await installPackage(file, source)
+      expect(first).not.toHaveProperty('reference')
       expect(await realpath(join(first.path, 'alias.js'))).toBe(await realpath(join(first.path, 'main.js')))
       await writeFile(join(source, 'manifest.json'), JSON.stringify({ id: 'fixture', version: '1.1.0', apiVersion: 1, main: 'main.js' }))
       await writeFile(join(source, 'main.js'), 'ui v2')
@@ -56,6 +57,24 @@ describe('portable Unit installation', () => {
       expect((await stat(file)).mode & 0o777).toBe(0o600)
     } finally { await rm(root, { recursive: true, force: true }) }
   })
+  it('keeps a private copy for a reference whose dependencies are installed with npm ci', async () => {
+    const { root, source, file } = await fixture()
+    try {
+      const identity = { name: 'fixture', version: '1.0.0' }
+      await mkdir(join(source, 'backend'))
+      await writeFile(join(source, 'backend/main.mjs'), 'export default () => ({})')
+      await writeFile(join(source, 'backend/package.json'), JSON.stringify(identity))
+      await writeFile(join(source, 'backend/package-lock.json'), JSON.stringify({ ...identity, lockfileVersion: 3, packages: { '': identity } }))
+      await writeFile(join(source, 'manifest.json'), JSON.stringify({ id: 'fixture', version: '1.0.0', apiVersion: 1,
+        backend: { apiVersion: 1, main: 'backend/main.mjs', dependencies: { mode: 'npm-ci' } } }))
+      const before = await packageDigest(source)
+      const installed = await installPackage(file, source, { reference: true })
+      expect(installed.reference).toBe(false)
+      expect(installed.path.startsWith(join(root, 'state/plugins/fixture/'))).toBe(true)
+      expect(await packageDigest(source)).toBe(before)
+      expect(installations(await readConfig(file)).map((p) => p.path)).toEqual([installed.path])
+    } finally { await rm(root, { recursive: true, force: true }) }
+  }, 30_000)
   it('rejects private environment files and external symlinks before changing configuration', async () => {
     const { root, source, file } = await fixture()
     try {
@@ -64,6 +83,7 @@ describe('portable Unit installation', () => {
       await rm(join(source, '.env'))
       await symlink(file, join(source, 'external.json'))
       await expect(installPackage(file, source)).rejects.toThrow('symlink escapes')
+      await expect(installPackage(file, source, { reference: true })).rejects.toThrow('symlink escapes')
       expect(installations(await readConfig(file))).toEqual([])
     } finally { await rm(root, { recursive: true, force: true }) }
   })

@@ -26,7 +26,6 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import vm from 'node:vm';
-import { scanUi, formatUiNotes } from './ui-reinvent.mjs';
 
 const argv = process.argv.slice(2);
 const FILE = 'forsion-plugin-main.js';
@@ -454,6 +453,8 @@ if (hidden && !loadError && explain.length) {
 // ── 6. style (only with --style): host classes and tokens against the published contract ──────────────────────────
 // Report only: it never changes the exit code. Scans main.js and every .css file in the plugin folder.
 if (argv.includes('--style')) {
+  // The restricted load probe needs no style scanner (and cannot read this sibling module).
+  const { scanUi, formatUiNotes } = await import('./ui-reinvent.mjs');
   const contract = JSON.parse(readFileSync(new URL('./plugin-contract.json', import.meta.url), 'utf8'));
   const pub = new Set(Object.values(contract.tokens).flatMap(Object.keys));
   const fallbackOk = new Set(contract.fallbackAllowed || []);

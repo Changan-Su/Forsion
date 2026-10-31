@@ -116,6 +116,26 @@ ctx.tangu?.mountChat?.(el, { agent, folder, title })
 
 `ctx.ui.mount*`、`ctx.tangu.mountChat`、`ctx.table.mount`、`ctx.dashboard.mount`、`ctx.app.mountBlocks` 与文件视图的 `mountNoteView` 都把宿主的界面挂进宿主自己加到 `el` 里的一层（`display:contents`，不出盒子，`el` 的高度与 flex 照旧作用在内容上）。`dispose()` 同步摘掉这一层，之后 `el` 立刻还给插件：清空它、放自己的内容、在同一个 `el` 上再挂都不用等。再挂的是一份新实例；只换数据或参数时用句柄的 `update()`。一个 `el` 同一时刻只有一份宿主界面：上一份没 dispose 就在同一个 `el` 上再挂，宿主先把上一份完整收掉（等同于 dispose，它的句柄此后不再生效），谁后调用谁留下。`mountFloatingToc` 例外：它叠在 `shell` 上，不占用 `shell`，不收掉也不被收掉。不要用 `el > .x` 或 `el.firstElementChild` 去取宿主渲染的节点。2.12.2 及更早的宿主没有这条保证，要兼容就把宿主内容挂进插件自己建的子节点，换内容时连子节点一起换掉。
 
+### 给悬浮目录留沟 (2026-10-30)
+
+`ctx.ui.mountFloatingToc` 的刻度住在滚动区左边一条沟里，宽度是 CSS 变量 `--lcl-ftoc-gutter`（36px）。正文左边的空白比这条沟窄时，你的内容要自己让开，否则刻度会压在字上。
+
+宿主在你传的 `scrollContainer` 上打 `data-lcl-ftoc` 属性（值是 `side`）。滚动区窄到目录隐藏时属性会摘掉，这时不用让；属性和有没有标题无关，所以第二个标题出现时正文不会横跳。
+
+```css
+.my-article[data-lcl-ftoc] { padding-left: max(24px, var(--lcl-ftoc-gutter)); }
+```
+
+内容居中、两边本来就有空白时，只补差额，宽窗口下不会多缩进（`720px` 换成你的内容宽度）：
+
+```css
+.my-article[data-lcl-ftoc] > .column {
+  padding-left: max(24px, calc(var(--lcl-ftoc-gutter) - max(0px, (100% - 720px) / 2)));
+}
+```
+
+目录展开成列表后（悬停 120ms，或键盘聚焦）才有 `.lcl-ftoc-item` 行，收起时这些节点不在 DOM 里。这些类名不是公共接口，不要依赖。老宿主没有这个变量和属性，上面的写法不生效，不影响显示。
+
 ### 跟随宿主的外观开关 (2026-10-05)
 
 设置 → 外观有三个可以逐项开关的开关（「宽松正文」「舒缓过渡」默认开，「外围淡出」默认关；哪个开着由用户定）：「外围淡出」（Ribbon 图标、未选中的标签、左侧栏文字平时退后，指针或键盘焦点进来恢复）、「宽松正文」（笔记与对话正文的行距、段距放宽）、「舒缓过渡」（切换视图的淡入、外围恢复慢一点）。插件不需要调用任何接口，按下面几条写样式就会跟着走：
@@ -421,3 +441,19 @@ color-mix(in srgb, var(--green) 14%, transparent)
 - 检查：`node check-plugin.mjs <插件目录> --style` 在「UI parts」下列出插件还在自己画、而宿主有零件的地方，每类一行，带位置和该换成哪个零件；Tangu 用插件沙箱（`plugin_sandbox`）验插件时，每次回来的状态后面也附同一份。只报告，不改退出码，也不拦安装和上架；界面本身是网页（iframe）的插件照样可以，那份页面的 CSS 在同一行写 `/* forsion-style: off */`。
 - 规则在 `forsion-plugin` 技能的 `tools/ui-reinvent.mjs`，按写法认：`<select>` / `role="listbox"`、自定 `menu` / `dropdown` / `popup` 类名或 `role="menu"`、`<dialog>` / `showModal` / `window.confirm`、`tab` 类名或 `data-tab` / `role="tab"`、`position: fixed`、`<iframe>` / `<webview>`、`document.head.append…`，以及整个插件没用过 `.btn` 时的手写按钮。压缩成一行的库代码（超过 2000 字的行）整行跳过。
 - 捆绑包模板 `samples/forsion-sample-bundle` 的计数器视图是照这张表写的（视图头、工具栏下拉、⋯ 菜单、确认框、空状态、`.btn`），可以照抄。
+
+### 裸写的控件跟着宿主，挂载失败有卡片 (2026-10-29)
+
+插件视图的挂载点里，没写 `class` 的 `<button>`、`<table>`、`<h1>`–`<h4>` 不写样式也是宿主的样子：按钮同不带修饰的 `.btn`（描边、悬停转墨色、禁用变淡）；表格同笔记和会话里的 Markdown 表格（表头灰字、中等字重、不垫底，格线淡一半）；`<h1>` / `<h2>` / `<h3>`、`<h4>` 分别用界面的 title / heading / body 字号档，半粗。`<input>`、`<select>`、`<textarea>` 本来就走宿主的表单控件基线。
+
+```js
+el.innerHTML = '<h2>本周</h2><button>新建</button> <input placeholder="搜索">' +
+  '<table><thead><tr><th>任务</th><th>状态</th></tr></thead><tbody><tr><td>导出</td><td>进行中</td></tr></tbody></table>'
+```
+
+- 你写的样式优先：写了 `class` 的元素这一层不管；没写 `class` 的，你写的任何规则都压得过它，哪怕是零权重的 `:where(…)`——这一层整条是零权重，`ctx.addStyle` 的样式又排在宿主后面。
+- 主按钮、危险按钮仍写 `.btn.primary` / `.btn.danger`，工具栏小按钮写 `.btn.sm`。视图头（`setViewHead` / `setViewModes`）里的按钮不在挂载点里，不吃这一层。
+- 宿主替你画的零件（`ctx.ui.mount*`、`ctx.table.mount` 等）里面、你自己搭的 `.ctx-menu` 里面不受影响；iframe / webview 里的页面拿不到。
+- 实现在 `desktop/frontend/src/styles/base.css` 末尾的 `plugin-view-base` 一段，只用公开 token（`pluginContract.test.ts` 逐个核对）。仪器：`desktop/scripts/plugin-base-shots.cjs`（真 Electron，装 `scripts/fixtures/plugin-base-sample`，明 / 暗拍图并量计算样式）。
+
+**挂载失败卡**：`mount` 同步抛错，或返回的 Promise 被 reject 时，视图里显示一张卡：「插件视图加载失败」、报错的第一行（完整堆栈在控制台）和「重试」。重试只重新运行这一个视图的 `mount`，不重载插件，同一插件的其它视图和面板照常运行。所以 `mount` 要能再跑一次：抛错之前挂上的监听和定时器宿主收不到，你自己收好，或者放到可能出错的步骤之后再挂。改了代码照旧走插件重载或沙箱热重载。

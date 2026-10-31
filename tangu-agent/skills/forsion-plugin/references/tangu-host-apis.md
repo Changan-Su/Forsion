@@ -354,10 +354,37 @@ void ctx.automation?.ensure([
 - `vault` 由宿主绑**当前库**,规则只在那个库里触发;`path` 归一与引擎同口径(反斜杠→正斜杠、去首尾斜杠与空段),
   拼法要稳定 —— path 一变引擎就认为条件变了、重新播种游标,期间新增的行不再触发。
 - **恒 `enabled:true`**:用户在自动化面板里单独关掉你的某条规则,下次插件重载 ensure 会把它开回来;要"可关"就把开关做成自己的设置项、按设置项决定发不发。
-- 用户**禁用插件** → 宿主把 `plugin:<id>:` 前缀的规则全部 `enabled=false`(不删);再启用时 ensure 置回 true,引擎重新播种游标(停用期间加的行**不会**一次性爆发)。
+- 用户**禁用或卸载插件** → 宿主把 `plugin:<id>:` 前缀的规则全部 `enabled=false`(不删;引擎不在时下次启动补上);再启用 / 恢复 / 重装时 setup 里的 ensure 置回 true,所以 ensure 要放在 setup 里,引擎重新播种游标(停用期间加的行**不会**一次性爆发)。
 - 聊天里的 agent 经 `manage_automation` **不能改/删** `plugin:` 前缀的规则;用户能在自动化 Space 里看、编辑(构建器认得 where / rowFrom / match / skipIfEmpty)。
 - 动作字段速查:`db_row_add.skipIfEmpty`(cells 的一个键,展开为空则跳过本步);`db_row_edit` 目标行 `rowId` > `rowFrom`(触发行的关联列,多值逐行)> `match {column, value}`(目标表全部命中行)> 触发行;
   单元格值支持 `{{row.X}}` / `{{target.X}}` / `{{= 算术 }}`。形状正典 = `desktop/frontend/src/types.ts` 的 `MuseTriggerUpsert` / `AutomationActionSpec`。
+
+## 插件自己的触发事件:ctx.automation.registerTrigger / emit(2026-10-30 起)
+
+`ensure` 替用户种规则;这一对是给用户一种新的「当…」:登记之后,它出现在自动化画布触发节点的「外部 · 插件」组,规则怎么写由用户定。
+
+```js
+// setup 里,别 await:宿主会等后端就绪(最多 60s)
+void ctx.automation?.registerTrigger({
+  id: 'build-finished',                     // [a-z0-9-]+;宿主拼成 plugin:<pluginId>:build-finished
+  name: { zh: '构建完成', en: 'Build finished' },  // 中英都要有
+  params: [                                 // 规则要填的参数,可省略;至多 8 个
+    { key: 'project', type: 'text', name: { zh: '项目', en: 'Project' } },   // type: app / number / text
+  ],
+  // requires: ['computer_history'],        // 电脑历史关着时灰掉、已有规则暂停
+})
+
+ctx.automation?.emit('build-finished', { project: 'site', status: 'ok' })
+```
+
+- **命名空间**:`id` 只是 key,带冒号或别家前缀直接被拒,碰不到别的插件。
+- **命中**:规则里填了的参数要和 payload 同名字段相等,payload 没这个字段不比。payload 只留字符串 / 数字 / 布尔,至多 20 个字段,每个值 500 字以内;动作模板里写 `{{row.status}}`。
+- **节奏**:规则缺省冷却 1 小时,用户可改,也可加时段、星期、每天几次。连发的事件 2 秒内合并,一次巡检只认最新一条。没有启用的插件规则时不起巡检,`emit` 没有成本,但也别在循环里发。
+- **内存**:事件不落盘,引擎重启丢掉还没被规则看到的。登记宿主会在后端重启后自动补,不用自己盯。
+- **卸载**:插件停用或卸载 = 注销,相关规则不删,暂停并写明原因;装回来自动恢复。
+- **Muse**:Muse 能提议在你的事件上提醒用户,不能建「叫醒自己」的规则(工具能发事件,等于它能自己叫醒自己)。
+- **返回**:`registerTrigger` 返回 `{ ok, error? }`,永不抛;`emit` 无返回,登记失败或没登记时只在控制台记一行。
+- **引擎插件**:用 `ctx.sdk.automation.registerTrigger(spec)` / `ctx.sdk.automation.emit(id, payload)`,形状相同;`registerTrigger` 校验不过会抛错,插件停用时宿主自动注销。
 
 ### `ctx.agent`:读写你自己的数据(2026-09-27 起,**只有 agent 自建 Space 有**)
 

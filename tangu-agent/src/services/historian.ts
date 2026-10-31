@@ -213,7 +213,7 @@ export async function onCloudRunDone(runId: string): Promise<void> {
     const user = await loadUserHistorianConfig(userId);
     if (!user.enabled) return;
     const s = (await query<any[]>(
-      `SELECT id, title, emoji, agent_config, kind, app_id, archived FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`,
+      `SELECT id, title, title_manual, emoji, emoji_manual, agent_config, kind, app_id, archived FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`,
       [sessionId, userId],
     ))[0];
     if (!s || s.app_id !== 'tangu' || (s.kind && s.kind !== 'user') || s.archived === true || s.archived === 1) return;
@@ -271,7 +271,7 @@ function parseJudgement(raw: string): { title: string; log: string; memory: stri
 }
 
 async function summarizeTanguSession(
-  row: { id: string; user_id: string; title: any; emoji?: string | null; agent_config: any },
+  row: { id: string; user_id: string; title: any; title_manual?: any; emoji?: string | null; emoji_manual?: any; agent_config: any },
   modelId: string,
   autoEmoji: boolean,
 ): Promise<void> {
@@ -295,11 +295,11 @@ async function summarizeTanguSession(
     }
   } catch { scopeKnown = false; }
   // 记忆域用 als.run 包住整段(不用 enterWith):回调跑在上报 done 的请求链上,不能改它的上下文,也不能串给别的会话。
-  await runWithUserAgentScope(userId, memSlug || '', () => judgeAndWrite(row, modelId, transcript, scopeKnown, memSlug, autoEmoji && !row.emoji));
+  await runWithUserAgentScope(userId, memSlug || '', () => judgeAndWrite(row, modelId, transcript, scopeKnown, memSlug, autoEmoji && !row.emoji && !row.emoji_manual));
 }
 
 async function judgeAndWrite(
-  row: { id: string; user_id: string; title: any },
+  row: { id: string; user_id: string; title: any; title_manual?: any },
   modelId: string,
   transcript: string,
   scopeKnown: boolean,
@@ -358,9 +358,9 @@ async function judgeAndWrite(
     // 写成了用户没用过的文字(英文对话出中文标题,见 core/scriptCheck.ts)→ 这次不改名;云端这路没有改写重试,等下一轮
     const userSaid = (await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = ? AND role = 'user' ORDER BY timestamp DESC LIMIT 30`, [sessionId])
       .catch(() => [])).map((m) => String(m.content || '')).join('\n'); // 用户原话(不带标签、不丢多行)
-    if (title && title.length >= 2 && !offScript(title, userSaid)) {
+    if (!row.title_manual && title && title.length >= 2 && !offScript(title, userSaid)) {
       // CAS:扫描到写回之间用户手改过标题就不覆盖。
-      await query(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ?`, [title, sessionId, String(row.title || '')])
+      await query(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ? AND title_manual = FALSE`, [title, sessionId, String(row.title || '')])
         .catch((e: any) => console.warn('[historian] tangu 标题更新失败:', e?.message || e));
     }
     const logText = redactSecrets(j.log);
