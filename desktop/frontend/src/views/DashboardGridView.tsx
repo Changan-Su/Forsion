@@ -478,10 +478,10 @@ function GridInner({ leaf }: ViewProps) {
   const dragRowKeyRef = useRef(0)
   /** 渲染算好的格子位 —— 判定只读它,不读动画途中的 DOM。 */
   const geomRef = useRef<DragGeom>({ bands: [], byId: new Map() })
-  /** 在途一笔:起手时的视口指针、宿主滚动量、抓点(指针到卡左沿),换算用的内容盒留白;
+  /** 在途一笔:视口指针(原生事件直接记)、抓点(指针到卡左沿)、换算用的内容盒留白;
    *  当前指针(内容盒坐标)、上次换位时的指针、走过哪条路、等闸的落点。 */
   const gestureRef = useRef<{
-    startX: number; startY: number; scrollX: number; scrollY: number; grab: number; padX: number; padY: number
+    clientX: number; clientY: number; grab: number; padX: number; padY: number; untrack: () => void
     x: number; y: number; ax: number; ay: number
     route: DragPlan['route'] | null
     pending: { plan: DragPlan; at: number } | null
@@ -491,6 +491,10 @@ function GridInner({ leaf }: ViewProps) {
   const landingRef = useRef<string | null>(null)
   useEffect(() => { landingRef.current = null })
   const dragNonce = useRef<unknown>(null)
+  useEffect(() => () => {
+    if (gestureRef.current) window.clearTimeout(gestureRef.current.timer)
+    gestureRef.current?.untrack()
+  }, [])
   /** ⚠️ body 端级 zoom ≠ 1 时 DragOverlay 的 fixed 坐标整体被再乘一次 zoom(壳脱离指针,
    *  探针实测 ×1.25 漂移)。反补偿 = 给 overlay 包一层 1/zoom;倍率用实测 rect/offsetWidth
    *  比值(本仓惯用法,勿用 zoomOf)。 */
@@ -504,21 +508,32 @@ function GridInner({ leaf }: ViewProps) {
     dragRowKeyRef.current = nextPinRow(pins)
     previewPinsRef.current = null
     const self = geomRef.current.byId.get(String(e.active.id))
-    const host = hostRef.current
     gestureRef.current = null
-    if (el && host && self) {
+    if (el && self) {
       const grid = el.getBoundingClientRect()
       const cs = getComputedStyle(el)
       const act = e.activatorEvent as { clientX?: number; clientY?: number; touches?: ArrayLike<{ clientX: number; clientY: number }> } | null
-      const startX = act?.clientX ?? act?.touches?.[0]?.clientX ?? grid.left // 触屏是 TouchEvent
-      const startY = act?.clientY ?? act?.touches?.[0]?.clientY ?? grid.top
+      const clientX = act?.clientX ?? act?.touches?.[0]?.clientX ?? grid.left // 触屏是 TouchEvent
+      const clientY = act?.clientY ?? act?.touches?.[0]?.clientY ?? grid.top
       const padX = parseFloat(cs.paddingLeft || '0')
       const padY = parseFloat(cs.paddingTop || '0')
-      const x = (startX - grid.left) / overlayZoomRef.current - padX
-      const y = (startY - grid.top) / overlayZoomRef.current - padY
+      const x = (clientX - grid.left) / overlayZoomRef.current - padX
+      const y = (clientY - grid.top) / overlayZoomRef.current - padY
+      // ⚠️ 指针自己记,不靠 onDragMove:它排在 React 渲染之后,主线程一忙,松手时最后几步还没算进来,
+      //    卡就落在手几十毫秒前的位置(G25 偶发红)。e.delta 也不用:它含滚动,而滚动量是 CSS px、指针是视觉 px。
+      const track = (ev: MouseEvent | TouchEvent): void => {
+        const p = 'touches' in ev ? ev.touches[0] : ev
+        const g = gestureRef.current
+        if (g && p) { g.clientX = p.clientX; g.clientY = p.clientY }
+      }
+      window.addEventListener('mousemove', track, true)
+      window.addEventListener('touchmove', track, { capture: true, passive: true })
       gestureRef.current = {
-        startX, startY, scrollX: host.scrollLeft, scrollY: host.scrollTop, grab: x - self.x, padX, padY,
-        x, y, ax: x, ay: y, route: null, pending: null, timer: 0,
+        clientX, clientY, grab: x - self.x, padX, padY, x, y, ax: x, ay: y, route: null, pending: null, timer: 0,
+        untrack: () => {
+          window.removeEventListener('mousemove', track, true)
+          window.removeEventListener('touchmove', track, true)
+        },
       }
     }
     setDragId(String(e.active.id))
@@ -599,30 +614,33 @@ function GridInner({ leaf }: ViewProps) {
     previewRef.current = next.seq
     setPreviewSeq(next.seq)
   }
-  /** 过闸就换。闸没过的落点留着,手再动时重算(onDragMove)。
-   *  ⚠️ 变尺寸卡片换一次位,整段能错开好几行,指针就压到另一张卡上,算出来又是上一态 —— 两道闸只能限速,
+  /** ⚠️ 变尺寸卡片换一次位,整段能错开好几行,指针就压到另一张卡上,算出来又是上一态 —— 两道闸只能限速,
    *  拦不住这种互翻(格点扫实证)。所以换之前先算一步:换完指针落在哪,会翻回现在这一态就不走。 */
+  const flipsBack = (id: string, next: DragPlan): boolean =>
+    planDrop(id, placeRows(composeRows(next.seq, next.pins)), next.seq, next.pins)?.key
+      === planKey(previewRef.current ?? ordered, previewPinsRef.current ?? pins)
+  /** 过闸就换。闸没过的落点留着,手再动时重算(onDragMove)。 */
   const stepDrag = (id: string, dwelled: boolean): void => {
     const g = gestureRef.current
     if (!g?.pending) return
     if (!dwelled && performance.now() - g.pending.at < DRAG_DWELL_MS) return
     if (Math.hypot(g.x - g.ax, g.y - g.ay) < DRAG_TRAVEL_PX) return
     const next = g.pending.plan
-    const back = planDrop(id, placeRows(composeRows(next.seq, next.pins)), next.seq, next.pins)
-    if (back?.key === planKey(previewRef.current ?? ordered, previewPinsRef.current ?? pins)) { g.pending = null; return }
+    if (flipsBack(id, next)) { g.pending = null; return }
     applyPlan(next)
+  }
+  /** 视口指针 → 内容盒坐标。原点每次现量:页面在滚、拖动中窗口变宽(居中的网格会横移)都算进去。 */
+  const syncPointer = (): void => {
+    const g = gestureRef.current
+    const grid = gridRef.current?.getBoundingClientRect()
+    if (!g || !grid) return
+    g.x = (g.clientX - grid.left) / overlayZoomRef.current - g.padX
+    g.y = (g.clientY - grid.top) / overlayZoomRef.current - g.padY
   }
   const onDragMove = (e: DragMoveEvent): void => {
     const g = gestureRef.current
-    const host = hostRef.current
-    const el = gridRef.current
-    if (!g || !host || !el) return
-    // e.delta 含滚动,而滚动量是 CSS px、指针是视觉 px,整体除 zoom 会累积偏移:先扣掉滚动还原视口指针。
-    // 原点每次现量,不用起手那份:拖动中窗口变宽,居中的网格会横移(e.delta 不含这一段)。
-    const grid = el.getBoundingClientRect()
-    const scale = overlayZoomRef.current
-    g.x = (g.startX + e.delta.x - (host.scrollLeft - g.scrollX) - grid.left) / scale - g.padX
-    g.y = (g.startY + e.delta.y - (host.scrollTop - g.scrollY) - grid.top) / scale - g.padY
+    if (!g) return
+    syncPointer()
     const id = String(e.active.id)
     const next = planDrop(id, geomRef.current, previewRef.current ?? ordered, previewPinsRef.current ?? pins)
     if (next && next.key === g.pending?.plan.key) { stepDrag(id, false); return }
@@ -637,7 +655,10 @@ function GridInner({ leaf }: ViewProps) {
     dragNonce.current = null
     previewRef.current = null
     previewPinsRef.current = null
-    if (gestureRef.current) window.clearTimeout(gestureRef.current.timer)
+    if (gestureRef.current) {
+      window.clearTimeout(gestureRef.current.timer)
+      gestureRef.current.untrack()
+    }
     gestureRef.current = null
     setDragId(null)
     setPreviewSeq(null)
@@ -646,10 +667,17 @@ function GridInner({ leaf }: ViewProps) {
   }
   const onDragCancel = (): void => { endDrag() }
   const onDragEnd = (e: DragEndEvent): void => {
-    // 还在停留窗口里的落点算数(快甩就松手不等);被行程闸挡下的不算 —— 屏幕上是什么就落什么。
+    // 按手最后的位置再算一次。新落点和还在停留窗口里的落点算数(快甩就松手不等);等够了还没换的是被闸挡下的,
+    // 不算,防回摆拒掉的也不算 —— 屏幕上是什么就落什么。
     const g = gestureRef.current
-    if (g?.pending && performance.now() - g.pending.at < DRAG_DWELL_MS && Math.hypot(g.x - g.ax, g.y - g.ay) >= DRAG_TRAVEL_PX) applyPlan(g.pending.plan)
-    landingRef.current = String(e.active.id)
+    const id = String(e.active.id)
+    if (g) {
+      syncPointer()
+      const next = planDrop(id, geomRef.current, previewRef.current ?? ordered, previewPinsRef.current ?? pins)
+      const fresh = next && (next.key !== g.pending?.plan.key || performance.now() - g.pending.at < DRAG_DWELL_MS)
+      if (next && fresh && Math.hypot(g.x - g.ax, g.y - g.ay) >= DRAG_TRAVEL_PX && !flipsBack(id, next)) applyPlan(next)
+    }
+    landingRef.current = id
     const { nonce, seq, pins: nextPins } = endDrag()
     // ⚠️ 「行内平移」这一支顺序压根没变(previewSeq 恒 null),不能被 `if (!seq) return` 吞掉 ——
     //    实证:第一版就是这样把 pin 落盘整个丢了(探针里 frontmatter 一个字节没动)。

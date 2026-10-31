@@ -79,6 +79,7 @@ async function gesture(page, cfg, g) {
   for (const w of g.via) {
     if (typeof w === 'string') pts.push(center(await rect(w)))
     else if (w.at) { const r = await rect(w.at); pts.push({ x: r.x + r.width * w.fx, y: r.y + r.height / 2 }) }
+    else if (w.cx != null) pts.push(await page.evaluate(({ cx, cy }) => { const g = document.querySelector('.dash3-grid'), r = g.getBoundingClientRect(), s = getComputedStyle(g); return { x: r.x + parseFloat(s.paddingLeft) + cx, y: r.y + parseFloat(s.paddingTop) + cy } }, w)) // 内容盒坐标
     else pts.push(w)
   }
   await page.mouse.move(start.x, start.y); await page.mouse.down()
@@ -114,9 +115,9 @@ async function run(browser) {
   const out = []
   try {
     const zoom = +(process.env.ZOOM || 1)
-    const open = async () => {
-      const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1280, height: +(process.env.VH || 1100) } })
-      await p.goto(URL_, { waitUntil: 'domcontentloaded' }); await p.waitForSelector('.dash3-host .dash3-card', { timeout: 60000 }); await p.waitForTimeout(800)
+    const open = async (query = '', width = 1280, height = +(process.env.VH || 1100)) => {
+      const p = await browser.newPage({ locale: 'zh-CN', viewport: { width, height } })
+      await p.goto(URL_ + query, { waitUntil: 'domcontentloaded' }); await p.waitForSelector('.dash3-host .dash3-card', { timeout: 60000 }); await p.waitForTimeout(800)
       await p.locator('.amx-toolbar button[title^="编辑布局"]').click(); await p.waitForTimeout(350)
       if (zoom !== 1) { await p.evaluate((z) => { document.body.style.zoom = String(z) }, zoom); await p.waitForTimeout(500) }
       return p
@@ -127,6 +128,9 @@ async function run(browser) {
       { name: '小卡穿过大卡', drag: '2', via: ['4', '6'] },
       { name: '大卡压小卡', drag: '4', via: ['2', '3', '6'] },
     ]) { const p = await open(); out.push(await gesture(p, cfg, g)); await p.close() }
+    // Codex 第三轮的反例:最后一站换了就翻回去,防回摆拒掉;松手不能绕过这道检查再落一次盘。
+    const r = await open('&cards=4x3,6x5,12x3,4x7,8x4', 1120, 1700) // 内容宽 996
+    out.push(await gesture(r, cfg, { name: '防回摆拒掉后松手', drag: '1', via: [{ cx: 876, cy: 1314 }, { cx: 921, cy: 1333 }], steps: 14, hold: 300 })); await r.close()
     const p = await open()
     const box = await p.evaluate(() => { const r = document.querySelector('.dash3-grid').getBoundingClientRect(); return { x: r.x + 10, y: r.y + 10, w: r.width - 20, h: Math.min(r.height, 760) - 20 } })
     out.push(await lattice(p, cfg, '7', box, 7, 5)); await p.close()
