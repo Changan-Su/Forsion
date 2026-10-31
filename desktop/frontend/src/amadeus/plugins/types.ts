@@ -759,6 +759,11 @@ export interface ListItem {
    *  closed and the one holding `activeKey()` is opened for you. `icon` overrides the folder glyph.
    *  A `primary` action from `itemMenu(folder)` is drawn as the `+` button on the row. */
   kind?: 'folder'
+  /** Folder rows only (2026-10-31+, feature-detect with `ctx.listCapabilities?.includes('folderOpen')`):
+   *  clicking the name calls `open()` and unfolds the row, and only the leading arrow folds it. The row
+   *  highlights when it is `activeKey`. Use it when a folder is also a thing to select, like a parent tag.
+   *  Older hosts ignore the field and the click only folds, so keep a child row for them. */
+  opensOnClick?: boolean
   /** Folder rows only (2026-10-14+): 'group' draws a top-level folder as a group head — the taller
    *  first-level row the Tangu sidebar uses for agents and projects: a 30px lead (`iconUrl` as a round
    *  avatar, else `icon` in a tile, else the first letter of the title), the title with a fold arrow, and
@@ -1644,7 +1649,7 @@ export interface PluginContext {
    *  folder rows, 'items' = dragging rows onto rows, 'rename' = in-place rename, 'group' = group heads
    *  (`folderStyle: 'group'`, `defaultOpen`; 2026-10-14+). Older hosts lack the field — treat a missing
    *  entry as "not supported" and keep emitting flat rows there. */
-  readonly listCapabilities?: readonly ('tree' | 'items' | 'rename' | 'group')[]
+  readonly listCapabilities?: readonly ('tree' | 'items' | 'rename' | 'group' | 'folderOpen')[]
   /** Show a top-right notification card (2026-07-23+). Source is auto-labelled with the plugin
    *  name and users can mute per plugin in 设置 → 通知与状态栏 — treat it as a mutable hint, not a
    *  data channel. error level is sticky (manual close) by default. Old hosts lack this API:

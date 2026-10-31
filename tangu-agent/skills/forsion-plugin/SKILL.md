@@ -681,6 +681,7 @@ The full contracts, examples and old-host fallbacks for these mounts live in [re
     数组顺序就是显示顺序。文件夹点一下开合、不调 `open()`;开合由宿主记(文件夹缺省收起,`activeKey()` 那一行
     所在的文件夹自动展开);搜索时宿主不画层级,只平铺匹配的行 —— 所以子行最好也写上 `group`。
     静态分组头(`group`)同样可以点开合,缺省展开。`itemMenu(文件夹)` 里带 `primary` 的那一项画成行尾的「+」。
+  - 文件夹可选中(2026-10-31 起;探测 `ctx.listCapabilities?.includes('folderOpen')`):文件夹行写 `opensOnClick: true`,点名字调 `open()` 并展开,行首箭头开合,`activeKey` 指向它时高亮;探测不到要留一行子项。
   - 组头(2026-10-14 起;探测 `ctx.listCapabilities?.includes('group')`):最上面一级的文件夹再写 `folderStyle: 'group'`,
     就画成 Tangu 左栏里 Agent / 项目那种一级行 —— 40px 高,前面一个 30px 的前导(有 `iconUrl` 是圆头像,有 `icon` 是方块里的图标,
     都没有就画标题的首字),名字后面一个开合箭头,`hint` 画成行尾的小胶囊(放未读数这类数字)。用在「这些行是谁的」这种分法上

@@ -671,9 +671,10 @@ export function PluginListBody({ src, stateKey }: { src: HostListSource; stateKe
         style={{ paddingLeft: folderPadLeft(depth) }} {...rowDropProps(it)} {...dragProps(it)} onContextMenu={contextMenu(actions)}>
         {renaming === it.key
           ? <div className="t2s-group-toggle t2s-folder-row"><span className="t2s-lead">{icon}</span>{renameInput(it)}</div>
-          : <button type="button" className="t2s-group-toggle t2s-folder-row" data-row-key={it.key} title={it.title} aria-expanded={isOpen}
-              onClick={() => open.setOpen('f:' + it.key, !isOpen)}>
-              <span className="t2s-lead">{icon}<span className={`t2s-chev t2s-lead-chev${isOpen ? ' open' : ''}`}><ChevronRight size={12} /></span></span>
+          : <button type="button" className={cls('t2s-group-toggle t2s-folder-row', it.opensOnClick && activeKey === it.key && 'active')} data-row-key={it.key} title={it.title} aria-expanded={isOpen}
+              onClick={it.opensOnClick ? () => { src.open(it, { newTab: false }); open.setOpen('f:' + it.key, true) } : () => open.setOpen('f:' + it.key, !isOpen)}>
+              {/* opensOnClick:点名字是打开,开合只留给前导的箭头 */}
+              <span className="t2s-lead" onClick={it.opensOnClick ? (e) => { e.stopPropagation(); open.setOpen('f:' + it.key, !isOpen) } : undefined}>{icon}<span className={`t2s-chev t2s-lead-chev${isOpen ? ' open' : ''}`}><ChevronRight size={12} /></span></span>
               <span className="t2s-group-label">{it.title}</span>
               {it.hint && <span className="t2s-count">{it.hint}</span>}
             </button>}

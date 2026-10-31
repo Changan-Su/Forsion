@@ -26,6 +26,8 @@ ctx.app.openNote(path, { reuseKey, activate })
 ctx.listCapabilities?.includes('tree' | 'items' | 'rename')
 ```
 
+文件夹同时也是可选中的东西时(比如父标签),给文件夹行写 `opensOnClick: true`,用 `ctx.listCapabilities?.includes('folderOpen')` 探测:点名字调 `open()` 并展开,只有行首的箭头负责开合,`activeKey` 指向它时整行高亮。旧宿主忽略这个字段,点一下只开合,所以探测不到时要在里面留一行子项。
+
 把行按「是谁的」归组(发信人、账号、来源)时,给最上面一级的文件夹再写 `folderStyle: 'group'`:它会画成 Tangu 左栏里 Agent / 项目那种一级行,前面是头像(`iconUrl`)、方块里的图标(`icon`)或标题的首字,`hint` 是行尾的小胶囊(适合放未读数)。组里的行不再画自己的图标,只留未读的圆点,一组先列 5 条,其余在「查看更多」后面。这种组的开合只记到应用重启:写了 `defaultOpen: true` 的组自己开着(比如里面有未读),它由假变真时宿主会重新打开这一组;不写就是收着。组的先后由你的数组顺序决定。搜索时不画层级,所以带 `query` 时请返回平铺的行。手机上,只有这一层组头的列表仍然是整屏列表,组里的行照样可以左滑。用 `ctx.listCapabilities?.includes('group')` 判断宿主认不认;不认的宿主会把它画成普通文件夹。
 
 桌面上,指针停在列表的一行上时,`itemMenu()` 里带 `icon` 的动作会在行尾排成一排图标钮,旁边仍是列出全部动作的「更多」菜单。它们和手机上左滑出来的是同一批、同一个顺序,所以把最常用的动作放在前面并配上图标;没有 `icon` 的动作只出现在菜单里。旧版宿主只有「更多」菜单。

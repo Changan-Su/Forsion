@@ -370,6 +370,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-taghit-line { padding: 3px 8px; margin-left: 10px; width: calc(100% - 10px); white-space: normal; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 .amx-taghit-line:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); }
 .amx-taghit-pill {
+  white-space: nowrap;
   color: var(--accent-ink);
   background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
   border-radius: var(--radius-pill, 999px);
