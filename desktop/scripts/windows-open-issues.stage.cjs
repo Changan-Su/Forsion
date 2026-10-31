@@ -15,10 +15,11 @@ async function main() {
     fs.writeFileSync(path.join(d, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
     fs.writeFileSync(path.join(d, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'fixture' }))
   }
-  let app
+  let app, child
   try {
     app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', `--remote-debugging-port=${process.env.MINI_CDP_PORT || 9451}`, ROOT], cwd: ROOT,
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '0', FORSION_TEST_DESKTOP: '', PI_CU_SOCKET_PATH: path.join(home, 'no-helper.sock') } })
+    child = app.process()
     const win = await app.firstWindow()
     if (!await skipOnboarding(win)) throw new Error('Onboarding did not close')
     await win.locator('.rb-space[aria-label="笔记"]').first().click()
@@ -83,7 +84,7 @@ async function main() {
   } finally {
     if (app) {
       await Promise.race([app.close().catch(() => {}), new Promise(r => setTimeout(r, 5000))])
-      if (app.process().exitCode === null) app.process().kill('SIGKILL')
+      if (child.exitCode === null) child.kill('SIGKILL')
     }
     await stub.close()
   }
