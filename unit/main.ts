@@ -15,6 +15,9 @@ import type { ManagementCommand } from './management'
 
 const dist = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
+const referenceFlag = args.indexOf('--reference')
+const reference = referenceFlag >= 0
+if (reference) args.splice(referenceFlag, 1)
 const commands = ['init', 'install', 'stage', 'update', 'run', 'migrate', 'enable', 'disable', 'restart', 'status', 'access']
 const action = commands.includes(args[0]) ? args.shift()! : 'run'
 const configArgument = args.shift()
@@ -26,9 +29,10 @@ async function findInstallation(config: UnitConfig, id?: string) {
   throw new Error(`Plugin is not installed: ${id}`)
 }
 async function run() {
+  if (reference && action !== 'install' && action !== 'update') throw new Error('--reference applies to install and update')
   if (action === 'update') {
     if (!configArgument?.trim() || args.length !== 2 || args.some((arg) => !arg.trim())) {
-      throw new Error('Usage: node main.mjs update <unit.json> <plugin-id> <package-path>')
+      throw new Error('Usage: node main.mjs update <unit.json> <plugin-id> <package-path> [--reference]')
     }
     if (!validId(args[0])) throw new Error('Invalid plugin id')
   }
@@ -49,13 +53,13 @@ async function run() {
     try { await handle.writeFile(JSON.stringify(config, null, 2) + '\n') } finally { await handle.close() }
     print({ config: path, instanceId: config.instanceId }); return
   }
-  if (action === 'install') { if (!args[0]) throw new Error('A plugin package directory is required'); print(await installPackage(file, resolve(args[0]))); return }
+  if (action === 'install') { if (!args[0]) throw new Error('A plugin package directory is required'); print(await installPackage(file, resolve(args[0]), { reference })); return }
   const config = await readConfig(file)
   config.workerFile ||= resolve(dist, 'backendWorker.mjs')
   if (action === 'stage') { print(await stageRelease(config.dataDir!, resolve(args[0]), config.version)); return }
   if (action === 'update') {
     await findInstallation(config, args[0])
-    print(await installPackage(file, resolve(args[1]), { updateId: args[0] })); return
+    print(await installPackage(file, resolve(args[1]), { updateId: args[0], reference })); return
   }
   if (action === 'access') {
     if (config.workspace?.mode !== 'local') throw new Error('Public sites use their Account provider')
