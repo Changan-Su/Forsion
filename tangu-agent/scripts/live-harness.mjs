@@ -166,6 +166,7 @@
  *                                                           #   留在 <场景>-evidence/。--cu-jev-mode auto|vision|elements(缺省 auto)、--cu-jev-threshold(缺省 = 插件缺省)、--cu-timeout(cusend 缺省 900)。
  *                                                           #   捆绑包同 cuvision:以装着的那份为底,另外把插件仓的 scripts/ 也覆盖进去。会真的动鼠标,走 devlock。
  *                                                           #   cuambig:收件人有歧义先问;cuscroll(反馈 d995c9a2):播放「我喜欢的音乐」第 18 首,要先滚(滚动交给 Jev,不许 act_ui 滚)。
+ *   npm run live:harness -- --only cuweb,cuwebdead --cu-plugin <捆绑包目录>   # 网页按钮的后台 AXPress(10-31):一次性 Electron 窗口;cuweb 全程不许抢前台,cuwebdead 用只认真实悬停的按钮验「再按一次走真实点击」。
  *   npm run live:harness -- --only inline                    # 正文生成式 AI(09-28,G3-07):POST /agent/inline 润色保事实 / 翻译 / 续写 / 选区里的注入不照做 / 缺字段 400 / 不落会话;改 services/inlineAi.ts 提示词后跑
  *   npm run live:harness -- --only pageinstructions         # 页级 Instructions:分页读带本页约束、下一页不继承、inline 约束与用户当前要求优先
  *   npm run live:harness -- --only tool,stalewrite           # G3-02(09-28):读后被用户改过的文件,write_file 须拒写 → 模型重读 → 终稿留着用户那行;改 write_file / read_file / 读后指纹(readState)后跑
@@ -218,6 +219,7 @@ import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './l
 import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
 import { CU_JEV_KEYS, JEV_REQUESTS_DIR, cuJevSetup, cuJevConfig, cuJevLive } from './lib/cu-jev-live.mjs';
+import { CU_WEB_KEYS, cuWebLive } from './lib/cu-web-live.mjs';
 import { appRefLive, appRefSelftest } from './lib/app-ref-live.mjs';
 import { taskOutcomesLive } from './lib/task-outcomes-live.mjs';
 
@@ -240,6 +242,7 @@ KEYS.push('novision');
 KEYS.push('cuoff');
 KEYS.push('cuvision');
 KEYS.push(...CU_JEV_KEYS);
+KEYS.push(...CU_WEB_KEYS);
 KEYS.push('dreamseed');
 KEYS.push('layers');
 KEYS.push('pageinstructions', 'dispatch');
@@ -296,6 +299,7 @@ OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英�
 OPT_IN.add('windowscmd'); // Windows Issue #77: exact cmd reads and rejected negative controls through real model/tool/SSE.
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
+for (const k of CU_WEB_KEYS) OPT_IN.add(k); // --only cuweb,cuwebdead:Electron 窗口上的后台 AXPress(cuwebdead 会动真鼠标;要 --cu-plugin)
 for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cuscroll,cusearch:Jev 真实案例,自绘替身 + 真 Jev(会动真鼠标;要 --cu-plugin)
 OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
@@ -993,7 +997,7 @@ if (ONLY.has('dispatch')) {
 const CU_FIXTURE = opt('cu-fixture', cuDefaultFixture());
 if (ONLY.has('cuvision')) cuVisionSetup({ bundle: opt('cu-plugin', ''), fixture: CU_FIXTURE, shared });
 const CU_JEV = CU_JEV_KEYS.some((k) => ONLY.has(k));
-if (CU_JEV) cuJevSetup({ bundle: opt('cu-plugin', ''), shared });
+if (CU_JEV || CU_WEB_KEYS.some((k) => ONLY.has(k))) cuJevSetup({ bundle: opt('cu-plugin', ''), shared });
 
 // selfschedule:隔离的 Amadeus 笔记库(一个带 calendarDate 列的日历,一行既有事件)。不设 FORSION_AMADEUS_VAULT 引擎会落到
 // 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
@@ -3412,6 +3416,12 @@ try {
   for (const key of CU_JEV_KEYS) {
     await scenario(key, { cumusic: 'cumusic Jev 真实案例:打开 Melody 播放今日推荐第三首', cusend: 'cusend Jev 真实案例:播放第三首,把最热评论发给 Chatter 好友 Sakura(说清了就直接发)', cuambig: 'cuambig Jev 真实案例:收件人有歧义(「小樱」)时先问、列出候选、不发', cuscroll: 'cuscroll Jev 真实案例:打开 Melody 播放「我喜欢的音乐」第 18 首(要先滚,滚动交给 Jev)', cusearch: 'cusearch 真实案例:Chatter 的搜索结果在单独的下拉里、排第一的是群,给 Sakura 发一句(不许打开那个群)' }[key], () =>
       cuJevLive({ key, api, run, OUT, bundle: opt('cu-plugin', ''), timeoutMs: Number(opt('cu-timeout', key === 'cusend' || key === 'cusearch' ? '900' : '420')) * 1000, tokensOf, ttft }));
+  }
+
+  // cuweb / cuwebdead(10-31):网页按钮的后台 AXPress。说明和判据在 lib/cu-web-live.mjs。
+  for (const key of CU_WEB_KEYS) {
+    await scenario(key, { cuweb: 'cuweb 网页按钮后台按下,不抢前台', cuwebdead: 'cuwebdead AXPress 没反应时再按一次走真实点击' }[key], () =>
+      cuWebLive({ key, api, run, OUT, electron: process.env.CU_ELECTRON || join(root, '..', 'desktop', 'node_modules', 'electron', 'dist', 'Electron.app', 'Contents', 'MacOS', 'Electron'), timeoutMs: Number(opt('cu-timeout', '420')) * 1000, tokensOf, ttft }));
   }
 
   // 审批档只归用户(09-27,设备能力 MCP 方案 P0 ②):旧版 manage_agent 收 approval_mode,模型一句话就能把 agent(含自己)调成
