@@ -169,6 +169,8 @@ An engine plugin can bring in another chat app (WeCom, for example) and reuse ev
 
 One account can also serve many contacts: with `multiPeer: true`, each contact gets its own binding, session and working folder, so their conversations stay apart. They all use the same agent under the same account, so agent memory is shared, and these sessions have no project memory. The working folder only keeps files apart and is not a sandbox: tools running on the host can still read other folders, so be careful about who may talk and how tools are approved. The driver decides who may talk. These contacts do not own the channel, so `/stop` is the only command, inbox messages are not forwarded, and the desktop cannot switch the connected session. Older engines silently ignore the key, so check `ctx.channelCapabilities?.multiPeer` first. An inbound message can carry `agentSlug` to pin an agent for that contact.
 
+For an unattended deployment whose credentials are written straight into the config, with nobody to press Connect, add `selfConnect: true`: on an account that has never connected, the first contact your driver hands over connects it for the local user. An account the user disconnected stays disconnected.
+
 When a driver implements `sendApproval`, approvals stop being text cards: the driver receives the tool name, arguments and preview, draws them itself, and answers through `respond`. Chat text can neither approve nor dismiss such a card, and it is rejected after 10 minutes with no answer. Implement `settleApproval` to learn how a card ended. A plugin's UI can fill in and connect a channel from its own bundle with `ctx.tangu.connectChannel(kind, fields)`. This is desktop only, and other plugins' channels are refused.
 
 ## Automation triggers

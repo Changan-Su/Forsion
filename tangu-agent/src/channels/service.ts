@@ -206,6 +206,8 @@ export interface ChannelServiceOpts {
   hostClientTag?: string;
   /** 每 peer 一条绑定 + 一个会话(PluginChannelSpec.multiPeer;内置通道不开)。 */
   multiPeer?: boolean;
+  /** 见 PluginChannelSpec.selfConnect。 */
+  selfConnect?: boolean;
 }
 
 // 与 routes/runs.ts 的公开请求闸同形。这里读的是受信宿主 env,但仍收紧形状,
@@ -539,7 +541,10 @@ export class ChannelService {
       [this.kind, accountId],
     );
     const b = fallback[0] as BindingRow | undefined;
-    if (this.multiPeer) return b ? this.bindPeer(b, peerId, agentSlug, gone) : null;
+    if (this.multiPeer) {
+      const known = b ?? await this.selfConnect(accountId);
+      return known ? this.bindPeer(known, peerId, agentSlug, gone) : null;
+    }
     if (b && !b.peer_id) {
       // 未绑定联系人的 binding:收第一个发消息的 peer 作为其专属联系人(TOFU)。
       await query(`UPDATE tangu_wechat_bindings SET peer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [peerId, b.id]);
@@ -548,6 +553,16 @@ export class ChannelService {
     }
     // binding 已绑定其它联系人 → 拒绝其他 peer(peer 隔离,避免任意人借同一 binding 执行 host)。
     return null;
+  }
+
+  /** 账号有过绑定(哪怕已作废)就是断开过,不替用户连回去。 */
+  private async selfConnect(accountId: string): Promise<BindingRow | null> {
+    if (!this.opts.selfConnect) return null;
+    const seen = await query<any[]>(`SELECT 1 FROM tangu_wechat_bindings WHERE channel = ? AND account_id = ? LIMIT 1`, [this.kind, accountId]);
+    if (seen[0]) return null;
+    const userId = process.env.TANGU_USER_ID || 'local';
+    await this.bindAccount({ userId, accountId });
+    return this.accountBinding(userId, accountId);
   }
 
   /**

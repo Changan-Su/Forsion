@@ -116,6 +116,11 @@ export interface PluginChannelSpec {
    * 这些 peer 不是通道主人,所以只有 /stop 算命令(其余 /x 当普通消息),收件箱不转发,桌面也不能切换连接的会话。
    */
   multiPeer?: boolean;
+  /**
+   * 配合 multiPeer,给凭据直接播种进配置、没人点「连接」的无人值守部署:账号从没连过时,驱动交上来的第一个 peer 替本机用户连上。
+   * 断开过的账号不复活。缺省 false = 没连接就回「未绑定」。
+   */
+  selfConnect?: boolean;
   /** 设置卡与侧栏文件夹的显示名。 */
   name: ChannelText;
   /** 凭据下方的一句提示(去哪儿拿凭据)。 */

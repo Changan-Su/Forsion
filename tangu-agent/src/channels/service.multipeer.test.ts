@@ -7,7 +7,7 @@
  * 负对照(实跑见红,逐条改 service.ts 跑本文件):新 peer 复用已有会话;删 findBinding 的 multiPeer 分支;默认强开;
  * 文字批到结构化卡;新消息作废结构化卡;peer 能跑斜杠命令;收件箱发给最后说话的 peer;重复连接断开别的 peer;
  * respond 去掉送达闸;respond 去掉本机闸;目录哈希不带账号;peer 键改回拼接;账号前缀改回拼接;两处 projectless 去掉;
- * 去掉 INSERT 后的锚点复查 —— 都红。
+ * 去掉 INSERT 后的锚点复查;selfConnect 不看声明;selfConnect 不查历史绑定 —— 都红。
  */
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -110,7 +110,7 @@ const cfgOf = (id: string): any => JSON.parse(session(id).agent_config);
 
 interface Offered { accountId: string; peerId: string; card: ChannelApprovalCard; respond: (a: 'approve' | 'reject') => boolean; settle: (r: { ok: boolean; error?: string }) => void; }
 
-function harness(opts: { multiPeer?: boolean; approvals?: boolean; settle?: boolean } = {}) {
+function harness(opts: { multiPeer?: boolean; selfConnect?: boolean; approvals?: boolean; settle?: boolean } = {}) {
   const sent: Array<[string, string]> = [];
   const offered: Offered[] = [];
   const settled: Array<[string, string, string]> = [];
@@ -126,7 +126,7 @@ function harness(opts: { multiPeer?: boolean; approvals?: boolean; settle?: bool
     } : {}),
     ...(opts.settle ? { settleApproval: (_a: string, peerId: string, approvalId: string, outcome: string) => { settled.push([peerId, approvalId, outcome]); } } : {}),
   };
-  const svc = new ChannelService({ kind: 'chat', driver, inboxDirName: 'chat-inbox', sessionTitle: 'Chat', unboundHint: 'unbound', multiPeer: opts.multiPeer });
+  const svc = new ChannelService({ kind: 'chat', driver, inboxDirName: 'chat-inbox', sessionTitle: 'Chat', unboundHint: 'unbound', multiPeer: opts.multiPeer, selfConnect: opts.selfConnect });
   // 起了 run 的那条要等 run 结束才回,这里不能干等:回复到了,或 run 落了行,就算走完这条入站(建会话有真的 mkdir,要多等几拍)。
   const say = async (peerId: string, text: string, extra: Partial<ChannelInbound> = {}): Promise<string> => {
     const runs = state.runs.length;
@@ -284,6 +284,22 @@ describe('multiPeer: one binding and session per peer', () => {
     const { say } = harness({ multiPeer: true });
     expect(await say('p1', 'hi')).toBe('unbound');
     expect(bindings()).toHaveLength(0);
+  });
+
+  it('connects itself on the first peer when the channel declares it', async () => {
+    const { say } = harness({ multiPeer: true, selfConnect: true });
+    expect(await say('p1', 'hi')).not.toBe('unbound');
+    expect(await say('p2', 'hi')).not.toBe('unbound');
+    expect(bindings()).toHaveLength(2);
+    expect(state.runs).toHaveLength(2);
+  });
+
+  it('does not connect a disconnected account back, even when the channel declares it', async () => {
+    const { svc, say } = harness({ multiPeer: true, selfConnect: true });
+    await say('p1', 'hi');
+    await svc.disconnect(process.env.TANGU_USER_ID || 'local', 'acc');
+    expect(await say('p2', 'hi')).toBe('unbound');
+    expect(state.runs).toHaveLength(1);
   });
 
   it('opens one binding when a new peer sends two messages at once', async () => {

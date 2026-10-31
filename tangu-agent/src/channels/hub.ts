@@ -83,7 +83,7 @@ class ChannelHub {
     if (typeof spec.driver.verify !== 'function') throw new Error(`channel "${kind}": driver.verify() is required`);
     this.plugins.set(kind, spec);
     if (owner) this.owners.set(kind, owner);
-    this.services.set(kind, new ChannelService({ kind, driver: spec.driver, inboxDirName: `${kind}-inbox`, sessionTitle: spec.name.en, name: spec.name, ...(spec.multiPeer === true ? { multiPeer: true } : {}) }));
+    this.services.set(kind, new ChannelService({ kind, driver: spec.driver, inboxDirName: `${kind}-inbox`, sessionTitle: spec.name.en, name: spec.name, ...(spec.multiPeer === true ? { multiPeer: true, selfConnect: spec.selfConnect === true } : {}) }));
     // 引擎已起(运行期启用 / 重扫)→ 现在就按设置启动;还没起 → startAll 会带上它。
     if (this.started) void this.bootChannel(kind);
     return () => {
