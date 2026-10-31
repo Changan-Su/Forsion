@@ -13,6 +13,7 @@ import { useApp } from '../stores/appStore'
 import { EmptyState } from '../components/EmptyState'
 import { byExpiry, daysUntil } from '../amadeus/lib/shareState'
 import { localPathFor, useEntrySync } from '../stores/entrySyncStore'
+import { refreshAfterLeave } from '../stores/sharedVaultStore'
 import { usePageStore } from '@amadeus/store/pageStore'
 import type { AmadeusPageShare, AmadeusSharedItem } from '../types'
 
@@ -302,7 +303,11 @@ export function PublicView(_: ViewProps) {
       const linkBase = r.linkBase || ''
       // 笔记在应用里打开:Web 上别的库切过去直达,桌面按同步映射找到当前库里的文件。
       const openPage = async (vaultId: string, path: string, localPath?: string): Promise<void> => {
-        if (!localPath && !window.amadeusSync && vaultId !== active) { collab.switchVault(vaultId, path); return }
+        if (!localPath && active && vaultId !== active) {
+          if (window.amadeusSync) useApp.getState().toast(t('publicview.pageMoved'))
+          else collab.switchVault(vaultId, path)
+          return
+        }
         const { vaultRoot, vaultSide } = usePageStore.getState()
         const target = localPath ?? localPathFor(useEntrySync.getState().vaults, vaultRoot, vaultSide, path)
         const { resolveDeepLink } = await import('../deepLinkInstall')
@@ -358,7 +363,7 @@ export function PublicView(_: ViewProps) {
         onOpen: () => void openPage(s.vaultId, s.path, s.localPath),
         removeIcon: 'leave' as const,
         removeTitle: t('publicview.leave'),
-        onRemove: s.shareId ? async () => { await collab.leaveShare(s.shareId!, s.vaultId); await loadCollab() } : undefined,
+        onRemove: s.shareId ? async () => { await collab.leaveShare(s.shareId!, s.vaultId); await refreshAfterLeave(s.vaultId); await loadCollab() } : undefined,
       })))
     } catch { setPubs([]); setShares([]); setExpired([]); setReceived([]) } finally { setCollabLoading(false) }
   }, [t])

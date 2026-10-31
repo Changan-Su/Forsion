@@ -84,7 +84,7 @@ import { ShareCard } from './components/ShareCard'
 import { ShareStatus } from './components/ShareStatus'
 import { tipProps, tipT, fsTipLines, type TipLines } from './hoverTip'
 import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry, cloudPathFor, localPathFor } from './stores/entrySyncStore'
-import { foreignVaultOwner, useSharedVault } from './stores/sharedVaultStore'
+import { foreignVaultOwner, refreshAfterLeave, useSharedVault } from './stores/sharedVaultStore'
 import { byExpiry, daysUntil } from './amadeus/lib/shareState'
 import type { AmadeusPageShare, AmadeusSharedItem } from './types'
 import { openCloudSyncDialog } from './components/CloudSyncDialog'
@@ -660,8 +660,12 @@ function SharedByMeSection() {
   }, [collab])
   if (!collab || shares.length + pubs.length === 0) return null
   const open = (vaultId: string, path: string, ev: RMouseEvent): void => {
+    if (activeVault && vaultId !== activeVault) {
+      if (window.amadeusSync) useApp.getState().toast(t('amxv.shared.otherVault'))
+      else collab.switchVault(vaultId, path)
+      return
+    }
     const { vaultRoot, vaultSide } = usePageStore.getState()
-    if (!window.amadeusSync && vaultId !== activeVault) { collab.switchVault(vaultId, path); return }
     const local = localPathFor(useEntrySync.getState().vaults, vaultRoot, vaultSide, path)
     if (local) void openNote(local, newTabOf(ev))
     else useApp.getState().toast(t('amxv.shared.otherVault'))
@@ -690,7 +694,6 @@ function SharedWithMeSection() {
   const collab = window.amadeusCollab
   const items = useSharedVault((s) => s.items)
   const activeVault = useSharedVault((s) => s.activeVault)
-  const ownVaults = useSharedVault((s) => s.ownVaults)
   const [ctx, setCtx] = useState<{ x: number; y: number; item: AmadeusSharedItem } | null>(null)
   useEffect(() => { void useSharedVault.getState().refresh() }, [collab])
   useEffect(() => {
@@ -710,9 +713,7 @@ function SharedWithMeSection() {
     if (!s.shareId || !window.confirm(t('amxv.shared.leaveConfirm', { title: s.title }))) return
     void collab.leaveShare(s.shareId, s.vaultId).then(async () => {
       useApp.getState().toast(t('amxv.shared.left'))
-      // 退的是正在看的库,而且那里没有别的共享了:回到自己的库,否则树是空的。
-      if (s.vaultId === activeVault && ownVaults[0] && !items.some((x) => x !== s && x.vaultId === s.vaultId)) collab.switchVault(ownVaults[0])
-      else await useSharedVault.getState().refresh()
+      await refreshAfterLeave(s.vaultId)
     }).catch(() => useApp.getState().toast(t('amxv.shared.leaveFailed'), true))
   }
   return (

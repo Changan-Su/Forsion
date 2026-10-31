@@ -31,6 +31,14 @@ export function foreignVaultOwner(s: Pick<SharedVaultState, 'items' | 'activeVau
   return s.items.find((it) => it.vaultId === s.activeVault) ?? null
 }
 
+/** 退出共享之后刷新;退的是正在看的库且那里没有别的共享了,回到自己的库,否则树是空的。 */
+export async function refreshAfterLeave(vaultId: string): Promise<void> {
+  const { activeVault, ownVaults, refresh } = useSharedVault.getState()
+  await refresh()
+  const foreign = vaultId === activeVault && !ownVaults.includes(vaultId)
+  if (foreign && ownVaults[0] && !useSharedVault.getState().items.some((it) => it.vaultId === vaultId)) window.amadeusCollab?.switchVault(ownVaults[0])
+}
+
 const stemPrefix = (path: string): string => `${path.replace(/\.md$/i, '')}.fd/`
 const covers = (root: string, path: string): boolean => path === root || path.startsWith(stemPrefix(root))
 

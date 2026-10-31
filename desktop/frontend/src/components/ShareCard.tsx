@@ -112,6 +112,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
   const [notOwner, setNotOwner] = useState(false)
   const [related, setRelated] = useState<{ items: AmadeusRelatedItem[]; subpages: number } | null>(null)
   const [fresh, setFresh] = useState<string[]>([])
+  const alongInFlight = useRef(new Set<string>())
 
   const refresh = (): void => {
     if (!alive.current || !collab || !path) return
@@ -179,10 +180,21 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
   }
 
   const toggleAlong = (item: AmadeusRelatedItem): void => {
+    // 同一项的请求不并发:后发先到时界面和服务端会对不上。
+    if (alongInFlight.current.has(item.path)) return
+    alongInFlight.current.add(item.path)
     const flip = (included: boolean): void => setRelated((r) => r && { ...r, items: r.items.map((i) => (i.path === item.path ? { ...i, included } : i)) })
     flip(!item.included)
     setFresh((list) => list.filter((p) => p !== item.path))
-    void collab.setShareItem(share!.id, item.path, !item.included).catch((e) => { if (alive.current) { flip(item.included); err(e, t('share.opFailed')) } })
+    void collab.setShareItem(share!.id, item.path, !item.included)
+      .catch(async (e) => {
+        if (!alive.current) return
+        flip(item.included)
+        // 文件刚被移动:清单已过时,按服务端的结果重画。
+        if ((e as { status?: number })?.status === 409) setRelated(await collab.relatedItems(share!.id).catch(() => null))
+        else err(e, t('share.opFailed'))
+      })
+      .finally(() => alongInFlight.current.delete(item.path))
   }
   const along = related ? [...related.items].sort((a, b) => Number(fresh.includes(b.path)) - Number(fresh.includes(a.path))) : []
   const left = share ? daysUntil(share.expiresAt) : null
