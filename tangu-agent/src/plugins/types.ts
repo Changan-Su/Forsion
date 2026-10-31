@@ -159,6 +159,8 @@ export interface TanguPluginContext {
    * 本机引擎才生效(云端 profile 不起通道)。停用插件时宿主完全停止该通道,绑定保留。kind 非法或撞名直接抛错(激活作废)。
    */
   registerChannel(spec: PluginChannelSpec): void;
+  /** 本引擎的通道管线认哪些字段。老引擎没有这个键,且会静默忽略 multiPeer —— 依赖它的插件要先判,不然 peer 全被拒。 */
+  channelCapabilities: { multiPeer: true; agentPin: true; sendApproval: true };
   /** 运行时构建块（按引用，见 `TanguSdk`）。 */
   sdk: TanguSdk;
   /** 带插件 id 前缀的日志。 */

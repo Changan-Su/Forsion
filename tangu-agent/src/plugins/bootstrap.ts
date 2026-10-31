@@ -220,8 +220,10 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       if (inst.activated) mountRoutes(id, inst);
     },
     registerChannel: (spec) => {
-      if (live('通道')) inst.runtimeDisposers.push(channelHub.registerChannel(spec)); // 停用时 stopEntry 跑 runtimeDisposers 摘掉
+      // owner 取发现目录(同 registerScopedRoutes),不信插件自报。停用时 stopEntry 跑 runtimeDisposers 摘掉。
+      if (live('通道')) inst.runtimeDisposers.push(channelHub.registerChannel(spec, { engine: id, bundle: d.bundled ? path.basename(path.dirname(path.dirname(d.dir))) : null }));
     },
+    channelCapabilities: { multiPeer: true, agentPin: true, sendApproval: true },
     sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
       automation: {
         ...automation,

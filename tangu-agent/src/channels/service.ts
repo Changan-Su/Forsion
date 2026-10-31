@@ -22,6 +22,7 @@
  *     发「停止」要等到任务出第一条回复才被读到)。
  */
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
@@ -35,14 +36,14 @@ import { remoteLocked } from '../services/remoteLock.js';
 import { resolveInquiry } from '../services/inquiries.js';
 import { patchSessionAgentConfig, readSessionSettings, requestRunThinking, setSessionModelId } from '../services/sessionSettings.js';
 import { chatModels, listModelCatalog } from '../services/modelCatalog.js';
-import { readAgentsMeta, listAgents, getAgent, agentCapOf } from '../agents/agentRegistry.js';
+import { readAgentsMeta, listAgents, getAgent, agentCapOf, isValidSlug } from '../agents/agentRegistry.js';
 import { resolveReplySegment, splitMessage, segmentDelayMs } from '../services/replySegment.js';
 import { resolveVoiceMessage, synthesizeVoiceWav, VOICE_MESSAGE_PLUGIN_ID } from '../services/voiceMessage.js';
 import { setPluginEnabled, setScopeSettings } from '../plugins/settingsStore.js';
 import { channelSettings, channelWorkspaceDir, saveChannelSettings } from './config.js';
 import { ChannelCommandCenter, normalizeChannelText, parseChannelCommand, stopReply, type ChannelCommandRuntime, type ChannelUsage } from './commands.js';
 import { CHANNEL_NAME, CHANNEL_REPLY_MAX, channelMsg, clipReply, resolveChannelLocale, type ChannelLocale } from './messages.js';
-import type { ApprovalMode, BuiltinChannelKind, ChannelDriver, ChannelInbound, ChannelKind, SendResult } from './types.js';
+import type { ApprovalMode, BuiltinChannelKind, ChannelApprovalAction, ChannelApprovalCard, ChannelApprovalOutcome, ChannelDriver, ChannelInbound, ChannelKind, SendResult } from './types.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const RUN_REPLY_TIMEOUT_MS = 180_000;
@@ -126,6 +127,10 @@ interface ApprovalPrompt extends PeerAddr {
    * 被限流丢了的卡用户没见过,随口一句「好」也会批掉它。
    */
   delivering?: boolean;
+  /** 驱动有 sendApproval:这张卡交给驱动显示,由 respond 兑现;文字消息不碰它(见 dispatchInbound 的两处判断)。 */
+  card?: ChannelApprovalCard;
+  /** 卡已交给驱动(排队没轮到的驱动没见过,结束时不用通知)。 */
+  offered?: boolean;
 }
 
 interface InquiryPrompt extends PeerAddr {
@@ -199,6 +204,8 @@ export interface ChannelServiceOpts {
    * TANGU_HOST_CLIENT 注入;显式值仅供其它宿主/测试注入。
    */
   hostClientTag?: string;
+  /** 每 peer 一条绑定 + 一个会话(PluginChannelSpec.multiPeer;内置通道不开)。 */
+  multiPeer?: boolean;
 }
 
 // 与 routes/runs.ts 的公开请求闸同形。这里读的是受信宿主 env,但仍收紧形状,
@@ -251,6 +258,9 @@ export function splitPreview(text: string, size = PREVIEW_PART_MAX): string[] {
   parts.push(rest);
   return parts;
 }
+
+/** 驱动钉的 Agent(ChannelInbound.agentSlug):写法不合法当没钉。isValidSlug 只在真钉了才调。 */
+const pinnedAgent = (slug: unknown): string | undefined => (typeof slug === 'string' && slug && isValidSlug(slug) ? slug : undefined);
 
 function previewHead(text: string): string {
   return text.length > PREVIEW_HEAD_MAX ? `${text.slice(0, PREVIEW_HEAD_MAX)}…` : text;
@@ -315,6 +325,7 @@ export class ChannelService {
     this.hostClientTag = normalizeChannelHostClientTag(opts.hostClientTag ?? process.env.TANGU_HOST_CLIENT);
   }
 
+  get multiPeer(): boolean { return this.opts.multiPeer === true; }
   settings() { return channelSettings(this.kind); }
   workspaceDir(): string { return channelWorkspaceDir(this.kind); }
   /** 本通道回复语言(设置手选 → TANGU_LOCALE → 系统 → 平台缺省)。每次现算:改设置即时生效。 */
@@ -323,6 +334,10 @@ export class ChannelService {
     const dir = this.workspaceDir();
     await fsp.mkdir(dir, { recursive: true }).catch(() => {});
     return dir;
+  }
+  /** multiPeer:每 peer 自己的工作目录(入站文件落在这里,别的 peer 的 run 用相对路径够不着)。peerId 由驱动编码,哈希后才进路径。 */
+  private peerWorkspaceDir(peerId: string): string {
+    return path.join(this.workspaceDir(), 'peers', createHash('sha256').update(peerId).digest('hex').slice(0, 16));
   }
   private peerKey(accountId: string, peerId: string): string { return `${accountId}:${peerId}`; }
 
@@ -402,6 +417,7 @@ export class ChannelService {
       if (p.kind === 'approval') {
         if (p.timer) clearTimeout(p.timer);
         resolveApproval(p.approvalId, { action: 'reject', rejectReason: APPROVAL_CHANNEL_STOPPED_REASON });
+        this.notifySettled(p, 'cancelled');
       } else {
         resolveInquiry(p.inquiryId, INQUIRY_CHANNEL_STOPPED_ANSWER);
       }
@@ -422,16 +438,18 @@ export class ChannelService {
     const approval = input.approvalMode || st.approvalMode;
     const modeChanged = !!input.approvalMode && input.approvalMode !== st.approvalMode;
     if (modeChanged) saveChannelSettings(this.kind, { approvalMode: approval });
-    const sessionId = await this.createChannelSession(input.userId, undefined, undefined);
+    // multiPeer 重复连接幂等:已有绑定都留着(换凭据不能把别的 peer 断开),没有才建一条等第一个 peer 接手。
+    const kept = this.multiPeer ? await this.accountBinding(input.userId, input.accountId) : null;
+    const sessionId = kept?.session_id ?? await this.createChannelSession(input.userId, undefined, undefined);
     await query(
       `INSERT INTO tangu_wechat_accounts (id, user_id, wx_user_id, channel, status, created_at, updated_at)
        VALUES (?, ?, ?, ?, 'active', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
        ON CONFLICT (id) DO UPDATE SET status = 'active', wx_user_id = ?, channel = ?, updated_at = CURRENT_TIMESTAMP`,
       [input.accountId, input.userId, input.label || null, this.kind, input.label || null, this.kind],
     );
-    // 单活跃绑定不变式:每 (用户, 通道) 同一时刻只有一个 is_active 绑定。
-    await query(`UPDATE tangu_wechat_bindings SET is_active = FALSE WHERE user_id = ? AND channel = ?`, [input.userId, this.kind]);
-    await query(
+    // 单活跃绑定不变式:每 (用户, 通道) 同一时刻只有一个 is_active 绑定。multiPeer 没有这条不变式。
+    if (!this.multiPeer) await query(`UPDATE tangu_wechat_bindings SET is_active = FALSE WHERE user_id = ? AND channel = ?`, [input.userId, this.kind]);
+    if (!kept) await query(
       `INSERT INTO tangu_wechat_bindings (id, user_id, channel, account_id, peer_id, session_id, remote_approval_mode, is_active, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [uuidv4(), input.userId, this.kind, input.accountId, input.peerId || null, sessionId, approval],
@@ -495,7 +513,15 @@ export class ChannelService {
     return (rows[0] as BindingRow) || null;
   }
 
-  private async findBinding(accountId: string, peerId: string): Promise<BindingRow | null> {
+  private async accountBinding(userId: string, accountId: string): Promise<BindingRow | null> {
+    const rows = await query<any[]>(
+      `SELECT * FROM tangu_wechat_bindings WHERE user_id = ? AND channel = ? AND account_id = ? AND is_active = TRUE ORDER BY updated_at DESC LIMIT 1`,
+      [userId, this.kind, accountId],
+    );
+    return (rows[0] as BindingRow) || null;
+  }
+
+  private async findBinding(accountId: string, peerId: string, agentSlug: string | undefined, gone: () => boolean): Promise<BindingRow | null> {
     const exact = await query<any[]>(
       `SELECT * FROM tangu_wechat_bindings
        WHERE channel = ? AND account_id = ? AND peer_id = ? AND is_active = TRUE
@@ -510,6 +536,7 @@ export class ChannelService {
       [this.kind, accountId],
     );
     const b = fallback[0] as BindingRow | undefined;
+    if (this.multiPeer) return b ? this.bindPeer(b, peerId, agentSlug, gone) : null;
     if (b && !b.peer_id) {
       // 未绑定联系人的 binding:收第一个发消息的 peer 作为其专属联系人(TOFU)。
       await query(`UPDATE tangu_wechat_bindings SET peer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [peerId, b.id]);
@@ -520,10 +547,36 @@ export class ChannelService {
     return null;
   }
 
+  /**
+   * multiPeer:已连接账号上的新 peer 开自己的绑定 + 会话 + 工作目录。第一个 peer 接手连接时建的那条空绑定,之后各开各的。
+   * 账号没连接(查不到活跃绑定)不到这里,照旧回「未绑定」。在 findBinding 的账号锁里跑,同一 peer 并发两条也只开一次。
+   * gone:建会话期间账号断开 / 通道停止,就不再写绑定(断开已作废全部绑定,这条写进去就成了复活)。
+   */
+  private async bindPeer(known: BindingRow, peerId: string, agentSlug: string | undefined, gone: () => boolean): Promise<BindingRow | null> {
+    const cwd = this.peerWorkspaceDir(peerId);
+    if (!known.peer_id) {
+      await fsp.mkdir(cwd, { recursive: true }).catch(() => {});
+      await patchSessionAgentConfig(known.session_id, { cwd });
+      if (gone()) return null;
+      await query(`UPDATE tangu_wechat_bindings SET peer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, [peerId, known.id]);
+      return { ...known, peer_id: peerId };
+    }
+    const sessionId = await this.createChannelSession(known.user_id, undefined, undefined, { cwd, agentSlug });
+    if (gone()) return null;
+    const id = uuidv4();
+    await query(
+      `INSERT INTO tangu_wechat_bindings (id, user_id, channel, account_id, peer_id, session_id, remote_approval_mode, is_active, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, TRUE, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [id, known.user_id, this.kind, known.account_id, peerId, sessionId, known.remote_approval_mode],
+    );
+    return { ...known, id, peer_id: peerId, session_id: sessionId };
+  }
+
   /** 在通道工作区新建会话并盖上通道默认(Agent/LLM/画图模型/审批)。 */
-  async createChannelSession(userId: string, modelId?: string, title?: string): Promise<string> {
+  async createChannelSession(userId: string, modelId?: string, title?: string, peer?: { cwd: string; agentSlug?: string }): Promise<string> {
     const st = this.settings();
     const ws = await this.ensureWorkspaceDir();
+    if (peer) await fsp.mkdir(peer.cwd, { recursive: true }).catch(() => {});
     const profile = deps().profile;
     const mid = modelId || st.modelId || profile.defaultModelId || '';
     const id = uuidv4();
@@ -533,8 +586,8 @@ export class ChannelService {
     const cfg: any = {
       execMode: 'host',
       approvalMode: st.approvalMode,
-      cwd: ws,
-      agentSlug: st.agentSlug || readAgentsMeta().defaultSlug,
+      cwd: peer?.cwd ?? ws,
+      agentSlug: pinnedAgent(peer?.agentSlug) || st.agentSlug || readAgentsMeta().defaultSlug,
     };
     if (st.imageModelId) cfg.imageModelId = st.imageModelId;
     await deps().state.setAgentConfig(id, JSON.stringify(cfg));
@@ -582,6 +635,8 @@ export class ChannelService {
     sessionId: string,
     guard?: { stale?: () => boolean; binding?: { id: string; account_id: string; peer_id: string | null } },
   ): Promise<{ ok: boolean }> {
+    // 没带 binding 的 UPDATE 按「用户 + 通道」改:multiPeer 下会把所有 peer 指到同一个会话。
+    if (this.multiPeer && !guard?.binding) throw new Error('This channel keeps one session per contact, so its connected session cannot be switched.');
     const stale = guard?.stale;
     const rows = await query<any[]>(`SELECT agent_config, project_path FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]);
     const s = rows[0];
@@ -640,6 +695,8 @@ export class ChannelService {
 
   /** 给该用户当前活跃绑定的 peer 发一条文本(收件箱转发等主动推送用)。 */
   async sendToOwner(userId: string, text: string): Promise<SendResult> {
+    // 最新的绑定只是最后说话的 peer,不是主人:用户的收件箱不能发给它。
+    if (this.multiPeer) return { ok: false, error: 'a multi-peer channel has no owner peer' };
     const b = await this.activeBinding(userId);
     if (!b) return { ok: false, error: 'no active binding' };
     if (!b.peer_id) return { ok: false, error: 'peer not established yet' };
@@ -722,7 +779,7 @@ export class ChannelService {
     // 按账号串行:receive 只按 peer 串行,两个不同 peer 同时给一个还没认主的绑定发消息,不锁的话两边都读到 peer_id 为空、
     // 都认领成功(TOFU 竞态,peer 隔离失守)。旧版整条轮询串行,碰巧没这个窗口(QQ 本来就有)。
     // 锁内先看代数:排在锁上等的旧入站(别的 peer 的查绑定挡着时账号断开、又重新扫码接入),轮到时不许认领新一代那个还没认主的绑定。
-    const binding = await withKeyLock(`channel-binding:${this.kind}:${msg.accountId}`, () => (channelGone() ? Promise.resolve(null) : this.findBinding(msg.accountId, msg.peerId)));
+    const binding = await withKeyLock(`channel-binding:${this.kind}:${msg.accountId}`, () => (channelGone() ? Promise.resolve(null) : this.findBinding(msg.accountId, msg.peerId, msg.agentSlug, channelGone)));
     // 查绑定期间通道停止 / 账号断开(停用再启用也算:epoch 已变,service 实例常驻)= 这条是上一代的入站:整条作废、零副作用
     // (回 '',连「未绑定」也不往重启后的驱动 / 已移除的账号说)。否则它会拿新一代的状态办事 —— 兑现重启后的新队首审批卡、
     // 停掉新一代的 run、迟到执行 /new /model 与数字选模型。这里到 stop / 批准拒绝 / 询问作答之间没有 await,查这一处即覆盖;
@@ -734,7 +791,9 @@ export class ChannelService {
     // Channel Session 关闭时不驱动 agent 会话(收件箱转发独立于此,仍可能在推送)。
     if (!this.settings().sessions) return channelMsg(L, 'sessionsOff');
 
-    const cmd = parseChannelCommand(text);
+    const parsed = parseChannelCommand(text);
+    // multiPeer 的 peer 不是通道主人:/resume 能切进别的 peer 的会话,/model /voice 写的是全通道设置。只留作用于自己的 /stop,其余当普通消息。
+    const cmd = this.multiPeer && parsed?.name !== '/stop' ? null : parsed;
     // 停止:裸关键词与 /stop 同一条路(旧版 /stop 落进「未知命令」)。
     if (STOP_RE.test(text) || cmd?.name === '/stop') return stopReply(L, this.stopPeer(key));
 
@@ -745,7 +804,7 @@ export class ChannelService {
     // 通道内审批:队首是审批卡时,「批准/拒绝」直接兑现它(无需回桌面)。命令照常执行,不动卡片。
     // 下面几步必须同步连着做:先摘卡再兑现(resolveApproval 会广播 approval_result,订阅者见卡已摘掉,不会当成「别处代答」);
     // 回复出口要在 run 的下一个事件之前挂上(run 在兑现后的微任务里才继续,同步挂上即赶得上)。
-    if (head?.kind === 'approval' && isVerdict) {
+    if (head?.kind === 'approval' && !head.card && isVerdict) {
       const approve = APPROVE_RE.test(text);
       // 卡还没全部确认送达(单条卡也算:可能还没到、或已被限流丢了):不批(用户可能只看到了前几条,甚至一条都没看到),
       // 卡片原样留着、不记作废;「拒绝」任何时候都安全,照常兑现。
@@ -809,7 +868,7 @@ export class ChannelService {
     // (旧版拒绝后没人再订阅,旧 run 的收尾回复就丢了)。排在它后面的卡接着显示 —— 用户还没见过它们,不替他放弃。
     // 上面有 await:只在这条消息到达时看到的那张卡仍是队首时才放弃它(这期间它可能已超时 / 被桌面答掉,换上来的新卡用户还没看到)。
     const stale = this.prompts.get(key)?.[0];
-    if (stale && stale === head && stale.kind === 'approval') {
+    if (stale && stale === head && stale.kind === 'approval' && !stale.card) {
       this.takeHead(key);
       const ok = resolveApproval(stale.approvalId, { action: 'reject', rejectReason: APPROVAL_SUPERSEDED_REASON });
       this.afterHeadGone(key, stale, false);
@@ -831,8 +890,8 @@ export class ChannelService {
       approvalMode: channelRunApprovalMode(st.approvalMode, binding),
       // host 执行需要真实 cwd:优先会话已存 cwd,其次 project_path,最后兜底通道工作区。
       cwd: currentCfg.cwd || session.project_path || this.workspaceDir(),
-      // 会话已选 agent 则用之,否则通道默认 agent,再兜底用户全局默认 agent。
-      agentSlug: currentCfg.agentSlug || st.agentSlug || readAgentsMeta().defaultSlug,
+      // 驱动钉了就用它(agentLoop 写穿回会话存值);否则会话已选 agent,否则通道默认 agent,再兜底用户全局默认 agent。
+      agentSlug: pinnedAgent(msg.agentSlug) || currentCfg.agentSlug || st.agentSlug || readAgentsMeta().defaultSlug,
     };
     if (!agentConfig.imageModelId && st.imageModelId) agentConfig.imageModelId = st.imageModelId;
     // 入站文件 → 落盘到会话工作区 <channel>-inbox/,把相对路径写进消息(host 工具可直接读;给模型看的,英文)。
@@ -893,7 +952,11 @@ export class ChannelService {
       abortRun(id, { byUser: true }); // 在跑的走 AbortController;排队的出队并补终态(agentLoop.abortRun 两种都认)
     }
     // 卡片都属于这个 peer 的 run(刚全停了):审批 / 询问的 resolver 随 abort 信号释放,这里只摘表、清计时器。
-    for (const p of this.prompts.get(key) ?? []) if (p.kind === 'approval' && p.timer) clearTimeout(p.timer);
+    for (const p of this.prompts.get(key) ?? []) {
+      if (p.kind !== 'approval') continue;
+      if (p.timer) clearTimeout(p.timer);
+      this.notifySettled(p, 'cancelled');
+    }
     this.prompts.delete(key);
     return ids.length;
   }
@@ -932,12 +995,15 @@ export class ChannelService {
         const preview = p.name && p.arguments != null
           ? deferredPreview({ id: approvalId, type: 'function', function: { name: String(p.name), arguments: String(p.arguments) } } as any, summary)
           : summary;
-        // 分条也放不下:不在通道里批。requestApproval 先登记 resolver 再广播,这里同步兑现是安全的。
-        if (splitPreview(preview).length > APPROVAL_CARD_MAX_PARTS) {
+        // 分条也放不下:不在通道里批。requestApproval 先登记 resolver 再广播,这里同步兑现是安全的。结构化卡没有条数上限,驱动拿到的是全文。
+        if (!this.driver.sendApproval && splitPreview(preview).length > APPROVAL_CARD_MAX_PARTS) {
           this.refuseTooLong(st, approvalId, preview);
           return;
         }
-        this.enqueuePrompt({ kind: 'approval', ...st.addr, runId: st.runId, approvalId, preview, localOnly: p.localOnly === true, approvalRunId: String(p.runId || st.runId) });
+        const card: ChannelApprovalCard | undefined = this.driver.sendApproval
+          ? { approvalId, runId: st.runId, toolName: String(p.name || ''), arguments: p.arguments == null ? '' : String(p.arguments), preview, localOnly: p.localOnly === true }
+          : undefined;
+        this.enqueuePrompt({ kind: 'approval', ...st.addr, runId: st.runId, approvalId, preview, localOnly: p.localOnly === true, approvalRunId: String(p.runId || st.runId), ...(card ? { card } : {}) });
         return;
       }
       case 'inquiry_request': {
@@ -949,7 +1015,7 @@ export class ChannelService {
       }
       // 兑现广播:通道自己兑现的,兑现前已摘掉卡片(这里找不到,忽略);还在表里 = 桌面端 / 别处代答了。
       case 'approval_result':
-        this.settledElsewhere(st, (q) => q.kind === 'approval' && q.approvalId === p.approvalId);
+        this.settledElsewhere(st, (q) => q.kind === 'approval' && q.approvalId === p.approvalId, p.action === 'reject' ? 'rejected' : 'approved');
         return;
       case 'inquiry_result':
         this.settledElsewhere(st, (q) => q.kind === 'inquiry' && q.inquiryId === p.inquiryId);
@@ -970,7 +1036,11 @@ export class ChannelService {
     const q = this.prompts.get(key) ?? [];
     const shown = q[0]?.runId === st.runId ? q[0] : undefined;
     const rest = q.filter((x) => x.runId !== st.runId);
-    for (const x of q) if (x.runId === st.runId && x.kind === 'approval' && x.timer) clearTimeout(x.timer);
+    for (const x of q) {
+      if (x.runId !== st.runId || x.kind !== 'approval') continue;
+      if (x.timer) clearTimeout(x.timer);
+      this.notifySettled(x, 'cancelled');
+    }
     if (rest.length) this.prompts.set(key, rest);
     else this.prompts.delete(key);
 
@@ -1085,6 +1155,7 @@ export class ChannelService {
    * 单条询问卡且有出口:经出口回(回给触发它的入站消息);审批卡(不论几条)与多条询问卡:全部按序主动推送。
    */
   private showPrompt(p: Prompt): void {
+    if (p.kind === 'approval' && p.card) { this.offerCard(p, p.card); return; }
     const L = this.locale();
     const more = (this.prompts.get(p.key)?.length ?? 1) - 1;
     const queued = more > 0 ? `\n\n${channelMsg(L, 'promptsQueued', { n: more })}` : '';
@@ -1115,6 +1186,50 @@ export class ChannelService {
     void Promise.all(sends).then((oks) => { if (oks.every(Boolean)) p.delivering = false; });
   }
 
+  /** 结构化审批卡:显示 = 交给驱动。起算超时、摘出口、送达闸都与文字审批卡相同。 */
+  private offerCard(p: ApprovalPrompt, card: ChannelApprovalCard): void {
+    p.timer = setTimeout(() => this.onApprovalTimeout(p), CHANNEL_APPROVAL_TIMEOUT_MS);
+    p.timer.unref?.();
+    this.runs.get(p.runId)?.sink?.close();
+    p.delivering = true;
+    p.offered = true;
+    void new Promise<SendResult>((resolve) => resolve(this.driver.sendApproval!(p.accountId, p.peerId, card, (action) => this.answerCard(p, action))))
+      .then((r) => {
+        if (!r?.ok) console.warn(`[${this.kind}-channel] 审批卡发送失败:`, r?.error);
+        return !!r?.ok;
+      }, (e: any) => {
+        console.warn(`[${this.kind}-channel] 审批卡发送失败:`, e?.message || e);
+        return false;
+      })
+      .then((ok) => { if (ok) p.delivering = false; else this.onApprovalUndelivered(p); });
+  }
+
+  /** respond 的落点:只认仍在显示的这张。批准的三道闸与文字卡同口径,拒绝任何时候都行。 */
+  private answerCard(p: ApprovalPrompt, action: ChannelApprovalAction): boolean {
+    if (this.prompts.get(p.key)?.[0] !== p) return false;
+    if (action === 'approve' && (p.delivering || lockedNow() || p.localOnly || approvalLocalOnly(p.approvalId, p.approvalRunId ?? p.runId))) return false;
+    this.takeHead(p.key);
+    const ok = resolveApproval(p.approvalId, { action }, undefined, { via: 'channel' });
+    this.afterHeadGone(p.key, p, false);
+    const st = this.runs.get(p.runId);
+    if (ok && st) this.resumeIfIdle(st);
+    if (!ok) this.notifySettled(p, 'cancelled'); // 卡其实已经结束了:respond 回 false,驱动也得能收卡
+    return ok;
+  }
+
+  /** 告诉驱动这张交出去的卡结束了。驱动的错不影响管线。 */
+  private notifySettled(p: ApprovalPrompt, outcome: ChannelApprovalOutcome): void {
+    if (!p.card || !p.offered || !this.driver.settleApproval) return;
+    void new Promise<void>((resolve) => resolve(this.driver.settleApproval!(p.accountId, p.peerId, p.approvalId, outcome) as void))
+      .catch((e: any) => console.warn(`[${this.kind}-channel] 收审批卡失败:`, e?.message || e));
+  }
+
+  /** 卡片因超时 / 没送达结束时的告知:有 settleApproval 的驱动自己收卡写文案,否则照旧发文字(ok = 真的是这次兑现的)。 */
+  private tellCardEnded(p: ApprovalPrompt, ok: boolean, outcome: ChannelApprovalOutcome, text: () => string): void {
+    if (p.card && this.driver.settleApproval) this.notifySettled(p, ok ? outcome : 'cancelled');
+    else if (ok) this.push(p.accountId, p.peerId, text());
+  }
+
   /**
    * 审批卡(一律经主动推送发出)有条没送达(单条卡即整张):它若仍在显示、没人答,按「没发全」拒绝(给模型的原因写清),
    * 通知用户,换下一张卡。
@@ -1128,7 +1243,7 @@ export class ChannelService {
     if (this.prompts.get(p.key)?.[0] !== p) return;
     this.takeHead(p.key);
     const ok = resolveApproval(p.approvalId, { action: 'reject', rejectReason: APPROVAL_DELIVERY_FAILED_REASON });
-    if (ok) this.push(p.accountId, p.peerId, channelMsg(this.locale(), 'approvalDeliveryFailed', { head: previewHead(p.preview) }));
+    this.tellCardEnded(p, ok, 'undelivered', () => channelMsg(this.locale(), 'approvalDeliveryFailed', { head: previewHead(p.preview) }));
     this.afterHeadGone(p.key, p, true);
     const st = this.runs.get(p.runId);
     if (ok && st) this.resumeIfIdle(st);
@@ -1149,17 +1264,20 @@ export class ChannelService {
     const q = this.prompts.get(key);
     if (q?.length) { this.showPrompt(q[0]); return; }
     this.prompts.delete(key);
-    if (markExpired && gone.kind === 'approval') this.expiredApprovalAt.set(key, Date.now());
+    if (markExpired && gone.kind === 'approval' && !gone.card) this.expiredApprovalAt.set(key, Date.now()); // 结构化卡不靠文字答,迟到的「好」就是普通消息
   }
 
   /** 卡片在桌面端 / 别处被答掉了:从队列摘掉;若正显示着,换下一张;run 若不再等任何显示中的卡,重挂出口接着推结果。 */
-  private settledElsewhere(st: RunState, match: (p: Prompt) => boolean): void {
+  private settledElsewhere(st: RunState, match: (p: Prompt) => boolean, outcome?: ChannelApprovalOutcome): void {
     const key = st.addr.key;
     const q = this.prompts.get(key);
     const i = q ? q.findIndex(match) : -1;
     if (!q || i < 0) return;
     const [p] = q.splice(i, 1);
-    if (p.kind === 'approval' && p.timer) clearTimeout(p.timer);
+    if (p.kind === 'approval') {
+      if (p.timer) clearTimeout(p.timer);
+      this.notifySettled(p, outcome ?? 'cancelled');
+    }
     if (i === 0) this.afterHeadGone(key, p, true);
     this.resumeIfIdle(st);
   }
@@ -1172,7 +1290,7 @@ export class ChannelService {
     p.timer = undefined;
     // 先摘再兑现:resolveApproval 会广播 approval_result,订阅者见卡已摘掉,不当「别处代答」。
     const ok = resolveApproval(p.approvalId, { action: 'reject', rejectReason: APPROVAL_TIMEOUT_REASON });
-    if (ok) this.push(p.accountId, p.peerId, channelMsg(this.locale(), 'approvalTimedOut', { minutes: APPROVAL_TIMEOUT_MIN, preview: previewHead(p.preview) }));
+    this.tellCardEnded(p, ok, 'timeout', () => channelMsg(this.locale(), 'approvalTimedOut', { minutes: APPROVAL_TIMEOUT_MIN, preview: previewHead(p.preview) }));
     this.afterHeadGone(p.key, p, true);
     const st = this.runs.get(p.runId);
     if (ok && st) this.resumeIfIdle(st);
