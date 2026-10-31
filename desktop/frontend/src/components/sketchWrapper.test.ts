@@ -11,8 +11,13 @@ vi.mock('./sketch.css?raw', async () => ({
 import { buildSketchDoc, SKETCH_CSP, SKETCH_SANDBOX, SKETCH_STATIC_VARS, SKETCH_VARS } from './sketchWrapper'
 
 describe('sketch 包装器安全不变式', () => {
-  it('sandbox 恒为仅 allow-scripts(绝不 allow-same-origin/forms/popups)', () => {
-    expect(SKETCH_SANDBOX).toBe('allow-scripts')
+  it('sandbox 恒为 allow-scripts + allow-forms(绝不 allow-same-origin/popups/top-navigation)', () => {
+    expect(SKETCH_SANDBOX).toBe('allow-scripts allow-forms')
+  })
+
+  it('allow-forms 必须配 form-action none(default-src 管不到 form-action)', () => {
+    expect(SKETCH_SANDBOX.split(' ')).toContain('allow-forms')
+    expect(SKETCH_CSP.split('; ')).toContain("form-action 'none'")
   })
 
   it('内层 CSP 收口网络且不给 eval', () => {

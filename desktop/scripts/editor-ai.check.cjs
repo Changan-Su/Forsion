@@ -18,7 +18,7 @@
 //       锁定 / 只读 → 按钮 aria-disabled、点了给说明、零写入;源码模式 → 不接、提示;
 //       一篇 v4 笔记都没开 → 按钮不出现(用户 09-29 拍板),实例挂上 / 卸下随之出现 / 消失;
 //       F8(Codex 复核 P1)插入后在画布里改了形状颜色(只在 frontmatter、文档不变)→ 回执撤销拒撤,颜色与回答都在。
-//   G = 对标 ChatGPT Space(2026-10-01):笔记里的 ```forsion-sketch 交互块按对话 sketch 卡同一沙箱渲染(只 allow-scripts、
+//   G = 对标 ChatGPT Space(2026-10-01):笔记里的 ```forsion-sketch 交互块按对话 sketch 卡同一沙箱渲染(只 allow-scripts allow-forms、
 //       代码块工具条收掉、打开不写盘);对话 sketch 卡「插入笔记」→ 围栏落盘 + 笔记里出卡;整段对话「整理成笔记」→
 //       complete 收到对话记录 + 指令,新建以模型一级标题命名的笔记(标题剥出正文)、重名加 -2、没有 complete 时入口不出现。
 //   H = 划线条(2026-10-13):工具栏 = 本视图的工具 + 动作区(问 Tangu、翻译、⋯ 里的插件动作);翻译进同一张预览卡、
@@ -1049,7 +1049,7 @@ async function groupF(browser) {
 async function groupG(browser) {
   const SK = '<b id="sk">交互</b><script>document.getElementById("sk").textContent = "已运行"</script>'
   const md = '# 标题\n\n第一段。\n\n```forsion-sketch\n' + SK + '\n```\n'
-  // G1 笔记里的交互块:嵌入层渲成 sketch 卡(沙箱只 allow-scripts)、源码与代码块工具条都不露、打开零写入
+  // G1 笔记里的交互块:嵌入层渲成 sketch 卡(沙箱只 allow-scripts allow-forms)、源码与代码块工具条都不露、打开零写入
   {
     const page = await openF(browser, md)
     await page.waitForSelector('.unified-body .unified-embed .sketch-frame', { timeout: 8000 }).catch(() => {})
@@ -1059,8 +1059,8 @@ async function groupG(browser) {
       const tools = host?.querySelector(':scope > .amx-code-tools')
       return { sandbox: f?.getAttribute('sandbox'), tools: tools ? getComputedStyle(tools).display : 'absent', writes: window.__upage.writes?.length ?? 0 }
     })
-    check('G1 ```forsion-sketch → sketch 卡(sandbox=allow-scripts),代码块工具条收掉,打开零写入',
-      st.sandbox === 'allow-scripts' && (st.tools === 'none' || st.tools === 'absent') && st.writes === 0 && (await vault(page)) === md, JSON.stringify(st))
+    check('G1 ```forsion-sketch → sketch 卡(sandbox=allow-scripts allow-forms),代码块工具条收掉,打开零写入',
+      st.sandbox === 'allow-scripts allow-forms' && (st.tools === 'none' || st.tools === 'absent') && st.writes === 0 && (await vault(page)) === md, JSON.stringify(st))
     await page.close()
   }
   // G2 对话 sketch 卡「插入笔记」→ 围栏原样落盘(HTML 里的 \\( 不被公式归一改写),笔记里随即出卡
