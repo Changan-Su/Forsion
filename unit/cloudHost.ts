@@ -98,6 +98,7 @@ export function createConfigStore(home: string, currentAccount: () => string | n
   }
   return {
     read,
+    readable: () => readJson(file).state !== 'unknown',
     write: (patch: Partial<AmadeusConfig>, account = currentAccount()) => { const copy = structuredClone(patch); return enqueue(async () => persist(copy, account)) },
     update: (change: (config: AmadeusConfig) => boolean | void | Promise<boolean | void>, account = currentAccount()) => enqueue(async () => {
       const config = await read(account)
@@ -115,7 +116,8 @@ export function boundVaultRoot(file: string, root: string, account: string, sync
   if (saved.state === 'unknown') return false
   // The root is part of the decision: pointing the workspace elsewhere must not publish that folder.
   if (saved.value) return saved.value.account === account && saved.value.root === root
-  if (!syncVault && readdirSync(root).some((name) => !name.startsWith('.'))) return false
+  // Extend syncs hidden files too, so only Finder's marker still counts as empty.
+  if (!syncVault && readdirSync(root).some((name) => name !== '.DS_Store')) return false
   writePrivateJson(file, { account, root })
   return true
 }
@@ -207,7 +209,17 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
   }
 
   const stopSync = () => amadeus?.stopAllSync()
-  const restartSync = () => (o.vault() && !closed ? amadeus?.restartAllSync() : undefined)
+  // Extend starts its engines without awaiting them: an unreadable config would reject with nobody listening and end the whole Unit.
+  const syncable = () => {
+    if (config.readable()) return true
+    log('[unit-cloud] amadeus-config.json is unreadable; sync stays off until the owner repairs it')
+    return false
+  }
+  const restartSync = async () => {
+    if (!o.vault() || closed) return
+    if (syncable()) await amadeus?.restartAllSync()
+    else await stopSync()
+  }
   const accounts = createAccountCore({
     loadCreds: creds.load, saveCreds: creds.save, saveConfig: async () => undefined, loadConfig: async () => ({}), ensureBackend: async () => {},
     refreshUnitHost: refreshHub, renderers: () => [], events: { on() {}, removeListener() {} },
@@ -324,7 +336,7 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
       if (!vault) { await stopSync(); return }
       if (hooks) vault.setMutationHooks(...hooks)
       if (amadeus) await restartSync()
-      else if (syncFactory) { amadeus = syncFactory(syncDeps); amadeus.start() }
+      else if (syncFactory) { amadeus = syncFactory(syncDeps); if (syncable()) amadeus.start() }
     },
     close: async () => {
       closed = true

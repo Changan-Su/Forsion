@@ -270,6 +270,10 @@ export function attachmentDisposition(name: string): string {
 const isLoopback = (addr: string | undefined): boolean =>
   addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
 
+/** 本机连本机:绑在具体局域网地址上时,隧道只能走那个地址,对端不是回环,两端地址相同。 */
+const isSelf = (socket: { remoteAddress?: string; localAddress?: string }): boolean =>
+  isLoopback(socket.remoteAddress) || (!!socket.remoteAddress && socket.remoteAddress === socket.localAddress)
+
 /** 内部密钥头比对(定长比较;缺头 / 多值头 / 长度不符一律不等)。 */
 const secretEq = (got: string | string[] | undefined, want: string): boolean => {
   if (typeof got !== 'string' || !want) return false
@@ -327,10 +331,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     gcSeenCallers(seenCallerDispatch, now)
   }
 
-  /** 鉴权:配对令牌(hash 比对)或「loopback + 内部密钥」(隧道 / P2P 各一把,server 已验 owner / 信令来路背书)。
+  /** 鉴权:配对令牌(hash 比对)或「本机连接 + 内部密钥」(隧道 / P2P 各一把,server 已验 owner / 信令来路背书)。
    *  返回来路:via=哪条通路;pairHash=命中的配对记录(回收后再验即失败;隧道与 P2P 为 null)。 */
   const authInfo = (req: http.IncomingMessage): { ok: boolean; pairHash: string | null; via: UnitIngress | null } => {
-    if (isLoopback(req.socket.remoteAddress)) {
+    if (isSelf(req.socket)) {
       if (secretEq(req.headers[UNIT_INTERNAL_HEADER], internalSecret)) return { ok: true, pairHash: null, via: 'tunnel' }
       if (secretEq(req.headers[UNIT_P2P_HEADER], p2pSecret)) return { ok: true, pairHash: null, via: 'p2p' }
     }

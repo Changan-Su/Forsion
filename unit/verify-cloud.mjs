@@ -156,6 +156,17 @@ try {
   const after = (await hub('/units')).json?.units ?? []
   check('a restart adds no device row', after.length === roster.length, `${after.length}`)
 
+  await b.stop()
+  const configFile = join(dirname(b.config), 'data/cloud/amadeus-config.json'), goodConfig = readFileSync(configFile)
+  writeFileSync(configFile, '{ damaged')
+  await b.start()
+  await delay(3000)
+  check('a damaged sync config leaves the Unit running', b.child.exitCode === null && (await b.account()).loggedIn)
+  check('a damaged sync config is left untouched', readFileSync(configFile, 'utf8') === '{ damaged')
+  await b.stop()
+  writeFileSync(configFile, goodConfig, { mode: 0o600 })
+  await b.start()
+
   const refused = await a.login().then(() => false, () => true)
   check('a second sign-in is refused while signed in', refused)
   const authFile = join(dirname(a.config), 'data/cloud/auth.json'), saved = readFileSync(authFile)

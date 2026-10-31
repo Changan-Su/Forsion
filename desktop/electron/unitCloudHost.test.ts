@@ -91,7 +91,12 @@ describe('Unit vault as a cloud mirror', () => {
     expect(boundVaultRoot(marker(), vault(), 'a', true)).toBe(true)
   })
 
-  it('ignores hidden files when judging empty, and refuses when ownership is unknown', async () => {
+  it('counts hidden notes as content, because the sync engine uploads them', async () => {
+    await writeFile(join(vault(), '.secret.md'), 'private')
+    expect(boundVaultRoot(marker(), vault(), 'a', false)).toBe(false)
+  })
+
+  it('ignores the Finder marker when judging empty, and refuses when ownership is unknown', async () => {
     await writeFile(join(vault(), '.DS_Store'), '')
     await writeFile(marker(), '{"account":')
     expect(boundVaultRoot(marker(), vault(), 'a', true)).toBe(false)

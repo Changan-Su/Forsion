@@ -330,6 +330,16 @@ describe('unitWeb', () => {
     } finally { b.close() }
   })
 
+  const lanAddress = Object.values(networkInterfaces()).flat().find((n) => n && n.family === 'IPv4' && !n.internal)?.address
+  it.skipIf(!lanAddress)('绑在具体局域网地址上时,本机隧道仍能用内部密钥进来', async () => {
+    const b = await boot(null, undefined, undefined, undefined, lanAddress)
+    try {
+      const url = `http://${lanAddress}:${b.handle.port}/unit/spaces`
+      expect((await fetch(url, { headers: { 'x-unit-internal': b.handle.internalSecret } })).status).toBe(200)
+      expect((await fetch(url, { headers: { 'x-unit-internal': 'wrong' } })).status).toBe(401)
+    } finally { b.close() }
+  })
+
   it('/unit/spaces:未配对 401;配对后返回 Space 配方清单(设备页 Ribbon 的数据源)', async () => {
     const b = await boot()
     try {
