@@ -337,6 +337,15 @@ export function dropIntoRow(
   return { ids: out, pins: nextPins }
 }
 
+/** 把 `from` 挪到 `over` 的前面或后面。(over, after) 定了结果就定了,算几次都一样 ——
+ *  方向由调用方按指针判,不按当前先后判:后者对同一目标连算两次是 AB→BA→AB,拖动中布局来回翻的根因之一。 */
+export function moveBeside(seq: string[], from: string, over: string, after: boolean): string[] {
+  if (from === over || !seq.includes(from) || !seq.includes(over)) return seq
+  const next = seq.filter((id) => id !== from)
+  next.splice(next.indexOf(over) + (after ? 1 : 0), 0, from)
+  return next
+}
+
 /** 下一个可用的行号:与任何现存行都不相等即可(同值才算同行,单调性不是契约)。 */
 export function nextPinRow(pins: Dash3Pins): number {
   return Object.values(pins).reduce((m, p) => Math.max(m, p.row + 1), 0) % (DASH3_MAX_ORDER + 1)

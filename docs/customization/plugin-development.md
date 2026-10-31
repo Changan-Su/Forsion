@@ -10,6 +10,8 @@ description: 给 Forsion 写桌面插件与引擎插件：布局、列表源、�
 
 插件用 JavaScript / TypeScript 编写,官方提供类型定义与模板。内置的「Forsion 扩展开发」技能可以让 Agent 照官方模板直接脚手架出插件、主题、Space 或智能体的骨架,见[技能](../agents/skills.md)。
 
+引擎插件可通过公开的 `registerSkillProvider` 提供实时、只读的外部技能来源，无需复制进用户技能目录，见[外部技能来源契约](plugin-skill-providers.md)。
+
 需要让插件产物与原生笔记面板联动时,使用 `ctx.app.openNote`:同一 `reuseKey` 的 Amadeus 面板会原地切换到新笔记；`activate:false` 可保持用户焦点在插件面板。配合 Space 主区条目的 `split:"right"` / `split:"down"`,插件无需在自己的 DOM 里复制文档编辑器或聊天界面。
 
 ```js
@@ -25,6 +27,8 @@ ctx.app.openNote(path, { reuseKey, activate })
 ```js
 ctx.listCapabilities?.includes('tree' | 'items' | 'rename')
 ```
+
+文件夹同时也是可选中的东西时(比如父标签),给文件夹行写 `opensOnClick: true`,用 `ctx.listCapabilities?.includes('folderOpen')` 探测:点名字调 `open()` 并展开,只有行首的箭头负责开合,`activeKey` 指向它时整行高亮。旧宿主忽略这个字段,点一下只开合,所以探测不到时要在里面留一行子项。
 
 把行按「是谁的」归组(发信人、账号、来源)时,给最上面一级的文件夹再写 `folderStyle: 'group'`:它会画成 Tangu 左栏里 Agent / 项目那种一级行,前面是头像(`iconUrl`)、方块里的图标(`icon`)或标题的首字,`hint` 是行尾的小胶囊(适合放未读数)。组里的行不再画自己的图标,只留未读的圆点,一组先列 5 条,其余在「查看更多」后面。这种组的开合只记到应用重启:写了 `defaultOpen: true` 的组自己开着(比如里面有未读),它由假变真时宿主会重新打开这一组;不写就是收着。组的先后由你的数组顺序决定。搜索时不画层级,所以带 `query` 时请返回平铺的行。手机上,只有这一层组头的列表仍然是整屏列表,组里的行照样可以左滑。用 `ctx.listCapabilities?.includes('group')` 判断宿主认不认;不认的宿主会把它画成普通文件夹。
 
@@ -100,7 +104,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。
 
-View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。见 [可复用 UI 组件](./ui-components.md)。
+View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`，在光标处插入文字用 `insertText`。见 [可复用 UI 组件](./ui-components.md)。
 
 设置类页面（账号、额度与积分、诊断、偏好）用 `ctx.ui.mountSettingsPage(el, { groups })` 交一份整页描述：每组有图标、标题、说明、右上角按钮和若干项（开关、数值、按钮、输入框、分段、下拉、「选了就执行」、步进器、代码 + 复制、额度条、空 / 加载 / 出错、自定义块），插件只给文字、值和回调，宿主用自己的设置零件画并按端排版——手机上开关、数值、单个按钮留在右边，输入框、步进器、两个以上的按钮换到下一行，「选了就执行」换成一枚按钮 + 半屏。清单外的内容放进 `custom` 块，块里用 `ctx.ui.mountSettingsItem` 挂单件。别再抄宿主的设置 CSS；2026-10-17 之前的宿主没有这两个接口，先探测，保留自己画的那套。见 [可复用界面组件](./ui-components.md)。
 

@@ -122,6 +122,15 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
     }
   }
 
+  for (const m of await deps().brain.models.listPluginModels?.() ?? []) {
+    const win = effectiveContextWindowInfo(m.id, m);
+    models.push({ id: m.id, name: m.name, provider: m.provider, source: 'direct', modelType: 'llm',
+      contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max,
+      supportsVision: m.supportsVision === true,
+      thinkingLevels: m.pluginThinkingLevels ?? thinkLv(m.provider, m.apiModelId || m.id),
+    });
+  }
+
   // 选择器按 id 选用 → 按 id 去重兜底(direct 已前缀化,正常不会撞)。
   const seen = new Set<string>();
   const unique = models.filter((m) => (seen.has(m.id) ? false : (seen.add(m.id), true)));
