@@ -12,7 +12,7 @@ const a: TanguCreds = { cloudUrl: 'https://accounts.test', token: 'tok-a', model
 const b: TanguCreds = { cloudUrl: 'https://accounts.test', token: 'tok-b' }
 
 /** 假渲染层:收到 auth:will-change 立刻回 auth:ready(events 与生产一样是 ipcMain 形状)。 */
-function harness(opts: { prepareFails?: boolean; managed?: boolean } = {}) {
+function harness(opts: { prepareFails?: boolean; managed?: boolean; credsUnreadable?: boolean } = {}) {
   let creds: TanguCreds = { ...a }
   const events = new EventEmitter()
   const order: string[] = []
@@ -28,6 +28,7 @@ function harness(opts: { prepareFails?: boolean; managed?: boolean } = {}) {
   const deps: AccountCoreDeps = {
     loadCreds: () => ({ ...creds }),
     saveCreds: vi.fn((c: TanguCreds) => { creds = { ...c }; order.push('write') }),
+    assertCredsWritable: () => { if (opts.credsUnreadable) throw new Error('auth.json is unreadable') },
     saveConfig: vi.fn(async () => { order.push('config') }),
     loadConfig: async () => ({ mode: opts.managed === false ? 'external' : 'managed' }),
     ensureBackend: vi.fn(async () => { order.push('backend') }),
@@ -55,6 +56,26 @@ describe('accountCore', () => {
     expect(h.creds()).toEqual({ cloudUrl: b.cloudUrl, token: b.token, model: 'm' })
     expect(asserts).toHaveLength(3)
     expect(h.deps.broadcast).toHaveBeenLastCalledWith('auth:changed', { loggedIn: true })
+  })
+
+  it('auth.json 读不出来:commit / clear 在任何副作用之前就拒(握手、停同步、提交点都不发生,Extend 不会忘账号 / 发吊销)', async () => {
+    const h = harness({ credsUnreadable: true })
+    const onCommitPoint = vi.fn()
+    await expect(h.core.commit({ cloudUrl: b.cloudUrl!, token: b.token! }, undefined, onCommitPoint)).rejects.toThrow('unreadable')
+    await expect(h.core.clear(undefined, onCommitPoint)).rejects.toThrow('unreadable')
+    expect(onCommitPoint).not.toHaveBeenCalled()
+    expect(h.order).toEqual([])
+  })
+
+  it('auth.json 在握手等待期间坏掉:提交点同样不跑,同步照常恢复', async () => {
+    const opts = { credsUnreadable: false }
+    const h = harness(opts)
+    vi.mocked(h.deps.stopSync).mockImplementation(async () => { opts.credsUnreadable = true })
+    const onCommitPoint = vi.fn()
+    await expect(h.core.clear(undefined, onCommitPoint)).rejects.toThrow('unreadable')
+    expect(onCommitPoint).not.toHaveBeenCalled()
+    expect(h.deps.restartSync).toHaveBeenCalled()
+    expect(h.deps.saveCreds).not.toHaveBeenCalled()
   })
 
   it('onCommitPoint:握手 + 停同步之后、写 auth.json 之前调一次;握手失败 / assertCurrent 抛错都不调(Extend 的记账 / 忘账号 / 吊销挂在这里)', async () => {

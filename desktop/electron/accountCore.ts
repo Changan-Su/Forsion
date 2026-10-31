@@ -32,6 +32,8 @@ export interface AccountCoreDeps {
   loadCreds(): TanguCreds
   /** 只写 auth.json(多账号记忆归 Extend)。 */
   saveCreds(c: TanguCreds): void
+  /** auth.json 读不出来时抛。 */
+  assertCredsWritable(): void
   saveConfig(patch: { cloudUrl?: string }): Promise<unknown>
   loadConfig(): Promise<{ mode?: string }>
   ensureBackend(): Promise<void>
@@ -79,6 +81,8 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
     lastAuthCreds = d.loadCreds()
     lastAuthKey = credKey(lastAuthCreds.cloudUrl || '', lastAuthCreds.token || '')
   }
+  /** 每道关口连 auth.json 能不能写一起查:握手要等,文件可能在等待期间坏掉,提交点的忘账号 / 吊销不能先做了才被拒。 */
+  const andWritable = (assertCurrent: () => void) => (): void => { assertCurrent(); d.assertCredsWritable() }
   let authTransitions: Promise<unknown> = Promise.resolve()
   const runAuthTransition = <T,>(fn: () => Promise<T>): Promise<T> => {
     const task = authTransitions.then(fn, fn)
@@ -110,6 +114,7 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
     transition: runAuthTransition,
     currentAuthKey,
     async commit(creds, assertCurrent = () => {}, onCommitPoint?: () => void) {
+      assertCurrent = andWritable(assertCurrent)
       assertCurrent()
       await withPreparedAccount(async () => {
         assertCurrent()
@@ -126,6 +131,7 @@ export function createAccountCore(d: AccountCoreDeps): AccountCore {
       })
     },
     async clear(assertCurrent = () => {}, onCommitPoint?: () => void) {
+      assertCurrent = andWritable(assertCurrent)
       assertCurrent()
       await withPreparedAccount(async () => {
         assertCurrent()
