@@ -8,7 +8,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
 import React, { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, CircleAlert, type LucideIcon } from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, CircleAlert, Gauge, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
@@ -56,7 +56,7 @@ import { ElementTile, PasteTile, QuotePreview, QuoteTile } from './QuoteTile'
 import { ELEMENT_EVENT, ELEMENT_TARGET_ATTR, composeElements, elementImages, formatElementBlock, markComposerUsed, type ElementPick } from './elementPick'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
 import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
-import { ContextUsagePop } from './ContextUsagePop'
+import { ContextUsagePop, fmtTokens } from './ContextUsagePop'
 import { isDirectModelId } from '../chatModelCatalog'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
@@ -505,6 +505,8 @@ export const Composer2: React.FC<{
   const waitTips = (touchUi ? TOUCH_TIP_KEYS : WAIT_TIP_KEYS).filter((k) => !engineId || k !== STEER_TIP)
   const [tipFade, setTipFade] = useState(false)
   const [compactCard, setCompactCard] = useState(false)
+  // 卡宽 ≤ 260(编码侧栏这类窄栏):占位换短句、上下文圆环收进「+」菜单;药丸去 ▾ 在 composer2.css 的 @container (max-width: 260px)。
+  const [narrowCard, setNarrowCard] = useState(false)
   // 窄输入框里小贴士折成两行会被一行高裁掉后半句 → 这个 run 里一旦折行就撑到两行并保持到 run 结束(不随每条贴士跳高度)。
   const [tipTall, setTipTall] = useState(false)
   useEffect(() => {
@@ -595,7 +597,7 @@ export const Composer2: React.FC<{
   useLayoutEffect(() => {
     const card = cardRef.current
     if (!card) return
-    const observer = new ResizeObserver(([entry]) => setCompactCard(entry.contentRect.width <= 360))
+    const observer = new ResizeObserver(([entry]) => { setCompactCard(entry.contentRect.width <= 360); setNarrowCard(entry.contentRect.width <= 260) })
     observer.observe(card)
     return () => observer.disconnect()
   }, [])
@@ -1891,7 +1893,7 @@ export const Composer2: React.FC<{
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
+            placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : narrowCard ? t('input.placeholderShort') : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
             data-suggestion={showSuggestion || undefined}
             data-tip-fade={(running && !compactCard && tipFade) || undefined}
             data-tip-tall={(running && !compactCard && tipTall) || undefined}
@@ -2102,6 +2104,11 @@ export const Composer2: React.FC<{
               onPickPaths={pickHostPaths}
               onPickFiles={pickMixedFiles}
               onAddReference={addContentReference}
+              ctxItem={narrowCard && !phoneCard && !isChat && !!ringWindow && ringWindow > 0 ? {
+                label: t('input.ctxMenuRow', { used: fmtTokens(ctxTokens || 0), total: fmtTokens(ringWindow), pct: String(Math.min(100, Math.round(((ctxTokens || 0) / ringWindow) * 100))) }),
+                icon: <Gauge size={14} />,
+                run: () => setOpenMenu('ctx'),
+              } : undefined}
             />
             {voiceActive ? (
               <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} onSend={voiceSend} t={t} />

@@ -2,17 +2,21 @@ import { createElement, useCallback, useEffect, useLayoutEffect, useMemo, useRed
 import { createPortal } from 'react-dom'
 import { createExtendViewController, type ExtendViewController, type ExtendViewHandle, type ExtendViewSide } from '@lcl/engine/extendView'
 import { translate, useI18n } from '../../i18n'
+import { projectName } from './studioModel'
 import './studioMessages'
 
-export type StudioTool = 'brief' | 'history' | 'checks' | 'issues' | 'setup' | 'sandbox'
+export type StudioTool = 'brief' | 'history' | 'checks' | 'issues' | 'setup' | 'sandbox' | 'files'
 export interface ActiveStudioTool { kind: StudioTool; side: ExtendViewSide; handle: ExtendViewHandle }
 
 const titles: Record<StudioTool, string> = {
-  brief: 'studio.project', history: 'studio.history', checks: 'studio.checks', issues: 'studio.issues', setup: 'studio.setup', sandbox: 'studio.sandbox',
+  brief: 'studio.project', history: 'studio.history', checks: 'studio.checks', issues: 'studio.issues', setup: 'studio.setup', sandbox: 'studio.sandbox', files: 'studio.files',
 }
+// 「项目文件」的标题带项目名(右栏里同时只有一个项目的树,名字说清是谁的)。
+const toolTitle = (kind: StudioTool, root: string): string =>
+  kind === 'files' ? translate('studio.filesTitle', { project: projectName(root) }) : translate(titles[kind])
 const defaultSides: Record<StudioTool, ExtendViewSide> = {
   // Sandbox 与 issues 同类:证据(日志 / 报错)是长列表,底部面板最宽,给得起。
-  brief: 'right', history: 'bottom', checks: 'right', issues: 'bottom', setup: 'right', sandbox: 'bottom',
+  brief: 'right', history: 'bottom', checks: 'right', issues: 'bottom', setup: 'right', sandbox: 'bottom', files: 'right',
 }
 interface Slot { kind: StudioTool; side: ExtendViewSide; element: HTMLDivElement }
 
@@ -94,7 +98,7 @@ export function useStudioTools(controller: ExtendViewController | undefined, roo
       handle = effectiveController.open({
         // Same tool/side refocuses; changing sides acquires a new native lease for the same DOM.
         id: `coding-tool:${JSON.stringify([root, kind, side])}`,
-        title: () => translate(titles[kind]),
+        title: () => toolTitle(kind, root),
         side,
         mount: (element) => {
           element.appendChild(slot.element)

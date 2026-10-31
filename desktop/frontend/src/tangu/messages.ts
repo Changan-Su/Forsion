@@ -73,6 +73,8 @@ registerMessages({
   'input.slash.loopCleared': { zh: '已清除本会话的循环上限（现在：{current}）', en: 'Session loop cap cleared (now: {current})' },
   'input.slash.loopUnlimited': { zh: '不限', en: 'no limit' },
   'input.ctxLabel': { zh: '上下文', en: 'Context' },
+  'input.ctxMenuRow': { zh: '上下文 · {used} / {total} · {pct}%', en: 'Context · {used} / {total} · {pct}%' },
+  'input.placeholderShort': { zh: '输入消息…', en: 'Message…' },
   'input.sessionTokens': { zh: '本会话 {n} tokens', en: 'Session {n} tokens' },
   'input.runCost': { zh: '本 run 成本 {used}/{limit} 点', en: 'Run cost {used}/{limit} pts' },
   'cost.nearCap': { zh: '⚠ 本 run 成本已达 {used} 点（上限 {limit}，TANGU_MAX_RUN_COST 可调），越过上限将自动停止', en: '⚠ Run cost reached {used} pts (limit {limit}, tune TANGU_MAX_RUN_COST); the run stops once the cap is exceeded' },

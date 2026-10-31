@@ -8,7 +8,7 @@ import { useApp } from '../../stores/appStore'
 import { readTanguChatViews } from '../../amadeus/plugins/tanguSeam'
 import { ensureImageSession } from './session'
 import { downloadBlob, renderImages } from './files'
-import { ImageThumbnail, LayerPreview } from './LayerPreview'
+import { ImageThumbnail, LayerFrame } from './LayerPreview'
 import { CropEditor } from './CropEditor'
 import { AIEditPanel } from './AIEditPanel'
 import { pasteSelection, referenceSelection, removeSelection } from './actions'
@@ -73,7 +73,7 @@ export function ImageStudioAssets() {
     <input type="search" aria-label={t('imageStudio.searchLayers')} placeholder={t('imageStudio.searchLayers')} value={query} onChange={e => setQuery(e.target.value)} />
     <div className="ims-asset-list">{items.map(item => <div key={item.id} className={`ims-layer-row${selection.includes(item.id) ? ' is-selected' : ''}`} data-layer-id={item.id}>
       <button className="ims-asset" aria-pressed={selection.includes(item.id)} onClick={e => useImageStudio.setState({ selection: e.shiftKey ? selection.includes(item.id) ? selection.filter(id => id !== item.id) : [...selection, item.id] : [item.id] })}>
-        <div className="ims-layer-thumb"><LayerPreview item={item} /></div><span><strong>{item.name}</strong><small>{t(`imageStudio.kind.${itemKind(item)}`)}</small></span>
+        <LayerFrame className="ims-layer-thumb" item={item} /><span><strong>{item.name}</strong><small>{t(`imageStudio.kind.${itemKind(item)}`)}</small></span>
       </button>
       <button aria-label={t(item.hidden ? 'imageStudio.show' : 'imageStudio.hide')} title={t(item.hidden ? 'imageStudio.show' : 'imageStudio.hide')} onClick={() => patch(item.id, { hidden: !item.hidden })}>{item.hidden ? <EyeOff size={14} /> : <Eye size={14} />}</button>
       <button aria-label={t(item.locked ? 'imageStudio.unlock' : 'imageStudio.lock')} title={t(item.locked ? 'imageStudio.unlock' : 'imageStudio.lock')} onClick={() => patch(item.id, { locked: !item.locked })}>{item.locked ? <Lock size={14} /> : <Unlock size={14} />}</button>
@@ -109,7 +109,7 @@ export function ImageStudioInspector() {
   return <section className="ims-panel ims-inspector"><h3>{t(items.length > 1 ? 'imageStudio.selection' : 'imageStudio.inspector')}</h3>
     {items.every(isImage) && <AIEditPanel key={`${board.id}:${selection.join(',')}`} board={board} images={items.filter(isImage)} />}
     {items.length === 1 ? <>
-      <div className="ims-preview" style={{ aspectRatio: item.w / item.h }}><LayerPreview item={item} /></div>
+      <LayerFrame className="ims-preview" style={{ aspectRatio: item.w / item.h }} item={item} />
       <fieldset disabled={item.locked} className="ims-properties">
         <input aria-label={t('imageStudio.layerName')} value={item.name} onChange={e => update({ name: e.target.value })} />
         <div className="ims-fields">{(['x', 'y', 'w', 'h'] as const).map(key => <NumberField key={key} label={t(`imageStudio.${key}`)} value={item[key]} min={key === 'w' || key === 'h' ? 1 : -100000} onChange={value => geometry(key, value)} />)}</div>

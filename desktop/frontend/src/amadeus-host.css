@@ -967,6 +967,20 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-drawview { overflow: hidden; }
 .amx-drawview .amx-draw { height: 100%; border: none; border-radius: 0; }
 .amx-drawview .amx-draw.amx-draw-state { height: auto; }
+/* Desk 白板磁贴(走查续七 7.7 A,AmadeusDrawingView 的 params.preview):只画图 —— 引擎的工具条 / 菜单 / 提示 / 缩放栏全收,
+   上面盖一层挡住选中、拖动和滚轮平移(双击 = 在白板中打开),右下角一颗「在白板中打开」。 */
+.amx-drawview:has(> .amx-drawpreview-shield) { position: relative; }
+.amx-boardhost[data-preview] .excalidraw .layer-ui__wrapper,
+.amx-boardhost[data-preview] .excalidraw .LoadingMessage { display: none; }
+.amx-drawpreview-shield { position: absolute; inset: 0; z-index: 4; }
+.amx-drawpreview-open {
+  position: absolute; right: 12px; bottom: 12px; z-index: 5;
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border: 0; border-radius: var(--radius-sm); background: var(--bg-card); color: var(--text);
+  font: inherit; font-size: var(--ui-font-meta, 12px); box-shadow: var(--btn-shadow); cursor: pointer;
+}
+.amx-drawpreview-open svg { color: var(--text-muted); }
+.amx-drawpreview-open:hover { background: color-mix(in srgb, var(--bg-card) 92%, var(--text)); }
 
 /* ── 白板:纸张 + 网格两层 ──────────────────────────────────────────────────
    两层都 portal 进 <Excalidraw> 内部,z-index 3 压过两张画布(1/2),DOM 靠前让位给 wysiwyg(3)/UI(4)。

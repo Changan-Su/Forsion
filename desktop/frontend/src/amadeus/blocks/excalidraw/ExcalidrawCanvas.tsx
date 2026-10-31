@@ -13,7 +13,8 @@ import { newBoardUi, sameBoardUi, type BoardUi } from './boardUi'
 import ViewIsland, { type ViewToggle } from './ViewIsland'
 import { useBoardGrid } from './useBoardGrid'
 import { installBoardRightPan } from './rightPan'
-import { Eye, Grid3x3, Magnet } from 'lucide-react'
+import { Eye, Grid3x3, Keyboard, Magnet } from 'lucide-react'
+import { ShortcutsDialog } from './ShortcutsDialog'
 import './viewIsland.css'
 import './excalidrawTheme.css' // 引擎 token → LCL 契约(见该文件),随画布 chunk 一起加载
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
@@ -197,6 +198,7 @@ export default function ExcalidrawCanvas({
   onSceneChange,
   registerApplier,
   viewMode = false,
+  preview = false,
 }: {
   initialData: ExcalidrawInitialDataState
   theme: 'light' | 'dark'
@@ -209,6 +211,8 @@ export default function ExcalidrawCanvas({
   registerApplier?: (fn: (remote: SceneLike) => void) => () => void
   /** 只读(公开分享页):引擎的 viewModeEnabled —— 能平移缩放看,不能画;onSceneChange 也不会因用户操作而来。 */
   viewMode?: boolean
+  /** Desk 磁贴的只读缩略:引擎界面全收(CSS 按 data-preview),尺寸 / 内容一变就重新适配全图。 */
+  preview?: boolean
 }): React.JSX.Element {
   const { t } = useI18n()
   const [api, setApi] = useState<ExcalidrawImperativeAPI | null>(null)
@@ -276,6 +280,7 @@ export default function ExcalidrawCanvas({
    *  (取色器、菜单)挂在 body 上,会被挡在全屏外面。浏览器会自己吃掉 Esc 退系统全屏(只能听 fullscreenchange);
    *  Electron 不一定,拿不到系统全屏时更没人管 —— 所以 Esc 也自己听一份。 */
   const [full, setFull] = useState(false)
+  const [keysOpen, setKeysOpen] = useState(false)
   /** 进全屏那一下,白板铺满窗口、视图岛跟着左下角挪走,指针底下就没有按钮了 —— 在刚才那颗按钮的位置
    *  放一枚「退出全屏」胶囊(几秒后淡出),「点一下进、再点一下出」照样成立(走查 P2-3)。 */
   const [fullHint, setFullHint] = useState<{ x: number; y: number } | null>(null)
@@ -545,7 +550,8 @@ export default function ExcalidrawCanvas({
       const els = a.getSceneElements()
       const b = elementBounds(els)
       const page = pageRect(settings, pageRange(settings, b).min)
-      if (!page) {
+      // Desk 磁贴要整张(纸张模式也不止第一页),按全部内容适配。
+      if (!page || preview) {
         if (els.length) fitInsets(a, host, st)
         return
       }
@@ -557,8 +563,23 @@ export default function ExcalidrawCanvas({
         captureUpdate: CaptureUpdateAction.NEVER,
       })
     },
-    [settings],
+    [settings, preview],
   )
+
+  // Desk 磁贴(preview):缩略图永远是整张 —— 磁贴尺寸变了、或者远端改动让内容范围变了,就重新适配一次。
+  useEffect(() => {
+    const host = hostRef.current
+    if (!preview || !api || !host) return
+    const refit = (): void => { fitState.current = 'pending'; requestAnimationFrame(() => tryFit(api)) }
+    const ro = new ResizeObserver(refit)
+    ro.observe(host)
+    let last = ''
+    const off = api.onChange((elements) => {
+      const key = JSON.stringify(elementBounds(elements))
+      if (key !== last) { last = key; refit() }
+    })
+    return () => { ro.disconnect(); off() }
+  }, [preview, api, tryFit])
 
   /** 换排布方向 = **搬用户内容**:每个元素跟着它所在的那一页走,页内偏移不变。
    *  进 undo 栈(IMMEDIATELY),后悔了 ⌘Z 就能回去。首次挂载不跑 —— 只认真正的切换。 */
@@ -682,7 +703,7 @@ export default function ExcalidrawCanvas({
     // data-nc-caps:Android 原生外壳往这里写两颗顶部胶囊的宽(mobile/src/nativeChrome.ts),宽屏时白板顶上那一排要绕开它们(base.css)。
     // data-touch-hint:提示条此刻是「怎么平移画布」、而手上不是鼠标 → 换成触屏说法(amadeus-host.css)。
     <div
-      className="amx-boardhost" ref={hostRef} data-full={full || undefined} data-nc-caps=""
+      className="amx-boardhost" ref={hostRef} data-full={full || undefined} data-preview={preview || undefined} data-nc-caps=""
       data-touch-hint={ui.idle && !mouse ? '' : undefined}
       style={{ '--amx-hint-pan': JSON.stringify(t('excalicanvas.panHintTouch')) } as React.CSSProperties}
       onPointerDownCapture={(e) => { const m = e.pointerType === 'mouse'; if (m !== mouse) setMouse(m) }}
@@ -708,6 +729,11 @@ export default function ExcalidrawCanvas({
         //    「场景变了顺带动视口」的路径兜底,重复调用是幂等的。
         onScrollChange={(scrollX, scrollY, zoom) => layout(clampView({ scrollX, scrollY, zoom }))}
         onChange={(elements, appState, files) => {
+          // 引擎自己的帮助框(? 键 / 欢迎页提示)一律改开应用画的快捷键表(7.4);它那份带上游外链,CSS 也藏着(excalidrawTheme.css)。
+          if (appState.openDialog?.name === 'help') {
+            api?.updateScene({ appState: { openDialog: null }, captureUpdate: CaptureUpdateAction.NEVER })
+            setKeysOpen(true)
+          }
           syncRange(elements)
           layout(clampView(appState))
           // 自建工具栏/面板是 portal 出去的,拿不到引擎的 React 数据流 —— 这里回捞那一小片。
@@ -735,16 +761,17 @@ export default function ExcalidrawCanvas({
           onSceneChange(serializeAsJSON(elements, appState, files, 'local'))
         }}
       >
-        {/* 自带菜单照抄 0.18.1 的 DefaultMainMenu,只去掉 Socials(离线桌面端的官网外链没意义),
+        {/* 自带菜单从 0.18.1 的 DefaultMainMenu 删减:去掉 Socials 与帮助(上游外链);打开 / 保存到 / 重置画布也去掉 ——
+            白板就是库里的一个文件,打开 / 另存 / 删除走 Forsion 的文件管理(走查续七 7.6;「保存到…」就是 Export 那项)。
             末尾接上本 App 的纸张/网格面板 —— 用户要它跟「画布背景」在同一处。 */}
         <MainMenu>
-          <MainMenu.DefaultItems.LoadScene />
-          <MainMenu.DefaultItems.SaveToActiveFile />
-          <MainMenu.DefaultItems.Export />
           <MainMenu.DefaultItems.SaveAsImage />
           <MainMenu.DefaultItems.SearchMenu />
-          <MainMenu.DefaultItems.Help />
-          <MainMenu.DefaultItems.ClearCanvas />
+          {!phone && (
+            <MainMenu.Item icon={<Keyboard size={16} />} shortcut="?" onSelect={() => setKeysOpen(true)} data-board-keys>
+              {t('boardkeys.title')}
+            </MainMenu.Item>
+          )}
           <MainMenu.Separator />
           {/* 主题由 App 统一下发(theme prop),这里只要那颗切换按钮,不开 fork 的「跟随系统」档 */}
           {/* 手机档没有底部视图岛的位置(引擎的手机工具栏占着),三个开关进这里;禅模式引擎本就不给手机 */}
@@ -781,6 +808,7 @@ export default function ExcalidrawCanvas({
           </Footer>
         )}
       </Excalidraw>
+      {keysOpen && <ShortcutsDialog onClose={() => setKeysOpen(false)} />}
       {/* 两颗胶囊的宽(宽 = 左、高 = 右)量成一个看不见的盒子,给下面 fit 的 ResizeObserver 盯:胶囊一变就重算(Codex 评审 P2) */}
       <i ref={capProbeRef} aria-hidden style={CAP_PROBE} />
       {/* 挂进引擎的 .excalidraw 根:胶囊的底色 / 外圈 / 投影都是引擎 token,只在那棵子树里有值 */}
