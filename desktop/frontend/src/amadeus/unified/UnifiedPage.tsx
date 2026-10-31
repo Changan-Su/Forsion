@@ -1269,8 +1269,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
    *  舞台只能平移缩放,标题/封面/属性只展示。桥那头(shareBridge)的写方法本就拒绝 —— 这里是第一道闸,
    *  桥是第二道;两道缺一不可(桥拒了会 toast「保存失败」,用户以为自己在编辑)。 */
   readOnly?: boolean
-  /** 单个 `\n` 当换行渲染(收件箱的信按聊天口径;标准 markdown 里它是空格)。**别按 readOnly 判** ——
-   *  公开分享页也是 readOnly,那是笔记,得守标准 markdown 语义。见 softBreak.ts 的 hardBreakRemark。 */
+  /** 单个 `\n` 当换行渲染(收件箱的信按聊天口径)。2026-10-29 起笔记本身也按 Obsidian 把软换行显示成换行
+   *  (inlineBr.ts),这个开关已冗余;**别**拿它去给笔记用 —— 它把 isInline 拍成 false,可写页保存会落成 `\` 换行。 */
   hardBreaks?: boolean
 }): ReactElement {
   const pageDir = path.replace(/\\/g, '/').split('/').slice(0, -1).join('/')
