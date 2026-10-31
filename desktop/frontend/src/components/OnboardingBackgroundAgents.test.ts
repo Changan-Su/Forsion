@@ -110,3 +110,12 @@ it('allows cloud Historian configuration while explaining that Muse requires a l
   expect(host.textContent).toContain('onboarding.background.localOnly')
   expect(api.saveSpecialConfig).not.toHaveBeenCalled()
 })
+it('treats an incomplete config as a load failure with retry instead of crashing the step (walkthrough 6.19)', async () => {
+  vi.mocked(api.getSpecialConfig).mockResolvedValueOnce({} as never)
+  await render()
+  expect(host.querySelector('.ob-background-error')?.textContent).toContain('onboarding.background.loadFail')
+  expect(toggle('settings.special.historian').disabled).toBe(true)
+  await act(async () => host.querySelector<HTMLButtonElement>('.ob-background-error button')!.click())
+  expect(host.querySelector('.ob-background-error')).toBeNull()
+  expect(toggle('settings.special.historian').getAttribute('aria-checked')).toBe('true')
+})
