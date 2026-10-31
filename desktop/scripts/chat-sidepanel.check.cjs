@@ -30,7 +30,7 @@
  *    它是 inset:0 的铺满层,rect 恒等于整列,量它必然「完美居中」= 假绿。
  * ⚠️ 先 npm run build:量的是 out/ 里的产物,源码改了没构建就是白测。
  * ⚠️ Amadeus 库由本脚本种在临时目录(seedVault:Alpha / Beta 两篇)。不种的话首启无 lastVault 会落到
- *    本机真实的 ~/Forsion-Dev/Amadeus:结果随那份库的第一篇而变,还会往真库里补种 Calendar.db。
+ *    本机真实的 ~/Forsion-Dev/Amadeus:结果随那份库的第一篇而变。
  *    6 还隐含 host 会话(引用是本机绝对路径,云端会话按设计不挂 —— 见 Composer2 autoChip 的 isHost 闸)。
  *
  * 用法:npm run check:chatside
@@ -288,6 +288,7 @@ async function main() {
   )
   await win.screenshot({ path: selectionMenuShot })
   await askButton.click()
+  await win.locator('.quote-reply-input').waitFor({ timeout: 5000 }).then(() => win.keyboard.press('Enter')).catch(() => {}) // 就地回复框:空着回车 = 只挂引用
   await win.waitForTimeout(1600)
   const selectionHandoff = await win.evaluate(`(() => {
     const main = document.querySelector('[data-chat-surface="chat"]')
@@ -683,7 +684,7 @@ async function main() {
     const card = document.querySelector('.t2c-card')
     out['t2c-card'] = card ? alphaOf(getComputedStyle(card).borderTopColor) : null
     // 这些块要有真实消息才渲染 → 插同类名探针,量的是规则本身
-    for (const cls of ['t2-tool', 't2-todo', 't2-panelcard', 't2-tsum-in', 'agent-desk-card', 'tool-card', 'tool-group']) {
+    for (const cls of ['t2-tool', 't2-todo', 't2-panelcard', 't2-card', 'agent-desk-card', 'tool-card', 'tool-group']) { // 10-25 起摘要栏每段一张 .t2-card
       const p = document.createElement('div')
       p.className = cls
       col.appendChild(p)

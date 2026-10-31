@@ -33,16 +33,19 @@ export function NotificationHost() {
   }, [paused, items.length, resume])
   return (
     <div ref={wrapRef} className={`ntf-wrap${inCalendar ? ' ntf-wrap-calendar' : ''}`} aria-live="polite" onMouseEnter={pause} onMouseLeave={resume}>
-      {/* popLayout:退场卡片立即让出布局位,下方卡片经 layout 弹簧同步上移补位(toast 堆叠标准配方)。 */}
-      <AnimatePresence initial={false} mode="popLayout">
+      {/* popLayout:退场卡片立即让出布局位,下方卡片经 layout 补位。走查续八 8.2 / 8.5 A:进 180ms 从右沿 6px 滑进 + 淡入,
+          出 160ms 淡出 + 右移 16px(同 base.css --toast-enter / exit-duration 那一套);layout 只补位置不补尺寸 ——
+          以前补尺寸,退场卡被弹出流后宽度塌成内容最小宽,看到的是一边滑一边被横向压扁。anchorX="right":弹出流后贴着
+          右沿(左沿会随通知区变窄而右移)。减少动态效果时由根上的 MotionConfig 去掉位移、只留淡入淡出。 */}
+      <AnimatePresence initial={false} mode="popLayout" anchorX="right">
         {items.map((n) => (
           <motion.div
             key={n.id}
-            layout
-            initial={{ x: '112%', opacity: 0.4 }}
+            layout="position"
+            initial={{ x: 6, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
-            exit={{ x: '112%', opacity: 0 }}
-            transition={{ type: 'spring', stiffness: 480, damping: 40, mass: 0.85 }}
+            exit={{ x: 16, opacity: 0, transition: { duration: 0.16, ease: [0.4, 0, 1, 1] } }}
+            transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             className={`ntf ntf-${n.level}`}
           >
             {(() => { const I = LEVEL_ICON[n.level]; return <I size={15} className="ntf-icon" /> })()}

@@ -1,7 +1,7 @@
 /**
  * Dev-only 台架:输入框上下文环的详情弹层(真 ContextUsagePop + 真 composer2.css)。
  * 参数:?lang=en  ?dark  ?theme=genesis-glass  ?noinfo(还没跑过 run)  ?logout(未登录)  ?unlimited(今日不限)  ?capped(1M 被封顶)
- *      ?over(占用超出窗口);window.__ctxu.switchAccount() = 直接换到账号 B(B 的额度 300ms 后才回来)
+ *      ?over(占用超出窗口);?direct=codex|deepseek|none(当前是直连模型:列该来源的额度 / 余额,none = 来源查不到);window.__ctxu.switchAccount() = 直接换到账号 B(B 的额度 300ms 后才回来)
  * 跑:node scripts/e2e-editor.cjs --check=ctxusage --shot
  */
 import { createRoot } from 'react-dom/client'
@@ -13,7 +13,8 @@ import './views/chat2/composer2.css'
 import { applyTheme } from './theme/loader'
 import { ContextUsagePop } from './views/chat2/ContextUsagePop'
 import { useApp } from './stores/appStore'
-import type { AuthStatusInfo, CtxInfo } from './types'
+import type { AuthStatusInfo, CtxInfo, ProviderQuota } from './types'
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
 
 const q = new URLSearchParams(location.search)
 setLocaleGlobal(q.get('lang') === 'en' ? 'en' : 'zh')
@@ -49,6 +50,18 @@ const info: CtxInfo = {
 }
 ;(window as unknown as { __compacted: number }).__compacted = 0
 
+// 直连来源的额度(形状照 10-27 实测:Codex /wham/usage 两个窗口、DeepSeek /user/balance)
+const DIRECT: Record<string, ProviderQuota | null> = {
+  codex: { providerId: 'codex', plan: 'pro', fetchedAt: Date.now(), windows: [
+    { seconds: 18000, usedPercent: 38, resetAt: Date.now() + (2 * 60 + 14) * 60e3 },
+    { seconds: 604800, usedPercent: 91, resetAt: Date.now() + 3 * 86400e3 },
+  ] },
+  deepseek: { providerId: 'deepseek', fetchedAt: Date.now(), balance: { currency: 'CNY', amount: 42.18 } },
+  none: null,
+}
+const direct = q.get('direct')
+const directModel = direct ? { id: `${direct}/demo`, load: async () => DIRECT[direct] ?? null } : undefined
+
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>
     <main style={{ minHeight: '100vh', background: 'var(--bg)', position: 'relative' }}>
@@ -67,6 +80,7 @@ createRoot(document.getElementById('root')!).render(
             sessionTokens={402000}
             ctxInfo={q.has('noinfo') ? null : info}
             onCompact={() => { (window as unknown as { __compacted: number }).__compacted++ }}
+            directModel={directModel}
           />
         </span>
       </span>

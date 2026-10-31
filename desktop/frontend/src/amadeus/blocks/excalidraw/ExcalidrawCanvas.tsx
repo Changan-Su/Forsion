@@ -12,6 +12,7 @@ import { getToolbarLayout, isDefaultLayout, resetToolbarLayout, subscribeToolbar
 import { newBoardUi, sameBoardUi, type BoardUi } from './boardUi'
 import ViewIsland, { type ViewToggle } from './ViewIsland'
 import { useBoardGrid } from './useBoardGrid'
+import { installBoardRightPan } from './rightPan'
 import { Eye, Grid3x3, Magnet } from 'lucide-react'
 import './viewIsland.css'
 import './excalidrawTheme.css' // 引擎 token → LCL 契约(见该文件),随画布 chunk 一起加载
@@ -669,6 +670,13 @@ export default function ExcalidrawCanvas({
     return () => { ro.disconnect(); setCapMax(0) }
   }, [api])
   useNativeChromeExtras(capMax > 0 ? { where: 'main', capLeftMax: capMax } : null)
+
+  // 空白处右键按住拖 = 平移、没拖松开才弹引擎的画布菜单(10-24 三张画布统一,做法与边界见 rightPan.ts)
+  useEffect(() => {
+    const el = hostRef.current
+    if (!el || !api) return
+    return installBoardRightPan(el, api)
+  }, [api])
 
   return (
     // data-nc-caps:Android 原生外壳往这里写两颗顶部胶囊的宽(mobile/src/nativeChrome.ts),宽屏时白板顶上那一排要绕开它们(base.css)。

@@ -1,5 +1,5 @@
 import { useEffect, useId, useState, type ReactNode } from 'react'
-import { Check, ChevronRight, FolderPlus, History, Loader2, Sparkles } from 'lucide-react'
+import { Check, ChevronRight, FolderPlus, History, Loader2, Sparkles, X } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { getSpecialConfig, saveSpecialConfig, listModels, listAgents } from '../services/backendService'
 import type { HistorianConfig, ModelInfo, MuseConfig, NormalAgentDef, SpecialAgentsConfig, SpecialAgentsSummary, TanguDesktopConfig } from '../types'
@@ -9,6 +9,7 @@ import { CapabilityMenu } from './CapabilityMenu'
 import { subscribeAccountQuota, type AccountQuotaView } from '../services/accountQuota'
 import './specialAgents.css'
 import { homeTarget, connectionKey } from '../services/engine/targets'
+import { agentName } from '../agentName'
 
 registerMessages({
   'specialUi.intro': { zh: '管理在后台整理记忆与推进工作的 Agent。选择一个 Agent 调整它的工作方式。', en: 'Manage the agents that organize memory and work in the background. Choose one to adjust how it works.' },
@@ -29,6 +30,13 @@ registerMessages({
   'specialUi.advanced': { zh: '高级设置', en: 'Advanced settings' },
   'specialUi.memory': { zh: '记忆与进化', en: 'Memory and growth' },
   'specialUi.resetPrompt': { zh: '恢复默认提示词', en: 'Restore default prompt' },
+  'specialUi.maxDm': { zh: '每天最多主动找你几次（0 = 不限）', en: 'Daily message limit (0 = no limit)' },
+  'specialUi.inboxAuto': { zh: 'Muse 替你标已读', en: 'Muse marks as read' },
+  'specialUi.inboxAutoHint': { zh: '点一下就不再替你标。', en: 'Click one to stop.' },
+  'specialUi.inboxCat.muse': { zh: 'Muse 自己发的信', en: 'Mail from Muse' },
+  'specialUi.inboxCat.update': { zh: '版本更新', en: 'Updates' },
+  'specialUi.inboxCat.store': { zh: '商店上新', en: 'Store news' },
+  'specialUi.inboxCat.maintenance': { zh: '维护通知', en: 'Maintenance' },
   'specialUi.addFolder': { zh: '添加文件夹', en: 'Add folder' },
   'specialUi.startHour': { zh: '开始时间（小时）', en: 'Start time (hour)' },
   'specialUi.endHour': { zh: '结束时间（小时）', en: 'End time (hour)' },
@@ -101,7 +109,7 @@ type SpecialDraft = { conf: SpecialAgentsConfig; baseline: SpecialAgentsConfig; 
 const specialDrafts = new Map<string, SpecialDraft>()
 
 /** Explicit, field-level saves keep text editing stable and preserve unrelated backend changes. */
-export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktopConfig; localHost?: boolean }) {
+export function SpecialAgentsTab({ cfg, localHost = false, initialRole = 'historian' }: { cfg: TanguDesktopConfig; localHost?: boolean; initialRole?: 'historian' | 'muse' }) {
   const { t } = useI18n()
   const draftKey = connectionKey(cfg)
   const [conf, setConf] = useState<SpecialAgentsConfig | null>(null)
@@ -112,7 +120,7 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
   const [models, setModels] = useState<ModelInfo[]>([])
   const [agents, setAgents] = useState<NormalAgentDef[]>([])
   const [slotDefault, setSlotDefault] = useState('')
-  const [active, setActive] = useState<'historian' | 'muse'>('historian')
+  const [active, setActive] = useState<'historian' | 'muse'>(initialRole)
   // 云端(web/安卓):引擎只有按轮 Historian 的四项(开关 / 模型 / 轮数 / 首轮),Muse、模式、提示词都是本地特性。
   const [cloud, setCloud] = useState(false)
   // 远程来源(设备页)只拿到开关摘要:不渲染编辑器(远端本就写不进去),只读显示开关状态(P1-K10b)
@@ -167,7 +175,7 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
     ...(value && !models.some((item) => item.id === value) ? [{ id: value, label: value }] : []),
   ], onChange, t('specialUi.searchModels'))
   const toggleRow = (label: string, value: boolean, onChange: (v: boolean) => void, hint?: string) => <div className="special-toggle-row"><div><strong>{label}</strong>{hint && <p>{hint}</p>}</div><Toggle label={label} value={value} onChange={onChange} /></div>
-  const escalation = agents.filter((a) => a.slug !== 'muse').map((a) => ({ id: a.slug, label: a.name || a.slug }))
+  const escalation = agents.filter((a) => a.slug !== 'muse').map((a) => ({ id: a.slug, label: agentName(a) }))
   if (m.escalateTo && !escalation.some((a) => a.id === m.escalateTo)) escalation.push({ id: m.escalateTo, label: m.escalateTo })
   return <div className="special-agents">
     {!cloud && <p className="special-intro">{t('specialUi.intro')}</p>}
@@ -202,7 +210,7 @@ export function SpecialAgentsTab({ cfg, localHost = false }: { cfg: TanguDesktop
               {m.activeHours && <div className="special-hours"><NumberField label={t('specialUi.startHour')} value={m.activeHours.start} min={0} max={23} onChange={(start) => changeMuse({ activeHours: { ...m.activeHours!, start } })} /><NumberField label={t('specialUi.endHour')} value={m.activeHours.end} min={0} max={23} onChange={(end) => changeMuse({ activeHours: { ...m.activeHours!, end } })} /></div>}
             </Field></div>
           <BackgroundQuotaSection museModelId={m.modelId} modelLabel={(id) => models.find((item) => item.id === id)?.name || id} />
-          <details className="special-disclosure"><summary>{t('settings.special.m.notify')}</summary><div className="special-field-grid"><Field label={t('settings.special.m.notifyMode')}>{choice(t('settings.special.m.notifyMode'), m.notify || 'immediate', [{ id: 'digest', label: t('settings.special.m.notifyDigest') }, { id: 'immediate', label: t('settings.special.m.notifyImmediate') }], (notify) => changeMuse({ notify: notify as MuseConfig['notify'] }))}</Field><Field label={t('settings.special.m.escalateTo')}>{choice(t('settings.special.m.escalateTo'), m.escalateTo || '', [{ id: '', label: t('settings.special.m.escalateNone') }, ...escalation], (escalateTo) => changeMuse({ escalateTo }))}</Field></div></details>
+          <details className="special-disclosure"><summary>{t('settings.special.m.notify')}</summary><div className="special-field-grid"><Field label={t('settings.special.m.notifyMode')}>{choice(t('settings.special.m.notifyMode'), m.notify || 'immediate', [{ id: 'digest', label: t('settings.special.m.notifyDigest') }, { id: 'immediate', label: t('settings.special.m.notifyImmediate') }], (notify) => changeMuse({ notify: notify as MuseConfig['notify'] }))}</Field><Field label={t('settings.special.m.escalateTo')}>{choice(t('settings.special.m.escalateTo'), m.escalateTo || '', [{ id: '', label: t('settings.special.m.escalateNone') }, ...escalation], (escalateTo) => changeMuse({ escalateTo }))}</Field><NumberField label={t('specialUi.maxDm')} value={m.maxDmPerDay ?? 0} min={0} max={24} onChange={(maxDmPerDay) => changeMuse({ maxDmPerDay })} /></div>{!!m.inboxAutoRead?.length && <Field label={t('specialUi.inboxAuto')} hint={t('specialUi.inboxAutoHint')}><div className="special-inbox-auto">{m.inboxAutoRead.map((c) => <button type="button" key={c} data-inbox-auto={c} onClick={() => changeMuse({ inboxAutoRead: m.inboxAutoRead!.filter((x) => x !== c) })}>{t(`specialUi.inboxCat.${c}`)}<X size={12} aria-hidden="true" /></button>)}</div></Field>}</details>
           <details className="special-disclosure"><summary>{t('settings.special.m.budget')}</summary><div className="special-field-grid">
             <NumberField label={t('settings.special.m.budgetWindow')} value={m.restartWindowHours} min={1} max={24} onChange={(restartWindowHours) => changeMuse({ restartWindowHours })} />
             <NumberField label={t('settings.special.m.maxCycles')} value={m.maxRestartsPerWindow} min={0} max={100} onChange={(maxRestartsPerWindow) => changeMuse({ maxRestartsPerWindow })} />

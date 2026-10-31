@@ -15,12 +15,11 @@ import type { FloatingPanelOpenOptions } from '../../shared/floatingPanel'
 import type { SessionRecord } from './types'
 import { FloatingViewSurface } from './components/FloatingViewSurface'
 import { PluginOnboardingHost } from './components/PluginOnboardingModal'
-import { BtwPanel } from '@tangu/ui/views/chat2/BtwPanel'
-import { btwSeedOf } from '@tangu/ui/views/chat2/btwStore'
 import { listSkills } from './services/backendService'
 import { floatingPanelTitle } from './floatingPanelTitle'
 import { homeTarget } from './services/engine/targets'
 import { AskStringHost } from './amadeus/components/askString'
+import { readTanguShell } from './amadeus/plugins/tanguSeam'
 
 export function FloatingRoot() {
   const { t } = useI18n()
@@ -35,7 +34,8 @@ export function FloatingRoot() {
   // (反馈会挂错会话、设置的「导出日志」会导错会话)。递不到就老实显示「未关联会话」/ 禁用导出。
   const panelSession = (target?.params?.session as SessionRecord | undefined)?.id ? target!.params!.session as SessionRecord : null
   const close = (): void => window.tangu?.closeSelf?.()
-  const btwSeed = target?.builtin === 'btw' ? btwSeedOf(target.params) : null
+  const shell = readTanguShell()
+  const btwSeed = target?.builtin === 'btw' ? shell?.btwSeedOf(target.params) ?? null : null
   // 内置面板的标题每次渲染按当前语言现译(切语言后标题栏与原生窗口标题跟着变);document.title 驱动原生窗口标题
   const title = target ? floatingPanelTitle(target, t) : ''
   useEffect(() => { if (target?.builtin && title) document.title = title }, [target?.builtin, title])
@@ -96,7 +96,7 @@ export function FloatingRoot() {
       {target.builtin === 'achievements' && <AchievementsModal onClose={onAchievementsClose} />}
       {target.builtin === 'feedback' && app.cfgLoaded && <FeedbackModal key={panelSession?.id || ''} surface="panel" cfg={app.cfg} activeSession={panelSession} onClose={onFeedbackClose} />}
       {/* 旁聊:不按 params 挂 key —— 同一扇窗再收到定向(新的引用 / 问题)只是往线程里追加,重挂会把线程丢了 */}
-      {target.builtin === 'btw' && app.cfgLoaded && btwSeed && <BtwPanel seed={btwSeed} onClose={close} />}
+      {target.builtin === 'btw' && app.cfgLoaded && btwSeed && shell && <shell.BtwPanel seed={btwSeed} onClose={close} />}
       {target.view && <FloatingViewSurface target={target.view} onUnavailable={close} />}
     </main>
     {/* 插件检查卡:设置 / 市场自 2026-09-20 住在这个独立窗口里,「运行引导」、手动启用、市场装完都在这里

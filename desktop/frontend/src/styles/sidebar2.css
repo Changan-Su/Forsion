@@ -86,7 +86,7 @@
 :is(.t2s-side, .t2sw-plug) .t2s-lead .t2s-lead-chev {
   position: absolute; inset: 0; margin: 0;
   align-items: center; justify-content: center;
-  transition: opacity var(--duration-fast, 0.15s), transform var(--duration-fast, 0.15s) var(--ease-out, ease);
+  transition: opacity var(--duration-fast, 0.15s), transform var(--collapse-duration) var(--collapse-ease);
 }
 /* 箭头默认恒隐;hover 可展开行才现、图标让位(只让「后面跟着箭头」的兄弟让位,不可展开的行图标恒亮)。
  * ⚠️ 写成 `.t2s-lead:has(.t2s-lead-chev) > :not(…)`(:has 不在最后一段 + 通配结尾)会让整页每插入一个元素多 15–25ms
@@ -102,7 +102,7 @@
   :is(.t2s-side, .t2sw-plug) .t2s-srow:hover .t2s-lead > :has(~ .t2s-lead-chev),
   :is(.t2s-side, .t2sw-plug) .t2s-folder-row:hover .t2s-lead > :has(~ .t2s-lead-chev) { opacity: 0; }
 }
-:is(.t2s-side, .t2sw-plug) .t2s-chev { transition: transform var(--duration-fast, 0.15s) var(--ease-out, ease); }
+:is(.t2s-side, .t2sw-plug) .t2s-chev { transition: transform var(--collapse-duration) var(--collapse-ease); } /* 与 AnimatedCollapse 同一份(8.10) */
 :is(.t2s-side, .t2sw-plug) .t2s-chev.open { transform: rotate(90deg); }
 /* 树的「文件夹/工作区」组头:去掉 .t2s-group-toggle 那套「分区标题」装(11.5px/全大写/字间距)——
  * 它是给**真**分区头(收藏/最近/集合)用的,树的组头应与行同档 13px(用户拍板)。
@@ -131,10 +131,10 @@
   margin: 4px 10px 8px;
   padding: 2px;
   border-radius: var(--radius-pill, 999px);
-  /* 明暗关系(2026-08-13 用户拍板反转):**轨道恒比所在面板暗一档(凹),选中态用 --accent 实底反色**。
-   * --accent 深色是近白 / 浅色是近黑,所以一套规则同时满足「深色选中浅、浅色选中深」。
-   * ⚠️ 轨道不能用 --overlay-light:它在深色下是**提亮**叠层(rgba(242,239,232,.05)),轨道会比面板更亮
-   *    而滑块回落到 --bg = 面板色,正好把明暗关系做反了 —— 这就是改前的观感。固定黑色叠层两模式都凹。 */
+  /* 明暗关系:轨道恒比所在面板暗一档(固定黑色叠层,两模式都凹);**选中格是凸起滑块**(--seg-thumb:
+   * 浅色卡面色 + 软阴影,暗色比轨道亮一档),选中字 --text。2026-10-25 用户选走查 5.11 A,推翻了 08-13
+   * 「次强调色滑块 + --accent-ink 字」那条 —— 侧栏胶囊、LCL 看法胶囊、Agent 标签条从此一种选中态、一种圆角(pill)。
+   * ⚠️ 轨道不能用 --overlay-light:它在深色下是**提亮**叠层(rgba(242,239,232,.05)),轨道会比面板更亮。 */
   background: rgba(0, 0, 0, 0.05);
   -webkit-app-region: no-drag;
   flex-shrink: 0;
@@ -151,11 +151,9 @@
      它们照旧靠下面的 `[data-side=…]` 规则平移(属性选择器特异性更高,盖得住这条)。 */
   width: calc((100% - 4px) / var(--seg-n, 2));
   border-radius: var(--radius-pill, 999px);
-  /* 次强调色(= 桌面 ribbon `.rb-space.on` 那一档),不是纯 --accent 实底 —— 用户拍板 2026-08-13。
-   * 半透明叠在上面的黑色轨道上:深色下往亮里走、浅色下往暗里走,明暗方向照旧成立,只是更克制。 */
-  background: var(--accent-light, var(--overlay-light, rgba(127, 127, 127, 0.12)));
+  background: var(--seg-thumb);
   border: none;
-  box-shadow: none;
+  box-shadow: var(--seg-thumb-shadow);
   /* 克制的弹性:轻微过冲即收,不弹跳 */
   transition: transform 0.3s cubic-bezier(0.32, 1.25, 0.5, 1);
   will-change: transform;
@@ -184,8 +182,7 @@
   cursor: pointer;
   transition: color 0.25s var(--ease-out, ease);
 }
-/* 与 `.rb-space.on` 同款:accent 前景(--accent-ink 是它的可读性守卫版)。 */
-.t2s-vaultseg button.on { color: var(--accent-ink, var(--accent, var(--text))); }
+.t2s-vaultseg button.on { color: var(--text); }
 .t2s-vaultseg[data-busy] button { cursor: default; }
 .t2s-vaultseg-hint {
   margin: 0 12px 8px;
@@ -264,7 +261,7 @@
 
 
 /* 滚动区 */
-.t2s-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 1.5px 6px 9px; --under-dock-pad: 9px; }
+.t2s-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 1.5px 6px 9px; --under-dock-pad: 9px; transition: box-shadow var(--lcl-drop-fade); }
 /* 常驻底部区(sticky footer):笔记的回收站 / 会话的添加本地工作区+已归档 —— 不随列表滚走。
  * 归档展开可能很长 → 自身 max-height + 滚动,绝不无限撑高把列表挤没。 */
 .t2s-foot { flex: 0 0 auto; -webkit-app-region: no-drag; border-top: var(--border-width, 1px) solid var(--border); padding: 3px 6px 6px; max-height: 45vh; overflow-y: auto; }
@@ -309,9 +306,11 @@
   margin-top: 4.5px;
   border-radius: var(--radius-sm, 6px);
   position: relative;
+  transition: box-shadow var(--lcl-drop-fade); /* 放进文件夹的描边淡入淡出 */
 }
-/* 落点提示:目标上方间隙里一道醒目插入线(拖动的组将落到此处之前) */
-.t2s-group.drag-over::before {
+/* 落点提示:目标上方间隙里一道醒目插入线(拖动的组将落到此处之前)。线常驻、平时透明,
+ * 换落点原地淡出淡入(LCL 落点提示,token 见 lcl/engine/dropIndicator.css)。 */
+.t2s-group::before {
   content: '';
   position: absolute;
   left: 4px;
@@ -319,13 +318,15 @@
   top: -4px;
   height: 3px;
   border-radius: var(--radius-pill, 999px);
-  background: var(--accent-ink);
+  background: var(--signal-line);
   z-index: 3;
+  pointer-events: none;
+  opacity: 0; scale: .6 1; transform-origin: left center; transition: var(--lcl-drop-leave);
 }
+.t2s-group.drag-over::before { opacity: 1; scale: 1; transition: var(--lcl-drop-enter); }
 /* 下移:落点在目标整块之下 —— 收起态块 = 组头本身,展开态块的下沿 = 会话容器下沿。 */
-.t2s-group.drag-over.below::before { top: auto; bottom: -4px; }
-.t2s-group-sessions.drag-over-end { position: relative; }
-.t2s-group-sessions.drag-over-end::after {
+.t2s-group.drag-over.below::before { top: calc(100% + 1px); } /* = bottom: -4px;写成 top 才能等离场淡完再变 */
+.t2s-group-sessions::after {
   content: '';
   position: absolute;
   left: 4px;
@@ -333,9 +334,12 @@
   bottom: -2px;
   height: 3px;
   border-radius: var(--radius-pill, 999px);
-  background: var(--accent-ink);
+  background: var(--signal-line);
   z-index: 3;
+  pointer-events: none;
+  opacity: 0; scale: .6 1; transform-origin: left center; transition: var(--lcl-drop-leave);
 }
+.t2s-group-sessions.drag-over-end::after { opacity: 1; scale: 1; transition: var(--lcl-drop-enter); }
 .t2s-group.dragging { opacity: 0.4; }
 .t2s-group-toggle {
   flex: 1;
@@ -383,9 +387,19 @@
 }
 .t2s-group:hover .t2s-group-add { opacity: 0.7; }
 .t2s-group-add:hover { opacity: 1; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); color: var(--text); }
+/* 5.17:行尾按钮平时不占位(浮在行尾、透明),组名用满宽;悬停 / 键盘聚焦 / 菜单开着时组头让出右边距,名字才收短。
+ * 不用 display:none —— 台架与读屏都要能直接点到它。触屏常显,照旧占位。 */
+@media (hover: hover) {
+  .t2s-group > .t2s-group-add { position: absolute; top: 50%; right: 0; translate: 0 -50%; }
+  .t2s-group > .t2s-group-add:nth-last-child(2) { right: 25.5px; }
+  .t2s-group > .t2s-group-add:nth-last-child(3) { right: 51px; } /* 文件面板展开且可写时三颗:新建文件 / 新建文件夹 / 刷新 */
+  .t2s-group:has(> .t2s-group-add):is(:hover, :focus-within, :has(> .t2s-group-add[aria-expanded=true])) { padding-right: 25.5px; }
+  .t2s-group:has(> .t2s-group-add + .t2s-group-add):is(:hover, :focus-within, :has(> .t2s-group-add[aria-expanded=true])) { padding-right: 51px; }
+  .t2s-group:has(> .t2s-group-add + .t2s-group-add + .t2s-group-add):is(:hover, :focus-within, :has(> .t2s-group-add[aria-expanded=true])) { padding-right: 76.5px; }
+}
 
 /* 会话行 */
-.t2s-group-sessions { display: flex; flex-direction: column; gap: 1px; padding-bottom: 1.5px; }
+.t2s-group-sessions { position: relative; display: flex; flex-direction: column; gap: 1px; padding-bottom: 1.5px; transition: box-shadow var(--lcl-drop-fade); } /* relative:组尾那条落点线(::after)常驻 */
 .t2s-srow {
   position: relative;
   display: flex;
@@ -401,7 +415,7 @@
   text-align: left;
   border-radius: var(--radius-sm, 6px);
   cursor: pointer;
-  transition: background var(--duration-fast, 0.15s);
+  transition: background var(--duration-fast, 0.15s), box-shadow var(--lcl-drop-fade);
 }
 .t2s-srow:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 /* 多选选中态(会话行与笔记行共用 .t2s-srow):与「当前打开」的 .active 刻意不同色 —— 选中是灰底,
@@ -456,6 +470,12 @@
 }
 .t2s-kids > svg { width: 11px; height: 11px; }
 .t2s-kids:hover { color: var(--text-muted); background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
+/* 会话行尾:还有进程在后台跑(静止绿点 + 个数;转圈留给 Agent 在干活的 StatusMark) */
+.t2s-bg {
+  flex: none; display: inline-flex; align-items: center; gap: 3px; padding: 0 2px;
+  font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); font-variant-numeric: tabular-nums;
+}
+.t2s-bg > i { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
 /* 父子会话的树线:竖线落在主会话图标的中线上(--kid-pad = 主会话的左内边距,槽宽 = --t2s-icon + 1.5);
  * 最后一个子会话那里拐一个圆角弯进它的图标。子会话图标淡一档。 */
 .t2s-srow.t2s-has-kids::after, .t2s-srow.t2s-kid::after {
@@ -543,9 +563,9 @@
 /* ══ 插件列表源(View 基座 P2):统一左栏承载插件数据 ══
  * 行/搜索框复用上面的 .t2s-srow / .t2s-search;这里只补顶部动作、分区头与右键菜单。 */
 .t2sw-plug { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.t2sw-plug-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.t2sw-plug-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; transition: box-shadow var(--lcl-drop-fade); }
 /* 插件列表的落区高亮:与笔记树同一套描边(.amx-drop-into),行级的那条在 amadeus-host.css。 */
-.t2sw-plug-list.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--accent, #6c5ce7); border-radius: var(--radius-sm, 6px); }
+.t2sw-plug-list.amx-drop-into { box-shadow: inset 0 0 0 1.5px var(--signal-line); border-radius: var(--radius-sm, 6px); }
 /* Search and one primary action; category selection and extra actions use shared menus. */
 .t2sw-plug-toolbar { display: flex; align-items: center; gap: 4px; padding: 6px 7px 2px; flex-shrink: 0; }
 .t2sw-plug-toolbar .t2s-search { flex: 1; width: auto; min-width: 0; margin: 0; padding: 5px 8px; }
@@ -556,13 +576,25 @@
   border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text-light);
   font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
 }
-.t2sw-plug-btn { display: block; max-width: 42%; padding: 3px 8px; flex: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text); }
+.t2sw-plug-btn { max-width: 42%; padding: 3px 8px; flex: none; white-space: nowrap; overflow: hidden; color: var(--text); }
+.t2sw-plug-btn-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.t2sw-plug-btn-ic { display: none; }
+.t2sw-plug-btn-ic > svg { width: 15px; height: 15px; }
+/* 5.17:工具栏窄于 260px(880 窗下的自动化侧栏)主动作只留图标,不再被省略成「New auto…」像个输入框;全名在悬停提示里。 */
+.t2sw-plug-toolbar { container: plug-toolbar / inline-size; }
+@container plug-toolbar (max-width: 259px) {
+  .t2sw-plug-btn { width: 26px; padding: 0; }
+  .t2sw-plug-btn-label { display: none; }
+  .t2sw-plug-btn-ic { display: inline-flex; }
+}
 .t2sw-plug-overflow, .t2sw-plug-reset { flex: none; width: 26px; padding: 0; }
 .t2sw-plug-filterbar { display: flex; align-items: center; gap: 2px; padding: 3px 8px 5px; flex-shrink: 0; min-width: 0; }
 .t2sw-plug-filter { justify-content: flex-start; min-width: 0; max-width: 75%; padding: 3px 5px; }
 .t2sw-plug-filter > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2sw-plug-filter > svg { flex: none; }
 .t2sw-plug-total { margin-left: auto; flex: none; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-variant-numeric: tabular-nums; }
+/* 开着筛选时最后一行下面的「筛掉了几条」 */
+.t2sw-plug-hidden { padding: 10px 12px; text-align: center; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-variant-numeric: tabular-nums; }
 .t2sw-plug-item { position: relative; }
 .t2sw-plug-item .t2s-srow { font-weight: 400; }
 .t2sw-plug-item .t2s-srow:is(.active, .is-unread) { font-weight: 500; }
@@ -615,11 +647,13 @@
 .t2sw-plug-gtile > svg { width: 16px; height: 16px; }
 .t2sw-plug-ghead > .t2s-count { margin-right: 4px; }
 /* 行拖到组头的前 / 后:插入线与 .t2sw-plug-item.drop-before 同款(.t2o-row 自己是 position: relative,组头没有选中态,::before 空着) */
-.t2sw-plug-ghead.drag-over::before {
+.t2sw-plug-ghead::before {
   content: ''; position: absolute; left: 4px; right: 4px; top: -2px; height: 3px;
   border-radius: var(--radius-pill, 999px); background: var(--signal-line); z-index: 3; pointer-events: none;
+  opacity: 0; scale: .6 1; transform-origin: left center; transition: var(--lcl-drop-leave);
 }
-.t2sw-plug-ghead.drag-over.below::before { top: auto; bottom: -2px; }
+.t2sw-plug-ghead.drag-over::before { opacity: 1; scale: 1; transition: var(--lcl-drop-enter); }
+.t2sw-plug-ghead.drag-over.below::before { top: calc(100% - 1px); } /* = bottom: -2px */
 .t2sw-plug-ghead.dragging { opacity: 0.4; }
 /* 组里的行前导槽里只有这一颗:未读的圆点(和 .t2s-dot.unread 同色同大,只是不贴在图标角上) */
 .t2sw-plug-udot { width: 6px; height: 6px; border-radius: 50%; background: var(--signal-line); }
@@ -635,13 +669,16 @@
 /* 箭头紧跟名字(.t2s-group-label 自己是 flex:1,会把箭头推到最右) */
 .t2sw-plug-sec-name .t2s-group-label { flex: 0 1 auto; }
 /* 行在列表里拖动时的插入线:与工作区组头那条(.t2s-group.drag-over)同款,画在行的上 / 下缘。 */
-.t2sw-plug-item.drop-before::before,
-.t2sw-plug-item.drop-after::after {
+.t2sw-plug-item::before,
+.t2sw-plug-item::after {
   content: ''; position: absolute; left: 4px; right: 4px; height: 3px;
   border-radius: var(--radius-pill, 999px); background: var(--signal-line); z-index: 3; pointer-events: none;
+  opacity: 0; scale: .6 1; transform-origin: left center; transition: var(--lcl-drop-leave);
 }
-.t2sw-plug-item.drop-before::before { top: -2px; }
-.t2sw-plug-item.drop-after::after { bottom: -2px; }
+.t2sw-plug-item::before { top: -2px; }
+.t2sw-plug-item::after { bottom: -2px; }
+.t2sw-plug-item.drop-before::before,
+.t2sw-plug-item.drop-after::after { opacity: 1; scale: 1; transition: var(--lcl-drop-enter); }
 .t2sw-plug-item.dragging { opacity: 0.4; }
 /* 文件夹行行尾的「更多」是 CapabilityMenu 的触发钮(.t2s-group-add):菜单开着时保持可见 */
 .t2sw-plug .t2s-group-add[aria-expanded=true] { opacity: 1; }
@@ -663,7 +700,7 @@
 .t2sw .t2s-special-group { gap: 0.65px; }
 
 /* ── 侧栏 Chat/Work 模式胶囊(新对话行右侧):复用 Local/Cloud 的 `.t2s-vaultseg` 正典,
- *    包括凹轨道、弹性滑块和 `.on` 文字态;这里只规定这一处嵌入行的宽度与间距。 */
+ *    包括凹轨道、凸起的弹性滑块和 `.on` 文字态;这里只规定这一处嵌入行的宽度与间距。 */
 .t2s-special-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .t2s-special-row .t2s-special { flex: 1; min-width: 0; }
 .t2s-side .t2s-vaultseg.t2s-mode {

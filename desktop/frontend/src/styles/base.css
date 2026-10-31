@@ -61,6 +61,10 @@
   --ui-control-height: 28px;
   --ui-control-pad-block: 4px;
   --radius-pill: 999px;
+  /* 分段控件选中滑块(5.11 A,10-25 用户定):凸起 —— 浅色卡面色 + 软阴影,暗色比轨道亮一档(:root.dark 那块)。
+   * 侧栏胶囊 .t2s-vaultseg、LCL 看法胶囊 .lcl-vmode、Agent 标签条 .agent-section-nav 共用。 */
+  --seg-thumb: var(--bg-card);
+  --seg-thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 0.5px rgba(0, 0, 0, 0.06);
   --font-body: var(--font-ui);
   --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
   --user-bg: rgba(28, 28, 28, 0.04);
@@ -137,10 +141,15 @@
   --db-page-line-height: 26px;
   --duration-instant: 0.1s;
   --duration-fast: 0.15s;
+  --duration-base: 0.2s; /* 8.11 新加的唯一一档:折叠、布局类补间 */
   --duration-slow: 0.25s;
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  /* 「agent 切换」同款灵动曲线(轻微过冲);用于展开/弹出等微动效,全局统一 taste */
-  --ease-spring: cubic-bezier(0.2, 0.8, 0.3, 1);
+  /* 弃用别名(8.11,DESIGN §3「动效 token」别名表):保留一个小版本后删,check:motion 禁新用。
+     --ease-spring 没有回弹、名字误导;--ease-out 与 --ease-surface 肉眼分不出;--ease-apple / --dur-* 原来各处同名不同值。 */
+  --ease-out: var(--ease-surface);
+  --ease-spring: var(--ease-surface);
+  --ease-apple: var(--ease-calm);
+  --dur-fast: var(--duration-fast);
+  --dur-normal: var(--duration-slow);
   /* ── 空间高程 token（明暗统一材质见下方 html:root 规则） ── */
   --on-accent: #fbfbfa;
   --on-accent-ink: var(--on-accent);
@@ -183,6 +192,8 @@
  * 没有这块时,暗色下会泄漏亮色 :root 中性色到深底上(= 之前「暗色完全异常」的根因)。 */
 :root.dark {
   --bg: #2a292b;
+  --seg-thumb: var(--overlay-strong);
+  --seg-thumb-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
   --bg-card: #323134;
   --bg-glass: rgba(28, 26, 22, 0.9);
   --sidebar-bg: #262528;
@@ -262,12 +273,17 @@ html[data-glass='off'] * {
  * The html:root specificity also wins over older installed first-party theme CSS. */
 html:root[data-mode='light'] {
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.025), 0 8px 24px -6px rgba(0, 0, 0, 0.05);
+  --droplet-shadow: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.03)) drop-shadow(0 6px 12px rgba(0, 0, 0, 0.06)); /* 液体的影子 ≈ --card-shadow,跟形状走 */
+  /* 半浮:住在纸里、身下没有正文的卡(摘要栏卡片缺省)。影子收近收淡,让输入卡做唯一的主浮(2026-10-28 用户定) */
+  --card-shadow-low: 0 1px 2px rgba(0, 0, 0, 0.025), 0 4px 10px -6px rgba(0, 0, 0, 0.07);
   --btn-shadow: none;
   --icon-shadow: none;
 }
 /* 暗色同一档「淡」:层次主要靠底色小台阶,阴影只在浮层边缘留一点(10-03 用户定 d3;.35/.6 + 顶边微光被否「太重」,别往重里调)。 */
 html:root[data-mode='dark'] {
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.10), 0 8px 24px -6px rgba(0, 0, 0, 0.18);
+  --droplet-shadow: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.12)) drop-shadow(0 6px 12px rgba(0, 0, 0, 0.2));
+  --card-shadow-low: 0 1px 2px rgba(0, 0, 0, 0.12), 0 4px 10px -6px rgba(0, 0, 0, 0.22);
   --btn-shadow: none;
   --icon-shadow: none;
 }
@@ -275,8 +291,10 @@ html:root[data-mode='dark'] {
 /* Flat only clears decorative elevation; focus, selection and menu motion stay intact. */
 html:root[data-mode][data-flat='1'] {
   --card-shadow: none;
+  --card-shadow-low: none;
   --btn-shadow: none;
   --icon-shadow: none;
+  --seg-thumb-shadow: none;
 }
 
 /* color-scheme 按 LCL 的 data-mode 声明:滚动条/原生控件随明暗,且 astryx 传送到 body 的浮层
@@ -287,6 +305,9 @@ html:root[data-mode][data-flat='1'] {
 
 /* ─── 重置 ─── */
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* 上一行把 UA 给模态 <dialog> 的 margin:auto 也清了 → 插件 showModal() 的对话框贴在左上角(走查续八 8.13)。
+ * :where 零特异性:只压过 *,组件 / 插件自己写了 margin 就以它为准。非模态 show() 不管。 */
+:where(dialog:modal) { margin: auto; }
 html, body, #root { height: 100%; }
 body {
   font-family: var(--font-ui);
@@ -301,8 +322,12 @@ body {
   overflow: hidden;
   transition: background var(--duration-slow), color var(--duration-slow);
 }
-button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+/* 插件视图里没写 class 的按钮让给文件末尾的 plugin-view-base(那边零权重,插件自己写的规则才都压得过);:where 不加特异性,别处照旧 (0,0,1)。
+ * 括号里那串与 plugin-view-base 的按钮选择器逐字一致(pluginContract.test.ts 核对),改一处两处一起改。 */
+button:where(:not([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *))) { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 input, textarea, select { font: inherit; color: var(--text); }
+/* 多选的勾选框(状态栏条目、导入勾选、待办完成…)跟主题的墨色走,不用系统蓝;二态设置一律是 SettingsSwitch(走查续五 5.1)。 */
+input[type='checkbox'] { accent-color: var(--accent-ink); }
 /* form-baseline:start —— 下面两块由 npm run check:formbase 整体抽出来做 A/B,别删这对标记。 */
 /* 表单控件基线:任何**没被更具体规则接管**的 input / select / textarea 都走主题,
  * 而不是掉回 Chromium 默认的方角灰框(用户实报:设置里那种「很原始」的输入框)。
@@ -351,6 +376,10 @@ a { color: var(--accent-ink); text-decoration: none; }
    聊天正文那份在 chat2.css 里用更高特异性补上引用条同款配色,这里是**全局兜底**:少了它,
    `.t2-content` 之外的每一处网页链接都是隐形的。 */
 .citelink { text-decoration: underline; text-underline-offset: 2px; }
+/* 文件类双链 / 引用前那枚类型图标(聊天 ChatWikiLink 与 Amadeus 正文同一套,后者在 amadeus/styles.css 有同值的作用域版);
+   全局放这里是因为 <Markdown> 也出现在收件箱、更新日志等不加载 chat2.css 的地方,没有尺寸的 svg 会撑成 300×150。 */
+.wikilink-nb { white-space: nowrap; }
+.wikilink-ic { display: inline-block; width: 0.95em; height: 0.95em; vertical-align: -0.15em; margin-right: 0.25em; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 a:hover { color: var(--accent-ink); }
 
 /* ⚠️ 全局**不要**写 `::-webkit-scrollbar` 自定义样式(2026-08-13 起)。
@@ -376,12 +405,15 @@ a:hover { color: var(--accent-ink); }
   to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
-/* 无障碍:尊重系统「减少动态效果」,关掉动画/过渡(framer-motion 由 useReducedMotion 各自处理) */
+/* 无障碍:尊重系统「减少动态效果」(DESIGN §3 规矩 8「留反馈,去点缀」,走查续八 8.3):关键帧一律压掉(转圈、骨架屏闪光照旧停);
+   过渡只留颜色 / 底色 / 边色 / 透明度 / 阴影,时长 --duration-fast —— 位移、缩放、尺寸不动,拨开关底色仍渐变过去。
+   framer-motion 由 Root / MobileRoot 根上的 <MotionConfig reducedMotion="user"> 跟系统(只留透明度)。 */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
+    transition-property: color, background-color, border-color, opacity, box-shadow !important;
+    transition-duration: var(--duration-fast) !important;
     scroll-behavior: auto !important;
   }
 }
@@ -501,7 +533,7 @@ a:hover { color: var(--accent-ink); }
   margin: 0;
   padding: 3px 4px 3px 6px;
   border-radius: var(--radius-md);
-  transition: background var(--duration-fast);
+  transition: background var(--duration-fast), box-shadow var(--lcl-drop-fade);
 }
 .ws-group-head:hover { background: var(--overlay-light); }
 /* 工作区下的会话:缩进嵌在分组之下(Codex 式层级)。 */
@@ -721,7 +753,7 @@ a:hover { color: var(--accent-ink); }
 /* 工作区拖拽排序:拖起的组半透明,落点组上方画一条 accent 插入线。 */
 .ws-group-head[draggable="true"] { cursor: grab; }
 .ws-group-head.ws-dragging { opacity: 0.4; }
-.ws-group-head.ws-drag-over { box-shadow: inset 0 2px 0 var(--accent-ink); }
+.ws-group-head.ws-drag-over { box-shadow: inset 0 2px 0 var(--signal-line); }
 .ws-group-toggle {
   flex: 1;
   display: flex;
@@ -985,6 +1017,10 @@ a:hover { color: var(--accent-ink); }
 .conn-pill.warn { color: var(--text); }
 .conn-pill.warn .dot { background: var(--warning); }
 .conn-pill.warn svg { color: var(--warning); }
+/* Muse 没开:状态位只写一行「未开启 · 去设置」(MuseView),不画胶囊。 */
+.muse-off-line { white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-meta); font-weight: 400; line-height: var(--ui-line-meta); }
+.muse-off-link { padding: 0; border: 0; background: none; color: var(--text); font: inherit; font-weight: 550; cursor: pointer; }
+.muse-off-link:hover { text-decoration: underline; text-underline-offset: 2px; }
 
 .icon-btn {
   display: inline-flex;
@@ -1388,6 +1424,17 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .tool-group-cur-copy {
   display: inline-block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom;
 }
+.tool-roll { display: inline-grid; min-width: 0; overflow: hidden; }
+.tool-roll-item { grid-area: 1 / 1; display: flex; min-width: 0; }
+/* 过程行滚动替换(ToolGroup 的 RollLine):旧行上滑 8px 淡出、新行从下面 8px 进,带 2px 模糊;减少动态效果直接换字 */
+.tool-roll-item.is-in { animation: tool-roll-in var(--roll-enter-duration) var(--ease-calm) both; }
+.tool-roll-item.is-out { pointer-events: none; animation: tool-roll-out var(--roll-exit-duration) var(--ease-exit) forwards; }
+@keyframes tool-roll-in { from { opacity: 0; translate: 0 8px; filter: blur(2px); } }
+@keyframes tool-roll-out { to { opacity: 0; translate: 0 -8px; filter: blur(2px); } }
+@media (prefers-reduced-motion: reduce) {
+  .tool-roll-item.is-in { animation: none; }
+  .tool-roll-item.is-out { display: none; }
+}
 .tool-group-cur .file { color: var(--accent-ink); font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); }
 .tool-group-step { color: var(--text-faint); }
 /* 窄列(侧栏对话、手机)换短摘要「思考 8 秒 · 5 个工具」,不靠省略号截断 */
@@ -1398,6 +1445,34 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .tool-group-status { flex-shrink: 0; display: inline-flex; }
 .tool-group-status:empty { display: none; }
+/* 发给模型前脱敏(借鉴 magpie 方案 A):过程行标题后一句「遮住 N 个值」;展开后被遮的值垫一层主题色底,不画框、不加下划线 */
+.t2-mask-tag {
+  display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; flex-shrink: 0; white-space: nowrap;
+  color: var(--text-muted); font: 400 var(--ui-font-caption)/1.3 var(--font-ui); border-radius: var(--radius-sm); cursor: pointer;
+}
+.t2-mask-tag svg { color: var(--accent-ink); }
+.t2-mask-tag:hover, .t2-mask-tag.open { color: var(--text); }
+.t2-mask-tag:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: 2px; }
+.t2-masked { background: color-mix(in srgb, var(--accent-ink) 16%, transparent); border-radius: 3px; padding: 0 1px; }
+.t2-mask-pop { width: min(440px, calc(100vw - 24px)); padding: 10px 12px 8px; font: 400 var(--ui-font-caption)/1.45 var(--font-ui); color: var(--text-muted); }
+.t2-mask-pop h4 { margin: 0 0 8px; font: 500 var(--ui-font-meta)/1.3 var(--font-ui); color: var(--text); }
+.t2-mask-pop table { width: 100%; border-collapse: collapse; }
+.t2-mask-pop th { text-align: left; font-weight: 400; color: var(--text-faint); padding: 0 6px 4px 0; }
+.t2-mask-pop td { padding: 5px 6px 5px 0; vertical-align: top; border-top: var(--border-width) solid var(--border); }
+.t2-mask-pop td:first-child { color: var(--text); white-space: nowrap; }
+.t2-mask-pop code { font-family: var(--font-mono); font-size: var(--ui-font-caption); color: var(--text); word-break: break-all; }
+.t2-mask-foot { display: flex; align-items: center; gap: 10px; margin-top: 6px; color: var(--text-faint); }
+.t2-mask-foot .grow { flex: 1; }
+.t2-mask-foot button { padding: 0; color: var(--accent-ink); font: inherit; background: none; border: 0; cursor: pointer; }
+.t2-mask-done { color: var(--text-faint); white-space: nowrap; }
+.mask-settings-list { padding: 0 15px 12px; } /* 同 .settings-row-notes:跟行的左右边距对齐 */
+.mask-settings-group + .mask-settings-group { margin-top: 8px; }
+.mask-settings-group-head { display: flex; align-items: baseline; gap: 8px; padding: 4px 0; }
+.mask-settings-group-head small, .mask-settings-item small { color: var(--text-faint); }
+.mask-settings-item { display: flex; align-items: center; gap: 8px; min-height: 26px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.mask-settings-item > span:first-child { color: var(--text); min-width: 72px; }
+.mask-settings-item code { font-family: var(--font-mono); }
+.mask-settings-item .grow { flex: 1; }
 .tool-group-list { padding: 4px 0 2px; }
 .tool-row { position: relative; font-size: var(--ui-font-meta, 12px); }
 .tool-row:not(:last-child)::before {
@@ -1605,6 +1680,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .inquiry-opts { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
 .inquiry-input { display: flex; gap: 6px; }
 .inquiry-input .inline-input { flex: 1; }
+/* 键位提示(用过一次键盘才出现);触屏没有键盘,不显示 */
+.inquiry-keys { margin-top: 6px; font-size: var(--ui-font-caption); color: var(--text-faint); }
+@media (hover: none) { .inquiry-keys { display: none; } }
 .inquiry-resolved { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 /* 卡片标题(计划 / 待办)——calm:文字色 + 强调只在 emoji/图标 */
 .tg-card-title {
@@ -1828,7 +1906,7 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   overflow: visible;
 }
 .composer-menu--mode .menu-item { font-size: var(--t2c-font-control, 12px); }
-.composer-menu .menu-item.approval-item { position: relative; align-items: center; gap: 9px; }
+.composer-menu .menu-item.approval-item { position: relative; align-items: center; }
 .composer-menu .menu-item.approval-item .grow { min-width: 0; }
 .approval-ic, .approval-ck { flex: none; color: var(--text-muted); }
 .menu-item.approval-item.active .approval-ic, .menu-item.approval-item.active .approval-ck { color: inherit; }
@@ -1907,17 +1985,12 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* 打开时药丸撑到与菜单同宽、右缘对齐。
    ⚠️ 走 min-width 不走 width:width:auto → 224px 不可插值,动画不会跑;0 → 224px 才行。
    .is-open 三段选择器是为了压过 .t2c-row .composer-chip{min-width:0}(窄屏收缩用)。 */
-/* ⚠️ 动的是 width 且**必须**配 interpolate-size:allow-keywords —— 没有它,fit-content(以及 auto)
-   到 224px 不可插值,过渡根本不跑。
-   ⚠️ 别改回「min-width: 0 → 224px」那版:它开的时候看着对,收的时候几乎瞬变 —— 因为可见区间只有
-   [自然宽, 224],而动画区间是 [0, 224],front-loaded 的 spring 曲线在头 25ms 就跌破了自然宽,
-   剩下 155ms 全动在看不见的地方。实测钉在 scripts/model-menu.check.cjs(开/收各采样)。
-   ponytail: Safari 尚不支持 interpolate-size,那边优雅降级为无动画;真要管 Safari 再改成 JS 量自然宽写 px。 */
+/* 开合直接到位、只换底色(走查续八 8.4,规矩 3:颜色和位移同一时长、同一条曲线):以前宽度补 180ms,菜单 80ms 就退完了、
+   药丸还在收。别把 width 过渡加回来;scripts/model-menu.check.cjs 的 B 钉着「开 / 收都不补宽度」。 */
 .composer-chip.model-pill-btn {
   min-width: 0;
-  interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast), width 0.18s var(--ease-spring);
+  transition: background var(--duration-fast);
 }
 .composer-chip.model-pill-btn.is-open {
   display: grid;
@@ -1975,6 +2048,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .cm-advanced-list .cm-row { padding-inline: 6px; font-size: var(--t2c-font-control, 12px); }
 .cm-row--static { cursor: default; }
 .cm-row--static:hover { background: transparent; color: var(--text-light); }
+/* Fast 行:说明写在标签下 —— 「约 2 倍出字速度，额度消耗更快」放在右侧一行放不下,截断会先吃掉最要紧的额度提示。 */
+.cm-fast-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.cm-fast-note { color: var(--text-faint); font-size: var(--t2c-font-meta, 11px); line-height: 1.35; }
 .cm-row-v.is-max,
 .cm-effort.is-max .cm-effort-value {
   color: #a77bff;
@@ -2320,12 +2396,14 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .engine-picker-more:hover { color: var(--text); }
 /* flex-shrink:0 —— 默认可压缩会让 pill 在放不下时被挤扁(内容宽 = 容器宽 → 永远不溢出、⋯ 永不出现),
    要的是保持原尺寸然后横向溢出去翻页。 */
-.engine-pill { display: inline-flex; align-items: center; flex-shrink: 0; cursor: pointer; white-space: nowrap; overflow: hidden; opacity: 0.6; padding: 7px; border-radius: var(--radius-lg, 16px); color: var(--text-muted); transition: opacity 0.2s ease, background-color 0.25s ease-out, color 0.2s ease; }
+/* 选中 / 悬停一个时长、一条曲线(走查续八 8.6):以前五个时长(200 / 250 / 500 / 600 / 400ms),标签 max-width 补到 160px 前 30% 就展开完、
+   后面在空转。标签按实际宽展开(interpolate-size 补 width 0 → auto,上限仍 160px),选中那一下最多鼓 4%、落回 1。 */
+.engine-pill { display: inline-flex; align-items: center; flex-shrink: 0; cursor: pointer; white-space: nowrap; overflow: hidden; opacity: 0.6; padding: 7px; border-radius: var(--radius-lg, 16px); color: var(--text-muted); transition: opacity var(--pill-select-duration) var(--ease-surface), background-color var(--pill-select-duration) var(--ease-surface), color var(--pill-select-duration) var(--ease-surface), padding var(--pill-select-duration) var(--ease-surface); }
 .engine-pill:hover { opacity: 1; }
 .engine-pill:disabled { cursor: default; }
 .engine-pill .engine-pill-icon { display: inline-flex; flex-shrink: 0; }
-.engine-pill .engine-pill-label { max-width: 0; opacity: 0; overflow: hidden; font-size: var(--ui-font-body, 13px); transition: max-width 0.6s cubic-bezier(0.2, 0.8, 0.3, 1), opacity 0.5s cubic-bezier(0.2, 0.8, 0.3, 1) 0.05s, margin 0.6s cubic-bezier(0.2, 0.8, 0.3, 1); }
-.engine-pill:hover .engine-pill-label { max-width: 160px; opacity: 1; margin-left: 6px; }
+.engine-pill .engine-pill-label { interpolate-size: allow-keywords; width: 0; max-width: 160px; opacity: 0; overflow: hidden; font-size: var(--ui-font-body, 13px); transition: width var(--pill-select-duration) var(--ease-surface), opacity var(--pill-select-duration) var(--ease-surface), margin var(--pill-select-duration) var(--ease-surface); }
+.engine-pill:hover .engine-pill-label { width: auto; opacity: 1; margin-left: 6px; }
 /* 触屏长按 = 打开菜单,不该同时选中药丸里的字(Android WebView 会选中并留下选区手柄)。 */
 @media (pointer: coarse) { .engine-pill { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
 /* ── 触屏按压反馈(2026-10-02 真机录屏打回:「点哪儿都有蓝色遮罩」)。
@@ -2341,9 +2419,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   :is(button, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option']) { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   :root:not([data-ripple]) :is(button, a, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option']):not(:disabled):active { box-shadow: inset 0 0 0 100vmax rgba(128, 128, 128, 0.2); }
 }
-.engine-pill.selected { opacity: 1; padding: 7px 13px; background: var(--overlay-light); color: var(--text); animation: agentSelectPop 0.4s ease-out; }
-.engine-pill.selected .engine-pill-label { max-width: 160px; opacity: 1; margin-left: 6px; font-weight: 600; }
-@keyframes agentSelectPop { 0% { transform: scale(1); } 35% { transform: scale(1.12); } 100% { transform: scale(1.02); } }
+.engine-pill.selected { opacity: 1; padding: 7px 13px; background: var(--overlay-light); color: var(--text); animation: agentSelectPop var(--pill-select-duration) var(--ease-surface); }
+.engine-pill.selected .engine-pill-label { width: auto; opacity: 1; margin-left: 6px; font-weight: 600; }
+@keyframes agentSelectPop { 0% { transform: scale(1); } 40% { transform: scale(1.04); } 100% { transform: scale(1); } }
 .engine-picker-hint { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
 /* Agent 选择器复用 engine-picker 形态;icon 槽放圆形头像或首字母 */
 .agent-pill-avatar { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; display: block; }
@@ -2416,6 +2494,19 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .att-tile:hover .att-tile-x, .att-tile-x:focus-visible { opacity: 1; }
 @media (hover: none) { .att-tile-x { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .att-tile { transition: none; } }
+/* 上传中 / 失败(附件上传进度方案 r2):缩略图上压一层纱 + 环;文件条底边内侧一根细条(不贴着文字,免得像下划线);
+   失败只垫红、不描边。环 / 条本身是 @lcl/components 的 UploadRing / UploadBar,前 300ms 不显示(快的不闪)。 */
+.att-tile-veil { position: absolute; inset: 0; border-radius: var(--radius-sm); background: color-mix(in srgb, var(--bg-card) 58%, transparent); pointer-events: none; }
+.att-tile > .lcl-upring { position: absolute; inset: 0; margin: auto; pointer-events: none; }
+.att-tile--file > .lcl-upbar { position: absolute; left: 7px; right: 7px; bottom: 4px; }
+.att-tile.is-failed .att-tile-sub { color: var(--danger); }
+.att-tile.is-failed .att-tile-badge { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
+.att-tile--file.is-failed { cursor: pointer; }
+.att-tile-retry {
+  position: absolute; inset: 0; margin: auto; width: 26px; height: 26px; padding: 0; border: 0; border-radius: 50%;
+  display: grid; place-items: center; background: var(--bg-card); color: var(--danger); cursor: pointer;
+}
+.att-tile-retry:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
 /* 引用磁贴(10-23,views/chat2/QuoteTile.tsx):文件条同一副身材,色块里是引号(强调色墨);整条是一颗按钮(看全文 / 跳回原文)。 */
 .att-tile--quote { padding: 0; width: 220px; }
 .att-tile-open {
@@ -2424,7 +2515,33 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 }
 .att-tile--quote:hover { background: color-mix(in srgb, var(--overlay-light) 60%, var(--bg-card)); }
 .att-tile-open:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
-.att-tile-badge[data-kind='quote'] { color: var(--accent-ink); }
+.att-tile-badge[data-kind='quote'], .att-tile-badge[data-kind='paste'], .att-tile-badge[data-kind='element'] { color: var(--accent-ink); }
+/* 划选「引用」的就地回复框(ReplyPopover):外壳 = .ui-popover(与划线条同一套);上面引文两行收起带竖线,下面一行回应 + 加进输入框。
+   挂在 body 下:只用根上的 token。 */
+.quote-reply { z-index: 100; width: min(380px, calc((100vw - 16px) / var(--uiz, 1))); padding: 10px 10px 8px; -webkit-app-region: no-drag; }
+.quote-reply-text {
+  padding-left: 10px; border-left: 2px solid var(--overlay-strong); color: var(--text-muted);
+  font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); white-space: pre-wrap; overflow-wrap: anywhere;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.quote-reply-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.quote-reply-input {
+  flex: 1; min-width: 0; height: 30px; padding: 0 2px; border: 0; outline: none; background: none;
+  color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px);
+}
+.quote-reply-input::placeholder { color: var(--text-faint); }
+.quote-reply-add {
+  flex: none; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm);
+  background: none; color: var(--text-muted); cursor: pointer;
+}
+.quote-reply-add:hover { background: var(--overlay-light); color: var(--text); }
+.quote-reply-add:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 1px; }
+.quote-preview-note {
+  width: 100%; min-height: 64px; padding: 8px 10px; resize: vertical; border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md);
+  background: var(--bg-card); color: var(--text); font: inherit; font-size: var(--ui-font-body, 13px); line-height: var(--ui-line-body, 1.55);
+}
+.quote-preview-note:focus { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 0; }
+.quote-preview-said { color: var(--text); font-size: var(--ui-font-body, 13px); line-height: var(--ui-line-body, 1.55); white-space: pre-wrap; overflow-wrap: anywhere; }
 /* 引用全文窗(QuotePreview):外壳是 Amadeus 的 .dialog,这里只放宽、给正文一条引用竖线和自己的滚动。 */
 .am-app .dialog.quote-preview { width: min(560px, 90vw); }
 .quote-preview-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -2437,6 +2554,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   max-height: min(60vh, 480px); overflow-y: auto; padding: 2px 0 2px 12px; border-left: 2px solid var(--overlay-strong);
   color: var(--text-muted); font-size: var(--ui-font-body, 13px); line-height: var(--ui-line-body, 1.55); white-space: pre-wrap; overflow-wrap: anywhere;
 }
+/* 长粘贴磁贴的全文:日志 / 代码多,等宽小一号 */
+.quote-preview-body--mono { font-family: var(--font-mono); font-size: var(--ui-font-caption); }
 
 /* agent 在对话区展示的文件(display_file / 生图 / 表情包):图片缩略图(点击放大)+ 文件卡片 */
 .inline-file-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
@@ -2906,6 +3025,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   border-radius: var(--radius-md);
   padding: 10px 12px;
 }
+/* 卡内子选项(内置浏览器「应用内打开链接」):一行文案 + 开关,开关与卡头那颗右缘对齐、文案与卡名对齐(走查续五 5.1)。 */
+.plugin-card-subrow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; padding-left: 50px; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
 .plugin-card--link { cursor: pointer; }
 .plugin-card--blocked { opacity: 0.6; }
 .plugin-logo {
@@ -2939,10 +3060,21 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   width: auto !important;
   min-width: 0;
 }
+/* 设置页之间互指的路径(收件箱 ↔ 通知):文字链,不是按钮 */
+.settings-xref-link { padding: 0; border: 0; background: none; color: var(--accent-ink); font: inherit; cursor: pointer; }
+.settings-xref-link:hover { text-decoration: underline; }
+/* 本机 Agent CLI:标题靠左、「重新检测」靠右 */
+.agent-clis-head { justify-content: space-between; }
 .settings-inline-row > .btn {
   flex: 0 0 auto;
   white-space: nowrap;
 }
+/* 同一行的输入框 / 下拉 / 按钮一个高度(走查续五 5.2):34 = 设置页下拉本来的高;技能库工具栏(globalSkillsLibrary.css)同用。
+ * 卡头里的 btn sm(29)不和输入框同行,不归这条管。 */
+:root { --settings-control-h: 34px; }
+.settings-inline-row > input,
+.settings-inline-row > select,
+.settings-inline-row > .btn { box-sizing: border-box; height: var(--settings-control-h); min-height: var(--settings-control-h); padding-block: 0; }
 
 /* 具体设置页共用的分组面板:一个主题只用一个外轮廓,内部设置靠行分隔,避免每个字段都变成卡片。 */
 .settings-panel {
@@ -2964,6 +3096,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-panel-head > div:not(.settings-panel-actions) { min-width: 0; flex: 1; }
 .settings-panel-head strong { display: block; color: var(--text); font-size: var(--ui-font-body, 13px); font-weight: 650; }
 .settings-panel-head p { margin: 3px 0 0; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+/* 卡里直接挂的补充说明(.settings-panel > .hint)和卡头那句说明同一档:同字号、同灰(走查续 W-23;此前继承正文字号,比卡头还醒目)。
+ * 写成 :where(…) = 零特异性:各处带类名的提示(.settings-commit-error 的危险色、.model-catalog-error …)照样压得过它,只替掉「继承正文」。 */
+:where(.settings-panel > .hint) { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
 .settings-panel-icon,
 .settings-choice-icon,
 .settings-overview-icon {
@@ -2979,6 +3114,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .settings-panel-actions .btn { width: 30px; height: 30px; padding: 0; justify-content: center; }
 .settings-panel-actions--wide { align-items: center; }
 .settings-panel-actions--wide .btn { width: auto; padding: 0 10px; }
+/* 图标按钮堆里带字的那颗(外观 › 重载主题,走查续五 5.7) */
+.settings-panel-actions .btn.settings-panel-btn--text { width: auto; gap: 4px; padding: 0 10px; white-space: nowrap; }
 
 /* 常规页先给出系统结论,再进入具体设置。左侧是判断,右侧是可扫描的状态清单。 */
 .settings-overview {
@@ -3158,6 +3295,13 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 
 /* 设置页统一行语言:左侧解释、右侧即时操作。开关、集合、筛选和页脚均只保留必要边线。 */
 .settings-setting-row { justify-content: space-between; }
+/* Hooks 页头卡(走查续五 5.4):卡头一句人话;协议细节降到说明字号、代码用代码样式;左对齐描边按钮,同 MCP 页「添加 MCP 服务器」。 */
+.hooks-intro { margin-bottom: 0; }
+.hooks-intro-body { display: flex; flex-direction: column; align-items: flex-start; gap: 10px; padding: 12px 15px 15px; }
+.hooks-intro-body .hint { margin: 0; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.6; }
+.hooks-intro-body code { padding: 1px 5px; border-radius: var(--radius-xs, 5px); background: var(--overlay-light); font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.92em; }
+/* 旧的 .field 块里换上的开关行(走查续五 5.1):行贴着 .field 的边,不再自带内衬。 */
+.field > .settings-control-row { min-height: 0; padding: 0; }
 .settings-row-control {
   flex: 0 1 260px;
   display: flex;
@@ -3190,25 +3334,43 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   border-radius: var(--radius-pill, 999px);
   background: var(--overlay-medium);
   cursor: pointer;
-  transition: border-color var(--duration-fast), background var(--duration-fast);
+  /* 底色、边色与旋钮前沿同一时长、同一条曲线(规矩 3,走查续八 8.7):以前 150ms ease 比旋钮晚到。 */
+  transition: border-color var(--switch-edge-duration) var(--ease-surface), background-color var(--switch-edge-duration) var(--ease-surface);
 }
+/* 旋钮按左右两条边定位(借鉴 Comma 方案 §4「开关拉伸」,10-24):两条边各走 --switch-edge-duration,后沿晚 --switch-edge-lag
+ * 出发 —— 离开时拉长、落地时回缩;过渡写在「要去的那一态」上,所以哪条边是后沿跟着方向换。不用 keyframes,中途反悔也接得住。
+ * 悬停时前沿朝要去的方向探 2px。 */
 .settings-switch > span {
   position: absolute;
   top: 2px;
   left: 2px;
-  width: 14px;
+  right: calc(100% - 16px);
   height: 14px;
-  border-radius: 50%;
+  border-radius: var(--radius-pill, 999px);
   background: var(--bg-card);
   box-shadow: var(--btn-shadow);
-  transition: transform var(--duration-fast), background var(--duration-fast);
+  transition: left var(--switch-edge-duration) var(--ease-surface), right var(--switch-edge-duration) var(--ease-surface) var(--switch-edge-lag), background var(--duration-fast);
 }
-/* 暗色的「关」:旋钮若仍是 --bg-card,与卡面同色、与半透明轨道只差一丝(≈1.3:1),开关看不出状态。
- * 改用背景族的 --text-faint(随 data-bg 走,不碰主题色轴),旋钮对轨道 ≥ 3:1(WCAG 1.4.11);「开」与浅色不变。
- * 仪器:check:themecontrast 的 switch-off 探针(全部语言 × 配色 × 暗色)。 */
-:root[data-mode='dark'] .settings-switch:not(.active) > span { background: var(--text-faint); }
+/* 「关」(走查续五 5.1 A,10-25):轨道用文字色实底(浅 15% / 暗 24%)、不描边,只比卡面深一档、不带主题色;旋钮阴影走 --btn-shadow(扁平模式清零,check:shadowcontract)。
+ * 暗色旋钮若仍是 --bg-card 会与卡面同色,改用背景族的 --text-light(随 data-bg 走;方案写的 --text-muted 在 24% 轨道上只有 2.5–2.9:1),
+ * 旋钮对轨道 ≥ 3:1(WCAG 1.4.11)。
+ * 外观页旧的 .switch(LCL gallery 也在用)关态同一套。仪器:check:themecontrast 的 switch-off 探针(轨道对卡面 / 旋钮对轨道)。 */
+.settings-switch:not(.active) { border-color: transparent; }
+.settings-switch:not(.active), .switch:not(.on) { background: color-mix(in srgb, var(--text) 15%, transparent); }
+:root[data-mode='dark'] .settings-switch:not(.active), :root[data-mode='dark'] .switch:not(.on) { background: color-mix(in srgb, var(--text) 24%, transparent); }
+:root[data-mode='dark'] .settings-switch:not(.active) > span, :root[data-mode='dark'] .switch:not(.on)::after { background: var(--text-light); }
 .settings-switch.active { border-color: var(--signal-mark); background: var(--signal-mark); }
-.settings-switch.active > span { transform: translateX(14px); background: var(--bg-card); }
+.settings-switch.active > span {
+  left: calc(100% - 16px); right: 2px; background: var(--bg-card);
+  transition: left var(--switch-edge-duration) var(--ease-surface) var(--switch-edge-lag), right var(--switch-edge-duration) var(--ease-surface), background var(--duration-fast);
+}
+.settings-switch:not(:disabled):hover > span { right: calc(100% - 18px); }
+.settings-switch.active:not(:disabled):hover > span { left: calc(100% - 18px); right: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .settings-switch > span, .settings-switch.active > span { transition: background var(--duration-fast); }
+  .settings-switch:not(:disabled):hover > span { right: calc(100% - 16px); }
+  .settings-switch.active:not(:disabled):hover > span { left: calc(100% - 16px); }
+}
 .settings-switch:focus-visible { outline: var(--focus-ring) solid var(--signal-line); outline-offset: 2px; }
 .settings-switch:disabled { cursor: not-allowed; }
 .is-disabled { opacity: .48; }
@@ -3380,6 +3542,23 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .settings-control-row[data-fit='wrap'] .settings-inline-actions > .btn { flex: 1 1 0; }
   .settings-meters { grid-template-columns: 1fr; gap: 16px; }
 }
+/* 设置零件放进窄窗格(右栏 / 左栏,窗口仍宽)也得换行(走查续八 8.13):上面 ≤820 那段里设置行的规则,按窗格宽再写一份。
+ * 窗格 = .wb-view(lcl/engine/engine.css 给了 container-type)。≤820 那段不能搬走:设置弹窗挂在 body 上,不在任何窗格里。 */
+@container (max-width: 420px) {
+  .settings-control-row { align-items: flex-start; flex-direction: column; }
+  .settings-row-control,
+  .settings-row-wide-control { width: 100%; flex-basis: auto; justify-content: flex-start; min-width: 0; }
+  .settings-row-control > select,
+  .settings-row-control > input { width: 100%; max-width: none; }
+  .settings-control-row[data-fit='inline'] { flex-direction: row; flex-wrap: wrap; align-items: center; row-gap: 8px; }
+  .settings-control-row[data-fit='inline'] > .settings-control-copy { flex: 1 1 0; min-width: 120px; }
+  .settings-control-row[data-fit='inline'] > .settings-row-control { width: auto; flex: 0 0 auto; justify-content: flex-end; }
+  .settings-control-row[data-fit='wrap'] .settings-parts-inline,
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions { width: 100%; }
+  .settings-control-row[data-fit='wrap'] .settings-parts-inline > input { flex: 1; width: auto; }
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions { justify-content: stretch; }
+  .settings-control-row[data-fit='wrap'] .settings-inline-actions > .btn { flex: 1 1 0; }
+}
 /* 触屏上设置零件的按钮、输入框、步进器加高到 36(手指好点)。只认零件画的行与面板,没换过来的旧页面不动。 */
 @media (pointer: coarse) {
   .settings-control-row[data-fit] .btn,
@@ -3388,6 +3567,38 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   .settings-panel--parts .settings-panel-actions .btn { min-height: 36px; }
   .settings-control-row[data-fit] .settings-stepper { height: 36px; }
   .settings-control-row[data-fit] .settings-stepper > button { width: 38px; }
+}
+/* Space 页:同一张卡里的下拉一样宽、右缘对齐(走查续 W-26)。主题色 / 背景色的下拉包在 .space-appearance-color 里,
+ * 直接子代的 220px 规则够不着它们 → 宽窄不一。窄屏沿用设置页既有的 ≤820 换行断点撑满(行在那里已经换到下一行,另起 760 会出现
+ * 「标签在上、下拉 200px 靠左」的一段)。 */
+.settings-sub--spaces .settings-row-control select { flex: 0 0 auto; width: 200px; }
+.settings-sub--spaces .space-appearance-color { justify-content: flex-end; }
+@media (max-width: 820px) {
+  .settings-sub--spaces .settings-row-control select { flex: 1 1 auto; width: 100%; }
+}
+/* 设置 → 模型 → 语音(走查续 4.5):三张卡 + 行。展开块(复刻录音区 / 音色工作室)挂在它那一行下面,同行线分隔;
+ * 说明一律是行里的小字那一档,不再藏在占位符里。 */
+.settings-voice-call .settings-control-list > * + .settings-control-row,
+.settings-voice-read .settings-control-list > * + .settings-control-row { border-top: var(--border-width) solid var(--border); }
+.settings-voice-block { display: grid; gap: 8px; padding: 12px 15px 14px; border-top: var(--border-width) solid var(--border); }
+.settings-voice-block .hint,
+.settings-voice-note { margin: 0; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+.settings-voice-error { margin: 0; color: var(--danger); font-size: var(--ui-font-caption, 11px); line-height: 1.45; }
+.settings-voice-inline { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.settings-voice-tts { flex-wrap: nowrap; }
+.settings-voice-tts > .btn { flex: 0 0 auto; white-space: nowrap; }
+.settings-voice-block .settings-voice-inline { justify-content: flex-start; }
+.settings-voice-tts > input { flex: 0 1 200px; width: 200px; min-width: 0; }
+/* 音色那一行右边是输入框 + 试听:比缺省的 260 宽一点,两样排在一行(窄屏另由 ≤820 的换行规则接) */
+@media (min-width: 821px) { .settings-voice-tts-row > .settings-row-control { flex-basis: 300px; } }
+.settings-row-control > .settings-voice-speed { width: 90px; }
+.settings-voice-ready { display: inline-flex; align-items: center; gap: 4px; margin-right: 5px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
+.settings-voice-progress { display: inline-flex; align-items: center; gap: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.settings-voice-progress-track { width: 96px; height: 4px; overflow: hidden; border-radius: var(--radius-pill, 999px); background: var(--overlay-medium); }
+.settings-voice-progress-track > span { display: block; height: 100%; border-radius: inherit; background: var(--action-fill); transition: width var(--duration-fast); }
+@media (max-width: 820px) {
+  .settings-control-row[data-fit='wrap'] .settings-voice-inline { width: 100%; justify-content: flex-start; }
+  .settings-control-row[data-fit='wrap'] .settings-voice-tts > input { flex: 1 1 auto; width: auto; }
 }
 
 /* 移动预览手机框内的通用二级界面兜底。SettingsModal 会在文件末尾用
@@ -3477,7 +3688,8 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .seg button + button { border-left: var(--border-width) solid var(--overlay-medium, rgba(127, 127, 127, 0.12)); }
 .seg button.active { background: var(--accent-tint); color: var(--text); }
 
-/* ── 开关(Switch):通用二态开关,<button role="switch" class="switch [on]">;文案配 .switch-row ── */
+/* ── 开关(Switch):旧的通用二态开关,<button role="switch" class="switch [on]">;文案配 .switch-row。
+ * 应用里已全部换成 SettingsSwitch(.settings-switch,走查续五 5.1),这份只剩 LCL gallery 在用;关态与它同一套(见 .settings-switch)。 ── */
 .switch {
   position: relative;
   width: 36px;
@@ -3721,6 +3933,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .file-row .file-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .file-row .file-size { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
 .file-row { cursor: pointer; }
+.file-row--uploading { cursor: default; } /* 正在传的那一行:环在右边,传完换成真行 */
+.file-row--uploading:hover { background: none; }
+.file-row--uploading.is-failed, .file-row--uploading.is-failed .file-size { color: var(--danger); }
 .file-row .file-act { opacity: 0; display: inline-flex; gap: 2px; }
 .file-row:hover .file-act { opacity: 1; }
 .file-row.active { background: var(--accent-light); }
@@ -4038,6 +4253,8 @@ html.dark .brand-logo--dark { display: inline-block; }
 .shortcut-row:last-child { border-bottom: none; }
 .shortcut-name { font-size: var(--ui-font-body, 13px); color: var(--text); }
 .shortcut-controls { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* 没有 ×(未绑定 / 录制中 / 按键查找的只读行)时占住那一格:键帽右缘一整列对齐(走查续 W-41)。宽同 × 的 26px。 */
+.shortcut-slot { flex: 0 0 26px; width: 26px; height: 26px; }
 .shortcut-key, .shortcut-capture {
   font-family: var(--font-mono); font-size: var(--ui-font-meta, 12px); min-width: 76px; text-align: center;
   padding: 4px 10px; border-radius: var(--radius-sm);
@@ -4229,6 +4446,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   box-shadow: var(--card-shadow, 0 8px 24px var(--shadow));
   color: var(--text);
 }
+/* 退场时 framer 把卡片弹出流、钉住原宽(data-motion-pop-id);max-width:100% 会按变窄的通知区把它夹窄 —— 退场卡不夹(走查续八 8.2)。 */
+.ntf[data-motion-pop-id] { max-width: none; }
 /* 级别只由左侧小图标的颜色传达(无边框高亮) */
 .ntf-icon { flex-shrink: 0; margin-top: 1px; color: var(--text-muted); }
 .ntf-success .ntf-icon { color: var(--green, #34a262); }
@@ -5078,7 +5297,6 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .pv-titles { flex: 1; min-width: 0; }
 .pv-title { font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); }
 .pv-subtitle { font-size: var(--ui-font-meta, 12px); color: var(--text-muted); margin-top: 1px; }
-.pv-notice { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 12px 16px 0; padding: 10px 12px; font-size: var(--ui-font-meta, 12px); color: var(--accent-ink); background: var(--overlay-light); border: var(--border-width) solid var(--border); border-radius: var(--radius-sm); }
 .pv-body { flex: 1; min-height: 0; overflow: auto; padding: 12px 16px 24px; display: flex; flex-direction: column; gap: 18px; }
 .pv-section { border: var(--border-width) solid var(--border); border-radius: var(--radius-md); overflow: hidden; }
 .pv-sec-head { display: flex; align-items: center; gap: 10px; padding: 11px 14px; background: var(--overlay-light); color: var(--text); }
@@ -5230,6 +5448,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .mk-notice-body small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
 .mk-notice-close { flex: 0 0 auto; width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); cursor: pointer; }
 .mk-notice-close:hover { background: var(--bg-hover); color: var(--text); }
+.mk-notice-action { flex: 0 0 auto; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--accent-ink); font-size: var(--ui-font-meta, 12px); font-weight: 600; padding: 1px 6px; cursor: pointer; }
+.mk-notice-action:hover { background: var(--bg-hover); }
 @media (max-width: 820px) { .mk-notice { width: calc(100% - 32px); } } /* 与 .settings-body 的 16px 内边距对齐(宽度与卡片区同为 max 1120 居中) */
 
 /* Secondary surfaces: short fade with a barely perceptible expansion, sampled from
@@ -5249,6 +5469,9 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --press-recoil-duration: 150ms;
   --menu-exit-duration: 80ms; /* 菜单、二级面板、命令面板退场 */
   --palette-enter-duration: 120ms; /* 命令面板、⌘P 进场 */
+  --droplet-duration: 420ms; /* 液滴展开(lcl/engine/droplet.ts):浮层从发起它的按钮里流出来;收起 0.7 倍倒放(10-30 用户定) */
+  --collapse-duration: var(--duration-base); /* 折叠展开 / 收起同长度(不算浮层退场,不缩短),箭头同一份 */
+  --collapse-ease: var(--ease-drawer);
   --tip-delay: 300ms; /* 提示框首次出现 */
   --tip-handoff: 80ms; /* 离开后多久再收(期间移到相邻触发点 = 接力) */
   --tip-enter: 150ms;
@@ -5257,7 +5480,23 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --hovercard-enter: 190ms;
   --hovercard-exit: 140ms;
   --flash-duration: 1100ms; /* 跳转落点双闪 */
+  --roll-enter-duration: 150ms; /* 过程行滚动替换:新行进 */
+  --roll-exit-duration: 100ms; /* 过程行滚动替换:旧行出 */
+  --reader-step-duration: 170ms; /* 画布阅读栏:翻上一轮 / 下一轮 */
+  --reader-close-duration: 200ms; /* 画布阅读栏关闭淡出,与 ChatCanvas READ_CLOSE_MS 同 */
+  /* 对话 ↔ 画布(ChatCanvas data-switch):进场整层 → 别的卡和线 → 胶囊 / 说明依次淡入,退场反过来;排在 ENTER_MS 420 / EXIT_MS 360 里 */
+  --canvas-switch-fade: 140ms; /* 整层淡入、退场每一层淡出 */
+  --canvas-switch-lag: 120ms; /* 进场:别的卡和线晚多久 */
+  --canvas-switch-cards: 220ms; /* 进场:别的卡和线淡入多久;退场:整层晚多久才淡出 */
+  --canvas-switch-hud-lag: 280ms; /* 进场:胶囊 / 说明晚多久 */
+  --canvas-switch-hud: 160ms; /* 进场:胶囊 / 说明淡入多久;空白处说明被卡盖住时让开 */
+  --switch-edge-duration: 120ms; /* 开关旋钮左右两条边各自的时长 */
+  --switch-edge-lag: 30ms; /* 开关旋钮后沿晚出发多久(离开时拉长、落地时回缩) */
+  --pill-select-duration: 200ms; /* 新对话 Agent / 引擎药丸选中、标签展开(走查续八 8.6) */
+  --toast-enter-duration: 180ms; /* 两种吐司进场:从贴着的那条边 6px 滑进 + 淡入(走查续八 8.5 A;右上通知卡在 NotificationHost 同值) */
+  --toast-exit-duration: 140ms; /* 底部吐司退场;右上通知卡 160ms 右移 16px(NotificationHost) */
   --draw-duration: 600ms; /* 描线 */
+  --land-duration: 160ms; /* 拖动排序松手落位:被拖的那一个从松手处滑进新位置(LCL land(),曲线同落点线 --lcl-drop-ease) */
 }
 @keyframes ui-menu-enter {
   from { opacity: 0; scale: 0.985; }
@@ -5272,7 +5511,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 /* 名单 = 所有「弹出来的菜单」;10-02 去掉匹配不到任何元素的 .add-menu,补上 Chat 的 / @ 菜单、账户菜单、仪表盘添加菜单。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu) {
+  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar) {
   animation: ui-menu-enter var(--menu-enter-duration) var(--menu-enter-ease);
   transform-origin: top left;
 }
@@ -5280,25 +5519,78 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transf
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
     .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu) { animation: none; }
+    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar) { animation: none; }
 }
 /* 退场:与上面的进场是**同一张名单**(check:motion 钉着)。OverlayAt 卸载时留下的替身(data-lcl-exit,见 menuAnchor.tsx
    useExitGhost)缩到 0.99、淡出、加速离开;不加模糊(filter 会让菜单成为 fixed 后代的包含块,DESIGN §4)。
    不在 OverlayAt 里的菜单关掉照旧立刻消失。减少动态效果时只淡出。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu)[data-lcl-exit] {
+  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
   animation: ui-menu-exit var(--menu-exit-duration) var(--ease-exit) forwards;
 }
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
     .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu)[data-lcl-exit] {
+    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
     animation-name: ui-fade-out;
   }
 }
-/* 替身里的子元素不重放自己的进场(命令面板 / ⌘P 的面板本身除外:它跟着遮罩一起退,见 engine.css)。 */
-[data-lcl-exit] :not(.cmd-panel, .amx-qf) { animation: none !important; }
+/* 替身本身缺省不动画(走查续八 8.1):替身是原样克隆,身上的进场 animation 还在 —— 不在退场名单上的(以前的笔记划线条)
+   关掉那一下会把进场再放一遍、「弹」出来一次。这里列的 = 所有写了 [data-lcl-exit] 退场规则的类(上面的菜单名单 + 遮罩 +
+   8.4 补的几处);新加退场规则必须加进来,否则退场被这条吃掉。check:motion 钉着。
+   不写成 html:root :is(…) 开头:那是 check:motion 读进场 / 退场名单的格式。 */
+[data-lcl-exit]:not(.lcl-ftoc-rail, .ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
+  .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar,
+  .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, [data-motion~='toast']) { animation: none !important; }
+/* 替身里的子元素不重放自己的进场(命令面板 / ⌘P / 确认框的面板本身除外:它跟着遮罩一起退,见 engine.css / amadeus styles.css)。 */
+[data-lcl-exit] :not(.cmd-panel, .amx-qf, .dialog) { animation: none !important; }
+
+/* 统一入场(2026-10-25,DESIGN §3「动效」):宿主与插件同一份,写在标准写法上,插件不用自己做动画。
+   - data-motion="enter":「用户刚点了才出现」的内容(点开的清单、展开的分区、换出来的那一版)。只给刚发生的(规矩 6),
+     新建 / 恢复 / 滚进视口的别写。动独立的 translate,不碰 transform(各处靠内联 transform 定位)。
+   - 原生 <details>:内容区淡入淡出,不补间高度(规矩 7:聊天流里也有 <details>);自己写了 ::details-content 过渡的照旧。
+   - 原生 <dialog> / popover 打开时与命令面板同一档进场。
+   全是 :where() 零特异性:组件自己写了 animation / transition 就以组件为准。减少动态效果由上面的全局规则一并收掉。 */
+@keyframes ui-enter { from { opacity: 0; translate: 0 4px; } }
+@keyframes ui-fade-in { from { opacity: 0; } }
+:where([data-motion~='enter']) { animation: ui-enter var(--menu-enter-duration) var(--ease-surface) backwards; }
+/* data-motion="toast"(走查续八 8.5 A):底部居中的轻吐司(.amx-toast)从下沿 6px 滑进 + 淡入,退场由卸载时的替身(useExitGhost)
+   淡出 + 往下 6px 回去。右上通知卡(NotificationHost,framer)同一套数:进 180ms 6px,出 160ms 右移 16px。 */
+@keyframes ui-toast-in { from { opacity: 0; translate: 0 6px; } }
+@keyframes ui-toast-out { to { opacity: 0; translate: 0 6px; } }
+:where([data-motion~='toast']) { animation: ui-toast-in var(--toast-enter-duration) var(--ease-surface) backwards; }
+:where([data-motion~='toast'][data-lcl-exit]) { animation: ui-toast-out var(--toast-exit-duration) var(--ease-exit) forwards; }
+:where(details)::details-content {
+  opacity: 0;
+  transition: opacity var(--collapse-duration) var(--collapse-ease), content-visibility var(--collapse-duration) allow-discrete;
+}
+:where(details[open])::details-content { opacity: 1; }
+/* 折叠(8.10):宿主与插件同一份。外层 data-motion="collapse" + data-open="true|false",里面**只套一层**;
+   grid-template-rows 0fr ↔ 1fr 过渡(打断接着走、不量高度),内容淡入与展开同时,收起同长度;收着时 visibility:hidden
+   (过渡期间保持可见、收完才藏,Tab 走不进去)。箭头写 data-motion="chevron" + 同一个 data-open,开着转 90°(朝右的箭头)。
+   展开完了里层仍裁切(CSS 不知道过渡何时完);要放开就在外层挂 data-settled —— React 壳 AnimatedCollapse 自己会挂。 */
+:where([data-motion~='collapse']) {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  visibility: hidden;
+  transition: grid-template-rows var(--collapse-duration) var(--collapse-ease), opacity var(--collapse-duration) var(--collapse-ease),
+    visibility var(--collapse-duration);
+}
+:where([data-motion~='collapse'][data-open='true']) { grid-template-rows: 1fr; opacity: 1; visibility: visible; }
+:where([data-motion~='collapse']) > * { min-height: 0; min-width: 0; overflow: hidden; } /* min-width:放开裁切后长标题照样省略,不撑宽侧栏 */
+:where([data-motion~='collapse'][data-settled]) > * { overflow: visible; }
+:where([data-motion~='chevron']) { transition: transform var(--collapse-duration) var(--collapse-ease); }
+:where([data-motion~='chevron'][data-open='true']) { transform: rotate(90deg); }
+:where(dialog[open], [popover]:popover-open) { animation: ui-menu-enter var(--palette-enter-duration) var(--ease-surface); }
+:where(dialog[open])::backdrop { animation: ui-fade-in var(--palette-enter-duration) var(--ease-calm); }
+/* 上面全局的减少动态效果只管元素与 ::before / ::after,这两个伪元素得点名 */
+@media (prefers-reduced-motion: reduce) {
+  :where(details)::details-content { transition: none; }
+  :where(dialog[open])::backdrop { animation: none; }
+}
 
 /* uiux-c: 全局键盘焦点环(U-43)。
    原来唯一的「全局」规则是 .am-app :focus-visible(amadeus/styles.css),Ribbon、标签条、侧栏行、状态栏都不在它的作用域里,
@@ -5332,3 +5624,70 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 /* 设置 → Git →「提交身份」:正在用的那一级的标签跟着主题色,其余照普通 settings-badge */
 .git-identity-panel .settings-badge[data-state="active"] { color: var(--accent-ink); border-color: currentColor; }
 .git-identity-panel [data-git-identity-level] .settings-badge { margin-right: 6px; }
+
+/* 右下角界面缩放提示(uiZoom.ts 的 showZoomHud,挂在 <html> 上不吃 body zoom):⌘± / ⌘0 时亮出,1.5s 后淡出 */
+.ui-zoom-hud {
+  position: fixed; right: 16px; bottom: 16px; z-index: 2147483000;
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 5px 5px 12px;
+  font-size: var(--ui-font-meta, 12px); color: var(--text-muted); font-variant-numeric: tabular-nums;
+  background: var(--bg-glass, var(--bg-card)); backdrop-filter: var(--panel-blur, blur(8px));
+  border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px);
+  box-shadow: var(--card-shadow);
+  opacity: 0; translate: 0 6px; pointer-events: none;
+  transition: opacity var(--toast-exit-duration, 140ms) var(--ease-exit, ease-in), translate var(--toast-exit-duration, 140ms) var(--ease-exit, ease-in);
+}
+.ui-zoom-hud[data-open] {
+  opacity: 1; translate: 0 0; pointer-events: auto;
+  transition-duration: var(--toast-enter-duration, 180ms); transition-timing-function: var(--ease-surface, ease-out);
+}
+.ui-zoom-hud-pct { color: var(--text); min-width: 3.2em; text-align: right; }
+.ui-zoom-hud-reset {
+  font: inherit; color: var(--text); padding: 3px 10px; border-radius: var(--radius-sm, 6px);
+  border: 0; background: var(--menu-hover, rgba(127, 127, 127, 0.14)); cursor: pointer;
+}
+.ui-zoom-hud-reset:hover { background: var(--border); }
+.ui-zoom-hud-reset[hidden] { display: none; }
+@media (prefers-reduced-motion: reduce) { .ui-zoom-hud { transition: none; translate: none; } }
+
+/* plugin-view-base:start —— 插件视图的基础样式(2026-10-29,插件开发体验 1B)。
+ * 插件在自己的视图里裸写(没写 class)的 <button> / <table> / <h1>–<h4>,不写样式也是宿主那一份的样子:
+ * 按钮同裸 .btn(描边成形、悬停转墨色),表格同笔记 / 会话的 Markdown 表格(DESIGN §6:表头不垫底、格线淡一半),
+ * 标题按界面字号档。<input> / <select> / <textarea> 由上面的「表单控件基线」管,这里不另写。
+ * · 权重:整条包在 :where() 里 = (0,0,0),插件自己写的任何规则(哪怕也是零权重,ctx.addStyle 排在后面)都压得过。
+ *   按钮能零权重,是因为文件头的全局重置 `button {…}`(0,0,1)把这些按钮让了出来 —— 重置里那串选择器与下面逐字一致。
+ *   零权重之间靠顺序:这块必须在 `*` 重置与表单基线之后(DESIGN §7.2,别往上挪)。
+ * · 只管没写 class 的:写了 class 就当插件在自己管样式(公开类 .btn 等的观感也就不动)。宿主替插件画的零件
+ *   (mountHostReact 那一层 data-host-mount)和插件自建的 .ctx-menu 里面一概不碰。
+ *   ponytail: 插件视图套插件视图、中间隔着一层宿主零件时,里面那份也不碰;真遇到再按最近的祖先判。
+ * · 视图头(setViewHead / setViewModes 的按钮)不在挂载点里,不吃这层,那里用 .btn.sm。
+ * · 值只用 plugin-contract.json 的公开 token、不写兜底(pluginContract.test.ts 按这对标记逐个对)。 */
+:where([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *)) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: var(--ui-font-body);
+  color: var(--text);
+  background: none;
+  border: 1px solid var(--overlay-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), color var(--duration-fast);
+}
+:where([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *):hover:not(:disabled)) { border-color: var(--accent-ink); color: var(--accent-ink); }
+:where([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *):disabled) { opacity: 0.5; cursor: not-allowed; }
+:where([data-plugin-view-host] table:not([class], [data-plugin-view-host] [data-host-mount] *)) { border-collapse: collapse; }
+:where([data-plugin-view-host] table:not([class], [data-plugin-view-host] [data-host-mount] *) > :is(thead, tbody, tfoot) > tr > :is(th, td)) {
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+:where([data-plugin-view-host] table:not([class], [data-plugin-view-host] [data-host-mount] *) > :is(thead, tbody, tfoot) > tr > th) { font-weight: 500; color: var(--text-muted); }
+:where([data-plugin-view-host] :is(h1, h2, h3, h4):not([class], [data-plugin-view-host] [data-host-mount] *)) { font-weight: 600; color: var(--text); }
+:where([data-plugin-view-host] h1:not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-title); line-height: var(--ui-line-title); }
+:where([data-plugin-view-host] h2:not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-heading); line-height: var(--ui-line-heading); }
+:where([data-plugin-view-host] :is(h3, h4):not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-body); line-height: var(--ui-line-body); }
+/* plugin-view-base:end */

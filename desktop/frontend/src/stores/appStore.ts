@@ -29,10 +29,7 @@ import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
 import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
 import { translate } from '../i18n'
-import { abortAllTanguRuns, abortTanguRun, createTanguSlice, readFocusModel, reloadDesktopConfig, resetTanguAuthScope, type TanguState } from '@tangu/ui/tangu/store/tanguSlice'
-// 转出垫片(第 2a 步):这些搬进了 Tangu 的 store 半身,import 方暂时照旧从这里取,之后逐个改到 Tangu 自己的出口。
-export { isHtmlCardTool, sketchFromToolEvent, recordToUi, splitDoneMark, pushTextSeg, pushToolSeg, segmentsFromHistory, settleSegments, DEFAULT_APPROVAL, DEFAULT_THINKING, stickyDefaults, applyPreset, rootlessWs, sessionReachable, composerReady, newSessionDirs, resolveNewSessionWorkspace, newChatProjectPath, newSessionPreset, withAmadeusWorkspace, amadeusLandingRoot, remoteSafeInit, newChatModelId, activeChatModelId, lockSessionMove, unlockSessionMove, AGENT_CONFIG_READ_RETRY_MS, AGENT_CONFIG_SYNC_WAIT_MS, steerAcceptPatch } from '@tangu/ui/tangu/store/tanguSlice'
-export type { SpecialKind, TeamWorkMember, DeskState, QueueItem } from '@tangu/ui/tangu/store/tanguSlice'
+import type { TanguSliceDeps, TanguState, createTanguSlice } from '@tangu/ui/tangu/store/tanguSlice'
 
 
 export type { SettingsTab }
@@ -217,8 +214,100 @@ export interface HostState {
 export interface AppState extends HostState, TanguState {}
 
 
-export const useApp = create<AppState>((set, get) => ({
-  ...createTanguSlice(set, get, {
+/** unit 焦点的「上次用的模型」(按设备记):手机自己的 cfg.modelId 在那台电脑上未必存在。 */
+const FOCUS_MODELS_KEY = 'forsion_engine_models'
+export function readFocusModel(ref: TargetRef): string {
+  if (ref.kind !== 'unit') return ''
+  try {
+    const m = JSON.parse(localStorage.getItem(FOCUS_MODELS_KEY) || '{}') as Record<string, unknown>
+    return typeof m[ref.unitId] === 'string' ? (m[ref.unitId] as string) : ''
+  } catch { return '' }
+}
+export function writeFocusModel(ref: TargetRef, modelId: string): void {
+  if (ref.kind !== 'unit') return
+  try {
+    const m = JSON.parse(localStorage.getItem(FOCUS_MODELS_KEY) || '{}') as Record<string, string>
+    delete m[ref.unitId]
+    m[ref.unitId] = modelId
+    const keys = Object.keys(m)
+    for (const k of keys.slice(0, Math.max(0, keys.length - 50))) delete m[k] // 只留最近 50 台
+    localStorage.setItem(FOCUS_MODELS_KEY, JSON.stringify(m))
+  } catch { /* 隐私模式:只活在内存 */ }
+}
+/** 新会话的「默认模型」(newChatModelId / activeChatModelId / send 的回退链共用):home = cfg.modelId(不变);
+ *  unit 焦点 = 按设备记的那个 → 手机偏好 → 都不在那台电脑的模型表里就不给(回落目标的 defaultModelId)。 */
+export function defaultModelOf(s: Pick<AppState, 'cfg' | 'modelsResp'> & { focusModelId?: string }, ref: TargetRef = focusRef()): string | undefined {
+  if (ref.kind === 'home') return s.cfg.modelId || undefined
+  // P1-K6 S4:会话可能在一台已经不是焦点的电脑上 —— 用那台的目录缓存与按设备记的模型(顶层 modelsResp / focusModelId 只属于焦点)
+  const onFocus = sameRef(ref, focusRef())
+  const models = onFocus ? s.modelsResp?.models : catalogFor(targetKeyOf(ref))?.models?.models
+  const remembered = onFocus ? s.focusModelId : readFocusModel(ref)
+  const has = (id: string | undefined): id is string => !!id && !!models?.some((m) => m.id === id)
+  if (has(remembered)) return remembered
+  return has(s.cfg.modelId) ? s.cfg.modelId : undefined
+}
+
+/** 新会话「这条消息实际会用哪个模型」的**唯一**回退链:本次空态显式选的 → 全局记忆
+ *  (cfg.modelId 就是「新会话用哪个模型」的真源,在会话里换模型也会写它)→ 后端默认。
+ *  ⚠️ 输入栏药丸(ChatView)、建会话时落库、startRun 三处必须同源。三份各写各的时出过的 bug:
+ *  建会话不传 model_id → 引擎按 profile.defaultModelId 落库(tangu-agent routes/sessions.ts),
+ *  而药丸显示的是 cfg.modelId → 发出去药丸当场跳回默认,第二轮还真的换成默认模型跑
+ *  (第二轮读的是会话自己的 model_id)。仪器:appStore.test.ts 的「新会话固化模型」。 */
+export function newChatModelId(s: Pick<AppState, 'newChatModel' | 'cfg' | 'modelsResp'> & { focusModelId?: string }): string | undefined {
+  return s.newChatModel || defaultModelOf(s) || s.modelsResp?.defaultModelId || undefined
+}
+/** 写进 cfg.modelId 的值:点选的正好是云端默认 → 记成「跟随」(''),后台以后换默认,新对话跟着走
+ *  (10-28:后台把 Auto 换成 Auto-Flash,点过一次药丸的老账号一直钉在 Auto)。只认云端托管模型:
+ *  没登录时目录里的默认是引擎回显的本机记忆(profile.defaultModelId = config 里的上次选择),记成 '' 会把它清掉。
+ *  只给模型药丸的点选(setSessionModel)用:设置页 / 新手引导自带「跟随」项,且撤销 / 回填走同一个回调,套上会把已存的值改掉(Codex 10-28)。 */
+export function rememberedModelId(modelId: string, resp: Pick<ModelsResponse, 'models' | 'defaultModelId'> | null | undefined): string {
+  const def = resp?.defaultModelId
+  return def && modelId === def && resp.models?.some((m) => m.id === def && m.source === 'forsion') ? '' : modelId
+}
+/** 主区聊天此刻**实际会用**的模型 id(有会话 → 会话的;空白新对话 → newChatModelId)。
+ *  = 输入栏药丸显示的那个(ChatView 的 mvModelId)。插件接缝 `ctx.tangu.activeModel()` 也读它 ——
+ *  这条回退链已经被就地展开过三份、出过「发出去药丸跳回默认」的 bug,**别再抄第四份**。 */
+export function activeChatModelId(
+  s: Pick<AppState, 'activeId' | 'newChatModel' | 'cfg' | 'modelsResp'> & { activeSession?: SessionRecord | null; focusModelId?: string },
+): string {
+  if (!s.activeId) return newChatModelId(s) || ''
+  return s.activeSession?.model_id || defaultModelOf(s) || s.modelsResp?.defaultModelId || ''
+}
+
+/** 重读主进程折算好的配置,刷新本地缓存(agent 改了 config.json 之后)。cfg 只动「设置里的值」那三项,连接信息不碰。
+ *  只认最后发起的那次读取:连改两次时两次读取的先后回来的顺序不保证,先发的那份(旧值)晚到就会把新值盖回去。 */
+let desktopConfigReloadSeq = 0
+export function reloadDesktopConfig(): void {
+  const generation = authGeneration
+  const seq = ++desktopConfigReloadSeq
+  void window.tangu?.getConfig?.().then((c) => {
+    if (generation !== authGeneration) return // 期间换了号:那份配置是上个账号的
+    if (seq !== desktopConfigReloadSeq) return // 后面又发起了一次读取:以那次为准
+    useApp.setState((s) => ({
+      desktopConfig: c, homeDir: c.homeDir, defaultWsDir: c.defaultWorkspaceDir || '',
+      cfg: { ...s.cfg, modelId: c.modelId, visionModelId: c.visionModelId, visionMode: c.visionMode },
+    }))
+  }).catch(() => { /* 读不到就保留本地:关设置 / 下次启动都会再读 */ })
+}
+
+/** Tangu 的 store 半身(tangu/store/tanguSlice.ts 的 TANGU_SLICE)。界面热更新 3c 起不在建 store 时摊进来,而由 Tangu 入口
+ *  activateTangu 经 host.installSlice 装:打包版里它来自运行时加载的界面包,宿主不能静态 import。仍是同一个 useApp(10-20 定)。
+ *  装之前 Tangu 字段是 undefined:激活排在 installEngine 里布局恢复之前;绕过 installEngine 的台架页 / 测试自己装
+ *  (tangu/store/standalone.ts)。只装一次 —— 再装会把会话、消息整份清回初值。 */
+export interface TanguSliceModule {
+  create: typeof createTanguSlice
+  /** 换号且不是托管模式:中止全部在途 run 的订阅与看门狗。 */
+  abortAllRuns(): void
+  /** 换号时收掉开在别的电脑上的那条 run。 */
+  abortRun(runId: string): void
+  /** 换号时 Tangu 侧的模块级状态复位。 */
+  resetAuthScope(): void
+}
+let tangu: TanguSliceModule | null = null
+export function installTanguSlice(mod: TanguSliceModule): void {
+  if (tangu) return
+  tangu = mod
+  const deps: TanguSliceDeps = {
     authGen: () => authGeneration,
     catalogToken,
     unitPollAt,
@@ -240,7 +329,11 @@ export const useApp = create<AppState>((set, get) => ({
     noteAgentWriteLive,
     noteAgentWriteEnd,
     agentWriteKnown,
-  }),
+  }
+  useApp.setState(mod.create(useApp.setState, useApp.getState, deps))
+}
+
+export const useApp = create<AppState>((set, get) => ({
   tr: (k) => k,
   // 云 web/mobile:boot() 异步回填前的早期请求(布局恢复后的轮询等)会拿默认 cfg 打
   // localhost:8787(控制台 ERR_CONNECTION_REFUSED 红噪音)。壳在挂载前已装好
@@ -482,7 +575,7 @@ export const useApp = create<AppState>((set, get) => ({
       ++connectGen
       connectInflight = null
       lastOkConnectKey = ''
-      resetTanguAuthScope()
+      tangu?.resetAuthScope()
       Object.values(get().agentAvatars).forEach((url) => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } })
       const managed = get().desktopMode === 'managed'
       if (!managed) useChildChat.setState({ selected: {}, sessions: {} })
@@ -497,7 +590,7 @@ export const useApp = create<AppState>((set, get) => ({
         } : {}),
       }))
       if (!managed) {
-        abortAllTanguRuns()
+        tangu?.abortAllRuns()
         // 上面 abort 的 run 都不走 endRun → 能力面收不到 onRunEnd,由这里统一通知重置(移动端登出即走此路)。
         notifyClientSurfaces('reset')
       }
@@ -526,7 +619,7 @@ export const useApp = create<AppState>((set, get) => ({
           for (const sid of remote) {
             const runId = st.runningBySession[sid]
             if (!runId) continue
-            abortTanguRun(runId)
+            tangu?.abortRun(runId)
           }
           const wasRemote = focusRef().kind === 'unit'
           resetEngineScope()
@@ -703,7 +796,7 @@ export const useApp = create<AppState>((set, get) => ({
   setOnboarding: (on) => set({ onboarding: on, onboardingUpdate: false }),
   setUpdateAvailable: (v) => set({ updateAvailable: v }),
   dismissUpdate: () => set({ updateDismissed: true }),
-}))
+}) as HostState as AppState)
 
 const revoke = (url: string): void => { try { URL.revokeObjectURL(url) } catch { /* ignore */ } }
 
@@ -835,7 +928,8 @@ installEngineHost({
   // R-16:本端列表 / 归档区里没打 unit 标的会话 = 本端会话(它们从不 bindSession,绑定表里没有)。设备自报撞上它们的 id 一律 conflict。
   isHomeSession: (sid) => {
     const st = useApp.getState()
-    return st.sessions.some((x) => x.id === sid && isHomeSession(x)) || st.archivedSessions.some((x) => x.id === sid && isHomeSession(x))
+    // Tangu 激活(装 store 半身)之前两张表还不存在:那时也没有本端会话
+    return !!(st.sessions?.some((x) => x.id === sid && isHomeSession(x)) || st.archivedSessions?.some((x) => x.id === sid && isHomeSession(x)))
   },
 })
 

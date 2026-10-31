@@ -3,8 +3,8 @@ import { registerMessages } from '../i18n'
 registerMessages({
   'desktopPermissions.title': { zh: '设备权限', en: 'Device permissions' },
   'desktopPermissions.description': {
-    zh: '按需开启电脑操作或媒体权限，也可以稍后到设置 → 系统 → 设备权限中处理。',
-    en: 'Enable computer control or media access as needed. You can return later in Settings → System → Device permissions.',
+    zh: '查看并管理电脑操作与媒体权限。',
+    en: 'Review and manage computer-use and media permissions.',
   },
   'desktopPermissions.later': { zh: '稍后设置', en: 'Set up later' },
   'desktopPermissions.optional': {

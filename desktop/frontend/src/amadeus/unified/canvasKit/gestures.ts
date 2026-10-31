@@ -30,6 +30,8 @@ import { clampZ } from './viewport'
 
 /** 卡内**可交互控件**:点它的语义是「用这个控件」,不是「选中或拖动这张卡」。 */
 export const CARD_CTL = 'button, a[href], input, select, textarea, [contenteditable="true"]'
+/** 右键按住拖:移动超过这么多屏幕像素才算拖(手抖一下照样是「右键点一下」,松开出菜单)。 */
+const RIGHT_SLOP = 4
 /** chrome 层(缩放胶囊/缩略图/菜单):手势一概不接管。 */
 export const STAGE_CHROME = '.amx-stage-hud, .amx-stage-minimap, .amx-stage-tools, .ctx-menu, .dash-add-menu, .dash-menu-scrim'
 
@@ -77,6 +79,9 @@ export interface GestureAdapter {
   repel?: boolean
   /** 空白处左键拖 = 平移(没有框选这回事的画布,如 Chat 画布;缺省是框选)。 */
   blankPan?: boolean
+  /** 空白处右键按住拖 = 平移;没拖动(≤ RIGHT_SLOP)松开才弹空白菜单。卡上右键照旧。
+   *  macOS 按下右键那一刻就发 contextmenu,所以空白处的菜单改由这里在松开时发,系统那一下拦掉。 */
+  rightPan?: boolean
 }
 
 export interface GestureApi {
@@ -94,7 +99,7 @@ export interface GestureApi {
 
 type DragBase = { id: number; x0: number; y0: number; live: boolean; who: unknown }
 type Drag =
-  | (DragBase & { kind: 'pan'; vx: number; vy: number })
+  | (DragBase & { kind: 'pan'; vx: number; vy: number; right?: boolean; ctxSeen?: boolean })
   | (DragBase & { kind: 'move'; keys: string[]; base: Map<string, Box>; slop: number })
   | (DragBase & { kind: 'size'; key: string; edge: ResizeEdge; b0: Box; slop: number })
   | (DragBase & { kind: 'marquee'; sx: number; sy: number; additive: boolean; base: string[] })
@@ -150,6 +155,8 @@ export function useCanvasGestures(
     const touches = new Map<number, { x: number; y: number }>()
     let pinch: { ids: string; d: number; cx: number; cy: number; anchor: { x: number; y: number }; z: number } | null = null
     let press: { t: number; x: number; y: number; id: number; timer: number } | null = null
+    /** 右键拖 / 右键点松开时,按下那会儿还没来过 contextmenu(Windows 松开后才补发):记下松开的位置,补发的那一下在窗口上整个拦掉 */
+    let trailing: { t: number; x: number; y: number } | null = null
 
     const stageOf = (e: PointerEvent | MouseEvent): { x: number; y: number } => V().toStage(e.clientX, e.clientY)
     const unit = (): number => (zoomOf(host) || 1) * V().vpRef.current.z
@@ -163,6 +170,7 @@ export function useCanvasGestures(
     /** 手势被别的东西接管:只回滚外观,**绝不落笔**。 */
     const abort = (): void => {
       drag = null
+      delete host.dataset.panning
       putLive(null)
       setMarquee(null)
       setBusy(false)
@@ -232,9 +240,26 @@ export function useCanvasGestures(
       }
       if (e.pointerType === 'touch') touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
       if (touches.size >= 2) { clearPress(); abort(); beginPinch(); return }
-      if (e.button === 2) return // 右键归 contextmenu
+      if (drag?.kind === 'pan' && drag.right) return // 右键拖着的时候别的键不接
+      if (e.button === 2) {
+        // 右键归 contextmenu;rightPan 的画布在空白处按住右键 = 平移,菜单等松开没拖时再弹
+        if (!A().rightPan || drag || A().hitKey(target)) return
+        const vp = V().vpRef.current
+        try { host.setPointerCapture(e.pointerId) } catch { /* 合成事件可没有有效 id */ }
+        drag = { kind: 'pan', right: true, id: e.pointerId, who: whoNow(), x0: e.clientX, y0: e.clientY, vx: vp.x, vy: vp.y, live: false }
+        host.focus({ preventScroll: true })
+        return
+      }
 
       const key = A().hitKey(target)
+      // 中键拖:卡上也是平移(三种画布同一条约定);卡里的控件(链接、按钮)照常归它们
+      if (e.button === 1 && key && !target.closest?.(CARD_CTL)) {
+        e.preventDefault()
+        const vp = V().vpRef.current
+        try { host.setPointerCapture(e.pointerId) } catch { /* 合成事件可没有有效 id */ }
+        drag = { kind: 'pan', id: e.pointerId, who: whoNow(), x0: e.clientX, y0: e.clientY, vx: vp.x, vy: vp.y, live: false }
+        return
+      }
       // ⚠️ 让路判定**必须在 preventDefault 之前**(08-21:一 preventDefault 就不补发 mousedown/click)。
       //    交互态那张卡、以及任何卡内的可交互控件,一律直接放行。
       if (key && (A().isEditing?.(key) || target.closest?.(CARD_CTL))) return
@@ -326,6 +351,8 @@ export function useCanvasGestures(
       const dys = e.clientY - drag.y0
 
       if (drag.kind === 'pan') {
+        if (drag.right && !drag.live && Math.hypot(dxs, dys) < RIGHT_SLOP) return
+        if (!drag.live) host.dataset.panning = ''
         const u = zoomOf(host) || 1
         const vp = V().vpRef.current
         V().setVp({ z: vp.z, x: drag.vx + dxs / u, y: drag.vy + dys / u })
@@ -364,7 +391,15 @@ export function useCanvasGestures(
       setBusy(false)
       setMarquee(null)
       try { if (host.hasPointerCapture(e.pointerId)) host.releasePointerCapture(e.pointerId) } catch { /* 同上 */ }
-      if (d.kind === 'pan' || d.kind === 'marquee') return
+      if (d.kind === 'pan') {
+        delete host.dataset.panning
+        if (!d.right) return
+        if (!d.ctxSeen) trailing = { t: performance.now(), x: e.clientX, y: e.clientY }
+        // 没拖 = 右键点了一下空白:这时才弹菜单
+        if (!d.live) A().onContextMenu?.(null, { ...stageOf(e), clientX: e.clientX, clientY: e.clientY })
+        return
+      }
+      if (d.kind === 'marquee') return
       if (!d.live) { putLive(null); return } // 纯点击:选中已在 onDown 落定,不写几何
       // ⚠️ 起手到松手之间换了文档 → **整笔作废**(见 GestureAdapter.identity 顶注)。
       if (d.who !== whoNow()) { putLive(null); return }
@@ -451,6 +486,8 @@ export function useCanvasGestures(
       A().onDoubleClick?.(A().hitKey(target), stageOf(e))
     }
     const onCtx = (e: MouseEvent): void => {
+      // 右键按着(macOS / Linux 按下就发 contextmenu):菜单归 finish 在松开时发,这里只拦,并记下这一下已经来过
+      if (drag?.kind === 'pan' && drag.right) { drag.ctxSeen = true; e.preventDefault(); return }
       const target = realTarget(e)
       if (target.closest?.(STAGE_CHROME)) return
       const key = A().hitKey(target)
@@ -484,6 +521,15 @@ export function useCanvasGestures(
       if (next.size) A().commit(A().constrain?.(next, { kind: 'move' }) ?? next)
     }
 
+    /** Windows 松开右键后补发的那一下 contextmenu:常落在刚弹出的菜单上,冒泡到窗口会把菜单当场关掉 → 在窗口捕获阶段整个吞掉 */
+    const onWinCtx = (e: MouseEvent): void => {
+      const tr = trailing
+      if (!tr) return
+      trailing = null
+      if (performance.now() - tr.t > 400 || Math.hypot(e.clientX - tr.x, e.clientY - tr.y) > 8) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+    }
     /** 幽灵手指兜底(触屏指针有隐式捕获,pointerup 可能落在别处)。 */
     const onWinUp = (e: PointerEvent): void => { if (drag && e.pointerId === drag.id) onUp(e) }
 
@@ -495,6 +541,7 @@ export function useCanvasGestures(
     host.addEventListener('contextmenu', onCtx)
     host.addEventListener('keydown', onKey)
     window.addEventListener('pointerup', onWinUp, true)
+    window.addEventListener('contextmenu', onWinCtx, true)
     window.addEventListener('blur', resetGesture)
     return () => {
       resetGesture()
@@ -506,6 +553,7 @@ export function useCanvasGestures(
       host.removeEventListener('contextmenu', onCtx)
       host.removeEventListener('keydown', onKey)
       window.removeEventListener('pointerup', onWinUp, true)
+      window.removeEventListener('contextmenu', onWinCtx, true)
       window.removeEventListener('blur', resetGesture)
     }
   }, [setSel])

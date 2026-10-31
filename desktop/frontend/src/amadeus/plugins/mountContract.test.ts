@@ -38,6 +38,7 @@ const { mountPluginFloatingToc } = await import('./floatingTocSurface')
 const { mountPluginBoard } = await import('./boardSurface')
 const { mountPluginSettingsPage, mountPluginSettingsItem } = await import('./settingsPageSurface')
 const { useApp } = await import('../../stores/appStore')
+await import('../../tangu/store/standalone')
 const { hasPageScope } = await import('../store/pageStore')
 
 // 插件文件类型的视图表面:mountBlocks 与 mountNoteView 都从它身上来
@@ -316,6 +317,52 @@ it('ctx.ui.mountSelectionBar({ watch: false }):hide() 只收条,开着的结果�
   await act(async () => { handle.dispose() })
   expect(card()).toBeNull()
   usePluginStore.setState({ selectionActions: [] })
+  expect(errors).toEqual([])
+})
+
+// 落点提示(2026-10-24):ctx.ui.dropIndicator 是 LCL 那一份;传视口坐标落位,停用插件即收、句柄变哑。
+it('ctx.ui.dropIndicator:线 / 描边按视口坐标落位,停用插件即收,之后句柄是哑的', async () => {
+  const { usePluginStore } = await import('./pluginStore')
+  const ind = () => document.querySelector<HTMLElement>('.lcl-drop-ind')
+  let ctx!: import('./types').PluginContext
+  usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {}, selectionActions: [] })
+  usePluginStore.getState().init([{ id: 'dropper', name: 'dropper', version: '0', setup: (c) => { ctx = c } }])
+  const d = ctx.ui!.dropIndicator!()
+  d.line({ x: 12, y: 40, w: 200 }, { key: 'row-2' })
+  expect(ind()!.style.display).toBe('block')
+  expect([ind()!.style.left, ind()!.style.top, ind()!.style.width]).toEqual(['12px', '40px', '200px'])
+  d.zone({ x: 0, y: 0, w: 80, h: 30 }, { key: 'folder-1' })
+  expect(ind()!.classList.contains('lcl-drop-ind--zone')).toBe(true)
+  d.hide()
+  expect(ind()!.style.display).toBe('none')
+  await act(async () => { usePluginStore.getState().disable('dropper') })
+  expect(ind(), '停用即收').toBeNull()
+  d.line({ x: 1, y: 1, w: 10 })
+  expect(ind(), '句柄已哑').toBeNull()
+  expect(() => ctx.ui!.dropIndicator!().line({ x: 0, y: 0, w: 1 })).not.toThrow() // 停用之后:哑句柄,不抛
+  expect(errors).toEqual([])
+})
+
+// 松手落位(2026-10-25):句柄上的 land 是 LCL 那一份;给元素就落,给查找函数就等它换了地方再落;停用时飞着的、等着的一起收。
+it('ctx.ui.dropIndicator().land:落位写内联过渡、停用即还原,之后是哑的', async () => {
+  const { usePluginStore } = await import('./pluginStore')
+  let ctx!: import('./types').PluginContext
+  usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {}, selectionActions: [] })
+  usePluginStore.getState().init([{ id: 'lander', name: 'lander', version: '0', setup: (c) => { ctx = c } }])
+  const row = document.createElement('div')
+  document.body.appendChild(row)
+  row.getBoundingClientRect = () => ({ left: 0, top: 100, x: 0, y: 100, width: 200, height: 28, right: 200, bottom: 128, toJSON() {} }) as DOMRect
+  const d = ctx.ui!.dropIndicator!()
+  expect(typeof d.land).toBe('function')
+  d.land!(row, { x: 0, y: 40 })
+  expect(row.style.transform, '起飞:反向位移已写上(过渡下一帧起跑)').toBe('translate(0px, -60px)')
+  d.land!(row, { x: Number.NaN, y: 0 } as { x: number; y: number }) // 坏坐标:不抛、不动
+  d.land!(() => { throw new Error('boom') }, { x: 0, y: 0 }) // 查找函数抛错:吞掉
+  await act(async () => { usePluginStore.getState().disable('lander') })
+  expect([row.style.transition, row.style.transform], '停用即还原').toEqual(['', ''])
+  d.land!(row, { x: 0, y: 40 })
+  expect(row.style.transform, '句柄已哑').toBe('')
+  row.remove()
   expect(errors).toEqual([])
 })
 

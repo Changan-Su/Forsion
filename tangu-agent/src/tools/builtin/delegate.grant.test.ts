@@ -61,6 +61,19 @@ const lastGrants = (): string[] | undefined | null => {
   return call ? (call[0] as any).grantTools : null;
 };
 
+describe('delegate 工具定义的前缀纪律', () => {
+  it('resume 紧跟 grantTools、engine 仍在最后;定义不随会话状态变化', () => {
+    configureTangu({ host: stub, brain: stub, billing: stub, profile, engines: { list: () => [{ id: 'codex', name: 'Codex', available: true }] } } as any);
+    const keysWith = Object.keys((delegateProvider.tools()[0] as any).definition.function.parameters.properties);
+    expect(keysWith.slice(-3)).toEqual(['grantTools', 'resume', 'engine']);
+    configureTangu({ host: stub, brain: stub, billing: stub, profile });
+    const tool = delegateProvider.tools()[0] as any;
+    expect(Object.keys(tool.definition.function.parameters.properties).slice(-2)).toEqual(['grantTools', 'resume']);
+    expect(tool.definition.function.parameters.required).toEqual(['task']);
+    expect(JSON.stringify(tool.definition)).toBe(JSON.stringify((delegateProvider.tools()[0] as any).definition));
+  });
+});
+
 describe('delegate.grantTools 校验', () => {
   it('缺省不授予:runSubAgent 不带 grantTools(老行为零变化)', async () => {
     const r = await execute({ task: 'do something' }, ctxOf());

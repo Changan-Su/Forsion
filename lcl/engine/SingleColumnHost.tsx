@@ -130,7 +130,7 @@ export function LeafHost({ extendable = true }: { extendable?: boolean } = {}) {
     // data-view:主区视图默认给浮动胶囊顶栏让出一条 --mb-top 的空位(见 singleColumn.css);
     // 自己想让内容从胶囊底下滚过去的视图(如 amadeus-editor)按 type 单独退订。
     <div className="mb-view" data-view={active.type} key={`${active.id}:${active.type}`}>
-      <ViewErrorBoundary>
+      <ViewErrorBoundary type={active.type}>
         <Suspense fallback={<Skeleton variant={skeletonVariantOf(active.type)} />}>
           <LateMount>
             {() => (extendable ? <ExtendViewHost present={presentDrawerExtension} ownerKey={identitySig(activeParams ?? active.params)}>
@@ -262,7 +262,7 @@ function Drawer({ side, docked, showFoot, page }: { side: 'left' | 'right'; dock
       <div className="mb-drawer-body">
         {active?.type === '__extend' ? <NativeExtendView id={active.id} side={side} /> : def && active ? (
           <div className="mb-view" key={`${active.id}:${active.type}`}>
-            <ViewErrorBoundary>
+            <ViewErrorBoundary type={active.type}>
               <Suspense fallback={<Skeleton variant="list" />}>
                 {/* 与桌面侧栏同一契约:临时 View 盖住本视图 + 返回。.mb-view 自己不滚,盖层住在里面即可。 */}
                 <ExtendViewHost present={presentInlineExtension} ownerKey={identitySig(active.params)}>

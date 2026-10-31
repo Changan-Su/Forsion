@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { AgentRunEvent, AuthStatusInfo, SessionRecord, UiMessage } from '../types'
 import { DEFAULT_LOCAL_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, sessionWorkspaceKey } from '../types'
-import { useApp, recordToUi, withAmadeusWorkspace, lockSessionMove, unlockSessionMove, newChatModelId, type AppState } from './appStore'
+import { useApp, newChatModelId, type AppState } from './appStore'
+import { withAmadeusWorkspace } from '../../../../tangu-agent/src/contracts/sessionDefaults'
+import { recordToUi, lockSessionMove, unlockSessionMove } from '../tangu/store/tanguSlice'
 import { agentEditing, resetAgentWriteLedger } from './agentWriteLedger'
 import { usePageStore } from '../amadeus/store/pageStore'
 import '../i18n.generated'
 import { translationValues } from '../i18n'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 // 助手消息身份还原:历史/重载的助手消息按「每条存的 agent_slug」显示真实作者,
 // 否则只能回退到「会话默认 agent」(就是 Christina 被显示成默认 Tangu Arioso 的 bug)。
@@ -303,6 +306,28 @@ describe('appStore.reduceEvent', () => {
     expect(state.subChatsBySession.s1[0].segs).toHaveLength(2)
   })
 
+  it('子代理续用:同一 subId 的第二轮写进新气泡,追问也画出来,第一轮原样不动', () => {
+    const emit = (type: string, payload: any) => useApp.getState().reduceEvent('s1', 'r1', { current: 'a1' }, { seq: 1, type, payload } as AgentRunEvent)
+    const first = 'delegate:c1'
+    const second = 'delegate:c1:t2'
+    emit('subchat', { id: 'c1', kind: 'subagent', sessionId: 'c1', title: 'Worker' })
+    emit('subagent', { subId: 'c1', sessionId: 'c1', phase: 'start', label: 'Worker', messageId: first, task: 'task one' })
+    emit('subagent', { subId: 'c1', phase: 'token', delta: 'first answer' })
+    emit('subagent', { subId: 'c1', phase: 'done' })
+    emit('subagent', { subId: 'c1', sessionId: 'c1', phase: 'start', label: 'Worker', messageId: second, task: 'follow up', userMessageId: 'u2' })
+    expect(useApp.getState().subChatsBySession.s1.find((x) => x.id === 'c1')).toMatchObject({ streaming: true })
+    emit('subagent', { subId: 'c1', phase: 'token', delta: 'second answer' })
+    emit('subagent', { subId: 'c1', phase: 'done' })
+    const messages = useApp.getState().messagesBySession.c1
+    expect(messages.map((m) => [m.id, m.role, m.content])).toEqual([
+      [first, 'assistant', 'first answer'],
+      ['u2', 'user', 'follow up'],
+      [second, 'assistant', 'second answer'],
+    ])
+    expect(messages.find((m) => m.id === second)?.status).toBe('done')
+    expect(useApp.getState().subChatsBySession.s1.find((x) => x.id === 'c1')?.segs.map((seg) => (seg as any).text)).toEqual(['first answer', 'second answer'])
+  })
+
   it('run 收尾(done / error)把本 run 挂在**更早段**上的待批审批与询问一并置过期,别的 run 的不碰', () => {
     const pend = (id: string, runId: string) => ({ approvalId: id, runId, name: 'run_bash', preview: `$ ${id}`, status: 'pending' as const })
     for (const terminal of ['done', 'error'] as const) {
@@ -573,7 +598,7 @@ describe('appStore.reduceEvent', () => {
 
   // Codex 评审 #1:turn_boundary(SSE)可能抢在 steer POST 响应前到达。
   it('steerAcceptPatch:消息已上屏或 run 已易主 → 不进等待区;↑ 历史始终记', async () => {
-    const { steerAcceptPatch } = await import('./appStore')
+    const { steerAcceptPatch } = await import('../tangu/store/tanguSlice')
     const base = { runningBySession: { s1: 'r1' }, steerPendingBySession: {}, steerSentBySession: {} }
     // 正常:进等待区 + 记历史
     const ok = steerAcceptPatch({ ...base, messagesBySession: {} } as any, 's1', 'r1', { id: 'u9', text: 'hi' })
@@ -796,6 +821,30 @@ describe('appStore.send 新会话固化模型', () => {
     expect(useApp.getState().cfg.modelId).toBe('new-pick')
     expect(newChatModelId(useApp.getState())).toBe('new-pick') // 空白新对话的药丸、建会话、startRun 同读这一条
     expect(setConfig).toHaveBeenCalledWith({ modelId: 'new-pick' })
+    vi.unstubAllGlobals()
+  })
+
+  // 10-28:后台把云端默认从 Auto 换成 Auto-Flash,点过一次药丸的老账号新对话仍是 Auto。点选的正好是云端默认 → 记成跟随。
+  it('在会话里点选的正好是云端默认 → cfg.modelId 记成跟随(\'\');没登录时引擎回显的本机默认(直连模型)照旧记具体 id', () => {
+    const setConfig = vi.fn(() => Promise.resolve())
+    vi.stubGlobal('window', { tangu: { setConfig } })
+    useApp.setState({
+      activeId: 's1', sessions: [created('s1', 'other')] as unknown as AppState['sessions'],
+      modelsResp: { models: [{ id: 'cloud-default', source: 'forsion' }, { id: 'codex/luna', source: 'direct' }], defaultModelId: 'cloud-default' } as unknown as AppState['modelsResp'],
+    })
+
+    useApp.getState().setSessionModel('cloud-default', 's1')
+    expect(useApp.getState().cfg.modelId).toBe('')
+    expect(setConfig).toHaveBeenLastCalledWith({ modelId: '' })
+    expect(useApp.getState().sessions.find((s) => s.id === 's1')?.model_id).toBe('cloud-default') // 会话本身照旧换成它
+    expect(newChatModelId(useApp.getState())).toBe('cloud-default')
+    // 后台换了默认 → 新对话跟着走
+    useApp.setState((s) => ({ modelsResp: { ...s.modelsResp!, defaultModelId: 'new-cloud-default' } }))
+    expect(newChatModelId(useApp.getState())).toBe('new-cloud-default')
+
+    useApp.setState({ modelsResp: { models: [{ id: 'codex/luna', source: 'direct' }], defaultModelId: 'codex/luna' } as unknown as AppState['modelsResp'] })
+    useApp.getState().setSessionModel('codex/luna', 's1')
+    expect(useApp.getState().cfg.modelId).toBe('codex/luna')
     vi.unstubAllGlobals()
   })
 

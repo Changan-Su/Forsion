@@ -120,13 +120,14 @@ const EFFORT_PRO: LevelMap = {
 /** gpt-5.6 起的公开 API:'max' 是真档(5.5 的档表到 xhigh 为止)。 */
 const EFFORT_FULL_MAX: LevelMap = { ...EFFORT_FULL, max: 'max' };
 
-/** GPT-6 Astra / GPT-6.1 Sol 只支持 low/medium/high/xhigh/max,不可关闭思考,也不支持 minimal。 */
+/** GPT-6 Astra / GPT-6.1 Sol 只支持 low/medium/high/xhigh/max,不可关闭思考,也不支持 minimal(6.1 Terra 不在此列,见 EFFORT_GPT6)。 */
 const EFFORT_ASTRA: LevelMap = { ...EFFORT_FULL_MAX, off: null, minimal: null };
 
 /**
  * GPT-6 Sol / Luna:同样不认 minimal,但**认 'none'(可关思考)**—— 与 Astra 不同,别合表。
  * 依据是 Codex 后端 400 原文列出的合法值(09-22 实测:Sol/Luna = none/low/…/max,Astra = low/…/max;
  * 'none' + 工具真请求走通)。Codex 客户端目录只展示 low 起步,比后端窄,不作准。
+ * GPT-6.1 Terra 同表:10-27 后端 400 原文 = none/low/medium/high/xhigh/max,none + 工具真请求走通。
  */
 const EFFORT_GPT6: LevelMap = { ...EFFORT_FULL_MAX, minimal: null };
 
@@ -316,7 +317,7 @@ const CLAUDE_ALWAYS_ON_CAP: Omit<ModelCapability, 'rule'> = { ...CLAUDE_ADAPTIVE
  */
 const GPT6_ASTRA = /^gpt-6-astra$/i;
 const GPT61_SOL = /^gpt-6\.1-sol$/i;
-const GPT6_SOL_LUNA = /^gpt-6-(sol|luna)$/i;
+const GPT6_SOL_LUNA = /^gpt-6(-(sol|luna)|\.1-terra)$/i; // 含 6.1 Terra:档位与 Sol/Luna 同,不随 6.1 Sol
 
 // 官方迁移指南要求带工具时走 Responses,并移除 temperature/top_p/top_logprobs。
 // Responses 转换器按白名单重建请求,只需在这里保证所有档位(包括旧会话的 off)都改道。
@@ -333,7 +334,7 @@ const GPT6_CAP: Omit<ModelCapability, 'rule'> = { ...ASTRA_CAP, levels: EFFORT_G
 const RULES: Rule[] = [
   // ── 订阅登录(协议已定,不看 host)────────────────────────────────────────
   {
-    // 6.1 Sol 与 Astra 同为强制思考;不能复用旧 Sol 的 none 档(10-01 后端 400 实测)。
+    // 6.1 Sol 与 Astra 同为强制思考;不能复用旧 Sol 的 none 档(10-01 后端 400 实测)。6.1 Terra 反而认 none,走 codex-gpt6。
     id: 'codex-gpt61-sol',
     protocol: /^openai-responses$/,
     model: GPT61_SOL,
@@ -416,6 +417,7 @@ const RULES: Rule[] = [
     cap: ASTRA_CAP,
   },
   {
+    // 6.1 Terra 在公开 API 上的档位照搬 Codex 后端实测(目录 supported_in_api: true),公开 API 本身未实测。
     id: 'openai-gpt6',
     host: /(^|\.)api\.openai\.com$/,
     model: GPT6_SOL_LUNA,
@@ -874,7 +876,7 @@ export function clampThinkingLevel(cap: ModelCapability, level: ThinkingLevel): 
 
 /** Claude 预算思考:留给正文的最小输出额度。 */
 const MIN_OUTPUT_TOKENS = 1024;
-/** 未指定 max_tokens 时,为预算思考补的上限(取所有 Claude 型号都吃得下的保守值)。 */
+/** 未指定 max_tokens 时,为预算 / 自适应思考补的上限(取所有 Claude 型号都吃得下的保守值)。 */
 const CLAUDE_MAX_TOKENS_CEILING = 32000;
 
 /** prefix 兜底的系统提示(英文——模型提示一律英文)。 */
@@ -945,6 +947,9 @@ export function applyThinking(
         // 也改走思考块 → 不要 summarized,UI 在工具间一片静默(官方 Opus 5.5 迁移指南)。计费与 display 无关。
         payload.thinking = { type: 'adaptive', display: 'summarized' };
         if (typeof wire === 'string') payload.output_config = { effort: wire };
+        // max_tokens 同时封顶思考 + 正文。调用方没给就落到转换器的 8192 缺省,xhigh / max 档一轮思考就能吃光,
+        // 上游 stop_reason=max_tokens 且零正文 →「Upstream output limit reached」(2026-10-25 用户反馈,Opus 5.5 max 档)。
+        if (!(typeof payload.max_tokens === 'number' && payload.max_tokens > 0)) payload.max_tokens = CLAUDE_MAX_TOKENS_CEILING;
       }
       break;
 

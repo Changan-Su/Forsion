@@ -84,6 +84,7 @@ const SKIP = {
   installMultiWindow: '移动端无卫星窗;实现本身对非 electron 天然 no-op',
   installTabTitleBar: 'Windows Electron 主窗与独立窗的原生窗口按钮叠加;手机无桌面标题栏,其余平台在模块入口 no-op',
   installAccountTransition: 'Electron 多窗口切号前保存握手;web/mobile 通过登录跳转和整页重载清理账号缓存,没有 auth:will-change IPC',
+  installTelemetryReport: '帮助改进 Forsion 这一版只有桌面:事件经主进程 CloudHost.telemetry 交给 Extend 的主进程半身,手机 / 网页不装载它;实现本身缺 window.tangu.telemetryReport 即 no-op',
   installKeepAwakeReport: '「有会话运行时不休眠」靠主进程 powerSaveBlocker,手机 WebView 没有对应能力;实现本身缺 window.tangu.reportRunningSessions 即 no-op',
   installCreationAutoVersion: '造物的 git 版本由桌面主进程在托管根(~/Forsion/Project)上做,手机端既没有这个目录也没有 codeStudio git IPC;实现本身缺 window.tangu.codeStudioGitCommit 即 no-op',
   windowKind: '多窗分流(?window=detached/mini);移动端只有一个 WebView',
@@ -99,7 +100,6 @@ const SKIP = {
   debugFireToast: '设置浮窗(开发者选项)「触发成就弹窗」经 onMainAction 转给主窗播(成就弹窗只有主窗挂,09-21)。移动端没有卫星窗 / onMainAction,按钮原地调',
   draftInMainChat: '反馈浮窗「让 Tangu 帮我诊断」经 onMainAction 把草稿交给主窗聊天(09-21)。移动端反馈与聊天同一渲染进程,按钮原地调',
   forgetUserSpace: '设置浮窗卸载用户 Space 后经 onMainAction 让主窗撤注册 / ribbon(09-21)。移动端没有用户自建 Space(spacesList 只给插件包里带的,生命周期随插件、不可单独删)、也没有卫星窗',
-  quoteInMainChat: '旁聊浮窗「引用到对话」经 onMainAction(chat-quote)把回答挂成主窗输入框的引用(09-22)。移动端旁聊是本页全屏页(<BtwHost page />),按钮原地调 quoteInMainChat,没有卫星窗通道',
   listSkills: 'Root 里仅用于接收设置浮窗的 skills-changed 广播后重读主窗技能清单；移动端设置与 Agent 档案共用一个渲染进程，改动后在原窗口刷新',
   openAgentProfile: 'Root 里仅用于接收设置浮窗的 open-agent 请求并切回主窗 Agent Space；移动端没有卫星窗，设置内直接导航到 Agent 档案',
   getLanguage: 'soft 主题的 panelGap 只喂给 Dockview Shell;单列壳不消费',
@@ -121,6 +121,10 @@ const SKIP = {
   WorkspaceHost: 'Dockview 分栏宿主;单列壳自己就是它的对位物',
   installHotkeys: '移动端无物理键盘;命令一律经「⋯」菜单/命令面板点选',
   installSashAffordance: '无分栏缝 = 无缝拖拽提示',
+  // —— 插件沙箱(tangu-agent/docs/plugin-sandbox.md):沙箱是桌面主进程另起的一份 Forsion,手机 / web 不起沙箱 ——
+  installSandboxHook: '同上:沙箱窗口给主进程调的 window.__forsionSandbox 钩子',
+  installPluginSandboxSurface: '插件沙箱能力面 plugin.sandbox:引擎门控只给 desktop/ 客户端(toolRegistry CLIENT_FOR_NS),手机 / web 不声明;卡片在手机上照常渲染并提示到电脑上打开',
+  SandboxChrome: '沙箱窗口标题栏的标识与按钮,只在桌面沙箱子进程里挂',
 }
 
 /** bootstrapEngine 里已知的 host 门控。新增门控 = 又一条「web/移动端会静默少一块」的通道,必须登记。 */

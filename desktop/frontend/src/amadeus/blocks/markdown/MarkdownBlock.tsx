@@ -69,6 +69,7 @@ import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react'
 import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown, fromAssetUrl } from '@amadeus-shared/assets'
 import { ATTACHMENT_CLIP_MIME, recentAttachmentCopy, rememberAttachmentCopy } from '../../lib/attachmentClipboard'
+import { writeImageToClipboard } from '../../../lib/imageClipboard'
 import { tabsToEntities, entitiesToTabs } from '@amadeus-shared/indentIo'
 import { resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from '@amadeus-shared/links'
 import { resolveFileLink } from '../../lib/vaultFiles'
@@ -338,7 +339,7 @@ function imageFromTransfer(dt: DataTransfer | null): File | null {
 }
 
 /** 当前 PM 选区若正好是一份附件,返回「库内 markdown 引用 + 主进程解析用 ref」。 */
-function selectedAttachment(view: EditorView): { reference: string; ref: string } | null {
+export function selectedAttachment(view: EditorView): { reference: string; ref: string } | null {
   const sel = view.state.selection
   let reference = ''
   let image: ProseNode | null = null
@@ -363,6 +364,40 @@ function selectedAttachment(view: EditorView): { reference: string; ref: string 
   const hash = ref.indexOf('#')
   if (hash > 0 && /\.[a-z0-9]{1,10}$/i.test(ref.slice(0, hash))) ref = ref.slice(0, hash)
   return ref ? { reference, ref } : null
+}
+
+/** 选中的是一张图片附件时,给出引用 + 它在页面上画出来的 <img>(`![](…)` 图片节点,或 `![[x.png]]` 嵌入图)。
+ *  网页 / 手机复制图片从这张 <img> 取字节:显示得出来就取得到,不用另走一遍附件解析。
+ *  只认一个文本块之内、范围里恰好一张图;笔记 / PDF 嵌入块的预览里带图也不算。 */
+export function selectedImage(view: EditorView): { reference: string; ref: string; img: HTMLImageElement } | null {
+  const hit = selectedAttachment(view)
+  const sel = view.state.selection
+  if (!hit) return null
+  const imageNode = sel instanceof NodeSelection && (sel.node.type.name === 'image' || sel.node.firstChild?.type.name === 'image')
+  if (!imageNode && !/\.(?:png|jpe?g|gif|webp|svg|avif|bmp)$/i.test(hit.ref)) return null
+  if (!(sel instanceof NodeSelection) && !sel.$from.sameParent(sel.$to)) return null
+  const pos = sel instanceof NodeSelection ? sel.from : sel.$from.before()
+  const el = view.nodeDOM(pos)
+  if (!(el instanceof HTMLElement)) return null
+  const imgs = (el instanceof HTMLImageElement ? [el] : [...el.querySelectorAll('img')]).filter((img) => {
+    if (!(img.currentSrc || img.src)) return false
+    try {
+      const at = view.posAtDOM(img, 0)
+      return at >= sel.from && at <= sel.to
+    } catch { return false }
+  })
+  return imgs.length === 1 ? { ...hit, img: imgs[0] } : null
+}
+
+/** 把选中的图片复制成真图片(块菜单「复制图片」)。桌面走主进程(原生图片 + 文件);网页 / 手机写 PNG + 引用文字。 */
+export async function copySelectedImage(view: EditorView, pagePath: string): Promise<boolean> {
+  const hit = selectedImage(view)
+  if (!hit) return false
+  const ok = amadeus.copyAttachment
+    ? await amadeus.copyAttachment(pagePath, hit.ref, hit.reference).catch(() => false)
+    : await writeImageToClipboard(hit.img.currentSrc || hit.img.src, hit.reference).then(() => true, () => false)
+  if (ok) rememberAttachmentCopy(hit.reference, hit.ref)
+  return ok
 }
 
 /** Forsion 自己写入的 attachment flavor 优先于同一剪贴板里的 native image/file。 */
@@ -483,6 +518,7 @@ export function MilkdownInner({
   keys,
   saveImage,
   saveFiles,
+  uploadImage,
   onOpenWiki,
   getPageNames,
   getFiles,
@@ -507,6 +543,8 @@ export function MilkdownInner({
   keys: BlockKeys
   saveImage: (file: File) => Promise<string | null>
   saveFiles: (files: File[]) => Promise<void>
+  /** 粘贴图片交给宿主(统一编辑器:带上传占位,见 unified/bodyUploads.ts);缺 = 存完在光标处插图片(v3)。 */
+  uploadImage?: (file: File) => void
   /** opts.newTab:⌘/Ctrl+点击、中键(L-11)或「在新标签页打开光标处链接」;宿主转给 openWikiLink 的第三参。 */
   onOpenWiki: (name: string, opts?: { newTab?: boolean }) => void
   getPageNames: () => string[]
@@ -552,6 +590,8 @@ export function MilkdownInner({
   saveImageRef.current = saveImage
   const saveFilesRef = useRef(saveFiles)
   saveFilesRef.current = saveFiles
+  const uploadImageRef = useRef(uploadImage)
+  uploadImageRef.current = uploadImage
   const wikiRef = useRef(onOpenWiki)
   wikiRef.current = onOpenWiki
   const pageNamesRef = useRef(getPageNames)
@@ -845,7 +885,8 @@ export function MilkdownInner({
       const file = imageFromTransfer(event.clipboardData)
       if (file) {
         event.preventDefault()
-        void insertImage(view, file)
+        if (uploadImageRef.current) uploadImageRef.current(file)
+        else void insertImage(view, file)
         return true
       }
       // 非图片文件(PDF/压缩包/音视频…):存为附件 → 独立 ![[base]] 嵌入块(与拖入同形态)。
@@ -949,8 +990,10 @@ export function MilkdownInner({
       return false
     }
     const handleAttachmentCopy = (view: EditorView, event: Event): boolean => {
-      if (!attachmentPagePath || !amadeus.copyAttachment) return false
-      const hit = selectedAttachment(view)
+      if (!attachmentPagePath) return false
+      // 网页 / 手机没有主进程:只接图片,随后由 Clipboard API 补成 PNG(引用文字同一项带上);别的附件照旧走默认复制。
+      const image = amadeus.copyAttachment ? null : selectedImage(view)
+      const hit = amadeus.copyAttachment ? selectedAttachment(view) : image
       const e = event as ClipboardEvent
       if (!hit || !e.clipboardData) return false
       e.preventDefault()
@@ -958,8 +1001,13 @@ export function MilkdownInner({
       e.clipboardData.setData('text/plain', hit.reference)
       try { e.clipboardData.setData(ATTACHMENT_CLIP_MIME, hit.reference) } catch { /* browser flavor limit */ }
       // copy 事件必须同步返回;主进程随后把同一份剪贴板升级为原生 image/file flavor。
-      void amadeus.copyAttachment(attachmentPagePath, hit.ref, hit.reference)
-        .then((ok) => { if (ok) rememberAttachmentCopy(hit.reference, hit.ref) })
+      if (amadeus.copyAttachment) {
+        void amadeus.copyAttachment(attachmentPagePath, hit.ref, hit.reference)
+          .then((ok) => { if (ok) rememberAttachmentCopy(hit.reference, hit.ref) })
+      } else if (image) {
+        void writeImageToClipboard(image.img.currentSrc || image.img.src, image.reference)
+          .then(() => rememberAttachmentCopy(image.reference, image.ref), () => { /* 取图失败 / 被后来的复制顶掉:剪贴板里照旧是引用文字 */ })
+      }
       return true
     }
     // 文件拖入(含图片)统一交给编辑器级附件处理(AmadeusEditorView.onDrop),按笔记设置存放 → 不在块内内联,
@@ -1835,6 +1883,7 @@ export function MilkdownInner({
           shape={toolbar.shape}
           fg={toolbar.fg}
           bg={toolbar.bg}
+          dir={toolbar.dir}
           onAct={onToolbarAct}
           onColor={(v) => runCmd(applyColorCommand.key, v || undefined)}
           onBg={(v) => runCmd(applyBgCommand.key, v || undefined)}

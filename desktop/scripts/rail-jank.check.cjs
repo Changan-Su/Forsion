@@ -64,11 +64,11 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
   <div class="t2-chat-view" id="view" style="height:100vh;display:flex;flex-direction:column;width:1188px">
     <div class="t2-chat-body">
       <div class="t2-stream" id="stream"><div class="t2-stream-inner">${msgs}</div></div>
-      <div class="t2-rail"><aside class="t2-tsum show" id="tsum"><div class="t2-tsum-in">
-        <div class="t2-tsum-state running"><span class="t2-tsum-state-tx">正在运行</span></div>
-        <details class="t2-tsum-sec" open><summary class="t2-tsum-sectitle"><span>来源</span></summary>
-          <div class="t2-tsum-scroll"><div class="t2-tsum-row">a.md</div><div class="t2-tsum-row">b.ts</div></div></details>
-      </div></aside></div>
+      <div class="t2-rail"><aside class="t2-tsum show" id="tsum">
+        <details class="t2-card t2-tsum-in" open><summary class="t2-card-head"><span class="t2-card-title"><span class="t2-tsum-state running"><span class="t2-tsum-state-tx">正在运行</span></span></span></summary><div class="t2-card-body"></div></details>
+        <details class="t2-card" open><summary class="t2-card-head"><span class="t2-card-title"><span>来源</span></span></summary>
+          <div class="t2-card-body"><div class="t2-tsum-row">a.md</div><div class="t2-tsum-row">b.ts</div></div></details>
+      </aside></div>
     </div>
     <div class="composer-anchor" id="anchor"><div class="t2-composer-wrap"><div class="t2-composer">输入框</div></div></div>
   </div>

@@ -96,7 +96,11 @@ async function startStubEngine(data = {}) {
     if (p === '/agent/runs' && req.method === 'POST') {
       const b = await body();
       const id = `r${seen.runs.length + 1}`;
-      seen.runs.push({ runId: id, message: b.message, sessionId: b.session_id, agentConfig: b.agent_config });
+      seen.runs.push({
+        runId: id, message: b.message, sessionId: b.session_id, agentConfig: b.agent_config,
+        // 附件记摘要(data 头 64 字符够解出 PNG 宽高);2 MB 以下的连 data 一起留(台架要验截图内容),更大的不留,免得把台架进程撑大
+        attachments: Array.isArray(b.attachments) ? b.attachments.map((a) => ({ name: a && a.name, mimeType: a && a.mimeType, size: a && a.size, dataLen: String((a && a.data) || '').length, head: String((a && a.data) || '').slice(0, 64), ...(String((a && a.data) || '').length < 2_000_000 ? { data: a.data } : {}) })) : [],
+      });
       runs.set(id, sseLines(queue.shift() || []));
       // 起 run 慢一拍(测「发送往返途中又来一句」这类在途竞态)
       if (state.runDelayMs) await new Promise((r) => setTimeout(r, state.runDelayMs));

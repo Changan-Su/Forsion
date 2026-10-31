@@ -9,8 +9,8 @@ import { amadeusAvailable } from './features/runtime'
  *    ——Dockview 的 components map 收缩时不能留活面板;
  *  - ctx.openView 经 pluginStore.viewOpener 钩子指到 workspace.openView(主区 / 侧栏 / 底部面板;移动端无底部)。
  */
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { Puzzle, type LucideIcon } from 'lucide-react'
+import React, { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState, useSyncExternalStore } from 'react'
+import { Puzzle, RotateCw, TriangleAlert, type LucideIcon } from 'lucide-react'
 import { registerView, unregisterView, useWorkspace, getActiveSpace, getView, showInMainPanel, useViewModes, ViewHead, type ViewProps, type ViewModeOption } from '@lcl/engine'
 import { notePluginGesture, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { recordDevMountError } from '@amadeus/plugins/devRecords'
@@ -18,12 +18,15 @@ import { setDevViewBridge } from '@amadeus/plugins/devSandbox'
 import type { ViewContribution } from '@amadeus/plugins/types'
 import { isClaimingHostView } from '../../shared/corePlugins'
 import { PLUGIN_ICONS } from '@amadeus/components/icons'
-import { registerMessages, translate, useI18n } from './i18n'
-import { PLUGIN_VIEW_HOST_ATTR, clearPluginViewModes, pluginViewModesOf, subscribePluginViewModes } from '@amadeus/plugins/pluginViewModes'
+import { registerMessages, useI18n } from './i18n'
+import { PLUGIN_VIEW_HOST_ATTR, clearPluginViewModes, pluginViewHeadOf, pluginViewModesOf, subscribePluginViewModes } from '@amadeus/plugins/pluginViewModes'
+import { pluginText } from '@amadeus/plugins/pluginText'
 import { setPluginCompanions } from './pluginCompanions'
+import { EmptyState } from './components/EmptyState'
 
 registerMessages({
-  'pluginview.mountFailed': { zh: '插件视图加载失败（见控制台）', en: 'Plugin view failed to load (see console)' },
+  'pluginview.mountFailed': { zh: '插件视图加载失败', en: 'Plugin view failed to load' },
+  'pluginview.retry': { zh: '重试', en: 'Retry' },
 })
 
 /** DOM-mount 宿主:div 交给插件的 mount(),卸载时跑其返回的清理函数。
@@ -39,7 +42,16 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
   // 快照取 spec(插件 set / update 都换新对象),登记那份本身换人时也跟着变
   useSyncExternalStore(subscribePluginViewModes, () => pluginViewModesOf(hostEl)?.spec ?? null)
   const modes = pluginViewModesOf(hostEl)
-  const { locale } = useI18n()
+  useSyncExternalStore(subscribePluginViewModes, () => pluginViewHeadOf(hostEl))
+  const head = pluginViewHeadOf(hostEl)
+  const headTitle = head?.title != null ? pluginText(head.title) : ''
+  const { locale, t } = useI18n()
+  // 挂载失败 → 失败卡(报错首行 +「重试」);重试只重跑这一个视图的 mount,插件本身不重载,同插件别的视图 / 面板不受影响。
+  // 卡只属于出错的那一次挂载:点了重试(attempt 变)或插件换了新代码(def 换人),同一次渲染里它就作废、挂载点不再 hidden ——
+  // 在 effect 里再收就晚了:新的 mount 量到的是 hidden 容器的 0×0(Codex 评审)
+  const [attempt, retry] = useReducer((n: number) => n + 1, 0)
+  const [failure, setFailure] = useState<{ def: ViewContribution; attempt: number; line: string } | null>(null)
+  const failed = failure && failure.def === def && failure.attempt === attempt ? failure.line : null
   useViewModes(leaf.id, modes ? {
     modes: modes.spec.modes.map((m): ViewModeOption => ({ value: m.id, label: locale === 'en' && m.labelEn ? m.labelEn : m.label, icon: modeIcon(m.icon) })),
     value: modes.spec.value,
@@ -78,7 +90,8 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
       console.error(`[plugin-view] mount "${def.id}" failed`, e)
       if (pluginId) recordDevMountError(pluginId, def.id, e)
       onError.current?.(e)
-      el.textContent = translate('pluginview.mountFailed')
+      el.replaceChildren()
+      setFailure({ def, attempt, line: errorLine(e) })
     }
     const runCleanup = (fn: () => void): void => {
       // 也派给窗口 error:agent 自建 Space 的清理抛错由 builtins/agentSpaceSync 按栈帧认领、回写给 agent(别的插件只多一行日志)
@@ -128,14 +141,25 @@ export const PluginViewHost: React.FC<ViewProps & { def: ViewContribution; plugi
     }
     disposeBeforePaint.current = dispose
     return () => { dispose(); clearPluginViewModes(el); if (disposeBeforePaint.current === dispose) disposeBeforePaint.current = null }
-  }, [def, pluginId, extendView])
+  }, [def, pluginId, extendView, attempt])
   return (
     <>
       {/* 有头行时挂载点要 position: relative:插件根常是 absolute inset:0(谛听),不然会盖到头行上 */}
-      {modes && <ViewHead leafId={leaf.id}><HostSlot el={modes.actions} /></ViewHead>}
-      <div ref={hostRef} {...{ [PLUGIN_VIEW_HOST_ATTR]: '' }} style={modes ? { height: 'calc(100% - 32px)', overflow: 'auto', position: 'relative' } : { height: '100%', overflow: 'auto' }} />
+      {(modes || head) && <ViewHead leafId={leaf.id} title={headTitle}>{modes && <HostSlot el={modes.actions} />}{head && <HostSlot el={head.actions} />}</ViewHead>}
+      <div ref={hostRef} {...{ [PLUGIN_VIEW_HOST_ATTR]: '' }} hidden={failed != null} style={modes || head ? { height: 'calc(100% - 32px)', overflow: 'auto', position: 'relative' } : { height: '100%', overflow: 'auto' }} />
+      {failed != null && <div data-plugin-view-failed="" style={{ height: modes || head ? 'calc(100% - 32px)' : '100%', display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
+        <EmptyState icon={TriangleAlert} title={t('pluginview.mountFailed')} line={failed || undefined}
+          action={{ label: t('pluginview.retry'), icon: RotateCw, action: 'plugin-view-retry', onClick: retry }} />
+      </div>}
     </>
   )
+}
+
+/** 失败卡上那一行:报错的首行(`Error: ` 前缀去掉,别的类型名留着),过长截断;完整的在控制台。 */
+export function errorLine(e: unknown): string {
+  const text = e instanceof Error ? (e.name === 'Error' ? e.message : `${e.name}: ${e.message}`) : String(e ?? '')
+  const line = text.split('\n', 1)[0].trim()
+  return line.length > 200 ? `${line.slice(0, 199)}…` : line
 }
 
 /** 把宿主建的那块 DOM(插件往里放按钮)挂进头行右边。 */
@@ -273,7 +297,7 @@ export function syncPluginViews(): void {
       registerView({
         type,
         kind: 'page', // 插件 view 无宿主可信的身份/文件声明,一律 page;embeddable 恒缺省 false(宿主白名单语义)
-        displayName: () => def.title,
+        displayName: () => pluginText(def.title),
         icon: viewIcon(def.icon),
         factory: (props) => <PluginViewHost def={def} pluginId={type.split(':')[1]} {...props} />,
         singleton: def.singleton !== false,

@@ -29,6 +29,7 @@ import { awaitTypingQuiet, installTypingGuard } from '../store/typingGuard'
 import {
   DbLinkPicker, MilkdownInner, normalizeSerializedMd, serializeUnified, stampedFileName,
   PREFIX_TRIGGERS, SLASH_SENTINELS, slashTurnFailed, getFocusedBlockApply, setFocusedBlockApply, type SlashItem, type SlashOps,
+  copySelectedImage, selectedImage,
 } from '../blocks/markdown/MarkdownBlock'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
 import { BLANK_SCENE_JSON, blankDrawing } from '@amadeus-shared/excalidraw/format'
@@ -87,7 +88,9 @@ import { createAgentChanges, keepAgentChanges, markAgentChanges, nextAgentChange
 import { AgentChangeCapsule, AgentLiveCapsule } from './AgentChangeCapsule'
 import { InlineAiPanel, type InlineAiRun } from './InlineAiPanel'
 import { alignByAnchor, hostTop, registerModeCapture, scrollHostOf, textareaCaretY } from './modeRelay'
-import { beginPending, createPendingInsert, endPending, insertAtPending, toastPendingLost, toastPendingSourceMode, type PendingAnchor } from './pendingInsert'
+import { startBodyUploads } from './bodyUploads'
+import { oneSaveAtATime } from '../../services/uploads'
+import { beginPending, createPendingInsert, endPending, insertAtPending, insertInlineAtPending, type PendingWidget, toastPendingLost, toastPendingSourceMode, type PendingAnchor } from './pendingInsert'
 import { aiContextOf, aiTargetOf, applyAiResult, clearAiTarget, createInlineAi, setAiTarget, translateTargetOf, type AiApply } from './inlineAi'
 import { aiSpaceTriggerEnabled } from '../lib/aiSpaceTrigger'
 import type { TanguInlineAction } from '../plugins/tanguSeam'
@@ -115,8 +118,6 @@ import { pmFindProvider } from './findReplace'
 import { claimMoveHandoff, hasMoveHandoff, registerMoveHandoff, type MoveHandoff, type MoveSnapshot } from './moveHandoff'
 
 registerMessages({
-  'unipage.upload.uploading': { zh: '上传中 {name}', en: 'Uploading {name}' },
-  'unipage.upload.fileN': { zh: '文件{n}', en: 'File {n}' },
   'unipage.toast.insertPointLost': { zh: '文件已创建，但原插入位置已失效（笔记已切换）', en: 'The file was created, but the original insertion point is gone (the note was switched).' },
   'unipage.plugin.notString': { zh: 'run() 必须返回字符串，实际是 {type}', en: 'run() must return a string, but returned {type}' },
   'unipage.plugin.tooLong': { zh: 'run() 返回内容过长', en: 'run() returned too much content' },
@@ -162,6 +163,9 @@ registerMessages({
   'unipage.menu.toNewColumnMulti': { zh: '选中多块时不能移到新列，请只选一块', en: 'Select a single block to move it to a new column' },
   'unipage.menu.backToDoc': { zh: '收回文档', en: 'Return to document' },
   'unipage.menu.duplicate': { zh: '复制块', en: 'Duplicate block' },
+  'unipage.menu.copyImage': { zh: '复制图片', en: 'Copy image' },
+  'unipage.menu.imageCopied': { zh: '已复制图片', en: 'Image copied' },
+  'unipage.menu.imageCopyFailed': { zh: '复制失败', en: 'Could not copy the image' },
   'unipage.menu.delete': { zh: '删除', en: 'Delete' },
   'unipage.lock.bar': { zh: '页面已锁定，防止误改。', en: 'This page is locked to prevent accidental edits.' },
   'unipage.lock.unlock': { zh: '解锁', en: 'Unlock' },
@@ -592,54 +596,36 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
     }
   }
 
-  /** 粘贴的非图片文件(v3 同语义):逐个存附件 → 光标所在块之后插一串 `![[base]]` 段落
-   *  (嵌入层自动渲染成文件卡/PDF)。此前 unified 传空实现,粘贴被 preventDefault 后静默吞掉(审计实报)。 */
-  const saveFiles = async (files: File[]): Promise<void> => {
+  /** 正文里的上传(粘贴 / 拖入的文件、粘贴的图片、斜杠「图片」):一批一个**不落盘**的占位钉在光标处,传完按原顺序插到那里
+   *  (bodyUploads.ts;此前是一行真正文「上传中 xxx」,会被自动保存进 .md)。
+   *  asImage:粘贴图片那一路 —— 插图片节点,与此前 saveImage 同一落盘形;其余 `![[base]]` 嵌入(嵌入层渲染成文件卡 / PDF / 图)。 */
+  const uploadIntoBody = (files: File[], asImage = false): void => {
     if (!files.length) return
-    // 先出占位块再上传(AFFiNE 同):大文件时用户立刻看到「东西已经落在这儿了」,而不是盯着
-    // 一个没反应的编辑器等几秒。占位文本带零宽标记,替换时按标记找回位置 —— 期间用户照常打字,
-    // 位置会跟着事务走(靠文本定位而不是缓存 pos,回灌/外部改动都不会把它对错地方)。
-    const marks = files.map((f, i) => `\u200b${translate('unipage.upload.uploading', { name: f.name || translate('unipage.upload.fileN', { n: i + 1 }) })}\u200b`)
-    getInstance()?.action((ctx) => {
-      const view = ctx.get(editorViewCtx)
-      const paragraph = view.state.schema.nodes.paragraph
-      if (!paragraph) return
-      const { $to } = view.state.selection
-      // 选区末端在 doc 顶层(选中的顶层块 —— 文件拖到 hr 上就是这样,见 blockLayer 的文件落点)= 紧跟其后。
-      let pos = $to.depth >= 1 ? $to.after(1) : $to.pos
-      let tr = view.state.tr
-      for (const m of marks) {
-        const node = paragraph.create(null, view.state.schema.text(m))
-        tr = tr.insert(pos, node)
-        pos += node.nodeSize
-      }
-      view.dispatch(tr.scrollIntoView())
+    startBodyUploads({
+      files,
+      pin: (w) => pinPending(files[0].name, true, w),
+      save: async (f, onProgress) => {
+        const bytes = new Uint8Array(await f.arrayBuffer())
+        const { opts } = await getAttachmentPrefs()
+        const r = await oneSaveAtATime(() => amadeus.saveAttachment(path, f.name || (asImage ? 'pasted.png' : 'file'), bytes, opts, onProgress))
+        return asImage ? `![](${toAssetUrl(joinRel(pageDir, r.pageRel), true)})` : `![[${r.base}]]`
+      },
+      finish: (md, a) => {
+        if (!md) { dropPending(a); return }
+        // 粘贴图片:插在锚那一行的那个位置(行内,与此前 replaceSelectionWith 同形);那里放不下行内节点才按块插
+        let placed = false
+        if (asImage && a && !a.cancelled() && !hidden?.()) {
+          getInstance()?.action((ctx) => {
+            const doc = ctx.get(parserCtx)(toDisplayMarkdown(md, pageDir)) as ProseNode | undefined
+            const img = doc?.firstChild?.firstChild
+            if (img?.type.name === 'image') placed = insertInlineAtPending(ctx.get(editorViewCtx), a.id, img)
+          })
+        }
+        if (!placed) insertAsync(md, a)
+      },
     })
-    /** 用占位文本找回它现在在哪(找不到 = 用户已经把它删了 → 什么都不做)。 */
-    const replaceMark = (mark: string, md: string | null): void => {
-      getInstance()?.action((ctx) => {
-        const view = ctx.get(editorViewCtx)
-        let fFrom = -1
-        let fTo = -1
-        view.state.doc.descendants((n, pos) => {
-          if (fFrom >= 0 || !n.isTextblock || n.textContent !== mark) return true
-          fFrom = pos
-          fTo = pos + n.nodeSize
-          return false
-        })
-        if (fFrom < 0) return
-        const found = { from: fFrom, to: fTo }
-        const paragraph = view.state.schema.nodes.paragraph
-        const tr = md && paragraph
-          ? view.state.tr.replaceWith(found.from, found.to, paragraph.create(null, view.state.schema.text(md)))
-          : view.state.tr.delete(found.from, found.to)
-        view.dispatch(tr)
-      })
-    }
-    for (let i = 0; i < files.length; i++) {
-      replaceMark(marks[i], await saveOneFile(path, files[i])) // 失败 = null → 把占位撤掉,不留一行假内容
-    }
   }
+  const saveFiles = async (files: File[]): Promise<void> => uploadIntoBody(files)
 
   /** 把一段 markdown 插进当前文档。返回是否真落地(编辑器没挂载 / 解析成空 = false)。
    *  - `'cursor'`(缺省,用户动作走这档):光标所在容器中的块为空 → 原地替换;否则插到它之后。
@@ -742,9 +728,9 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
   /** 异步 slash 项的锚(评审 G3-06,见 pendingInsert.ts):'/query' 消费掉之后**当场**在光标处钉住,结果回来插到那里 ——
    *  不插在完成那一刻的光标处、不抢别的输入框的焦点、不在唤起处留空段。编辑器已拆 = null。
    *  visible=false:只记位置不画占位(弹对话框问地址的那几项,对话框开着时画「进行中」是噪音)。 */
-  const pinPending = (label: string, visible = true): PendingAnchor | null => {
+  const pinPending = (label: string, visible = true, widget?: PendingWidget): PendingAnchor | null => {
     let a: PendingAnchor | null = null
-    getInstance()?.action((ctx) => { a = beginPending(ctx.get(editorViewCtx), label, visible) })
+    getInstance()?.action((ctx) => { a = beginPending(ctx.get(editorViewCtx), label, visible, widget) })
     return a
   }
   const dropPending = (a: PendingAnchor | null): void => {
@@ -870,17 +856,8 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         const f = input.files?.[0]
         if (!f) return
         // 对话框是模态的,选好文件这一刻光标还在唤起处:此刻钉锚(选文件对话框取消时不留占位)。
-        const a = pinPending(item.label)
-        void (async () => {
-          try {
-            const bytes = new Uint8Array(await f.arrayBuffer())
-            const { opts } = await getAttachmentPrefs()
-            const { base } = await amadeus.saveAttachment(path, f.name || 'image.png', bytes, opts)
-            insertAsync(`![[${base}]]`, a) // 与拖入同形态:嵌入层渲染成图片块
-          } catch {
-            dropPending(a) // 保存失败静默跳过
-          }
-        })()
+        // 与拖入同形态 `![[base]]`(嵌入层渲染成图片块);上传中是本地预览 + 环,失败给重试 / 移除。
+        uploadIntoBody([f])
       }
       input.click()
       return
@@ -993,6 +970,7 @@ function UnifiedEditorHost({ path, pageDir, body, onChange, onFinalFlush, skipFi
         keys={NOOP_KEYS}
         saveImage={saveImage}
         saveFiles={saveFiles}
+        uploadImage={(f: File) => uploadIntoBody([f], true)}
         // 没带修饰键的点击 / 「打开光标处链接」:文件类目标开在旁边那半屏(openWikiLink 的 split;笔记目标不认它,照旧就地)。
         onOpenWiki={(name, o) => void store.getState().openWikiLink(name, path, o ?? { split: true })}
         getPageNames={() => store.getState().pages}
@@ -3729,6 +3707,23 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
             }}>
               <Copy size={13} /> {t('unipage.menu.duplicate')}
             </button>
+            {/* 选中的是一张图(右键图片即选中它):复制成真图片,能直接贴进聊天 / 别的应用。键盘 Mod+C 走同一份。 */}
+            {(() => {
+              const view = layer.getView()
+              return view && selectedImage(view) && (
+                <button role="menuitem" tabIndex={-1} data-act="copyImage" onClick={() => {
+                  setBlockMenu(null)
+                  const v = layer.getView()
+                  if (!v || !restoreMenuTarget(v)) return
+                  void copySelectedImage(v, path).then((ok) => {
+                    window.dispatchEvent(new CustomEvent('amadeus:toast', { detail: { text: translate(ok ? 'unipage.menu.imageCopied' : 'unipage.menu.imageCopyFailed') } }))
+                  })
+                  v.focus()
+                }}>
+                  <CoverImageIcon size={13} /> {t('unipage.menu.copyImage')}
+                </button>
+              )
+            })()}
             {/* 复制标题链接 / 复制块链接 / 移动到(B-15):只在真能用的时候露出 —— 块链接只给已有 `^id` 的块(不铸 ID)。 */}
             {(() => {
               const view = layer.getView()

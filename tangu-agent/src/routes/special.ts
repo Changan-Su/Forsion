@@ -10,7 +10,11 @@
  *   GET      /agent/special/muse/status                Muse 运行态 + 本窗口预算余量
  *   GET      /agent/special/muse/triggers              自动化规则列表(manage_automation 工具/构建器写入;附 nextRunAt)
  *   POST     /agent/special/automation/triggers/:id/fire  立即执行(origin=manual 试跑 / button 按钮点击,不动 lastFiredAt)
- *   POST     /agent/special/automation/kick            唤醒巡检(桌面写完 .db 后踢一下,db_changed 从 5min 降到 ~2s)
+ *   POST     /agent/special/automation/kick            唤醒巡检(桌面写完 .db 后踢一下,db_changed 从 5min 降到 ~2s;{scope:'computer'} = 电脑历史落盘后踢,没有电脑类规则就不醒)
+ *   GET      /agent/special/automation/sources         触发源注册表(界面菜单;每源带 available / reason)
+ *   POST     /agent/special/automation/plugin-triggers  渲染层插件登记触发源(ctx.automation.registerTrigger;只在内存,重启后宿主补登)
+ *   DELETE   /agent/special/automation/plugin-triggers/:pluginId/:key       注销(插件停用 / 卸载 / 重载)
+ *   POST     /agent/special/automation/plugin-triggers/:pluginId/:key/emit  插件事件(ctx.automation.emit)
  *   GET      /agent/special/automation/actions          tool_call 动作目录(白名单+automationSafe)
  *   GET      /agent/special/automation/executions       动作链执行账本(?triggerId=&limit=)
  *   POST     /agent/special/muse/triggers              upsert 规则(带 id 改/无 id 建;桌面「自动化」构建器)
@@ -27,6 +31,11 @@
  *   GET      /agent/special/muse/library                Muse Library 目录树(桌面 Agent Space 左栏;含子目录)
  *   GET      /agent/special/muse/library/file?path=     读 Library 里一个文本文件(Muse 自建 Space 的 ctx.agent.library.read)
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
+ *   GET      /agent/special/muse/cards?status=          Muse 私聊里要用户点的卡(services/museCards.ts)
+ *   GET      /agent/special/muse/cards/:id              单张卡(流里那一行按 id 读)
+ *   POST     /agent/special/muse/cards/:id/decide { action }  用户点卡:效果在引擎里按 kind 白名单执行,CAS pending,不符 409
+ *   POST     /agent/special/muse/cards/:id/summary-edit { index, expected, text }  改小结里的一条(记忆跟着改)
+ *   POST     /agent/special/muse/messages/:id/feedback { verdict }  主动消息下面的「有用 / 少来点这种」
  *
  * 本地特性：profile.capabilities.hostExec=false（云端）一律 404；例外 = /agent/special/config(云端返回每用户的按轮 Historian 设置)。
  * 远程来源(x-forsion-remote)读 /agent/special/config 只拿最小投影(开关 + 两个节奏值,remote:true;P1 · K10b)。
@@ -44,7 +53,9 @@ import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS, type SpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
-import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, type DbLike } from '../services/museTriggers.js';
+import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
+import { getTriggerSource, listTriggerSources } from '../services/triggerRegistry.js';
+import { emitPluginTrigger, registerPluginTrigger, unregisterPluginTrigger } from '../plugins/automation.js';
 import { readDbOrNull } from '../services/amadeusDb.js';
 import { dropCursors } from '../services/dbCursors.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
@@ -53,11 +64,11 @@ import { resolveTools, declaredApproval } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import { loadSchedule, entriesOf, validateEntryInput, upsertEntry, ensureEntry, removeEntry } from '../services/agentSchedule.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, isValidSlug } from '../agents/agentRegistry.js';
-import { runWithAgentSlug } from '../seams/runContext.js';
 import { listApprovals, decideApproval, getApproval } from '../services/pendingApprovals.js';
 import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
 import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
+import { appendMuseFeedback, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -69,13 +80,6 @@ function ensureLocal(res: any): boolean {
     return false;
   }
   return true;
-}
-
-/** 用户对 TODO 的处理写进 Muse 自己的 LOG(英文——下周期 read_log 喂给模型)——反馈闭环。绝不抛。 */
-async function appendMuseFeedback(userId: string, line: string): Promise<void> {
-  try {
-    await runWithAgentSlug(MUSE_AGENT_SLUG, () => deps().brain.memory.appendLogEntry(userId, line));
-  } catch { /* 反馈写失败不阻断主流程 */ }
 }
 
 /** 云端(web/安卓)只有按轮 Historian,每用户一份。回完整形状(Muse 等取缺省)让前端 dirty 判定稳定;cloud:true 让前端只露 Historian 的五项。 */
@@ -368,6 +372,7 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
  *   enabled / mode / running / sleepUntil / sleepReason —— MuseView 的状态药丸与「休眠中」提示;
  *   sessionId / running —— MuseView 取最近几条思考、自动化 Space 的「运行记录」;lastCycleAt —— 自动化详情卡「上次运行」;
  *   spaceStamp —— Muse Space 按戳热重载(builtins/muse.tsx、MuseView → syncAgentSpace);
+ *   feedbackUntil —— 手机上 Muse 私聊的「有用 / 少来点这种」到什么时候收起(MuseCards.tsx MuseFeedbackRow);
  *   running / lastCycleAt / sleepUntil / sleepReason / mode / heartbeatMinutes / pendingApprovals —— Muse 自建 Space 的
  *     ctx.agent.status() 契约(tanguProbe.museSelf;手机整端切到这台电脑时它的请求就打到这里)。
  * 不回:libraryDir / spaceDir(本机绝对路径,渲染层没有读者)、hasModel、restartsThisWindow / maxRestartsPerWindow(次数预算)、
@@ -377,7 +382,7 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
 const remoteMuseStatusView = (s: Awaited<ReturnType<typeof museStatus>>) => ({
   enabled: s.enabled, running: s.running, lastCycleAt: s.lastCycleAt, sessionId: s.sessionId,
   mode: s.mode, heartbeatMinutes: s.heartbeatMinutes, pendingApprovals: s.pendingApprovals,
-  spaceStamp: s.spaceStamp, sleepUntil: s.sleepUntil, sleepReason: s.sleepReason,
+  spaceStamp: s.spaceStamp, sleepUntil: s.sleepUntil, sleepReason: s.sleepReason, feedbackUntil: s.feedbackUntil,
 });
 
 router.get('/agent/special/muse/status', authMiddleware, async (req: AuthRequest, res) => {
@@ -398,8 +403,12 @@ router.get('/agent/special/muse/triggers', authMiddleware, async (_req: AuthRequ
     const list = await loadTriggers();
     // notice = 引擎侧**不停用**的暂时性状态位(库不符 / 表暂时读不到 / where 列按名解析不到);
     // 与 disabledReason 互补:那条是「已经停了,为什么」,这条是「还开着,但为什么不动」(H3)。
+    // 暂停原因(触发源没了 / 电脑历史关了)现算,关掉的那一刻面板就写明,不等下一 tick。
     const notices = getAutomationNotices();
-    res.json({ triggers: list.map((t) => ({ ...t, nextRunAt: nextRunAt(t), ...(notices[t.id] ? { notice: notices[t.id] } : {}) })) });
+    res.json({ triggers: list.map((t) => {
+      const notice = (t.enabled ? triggerUnmet(t) : null) ?? notices[t.id];
+      return { ...t, nextRunAt: nextRunAt(t), ...(notice ? { notice } : {}) };
+    }) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'triggers failed' });
   }
@@ -516,10 +525,48 @@ router.post('/agent/special/automation/triggers/:id/fire', authMiddleware, async
  * 刻意不收任何业务 payload:唤醒之后仍由引擎自己重读磁盘做权威判定,绝不信客户端传来的行内容
  * (否则「谁能发这个请求」就变成了「谁能伪造表格变化」)。调用方自己节流。
  */
-router.post('/agent/special/automation/kick', authMiddleware, async (_req: AuthRequest, res) => {
+router.post('/agent/special/automation/kick', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
+  // 电脑历史每次切 App 都来一下(主进程节流 5s):没有电脑类规则的用户不该为此跑整个 tick。
+  if (req.body?.scope === 'computer') {
+    const list = await loadTriggers().catch(() => []);
+    if (!list.some((t) => t.enabled && getTriggerSource(t.cond?.type)?.eventSource === 'computer')) { res.json({ ok: true, skipped: true }); return; }
+  }
   kickMuse();
   res.json({ ok: true });
+});
+
+router.post('/agent/special/automation/plugin-triggers', authMiddleware, (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    registerPluginTrigger(String(req.body?.pluginId ?? ''), req.body?.trigger);
+    res.json({ ok: true });
+  } catch (e: any) { res.status(400).json({ error: 'bad_trigger', detail: e?.message }); }
+});
+router.delete('/agent/special/automation/plugin-triggers/:pluginId/:key', authMiddleware, (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  unregisterPluginTrigger(String(req.params.pluginId), String(req.params.key));
+  res.json({ ok: true });
+});
+router.post('/agent/special/automation/plugin-triggers/:pluginId/:key/emit', authMiddleware, (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    emitPluginTrigger(String(req.params.pluginId), String(req.params.key), req.body?.payload);
+    res.json({ ok: true });
+  } catch (e: any) { res.status(404).json({ error: 'unknown_trigger', detail: e?.message }); }
+});
+
+// 触发源目录(自动化画布的类型菜单直接从这里出)。电脑那组:本平台没有电脑历史 = 不给(Linux);关着 = 给但 available:false,界面灰掉。
+router.get('/agent/special/automation/sources', authMiddleware, async (_req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const supported = process.platform === 'darwin' || process.platform === 'win32';
+  const sources = listTriggerSources()
+    .filter((s) => supported || !s.requires?.includes('computer_history'))
+    .map((s) => {
+      const reason = triggerUnmet({ cond: { type: s.id } as MuseTrigger['cond'] });
+      return { id: s.id, group: s.group, name: s.name, params: s.params, requires: s.requires ?? [], eventSource: s.eventSource, defaultCooldownHours: s.defaultCooldownHours, timed: !!s.timed, available: !reason, ...(reason ? { reason } : {}) };
+    });
+  res.json({ sources });
 });
 
 // 动作目录:tool_call 步骤选择器的数据源(白名单内置 + automationSafe 插件工具;参数 JSON schema 供表单生成)。
@@ -624,6 +671,67 @@ router.post('/agent/special/muse/feedback', authMiddleware, async (req: AuthRequ
   if (!text) return res.status(400).json({ detail: 'text required' });
   await appendMuseFeedback(req.user!.userId, `[feedback] ${text}`);
   res.json({ ok: true });
+});
+
+// 私聊里的卡:读与点。点卡对远端放行(手机私聊同一张卡),客户端只传 action,改什么在引擎里定。
+router.get('/agent/special/muse/cards', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+    res.json({ cards: await listMuseCards(req.user!.userId, status) });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'cards failed' }); }
+});
+
+router.get('/agent/special/muse/cards/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const card = await getMuseCard(req.user!.userId, req.params.id);
+    if (!card) return res.status(404).json({ detail: 'card not found' });
+    res.json({ card });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'card failed' }); }
+});
+
+router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const b = req.body || {};
+    const r = await decideMuseCard(req.user!.userId, req.params.id, String(b.action || ''), {
+      messageId: typeof b.messageId === 'string' ? b.messageId : undefined,
+      answers: b.answers && typeof b.answers === 'object' ? { when: String(b.answers.when || ''), pace: String(b.answers.pace || ''), focus: Array.isArray(b.answers.focus) ? b.answers.focus.map(String) : [] } : undefined,
+      index: typeof b.index === 'number' ? b.index : undefined,
+      expected: typeof b.expected === 'string' ? b.expected : undefined,
+    });
+    if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
+    if (r.card.kind === 'settings' || r.card.kind === 'intro') kickMuse(); // 心跳 / 作息变了:巡检节奏下一轮就跟上
+    res.json({ ok: true, card: r.card, ...(r.trigger ? { trigger: r.trigger } : {}) });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'decide failed' }); }
+});
+
+// 改小结里的一条 = 往 Muse 的长期记忆写用户的原话,拒远端(同 /muse/feedback);上面的 decide 对远端放行,所以不收文本。
+router.post('/agent/special/muse/cards/:id/summary-edit', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const b = req.body || {};
+    const r = await decideMuseCard(req.user!.userId, req.params.id, 'edit', {
+      index: typeof b.index === 'number' ? b.index : undefined,
+      expected: typeof b.expected === 'string' ? b.expected : undefined,
+      text: typeof b.text === 'string' ? b.text : undefined,
+    });
+    if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
+    res.json({ ok: true, card: r.card });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'edit failed' }); }
+});
+
+// 主动消息下面的「有用 / 少来点这种」(磨合期两周)。和 /muse/feedback 同一条 [feedback] 通道,但只收一个枚举 + 消息 id、行文引擎自己拼:
+// 这条对远端放行(手机私聊同一排按钮),而 /muse/feedback 收任意文本、拒远端 —— 那是往自治 Agent 的 LOG 里写字。
+router.post('/agent/special/muse/messages/:id/feedback', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const verdict = String(req.body?.verdict || '');
+  if (verdict !== 'up' && verdict !== 'down') return res.status(400).json({ detail: 'verdict must be up or down' });
+  try {
+    if (!(await recordMessageFeedback(req.user!.userId, req.params.id, verdict))) return res.status(404).json({ detail: 'message not found' });
+    res.json({ ok: true });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'feedback failed' }); }
 });
 
 // ── 异步审批(pending_approvals;Muse ask/agent 档的越界动作) ──────────────

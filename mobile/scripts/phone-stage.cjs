@@ -101,9 +101,12 @@ const MESSAGES = [
 ]
 // A reply the way an agent writes one — a list inside a list, a numbered list that reaches two digits. The chat page is
 // judged on it (st-3); st-1 keeps its two short lines for the scenes that need a conversation shorter than the screen.
+const LINK_PR = 'https://github.com/Changan-Su/Forsion/pull/153'
+// what the engine answers for that link (GET /agent/link-preview): the rich card's data
+const LINK_PREVIEW = { source: 'github', kind: 'pr', repo: 'Changan-Su/Forsion', number: 153, title: 'Fix the asset URL prefix', state: 'merged', author: 'Changan-Su', at: new Date(T0 - DAY).toISOString(), additions: 9, deletions: 6, changedFiles: 2 }
 const CHAT_MESSAGES = [
   { ...MESSAGES[0], id: 'st-c1', content: '登录页的验证码图片不显示了，帮我查一下原因。' },
-  { ...MESSAGES[1], id: 'st-c2', content: ['先说结论：验证码不显示是因为图片地址被拼了两次前缀。', '', '- 开发环境走代理，前缀由 `BACKEND_URL` 决定', '  - 本机 dev', '  - 预览包', '- 生产环境同源，所以线上一直没事', '', '改法两步：', '', '9. 改 `shared/assetUrl.ts`', '10. 补一条测试'].join('\n') },
+  { ...MESSAGES[1], id: 'st-c2', content: ['先说结论：验证码不显示是因为图片地址被拼了两次前缀。', '', '- 开发环境走代理，前缀由 `BACKEND_URL` 决定', '  - 本机 dev', '  - 预览包', '- 生产环境同源，所以线上一直没事', '', '改法两步：', '', '9. 改 `shared/assetUrl.ts`', '10. 补一条测试', '', `同样的毛病在 [#153](${LINK_PR}) 里修过一次。`].join('\n') },
   { ...MESSAGES[0], id: 'st-c3', content: '把改了的三处列成表。', timestamp: T0 - 3 * MIN },
   // a table wider than the screen (five columns, one cell a sentence), one that fits (two columns), a code block,
   // and a reply that thought first: the "thinking" row
@@ -176,6 +179,7 @@ async function stubApi(page, unknown) {
       if (m === 'PATCH' || m === 'PUT') configs[id] = { ...(m === 'PATCH' ? configs[id] : {}), ...JSON.parse(req.postData() || '{}') }
       return json({ agent_config: configs[id] || {} })
     }
+    if (p.endsWith('/agent/link-preview')) return json({ preview: url.searchParams.get('url') === LINK_PR ? LINK_PREVIEW : null })
     if (/\/agent\/sessions\/[^/]+\/messages$/.test(p)) return json({ messages: p.includes('/st-1/') ? MESSAGES : p.includes('/st-3/') ? CHAT_MESSAGES : [] })
     const one = p.match(/\/agent\/sessions\/([^/]+)$/)
     if (one && m === 'PATCH') {
@@ -238,7 +242,7 @@ async function seedNotes(page) {
 }
 
 /** The inbox rows go where the app keeps them on a phone (localStorage), then the store is asked to read them again. */
-async function seedInbox(page) {
+async function seedInbox(page, rows = INBOX) {
   await page.evaluate(async ({ storeUrl, ntfUrl, rows }) => {
     localStorage.setItem('tangu_inbox_msgs', JSON.stringify(rows))
     const { useInbox } = await import(/* @vite-ignore */ storeUrl)
@@ -247,7 +251,7 @@ async function seedInbox(page) {
     // rows that appear after the first poll count as new mail: the app puts a notification card up. Not what is looked at here.
     const { useNotifications } = await import(/* @vite-ignore */ ntfUrl)
     useNotifications.getState().dismissAll()
-  }, { storeUrl: moduleUrl('../desktop/frontend/src/stores/inboxStore.ts'), ntfUrl: moduleUrl('../desktop/frontend/src/stores/notificationStore.ts'), rows: INBOX })
+  }, { storeUrl: moduleUrl('../desktop/frontend/src/stores/inboxStore.ts'), ntfUrl: moduleUrl('../desktop/frontend/src/stores/notificationStore.ts'), rows })
   await page.waitForTimeout(400)
 }
 
@@ -643,6 +647,25 @@ const SCENES = {
     const link = await rect(page, `${LIST} .agents-roster-create`)
     return [['Agents: the roster, and "create" is the main button (no link at the foot)', (await stage.nav(page)) === 'list' && names.length === 2 && !link && !!fab && near(fab.w, 58) && near(SCREEN.width - fab.right, 16) && fab.bottom <= DOCK_TOP - 6, JSON.stringify({ names, link, fab })]]
   },
+  // An agent's run settings on a touch screen (10-25 round 4 · 4.3): no native selects; the approval names are the composer's.
+  'agent-config': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'agents')
+    await page.locator(`${LIST} .agents-roster-item`, { hasText: '研究员' }).first().tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 }).catch(() => {})
+    await page.waitForTimeout(500)
+    const nav = await stage.nav(page)
+    const RUN = '.mb-view [data-agent-profile] .profile-config-group'
+    await page.waitForSelector(RUN, { timeout: 8000 }).catch(() => {})
+    const selects = await page.evaluate((q) => document.querySelector(q)?.querySelectorAll('select').length ?? -1, RUN)
+    await page.locator(`${RUN} [data-profile-field="approval"] .profile-model-trigger`).first().tap()
+    await page.waitForTimeout(300)
+    const opts = await texts(page, `${RUN} [data-profile-field="approval"] [role="option"]`)
+    await page.screenshot({ path: path.join(OUT, `agent-config-open${DARK ? '-dark' : ''}.png`) })
+    await page.locator(`${RUN} [data-profile-field="approval"] .profile-model-trigger`).first().tap()
+    await stage.action(page, 'left')
+    return [['run settings (the profile page, one level down): no native selects, approval names are the composer\'s', nav === 'detail' && selects === 0 && opts.join('|') === '跟随默认（替我批准）|询问我批准|替我批准|完全放行|自定义（config.json）', JSON.stringify({ nav, selects, opts })]]
+  },
   'images-list': async (page) => {
     await stage.space(page, 'image-studio')
     await page.waitForSelector(`${LIST} .ims-nav`, { timeout: 15_000 })
@@ -654,6 +677,23 @@ const SCENES = {
   },
   // A call is on. Its bar belongs to the app, not to the chat: it stays up on every page, right under the capsules, so
   // every page starts below it (the shell's top room grows by the bar, see voiceCall.css). Checked page by page.
+  // An empty inbox (10-25 round 4 · 4.1): the list is the page on a phone, so the shared EmptyState sits in the list —
+  // the same component as the desktop's reader, a bit above the middle — instead of a bare "nothing here yet".
+  'inbox-empty': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await seedInbox(page, [])
+    await stage.space(page, 'inbox')
+    await page.waitForSelector(`${LIST} .empty-state`, { timeout: 6000 }).catch(() => {})
+    const title = await rect(page, `${LIST} .empty-state .empty-state-title`)
+    const words = await texts(page, `${LIST} .empty-state .empty-state-title, ${LIST} .empty-state .empty-state-line`)
+    const bare = await texts(page, `${LIST} .t2sw-empty`)
+    const box = await page.evaluate((q) => { const el = document.querySelector(q); if (!el) return null; const cs = getComputedStyle(el); const r = el.getBoundingClientRect(); return { jc: cs.justifyContent, pt: cs.paddingTop, top: r.top, h: r.height, parent: getComputedStyle(el.parentElement).display, ph: el.parentElement.getBoundingClientRect().height } }, `${LIST} .empty-state`)
+    await page.screenshot({ path: path.join(OUT, `inbox-empty-list${DARK ? '-dark' : ''}.png`) })
+    return [
+      ['an empty inbox says what lands here, with the shared empty state in the list', words[0] === '收件箱是空的' && words[1] === 'Agent 的汇报和等你批准的请求会送到这里。' && !bare.length, JSON.stringify({ words, bare })],
+      ['it sits above the middle of the screen, below the capsules, centred across', !!title && title.y > LAYOUT.top && title.y + title.h / 2 < SCREEN.height / 2 && near(title.x + title.w / 2, SCREEN.width / 2, 24), JSON.stringify({ title, box })],
+    ]
+  },
   'inbox-list': async (page) => {
     if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
     await seedInbox(page)
@@ -823,6 +863,34 @@ const SCENES = {
     rows.push(['the call over: the pages take the room back', !(await rect(page, '.vc-bar')) && (back === '' || back === '0px'), `--mb-top-extra «${back}»`])
     return rows
   },
+  // A link in an answer: a long press shows the card a hover shows on the desktop (here the rich one: the engine answers
+  // for that PR); lifting the finger closes it and does not open the link. Shot while held: linkcard-held.png.
+  linkcard: async (page) => {
+    await openChat(page, '登录页验证码不显示')
+    const a = page.locator(`${CHAT} a.citelink`).first()
+    await a.scrollIntoViewIfNeeded()
+    const box = await a.boundingBox()
+    const at = [{ x: box.x + box.width / 2, y: box.y + box.height / 2 }]
+    const card = () => page.evaluate(() => { const el = document.querySelector('body > .chat-link-card'); return el ? { text: el.textContent, rich: !!el.querySelector('.chat-link-card-rich') } : null })
+    const cdp = await page.context().newCDPSession(page)
+    const url = page.url()
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: at })
+    await page.waitForTimeout(250)
+    const early = await card()
+    await page.waitForTimeout(900)
+    const held = await card()
+    await page.screenshot({ path: path.join(OUT, `linkcard-held${DARK ? '-dark' : ''}.png`) })
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+    await page.waitForTimeout(500)
+    const after = await card()
+    const stayed = page.url() === url && (await page.locator('.mb-shell').count()) === 1
+    await cdp.detach()
+    return [
+      ['a long press: nothing at a quarter second', early === null, JSON.stringify(early)],
+      ['a long press: the rich card once held', !!held?.rich && /已合并/.test(held.text) && /#153/.test(held.text), JSON.stringify(held)],
+      ['lifting the finger closes it and does not open the link', after === null && stayed, JSON.stringify({ after, stayed })],
+    ]
+  },
   // The notification stack is mounted outside the shell (MobileRoot's last child): none of the shell's room-keeping
   // reaches it. The capsules and the dock are native — drawn over the page — so a card under one of them is cut off.
   'notify-card': async (page) => {
@@ -851,6 +919,56 @@ const SCENES = {
     const c = await card()
     rows.push(['a notification: the card starts right below the capsule row, inside the screen', clear(c) && near(c.y, LAYOUT.top + 6 * zoom, 2), JSON.stringify({ card: c, capsulesEnd: LAYOUT.top })])
     return rows
+  },
+  // The agent picker of a new chat. The phone's column is narrow, so the strip folds into one chip. Without a native host
+  // the chip opens a web bottom sheet (names only, ticks, team order); with one, the Android checklist — ticked in order,
+  // applied when it closes (docs/ToBeImproved/窄栏Agent选择器方案_2026-10-23, chosen 10-24).
+  'agent-picker': async (page) => {
+    if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
+    await stage.space(page, 'tangu'); await chip(page, 'all')
+    await page.locator(`${LIST} [data-act="list-fab"], ${LIST} [data-act="new-chat"]`).first().tap()
+    await page.waitForFunction(() => document.querySelector('.mb-shell')?.getAttribute('data-nav') === 'detail', null, { timeout: 6000 })
+    await page.waitForTimeout(600)
+    const pickerChip = page.locator('.agent-select-strip .compact-chat-picker').filter({ visible: true }).first()
+    const chipName = () => pickerChip.locator('.compact-chat-picker-name').textContent()
+    // web sheet
+    await pickerChip.tap()
+    await page.waitForSelector('.chat-pick-sheet')
+    const names = await texts(page, '.chat-pick-sheet .chat-pick-name')
+    const sheetText = await page.locator('.chat-pick-sheet').textContent()
+    await page.locator('.chat-pick-sheet [data-pick-id="agent:editor"]').tap()
+    await page.locator('.chat-pick-sheet [data-pick-id="agent:researcher"]').tap()
+    await page.waitForTimeout(400)
+    const order = await page.evaluate(() => [...document.querySelectorAll('.chat-pick-sheet .chat-pick-index')]
+      .map((el) => `${el.closest('[data-pick-id]').dataset.pickId}=${el.textContent}`).sort((a, b) => a.split('=')[1] - b.split('=')[1]))
+    await page.screenshot({ path: path.join(OUT, `agent-picker-sheet${DARK ? '-dark' : ''}.png`) })
+    await page.locator('.chat-pick-scrim').tap({ position: { x: 40, y: 80 } })
+    await page.waitForTimeout(300)
+    const sheetTeam = await chipName()
+    const sheetGone = !(await page.locator('.chat-pick-sheet').count())
+    await pickerChip.tap()
+    await page.locator('.chat-pick-sheet [data-pick-id=""]').tap()
+    await page.waitForTimeout(300)
+    // native checklist (a stand-in presenter, as in chat-card): the host answers with the ticks in tick order
+    await page.evaluate(async (url) => {
+      const st = window.__stage; st.menus = []; st.answer = { checked: ['agent:researcher', 'agent:editor'] }
+      st.offSheet = (await import(/* @vite-ignore */ url)).installNativeSheetPresenter(async (payload) => { st.menus.push(payload); const a = st.answer; st.answer = null; return a })
+    }, moduleUrl('../lcl/engine/nativeSheet.ts'))
+    await pickerChip.tap()
+    await page.waitForFunction(() => window.__stage.menus.length > 0, null, { timeout: 5000 }).catch(() => {})
+    await page.waitForTimeout(500)
+    const sent = await page.evaluate(() => window.__stage.menus[0] || null)
+    const nativeTeam = await chipName()
+    const noWebSheet = !(await page.locator('.chat-pick-sheet').count())
+    await page.evaluate(() => { window.__stage.offSheet(); delete window.__stage.offSheet })
+    const items = sent?.items || []
+    return [
+      ['web sheet: names only, the descriptions stay out of the rows', names.includes('研究员') && names.includes('编辑') && !sheetText.includes('改稿、压字数'), JSON.stringify(names)],
+      ['web sheet: two picks = a team, numbered in pick order', order.join(',') === 'agent:editor=1,agent:researcher=2', order.join(',')],
+      ['web sheet: tapping the scrim closes it, the chip names both', sheetGone && sheetTeam === '编辑、研究员', sheetTeam],
+      ['native host: a checklist of names, no web sheet', sent?.kind === 'checklist' && items.map((i) => i.label).join('、') === '研究员、编辑' && items.every((i) => !i.detail) && noWebSheet, JSON.stringify(sent && { kind: sent.kind, items: items.map((i) => [i.label, i.detail]) })],
+      ['native host: the ticks come back in tick order', nativeTeam === '研究员、编辑', nativeTeam],
+    ]
   },
 }
 

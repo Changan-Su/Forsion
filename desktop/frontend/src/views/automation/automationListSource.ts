@@ -1,7 +1,8 @@
 /** Automation contributes data and actions to the native Workspace View. It does not draw another sidebar. */
 import { useWorkspace } from '@lcl/engine'
 import { usePluginStore } from '../../amadeus/plugins/pluginStore'
-import type { ListItem, ListSourceContribution } from '../../amadeus/plugins/types'
+import type { ListItem } from '../../amadeus/plugins/types'
+import type { HostListSource } from '../../amadeus/plugins/pluginText'
 import { translate as t } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { homeAgentDefs, subscribeHomeAgents } from '../../stores/homeCatalog'
@@ -75,7 +76,7 @@ export function subscribeAutomation(cb: () => void): () => void {
   return () => { off(); offAgents(); if (--readers === 0) { stopPolling?.(); stopPolling = undefined } }
 }
 
-export const automationListSource: ListSourceContribution = {
+export const automationListSource: HostListSource = {
   id: 'rules', get title() { return t('space.automation') }, search: true,
   activeKey: () => useAutomation.getState().builder ? null : keyOf(useAutomation.getState().sel),
   subscribe: subscribeAutomation,

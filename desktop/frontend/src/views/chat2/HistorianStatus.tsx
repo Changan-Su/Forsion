@@ -11,12 +11,13 @@ import { Markdown } from '../../components/Markdown'
 import { openAgentProfile } from '../agentProfileNav'
 import { showDetails } from '../../stores/detailsSubject'
 import { targetForSession } from '../../services/engine/targets'
+import { agentName } from '../../agentName'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
   'historian.status.ready': { zh: '待命', en: 'Ready' },
   'historian.status.working': { zh: '整理会话中', en: 'Reviewing conversation' },
-  'historian.status.empty': { zh: '本会话还没有 Historian 工作记录', en: 'No Historian activity in this conversation yet' },
+  'historian.status.empty': { zh: '本会话还没有史官工作记录', en: 'No Historian activity in this conversation yet' },
   'historian.status.unavailable': { zh: '状态暂不可用', en: 'Status unavailable' },
   'historian.status.viewTranscript': { zh: '查看完整记录', en: 'View full transcript' },
 })
@@ -60,7 +61,7 @@ function nudgeRefine(sessionId: string, activityId: string): void {
 function notifyAdopted(sessionId: string, activityId: string, titles: string): void {
   const st = useApp.getState()
   const slug = st.configBySession[sessionId]?.agentSlug || st.defaultAgentSlug
-  const name = st.agentDefs.find((a) => a.slug === slug)?.name || slug
+  const name = agentName(st.agentDefs.find((a) => a.slug === slug)) || slug
   notifyApp({
     event: 'harness.candidates', level: 'info', sticky: true, dedupeKey: `harness.adopted:${activityId}`,
     text: st.tr('ntf.harnessAdopted', { name, titles: titles.split(' | ').join(currentLocale() === 'zh' ? '、' : ', ') }),
@@ -74,7 +75,7 @@ function notifyConfirm(sessionId: string, activityId: string): void {
   const slug = st.configBySession[sessionId]?.agentSlug || st.defaultAgentSlug
   notifyApp({
     event: 'harness.candidates', level: 'info', sticky: true, dedupeKey: `harness.confirm:${activityId}`,
-    text: st.tr('ntf.harnessConfirm', { name: st.agentDefs.find((a) => a.slug === slug)?.name || slug }),
+    text: st.tr('ntf.harnessConfirm', { name: agentName(st.agentDefs.find((a) => a.slug === slug)) || slug }),
     action: { label: st.tr('ntf.actionView'), run: () => openAgentProfile(slug, 'evolution') },
   })
 }
@@ -180,9 +181,9 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
       <span className="t2o-desk-name">Historian</span>
       <span className="t2o-desk-dot" data-status={status} />
       <span className="t2o-desk-activity">{t(failed ? 'historian.status.unavailable' : data?.running ? 'historian.status.working' : 'historian.status.ready')}</span>
-      <ChevronRight size={12} style={{ transform: open ? 'rotate(90deg)' : undefined }} />
+      <ChevronRight size={12} style={{ transform: open ? 'rotate(90deg)' : undefined, transition: 'transform var(--duration-fast)' }} />
     </button>
-    {open && <div className="t2o-desk-work" data-historian-work>
+    {open && <div className="t2o-desk-work" data-historian-work data-motion="enter">
       {records.map((r) => <Markdown key={r.id} content={r.content} />)}
       {(data?.activity || []).map((item) => <div className="t2o-historian-event" key={item.id}>{item.detail}</div>)}
       {!records.length && !data?.activity.length && <div className="panel-note">{t('historian.status.empty')}</div>}
@@ -191,7 +192,7 @@ export function HistorianStatus({ sessionId }: { sessionId: string }) {
           type="button"
           className="t2-tsum-more"
           data-historian-transcript
-          onClick={() => useChildChat.getState().open(sessionId, { id: transcriptId, title: 'Historian', sessionId: transcriptId })}
+          onClick={() => useChildChat.getState().open(sessionId, { id: transcriptId, title: t('settings.special.historian'), sessionId: transcriptId })}
         >{t('historian.status.viewTranscript')}</button>
       )}
     </div>}

@@ -52,7 +52,7 @@ async function launch({ home, signedIn, cloud, stub }) {
 /** 设置浮窗里切到 模型 → 默认模型 / 语音。 */
 async function goSub(sp, sub) {
   await sp.locator('.settings-nav-subitem', { hasText: sub }).first().click()
-  if (sub === '语音') await sp.locator('.settings-sec', { hasText: '语音通话' }).first().waitFor({ timeout: 8000 })
+  if (sub === '语音') await sp.locator('.settings-voice-call .settings-panel-head strong', { hasText: '语音通话' }).first().waitFor({ timeout: 8000 })
   else await sp.locator('.model-defaults-panel').first().waitFor({ timeout: 8000 })
 }
 /** 打开设置浮窗并走到 模型 → 默认模型(「语音通话」用哪个模型在这里选)。 */

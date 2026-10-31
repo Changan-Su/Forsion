@@ -11,6 +11,7 @@ import { blockLabel, type BlockNode } from './blockTriggers'
 import { editContextAt, editContextOf, slashAvailable, toolbarShape, type EditContext, type ToolbarShape } from './menuContext'
 import { registerMessages, translate } from '../../../i18n'
 import { AT_BLOCKED_BEFORE } from '@amadeus-shared/mdMarks'
+import { mountLineSelection } from '@lcl/engine/lineSelection'
 
 registerMessages({
   'wikiac.multiBlocks': { zh: '多个块', en: 'Multiple blocks' },
@@ -234,6 +235,8 @@ export interface SelRect {
   /** 选区**处处相同**的文字色 / 背景色(A▾ 按钮据此显示当前颜色);不一致或没有 = 缺省。 */
   fg?: string
   bg?: string
+  /** 鼠标拖选松手时的拖动方向(工具栏顺着它滑进来,同聊天划线条 .selbar;走查续八 8.1)。双击 / 三击 / 键盘选区没有。 */
+  dir?: 'forward' | 'backward'
 }
 /** 选中的是不是「一张图」—— 两种形态都算:md 图片节点(NodeSelection),以及 `![[pic.png|200]]`
  *  那段被整体选中的源码文本(wikilink.ts 的选中态就是这么表示的)。
@@ -257,7 +260,11 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
     // 向上拖选时工具栏正好浮在指针要去的那一行上,指针落到工具栏上 → 第一段选不进来;向下拖则一路闪。
     // 键盘产生的选区(Shift+方向键 / ⌘A)没有按住这回事,照旧即时显示。
     let held = false
+    // 这一次松手是不是单击拖选(e.detail === 1):只有它给方向,松手后头一次 compute 用完即清。
+    let dragged = false
     const compute = (view: EditorView): void => {
+            const fromDrag = dragged
+            dragged = false
             if (held || toolbarDismissKey.getState(view.state)) return report(null)
             const { selection, doc } = view.state
             // hasFocus:编辑器失焦(点到别处/别的块)时 blur 会派空事务触发 update、选区仍非空 →
@@ -329,7 +336,7 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
               })
               return vals.size === 1 ? [...vals][0] || undefined : undefined
             }
-            report({ from, to, active, align, shape: toolbarShape(editContextOf(selection)), fg: uniform('amadeusColor', 'color'), bg: uniform('amadeusBg', 'bg'), left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain) })
+            report({ from, to, active, align, shape: toolbarShape(editContextOf(selection)), fg: uniform('amadeusColor', 'color'), bg: uniform('amadeusBg', 'bg'), dir: fromDrag ? (selection.head < selection.anchor ? 'backward' : 'forward') : undefined, left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain) })
     }
     return new Plugin({
       key: toolbarDismissKey,
@@ -342,6 +349,7 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
           mousedown: (view, e) => {
             if (e.button !== 0) return false
             held = true
+            const single = e.detail === 1
             report(null)
             // 松手在窗口外收不到 mouseup:窗口失焦(非捕获 —— 捕获期会收到页内任何元素的 blur)也算松手。
             const release = (): void => {
@@ -349,6 +357,8 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
               window.removeEventListener('pointercancel', release, true)
               window.removeEventListener('blur', release)
               held = false
+              // 松手后头一次 compute 带方向:PM 自己 mouseup 派的事务可能先于下面的 setTimeout 触发 update,所以这里就记上。
+              dragged = single
               // 等 PM 自己的 mouseup / selectionchange 把最终选区落进 state 再算(它们与这里同在这一拍)。
               setTimeout(() => { if (!view.isDestroyed) compute(view) }, 0)
             }
@@ -359,7 +369,10 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
           },
         },
       },
-      view: () => ({ update: compute }),
+      view: (view) => {
+        const paint = mountLineSelection(view.dom, { editable: true, suspended: () => view.composing })
+        return { update: (next) => { compute(next); paint.refresh() }, destroy: paint.dispose }
+      },
     })
   })
 }

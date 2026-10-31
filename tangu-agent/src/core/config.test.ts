@@ -7,7 +7,8 @@ import { configExists, loadRawConfig, getRawSection, saveSection, updateSection,
 import { configFile } from './tanguHome.js';
 import { loadMcpConfig } from '../mcp/config.js';
 
-const fsFault = vi.hoisted(() => ({ writeSyncENOSPC: false }));
+// fsyncFailAt:第 N 次 fsync 抛 EIO(0 = 不注入;每次注入后自增计数)
+const fsFault = vi.hoisted(() => ({ writeSyncENOSPC: false, fsyncFailAt: 0, fsyncCalls: 0 }));
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>();
   return {
@@ -16,6 +17,10 @@ vi.mock('node:fs', async (importOriginal) => {
       if (fsFault.writeSyncENOSPC) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' });
       return real.writeSync(...args);
     }) as typeof real.writeSync,
+    fsyncSync: ((fd: number) => {
+      if (fsFault.fsyncFailAt && ++fsFault.fsyncCalls === fsFault.fsyncFailAt) throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' });
+      return real.fsyncSync(fd);
+    }) as typeof real.fsyncSync,
   };
 });
 
@@ -188,5 +193,109 @@ describe('config.json 唯一真源', () => {
     expect(Date.now() - t0).toBeLessThan(2000);
     expect(getRawSection('cloud')).toEqual({ url: 'u' });
     expect(leftovers()).toEqual([]);
+  });
+});
+
+describe('写前备份 / 读坏恢复(读失败 = 不知道,不等于空)', () => {
+  const bakDir = (): string => join(dirname(configFile()), 'config-backup');
+  const bak = (): string => join(bakDir(), 'config.json.bak');
+  const marker = (): string => join(bakDir(), 'config.json.recovered');
+  const bads = (): string[] => (existsSync(bakDir()) ? readdirSync(bakDir()).filter((n) => n.startsWith('config.json.bad-')) : []);
+
+  it('第一次写不留 .bak;之后每次写前把上一份原样存成 .bak(0600)', () => {
+    saveSection('cloud', { url: 'u1' });
+    expect(existsSync(bak())).toBe(false);
+    const first = readFileSync(configFile(), 'utf8');
+    saveSection('cloud', { url: 'u2' });
+    expect(readFileSync(bak(), 'utf8')).toBe(first);
+    if (process.platform !== 'win32') expect(statSync(bak()).mode & 0o777).toBe(0o600);
+    expect(readdirSync(bakDir()).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  for (const [label, broken] of [['零字节', ''], ['半截 JSON', '{"cloud": {"url": "u'], ['不是对象', '[1,2]']] as const) {
+    it(`${label}:读时从 .bak 恢复,坏的另存 .bad-* 不删,记恢复标记`, () => {
+      saveSection('cloud', { url: 'u1' });
+      saveSection('mcp', { mcpServers: {} }); // .bak = 只有 cloud 那份
+      const bakTime = statSync(bak()).mtimeMs;
+      writeFileSync(configFile(), broken, 'utf8');
+      expect(loadRawConfig()).toEqual({ cloud: { url: 'u1' } });
+      expect(JSON.parse(readFileSync(configFile(), 'utf8'))).toEqual({ cloud: { url: 'u1' } }); // 原位换回
+      expect(bads()).toHaveLength(1);
+      expect(readFileSync(join(bakDir(), bads()[0]), 'utf8')).toBe(broken);
+      expect(bads()[0]).not.toContain(':'); // Windows 文件名不许冒号
+      const m = JSON.parse(readFileSync(marker(), 'utf8'));
+      expect(m.version).toBe(bakTime);
+      expect(m.bad).toBe(bads()[0]);
+      expect(existsSync(`${configFile()}.lock`)).toBe(false);
+    });
+  }
+
+  it('坏文件 + 有 .bak:saveSection 在恢复出来的内容上合并(其余段不丢)', () => {
+    saveSection('cloud', { url: 'u1', token: 't' });
+    saveSection('mcp', { mcpServers: { a: { command: 'x' } } });
+    writeFileSync(configFile(), '', 'utf8');
+    saveSection('approval', { base: 'readonly' });
+    expect(loadRawConfig()).toEqual({ cloud: { url: 'u1', token: 't' }, approval: { base: 'readonly' } });
+    expect(bads()).toHaveLength(1);
+  });
+
+  it('.bak 也坏:拒写、一个字节都不动,不留 .bad、不记标记;读返回 null', () => {
+    saveSection('cloud', { url: 'u1' });
+    saveSection('cloud', { url: 'u2' });
+    writeFileSync(bak(), '{"cloud":', 'utf8');
+    writeFileSync(configFile(), '', 'utf8');
+    expect(() => saveSection('approval', { base: 'readonly' })).toThrow(/没有可用的备份/);
+    expect(readFileSync(configFile(), 'utf8')).toBe('');
+    expect(loadRawConfig()).toBeNull();
+    expect(bads()).toEqual([]);
+    expect(existsSync(marker())).toBe(false);
+    expect(existsSync(`${configFile()}.lock`)).toBe(false);
+  });
+
+  it('备份写不进去(备份目录被占成文件)→ 整次拒写,config.json 一个字节不动', () => {
+    saveSection('cloud', { url: 'u1' });
+    const before = readFileSync(configFile(), 'utf8');
+    writeFileSync(bakDir(), 'not a dir', 'utf8');
+    expect(() => saveSection('cloud', { url: 'u2' })).toThrow();
+    expect(readFileSync(configFile(), 'utf8')).toBe(before);
+    expect(existsSync(`${configFile()}.lock`)).toBe(false);
+  });
+
+  it('fsync 失败(断电前刷不下去,magpie #1505)→ 整次拒写:config.json 与 .bak 原样,两个目录都不留临时文件', () => {
+    saveSection('cloud', { url: 'u1' });
+    saveSection('cloud', { url: 'u2' });
+    const before = readFileSync(configFile(), 'utf8');
+    const bakBefore = readFileSync(bak(), 'utf8');
+    const tmps = (): string[] => [...readdirSync(dirname(configFile())), ...readdirSync(bakDir())].filter((n) => n.endsWith('.tmp'));
+    for (const at of [1, 2]) { // 1 = 写 .bak 那次,2 = 写 config.json 那次
+      fsFault.fsyncCalls = 0; fsFault.fsyncFailAt = at;
+      try {
+        expect(() => saveSection('cloud', { url: 'u3' })).toThrow(/EIO/);
+      } finally { fsFault.fsyncFailAt = 0; }
+      expect(readFileSync(configFile(), 'utf8')).toBe(before);
+      expect(tmps()).toEqual([]);
+      expect(existsSync(`${configFile()}.lock`)).toBe(false);
+    }
+    expect(readFileSync(bak(), 'utf8')).toBe(before); // 第 2 轮 .bak 已写成功:= 当前那份,仍可恢复
+    expect(bakBefore).not.toBe(before);
+  });
+
+  it('连续两次恢复各留一份 .bad-*,不互相覆盖', () => {
+    saveSection('cloud', { url: 'u1' });
+    saveSection('cloud', { url: 'u2' });
+    writeFileSync(configFile(), '', 'utf8');
+    expect(loadRawConfig()).toEqual({ cloud: { url: 'u1' } });
+    writeFileSync(configFile(), '{', 'utf8');
+    expect(loadRawConfig()).toEqual({ cloud: { url: 'u1' } });
+    expect(bads().map((n) => readFileSync(join(bakDir(), n), 'utf8')).sort()).toEqual(['', '{']);
+  });
+
+  it('.bak 不是第二条读路径:config.json 不存在时不拿 .bak 顶上', () => {
+    saveSection('cloud', { url: 'u1' });
+    saveSection('cloud', { url: 'u2' });
+    rmSync(configFile());
+    expect(loadRawConfig()).toBeNull();
+    expect(configExists()).toBe(false);
+    expect(existsSync(configFile())).toBe(false);
   });
 });

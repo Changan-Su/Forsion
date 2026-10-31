@@ -2116,7 +2116,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2139,11 +2139,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -2447,13 +2455,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -2488,6 +2496,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -2897,7 +2909,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2920,11 +2932,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -3247,13 +3267,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -3288,6 +3308,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -3697,7 +3721,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3720,11 +3744,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -4220,13 +4252,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -4261,6 +4293,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -4841,7 +4877,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4864,11 +4900,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -5383,13 +5427,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -5424,6 +5468,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -6004,7 +6052,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6027,11 +6075,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -6294,13 +6350,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -6335,6 +6391,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -6744,7 +6804,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6767,11 +6827,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -7053,13 +7121,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -7094,6 +7162,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -7503,7 +7575,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7526,11 +7598,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -8026,13 +8106,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -8067,6 +8147,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -8647,7 +8731,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8670,11 +8754,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -9189,13 +9281,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -9230,6 +9322,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [
@@ -9810,7 +9906,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to the current Agent’s long-term memory, injected into every future session. Keep it small and high-signal. WHEN: user identity/preferences/corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence; never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9833,11 +9929,19 @@
             },
             "id": {
               "type": "string",
-              "description": "An entry ID returned by list for this Agent; required for update/forget."
+              "description": "An entry ID returned by list; required for update/forget."
             },
             "expectedVersion": {
               "type": "string",
-              "description": "Version returned by list; include when modifying an existing entry."
+              "description": "Version returned by list for that scope; include when modifying an existing entry."
+            },
+            "scope": {
+              "type": "string",
+              "enum": [
+                "agent",
+                "person"
+              ],
+              "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
             }
           },
           "required": [
@@ -10333,13 +10437,13 @@
       "type": "function",
       "function": {
         "name": "delegate",
-        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns) and return its final report. One-shot, no back-and-forth: for long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
+        "description": "Delegate an independent subtask to a subagent (its own context, a reduced tool set that it can extend with load_tools, up to 24 turns per call) and return its final report. For long intermediate work — broad searches, batch file analysis — that should not fill your context, since you get only the conclusion. Several calls in one turn run in parallel (keep their write scopes disjoint). The task must be self-contained: the subagent cannot see this conversation unless forkContext is set. Each report ends with a subagent id. A delegate call without resume starts a blank subagent that knows nothing of earlier ones, so whenever you or the user follow up on a subagent's work (\"ask it…\", \"also have it check…\"), pass that id as resume: it continues with everything it already read and did. Start a new subagent only for unrelated work. For multi-round deliberation with a peer, use start_discussion instead. For work the user should see as its own session in their list (e.g. they ask you to open child sessions), use start_session instead.",
         "parameters": {
           "type": "object",
           "properties": {
             "task": {
               "type": "string",
-              "description": "Subtask description (self-contained, clear goal, stating what to return)"
+              "description": "Subtask description (self-contained, clear goal, stating what to return). With resume, just the follow-up."
             },
             "context": {
               "type": "string",
@@ -10374,6 +10478,10 @@
                 ]
               },
               "description": "Optional: management tools to hand to the subagent. Subagents cannot change agent, skill, automation, schedule or harness configuration unless you list those tools here. Grant only what the subtask genuinely requires and only when the user asked for that change; the subagent gets the tool immediately, with the usual approval rules."
+            },
+            "resume": {
+              "type": "string",
+              "description": "The subagent id from an earlier delegate report in this conversation. Set it whenever this call follows up on that subagent's work: without it you get a blank subagent. It continues with its full prior context, so task only needs the follow-up, not the background again. It keeps its original agent, instructions and grants, so agentSlug, instructions, name, grantTools and engine cannot be combined with resume. Only one resume of an id at a time. If the id is rejected, delegate a new subagent with a self-contained task."
             }
           },
           "required": [

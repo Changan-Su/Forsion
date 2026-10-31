@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Images, LayoutGrid, MessageCircle, Download, Copy, Plus, RotateCcw, RotateCw, FlipHorizontal2, FlipVertical2, Crop, Loader2, Eye, EyeOff, Lock, Unlock, ArrowUp, ArrowDown, Trash2, GitBranch } from 'lucide-react'
+import { Images, LayoutGrid, MessageCircle, Download, Copy, Plus, RotateCcw, RotateCw, FlipHorizontal2, FlipVertical2, Crop, Loader2, Eye, EyeOff, Lock, Unlock, ArrowUp, ArrowDown, Trash2, GitBranch, MessageSquarePlus } from 'lucide-react'
 import { useListFirst, useWorkspace, type ViewProps } from '@lcl/engine'
 import { ListFab } from '../../components/phoneList'
 import { useI18n } from '../../i18n'
@@ -147,7 +147,7 @@ export function ImageStudioInspector() {
     </> : <><p>{t('imageStudio.selectedCount', { count: items.length })}</p><div className="ims-align">{(['left', 'center', 'right', 'top', 'middle', 'bottom'] as const).map(axis => <button key={axis} onClick={() => useImageStudio.getState().update(board.id, b => alignItems(b, selection, axis))}>{t(`imageStudio.align.${axis}`)}</button>)}</div></>}
     <div className="ims-button-row"><button title={t('imageStudio.layerUp')} aria-label={t('imageStudio.layerUp')} onClick={() => useImageStudio.getState().update(board.id, b => reorderItems(b, selection, 'up'))}><ArrowUp size={15} /></button><button title={t('imageStudio.layerDown')} aria-label={t('imageStudio.layerDown')} onClick={() => useImageStudio.getState().update(board.id, b => reorderItems(b, selection, 'down'))}><ArrowDown size={15} /></button><button title={t('imageStudio.remove')} aria-label={t('imageStudio.remove')} onClick={removeSelection}><Trash2 size={15} /></button></div>
     <div className="ims-panel-actions">
-      <button disabled={busy || items.every(i => i.hidden)} onClick={() => void run(referenceSelection)}><MessageCircle size={14} />{t('imageStudio.reference')}</button>
+      <button disabled={busy || items.every(i => i.hidden)} onClick={() => void run(referenceSelection)}><MessageSquarePlus size={14} />{t('imageStudio.reference')}</button>
       <button onClick={() => pasteSelection(true)}><Copy size={14} />{t('imageStudio.duplicate')}</button>
       {items.length === 1 && isImage(item) && <button className="ims-primary" disabled={busy} onClick={() => void run(async () => downloadBlob(await renderImages([item], true), item.name.replace(/\.[^.]+$/, '') + '.png'))}><Download size={14} />{t('imageStudio.export')}</button>}
     </div>{error && <p role="alert">{t('imageStudio.error', { error })}</p>}

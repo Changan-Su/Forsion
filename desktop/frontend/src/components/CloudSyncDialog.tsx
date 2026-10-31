@@ -7,6 +7,7 @@ import { Cloud, FileText, ListTree, Paperclip } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { isExcludedPath, useEntrySync } from '../stores/entrySyncStore'
 import { registerMessages, useI18n } from '../i18n'
+import { DialogOverlay } from '../amadeus/components/DialogOverlay'
 
 registerMessages({
   'csd.title': { zh: '开启云同步', en: 'Turn on cloud sync' },
@@ -190,7 +191,7 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
     )
 
   return (
-    <div className="dialog-overlay" onMouseDown={onClose}>
+    <DialogOverlay onMouseDown={onClose}>
       <div className="dialog amx-csd" onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title">
           <Cloud size={15} style={{ verticalAlign: -2, marginRight: 6 }} />
@@ -243,6 +244,6 @@ function Dialog({ req, onClose }: { req: Req; onClose: () => void }) {
           </>
         )}
       </div>
-    </div>
+    </DialogOverlay>
   )
 }

@@ -17,6 +17,8 @@ import { homedir } from 'os'
 let devMode = false
 export function setDevMode(v: boolean): void { devMode = v }
 export const isDevMode = (): boolean => devMode
+/** 插件沙箱子进程:父进程 spawn 时带 FORSION_SANDBOX=1,TANGU_HOME / FORSION_WORKSPACE_DIR 都指进沙箱目录(pluginSandbox.ts)。 */
+export const isSandboxMode = (): boolean => process.env.FORSION_SANDBOX === '1'
 
 /** Forsion 根 = 共享域(auth/provider-auth/config.json/activity/desktop-bridge)+ desktop 自有内容。
  *  TANGU_HOME 与引擎同义 = **引擎 home**:realpath 后目录名叫 tangu → 根 = 其父目录;否则根 = 它自身(字面路径)、
@@ -46,11 +48,11 @@ export function bindDevTanguHome(): void {
 }
 
 /** 默认本机工作区(会话 host 执行 cwd 兜底;默认笔记库 Amadeus/、Coding / 造物的 Project/ 都在它下面)。
- *  FORSION_WORKSPACE_DIR 只在 dev 态认,给台架用(scripts/lib/launch-electron.cjs 自动补):临时 TANGU_HOME 管不到这里,
+ *  FORSION_WORKSPACE_DIR 只在 dev 态与插件沙箱里认,给台架用(scripts/lib/launch-electron.cjs 自动补):临时 TANGU_HOME 管不到这里,
  *  不挪的话没预置库配置的台架一恢复库,打开的就是开发者真实的 ~/Forsion-Dev/Amadeus。
  *  刻意不做成「跟着 TANGU_HOME 走」:bindDevTanguHome 会给平时的 dev 实例也设上 TANGU_HOME,那样真实工作区就被挪走了。 */
 export const defaultWorkspaceDir = (): string =>
-  (devMode && process.env.FORSION_WORKSPACE_DIR?.trim()) || join(homedir(), devMode ? 'Forsion-Dev' : 'Forsion')
+  ((devMode || isSandboxMode()) && process.env.FORSION_WORKSPACE_DIR?.trim()) || join(homedir(), devMode ? 'Forsion-Dev' : 'Forsion')
 
 const lstatOrNull = (p: string): ReturnType<typeof lstatSync> | null => {
   try { return lstatSync(p) } catch { return null }

@@ -143,13 +143,13 @@ async function main() {
       await sp.locator('.settings-nav').getByRole('button', { name: '模型', exact: true }).first().click().catch(() => {})
       await sp.waitForTimeout(500)
       const sub = async (name) => { await sp.locator('.settings-nav-subitem', { hasText: name }).first().click().catch(() => {}); await sp.waitForTimeout(500) }
-      // 10-17 方案 C:用哪个通话模型在「默认模型 → 语音通话」里选(选「未开启」= 关);语音页三节:语音通话(音色)/ 语音输入 / 朗读
+      // 10-17 方案 C:用哪个通话模型在「默认模型 → 语音通话」里选(选「未开启」= 关);语音页三张卡:语音通话(音色)/ 本地语音识别 / 朗读
       const panel = sp.locator('.model-defaults-panel')
       const call = panel.getByRole('button', { name: '语音通话', exact: true })
       const pickCall = async (name) => { await call.click().catch(() => {}); await panel.locator('.composer-menu').getByRole('button', { name, exact: true }).click().catch(() => {}); await sp.waitForTimeout(600) }
       await sub('语音')
-      await sp.locator('.settings-sec', { hasText: '语音通话' }).first().waitFor({ timeout: 8000 }).catch(() => {})
-      sections = await sp.locator('.settings-sec').allTextContents().catch(() => [])
+      await sp.locator('.settings-voice-call .settings-panel-head strong', { hasText: '语音通话' }).first().waitFor({ timeout: 8000 }).catch(() => {})
+      sections = (await sp.locator('.settings-sub[data-settings-sub="m-voice"] > .settings-panel > .settings-panel-head strong').allTextContents().catch(() => [])).map((x) => x.trim())
       const selBefore = await sp.locator('select.realtime-voice').count()
       await sub('默认模型')
       await call.waitFor({ timeout: 8000 }).catch(() => {})
@@ -161,7 +161,7 @@ async function main() {
       // 点开「自定义音色 ID」什么都不填就离开:已选的 Cindy 不能被清掉
       await sp.locator('select.realtime-voice').first().selectOption('__custom__').catch(() => {})
       await sp.waitForTimeout(200)
-      await sp.locator('.settings-sec').first().click().catch(() => {})
+      await sp.locator('.settings-voice-call .settings-panel-head strong').first().click().catch(() => {})
       await sp.waitForTimeout(600)
       await sub('默认模型')
       await pickCall('未开启') // 关:只清模型,音色留着
@@ -182,8 +182,8 @@ async function main() {
     }
     const cfgRt = JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).tts?.realtimeModel
     check('R1 设置 → 模型 → 默认模型里选得到实时模型,落进 config.json', picked === RT_MODEL && cfgRt === RT_MODEL, `选后 ${picked || '-'};config.tts.realtimeModel=${cfgRt}`)
-    check('R1b 语音页分「语音通话 / 语音输入 / 朗读」三节;没选通话模型时不出音色,选「未开启」只清模型不丢音色',
-      sections.join('|') === '语音通话|语音输入|朗读' && offCfg.selBefore === 0 && !offCfg.realtimeModel && offCfg.realtimeVoice === 'Cindy',
+    check('R1b 语音页三张卡「语音通话 / 本地语音识别 / 朗读」;没选通话模型时不出音色,选「未开启」只清模型不丢音色',
+      sections.join('|') === '语音通话|本地语音识别|朗读' && offCfg.selBefore === 0 && !offCfg.realtimeModel && offCfg.realtimeVoice === 'Cindy',
       JSON.stringify({ sections, offCfg }))
     const btn = liveBtn().first()
     const shown = await until(() => btn.isVisible().catch(() => false), 8000)

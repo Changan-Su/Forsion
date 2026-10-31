@@ -53,11 +53,12 @@ export function SpaceAppearancePanel() {
       const key = axis === 'skin' ? 'spaceAppearance.accent' : 'spaceAppearance.background'
       const seedKey = axis === 'skin' ? 'seed' : 'bgSeed'
       return <SettingsRow key={axis} label={t(key)} control={<div className="space-appearance-color">
+        {/* 色块排在下拉左边:下拉的右缘和同卡其它下拉对齐(走查续 W-26) */}
+        {appearance[axis] === 'custom' && <input type="color" aria-label={t(key)} value={appearance[seedKey] || global[seedKey] || global.seed} onChange={(e) => update({ [seedKey]: e.target.value })} />}
         <select aria-label={t(key)} value={appearance[axis] ?? ''} onChange={(e) => update({ [axis]: e.target.value || undefined })}>
           <option value="">{t('spaceAppearance.inherit')}</option>
           {skins.map((skin) => <option key={skin.id} value={skin.id}>{t(`settings.theme.skin.${skin.id}`)}</option>)}
         </select>
-        {appearance[axis] === 'custom' && <input type="color" aria-label={t(key)} value={appearance[seedKey] || global[seedKey] || global.seed} onChange={(e) => update({ [seedKey]: e.target.value })} />}
       </div>} />
     })}
     <SettingsRow label={t('spaceAppearance.mode')} description={forced ? t('settings.theme.modeLockedHint') : undefined} control={<select disabled={!!forced} aria-label={t('spaceAppearance.mode')} value={appearance.modePref ?? ''} onChange={(e) => update({ modePref: (e.target.value || undefined) as SpaceAppearance['modePref'] })}>

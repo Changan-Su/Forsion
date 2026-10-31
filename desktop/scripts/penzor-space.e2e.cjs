@@ -148,6 +148,11 @@ function startFakeCloud() {
       { id: 'f-prompt', name: 'prompt 记录.txt', fileType: 'file', fileSize: 12 * 1024, updatedAt: day(9, 10), parentId: 'ROOT' },
     ],
     penzor: [], // 我的云盘:装好是空的,下面的场景往里传
+    connect: [ // 在线网页的文件:server 标 managed,文件夹名是 app id、displayName 才是网页名
+      { id: 'd-page', name: '0b9f2c1e-7a44-4a6e-9d0a-2f1c6c0e51aa', displayName: '下午茶接龙', managed: true, fileType: 'directory', fileSize: 0, updatedAt: day(1), parentId: 'ROOT' },
+      { id: 'f-page', name: 'index.html', managed: true, fileType: 'file', fileSize: 4096, updatedAt: day(1), parentId: 'd-page' },
+      { id: 'f-stray', name: 'stray.bin', fileType: 'file', fileSize: 512, updatedAt: day(4), parentId: 'd-page' },
+    ],
   }
   const driveBytes = () => appFiles.penzor.filter((f) => f.fileType === 'file').reduce((n, f) => n + f.fileSize, 0)
   const trash = [
@@ -173,6 +178,7 @@ function startFakeCloud() {
       { appId: 'ai-studio', canManage: false, bytes: 1160 * MB + live, files: 214, trashBytes: 9.4 * MB, trashFiles: 1 },
       { appId: 'photo-studio', bytes: 642 * MB, files: 88, trashBytes: 64 * MB, trashFiles: 2 },
       { appId: 'notebase', bytes: 34 * MB, files: 41, trashBytes: 2.1 * MB, trashFiles: 1 },
+      { appId: 'connect', bytes: 4608, files: 2, trashBytes: 0, trashFiles: 0 },
       { appId: 'penzor', bytes: driveBytes(), files: appFiles.penzor.filter((f) => f.fileType === 'file').length, trashBytes: 0, trashFiles: 0 },
     ]
   }
@@ -407,6 +413,8 @@ async function main() {
     }
     const shot = async (name, page = win) => { await page.mouse.move(1000, 5).catch(() => {}); await page.waitForTimeout(500); await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }); console.log('shot', name) }
     const setMode = (mode, skin) => win.evaluate(([m, s]) => { const r = document.documentElement; r.dataset.mode = m; r.classList.toggle('dark', m === 'dark'); if (s) r.dataset.skin = s; else delete r.dataset.skin }, [mode, skin || null])
+    // 子项可能是一行,也可能本身是一个分组(按应用看 → 应用文件,行尾还带用量):两种都算看得见,免得把已展开的上层又点收起
+    const treeShows = async (title) => { for (const l of [win.locator('.t2s-srow-title', { hasText: new RegExp(`^${title}$`) }), win.locator('.t2s-folder-row', { hasText: new RegExp(`^${title}`) })]) if (await l.first().isVisible().catch(() => false)) return true; return false }
     const sideWidth = () => win.evaluate(() => { const e = document.querySelector('.pz-side'); return e ? Math.round(e.getBoundingClientRect().width) : 0 })
 
     await win.waitForTimeout(3000)
@@ -418,7 +426,7 @@ async function main() {
     await win.waitForSelector('.pz-total', { timeout: 20_000 })
     const total = await win.locator('.pz-total b').textContent().catch(() => '')
     check('① 统一根展示八个来源和总量', await win.locator('.pz-rows .row').count() === 8 && total === '4.2 GB', total)
-    check('① T2 提醒且历史不计', /提醒阶段/.test(await win.locator('.pz-unified-quota').textContent()) && /历史版本/.test(await win.locator('.pz-unified-quota').textContent()))
+    check('① T2 提醒且历史不计', /只是提醒/.test(await win.locator('.pz-unified-quota').textContent()) && /历史版本不算/.test(await win.locator('.pz-unified-quota').textContent()))
     await win.waitForTimeout(900)
     check('① 概览时右栏收起(不是空占位)', (await sideWidth()) < 40 && !(await win.locator('.dv-groupview .sidebar-empty, [data-view-type="sidebar-empty"]').count()), `side=${await sideWidth()}`)
     await setMode('light'); await shot('overview')
@@ -443,10 +451,11 @@ async function main() {
     if (!process.env.PENZOR_VISUAL_ONLY) {
     // Native root folder contains every source.
     const rootFolder = win.locator('.t2s-folder-row', { hasText: '我的云盘' }).first()
-    if (!(await win.locator('.t2s-srow-title', { hasText: /^我上传的$/ }).first().isVisible().catch(()=>false))) await rootFolder.click()
+    if (!(await win.locator('.t2s-srow-title', { hasText: /^我的文件$/ }).first().isVisible().catch(()=>false))) await rootFolder.click()
     // ② 同步库:展开组头 → 点 WMOSv11
-    for (const [folder, child] of [['智库同步', 'WMOSv11'], ['应用文件', 'AI Studio'], ['Amadeus Cloud', '我的云端笔记']]) {
-      const vis = await win.locator('.t2s-srow-title', { hasText: new RegExp(`^${child}$`) }).first().isVisible().catch(() => false)
+    // Extend 0.9.4 起应用文件、Amadeus Cloud 收在「按应用看」下面一层(左栏 A)
+    for (const [folder, child] of [['智库同步', 'WMOSv11'], ['按应用看', '应用文件'], ['应用文件', 'AI Studio'], ['Amadeus Cloud', '我的云端笔记']]) {
+      const vis = await treeShows(child)
       if (!vis) await win.locator('.t2s-folder-row', { hasText: folder }).first().click().catch(() => {})
       await win.waitForTimeout(300)
     }
@@ -469,6 +478,35 @@ async function main() {
     check('③ 应用文件仅下载', (await win.locator('.ctx-menu.pz-menu button').allTextContents()).join('|') === '下载')
     await win.keyboard.press('Escape')
     await shot('app-readonly')
+
+    // 在线网页的文件夹显示网页名、只读;没人引用的孤儿照常能管
+    await win.locator('.t2s-srow-title', { hasText: /^Forsion Connect$/ }).first().click()
+    const pageRow = win.locator('.pz-table tbody tr', { hasText: '下午茶接龙' }).first()
+    await pageRow.waitFor()
+    check('③ 网页文件夹显示网页名,不露 app id', !(await win.locator('.pz-table').textContent()).includes('0b9f2c1e'))
+    check('③ 有去「我的网页」的入口', await win.locator('.pz-chip', { hasText: '管理我的网页' }).count() === 1)
+    await pageRow.click({ button: 'right' })
+    await win.waitForTimeout(300)
+    check('③ 网页文件夹没有改名 / 移动 / 删除', await win.locator('.ctx-menu.pz-menu').count() === 0)
+    await win.keyboard.press('Escape')
+    await pageRow.dblclick()
+    const pageFile = win.locator('.pz-table tbody tr', { hasText: 'index.html' }).first()
+    await pageFile.waitFor()
+    await pageFile.click({ button: 'right' })
+    await win.waitForSelector('.ctx-menu.pz-menu')
+    check('③ 网页文件只能下载', (await win.locator('.ctx-menu.pz-menu button').allTextContents()).join('|') === '下载')
+    await win.keyboard.press('Escape')
+    await pageFile.click()
+    check('③ 右栏写明去哪管', /已发布网页/.test(await win.locator('.pz-side .pz-tip').textContent().catch(() => '')))
+    await shot('hosted-page-file')
+    await win.locator('.pz-table tbody tr', { hasText: 'stray.bin' }).first().click({ button: 'right' })
+    await win.waitForSelector('.ctx-menu.pz-menu')
+    check('③ 没人引用的孤儿能删', (await win.locator('.ctx-menu.pz-menu button').allTextContents()).includes('移到回收站'))
+    await win.keyboard.press('Escape')
+    await win.locator('.pz-top .pz-ibtn').first().click()
+    await pageRow.waitFor()
+    await pageRow.click()
+    await shot('hosted-page-list')
 
     // New sources use real views and native selection, not injected DOM.
     for (const [label, file] of [['Agents','tangu'], ['我的资料','HUMAN.md'], ['插件数据','calendar']]) {
@@ -506,8 +544,8 @@ async function main() {
     check('旧服务端 404 不伪造统一统计或清除登录态', await win.locator('.pz-total b').textContent() === '—' && !(await win.getByText('登录后查看你的蓬洲云').count()))
     await shot('legacy-backend')
     // Re-open the folder tree after reload; old APIs still supply its known vaults.
-    for (const [folder, child] of [['我的云盘', '我上传的'], ['Amadeus Cloud', '我的云端笔记']]) {
-      if (!(await win.locator('.t2s-srow-title', { hasText: new RegExp(`^${child}$`) }).first().isVisible().catch(() => false))) await win.locator('.t2s-folder-row', { hasText: folder }).first().click()
+    for (const [folder, child] of [['我的云盘', '我的文件'], ['按应用看', 'Amadeus Cloud'], ['Amadeus Cloud', '我的云端笔记']]) {
+      if (!(await treeShows(child))) await win.locator('.t2s-folder-row', { hasText: folder }).first().click()
     }
 
     // Amadeus Cloud:只看和下载
@@ -525,7 +563,7 @@ async function main() {
     const uploadsHit = () => cloud.st.hits.filter((h) => h.startsWith('POST /api/files/upload')).length
     const cardTitle = () => win.locator('.pz-txcard .pz-txhead b').textContent({ timeout: 1000 }).catch(() => '')
     const tableNames = () => win.locator('.pz-table td.n b').allTextContents()
-    await win.locator('.t2s-srow-title', { hasText: /^我上传的$/ }).first().click()
+    await win.locator('.t2s-srow-title', { hasText: /^我的文件$/ }).first().click()
     await win.waitForSelector('text=这里还空着', { timeout: 10_000 }).catch(() => {})
     check('⑥ 我的云盘在概览下面,装好是空的', await win.getByText('这里还空着').count() > 0)
     await shot('drive-empty')
@@ -629,9 +667,9 @@ async function main() {
     await win.waitForSelector('.pz-unified-quota')
     // The same persistent root picker used by the overview action survives navigation to uploads.
     await win.locator('.pz-root-upload').setInputFiles(mk('根上传.md', 1024))
-    await win.waitForFunction(()=>document.querySelector('.pz-h1')?.textContent === '我上传的')
+    await win.waitForFunction(()=>document.querySelector('.pz-h1')?.textContent === '我的文件')
     await win.waitForFunction(()=>document.querySelector('.pz-table')?.textContent?.includes('根上传.md'))
-    check('⑦ 根上传落在我上传的，T2 超额未新增拦截', cloud.st.uploads.some(f=>f.name==='根上传.md'))
+    check('⑦ 根上传落在我的文件，T2 超额未新增拦截', cloud.st.uploads.some(f=>f.name==='根上传.md'))
 
     // 退出前确认:还有在传的,退出先问(主进程的对话框换成假的,答「取消」)→ 不退;取消那一项后照常退(收尾的 app.close 就是这条)
     cloud.st.throttle = true

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Upload, Download, Undo2, Redo2, LayoutGrid, SlidersHorizontal, Layers, MessageCircle, Trash2, Loader2, ArrowUpRight, FileDown, Type, Square, Circle, Frame, MousePointer2, Hand, Copy, Sparkles, X } from 'lucide-react'
+import { ArrowLeft, Upload, Download, Undo2, Redo2, LayoutGrid, SlidersHorizontal, Layers, Trash2, Loader2, ArrowUpRight, FileDown, Type, Square, Circle, Frame, MousePointer2, Hand, Copy, Sparkles, X, MessageCircle, MessageSquarePlus } from 'lucide-react'
 import { useSpaceStore, type ViewProps } from '@lcl/engine'
 import { windowKind } from '../../windowKind'
 import { CanvasChrome, CanvasMiniMap, useCanvasViewport, useCanvasGestures, hostSize, zoomAt, gridLayerStyle, type ResizeEdge } from '../../amadeus/unified/canvasKit'
@@ -189,7 +189,7 @@ function ImageCanvas() {
         <button disabled={!images.some(i => !i.locked && !i.hidden)} title={t('imageStudio.arrange')} aria-label={t('imageStudio.arrange')} onClick={() => { if (board) { const arranged = arrangeImages(images.filter(i => !i.locked && !i.hidden)); useImageStudio.getState().update(board.id, b => ({ ...b, images: b.images.map(i => arranged.find(a => a.id === i.id) || i) })); view.fitTo(arranged) } }}><LayoutGrid size={15} /></button>
         <button disabled={!selected.length} title={t('imageStudio.remove')} aria-label={t('imageStudio.remove')} onClick={removeSelection}><Trash2 size={15} /></button>
         <button disabled={!selected.length} title={t('imageStudio.duplicate')} aria-label={t('imageStudio.duplicate')} onClick={() => pasteSelection(true)}><Copy size={15} /></button>
-        <button disabled={!selected.length || busy} title={t('imageStudio.reference')} aria-label={t('imageStudio.reference')} onClick={() => void run(referenceSelection)}><MessageCircle size={15} /></button>
+        <button disabled={!selected.length || busy} title={t('imageStudio.reference')} aria-label={t('imageStudio.reference')} onClick={() => void run(referenceSelection)}><MessageSquarePlus size={15} /></button>
       </>}
       <span className="ims-toolbar-space" />
       {([[STUDIO_CHAT, MessageCircle, 'imageStudio.chat'], [STUDIO_LAYERS, Layers, 'imageStudio.layers'], [STUDIO_INSPECTOR, SlidersHorizontal, 'imageStudio.inspector']] as const).map(([type, Icon, key]) => <button key={type} title={t(key)} aria-label={t(key)} onClick={() => revealStudioPanel(type)}><Icon size={16} /></button>)}

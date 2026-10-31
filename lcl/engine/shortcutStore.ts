@@ -131,7 +131,8 @@ export function isMacPlatform(): boolean {
 /** 热键字符串 → 展示文本(mac 用符号紧排,其它用 Ctrl+Shift+… )。 */
 export function formatHotkey(hk: string, isMac: boolean): string {
   if (!hk) return ''
-  if (isPairHotkey(hk)) { const one = formatHotkey(hk.split('+')[0], isMac); return `${one} + ${one}` }
+  // 同按一对写成 ⌘⌘(不是「⌘ + ⌘」:那读起来像先后两个组合键);Ctrl 这类单词名照旧「Ctrl + Ctrl」
+  if (isPairHotkey(hk)) { const one = formatHotkey(hk.split('+')[0], isMac); return one.length > 1 ? `${one} + ${one}` : `${one}${one}` }
   const sym: Record<string, string> = isMac
     ? { mod: '⌘', shift: '⇧', alt: '⌥', space: 'Space', enter: '↵', escape: 'Esc', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' }
     : { mod: 'Ctrl', shift: 'Shift', alt: 'Alt', space: 'Space', enter: 'Enter', escape: 'Esc', arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→' }

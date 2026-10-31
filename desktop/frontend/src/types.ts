@@ -7,9 +7,9 @@ import type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 import type { ComputerHistoryApi } from '../../shared/computerHistory'
 export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermissionsSnapshot, DesktopPermissionState } from '../../shared/desktopPermissions'
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
-export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
-import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, MuseTriggerInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
 /** 带时间戳的转写结果(仅在调用方显式要 timestamps 时返回;segments 缺席 = 上游给不了)。 */
 export interface AsrTimedResult { text: string; segments?: Array<{ start: number; end: number; text: string }> }
@@ -77,6 +77,12 @@ export interface MuseConfig {
   notify?: 'immediate' | 'digest'
   /** 难活升级给哪个 agent(slug;空=不指定)。 */
   escalateTo?: string
+  /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
+  inboxAutoRead?: string[]
+  /** 用户点过「这类以后都别管」的类别。 */
+  inboxIgnored?: string[]
+  /** 一天最多主动找用户几次(0 = 不限)。 */
+  maxDmPerDay?: number
 }
 
 /** GET /agent/special/muse/library 的一项(Library 相对路径;dir=目录)。 */
@@ -113,6 +119,8 @@ export interface MuseStatusInfo {
   lastCycleAt: number | null
   lastError?: string | null
   sessionId: string | null
+  /** 主动消息下面的反馈按钮开到这个时刻(磨合期 14 天,epoch ms)。旧引擎 / 还没跑过周期 = 没有。 */
+  feedbackUntil?: number | null
   /** 旧引擎没有下面四个字段(可选,读端兜底)。 */
   mode?: 'ask' | 'agent' | 'auto'
   heartbeatMinutes?: number
@@ -138,7 +146,12 @@ export interface MuseTriggerUpsert {
    *  那正是「用户重新启用插件 → setup 再 ensure 一次 → 规则复活」这条既有生命周期,别给它加 actor。 */
   actor?: 'plugin-ensure' | 'user'
   desc: string
-  cond_type: 'file_chars_gte' | 'event_seen' | 'daily_at' | 'at' | 'every' | 'manual' | 'db_changed'
+  cond_type: MuseTriggerInfo['cond']['type']
+  /** 新触发源的参数(按 GET /agent/special/automation/sources 的表)。 */
+  params?: Record<string, string | number>
+  /** 「只在」:undefined=保留,null=清空。 */
+  only?: MuseTriggerInfo['only'] | null
+  max_per_day?: number | null
   path?: string
   n?: number
   match?: string
@@ -159,6 +172,20 @@ export interface MuseTriggerUpsert {
   agent_slug?: string
   enabled?: boolean
   actions?: AutomationActionSpec[] | null
+}
+/** GET /agent/special/automation/sources 的一行:触发源注册表投影(类型菜单直接从这里出)。 */
+export interface TriggerSourceInfo {
+  id: string
+  group: 'time' | 'computer' | 'forsion' | 'external' | 'plugin'
+  name: { zh: string; en: string }
+  params: Array<{ key: string; type: 'app' | 'number' | 'text'; name: { zh: string; en: string }; required?: boolean; hidden?: boolean; min?: number; max?: number; default?: string | number }>
+  requires: string[]
+  eventSource: string
+  defaultCooldownHours?: number
+  timed?: boolean
+  available: boolean
+  /** available=false 时的 notice code。 */
+  reason?: string
 }
 /** GET /agent/special/automation/actions 的目录项(tool_call 步骤选择器+参数表单生成)。 */
 export interface AutomationActionCatalogItem {
@@ -253,6 +280,19 @@ export interface DirectProviderConfig {
   asrModelIds?: string[]
   /** 该 provider 里**没有**多模态的模型(黑名单;默认都算能看图)。命中的模型遇图转交辅助视觉模型。 */
   noVisionModelIds?: string[]
+  /** 推理协议;缺省 OpenAI 兼容 /chat/completions。从 Claude Code / Codex 导入的连接带 anthropic-messages / openai-responses。 */
+  protocol?: 'openai' | 'anthropic-messages' | 'openai-responses'
+}
+
+/** 导入本机配置的一行(主进程给的,不含 key)。 */
+export interface LocalProviderCandidate {
+  id: string
+  source: 'cc-switch' | 'claude-code' | 'codex'
+  name: string
+  host: string
+  keyTail: string
+  models: string[]
+  exists: boolean
 }
 
 /** 「设置 → Git」(引擎 config.json 的 git 段):PROJECT 详情的 git 动作与 agent 自己建分支 / 写提交时都照它。 */
@@ -307,6 +347,7 @@ export interface MirrorTestResult {
 
 /** ~/.tangu/mcp.json 一项。 */
 export interface McpServerConfigEntry {
+  cwd?: string
   command?: string
   args?: string[]
   env?: Record<string, string>
@@ -374,6 +415,41 @@ export interface AuthStatusInfo {
   backendState?: 'stopped' | 'starting' | 'ready' | 'crashed' | null
 }
 
+/** 插件沙箱(electron/pluginSandbox.ts;契约 tangu-agent/docs/plugin-sandbox.md)。 */
+export interface PluginSandboxResult { ok: boolean; code?: string; error?: string; text?: string; image?: string }
+/** 带给沙箱首屏的界面状态:语言(zh / en)+ 主题那几把 localStorage 键。 */
+export interface PluginSandboxUi { locale: string; storage: Record<string, string> }
+export interface PluginSandboxState {
+  running: boolean
+  pluginId?: string
+  name?: string
+  version?: string
+  dir?: string
+  sessionId?: string
+  status?: import('../../../tangu-agent/src/contracts/pluginSandbox').SandboxStatus | null
+}
+export interface PluginSandboxReport { note: string; sessionId?: string; pluginId: string; name: string }
+export interface PluginSandboxApi {
+  /** ui.storage = 本窗的主题键(沙箱首屏照着画);语言由主进程按自己的界面语言给。deadline = 引擎给这次动作的期限(Date.now() 毫秒),排队排过了主进程就不做了。reveal = 用户在界面上点的,起好后把沙箱窗口叫到前面。 */
+  exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number; reveal?: boolean; ui?: { storage: Record<string, string> } }): Promise<PluginSandboxResult>
+  state(): Promise<PluginSandboxState>
+  show(): Promise<boolean>
+  stop(): Promise<void>
+  reset(): Promise<PluginSandboxResult>
+  /** 「安装到我的 Forsion」:主进程先弹确认框;用户取消 = cancelled。 */
+  install(): Promise<{ ok: boolean; pluginId?: string; error?: string; cancelled?: boolean }>
+  onChanged(cb: (s: PluginSandboxState) => void): () => void
+  onReport(cb: (r: PluginSandboxReport) => void): () => void
+}
+export interface PluginSandboxSelf {
+  pluginId: string
+  name: string
+  version: string
+  dir: string
+  appVersion: string
+  ui?: PluginSandboxUi
+}
+
 /** preload 注入的 window.tangu(浏览器内调试时缺省,backend/auth 能力按需探测)。 */
 declare global {
   interface Window {
@@ -390,6 +466,10 @@ declare global {
       desktopPermissionRepair?(id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot>
       /** 离开权限页关闭指导窗;main 同时处理尚未完成的 request 取消竞态。 */
       desktopPermissionsCloseGuide?(): Promise<void>
+      /** 插件沙箱的控制面:只有用户那份桌面 Forsion 有(沙箱自己、web、mobile 都没有)。 */
+      pluginSandbox?: PluginSandboxApi
+      /** 本进程就是插件沙箱:自身信息 + 沙箱条上的按钮(报告问题 / 安装 / 重置)转给父进程。普通实例没有这个键。 */
+      sandbox?: { self: PluginSandboxSelf; action(a: 'report' | 'install' | 'reset', note?: string): Promise<boolean>; changed(): void }
       /** 电脑历史(主进程 electron/computerHistory.ts);无 agent 后端的产品形态没有这个键。 */
       computerHistory?: ComputerHistoryApi
       /** Tangu Web(浏览器云端客户端)标志:由 web 垫片注入;共享组件据此解闸云端可用特性(如技能)。 */
@@ -417,6 +497,9 @@ declare global {
       /** Verified Extend renderer is bundled with the mobile host. */
       extendMobile?: boolean
       getConfig(): Promise<StoredDesktopConfig>
+      /** config.json / provider-auth.json 读坏后从 .bak 恢复过:最近一次的时刻与恢复到的版本时刻(epoch ms);没有 = null。 */
+      configRecoveryNotice?(): Promise<{ at: number; version: number } | null>
+      clearConfigRecoveryNotice?(): Promise<void>
       documentTasks?: import('../../shared/documentTasks').DocumentTaskClaimsApi
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>
@@ -503,6 +586,9 @@ declare global {
       termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>
+      /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程(整形后转给 Extend;只进不出)。
+       *  只有 Extend 注册了 telemetry:get 才有这个键 —— 引导第 7 步「帮助改进」页签据此同步判断本机有没有这一页。 */
+      telemetryReport?(kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
@@ -581,6 +667,8 @@ declare global {
       activeWindow?(): Promise<ActiveWindowSample | null>
       /** 本窗口订阅着的在飞 run 数 → 主进程「有会话运行时不休眠」(keepAwakeReport.ts 上报)。 */
       reportRunningSessions?(count: number): void
+      /** 在跑 / 等你的会话 → 托盘 / 菜单栏(借鉴 Comma 2.6;trayReport.ts)。 */
+      setTraySessions?(rows: Array<{ id: string; title: string; state: 'run' | 'wait' }>): void
       /** 拖入文件 → 绝对路径(本机模式粘贴路径用)。 */
       getPathForFile?(file: File): string
       /** 本机工作区文件浏览(host cwd)。 */
@@ -603,6 +691,8 @@ declare global {
       codePreviewServePath?(filePath: string): Promise<{ url: string }>
       /** 无本机路径的 HTML(云沙箱/对话内联):把文本挂到令牌根,同样拿到真实源。 */
       codePreviewServeHtml?(html: string): Promise<{ url: string }>
+      /** 网页卡片的缩略图:主进程离屏截一张 http(s) 页面;拍不到 → null。 */
+      pageThumb?(url: string, version?: string): Promise<{ dataUrl: string; title: string } | null>
       codePreviewStop?(): Promise<{ ok: boolean }>
       /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
       codeProjectsRoot?(): Promise<string>
@@ -689,6 +779,9 @@ declare global {
       }
       listProviders?(): Promise<DirectProviderConfig[]>
       saveProvider?(provider: DirectProviderConfig): Promise<DirectProviderConfig[]>
+      /** 本机 CC Switch / Claude Code / Codex 里能导入的连接(electron/discovery/providers.ts;只有 key 末 4 位)。 */
+      scanLocalProviders?(force?: boolean): Promise<LocalProviderCandidate[]>
+      importLocalProviders?(ids: string[]): Promise<DirectProviderConfig[]>
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
       /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */
@@ -707,6 +800,11 @@ declare global {
       appDockCandidates?(): Promise<{ windows: import('../../shared/appDock').DockCandidate[]; error?: string }>
       appDockAttach?(target: import('../../shared/appDock').DockWindow): Promise<{ ok: boolean; error?: string }>
       appDockDetach?(): Promise<void>
+      /** 内置浏览器点选元素(只有桌面有;契约见 shared/browserPick.ts)。 */
+      browserPick?: {
+        start(guestId: number): Promise<import('../../shared/browserPick').PickResponse>
+        control(guestId: number, action: 'cancel' | 'parent'): Promise<boolean>
+      }
       /** 应用 / 窗口引用(桌面 macOS 与 Windows;没有这组方法的宿主上引用只显示名字、不可点)。 */
       appRefs?: {
         list(): Promise<import('../../shared/appRefs').AppRefList>
@@ -726,8 +824,9 @@ declare global {
       asrLocalDownload?(): Promise<{ ok: boolean; ready: boolean }>
       asrLocalRemove?(): Promise<{ ok: boolean }>
       onAsrLocalProgress?(cb: (ev: { received: number; total: number }) => void): () => void
+      importMcpConfig?(cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry>; added: string[]; replaced: string[]; skipped: string[] }>
       readMcpConfig?(): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
-      writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
+      writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry>; base?: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
       discoveryScan?(): Promise<DiscoveryResult>
       discoveryImportSkills?(ids: string[]): Promise<{ imported: string[] }>
       discoveryImportMcp?(names: string[]): Promise<{ imported: string[]; reserved?: string[] }>
@@ -757,12 +856,14 @@ declare global {
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
       marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
+      /** 卸载走确认框之后撤掉商店的安装记录(文件已经由回收站那条路挪走)。 */
+      marketForget?(type: string, slug: string): Promise<{ ok: boolean }>
       /** 本宿主能装的市场类型(缺省 = 全部)。Android App 没有本机引擎 / 主题目录 / Space 目录,只声明 ['amadeus-plugin'];
        *  MarketModal 只列这些类型,其余在发现页一句话说明去桌面端装。 */
       marketTypes?: readonly string[]
       /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
-      pluginsUninstall?(id: string): Promise<{ ok: boolean }>
+      pluginsUninstall?(id: string, movedSlug?: string): Promise<{ ok: boolean }>
       /** 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(数据化布局配方;market type='space' 同目录)。 */
       spacesList?(): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>>
       spacesSave?(slug: string, json: string): Promise<{ ok: boolean }>

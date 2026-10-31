@@ -2,7 +2,7 @@ import { registerMessages } from '../../i18n'
 
 registerMessages({
   'csl.title': { zh: '编码工作室', en: 'Coding Studio' },
-  'csl.subtitle': { zh: '继续已有作品，或开始一个新想法。', en: 'Pick up an existing project or start a new idea.' },
+  'csl.subtitle': { zh: '继续已有项目，或开始一个新想法。', en: 'Pick up an existing project or start a new idea.' },
   'csl.idea': { zh: '你想做什么？', en: 'What would you like to build?' },
   'csl.ideaPlaceholder': { zh: '比如：一个帮我整理阅读笔记的工具，能搜索、加标签，再把重点总结成一页。', en: 'An app to organize my reading notes, with search, tags, and a one-page summary of the key ideas.' },
   'csl.details': { zh: '补充项目细节', en: 'Add project details' },

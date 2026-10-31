@@ -21,6 +21,8 @@ export interface CatalogModel {
   maxContextWindow?: number;
   supportsVision: boolean;
   thinkingLevels?: ThinkingLevel[];
+  /** Fast 档说明原文(只有 Codex 订阅目录给);缺席 = 没有 Fast 档。 */
+  fastTier?: string;
   groupId?: string | null;
   groupName?: string | null;
   groupSortOrder?: number;
@@ -42,6 +44,8 @@ export interface ModelCatalog {
   translateModels: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
   /** Forsion 云端的朗读模型(不进 models;桌面「语音朗读」的模型框列它们)。老云端 / 没登录 = 空。 */
   ttsModels: Array<{ id: string; name: string; apiModelId?: string | null }>;
+  /** Forsion 云端的补全(FIM)模型(客户端「补全」模型槽列它们;只做补全的不进 models)。老云端 / 没登录 = 空。 */
+  fimModels: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
   /** 云端托管面:ok / error(拉取抛错)。「可达但为空」的判定要 users/me 探针,由路由补。 */
   forsion: { status: 'ok' | 'empty' | 'error'; detail: string | null };
 }
@@ -70,6 +74,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
   let realtimeModel: ModelCatalog['realtimeModel'] = null;
   let translateModels: ModelCatalog['translateModels'] = [];
   let ttsModels: ModelCatalog['ttsModels'] = [];
+  let fimModels: ModelCatalog['fimModels'] = [];
   try {
     // 优先按应用过滤(admin 的 project_model_configs);brain 未实现该可选方法 → 回退全局列表。
     const listForProject = deps().brain.models.listModelsForProject;
@@ -83,6 +88,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
       realtimeModel = r?.realtimeModel ?? null;
       translateModels = r?.translateModels ?? [];
       ttsModels = r?.ttsModels ?? [];
+      fimModels = r?.fimModels ?? [];
     } else {
       cloud = (await deps().brain.models.listGlobalModels()) || [];
     }
@@ -92,6 +98,8 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
   }
   for (const m of cloud) {
     if (!m?.id) continue;
+    // 只做补全的模型(modelType 'fim')不能聊天:就算老 / 新云端把它混进了 models,也别让下面的兜底把它当 llm 放进聊天菜单。
+    if (m.modelType === 'fim') continue;
     // 已知类型(生图/语音识别)透传,未知归 llm。旧版只透传 image_gen,把 asr 静默拍成 llm。
     const mType = m.modelType === 'image_gen' || m.modelType === 'asr' ? m.modelType : 'llm';
     const win = effectiveContextWindowInfo(m.id, m);
@@ -107,7 +115,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
     for (const mid of p.modelIds ?? []) {
       const id = `${p.providerId}/${mid}`;
       const win = effectiveContextWindowInfo(id);
-      models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl) });
+      models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl), ...(p.fastTiers?.[mid] ? { fastTier: p.fastTiers[mid] } : {}) });
     }
     for (const mid of p.imageModelIds ?? []) {
       models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'image_gen', contextWindow: 0, contextWindowSource: 'default', supportsVision: false });
@@ -127,6 +135,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
     realtimeModel,
     translateModels,
     ttsModels,
+    fimModels,
     forsion,
   };
 }

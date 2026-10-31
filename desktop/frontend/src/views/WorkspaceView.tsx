@@ -10,19 +10,20 @@ import { amadeusAvailable, sessionsAvailable } from '../features/runtime'
  * 主视图硬规则 → 本 Space 的默认档(SpaceDefinition.autoWorkspaceMode);右栏恒为文件。
  */
 import { Fragment, useMemo, useState, useEffect, useReducer, useRef, type ReactNode } from 'react'
-import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras, startOpenDrag, mainOpensBeside } from '@lcl/engine'
+import { useWorkspace, activeMainPanel, useSpaceStore, getView, useListFirst, useNativeChromeExtras, startOpenDrag, mainOpensBeside, dragGrab, landWhenMoved, releasePoint, type LandPoint } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine'
+import { tooltipProps } from '@lcl/components'
 import { ChevronDown, ChevronRight, FileText, Folder, FolderOpen, ListFilter, MoreHorizontal, Pencil, Plus, Search, X } from 'lucide-react'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import type { ListAction, ListDropTarget, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
-import { LIST_ROW_MIME, ancestorsOf, buildListTree, dropCandidates, fitsPhoneList, flattenLeaves, groupFold, isFolder, isGroupHead, leafCount, type GroupFold, type ListDropPosition, type ListNode } from '@amadeus/plugins/listTree'
+import type { ListDropTarget, ListItem } from '@amadeus/plugins/types'
+import type { HostListAction as ListAction, HostListSource } from '@amadeus/plugins/pluginText'
+import { LIST_ROW_MIME, ancestorsOf, buildListTree, dropCandidates, fitsPhoneList, flattenLeaves, groupFold, hiddenByFilter, isFolder, isGroupHead, leafCount, type GroupFold, type ListDropPosition, type ListNode } from '@amadeus/plugins/listTree'
 import { folderPadLeft, nameLeft } from '@amadeus/lib/treeIndent'
 import { initialFor } from '../components/agentInitial'
 import { useApp } from '../stores/appStore'
 import { registerMessages, useI18n } from '../i18n'
 import { useShallow } from 'zustand/react/shallow'
-import { readTanguChatOutline, readTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
-import { FilesPanel } from '@tangu/ui/views/chat2/FilesPanel'
+import { readTanguChatOutline, readTanguShell, readTanguSidebarModes } from '../amadeus/plugins/tanguSeam'
 import { PATHS_MIME as DRAG_MIME } from '../components/chatDragRef'
 import type { PreviewTarget } from '../components/WorkspaceFilePreview'
 import { AmadeusPagesView, AmadeusOutlineView, ScopedPageOutline } from '../amadeusViews'
@@ -37,6 +38,9 @@ import { ListChips, ListFab, ListHint, PullHint, SwipeRow, closeOtherSwipes, use
 import { ContextMenu, type CtxMenu } from '../components/RightPanel'
 import { resolveIcon } from '@amadeus/components/icons'
 import { ensureAmadeusReady } from '../amadeusPlugins'
+import { EmptyState } from '../components/EmptyState'
+import { hostListEmpty, isEmptySpace } from './hostListEmpty'
+import { AnimatedCollapse } from '../components/AnimatedUI'
 
 registerMessages({
   'wsview.all': { zh: '全部', en: 'All' },
@@ -51,6 +55,7 @@ registerMessages({
   'wsview.actions': { zh: '{source}操作', en: '{source} actions' },
   'wsview.itemActions': { zh: '{title}的操作', en: 'Actions for {title}' },
   'wsview.resultCount': { zh: '{count} 项', en: '{count} items' },
+  'wsview.hiddenByFilters': { zh: '筛掉了 {count} 条', en: '{count} hidden by filters' },
   'wsview.rename': { zh: '重命名', en: 'Rename' },
   'wsview.renameLabel': { zh: '重命名{title}', en: 'Rename {title}' },
   // 手机的整屏列表:首次提示把这张列表自己的动作念一遍(动作名来自列表源)
@@ -125,6 +130,8 @@ function FilesBody({ vaultCtx, sideFilter }: { vaultCtx: { root: string; noteDir
   // 置顶「当前打开文件所在的工作区」;编辑器场景的 vault 工作区本来就排在首位,直接用它。
   const curFile = useCurrentFilePath()
   const pinnedWorkspaceKey = vaultKey ?? workspaceKeyForPath(workspaces, curFile)
+  const FilesPanel = readTanguShell()?.FilesPanel
+  if (!FilesPanel) return null
   return (
     <FilesPanel
       workspaces={workspaces}
@@ -285,7 +292,7 @@ const cls = (...parts: Array<string | false | null | undefined>): string | undef
 const NAV_ROWS = '.t2s-srow, .t2s-folder-row, .t2sw-plug-ghead, .t2sw-plug-sec'
 
 /** stateKey:开合记忆按它分开存(WorkspaceView 给 `plugin:<插件>:<源>`);不给就用源自己的 id。 */
-export function PluginListBody({ src, stateKey }: { src: ListSourceContribution; stateKey?: string }) {
+export function PluginListBody({ src, stateKey }: { src: HostListSource; stateKey?: string }) {
   const { t } = useI18n()
   const [, force] = useReducer((x: number) => x + 1, 0)
   // ⚠️vault 懒引导 × 插件在启动期激活 = 列表源恒空(2026-08-28 用户实报,青鸟收藏夹):
@@ -319,6 +326,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   // Sources may remove an empty category after archive/delete; never leave a hidden stale filter.
   useEffect(() => { if (group && !activeGroup) setGroup(null) }, [group, activeGroup?.key])
   const items = src.items({ query: query || undefined, group: activeGroup?.key })
+  // 开着筛选时列表底下写「筛掉了几条」(借鉴 Comma §2.9);跟着同一个搜索词比,搜索 + 筛选时数的是搜索结果里被筛掉的
+  const hidden = activeGroup ? hiddenByFilter(src.items({ query: query || undefined }), items) : 0
   // 文件夹的开合:普通文件夹落盘(缺省收起);组头只记这一次运行,由插件的 defaultOpen 带着走。
   // 键带上当前的筛选:同一个源在「全部」和「已归档」里是两张不同的列表(同一个发信人在两边该不该开着并不一样),
   // 两处同时显示这个源、筛选不同的时候也就不会互相改对方的开合。
@@ -352,6 +361,13 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   const flatHeld = useRef(flatNow)
   if (!renaming) flatHeld.current = flatNow
   const flat = flatHeld.current
+  // 宿主源登记过空态(hostListEmpty):主区已经讲清楚了就不再写「暂无内容」;手机整屏列表里直接画那份空态。
+  const hostEmpty = hostListEmpty(src)
+  const activeSpaceId = useSpaceStore((s) => s.activeSpaceId)
+  const emptyRow = query ? <div className="t2sw-empty">{t('wsview.noMatches')}</div>
+    : hostEmpty && !activeGroup && flat && (hostEmpty.ready?.() ?? true) ? <EmptyState icon={hostEmpty.icon} title={hostEmpty.title()} line={hostEmpty.line?.()} action={hostEmpty.action?.()} data-state="empty" />
+      : hostEmpty && !activeGroup && isEmptySpace(hostEmpty, activeSpaceId) ? null
+        : <div className="t2sw-empty">{t('wsview.empty')}</div>
   // 已经开着时再点一次搜索钮:状态没变,效果不会重跑,所以这里直接把光标放回去(键盘被收起之后还能再叫出来)
   const openSearch = (): void => { setSearching(true); searchRef.current?.focus() }
   useEffect(() => { if (searching) searchRef.current?.focus() }, [searching])
@@ -429,6 +445,11 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
   // ── 行在列表里拖动('items')。宿主只判落点、画提示,真正的移动由插件在 onDrop 里做。──
   const takesItems = !!src.drop?.accepts.includes('items')
   const endDrag = (): void => { dragKeys.current = null; setDragging(null); setDropAt(null) }
+  /** 拖起时指针在那一整块(行 / 组 / 文件夹连同展开的子项)里的位置:松手落位从拖影所在处滑进新位置。 */
+  const dragGrabAt = useRef<LandPoint | null>(null)
+  /** 一行在列表里的「整块」:叶子行 = .t2sw-plug-item;组头 = 整个 .t2sw-plug-group;文件夹 = 组头连同展开的子项那层。 */
+  const unitOf = (row: Element | null): HTMLElement | null => (row?.closest<HTMLElement>('.t2sw-plug-item')
+    ?? (row?.classList.contains('t2sw-plug-ghead') ? row.parentElement : row?.closest('.t2s-group')?.parentElement)) ?? null
   /** 搜索时列表是压平的,前后关系没有意义,不让拖;正在改名的那一行也不拖。 */
   const dragProps = (it: ListItem): Record<string, unknown> =>
     takesItems && it.draggable && !query && renaming !== it.key
@@ -442,6 +463,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
             const r = e.currentTarget.getBoundingClientRect()
             e.dataTransfer.setDragImage(e.currentTarget, e.clientX - r.left, e.clientY - r.top)
             dragKeys.current = [it.key]
+            const unit = unitOf(e.currentTarget)
+            dragGrabAt.current = unit ? dragGrab(unit, e) : null
             setDragging(it.key)
           },
           onDragEnd: endDrag,
@@ -500,9 +523,16 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         const keys = dragKeys.current
         if (!keys) { outer.onDrop?.(e); return }
         const to = landing(e, it)
+        const grab = dragGrabAt.current
+        dragGrabAt.current = null
         endDrag()
         if (!to) return
         e.preventDefault(); e.stopPropagation()
+        // 松手落位:真正的挪动在插件的 onDrop 里(常常写完盘才重渲),等那一行换了地方再从松手处滑进去
+        if (grab && keys.length === 1) {
+          const sel = `[data-row-key="${CSS.escape(keys[0])}"]`
+          landWhenMoved(() => unitOf(listRef.current?.querySelector(sel) ?? null), releasePoint(e, grab))
+        }
         void src.drop!.onDrop({ items: keys }, to)
       },
     }
@@ -619,11 +649,11 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         <span className="t2sw-plug-gname"><span className="t2o-name">{it.title}</span><span className={`t2s-chev${isOpen ? ' open' : ''}`}><ChevronRight size={12} /></span></span>
         {it.hint && <span className="t2s-count">{it.hint}</span>}
       </button>
-      {isOpen && <div className="t2s-group-sessions">
+      <AnimatedCollapse open={isOpen}>{isOpen && <div className="t2s-group-sessions">
         {shown.map((child) => node(child, 2, true))}
         {shown.length < n.children.length && <button type="button" className="t2s-viewmore" style={flat ? undefined : { marginLeft: nameLeft(2) - 6 }}
           onClick={() => setMore((prev) => new Set(prev).add(it.key))}>{t('sidebar.viewMore')} · {n.children.length - shown.length}</button>}
-      </div>}
+      </div>}</AnimatedCollapse>
     </div>
   }
   // 文件夹行:与笔记树的文件夹同一套结构与类名(前导槽里图标 ↔ 悬停换箭头,行尾「更多」和「+」)。
@@ -654,7 +684,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
           onClick={() => { open.setOpen('f:' + it.key, true); add.run() }}><Plus size={14} /></button>}
       </div>
       {/* 展开着的文件夹,「排在它后面」的线画在它整块的下沿 */}
-      {isOpen && <div className={cls('t2s-group-sessions', at === 'after' && 'drag-over-end')}>{n.children.map((child) => node(child, depth + 1))}</div>}
+      <AnimatedCollapse open={isOpen}>{isOpen && <div className={cls('t2s-group-sessions', at === 'after' && 'drag-over-end')}>{n.children.map((child) => node(child, depth + 1))}</div>}</AnimatedCollapse>
     </div>
   }
   const node = (n: ListNode, depth: number, inGroup = false): ReactNode =>
@@ -670,7 +700,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         <span className="t2sw-plug-sec-name"><span className="t2s-group-label">{g}</span><span className={`t2s-chev${isOpen ? ' open' : ''}`}><ChevronRight size={12} /></span></span>
         <span className="t2s-count">{leafCount(list)}</span>
       </button>
-      {isOpen && list.map((n) => node(n, 1))}
+      <AnimatedCollapse open={isOpen}>{isOpen && list.map((n) => node(n, 1))}</AnimatedCollapse>
     </div>
   }
 
@@ -700,6 +730,7 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
     menuOpener.current = null
     setMenu({ x: at.x, y: at.y, items: secondary.map((action) => ({ label: action.label, danger: action.danger, run: action.run })) })
   }
+  const primaryLabelRef = useRef<HTMLSpanElement>(null)
   const fabIcon = ((): ReactNode => { const icon = resolveIcon(primary?.icon); return icon && typeof icon !== 'string' ? icon : <Plus /> })()
 
   return (
@@ -712,7 +743,10 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
       {flat && src.search && (searching || !!query) && <div className="t2sw-plug-toolbar">{searchField(true)}</div>}
       {!flat && (src.search || primary || secondary.length > 0) && <div className="t2sw-plug-toolbar">
         {src.search && searchField(false)}
-        {primary && <button type="button" className="t2sw-plug-btn" title={primary.label} onClick={() => primary.run()}>{primary.label}</button>}
+        {/* 工具栏窄于 260px 只留图标(5.17),提示照应用里的 .lcl-tip 给全名;字露着时不弹。 */}
+        {primary && <button type="button" className="t2sw-plug-btn" aria-label={primary.label} onClick={() => primary.run()}
+          {...tooltipProps(() => primaryLabelRef.current?.offsetParent ? null : [primary.label], { side: 'bottom' })}>
+          <span className="t2sw-plug-btn-ic" aria-hidden="true">{fabIcon}</span><span ref={primaryLabelRef} className="t2sw-plug-btn-label">{primary.label}</span></button>}
         {!!secondary.length && <CapabilityMenu label={t('wsview.actions', { source: src.title })} className="t2sw-plug-overflow"
           items={secondary.map((action) => ({ id: action.id, label: action.label, danger: action.danger, onSelect: action.run }))}><MoreHorizontal size={15} /></CapabilityMenu>}
       </div>}
@@ -751,7 +785,8 @@ export function PluginListBody({ src, stateKey }: { src: ListSourceContribution;
         {flat && src.search && <PullHint />}
         {flat && phoneHint && <ListHint id={`list:${src.id}`}>{phoneHint}</ListHint>}
         {sections ? sections.map(([g, list]) => section(g, list)) : roots.map((n) => node(n, 1))}
-        {items.length === 0 && <div className="t2sw-empty">{query ? t('wsview.noMatches') : t('wsview.empty')}</div>}
+        {items.length === 0 && emptyRow}
+        {hidden > 0 && <div className="t2sw-plug-hidden">{t('wsview.hiddenByFilters', { count: hidden })}</div>}
       </div>
       {/* 手机:源的常用动作是右下角的主按钮,其余动作在它的长按菜单里 */}
       {flat && primary && <ListFab label={primary.label} icon={fabIcon} onClick={() => primary.run()}

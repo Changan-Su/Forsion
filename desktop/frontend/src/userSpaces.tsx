@@ -9,8 +9,9 @@ import { windowKind } from './windowKind'
 import {
   Bot, Inbox, Mail, NotebookText, BookOpen, Briefcase, CalendarDays, MessageCircle, Folder, FolderOpen,
   FileText, Star, Heart, Home, Target, Zap, Globe, Music, Image, Video, Code, Terminal, LayoutGrid, Sparkles,
-  Boxes, ListTree, ListTodo, Server, ServerCog,
+  Boxes, ListTree, ListTodo, Server, ServerCog, Cloud,
 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
@@ -37,6 +38,7 @@ import { setHiddenPluginSpaces, type HiddenSpace } from './pluginSpaceHealth'
 import { hasBottomPanel } from './pluginViews'
 import { PRODUCT } from './product'
 import { pluginSpaceOwner } from './stores/spaceProgress'
+import { checkPluginIcon, vocabIcon } from '@amadeus/plugins/pluginIcon'
 import { LAST_EXIT_SPACE, awaitedStartupSpace, resolveStartupTarget, startupSpacePref } from './spaces'
 
 // 保留 id:用户/市场的 space.json 不许占用宿主 Space 的 id。calendar 现在是内置插件(关掉即不注册),
@@ -44,13 +46,16 @@ import { LAST_EXIT_SPACE, awaitedStartupSpace, resolveStartupTarget, startupSpac
 // home 同理(10-18):内置主页关着时别人占了它,连 Ribbon 主位槽一起被占。
 const BUILTIN_IDS = ['tangu', 'inbox', 'amadeus', 'calendar', 'muse', 'home'] as const
 
-/** 精选图标表(space.json 的 icon 字段按名取):刻意不做 lucide 全量动态查找(bundle 爆炸)。 */
+/** 精选图标表(space.json 的 icon 字段按名取):刻意不做 lucide 全量动态查找(bundle 爆炸)。
+ *  这 30 个名字也都在插件图标词表(PLUGIN_ICONS)里;词表里别的名字 Space 同样认(8.17,见 specToDefinition)。 */
 const SPACE_ICONS: Record<string, LucideIcon> = {
   bot: Bot, inbox: Inbox, mail: Mail, 'notebook-text': NotebookText, 'book-open': BookOpen, briefcase: Briefcase,
   'calendar-days': CalendarDays, 'message-circle': MessageCircle, folder: Folder, 'folder-open': FolderOpen,
   'file-text': FileText, star: Star, heart: Heart, home: Home, target: Target, zap: Zap, globe: Globe,
   music: Music, image: Image, video: Video, code: Code, terminal: Terminal, 'layout-grid': LayoutGrid,
   sparkles: Sparkles, boxes: Boxes, 'list-tree': ListTree, 'list-todo': ListTodo, server: Server, 'server-cog': ServerCog,
+  // 2026-10-23:蓬洲云的 space.json 一直写的 cloud,表里没有就回落成方块堆。它自带 iconFile,cloud 只在图读不到时兜底
+  cloud: Cloud,
 }
 
 /** 自绘图标(space.json 的 `iconFile`;主进程验过并读成 data URL)→ 与 lucide 同签名的组件,渲染点零改动。
@@ -143,7 +148,13 @@ function migrateRecipeLayout(spec: SpaceSpec): void {
 
 function specToDefinition(spec: SpaceSpec, iconUrl?: string): SpaceDefinition {
   const sides: SpaceDefinition['sidebarDefaults'] = { left: toPanels(spec.layout.left), right: toPanels(spec.layout.right), bottom: toPanels(spec.layout.bottom ?? []) }
-  const glyph = SPACE_ICONS[spec.icon ?? ''] ?? Boxes
+  // 一张词表(8.17):Space 自己那 30 枚先认(画法不变),其余插件词表里的名字也认;都不认 → 方块堆 + 控制台警告一次
+  const named = spec.icon ?? ''
+  let glyph = Object.prototype.hasOwnProperty.call(SPACE_ICONS, named) ? SPACE_ICONS[named] : vocabIcon(named) as unknown as LucideIcon | undefined
+  if (!glyph) {
+    if (named && !iconUrl) checkPluginIcon(pluginSpaceOwner.get(spec.id) ?? `space:${spec.id}`, named, 'space.json')
+    glyph = Boxes
+  }
   return {
     id: spec.id,
     mini: spec.mini ? { ...spec.mini, name: spec.mini.name ? specName({ ...spec, name: spec.mini.name }) : undefined } : undefined,
@@ -204,6 +215,8 @@ function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id, iconUrl?: 
     // 右键项(Ribbon 把「在新窗口中打开」排在它前面)。原先是右键直接弹删除确认,现在先过一层菜单。
     menu: () => [{
       label: app().tr('spaces.delete'),
+      icon: Trash2,
+      danger: true,
       onClick: () => { if (window.confirm(app().tr('spaces.deleteConfirm', { name: label(def.name) }))) void deleteUserSpace(spec.id) },
     }],
   })

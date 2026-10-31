@@ -27,7 +27,7 @@ import { printBanner } from './components/Banner.js';
 import { App } from './app.js';
 import { dispatchPluginCommand, listPlugins, activateAllPlugins } from '../plugins/bootstrap.js';
 import { applySpecialAgentEnableMigration } from '../services/specialAgentsConfig.js';
-import { drainRunsForExit } from '../services/agentLoop.js';
+import { activeRunCount, drainRunsForExit } from '../services/agentLoop.js';
 
 /** CLI 版本 = 包 package.json(dist/tui/main.js 的 ../../;打包态即 resources/tangu-server/package.json)。 */
 function pkgVersion(): string {
@@ -142,7 +142,7 @@ async function main(): Promise<void> {
   const { brain, providers } = buildBrain(cfg);
 
   // MCP(~/.tangu/mcp.json):启动连一次,进程级冻结;与 standalone server 同语义。
-  const mcp = createMcpManager();
+  const mcp = createMcpManager(undefined, { canReload: () => activeRunCount() === 0 });
   await mcp.start();
   bindPluginMcp(mcp); // 插件 manifest 声明的 MCP 要在激活插件之前就有地方挂
 

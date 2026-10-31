@@ -20,6 +20,9 @@ const readChatItem: FloatingTocItemReader = (element) => {
   return { text, level: Number(element.dataset.tocLevel) || 1 }
 }
 
+const composerInset = (scroll: HTMLElement): number =>
+  parseFloat(getComputedStyle(scroll).getPropertyValue('--t2-composer-h')) || 96
+
 /** Chat keeps only its source-DOM mapping here; scanning, navigation, focus, and visuals live in LCL. */
 export function FloatingToc({ scrollContainerRef, scanTrigger }: {
   scrollContainerRef: RefObject<HTMLElement | null>
@@ -33,6 +36,7 @@ export function FloatingToc({ scrollContainerRef, scanTrigger }: {
       itemFromElement={readChatItem}
       label={t('ftoc.label')}
       scanTrigger={scanTrigger}
+      bottomInset={composerInset}
     />
   )
 }

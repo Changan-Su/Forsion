@@ -7,6 +7,7 @@
  *       defaultModelId,
  *       forsion: { status: 'ok'|'empty'|'error', detail }               // 云端托管面诊断(空列表不再静默)
  *     }
+ *   GET /agent/models/quota?model=<id> → { quota }(直连来源的额度 / 余额,见 llm/providerQuota.ts)
  * forsion 部分经 deps().brain.models(microserver 进程内直连 / standalone 走 brain-api);
  * 优先 listModelsForProject(profile.appId) 遵守 admin「应用模型配置」,旧 brain 回退 listGlobalModels。
  * profile 按查询参数 `app_id` 解析(与 run 的 resolveProfile 同源),缺省才回退本进程基线。
@@ -66,6 +67,7 @@ router.get('/agent/models', authMiddleware, async (req: AuthRequest, res) => {
       realtimeModel: cat.realtimeModel, // Forsion 云端的实时语音通话模型(设置页「语音通话」与输入框通话键的云端缺省)
       translateModels: cat.translateModels, // Forsion 云端的机器翻译模型(设置页「翻译」模型槽的候选;不在 models 里)
       ttsModels: cat.ttsModels, // Forsion 云端的朗读模型(设置页「语音朗读」模型框的候选;不在 models 里)
+      fimModels: cat.fimModels, // Forsion 云端的补全(FIM)模型(设置页「补全」模型槽与插件 ctx.tangu.fim 的候选)
       contextWindowCap: CONTEXT_WINDOW_TOKENS, // 缺省上限:模型菜单「默认」档显示 min(maxContextWindow, 它)
       // Ultra 的 run 不受缺省上限约束(09-27,agentLoop 按 ultraRequested 传 uncapped)。客户端只在引擎声明了它时才按拉满显示窗口:
       // 老引擎 Ultra 照样封顶,context_info 也不带 ultra —— 不声明的话新桌面会把 272k 的 run 显示成 1M(Codex 09-27)。
@@ -98,6 +100,18 @@ export function applyModelOverride(body: any, hostExec: boolean): { code: number
   }
   return { code: 200, body: { overrides: setModelContextWindow(modelId, tokens) } };
 }
+
+// GET /agent/models/quota?model=<id> → { quota: ProviderQuota | null }:直连模型所属来源的额度 / 余额(上下文环弹层)。
+// 云端部署没有直连 provider → 恒 null;查不到也是 null(不报错,客户端不显示)。
+router.get('/agent/models/quota', authMiddleware, async (req, res) => {
+  try {
+    const modelId = String(req.query.model || '');
+    const quota = modelId ? await deps().brain.models.providerQuota?.(modelId) ?? null : null;
+    res.json({ quota });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'quota lookup failed' });
+  }
+});
 
 router.put('/agent/models/overrides', authMiddleware, async (req, res) => {
   try {

@@ -255,7 +255,7 @@ async function syncRound() {
     check('E 「重新加载」点名了全部插件,没变的照样不拆装', (await g('__keepSetups')) === 1 && (await g('__keepDisposed')) === 0)
 
     // P:关掉再打开闸插件 → 检查卡弹出 → 在卡里装配套推荐的引擎插件(假引擎说要重启)
-    const hostBox = st.locator('[data-plugin-id="rec-host"] input[type="checkbox"]')
+    const hostBox = st.locator('[data-plugin-id="rec-host"] [role="switch"]')
     await hostBox.click()
     await pause(300)
     await hostBox.click()

@@ -26,6 +26,7 @@ import type { currentRunUserId } from '../seams/runContext.js';
 import type { activeRunCount } from '../services/agentLoop.js';
 import type { createThinWorker } from '../adapters/httpWorkerHost.js';
 import type { createProfileStore } from '../profiles/profileStore.js';
+import type { ChannelSettings, PluginChannelSpec } from '../channels/types.js';
 
 /** 插件契约版本。loader 只加载 `apiVersion === TANGU_PLUGIN_API` 的插件。 */
 export const TANGU_PLUGIN_API = 1;
@@ -97,7 +98,21 @@ export interface TanguSdk {
   pluginStore: typeof PluginStore;
   /** 把媒体(图片/文件)发到当前微信会话连接的用户(send_sticker 等用;非微信会话返回 ok:false)。 */
   sendWechatMedia(userId: string, sessionId: string, buffer: Buffer, opts: { kind: 'image' | 'file'; fileName: string }, signal?: AbortSignal): Promise<{ ok: boolean; error?: string }>;
+  /** 读某通道的设置(插件通道的驱动经此读自己的凭据 appId / appSecret / botToken;每次现读,改设置即时可见)。 */
+  channelSettings(kind: string): ChannelSettings;
 }
+
+/** ctx.cloud 的一次请求(官方插件专用)。path 原样匹配白名单,不解码。 */
+export interface PluginCloudRequest {
+  path: string;
+  method?: 'GET' | 'POST';
+  body?: unknown;
+  /** 缺省 15s,上限 120s。 */
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}
+/** status 0 = 没发出去或没收到(error 写原因);403 + path_not_allowed = 白名单外,没发。 */
+export interface PluginCloudResponse { status: number; json?: any; error?: string }
 
 /** 插件可挂载额外路由的三组 router（标准/数据/admin）。 */
 export interface PluginRouters {
@@ -132,12 +147,24 @@ export interface TanguPluginContext {
   registerRoutes(mount: (r: PluginRouters) => void): void;
   /** Authenticated JSON routes under /extensions/<bundle>/<engine>. Host assigns ownership and removes on disable. */
   registerScopedRoutes(mount: (router: Router) => void): void;
+  /**
+   * 贡献一个 IM 通道(企业微信等):驱动只管传输层,会话绑定 / 审批 / slash / 收件箱转发 / 设置卡全由宿主管线负责。
+   * 本机引擎才生效(云端 profile 不起通道)。停用插件时宿主完全停止该通道,绑定保留。kind 非法或撞名直接抛错(激活作废)。
+   */
+  registerChannel(spec: PluginChannelSpec): void;
   /** 运行时构建块（按引用，见 `TanguSdk`）。 */
   sdk: TanguSdk;
   /** 带插件 id 前缀的日志。 */
   log(msg: string): void;
   /** 路径信息。 */
   paths: { pluginDir: string; dataDir: string };
+  /**
+   * 以用户的 Forsion 账号请求云端。**只有官方插件有**(捆绑包 SIGNATURE 用引擎钉的公钥验过,见 ./official.ts),
+   * 其余插件恒为 undefined。路径白名单:`GET /api/market/mine`、`POST /api/market/mine/<id>/update`(可带 `?dryRun=1`),
+   * 别的一律 `{ status: 403, error: 'path_not_allowed' }`、不发;没有云端接缝(内嵌引擎 / 没配云端)= `{ status: 0, error: 'no_cloud' }`。
+   * 令牌由宿主带,插件拿不到;永不抛。
+   */
+  cloud?: { request(req: PluginCloudRequest): Promise<PluginCloudResponse> };
   /**
    * 发用户活动事件(强制 `plugin:<id>:` 前缀,对齐桌面 ctx.activity.log)——自动化 event_seen 可盯,
    * Muse/read_activity 可读。仅本地形态生效(云端 worker 静默 no-op)。detail 值折叠空白截断,勿放敏感原文。

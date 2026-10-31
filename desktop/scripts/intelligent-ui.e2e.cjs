@@ -225,10 +225,14 @@ async function main() {
     await media.evaluate(el => { el.style.removeProperty('width'); el.style.removeProperty('max-width') })
     // 481px is just above the stacking breakpoint: four wide-glyph segments and a long host have the least room there.
     const edge = win.locator('.intelligent-ui[data-document-id="edge-widths"]')
+    // The card sits outside the chat answer's .t2-content, so its fences need their own block look (10-28 feedback: code read as loose text).
+    const fence = edge.locator('[data-block-id="code"] pre')
+    check('a code fence is a filled block with a visible copy icon and no run key', await fence.evaluate(el => getComputedStyle(el).backgroundColor !== 'rgba(0, 0, 0, 0)' && parseFloat(getComputedStyle(el).paddingLeft) > 0)
+      && await edge.locator('[data-block-id="code"]').getByTitle('复制代码').evaluate(b => b.querySelector('svg')?.getBoundingClientRect().width >= 12) && await edge.locator('[data-testid="code-run"]').count() === 0)
     for (const width of [481, 320]) {
       await edge.evaluate((el, w) => { el.style.width = `${w}px`; el.style.maxWidth = '100%' }, width)
-      const fits = await edge.evaluate(el => el.scrollWidth <= el.clientWidth + 1 && [...el.querySelectorAll('.iui-seg .iui-parallel, .iui-seg label, .iui-source > a')].every(n => n.scrollWidth <= n.clientWidth + 1))
-      check(`wide segments and a long source host stay inside a ${width}px answer`, await edge.locator('.iui-seg').count() === 1 && fits)
+      const fits = await edge.evaluate(el => el.scrollWidth <= el.clientWidth + 1 && [...el.querySelectorAll('.iui-seg .iui-parallel, .iui-seg label, .iui-source > a, [data-block-id="code"] > div')].every(n => n.scrollWidth <= n.clientWidth + 1))
+      check(`wide segments, a long source host and a long code line stay inside a ${width}px answer`, await edge.locator('.iui-seg').count() === 1 && fits)
     }
     await edge.evaluate(el => { el.style.removeProperty('width'); el.style.removeProperty('max-width') })
     const fold = win.locator('[data-document-id="dinner"] [data-block-id="steps"] details'), tick = win.locator('[data-document-id="dinner"] .iui-check-rows input').first()

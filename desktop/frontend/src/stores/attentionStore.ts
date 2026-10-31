@@ -14,9 +14,9 @@
  */
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import { engineFetch, homeTarget, knownTargets } from '../services/engine/targets'
+import { engineFetch, homeTarget, knownTargets, targetForSession } from '../services/engine/targets'
 import type { UiMessage } from '../types'
-import { rowStatus, type RowStatus } from '@tangu/ui/views/chat2/sessionTree'
+import { rowStatus, type RowStatus } from '../../../../tangu-agent/src/contracts/sessionStatus'
 import { setActiveSpace } from '@lcl/engine'
 import { useApp } from './appStore'
 import { notifyApp } from './notificationStore'
@@ -45,7 +45,7 @@ export interface DmAttention { unread: boolean; awaiting: boolean }
 interface AttentionState {
   byTarget: Record<string, TargetAttention>
   dm: Record<string, DmAttention>
-  /** 读过:本地先熄、再告诉引擎(proactive_at ≤ last_read_at)。 */
+  /** 读过:本地先熄、再告诉引擎(proactive_at ≤ last_read_at,收尾问句的 awaiting_user 一并清 —— 看过就不再算等你)。 */
   markRead(sessionId: string): void
   /** 装轮询(幂等,可重复调用 —— StrictMode 双 effect 只装一份);返回卸载。 */
   install(): () => void
@@ -83,6 +83,7 @@ function sanitizeDm(raw: unknown): Record<string, DmAttention> {
 }
 
 const inflight = new Set<string>()
+const reading = new Set<string>() // POST /read 在途的会话 id(列表引用每变一次都会问一遍,别叠请求)
 let dmDisabled = false // 老引擎没有这个端点(404):本次启动不再拉
 let dmLoaded = false
 const listTried = new Set<string>() // 为它补拉过会话列表的私聊 id(见 refresh)
@@ -95,9 +96,21 @@ export const useAttention = create<AttentionState>((set, get) => ({
 
   markRead(sessionId) {
     const cur = get().dm[sessionId]
-    if (!cur?.unread) return
-    set((s) => ({ dm: { ...s.dm, [sessionId]: { ...cur, unread: false } } }))
-    void engineFetch(homeTarget(), `/agent/sessions/${encodeURIComponent(sessionId)}/read`, { method: 'POST' }, { timeoutMs: REQUEST_TIMEOUT_MS }).catch(() => {})
+    const listed = useApp.getState().sessions.some((x) => x.id === sessionId && x.awaiting_user)
+    if (!cur?.unread && !listed) return
+    if (cur?.unread) set((s) => ({ dm: { ...s.dm, [sessionId]: { ...cur, unread: false } } }))
+    if (reading.has(sessionId)) return
+    // 等你不在本地先熄:引擎说了算(Muse 后台待批、回报没送回的子会话读了也留着;老引擎不回 awaiting = 没清)。
+    reading.add(sessionId)
+    void engineFetch(targetForSession(sessionId), `/agent/sessions/${encodeURIComponent(sessionId)}/read`, { method: 'POST' }, { timeoutMs: REQUEST_TIMEOUT_MS })
+      .then(async (r) => {
+        const j = r.ok ? await r.json().catch(() => null) as { awaiting?: unknown } | null : null
+        if (j?.awaiting !== false) return
+        useApp.setState((s) => ({ sessions: s.sessions.map((x) => (x.id === sessionId && x.awaiting_user ? { ...x, awaiting_user: false } : x)) }))
+        if (get().dm[sessionId]?.awaiting) void get().refresh('home') // 私聊的等你来自轮询,重拉一次(待批那路照样亮)
+      })
+      .catch(() => {})
+      .finally(() => reading.delete(sessionId))
   },
 
   async refresh(targetKey) {
@@ -163,13 +176,15 @@ export const useAttention = create<AttentionState>((set, get) => ({
       const timer = window.setInterval(tick, ATTENTION_POLL_MS)
       const onVis = (): void => { if (typeof document !== 'undefined' && !document.hidden) void get().refresh() }
       if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVis)
-      // 连上的那一刻拉一次(启动 / 断线重连 / 引擎重启):别等 20s。打开一条私聊 = 读过。
+      // 连上的那一刻拉一次(启动 / 断线重连 / 引擎重启):别等 20s。打开一条会话 = 读过;
+      // 正看着的那条一轮以问句收尾、列表刷新带回 awaiting_user,也当场算读过(否则切走后黄点留着,点回来也不灭)。
       let prevConn = useApp.getState().connState
       let prevActive = useApp.getState().activeId
+      let prevSessions = useApp.getState().sessions
       const unsub = useApp.subscribe((s) => {
         if (s.connState === 'ok' && prevConn !== 'ok') void get().refresh()
         prevConn = s.connState
-        if (s.activeId !== prevActive) { prevActive = s.activeId; readActiveDm() }
+        if (s.activeId !== prevActive || s.sessions !== prevSessions) { prevActive = s.activeId; prevSessions = s.sessions; readActiveDm() }
       })
       tick()
       teardown = () => {
@@ -205,7 +220,7 @@ function notifyNewWaits(prev: Record<string, DmAttention>, next: Record<string, 
   }
 }
 
-/** 正开着(窗口可见)的那条私聊有新消息 → 就地算读过(用户就在看它)。 */
+/** 正开着(窗口可见)的那条会话有新消息 / 在等回话 → 就地算读过(用户就在看它)。 */
 function readActiveDm(): void {
   const id = useApp.getState().activeId
   if (id && (typeof document === 'undefined' || !document.hidden)) useAttention.getState().markRead(id)
@@ -293,6 +308,7 @@ export function __resetAttentionForTests(): void {
   dmDisabled = false
   dmLoaded = false
   listTried.clear()
+  reading.clear()
   useAttention.setState({ byTarget: {}, dm: {} })
 }
 

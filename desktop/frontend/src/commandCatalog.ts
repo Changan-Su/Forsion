@@ -86,7 +86,7 @@ export const COMMAND_CATALOG: CommandSpec[] = [
     surfaces: ['tui', 'desktop', 'channel'],
   },
   { name: '/approval', key: 'approval', arg: '<档位>', aliases: ['/permissions'], zh: '查看或切换审批档：readonly|auto-edit|full-auto|custom', en: 'Show or switch the approval mode: readonly|auto-edit|full-auto|custom', surfaces: ['tui', 'desktop', 'channel'] },
-  { name: '/loop', key: 'loop', arg: '<1-200>', zh: '最大循环轮数（默认 90；耗尽会提示）', en: 'Max loop iterations (default 90; you get a prompt when exhausted)', surfaces: ['tui', 'desktop', 'channel'] },
+  { name: '/loop', key: 'loop', arg: '<n|off>', zh: '最大循环轮数（默认不限；设了上限耗尽会提示）', en: 'Max loop iterations (no limit by default; you get a prompt when a cap runs out)', surfaces: ['tui', 'desktop', 'channel'] },
   { name: '/verify', key: 'verify', arg: '<命令|off>', zh: '本会话验证命令：收尾前自动跑，不绿不许收（off 关闭）', en: 'Session verify command — runs before the turn may end; must pass (off to clear)', surfaces: ['desktop'] },
   { name: '/plan', key: 'plan', zh: '切换计划模式：只读调研 → 提交计划求批准', en: 'Toggle plan mode: read-only research, then submit a plan for approval', surfaces: ['tui', 'desktop'] },
   { name: '/chat', key: 'chat', zh: '切到 Chat 模式（轻量：答完即停、临时工作区、不写笔记；侧栏只列聊天会话，新会话按此模式创建，已创建的会话不可切换）', en: 'Switch to Chat mode (light: answers and stops, temporary workspace, never writes your notes; the sidebar lists chat sessions only, new sessions use it, existing sessions are fixed)', surfaces: ['desktop'] },

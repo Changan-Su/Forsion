@@ -3,8 +3,8 @@ import { useChildChat } from './stores/childChatStore';
  * `ctx.tangu` 探针的实现(2026-08-29+)。契约与「为什么要探针」见
  * `amadeus/plugins/tanguSeam.ts` —— 那边是叶子,这边才碰 store。
  *
- * 由 `installEngine()` 调用,**必须早于 `installAmadeusPlugins()`**:`ctx.tangu` 的有无是在
- * 建 plugin context 那一刻定的。三端共用 installEngine,移动端自动跟上(check:parity)。
+ * 由 Tangu 入口 `activateTangu(host)` 经 `host.installProbe` 调用(installEngine 里排在 `installAmadeusPlugins()` 之前):
+ * `ctx.tangu` 的有无是在建 plugin context 那一刻定的。三端共用 installEngine,移动端自动跟上(check:parity)。
  */
 import { setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { claimHostMount } from '@lcl/components'
@@ -12,6 +12,7 @@ import {
   pluginChatType,
   readTanguNewChat,
   setTanguProbe,
+  type TanguProbe,
   type TanguAgentSelf,
   type TanguAgentInfo,
   type TanguAgentStatus,
@@ -22,24 +23,27 @@ import {
   type TanguComposerOptions,
   type TanguCompleteRequest,
   type TanguCompleteResult,
+  type TanguFimRequest,
+  type TanguFimResult,
   type TanguModelInfo,
   type TanguSessionInfo,
   type TanguStartChatOptions,
   type TanguStartChatResult,
 } from '@amadeus/plugins/tanguSeam'
-import { activeChatModelId, stickyDefaults, useApp, type AppState } from './stores/appStore'
+import { activeChatModelId, useApp, type AppState } from './stores/appStore'
+import { stickyDefaults } from '../../../tangu-agent/src/contracts/sessionDefaults'
 import { agentStatusOf, statusKey } from './stores/agentStatus'
 import { usePluginChat } from './stores/pluginChatStore'
 import type { TanguDesktopConfig } from './types'
 import { getSessionDetail, getAgentSchedules, getMuseLibrary, getMuseLibraryFile, getMuseStatus, getMuseTodos, patchMuseTodo } from './services/backendService'
 import { hasNativeFeature } from './features/runtime'
-import { quoteInChatPanel } from '@tangu/ui/views/chat2/chatPanelQuote'
-import { completeInline } from './services/inlineAi'
+import { completeInline, fimInline, FIM_UNAVAILABLE } from './services/inlineAi'
 import { submitDocumentTask } from './services/documentTasks'
 import { openSession } from './sessionNav'
 import { connectionTarget } from './services/engine/targets'
 import { catalogFor, ensureCatalog } from './services/engine/catalog'
 import { getCallVoice, subscribeCallVoice } from './services/callVoice'
+import { agentName } from './agentName'
 
 /** 这次翻译用哪个模型。「翻译」模型槽(设置 → 模型;config.json models.translate)设了、**本机引擎**的目录里也还有 → 用它。
  *  没设、读不到、或目录里已经没有这个模型(下架 / 换了账号)→ 目录里有机器翻译模型(translateModels)就自动用第一个
@@ -74,6 +78,32 @@ async function translateInline(req: TanguCompleteRequest, opts: TanguCompleteOpt
     if (!pick.auto || streamed || !chat || opts.signal?.aborted) throw e
     return by(await completeInline({ ...req, modelId: chat }, chat, opts), chat)
   }
+}
+
+/** 行内补全(ctx.tangu.fim)用哪个模型:点名的 → 「补全」模型槽(config.json models.fim,且还在**本机引擎**目录的 fimModels 里)
+ *  → fimModels 第一个 → null(调用方 reject fim_unavailable)。目录按 home 验(与 translateModelChoice 同理:正文 AI 只打本机)。
+ *  目录还没拉到就先拉一次 —— 冷启动时直接判「没有」会让插件整场会话落回 complete;拉不到(引擎没起来)才先信槽。 */
+export async function fimModelChoice(modelId?: string): Promise<{ id: string; name: string } | null> {
+  const cached = catalogFor('home')?.models
+  const cat = cached ?? (await ensureCatalog('home').catch(() => null))?.models ?? null
+  const nameOf = (id: string): string => cat?.fimModels?.find((m) => m.id === id)?.name || cat?.models.find((m) => m.id === id)?.name || id
+  if (modelId) return { id: modelId, name: nameOf(modelId) }
+  const slot = (await window.tangu?.getConfig?.().catch(() => null))?.fimModelId
+  // 云端目录这次没拉成(status error,fimModels 空)≠ 没有补全模型:先信槽;槽也没有就报可重试的错,
+  // 别抛 fim_unavailable —— 插件会据此整场会话落回 complete,网好了也不回来。
+  const cloudDown = cat?.forsion?.status === 'error'
+  if (slot && (!cat || cloudDown || cat.fimModels?.some((m) => m.id === slot))) return { id: slot, name: nameOf(slot) }
+  const first = cat?.fimModels?.[0]
+  if (!first && cloudDown) throw new Error('fim_catalog_unreachable')
+  return first ? { id: first.id, name: first.name || first.id } : null
+}
+
+async function fimViaProbe(req: TanguFimRequest, opts: TanguCompleteOptions = {}): Promise<TanguFimResult> {
+  const pick = await fimModelChoice(req.modelId)
+  if (!pick) throw new Error(FIM_UNAVAILABLE)
+  opts.signal?.throwIfAborted()
+  const r = await fimInline(req, pick.id, opts)
+  return { text: r.text, model: pick }
 }
 
 function readActiveModel(): TanguModelInfo | null {
@@ -119,7 +149,7 @@ export async function modelCatalog(kind: import('../../shared/pluginModelPicker'
  *  (`NormalAgentDef.createdBy` 的注释也是这么写的)。另外两处**会**过滤的是聊天中途的「换 Agent」菜单
  *  (Composer2)与团队成员候选(TeamEditor),那是「谁能被指派干活」的口径,不是「会话归谁」。
  *  归属侧(agentStatus.agentSlug)一样不过滤,两边必须对得上:Muse 的会话也报 muse,插件才挑得出形象。 */
-const readAgents = (): TanguAgentInfo[] => useApp.getState().agentDefs.map((a) => ({ slug: a.slug, name: a.name || a.slug }))
+const readAgents = (): TanguAgentInfo[] => useApp.getState().agentDefs.map((a) => ({ slug: a.slug, name: agentName(a) }))
 
 const readActiveSpace = (): string | null => useSpaceStore.getState().activeSpaceId || null
 
@@ -455,7 +485,7 @@ function museSelf(): TanguAgentSelf {
   }
 }
 
-export function installTanguProbe(): void {
+export function installTanguProbe(fromTangu: Pick<TanguProbe, 'askInChat'> = {}): void {
   setTanguProbe({
     hostExecution: () => window.tangu?.executionCapabilities?.host ?? (useApp.getState().desktopConfig?.mode === 'managed'),
     activeModel: readActiveModel,
@@ -496,9 +526,9 @@ export function installTanguProbe(): void {
       openDocumentTask: (id: string) => openSession(id, { newTab: true }),
     } : {}),
     agentSelf: (slug) => (slug === 'muse' ? museSelf() : null),
-    // 编辑器「问 Tangu」(G3-04):只在注册了 chat-panel 的宿主上给(与 features/tangu.tsx 同一个谓词)。
-    // automation-only 档案也会装本探针(bootstrapEngine),那里没有侧栏对话 → 方法缺席,编辑器不出入口。
-    ...(hasNativeFeature('tangu') ? { askInChat: quoteInChatPanel } : {}),
+    // 编辑器「问 Tangu」(G3-04):Tangu 激活时自己交进来(与注册 chat-panel 同一个谓词)。
+    // automation-only 档案也会装本探针,那里没有侧栏对话 → 没交、方法缺席,编辑器不出入口。
+    ...(fromTangu.askInChat ? { askInChat: fromTangu.askInChat } : {}),
     // 插件视图里的原生对话(ctx.tangu.mountChat):同一门控 —— 没有对话能力的档案里 ChatView 没有数据源。
     ...(hasNativeFeature('tangu') ? { mountChat } : {}),
     // 新对话输入区(ctx.tangu.mountComposer,主页插件化 S2):同一门控。
@@ -507,6 +537,8 @@ export function installTanguProbe(): void {
     // 例外:translate 动作先看「翻译」模型槽(编辑器的翻译与插件 ctx.tangu.translate 同一个口子)。
     // 与「问 Tangu」同一门控:没有 Tangu 产品能力的档案(automation-only)不出 AI 入口、插件也拿不到 complete。
     ...(hasNativeFeature('tangu') ? { complete: async (req, opts) => (req.action === 'translate' && !req.modelId ? translateInline(req, opts) : completeInline(req, readActiveModel()?.id ?? null, opts)) } : {}),
+    // 行内补全(FIM,2026-10-26+):同一门控、同一条 /agent/inline;模型取 fimModelChoice(),做不了一律 fim_unavailable。
+    ...(hasNativeFeature('tangu') ? { fim: fimViaProbe } : {}),
     // ⚠️只在 (模型 id, Space id) 这对值**真变了**时才回调。useApp 在流式回答期间每收一个
     // SSE 增量就 set 一次 state,裸转发 = 把每个订阅插件按帧敲一遍(浮层类插件会当场掉帧)。
     subscribe: (cb) => {

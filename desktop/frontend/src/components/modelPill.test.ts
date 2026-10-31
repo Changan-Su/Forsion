@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { catalogForDefaultSlot, contextLimitOptions, contextRingWindow, effortAt, effortStopAt, ultraContextWindow } from './ModelPill'
+import { catalogForDefaultSlot, contextLimitOptions, contextRingWindow, effortAt, effortStopAt, fastTierText, ultraContextWindow } from './ModelPill'
 import type { CtxInfo, ModelInfo } from '../types'
 
 describe('Effort slider', () => {
@@ -87,5 +87,14 @@ describe('输入框进度环分母(09-27 Ultra 拉满:切了开关还没发下�
   it('老引擎(没声明 ultraUncapped,Ultra 也封顶、context_info 不带 ultra):Ultra 不改分母(Codex 09-27)', () => {
     expect(contextRingWindow({ ...base, engineUncapped: undefined, ctxInfo: info({}), ultra: true })).toEqual({ window: 272_000, stale: false })
     expect(contextRingWindow({ ...base, engineUncapped: undefined, ultra: true })).toEqual({ window: 272_000, stale: false })
+  })
+})
+
+describe('fastTierText', () => {
+  const t = (k: string, v?: Record<string, string>) => `${k}|${v?.speed}`
+  it('reads the speed out of the catalog text and flags extra usage; unknown wording passes through', () => {
+    expect(fastTierText('1.5x speed', t)).toBe('pill.fastDesc|1.5')
+    expect(fastTierText('2x speed, increased usage', t)).toBe('pill.fastDescUsage|2')
+    expect(fastTierText('Priority processing', t)).toBe('Priority processing')
   })
 })

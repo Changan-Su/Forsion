@@ -1,17 +1,22 @@
 import { useEffect, useState } from 'react'
-import { Check, Download, HardDrive, Loader2, Trash2 } from 'lucide-react'
+import { Check, Download, Loader2, Mic, Trash2 } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import type { StoredDesktopConfig } from '../types'
+import { SettingsPanel } from './SettingsPrimitives'
 
 /**
- * 设置 → 模型 → 语音 →「本地语音识别」:下载 / 删除本地 SenseVoice,下载完自动选它。
+ * 设置 → 模型 → 语音 →「本地语音识别」卡(10-25 换成设置卡片):下载 / 删除本地 SenseVoice,下载完自动选它。
  * 语音输入用哪个模型(本地 / 云端 / 自带)在「默认模型 → 语音输入」里选(10-17 方案 C);这里只管本地模型文件。
  * 自包含(getConfig/setConfig + asrLocal* IPC)。非桌面环境自动隐藏。
  */
 
 registerMessages({
   'asr.localTitle': { zh: '本地语音识别', en: 'On-device speech recognition' },
-  'asr.localHint': { zh: '下载后语音输入可以离线用、不计额度；在「默认模型 → 语音输入」里选它。', en: 'Once downloaded, voice input works offline at no cost. Choose it under Default models → Voice input.' },
+  'asr.localHint': { zh: '下载后语音输入可以离线用、不计额度，约 230 MB；在「默认模型 → 语音输入」里选它。', en: 'Once downloaded, voice input works offline at no cost. About 230 MB. Choose it under Default models → Voice input.' },
+  'asr.downloadBtn': { zh: '下载', en: 'Download' },
+  'asr.downloaded': { zh: '已下载', en: 'Downloaded' },
+  'asr.downloadedInUse': { zh: '已下载 · 在用', en: 'Downloaded · in use' },
+  'asr.use': { zh: '使用', en: 'Use' },
 })
 
 export function AsrModelChoice({ onSaved }: { onSaved?: (c: StoredDesktopConfig) => void } = {}) {
@@ -48,45 +53,32 @@ export function AsrModelChoice({ onSaved }: { onSaved?: (c: StoredDesktopConfig)
   if (!window.tangu?.asrLocalStatus) return null // 非桌面环境不显示
 
   const localSelected = backend === 'local' && ready
+  const pct = Math.round(progress * 100)
+
+  // 卡头右边一个动作(走查续 4.5):没下载 =「下载」/ 下载中 = 进度 / 下好了 =「已下载」+ 没在用时「使用」+ 删除。
+  const actions = ready ? (
+    <>
+      <span className="settings-voice-ready" title={`${t('settings.asr.localName')} · ${t('settings.asr.offlineTag')} · ${(sizeBytes / 1048576).toFixed(0)} MB`}>
+        <Check size={12} />{t(localSelected ? 'asr.downloadedInUse' : 'asr.downloaded')}
+      </span>
+      {!localSelected && <button type="button" className="btn ghost sm" onClick={pickLocal}>{t('asr.use')}</button>}
+      <button type="button" className="btn ghost sm" title={t('settings.asr.localRemove')} aria-label={t('settings.asr.localRemove')} onClick={() => void remove()}>
+        <Trash2 size={13} />
+      </button>
+    </>
+  ) : downloading ? (
+    <span className="settings-voice-progress" role="progressbar" aria-label={t('settings.asr.downloading')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+      <Loader2 size={13} className="spin" />
+      <span>{t('settings.asr.downloading')} {pct}%</span>
+      <span className="settings-voice-progress-track"><span style={{ width: `${pct}%` }} /></span>
+    </span>
+  ) : (
+    <button type="button" className="btn ghost sm" onClick={() => void download()}><Download size={13} />{t('asr.downloadBtn')}</button>
+  )
 
   return (
-    <div className="field">
-      <label>{t('asr.localTitle')}</label>
-      <div className="hint" style={{ marginBottom: 8 }}>{t('asr.localHint')}</div>
-      <div className="model-group-body">
-        {/* 本地 SenseVoice 行:未下载=下载按钮 / 下载中=进度 / 已就绪=可选中 + 删除 */}
-        {ready ? (
-          <button className={`file-row${localSelected ? ' active' : ''}`} onClick={pickLocal}>
-            <HardDrive size={13} />
-            <span className="file-name" style={{ color: localSelected ? 'var(--accent-ink)' : undefined }}>{t('settings.asr.localName')}</span>
-            <span className="model-group-tag">{t('settings.asr.offlineTag')} · {(sizeBytes / 1048576).toFixed(0)}MB</span>
-            {localSelected && <Check size={12} style={{ color: 'var(--accent-ink)' }} />}
-            <span
-              role="button"
-              tabIndex={0}
-              title={t('settings.asr.localRemove')}
-              onClick={(e) => { e.stopPropagation(); void remove() }}
-              style={{ marginLeft: 4, opacity: 0.55, display: 'inline-flex' }}
-            >
-              <Trash2 size={12} />
-            </span>
-          </button>
-        ) : downloading ? (
-          <div className="file-row" style={{ gap: 10 }}>
-            <Loader2 size={13} className="spin" />
-            <span style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.asr.downloading')} {Math.round(progress * 100)}%</span>
-            <div style={{ flex: 1, height: 5, background: 'var(--overlay-light, rgba(127,127,127,.15))', borderRadius: 3, overflow: 'hidden' }}>
-              <div style={{ width: `${Math.round(progress * 100)}%`, height: '100%', background: 'var(--accent, #6366f1)', transition: 'width .2s' }} />
-            </div>
-          </div>
-        ) : (
-          <button className="file-row" onClick={() => void download()}>
-            <Download size={13} />
-            <span className="file-name">{t('settings.asr.localName')} — {t('settings.asr.download')}</span>
-          </button>
-        )}
-      </div>
-      {err && <div className="hint" style={{ color: 'var(--danger)', marginTop: 6 }}>{err}</div>}
-    </div>
+    <SettingsPanel className="settings-voice-asr" icon={<Mic size={16} />} title={t('asr.localTitle')} description={t('asr.localHint')} actions={actions}>
+      {err && <div className="settings-voice-block"><p className="settings-voice-error" role="alert">{err}</p></div>}
+    </SettingsPanel>
   )
 }

@@ -1,4 +1,5 @@
 import { contentSyncOwned } from '../contentSyncHost'
+import { readExternalPdf, writeExternalPdfAnnotations, exportExternalPdfCopy } from './externalPdf'
 import { promises as fs, readdirSync, readFileSync } from 'node:fs'
 import { execFile } from 'node:child_process'
 import path from 'node:path'
@@ -7,9 +8,9 @@ import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
-import { serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
+import { trashSeedCalendar } from './fs/seedCalendar'
 import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from './fs/vaultHandlers'
 import { createPageHistory } from './fs/pageHistory'
 export type { VaultFace } from './fs/vaultHandlers'
@@ -30,6 +31,7 @@ import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir } from './clo
 import type { AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
 import { mt } from '../mainI18n'
+import { moveToDesktopTrash, restoreDesktopTrash } from '../trashWriter'
 import '../mainMessages' // P1-K5:main.dialog.openVault 在这里登记(main.ts 也 import,重复登记同值无害)
 
 const runFile = promisify(execFile)
@@ -236,7 +238,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         const r = await operation
         if (mayBind && r) rendererRoots.set(e.sender.id, (r as { root: string }).root)
         const ev = casRejected(channel, r) ? undefined : VAULT_WRITE_EVENTS[channel]?.(a, isPagePath) // 被拒的 CAS 没写,不叫人回灌
-        if (ev) emitRemote(ev[0], ev[1], 'host')
+        if (ev) {
+          emitRemote(ev[0], ev[1], 'host')
+          // Drawing echoes are suppressed by the watcher. Other local renderers
+          // need the same committed scene notification as Unit clients.
+          if (channel === IPC.drawingWrite) {
+            for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && w.webContents !== e.sender) w.webContents.send(ev[0], relPayload(ev[0], ev[1]))
+          }
+        }
         return r
       } finally { pendingVaultWrites.delete(operation) }
     })
@@ -272,11 +281,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   )
 
   const rememberPage = (pagePath: string): Promise<void> => writeConfig({ lastPage: vaultRel(pagePath) })
+  const defaultVaultRoot = (): string => path.join(defaultWorkspaceDir(), 'Amadeus')
 
   /** 切到某个根:统一收口(setRoot + watcher + index + 返回渲染端所需载荷)。 */
   const activateRoot = async (root: string, keepLastPage: boolean): Promise<{ root: string; pages: string[]; folders: string[]; lastPage?: string }> => {
     vault.setRoot(root)
     watcher.start(root)
+    // 只有默认库是我们种过的;失败不挡开库,下次再试
+    if (path.resolve(root) === defaultVaultRoot()) await trashSeedCalendar(vault).catch((e) => console.warn('[amadeus] seed calendar cleanup failed', e))
     const pages = await vault.listPages()
     const folders = await vault.listFolders()
     await index.build()
@@ -290,17 +302,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     }
   }
 
-  /** 首启无 lastVault:自带默认工作区 ~/Forsion/Amadeus(dev→~/Forsion-Dev/Amadeus)+ 种子 Calendar.db。
-   *  幂等:目录已存在不动,Calendar.db 已存在不覆盖(用户后来选过别的 vault 则走不到这里)。 */
+  /** 首启无 lastVault:自带默认工作区 ~/Forsion/Amadeus(dev→~/Forsion-Dev/Amadeus)。不种日历,默认日历是引擎的 human/CALENDAR.db。
+   *  幂等:目录已存在不动(用户后来选过别的 vault 则走不到这里)。 */
   const ensureDefaultVault = async (): Promise<{ root: string; pages: string[]; folders: string[] }> => {
-    const root = path.join(defaultWorkspaceDir(), 'Amadeus')
+    const root = defaultVaultRoot()
     await fs.mkdir(root, { recursive: true })
-    vault.setRoot(root)
-    try {
-      await fs.access(path.join(root, 'Calendar.db'))
-    } catch {
-      await vault.writeTextFile('Calendar.db', serializeDb(seedCalendarDb()))
-    }
     await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
     return activateRoot(root, false)
   }
@@ -314,7 +320,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
 
   handle(IPC.restoreVault, async () => {
     let { lastVault } = await readConfig()
-    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区 + 种子多维表(不再落欢迎页)
+    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
     // A saved cloud root may belong to a previous account (or the old unowned
     // mirror). Never mount it for a different account, including signed-out boot.
     if (isManagedCloudVault(lastVault) && (!cloud || !currentCloudAccountId() || lastVault !== cloudVaultDir())) {
@@ -599,9 +605,12 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     // ⚠️来源名单 = **宿主家目录里的授权**(devLoadStore),不是项目 sidecar 里的标志:项目目录不可信,
     //   克隆 / 解压来的文件夹自带一个 `devLoad:true` 就能零点击以插件权限执行 —— 第一版就是这么漏的(评审 HIGH)。
     //   授权按「产物 id + 授权当时的真实根」双钥匙核对;复制出来的项目(id 被重铸)与搬了家的 sidecar 都对不上。
-    const products: NonNullable<Awaited<ReturnType<typeof getProduct>>>[] = []
+    const products: Array<{ id: string; root: string; name: string; updatedAt: number }> = []
     const authorizedPluginId = new Map<string, string | null>() // 产物 id → 授权当时的生效插件 id(清单写坏期间沿用)
-    const loads = readDevLoads(forsionHomeDir())
+    // 插件沙箱子进程:唯一的开发来源 = 父进程 spawn 时指定的那个插件目录(pluginSandbox.ts)。授权在父进程那侧(起沙箱要审批)。
+    const sandboxDir = process.env.FORSION_SANDBOX === '1' ? process.env.FORSION_SANDBOX_PLUGIN?.trim() : undefined // = isSandboxMode()(测试 mock 掉了 forsionHome,这里直读)
+    if (sandboxDir) products.push({ id: 'plugin-sandbox', root: sandboxDir, name: path.basename(sandboxDir), updatedAt: 0 })
+    const loads = sandboxDir ? {} : readDevLoads(forsionHomeDir())
     for (const [pid, grant] of Object.entries(loads)) {
       // 原地加入的外部插件项目也在造物里:同一份经目录身份核过的登记(productTrust),否则授权过的外部插件永远加载不出来
       const product = await getProduct(projectsRootDir(), pid, externalCreations(forsionHomeDir())).catch(() => null) // 托管根不存在 / 扫不动 → 当没有
@@ -784,6 +793,19 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     await shell.openPath(dir)
   })
 
+  // Desktop-only file-view bridge; deliberately absent from Unit's remote vault allowlist.
+  handle(IPC.exportExternalPdf, async (e, p: string, name: string, bytes: Uint8Array) => {
+    await readExternalPdf(p) // validate the source before showing a save dialog
+    const options = { defaultPath: path.join(path.dirname(p), path.basename(name)), filters: [{ name: 'PDF', extensions: ['pdf'] }] }
+    const win = e ? BrowserWindow.fromWebContents((e as Electron.IpcMainInvokeEvent).sender) : null
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options)
+    if (result.canceled || !result.filePath) return null
+    await exportExternalPdfCopy(p, result.filePath, bytes)
+    return path.basename(result.filePath)
+  })
+  handle(IPC.readExternalPdf, (_e, p: string, annotations?: boolean) => readExternalPdf(p, annotations))
+  handle(IPC.writeExternalPdfAnnotations, (_e, p: string, bytes: Uint8Array, backup?: number) => writeExternalPdfAnnotations(p, bytes, backup))
+
   // ── 插件私有数据 blob(ctx.loadData / ctx.saveData)。~/.forsion/plugins-data/<id>.json。
   // 为什么不复用 registerSetting:那是「每键一个字符串塞 localStorage」,装不下几十 KB 的
   // 片段库,也没有原子性。为什么不落 vault:插件数据跟着**应用**走,不跟着某个笔记库走
@@ -831,7 +853,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // 卸载 Forsion 插件:按 manifest id 定位目录(id 可与目录名不同;与 listPlugins 同一 pluginIdOf 门禁)整删。
   // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
-  handle(IPC.uninstallPlugin, async (_e, id: string) => {
+  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }) => {
     if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     // ⚠️开发副本正遮蔽同 id 的安装版时必须拒绝:这里只扫全局目录,删掉的是**安装版**,而跑着的是开发副本 ——
     // 用户看到「已卸载」,插件却还在;等哪天撤下开发副本,它才凭空消失(且没有任何提示)。先撤开发副本再卸载。
@@ -865,8 +887,35 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         await fs.writeFile(extTombstonesFile(), JSON.stringify(merged, null, 2), 'utf8')
       }
     } catch { /* manifest 坏/缺 → 无可声明 */ }
-    await fs.rm(target, { recursive: true, force: true })
+    // 进回收站(10-28 手动卸载规范,electron/trashWriter):插件文件 + 设置(勾了「保留设置」就不挪)+ 勾了才挪的库里工作文件夹,
+    // 一条恢复。工作文件夹由渲染层按 ctx.app.workFolder() 同口径算出(相对库根),这里只认库里、不是库根的真目录。
+    const paths: Array<{ path: string; role: string }> = [{ path: target, role: 'files' }]
+    if (!opts?.keepSettings) paths.push({ path: path.join(forsionHomeDir(), 'plugins-data', `${id}.json`), role: 'settings' })
+    const vaultRoot = vault.getRoot()
+    const rel = typeof opts?.vaultFolder === 'string' ? opts.vaultFolder.replace(/^\/+|\/+$/g, '') : ''
+    if (vaultRoot && rel && !rel.split('/').some((seg) => !seg || seg === '.' || seg === '..')) {
+      const abs = path.resolve(vaultRoot, rel)
+      // 按真实路径比:中间某一层是指向库外的软链时,字面上在库里、实际挪走的是库外的目录
+      const [realAbs, realRoot] = await Promise.all([fs.realpath(abs).catch(() => ''), fs.realpath(vaultRoot).catch(() => '')])
+      const inside = realAbs && realRoot ? path.relative(realRoot, realAbs) : ''
+      if (inside && !inside.startsWith('..') && !path.isAbsolute(inside) && (await fs.lstat(abs).catch(() => null))?.isDirectory()) paths.push({ path: abs, role: 'vault' })
+    }
+    const prefs = !opts?.keepSettings && opts?.prefs && typeof opts.prefs === 'object'
+      ? Object.fromEntries(Object.entries(opts.prefs).filter(([k, v]) => typeof k === 'string' && typeof v === 'string')) : undefined
+    let name = id
+    try { name = String((JSON.parse(await fs.readFile(path.join(target, 'manifest.json'), 'utf8')) as { name?: unknown }).name || id) } catch { /* 用 id */ }
+    // engineTrash:内嵌引擎插件的设置在引擎那边的回收站条目,恢复时渲染层连带放回
+    const engineTrash = Array.isArray(opts?.engineTrash) ? opts.engineTrash.filter((x): x is string => typeof x === 'string').slice(0, 50) : []
+    const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}) } })
     vault.setPluginFileExtensions(collectPluginExts()) // 重算(含墓碑):保护不随卸载失效
+    return { ...(entry ? { trashId: entry.id } : {}), dirName: path.basename(target) }
+  })
+
+  // 恢复主进程写的回收站条目(Forsion 插件):文件放回原处,重算扩展名保护;偏好交回渲染层写 localStorage、重载插件。
+  handle(IPC.trashRestore, async (_e, id: string) => {
+    const entry = await restoreDesktopTrash(String(id))
+    vault.setPluginFileExtensions(collectPluginExts())
+    return { kind: entry.kind, ref: entry.ref, ...(entry.extra ? { extra: entry.extra } : {}) }
   })
 
   // ctx.tangu.startChat 的 send:true 归属判定(2026-09-19)。bundle.agents 只说明「插件目录里有 agents/<slug>/」,

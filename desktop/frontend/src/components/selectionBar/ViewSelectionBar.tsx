@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState, type ReactElement, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
 import { Languages, MessageSquareQuote } from 'lucide-react'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, mountLineSelection } from '@lcl/engine'
 import { SelectionBar, type SelectionBarAction, type SelectionBarTool } from '@lcl/components'
 import { registerMessages, translate, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -21,6 +21,7 @@ import { resolveIcon } from '@amadeus/components/icons'
 import { InlineAiPanel, type InlineAiRun } from '@amadeus/unified/InlineAiPanel'
 import { listSelectionActions, runSelectionAction, selectionActionKey, selectionBarOrder, type OwnedSelectionAction } from '../../selectionActions'
 import { translateTargetOf } from '../../translateTarget'
+import { selectionMarkdown } from './selectionMarkdown'
 
 registerMessages({
   'selbar.ask': { zh: '问 Tangu', en: 'Ask Tangu' },
@@ -32,8 +33,12 @@ export interface BarSelection {
   text: string
   markdown?: string
   rect: { left: number; right: number; top: number; bottom: number }
+  /** 拖选的方向:条顺着它滑进来(借鉴 Comma 方案,10-24)。双击 / 三击选词选段没有拖的方向,不给。 */
+  dir?: 'forward' | 'backward'
 }
 export interface BarSource { title?: string; path?: string; sessionId?: string; page?: number }
+/** 动的是变换、不是滚动的视图(画布):视口一挪就在 `watch` 里面的元素上派发这个事件,条跟着收(条是固定定位,不收会飘在原处)。 */
+export const SELBAR_VIEWPORT_MOVED = 'selbar:viewport-moved'
 
 export interface ViewSelectionBarProps {
   /** 'chat' 或 '<插件 id>:<视图 id>':插件动作的 scope / when 按它过滤。 */
@@ -95,20 +100,25 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
   useEffect(() => {
     const el = watch?.current
     if (!el) return
+    const paint = mountLineSelection(el)
     // 按在条上的那一下(按钮按下即执行,条随即收起):它的松手可能落回这个元素,那不是一次新的选择,不能把条再弹出来。
     let fromBar = false
-    const read = (): void => {
+    const read = (e: MouseEvent): void => {
       if (fromBar) return
       const s = window.getSelection()
       if (!s || s.isCollapsed || !s.rangeCount) { setOwn(null); return }
-      const text = s.toString().trim()
+      const content = selectionMarkdown(s, el)
+      const text = content?.text ?? ''
       const range = s.getRangeAt(0)
       const at = range.commonAncestorContainer
       const host = at.nodeType === Node.ELEMENT_NODE ? (at as Element) : at.parentElement
       // 输入框 / 可编辑区里的选区不归这一条管(那里有自己的工具栏或什么都不该出)。
       if (!text || !el.contains(at) || host?.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) { setOwn(null); return }
       const r = range.getBoundingClientRect()
-      setOwn({ text, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } })
+      const back = s.anchorNode === s.focusNode ? s.focusOffset < s.anchorOffset
+        : !!(s.anchorNode && s.focusNode && s.anchorNode.compareDocumentPosition(s.focusNode) & Node.DOCUMENT_POSITION_PRECEDING)
+      const dir = e.detail > 1 ? undefined : back ? 'backward' : 'forward'
+      setOwn({ text, markdown: content?.markdown, rect: { left: r.left, right: r.right, top: r.top, bottom: r.bottom }, dir })
     }
     const onSelection = (): void => { if (window.getSelection()?.isCollapsed) setOwn(null) }
     // 调用方自己报的选区(插件的 show())也跟着收:它是按当时的位置报的,滚了 / 盒子变了就不在那儿了。
@@ -131,13 +141,16 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
     document.addEventListener('mousedown', onDown, true)
     // capture:滚动不冒泡,里面哪一层滚了都要收(选区的位置已经变了)。
     el.addEventListener('scroll', clear, { passive: true, capture: true })
+    el.addEventListener(SELBAR_VIEWPORT_MOVED, clear, true)
     return () => {
+      paint.dispose()
       ro.disconnect()
       el.removeEventListener('mouseup', read)
       document.removeEventListener('mouseup', onUp)
       document.removeEventListener('selectionchange', onSelection)
       document.removeEventListener('mousedown', onDown, true)
       el.removeEventListener('scroll', clear, { capture: true })
+      el.removeEventListener(SELBAR_VIEWPORT_MOVED, clear, true)
     }
   }, [watch, watchKey])
 
@@ -186,6 +199,7 @@ export function ViewSelectionBar(p: ViewSelectionBarProps): ReactElement | null 
           aria-label={t('chat.selection.actions')}
           data-testid="selection-bar"
           data-view={p.view}
+          data-dir={sel.dir}
           data-dense={p.dense ? '' : undefined}
           // 点在条的空白处也不能丢选区(按钮自己各有一份 preventDefault)。
           onMouseDown={(e) => e.preventDefault()}

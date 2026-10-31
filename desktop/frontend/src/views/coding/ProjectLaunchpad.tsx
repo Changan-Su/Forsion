@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type FormEven
 import { ArrowLeft, ArrowRight, Bot, Check, ChevronDown, Code2, Folder, FolderOpen, Image, LayoutDashboard, Lightbulb, Loader2, MessageSquare, Palette, Plus, Puzzle, Search, UserRound, WandSparkles, X, RotateCw } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { formatDate } from '../../format/time'
+import { EmptyState } from '../../components/EmptyState'
 import { ChatBox, useChatBoxSelection, type ChatBoxSelection } from '../../components/chatbox'
 import { projectBasename, STUDIO_CAPABILITIES, STUDIO_TEMPLATES, validateProjectName, type StudioBrief, type StudioCapability, type StudioTemplate } from './projectBrief'
 import { useLaunchNavigation } from './launchpadNavigation'
@@ -186,7 +187,7 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
             : loading && allProjects.length === 0 ? <p className="csl-status" role="status"><Loader2 size={16} className="csl-spin" />{t('csl.projectsLoading')}</p>
             : listError && allProjects.length === 0 ? null
               : !canList ? <p className="csl-status">{t('csl.hostUnavailable')}</p>
-                : allProjects.length === 0 ? <div className="csl-empty"><Code2 size={25} /><strong>{t('csl.emptyTitle')}</strong><p>{t('csl.emptyHint')}</p><button type="button" className="csl-new" disabled={!canCreate} onClick={showCreate}><Plus size={15} />{t('csl.newProject')}</button></div>
+                : allProjects.length === 0 ? <EmptyState icon={Code2} title={t('csl.emptyTitle')} line={t('csl.emptyHint')} data-state="empty" action={{ label: t('csl.newProject'), icon: Plus, disabled: !canCreate, onClick: showCreate, action: 'new-project' }} />
                   : <div className="csl-project-list" role="group" aria-label={t('csl.projects')}>
                     <div className="csl-list-head" aria-hidden="true"><span>{t('csl.columnName')} · {filtered.length}</span><span>{t('csl.lastOpened')}</span></div>
                     {filtered.map((project) => <button type="button" key={project.path} className="csl-project" title={project.path}

@@ -5,19 +5,45 @@
  */
 import React from 'react'
 import { useSpaceStore, label } from '@lcl/engine'
-import { isUserSpace, deleteUserSpace } from '../userSpaces'
+import { isUserSpace, deleteUserSpace, pluginOfSpace } from '../userSpaces'
+import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { pluginDisplayDescription } from '../amadeus/plugins/display'
 import { DEFAULT_SPACE_KEY, LAST_EXIT_SPACE, HOME_SLOT_SPACE, startupSpacePref } from '../spaces'
 import { homeSlotSpaceId, setHomeSlotSpace } from '../homeSlot'
 import { panelToast } from './PanelNotice'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import { LayoutGrid, Rocket } from 'lucide-react'
 import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
 import { SpaceAppearancePanel } from './SpaceAppearancePanel'
 
+/** 每行副标题 = 这个 Space 是干什么的(走查续五 5.7),不再露内部 id(id 进行的悬停提示)。
+ *  内置的在这张表里;插件 Space 用插件 manifest 的说明;都没有就空着,不回退成 id。 */
+const BUILTIN_PURPOSE = ['home', 'tangu', 'amadeus', 'calendar', 'inbox', 'agents', 'coding', 'image-studio', 'artificial', 'automation', 'muse', 'public']
+registerMessages({
+  'settings.spaces.purpose.home': { zh: '壁纸、时钟和完整的输入区，打开 App 先到这里', en: 'Wallpaper, clock and the full input, where the app opens' },
+  'settings.spaces.purpose.tangu': { zh: '和 Agent 对话，管理会话与项目', en: 'Chat with agents, manage sessions and projects' },
+  'settings.spaces.purpose.amadeus': { zh: '笔记、白板和多维表', en: 'Notes, boards and databases' },
+  'settings.spaces.purpose.calendar': { zh: '日程、待办和笔记里的任务', en: 'Events, tasks and tasks from notes' },
+  'settings.spaces.purpose.inbox': { zh: 'Agent 的汇报、等你批准的请求和 Muse 的信', en: 'Agent reports, requests waiting for you and letters from Muse' },
+  'settings.spaces.purpose.agents': { zh: '每个 Agent 的配置、技能和日程', en: 'Each agent’s settings, skills and schedule' },
+  'settings.spaces.purpose.coding': { zh: '新建或打开项目，和 Agent 一起写代码', en: 'Start or open a project and code with an agent' },
+  'settings.spaces.purpose.image-studio': { zh: '在画布上构思、生图、导出作品', en: 'Sketch, generate and export on a canvas' },
+  'settings.spaces.purpose.artificial': { zh: '这台电脑上做出来的网页应用和插件', en: 'Web apps and plugins made on this computer' },
+  'settings.spaces.purpose.automation': { zh: '把重复的事做成工作流', en: 'Turn repeat work into workflows' },
+  'settings.spaces.purpose.muse': { zh: 'Muse 写的笔记、草稿和工作日志', en: 'Notes, drafts and logs Muse writes' },
+  'settings.spaces.purpose.public': { zh: '你发布过的网站和笔记', en: 'Sites and notes you’ve published' },
+})
+
 /** phone = 单列壳:没有 ribbon,主位槽那一格不存在 —— 那一行不出,文案也不提 ribbon / 右键。 */
 export const SpacesTab: React.FC<{ phone?: boolean }> = ({ phone }) => {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const spaces = useSpaceStore((s) => s.spaces)
+  const plugins = usePluginStore((s) => s.plugins)
+  const purpose = (id: string): string => {
+    if (BUILTIN_PURPOSE.includes(id)) return t(`settings.spaces.purpose.${id}`)
+    const owner = plugins.find((p) => p.id === pluginOfSpace(id))
+    return (owner && pluginDisplayDescription(owner, locale)) || ''
+  }
   const [startup, setStartup] = React.useState<string>(startupSpacePref)
   const changeStartup = (v: string): void => {
     setStartup(v)
@@ -72,9 +98,9 @@ export const SpacesTab: React.FC<{ phone?: boolean }> = ({ phone }) => {
             const user = isUserSpace(sp.id)
             const Icon = sp.icon
             return (
-              <div key={sp.id} className="settings-collection-row">
+              <div key={sp.id} className="settings-collection-row" title={sp.id}>
                 <span className="settings-collection-icon">{Icon ? <Icon size={16} /> : <LayoutGrid size={16} />}</span>
-                <span className="settings-collection-name"><strong>{name}</strong><small>{sp.id}</small></span>
+                <span className="settings-collection-name"><strong>{name}</strong>{purpose(sp.id) && <small>{purpose(sp.id)}</small>}</span>
                 <span className="settings-badge">{user ? t('settings.spaces.user') : t('settings.spaces.builtin')}</span>
                 {user && <button className="btn ghost sm danger-ink" onClick={() => void uninstall(sp.id, name)}>{t('settings.spaces.uninstall')}</button>}
               </div>

@@ -29,7 +29,7 @@ import { publish, drain, type AgentEvent } from './eventBus.js';
 import { updateRunStatus } from './runStore.js';
 import { completeHistorianTask } from './historianSession.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
-import { getAgent, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { agentNames, getAgent, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { compactSession, getLatestSummary } from './compaction.js';
 import { activateMember as realActivateMember, type ActivateMember, type MemberOutcome } from './teamRuns.js';
@@ -118,14 +118,14 @@ export function teamDue(st: TeamState, cap: number): string[] {
   }
   return out;
 }
-/** 从一段发言里按出现顺序解析被 @ 的成员(按 @<name> 或 @<slug>;排除自己;去重)。模型不守约定 = 无人被点名。 */
-export function parseMentions(text: string, participants: Array<{ slug: string; name: string }>, selfSlug: string): string[] {
+/** 从一段发言里按出现顺序解析被 @ 的成员(按 @任一名字 或 @<slug>;排除自己;去重)。模型不守约定 = 无人被点名。 */
+export function parseMentions(text: string, participants: Array<{ slug: string; name: string; nameZh?: string; nameEn?: string }>, selfSlug: string): string[] {
   // 词法边界:@Ann 不能命中 @Anna(名字 / slug 后面不能紧跟字母数字 _ -);同一位置多个命中取最长;重叠命中只算一个。
   const esc = (k: string): string => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const hits: Array<{ i: number; len: number; slug: string }> = [];
   for (const a of participants) {
     if (a.slug === selfSlug) continue;
-    for (const key of new Set([a.name, a.slug].filter(Boolean))) {
+    for (const key of new Set([...agentNames(a), a.slug])) {
       const re = new RegExp(`@${esc(key)}(?![\\p{L}\\p{N}_-])`, 'gu');
       let m: RegExpExecArray | null;
       while ((m = re.exec(text))) { hits.push({ i: m.index, len: m[0].length, slug: a.slug }); if (!m[0].length) re.lastIndex++; }
@@ -275,7 +275,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     }
 
     const maxRounds = roundCap(p.agentConfig.groupMaxRounds);
-    const roster = participants.map((a) => `- ${a.name}(${a.slug})：${a.description || '——'}`).join('\n');
+    const roster = participants.map((a) => `- ${agentNames(a).join(' / ')}(${a.slug})：${a.description || '——'}`).join('\n');
 
     // ③ 已读指针(seen[slug] = transcript 中已注入到该成员的条数);成员的私有上下文住在各自的工作会话里(teamRuns.ts),这里不再持有。
     const seen = new Map<string, number>();
@@ -425,6 +425,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
         teamRunId: runId, teamSessionId: sessionId, userId, appId: p.appId, modelId,
         member: agent, inlineDef: inlineSlugs.has(slug), delta, cycle, roster, teamDoc: teamDocFor(agent),
         execMode: p.execMode, cwd: p.cwd, extraRoots: p.extraRoots, wsProject: p.wsProject, approvalMode, followSessionMode: p.followSessionMode, signal,
+        maxIterations: memberLoopCap(p.agentConfig.maxIterations),
         remote: effectiveRemote({ remote: p.remote, runId }),
         onStarted: (ids) => {
           childId = ids.runId; childRuns.set(slug, ids.runId);
@@ -649,6 +650,12 @@ async function account(p: GroupChatParams, res: StreamResult, effModelId: string
   return cost;
 }
 
+/** 团队 run 的轮数上限传给成员单次发言;非正数 / 非数 = 没设。 */
+function memberLoopCap(v: unknown): number | undefined {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : undefined;
+}
+
 /** 显式 groupMaxRounds(内部调用方:讨论 / Historian 辅助)钳 1..MAX;没传 = 兜底天花板本身,不是缺省上限。 */
 function roundCap(v: any): number {
   const n = Math.floor(Number(v));
@@ -699,7 +706,7 @@ export function sanitizeTempAgents(raw: any): NormalAgentDef[] {
       model: String(r.model || '').trim(),
       tools: Array.isArray(r.tools) ? r.tools.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 100) : [],
       thinkingLevel: THINK_LEVELS.includes(r.thinkingLevel) ? r.thinkingLevel : '',
-      maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.min(200, Math.floor(maxIter)) : null,
+      maxIterations: Number.isFinite(maxIter) && maxIter > 0 ? Math.floor(maxIter) : null,
       // H5 fail-closed:空 / 纯空白 / 缺席 = ''(跟随会话);未知非空值 → readonly 并告警(旧口径静默写 '' = 放宽)。
       // 首尾空白先剥(与 projectContext / agentRegistry 同口径)。
       // 'custom' 现在照收 —— 与 agentRegistry 落盘口径一致(旧白名单漏了它,自定义档的临时成员被悄悄抹成跟随会话)。

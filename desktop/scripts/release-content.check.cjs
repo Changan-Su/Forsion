@@ -110,7 +110,8 @@ for (const dir of resources) {
   check(preload.includes('desktopPermissionsStatus'), 'Permission status bridge missing')
 
   // 每个内置包:npm 上钉死的精确正式版(Dependabot 提 PR 升级;范围或本地 file: 依赖都会让安装包内容不可复现;
-  // 刻意不收预发布版:播种按 cmpVersion 比版本,它把 0.5.9-rc.1 排在 0.5.9 之上,内置过预发布版,正式版就永远换不上去),
+  // 刻意不收预发布版:安装包只带正式版。10-25 之前的 cmpVersion 把 0.5.9-rc.1 排在 0.5.9 之上,内置过预发布版,
+  // 老桌面上同号正式版就永远换不上去;现在排序已改对,这条照旧守着),
   // 随包那份的 id / 版本对得上,带主进程半身的还要过清单里钉的公钥。
   for (const bundle of builtinBundles) {
     if (bundle.requiresSpace && !product.spaces.includes(bundle.requiresSpace)) continue

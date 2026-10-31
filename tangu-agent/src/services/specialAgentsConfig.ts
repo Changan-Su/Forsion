@@ -86,6 +86,12 @@ export interface MuseConfig {
   notify: 'immediate' | 'digest';
   /** 难活升级给哪个 agent(slug;空=由 developer_instructions 自行决定/不升级)。经 delegate 按该 agent 的模型跑。 */
   escalateTo: string;
+  /** 收件箱里用户点过「好」、Muse 可以自动标已读的类别(services/inboxCategory.ts)。这是一次总的授权,「询问」档也不再逐封弹审批。 */
+  inboxAutoRead: string[];
+  /** 用户点过「这类以后都别管」的类别:不提醒也不标。 */
+  inboxIgnored: string[];
+  /** 一天最多主动找用户几次(message_user 与 Muse 自己发起的卡;0=不限,每小时 3 条照旧)。 */
+  maxDmPerDay: number;
 }
 // 注:旧字段 compactAtRatio(声明后从未被读)与 prompt(人格已迁入 ~/.tangu/agents/muse/ 文件夹,
 // 见 legacyMusePrompt 的一次性迁移)已移除;旧 config.json 里的残留键被 normalize 静默丢弃。
@@ -145,6 +151,9 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     heartbeatMinutes: 120,
     notify: 'immediate',
     escalateTo: '',
+    inboxAutoRead: [],
+    inboxIgnored: [],
+    maxDmPerDay: 0,
   },
 };
 
@@ -156,6 +165,8 @@ const clampInt = (v: any, def: number, min: number, max: number): number => {
 };
 const asStr = (v: any, def = ''): string => (typeof v === 'string' ? v : def);
 const asBool = (v: any, def: boolean): boolean => (typeof v === 'boolean' ? v : def);
+
+const asCategories = (v: any): string[] => (Array.isArray(v) ? [...new Set(v.filter((x: any) => typeof x === 'string' && /^[a-z-]{1,32}$/.test(x)))].slice(0, 16) as string[] : []);
 
 function normalizeActiveHours(v: any): { start: number; end: number } | null {
   if (!v || typeof v !== 'object') return null;
@@ -204,6 +215,9 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       ),
       notify: m.notify === 'digest' ? 'digest' : d.muse.notify,
       escalateTo: asStr(m.escalateTo, d.muse.escalateTo).trim().slice(0, 64),
+      inboxAutoRead: asCategories(m.inboxAutoRead),
+      inboxIgnored: asCategories(m.inboxIgnored),
+      maxDmPerDay: clampInt(m.maxDmPerDay, d.muse.maxDmPerDay, 0, 24),
     },
   };
 }
@@ -244,6 +258,14 @@ export function saveSpecialAgentsConfig(patch: SpecialAgentsPatch): SpecialAgent
       historian: { ...cur.historian, ...(patch.historian || {}) },
       muse: { ...cur.muse, ...(patch.muse || {}) },
     });
+  })!;
+}
+
+/** 在配置锁里按当前值算出 Muse 的改动:用户点卡要往列表里加一项,读改写不能隔着锁。 */
+export function updateMuseConfig(fn: (cur: MuseConfig) => Partial<MuseConfig>): SpecialAgentsConfig {
+  return updateSection('specialAgents', (sec): SpecialAgentsConfig => {
+    const cur = specialAgentsFrom(sec);
+    return normalizeConfig({ ...cur, muse: { ...cur.muse, ...fn(cur.muse) } });
   })!;
 }
 
@@ -307,28 +329,60 @@ export function applySpecialAgentEnableMigration(): SpecialAgentsConfig {
  * 用户显式配置 > 本地 `~/.tangu/config.json` 的 `models.background`(桌面设置/引导写) >
  * admin 的 app 级「辅助模型」槽 > app 级对话默认 > profile 静态默认。
  * 用户没手动选模型时跟随云端(admin 改了下次解析即生效);选过即脱离跟随。
+ * 选过的托管模型若已被 admin 停用,顺次回落到下一档,不再原样返回 —— 否则 Historian / 项目记忆 / Muse
+ * 每轮都吃上游「Model 'x' is disabled」静默失败(2026-10-25 用户反馈)。直连模型不受云端约束,也不等云端;
+ * 拉不到目录(断网 / 未登录)时一律放行,宁可沿用旧选择也不误判。
  * 60s 缓存(Historian 每轮触发,避免连环拉模型列表)。
  */
-let bgSlotCache: { at: number; bg: string; def: string } | null = null;
-export async function resolveBackgroundModelId(explicit: string): Promise<string> {
-  if (explicit) return explicit;
-  const local = String((getRawSection('models') as any)?.background || '').trim();
-  if (local) return local;
+let bgSlotCache: { at: number; bg: string; def: string; enabled: Set<string> | null } | null = null;
+const staleWarned = new Set<string>();
+async function backgroundCatalog(): Promise<NonNullable<typeof bgSlotCache>> {
   const now = Date.now();
-  if (!bgSlotCache || now - bgSlotCache.at > 60_000) {
-    let bg = '';
-    let def = '';
-    try {
-      const list = deps().brain.models.listModelsForProject;
-      if (list) {
-        const r = await list(deps().profile.appId);
+  if (bgSlotCache && now - bgSlotCache.at <= 60_000) return bgSlotCache;
+  const m = deps().brain.models;
+  let bg = '';
+  let def = '';
+  let enabled: Set<string> | null = null;
+  await Promise.all([
+    (async () => {
+      try {
+        const r = await m?.listModelsForProject?.(deps().profile.appId);
         bg = String(r?.backgroundModelId || '');
         def = String(r?.defaultModelId || '');
-      }
-    } catch { /* 云端不可达 → 落 profile 静态默认 */ }
-    bgSlotCache = { at: now, bg, def };
+      } catch { /* 云端不可达 → 落 profile 静态默认 */ }
+    })(),
+    (async () => {
+      // 停用判定按全局 enabled 列表,不按 profile.appId 的应用目录:云端 worker 的 appId 是基线应用,按它筛会误伤
+      // 别的应用的合法选择。id 与上游名(apiModelId)都算 —— 云端解析模型时两种都认。
+      try {
+        const all = await m?.listGlobalModels?.();
+        if (all?.length) enabled = new Set(all.flatMap((x: any) => [x?.id, x?.apiModelId]).filter(Boolean).map(String));
+      } catch { /* 同上:拉不到 → 不判 */ }
+    })(),
+  ]);
+  return (bgSlotCache = { at: now, bg, def, enabled });
+}
+
+export async function resolveBackgroundModelId(explicit: string): Promise<string> {
+  const local = String((getRawSection('models') as any)?.background || '').trim();
+  const picks = [() => explicit, () => local, async () => (await backgroundCatalog()).bg, async () => (await backgroundCatalog()).def];
+  for (const pick of picks) {
+    const id = await pick();
+    if (!id) continue;
+    if (deps().brain.models?.hasDirectModel?.(id)) return id;
+    const { enabled } = await backgroundCatalog();
+    if (!enabled || enabled.has(id)) return id;
+    if (!staleWarned.has(id)) {
+      staleWarned.add(id);
+      console.warn(`[specialAgents] 后台模型 ${id} 已被停用或下架,回落下一档`);
+    }
   }
-  return bgSlotCache.bg || bgSlotCache.def || deps().profile.defaultModelId || '';
+  return deps().profile.defaultModelId || '';
+}
+
+export function __resetBackgroundSlotCacheForTests(): void {
+  bgSlotCache = null;
+  staleWarned.clear();
 }
 
 /** 当前设备本地时是否在运行时段内（activeHours=null → 恒 true；支持跨夜）。 */

@@ -26,6 +26,10 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['OpenAI GPT-6.1 Sol', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.1-sol' }, 'openai-gpt61-sol'],
     ['Codex GPT-6.1 Sol 请求', { protocol: 'openai-responses', modelId: 'gpt-6.1-sol' }, 'codex-gpt61-sol'],
     ['Codex GPT-6.1 Sol 目录', { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6.1-sol' }, 'codex-gpt61-sol'],
+    // ⚠️ 判别式:6.1 Terra 认 none(10-27 后端 400 原文),必须落 Sol/Luna 表,不能跟 6.1 Sol 进 Astra 表
+    ['OpenAI GPT-6.1 Terra', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.1-terra' }, 'openai-gpt6'],
+    ['Codex GPT-6.1 Terra 请求', { protocol: 'openai-responses', modelId: 'gpt-6.1-terra' }, 'codex-gpt6'],
+    ['Codex GPT-6.1 Terra 目录', { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6.1-terra' }, 'codex-gpt6'],
     ['未知 GPT-6.1 变体不预支档位', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.1-luna' }, 'openai-nonreasoning'],
     ['OpenAI GPT-6 Astra', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-astra' }, 'openai-astra'],
     ['OpenAI GPT-6 Sol', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-sol' }, 'openai-gpt6'],
@@ -210,7 +214,7 @@ describe('applyThinking — 各家线上形态', () => {
 
   // 后端 400 原文(09-22 实测):Sol/Luna 合法值 = none/low/medium/high/xhigh/max —— 能关、没有 minimal,
   // 与 Astra(没有 none)不同,别合表。
-  it.each(['gpt-6-sol', 'gpt-6-luna'])('%s:off 发 none(官方路径留在 chat/completions),minimal 折到 low,max 真档', (modelId) => {
+  it.each(['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-terra'])('%s:off 发 none(官方路径留在 chat/completions),minimal 折到 low,max 真档', (modelId) => {
     for (const q of [
       { baseUrl: 'https://api.openai.com/v1', modelId },
       { protocol: 'openai-responses', modelId },
@@ -306,6 +310,12 @@ describe('applyThinking — 各家线上形态', () => {
     const { payload } = apply({ baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-4.8' }, 'max');
     expect(payload.thinking).toEqual({ type: 'adaptive', display: 'summarized' });
     expect(payload.output_config).toEqual({ effort: 'max' });
+  });
+
+  it('Claude 自适应:未给 max_tokens 时补足上限(否则 8192 缺省被 max 档思考吃光),给了就不动', () => {
+    const target = { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5-5' };
+    expect(apply(target, 'max').payload.max_tokens).toBe(32000);
+    expect(apply(target, 'low', { max_tokens: 1600 }).payload.max_tokens).toBe(1600);
   });
 
   it('gpt-5.6 起 effort 有真 max;5.5 到 xhigh 为止;两代都没有 minimal', () => {

@@ -3148,14 +3148,50 @@ async function main() {
         document.querySelector(s).dispatchEvent(ev)
       }, PM)
       await pg.waitForTimeout(120)
-      const during = await pg.evaluate((s) => document.querySelector(s).textContent.includes('上传中'), PM)
+      // 占位只在显示层(bodyUploads 的 widget):屏幕上有,文档里没有 —— 自动保存写不进 .md
+      const during = await pg.evaluate((s) => ({
+        shown: !!document.querySelector(`${s} .amx-upph-file`) && document.querySelector(s).textContent.includes('上传中'),
+        inDoc: window.__upage.probe.view().state.doc.textContent.includes('上传中'),
+      }), PM)
       await pg.waitForTimeout(600)
       const after = await pg.evaluate((s) => {
         const t = document.querySelector(s).textContent
-        return { placeholder: t.includes('上传中'), embedded: /A\.pdf/.test(t) }
+        return { placeholder: t.includes('上传中') || !!document.querySelector(`${s} .amx-upph`), embedded: /A\.pdf/.test(t) }
       }, PM)
-      record('U2 上传先出占位块,拿到路径后替换成嵌入行', during && !after.placeholder && after.embedded,
+      record('U2 上传先出占位(不进文档),拿到路径后原地换成嵌入行', during.shown && !during.inDoc && !after.placeholder && after.embedded,
         JSON.stringify({ during, ...after }))
+      await pg.close()
+    }
+    // U2b 粘贴图片:先出本地预览 + 环,传完换成图片节点;失败给重试,重试成功照样插进去
+    {
+      const pg = await openSeed('正文。\n')
+      await pg.evaluate(() => {
+        let n = 0
+        window.amadeus.saveAttachment = () => new Promise((res, rej) => setTimeout(() =>
+          (n++ === 0 ? rej(new Error('offline')) : res({ pageRel: 'attachments/p.png', base: 'p.png', abs: '/tmp/p.png' })), 250))
+      })
+      await pg.evaluate((s) => {
+        const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='), (c) => c.charCodeAt(0))
+        const dt = new DataTransfer()
+        dt.items.add(new File([png], 'image.png', { type: 'image/png' }))
+        const ev = new ClipboardEvent('paste', { bubbles: true, cancelable: true })
+        Object.defineProperty(ev, 'clipboardData', { value: dt })
+        document.querySelector(s).dispatchEvent(ev)
+      }, PM)
+      await pg.waitForTimeout(120)
+      const preview = await pg.evaluate((s) => /^blob:/.test(document.querySelector(`${s} .amx-upph-img img`)?.src || ''), PM)
+      await pg.waitForTimeout(500)
+      const failed = await pg.evaluate((s) => !!document.querySelector(`${s} .amx-upph-img.is-failed`), PM)
+      await pg.evaluate((s) => document.querySelector(`${s} .amx-upph-img.is-failed .amx-upph-act`).click(), PM)
+      await pg.waitForTimeout(600)
+      const after = await pg.evaluate((s) => {
+        const v = window.__upage.probe.view()
+        let img = null
+        v.state.doc.descendants((n) => { if (n.type.name === 'image') img = n.attrs.src })
+        return { widget: !!document.querySelector(`${s} .amx-upph`), img }
+      }, PM)
+      record('U2b 粘贴图片:本地预览占位 → 失败可重试 → 换成图片节点', preview && failed && !after.widget && /p\.png/.test(after.img || ''),
+        JSON.stringify({ preview, failed, ...after }))
       await pg.close()
     }
     // U3 双击图片开大图;Esc 关。

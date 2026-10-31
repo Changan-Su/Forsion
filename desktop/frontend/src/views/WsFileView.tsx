@@ -22,13 +22,12 @@ import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { PlainMarkdownEditor } from '../amadeus/blocks/markdown/MarkdownBlock'
 import { getTransientTarget, hostTargetFor, pendingWrites } from './wsFileNav'
 import { useApp } from '../stores/appStore'
-import { bumpDir } from '@tangu/ui/views/chat2/FilesPanel'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { findFileType, usePluginStore } from '@amadeus/plugins/pluginStore'
 import { openNote } from '../amadeusNav'
 import { newTabOf } from './itemSelect'
 import type { CtxItem } from '../components/RightPanel'
-import { DeskChromeContext } from '../amadeus/plugins/tanguSeam'
+import { DeskChromeContext, readTanguShell } from '../amadeus/plugins/tanguSeam'
 
 /** 卸载冲刷失败/冲突时的兜底:把未保存内容另存为旁路文件(绝不静默丢),全局 toast 告知。 */
 async function salvageDraft(path: string, content: string): Promise<void> {
@@ -36,7 +35,7 @@ async function salvageDraft(path: string, content: string): Promise<void> {
   const salvagePath = path.replace(/(\.[^./\\]+)?$/, `.本地未保存-${Date.now()}$1`)
   try {
     await window.tangu?.writeHostFile?.(salvagePath, content, undefined, true)
-    bumpDir(salvagePath.slice(0, Math.max(salvagePath.lastIndexOf('/'), salvagePath.lastIndexOf('\\'))))
+    readTanguShell()?.bumpDir(salvagePath.slice(0, Math.max(salvagePath.lastIndexOf('/'), salvagePath.lastIndexOf('\\'))))
     toast(useApp.getState().tr('preview.mdSalvaged', { file: salvagePath.split(/[/\\]/).pop() || salvagePath }), true)
   } catch {
     toast(useApp.getState().tr('preview.mdSaveFail', { err: path }), true)
@@ -272,10 +271,11 @@ export function WsFileView({ leaf }: ViewProps) {
     if (!data || (kind !== 'xlsx' && kind !== 'pptx')) { setOffice(null); setOfficeErr(false); return }
     let cancelled = false
     setOffice(null); setOfficeErr(false); setSheetIdx(0)
-    loadOffice(data.bytes, kind)
+    const controller = new AbortController()
+    loadOffice(data.bytes, kind, controller.signal)
       .then((r) => { if (!cancelled) setOffice(r) })
       .catch(() => { if (!cancelled) setOfficeErr(true) })
-    return () => { cancelled = true }
+    return () => { cancelled = true; controller.abort() }
   }, [data, kind])
 
   const openWithDefault = (): void => {
@@ -384,7 +384,7 @@ export function WsFileView({ leaf }: ViewProps) {
     : cm({ value: text, language: 'html', wrap, focusLine: focus })
   else if (kind === 'docx') body = <DocxView bytes={data.bytes} download={target.download} />
   else if (kind === 'xlsx' || kind === 'pptx') {
-    body = officeErr ? <OfficeFail t={t} download={target.download} />
+    body = officeErr ? <OfficeFail t={t} download={target.download} workbook={kind === 'xlsx'} />
       : !office ? <Spinner />
       : office.kind === 'xlsx' ? (
         <div className="wsfile-sheetwrap">

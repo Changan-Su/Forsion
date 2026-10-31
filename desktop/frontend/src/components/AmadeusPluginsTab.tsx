@@ -10,19 +10,23 @@ import { NativeFeaturesSection } from '../features/NativeFeaturesSection'
  * 数据源是 vendored 的 usePluginStore(与 Amadeus Space 同一单例);样式照 PluginsTab 的 hint/btn 约定。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { ArrowLeft } from 'lucide-react'
-import { pluginFootprint, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { ArrowLeft, Bot, CalendarDays, Cloud, NotebookText, type LucideIcon } from 'lucide-react'
+import { useSpaceStore } from '@lcl/engine'
+import { pluginFootprint, pluginVaultFolder, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { PluginUninstallDialog } from './UninstallDialog'
+import { uninstallForsionPlugin } from './pluginUninstall'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
-import { pluginDataSyncUserOff, setPluginDataSyncUserOff } from '../amadeus/plugins/pluginDataSync'
+import { pluginDataSyncOn, pluginDataSyncUserOff, setPluginDataSyncUserOff } from '../amadeus/plugins/pluginDataSync'
 import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
 import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, isPlacedSettingsView } from '../amadeus/plugins/display'
 import { Markdown } from './Markdown'
+import { SettingsSwitch } from './SettingsPrimitives'
 import { KNOWN_APPS } from '../../../shared/knownApps'
 import { rescanPlugins, setPluginEnabled, type PluginInfo } from '../services/backendService'
-import { loadUserSpaces } from '../userSpaces'
+import { loadUserSpaces, pluginOfSpace } from '../userSpaces'
 import { hiddenSpaceName, hiddenSpaceReason, useHiddenSpacesOf } from '../pluginSpaceHealth'
 import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
@@ -33,6 +37,7 @@ import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
 import type { PluginCapability, PluginDependency } from '@amadeus-shared/ipc'
+import type { UnmetDependency } from '../amadeus/plugins/pluginDeps'
 import { PluginLogo } from './PluginLogo'
 import { canOpenPluginsFolder } from '../amadeus/lib/hostCaps'
 import { FileOpenersPanel } from './FileOpenersPanel'
@@ -145,6 +150,14 @@ registerMessages({
 
 /** 启停后的捆绑包级联:内嵌 Space 显隐同步 + 刷新引擎插件列表。内嵌引擎插件的开关**不在这里写** —— 这里多半是设置浮窗,
  *  它的运行态未必等于主窗的;由主窗收到偏好 / 开启戳后在 syncBundleEngines 里统一串行写(Codex 10-02)。 */
+/** 核心插件卡:说明各自一条(别再落到电脑操作那条上),没有 logo 时的图标 = Ribbon / Space 里那个。 */
+const CORE_DESCRIPTIONS: Record<string, string> = {
+  'forsion-extend': 'plugins.core.extend',
+  'tangu-computer-use': 'plugins.core.computerUse',
+  'forsion-calendar': 'plugins.core.calendar',
+}
+const CORE_ICONS: Record<string, LucideIcon> = { 'forsion-extend': Cloud, 'forsion-calendar': CalendarDays }
+
 function cascadeAfterToggle(p: AmadeusPlugin, onEngineReload?: () => void): void {
   void loadUserSpaces() // 无 bundle 时幂等无害
   if (p.bundle?.enginePlugins?.length) onEngineReload?.()
@@ -186,7 +199,7 @@ const PluginSwitch: React.FC<{ p: AmadeusPlugin; onFlip: () => void }> = ({ p, o
   const stuck = !!p.blocked || unmet.length > 0
   return (
     <span title={unmet.length ? t('settings.amadeusPlugins.needsDepsToEnable', { list: unmet.map((u) => depName(u.dep, plugins, locale)).join(t('common.listSep')) }) : undefined} onClick={(e) => e.stopPropagation()}>
-      <input type="checkbox" data-plugin-switch checked={wanted && !p.blocked} disabled={stuck} onChange={onFlip} style={{ cursor: stuck ? 'not-allowed' : 'pointer' }} />
+      <SettingsSwitch data-plugin-switch="" checked={wanted && !p.blocked} disabled={stuck} label={pluginDisplayName(p, locale)} onChange={onFlip} />
     </span>
   )
 }
@@ -228,46 +241,62 @@ const HiddenSpaces: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   )
 }
 
-/** 前置插件:逐条说清楚状态,给能做的那一步(去市场找 / 打开它)。 */
-const RequiredPlugins: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+/** 商店详情页复用前置行时给的东西(MarketModal):整条未满足的链、每行商店里的情况、一键按钮。 */
+export interface RequiredPluginsStore {
+  unmet: UnmetDependency[]
+  row(dep: PluginDependency): { note?: string; find?: boolean }
+  find(query: string): void
+  foot: React.ReactNode
+}
+
+/** 前置插件:逐条说清楚状态,给能做的那一步(去市场找 / 打开它)。设置页与商店详情页共用这些行,商店那边多一句商店里的情况和一键按钮。 */
+export const RequiredPlugins: React.FC<{ p: AmadeusPlugin; store?: RequiredPluginsStore }> = ({ p, store }) => {
   const { t, locale } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
   const disabledIds = usePluginStore((s) => s.disabledIds)
-  const deps = p.requiresPlugins ?? []
+  const direct = p.requiresPlugins ?? []
+  // 商店那边要补全整条链:前置自己缺的也列出来,否则按钮的数字和行对不上
+  const deps = store ? [...direct, ...store.unmet.map((u) => u.dep).filter((d) => !direct.some((x) => x.id === d.id))] : direct
   if (!deps.length) return null
-  const unmet = unmetPluginDeps(p, { plugins, activeIds, disabledIds })
+  const unmet = store?.unmet ?? unmetPluginDeps(p, { plugins, activeIds, disabledIds })
   const market = !!window.tangu?.marketList && !window.tangu?.unitPage
+  const hint = <div style={{ color: 'var(--text-faint)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.requiresHint')}</div>
+  const rows = deps.map((d) => {
+    const u = unmet.find((x) => x.dep.id === d.id)
+    const installed = plugins.find((x) => x.id === d.id)
+    // 前置自己也缺前置时「启用」点了没反应 —— 那就不给按钮,状态行已经说了它关着
+    const canEnable = u?.reason === 'off' && !!installed && !unmetPluginDeps(installed, { plugins, activeIds, disabledIds }).length
+    const row = store?.row(d)
+    const canFind = store ? !!row?.find : market && (u?.reason === 'missing' || u?.reason === 'version')
+    return (
+      <div key={d.id} data-dep-id={d.id} data-dep-state={u?.reason ?? 'ok'} style={store ? { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 5 } : { display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={store ? undefined : { flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
+            {depName(d, plugins, locale)}
+            {d.minVersion && <span style={{ color: 'var(--text-faint)' }}> ≥ {d.minVersion}</span>}
+          </div>
+          <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: u ? 'var(--warn, #b8860b)' : 'var(--text-faint)' }}>
+            {!u ? t('settings.amadeusPlugins.dep.ok')
+              : u.reason === 'version' ? t('settings.amadeusPlugins.dep.version', { min: d.minVersion ?? '', have: u.have ?? '' })
+              : t(`settings.amadeusPlugins.dep.${u.reason}`)}
+            {row?.note && <span data-dep-note> · {row.note}</span>}
+          </div>
+        </div>
+        {canFind && (
+          <button className="btn ghost sm" onClick={() => (store ? store.find(d.name || d.id) : useApp.getState().openMarket(d.market || d.name || d.id))}>{t('settings.amadeusPlugins.dep.findInMarket')}</button>
+        )}
+        {canEnable && <button className="btn ghost sm" onClick={() => usePluginStore.getState().enable(d.id)}>{t('settings.amadeusPlugins.dep.enable')}</button>}
+      </div>
+    )
+  })
+  if (store) return <div className="mk-deps" data-market-deps={p.id}><div className="mk-deps-head">{t('settings.amadeusPlugins.requires')}</div>{rows}{store.foot}{hint}</div>
   return (
     <>
       <div className="hint">{t('settings.amadeusPlugins.requires')}</div>
       <div className="plugin-card" data-plugin-requires style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {deps.map((d) => {
-          const u = unmet.find((x) => x.dep.id === d.id)
-          const installed = plugins.find((x) => x.id === d.id)
-          // 前置自己也缺前置时「启用」点了没反应 —— 那就不给按钮,状态行已经说了它关着
-          const canEnable = u?.reason === 'off' && !!installed && !unmetPluginDeps(installed, { plugins, activeIds, disabledIds }).length
-          return (
-            <div key={d.id} data-dep-id={d.id} data-dep-state={u?.reason ?? 'ok'} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
-                  {depName(d, plugins, locale)}
-                  {d.minVersion && <span style={{ color: 'var(--text-faint)' }}> ≥ {d.minVersion}</span>}
-                </div>
-                <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: u ? 'var(--warn, #b8860b)' : 'var(--text-faint)' }}>
-                  {!u ? t('settings.amadeusPlugins.dep.ok')
-                    : u.reason === 'version' ? t('settings.amadeusPlugins.dep.version', { min: d.minVersion ?? '', have: u.have ?? '' })
-                    : t(`settings.amadeusPlugins.dep.${u.reason}`)}
-                </div>
-              </div>
-              {market && (u?.reason === 'missing' || u?.reason === 'version') && (
-                <button className="btn ghost sm" onClick={() => useApp.getState().openMarket(d.market || d.name || d.id)}>{t('settings.amadeusPlugins.dep.findInMarket')}</button>
-              )}
-              {canEnable && <button className="btn ghost sm" onClick={() => usePluginStore.getState().enable(d.id)}>{t('settings.amadeusPlugins.dep.enable')}</button>}
-            </div>
-          )
-        })}
-        <div style={{ color: 'var(--text-faint)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.requiresHint')}</div>
+        {rows}
+        {hint}
       </div>
     </>
   )
@@ -350,7 +379,7 @@ export const SettingRow: React.FC<{ pluginId: string; def: SettingContribution }
         {def.description && <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{def.description}</div>}
       </div>
       {def.type === 'boolean' ? (
-        <input type="checkbox" checked={val === 'true'} onChange={(e) => write(e.target.checked ? 'true' : 'false')} />
+        <SettingsSwitch checked={val === 'true'} label={def.label} onChange={(on) => write(on ? 'true' : 'false')} />
       ) : def.type === 'number' ? (
         <input
           type="number" value={val} min={def.min} max={def.max}
@@ -375,7 +404,7 @@ const PluginSyncRow: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
         <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>{t('settings.amadeusPlugins.syncData')}</div>
         <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)' }}>{t('settings.amadeusPlugins.syncDataHint')}</div>
       </div>
-      <input type="checkbox" data-plugin-sync checked={on} onChange={(e) => { setPluginDataSyncUserOff(p.id, !e.target.checked); setOn(e.target.checked) }} />
+      <SettingsSwitch data-plugin-sync="" checked={on} label={t('settings.amadeusPlugins.syncData')} onChange={(next) => { setPluginDataSyncUserOff(p.id, !next); setOn(next) }} />
     </div>
   )
 }
@@ -552,6 +581,7 @@ const PluginGuide: React.FC<{ plugin: AmadeusPlugin }> = ({ plugin: p }) => {
 /** 带主进程半身的内置包(Forsion Extend)的开关:那一半开窗前就装好、没法热卸,开关改的是**下次开机**装不装。
  *  读主进程的状态,不看渲染半身的 activeIds —— 本机 localStorage 里可能留着旧开关拨下的「关」,主进程半身其实在跑。 */
 const BundleSwitch: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+  const { locale } = useI18n()
   const [busy, setBusy] = useState(false)
   const flip = async (on: boolean): Promise<void> => {
     setBusy(true)
@@ -568,15 +598,9 @@ const BundleSwitch: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
     }
   }
   return (
-    <input
-      type="checkbox"
-      data-bundle-switch
-      checked={!p.bundleOff}
-      disabled={busy || !!p.blocked}
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => void flip(e.target.checked)}
-      style={{ cursor: busy || p.blocked ? 'not-allowed' : 'pointer' }}
-    />
+    <span onClick={(e) => e.stopPropagation()}>
+      <SettingsSwitch data-bundle-switch="" checked={!p.bundleOff} disabled={busy || !!p.blocked} label={pluginDisplayName(p, locale)} onChange={(on) => void flip(on)} />
+    </span>
   )
 }
 
@@ -629,42 +653,11 @@ const PluginDetail: React.FC<{
   useEffect(() => { if (on && isGate(p)) void usePluginOnboarding.getState().evaluate(p.id) }, [p, on])
   const dep = p.requiresApp && KNOWN_APPS[p.requiresApp] ? p.requiresApp : null
   const toggleHere = (): void => flipPlugin(p, t, locale, () => cascadeAfterToggle(p, onEngineReload))
-  const uninstall = async (): Promise<void> => {
-    const name = pluginDisplayName(p, locale)
-    const deps = runningDependents(p.id).map((x) => pluginDisplayName(x, locale))
-    const ask = t('settings.amadeusPlugins.uninstallConfirm', { name })
-    if (!window.confirm(deps.length ? `${t('settings.amadeusPlugins.uninstallDependents', { name, list: deps.join(t('common.listSep')) })}\n\n${ask}` : ask)) return
-    const ids = p.bundle?.enginePlugins ?? []
-    // 先级联关停内嵌引擎插件(尽力):目录一删设置落点就没了,先关能让工具即刻对模型不可见
-    if (cfg) for (const id of ids) await setPluginEnabled(homeTarget(), id, false).catch(() => {})
-    try {
-      await amadeus.uninstallPlugin?.(p.id)
-    } catch (e: any) {
-      // 主进程的开发副本守卫用机器码开头(见 electron/amadeus/ipc.ts 的 uninstallPlugin):
-      // 这条是用户真会撞上的(开发副本可能是别的窗口/上一次会话开的),按当前语言说人话;其余原因码交给 ipcErrorText。
-      // ipcErrorText 已剥掉 Electron invoke 前缀,不认识的码原样透传,所以在它的结果上认前缀。
-      const text = ipcErrorText(e)
-      panelToast(text.startsWith('dev-shadowed') ? t('settings.amadeusPlugins.devShadowedUninstall') : text, true)
-      return
-    }
-    onBack()
-    await reloadPluginsAndAnnounce() // 设置是独立浮窗:主窗 / 分离窗里跑着的那份实例靠广播拆
-    void loadUserSpaces() // 撤下其内嵌 Space
-    if (ids.length) {
-      // 引擎 10-02 起热插拔:重扫发现目录没了就运行期撤掉内嵌插件(依赖它们的先休眠),不用重启。旧引擎(不给 reloadedIds)
-      // 撤不掉工具 / 路由 → 照旧重启并核实;失败要说清「文件已删但引擎待重启」而非谎报成功(codex P1-8)。
-      const r = cfg ? await rescanPlugins(homeTarget()).catch(() => null) : null
-      if (!r?.reloadedIds || r.needsRestart) {
-        const st = await window.tangu?.backendRestart?.().catch(() => null)
-        onEngineReload?.()
-        if (!st || st.state === 'crashed') {
-          panelToast(t('settings.amadeusPlugins.uninstalledRestartPending', { name: pluginDisplayName(p, locale) }), true)
-          return
-        }
-      } else onEngineReload?.()
-    }
-    panelToast(t('settings.amadeusPlugins.uninstalled', { name: pluginDisplayName(p, locale) }))
-  }
+  // 卸载走统一确认框(components/UninstallDialog,10-28 手动卸载规范):插件文件与设置进回收站(可勾「保留设置」),
+  // 库里的工作文件夹缺省留着(可勾「一并移到回收站」);删完 6 秒内可撤销。
+  const [askUninstall, setAskUninstall] = useState(false)
+  const uninstall = (opts: { keepSettings: boolean; moveVault: boolean }): Promise<boolean> =>
+    uninstallForsionPlugin(p, pluginDisplayName(p, locale), opts, { engine: !!cfg, onGone: onBack, onEngineReload })
 
   /** 撤下开发副本:关掉产物的 devLoad 开关,再只重载这一个 id —— 有安装版的话它会在同一拍回来。
    *  刻意不走 amadeus.uninstallPlugin:开发副本在用户自己的项目目录里,宿主绝不去删它。 */
@@ -723,10 +716,19 @@ const PluginDetail: React.FC<{
             <button className="btn ghost sm" onClick={() => void unloadDev()}>{t('settings.amadeusPlugins.devUnload')}</button>
           )
         ) : !p.builtin && !p.preinstalled && !p.agent && !!amadeus?.uninstallPlugin && !window.tangu?.unitPage && (
-          <button className="btn ghost sm" data-plugin-uninstall style={{ color: 'var(--danger, #c0392b)' }} onClick={() => void uninstall()}>
+          <button className="btn ghost sm" data-plugin-uninstall style={{ color: 'var(--danger, #c0392b)' }} onClick={() => setAskUninstall(true)}>
             {t('settings.amadeusPlugins.uninstall')}
           </button>
         )}
+        {askUninstall && <PluginUninstallDialog
+          name={pluginDisplayName(p, locale)}
+          warning={runningDependents(p.id).length ? t('settings.amadeusPlugins.uninstallDependents', { name: pluginDisplayName(p, locale), list: runningDependents(p.id).map((x) => pluginDisplayName(x, locale)).join(t('common.listSep')) }) : undefined}
+          vaultFolder={pluginVaultFolder(p.id, p.name)}
+          cloudData={pluginDataSyncOn(p)}
+          skills={p.bundle?.skills.length ?? 0}
+          agents={p.bundle?.agents ?? []}
+          onConfirm={(opts) => void uninstall(opts)}
+          onClose={() => setAskUninstall(false)} />}
         {/* 带主进程半身的内置包(Forsion Extend):开关管下次开机装不装那一半;没有这座桥(设备页 / 旧壳)就不给开关 */}
         {p.locked
           ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} />
@@ -835,6 +837,7 @@ export const AmadeusPluginsTab: React.FC<{
   const openFolder = usePluginStore((s) => s.openPluginsFolder)
   const scaffold = usePluginStore((s) => s.scaffoldSample)
   usePluginOnboarding((s) => s.version) // 「待引导」徽标随实测结果即时变化
+  const spaces = useSpaceStore((s) => s.spaces)
   const [detail, setDetail] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   useEffect(() => { setDetail(null); setQuery('') }, [section])
@@ -867,6 +870,9 @@ export const AmadeusPluginsTab: React.FC<{
   const builtins = plugins.filter((p) => p.builtin && !isCorePlugin(p) && matches(p))
   const externals = plugins.filter((p) => !p.builtin && !isCorePlugin(p) && matches(p))
 
+  /** 没有 logo 的插件卡:核心插件用它在 Ribbon 里的图标,其余用它注册的第一个 Space 的图标,再没有才是拼图(走查续五 5.8)。 */
+  const fallbackIcon = (p: AmadeusPlugin) => CORE_ICONS[p.id] ?? spaces.find((s) => pluginOfSpace(s.id) === p.id)?.icon
+
   /** 一张插件卡:内置区与外置区同款(区标题已说明归属,卡上不再重复挂「内置/外置」小标签)。 */
   const renderCard = (p: AmadeusPlugin): React.ReactNode => {
     return (
@@ -881,7 +887,7 @@ export const AmadeusPluginsTab: React.FC<{
         onClick={() => setDetail(p.id)}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <PluginLogo url={p.iconUrl} />
+          <PluginLogo url={p.iconUrl} icon={fallbackIcon(p)} />
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
               <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{isCorePlugin(p) && p.id === 'forsion-extend' ? 'Forsion Extend' : pluginDisplayName(p, locale)}</b>
@@ -896,7 +902,7 @@ export const AmadeusPluginsTab: React.FC<{
               <RunBadge p={p} />
               <BundleChips p={p} />
             </div>
-            {pluginDisplayDescription(p, locale) && <div className="plugin-card-description">{isCorePlugin(p) ? t(p.id === 'forsion-extend' ? 'plugins.core.extend' : 'plugins.core.computerUse') : pluginDisplayDescription(p, locale)}</div>}
+            {pluginDisplayDescription(p, locale) && <div className="plugin-card-description">{isCorePlugin(p) ? t(CORE_DESCRIPTIONS[p.id] ?? 'plugins.core.computerUse') : pluginDisplayDescription(p, locale)}</div>}
             {p.locked && <RestartPending p={p} />}
           </div>
           {/* 带主进程半身的内置包:同详情页,开关管下次开机装不装那一半 */}
@@ -912,12 +918,12 @@ export const AmadeusPluginsTab: React.FC<{
     <div className="plugin-management" data-plugin-section="core">
       <div className="hint">{t('plugins.core.hint')}</div>
       {!managedFeatures && hasNativeFeature('amadeus') && <div className="plugin-card plugin-core-native" data-plugin-id="amadeus-core">
-        <PluginLogo />
+        <PluginLogo icon={NotebookText} />
         <div className="plugin-core-native-copy"><strong>Amadeus</strong><div className="hint">{t('plugins.core.amadeus')}</div></div>
         <span className="hint">v{APP_VERSION} · {t('plugins.core.withApp')}</span>
       </div>}
       {!managedFeatures && PRODUCT.agentBackend && <div className="plugin-card plugin-core-native" data-plugin-id="tangu-core">
-        <PluginLogo />
+        <PluginLogo icon={Bot} />
         <div className="plugin-core-native-copy"><strong>Tangu</strong><div className="hint">{t('plugins.core.tangu')}</div></div>
         <EngineVersionHint />
       </div>}

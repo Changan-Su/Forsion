@@ -34,3 +34,17 @@
 .mk-chat-search { display: flex; align-items: center; gap: 8px; color: var(--text-muted); padding: 12px 0; }
 .mk-chat-error { color: var(--danger); overflow-wrap: anywhere; }
 @media (max-width: 600px) { .mk-chat-card-top { flex-wrap: wrap; } .mk-chat-card-top > .mk-compat { margin-left: 48px; } .mk-comment-replies { margin-left: 6px; padding-left: 10px; } .mk-upgrade-filters { padding-left: 12px; padding-right: 12px; } .mk-version-row { align-items: flex-start; flex-direction: column; } }
+
+/* 一键补前置:详情页右栏的前置块(行与设置页同一份 RequiredPlugins)、提示条里的按钮、卡片上的「等待前置插件」 */
+.mk-deps { margin-top: 15px; padding-top: 12px; display: flex; flex-direction: column; gap: 9px; border-top: var(--border-width) solid var(--border); }
+.mk-deps + .mk-trust-row { border-top: 0; margin-top: 0; }
+.mk-deps-head { color: var(--text); font-size: var(--ui-font-caption, 11px); font-weight: 600; }
+.mk-deps .mk-wide-btn { display: flex; align-items: center; justify-content: center; gap: 6px; }
+.mk-notice > .btn { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 6px; }
+.mk-waiting-badge { color: var(--warn, #b8860b); }
+@media (max-width: 720px) {
+  .mk-notice.has-action { flex-wrap: wrap; }
+  .mk-notice.has-action .mk-notice-body { flex: 1 1 calc(100% - 60px); }
+  .mk-notice.has-action .mk-notice-close { order: 1; }
+  .mk-notice.has-action > .btn { order: 2; margin-left: 24px; }
+}

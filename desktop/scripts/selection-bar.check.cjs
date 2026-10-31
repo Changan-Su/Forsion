@@ -122,7 +122,7 @@ async function dragSelect(win, rootSel, text) {
 }
 /** 条的现状:位置、外壳、行里各枚按钮的 data-act(竖线记成 '|')。 */
 const barState = (win) => win.evaluate(() => {
-  const el = document.querySelector('[data-testid="selection-bar"]')
+  const el = document.querySelector('[data-testid="selection-bar"]:not([data-lcl-exit])') // 收起时的退场替身(useExitGhost)不算
   if (!el) return null
   const b = el.getBoundingClientRect()
   const cs = getComputedStyle(el)
@@ -169,18 +169,20 @@ async function pickMore(win, id) {
  *  ⚠️ 连接配置要写进 `<user-data-dir>-dev`:未打包的构建把 userData 改成了它(electron/main.ts),只写在 userdata/ 里应用读不到,
  *  外部令牌是空的 —— 开机不连(boot 要有令牌),只有点掉首启引导那一下不看令牌连一次,之后主窗一重载就停在「先在设置里连接后端」
  *  (10-14 取证:两边都写之后重载四次都连得回)。换语言 / 明暗仍然另起一个实例,首帧就按新偏好起。 */
-async function launch(stubUrl, prefs) {
+async function launch(stubUrl, prefs, fixture = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-selbar-'))
   const userdata = path.join(home, 'userdata'); fs.mkdirSync(userdata)
   const vault = path.join(home, 'vault'); fs.mkdirSync(vault)
+  for (const [name, content] of Object.entries(fixture.notes || {})) fs.writeFileSync(path.join(vault, name), content)
   const plugin = path.join(home, 'plugins', 'selprobe'); fs.mkdirSync(plugin, { recursive: true })
-  fs.writeFileSync(path.join(plugin, 'main.js'), PLUGIN_MAIN)
+  fs.writeFileSync(path.join(plugin, 'main.js'), fixture.pluginMain || PLUGIN_MAIN)
   fs.writeFileSync(path.join(plugin, 'manifest.json'), JSON.stringify({ id: 'selprobe', name: 'selprobe', version: '1.0.0', minAppVersion: '0.0.1', description: '台架用的划线条探针,不是产品插件' }))
   fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
   const token = ['test', Buffer.from(JSON.stringify({ sub: 'test-selbar', exp: Math.floor(Date.now() / 1000) + 86400 * 10 })).toString('base64url'), 'test'].join('.')
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: stubUrl, token }))
   for (const dir of [userdata, `${userdata}-dev`]) {
     fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stubUrl, cloudUrl: stubUrl, token }))
   }
   const app = await electron.launch({ args: [`--user-data-dir=${userdata}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl } })
@@ -214,7 +216,7 @@ async function main() {
         const b = await body()
         inline.push(b)
         if (failMt && b.model_id === 'qwen-mt') return { __code: 500, body: { detail: 'mt upstream down' } }
-        const answer = `译文<${b.language}>:${String(b.selection).slice(0, 8)}`
+        const answer = `译文（${b.language}）:${String(b.selection).slice(0, 8)}`
         return sse([...answer.match(/[\s\S]{1,5}/g).map((text) => ({ type: 'delta', text })), { type: 'done', content: answer, toolCallText: false }])
       }
     },
@@ -238,6 +240,7 @@ async function main() {
       console.log(`DIAG ${name} | ${JSON.stringify(dom)} | ${file}`)
     }
     check('主窗离开首启引导', await skipOnboarding(win))
+    await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' }) // 登录后首次同步卡 2.5s 后弹、会盖住划线条(同 btw.check)
     const input = win.locator('.t2c-ta').first()
     await input.waitFor({ timeout: 30000 })
     await win.locator('text=Parser 重构').first().click()
@@ -253,7 +256,7 @@ async function main() {
     check('聊天里选中文字 → 划线条出现,挂在 body 下、fixed', !!sel1 && !!bar1 && bar1.inBody && bar1.position === 'fixed' && bar1.view === 'chat', JSON.stringify({ sel1, bar1 }))
     check('条在选区上方、水平居中(±2px)、不越出视口', bar1.bottom <= sel1.top + 1 && sel1.top - bar1.bottom < 16 && Math.abs((bar1.left + bar1.right) / 2 - (sel1.left + sel1.right) / 2) <= 2 && bar1.left >= 0 && bar1.right <= bar1.vw && bar1.top >= 0, JSON.stringify({ sel1, bar1 }))
     check('外壳是共用的 .ui-popover 圆角矩形(不是胶囊)', bar1.popover && bar1.radius > 0 && bar1.radius <= 14 && (await win.locator('.t2-quote-menu').count()) === 0, `radius=${bar1.radius}`)
-    check('组成:引用 / 在侧栏提问 / 顺便问 / 翻译 / ⋯(聊天没有自己的工具,不画竖线)', bar1.row.join(',') === 'quote,ask-in-panel,btw,translate,more', bar1.row.join(','))
+    check('组成:引用 / 顺便问 / 翻译 / ⋯(10-18「在侧栏提问」并进顺便问;聊天没有自己的工具,不画竖线)', bar1.row.join(',') === 'quote,btw,translate,more', bar1.row.join(','))
     await shot(win, path.join(shots, 'chat-bar.png'))
     // 选区贴着聊天区顶上时条会压到标签栏上,标签栏是窗口拖拽区(不看层叠):条自己得打 no-drag 的洞,不然按下去是拖窗口。
     // CDP 派发的点击不经过系统的拖拽区,这里只能钉计算样式;先确认标签栏那边读得出 drag,读不出就如实跳过。
@@ -282,9 +285,12 @@ async function main() {
     // ── 「引用」照旧:挂成输入框上方的引用卡,条收起、选区清掉 ──
     await dragSelect(win, CHAT, 'AZURE-FALCON 已记下')
     await win.locator('[data-testid="selection-quote"]').click()
-    await win.locator('[data-chat-surface="chat"] .t2c-quote-text', { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 5000 })
-    check('「引用」挂卡后条收起、选区清掉', !(await barState(win)) && (await win.evaluate(() => window.getSelection().isCollapsed)))
-    await win.locator('[data-chat-surface="chat"] .t2c-quote-x').first().click()
+    await win.locator('.quote-reply-input').waitFor({ timeout: 5000 }) // 先弹就地回复框;空着回车 = 只挂引用
+    await win.keyboard.press('Enter')
+    await win.locator('[data-chat-surface="chat"] .t2c-tilerow .att-tile--quote .att-tile-head', { hasText: 'AZURE-FALCON' }).first().waitFor({ timeout: 5000 })
+    const quoted = { bar: await barState(win), collapsed: await win.evaluate(() => window.getSelection().isCollapsed) }
+    check('「引用」挂卡后条收起、选区清掉', !quoted.bar && quoted.collapsed, JSON.stringify(quoted))
+    await win.locator('[data-chat-surface="chat"] .t2c-tilerow .att-tile--quote .att-tile-x').first().click()
 
     // ── 翻译:只读结果卡;目标语言 = 界面语言之外的那种;缺省走目录里的机器翻译模型 ──
     const sel2 = await dragSelect(win, CHAT, '重构解析器的词法阶段')
@@ -293,7 +299,7 @@ async function main() {
     const req1 = inline.at(-1)
     check('翻译请求:action=translate、选中的文字、中文界面下中文译成英文', req1?.action === 'translate' && req1.selection === '重构解析器的词法阶段' && req1.language === 'English', JSON.stringify(req1))
     check('没在设置里选过翻译模型 → 自动用目录里的机器翻译模型', req1?.model_id === 'qwen-mt', `model_id=${req1?.model_id}`)
-    check('结果卡是只读的:复制 / 重试 / 关闭,没有「替换」「插入下方」', !!c1 && c1.readonly && c1.phase === 'done' && c1.acts.join(',') === 'copy,retry,discard' && c1.preview === '译文<English>:重构解析器的词法', JSON.stringify(c1))
+    check('结果卡是只读的:复制 / 重试 / 关闭,没有「替换」「插入下方」', !!c1 && c1.readonly && c1.phase === 'done' && c1.acts.join(',') === 'copy,retry,discard' && c1.preview === '译文（English）:重构解析器的词法', JSON.stringify(c1))
     check('卡头:目标语言下拉 + 写明是机器翻译', c1.lang === 'English' && /机器翻译.*Qwen MT Flash/.test(c1.hint || '') && c1.title === '翻译', JSON.stringify(c1))
     check('卡贴着选区(下面放不下才翻到上面)、不越出视口;条已收起、选区还在', ((c1.top >= sel2.bottom - 1 && c1.top - sel2.bottom < 16) || (c1.bottom <= sel2.top + 1 && sel2.top - c1.bottom < 16)) && c1.left >= 0 && c1.right <= (await win.evaluate(() => innerWidth)) && !(await barState(win)) && !(await win.evaluate(() => window.getSelection().isCollapsed)), JSON.stringify({ c1, sel2 }))
     await settle(win)
@@ -308,7 +314,7 @@ async function main() {
     await win.locator('[data-testid="inline-ai-lang"]').selectOption('Japanese')
     await until(async () => inline.length >= 2 && inline.at(-1).language === 'Japanese', 5000)
     const c2 = await cardDone(win)
-    check('卡头换语言 = 重译一次', inline.at(-1)?.language === 'Japanese' && c2?.lang === 'Japanese' && c2.preview === '译文<Japanese>:重构解析器的词法', JSON.stringify({ last: inline.at(-1), c2 }))
+    check('卡头换语言 = 重译一次', inline.at(-1)?.language === 'Japanese' && c2?.lang === 'Japanese' && c2.preview === '译文（Japanese）:重构解析器的词法', JSON.stringify({ last: inline.at(-1), c2 }))
     await input.click()
     check('点卡外面卡就收', (await until(async () => !(await card(win)), 3000)) === true)
 
@@ -416,6 +422,7 @@ async function main() {
       app = second.app
       win = second.win
       check('深色 + 英文的实例离开首启引导', await skipOnboarding(win))
+      await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' })
       const row = win.locator('.t2s-srow', { hasText: 'Parser 重构' }).first()
       await row.waitFor({ timeout: 30000 })
       await row.click()
@@ -423,7 +430,7 @@ async function main() {
       await dragSelect(win, CHAT, '重构解析器的词法阶段')
       const barEn = await barReady(win)
       const labels = await win.evaluate(() => [...document.querySelectorAll('[data-testid="selection-bar"] .selbar-row > button')].map((b) => b.textContent.trim()))
-      check('英文界面:条上的字是英文(不是 key、不是中文)', !!barEn && labels.slice(0, 4).every((l) => /^[A-Za-z ]+$/.test(l)) && labels.includes('Translate'), labels.join(' | '))
+      check('英文界面:条上的字是英文(不是 key、不是中文)', !!barEn && labels.slice(0, 3).every((l) => /^[A-Za-z ]+$/.test(l)) && labels.includes('Translate'), labels.join(' | '))
       await shot(win, path.join(shots, 'chat-bar-dark-en.png'))
       await win.locator('[data-testid="selection-translate"]').click({ timeout: 8000 })
       const cEn = await cardDone(win)
@@ -440,4 +447,5 @@ async function main() {
   }
 }
 
-main().catch((e) => { console.error(e); process.exit(1) })
+module.exports = { launch, dragSelect, barReady, cardDone, shot, until, pickMore }
+if (require.main === module) main().catch((e) => { console.error(e); process.exit(1) })

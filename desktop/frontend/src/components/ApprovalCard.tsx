@@ -14,7 +14,7 @@ import type { ApprovalRequest } from '../../../../tangu-agent/src/contracts/clie
 import { DiffView } from './DiffView'
 import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
-import { alwaysAllowWorks, answeredByText, approvalReasonText, approvalRemoteText, MODE_KEY } from '../approvalReason'
+import { alwaysAllowWorks, answeredByText, approvalPreviewText, approvalReasonText, approvalRemoteText, MODE_KEY } from '../approvalReason'
 import { capsForRef } from '../services/engine/targetCaps'
 import { refForSession, useSessionHostName } from '../services/engine/targets'
 
@@ -43,6 +43,27 @@ registerMessages({
   'approval.byRegisteredDevice': { zh: '在已登记设备上', en: 'on a registered device' },
   'approval.byOther': { zh: '在另一台设备上', en: 'on another device' },
   'approval.byChannel': { zh: '经消息通道', en: 'via a messaging channel' },
+  // 散文类预览(approval_request.previewI18n):en 与引擎 webPublishPreview / accountActionPreview 逐字相同
+  'approval.preview.webPublish': {
+    zh: '把 {path} 发布为 Forsion 网页「{name}」（链接名：{slug}）。\n拿到链接的人都能打开。文件存进你的 Forsion 云盘，计入云盘用量。如果你已有名为 {slug} 的网页，它会被替换。',
+    en: 'Publish {path} as a Forsion web page "{name}" (link name: {slug}).\nAnyone with the link can open it. The files go to your Forsion cloud drive and count toward its storage. If you already have a page called {slug}, it is replaced.',
+  },
+  'approval.preview.webUnpublish': {
+    zh: '下线你的 Forsion 网页「{slug}」。它的链接会失效，文件会从你的云盘删除。',
+    en: 'Take down your Forsion web page "{slug}". Its link stops working and its files are deleted from your cloud drive.',
+  },
+  'approval.preview.resetCard': {
+    zh: 'Forsion 账号：使用 1 张额度重置卡，把今日和本周的 AI 额度恢复到 100%。这张卡会被用掉。',
+    en: "Forsion account: use 1 quota reset card — restores today's and this week's AI quota to 100%. The card is spent.",
+  },
+  'approval.preview.moveQuota': {
+    zh: 'Forsion 账号：把 AI 额度上限的 {percent}%（不够就转剩下的全部）转到后台额度（Muse 与自动化用），只在当前周期有效。转过去就转不回来。',
+    en: 'Forsion account: move {percent}% of the AI quota limit (or as much as is left) to the background quota (Muse and automations) for the current period. It cannot be moved back.',
+  },
+  'approval.preview.feedback': {
+    zh: 'Forsion 账号：把这条反馈发给 Forsion 团队：\n{message}',
+    en: 'Forsion account: send this feedback to the Forsion team:\n{message}',
+  },
 })
 
 /** P1-K3:本页点过决定的审批 id(托盘与内嵌两处渲染同一张卡,状态放模块级)。收起后「在哪答的」对答复方自己不写。 */
@@ -57,6 +78,7 @@ export const wasDecidedHere = (approvalId: string): boolean => decidedHere.has(a
 export const isRemoteApprover = (sessionId?: string): boolean => capsForRef(refForSession(sessionId)).remoteApprover
 import { SPOOF_RE, WIDE_BLANK_RE } from './approvalText'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
+import { useGitApproval } from '../views/chat2/GitToolCard'
 
 const TA_MAX_PX = 480
 
@@ -91,6 +113,8 @@ export const ApprovalCard: React.FC<{
   const cmdWideBlank = WIDE_BLANK_RE.test(cmd)
   const resolved = req.status !== 'pending'
   const diff = useMemo(() => (isBash ? null : toolDiffText(req.name, req.arguments)), [isBash, req.name, req.arguments])
+  // git_commit / git_push / git_pull:标题与卡身换成结构化的(提交哪些文件、推到哪个站、用谁的账号,现读);读不到照旧显示引擎写的说明
+  const git = useGitApproval(req.name, req.arguments, sessionId, !resolved && !remote)
 
   // 「总允许」对 escalate / custom-ask / protected 无效(引擎不落),按钮不给 —— 规则见 approvalReason.ts。
   const alwaysWorks = alwaysAllowWorks(req.reason) && !remote
@@ -115,7 +139,7 @@ export const ApprovalCard: React.FC<{
     <div className={`approval-card${resolved ? ' resolved' : ''}`}>
       <div className="approval-title">
         <ShieldQuestion size={15} style={{ color: 'var(--accent-ink)' }} />
-        {t('approval.requestExec', { name: req.name })}
+        {git ? git.title : t('approval.requestExec', { name: req.name })}
         {resolved && (
           <span style={{ fontWeight: 400, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)' }}>
             {req.status === 'approved' ? t('approval.statusApproved') : req.status === 'rejected' ? t('approval.statusRejected') : t('approval.statusExpired')}
@@ -152,7 +176,8 @@ export const ApprovalCard: React.FC<{
         <>
           {/* preview 恒显:引擎把越界警示(英文「⚠ Write outside the workspace · 」)与控制面要害(建什么、到点无人值守跑什么)
               拼进这个字符串;本地化的原因走上面的 why 行。旧事件没有 reason 时它仍是唯一的警示载体,diff 只能附加不能替换 */}
-          <div className="approval-preview">{req.preview}</div>
+          {(!git || /^⚠/.test(req.preview || '')) && <div className="approval-preview">{approvalPreviewText(req, t as (k: string, v?: Record<string, unknown>) => string)}</div>}
+          {git?.body}
           {diff && <div className="approval-diff"><DiffView text={diff} side={false} /></div>}
           {remote && !resolved && approveHere && <div className="approval-why" data-remote-readonly>{t('approval.remoteReadOnly')}</div>}
           {!resolved && !approveHere && <div className="approval-why" data-local-only>{t('approval.localOnly')}</div>}

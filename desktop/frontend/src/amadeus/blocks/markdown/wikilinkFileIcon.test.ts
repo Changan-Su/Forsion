@@ -1,6 +1,6 @@
 // 文件类双链的类型图标按名字认种类(2026-10-14 方案 A):笔记一律不带图标,文件按种类各一枚。
 import { describe, expect, it } from 'vitest'
-import { fileIconKind } from './wikilink'
+import { fileIconKind } from './fileIcon'
 
 describe('fileIconKind', () => {
   it('笔记(裸名 / .md / 版本号式的名字)不带图标', () => {

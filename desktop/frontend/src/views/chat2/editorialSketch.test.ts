@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { SketchItem, ToolEvent } from '../../types'
 import { partitionToolSegment } from './EditorialMessage'
-import { sketchFromToolEvent } from '../../stores/appStore'
+import { sketchFromToolEvent } from '../../tangu/store/tanguSlice'
 
 const done = (id: string, name: string): ToolEvent => ({ id, name, done: true, result: 'ok' })
 
@@ -45,6 +45,17 @@ describe('EditorialMessage inline Sketch ordering', () => {
       { t: 'tools', events: [done('read', 'read_file')] },
     ])
   })
+  it('keeps git tool rows and puts one Git card after a run of consecutive git calls', () => {
+    const running: ToolEvent = { id: 'gp2', name: 'git_push', done: false }
+    const events = [done('read', 'read_file'), done('gs', 'git_status'), done('gc', 'git_commit'), done('gp', 'git_push'), done('run', 'run_bash'), running]
+    const parts = partitionToolSegment(events)
+    expect(parts.map((part) => part.t === 'tools' ? `tools:${part.events.map((ev) => ev.id).join(',')}` : part.t === 'git' ? `git:${part.events.map((ev) => ev.id).join(',')}` : part.t)).toEqual([
+      'tools:read,gs,gc,gp',
+      'git:gs,gc,gp',
+      'tools:run,gp2', // 还在跑的 git 调用不出卡
+    ])
+  })
+
   it('places every completed Sketch immediately after its own tool call', () => {
     const events = [done('read1', 'read_file'), done('sk1', 'sketch'), done('run1', 'run_bash'), done('sk2', 'sketch')]
     const sketches: SketchItem[] = [
@@ -52,7 +63,7 @@ describe('EditorialMessage inline Sketch ordering', () => {
       { callId: 'sk2', html: '<p>TWO</p>' },
     ]
     const parts = partitionToolSegment(events, sketches)
-    expect(parts.map((part) => part.t === 'tools' ? `tools:${part.events.map((ev) => ev.id).join(',')}` : part.t === 'sketch' ? `sketch:${part.item.callId}` : `intelligent:${part.event.id}`)).toEqual([
+    expect(parts.map((part) => part.t === 'tools' ? `tools:${part.events.map((ev) => ev.id).join(',')}` : part.t === 'sketch' ? `sketch:${part.item.callId}` : part.t === 'git' ? `git:${part.events.map((ev) => ev.id).join(',')}` : `intelligent:${part.event.id}`)).toEqual([
       'tools:read1,sk1',
       'sketch:sk1',
       'tools:run1,sk2',

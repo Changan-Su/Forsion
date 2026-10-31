@@ -111,10 +111,10 @@ describe('registry 级:defer 过滤与解锁', () => {
   });
 
   it('muse / automation 系统 run:全量可见,load_tools 不出现', () => {
-    // Muse 只有 auto 档(full-auto)才看得见 manage_automation(2026-09-10:ask/agent 档建 agent_run 规则=把审批档洗成对方的全开)。
+    // Muse 三档都看得见 manage_automation;ask/agent 档只能提规则卡(execute 里收口,见 test/manageAutomationMuseCard)。
     const got = names({ ...base, muse: true, approvalMode: 'full-auto', unlockTools: () => {} });
     expect(got).toContain('manage_automation');
-    expect(names({ ...base, muse: true, approvalMode: 'auto-edit', unlockTools: () => {} })).not.toContain('manage_automation');
+    expect(names({ ...base, muse: true, approvalMode: 'auto-edit', unlockTools: () => {} })).toContain('manage_automation');
     expect(got).not.toContain('load_tools');
     const auto = names({ ...base, automationOrigin: 'rule-1', unlockTools: () => {} });
     expect(auto).toContain('manage_automation');

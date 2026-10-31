@@ -194,7 +194,8 @@ describe('真 loop', () => {
     const text = String(results.find((p) => p.name === 'session_status')?.result ?? '');
     expect(text).toContain('Model: m1');
     expect(text).toMatch(/Context: about [\d,]+ of [\d,]+ tokens in use/); // 第 2 次调用已有实测基准
-    expect(text).toMatch(/This run: step 2 of at most \d+ · 2 model calls so far · \d+s elapsed/);
+    // 会话 / Agent 都没设上限 → 默认不限轮数(10-25 起;原默认 90)
+    expect(text).toMatch(/This run: step 2 \(no step limit\) · 2 model calls so far · \d+s elapsed/);
     expect(text).toContain('Tokens this run: 23,000 in (8,000 served from cache) + 100 out = 23,100'); // 11000 + 12000
     expect(text).toContain('Context growth: about 1,000 tokens per step so far');
     expect(text).toMatch(/This conversation: 1 earlier run used 5,000 tokens; it started 2h 0m ago\./);

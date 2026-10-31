@@ -18,6 +18,9 @@
  *   6 ⚠️同上,但面板在**侧栏**:侧栏 panel 的 contentComponent 就是视图名(主区一律 '__frame'),
  *     反注册后 Dockview 的 components 表里根本没有它 —— 这条才是真会炸的那半。夹具用引擎自己
  *     产出的日历布局(含 todo-list/calendar-config 侧栏面板)搬进 space:tangu 的槽,不手搓 JSON。
+ *     10-23 起(Tangu 界面热更新计划 3a)components 表有兜底:applyNamed 不再抛、不再回退默认布局,
+ *     而是整份应用,日历那几个位置画「此视图暂不可用」占位,插件开回来就地复活。设了 CAL_SHOT=<png 路径>
+ *     就在这一刻截一张图(观感自查用,不入库)。
  *   7 ⚠️**折叠侧栏的 stash**:6 那条靠「fromJSON 抛 → 回退 resetLayout」兜住,但 stash 不在
  *     dockview blob 里 —— 活体面板全已注册时 applyNamed 成功,未注册的 stash 项原样进 store,
  *     一展开侧栏就 openView 一个死视图。tryRestoreLayout 早有 .filter(known),applyNamed 没有。
@@ -190,7 +193,7 @@ async function main() {
     await openLauncher(win)
     const carded = await clickCard(win, ['日历', 'Calendar'])
     const planted = await win.evaluate(SNAP)
-    await enterSpace(win, ['笔记', 'Note'], 'amadeus')
+    await enterSpace(win, ['笔记', 'Notes'], 'amadeus')
     await win.evaluate(toggle(false))
     await win.waitForTimeout(1500)
     errs.length = 0
@@ -212,7 +215,7 @@ async function main() {
     // 6 侧栏面板那半:把引擎刚存下的 space:calendar 布局(10-16 起左 calendar-config / 右 calendar-side)
     //   搬进 space:tangu 的命名槽 —— 真实 blob,不手搓;再关插件、切回 Tangu 让 applyNamed 吃它。
     await enterCalendar(win)
-    await enterSpace(win, ['笔记', 'Note'], 'amadeus') // 切走 = saveNamed('space:calendar')
+    await enterSpace(win, ['笔记', 'Notes'], 'amadeus') // 切走 = saveNamed('space:calendar')
     const cloned = await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')
@@ -234,11 +237,13 @@ async function main() {
       groups: document.querySelectorAll('.dv-groupview').length,
       spaces: document.querySelectorAll('.rb-space').length,
       panels: document.querySelectorAll('.dv-tab').length,
+      placeholders: document.querySelectorAll('[data-view-placeholder]').length,
     }))()`)
+    if (process.env.CAL_SHOT) await win.screenshot({ path: process.env.CAL_SHOT })
     check(
-      '6 侧栏面板版:同上,切回去仍不炸(applyNamed 必须挡掉未注册视图)',
+      '6 侧栏面板版:同上,切回去不炸,日历的位置是占位(布局整份留着)',
       cloned.ok && (cloned.panelTypes || []).includes('calendar')
-        && side.active === 'tangu' && side.calView === 0 && aliveSide.groups > 0 && aliveSide.spaces > 0 && errs.length === 0,
+        && side.active === 'tangu' && side.calView === 0 && aliveSide.groups > 0 && aliveSide.spaces > 0 && aliveSide.placeholders > 0 && errs.length === 0,
       JSON.stringify({ cloned, calView: side.calView, ...aliveSide, errs: errs.slice(0, 2) }),
     )
     await win.evaluate(toggle(true))
@@ -255,7 +260,7 @@ async function main() {
     await win.waitForTimeout(1200)
     await win.click('.dv-edge-right') // 收右栏 → calendar-side 入 stash
     await win.waitForTimeout(1200)
-    await enterSpace(win, ['笔记', 'Note'], 'amadeus') // 切走 = saveNamed('space:calendar')
+    await enterSpace(win, ['笔记', 'Notes'], 'amadeus') // 切走 = saveNamed('space:calendar')
     await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')
@@ -271,7 +276,7 @@ async function main() {
       }
     })()`)
     await win.waitForTimeout(1500)
-    await enterSpace(win, ['笔记', 'Note'], 'amadeus')
+    await enterSpace(win, ['笔记', 'Notes'], 'amadeus')
     const stashFix = await win.evaluate(`(() => {
       const KEY = 'tangu2_named_layouts'
       const m = JSON.parse(localStorage.getItem(KEY) || '{}')

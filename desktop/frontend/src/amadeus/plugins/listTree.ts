@@ -21,6 +21,14 @@ export const isFolder = (item: ListItem): boolean => item.kind === 'folder'
 /** 组头:最上面一级、画成工作区一级行那样的文件夹(`folderStyle: 'group'`)。 */
 export const isGroupHead = (item: ListItem): boolean => isFolder(item) && item.folderStyle === 'group' && !item.parent
 
+/** 筛选藏掉了几行(2026-10-24,借鉴 Comma §2.9):清掉筛选会多出来的行 —— 没筛的那份里有、这一份里没有的(文件夹不算)。
+ *  用集合差,不用两个行数相减:分组不一定是「全部」的子集(收件箱的「已归档」是另一份数据),相减会算错、甚至出负数。
+ *  重复的 key 只算一行,和 buildListTree 画出来的一样(Codex 10-24)。 */
+export function hiddenByFilter(all: ListItem[], shown: ListItem[]): number {
+  const here = new Set(shown.map((item) => item.key))
+  return new Set(all.filter((item) => !isFolder(item) && !here.has(item.key)).map((item) => item.key)).size
+}
+
 /** 手机的整屏列表画得下的形状:平铺的行,外加最多一层组头(组头下面直接是行)。更深的树、普通文件夹仍画成树。 */
 export function fitsPhoneList(items: ListItem[]): boolean {
   const heads = new Set(items.filter(isGroupHead).map((item) => item.key))

@@ -100,6 +100,11 @@ describe('teamRuns', () => {
     expect((memberRunConfig(await base({ followSessionMode: true })) as any).teamMember.followSessionMode).toBe(true);
   });
 
+  it('10-25:团队 run 的轮数上限套到成员单次发言(后台讨论 / Historian 协助靠它保住 90);没设 = 不带,成员按定义或不限', async () => {
+    expect((memberRunConfig(await base({ maxIterations: 90 })) as any).maxIterations).toBe(90);
+    expect('maxIterations' in JSON.parse(JSON.stringify(memberRunConfig(await base({}))))).toBe(false);
+  });
+
   it('activateMember:建会话 → createRun(输入含 delta 与 teamMember)→ onStarted 带 id → 先订阅再入队(子 run 事件转发)→ 终态 done 读回 result.content', async () => {
     childFinishes('接口好了\nDONE');
     const started: any[] = []; const forwarded: string[] = [];

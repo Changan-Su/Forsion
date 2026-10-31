@@ -80,6 +80,7 @@ import {
   toLocalDate,
   useWeekStart,
   useWeekStartPref,
+  wallDiffMin,
   type WeekStartPref,
 } from './calendar/dateUtils'
 
@@ -1027,7 +1028,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
     // resize(start/end):竖向改时长;时间文本随预览实时反算(与 up() 的钳制一致)
     const delta = snap15((((e.clientY - d.y0) / d.zoom) / hourPx) * 60)
     const baseEndForClamp = d.ev.end ?? addMinutes(d.ev.start, 60)
-    const duration = (baseEndForClamp.getTime() - d.ev.start.getTime()) / 60000
+    const duration = wallDiffMin(baseEndForClamp, d.ev.start) // 与 dyMin 同为墙钟分钟
     const dyMin = d.mode === 'start' ? Math.max(-d.min0, Math.min(duration - 15, delta)) : Math.max(15 - duration, delta)
     if (!d.moved && Math.abs(e.clientY - d.y0) < 5) return
     if (!d.moved) { d.moved = true; d.el.classList.add('dragging') }

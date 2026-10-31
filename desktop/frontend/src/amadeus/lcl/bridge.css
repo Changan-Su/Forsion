@@ -27,9 +27,6 @@
   --radius-lg: var(--radius);
   --radius-xl: var(--radius);
   --radius-pill: 9999px;
-  --ease-apple: cubic-bezier(0.25, 0.1, 0.25, 1);
-  --dur-fast: 150ms;
-  --dur-normal: 250ms;
   --font-ui: var(--font);
   --font-mono: var(--mono);
 }
@@ -54,7 +51,4 @@
   --radius-xs: var(--radius-sm);
   --radius-xl: var(--radius-lg);
   --radius-pill: 9999px;
-  --ease-apple: var(--ease-out);
-  --dur-fast: var(--duration-fast);
-  --dur-normal: var(--duration-slow);
 }

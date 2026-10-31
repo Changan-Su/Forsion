@@ -18,6 +18,7 @@
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import type { CloudAccountBrain, CloudResponse } from '../../seams/cloudBrain.js';
+import type { ApprovalPreviewI18n } from '../../services/approvals.js';
 import { deps } from '../../seams/runtime.js';
 import { effectiveRemote } from '../../services/remoteOrigin.js';
 
@@ -205,6 +206,15 @@ export function accountActionPreview(args: any): string {
   if (a.action === 'use_reset_card') return "Forsion account: use 1 quota reset card — restores today's and this week's AI quota to 100%. The card is spent.";
   if (a.action === 'move_quota_to_background') return `Forsion account: move ${a.percent}% of the AI quota limit (or as much as is left) to the background quota (Muse and automations) for the current period. It cannot be moved back.`;
   return `Forsion account: send this feedback to the Forsion team:\n${a.message}`;
+}
+
+/** 同一段的结构化版:桌面卡按界面语言渲染(键 approval.preview.*,en 与上面逐字相同)。请求无效 → 不给,卡上照旧显示英文那句。 */
+export function accountActionPreviewI18n(args: any): ApprovalPreviewI18n | undefined {
+  const a = parseAccountAction(args);
+  if (!a.ok) return undefined;
+  if (a.action === 'use_reset_card') return { key: 'approval.preview.resetCard' };
+  if (a.action === 'move_quota_to_background') return { key: 'approval.preview.moveQuota', vars: { percent: a.percent! } };
+  return { key: 'approval.preview.feedback', vars: { message: a.message! } };
 }
 
 async function act(c: CloudAccountBrain, ctx: ToolContext, args: any): Promise<string> {

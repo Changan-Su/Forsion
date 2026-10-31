@@ -64,6 +64,8 @@ const api = {
     },
   } satisfies ComputerHistoryApi,
   getConfig: (): Promise<any> => ipcRenderer.invoke('config:get'),
+  configRecoveryNotice: (): Promise<{ at: number; version: number } | null> => ipcRenderer.invoke('config:recoveryNotice'),
+  clearConfigRecoveryNotice: (): Promise<void> => ipcRenderer.invoke('config:clearRecoveryNotice'),
   documentTasks: {
     claim: (key, signature) => ipcRenderer.invoke('documentTasks:claim', key, signature),
     complete: (key, token, sessionId) => ipcRenderer.invoke('documentTasks:complete', key, token, sessionId),
@@ -260,6 +262,8 @@ const api = {
   activeWindow: (): Promise<ActiveWindowSample | null> => ipcRenderer.invoke('system:activeWindow'),
   /** 本窗口订阅着的在飞 run 数(「有会话运行时不休眠」,开关与判定在主进程 keepAwake.ts)。 */
   reportRunningSessions: (count: number): void => ipcRenderer.send('power:running', count),
+  /** 在跑 / 等你的会话(托盘 / 菜单栏列出,借鉴 Comma 2.6);各窗口各报一份、主进程按窗口并起来,清洗在 tray.ts sanitizeTraySessions。 */
+  setTraySessions: (rows: Array<{ id: string; title: string; state: 'run' | 'wait' }>): void => ipcRenderer.send('tray:sessions', rows),
   /** 拖入文件 → 绝对路径(Electron≥32 File.path 已移除,必须 webUtils 在渲染层取)。 */
   getPathForFile: (file: File): string => webUtils.getPathForFile(file),
   /** 本机工作区文件浏览:列目录 / 读文件(主进程 fs)。 */
@@ -280,6 +284,8 @@ const api = {
   codePreviewServePath: (filePath: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:servePath', filePath),
   /** 无本机路径的 HTML(云沙箱/对话内联):把文本挂到令牌根,同样拿到真实源。 */
   codePreviewServeHtml: (html: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:serveHtml', html),
+  /** 网页卡片的缩略图:主进程离屏截一张 http(s) 页面(见 electron/pageThumb.ts);拍不到 → null。 */
+  pageThumb: (url: string, version?: string): Promise<{ dataUrl: string; title: string } | null> => ipcRenderer.invoke('pageThumb:capture', url, version),
   /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
   codeProjectsRoot: (): Promise<string> => ipcRenderer.invoke('codeProjects:root'),
   codeStudioWatch: (root: string | null) => ipcRenderer.invoke('codeStudio:watch', root),
@@ -355,10 +361,14 @@ const api = {
   // ── 直连 provider 管理(~/.tangu/providers.json;managed 模式保存后自动重启后端加载)──
   listProviders: (): Promise<any[]> => ipcRenderer.invoke('providers:list'),
   saveProvider: (provider: Record<string, any>): Promise<any[]> => ipcRenderer.invoke('providers:save', provider),
+  /** 本机 CC Switch / Claude Code / Codex 里能导入的连接(只有 key 末 4 位)。 */
+  scanLocalProviders: (force?: boolean): Promise<any[]> => ipcRenderer.invoke('providers:scanLocal', force),
+  importLocalProviders: (ids: string[]): Promise<any[]> => ipcRenderer.invoke('providers:importLocal', ids),
   deleteProvider: (providerId: string): Promise<any[]> => ipcRenderer.invoke('providers:delete', providerId),
   // ── MCP server 管理(~/.tangu/mcp.json;保存后托管后端重启重连)──
+  importMcpConfig: (cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => ipcRenderer.invoke('mcp:import', cfg),
   readMcpConfig: (): Promise<{ mcpServers: Record<string, any> }> => ipcRenderer.invoke('mcp:read'),
-  writeMcpConfig: (cfg: { mcpServers: Record<string, any> }): Promise<{ mcpServers: Record<string, any> }> =>
+  writeMcpConfig: (cfg: { mcpServers: Record<string, any>; base?: Record<string, any> }): Promise<{ mcpServers: Record<string, any> }> =>
     ipcRenderer.invoke('mcp:write', cfg),
   // ── 跨生态 agent 资产发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu)──
   discoveryScan: (): Promise<any> => ipcRenderer.invoke('discovery:scan'),
@@ -425,7 +435,8 @@ const api = {
     ipcRenderer.invoke('market:uninstall', type, slug),
   // ── 后端插件卸载(仅 ~/.tangu/plugins 用户目录;设置清理走后端 DELETE,重启由前端触发)──
   pluginsUserInstalled: (): Promise<Array<{ id: string; slug: string }>> => ipcRenderer.invoke('plugins:userInstalled'),
-  pluginsUninstall: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id),
+  pluginsUninstall: (id: string, movedSlug?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id, movedSlug),
+  marketForget: (type: string, slug: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('market:forget', type, slug),
   // ── 用户自定义 Space(~/.tangu/spaces;数据化布局配方,market type='space' 同目录)──
   spacesList: (): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> => ipcRenderer.invoke('spaces:list'),
   spacesSave: (slug: string, json: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:save', slug, json),
@@ -458,6 +469,11 @@ const api = {
   appDockCandidates: (): Promise<{ windows: import('../shared/appDock').DockCandidate[]; error?: string }> => ipcRenderer.invoke('appDock:candidates'),
   appDockAttach: (target: import('../shared/appDock').DockWindow): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('appDock:attach', target),
   appDockDetach: (): Promise<void> => ipcRenderer.invoke('appDock:detach'),
+  /** 内置浏览器点选元素(契约见 shared/browserPick.ts):guestId = <webview>.getWebContentsId()。start 在点下 / 取消时兑现。 */
+  browserPick: {
+    start: (guestId: number): Promise<import('../shared/browserPick').PickResponse> => ipcRenderer.invoke('browserPick:start', guestId),
+    control: (guestId: number, action: 'cancel' | 'parent'): Promise<boolean> => ipcRenderer.invoke('browserPick:control', guestId, action),
+  },
   /** 应用 / 窗口引用(macOS 与 Windows;别的平台列表为空;契约见 shared/appRefs.ts)。 */
   appRefs: {
     list: (): Promise<import('../shared/appRefs').AppRefList> => ipcRenderer.invoke('appRefs:list'),
@@ -597,6 +613,11 @@ const api = {
     typeof channel === 'string' && cloudPresent().has(channel)
       ? ipcRenderer.invoke(channel, ...args)
       : Promise.reject(new Error(`not a Forsion Extend channel: ${String(channel)}`)),
+  /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程,主进程整形后经 CloudHost.telemetry 转给 Extend。
+   *  只进不出、没有读接口。键在不在 = Extend 有没有注册 telemetry:get(见下方 CLOUD_KEYS):没有 Extend 遥测就没人收,
+   *  渲染层也拿它做同步判断(引导第 7 步「帮助改进」在本机有没有)。 */
+  telemetryReport: (kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void =>
+    ipcRenderer.send('host-telemetry:report', kind, props),
 
   // ── 屏幕共享 ────────────────────────────────────────────────────────────────
   /** 可共享的屏幕/窗口(带 dataURL 缩略图)。选源 UI 由调用方自己画 —— 宿主不提供选择器。 */
@@ -670,8 +691,8 @@ const AGENT_KEYS = [
   'connectMeta', 'connectList', 'connectPublish', 'connectUnpublish',
   'connectListingApply', 'connectListingWithdraw', 'connectStore',
   'submitFeedback',
-  'listProviders', 'saveProvider', 'deleteProvider',
-  'readMcpConfig', 'writeMcpConfig',
+  'listProviders', 'saveProvider', 'deleteProvider', 'scanLocalProviders', 'importLocalProviders',
+  'readMcpConfig', 'writeMcpConfig', 'importMcpConfig',
   'discoveryScan', 'discoveryImportSkills', 'discoveryImportMcp',
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
@@ -690,7 +711,7 @@ const AGENT_KEYS = [
   'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketForget', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),
@@ -706,8 +727,37 @@ const CLOUD_KEYS: Record<string, string> = {
   connectListingApply: 'connect:listingApply', connectListingWithdraw: 'connect:listingWithdraw', connectStore: 'connect:store',
   // 设备名册(0.6 起):没有 Extend 就不列账号名下的其他设备;unitHostStatus / 局域网探针 / 已配对设备 / P2P 留宿主,局域网直连照常。
   unitsList: 'units:list', unitsUpdate: 'units:update', unitsRemove: 'units:remove', unitsOpenInBrowser: 'units:openInBrowser',
+  // 帮助改进(2.13.8 起):通道是宿主自己的 host-telemetry:report,但只在 Extend 接得住(注册了 telemetry:get)时才留
+  telemetryReport: 'telemetry:get',
 }
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
 if (!cloudPresent().size) delete (api as Record<string, unknown>).cloudInvoke
+
+// 插件沙箱(electron/pluginSandbox.ts / sandboxChild.ts):用户那份 Forsion 拿控制面 pluginSandbox;沙箱那份拿 sandbox(自身信息 +
+// 沙箱条按钮)。两者互斥:沙箱里不能再起沙箱。主进程两种身份都答 pluginSandbox:self(普通实例答 null),同步问一次就分得清。
+const sandboxSelf: unknown = ipcRenderer.sendSync('pluginSandbox:self')
+const on = <T,>(channel: string) => (cb: (v: T) => void): (() => void) => {
+  const listener = (_e: unknown, v: T) => cb(v)
+  ipcRenderer.on(channel, listener)
+  return () => { ipcRenderer.removeListener(channel, listener) }
+}
+if (sandboxSelf) {
+  (api as Record<string, unknown>).sandbox = {
+    self: sandboxSelf,
+    action: (a: string, note?: string) => ipcRenderer.invoke('pluginSandbox:childAction', a, note),
+    changed: () => ipcRenderer.send('pluginSandbox:changed'),
+  }
+} else {
+  (api as Record<string, unknown>).pluginSandbox = {
+    exec: (op: string, args: Record<string, unknown>, origin: unknown) => ipcRenderer.invoke('pluginSandbox:exec', op, args, origin),
+    state: () => ipcRenderer.invoke('pluginSandbox:state'),
+    show: () => ipcRenderer.invoke('pluginSandbox:show'),
+    stop: () => ipcRenderer.invoke('pluginSandbox:stop'),
+    reset: () => ipcRenderer.invoke('pluginSandbox:reset'),
+    install: () => ipcRenderer.invoke('pluginSandbox:install'),
+    onChanged: on('pluginSandbox:changed'),
+    onReport: on('pluginSandbox:report'),
+  }
+}
 
 contextBridge.exposeInMainWorld('tangu', api)

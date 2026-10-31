@@ -1,3 +1,4 @@
+import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpConfig'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
 import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
@@ -13,6 +14,8 @@ import { createMiniResizeQueue } from './miniResizeQueue'
 import { miniResizeShape } from './miniResizeShape'
 import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
+import { createPluginSandbox, type PluginSandboxUiSeed } from './pluginSandbox'
+import { sandboxSelf, startSandboxChild, sandboxForward } from './sandboxChild'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
 import { normalizeUiSync, UI_LOCALE_CHANNEL } from '../shared/uiSync'
@@ -26,17 +29,20 @@ import { basename, dirname, isAbsolute, join, relative } from 'path'
 import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
-import { createSerialQueue, lockedUpdateJson, writePrivateJson } from './configWrite'
+import { clearRecoveryNotice, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
 import { existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { readSpaceIconDataUrl } from './spaceIcon'
 import { bindDevTanguHome, forsionHomeDir, tanguDataDir, migrateForsionHome, migrateEngineData, migratePair, setDevMode, defaultWorkspaceDir as forsionWorkspaceDir } from './forsionHome'
+import { moveToDesktopTrash } from './trashWriter'
 import { privateHostReason } from './netGuard'
 import { execFile, execFileSync, spawn } from 'child_process'
 import { homedir, hostname, networkInterfaces } from 'os'
 import { randomUUID } from 'crypto'
 import { BackendManager, bundledPythonBin, resolveBundledGit, resolveBundledNode, type BackendStatus } from './backendManager'
+import { registerBrowserPickIpc } from './browserPick'
+import { registerPageThumbIpc } from './pageThumb'
 import { CLIP_ORIGIN, browserControlCode, registerClipExtensionIpc, startClipVersionSync } from './clipExtension'
 import { envWithFullPath, pathKeyOf, withBundledGit } from './envPath'
 import { findGit } from './gitHistory'
@@ -47,11 +53,12 @@ import { randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
+import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller } from './updater'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
-import { createTray, refreshTrayMenu, setTrayIndicator, trayLang } from './tray'
+import { createTray, MINI_ACCELERATOR, mergeTrayReports, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
@@ -63,12 +70,13 @@ import { createUnitRelay } from './unitRelay' // 桌面作为调用方:把会话
 import './editContextMenu' // 编辑区系统右键菜单(评审 G4-08):导入即给每个应用窗口挂 context-menu,逻辑全在模块里
 import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
-import { createCorePluginUpdater } from './corePluginUpdates'
+import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
+import { createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, telemetryPackaged } from './telemetryHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
 import { extractZipToDir, checkMarketPackage, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
@@ -123,6 +131,9 @@ import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
+/** 本进程是插件沙箱(用户那份 Forsion 按需另起的,见 pluginSandbox.ts)。沙箱不碰整机共享的东西:协议注册、托盘、全局快捷键、
+ *  CLI、MCP 固定端口、更新检查、自动 Mini;关窗即退出。数据目录由父进程经 --user-data-dir / TANGU_HOME / FORSION_WORKSPACE_DIR 指进去。 */
+const SANDBOX = sandboxSelf()
 // dev 与安装版的 Electron userData 默认共用同一目录 appData/forsion-desktop(app.getName() 取 package.json
 // name="forsion-desktop";electron-builder 的 productName 只改 .app 包名/CFBundleName「Forsion」,不动 userData)。
 // → 二者抢同一把 userData/SingletonLock,后启者 requestSingleInstanceLock() 返 false 被下方 app.exit(0)(即
@@ -145,7 +156,7 @@ app.on('second-instance', (_e, argv, cwd) => {
 // ── forsion:// deep link(入站;与出站外链回投的 app:open-url 无关)────────────────────────
 // 正典:docs/ToBeImproved/View基座统一化方案_2026-08-25.md §4。只导航不执行;白名单在渲染层 resolver。
 // 系统 handler 仅打包版注册:dev 注册会把裸 electron 二进制写进 LaunchServices/注册表,污染整机。
-if (app.isPackaged) app.setAsDefaultProtocolClient('forsion')
+if (app.isPackaged && !SANDBOX) app.setAsDefaultProtocolClient('forsion')
 /** 渲染层已 drain 过 → 之后直推;窗口 reload/重建把它翻回 false(Cmd+R 会换掉监听者,推进虚空)。 */
 let deepLinkReady = false
 function deliverDeepLink(url: string): void {
@@ -157,7 +168,8 @@ function deliverDeepLink(url: string): void {
   }
 }
 // mac:open-url 必须在 whenReady 之前挂上,冷启动经 Dock/浏览器唤起的 URL 才接得到。
-app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) deliverDeepLink(url) })
+// 沙箱与用户那份同一个 bundle:系统可能把链接 / 文件投给沙箱,转回给用户那份
+app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) { if (SANDBOX) sandboxForward('url', url); else deliverDeepLink(url) } })
 // win/linux 首启:URL 直接躺在 process.argv(mac 走 open-url,不经 argv)。
 for (const a of process.argv.slice(1)) if (isForsionUrl(a)) pushDeepLink(a)
 
@@ -173,7 +185,7 @@ function deliverOpenFile(p: string): void {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:open-file')
 }
 // mac:Finder 双击 / 打开方式 / 拖到 Dock 图标。同 open-url,必须在 whenReady 之前挂上,冷启动才接得到。
-app.on('open-file', (e, p) => { e.preventDefault(); deliverOpenFile(p) })
+app.on('open-file', (e, p) => { e.preventDefault(); if (SANDBOX) sandboxForward('file', p); else deliverOpenFile(p) })
 // win/linux 首启:文件路径在 argv 里(argv[0] 是可执行文件本身,切掉)。
 for (const f of filesFromArgv(process.argv.slice(1), process.cwd())) pushOpenFile(f)
 
@@ -203,15 +215,14 @@ async function loadTanguEnvFile(): Promise<void> {
 // ── ~/.tangu/config.json:与包内 core/config.ts 同格式的「唯一真源」。桌面读写各段(providers/mcp/
 //    cloud/browser/wechat/sandbox/workspace)落此文件;后端(standalone)同读。段存在即权威,缺失回落 legacy。
 const homeConfigPath = (): string => join(tanguHomeDir(), 'config.json')
-async function readHomeConfig(): Promise<Record<string, any>> {
-  try {
-    const p = JSON.parse(await readFile(homeConfigPath(), 'utf8'))
-    if (!p || typeof p !== 'object' || Array.isArray(p)) throw new Error('Invalid config.json: expected an object')
-    return p
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {}
-    throw error // Never overwrite an unreadable security configuration with defaults.
-  }
+/** 坏文件(零字节 / 半截)先从 config-backup/config.json.bak 恢复;恢复不了抛 —— Never overwrite an unreadable security configuration with defaults. */
+const readHomeConfig = (): Promise<Record<string, any>> => readJsonRecovering(homeConfigPath())
+/** 会写恢复标记的两份(config.json、引擎写的 provider-auth.json;后者可能是软链,标记在真身旁边)。 */
+const recoverableConfigFiles = (): string[] => {
+  const auth = join(forsionHomeDir(), 'provider-auth.json')
+  let real = auth
+  try { real = realpathSync(auth) } catch { /* 还没登录过 */ }
+  return [homeConfigPath(), real]
 }
 /** config.json 的读改写:引擎 / CLI 同写这份,持跨进程写锁在写入那一刻的内容上改(configWrite.ts 的 lockedUpdateJson;
  *  mutate 必须同步,返回 undefined = 不写)。原子落位(唯一临时名 + rename,0600 含 token/apiKey):截断直写或共用 .tmp 名
@@ -430,6 +441,12 @@ interface TanguStoredConfig {
   visionMode: 'auto' | 'always' | 'off'
   /** 辅助模型 · 翻译(笔记里的「翻译」与插件 ctx.tangu.translate 用;落 config.json models.translate;缺省=跟聊天当前模型)。 */
   translateModelId: string
+  /** 辅助模型 · 补全(插件 ctx.tangu.fim 的行内补全用;落 config.json models.fim;缺省 = 目录里第一个补全模型)。 */
+  fimModelId: string
+  /** 额度用完时改用的模型(落 config.json models.quotaFallback;空 = 停下报错)。引擎 llm/quotaRelay.ts 读。 */
+  quotaFallbackModelId: string
+  /** 换之前先问我(models.quotaFallbackAsk):开着时停在失败卡上让人选。 */
+  quotaFallbackAsk: boolean
   /** 默认语音识别模型 id(语音输入转写用;持久化到 config.json asr.modelId;缺省=跟随 app 级 asr 默认)。 */
   asrModelId: string
   /** 语音输入偏好后端:local=本地 SenseVoice(需下载);cloud=自带-key/Forsion 云端。缺省 cloud。 */
@@ -441,6 +458,8 @@ interface TanguStoredConfig {
   lastChatThinkingLevel: 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | ''
   /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;纯渲染层 UI 记忆)。 */
   lastUltra: boolean
+  /** 上次的 Fast 开关(新会话照它起步;纯渲染层 UI 记忆)。 */
+  lastFast: boolean
   cloudUrl: string // managed:传给 tangu-server 的 Forsion 云端
   sandbox: 'auto' | 'docker' | 'none'
   hostSandbox?: HostSandboxConfig
@@ -535,12 +554,16 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   visionModelId: '',
   visionMode: 'auto',
   translateModelId: '',
+  fimModelId: '',
+  quotaFallbackModelId: '',
+  quotaFallbackAsk: false,
   asrModelId: '',
   asrBackend: 'cloud',
   lastApprovalMode: 'auto-edit',
   lastThinkingLevel: '',
   lastChatThinkingLevel: '',
   lastUltra: false,
+  lastFast: false,
   cloudUrl: '',
   sandbox: 'auto',
   hostSandbox: { mode: 'off', network: 'deny' },
@@ -614,7 +637,7 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
   'disabledBundles', // 桌面专属(内置包主进程半身由 main 开机装载)
-  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', 'lastUltra', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
+  'lastApprovalMode', 'lastThinkingLevel', 'lastChatThinkingLevel', 'lastUltra', 'lastFast', // 桌面专属(新会话起步档位的记忆,纯渲染层 UI;chat 单独一槽)
 ]
 // 文件名是与引擎的契约(电脑历史第二道闸经 FORSION_DESKTOP_CONFIG 读它,见 shared/computerHistory.ts),改名三处同步
 const configPath = (): string => join(app.getPath('userData'), COMPUTER_HISTORY_DESKTOP_CONFIG_FILE)
@@ -782,6 +805,9 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       backgroundModelId: auxModels.background || '',
       visionModelId: auxModels.vision || '',
       translateModelId: auxModels.translate || '',
+      fimModelId: auxModels.fim || '',
+      quotaFallbackModelId: typeof auxModels.quotaFallback === 'string' ? auxModels.quotaFallback : '',
+      quotaFallbackAsk: auxModels.quotaFallbackAsk === true,
       visionMode: auxModels.visionMode === 'always' || auxModels.visionMode === 'off' ? auxModels.visionMode : 'auto',
     } : {}),
   }
@@ -854,6 +880,9 @@ function applyHomePatch(home: Record<string, any>, patch: Partial<TanguStoredCon
   if ('visionModelId' in patch) { auxModels.vision = patch.visionModelId; mT = true }
   if ('visionMode' in patch) { auxModels.visionMode = patch.visionMode; mT = true }
   if ('translateModelId' in patch) { auxModels.translate = patch.translateModelId; mT = true }
+  if ('fimModelId' in patch) { auxModels.fim = patch.fimModelId; mT = true }
+  if ('quotaFallbackModelId' in patch) { auxModels.quotaFallback = patch.quotaFallbackModelId; mT = true }
+  if ('quotaFallbackAsk' in patch) { auxModels.quotaFallbackAsk = patch.quotaFallbackAsk === true; mT = true }
   if ('sandbox' in patch) { home.sandbox = patch.sandbox; oT = true }
   if ('hostSandbox' in patch) { home.hostSandbox = normalizeHostSandboxConfig(patch.hostSandbox); oT = true }
   if ('defaultWorkspaceDir' in patch) { home.workspace = patch.defaultWorkspaceDir; oT = true }
@@ -960,6 +989,7 @@ const mcpLifecycle = createMcpLifecycle({
   log: (m) => console.log(m),
 })
 async function applyForsionMcp(enabled: boolean | (() => Promise<boolean>)): Promise<void> {
+  if (SANDBOX) return // 沙箱不开对外 MCP:固定端口是整机共享的(设置页里打开也不起)
   try {
     await mcpLifecycle.apply(enabled)
   } catch (e) {
@@ -1188,6 +1218,7 @@ async function openUnitScopedFile(p: string): ReturnType<typeof openUnitHostRegu
  *  startUnitWeb 撞 EADDRINUSE → 落 port 0 → 悄悄换掉用户刚抄走的直连端口。 */
 let unitRefreshChain: Promise<void> = Promise.resolve()
 function refreshUnitHost(): Promise<void> {
+  if (SANDBOX) return Promise.resolve() // 沙箱不做设备互联(局域网端口、云端通道都是整机的)
   unitRefreshChain = unitRefreshChain
     .then(() => doRefreshUnitHost())
     .catch((e) => { console.error('[unit] refresh failed:', e) })
@@ -1465,7 +1496,7 @@ let engineOverlayInit: Promise<void> | null = null
 function initEngineOverlay(): Promise<void> {
   return (engineOverlayInit ??= (async () => {
     if (!app.isPackaged || !PRODUCT.agentBackend) return
-    engineOverlay = await setupEngineOverlay({ bundledRoot: join(process.resourcesPath, 'tangu-server'), forsionHome: forsionHomeDir(), log: (m) => console.log(m) })
+    engineOverlay = await setupEngineOverlay({ bundledRoot: join(process.resourcesPath, 'tangu-server'), forsionHome: forsionHomeDir(), desktopVersion: app.getVersion(), log: (m) => console.log(m) })
     if (engineOverlay) backend.setEngineOverlay(engineOverlay.control)
   })().catch((e) => console.warn('[engine-updates] 初始化失败(忽略,引擎照常跑自带的):', (e as Error)?.message)))
 }
@@ -1475,11 +1506,13 @@ function initEngineOverlay(): Promise<void> {
 let ensureChain: Promise<void> = Promise.resolve()
 function ensureBackend(): Promise<void> {
   if (!PRODUCT.agentBackend) return Promise.resolve() // 产品档案:本变体不捆 agent 托管后端
+  if (SANDBOX) return Promise.resolve() // 沙箱不起引擎(设置页里切到托管也不起;契约 plugin-sandbox.md §6)
   ensureChain = ensureChain.then(async () => {
     const stored = await loadConfig()
     // 「允许其他设备连接本机」开着时引擎必须常驻:本机 UI 切去别的 Unit(mode≠managed)
     // 也不能停 —— 停了 = 别的设备那头断服(设备通道与局域网面的转发目标就是这个引擎)。
     if (stored.mode !== 'managed' && !stored.unitHostEnabled) {
+      telemetryStartup.noEngine()
       await backend.stop()
       return
     }
@@ -1520,6 +1553,35 @@ const QUIET_WINDOWS = process.env.TANGU_HARNESS_QUIET
 // _handleAEOpenEvent 里弹 NSAlert 模态框,ready 永不来 → 台架零输出挂死(09-27 多会话同时中招)。注册域只在内存、不落盘;
 // AppKit 在主脚本同步段之后才读这个键(09-28 注入探针实证,仪器 npm run check:persistignore)。
 if (QUIET_WINDOWS && process.platform === 'darwin') systemPreferences.registerDefaults({ ApplePersistenceIgnoreState: true })
+
+// ── 帮助改进 Forsion(匿名遥测)的宿主那一半:只采集、转发给 Extend(CloudHost.telemetry),自己不存不发(telemetryHost.ts)──
+// 模块装载即建:Extend 在 whenReady 里订阅,之前的启动期崩溃先攒着(≤50 条)等它来回放。
+// 台架 = QUIET_WINDOWS(TANGU_HARNESS_QUIET 或 Playwright 起的实例);插件沙箱是另起的一份 Forsion,也不算。
+let telemetryBeta: boolean | null = null
+const refreshTelemetryChannel = (): void => { void betaChannelOn().then((b) => { telemetryBeta = b }, () => {}) }
+const telemetry = createTelemetryHost({
+  packaged: telemetryPackaged({
+    isPackaged: app.isPackaged, harness: QUIET_WINDOWS || !!process.env.TANGU_HARNESS_QUIET, sandbox: !!SANDBOX, env: process.env.FORSION_TELEMETRY,
+  }),
+  sessionId: randomUUID(),
+  // 更新通道现读 config(每次读完更新缓存、先回上一次的值);还没读到时按版本号:预发布号 = beta
+  channel: () => { refreshTelemetryChannel(); return (telemetryBeta ?? app.getVersion().includes('-')) ? 'beta' : 'stable' },
+  coreVersion: () => (PRODUCT.agentBackend ? backend.engineVersion() ?? backend.engineOverlayVersion() : null),
+  log: (m) => console.warn(m),
+})
+refreshTelemetryChannel()
+const uptimeS = (): number => Math.round(process.uptime())
+// 主进程异常:用 uncaughtExceptionMonitor 只旁听,不改 Electron 原本的处理(挂 uncaughtException 会把它吞掉)。
+process.on('uncaughtExceptionMonitor', (err, origin) => {
+  telemetry.emit('crash', crashFromError('main', origin === 'unhandledRejection' ? 'rejection' : 'exception', err, { uptimeS: uptimeS() }))
+})
+// 没人接的 rejection 不另挂 unhandledRejection 监听:挂了 Node 就不再把它转成 uncaughtException,Electron 原本的错误框也没了。
+// 默认 throw 模式下它照样走到上面的 monitor(origin = 'unhandledRejection')。
+/** startup 那条:主窗首帧 + 引擎就绪(进程起来之后的毫秒)。无托管引擎 / 一分钟内没就绪就只带首帧。 */
+const telemetryStartup = createStartupTracker({
+  expectEngine: PRODUCT.agentBackend && !SANDBOX, waitMs: 60_000,
+  emit: (props) => telemetry.emit('perf', props),
+})
 
 function present(win: BrowserWindow): void {
   if (QUIET_WINDOWS) win.showInactive()
@@ -1662,7 +1724,10 @@ function createWindow(): void {
   })
   watchTabTitleBar(mainWindow)
   sinkForHarness(mainWindow)
-  mainWindow.once('ready-to-show', () => { if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow) })
+  mainWindow.once('ready-to-show', () => {
+    telemetryStartup.firstFrame(process.uptime() * 1000) // 只认第一次(主窗被销毁重建时这里会再来)
+    if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow)
+  })
 
   mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
   hardenNav(mainWindow.webContents)
@@ -1698,6 +1763,7 @@ function createWindow(): void {
   // 关闭窗口 = 最小化到托盘(App 常驻后台,后端/Muse 不中断);真正退出走托盘「退出」/before-quit(置 isQuitting)。
   mainWindow.on('close', (e) => {
     if (isQuitting) return
+    if (SANDBOX) { isQuitting = true; app.quit(); return } // 沙箱不进托盘:关窗就停
     e.preventDefault()
     mainWindow?.hide()
   })
@@ -1721,9 +1787,12 @@ function loadRendererWith(win: BrowserWindow, params: Record<string, string>): v
   }
 }
 
+// 启动流程建主窗之前不建窗:那时 IPC 还没登记完、内置包可能还没播种(首次启动的 npm 预取最多等 10 秒,
+// 用户这时多半会再点一次图标 → second-instance)。主窗由启动流程自己建,唤起请求那时自然满足。
+let startupWindowGate = true
 /** 召回主窗:隐藏则显示、最小化则还原、销毁则重建。托盘/通知/单实例/activate 共用。 */
 function showMainWindow(): void {
-  if (!mainWindow || mainWindow.isDestroyed()) { createWindow(); return }
+  if (!mainWindow || mainWindow.isDestroyed()) { if (!startupWindowGate) createWindow(); return }
   if (mainWindow.isMinimized()) mainWindow.restore()
   present(mainWindow)
 }
@@ -1947,6 +2016,28 @@ let miniSession: MiniSessionContext = { sessionId: null, runId: null }
 let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
 /** 电脑历史控制器(只在带 agent 后端的形态建;见 electron/computerHistory.ts)。 */
 let computerHistory: ComputerHistory | null = null
+
+/** 电脑历史落盘后踢一下引擎巡检:「打开 Steam 时」不用等 5 分钟。不带任何内容,引擎自己重读磁盘判定;窗口关着也要到,所以不经渲染层。
+ *  ≥5s 节流(切 App 很频繁),最后一次不丢;失败无所谓,下一个巡检周期照样看到。 */
+const COMPUTER_KICK_MS = 5_000
+let computerKickAt = 0
+let computerKickTimer: ReturnType<typeof setTimeout> | null = null
+function kickAutomationForComputer(): void {
+  if (computerKickTimer) return
+  computerKickTimer = setTimeout(() => {
+    computerKickTimer = null
+    computerKickAt = Date.now()
+    const st = backend.getStatus()
+    if (st.state !== 'ready' || !st.url) return
+    void fetch(`${st.url.replace(/\/+$/, '')}/agent/special/automation/kick`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${backend.getToken()}`, 'Content-Type': 'application/json' },
+      body: '{"scope":"computer"}',
+      signal: AbortSignal.timeout(5_000),
+    }).catch(() => {})
+  }, Math.max(0, computerKickAt + COMPUTER_KICK_MS - Date.now()))
+  computerKickTimer.unref?.()
+}
 let autoMiniWindow: BrowserWindow | null = null
 let autoMiniSessionId: string | null = null
 /** 最后获焦的 Forsion 窗口(自动 Mini 除外);自动 Mini 开场时快照成 autoMiniReturnTo,本轮跑完还给用户。 */
@@ -2443,6 +2534,7 @@ app.whenReady().then(async () => {
         for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('computerHistory:changed', view)
         refreshTrayMenu()
       },
+      onSignal: kickAutomationForComputer,
     })
     registerComputerHistoryIpc(computerHistory, isTrustedSender)
   }
@@ -2614,11 +2706,49 @@ app.whenReady().then(async () => {
     restartSync: () => restartAmadeusSync?.(),
     log: (m) => console.error(m),
   })
+  // Manual checks and background checks share state and a single in-flight run.
+  const corePluginUpdater = createCorePluginUpdater({
+    items: [
+      ...(PRODUCT.agentBackend ? [{ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'idle' as const }] : []),
+      ...bundleSources.map((s) => ({ id: s.id, packageName: s.pkg, phase: 'idle' as const })),
+    ],
+    enabled: app.isPackaged,
+    broadcast: (status) => {
+      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updater:core-status', status)
+    },
+    run: async (onStatus) => {
+      const stored = await loadConfig()
+      const registries = registryOrder(stored.mirror)
+      const registryFetch = (url: string, init: { signal: AbortSignal; headers?: Record<string, string> }): Promise<Response> =>
+        url.startsWith(NPM_OFFICIAL) ? net.fetch(url, init) : fetch(url, init)
+      await initEngineOverlay()
+      const engine = engineOverlay
+      // 两条通道各查各的、各报各的状态,谁也不等谁;两边内部都吞错。
+      await Promise.all([
+        checkBuiltinUpdates({
+          pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources,
+          appVersion: app.getVersion(), registries, onStatus, fetch: registryFetch,
+        }),
+        !PRODUCT.agentBackend ? undefined
+          : engine
+            ? checkEngineUpdate({
+                engineRoot: engine.root, bundledRoot: engine.bundledRoot, api: engine.api, desktopVersion: app.getVersion(), registries, fetch: registryFetch,
+                runningVersion: backend.engineOverlayVersion(), onStatus,
+              })
+            : onStatus({ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'current' }),
+      ])
+    },
+  })
+  // 装好 / 升级后第一次启动:先限时查一次 npm,查到的新版这一次就播种 / 拉起;超时照常用安装包那份(见 prefetchOnFirstBoot)。
+  const firstBootPrefetch = app.isPackaged && !SANDBOX
+    ? await prefetchOnFirstBoot({ markerFile: join(app.getPath('userData'), 'core-prefetch-version'), version: app.getVersion(), timeoutMs: 10_000, check: corePluginUpdater.check })
+    : 'skipped'
   // 全档案都播种 / 装载(2026-09-28 起):Amadeus / basic 单品也跑云同步、penzor、登录态续期,这些都住在 Extend 里;
   // 只在 agent 后端才有意义的包(电脑操作)由清单 requires 挡在 bundleSources 之外。
   {
     await seedBuiltinBundles(join(forsionHomeDir(), 'plugins'), bundleSources, { appVersion: app.getVersion() })
       .catch((e) => console.warn('[builtin-plugins] 播种失败(忽略):', (e as Error)?.message))
+    if (firstBootPrefetch !== 'skipped') corePluginUpdater.reset()
     const host: CloudHost = {
       getCloud: async () => {
         const stored = await loadConfig()
@@ -2662,6 +2792,8 @@ app.whenReady().then(async () => {
       },
       // ── 0.10 起:退出前问一次(蓬洲云还有文件在传)──
       addQuitGuard: (fn) => quitGuards.add(fn),
+      // ── 2.13.8 起:帮助改进 Forsion 的宿主事件(崩溃 / 性能 / 功能使用),见 telemetryHost.ts ──
+      telemetry: telemetry.seam,
       contentSync: {
         roots: async () => {
           const cfg=await readAmadeusConfig()
@@ -2749,39 +2881,6 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) throw new Error('forbidden')
     return guardedRestart(canInstallUpdate() && getUpdaterStatus().phase === 'downloaded')
   })
-  // Manual checks and background checks share state and a single in-flight run.
-  const corePluginUpdater = createCorePluginUpdater({
-    items: [
-      ...(PRODUCT.agentBackend ? [{ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'idle' as const }] : []),
-      ...bundleSources.map((s) => ({ id: s.id, packageName: s.pkg, phase: 'idle' as const })),
-    ],
-    enabled: app.isPackaged,
-    broadcast: (status) => {
-      for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updater:core-status', status)
-    },
-    run: async (onStatus) => {
-      const stored = await loadConfig()
-      const registries = registryOrder(stored.mirror)
-      const registryFetch = (url: string, init: { signal: AbortSignal; headers?: Record<string, string> }): Promise<Response> =>
-        url.startsWith(NPM_OFFICIAL) ? net.fetch(url, init) : fetch(url, init)
-      await initEngineOverlay()
-      const engine = engineOverlay
-      // 两条通道各查各的、各报各的状态,谁也不等谁;两边内部都吞错。
-      await Promise.all([
-        checkBuiltinUpdates({
-          pluginsRoot: join(forsionHomeDir(), 'plugins'), sources: bundleSources,
-          appVersion: app.getVersion(), registries, onStatus, fetch: registryFetch,
-        }),
-        !PRODUCT.agentBackend ? undefined
-          : engine
-            ? checkEngineUpdate({
-                engineRoot: engine.root, bundledRoot: engine.bundledRoot, api: engine.api, registries, fetch: registryFetch,
-                runningVersion: backend.engineOverlayVersion(), onStatus,
-              })
-            : onStatus({ id: ENGINE_UPDATE_ID, packageName: ENGINE_PACKAGE, phase: 'current' }),
-      ])
-    },
-  })
   // 定时 / 唤醒触发的检查:下载中别插一脚(下载完 checkForUpdates 自己会原样返回)。
   const checkAppUpdateQuietly = (): void => { if (getUpdaterStatus().phase !== 'downloading') void checkForUpdates() }
   const checkAllUpdates = () => {
@@ -2790,7 +2889,7 @@ app.whenReady().then(async () => {
     return checkForUpdates()
   }
   ipcMain.handle('updater:core-status', () => corePluginUpdater.snapshot())
-  if (app.isPackaged) {
+  if (app.isPackaged && !SANDBOX) {
     setTimeout(() => {
       void corePluginUpdater.check()
       // 应用本体也跟着每 6 小时查一次:原来只在渲染层启动时查,一直开着不退的人永远收不到新版本(What's new 弹窗靠这个广播)
@@ -2798,7 +2897,7 @@ app.whenReady().then(async () => {
     }, 60_000).unref()
   }
   // tangu CLI 自动安装/自愈:shim 指向 App 内部资源(App 自动更新 → CLI 同步),幂等注入 PATH;吞错不阻塞。
-  if (PRODUCT.agentBackend) void ensureCliInstalled({
+  if (PRODUCT.agentBackend && !SANDBOX) void ensureCliInstalled({
     isPackaged: app.isPackaged,
     platform: process.platform,
     execPath: process.execPath,
@@ -2852,6 +2951,24 @@ app.whenReady().then(async () => {
     }
     keepAwake.report(id, Number.isSafeInteger(count) && (count as number) > 0)
   })
+  // 托盘 / 菜单栏的在跑 / 等你会话(借鉴 Comma 2.6):会话名册在渲染层。主窗 / Mini / 独立窗各有自己的名册,在哪个窗口里起的 run
+  // 只有那个窗口先知道 —— 所以各窗口各报一份、按窗口记,并起来再给托盘(mergeTrayReports)。窗口销毁 / 渲染进程崩溃 / 重载时
+  // 丢掉它那份(同 power:running 的清法),新页面装好会话列表后会重新报。
+  const trayReports = new Map<number, ReturnType<typeof sanitizeTraySessions>>()
+  const pushTrayReports = (): void => setTraySessions(mergeTrayReports(trayReports.values()))
+  ipcMain.on('tray:sessions', (e, raw: unknown) => {
+    if (!isTrustedSender(e) || !e.senderFrame) return // senderFrame 为空 = 旧文档导航后才到的迟到上报,丢弃
+    const wc = e.sender
+    const id = wc.id
+    if (!trayReports.has(id)) {
+      const forget = (): void => { if (trayReports.delete(id)) pushTrayReports() }
+      wc.once('destroyed', forget)
+      wc.on('render-process-gone', forget)
+      wc.on('did-navigate', forget)
+    }
+    trayReports.set(id, sanitizeTraySessions(raw))
+    pushTrayReports()
+  })
   // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
   // 设备互联通道:合盖期间的出站长连多半已是半开连接(不报错也收不到东西)→ 唤醒即重拨,别等 45s 读看门狗。
   // 睡眠会让「暂停到点」的计时器迟到 → keepAwake 重排;电脑历史采集器重新核一次状态。
@@ -2863,6 +2980,8 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
+  ipcMain.handle('config:recoveryNotice', (e) => (isTrustedSender(e) ? readRecoveryNotice(recoverableConfigFiles()) : null))
+  ipcMain.handle('config:clearRecoveryNotice', (e) => (isTrustedSender(e) ? clearRecoveryNotice(recoverableConfigFiles()) : undefined))
   registerDocumentTaskIpc(ipcMain, join(app.getPath('userData'), 'document-task-receipts.json'), isTrustedSender)
   deviceSecrets.registerSecretsIpc(ipcMain, { isTrustedSender, refreshUnitHost }) // P1-K5:secrets:status / retry / resetUnitPairing / relaunch
   registerRemoteSessionsIpc(ipcMain, remoteSessions, isTrustedSender) // P1-K4:remoteSessions:get / setEnabled / setMaxApprovalMode / revoke
@@ -3368,7 +3487,7 @@ app.whenReady().then(async () => {
     e.sender.startDrag({ file: filePath, icon })
   })
   registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome 扩展页(拖拽复用上面的 fs:startDrag)
-  startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
+  if (!SANDBOX) startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
 
   ipcMain.handle('backend:getStatus', () => backend.getStatus())
   ipcMain.handle('backend:getLogs', () => backend.getLogs())
@@ -3465,15 +3584,29 @@ app.whenReady().then(async () => {
     }
   }
   ipcMain.handle('mcp:read', async () => ({ mcpServers: await readMcpServers() }))
-  ipcMain.handle('mcp:write', async (_e, cfg: { mcpServers: Record<string, any> }) => {
-    if (!cfg || typeof cfg.mcpServers !== 'object') throw new Error('非法 MCP 配置')
-    // dev / dev_* 是设备 MCP 的保留命名空间(shared/mcpNames.ts):新加的一律拒,盘上存量的放行(引擎加载时跳过、状态报错)
-    const reserved = newReservedMcpNames(cfg.mcpServers, await readMcpServers())
-    if (reserved.length) throw new Error(`${MCP_NAME_RESERVED}: ${reserved.join(', ')}`)
-    await saveHomeSection('mcp', { mcpServers: cfg.mcpServers }) // 唯一真源:config.json mcp 段(chmod 600)
-    const stored = await loadConfig()
-    if (stored.mode === 'managed') void ensureBackend() // 重启后端重连 MCP(进程级冻结语义)
-    return { mcpServers: cfg.mcpServers }
+  ipcMain.handle('mcp:write', async (_e, cfg: { mcpServers: Record<string, any>; base?: Record<string, any> }) => {
+    const fallback = await readMcpServers()
+    let servers: Record<string, any> = {}
+    await saveHomeSection('mcp', (sec: any) => {
+      const current = sec === undefined ? fallback : sec?.mcpServers ?? {}
+      const reserved = cfg?.mcpServers && typeof cfg.mcpServers === 'object' ? newReservedMcpNames(cfg.mcpServers, current) : []
+      if (reserved.length) throw new Error(`${MCP_NAME_RESERVED}: ${reserved.join(', ')}`)
+      servers = applyMcpSnapshot(current, cfg?.mcpServers, cfg?.base ?? current)
+      return { ...sec, mcpServers: servers }
+    })
+    // The engine reconciles MCP settings at idle via /agent/tools or run settlement; never restart an active reply.
+    return { mcpServers: servers }
+  })
+  ipcMain.handle('mcp:import', async (_e, cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => {
+    const incoming = parseMcpInput(cfg?.config, cfg?.name)
+    if (cfg.replaceNames !== undefined && (!Array.isArray(cfg.replaceNames) || cfg.replaceNames.some(n => typeof n !== 'string'))) throw new Error('Invalid MCP replacement names')
+    const fallback = await readMcpServers()
+    let result!: ReturnType<typeof mergeMcpImport>
+    await saveHomeSection('mcp', (sec: any) => {
+      result = mergeMcpImport(sec === undefined ? fallback : sec?.mcpServers ?? {}, incoming, cfg.replaceNames, cfg.expected)
+      return { ...sec, mcpServers: result.servers }
+    })
+    return { mcpServers: result.servers, added: result.added, replaced: result.replaced, skipped: result.skipped }
   })
 
   // ── 拖入式主题(~/.tangu/themes/<id>/{theme.json,theme.css}):主进程读盘 → 渲染端 <style> 注入 ──
@@ -3566,6 +3699,26 @@ app.whenReady().then(async () => {
     if (stored.mode === 'managed') void ensureBackend()
     return list
   })
+  // 导入本机配置(electron/discovery/providers.ts):打开提供方页时查,最多一分钟一次;导入按 id 在主进程重读,key 不经渲染端
+  let localScan: { at: number; list: LocalProviderCandidate[] } | null = null
+  const localScanOpts = async () => { const u = (await loadConfig()).cloudUrl; try { return { skipHosts: u ? [new URL(u).hostname] : [] } } catch { return {} } }
+  ipcMain.handle('providers:scanLocal', async (_e, force?: boolean) => {
+    if (!force && localScan && Date.now() - localScan.at < 60_000) return localScan.list
+    localScan = { at: Date.now(), list: await scanLocalProviders(await readProvidersFile(), await localScanOpts()) }
+    return localScan.list
+  })
+  ipcMain.handle('providers:importLocal', async (_e, ids: string[]) => {
+    const opts = await localScanOpts()
+    const add = await localProvidersFor(Array.isArray(ids) ? ids : [], await readProvidersFile(), opts)
+    localScan = null
+    // 选的那几条在原来的应用里刚改过(指纹变了)或已经加过:一条都没取到就如实报,界面重扫一遍让人重选
+    if (!add.length) throw new Error('import_stale')
+    const list = await updateProvidersFile((cur) => [...cur, ...add.filter((a) => !cur.some((p) => p.providerId === a.providerId))])
+    localScan = null
+    const stored = await loadConfig()
+    if (stored.mode === 'managed') void ensureBackend()
+    return list
+  })
   ipcMain.handle('providers:delete', async (_e, providerId: string) => {
     const list = await updateProvidersFile((cur) => cur.filter((p) => p.providerId !== providerId))
     const stored = await loadConfig()
@@ -3580,7 +3733,7 @@ app.whenReady().then(async () => {
     if (!audio.length) throw new Error('空音频')
     // 本地优先:选了本地且模型就绪 → 离线转写(不联网)。
     if (asrBackendFor(cfg.asrBackend, req.backend, localModelReady()) === 'local') {
-      return transcribeLocal(audio, { timestamps: req?.timestamps })
+      return transcribeLocal(audio, { timestamps: req?.timestamps, language: req?.language })
     }
     // 云端:自带 provider(<provider>/<model> 命中 providers.json)→ 主进程直连上游;否则走 Forsion 托管(计费)。
     const modelId = (req?.modelId || cfg.asrModelId || '').trim()
@@ -3749,7 +3902,7 @@ app.whenReady().then(async () => {
   // 普通组合键只在 Forsion 不在前台时注册成全局快捷键(同手势那边的 excludePids):在前台时交给窗口里的命令分发 ——
   // 不然全局注册会把键吞掉,设置里录这个组合也录不到。注册不上(被别的应用占了)就只在 Forsion 里管用,下次失焦再试。
   function syncAppRefAccelerator(): void {
-    const want = BrowserWindow.getFocusedWindow() ? null : appRefWantedAccel
+    const want = BrowserWindow.getFocusedWindow() || SANDBOX ? null : appRefWantedAccel
     if (want === appRefAccelerator) return
     if (appRefAccelerator) globalShortcut.unregister(appRefAccelerator)
     appRefAccelerator = null
@@ -3775,6 +3928,10 @@ app.whenReady().then(async () => {
       return jpeg ? { mimeType: 'image/jpeg', data: jpeg.toString('base64') } : null
     } catch { return null }
   })
+
+  // 内置浏览器「点选元素发进对话」:点选脚本由主进程注入 guest 的独立 JS 世界,guest 无 preload / 无 IPC(electron/browserPick.ts)
+  registerBrowserPickIpc(isTrustedSender)
+  registerPageThumbIpc(isTrustedSender)
 
   // ── Computer Use:最近被操控窗口的一帧画面(只读,不启动 helper;详见 electron/computerUse.ts)──
   ipcMain.handle('computerUse:liveView', (_e, opts?: { maxDimension?: number; quality?: number; activeWithinMs?: number; image?: boolean }) =>
@@ -3804,7 +3961,7 @@ app.whenReady().then(async () => {
   })
 
   // ── 应用内自动更新(electron-updater;检查 → 下载 → 重启安装。mac 仅检测,UI 引导手动下载)──
-  ipcMain.handle('updater:check', () => checkAllUpdates())
+  ipcMain.handle('updater:check', () => (SANDBOX ? { phase: 'unsupported' } : checkAllUpdates()))
   ipcMain.handle('updater:status', () => getUpdaterStatus())
   // 测试版通道开关。落 config.json 的 updater 段;updater.ts 每次检查现读,改完无需重启。
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
@@ -4032,12 +4189,24 @@ app.whenReady().then(async () => {
   // ── 后端插件卸载:只动 ~/.tangu/plugins(用户目录);<pkg>/plugins 首方插件结构性安全(不在这里,删不到)。
   // manifest id 可能 ≠ 目录名,须读 manifest 映射。设置清理走后端 DELETE /agent/plugins/:id,重启由前端触发。
   ipcMain.handle('plugins:userInstalled', () => readUserPluginDirs(join(tanguDataDir(), 'plugins')))
-  ipcMain.handle('plugins:uninstall', async (_e, id: string) => marketPluginUpdater.exclusive(async () => {
+  // movedSlug:新版引擎(DELETE ?trash=1)已经把文件夹挪进回收站,这里只撤商店的安装记录。文件夹还在(引擎不在 / 旧引擎)
+  // 也不硬删 —— 确认框说的是进回收站,由主进程挪(restorer=desktop,恢复后需重扫引擎插件)。
+  ipcMain.handle('plugins:uninstall', async (_e, id: string, movedSlug?: string) => marketPluginUpdater.exclusive(async () => {
     if (!isSafeSlug(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     const hit = (await readUserPluginDirs(join(tanguDataDir(), 'plugins'))).find((p) => p.id === id)
-    if (!hit) throw new Error('not-user-plugin') // 内置/首方插件不可卸载
+    if (!hit) {
+      if (typeof movedSlug === 'string' && isSafeSlug(movedSlug)) { await marketPluginUpdater.forget('plugin', movedSlug); return { ok: true } }
+      throw new Error('not-user-plugin') // 内置/首方插件不可卸载
+    }
     await marketPluginUpdater.forget('plugin', hit.slug)
-    await rm(join(tanguDataDir(), 'plugins', hit.slug), { recursive: true, force: true })
+    await moveToDesktopTrash({ ref: id, name: id, paths: [{ path: join(tanguDataDir(), 'plugins', hit.slug), role: 'files' }], extra: { engine: true } })
+    return { ok: true }
+  }))
+  // 卸载走确认框(Agent / 技能 / Forsion 插件进回收站)之后,撤掉商店的安装记录,别让更新器去更新一个已经不在的目录。
+  ipcMain.handle('market:forget', async (e, type: string, slug: string) => marketPluginUpdater.exclusive(async () => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    if (!marketItemDir(tanguHomeDir(), type, slug)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
+    await marketPluginUpdater.forget(type, slug)
     return { ok: true }
   }))
 
@@ -4388,12 +4557,12 @@ app.whenReady().then(async () => {
     return { routed: true }
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
-  const MINI_ACCEL = 'CommandOrControl+Shift+M'
+  const MINI_ACCEL = MINI_ACCELERATOR // 托盘菜单「新建 Mini 对话」显示的是同一个
   const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ } }
-  registerMiniShortcut()
-  globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
-  if (PRODUCT.agentBackend) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
-  if (PRODUCT.agentBackend) void remoteSafety.start() // P1-K2:读锁文件(跨重启)→ 注册急停热键 ⌃⌥⇧.(失败托盘 / 设置页可见)→ 订引擎活动流
+  if (!SANDBOX) registerMiniShortcut()
+  if (!SANDBOX) globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
+  if (PRODUCT.agentBackend && !SANDBOX) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
+  if (PRODUCT.agentBackend && !SANDBOX) void remoteSafety.start() // P1-K2:读锁文件(跨重启)→ 注册急停热键 ⌃⌥⇧.(失败托盘 / 设置页可见)→ 订引擎活动流
 
   // 启动即续期(2 周滑动窗口),且**必须先于 ensureBackend**:后端 token 走 env 快照,而本地端点鉴权
   // 是**逐字比对**那枚快照 —— 续期把 auth.json 换成新的、引擎手上还是旧串,渲染层(getConfig 实时读
@@ -4403,11 +4572,11 @@ app.whenReady().then(async () => {
   setInterval(() => { void accountCore.refresh() }, 24 * 3600_000) // 一直开着不关的也算「在用软件」
   // MCP 服务常驻、随 App 启动(引擎的 ASR 桥要用);外部面按设置「高级」开关(默认关)。开关值在 lifecycle 队列里现读:
   // 若先读到旧值、用户又在读完前切了开关,旧值作废(见 createMcpLifecycle)。不依赖后端就绪,工具调用时现取引擎地址。
-  void applyForsionMcp(async () => (await loadConfig()).mcpEnabled)
+  if (!SANDBOX) void applyForsionMcp(async () => (await loadConfig()).mcpEnabled)
   // ⚠️必须**先于** createWindow / restoreDetachedWindows:恢复的终端 tab 一挂载就 pty:spawn,
   // 那时 handler 还没注册的话 IPC 直接「No handler registered」,视图落进已退出态且不会重试。
   registerPtyIpc(isTrustedSender)
-  if (PRODUCT.agentBackend && process.platform === 'darwin') {
+  if (PRODUCT.agentBackend && process.platform === 'darwin' && !SANDBOX) {
     miniAutoPanel = startMiniAutoPanel({
       readForeground: readComputerUseForeground,
       // 用户按住自动 Mini 拖走时焦点落在它自己身上 —— 不算「回到 Forsion」,否则一拖就收起。
@@ -4418,11 +4587,13 @@ app.whenReady().then(async () => {
     })
     app.on('browser-window-focus', (_e, w) => { if (w !== autoMiniWindow) lastFocusedWindow = w; miniAutoPanel?.refresh() })
   }
+  startupWindowGate = false
   createWindow()
+  if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
   void restoreDetachedWindows() // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局)
   // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。
   const ch = computerHistory
-  createTray({
+  if (!SANDBOX) createTray({
     show: showMainWindow,
     checkUpdates: () => { void checkAllUpdates() },
     quit: () => { isQuitting = true; app.quit() },
@@ -4432,6 +4603,16 @@ app.whenReady().then(async () => {
       resume: () => { void ch.resume().catch(() => {}) },
     } : undefined,
     remote: PRODUCT.agentBackend ? remoteSafety.trayHandlers(openRemoteSafetySettings) : undefined, // P1-K2:远程会话运行中 · 设备名 / 停止全部 / 解锁
+    // 借鉴 Comma 2.6:在跑 / 等你的会话(清单由各窗口经 tray:sessions 报上来、并成一份);点一条 = 显示主窗并打开它(同审批通知点击那条 approval:open)
+    sessions: PRODUCT.agentBackend ? {
+      list: traySessions,
+      open: (sessionId) => { showMainWindow(); if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(APPROVAL_OPEN_CHANNEL, { sessionId }) },
+    } : undefined,
+    // 「随处说一句」= Mini 窗:已经开着就提到前面(热键是开合切换,菜单项不该把开着的 Mini 藏掉)
+    newMini: {
+      open: () => { if (miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible()) present(miniWindow); else toggleMiniWindow() },
+      accelerator: () => (globalShortcut.isRegistered(MINI_ACCEL) ? MINI_ACCEL : null),
+    },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
   const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
@@ -4447,8 +4628,110 @@ app.whenReady().then(async () => {
   app.on('child-process-gone', (_e, d) => {
     console.error('[tangu-desktop] child-process-gone', d.type, d.reason)
     if (d.type === 'GPU' && d.reason !== 'clean-exit') recoverRenderer(`gpu-gone:${d.reason}`)
+    const crash = processGoneProps('other', d, uptimeS())
+    if (crash) telemetry.emit('crash', crash)
   })
+  installHostTelemetry()
 })
+
+// ── 插件沙箱(契约 tangu-agent/docs/plugin-sandbox.md)────────────────────────────────────────
+// 两种身份都答 pluginSandbox:self(preload 同步问一次分身份):沙箱答自己的信息,用户那份答 null。
+ipcMain.on('pluginSandbox:self', (e) => { e.returnValue = SANDBOX ? { ...SANDBOX, appVersion: app.getVersion() } : null })
+/** 父进程渲染层最近一次带来的主题键(起沙箱时随 exec 报上来)。 */
+let sandboxStorage: Record<string, string> = {}
+const pluginSandbox = SANDBOX ? null : createPluginSandbox({
+  forsionHome: forsionHomeDir,
+  // dev:同一个 electron 二进制 + app 路径(ELECTRON_RENDERER_URL 随环境带过去,沙箱也吃 vite 热更新);打包态:应用本体
+  spawn: (args, env) => spawn(process.execPath, args, { env, stdio: 'ignore' }),
+  appArgs: app.isPackaged ? [] : [app.getAppPath()],
+  platform: process.platform,
+  pid: process.pid,
+  ui: (): PluginSandboxUiSeed => ({ locale: mainLocale(), storage: sandboxStorage }),
+  onChange: (st) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('pluginSandbox:changed', st) },
+  onChildEvent: (ev) => {
+    if (ev.event === 'report') { showMainWindow(); mainWindow?.webContents.send('pluginSandbox:report', ev) }
+    else if (ev.event === 'install') void installFromSandbox().catch((e) => console.error('[plugin-sandbox] install failed:', e))
+    else if (ev.event === 'reset') void pluginSandbox?.reset().catch((e) => console.error('[plugin-sandbox] reset failed:', e))
+    else if (ev.kind === 'url') { if (isForsionUrl(ev.value)) deliverDeepLink(ev.value) }
+    else deliverOpenFile(ev.value)
+  },
+  log: (m) => console.log(m),
+})
+/** 「安装到我的 Forsion」:卡片、Coding Studio、沙箱窗口三处的按钮都到这里,先在用户那份的主窗上确认。 */
+async function installFromSandbox(): Promise<{ ok: boolean; pluginId?: string; error?: string; cancelled?: boolean }> {
+  const st = pluginSandbox?.state()
+  if (!pluginSandbox || !st?.running) return { ok: false, error: 'no sandbox is running' }
+  const expect = { pluginId: st.pluginId, dir: st.dir } // 用户点「安装」同意的就是框里这一个
+  showMainWindow()
+  // ⚠️ 必须挂父窗(同 confirmPair):无父的 showMessageBox 在 mac 上冻住主循环;拿不到窗就不装
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  if (!win) return { ok: false, cancelled: true }
+  const { response } = await dialog.showMessageBox(win, {
+    type: 'question', title: mt('main.pluginSandbox.installTitle'),
+    message: mt('main.pluginSandbox.installMessage', { name: st.name ?? '', version: st.version ?? '' }),
+    detail: mt('main.pluginSandbox.installDetail', { dir: st.dir ?? '' }),
+    buttons: [mt('main.pluginSandbox.install'), mt('main.pluginSandbox.cancel')], defaultId: 0, cancelId: 1, noLink: true,
+  })
+  if (response !== 0) return { ok: false, cancelled: true }
+  const r = await pluginSandbox.install(expect)
+  // 各窗自己重载插件(与商店安装同一条广播)
+  if (r.ok) for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('window:mainAction', 'extensions-changed', JSON.stringify({ type: 'amadeus-plugin', ids: [r.pluginId] }))
+  return r
+}
+if (pluginSandbox) {
+  ipcMain.handle('pluginSandbox:exec', (e, op: unknown, args: unknown, origin: unknown) => {
+    if (!isTrustedSender(e)) return { ok: false, code: 'error', error: 'untrusted sender' }
+    const o = (origin && typeof origin === 'object' ? origin : {}) as { sessionId?: unknown; deadline?: unknown; reveal?: unknown; ui?: { storage?: unknown } }
+    const storage = o.ui?.storage
+    if (storage && typeof storage === 'object') {
+      sandboxStorage = Object.fromEntries(Object.entries(storage as Record<string, unknown>)
+        .filter(([k, v]) => /^forsion_(theme|glass)/.test(k) && typeof v === 'string' && v.length <= 4096).slice(0, 40)) as Record<string, string>
+    }
+    return pluginSandbox.exec(String(op), args && typeof args === 'object' ? args as Record<string, unknown> : {}, {
+      sessionId: typeof o.sessionId === 'string' ? o.sessionId : undefined,
+      deadline: typeof o.deadline === 'number' && Number.isFinite(o.deadline) ? o.deadline : undefined,
+      reveal: o.reveal === true,
+    })
+  })
+  ipcMain.handle('pluginSandbox:state', (e) => (isTrustedSender(e) ? pluginSandbox.state() : { running: false }))
+  ipcMain.handle('pluginSandbox:show', (e) => (isTrustedSender(e) ? pluginSandbox.show() : false))
+  ipcMain.handle('pluginSandbox:stop', (e) => (isTrustedSender(e) ? pluginSandbox.stop() : undefined))
+  ipcMain.handle('pluginSandbox:reset', (e) => (isTrustedSender(e) ? pluginSandbox.reset() : { ok: false }))
+  ipcMain.handle('pluginSandbox:install', (e) => (isTrustedSender(e) ? installFromSandbox() : { ok: false }))
+}
+
+/** 遥测的其余接线(whenReady 里调一次):各窗渲染进程崩溃、引擎意外退出 / 首次就绪、每小时的内存与卡顿、渲染层的上报通道。 */
+function installHostTelemetry(): void {
+  // app 级:主窗、独立窗、Mini、浮窗一处都接到(各窗自己的 render-process-gone 只管自愈)
+  app.on('render-process-gone', (_e, _wc, d) => {
+    const crash = processGoneProps('renderer', d, uptimeS())
+    if (crash) telemetry.emit('crash', crash)
+  })
+  if (PRODUCT.agentBackend && !SANDBOX) {
+    const offReady = backend.onStatus((st) => {
+      if (st.state !== 'ready') return
+      telemetryStartup.engineReady(process.uptime() * 1000)
+      offReady()
+    })
+    backend.onUnexpectedExit(({ code, signal, uptimeMs }) => telemetry.emit('crash', engineExitProps(code, signal, Math.round(uptimeMs / 1000))))
+  }
+  setInterval(() => {
+    const { longTasks } = telemetry.takeHour()
+    let rssKb = 0
+    try { for (const m of app.getAppMetrics()) rssKb += m.memory?.workingSetSize ?? 0 } catch { /* 拿不到就记 0 */ }
+    telemetry.emit('perf', {
+      kind: 'hourly',
+      rssMb: Math.round(rssKb / 1024),
+      heapMb: Math.round(process.memoryUsage().heapUsed / 1048576),
+      longTasks,
+    })
+  }, 3_600_000).unref()
+  // preload telemetryReport:渲染层只报 crash / feature / longtasks,整形与封顶在 telemetryHost.shapeRendererReport。只进不出,没有读接口。
+  ipcMain.on('host-telemetry:report', (e, kind: unknown, props: unknown) => {
+    if (!isTrustedSender(e)) return
+    telemetry.report(kind, props)
+  })
+}
 
 app.on('before-quit', (e) => {
   // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
@@ -4460,6 +4743,7 @@ app.on('before-quit', (e) => {
     if (win && !win.isDestroyed()) state.bounds = win.getBounds()
   }
   saveDetachedState()
+  void pluginSandbox?.dispose() // 沙箱跟着退(它那头也会因控制通道断开自己退)
   globalShortcut.unregisterAll() // 释放 mini 全局快捷键
   miniAutoPanel?.stop(); miniAutoPanel = null
   approvalDelivery.stop() // P1-K3

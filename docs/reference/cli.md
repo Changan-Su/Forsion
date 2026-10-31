@@ -64,7 +64,7 @@ tangu install npm:<包名>
 | `/status` | 本会话概况:模型、思考档(请求 → 实际生效)、审批档、工作目录、用量 |
 | `/hotkeys` | 列出全部快捷键 |
 | `/plan` | 切换计划模式(团队模式下不可用;`/groupchat` 进入团队模式时会把它关掉) |
-| `/loop <1-200>` | 最大循环轮数 |
+| `/loop <轮数>` | 最大循环轮数(默认不限;`/loop off` 恢复不限) |
 | `/new` `/branch` `/compact` `/retry` `/edit` `/delete` | 会话管理(运行中不可用,先 `Esc` 中止) |
 
 ### 快捷键

@@ -11,7 +11,7 @@
 import { useEffect, useRef, useState, type ReactElement, type RefObject, type SVGProps, type ReactNode, type MouseEvent } from 'react'
 import { HUMAN_CAL } from '../../amadeus/store/humanCalendarIo'
 import { ExternalLink, MoreHorizontal, ChevronUp } from 'lucide-react'
-import { UI_MODE, useNativeChromeClaim } from '@lcl/engine'
+import { UI_MODE, useExitGhost, useNativeChromeClaim } from '@lcl/engine'
 import { coerceForDisplay, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { CalDateFields } from '../../amadeus/blocks/database/propertyTypes.builtins'
 import { getPropertyType, isStamped, resolveBaseType } from '../../amadeus/blocks/database/propertyTypes'
@@ -93,6 +93,7 @@ export function EventCard({ ev, at, onClose, maxRight, calendar = false, onActio
   const mobile = calendar && (UI_MODE === 'mobile' || !!window.tangu?.mobile)
   const pos = cardPos(at, { maxRight })
   const dialogRef = useRef<HTMLDivElement>(null)
+  useExitGhost(dialogRef) // 关掉(卸载)时留替身放 80ms 退场(走查续八 8.4)
   const closeRef = useRef<HTMLButtonElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
@@ -196,8 +197,10 @@ function EventCardBody({ ev, onClose, closeRef, onActions }: { ev: CardTarget; o
 
 /** 一行记录的字段:标题、时间(`colId` 那一列)、其余属性。事件浮卡与插件的 ctx.ui.mountRecord(recordSurface)共用 ——
  *  外框、关闭、打开 / 删除归调用方。`title` / `raw` 缺省取这一行自己的(浮卡传事件流里算好的那份);`lock` = 一律只读。 */
-export function RecordFields({ db, row, colId, title = row.name, raw, lock = false }: {
+export function RecordFields({ db, row, colId, title = row.name, raw, lock = false, hide }: {
   db: AggDb; row: AggRow; colId?: string; title?: string; raw?: string; lock?: boolean
+  /** 不列出的属性列(插件 mountRecord 的 hideColumns) */
+  hide?: readonly string[]
 }) {
   const { t } = useI18n()
   // 只读源(agent 日程 / ICS / 另一侧 Vault):全字段展示。
@@ -207,7 +210,7 @@ export function RecordFields({ db, row, colId, title = row.name, raw, lock = fal
   const fullyEditable = !lock && !db.readonly
   const nameCol = db.columns[0]
   const titleEditable = fullyEditable && !(db.isNoteView && nameCol?.type === 'page')
-  const others = db.columns.filter((c) => c.id !== nameCol?.id && c.id !== colId)
+  const others = db.columns.filter((c) => c.id !== nameCol?.id && c.id !== colId && !hide?.includes(c.id))
   const timeRaw = raw ?? (colId && typeof row.cells[colId] === 'string' ? (row.cells[colId] as string) : '')
   const summary = colId ? eventTimeSummary(timeRaw) : null
   const [editTime, setEditTime] = useState(false)

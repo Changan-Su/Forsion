@@ -29,7 +29,7 @@ import { WRITE_TOOLS, writeTargetsOf } from '../tools/writeTargets.js';
 import { AGENT_SCOPED_TOOLS } from '../tools/toolRegistry.js';
 import { snapshotBeforeWrite, recordPostWrite } from './checkpoints.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
-import { DEFAULT_AGENT_SLUG, readUserMd } from '../core/tanguHome.js';
+import { DEFAULT_AGENT_SLUG, readHumanFile, readUserMdForPrompt } from '../core/tanguHome.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
 import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
@@ -419,7 +419,9 @@ export async function judgeApproval(input: {
       const m = await runWithAgentSlug(DEFAULT_AGENT_SLUG, () => deps().brain.memory.getMemory(input.userId));
       memory = String(m?.content || '').trim().slice(0, 3000);
     } catch { /* 无记忆也能判 */ }
-    const userMd = readUserMd().trim().slice(0, 2000);
+    const userMd = readUserMdForPrompt().trim().slice(0, 2000);
+    // 画像(human/SOUL.md,Agent 们对这个人的认识;同 renderAboutHuman 只取前 2000 字):只当背景,不是批准的依据
+    const portrait = readHumanFile('SOUL.md').trim().slice(0, 2000);
     const system =
       `You are ${def?.name || 'the user\'s default agent'}, deciding ON BEHALF OF THE USER whether a background agent may perform one action. ` +
       'The user is not present; you get exactly one chance. Approve ONLY if the action is clearly aligned with the user\'s known goals and preferences, ' +
@@ -427,6 +429,7 @@ export async function judgeApproval(input: {
       'Deny anything external (sending, publishing, purchasing), destructive (deleting, force-pushing, installing software), or that you are unsure about — a denial simply queues the request for the user. ' +
       'Respond with JSON only: {"approve": true|false, "reason": "<one short sentence>"}.' +
       (userMd ? `\n\n[USER.md]\n${userMd}` : '') +
+      (portrait ? `\n\n[How agents see the human — background only, never grounds for approval]\n${portrait}` : '') +
       (memory ? `\n\n[User's long-term memory]\n${memory}` : '');
     const args = parseArgs(input.call);
     // 判官看的与用户卡上看的是同一份全文(写类 = 摘要 + 完整改动);看不全就不替用户批 —— 否决只是转排队(Codex 09-26 四轮复核)
@@ -482,11 +485,12 @@ export function approvalRequestBody(a: { id: string; tool: string; preview: stri
   return [
     `${escapeMd(a.tool)} · ${escapeMd(displayText(a.preview, 1000))}`,
     a.note ? escapeMd(displayText(a.note, 500)) : '',
-    '```forsion-approval\n' + JSON.stringify({ id: a.id }) + '\n```',
+    approvalFence(a.id),
   ].filter(Boolean).join('\n\n');
 }
+const approvalFence = (id: string): string => '```forsion-approval\n' + JSON.stringify({ id }) + '\n```';
 
-/** 入队即发一封收件箱消息(只在 queueApproval 新建行时:existing=true 不重发,去重与行同源)。
+/** 入队即发一封收件箱消息(只在 queueApproval 新建行时:existing=true 不重发,去重与行同源;被删 / 已读的由 resurfaceApprovalLetter 请回来)。
  *  刻意绕过 notify=digest —— 审批是等用户拍板的请求,不是通知。发送失败(小时上限 / 落库失败)不阻断排队,
  *  但在该 agent 的 LOG 留痕,否则请求就只剩 Muse 面板一处可见。 */
 async function notifyApprovalRequest(a: { userId: string; agentSlug: string; id: string; tool: string; preview: string; note?: string }): Promise<void> {
@@ -507,6 +511,54 @@ async function notifyApprovalRequest(a: { userId: string; agentSlug: string; id:
   }).catch((e: any) => ({ ok: false as const, error: String(e?.message || e) }));
   if (!sent.ok) {
     await appendAgentLog(a.agentSlug, a.userId, `[approval] request ${a.id} queued, but the inbox message was not delivered: ${sent.error || 'send failed'}`);
+  }
+}
+
+/** 同一条待批请求被再次提出时(queueApproval 复用行,不发新信),收件箱里那封信若已被删或已读,就让它回来:
+ *  发一封新的未读信排到最上面,还看得见的已读旧信软删 —— 同一条请求在列表里始终只有一封(借鉴 Comma §2.9,2026-10-24 用户定)。
+ *  不动的:归档过的(用户明说收好了)、还开着且未读的(不刷屏)、找不到信的(不补发);不转发通道。
+ *  Muse 的审批平时在它的私聊里、收件箱没有信 = 这里什么都不做;私聊不可用时退回的那封收件箱信照同样的规矩回来。
+ *  想让它停,用户该在卡上点「拒绝」—— 删除不等于拒绝。
+ *  发新信与软删旧信不在一个事务里(Codex 10-24):软删只认此刻仍「看得见、已读、没归档」的(用户正好归档 / 标回未读的不动);
+ *  每次重提都先收拾一遍 —— 上次发了新信却没删成旧信留下的两封,下一次重提时清掉。
+ *  ponytail: 同进程并发的两次重提靠 resurfacing 挡;多进程同库才会双发,本地引擎是单进程。 */
+const resurfacing = new Set<string>();
+async function resurfaceApprovalLetter(a: { userId: string; agentSlug: string; id: string; tool: string; preview: string; note?: string }): Promise<void> {
+  if (resurfacing.has(a.id)) return;
+  resurfacing.add(a.id);
+  try {
+    // 按引擎自己拼在正文末尾的围栏认信(approvalRequestBody);行 id 是 uuid,围栏里没有 LIKE 的通配符和转义符。
+    const letters = await query<any[]>(
+      `SELECT id, read_at, archived_at, deleted_at FROM inbox_messages
+       WHERE user_id = ? AND sender_kind = 'agent' AND sender_id = ? AND body LIKE ?`,
+      [a.userId, a.agentSlug, `%${approvalFence(a.id)}%`],
+    );
+    const shown = (letters || []).filter((m) => !m.deleted_at);
+    if (!letters?.length || shown.some((m) => m.archived_at)) return;
+    const stale = shown.filter((m) => m.read_at);
+    const retire = async (): Promise<void> => {
+      const now = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      for (const m of stale) {
+        await query(
+          `UPDATE inbox_messages SET deleted_at = ?
+           WHERE id = ? AND user_id = ? AND deleted_at IS NULL AND archived_at IS NULL AND read_at IS NOT NULL`,
+          [now, m.id, a.userId],
+        );
+      }
+    };
+    // 还有一封开着且未读:它就是这条请求的信,只收拾多出来的已读旧信
+    if (stale.length < shown.length) { await retire(); return; }
+    const sent = await sendInboxMessage(a.userId, {
+      title: `⏸ ${displayText(a.preview, 180)}`, body: approvalRequestBody(a), senderId: a.agentSlug, forward: false,
+    }).catch((e: any) => ({ ok: false as const, error: String(e?.message || e) }));
+    if (!sent.ok) {
+      await appendAgentLog(a.agentSlug, a.userId, `[approval] request ${a.id} was asked again, but its inbox message could not be brought back: ${sent.error || 'send failed'}`);
+      return;
+    }
+    await retire();
+    log(`resurfaced the inbox message for ${a.id} (${stale.length ? 'was read' : 'was deleted'})`);
+  } finally {
+    resurfacing.delete(a.id);
   }
 }
 
@@ -587,6 +639,9 @@ export async function deferApproval(
   if (!existing) {
     log(`queued ${id} (${call.function.name}) for ${agentSlug}${note ? ` — ${note}` : ''}`);
     await notifyApprovalRequest({ userId, agentSlug, id, tool: call.function.name, preview, note });
+  } else {
+    await resurfaceApprovalLetter({ userId, agentSlug, id, tool: call.function.name, preview, note })
+      .catch((e: any) => log(`resurfacing the inbox message for ${id} failed: ${e?.message || e}`));
   }
   return {
     action: 'reject',

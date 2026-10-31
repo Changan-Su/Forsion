@@ -10,6 +10,7 @@ import type { PluginMeta } from './registry.js';
 import type { ToolProvider, ToolDef } from '../tools/toolRegistry.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 import type { AppProfile } from '../seams/appProfile.js';
+import type { PluginChannelSpec } from '../channels/types.js';
 
 type Assert<T extends true> = T;
 type Extends<A, B> = A extends B ? true : false;
@@ -25,5 +26,6 @@ type _PluginOk = Assert<Extends<Pub.TanguPlugin, TanguPlugin>>;
 type _ProviderOk = Assert<Extends<Pub.ToolProvider, ToolProvider>>;
 type _MetaOk = Assert<Extends<Pub.PluginMeta, PluginMeta>>;
 type _ToolDefOk = Assert<Extends<Pub.ToolDef, ToolDef>>;
+type _ChannelOk = Assert<Extends<Pub.PluginChannelSpec, PluginChannelSpec>>;
 
 export {};

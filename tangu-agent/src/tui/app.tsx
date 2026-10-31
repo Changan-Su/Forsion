@@ -853,12 +853,15 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         return;
       }
       case '/loop': {
-        if (/^\d+$/.test(rest)) {
-          const n = Math.min(Math.max(1, parseInt(rest, 10)), 200);
+        if (/^(off|default|reset)$/i.test(rest)) {
+          setCfg((c) => ({ ...c, maxIterations: undefined }));
+          notice('已清除会话循环上限（Agent 定义了上限就按 Agent 的，否则不限）', 'success');
+        } else if (/^\d+$/.test(rest)) {
+          const n = Math.max(1, parseInt(rest, 10));
           setCfg((c) => ({ ...c, maxIterations: n }));
           notice(`最大循环轮数已设为 ${n} 轮`, 'success');
         } else {
-          notice(`当前最大循环轮数：${cfgRef.current.maxIterations || 90}\n用法：/loop <1-200>`);
+          notice(`当前最大循环轮数：${cfgRef.current.maxIterations || '不限'}\n用法：/loop <轮数>，/loop off 恢复不限`);
         }
         return;
       }
@@ -1021,7 +1024,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
         try {
           await ensureSession(sessionIdRef.current, cfgRef.current.model);
           // 与 PATCH /agent/sessions/:id 同口径:只改 title,不动 updated_at(那是消息活动时间)。
-          await query(`UPDATE chat_sessions SET title = ? WHERE id = ? AND user_id = ?`, [title, sessionIdRef.current, userId]);
+          await query(`UPDATE chat_sessions SET title = ?, title_manual = TRUE WHERE id = ? AND user_id = ?`, [title, sessionIdRef.current, userId]);
           notice(L(`会话已重命名为「${title}」`, `Session renamed to "${title}"`), 'success');
         } catch (e: any) {
           notice(L(`重命名失败：${e?.message || e}`, `Rename failed: ${e?.message || e}`), 'error');
@@ -1258,7 +1261,7 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
           [L('审批', 'Approval'), `${approvalLabel(c.approvalMode)} (${c.approvalMode}) · ${L('执行', 'exec')} ${c.execMode}`],
           [L('工作目录', 'Cwd'), c.cwd],
           ['Agent', `${agent} · ${L('团队', 'team')} ${group}`],
-          [L('循环上限', 'Max steps'), `${c.maxIterations ?? 90} · ${L('预算', 'budget')} ${c.tokenBudget ?? L('无', 'none')}`],
+          [L('循环上限', 'Max steps'), `${c.maxIterations ?? L('不限', 'no limit')} · ${L('预算', 'budget')} ${c.tokenBudget ?? L('无', 'none')}`],
           [L('用量', 'Usage'), L(`${u.total.toLocaleString()} tokens · 约 ${u.cost.toFixed(4)} 费用单位`, `${u.total.toLocaleString()} tokens · ~${u.cost.toFixed(4)} cost units`)],
         ];
         const w = Math.max(...rows.map(([k]) => dispWidth(k)));

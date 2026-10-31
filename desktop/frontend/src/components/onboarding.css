@@ -311,6 +311,8 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--s
 @container (max-height: 660px) {
   .ob-history-about .ch-about { display: none; }
   .ob-history-about .ob-history-more { border-top: 0; border-radius: var(--radius-lg); padding-top: 12px; }
+  /* 帮助改进那张卡(OnboardingImprove):四类数据行收紧,818×582 也不整页滚动、「隐私政策」留在窗内。 */
+  [data-ob-improve] .ob-history-row { min-height: 0; padding-block: 6px; }
   .ob-background-agent { padding: 14px 18px; }
   .ob-background-agents { gap: 10px; }
   .ob-background-layout { gap: 12px; }
@@ -360,8 +362,7 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--s
   .ob-history-row { animation: ob-pane-in .3s var(--ease-out) both; }
   /* 左栏走完的一步:对勾画出来。 */
   .ob-draw path, .ob-draw polyline { stroke-dasharray: 24; animation: ob-draw .38s var(--ease-out) .08s both; }
-  /* 开关的滑块、选项卡的选中态、「完整说明」的箭头 */
-  .ob-flow .settings-switch > span { transition: transform .34s var(--ease-spring), background var(--duration-fast); }
+  /* 选项卡的选中态、「完整说明」的箭头(开关的滑块用 base.css 那份拉伸,10-24) */
   .ob-connect-option, .ob-env-option { transition: border-color .2s ease, background .2s ease; }
   button.ob-progress-item, .ob-skip { transition: color var(--duration-fast); }
   .ob-history-more > svg { transition: translate var(--duration-fast); }

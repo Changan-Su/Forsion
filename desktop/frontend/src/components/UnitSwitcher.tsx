@@ -19,7 +19,7 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { create } from 'zustand'
-import { Check, ChevronDown, Cloud, Globe, Laptop, Monitor, Smartphone, X } from 'lucide-react'
+import { Check, ChevronDown, Cloud, Globe, Laptop, Monitor, MonitorSmartphone, Smartphone, X } from 'lucide-react'
 import { OverlayAt } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -440,6 +440,8 @@ export function UnitSettings(): React.ReactElement {
           )}
           {/* 未登录:可点,直接去登录(W-02) */}
           {units === null && !!window.tangu?.forsionLogin && <button className="unitsw-row" onClick={() => useApp.getState().openSettings('forsion')}>
+            {/* 空图标位:文字和上下两行的标题对齐(走查续五 W-57) */}
+            <span className="unitsw-ic" aria-hidden="true" />
             <span className="unitsw-col"><span className="unitsw-desc">{t('unit.notLoggedIn')} ›</span></span>
           </button>}
           {/* 手机在 P1 不开设备通道(它是调用方,不是执行设备):滤掉(P1-K1)。
@@ -465,7 +467,7 @@ export function UnitSettings(): React.ReactElement {
         </div>
       </SettingsPanel>
 
-      <SettingsPanel anchor="units-host" icon={<span className={`unitsw-dot${host?.connected || (!relay && host?.lanUrl) ? ' live' : hostEnabled ? ' wait' : ''}`} />}
+      <SettingsPanel anchor="units-host" icon={<MonitorSmartphone size={16} />}
         title={t('unit.hostToggle')} description={<span className="unitset-hint">{hostHint}</span>}
         actions={<SettingsSwitch checked={hostEnabled} disabled={busy} label={t('unit.hostToggle')} onChange={toggleHost} />}>
         {/* P1-K5:设备凭据降级 / 锁定提示(只在互联开着时才问状态 —— 问状态会判定钥匙串等级) */}
