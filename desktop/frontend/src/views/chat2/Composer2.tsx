@@ -56,6 +56,7 @@ import { ElementTile, PasteTile, QuotePreview, QuoteTile } from './QuoteTile'
 import { ELEMENT_EVENT, ELEMENT_TARGET_ATTR, composeElements, elementImages, formatElementBlock, markComposerUsed, type ElementPick } from './elementPick'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
 import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
+import { announceSend } from './freshLayout'
 import { ContextUsagePop } from './ContextUsagePop'
 import { isDirectModelId } from '../chatModelCatalog'
 import { usePromptSuggest } from './promptSuggest'
@@ -1475,6 +1476,7 @@ export const Composer2: React.FC<{
     const sentKey = draftKey
     const known = sentKey === NEW_CHAT_DRAFT ? new Set(useApp.getState().sessions.map((x) => x.id)) : null
     noteSend(outgoing, taRef.current) // 发送动效:气泡从这一行升上去(sendFlight.ts)
+    announceSend('press', sentKey, taRef.current) // 空对话居中的那一块此刻落底(freshLayout.ts / EmptyState2)
     const sentAtts = attachments.filter((a) => !isLeaving(a))
     const sentWs = wsFiles.filter((a) => !isLeaving(a))
     const toUpload = sentWs.filter((a) => !isInWorkspace(a)) // 已经传进工作区的不再传
@@ -1483,12 +1485,14 @@ export const Composer2: React.FC<{
       if (accepted) release([...sentAtts, ...sentWs])
       if (!accepted) {
         dropSend(outgoing)
+        announceSend('drop', sentKey, taRef.current)
         // 新对话的第一句没发出去,而输入框已经换到刚建的会话上:那份输入跟过去,留在眼前可以重发(那边有草稿就不动)。
         // 只认发送前还不存在的会话 —— 用户途中自己切去了别的会话,就不往那里塞,那份留在新对话里。
         const shown = draftKeyRef.current
         if (known && shown !== sentKey && !known.has(shown)) moveDraft(sentKey, shown)
         return false
       }
+      announceSend('sent', sentKey, taRef.current)
       if (!override && draftKeyRef.current === sentKey) fadeOutDraft(taRef.current) // 输入框里的字上移淡出,再清空
       // 发送途中又加进来的附件不跟着这条清掉(它们不在这次发出去的里面)
       const sent = new Set([...sentAtts, ...sentWs])

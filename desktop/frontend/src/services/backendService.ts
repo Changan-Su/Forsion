@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   GitIdentity, GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -1075,6 +1075,14 @@ export const museMessageFeedback = (t: EngineTarget, id: string, verdict: 'up' |
 
 export const postMuseFeedback = (t: EngineTarget, text: string) =>
   request<{ ok: boolean }>(t, '/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text }) })
+
+/** 新对话页的 Muse 开场建议(Muse 关着 / 开场建议关着 → 空;云端 404 由调用方当「没有」)。 */
+export const getMuseStarters = (t: EngineTarget) =>
+  request<{ starters: MuseStarter[] }>(t, '/agent/special/muse/starters', undefined, { timeoutMs: 8000 }).then((r) => r.starters || [])
+
+/** 用户点了 × / 点行发出去了。mute = 右键「别再推这类」。 */
+export const patchMuseStarter = (t: EngineTarget, id: string, status: 'dismissed' | 'used', mute?: boolean) =>
+  request<{ ok: boolean }>(t, `/agent/special/muse/starters/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(mute ? { status, mute: true } : { status }) })
 
 /** Muse Library 目录树(Agent Space 左栏;root=绝对路径,files 为相对路径)。 */
 export const getMuseLibrary = (t: EngineTarget) =>

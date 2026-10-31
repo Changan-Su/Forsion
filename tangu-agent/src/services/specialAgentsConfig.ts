@@ -86,6 +86,9 @@ export interface MuseConfig {
   notify: 'immediate' | 'digest';
   /** 难活升级给哪个 agent(slug;空=由 developer_instructions 自行决定/不升级)。经 delegate 按该 agent 的模型跑。 */
   escalateTo: string;
+  /** 新对话页的开场建议(10-25 用户选方案 A,docs/ToBeImproved/Muse预制提示词方案_2026-10-25):开 = Muse 看得见 set_chat_starters、
+   *  桌面 GET /agent/special/muse/starters 有内容;关 = 工具不给、接口回空。缺省开(跟着 Muse 总开关走)。 */
+  chatStarters: boolean;
   /** 收件箱里用户点过「好」、Muse 可以自动标已读的类别(services/inboxCategory.ts)。这是一次总的授权,「询问」档也不再逐封弹审批。 */
   inboxAutoRead: string[];
   /** 用户点过「这类以后都别管」的类别:不提醒也不标。 */
@@ -151,6 +154,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     heartbeatMinutes: 120,
     notify: 'immediate',
     escalateTo: '',
+    chatStarters: true,
     inboxAutoRead: [],
     inboxIgnored: [],
     maxDmPerDay: 0,
@@ -215,6 +219,7 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       ),
       notify: m.notify === 'digest' ? 'digest' : d.muse.notify,
       escalateTo: asStr(m.escalateTo, d.muse.escalateTo).trim().slice(0, 64),
+      chatStarters: asBool(m.chatStarters, d.muse.chatStarters),
       inboxAutoRead: asCategories(m.inboxAutoRead),
       inboxIgnored: asCategories(m.inboxIgnored),
       maxDmPerDay: clampInt(m.maxDmPerDay, d.muse.maxDmPerDay, 0, 24),

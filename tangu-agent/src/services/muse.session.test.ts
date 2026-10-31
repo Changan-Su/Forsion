@@ -117,7 +117,8 @@ describe('C1a 预算口径:跨全部 Muse 会话', () => {
 // 10-19 放到 4300:ask / agent 档补一句「看 / 读 / 搜文件用免审批的工具,run_bash 每条都要批」(Windows 上 dir / findstr 排成一串审批卡),实测约 4200。
 // 10-30 放到 4400:加一句「按条件触发的用 manage_automation,用户在规则卡上点头」(触发源注册表),实测约 4330。
 // 同日放到 4500:合并时叠上「用户本人的事实记进 person 作用域」(用户画像写入),实测约 4436。
-const MAX_KICKOFF = 4500;
+// 同日放到 4600:再叠上开场建议那句「用 set_chat_starters 维护新对话页那几行,有更合时的再换」(Muse 预制提示词方案 A),实测约 4552。
+const MAX_KICKOFF = 4600;
 
 describe('C1b kickoff 拆分', () => {
   const cfg = { ...SPECIAL_AGENTS_DEFAULTS.muse, mode: 'ask' as const, escalateTo: '', notify: 'immediate' as const };
@@ -135,6 +136,11 @@ describe('C1b kickoff 拆分', () => {
     expect(message).toContain('Permission tier: ask');
     expect(message).toContain('Your Space:');
     expect(message).toContain('add_muse_todo');
+  });
+
+  it('开场建议开着时点名 set_chat_starters(留着别换);关掉就不提(10-25 Muse 预制提示词)', () => {
+    expect(buildCycleMessages(cfg, dynA).message).toContain('set_chat_starters');
+    expect(buildCycleMessages({ ...cfg, chatStarters: false }, dynA).message).not.toContain('set_chat_starters');
   });
 
   it('ask / agent 档点明读文件用免审批的工具,别拿 run_bash 读(10-19 Windows 上 dir / findstr 排成一串审批卡);auto 档不需要', () => {

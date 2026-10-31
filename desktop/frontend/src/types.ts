@@ -77,6 +77,8 @@ export interface MuseConfig {
   notify?: 'immediate' | 'digest'
   /** 难活升级给哪个 agent(slug;空=不指定)。 */
   escalateTo?: string
+  /** 新对话页的 Muse 开场建议(10-25);旧引擎没有这个键,读端按开处理。 */
+  chatStarters?: boolean
   /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
   inboxAutoRead?: string[]
   /** 用户点过「这类以后都别管」的类别。 */
@@ -101,6 +103,12 @@ export type SpecialConfigResponse =
   | { config: SpecialAgentsConfig; defaults?: { historianPrompt: string }; cloud?: boolean; remote?: undefined }
   | { config: SpecialAgentsSummary; remote: true; defaults?: undefined; cloud?: undefined }
 
+/** GET /agent/special/muse/starters 的一条:用户照原样就能发的一句话;source.label 原样出现在 text 里,桌面把它画成链接。 */
+export interface MuseStarter {
+  id: string
+  text: string
+  source: { kind: 'calendar' | 'note' | 'todo' | 'session' | 'web' | 'muse'; label: string; ref?: string }
+}
 export interface MuseTodo {
   id: string
   title: string

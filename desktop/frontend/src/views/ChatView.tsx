@@ -41,6 +41,8 @@ import { SessionOpening } from '../components/SessionOpening'
 import { ExtraFolders } from '../components/ExtraFolders'
 import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
+import { MuseStarters } from './chat2/MuseStarters'
+import { NEW_CHAT_DRAFT } from './chat2/composerDrafts'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
 import { BgStrip } from './chat2/BackgroundProcs'
@@ -602,6 +604,13 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 输入卡上方那一栏的两半(JSX 在 .composer-anchor 里):项目那半只在空白新对话上;开场那半还包括已建好但没发过消息的会话。
   const projectBarOn = !activeId && (!studioChat || !!studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat))
   const openingOn = !hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok'
+  // 空对话居中 → 首发落底(freshLayout.ts):小窗 / 子会话面板 / 手机不居中 —— 手机一点输入框键盘就把它顶到键盘上沿,先居中再被顶走等于跳两次。
+  // 原生手机包里 UI_MODE 恒为 desktop,判手机还要看 window.tangu?.mobile。
+  const freshCenter = !params.miniSurface && !params.childSurface && UI_MODE !== 'mobile' && !window.tangu?.mobile
+  // 从有消息的会话点「新对话」进来:输入区从底部升回中间(只认挂载那一刻,EmptyState2 自己记)
+  const hadMessagesRef = useRef(false)
+  const freshRise = hadMessagesRef.current && !hasMessages && !activeId
+  useEffect(() => { hadMessagesRef.current = hasMessages }, [hasMessages])
   /** 流里有画出来的消息(系统消息、列表里隐藏的不算):决定底对齐的排法,也决定手机上整列跟不跟键盘走。 */
   const anyShown = (hasMessages && shownMessages.some((m) => m.role !== 'system' && !isHiddenInList(m))) || s.failedSends.length > 0
   // Agent Desk 只在会话开始后显示:草稿与已建 ID 但未发消息的新会话都不挂载,也不占右侧车道。
@@ -895,7 +904,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       )}
 
       {/* 空状态优先保持 view 居中;空间不足时按 composer 实高向上避让,小高度逐级精简。 */}
-      {!hasMessages && !historyLoading && !canvasOn && <EmptyState2 compact={!!params.miniSurface} title={params.miniSurface ? t('mini.chatHint') : studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />}
+      {!hasMessages && !historyLoading && !canvasOn && <EmptyState2 center={freshCenter} rise={freshRise} compact={!!params.miniSurface} title={params.miniSurface ? t('mini.chatHint') : studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />}
 
       {/* 输入区整簇(新对话的两条选择器 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
           正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
@@ -1086,6 +1095,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           onWithdrawSteer={activeId ? (id) => s.withdrawSteer(activeId, id) : undefined}
           onSteerNow={activeId ? () => { void s.steerNow(activeId) } : undefined}
         />
+        {/* Muse 的开场建议(新对话、没消息时;开场那一行出现的同一组条件):Chat Box 正下方最多三行 */}
+        {openingOn && !studioChat && <MuseStarters draftKey={activeId ?? NEW_CHAT_DRAFT} centered={freshCenter} />}
       </div>
       {/* 右侧车道:摘要栏卡片栈(进度 / 后台 / 产物 / 来源 / 工作范围 / 插件卡 / Agent Desk 卡片态,2026-10-25 多卡片)。
         * 锚在整列(.t2-chat-col,含输入框区);滚动条仍在最右缘(卡片右侧留 --tsum-gut 让 thumb 落位)。

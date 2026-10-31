@@ -338,6 +338,8 @@ export const CLASSIFICATION = {
   'POST /agent/special/approvals/:id/approve': [A, 'answer an async approval (D1/D2)'],
   'POST /agent/special/approvals/:id/reject': [A, 'answer an async approval (D1/D2)'],
   'GET /agent/special/muse/library': [A, 'Muse library'],
+  'GET /agent/special/muse/starters': [A, 'Muse chat starters shown under the new-chat composer (read-only)'],
+  'PATCH /agent/special/muse/starters/:id': [D, 'marks a starter used / dismissed and appends [feedback] to Muse LOG (memory write into an autonomous Agent)'],
   'GET /agent/special/muse/library/file': [A, 'Muse library file (read-only, realpath-bounded to the Library)'],
 
   // ── hooks.ts / wechat.ts / channels.ts —— 整组本机 ──
