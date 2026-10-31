@@ -5051,7 +5051,7 @@ Then reply with only the command output.`,
   const museRules = () => { try { return JSON.parse(readFileSync(join(home, 'agents', 'muse', 'triggers.json'), 'utf8')); } catch { return []; } };
   // muserule(10-30):ask 档的 Muse 收到「每次打开 X 就提醒」→ 只发规则卡,triggers.json 一条不多;用户点「好」规则才出现。
   // 10-31 递话改走私聊:原来往 /muse/feedback 写「The user asked: …」,产品里没有这样的发送方([feedback] 只有回执和 Space 报错),
-  // 这样递第一个周期漏掉 7/19(含 ruleobserve),同一句话走私聊 0/11(汇总 harness-runs/2026-10-31/Muse周期漏请求-live汇总.md)。
+  // 这样递第一个周期漏掉 7/20(含 ruleobserve),同一句话走私聊 0/14(汇总 harness-runs/2026-10-31/Muse周期漏请求-live汇总.md)。
   await scenario('muserule', `muserule Muse 提规则卡、点了才建(${MUSE_MODE})`, async () => {
     const before = museRules().length;
     const chat = await askMuseInDm('Every time I open Figma, remind me to stretch first. Set this up as an automation rule in your next background round, not now in this chat.');
