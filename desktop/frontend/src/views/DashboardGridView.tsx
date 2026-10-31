@@ -1198,7 +1198,7 @@ function GridInner({ leaf }: ViewProps) {
 
 /** 卡换格时的弹簧(临界阻尼,不回弹):从当前位置、当前大小,带着当前速度走向新格。
  *  不用 framer 的 layout 动画:它每次打断都从零速重启(`velocity: 0` 写死),连续让位时卡走走停停;
- *  它量视觉 px 再写 CSS px,body zoom ≠ 1 时起点差一个倍率;改档时靠 scale,内容会被压扁。
+ *  它量视觉 px 再写 CSS px,body zoom 110% 时换位第一帧先往反方向跳约 5%(实测);改档时靠 scale,内容会被压扁。
  *  这里按格子算,不量 DOM;位置走 transform,大小走真实宽高。写在内层卡上:外层 slot 的 transform 归 framer。 */
 const SPRING_K = 420
 const SPRING_D = 41
