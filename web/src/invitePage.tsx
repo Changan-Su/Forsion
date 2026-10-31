@@ -166,6 +166,7 @@ export function mountInvitePage(token: string, options?: InvitePageOptions): voi
   style.textContent = CSS
   document.head.appendChild(style)
   document.title = `${translate('invite.title')} · Forsion`
+  document.getElementById('tangu-splash')?.remove() // 这里不启动主应用,开屏只会盖住邀请卡
   const el = document.getElementById('root') ?? document.body.appendChild(document.createElement('div'))
   const account = options ?? { apiBase: getApiBase(), getToken, request: (path, init) => fetch(path, init), appBase: '/' }
   createRoot(el).render(<InviteApp token={token} account={account} />)

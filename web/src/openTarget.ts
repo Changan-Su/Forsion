@@ -25,6 +25,7 @@ export function takeOpenTarget(): string | null {
   history.replaceState(history.state, '', url.href)
   if (!isSafeVaultPath(note)) return null
   try { localStorage.setItem(contentStorageKey(ACTIVE_VAULT_KEY), vault) } catch { /* private mode */ }
+  ;(window as { __FORSION_OPEN_TARGET__?: boolean }).__FORSION_OPEN_TARGET__ = true
   return note
 }
 

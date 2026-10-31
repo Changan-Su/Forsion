@@ -2000,7 +2000,7 @@ html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-f
 /* 分享卡片(ShareCard:Share|Publish 双 tab 浮层,锚定分享按钮) */
 .amxc-cardwrap { position: fixed; inset: 0; z-index: 240; -webkit-app-region: no-drag; }
 .amxc-card {
-  position: fixed; width: 360px; max-height: min(520px, calc(100vh - 48px)); overflow-y: auto;
+  position: fixed; width: 360px; max-height: min(640px, calc(100vh - 48px)); overflow-y: auto;
   padding: 8px 12px 12px;
   background: var(--bg-card, var(--surface)); color: var(--text);
   border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 12px);

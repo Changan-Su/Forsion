@@ -191,7 +191,7 @@ Three icon-only tabs, named in their tooltips. Amadeus opens on "Workspace".
 
 | Tab | What it holds |
 | --- | --- |
-| Workspace | The note tree. The filter box "Search notes" at the top matches names only; below it come "Pinned", "Cloud sync", "Shared with me", "Starred", "Collections" and then the vault itself ("Cloud sync" and "Shared with me" appear only when cloud sync and collaboration are available) |
+| Workspace | The note tree. The filter box "Search notes" at the top matches names only; below it come "Pinned", "Cloud sync", "Shared by me", "Shared with me", "Starred", "Collections" and then the vault itself ("Cloud sync" and "Shared with me" appear only when cloud sync and collaboration are available) |
 | Search | Full-text search (`⌘/Ctrl + ⇧ + F`). Each hit carries a highlighted snippet, opening one jumps to the first matching block and flashes it; "Save as collection" stores the query in the sidebar for one-click replay |
 | Tags | Every inline #tag in the vault with its count; click one to expand the notes carrying it, click again to collapse |
 
@@ -323,7 +323,7 @@ Pick any folder to be your vault, and everything under it — Markdown notes, at
 
 The left sidebar lays the whole vault out as a tree: folders first in alphabetical order (empty ones included), then every file — notes, attachments, databases, PDFs, images, drawing boards. A note with an icon shows that icon instead of the generic file glyph. The whole tree sits in a section named after the vault folder; click that name to collapse it all.
 
-Above the tree sit a few more sections: "Pinned", "Starred", "Collections", "Shared with me", "Cloud sync". Press and drag a section header to reorder them (mouse only); the order and each section's open state are remembered.
+Above the tree sit a few more sections: "Pinned", "Starred", "Collections", "Shared by me", "Shared with me", "Cloud sync". Press and drag a section header to reorder them (mouse only); the order and each section's open state are remembered.
 
 - The box at the top, "Search notes", filters by **file name** and replaces the tree with a flat list. It does not search note contents — full-text search is a separate command, `⌘/Ctrl + Shift + F` "Search notes (full text)"; to jump by name use `⌘/Ctrl + P` "Quick find".
 - While the filter box has text, folders are not shown and you cannot drag a file to the vault root. With no hits it reads "No matching notes".
@@ -2817,15 +2817,15 @@ Automation lives behind the ribbon's "Automation" icon, in three panes: "Automat
 
 ### Public: publishing, sharing, and exactly what becomes visible
 
-Public is the ribbon's "Publish" icon; the page is titled "Published" and has three sections: "My sites", "Published notes", "Shared notes". Each row offers open, copy link, and a two-click "Unpublish".
+Public is the ribbon's "Sharing" icon; the page is titled "Sharing & publishing" and sorts everything into "All", "Shared by me", "Shared with me", "Published" and "Expired". Pages you share expand in place, so you can change access, remove people or stop sharing there; pages shared with you can be left; published items offer open, copy link, and a two-click "Unpublish". An expired share is kept for 30 days, and "Renew 7 days" brings it back without inviting anyone again.
 
 > [!warning]
 > This Space only manages — it creates nothing; both publishing and sharing start from the note itself. It also needs a Forsion account: signed out, all it says is "Sign in to Forsion to see your published content".
 
 - **Publishing a note (public, read-only)**: open the note → the toolbar's "Share / publish" icon → the "Publish" tab → "Publish to a public link". Anyone with the link can read it with no account at all. The card always shows "Published {used} / {total} pages." and refuses past your quota with "Plan limit reached". Publishing a page also publishes its `.fd` subpage tree.
 - **Publishing a whole folder**: right-click a folder in the notes sidebar → "Publish this folder (public link)". That publishes the entire subtree at once and copies the link to your clipboard in the same action.
-- **Sharing a note (collaboration)**: the same "Share / publish" icon → the "Share" tab → "Turn on live sharing". You set "Link access" (can edit / read-only), "Open for", and a "Password", and manage people under "Participants · {n}". "Stop sharing" cuts everyone off at once, and rotating the link kills the old one instantly.
-- **"Shared with me"**: a section in the notes sidebar listing pages other people shared with you. It renders nothing at all when the list is empty, so not finding it is normal.
+- **Sharing a note (collaboration)**: the same "Share / publish" icon → the "Share" tab → "Turn on live sharing". You set "Link access" (can edit / read-only), "Open for", and a "Password", and manage people under "Participants · {n}". "Stop sharing" cuts everyone off at once, and rotating the link kills the old one instantly. Removing a participant rotates the link too, without affecting anyone else who already joined. "Share along" in the card lists what the page refers to outside the share: attachments start selected, linked pages are yours to tick, selected items follow this share's access, and unticking takes them back at once. References added later are not included automatically; they appear first with a "New" tag the next time you open the card. Someone who accepts the invite lands on the page itself, and people who already joined go straight there without accepting again.
+- **"Shared by me" and "Shared with me"**: two sections in the notes sidebar. "Shared by me" lists what you share and publish, with the number of people or the end date at the end of the row, and a warning when it is about to end. "Shared with me" lists pages other people shared with you; right-click to copy a page link or leave the share. An empty section renders nothing at all, so not finding one is normal. On the web, opening someone else's page switches to their vault, and "Back to my vault" at the top of the sidebar brings you back.
 - **Who may act**: only the vault owner can manage publishing and sharing; a participant is told "Only the vault owner can manage sharing and publishing." Live sharing is also plan-gated, and free plans are asked to upgrade to Plus or Pro.
 
 > [!warning]
@@ -3349,7 +3349,7 @@ Sidebars and panels have no settings page of their own; they are driven by comma
 - In Amadeus the left sidebar holds "Notes", "Search" and "Tags"; the right sidebar holds chat, outline, backlinks and graph, and starts collapsed.
 - The left sidebar uses `⌘/Ctrl + /` rather than `⌘/Ctrl + B` because the latter is bold in the note editor. The right sidebar has no default key — assign one on the "Shortcuts" page if you want it.
 - Drag the divider to resize a sidebar or the bottom panel. Widths are remembered per Space; a sidebar you have never dragged sits at the default width.
-- The blocks above the notes tree — "Pinned", "Cloud sync", "Shared with me", "Starred", "Collections" — can be reordered by dragging their headers. Mouse only: touch and pen will not start the drag, and only the header is a handle — dragging from inside a block drags a note instead.
+- The blocks above the notes tree — "Pinned", "Cloud sync", "Shared by me", "Shared with me", "Starred", "Collections" — can be reordered by dragging their headers. Mouse only: touch and pen will not start the drag, and only the header is a handle — dragging from inside a block drags a note instead.
 - "Pinned", "Starred" and "Collections" are stored on this device, per vault. Rename or move the vault folder and those blocks come back empty.
 
 The status bar is at Settings → "Appearance" → "Status bar": the "Display" panel has one master switch, "Show status bar" (on by default), and the "Status bar" panel below is a checkable, drag-to-reorder list holding "Current Space", "Running sessions", "Sync status", "Backlinks", "Word count" and "Inbox unread". Turn the master switch off and the whole bar goes away, giving the height back to the workspace.

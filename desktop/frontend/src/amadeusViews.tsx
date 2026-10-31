@@ -138,7 +138,7 @@ registerMessages({
   'amxv.sec.searchTip': { zh: '搜索：{q}', en: 'Search: {q}' },
   'amxv.sec.removeCollection': { zh: '移除集合', en: 'Remove collection' },
   'amxv.sec.sharedByMe': { zh: '我共享的', en: 'Shared by me' },
-  'amxv.shared.people': { zh: '{n} 人', en: '{n} people' },
+  'amxv.shared.people': { zh: '{n} 人', en: '{n} joined' },
   'amxv.shared.waiting': { zh: '等人加入', en: 'Waiting to join' },
   'amxv.shared.published': { zh: '已发布', en: 'Published' },
   'amxv.shared.dueToday': { zh: '今天到期', en: 'Ends today' },
@@ -655,7 +655,8 @@ function SharedByMeSection() {
     }
     load()
     window.addEventListener('amadeus:shares-changed', load)
-    return () => window.removeEventListener('amadeus:shares-changed', load)
+    window.addEventListener('focus', load) // 对方加入不推送:发完链接切回来时补一次人数
+    return () => { window.removeEventListener('amadeus:shares-changed', load); window.removeEventListener('focus', load) }
   }, [collab])
   if (!collab || shares.length + pubs.length === 0) return null
   const open = (vaultId: string, path: string, ev: RMouseEvent): void => {
