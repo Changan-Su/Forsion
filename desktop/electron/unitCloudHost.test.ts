@@ -74,6 +74,16 @@ describe('Unit vault as a cloud mirror', () => {
     expect(boundVaultRoot(marker(), vault(), 'b', true)).toBe(false)
   })
 
+  it('does not follow the binding to another folder', async () => {
+    expect(boundVaultRoot(marker(), vault(), 'a', false)).toBe(true)
+    const other = join(dir, 'other')
+    await mkdir(other)
+    await writeFile(join(other, 'Private.md'), 'mine')
+    expect(boundVaultRoot(marker(), other, 'a', false)).toBe(false)
+    expect(boundVaultRoot(marker(), other, 'a', true)).toBe(false)
+    expect(boundVaultRoot(marker(), vault(), 'a', false)).toBe(true)
+  })
+
   it('never publishes existing notes unless the owner opted in', async () => {
     await writeFile(join(vault(), 'Private.md'), 'mine')
     expect(boundVaultRoot(marker(), vault(), 'a', false)).toBe(false)

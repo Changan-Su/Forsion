@@ -113,9 +113,10 @@ export function createConfigStore(home: string, currentAccount: () => string | n
 export function boundVaultRoot(file: string, root: string, account: string, syncVault: boolean): boolean {
   const saved = readJson(file)
   if (saved.state === 'unknown') return false
-  if (saved.value) return saved.value.account === account
+  // The root is part of the decision: pointing the workspace elsewhere must not publish that folder.
+  if (saved.value) return saved.value.account === account && saved.value.root === root
   if (!syncVault && readdirSync(root).some((name) => !name.startsWith('.'))) return false
-  writePrivateJson(file, { account })
+  writePrivateJson(file, { account, root })
   return true
 }
 
@@ -173,7 +174,7 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
   let activeVault: RuntimeVault | null = null, syncStatus: unknown = null
   let hooks: Parameters<AmadeusSyncHostDeps['setMutationHooks']> | null = null
   let device: { url: string; userCode: string } | null = null, onDevice: (() => void) | null = null
-  let refresher: ReturnType<typeof setInterval> | null = null
+  let refresher: ReturnType<typeof setInterval> | null = null, credsWatch: ReturnType<typeof setInterval> | null = null
 
   const pairingFile = join(home, 'unit-pairing.json')
   const refreshHub = () => {
@@ -206,7 +207,7 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
   }
 
   const stopSync = () => amadeus?.stopAllSync()
-  const restartSync = () => (o.vault() ? amadeus?.restartAllSync() : undefined)
+  const restartSync = () => (o.vault() && !closed ? amadeus?.restartAllSync() : undefined)
   const accounts = createAccountCore({
     loadCreds: creds.load, saveCreds: creds.save, saveConfig: async () => undefined, loadConfig: async () => ({}), ensureBackend: async () => {},
     refreshUnitHost: refreshHub, renderers: () => [], events: { on() {}, removeListener() {} },
@@ -239,6 +240,11 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
     log,
   }
 
+  // A runtime replaced by an update or stopped by disable must not finish its old sign-in over the new one's account.
+  const whileRunning = (assertCurrent?: () => void) => () => {
+    if (closed) throw new Error('The cloud runtime has stopped')
+    assertCurrent?.()
+  }
   const lockedVault = () => {
     const vault = o.vault()
     if (!vault) throw new Error('The vault is not available')
@@ -260,9 +266,9 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
     },
     accountBackendState: async () => null,
     accountTransition: accounts.transition,
-    accountCommit: async (next: { cloudUrl: string; token: string }, assertCurrent?: () => void, onCommitPoint?: () => void) => { creds.assertWritable(); await accounts.commit(next, assertCurrent, onCommitPoint) },
-    accountClear: async (assertCurrent?: () => void, onCommitPoint?: () => void) => { creds.assertWritable(); await accounts.clear(assertCurrent, onCommitPoint) },
-    writeCreds: accounts.writeCreds,
+    accountCommit: async (next: { cloudUrl: string; token: string }, assertCurrent?: () => void, onCommitPoint?: () => void) => { creds.assertWritable(); await accounts.commit(next, whileRunning(assertCurrent), onCommitPoint) },
+    accountClear: async (assertCurrent?: () => void, onCommitPoint?: () => void) => { creds.assertWritable(); await accounts.clear(whileRunning(assertCurrent), onCommitPoint) },
+    writeCreds: (patch: Partial<{ cloudUrl: string; token: string }>) => { if (!closed) accounts.writeCreds(patch) },
     onExternalCredsChange: (cb: (change: ExternalCredsChange) => void) => accounts.onExternalChange(cb),
     setTokenRefresher: accounts.setRefresher,
     setAmadeusSyncFactory: (factory: AmadeusSyncFactory) => { syncFactory = factory },
@@ -284,6 +290,9 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
   await accounts.refresh(4000).catch(() => {})
   refresher = setInterval(() => { void accounts.refresh().catch(() => {}) }, 24 * 3600_000)
   refresher.unref()
+  // auth.json can change behind the running Unit. Polling also sees that on network and bind mounts, where file events do not arrive.
+  credsWatch = setInterval(() => accounts.onAuthFileMaybeChanged(), WATCH_MS)
+  credsWatch.unref()
   refreshHub()
   const stopWatching = watchResume((reason) => {
     hub?.reconnect(reason)
@@ -293,18 +302,14 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
 
   return {
     account: {
-      login: async (cloudUrl) => {
+      login: (cloudUrl) => new Promise((done, reject) => {
         creds.assertWritable()
+        // One account at a time: a pending switch would look signed in to whoever polls, under the wrong account.
+        if (accountId()) throw new Error('Already signed in. Sign out first.')
         device = null
-        let failure: string | null = null, finished = false
-        const started = new Promise<void>((done) => { onDevice = done })
-        const flow = invoke('auth:forsionLogin', cloudUrl).catch((error) => { failure = error instanceof Error ? error.message : 'Sign-in failed' }).finally(() => { finished = true; onDevice?.() })
-        void flow
-        await started
-        if (failure) throw new Error(failure)
-        if (!device && finished) return { signedIn: true }
-        return device
-      },
+        onDevice = () => done(device)
+        invoke('auth:forsionLogin', cloudUrl).then(() => done({ signedIn: true }), reject)
+      }),
       logout: () => invoke('auth:logout'),
       status: async () => {
         const status = await invoke('auth:status') as Record<string, unknown>
@@ -325,8 +330,9 @@ export async function createCloudRuntime(o: CloudRuntimeOptions, bundle = cloudB
       closed = true
       stopWatching()
       if (refresher) clearInterval(refresher)
+      if (credsWatch) clearInterval(credsWatch)
       hub?.stop(); hub = null
-      await stopSync()
+      await accounts.transition(async () => { await stopSync() })
     },
   }
 }

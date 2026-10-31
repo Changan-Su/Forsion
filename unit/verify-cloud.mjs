@@ -4,7 +4,7 @@
  *   node unit/verify-cloud.mjs --extend <signed package dir> --auth <auth.json of the local server> [--unit unit/dist] [--keep]
  * Tokens stay in this process and the Units' private data directories; nothing here prints them. */
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -66,7 +66,7 @@ function device(name) {
       if (!body.ok) throw new Error(body.error || `rpc ${ch} failed`)
       return body.result
     },
-    login: () => new Promise((done, reject) => {
+    login: (beforeApproval = async () => {}) => new Promise((done, reject) => {
       const proc = spawn(process.execPath, [main, 'login', config, cloud], { cwd: scratch, stdio: ['ignore', 'pipe', 'pipe'] })
       let out = '', approved = false
       proc.stdout.on('data', async (d) => {
@@ -75,6 +75,7 @@ function device(name) {
         let started
         try { started = JSON.parse(out) } catch { return }
         approved = true
+        await beforeApproval()
         const answer = await hub('/auth/cli/approve', { method: 'POST', body: JSON.stringify({ user_code: started.userCode }) })
         if (answer.status !== 200) reject(new Error(`approve failed (${answer.status})`))
       })
@@ -155,9 +156,23 @@ try {
   const after = (await hub('/units')).json?.units ?? []
   check('a restart adds no device row', after.length === roster.length, `${after.length}`)
 
+  const refused = await a.login().then(() => false, () => true)
+  check('a second sign-in is refused while signed in', refused)
+  const authFile = join(dirname(a.config), 'data/cloud/auth.json'), saved = readFileSync(authFile)
+  rmSync(authFile)
+  const dropped = await until(async () => { const s = await a.account(); return !s.loggedIn && s.relay === null }, 15_000)
+  check('removing auth.json closes the relay', dropped !== null, `${dropped} ms`)
+  writeFileSync(authFile, saved, { mode: 0o600 })
+  const back = await until(async () => (await a.account()).relay?.connected, 15_000)
+  check('restoring auth.json brings it back', back !== null, `${back} ms`)
+
   await cli('logout', a.config)
   const out = await a.account()
   check('sign-out clears the Unit account and leaves its notes', !out.loggedIn && out.relay === null && existsSync(a.vault))
+
+  await a.login(() => cli('disable', a.config, 'forsion-extend')).catch(() => {})
+  await delay(4000)
+  check('a stopped runtime cannot finish its sign-in', !JSON.parse(readFileSync(authFile, 'utf8')).token)
 } catch (error) {
   failed++
   console.log(`FAIL  ${error instanceof Error ? error.message : error}`)
