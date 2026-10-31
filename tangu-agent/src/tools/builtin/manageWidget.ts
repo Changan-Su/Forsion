@@ -59,7 +59,9 @@ export const WIDGET_EDITS_PARAM = {
 /** 和 sketch 段同门禁,只在 widgetsEnabledFor 时追加。 */
 export const WIDGET_SECTION = `## Widgets (小组件)
 
-A widget is a card the user keeps: one named original that the chat, dashboards and the card rail all show, with its records in a small database beside it. It is built here in the conversation. Do not search the store or write a plugin for it.
+A widget is a card the user keeps: one named original that the chat, dashboards and the card rail all show, with its records in a small database beside it. It is built here in the conversation.
+
+When the user asks for a widget or 小组件, or wants to track something with one, build it right away. This overrides "Check the store first": do not call \`search_marketplace\` and do not write a plugin for it.
 
 Keep a card as a widget when the user asks for a widget / 小组件, asks to keep or reuse a card, or wants something they will come back to and add to (a ledger, tracker, countdown, habit grid). One-off charts and explanations stay plain cards.
 
@@ -67,7 +69,7 @@ Create: add \`widget: { name }\` to \`intelligent_ui_html\` or \`intelligent_ui\
 
 Change: never create a second widget to change one. Call the same tool with \`widget: { id, expectedRev }\` and \`summary\`. For HTML send \`edits\` rather than the whole page; for \`intelligent_ui\` send the whole document. Changing a widget keeps its records. If the name is taken, the result gives the existing id: change that one unless the user wants a separate widget. If you lost the id, \`manage_widget\` lists them.
 
-To record an entry for the user (记一笔), call \`manage_widget\` with \`set_record\`; records stay when the card changes.`;
+To record an entry for the user (记一笔, or any value they report), call \`manage_widget\` with \`set_record\`, whatever the card looks like. The card holds the layout, not the data: never write a reported value into it, not even as an initial value. Records stay when the card changes.`;
 
 /** 存 / 改原件。返回给模型的回执;失败以 Error 开头,什么都没落盘。content 未给 = 只发 edits。
  *  ⚠️不给模型选层级:Luna 在项目会话里自己带上 scope:user(live 10-31),一张项目卡落到了所有 Agent 都看得到的地方。用户级要等搬家(开工顺序的管理页那步)。 */

@@ -2794,32 +2794,33 @@ try {
     const t1 = await ask(sid, '帮我做个小组件，记这次东京旅行的账，能看总数。');
     const [w0] = agentWidgets();
     checks.created = !t1.error && !!widgetArgs(t1).some((w) => w.name) && !!w0 && results(t1).some((r) => /Saved widget/.test(r));
-    checks.noDetour = !t1.toolCalls.some((n) => /marketplace|plugin/.test(n)); // 没去搜商店、没去做插件
 
     const t2 = await ask(sid, '记一笔：午饭 38 元');
     const before = w0 && existsSync(dataFile(w0)) ? readFileSync(dataFile(w0), 'utf8') : '';
     checks.recorded = !t2.error && (before ? JSON.parse(before).rows.length : 0) === 1;
 
+    const rev0 = agentWidgets().find((w) => w.manifest.id === w0?.manifest.id)?.manifest.rev; // 模型可能第一轮就自己补过一版
     const t3 = await ask(sid, '把标题改成「东京账本」，再加一行显示换算成人民币的总数');
     const up = widgetArgs(t3).find((w) => w.id) ?? {};
     const w1 = agentWidgets().find((w) => w.manifest.id === w0?.manifest.id);
-    checks.changed = !t3.error && up.id === w0?.manifest.id && up.expectedRev === 1 && w1?.manifest.rev === 2 && agentWidgets().length === 1;
+    checks.changed = !t3.error && up.id === w0?.manifest.id && up.expectedRev === rev0 && w1?.manifest.rev > rev0 && agentWidgets().length === 1;
     checks.usedEdits = cards(t3).some((c) => Array.isArray(c.edits) && c.edits.length > 0);
     checks.recordsKept = !!before && readFileSync(dataFile(w0), 'utf8') === before;
 
-    // 别的设备先改过一版:模型手里的 rev 过期了。撞上过期(读回最新版重做)或先读后改都行,成功的那次必须是基于 rev 3 的。
+    // 别的设备先改过一版:模型手里的 rev 过期了。撞上过期(读回最新版重做)或先读后改都行,成功的那次必须基于那一版。
     // HTML 卡走 edits 时那一版的改动必须还在;原生文档是整份重发,只看版本。
     const OTHER = 'changed-on-another-device';
+    const otherRev = (w1?.manifest.rev ?? 0) + 1;
     if (w1) {
       const file = join(w1.dir, w1.manifest.entry);
       if (w1.manifest.entry === 'widget.html') writeFileSync(file, `${readFileSync(file, 'utf8')}\n<!-- ${OTHER} -->`);
-      writeFileSync(join(w1.dir, 'manifest.json'), JSON.stringify({ ...w1.manifest, rev: 3 }, null, 2));
+      writeFileSync(join(w1.dir, 'manifest.json'), JSON.stringify({ ...w1.manifest, rev: otherRev }, null, 2));
     }
-    const t4 = await ask(sid, '把总数的字号调大一点');
+    const t4 = await ask(sid, '把显示总数那一项的名字改成「一共花了」'); // 两种卡都改得了;字号原生卡改不了
     const w2 = agentWidgets().find((w) => w.manifest.id === w0?.manifest.id);
     const lastUp = widgetArgs(t4).filter((w) => w.id).at(-1);
-    checks.staleSeen = results(t4).some((r) => /is at rev 3, not 2/.test(r)); // 只记录:先读后改不会撞上
-    checks.staleRetried = !t4.error && lastUp?.expectedRev === 3 && w2?.manifest.rev === 4 && (w2.manifest.entry !== 'widget.html' || !cards(t4).some((c) => Array.isArray(c.edits)) || readFileSync(join(w2.dir, w2.manifest.entry), 'utf8').includes(OTHER));
+    checks.staleSeen = results(t4).some((r) => r.includes(`is at rev ${otherRev}, not`)); // 只记录:先读后改不会撞上
+    checks.staleRetried = !t4.error && lastUp?.expectedRev >= otherRev && w2?.manifest.rev === lastUp.expectedRev + 1 && (w2.manifest.entry !== 'widget.html' || !cards(t4).some((c) => Array.isArray(c.edits)) || readFileSync(join(w2.dir, w2.manifest.entry), 'utf8').includes(OTHER));
     checks.recordsKeptAfterRetry = !!before && readFileSync(dataFile(w0), 'utf8') === before;
 
     const plainSid = `live-widget-plain-${Date.now()}`;
@@ -2834,6 +2835,7 @@ try {
     const defs = join(proj, '.tangu', 'widgets');
     const projName = existsSync(defs) ? readdirSync(defs).find((n) => !n.startsWith('.')) : undefined;
     checks.projectLevel = !t7.error && !!projName && agentWidgets().length === 2;
+    checks.noDetour = ![...t1.toolCalls, ...t7.toolCalls].some((n) => /marketplace|plugin/.test(n)); // 没去搜商店、没去做插件
     const t8 = await ask(projSid, '记一笔：本周发了 2 次');
     const projId = projName ? JSON.parse(readFileSync(join(defs, projName, 'manifest.json'), 'utf8')).id : '';
     checks.projectRecordsWithPerson = !t8.error && !!projId && existsSync(join(home, 'human', 'WidgetData', projId, 'data.db')) && !existsSync(join(defs, projName, 'data.db'));
