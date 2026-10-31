@@ -27,6 +27,8 @@ import type { activeRunCount } from '../services/agentLoop.js';
 import type { createThinWorker } from '../adapters/httpWorkerHost.js';
 import type { createProfileStore } from '../profiles/profileStore.js';
 import type { PluginSkillProvider } from '../skills/pluginSkills.js';
+import type { PluginModelProvider } from '../llm/pluginModels.js';
+export type { PluginModel, PluginModelReadContext, PluginModelCallContext, PluginModelProvider, PluginModelRequest, PluginModelResult } from '../llm/pluginModels.js';
 export type { PluginSkillEntry, PluginSkillListContext, PluginSkillProvider } from '../skills/pluginSkills.js';
 import type { ChannelSettings, PluginChannelSpec } from '../channels/types.js';
 
@@ -136,6 +138,7 @@ export interface TanguPluginContext {
   registerToolProvider(p: ToolProvider): void;
   /** Publish live read-only skills under a host-owned namespace; revoked on disable/unload. */
   registerSkillProvider(provider: PluginSkillProvider): void;
+  registerModelProvider(provider: PluginModelProvider): void;
   /** 登记进统一插件注册表（在「设置 → 插件」露出 + schema 面板;带 toolProvider 则顺带注册工具）。
    *  停用后 meta 仍列出(休眠:名称/图标/设置保留,toolProvider 与 promptSection 摘掉)。 */
   registerPlugin(meta: PluginMeta): void;

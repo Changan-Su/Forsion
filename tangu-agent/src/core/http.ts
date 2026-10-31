@@ -4,6 +4,7 @@
  */
 import type { Request, RequestHandler } from 'express';
 import { deps } from '../seams/runtime.js';
+import { runWithRemoteRequest } from '../seams/runContext.js';
 
 /** 与 Forsion AuthRequest 同构:core 只读 req.user.userId(其余字段透传)。 */
 export interface AuthRequest extends Request {
@@ -12,8 +13,8 @@ export interface AuthRequest extends Request {
 
 /** 用户鉴权中间件(lazy → deps().host.authMiddleware)。 */
 export const authMiddleware: RequestHandler = (req, res, next) =>
-  deps().host.authMiddleware(req, res, next);
+  runWithRemoteRequest(req.headers['x-forsion-remote'] !== undefined, () => deps().host.authMiddleware(req, res, next));
 
 /** 管理员鉴权中间件(lazy → deps().host.adminMiddleware)。 */
 export const adminMiddleware: RequestHandler = (req, res, next) =>
-  deps().host.adminMiddleware(req, res, next);
+  runWithRemoteRequest(req.headers['x-forsion-remote'] !== undefined, () => deps().host.adminMiddleware(req, res, next));
