@@ -121,7 +121,7 @@ const VERIFY = `Verify a proposed Agent memory consolidation against the supplie
 IDs listed in keep are existing memory facts preserved verbatim from sources; judge the remaining groups and discards. Reject if any durable existing fact, condition, date, exception or exact value is lost; any unsupported fact or instruction is introduced; any candidate promoted without user-stated or directly demonstrated conversation evidence; or uncertain contradictions silently resolved. True duplicate merges and justified rejection of candidate noise are allowed. Return JSON {"ok":true|false,"reason":"brief reason"}.`;
 /** 容得下 JSON 对象前后的几句话:没有原生思考的端点,档位是一句「先想再答」的系统提示,模型可能在 JSON 前面写几句。
  *  只认**恰好一个**对象:花括号对外面还有花括号 = 多个对象,或者后一个对象被截断了(先说 ok、后面改口的半截输出)—— 照旧整段解析、照旧失败。 */
-function parseJson(text: string): unknown {
+export function parseJson(text: string): unknown {
   const s = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   const i = s.indexOf('{'); const j = s.lastIndexOf('}');
   return JSON.parse(i >= 0 && j > i && !/[{}]/.test(s.slice(0, i) + s.slice(j + 1)) ? s.slice(i, j + 1) : s);

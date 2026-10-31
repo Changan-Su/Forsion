@@ -373,6 +373,7 @@
     "check:r5narrow": "node scripts/r5-names-narrow.check.cjs",
     "check:settingscontrols": "node scripts/settings-controls.check.cjs",
     "check:humanprofile": "node scripts/human-profile.check.cjs",
+    "check:portrait-move": "node scripts/portrait-move.check.cjs",
     "check:projectdetails": "node scripts/project-details.check.cjs",
     "check:creationcard": "node scripts/creation-card.check.cjs",
     "check:teamoutputs": "node scripts/team-outputs.check.cjs",
