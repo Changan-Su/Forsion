@@ -84,7 +84,7 @@
     "jszip": "^3.10.1",
     "katex": "^0.16.27",
     "lucide-react": "^1.17.0",
-    "nanoid": "^5.1.16",
+    "nanoid": "^6.0.2",
     "node-diff3": "^3.2.1",
     "path-browserify": "^1.0.1",
     "pdfjs-dist": "^5.7.284",
