@@ -10,16 +10,20 @@
  * 活动全结束后入口收掉、拉取失败留着上一份由 Extend 的 events.test.tsx 管,这里不重复。
  * 截图在 --out(缺省系统临时目录 forsion-events-center):亮 / 暗 / 主题色 / 窄窗,交付前和方案图 A 并排看一遍。
  *
- * 需先 npm run build(读 out/)。用法:node scripts/events-center.e2e.cjs --pkg=<已 build + sign 的 Extend 检出>
+ * --server=<server 检出>:活动接口换成真路由 × PGlite(server/scripts/events-local-cloud.ts),活动由后台接口发布,核对奖励真的进了账本。
+ *
+ * --hold=<秒>:摆台,实例停在主页不跑断言,留给人或 computer use 上手;--out 下出现 done 文件就提前退。CU 要配 STAGE_ELECTRON(独有 bundle id 的 Electron 拷贝,见 gui-verify §4.2)。
+ *
+ * 需先 npm run build(读 out/)。用法:node scripts/events-center.e2e.cjs --pkg=<已 build + sign 的 Extend 检出> [--server=<server 检出>]
  */
-const fs = require('fs'), os = require('os'), path = require('path'), http = require('http')
+const fs = require('fs'), os = require('os'), path = require('path'), http = require('http'), { spawn } = require('child_process')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { startFakeForsionCloud } = require('./lib/fake-forsion-cloud.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
 const arg = (key) => process.argv.find((x) => x.startsWith(`--${key}=`))?.slice(key.length + 3)
-const ROOT = path.resolve(__dirname, '..'), PKG = arg('pkg')
+const ROOT = path.resolve(__dirname, '..'), PKG = arg('pkg'), SERVER = arg('server'), HOLD = Number(arg('hold') || 0)
 const OUT = path.resolve(arg('out') || path.join(os.tmpdir(), 'forsion-events-center'))
 const results = []
 const check = (name, ok, detail) => { results.push({ name, ok: !!ok }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`) }
@@ -60,6 +64,61 @@ async function panelWindow(app, win, selector = '.ev-root') {
   return null
 }
 
+function startLocalCloud(dir) {
+  const child = spawn(path.join(dir, 'node_modules/.bin/tsx'), ['scripts/events-local-cloud.ts'], { cwd: dir, stdio: ['pipe', 'pipe', 'inherit'] })
+  return new Promise((ok, no) => {
+    let out = ''
+    child.stdout.on('data', (d) => { out += d; const line = out.split('\n').find((x) => x.startsWith('{"url"')); if (line) ok(JSON.parse(line)) })
+    child.on('exit', (code) => no(new Error(`本地后端退出 ${code}`)))
+  })
+}
+
+/** 真后端:后台接口发布的活动 → 真面板签到、领取 → 账本里真有这几笔。 */
+async function realFlow(sp, local) {
+  const state = async () => (await fetch(`${local.url}/__e2e/state`)).json()
+  const until = async (fn) => { for (let i = 0; i < 40; i++) { const s = await state(); if (fn(s)) return s; await sp.waitForTimeout(150) } return state() }
+  await sp.locator('.ev-rail').waitFor()
+  const rail = await sp.locator('.ev-rail').innerText()
+  check('真后端:左栏是后台发布的四场', ['金秋七日签到', '创作者任务', '中秋投壶', '11 月维护公告'].every((x) => rail.includes(x)), rail.replace(/\n/g, ' / '))
+  // 台架走 http,CSP 拦图 → 面板退回占位;生产是 https。这里直接核接口
+  const feed = await (await fetch(`${local.url}/api/events/feed`, { headers: { authorization: `Bearer ${local.token}` } })).json()
+  const artPath = feed.events.find((e) => e.artUrl)?.artUrl ?? ''
+  const art = await fetch(local.url + artPath).catch(() => null)
+  check('真后端:主视觉走公开地址,长缓存', /^\/api\/events\/art\/[a-f0-9]{64}\.png$/.test(artPath) && art?.status === 200 && /immutable/.test(art.headers.get('cache-control')), artPath)
+
+  await sp.locator('.ev-ri', { hasText: '金秋七日签到' }).click()
+  await sp.getByRole('button', { name: '今日签到' }).click()
+  let s = await until((x) => x.balance === 20)
+  check('真后端:签到的积分进了账本', s.balance === 20 && s.ledger.length === 1, JSON.stringify(s.ledger))
+  await sp.getByRole('button', { name: '今日已签' }).waitFor().catch(() => {})
+  check('真后端:按钮变成今日已签,1/7 → 已签 1', await sp.getByRole('button', { name: '今日已签' }).count() === 1 && /已签 1\/7/.test(await sp.locator('.ev-stage').innerText()))
+
+  await sp.locator('.ev-ri', { hasText: '创作者任务' }).click()
+  const stage = sp.locator('.ev-stage')
+  check('真后端:托管用量和插件过审算出进度', /10k\/10k/.test(await stage.innerText()) && /1\/1/.test(await stage.innerText()) && /0\/3/.test(await stage.innerText()))
+  await sp.getByRole('button', { name: '全部领取 (2)' }).click()
+  s = await until((x) => x.balance === 720)
+  check('真后端:全部领取两笔都到账', s.balance === 720 && s.ledger.length === 3, `balance=${s.balance}`)
+  await sp.waitForTimeout(400)
+  check('真后端:领完没有可领的了', await sp.getByRole('button', { name: '领取' }).count() === 0)
+  check('真后端:奖励不重发(重开面板状态还在)', await sp.reload().then(() => sp.locator('.ev-rail').waitFor()).then(() => sp.locator('.ev-ri', { hasText: '创作者任务' }).click()).then(() => sp.getByRole('button', { name: '领取' }).count()) === 0)
+
+  await sp.locator('.ev-ri', { hasText: '中秋投壶' }).click()
+  await sp.getByText('还没有人上榜').waitFor().catch(() => {})
+  check('真后端:小游戏榜单为空时的样子', await sp.getByText('还没有人上榜').count() === 1)
+  await sp.locator('.ev-ri', { hasText: '11 月维护公告' }).click()
+  await sp.waitForTimeout(500)
+  check('真后端:公告正文渲染,并写了一条弹窗公告', /维护时间/.test(await sp.locator('.ev-stage').first().evaluate((el) => [...el.querySelectorAll('*')].map((e) => e.shadowRoot?.textContent ?? '').join(''))) && (await state()).announcements.length === 1)
+  await sp.locator('.ev-foot button, .ev-rail button').filter({ hasText: '已结束的活动' }).click()
+  await sp.waitForTimeout(300)
+  const ended = sp.locator('.ev-ri').first()
+  check('真后端:旧的中秋活动在已结束里', await ended.count() === 1, await ended.innerText().catch(() => ''))
+  await ended.click()
+  await sp.waitForTimeout(400)
+  check('真后端:点开旧活动不崩', await sp.locator('.ev-stage').count() === 1)
+  await sp.screenshot({ path: path.join(OUT, 'real-ended.png') })
+}
+
 async function main() {
   if (!PKG || !fs.existsSync(path.join(PKG, 'SIGNATURE'))) { console.error('要传 --pkg=<build + sign 过的 Extend 检出>'); process.exit(2) }
   fs.mkdirSync(OUT, { recursive: true })
@@ -73,9 +132,15 @@ async function main() {
   const stub = await startStubEngine(), cloud = await startFakeForsionCloud({ scenario: 'both' })
   const { s, feed } = fixture()
   const posts = []
+  const local = SERVER ? await startLocalCloud(SERVER) : null
   const json = (res, code, v) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(v)) }
   const front = http.createServer(async (req, res) => {
     const url = req.url.split('?')[0]
+    if (local && url.startsWith('/api/events')) {
+      const { host: _host, ...headers } = req.headers
+      const up = http.request(local.url + req.url, { method: req.method, headers: { ...headers, authorization: `Bearer ${local.token}` } }, (r) => { res.writeHead(r.statusCode, r.headers); r.pipe(res) })
+      up.on('error', () => json(res, 502, {})); return req.pipe(up)
+    }
     if (url === '/api/events/feed') return json(res, 200, feed())
     if (url === '/api/events/sign/checkin' && req.method === 'POST') {
       posts.push(url); s.signedToday = true; s.signed += 1
@@ -99,12 +164,20 @@ async function main() {
   const errors = []
   let app
   try {
-    app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1' }, timeout: 90000 })
+    app = await electron.launch({ ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}), args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1' }, timeout: 90000 })
     const win = await app.firstWindow()
     await win.waitForSelector('#root')
     await skipOnboarding(win)
     await win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' }) // 登录后首次同步卡,这里不测它
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1512, 950) })
+
+    if (HOLD) {
+      console.log('HOLD ready')
+      const until = Date.now() + HOLD * 1000
+      while (Date.now() < until && !fs.existsSync(path.join(OUT, 'done'))) await new Promise((r) => setTimeout(r, 500))
+      await app.close().catch(() => {})
+      process.exit(0)
+    }
 
     // ① 入口
     const entry = win.locator('.rb [aria-label="活动"]').first()
@@ -121,6 +194,9 @@ async function main() {
     if (!sp) throw new Error('面板没开')
     sp.on('pageerror', (e) => errors.push(String(e)))
     sp.setDefaultTimeout(12000)
+    if (local) await realFlow(sp, local)
+    else await fixtureFlow()
+    async function fixtureFlow() {
     await sp.locator('.ev-rail').waitFor()
     const rail = await sp.locator('.ev-rail').innerText()
     check('① 左栏列出四场和预告', ['金秋七日签到', '创作者任务', '中秋投壶', '11 月维护公告', '新春活动'].every((x) => rail.includes(x)))
@@ -197,7 +273,11 @@ async function main() {
     await win.waitForFunction(() => document.querySelector('.rb-space.on')?.getAttribute('aria-label') === '笔记').catch(() => {})
     check('③ 前置:主窗在笔记', await activeSpace() === '笔记', await activeSpace())
     await sp.locator('.ev-ri', { hasText: '创作者任务' }).click()
+    const mainUrl = win.url()
+    await app.evaluate(({ BrowserWindow }, u) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === u)?.hide(), mainUrl)
     await sp.getByRole('button', { name: '去完成' }).click()
+    await win.waitForTimeout(800)
+    check('③ 主窗藏着时跳转会把它叫回来', await app.evaluate(({ BrowserWindow }, u) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL() === u)?.isVisible(), mainUrl))
     await win.waitForFunction(() => document.querySelector('.rb-space.on')?.getAttribute('aria-label') === 'Tangu', null, { timeout: 8000 }).catch(() => {})
     check('③ 「去完成」让主窗切到 Tangu', await activeSpace() === 'Tangu', await activeSpace())
     await win.waitForTimeout(600)
@@ -207,6 +287,17 @@ async function main() {
     await app.evaluate(({ app }) => { app.emit('open-url', { preventDefault() {} }, 'forsion://open?view=plugin:forsion-extend:events&id=pot') })
     await win.waitForTimeout(1500)
     check('⑤ 深链打开面板并选中那一场', /中秋投壶/.test(await win.locator('.ev-stage').first().innerText().catch(() => '')), 'main view')
+
+    // ⑥ 手机宽度(浮窗有最小宽,借主窗这份整页把面板收窄):详情 ↔ 列表两级
+    await win.evaluate(() => { const r = document.querySelector('.ev-root'); r.style.width = '390px'; r.style.height = '800px' })
+    await win.waitForTimeout(500)
+    check('⑥ 手机宽度是单列详情', await win.locator('.ev-body.phone .ev-stage').count() === 1 && await win.locator('.ev-rail').count() === 0)
+    await win.locator('.ev-root').screenshot({ path: path.join(OUT, 'phone-detail.png') })
+    await win.locator('.ev-phone-back').click()
+    await win.waitForTimeout(300)
+    check('⑥ 返回是活动列表', await win.locator('.ev-rail').count() === 1 && await win.locator('.ev-stage').count() === 0)
+    await win.locator('.ev-root').screenshot({ path: path.join(OUT, 'phone-list.png') })
+    }
 
   } finally {
     await app?.close().catch(() => {})
