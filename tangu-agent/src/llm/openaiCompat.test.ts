@@ -245,6 +245,12 @@ describe('compatWireMessages(reasoning_content 门控)', () => {
     expect(wire('qwen3-max', base, { enable_thinking: false })[1].reasoning_content).toBeUndefined();
   });
 
+  it('Kimi K3 系(官方要求原样回传完整 assistant message):直连与网关都放行,K2.7 Code 仍剥', () => {
+    expect(wire('kimi-k3.1-pro', 'https://api.moonshot.ai/v1')[1].reasoning_content).toBe('COT');
+    expect(wire('kimi/kimi-k3', 'https://llm-x.cn-beijing.maas.aliyuncs.com/compatible-mode/v1')[1].reasoning_content).toBe('COT');
+    expect(wire('moonshotai/Kimi-K2.7-Code', 'https://api.siliconflow.cn/v1')[1].reasoning_content).toBeUndefined();
+  });
+
   it('OpenAI 官方与未知网关一律剥掉(未知端点绝不发未知字段:严格网关 400)', () => {
     expect(wire('gpt-5.6-luna', 'https://api.openai.com/v1')[1].reasoning_content).toBeUndefined();
     expect(wire('my-model', 'https://llm.mycorp.internal/v1')[1].reasoning_content).toBeUndefined();
