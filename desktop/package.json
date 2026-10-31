@@ -234,6 +234,7 @@
     "check:agentmemory": "node scripts/agent-memory.check.cjs",
     "check:settingsmode": "node scripts/settings-mode.check.cjs",
     "check:settingspolish": "node scripts/settings-polish.check.cjs",
+    "check:providerpresets": "node scripts/provider-presets.check.cjs",
     "check:settingscopy": "node scripts/settings-copy.check.cjs",
     "check:themecontrast": "node scripts/theme-contrast.check.cjs",
     "check:themevisual": "node scripts/theme-visual.check.cjs",
