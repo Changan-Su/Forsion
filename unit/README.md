@@ -143,6 +143,31 @@ Installing a new package with the same ID updates it. Running plugins can be rep
 
 Use `update <unit.json> <plugin-id> <package-path>` for an explicit live update. The ID must already be installed and match the new manifest. If Unit is offline, the command fails without changing configuration or running migrations. The package path resolves from the current working directory and must name an unpacked plugin directory. Updates reuse the installer's package, dependency and path checks, copy the package into a separate instance version directory, then activate and persist it through the local control channel. Moving or deleting the source package afterward does not affect the installed version. Unit keeps its process and port; the updated plugin and its active dependents restart in dependency order while unrelated plugins keep running. Failed activation restores the previous service and keeps its configured path. Use `install` for an offline replacement that loads at the next startup.
 
+### 按引用安装 / Install by reference
+
+同一台宿主上跑多个实例时（NAS、VPS、多实例部署），不必每个实例各拷一份包。给 `install` 或 `update` 加 `--reference`，配置里记的就是包目录解析后的绝对路径，实例下不再产生 `plugins/` 副本：
+
+Several instances on one host (a NAS, a VPS, any multi-instance setup) need not each keep a copy of a package. With `--reference`, `install` and `update` record the package directory's resolved absolute path and create no copy under the instance's `plugins/`:
+
+```sh
+node main.mjs install /absolute/path/my-unit/unit.json /opt/forsion/packages/calendar/1.0.0 --reference
+node main.mjs update /absolute/path/my-unit/unit.json calendar /opt/forsion/packages/calendar/1.1.0 --reference
+```
+
+- 包目录可以是只读挂载，Unit 不往里写任何东西，也不删除：更新只切换配置里的路径，旧目录原样留给还在用它的实例。清理旧版本由运维决定。校验与普通安装相同（manifest、版本、私密环境文件、逃逸的软链）。
+- 路径按解析软链之后记录，把 `current` 这类软链改指向别的版本不会悄悄换掉实例的代码，要显式 `update`。
+- 目录不存在或读不了时，命令报错，Unit 拒绝启动，`unit.json` 保持原样；挂载恢复后照常运行。不要把已被实例引用的目录删掉：恢复目录或手动改 `unit.json` 才能继续。
+- `backend.dependencies.mode` 为 `npm-ci` 的包要往包里装依赖，仍走私有拷贝；输出里的 `reference` 字段为 `false`，`path` 指向拷贝。
+- 不带 `--reference` 的 `update`，以及 `unit_update` 的暂存发行，都走私有拷贝，该实例从此不再共用目录。之后再 `update --reference` 可切回。
+- 插件必须把数据写到 `dataDir`：`packageDir` 可能只读，也可能被别的实例共用。
+
+- The directory may be a read-only mount. Unit writes nothing there and deletes nothing: an update only switches the configured path, leaving the old directory for any instance still using it. Removing old versions is the operator's call. Validation matches an ordinary install (manifest, version, private environment files, escaping links).
+- The path is recorded after resolving links, so repointing a link such as `current` never swaps an instance's code silently; run `update` explicitly.
+- If the directory is missing or unreadable, commands fail, Unit refuses to start and `unit.json` stays as it was; once the mount is back everything runs as before. Do not delete a directory an instance references: recovery means restoring it or editing `unit.json` by hand.
+- Packages with `backend.dependencies.mode` set to `npm-ci` install dependencies into the package, so they still get a private copy; the output reports `reference: false` and `path` names the copy.
+- `update` without `--reference`, and staged releases applied by `unit_update`, take a private copy, and that instance stops sharing the directory. A later `update --reference` switches it back.
+- Plugins must write data under `dataDir`: `packageDir` may be read-only and may be shared with other instances.
+
 插件继续使用 Forsion 的 `main`、Space 配方和插件 API。可选 `frontend.features` 激活共享界面中的 Amadeus、Tangu、Calendar、Automation、Public 功能；新增界面实现仍需更新 Unit。可信插件可声明 `runtime` 提供设备能力，或声明 `backend` 提供 HTTP 服务。接口分别见 `runtimeTypes.ts` 和 `backendTypes.ts`；支持这些通用接口不代表预装任何商业实现。
 
 Plugins use Forsion's existing `main`, Space recipes and plugin API. Optional `frontend.features` activates Amadeus, Tangu, Calendar, Automation or Public in the shared renderer; new UI implementations still require a Unit update. Trusted plugins can declare `runtime` for device capabilities or `backend` for HTTP services, as defined in `runtimeTypes.ts` and `backendTypes.ts`. Supporting these generic contracts does not bundle a commercial implementation.

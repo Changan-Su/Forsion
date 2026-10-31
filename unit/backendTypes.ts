@@ -4,6 +4,7 @@ import type { MessagePort } from 'node:worker_threads'
 
 /** Backend capabilities extend the existing package identity; they are not a second manifest. */
 export interface BackendContext {
+  /** May be read-only and shared with other instances: write under dataDir, never here. */
   packageDir: string
   dataDir: string
   config: Record<string, unknown>
