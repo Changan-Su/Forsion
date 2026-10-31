@@ -35,6 +35,8 @@
 /* 卡内底排:+ · 模式 / 上下文环 · 模型 · mic · 圆形发送 · 停止 */
 .t2c-row { display: flex; align-items: center; gap: 6px; margin-top: 8px; flex-wrap: nowrap; }
 .t2c-grow { flex: 1; }
+/* ctx.ui.mountChatBox 的 toolbar 插槽:插件内容排在模型药丸前面。 */
+.t2c-plugin-toolbar { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
 .t2c-send {
   width: 32px; height: 32px; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center;
   border: none; border-radius: var(--radius-pill, 999px); background: var(--action-fill); color: var(--on-action, #fff); cursor: pointer;

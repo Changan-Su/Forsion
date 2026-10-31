@@ -46,6 +46,7 @@ import type {
 } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { resolvePageName, stripForIndex } from '@amadeus-shared/links'
+import { hasTagFilter, parseSearchQuery, tagSearchRemote } from '@amadeus-shared/tagQuery'
 import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { findEmbedBlock } from './shareBridge'
 import { propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propagateNoteRenames'
@@ -1120,8 +1121,19 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     search: async (query) => {
       await ensureVault()
       // 服务端按 path ILIKE 也算命中 → 点开头路径(.trash/、库标记)会漏进结果;与树同一把 visiblePath 尺子。
-      const hits = await http.get<SearchHit[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/search`, { q: query })
-      return hits.filter((h) => visiblePath(h.path))
+      const textSearch = async (q: string): Promise<SearchHit[]> =>
+        (await http.get<SearchHit[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/search`, { q })).filter((h) => visiblePath(h.path))
+      const parsed = parseSearchQuery(query)
+      if (!hasTagFilter(parsed)) return textSearch(query)
+      // 服务端不懂 `tag:`,/tags/pages 也只认确切标签:在这里拼,结果与本地索引同形(含 hits),但只看前 50 篇。
+      const base = `/amadeus/vaults/${encodeURIComponent(vid())}`
+      return tagSearchRemote(parsed, {
+        listTags: () => http.get<TagCount[]>(`${base}/tags`),
+        pagesByTag: async (tag) => (await http.get<{ paths: string[] }>(`${base}/tags/pages`, { tag })).paths,
+        allPages: async () => (await fetchTree()).pages.filter(visiblePage),
+        textSearch,
+        readText: async (p) => (await getFile(p)).content,
+      })
     },
     backlinks: async (pagePath) => {
       await ensureVault()

@@ -63,6 +63,7 @@ import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import { parseTags, stripForIndex } from '@amadeus-shared/links'
+import { tagCounts, tagDocFromRaw } from '@amadeus-shared/tagQuery'
 import { noteFmMeta } from '@amadeus-shared/linkIndex'
 import { setRecentsProvider } from './amadeus/lib/recents'
 import { parseBody } from '@amadeus-shared/compiler/markers'
@@ -1911,22 +1912,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     readTextFile: (p: string) => Promise.resolve(vault.get(p) ?? null),
     // 标签 / 别名面(评审 L-14 `#` 补全、L-13 `[[` 别名候选):用与主进程索引同一份解析(正文 #标签 + fm tags / aliases),
     // 由内存 vault 现算 —— 仪器往 `__upage.vault` 塞一篇带标签的笔记即可喂出候选。见 scripts/wiki-suggest.check.cjs。
-    listTags: () => {
-      const counts = new Map<string, { tag: string; count: number }>()
-      for (const [p, text] of vault) {
-        if (!p.endsWith('.md')) continue
-        const seen = new Set<string>()
-        for (const t of [...parseTags(stripForIndex(text)), ...noteFmMeta(text).tags]) {
-          const k = t.toLowerCase()
-          if (seen.has(k)) continue
-          seen.add(k)
-          const c = counts.get(k)
-          if (c) c.count++
-          else counts.set(k, { tag: t, count: 1 })
-        }
-      }
-      return Promise.resolve([...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)))
-    },
+    listTags: () => Promise.resolve(tagCounts([...vault].filter(([p]) => p.endsWith('.md')).map(([p, text]) => tagDocFromRaw(p, text)))),
     pageAliases: () => {
       const out: Record<string, string[]> = {}
       for (const [p, text] of vault) if (p.endsWith('.md')) { const a = noteFmMeta(text).aliases; if (a.length) out[p] = a }

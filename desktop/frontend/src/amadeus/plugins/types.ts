@@ -1745,7 +1745,9 @@ export interface PluginContext {
     contextMenu?(x: number, y: number, items: PluginContextMenuEntry[], opts?: { keepOpen?: boolean; onClose?(): void }): PluginMenuHandle
     contextMenu?(at: PluginAnchor, items: PluginContextMenuEntry[], opts?: { keepOpen?: boolean; onClose?(): void }): PluginMenuHandle
     /** Shared prompt input + live model catalog. Local draft; the plugin owns submission.
-     *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure. */
+     *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure.
+     *  `modelPicker` / `toolbar` / `suggest` / `insertText` arrived together: older hosts ignore the options, so check
+     *  `typeof box.insertText === 'function'` on the returned handle. */
     mountChatBox?(
       el: HTMLElement,
       opts: import('../../../../shared/chatBox').PluginChatBoxOptions,
