@@ -293,9 +293,35 @@ export interface PluginCommand {
   run(argv: string[]): Promise<number | void>;
 }
 
+/** One read-only skill currently enabled at the external source. */
+export interface PluginSkillEntry {
+  /** Provider-local kebab-case slug, 1–64 characters. The host assigns the full id. */
+  id: string;
+  name: string;
+  description: string;
+  /** Markdown instructions without YAML frontmatter. */
+  content: string;
+  /** Optional absolute directory for relative resources; does not grant file access. */
+  dir?: string;
+}
+export interface PluginSkillListContext {
+  cwd?: string;
+  /** Always supplied by this host; aborted after 5 seconds or on provider revocation. */
+  signal?: AbortSignal;
+}
+export interface PluginSkillProvider {
+  /** Provider-local kebab-case slug, 1–64 characters. */
+  id: string;
+  /** Re-read current source state. Return only enabled skills; no persistent copy is made. */
+  list(context: PluginSkillListContext): Promise<readonly PluginSkillEntry[]>;
+}
+
 export interface TanguPluginContext {
   registerPlugin(meta: PluginMeta): void;
   registerToolProvider(p: ToolProvider): void;
+  /** Live read-only source; IDs are local:plugin/<engineId>/<providerId>/<entryId>.
+   * Automatically revoked on disable, unload, failed activation or replacement. */
+  registerSkillProvider(provider: PluginSkillProvider): void;
   /** 注册 `tangu <name>` 子命令(如 computer-use 的 doctor/setup)。 */
   registerCommand(cmd: PluginCommand): void;
   registerScopedRoutes(mount: (router: ScopedPluginRouter) => void): void;

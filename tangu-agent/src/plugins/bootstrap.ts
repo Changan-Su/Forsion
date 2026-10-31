@@ -4,6 +4,7 @@ import { tanguHome } from '../core/tanguHome.js';
 import { createPluginRuns, pluginEngines } from './runs.js';
 import { createPluginWorkspaces } from './workspaces.js';
 import { createPluginAutomation } from './automation.js';
+import { registerPluginSkillProvider } from '../skills/pluginSkills.js';
 import { authMiddleware } from '../core/http.js';
 import path from 'node:path';
 /**
@@ -154,6 +155,10 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       inst.providerIds.add(p.id);
       providerOwner.set(p.id, id);
       registerToolProvider({ ...p, origin: 'plugin', official }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
+    },
+    registerSkillProvider: (provider) => {
+      if (!live('技能')) return;
+      inst.runtimeDisposers.push(registerPluginSkillProvider(id, provider));
     },
     // folder 插件进统一注册表；图标只信宿主读到的包根 icon.png。
     // 捆绑包内嵌的引擎插件默认跟随捆绑包(桌面上捆绑包缺省即启用,且只给捆绑包一个开关、拨动时级联):

@@ -10,6 +10,8 @@ For plugin authors. Installing plugins, bundles and the security model are cover
 
 Plugins are written in JavaScript / TypeScript, with official type definitions and templates. The built-in "Forsion extension development" skill lets the agent scaffold a plugin, theme, Space or agent straight from the official templates; see [Skills](../agents/skills.md).
 
+Engine plugins can expose live, read-only external skills through `registerSkillProvider` without copying them into the user's skills directory. See the [external skill provider contract](plugin-skill-providers.en.md).
+
 To link what your plugin produces with the native notes panel, use `ctx.app.openNote`: an Amadeus panel with the same `reuseKey` switches to the new note in place, and `activate:false` keeps the user's focus on the plugin panel. Combined with `split:"right"` / `split:"down"` on a Space's main-area entries, your plugin doesn't need to copy a document editor or chat interface into its own DOM.
 
 ```js
