@@ -26,6 +26,28 @@ describe('sketch 包装器安全不变式', () => {
     expect(SKETCH_CSP).not.toContain('https:')
   })
 
+  it('WebRTC 守卫紧跟 CSP,先于文档里任何别的脚本', () => {
+    const doc = buildSketchDoc('<b>hi</b>')
+    const after = doc.slice(doc.indexOf('<head>') + '<head>'.length).replace(/^<meta[^>]*>/, '')
+    expect(after.startsWith('<script>/* 卡内的 WebRTC 封堵')).toBe(true)
+    expect(doc).toContain("'RTCPeerConnection'")
+  })
+
+  it('初始 HTML 里的 shadowrootmode 被剥掉(大小写不敏感),解析不出声明式 shadow 树', () => {
+    const doc = buildSketchDoc('<div><template ShadowRootMode="closed"></template></div>')
+    expect(doc.slice(doc.indexOf('<body>'))).toContain('data-shadowrootmode="closed"')
+    expect(doc.slice(doc.indexOf('<body>'))).not.toMatch(/[^-]shadowrootmode/i)
+    // 分隔符是 / 或紧贴上一个属性的引号时,解析器一样认
+    for (const html of ['<template/shadowrootmode=open>', '<template a="b"shadowrootmode=open>', '<template\nSHADOWROOTMODE\n=open>']) {
+      expect(buildSketchDoc(html).slice(buildSketchDoc(html).indexOf('<body>'))).not.toMatch(/[^-]shadowrootmode/i)
+    }
+  })
+
+  it('属性位置以外的 shadowrootmode 原样保留', () => {
+    const html = '<p>shadowrootmode</p><script>t.shadowRootMode; ({ shadowrootmode: 1 })</script><i data-shadowrootmode="x"></i>'
+    expect(buildSketchDoc(html)).toContain(html)
+  })
+
   it('CSP meta 是 head 第一个元素(模型 HTML 只能收紧不能放松)', () => {
     const doc = buildSketchDoc('<b>hi</b>')
     const head = doc.indexOf('<head>')
@@ -42,7 +64,7 @@ describe('sketch 包装器安全不变式', () => {
   })
 
   it('runs both raw bootstrap scripts without accidental IIFE chaining', () => {
-    const script = buildSketchDoc('').match(/<script>([\s\S]*?)<\/script>/)![1]
+    const script = [...buildSketchDoc('').matchAll(/<script>([\s\S]*?)<\/script>/g)][1][1] // 第一个是 sketchGuard
     const ready: Function[] = []
     const register = vi.fn()
     runInNewContext(script, {
@@ -140,6 +162,6 @@ describe('sketch 主题桥', () => {
     expect(doc).toContain('\\u003c/script>')
     expect(doc).not.toContain('__SKETCH_INITIAL_STATE__')
     expect(doc).toContain('$&\\u2028')
-    expect(doc.match(/<script>/g)).toHaveLength(1)
+    expect(doc.match(/<script>/g)).toHaveLength(2) // sketchGuard + 运行时,状态值没有多拼出一个
   })
 })

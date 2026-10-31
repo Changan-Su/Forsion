@@ -10,6 +10,8 @@ description: 给 Forsion 写桌面插件与引擎插件：布局、列表源、�
 
 插件用 JavaScript / TypeScript 编写,官方提供类型定义与模板。内置的「Forsion 扩展开发」技能可以让 Agent 照官方模板直接脚手架出插件、主题、Space 或智能体的骨架,见[技能](../agents/skills.md)。
 
+引擎插件可通过公开的 `registerSkillProvider` 提供实时、只读的外部技能来源，无需复制进用户技能目录，见[外部技能来源契约](plugin-skill-providers.md)。
+
 需要让插件产物与原生笔记面板联动时,使用 `ctx.app.openNote`:同一 `reuseKey` 的 Amadeus 面板会原地切换到新笔记；`activate:false` 可保持用户焦点在插件面板。配合 Space 主区条目的 `split:"right"` / `split:"down"`,插件无需在自己的 DOM 里复制文档编辑器或聊天界面。
 
 ```js

@@ -15,6 +15,7 @@
  *   绕开 runtime 监听的 <a>)只由**父文档**的 frame-src 裁决,内层 CSP 管不到,而宿主 frame-src 要给别的 iframe 放行本机端口、
  *   YouTube、B 站,卡片能把数据带到这些地址。壳的 frame-src 'none' 不挡 srcdoc,只挡导航。
  *   试过不行的:Navigation API 在不透明源帧里不触发 navigate;宿主等 iframe 再次 load 时请求已经到了;iframe 的 csp 属性在响应时才判。
+ * - CSP 和 sandbox 都挡不住 WebRTC,卡内由 sketchGuard.js 封堵(三端共用,头注写了为什么不用 setWebRTCIPHandlingPolicy)。
  *
  * 主题桥(08-21 二轮):把宿主的语义 token 以 --fs-* 注进卡内。首帧走 srcdoc 内联(无闪),
  * 之后换肤走 postMessage 就地改 documentElement.style —— **不重建 srcdoc**,否则 iframe 重载、
@@ -24,6 +25,7 @@
  */
 
 import sketchCss from './sketch.css?raw'
+import sketchGuard from './sketchGuard.js?raw'
 import sketchRuntime from './sketchRuntime.js?raw'
 import sketchFigures from './sketchFigures.js?raw'
 import { serializeSketchState } from './sketchState'
@@ -121,12 +123,15 @@ export function buildSketchDoc(html: string, vars: Record<string, string> = {}, 
     .replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
   // nonce 是宿主生成的随机串(ask / copy 的授权令牌,见 sketchRuntime.js 头注);只允许 [A-Za-z0-9-],拼不出提前闭合的引号
   const runtime = sketchRuntime.replace('__SKETCH_INITIAL_STATE__', () => initial).replace('__SKETCH_NONCE__', () => nonce.replace(/[^A-Za-z0-9-]/g, ''))
+  // 属性位置的 shadowrootmode 改掉,初始解析就建不出 shadow 树(值可以写成字符引用,不能按值匹配)。
+  // ponytail: 不做 HTML 分词,脚本里恰好写 `shadowrootmode =` 也会被改到;真碰上再换分词。
   return '<!doctype html><html><head>' +
     `<meta http-equiv="Content-Security-Policy" content="${SKETCH_CSP}">` +
+    `<script>${sketchGuard}</script>` +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
     `<style>${varsBlock(vars)}${SKETCH_SERIES_CSS}${sketchCss}</style>` +
     `<script>${runtime};\n${sketchFigures}</script>` +
-    `</head><body>${html}</body></html>`
+    `</head><body>${html.replace(/([\s/"'])shadowrootmode(?=\s*=)/gi, '$1data-shadowrootmode')}</body></html>`
 }
 
 /** 壳里只有这段中转:宿主和卡片两边都照旧 postMessage,event.source 对宿主来说就是壳。卡片的明暗跟着改,
