@@ -2807,17 +2807,19 @@ try {
     checks.usedEdits = cards(t3).some((c) => Array.isArray(c.edits) && c.edits.length > 0);
     checks.recordsKept = !!before && readFileSync(dataFile(w0), 'utf8') === before;
 
-    // 别的设备先改过一版:模型手里的 rev 过期了,要读回最新版重做,不能把那一版盖掉
-    const OTHER = '<!-- changed on another device -->';
+    // 别的设备先改过一版:模型手里的 rev 过期了。撞上过期(读回最新版重做)或先读后改都行,成功的那次必须是基于 rev 3 的。
+    // HTML 卡走 edits 时那一版的改动必须还在;原生文档是整份重发,只看版本。
+    const OTHER = 'changed-on-another-device';
     if (w1) {
       const file = join(w1.dir, w1.manifest.entry);
-      writeFileSync(file, `${readFileSync(file, 'utf8')}\n${OTHER}`);
+      if (w1.manifest.entry === 'widget.html') writeFileSync(file, `${readFileSync(file, 'utf8')}\n<!-- ${OTHER} -->`);
       writeFileSync(join(w1.dir, 'manifest.json'), JSON.stringify({ ...w1.manifest, rev: 3 }, null, 2));
     }
     const t4 = await ask(sid, '把总数的字号调大一点');
     const w2 = agentWidgets().find((w) => w.manifest.id === w0?.manifest.id);
-    const staleSeen = results(t4).some((r) => /is at rev 3, not 2/.test(r));
-    checks.staleRetried = !t4.error && staleSeen && w2?.manifest.rev === 4 && readFileSync(join(w2.dir, w2.manifest.entry), 'utf8').includes(OTHER);
+    const lastUp = widgetArgs(t4).filter((w) => w.id).at(-1);
+    checks.staleSeen = results(t4).some((r) => /is at rev 3, not 2/.test(r)); // 只记录:先读后改不会撞上
+    checks.staleRetried = !t4.error && lastUp?.expectedRev === 3 && w2?.manifest.rev === 4 && (w2.manifest.entry !== 'widget.html' || !cards(t4).some((c) => Array.isArray(c.edits)) || readFileSync(join(w2.dir, w2.manifest.entry), 'utf8').includes(OTHER));
     checks.recordsKeptAfterRetry = !!before && readFileSync(dataFile(w0), 'utf8') === before;
 
     const plainSid = `live-widget-plain-${Date.now()}`;
@@ -2839,7 +2841,7 @@ try {
 
     const turns = [t1, t2, t3, t4, t5, t6, t7, t8];
     writeFileSync(join(OUT, 'widget-evidence.json'), JSON.stringify({ checks, turns: turns.map((t) => ({ tools: t.toolCalls, cards: cards(t).map(({ html, document, ...rest }) => ({ ...rest, htmlChars: html?.length, documentChars: document?.length })), results: t.toolResults.map((r) => ({ name: r.name, isError: r.isError, result: String(r.result).slice(0, 300) })), reply: t.content })) }, null, 2));
-    const { usedEdits, ...must } = checks;
+    const { usedEdits, staleSeen, ...must } = checks;
     return { ok: Object.values(must).every(Boolean), detail: JSON.stringify(checks), output: t4.content, toolCalls: turns.flatMap((t) => t.toolCalls), ttftMs: ttft(t1), tokens: turns.reduce((n, t) => n + (tokensOf(t) || 0), 0) };
   });
 
