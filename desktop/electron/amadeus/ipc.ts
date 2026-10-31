@@ -8,9 +8,9 @@ import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
-import { serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
+import { trashSeedCalendar } from './fs/seedCalendar'
 import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from './fs/vaultHandlers'
 import { createPageHistory } from './fs/pageHistory'
 export type { VaultFace } from './fs/vaultHandlers'
@@ -281,11 +281,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   )
 
   const rememberPage = (pagePath: string): Promise<void> => writeConfig({ lastPage: vaultRel(pagePath) })
+  const defaultVaultRoot = (): string => path.join(defaultWorkspaceDir(), 'Amadeus')
 
   /** 切到某个根:统一收口(setRoot + watcher + index + 返回渲染端所需载荷)。 */
   const activateRoot = async (root: string, keepLastPage: boolean): Promise<{ root: string; pages: string[]; folders: string[]; lastPage?: string }> => {
     vault.setRoot(root)
     watcher.start(root)
+    // 只有默认库是我们种过的;失败不挡开库,下次再试
+    if (path.resolve(root) === defaultVaultRoot()) await trashSeedCalendar(vault).catch((e) => console.warn('[amadeus] seed calendar cleanup failed', e))
     const pages = await vault.listPages()
     const folders = await vault.listFolders()
     await index.build()
@@ -299,17 +302,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     }
   }
 
-  /** 首启无 lastVault:自带默认工作区 ~/Forsion/Amadeus(dev→~/Forsion-Dev/Amadeus)+ 种子 Calendar.db。
-   *  幂等:目录已存在不动,Calendar.db 已存在不覆盖(用户后来选过别的 vault 则走不到这里)。 */
+  /** 首启无 lastVault:自带默认工作区 ~/Forsion/Amadeus(dev→~/Forsion-Dev/Amadeus)。不种日历,默认日历是引擎的 human/CALENDAR.db。
+   *  幂等:目录已存在不动(用户后来选过别的 vault 则走不到这里)。 */
   const ensureDefaultVault = async (): Promise<{ root: string; pages: string[]; folders: string[] }> => {
-    const root = path.join(defaultWorkspaceDir(), 'Amadeus')
+    const root = defaultVaultRoot()
     await fs.mkdir(root, { recursive: true })
-    vault.setRoot(root)
-    try {
-      await fs.access(path.join(root, 'Calendar.db'))
-    } catch {
-      await vault.writeTextFile('Calendar.db', serializeDb(seedCalendarDb()))
-    }
     await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
     return activateRoot(root, false)
   }
@@ -323,7 +320,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
 
   handle(IPC.restoreVault, async () => {
     let { lastVault } = await readConfig()
-    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区 + 种子多维表(不再落欢迎页)
+    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
     // A saved cloud root may belong to a previous account (or the old unowned
     // mirror). Never mount it for a different account, including signed-out boot.
     if (isManagedCloudVault(lastVault) && (!cloud || !currentCloudAccountId() || lastVault !== cloudVaultDir())) {

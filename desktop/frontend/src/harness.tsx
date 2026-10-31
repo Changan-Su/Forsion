@@ -1177,7 +1177,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     writeDatabase: (p: string, data: unknown) => { mem.set(p, JSON.stringify(data)); return Promise.resolve() },
   })
   const STOCK = '库存表.db', OUT = '出库记录.db', ORDER = '订单总表.db', TASK = '任务表.db'
-  // 任务表的日期相对今天算(seedCalendarDb 同款):甘特轴恒含今天,写死 2026-03 会让轴拉到半年宽、今日线在屏外
+  // 任务表的日期相对今天算:甘特轴恒含今天,写死 2026-03 会让轴拉到半年宽、今日线在屏外
   const erpDay = (n: number): string => {
     const t = new Date()
     const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + n)
