@@ -10,7 +10,7 @@ vi.mock('../../services/backendService', () => ({
   request: vi.fn(async (_target: unknown, route: string, init?: RequestInit) => {
     calls.push({ route, method: init?.method ?? 'GET', ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) })
     if (route === '/agent/channels') return { available: true, channels: channels.list }
-    if (route.endsWith('/connect')) return { ok: true, accountId: 'acc', label: 'Org', sessionId: 's1' }
+    if (route.endsWith('/connect')) return { ok: true, accountId: 'acc', label: 'Chat', sessionId: 's1' }
     return { ok: true }
   }),
   listPlugins: vi.fn(async () => []),
@@ -35,7 +35,7 @@ function ctxOf(id: string, bundle: { dir?: string; enginePlugins: string[] }): C
 
 beforeEach(() => {
   calls.length = 0
-  channels.list = [channel('org', { engine: 'org-engine', bundle: 'acme-chat' }), channel('wecom', { engine: 'wecom', bundle: 'wecom-plugin' }), { kind: 'telegram' }]
+  channels.list = [channel('chat', { engine: 'chat-engine', bundle: 'acme-chat' }), channel('wecom', { engine: 'wecom', bundle: 'wecom-plugin' }), { kind: 'telegram' }]
   setTanguProbe({
     activeModel: () => null, models: () => [], activeSpace: () => null, subscribe: () => () => {},
     waitBackend: async () => CFG, hostExecution: () => true,
@@ -44,19 +44,19 @@ beforeEach(() => {
 afterEach(() => { setTanguProbe(null); delete (globalThis as { window?: unknown }).window })
 
 describe('ctx.tangu.connectChannel', () => {
-  const own = { dir: 'acme-chat', enginePlugins: ['org-engine'] }
+  const own = { dir: 'acme-chat', enginePlugins: ['chat-engine'] }
 
   it('saves the credentials, then connects, for a channel in its own bundle', async () => {
-    const result = await ctxOf('acme', own).tangu!.connectChannel!('org', { appId: 'unit-1', appSecret: 'secret' })
-    expect(result).toEqual({ ok: true, accountId: 'acc', label: 'Org', sessionId: 's1' })
+    const result = await ctxOf('acme', own).tangu!.connectChannel!('chat', { appId: 'unit-1', appSecret: 'secret' })
+    expect(result).toEqual({ ok: true, accountId: 'acc', label: 'Chat', sessionId: 's1' })
     expect(calls.map((c) => [c.method, c.route])).toEqual([
-      ['GET', '/agent/channels'], ['PUT', '/agent/channels/org/config'], ['POST', '/agent/channels/org/connect'],
+      ['GET', '/agent/channels'], ['PUT', '/agent/channels/chat/config'], ['POST', '/agent/channels/chat/connect'],
     ])
     expect(calls[1].body).toEqual({ appId: 'unit-1', appSecret: 'secret' })
   })
 
   it('matches the install folder name case-insensitively, as engine routes do', async () => {
-    const result = await ctxOf('acme', { dir: 'Acme-Chat', enginePlugins: ['org-engine'] }).tangu!.connectChannel!('org', { appId: 'x' })
+    const result = await ctxOf('acme', { dir: 'Acme-Chat', enginePlugins: ['chat-engine'] }).tangu!.connectChannel!('chat', { appId: 'x' })
     expect(result.ok).toBe(true)
   })
 
@@ -77,17 +77,17 @@ describe('ctx.tangu.connectChannel', () => {
   })
 
   it('refuses when only the folder matches', async () => {
-    const result = await ctxOf('acme', { dir: 'acme-chat', enginePlugins: [] }).tangu!.connectChannel!('org', { appId: 'x' })
+    const result = await ctxOf('acme', { dir: 'acme-chat', enginePlugins: [] }).tangu!.connectChannel!('chat', { appId: 'x' })
     expect(result.ok).toBe(false)
   })
 
   it('refuses a channel with no recorded owner, as an older engine reports', async () => {
-    channels.list = [channel('org', null)]
-    expect((await ctxOf('acme', own).tangu!.connectChannel!('org', { appId: 'x' })).ok).toBe(false)
+    channels.list = [channel('chat', null)]
+    expect((await ctxOf('acme', own).tangu!.connectChannel!('chat', { appId: 'x' })).ok).toBe(false)
   })
 
   it('refuses keys the channel did not declare, so it cannot reach other settings', async () => {
-    const result = await ctxOf('acme', own).tangu!.connectChannel!('org', { approvalMode: 'full-auto' } as never)
+    const result = await ctxOf('acme', own).tangu!.connectChannel!('chat', { approvalMode: 'full-auto' } as never)
     expect(result).toEqual({ ok: false, error: 'Invalid channel field: approvalMode' })
     expect(calls.map((c) => c.method)).toEqual(['GET'])
   })
@@ -100,7 +100,7 @@ describe('ctx.tangu.connectChannel', () => {
 
   it('needs a local engine', async () => {
     setTanguProbe({ activeModel: () => null, models: () => [], activeSpace: () => null, subscribe: () => () => {}, waitBackend: async () => CFG, hostExecution: () => false } as never)
-    const result = await ctxOf('acme', own).tangu!.connectChannel!('org', { appId: 'x' })
+    const result = await ctxOf('acme', own).tangu!.connectChannel!('chat', { appId: 'x' })
     expect(result).toEqual({ ok: false, error: 'A local engine is required' })
   })
 
@@ -114,13 +114,13 @@ describe('ctx.tangu.connectChannel', () => {
 
 describe('ownedChannelPatch', () => {
   it('rejects non-string values and non-object fields', () => {
-    const ch = channel('org', { engine: 'e', bundle: 'b' })
+    const ch = channel('chat', { engine: 'e', bundle: 'b' })
     expect(() => ownedChannelPatch(ch as never, { appId: 1 }, 'b', ['e'])).toThrow(/Invalid channel field/)
     expect(() => ownedChannelPatch(ch as never, null, 'b', ['e'])).toThrow(/Invalid channel fields/)
     expect(() => ownedChannelPatch(ch as never, [], 'b', ['e'])).toThrow(/Invalid channel fields/)
   })
 
   it('refuses a standalone engine plugin, which has no bundle', () => {
-    expect(() => ownedChannelPatch(channel('org', { engine: 'e', bundle: null }) as never, {}, 'b', ['e'])).toThrow(/does not belong/)
+    expect(() => ownedChannelPatch(channel('chat', { engine: 'e', bundle: null }) as never, {}, 'b', ['e'])).toThrow(/does not belong/)
   })
 })

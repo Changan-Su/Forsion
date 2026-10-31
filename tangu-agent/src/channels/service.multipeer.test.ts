@@ -115,7 +115,7 @@ function harness(opts: { multiPeer?: boolean; approvals?: boolean; settle?: bool
   const offered: Offered[] = [];
   const settled: Array<[string, string, string]> = [];
   const driver: ChannelDriver = {
-    kind: 'org',
+    kind: 'chat',
     start: async () => {},
     stop: () => {},
     status: () => [],
@@ -126,7 +126,7 @@ function harness(opts: { multiPeer?: boolean; approvals?: boolean; settle?: bool
     } : {}),
     ...(opts.settle ? { settleApproval: (_a: string, peerId: string, approvalId: string, outcome: string) => { settled.push([peerId, approvalId, outcome]); } } : {}),
   };
-  const svc = new ChannelService({ kind: 'org', driver, inboxDirName: 'org-inbox', sessionTitle: 'Org', unboundHint: 'unbound', multiPeer: opts.multiPeer });
+  const svc = new ChannelService({ kind: 'chat', driver, inboxDirName: 'chat-inbox', sessionTitle: 'Chat', unboundHint: 'unbound', multiPeer: opts.multiPeer });
   // 起了 run 的那条要等 run 结束才回,这里不能干等:回复到了,或 run 落了行,就算走完这条入站(建会话有真的 mkdir,要多等几拍)。
   const say = async (peerId: string, text: string, extra: Partial<ChannelInbound> = {}): Promise<string> => {
     const runs = state.runs.length;
@@ -246,8 +246,8 @@ describe('multiPeer: one binding and session per peer', () => {
     await say('p2', 'hi');
     const cwd2 = lastRun().input.agentConfig.cwd;
     expect(cwd1).not.toBe(cwd2);
-    expect(cwd1.startsWith(path.join(state.ws, 'org', 'peers'))).toBe(true);
-    expect(cwd2.startsWith(path.join(state.ws, 'org', 'peers'))).toBe(true);
+    expect(cwd1.startsWith(path.join(state.ws, 'chat', 'peers'))).toBe(true);
+    expect(cwd2.startsWith(path.join(state.ws, 'chat', 'peers'))).toBe(true);
     expect(cwd1).not.toContain('p1'); // peerId 由驱动编码,不直接进路径
   });
 
@@ -255,7 +255,7 @@ describe('multiPeer: one binding and session per peer', () => {
     const { svc, say } = harness({ multiPeer: true });
     await svc.bindAccount({ userId: 'u1', accountId: 'acc' });
     await say('../../etc', 'hi');
-    expect(path.dirname(lastRun().input.agentConfig.cwd)).toBe(path.join(state.ws, 'org', 'peers'));
+    expect(path.dirname(lastRun().input.agentConfig.cwd)).toBe(path.join(state.ws, 'chat', 'peers'));
   });
 
   it('reconnecting keeps every peer connected and adds no binding', async () => {

@@ -160,11 +160,11 @@ describe('插件通道(ctx.registerChannel)', () => {
   });
 
   it('multiPeer 交给 service,状态里带上;归属只认注册方给的,spec 里写的不算', async () => {
-    const off = channelHub.registerChannel({ ...spec(), multiPeer: true, owner: { engine: 'forged', bundle: 'forged' } } as any, { engine: 'org-engine', bundle: 'acme' });
+    const off = channelHub.registerChannel({ ...spec(), multiPeer: true, owner: { engine: 'forged', bundle: 'forged' } } as any, { engine: 'chat-engine', bundle: 'acme' });
     expect((channelHub.service('wecom') as any).opts.multiPeer).toBe(true);
     const st = (await channelHub.statusAll('u1')).find((c) => c.kind === 'wecom');
     expect(st.plugin.multiPeer).toBe(true);
-    expect(st.plugin.owner).toEqual({ engine: 'org-engine', bundle: 'acme' });
+    expect(st.plugin.owner).toEqual({ engine: 'chat-engine', bundle: 'acme' });
     off();
     offs.push(channelHub.registerChannel({ ...spec(), multiPeer: 'yes' } as any));
     expect((channelHub.service('wecom') as any).opts).not.toHaveProperty('multiPeer');
