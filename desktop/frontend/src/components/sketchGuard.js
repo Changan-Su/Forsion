@@ -21,6 +21,7 @@
     const found = apply(query, document, ['iframe,frame,object,embed'])
     for (let i = apply(listSize, found, []) - 1; i >= 0; i--) apply(remove, found[i], [])
   }).observe(document, { childList: true, subtree: true })
+  document.currentScript?.remove()
   deleteProperty(Element.prototype, 'attachShadow')
   const KEEP = ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'getHTML']
   for (const owner of [Element.prototype, ShadowRoot.prototype, CharacterData.prototype, Document, Document.prototype]) {
