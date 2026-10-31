@@ -5,12 +5,14 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { IPC } from '@amadeus-shared/ipc'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
+import { withContentWriteLock } from '../desktop/electron/contentSyncHost'
 import { VaultManager } from '../desktop/electron/amadeus/fs/vaultManager'
 import { VaultIndex } from '../desktop/electron/amadeus/fs/vaultIndex'
 import { VaultWatcher } from '../desktop/electron/amadeus/fs/watcher'
 import { trashSeedCalendar } from '../desktop/electron/amadeus/fs/seedCalendar'
-import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from '../desktop/electron/amadeus/fs/vaultHandlers'
+import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS } from '../desktop/electron/amadeus/fs/vaultHandlers'
 import { fetchLinkMeta, searchImages } from '../desktop/electron/amadeus/linkMeta'
+import type { RuntimeVault } from './runtimeTypes'
 
 export interface LocalVaultOptions {
   root: string
@@ -20,7 +22,7 @@ export interface LocalVaultOptions {
   log?: (message: string) => void
 }
 
-export interface LocalVault extends VaultFace {
+export interface LocalVault extends RuntimeVault {
   setPluginFileExtensions(extensions: string[]): Promise<void>
   close(): Promise<void>
 }
@@ -143,6 +145,10 @@ export async function createLocalVault(options: LocalVaultOptions): Promise<Loca
     assetAbs: async (page, ref) => closed ? null : vault.resolveAttachment(page ?? '', ref),
     onEvent: (subscriber) => { if (!closed) subscribers.add(subscriber); return () => { subscribers.delete(subscriber) } },
     setPluginFileExtensions: (requested) => run(async () => { await setExtensions(requested); await index.build(); emit(IPC.structureChange) }),
+    // stateDir is outside the vault, so no vault path is mistaken for an engine memory directory.
+    withWriteLock: (paths, commit) => withContentWriteLock(paths, stateDir, commit),
+    setMutationHooks: (onMutate, onMove, onBeforeMove) => vault.setMutationHooks(onMutate, onMove, onBeforeMove),
+    settled: async () => { await queue },
     close: async () => {
       if (closed) return
       closed = true

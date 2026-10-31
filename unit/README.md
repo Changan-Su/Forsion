@@ -70,6 +70,38 @@ node main.mjs access /absolute/path/my-unit/unit.json
 
 The default listener is loopback-only. The owner key stays in private instance data; the browser consumes it from the URL fragment, removes it and retains it only for that tab session. Keep instance data outside the release directory so code updates preserve data. `init` refuses to overwrite existing configuration.
 
+## 云账号 / Cloud account
+
+本地模式（`--mode local`）的 Unit 可以托管 Forsion Extend 的 Node 层，不需要 Electron：同一份签名包、同一个 `registerCloud` 入口。装上它之后，这台 Unit 就能登录账号、同步笔记，并通过云端中转被同账号的其他设备访问。Extend 不随发行包提供，从 npm 取，装载时用桌面同一把固定公钥验签。
+
+A local-mode Unit can host the Node half of Forsion Extend without Electron: the same signed package and the same `registerCloud` entry. Once installed, the Unit can sign in, sync notes, and be reached by the account's other devices through the cloud relay. Extend is not part of the release; take it from npm. It is verified against the same pinned key as the desktop.
+
+```sh
+npm pack @forsion/extend && tar -xzf forsion-extend-*.tgz
+node main.mjs install /absolute/path/my-unit/unit.json ./package
+node main.mjs run /absolute/path/my-unit/unit.json
+# From another terminal. Prints a link and a code; confirm them in any browser.
+node main.mjs login /absolute/path/my-unit/unit.json https://api.forsion.net
+node main.mjs account /absolute/path/my-unit/unit.json
+node main.mjs logout /absolute/path/my-unit/unit.json
+```
+
+凭据、配对和同步状态都在 `data/cloud/`，文件权限 0600，不加密（无头设备没有钥匙串），只有本机主人经控制通道能操作，网页和本地引擎都读不到。其中任何一个文件读不出来时都按「不知道」处理：保持原样、拒绝写入，由主人修复或删除。
+
+Credentials, the relay pairing and sync state live in `data/cloud/` with mode 0600 and without encryption, since a headless device has no keychain. Only the owner can operate them, through the local control channel; neither the Web UI nor the local engine can read them. A file that cannot be read counts as unknown: it stays as it is, writes are refused, and the owner repairs or removes it.
+
+**笔记同步**：Unit 只有一个智库，所以它只能是一个账号的云镜像。第一个登录的账号绑定它，前提是智库为空（隐藏文件不算），或者 `unit.json` 里设了 `"cloud": { "syncVault": true }`。已有笔记不会被悄悄上传。没绑定时同步落在 `data/cloud` 里的私有镜像，网页和引擎看不到；之后登录的其他账号也一样，一个账号的笔记不会进另一个账号的云端。解绑要先停 Unit，再删 `data/cloud/vault-account.json`。
+
+**Note sync**: a Unit has one vault, so it can mirror exactly one account. The first account to sign in binds it, provided the vault is empty (hidden files aside) or `unit.json` sets `"cloud": { "syncVault": true }`. Existing notes are never uploaded silently. Without a binding, sync goes to a private mirror under `data/cloud`, which the Web UI and the engine do not see; the same applies to any later account, so one account's notes never reach another's cloud. To unbind, stop the Unit and delete `data/cloud/vault-account.json`.
+
+**设备中转**：登录后默认打开，`"cloud": { "relay": false }` 关闭。中转来的请求算另一台设备，不算工作区主人：引擎只放基础档并盖远端标记，不可逆删除只许本机。进程恢复（SIGCONT，或定时器迟到）和网络地址变化时立刻重连并重启同步，不等 45 秒看门狗。目前经中转能用 `/unit`、`/vault`、`/engine` 这些接口；经中转打开 Unit 自己的网页还不支持。
+
+**Device relay**: on once signed in; `"cloud": { "relay": false }` turns it off. A relayed request is another device, not the workspace owner: the engine allows only the base tier and marks it as remote, and irreversible deletes stay local. When the process resumes (SIGCONT or a late timer) or the network address changes, the Unit redials and restarts sync at once rather than waiting for the 45-second watchdog. Through the relay the `/unit`, `/vault` and `/engine` interfaces work; opening the Unit's own page through the relay is not supported yet.
+
+`unit/verify-cloud.mjs` 用两台真实 Unit、一个签名包和本机 server 跑完整条链路，只认本机地址。
+
+`unit/verify-cloud.mjs` runs the whole chain with two real Units, a signed package and a local server. It accepts local addresses only.
+
 ## npm 发布 / npm package
 
 每个桌面正式版（`v*` 标签）推上来后，`check-unit.yml` 的 `publish-npm` 把同一提交构建出的 Unit 发到 npm：`@forsion/unit`，版本号等于桌面版本号。包内是框架本体与网页壳（`main.mjs`、`backendWorker.mjs`、`web/`、`release.json`），不含按平台构建的本地插件。只发标签那一个提交的构建：`main` 上的构建与它跟着的正式版同号，`unit/check-publishable.mjs` 会拒绝。

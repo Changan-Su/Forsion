@@ -10,6 +10,7 @@ import { IPC, type DbReadResult } from '@amadeus-shared/ipc'
 import type { LoadedPage } from '@amadeus-shared/compiler'
 import { createLocalVault, type LocalVault } from '../../unit/localVault'
 import { createRuntime } from '../../unit/plugins/amadeus/runtime'
+import { withTextWriteLock } from './amadeus/fs/vaultHandlers'
 
 const execute = promisify(execFile)
 const EVENTS = JSON.stringify({ version: 2, name: 'Events', columns: [{ id: 'title', name: 'Title', type: 'text' }, { id: 'when', name: 'When', type: 'calendarDate' }], rows: [] })
@@ -26,6 +27,20 @@ async function open(name = 'owner', pluginFileExtensions?: string[]) {
 async function close(vault: LocalVault) { await vault.close(); live.delete(vault) }
 
 describe('standalone local Amadeus capability', () => {
+  it('hands the cloud host the lock vault writes take, so a download cannot land inside a save', async () => {
+    const vault = await open()
+    const file = vault.absPath('Note.md'), order: string[] = []
+    let release!: () => void
+    const held = withTextWriteLock(file, () => new Promise<void>((done) => { release = done }))
+    const download = vault.withWriteLock(file, () => { order.push('download') })
+    const save = vault.call(IPC.writeTextFile, ['Note.md', 'saved', { create: true }], 'tab-a').then(() => { order.push('save') })
+    await new Promise((done) => setTimeout(done, 50))
+    expect(order).toEqual([])
+    release()
+    await Promise.all([held, download, save])
+    expect(order).toEqual(['download', 'save'])
+  })
+
   it('persists page/compiler state, local Calendar rows, binary assets and plugin data across a cold restart', async () => {
     let vault = await open()
     await vault.call(IPC.createFolder, ['', 'Notes'])
