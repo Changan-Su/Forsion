@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process'
 import { readPackage, packagePath } from './packages'
 import { readConfig, writeConfig, installations } from './config'
 import { sendControl, unitIsOffline } from './control'
+import { OperationError, RollbackIncomplete } from './errors'
 
 async function inspectTree(dir: string, root: string, seen = new Set<string>()): Promise<void> {
   const actual = await realpath(dir)
@@ -56,11 +57,15 @@ async function installDependencies(root: string, backendMain: string): Promise<v
 }
 /**
  * updateId requires an existing plugin and a live owner; ordinary installs also work offline.
+ * applyInstall hands a new plugin to the live owner (remote management), which activates it and writes unit.json.
+ * verify runs on the bytes that will be activated: a check on the staged release alone proves nothing about
+ * what a concurrent writer left there when it was copied.
  * reference records the package's own path instead of copying it: nothing is written there, so several
  * instances can share one read-only directory. Packages that install dependencies still get a private copy.
  */
-export async function installPackage(configPath: string, source: string, options: { updateId?: string; releaseDigest?: string; reference?: boolean;
-  applyUpdate?: (id: string, path: string) => Promise<unknown> } = {}) {
+export async function installPackage(configPath: string, source: string, options: { updateId?: string; installId?: string; releaseDigest?: string; reference?: boolean;
+  verify?: (root: string) => Promise<void>
+  applyUpdate?: (id: string, path: string) => Promise<unknown>; applyInstall?: (id: string, path: string) => Promise<unknown> } = {}) {
   const file = resolve(configPath), root = dirname(file)
   const lockPath = resolve(root, '.install.lock')
   const lock = await open(lockPath, 'wx', 0o600).catch(() => { throw new Error('Another install is in progress') })
@@ -77,6 +82,10 @@ export async function installPackage(configPath: string, source: string, options
       try { await sendControl(config.dataDir!, { action: 'status' }) }
       catch (error) { if (unitIsOffline(error)) throw new Error('Unit is not running; start it before updating'); throw error }
     }
+    if (options.applyInstall) {
+      if (options.installId !== undefined && pack.manifest.id !== options.installId) throw new Error('Release changes plugin identity')
+      if (existing) throw new OperationError('Plugin is already installed; use update')
+    }
     await inspectTree(sourceRoot, sourceRoot)
     // stage stays unset for a reference: the cleanup below may only ever remove a private copy.
     if (!options.reference || pack.manifest.backend?.dependencies?.mode === 'npm-ci') {
@@ -91,6 +100,7 @@ export async function installPackage(configPath: string, source: string, options
       if (pack.manifest.backend?.dependencies?.mode === 'npm-ci' || pack.manifest.runtime?.dependencies?.mode === 'npm-ci'
         || await packageDigest(target) !== options.releaseDigest) throw new Error('Staged release changed during installation')
     }
+    await options.verify?.(target)
     if (pack.manifest.backend?.dependencies?.mode === 'npm-ci') await installDependencies(target, pack.manifest.backend.main)
     const ready = await readPackage(target, config.version)
     const installed = { id: ready.manifest.id, version: ready.manifest.version, path: target, ...(options.reference ? { reference: !stage } : {}) }
@@ -111,6 +121,12 @@ export async function installPackage(configPath: string, source: string, options
         if (options.updateId !== undefined) throw new Error('Unit is not running; start it before updating')
       }
       existing.entry.path = target
+    } else if (options.applyInstall) {
+      // The in-process owner either activated it and persisted unit.json, or rolled back before throwing.
+      try { await options.applyInstall(pack.manifest.id, target) }
+      catch (error) { if (error instanceof RollbackIncomplete) committed = true; throw error }
+      committed = true
+      return installed
     } else {
       try {
         await sendControl(config.dataDir!, { action: 'status' })

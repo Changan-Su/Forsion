@@ -13,6 +13,7 @@ import { createAccountHttp } from './accountHttp'
 import { createLocalWorkspace } from './localWorkspace'
 import type { LocalRuntime, RuntimeFactory } from './runtimeTypes'
 import { createManagement, MANAGEMENT_PATH, type ManagementCommand } from './management'
+import { OperationError, RollbackIncomplete } from './errors'
 import { validateWebEntries, type WebEntry } from './webEntries'
 import { cloudBundle, createCloudRuntime } from './cloudHost'
 export { loadPackages } from './packages'
@@ -25,12 +26,13 @@ export interface UnitConfig {
   workspace?: { mode: 'local'; path?: string }
   /** relay defaults on once signed in; syncVault also publishes an existing, non-empty vault to the first account. */
   cloud?: { relay?: boolean; syncVault?: boolean }
-  management?: { enabled: boolean }
+  /** trustedKeys: ed25519 public keys (PEM) whose signed releases remote install / update accept. */
+  management?: { enabled: boolean; trustedKeys?: string[] }
   webEntries?: WebEntry[]
 }
 type Backend = Awaited<ReturnType<typeof startBackend>>
 type State = 'disabled' | 'starting' | 'active' | 'stopping' | 'failed'
-interface RecordState { package: InstalledPackage; installation: PluginInstallation; state: State; backend?: Backend; runtime?: LocalRuntime; mounts: string[] }
+interface RecordState { package: InstalledPackage; installation: PluginInstallation; state: State; backend?: Backend; runtime?: LocalRuntime; mounts: string[]; unclean?: boolean }
 const matches = (path: string, prefix: string) => prefix === '/' || path === prefix || path.startsWith(prefix + '/')
 const pathname = (url: string | undefined) => (url || '/').split('?')[0]
 
@@ -137,7 +139,13 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   let chain = Promise.resolve(), closing = false, started = false
   const syncRuntimes = async () => {
     const roots = [...records.values()].filter(usable).map((r) => r.package.root)
-    for (const rec of records.values()) if (usable(rec)) await rec.runtime?.setPackages?.(roots, [...records.values()].map((r) => r.package.root))
+    // Every runtime gets its turn: one refusing must not leave a later one waiting for packages forever.
+    let failure: { error: unknown } | undefined
+    for (const rec of records.values()) if (usable(rec)) {
+      try { await rec.runtime?.setPackages?.(roots, [...records.values()].map((r) => r.package.root)) }
+      catch (error) { failure ??= { error } }
+    }
+    if (failure) throw failure.error
   }
   const serialize = <T>(action: () => Promise<T>): Promise<T> => {
     const job = chain.then(action)
@@ -154,7 +162,7 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     onRestart: () => { if (!closing) void serialize(() => restart(id)).catch(() => console.error(`[unit] Plugin ${id} restart failed`)) },
     onFailure: (error: Error) => { console.error(`[unit] Plugin ${id}: ${error.message}`); rec.state = 'failed'; rec.backend = undefined; refreshProduct() },
   })
-  async function activate(id: string) {
+  async function activate(id: string, sync = true) {
     if (closing) throw new Error('Unit is stopping')
     const rec = mustGet(id)
     if (rec.state === 'active') return
@@ -193,19 +201,20 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
         rec.mounts = [...new Set(mounts)]
       }
       rec.backend = backend; rec.runtime = runtime; rec.state = 'active'; rec.installation.enabled = true
-      if (started) await syncRuntimes()
+      if (started && sync) await syncRuntimes()
     } catch (error) {
       rec.state = 'failed'; rec.backend = undefined; rec.runtime = undefined
-      try { if (typeof runtime?.close === 'function') await runtime.close() } finally { await backend?.stop() }
+      try { try { if (typeof runtime?.close === 'function') await runtime.close() } finally { await backend?.stop() } }
+      catch (cleanup) { rec.unclean = true; throw cleanup }
       throw error
     } finally { refreshProduct() }
   }
-  async function deactivate(id: string, force = false, preserveIntent = false) {
+  async function deactivate(id: string, force = false, preserveIntent = false, sync = true) {
     const rec = mustGet(id)
     if (!force && [...records.values()].some((r) => r.state === 'active' && r.package.manifest.requires?.includes(id))) throw new Error('Disable dependent plugins first')
     const backend = rec.backend, runtime = rec.runtime
     rec.backend = undefined; rec.runtime = undefined; rec.state = 'stopping'; refreshProduct()
-    try { try { await runtime?.close() } finally { await backend?.stop() } } finally { rec.state = 'disabled'; if (!preserveIntent) rec.installation.enabled = false; refreshProduct(); if (started && !closing) await syncRuntimes() }
+    try { try { await runtime?.close() } finally { await backend?.stop() } } finally { rec.state = 'disabled'; if (!preserveIntent) rec.installation.enabled = false; refreshProduct(); if (started && !closing && sync) await syncRuntimes() }
   }
   const activeTree = (id: string) => {
     const affected = new Set([id])
@@ -217,6 +226,15 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
     const active = activeTree(id)
     for (const candidate of [...active].reverse()) await deactivate(candidate, false, true)
     for (const candidate of ordered.filter((candidate) => candidate === id || active.includes(candidate))) await activate(candidate)
+  }
+  /** Always removes the record and its order; RollbackIncomplete reports what could not be confirmed. */
+  const discard = async (id: string) => {
+    const rec = mustGet(id)
+    let confirmed = !rec.unclean
+    await deactivate(id, true, true, false).catch(() => { confirmed = false })
+    records.delete(id); ordered.splice(0, ordered.length, ...ordered.filter((candidate) => candidate !== id)); refreshProduct()
+    if (started && !closing) await syncRuntimes().catch(() => { confirmed = false })
+    if (!confirmed) throw new RollbackIncomplete(`Install was rolled back, but ${id} may still be running or referenced; its version directory was kept. Restart the Unit to clear it.`)
   }
   const select = (path: string) => {
     if (protectedPaths.some((p) => matches(path, p))) return undefined
@@ -234,10 +252,14 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
   const accountHttp = createAccountHttp({ dataDir, provider: accountProvider,
     pluginActive: (id) => { const rec = records.get(id); return !!rec && usable(rec) } })
   const management = await createManagement({ enabled: config.management?.enabled === true, dataDir, version: config.version,
-    provider: accountProvider, execute: managementOptions.execute,
-    status: () => ({ instanceId: config.instanceId, version: config.version, pid: process.pid,
-      plugins: [...records.values()].map((r) => ({ id: r.package.manifest.id, version: r.package.manifest.version, state: r.state,
-        requires: r.package.manifest.requires || [] })) }) })
+    provider: accountProvider, execute: managementOptions.execute, trustedKeys: config.management?.trustedKeys,
+    status: () => {
+      // The account authority hosts this administration surface; remote disable / uninstall of it is refused.
+      const authority = accountProvider()?.id
+      return { instanceId: config.instanceId, version: config.version, pid: process.pid,
+        plugins: [...records.values()].map((r) => ({ id: r.package.manifest.id, version: r.package.manifest.version, state: r.state,
+          requires: r.package.manifest.requires || [], protected: r.package.manifest.id === authority })) }
+    } })
   const mountedEntries = await Promise.all(webEntries.map(async (entry) => ({ entry, web: await startUnitWeb({
     account: { metadata: () => accountProvider()?.account.metadata, handle: (path, req, res) => {
       if (path.startsWith('/unit/plugin-data/') && !entry.plugins.includes(path.slice('/unit/plugin-data/'.length))) {
@@ -326,6 +348,67 @@ export async function startBasicUnit(config: UnitConfig, managementOptions: { ex
         throw error
       }
       finally { refreshProduct() }
+    }),
+    /**
+     * Adds a new plugin from an installed version directory and activates it in dependency order.
+     * Any failure takes it out again, so the running Unit matches unit.json. The caller gets remove()
+     * for when persisting the entry fails; it and a failed activation both end in discard().
+     */
+    install: (path: string) => serialize(async () => {
+      if (closing) throw new Error('Unit is stopping')
+      const next = await readPackage(path, config.version), id = next.manifest.id
+      if (records.has(id)) throw new OperationError('Plugin is already installed; use update')
+      for (const dep of next.manifest.requires || []) {
+        if (!records.has(dep)) throw new OperationError(`Required plugin is not installed: ${dep}`)
+        if (mustGet(dep).state !== 'active') throw new OperationError(`Required plugin is not active: ${dep}`)
+      }
+      for (const other of records.values()) for (const space of next.spaceIds) if (other.package.spaceIds.has(space)) throw new OperationError('Duplicate Space id')
+      records.set(id, { package: next, installation: { path: next.root, enabled: true }, state: 'disabled', mounts: [] })
+      try {
+        const nextOrder = dependencyOrder()
+        validateFeatures()
+        validateWebEntries(config.webEntries, config.basePath, !!local, new Map([...records].map(([candidate, r]) => [candidate, { requires: r.package.manifest.requires, spaces: r.package.spaceIds }])))
+        ordered.splice(0, ordered.length, ...nextOrder)
+      } catch (error) {
+        records.delete(id)
+        throw new OperationError(error instanceof Error ? error.message : 'Invalid plugin set')
+      }
+      try { await activate(id) }
+      catch (error) { console.error(`[unit] Plugin ${id} failed to activate during install:`, error); await discard(id); throw error }
+      return { id, remove: () => serialize(() => discard(id)) }
+    }),
+    /**
+     * Stops (if needed) and removes a plugin record. Files stay: the version directory and dataDir/plugins/<id>.
+     * Refuses while any installed plugin requires it, or while unit.json still names it, because the
+     * next Unit start would fail. All or nothing: a failed stop or resync puts the record, its order and
+     * its running state back. The returned function does the same if the caller cannot persist the removal.
+     */
+    uninstall: (id: string) => serialize(async () => {
+      const rec = mustGet(id)
+      const dependents = [...records.entries()].filter(([candidate, r]) => candidate !== id && r.package.manifest.requires?.includes(id)).map(([candidate]) => candidate)
+      if (dependents.length) throw new OperationError(`Uninstall the plugins that require it first: ${dependents.join(', ')}`)
+      if (config.webEntries?.some((entry) => entry.plugins.includes(id))) throw new OperationError('A web entry in unit.json publishes this plugin; remove it there first')
+      if (config.defaultSpace && rec.package.spaceIds.has(config.defaultSpace)) throw new OperationError('This plugin supplies the Unit default Space; change defaultSpace in unit.json first')
+      const before = { records: [...records], order: [...ordered], state: rec.state, enabled: rec.installation.enabled }
+      const restore = async () => {
+        records.clear()
+        for (const [candidate, record] of before.records) records.set(candidate, record)
+        ordered.splice(0, ordered.length, ...before.order)
+        rec.installation.enabled = before.enabled
+        let running = true
+        // Without its own resync: a runtime that just refused one must not fail the plugin being restored.
+        if (before.state === 'active') await activate(id, false).catch((error) => { running = false; console.error(`[unit] Plugin ${id} did not restart after an undone uninstall:`, error) })
+        else rec.state = before.state
+        refreshProduct()
+        if (started && !closing) await syncRuntimes().catch(() => console.error(`[unit] Plugin runtimes did not resync after ${id} was restored`))
+        if (!running) throw new OperationError(`Uninstall was undone, but ${id} did not restart; inspect plugin status`)
+      }
+      try {
+        await deactivate(id, false, false, false)
+        records.delete(id); ordered.splice(ordered.indexOf(id), 1); refreshProduct()
+        if (started && !closing) await syncRuntimes()
+      } catch (error) { await restore(); throw error }
+      return () => serialize(restore)
     }),
     migrate: (id: string) => serialize(async () => {
       const rec = mustGet(id)

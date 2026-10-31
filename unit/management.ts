@@ -2,13 +2,17 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { mkdir, readFile, writeFile, rename } from 'node:fs/promises'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createPublicKey } from 'node:crypto'
 import type { BackendAccount } from './backendTypes'
 import { validId } from './packages'
-import { listReleases, resolveRelease, validReleaseId } from './releases'
+import { OperationError } from './errors'
+import { listReleases, resolveRelease, validReleaseId, releaseSignature, UNTRUSTED_RELEASE, type ReleaseSignature } from './releases'
 
 export const MANAGEMENT_PATH = '/api/admin/unit'
-const actions = ['enable', 'disable', 'restart', 'update', 'migrate'] as const
+const actions = ['enable', 'disable', 'restart', 'update', 'migrate', 'install', 'uninstall'] as const
+/** Remote install / update apply a staged release; both name it by releaseId. */
+const releaseActions: readonly string[] = ['update', 'install']
+interface PluginStatus { id: string; state: string; requires: string[]; protected?: boolean }
 export type ManagementCommand = { action: typeof actions[number]; id: string; path?: string; releaseDigest?: string }
 interface Job {
   id: string; action: ManagementCommand['action']; pluginId: string; releaseId?: string
@@ -26,12 +30,31 @@ const json = (res: ServerResponse, status: number, value: unknown) => {
 export async function createManagement(options: {
   enabled: boolean; dataDir: string; version: string
   provider: () => { id: string; account: BackendAccount } | undefined
-  status: () => unknown
+  status: () => { plugins: PluginStatus[] } & Record<string, unknown>
+  /** Private unit.json management.trustedKeys: ed25519 public keys (PEM) accepted besides the pinned official ones. */
+  trustedKeys?: unknown
   execute?: (command: ManagementCommand, authorize: () => Promise<void>) => Promise<unknown>
 }) {
   const file = join(options.dataDir, 'management-jobs.json')
   let jobs: Job[] = [], saving = Promise.resolve(), busy = false, closing = false, pending: Promise<void> | undefined
   const requests = new Set<Promise<void>>()
+  const trustedKeys: string[] = []
+  if (options.enabled && options.trustedKeys !== undefined) {
+    const keys = options.trustedKeys
+    if (!Array.isArray(keys) || keys.length > 32 || !keys.every((key) => {
+      try { return typeof key === 'string' && createPublicKey(key).asymmetricKeyType === 'ed25519' } catch { return false }
+    })) throw new Error('management.trustedKeys must list ed25519 public keys in PEM')
+    trustedKeys.push(...keys)
+  }
+  // Keys only change with unit.json, which is read at startup; staged release directories are
+  // append-only and every installation re-verifies, so a verdict per release digest stays valid.
+  const verdicts = new Map<string, Promise<ReleaseSignature>>()
+  const signatureOf = (releaseId: string, sha256: string, path: string) => {
+    const key = `${releaseId}:${sha256}`
+    let verdict = verdicts.get(key)
+    if (!verdict) { verdict = releaseSignature(path, trustedKeys).catch(() => 'untrusted' as const); verdicts.set(key, verdict) }
+    return verdict
+  }
   if (options.enabled) {
     try { jobs = JSON.parse(await readFile(file, 'utf8')) } catch (e: any) { if (e.code !== 'ENOENT') throw e }
     if (!Array.isArray(jobs) || jobs.length > 100) throw new Error('Invalid Unit job journal')
@@ -74,8 +97,17 @@ export async function createManagement(options: {
       const actor = await authorize()
       const path = new URL(req.url!, 'http://unit.invalid').pathname
       if (req.method === 'GET') {
-        if (path === MANAGEMENT_PATH + '/status') json(res, 200, { ...(options.status() as object), management: { enabled: true, actions, busy } })
-        else if (path === MANAGEMENT_PATH + '/releases') json(res, 200, { releases: await listReleases(options.dataDir) })
+        if (path === MANAGEMENT_PATH + '/status') json(res, 200, { ...options.status(), management: { enabled: true, actions, busy } })
+        else if (path === MANAGEMENT_PATH + '/releases') {
+          const releases = await listReleases(options.dataDir), installed = new Set(options.status().plugins.map((plugin) => plugin.id))
+          const listed = new Set(releases.map((release) => `${release.releaseId}:${release.sha256}`))
+          for (const key of verdicts.keys()) if (!listed.has(key)) verdicts.delete(key)
+          const result = []
+          // Sequential: a bundled Server plugin can hold many files; verdicts are cached per digest.
+          for (const release of releases) result.push({ ...release, installed: installed.has(release.pluginId),
+            signature: await signatureOf(release.releaseId, release.sha256, join(options.dataDir, 'releases', release.releaseId, 'package')) })
+          json(res, 200, { releases: result })
+        }
         else if (path === MANAGEMENT_PATH + '/operations') json(res, 200, { operations: [...jobs].reverse() })
         else if (path.startsWith(MANAGEMENT_PATH + '/operations/')) {
           const job = jobs.find((entry) => entry.id === path.slice((MANAGEMENT_PATH + '/operations/').length))
@@ -100,9 +132,11 @@ export async function createManagement(options: {
       if (!input || Array.isArray(input) || typeof input !== 'object'
         || Object.keys(input).some((key) => !['action', 'pluginId', 'releaseId', 'requestId', 'confirm'].includes(key))
         || !actions.includes(input.action) || !validId(input.pluginId) || !validReleaseId(input.requestId)
-        || (input.action === 'update' ? !validReleaseId(input.releaseId) : input.releaseId !== undefined)) throw new HttpError(400, 'Invalid operation arguments')
+        || (releaseActions.includes(input.action) ? !validReleaseId(input.releaseId) : input.releaseId !== undefined)) throw new HttpError(400, 'Invalid operation arguments')
       if (input.confirm !== true) throw new HttpError(400, 'confirm:true is required for Unit operations')
-      permission = input.action === 'update' ? 'unit.update' : input.action === 'migrate' ? 'unit.migrate' : 'unit.lifecycle'
+      // Installing a staged, signed release is the same grant as updating to one; uninstalling keeps
+      // data and versions on disk, like disabling. Existing MCP role ceilings therefore apply unchanged.
+      permission = releaseActions.includes(input.action) ? 'unit.update' : input.action === 'migrate' ? 'unit.migrate' : 'unit.lifecycle'
       await authorize() // Bodies may arrive slowly; resolve current authority again before accepting work.
       const previous = jobs.find((job) => job.id === input.requestId)
       if (previous) {
@@ -112,15 +146,28 @@ export async function createManagement(options: {
       }
       if (busy) throw new HttpError(409, 'Another Unit operation is running')
       // Stopping the sole authority would prevent the same administrator from recovering over MCP.
-      if (provider.id === input.pluginId && ['disable', 'migrate'].includes(input.action)) throw new HttpError(409, 'Use local CLI for maintenance that stops the account authority')
+      if (provider.id === input.pluginId && ['disable', 'migrate', 'uninstall'].includes(input.action)) throw new HttpError(409, 'Use local CLI for maintenance that stops the account authority')
       busy = true
       try {
-        const status = options.status() as { plugins: Array<{ id: string }> }
-        if (!status.plugins.some((plugin) => plugin.id === input.pluginId)) throw new HttpError(404, 'Plugin is not installed')
+        const plugins = options.status().plugins
+        const installed = plugins.some((plugin) => plugin.id === input.pluginId)
+        if (input.action === 'install' ? installed : !installed) {
+          throw input.action === 'install' ? new HttpError(409, 'Plugin is already installed; use update') : new HttpError(404, 'Plugin is not installed')
+        }
+        if (input.action === 'uninstall') {
+          // Disabled dependents still name it in requires and would fail the next Unit start.
+          const dependents = plugins.filter((plugin) => plugin.requires.includes(input.pluginId)).map((plugin) => plugin.id)
+          if (dependents.length) throw new HttpError(409, `Uninstall the plugins that require it first: ${dependents.join(', ')}`)
+        }
         let release: Awaited<ReturnType<typeof resolveRelease>> | undefined
-        if (input.action === 'update') {
+        if (releaseActions.includes(input.action)) {
           try { release = await resolveRelease(options.dataDir, input.releaseId, input.pluginId, options.version, false) }
           catch { throw new HttpError(400, 'Release is missing, incompatible, or its identity/content changed') }
+          if (await signatureOf(input.releaseId, release.item.sha256, release.path) !== 'trusted') throw new HttpError(400, UNTRUSTED_RELEASE)
+          if (input.action === 'install') {
+            const inactive = (release.manifest.requires || []).filter((id) => plugins.find((plugin) => plugin.id === id)?.state !== 'active')
+            if (inactive.length) throw new HttpError(409, `Required plugins are not active: ${inactive.join(', ')}`)
+          }
         }
         await authorize()
         const job: Job = { id: input.requestId, action: input.action, pluginId: input.pluginId,
@@ -146,7 +193,7 @@ export async function createManagement(options: {
           } catch (error) {
             job.state = 'failed'
             const reason = error instanceof Error ? error.message : ''
-            job.error = error instanceof HttpError || ['Disable dependent plugins first', 'Disable the plugin before migrating',
+            job.error = error instanceof HttpError || error instanceof OperationError || ['Disable dependent plugins first', 'Disable the plugin before migrating',
               'Unit is stopping', 'Staged release changed during installation'].includes(reason)
               ? reason : 'Operation failed; inspect plugin status. Updates attempt to restore the previous package.'
           } finally {
@@ -168,7 +215,9 @@ export async function createManagement(options: {
         else json(res, 202, job)
       } catch (error) { busy = false; throw error }
     } catch (error) {
-      json(res, error instanceof HttpError ? error.status : 503, { error: error instanceof HttpError ? error.message : 'Unit management is temporarily unavailable' })
+      const message = error instanceof HttpError ? error.message : 'Unit management is temporarily unavailable'
+      // detail is what the admin plugin's fetch reads; error stays for MCP and older callers.
+      json(res, error instanceof HttpError ? error.status : 503, { error: message, detail: message })
     } finally { res.off('close', cancel) }
   }
   return {
