@@ -545,15 +545,18 @@ export function App({ boot, storage }: { boot: TuiConfig; storage: string }): Re
   const applyModel = async (id: string, entry?: CatalogModel, unverified = false): Promise<void> => {
     patchCfg({ model: id });
     setCtxInfo(null);
-    saveModel(id);
+    let notSaved = ''; // auth.json 读不出来时拒写:这次切换照常生效,只是下次启动记不住
+    try { saveModel(id); } catch (e) { notSaved = (e as Error).message; }
     await settingsWriter.model(sessionIdRef.current, id);
     const lv = cfgRef.current.thinkingLevel;
     const eff = effectiveThinkingOn(lv, (entry ?? modelInfo(id))?.thinkingLevels);
-    const lines = [L(`模型已切到 ${id}（已记住，下次直接 tangu 即用）`, `Model switched to ${id} (remembered for the next launch)`)];
+    const lines = [notSaved
+      ? L(`模型已切到 ${id}（这次没记住：${notSaved}）`, `Model switched to ${id} (not remembered: ${notSaved})`)
+      : L(`模型已切到 ${id}（已记住，下次直接 tangu 即用）`, `Model switched to ${id} (remembered for the next launch)`)];
     if (unverified) lines.push(L('注意：该 id 不在模型目录里，未做校验', 'Note: this id is not in the model catalog and was not validated'));
     if (eff !== lv) lines.push(L(`该模型不支持思考档 ${lv}，将按 ${eff} 运行`, `This model doesn't support thinking level ${lv}; it will run as ${eff}`));
     if (activeRunId.current) lines.push(L('当前运行仍用原模型，从你的下一条消息起生效', 'The current run keeps its model; the switch takes effect from your next message'));
-    notice(lines.join('\n'), unverified ? 'warn' : 'success');
+    notice(lines.join('\n'), unverified || notSaved ? 'warn' : 'success');
   };
 
   const openModelPicker = async (query = ''): Promise<void> => {
