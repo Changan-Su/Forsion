@@ -28,6 +28,16 @@ async function prepare(brain: CloudBrainServices, modelId = id) {
   const payload = await brain.llm.buildProviderPayload({ ...resolved, messages: [{ role: 'user', content: 'hello' }], thinkingLevel: 'medium' });
   return { ...resolved, payload };
 }
+it('preserves the source default when no thinking levels are declared', async () => {
+  const metadata = { id: localId, name: 'Source defaults' };
+  const stream = vi.fn(async (input: PluginModelRequest) => { expect(input.thinkingLevel).toBeUndefined(); return result(); });
+  register({ listModels: async () => [metadata], resolveModel: async () => metadata, stream });
+  const brain = withPluginModelProviders(base());
+  const prepared = await prepare(brain);
+  await brain.llm.streamProviderCompletion({ ...prepared, signal: new AbortController().signal });
+  expect(stream).toHaveBeenCalledOnce();
+});
+
 beforeEach(() => {
   savedHome = process.env.TANGU_HOME;
   root = mkdtempSync(path.join(tmpdir(), 'plugin-model-test-'));

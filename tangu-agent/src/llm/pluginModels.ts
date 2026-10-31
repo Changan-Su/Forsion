@@ -200,7 +200,7 @@ export function withPluginModelProviders(brain: CloudBrainServices): CloudBrainS
         if (!r || !active(r)) throw revoked();
         opts.signal?.throwIfAborted();
         const thinkingLevel = opts.thinkingLevel && opts.model.pluginThinkingLevels
-          ? clampThinkingLevel(resolveModelCapability({ thinkingLevels: opts.model.pluginThinkingLevels }), opts.thinkingLevel) : opts.thinkingLevel;
+          ? clampThinkingLevel(resolveModelCapability({ thinkingLevels: opts.model.pluginThinkingLevels }), opts.thinkingLevel) : undefined;
         return { [MARK]: { key: r.key, generation: r.generation }, request: structuredClone({
           modelId: opts.model.apiModelId, messages: opts.messages, tools: opts.tools, toolChoice: opts.toolChoice,
           temperature: opts.temperature, maxTokens: opts.maxTokens, thinkingLevel, cacheKey: opts.cacheKey,

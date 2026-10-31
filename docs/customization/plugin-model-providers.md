@@ -27,7 +27,7 @@ ctx.registerModelProvider({
 | `resolveModel(modelId,{signal})` | 现读来源局部 ID，返回匹配的元数据；不可用时返回 `null`。缺失或已撤销的插件模型明确失败，不回落为云模型。 |
 | `stream(input)` | 接收宿主整理好的消息与工具定义，完成一次推理，返回 `PluginModelResult`。凭据留在来源闭包或服务中，不暴露给渲染层或原生模型目录。 |
 
-`PluginModel` 包含 `id`、`name`，可选正整数 `contextWindow`、可选 `supportsVision`（缺省 `false`）和可选非空 `thinkingLevels`（`off/minimal/low/medium/high/xhigh/max`）。宿主沿用上下文窗口政策，并按声明的思考档夹紧请求。未知能力不填，不臆测。
+`PluginModel` 包含 `id`、`name`，可选正整数 `contextWindow`、可选 `supportsVision`（缺省 `false`）和可选非空 `thinkingLevels`（`off/minimal/low/medium/high/xhigh/max`）。宿主沿用上下文窗口政策，并按声明的思考档夹紧请求；未声明档位时不传 `thinkingLevel`，保留来源默认行为。未知能力不填，不臆测。
 
 `PluginModelRequest` 提供来源局部 `modelId`、`messages`，可选的 `tools`、`toolChoice`、`temperature`、`maxTokens`、`thinkingLevel`、`cacheKey`，以及 `AbortSignal`。消息使用原生 OpenAI 风格的角色与工具调用字段；图片已在消息内容中。流式回调为 `onResponseStart()`、`onToken(delta)`、`onReasoning(delta)` 和 `onToolCallDelta({id,name,argsLen,args,argsDelta})`。`args` 是累计 JSON 参数文本，`argsDelta` 是新片段，`argsLen` 是累计字符数。
 
