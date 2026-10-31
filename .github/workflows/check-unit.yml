@@ -37,6 +37,9 @@ jobs:
         run: |
           node unit/check-sync.mjs
           node --test unit/*.test.mjs
+          node --test tangu-agent/scripts/engine-release-gate.test.mjs
+          node --test desktop/scripts/dev-version.test.cjs
+          node --test desktop/scripts/release-channel.test.mjs mobile/scripts/update-fixture.test.mjs
       - name: Install shared dependencies
         run: |
           npm ci --prefix tangu-agent --no-audit --no-fund
@@ -47,11 +50,13 @@ jobs:
       - name: Check shared runtime and Unit lifecycle
         run: |
           npm run typecheck --prefix tangu-agent
+          cd tangu-agent && npx vitest run src/boot/overlay.test.ts && cd ..
           npm run typecheck --prefix desktop
           npm run typecheck --prefix web
           npm run check:parity --prefix desktop
           cd desktop
-          npx vitest run electron/unit*.test.ts electron/backendRunner.test.ts electron/basicUnit.test.ts electron/builtinBundles.test.ts frontend/src/services/unitAccount.test.ts frontend/src/services/unitCloudTransport.test.ts frontend/src/features/nativeFeatures.test.ts
+          npx vitest run electron/engineHost.test.ts electron/engineUpdates.test.ts electron/backendManager.test.ts electron/unit*.test.ts electron/backendRunner.test.ts electron/basicUnit.test.ts electron/builtinBundles.test.ts frontend/src/services/unitAccount.test.ts frontend/src/services/unitCloudTransport.test.ts frontend/src/features/nativeFeatures.test.ts
+          npx vitest run shared/releaseVersion.test.ts shared/updateSource.test.ts shared/websiteReleases.test.ts electron/revisionUpdateCheck.test.ts electron/updater.test.ts electron/updaterUtil.test.ts frontend/src/changelog.test.ts
       - name: Build independent Unit distribution
         run: node unit/build.mjs --package --local-plugins
       - uses: actions/upload-artifact@v4
@@ -88,13 +93,8 @@ jobs:
       - name: Only the tagged release build is publishable
         id: gate
         run: |
-          # 预发布 tag(v2.7.4-beta.1 之类)不发 npm,也不该让这个 job 变红。
-          if ! [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::notice::$GITHUB_REF_NAME is not a stable release tag; nothing to publish."
-            exit 0
-          fi
-          node unit/check-publishable.mjs unit-dist "$GITHUB_REF_NAME"
-          echo "publish=true" >> "$GITHUB_OUTPUT"
+          # Stable npm versions only. Prereleases/revisions remain downloadable artifacts; +metadata cannot create a unique npm identity.
+          node unit/check-publishable.mjs unit-dist "$GITHUB_REF_NAME" --github-output
       # package.json 的 files 白名单把按平台构建的本地插件(plugins/)留在包外;这里再核一遍,漏进去就别发。
       - name: Pack
         if: steps.gate.outputs.publish == 'true'

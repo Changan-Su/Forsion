@@ -146,7 +146,7 @@ async function main() {
     const panel = win.locator('[data-aside-panel] .btw-panel')
     await panel.waitFor({ timeout: 10_000 })
     r.check('A1 顺便问开在右边那块面板,不新开窗,存下来的那一问载回来了', ctx.app.windows().length === windowsBefore && (await panel.locator('.btw-turn').count()) === 1 && (await panel.locator('.btw-turn-q').first().textContent()).includes('Yjs'), '')
-    const box = panel.locator('.btw-input textarea')
+    const box = panel.locator('.btw-compose .t2c-ta') // 10-24 起输入区是共用 Chat Box
     await box.fill('包有多大?')
     await box.press('Enter')
     await panel.locator('.btw-turn').nth(1).locator('.btw-turn-a').waitFor({ timeout: 10_000 })
@@ -182,7 +182,7 @@ async function main() {
     await win.locator('#tocmsg-c2').hover()
     await bring.click()
     await win.locator(`.t2s-srow.active[data-sel-id="${R}"]`).waitFor({ timeout: 10_000 })
-    await win.locator('.t2c-quote-text', { hasText: 'Yjs 合适' }).first().waitFor({ timeout: 10_000 })
+    await win.locator('.t2c-tilerow .att-tile--quote .att-tile-head', { hasText: 'Yjs 合适' }).first().waitFor({ timeout: 10_000 })
     r.check('B4 带回 = 回到主线,输入框挂上那条回答的引用,没有自己发出去', ctx.stub.seen.runs.length === 0, '')
     await win.screenshot({ path: path.join(dir, 'brought-back.png') })
 

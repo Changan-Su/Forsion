@@ -17,8 +17,10 @@ const CU_RELEASE_CERT_SHA1 = 'dab3a30e7568c7e2c021660b49398356a205a191'
 // and (for packages with a main-process half) signed with the key pinned in that list. A package missing from
 // extraResources used to ship silently; now it fails here.
 const builtinBundles = require('../electron/builtinBundles.json')
+const product = JSON.parse(fs.readFileSync(path.join(desktop, 'products', `${process.env.FORSION_PRODUCT || 'forsion'}.json`), 'utf8'))
 const { bundleExtend } = require('../build/distribution.cjs')
 const expectedVersion = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8')).version
+const expectedEngineVersion = JSON.parse(fs.readFileSync(path.join(desktop, '..', 'tangu-agent', 'package.json'), 'utf8')).version
 const errors = []
 function check(ok, message) {
   if (!ok) errors.push(message)
@@ -81,7 +83,9 @@ for (const dir of resources) {
   check(fs.existsSync(path.join(extensionDir, 'background.js')), 'Bundled Chrome extension background script missing')
   // 扩展本体是 Forsion Clip(npm @forsion/clip):引擎只认 manifest.key 钉死的那个扩展 ID,丢了 key 就连不上
   check(!!readJson(path.join(extensionDir, 'manifest.json')).key, 'Bundled Chrome extension has no fixed key (Tangu engine only accepts its pinned ID)')
-  check(engine.version === expectedVersion, `Engine version ${engine.version} != ${expectedVersion}`)
+  check(engine.version === expectedEngineVersion, `Engine version ${engine.version} != ${expectedEngineVersion}`)
+  const host = readJson(path.join(dir, 'tangu-server', 'desktop-host.json'))
+  check(host.version === expectedVersion, `Engine host version ${host.version} != desktop ${expectedVersion}`)
   // 引擎的 npm 热更新:桌面与终端都经安装包里的启动器拉起引擎,由它在自带的 dist 与下载的新版之间挑。启动器或它的判定
   // 模块没进包 = 这条通道在这一版里静默不存在;验新版用的公钥编在 signingKey.js 里,必须是一把能解析的 ed25519 公钥。
   const boot = path.join(dir, 'tangu-server', 'dist', 'boot')
@@ -106,9 +110,11 @@ for (const dir of resources) {
   check(preload.includes('desktopPermissionsStatus'), 'Permission status bridge missing')
 
   // 每个内置包:npm 上钉死的精确正式版(Dependabot 提 PR 升级;范围或本地 file: 依赖都会让安装包内容不可复现;
-  // 刻意不收预发布版:播种按 cmpVersion 比版本,它把 0.5.9-rc.1 排在 0.5.9 之上,内置过预发布版,正式版就永远换不上去),
+  // 刻意不收预发布版:安装包只带正式版。10-25 之前的 cmpVersion 把 0.5.9-rc.1 排在 0.5.9 之上,内置过预发布版,
+  // 老桌面上同号正式版就永远换不上去;现在排序已改对,这条照旧守着),
   // 随包那份的 id / 版本对得上,带主进程半身的还要过清单里钉的公钥。
   for (const bundle of builtinBundles) {
+    if (bundle.requiresSpace && !product.spaces.includes(bundle.requiresSpace)) continue
     if (!bundleExtend && bundle.id === 'forsion-extend') continue
     const pinned = pkg.dependencies?.[bundle.pkg] ?? ''
     check(/^\d+\.\d+\.\d+$/.test(pinned), `${bundle.pkg} dependency must be an exact release version, got "${pinned}"`)

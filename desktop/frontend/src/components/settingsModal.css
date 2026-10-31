@@ -151,4 +151,11 @@
   text-align: start;
   cursor: pointer;
 }
+.settings-cloud-advanced-toggle > svg { transition: transform var(--duration-fast); }
 .settings-cloud-advanced-toggle[aria-expanded='true'] > svg { transform: rotate(90deg); }
+
+/* MCP 页:每个 server 每个请求约占多少 token + 页头合计(借 magpie 第二轮 10) */
+.mcp-tokens { flex: none; margin-right: 10px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
+.mcp-token-summary { display: flex; align-items: flex-start; gap: 8px; margin: 0 0 10px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--overlay-light); color: var(--text); font-size: var(--ui-font-body); line-height: 1.5; }
+.mcp-token-summary > svg { flex: none; margin-top: 3px; color: var(--text-muted); }
+.mcp-token-summary small { display: block; color: var(--text-muted); font-size: var(--ui-font-caption); }

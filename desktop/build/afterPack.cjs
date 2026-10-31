@@ -13,6 +13,7 @@
  */
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
+const { assertPackagedRuntime } = require('./runtime-policy.cjs');
 
 exports.default = async function afterPack(context) {
   const { appOutDir, packager, electronPlatformName, arch } = context;
@@ -25,6 +26,11 @@ exports.default = async function afterPack(context) {
     electronPlatformName === 'darwin'
       ? path.join(appOutDir, `${packager.appInfo.productFilename}.app`, 'Contents', 'Resources')
       : path.join(appOutDir, 'resources');
+
+  // Written before signing; both the desktop updater and the terminal launcher read this same host identity.
+  if (product.agentBackend) {
+    await require('./engine-host.cjs').writeEngineHost(path.join(resourcesDir(), 'tangu-server'), packager.appInfo.version);
+  }
 
   // ① better-sqlite3 → Electron ABI 重建(仅捆 agent 后端的变体需要 —— 它随 tangu-server/node_modules 进包)
   if (!product.agentBackend) {
@@ -55,12 +61,16 @@ exports.default = async function afterPack(context) {
   if (product.agentBackend) {
     const nodeRoot = path.join(resourcesDir(), 'node');
     const { existsSync } = require('fs');
+    assertPackagedRuntime(nodeRoot, 'node', electronPlatformName);
     if (existsSync(path.join(nodeRoot, '.skipped'))) {
       console.log('[afterPack] 内置 Node 已降级(.skipped)→ 跳过 npm 完整性检查');
     } else {
       const npx = electronPlatformName === 'darwin' || electronPlatformName === 'linux'
         ? path.join(nodeRoot, 'lib', 'node_modules', 'npm', 'bin', 'npx-cli.js')
         : path.join(nodeRoot, 'node_modules', 'npm', 'bin', 'npx-cli.js');
+      const nodeBin = path.join(nodeRoot, ...(electronPlatformName === 'win32' ? ['node.exe'] : ['bin', 'node']));
+      if (!existsSync(nodeBin)) throw new Error(`Missing bundled Node executable: ${nodeBin}`);
+      execFileSync(nodeBin, ['--version'], { stdio: 'inherit' });
       if (!existsSync(npx)) throw new Error(`[afterPack] 内置 Node 缺 npm:${npx} 不存在(npx 会失效,外部引擎必挂)`);
       console.log('[afterPack] 内置 Node 带着 npm ✓');
     }
@@ -71,6 +81,7 @@ exports.default = async function afterPack(context) {
   if (product.agentBackend) {
     const { existsSync } = require('fs');
     const pyRoot = path.join(resourcesDir(), 'python');
+    assertPackagedRuntime(pyRoot, 'python', electronPlatformName);
     if (existsSync(path.join(pyRoot, '.skipped'))) {
       console.log('[afterPack] 内置 Python 已降级(.skipped)→ 跳过预装库检查');
     } else {
@@ -84,6 +95,7 @@ exports.default = async function afterPack(context) {
   if (product.agentBackend) {
     const { existsSync } = require('fs');
     const gitRoot = path.join(resourcesDir(), 'git');
+    assertPackagedRuntime(gitRoot, 'git', electronPlatformName);
     if (existsSync(path.join(gitRoot, '.skipped'))) {
       console.log('[afterPack] 内置 git 未捆(.skipped)→ 跳过 git 检查');
     } else {

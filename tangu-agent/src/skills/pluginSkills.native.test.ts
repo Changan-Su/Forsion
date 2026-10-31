@@ -10,7 +10,8 @@ import { configureTangu } from '../seams/runtime.js';
 import { createTanguProfile } from '../profiles/index.js';
 import { loadSkillLoadout } from '../services/skillLoadout.js';
 import { skillsProvider } from '../tools/builtin/skills.js';
-import { listSkillCatalog, deleteCatalogSkill, updateCatalogSkill } from './catalog.js';
+import { listSkillCatalog, updateCatalogSkill } from './catalog.js';
+import { uninstallSkillByKey } from '../services/skillUninstall.js';
 
 let base: string;
 let home: string;
@@ -57,7 +58,7 @@ it('discovers the provider through native assets and use_skill without replacing
   expect((await listSkillCatalog()).some(skill => skill.id === id)).toBe(false);
   const native = (await listSkillCatalog()).find(skill => skill.id === 'local:release')!;
   await updateCatalogSkill(native.key, { content: 'Native changed.' });
-  await deleteCatalogSkill(native.key);
+  await uninstallSkillByKey(native.key);
   expect(await fs.readFile(path.join(source, 'SKILL.md'), 'utf8')).toBe('Only the source owns this body.');
 });
 

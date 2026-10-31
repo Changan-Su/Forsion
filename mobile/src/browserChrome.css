@@ -1,0 +1,64 @@
+/* Browser surfaces for the same chrome/sheet state used by Android. All colours and type roles are Genesis. */
+.bmc-chrome { position: fixed; inset: 0; z-index: 35; pointer-events: none; color: var(--text); font-family: var(--font-ui); }
+.bmc-top { position: absolute; top: calc(env(safe-area-inset-top) / var(--uiz, 1)); left: 0; right: 0; display: flex; justify-content: space-between; gap: 8px; padding: 6px 8px; }
+.bmc-capsule, .bmc-dock { position: relative; display: flex; align-items: center; gap: 2px; padding: 2px; pointer-events: auto; border-radius: var(--radius-pill); }
+/* The material has no descendants: fixed menus cannot acquire a filtered containing block here. */
+.bmc-capsule::before, .bmc-dock::before { content: ''; position: absolute; inset: 0; z-index: -1; border: 1px solid var(--border); border-radius: inherit; background: color-mix(in srgb, var(--bg-card) 88%, transparent); box-shadow: var(--card-shadow); backdrop-filter: blur(18px) saturate(1.8); -webkit-backdrop-filter: blur(18px) saturate(1.8); }
+:root[data-glass='off'] .bmc-capsule::before, :root[data-glass='off'] .bmc-dock::before { background: var(--bg-card); backdrop-filter: none; -webkit-backdrop-filter: none; }
+.bmc-heading { min-width: 0; max-width: 65%; }
+.bmc-actions { flex-shrink: 0; }
+.bmc-actions:empty { display: none; }
+/* Page claims replace the settings/market header too. These pages live above the shell's overlay layer. */
+.bmc-chrome[data-mode='page'] { z-index: 55; }
+body:has([data-browser-mobile-chrome][data-mode='page']) .settings-page[data-native-chrome] { padding-top: calc(var(--nc-top, 0) * 1px / var(--uiz, 1)); }
+.bmc-button { width: 36px; height: 36px; flex: 0 0 36px; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: var(--radius-pill); background: transparent; color: inherit; cursor: pointer; }
+.bmc-button:hover, .bmc-title:is(button):hover, .bmc-destination:hover, .bmc-sheet-row:hover { background: var(--bg-hover); }
+.bmc-title { display: flex; align-items: center; gap: 5px; min-width: 0; padding: 0 12px; height: 36px; font: inherit; font-size: var(--ui-font-body); font-weight: 500; color: inherit; border: 0; border-radius: var(--radius-pill); background: transparent; }
+.bmc-title > span, .bmc-title > small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bmc-title > small { font-size: var(--ui-font-meta); color: var(--text-muted); }
+.bmc-title > svg { flex-shrink: 0; }
+.bmc-account { font-size: var(--ui-font-body); }
+.bmc-account > img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+.bmc-dock { position: absolute; bottom: calc(env(safe-area-inset-bottom) / var(--uiz, 1) + 8px); left: 50%; translate: -50% 0; width: min(500px, calc(100vw / var(--uiz, 1) - 16px)); padding: 4px; }
+.bmc-destination { display: flex; flex: 1 1 0; min-width: 0; flex-direction: column; align-items: center; justify-content: center; gap: 3px; min-height: 48px; padding: 4px 2px; border: 0; border-radius: var(--radius-pill); color: var(--text-muted); background: transparent; font-family: inherit; font-size: var(--ui-font-caption); line-height: var(--ui-line-caption); cursor: pointer; }
+.bmc-destination > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%; }
+.bmc-destination[aria-current] { background: var(--accent-light); color: var(--accent-ink); }
+.bmc-destination-icon { position: relative; display: flex; }
+.bmc-badge { position: absolute; right: -4px; top: 0; width: 6px; height: 6px; border-radius: 50%; background: var(--accent-ink); }
+.bmc-badge[data-kind='attention'] { background: var(--warning); }
+.bmc-badge[data-kind='unread'] { background: var(--danger); }
+.bmc-sheet-dialog { position: fixed; inset: 0; width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); overflow: hidden; }
+.bmc-sheet-dialog[open] { display: flex; align-items: flex-end; justify-content: center; }
+.bmc-sheet-dialog::backdrop { background: var(--overlay-scrim); }
+.bmc-sheet { width: 100%; max-width: 560px; max-height: min(85%, calc(100% - env(safe-area-inset-top))); padding: 0 12px calc(12px + env(safe-area-inset-bottom)); background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-lg) var(--radius-lg) 0 0; box-shadow: var(--card-shadow); font-family: var(--font-ui); font-size: var(--ui-font-body); display: flex; flex-direction: column; min-height: 0; animation: ui-menu-enter var(--menu-enter-duration) var(--menu-enter-ease); }
+.bmc-sheet-head { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+.bmc-sheet-head > strong { flex: 1; min-width: 0; font-size: var(--ui-font-heading); font-weight: 500; overflow-wrap: anywhere; }
+.bmc-sheet-body { overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
+.bmc-sheet-search { margin: 8px 0; flex-shrink: 0; }
+.bmc-sheet-section + .bmc-sheet-section { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.bmc-sheet-section-title, .bmc-sheet-note { color: var(--text-muted); font-size: var(--ui-font-meta); padding: 4px 8px; }
+.bmc-sheet-item { display: flex; align-items: center; }
+.bmc-sheet-row { display: flex; align-items: center; gap: 12px; flex: 1; width: 100%; min-width: 0; min-height: 44px; padding: 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.bmc-sheet-row:disabled { color: var(--text-muted); cursor: default; }
+.bmc-sheet-row[data-danger], .bmc-sheet-submit[data-danger] { color: var(--danger); }
+.bmc-sheet-icon { width: 20px; height: 20px; flex: 0 0 20px; }
+.bmc-sheet-copy { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.bmc-sheet-copy > small { display: block; margin-top: 3px; font-size: var(--ui-font-meta); color: var(--text-muted); }
+.bmc-sheet-row > svg:last-child { flex-shrink: 0; }
+.bmc-sheet-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px; }
+.bmc-sheet-grid .bmc-sheet-row { flex-direction: column; text-align: center; gap: 6px; }
+.bmc-sheet-grid .bmc-sheet-row > svg:last-child:not(:first-child) { display: none; }
+.bmc-sheet-grid [aria-pressed='true'] { background: var(--accent-light); color: var(--accent-ink); }
+.bmc-sheet-buttons { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+.bmc-sheet-submit { display: block; min-height: 36px; padding: 6px 16px; margin: 8px 0; border: 0; border-radius: var(--radius-sm); background: var(--action-fill); color: var(--on-action); font: inherit; cursor: pointer; }
+.bmc-sheet form > input { width: 100%; margin-top: 8px; }
+@media (prefers-reduced-motion: reduce) { .bmc-sheet { animation: none; } }
+/* Wide layout (Pad A2, the same rail Android draws: NativeSpaceRail): the Spaces stand in a rail at the left edge instead of
+   the dock — opaque, the shell's colour, a hairline on its right, the avatar at its foot — and the whole shell starts after
+   it (the attribute is set by BrowserChrome while the rail is up). --bmc-rail-w = NATIVE_RAIL_WIDTH; cells 62×58, gap 4.
+   Taps only, as the dock: no swipe on the left edge. Kept at the end of the file (DESIGN §7.2). */
+:root { --bmc-rail-w: 76px; }
+html[data-browser-rail] .mb-shell { left: calc(var(--bmc-rail-w) + env(safe-area-inset-left) / var(--uiz, 1)); }
+.bmc-rail { position: absolute; top: 0; bottom: 0; left: 0; box-sizing: border-box; width: calc(var(--bmc-rail-w) + env(safe-area-inset-left) / var(--uiz, 1)); display: flex; flex-direction: column; align-items: center; gap: 4px; padding: calc(env(safe-area-inset-top) / var(--uiz, 1) + 8px) 0 calc(env(safe-area-inset-bottom) / var(--uiz, 1) + 10px) calc(env(safe-area-inset-left) / var(--uiz, 1)); background: var(--bg); border-right: 1px solid var(--border); pointer-events: auto; }
+.bmc-rail-cells { flex: 1 1 0; min-height: 0; align-self: stretch; overflow: hidden; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.bmc-rail .bmc-destination { flex: none; width: 62px; height: 58px; min-height: 0; border-radius: var(--radius-lg); }

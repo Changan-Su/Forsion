@@ -459,7 +459,7 @@ const test = async (name, fn) => {
     await mk.marketInstall('a', '1.2.0');
     const request = new URL(fetched.find(url => url.includes('/install?')));
     assert.equal(request.searchParams.get('version'), '1.2.0'); assert.equal(request.searchParams.get('appVersion'), '2.13.4'); assert.equal(request.searchParams.get('identity'), 'uuid-v1');
-    await assert.rejects(() => mk.marketInstall('a'), /requires Forsion/);
+    await assert.rejects(() => mk.marketInstall('a'), /^Error: mobilemarket\.incompatibleVersion:\{"req":"≥ 99\.0\.0","current":"2\.13\.4"\}$/);
   });
 
   await test('marketTypes = 只有 Forsion 插件', async () => {
@@ -804,7 +804,8 @@ const test = async (name, fn) => {
   })
 
   await test('isDesktopOnly:true → 拒装,且在动磁盘之前:已装的旧版原样保留', async () => {
-    const { mk, fs } = market({ install: {
+    // 带 appVersion:平台检查也会把它算作不符,这里钉住 isDesktopOnly 先判、报更具体的那句
+    const { mk, fs } = market({ appVersion: () => '2.13.4', install: {
       v1: { type: 'amadeus-plugin', installSlug: 'same', downloadUrl: 'https://oss.test/v1' },
       v2: { type: 'amadeus-plugin', installSlug: 'same', downloadUrl: 'https://oss.test/v2' },
     }, blobs: {
@@ -815,6 +816,26 @@ const test = async (name, fn) => {
     await assert.rejects(mk.marketInstall('v2'), /^Error: mobilemarket\.desktopOnlyPlugin$/)
     assert.equal(dec(fs.files.get('plugins/same/main.js')), 'v1')
     assert.match(dec(fs.files.get('plugins/same/manifest.json')), /"1\.0\.0"/)
+  })
+
+  await test('平台 / 版本不符(只写 platforms、没写 isDesktopOnly;或 minAppVersion 太高)→ 拒装报本地化原因,不报英文机器码,什么都不落盘', async () => {
+    const { mk, fs, downloaded } = market({ appVersion: () => '2.13.4', install: {
+      pkg: { type: 'amadeus-plugin', installSlug: 'pkg', downloadUrl: 'https://oss.test/pkg' },
+      ios: { type: 'amadeus-plugin', installSlug: 'ios', downloadUrl: 'https://oss.test/ios' },
+      old: { type: 'amadeus-plugin', installSlug: 'old', downloadUrl: 'https://oss.test/old' },
+      srv: { type: 'amadeus-plugin', installSlug: 'srv', downloadUrl: 'https://oss.test/ok', platforms: ['desktop'] },
+    }, blobs: {
+      'https://oss.test/pkg': await zipOf({ 'manifest.json': manifest({ id: 'pkg', platforms: ['desktop'] }), 'main.js': 'x' }),
+      'https://oss.test/ios': await zipOf({ 'manifest.json': manifest({ id: 'ios', platforms: ['ios', 'web'] }), 'main.js': 'x' }),
+      'https://oss.test/old': await zipOf({ 'manifest.json': manifest({ id: 'old', minAppVersion: '2.14.0', maxAppVersion: '3.0.0' }), 'main.js': 'x' }),
+      'https://oss.test/ok': await zipOf({ 'manifest.json': manifest({ id: 'srv' }), 'main.js': 'x' }),
+    } })
+    await assert.rejects(mk.marketInstall('pkg'), /^Error: mobilemarket\.unsupportedPlatform$/)
+    await assert.rejects(mk.marketInstall('ios'), /^Error: mobilemarket\.unsupportedPlatform$/)
+    await assert.rejects(mk.marketInstall('old'), /^Error: mobilemarket\.incompatibleVersion:\{"req":"≥ 2\.14\.0, < 3\.0\.0","current":"2\.13\.4"\}$/)
+    await assert.rejects(mk.marketInstall('srv'), /^Error: mobilemarket\.unsupportedPlatform$/) // 服务器返回的条目信息就写了平台:下载前就拒(包本身是兼容的)
+    assert.ok(!downloaded.includes('https://oss.test/ok'))
+    assert.equal(fs.files.size, 0)
   })
 
   await test('requiresApp(依赖装在电脑上的应用)→ 拒装并点出是哪个应用,什么都不落盘;已在盘上的列成 blocked、代码不读;空串 / 非字符串不算声明', async () => {

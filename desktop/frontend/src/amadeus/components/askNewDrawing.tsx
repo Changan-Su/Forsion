@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { create } from 'zustand'
 import { useEscape } from './Dialogs'
 import { PAPER_IDS, type PaperId } from '@amadeus-shared/excalidraw/board'
+import { DialogOverlay } from './DialogOverlay'
 
 export interface NewDrawing {
   name: string
@@ -55,7 +56,7 @@ function Dialog({ req, settle }: { req: Req; settle: (v: NewDrawing | null) => v
     settle(v ? { name: v, paper, landscape } : null)
   }
   return (
-    <div className="dialog-overlay" onMouseDown={() => settle(null)}>
+    <DialogOverlay onMouseDown={() => settle(null)}>
       <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
         <div className="dialog-title">{req.title}</div>
         <input
@@ -100,6 +101,6 @@ function Dialog({ req, settle }: { req: Req; settle: (v: NewDrawing | null) => v
           </button>
         </div>
       </div>
-    </div>
+    </DialogOverlay>
   )
 }

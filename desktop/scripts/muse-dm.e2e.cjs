@@ -5,11 +5,13 @@
  *  R1 左栏 Muse 行尾 = 等你、Xyra 行尾 = 有新消息;Muse 头像角上不再有常亮的「主动式」点
  *  R2 Tangu 角标 = 2(两条私聊),有人在等你 → 警示色(dm-wait)
  *  R3 点 Muse 行进私聊:三条主动消息头上都有「主动发来 · 时间」,用户 / 普通回答没有
- *  R4 待办卡按 Muse 待办画:按钮依次「交给 Muse 执行(主)/ 在这里做 / 新会话执行 / 忽略」,没有「开个子会话」
- *  R5 审批那条:围栏不进正文,流里一行指向输入框上方;托盘里是那张审批卡
+ *  R4 Muse 提的待办(任务书)和后台审批都进对话末尾的卡片堆(10-23「交互卡片一律在最新位置」):
+ *     审批在上、待办垫底;流里待办那条只留一行「任务卡「…」· 在对话最下面」,输入框上方不再有 Muse 自己的托盘
+ *  R5 审批那条:围栏不进正文,流里一行指向对话最下面;卡片堆最上面是那张审批卡
  *  R6 打开即读过:引擎收到 POST /agent/sessions/<Muse 私聊>/read
- *  R7 托盘里点批准 → 托盘收起,流里那行变成「你在 HH:MM 批准了 · <结果>」;角标降到 1,不再是警示色
- *  R8 点「交给 Muse 执行」→ 引擎收到批准待办,卡定格
+ *  R7 卡片堆里点批准 → 审批离开卡片堆,流里那行变成「你在 HH:MM 批准了 · <结果>」;角标降到 1,不再是警示色;
+ *     卡片堆顶上换成待办卡,按钮依次「交给 Muse 执行(主)/ 在这里做 / 新会话执行 / 忽略」,没有「开个子会话」
+ *  R8 点「交给 Muse 执行」→ 引擎收到批准待办,卡片堆清空,流里那行变成「已交给 Muse 执行」
  *  R9 点 Xyra 行 → 角标清零
  * 截图(亮 / 暗)自己看。量的是 out/ 产物:改了源码先 `npx electron-vite build`。
  *   node ../.claude/hooks/devlock.cjs run --vehicle=e2e --what="Muse 私聊台架" --eta=3 -- node scripts/muse-dm.e2e.cjs
@@ -79,7 +81,7 @@ async function main() {
       if (p === '/agent/special/approvals') return { approvals: approved ? [] : [row()] }
       if (p === '/agent/special/config') return { config: { historian: { enabled: false }, muse: { enabled: true, mode: 'ask' } } }
       if (p === '/agent/special/muse/library') return { root: LIB, files: [] }
-      if (p === '/agent/special/muse/todos') return { todos: [] }
+      if (p === '/agent/special/muse/todos') return { todos: seen.todoApprove ? [] : [{ id: 't1', title: '补 README 的 Windows 安装步骤', detail: null, status: 'pending', source_session_id: null, created_at: at(20) }] }
       return undefined
     },
   })
@@ -115,46 +117,56 @@ async function main() {
     // ── 进 Muse 私聊 ──
     await orbit('Muse').click()
     await win.locator('#tocmsg-p3').waitFor({ timeout: 15_000 })
-    await win.waitForSelector('[data-muse-tray] .ibx-approval[data-approval-status="pending"]', { timeout: 10_000 }).catch(() => {})
-    await win.waitForSelector('#tocmsg-p2 .t2-taskcard-actions button.primary', { timeout: 10_000 }).catch(() => {})
-    const chat = await win.evaluate(() => {
+    const DECK = '[data-pending-deck] .t2c-apv'
+    await win.waitForSelector(`${DECK} .t2c-apv-body[data-tray-kind="muse-approval"] .ibx-approval[data-approval-status="pending"]`, { timeout: 10_000 }).catch(() => {})
+    await win.waitForSelector('#tocmsg-p2 [data-task-trace="pending"]', { timeout: 10_000 }).catch(() => {})
+    const chat = await win.evaluate((DECK) => {
       const from = (id) => document.querySelector(`#tocmsg-${id} .t2-dm-from`)?.textContent || ''
-      const p2 = document.querySelector('#tocmsg-p2')
+      const deck = document.querySelector(DECK)
       return {
         from: ['p1', 'p2', 'p3'].map(from), none: ['a1'].map(from).join(''),
-        buttons: [...(p2?.querySelectorAll('.t2-taskcard-actions button') || [])].map((b) => `${b.classList.contains('primary') ? '*' : ''}${b.textContent.trim()}`),
+        inStream: !!deck?.closest('.t2-stream-inner'), kinds: deck?.getAttribute('data-tray-msgs') || '', n: deck?.getAttribute('data-approval-tray') || '',
+        top: deck?.querySelector('.t2c-apv-body')?.getAttribute('data-tray-kind') || '', more: deck?.querySelector('.t2c-apv-more')?.textContent || '',
+        p2card: !!document.querySelector('#tocmsg-p2 .t2-taskcard'), p2trace: document.querySelector('#tocmsg-p2 [data-task-trace]')?.textContent || '',
+        oldTray: !!document.querySelector('[data-muse-tray]'),
         fenceLeak: /forsion-approval|"id":"a1"/.test(document.querySelector('#tocmsg-p3')?.textContent || ''),
         pointer: document.querySelector('#tocmsg-p3 [data-muse-approval]')?.getAttribute('data-muse-approval') || '',
         pointerText: document.querySelector('#tocmsg-p3 [data-muse-approval]')?.textContent || '',
-        tray: !!document.querySelector('[data-muse-tray] .ibx-approval[data-approval-status="pending"]'),
+        tray: !!deck?.querySelector('.t2c-apv-body[data-tray-kind="muse-approval"] .ibx-approval[data-approval-status="pending"]'),
       }
-    })
+    }, DECK)
     r.check('R3 三条主动消息头上有「主动发来 · 时间」,普通回答没有', chat.from.every((x) => /主动发来 · \d|Reached out · \d/.test(x)) && !chat.none, JSON.stringify(chat.from))
-    const want = process.env.LANG_EN ? ['*Let Muse do it', 'Do it here', 'Run in new session', 'Ignore'] : ['*交给 Muse 执行', '在这里做', '新会话执行', '忽略']
-    r.check('R4 待办卡:交给 Muse 执行(主)/ 在这里做 / 新会话执行 / 忽略,没有开个子会话', JSON.stringify(chat.buttons) === JSON.stringify(want), JSON.stringify(chat.buttons))
-    r.check('R5 审批围栏不进正文,流里一行指向托盘,托盘里有那张卡', !chat.fenceLeak && chat.pointer === 'pending' && chat.tray, `${chat.pointer} · ${chat.pointerText}`)
+    r.check('R4 待办与后台审批都在对话末尾的卡片堆(审批在上、待办垫底);流里待办只剩一行;没有 Muse 自己的托盘',
+      chat.inStream && chat.n === '2' && chat.top === 'muse-approval' && /任务卡 1|task cards: 1/.test(chat.more) && !chat.p2card && /在对话最下面|at the end of the chat/.test(chat.p2trace) && !chat.oldTray, JSON.stringify(chat))
+    r.check('R5 审批围栏不进正文,流里一行指向对话最下面,卡片堆里有那张卡', !chat.fenceLeak && chat.pointer === 'pending' && /对话最下面|end of the chat/.test(chat.pointerText) && chat.tray, `${chat.pointer} · ${chat.pointerText}`)
     await win.waitForTimeout(500)
     r.check('R6 打开即读过(POST read)', seen.read.includes(MUSE), JSON.stringify(seen.read))
     await win.screenshot({ path: path.join(dir, 'dm.png') })
 
-    // ── 托盘里批准 ──
-    await win.locator('[data-muse-tray] .ibx-approval button.primary').click()
+    // ── 卡片堆里批准 ──
+    await win.locator(`${DECK} .t2c-apv-body[data-tray-kind="muse-approval"] .ibx-approval button.primary`).click()
     await win.waitForSelector('#tocmsg-p3 [data-muse-approval="approved"]', { timeout: 10_000 }).catch(() => {})
-    await win.waitForFunction(() => !document.querySelector('[data-muse-tray]'), null, { timeout: 10_000 }).catch(() => {})
+    await win.waitForSelector(`${DECK} .t2c-apv-body[data-tray-kind="task"] .t2-taskcard-actions button.primary`, { timeout: 10_000 }).catch(() => {})
     await win.waitForTimeout(800)
-    const after = await win.evaluate(() => ({
-      tray: !!document.querySelector('[data-muse-tray]'),
+    const after = await win.evaluate((DECK) => ({
+      top: document.querySelector(`${DECK} .t2c-apv-body`)?.getAttribute('data-tray-kind') || '',
+      buttons: [...document.querySelectorAll(`${DECK} .t2c-apv-body[data-tray-kind="task"] .t2-taskcard-actions button`)].map((b) => `${b.classList.contains('primary') ? '*' : ''}${b.textContent.trim()}`),
       line: document.querySelector('#tocmsg-p3 [data-muse-approval]')?.textContent || '',
       st: document.querySelector('#tocmsg-p3 [data-muse-approval]')?.getAttribute('data-muse-approval') || '',
-    }))
+    }), DECK)
     const b1 = await badge()
-    r.check('R7 批准后托盘收起、流里变回执;角标 1 且不再警示色', seen.approve === 1 && !after.tray && after.st === 'approved' && /(你在 \d{1,2}:\d{2} 批准了|You approved at).*Wrote Inbox/.test(after.line) && b1?.n === '1' && !b1.wait, `${JSON.stringify(after)} badge=${JSON.stringify(b1)}`)
+    r.check('R7a 批准后审批离开卡片堆、流里变回执;角标 1 且不再警示色', seen.approve === 1 && after.top === 'task' && after.st === 'approved' && /(你在 \d{1,2}:\d{2} 批准了|You approved at).*Wrote Inbox/.test(after.line) && b1?.n === '1' && !b1.wait, `${JSON.stringify(after)} badge=${JSON.stringify(b1)}`)
+    const want = process.env.LANG_EN ? ['*Let Muse do it', 'Do it here', 'Run in new session', 'Ignore'] : ['*交给 Muse 执行', '在这里做', '新会话执行', '忽略']
+    r.check('R7b 卡片堆顶上换成待办卡:交给 Muse 执行(主)/ 在这里做 / 新会话执行 / 忽略,没有开个子会话', JSON.stringify(after.buttons) === JSON.stringify(want), JSON.stringify(after.buttons))
     await win.screenshot({ path: path.join(dir, 'dm-approved.png') })
 
     // ── 交给 Muse 执行 ──
-    await win.locator('#tocmsg-p2 .t2-taskcard-actions button.primary').click()
-    await win.waitForSelector('#tocmsg-p2 .t2-taskcard.done', { timeout: 10_000 }).catch(() => {})
-    r.check('R8 交给 Muse 执行 → 引擎收到批准待办,卡定格', seen.todoApprove === 1 && await win.locator('#tocmsg-p2 .t2-taskcard.done').count() === 1, `approve=${seen.todoApprove}`)
+    await win.locator(`${DECK} .t2c-apv-body[data-tray-kind="task"] .t2-taskcard-actions button.primary`).click()
+    await win.waitForFunction(() => !document.querySelector('[data-pending-deck] .t2c-apv'), null, { timeout: 10_000 }).catch(() => {})
+    await win.waitForSelector('#tocmsg-p2 [data-task-trace="muse"]', { timeout: 10_000 }).catch(() => {})
+    const done = await win.evaluate(() => ({ deck: !!document.querySelector('[data-pending-deck] .t2c-apv'), trace: document.querySelector('#tocmsg-p2 [data-task-trace]')?.textContent || '' }))
+    r.check('R8 交给 Muse 执行 → 引擎收到批准待办,卡片堆清空,流里那行是结局', seen.todoApprove === 1 && !done.deck && /已交给 Muse 执行|Handed to Muse/.test(done.trace), `approve=${seen.todoApprove} ${JSON.stringify(done)}`)
+    await win.screenshot({ path: path.join(dir, 'dm-done.png') })
 
     // ── 点 Xyra 行 → 角标清零 ──
     await orbit('Xyra').click()

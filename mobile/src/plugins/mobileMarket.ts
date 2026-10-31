@@ -11,7 +11,7 @@ import { assertMarketplaceRequirements } from '../../../desktop/shared/marketpla
  *    且每个字节都要以 base64 过一遍 Capacitor 桥)+ 解压总量与条目数上限(防 zip 炸弹;三道闸见 zipUnpack.ts:
  *    解析前看条目数、解压前看声明大小、解压时按实际字节流式封顶)。
  *  · 下载地址只认 `https:`(file: / content: / 明文 http 一律不下载);allowLoopbackHttp 只给 debug 包的台架开回环明文。
- *  · manifest `isDesktopOnly: true`、声明了 `requiresApp`(依赖装在电脑上的应用)、入口文件(manifest.main,缺省 main.js)不在包里
+ *  · manifest `isDesktopOnly: true`、`platforms` 不含 android、Forsion 版本不在 min/maxAppVersion 之内、声明了 `requiresApp`(依赖装在电脑上的应用)、入口文件(manifest.main,缺省 main.js)不在包里
  *    → 拒装,且在**写下第一个字节之前**判。
  *  · 落盘不碰正在用的那一版:新版先完整写进暂存目录,再「旧 → 备份、暂存 → 正式、删备份」;写到一半失败 / 被杀,
  *    旧版原样可用,残留由 pluginHost.recoverPluginDirs 在下次清点 / 安装时收拾。
@@ -218,6 +218,23 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
   const maxUnpacked = deps.maxUnpackedBytes ?? MOBILE_MAX_UNPACKED_BYTES
   const maxEntries = deps.maxEntries ?? MOBILE_MAX_ENTRIES
   const allowedUrl = (url: unknown): url is string => isAllowedDownloadUrl(url, deps.allowLoopbackHttp === true)
+  // assertMarketplaceRequirements 抛的是英文机器码(`install: unsupported platform` / `install: requires Forsion …`),
+  // 原样上屏用户看不懂:「平台不符」「版本不够」换成本地化原因;字段格式非法的(坏数据)照旧抛。
+  const assertRequirements = (item: Record<string, unknown>): void => {
+    if (!deps.appVersion) return
+    const current = deps.appVersion()
+    try {
+      assertMarketplaceRequirements(item as any, current, 'android')
+    } catch (e) {
+      const msg = (e as Error)?.message || ''
+      if (msg === 'install: unsupported platform') throw new MarketUserError(deps.t('mobilemarket.unsupportedPlatform'))
+      if (msg.startsWith('install: requires Forsion ')) {
+        const req = [item.minAppVersion && `≥ ${item.minAppVersion}`, item.maxAppVersion && `< ${item.maxAppVersion}`].filter(Boolean).join(', ')
+        throw new MarketUserError(deps.t('mobilemarket.incompatibleVersion', { req, current }))
+      }
+      throw e
+    }
+  }
   const listeners = new Set<(ev: MarketInstallProgress) => void>()
   const emit = (ev: MarketInstallProgress): void => {
     for (const cb of listeners) { try { cb(ev) } catch { /* 一个订阅者炸了不连累别人 */ } }
@@ -318,7 +335,7 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
         || !allowedUrl(info.downloadUrl)) {
         throw new Error('resolve: invalid target')
       }
-      if (deps.appVersion) assertMarketplaceRequirements(info as any, deps.appVersion(), 'android')
+      assertRequirements(info)
       const slug = info.installSlug
       // 非插件家族(技能 / Agent / 主题 / Space):不用下载就知道手机装不了。插件家族要下载后按 manifest 纠偏才知道。
       if (info.type !== 'plugin' && info.type !== 'amadeus-plugin') throw new MarketUserError(deps.t('mobilemarket.desktopOnlyType'))
@@ -365,8 +382,10 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
         manifest = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null
       } catch { /* 下面统一报 manifest 无效 */ }
       if (!manifest || !manifestFile) throw new MarketUserError(deps.t('mobilemarket.badManifest'))
-      if (deps.appVersion) assertMarketplaceRequirements(manifest as any, deps.appVersion(), 'android')
+      // isDesktopOnly 先判:assertRequirements 也会把它算作平台不符,但那边报的是笼统的「不支持手机」,
+      // 这里给更具体的「声明了仅桌面端」(e2e:plugins 第 4 步钉着这句)。
       if (manifest.isDesktopOnly === true) throw new MarketUserError(deps.t('mobilemarket.desktopOnlyPlugin'))
+      assertRequirements(manifest)
       const needsApp = requiredDesktopApp(manifest)
       if (needsApp) throw new MarketUserError(deps.t('mobilemarket.requiresDesktopApp', { app: KNOWN_APPS[needsApp]?.name ?? needsApp }))
       const pluginId = effectivePluginId(slug, manifest.id)

@@ -221,12 +221,12 @@
   -webkit-backdrop-filter: var(--gl-blur-float);
 }
 
-/* 审批托盘(输入卡上沿,同样悬浮在正文之上):与输入卡同一档薄玻璃,材质同样画在 ::before(理由见上)。 */
-[data-theme='genesis-glass'] .t2c-apv {
+/* 审批托盘与插话等待区(输入卡上沿,同样悬浮在正文之上):与输入卡同一档薄玻璃,材质同样画在 ::before(理由见上)。 */
+[data-theme='genesis-glass'] :is(.t2c-apv, .t2c-steer) {
   background: transparent;
   isolation: isolate;
 }
-[data-theme='genesis-glass'] .t2c-apv::before {
+[data-theme='genesis-glass'] :is(.t2c-apv, .t2c-steer)::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -261,7 +261,7 @@
 [data-theme='genesis-glass'] .rb-iconpick,
 [data-theme='genesis-glass'] .unitsw-menu,
 [data-theme='genesis-glass'] .t2sw-plug-menu,
-[data-theme='genesis-glass'] .amx-tip,
+[data-theme='genesis-glass'] .lcl-tip,
 [data-theme='genesis-glass'] .amx-db-pop,
 [data-theme='genesis-glass'] .ui-popover,
 [data-theme='genesis-glass'] .amx-bpick,
@@ -302,7 +302,7 @@
 [data-theme='genesis-glass'] .rb-iconpick,
 [data-theme='genesis-glass'] .unitsw-menu,
 [data-theme='genesis-glass'] .t2sw-plug-menu,
-[data-theme='genesis-glass'] .amx-tip {
+[data-theme='genesis-glass'] .lcl-tip {
   background: var(--gl-sheen), var(--gl-side);
 }
 
@@ -467,6 +467,7 @@
 /* base.css 的通配符不匹配伪元素；三类材质代理必须显式停掉滤镜，性能开关才名副其实。 */
 :root[data-theme='genesis-glass'][data-glass='off'] .t2c-card::before,
 :root[data-theme='genesis-glass'][data-glass='off'] .t2c-apv::before,
+:root[data-theme='genesis-glass'][data-glass='off'] .t2c-steer::before,
 :root[data-theme='genesis-glass'][data-glass='off'] .composer-menu:is(.composer-menu--model, .composer-menu--mode, .composer-menu--add)::before,
 :root[data-theme='genesis-glass'][data-glass='off'] .cmd-overlay::before {
   backdrop-filter: none;

@@ -5,3 +5,6 @@ dist/
 # ios/ 暂未添加。
 # 模拟器 / 台架运行产物(截图、uiautomator dump、acceptance.json):本地看,不入库。
 outputs/
+
+# Verified npm archive cache; never app data.
+.extend-cache/

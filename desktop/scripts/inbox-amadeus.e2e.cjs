@@ -3,6 +3,7 @@
  *  ⓪ Inbox Space 左栏 = 统一工作区(自动 · 收件箱列表源):行 = 共享 SidebarRow + 未读点,分组(未读 / 稳定来源类别 / 已归档)可筛,
  *     多条 `automation:<ruleId>` 合并为「自动化」,内部 id 在分组和阅读页都不得出现;
  *     已归档是单独拉的一份(filter=archived)且点得开;旧 Gmail 式列表(.ibx-row / .ibx-chips)不复存在;
+ *     开着筛选时列表底下写「筛掉了 {n} 条」= 清掉筛选会多出来的行(已归档不是「全部」的子集,按集合差数;2026-10-24 借鉴 Comma §2.9);
  *  ① agent 消息:正文经 UnifiedPage 只读渲染(表格 / 标题是 Milkdown DOM),页面标题被隐、阅读面板 h1 唯一,围栏原文不进正文;
  *  ② 末尾 forsion-approval 围栏 → 审批卡,卡上的预览来自 GET /agent/special/approvals 的行(正文里没这串字);
  *     点「批准并执行」→ POST /agent/special/approvals/apv-1/approve,卡定格「已批准并执行」+ 结果;
@@ -217,6 +218,9 @@ async function main() {
     const win = await app.firstWindow()
     await win.setViewportSize({ width: 1500, height: 900 })
     await win.waitForSelector('#root', { timeout: 30_000 })
+    // 登录后首次同步卡(SyncSetupCard)启动 2.5s 后弹、盖住列表(悬停 / 点击被它截走),和本台架无关:藏掉(同 btw.check);reload 之后再藏一次
+    const hideSyncCard = () => win.addStyleTag({ content: '.sync-setup-backdrop { display: none !important; }' })
+    await hideSyncCard()
     await win.waitForTimeout(2500)
     for (const label of ['跳过引导', 'Skip']) {
       const b = win.locator(`text=${label}`).first()
@@ -293,6 +297,9 @@ async function main() {
     await openMessage(win, '请审批')
     // 块编辑器挂在 .unified-page 的兄弟容器里,探针以 .ibx-amadeus(整个只读页宿主)为根。
     await win.waitForSelector('.ibx-reader-body .ibx-amadeus table', { timeout: 20_000 }).catch(() => {})
+    // 10-26:内嵌的 .amx-pane 自带 overflow:auto,会在阅读面板里多出一层纵向滚动(滚轮先滚它再滚外层)
+    const paneOy = await win.locator('.ibx-reader-body .ibx-amadeus').first().evaluate((el) => getComputedStyle(el).overflowY).catch(() => '')
+    check('阅读面板只有一层纵向滚动:内嵌正文宿主 .ibx-amadeus 不自己滚', paneOy === 'visible', paneOy)
     const dom = await win.evaluate(() => {
       const host = document.querySelector('.ibx-reader-body .ibx-amadeus')
       const text = host?.textContent || ''
@@ -343,11 +350,16 @@ async function main() {
     // 筛选:未读(客户端)/ 已归档(换服务端 filter)/ 回到全部。数行之前先把收着的组摊开。
     const clickGroup = async (name) => { await win.getByRole('button', { name: '筛选分类', exact: true }).click(); await win.getByRole('menuitemradio', { name, exact: true }).click(); await win.waitForTimeout(900) }
     const listRows = async () => { await revealAll(win); return win.locator('.t2sw-plug-list .t2s-srow').count() }
-    await clickGroup('未读'); const unreadRows = await listRows()
-    await clickGroup('已归档'); const archivedHeads = await win.locator('.t2sw-plug-ghead[aria-expanded="true"]').count(); const archivedRows = await listRows()
+    const hiddenLine = () => win.locator('.t2sw-plug-hidden').allTextContents()
+    await clickGroup('未读'); const unreadRows = await listRows(); const unreadHidden = await hiddenLine()
+    await win.locator('.t2sw-plug').first().screenshot({ path: path.join(path.dirname(SHOT), 'workspace-filter-hidden-zh.png') }).catch(() => {})
+    await clickGroup('已归档'); const archivedHeads = await win.locator('.t2sw-plug-ghead[aria-expanded="true"]').count(); const archivedRows = await listRows(); const archivedHidden = await hiddenLine()
     await openMessage(win, '已归档的旧消息')
     const archivedTitle = await win.locator('.ibx-reader-title').first().textContent().catch(() => '')
-    await clickGroup('全部'); const allRows = await listRows()
+    await clickGroup('全部'); const allRows = await listRows(); const allHidden = await hiddenLine()
+    check('开着筛选时列表底下写「筛掉了几条」:未读筛掉 2 封(已读的)/ 已归档是另一份数据,未归档的 5 封全算 / 回到全部没有这一行',
+      JSON.stringify(unreadHidden) === '["筛掉了 2 条"]' && JSON.stringify(archivedHidden) === '["筛掉了 5 条"]' && allHidden.length === 0,
+      JSON.stringify({ unreadHidden, archivedHidden, allHidden }))
     check('筛选:未读剩 3(刚读的那封掉出)/ 已归档 1 封、只有一个发信人所以那一组直接开着、点得开 / 回到全部 5;已归档是单独拉的(filter=archived)',
       unreadRows === 3 && archivedRows === 1 && archivedHeads === 1 && archivedTitle === '已归档的旧消息' && allRows === 5 && seen.filters.includes('archived'),
       JSON.stringify({ unreadRows, archivedRows, archivedHeads, archivedTitle, allRows, filters: seen.filters }))
@@ -589,6 +601,7 @@ async function main() {
     if (!NEGATIVE_CONTROL) {
       await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme', 'dark') })
       await win.reload({ waitUntil: 'domcontentloaded' })
+      await hideSyncCard()
       await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 820))
       await win.setViewportSize({ width: 1000, height: 820 })
       await win.locator('button.rb-space[aria-label^="Inbox"]').first().click() // 中间的最近使用里也会有它一份

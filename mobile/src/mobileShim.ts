@@ -19,14 +19,15 @@ import { Browser } from '@capacitor/browser'
 import { InAppBrowser, ToolbarPosition, iOSViewStyle, iOSAnimation } from '@capacitor/inappbrowser'
 import { registerMessages, translate } from '@/i18n'
 import { APP_VERSION } from '@/changelog'
-import { isNewer } from '../../desktop/shared/updateVersion'
-import { parseMainland, parseWebsiteInstallers, sourceOrder } from '../../desktop/shared/updateSource'
+import { isNewer, isPrerelease } from '../../desktop/shared/updateVersion'
+import { parseMainland, parseWebsiteInstallers, selectGitHubRelease, sourceOrder } from '../../desktop/shared/updateSource'
 import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudAccountCache'
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken, clientTag } from './capacitorAuth'
 import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
 import { NATIVE_DOWNLOAD_MAX_BYTES } from '@/services/nativeDownload'
 import { createSaveDownload, type ForsionDownloadsPlugin } from './saveDownload'
 import { createCloudFetch } from './cloudFetch'
+import { createMobileAccount } from './pluginAccount'
 
 // 语音转写失败时给用户看的话。服务端的 detail 只有中文(brain-api/routes.ts),不原样透出,按状态码换成这几句。
 registerMessages({
@@ -99,7 +100,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   const logout = async (): Promise<void> => {
     token = ''
     clearCloudAccountCache()
-    authListeners.forEach((listener) => listener())
+    authListeners.forEach((listener) => { try { listener() } catch { /* isolated */ } })
     if (native) await clearStoredToken()
     else { try { localStorage.removeItem(TOKEN_KEY) } catch { /* ignore */ } }
     await login()
@@ -225,6 +226,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     emitUpd({ phase: 'checking' })
     try {
       const current = await installedVersion()
+      const beta = (readPrefs().updater as { beta?: unknown } | undefined)?.beta === true
       const GH = 'https://api.github.com/repos/Changan-Su/Forsion/releases'
       // ⚠️ cloudApiBase 已含 /api,路径从 /api 之后写起(同 cloudJson 的坑)。
       const site = parseWebsiteInstallers(await getJson(`${cloudApiBase}/website/config`))
@@ -234,19 +236,27 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
       if (site) {
         // 官网答了:没挂安卓包 = 没有新版可提示(不是错)。
         version = site.android?.version || ''
+        if (!beta && isPrerelease(version)) version = ''
         url = `${cloudApiBase}/website/download/android`
-        if (version && isNewer(version, current) && sourceOrder('auto', parseMainland(await getJson(`${cloudApiBase}/auth/region`, 3000)))[0] === 'github') {
+        if (beta) {
+          const pre = selectGitHubRelease(await getJson(GH), true, true, rel => !!apkAsset(rel))
+          if (pre && (!version || isNewer(pre.version, version))) {
+            version = pre.version; url = apkAsset(pre.release); source = 'github'
+          }
+        }
+        if (source === 'website' && version && isNewer(version, current) && sourceOrder('auto', parseMainland(await getJson(`${cloudApiBase}/auth/region`, 3000)))[0] === 'github') {
           const gh = apkAsset(await getJson(`${GH}/tags/v${version}`))
           if (gh) { url = gh; source = 'github' }
         }
       } else {
-        const rel = await getJson(`${GH}/latest`)
+        const body = await getJson(beta ? GH : `${GH}/latest`)
         // **两个源都没答上**(离线 / 网关挂了 + GitHub 在大陆不可达)不能报「已是最新版」——
         // 那会把一次失败伪装成「检查过了,没新版」,用户永远等不到提醒(Codex 09-15)。
-        if (!rel) return emitUpd({ phase: 'error', error: translate('about.update.unreachable') })
+        if (!body) return emitUpd({ phase: 'error', error: translate('about.update.unreachable') })
         // 没有 APK 资产 = 这个 tag 的 build-android 挂了(它不阻断发版),别报一个下不到的新版本。
-        url = apkAsset(rel)
-        version = url ? String(rel?.tag_name || '').replace(/^v/i, '').trim() : ''
+        const rel = selectGitHubRelease(body, beta, false, item => !!apkAsset(item))
+        url = rel ? apkAsset(rel.release) : ''
+        version = rel?.version || ''
         source = 'github'
       }
       if (version && isNewer(version, current)) {
@@ -275,9 +285,27 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     }
   }
 
+  const saveDownload = native ? createSaveDownload(registerPlugin<ForsionDownloadsPlugin>('ForsionDownloads'), { maxBytes: NATIVE_DOWNLOAD_MAX_BYTES }) : undefined
+  const account = createMobileAccount({
+    cloudApiBase: () => cloudApiBase, token: () => token, status: authStatus, login, logout,
+    onAuthChanged: (cb) => { authListeners.add(cb); return () => { authListeners.delete(cb) } },
+    fetch: (input, init) => origFetch(input, init),
+    async saveDownload(blob, name) {
+      try {
+        if (saveDownload) await saveDownload(name, blob.type, blob)
+        else {
+          const url = URL.createObjectURL(blob), a = document.createElement('a')
+          a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove()
+          setTimeout(() => URL.revokeObjectURL(url), 30_000)
+        }
+        return { ok: true }
+      } catch (e) { return { ok: false, error: String((e as Error)?.message || e) } }
+    },
+  })
   ;(window as unknown as { tangu: unknown }).tangu = {
     cloudWeb: true,
     mobile: true,
+    account,
     // 这台设备上没有本机引擎(聊天接的是云端,或隧道到「我的电脑」—— 那也不是本机)。共享渲染层据此不把
     // 只有本机引擎才有的接口挂给插件(ctx.automation:规则存在引擎的本机档案里,云端引擎答 404)。
     executionCapabilities: { host: false },
@@ -321,7 +349,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     unitForgetSelf: unit.unitForgetSelf,
     // P1-DL 存到系统「下载」:Capacitor WebView 没有 DownloadListener,`<a download>` 在 App 里是哑弹。只装 native 路径 ——
     // web(dev / preview)是真浏览器,缺席 → 调用方回落 <a download>(见 services/nativeDownload.ts)。
-    saveDownload: native ? createSaveDownload(registerPlugin<ForsionDownloadsPlugin>('ForsionDownloads'), { maxBytes: NATIVE_DOWNLOAD_MAX_BYTES }) : undefined,
+    saveDownload,
     accountUseResetCard: (type?: string) => {
       if (type !== undefined && type !== 'both' && type !== 'weekly') {
         return Promise.resolve({ status: 400, json: { error: 'invalid_type', detail: `invalid reset card type: ${type}` } })
@@ -367,7 +395,9 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   }
   if (!native) window.addEventListener('storage', (event) => {
     if (event.key !== TOKEN_KEY || event.oldValue === event.newValue) return
-    syncCloudAccountCache(cloudApiBase, readWebToken())
+    token = ''
+    clearCloudAccountCache()
+    authListeners.forEach((listener) => { try { listener() } catch { /* isolated */ } })
     location.reload()
   })
 }

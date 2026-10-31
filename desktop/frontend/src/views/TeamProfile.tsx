@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode, type CSSProperties } from 'react'
+import { useEffect, useMemo, useState, type ChangeEvent, type ReactNode } from 'react'
 import { ArrowDown, ArrowLeft, ArrowUp, ChevronRight, ImageUp, Loader2, Plus, Search, Settings2, Smile, Trash2, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
@@ -6,7 +6,7 @@ import { useI18n } from '../i18n'
 import { deleteTeamAvatar, getTeam, patchSessionConfig, patchTeam, updateSession, uploadTeamAvatar } from '../services/backendService'
 import type { AgentConfig, ModelInfo, NormalAgentDef, SessionRecord, TeamDef, ThinkingLevel } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { isTeamImageAvatar, THINKING_LEVELS } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { ProfileModelField, ProfileTextEditor } from './profileControls'
+import { ProfileModelField, ProfileSelectField, ProfileTextEditor, approvalOptions, thinkingOptions, useSectionNavSlide } from './profileControls'
 import { AvatarStack } from '../components/AvatarStack'
 import { ModelSelect } from '../components/ModelSelect'
 import { moveTeamMember, teamDraft, teamSessionConfig, teamSessionPatch, type MemberTuning, type TeamDraft } from './teamProfileState'
@@ -15,6 +15,7 @@ import './teamProfile.css'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { thinkingLabel } from '../components/thinkingLabel'
 import { homeTarget, targetForSession } from '../services/engine/targets'
+import { agentName, agentNames } from '../agentName'
 
 type Props = {
   session?: SessionRecord
@@ -35,6 +36,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
   const [loadError, setLoadError] = useState('')
   const [retry, setRetry] = useState(0)
   const [tab, setTab] = useState<'lineup' | 'settings'>('lineup')
+  const navRef = useSectionNavSlide(tab)
   const [selected, setSelected] = useState('')
   const [opened, setOpened] = useState<string[]>([])
   const [picker, setPicker] = useState(false)
@@ -60,7 +62,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
 
   const patch = (value: Partial<TeamDraft>) => { setDraft((d) => ({ ...d, ...value })); setDirty(true); setNotice(''); setError('') }
   const agentFor = (slug: string) => draft.tempAgents.find((a) => a.slug === slug) || s.agents.find((a) => a.slug === slug)
-  const memberNames = draft.members.map((m) => agentFor(m.slug)?.name || m.slug)
+  const memberNames = draft.members.map((m) => agentName(agentFor(m.slug)) || m.slug)
   const open = (slug: string) => { setSelected(slug); setOpened((ids) => ids.includes(slug) ? ids : [...ids, slug]) }
   const add = (slug: string) => { patch({ members: [...draft.members, { slug, role: '' }] }); setPicker(false); setQuery('') }
   // 会话级调档:已存成员写 memberConfigs(只影响本会话),临时成员的模型 / Effort 本就住在它自己的定义里 —— 两处只此一个写点。
@@ -107,11 +109,11 @@ export function TeamProfile({ session, config, renderMember }: Props) {
       setNotice(t('teamProfile.avatarRemoved'))
     } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
   }
-  const candidates = s.agents.filter((a) => a.createdBy !== 'system' && !draft.members.some((m) => m.slug === a.slug) && `${a.name} ${a.description} ${a.slug}`.toLowerCase().includes(query.toLowerCase()))
+  const candidates = s.agents.filter((a) => a.createdBy !== 'system' && !draft.members.some((m) => m.slug === a.slug) && `${agentNames(a).join(' ')} ${a.description} ${a.slug}`.toLowerCase().includes(query.toLowerCase()))
   const teamAvatar = s.teamAvatarUrl && isTeamImageAvatar(draft.avatar) ? <img src={s.teamAvatarUrl} alt="" /> : (!isTeamImageAvatar(draft.avatar) && draft.avatar) || (draft.members.length
     ? <AvatarStack size={42} items={draft.members.map((member) => {
         const definition = agentFor(member.slug)
-        return { slug: member.slug, name: definition?.name || member.slug, avatarUrl: s.avatars[member.slug] }
+        return { slug: member.slug, name: agentName(definition) || member.slug, avatarUrl: s.avatars[member.slug] }
       })} />
     : <Users size={26} strokeWidth={1.5} />)
   const missing = draft.members.some((m) => !agentFor(m.slug) || (config.teamSlug && !s.agents.some((a) => a.slug === m.slug)))
@@ -139,7 +141,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
         // (如刚移除的工作范围、刚切的审批档)退回旧值
         useApp.setState((a) => ({ configBySession: { ...a.configBySession, [session.id]: teamSessionConfig(a.configBySession[session.id] || savedConfig, nextDraft) }, sessions: a.sessions.map((v) => v.id === session.id ? { ...v, agent_config: teamSessionConfig(v.agent_config || savedConfig, nextDraft) } : v) }))
         if (!config.teamSlug && nextDraft.name.trim() !== session.title) {
-          const updated = await updateSession(targetForSession(session.id), session.id, { title: nextDraft.name.trim() })
+          const updated = await updateSession(targetForSession(session.id), session.id, { title: nextDraft.name.trim(), title_source: 'user' })
           useApp.setState((a) => ({ sessions: a.sessions.map((v) => v.id === session.id ? { ...v, title: updated.title } : v) }))
         }
       } else {
@@ -176,25 +178,25 @@ export function TeamProfile({ session, config, renderMember }: Props) {
           <span className={`agent-state${s.running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : s.running ? 'agentProfile.working' : 'agentProfile.standby')}<span>· {draft.members.length} {t('teamProfile.members')}</span></span></div>
       </header>
       {(session?.project_name || config.cwd) && <p className="team-profile-location" title={config.cwd}>{session?.project_name || (config.teamSlug ? t('teamProfile.library') : config.cwd?.replace(/\\/g, '/').split('/').filter(Boolean).pop() || config.cwd)}</p>}
-      <nav className="agent-section-nav" style={{ '--profile-tab-count': 2, '--profile-tab-index': tab === 'lineup' ? 0 : 1 } as CSSProperties} aria-label={t('teamProfile.navigation')}>
+      <nav ref={navRef} className="agent-section-nav" aria-label={t('teamProfile.navigation')}>
         <button className={tab === 'lineup' ? 'selected' : ''} aria-pressed={tab === 'lineup'} onClick={() => setTab('lineup')}><Users size={14} />{t('teamProfile.lineup')}</button>
         <button className={tab === 'settings' ? 'selected' : ''} aria-pressed={tab === 'settings'} onClick={() => setTab('settings')}><Settings2 size={14} />{t('teamProfile.settings')}</button>
       </nav>
       <fieldset disabled={busy} className="team-profile-fields" key={tab}>
         {tab === 'lineup' ? <>
           <div className="team-lineup-toolbar"><p className="team-profile-caption">{t('teamProfile.lineupHint')}</p><button className="team-member-add" onClick={() => setPicker(!picker)} aria-expanded={picker}><Plus size={24} strokeWidth={1.5} /><span>{t('teamProfile.add')}</span></button></div>
-          {picker && <div className="team-candidate-picker"><div className="team-candidate-heading"><label className="agents-search"><Search size={13} /><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t('agentProfile.search')} placeholder={t('agentProfile.search')} /></label><button aria-label={t('teamProfile.closePicker')} onClick={() => setPicker(false)}><X size={14} /></button></div><div className="team-candidates">{candidates.map((a) => <button key={a.slug} onClick={() => add(a.slug)}><AgentAvatar name={a.name || a.slug} url={s.avatars[a.slug]} size={16} className="agent-avatar-mini" /><span><strong>{a.name}</strong><small>{a.description}</small></span><Plus size={14} /></button>)}{!candidates.length && <p className="agent-profile-muted">{t('teamProfile.noCandidates')}</p>}</div>{!config.teamSlug && <button className="agent-profile-link" onClick={addTemp}>{t('teamProfile.addTemp')}<Plus size={14} /></button>}</div>}
+          {picker && <div className="team-candidate-picker"><div className="team-candidate-heading"><label className="agents-search"><Search size={13} /><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t('agentProfile.search')} placeholder={t('agentProfile.search')} /></label><button aria-label={t('teamProfile.closePicker')} onClick={() => setPicker(false)}><X size={14} /></button></div><div className="team-candidates">{candidates.map((a) => <button key={a.slug} onClick={() => add(a.slug)}><AgentAvatar name={agentName(a)} url={s.avatars[a.slug]} size={16} className="agent-avatar-mini" /><span><strong>{agentName(a)}</strong><small>{a.description}</small></span><Plus size={14} /></button>)}{!candidates.length && <p className="agent-profile-muted">{t('teamProfile.noCandidates')}</p>}</div>{!config.teamSlug && <button className="agent-profile-link" onClick={addTemp}>{t('teamProfile.addTemp')}<Plus size={14} /></button>}</div>}
           <div className="team-lineup">{draft.members.map((m, index) => {
             const agent = agentFor(m.slug), work = s.work?.[m.slug]
             const status = work?.status || 'idle'
             return <article className={`team-member${!agent ? ' unavailable' : ''}`} key={m.slug} data-team-member={m.slug}>
-              <button className="team-member-open" disabled={!agent} onClick={() => open(m.slug)} aria-label={`${t('teamProfile.inspect')} ${agent?.name || m.slug}`}>
-                <span className="team-member-portrait"><AgentAvatar name={agent?.name || m.slug} url={s.avatars[m.slug]} siblings={memberNames} fill /></span>
-                <strong>{agent?.name || m.slug}</strong><span className={`team-member-status ${status}`}>{agent ? t(`teamProfile.status.${status}`) : t('teamProfile.missing')}</span><ChevronRight size={14} className="team-member-chevron" />
+              <button className="team-member-open" disabled={!agent} onClick={() => open(m.slug)} aria-label={`${t('teamProfile.inspect')} ${agentName(agent) || m.slug}`}>
+                <span className="team-member-portrait"><AgentAvatar name={agentName(agent) || m.slug} url={s.avatars[m.slug]} siblings={memberNames} fill /></span>
+                <strong>{agentName(agent) || m.slug}</strong><span className={`team-member-status ${status}`}>{agent ? t(`teamProfile.status.${status}`) : t('teamProfile.missing')}</span><ChevronRight size={14} className="team-member-chevron" />
               </button>
               {agent && <MemberTuning agent={agent} models={s.models || []} temp={draft.tempAgents.some((a) => a.slug === m.slug)}
                 tuning={draft.memberConfigs[m.slug]} onChange={(value) => tuneMember(m.slug, value)} />}
-              <label className="team-member-role"><span>{t('teamProfile.role')}</span><textarea rows={2} aria-label={`${agent?.name || m.slug} ${t('teamProfile.role')}`} value={m.role} maxLength={500} placeholder={t('teamProfile.rolePlaceholder')} onChange={(e) => patch({ members: draft.members.map((v) => v.slug === m.slug ? { ...v, role: e.target.value } : v) })} /></label>
+              <label className="team-member-role"><span>{t('teamProfile.role')}</span><textarea rows={2} aria-label={`${agentName(agent) || m.slug} ${t('teamProfile.role')}`} value={m.role} maxLength={500} placeholder={t('teamProfile.rolePlaceholder')} onChange={(e) => patch({ members: draft.members.map((v) => v.slug === m.slug ? { ...v, role: e.target.value } : v) })} /></label>
               <div className="team-member-actions">
                 <button disabled={index === 0} aria-label={t('teamProfile.moveUp')} title={t('teamProfile.moveUp')} onClick={() => patch({ members: moveTeamMember(draft.members, m.slug, -1) })}><ArrowUp size={13} /></button>
                 <button disabled={index === draft.members.length - 1} aria-label={t('teamProfile.moveDown')} title={t('teamProfile.moveDown')} onClick={() => patch({ members: moveTeamMember(draft.members, m.slug, 1) })}><ArrowDown size={13} /></button>
@@ -247,9 +249,9 @@ function MemberTuning({ agent, models, temp, tuning, onChange }: {
       value={model}
       onChange={(id) => onChange({ model: id })}
       defaultLabel={inherited.model ? follow(models.find((m) => m.id === inherited.model)?.name || inherited.model) : t('teamProfile.tuneModelDefault')}
-      ariaLabel={`${agent.name} ${t('teamProfile.tuneModel')}`}
+      ariaLabel={`${agentName(agent)} ${t('teamProfile.tuneModel')}`}
     />
-    <select className="team-member-effort" aria-label={`${agent.name} ${t('teamProfile.tuneEffort')}`} value={level} onChange={(e) => onChange({ thinkingLevel: e.target.value as ThinkingLevel | '' })}>
+    <select className="team-member-effort" aria-label={`${agentName(agent)} ${t('teamProfile.tuneEffort')}`} value={level} onChange={(e) => onChange({ thinkingLevel: e.target.value as ThinkingLevel | '' })}>
       <option value="">{inherited.level ? `${t('teamProfile.tuneDefault')} · ${thinkingLabel(inherited.level as ThinkingLevel, t)}` : t('teamProfile.tuneDefault')}</option>
       {THINKING_LEVELS.map((lv) => <option key={lv} value={lv}>{thinkingLabel(lv, t)}</option>)}
     </select>
@@ -260,12 +262,13 @@ function MemberTuning({ agent, models, temp, tuning, onChange }: {
 function TempMember({ agent, onChange, onBack }: { agent: NormalAgentDef; onChange: (patch: Partial<NormalAgentDef>) => void; onBack: () => void }) {
   const { t } = useI18n()
   const models = useApp((s) => s.modelsResp?.models)
-  return <div className="team-temp-member"><header className="agent-character-hero"><div className="agent-portrait small"><AgentAvatar name={agent.name} fill /></div><h2>{agent.name}</h2></header><p className="agent-profile-muted">{t('teamProfile.tempScope')}</p><div className="agent-config-fields">
+  return <div className="team-temp-member"><header className="agent-character-hero"><div className="agent-portrait small"><AgentAvatar name={agentName(agent)} fill /></div><h2>{agentName(agent)}</h2></header><p className="agent-profile-muted">{t('teamProfile.tempScope')}</p><div className="agent-config-fields">
     {(['name', 'description'] as const).map((key) => <label className="agent-field" key={key}>{t(`agentProfile.${key}`)}<input value={agent[key]} maxLength={key === 'name' ? 120 : key === 'description' ? 300 : undefined} onChange={(e) => onChange({ [key]: e.target.value })} /></label>)}
     <ProfileModelField models={models || []} value={agent.model} label={t('agentProfile.model')} onChange={(model) => onChange({ model })} />
-    <label className="agent-field">{t('agentProfile.thinking')}<select aria-label={t('agentProfile.thinking')} value={agent.thinkingLevel} onChange={(e) => onChange({ thinkingLevel: e.target.value as NormalAgentDef['thinkingLevel'] })}><option value="">{t('agentProfile.default')}</option>{THINKING_LEVELS.map((v) => <option key={v} value={v}>{thinkingLabel(v, t)}</option>)}</select></label>
-    <label className="agent-field">{t('agentProfile.approval')}<select aria-label={t('agentProfile.approval')} value={agent.approvalMode} onChange={(e) => onChange({ approvalMode: e.target.value as NormalAgentDef['approvalMode'] })}>{[['', 'default'], ['readonly', 'readonly'], ['auto-edit', 'autoEdit'], ['full-auto', 'fullAuto'], ['custom', 'custom']].map(([v, k]) => <option key={v} value={v}>{t(`agentProfile.${k}`)}</option>)}</select></label>
-    <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min={1} max={200} value={agent.maxIterations ?? ''} onChange={(e) => onChange({ maxIterations: e.target.value ? Math.min(200, Math.max(1, Math.floor(Number(e.target.value)))) : null })} /></label>
+    {/* 临时成员的缺省跟着团队 / 会话走,不是全局那一档 → 「跟随默认」不写括号(Codex 10-25 评审) */}
+    <ProfileSelectField field="thinking" label={t('agentProfile.thinking')} value={agent.thinkingLevel || ''} options={thinkingOptions(t, { knownDefault: false })} onChange={(v) => onChange({ thinkingLevel: v as NormalAgentDef['thinkingLevel'] })} />
+    <ProfileSelectField field="approval" label={t('agentProfile.approval')} value={agent.approvalMode || ''} options={approvalOptions(t, { knownDefault: false })} onChange={(v) => onChange({ approvalMode: v as NormalAgentDef['approvalMode'] })} />
+    <label className="agent-field">{t('agentProfile.maxIterations')}<input type="number" min={1} value={agent.maxIterations ?? ''} onChange={(e) => onChange({ maxIterations: e.target.value ? Math.max(1, Math.floor(Number(e.target.value))) : null })} /></label>
     <ProfileTextEditor label={t('agentProfile.prompt')} rows={8} value={agent.systemPrompt} maxLength={100000} onChange={(systemPrompt) => onChange({ systemPrompt })} />
     <button onClick={onBack}>{t('teamProfile.backToSave')}</button>
   </div></div>

@@ -4,6 +4,7 @@
  * 在移动端 M0 自然不注册),但渲染 MobileRoot(单列 MobileShell)而非 desktop 的 Dockview Root。
  */
 import { createRoot } from 'react-dom/client'
+import { MotionConfig } from 'framer-motion'
 import { MobileRoot } from './MobileRoot'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import '@/styles/base.css'
@@ -26,6 +27,7 @@ import { installLiveIsland } from './liveIsland'
 import { installNativeModelPicker } from './nativeModelPicker'
 import { installNativeSheet } from './nativeSheet'
 import { installNativeChrome } from './nativeChrome'
+import { browserChromeInstalled, installBrowserChrome } from './browserChrome'
 import { installNativeFilePicker } from './nativeFiles'
 import { installShareInbox } from './shareInbox'
 import { installPhoneControl } from './phoneControl'
@@ -57,8 +59,12 @@ try {
   // 顶栏必须在首次渲染前装上,单列壳首帧就不画 Web 胶囊顶栏(否则先闪一下再消失)。
   installNativeSheet()
   installNativeChrome()
-  // 按压反馈:Android App 里是从落点散开的水波纹(别的端仍是 base.css 那层整块变灰)。
-  if (Capacitor.getPlatform() === 'android') installTapRipple()
+  // 网页(Tangu Web / Unit 设备页,webShim / unitShim)也消费同一套移动导航 / 顶栏 / 半屏协议,由 DOM 宿主画。
+  // Android 的原生宿主仍由上面安装。移动 App 自己的包(mobileShim,`tangu.mobile`)在普通浏览器里跑时 = 开发 / 台架替身
+  // (mobile 的 e2e:* 与 phone-stage / pad-stage 出图台架):照旧走壳自带的 Web 顶栏回落,不装这层。
+  if (!Capacitor.isNativePlatform() && !window.tangu?.mobile) installBrowserChrome()
+  // 按压反馈:Android App 与网页移动壳里是从落点散开的水波纹(别的端仍是 base.css 那层整块变灰)。
+  if (Capacitor.getPlatform() === 'android' || browserChromeInstalled()) installTapRipple()
   // 系统文件选择器(window.tangu.pickFiles):原生半屏里点「添加文件」时 WebView 没有用户激活,文件 input 打不开。
   installNativeFilePicker()
   // 丝滑光标:desktop 在 main.tsx 装,移动端走的是本模块 —— 漏装过一轮(用户实报「移动端没生效」)。
@@ -90,10 +96,13 @@ try {
   recordError('init', err) // 同 desktop main.tsx:被 catch 吞掉的启动错误不派发 window 'error'
 }
 
+// framer 也跟系统「减少动态效果」(走查续八 8.3):位移 / 缩放 / 布局动画停,只留透明度;CSS 那半在 styles/base.css。
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>
-    <ErrorBoundary>
-      <MobileRoot />
-    </ErrorBoundary>
+    <MotionConfig reducedMotion="user">
+      <ErrorBoundary>
+        <MobileRoot />
+      </ErrorBoundary>
+    </MotionConfig>
   </LocaleProvider>,
 )

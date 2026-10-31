@@ -79,7 +79,9 @@ async function openShell(browser, url, viewport, stub) {
     const same = await page.evaluate(async (src) => {
       const eng = await import(src)
       window.__padEngine = eng
-      eng.installNativeChromeHost({ spaces: true, render: () => {} })
+      // The browser's own mobile chrome (mobile/src/browserChrome.tsx) is already the host: keep it — replacing it would
+      // freeze what it draws. Only a build without it gets this stand-in.
+      if (!eng.nativeChromeInstalled()) eng.installNativeChromeHost({ spaces: true, render: () => {} })
       return eng.useWorkspace.getState().mainLeaves.length > 0
     }, ENGINE)
     assert(same, '台架 import 到的 @lcl/engine 不是应用那一份')

@@ -1,6 +1,8 @@
 // 拖入 / 粘贴 / 上传的统一文件导入。三端多态:直接调 window.amadeus.saveAttachment/saveAsset
 // (本地磁盘 / 云端 HTTP / 移动 FS 各自实现),调用方不分本地云端。云端直写才预检单文件上限(随会员档位)。
 import { amadeus } from '@amadeus/api'
+import { create } from 'zustand'
+import { onBatchSettled, oneSaveAtATime, startUpload } from './services/uploads'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { getAttachmentPrefs } from '@amadeus/lib/attachments'
 import { useUiStore } from '@amadeus/store/uiStore'
@@ -145,24 +147,38 @@ export async function importToPage(files: File[], page: string): Promise<void> {
   else notify(translate('fileimport.uploadedOne', { name: files[0].name }))
 }
 
+/** 拖到文件树里、正在传的文件(目标文件夹 → 上传台账 id):树里先出这一行,行尾一颗小环;每个传完就刷树,真行接上
+ *  (附件上传进度方案 r2;此前只有吐司百分比,传完那一行才出现)。失败的留在树里给重试 / 移除。 */
+export const useFolderUploads = create<Record<string, string[]>>(() => ({}))
+const setFolderRows = (folder: string, fn: (ids: string[]) => string[]): void =>
+  useFolderUploads.setState((all) => {
+    const next = fn(all[folder] ?? [])
+    const { [folder]: _old, ...rest } = all
+    return next.length ? { ...rest, [folder]: next } : rest
+  }, true)
+
 /** 拖到文件树 / 库侧栏:把文件写进库里的目标文件夹(空串=库根,不插入嵌入),类似文件管理器导入。 */
 export async function importToFolder(files: File[], folder: string): Promise<void> {
   if (!files.length) return
-  let ok = 0
   const fails: string[] = []
+  const ids: string[] = []
   for (const f of files) {
     const over = await overLimit(f)
     if (over) { fails.push(withReason(f.name, translate('fileimport.overCloudLimit', { limit: over }))); continue }
-    try {
+    ids.push(startUpload(f.name, f.size, async ({ stage, progress }) => {
+      stage('uploading')
       const bytes = new Uint8Array(await f.arrayBuffer())
-      await amadeus.saveAttachment('', f.name, bytes, { mode: 'vault', folder }, progressNotifier(f.name))
-      ok++
-    } catch (e) { fails.push(withReason(f.name, explain(e))) }
+      await oneSaveAtATime(() => amadeus.saveAttachment('', f.name, bytes, { mode: 'vault', folder }, (sent, total) => progress(total > 0 ? (sent / total) * f.size : null)))
+      await refreshTree() // 真行先出来,再收在传的那一行(不闪空)
+    }))
   }
-  await refreshTree()
-  const where = folder ? (folder.split('/').pop() || folder) : translate('fileimport.vaultRoot')
   if (fails.length) notify(translate(fails.length === 1 ? 'fileimport.notImportedOne' : 'fileimport.notImportedMany', { n: fails.length, first: fails[0] }))
-  else notify(translate(ok === 1 ? 'fileimport.importedToOne' : 'fileimport.importedToMany', { n: ok, where }))
+  if (!ids.length) return
+  setFolderRows(folder, (prev) => [...prev, ...ids])
+  const done = await new Promise<string[]>((resolve) => onBatchSettled(ids, resolve))
+  setFolderRows(folder, (prev) => prev.filter((id) => !ids.includes(id)))
+  const where = folder ? (folder.split('/').pop() || folder) : translate('fileimport.vaultRoot')
+  if (done.length && !fails.length) notify(translate(done.length === 1 ? 'fileimport.importedToOne' : 'fileimport.importedToMany', { n: done.length, where }))
 }
 
 /** 应用内路径拖拽(文件面板的行)要走进「导入」这条链,得先把主机文件读成 File —— 主进程

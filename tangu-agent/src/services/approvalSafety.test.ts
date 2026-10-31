@@ -14,7 +14,9 @@ const call = (command: string): ToolCall => ({ id: 'safe-regression', type: 'fun
 describe('shell approval gate regression (no command execution)', () => {
   for (const approvalMode of ['readonly', 'auto-edit'] as const) {
     it(`${approvalMode} asks before wrapper/find/git mutation commands`, async () => {
-      for (const [index, command] of ['env touch /tmp/not-executed', 'find /tmp -delete', 'git branch -D unused', 'git remote add unused https://example.invalid/repo'].entries()) {
+      const commands = ['env touch /tmp/not-executed', 'find /tmp -delete', 'git branch -D unused', 'git remote add unused https://example.invalid/repo'];
+      if (process.platform === 'win32') commands.push('dir /b | more', 'type a.txt,b.txt', 'dir %USERPROFILE%', 'git status', 'findstr /f:files text');
+      for (const [index, command] of commands.entries()) {
         state.publish.mockClear();
         const pending = gateToolCall(`approval-${approvalMode}-${index}`, call(command), { sessionId: 'approval-safety', execMode: 'host', approvalMode });
         await vi.waitFor(() => expect(state.publish).toHaveBeenCalledWith(expect.any(String), 'approval_request', expect.objectContaining({ name: 'run_bash' })));
@@ -25,7 +27,20 @@ describe('shell approval gate regression (no command execution)', () => {
     });
   }
   it('keeps simple read-only calls immediate', async () => {
-    await expect(gateToolCall('safe-ls', call('ls -la'), { sessionId: 'approval-safety', execMode: 'host', approvalMode: 'readonly' })).resolves.toEqual({ action: 'approve' });
+    const commands = process.platform === 'win32' ? ['dir /b "Library"', 'type "Journal\\today.md"', 'dir 2>nul & echo --- & dir /b', 'findstr text file.txt'] : ['ls -la'];
+    for (const [index, command] of commands.entries()) {
+      await expect(gateToolCall(`safe-read-${index}`, call(command), { sessionId: 'approval-safety', execMode: 'host', approvalMode: 'readonly' })).resolves.toEqual({ action: 'approve' });
+    }
+    expect(state.publish).not.toHaveBeenCalled();
+  });
+  it.skipIf(process.platform !== 'win32')('Muse ask/agent reads bypass deferred approval without asking a judge', async () => {
+    for (const approvalDeferral of ['queue', 'agent'] as const) {
+      for (const command of ['dir /b Library 2>nul & echo --- & dir /b Journal', 'cd /d Space && findstr text notes.md']) {
+        await expect(gateToolCall(`muse-${approvalDeferral}`, call(command), {
+          sessionId: 'muse-read-safety', execMode: 'host', approvalMode: 'auto-edit', approvalDeferral, unattended: true,
+        })).resolves.toEqual({ action: 'approve' });
+      }
+    }
     expect(state.publish).not.toHaveBeenCalled();
   });
 });

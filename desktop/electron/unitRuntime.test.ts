@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { build } from 'esbuild'
-import { startBasicUnit, type PluginInstallation } from '../../unit/host'
+import { startBasicUnit, type PluginInstallation, type UnitConfig } from '../../unit/host'
 import { readPackage } from '../../unit/packages'
 
 type Unit = Awaited<ReturnType<typeof startBasicUnit>>
@@ -121,10 +121,10 @@ async function bluebirdFixture(version: string, failStart = false): Promise<stri
   return dir
 }
 
-async function unit(plugins: Array<string | PluginInstallation>, defaultSpace?: string): Promise<Unit> {
+async function unit(plugins: Array<string | PluginInstallation>, defaultSpace?: string, extra: Partial<UnitConfig> = {}): Promise<Unit> {
   const handle = await startBasicUnit({ instanceId: `runtime-${++sequence}`, name: 'Unit runtime fixture', version: '3.0.0',
     port: 0, bindHost: '127.0.0.1', basePath: '/admin/', webDist, workerFile,
-    dataDir: join(root, `data-${sequence}`), plugins, defaultSpace })
+    dataDir: join(root, `data-${sequence}`), plugins, defaultSpace, ...extra })
   live.add(handle)
   return handle
 }
@@ -135,6 +135,51 @@ const get = (handle: Unit, path: string) => fetch(base(handle) + path)
 const metadata = (handle: Unit) => get(handle, '/admin/unit/meta').then((r) => r.json())
 
 describe('composed Unit package lifecycle', () => {
+  it('mounts public Web alongside Admin with one backend and isolated package/data surfaces', async () => {
+    const server = await fixture('server-admin', { account: true })
+    const ui = join(root, 'public-ui')
+    await mkdir(join(ui, 'spaces', 'notes'), { recursive: true })
+    await writeFile(join(ui, 'manifest.json'), JSON.stringify({ id: 'public-ui', name: 'Notes', version: '1.0.0', apiVersion: 1, main: 'main.js' }))
+    await writeFile(join(ui, 'main.js'), 'ctx.registerSettingsView({id:"public-only"})')
+    await writeFile(join(ui, 'spaces/notes/space.json'), JSON.stringify({ id: 'notes', layout: { main: [] } }))
+    const eventLog = join(root, 'web-entry-backend-events')
+    const app = await unit([{ path: server, config: { eventLog } }, { path: ui, publish: false }], 'server-admin', {
+      webEntries: [{ basePath: '/web/', plugins: ['public-ui'], defaultSpace: 'notes', inheritWebAccount: true }],
+    })
+    try {
+      const list = (prefix: string) => get(app, `${prefix}/unit/plugins`).then((r) => r.json())
+      expect((await list('/admin')).plugins.map((p: any) => p.id)).toEqual(['server-admin'])
+      expect((await list('/web')).plugins.map((p: any) => p.id)).toEqual(['public-ui'])
+      expect(await get(app, '/web/').then((r) => r.text())).toContain('"inheritWebAccount":true')
+      expect(await get(app, '/admin/').then((r) => r.text())).not.toContain('"inheritWebAccount":true')
+      expect((await get(app, '/web/unit/plugin-data/server-admin')).status).toBe(404)
+      for (const p of ['/web/vault/tree', '/web/engine/health', '/web/unit/hostfile']) expect((await get(app, p)).status).toBe(403)
+      const request = (user: string, data?: string) => fetch(base(app) + '/web/unit/plugin-data/public-ui', {
+        method: data === undefined ? 'GET' : 'PUT', headers: { Authorization: `Bearer ${user}`, 'Content-Type': 'application/json' },
+        ...(data === undefined ? {} : { body: JSON.stringify({ data }) }),
+      })
+      await Promise.all(['alice', 'bob'].map((user) => request(user, user)))
+      expect(await request('alice').then((r) => r.json())).toEqual({ data: 'alice' })
+      expect(await request('bob').then((r) => r.json())).toEqual({ data: 'bob' })
+      expect((await readFile(eventLog, 'utf8')).trim()).toBe('server-admin:start')
+      const state = app.status()
+      expect(state.filter((p) => p.id === 'server-admin')).toHaveLength(1)
+      expect(state.every((p) => p.state === 'active')).toBe(true)
+      await app.disable('public-ui')
+      expect((await list('/web')).plugins).toEqual([])
+      expect((await list('/admin')).plugins.map((p: any) => p.id)).toEqual(['server-admin'])
+      await app.enable('public-ui')
+      expect(await request('alice').then((r) => r.json())).toEqual({ data: 'alice' })
+      const replacement = join(root, 'public-ui-update')
+      await mkdir(join(replacement, 'spaces/notes'), { recursive: true })
+      await writeFile(join(replacement, 'manifest.json'), JSON.stringify({ id: 'public-ui', name: 'Notes', version: '1.1.0', apiVersion: 1, main: 'main.js', requires: ['server-admin'] }))
+      await writeFile(join(replacement, 'main.js'), 'changed')
+      await writeFile(join(replacement, 'spaces/notes/space.json'), JSON.stringify({ id: 'notes', layout: { main: [] } }))
+      await expect(app.update('public-ui', replacement)).rejects.toThrow('Web entry omits a dependency')
+      expect((await list('/web')).plugins[0].version).toBe('1.0.0')
+      expect((await list('/admin')).plugins[0].id).toBe('server-admin')
+    } finally { await close(app) }
+  })
   it('composes native packages, suppresses unpublished Admin UI and preserves cloud services through backend updates', async () => {
     const server = await fixture('server-admin', { account: true })
     const amadeus = resolve('../unit/plugins/amadeus'), calendar = resolve('../unit/plugins/calendar')

@@ -4,7 +4,8 @@
  */
 import { AgentsDetailView } from '../components/AgentsDetailView'
 import { WorkspaceDetailView } from '../components/WorkspaceDetailView'
-import { useApp, type SpecialKind } from '../stores/appStore'
+import { useApp } from '../stores/appStore'
+import { type SpecialKind } from '../tangu/store/tanguSlice'
 import { useWorkspace, recordNav } from '@lcl/engine'
 import { openSession } from '../sessionNav'
 import { sessionWorkspaceKey } from '../../../../tangu-agent/src/contracts/clientTypes'
@@ -47,7 +48,7 @@ export function AgentsDetailSpecialView() {
       cfg={s.cfg}
       sessions={s.sessions}
       onOpenSession={focusSession}
-      onOpenSettings={() => s.openSettings('agents')}
+      onOpenSettings={() => s.openSettings('agents/ag-special/muse')}
     />
   )
 }

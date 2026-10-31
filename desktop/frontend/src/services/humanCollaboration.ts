@@ -10,6 +10,8 @@ export interface HumanChange {
   beforeVersion: string; afterVersion: string; undoOf?: string
   /** 引擎给 Agent 的写入盖的章:按哪一版写法写的。没有 = 修复之前的引擎写的(那时它会把自己的承诺也写进来)。 */
   rules?: number
+  /** 这一笔从哪来(10-29 画像写入):remember 记下 / Dream 整理 / 跨档挪来 / 从记忆交给所有 Agent / 用户从回执撤销。老引擎不带。 */
+  source?: { kind: 'remember' | 'dream' | 'move' | 'promote' | 'user'; agent?: string; action?: 'add' | 'update' | 'forget' }
 }
 export interface HumanDocument {
   scope: HumanScope; path: string; content: string; version: string; exists: boolean; updatedAt: string | null;
@@ -66,3 +68,27 @@ export function humanChanges(events: ToolEvent[] = []): HumanChange[] {
   }
   return [...changes.values()]
 }
+
+/** 协作请求卡的处理记录(本机):「知道了」= 收成一行(请求在卡出现时已经生效,这不是审批);「撤销」整张撤回时另记一份。
+ *  卡片堆按它决定收不收这张卡(10-23「交互卡片放最新位置」);存不下就只在本次有效。多窗口靠 storage 事件同步。 */
+const ACK_KEY = 'forsion.humanAck'
+const UNDONE_KEY = 'forsion.humanUndone'
+const readIds = (k: string): string[] => { try { const v = JSON.parse(localStorage.getItem(k) || '[]'); return Array.isArray(v) ? v.filter((x) => typeof x === 'string') : [] } catch { return [] } }
+// 存不下(私密窗口 / 配额满)也要在本次生效:内存里留一份,读的时候并上
+const memIds: Record<string, Set<string>> = { [ACK_KEY]: new Set(), [UNDONE_KEY]: new Set() }
+const seenIds = (k: string): Set<string> => new Set([...readIds(k), ...memIds[k]])
+let ackVersion = 0
+const ackListeners = new Set<() => void>()
+const bumpAck = (): void => { ackVersion++; for (const f of ackListeners) f() }
+if (typeof window !== 'undefined') window.addEventListener('storage', (e) => { if (e.key === ACK_KEY || e.key === UNDONE_KEY) bumpAck() })
+function addIds(k: string, ids: string[]): void {
+  for (const id of ids) memIds[k].add(id)
+  try { localStorage.setItem(k, JSON.stringify([...new Set([...readIds(k), ...ids])].slice(-200))) } catch { /* ignore */ }
+  bumpAck()
+}
+export const humanAcked = (ids: string[]): boolean => { const seen = seenIds(ACK_KEY); return ids.every((id) => seen.has(id)) }
+export const humanUndone = (ids: string[]): boolean => { const seen = seenIds(UNDONE_KEY); return ids.length > 0 && ids.every((id) => seen.has(id)) }
+export const ackHumanChanges = (ids: string[]): void => addIds(ACK_KEY, ids)
+export const markHumanUndone = (ids: string[]): void => { addIds(UNDONE_KEY, ids); addIds(ACK_KEY, ids) }
+export const subscribeHumanAck = (f: () => void): (() => void) => { ackListeners.add(f); return () => { ackListeners.delete(f) } }
+export const humanAckVersion = (): number => ackVersion

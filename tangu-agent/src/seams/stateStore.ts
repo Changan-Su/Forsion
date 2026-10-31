@@ -76,6 +76,8 @@ export interface FinalizeMessageInput {
   displayFiles?: any[];
   /** 产出这条消息的 agent slug —— 客户端按它还原头像/昵称(否则重载只能回退到「会话默认 agent」)。 */
   agentSlug?: string;
+  /** 消息来由(chat_messages.origin,≤24 字符):'fallback:quota' = 这一轮额度用完改用了后备模型(modelId 即实际模型)。 */
+  origin?: string;
 }
 
 /** 重启自愈看到的在飞 run:owner = 持有它的本机引擎进程 `<pid>:<启动时刻秒>`(NULL = 不知道;见 services/runOwner.ts)。 */

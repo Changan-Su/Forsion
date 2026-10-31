@@ -9,10 +9,17 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useMemo,
   useRef,
   useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from 'react'
+import { curve, emergeDroplet, ms, type Droplet } from './droplet'
+import { useExitGhost, zoomOf } from './menuAnchor'
+import { reducedMotion } from './spring'
 import './floatingToc.css'
 
 export interface FloatingTocItemDescriptor {
@@ -62,6 +69,9 @@ export interface FloatingTocProps extends FloatingTocOptions {
   /** Height of sticky chrome covering the top of the scroll container (read at use time), added to
    *  `topOffset` for both the jump target and the active-section line. Pass a stable function. */
   topInset?: (scrollContainer: HTMLElement) => number
+  /** Height of floating chrome over the bottom of the scroll container (a composer, say). The open
+   *  list stays above it. Read when the list opens. */
+  bottomInset?: (scrollContainer: HTMLElement) => number
   /** `overlay` anchors to a non-scrolling positioned parent; `sticky` lives in the scroll surface. */
   placement?: 'overlay' | 'sticky'
 }
@@ -72,6 +82,18 @@ interface ResolvedItem extends FloatingTocItemDescriptor {
 }
 
 const DEFAULT_SELECTOR = 'h1, h2, h3, [data-lcl-toc-title]'
+
+const ROW = 28 // Row height and list padding; keep in step with floatingToc.css.
+const PAD = 6
+const TICK_LENGTHS = [16, 13, 10, 7]
+const ACTIVE_BUMP = 4
+const TICK_WIDTH = 20 // Ticks are this wide in CSS and scaled down, so length changes stay on the compositor.
+const POOL_CELL = 3 // Below this spacing ticks merge: each cell draws its highest-level heading.
+const OPEN_DELAY = 120
+const CLOSE_DELAY = 150
+const IDLE_AFTER = 1200
+
+const tickLength = (level: number): number => TICK_LENGTHS[Math.min(level, TICK_LENGTHS.length - 1)]
 
 function resolveElement(source: FloatingTocElementSource | undefined): HTMLElement | null {
   if (!source) return null
@@ -134,8 +156,9 @@ export function cancelScrollToElement(root: Element): void {
  *  corrects (up to 3 times). Blocks skipped by `content-visibility: auto` only get their real height in the frame they
  *  come near the viewport, which pushes the target away, and scroll anchoring has no anchor to compensate with then
  *  (a long chat landed 850 px off). Stops as soon as the user scrolls, clicks or types, or another jump on the same
- *  root starts; call `cancelScrollToElement(root)` before scrolling `root` somewhere else yourself. */
-export function scrollToElement(root: Element, target: Element, offset = 0): void {
+ *  root starts; call `cancelScrollToElement(root)` before scrolling `root` somewhere else yourself.
+ *  `onLanded` runs once the target has settled in place (not when the user or a newer jump cut it short). */
+export function scrollToElement(root: Element, target: Element, offset = 0, onLanded?: () => void): void {
   cancelScrollToElement(root)
   const delta = (): number => target.getBoundingClientRect().top - root.getBoundingClientRect().top - offset
   root.scrollTo({ top: Math.max(0, root.scrollTop + delta()), behavior: 'smooth' })
@@ -153,7 +176,7 @@ export function scrollToElement(root: Element, target: Element, offset = 0): voi
     if (root.scrollTop !== last) { last = root.scrollTop; still = 0 } // smooth scroll still moving
     else if (++still >= 2) {
       const d = delta()
-      if (Math.abs(d) <= 2 || tries++ >= 3) return done()
+      if (Math.abs(d) <= 2 || tries++ >= 3) { done(); onLanded?.(); return }
       root.scrollBy({ top: d })
       still = 0
     }
@@ -172,16 +195,28 @@ export function FloatingToc({
   hideBelow = 520,
   topOffset = 24,
   topInset,
+  bottomInset,
   side = 'left',
   scanTrigger,
   placement = 'overlay',
 }: FloatingTocProps) {
   const [items, setItems] = useState<ResolvedItem[]>([])
   const [activeKey, setActiveKey] = useState<string | null>(null)
-  const [hovered, setHovered] = useState(false)
-  const [focused, setFocused] = useState(false)
+  const [phase, setPhase] = useState<'closed' | 'open' | 'closing'>('closed')
   const [tooNarrow, setTooNarrow] = useState(false)
+  const [railMax, setRailMax] = useState(0)
   const hoverTimer = useRef<number | null>(null)
+  const hovered = useRef(false)
+  const keepClosedOnFocus = useRef(false)
+  const idleTimer = useRef(0)
+  const lastActive = useRef(-1)
+  const droplet = useRef<Droplet | null>(null)
+  const navRef = useRef<HTMLElement | null>(null)
+  const railRef = useRef<HTMLSpanElement | null>(null)
+  const hitRef = useRef<HTMLButtonElement | null>(null)
+  const panelRef = useRef<HTMLDivElement | null>(null)
+  const sourceRef = useRef<HTMLElement | null>(null)
+  const beadRef = useRef<HTMLElement | null>(null)
   const keys = useRef(new WeakMap<HTMLElement, string>())
   const nextKey = useRef(0)
 
@@ -255,16 +290,36 @@ export function FloatingToc({
     }
   }, [contentRoot, scan, scanTrigger, scrollContainer])
 
-  useEffect(() => {
-    const root = resolveElement(scrollContainer)
-    if (!root) return
-    const measure = (): void => setTooNarrow(hideBelow > 0 && root.getBoundingClientRect().width <= hideBelow)
-    measure()
-    if (typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver(measure)
-    observer.observe(root)
-    return () => observer.disconnect()
-  }, [hideBelow, scrollContainer])
+  // `data-lcl-ftoc` tells the surface's CSS the gutter is needed. It tracks the width only, not whether there are
+  // headings yet: the text must not shift when a second heading appears.
+  // A microtask, because the scroll container is often an ancestor whose ref attaches after this layout effect runs;
+  // it still lands before the first paint, so the text does not jump sideways on mount.
+  useLayoutEffect(() => {
+    let stop = (): void => {}
+    let live = true
+    queueMicrotask(() => {
+      const root = resolveElement(scrollContainer)
+      if (!live || !root) return
+      const measure = (): void => {
+        const narrow = hideBelow > 0 && root.getBoundingClientRect().width <= hideBelow
+        setTooNarrow(narrow)
+        if (narrow) root.removeAttribute('data-lcl-ftoc')
+        else root.setAttribute('data-lcl-ftoc', side)
+        setRailMax(Math.min(window.innerHeight / zoomOf(root) * 0.44, root.clientHeight - 32))
+      }
+      measure()
+      const observer = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(measure)
+      observer?.observe(root)
+      stop = () => {
+        observer?.disconnect()
+        root.removeAttribute('data-lcl-ftoc')
+      }
+    })
+    return () => {
+      live = false
+      stop()
+    }
+  }, [hideBelow, scrollContainer, side])
 
   // A scroll listener is more reliable than an IntersectionObserver here: headings between probe
   // bands still retain the preceding section, and it works for nested positioned editor blocks.
@@ -289,11 +344,19 @@ export function FloatingToc({
     const schedule = (): void => {
       if (!frame) frame = requestAnimationFrame(sync)
     }
+    const wake = (): void => {
+      navRef.current?.classList.add('awake')
+      window.clearTimeout(idleTimer.current)
+      idleTimer.current = window.setTimeout(() => navRef.current?.classList.remove('awake'), IDLE_AFTER)
+    }
     sync()
+    root.addEventListener('scroll', wake, { passive: true })
     root.addEventListener('scroll', schedule, { passive: true })
     window.addEventListener('resize', schedule)
     return () => {
       cancelAnimationFrame(frame)
+      window.clearTimeout(idleTimer.current)
+      root.removeEventListener('scroll', wake)
       root.removeEventListener('scroll', schedule)
       window.removeEventListener('resize', schedule)
     }
@@ -301,6 +364,7 @@ export function FloatingToc({
 
   useEffect(() => () => {
     if (hoverTimer.current != null) window.clearTimeout(hoverTimer.current)
+    droplet.current?.cancel()
   }, [])
 
   const jumpTo = useCallback((item: ResolvedItem) => {
@@ -323,60 +387,221 @@ export function FloatingToc({
     setActiveKey(item.key)
   }, [collect, items, scan, scrollContainer, topOffset, topInset])
 
-  const enter = (): void => {
+  const clearHoverTimer = (): void => {
     if (hoverTimer.current != null) window.clearTimeout(hoverTimer.current)
     hoverTimer.current = null
-    setHovered(true)
   }
-  const leave = (): void => {
-    if (hoverTimer.current != null) window.clearTimeout(hoverTimer.current)
-    hoverTimer.current = window.setTimeout(() => setHovered(false), 150)
+  const open = useCallback((): void => {
+    clearHoverTimer()
+    setPhase((p) => (p === 'open' ? p : 'open'))
+  }, [])
+  const close = useCallback((): void => {
+    clearHoverTimer()
+    const d = droplet.current
+    setPhase((p) => (p === 'closed' ? p : d ? 'closing' : 'closed'))
+    if (!d) return
+    void d.retract().then(() => {
+      if (droplet.current !== d) return // Reopened meanwhile.
+      droplet.current = null
+      setPhase((p) => (p === 'closing' ? 'closed' : p))
+    })
+  }, [])
+
+  const visible = items.length >= Math.max(1, minItems) && !tooNarrow
+  // Only the ticks fade out as a ghost: a clone of the panel would lose its running clip and show whole.
+  useExitGhost(railRef, visible)
+
+  useEffect(() => {
+    if (visible) return
+    clearHoverTimer()
+    hovered.current = false
+    droplet.current?.cancel()
+    droplet.current = null
+    setPhase('closed')
+  }, [visible])
+
+  // Lines the active row up with its tick, then pours the list out of the tick.
+  useLayoutEffect(() => {
+    if (phase !== 'open') return
+    const nav = navRef.current, panel = panelRef.current, source = sourceRef.current
+    const scroller = resolveElement(scrollContainer)
+    if (!nav || !panel || !source || !scroller) return
+    droplet.current?.cancel()
+    const z = zoomOf(nav)
+    const box = scroller.getBoundingClientRect()
+    const paneH = box.height / z
+    const low = (topInset?.(scroller) ?? 0) + 8
+    const high = (bottomInset?.(scroller) ?? 0) + 8
+    const full = items.length * ROW + 2 * PAD + 2
+    const height = Math.max(ROW + 2 * PAD, Math.min(window.innerHeight / z * 0.56, paneH - low - high, full))
+    const index = Math.max(0, items.findIndex((item) => item.key === activeKey))
+    const navTop = (nav.getBoundingClientRect().top - box.top) / z
+    const rowMiddle = PAD + index * ROW + ROW / 2
+    const tick = (source.getBoundingClientRect().top + source.getBoundingClientRect().height / 2 - box.top) / z
+    const maxScroll = Math.max(0, full - height), maxTop = Math.max(low, paneH - high - height)
+    const clampTop = (y: number): number => Math.min(maxTop, Math.max(low, y))
+    const firstTop = clampTop(tick - height / 2)
+    const scroll = Math.min(maxScroll, Math.max(0, rowMiddle - (tick - firstTop)))
+    panel.style.top = `${clampTop(tick - (rowMiddle - scroll)) - navTop}px`
+    panel.style.height = `${height}px`
+    panel.scrollTop = scroll
+    droplet.current = emergeDroplet(source, panel)
+  }, [phase]) // eslint-disable-line react-hooks/exhaustive-deps -- placed once per opening
+
+  // A click anywhere else closes it (touch has no leave), and so does leaving the window.
+  useEffect(() => {
+    if (phase !== 'open') return
+    const outside = (event: PointerEvent): void => {
+      if (!navRef.current?.contains(event.target as Node)) close()
+    }
+    // The list is placed once per opening, so a resized surface closes it rather than leaving it over the composer.
+    const scroller = resolveElement(scrollContainer)
+    const width = scroller?.clientWidth, height = scroller?.clientHeight
+    const resized = typeof ResizeObserver === 'undefined' || !scroller ? null : new ResizeObserver(() => {
+      if (scroller.clientWidth !== width || scroller.clientHeight !== height) close()
+    })
+    if (scroller) resized?.observe(scroller)
+    document.addEventListener('pointerdown', outside)
+    window.addEventListener('blur', close)
+    return () => {
+      resized?.disconnect()
+      document.removeEventListener('pointerdown', outside)
+      window.removeEventListener('blur', close)
+    }
+  }, [close, phase, scrollContainer])
+
+  const activeIndex = items.findIndex((item) => item.key === activeKey)
+
+  useEffect(() => {
+    const was = lastActive.current
+    lastActive.current = activeIndex
+    if (was < 0 || activeIndex < 0 || was === activeIndex) return
+    const reduced = reducedMotion()
+    if (!reduced) {
+      beadRef.current?.animate(
+        [{ transform: 'scaleY(1)' }, { transform: 'scaleY(2.4)', offset: 0.4 }, { transform: 'scaleY(1)' }],
+        { duration: ms('--duration-slow', 250), easing: curve('--ease-calm', 'ease') },
+      )
+    }
+    const panel = panelRef.current
+    if (!panel || phase !== 'open') return
+    const y = PAD + activeIndex * ROW, top = panel.scrollTop, h = panel.clientHeight
+    if (y < top + h * 0.2 || y + ROW > top + h * 0.8) {
+      panel.scrollTo({ top: y - h / 2 + ROW / 2, behavior: reduced ? 'auto' : 'smooth' })
+    }
+  }, [activeIndex, phase])
+
+  const rail = useMemo(() => {
+    const height = Math.max(0, Math.min(railMax, items.length * 6))
+    const gap = height / Math.max(1, items.length)
+    const best = new Map<number, number>()
+    items.forEach((item, index) => {
+      const cell = Math.floor(((index + 0.5) * gap) / POOL_CELL)
+      const held = best.get(cell)
+      if (held == null || item.level < items[held].level) best.set(cell, index)
+    })
+    const ticks = items.map((item, index) => {
+      if (best.get(Math.floor(((index + 0.5) * gap) / POOL_CELL)) !== index) return null
+      const style = {
+        '--y': `${(index + 0.5) * gap}px`,
+        '--l': (tickLength(item.level) / TICK_WIDTH).toFixed(3),
+        '--o': item.primary ? 0.62 : item.level <= 1 ? 0.5 : 0.36,
+      } as CSSProperties
+      return <i key={item.key} className="lcl-ftoc-tick" style={style} />
+    })
+    return { height, gap, ticks }
+  }, [items, railMax])
+
+  // Pointer enter / leave only: touch has no hover, so a tap opens through the button's click.
+  const onEnter = (event: ReactPointerEvent): void => {
+    if (event.pointerType === 'touch') return
+    hovered.current = true
+    clearHoverTimer()
+    if (event.buttons || phase === 'open') return // Dragging a text selection across the gutter opens nothing.
+    hoverTimer.current = window.setTimeout(open, OPEN_DELAY)
+  }
+  const onLeave = (event: ReactPointerEvent): void => {
+    if (event.pointerType === 'touch') return
+    hovered.current = false
+    clearHoverTimer()
+    hoverTimer.current = window.setTimeout(() => {
+      // Keyboard users keep the list when the mouse wanders off. A mouse click also leaves focus on a row, so ask :focus-visible.
+      const focused = document.activeElement
+      if (!navRef.current?.contains(focused) || !focused?.matches(':focus-visible')) close()
+    }, CLOSE_DELAY)
   }
 
-  if (items.length < Math.max(1, minItems) || tooNarrow) return null
-  const expanded = hovered || focused
+  if (!visible) return null
+  const levelBase = Math.min(...items.map((item) => item.level))
+  const active = activeIndex >= 0 ? items[activeIndex] : null
 
   return (
     <div className={`lcl-ftoc-frame is-${placement}`} data-side={side}>
       <nav
-        className={`lcl-ftoc${expanded ? ' open' : ''}`}
-        style={expanded ? undefined : { height: `min(44vh, ${items.length * 6 + 12}px)` }}
-        onMouseEnter={enter}
-        onMouseLeave={leave}
-        onFocusCapture={() => setFocused(true)}
+        ref={navRef}
+        className={`lcl-ftoc${phase === 'open' ? ' open' : ''}${phase === 'closed' ? '' : ' hot'}`}
+        style={{ '--rail-h': `${rail.height}px`, '--th': rail.gap >= 4 ? '2px' : '1px' } as CSSProperties}
+        onPointerEnter={onEnter}
+        onPointerLeave={onLeave}
+        onFocusCapture={(event) => {
+          if (keepClosedOnFocus.current) keepClosedOnFocus.current = false
+          else if ((event.target as HTMLElement).matches(':focus-visible')) open()
+        }}
         onBlurCapture={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false)
+          if (!hovered.current && !event.currentTarget.contains(event.relatedTarget as Node | null)) close()
         }}
         onKeyDown={(event) => {
-          if (event.key === 'Escape') {
-            setHovered(false)
-            setFocused(false)
-            ;(event.target as HTMLElement | null)?.blur?.()
-          }
+          if (event.key !== 'Escape') return
+          close()
+          keepClosedOnFocus.current = true
+          hitRef.current?.focus()
         }}
         aria-label={label}
       >
-        {items.map((item) => {
-          const active = activeKey === item.key
-          const barLength = (item.level === 0 ? 18 : item.level === 1 ? 14 : item.level === 2 ? 11 : 8) + (active ? 6 : 0)
-          return (
-            <button
-              key={item.key}
-              type="button"
-              className={`lcl-ftoc-item${active ? ' active' : ''}${item.primary ? ' primary' : ''}`}
-              onClick={() => jumpTo(item)}
-              title={item.text}
-              aria-current={active ? 'location' : undefined}
-              style={{ paddingInlineStart: expanded ? 8 + item.level * 10 : 0 }}
+        <span ref={railRef} className="lcl-ftoc-rail">
+          {rail.ticks}
+          {active && (
+            <span
+              className="lcl-ftoc-mark"
+              style={{
+                '--my': `${(activeIndex + 0.5) * rail.gap}px`,
+                '--ml': ((tickLength(active.level) + ACTIVE_BUMP) / TICK_WIDTH).toFixed(3),
+              } as CSSProperties}
             >
-              <span
-                className="lcl-ftoc-bar"
-                style={{ transform: expanded ? 'translateX(0) scaleX(1)' : `translateX(${item.level * 3}px) scaleX(${barLength / 4})` }}
-              />
-              <span className="lcl-ftoc-text">{item.text}</span>
-            </button>
-          )
-        })}
+              <i className="lcl-ftoc-pin" />
+              <i ref={beadRef} className="lcl-ftoc-bead" />
+              <i ref={sourceRef} className="lcl-ftoc-source" />
+            </span>
+          )}
+        </span>
+        <button
+          ref={hitRef}
+          type="button"
+          className="lcl-ftoc-hit"
+          aria-label={label}
+          aria-expanded={phase === 'open'}
+          onClick={open}
+        />
+        {phase !== 'closed' && (
+          <div ref={panelRef} className="lcl-ftoc-panel">
+            <div className="lcl-ftoc-list">
+              <i className="lcl-ftoc-hl" style={{ '--hy': `${Math.max(0, activeIndex) * ROW}px` } as CSSProperties} />
+              {items.map((item, index) => (
+                <button
+                  key={item.key}
+                  type="button"
+                  className={`lcl-ftoc-item${index === activeIndex ? ' active' : ''}${item.primary ? ' primary' : ''}`}
+                  onClick={() => jumpTo(item)}
+                  title={item.text}
+                  aria-current={index === activeIndex ? 'location' : undefined}
+                  style={{ paddingInlineStart: 8 + (item.level - levelBase) * 12 }}
+                >
+                  <span className="lcl-ftoc-text">{item.text}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </nav>
     </div>
   )

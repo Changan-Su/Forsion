@@ -1,17 +1,35 @@
-/** Sandbox = 开发加载器,不是隔离环境。
- *  它把项目文件夹里的插件直接加载进**正在运行的这个** Forsion:真应用、用户的真笔记库、
- *  与已安装插件同权。所以「加载」按钮上方那段话不可折叠、不可关闭 —— 用户按下去之前必须看见。
+/** Sandbox 面板两档(2026-10-23 插件沙箱方案 A):
+ *  · 隔离沙箱(缺省):另起一份独立的 Forsion 只装这个插件(electron/pluginSandbox.ts),状态 / 证据从那边来;
+ *  · 我的 Forsion:开发加载器,不是隔离环境。它把项目文件夹里的插件直接加载进**正在运行的这个** Forsion:真应用、用户的真笔记库、
+ *    与已安装插件同权。所以「加载」按钮上方那段话不可折叠、不可关闭 —— 用户按下去之前必须看见。
  *  证据(setup 抛错 / 视图 mount 抛错 / 这个插件自己的 console)收在这里,一键带回对话。 */
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertCircle, Loader2, Play, RotateCw, ShieldAlert, Square, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { AlertCircle, AppWindow, Download, FlaskConical, Loader2, Play, RotateCcw, RotateCw, ShieldAlert, Square, Trash2 } from 'lucide-react'
+import { sandboxUiStorage } from '../../services/pluginSandboxSurface'
 import { clearDevPluginLogs, reloadDevPlugin, useDevPluginState } from '@amadeus/plugins/devSandbox'
 import { useI18n } from '../../i18n'
 import { hiddenSpaceForAgent, hiddenSpaceName, hiddenSpaceReason, useHiddenSpacesOf, useRegisteredViews } from '../../pluginSpaceHealth'
 import { useCodeStudio } from '../../stores/codeStudioStore'
-import { isNearBottom, sandboxPrompt } from './sandboxModel'
+import { isNearBottom, isolatedSandboxPrompt, sandboxPrompt } from './sandboxModel'
 import { normPath } from './studioModel'
 import type { ProductSummary } from '../../../../shared/products'
+import type { PluginSandboxState } from '../../types'
 import './studioMessages'
+
+/** 隔离沙箱的实时状态(没有沙箱控制面的端 = null)。
+ * ponytail: 对话里的沙箱卡(views/chat2/PluginSandboxCard.tsx)有同样的一份 —— 卡片在 Tangu 界面那边,共用就得跨 tangu-boundary 加依赖。 */
+function useLiveSandbox(): PluginSandboxState | null {
+  const api = window.tangu?.pluginSandbox
+  const [live, setLive] = useState<PluginSandboxState | null>(null)
+  useEffect(() => {
+    if (!api) return
+    let alive = true
+    void api.state().then((s) => { if (alive) setLive(s) }, () => {})
+    const off = api.onChanged((s) => setLive(s))
+    return () => { alive = false; off() }
+  }, [api])
+  return live
+}
 
 export type SandboxState = 'unavailable' | 'unloaded' | 'active' | 'blocked' | 'failed'
 type Busy = 'load' | 'unload' | 'reload' | null
@@ -24,7 +42,106 @@ export interface SandboxPanelProps {
   onProductChanged(): void
 }
 
-export function SandboxPanel({ root, product, onPrompt, onProductChanged }: SandboxPanelProps) {
+type Tier = 'isolated' | 'mine'
+
+export function SandboxPanel(props: SandboxPanelProps) {
+  const { t } = useI18n()
+  const iso = !!window.tangu?.pluginSandbox
+  // 已经在「我的 Forsion」里加载着的项目,打开面板先看那一档(它的状态与卸载按钮在那边)
+  const [tier, setTier] = useState<Tier>(() => (iso && props.product?.devLoad !== true ? 'isolated' : 'mine'))
+  const tiers = iso ? (
+    <div className="csu-sandbox-tiers" role="group">
+      {(['isolated', 'mine'] as const).map((k) => (
+        <button key={k} type="button" aria-pressed={tier === k} data-tier={k} onClick={() => setTier(k)}>
+          {t(k === 'isolated' ? 'studio.sandbox.tierIsolated' : 'studio.sandbox.tierMine')}
+        </button>
+      ))}
+    </div>
+  ) : null
+  return tier === 'isolated' && iso ? <IsolatedSandbox {...props} tiers={tiers} /> : <DevLoadSandbox {...props} tiers={tiers} />
+}
+
+function IsolatedSandbox({ root, product, onPrompt, tiers }: SandboxPanelProps & { tiers: ReactNode }) {
+  const { t } = useI18n()
+  const api = window.tangu!.pluginSandbox!
+  const live = useLiveSandbox()
+  const [busy, setBusy] = useState<'start' | 'stop' | 'reset' | 'install' | null>(null)
+  const [error, setError] = useState('')
+  const [note, setNote] = useState('')
+  const pluginId = product?.kind === 'plugin' ? product.pluginId ?? null : null
+  if (!pluginId) {
+    return <div className="csu-panel-body csu-sandbox" data-sandbox-state="unavailable">
+      {tiers}<p className="csu-hint" role="status">{t('studio.sandbox.notPlugin')}</p>
+    </div>
+  }
+  const mine = !!live?.running && normPath(live.dir || '') === normPath(root)
+  const st = mine ? live?.status ?? null : null
+  const other = live?.running && !mine ? live.name || live.pluginId || '' : ''
+  const state = !mine ? 'unloaded' : !st || st.state === 'starting' ? 'starting' : st.state === 'running' ? 'active' : st.state === 'blocked' ? 'blocked' : 'failed'
+  const label = state === 'unloaded' ? t('studio.sandbox.isoIdle') : t(`sandbox.card.${st?.state ?? 'starting'}`)
+  const act = async (what: NonNullable<typeof busy>) => {
+    if (busy) return
+    setBusy(what); setError('')
+    try {
+      const r = what === 'start' ? await api.exec('start', { dir: root }, { reveal: true, ui: { storage: sandboxUiStorage() } })
+        : what === 'reset' ? await api.reset()
+          : what === 'install' ? await api.install()
+            : (await api.stop(), { ok: true })
+      if (!r.ok && !('cancelled' in r && r.cancelled) && r.error) setError(r.error)
+    } finally { setBusy(null) }
+  }
+  const spin = (k: typeof busy, icon: ReactNode) => (busy === k ? <Loader2 size={13} className="csx-spin" /> : icon)
+  return <div className="csu-panel-body csu-sandbox" data-sandbox-tier="isolated" data-sandbox-state={state} data-plugin-id={pluginId}>
+    <section className="csu-sandbox-head">
+      {tiers}
+      <p className="csu-sandbox-status" role="status"><strong data-sandbox-state-label><FlaskConical size={12} /> {label}</strong>
+        <span>{other ? t('studio.sandbox.isoOther', { name: other }) : t(mine ? 'studio.sandbox.isoRunningHint' : 'studio.sandbox.isoIdleHint')}</span></p>
+      {state === 'active' && st && <p className="csu-hint" role="status" data-sandbox-views={st.views.length}>
+        {st.views.length ? t('plugins.registeredViews', { list: st.views.join(t('common.listSep')) }) : t('plugins.registeredViewsNone')}
+      </p>}
+      {st?.hiddenSpaces.map((h) => <p key={h.slug} className="csu-hint" role="status" data-sandbox-space-hidden>{t('plugins.spaceHidden.badge')} · {h.slug}: {h.reason}</p>)}
+      {st?.blocked && <p className="csu-hint" role="status">{t('studio.sandbox.blockedOther', { reason: st.blocked })}</p>}
+      <div className="csu-sandbox-actions">
+        {!mine
+          ? <button type="button" className="csu-primary" data-action="sandbox-iso-start" disabled={busy !== null} onClick={() => void act('start')}>
+            {spin('start', <Play size={13} />)}{t(busy === 'start' ? 'studio.sandbox.isoStarting' : 'studio.sandbox.isoStart')}
+          </button>
+          : <>
+            <button type="button" className="csu-primary" data-action="sandbox-iso-open" onClick={() => void api.show()}><AppWindow size={13} />{t('sandbox.card.open')}</button>
+            <button type="button" data-action="sandbox-iso-reset" disabled={busy !== null} onClick={() => void act('reset')}>{spin('reset', <RotateCcw size={13} />)}{t('sandbox.card.reset')}</button>
+            <button type="button" data-action="sandbox-iso-stop" disabled={busy !== null} onClick={() => void act('stop')}>{spin('stop', <Square size={13} />)}{t('studio.sandbox.isoStop')}</button>
+            <button type="button" data-action="sandbox-iso-install" disabled={busy !== null} onClick={() => void act('install')}>{spin('install', <Download size={13} />)}{t('sandbox.card.install')}</button>
+          </>}
+      </div>
+      {!!error && <p className="csu-error" role="alert" data-sandbox-error="action">{error}</p>}
+    </section>
+
+    <section className="csu-sandbox-evidence">
+      {!!st?.setupError && <div className="csu-sandbox-block" data-sandbox-error="setup">
+        <h3>{t('studio.sandbox.setupError')}</h3><pre>{st.setupError}</pre>
+      </div>}
+      {!!st?.mountErrors.length && <div className="csu-sandbox-block" data-sandbox-error="mount">
+        <h3>{t('studio.sandbox.mountErrors')}</h3>
+        <ul>{st.mountErrors.map((item, i) => <li key={`${item.view}:${i}`}><AlertCircle size={13} /><code>{item.view}</code><span>{item.message}</span></li>)}</ul>
+      </div>}
+      <div className="csu-sandbox-block csu-sandbox-logs">
+        <h3>{t('studio.sandbox.console')}</h3>
+        {!st?.logs.length
+          ? <p className="csu-hint">{t('studio.sandbox.noEvidence')}</p>
+          : <ol aria-label={t('studio.sandbox.console')}>
+            {st.logs.map((item, index) => <li key={index} data-sandbox-log data-level={item.level}><span>{item.level}</span><span>{item.text}</span></li>)}
+          </ol>}
+      </div>
+    </section>
+
+    <div className="csu-sandbox-send">
+      <input aria-label={t('studio.sandbox.note')} placeholder={t('studio.sandbox.note')} maxLength={500} value={note} onChange={e => setNote(e.target.value)} />
+      <button type="button" className="csu-primary" data-action="sandbox-iso-send" disabled={!mine} onClick={() => onPrompt(isolatedSandboxPrompt(pluginId, note), false)}>{t('studio.sandbox.isoSend')}</button>
+    </div>
+  </div>
+}
+
+function DevLoadSandbox({ root, product, onPrompt, onProductChanged, tiers }: SandboxPanelProps & { tiers: ReactNode }) {
   const { t, locale } = useI18n()
   const devLoad = product?.devLoad === true
   // 清单被写坏(kind 退成 unknown)而授权还在:照样要看得到报错、卸得掉 —— pluginId 取宿主随授权存下的那个。
@@ -96,7 +213,7 @@ export function SandboxPanel({ root, product, onPrompt, onProductChanged }: Sand
 
   if (!canLoad) {
     return <div className="csu-panel-body csu-sandbox" data-sandbox-state="unavailable">
-      <p className="csu-hint" role="status">{t(bridge?.productsUpdate ? 'studio.sandbox.notPlugin' : 'studio.sandbox.unavailable')}</p>
+      {tiers}<p className="csu-hint" role="status">{t(bridge?.productsUpdate ? 'studio.sandbox.notPlugin' : 'studio.sandbox.unavailable')}</p>
     </div>
   }
   const stateLabel = state === 'active' ? t('studio.sandbox.stateActive')
@@ -116,6 +233,7 @@ export function SandboxPanel({ root, product, onPrompt, onProductChanged }: Sand
 
   return <div className="csu-panel-body csu-sandbox" data-sandbox-state={state} data-plugin-id={pluginId}>
     <section className="csu-sandbox-head">
+      {tiers}
       <p className="csu-sandbox-status" role="status"><strong data-sandbox-state-label>{stateLabel}</strong><span>{stateHint}</span></p>
       {/* 宿主自己的记录:这次加载注册了哪些视图。「没报错、一个视图都没有」= 注册代码没被执行到,光看控制台看不出来。 */}
       {state === 'active' && <p className="csu-hint" role="status" data-sandbox-views={views.length}>

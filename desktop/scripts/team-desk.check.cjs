@@ -27,10 +27,13 @@ const faults = { configPut: false, hits: 0 }
 const AGENTS = [
   // thinkingLevel:5l —— 团队会话钉住的就是默认 Agent xyra,它的思考缺省不该冒充成员的
   { slug: 'xyra', name: 'Xyra', description: 'General assistant', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/xyra/Library', thinkingLevel: 'high' },
-  { slug: 'orbit-one', name: 'Orbit One', description: 'Team desk instrument agent', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/orbit-one/Library' },
+  // avatar:6e 里一位走图片头像、其余走首字圆片
+  { slug: 'orbit-one', name: 'Orbit One', description: 'Team desk instrument agent', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/orbit-one/Library', avatar: 'avatar.png' },
   // 5j/5k:Agent 定义里设了只读 + 思考深
   { slug: 'solo-ro', name: 'Solo RO', description: 'Read-only by default', createdBy: 'user', libraryDir: '/tmp/teamdesk-lib/solo-ro/Library', approvalMode: 'readonly', thinkingLevel: 'high' },
 ]
+/** 1×1 青色 PNG:Orbit One 的上传头像。 */
+const AVATAR_PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')
 const SESSION_ID = 'td-team'
 const BRANCH_ID = 'td-branch'
 const SOLO_ID = 'td-solo'
@@ -375,7 +378,8 @@ async function run(app, win, stub) {
       top: Array.from(menu.querySelectorAll('.menu-item')).filter((b) => !b.closest('.cm-sub') && !b.matches('[data-agent-switch]')).map((b) => b.textContent.trim()),
       sections: Array.from(menu.querySelectorAll(':scope > .menu-section')).map((e) => e.textContent.trim()),
       trigger: (menu.querySelector('[data-agent-switch]') || {}).textContent ?? null,
-      sub: sub ? { items: Array.from(sub.querySelectorAll('.menu-item')).map((b) => b.textContent.trim()), box: box(sub) } : null,
+      // 行首是 Agent 头像(首字圆片或图片),不再是 Bot;文字只读 .grow,首字不混进名字
+      sub: sub ? { items: Array.from(sub.querySelectorAll('.menu-item')).map((b) => b.querySelector('.grow')?.textContent.trim()), avatars: sub.querySelectorAll('.menu-item > .agent-pill-initial, .menu-item > img.agent-pill-avatar').length, imgs: sub.querySelectorAll('.menu-item > img.agent-pill-avatar').length, rowH: Array.from(sub.querySelectorAll('.menu-item')).map((b) => Math.round(b.getBoundingClientRect().height)), box: box(sub) } : null,
       menu: box(menu),
     }
   })()`)
@@ -388,7 +392,7 @@ async function run(app, win, stub) {
   await win.waitForSelector('.cm-sub[data-pane="agents"]', { state: 'visible', timeout: 3_000 }).catch(() => {})
   mm = await modeMenu()
   const beside = !!mm?.sub && (mm.sub.box.l >= mm.menu.r - 1 || mm.sub.box.r <= mm.menu.l + 1 || mm.sub.box.b <= mm.menu.t + 1)
-  check('6e 悬停「普通模式」展开二级 Agent 面板(夹具里全部三位 Agent),面板贴在一级菜单外侧不压菜单', mm?.sub?.items.join('|') === 'Xyra|Orbit One|Solo RO' && beside, JSON.stringify(mm?.sub))
+  check('6e 悬停「普通模式」展开二级 Agent 面板(夹具里全部三位 Agent,行首是头像),面板贴在一级菜单外侧不压菜单', mm?.sub?.items.join('|') === 'Xyra|Orbit One|Solo RO' && mm.sub.avatars === 3 && mm.sub.imgs === 1 && beside, JSON.stringify(mm?.sub))
   shots.menu = path.join(os.tmpdir(), `forsion-teamdesk-modemenu-${process.pid}.png`)
   await settleAgentPane(win)
   await win.screenshot({ path: shots.menu })
@@ -481,6 +485,7 @@ async function main() {
     if (route === '/agent/special/historian/activity') return { running: false, activity: [{ id: 'hist-action', detail: '已保存该会话的工作约定', session_ref: SESSION_ID }], records: url.searchParams.get('detail') === '1' ? [{ id: 'hist-record', content: '团队接口与测试的分工已记录。' }] : [] }
     if (route === '/agent/runs' && url.searchParams.has('sessionId')) return { runs: [] }
     if (route === '/agent/solo/agent/solo-ro/open') return { session: SOLO_SESSION, created: false }
+    if (route === '/agent/agents/orbit-one/avatar') return { __buffer: AVATAR_PNG, contentType: 'image/png' }
   } })
   for (const dir of [userData, `${userData}-dev`]) {
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'e2e' }), 'utf8')

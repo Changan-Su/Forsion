@@ -2,12 +2,13 @@
  * 客户端能力面(client surface)注册表 —— 引擎发来的 `client_cmd` 由哪个端上的执行者接手。
  * 契约见 tangu-agent/docs/phone-control.md §5。
  *
- * 为什么是注册表而不是 `window.tangu?.X` 门控:能力面只有移动端注册(`mobile/src/phoneControl.ts`),
- * desktop/web 什么都不注册 → startRun 发 `client_capabilities: []`、`client_cmd` 在 appStore 里
- * 找不到 surface 就丢弃。共享渲染层里不出现任何平台判断,也就不给 check:parity 添新门控。
+ * 为什么是注册表而不是 `window.tangu?.X` 门控:能力面由各端自己注册(移动端 `mobile/src/phoneControl.ts`;
+ * 桌面用户那份 `services/pluginSandboxSurface.ts`),没注册的端 startRun 发 `client_capabilities: []`、
+ * `client_cmd` 在 appStore 里找不到 surface 就丢弃。共享渲染层里不出现任何平台判断。
  *
- * ⚠️ `exec` 只做转交,**JS 不回执**:回执(claim / result)由原生自己发,token 与 apiBase 也由原生
+ * ⚠️ 手机面 `exec` 只做转交,**JS 不回执**:回执(claim / result)由原生自己发,token 与 apiBase 也由原生
  *    自取。JS 在这条链上只是一个不受信的搬运工(Capacitor 桥对主 frame 的任意脚本可见)。
+ *    桌面的插件沙箱面例外:动作在主进程,渲染层自己 claim / result(见 pluginSandboxSurface.ts 头注)。
  */
 import type { ComponentType } from 'react'
 

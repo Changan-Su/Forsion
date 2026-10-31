@@ -11,7 +11,8 @@
  * (旧口径从锁外预读的 existing 补省略项,预读到落盘之间用户在设置里的改动会被写回去)。
  */
 import type { ToolProvider } from '../toolRegistry.js';
-import { listAgents, getAgent, saveAgent, patchAgent, deleteAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, DEFAULT_MAX_ITERATIONS, KEEP_APPROVAL_MODE, type AgentPatch, type NormalAgentDef } from '../../agents/agentRegistry.js';
+import { uninstallAgent } from '../../services/agentUninstall.js';
+import { listAgents, getAgent, saveAgent, patchAgent, slugFromNames, isValidSlug, agentNames, AGENT_MAX_ITERATIONS_MIN, KEEP_APPROVAL_MODE, type AgentPatch, type NormalAgentDef } from '../../agents/agentRegistry.js';
 import { THINKING_LEVELS } from '../../llm/modelCapabilities.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
@@ -43,8 +44,10 @@ export const manageAgentProvider: ToolProvider = {
             type: 'object',
             properties: {
               action: { type: 'string', enum: ['create', 'update', 'delete', 'list'], description: 'The operation' },
-              slug: { type: 'string', description: 'Unique agent identifier (lowercase alphanumerics and hyphens); required for update/delete, optional for create (derived from name)' },
+              slug: { type: 'string', description: 'Unique agent identifier (lowercase alphanumerics and hyphens); required for update/delete. Optional for create when an English name is given; required for a Chinese-only name' },
               name: { type: 'string', description: 'Display name (required for create/update)' },
+              name_zh: { type: 'string', description: 'Chinese name, shown when the app is in Chinese (optional)' },
+              name_en: { type: 'string', description: 'English name, shown when the app is in English; no Chinese characters (optional)' },
               description: { type: 'string', description: 'One-sentence summary' },
               system_prompt: { type: 'string', description: 'The agent\'s development instructions (what to do / how to do it / what to read; required for create/update)' },
               soul: { type: 'string', description: 'Persona definition (SOUL.md; tone/values; optional)' },
@@ -66,7 +69,7 @@ export const manageAgentProvider: ToolProvider = {
           if (action === 'list') {
             const all = await listAgents();
             if (!all.length) return '(no local agents)';
-            return all.map((a) => `- ${a.slug}: ${a.name}${a.description ? ` — ${a.description}` : ''}`).join('\n');
+            return all.map((a) => `- ${a.slug}: ${agentNames(a).join(' / ')}${a.description ? ` — ${a.description}` : ''}`).join('\n');
           }
           if (action === 'delete') {
             const slug = String(args.slug || '');
@@ -75,18 +78,22 @@ export const manageAgentProvider: ToolProvider = {
             if (isSelf(slug, ctx)) return 'Error: you cannot delete yourself (the active agent). Ask the user to do it in Settings.';
             // 用户给它设过审批档 → 不许删:删了再 create 同 slug = 新定义没有档,激活时回落会话档,等于把用户的收紧洗掉(Codex 09-27)。
             if ((await getAgent(slug))?.approvalMode) return `Error: agent "${slug}" has an approval level set by the user, so only the user can delete it in Settings.`;
-            const ok = await deleteAgent(slug);
-            return ok ? `Deleted agent: ${slug}` : `Agent not found: ${slug}`;
+            if (!(await getAgent(slug))) return `Agent not found: ${slug}`;
+            // 与名册删除同一条(services/agentUninstall):进回收站 30 天,私聊归档、移出团队、暂停用到它的自动化。
+            const r = await uninstallAgent(ctx.userId, ctx.appId, slug);
+            if (r.busy) return `Error: agent "${slug}" is in a two-member team that is still running; deleting it would remove that team too. Try again once the team run finishes.`;
+            return r.ok ? `Deleted agent: ${slug}. It is in the trash for 30 days (the user can restore it in Settings › System › Trash); its direct chats were archived.` : `Error: agent "${slug}" cannot be deleted (the default agent, or Muse while it is on).`;
           }
           if (action === 'create' || action === 'update') {
             // 审批档只归用户(H2):schema 里已删,模型照旧传 → 报错且不落盘(同 update_session_settings 的先例)。
             // 错误语要告诉模型怎么改:捆绑技能等旧材料可能还教它传 approval_mode,别让它卡在这一步。
             if (args.approval_mode !== undefined) return 'Error: approval_mode can only be changed by the user in Settings. Nothing was saved; call again without approval_mode.';
             if (!args.name || !args.system_prompt) return 'Error: create/update requires name and system_prompt.';
-            // slug 归一必须与 saveAgent 的落盘规则一致(非法 slug → slugify(name)),否则可以用
+            // slug 归一必须与 saveAgent 的落盘规则一致(非法 slug → 由名字推),否则可以用
             // 大写等非法变体让守卫查不到 existing、saveAgent 却归一回自己的 slug(Codex 评审 #2)。
             const requested = args.slug ? String(args.slug) : '';
-            const slug = requested && isValidSlug(requested) ? requested : slugify(String(args.name));
+            const slug = requested && isValidSlug(requested) ? requested : slugFromNames(args.name_en, args.name);
+            if (!slug) return 'Error: a Chinese-only name cannot produce a slug. Nothing was saved; call again with slug (lowercase letters, digits, hyphens).';
             const existing = await getAgent(slug);
             if (action === 'update' && !existing) return `Error: agent not found: ${slug} (use action=list to see agents).`;
             // 守卫对「某一份」agent 快照判:预读判一次(快速失败、报错顺序照旧);覆盖已有 agent 的路径在 patchAgent 里
@@ -107,19 +114,21 @@ export const manageAgentProvider: ToolProvider = {
               if (args.max_iterations != null) {
                 const want = Number(args.max_iterations);
                 if (!Number.isFinite(want) || want < AGENT_MAX_ITERATIONS_MIN) return `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN} (got ${args.max_iterations}).`;
-                const now = cur?.maxIterations ?? DEFAULT_MAX_ITERATIONS;
-                if (isSelf(slug, ctx) && want < now) return `an agent may not lower its own max_iterations (current ${now}, requested ${want}). Keep it or raise it; only the user can lower it in Settings.`;
+                const now = cur?.maxIterations ?? Infinity; // 没设 = 不限:给自己加任何上限都算调低
+                if (isSelf(slug, ctx) && want < now) return `an agent may not lower its own max_iterations (current ${Number.isFinite(now) ? now : 'no limit'}, requested ${want}). Keep it or raise it; only the user can lower it in Settings.`;
               }
               return null;
             };
             const refused = guard(existing);
             if (refused) return `Error: ${refused}`;
             // 只放模型**传了**的字段:省略 ≠ 清空(H2)—— buildAgentDef 对 description / model / tools / thinkingLevel 的省略项写空;
-            // 轮数省略也得保留,否则 update 只改 model 就把自己的 150 降回默认 90,「不许自降」守卫形同虚设(Codex 09-13 #1)。
+            // 轮数省略也得保留,否则 update 只改 model 就把自己的 150 清回默认,「不许自降」守卫形同虚设(Codex 09-13 #1)。
             // 省略的字段**不**从上面的预读 existing 补:从那次读到落盘之间用户可能刚在设置里收窄了工具 / 换了模型,传旧值会把它写回去
             // (09-25 审批档那条 P1 的同类窗口)。覆盖已有的走 patchAgent:在按 slug 串行化的保存里现读、只改传了的字段。
             const fields: AgentPatch = {
               name: String(args.name),
+              nameZh: args.name_zh != null ? String(args.name_zh) : undefined,
+              nameEn: args.name_en != null ? String(args.name_en) : undefined,
               systemPrompt: String(args.system_prompt),
               description: args.description != null ? String(args.description) : undefined,
               model: args.model != null ? String(args.model) : undefined,
@@ -142,7 +151,7 @@ export const manageAgentProvider: ToolProvider = {
               })
               : await saveAgent({ ...fields, slug, name: String(args.name), systemPrompt: String(args.system_prompt), approvalMode: KEEP_APPROVAL_MODE, mustNotExist: true });
             // create 撞上已有 slug = 覆盖(设计如此,见上;readonly / auto-edit 的审批卡已写「overwrites」),但完全放行档不弹卡 ——
-            // 回执必须点破,否则纯中文名不带 slug(slugify → 'agent')连建两个,模型两次都以为「建好了」,第一个已被悄悄替换。
+            // 回执必须点破,否则同一个 slug 连建两个,模型两次都以为「建好了」,第一个已被悄悄替换。
             const verb = action === 'update'
               ? 'Updated agent'
               : existing ? 'Overwrote existing agent' : 'Created agent';

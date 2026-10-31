@@ -2,6 +2,8 @@
  * 更新日志的纯解析(不带 Vite 的 `?raw`):应用里经 changelog.ts 用,构建期的开屏插件(startupAppearancePlugin.ts)也用同一份,
  * 两边读出来的版本号才不会各说各的。
  */
+import { parseReleaseVersion } from '../../shared/updateVersion'
+
 export interface ChangelogEntry {
   version: string
   date: string // YYYY-MM-DD(可空)
@@ -36,11 +38,10 @@ export function parseChangelog(md: string): ChangelogEntry[] {
  * 当前已发布版本。更新日志允许把 `Unreleased` 放在顶部，因此不能再用 CHANGELOG[0]：
  * 那会把插件 minAppVersion 门禁的宿主版本变成 0.0.0，误杀整包插件及其 Space。
  */
-const RELEASE_VERSION_RE = /^(?:Forsion\s+)?v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$/i
 export function latestReleasedVersion(entries: ChangelogEntry[]): string {
   for (const entry of entries) {
-    const match = RELEASE_VERSION_RE.exec(entry.version.trim())
-    if (match) return match[1]
+    const parsed = parseReleaseVersion(entry.version.trim().replace(/^Forsion\s+/i, ''))
+    if (parsed) return parsed.version
   }
   return ''
 }

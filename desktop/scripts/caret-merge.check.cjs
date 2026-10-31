@@ -212,6 +212,32 @@ async function main() {
     await page.close()
   }
 
+  // C5 v4 段尾 Shift+Enter(用户实报 10-23「Shift+回车没反应、回车后多出的距离删不掉」):DOM 选区停在
+  // 硬换行 <br> 之后的元素边界上、没有矩形,邻居兜底取了那个 <br> 的右边 → 覆盖层画回第一行行尾。
+  {
+    const UPM = '.unified-body .ProseMirror'
+    const page = await browser.newPage({ locale: 'zh-CN' })
+    page.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    await page.goto(`${BASE}?upage&caret&useed=${encodeURIComponent('第一行文字\n\n第二段。\n')}`, { waitUntil: 'domcontentloaded' })
+    await page.waitForSelector(UPM, { timeout: 20000 })
+    await page.waitForTimeout(600)
+    await page.locator(`${UPM} > p:first-child`).click()
+    await page.keyboard.press('End')
+    await settle(page)
+    const before = await geom(page)
+    await page.keyboard.press('Shift+Enter')
+    await settle(page)
+    const brk = await geom(page)
+    const line2 = await page.evaluate((s) => Math.round(document.querySelector(`${s} > p:first-child > br.ProseMirror-trailingBreak`)?.getBoundingClientRect().top ?? -1), UPM)
+    check('C5 段尾 Shift+Enter:覆盖层落到新的一行', !!brk.overlay && Math.abs(brk.overlay.top - line2) <= 6 && brk.overlay.top > before.overlay.top + 5, JSON.stringify({ before: before.overlay, after: brk.overlay, line2 }))
+    await page.keyboard.press('Enter')
+    await page.keyboard.press('Backspace')
+    await settle(page)
+    const back = await geom(page)
+    check('C5 回车再退格:覆盖层回到硬换行那一行,不是第一行行尾', !!back.overlay && Math.abs(back.overlay.top - line2) <= 6, JSON.stringify({ back: back.overlay, line2 }))
+    await page.close()
+  }
+
   await browser.close()
   const bad = results.filter((r) => !r.ok)
   console.log(`\n${results.length - bad.length}/${results.length} 通过`)

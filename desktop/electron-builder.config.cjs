@@ -5,6 +5,11 @@
 const { readFileSync } = require('fs')
 const { join } = require('path')
 const { backendDependencyFilter } = require('./build/backend-dependencies.cjs')
+const { fileAssociationsFor, createNsisInclude } = require('./build/file-associations.cjs')
+// builder 26.15.3's modern 7za auto-selects ARM64 for bundled ARM PE files, but
+// NSIS's install-time decoder cannot read that filter (#9983). Pin every build
+// entry (including cross-host --win) to the compatible lossless BCJ filter.
+process.env.ELECTRON_BUILDER_7Z_FILTER = 'BCJ'
 // 内置插件捆绑包清单(单一来源;electron/builtinPlugins.ts 播种、builtinUpdates 更新、release-content.check 核对都读它)。
 const builtinBundles = require('./electron/builtinBundles.json')
 const { bundleExtend, artifactSuffix, updateChannel } = require('./build/distribution.cjs')
@@ -54,10 +59,7 @@ module.exports = {
   // win:NSIS 装机写 HKCU\Software\Classes\.<ext> 的默认 ProgID + OpenWithProgids —— Win10+ 用户选过的(UserChoice,
   // 如 Edge 打 PDF)不受影响,.md 这种没人认领的会直接归 Forsion。name 即 ProgID,卸载时整键删除 → 必须带 Forsion 前缀免得撞别家,
   // 还得按产品分开(全家桶 / Amadeus / Basic 可同装,共用一个 ProgID 会互相覆盖命令、卸一个删掉另一个的)。
-  fileAssociations: [
-    { ext: 'pdf', name: `Forsion.${product.id}.pdf`, description: 'PDF document', role: 'Viewer', rank: 'Alternate', mimeType: 'application/pdf' },
-    { ext: ['md', 'markdown'], name: `Forsion.${product.id}.markdown`, description: 'Markdown document', role: 'Editor', rank: 'Default', mimeType: 'text/markdown' },
-  ],
+  fileAssociations: fileAssociationsFor(product.id),
   artifactName: product.artifactPrefix + artifactSuffix + '-${version}-${arch}.${ext}',
   extraMetadata: { forsionBundleExtend: bundleExtend },
   files: [
@@ -106,7 +108,7 @@ module.exports = {
     // 落点目录名 = 包名去 scope(builtinPlugins.bundledDirName),两边同一约定;清单里每个包都要在,少了
     // release-content.check 会红(不再静默漏包)。清单 requires: 'agentBackend' 的(电脑操作)只进带 agent 后端的档案;
     // Forsion Extend 缺省全档案都带;FORSION_BUNDLE_EXTEND=0 另出不捆云插件的安装包。
-    ...builtinBundles.filter((b) => (!b.requires || product[b.requires]) && (bundleExtend || b.id !== 'forsion-extend')).map((b) => ({
+    ...builtinBundles.filter((b) => (!b.requires || product[b.requires]) && (!b.requiresSpace || product.spaces.includes(b.requiresSpace)) && (bundleExtend || b.id !== 'forsion-extend')).map((b) => ({
       from: `node_modules/${b.pkg}`,
       to: `bundled-plugins/${bundledDirName(b.pkg)}`,
       // 电脑操作的 CI 原生编译会留下数百 MB 的 Rust 中间文件;只交付 prebuilt 和源码。别的包没有这个目录,过滤器无副作用。
@@ -166,7 +168,7 @@ module.exports = {
   win: { target: 'nsis', icon: 'build/icon.ico' },
   // 卸载时询问是否清除用户数据(~/.forsion、~/Forsion、%APPDATA%\Forsion);见 build/installer.nsh。
   nsis: {
-    include: 'build/installer.nsh',
+    include: createNsisInclude(product.id),
     oneClick: false,
     installerLanguages: ['en_US', 'zh_CN'],
     runAfterFinish: true,

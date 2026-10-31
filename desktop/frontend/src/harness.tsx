@@ -51,7 +51,7 @@ import { OverlayAt } from '@lcl/engine'
 import { NoteFloatingToc } from './amadeus/unified/NoteFloatingToc'
 import { AmxMobileBar, NoteTabIcon, pageStyleSheetActions } from './amadeusViews'
 import { OutlineView, PluginListBody } from './views/WorkspaceView'
-import type { ListItem, ListSourceContribution, TableSpec } from '@amadeus/plugins/types'
+import type { ListItem, TableSpec } from '@amadeus/plugins/types'
 import { SidebarRow } from './components/SidebarRow'
 import { FileText as FileTextIcon, Copy as CopyIcon } from 'lucide-react'
 import { noteMarkdownBody } from './amadeus/unified/copyMarkdown'
@@ -74,6 +74,7 @@ import { UnifiedSpikeHarness } from './amadeus/unified/UnifiedSpike'
 import { routeNote } from './amadeus/unified/router'
 import { SEG_SLOT } from './amadeus/unified/CanvasModeSeg'
 import { useUiOverlay } from './amadeusOverlayStore'
+import './tangu/store/standalone' // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c);排在最后,别早于上面那些打桩的 import
 
 // ExcalidrawEmbed 平时干这件事;harness 直挂画布,得自己设(否则字体去 CDN 拉,CSP 拦)。
 ;(window as unknown as { EXCALIDRAW_ASSET_PATH?: string }).EXCALIDRAW_ASSET_PATH = new URL('excalidraw/', document.baseURI).href
@@ -650,6 +651,12 @@ if (new URLSearchParams(location.search).has('dock')) {
       },
       split: (): string | null => useWorkspace.getState().splitActive('right')?.id ?? null,
       activate: (leafId: string): void => useWorkspace.getState().activateLeaf(leafId),
+      /** 把 leafId 所在的组整组挪到 toId 那组的右边(真实拖组走的同一个 moveTo)。 */
+      moveGroupRightOf: (leafId: string, toId: string): void => {
+        const api = useWorkspace.getState().api
+        const to = api?.getPanel(toId)?.group
+        if (to) api?.getPanel(leafId)?.group.api.moveTo({ group: to, position: 'right' })
+      },
       stack: (leafId: string): { keys: string[]; idx: number } => {
         const st = useNav.getState().stacks[leafId]
         return { keys: st?.entries.map((e) => e.key) ?? [], idx: st?.idx ?? -1 }
@@ -972,6 +979,9 @@ if (new URLSearchParams(location.search).has('dock')) {
     // ?running 起步就在跑;右下角「运行」按钮来回切,看流星渐快 / 渐慢
     const [running, setRunning] = useState(modelPillParams.has('running'))
     const [defaults, setDefaults] = useState({ backgroundModelId: '', imageModelId: '', visionModelId: '' })
+    // ?fast[=<目录说明>] 露出 Fast 行(缺省扮「2x speed, increased usage」那一类),?fast&faston 起步就开着
+    const [fast, setFast] = useState(modelPillParams.has('faston'))
+    const fastProps = modelPillParams.has('fast') ? { fast, fastTier: modelPillParams.get('fast') || '2x speed, increased usage', onFastChange: setFast } : {}
     // 「上下文上限」行:GLM-4.7 扮 1M 模型(缺省封在 272k);选「最大」= 本机覆盖成 1M(与真 store 同形)
     const [ctxOverride, setCtxOverride] = useState<number | null>(new URLSearchParams(location.search).has('ctxmax') ? 1_000_000 : null)
     const modelsResponse = {
@@ -1001,6 +1011,7 @@ if (new URLSearchParams(location.search).has('dock')) {
             defaultModelIds={defaults}
             onDefaultModelChange={(slot, modelId) => setDefaults((d) => ({ ...d, [slot]: modelId }))}
             onContextWindowChange={(_id, tokens) => setCtxOverride(tokens)}
+            {...fastProps}
           />
         </div>
       </div>
@@ -1166,7 +1177,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     writeDatabase: (p: string, data: unknown) => { mem.set(p, JSON.stringify(data)); return Promise.resolve() },
   })
   const STOCK = '库存表.db', OUT = '出库记录.db', ORDER = '订单总表.db', TASK = '任务表.db'
-  // 任务表的日期相对今天算(seedCalendarDb 同款):甘特轴恒含今天,写死 2026-03 会让轴拉到半年宽、今日线在屏外
+  // 任务表的日期相对今天算:甘特轴恒含今天,写死 2026-03 会让轴拉到半年宽、今日线在屏外
   const erpDay = (n: number): string => {
     const t = new Date()
     const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + n)
@@ -1532,7 +1543,9 @@ if (new URLSearchParams(location.search).has('dock')) {
     })
   }
   registerView({ type: 'amadeus-pdf', kind: 'entity', embeddable: true, idParam: 'probePath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'], displayName: 'File Probe', icon: Square, factory: (p) => <DashFileProbe {...p} /> })
-  const gridIds = ['1', '2', '3', '4', '5', '6', '7']
+  // `&cards=4x3,6x5`:换成这组尺寸的文本卡,给探针复现具体几何。
+  const sized = new URLSearchParams(location.search).get('cards')?.split(',').map((s) => s.split('x').map(Number))
+  const gridIds = sized ? sized.map((_, i) => String(i + 1)) : ['1', '2', '3', '4', '5', '6', '7']
   usePageStore.setState({
     activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE, '笔记甲.md'], files: ['手册.pdf', '图.png'],
     manifest: {
@@ -1545,11 +1558,13 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 钉「手调=硬值 / 未动=可弹」的分界(2026-08-31 打回后收窄)。
       fmExtra: [
         'tags: [harness]', 'dashboard3:',
-        '  "1": [0, 12, 1]', '  "2": [1, 3, 2]', '  "3": [2, 3, 2]', '  "4": [3, 6, 5]',
-        '  "5": [4, 12, 1]', '  "6": [5, 6, 3]', '  "7": [6, 6, 3]',
+        ...(sized ? sized.map(([w, h], i) => `  "${i + 1}": [${i}, ${w}, ${h}]`) : [
+          '  "1": [0, 12, 1]', '  "2": [1, 3, 2]', '  "3": [2, 3, 2]', '  "4": [3, 6, 5]',
+          '  "5": [4, 12, 1]', '  "6": [5, 6, 3]', '  "7": [6, 6, 3]',
+        ]),
       ].join('\n'),
     },
-    blocks: {
+    blocks: sized ? Object.fromEntries(gridIds.map((id) => [id, { id, type: 'markdown', content: `卡片 ${id}` }])) : {
       1: { id: '1', type: 'markdown', content: '```section\ntitle: 今天\n```' },
       2: { id: '2', type: 'markdown', content: '```clock\ntz: Asia/Shanghai\n```' },
       3: { id: '3', type: 'markdown', content: '随手记：把常看的东西摆成一页。' },
@@ -2385,7 +2400,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     activeKey: () => 'a',
     open: () => {},
     subscribe: () => () => {},
-  } as unknown as ListSourceContribution
+  } as unknown as import("@amadeus/plugins/pluginText").HostListSource
   // Optional shared-toolbar probe: old plugin actions and drag contracts still work without a new API.
   if (new URLSearchParams(location.search).has('controls')) {
     const listeners = new Set<() => void>()
@@ -2423,7 +2438,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     ]
     // 当前行藏在收起的文件夹里:宿主要自己把它上面的文件夹展开
     let active = 'a1'
-    const probe = { opened: [] as string[], drops: [] as unknown[], renames: [] as unknown[], adds: [] as string[], refuse: '' }
+    const probe = { opened: [] as string[], drops: [] as unknown[], renames: [] as unknown[], adds: [] as string[], refuse: '', reorder: false }
     ;(window as any).__treeProbe = probe
     SRC.subscribe = (cb) => { listeners.add(cb); return () => { listeners.delete(cb) } }
     SRC.items = (f) => rows.filter((item) => !f?.query || item.title.includes(f.query))
@@ -2437,7 +2452,22 @@ if (new URLSearchParams(location.search).has('dock')) {
       accepts: ['items'],
       // 文件夹不能放进文件夹(宿主被拒后改问「排在前 / 后」);probe.refuse 那一行什么都不收
       canDrop: (payload, target) => !(rows.find((r) => r.key === payload.items[0])?.kind === 'folder' && target.position === 'into') && target.item?.key !== probe.refuse,
-      onDrop: (payload, target) => { probe.drops.push({ items: payload.items, to: target.item?.key, position: target.position }) },
+      onDrop: (payload, target) => {
+        probe.drops.push({ items: payload.items, to: target.item?.key, position: target.position })
+        // reorder 开着时真的挪(像真插件那样写完再重渲,晚 60ms):松手落位(LCL land)要等这一行换了地方才落
+        if (!probe.reorder || !target.item || !payload.items?.length) return
+        const key = payload.items?.[0], to = target.item
+        window.setTimeout(() => {
+          const moving = rows.find((r) => r.key === key)
+          if (!moving) return
+          const rest = rows.filter((r) => r.key !== key)
+          const at = rest.findIndex((r) => r.key === to.key)
+          const moved = { ...moving, parent: target.position === 'into' ? to.key : to.parent, group: to.group }
+          rest.splice(target.position === 'after' ? at + 1 : target.position === 'into' ? at + 1 : at, 0, moved)
+          rows = rest
+          emit()
+        }, 60)
+      },
     }
   }
   // 组头(folderStyle: 'group')、行尾的悬停图标钮、「查看更多」(2026-10-14):收件箱按发信人的那一种列表。

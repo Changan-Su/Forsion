@@ -16,14 +16,15 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.ribbon.iconsOnly': { zh: '只显示图标', en: 'Icons only' },
   'lcl.ribbon.addSpaceOrFolder': { zh: '新建 Space 或收纳夹', en: 'New Space or folder' },
   'lcl.ribbon.addCommand': { zh: '添加命令', en: 'Add command' },
-  'lcl.ribbon.more': { zh: '更多', en: 'More' },
-  'lcl.ribbon.less': { zh: '收起', en: 'Show less' },
+  // 「+N」溢出入口与浮层(2026-10-30):按钮上只写 +N,名字给读屏 / 浮签 / 宽条与浮层标题
+  'lcl.ribbon.moreSpaces': { zh: '更多 Space', en: 'More Spaces' },
+  'lcl.ribbon.moreCommands': { zh: '更多命令', en: 'More commands' },
+  'lcl.ribbon.moreCount': { zh: '{label} · {n}', en: '{label} · {n}' },
+  'lcl.ribbon.dragToPin': { zh: '拖到左边条上即可常驻', en: 'Drag onto the bar to keep it there' },
   'lcl.ribbon.switchSpace': { zh: '切到第 {n} 个 Space', en: 'Switch to Space {n}' },
   'lcl.ribbon.newSpace': { zh: '新建 Space', en: 'New Space' },
   'lcl.ribbon.newFolder': { zh: '新建收纳夹', en: 'New folder' },
   'lcl.ribbon.folderDefaultName': { zh: '收纳夹', en: 'Folder' },
-  'lcl.ribbon.newFolderSpaces': { zh: '新建收纳夹（Space 区）', en: 'New folder (Spaces)' },
-  'lcl.ribbon.newFolderCommands': { zh: '新建收纳夹（命令区）', en: 'New folder (commands)' },
   'lcl.ribbon.changeIcon': { zh: '更换图标', en: 'Change icon' },
   'lcl.ribbon.rename': { zh: '重命名', en: 'Rename' },
   'lcl.ribbon.renameFolder': { zh: '重命名收纳夹', en: 'Rename folder' },
@@ -51,11 +52,20 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.layout.undo': { zh: '撤销', en: 'Undo' },
 
   // 视图错误边界
-  'lcl.view.loadFailed': { zh: '此视图加载失败', en: 'Failed to load this view' },
+  'lcl.view.errorTitle': { zh: '这一页没能打开', en: "This page didn't load" },
+  'lcl.view.errorLine': { zh: '加载时出了错。重试一次，还不行就复制详情发给我们。', en: 'Something went wrong while loading. Try again, and if it keeps failing, copy the details and send them to us.' },
+  'lcl.view.errorLineNamed': { zh: '「{name}」加载时出了错。重试一次，还不行就复制详情发给我们。', en: 'Something went wrong while loading {name}. Try again, and if it keeps failing, copy the details and send them to us.' },
+  'lcl.view.copyDetails': { zh: '复制详情', en: 'Copy details' },
+  'lcl.view.copied': { zh: '已复制', en: 'Copied' },
+  'lcl.view.errorDetails': { zh: '错误详情', en: 'Error details' },
   'lcl.view.retry': { zh: '重试', en: 'Retry' },
+  // 布局里存着、此刻没注册的视图(插件还没就位 / 已关掉)的占位
+  'lcl.view.unavailable': { zh: '此视图暂不可用', en: "This view isn't available" },
+  'lcl.view.unavailableHint': { zh: '它所属的插件还没加载，或者已经关掉。插件回来后，这里会原样恢复。', en: "Its plugin hasn't loaded yet or is turned off. It will come back here once the plugin is available." },
 
   // 命令面板 / Mini Panel / 移动单列壳
   'lcl.palette.pickCommand': { zh: '选择要添加的命令…', en: 'Pick a command to add…' },
+  'lcl.palette.pairHint': { zh: '同时按左右两个 {key}', en: 'Press both {key} keys together' },
   'lcl.mini.switchSpace': { zh: '切换 Space', en: 'Switch Space' },
   'lcl.mini.showMain': { zh: '在主面板显示', en: 'Show in main panel' },
   'lcl.mini.close': { zh: '关闭 Mini Panel', en: 'Close Mini Panel' },

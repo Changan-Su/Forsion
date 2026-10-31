@@ -15,9 +15,10 @@ describe('isNewer', () => {
     expect(isNewer('2.7.2', '2.7.2')).toBe(false)
   })
 
-  it('带 v 前缀与 build 元数据都不影响', () => {
+  it('识别 v 前缀与保留的 build 修订号,其他元数据不影响', () => {
     expect(isNewer('v2.7.3', '2.7.2')).toBe(true)
-    expect(isNewer('2.7.3+build.5', '2.7.3')).toBe(false) // build 元数据不参与比较
+    expect(isNewer('2.7.3+build.5', '2.7.3')).toBe(true)
+    expect(isNewer('2.7.3+sha.5', '2.7.3')).toBe(false)
   })
 
   it('⚠️ 正式版比同号 prerelease 新(beta 用户能升回正式版)', () => {
@@ -92,5 +93,6 @@ describe('changelogSection', () => {
   it('prerelease 版本号照样能命中', () => {
     const beta = '## 2.7.4-beta.1 (2026-07-30)\n\n- beta 内容\n\n## 2.7.3 (x)\n\n- 老'
     expect(changelogSection(beta, '2.7.4-beta.1')).toBe('- beta 内容')
+    expect(changelogSection('## 2.13.8-rc.1+build.2 (x)\n\n- Revision', '2.13.8-rc.1+build.2')).toBe('- Revision')
   })
 })

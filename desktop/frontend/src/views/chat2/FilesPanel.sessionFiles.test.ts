@@ -26,6 +26,7 @@ import { FilesPanel } from './FilesPanel'
 import { useApp } from '../../stores/appStore'
 import { bindSession, clearSessionBindings, resetFocusForTests, useEngineFocus } from '../../services/engine/targets'
 import type { WorkspaceDescriptor } from '../../types'
+import '../../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 const SID = 'sess-remote-1'
 const UNIT = '6f99bfba-c9dc-4e10-9b51-43e50fde8db1'

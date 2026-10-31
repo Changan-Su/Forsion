@@ -3,7 +3,8 @@ const fs = require('node:fs')
 const path = require('node:path')
 const { execFileSync } = require('node:child_process')
 
-function inspectVersions(desktop) {
+async function inspectVersions(desktop) {
+  const { parseReleaseVersion } = await import('../shared/releaseVersion.mjs')
   const read = file => JSON.parse(fs.readFileSync(file, 'utf8'))
   const engine = path.resolve(desktop, '../tangu-agent')
   const values = {}
@@ -14,17 +15,20 @@ function inspectVersions(desktop) {
     values[`${name}/package-lock.json packages[""]`] = lock.packages?.['']?.version
   }
   const changelog = fs.readFileSync(path.join(desktop, 'CHANGELOG.md'), 'utf8').replace(/<!--[\s\S]*?-->/g, '')
-  values['desktop/CHANGELOG.md'] = /^##\s+(?:Forsion\s+)?v?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)(?=\s|$)/mi.exec(changelog)?.[1]
+  values['desktop/CHANGELOG.md'] = /^##\s+(?:Forsion\s+)?v?(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)(?=\s|$)/mi.exec(changelog)?.[1]
   const version = values['desktop/package.json']
-  const errors = Object.entries(values)
-    .filter(([, value]) => !value || value !== version)
-    .map(([file, value]) => `${file}: ${value || '(missing)'}; expected ${version}`)
+  const errors = []
+  for (const [file, value] of Object.entries(values)) {
+    const expected = values[file.startsWith('tangu-agent/') ? 'tangu-agent/package.json' : 'desktop/package.json']
+    const parsed = parseReleaseVersion(value)
+    if (!parsed || parsed.version !== value || value !== expected) errors.push(`${file}: ${value || '(missing)'}; expected ${expected}`)
+  }
   return { version, errors }
 }
 
-function main() {
+async function main() {
   const desktop = path.resolve(__dirname, '..')
-  const { version, errors } = inspectVersions(desktop)
+  const { version, errors } = await inspectVersions(desktop)
   console.log(`[dev-version] Forsion ${version} | ${desktop}`)
   for (const error of errors) console.error(`[dev-version] MISMATCH ${error}`)
   if (errors.length) {
@@ -48,4 +52,4 @@ function main() {
 }
 
 module.exports = { inspectVersions }
-if (require.main === module) main()
+if (require.main === module) main().catch(error => { console.error(error); process.exitCode = 1 })

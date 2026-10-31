@@ -7,7 +7,7 @@
  *
  * 合格 = 下面五条全过(都是机械判定,不靠人记):
  *  · 包名对、版本是正式版、比安装包自带的新;
- *  · `forsion.minDesktop` 不高于壳的版本。壳版本取自带引擎的版本号:两者同号发版是 build-desktop 的硬门禁;
+ *  · `forsion.minDesktop` 不高于壳的版本。壳版本读安装包的 desktop-host.json;旧同号安装包缺少此文件时才回退到自带引擎版本;
  *  · `dependencies` 与自带的完全相同 —— 新版只带了 dist,依赖用的是安装包里那份 node_modules;
  *  · 建表 / 迁移文件与自带的逐字节相同 —— 带迁移的版本只能随安装包发,这样退回自带引擎永远安全;
  *  · SIGNATURE 对得上钉死的公钥,目录里的文件恰好是签过的那些(多一个、少一个、改一个字节都不行)。
@@ -15,9 +15,10 @@
  * 只用 node 内置模块:启动器在挑定之前不能把引擎本体拉进来。
  */
 import { createHash, createPublicKey, verify as verifySignature } from 'node:crypto';
-import { lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { ENGINE_SIGNING_KEY } from './signingKey.js';
+import { compareReleaseVersions, parseReleaseVersion } from '../contracts/releaseVersion.mjs';
 
 export const ENGINE_PACKAGE = '@forsion/tangu-agent';
 export const SIGNATURE_FILE = 'SIGNATURE';
@@ -123,8 +124,17 @@ export function checkOverlay(dir: string, bundledRoot: string, publicKeyPem: str
   if (!RELEASE.test(version) || !RELEASE.test(base)) return reject('version', `${version || '?'} / bundled ${base || '?'} is not a release version`);
   if (cmpVersion(version, base) <= 0) return reject('version', `${version} is not newer than the bundled ${base}`);
   const minDesktop = pkg.forsion?.minDesktop;
-  if (typeof minDesktop !== 'string' || !RELEASE.test(minDesktop)) return reject('host', 'forsion.minDesktop is missing');
-  if (cmpVersion(base, minDesktop) < 0) return reject('host', `needs Forsion ≥ ${minDesktop}, this is ${base}`);
+  if (typeof minDesktop !== 'string' || !parseReleaseVersion(minDesktop)) return reject('host', 'forsion.minDesktop is missing');
+  // Packaging records the shell version separately. Only legacy equal-version installers lack this file.
+  const hostFile = path.join(bundledRoot, 'desktop-host.json');
+  let desktop: unknown = base;
+  try {
+    if (existsSync(hostFile)) desktop = readJson(hostFile).version;
+  } catch {
+    return reject('host', 'unreadable desktop-host.json');
+  }
+  if (typeof desktop !== 'string' || !parseReleaseVersion(desktop)) return reject('host', 'invalid desktop-host.json version');
+  if (compareReleaseVersions(desktop, minDesktop) < 0) return reject('host', `needs Forsion ≥ ${minDesktop}, this is ${desktop}`);
   if (canonicalFiles(pkg.dependencies ?? {}) !== canonicalFiles(bundled.dependencies ?? {})) return reject('deps', 'dependencies differ from the bundled engine');
   try {
     for (const rel of SCHEMA_FILES) {

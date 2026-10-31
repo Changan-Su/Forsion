@@ -1,7 +1,6 @@
 /**
- * POST /agent/agents 新建撞 slug 回归测试:中文等非 ASCII 名全部派生为兜底 'agent',
- * 此前第二次创建会**静默覆盖**第一个(saveAgent 是按 slug 的 upsert)。
- * 修复后:新建撞 slug 递增后缀,绝不覆盖;PATCH 仍原位更新。
+ * POST /agent/agents 新建的 id:saveAgent 是按 slug 的 upsert,撞了会**静默覆盖**。
+ * 只有中文名要显式给 id;显式 id 撞了 409;由名字推出来的撞了递增后缀;PATCH 仍原位更新。
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -45,23 +44,40 @@ afterAll(() => {
 });
 
 describe('POST /agent/agents 撞 slug', () => {
-  it('两个中文名(同派生 slug)→ 两个独立 agent,绝不覆盖', async () => {
-    const a = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ name: '秦车', systemPrompt: 'A' }) });
-    const b = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ name: '墨璃', systemPrompt: 'B' }) });
-    expect(a.status).toBe(200);
-    expect(b.status).toBe(200);
-    expect(a.body.agent.slug).toBe('agent');
-    expect(b.body.agent.slug).toBe('agent-2');
-    const list = await api('/agent/agents');
-    const bySlug = Object.fromEntries(list.body.agents.map((x: any) => [x.slug, x]));
-    expect(bySlug['agent'].name).toBe('秦车');
-    expect(bySlug['agent'].systemPrompt).toBe('A');
-    expect(bySlug['agent-2'].name).toBe('墨璃');
+  it('只有中文名、没给 id → 400,不落到兜底的 agent、不转拼音', async () => {
+    const r = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ nameZh: '秦车', systemPrompt: 'A' }) });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('slug_required');
+    expect((await api('/agent/agents')).body.agents.map((x: any) => x.slug)).not.toContain('agent');
   });
 
-  it('显式传已存在 slug 新建 → 同样唯一化(想更新走 PATCH)', async () => {
-    const r = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'agent', name: 'Third', systemPrompt: 'C' }) });
-    expect(r.body.agent.slug).toBe('agent-3');
+  it('中文名 + 显式 id 建成;撞已有 id → 409,不覆盖也不悄悄换一个', async () => {
+    const a = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'agent', nameZh: '秦车', systemPrompt: 'A' }) });
+    expect(a.status).toBe(200);
+    expect(a.body.agent).toMatchObject({ slug: 'agent', name: '秦车', nameZh: '秦车', nameEn: '' });
+    const dup = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'agent', nameZh: '墨璃', systemPrompt: 'B' }) });
+    expect(dup.status).toBe(409);
+    expect(dup.body.error).toBe('exists');
+    expect((await api('/agent/agents/agent', { method: 'PATCH', body: '{}' })).body.agent.name).toBe('秦车');
+  });
+
+  it('不合法的 id → 400(旧口径悄悄改用名字推的)', async () => {
+    const r = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'Bad Id', nameEn: 'Okay', systemPrompt: 'A' }) });
+    expect(r.status).toBe(400);
+    expect(r.body.error).toBe('invalid_slug');
+  });
+
+  it('id 由英文名推;推出来的撞了递增后缀,绝不覆盖', async () => {
+    const a = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ nameEn: 'Night Owl', nameZh: '夜猫', systemPrompt: 'A' }) });
+    const b = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ name: 'Night Owl', systemPrompt: 'B' }) });
+    expect(a.body.agent.slug).toBe('night-owl');
+    expect(b.body.agent.slug).toBe('night-owl-2');
+  });
+
+  it('英文名有汉字 → 400,什么都不写', async () => {
+    const r = await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: 'mixed', nameEn: 'Night 猫', systemPrompt: 'A' }) });
+    expect(r.status).toBe(400);
+    expect((await api('/agent/agents')).body.agents.map((x: any) => x.slug)).not.toContain('mixed');
   });
 
   it('PATCH 仍原位更新,不产生新 slug', async () => {

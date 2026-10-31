@@ -3,13 +3,16 @@
  *  写穿:mutate 纯函数换 data + per-ref 500ms 防抖落盘(照 pageStore 模块级 saveTimer 先例);
  *  外部改动经 watcher 的 onDbExternalChange → reloadByPath 热重载;missing/corrupt 态另有「重试」手动 reload。 */
 import { create } from 'zustand'
+import { fileReferenceKey, newFileIdentity, publishFileEntry } from './fileIdentity'
 import type { DbFile } from '@amadeus-shared/db/schema'
 import { stampUpdatedRows } from '@amadeus-shared/db/stamp'
 import { amadeus } from '../api'
 import { kickAutomation } from './automationKick'
+import { HUMAN_CAL, readHumanCal, writeHumanCalCas } from './humanCalendarIo'
 import { onNotePathGone, usePageStore } from './pageStore'
 
 export interface DbEntry {
+  identity?: string
   status: 'loading' | 'ok' | 'missing' | 'corrupt'
   /** ok/corrupt 时为解析出的 vault 相对路径(写回/reveal 用)。 */
   path: string | null
@@ -31,7 +34,7 @@ interface DbStoreState {
   /** 幂等加载:已 ok 的 ref 跳过(多个嵌入共用一次载入)。 */
   load(pagePath: string, ref: string): Promise<void>
   /** 强制重读(missing/corrupt 态「重试」)。 */
-  reload(pagePath: string, ref: string): Promise<void>
+  reload(pagePath: string, ref: string, reuse?: boolean): Promise<boolean>
   /** 外部改了某 vault 相对路径的 .db(如 agent 直连磁盘)→ 重读所有解析到该路径的已载条目。 */
   reloadByPath(dbPath: string): Promise<void>
   /** 纯函数换 data + 防抖写穿;非 ok 态 no-op(损坏文件绝不回写)。 */
@@ -42,6 +45,7 @@ interface DbStoreState {
   dropByPath(dbPath: string): void
 }
 
+const identityOf = (ref: string): string => useDbStore.getState().entries[ref]?.identity ?? ref
 const saveTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const SAVE_DELAY = 500
 
@@ -73,6 +77,7 @@ function applyOps(data: DbFile, ops: ((d: DbFile) => DbFile)[]): DbFile {
 }
 
 function persist(ref: string): Promise<void> {
+  ref = identityOf(ref)
   const existing = inFlight.get(ref)
   if (existing) return existing // Flush must wait for the real write, not merely observe it.
   const running = persistInner(ref, 0).finally(() => {
@@ -88,14 +93,15 @@ async function persistInner(ref: string, attempt: number, gen = useDbStore.getSt
   if (!e || e.status !== 'ok' || !e.path || !e.data) return
   const ops = [...(pendingOps.get(ref) ?? [])] // 快照:CAS 等待期间用户可能又 mutate,那些不属于本批
   try {
-    // 宿主没有比对交换写(云端 / 移动端桥),或这份数据没有票据 → 老路无条件写。
-    if (!amadeus.writeDatabaseCas || !e.version) {
+    // 宿主没有比对交换写(云端 / 移动端桥),或这份数据没有票据 → 老路无条件写。默认日历(human/)一律走引擎的比对交换写。
+    const human = e.path === HUMAN_CAL || ref === HUMAN_CAL
+    if (!human && (!amadeus.writeDatabaseCas || !e.version)) {
       await amadeus.writeDatabase(e.path, e.data)
       if (gen !== useDbStore.getState().gen) return
       ackOps(ref, ops)
       return
     }
-    const r = await amadeus.writeDatabaseCas(e.path, e.data, e.version)
+    const r = human ? await writeHumanCalCas(e.data, e.version ?? '') : await amadeus.writeDatabaseCas!(e.path, e.data, e.version!)
     if (gen !== useDbStore.getState().gen) return
     if (r.ok) {
       ackOps(ref, ops)
@@ -107,8 +113,9 @@ async function persistInner(ref: string, attempt: number, gen = useDbStore.getSt
     }
     // 冲突:磁盘上已是别人的新版本。重读 → 把本地这批改动重放上去 → 再写。
     if (attempt >= MAX_CAS_RETRY) { arm(ref); return } // 重试耗尽:重新武装 timer,别把改动困在内存里
-    await useDbStore.getState().reload(e.path, ref)
+    const loaded = await useDbStore.getState().reload(e.path, e.path)
     if (gen !== useDbStore.getState().gen) return
+    if (!loaded) { arm(ref); return }
     const fresh = useDbStore.getState().entries[ref]
     if (!fresh || fresh.status !== 'ok' || !fresh.data) return
     // 重放**当前全部** pending(含等待期间新加的),而不是本批快照 —— 重读已经把内存态换成磁盘版了。
@@ -121,6 +128,9 @@ async function persistInner(ref: string, attempt: number, gen = useDbStore.getSt
   }
 }
 
+/** 这个 ref 还有没落盘 / 正在落盘的改动:外部刷新这时别重读 —— 重读会把已经写进磁盘、还没确认的改动再重放一遍(重复一行)。 */
+export const dbBusy = (ref: string): boolean => { const key = identityOf(ref); return saveTimers.has(key) || !!pendingOps.get(key)?.length || inFlight.has(key) }
+
 /** 武装/重排防抖落盘。 */
 function arm(ref: string): void {
   const t = saveTimers.get(ref)
@@ -132,7 +142,7 @@ function arm(ref: string): void {
 function set0(ref: string, fn: (e: DbEntry) => DbEntry): void {
   useDbStore.setState((s) => {
     const cur = s.entries[ref]
-    return cur ? { entries: { ...s.entries, [ref]: fn(cur) } } : s
+    return cur ? { entries: publishFileEntry(s.entries, ref, fn(cur)) } : s
   })
 }
 
@@ -141,39 +151,45 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
   gen: 0,
 
   async load(pagePath, ref) {
-    const cur = get().entries[ref]
-    if (cur && cur.status !== 'missing') return
-    await get().reload(pagePath, ref)
+    const key = fileReferenceKey(pagePath, ref)
+    const cur = get().entries[key]
+    // Loading placeholders have no resolved path yet; the same reference key
+    // already owns that read even for standalone load(path, path) consumers.
+    if (cur?.status === 'loading' || (cur && cur.status !== 'missing' && (pagePath !== ref || cur.path === ref))) return
+    await get().reload(pagePath, ref, true)
   },
 
-  async reload(pagePath, ref) {
+  async reload(pagePath, ref, reuse = false) {
     const gen = get().gen
-    set((s) => ({ entries: { ...s.entries, [ref]: { status: 'loading', path: null, data: null } } }))
+    const key = fileReferenceKey(pagePath, ref)
+    const previous = get().entries[key]
+    if (!previous) set((s) => ({ entries: { ...s.entries, [key]: { status: 'loading', path: null, data: null } } }))
     try {
-      const r = await amadeus.readDatabase(pagePath, ref)
-      if (gen !== get().gen) return
-      const entry: DbEntry =
-        r.status === 'ok'
-          ? { status: 'ok', path: r.path, data: r.data, version: r.version }
-          : r.status === 'corrupt'
-            ? { status: 'corrupt', path: r.path, data: null, message: r.message }
-            : { status: 'missing', path: null, data: null }
-      set((s) => ({ entries: { ...s.entries, [ref]: entry } }))
+      const r = ref === HUMAN_CAL ? await readHumanCal() : await amadeus.readDatabase(pagePath, ref)
+      if (gen !== get().gen) return false
+      const existing = r.status !== 'missing' ? Object.values(get().entries).find(e => e.path === r.path && e.identity) : undefined
+      const entry: DbEntry = reuse && existing ? existing : r.status === 'ok'
+        ? { status: 'ok', path: r.path, data: r.data, version: r.version, identity: existing?.identity ?? newFileIdentity() }
+        : r.status === 'corrupt'
+          ? { status: 'corrupt', path: r.path, data: null, message: r.message, identity: existing?.identity ?? newFileIdentity() }
+          : { status: 'missing', path: null, data: null, identity: previous?.identity }
+      set((s) => ({ entries: publishFileEntry(s.entries, key, entry) }))
+      return r.status === 'ok'
     } catch {
-      if (gen !== get().gen) return
-      set((s) => ({ entries: { ...s.entries, [ref]: { status: 'missing', path: null, data: null } } }))
+      if (gen !== get().gen) return false
+      // A transient read failure must not discard a loaded file or pending ops.
+      if (!previous) set((s) => ({ entries: { ...s.entries, [key]: { status: 'missing', path: null, data: null } } }))
+      return false
     }
   },
 
   async reloadByPath(dbPath) {
     const gen = get().gen
     // entry.path 是 readDatabase 解析出的确切 vault 相对路径;传它作 pagePath 让 basename ref 也能正确重解析。
-    const refs = Object.entries(get().entries)
-      .filter(([, e]) => e.path === dbPath)
-      .map(([ref]) => ref)
+    const refs = [...new Set(Object.values(get().entries).filter(e => e.path === dbPath).map(e => e.identity ?? dbPath))]
     await Promise.all(refs.map(async (ref) => {
-      await get().reload(dbPath, ref)
-      if (gen !== get().gen) return
+      const loaded = await get().reload(dbPath, dbPath)
+      if (gen !== get().gen || !loaded) return
       // 外部改动落地时,本地可能还有没落盘的改动(防抖窗口里)。重读会把它们冲掉 —— 重放回去,
       // 否则「自动化加了一行」会顺手吃掉用户此刻正在敲的那个格子。
       const ops = pendingOps.get(ref)
@@ -185,6 +201,7 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
   },
 
   mutate(ref, fn) {
+    ref = identityOf(ref)
     const e = get().entries[ref]
     if (!e || e.status !== 'ok' || !e.data) return
     // `updated`(修改时间)列的盖章点:所有写口(setCell / 行操作 / 日历改期 / 看板拖动)都汇到这里。
@@ -192,7 +209,7 @@ export const useDbStore = create<DbStoreState>((set, get) => ({
     const op = (d: DbFile): DbFile => stampUpdatedRows(d, fn(d))
     const next = op(e.data)
     pendingOps.set(ref, [...(pendingOps.get(ref) ?? []), op]) // 冲突时按同样的顺序重放到最新磁盘数据上
-    set((s) => ({ entries: { ...s.entries, [ref]: { ...e, data: next } } }))
+    set0(ref, cur => ({ ...cur, data: next }))
     arm(ref)
   },
 
@@ -234,7 +251,13 @@ usePageStore.subscribe((s, p) => {
   if (s.vaultRoot !== p.vaultRoot) useDbStore.setState((d) => ({ entries: {}, gen: d.gen + 1 }))
 })
 useDbStore.subscribe((s, p) => {
-  if (s.gen === p.gen) return
+  if (s.gen === p.gen) {
+    // Explicit cache replacement/drop retires queues belonging to removed identities.
+    for (const ref of pendingOps.keys()) if (!s.entries[ref]) {
+      clearTimeout(saveTimers.get(ref)); saveTimers.delete(ref); pendingOps.delete(ref)
+    }
+    return
+  }
   for (const timer of saveTimers.values()) clearTimeout(timer)
   saveTimers.clear()
   pendingOps.clear()
@@ -259,7 +282,9 @@ onNotePathGone((from, kind, to) => {
     const entries = { ...s.entries }
     for (const ref of refs) {
       const e = entries[ref]
-      entries[ref] = to ? { ...e, path: kind === 'file' ? to : to + e.path!.slice(from.length) } : { status: 'missing', path: null, data: null }
+      if (!dead(e.path)) continue
+      const updated: DbEntry = to ? { ...e, path: kind === 'file' ? to : to + e.path!.slice(from.length) } : { status: 'missing', path: null, data: null, identity: e.identity }
+      Object.assign(entries, publishFileEntry(entries, ref, updated))
     }
     return { entries }
   })

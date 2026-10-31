@@ -7,7 +7,7 @@
  * check:parity 当时也扫不到(bootstrap.ts 不在门控台账里)、boot 冒烟更不会点更新。
  *
  * 断言:
- *   A. 网关报了更高版本 → checkForUpdates 出 available,并自动弹出「更新」页(.changelog-view)
+ *   A. 网关报了更高版本 → checkForUpdates 出 available,并自动弹出 What's new 弹窗(.wn-modal;2.13.5 前是「更新」标签页 .changelog-view)
  *   B. 「下载更新」落到网关的安卓下载端点(大陆可达;不是 github.com)
  *   C. 负对照:网关报的版本不比装机版本新 → not-available,且不弹页
  *
@@ -25,6 +25,9 @@ const { chromium } = (() => {
 let URL = '' // main() 里由 startPreview 给:系统分配的空闲端口,E2E_PORT 可指定(见 lib/preview.cjs)
 const NEWER = '99.0.0'
 const OLDER = '0.0.1'
+const INSTALLED = require('../../desktop/package.json').version
+/** 自动弹出的 What's new 两栏弹窗(components/WhatsNewDialog.tsx,MobileRoot 挂了 WhatsNewHost)。 */
+const WHATS_NEW = '.wn-modal[role="dialog"]'
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -53,6 +56,8 @@ function findChromium() {
 }
 
 async function main() {
+  const { revisionFixture } = await import('./lib/update-fixture.mjs')
+  const revision = revisionFixture(INSTALLED)
   const root = path.resolve(__dirname, '..')
   if (!fs.existsSync(path.join(root, 'dist/index.html'))) {
     console.error('✗ 没有 dist/,先跑 npm run build')
@@ -72,15 +77,17 @@ async function main() {
     browser = await chromium.launch({ executablePath: findChromium(), headless: true, args: ['--no-sandbox'] })
 
     /** 开一页:网关报 `version`,GitHub 一律断网(只验网关这条路,顺便证明 GitHub 不可达也不影响)。 */
-    const open = async (version) => {
+    const open = async (version, { beta = false, github = null } = {}) => {
       const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true })
       await ctx.addInitScript(() => { try { localStorage.setItem('forsion_tangu_onboarding_done', '1') } catch { /* ignore */ } })
       await ctx.addInitScript(() => { try { localStorage.setItem('forsion_token', 'e2e-update') } catch { /* ignore */ } })
+      await ctx.addInitScript(beta => { localStorage.setItem('forsion_mobile_config', JSON.stringify({ updater: { beta } })) }, beta)
       // 自动弹页每个版本只弹一次(localStorage 记号),每个 ctx 都是新 profile,不会互相干扰。
       const ctxPage = await ctx.newPage()
       await ctxPage.route('**/auth/me', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: '{"username":"e2e"}' }))
       await ctxPage.route('**/api/**', (r) => r.abort())
       await ctxPage.route('**/api.github.com/**', (r) => r.abort())
+      if (github) await ctxPage.route('**/api.github.com/**', r => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(github) }))
       // ⚠️ 必须**后**注册:playwright 后注册的路由先匹配,写在 abort 前面会被整片 abort 吃掉。
       await ctxPage.route('**/website/config', (r) => r.fulfill({
         status: 200, contentType: 'application/json',
@@ -99,18 +106,48 @@ async function main() {
     // ── A/B:网关报了更高版本 ──
     {
       const { ctx, page } = await open(NEWER)
+      // 先数弹窗、再手动查:手动 checkForUpdates 也会广播给 onUpdaterStatus,顺序反过来的话
+      // 「启动那次没弹、是手动这次弹的」也会绿。CI 的 runner 冷启动慢,open() 那 5 秒之外再给启动检查最多 10 秒。
+      await page.locator(WHATS_NEW).first().waitFor({ state: 'attached', timeout: 10_000 }).catch(() => {})
+      const opened = await page.locator(WHATS_NEW).count()
+      if (opened > 0) pass('启动自动弹出 What\'s new 弹窗')
+      else fail('启动自动弹出 What\'s new 弹窗', `没找到 ${WHATS_NEW}`)
+
       const st = await page.evaluate(() => window.tangu.checkForUpdates())
       if (st && st.phase === 'available' && st.version === NEWER) pass('网关报新版本 → available', `${st.version}`)
       else fail('网关报新版本 → available', JSON.stringify(st))
-
-      const opened = await page.locator('.changelog-view').count()
-      if (opened > 0) pass('启动自动弹出「更新」页')
-      else fail('启动自动弹出「更新」页', '没找到 .changelog-view')
 
       await page.evaluate(() => window.tangu.downloadUpdate())
       const urls = await page.evaluate(() => window.__opened || [])
       if (urls.some((u) => /\/website\/download\/android$/.test(u))) pass('「下载更新」落到网关安卓下载端点', urls.join(' '))
       else fail('「下载更新」落到网关安卓下载端点', urls.join(' ') || '(没开任何链接)')
+      await ctx.close()
+    }
+
+    // Same-core revision / stable channel isolation / opted-in previews, through the actual mobile shim and UI.
+    for (const scenario of [
+      { name: '同版本修订', website: revision.version, beta: revision.beta, phase: 'available', expected: revision.version },
+      { name: '稳定通道隔离预发布', website: '99.0.0-beta.1', phase: 'not-available' },
+      { name: '测试通道仅选有 APK 的最高预发布', website: INSTALLED, beta: true, phase: 'available', expected: '99.0.0-beta.10+build.2', github: [
+        { tag_name: 'v100.0.0-beta.1', assets: [] },
+        ...['99.0.0-beta.2', '99.0.0-beta.10+build.2'].map(version => ({ tag_name: `v${version}`, prerelease: true, assets: [{ name: `Forsion-Tangu-${version}-android.apk`, browser_download_url: `https://example.test/${version}.apk` }] })),
+      ] },
+    ]) {
+      const { ctx, page } = await open(scenario.website, scenario)
+      const status = await page.evaluate(() => window.tangu.checkForUpdates())
+      if (status.phase === scenario.phase && (!scenario.expected || status.version === scenario.expected)) pass(scenario.name, JSON.stringify(status))
+      else fail(scenario.name, JSON.stringify(status))
+      if (scenario.github) {
+        await page.evaluate(() => window.tangu.downloadUpdate())
+        const urls = await page.evaluate(() => window.__opened || [])
+        if (urls.includes(`https://example.test/${scenario.expected}.apk`)) pass('预发布下载钉到同版 APK')
+        else fail('预发布下载钉到同版 APK', JSON.stringify(urls))
+      }
+      if (scenario.name === '同版本修订') {
+        const output = path.join(root, 'outputs/update-version')
+        fs.mkdirSync(output, { recursive: true })
+        await page.screenshot({ path: path.join(output, 'revision.png') })
+      }
       await ctx.close()
     }
 
@@ -136,9 +173,9 @@ async function main() {
       const st = await page.evaluate(() => window.tangu.checkForUpdates())
       if (st && st.phase === 'not-available') pass('负对照:旧版本 → not-available')
       else fail('负对照:旧版本 → not-available', JSON.stringify(st))
-      const opened = await page.locator('.changelog-view').count()
-      if (opened === 0) pass('负对照:不弹「更新」页')
-      else fail('负对照:不弹「更新」页', '弹了')
+      const opened = await page.locator(WHATS_NEW).count()
+      if (opened === 0) pass('负对照:不弹 What\'s new 弹窗')
+      else fail('负对照:不弹 What\'s new 弹窗', '弹了')
       await ctx.close()
     }
   } catch (e) {

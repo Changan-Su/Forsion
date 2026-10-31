@@ -15,6 +15,7 @@ name: probe-app-refs-windows
 on:
   workflow_dispatch:
   push:
+    branches: [main]
     paths: &app_ref_paths
       - '.github/workflows/probe-app-refs-windows.yml'
       - 'desktop/electron/appRefsWin.ts'
@@ -22,8 +23,6 @@ on:
       - 'desktop/electron/appRefHotkey.ts'
       - 'desktop/electron/appRefHotkey.test.ts'
       - 'desktop/scripts/app-refs-windows.probe.cjs'
-  pull_request:
-    paths: *app_ref_paths
 permissions:
   contents: read
 jobs:

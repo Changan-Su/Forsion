@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   claimNativeChrome, dispatchNativeChromeAction, dispatchNativeChromeSpace, installNativeChromeHost, nativeChromeDrawsSpaces,
-  nativeChromeInstalled, nativeChromeState, setNativeChromeShell, type NativeChromeState,
+  nativeChromeInstalled, nativeChromeState, nativeRailCells, setNativeChromeShell, type NativeChromeState,
 } from './nativeChrome'
 
 const labels = { left: 'Left panel', right: 'Right panel', tabs: 'Tabs', more: 'More' }
@@ -87,5 +87,23 @@ describe('native chrome seam', () => {
     const b = installNativeChromeHost({ render: () => {} })
     a(); expect(nativeChromeInstalled()).toBe(true)
     b(); expect(nativeChromeInstalled()).toBe(false)
+  })
+})
+
+describe('rail cells (wide layout, Pad A2) — same rule as Android ChromeState.railCells', () => {
+  // = NativeChromeBarLayoutTest.shortRailHoldsThePinnedOnesFirstAndAnAllCell: 9 Spaces, s0 and s6 pinned.
+  const spaces = Array.from({ length: 9 }, (_, i) => ({ id: `s${i}`, pinned: i === 0 || i === 6 }))
+  const ids = (xs: Array<{ id: string }>): string[] => xs.map((x) => x.id)
+  it('every Space while they fit, nothing behind "all"', () => {
+    expect(nativeRailCells(spaces, 9)).toEqual({ cells: spaces, more: [] })
+  })
+  it('short rail: the pinned ones first, then the rest in list order, one place for "all"; on screen in list order', () => {
+    const { cells, more } = nativeRailCells(spaces, 4)
+    expect(ids(cells)).toEqual(['s0', 's1', 's6'])
+    expect(ids(more)).toEqual(['s2', 's3', 's4', 's5', 's7', 's8'])
+  })
+  it('room for one place or none: "all" alone', () => {
+    expect(ids(nativeRailCells(spaces, 1).cells)).toEqual([])
+    expect(ids(nativeRailCells(spaces, 0).more)).toHaveLength(9)
   })
 })

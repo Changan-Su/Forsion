@@ -2,8 +2,11 @@
  *  避免各自散落 `type==='calendarDate'` 的隐式识别。agent:// 只读源不在此(调用方另并 useAgentCalDbs)。 */
 import { useEffect, useMemo } from 'react'
 import { usePageStore } from './pageStore'
+import { dbBusy, useDbStore } from './dbStore'
+import { HUMAN_CAL, humanCalLegacy, readHumanCal } from './humanCalendarIo'
 import { useCalendarConfig, memberOf, isMigrated } from './calendarConfigStore'
 import {
+  getAggDb,
   useAllDatabases,
   useDatabasesReady,
   firstDateCol,
@@ -31,7 +34,53 @@ export function useCalendarMembers(): CalMemberDb[] {
     migrate(vault, migrationSeeds(all))
   }, [migrated, ready, all, vault, migrate])
 
-  return useMemo(() => resolveCalendarMembers(all, vault, byVault), [all, byVault, vault])
+  const human = useHumanCalDb()
+  return useMemo(() => withHumanCal(human, resolveCalendarMembers(all, vault, byVault), vault), [human, all, byVault, vault])
+}
+
+/** 回到窗口时调:别的设备同步下来 / 引擎镜像合进来的改动先悄悄比一下版本,变了才重读(重读那一下条目是「加载中」,每次都重读整本日历会闪);
+ *  有没落盘的改动时不重读(会把写进去还没确认的改动再重放一遍,Codex 评审);上次没读到(引擎还没起来)就重试。 */
+export async function refreshHumanCal(): Promise<void> {
+  const store = useDbStore.getState
+  const cur = store().entries[HUMAN_CAL]
+  if (cur?.status === 'missing') { await store().load(HUMAN_CAL, HUMAN_CAL); return }
+  if (cur?.status !== 'ok' || dbBusy(HUMAN_CAL)) return
+  const fresh = await readHumanCal()
+  if (fresh.status === 'ok' && !dbBusy(HUMAN_CAL) && fresh.version !== store().entries[HUMAN_CAL]?.version) await store().reloadByPath(HUMAN_CAL)
+}
+
+/** 默认日历 human/CALENDAR.db 的 AggDb;引擎不在本机 / 还没读到 = null。库一换(dbStore 整片作废)就重读。 */
+export function useHumanCalDb(): AggDb | null {
+  const entry = useDbStore((s) => s.entries[HUMAN_CAL])
+  const gen = useDbStore((s) => s.gen)
+  useEffect(() => watchHumanCal(), [gen])
+  return useMemo(() => (entry?.status === 'ok' ? getAggDb(HUMAN_CAL) : null), [entry])
+}
+
+/** Non-React consumers share the same bounded load/focus lifecycle as native views. */
+export function watchHumanCal(): () => void {
+  const store = useDbStore.getState
+  let generation = store().gen
+  const load = (): void => { void store().load(HUMAN_CAL, HUMAN_CAL) }
+  load()
+  const onFocus = (): void => { void refreshHumanCal() }
+  window.addEventListener('focus', onFocus)
+  const poll=setInterval(()=>{if(document.visibilityState!=='hidden')void refreshHumanCal()},5000)
+  const off = useDbStore.subscribe((s) => { if (s.gen !== generation) { generation = s.gen; load() } })
+  const retries = [3_000, 10_000, 30_000].map((ms) => setTimeout(() => { if (store().entries[HUMAN_CAL]?.status === 'missing') load() }, ms))
+  return () => { off(); window.removeEventListener('focus', onFocus); retries.forEach(clearTimeout); clearInterval(poll) }
+}
+
+/** 默认日历排第一(没设过默认库时新建事件就落在这里);旧位置镜像的那份(默认笔记库根上的 Calendar.db)不再重复列出。
+ *  Native views and calendar-capable plugins use this same projection. */
+export function withHumanCal(human: AggDb | null, members: CalMemberDb[], vault: string): CalMemberDb[] {
+  if (!human) return members
+  const dateCol = firstDateCol(human)?.id
+  if (!dateCol) return members
+  const legacy = humanCalLegacy()
+  const abs = (p: string): string => `${vault.replace(/[\\/]+$/, '')}/${p}`.replace(/\\/g, '/')
+  const rest = members.filter((m) => (!legacy || abs(m.db.path) !== legacy.replace(/\\/g, '/')))
+  return [{ db: human, dateCol, checkboxCol: firstCheckboxCol(human)?.id }, ...rest]
 }
 
 /** 一次性迁移的种子:有日期列的可写库(首个日期列 + 首个勾选列)= 迁移前的隐式成员,迁移后解析结果不变。

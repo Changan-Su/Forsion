@@ -4,6 +4,7 @@
  * window.tangu 是桌面形态的桩:名册、`unitRelay`(给一个本机回环地址,请求由台架脚本的路由桩应答)。不连主进程。
  * ?dark / ?lang=en / ?zoom=1.1 / ?signedout(没登录:没有中转口)/ ?solo(账号下没有别的电脑)/ ?long(多一台名字很长的)。
  * 截图与断言:scripts/run-location-pill.check.cjs(node scripts/e2e-editor.cjs --check=run-location-pill)。
+ * ?sidebar:工作区的真 DeviceSessionSections,离线折叠回归(check:device-sidebar)。
  * 整条链路(主进程中转口 × 真 Electron)见 scripts/run-location.e2e.cjs。
  */
 import { createRoot } from 'react-dom/client'
@@ -41,6 +42,7 @@ void (async () => {
   const [{ useApp }, T, { RunLocationPicker }, { ProjectSelector }, { ExtraFolders }, { useRemoteNewChatWorkspaces }] = await Promise.all([
     import('./stores/appStore'), import('./services/engine/targets'), import('./components/RunLocationPicker'),
     import('./components/ProjectSelector'), import('./components/ExtraFolders'), import('./stores/newChatWorkspaces'),
+    import('./tangu/store/standalone'), // 不走 installEngine:自己装 Tangu 的 store 半身(界面热更新 3c),同样排在打桩之后
   ])
   useApp.getState().setTr(translate) // main.tsx 做的那一步:store 里的文案(默认工作区的名字)靠它
   useApp.setState({
@@ -52,6 +54,34 @@ void (async () => {
   })
   await T.refreshDesktopRelay()
   ;(window as unknown as Record<string, unknown>).__runloc = { useApp, T }
+
+  if (params.has('sidebar')) {
+    await import('./styles/sidebar2.css')
+    const [{ DeviceSessionSections }, { useDeviceSessions }, { noteDeviceProbe }] = await Promise.all([
+      import('./views/chat2/DeviceSessionSections'), import('./stores/deviceSessionsStore'), import('./services/deviceMarks'),
+    ])
+    const offline = Array.from({ length: 14 }, (_, i) => ({
+      id: `7f0e8a52-0000-4000-8000-${String(i + 100).padStart(12, '0')}`,
+      name: i === 1 ? 'DESKTOP-EEUIJMF' : 'MacBook-Pro.local', platform: i === 1 ? 'win32' : 'darwin', kind: 'desktop' as const, online: false,
+    }))
+    useDeviceSessions.setState({ units: [units[0], ...offline] as never, byUnit: {}, refresh: async () => {} })
+    noteDeviceProbe(MINI, { ok: true })
+    ;(window as unknown as Record<string, unknown>).__deviceSidebar = {
+      setOnline: (id: string, online: boolean) => useDeviceSessions.setState((s) => ({ units: s.units!.map((u) => u.id === id ? { ...u, online } : u) })),
+      setAllOnline: () => useDeviceSessions.setState((s) => ({ units: s.units!.map((u) => ({ ...u, online: true })) })),
+      offlineId: offline[0].id,
+    }
+    createRoot(document.getElementById('root')!).render(
+      <LocaleProvider>
+        <div className="t2sw" style={{ width: 300, height: '100vh', background: 'var(--sidebar-bg)' }}>
+          <div className="t2s-side"><div className="t2s-scroll">
+            <DeviceSessionSections activeId={null} runningIds={new Set()} unreadIds={new Set()} />
+          </div></div>
+        </div>
+      </LocaleProvider>,
+    )
+    return
+  }
 
   const Bar = (): React.ReactElement => {
     const s = useApp()

@@ -17,7 +17,11 @@ const calls = {
   listOf: null as null | (() => MuseTriggerInfo[]),
   /** 给交错用:挂住**第一笔** save(用完即清),模拟 ensure 正发到一半。 */
   hold: null as null | Promise<void>,
+  /** 插件触发源的下发顺序:+ 登记、- 注销、! 事件。 */
+  triggers: [] as string[],
+  failDrop: false,
 }
+vi.mock('../api', () => ({ amadeus: { listPlugins: async () => [] } }))
 vi.mock('../../services/backendService', () => ({
   saveMuseTrigger: vi.fn(async (_cfg: unknown, input: MuseTriggerUpsert) => {
     if (calls.failIds.has(String(input.id))) throw new Error('HTTP 400')
@@ -26,6 +30,19 @@ vi.mock('../../services/backendService', () => ({
     return { ...input }
   }),
   getMuseTriggers: vi.fn(async () => calls.listOf?.() ?? calls.list),
+  registerAutomationTrigger: vi.fn(async (_cfg: unknown, pluginId: string, trigger: { id: string }) => {
+    calls.triggers.push(`+${pluginId}:${trigger.id}`)
+    return { ok: true }
+  }),
+  unregisterAutomationTrigger: vi.fn(async (_cfg: unknown, pluginId: string, key: string) => {
+    if (calls.failDrop) throw new Error('HTTP 500')
+    calls.triggers.push(`-${pluginId}:${key}`)
+    return { ok: true }
+  }),
+  emitAutomationTrigger: vi.fn(async (_cfg: unknown, pluginId: string, key: string, payload: unknown) => {
+    calls.triggers.push(`!${pluginId}:${key}:${JSON.stringify(payload)}`)
+    return { ok: true }
+  }),
 }))
 
 const { usePluginStore, getPluginDisableState } = await import('./pluginStore')
@@ -54,6 +71,8 @@ const rule = (over: Partial<Rule> = {}): Rule => ({
 })
 
 beforeEach(() => {
+  calls.triggers = []
+  calls.failDrop = false
   calls.save = []
   calls.list = []
   calls.failIds = new Set()
@@ -384,6 +403,46 @@ describe('禁用规则的墓碑 / 就绪边沿重放 / 与 ensure 串行', () =>
     expect(getPluginDisableState('pc-erp')).toBeNull() // 关成了 = 没有欠账
   })
 
+  describe('跨重启的欠账(amadeus.plugins.rulesOwed)', () => {
+    const KEY = 'amadeus.plugins.rulesOwed'
+    let ls: Map<string, string>
+    beforeEach(() => {
+      ls = new Map()
+      vi.stubGlobal('localStorage', { getItem: (k: string) => ls.get(k) ?? null, setItem: (k: string, v: string) => { ls.set(k, v) }, removeItem: (k: string) => { ls.delete(k) } })
+      vi.stubGlobal('window', {})
+    })
+    afterEach(() => { vi.unstubAllGlobals() })
+
+    it('后端不在 → 落盘;关成了 → 销账', async () => {
+      const { st, fireReady } = readyProbe()
+      calls.list = [tr('plugin:pc-erp:a', true)]
+      ctxOf('pc-erp')
+      usePluginStore.getState().disable('pc-erp')
+      await vi.waitFor(() => expect(getPluginDisableState('pc-erp')?.pending).toBe(false))
+      expect(JSON.parse(ls.get(KEY)!)).toEqual(['pc-erp'])
+      st.backendOk = true
+      fireReady()
+      await vi.waitFor(() => expect(getPluginDisableState('pc-erp')).toBeNull())
+      expect(JSON.parse(ls.get(KEY)!)).toEqual([])
+    })
+
+    it('上次运行没关成、插件已经不在了 → 这次 loadExternal 后补关(负对照:去掉重放这条红)', async () => {
+      calls.list = [tr('plugin:pc-gone:a', true), tr('plugin:pc-other:a', true)]
+      ls.set(KEY, JSON.stringify(['pc-gone']))
+      usePluginStore.setState({ initialized: false, plugins: [], activeIds: [], disabledIds: [], disposers: {} })
+      await usePluginStore.getState().loadExternal()
+      await vi.waitFor(() => expect(calls.save).toHaveLength(1))
+      expect(calls.save[0]).toMatchObject({ id: 'plugin:pc-gone:a', enabled: false })
+      await vi.waitFor(() => expect(JSON.parse(ls.get(KEY)!)).toEqual([]))
+    })
+
+    it('记着欠账但插件又跑起来了 → start 销账', () => {
+      ls.set(KEY, JSON.stringify(['pc-erp']))
+      ctxOf('pc-erp')
+      expect(JSON.parse(ls.get(KEY)!)).toEqual([])
+    })
+  })
+
   it('墓碑挂着时用户又把插件启用了 → 墓碑作废,后续边沿不再去关它的规则', async () => {
     const { st, fireReady } = readyProbe()
     calls.list = [tr('plugin:pc-erp:a', true)]
@@ -489,6 +548,32 @@ describe('ctx.databases / ctx.noteTasks 的能力闸(default-deny)', () => {
 })
 
 describe('ctx.notify 的 action / key(10-17)', () => {
+  it('通知展示名跟随发送时语言，缺英文时回退；插件身份和去重键不变', async () => {
+    const { useNotifications } = await import('../../stores/notificationStore')
+    const { currentLocale, setLocaleGlobal } = await import('../../i18n')
+    const previousLocale = currentLocale()
+    const ctx = ctxOf('calendar-label')
+    usePluginStore.setState((s) => ({ plugins: s.plugins.map((p) => ({ ...p, name: '日历与待办', nameEn: 'Calendar and tasks' })) }))
+    try {
+      for (const [locale, expected] of [['en', 'Calendar and tasks'], ['zh', '日历与待办']] as const) {
+        setLocaleGlobal(locale)
+        useNotifications.setState({ items: [], queue: [] })
+        ctx.notify?.('Added', { key: 'task-added' })
+        expect(useNotifications.getState().items.at(-1)).toMatchObject({
+          sourceLabel: expected, event: 'plugin:calendar-label', dedupeKey: 'plugin:calendar-label:task-added',
+        })
+      }
+      setLocaleGlobal('en')
+      usePluginStore.setState((s) => ({ plugins: s.plugins.map((p) => ({ ...p, nameEn: undefined })) }))
+      useNotifications.setState({ items: [], queue: [] })
+      ctx.notify?.('Added')
+      expect(useNotifications.getState().items.at(-1)?.sourceLabel).toBe('日历与待办')
+    } finally {
+      setLocaleGlobal(previousLocale)
+      useNotifications.setState({ items: [], queue: [] })
+    }
+  })
+
   // 负对照(10-17 实跑红):动作不看 ctxAlive → 「停用后」红;key 不加插件前缀 → dedupeKey 那条红;
   // 带 key 时不显式给 action / store 合并仍用 ?? 沿用 → 「旧按钮要清掉」红。
   it('带动作的卡停 8 秒、key 按插件加前缀;动作在插件停用后不调;坏动作不挂按钮', async () => {
@@ -513,5 +598,79 @@ describe('ctx.notify 的 action / key(10-17)', () => {
     usePluginStore.getState().disable('ntf')
     item.action!.run()
     expect(run).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('ctx.automation.registerTrigger / emit', () => {
+  const trigger = { id: 'ping', name: { zh: '收到', en: 'Ping' } }
+
+  it('登记后事件跟在登记后面发;停用插件按 key 注销,之后 emit 不再发', async () => {
+    setTanguProbe(probe(async () => CFG))
+    const ctx = ctxOf('demo-trig')
+    const auto = ctx.automation!
+    const res = auto.registerTrigger(trigger)
+    auto.emit('ping', { room: 'a' })
+    expect(await res).toEqual({ ok: true })
+    await vi.waitFor(() => expect(calls.triggers).toEqual(['+demo-trig:ping', '!demo-trig:ping:{"room":"a"}']))
+    usePluginStore.getState().disable('demo-trig')
+    await vi.waitFor(() => expect(calls.triggers.at(-1)).toBe('-demo-trig:ping'))
+    const before = calls.triggers.length
+    auto.emit('ping')
+    expect(await auto.registerTrigger(trigger)).toEqual({ ok: false, error: 'plugin disabled' })
+    await new Promise((r) => setTimeout(r, 5))
+    expect(calls.triggers).toHaveLength(before)
+  })
+
+  it('后端重启(就绪边沿)补登还活着的;停用过的不补', async () => {
+    let fire = (): void => {}
+    setTanguProbe(probe(async () => CFG, (cb) => { fire = cb; return () => {} }))
+    const ctx = ctxOf('demo-trig2')
+    await ctx.automation!.registerTrigger(trigger)
+    calls.triggers = []
+    fire()
+    await vi.waitFor(() => expect(calls.triggers).toEqual(['+demo-trig2:ping']))
+    usePluginStore.getState().disable('demo-trig2')
+    await vi.waitFor(() => expect(calls.triggers.at(-1)).toBe('-demo-trig2:ping'))
+    calls.triggers = []
+    fire()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(calls.triggers).toEqual([])
+  })
+
+  it('注销没成:下次就绪边沿补;再登记回来就不欠了', async () => {
+    let fire = (): void => {}
+    setTanguProbe(probe(async () => CFG, (cb) => { fire = cb; return () => {} }))
+    const ctx = ctxOf('demo-trig4')
+    await ctx.automation!.registerTrigger(trigger)
+    calls.failDrop = true
+    usePluginStore.getState().disable('demo-trig4')
+    await new Promise((r) => setTimeout(r, 5))
+    calls.failDrop = false
+    calls.triggers = []
+    fire()
+    await vi.waitFor(() => expect(calls.triggers).toEqual(['-demo-trig4:ping']))
+    calls.triggers = []
+    fire()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(calls.triggers).toEqual([])
+
+    const again = ctxOf('demo-trig5')
+    await again.automation!.registerTrigger(trigger)
+    calls.failDrop = true
+    usePluginStore.getState().disable('demo-trig5')
+    await new Promise((r) => setTimeout(r, 5))
+    calls.failDrop = false
+    const back = ctxOf('demo-trig5')
+    await back.automation!.registerTrigger(trigger)
+    calls.triggers = []
+    fire()
+    await new Promise((r) => setTimeout(r, 5))
+    expect(calls.triggers).toEqual(['+demo-trig5:ping'])
+  })
+
+  it('后端没起来 → 返回失败不抛,不阻塞', async () => {
+    setTanguProbe(probe(async () => null))
+    expect(await ctxOf('demo-trig3').automation!.registerTrigger(trigger)).toEqual({ ok: false, error: 'engine not ready' })
+    expect(calls.triggers).toEqual([])
   })
 })

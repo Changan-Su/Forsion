@@ -4,6 +4,7 @@
 // 用法:node scripts/e2e-editor.cjs --check=unified-page
 const fs = require('fs'), os = require('os'), path = require('path')
 const { chromium } = require('playwright-core')
+const platformKey = require('./lib/platform-keys.cjs')
 
 function findChromium() {
   if (process.env.CHROMIUM_EXE) return process.env.CHROMIUM_EXE
@@ -360,7 +361,7 @@ async function main() {
       const RAW0 = '---\nstatus: [未闭合\nnote: 旧A\n---\n# 标题\n\n正文。\n'
       const pb = await openProps(RAW0)
       await pb.click('.amx-props-raw')
-      await pb.keyboard.press('Meta+ArrowDown')
+      await pb.keyboard.press(platformKey('Meta+ArrowDown'))
       await pb.keyboard.type('\nextra: 修复中的一大段')
       await pb.evaluate(() => window.__upage.fire('Unified.md', '---\nstatus: [未闭合\nnote: 外部B\n---\n# 标题\n\n正文。\n'))
       await pb.waitForTimeout(1200)
@@ -369,7 +370,7 @@ async function main() {
       await pb.keyboard.press('Escape')
       await pb.waitForTimeout(100)
       const esc = await raw()
-      for (let i = 0; i < 40 && (await raw()).v !== 'status: [未闭合\nnote: 旧A'; i++) { await pb.keyboard.press('Meta+z'); await pb.waitForTimeout(40) } // 撤销按输入分组,逐次按到回原样
+      for (let i = 0; i < 40 && (await raw()).v !== 'status: [未闭合\nnote: 旧A'; i++) { await pb.keyboard.press(platformKey('Meta+z')); await pb.waitForTimeout(40) } // 撤销按输入分组,逐次按到回原样
       const undone = await raw()
       const w1 = await nWrites(pb)
       await pb.evaluate(() => document.activeElement.blur())
@@ -518,7 +519,7 @@ async function main() {
         return pg.evaluate(() => { const a = document.activeElement; return `${a?.closest('.amx-prop-row')?.dataset.key}|${a?.tagName}.${a?.className}|${a?.type}` })
       }
       const fN = await addTyped('n', 'number')
-      await pg.keyboard.press('Meta+A')
+      await pg.keyboard.press(platformKey('Meta+A'))
       await pg.keyboard.type('5')
       await pg.keyboard.press('Enter')
       const fD = await addTyped('done', 'checkbox')
@@ -872,7 +873,7 @@ async function main() {
       return { out, doc, lines: pt.lines }
     }
     const a = await run(`${longPara}\n\n第二段。\n`, { block: 0, line: 'last' }, (n) => Array(n).fill('ArrowUp'))
-    const b = await run('第一段文字。\n\n第二段。\n', { block: 0, line: 'first' }, ['Meta+ArrowLeft', 'ArrowLeft'])
+    const b = await run('第一段文字。\n\n第二段。\n', { block: 0, line: 'first' }, [platformKey('Meta+ArrowLeft'), 'ArrowLeft'])
     const c = await run('- 项一\n- 项二\n', { block: 0, line: 'first' }, ['ArrowUp'])
     const d = await run('第一段文字。\n\n第二段。\n', { block: 1, line: 'first' }, ['ArrowUp'])
     const aLast = a.out[a.out.length - 1]
@@ -1067,7 +1068,7 @@ async function main() {
 
     // e6 Mod+Backspace 一步归零
     await caret('乙段。', 0)
-    await pg.keyboard.press(process.platform === 'darwin' ? 'Meta+Backspace' : 'Control+Backspace')
+    await pg.keyboard.press(process.platform === 'darwin' ? platformKey('Meta+Backspace') : 'Control+Backspace')
     await pg.waitForTimeout(200)
     const e6 = await ps()
     record('K13e6 Mod+Backspace → 一步归零(段落仍在)', e6[1].t === '乙段。' && !e6[1].di, JSON.stringify(e6[1]))
@@ -1176,7 +1177,7 @@ async function main() {
     await pg.keyboard.press('Delete')
     await pg.waitForTimeout(250)
     const c14a = await pg.evaluate((s) => document.querySelector(s).textContent?.includes('example.com'), PM)
-    await pg.keyboard.press('Meta+z')
+    await pg.keyboard.press(platformKey('Meta+z'))
     await pg.waitForTimeout(250)
     const c14b = await pg.evaluate((s) => {
       const el = document.querySelector(s)
@@ -1270,10 +1271,10 @@ async function main() {
       v.dispatch(v.state.tr.setSelection(TS.create(v.state.doc, at, at + 2)))
     })
     await selectWord()
-    await pg.keyboard.press('Meta+Shift+h')
+    await pg.keyboard.press(platformKey('Meta+Shift+h'))
     await pg.waitForTimeout(1400)
     const md1 = await pg.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
-    await pg.keyboard.press('Meta+Shift+h')
+    await pg.keyboard.press(platformKey('Meta+Shift+h'))
     await pg.waitForTimeout(1400)
     const md2 = await pg.evaluate(() => window.__upage.writes.at(-1)?.text ?? '')
     record('P14e Obsidian 行内语法实况:==/%% 离开渲染、光标进入露源码;kbd/sub/sup 可编辑;代码与 === 不误伤;⌘⇧H 切换',
@@ -1779,7 +1780,7 @@ async function main() {
     await pg.waitForTimeout(1300)
     const c3 = { ...(await st()), md: await lastMd() }
     await pg.evaluate(() => window.__upage.probe.view().focus())
-    await pg.keyboard.press('Meta+z')
+    await pg.keyboard.press(platformKey('Meta+z'))
     await pg.waitForTimeout(1300)
     const c4 = await lastMd()
     // e:嵌入卡里的命中:查得到、不可替换
@@ -1805,7 +1806,7 @@ async function main() {
     await pg.waitForTimeout(1300)
     const f2 = { ta: await pg.evaluate(() => document.querySelector('.amx-source').value), md: await lastMd(), ...(await st()) }
     await pg.evaluate(() => document.querySelector('.amx-source').focus())
-    await pg.keyboard.press('Meta+z')
+    await pg.keyboard.press(platformKey('Meta+z'))
     await pg.waitForTimeout(1300)
     const f3 = { ta: await pg.evaluate(() => document.querySelector('.amx-source').value), md: await lastMd() }
     if (process.argv.includes('--shot')) {
@@ -2003,7 +2004,7 @@ async function main() {
     })
     const tiers = []
     for (let i = 0; i < 3; i++) {
-      await pg.keyboard.press('Meta+a')
+      await pg.keyboard.press(platformKey('Meta+a'))
       await pg.waitForTimeout(150)
       tiers.push(await selText())
     }
@@ -2031,7 +2032,7 @@ async function main() {
     }, PM)
     await pg.mouse.click(c.x, c.y)
     await pg.waitForTimeout(200) // 同上:不等这一下,第一次按键恒落空(实测两次)
-    await pg.keyboard.press('Meta+Alt+ArrowUp')
+    await pg.keyboard.press(platformKey('Meta+Alt+ArrowUp'))
     await pg.waitForTimeout(250)
     const a23 = await pg.evaluate((s) => {
       const v = window.__upage.probe.view()
@@ -2041,7 +2042,7 @@ async function main() {
         caretIn: $f.parent.textContent,
       }
     }, PM)
-    await pg.keyboard.press('Meta+Shift+ArrowDown') // 另一套绑定,搬回去
+    await pg.keyboard.press(platformKey('Meta+Shift+ArrowDown')) // 另一套绑定,搬回去
     await pg.waitForTimeout(250)
     const b23 = await pg.evaluate((s) =>
       [...document.querySelector(s).querySelectorAll(':scope > p')].map((x) => x.textContent).join('|'), PM)
@@ -2058,7 +2059,7 @@ async function main() {
     }, PM)
     await pg2.mouse.click(li.x, li.y)
     await pg2.waitForTimeout(200)
-    await pg2.keyboard.press('Meta+Alt+ArrowUp')
+    await pg2.keyboard.press(platformKey('Meta+Alt+ArrowUp'))
     await pg2.waitForTimeout(250)
     const c23 = await pg2.evaluate((s) => ({
       lis: [...document.querySelector(s).querySelectorAll('li')].map((x) => x.textContent).join('|'),
@@ -2270,10 +2271,10 @@ async function main() {
       v.focus()
     })
     await selectAll()
-    await pg.keyboard.press('Meta+u')
+    await pg.keyboard.press(platformKey('Meta+u'))
     await pg.waitForTimeout(200)
     await selectAll()
-    await pg.keyboard.press('Meta+Shift+s')
+    await pg.keyboard.press(platformKey('Meta+Shift+s'))
     await pg.waitForTimeout(200)
     const a27 = await pg.evaluate((s) => {
       const el = document.querySelector(s)
@@ -2511,7 +2512,7 @@ async function main() {
       const pg = await openSeed('- 甲\n    - 乙\n        - 丙\n')
       await caret(pg, '丙', 'start')
       await pg.waitForTimeout(150)
-      await pg.keyboard.press('Meta+Backspace')
+      await pg.keyboard.press(platformKey('Meta+Backspace'))
       await pg.waitForTimeout(300)
       const k10 = await pg.evaluate(() => {
         const v = window.__upage.probe.view()
@@ -2576,7 +2577,7 @@ async function main() {
         v.dispatch(v.state.tr.setSelection(v.state.selection.constructor.create(v.state.doc, 3)))
       })
       await pg.waitForTimeout(150)
-      await pg.keyboard.press('Meta+Enter')
+      await pg.keyboard.press(platformKey('Meta+Enter'))
       await pg.keyboard.type('新段')
       await pg.waitForTimeout(250)
       const k8 = await tops(pg)
@@ -3147,14 +3148,50 @@ async function main() {
         document.querySelector(s).dispatchEvent(ev)
       }, PM)
       await pg.waitForTimeout(120)
-      const during = await pg.evaluate((s) => document.querySelector(s).textContent.includes('上传中'), PM)
+      // 占位只在显示层(bodyUploads 的 widget):屏幕上有,文档里没有 —— 自动保存写不进 .md
+      const during = await pg.evaluate((s) => ({
+        shown: !!document.querySelector(`${s} .amx-upph-file`) && document.querySelector(s).textContent.includes('上传中'),
+        inDoc: window.__upage.probe.view().state.doc.textContent.includes('上传中'),
+      }), PM)
       await pg.waitForTimeout(600)
       const after = await pg.evaluate((s) => {
         const t = document.querySelector(s).textContent
-        return { placeholder: t.includes('上传中'), embedded: /A\.pdf/.test(t) }
+        return { placeholder: t.includes('上传中') || !!document.querySelector(`${s} .amx-upph`), embedded: /A\.pdf/.test(t) }
       }, PM)
-      record('U2 上传先出占位块,拿到路径后替换成嵌入行', during && !after.placeholder && after.embedded,
+      record('U2 上传先出占位(不进文档),拿到路径后原地换成嵌入行', during.shown && !during.inDoc && !after.placeholder && after.embedded,
         JSON.stringify({ during, ...after }))
+      await pg.close()
+    }
+    // U2b 粘贴图片:先出本地预览 + 环,传完换成图片节点;失败给重试,重试成功照样插进去
+    {
+      const pg = await openSeed('正文。\n')
+      await pg.evaluate(() => {
+        let n = 0
+        window.amadeus.saveAttachment = () => new Promise((res, rej) => setTimeout(() =>
+          (n++ === 0 ? rej(new Error('offline')) : res({ pageRel: 'attachments/p.png', base: 'p.png', abs: '/tmp/p.png' })), 250))
+      })
+      await pg.evaluate((s) => {
+        const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII='), (c) => c.charCodeAt(0))
+        const dt = new DataTransfer()
+        dt.items.add(new File([png], 'image.png', { type: 'image/png' }))
+        const ev = new ClipboardEvent('paste', { bubbles: true, cancelable: true })
+        Object.defineProperty(ev, 'clipboardData', { value: dt })
+        document.querySelector(s).dispatchEvent(ev)
+      }, PM)
+      await pg.waitForTimeout(120)
+      const preview = await pg.evaluate((s) => /^blob:/.test(document.querySelector(`${s} .amx-upph-img img`)?.src || ''), PM)
+      await pg.waitForTimeout(500)
+      const failed = await pg.evaluate((s) => !!document.querySelector(`${s} .amx-upph-img.is-failed`), PM)
+      await pg.evaluate((s) => document.querySelector(`${s} .amx-upph-img.is-failed .amx-upph-act`).click(), PM)
+      await pg.waitForTimeout(600)
+      const after = await pg.evaluate((s) => {
+        const v = window.__upage.probe.view()
+        let img = null
+        v.state.doc.descendants((n) => { if (n.type.name === 'image') img = n.attrs.src })
+        return { widget: !!document.querySelector(`${s} .amx-upph`), img }
+      }, PM)
+      record('U2b 粘贴图片:本地预览占位 → 失败可重试 → 换成图片节点', preview && failed && !after.widget && /p\.png/.test(after.img || ''),
+        JSON.stringify({ preview, failed, ...after }))
       await pg.close()
     }
     // U3 双击图片开大图;Esc 关。

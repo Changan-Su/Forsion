@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { useApp } from '../../stores/appStore'
+import './standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 // 核心插件化第 2a 步把 appStore 拆成宿主半边 + Tangu 半边(tangu/store/tanguSlice.ts),仍拼成同一个 useApp。
 // 这张表是拆之前 main 上的完整键集合:拆分 / 往返搬家时悄悄丢了一个成员(或两边各写了一个同名的),这里第一个报红。
@@ -13,8 +14,8 @@ const EXPECTED = [
   'configBySession', 'connMessage', 'connState', 'connect', 'connectOnce', 'createInWorkspace', 'ctxInfoBySession',
   'decideApproval', 'defaultAgentSlug', 'defaultWorkspace', 'defaultWsDir', 'deleteSession', 'deskAutoShow',
   'deskBySession', 'deskLiveClear', 'deskLiveSync', 'deskPresent', 'deskShowFile', 'desktopConfig', 'desktopMode',
-  'detailWsKey', 'dismissUpdate', 'draftRefs', 'editUserMessage', 'engineCaps', 'engines', 'ensureEngineCaps',
-  'ensureProjectSettings', 'ensureSoloSession', 'ensureTeamSession', 'feedbackDraft', 'feedbackOpen', 'filePreview',
+  'detailWsKey', 'discardFailed', 'dismissUpdate', 'draftRefs', 'editUserMessage', 'engineCaps', 'engines', 'ensureEngineCaps',
+  'ensureProjectSettings', 'ensureSoloSession', 'ensureTeamSession', 'failedBySession', 'feedbackDraft', 'feedbackOpen', 'filePreview',
   'focusDirs', 'focusModelId', 'groupVoting', 'handleAuthExpired', 'historyLoading', 'homeDir', 'hydrateTeamWork',
   'jumpTarget', 'llmRetryBySession', 'loadProjectIcon', 'loadSessionHistory', 'marketOpen', 'marketTarget',
   'mergeBackgroundSubChats', 'messagesBySession', 'modelsResp', 'moveSessionToProject', 'newChatCfg', 'newChatModel',
@@ -23,13 +24,13 @@ const EXPECTED = [
   'patchSessionConfig', 'pendingChatQuote', 'pendingDraft', 'pendingShare', 'pollSession', 'projectIconUrls',
   'projectSettingsByPath', 'pushNotice', 'reduceEvent', 'refreshAgents', 'refreshCloudProjects', 'refreshSessions',
   'refreshSpecialEnabled', 'refreshTeams', 'refreshVoiceMode', 'regenerate', 'rememberProjectSettings',
-  'removeAgent', 'removeWorkspace', 'renameSession', 'renameWorkspace', 'retry', 'rewindTo', 'rotateSoloSession',
+  'removeAgent', 'removeWorkspace', 'renameSession', 'renameWorkspace', 'retry', 'retryFailed', 'rewindTo', 'rotateSoloSession',
   'runStatsBySession', 'runningBySession', 'seedOnceBySession', 'selectNewChatAgent', 'selectSessionAgent', 'send',
   'sendNow', 'sessionMode', 'sessions', 'setActiveId', 'setActiveSpecial', 'setActiveWorkspaceKey',
   'setDefaultModel', 'setDetailWsKey', 'setExecConfig', 'setFilePreview', 'setJumpTarget', 'setModelContextWindow',
   'setNewChatCfg', 'setNewChatModel', 'setNewChatWs', 'setOnboarding', 'setPendingChatQuote', 'setPendingDraft',
   'setPendingShare', 'setSeedOnce', 'setSessionEmoji', 'setSessionEngine', 'setSessionEngineModel',
-  'setSessionGroup', 'setSessionMaxIterations', 'setSessionMode', 'setSessionModel', 'setSessionPlanMode',
+  'setSessionFast', 'setSessionGroup', 'setSessionMaxIterations', 'setSessionMode', 'setSessionModel', 'setSessionPlanMode',
   'setSessionThinking', 'setTr', 'setUpdateAvailable', 'setVoiceMode', 'settingsNonce', 'settingsOpen',
   'settingsSkillKey', 'settingsTab', 'skillsList', 'specialEnabled', 'steerNow', 'steerPendingBySession',
   'steerRestoreBySession', 'steerSentBySession', 'stop', 'stoppingBySession', 'subChatsBySession', 'subscribeRun',

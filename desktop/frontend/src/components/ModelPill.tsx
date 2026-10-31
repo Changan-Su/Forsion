@@ -12,7 +12,7 @@ import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type Mode
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
-import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, OverlayAt, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu } from '@lcl/engine'
+import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, useExitGhost, OverlayAt, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu } from '@lcl/engine'
 import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
@@ -44,7 +44,20 @@ registerMessages({
   'pill.ultra': { zh: 'Ultra', en: 'Ultra' },
   'pill.ultraNote': { zh: '思考拉满，主动并行派子代理', en: 'Max thinking + parallel subagents' },
   'pill.ultraTitle': { zh: 'Ultra：思考拉满 + 主动并行派子代理（额度消耗会成倍增加）', en: 'Ultra: max thinking plus proactive parallel subagents (uses several times the quota)' },
+  // Fast 对标 Codex /fast(service_tier=priority);说明取模型目录的原文再翻译,见 fastTierText。
+  'pill.rowFast': { zh: '快速模式', en: 'Fast mode' },
+  'pill.fastTag': { zh: '快速', en: 'Fast' },
+  'pill.speedStandard': { zh: '标准', en: 'Standard' },
+  'pill.fastDesc': { zh: '约 {speed} 倍速度', en: '{speed}x speed' },
+  'pill.fastDescUsage': { zh: '约 {speed} 倍速度，额度消耗更快', en: '{speed}x speed, higher usage' },
 })
+
+/** 模型目录给的 Fast 说明(英文原文,如「2x speed, increased usage」)→ 当前语言;认不出的格式原样显示。 */
+export function fastTierText(desc: string, t: (key: string, vars?: Record<string, string>) => string): string {
+  const speed = /(\d+(?:\.\d+)?)x speed/i.exec(desc)?.[1]
+  if (!speed) return desc
+  return t(/increased usage/i.test(desc) ? 'pill.fastDescUsage' : 'pill.fastDesc', { speed })
+}
 
 export interface ModelPillOption extends Pick<ModelInfo, 'id' | 'name' | 'tags' | 'multiplier'> { description?: string; source?: ModelInfo['source'] }
 export interface ModelPillGroup { key?: string; label: string; source?: ModelInfo['source']; options: ModelPillOption[] }
@@ -185,6 +198,9 @@ function ModelMenuSurface({ portal, anchorRef, innerRef, style, children }: {
   children: React.ReactNode
 }) {
   const [anchor, setAnchor] = useState({ x: 0, y: 0, top: 0 })
+  // 内嵌那一版关掉时留替身放 80ms 退场(走查续八 8.4);portal 那一版走 OverlayAt,自带。
+  const ghostRef = useRef<HTMLDivElement | null>(null)
+  useExitGhost(ghostRef, !portal)
   useLayoutEffect(() => {
     if (!portal) return
     const update = () => {
@@ -207,7 +223,7 @@ function ModelMenuSurface({ portal, anchorRef, innerRef, style, children }: {
       ro.disconnect()
     }
   }, [portal, anchorRef])
-  if (!portal) return <div ref={innerRef} className="composer-menu composer-menu--model" style={style}>{children}</div>
+  if (!portal) return <div ref={(el) => { ghostRef.current = el; innerRef(el) }} className="composer-menu composer-menu--model" style={style}>{children}</div>
   return createPortal(<div className="ui-popover-backdrop" style={{ pointerEvents: 'none' }} data-cmenu>
     <OverlayAt x={anchor.x} y={anchor.y} anchorTop={anchor.top} prefer="above" innerRef={innerRef}
       className="composer-menu composer-menu--model composer-menu--portal">{children}</OverlayAt>
@@ -238,8 +254,12 @@ export const ModelPill: React.FC<{
   ultra?: boolean
   /** agent 正在跑:Ultra 胶囊的流星只在这时出现(开跑渐快、停下渐慢)。 */
   running?: boolean
-  /** 当前模型支持的思考档；不支持的档仍可选，由引擎自动降档。 */
+  /** 当前模型支持的思考档；不支持的档仍可选，由引擎换到相近档位（先往低、没有再往高）。 */
   supportedThinking?: string[]
+  /** 会话的 Fast 开关;fastTier(当前模型目录里的 Fast 说明)缺席或不给 onFastChange 时不露这一行。 */
+  fast?: boolean
+  fastTier?: string
+  onFastChange?: (fast: boolean) => void
   /** 本 run 实际生效档；与请求档不同则在推理强度摘要中显示降档。 */
   effectiveThinking?: string
   /** 高级区需要全量目录（主模型列表可能已按云端会话过滤，不能拿它代替）。 */
@@ -261,7 +281,7 @@ export const ModelPill: React.FC<{
 }> = ({
   className, scopeKey, onSelectionChange, menuPortal = false, open: controlledOpen, onOpenChange,
   disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, allowUltra = false, ultra, running = false, supportedThinking, effectiveThinking,
-  modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title, icon, hub,
+  fast, fastTier, onFastChange, modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title, icon, hub,
 }) => {
   const { t } = useI18n()
   const pickerPrefs = useModelPickerPreferences()
@@ -285,7 +305,7 @@ export const ModelPill: React.FC<{
   useEffect(() => () => { nativeCall.current?.abort(); nativeCall.current = null }, [])
   useLayoutEffect(() => {
     if (nativeCall.current) { nativeCall.current.abort(); nativeCall.current = null; setNativeOpen(false); setPillOpen(false) }
-  }, [scopeKey, disabled, modelId, thinkingLevel, ultra, catalogKey])
+  }, [scopeKey, disabled, modelId, thinkingLevel, ultra, fast, catalogKey])
   useEffect(() => { if (!open) { nativeCall.current?.abort(); nativeCall.current = null; setNativeOpen(false) } }, [open])
   const subRef = useRef<HTMLDivElement>(null)
   const hoverTimer = useRef(0)
@@ -354,7 +374,10 @@ export const ModelPill: React.FC<{
   // Ultra 开着时请求档恒 max(引擎同口径),存值是什么都不看。
   const effLevel: Thinking = isUltra ? 'max' : thinkingLevel || 'medium'
   const effortText = isUltra ? t('pill.ultra') : effortDisplay(effLevel, t)
-  const effort = effLevel !== 'off' ? ` · ${effortText}` : ''
+  const showFast = !!onFastChange && !!fastTier
+  const fastOn = showFast && !!fast
+  const fastText = fastTier ? fastTierText(fastTier, t) : ''
+  const effort = `${effLevel !== 'off' ? ` · ${effortText}` : ''}${fastOn ? ` · ${t('pill.fastTag')}` : ''}`
   const lastStop = THINKING_LEVELS.length - (allowUltra ? 0 : 1)
   const effortIndex = isUltra ? lastStop : Math.max(0, THINKING_LEVELS.indexOf(effLevel))
   const effortPct = `${(effortIndex / lastStop) * 100}%`
@@ -436,6 +459,10 @@ export const ModelPill: React.FC<{
       ...THINKING_LEVELS.map(lv => ({ value: lv, label: effortDisplay(lv, t) })),
       ...(allowUltra ? [{ value: 'ultra', label: t('pill.ultra'), detail: t('pill.ultraTitle') }] : []),
     ] }] })
+    if (showFast) fields.push({ id: 'speed', label: t('pill.rowFast'), value: fastOn ? 'fast' : 'standard', groups: [{ label: '', options: [
+      { value: 'standard', label: t('pill.speedStandard') },
+      { value: 'fast', label: t('pill.fastTag'), detail: fastText },
+    ] }] })
     if (onDefaultModelChange) for (const { slot, label } of slotRows) fields.push({ id: slot, label, value: defaultModelIds?.[slot] || '', groups: [
       { label: '', options: [{ value: '', label: t('pill.followCloudDefault') }] }, ...toGroups(groupCatalog(slotModels(slot))),
     ] })
@@ -457,6 +484,7 @@ export const ModelPill: React.FC<{
       if (onSelectionChange) onSelectionChange(patch)
       else { if (patch.modelId !== undefined) onSelect(patch.modelId); if (patch.thinkingLevel) onThinkingChange?.(patch.thinkingLevel, patch.ultra) }
     }
+    if ('speed' in changes) onFastChange?.(changes.speed === 'fast')
     for (const { slot } of slotRows) if (slot in changes) onDefaultModelChange?.(slot, changes[slot])
     if ('context' in changes && !('model' in changes) && modelId) onContextWindowChange?.(modelId, changes.context === 'max' ? ctx?.maxTokens ?? null : null)
   }
@@ -480,8 +508,9 @@ export const ModelPill: React.FC<{
     }
     const count = (items: SheetMenuItem[]): number => items.reduce((n, it) => n + 1 + (it.children || []).reduce((m, s) => m + count(s.items), 0), 0)
     const fields = pickerFields().filter((f) => f.groups.some((g) => g.options.length))
-    const main = [...fields.filter((f) => f.id === 'model' || f.id === 'thinking').map(page), ...extra]
-    const advanced = fields.filter((f) => f.id !== 'model' && f.id !== 'thinking').map(page)
+    const isMain = (f: PickerField): boolean => f.id === 'model' || f.id === 'thinking' || f.id === 'speed'
+    const main = [...fields.filter(isMain).map(page), ...extra]
+    const advanced = fields.filter((f) => !isMain(f)).map(page)
     if (!main.length || count(main) > NATIVE_MENU_MAX_ITEMS) return null
     return { title: hub!.title, back: hub!.back, sections: [
       { items: main },
@@ -627,6 +656,20 @@ export const ModelPill: React.FC<{
             <span className="cm-row-v">{label}</span>
             <ChevronRight size={13} />
           </button>
+
+          {/* 模型与思考条之间：Fast 开关(只对目录列了 Fast 档的模型露出;说明随模型变,如 1.5 倍 / 2 倍且额度消耗更快)。 */}
+          {showFast && (
+            <button type="button"
+              role="switch"
+              aria-checked={fastOn}
+              className="cm-row cm-fast-row"
+              onMouseEnter={cancelHover}
+              onClick={() => onFastChange!(!fastOn)}
+            >
+              <span className="cm-fast-text"><span className="cm-row-k">{t('pill.rowFast')}</span><span className="cm-fast-note">{fastText}</span></span>
+              <span className={`settings-switch${fastOn ? ' active' : ''}`} aria-hidden="true"><span /></span>
+            </button>
+          )}
 
           {/* 第三行：ChatGPT 式离散拖动条。Max 单独切换蓝紫渐变 + 星点层；Ultra 把星点换成并行光流(几路子代理同时在跑)。 */}
           {onThinkingChange && (

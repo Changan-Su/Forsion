@@ -30,6 +30,7 @@ import { useApp } from '../stores/appStore'
 import { PRODUCT } from '../product'
 import { SpaceButton } from '../components/SpaceButton'
 import { CalendarDashboardCard, TodoDashboardCard } from '../views/DashboardCompactViews'
+import { CoreViewSlot } from './CoreViewSlot'
 
 const CalendarView = lazyRetry(() => import('../views/CalendarView').then((m) => ({ default: m.CalendarView })))
 const TodoListView = lazyRetry(() => import('../views/TodoListView').then((m) => ({ default: m.TodoListView })))
@@ -121,7 +122,8 @@ export function installCalendarViews(): void {
     type: 'todo-list', kind: 'collection', embeddable: true,
     intelligent: { description: 'Live saved Forsion tasks, ordered by due date. Users can mark tasks complete. Does not create tasks.', render: () => <TodoDashboardCard size="lg" /> },
     displayName: () => app().tr('view.todo'), icon: ListTodo,
-    factory: ({ params, leaf }) => <Suspense fallback={<Skeleton variant="list" />}><TodoListView params={params} leaf={leaf} /></Suspense>,
+    workspaceSource: 'plugin:forsion-calendar:lists',
+    factory: (props) => <CoreViewSlot type="todo-list" {...props} fallback={<Suspense fallback={<Skeleton variant="list" />}><TodoListView params={props.params} leaf={props.leaf} /></Suspense>} />,
     dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <TodoDashboardCard size={ctx.size} /> },
   })
   registerView({
@@ -130,12 +132,12 @@ export function installCalendarViews(): void {
     rightCompanions: [{ type: 'calendar-side', params: {} }],
     intelligent: { description: 'Live Forsion calendar agenda for the next 31 days, including configured calendars. Does not create events.', render: () => <CalendarDashboardCard size="lg" /> },
     displayName: () => app().tr('view.calendar'), icon: CalendarDays,
-    factory: (props) => <Suspense fallback={<Skeleton variant="document" />}><CalendarView leafId={props.leaf.id} /></Suspense>, singleton: true,
+    factory: (props) => <CoreViewSlot type="calendar" {...props} fallback={<Suspense fallback={<Skeleton variant="document" />}><CalendarView leafId={props.leaf.id} /></Suspense>} />, singleton: true,
     dashboard: { sizes: ['wide', 'lg', 'full'], defaultSize: 'lg', surface: 'summary', factory: (_props, ctx) => <CalendarDashboardCard size={ctx.size} /> },
   })
   // 日历右栏:待办 ↔ 选中事件的详情 ↔ 新建草稿(见 views/calendar/CalendarSide)。只在日历 Space 的右栏用,不进启动器。
-  registerView({ type: 'calendar-side', kind: 'page', displayName: () => app().tr('view.todo'), icon: ListTodo, factory: () => <Suspense fallback={<Skeleton variant="list" />}><CalendarSide /></Suspense>, singleton: true })
-  registerView({ type: 'calendar-config', kind: 'page', displayName: () => app().tr('view.calendarConfig'), icon: Settings, factory: () => <Suspense fallback={<Skeleton variant="list" />}><CalendarConfigView /></Suspense>, singleton: true })
+  registerView({ type: 'calendar-side', kind: 'page', displayName: () => app().tr('view.todo'), icon: ListTodo, factory: (props) => <CoreViewSlot type="calendar-side" {...props} fallback={<Suspense fallback={<Skeleton variant="list" />}><CalendarSide /></Suspense>} />, singleton: true })
+  registerView({ type: 'calendar-config', kind: 'page', displayName: () => app().tr('view.calendarConfig'), icon: Settings, factory: (props) => <CoreViewSlot type="calendar-config" {...props} fallback={<Suspense fallback={<Skeleton variant="list" />}><CalendarConfigView /></Suspense>} />, singleton: true })
 }
 
 /** Space + ribbon 图标(幂等:启动那次由 registerSpaces 按槽位注册过就不重复)。 */

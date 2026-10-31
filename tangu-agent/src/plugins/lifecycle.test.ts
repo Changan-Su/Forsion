@@ -238,7 +238,7 @@ describe('manifest mcpServers', () => {
     const hookOwners = () => hk.discoverHooks({ events: {}, state: {} }, 'Stop').map((x) => x.plugin?.id);
     const calls: string[] = [];
     pm.bindPluginMcp({
-      addServers: (o: { id: string }, s: Record<string, { args?: string[]; cwd?: string }>) => calls.push(`add:${o.id}:${Object.keys(s)}:${s.srv?.args?.[0] === path.join(pluginsRoot, 'lc-m', 's.js')}:${s.srv?.cwd === path.join(pluginsRoot, 'lc-m')}`),
+      addServers: (o: { id: string }, s: Record<string, { args?: string[]; cwd?: string }>) => calls.push(`add:${o.id}:${Object.keys(s)}:${typeof s.srv?.args?.[0] === 'string' && path.resolve(s.srv.args[0]) === path.join(pluginsRoot, 'lc-m', 's.js')}:${s.srv?.cwd === path.join(pluginsRoot, 'lc-m')}`),
       removeServers: async (id: string) => { calls.push(`remove:${id}`); },
     } as any);
     await h.boot.activateAllPlugins();

@@ -1,5 +1,5 @@
 /**
- * 多通道(微信/Telegram/QQ)状态 store:15s 轮询 GET /agent/channels + 设置/连接动作。
+ * 多通道(微信/Telegram/QQ + 插件通道)状态 store:15s 轮询 GET /agent/channels + 设置/连接动作。
  * 与 appStore 单向解耦(经 getState() 读 cfg/tr);每次刷新把「已启用通道 → 工作区文件夹」
  * 快照写进 appStore.channelWorkspaces,供侧栏会话列表按文件夹分组(替代旧的 wechat 硬编码组)。
  * 失败纪律:云端/老后端无 /agent/channels 时静默(通道仅内置本地后端可用)。
@@ -12,6 +12,7 @@ import {
 } from '../services/backendService'
 import type { ChannelKind, WorkspaceDescriptor } from '../types'
 import { homeTarget } from '../services/engine/targets'
+import { currentLocale } from '../i18n'
 
 export type { ChannelStatus }
 
@@ -19,8 +20,9 @@ let pollTimer: number | null = null
 let unsubConn: (() => void) | null = null
 
 
-/** 通道显示名(设置卡与侧栏文件夹同源)。 */
-export function channelLabel(kind: ChannelKind): string {
+/** 通道显示名(设置卡与侧栏文件夹同源)。插件通道用它自报的双语名。 */
+export function channelLabel(kind: ChannelKind, plugin?: ChannelStatus['plugin']): string {
+  if (plugin) return plugin.name[currentLocale()] || plugin.name.en
   const tr = useApp.getState().tr
   return tr(`channel.name.${kind}`)
 }
@@ -28,7 +30,7 @@ export function channelLabel(kind: ChannelKind): string {
 function pushWorkspaces(channels: ChannelStatus[]): void {
   const folders: WorkspaceDescriptor[] = channels
     .filter((c) => c.enabled && c.workspace)
-    .map((c) => ({ key: c.workspace, name: channelLabel(c.kind), kind: 'channel', channel: c.kind, path: c.workspace, system: true }))
+    .map((c) => ({ key: c.workspace, name: channelLabel(c.kind, c.plugin), kind: 'channel', channel: c.kind, path: c.workspace, system: true }))
   const prev = useApp.getState().channelWorkspaces
   // 浅比较避免每 15s 触发一次全侧栏重渲。
   const same = prev.length === folders.length && prev.every((p, i) => p.key === folders[i].key && p.name === folders[i].name && p.channel === folders[i].channel)

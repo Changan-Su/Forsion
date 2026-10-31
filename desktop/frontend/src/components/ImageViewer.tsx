@@ -16,9 +16,11 @@ import { ChevronLeft, ChevronRight, Copy, Download, ExternalLink, Minus, MoreHor
 import { useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
 import { registerMessages, translate as tr } from '../i18n'
 import { saveResponseAs } from '../services/nativeDownload'
+import { writeImageToClipboard } from '../lib/imageClipboard'
 import { pushMobileBack } from '../amadeus/lib/mobileBack'
 import { useApp } from '../stores/appStore'
 import './imageViewer.css'
+import { motion } from '../theme/motionTokens'
 
 registerMessages({
   'viewer.open': { zh: '查看图片 {name}', en: 'View image {name}' },
@@ -48,7 +50,6 @@ const metas = new WeakMap<HTMLImageElement, ViewMeta>()
 const STEP = 1.25
 const MAX = 8
 const GAP = 32
-const FLY_MS = 220
 
 /** 给能点开看的 <img> 摊上的属性:点 / 回车 / 空格都打开看图。meta 按元素记,看图时按 DOM 顺序收。 */
 export function viewableProps(meta: ViewMeta) {
@@ -96,24 +97,9 @@ export function openImageViewer(from: HTMLImageElement): void {
 
 const reduced = (): boolean => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
 
-async function fetchBlob(src: string): Promise<Blob> {
-  const r = await fetch(src)
-  if (!r.ok) throw new Error(String(r.status))
-  return r.blob()
-}
-async function toPng(blob: Blob): Promise<Blob> {
-  if (blob.type === 'image/png') return blob
-  const bmp = await createImageBitmap(blob) // 剪贴板只认 PNG:别的格式先画一遍
-  const c = document.createElement('canvas')
-  c.width = bmp.width
-  c.height = bmp.height
-  c.getContext('2d')!.drawImage(bmp, 0, 0)
-  return new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('toBlob'))), 'image/png'))
-}
 async function copyImage(src: string): Promise<void> {
   try {
-    const png = await toPng(await fetchBlob(src))
-    await navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+    await writeImageToClipboard(src)
     useApp.getState().toast(tr('viewer.copied'))
   } catch {
     useApp.getState().toast(tr('viewer.copyFailed'), true)
@@ -241,7 +227,7 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
     if (!t || !el || reduced()) return
     const f = fitOf(start)
     el.style.transformOrigin = `${f.tx + (dims[start].w * f.s) / 2}px ${f.ty + (dims[start].h * f.s) / 2}px`
-    el.animate([{ transform: flyFrom(t, f, start) }, { transform: 'none' }], { duration: FLY_MS, easing: 'cubic-bezier(.2, .8, .2, 1)' })
+    el.animate([{ transform: flyFrom(t, f, start) }, { transform: 'none' }], { duration: motion.ms('base'), easing: motion.css('surface') })
   })
 
   const close = useCallback(() => {
@@ -253,9 +239,9 @@ function Viewer({ items, start, onDone }: { items: Item[]; start: number; onDone
     if (reduced() || !el) { finish(); return }
     if (t) {
       el.style.transformOrigin = `${v.tx + (dims[idx].w * v.s) / 2}px ${v.ty + (dims[idx].h * v.s) / 2}px`
-      el.animate([{ transform: 'none' }, { transform: flyFrom(t, v, idx) }], { duration: FLY_MS, easing: 'cubic-bezier(.4, 0, .6, 1)', fill: 'forwards' }).onfinish = finish
+      el.animate([{ transform: 'none' }, { transform: flyFrom(t, v, idx) }], { duration: motion.ms('base'), easing: motion.css('drawer'), fill: 'forwards' }).onfinish = finish
     } else {
-      el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: 160, fill: 'forwards' }).onfinish = finish // 缩略图不在视口:淡出
+      el.animate([{ opacity: 1 }, { opacity: 0 }], { duration: motion.ms('fast'), easing: motion.css('exit'), fill: 'forwards' }).onfinish = finish // 缩略图不在视口:淡出
     }
   }, [closing, items, idx, v, dims, onDone]) // eslint-disable-line react-hooks/exhaustive-deps
 

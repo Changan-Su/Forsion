@@ -6,6 +6,17 @@ Unit is the independently runnable Forsion framework, sharing the Genesis Deskto
 
 ## Desktop 同步 / Desktop synchronization
 
+已有后台 Unit 可在同一个 listener 上增加 `webEntries`，每个入口声明自己的 `basePath`、`plugins` 和 `defaultSpace`。
+主入口仍按原 `publish` 设置发布；附加入口只能列出其显式插件及依赖，不能读取主机文件或公开后台插件。
+两者共用同一份后端生命周期和账号存储。更新插件时会重新校验所有入口，避免一次热更新留下无法重启的配置。
+`inheritWebAccount: true` 仅供同源官方 Web 迁移：先经 Unit 验证旧登录，再恢复经权限核对的智库选择，不复制无归属的内容缓存。
+官方 Extend 在装载及更新时必须通过桌面同一固定公钥验签；自建的普通插件仍由运营方安装并列入允许清单。
+
+An existing Unit can add explicit `webEntries` on the same listener while retaining its original Admin projection.
+Each surface publishes only its selected packages; the backend and per-account storage are shared.
+Hot updates validate every surface before committing. Official Extend packages must pass the pinned publisher signature.
+Legacy same-origin login inheritance is opt-in and never copies unattributed content caches.
+
 Desktop 基线不再手工维护：构建时由 git 推导，取检出历史里最新的 `v*` 稳定版标签作基线，距它的提交数作 Unit 修订号。同步方向为 Desktop → Unit；共享功能复用源码，Unit 维护宿主适配。本分支不向 Desktop 主线自动回合，也不从商业 Server 仓库同步代码。
 
 The Desktop baseline is no longer hand-maintained: the build derives it from git, taking the newest `v*` stable tag contained in the checkout as the baseline and the number of commits since it as the Unit revision. Synchronization flows from Desktop into Unit. Shared features reuse source code; Unit maintains its host adapters. This branch does not automatically merge back into Desktop or import the commercial Server repository.
@@ -20,9 +31,9 @@ node unit/check-sync.mjs
 
 When a new stable release is available, merge its tag, resolve conflicts, and run type, plugin, account and local installation checks before building. Verify that fixes in extracted shared handlers are carried forward. The pre-build check refuses exactly one situation: a newer stable tag exists in the repository but not in HEAD's history (packaging from a stale checkout). Any build that is not exactly the tagged commit (later commits, or a package version already bumped past the tag) is recorded in `release.json` as a pre-release rather than refused; a package version behind the baseline tag is refused. It checks fetched tags and does not fetch or merge automatically.
 
-`.github/workflows/check-unit.yml` 提供分支检查和手动构建；发行包中的 `release.json` 记录 Desktop 基线标签与提交、Unit 修订号、是否预发布及源码提交。检查本身不发布版本。
+`.github/workflows/check-unit.yml` 提供分支检查和手动构建；发行包中的 `release.json` 记录 Desktop 基线标签与提交、独立的 `engineVersion`、Unit 修订号、是否预发布及源码提交。桌面与引擎不要求同号，Unit npm 版本仍跟随桌面。检查本身不发布版本。
 
-`.github/workflows/check-unit.yml` provides branch validation and manual builds. Each distribution contains `release.json` with its Desktop baseline tag and commit, Unit revision, pre-release flag and source commit. Validation does not publish a release.
+`.github/workflows/check-unit.yml` provides branch validation and manual builds. Each distribution contains `release.json` with its Desktop baseline tag and commit, independent `engineVersion`, Unit revision, pre-release flag and source commit. Desktop and engine need not share a version; the Unit npm version still follows Desktop. Validation does not publish a release.
 
 ## 构建与安装 / Build and install
 
@@ -99,6 +110,31 @@ Installing a new package with the same ID updates it. Running plugins can be rep
 显式在线更新使用 `update <unit.json> <plugin-id> <package-path>`。ID 必须已安装且与新包 manifest 一致；Unit 未运行时命令直接失败，不修改配置或执行迁移。包路径相对当前工作目录解析，必须指向已解包的插件目录。更新复用安装器的包、依赖与路径检查，将包复制到实例下独立的版本目录，再通过本机控制通道切换并持久化；之后移动或删除源包不会影响已安装版本。Unit 的进程和端口保持不变，更新包及其活跃依赖方按依赖顺序重启；无关插件继续运行。新包激活失败时恢复旧版服务，配置保留旧路径。离线替换仍可使用 `install`，下次启动时加载。
 
 Use `update <unit.json> <plugin-id> <package-path>` for an explicit live update. The ID must already be installed and match the new manifest. If Unit is offline, the command fails without changing configuration or running migrations. The package path resolves from the current working directory and must name an unpacked plugin directory. Updates reuse the installer's package, dependency and path checks, copy the package into a separate instance version directory, then activate and persist it through the local control channel. Moving or deleting the source package afterward does not affect the installed version. Unit keeps its process and port; the updated plugin and its active dependents restart in dependency order while unrelated plugins keep running. Failed activation restores the previous service and keeps its configured path. Use `install` for an offline replacement that loads at the next startup.
+
+### 按引用安装 / Install by reference
+
+同一台宿主上跑多个实例时（NAS、VPS、多实例部署），不必每个实例各拷一份包。给 `install` 或 `update` 加 `--reference`，配置里记的就是包目录解析后的绝对路径，实例下不再产生 `plugins/` 副本：
+
+Several instances on one host (a NAS, a VPS, any multi-instance setup) need not each keep a copy of a package. With `--reference`, `install` and `update` record the package directory's resolved absolute path and create no copy under the instance's `plugins/`:
+
+```sh
+node main.mjs install /absolute/path/my-unit/unit.json /opt/forsion/packages/calendar/1.0.0 --reference
+node main.mjs update /absolute/path/my-unit/unit.json calendar /opt/forsion/packages/calendar/1.1.0 --reference
+```
+
+- 包目录可以是只读挂载，Unit 不往里写任何东西，也不删除：更新只切换配置里的路径，旧目录原样留给还在用它的实例。清理旧版本由运维决定。校验与普通安装相同（manifest、版本、私密环境文件、逃逸的软链）。
+- 路径按解析软链之后记录，把 `current` 这类软链改指向别的版本不会悄悄换掉实例的代码，要显式 `update`。
+- 目录不存在或读不了时，命令报错，Unit 拒绝启动，`unit.json` 保持原样；挂载恢复后照常运行。不要把已被实例引用的目录删掉：恢复目录或手动改 `unit.json` 才能继续。
+- `backend.dependencies.mode` 为 `npm-ci` 的包要往包里装依赖，仍走私有拷贝；输出里的 `reference` 字段为 `false`，`path` 指向拷贝。
+- 不带 `--reference` 的 `update`，以及 `unit_update` 的暂存发行，都走私有拷贝，该实例从此不再共用目录。之后再 `update --reference` 可切回。
+- 插件必须把数据写到 `dataDir`：`packageDir` 可能只读，也可能被别的实例共用。
+
+- The directory may be a read-only mount. Unit writes nothing there and deletes nothing: an update only switches the configured path, leaving the old directory for any instance still using it. Removing old versions is the operator's call. Validation matches an ordinary install (manifest, version, private environment files, escaping links).
+- The path is recorded after resolving links, so repointing a link such as `current` never swaps an instance's code silently; run `update` explicitly.
+- If the directory is missing or unreadable, commands fail, Unit refuses to start and `unit.json` stays as it was; once the mount is back everything runs as before. Do not delete a directory an instance references: recovery means restoring it or editing `unit.json` by hand.
+- Packages with `backend.dependencies.mode` set to `npm-ci` install dependencies into the package, so they still get a private copy; the output reports `reference: false` and `path` names the copy.
+- `update` without `--reference`, and staged releases applied by `unit_update`, take a private copy, and that instance stops sharing the directory. A later `update --reference` switches it back.
+- Plugins must write data under `dataDir`: `packageDir` may be read-only and may be shared with other instances.
 
 插件继续使用 Forsion 的 `main`、Space 配方和插件 API。可选 `frontend.features` 激活共享界面中的 Amadeus、Tangu、Calendar、Automation、Public 功能；新增界面实现仍需更新 Unit。可信插件可声明 `runtime` 提供设备能力，或声明 `backend` 提供 HTTP 服务。接口分别见 `runtimeTypes.ts` 和 `backendTypes.ts`；支持这些通用接口不代表预装任何商业实现。
 

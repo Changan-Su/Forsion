@@ -45,7 +45,8 @@ export async function registerStartupAppearance(isTrusted: (e: Electron.IpcMainI
   // every launch because an update undoes it. Packaged builds only — in development the bundle is Electron's own.
   let keeping: Promise<void> = Promise.resolve()
   const keep = (): void => {
-    if (!app.isPackaged) return
+    // 插件沙箱是同一个安装包另起的一份:它的设置页改图标不能写到整机那份 .app / 快捷方式上
+    if (!app.isPackaged || process.env.FORSION_SANDBOX === '1') return
     const icon = state.icon && state.nativeIcon ? activeIcon : null
     const key = icon ? state.icon!.image : null
     const dir = app.getPath('userData')

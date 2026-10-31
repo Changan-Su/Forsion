@@ -1,0 +1,21 @@
+const assert = require('node:assert/strict')
+const path = require('node:path')
+const crypto = require('node:crypto')
+const { build } = require('esbuild')
+;(async () => {
+  const out = (await build({ entryPoints: [path.resolve(__dirname, '../build/extendBundle.ts')], bundle: true, write: false, platform: 'node', format: 'cjs', define: { 'import.meta.dirname': JSON.stringify(path.resolve(__dirname, '../build')) }, logLevel: 'silent' })).outputFiles[0].text
+  const mod = { exports: {} }; new Function('module', 'exports', 'require', out)(mod, mod.exports, require)
+  const { verifyExtendFiles, loadExtendBundle } = mod.exports
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('ed25519')
+  const key = publicKey.export({ type: 'spki', format: 'pem' })
+  const files = new Map(Object.entries({ 'manifest.json': '{"id":"forsion-extend","main":"dist/main.js"}', 'package.json': '{}', 'dist/main.js': 'actual plugin renderer' }).map(([p, s]) => [p, Buffer.from(s)]))
+  const hashes = Object.fromEntries([...files].map(([p, b]) => [p, crypto.createHash('sha256').update(b).digest('hex')]).sort(([a], [b]) => a < b ? -1 : 1))
+  const sig = crypto.sign(null, Buffer.from(JSON.stringify(hashes)), privateKey).toString('base64')
+  files.set('SIGNATURE', Buffer.from(JSON.stringify({ alg: 'ed25519', files: hashes, sig })))
+  files.set('unsigned.js', Buffer.from('never execute me')); verifyExtendFiles(files, key); assert(!files.has('unsigned.js'))
+  files.set('dist/main.js', Buffer.from('tampered')); assert.throws(() => verifyExtendFiles(files, key), /signed hash/)
+  files.set('dist/main.js', Buffer.from('actual plugin renderer')); assert.throws(() => verifyExtendFiles(files), /pinned public key/)
+  await assert.rejects(loadExtendBundle({ mode: 'production', testRoot: '/tmp/not-read' }), /only allowed.*extend-test/)
+  const actual = await loadExtendBundle({ mode: 'production' }); assert.equal(actual.manifest.mobileHostApi, 1); assert.equal(actual.manifest.version, require('../extend-bundle.json').version); assert(actual.code.length > 100000 && actual.recipes.length > 0 && !actual.testOnly)
+  console.log('PASS mobile Extend: signed renderer and manifest required, tamper and foreign-key rejected, unsigned files dropped, test override refused in production')
+})().catch((e) => { console.error(e); process.exitCode = 1 })

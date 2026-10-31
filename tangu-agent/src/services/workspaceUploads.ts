@@ -51,6 +51,15 @@ export function takeWorkspaceUploads(sessionId: string, opts: { remote: boolean 
   return mine.map((u) => u.path);
 }
 
+/** 删除路由:那份文件删了,登记也撤掉(输入框里先传上去、发之前又移除的附件,不该出现在下一条消息的第一行)。 */
+export function forgetWorkspaceUpload(sessionId: string, absPath: string): void {
+  const list = pending.get(sessionId);
+  if (!list) return;
+  const rest = list.filter((u) => u.path !== absPath);
+  if (rest.length) pending.set(sessionId, rest);
+  else pending.delete(sessionId);
+}
+
 /** 只给测试:清空进程内表。 */
 export function _resetWorkspaceUploads(): void {
   pending.clear();

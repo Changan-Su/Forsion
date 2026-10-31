@@ -20,7 +20,6 @@ import { syncPluginViews } from './pluginViews'
 import { installPluginStatusBridge } from './pluginStatusBridge'
 import { evaluateAndNudge } from './stores/pluginOnboardingStore'
 import { installAmadeusAutomationBridge } from './amadeusAutomation'
-import { CALENDAR_PLUGIN_ID, setCalendarYield } from './builtins'
 
 let installed = false
 
@@ -28,6 +27,8 @@ let installed = false
  *  交错的话,先读到旧磁盘快照的那一个后落定,会把刚装的插件从本窗 store 里抹掉(Codex 评审)。
  *  监听先于初次装载注册,所以启动中的窗口收到的广播一定排在它自己的首次装载之后。 */
 let reconcileQueue: Promise<unknown> = Promise.resolve()
+let pluginsReady: Promise<void> = Promise.resolve()
+export const whenAmadeusPluginsReady = (): Promise<void> => pluginsReady
 function enqueueReconcile<T>(job: () => Promise<T>): Promise<T> {
   const next = reconcileQueue.then(job, job)
   reconcileQueue = next.catch(() => {})
@@ -38,11 +39,7 @@ export function installAmadeusPlugins(): void {
   if (installed) return
   installed = true
   syncPluginViews() // 插件视图桥先就位:随后的 init/loadExternal 里注册的视图第一时间进 LCL 注册表
-  // 日历核心插件开着 → 内置日历让位(见 builtins/index 的 CALENDAR_PLUGIN_ID)。
-  // ponytail: 并行双跑期插件还是开发装的(没进 CORE_BUNDLE_IDS),只认 id;进了核心名单就改成 isCorePlugin 判定,别让同名第三方插件把内置日历顶掉。
-  const calendarPluginOn = (): boolean => usePluginStore.getState().activeIds.includes(CALENDAR_PLUGIN_ID)
-  setCalendarYield(calendarPluginOn())
-  usePluginStore.subscribe(() => setCalendarYield(calendarPluginOn()))
+  // Calendar keeps its native Space and saved layout; CoreViewSlot replaces only its renderers.
   installPluginStatusBridge() // 状态条项桥同理(→ 全局状态栏)
   if (amadeusAvailable()) installAmadeusAutomationBridge() // Amadeus「按钮」块 → 本地引擎自动化(云端/移动端不注册=按钮显示不支持)
   // Mini/detached renderers share preferences but own plugin instances. Revoke local views
@@ -86,7 +83,7 @@ export function installAmadeusPlugins(): void {
   })
   const store = usePluginStore.getState()
   store.init(amadeusAvailable() ? [calloutBlocks, wordCount] : [])
-  void enqueueReconcile(() => store.loadExternal()).then(() => {
+  pluginsReady = enqueueReconcile(() => store.loadExternal()).then(() => {
     // 捆绑包内嵌的 Space 引用插件自己的视图,必须等插件装完(视图已注册)才过得了 parseSpaceJson 的
     // isViewRegistered 闸 —— bootstrapEngine 那次 loadUserSpaces 跑在插件之前,注定被「未注册视图」跳过。
     // 补跑一次:装了带 Space 的插件,ribbon 顶部(Space 区)末尾即自动出现,无需进设置页或重启。
@@ -97,6 +94,8 @@ export function installAmadeusPlugins(): void {
     // 徽标常驻设置页。check 类(可能打远端)启动期不跑,见 pluginOnboardingStore 文件头。
     const s = usePluginStore.getState()
     for (const p of s.plugins) if (s.activeIds.includes(p.id)) void evaluateAndNudge(p)
+    // 插件沙箱:装载落定 = 卡片从「启动中」变成「运行中 / 失败」,并把插件的第一个视图开出来
+    if (window.tangu?.sandbox && windowKind() === 'main') void import('./sandbox/sandboxWindow').then((m) => m.sandboxPluginsLoaded())
   })
 
   // 插件 commands → engine 命令面板(**全局可见**,2026-07-18 放开——插件视图可装进任意 Space,

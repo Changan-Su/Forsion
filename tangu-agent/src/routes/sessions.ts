@@ -8,7 +8,7 @@
  *   POST   /agent/sessions/:id/messages/delete { ids }  按 id 截断消息(编辑重发 / 重新生成前清掉该点及之后)
  *   GET    /agent/sessions/:id/config              读 agent_config(enabledSkillIds/execMode/approvalMode/…)
  *   PUT    /agent/sessions/:id/config              整体替换 agent_config
- *   POST   /agent/sessions/:id/aside { question, quote?, thread?, model_id? }  旁聊 /btw(SSE,不落库)
+ *   POST   /agent/sessions/:id/aside { question, quote?, thread?, attachments?, model_id?, thinking_level?, vision_mode?, vision_model_id? }  旁聊 /btw(SSE;答完存进 chat_asides)
  *   POST   /agent/sessions/:id/suggest { run_id? }  输入建议(JSON { suggestion };空串 = 没有)
  */
 import { Router, type Response } from 'express';
@@ -28,7 +28,8 @@ import { startChildSession } from '../services/childSessions.js';
 import { museDmSessionId } from '../services/museDm.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
-import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
+import { listCheckpoints, restoreCodeSince } from '../services/checkpoints.js';
+import { deleteSessionCascade } from '../services/sessionCleanup.js';
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
 import { isValidSlug } from '../agents/agentRegistry.js';
 import { isDelegateActive } from '../services/delegateTranscript.js';
@@ -36,7 +37,7 @@ import { ensureMemberSession, memberRunConfig } from '../services/teamRuns.js';
 import { recoverTeamOutputs } from '../services/teamOutputs.js';
 import { withKeyLock } from '../core/keyLock.js';
 import { settleTeamPlanMode } from '../services/sessionSettings.js';
-import { answerAside, deleteAside, listAsides, normalizeAsideInput, saveAside } from '../services/aside.js';
+import { answerAside, asideAttachmentsTooLarge, asideThinkingLevel, attachmentMetas, deleteAside, listAsides, normalizeAsideInput, saveAside } from '../services/aside.js';
 import { suggestNextPrompt } from '../services/promptSuggestion.js';
 import { normalizeClientTag } from './runs.js';
 import { parseRemoteOrigin, applyRemoteConfigWrite, remoteCwdViolation, remoteCwdErrorBody, remoteOriginMarker } from '../services/remoteOrigin.js';
@@ -163,13 +164,18 @@ router.get('/agent/sessions/attention', authMiddleware, async (req: AuthRequest,
   }
 });
 
-// 用户打开了这个会话:读到现在(只动 last_read_at,不动 updated_at —— 读一下不该把会话顶到列表最上面)。
+// 用户打开了这个会话:读到现在,收尾问句的「等你」也算看过(10-27:只清未读时点进去黄点不灭,要回一句才灭)。
+// 不动 updated_at —— 读一下不该把会话顶到列表最上面。真在等的审批 / 询问另有来源,不受影响。
+// 回报还没送回主会话的子会话(report_run_id)留着:送达时靠它告诉主会话 waiting_for_user(childSessions.deliverNow)。
 router.post('/agent/sessions/:id/read', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const s = await getOwnSession(req.params.id, req.user!.userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    await query(`UPDATE chat_sessions SET last_read_at = ? WHERE id = ?`, [Date.now(), s.id]);
-    res.json({ ok: true });
+    await query(
+      `UPDATE chat_sessions SET last_read_at = ?, awaiting_user = CASE WHEN report_run_id IS NULL THEN FALSE ELSE awaiting_user END WHERE id = ?`,
+      [Date.now(), s.id]);
+    const [r] = await query<any[]>(`SELECT awaiting_user FROM chat_sessions WHERE id = ?`, [s.id]);
+    res.json({ ok: true, awaiting: !!r?.awaiting_user });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'mark read failed' });
   }
@@ -293,7 +299,9 @@ router.post('/agent/sessions/:id/children', authMiddleware, async (req: AuthRequ
     if (!message || message.length > 20_000) return res.status(400).json({ detail: 'message required (max 20000 chars)' });
     const title = typeof req.body?.title === 'string' ? req.body.title : '';
     const remote = parseRemoteOrigin(req.headers);
-    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(remote ? { remote } : {}) });
+    // 任务卡的 `agent:` 是模型写的串:认得才用,认不得跟主会话走
+    const agent = typeof req.body?.agent === 'string' ? await getAgent(req.body.agent).catch(() => null) : null;
+    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(agent ? { agentSlug: agent.slug } : {}), ...(remote ? { remote } : {}) });
     res.json({ sessionId: r.sessionId, runId: r.runId, title: r.title });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'start child session failed' });
@@ -341,7 +349,7 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const { title, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
+    const { title, title_source, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
     const icon = normalizeSessionEmoji(emoji);
     if (emoji !== undefined && emoji !== null && emoji !== '' && !icon) return res.status(400).json({ detail: 'emoji must be one emoji' });
     // 契约 C8:远端改会话的项目路径同样不许指到根 / 家目录 / 受保护目录(桌面据 project_path 给之后的 run 填 cwd)。
@@ -350,10 +358,17 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
     const sets: string[] = [];
     const params: any[] = [];
-    if (typeof title === 'string') { sets.push('title = ?'); params.push(title.trim().slice(0, 200)); }
+    if (typeof title === 'string') {
+      const nextTitle = title.trim().slice(0, 200);
+      // 只有用户自己的改名入口带 title_source:'user'。手动 = Historian 此后不再动这个标题;用户把标题清空 = 交还给 Historian。
+      // 前端发出第一句后写的占位标题带 'auto':不算手动,也盖不掉手动标题(本机列表可能还没刷到别的设备刚改的名字)。
+      sets.push(title_source === 'auto' ? 'title = CASE WHEN title_manual THEN title ELSE ? END' : 'title = ?'); params.push(nextTitle);
+      if (title_source === 'user') sets.push(`title_manual = ${nextTitle ? 'TRUE' : 'FALSE'}`);
+    }
     if (typeof archived === 'boolean') { sets.push('archived = ?'); params.push(archived); }
     if (typeof model_id === 'string') { sets.push('model_id = ?'); params.push(model_id || null); }
-    if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?'); params.push(icon); }
+    // Historian 写图标不走这里,这条路都是用户动的;清空也算,不然下一轮又被自动填上。
+    if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?', 'emoji_manual = TRUE'); params.push(icon); }
     if (typeof project_path === 'string' || project_path === null) { sets.push('project_path = ?'); params.push(project_path ? String(project_path).slice(0, 1000) : null); }
     if (typeof project_name === 'string' || project_name === null) { sets.push('project_name = ?'); params.push(project_name ? String(project_name).slice(0, 255) : null); }
     if (typeof projectless === 'boolean') { sets.push('projectless = ?'); params.push(projectless); }
@@ -397,16 +412,7 @@ router.delete('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, re
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const sid = req.params.id;
-    // 显式级联(standalone schema 无外键 CASCADE;顺序:叶 → 根)。
-    await query(`DELETE FROM agent_run_events WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = ?)`, [sid]);
-    await query(`DELETE FROM agent_steps WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = ?)`, [sid]);
-    await query(`DELETE FROM agent_runs WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_messages WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_asides WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_sessions WHERE id = ?`, [sid]);
-    bumpHistoryRevision(sid); // 在飞的后台摘要落库前会复核版本 → 丢弃
-    await removeSessionCheckpoints(sid); // 代码快照跟着走,否则 home 无界增长
+    await deleteSessionCascade(req.params.id);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete session failed' });
@@ -731,6 +737,8 @@ router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest
   const userId = req.user!.userId;
   const s = await getOwnSession(req.params.id, userId).catch(() => null);
   if (!s) return res.status(404).json({ detail: 'Session not found' });
+  // 附件合计过大:回 400 带 code(客户端译成人话),不悄悄丢掉一部分 —— 用户会以为模型看到了
+  if (asideAttachmentsTooLarge(req.body)) return res.status(400).json({ detail: 'Attachments too large', code: 'aside_attachments_too_large' });
   const input = normalizeAsideInput(req.body);
   if (!input) return res.status(400).json({ detail: 'question required' });
   const modelId = (typeof req.body?.model_id === 'string' && req.body.model_id) || s.model_id || resolveProfile(s.app_id)?.defaultModelId || '';
@@ -753,16 +761,22 @@ router.post('/agent/sessions/:id/aside', authMiddleware, async (req: AuthRequest
   const heartbeat = setInterval(() => { if (!res.writableEnded) res.write(': hb\n\n'); }, 15_000);
   asideInFlight.set(userId, inFlight + 1);
   try {
+    const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : undefined);
     const answer = await answerAside({
       sessionId: s.id, userId, modelId, appId: s.app_id, client: normalizeClientTag(req.body?.client),
       input, signal: ac.signal, onToken: (text) => write({ type: 'delta', text }),
+      // 同主对话 run 的 agentConfig.visionMode / visionModelId(云端会话的引擎读不到本机 config.json,只能随请求带)
+      visionMode: str(req.body?.vision_mode), visionModelId: str(req.body?.vision_model_id),
+      thinkingLevel: asideThinkingLevel(req.body?.thinking_level),
+      onStatus: (ev) => write({ type: 'status', ...ev }),
     });
-    // 落库失败不影响这次回答(客户端照样拿到全文,只是重开时没有这一条)。
+    // 落库失败不影响这次回答(客户端照样拿到全文,只是重开时没有这一条)。附件只存记录(名字 / 类型 / 大小 / 缩略图),不存内容。
+    const metas = attachmentMetas(input.attachments);
     const saved = answer.content
       ? await saveAside({
         asideId: typeof req.body?.aside_id === 'string' ? req.body.aside_id : undefined, sessionId: s.id, userId,
         messageId: typeof req.body?.message_id === 'string' ? req.body.message_id : undefined,
-        turn: { question: input.question, ...(input.quote ? { quote: input.quote } : {}), answer: answer.content }, thread: input.thread,
+        turn: { question: input.question, ...(input.quote ? { quote: input.quote } : {}), answer: answer.content, ...(metas.length ? { attachments: metas } : {}) }, thread: input.thread,
       }).catch((e) => { console.warn('[aside] save failed:', e?.message || e); return undefined; })
       : undefined;
     write({ type: 'done', ...answer, modelId, ...(saved ? { asideId: saved.id, asideMessageId: saved.messageId } : {}) });

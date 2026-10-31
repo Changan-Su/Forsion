@@ -16,6 +16,7 @@ import { getLocalSkill, builtinSkillsDir, skillTreeHash } from '../../skills/loc
 import { getToolDefinitions, listDeferredTools } from '../registry.js';
 import { skillsProvider } from './skills.js';
 import { manageSkillProvider } from './manageSkill.js';
+import { capToolResult } from '../../services/contextBudget.js';
 
 const useSkill = skillsProvider.tools().find((t) => t.name === 'use_skill')!;
 const manage = manageSkillProvider.tools()[0];
@@ -74,6 +75,35 @@ describe('use_skill:技能文件夹', () => {
     for (const rel of ['scripts/quick_validate.py', 'agents/grader.md', 'references/schemas.md']) {
       await expect(fs.access(path.join(home, 'skills', 'skill-creator', rel))).resolves.toBeUndefined();
     }
+  });
+
+  // 10-24:模型看到的是 capToolResult 之后的那份 —— 超 48k 字只留头 34k + 尾 12k。forsion-plugin 正文 14.5 万字,
+  // 「发布到商店」在 13 万字处,模型从来看不到(live storename 红了三天)。商店一节提到头部,长 API 细则搬进 references/。
+  // 钉住:内置技能都不被 use_skill 截断;正文点名的 references/ 文件都在,而且在模型看得到的那部分里被点到名。
+  it('包内置技能:模型看得到的部分里点到了它所有的 references/ 文件,且文件都在', async () => {
+    for (const slug of await fs.readdir(builtinSkillsDir())) {
+      const out = await load(`local:${slug}`);
+      expect(out, slug).not.toContain('…(truncated)');
+      const visible = capToolResult(out);
+      const dir = out.match(/^Skill folder: (.+)$/m)?.[1];
+      for (const rel of new Set(out.match(/references\/[\w.-]+\.md/g) || [])) {
+        await expect(fs.access(path.join(dir!, rel)), `${slug}: ${rel}`).resolves.toBeUndefined();
+        expect(visible, `${slug}: ${rel} only named in the omitted middle`).toContain(rel);
+      }
+    }
+    expect(capToolResult(await load('local:forsion-plugin'))).toContain('## 发布到商店');
+  });
+
+  // 10-29 插件开发体验 1B:agent 写的插件自己画下拉 / 菜单 / 对话框,因为「用宿主零件」的规矩和样式契约都在被省掉的中段。
+  // 钉住:界面纪律、零件速查表、样式契约、商店一节到 Agent 自建 Space 的指针,都在模型看得到的前 34k 里。
+  it('forsion-plugin:界面纪律与样式契约在模型看得到的部分', async () => {
+    const out = await load('local:forsion-plugin');
+    const visible = capToolResult(out);
+    for (const s of ["## Desktop plugin UI: use the host's parts", "ctx.ui.mountControl(el, { type: 'select' })", 'ctx.ui.contextMenu({ anchor',
+      'ctx.ui.confirm({ title, danger })', '--style` lists, under "UI parts"', '### 样式契约', '### Android App', 'section `ctx.agent`']) {
+      expect(visible, s).toContain(s);
+    }
+    expect(visible.indexOf('section `ctx.agent`')).toBeLessThan(visible.indexOf('…[tool output too large'));
   });
 });
 

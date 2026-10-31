@@ -24,13 +24,18 @@ const path = require('node:path')
 const sdk = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT || path.join(os.homedir(), 'Library/Android/sdk')
 const SERIAL = process.env.ANDROID_SERIAL || ''
 const adb = (...args) => execFileSync(path.join(sdk, 'platform-tools/adb'), [...(SERIAL ? ['-s', SERIAL] : []), ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
-const PKG = 'com.forsion.tangu'
+const PKG = process.env.FORSION_ANDROID_PACKAGE || 'com.forsion.tangu'
 const PORT = Number(process.env.HUB_PORT || 8790)
 const CDP_PORT = Number(process.env.CDP_PORT || 9354)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const b64u = (s) => Buffer.from(s).toString('base64url')
 const TOKEN = `${b64u('{"alg":"HS256","typ":"JWT"}')}.${b64u(JSON.stringify({ userId: 'u_emu_dl', username: 'u_emu_dl' }))}.emu-sig`
 const RUN = `p1dl-${Date.now().toString(36)}`
+const EXTEND_ACCEPTANCE = process.env.FORSION_EXTEND_ACCEPTANCE === '1'
+if (EXTEND_ACCEPTANCE && (!SERIAL || !PKG.endsWith('.nativepreview'))) throw new Error('Extend acceptance requires an explicit isolated emulator and nativepreview package')
+const LEGACY_TEXT = '# Existing local note\n\nPreserve this note through account adoption and relaunch.\n'
+const LEGACY_PATH = 'vault/legacy-extend-fixture.md'
+
 
 // ───── 假 hub:只要让垫片装得上、启动别 401 登出 ─────
 const server = http.createServer((req, res) => {
@@ -39,6 +44,7 @@ const server = http.createServer((req, res) => {
   req.resume()
   const p = new URL(req.url, 'http://x').pathname
   const send = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', ...cors }); res.end(JSON.stringify(obj)) }
+  if (p === '/api/mobile-extend/legacy-content') { res.writeHead(200, { 'Content-Type': 'text/plain', ...cors }); return res.end('Existing native account bytes') }
   if (p === '/api/auth/me') return send(200, { id: 'u_emu_dl', username: 'u_emu_dl' })
   if (p === '/api/auth/refresh') return send(401, { detail: 'emu: no refresh' })
   if (p === '/api/agent/sessions') return send(200, { sessions: [] })
@@ -76,10 +82,15 @@ async function boot() {
   adb('reverse', `tcp:${PORT}`, `tcp:${PORT}`)
   adb('shell', 'am', 'force-stop', PKG)
   adb('shell', 'pm', 'clear', PKG)
-  adb('shell', 'am', 'start', '-n', `${PKG}/.MainActivity`)
+  adb('shell', 'am', 'start', '-n', `${PKG}/com.forsion.tangu.MainActivity`)
   await sleep(4000)
   for (let i = 0; i < 30; i++) {
     try {
+      if (EXTEND_ACCEPTANCE) await js(`
+        await Capacitor.Plugins.Filesystem.writeFile({ path: ${JSON.stringify(LEGACY_PATH)}, directory: 'DATA', data: ${JSON.stringify(LEGACY_TEXT)}, encoding: 'utf8', recursive: true })
+        localStorage.setItem('amadeus_vault_mode', 'local')
+        localStorage.setItem('amadeus_last_page', 'legacy-extend-fixture.md')
+        return true`)
       await evaluate(`Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: ${JSON.stringify(TOKEN)} }).then(() => 'ok')`)
       await evaluate(`localStorage.setItem('forsion_tangu_onboarding_done', '1'), 'ok'`)
       await sleep(1500)
@@ -89,10 +100,10 @@ async function boot() {
   }
   if (!adb('shell', `run-as ${PKG} cat shared_prefs/CapacitorStorage.xml`).includes('forsion_token')) throw new Error('token 没落进 CapacitorStorage')
   adb('shell', 'am', 'force-stop', PKG)
-  adb('shell', 'am', 'start', '-n', `${PKG}/.MainActivity`)
+  adb('shell', 'am', 'start', '-n', `${PKG}/com.forsion.tangu.MainActivity`)
   let last = null
   for (let i = 0; i < 90; i++) {
-    try { last = await evaluate('JSON.stringify({ url: location.href, dl: typeof (window.tangu && window.tangu.saveDownload) })'); if (JSON.parse(last).dl === 'function') return } catch (e) { last = String(e.message || e) }
+    try { last = await evaluate('JSON.stringify({ url: location.href, dl: typeof (window.tangu && window.tangu.saveDownload), plugins: typeof window.amadeus?.listPlugins, shell: !!document.querySelector(".mb-shell") })'); if (JSON.parse(last).dl === 'function' && (!EXTEND_ACCEPTANCE || (JSON.parse(last).plugins === 'function' && JSON.parse(last).shell))) return } catch (e) { last = String(e.message || e) }
     await sleep(1000)
   }
   throw new Error(`垫片没装上(window.tangu.saveDownload 缺席):${last}`)
@@ -110,6 +121,37 @@ function rows() {
 const rowOf = (name) => rows().find((r) => r._display_name === name)
 const sha = (name) => adb('shell', 'sha256sum', `'/sdcard/Download/${name}'`).trim().split(/\s+/)[0]
 const sdDownload = () => adb('shell', 'ls', '-a', '/sdcard/Download').split('\n').map((s) => s.trim()).filter(Boolean)
+
+async function extendAcceptance() {
+  const hash = require('node:crypto').createHash('sha256').update(LEGACY_TEXT).digest('hex')
+  const localHash = () => adb('shell', `run-as ${PKG} sha256sum files/${LEGACY_PATH}`).trim().split(/\s+/)[0]
+  check('Extend: old local note bytes remain after sign-in', localHash() === hash)
+  const actual = await js(`const p = (await window.amadeus.listPlugins()).find(p => p.id === 'forsion-extend'); return { version: p?.version, locked: p?.locked, mobile: window.tangu.extendMobile, pages: await window.amadeus.listPages(), last: localStorage.getItem('amadeus_last_page') }`)
+  const pinned = require('../extend-bundle.json').version
+  check(`Extend: signed ${pinned} loaded in APK with local vault selection preserved`, actual.version === pinned && actual.locked && actual.mobile && actual.pages.includes('legacy-extend-fixture.md') && actual.last === 'legacy-extend-fixture.md', actual)
+  const name = `${RUN}-extend-native.txt`
+  const saved = await js(`const r = await window.tangu.account.request('/mobile-extend/legacy-content'); return window.tangu.account.saveDownload(await r.blob(), ${JSON.stringify(name)})`)
+  check('Extend: account download reaches native MediaStore with exact bytes', saved?.ok && sha(name) === require('node:crypto').createHash('sha256').update('Existing native account bytes').digest('hex'), saved)
+  await js(`window.dispatchEvent(new CustomEvent('forsion:open-settings', { detail: 'forsion/fx:forsion-extend:account-details' })); return true`)
+  for (let i = 0; i < 30; i++) { if (await js(`return !!document.querySelector('[data-fx-page="account-details"]')?.textContent.includes('u_emu_dl')`)) break; await sleep(300) }
+  const accountUi = await js(`return document.querySelector('[data-fx-page="account-details"]')?.textContent || ''`)
+  check('Extend: real account settings renderer works inside Android WebView', accountUi.includes('u_emu_dl'), accountUi.slice(0, 300))
+  const shotRoot = path.resolve(__dirname, '../outputs/extend-mobile')
+  require('node:fs').mkdirSync(shotRoot, { recursive: true })
+  require('node:fs').writeFileSync(path.join(shotRoot, 'android-account.png'), execFileSync(path.join(sdk, 'platform-tools/adb'), ['-s', SERIAL, 'exec-out', 'screencap', '-p']))
+
+  await js(`await window.tangu.forsionLogout(); return true`)
+  check('Extend: signing out preserves old local note bytes', localHash() === hash)
+  await js(`await Capacitor.Plugins.Preferences.set({ key: 'forsion_token', value: ${JSON.stringify(TOKEN)} }); return true`)
+  // Preferences resolves before Android's asynchronous disk flush; verify persistence before killing the process.
+  await sleep(1500)
+  if (!adb('shell', `run-as ${PKG} cat shared_prefs/CapacitorStorage.xml`).includes('forsion_token')) throw new Error('fixture token not persisted before relaunch')
+  adb('shell', 'am', 'force-stop', PKG)
+  adb('shell', 'am', 'start', '-n', `${PKG}/com.forsion.tangu.MainActivity`)
+  for (let i = 0; i < 45; i++) { try { if (await js(`return !!window.tangu?.account && !!window.amadeus?.listPlugins`)) break } catch {} await sleep(500) }
+  const restored = await js(`return { token: (await Capacitor.Plugins.Preferences.get({ key: 'forsion_token' })).value, mode: localStorage.getItem('amadeus_vault_mode'), last: localStorage.getItem('amadeus_last_page'), pages: await window.amadeus.listPages() }`)
+  check('Extend: relaunch preserves token, local mode, selected note and actual file bytes', restored.token === TOKEN && restored.mode === 'local' && restored.last === 'legacy-extend-fixture.md' && restored.pages.includes('legacy-extend-fixture.md') && localHash() === hash, { ...restored, token: restored.token === TOKEN ? '[fixture token preserved]' : '[missing]' })
+}
 
 async function run() {
   const pid0 = adb('shell', 'pidof', PKG).trim()
@@ -192,6 +234,7 @@ async function run() {
   await new Promise((r) => server.listen(PORT, '127.0.0.1', r))
   try {
     await boot()
+    if (EXTEND_ACCEPTANCE) await extendAcceptance()
     await run()
   } catch (e) {
     check('harness', false, e.message)

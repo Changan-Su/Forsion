@@ -5,7 +5,7 @@
  * 展开:竖排步骤(图标列 + 步骤间细线),思考原文在第一步下;每个调用一行(动作 + 目标 + 可选 +增/-删),可再展开看参数/结果。
  * 复用 .tool-card-body/.label 样式;+增/-删 best-effort(算不出就只显目标)。
  */
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { ChevronRight, ChevronDown, XCircle, PauseCircle, Sparkles, FilePlus2, Pencil, Terminal, FileText, Search, Globe, Wrench, type LucideIcon } from 'lucide-react'
 import { AnimatedCollapse } from './AnimatedUI'
 import { DiffView } from './DiffView'
@@ -13,15 +13,21 @@ import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
 import type { ApprovalRequest, ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
+import { MaskTag, MaskedText, collectMasked, type MaskedValue } from './MaskedValues'
 import { isSelfWriteReceipt } from '../services/selfUpdates'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
-  'tool.parked.waiting': { zh: '已挂起，等你在输入框上方批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it above the input box. The agent carries on meanwhile; the result lands here once you decide.' },
+  'tool.parked.waiting': { zh: '已挂起，等你批准。Agent 先做别的，拍板后结果会补在这里。', en: 'Parked until you approve it. The agent carries on meanwhile; the result lands here once you decide.' },
   'tool.parked.past': { zh: '当时挂起等你批准，结局见后面的审批结果。', en: 'This call was parked for your approval; see the approval result further down.' },
+  'tool.parked.askPast': { zh: '当时挂起等你回答，Agent 没停下来；答案见后面那一行。', en: 'This question was parked while the agent kept going; see your answer further down.' },
   // 不写「在输入框上方」:紧挨着的指路行 / 计划卡 / 团队 work 行已经说了在哪答,这里再写一遍是重复
   'tool.waitingYou': { zh: '等你回复', en: 'Waiting for your reply' },
   'tool.verb.readComputerHistory': { zh: '读取电脑历史', en: 'Read computer history' },
+  'tool.verb.gitStatus': { zh: '查看 Git 状况', en: 'Checked Git status' },
+  'tool.verb.gitCommit': { zh: '提交', en: 'Committed' },
+  'tool.verb.gitPush': { zh: '推送', en: 'Pushed' },
+  'tool.verb.gitPull': { zh: '拉取', en: 'Pulled' },
   'tool.thought': { zh: '思考过程', en: 'Thought process' },
   'tool.thinkingNow': { zh: '思考中', en: 'Thinking' },
   'tool.thoughtSec': { zh: '思考 {n} 秒', en: 'Thought for {n}s' },
@@ -112,6 +118,15 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'search', verbKey: 'tool.verb.searched', target: String(a.query ?? ''), isFile: false }
     case 'web_fetch':
       return { kind: 'browse', verbKey: 'tool.verb.browsed', target: String(a.url ?? ''), isFile: false }
+    // 当前项目的 git(tangu-agent tools/builtin/git.ts):提交那行带信息首行,推送那行带「只推这一次」的远端名
+    case 'git_status':
+      return { kind: 'read', verbKey: 'tool.verb.gitStatus', target: '', isFile: false }
+    case 'git_commit':
+      return { kind: 'run', verbKey: 'tool.verb.gitCommit', target: String(a.message ?? '').split('\n')[0], isFile: false }
+    case 'git_push':
+      return { kind: 'run', verbKey: 'tool.verb.gitPush', target: typeof a.remote === 'string' ? a.remote : '', isFile: false }
+    case 'git_pull':
+      return { kind: 'run', verbKey: 'tool.verb.gitPull', target: '', isFile: false }
     case COMPUTER_HISTORY_TOOL:
       return { kind: 'read', verbKey: 'tool.verb.readComputerHistory', target: String(a.query ?? a.app ?? ''), isFile: false }
     default:
@@ -142,6 +157,28 @@ export function thoughtLabel(t: (key: string, vars?: Record<string, string | num
   return sec < 60 ? t('tool.thoughtSec', { n: sec }) : t('tool.thoughtMin', { m: Math.floor(sec / 60), s: sec % 60 })
 }
 
+/** 过程行换一步时滚动替换(借鉴 Comma 方案 §6,10-24):旧行上滑淡出、新行从下面进。`k` 变了才滚;挂上时不入场。
+ *  两行叠在同一个 grid 格子里,不挤动后面的状态图标;动效与时长全在 base.css 的 .tool-roll。 */
+const RollLine: React.FC<{ k: string; children: React.ReactNode }> = ({ k, children }) => {
+  const cur = useRef({ k, node: children })
+  const moved = useRef(false)
+  const [out, setOut] = useState<{ k: string; node: React.ReactNode } | null>(null)
+  if (cur.current.k !== k) moved.current = true
+  useLayoutEffect(() => {
+    if (cur.current.k === k) { cur.current.node = children; return }
+    setOut(cur.current)
+    cur.current = { k, node: children }
+  })
+  // 兜底:藏起来的容器里动画不放、animationend 不来,旧行别一直叠在那儿
+  useEffect(() => { if (!out) return; const id = setTimeout(() => setOut(null), 250); return () => clearTimeout(id) }, [out])
+  return (
+    <span className="tool-roll">
+      {out && <span key={`out-${out.k}`} className="tool-roll-item is-out" aria-hidden onAnimationEnd={() => setOut(null)}>{out.node}</span>}
+      <span key={k} className={`tool-roll-item${moved.current ? ' is-in' : ''}`}>{children}</span>
+    </span>
+  )
+}
+
 const ThinkRow: React.FC<{ reasoning: string; label: string; thinking: boolean }> = ({ reasoning, label, thinking }) => {
   const [open, setOpen] = useState(true)
   return (
@@ -156,7 +193,7 @@ const ThinkRow: React.FC<{ reasoning: string; label: string; thinking: boolean }
   )
 }
 
-const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean; asking?: boolean }> = ({ ev, desc, running, waiting, asking }) => {
+const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean; asking?: boolean; masked: MaskedValue[] }> = ({ ev, desc, running, waiting, asking, masked }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // 只在展开时构造 diff(P1:文件修改类工具详情渲染 diff 而非裸 JSON)
@@ -173,7 +210,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
         <span className="tool-row-copy">
           <span className={`tool-row-copy-text${active ? ' chat-run-shimmer-text' : ''}`}>
             <span className="tool-row-verb">{verb}</span>
-            <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}>{desc.target}</span>
+            <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}><MaskedText text={desc.target} masked={masked} /></span>
           </span>
         </span>
         <Stat d={desc} />
@@ -192,14 +229,14 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
               {ev.arguments && (
                 <details className="tool-raw-args">
                   <summary>{t('tool.argsLabel')}</summary>
-                  {fmtArgs(ev.arguments)}
+                  <MaskedText text={fmtArgs(ev.arguments)} masked={masked} />
                 </details>
               )}
             </>
-          ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div>{fmtArgs(ev.arguments)}</>) : null}
+          ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div><MaskedText text={fmtArgs(ev.arguments)} masked={masked} /></>) : null}
           {/* 挂起的占位结果是写给模型的英文说明,对人换成一句本地化的状态 */}
-          {ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
-            : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{toolResultText(ev, t)}</>)}
+          {ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(ASKS_YOU.has(ev.name) ? (asking ? 'tool.waitingYou' : 'tool.parked.askPast') : waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
+            : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div><MaskedText text={toolResultText(ev, t)} masked={masked} /></>)}
         </div>
       </AnimatedCollapse>
     </div>
@@ -218,7 +255,9 @@ export const ToolGroup: React.FC<{
   reasoningMs?: number
   /** 思考正在进行(这一行是消息里最后一块时才传 true)。 */
   thinking?: boolean
-}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp }) => {
+  /** 这组调用所在的会话(「从不遮住」写进跑这个会话的那台引擎)。 */
+  sessionId?: string
+}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp, sessionId }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // Agent 自己写成了的记忆 / 进化记录 / 协作说明,由回复下面的回执行和请求卡呈现,这里不再重复列一行(没写成的照旧留着)。
@@ -243,12 +282,15 @@ export const ToolGroup: React.FC<{
   const summary = [...(thinking ? [] : [thinkLabel]), ...order.filter((k) => counts[k] > 0).map((k) => t(SUM[k], { n: counts[k] }))].filter(Boolean).join(' · ')
   const shortSummary = [...(thinking ? [] : [thinkLabel]), groupedEvents.length ? t('tool.sumN', { n: groupedEvents.length }) : ''].filter(Boolean).join(' · ') || thinkLabel
 
-  const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && !!running && !e.done && ASKS_YOU.has(e.name)
+  // 挂起的 ask_user(托盘 run,10-23)已经有占位结果(done),仍在等你答 —— 它那一段可能已经收尾(切段),不看 running
+  const asksYou = (e: ToolEvent): boolean => !!awaitingAnswer && ASKS_YOU.has(e.name) && (!!e.parked || (!!running && !e.done))
   const allDone = groupedEvents.every((e) => e.done)
   const anyErr = groupedEvents.some((e) => e.isError)
   // 挂起的调用「还在等你」= 它那张审批仍 pending(审批与工具卡按 toolCallId 对上;重载后审批不在 → 只算「当时挂起」)
   const waitingIds = new Set((approvals || []).filter((a) => a.status === 'pending' && a.toolCallId).map((a) => a.toolCallId!))
   const anyParked = groupedEvents.some((e) => e.parked)
+  // 挂起的提问还在等你答:agent 在干别的(当前步骤照常写在头上),暂停图标标出「这组里有个问题等你」
+  const parkedAsk = groupedEvents.some((e) => e.parked && asksYou(e))
   // 运行中:展示第一个未完成的调用作为「当前」;都完成则无。思考中优先(它是这一行最新的动静)。
   const curIdx = running && !thinking ? groupedEvents.findIndex((e) => !e.done) : -1
   const curAsks = curIdx >= 0 && asksYou(groupedEvents[curIdx])
@@ -257,6 +299,7 @@ export const ToolGroup: React.FC<{
   const curDesc = curIdx >= 0 ? descs[curIdx] : null
   const curVerb = curDesc ? (curDesc.verbKey ? t(curDesc.verbKey) : groupedEvents[curIdx].name) : ''
   const showList = !!reasoning || groupedEvents.length > 0
+  const masked = collectMasked(groupedEvents)
 
   return (
     <>
@@ -264,6 +307,7 @@ export const ToolGroup: React.FC<{
         <div className="tool-group">
           <button className="tool-group-head" aria-busy={busy} aria-expanded={open} onClick={() => setOpen((o) => !o)}>
             <span className="tool-group-ic">{open ? <ChevronDown size={13} /> : busy ? <Dots /> : <ChevronRight size={13} />}</span>
+            <RollLine k={open ? 'sum' : thinking ? 'think' : curAsks ? 'ask' : curDesc ? `cur-${groupedEvents[curIdx].id}` : 'sum'}>
             {!open && thinking ? (
               <span className="tool-group-cur"><span className="tool-group-cur-copy chat-run-shimmer-text">{thinkLabel}</span></span>
             ) : !open && curAsks ? (
@@ -285,15 +329,19 @@ export const ToolGroup: React.FC<{
                 <span className="tool-group-sum-short">{shortSummary}</span>
               </span>
             )}
+            </RollLine>
+            {masked.length > 0 && <MaskTag masked={masked} sessionId={sessionId} />}
             <span className="tool-group-status">
-              {anyParked ? <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />
+              {anyParked ? (parkedAsk
+                ? <PauseCircle size={13} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
+                : <PauseCircle size={13} style={{ color: groupedEvents.some((e) => e.parked && waitingIds.has(e.id)) ? 'var(--accent-ink)' : 'var(--text-faint)' }} />)
                 : allDone && anyErr ? <XCircle size={13} style={{ color: 'var(--danger)' }} /> : null}
             </span>
           </button>
           <AnimatedCollapse open={open}>
             <div className="tool-group-list">
               {!!reasoning && <ThinkRow reasoning={reasoning} label={thinkLabel} thinking={thinking} />}
-              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} asking={asksYou(ev)} />)}
+              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} asking={asksYou(ev)} masked={masked} />)}
             </div>
           </AnimatedCollapse>
         </div>

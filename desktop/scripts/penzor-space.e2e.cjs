@@ -11,6 +11,9 @@
  *  ⑤ 云端说 401 → 登录页。
  * 截图在 $SHOTS_DIR(缺省系统临时目录下 forsion-penzor-space-shots/),交付前人眼看一遍。
  *
+ * A + T2 fixture (2026-10-21): unified root, eight sources, notice-only quota, stale samples, Agent/profile/plugin browsing and Amadeus trash.
+ * PENZOR_FIXTURE_SIGNING=1 creates a disposable signed fixture and compiled shell copy; no real signing key is read.
+ * Run under the root .claude/hooks/devlock.cjs; EXTEND_PKG points to a built Extend checkout.
  * 需先 npm run build(读 out/)。用法:EXTEND_PKG=<已 build + sign 的 Forsion-Extend 检出> npm run e2e:penzor
  * 走查用:PENZOR_HOLD=1 摆好(假云端 + 上传限速)就停住、不跑断言,窗口关掉 / 退出才收场;配 STAGE_ELECTRON=<单独一份 Electron.app>/Contents/MacOS/Electron,
  * computer use 按应用认窗口,别和正开着的 dev 混(见 gui-verify §4.2)。
@@ -19,12 +22,16 @@ const fs = require('fs')
 const os = require('os')
 const path = require('path')
 const http = require('http')
+const { createHash } = require('node:crypto')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
+const startupDiagnostics = require('./lib/packaged-startup-diagnostics.cjs')
 
 const ROOT = path.join(__dirname, '..')
-const EXTEND = process.env.EXTEND_PKG
+let EXTEND = process.env.EXTEND_PKG
+const PACKAGED_EXE = process.env.PENZOR_PACKAGED_EXE
+const PREVIOUS_EXTEND = process.env.PENZOR_PREVIOUS_EXTEND
 const SHOTS = process.env.SHOTS_DIR || path.join(os.tmpdir(), 'forsion-penzor-space-shots')
 const results = []
 function check(name, ok, detail) {
@@ -32,14 +39,94 @@ function check(name, ok, detail) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
 
-function installExtend(home) {
-  const pkg = JSON.parse(fs.readFileSync(path.join(EXTEND, 'package.json'), 'utf8'))
+function installExtend(home, source = EXTEND) {
+  const pkg = JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8'))
   const dest = path.join(home, 'plugins', 'forsion-extend')
   for (const f of ['package.json', ...pkg.files]) {
     fs.mkdirSync(path.dirname(path.join(dest, f)), { recursive: true })
-    fs.copyFileSync(path.join(EXTEND, f), path.join(dest, f))
+    fs.copyFileSync(path.join(source, f), path.join(dest, f))
   }
   return pkg.version
+}
+
+async function withinDeadline(work, timeout, message) {
+  let timer
+  try { return await Promise.race([work(), new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(message)), timeout) })]) }
+  finally { clearTimeout(timer) }
+}
+
+function readCloudState(page) {
+  return page.evaluate(() => ({
+    viewport: { width: innerWidth, height: innerHeight },
+    slots: [...document.querySelectorAll('.rb-top .rb-slot')].map(e => ({ id: e.dataset.id, label: e.querySelector('button')?.getAttribute('aria-label') })),
+    cells: document.querySelectorAll('.rb-top .rb-cell').length,
+    entries: document.querySelector('.rb-top .rb-strip-in')?.children.length,
+    more: document.querySelector('.rb-more[data-rb-more="top"]')?.getAttribute('aria-expanded'),
+    strip: document.querySelector('.rb-top .rb-strip-in')?.style.transform,
+    hiddenSpaces: localStorage.getItem('forsion_plugin_space_health'),
+    disabledPlugins: localStorage.getItem('amadeus.plugins.disabled'),
+  }))
+}
+
+function recordCloudState(stage, state) {
+  fs.appendFileSync(path.join(SHOTS, 'cloud-navigation.jsonl'), JSON.stringify({ at: new Date().toISOString(), stage, ...state }) + '\n')
+  return state
+}
+
+async function cloudSnapshot(page, stage) {
+  return withinDeadline(async () => recordCloudState(stage, await readCloudState(page)), 3000, 'Cloud diagnostic exceeded 3s')
+}
+
+async function pluginSnapshot(page, stage) {
+  try { await withinDeadline(async () => {
+    const state = await page.evaluate(async () => {
+      const sources = await window.amadeus?.listPlugins?.()
+      const spaces = await window.tangu?.spacesList?.()
+      return {
+        sources: sources?.map(({ id, version, blocked, blockedReason, code }) => ({ id, version, blocked, blockedReason, codeBytes: code?.length })),
+        spaces: spaces?.map(({ slug, plugin, json }) => { let id; try { id = JSON.parse(json).id } catch {} return { slug, plugin, id } }),
+      }
+    })
+    fs.appendFileSync(path.join(SHOTS, 'plugin-reload.jsonl'), JSON.stringify({ at: new Date().toISOString(), stage, ...state }) + '\n')
+    recordCloudState(stage, await readCloudState(page))
+  }, 3000, 'Plugin/DOM diagnostic exceeded 3s') }
+  catch (error) { fs.appendFileSync(path.join(SHOTS, 'plugin-reload.jsonl'), JSON.stringify({ at: new Date().toISOString(), stage, diagnosticError: error.message }) + '\n') }
+}
+
+async function openCloud(page) {
+  // Expanded overflow is still a virtual window on short native desktops; use the real wheel to reveal later slots.
+  const cloud = page.locator('.rb-slot[data-id="space:forsion-penzor"] button.rb-btn').first()
+  const more = page.locator('.rb-more[data-rb-more="top"]').first()
+  const deadline = Date.now() + 20000
+  const remaining = () => Math.max(1, deadline - Date.now())
+  await cloudSnapshot(page, 'open-cloud')
+  if (!(await cloud.isVisible())) {
+    await more.waitFor({ state: 'visible', timeout: remaining() })
+    if (await more.getAttribute('aria-expanded', { timeout: remaining() }) !== 'true') await more.click({ timeout: remaining() })
+  }
+  for (let step = 0; !(await cloud.isVisible()) && step < 30 && Date.now() < deadline; step++) {
+    const before = await cloudSnapshot(page, `wheel-${step}-before`)
+    if (await cloud.isVisible()) break
+    const strip = await page.locator('.rb-top .rb-strip').boundingBox()
+    if (!strip) throw new Error('Cloud navigation has no visible Ribbon strip')
+    await page.mouse.move(strip.x + strip.width / 2, strip.y + strip.height / 2)
+    await page.mouse.wheel(0, 120)
+    // Accept late registration as well as scroll progress: at the current boundary the wheel can do nothing until a plugin appends its cell.
+    await page.waitForFunction(({ ids, entries }) => {
+      const target = document.querySelector('.rb-slot[data-id="space:forsion-penzor"] button.rb-btn')
+      return !!target?.getClientRects().length && getComputedStyle(target).visibility !== 'hidden'
+        || document.querySelector('.rb-top .rb-strip-in')?.children.length !== entries
+        || [...document.querySelectorAll('.rb-top .rb-slot')].map(e => e.dataset.id).join('\n') !== ids
+    }, { ids: before.slots.map(e => e.id).join('\n'), entries: before.entries }, { timeout: remaining() })
+  }
+  await cloud.waitFor({ state: 'visible', timeout: remaining() })
+  await cloudSnapshot(page, 'cloud-visible')
+  const label = await cloud.getAttribute('aria-label', { timeout: remaining() })
+  await cloud.click({ timeout: remaining() })
+  await page.evaluate(() => document.querySelector('.rb-more[data-rb-more="top"][aria-expanded="true"]')?.click())
+  await page.waitForSelector('.pz', { timeout: remaining() })
+  await cloudSnapshot(page, 'cloud-opened')
+  return label
 }
 
 // ── 本机假云端 ────────────────────────────────────────────────────────────────
@@ -48,7 +135,7 @@ const now = Date.now()
 const ago = (min) => now - min * 60_000
 const day = (d, h = 12) => { const x = new Date(now); x.setDate(x.getDate() - d); x.setHours(h, 0, 0, 0); return x.getTime() }
 function startFakeCloud() {
-  const st = { signedOut: false, hits: [], quota: 10240 * MB, throttle: false, uploads: [], badLength: 0 }
+  const st = { rollout: null, noticeRevision: null, unified: 'ok', signedOut: false, hits: [], quota: 10240 * MB, throttle: false, uploads: [], badLength: 0 }
   let seq = 0
   const appFiles = {
     'ai-studio': [
@@ -61,6 +148,11 @@ function startFakeCloud() {
       { id: 'f-prompt', name: 'prompt 记录.txt', fileType: 'file', fileSize: 12 * 1024, updatedAt: day(9, 10), parentId: 'ROOT' },
     ],
     penzor: [], // 我的云盘:装好是空的,下面的场景往里传
+    connect: [ // 在线网页的文件:server 标 managed,文件夹名是 app id、displayName 才是网页名
+      { id: 'd-page', name: '0b9f2c1e-7a44-4a6e-9d0a-2f1c6c0e51aa', displayName: '下午茶接龙', managed: true, fileType: 'directory', fileSize: 0, updatedAt: day(1), parentId: 'ROOT' },
+      { id: 'f-page', name: 'index.html', managed: true, fileType: 'file', fileSize: 4096, updatedAt: day(1), parentId: 'd-page' },
+      { id: 'f-stray', name: 'stray.bin', fileType: 'file', fileSize: 512, updatedAt: day(4), parentId: 'd-page' },
+    ],
   }
   const driveBytes = () => appFiles.penzor.filter((f) => f.fileType === 'file').reduce((n, f) => n + f.fileSize, 0)
   const trash = [
@@ -83,9 +175,10 @@ function startFakeCloud() {
   const appTotals = () => {
     const live = appFiles['ai-studio'].filter((f) => f.fileType === 'file').reduce((n, f) => n + f.fileSize, 0)
     return [
-      { appId: 'ai-studio', bytes: 1160 * MB + live, files: 214, trashBytes: 9.4 * MB, trashFiles: 1 },
+      { appId: 'ai-studio', canManage: false, bytes: 1160 * MB + live, files: 214, trashBytes: 9.4 * MB, trashFiles: 1 },
       { appId: 'photo-studio', bytes: 642 * MB, files: 88, trashBytes: 64 * MB, trashFiles: 2 },
       { appId: 'notebase', bytes: 34 * MB, files: 41, trashBytes: 2.1 * MB, trashFiles: 1 },
+      { appId: 'connect', bytes: 4608, files: 2, trashBytes: 0, trashFiles: 0 },
       { appId: 'penzor', bytes: driveBytes(), files: appFiles.penzor.filter((f) => f.fileType === 'file').length, trashBytes: 0, trashFiles: 0 },
     ]
   }
@@ -102,6 +195,7 @@ function startFakeCloud() {
     const src = String(req.headers['x-project-source'] || '')
     st.hits.push(`${req.method} ${p}${u.search}${src ? ` [${src}]` : ''}`)
     const json = (status, body) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
+    if (st.legacy && /^\/api\/storage\/(ledger|notice|source-)/.test(p)) return json(404, { detail: 'Not found' })
     if (st.signedOut) return json(401, { detail: 'Invalid or expired token' })
     if (p === '/api/brain/users/me') return json(200, { id: 'u1', username: 'demo', nickname: '演示' })
     if (p === '/api/remotesync/vaults') return json(200, {
@@ -122,6 +216,27 @@ function startFakeCloud() {
       { path: '读书笔记 · 原则.md', kind: 'page', size: 22 * 1024, updatedAt: new Date(day(4)).toISOString() },
     ] })
     if (p === '/api/amadeus/attachments') return json(200, { attachments: [{ vaultId: 'a1', vaultName: '我的云端笔记', path: '课题组/附件/课题组合影.heic', size: 22.4 * MB }], totalBytes: 22.4 * MB })
+    if (p === '/api/storage/notice/ack' && req.method === 'POST') {
+      const b = JSON.parse(String(await body()) || '{}')
+      st.noticeRevision = b.revision
+      if (b.revision !== 7) return json(409,{detail:'Notice changed'})
+      st.rollout = 'grace'
+      return json(200,{revision:7})
+    }
+    if (p === '/api/storage/ledger') {
+      if (st.unified === 'unavailable') return json(503, { detail: 'Unavailable' })
+      const amounts = [driveBytes(), 718*MB, 1594*MB, 20*MB, MB, 1916*MB, 2*MB, 46*MB]
+      const ids = ['uploads','ama','sync','agents','profile','apps','plugins','exports']
+      const used = amounts.reduce((a,b)=>a+b,0)
+      return json(200, { schemaVersion: 1, phase: st.rollout || 'notice', enforcement: st.rollout === 'enforced', rollout: st.rollout ? { revision:7, acknowledgedAt:st.rollout === 'notice'?null:new Date().toISOString(), graceUntil:new Date(Date.now()+30*86400000).toISOString(), compatibilityUntil:null } : null, complete: true, asOf: new Date().toISOString(), state: st.unified,
+        quota: { limitBytes: st.unified === 'over' ? MB : 10240*MB, origin: 'default' }, usage: { usedBytes: used, measuredBytes: used, liveBytes: used, trashBytes: 0, historyBytesExcluded: MB },
+        sources: ids.map((id,i)=>({ id, status:'ready', liveBytes:amounts[i], trashBytes:0, historyBytesExcluded:0, fileCount:1 })) })
+    }
+    if (p === '/api/storage/source-trash/ama') return json(200, { entries: [{id:'trash-1',path:'旧笔记.md',vaultName:'我的云端笔记',size:1024,deletedAt:new Date(day(2)).toISOString(),expiresAt:new Date(now+28*86400000).toISOString()}] })
+    if (p === '/api/storage/source-files/agents') return json(200, { entries: [{ path: 'tangu/MEMORY.md', size: 1234, mtime: now, downloadPath: '/storage/source-content/agents?slug=tangu&path=MEMORY.md' }] })
+    if (p === '/api/storage/source-files/profile') return json(200, { entries: ['HUMAN.md','AGENT.md','SOUL.md','MEMORY.md','CALENDAR.db'].map(name=>({ path:name,size:1234,mtime:now,downloadPath:`/storage/source-content/profile?slug=__human__&path=${name}` })) })
+    if (p === '/api/storage/source-files/plugins') return json(200, { entries: [{ path:'calendar',size:200,mtime:now }] })
+    if (p.startsWith('/api/storage/source-content/')) { res.writeHead(200, { 'Content-Type':'application/octet-stream' }); return res.end('fixture memory') }
     if (p === '/api/storage/quota') return json(200, { used: 1916 * MB + driveBytes(), quota: st.quota, percentage: 18.7 })
     if (p === '/api/storage/files-by-app') return json(200, {
       apps: appTotals(),
@@ -203,6 +318,14 @@ function startFakeCloud() {
 }
 
 async function main() {
+  if (PACKAGED_EXE && process.env.GITHUB_ACTIONS !== 'true') throw Error('Packaged startup changes OS integrations; run only on a dedicated GitHub Actions runner')
+  let launchRoot = process.env.PENZOR_SOURCE_DESKTOP || ROOT
+  if (PACKAGED_EXE && process.env.PENZOR_FIXTURE_SIGNING === '1') throw Error('Packaged acceptance must retain the production trust key')
+  if (process.env.PENZOR_FIXTURE_SIGNING === '1') {
+    const fixture = await require('./lib/penzor-fixture.cjs').preparePenzorFixture(ROOT, EXTEND)
+    launchRoot = fixture.app; EXTEND = fixture.extend
+    console.log('Isolated test-key build:', fixture.root)
+  }
   if (!EXTEND || !fs.existsSync(path.join(EXTEND, 'spaces/penzor/space.json')) || !fs.existsSync(path.join(EXTEND, 'SIGNATURE'))) {
     console.error('EXTEND_PKG 要指向一份 build + sign 过的 Forsion-Extend 检出(带 spaces/penzor/space.json 和 SIGNATURE)')
     process.exit(2)
@@ -215,7 +338,10 @@ async function main() {
   fs.writeFileSync(path.join(vault, '欢迎.md'), '# 欢迎\n')
   fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({ cloudUrl: cloud.url, token: 'fake-token' }))
   const userData = path.join(home, 'userdata')
-  installExtend(home)
+  installExtend(home, PREVIOUS_EXTEND || EXTEND)
+  const sentinel = Buffer.from('existing local note before upgrade\n')
+  const sentinelPath = path.join(vault, 'Keep after upgrade.md')
+  fs.writeFileSync(sentinelPath, sentinel)
   const stub = await startStubEngine({ models: [{ id: 'gpt-6-luna', name: 'GPT-6 Luna', provider: 'stub', source: 'forsion' }] })
   for (const d of [userData, `${userData}-dev`]) {
     fs.mkdirSync(d, { recursive: true })
@@ -223,20 +349,52 @@ async function main() {
     for (const f of ['remotesync.json', 'remotesync.dev.json']) fs.writeFileSync(path.join(d, f), JSON.stringify({ backend: 'penzor', penzor: { vault: 'WMOSv11' } }, null, 2))
     fs.writeFileSync(path.join(d, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'mock', cloudUrl: cloud.url }))
   }
-  const app = await electron.launch({
-    args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
-    ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
-    env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock') },
-    timeout: 90_000,
-  })
+  const isolatedEnv = PACKAGED_EXE ? { HOME: home, USERPROFILE: home, APPDATA: path.join(home, 'AppData', 'Roaming'), LOCALAPPDATA: path.join(home, 'AppData', 'Local') } : {}
+  // Windows resolves app.getPath('appData') before ready; a redirected shell folder must already exist.
+  for (const dir of Object.values(isolatedEnv)) fs.mkdirSync(dir, { recursive: true })
+  const nativeStartupDiagnostics = PACKAGED_EXE && ['darwin', 'win32'].includes(process.platform)
+  const stopStartupDiagnostics = nativeStartupDiagnostics ? startupDiagnostics.watch(SHOTS, 'app-startup', PACKAGED_EXE) : () => {}
+  let app
+  try {
+    app = await electron.launch({
+      // executablePath skips Playwright's Electron loader, including its mock-keychain switches.
+      args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ...(PACKAGED_EXE && process.platform === 'darwin' ? ['--use-mock-keychain', '--password-store=basic'] : []), ...(PACKAGED_EXE ? [] : [launchRoot])], cwd: launchRoot,
+      ...(PACKAGED_EXE || process.env.STAGE_ELECTRON ? { executablePath: PACKAGED_EXE || process.env.STAGE_ELECTRON } : {}),
+      env: { ...process.env, ...isolatedEnv, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(home, 'bridge.sock') },
+      timeout: 90_000,
+    })
+  } catch (error) {
+    if (nativeStartupDiagnostics) startupDiagnostics.capture(SHOTS, 'app-launch-failure', PACKAGED_EXE)
+    throw error
+  } finally { stopStartupDiagnostics() }
   const errors = []
   try {
+    const runtime = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), resources: process.resourcesPath, userData: app.getPath('userData') }))
+    check('运行的是指定的真实安装包或源码构建', runtime.packaged === !!PACKAGED_EXE, JSON.stringify(runtime))
+    if (process.env.PENZOR_EXPECT_VERSION) check('桌面版本与候选版本一致', runtime.version === process.env.PENZOR_EXPECT_VERSION)
+    fs.writeFileSync(path.join(SHOTS, 'runtime.json'), JSON.stringify(runtime, null, 2))
     const win = await app.firstWindow({ timeout: 120_000 })
-    win.on('console', (m) => { if (m.type() === 'error' && /penzor|pz-/i.test(m.text())) errors.push(m.text()) })
-    win.on('pageerror', (e) => errors.push(String(e)))
+    win.setDefaultTimeout(10_000)
+    const trace = (type, text) => fs.appendFileSync(path.join(SHOTS, 'renderer-console.jsonl'), JSON.stringify({ at: new Date().toISOString(), type, text }) + '\n')
+    win.on('console', (m) => { trace(m.type(), m.text()); if (m.type() === 'error' && /penzor|pz-/i.test(m.text())) errors.push(m.text()) })
+    win.on('pageerror', (e) => { trace('pageerror', String(e)); errors.push(String(e)) })
+    for (const channel of ['stdout', 'stderr']) app.process()[channel]?.on('data', bytes => fs.appendFileSync(path.join(SHOTS, `electron-${channel}.log`), bytes))
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows()[0]?.setContentSize(1512, 950) })
     await win.waitForSelector('#root', { timeout: 30_000 })
-    check('首启引导点掉', await skipOnboarding(win))
+    if (PACKAGED_EXE) await win.waitForFunction(() => typeof window.tangu?.cloudFetch === 'function')
+    if (PACKAGED_EXE) {
+      const installed = path.join(home, 'plugins', 'forsion-extend')
+      const signature = JSON.parse(fs.readFileSync(path.join(EXTEND, 'SIGNATURE'), 'utf8'))
+      const sameFiles = ['SIGNATURE', ...Object.keys(signature.files)].every(file => fs.existsSync(path.join(installed, file)) && createHash('sha256').update(fs.readFileSync(path.join(installed, file))).digest('hex') === createHash('sha256').update(fs.readFileSync(path.join(EXTEND, file))).digest('hex'))
+      fs.writeFileSync(path.join(SHOTS, 'extend-signature.json'), JSON.stringify({ installedVersion: JSON.parse(fs.readFileSync(path.join(installed, 'package.json'), 'utf8')).version,
+        bundledSignatureSha256: createHash('sha256').update(fs.readFileSync(path.join(EXTEND, 'SIGNATURE'))).digest('hex'),
+        installedSignatureSha256: createHash('sha256').update(fs.readFileSync(path.join(installed, 'SIGNATURE'))).digest('hex'), sameFiles }, null, 2))
+      check('旧 Extend 已被随包签名版本完整升级，所有发行文件字节一致', sameFiles)
+      check('升级保留已有笔记内容', fs.readFileSync(sentinelPath).equals(sentinel))
+    }
+    const skipped = await skipOnboarding(win)
+    if (!skipped) await win.getByRole('button', { name: /^(Skip onboarding|跳过引导)$/ }).first().click({ timeout: 5000 })
+    check('首启引导点掉', skipped || await skipOnboarding(win, 1000))
     if (process.env.PENZOR_HOLD) {
       cloud.st.throttle = true
       // 「踢一下」:往 <home>/kick 写几行本机路径 = 在「上传」里选了它们(computer use 在后台点不动系统的选文件框)
@@ -245,7 +403,7 @@ async function main() {
         if (!fs.existsSync(kick)) return
         const files = fs.readFileSync(kick, 'utf8').split('\n').filter(Boolean)
         fs.rmSync(kick)
-        win.locator('.pz input[type=file][multiple]').setInputFiles(files).catch((e) => console.log('kick failed', e.message))
+        win.locator('.pz input[type=file][multiple]:not(.pz-root-upload)').setInputFiles(files).catch((e) => console.log('kick failed', e.message))
       }, 1000)
       console.log(`HOLD ready · kick=${kick} · 窗口关掉或退出就收场`)
       await new Promise((r) => { app.once('close', r); app.process().once('exit', r); setTimeout(r, 40 * 60_000) }) // 从菜单退出时子进程的 exit 不一定到,认 Playwright 的 close
@@ -255,31 +413,49 @@ async function main() {
     }
     const shot = async (name, page = win) => { await page.mouse.move(1000, 5).catch(() => {}); await page.waitForTimeout(500); await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }); console.log('shot', name) }
     const setMode = (mode, skin) => win.evaluate(([m, s]) => { const r = document.documentElement; r.dataset.mode = m; r.classList.toggle('dark', m === 'dark'); if (s) r.dataset.skin = s; else delete r.dataset.skin }, [mode, skin || null])
+    // 子项可能是一行,也可能本身是一个分组(按应用看 → 应用文件,行尾还带用量):两种都算看得见,免得把已展开的上层又点收起
+    const treeShows = async (title) => { for (const l of [win.locator('.t2s-srow-title', { hasText: new RegExp(`^${title}$`) }), win.locator('.t2s-folder-row', { hasText: new RegExp(`^${title}`) })]) if (await l.first().isVisible().catch(() => false)) return true; return false }
     const sideWidth = () => win.evaluate(() => { const e = document.querySelector('.pz-side'); return e ? Math.round(e.getBoundingClientRect().width) : 0 })
 
+    await win.waitForTimeout(3000)
+    const later = win.getByRole('button', { name: '稍后', exact: true })
+    if (await later.count()) await later.first().click()
     // ① Ribbon → 概览,右栏收起
-    const btn = win.locator('.rb [aria-label="蓬洲云"]').first()
-    await win.waitForTimeout(1500)
-    if (!(await btn.count())) await win.locator('.rb-more[data-rb-more="top"]').click().catch(() => {})
-    await btn.waitFor({ timeout: 20_000 }).catch(() => {})
-    check('① Ribbon 上有「蓬洲云」', await btn.count() > 0)
-    await btn.click().catch(() => {})
-    await win.evaluate(() => document.querySelector('.rb-open-top .rb-more')?.click())
-    await win.waitForSelector('.pz-total', { timeout: 20_000 }).catch(() => {})
+    check('① Ribbon 上有「蓬洲云」', await openCloud(win) === '蓬洲云')
+    await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click()
+    await win.waitForSelector('.pz-total', { timeout: 20_000 })
     const total = await win.locator('.pz-total b').textContent().catch(() => '')
-    check('① 打开就是概览:总量 4.17 GB(四本相加)', total === '4.17 GB', total)
-    check('① 四张账卡', await win.locator('.pz-card').count() === 4)
-    await win.waitForFunction(() => document.querySelectorAll('.pz-rows .row').length >= 6, null, { timeout: 10_000 }).catch(() => {})
-    const top = await win.locator('.pz-rows .row .t').allTextContents()
-    check('① 占用最多:四本账一起排,第一是 WMOS 演示录屏.mov', /^WMOS 演示录屏\.mov/.test(top[0] || ''), top.slice(0, 3).join(' | '))
+    check('① 统一根展示八个来源和总量', await win.locator('.pz-rows .row').count() === 8 && total === '4.2 GB', total)
+    check('① T2 提醒且历史不计', /只是提醒/.test(await win.locator('.pz-unified-quota').textContent()) && /历史版本不算/.test(await win.locator('.pz-unified-quota').textContent()))
     await win.waitForTimeout(900)
     check('① 概览时右栏收起(不是空占位)', (await sideWidth()) < 40 && !(await win.locator('.dv-groupview .sidebar-empty, [data-view-type="sidebar-empty"]').count()), `side=${await sideWidth()}`)
     await setMode('light'); await shot('overview')
     await setMode('dark'); await shot('overview-dark'); await setMode('light')
 
+    const refreshRollout = async () => {
+      await win.getByRole('button', {name:'刷新',exact:true}).click()
+      await win.waitForTimeout(600)
+    }
+    cloud.st.rollout = 'notice'; await refreshRollout()
+    await win.getByRole('button',{name:'已阅读容量与历史保留通知',exact:true}).waitFor()
+    await shot('rollout-notice')
+    await win.getByRole('button',{name:'已阅读容量与历史保留通知',exact:true}).click()
+    await win.waitForFunction(()=>/通知宽限期/.test(document.querySelector('.pz-unified-quota')?.textContent||''))
+    check('T2 实际确认当前版本后进入至少 30 天过渡期', cloud.st.noticeRevision === 7 && !(await win.getByRole('button',{name:'已阅读容量与历史保留通知',exact:true}).count()))
+    await shot('rollout-grace')
+    cloud.st.rollout='enforced'; cloud.st.unified='over'; await refreshRollout()
+    check('T2 启用后的额度文案不再声称只提醒', /暂停新增内容/.test(await win.locator('.pz-unified-quota').textContent()) && !/仅提醒/.test(await win.locator('.pz-unified-quota').textContent()))
+    await shot('rollout-enforced')
+    cloud.st.rollout=null; cloud.st.unified='ok'; await refreshRollout()
+
+    if (!process.env.PENZOR_VISUAL_ONLY) {
+    // Native root folder contains every source.
+    const rootFolder = win.locator('.t2s-folder-row', { hasText: '我的云盘' }).first()
+    if (!(await win.locator('.t2s-srow-title', { hasText: /^我的文件$/ }).first().isVisible().catch(()=>false))) await rootFolder.click()
     // ② 同步库:展开组头 → 点 WMOSv11
-    for (const [folder, child] of [['设备同步', 'WMOSv11'], ['应用文件', 'AI Studio'], ['Amadeus Cloud', '我的云端笔记']]) {
-      const vis = await win.locator('.t2s-srow-title', { hasText: new RegExp(`^${child}$`) }).first().isVisible().catch(() => false)
+    // Extend 0.9.4 起应用文件、Amadeus Cloud 收在「按应用看」下面一层(左栏 A)
+    for (const [folder, child] of [['智库同步', 'WMOSv11'], ['按应用看', '应用文件'], ['应用文件', 'AI Studio'], ['Amadeus Cloud', '我的云端笔记']]) {
+      const vis = await treeShows(child)
       if (!vis) await win.locator('.t2s-folder-row', { hasText: folder }).first().click().catch(() => {})
       await win.waitForTimeout(300)
     }
@@ -294,33 +470,83 @@ async function main() {
     await shot('sync')
     await setMode('light', 'teal'); await shot('sync-teal'); await setMode('light')
 
-    // ③ 应用文件:右键移到回收站 → 吐司、回收站 +1 → 恢复
+    // Other applications are read-only, including the native context menu.
     await win.locator('.t2s-srow-title', { hasText: /^AI Studio$/ }).first().click()
-    await win.waitForSelector('.pz-table tbody tr', { timeout: 10_000 }).catch(() => {})
-    const trashHint = () => win.evaluate(() => { const r = [...document.querySelectorAll('.t2s-srow')].find((x) => /回收站/.test(x.textContent || '')); return r ? r.textContent : '' })
-    const beforeHint = await trashHint()
     const row = win.locator('.pz-table tbody tr', { hasText: '海报_v3_4k.png' }).first()
     await row.click({ button: 'right' })
-    await win.waitForSelector('.ctx-menu.pz-menu', { timeout: 5000 }).catch(() => {})
-    const items = await win.locator('.ctx-menu.pz-menu button').allTextContents()
-    check('③ 右键是宿主菜单:下载 / 重命名 / 移动到… / 移到回收站', items.join('|') === '下载|重命名|移动到…|移到回收站', items.join('|'))
-    await shot('trash-menu')
-    await win.locator('.ctx-menu.pz-menu button', { hasText: '移到回收站' }).click()
-    await win.waitForFunction(() => /已把「海报_v3_4k\.png」移到回收站/.test(document.body.innerText), null, { timeout: 8000 }).catch(() => {})
-    check('③ 不弹确认,吐司说一声', /已把「海报_v3_4k\.png」移到回收站/.test(await win.evaluate(() => document.body.innerText)))
-    check('③ 服务端收到带应用来源的删除', cloud.st.hits.includes('DELETE /api/files/f-v3 [ai-studio]'))
-    await win.waitForTimeout(800)
-    const afterHint = await trashHint()
-    check('③ 左栏回收站从 3 项变 4 项', /3 项/.test(beforeHint) && /4 项/.test(afterHint), `${beforeHint} → ${afterHint}`)
-    check('③ 右栏换成下一个文件', /海报_v2\.png/.test(await win.locator('.pz-side .pz-fname').textContent().catch(() => '')))
-    await shot('trash-done')
-    await win.locator('.t2s-srow', { hasText: '回收站' }).first().click()
-    await win.waitForSelector('.pz-table tbody tr', { timeout: 10_000 }).catch(() => {})
-    await win.locator('.pz-table tbody tr', { hasText: '海报_v3_4k.png' }).first().click()
-    await shot('trash')
-    await win.locator('.pz-side .pz-btn', { hasText: '恢复' }).click()
-    await win.waitForFunction(() => /已恢复「海报_v3_4k\.png」/.test(document.body.innerText), null, { timeout: 8000 }).catch(() => {})
-    check('③ 回收站里恢复', cloud.st.hits.includes('POST /api/trash/f-v3/restore'))
+    await win.waitForSelector('.ctx-menu.pz-menu')
+    check('③ 应用文件仅下载', (await win.locator('.ctx-menu.pz-menu button').allTextContents()).join('|') === '下载')
+    await win.keyboard.press('Escape')
+    await shot('app-readonly')
+
+    // 在线网页的文件夹显示网页名、只读;没人引用的孤儿照常能管
+    await win.locator('.t2s-srow-title', { hasText: /^Forsion Connect$/ }).first().click()
+    const pageRow = win.locator('.pz-table tbody tr', { hasText: '下午茶接龙' }).first()
+    await pageRow.waitFor()
+    check('③ 网页文件夹显示网页名,不露 app id', !(await win.locator('.pz-table').textContent()).includes('0b9f2c1e'))
+    check('③ 有去「我的网页」的入口', await win.locator('.pz-chip', { hasText: '管理我的网页' }).count() === 1)
+    await pageRow.click({ button: 'right' })
+    await win.waitForTimeout(300)
+    check('③ 网页文件夹没有改名 / 移动 / 删除', await win.locator('.ctx-menu.pz-menu').count() === 0)
+    await win.keyboard.press('Escape')
+    await pageRow.dblclick()
+    const pageFile = win.locator('.pz-table tbody tr', { hasText: 'index.html' }).first()
+    await pageFile.waitFor()
+    await pageFile.click({ button: 'right' })
+    await win.waitForSelector('.ctx-menu.pz-menu')
+    check('③ 网页文件只能下载', (await win.locator('.ctx-menu.pz-menu button').allTextContents()).join('|') === '下载')
+    await win.keyboard.press('Escape')
+    await pageFile.click()
+    check('③ 右栏写明去哪管', /已发布网页/.test(await win.locator('.pz-side .pz-tip').textContent().catch(() => '')))
+    await shot('hosted-page-file')
+    await win.locator('.pz-table tbody tr', { hasText: 'stray.bin' }).first().click({ button: 'right' })
+    await win.waitForSelector('.ctx-menu.pz-menu')
+    check('③ 没人引用的孤儿能删', (await win.locator('.ctx-menu.pz-menu button').allTextContents()).includes('移到回收站'))
+    await win.keyboard.press('Escape')
+    await win.locator('.pz-top .pz-ibtn').first().click()
+    await pageRow.waitFor()
+    await pageRow.click()
+    await shot('hosted-page-list')
+
+    // New sources use real views and native selection, not injected DOM.
+    for (const [label, file] of [['Agents','tangu'], ['我的资料','HUMAN.md'], ['插件数据','calendar']]) {
+      await win.locator('.t2s-srow-title', { hasText: new RegExp(`^${label}$`) }).first().click()
+      await win.waitForFunction(f => document.querySelector('.pz-table')?.textContent?.includes(f), file)
+      if (label === 'Agents') {
+        await win.locator('.pz-table tbody tr', { hasText: 'tangu' }).dblclick()
+        await win.waitForFunction(()=>document.querySelector('.pz-table')?.textContent?.includes('MEMORY.md'))
+      }
+      check(`③ ${label} 不显示写操作`, !(await win.locator('.pz-side button', {hasText:/重命名|移到回收站/}).count()))
+      if (label === '插件数据') check('③ 插件无下载按钮', !(await win.locator('.pz-side button', {hasText:'下载'}).count()))
+      await shot(label === 'Agents' ? 'agents' : label === '我的资料' ? 'profile' : 'plugins')
+    }
+    const refresh = async () => {
+      await win.evaluate(() => { const b = [...document.querySelectorAll('button')].find(x => /^刷新$/.test(x.getAttribute('aria-label') || x.title || x.textContent || '')); b?.click() })
+      await win.waitForTimeout(600)
+    }
+    await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click()
+    cloud.st.unified = 'over'; await refresh()
+    check('③ 超额只提醒', /已超过统一额度/.test(await win.locator('.pz-unified-quota').textContent()))
+    await shot('quota-over')
+    cloud.st.unified = 'unavailable'; await refresh()
+    check('③ 失败保留上次统计并明确当前未知', /保留上次统计/.test(await win.locator('.pz-unified-quota').textContent()) && await win.locator('.pz-total b').textContent() === '4.2 GB')
+    await shot('quota-unavailable')
+    cloud.st.unified = 'over'; await refresh() // following real upload must still succeed
+
+    // Cold renderer reload against the pre-unified backend must keep legacy file operations usable.
+    cloud.st.legacy = true
+    await pluginSnapshot(win, 'before-legacy-reload')
+    await win.reload(); await win.waitForSelector('#root')
+    await pluginSnapshot(win, 'after-legacy-reload')
+    await openCloud(win)
+    await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click()
+    await win.waitForSelector('.pz-unified-quota')
+    check('旧服务端 404 不伪造统一统计或清除登录态', await win.locator('.pz-total b').textContent() === '—' && !(await win.getByText('登录后查看你的蓬洲云').count()))
+    await shot('legacy-backend')
+    // Re-open the folder tree after reload; old APIs still supply its known vaults.
+    for (const [folder, child] of [['我的云盘', '我的文件'], ['按应用看', 'Amadeus Cloud'], ['Amadeus Cloud', '我的云端笔记']]) {
+      if (!(await treeShows(child))) await win.locator('.t2s-folder-row', { hasText: folder }).first().click()
+    }
 
     // Amadeus Cloud:只看和下载
     await win.locator('.t2s-srow-title', { hasText: /^我的云端笔记$/ }).first().click()
@@ -337,7 +563,7 @@ async function main() {
     const uploadsHit = () => cloud.st.hits.filter((h) => h.startsWith('POST /api/files/upload')).length
     const cardTitle = () => win.locator('.pz-txcard .pz-txhead b').textContent({ timeout: 1000 }).catch(() => '')
     const tableNames = () => win.locator('.pz-table td.n b').allTextContents()
-    await win.locator('.t2s-srow-title', { hasText: /^我的云盘$/ }).first().click()
+    await win.locator('.t2s-srow-title', { hasText: /^我的文件$/ }).first().click()
     await win.waitForSelector('text=这里还空着', { timeout: 10_000 }).catch(() => {})
     check('⑥ 我的云盘在概览下面,装好是空的', await win.getByText('这里还空着').count() > 0)
     await shot('drive-empty')
@@ -356,7 +582,7 @@ async function main() {
     check('⑥ 回车建好「资料」', cloud.st.hits.includes('POST /api/files [penzor]') && (await tableNames()).includes('资料'))
 
     cloud.st.throttle = true
-    await win.locator('.pz input[type=file][multiple]').setInputFiles(batch1)
+    await win.locator('.pz input[type=file][multiple]:not(.pz-root-upload)').setInputFiles(batch1)
     await win.waitForSelector('.pz-txcard', { timeout: 8000 }).catch(() => {})
     await win.waitForFunction(() => document.querySelectorAll('.pz-txcard .pz-txrow2').length >= 5, null, { timeout: 8000 }).catch(() => {})
     check('⑥ 一开传卡片就打开:正在传输 4 项', /正在传输 4 项/.test(await cardTitle()), await cardTitle())
@@ -385,7 +611,7 @@ async function main() {
     await win.waitForTimeout(400)
     check('⑥ 清除后卡片收掉', !(await win.locator('.pz-txcard, .pz-txpill').count()))
 
-    await win.locator('.pz input[type=file][multiple]').setInputFiles([batch1[3]])
+    await win.locator('.pz input[type=file][multiple]:not(.pz-root-upload)').setInputFiles([batch1[3]])
     await win.waitForFunction(() => /全部传完/.test(document.querySelector('.pz-txcard .pz-txhead b')?.textContent || ''), null, { timeout: 15_000 }).catch(() => {})
     check('⑥ 撞名 → 「组会纪要 (1).md」,卡片说全部传完', cloud.st.uploads.some((x) => x.name === '组会纪要 (1).md') && /全部传完/.test(await cardTitle()))
     await win.mouse.move(200, 600)
@@ -403,7 +629,7 @@ async function main() {
     const okQuota = cloud.st.quota
     cloud.st.quota = 1916 * MB + cloud.st.uploads.reduce((n, x) => n + x.size, 0) + 2 * MB // 只剩 2 MB,这批要 9 MB
     const before6 = uploadsHit()
-    await win.locator('.pz input[type=file][multiple]').setInputFiles([batch1[1], batch1[2]])
+    await win.locator('.pz input[type=file][multiple]:not(.pz-root-upload)').setInputFiles([batch1[1], batch1[2]])
     await win.waitForFunction(() => /空间不够/.test(document.querySelector('.pz-txcard')?.textContent || ''), null, { timeout: 8000 }).catch(() => {})
     const qtext = await win.locator('.pz-txcard').textContent().catch(() => '')
     check('⑥ 配额预检:放不下就一个都不传,卡片写还差 7 MB + 去回收站腾地方', /空间不够，还差 7(\.0+)? MB/.test(qtext) && /去回收站腾地方/.test(qtext) && uploadsHit() === before6, qtext.slice(0, 80))
@@ -412,7 +638,7 @@ async function main() {
     cloud.st.quota = okQuota
 
     await win.locator('.pz-table tbody tr', { hasText: '封面.png' }).first().click()
-    await win.locator('.pz-table tbody tr', { hasText: '数据.csv' }).first().click({ modifiers: ['Meta'] })
+    await win.locator('.pz-table tbody tr', { hasText: '数据.csv' }).first().click({ modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
     await win.waitForTimeout(400)
     const selbar = await win.locator('.pz-selbar').textContent().catch(() => '')
     const sideTitle = await win.locator('.pz-side .pz-fname').textContent().catch(() => '')
@@ -422,15 +648,32 @@ async function main() {
     await win.waitForFunction(() => /已把 2 项移到回收站/.test(document.body.innerText), null, { timeout: 8000 }).catch(() => {})
     check('⑥ 批量移到回收站:一次 batch/delete,吐司说 2 项', cloud.st.hits.includes('POST /api/files/batch/delete [penzor]') && /已把 2 项移到回收站/.test(await win.evaluate(() => document.body.innerText)))
     await win.locator('.pz-scroll').click({ position: { x: 600, y: 600 } }).catch(() => {})
-    await win.keyboard.press('Meta+A')
+    await win.keyboard.press('ControlOrMeta+A')
     await win.waitForTimeout(300)
     const all = await win.locator('.pz-selbar').textContent().catch(() => '')
     check('⑥ ⌘A 全选', /^已选 \d+ 项/.test(all) && Number(all.match(/已选 (\d+)/)?.[1]) === (await win.locator('.pz-table tbody tr').count()), all)
     await win.keyboard.press('Escape')
 
+    check('旧服务端 404 下上传、新建、回收站仍走原有接口', cloud.st.uploads.length > 0 && cloud.st.hits.includes('POST /api/files/batch/delete [penzor]'))
+    cloud.st.legacy = false
+    await refresh()
+
+    // Amadeus deleted current files are explained separately from ordinary app trash.
+    await win.locator('.t2s-srow', { hasText: '回收站' }).first().click()
+    await win.waitForSelector('.pz-ama-trash')
+    check('⑦ Amadeus 待清理快照和到期日期可见', /旧笔记.md/.test(await win.locator('.pz-ama-trash').textContent()) && /可清理日期/.test(await win.locator('.pz-ama-trash').textContent()))
+    await shot('trash-sources')
+    await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click()
+    await win.waitForSelector('.pz-unified-quota')
+    // The same persistent root picker used by the overview action survives navigation to uploads.
+    await win.locator('.pz-root-upload').setInputFiles(mk('根上传.md', 1024))
+    await win.waitForFunction(()=>document.querySelector('.pz-h1')?.textContent === '我的文件')
+    await win.waitForFunction(()=>document.querySelector('.pz-table')?.textContent?.includes('根上传.md'))
+    check('⑦ 根上传落在我的文件，T2 超额未新增拦截', cloud.st.uploads.some(f=>f.name==='根上传.md'))
+
     // 退出前确认:还有在传的,退出先问(主进程的对话框换成假的,答「取消」)→ 不退;取消那一项后照常退(收尾的 app.close 就是这条)
     cloud.st.throttle = true
-    await win.locator('.pz input[type=file][multiple]').setInputFiles([batch1[0]])
+    await win.locator('.pz input[type=file][multiple]:not(.pz-root-upload)').setInputFiles([batch1[0]])
     await win.waitForFunction(() => /正在传输/.test(document.querySelector('.pz-txcard .pz-txhead b')?.textContent || ''), null, { timeout: 8000 }).catch(() => {})
     await app.evaluate(({ dialog }) => { globalThis.__asked = []; dialog.showMessageBox = async (w, o) => { globalThis.__asked.push(String((o || w)?.message)); return { response: 1, checkboxChecked: false } } })
     await app.evaluate(({ app: a }) => { a.quit() })
@@ -462,19 +705,45 @@ async function main() {
       check('④ 点了 → 主窗停在 WMOSv11', /WMOSv11/.test(await win.locator('.pz-h1').textContent().catch(() => '')))
     }
 
+    }
+    cloud.st.signedOut = false
+    await pluginSnapshot(win, 'before-english-reload')
+    await win.evaluate(()=>localStorage.setItem('tangu_locale','en'))
+    await win.reload(); await win.waitForSelector('#root')
+    await pluginSnapshot(win, 'after-english-reload')
+    await openCloud(win)
+    await win.locator('.t2s-srow-title', {hasText:/^Overview$/}).first().click()
+    await win.waitForSelector('.pz-unified-quota')
+    check('⑧ English unified root and quota text', await win.locator('.pz-h1').textContent() === 'My drive' && /notice/.test(await win.locator('.pz-unified-quota').textContent()))
+    await shot('overview-en')
+    const mainWindow = await app.browserWindow(win)
+    await mainWindow.evaluate(w => w.setContentSize(1000,780))
+    await win.waitForTimeout(500)
+    const width = await win.evaluate(() => innerWidth)
+    check('⑧ 窄桌面主区无横向溢出', width <= 1000 && await win.locator('.pz-scroll').evaluate(el=>el.scrollWidth<=el.clientWidth+1), `viewport=${width}`)
+    await shot('overview-narrow-en')
     // ⑤ 401 → 登录页
     cloud.st.signedOut = true
-    await win.locator('.t2s-srow-title', { hasText: /^概览$/ }).first().click().catch(() => {})
-    await win.evaluate(() => { const b = [...document.querySelectorAll('button')].find((x) => /^刷新$/.test(x.getAttribute('aria-label') || x.title || x.textContent || '')); b?.click() })
-    await win.waitForSelector('text=登录后查看你的蓬洲云', { timeout: 10_000 }).catch(() => {})
-    check('⑤ 云端 401 → 登录页', await win.getByText('登录后查看你的蓬洲云').count() > 0)
+    await win.locator('.t2s-srow-title', { hasText: /^Overview$/ }).first().click().catch(() => {})
+    await win.evaluate(() => { const b = [...document.querySelectorAll('button')].find((x) => /^Refresh$/.test(x.getAttribute('aria-label') || x.title || x.textContent || '')); b?.click() })
+    await win.waitForSelector('text=Sign in to see your Penzor Cloud', { timeout: 10_000 }).catch(() => {})
+    check('⑤ 云端 401 → 登录页', await win.getByText('Sign in to see your Penzor Cloud').count() > 0)
     await shot('signed-out')
     check('没有渲染层报错', errors.length === 0, errors.slice(0, 3).join(' || '))
+  } catch (e) {
+    const page = app.windows()[0]
+    if (page) {
+      await pluginSnapshot(page, 'failure').catch(error => console.error('Plugin failure snapshot:', error.message))
+      await page.screenshot({ path: path.join(SHOTS, 'failure.png') }).catch(()=>{})
+      console.error((await page.locator('body').innerText().catch(()=>'' )).slice(-4000))
+    }
+    throw e
   } finally {
     await Promise.race([app.close().catch(() => {}), new Promise((r) => setTimeout(r, 5000))]) // 走查里应用已经自己退了,close 会一直等
     await Promise.race([stub.close?.(), new Promise((r) => setTimeout(r, 3000))]) // 连接没断干净时 close 会一直等(10-19 走查两次挂在这附近)
     cloud.close()
   }
+  fs.writeFileSync(path.join(SHOTS, 'results.json'), JSON.stringify(results, null, 2))
   const failed = results.filter((r) => !r.ok)
   console.log(`\n${results.length - failed.length}/${results.length} passed · shots in ${SHOTS}`)
   process.exit(failed.length ? 1 : 0)

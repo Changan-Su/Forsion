@@ -6,7 +6,7 @@
 import { inboxCardOf } from '@amadeus/plugins/inboxCards'
 import { create } from 'zustand'
 import { setActiveSpace } from '@lcl/engine'
-import { translate } from '../i18n'
+import { subscribeLocale, translate } from '../i18n'
 import { useApp } from './appStore'
 import { homeAgentDefs } from './homeCatalog'
 import { notifyApp } from './notificationStore'
@@ -16,6 +16,7 @@ import {
 } from '../services/backendService'
 import { currentClientId } from '../services/agentRunService'
 import { homeTarget } from '../services/engine/targets'
+import { agentName } from '../agentName'
 
 export type { InboxMessage, InboxFilter }
 
@@ -23,6 +24,7 @@ export type { InboxMessage, InboxFilter }
 // 首拉只记基准不弹通知(历史未读只上角标,防启动通知轰炸)。
 let pollTimer: number | null = null
 let unsubConn: (() => void) | null = null
+let unsubLocale: (() => void) | null = null
 let lastLatestId: string | null | undefined = undefined
 /** 未读轮询单飞(Codex 09-11 P2):挂载刷新、15s 轮询、多个列表实例撞在一起时,并发的 refreshUnread 会在
  *  lastLatestId 更新前都判成「新消息」→ 同一条通知两遍。同一时刻只跑一个,期间再来的合成一次尾随重跑。 */
@@ -41,7 +43,7 @@ export function senderOf(m: Pick<InboxMessage, 'sender_kind' | 'sender_id'>): st
   if (m.sender_kind === 'system') return inboxCardOf(m)?.sender?.() || translate('inbox.sender.system')
   if (isAutomationSender(m)) return translate('inbox.sender.automation')
   const a = homeAgentDefs().find((x) => x.slug === m.sender_id) // 收件箱是本端的:焦点在我的电脑时也按本端的 Agent 认发件人
-  return a?.name || m.sender_id || 'agent'
+  return agentName(a) || m.sender_id || 'agent'
 }
 
 /** 解析后端 UTC 'YYYY-MM-DD HH:MM:SS'(无后缀)为本地 Date;坏值回 null。 */
@@ -58,6 +60,8 @@ interface InboxState {
    *  (2026-09-11:旧版全局 filter + 列表源在渲染期切档,两个实例选不同分组会无限互拉)。 */
   archived: InboxMessage[]
   archivedLoaded: boolean
+  /** 未归档那份拉成功过一次:「收件箱是空的」只在这之后才说(之前的空数组只是还没拉)。 */
+  listLoaded: boolean
   selectedId: string | null
   unreadCount: number
   loading: boolean
@@ -89,10 +93,18 @@ export function inboxLetterPops(m: Pick<InboxMessage, 'sender_id' | 'body'>): bo
   return !!m.sender_id?.startsWith('automation:') || /```forsion-approval\b/.test(m.body || '')
 }
 
+/** 删除确认:Agent 的审批信多一句 —— 请求还在等批时,Agent 再提出它会回来(引擎 pendingApprovals.resurfaceApprovalLetter),
+ *  想让它停得在卡上点「拒绝」。只认 Agent 发的(和审批卡同一道信任闸:服务端广播里的同名围栏不出卡)。 */
+export function inboxDeleteConfirm(m: Pick<InboxMessage, 'title' | 'sender_kind' | 'body'>): string {
+  const approval = m.sender_kind === 'agent' && /```forsion-approval\b/.test(m.body || '')
+  return translate(approval ? 'inbox.deleteConfirmApproval' : 'inbox.deleteConfirm', { title: m.title })
+}
+
 export const useInbox = create<InboxState>((set, get) => ({
   messages: [],
   archived: [],
   archivedLoaded: false,
+  listLoaded: false,
   selectedId: null,
   unreadCount: 0,
   loading: false,
@@ -101,7 +113,7 @@ export const useInbox = create<InboxState>((set, get) => ({
     set({ loading: true })
     try {
       const messages = await listInbox(homeTarget(), 'all')
-      set({ messages })
+      set({ messages, listLoaded: true })
     } catch { /* 静默:断连/老后端 404 */ } finally {
       set({ loading: false })
     }
@@ -123,7 +135,7 @@ export const useInbox = create<InboxState>((set, get) => ({
           const msgs = await listInbox(homeTarget(), 'all')
           // 拉列表这会儿本地又动过(点开 / 标记 / 删除,或别处刚刷过):这份快照是旧的,盖回去会吃掉那次改动 —— 丢掉,重跑一遍。
           if (get().messages !== held) { unreadAgain = true; return }
-          set({ messages: msgs })
+          set({ messages: msgs, listLoaded: true })
           const m = latestChanged && r.count > had ? msgs.find((x) => x.id === r.latestId) : undefined
           // 收件箱新消息 → 统一通知入口(应用内卡片 + 系统通知由 notifyApp 一并发,受通知设置门控;
           // 不再单发 notifyInbox,避免与统一系统通知重复)。
@@ -163,6 +175,10 @@ export const useInbox = create<InboxState>((set, get) => ({
       }))
       setBadge(get().unreadCount)
       void patchInboxMessage(homeTarget(), id, { read: true }).catch(() => void get().refreshUnread())
+    } else if (m?.read_by) {
+      // Muse 替你标过的信,你点开就是你读的了:清掉归属,之后 Muse 撤回已读不会动它
+      set((s) => mapBoth(s, (x) => (x.id === id ? { ...x, read_by: null } : x)))
+      void patchInboxMessage(homeTarget(), id, { read: true }).catch(() => {})
     }
   },
 
@@ -170,7 +186,7 @@ export const useInbox = create<InboxState>((set, get) => ({
     const now = new Date().toISOString().slice(0, 19).replace('T', ' ')
     const counted = !findAny(get(), id)?.archived_at
     set((s) => ({
-      ...mapBoth(s, (x) => (x.id === id ? { ...x, read_at: read ? now : null } : x)),
+      ...mapBoth(s, (x) => (x.id === id ? { ...x, read_at: read ? now : null, read_by: null } : x)),
       unreadCount: counted ? Math.max(0, s.unreadCount + (read ? -1 : 1)) : s.unreadCount,
     }))
     setBadge(get().unreadCount)
@@ -250,6 +266,11 @@ export const useInbox = create<InboxState>((set, get) => ({
       if (s.connState === 'ok' && prev !== 'ok') void get().refreshUnread()
       prev = s.connState
     })
+    // 广播的中英文在 listInbox 里挑:切界面语言时重拉一遍已载入的列表
+    unsubLocale = subscribeLocale(() => {
+      void get().refreshList()
+      if (get().archivedLoaded) void get().refreshArchived()
+    })
     tickBody()
   },
 
@@ -257,5 +278,7 @@ export const useInbox = create<InboxState>((set, get) => ({
     if (pollTimer != null) { window.clearInterval(pollTimer); pollTimer = null }
     unsubConn?.()
     unsubConn = null
+    unsubLocale?.()
+    unsubLocale = null
   },
 }))

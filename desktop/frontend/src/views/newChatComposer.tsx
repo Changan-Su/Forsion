@@ -8,7 +8,9 @@ import { useEffect, useMemo } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { setActiveSpace, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { mountHostReact } from '@lcl/components'
-import { useApp, newChatModelId, stickyDefaults, withAmadeusWorkspace, applyPreset, newSessionPreset, resolveNewSessionWorkspace } from '../stores/appStore'
+import { useApp, newChatModelId } from '../stores/appStore'
+import { stickyDefaults, withAmadeusWorkspace, applyPreset } from '../../../../tangu-agent/src/contracts/sessionDefaults'
+import { newSessionPreset, resolveNewSessionWorkspace } from '../tangu/store/tanguSlice'
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -62,6 +64,7 @@ export function NewChatComposer({ onDispatch, onStartCall, onInputModeChange, li
     setSessionModel: state.setSessionModel,
     setNewChatCfg: state.setNewChatCfg,
     setSessionThinking: state.setSessionThinking,
+    setSessionFast: state.setSessionFast,
     setDefaultModel: state.setDefaultModel,
     setModelContextWindow: state.setModelContextWindow,
     setVoiceMode: state.setVoiceMode,
@@ -168,6 +171,8 @@ export function NewChatComposer({ onDispatch, onStartCall, onInputModeChange, li
         thinkingLevel={config.thinkingLevel}
         ultra={config.ultra}
         onThinkingChange={(level, ultra) => s.setSessionThinking(level, null, undefined, ultra)}
+        fast={config.fast}
+        onFastChange={(on) => s.setSessionFast(on, null)}
         defaultModelIds={{
           backgroundModelId: s.desktopConfig?.backgroundModelId || '',
           imageModelId: s.cfg.imageModelId || '',
@@ -214,7 +219,7 @@ export function sendFromNewChat(...args: Parameters<NewChatDispatch>): Promise<b
   // 老用户的 Tangu 命名布局可能把主 chat 关过;发话就是显式要去聊天,这里保证有一张聊天视图接住新会话。
   useWorkspace.getState().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
   const [text, attachments, workspaceFiles, skillIds, mentions] = args
-  return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, null)
+  return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, null, false, true)
 }
 
 /** 开通话 = 与发第一句同一条路:切到 Tangu、保证有主聊天视图,再建新会话;通话条随之出现在那边的输入框。

@@ -50,6 +50,8 @@ export interface BuiltinBundle {
   minVersion?: string
   /** 只在带这个产品能力的档案里播种 / 更新 / 打包(电脑操作要 agent 后端);缺省 = 全产品(Forsion Extend:Amadeus 单品也是云产品)。 */
   requires?: 'agentBackend'
+  /** Only products that include this native Space bundle its replacement renderer. */
+  requiresSpace?: string
 }
 
 /** 随 App 内置的捆绑包清单(builtinBundles.json)。 */
@@ -66,6 +68,7 @@ export interface BuiltinSourceOpts {
   platform?: NodeJS.Platform
   /** 产品档案是否带 agent 后端(缺省 true):清单里 requires: 'agentBackend' 的包在单品变体里既不播种也不更新。 */
   agentBackend?: boolean
+  spaces?: readonly string[]
 }
 
 /** 清单项 + 随包来源目录。 */
@@ -77,7 +80,7 @@ export interface BuiltinSource extends BuiltinBundle {
 export function builtinBundleSources(o: BuiltinSourceOpts): BuiltinSource[] {
   const platform = o.platform ?? process.platform
   const agentBackend = o.agentBackend ?? true
-  return BUILTIN_BUNDLES.filter((b) => b.platforms.includes(platform) && (!b.requires || agentBackend)).map((b) => ({
+  return BUILTIN_BUNDLES.filter((b) => b.platforms.includes(platform) && (!b.requires || agentBackend) && (!b.requiresSpace || !o.spaces || o.spaces.includes(b.requiresSpace))).map((b) => ({
     ...b,
     dir: o.isPackaged
       ? path.join(o.resourcesPath, 'bundled-plugins', bundledDirName(b.pkg))
@@ -192,11 +195,25 @@ async function replaceDir(src: string, dest: string): Promise<void> {
   }
 }
 
+// 暂存区(.pending/)的写入与播种互斥:首次启动的预取超时后还在后台下载(corePluginUpdates.prefetchOnFirstBoot),
+// 它晚到的写入不能和播种里「读暂存 + 整个清掉暂存区」交错 —— 交错会留下文件缺了一半、manifest 还在的暂存目录,
+// 下次启动被当成完整更新换上。平常更新器在播种之后才跑,这把锁没人争。
+let pendingChain: Promise<unknown> = Promise.resolve()
+export function withPendingLock<T>(fn: () => Promise<T>): Promise<T> {
+  const run = pendingChain.then(fn, fn)
+  pendingChain = run.catch(() => {})
+  return run
+}
+
 /**
  * 把各内置捆绑包播种进 pluginsRoot。逐包吞错(一个坏包不能挡住启动,也不能挡住别的包),错误进 log。
  * 必须在引擎 spawn 与首次 listPlugins 之前 await 完 —— 引擎只在启动时扫一次 bundle 根。
  */
-export async function seedBuiltinBundles(
+export function seedBuiltinBundles(...args: Parameters<typeof seedUnlocked>): Promise<SeedBundlesReport> {
+  return withPendingLock(() => seedUnlocked(...args))
+}
+
+async function seedUnlocked(
   pluginsRoot: string,
   sources: ReadonlyArray<string | BuiltinSource>,
   opts: { log?: (m: string) => void; appVersion?: string | null } = {},

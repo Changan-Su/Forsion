@@ -150,3 +150,18 @@ describe('done 判官', () => {
     expect(payloads).toHaveLength(1);
   });
 });
+
+describe('parseJudgement — 模型把 LaTeX 写进 JSON 串', () => {
+  it('裸 \\( 之类的非法转义不再让整份判断(连标题)作废', async () => {
+    const { parseJudgement } = await import('../src/services/localHistorian.js');
+    // 2026-10-24 用户反馈的判官原话(截取),之前 JSON.parse 直接抛 → 标题停在首条消息截断那段
+    const raw = '{"emoji":"📚","title":"球谐函数 \\(Y_{lm}\\) 的推导","summary":"复习球谐函数时，解释了 \\(Y_{lm}(\\theta,\\phi)=\\Theta_{lm}(\\theta)e^{im\\phi}\\)"}';
+    const j = parseJudgement(raw);
+    expect(j?.emoji).toBe('📚');
+    expect(j?.title).toBe('球谐函数 \\(Y_{lm}\\) 的推导');
+    // 已正确转义的 \\alpha 与裸 \( 混在一起:成对的不能再补(Codex 评审)
+    expect(parseJudgement('{"title":"Physics","summary":"\\\\alpha and \\(Y_{lm}\\)"}')?.summary).toBe('\\alpha and \\(Y_{lm}\\)');
+    expect(parseJudgement('{"title":"正常"}')?.title).toBe('正常');
+    expect(parseJudgement('不是 JSON')).toBeNull();
+  });
+});

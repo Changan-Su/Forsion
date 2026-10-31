@@ -1,11 +1,12 @@
 /** 主区聊天 leaf：followActive 跟随侧栏；分屏 leaf 用 sessionId 固定会话。 */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from 'react'
 import { AnimatePresence } from 'framer-motion'
-import { ArrowDown, Folder, MessageCircleQuestion, MessageSquare, Quote, Waypoints } from 'lucide-react'
+import { ArrowDown, CircleAlert, Folder, MessageCircleQuestion, MessageSquare, Quote, Waypoints } from 'lucide-react'
 import type { AgentConfig, UiMessage } from '../../../../tangu-agent/src/contracts/clientTypes'
+import type { FailedSend } from '../tangu/store/failedSend'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
-import { displaySessionTitle } from '../sessionTitle'
+import { displaySessionTitle, soloSessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { RunLocationPicker, useRunPickerVisible } from '../components/RunLocationPicker' // P1-K7a
 import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
@@ -16,7 +17,8 @@ import { openNewChat, openSession, rotateSolo } from '../sessionNav'
 import { TeamEditor } from '../components/TeamEditor'
 import { postMuseFeedback, saveAgentScheduleEntry } from '../services/backendService'
 import { runTaskCard } from './chat2/taskLanding'
-import { NO_QUOTE_DRAFT, quoteAdded, quotesFor } from './chat2/quotes'
+import { NO_QUOTE_DRAFT, notesFor, quoteAdded, quoteNoted, quotesFor } from './chat2/quotes'
+import { ReplyPopover } from './chat2/QuoteTile'
 import { askOriginOf, insertReplyToNote } from './chat2/insertToNote'
 import { amadeusAvailable } from '../features/runtime'
 import { resolveDeskPath } from '../stores/deskPlan'
@@ -24,10 +26,15 @@ import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ToolCardDeskContext, toolCardDeskFor } from '../components/PluginToolCard'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
-import { ApprovalTray } from './chat2/ApprovalTray'
-import { MuseApprovalTray } from './chat2/MuseDm'
-import { APPROVAL_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
-import { CHILD_UPDATE_OPEN, ChildFromLine } from './chat2/ChildSessions'
+import { ApprovalTray, DeckPill, type DeckItem } from './chat2/ApprovalTray'
+import { pendingCreationCardsOf, pendingHumanCardsOf, pendingTaskCardsOf, tasksOf, useTaskHandledVersion } from './chat2/pendingTasks'
+import { useHumanAckVersion } from '../components/HumanUpdateCard'
+import { creationCardsSupported, useSessionCreation } from './chat2/CreationCards'
+import { TodoList } from '../components/InquiryCard'
+import { useMusePendingApprovals, useMusePendingTodos } from './chat2/MuseDm'
+import { useMusePendingCards } from './chat2/MuseCards'
+import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
+import { CHILD_UPDATE_OPEN, ChildFromLine, ChildSessionsPill } from './chat2/ChildSessions'
 import { RunStatsLine } from './chat2/RunStatsLine'
 import { SessionTraceLines, useSessionTraces } from '../components/SessionTraces'
 import { SessionOpening } from '../components/SessionOpening'
@@ -36,7 +43,10 @@ import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
-import { useApp, stickyDefaults, activeChatModelId, withAmadeusWorkspace, applyPreset, newSessionPreset, amadeusLandingRoot } from '../stores/appStore'
+import { BgStrip } from './chat2/BackgroundProcs'
+import { useApp, activeChatModelId } from '../stores/appStore'
+import { stickyDefaults, withAmadeusWorkspace, applyPreset } from '../../../../tangu-agent/src/contracts/sessionDefaults'
+import { newSessionPreset, amadeusLandingRoot } from '../tangu/store/tanguSlice'
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from '../components/chatDragRef'
@@ -48,7 +58,7 @@ import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
 import { openBtw, quoteInMainChat } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
-import { ChatCanvas, useChatCanvasPref } from './chat2/ChatCanvas'
+import { ChatCanvas, armCanvasEnter, chatAnchor, useChatCanvasPref, type CanvasAnchor } from './chat2/ChatCanvas'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
@@ -65,10 +75,12 @@ import { selectableChatModels } from './chatModelCatalog'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
 import { TargetHealthNotice, useComposerReady, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
+import { agentName, agentNames } from '../agentName'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
+const EMPTY_FAILED: FailedSend[] = []
 const EMPTY_USAGE: { ctx: number; base: number; live: number; runCost?: number; costLimit?: number } = { ctx: 0, base: 0, live: 0 }
 const EMPTY_STEER: Array<{ id: string; text: string }> = []
 const EMPTY_STRS: string[] = []
@@ -85,10 +97,22 @@ function appRefOf(raw: unknown): { app: string; bundleId?: string; pid: number; 
 
 /** 「回到底部」键自己管显隐。它在滚动起手的那一下翻转;原来是 ChatView 的 state,翻一次就把整段对话的每条消息
  *  重渲一遍(2026-10-11 实测:中端手机速度下每次滑动起手顿约 150ms)。ChatView 只握一个写入口(`setter`),不随它重渲。 */
-function JumpToBottom({ setter, title, onClick }: { setter: MutableRefObject<(show: boolean) => void>; title: string; onClick: () => void }) {
+function JumpToBottom({ setter, title, replies, onClick }: { setter: MutableRefObject<(show: boolean) => void>; title: string; replies: number; onClick: () => void }) {
+  const { t } = useI18n()
   const [show, setShow] = useState(false)
-  setter.current = setShow
-  return show ? <button className="jump-bottom t2-jump" title={title} onClick={onClick}><ArrowDown size={16} /></button> : null
+  // 借 Comma:离开底部那一刻记下回答条数,之后新落下的整条回答(用户自己的不算)写在键上,变成「↓ N 条新消息」
+  const base = useRef(replies)
+  const latest = useRef(replies)
+  latest.current = replies
+  setter.current = (next) => setShow((prev) => { if (next && !prev) base.current = latest.current; return next })
+  if (!show) return null
+  const n = Math.max(0, replies - base.current)
+  return (
+    <button className={`jump-bottom t2-jump${n ? ' t2-jump--count' : ''}`} title={title} onClick={onClick}>
+      <ArrowDown size={n ? 14 : 16} />
+      {n > 0 && <span>{t(n === 1 ? 'chat.newMessage' : 'chat.newMessages', { n })}</span>}
+    </button>
+  )
 }
 
 /** 划线所在的那条回答(EditorialMessage 根节点 id = tocmsg-<消息 id>);不在某条回答里 → undefined(引擎挂到最近一条回答)。 */
@@ -97,6 +121,15 @@ function selectedMessageId(): string | undefined {
   const el = node instanceof Element ? node : node?.parentElement
   const id = el?.closest('.t2-asst[id^="tocmsg-"]')?.id
   return id ? id.slice('tocmsg-'.length) : undefined
+}
+
+/** 划线在画布卡 / 阅读栏里:那张卡是哪个会话的(卡 key = `${会话 id}:${提问 id}`)。分支卡上的消息 id 是复制出来的,顺便问得挂在它自己的会话上。 */
+function selectedCanvasSessionId(): string | undefined {
+  const node = window.getSelection()?.anchorNode
+  const el = node instanceof Element ? node : node?.parentElement
+  const d = el?.closest<HTMLElement>('[data-cv-node], [data-cv-read]')?.dataset
+  const k = d?.cvNode ?? d?.cvRead
+  return k?.includes(':') ? k.slice(0, k.indexOf(':')) : undefined
 }
 
 export function ChatView({ leaf, params }: ViewProps) {
@@ -127,6 +160,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const s = useApp(useShallow((state) => ({
     activeSession: state.sessions.find((x) => x.id === activeId) || state.archivedSessions.find((x) => x.id === activeId) || null,
     activeMessages: (activeId && state.messagesBySession[activeId]) || EMPTY_MESSAGES,
+    failedSends: (activeId && state.failedBySession[activeId]) || EMPTY_FAILED,
     running: !!(activeId && state.runningBySession[activeId]),
     runStats: (activeId && state.runStatsBySession[activeId]) || null,
     historianEnabled: state.specialEnabled.historian,
@@ -193,6 +227,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     setNewChatModel: state.setNewChatModel,
     setSessionEngineModel: state.setSessionEngineModel,
     setSessionThinking: state.setSessionThinking,
+    setSessionFast: state.setSessionFast,
     setDefaultModel: state.setDefaultModel,
     setModelContextWindow: state.setModelContextWindow,
     setSessionMaxIterations: state.setSessionMaxIterations,
@@ -215,6 +250,11 @@ export function ChatView({ leaf, params }: ViewProps) {
   const [quoteDraft, setQuoteDraft] = useState(NO_QUOTE_DRAFT)
   const quoteSid = activeId ?? null
   const quotes = quotesFor(quoteDraft, quoteSid)
+  const quoteNotes = notesFor(quoteDraft, quoteSid)
+  // 划选「引用」先弹的就地回复框(选中的字 + 选区位置;收起选区后照样知道开在哪)
+  const [replyAt, setReplyAt] = useState<{ text: string; rect: { left: number; top: number; bottom: number } } | null>(null)
+  const closeReply = useCallback(() => setReplyAt(null), [])
+  useEffect(() => setReplyAt(null), [quoteSid]) // 换了会话:回复框是上一个会话的,收掉,别把引用挂到新会话里
   const [refDrop, setRefDrop] = useState(false) // 工作区条目拖到聊天区上方(整块高亮)
   const childSession = useChildChat((state) => activeId ? state.sessions[activeId] : undefined)
   const activeSession = s.activeSession || childSession
@@ -224,6 +264,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const activeCtxInfo = s.activeCtxInfo && (!s.activeCtxInfo.modelId || !activeModel || s.activeCtxInfo.modelId === activeModel.id) ? s.activeCtxInfo : null
   const activeUsage = s.activeUsage
   const activeMessages = s.activeMessages
+  const replyCount = useMemo(() => activeMessages.reduce((n, m) => (m.role === 'user' ? n : n + 1), 0), [activeMessages])
   // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
   // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
   const shownMessages = useTailFirst(activeMessages, activeId || null, s.jumpTarget?.sessionId !== activeId)
@@ -240,6 +281,28 @@ export function ChatView({ leaf, params }: ViewProps) {
   }
   const pendingApprovals = useMemo(() => pendingPromptsOf(activeMessages), [activeMessages])
   const running = s.running
+  // 对话末尾的卡片堆(10-23 方案「待确认卡片」B):挡着 agent 的在前,还在等你选的任务卡垫底
+  const taskHandledV = useTaskHandledVersion()
+  // Muse 私聊里它提的待办:引擎确认还 pending 的才进卡片堆
+  const museTodoIds = useMemo(() => activeMessages.filter((m) => m.origin === 'proactive:todo').flatMap((m) => tasksOf(m).map((c) => c.todo || '')).filter(Boolean).join(','), [activeMessages])
+  const musePendingTodos = useMusePendingTodos(museTodoIds, taskHandledV)
+  const pendingTasks = useMemo(() => (activeId ? pendingTaskCardsOf(activeMessages, activeId, Date.now(), musePendingTodos) : []), [activeMessages, activeId, taskHandledV, musePendingTodos])
+  // 协作请求卡(Agent 改了协作说明)与作品卡也是交互卡片(10-23 用户定):没处理的进卡片堆,垫在任务卡后面
+  const humanAckV = useHumanAckVersion()
+  const pendingHuman = useMemo(() => (activeId ? pendingHumanCardsOf(activeMessages) : []), [activeMessages, activeId, humanAckV])
+  const sessionInCreation = useSessionCreation(activeId ?? undefined).inCreation
+  const pendingCreations = useMemo(() => (activeId && creationCardsSupported() && !sessionInCreation ? pendingCreationCardsOf(activeMessages, activeId) : []), [activeMessages, activeId, taskHandledV, sessionInCreation])
+  // 对话末尾那一行任务清单:最新那一份 —— 会话还在跑,或它在最后一条回答上、还有没做完的;其余几份在各自回答里收成一行
+  const tailTodo = useMemo(() => {
+    let last = true
+    for (let i = activeMessages.length - 1; i >= 0; i--) {
+      const m = activeMessages[i]
+      if (m.role !== 'assistant') continue
+      if (m.todos?.length) return running || (last && m.todos.some((x) => x.status !== 'completed')) ? m : null
+      last = false
+    }
+    return null
+  }, [activeMessages, running])
   const execConfig = s.execConfig
   // Vault 切换会即时重算 Project 列表与系统工作根;不能只在 s.workspaces() 里 getState 快照,
   // 否则 appStore 本身没变化时 React 不会重渲染选择器。
@@ -310,7 +373,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)+ steer 入队即记的补充池(被删/撤回的插话
   // 仍可从 ↑ 找回;已注入的会同时出现在消息里,按文本去重)。打断标记是机器行,不进历史。
   const sentHistory = useMemo(() => {
-    const users = activeMessages.filter((m) => m.role === 'user' && !m.content.startsWith('<turn_interrupted>') && !m.content.startsWith(APPROVAL_UPDATE_OPEN) && !m.content.startsWith(CHILD_UPDATE_OPEN)).map((m) => m.content)
+    const users = activeMessages.filter((m) => m.role === 'user' && !m.content.startsWith('<turn_interrupted>') && !m.content.startsWith(APPROVAL_UPDATE_OPEN) && !m.content.startsWith(INQUIRY_UPDATE_OPEN) && !m.content.startsWith(CHILD_UPDATE_OPEN)).map((m) => m.content)
     const have = new Set(users)
     return [...users, ...s.steerSent.filter((x) => !have.has(x))]
   }, [activeMessages, s.steerSent])
@@ -321,7 +384,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 否则 EditorialMessage 只能退到「Tangu」,改名后旧对话仍显示基础名。响应 agentDefs,故连上后自动纠正。
   const chatAgentName = curEngineId
     ? s.engines.find((e) => e.id === curEngineId)?.name
-    : (chatAgentSlug ? s.agentDefs.find((a) => a.slug === chatAgentSlug)?.name : undefined)
+    : (chatAgentSlug ? agentName(s.agentDefs.find((a) => a.slug === chatAgentSlug)) : undefined)
   const userName = s.authInfo?.nickname || s.authInfo?.username || undefined
   const userAvatar = s.authInfo?.avatar || undefined
   // 语音消息:该会话 agent 是否开启(voice-message 插件设置驱动);渲染语音条还需配了朗读 TTS 模型。
@@ -357,11 +420,13 @@ export function ChatView({ leaf, params }: ViewProps) {
     if (activeId) void useApp.getState().loadSessionHistory(activeId)
   }, [activeId])
 
+  const soloAgentSlug = activeSession?.agent_config?.soloAgentSlug
+  const soloAgent = soloAgentSlug ? s.agentDefs.find((a) => a.slug === soloAgentSlug) : undefined
   // 每个 leaf 维护自己的标题，避免分屏时误改第一块 Chat tab。会话清单尚未加载但 sessionId 已从
   // Mini handoff 到达时用稳定占位；不能再另挂一段「新对话」标题 effect 与本段来回改名(React #185)。
   useEffect(() => {
-    leaf.setTitle(activeSession?.title ? displaySessionTitle(activeSession.title, t) : (activeId ? 'Tangu Agent' : t('sidebar.newChat')))
-  }, [activeId, activeSession?.title, leaf, t])
+    leaf.setTitle(activeSession?.title ? soloSessionTitle(activeSession.title, soloAgent, t) : (activeId ? 'Tangu Agent' : t('sidebar.newChat')))
+  }, [activeId, activeSession?.title, soloAgent, leaf, t])
 
   // 内容级搜索命中 → 打开会话后滚到那条消息并闪一下(P3)。消息还没到齐时不动手:
   // 历史是异步拉的,早滚一次会落在错的位置;拉完仍找不到 = 命中落在更早的分页里,如实提示而不是假装跳了。
@@ -376,16 +441,26 @@ export function ChatView({ leaf, params }: ViewProps) {
     // 命中可能在长提问折叠起来的那截里(不知道落在哪一段):跳到用户消息先展开
     el.querySelector<HTMLButtonElement>('.t2-user-more[aria-expanded="false"]')?.click()
     const root = chatScrollRef.current
+    // 不随 effect 清理:下一行 clearJumpTarget 改了依赖、effect 立刻重跑,清理会把这个定时器掐掉 → 类永远摘不掉,再跳到同一条就不闪了
+    const flash = (): void => { el.classList.add('t2-jump-flash'); window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1100) }
     if (root) {
       stickToBottom.current = false
-      scrollToElement(root, el, 24) // 落地后再量再补:上面的消息带 content-visibility,进视口才量出真实高度
-    }
-    el.classList.add('t2-jump-flash')
-    // 不随 effect 清理:下一行 clearJumpTarget 改了依赖、effect 立刻重跑,清理会把这个定时器掐掉 → 类永远摘不掉,再跳到同一条就不闪了
-    window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1600)
+      // 落地后再量再补:上面的消息带 content-visibility,进视口才量出真实高度。
+      // 落稳了才闪:刚打开的长会话从底部平滑滚上去要大半秒,先闪就在半路放完了(10-24 ⌘P ⌘↵ 台架实测:到位时 1.1s 已过)
+      scrollToElement(root, el, 24, flash)
+    } else flash()
     s.clearJumpTarget()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [s.jumpTarget?.seq, activeId, historyLoading, activeMessages.length])
+
+  // 子会话药丸(2.2)点了:滚回那块子会话块、到位后闪两下(同搜索跳转的落点双闪,闪的是块本身不是整条消息)
+  const jumpToChildBlock = useCallback((el: HTMLElement): void => {
+    const root = chatScrollRef.current
+    const flash = (): void => { el.classList.add('t2-jump-flash'); window.setTimeout(() => el.classList.remove('t2-jump-flash'), 1100) }
+    if (!root) { flash(); return }
+    stickToBottom.current = false
+    scrollToElement(root, el, 24, flash)
+  }, [])
 
   const scrollToBottom = useCallback((smooth = false): void => {
     const el = chatScrollRef.current
@@ -510,6 +585,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       // 建议芯片 = 用户自己把这句话打进去按了回车(运行中则落进 steer 等待区)。
       onSuggest: readOnly ? undefined : (text) => void env().s.send(text, [], undefined, undefined, undefined, env().activeId),
       onTask: (card, landing) => runTaskCard(card, landing, env().activeId),
+      onJumpDeck: () => scrollToBottom(true),
       // 回答插回笔记(G3-08):由「问 Tangu」发起的对话优先插回出处那篇;宿主没有 Amadeus 编辑能力就不出按钮。
       onInsertNote: canInsertNote ? (text) => void insertReplyToNote(text, askOriginOf(env().activeMessages, id)) : undefined,
       // 插件结果卡片的 call.quote:同划线「引用」,挂进这块输入框
@@ -522,12 +598,12 @@ export function ChatView({ leaf, params }: ViewProps) {
   const fileCtx = useMemo(() => ({ cfg: s.cfg, sessionId: activeId || '', execMode: mvCfg.execMode, onOpenPreview: s.setFilePreview }), [s.cfg, activeId, mvCfg.execMode, s.setFilePreview])
   const voice = useMemo(() => (ttsEnabled ? { on: voiceOn, cfg: s.cfg, stored: s.desktopConfig } : undefined), [ttsEnabled, voiceOn, s.cfg, s.desktopConfig])
 
-  const hasMessages = activeMessages.length > 0
+  const hasMessages = activeMessages.length > 0 || s.failedSends.length > 0
   // 输入卡上方那一栏的两半(JSX 在 .composer-anchor 里):项目那半只在空白新对话上;开场那半还包括已建好但没发过消息的会话。
   const projectBarOn = !activeId && (!studioChat || !!studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat))
   const openingOn = !hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok'
   /** 流里有画出来的消息(系统消息、列表里隐藏的不算):决定底对齐的排法,也决定手机上整列跟不跟键盘走。 */
-  const anyShown = hasMessages && shownMessages.some((m) => m.role !== 'system' && !isHiddenInList(m))
+  const anyShown = (hasMessages && shownMessages.some((m) => m.role !== 'system' && !isHiddenInList(m))) || s.failedSends.length > 0
   // Agent Desk 只在会话开始后显示:草稿与已建 ID 但未发消息的新会话都不挂载,也不占右侧车道。
   // 例外(10-13):Muse 私聊一进来就挂 —— 它的 Desk 空闲时演 Muse Space(见 useDeskHome),不必等第一条消息。
   // 桌面端默认开(移动端没有);用户可在设置→高级关掉,窄容器由 CSS 容器查询兜底隐藏。
@@ -538,6 +614,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   const deskQuote = useCallback((text: string) => setQuoteDraft((prev) => quoteAdded(prev, quoteSid, text)), [quoteSid])
   // 插件结果卡片的 Desk 落点只在 Desk 真看得见时成立(判定在 toolCardDeskFor;这里量聊天视图宽度,对齐 CSS 容器查询)
   const chatViewRef = useRef<HTMLDivElement>(null)
+  const chatColRef = useRef<HTMLDivElement>(null)
   const [chatViewW, setChatViewW] = useState(Infinity)
   useEffect(() => {
     const el = chatViewRef.current
@@ -556,6 +633,34 @@ export function ChatView({ leaf, params }: ViewProps) {
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
   const canvasOn = canvasAllowed && canvasPref.on
+  const [canvasExit, setCanvasExit] = useState(false) // 刚切回对话:画布留一会儿播退场
+  // 按下「对话 / 画布」胶囊那一刻就量好对齐哪条:松手时胶囊先激活这个视图,那一下对话流的滚动位置会短暂归零(台架实测),再量就歪了
+  const segAnchor = useRef<{ at: number; a: CanvasAnchor | null } | null>(null)
+  // 切到画布那一下:右栏卡片照它们的离场过渡往右收完再卸。⚠️ 别改成画布开着也一直挂着:切回对话时「在对话里打开」的落点会偏高(台架 RA5 对照实测)
+  const [railOut, setRailOut] = useState(false)
+  useEffect(() => { if (!railOut) return; const t = setTimeout(() => setRailOut(false), 450); return () => clearTimeout(t) }, [railOut])
+  // Muse 私聊:它后台排队的审批也进卡片堆(排在本会话的审批 / 提问之后、任务卡之前)
+  const museApprovals = useMusePendingApprovals(mvCfg.soloAgentSlug === 'muse' && !params.childSurface)
+  const museCards = useMusePendingCards(mvCfg.soloAgentSlug === 'muse' && !params.childSurface, activeId, `${activeMessages.length}:${running}`)
+  const deckItems = useMemo<DeckItem[]>(() => [
+    ...pendingApprovals,
+    ...museApprovals.map((info) => ({ kind: 'muse-approval' as const, id: `muse:${info.id}`, messageId: '', info })),
+    ...pendingTasks,
+    ...pendingHuman.map((h) => (h.agentName || !chatAgentName ? h : { ...h, agentName: chatAgentName })), // 同流里那张的署名
+    ...pendingCreations,
+    ...museCards.map((card) => ({ kind: 'muse-card' as const, id: `muse-card:${card.id}`, messageId: '', card })),
+  ], [pendingApprovals, museApprovals, pendingTasks, pendingHuman, pendingCreations, museCards, chatAgentName])
+  const deck = deckItems.length ? (
+    <ApprovalTray
+      // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
+      key={activeId ?? ''}
+      sessionId={activeId ?? undefined}
+      items={deckItems}
+      onDecide={(mid, aid, action, args) => s.decideApproval(mid, aid, action, args, activeId)}
+      onAnswer={(mid, iid, ans) => s.answerInquiry(mid, iid, ans, activeId)}
+      onTask={(card, landing) => runTaskCard(card, landing, activeId)}
+    />
+  ) : null
   const toolCardDesk = toolCardDeskFor({ sessionId: activeId, takesFiles: deskTakesFiles, canvas: canvasOn, width: chatViewW, childOpen: !!(activeId && childSelections[activeId]), deskOpen: deskOpenNow })
   // 「对话 / 画布」= 视图模式(lcl viewModes):胶囊在这一列的头行左端,⌥⌘V 切换;记忆照旧按树根
   useViewModes(leaf.id, canvasAllowed ? {
@@ -564,15 +669,16 @@ export function ChatView({ leaf, params }: ViewProps) {
       { value: 'canvas', label: t('chatcanvas.seg.canvas'), icon: Waypoints },
     ],
     value: canvasOn ? 'canvas' : 'chat',
-    onChange: (v) => setCanvasPref({ on: v === 'canvas' }),
+    onChange: (v) => {
+      const on = v === 'canvas'
+      const p = segAnchor.current
+      if (on) armCanvasEnter(p && performance.now() - p.at < 1000 ? p.a : chatAnchor(chatViewRef.current)) // 进场对齐对话流里正看着的那条
+      setCanvasExit(!on)
+      setRailOut(on)
+      setCanvasPref({ on })
+    },
     ariaLabel: t('chatcanvas.seg.aria'),
   } : null)
-  // 画布里双击一张卡:切回对话、滚到那个会话里的那一轮(搜索跳转那条路,历史没到齐会等)
-  const openTurn = useCallback((sid: string, mid: string): void => {
-    setCanvasPref({ on: false })
-    if (sid !== useApp.getState().activeId) useApp.getState().setActiveId(sid)
-    useApp.getState().setJumpTarget(sid, mid)
-  }, [setCanvasPref])
 
   // 工作区(会话/笔记/文件)拖进来即引用:**整个聊天区**都是落区,不用瞄准输入框。
   // 只吃 chatDragRef 的两个 MIME —— OS 文件仍归输入框卡片那套(附件/路径插入),两条路不打架。
@@ -618,6 +724,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       // 只有真的离开整块才撤高亮(子元素间移动会连发 leave/enter)
       onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setRefDrop(false) }}
       onDrop={onRefDrop}
+      onPointerDownCapture={(e) => { if (!canvasOn && (e.target as Element).closest?.('[data-testid="chat-canvas-seg"]')) segAnchor.current = { at: performance.now(), a: chatAnchor(chatViewRef.current) } }}
     >
       {raiseTeam && mvCfg.soloAgentSlug && activeId && <TeamEditor
         agents={s.agentDefs.filter((a) => a.createdBy !== 'system' && !!a.libraryDir)} team={null} initialMembers={[mvCfg.soloAgentSlug]}
@@ -634,7 +741,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           a conversation is on screen and at its end (it is laid out from the bottom up there, so it lands where layout
           puts it afterwards), the input alone otherwise: an empty chat's mark is centred, not bottom-anchored.
           Markers only; nothing reads them elsewhere. */}
-      <div className="t2-chat-col" data-kb-rise={anyShown ? 'end' : undefined}>
+      <div ref={chatColRef} className="t2-chat-col" data-kb-rise={anyShown ? 'end' : undefined}>
       {/* 头行只盖这一列(右栏卡片不动、不放会话标题);画布模式下它浮在舞台上面 */}
       <ViewHead leafId={leaf.id} testId="chat-canvas-seg" />
       <ErrorBoundary key={activeId || 'none'}>
@@ -680,7 +787,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                     </> : undefined}
                     avatarUrl={m.role !== 'assistant' ? undefined : (() => {
                       // 群聊发言人:优先 agentId,缺失时按名反查 slug(agentDefs 晚到时自动纠正);仍无则不回退会话默认头像。
-                      const aid = m.agentId || (m.agentName ? s.agentDefs.find((a) => a.name === m.agentName)?.slug : undefined)
+                      const aid = m.agentId || (m.agentName ? s.agentDefs.find((a) => agentNames(a).includes(m.agentName!))?.slug : undefined)
                       if (aid) return s.agentAvatars[aid]
                       if (m.agentName) return undefined
                       return curEngineId ? undefined : chatAgentAvatar
@@ -694,10 +801,29 @@ export function ChatView({ leaf, params }: ViewProps) {
                     speakState={tts?.msgId === m.id ? tts.phase : undefined}
                     voice={voice}
                     handlers={handlersFor(m.id)}
+                    todoInTail={m.id === tailTodo?.id}
                   />
                 )
               })
             )}
+            {/* 借 Comma:没发出去的那几条留在末尾,淡掉的气泡 + 原因 · 丢弃 · 重试(原因的原文在悬停提示里) */}
+            {s.failedSends.map((f) => (
+              <EditorialMessage
+                key={f.id}
+                msg={{ id: f.id, role: 'user', content: f.text, attachments: f.attachments, status: 'done', timestamp: f.at }}
+                userName={userName}
+                userAvatar={userAvatar}
+                fileCtx={fileCtx}
+                footer={
+                  <div className="t2-failed" role="status">
+                    <span className="t2-failed-why" title={f.detail}><CircleAlert size={13} />{t(`chat.failed.${f.reason}`)}</span>
+                    {f.reason === 'quota' && <button type="button" className="t2-failed-btn" onClick={() => useApp.getState().openSettings('forsion')}>{t('chat.failed.credits')}</button>}
+                    <button type="button" className="t2-failed-btn" onClick={() => useApp.getState().discardFailed(activeId!, f.id)}>{t('chat.failed.discard')}</button>
+                    <button type="button" className="t2-failed-btn primary" onClick={() => { void useApp.getState().retryFailed(activeId!, f.id) }}>{t('chat.failed.retry')}</button>
+                  </div>
+                }
+              />
+            ))}
             {running && runStats && !runStatsMsgId && runStats.finishedAt == null && <div className="t2-runstats-solo"><RunStatsLine stats={runStats} /></div>}
             {activeMessages.filter((m) => m.teamSummary).slice(-1).map((m) => <TeamSummary key={m.id} message={m} />)}
             {running && activeId && s.isGroupVoting && <div className="t2-sys"><span className="t2-dot" /> {t('group.voting.inProgress')}</div>}
@@ -716,28 +842,56 @@ export function ChatView({ leaf, params }: ViewProps) {
                 <div className="t2-compact-track"><div className="t2-compact-fill" style={{ width: `${s.compacting}%` }} /></div>
               </div>
             )}
+            {/* 对话末尾:任务清单一行 + 等你处理的卡片堆,跟着最新内容走(画布模式下卡片堆回到输入框上方) */}
+            {!canvasOn && (tailTodo || deck) && (
+              <div className="t2-tail" data-pending-deck>
+                {tailTodo && <TodoList todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} folded />}
+                {deck}
+              </div>
+            )}
             </div>
           </div>
-          <JumpToBottom setter={jumpSetter} title={t('chat.jumpToBottom')} onClick={() => scrollToBottom(true)} />
+          <JumpToBottom key={activeId || ''} setter={jumpSetter} title={t('chat.jumpToBottom')} replies={replyCount} onClick={() => scrollToBottom(true)} />
           {/* 划线条(全应用同一条,components/selectionBar):这里接管「带去对话」那一格 —— 引用 / 顺便问(10-18 起「在侧栏提问」并进顺便问,开在右边那块面板),
               行为与原来的胶囊菜单一字不差;翻译和插件动作(⋯)由共用的那一层给。条自己 portal 到 body。 */}
           <ViewSelectionBar
             view="chat"
-            watch={chatScrollRef}
-            watchKey={`${activeId}:${activeMessages.length}`}
+            watch={canvasOn ? chatColRef : chatScrollRef} // 画布开着:卡和右边阅读栏都在对话流外面,看这一列(别看整个视图:右边子会话面板里嵌着另一个 ChatView,两条菜单会叠在一起 —— Codex 评审)
+            watchKey={`${activeId}:${activeMessages.length}:${canvasOn ? 'canvas' : 'chat'}`}
             dense={leaf.type === 'chat-panel'}
             source={() => ({ title: activeSession?.title || undefined, sessionId: activeId || undefined })}
             lead={(sel, done) => [
-              { id: 'quote', label: t('chat.action.quote'), icon: <Quote size={14} />, lead: true, testId: 'selection-quote', onRun: () => { setQuoteDraft((prev) => quoteAdded(prev, quoteSid, sel.text)); done() } },
+              { id: 'quote', label: t('chat.action.quote'), icon: <Quote size={14} />, lead: true, testId: 'selection-quote', onRun: () => { setReplyAt({ text: sel.text, rect: sel.rect }); done() } },
               // 划线顺便问:选中的那段作为引用,挂在它所在的那条回答上,主对话里什么都不发
-              ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => { openBtw({ sessionId: activeId, title: activeSession?.title, quote: sel.text, modelId: mvModelId || undefined, messageId: selectedMessageId() }); done() } }] : []),
+              ...(activeId ? [{ id: 'btw', label: t('btw.selectionAction'), icon: <MessageCircleQuestion size={14} />, testId: 'selection-btw', onRun: () => {
+                const sid = selectedCanvasSessionId() || activeId
+                openBtw({ sessionId: sid, title: (sid === activeId ? activeSession : useApp.getState().sessions.find((x) => x.id === sid))?.title, quote: sel.text, modelId: mvModelId || undefined, messageId: selectedMessageId() })
+                done()
+              } }] : []),
             ]}
           />
+          {replyAt && (
+            <ReplyPopover
+              text={replyAt.text}
+              rect={replyAt.rect}
+              onClose={closeReply}
+              onAdd={(note) => {
+                setQuoteDraft((prev) => quoteAdded(prev, quoteSid, replyAt.text, note))
+                setReplyAt(null)
+                composerRef.current?.querySelector<HTMLTextAreaElement>('textarea')?.focus() // 接着写这条消息
+              }}
+            />
+          )}
         </div>
       </ErrorBoundary>
-      {/* 画布盖在对话流上(流照旧挂着、只是藏起来:切回来滚动位置还在);按树根挂,点到别的支时舞台不重挂 */}
-      {canvasOn && activeId && treeRoot && (
-        <ChatCanvas key={treeRoot} rootId={treeRoot} activeId={activeId} dir={canvasPref.dir} onDir={(dir) => setCanvasPref({ dir })} onOpenTurn={openTurn} />
+      {/* 画布盖在对话流上(流照旧挂着、只是藏起来:切回来滚动位置还在);按树根挂,点到别的支时舞台不重挂。
+          ⚠️ key 带前缀:和上面正文的 key={activeId} 是兄弟,在主线上两者同为会话 id → React 认重,
+          画布开着换会话时旧正文删不掉,回到对话就上下叠两份(10-20 用户报) */}
+      {(canvasOn || (canvasExit && canvasAllowed)) && activeId && treeRoot && (
+        <ChatCanvas
+          key={`canvas:${treeRoot}`} rootId={treeRoot} activeId={activeId} dir={canvasPref.dir} onDir={(dir) => setCanvasPref({ dir })} onChat={() => setCanvasPref({ on: false })}
+          exiting={!canvasOn} onExited={() => setCanvasExit(false)}
+        />
       )}
 
       {/* 空状态优先保持 view 居中;空间不足时按 composer 实高向上避让,小高度逐级精简。 */}
@@ -785,6 +939,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           </div>
         )}
 
+        {/* 窄窗(摘要栏收起)时后台进程退到这一行;摘要栏在场时 CSS 藏掉(chat2.css .t2-bgstrip) */}
+        {activeId && !params.childSurface && hasMessages && <BgStrip sessionId={activeId} />}
         <AnimatePresence>
           {s.filePreview && (
             <WorkspaceFilePreview key={s.filePreview.name} target={s.filePreview} onClose={() => s.setFilePreview(null)} />
@@ -792,17 +948,14 @@ export function ChatView({ leaf, params }: ViewProps) {
         </AnimatePresence>
         <Composer2
           sessionId={activeId}
-          approvalTray={pendingApprovals.length ? (
-            <ApprovalTray
-              // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
-              key={activeId ?? ''}
-              sessionId={activeId ?? undefined}
-              items={pendingApprovals}
-              onDecide={(mid, aid, action, args) => s.decideApproval(mid, aid, action, args, activeId)}
-              onAnswer={(mid, iid, ans) => s.answerInquiry(mid, iid, ans, activeId)}
-            />
-          // Muse 私聊:它后台排队的审批也在这里批(10-18 方案 B;没有待批时托盘不画)
-          ) : mvCfg.soloAgentSlug === 'muse' && !params.childSurface ? <MuseApprovalTray key={activeId ?? ''} /> : undefined}
+          // 卡片堆在对话末尾时这里只放「↓ N 件等你」药丸(滚出视野才露);画布模式下卡片堆本身回到这里。
+          // 「N 件等你」与子会话药丸(借鉴 Comma 2.2)同一排;两颗都不露时这一排是空的(CSS :empty 收掉)
+          approvalTray={canvasOn ? (deck ?? undefined) : (
+            <div className="t2-deckpill-row">
+              {deck && <DeckPill key={activeId ?? ''} rootRef={chatScrollRef} count={deckItems.length} todos={tailTodo?.todos} onClick={() => scrollToBottom(true)} />}
+              <ChildSessionsPill key={`child-${activeId ?? ''}`} rootRef={chatScrollRef} sessionId={activeId} onJump={jumpToChildBlock} />
+            </div>
+          )}
           advisory={!params.childSurface ? (
             // P1-K6:焦点在「我的电脑」且连不上时,顶上这一段换成连接态提示(同一段语汇,两条不叠放)。
             // ⚠️ 本文件的状态条 / disabled 归 K7(INTEGRATION §2.2,合入顺序 K6-S4 → K7):K7 的 RemoteSessionStrip(§3.8)落地时
@@ -836,6 +989,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           thinkingLevel={mvCfg.thinkingLevel}
           ultra={mvCfg.ultra}
           onThinkingChange={(lv, ultra) => s.setSessionThinking(lv, activeId, !params.childSurface, ultra)}
+          fast={mvCfg.fast}
+          onFastChange={(on) => s.setSessionFast(on, activeId)}
           defaultModelIds={{
             backgroundModelId: s.desktopConfig?.backgroundModelId || '',
             imageModelId: s.cfg.imageModelId || '',
@@ -892,13 +1047,18 @@ export function ChatView({ leaf, params }: ViewProps) {
             if (studioChat) {
               const target = useCodeStudio.getState().prepareRun()
               if (!target) return false
-              return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, target.sessionId)
+              return useApp.getState().send(text, attachments, workspaceFiles, skillIds, mentions, target.sessionId, false, true)
             }
-            return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId)
+            return s.send(text, attachments, workspaceFiles, skillIds, mentions, activeId, false, true)
           }}
           onStop={() => s.stop(activeId)}
           quotes={quotes}
-          onRemoveQuote={(index) => setQuoteDraft((prev) => ({ sid: quoteSid, list: quotesFor(prev, quoteSid).filter((_, i) => i !== index) }))}
+          quoteNotes={quoteNotes}
+          onQuoteNote={(quote, note) => setQuoteDraft((prev) => quoteNoted(prev, quoteSid, quote, note))}
+          onRemoveQuote={(index) => setQuoteDraft((prev) => {
+            const list = quotesFor(prev, quoteSid)
+            return quoteNoted({ sid: quoteSid, list: list.filter((_, i) => i !== index), notes: notesFor(prev, quoteSid) }, quoteSid, list[index] ?? '', '')
+          })}
           onClearQuote={() => setQuoteDraft({ sid: quoteSid, list: [] })}
           // /btw [问题]:带本会话上下文旁聊(会话级浮窗);输入框挂着的引用一并带过去
           onBtw={activeId ? (question, quote) => openBtw({ sessionId: activeId, title: activeSession?.title, question, quote, modelId: mvModelId || undefined }) : undefined}
@@ -927,12 +1087,14 @@ export function ChatView({ leaf, params }: ViewProps) {
           onSteerNow={activeId ? () => { void s.steerNow(activeId) } : undefined}
         />
       </div>
-      {/* 右侧车道:任务概览卡 + Agent Desk 卡片态。锚在整列(.t2-chat-col,含输入框区)——
-        * Desk 卡底缘与输入框底缘同一条线(都是列底 -16px);滚动条仍在最右缘
-        * (卡片右侧留 --tsum-gut 让 thumb 落位)。够宽才显示(容器查询),见 chat2.css .t2-rail */}
-      {/* 画布模式下右侧车道收起,舞台铺满;切回对话原样回来 */}
-      {!params.childSurface && !canvasOn && <div className="t2-rail">
+      {/* 右侧车道:摘要栏卡片栈(进度 / 后台 / 产物 / 来源 / 工作范围 / 插件卡 / Agent Desk 卡片态,2026-10-25 多卡片)。
+        * 锚在整列(.t2-chat-col,含输入框区);滚动条仍在最右缘(卡片右侧留 --tsum-gut 让 thumb 落位)。
+        * 够宽才显示(容器查询),见 chat2.css .t2-rail */}
+      {/* 画布模式下右侧车道收起,舞台铺满(刚切过去那 450ms 留着播卡片往右收);切回对话原样回来 */}
+      {!params.childSurface && (!canvasOn || railOut) && <div className="t2-rail" data-off={canvasOn ? '' : undefined}>
         <TaskSummary
+          sessionId={activeId}
+          desk={deskEnabled && activeId ? <DeskCard key="desk" sessionId={activeId} /> : null}
           teamStatus={activeId ? <>
             {teamDesk && <TeamStatus sessionId={activeId} />}
             <SubChatStatus sessionId={activeId} />
@@ -973,7 +1135,6 @@ export function ChatView({ leaf, params }: ViewProps) {
             openWsFile(targetFor(f, s.cfg, activeId || '', mvCfg.execMode))
           }}
         />
-        {deskEnabled && activeId ? <DeskCard sessionId={activeId} /> : null}
       </div>}
       </div>
       {deskEnabled && activeId && !childSelections[activeId] && !canvasOn ? <AgentDesk sessionId={activeId} onQuote={deskQuote} /> : null}

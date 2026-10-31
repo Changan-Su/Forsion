@@ -226,6 +226,7 @@ export function captureSideWidths(api: DockviewApi): void {
 }
 
 type SizableGroup = { api: { setSize: (s: { width?: number; height?: number }) => void; width?: number; height?: number; setConstraints?: (c: { minimumWidth?: number; maximumWidth?: number; minimumHeight?: number; maximumHeight?: number }) => void } }
+const sideLocks = new WeakMap<SizableGroup, number>()
 
 /** 临时锁住指定侧栏的宽度(min=max=目标宽),让 close 释放的空白只被中间主区吸收 ——
  *  Dockview 默认把腾出的宽度按比例摊给所有组,侧栏会「突然变宽」而剩下的主区纹丝不动。
@@ -235,16 +236,43 @@ function lockSides(api: DockviewApi, sides: ('left' | 'right')[], keepCurrent = 
   for (const s of sides) {
     const g = (panelsAt(api, s)[0] as { group?: SizableGroup } | undefined)?.group
     if (!g) continue
+    const owners = sideLocks.get(g) ?? 0
+    sideLocks.set(g, owners + 1)
+    locked.push(g)
+    if (owners) continue // another split/toggle still owns these constraints
     // keepCurrent:钉「此刻的宽」= 用户要的「侧栏纹丝不动」。收栏那条路径必须钉目标宽 —— 它随后
     // 就要 pinSides 纠正漂移,钉当前宽会把漂移一起锁死。
     const w = (keepCurrent ? g.api.width : 0) || sideTargetWidth(api, s)
     try { g.api.setConstraints?.({ minimumWidth: w, maximumWidth: w }) } catch { /* 跨版本兜底 */ }
-    locked.push(g)
   }
-  return () => { for (const g of locked) { try { g.api.setConstraints?.({ minimumWidth: 0, maximumWidth: Number.MAX_SAFE_INTEGER }) } catch { /* ignore */ } } }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    for (const g of locked) {
+      const owners = (sideLocks.get(g) ?? 1) - 1
+      if (owners) { sideLocks.set(g, owners); continue }
+      sideLocks.delete(g)
+      try { g.api.setConstraints?.({ minimumWidth: 0, maximumWidth: Number.MAX_SAFE_INTEGER }) } catch { /* ignore */ }
+    }
+  }
 }
 /** 收起一侧期间锁住**另一**侧(空白只给主区,免另一侧变宽再被 pinSides 弹回 = 收栏闪屏)。 */
 const lockOtherSide = (api: DockviewApi, side: 'left' | 'right'): (() => void) => lockSides(api, [side === 'left' ? 'right' : 'left'])
+
+/** Dockview defaults to distributing a new split across every sibling, including shell
+ * sidebars. Lock them before adding the group so only Main gives up space; otherwise
+ * onDidLayoutChange also persists that system redistribution as a user resize. */
+function addPanelPreservingSides(api: DockviewApi, options: Parameters<DockviewApi['addPanel']>[0]): IDockviewPanel {
+  const split = (options.params as PanelMeta | undefined)?.__loc === 'main' && options.position?.direction && options.position.direction !== 'within'
+  const release = split ? lockSides(api, ['left', 'right'], true) : () => {}
+  // A horizontal split adds another minimum-width group. If locked shell widths
+  // cannot fit it, let Dockview resize the sides rather than overflowing the window.
+  if (split && (options.position?.direction === 'right' || options.position?.direction === 'left')
+    && api.minimumWidth + DV_GROUP_MIN > api.width) release()
+  try { return api.addPanel(options) }
+  finally { if (split) setTimeout(release, 180) }
+}
 
 /** rAF 把某组的一个维度(width|height)从 from 平滑补间到 to(ease-out cubic),done 收尾。
  *  无 rAF(测试)时直接收尾。 */
@@ -361,7 +389,7 @@ export function dropAllowed(api: DockviewApi, panelId: string, target: DropTarge
  *  position 另给落点时按它开(见 besidePanePosition)。 */
 function openTabBeside(api: DockviewApi, beside: IDockviewPanel, type: string, params: Record<string, unknown>, position?: Record<string, unknown>): Leaf {
   const def = getView(type)
-  const panel = api.addPanel({
+  const panel = addPanelPreservingSides(api, {
     id: def?.singleton && !api.getPanel(type) ? type : nextId(api, type),
     component: '__frame',
     title: def ? label(def.displayName) : type,
@@ -458,6 +486,9 @@ const usableRight = (type: string): boolean => { const def = getView(type); retu
 function rightGroupNow(api: DockviewApi, defaults: readonly Stashed[]): ReturnType<typeof rightGroupFor> {
   const main = activeMainPanel(api)
   const type = main ? panelType(main) : null
+  // 主视图还是占位(它的插件没就位 / 已关掉):不对账。按缺省组对的话,会把它带 __by:'rule' 的伴随视图当成
+  // 「不属于本组」关掉、随即存盘 —— 参数一丢,插件回来也复原不了(Codex 3a 评审)。注册上来后下一次 refreshTabs 再对。
+  if (type && !getView(type)) return null
   return rightGroupFor(type, type ? getView(type)?.rightCompanions : undefined, defaults, usableRight)
 }
 /** refreshTabs 里发现组变了:推一拍再对账 —— 它本身就在开 / 关 / 激活的半路上,当场再开关面板会重入。 */
@@ -707,8 +738,8 @@ interface WorkspaceState {
   /** 关掉**所有区**里该类型的全部实例(反注册插件/内置视图前的清场)。
    *  调用方从前是各自 `mainTabs + closeSideView('left') + closeSideView('right')` 手写一遍 —— 加了
    *  bottom 之后那种写法会漏掉停在底部的实例:视图被 unregisterView 之后 panel 还活着(cleanup 不跑、
-   *  插件 UI 继续存活),且这个已不存在的类型会留在持久化布局里 → 下次启动 layoutViewsAllRegistered
-   *  判定失败,**整份布局被丢弃回默认**。清场必须以 api.panels 为准,不能按位置手写枚举。
+   *  插件 UI 继续存活),且这个已不存在的类型会留在持久化布局里 → 下次启动它只剩一个占位(从前更糟:
+   *  整份布局被丢弃回默认)。清场必须以 api.panels 为准,不能按位置手写枚举。
    *  force = 视图要注销了,固定 View 也一并关掉;不传(插件自己的 ctx.closeView)则留下区内最后一个固定的。 */
   closeViewsOfType(type: string, force?: boolean): void
   /** 把该类型的全部实例**原地**换成另一个视图(2026-10-02,插件 `ctx.replaceView` 的引擎半身;Coding 进出项目
@@ -1400,7 +1431,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 左右侧栏严禁左右分屏(与拖拽路径 dropModel.splitDirection 同一铁律):焦点在侧栏时向右分一律折叠成向下。
     // 底部面板不在此列 —— 它是横着的宽条,左右分屏才是自然动作(≈ VS Code 终端分栏)。
     const inSidebar = __loc === 'left' || __loc === 'right'
-    const panel = api.addPanel({
+    const panel = addPanelPreservingSides(api, {
       id: nextId(api, type),
       component: __loc && __loc !== 'main' ? type : '__frame', // 主区分屏 panel 同样挂 frame 宿主(支持就地切视图);非主区(含 bottom)保持 per-type 组件,与 openView 一致
       title: active.title ?? type,
@@ -1492,6 +1523,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       // 侧栏 panel 的 component 就是视图名,Dockview 的表里没有它就当场抛
       // (「Only React.memo… are accepted as components」,一次未捕获异常打断整次展开)。
       // 在**使用点**过滤而不是在 applyNamed/存档时剔除:stash 原样留在布局里,插件开回来即原样复活。
+      // ponytail: 插件没回来时展开再收起,这些 unknown 条目就随这一轮丢了(展开只开认得的);要保住得让 stash 与活 panel 并存,
+      //   等真有人报再做。(侧栏组件表现在有兜底,开出来也不会抛了,只是不该替用户把死视图摆出来。)
       const known = (v: Stashed): boolean => !!getView(v.type)
       const live = get().stash[side].filter(known)
       const defaults = get().sidebarDefaults[side].filter(known)
@@ -1600,9 +1633,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
 }))
 
 /** 启动时尝试恢复上次布局(给 WorkspaceHost.onReady 用)。成功返回 true。 */
-/** 布局引用的所有视图当前是否都已注册。Tangu Web 无 window.amadeus → amadeus-* 未注册;
- *  若旧布局引用了它们,dockview.fromJSON 会异步挂载未知组件、在其 effect 里 deref undefined 崩溃
- *  (越过下面的 try/catch)。故先校验:有未注册视图即丢弃整份布局 → 回退默认布局。 */
+/** 布局引用的所有视图当前是否都已注册。没注册的组件名今天由 WorkspaceHost 的兜底(withComponentFallback)画占位,
+ *  不再崩;这里留着给「要不要再等等插件」的判断用:归属不明 / 别的 Space 的布局还原(见 restoreLayout)、
+ *  namedLayoutRestorable、savedLayoutRestorable。 */
 function layoutViewsAllRegistered(dockview: unknown): boolean {
   const panels = (dockview as { panels?: Record<string, { params?: { __type?: string } }> } | null)?.panels
   if (!panels) return true
@@ -1699,8 +1732,15 @@ function restoreLayout(api: DockviewApi): boolean {
   const layout = loadLayout()
   if (!layout) return false
   migrateLayoutBlob(layout) // 必须先迁移再校验:退役视图(sessions 等)已无注册,迁移前校验会误丢整份布局
-  if (!layoutViewsAllRegistered(layout.dockview)) return false
-  const known = (v: PersistedPanel): boolean => !!getView(v.type) // 收起态 stash 也剔除未注册视图,防展开时重开死视图
+  // 布局归当前 Space(信封里记的归属 = 画像键,onReady 之前已按活动 Space 设好)时,里面个别视图没注册
+  // (插件还没就位 / 已关掉)不再让整份落空:落空 = 屏上换成默认布局,第一次保存就盖掉布局键,
+  // 下一次切 Space 再把默认布局存进本 Space 自己的槽 —— 用户的布局就这样丢了。那些 panel 交给
+  // WorkspaceHost 的兜底画占位、注册上来就地复活;stash 里的原样留着(展开侧栏时在使用点过滤)。
+  // 归属不明(老存档)或是别的 Space(它整个还没注册,如插件 Space 晚到、人被停在回落 Space 上)照旧落空:
+  // 那条路有 adoptSpaceLayoutCold 的归档 + settleAsyncStartupSpace 的补还原兜着,屏上也不该摆别人 Space 的占位。
+  const ownedHere = !!layout.space && layout.space === useWorkspace.getState().sideProfileKey
+  if (!ownedHere && !layoutViewsAllRegistered(layout.dockview)) return false
+  const known = (v: PersistedPanel): boolean => ownedHere || !!getView(v.type) // 别人的布局:收起态 stash 也剔除未注册视图
   try {
     selfTitled.clear()
     rightKey = layout.sidebars.right.rule ?? null // 同 applyLayout

@@ -1,6 +1,7 @@
 /**
  * 真 Electron:看图(A2,components/ImageViewer.tsx)。npx electron-vite build && npm run check:imageviewer
  * SHOTS=<目录> 时另存 110% 缩放的截图(和方案页 round2.html §4 对照用)。
+ * Windows 另验实际 WCO、原生命中、最大化 / 窄窗和点击关闭;SHOTS 同存含原生标题栏的截图及 JSON。
  * 没覆盖:触屏手势(双指缩放、左右滑、下拉关闭)—— Playwright 的 Electron 驱动给不出 pointerType=touch。
  */
 const fs = require('fs')
@@ -82,6 +83,24 @@ async function main() {
     check('点缩略图打开看图(对话里四张图,这是第二张)', s && s.role === 'dialog' && s.name === 'mail.png' && s.count === '2 / 4' && s.focusIn, s)
     check('左右邻图都露出来', s.sides === 2, s)
     check('小图适应窗口 = 100%(不放大超过原图)', s.pct === '100%' && s.main[0] === 720, s)
+    // Windows(10-23 用户报):原生最小化 / 最大化 / 关闭盖在右上角,看图的关闭钮不能压在它底下。
+    // mac 上没有 WCO,这里照 tabTitleBar.ts 的写法摆出那两个标记,量关闭钮右缘让开了它。
+    const wco = process.platform !== 'win32' && await win.evaluate(async () => {
+      const root = document.documentElement
+      const marker = root.getAttribute('data-tab-titlebar')
+      const width = root.style.getPropertyValue('--windows-caption-width')
+      const priority = root.style.getPropertyPriority('--windows-caption-width')
+      root.dataset.tabTitlebar = '1'
+      root.style.setProperty('--windows-caption-width', '138px')
+      await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))
+      const right = document.querySelector('.iv-bar .iv-tools > button:last-child').getBoundingClientRect().right
+      if (marker === null) delete root.dataset.tabTitlebar
+      else root.setAttribute('data-tab-titlebar', marker)
+      if (width) root.style.setProperty('--windows-caption-width', width, priority)
+      else root.style.removeProperty('--windows-caption-width')
+      return { right: Math.round(right), limit: innerWidth - 138 }
+    })
+    if (wco) check('Windows 标题栏按钮在右上角时,关闭钮让开它(模拟)', wco.right <= wco.limit, wco)
 
     // 点一下主图不关(指针一按下就被舞台捕获,松手时的 target 恒是舞台 —— 早先按它判「点在空处」,点主图也关了,Codex P1)
     const mainBox = await win.locator('.iv-img:not(.is-side)').boundingBox()
@@ -188,6 +207,22 @@ async function main() {
     await win.keyboard.press('Escape')
     check('Esc 先关「更多」菜单', await win.evaluate(() => !!document.querySelector('.iv') && !document.querySelector('.iv-menu')), null)
     await win.keyboard.press('Escape'); await closed()
+
+    if (process.platform === 'win32') {
+      // Negative control recreates pre-#155 spacing without rebuilding product code.
+      if (process.argv.includes('--no-caption-gap')) await win.addStyleTag({ content: '[data-tab-titlebar] .iv .iv-bar { padding-right: 12px !important }' })
+      // Removing the actual declaration reproduces the tab row stealing zoom-button input.
+      if (process.argv.includes('--no-viewer-client-region')) await win.evaluate(() => {
+        let removed = false
+        for (const sheet of document.styleSheets) for (const rule of sheet.cssRules) {
+          if (rule.selectorText === '.iv' && rule.style.getPropertyValue('-webkit-app-region')) {
+            rule.style.removeProperty('-webkit-app-region'); removed = true
+          }
+        }
+        if (!removed) throw new Error('Viewer no-drag declaration was not found')
+      })
+      await require('./lib/image-viewer-caption.cjs').checkWindowsCaption({ app, win, check, closed, shots })
+    }
 
     console.log(`\n${count} checks passed`)
   } finally { await ctx.close() }

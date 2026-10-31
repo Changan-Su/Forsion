@@ -1,4 +1,4 @@
-import { ArrowDown, ArrowUp, CheckCheck, ClipboardPaste, Copy, CopyPlus, Download, Lock, MessageCircle, SlidersHorizontal, Trash2, Unlock, Upload } from 'lucide-react'
+import { ArrowDown, ArrowUp, CheckCheck, ClipboardPaste, Copy, CopyPlus, Download, Lock, SlidersHorizontal, Trash2, Unlock, Upload, MessageSquarePlus } from 'lucide-react'
 import { ContextMenu, type CtxItem } from '../../components/RightPanel'
 import { useI18n } from '../../i18n'
 import { useImageStudio } from '../../stores/imageStudioStore'
@@ -34,7 +34,7 @@ export function ImageContextMenu({ target, board, busy, onClose, onImport, onExp
   )
   if (items.length && board) entries.push(
     { label: t('imageStudio.exportSelection'), icon: <Download size={14} />, disabled: busy, run: act(onExport) },
-    { label: t('imageStudio.reference'), icon: <MessageCircle size={14} />, separatorBefore: true, disabled: busy || items.length > 8, run: act(() => void run(referenceSelection)) },
+    { label: t('imageStudio.reference'), icon: <MessageSquarePlus size={14} />, separatorBefore: true, disabled: busy || items.length > 8, run: act(() => void run(referenceSelection)) },
     { label: t('imageStudio.inspector'), icon: <SlidersHorizontal size={14} />, run: act(onInspect) },
     { label: t('imageStudio.copyObjects'), icon: <Copy size={14} />, shortcut: `${command}C`, separatorBefore: true, run: act(copySelection) },
     { label: t('imageStudio.duplicate'), icon: <CopyPlus size={14} />, shortcut: `${command}D`, run: act(() => pasteSelection(true)) },

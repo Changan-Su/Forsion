@@ -84,4 +84,34 @@ describe('model key as one native menu (phone)', () => {
     expect(big.onUnavailable).toHaveBeenCalledTimes(1)
     expect(el.querySelector('.composer-menu--model')).not.toBeNull() // this tap falls through to the picker / web menu
   })
+
+  it('Fast: a row only for models whose catalog lists it; picking it reaches onFastChange', async () => {
+    const onFastChange = vi.fn()
+    await mount({ fastTier: '2x speed, increased usage', onFastChange })
+    await tap()
+    expect(rows().map((r) => r.id)).toEqual(['field:model', 'field:thinking', 'field:speed', 'mode'])
+    expect(rows()[2].detail).toBe('标准')
+    expect(rows()[2].children!.flatMap((x) => x.items).map((o) => o.detail)).toEqual([undefined, '约 2 倍速度，额度消耗更快'])
+    answer = { id: 'speed:0:1' }; await tap()
+    expect(onFastChange).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('Fast row in the desktop menu', () => {
+  it('shows the catalog speed, toggles through onFastChange, and tags the pill while on', async () => {
+    off(); off = () => {} // no native host: the web menu opens
+    const onFastChange = vi.fn()
+    await mount({ hub: undefined, fastTier: '1.5x speed', fast: false, onFastChange })
+    await tap()
+    const row = el.querySelector('.cm-fast-row') as HTMLButtonElement
+    expect(row.getAttribute('aria-checked')).toBe('false')
+    expect(row.textContent).toContain('约 1.5 倍速度')
+    await act(async () => { row.click() })
+    expect(onFastChange).toHaveBeenCalledWith(true)
+    await mount({ hub: undefined, fastTier: '1.5x speed', fast: true, onFastChange })
+    expect(el.querySelector('.model-pill-btn')!.textContent).toContain('快速')
+    await mount({ hub: undefined, fast: true, onFastChange }) // the model has no Fast tier: no row, no tag
+    expect(el.querySelector('.cm-fast-row')).toBeNull()
+    expect(el.querySelector('.model-pill-btn')!.textContent).not.toContain('快速')
+  })
 })

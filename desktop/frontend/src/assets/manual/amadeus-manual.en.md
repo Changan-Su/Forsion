@@ -177,7 +177,7 @@ Each icon in the ribbon's upper zone is a Space: Home, Tangu, Inbox, Amadeus, Co
 - Collapse / expand: the top-most button. Collapsed shows icons only, with the name on hover (tooltip "Expand"); expanded shows icon plus name ("Collapse"), and the first nine also show their shortcut.
 - Home slot: the single centred cell, holding "Home" by default, and also the default startup target. Right-click it → "Space in the home slot" → pick any Space. Whatever you put there disappears from the upper zone, so it never shows twice.
 - The fixed strip at the bottom: "Store", "Achievements", "Toggle light/dark mode", "Command palette (⌘K)", "Settings", and your account card last.
-- Tidying up: drag icons to reorder within their zone (you cannot drag between the two zones); create a folder from the ＋ or right-click menu ("New folder (Spaces)") and then drag icons onto it; when a zone runs out of room the tail collapses into "More". The same menu carries "New Space" and "Add command".
+- Tidying up: drag icons to reorder within their zone (you cannot drag between the two zones); create a folder from the ＋ or right-click menu ("New folder") and then drag icons onto it; when a zone runs out of room the tail collapses into "More". The same menu carries "New Space" and "Add command".
 
 > [!warning]
 > The slot number follows the current order — it is not tied to a Space. Drag an icon, or turn a built-in plugin on or off, and `⌘/Ctrl + N` opens something else; the Space sitting in the home slot takes no number at all. Expand the ribbon to see which number each icon has right now.
@@ -310,7 +310,7 @@ Pick any folder to be your vault, and everything under it — Markdown notes, at
 | Command palette `⌘/Ctrl + K` | Anywhere | "Open vault…" |
 
 - The folder picker is desktop only; on the web the same footer button opens the "Cloud vault" panel instead.
-- The first launch does not ask which folder you want — it creates `Forsion/Amadeus` in your home folder as the default vault and seeds a `Calendar.db` in it.
+- The first launch does not ask which folder you want — it creates `Forsion/Amadeus` in your home folder as the default vault. The default calendar isn't in the vault; it's `human/CALENDAR.db` in the engine's home folder.
 - Every launch after that reopens the last vault and returns to the note you last had open. If that folder is gone, the main area reads "Open a vault folder to get started."
 - Switching vaults flushes unsaved edits back to the old vault before the root changes, so nothing leaks between libraries.
 - After you switch vaults by hand you land on the first note alphabetically, not where you left off — that is normal for a switch, as opposed to a restore on launch.
@@ -2973,7 +2973,7 @@ The plugin folder is `~/.forsion/plugins/`, one folder per plugin, and store ins
 |---|---|
 | A plugin you dropped in by hand does not show up | Click "Reload" on the plugin page; if it still does not appear, that folder is not a complete plugin package |
 | A greyed-out card badged "Requires app version ≥ …" | Update the app, then come back and check the box |
-| A panel reads "Plugin view failed to load (see console)" | Toggle the plugin off and on again, then check "Updates" in the store for a newer version |
+| A panel shows a "Plugin view failed to load" card | Click "Retry" on the card first; if that doesn't help, toggle the plugin off and on again, then check "Updates" in the store for a newer version |
 | You switched interface language but the plugin's `/` entries and command names are still in the old one | Toggle that plugin off and on, or restart the app. Those names are fixed at the moment the plugin is enabled and do not follow a mid-session language switch |
 | One plugin sends too many notifications | Settings → "Appearance" → "Notifications" → "Plugin notifications", and switch off its row |
 | An unwanted item in the status bar | Settings → "Appearance" → "Status bar", uncheck it; drag to reorder |

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useApp } from '../../stores/appStore'
 import { useComposerDrafts, setDraftField } from './composerDrafts'
 import { PROMPT_SUGGEST_KEY, clearSuggestion, isPromptSuggestOn, requestSuggestion, setPromptSuggest, usePromptSuggest } from './promptSuggest'
+import '../../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 const initialApp = useApp.getState()
 const json = (body: object, status = 200): Response => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })

@@ -69,8 +69,8 @@ async function main() {
       active: [...document.querySelectorAll('.dv-tab.dv-active-tab')].filter(vis).map((e) => (e.textContent || '').trim()),
       row: [...document.querySelectorAll('.t2s-srow.active')].map((e) => (e.textContent || '').trim()),
       chars: [...document.querySelectorAll('.sb-plain, .status-item')].map((e) => (e.textContent || '').trim()).filter((t) => /字|chars/i.test(t)),
-      groups: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-nav-btn')).length,
-      byGroup: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-nav-btn'))
+      groups: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-new-tab')).length,
+      byGroup: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-new-tab'))
         .map((g) => [...g.querySelectorAll('.wb-tab-name')].map((e) => (e.textContent || '').trim())),
       welcome: /从左栏选一篇笔记开始/.test(document.body.innerText),
     }
@@ -90,7 +90,7 @@ async function main() {
     await win.waitForSelector('.t2s-srow:has-text("Gamma")', { timeout: 20_000 })
     await win.waitForTimeout(2500)
     const f0 = await state()
-    check('⚠️F0 从主页点进 Note Space、还没点任何笔记:主区是空白编辑器,树上不亮启动那篇', f0.tabs.includes('编辑器') && f0.row.length === 0, JSON.stringify(f0))
+    check('⚠️F0 从主页点进 Note Space、还没点任何笔记:主区是空白编辑器,树上不亮启动那篇', f0.tabs.includes('笔记') && f0.row.length === 0, JSON.stringify(f0))
 
     // ── 第二程:冷启动直接落在 Note Space(进程重来,模块状态清零)──
     await win.evaluate(`localStorage.setItem('forsion_default_space', 'amadeus')`)
@@ -102,7 +102,7 @@ async function main() {
     await win.waitForSelector('.t2s-srow:has-text("Gamma")', { timeout: 30_000 })
     await win.waitForTimeout(3000)
     const f0b = await state()
-    check('⚠️F0b 冷启动直接落在 Note Space:空白编辑器仍是欢迎页(没被启动页顶掉),树上不亮', f0b.tabs.includes('编辑器') && f0b.welcome && f0b.row.length === 0, JSON.stringify(f0b))
+    check('⚠️F0b 冷启动直接落在 Note Space:空白编辑器仍是欢迎页(没被启动页顶掉),树上不亮', f0b.tabs.includes('笔记') && f0b.welcome && f0b.row.length === 0, JSON.stringify(f0b))
 
     const rowIs = (name) => (s) => s.row.length === 1 && s.row[0] === name
     const openRow = async (name) => { await win.locator('.t2s-srow', { hasText: name }).first().click(); await win.waitForTimeout(1800) }

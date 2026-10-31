@@ -318,14 +318,19 @@ export function RemoteSyncSection(): React.ReactElement | null {
           </div>
         )}
 
-        {on && (
-          <div className="settings-inline-row" style={{ marginTop: 6 }}>
+        {/* 保存挪进远程服务这张卡的底部(走查续五 W-27),不再独占一张空卡 */}
+        <div className="settings-inline-row" style={{ marginTop: 6 }}>
+          <button className="btn primary sm" disabled={busy} onClick={save}>
+            {t('settings.btn.save')}
+          </button>
+          {on && (
             <button className="btn ghost sm" disabled={busy} onClick={testConn}>
               {t('settings.remotesync.test')}
             </button>
-            {svcNote && <span className="hint">{svcNote}</span>}
-          </div>
-        )}
+          )}
+          {svcNote && <span className="hint">{svcNote}</span>}
+          {!on && note && <span className="hint">{note}</span>}
+        </div>
       </div>
 
       {/* ── 同步计划(remotely-save: Sync schedule + Sync direction)── */}
@@ -392,24 +397,19 @@ export function RemoteSyncSection(): React.ReactElement | null {
       )}
 
       {/* ── 操作 + 进度 + 最近结果 ── */}
-      <div className="field">
-        <div className="settings-inline-row">
-          <button className="btn primary sm" disabled={busy} onClick={save}>
-            {t('settings.btn.save')}
-          </button>
-          {on && (
-            <>
-              <button className="btn ghost sm" disabled={busy || running} onClick={dryRun}>
-                {t('settings.remotesync.dryRun')}
-              </button>
-              <button className="btn sm" disabled={busy || running} onClick={() => runSync()}>
-                {running ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />}{' '}
-                {running ? t('settings.remotesync.syncing') : t('settings.remotesync.syncNow')}
-              </button>
-            </>
-          )}
-          {note && <span className="hint">{note}</span>}
-        </div>
+      {(on || running || rootError || report) && <div className="field">
+        {on && (
+          <div className="settings-inline-row">
+            <button className="btn ghost sm" disabled={busy || running} onClick={dryRun}>
+              {t('settings.remotesync.dryRun')}
+            </button>
+            <button className="btn sm" disabled={busy || running} onClick={() => runSync()}>
+              {running ? <Loader2 size={12} className="spin" /> : <RefreshCw size={12} />}{' '}
+              {running ? t('settings.remotesync.syncing') : t('settings.remotesync.syncNow')}
+            </button>
+            {note && <span className="hint">{note}</span>}
+          </div>
+        )}
 
         {running && (
           <div className="rsync-progress">
@@ -453,7 +453,7 @@ export function RemoteSyncSection(): React.ReactElement | null {
             {report.errors.length > 3 ? '…' : ''}
           </div>
         )}
-      </div>
+      </div>}
     </>
   )
 }

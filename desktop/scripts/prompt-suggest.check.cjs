@@ -28,10 +28,12 @@ const SHOTS = {
   dark: path.join(os.tmpdir(), 'forsion-promptsuggest-dark.png'),
   setting: path.join(os.tmpdir(), 'forsion-promptsuggest-setting.png'),
 }
-const SUGGESTION = '跑一下测试看看'
+const SUGGESTION = '帮我看看 Docker 里的 Tangu 容器现在有没有正在进行的任务，能不能安全退出'
 // 后两轮各回一句不一样的:证明显示的是「这一轮」的那句,不是上一轮留下的
 const SUGGESTION_5 = '把结果贴给我'
 const SUGGESTION_6 = '后台那一轮的下一句'
+// 灰字末尾带「⇥ Tab」提示(10-23 用户:很多人不知道按 Tab 填入),与 tangu/messages.ts 的 input.suggestionTab 同步
+const shown = (s) => `${s}　⇥ Tab 填入`
 const results = []
 function check(name, ok, detail) {
   results.push({ name, ok: !!ok })
@@ -146,15 +148,29 @@ async function main() {
     await turn('先看看有哪些文件', '有 a.ts 和 a.test.ts。要我跑一下测试吗?')
     await waitFor(() => asked.length > 0, 4000)
     check('缺省开:一轮结束拉一次,带上刚结束的 run', asked.length === 1 && asked[0].run_id === stub.seen.runs.at(-1)?.runId, JSON.stringify(asked))
-    await waitFor(async () => (await placeholder()) === SUGGESTION, 4000)
-    check('那句成了空输入框里的灰字', (await placeholder()) === SUGGESTION && (await flagged()) === 'true' && (await ta.inputValue()) === '', JSON.stringify(await placeholder()))
+    await waitFor(async () => (await placeholder()) === shown(SUGGESTION), 4000)
+    check('那句成了空输入框里的灰字', (await placeholder()) === shown(SUGGESTION) && (await flagged()) === 'true' && (await ta.inputValue()) === '', JSON.stringify(await placeholder()))
+    const suggestionView = win.locator('.t2c-suggestion:visible').first()
+    const pill = suggestionView.locator('.t2c-suggestion-key')
+    check('建议和 Tab 提示分开显示,胶囊跟在句尾', await suggestionView.isVisible() && await pill.textContent() === '按 Tab 填入' && (await suggestionView.textContent()).includes(SUGGESTION))
+    const geometry = async () => suggestionView.evaluate((el) => {
+      const wrap = el.parentElement, ta = wrap.querySelector('textarea'), badge = el.querySelector('.t2c-suggestion-key')
+      const w = wrap.getBoundingClientRect(), t = ta.getBoundingClientRect(), b = badge.getBoundingClientRect()
+      return { visible: b.left >= w.left - 1 && b.right <= w.right + 1 && b.bottom <= w.bottom + 1, covers: t.height >= w.height - 1, lines: w.height / parseFloat(getComputedStyle(el).lineHeight) }
+    })
+    await ta.evaluate(el => { el.closest('.t2c-card').style.width = '280px' })
+    await win.waitForTimeout(200)
+    const narrow = await geometry()
+    check('窄输入框长建议可完整换行,胶囊可见且可点击输入', narrow.visible && narrow.covers && narrow.lines >= 2, JSON.stringify(narrow))
+    await win.locator('.t2c-card:visible').first().screenshot({ path: path.join(os.tmpdir(), 'forsion-promptsuggest-narrow.png') })
+    await ta.evaluate(el => { el.closest('.t2c-card').style.width = '' })
 
     // ── ② 设置 → 高级 → 界面与会话:缺省勾着;取消 / 再勾上(真点) ──
     // 设置是一扇单独的浮窗(另一个渲染进程):开关写的是共用的 localStorage,主窗每次现读、经 storage 事件撤灰字。
     await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'advanced/a-ui' } }))
     let fl
     await waitFor(async () => { fl = app.windows().find((w) => w.url().includes('window=floating')); return !!fl }, 15000)
-    const box = fl ? fl.locator('[data-setting-anchor="prompt-suggest"] input[type="checkbox"]').first() : null
+    const box = fl ? fl.locator('[data-setting-anchor="prompt-suggest"] [role="switch"]').first() : null
     const found = !!box && await box.waitFor({ timeout: 30000 }).then(() => true, () => false)
     check('设置 → 高级 → 界面与会话里有「输入建议」,缺省勾着', found && await box.isChecked())
     if (found) {
@@ -186,14 +202,16 @@ async function main() {
     await waitFor(() => asked.length > askedOn, 4000)
     const lastRun = stub.seen.runs.at(-1)?.runId
     check('开着:一轮结束拉一次,带上刚结束的 run', asked.length === askedOn + 1 && asked.at(-1)?.run_id === lastRun, JSON.stringify({ asked: asked.slice(askedOn), lastRun }))
-    await waitFor(async () => (await placeholder()) === SUGGESTION, 4000)
-    check('又成了空输入框里的灰字', (await placeholder()) === SUGGESTION && (await flagged()) === 'true' && (await ta.inputValue()) === '', JSON.stringify(await placeholder()))
+    await waitFor(async () => (await placeholder()) === shown(SUGGESTION), 4000)
+    check('又成了空输入框里的灰字', (await placeholder()) === shown(SUGGESTION) && (await flagged()) === 'true' && (await ta.inputValue()) === '', JSON.stringify(await placeholder()))
 
     if (!NEGATIVE_CONTROL) {
       const box = win.locator('.t2c-card, .t2c').first()
+      await win.screenshot({ path: path.join(os.tmpdir(), 'forsion-promptsuggest-window-light.png') })
       await box.screenshot({ path: SHOTS.light }).catch(() => win.screenshot({ path: SHOTS.light }))
       await win.evaluate(() => { document.documentElement.classList.add('dark'); document.documentElement.dataset.mode = 'dark' })
       await win.waitForTimeout(250)
+      await win.screenshot({ path: path.join(os.tmpdir(), 'forsion-promptsuggest-window-dark.png') })
       await box.screenshot({ path: SHOTS.dark }).catch(() => win.screenshot({ path: SHOTS.dark }))
       await win.evaluate(() => { document.documentElement.classList.remove('dark'); delete document.documentElement.dataset.mode })
     }
@@ -205,9 +223,10 @@ async function main() {
     await win.waitForTimeout(300)
     const caret = await ta.evaluate((el) => [el.selectionStart, el.selectionEnd, document.activeElement === el])
     check('Tab:那句进了输入框,没有发出去', (await ta.inputValue()) === SUGGESTION && stub.seen.runs.length === runsBeforeTab, JSON.stringify(await ta.inputValue()))
+    check('填入后胶囊消失', await suggestionView.count() === 0)
     check('Tab 之后焦点还在输入框、光标在句尾', caret[2] === true && caret[0] === SUGGESTION.length && caret[1] === SUGGESTION.length, JSON.stringify(caret))
     // ── ④ 常驻:和平常的占位文字一样,输入框空了就在 ──
-    const still = async (want = SUGGESTION) => (await placeholder()) === want && (await flagged()) === 'true' && (await ta.inputValue()) === ''
+    const still = async (want = SUGGESTION) => (await placeholder()) === shown(want) && (await flagged()) === 'true' && (await ta.inputValue()) === ''
     const askedSticky = asked.length
     await ta.fill('')
     await win.waitForTimeout(200)
@@ -247,7 +266,7 @@ async function main() {
     const held = await hold('开始吧')
     await win.waitForTimeout(300)
     // 运行中本来就不显示灰字;「起跑即作废」那条路径由 promptSuggest.test.ts 直接钉(subscribeRun),这里只看界面
-    check('新一轮跑着:不显示上一轮的那句', (await placeholder()) !== SUGGESTION && !(await flagged()) && (await ta.inputValue()) === '', JSON.stringify(await placeholder()))
+    check('新一轮跑着:不显示上一轮的那句', (await placeholder()) !== shown(SUGGESTION) && !(await flagged()) && (await ta.inputValue()) === '', JSON.stringify(await placeholder()))
     await ta.fill('我先打着下一句') // 这一轮还没结束,用户已经在打下一句
     reply = SUGGESTION_5
     finish(held, '干活中…干完了')

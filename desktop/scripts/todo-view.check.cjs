@@ -67,7 +67,7 @@ async function standalone(win, app, { vault, d0, d1 }) {
   check('S12 日历右栏走窄档:没有 is-wide,标题旁一个筛选菜单,来源缩成日期前的色点', side && !side.wide && side.menu && side.dots > 0, JSON.stringify(side))
 
   // 单独打开:笔记 Space → 新标签 → 启动器「日历 ⌄」→ 待办清单
-  await clickSpace(win, ['笔记', 'Note'])
+  await clickSpace(win, ['笔记', 'Notes'])
   await win.waitForTimeout(1200)
   await win.locator('.dv-new-tab').first().click()
   await win.waitForSelector('.newtab', { state: 'visible', timeout: 10_000 })
@@ -113,7 +113,7 @@ async function standalone(win, app, { vault, d0, d1 }) {
   const today1 = await win.evaluate((sel) => ({ secs: [...document.querySelectorAll(`${sel} .amx-todo-gname`)].map((e) => e.textContent.trim()), rest: document.querySelector(`${sel} .amx-todo-rest`)?.textContent ?? '' }), MAIN)
   await clickSpace(win, ['日历', 'Calendar'])
   await win.waitForTimeout(800)
-  await clickSpace(win, ['笔记', 'Note'])
+  await clickSpace(win, ['笔记', 'Notes'])
   await win.waitForSelector(MAIN, { timeout: 10_000 })
   await win.waitForTimeout(500)
   const segOn = await win.evaluate((sel) => document.querySelector(`${sel} .amx-todo-seg button.active`)?.textContent ?? '', MAIN)
@@ -286,7 +286,7 @@ async function main() {
     await win.waitForSelector('.dv-groupview', { timeout: 40_000 })
 
     // 先进 Amadeus 让 vaultRoot 与全库扫描就绪(同 calendar-ui.check.cjs)。
-    await clickSpace(win, ['笔记', 'Note'])
+    await clickSpace(win, ['笔记', 'Notes'])
     await win.waitForSelector('.am-app', { timeout: 30_000 })
     await win.waitForTimeout(2400)
     await clickSpace(win, ['日历', 'Calendar'])

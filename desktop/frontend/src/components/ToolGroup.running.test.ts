@@ -29,7 +29,10 @@ describe('ToolGroup running visuals', () => {
 
   async function render(running: boolean): Promise<void> {
     await act(async () => root.render(React.createElement(ToolGroup, { events: [pendingCommand], running })))
+    await endRolls()
   }
+  // 过程行换态时旧行留着放 100ms 退场(RollLine);happy-dom 不放动画,这里替它把退场放完
+  const endRolls = () => act(async () => { host.querySelectorAll('.tool-roll-item.is-out').forEach((el) => el.dispatchEvent(new Event('animationend', { bubbles: true }))) })
 
   it('removes every running shimmer and busy state when the parent run is stopped', async () => {
     await render(true)
@@ -55,6 +58,7 @@ describe('ToolGroup running visuals', () => {
     expect(host.querySelector('.tool-row-head')?.getAttribute('aria-busy')).toBe('false')
     // answered / expired → back to the ordinary running look
     await act(async () => root.render(React.createElement(ToolGroup, { events: [ask], running: true, awaitingAnswer: false })))
+    await endRolls()
     expect(host.querySelector('[data-waiting-you]')).toBeNull()
     expect(host.querySelectorAll('.chat-run-shimmer-text').length).toBeGreaterThan(0)
   })

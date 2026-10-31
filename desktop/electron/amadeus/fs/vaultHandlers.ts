@@ -22,6 +22,8 @@ import { writeVaultText } from './pageWrite'
 import { registerPageHistoryHandlers, type PageHistory } from './pageHistory'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { vaultRel } from './vaultRel'
+import { migrateWorkFolder } from './workFolderMigration'
+import type { WorkFolderMigration } from '@amadeus-shared/ipc'
 
 const nowIso = (): string => new Date().toISOString()
 function dbVersion(text: string): string {
@@ -50,7 +52,7 @@ export const VAULT_WRITE_EVENTS: Record<string, (a: unknown[], isPagePath: (rel:
   // ⚠️ 这与 watcher 的分流**不一样**:watcher 对一切 .md(含 .excalidraw.md / 插件 .mindmap.md)都发 externalChange,
   //    只有非 .md 才发 fileChange;这里按笔记判据分,插件自定义 .md 类型走 fileChange。
   [IPC.writeTextFile]: (a, isPagePath) => [typeof a[0] === 'string' && isPagePath(a[0]) ? IPC.externalChange : IPC.fileChange, a[0]],
-  [IPC.drawingWrite]: (a) => [IPC.fileChange, a[0]],
+  [IPC.drawingWrite]: (a) => [IPC.externalChange, a[0]],
   [IPC.saveVaultBytes]: (a) => [IPC.fileChange, a[0]],
   [IPC.dbWrite]: (a) => [IPC.dbChange, a[0]],
   [IPC.dbWriteCas]: (a) => [IPC.dbChange, a[0]],
@@ -77,7 +79,7 @@ export const VAULT_WRITE_EVENTS: Record<string, (a: unknown[], isPagePath: (rel:
  *  VAULT_WRITE_EVENTS 映射的回灌事件 —— 发了就是叫别的编辑器 / 设备去重读一份没变过的盘面(收口 N-9)。
  *  三个派发口共用这一份判据:ipc.ts 的 handle 与 vaultFace.call、unit/localVault 的 call。 */
 export function casRejected(channel: string, result: unknown): boolean {
-  return (channel === IPC.dbWriteCas || channel === IPC.writeTextFile || channel === IPC.restorePageHistory) && (result as { ok?: unknown } | null | undefined)?.ok === false
+  return (channel === IPC.drawingWrite || channel === IPC.dbWriteCas || channel === IPC.writeTextFile || channel === IPC.restorePageHistory) && (result as { ok?: unknown } | null | undefined)?.ok === false
 }
 
 export interface VaultHandlerDependencies {
@@ -104,7 +106,7 @@ export interface VaultHandlerDependencies {
  *  随后旧正文连同补丁写回 → 编辑器刚落盘的新正文静默丢失。不可重入:只在最底层那段「读→改→写」上锁,
  *  别把一个会再去拿锁的 helper 整个包进来。 */
 const textWriteChains = new Map<string, Promise<unknown>>()
-function withTextWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+export function withTextWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = textWriteChains.get(key) ?? Promise.resolve()
   const run = prev.then(fn, fn)
   const tail = run.catch(() => {})
@@ -114,7 +116,14 @@ function withTextWriteLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
-  const { vault, index, handle, rememberPage, notifyAll } = deps
+  const { vault, index, handle, rememberPage: persistLastPage, notifyAll } = deps
+  // The file operation has already committed when most callers remember its
+  // location. A device preference failure must not masquerade as a failed move
+  // and make the renderer resume writing the now-missing source path.
+  const rememberPage = async (page: string): Promise<void> => {
+    try { await persistLastPage(page) }
+    catch (error) { console.warn('[amadeus] rememberPage failed; file operation is committed', page, error) }
+  }
   const logActivity = deps.logActivity ?? (() => {})
   const logNoteEdit = deps.logNoteEdit ?? (() => {})
   /** 按 vault 相对路径拿同篇写锁(键 = 绝对路径,各种写法归一)。越界 / 无库时 absPath 会抛:那就不上锁直接跑,
@@ -130,6 +139,14 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
     const keys = [...new Set(rels.flatMap((r) => { try { return [vault.absPath(r)] } catch { return [] } }))].sort()
     return keys.reduceRight<() => Promise<T>>((inner, key) => () => withTextWriteLock(key, inner), fn)()
   }
+  handle(IPC.migrateWorkFolder, async (_e, request: WorkFolderMigration) => {
+    const result = await migrateWorkFolder(vault, request, withPathLocks)
+    if (vault.getRoot() === request.expectedRoot && result.status === 'complete') {
+      try { await index.build(); notifyAll(IPC.structureChange) }
+      catch (error) { console.warn('[migration] committed; index refresh failed', error) }
+    }
+    return result
+  })
   handle(IPC.listPages, () => vault.listPages())
   handle(IPC.listFiles, () => vault.listFiles())
 
@@ -351,8 +368,17 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
 
   // 必须走 writeTextFile 而非 saveVaultBytes:后者不记自写账本,而 .excalidraw.md 命中 watcher 的
   // `.md` 分支 → 每次自动保存都会被当成外部改动回弹。
-  handle(IPC.drawingWrite, (_e, drawingPath: string, source: string) =>
-    withPathLock(drawingPath, () => vault.writeTextFile(drawingPath, source)))
+  handle(IPC.drawingWrite, (_e, drawingPath: string, source: string, base?: string) =>
+    withPathLock(drawingPath, async () => {
+      if (typeof base === 'string') {
+        let current: string | null
+        try { current = await fs.readFile(vault.absPath(drawingPath), 'utf8') }
+        catch (error: any) { if (error?.code !== 'ENOENT') throw error; current = null }
+        if (current === null || textFingerprint(current) !== base) return { ok: false, current }
+      }
+      await vault.writeTextFile(drawingPath, source)
+      return { ok: true }
+    }))
 
   // 通用 vault 文本读写(插件文件类型:ctx.app.readFile/writeFile)。读越界即 null;
   // 写同 drawingWrite 走 writeTextFile(记自写账本,插件保存不被 watcher 当外部改动回弹)。
@@ -364,19 +390,23 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       return null
     }
   })
-  handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: { create?: boolean; base?: string }) => {
+  handle(IPC.writeTextFile, async (e, filePath: string, text: string, opts?: { create?: boolean; base?: string; expectedRoot?: string }) => {
     const base = typeof opts?.base === 'string' ? opts.base : null
     return withPathLock(filePath, async () => {
+      const expectedRoot = typeof opts?.expectedRoot === 'string' ? opts.expectedRoot : null
+      const checkRoot = (): void => { if (expectedRoot !== null && vault.getRoot() !== expectedRoot) throw new Error('Vault changed before text save') }
+      checkRoot()
       if (opts?.create === true) {
         // 仅新建(Codex 复核返修 P1-1,优先于 base):`wx` 独占创建,已存在 → 不写,交回现文(调用方据此打开它 / 换下一个名字);
         // 现文读不出来 → current:null,调用方按「没建成」提示,绝不当成已存在。
         try {
           await vault.createTextFile(filePath, text)
+          checkRoot()
         } catch (err) {
           if ((err as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw err
           return { ok: false as const, current: await fs.readFile(vault.absPath(filePath), 'utf8').catch(() => null) }
         }
-        if (vault.isPagePath(filePath)) await index.update(filePath)
+        if ((expectedRoot === null || vault.getRoot() === expectedRoot) && vault.isPagePath(filePath)) await index.update(filePath)
         if (e != null && vault.isPagePath(filePath)) deps.notifyPeers?.(e, IPC.externalChange, filePath)
         return { ok: true as const }
       }
@@ -400,7 +430,13 @@ export function registerVaultHandlers(deps: VaultHandlerDependencies): void {
       }
       // ⚠️ 必须走 writeVaultText:这是 **v4/unified 笔记唯一的落盘通道**,只写盘不更索引的话
       //    图标/搜索/反链/tags 全部停在上次启动时的样子(见 pageWrite.ts 顶注)。
-      await writeVaultText(vault, index, filePath, text)
+      checkRoot()
+      if (expectedRoot !== null) {
+        // The vault resolves its absolute target synchronously before awaiting disk IO.
+        await vault.writeTextFile(filePath, text)
+        checkRoot()
+        if (vault.getRoot() === expectedRoot && vault.isPagePath(filePath)) await index.update(filePath)
+      } else await writeVaultText(vault, index, filePath, text)
       // 同篇开在别的窗口:自写账本把 watcher 的回声压掉了(整个进程一本账),不补这一声它们永远停在旧内容,
       // 下一次保存再把这次写的整篇盖掉。发起窗口不回发 —— 它自己的同窗实例由渲染层 lifecycle 通知。
       // Unit RPC 起源(e = null)不走这里:它的本机广播由 vaultFace.call 按 VAULT_WRITE_EVENTS 负责。

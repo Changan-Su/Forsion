@@ -418,6 +418,32 @@ describe('底部面板:布局信封向后兼容', () => {
     vi.runAllTimers()
   })
 
+  // 3a(Tangu 界面热更新计划 §1.2):归当前 Space 的布局里个别视图没注册(插件还没就位 / 已关掉),落空就是丢布局 ——
+  // 默认布局第一次保存盖掉布局键,下次切 Space 再存进本 Space 的槽。改成整份还原,没注册的 panel 由宿主画占位。
+  it('布局归当前 Space、里面有没注册的视图 ⇒ 整份还原、panel 留着、stash 原样;归属是别的 Space ⇒ 照旧落空', () => {
+    const { api, panels } = mkApi(1600, 1000)
+    useWorkspace.getState().setApi(api)
+    useWorkspace.getState().setSideProfile('tangu', {}, {})
+    const blob = (space: string): string => JSON.stringify({
+      version: 4, space,
+      dockview: { panels: {
+        p1: { contentComponent: '__frame', params: { __loc: 'main', __type: 'termv' } },
+        p2: { contentComponent: '__frame', params: { __loc: 'main', __type: 'plugin:late:view' } },
+      } },
+      sidebars: { left: { visible: false, stash: [{ type: 'plugin:late:side', params: {} }] }, right: { visible: false, stash: [] } },
+    })
+    localStorage.setItem(LAYOUT_KEY, blob('tangu'))
+    expect(tryRestoreLayout(api)).toBe(true)
+    expect(bootLayoutFellThrough()).toBe(false)
+    expect(panels.map((p) => p.params.__type)).toEqual(['termv', 'plugin:late:view'])
+    expect(useWorkspace.getState().stash.left).toEqual([{ type: 'plugin:late:side', params: {} }])
+    // 别的 Space 的现场(它整个还没注册,人停在回落 Space 上):不摆别人的占位,交给归档 + settleAsyncStartupSpace 补还原
+    localStorage.setItem(LAYOUT_KEY, blob('plugin-space'))
+    expect(tryRestoreLayout(api)).toBe(false)
+    expect(bootLayoutFellThrough()).toBe(true)
+    vi.runAllTimers()
+  })
+
   // 布局信封里的归属(space):冷启动归档按它认主(spaceRegistry.adoptSpaceLayoutCold),补定位按它判断屏上是谁的现场。
   // 平时 = 画像键;例外是 onReady 原样还原出「别的 Space」的现场 —— 异步就位的用户 Space,那一刻画像键还是回落 Space。
   it('存盘在信封里记归属:平时是画像键;启动还原出来的布局沿用它自带的,画像重设 / 重建默认后回到画像键', () => {

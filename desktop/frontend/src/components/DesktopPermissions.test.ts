@@ -149,6 +149,25 @@ describe('DesktopPermissions', () => {
     expect(row('microphone').querySelector<HTMLButtonElement>('button')!.disabled).toBe(false)
   })
 
+  it('offers repair only while a healthy helper reads a CU permission as not allowed; a failure gives the manual − / + steps', async () => {
+    const repair = vi.fn<NonNullable<NonNullable<Window['tangu']>['desktopPermissionRepair']>>()
+    window.tangu!.desktopPermissionRepair = repair
+    const denied = snapshot({ permissions: { ...snapshot().permissions, computerAccessibility: 'denied' } })
+    status.mockResolvedValue(denied)
+    await mount(false, 'dark')
+    const repairButton = (id: DesktopPermissionId) => [...row(id).querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('修复授权'))
+    expect(repairButton('computerScreen')).toBeUndefined()
+    expect(repairButton('microphone')).toBeUndefined()
+    repair.mockRejectedValueOnce(new Error('tccutil: No such bundle identifier'))
+    await act(async () => repairButton('computerAccessibility')!.click())
+    expect(repair).toHaveBeenCalledExactlyOnceWith('computerAccessibility', { locale: 'zh', mode: 'dark' })
+    expect(request).not.toHaveBeenCalled()
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain('点「−」删除，再点「+」重新添加')
+    status.mockResolvedValue(snapshot({ ...denied, helperError: 'outdated' }))
+    await advance(3000)
+    expect(repairButton('computerAccessibility')).toBeUndefined()
+  })
+
   it('does not overwrite a user action with a stale passive read, including a read failure', async () => {
     await mount()
     const oldRead = deferred<DesktopPermissionsSnapshot>()

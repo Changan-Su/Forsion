@@ -5,8 +5,8 @@
  * 失败即停、试跑(manual)不烧 lastFiredAt(由调用方语义保证——runActions 本身不 mark)、
  * upsert 缺席 actions 保留旧值(旧客户端整量启停不抹链)。
  */
-import { describe, it, expect, beforeAll } from 'vitest';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -17,9 +17,12 @@ import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { registerToolProvider } from '../src/tools/toolRegistry.js';
-import { runActions, listExecutions, isAutomationTool } from '../src/services/automation.js';
+import { runActions, listExecutions, isAutomationTool, launchAutomationTriggers } from '../src/services/automation.js';
 import { validateTriggerInput, upsertTrigger, loadTriggers, type MuseTrigger } from '../src/services/museTriggers.js';
 import { setCursors, loadCursors } from '../src/services/dbCursors.js';
+
+const { forwardInboxToChannels } = vi.hoisted(() => ({ forwardInboxToChannels: vi.fn() }));
+vi.mock('../src/channels/forward.js', () => ({ forwardInboxToChannels }));
 
 const USER = 'local'; // automationUserId() 缺省
 
@@ -84,6 +87,51 @@ describe('runActions', () => {
     const rows = await query<any[]>(`SELECT role, content FROM chat_messages WHERE session_id = ?`, [sess[0].id]);
     expect(rows[0].role).toBe('model');
     expect(rows[0].content).toContain('notified');
+  });
+
+  it('remind:收件箱 + Muse 私聊一行,不转发到通道、不占 Muse 每小时配额', async () => {
+    forwardInboxToChannels.mockClear();
+    const t = trig({ id: 'w-remind', actions: [{ type: 'remind', title: '该学习了', body: '先背 20 个单词' }] });
+    const r = await runActions(t, 'auto');
+    expect(r.status).toBe('done');
+    expect(r.steps[0]).toMatchObject({ type: 'remind', ok: true });
+    const letters = await query<any[]>(`SELECT * FROM inbox_messages WHERE sender_id = ?`, ['automation:w-remind']);
+    expect(letters).toHaveLength(1);
+    const dm = await query<any[]>(`SELECT content, origin FROM chat_messages WHERE origin = 'proactive:remind'`);
+    expect(dm).toEqual([{ content: '该学习了\n先背 20 个单词', origin: 'proactive:remind' }]);
+    expect(forwardInboxToChannels).not.toHaveBeenCalled();
+  });
+
+  it('remind:Muse 运行时段外跳过,不补发;试跑不受限', async () => {
+    const hour = new Date().getHours();
+    writeFileSync(join(process.env.TANGU_HOME!, 'special-agents.json'), JSON.stringify({ muse: { activeHours: { start: (hour + 2) % 24, end: (hour + 3) % 24 } } }));
+    try {
+      const t = trig({ id: 'w-quiet', actions: [{ type: 'remind', title: '夜里别响' }] });
+      const r = await runActions(t, 'auto');
+      expect(r.steps[0]).toMatchObject({ type: 'remind', ok: true, skipped: true });
+      expect(await query<any[]>(`SELECT id FROM inbox_messages WHERE sender_id = 'automation:w-quiet'`)).toHaveLength(0);
+      await runActions(t, 'manual');
+      expect(await query<any[]>(`SELECT id FROM inbox_messages WHERE sender_id = 'automation:w-quiet'`)).toHaveLength(1);
+    } finally {
+      rmSync(join(process.env.TANGU_HOME!, 'special-agents.json'), { force: true });
+    }
+  });
+
+  it('用户有 run 在跑:别的动作让位,直接提醒照响(不叫模型,不抢账号)', async () => {
+    await query(`INSERT INTO chat_sessions (id, user_id, title, kind) VALUES ('s-busy', ?, 't', 'user')`, [USER]);
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, app_id, model_id, assistant_message_id, status) VALUES ('r-busy', 's-busy', ?, 'tangu', 'm', 'a-busy', 'running')`, [USER]);
+    try {
+      const seen: string[] = [];
+      const io = { runActions: async (t: MuseTrigger) => { seen.push(t.id); return { execId: 'x', status: 'done' as const, steps: [], touched: {} }; } };
+      const r = await launchAutomationTriggers([
+        { t: trig({ id: 'w-note', actions: [{ type: 'notify', title: 'n' }] }) },
+        { t: trig({ id: 'w-rem', actions: [{ type: 'remind', title: 'r' }] }) },
+      ], io);
+      expect(seen).toEqual(['w-rem']);
+      expect(r.launched).toEqual(['w-rem']);
+    } finally {
+      await query(`DELETE FROM agent_runs WHERE id = 'r-busy'`);
+    }
   });
 
   it('tool_call 直执行(automationSafe 测试工具);失败即停链', async () => {

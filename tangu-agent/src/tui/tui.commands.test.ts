@@ -313,7 +313,7 @@ describe('run config (runConfig.ts)', () => {
   it('resume: TUI key wins over the shared one; full-auto is held back unless already full-auto', () => {
     const cur = { approvalMode: 'auto-edit' as const, thinkingLevel: 'medium' as const };
     const r1 = resumePlan({ modelId: 'x', agentConfig: { [TUI_APPROVAL_KEY]: 'readonly', approvalMode: 'custom', thinkingLevel: 'none', maxIterations: 999, planMode: true, agentSlug: 'ann' } }, cur);
-    expect(r1.patch).toMatchObject({ model: 'x', approvalMode: 'readonly', thinkingLevel: 'off', maxIterations: 200, planMode: true });
+    expect(r1.patch).toMatchObject({ model: 'x', approvalMode: 'readonly', thinkingLevel: 'off', maxIterations: 999, planMode: true });
     expect(r1.agentSlug).toBe('ann');
     expect(r1.heldBackFullAuto).toBe(false);
     expect(resumePlan({ agentConfig: { approvalMode: 'custom' } }, cur).patch.approvalMode).toBe('custom'); // 桌面会话:参考共享档

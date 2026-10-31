@@ -170,14 +170,14 @@ export const REMOTE_STRIPPED_CONFIG_KEYS = [
  * 契约 C7:远程**写会话配置**(PUT|PATCH /agent/sessions/:id/config、远程 POST /agent/sessions 的初始配置)只收这些键;
  * 其余一律保留存值 —— 存值是本机下一次 run 会照抄的东西,远端改不了、也删不掉。白名单而不是黑名单:明天新加的配置键缺省就远端不可写。
  *   agentSlug —— 选 Agent(其定义的审批档经激活时再钳,C3);
- *   modelId / model —— 模型;thinkingLevel / ultra / effort / reasoningEffort —— 思考档一类;
+ *   modelId / model —— 模型;thinkingLevel / ultra / effort / reasoningEffort —— 思考档一类;fast —— 出字速度档;
  *   title / name —— 标题一类;
  *   approvalMode —— 钳到上限(C3),custom 不收(见 applyRemoteConfigWrite)。
  * ⚠️ 远端新建的会话因此只存这几个键(execMode / preset / cwd 等不落库):远端那一轮不受影响(run 用请求里的 agent_config),
  * 只是本机日后打开这个会话时看到的是缺省值。与桌面 unitWeb 路由表(engineRoutes.generated.ts)那条注释同一口径。
  */
 export const REMOTE_WRITABLE_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  'agentSlug', 'modelId', 'model', 'thinkingLevel', 'ultra', 'effort', 'reasoningEffort', 'title', 'name', 'approvalMode',
+  'agentSlug', 'modelId', 'model', 'thinkingLevel', 'ultra', 'fast', 'effort', 'reasoningEffort', 'title', 'name', 'approvalMode',
 ]);
 
 /** 远程请求带来的 agent_config(起 run 用):剥掉受保护键、审批档钳到上限。返回新对象,不改入参。cwd 不在这里动 —— 由路由按 C8 校验、拒整条请求。 */
@@ -255,9 +255,10 @@ export function applyRemoteConfigWrite(stored: unknown, next: Record<string, any
 // log_event 同理(P1 · M1A,G7):每日日志按天进 Muse 周期提示词的活动摘要,远端写一条 = 把原话送进无人值守的 Muse;
 // HTTP 的 POST /agent/log 本就是 deny-remote。它没有 action 参数,恒拒。
 // update_app_settings 同理(10-05):本机 config.json 里的默认模型 / 语音 / 联网搜索 / 默认工作目录对之后每个本机会话生效;没有 action 参数,恒拒(读走 app_settings)。
-const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_harness', 'manage_automation', 'manage_schedule', 'remember', 'log_event', 'update_app_settings']);
+const REMOTE_READONLY_MANAGEMENT = new Set(['manage_agent', 'manage_skill', 'manage_harness', 'manage_automation', 'manage_schedule', 'remember', 'log_event', 'update_app_settings', 'manage_mcp']);
 export function remoteManagementDenied(tool: string, action: unknown): string | null {
   if (!REMOTE_READONLY_MANAGEMENT.has(tool) || action === 'list') return null;
+  if (tool === 'manage_mcp') return action === 'check' ? null : 'Remote sessions cannot change MCP settings on the host computer. Use list/check, or ask the user to configure MCP locally.';
   if (tool === 'log_event') return 'Remote sessions cannot write to the daily log: it feeds background agents on the host computer. Tell the user the result in your reply instead.';
   if (tool === 'update_app_settings') return 'Remote sessions cannot change app settings on the host computer. Tell the user to change it in Settings there.';
   return `Remote sessions cannot create, change or delete agents, skills, the evolution record, long-term memory, automations or schedules (${tool} action "${String(action ?? '')}"): they take effect in later runs on the host computer. Only action "list" is available here; ask the user to make this change on the host computer.`;

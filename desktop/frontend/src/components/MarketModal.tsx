@@ -7,7 +7,7 @@ import './MarketUpgrade.css'
  * 发现首页 + 分类目录 + 安装管理 + 商品详情。
  * 浏览/安装全走主进程 IPC(marketService),token 不下发渲染层。
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AlertCircle, ArrowLeft, ArrowRight, Bot, Check, Clock, Coins, Compass, Crown, Download, ExternalLink,
   GitBranch, Globe, LayoutGrid, Library, Loader2, Monitor, Package, PackageOpen, Palette, Puzzle,
@@ -21,22 +21,50 @@ import { Markdown } from './Markdown'
 import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, isDesktopOnlyItem, DESKTOP_ONLY_TAG, type InstalledItem } from '../services/marketService'
 import { forgetUserSpace, loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
-import { unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
-import { announceExtensionsChanged, reloadPluginsAndAnnounce } from '../amadeusPlugins'
+import { pluginVaultFolder, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
+import { dependentsOf, unmetClosure } from '@amadeus/plugins/pluginDeps'
+import { pluginDataSyncOn } from '@amadeus/plugins/pluginDataSync'
+import type { AmadeusPlugin } from '@amadeus/plugins/types'
+import { AgentUninstallDialog, PluginUninstallDialog, SkillUninstallDialog } from './UninstallDialog'
+import { uninstallEnginePlugin, uninstallForsionPlugin } from './pluginUninstall'
+import { PanelNotice } from './PanelNotice'
+import { listPlugins, listSkillCatalog } from '../services/backendService'
+import { homeTarget } from '../services/engine/targets'
+import { announceExtensionsChanged, installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { afterMarketInstall, canRestartBackend, restartBackend } from '../marketPostInstall'
 import { isGate, promptIfPending } from '../stores/pluginOnboardingStore'
 import { track } from '../achievements/store'
 import { act } from '../activity/log'
 import { openBrowser } from '../builtins'
 import type { MarketCard, MarketDetail, MarketInstallProgress } from '../types'
-import { PluginSettingsView } from './AmadeusPluginsTab'
-import { isPlacedSettingsView } from '../amadeus/plugins/display'
+import { PluginSettingsView, RequiredPlugins, type RequiredPluginsStore } from './AmadeusPluginsTab'
+import { isPlacedSettingsView, pluginDisplayName } from '../amadeus/plugins/display'
+import { installableDeps, planDeps, type DepPlan } from '../marketDeps'
 import { MarketPluginAutoUpdate, useMarketPluginUpdates } from './MarketPluginAutoUpdate'
 import { compareMarketVersions } from '../../../shared/marketPluginUpdates'
+import { SkillAgentPicker, applySkillAgentChoice, skillAgentsSupported, useSkillAgents, type SkillAgentChoice } from './MarketSkillAgents'
 
 registerMessages({
   'market.submissionsDescription': { zh: '投稿内容，查看审核结果并管理版本更新。', en: 'Submit your work, view review results and manage version updates.' },
   'market.group.more': { zh: '更多', en: 'More' },
+  // 一键补前置:装好的插件在等前置时,提示条与详情页右栏给的那一步
+  'market.deps.install': { zh: '安装前置插件', en: 'Install required plugin' },
+  'market.deps.installN': { zh: '安装前置插件（{n}）', en: 'Install required plugins ({n})' },
+  'market.deps.update': { zh: '更新前置插件', en: 'Update required plugins' },
+  'market.deps.installing': { zh: '正在安装 {name}（{n}/{total}）', en: 'Installing {name} ({n} of {total})' },
+  'market.deps.willRun': { zh: '装好后「{name}」会自动开始运行。', en: '"{name}" starts on its own once these are installed.' },
+  'market.deps.ready': { zh: '前置插件已装好，「{name}」已开始运行。', en: 'Required plugins are installed and "{name}" is running.' },
+  'market.deps.notReady': { zh: '「{name}」还不能运行，还差：{list}', en: '"{name}" still can\'t run. It needs: {list}' },
+  'market.deps.notRunning': { zh: '前置插件已装好，但「{name}」还没有运行，可以在插件设置里查看原因。', en: 'Required plugins are installed, but "{name}" isn\'t running. Check its plugin settings for the reason.' },
+  'market.deps.installableHint': { zh: '{list} 可以从商店直接安装。', en: '{list} can be installed from the store.' },
+  'market.deps.absentHint': { zh: '{list} 商店里没有，需要向插件作者确认安装方式。', en: '{list} isn\'t in the store. Ask the plugin\'s author how to install it.' },
+  'market.deps.inStore': { zh: '商店有 {version}', en: '{version} in the store' },
+  'market.deps.inStoreAny': { zh: '商店里有', en: 'In the store' },
+  'market.deps.absent': { zh: '商店里没有', en: 'Not in the store' },
+  'market.deps.tooLow': { zh: '商店里最高 {version}，版本还不够', en: 'The store only has {version}' },
+  'market.deps.incompatible': { zh: '商店里的版本不能装在这里', en: 'The store version can\'t be installed here' },
+  'market.deps.mismatch': { zh: '商店里的条目不是它要的插件', en: 'The store listing isn\'t the plugin it needs' },
+  'market.deps.queued': { zh: '等待安装', en: 'Waiting to install' },
 })
 
 type MarketType = MarketCard['type']
@@ -127,17 +155,21 @@ function formatDate(value?: string | null): string {
 }
 
 export function MarketModal({ onClose, initialQuery, initialItemId, initialDetailTab }: { onClose?: () => void; initialQuery?: string; initialItemId?: string; initialDetailTab?: string } = {}) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const pluginUpdates = useMarketPluginUpdates()
   const settingsViews = usePluginStore((s) => s.settingsViews)
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
-  const submissionView = !window.tangu?.unitPage && window.tangu?.cloudInvoke
+  const disabledIds = usePluginStore((s) => s.disabledIds)
+  // 账号类的页(投稿 / 会员 / 积分)属于本页登录的那个人:桌面与服务器 Unit 的网页主入口给,看别的设备的设备页不给。
+  const ownAccount = !window.tangu?.unitPage || !!window.tangu?.unitPublicEntry
+  // 网页主入口上 Extend 的通道在它自己的页内适配层里,不经 window.tangu.cloudInvoke。
+  const submissionView = ownAccount && (window.tangu?.unitPublicEntry || (window.tangu?.mobile && window.tangu?.extendMobile && window.tangu?.account) || window.tangu?.cloudInvoke)
     ? settingsViews.find((o) => o.pluginId === 'forsion-extend' && o.item.id === 'submission' && activeIds.includes(o.pluginId) && isPlacedSettingsView(plugins.find((p) => p.id === o.pluginId), o.item))
     : undefined
   // 插件提供的页:只认已启用的首方内置包(locked),设备页不显示。按 group 分组,组与页都保持注册顺序。
   const allStoreViews = usePluginStore((s) => s.storeViews)
-  const storeViews = useMemo(() => (window.tangu?.unitPage ? [] : allStoreViews.filter((o) => activeIds.includes(o.pluginId) && !!plugins.find((p) => p.id === o.pluginId)?.locked)), [allStoreViews, activeIds, plugins])
+  const storeViews = useMemo(() => (!ownAccount ? [] : allStoreViews.filter((o) => activeIds.includes(o.pluginId) && !!plugins.find((p) => p.id === o.pluginId)?.locked)), [ownAccount, allStoreViews, activeIds, plugins])
   const [storeViewKey, setStoreViewKey] = useState<string | null>(null)
   const storeViewKeyOf = (o: { pluginId: string; item: { id: string } }): string => `${o.pluginId}:${o.item.id}`
   // 页面所属的插件被停用 / 卸载 → 找不到了,自然退回 tab 指着的那页
@@ -147,11 +179,12 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   // 市场住在独立浮窗(桌面)或全屏覆盖层(主窗)里:全局通知在浮窗不渲染、在主窗被 overlayOpen 挡住,
   // 所以安装/卸载的结果只能由市场自己说 —— 这条提示条就是那个出口(09-21 用户实报「点安装只转圈没反馈」)。
   // restart = 引擎只能重启后才生效的那几种(插件贡献了路由 / 原地更新 / 卸载):给按钮,别让用户自己去找「重启」。
-  const [notice, setNotice] = useState<{ text: string; error: boolean; hint?: string; restart?: 'idle' | 'running' } | null>(null)
+  // deps = 这条提示挂着哪个插件的一键补前置按钮。
+  const [notice, setNotice] = useState<{ text: string; error: boolean; hint?: string; restart?: 'idle' | 'running'; deps?: string } | null>(null)
   // 普通提示不覆盖还挂着的错误(并发安装时,后完成的「已安装」会在几百毫秒内把前一个的失败原因顶掉)。
   const toast = useCallback((text: string, error = false, hint?: string) => setNotice((cur) => (cur?.error && !error ? cur : { text, error, hint })), [])
   useEffect(() => {
-    if (!notice || notice.error || notice.restart) return // 错误与待点的重启常驻到手动关 / 下一条提示
+    if (!notice || notice.error || notice.restart || notice.deps) return // 错误与待点的按钮常驻到手动关 / 下一条提示
     const timer = setTimeout(() => setNotice(null), 4000)
     return () => clearTimeout(timer)
   }, [notice])
@@ -169,7 +202,15 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const contentTypes = useMemo(hostContentTypes, [])
   const categoryTabs = useMemo(() => categoryTabsFor(contentTypes), [contentTypes])
   const scopeLimited = contentTypes.length < CONTENT_TABS.length
+  // 本宿主一类都装不了(网页版):没有目录可逛,商店只剩插件提供的页和投稿。
+  const storeOnly = contentTypes.length === 0
   const [tab, setTab] = useState<Tab>('discover')
+  // 只剩插件页时落在第一张上(Extend 的页晚于商店挂载才注册,所以跟着 storeViews 再判);一张都没有、有投稿就落投稿。
+  const firstStoreView = storeOnly && tab === 'discover' && !storeViewKey ? storeViews[0] : undefined
+  useEffect(() => {
+    if (firstStoreView) setStoreViewKey(storeViewKeyOf(firstStoreView))
+    else if (storeOnly && tab === 'discover' && !storeViewKey && submissionView) setTab('submit')
+  }, [firstStoreView, storeOnly, tab, storeViewKey, submissionView])
   const [catalog, setCatalog] = useState<MarketCard[]>([])
   const [catalogError, setCatalogError] = useState('')
   const [installed, setInstalled] = useState<Record<string, InstalledItem[]>>({})
@@ -187,6 +228,10 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const [failed, setFailed] = useState<Record<string, true>>({})
   useEffect(() => onInstallProgress((p) => setProgress((m) => ({ ...m, [p.id]: p }))), [])
   const [uninstalling, setUninstalling] = useState<string | null>(null)
+  // 一键补前置在跑:哪个插件的、正在装哪一项、第几个。
+  const [depsRun, setDepsRun] = useState<{ pluginId: string; card: MarketCard; n: number; total: number } | null>(null)
+  // 商店在独立浮窗:没进过设置页时这个窗口的插件 store 可能还是空的,详情页的前置块靠它
+  useEffect(() => { if (window.amadeus) installAmadeusPlugins() }, [])
   const [webApps, setWebApps] = useState<{ base: string; items: WebApp[] } | null>(null)
   const [webLoading, setWebLoading] = useState(false)
   const [webError, setWebError] = useState('')
@@ -206,7 +251,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     const lists = settled.map((result) => result.status === 'fulfilled' ? result.value : [])
     const all = lists.flat()
     setCatalog(all)
-    if (settled.every((result) => result.status === 'rejected')) setCatalogError(t('market.loadFailShort'))
+    if (settled.length && settled.every((result) => result.status === 'rejected')) setCatalogError(t('market.loadFailShort'))
     const ups = all.filter((c) => {
       const pools = (c.type === 'plugin' || c.type === 'amadeus-plugin')
         ? [...(inst[c.type] || []), ...(inst[c.type === 'plugin' ? 'amadeus-plugin' : 'plugin'] || [])]
@@ -246,6 +291,27 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   }, [installed])
 
   const installedEntry = (c: MarketCard): InstalledItem | undefined => installedInfo(c)?.entry
+  /** 这个条目装上的 Forsion 插件(目录名可以与装载 id 不同)。 */
+  const installedPlugin = (c: MarketCard): AmadeusPlugin | undefined => {
+    const info = installedInfo(c)
+    if (info?.realType !== 'amadeus-plugin') return undefined
+    return plugins.find((p) => p.id === (info.entry.id ?? c.installSlug) || p.bundle?.dir === c.installSlug)
+  }
+  /** p 缺的前置(连前置自己缺的)逐条对到商店上。读 getState:一键补前置的循环要拿到上一步装完之后的状态。 */
+  const depPlan = (p: AmadeusPlugin): DepPlan[] => {
+    const s = usePluginStore.getState()
+    return planDeps(unmetClosure(p, s.plugins, (x) => unmetPluginDeps(x, s)), catalog, { appVersion, platform: marketPlatform(), isInstalled: (c) => (installed['amadeus-plugin'] || []).some((x) => x.slug === c.installSlug) })
+  }
+  const depLabel = (x: DepPlan): string => x.card?.name || x.unmet.dep.name || x.unmet.dep.id
+  // 目录没拉到插件这一类(离线 / 这一类请求失败)时不知道有没有,不能说「商店里没有」。
+  const pluginsListed = catalog.some((c) => c.type === 'amadeus-plugin')
+  /** 提示条第二行:只有一部分能装时才需要说哪些能、哪些不能。 */
+  const depsHint = (plan: DepPlan[]): string | undefined => {
+    const can = plan.filter((x) => x.card && !x.skip).map(depLabel), absent = plan.filter((x) => x.skip === 'absent').map(depLabel)
+    if (!absent.length || !pluginsListed) return undefined
+    const sep = t('common.listSep')
+    return [can.length ? t('market.deps.installableHint', { list: can.join(sep) }) : '', t('market.deps.absentHint', { list: absent.join(sep) })].filter(Boolean).join(' ')
+  }
   const isInstalled = (c: MarketCard): boolean => !!installedEntry(c)
   const hasUpdate = (c: MarketCard): boolean => isNewer(c.latestVersion, installedEntry(c)?.version ?? null)
   const autoUpdate = (c: MarketCard) => (c.type === 'plugin' || c.type === 'amadeus-plugin') && isInstalled(c)
@@ -266,15 +332,23 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     useApp.getState().openSettings(`${info.realType === 'amadeus-plugin' ? 'fplugin' : 'plugin'}:${info.entry.id ?? c.installSlug}`)
   }
 
-  const onInstall = async (c: MarketCard, version?: string): Promise<void> => {
+  // 技能「装给哪些 Agent」:按条目记,缺省 null = 所有 Agent;只在首次安装时生效
+  const [skillChoice, setSkillChoice] = useState<Record<string, SkillAgentChoice>>({})
+  const skillAgents = useSkillAgents(true)
+  /** quiet = 一键补前置的一步:结果由那条链统一说,这里不报成功。 */
+  const onInstall = async (c: MarketCard, version?: string, quiet = false): Promise<{ ok: boolean; restart: boolean }> => {
     setInstalling((m) => ({ ...m, [c.id]: true }))
     setProgress((m) => omit(m, c.id))
     setFailed((m) => omit(m, c.id))
-    setNotice(null) // 新一轮安装 = 用户已看过上一条(失败的那项按钮仍是「重试」)
+    if (!quiet) setNotice(null) // 新一轮安装 = 用户已看过上一条(失败的那项按钮仍是「重试」)
     const wasInstalled = isInstalled(c)
     try {
       const res = await installMarket(c.id, version)
       const effectiveType = ((res?.type as MarketType) || c.type)
+      if (effectiveType === 'skill' && !wasInstalled && skillAgentsSupported()) {
+        await applySkillAgentChoice(res?.slug || c.installSlug, skillChoice[c.id] ?? null)
+          .catch((e) => toast(t('market.skillAgents.applyFailed', { e: e?.message || String(e) }), true))
+      }
       track('market.install')
       act('market.install', { id: c.id })
       // 本窗热重载 + 通知主窗等其余窗口(市场是独立浮窗)+ 判断要不要重启后端,与插件引导卡共用。
@@ -282,30 +356,121 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
       // 装完 = 注意力在场:逐个实测新插件(连 check),第一个确有未满足的才弹检查卡。
       const state = usePluginStore.getState()
       for (const p of fresh) if (state.activeIds.includes(p.id) && isGate(p) && await promptIfPending(p.id)) break
+      if (quiet) { await scanCatalog(); return { ok: true, restart } }
       if (restart) offerRestart(t('market.pluginInstalledRestartHint'))
       else if (effectiveType === 'space') toast(t('market.spaceInstalled', { name: c.name }))
       else if (effectiveType === 'theme') toast(t('market.themeInstalled', { name: c.name }))
       else if (effectiveType === 'amadeus-plugin') {
-        // 装上了但前置没齐(装着、开不了):别报「已加载」,说清还缺什么 —— 插件详情页有「在市场中查找」
+        // 装上了但前置没齐(装着、开不了):别报「已加载」,说清还缺什么;能从商店装的给一键按钮,提示条不自动消失
         const p = usePluginStore.getState().plugins.find((x) => x.id === res?.id)
-        const plugins = usePluginStore.getState().plugins
-        const missing = p ? unmetPluginDeps(p).map((u) => plugins.find((x) => x.id === u.dep.id)?.name || u.dep.name || u.dep.id) : []
-        toast(missing.length ? t('market.amadeusPluginNeedsDeps', { name: c.name, list: missing.join(t('common.listSep')) }) : t('market.amadeusPluginInstalled', { name: c.name }))
+        const plan = p ? depPlan(p) : []
+        if (p && plan.length) {
+          const text = t('market.amadeusPluginNeedsDeps', { name: c.name, list: plan.map(depLabel).join(t('common.listSep')) })
+          setNotice((cur) => (cur?.error ? cur : { text, error: false, hint: depsHint(plan), deps: installableDeps(plan).length ? p.id : undefined }))
+        } else toast(t('market.amadeusPluginInstalled', { name: c.name }))
       }
       else if (effectiveType !== 'plugin') toast(t('market.installOk', { name: c.name })) // 引擎插件的结果 onPluginInstalled 已经说过
       await scanCatalog()
+      return { ok: true, restart }
     } catch (e: any) {
       setFailed((m) => ({ ...m, [c.id]: true }))
       toast(t('market.installFailNamed', { name: c.name, e: e?.message || String(e) }), true, c.source === 'github' && e?.stage !== 'resolve' ? t('market.installHintGithub') : undefined)
+      return { ok: false, restart: false }
     } finally {
       setInstalling((m) => omit(m, c.id))
       setProgress((m) => omit(m, c.id))
     }
   }
 
+  /** 把 p 缺的前置一个个装上。每步重算:装完 B 才知道 B 还缺 C。依赖方恢复不在这里 —— 装完的重载走到 pluginStore 的 reconcile。 */
+  const onInstallDeps = async (p: AmadeusPlugin): Promise<void> => {
+    const name = pluginDisplayName(p, locale)
+    const tried = new Set<string>() // 同一条目一轮只试一次:装上了前置却还是不齐(条目不是它要的包)时不能原地打转
+    const live = (): AmadeusPlugin | undefined => usePluginStore.getState().plugins.find((x) => x.id === p.id)
+    // 不盖掉并发安装还挂着的失败(同 toast);自己这条链的错误(带 deps)可以被下一步换掉。
+    const say = (next: NonNullable<typeof notice>): void => setNotice((cur) => (cur?.error && cur.deps !== p.id ? cur : next))
+    let restart = false
+    for (;;) {
+      const self = live() // 每步重读:装的途中它可能被别的窗口卸载或换了版本
+      if (!self) break
+      const todo = installableDeps(depPlan(self)).filter((c) => !tried.has(c.id))
+      const card = todo[0]
+      if (!card) break
+      tried.add(card.id)
+      const step = { n: tried.size, total: tried.size + todo.length - 1 }
+      setDepsRun({ pluginId: p.id, card, ...step })
+      say({ text: t('market.deps.installing', { name: card.name, n: String(step.n), total: String(step.total) }), error: false, hint: t('market.deps.willRun', { name }), deps: p.id })
+      const r = await onInstall(card, undefined, true)
+      if (!r.ok) { // onInstall 已报错(常驻);这颗按钮此时是「重试」
+        setDepsRun(null)
+        setNotice((cur) => (cur ? { ...cur, deps: p.id } : cur))
+        return
+      }
+      restart ||= r.restart
+    }
+    setDepsRun(null)
+    const self = live()
+    if (!self) { setNotice((cur) => (cur?.deps === p.id ? null : cur)); return } // 它自己没了,这条提示也没有意义了
+    if (usePluginStore.getState().activeIds.includes(p.id)) { // 只有真跑起来才这么说
+      if (restart) offerRestart(t('market.pluginInstalledRestartHint'))
+      else say({ text: t('market.deps.ready', { name }), error: false })
+      if (isGate(self)) void promptIfPending(p.id) // 和普通安装同一条:装完 = 注意力在场
+      return
+    }
+    const left = depPlan(self)
+    if (left.length) say({ text: t('market.deps.notReady', { name, list: left.map(depLabel).join(t('common.listSep')) }), error: false, hint: depsHint(left), deps: p.id })
+    else say({ text: t('market.deps.notRunning', { name }), error: false, deps: p.id })
+  }
+
+  // Agent / 技能 / 插件走统一卸载确认框(components/UninstallDialog,10-28 手动卸载规范):逐项写去向、进回收站、6 秒内可撤销,
+  // 与设置页同一条路;Space 与主题没有留下的东西,照旧一句确认后删目录。
+  const [asking, setAsking] = useState<
+    | { kind: 'agent'; c: MarketCard; slug: string }
+    | { kind: 'skill'; c: MarketCard; slug: string; key: string }
+    | { kind: 'plugin'; c: MarketCard; id: string; warning?: string }
+    | { kind: 'amadeus-plugin'; c: MarketCard; plugin: AmadeusPlugin; warning?: string }
+    | null>(null)
+  // 设置页两处同一句:还在跑、依赖它的插件写进确认框
+  const dependentsWarning = (name: string, dependents: Array<Parameters<typeof pluginDisplayName>[0]>): string | undefined =>
+    dependents.length ? t('settings.plugins.uninstallDependents', { name, list: dependents.map((x) => pluginDisplayName(x, locale)).join(t('common.listSep')) }) : undefined
+  const afterDialogUninstall = async (c: MarketCard, type: string, slug: string): Promise<void> => {
+    act('market.uninstall', { id: c.id })
+    if (type === 'agent' || type === 'skill') void window.tangu?.marketForget?.(type, slug).catch(() => {})
+    await scanCatalog()
+  }
+
   const onUninstall = async (c: MarketCard): Promise<void> => {
     const info = installedInfo(c)
     if (!info) return
+    const slug = c.installSlug
+    try {
+      if (info.realType === 'agent') { setAsking({ kind: 'agent', c, slug }); return }
+      if (info.realType === 'skill') {
+        // 商店技能装在用户技能目录的 <installSlug>/:按目录名找到它在技能目录里的那一行(确认框要 key)
+        const row = (await listSkillCatalog(homeTarget())).find((r) => r.scope === 'user' && r.slug === slug && r.provenance === 'user')
+        if (row) { setAsking({ kind: 'skill', c, slug, key: row.key }); return }
+      } else if (info.realType === 'plugin') {
+        const hit = (await window.tangu?.pluginsUserInstalled?.())?.find((p) => p.slug === slug)
+        if (hit) {
+          const engine = await listPlugins(homeTarget())
+          const dependents = dependentsOf(hit.id, engine.map((x) => ({ id: x.id, version: x.version ?? '', requiresPlugins: x.requiresPlugins })))
+            .map((n) => engine.find((x) => x.id === n.id)!).filter((x) => x.active ?? x.enabled)
+          setAsking({ kind: 'plugin', c, id: hit.id, warning: dependentsWarning(c.name, dependents) })
+          return
+        }
+      } else if (info.realType === 'amadeus-plugin') {
+        const plugin = usePluginStore.getState().plugins.find((p) => p.bundle?.dir === slug || p.id === slug)
+        if (plugin) { setAsking({ kind: 'amadeus-plugin', c, plugin, warning: dependentsWarning(c.name, runningDependents(plugin.id)) }); return }
+      }
+    } catch {
+      // 查不了(引擎还没起来等):报错别卸 —— 老路是直接删目录,不进回收站
+      toast(t('uninstall.engineDown'), true)
+      return
+    }
+    await legacyUninstall(c, info) // 查得到列表却没有这一份(目录多半已经不在):走老路撤记录
+  }
+
+  const legacyUninstall = async (c: MarketCard, info: NonNullable<ReturnType<typeof installedInfo>>): Promise<void> => {
     // agent 与 skill 落地后是**活体**(agent 带自己的 MEMORY/LOG,技能可能被用户改过),
     // 删目录 = 连用户数据一起没。确认文案对这两类单独加重,别用一句通用的「确定卸载吗」糊过去。
     const warn = info.realType === 'agent' ? t('market.uninstallWarnAgent')
@@ -393,11 +558,13 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const shownTags = (c: MarketCard): string[] => (c.tags || []).filter((tag) => tag !== DESKTOP_ONLY_TAG)
 
   const installBtn = (c: MarketCard, extraClass = '') => {
-    const compatibility = marketplaceCompatibility(c, appVersion, marketPlatform())
-    if (compatibility === 'version' || compatibility === 'platform') return <button className={`btn sm ${extraClass}`} disabled data-market-install={c.id}><MarketRequirements item={c} version={appVersion} /></button>
+    // 「仅桌面」先判:通用兼容性也把这枚保留标签算作 platform,排在前面的话手机上只剩一句「当前端不可用」,
+    // 说不出装不了的原因(手机 e2e:plugins 4b 钉着这枚按钮)。
     if (desktopOnlyHere(c)) {
       return <button className={`btn sm ${extraClass}`.trim()} disabled data-market-install={c.id} data-install-state="desktop-only" title={t('market.desktopOnlyHint')}><Monitor size={13} />{t('market.desktopOnlyInstall')}</button>
     }
+    const compatibility = marketplaceCompatibility(c, appVersion, marketPlatform())
+    if (compatibility === 'version' || compatibility === 'platform') return <button className={`btn sm ${extraClass}`} disabled data-market-install={c.id}><MarketRequirements item={c} version={appVersion} /></button>
     const state = pluginUpdates.items.find((x) => x.id === c.id)
     const busy = !!installing[c.id] || state?.phase === 'downloading'
     const pending = !!state?.pendingVersion
@@ -419,6 +586,50 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
         {pending ? t('restartUpdate.button') : busy ? state?.phase === 'downloading' ? t('market.autoUpdateDownloading') : busyLabel(p) : retry ? t('market.installRetry') : update ? t('market.update') : done ? t('market.reinstall') : t('market.install')}
       </button>
     )
+  }
+
+  /** 一键补前置:提示条与详情页右栏同一颗。这次真能装的一个都没有就不出现,不假装能装。 */
+  const depsBtn = (p: AmadeusPlugin, extraClass = ''): ReactNode => {
+    const run = depsRun?.pluginId === p.id ? depsRun : null
+    const plan = depPlan(p), todo = installableDeps(plan)
+    if (!run && !todo.length) return null
+    const retry = !run && todo.some((c) => failed[c.id])
+    const update = plan.every((x) => !x.card || x.skip || x.unmet.reason === 'version')
+    return (
+      <button className={`btn sm primary ${extraClass}`.trim()} disabled={!!depsRun} data-market-deps-install={p.id} onClick={() => void onInstallDeps(p)}>
+        {run ? <Loader2 size={13} className="mk-spin" /> : retry ? <RefreshCw size={13} /> : <Download size={13} />}
+        {run ? busyLabel(progress[run.card.id]) : retry ? t('market.installRetry') : update ? t('market.deps.update') : todo.length > 1 ? t('market.deps.installN', { n: String(todo.length) }) : t('market.deps.install')}
+      </button>
+    )
+  }
+
+  /** 「商店里没有」那一行的查找:对不上 slug 不等于真没有(见 marketDeps.ts),留一条按名字搜的路。 */
+  const findInStore = (q: string): void => { switchTab('discover'); setQuery(q) }
+
+  const depsStore = (p: AmadeusPlugin): RequiredPluginsStore => {
+    const plan = depPlan(p)
+    const run = depsRun?.pluginId === p.id ? depsRun : null
+    const noteOf = (x: DepPlan): string | undefined => {
+      if (x.skip === 'absent') return pluginsListed ? t('market.deps.absent') : undefined
+      if (x.skip === 'low') return t('market.deps.tooLow', { version: x.card?.latestVersion ?? '' })
+      if (x.skip === 'incompatible') return t('market.deps.incompatible')
+      if (x.skip === 'mismatch') return t('market.deps.mismatch')
+      if (!x.card) return undefined
+      if (run) return x.card.id === run.card.id ? busyLabel(progress[run.card.id]) : t('market.deps.queued')
+      return x.card.latestVersion ? t('market.deps.inStore', { version: x.card.latestVersion }) : t('market.deps.inStoreAny')
+    }
+    return {
+      unmet: plan.map((x) => x.unmet),
+      row: (dep) => { const x = plan.find((y) => y.unmet.dep.id === dep.id); return x ? { note: noteOf(x), find: x.skip === 'absent' && pluginsListed } : {} },
+      find: findInStore,
+      foot: depsBtn(p, 'mk-wide-btn'),
+    }
+  }
+
+  /** 列表卡片:装着却在等前置(只算用户想开的;用户自己关掉的不是在等)。 */
+  const waitingDeps = (c: MarketCard): boolean => {
+    const p = installedPlugin(c)
+    return !!p && !p.blocked && pluginWanted(p, disabledIds) && !activeIds.includes(p.id) && unmetPluginDeps(p, { plugins, activeIds, disabledIds }).length > 0
   }
 
   /** 卸载按钮:只对已安装项出现;webapp 没有本地安装目录,不在此列。 */
@@ -504,6 +715,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
         <div className="mk-card-eyeline">
           <span>{navLabel[c.type]}</span>
           {isInstalled(c) && <span className="mk-installed-badge"><Check size={11} />{t('market.installed')}</span>}
+          {waitingDeps(c) && <span className="mk-waiting-badge" data-market-waiting={c.id}>{t('settings.amadeusPlugins.waitingDeps')}</span>}
           {desktopBadge(c)}
         </div>
         <button className="mk-card-title" onClick={(e) => { e.stopPropagation(); openDetail(c) }}>{c.name}</button>
@@ -536,11 +748,13 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     return <div className="mk-grid">{cards.map((item) => card(item))}</div>
   }
 
-  const showSearch = !detail && !storeView && tab !== 'submit'
-  const showSort = !detail && !storeView && tab !== 'submit' && tab !== 'webapp'
+  const showSearch = !storeOnly && !detail && !storeView && tab !== 'submit'
+  const showSort = !storeOnly && !detail && !storeView && tab !== 'submit' && tab !== 'webapp'
   /** 左栏高亮:开着插件页时内置入口都不亮。 */
   const navTab: Tab | null = storeView ? null : tab
   const openStoreView = (key: string): void => { setStoreViewKey(key); setDetail(null); setQuery('') }
+  const noticePlugin = notice?.deps ? plugins.find((p) => p.id === notice.deps) : undefined
+  const detailPlugin = detail ? installedPlugin(detail) : undefined
   const storeGroups: Array<{ label: string; views: typeof storeViews }> = []
   for (const o of storeViews) {
     const label = resolveText(o.item.group) || t('market.group.more')
@@ -556,11 +770,13 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           <div className="mk-nav-brand"><div className="mk-nav-mark"><Sparkles size={17} /></div><div><strong>{t('market.title')}</strong><span>{t('market.navSubtitle')}</span></div></div>
         </div>
         <div className="settings-nav-list">
+          {!storeOnly && <>
           <div className="settings-nav-group"><div className="settings-nav-grouphead">{t('market.group.discover')}</div><button className={navTab === 'discover' ? 'active' : ''} onClick={() => switchTab('discover')}><Compass size={15} />{navLabel.discover}</button></div>
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.group.categories')}</div>
             {categoryTabs.map((id) => <button key={id} className={navTab === id ? 'active' : ''} onClick={() => switchTab(id)}><TypeGlyph type={id as MarketType | 'webapp'} size={15} />{navLabel[id]}</button>)}
           </div>
+          </>}
           {storeGroups.map((g) => (
             <div key={g.label} className="settings-nav-group" data-store-group>
               <div className="settings-nav-grouphead">{g.label}</div>
@@ -569,8 +785,8 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           ))}
           <div className="settings-nav-group">
             <div className="settings-nav-grouphead">{t('market.group.manage')}</div>
-            <button className={navTab === 'installed' ? 'active' : ''} onClick={() => switchTab('installed')}><Library size={15} />{navLabel.installed}</button>
-            <button className={navTab === 'updates' ? 'active' : ''} onClick={() => switchTab('updates')}><RefreshCw size={15} />{navLabel.updates}{updatable.length > 0 && <span className="mk-nav-count">{updatable.length}</span>}</button>
+            {!storeOnly && <button className={navTab === 'installed' ? 'active' : ''} onClick={() => switchTab('installed')}><Library size={15} />{navLabel.installed}</button>}
+            {!storeOnly && <button className={navTab === 'updates' ? 'active' : ''} onClick={() => switchTab('updates')}><RefreshCw size={15} />{navLabel.updates}{updatable.length > 0 && <span className="mk-nav-count">{updatable.length}</span>}</button>}
             {/* Extend 的投稿页同时挂在市场与云端设置中;旧包仍可打开网页个人中心。 */}
             {(!!submissionView || !!window.tangu?.openAccountCenter) && <button className={navTab === 'submit' ? 'active' : ''} onClick={() => switchTab('submit')}><Send size={15} />{navLabel.submit}</button>}
           </div>
@@ -585,15 +801,25 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
         </div>
 
         {notice && (
-          <div className={`mk-notice${notice.error ? ' is-error' : ''}`} role={notice.error ? 'alert' : 'status'} data-market-notice={notice.error ? 'error' : 'ok'}>
+          <div className={`mk-notice${notice.error ? ' is-error' : ''}${noticePlugin ? ' has-action' : ''}`} role={notice.error ? 'alert' : 'status'} data-market-notice={notice.error ? 'error' : 'ok'}>
             {notice.error ? <AlertCircle size={15} /> : <Check size={15} />}
             <div className="mk-notice-body"><span>{notice.text}</span>{notice.hint && <small>{notice.hint}</small>}</div>
+            {noticePlugin && depsBtn(noticePlugin)}
             {notice.restart && <button className="btn sm primary" data-market-restart disabled={notice.restart === 'running'} onClick={() => void onRestartBackend()}>{notice.restart === 'running' ? t('market.backendRestarting') : t('market.restartBackend')}</button>}
             <button className="mk-notice-close" onClick={() => setNotice(null)} aria-label={t('common.close')}><X size={13} /></button>
           </div>
         )}
 
-        {!detail && !detailLoading && !storeView && <div className="mk-upgrade-filters"><select aria-label={t('market.tagAll')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAll')}</option>{[...new Set(catalog.flatMap(c => c.tags || []))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><label><input type="checkbox" checked={compatibleOnly} onChange={e => setCompatibleOnly(e.target.checked)} />{t('market.compatibleOnly')}</label><span>Forsion {appVersion}</span></div>}
+        <PanelNotice />
+        {asking?.kind === 'agent' && <AgentUninstallDialog slug={asking.slug} name={asking.c.name} onClose={() => setAsking(null)} onDone={() => void afterDialogUninstall(asking.c, 'agent', asking.slug)} />}
+        {asking?.kind === 'skill' && <SkillUninstallDialog skillKey={asking.key} name={asking.c.name} onClose={() => setAsking(null)} onDone={() => void afterDialogUninstall(asking.c, 'skill', asking.slug)} />}
+        {asking?.kind === 'plugin' && <PluginUninstallDialog name={asking.c.name} warning={asking.warning} onClose={() => setAsking(null)}
+          onConfirm={(opts) => { const a = asking; void uninstallEnginePlugin(a.id, a.c.name, opts).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'plugin', a.c.installSlug) }) }} />}
+        {asking?.kind === 'amadeus-plugin' && <PluginUninstallDialog name={asking.c.name} warning={asking.warning} vaultFolder={pluginVaultFolder(asking.plugin.id, asking.plugin.name)} cloudData={pluginDataSyncOn(asking.plugin)}
+          skills={asking.plugin.bundle?.skills.length ?? 0} agents={asking.plugin.bundle?.agents ?? []} onClose={() => setAsking(null)}
+          onConfirm={(opts) => { const a = asking; void uninstallForsionPlugin(a.plugin, a.c.name, opts, { engine: true }).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'amadeus-plugin', a.c.installSlug) }) }} />}
+
+        {!storeOnly && !detail && !detailLoading && !storeView && <div className="mk-upgrade-filters"><select aria-label={t('market.tagAll')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAll')}</option>{[...new Set(catalog.flatMap(c => c.tags || []))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><label><input type="checkbox" checked={compatibleOnly} onChange={e => setCompatibleOnly(e.target.checked)} />{t('market.compatibleOnly')}</label><span>Forsion {appVersion}</span></div>}
         <div className="settings-body mk-body">
           {detail ? (
             <div className="mk-detail">
@@ -605,6 +831,8 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
                 </main>
                 <aside className="mk-detail-sidebar">
                   <div className="mk-detail-actions">{installBtn(detail, 'mk-wide-btn')}{uninstallBtn(detail)}{canOpenSettings(detail) && <button className="btn sm mk-wide-btn" onClick={() => openPluginSettings(detail)}><Settings size={13} />{t('market.openSettings')}</button>}{autoUpdate(detail)}</div>
+                  {detailPlugin && <RequiredPlugins p={detailPlugin} store={depsStore(detailPlugin)} />}
+                  {detail.type === 'skill' && !isInstalled(detail) && <SkillAgentPicker hint agents={skillAgents} choice={skillChoice[detail.id] ?? null} disabled={!!installing[detail.id]} onChange={(next) => setSkillChoice((m) => ({ ...m, [detail.id]: next }))} />}
                   <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>
                   <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{navLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
                   {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}

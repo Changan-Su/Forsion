@@ -7,7 +7,7 @@
  *  Negative controls (run them when touching this): drop `'forsion_account'` from CHAT_PRESET_DEFERRED → legs 1 / 4 go red
  *  (the chat face has no account tool); remove `!alwaysAsk` from the non-host early return in gateToolCall → leg 4 goes red
  *  (the card is spent with no approval card). */
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 
 const QUOTA = {
   dailyLimit: 81_337, dailyRemaining: 30_219, weeklyLimit: 406_685, weeklyRemaining: 2_033, weeklyResetAt: '2026-10-12', tier: 'pro', resetCards: 2,
@@ -15,30 +15,69 @@ const QUOTA = {
 };
 const RAW = [81_337, 30_219, 406_685, 2_033, 16_267, 40_668].flatMap((n) => [String(n), n.toLocaleString('en-US')]);
 
-/** Fake Forsion cloud: only the account routes; everything else 404s. `seen` is every authenticated request. */
-export async function startFakeCloud(token) {
+/** Fake Forsion cloud: only the account routes; everything else 404s. `seen` is every authenticated request.
+ *  `connect` (webpublishreal): a real Forsion Connect server (server scripts/connect-local.mts) — /api/connect/* and /apps/*
+ *  are passed through to it untouched (Authorization and Host included, so its publicUrl / publicBase name this front),
+ *  and `apps` follows what it accepted, so the legs read the same way against the real routes. */
+/** pluginaware:两条真实上架过的插件,够「反复的事查得到」;咖啡机除垢那条腿故意查不到。 */
+const MARKET = [
+  { id: 'diting', name: '谛听', type: 'plugin', source: 'zip', author: 'Forsion', installSlug: 'diting', latestVersion: '0.3.0', summary: '上课或开会时实时听写，把录音转成文字并整理成笔记。', description: 'Live transcription for lectures and meetings; turns recordings into structured notes.', tags: ['transcription', 'notes', 'lecture', '录音', '笔记'] },
+  { id: 'better-pdf', name: 'Better PDF', type: 'plugin', source: 'zip', author: 'Forsion', installSlug: 'better-pdf', latestVersion: '1.2.0', summary: '读 PDF 时划线、摘录，一键存进笔记。', description: 'Highlight PDFs and clip passages into notes.', tags: ['pdf', 'notes'] },
+];
+
+export async function startFakeCloud(token, { connect } = {}) {
   const seen = [];
+  const apps = new Map(); // Forsion Connect(webpublish 场景):slug → 发布体;形状照 server microserver/connect 的响应
+  let url = '';
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', (d) => (body += d));
     req.on('end', () => {
       const path = String(req.url || '').split('?')[0];
       const send = (status, json) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(json)); };
+      if (connect && (path.startsWith('/api/connect/') || path.startsWith('/apps/'))) {
+        seen.push({ method: req.method, path, body });
+        const up = request(connect + req.url, { method: req.method, headers: req.headers }, (r) => {
+          const del = /^\/api\/connect\/apps\/([a-z0-9-]+)$/.exec(path);
+          if (r.statusCode === 200 && req.method === 'POST' && path === '/api/connect/apps') { try { const b = JSON.parse(body); apps.set(b.slug, b); } catch { /* the server already said 200 */ } }
+          if (r.statusCode === 200 && req.method === 'DELETE' && del) apps.delete(del[1]);
+          res.writeHead(r.statusCode || 502, r.headers); r.pipe(res);
+        });
+        up.on('error', (e) => send(502, { detail: `connect upstream: ${e.message}` }));
+        return up.end(body);
+      }
       if (req.headers.authorization !== `Bearer ${token}`) return send(401, { error: 'unauthorized' });
       seen.push({ method: req.method, path, body });
       const key = `${req.method} ${path}`;
+      // 台架自查用:前置收到过几次「发布」(含被拒的)—— 真机那段判「批准前一个字节都没发」看这个
+      if (key === 'GET /__harness/connect-posts') return send(200, { n: seen.filter((r) => r.method === 'POST' && r.path === '/api/connect/apps').length });
+      if (key === 'GET /api/market/items') return send(200, { items: MARKET });
+      if (req.method === 'GET' && path.startsWith('/api/market/items/')) { const hit = MARKET.find((i) => i.id === decodeURIComponent(path.slice('/api/market/items/'.length))); return hit ? send(200, hit) : send(404, { detail: 'not found' }); }
       if (key === 'GET /api/token-quota/my') return send(200, QUOTA);
       if (key === 'GET /api/brain/users/me') return send(200, { id: 'u-live', username: 'livetester', nickname: 'Live Tester', membershipTier: 'pro' });
       if (key === 'GET /api/membership/my') return send(200, { membership: { tier: 'pro', status: 'active', expiresAt: '2026-11-03T00:00:00.000Z', autoRenew: true, plan: { name: 'Pro' } } });
       if (key === 'GET /api/credits/balance') return send(200, { balance: 1234 });
       if (key === 'POST /api/token-quota/reset-card/use') return send(200, { success: true, resetCards: 1, quota: { ...QUOTA, dailyRemaining: QUOTA.dailyLimit, weeklyRemaining: QUOTA.weeklyLimit } });
       if (key === 'POST /api/token-quota/background/convert') return send(200, { success: true, converted: { daily: 1, weekly: 1 }, quota: QUOTA });
+      if (key === 'GET /api/connect/apps') {
+        return send(200, { apps: [...apps.values()].map((a) => ({ slug: a.slug, name: a.name, entry: a.entry, status: 'active', total_bytes: a.files.reduce((n, f) => n + f.size, 0), updated_at: new Date().toISOString(), listing_status: null })),
+          used: apps.size, limit: 5, tier: 'pro', handle: 'livetester', publicBase: url });
+      }
+      if (key === 'POST /api/connect/apps') {
+        let b; try { b = JSON.parse(body); } catch { return send(400, { code: 'invalid', detail: 'bad json' }); }
+        if (!/^[a-z0-9](?:[a-z0-9-]{1,30})?[a-z0-9]$/.test(String(b.slug)) || !Array.isArray(b.files) || !b.files.some((f) => f.path === b.entry)) return send(400, { code: 'invalid', detail: '参数不合法' });
+        apps.set(b.slug, b);
+        return send(200, { slug: b.slug, handle: 'livetester', url: `/apps/livetester/${b.slug}/`, publicUrl: `${url}/apps/livetester/${b.slug}/` });
+      }
+      const del = /^DELETE \/api\/connect\/apps\/([a-z0-9-]+)$/.exec(key);
+      if (del) return apps.delete(del[1]) ? send(200, { ok: true }) : send(404, { detail: '应用不存在或不属于你' });
       return send(404, { error: 'not_found' });
     });
   });
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   server.unref();
-  return { url: `http://127.0.0.1:${server.address().port}`, seen, posts: (path) => seen.filter((r) => r.method === 'POST' && r.path === path) };
+  url = `http://127.0.0.1:${server.address().port}`;
+  return { url, seen, apps, connect, token, urlFor: (slug) => `${url}/apps/livetester/${slug}/`, posts: (path) => seen.filter((r) => r.method === 'POST' && r.path === path) };
 }
 
 const CHAT = { preset: 'chat', execMode: 'sandbox', cwd: undefined };
@@ -92,8 +131,9 @@ export async function accountLive({ run, api, sleep, cloud }) {
       () => { sentBeforeAnswer = cloud.posts(path).length - before; return 'approve'; });
     const ask = ev.approvalList.find((a) => a.name === 'forsion_account_action');
     const sent = cloud.posts(path).length - before;
-    leg('用重置卡(聊天会话 + 完全通行):照样弹卡,批准后只发一次', !ev.error && !!ask && ask.reason === 'always' && sentBeforeAnswer === 0 && sent === 1,
-      ev.error || `${ask ? `弹卡(原因 ${ask.reason})` : '✗ 没弹卡'};批准前已发 ${sentBeforeAnswer ?? '-'} 次;共发 ${sent} 次`, ev);
+    const i18n = ask?.previewI18n?.key === 'approval.preview.resetCard'; // 卡上那句按界面语言渲染的结构化版(10-24)
+    leg('用重置卡(聊天会话 + 完全通行):照样弹卡,批准后只发一次,卡带本地化预览', !ev.error && !!ask && ask.reason === 'always' && sentBeforeAnswer === 0 && sent === 1 && i18n,
+      ev.error || `${ask ? `弹卡(原因 ${ask.reason})` : '✗ 没弹卡'};批准前已发 ${sentBeforeAnswer ?? '-'} 次;共发 ${sent} 次;预览键 ${ask?.previewI18n?.key ?? '✗ 没有'}`, ev);
   }
   // 5. Rejected on the card → nothing is sent, and the reply does not claim it was done.
   {
@@ -103,8 +143,9 @@ export async function accountLive({ run, api, sleep, cloud }) {
     const ask = ev.approvalList.find((a) => a.name === 'forsion_account_action');
     const sent = cloud.posts(path).length - before;
     const claimed = /(已经?|成功)(帮你|为你)?(挪|转|移)/.test(ev.content) && !/没有|未|没能|拒绝|取消|未能/.test(ev.content);
-    leg('挪额度被用户拒绝:不发请求,不谎称做了', !ev.error && !!ask && ask.reason === 'always' && sent === 0 && !claimed,
-      ev.error || `${ask ? `弹卡(原因 ${ask.reason})` : '✗ 没弹卡'};发了 ${sent} 次${claimed ? ';✗ 回复声称已挪' : ''}`, ev);
+    const i18n = ask?.previewI18n?.key === 'approval.preview.moveQuota' && ask.previewI18n.vars?.percent === 30;
+    leg('挪额度被用户拒绝:不发请求,不谎称做了;卡带本地化预览(30%)', !ev.error && !!ask && ask.reason === 'always' && sent === 0 && !claimed && i18n,
+      ev.error || `${ask ? `弹卡(原因 ${ask.reason})` : '✗ 没弹卡'};发了 ${sent} 次${claimed ? ';✗ 回复声称已挪' : ''};预览 ${ask?.previewI18n ? JSON.stringify(ask.previewI18n) : '✗ 没有'}`, ev);
   }
 
   const bad = legs.filter((l) => !l.ok);

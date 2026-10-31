@@ -10,7 +10,11 @@
  * `capabilities` 白名单那道双闸)。
  */
 
-import { createContext, type ComponentType } from 'react'
+import type { TanguSliceModule } from '../../stores/appStore'
+import { createContext, createElement, type ComponentProps, type ComponentType, type ReactElement } from 'react'
+import type { BtwSeed } from '@tangu/ui/views/chat2/btwStore'
+import type { FilesPanel } from '@tangu/ui/views/chat2/FilesPanel'
+import type { SpecialKind } from '@tangu/ui/tangu/store/tanguSlice'
 import type { CtxItem } from '../../components/RightPanel'
 import type { ViewProps } from '@lcl/engine'
 import type { Attachment } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -229,9 +233,31 @@ export interface TanguProbe {
    *  `action: 'translate'` 没点名模型时先取「翻译」模型槽(设置 → 模型 → 翻译)。
    *  可选:纯 Amadeus 壳 / 台架假探针不给 = 编辑器里没有 AI 入口、插件那边没有 `ctx.tangu.complete`。 */
   complete?(req: TanguCompleteRequest, opts?: TanguCompleteOptions): Promise<TanguCompleteResult>
+  /** 行内补全(FIM,2026-10-26+):引擎 `/agent/inline` 的 `fim` 动作,光标前后文原样交给补全模型,无提示词。
+   *  模型:`req.modelId` → 「补全」模型槽(还在目录里)→ 目录 fimModels 第一个 → 都没有 reject `Error('fim_unavailable')`;
+   *  引擎 / 云端回 fim_unsupported 也 reject 成 `fim_unavailable`(插件据此落回 `complete`)。只在给得出 `complete` 的宿主上有。 */
+  fim?(req: TanguFimRequest, opts?: TanguCompleteOptions): Promise<TanguFimResult>
 }
 
-/** 正文 AI 的动作(与引擎 services/inlineAi.ts 的 INLINE_ACTIONS 同表)。改写类(前六个)必须带 selection。 */
+export interface TanguFimRequest {
+  /** 光标前的正文(引擎留尾 16k 字符)。 */
+  before: string
+  /** 光标后的正文(引擎留头 8k 字符)。 */
+  after?: string
+  /** 输出上限,引擎夹到 1..512,缺省 64。 */
+  maxTokens?: number
+  /** 停止串,引擎留前 4 个、每个前 32 字符。 */
+  stop?: string[]
+  /** 不给 = 「补全」模型槽 / 目录里第一个补全模型。 */
+  modelId?: string
+}
+export interface TanguFimResult {
+  /** 模型原文(不 trim、不剥围栏)。 */
+  text: string
+  model?: { id: string; name: string }
+}
+
+/** 正文 AI 的动作(与引擎 services/inlineAi.ts 的 INLINE_ACTIONS 同表,只差 'fim' —— 那一档走 TanguProbe.fim,不进 complete)。改写类(前六个)必须带 selection。 */
 export type TanguInlineAction = 'improve' | 'fix' | 'shorter' | 'longer' | 'summarize' | 'translate' | 'continue' | 'custom'
 export interface TanguCompleteRequest {
   action: TanguInlineAction
@@ -287,6 +313,15 @@ export interface TanguAgentSelf {
   schedule(): Promise<TanguAgentScheduleEntry[]>
   libraryList(): Promise<TanguAgentLibraryEntry[]>
   libraryRead(path: string): Promise<string>
+}
+
+/** 宿主交给 Tangu 入口 `activateTangu(host)` 的东西(界面热更新 3b):只放入口 import 不到的宿主私有件,
+ *  其余宿主模块照共享模块表直接 import。**宿主内部接缝,不进 `ctx.tangu`**。 */
+export interface TanguHost {
+  /** 把 Tangu 的 store 半身装进 useApp(宿主 stores/appStore.ts 的 installTanguSlice;界面热更新 3c)。入口第一件事就做。 */
+  installSlice(mod: TanguSliceModule): void
+  /** 装 ctx.tangu 探针(宿主 tanguProbe.ts)。`tangu` = Tangu 自己交进去的那几块,Tangu 没激活时为空。 */
+  installProbe(tangu: Pick<TanguProbe, 'askInChat'>): void
 }
 
 let probe: TanguProbe | null = null
@@ -365,6 +400,8 @@ export interface TanguNewChat {
   send: TanguNewChatDispatch
   /** 切到 Tangu、建新会话,resolve 新会话 id;没建成 → null。 */
   startCall(): Promise<string | null>
+  /** 清成空白新对话(⌘N 那条;手机「分享到 Forsion → 新对话」也用)。 */
+  blank(): void
   mount(el: HTMLElement, o: TanguComposerOptions): TanguComposerMount
 }
 
@@ -435,6 +472,40 @@ export function setTanguChatViews(p: TanguChatViews | null): void {
 
 export function readTanguChatViews(): TanguChatViews | null {
   return chatViews
+}
+
+/** Tangu 交给宿主外壳的界面件(界面热更新 3d):宿主不再直引 Tangu 模块,Tangu 激活时交进来。不看档案一律交 ——
+ *  这些以前是宿主静态 import 的,任何档案都有。**宿主内部接缝,不进 `ctx.tangu`**。没交(不走激活的台架页)→ 外壳不画旁聊 / 文件树。 */
+export interface TanguShell {
+  /** 旁聊:主窗 / 手机挂的宿主(page = 手机全屏页)、设置浮窗式的独立旁聊窗口、浮窗参数 → 种子、把回答投成主区对话的引用 */
+  BtwHost: ComponentType<{ page?: boolean }>
+  BtwPanel: ComponentType<{ seed: BtwSeed; onClose?: () => void }>
+  btwSeedOf(params: Record<string, unknown> | undefined): BtwSeed | null
+  quoteInMainChat(text: string): void
+  /** 手机:旁聊全屏页此刻是否盖在最上面(切了会话而隐着时不算)、关掉它、变化时回调 */
+  btwPageVisible(activeId: string | null): boolean
+  closeBtwPage(): void
+  subscribeBtw(cb: () => void): () => void
+  /** 工作区侧栏的「文件」模式;bumpDir = 让某个目录重新列一次 */
+  FilesPanel: ComponentType<ComponentProps<typeof FilesPanel>>
+  bumpDir(dir: string): void
+  /** 打开 Agents / 项目详情这类特殊视图(新建标签页里的入口) */
+  openSpecial(kind: SpecialKind, wsKey?: string): void
+}
+
+let shell: TanguShell | null = null
+
+export function setTanguShell(p: TanguShell | null): void {
+  shell = p
+}
+
+export function readTanguShell(): TanguShell | null {
+  return shell
+}
+
+/** 宿主外壳里挂旁聊的那一处(Root / MobileRoot 同名,check:parity 按名字对齐):Tangu 没交就不画。 */
+export function TanguBtwHost(props: { page?: boolean }): ReactElement | null {
+  return shell ? createElement(shell.BtwHost, props) : null
 }
 
 /** 往输入框预填的来源(核心插件化 2e-8,方案第 5 节 10 号接缝「Composer2 扩展槽」的仓内版):造物、图像工作室、插件聊天

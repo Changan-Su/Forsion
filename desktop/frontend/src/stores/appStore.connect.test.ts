@@ -24,6 +24,7 @@ vi.mock('../services/agentRunService', async (importOriginal) => ({
 }))
 
 const { useApp, BOOT_RETRY_MS } = await import('./appStore')
+await import('../tangu/store/standalone')
 const backendApi = await import('../services/backendService')
 const initial = useApp.getState()
 

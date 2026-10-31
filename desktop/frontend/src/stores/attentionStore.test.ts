@@ -180,8 +180,37 @@ describe('私聊 attention(Muse 主动发来 / 等你)', () => {
     const off = useAttention.getState().install()
     useApp.setState({ activeId: 'dm1' } as any)
     await flush()
-    expect(useAttention.getState().dm.dm1).toEqual({ unread: false, awaiting: true })
+    expect(useAttention.getState().dm.dm1).toEqual({ unread: false, awaiting: true }) // 等你听引擎的(这里 /read 没回 awaiting:false)
     expect(state.dm.mock.calls.some(([path, init]) => path === '/agent/sessions/dm1/read' && (init as any)?.method === 'POST')).toBe(true)
+    off()
+  })
+
+  it('收尾问句的等你(awaiting_user):点进去算看过;正看着的那条列表刷新带回 awaiting_user 也当场熄(10-27 黄点不灭)', async () => {
+    let still = new Set<string>()
+    state.dm.mockImplementation(async (path: string) => json({ ok: true, awaiting: still.has(path) }))
+    useApp.setState({ sessions: [{ id: 'p1', title: 'x', awaiting_user: true }, { id: 'p2', title: 'y', awaiting_user: true }], configBySession: {}, activeId: null } as any)
+    const off = useAttention.getState().install()
+    await flush()
+    const reads = (): string[] => state.dm.mock.calls.filter(([, init]) => (init as any)?.method === 'POST').map(([path]) => path as string)
+    useApp.setState({ activeId: 'p1' } as any)
+    await flush()
+    expect(useApp.getState().sessions.map((x: any) => x.awaiting_user)).toEqual([false, true])
+    expect(reads()).toEqual(['/agent/sessions/p1/read'])
+
+    useApp.setState({ sessions: [{ id: 'p1', title: 'x', awaiting_user: true }, { id: 'p2', title: 'y', awaiting_user: true }] } as any) // 一轮问句收尾后列表刷新
+    await flush()
+    expect(useApp.getState().sessions.map((x: any) => x.awaiting_user)).toEqual([false, true])
+    expect(reads()).toEqual(['/agent/sessions/p1/read', '/agent/sessions/p1/read'])
+
+    useApp.setState({ sessions: [...useApp.getState().sessions] } as any) // 没在等:不再发
+    await flush()
+    expect(reads()).toHaveLength(2)
+
+    still = new Set(['/agent/sessions/p2/read']) // 引擎说读了还在等(回报没送回的子会话 / 老引擎)→ 不熄
+    useApp.setState({ activeId: 'p2' } as any)
+    await flush()
+    expect(reads()).toHaveLength(3)
+    expect(useApp.getState().sessions.map((x: any) => x.awaiting_user)).toEqual([false, true])
     off()
   })
 

@@ -20,6 +20,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { StreamableHTTPClientTransport, StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
+import { sameOriginFetch } from './sameOriginFetch.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import { loadRawMcpServers, enabledServers, inferTransport, isReservedServerName, RESERVED_SERVER_ERROR, type McpServerConfig } from './config.js';
 import { bridgeTool, contentToResult, fenceMcpText, sanitizePart, type LoadedMcpTool, type McpImage } from './toolBridge.js';
@@ -47,6 +48,8 @@ export interface McpServerStatus {
 
 /** 时间常量覆写(单测用;生产不传)。 */
 export interface McpManagerOptions {
+  /** Host run barrier; configuration changes may close stdio processes and must wait until idle. */
+  canReload?: () => boolean;
   reconnectCooldownMs?: number;
   retryBaseMs?: number;
   retryMaxMs?: number;
@@ -99,6 +102,8 @@ async function waitOrAbort(p: Promise<unknown>, signal?: AbortSignal): Promise<b
 }
 
 export interface McpManager {
+  /** Reconcile saved user settings only while the host has no active runs. Never rebind an old tool snapshot. */
+  reloadConfig(): Promise<void>;
   /** 本 run 的工具快照(已按 server 名过滤;Map 键=桥接名)。run 开始取一次,run 内不变。 */
   toolsForRun(enabledServerNames?: string[]): Map<string, LoadedMcpTool>;
   callTool(bridged: LoadedMcpTool, args: Record<string, any>, signal?: AbortSignal): Promise<McpCallResult>;
@@ -149,6 +154,9 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const owner = new Map<string, string>();
   /** 启动时的首批连接落定后才开始认领 —— 首批按 server 名字典序认领,与谁先连上无关(确定性)。 */
   let started = false;
+  let configSnapshot = '';
+  let reloading: Promise<void> | null = null;
+  const snapshotEntries = new WeakMap<LoadedMcpTool, ServerEntry>();
   /** 消毒后的 server 名 → 先到的 server(start 与插件 addServers 共用;插件 server 移出后不让位,同名再加回来照认)。 */
   const bySanitized = new Map<string, string>();
   /**
@@ -244,7 +252,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     }
     if (!cfg.url) throw new Error(`${t} server 缺 url`);
     const url = new URL(cfg.url);
-    const opts = cfg.headers ? { requestInit: { headers: cfg.headers } } : undefined;
+    const opts = { fetch: sameOriginFetch(url), requestInit: { headers: cfg.headers } };
     return t === 'sse' ? new SSEClientTransport(url, opts) : new StreamableHTTPClientTransport(url, opts);
   }
 
@@ -360,6 +368,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     async start() {
       // 磁盘视图:保留名的 server 也列出来(error + 原因),用户在 MCP 设置里看得到它为什么没起来
       const raw = loadRawMcpServers(configFile);
+      configSnapshot = JSON.stringify(raw);
       for (const name of Object.keys(raw)) if (!isReservedServerName(name)) nameOwner.set(name, ''); // 关着的也占名
       for (const [name, c] of enabledServers({ mcpServers: raw })) newEntry(name, c);
       // 失败互不阻断;并行连(没连上的转后台重试,不拖启动)
@@ -368,6 +377,28 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       for (const s of servers) if (s.status === 'connected') claimTools(s); // 按名字典序,同步一口气认领完
       ensureExitHook();
       for (const [origin, more] of queued.splice(0)) api.addServers(origin, more);
+    },
+
+    reloadConfig() {
+      if (reloading) return reloading;
+      if (disposed || !started || (opts.canReload && !opts.canReload())) return Promise.resolve();
+      const raw = loadRawMcpServers(configFile);
+      const fingerprint = JSON.stringify(raw);
+      if (fingerprint === configSnapshot) return Promise.resolve();
+      configSnapshot = fingerprint;
+      const gone = servers.filter(s => !s.origin && (!raw[s.name] || raw[s.name].enabled === false || JSON.stringify(raw[s.name]) !== JSON.stringify(s.cfg)));
+      const added = Object.entries(raw).filter(([name, c]) => c.enabled !== false && !servers.some(s => !s.origin && s.name === name && !gone.includes(s)));
+      // Remove before awaiting close. A stale run snapshot must fail, never dispatch to a replacement endpoint.
+      for (const s of gone) { servers.splice(servers.indexOf(s), 1); s.configError = true; }
+      reloading = (async () => {
+        await Promise.all(gone.map(closeEntry));
+        if (disposed) return;
+        for (const name of Object.keys(raw)) if (!isReservedServerName(name) && !nameOwner.has(name)) nameOwner.set(name, '');
+        const entries = added.map(([name, c]) => newEntry(name, c));
+        ensureExitHook();
+        await Promise.all(entries.filter(s => !s.configError).map(connect));
+      })().finally(() => { reloading = null; });
+      return reloading;
     },
 
     addServers(origin, more) {
@@ -395,14 +426,16 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       for (const s of servers) {
         if (s.status !== 'connected') continue;
         if (enabledServerNames && !enabledServerNames.includes(s.name)) continue;
-        for (const t of s.tools) if (owner.get(t.name) === s.name) out.set(t.name, t);
+        for (const t of s.tools) if (owner.get(t.name) === s.name) { snapshotEntries.set(t, s); out.set(t.name, t); }
       }
       return out;
     },
 
     async callTool(bridged, args, signal) {
       if (isHostSandboxRestricted()) return { text: 'Error: MCP is unavailable while the local sandbox is enabled', isError: true };
-      const entry = servers.find((s) => s.name === bridged.serverName);
+      const bound = snapshotEntries.get(bridged);
+      const entry = bound ?? servers.find((s) => s.name === bridged.serverName);
+      if (bound && !servers.includes(bound)) return { text: 'Error: MCP settings changed. Start a new run to use the new configuration.', isError: true };
       if (!entry) return { text: `Error: MCP server "${bridged.serverName}" is not configured`, isError: true };
       if (signal?.aborted) return ABORTED;
       // 懒重连:server 断线 / 初次没连上时,调用前按冷却(15s)尝试重连一次(后台重试正在连就搭它的车)——

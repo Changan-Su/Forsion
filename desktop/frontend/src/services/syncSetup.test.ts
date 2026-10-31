@@ -161,7 +161,7 @@ describe('agents and plugins', () => {
     const s = await fresh()
     await s.setSync('plugins', false)
     expect(localStorage.getItem('forsion.pluginSync.off')).toBe('1')
-    expect(s.getSync()?.plugins).toEqual({ on: false, count: 1 })
+    expect(s.getSync()?.plugins).toMatchObject({ on: false, count: 1 })
     await s.setSync('plugins', true)
     expect(localStorage.getItem('forsion.pluginSync.off')).toBeNull()
   })
@@ -223,6 +223,67 @@ describe('first sign-in card', () => {
     expect(wantsSyncCard(snap, false)).toBe(false)
     expect(wantsSyncCard({ ...snap, decided: true }, true)).toBe(false)
     expect(wantsSyncCard({ ...snap, signedIn: false }, true)).toBe(false)
-    expect(wantsSyncCard({ ...snap, notes: { ...snap.notes, on: true }, agents: { on: true, count: 2 }, plugins: { on: true, count: 1 } }, true)).toBe(false)
+    expect(wantsSyncCard({ ...snap, notes: { ...snap.notes, on: true }, agents: { ...snap.agents, on: true, count: 2 }, plugins: { ...snap.plugins, on: true, count: 1 } }, true)).toBe(false)
   })
+})
+
+describe('sync feedback for agents and plugin data', () => {
+  it('carries the last agent sync (with its conflict copies) and how many plugins still have unsent changes', async () => {
+    request.mockImplementation(async (_t: unknown, path: string) => path === '/agent/sync/status'
+      ? { available: true, running: false, lastAt: 1000, lastResult: { ok: false, pushed: 3, pulled: 1, conflicts: 2, error: 'cloud file hash mismatch', memory: 'skipped', logs: [] } }
+      : { enabled: true, agents: 2 })
+    localStorage.setItem('forsion.pluginSync.a', JSON.stringify({ v: 4, gen: 2, dirty: 5 }))
+    localStorage.setItem('forsion.pluginSync.lastOk', '900')
+    const s = await fresh()
+    await s.refreshSync()
+    expect(s.getSync()?.agents).toEqual({ on: true, count: 2, running: false, last: { at: 1000, ok: false, pushed: 3, pulled: 1, conflicts: 2, error: 'cloud file hash mismatch' } })
+    expect(s.getSync()?.plugins).toEqual({ on: true, count: 1, pending: 1, lastAt: 900 })
+  })
+
+  it('an engine that never synced yet (or an old one without the status route) shows no last result', async () => {
+    request.mockImplementation(async (_t: unknown, path: string) => { if (path === '/agent/sync/status') throw new Error('404'); return { enabled: true, agents: 1 } })
+    const s = await fresh()
+    await s.refreshSync()
+    expect(s.getSync()?.agents).toMatchObject({ on: true, last: null })
+  })
+})
+
+it('unified storage is notice-only, cached per account, and never blocks starting sync', async () => {
+  const fetch = (window as any).tangu.cloudFetch
+  const cloud = vi.fn(async (o: { path: string }) => o.path === '/storage/ledger' ? { status: 200, json: {
+    schemaVersion: 1, complete: true, usage: { usedBytes: 100 }, quota: { limitBytes: 1 }, asOf: '2026-10-21T00:00:00Z',
+  } } : fetch(o))
+  ;(window as any).tangu.cloudFetch = cloud
+  const s = await fresh(); await s.refreshSync(); await s.refreshSync()
+  expect(s.getSync()?.storage).toMatchObject({ usedBytes: 100, limitBytes: 1, complete: true })
+  expect(cloud.mock.calls.filter(c => c[0].path === '/storage/ledger')).toHaveLength(1)
+  expect((await s.setSync('notes', true)).ok).toBe(true)
+  ;(window as any).tangu.authStatus = async () => ({ loggedIn: true, accountId: 'other' })
+  await s.refreshSync()
+  expect(cloud.mock.calls.filter(c => c[0].path === '/storage/ledger')).toHaveLength(2)
+})
+
+it('enforced unified storage is displayed but does not turn off download-capable sync', async () => {
+ const fetch=(window as any).tangu.cloudFetch;
+ (window as any).tangu.cloudFetch=async(o:{path:string})=>o.path==='/storage/ledger'?{status:200,json:{schemaVersion:1,complete:true,enforcement:true,usage:{usedBytes:200},quota:{limitBytes:100},asOf:'2026-10-21T00:00:00Z'}}:fetch(o);
+ const s=await fresh();await s.refreshSync();expect(s.getSync()?.storage?.enforcement).toBe(true);
+ expect((await s.setSync('notes',true)).ok).toBe(true);
+});
+
+
+describe('folder rules first',()=>{
+ it('an unavailable rules backend still prevents eager legacy uploads',async()=>{
+  ;(window as any).tangu.cloudInvoke=vi.fn(async()=>({ok:false,error:'content_http_503'}))
+  const s=await fresh();await s.refreshSync();request.mockClear();await s.applySyncChoices({notes:true,agents:true,plugins:true})
+  expect(s.getSync()?.contentRules).toBe(true);expect(rs.set).not.toHaveBeenCalled();expect(rs.run).not.toHaveBeenCalled()
+  expect(request.mock.calls.some(c=>c[1]==='/agent/sync/default'&&c[2]?.method==='PUT')).toBe(false)
+ })
+
+ it('opens folder rules without starting legacy uploads from first-login choices',async()=>{
+  ;(window as any).tangu.cloudInvoke=vi.fn(async()=>({ok:true,value:{available:true}}))
+  const s=await fresh();await s.refreshSync();request.mockClear();await s.applySyncChoices({notes:true,agents:true,plugins:true})
+  expect(s.getSync()?.contentRules).toBe(true);expect(rs.set).not.toHaveBeenCalled();expect(rs.run).not.toHaveBeenCalled()
+  expect(request.mock.calls.some(c=>c[1]==='/agent/sync/default'&&c[2]?.method==='PUT')).toBe(false)
+  expect(JSON.parse(localStorage.getItem(s.PENZOR_FOCUS)!)).toMatchObject({page:'sync'})
+ })
 })

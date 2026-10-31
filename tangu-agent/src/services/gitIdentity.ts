@@ -5,7 +5,7 @@
  *   1. 这台电脑 / 这个仓库的 git 配置里有的,照用,这里什么都不加 —— 自己配过的人不受影响。
  *   2. 缺的那一样(名字或邮箱)才由这里补:先用「设置 → Git」里填的,没填就用由 Forsion 账号推出来的。
  *      只经环境变量交给**这一次**提交的子进程(GIT_AUTHOR_* / GIT_COMMITTER_*),不写任何 git 配置;
- *      所以只对从 Forsion 里点的提交生效,终端里、Agent 自己跑的 `git commit` 照旧。
+ *      所以只对从 Forsion 里点的提交和 Agent 的 git_commit 工具生效,终端里、Agent 用 run_bash 跑的 `git commit` 照旧。
  *   3. 都凑不齐(没登录 Forsion、也没填)→ 不补。git 多半会自己按这台电脑的用户名和主机名取一个(`someone@host.local`),
  *      提交照样成功 —— 那个身份也报给界面(source = auto),让用户看得见、想换能换;git 取不出来时才是 no_identity。
  *
@@ -21,6 +21,8 @@
 import os from 'node:os';
 import { readGit } from './gitActions.js';
 import { cleanIdentityPart, gitSettings } from './gitSettings.js';
+import { deps } from '../seams/runtime.js';
+import { forsionGit } from './forsionGit.js';
 
 export interface GitIdentity {
   name: string;
@@ -46,6 +48,15 @@ export function forsionIdentity(user: { username?: unknown; nickname?: unknown }
 async function configured(key: string, cwd?: string): Promise<string> {
   const r = await readGit(cwd ?? os.homedir(), ['config', '--get', key], { timeoutMs: 5000 }).catch(() => null);
   return r?.code === 0 ? r.stdout.trim() : '';
+}
+
+/** 由 Forsion 账号推出来的缺省提交身份(给 resolveGitIdentity 当 defaults)。走一趟云端,所以限时:它挡在提交前面。没登录 / 够不着 → null。 */
+export async function accountIdentityDefaults(userId: string): Promise<IdentityDefaults | null> {
+  const timeout = new Promise<null>((resolve) => { setTimeout(() => resolve(null), 5000).unref(); });
+  const user = await Promise.race([deps().brain.users.getUserById(userId).catch(() => null), timeout]);
+  if (!user || !user.username || user.username === 'local') return null;
+  const site = await forsionGit()?.hosting().catch(() => null);
+  return forsionIdentity(user, site ? new URL(site.origin).hostname : null);
 }
 
 export interface ResolvedIdentity {

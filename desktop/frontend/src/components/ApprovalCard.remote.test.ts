@@ -21,6 +21,7 @@ import { resolveApproval } from '../services/agentRunService'
 import { syncNow } from '../services/backendService'
 import { useApp } from '../stores/appStore'
 import { resetFocusForTests, useEngineFocus, connectionTarget } from '../services/engine/targets'
+import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
 
 const req: ApprovalRequest = {
   approvalId: 'a1', runId: 'r1', name: 'run_bash', arguments: JSON.stringify({ command: 'make build' }),

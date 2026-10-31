@@ -8,17 +8,19 @@
  *    刻意不套 astryx Card/Scope —— 那会把整卡盖成 astryx 中性灰、与 app 暖色主题不搭。
  *  ponytail: 时间仍用原生 date/time 输入编辑(点击展开),未做参考图那种内联时间胶囊编辑器;
  *  select 值显示为中性胶囊,无每选项配色(schema 的 options 是纯字符串,无色)。 */
-import { useEffect, useRef, useState, type ReactElement, type RefObject, type SVGProps } from 'react'
-import { ExternalLink } from 'lucide-react'
+import { useEffect, useRef, useState, type ReactElement, type RefObject, type SVGProps, type ReactNode, type MouseEvent } from 'react'
+import { HUMAN_CAL } from '../../amadeus/store/humanCalendarIo'
+import { ExternalLink, MoreHorizontal, ChevronUp } from 'lucide-react'
+import { UI_MODE, useExitGhost, useNativeChromeClaim } from '@lcl/engine'
 import { coerceForDisplay, type CellValue, type DbColumn } from '@amadeus-shared/db/schema'
 import { CalDateFields } from '../../amadeus/blocks/database/propertyTypes.builtins'
-import { getPropertyType, resolveBaseType } from '../../amadeus/blocks/database/propertyTypes'
+import { getPropertyType, isStamped, resolveBaseType } from '../../amadeus/blocks/database/propertyTypes'
 import { linkLabel, rowLinkIds } from '../../amadeus/blocks/database/rowLink'
 import { setAggCell, setAggName, cellText, type AggDb, type AggRow } from '../../amadeus/store/dbAggregateStore'
 import { useDbStore } from '../../amadeus/store/dbStore'
 import { openDb } from '../../amadeusNav'
 import { eventTimeSummary } from './dateUtils'
-import { deleteCalendarRow } from './eventActions'
+import { deleteCalendarRow, rescheduleCalendarRow } from './eventActions'
 import { registerMessages, useI18n } from '../../i18n'
 import {
   PageIcon, DateTimeIcon, TextIcon, NumberIcon,
@@ -35,6 +37,8 @@ registerMessages({
   'evcard.openNote': { zh: '打开笔记', en: 'Open note' },
   'evcard.openDb': { zh: '打开多维表', en: 'Open database' },
   'evcard.delete': { zh: '删除', en: 'Delete' },
+  'evcard.actions': { zh: '事件操作', en: 'Event actions' },
+  'evcard.expand': { zh: '展开详情', en: 'Expand details' },
   'evcard.rowlinkReadonly': { zh: '关联表列请在表格里编辑', en: 'Edit related rows in the table' },
   'evcard.noOptions': { zh: '（无选项，请在表格里添加）', en: '(No options — add them in the table)' },
 })
@@ -81,19 +85,28 @@ function PropIcon({ col }: { col: DbColumn }) {
   return <Ic />
 }
 
-export function EventCard({ ev, at, onClose, maxRight }: { ev: CardTarget; at: Anchor; onClose: () => void; maxRight?: number }) {
+export function EventCard({ ev, at, onClose, maxRight, calendar = false, onActions, actions, collapsed = false, onExpand, focusTitle = false }: {
+  ev: CardTarget; at: Anchor; onClose: () => void; maxRight?: number; calendar?: boolean;
+  onActions?: (e: MouseEvent<HTMLButtonElement>) => void; actions?: ReactNode; collapsed?: boolean; onExpand?: () => void; focusTitle?: boolean;
+}) {
   const { t } = useI18n()
+  const mobile = calendar && (UI_MODE === 'mobile' || !!window.tangu?.mobile)
   const pos = cardPos(at, { maxRight })
   const dialogRef = useRef<HTMLDivElement>(null)
+  useExitGhost(dialogRef) // 关掉(卸载)时留替身放 80ms 退场(走查续八 8.4)
   const closeRef = useRef<HTMLButtonElement>(null)
   const onCloseRef = useRef(onClose)
   onCloseRef.current = onClose
+  useNativeChromeClaim(mobile ? { mode: 'page', title: ev.db.name, back: t('evcard.close'), onBack: () => {
+    const handled = !window.dispatchEvent(new Event('forsion:mobile-back', { cancelable: true }))
+    if (!handled) onClose()
+  } } : null)
 
   useEffect(() => {
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null
     const frame = window.requestAnimationFrame(() => {
       const titleInput = dialogRef.current?.querySelector<HTMLInputElement>('.amx-cal-card-title:not(.amx-cal-card-title-ro)')
-      ;(titleInput ?? closeRef.current)?.focus()
+      if (!calendar || focusTitle) (titleInput ?? closeRef.current)?.focus()
     })
     const keydown = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') {
@@ -101,7 +114,7 @@ export function EventCard({ ev, at, onClose, maxRight }: { ev: CardTarget; at: A
         onCloseRef.current()
         return
       }
-      if (e.key !== 'Tab' || !dialogRef.current) return
+      if (calendar || e.key !== 'Tab' || !dialogRef.current) return
       const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'))
       if (!focusable.length) return
       const first = focusable[0]
@@ -115,32 +128,42 @@ export function EventCard({ ev, at, onClose, maxRight }: { ev: CardTarget; at: A
       window.removeEventListener('keydown', keydown)
       previous?.focus()
     }
-  }, [])
+  }, [calendar, focusTitle])
 
   return (
-    <div className="amx-cal-cardcatch" onMouseDown={onClose}>
+    <div className={`amx-cal-cardcatch${calendar ? ' calendar' : ''}${mobile ? ' mobile' : ''}`} onMouseDown={calendar ? undefined : onClose}>
       <div
-        className="amx-cal-cardwrap"
+        className={`amx-cal-cardwrap${mobile ? ' amx-cal-drawer' : ''}${collapsed ? ' collapsed' : ''}`}
         ref={dialogRef}
         role="dialog"
-        aria-modal="true"
+        aria-modal={calendar ? false : true}
         aria-label={t('evcard.editEvent', { title: ev.title || t('evcard.untitled') })}
-        style={pos}
+        data-kb-rise={mobile ? 'bar' : undefined}
+        style={mobile ? undefined : pos}
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <EventCardBody ev={ev} onClose={onClose} closeRef={closeRef} />
+        {mobile && <button className="amx-cal-drawer-grab" aria-label={t('evcard.expand')} onClick={onExpand} onPointerDown={(e) => { e.currentTarget.dataset.y = String(e.clientY); e.currentTarget.setPointerCapture(e.pointerId) }} onPointerUp={(e) => {
+          if (e.clientY - Number(e.currentTarget.dataset.y) > 55) onClose()
+          else onExpand?.()
+        }}><span /></button>}
+        {actions ?? (collapsed ? <div className="amx-cal-drawer-summary">
+          <button className="amx-cal-card-x" onClick={onExpand} aria-label={t('evcard.expand')}><ChevronUp size={18} /></button>
+          <div><strong>{ev.title || t('evcard.untitled')}</strong><span>{eventTimeSummary(ev.raw)?.head} {eventTimeSummary(ev.raw)?.badge}</span></div>
+          <button className="amx-cal-card-x" onClick={onClose} aria-label={t('evcard.close')}>×</button>
+        </div> : <EventCardBody ev={ev} onClose={onClose} closeRef={closeRef} onActions={onActions} />)}
       </div>
     </div>
   )
 }
 
-function EventCardBody({ ev, onClose, closeRef }: { ev: CardTarget; onClose: () => void; closeRef?: RefObject<HTMLButtonElement | null> }) {
+function EventCardBody({ ev, onClose, closeRef, onActions }: { ev: CardTarget; onClose: () => void; closeRef?: RefObject<HTMLButtonElement | null>; onActions?: (e: MouseEvent<HTMLButtonElement>) => void }) {
   const { t } = useI18n()
   const { db, row, title } = ev
   const deletable = !db.readonly
   const accent = ev.color ?? 'var(--accent, #6c5ce7)'
   // 只读聚合源可能来自 Agent / ICS / 另一侧 Vault，路径不是活动 Vault 可打开的数据库路径。
-  const canOpenSource = !db.readonly || !!db.openRow
+  // 默认日历在引擎家目录里(human/),没有能打开的库文件
+  const canOpenSource = (!db.readonly && db.path !== HUMAN_CAL) || !!db.openRow
 
   return (
     <div className="amx-cal-cardin">
@@ -150,7 +173,8 @@ function EventCardBody({ ev, onClose, closeRef }: { ev: CardTarget; onClose: () 
           <span className="amx-cal-card-dot" style={{ background: accent }} />
           {db.name}
         </span>
-        <button className="amx-cal-card-x" ref={closeRef} onClick={onClose} aria-label={t('evcard.close')}>×</button>
+        <span className="amx-cal-card-buttons">{onActions && <button className="amx-cal-card-x" onClick={onActions} aria-label={t('evcard.actions')}><MoreHorizontal size={18} /></button>}
+        <button className="amx-cal-card-x" ref={closeRef} onClick={onClose} aria-label={t('evcard.close')}>×</button></span>
       </div>
 
       <RecordFields db={db} row={row} colId={ev.colId ?? undefined} title={title} raw={ev.raw} />
@@ -162,7 +186,7 @@ function EventCardBody({ ev, onClose, closeRef }: { ev: CardTarget; onClose: () 
               <ExternalLink size={13} /> {db.openRow ? t('evcard.openNote') : t('evcard.openDb')}
             </button>
           )}
-          {deletable && (
+          {deletable && !onActions && (
             <button className="amx-cal-card-del" onClick={() => { deleteCalendarRow(db, row, title); onClose() }}>{t('evcard.delete')}</button>
           )}
         </div>
@@ -173,21 +197,32 @@ function EventCardBody({ ev, onClose, closeRef }: { ev: CardTarget; onClose: () 
 
 /** 一行记录的字段:标题、时间(`colId` 那一列)、其余属性。事件浮卡与插件的 ctx.ui.mountRecord(recordSurface)共用 ——
  *  外框、关闭、打开 / 删除归调用方。`title` / `raw` 缺省取这一行自己的(浮卡传事件流里算好的那份);`lock` = 一律只读。 */
-export function RecordFields({ db, row, colId, title = row.name, raw, lock = false }: {
+export function RecordFields({ db, row, colId, title = row.name, raw, lock = false, hide }: {
   db: AggDb; row: AggRow; colId?: string; title?: string; raw?: string; lock?: boolean
+  /** 不列出的属性列(插件 mountRecord 的 hideColumns) */
+  hide?: readonly string[]
 }) {
   const { t } = useI18n()
   // 只读源(agent 日程 / ICS / 另一侧 Vault):全字段展示。
   // 可编辑投影(笔记 `@` 标记源)有 writeCell:时间可改(回写那行 markdown)。`readonly` 只管**时间那一行**:可编辑投影把它放开。
-  const readonly = lock || (!!db.readonly && !db.writeCell)
+  const readonly = lock || (!!db.readonly && !db.writeCell) || isStamped(db.columns.find((c) => c.id === colId)?.type ?? '')
   // 其余一律看严格的 db.readonly —— 投影只支持改时间,标题/属性放开就是「看着能改、改了没反应」。
   const fullyEditable = !lock && !db.readonly
   const nameCol = db.columns[0]
   const titleEditable = fullyEditable && !(db.isNoteView && nameCol?.type === 'page')
-  const others = db.columns.filter((c) => c.id !== nameCol?.id && c.id !== colId)
+  const others = db.columns.filter((c) => c.id !== nameCol?.id && c.id !== colId && !hide?.includes(c.id))
   const timeRaw = raw ?? (colId && typeof row.cells[colId] === 'string' ? (row.cells[colId] as string) : '')
   const summary = colId ? eventTimeSummary(timeRaw) : null
   const [editTime, setEditTime] = useState(false)
+  useEffect(() => {
+    if (!editTime) return
+    const back = (e: Event): void => {
+      e.preventDefault(); e.stopImmediatePropagation()
+      if (!(e as CustomEvent).detail?.probe) setEditTime(false)
+    }
+    window.addEventListener('forsion:mobile-back', back, true)
+    return () => window.removeEventListener('forsion:mobile-back', back, true)
+  }, [editTime])
 
   return (
     <>
@@ -227,7 +262,7 @@ export function RecordFields({ db, row, colId, title = row.name, raw, lock = fal
             )}
             {!readonly && (editTime || !summary) && (
               <div className="amx-cal-card-timeedit">
-                <CalDateFields value={timeRaw} onChange={(v) => setAggCell(db, row.rowId, colId, v)} autoFocus={editTime} />
+                <CalDateFields value={timeRaw} onChange={(v) => rescheduleCalendarRow(db, row, colId, timeRaw, v ?? '', title)} autoFocus={editTime} />
                 {summary && (
                   <button type="button" className="amx-cal-card-timedone" onClick={() => setEditTime(false)}>{t('evcard.done')}</button>
                 )}

@@ -18,18 +18,19 @@
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import type { CloudAccountBrain, CloudResponse } from '../../seams/cloudBrain.js';
+import type { ApprovalPreviewI18n } from '../../services/approvals.js';
 import { deps } from '../../seams/runtime.js';
 import { effectiveRemote } from '../../services/remoteOrigin.js';
 
-const cloud = (): CloudAccountBrain | undefined => {
+export const cloud = (): CloudAccountBrain | undefined => {
   try { return deps().brain?.cloud; } catch { return undefined; }
 };
 
-function readable(_p: unknown, ctx: ToolContext): boolean {
+export function readable(_p: unknown, ctx: ToolContext): boolean {
   return !!cloud() && !((ctx.subAgentDepth ?? 0) >= 1) && !ctx.inDiscussion && !ctx.muse && !ctx.automationOrigin && !ctx.ephemeral
     && ctx.runOrigin !== 'channel';
 }
-function actionable(p: unknown, ctx: ToolContext): boolean {
+export function actionable(p: unknown, ctx: ToolContext): boolean {
   return readable(p, ctx) && !ctx.approvalDeferral && ctx.runOrigin !== 'unattended' && !effectiveRemote(ctx);
 }
 
@@ -38,7 +39,7 @@ const ok = (r: CloudResponse): boolean => r.status >= 200 && r.status < 300;
 const errCode = (r: CloudResponse): string => String(r.json?.error ?? r.json?.code ?? r.json?.detail ?? '').slice(0, 120);
 
 /** 读失败时给模型的那句(成功 → null)。 */
-function failure(r: CloudResponse): string | null {
+export function failure(r: CloudResponse): string | null {
   if (ok(r)) return null;
   if (r.error === 'not_signed_in') return `The user is not signed in to a Forsion account in this app, so there is no account to read. They can sign in under ${SIGN_IN}.`;
   if (r.status === 401) return `The Forsion sign-in has expired. Ask the user to sign in again (${SIGN_IN}), then retry.`;
@@ -157,6 +158,26 @@ async function backpack(c: CloudAccountBrain, ctx: ToolContext): Promise<string>
   return ['Backpack:', ...[...counts].map(([name, k]) => `  - ${name}${k > 1 ? ` × ${k}` : ''}`), 'Redeem codes and keys in the backpack are not shown here; the user opens them in the Backpack page.'].join('\n');
 }
 
+export const formatBytes = (b: number): string => (b < 1024 * 1024 ? `${Math.max(1, Math.ceil(b / 1024))} KB` : `${(b / 1024 / 1024).toFixed(1)} MB`);
+/** server 列表回 publicBase(给人打开的站点源);老 server 没有就给相对路径。 */
+export const pageUrl = (base: unknown, handle: unknown, slug: unknown): string => `${typeof base === 'string' ? base.replace(/\/+$/, '') : ''}/apps/${handle}/${slug}/`;
+
+/** 用户在 Forsion Connect 上发布的网页(publish_web_page 发的、Coding Space 发布对话框发的都在这里)。 */
+async function webPages(c: CloudAccountBrain, ctx: ToolContext): Promise<string> {
+  const r = await c.request({ path: '/api/connect/apps', signal: ctx.signal });
+  if (r.status === 404) return 'Web page publishing (Forsion Connect) is not enabled on this Forsion server.';
+  const bad = failure(r);
+  if (bad) return bad;
+  const j = r.json ?? {};
+  const apps: any[] = Array.isArray(j.apps) ? j.apps : [];
+  const head = `Published web pages: ${apps.length} of ${toNum(j.limit) ?? '?'} allowed on the user's plan.`;
+  if (!apps.length) return `${head} None yet; publish one with publish_web_page.`;
+  return [head, ...apps.map((a) => {
+    const extra = [a.status === 'disabled' ? 'disabled by a Forsion administrator' : '', a.listing_status ? `store listing ${a.listing_status}` : ''].filter(Boolean);
+    return `  - ${a.name} — ${pageUrl(j.publicBase, j.handle, a.slug)} (slug ${a.slug}, ${formatBytes(toNum(a.total_bytes) ?? 0)}, updated ${String(a.updated_at ?? '').slice(0, 10)})${extra.length ? ` — ${extra.join(', ')}` : ''}`;
+  }), 'Publish to an existing slug to update that page, or take one down, with publish_web_page.'].join('\n');
+}
+
 const ACTIONS = ['use_reset_card', 'move_quota_to_background', 'send_feedback'] as const;
 type Action = (typeof ACTIONS)[number];
 
@@ -185,6 +206,15 @@ export function accountActionPreview(args: any): string {
   if (a.action === 'use_reset_card') return "Forsion account: use 1 quota reset card — restores today's and this week's AI quota to 100%. The card is spent.";
   if (a.action === 'move_quota_to_background') return `Forsion account: move ${a.percent}% of the AI quota limit (or as much as is left) to the background quota (Muse and automations) for the current period. It cannot be moved back.`;
   return `Forsion account: send this feedback to the Forsion team:\n${a.message}`;
+}
+
+/** 同一段的结构化版:桌面卡按界面语言渲染(键 approval.preview.*,en 与上面逐字相同)。请求无效 → 不给,卡上照旧显示英文那句。 */
+export function accountActionPreviewI18n(args: any): ApprovalPreviewI18n | undefined {
+  const a = parseAccountAction(args);
+  if (!a.ok) return undefined;
+  if (a.action === 'use_reset_card') return { key: 'approval.preview.resetCard' };
+  if (a.action === 'move_quota_to_background') return { key: 'approval.preview.moveQuota', vars: { percent: a.percent! } };
+  return { key: 'approval.preview.feedback', vars: { message: a.message! } };
 }
 
 async function act(c: CloudAccountBrain, ctx: ToolContext, args: any): Promise<string> {
@@ -225,7 +255,7 @@ export const forsionAccountProvider: ToolProvider = {
       name: 'forsion_account',
       deferred: true,
       deferGroup: 'forsion_account',
-      deferHint: "The user's Forsion account: plan, AI quota left today / this week, background quota, quota reset cards, points, backpack, recent usage. Check it when the user asks how much quota, how many tokens or how many points they have left, or what their plan is. A bare \"how many tokens do I have left\" can mean this or the conversation's context window (session_status): read both and answer both.",
+      deferHint: "The user's Forsion account: plan, AI quota left today / this week, background quota, quota reset cards, points, backpack, recent usage. Check it when the user asks how much quota, how many tokens or how many points they have left, what their plan is, or which web pages they have published. A bare \"how many tokens do I have left\" can mean this or the conversation's context window (session_status): read both and answer both.",
       isEnabledFor: readable,
       definition: {
         type: 'function',
@@ -233,13 +263,13 @@ export const forsionAccountProvider: ToolProvider = {
           name: 'forsion_account',
           description:
             "Read the signed-in user's Forsion account. `overview` (default): who is signed in, plan, AI quota left today and this week and when each resets, background quota, quota reset cards, points. " +
-            '`usage`: requests over the last days by model and by app, and the latest requests. `backpack`: items the user owns. ' +
+            '`usage`: requests over the last days by model and by app, and the latest requests. `backpack`: items the user owns. `web_pages`: the web pages the user has published on Forsion, with their links and slugs. ' +
             'Read-only. AI quota comes back as percentages only — never tell the user a token or point count for it. ' +
             "This is the account allowance, not this conversation's context window (that is session_status).",
           parameters: {
             type: 'object',
             properties: {
-              section: { type: 'string', enum: ['overview', 'usage', 'backpack'], description: 'What to read (default: overview)' },
+              section: { type: 'string', enum: ['overview', 'usage', 'backpack', 'web_pages'], description: 'What to read (default: overview)' },
               days: { type: 'number', description: 'For usage: how many days back, 1-30 (default 7)' },
             },
           },
@@ -251,6 +281,7 @@ export const forsionAccountProvider: ToolProvider = {
         const section = typeof args?.section === 'string' ? args.section : 'overview';
         if (section === 'usage') return usage(c, ctx, args?.days);
         if (section === 'backpack') return backpack(c, ctx);
+        if (section === 'web_pages') return webPages(c, ctx);
         return overview(c, ctx);
       },
     },

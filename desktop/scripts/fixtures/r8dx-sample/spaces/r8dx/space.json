@@ -1,0 +1,12 @@
+{
+  "id": "r8dx",
+  "name": { "zh": "DX 样例", "en": "DX sample" },
+  "icon": "list-checks",
+  "version": "1.0.0",
+  "layout": {
+    "main": [{ "type": "plugin:r8dx-sample:main", "pinned": true, "mainPage": true }],
+    "left": [{ "type": "workspace", "params": { "mode": "plugin:r8dx-sample:items" }, "pinned": true }],
+    "right": [{ "type": "plugin:r8dx-sample:settings" }]
+  },
+  "requires": { "views": ["workspace"] }
+}

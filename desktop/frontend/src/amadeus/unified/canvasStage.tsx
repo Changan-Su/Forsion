@@ -57,6 +57,7 @@ import { appRefToken } from '../../../../shared/appRefs'
 import { syncSmoothCaretToLayout } from '../../smoothCaret'
 import { noteMemoryId } from './viewMemory'
 import { registerMessages, translate, useI18n } from '../../i18n'
+import { motion } from '../../theme/motionTokens'
 
 registerMessages({
   'canvasstage.textTitle.connector': { zh: '连线标签', en: 'Connector label' },
@@ -325,6 +326,12 @@ function refToCardMd(ref: ChatRef, link = false): string {
  *  就只剩 text/plain)。 */
 const CLIP_MIME = 'application/x-amx-canvas'
 
+/** 适应内容 / 缩放按钮 / 键盘缩放的镜头时长(ms)。曲线与双击聚焦同一条(flyTo),只是更短 —— 这几下是「换个视角」,
+ *  不是「去看那张卡」。三张画布统一方案 10-24。 */
+const CAM_MS = 300
+/** 空白处右键按住拖:移动超过这么多屏幕像素才算拖(手抖一下照样是「右键点一下」,松开出菜单)。与 Tangu 画布同值。 */
+const RIGHT_SLOP = 4
+
 /** 画布自己的剪贴板镜像:系统剪贴板存不下 PM 节点,copy 时把卡原样记在这儿,paste 时**凭令牌**
  *  认领 —— 只比文本的话,用户在别处复制了一模一样的字就会静默粘回旧卡(Codex 评审 medium)。
  *  白板元素 / 层级不进镜像:它们本来就是 JSON,随 CLIP_MIME 载荷走(V-07)。 */
@@ -505,6 +512,10 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   const [vp, setVp] = useState<Viewport>(() => recallViewport(vpKey) ?? { x: 0, y: 0, z: 1 })
   const vpRef = useRef(vp)
   vpRef.current = vp
+  /** **DOM 上此刻真画着的**视口(提交后才更新)。镜头动画在 rAF 里先写 vpRef、渲染要等下一个任务 ——
+   *  这中间按 Shift+1 的话,拿 vpRef 去折算 getBoundingClientRect 会差一帧,fit 落到错的地方。 */
+  const domVpRef = useRef(vp)
+  useLayoutEffect(() => { domVpRef.current = vp }, [vp])
   /** 本机画布 chrome 偏好：默认显示，HUD 开关即时生效并跨页面/重启记忆，不写进笔记。 */
   const [miniMapVisible, setMiniMapVisible] = useState<boolean>(canvasMiniMapEnabled)
   /** 低倍率概览同属本机渲染偏好；默认开，关闭时阈值以下仍保留完整正文。 */
@@ -583,12 +594,48 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   /** 双击聚焦的逐帧弹簧。不能给 stage-inner 常驻 transition：滚轮、平移和拖卡都会被拖出尾巴。 */
   const [focusMotion, setFocusMotion] = useState(false)
   const focusRaf = useRef(0)
+  /** 镜头动画的终点(动画途中有值,落定 / 被打断即 null)。连按缩放时以它为基准叠加 —— 从半路的中间值
+   *  算的话,快速连按两下只放大到约 1.1×1.2,而不是 1.44。HUD 的百分比也显示它(见 hudZoom)。 */
+  const camTargetRef = useRef<Viewport | null>(null)
   const stopFocusMotion = useCallback((): void => {
     cancelAnimationFrame(focusRaf.current)
     focusRaf.current = 0
+    camTargetRef.current = null
     setFocusMotion(false)
   }, [])
   useEffect(() => () => cancelAnimationFrame(focusRaf.current), [])
+  /** 把视口送到 target。逐帧推进 pan/zoom,点阵、缩略图视口和内容保持同源;二阶欠阻尼阶跃:起止速度都柔和,
+   *  约在中后段越过终点 1.5%,随后自然收束。不靠常驻 CSS transition(滚轮、平移和拖卡都会被拖出尾巴)。
+   *  系统要求减少动态 = 当场落定。双击聚焦 460–560ms(focusNode 自己算),适应 / 缩放 CAM_MS。
+   *  ⚠️ 最后一帧直接落 target(不是 start + Δ×1):浮点会差一个 ulp,「回 100%」就不是 1 了。 */
+  const flyTo = useCallback((target: Viewport, duration: number): void => {
+    const start = { ...vpRef.current }
+    stopFocusMotion()
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      vpRef.current = target
+      setVp(target)
+      return
+    }
+    camTargetRef.current = target
+    const began = performance.now()
+    setFocusMotion(true)
+    const tick = (now: number): void => {
+      const t = Math.min(1, (now - began) / duration)
+      const k = 1 - Math.exp(-8 * t) * (Math.cos(6 * t) + (8 / 6) * Math.sin(6 * t))
+      const next = t >= 1
+        ? target
+        : { x: start.x + (target.x - start.x) * k, y: start.y + (target.y - start.y) * k, z: start.z + (target.z - start.z) * k }
+      vpRef.current = next
+      setVp(next)
+      if (t < 1) focusRaf.current = requestAnimationFrame(tick)
+      else {
+        focusRaf.current = 0
+        camTargetRef.current = null
+        setFocusMotion(false)
+      }
+    }
+    focusRaf.current = requestAnimationFrame(tick)
+  }, [stopFocusMotion])
   /** “一键整理”是批量 FLIP：先落最终几何，再从旧位置反向补 transform。这里单独持有 rAF/动画，
    *  这样再次整理、开始拖拽或卸载舞台时都能立刻交还控制权，不会有旧动画把卡拉回去。 */
   const arrangeMotion = useRef<{ raf: number; animations: Animation[] }>({ raf: 0, animations: [] })
@@ -975,8 +1022,9 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     return { x: ((clientX - r.left) / u - x) / z, y: ((clientY - r.top) / u - y) / z }
   }, [])
 
-  /** 首次进画布:把全部内容框进视野(方案 §3.1「开卷默认 fit 全部内容」)。 */
-  const fit = useCallback(() => {
+  /** 把全部内容框进视野(方案 §3.1「开卷默认 fit 全部内容」)。animate = 用户点的(Shift+1 / HUD ⤢ / 右键「适应内容」)
+   *  走镜头动画;开卷那次自动适应**当场落定** —— 从原点 {0,0,1} 飞过去只会让人看到一下莫名的缩放。 */
+  const fit = useCallback((animate: boolean) => {
     stopFocusMotion()
     const host = hostRef.current
     const view = getView()
@@ -987,7 +1035,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     // 开卷 / 点「适应内容」都整片落在视野外。
     const boxes = [...host.querySelectorAll('.amx-ucard, .amx-el-shape, .amx-el-frame, .amx-el-frame-bar, .amx-el-conn, .amx-el-label'), view.dom].map((el) => (el as HTMLElement).getBoundingClientRect())
     if (!boxes.length) return
-    const { x, y, z } = vpRef.current
+    const { x, y, z } = domVpRef.current // 量的是 DOM 盒,就按 DOM 上画着的那份视口折回(见 domVpRef)
     const hr = host.getBoundingClientRect()
     const u = zoomOf(host) || 1 // 应用级 CSS zoom,见 toStage 的告警
     const toS = (v: number, off: number) => (v / u - off) / z
@@ -1003,31 +1051,42 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     // **居中**,不是钉在左上角的 pad 上。满铺之后舞台比内容大得多,钉左上会把整篇挤在角落、
     // 右下留一大片空白(截图才看得出来,几何断言不管构图)。内容比视野大时 nz 已经把它缩到刚好,
     // 居中与 pad 等价;缩到 MIN_Z 还装不下时居中=看中段,也比看左上角合理。
-    setVp({ z: nz, x: (hr.width / u - w * nz) / 2 - minX * nz, y: (hr.height / u - h * nz) / 2 - minY * nz })
-  }, [getView, stopFocusMotion])
+    const target = { z: nz, x: (hr.width / u - w * nz) / 2 - minX * nz, y: (hr.height / u - h * nz) / 2 - minY * nz }
+    if (animate) flyTo(target, CAM_MS)
+    else setVp(target)
+  }, [getView, stopFocusMotion, flyTo])
 
-  /** 以舞台中心为锚的定倍缩放(HUD 的 −/+)。 */
-  const zoomBy = useCallback((factor: number) => {
-    stopFocusMotion()
+  /** 以舞台中心为锚缩放到 nz(HUD 的 −/+/百分比、Cmd+=/-/0),走镜头动画。基准是在途动画的终点(见 camTargetRef)。
+   *  线性插值 x 与 z 恰好让中心那个舞台点全程不动((cx-x)/z 是常数),不用另算锚。 */
+  const zoomTo = useCallback((want: number) => {
     const host = hostRef.current
     if (!host) return
-    const { x, y, z } = vpRef.current
-    const nz = Math.max(MIN_Z, Math.min(MAX_Z, z * factor))
+    const { x, y, z } = camTargetRef.current ?? vpRef.current
+    const nz = Math.max(MIN_Z, Math.min(MAX_Z, want))
     if (nz === z) return
     const u = zoomOf(host) || 1
     const cx = host.getBoundingClientRect().width / u / 2
     const cy = host.getBoundingClientRect().height / u / 2
-    setVp({ z: nz, x: cx - ((cx - x) * nz) / z, y: cy - ((cy - y) * nz) / z })
-  }, [stopFocusMotion])
+    flyTo({ z: nz, x: cx - ((cx - x) * nz) / z, y: cy - ((cy - y) * nz) / z }, CAM_MS)
+  }, [flyTo])
+  /** 定倍缩放(HUD 的 −/+)。 */
+  const zoomBy = useCallback((factor: number) => zoomTo((camTargetRef.current ?? vpRef.current).z * factor), [zoomTo])
+  /** HUD 的缩放入口。百分比按钮发的是 `1 / zoom`(canvasKit Chrome:四家共用一个乘法回调),而 zoom 就是下面传进去的
+   *  hudZoom = 同一个基准 —— 乘回来 ≈ 1 就当「回 100%」处理,落在精确的 1 上(浮点 z×(1/z) 不保证等于 1)。 */
+  const hudZoomBy = useCallback((factor: number) => {
+    const z = (camTargetRef.current ?? vpRef.current).z
+    if (Math.abs(z * factor - 1) < 1e-9) zoomTo(1)
+    else zoomTo(z * factor)
+  }, [zoomTo])
 
   /** 缩略图导航：保持当前缩放，只把点中的舞台坐标移到视口中心。 */
   const centerFromMiniMap = useCallback((worldX: number, worldY: number): void => {
+    const z = (camTargetRef.current ?? vpRef.current).z // 缩放动画途中点缩略图:按要去的那个倍率居中
     stopFocusMotion()
     const host = hostRef.current
     if (!host) return
     const u = zoomOf(host) || 1
     const r = host.getBoundingClientRect()
-    const z = vpRef.current.z
     setVp({ z, x: r.width / u / 2 - worldX * z, y: r.height / u / 2 - worldY * z })
   }, [stopFocusMotion])
 
@@ -1089,7 +1148,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     if (!active || !shouldFit.current) return // 本会话来过:保留上次的视口,别每次切模式都跳回 fit
     shouldFit.current = false
     // 等编辑器真正排完版再量:量早了卡片还是 0 宽,fit 出来的缩放是垃圾。
-    const t = setTimeout(() => fitRef.current(), 220)
+    const t = setTimeout(() => fitRef.current(false), 220)
     return () => clearTimeout(t)
   }, [active])
 
@@ -1972,40 +2031,14 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     // 目标占视口约 62% 宽 / 72% 高；短卡最多放到 1.5×，长文卡则自动退到能完整阅读的比例。
     const z = Math.max(MIN_Z, Math.min(1.5, MAX_Z, (vw * 0.62) / Math.max(1, box.w), (vh * 0.72) / Math.max(1, box.h)))
     const target = { z, x: vw / 2 - (box.x + box.w / 2) * z, y: vh / 2 - (box.y + box.h / 2) * z }
-    const start = { ...vpRef.current }
-    stopFocusMotion()
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
-      vpRef.current = target
-      setVp(target)
-    } else {
-      const distance = Math.hypot(target.x - start.x, target.y - start.y)
-      const duration = Math.round(Math.max(460, Math.min(560, 420 + distance * 0.12 + Math.abs(target.z - start.z) * 120)))
-      const began = performance.now()
-      setFocusMotion(true)
-      const tick = (now: number): void => {
-        const t = Math.min(1, (now - began) / duration)
-        // 二阶欠阻尼阶跃：起止速度都柔和，约在中后段越过终点 1.5%，随后自然收束。
-        const k = t >= 1 ? 1 : 1 - Math.exp(-8 * t) * (Math.cos(6 * t) + (8 / 6) * Math.sin(6 * t))
-        const next = {
-          x: start.x + (target.x - start.x) * k,
-          y: start.y + (target.y - start.y) * k,
-          z: start.z + (target.z - start.z) * k,
-        }
-        vpRef.current = next
-        setVp(next)
-        if (t < 1) focusRaf.current = requestAnimationFrame(tick)
-        else {
-          focusRaf.current = 0
-          setFocusMotion(false)
-        }
-      }
-      focusRaf.current = requestAnimationFrame(tick)
-    }
+    const start = vpRef.current
+    const distance = Math.hypot(target.x - start.x, target.y - start.y)
+    flyTo(target, Math.round(Math.max(460, Math.min(560, 420 + distance * 0.12 + Math.abs(target.z - start.z) * 120))))
     if (keepEdit) return
     setEditing(null)
     setSel([key])
     host.focus({ preventScroll: true })
-  }, [stopFocusMotion])
+  }, [flyTo])
 
   /** 以 root 为不动锚，把全部后代排成思维导图。根的各支可以独立分到左右两侧；再沿纵轴找
    *  最近的无碰撞位置，避让其它卡片、主卡、形状与 Frame。全部坐标合成一笔 PM 事务。 */
@@ -2441,7 +2474,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         const end: Keyframe = key === MAIN_KEY
           ? { marginLeft: `${to.x}px`, marginTop: `${to.y}px`, width: `${to.w}px`, height: `${to.h}px` }
           : { left: `${to.x}px`, top: `${to.y}px`, width: `${to.w}px`, height: `${to.h}px` }
-        const animation = el.animate([start, end], { duration: 220, easing: 'cubic-bezier(0.2, 0.78, 0.28, 1)', fill: 'none' })
+        const animation = el.animate([start, end], { duration: motion.ms('base'), easing: motion.css('surface'), fill: 'none' })
         animation.id = 'amx-card-snap'
         repelAnimations.push(animation)
         const done = (): void => { repelAnimations = repelAnimations.filter((a) => a !== animation) }
@@ -2478,7 +2511,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     host.addEventListener('wheel', onWheel, { passive: false })
 
     type Drag =
-      | { kind: 'pan'; x0: number; y0: number; vx: number; vy: number; tapKey?: string }
+      // right = 空白处右键按住拖(live = 已拖过 RIGHT_SLOP;ctxSeen = 按下期间系统那下 contextmenu 已经来过并被拦,见 onCtxMenu)
+      | { kind: 'pan'; x0: number; y0: number; vx: number; vy: number; tapKey?: string; right?: boolean; live?: boolean; ctxSeen?: boolean }
       | { kind: 'card-size'; key: string; edge: CardResizeEdge; b0: ElBox; h0: number; x0: number; y0: number; dx: number; dy: number; next: ElBox; live?: boolean; others?: ElBox[]; gx?: boolean; gy?: boolean }
       | { kind: 'move'; cards: Array<{ anchor: string; ox: number; oy: number }>; ids: Set<string>; hit: string; x0: number; y0: number; dx: number; dy: number; mainStart: { x: number; y: number } | null; mainEl: HTMLElement | null; live?: boolean; additive?: boolean; growSel?: string[]; align?: { base: ElBox | null; others: ElBox[] }; gx?: boolean; gy?: boolean }
       | { kind: 'size'; id: string; corner: string; b0: ElBox; dx: number; dy: number; dw: number; dh: number; live?: boolean }
@@ -2498,6 +2532,11 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     let dragOwner = -1
     const capture = (id: number): void => { dragOwner = id; try { host.setPointerCapture(id) } catch { /* 无所谓 */ } }
     const release = (id: number): void => { try { if (host.hasPointerCapture(id)) host.releasePointerCapture(id) } catch { /* 同上 */ } }
+    /** 右键拖平移期间的握紧抓手光标(样式在 styles.css 的 [data-panning])。只在真拖起来之后挂:右键点一下(出菜单)不闪抓手。 */
+    const setPanning = (on: boolean): void => { if (on) host.dataset.panning = ''; else delete host.dataset.panning }
+    /** 右键拖 / 右键点空白松开时,按下期间还没来过 contextmenu(Windows 松开后才补发):记下松开的时刻与位置,
+     *  补发的那一下由 onWinCtx 在窗口捕获期整个吞掉 —— 它常落在刚弹出的菜单上,放过去就把菜单当场关掉。 */
+    let trailing: { t: number; x: number; y: number } | null = null
 
     /** 对齐参考线(V-14)的吸附容差:屏幕上恒 NEIGHBOR_SNAP_PX,换成舞台单位(两级缩放,见 toStage 的告警)。 */
     const guideTol = (): number => NEIGHBOR_SNAP_PX / (vpRef.current.z * (zoomOf(host) || 1))
@@ -2548,6 +2587,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     /** 手势被别的东西接管:只回滚外观,**绝不落笔**(与 pointercancel 同一条,见 onCancel 顶注)。 */
     const abortDrag = (): void => {
       edgeStop()
+      setPanning(false)
       const d = drag
       drag = null
       if (d && d.kind !== 'pan') clearVisuals(d)
@@ -2644,6 +2684,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       setMenu(null)
       const target = e.target as HTMLElement
       if (target.closest('.amx-stage-tools, .amx-stage-hud, .amx-stage-minimap, .ctx-menu')) return // chrome 自己的按钮
+      if (drag?.kind === 'pan' && drag.right) return // 右键拖着的时候别的指针一概不接(松开再说)
       stopRepelMotion() // 动画途中再次抓取 = 立刻把控制权交还指针
       actRef.current.stopArrangeMotion()
       actRef.current.stopFocusMotion()
@@ -2659,6 +2700,20 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         armPress(e)
       }
       if (pinch) return // 手势期间新落的手指(三指以上)同样不进单指逻辑
+      // 右键:**空白处**按住拖 = 平移(10-24 用户拍板,三张画布同一套);没拖动(≤ RIGHT_SLOP)松开才弹空白菜单(onUp)。
+      // 对象(卡 / 主卡 / 形状 / 连线)上右键一字不动:照旧由 contextmenu 先选中再弹菜单(onCtxMenu → stageMenuAt)。
+      // 「空白」与菜单同一把尺(menuHitAt,含连线的数学命中):压在连线上右键仍是连线菜单,不是平移;只读 = skip,照旧归原生菜单。
+      // preventDefault = 不抢焦点(与 Alt / 中键 / 空格平移同规:只挪视口,正在编辑的卡照常能接着打字)。
+      // Chromium 里取消 pointerdown 不影响系统的 contextmenu(mac 照样按下即发,由 onCtxMenu 拦下;C108 钉着)。
+      if (e.button === 2) {
+        if (drag || e.pointerType === 'touch') return
+        const h = menuHitAt(target, e.clientX, e.clientY)
+        if (h.r !== 'hit' || h.key) return
+        e.preventDefault()
+        drag = { kind: 'pan', right: true, x0: e.clientX, y0: e.clientY, vx: vpRef.current.x, vy: vpRef.current.y }
+        capture(e.pointerId)
+        return
+      }
       slop = e.pointerType === 'touch' ? TOUCH_SLOP / (vpRef.current.z * (zoomOf(host) || 1)) : CLICK_SLOP
       const middle = e.button === 1
       if (e.button !== 0 && !middle) return
@@ -3141,6 +3196,11 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       if (!drag) return
       const u = zoomOf(host) || 1 // 应用级 CSS zoom,见 toStage 的告警
       if (drag.kind === 'pan') {
+        if (drag.right && !drag.live) {
+          if (Math.hypot(e.clientX - drag.x0, e.clientY - drag.y0) <= RIGHT_SLOP) return // 手抖不算拖:松开照样出菜单
+          drag.live = true
+          setPanning(true)
+        }
         setVp({ ...vpRef.current, x: drag.vx + (e.clientX - drag.x0) / u, y: drag.vy + (e.clientY - drag.y0) / u })
         return
       }
@@ -3316,6 +3376,18 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       release(e.pointerId)
       if (!d) return
       if (d.kind === 'pan') {
+        if (d.right) {
+          setPanning(false)
+          if (!d.ctxSeen) trailing = { t: performance.now(), x: e.clientX, y: e.clientY }
+          // 没拖 = 右键点了一下空白:这时才弹空白菜单(按下时已判定是空白;与 stageMenuAt 的空白分支同一份 —— 不改选中)。
+          // 焦点交给舞台 = 修前右键按下的默认结果(按下那一下现在 preventDefault 了):Esc 关菜单走舞台的 onKeyDown,
+          // 焦点留在侧栏 / body / 正在编辑的卡里的话,Esc 关不掉这份菜单。只是拖了一下(平移)才保留原焦点。
+          if (!d.live) {
+            host.focus({ preventScroll: true })
+            setMenu({ x: e.clientX, y: e.clientY, key: null, at: toStage(e.clientX, e.clientY) })
+          }
+          return
+        }
         // 触屏两段式的第一段:落在对象上但没真拖动 = 一次点选(见 onDown 的 touchKey)。
         // 阈值用**屏幕像素**的 TOUCH_SLOP —— pan 的 x0/y0 就是 clientX/Y,不过舞台的 z。
         if (d.tapKey && Math.hypot(e.clientX - d.x0, e.clientY - d.y0) < TOUCH_SLOP) setSel([d.tapKey])
@@ -3554,16 +3626,16 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     // (非编辑态就能对主卡/卡片正文做块级删除)。捕获期规则:编辑中的卡/正文 = 掐断传播
     // (块菜单别抢)但**不取消默认** → 原生文本菜单;其余 = 掐断传播 + 取消默认 → 只开画布菜单。
     // 文档模式不受影响:本 effect 只在画布模式挂(!active 早退),块菜单在文档模式照常。
-    /** 命中判定与开菜单本身(右键与触屏长按**共用这一份**,别再各写一遍)。
-     *  'skip' = 不归舞台管(交给原生/别人),'native' = 明确让位给 PM/原生菜单,'open' = 已开画布菜单。 */
-    const stageMenuAt = (target: HTMLElement, x: number, y: number): 'skip' | 'native' | 'open' => {
-      if (readOnlyRef.current) return 'skip' // 只读:右键/长按都不开舞台菜单(交还浏览器原生菜单)
-      if (target.closest('.amx-stage-tools, .amx-stage-hud, .amx-stage-minimap')) return 'skip'
+    /** 右键 / 长按的命中判定(纯判定,不动状态)。右键按下判「空白 → 平移」也吃这一份(onDown),与菜单同一把尺。
+     *  'skip' = 不归舞台管(交给原生/别人),'native' = 明确让位给 PM/原生菜单,'hit' = 归画布菜单(key = null 即空白)。 */
+    const menuHitAt = (target: HTMLElement, x: number, y: number): { r: 'skip' | 'native' } | { r: 'hit'; key: string | null } => {
+      if (readOnlyRef.current) return { r: 'skip' } // 只读:右键/长按都不开舞台菜单(交还浏览器原生菜单)
+      if (target.closest('.amx-stage-tools, .amx-stage-hud, .amx-stage-minimap')) return { r: 'skip' }
       const shape = target.closest<HTMLElement>(EL_HIT)
       const card = target.closest<HTMLElement>('.amx-ucard')
       const inMain = !card && !shape && !!target.closest('.ProseMirror')
       // 正在编辑的卡/正文让位给 PM/原生菜单(复制粘贴、拼写检查都在那儿)。
-      if ((card?.dataset.anchor && editingRef.current === card.dataset.anchor) || (inMain && editingRef.current === MAIN_KEY)) return 'native'
+      if ((card?.dataset.anchor && editingRef.current === card.dataset.anchor) || (inMain && editingRef.current === MAIN_KEY)) return { r: 'native' }
       let key = shape?.dataset.el
         ? elKey(shape.dataset.el)
         : card?.dataset.anchor
@@ -3571,7 +3643,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
           : inMain
             ? MAIN_KEY
             : null
-      if (!key && !isBlank(target)) return 'skip' // 浮层 chrome(把手等,不在 PM 内):原生菜单
+      if (!key && !isBlank(target)) return { r: 'skip' } // 浮层 chrome(把手等,不在 PM 内):原生菜单
       // 连线没有 DOM 命中面(元素层整层 pointer-events:none),空白处按数学补一次命中 —— 与单击 / 双击
       // 同一把尺(hitEdge + 8px/z 容差)。修前右键连线落进「空白菜单」,连线没有任何菜单入口(V-08 设色无处下手)。
       if (!key) {
@@ -3587,12 +3659,26 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
         })
         if (hit) key = elKey(hit.id)
       }
-      if (key && !selRef.current.includes(key)) setSel([key])
-      setMenu({ x, y, key, at: toStage(x, y) })
+      return { r: 'hit', key }
+    }
+    /** 命中判定与开菜单本身(右键与触屏长按**共用这一份**,别再各写一遍)。'open' = 已开画布菜单(先选中再弹)。 */
+    const stageMenuAt = (target: HTMLElement, x: number, y: number): 'skip' | 'native' | 'open' => {
+      const h = menuHitAt(target, x, y)
+      if (h.r !== 'hit') return h.r
+      if (h.key && !selRef.current.includes(h.key)) setSel([h.key])
+      setMenu({ x, y, key: h.key, at: toStage(x, y) })
       return 'open'
     }
 
     const onCtxMenu = (e: MouseEvent): void => {
+      // 空白处右键按着(macOS / Linux 按下那一刻就发 contextmenu):空白菜单归 onUp 在松开且没拖时发,这里只拦
+      // (stopPropagation 免得 blockLayer 接走),并记下这一下已经来过 —— 松开后就不必再等 Windows 式的补发。
+      if (drag?.kind === 'pan' && drag.right) {
+        drag.ctxSeen = true
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       const r = stageMenuAt(e.target as HTMLElement, e.clientX, e.clientY)
       if (r === 'skip') return
       e.stopPropagation()
@@ -3758,6 +3844,33 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     }
     window.addEventListener('pointerup', onWinUp, true)
     window.addEventListener('pointercancel', onWinUp, true)
+    /** Windows 松开右键后才补发的那一下 contextmenu(见 trailing):只认**这一次按压**的 ——
+     *  松开后 400ms 内、离松开处 8px 内;对不上就原样放行(键盘菜单键、别处的右键照常)。
+     *  ⚠️ 窗口捕获期 + stopImmediatePropagation:菜单的关闭监听同样挂在窗口捕获期(上面 [menu] 那个 effect),
+     *     它在菜单弹出**之后**才注册,排在本监听后面,于是被一并截住;冒泡到舞台的 onCtxMenu 也到不了。 */
+    const onWinCtx = (e: MouseEvent): void => {
+      const tr = trailing
+      if (!tr) return
+      trailing = null
+      if (performance.now() - tr.t > 400 || Math.hypot(e.clientX - tr.x, e.clientY - tr.y) > 8) return
+      e.preventDefault()
+      e.stopImmediatePropagation()
+    }
+    window.addEventListener('contextmenu', onWinCtx, true)
+
+    /** 右键拖平移丢了指针捕获却没等到 pointerup / pointercancel(窗口失焦、系统把指针收走):按钮早已松开,
+     *  不收尾的话之后空手移动照样在平移、新的按下也被「右键拖着」那道闸挡掉(Codex 评审 10-24)。只管右键拖这一种,
+     *  别的手势照旧(松手时 release 引起的 lostpointercapture 来时 drag 已经清空,不会误伤)。 */
+    const onLostCapture = (e: PointerEvent): void => {
+      if (drag?.kind === 'pan' && drag.right && dragOwner === e.pointerId) abortDrag()
+    }
+    const onBlurRightPan = (): void => {
+      if (drag?.kind !== 'pan' || !drag.right) return
+      release(dragOwner)
+      abortDrag()
+    }
+    host.addEventListener('lostpointercapture', onLostCapture)
+    window.addEventListener('blur', onBlurRightPan)
 
     const onCancel = (e: PointerEvent): void => {
       if (e.pointerType === 'touch') {
@@ -3795,7 +3908,11 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     return () => {
       window.removeEventListener('pointerup', onWinUp, true)
       window.removeEventListener('pointercancel', onWinUp, true)
+      window.removeEventListener('contextmenu', onWinCtx, true)
+      host.removeEventListener('lostpointercapture', onLostCapture)
+      window.removeEventListener('blur', onBlurRightPan)
       clearPress()
+      delete host.dataset.panning
       dragCss.remove()
       stopRepelMotion()
       delete host.dataset.amxDragscope
@@ -3901,8 +4018,8 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     // 都挂在 window 冒泡期、第一句先看 defaultPrevented —— 不拦,缩的是整窗 UI 而不是画布。
     if (!e.altKey && (mod ? e.key === '=' || e.key === '+' || e.key === '-' || e.key === '0' : e.shiftKey && e.code === 'Digit1')) {
       e.preventDefault()
-      if (!mod) fit()
-      else if (e.key === '0') zoomBy(1 / vpRef.current.z)
+      if (!mod) fit(true)
+      else if (e.key === '0') zoomTo(1)
       else zoomBy(e.key === '-' ? 1 / 1.2 : 1.2)
       return
     }
@@ -4132,10 +4249,11 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
       {active && connFrom ? <div className="amx-stage-hint">{t('canvasstage.conn.hint')}</div> : null}
       {active ? (
         // 缩放胶囊 / 吸附 / 缩略图开关 —— 与仪表盘共用同一份 chrome(View 基座方案 §6.4 S2)。
+        // 百分比显示镜头**要去的**倍率(动画途中 = 终点):它与 hudZoomBy 的基准必须同源,百分比按钮发回的 1/zoom 才对得上。
         <CanvasChrome
-          zoom={vp.z}
-          onZoomBy={zoomBy}
-          onFit={fit}
+          zoom={camTargetRef.current?.z ?? vp.z}
+          onZoomBy={hudZoomBy}
+          onFit={() => fit(true)}
           snap={snapEnabled}
           onSnap={(on) => { setSnapEnabled(on); hostRef.current?.focus({ preventScroll: true }) }}
           mini={miniMapVisible}
@@ -4296,7 +4414,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
                 <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('ellipse', at.x, at.y) }}>{t('canvasstage.shape.ellipse')}</button>
                 <button onClick={() => { const at = menu.at; setMenu(null); addShapeAt('text', at.x, at.y) }}>{t('canvasstage.shape.text')}</button>
                 <button onClick={() => { const at = menu.at; setMenu(null); addFrame(at.x, at.y) }}>Frame</button>
-                <button onClick={() => { setMenu(null); fit() }}>{t('canvasstage.menu.fit')}</button>
+                <button onClick={() => { setMenu(null); fit(true) }}>{t('canvasstage.menu.fit')}</button>
                 <div className="ctx-separator" />
                 <button onClick={() => { setMenu(null); void exportCanvas() }}>{t('canvasstage.menu.exportCanvas')}</button>
               </>

@@ -9,7 +9,7 @@ import {
   Camera, ChevronDown, ChevronRight, FileText, Image as ImageIcon, MessageSquarePlus, MessagesSquare,
   AppWindow, PanelsTopLeft, Paperclip, Plus, Search, UserPlus,
 } from 'lucide-react'
-import { allViews, getView, label, nestedPanelPlacement, openNativeSheetMenu, UI_ZOOM_EVENT, useEdgeNudge, useWorkspace, zoomOf, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
+import { allViews, getView, label, nestedPanelPlacement, openNativeSheetMenu, UI_ZOOM_EVENT, useEdgeNudge, useExitGhost, useWorkspace, zoomOf, type SheetMenu, type SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
 import { usePageStore } from '../../amadeus/store/pageStore'
 import { useRecentViews } from '../../recentViews'
@@ -110,6 +110,9 @@ export const AddContentMenu: React.FC<{
   const fileInputRef = useRef<HTMLInputElement>(null)
   const menuFix = useEdgeNudge(open, { boundary: '.t2-chat-view' })
   const subFix = useEdgeNudge(pane ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
+  // 关掉时留替身放 80ms 退场(走查续八 8.4;.composer-menu 在 base.css 的退场名单上)。
+  useExitGhost(menuRef, open)
+  useExitGhost(subRef, open && !!pane)
 
   const sessions = useApp((s) => s.sessions)
   const archivedSessions = useApp((s) => s.archivedSessions)

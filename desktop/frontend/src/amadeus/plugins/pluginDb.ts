@@ -11,6 +11,7 @@
  *  没有 CAS 写口的宿主(云端 / 移动端桥)直接 `{ ok:false, error }`,让插件走自己的回落路,别在这里
  *  偷偷降级成无票据覆盖 —— 那等于把 codex 抓的洞换个地方开。 */
 import type { DbFile } from '@amadeus-shared/db/schema'
+import { HUMAN_CAL, readHumanCal, writeHumanCalCas } from '../store/humanCalendarIo'
 
 export interface MutateDbResult {
   ok: boolean
@@ -72,3 +73,15 @@ export async function mutateDbCas(
   }
   return { ok: false, conflict: true, error: `version conflict after ${retries} retries (latest ${lastVersion})` }
 }
+
+/** Same mutation contract for the host-owned calendar, including a missing-file CAS ticket. */
+export const mutateHumanCalendar = (fn: (db: DbFile) => DbFile | null, isLive: () => boolean): Promise<MutateDbResult> => mutateDbCas({
+  readDatabase: async () => {
+    const r = await readHumanCal()
+    return r.status === 'ok' ? { ...r, version: r.version || 'human:new' } : r
+  },
+  writeDatabaseCas: async (_path, data, version) => {
+    const r = await writeHumanCalCas(data, version === 'human:new' ? '' : version)
+    return r.ok ? r : { ok: false, version: '' }
+  },
+}, HUMAN_CAL, fn, MUTATE_DB_RETRIES, isLive)

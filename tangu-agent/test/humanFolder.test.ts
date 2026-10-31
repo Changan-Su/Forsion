@@ -85,7 +85,16 @@ describe('human/ folder, step 1', () => {
     const undo = await api('/agent/human/MEMORY.md/undo', 'POST', { changeId: put.body.change.id, expectedVersion: put.body.document.version });
     expect(undo.status).toBe(200);
     expect(readFileSync(userMdFile(), 'utf8')).toBe(undo.body.document.content);
-    expect((await api('/agent/human/CALENDAR.db')).status).toBe(404);
+    // CALENDAR.db has a separate local-only database route; it remains excluded from the text-document API.
+    const calendar = await api('/agent/human/CALENDAR.db');
+    expect(calendar.status).toBe(200);
+    expect(['ok', 'missing']).toContain(calendar.body.status);
+    expect((await api('/agent/human/UNKNOWN.md')).status).toBe(404);
+    for (const method of ['GET', 'PUT']) {
+      const remoteCalendar = await api('/agent/human/CALENDAR.db', method, undefined, { 'x-forsion-remote': 'lan' });
+      expect(remoteCalendar.status).toBe(403);
+      expect(remoteCalendar.body.error).toBe('HUMAN_REMOTE_DENIED');
+    }
     expect((await api('/agent/human/..%2FUSER.md')).status).toBe(404);
     expect((await api('/agent/human/AGENT.md', 'GET', undefined, { 'x-forsion-remote': 'lan' })).status).toBe(403);
   });

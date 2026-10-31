@@ -15,7 +15,7 @@ import type { SessionRecord, UiMessage } from '../../../../../tangu-agent/src/co
 const unseen = (m: UiMessage): boolean =>
   m.role === 'system' || !!m.teamSummary || (!!m.work && !m.content && !m.error && !m.approvals?.length && !m.inquiries?.length)
 /** 引擎落库的机器行(打断 / 审批结局 / 子会话回报)也是 role=user,但不是用户问的话:跟着上一轮,不另起一张卡。 */
-const MACHINE = /^<(turn_interrupted|approval_update|child_sessions_update)>/
+const MACHINE = /^<(turn_interrupted|approval_update|inquiry_update|child_sessions_update)>/
 const isQuestion = (m: UiMessage): boolean => m.role === 'user' && !MACHINE.test(m.content)
 
 export interface Turn { user?: UiMessage; answers: UiMessage[]; first: string; last: string; ids: Set<string> }
@@ -121,4 +121,12 @@ export function buildTurnTree(rootId: string, branches: readonly SessionRecord[]
     grow(b.id, turns.slice(n), srcPath.slice(0, end + 1), seen)
   }
   return { cards, roots, paths }
+}
+
+const READ_STEPS_MAX = 8 // 这一支超过这么多轮:轮次折成「1 2 … 7 8 9」
+/** 阅读栏顶上的轮次(下标):不多就全列;多了留头两轮、当前和前后各一轮、最后一轮,中间折成 -1(画成「…」),只隔一轮就直接列出来 */
+export function readSteps(n: number, cur: number): number[] {
+  if (n <= READ_STEPS_MAX) return Array.from({ length: n }, (_, i) => i)
+  const keep = [...new Set([0, 1, cur - 1, cur, cur + 1, n - 1])].filter((i) => i >= 0 && i < n).sort((a, b) => a - b)
+  return keep.flatMap((i, j) => (!j || i - keep[j - 1] === 1 ? [i] : i - keep[j - 1] === 2 ? [i - 1, i] : [-1, i]))
 }

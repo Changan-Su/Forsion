@@ -76,8 +76,11 @@ async function main() {
     const switchTo = async (name) => { await mini.locator('.mini-card-space').click(); await mini.locator('.mini-card-popover').getByRole('button', { name, exact: true }).click() }
     await mini.locator('.mini-card-space').click()
     const labels = await mini.locator('.mini-card-popover .mini-card-row').allTextContents()
-    check('only adapted native and plugin Spaces', labels.length === 4 && labels.includes('ToDo List') && labels.includes('Mini 探针'), JSON.stringify(labels))
+    check('only adapted native and plugin Spaces', labels.length === 5 && labels.includes('ToDo List') && labels.includes('待办') && labels.includes('Mini 探针'), JSON.stringify(labels))
     await mini.screenshot({ path: path.join(shots, 'spaces.png') }); await mini.keyboard.press('Escape')
+    await switchTo('待办')
+    await mini.locator('.fc-view-todo-mini .amx-todo').waitFor()
+    check('Tasks Space uses the shared Mini task renderer', true)
     await switchTo(labels.find((x) => /Amadeus|笔记/.test(x)))
     await mini.getByRole('button', { name: '选择笔记', exact: true }).click()
     await mini.locator('.mini-card-popover--picker').getByRole('button', { name: 'Mini note', exact: true }).click()
@@ -114,7 +117,8 @@ async function main() {
     await win.evaluate(() => localStorage.setItem('amadeus.plugins.disabled', JSON.stringify(['mini-probe', 'uninstalled-plugin'])))
     await mini.waitForSelector('.mini-card-shell[data-space="tangu"]')
     await mini.locator('.mini-card-space').click()
-    check('disabling in main removes the active Mini plugin', await mini.locator('.mini-card-popover .mini-card-row').count() === 3)
+    const afterDisable = await mini.locator('.mini-card-popover .mini-card-row').allTextContents()
+    check('disabling in main removes the active Mini plugin', afterDisable.length === 4 && afterDisable.includes('待办') && !afterDisable.includes('Mini 探针'), JSON.stringify(afterDisable))
     check('cross-window sync preserves other disabled IDs', await mini.evaluate(() => JSON.parse(localStorage.getItem('amadeus.plugins.disabled')).includes('uninstalled-plugin')))
     await mini.keyboard.press('Escape')
     await win.evaluate(() => localStorage.setItem('amadeus.plugins.disabled', JSON.stringify(['uninstalled-plugin'])))
@@ -145,13 +149,14 @@ async function main() {
       // This section isolates the manual window's own behavior; mini-auto.check.cjs covers real cross-process OS focus.
       globalThis.__miniOriginalFocusedWindow = BrowserWindow.getFocusedWindow
       BrowserWindow.getFocusedWindow = () => null
-      const w = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')), area = screen.getPrimaryDisplay().workArea
-      w.setPosition(area.x + 40, area.y + 40)
+      const w = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini'))
+      const area = screen.getDisplayMatching(w.getBounds()).workArea
+      w.setContentBounds({ ...w.getContentBounds(), x: area.x + 40, y: area.y + 40 })
       globalThis.__miniCursor = { x: area.x + 430, y: area.y + 220 }; screen.getCursorScreenPoint = () => ({ ...globalThis.__miniCursor }) // 同真接口:每次一个新对象
       globalThis.__miniIgnore = []; const set = w.setIgnoreMouseEvents.bind(w)
       w.setIgnoreMouseEvents = (v) => { globalThis.__miniIgnore.push(v); set(v) }
     })
-    const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')).getBounds())
+    const bounds = () => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')).getContentBounds())
     const lastIgnore = () => app.evaluate(() => globalThis.__miniIgnore.at(-1))
     const parked = await bounds()
     const signalTime = Date.now()
@@ -204,6 +209,11 @@ async function main() {
     const shorter = await bounds()
     check('dragging the bottom edge shrinks the card in place', shorter.height === before.height - 200 && shorter.width === before.width && shorter.x === before.x && shorter.y === before.y, JSON.stringify(shorter))
     check('content follows the new size', await fills())
+    check('content scrollbar stays clear of the right resize grip', await mini.evaluate(() => {
+      const content = document.querySelector('.mini-card-main').getBoundingClientRect()
+      const grip = document.querySelector('.mini-card-edge[data-edge="e"]').getBoundingClientRect()
+      return content.right <= grip.left + 0.1
+    }))
     await mini.screenshot({ path: path.join(shots, 'todo-resized.png') })
     await mini.mouse.up(); await pause(100)
     // 松手后主进程要忘掉起手位置:此时再来一条不带起手的「拖动」,只能从当前光标重新起算(位移为零)
@@ -211,8 +221,8 @@ async function main() {
     check('releasing ends the resize', JSON.stringify(shorter) === JSON.stringify(await bounds()))
     await mini.evaluate(() => window.tangu.miniResize(null))
     // 贴边折叠时不改大小:缩窄会把露在屏内的把手也带出屏幕,卡片就找不回来了
-    const setX = (x) => app.evaluate(({ BrowserWindow }, x) => { const w = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')); w.setPosition(x, w.getBounds().y) }, x)
-    const left = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea.x)
+    const setX = (x) => app.evaluate(({ BrowserWindow }, x) => { const w = BrowserWindow.getAllWindows().find((w) => w.webContents.getURL().includes('window=mini')); w.setContentBounds({ ...w.getContentBounds(), x }) }, x)
+    const left = await app.evaluate(({ screen, BrowserWindow }) => screen.getDisplayMatching(BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('window=mini')).getBounds()).workArea.x)
     await setX(left + 4); await pause(900)
     const tucked = await bounds()
     await mini.evaluate(() => window.tangu.miniResize('e', true)); await nudge(-60, 0)
@@ -232,7 +242,7 @@ async function main() {
     check('no overflow at the minimum size', await fills() && await mini.evaluate(() => { const root = document.querySelector('.mini-card-shell'); return root.scrollWidth === root.clientWidth }))
     await mini.screenshot({ path: path.join(shots, 'tangu-min.png') })
     // 拉到头也不出工作区:伸到屏幕外的卡片一挪就会被判成贴边、折成一条
-    const area = await app.evaluate(({ screen }) => screen.getPrimaryDisplay().workArea)
+    const area = await app.evaluate(({ screen, BrowserWindow }) => screen.getDisplayMatching(BrowserWindow.getAllWindows().find(w => w.webContents.getURL().includes('window=mini')).getBounds()).workArea)
     await dragEdge('s', 0, 9999); await mini.mouse.up()
     const tallest = await bounds()
     check('the bottom edge cannot be dragged off the screen', tallest.height > 160 && tallest.y + tallest.height <= area.y + area.height, JSON.stringify({ area, tallest }))
@@ -246,7 +256,19 @@ async function main() {
     mini.on('pageerror', (e) => errors.push(`mini: ${e.message}`))
     await mini.waitForSelector('.mini-todo .amx-todo', { timeout: 30000 })
     const reopened = await bounds()
-    check('reopened card keeps the size the user chose', reopened.width === kept.width && reopened.height === kept.height && kept.width === 380 && kept.height === 300, JSON.stringify(reopened))
+    // Compare to the actual chosen content size. Mixed-DPI Chromium pointer-up coordinates
+    // can round the last gesture; exact resize deltas are checked above, independently.
+    check('reopened card keeps the size the user chose', reopened.width === kept.width && reopened.height === kept.height && kept.width > 260 && kept.height > 160, JSON.stringify({ kept, reopened }))
+    const reopenCycles = []
+    for (let cycle = 0; cycle < 5; cycle++) {
+      await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
+      for (let i = 0; i < 100 && app.windows().some(w => w.url().includes('window=mini')); i++) await pause(50)
+      await win.evaluate(() => window.tangu.openMini({ spaceId: 'calendar' }))
+      for (let i = 0; i < 200; i++) { mini = app.windows().find(w => w.url().includes('window=mini')); if (mini) break; await pause(50) }
+      await mini.waitForSelector('.mini-todo .amx-todo', { timeout: 30000 })
+      reopenCycles.push(await bounds())
+    }
+    check('five close/open cycles never accumulate fractional-DPI size drift', reopenCycles.every(b => b.width === kept.width && b.height === kept.height), JSON.stringify({ kept, reopenCycles }))
     await mini.screenshot({ path: path.join(shots, 'todo-reopened.png') })
     await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
     check('no renderer errors', errors.length === 0, JSON.stringify(errors))

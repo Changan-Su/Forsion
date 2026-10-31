@@ -102,4 +102,46 @@ export function setPluginViewModes(el: HTMLElement, spec: PluginViewModesSpec, o
 /** 宿主卸载视图时清掉它那份(插件没 dispose 也不留孤儿)。 */
 export function clearPluginViewModes(host: HTMLElement): void {
   entries.get(host)?.retire()
+  heads.get(host)?.retire()
+}
+
+/** `ctx.ui.setViewHead`(2026-10-26+,走查续八 8.19):同一条 32px 头行,不必先有看法 —— 左边标题、右边插件的按钮。
+ *  和 setViewModes 并存:胶囊在前、标题其次、两份按钮都在右端。`title` 是 PluginText,画的时候求值(PluginViewHost)。 */
+export interface PluginViewHeadEntry { readonly title?: unknown; readonly actions: HTMLElement; retire(): void }
+const heads = new Map<HTMLElement, PluginViewHeadEntry>()
+export const pluginViewHeadOf = (host: HTMLElement | null): PluginViewHeadEntry | null => (host ? heads.get(host) ?? null : null)
+
+export function setPluginViewHead(
+  el: HTMLElement, opts: { title?: unknown; actions?: HTMLElement | HTMLElement[] } | undefined, own: (dispose: () => void) => () => void,
+): { update(patch: { title?: unknown; actions?: HTMLElement | HTMLElement[] }): void; readonly actions: HTMLElement; dispose(): void } {
+  if (!(el instanceof HTMLElement)) throw new TypeError('setViewHead needs the element your view was mounted on (or one inside it)')
+  const host = el.closest<HTMLElement>(`[${PLUGIN_VIEW_HOST_ATTR}]`)
+  if (!host) throw new Error('setViewHead only works inside a plugin view (pass the element mount() received)')
+  const actions = document.createElement('div')
+  actions.className = 'plugin-viewhead-actions'
+  actions.style.cssText = 'display:flex;align-items:center;gap:2px;min-width:0'
+  const put = (a: unknown): void => { for (const x of Array.isArray(a) ? a : a ? [a] : []) if (x instanceof HTMLElement) actions.append(x) }
+  put(opts?.actions)
+  let alive = true
+  let dispose = (): void => {}
+  // 每次 update 换一个新对象:PluginViewHost 拿 entry 身份当 useSyncExternalStore 的快照
+  const make = (title: unknown): PluginViewHeadEntry => ({ title, actions, retire: () => dispose() })
+  let entry = make(opts?.title)
+  heads.get(host)?.retire()
+  heads.set(host, entry)
+  changed()
+  dispose = own(() => {
+    alive = false
+    actions.remove()
+    if (heads.get(host) === entry) { heads.delete(host); changed() }
+  })
+  return {
+    update(patch) {
+      if (!alive || !patch || typeof patch !== 'object') return
+      if ('actions' in patch) { actions.replaceChildren(); put(patch.actions) }
+      if ('title' in patch) { entry = make(patch.title); heads.set(host, entry); changed() }
+    },
+    actions,
+    dispose,
+  }
 }

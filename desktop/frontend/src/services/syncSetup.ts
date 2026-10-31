@@ -8,9 +8,9 @@
  *  - 插件数据 = 本机所有插件一起关的 localStorage 键(PLUGIN_SYNC_ALL_OFF_KEY)。
  * 「点过了」按账号记在本机(decided):登录了但没点过的,主窗弹一次卡片;点「稍后」也算点过,左栏挂点不再弹。
  */
-import { request } from './backendService'
+import { request, type SyncStatusResult } from './backendService'
 import { homeTarget } from './engine/targets'
-import { PLUGIN_SYNC_ALL_OFF_KEY } from '../amadeus/plugins/pluginDataSync'
+import { PLUGIN_SYNC_ALL_OFF_KEY, pluginSyncSummary } from '../amadeus/plugins/pluginDataSync'
 import { usePluginStore, pluginWanted } from '../amadeus/plugins/pluginStore'
 import type { AuthStatusInfo, RemoteSyncConfig, RemoteSyncReport } from '../types'
 import { registerMessages } from '../i18n'
@@ -25,6 +25,9 @@ export type SyncKind = 'notes' | 'agents' | 'plugins'
 export type NotesChoice = 'merge' | 'cloud' | 'skip'
 export interface NotesPending { cloudFiles: number; cloudBytes: number; cloudDevice: string | null; localOnly: number; conflicts: number }
 export interface SyncSnapshot {
+  /** Informational unified quota; never gates sync choices. */
+  storage?: { usedBytes: number | null; limitBytes: number; complete: boolean; asOf: string; enforcement?: boolean } | null
+  contentRules?: boolean
   signedIn: boolean
   decided: boolean
   notes: {
@@ -40,13 +43,15 @@ export interface SyncSnapshot {
     syncOnStart: boolean
     direction: 'both' | 'push' | 'pull'
     localBytes: number | null
-    /** 设备同步额度(蓬洲云 2 GB 那本账);拿不到 = null。 */
+    /** 既有设备同步限制，T2 保留；统一额度在 storage，拿不到 = null。 */
     maxBytes: number | null
     /** 这台装了带 penzor 后端的 Forsion Extend(没有就开不了笔记库同步)。 */
     available: boolean
   }
-  agents: { on: boolean; count: number }
-  plugins: { on: boolean; count: number }
+  /** last = 引擎上一轮 Agent / human/ 文件同步的结果(引擎重启后第一轮跑完前为 null);conflicts = 那一轮新出的冲突副本数 */
+  agents: { on: boolean; count: number; running: boolean; last: { at: number; ok: boolean; pushed: number; pulled: number; conflicts: number; error?: string } | null }
+  /** pending = 改了还没传上去的插件数;lastAt = 上次和云端对上的时刻 */
+  plugins: { on: boolean; count: number; pending: number; lastAt: number | null }
 }
 export interface SyncResult { ok: boolean; error?: string }
 
@@ -74,6 +79,16 @@ let snap: SyncSnapshot | null = null
 let account: string | null = null
 let started = false
 let loading: Promise<void> | null = null
+let storageCache: { account: string; at: number; value: SyncSnapshot['storage'] } | null = null
+async function readStorage(acct: string | null): Promise<SyncSnapshot['storage']> {
+  if (!acct) { storageCache = null; return null }
+  if (storageCache?.account === acct && Date.now() - storageCache.at < 60_000) return storageCache.value
+  const r = await window.tangu?.cloudFetch?.({ path: '/storage/ledger' }).catch(() => null)
+  const l = r?.status === 200 && r.json?.schemaVersion === 1 ? r.json : null
+  const value = l ? { usedBytes: l.complete ? l.usage.usedBytes : null, limitBytes: l.quota.limitBytes, complete: l.complete, asOf: l.asOf, enforcement: l.enforcement === true } : null
+  storageCache = { account: acct, at: Date.now(), value }
+  return value
+}
 const listeners = new Set<() => void>()
 const emit = (): void => { for (const cb of listeners) { try { cb() } catch { /* 一个订阅方坏了不拖别人 */ } } }
 
@@ -86,16 +101,25 @@ const toLast = (r: RemoteSyncReport | null): SyncSnapshot['notes']['last'] => r
   ? { at: r.finishedAt, ok: r.ok, pushed: r.pushed, pulled: r.pulled, conflicts: r.conflicts, skippedLarge: r.skippedLarge?.length ?? 0, errors: r.errors ?? [] }
   : null
 
+const AGENTS_OFF: SyncSnapshot['agents'] = { on: false, count: 0, running: false, last: null }
 async function readAgents(): Promise<SyncSnapshot['agents']> {
   try {
-    const r = await request<{ enabled: boolean | null; agents: number }>(homeTarget(), '/agent/sync/default')
-    return { on: r.enabled === true, count: r.agents ?? 0 }
-  } catch { return { on: false, count: 0 } } // 老引擎没有这条路由 / 引擎没起:当关着
+    const [r, st] = await Promise.all([
+      request<{ enabled: boolean | null; agents: number }>(homeTarget(), '/agent/sync/default'),
+      request<SyncStatusResult>(homeTarget(), '/agent/sync/status').catch(() => null),
+    ])
+    const l = st?.lastResult
+    return {
+      on: r.enabled === true, count: r.agents ?? 0, running: !!st?.running,
+      last: st?.lastAt && l ? { at: st.lastAt, ok: l.ok, pushed: l.pushed ?? 0, pulled: l.pulled ?? 0, conflicts: l.conflicts ?? 0, ...(l.ok ? {} : { error: l.error }) } : null,
+    }
+  } catch { return AGENTS_OFF } // 老引擎没有这条路由 / 引擎没起:当关着
 }
 
 function readPlugins(): SyncSnapshot['plugins'] {
   const st = usePluginStore.getState()
-  return { on: ls.get(PLUGIN_SYNC_ALL_OFF_KEY) !== '1', count: st.plugins.filter((p) => p.syncData && pluginWanted(p, st.disabledIds)).length }
+  const ids = st.plugins.filter((p) => p.syncData && pluginWanted(p, st.disabledIds)).map((p) => p.id)
+  return { on: ls.get(PLUGIN_SYNC_ALL_OFF_KEY) !== '1', count: ids.length, ...pluginSyncSummary(ids) }
 }
 
 async function load(): Promise<void> {
@@ -103,16 +127,20 @@ async function load(): Promise<void> {
   const auth: AuthStatusInfo | null = await window.tangu?.authStatus?.().catch(() => null) ?? null
   const signedIn = !!auth?.loggedIn
   account = signedIn ? (auth?.accountId ?? auth?.username ?? 'default') : null
-  const [state, stats, agents, quota] = await Promise.all([
+  const [state, stats, agents, quota, storage, content] = await Promise.all([
     rs?.get().catch(() => null) ?? null,
     rs?.rootStats?.().catch(() => null) ?? null,
-    signedIn ? readAgents() : Promise.resolve({ on: false, count: 0 }),
+    signedIn ? readAgents() : Promise.resolve(AGENTS_OFF),
     signedIn ? window.tangu?.cloudFetch?.({ path: '/remotesync/vaults' }).catch(() => null) ?? null : null,
+    readStorage(account),
+    signedIn ? window.tangu?.cloudInvoke?.('penzor:sync:get').catch(()=>null) as Promise<any> : null,
   ])
   const cfg = state?.config
   let pending: NotesPending | null = null
   try { pending = account ? JSON.parse(ls.get(pendingKey(account)) || 'null') : null } catch { pending = null }
   snap = {
+    storage,
+    contentRules:!!content&&typeof content.ok==='boolean',
     signedIn,
     decided: !!account && ls.get(decidedKey(account)) === '1',
     notes: {
@@ -158,7 +186,8 @@ export function startSyncSetup(): void {
   // 分离窗 / 浮窗里也有插件实例会来拿状态,只有主窗口(没有 ?window=)替用户发这一次同步
   const isMain = (() => { try { return !new URLSearchParams(location.search).get('window') } catch { return false } })()
   void refreshSync().then(() => {
-    if (isMain && snap?.signedIn && snap.agents.on) void request(homeTarget(), '/agent/sync', { method: 'POST' }).catch(() => {})
+    // 跑完再读一遍:同步页上的「上次同步 / 冲突」跟着这一轮走
+    if (isMain && snap?.signedIn && snap.agents.on) void request(homeTarget(), '/agent/sync', { method: 'POST' }).catch(() => {}).then(() => refreshSync())
   })
 }
 
@@ -245,6 +274,7 @@ export async function resolveNotes(choice: NotesChoice, backupLabel: string): Pr
 export async function setSync(kind: SyncKind, on: boolean, who?: string | null): Promise<SyncResult> {
   try {
     if (kind === 'plugins') { ls.set(PLUGIN_SYNC_ALL_OFF_KEY, on ? null : '1'); return { ok: true } }
+    if (snap?.contentRules) {openPenzorSync();return {ok:true}}
     if (kind === 'agents') {
       await request(homeTarget(), '/agent/sync/default', { method: 'PUT', body: JSON.stringify({ enabled: on }) })
       const stored = await window.tangu?.getConfig?.().catch(() => null)
@@ -265,6 +295,10 @@ export async function applySyncChoices(choices: Record<SyncKind, boolean>): Prom
   if (!snap) await refreshSync() // 引导收尾时可能还没读过:不读就不知道是哪个账号,「点过了」记不上
   const who = account
   const out: SyncResult[] = []
+  if(snap?.contentRules){
+    if(!(await sameAccount(who)))return [{ok:false,error:'account-changed'}]
+    out.push(await setSync('plugins',choices.plugins,who));markSyncDecided();openPenzorSync();return out
+  }
   for (const kind of ['agents', 'plugins', 'notes'] as const) {
     if (account !== who) { out.push({ ok: false, error: 'account-changed' }); return out }
     if (kind === 'notes' && !choices.notes && snap?.notes.backend !== 'penzor') continue
@@ -286,6 +320,7 @@ export function markSyncDecided(): void {
 }
 
 export async function runSyncNow(): Promise<void> {
+  if(snap?.contentRules){await window.tangu?.cloudInvoke?.('penzor:sync:run');await refreshSync();return}
   if (snap?.notes.on) await window.remoteSync?.run().catch(() => null)
   if (snap?.agents.on) await request(homeTarget(), '/agent/sync', { method: 'POST' }).catch(() => null)
   await refreshSync()

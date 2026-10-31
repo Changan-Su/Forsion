@@ -189,6 +189,9 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
 .mini-card-edge[data-edge='ne'], .mini-card-edge[data-edge='sw'] { cursor: nesw-resize; }
 .mini-card-edge[data-edge='nw'], .mini-card-edge[data-edge='se'] { cursor: nwse-resize; }
 
+/* Keep the content scrollbar beside the right resize grip, rather than under it. */
+.mini-card-shell[data-resizable] .mini-card-main { margin-right: 4px; }
+
 /* 点击内容空白关闭菜单。透明层只住在 chrome 下方,不会阻断顶部按钮之间的切换。 */
 .mini-card-dismiss {
   position: absolute;

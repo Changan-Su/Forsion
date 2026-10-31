@@ -30,6 +30,8 @@ export interface AnchorOpts {
   prefer?: 'below' | 'above'
   /** 水平以 x 为中心(行内工具栏那种居中浮条),缺省是左对齐 x。 */
   center?: boolean
+  /** 右缘对齐 x(「⋯」按钮下方往左展开的菜单),缺省是左缘对齐 x。 */
+  alignEnd?: boolean
   margin?: number
 }
 
@@ -47,8 +49,8 @@ export function clampMenu(
   vh: number,
   opts: AnchorOpts = {},
 ): { left: number; top: number } {
-  const { anchorTop = y, prefer = 'below', center = false, margin = 8 } = opts
-  const left = Math.max(margin, Math.min(center ? x - w / 2 : x, vw - w - margin))
+  const { anchorTop = y, prefer = 'below', center = false, alignEnd = false, margin = 8 } = opts
+  const left = Math.max(margin, Math.min(center ? x - w / 2 : alignEnd ? x - w : x, vw - w - margin))
   const fits = (t: number): boolean => t >= margin && t + h <= vh - margin
   const below = y
   const above = anchorTop - h
@@ -64,7 +66,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
   ref: RefObject<HTMLDivElement | null>
   style: CSSProperties
 } {
-  const { anchorTop, prefer, center, margin = 8 } = opts
+  const { anchorTop, prefer, center, alignEnd, margin = 8 } = opts
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: x, top: y, maxWidth: undefined as number | undefined })
   useLayoutEffect(() => {
@@ -75,7 +77,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
       // offsetWidth/Height = 未缩放局部 px(且不含 pop-in 的 scale 动画)→ ×z 换到视口 px 再比。
       const vw = window.innerWidth
       const wV = el.offsetWidth * z
-      const v = clampMenu(x, y, wV, el.offsetHeight * z, vw, window.innerHeight, { anchorTop, prefer, center, margin })
+      const v = clampMenu(x, y, wV, el.offsetHeight * z, vw, window.innerHeight, { anchorTop, prefer, center, alignEnd, margin })
       // 比视口还宽(窄屏 × 固定宽度浮层):夹取只能贴左边、右边照样被裁 → 给个局部 px 的上限。
       const maxWidth = wV > vw - 2 * margin ? (vw - 2 * margin) / z : undefined
       setPos((prev) => {
@@ -93,7 +95,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
       window.removeEventListener(UI_ZOOM_EVENT, apply)
       ro.disconnect()
     }
-  }, [x, y, anchorTop, prefer, center, margin])
+  }, [x, y, anchorTop, prefer, center, alignEnd, margin])
   return { ref, style: { left: pos.left, top: pos.top, maxWidth: pos.maxWidth } }
 }
 
@@ -211,16 +213,20 @@ export function useEdgeNudge(
     if (!el) return
     const apply = (): void => {
       const z = zoomOf(el)
-      // 先撤掉上一次的推移再量,否则每次都在已推过的位置上再推一遍(自我叠加,菜单会一路飞出去)。
-      const prev = el.style.translate
+      // 先撤掉上一次的推移和收窄再量,否则每次都在已推过的位置上再推一遍(自我叠加,菜单会一路飞出去);
+      // 收窄不撤的话,量到的是收窄后的宽 → 判「放得下」→ 撤掉收窄 → 变宽又放不下,ResizeObserver 来回翻(边界比浮层窄时闪)。
+      const prev = el.style.translate, prevMax = el.style.maxWidth
       el.style.translate = ''
+      el.style.maxWidth = ''
       const r = el.getBoundingClientRect()
+      const ow = el.offsetWidth
       el.style.translate = prev
+      el.style.maxWidth = prevMax
       // ⚠️ 这里跑在 useLayoutEffect,而入场动画 `@keyframes pop` 正 `scale(0.97)` 着 —— rect 会**偏窄**,
       // 于是刚好溢出的菜单被判成「放得下」,dx=0,动画结束一还原就露在屏幕外(实测:390 屏上模式菜单
       // 量到 357 宽判定通过,实际 368 宽、右缘 387.5 已经出界)。offsetWidth 不吃 transform,是未缩放的
       // 真实宽(局部 px,×zoom 换到视口 px);pop 只有 translateY,缩放中心横向不动,故用 rect 中线还原左缘。
-      const w = el.offsetWidth * z
+      const w = ow * z
       const boundary = boundarySelector ? el.closest(boundarySelector)?.getBoundingClientRect() : undefined
       const boundaryLeft = boundary?.left ?? 0
       const boundaryRight = boundary?.right ?? window.innerWidth
@@ -246,13 +252,68 @@ export function useEdgeNudge(
   return { ref, style: { translate: fix.dx ? `${fix.dx}px` : undefined, maxWidth: fix.maxWidth } }
 }
 
-/** 一行接入版:把 `style={{ left: x, top: y }}` 换成 `<OverlayAt x={x} y={y} className=…>`。 */
+/**
+ * 浮层退场(DESIGN §3「动效」):条件渲染的浮层一关就从 DOM 里没了,来不及放退场。这里在卸载那一刻拷一份「替身」
+ * 留在原处放完退场再摘 —— 调用方不用改成延迟卸载。
+ *
+ * - 有没有退场、怎么退由 CSS 决定:替身带 `data-lcl-exit`,命中了退场规则(base.css 那张名单)就放完再摘;
+ *   没命中(没有动画)就立刻摘,等于原样。仪器 `check:motion` 钉着进场名单 == 退场名单。
+ * - 卸载时父节点可能一起被拆(Ribbon 的 backdrop 包着菜单):替身落进**还在的最近祖先**,作用域类(`.am-app`…)和变量照旧;
+ *   拆掉的那几层浅拷一份套在外面(透明、不吃指针),层叠上下文与原来相同。
+ * - 替身 inert + aria-hidden + 不吃指针:读屏、焦点、点击都只认真菜单;输入框的值手动带上(cloneNode 不拷 value)。
+ * - 组件常驻、靠 `open` 决定画不画的(命令面板、⌘P)传 open:翻成 false 时同样留替身。
+ */
+export function useExitGhost(ref: RefObject<HTMLElement | null>, open = true): void {
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!open || !el) return
+    // 祖先链在挂上时就记下:open 翻成 false 那一次,清理跑在 React 摘掉节点之后(卸载那一次则在之前)。
+    const chain: Element[] = []
+    for (let p = el.parentElement; p; p = p.parentElement) chain.push(p)
+    return () => {
+      const next = el.isConnected ? el.nextSibling : null
+      const ghost = el.cloneNode(true) as HTMLElement
+      const src = el.querySelectorAll('input, textarea')
+      ghost.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((g, i) => { g.value = (src[i] as HTMLInputElement | undefined)?.value ?? g.value })
+      ghost.removeAttribute('id')
+      ghost.setAttribute('aria-hidden', 'true')
+      ghost.setAttribute('data-lcl-exit', '')
+      ghost.inert = true
+      ghost.style.pointerEvents = 'none'
+      queueMicrotask(() => {
+        if (el.isConnected) return // 没真卸(StrictMode 的演习卸载、换 key 前后同位)
+        const hostAt = chain.findIndex((p) => p.isConnected)
+        if (hostAt < 0) return
+        const host = chain[hostAt]
+        // 一起被拆的那几层(Ribbon 的 backdrop)照原样套回去,只当定位 / 层叠的壳:不上色、不动画、不吃指针。
+        // 少了它,替身落进 .rb 的层叠上下文,会被旁边的侧栏盖住(10-23 实拍)。
+        let outer: Element = ghost
+        for (const w of chain.slice(0, hostAt)) {
+          const shell = w.cloneNode(false) as HTMLElement
+          shell.removeAttribute('id')
+          shell.setAttribute('aria-hidden', 'true')
+          shell.inert = true
+          Object.assign(shell.style, { background: 'none', boxShadow: 'none', backdropFilter: 'none', border: '0', animation: 'none', pointerEvents: 'none' })
+          shell.appendChild(outer)
+          outer = shell
+        }
+        host.insertBefore(outer, next?.parentNode === host ? next : null)
+        const anims = ghost.getAnimations?.() ?? []
+        if (!anims.length) { outer.remove(); return }
+        void Promise.allSettled(anims.map((a) => a.finished)).then(() => outer.remove())
+      })
+    }
+  }, [ref, open])
+}
+
+/** 一行接入版:把 `style={{ left: x, top: y }}` 换成 `<OverlayAt x={x} y={y} className=…>`。关掉时放退场(useExitGhost)。 */
 export function OverlayAt({
   x,
   y,
   anchorTop,
   prefer,
   center,
+  alignEnd,
   margin,
   innerRef,
   className,
@@ -265,6 +326,7 @@ export function OverlayAt({
   anchorTop?: number
   prefer?: 'below' | 'above'
   center?: boolean
+  alignEnd?: boolean
   margin?: number
   /** 调用方也要拿这个 DOM(如判定「点在菜单外」)时传进来;内部定位仍用自己的 ref。 */
   innerRef?: (el: HTMLDivElement | null) => void
@@ -272,7 +334,8 @@ export function OverlayAt({
   style?: CSSProperties
   children?: ReactNode
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className' | 'children'>) {
-  const p = useClampedMenu(x, y, { anchorTop, prefer, center, margin })
+  const p = useClampedMenu(x, y, { anchorTop, prefer, center, alignEnd, margin })
+  useExitGhost(p.ref)
   return (
     <div
       ref={(el) => {
@@ -286,4 +349,23 @@ export function OverlayAt({
       {children}
     </div>
   )
+}
+
+/** DOM-owned popovers share the same exit CSS as OverlayAt. Cleanup runs on the
+ * live surface immediately; only an inert visual copy survives until it fades. */
+export function removeOverlayWithExit(el: HTMLElement): void {
+  if (!el.isConnected) { el.remove(); return }
+  const ghost = el.cloneNode(true) as HTMLElement
+  const inputs = el.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')
+  ghost.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((g, i) => { g.value = inputs[i]?.value ?? g.value })
+  ghost.removeAttribute('id')
+  ghost.querySelectorAll('[id]').forEach((n) => n.removeAttribute('id'))
+  ghost.setAttribute('aria-hidden', 'true')
+  ghost.dataset.lclExit = ''
+  ghost.inert = true
+  ghost.style.pointerEvents = 'none'
+  el.replaceWith(ghost)
+  const animations = ghost.getAnimations?.() ?? []
+  if (!animations.length) ghost.remove()
+  else void Promise.allSettled(animations.map((a) => a.finished)).then(() => ghost.remove())
 }

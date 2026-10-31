@@ -4,7 +4,7 @@
  * 病史:硬编码 'auto-edit',用户换到全自动后每建一个会话都要重设一次。
  */
 import { describe, it, expect } from 'vitest'
-import { stickyDefaults, DEFAULT_APPROVAL } from './appStore'
+import { stickyDefaults, DEFAULT_APPROVAL } from '../../../../tangu-agent/src/contracts/sessionDefaults'
 import { newSessionConfig, settleModes, settlePlanMode, settleUltra, teamModeOn } from './projectSettings'
 import type { StoredDesktopConfig } from '../types'
 
@@ -37,6 +37,14 @@ describe('stickyDefaults', () => {
     expect(stickyDefaults(dc, false).ultra).toBeUndefined() // 云端会话:没有 delegate,药丸也显示不出来
     expect(stickyDefaults(dc, true, 'chat').ultra).toBeUndefined() // chat 槽没有 Ultra
     expect(stickyDefaults(cfg({ lastThinkingLevel: 'high', lastUltra: true }), true).ultra).toBeUndefined()
+  })
+
+  it('Fast 记住了就带上(chat / work、本机 / 云端都一样);没记过不带键', () => {
+    for (const [host, preset] of [[true, undefined], [false, undefined], [true, 'chat']] as const) {
+      expect(stickyDefaults(cfg({ lastFast: true }), host, preset).fast).toBe(true)
+    }
+    expect('fast' in stickyDefaults(cfg({ lastFast: false }), true)).toBe(false)
+    expect('fast' in stickyDefaults(null, true)).toBe(false)
   })
 
   it('建会话三层次序下 Ultra 只跟 max 同在:项目默认 / 草稿显式改过档就不带上次的 Ultra', () => {

@@ -35,6 +35,8 @@ import { registerToolProvider, unregisterToolProvider, listToolProviders } from 
 import { registerPlugin, getPluginMeta, pluginsNeedingRestart, setPluginDormant, unregisterPlugin } from './registry.js';
 import * as pluginStore from './settingsStore.js';
 import { wechatRemote } from '../services/wechatRemote.js';
+import { channelHub } from '../channels/hub.js';
+import { channelSettings } from '../channels/config.js';
 import { createTanguModule } from '../index.js';
 import { createHttpBrain } from '../adapters/standalone/httpBrain.js';
 import { createNoopBilling } from '../adapters/standalone/noopBilling.js';
@@ -49,6 +51,7 @@ import {
 } from './loader.js';
 import { appendActivityLine } from '../services/userActivity.js';
 import { seedBundleAgents } from './bundles.js';
+import { createOfficialCloud, isOfficialEnginePlugin } from './official.js';
 import { attachPluginMcp } from '../mcp/pluginServers.js';
 import { attachPluginHooks } from '../hooks/pluginHooks.js';
 import type {
@@ -76,11 +79,14 @@ const sdk: Omit<TanguSdk, 'runs' | 'engines' | 'workspaces' | 'automation'> = {
   createProfileStore,
   pluginStore,
   sendWechatMedia: (userId, sessionId, buffer, opts, signal) => wechatRemote.sendMediaForSession(userId, sessionId, buffer, opts, signal),
+  channelSettings,
 };
 
 /** 一次激活的效果台账。停用时据此逐条撤销;撤销后 disposed=true,旧 ctx 的迟到注册一律忽略。 */
 interface Instance {
   plugin?: TanguPlugin;
+  /** 本次激活的官方判定(startEntry 里定,之后不变)。 */
+  official?: boolean;
   disposed: boolean;
   runtimeDisposers: (() => void)[];
   /** activate 已成功返回:此后 registerRoutes 立即挂;之前先攒着(激活失败就不必挂)。 */
@@ -120,7 +126,7 @@ function newInstance(metaIds: Set<string> = new Set()): Instance {
   };
 }
 
-function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
+function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): TanguPluginContext {
   const id = d.manifest.id;
   const toolAliases = new Map<string, string>();
   const metaAliases = new Map<string, string>();
@@ -148,7 +154,7 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
       p = scopedProvider(p);
       inst.providerIds.add(p.id);
       providerOwner.set(p.id, id);
-      registerToolProvider({ ...p, origin: 'plugin' }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
+      registerToolProvider({ ...p, origin: 'plugin', official }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
     },
     registerSkillProvider: (provider) => {
       if (!live('技能')) return;
@@ -164,6 +170,8 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
         if (!metaAliases.has(meta.id)) metaAliases.set(meta.id, metaAliases.size === 0 || meta.id === d.packageId ? id : `market-${createHash('sha256').update(id + ':' + meta.id).digest('hex').slice(0, 48)}`);
         meta = { ...meta, id: metaAliases.get(meta.id)!, ...(meta.toolProvider ? { toolProvider: scopedProvider(meta.toolProvider) } : {}) };
       }
+      // official 只认宿主的判定:插件自己在 provider 上写的值一律盖掉(registry.registerPlugin 展开 toolProvider 时保留它)。
+      if (meta.toolProvider) meta = { ...meta, toolProvider: { ...meta.toolProvider, official } };
       inst.metaIds.add(meta.id);
       if (meta.toolProvider) { // registry 顺带注册的 provider 也进台账
         inst.providerIds.add(meta.toolProvider.id);
@@ -205,9 +213,18 @@ function makeContext(d: DiscoveredPlugin, inst: Instance): TanguPluginContext {
       });
       if (inst.activated) mountRoutes(id, inst);
     },
+    registerChannel: (spec) => {
+      if (live('通道')) inst.runtimeDisposers.push(channelHub.registerChannel(spec)); // 停用时 stopEntry 跑 runtimeDisposers 摘掉
+    },
     sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
-      automation: { ...automation, save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }) },
+      automation: {
+        ...automation,
+        save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }),
+        registerTrigger: (spec) => { const off = automation.registerTrigger(spec); inst.runtimeDisposers.push(off); return off; }, // 停用时 stopEntry 注销
+      },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
+    // 只有官方插件(签名捆绑包,./official.ts)有这个键;其余插件的 ctx 上根本没有它(不是一个返回错误的空壳)。
+    ...(official ? { cloud: createOfficialCloud(() => !inst.disposed) } : {}),
     log: (msg) => console.log(`[plugin:${id}] ${msg}`),
     paths: { pluginDir: d.dir, dataDir: path.join(tanguHome(), 'plugin-data', id) },
     activity: {
@@ -259,6 +276,9 @@ interface Entry {
   d: DiscoveredPlugin;
   /** 已 import 的模块对象:停用→启用复用,不重 import(ESM 模块永不卸载)。原地升级时清空并换新 gen。 */
   plugin?: TanguPlugin;
+  /** plugin 这个模块对象 import 之前那次官方判定过没过。复用缓存模块时要它与当次判定**同时**为真:
+   *  被篡改时 import 的模块,文件恢复原样后再启用也不能升成官方(Codex 10-27 #1)。 */
+  pluginOfficial?: boolean;
   /** 入口破缓存代号(0 = 原始 URL)。 */
   gen: number;
   /** 当前实例;undefined = 休眠。 */
@@ -293,6 +313,8 @@ export interface PluginStatus {
   settling?: boolean;
   /** 此刻在跑的实例名下注册的工具名(模型看到的名字),不含和核心工具或别的插件撞名的。桌面据此只让插件给自己引擎半身的工具挂结果卡片。 */
   tools?: string[];
+  /** 在跑的实例过了官方签名判定(见 official.ts)。桌面据此放行官方插件给少数核心工具画结果卡(toolResultCards.ts)。 */
+  official?: boolean;
 }
 
 /** 生命周期限时(测试改小)。超时只是不再等,对方仍在后台跑 —— 见 withDeadline。 */
@@ -409,18 +431,25 @@ async function startEntry(e: Entry): Promise<boolean> {
   const id = e.d.manifest.id;
   const inst = newInstance(e.metaIds);
   e.inst = inst;
+  let official = false;
   try {
     // import 与 activate 一起限时:吊死的连接 / 顶层 await 不许堵住整条生命周期链(重扫、开关、卸载全排在它后面)
     await withDeadline(e, 'activate', lifecycleTimeouts.activateMs, async () => {
+      // 官方判定每次激活现做,且在首次 import 之前(升级 / 重扫换了代码就重新核;核不过照常加载,只是不当官方)。
+      const verified = await isOfficialEnginePlugin(e.d);
       if (e.plugin) {
         assertNativePluginsAllowed(); // 复用已 import 的模块对象也要过沙箱闸
+        official = verified && e.pluginOfficial === true;
       } else {
+        official = verified;
         if (!e.gen && importedUrls.has(e.d.entryUrl)) e.gen = ++genSeq; // 卸载后同路径重装:破入口缓存
         importedUrls.add(e.d.entryUrl);
         e.plugin = await loadPlugin(e.d, e.gen);
+        e.pluginOfficial = verified;
       }
       inst.plugin = e.plugin;
-      await e.plugin.activate(makeContext(e.d, inst));
+      inst.official = official;
+      await e.plugin.activate(makeContext(e.d, inst, official));
     });
     inst.activated = true;
     e.failed = false;
@@ -628,7 +657,7 @@ export function rescanPlugins(): Promise<{ addedIds: string[]; reloadedIds: stri
     for (const id of removedIds) dropEntry(id);
     for (const e of reloading) {
       const d = found.get(e.d.manifest.id)!;
-      Object.assign(e, { d, plugin: undefined, gen: ++genSeq, failed: false, lastError: undefined, leaving: false });
+      Object.assign(e, { d, plugin: undefined, pluginOfficial: undefined, gen: ++genSeq, failed: false, lastError: undefined, leaving: false });
       pluginsNeedingRestart.delete(d.manifest.id);
     }
     const fresh = new Set<string>();
@@ -697,6 +726,9 @@ export function removePluginLive(id: string): Promise<void> {
   });
 }
 
+/** 从回收站放回来的同一份代码:撤掉卸载墓碑,下一次重扫照常加载。 */
+export function forgetUninstalled(id: string): void { uninstalled.delete(id); }
+
 /** 列表用的运行态(同步读,不进串行队列)。没进生命周期的 meta(编进 app 的 builtin 等):active = 启用态,无 version。 */
 export function pluginStatus(id: string): PluginStatus {
   const e = entries.get(id) ?? [...entries.values()].find((x) => x.metaIds.has(id));
@@ -719,6 +751,7 @@ export function pluginStatus(id: string): PluginStatus {
     }
     const tools = [...owners].filter(([, o]) => o.size === 1 && o.has(e.d.manifest.id)).map(([name]) => name);
     if (tools.length) out.tools = tools;
+    if (e.inst.official) out.official = true;
   }
   return out;
 }

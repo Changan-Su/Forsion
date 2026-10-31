@@ -30,7 +30,7 @@
  *    它是 inset:0 的铺满层,rect 恒等于整列,量它必然「完美居中」= 假绿。
  * ⚠️ 先 npm run build:量的是 out/ 里的产物,源码改了没构建就是白测。
  * ⚠️ Amadeus 库由本脚本种在临时目录(seedVault:Alpha / Beta 两篇)。不种的话首启无 lastVault 会落到
- *    本机真实的 ~/Forsion-Dev/Amadeus:结果随那份库的第一篇而变,还会往真库里补种 Calendar.db。
+ *    本机真实的 ~/Forsion-Dev/Amadeus:结果随那份库的第一篇而变。
  *    6 还隐含 host 会话(引用是本机绝对路径,云端会话按设计不挂 —— 见 Composer2 autoChip 的 isHost 闸)。
  *
  * 用法:npm run check:chatside
@@ -288,16 +288,17 @@ async function main() {
   )
   await win.screenshot({ path: selectionMenuShot })
   await askButton.click()
+  await win.locator('.quote-reply-input').waitFor({ timeout: 5000 }).then(() => win.keyboard.press('Enter')).catch(() => {}) // 就地回复框:空着回车 = 只挂引用
   await win.waitForTimeout(1600)
   const selectionHandoff = await win.evaluate(`(() => {
     const main = document.querySelector('[data-chat-surface="chat"]')
     const panel = document.querySelector('[data-chat-surface="chat-panel"]')
-    const quote = (root) => root?.querySelector('.t2c-quote-text')?.textContent?.trim() || ''
+    const quote = (root) => root?.querySelector('.t2c-tilerow .att-tile--quote .att-tile-head')?.textContent?.trim() || ''
     return {
       panelMounted: !!panel,
       panelQuote: quote(panel),
       mainQuote: quote(main),
-      mainCards: main?.querySelectorAll('.t2c-quote').length || 0,
+      mainCards: main?.querySelectorAll('.t2c-tilerow .att-tile--quote').length || 0,
       focused: main?.querySelector('.t2c-ta') === document.activeElement,
       disabled: !!main?.querySelector('.t2c-ta')?.disabled,
     }
@@ -311,7 +312,7 @@ async function main() {
   await win.screenshot({ path: selectionPanelShot })
   await win.evaluate("document.querySelector('[data-selection-probe]')?.remove()")
   // 引用卡摘掉再往下量:后面几条量的是输入卡的常态高度。
-  await win.locator('[data-chat-surface="chat"] .t2c-quote-x').first().click().catch(() => {})
+  await win.locator('[data-chat-surface="chat"] .att-tile-x').first().click().catch(() => {})
   await win.waitForTimeout(300)
 
   // ── 28 Tangu 右栏 = 同一正式会话的 ChatView 承载形态 ────────────────────────
@@ -683,7 +684,7 @@ async function main() {
     const card = document.querySelector('.t2c-card')
     out['t2c-card'] = card ? alphaOf(getComputedStyle(card).borderTopColor) : null
     // 这些块要有真实消息才渲染 → 插同类名探针,量的是规则本身
-    for (const cls of ['t2-tool', 't2-todo', 't2-panelcard', 't2-tsum-in', 'agent-desk-card', 'tool-card', 'tool-group']) {
+    for (const cls of ['t2-tool', 't2-todo', 't2-panelcard', 't2-card', 'agent-desk-card', 'tool-card', 'tool-group']) { // 10-25 起摘要栏每段一张 .t2-card
       const p = document.createElement('div')
       p.className = cls
       col.appendChild(p)
@@ -742,7 +743,7 @@ async function main() {
       ['t2sw-plug-menu', 't2sw-plug-menu', '', 'fallback'],
       ['selbar', 'ui-popover selbar', '', 'menu'],
       ['selbar-dense', 'ui-popover selbar', '', 'fallback', 'data-dense'],
-      ['amx-tip', 'amx-tip', '', 'fallback'],
+      ['lcl-tip', 'lcl-tip', '', 'fallback'],
       ['amx-db-pop', 'amx-db-pop', '', 'menu'],
       ['amx-cal-agenda', 'amx-cal-agenda', '', 'menu'],
       ['amx-cal-cardwrap', 'amx-cal-cardwrap', '', 'menu'],

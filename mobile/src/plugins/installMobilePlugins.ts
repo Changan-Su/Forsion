@@ -14,6 +14,9 @@ import { APP_VERSION } from '@/changelog'
 import { capacitorPluginFs, hasNativeMarketDownload, isDebuggableAndroid, nativeMarketDownload } from './capacitorPluginFs'
 import { createPluginHost, type MobilePluginHost } from './pluginHost'
 import { createFetchDownload, createMobileMarket, type MobileMarket } from './mobileMarket'
+import { withBundledCalendar } from './bundledCalendar'
+import { withBundledExtend } from './bundledExtend'
+import { isCorePlugin } from '../../../desktop/shared/corePlugins'
 
 registerMessages({
   'mobilemarket.noCloud': { zh: '还没有连接 Forsion 云端，无法使用应用市场', en: 'Not connected to Forsion cloud, so the market is unavailable' },
@@ -24,6 +27,14 @@ registerMessages({
   'mobilemarket.desktopOnlyPlugin': {
     zh: '这个插件声明了「仅支持桌面端」，无法安装到手机上',
     en: 'This plugin is marked "Desktop only" and can’t be installed on a phone',
+  },
+  'mobilemarket.unsupportedPlatform': {
+    zh: '这个插件不支持安卓手机，无法安装到手机上',
+    en: 'This plugin doesn’t support Android and can’t be installed on a phone',
+  },
+  'mobilemarket.incompatibleVersion': {
+    zh: '这个插件要求 Forsion 版本 {req}，当前是 {current}，无法安装',
+    en: 'This plugin requires Forsion {req} (this app is {current}) and can’t be installed',
   },
   'mobilemarket.requiresDesktopApp': {
     zh: '这个插件要配合电脑上的应用「{app}」使用，无法安装到手机上',
@@ -51,7 +62,8 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
   const fs = capacitorPluginFs()
   // 门禁用的宿主版本 = 渲染层随包的 CHANGELOG 版本(移动端与桌面同一份渲染层源码,插件 API 能力按它算);
   // 顶节是 Unreleased 时 APP_VERSION 为空 → 传 null,不按 0.0.0 误杀声明了 minAppVersion 的插件。
-  const host = createPluginHost(fs, { appVersion: () => APP_VERSION || null })
+  const version = () => APP_VERSION || null
+  const host = withBundledExtend(withBundledCalendar(createPluginHost(fs, { appVersion: version }), version), version)
   const market = createMobileMarket({
     fs,
     appVersion: () => APP_VERSION,
@@ -67,12 +79,14 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
     },
     reservedIds: async () => {
       const { usePluginStore } = await import('@/amadeus/plugins/pluginStore')
-      return usePluginStore.getState().plugins.filter((p) => p.builtin).map((p) => p.id)
+      return usePluginStore.getState().plugins.filter((p) => p.builtin || isCorePlugin(p)).map((p) => p.id)
     },
     t: (key, vars) => translate(key, vars),
   })
   const t = window.tangu as unknown as Record<string, unknown> | undefined
   if (t) {
+    // Only this app build has the verified bundled renderer and host account transport.
+    if (typeof window.tangu?.account?.request === 'function' && typeof window.tangu?.account?.status === 'function') t.extendMobile = true
     t.marketTypes = market.marketTypes
     t.marketList = market.marketList
     t.marketDetail = market.marketDetail

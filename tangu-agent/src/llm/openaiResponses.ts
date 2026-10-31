@@ -13,6 +13,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
+import { isStreamContextOverflow } from '../services/contextWindowStore.js';
 import { ACCOUNT_MARK, RUN_MARK } from './openaiCompat.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { stringifyWellFormed } from './wellFormedJson.js';
@@ -118,6 +119,9 @@ export function openaiToResponsesBody(payload: any): any {
   }
   // GPT-5 系 verbosity(coding 预设下发 low,对齐 codex 模型默认;省可见正文的输出量)。
   if (payload.text_verbosity) body.text = { verbosity: payload.text_verbosity };
+  // Fast 档(multiBrain 只在 Codex 订阅 + 目录列了 Fast 时写):Codex CLI 同款顶层字段。响应里的 service_tier 恒回 default,
+  // 别拿它判断生效与否(10-25 抓 Codex CLI 自己的请求,同样回 default)。
+  if (payload.service_tier) body.service_tier = payload.service_tier;
   // 官方 Responses(BYOK)支持 max_output_tokens;**订阅私有端点直接 400 拒**("Unsupported parameter")
   // ——未知端点绝不发未知字段。实证:self_brainstorm 真机首跑三席全灭、compaction 传 maxTokens 同病(07-31)。
   const cap = payload.max_completion_tokens ?? payload.max_tokens;
@@ -193,17 +197,22 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
 
   if (!response.ok || !response.body) {
     let detail = '';
+    let resetsAtMs = 0;
+    let code = '';
     try {
       const j: any = await response.json();
       detail = j?.error?.message || JSON.stringify(j).slice(0, 300);
+      code = j?.error?.code || j?.error?.type || '';
       // Codex 订阅额度用尽:带上重置时间,否则用户只看到一句「usage limit」不知道等多久(PI-DSH 评审 R5)。
+      // 绝对时刻(ISO)也写进去:界面据此说「X 点重置」;额度用完接力据 err.resetsAt 判重置前直接用后备。
       const resetsAt = Number(j?.error?.resets_at) || (Number(j?.error?.resets_in_seconds) ? Date.now() / 1000 + Number(j.error.resets_in_seconds) : 0);
       if (resetsAt && /usage/i.test(`${j?.error?.type || ''} ${j?.error?.code || ''} ${detail}`)) {
-        detail += ` (resets in ~${Math.max(1, Math.round((resetsAt * 1000 - Date.now()) / 60_000))} min)`;
+        resetsAtMs = resetsAt * 1000;
+        detail += ` (resets in ~${Math.max(1, Math.round((resetsAtMs - Date.now()) / 60_000))} min, at ${new Date(resetsAtMs).toISOString()})`;
       }
     } catch { /* keep empty */ }
     const status = response.status === 401 || response.status === 403 ? 502 : response.status || 502;
-    throw new LlmError(status, detail || `Codex upstream error ${response.status}`);
+    throw Object.assign(new LlmError(status, detail || `Codex upstream error ${response.status}`), code ? { code } : {}, resetsAtMs ? { resetsAt: resetsAtMs } : {});
   }
 
   let content = '';
@@ -319,7 +328,17 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
           if (typeof rt === 'number') usage.reasoning_tokens = rt;
         }
       } else if (type === 'response.failed' || type === 'error') {
-        throw new LlmError(502, ev.response?.error?.message || ev.error?.message || 'Codex stream error');
+        // 流里的失败(Codex 额度用完也会走这里):code 和重置时刻同 HTTP 429 那条路一样带上，额度接力才认得出、界面才说得出几点重置
+        // 标准 error 事件的 code / message 在顶层(openai-node ResponseErrorEvent);Codex 有时包在 error 里
+        const e = ev.response?.error || ev.error || ev;
+        let msg = e.message || 'Codex stream error';
+        const resetsAt = Number(e.resets_at) || (Number(e.resets_in_seconds) ? Date.now() / 1000 + Number(e.resets_in_seconds) : 0);
+        if (resetsAt) msg += ` (resets in ~${Math.max(1, Math.round((resetsAt * 1000 - Date.now()) / 60_000))} min, at ${new Date(resetsAt * 1000).toISOString()})`;
+        const code = e.code || (e === ev ? undefined : e.type);
+        // 超长(HTTP 200 的流里送来 context_length_exceeded,借 magpie #4040)按 400 抛:走 agentLoop 的压缩后重试、学真实上限;
+        // 按 502 抛会被当成网关抖动原样重发 3 次。额度类带着 code 仍是 502(retry.ts 按 code 认),其余照旧 502。
+        const overflow = isStreamContextOverflow(code, msg);
+        throw Object.assign(new LlmError(overflow ? 400 : 502, msg), { code }, resetsAt ? { resetsAt: resetsAt * 1000 } : {});
       }
     }
   }

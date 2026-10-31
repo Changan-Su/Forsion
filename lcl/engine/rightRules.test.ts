@@ -186,6 +186,22 @@ describe('右栏主视图规则:桌面 store', () => {
     expect(api.activePanel?.params).toMatchObject({ __type: 'chatv' })
   })
 
+  // 3a:主视图成了占位(插件没就位 / 已关掉),按缺省组对账会把它的伴随视图(打了规则标)关掉并存盘,参数一丢就回不来了
+  it('主视图没注册(占位):右栏不对账,伴随视图原样留着;注册回来照常', async () => {
+    const { panels } = await boot()
+    useWorkspace.getState().openView('notev', { notePath: 'a.md' }, 'main', { newTab: true })
+    await flush()
+    expect(right(panels).tabs).toEqual(['side', 'outline', 'back'])
+    unregisterView('notev')
+    useWorkspace.getState().activateLeaf(mainId(panels, 'notev'))
+    await flush()
+    expect(right(panels).tabs).toEqual(['side', 'outline', 'back'])
+    registerView(VIEWS.find((v) => v.type === 'notev')!)
+    useWorkspace.getState().activateLeaf(mainId(panels, 'chatv'))
+    await flush()
+    expect(right(panels).tabs).toEqual(['det', 'files', 'outline'])
+  })
+
   it('视图拿到的 params 里没有来源标记', async () => {
     const { panels } = await boot()
     useWorkspace.getState().openView('notev', { notePath: 'a.md' }, 'main', { newTab: true })

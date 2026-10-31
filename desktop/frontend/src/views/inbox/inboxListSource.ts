@@ -21,18 +21,23 @@
  */
 import { useWorkspace } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import type { ListGroup, ListItem, ListSourceContribution } from '@amadeus/plugins/types'
+import type { ListGroup, ListItem } from '@amadeus/plugins/types'
+import type { HostListSource } from '@amadeus/plugins/pluginText'
 import { translate } from '../../i18n'
 import { formatListTime } from '../../format/time'
 import { useApp } from '../../stores/appStore'
 import { homeAgentAvatars, subscribeHomeAgents } from '../../stores/homeCatalog'
-import { useInbox, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
+import { useInbox, inboxDeleteConfirm, isAutomationSender, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { INBOX_WORKSPACE_MODE } from '../workspaceMode'
+import { setHostListEmpty } from '../hostListEmpty'
+import './inboxEmptyMessages'
+import { Inbox } from 'lucide-react'
 
 // 源身份单源:从工作区模式串 `plugin:<pid>:<srcId>` 拆出来 —— Space 默认档 / workspaceSource / 注册三处永远一致。
 const [, SOURCE_OWNER, SOURCE_ID] = INBOX_WORKSPACE_MODE.split(':')
 const UNREAD = 'unread'
 const ARCHIVED = 'archived'
+const MUSE_READ = 'muse-read'
 
 type SourceKind = 'forsion' | 'automation' | 'agents' | 'system'
 // 图标按来源一处定:组头、搜索结果的行首用的是同一枚(阅读面板头部的 SenderGlyph 画的也是这几个字形)。
@@ -102,7 +107,8 @@ function toItem(m: InboxMessage, parent?: string): ListItem {
     key: m.id,
     title: m.title,
     ...(subtitle ? { subtitle } : {}),
-    hint: timeAgo(m.created_at),
+    // Muse 替你标的:行尾带一句,和时间同一种灰字
+    hint: m.read_by === 'muse' ? `${translate('inbox.readByMuse')} · ${timeAgo(m.created_at)}` : timeAgo(m.created_at),
     // 行首 = 谁发的:Agent 有头像用头像(iconUrl),没有就是 agent 那枚;其余按来源。组里的行宿主不画它。
     icon: SOURCE_ICON[sourceKind(m)],
     ...(avatar ? { iconUrl: avatar } : {}),
@@ -140,7 +146,7 @@ function grouped(list: InboxMessage[]): ListItem[] {
   return out
 }
 
-export const inboxListSource: ListSourceContribution = {
+export const inboxListSource: HostListSource = {
   id: SOURCE_ID,
   get title() { return translate('space.inbox') },
   search: true,
@@ -150,6 +156,7 @@ export const inboxListSource: ListSourceContribution = {
     // 未归档那份里可能有刚点了「归档」、PATCH 还没回来的行 —— 按字段立即挪走。
     let list = group === ARCHIVED ? st.archived : st.messages.filter((m) => !m.archived_at)
     if (group === UNREAD) list = list.filter((m) => !m.read_at)
+    if (group === MUSE_READ) list = list.filter((m) => m.read_by === 'muse')
     const q = f?.query?.trim().toLowerCase()
     // 搜索结果是平铺的(宿主搜索时不画层级):每行自己带上发信人
     if (q) return list.filter((m) => m.title.toLowerCase().includes(q) || (m.body || '').toLowerCase().includes(q) || senderOf(m).toLowerCase().includes(q)).map((m) => toItem(m))
@@ -157,9 +164,12 @@ export const inboxListSource: ListSourceContribution = {
   },
   groups(): ListGroup[] {
     const st = useInbox.getState()
+    const museRead = st.messages.filter((m) => m.read_by === 'muse' && !m.archived_at).length
     return [
       { key: UNREAD, title: translate('inbox.filter.unread'), count: st.unreadCount },
       { key: ARCHIVED, title: translate('inbox.filter.archived'), ...(st.archivedLoaded ? { count: st.archived.length } : {}) },
+      // Muse 标过才有这一项(手机收件箱在本地,永远没有)
+      ...(museRead ? [{ key: MUSE_READ, title: translate('inbox.filter.museRead'), count: museRead }] : []),
     ]
   },
   activeKey: () => useInbox.getState().selectedId,
@@ -190,10 +200,17 @@ export const inboxListSource: ListSourceContribution = {
       // 图标给手机上左滑出来的圆钮用(只有图标,不带字):成对的动作各用各的
       { id: 'read', icon: m.read_at ? 'mail' : 'mail-open', label: translate(m.read_at ? 'inbox.action.markUnread' : 'inbox.action.markRead'), run: () => st.markRead(m.id, !m.read_at) },
       { id: 'archive', icon: m.archived_at ? 'unarchive' : 'archive', label: translate(m.archived_at ? 'inbox.action.unarchive' : 'inbox.action.archive'), run: () => st.markArchived(m.id, !m.archived_at) },
-      { id: 'delete', icon: 'trash', label: translate('inbox.action.delete'), danger: true, run: () => { if (window.confirm(translate('inbox.deleteConfirm', { title: m.title }))) st.remove(m.id) } },
+      { id: 'delete', icon: 'trash', label: translate('inbox.action.delete'), danger: true, run: () => { if (window.confirm(inboxDeleteConfirm(m))) st.remove(m.id) } },
     ]
   },
 }
+
+// 一封都没有时,主区阅读面板说「收件箱是空的」(InboxReaderView);列表这边就不再重复「暂无内容」。文案同一份。
+setHostListEmpty(inboxListSource, {
+  space: 'inbox', icon: Inbox,
+  title: () => translate('inbox.reader.emptyTitle'), line: () => translate('inbox.reader.emptyLine'),
+  ready: () => useInbox.getState().listLoaded,
+})
 
 /** 宿主内置源直接进插件仓的 listSources(工作区视图只认那一处);幂等 —— HMR / 重复装配不叠第二份。
  *  ponytail: 源主人名 'inbox' 若与某个外置插件同名,那个插件卸载会顺手摘掉本源;真撞上再给宿主源单开一格。 */

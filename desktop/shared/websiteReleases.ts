@@ -2,7 +2,7 @@
  * What's new 弹窗的数据:官网「更新动态」(forsion.net/releases)的已发布快照 + 打包进来的 CHANGELOG。
  * 主进程(拉取校验)与渲染层(合并成版本列表)共用;纯函数,不碰 Electron / DOM。
  */
-import { isNewer } from './updateVersion'
+import { isNewer, parseReleaseVersion } from './updateVersion'
 
 export const WEBSITE_ORIGIN = 'https://forsion.net'
 export const WEBSITE_RELEASES_URL = `${WEBSITE_ORIGIN}/api/website/releases`
@@ -15,7 +15,8 @@ export interface WebsiteRelease {
 }
 
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined)
-const VERSION = /^\d+(\.\d+)*(-[0-9A-Za-z.-]+)?$/ // 测试版通道的 2.13.5-beta.1 也算
+// Two-part editorial overviews ("2.12") are not installer identities.
+const articleVersion = (v: string) => !!parseReleaseVersion(v) || /^(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(v)
 
 /** 只收形状对的条目;字段缺失 / 类型不对的整条丢掉,不让一条坏数据带崩弹窗。 */
 export function parseWebsiteReleases(body: unknown): WebsiteRelease[] {
@@ -24,7 +25,7 @@ export function parseWebsiteReleases(body: unknown): WebsiteRelease[] {
   const out: WebsiteRelease[] = []
   for (const r of list) {
     const version = str(r?.version), zh = str(r?.markdown?.zh), en = str(r?.markdown?.en)
-    if (!version || !VERSION.test(version) || (!zh && !en)) continue
+    if (!version || !articleVersion(version) || (!zh && !en)) continue
     out.push({ version, date: str(r?.date) || '', scope: { zh: str(r?.scope?.zh), en: str(r?.scope?.en) }, markdown: { zh, en } })
   }
   return out
@@ -32,14 +33,17 @@ export function parseWebsiteReleases(body: unknown): WebsiteRelease[] {
 
 /** semver 比较(复用 updater 那份,beta 早于同号正式版);段数少的算旧:官网的「2.12」总览排在 2.12.x 之后。 */
 export function compareVersions(a: string, b: string): number {
-  if (isNewer(a, b)) return 1
-  if (isNewer(b, a)) return -1
-  const parts = (v: string): number => v.split('-')[0].split('.').length
+  const full = (v: string) => /^\d+\.\d+$/.test(v) ? `${v}.0` : v
+  if (isNewer(full(a), full(b))) return 1
+  if (isNewer(full(b), full(a))) return -1
+  const parts = (v: string): number => v.split(/[-+]/)[0].split('.').length
   return parts(a) - parts(b)
 }
 
 export interface WhatsNewEntry {
   version: string
+  /** Editorial label only; updater identity and website anchors remain real versions. */
+  displayVersion?: string
   date: string
   /** 官网那一篇(当前语言,缺了用另一种语言) */
   markdown?: string
@@ -72,11 +76,19 @@ export function buildWhatsNewEntries(input: {
     map.set(r.version, { version: r.version, date: r.date, markdown: r.markdown[locale] ?? r.markdown[other], scope: r.scope[locale] ?? r.scope[other], ...flags(r.version) })
   }
   for (const c of input.changelog) {
-    if (!VERSION.test(c.version) || map.has(c.version)) continue // Unreleased 不是版本
+    if (!articleVersion(c.version) || map.has(c.version)) continue // Unreleased 不是版本
     map.set(c.version, { version: c.version, date: c.date, lines: c.lines, ...flags(c.version) })
   }
   const u = input.update
-  if (u?.version && VERSION.test(u.version) && !map.has(u.version)) map.set(u.version, { version: u.version, date: '', notes: u.notes, ...flags(u.version) })
+  if (u?.version && articleVersion(u.version) && !map.has(u.version)) map.set(u.version, { version: u.version, date: '', notes: u.notes, ...flags(u.version) })
+  // The 2.13.6 article/changelog is the consolidated 2.13.5 + 2.13.6 edition.
+  // Keep its numeric identity for sorting/update actions; a cached 2.13.5 post must not duplicate it.
+  const combined = map.get('2.13.6')
+  if (combined && (combined.markdown || combined.lines)) {
+    combined.displayVersion = '2.13.5&2.13.6'
+    combined.installed ||= installed === '2.13.5'
+    map.delete('2.13.5')
+  }
   return [...map.values()].sort((a, b) => compareVersions(b.version, a.version))
 }
 

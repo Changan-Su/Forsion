@@ -3,8 +3,8 @@ import { registerMessages } from '../i18n'
 registerMessages({
   'desktopPermissions.title': { zh: '设备权限', en: 'Device permissions' },
   'desktopPermissions.description': {
-    zh: '按需开启电脑操作或媒体权限，也可以稍后到设置 → 系统 → 设备权限中处理。',
-    en: 'Enable computer control or media access as needed. You can return later in Settings → System → Device permissions.',
+    zh: '查看并管理电脑操作与媒体权限。',
+    en: 'Review and manage computer-use and media permissions.',
   },
   'desktopPermissions.later': { zh: '稍后设置', en: 'Set up later' },
   'desktopPermissions.optional': {
@@ -24,6 +24,16 @@ registerMessages({
   'desktopPermissions.installing': { zh: '正在准备 Computer Use 并打开引导…', en: 'Preparing Computer Use and opening setup…' },
   'desktopPermissions.verifying': { zh: '正在验证 Computer Use 权限…', en: 'Verifying Computer Use permissions…' },
   'desktopPermissions.openSettings': { zh: '打开系统设置', en: 'Open system settings' },
+  'desktopPermissions.repair': { zh: '修复授权', en: 'Repair access' },
+  'desktopPermissions.repairing': { zh: '正在修复授权并重启助手…', en: 'Repairing access and restarting the helper…' },
+  'desktopPermissions.repairHint': {
+    zh: '系统设置里已经开着，这里仍显示未允许？点「修复授权」：删掉旧版助手留下的那条记录、重启助手并重新添加，然后再打开一次开关。',
+    en: 'Already on in System Settings but still shown as not allowed? Click Repair access: it removes the record an older helper left, restarts the helper and adds it again. Then turn the switch on once more.',
+  },
+  'desktopPermissions.repairFailed': {
+    zh: '自动修复失败。请在系统设置的列表里选中 tangu-computer-use，点「−」删除，再点「+」重新添加。',
+    en: 'Automatic repair failed. In System Settings, select tangu-computer-use in the list, click − to remove it, then click + and add it again.',
+  },
   'desktopPermissions.request': { zh: '设置权限', en: 'Set up permission' },
   'desktopPermissions.install': { zh: '安装并设置权限', en: 'Install and set up access' },
   'desktopPermissions.start': { zh: '启动并设置权限', en: 'Start and set up access' },

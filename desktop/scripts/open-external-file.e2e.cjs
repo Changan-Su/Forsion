@@ -76,6 +76,7 @@ async function main() {
   fs.mkdirSync(vaultDir, { recursive: true })
   // 库内笔记与 O4 的库外文件同名:「已开着就聚焦」不许按文件名把它认成那个库外预览页
   fs.writeFileSync(path.join(vaultDir, '二次启动.md'), '# 二次启动\n\n这是库里的同名笔记。\n')
+  fs.writeFileSync(path.join(vaultDir, 'MixedCase.md'), '# MixedCase\n\nWindows path identity fixture.\n')
   const outside = path.join(home, '桌面')
   fs.mkdirSync(outside, { recursive: true })
   const extMd = path.join(outside, '外部说明.md')
@@ -185,6 +186,25 @@ async function main() {
     const o7 = await waitFor(async () => (await activeWsfile(win)) === afterReload, 15_000)
     check('O7 渲染层重载之后再从系统打开 → 照样落地', !!o7, `active=${await activeWsfile(win)}`)
     if (!o7) await shot('o7')
+    if (process.platform === 'win32') {
+      // Both paths arrive from real second processes. A stale active-note check
+      // cannot pass: switch to an external PDF between the two deliveries.
+      const deliver = async (file) => {
+        const child = spawn(electronBin, [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT, file], { cwd: ROOT, env: electron.workspaceEnv(env), windowsHide: true, stdio: 'ignore' })
+        return new Promise((resolve) => { const t = setTimeout(() => { child.kill(); resolve('timeout') }, 20000); child.once('exit', (code) => { clearTimeout(t); resolve(code) }); child.once('error', () => { clearTimeout(t); resolve('error') }) })
+      }
+      const mixed = path.join(vaultDir, 'MixedCase.md')
+      const first = await deliver(mixed)
+      const firstShown = await waitFor(async () => (await tabTitles(win)).includes('MixedCase') && await activeWsfile(win) !== mixed, 15000)
+      const away = await deliver(extPdf)
+      const left = await waitFor(async () => await activeWsfile(win) === extPdf, 15000)
+      const second = await deliver(mixed.toLowerCase())
+      const returned = await waitFor(async () => await activeWsfile(win) !== extPdf, 15000)
+      const content = await win.locator('.ProseMirror:visible').filter({ hasText: 'Windows path identity fixture.' }).count()
+      const count = (await tabTitles(win)).filter(title => title.toLowerCase() === 'mixedcase').length
+      check('O8 Windows case-only second-instance path focuses the original native note without a duplicate', first === 0 && firstShown && away === 0 && left && second === 0 && returned && count === 1 && content === 1, `nativeTabs=${count} tabs=${(await tabTitles(win)).join('|')}`)
+      if (count !== 1 || !returned) await shot('o8')
+    }
   } finally {
     await app.close().catch(() => {})
     try { await stub.close() } catch { /* ignore */ }

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { seedBuiltinBundles, builtinPluginIds, builtinBundleSources, activeBundleDir, pendingDirFor, _resetBuiltinIdsForTest, BUILTIN_BUNDLES, type BuiltinSource, initBundleSwitches, setBundleOff, bundleOff, bundleRestartPending } from './builtinPlugins'
+import { seedBuiltinBundles, builtinPluginIds, builtinBundleSources, activeBundleDir, pendingDirFor, _resetBuiltinIdsForTest, BUILTIN_BUNDLES, type BuiltinSource, initBundleSwitches, setBundleOff, bundleOff, bundleRestartPending, withPendingLock } from './builtinPlugins'
 import { signDir, testKeyPair } from './bundleSignature.testutil'
 
 const write = async (dir: string, files: Record<string, string>): Promise<void> => {
@@ -183,6 +183,21 @@ describe('npm 暂存区(.pending)', () => {
       expect(await fs.readdir(root), name).toEqual(['tangu-computer-use'])
     }
   })
+  it('首次启动预取超时后还在写暂存区:播种等它写完再读,不和写入交错', async () => {
+    let release!: () => void
+    const writing = withPendingLock(async () => {
+      await new Promise<void>((resolve) => { release = resolve })
+      await write(pend(), { 'manifest.json': manifest('tangu-computer-use', '0.6.0'), 'main.js': 'v0.6.0' })
+    })
+    const seeding = seedAt('2.11.5')
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    expect(await read(path.join(root, 'tangu-computer-use', 'main.js'))).toBeNull() // 写入没做完,播种还没开始
+    release()
+    await writing
+    await seeding
+    expect(await read(path.join(root, 'tangu-computer-use', 'main.js'))).toBe('v0.6.0')
+    expect(await fs.readdir(root)).toEqual(['tangu-computer-use'])
+  })
 })
 
 describe('activeBundleDir', () => {
@@ -196,23 +211,25 @@ describe('activeBundleDir', () => {
 describe('builtinBundleSources', () => {
   it('打包版走 resources/bundled-plugins/<name>,dev 走 node_modules/<pkg>;清单项原样带上', () => {
     const packaged = builtinBundleSources({ isPackaged: true, resourcesPath: '/App/Contents/Resources', appPath: '/x', platform: 'darwin' })
-    expect(packaged.map((s) => s.dir)).toEqual(['/App/Contents/Resources/bundled-plugins/tangu-computer-use', '/App/Contents/Resources/bundled-plugins/extend'])
+    expect(packaged.map((s) => s.dir)).toEqual(['/App/Contents/Resources/bundled-plugins/tangu-computer-use', '/App/Contents/Resources/bundled-plugins/extend', '/App/Contents/Resources/bundled-plugins/calendar'])
     expect(packaged[1]).toMatchObject({ pkg: '@forsion/extend', id: 'forsion-extend', desktop: { entry: 'dist/desktop.mjs' } })
     expect(packaged[1].desktop?.signingKey).toMatch(/^-----BEGIN PUBLIC KEY-----\n/)
     expect(builtinBundleSources({ isPackaged: false, resourcesPath: '/x', appPath: '/repo/desktop', platform: 'win32' }).map((s) => s.dir))
-      .toEqual(['/repo/desktop/node_modules/@forsion/tangu-computer-use', '/repo/desktop/node_modules/@forsion/extend'])
+      .toEqual(['/repo/desktop/node_modules/@forsion/tangu-computer-use', '/repo/desktop/node_modules/@forsion/extend', '/repo/desktop/node_modules/@forsion/calendar'])
   })
 
   it('按清单项自己声明的 platforms 过滤:电脑操作不进 Linux,Forsion Extend 全平台', () => {
-    expect(builtinBundleSources({ isPackaged: true, resourcesPath: '/r', appPath: '/x', platform: 'linux' }).map((s) => s.pkg)).toEqual(['@forsion/extend'])
+    expect(builtinBundleSources({ isPackaged: true, resourcesPath: '/r', appPath: '/x', platform: 'linux' }).map((s) => s.pkg)).toEqual(['@forsion/extend', '@forsion/calendar'])
     for (const b of BUILTIN_BUNDLES) expect(b.platforms.length, b.pkg).toBeGreaterThan(0)
   })
 
   it('按清单项 requires 过滤产品档案:电脑操作只进带 agent 后端的档案,Forsion Extend(云同步 / penzor / 登录态)全档案都进;缺省当作带', () => {
     const base = { isPackaged: true, resourcesPath: '/r', appPath: '/x', platform: 'darwin' as const }
-    expect(builtinBundleSources({ ...base, agentBackend: false }).map((s) => s.pkg)).toEqual(['@forsion/extend'])
-    expect(builtinBundleSources({ ...base, agentBackend: true }).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend'])
-    expect(builtinBundleSources(base).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend'])
+    expect(builtinBundleSources({ ...base, agentBackend: false }).map((s) => s.pkg)).toEqual(['@forsion/extend', '@forsion/calendar'])
+    expect(builtinBundleSources({ ...base, agentBackend: true }).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend', '@forsion/calendar'])
+    expect(builtinBundleSources(base).map((s) => s.pkg)).toEqual(['@forsion/tangu-computer-use', '@forsion/extend', '@forsion/calendar'])
+    expect(builtinBundleSources({ ...base, agentBackend: false, spaces: ['home'] }).map((s) => s.pkg)).toEqual(['@forsion/extend'])
+    expect(builtinBundleSources({ ...base, agentBackend: false, spaces: ['amadeus', 'calendar'] }).map((s) => s.pkg)).toEqual(['@forsion/extend', '@forsion/calendar'])
     expect(BUILTIN_BUNDLES.find((b) => b.id === 'tangu-computer-use')?.requires).toBe('agentBackend')
     expect(BUILTIN_BUNDLES.find((b) => b.id === 'forsion-extend')?.requires).toBeUndefined()
   })

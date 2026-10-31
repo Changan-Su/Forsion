@@ -129,7 +129,8 @@
   border-radius: var(--radius-sm);
   padding: 5px 10px;
   font-size: var(--ui-font-meta, 12px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .btn-ghost:hover,
 .am-app .btn-new:hover {
@@ -158,7 +159,8 @@
   font-size: var(--ui-font-body, 13px);
   display: grid;
   place-items: center;
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .icon-btn:hover {
   border-color: var(--border-strong);
@@ -698,7 +700,8 @@
   border-radius: var(--radius-sm);
   padding: 6px 14px;
   font-size: var(--ui-font-body, 13px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .add-block:hover {
   border-color: var(--primary);
@@ -1210,7 +1213,7 @@ body.amx-marquee-active * {
   user-select: none;
   transition: background 0.12s ease, color 0.12s ease;
 }
-.am-app .callout-chevron svg { transform: rotate(90deg); transition: transform 0.12s ease; }
+.am-app .callout-chevron svg { transform: rotate(90deg); transition: transform var(--collapse-duration) var(--collapse-ease); }
 .am-app .callout-chevron.collapsed svg { transform: rotate(0deg); }
 /* PM 更新 Markdown marker 时会重建按钮；起始样式让新 SVG 仍从上一方向旋转入位。
    只认正在切换的那一块(data-fold-animating,直属标题行):别的原因重建按钮(撤销、回灌…)不许转一下。 */
@@ -1228,10 +1231,20 @@ body.amx-marquee-active * {
   interpolate-size: allow-keywords;
   height: auto;
   overflow: hidden;
+  /* 时长 / 曲线与宿主折叠同一对 --collapse-*(8.10)。块是编辑器的 DOM、没法再套一层,所以这里仍补间高度,不走 data-motion="collapse" */
   transition:
-    height 0.2s cubic-bezier(0.32, 0.72, 0, 1),
-    opacity 0.16s ease,
-    margin-block 0.2s cubic-bezier(0.32, 0.72, 0, 1);
+    height var(--collapse-duration) var(--collapse-ease),
+    opacity var(--collapse-duration) var(--collapse-ease),
+    margin-block var(--collapse-duration) var(--collapse-ease);
+}
+/* 统一编辑器里上面这条被「块选中淡底」那条 .am-app .unified-body .ProseMirror :is(p, …) 的 background-color 过渡
+   以 (0,4,0) 压掉了,折叠一直是硬切(10-26 实测,main 上同样);这里再高一档,把那条淡底过渡一并带上。 */
+.am-app .unified-body .ProseMirror .callout > *:not(:first-child) {
+  transition:
+    height var(--collapse-duration) var(--collapse-ease),
+    opacity var(--collapse-duration) var(--collapse-ease),
+    margin-block var(--collapse-duration) var(--collapse-ease),
+    background-color var(--duration-slow) var(--ease-calm);
 }
 .am-app .callout.callout-collapsed > *:not(:first-child) {
   height: 0;
@@ -1553,15 +1566,21 @@ body.amx-marquee-active * {
   /* 外壳与笔记「…」菜单同一套(10-02 用户拍板 c1):细描边 + 统一淡阴影,不自带毛玻璃;Genesis 下由主题材质表接管。 */
   position: fixed;
   z-index: 55;
-  /* ⚠️别把摆位写成 transform:pop-in 动画也动 transform,会覆盖它 120ms(工具栏先出现在选区
-     右下再跳上去,用户实报)。落位交给 OverlayAt 的 prefer:'above' + center。 */
+  /* ⚠️别把摆位写成 transform:拖选进场 selbar-in 动的是 transform,会覆盖它(工具栏先出现在选区右下再跳上去,用户实报)。
+     落位交给 OverlayAt 的 prefer:'above' + center。进退场(走查续八 8.1):在 base.css 的菜单名单里 —— 双击 / 三击 / 键盘选区
+     走菜单进场,关掉 80ms 缩淡退场;拖选松手顺着方向滑进(下面 data-dir)。 */
   background: var(--surface-2);
   border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-panel);
-  animation: pop-in 120ms var(--ease-apple);
   user-select: none;
   -webkit-app-region: no-drag; /* 第一行的选区会把它顶到标签栏(窗口拖拽区)上,同 .selbar */
+}
+/* 拖选松手:和聊天划线条 .selbar 同一档,从拖的方向 8px 滑进(lcl/components/selectionBar.css 的 selbar-in)。 */
+.am-app .inline-toolbar[data-dir='forward'] { --selbar-travel: -8px; }
+.am-app .inline-toolbar[data-dir='backward'] { --selbar-travel: 8px; }
+@media (prefers-reduced-motion: no-preference) {
+  html:root .am-app .inline-toolbar[data-dir]:not([data-lcl-exit]) { animation: selbar-in var(--tip-enter) var(--ease-surface); }
 }
 .am-app .itb-row {
   display: flex;
@@ -1809,7 +1828,7 @@ body.amx-marquee-active * {
   content: none;
 }
 /* 异步插入的占位钉在空行里(评审 G3-06):空行提示别从占位胶囊底下漏出来。 */
-.am-app .milkdown .ProseMirror .is-empty:has(.amx-pending-insert)::before {
+.am-app .milkdown .ProseMirror .is-empty:has(.amx-pending-insert, .amx-upph)::before {
   content: none;
 }
 /* 焦点门控(评审 K-23):提示只给正在编辑的空块。装饰跟着选区走、不看焦点 —— 编辑器失焦后选区还在,
@@ -2169,12 +2188,8 @@ body.amx-marquee-active * {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .am-app * {
-    animation-duration: 0.001ms !important;
-    transition-duration: 0.001ms !important;
-  }
-}
+/* 减少动态效果:由 styles/base.css 的全局规则统一收(走查续八 8.3:关键帧压掉,颜色 / 透明度过渡留着)。这里以前另有一份
+   `.am-app *` 把过渡一律掐成 0.001ms —— 特异性更高,会把全局留下的颜色过渡也掐掉,已删。 */
 
 /* 滚动条:交还系统 overlay,这里**刻意不写** `::-webkit-scrollbar`(写了就变 custom scrollbar,
    恒占 11px 布局宽 —— 笔记正文右边那条空槽就是它)。理由与仪器见 styles/base.css 同名注释。 */
@@ -2358,7 +2373,14 @@ body.amx-marquee-active * {
   justify-content: center;
   background: rgba(0, 0, 0, 0.32);
   backdrop-filter: blur(2px);
-  animation: overlay-in var(--dur-fast) var(--ease-apple);
+  animation: lcl-fade-in var(--palette-enter-duration) var(--ease-surface);
+}
+/* 确认框进退场与命令面板 / ⌘P 同一对(走查续八 8.4):遮罩淡入、框从 0.96 放大 120ms;关掉时卸载留下的替身(DialogOverlay 里的
+   useExitGhost)80ms 加速退场 —— 按了「删除」也照样放完,删除本身不等它。 */
+.am-app .dialog-overlay[data-lcl-exit] { animation: lcl-fade-out var(--menu-exit-duration) var(--ease-exit) forwards; }
+.am-app .dialog-overlay[data-lcl-exit] > .dialog { animation: lcl-panel-out var(--menu-exit-duration) var(--ease-exit) forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .am-app .dialog-overlay[data-lcl-exit] > .dialog { animation-name: lcl-fade-out; }
 }
 .am-app .dialog {
   width: min(420px, 90vw);
@@ -2370,7 +2392,7 @@ body.amx-marquee-active * {
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-panel);
-  animation: panel-rise var(--dur-normal) var(--ease-apple);
+  animation: lcl-panel-in var(--palette-enter-duration) var(--ease-surface);
 }
 .am-app .dialog-title {
   font-size: var(--ui-font-heading, 14px);
@@ -2425,6 +2447,24 @@ body.amx-marquee-active * {
   cursor: pointer;
 }
 .am-app .dialog-check input { flex-shrink: 0; margin: 3px 0 0; accent-color: var(--danger, #e5484d); }
+/* 卸载确认框(10-28 手动卸载规范,components/UninstallDialog):逐项写去向,每行右侧一枚去向药丸,勾选项挂在对应那行下面;
+   脚注(「30 天内可在 设置 › 回收站 恢复」)与按钮同一行。手机(原生外壳)贴底成半屏。 */
+.am-app .dialog.un-dlg { width: min(520px, calc(100vw - 32px)); }
+.am-app .un-list { display: flex; flex-direction: column; }
+.am-app .un-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 2px; }
+.am-app .un-row + .un-row { border-top: 1px solid var(--border); }
+.am-app .un-row > svg { margin-top: 2px; color: var(--text-muted); flex-shrink: 0; }
+.am-app .un-tx { flex: 1; min-width: 0; font-size: var(--ui-font-body, 13px); line-height: 1.45; color: var(--text); }
+.am-app .un-tx small { display: block; margin-top: 1px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.am-app .un-tx .dialog-check { margin-top: 6px; font-size: var(--ui-font-meta, 12px); }
+.am-app .un-pill { flex-shrink: 0; margin-top: 1px; padding: 1px 8px; border-radius: var(--radius-pill); background: var(--menu-hover); color: var(--text-sec); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
+.am-app .un-pill[data-tone='del'] { color: var(--danger, #e5484d); }
+.am-app .un-pill[data-tone='keep'] { color: var(--text); }
+.am-app .un-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.am-app .un-note { flex: 1; min-width: 160px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.am-app .un-foot .dialog-actions { margin: 0 0 0 auto; }
+.am-app .dialog-overlay.un-sheet { align-items: flex-end; }
+.am-app .dialog-overlay.un-sheet > .dialog { width: 100%; max-width: none; border-radius: var(--radius-lg) var(--radius-lg) 0 0; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
 .am-app .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -2438,7 +2478,8 @@ body.amx-marquee-active * {
   border-radius: var(--radius-sm);
   padding: 7px 16px;
   font-size: var(--ui-font-body, 13px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .dialog-btn:hover {
   border-color: var(--border-strong);
@@ -2634,7 +2675,8 @@ body.amx-marquee-active * {
   border-radius: var(--radius-pill);
   padding: 6px 18px;
   font-size: var(--ui-font-body, 13px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .seg-btn[data-active] {
   background: var(--primary);
@@ -2698,7 +2740,8 @@ body.amx-marquee-active * {
   border-radius: var(--radius-sm);
   padding: 7px 14px;
   font-size: var(--ui-font-meta, 12px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .settings-btn:hover {
   border-color: var(--border-strong);
@@ -2792,7 +2835,8 @@ body.amx-marquee-active * {
   color: var(--text-sec);
   border-radius: var(--radius-pill);
   font-size: var(--ui-font-body, 13px);
-  transition: all var(--dur-fast) var(--ease-apple);
+  transition: background-color var(--duration-fast) var(--ease-calm), color var(--duration-fast) var(--ease-calm),
+    border-color var(--duration-fast) var(--ease-calm), box-shadow var(--duration-fast) var(--ease-calm);
 }
 .am-app .theme-chip:hover {
   border-color: var(--border-strong);
@@ -4111,11 +4155,13 @@ body.amx-marquee-active * {
 }
 .am-app .amx-card-overview[data-overview-density='title'] .amx-card-overview-detail { display: none; }
 /* 画布缩略图：固定在 chrome 层，不吃舞台 pan/zoom；盒子来自真实卡片/主卡/图形几何。
-   视口框本身也是导航面，点击或拖动都会平移画布。 */
+   视口框本身也是导航面，点击或拖动都会平移画布。
+   缩放胶囊与缩略图离边 16px(10-24 三张画布统一:与 Tangu 画布 chat2.css、图像工作室同值;仪表盘 / 流程画布同吃这两条)。
+   缩略图底边 = 胶囊 16 + 胶囊高 ≈28 + 间距 8。 */
 .am-app .amx-stage-minimap {
   position: absolute;
-  right: 8px;
-  bottom: 42px;
+  right: 16px;
+  bottom: 52px;
   width: 184px;
   height: 112px;
   box-sizing: border-box;
@@ -4159,8 +4205,8 @@ body.amx-marquee-active * {
 }
 .am-app .amx-stage-hud {
   position: absolute;
-  right: 8px;
-  bottom: 8px;
+  right: 16px;
+  bottom: 16px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -4289,7 +4335,8 @@ body.amx-marquee-active * {
 .am-app .amx-canvas .amx-ucard { box-sizing: border-box; }
 /* 块拖拽的落点指示:画布模式下换成「目标卡描边」(那条横线在绝对定位的卡片间必然撒谎,
    见 blockLayer 的 executeDropInCanvas)。outline 不进布局,连线端点不会因此跳。 */
-.am-app .amx-canvas .amx-ucard.amx-droptarget { outline: 2px solid var(--signal-line); outline-offset: 2px; }
+.am-app .amx-canvas .amx-ucard { outline: 2px solid transparent; outline-offset: 2px; transition: outline-color var(--lcl-drop-fade); } /* 常驻透明,亮起 / 熄灭只换颜色 */
+.am-app .amx-canvas .amx-ucard.amx-droptarget { outline-color: var(--signal-line); }
 
 /* 顶栏胶囊的插槽与锚(2026-08-18 portal 化,见 unified/CanvasModeSeg 顶注)。
    插槽是顶栏里的一个空 span:里头没有胶囊时不许占位、也不许把 flex 间距撑开。
@@ -4309,6 +4356,10 @@ body.amx-marquee-active * {
      手机上整条点不到。抬到工具条之上;缩略图再让一档。 */
   .am-app .amx-stage-hud { bottom: 112px; }
   .am-app .amx-stage-minimap { bottom: 168px; }
+  /* 离边仍是 8px(桌面是 16px,10-24 三张画布统一):手机上 HUD 那排 34px 按钮已经顶满窄机宽度(见下),
+     再多让 8px 左边就伸出舞台(check:canvastouch T8)。 */
+  .am-app .amx-stage-hud,
+  .am-app .amx-stage-minimap { right: 8px; }
   /* 手指命中面:这几颗按钮的尺寸是按鼠标定的(28×26 / 12px 图标)。只放大盒子,图标 size 归 React。
      ⚠️ 34px 是**上限不是审美**:8 颗工具 + 间距 + 内边距 = 294px,窄机(360pt ÷ body zoom 1.15
      ≈ 313px)刚好装得下;再大就顶穿工具条背景往外溢(与 .amx-mbar 那条同一笔账)。 */
@@ -4348,6 +4399,13 @@ body.amx-marquee-active * {
    同特异性的覆盖靠源码顺序(DESIGN §7.2)。 */
 .am-app .amx-stage.amx-space-pan,
 .am-app .amx-stage.amx-space-pan * { cursor: grab; }
+/* 空白处右键按住拖 = 平移(10-24,canvasStage 的 setPanning):拖起来之后整片握紧抓手,同样压住卡片 / 正文 / 把手的光标。
+   排在空格抓手之后:按着空格再右键拖,显示的是「正在拖」。 */
+.am-app .amx-stage[data-panning],
+.am-app .amx-stage[data-panning] * { cursor: grabbing; }
+/* 白板同一手势(blocks/excalidraw/rightPan.ts):引擎把光标写在交互画布的行内 style 上,只有 !important 压得住。 */
+.amx-boardhost[data-rpan],
+.amx-boardhost[data-rpan] * { cursor: grabbing !important; }
 
 /* ── Agent 改动呈现(评审 G3-03)──────────────────────────────────────────────────────
    装饰只在内存(agentChanges.ts),不进序列化。色值一律走语义 token:改动 = --green 的淡底 + 下划线
@@ -4444,6 +4502,33 @@ body.amx-marquee-active * {
   animation: spin 0.9s linear infinite;
 }
 .am-app .amx-pending-insert .btn.sm { border-radius: var(--radius-pill); }
+
+/* 正文上传占位(unified/bodyUploads.ts,附件上传进度方案 r2 §4 A):不进文档,传完原地换成真的嵌入。
+   图片 = 本地预览 + 纱 + 环(底部一行状态);文件 = 与嵌入层同一张 .embed-file 卡 + 状态 + 底边内侧细条。
+   失败只垫红、不描边(同 Tangu 磁贴)。环 / 条是 @lcl/components 的 UploadRing / UploadBar,前 300ms 不显示。 */
+/* 自成一行(锚在段尾时也换到段下):传完插在这一块之后,占位先站在那个位置上,完成时不跳 */
+.am-app .amx-upph { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; width: 100%; margin: 6px 0; user-select: none; }
+.am-app .amx-upph-img { position: relative; display: block; max-width: min(100%, 360px); border-radius: var(--radius-md, 10px); overflow: hidden; }
+.am-app .amx-upph-img > img { display: block; max-width: 100%; max-height: 320px; }
+.am-app .amx-upph-veil { position: absolute; inset: 0; background: color-mix(in srgb, var(--bg-card) 50%, transparent); }
+.am-app .amx-upph-img > .lcl-upring { position: absolute; inset: 0; margin: auto; }
+.am-app .amx-upph-foot {
+  position: absolute; left: 6px; right: 6px; bottom: 6px; display: flex; align-items: center; gap: 4px;
+  padding: 2px 6px; border-radius: var(--radius-pill); background: color-mix(in srgb, var(--bg-card) 82%, transparent); width: fit-content; max-width: calc(100% - 12px);
+}
+.am-app .amx-upph-file { position: relative; cursor: default; }
+.am-app .amx-upph-file:hover { background: var(--bg-card); }
+.am-app .amx-upph-file > .lcl-upbar { position: absolute; left: 12px; right: 12px; bottom: 3px; }
+.am-app .amx-upph-status { flex: 0 0 auto; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: nowrap; }
+.am-app .amx-upph-acts { display: inline-flex; gap: 2px; }
+.am-app .amx-upph-act {
+  border: 0; background: none; padding: 0 4px; border-radius: var(--radius-sm, 4px); cursor: pointer;
+  font: inherit; font-size: var(--ui-font-caption, 11px); color: var(--text);
+}
+.am-app .amx-upph-act:hover { background: var(--menu-hover); }
+.am-app .amx-upph .is-failed .amx-upph-status { color: var(--danger); }
+.am-app .amx-upph-file.is-failed, .am-app .amx-upph-file.is-failed:hover { background: color-mix(in srgb, var(--danger) 8%, var(--bg-card)); }
+.am-app .amx-upph-img.is-failed > .lcl-upring { display: none; }
 
 /* ── 正文 AI(评审 G3-07):目标淡底 + 预览面板。面板外壳走共享 `.ui-popover`(字体 / 描边 / 圆角 / 阴影),
    这里只管内容布局;色值只消费语义 token。 */

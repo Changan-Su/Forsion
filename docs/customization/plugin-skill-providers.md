@@ -1,6 +1,6 @@
 # 引擎插件的外部技能来源
 
-[English](plugin-skill-providers.en.md) · [插件开发](plugins.md)
+[English](plugin-skill-providers.en.md) · [插件开发](plugin-development.md)
 
 引擎插件在 `activate(ctx)` 中注册实时、只读的技能来源。宿主把它接入原生技能列表、技能载入和 `use_skill`，不复制进用户目录。静态随包技能仍可放在 bundle 的 `skills/` 中。
 

@@ -8,6 +8,7 @@
  *    选中的那边下不动,自动换另一边一次。
  * 住 desktop/shared/:web 镜像的构建上下文只带 desktop/shared(见 updateVersion.ts 头注)。
  */
+import { isNewer, isPrerelease, parseReleaseVersion } from './updateVersion'
 
 export const WEBSITE_API = 'https://forsion.net/api'
 
@@ -43,8 +44,6 @@ export interface WebsiteInstaller {
 }
 export type WebsiteInstallers = Partial<Record<WebsitePlatform, WebsiteInstaller>>
 
-const VERSION_RE = /^\d+(\.\d+)*(-[0-9A-Za-z.-]+)?$/
-
 /** `/api/website/config` → 各平台已发布的安装包;形状不对返回 null(= 官网没答上)。 */
 export function parseWebsiteInstallers(body: unknown): WebsiteInstallers | null {
   const platforms = (body as { platforms?: unknown } | null)?.platforms
@@ -53,7 +52,7 @@ export function parseWebsiteInstallers(body: unknown): WebsiteInstallers | null 
   for (const key of ['windows', 'macos', 'android'] as const) {
     const p = (platforms as Record<string, any>)[key]
     const version = String(p?.version || '').trim().replace(/^v/i, '')
-    if (!p || !VERSION_RE.test(version)) continue
+    if (!p || !parseReleaseVersion(version)) continue
     out[key] = {
       version,
       filename: String(p.filename || ''),
@@ -62,6 +61,24 @@ export function parseWebsiteInstallers(body: unknown): WebsiteInstallers | null 
     }
   }
   return out
+}
+
+/** Both the declared GitHub flag and the version suffix restrict an entry to the preview channel. */
+export function selectGitHubRelease(body: unknown, beta: boolean, onlyPre = false, accepts?: (release: Record<string, unknown>) => boolean): { version: string; body?: string; release: Record<string, unknown> } | null {
+  const list = Array.isArray(body) ? body : [body]
+  let best: { version: string; body?: string; release: Record<string, unknown> } | null = null
+  for (const value of list) {
+    if (!value || typeof value !== 'object') continue
+    const release = value as Record<string, unknown>
+    const parsed = parseReleaseVersion(release.tag_name)
+    if (release.draft === true || !parsed || (accepts && !accepts(release))) continue
+    const pre = release.prerelease === true || isPrerelease(parsed.version)
+    if ((!beta && pre) || (onlyPre && !pre)) continue
+    if (!best || isNewer(parsed.version, best.version)) best = {
+      version: parsed.version, body: typeof release.body === 'string' ? release.body : undefined, release,
+    }
+  }
+  return best
 }
 
 /** 这个包的「官网版本」看哪个平台:Linux 官网不放,跟 Windows 走(同一个 tag 一起出)。 */

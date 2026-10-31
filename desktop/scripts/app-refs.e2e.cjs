@@ -169,7 +169,7 @@ async function main() {
     await view.screenshot({ path: path.join(SHOT_DIR, `bubble${tag}.png`) })
     // 移开就收;等着出卡的那 0.3 秒里来了滚动事件(芯片还在原处)照样出 —— 一有滚动就取消的话,先滚再停在芯片上就再也不出卡
     await win.mouse.move(2, 2)
-    await win.waitForTimeout(150)
+    await win.waitForTimeout(400) // 离开 80ms 宽限 + 140ms 退场(LCL 悬停卡)
     const gone = await win.locator('body > .app-ref-card').count() === 0
     await chip('Linear – Pricing').hover()
     await win.evaluate(() => document.querySelector('.app-ref').dispatchEvent(new Event('scroll')))
@@ -338,7 +338,8 @@ async function main() {
     helper.fireHotkey({ bundleId: 'com.apple.iWork.Numbers', app: 'Numbers', pid: 12, windowId: 201, title: '季度预算.numbers' })
     await strip.nth(1).waitFor({ timeout: 5000 }).catch(() => {})
     check('在别的应用里按双 ⌘:助手推来的那扇窗口进「已选择」', await strip.count() === 2 && /季度预算\.numbers/.test(await strip.nth(1).textContent()), await strip.allTextContents())
-    const shot = view.locator('.t2c-card .attach-chip img[alt="季度预算.numbers.jpg"]')
+    // 附件在输入卡里画成磁贴(AttachmentTile,10-17 起;之前是 .attach-chip 里的 img)
+    const shot = view.locator('.t2c-card .att-tile--img img[alt="季度预算.numbers.jpg"]')
     await shot.first().waitFor({ timeout: 8000 }).catch(() => {})
     check('同时把那扇窗口的截图当图片附件挂上(由助手按窗口号截)', await shot.count() === 1 && helper.requests.some((r) => r.cmd === 'windowImage' && r.windowId === 201), helper.requests.filter((r) => r.cmd === 'windowImage'))
     // 截图迟到时那条引用已经被删了(同理:已发出、切了会话):那张图丢掉,不挂到草稿里
@@ -349,7 +350,7 @@ async function main() {
     const lateReq = () => helper.requests.find((r) => r.cmd === 'windowImage' && r.windowId === 209)
     for (let i = 0; i < 50 && !lateReq()?.answered; i++) await win.waitForTimeout(100)
     await win.waitForTimeout(500)
-    check('截图到之前引用被删掉了:迟到的截图不挂上', !!lateReq()?.answered && await late.count() === 0 && await view.locator('.t2c-card .attach-chip img[alt="迟到.numbers.jpg"]').count() === 0, { answered: !!lateReq()?.answered, chips: await strip.allTextContents() })
+    check('截图到之前引用被删掉了:迟到的截图不挂上', !!lateReq()?.answered && await late.count() === 0 && await view.locator('.t2c-card .att-tile[title="迟到.numbers.jpg"]').count() === 0, { answered: !!lateReq()?.answered, chips: await strip.allTextContents() })
     await win.keyboard.down('MetaLeft')
     await win.keyboard.press('k')
     await win.keyboard.up('MetaLeft')
@@ -479,7 +480,7 @@ async function main() {
     await sp2.keyboard.up('ShiftLeft')
     await sp2.waitForTimeout(300)
     const recorded = await row.locator('.shortcut-key').textContent().catch(() => null)
-    check('设置里录快捷键:左右 ⇧ 一起按,录成「⇧ + ⇧」', recorded === '⇧ + ⇧', recorded)
+    check('设置里录快捷键:左右 ⇧ 一起按,录成「⇧⇧」', recorded === '⇧⇧', recorded)
     await sp2.screenshot({ path: path.join(SHOT_DIR, `shortcut-shiftpair${tag}.png`) })
     await (await app.browserWindow(sp2)).evaluate((w) => w.close()).catch(() => {})
     for (let i = 0; i < 50 && !helper.hotkeySubs.slice(subsBefore).some((x) => x.msg.gesture === 'shiftPair'); i++) await win.waitForTimeout(100)

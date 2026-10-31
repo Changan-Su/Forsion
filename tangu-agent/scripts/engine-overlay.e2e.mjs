@@ -36,6 +36,9 @@ if (!existsSync(path.join(root, 'dist', 'boot', 'launch.js'))) { console.error(`
 if (!arg('--exe') && typeof nodeModule.registerHooks !== 'function') { console.error(`Node ${process.versions.node} has no module.registerHooks (need ≥ 22.15).`); process.exit(1) }
 
 const bundled = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8')).version
+const hostSource = path.join(root, 'desktop-host.json')
+const hostText = existsSync(hostSource) ? readFileSync(hostSource, 'utf8') : null
+const desktop = hostText ? JSON.parse(hostText).version : bundled
 const [major, minor, patch] = bundled.split('.').map(Number)
 const next = `${major}.${minor}.${patch + 1}`
 const tmp = mkdtempSync(path.join(os.tmpdir(), 'engine-overlay-e2e-'))
@@ -45,8 +48,10 @@ const engineRoot = path.join(tmp, 'engine')
 // 临时安装包包根:与 root 只差一把公钥。node_modules 用目录链接(Windows 上是 junction,不要特权)指回 root 那份。
 const installer = path.join(tmp, 'installer', 'tangu-server')
 const depsLink = path.join(installer, 'node_modules')
+const hostFile = path.join(installer, 'desktop-host.json')
 mkdirSync(installer, { recursive: true })
 for (const name of ['dist', 'skills', 'agent-skills', 'package.json']) cpSync(path.join(root, name), path.join(installer, name), { recursive: true })
+if (hostText) writeFileSync(hostFile, hostText)
 symlinkSync(path.join(root, 'node_modules'), depsLink, 'junction')
 const testKey = generateKeyPairSync('ed25519')
 writeFileSync(path.join(installer, 'dist', 'boot', 'signingKey.js'), `export const ENGINE_SIGNING_KEY = ${JSON.stringify(testKey.publicKey.export({ type: 'spki', format: 'pem' }))};\n`)
@@ -103,7 +108,10 @@ async function boot(extraEnv = {}) {
 
 try {
   console.log(`bundled ${bundled} → update ${next}   (home: ${tmp})`)
-  const stage = pack(next, bundled)
+  const stage = pack(next, desktop)
+  const packedManifest = JSON.parse(readFileSync(path.join(stage, 'package.json'), 'utf8'))
+  check(existsSync(path.join(stage, 'dist', 'contracts', 'releaseVersion.mjs')), 'signed engine package includes the shared version contract')
+  check(packedManifest.repository?.url === 'git+https://github.com/Changan-Su/Forsion.git', 'npm package identifies the repository required by trusted publishing')
   // 干扰项:新版目录上层的野 node_modules。引擎的第一批 import 里就有 express,解析被它劫走的话直接起不来。
   mkdirSync(path.join(tmp, 'node_modules', 'express'), { recursive: true })
   writeFileSync(path.join(tmp, 'node_modules', 'express', 'package.json'), '{"name":"express","version":"0.0.0","main":"index.js"}')
@@ -116,12 +124,38 @@ try {
   const good = await boot()
   check(good.version === next && good.output.includes(`[engine-overlay] running ${next}`), `放进签好名的 ${next} → 跑新版(上层野 node_modules 不干扰)`, `got ${good.version}\n${good.output.slice(-800)}`)
 
+  // Prove that shell compatibility and engine update ordering use separate identities, through the real launcher.
+  const independentHost = `${major + 2}.0.0`
+  writeFileSync(hostFile, JSON.stringify({ version: independentHost }))
+  install(pack(next, independentHost), next)
+  const independent = await boot()
+  check(independent.version === next, `壳 ${independentHost} / 自带引擎 ${bundled} → 收下引擎 ${next}`, independent.output.slice(-800))
+
   const tui = spawn(exe, [launch, 'tui', 'plugins'], { env: { ...process.env, TANGU_HOME: tanguHome, TANGU_PLUGINS: 'off', TANGU_ENGINE_OVERLAY: 'verbose', ...runAsNode }, stdio: ['ignore', 'pipe', 'pipe'] })
   let tuiOut = ''
   tui.stdout.on('data', (d) => { tuiOut += d })
   tui.stderr.on('data', (d) => { tuiOut += d })
   const tuiCode = await new Promise((resolve) => tui.on('exit', resolve))
   check(tuiCode === 0 && tuiOut.includes(`[engine-overlay] running ${next}`), `终端入口(tangu plugins)也跑新版`, `exit ${tuiCode}\n${tuiOut.slice(-600)}`)
+
+  writeFileSync(hostFile, JSON.stringify({ version: `${major}.0.0` }))
+  const oldShell = await boot()
+  check(oldShell.version === bundled && /skipped \(host\)/.test(oldShell.output), '新引擎版本不能代替较旧的壳满足 minDesktop', oldShell.output.slice(-800))
+
+  writeFileSync(hostFile, JSON.stringify({ version: `${independentHost}+build.2` }))
+  install(pack(next, `${independentHost}+build.1`), next)
+  const revisionHost = await boot()
+  check(revisionHost.version === next, 'revision host accepts a signed engine requiring an earlier revision', revisionHost.output.slice(-800))
+  writeFileSync(hostFile, JSON.stringify({ version: independentHost }))
+  const earlierRevision = await boot()
+  check(earlierRevision.version === bundled && /skipped \(host\)/.test(earlierRevision.output), 'base host cannot satisfy a higher revision minimum', earlierRevision.output.slice(-800))
+  writeFileSync(hostFile, JSON.stringify({ version: `${independentHost}-rc.1` }))
+  install(pack(next, independentHost), next)
+  const prereleaseHost = await boot()
+  check(prereleaseHost.version === bundled && /skipped \(host\)/.test(prereleaseHost.output), 'prerelease host cannot satisfy the same-core stable minimum', prereleaseHost.output.slice(-800))
+  if (hostText) writeFileSync(hostFile, hostText)
+  else rmSync(hostFile)
+  install(stage, next)
 
   const off = await boot({ TANGU_ENGINE_OVERLAY: 'off' })
   check(off.version === bundled, 'TANGU_ENGINE_OVERLAY=off → 跑自带的', `got ${off.version}`)
@@ -147,7 +181,7 @@ try {
   check(bad.version === bundled, '记成坏版本 → 跑自带的', `got ${bad.version}`)
   rmSync(path.join(engineRoot, 'bad.json'))
 
-  install(pack(next, `${major + 1}.0.0`), next)
+  install(pack(next, `${Number(desktop.split('.')[0]) + 1}.0.0`), next)
   const tooNew = await boot()
   check(tooNew.version === bundled && /skipped \(host\)/.test(tooNew.output), `新版要求更高的壳版本 → 退回自带的`, `got ${tooNew.version}\n${tooNew.output.slice(-600)}`)
 

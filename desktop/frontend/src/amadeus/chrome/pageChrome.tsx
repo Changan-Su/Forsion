@@ -5,7 +5,10 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Search, Images, Image, Link2, Upload, X, Check } from 'lucide-react'
+import { create } from 'zustand'
 import './pageChrome.css'
+import { UploadRing } from '@lcl/components'
+import { cancelUpload, oneSaveAtATime, retryUpload, startUpload, uploadFraction, useUploads } from '../../services/uploads'
 import { OverlayAt } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
 import { getAttachmentPrefs } from '@amadeus/lib/attachments'
@@ -38,6 +41,9 @@ registerMessages({
   'pgchrome.searchEmpty': { zh: '没搜到结果，上方为精选封面。', en: 'No results — the covers above are our featured picks.' },
   'pgchrome.urlPlaceholder': { zh: '粘贴图片地址（https://…)', en: 'Paste an image URL (https://…)' },
   'pgchrome.setCover': { zh: '设为封面', en: 'Set as cover' },
+  'pgchrome.coverUploadFailed': { zh: '封面没传上去', en: 'The cover didn’t upload' },
+  'pgchrome.coverRetry': { zh: '重试', en: 'Retry' },
+  'pgchrome.coverDiscard': { zh: '不用了', en: 'Discard' },
   'pgchrome.chooseLocal': { zh: '选择本地图片…', en: 'Choose a local image…' },
   'pgchrome.uploadHint': { zh: '图片会保存到当前智库的附件位置。', en: 'Images are saved with attachments in this vault.' },
   'pgchrome.emojiPlaceholder': { zh: '搜索 emoji（中/英），或粘贴任意字符后回车…', en: 'Search emoji (Chinese or English), or paste any character and press Enter…' },
@@ -77,6 +83,41 @@ export function coverSlack(img: HTMLImageElement): number {
 
 /** Notion/pixel-banner 式封面横幅:收进正文区、四角圆角裁切;上下拖动图片调纵向焦点(存 fm cover_y);
  *  底部柔和渐变逐渐融入页面背景色,与正文自然过渡;悬停出「更换/移除」。 */
+/** 在传的封面(按页):封面区先出本地预览,盖纱 + 环;传完换成真封面,失败给重试 / 不用了(附件上传进度方案 r2)。
+ *  放模块级:选图浮层关了、封面组件重挂,进度照样在。 */
+const usePendingCovers = create<Record<string, { id: string; preview: string }>>(() => ({}))
+function clearPendingCover(page: string, id: string): void {
+  const cur = usePendingCovers.getState()[page]
+  if (cur?.id !== id) return
+  URL.revokeObjectURL(cur.preview)
+  cancelUpload(id) // 还在传的:结果不再写封面(job 里看 signal)
+  usePendingCovers.setState((all) => { const { [page]: _gone, ...rest } = all; return rest }, true)
+}
+
+/** 现在挂着的封面组件按页登记它的写口:上传传完(含换页再回来后点重试)时用**这一个**写,不用发起时那个选图浮层的旧回调 ——
+ *  旧回调连着已经退役的那个页实例,拿它写封面会把那份旧正文一起写回去。没有挂着的封面组件才退回发起时的回调。 */
+const coverWriters = new Map<string, (cover: string) => void>()
+
+function PendingCover({ page, id, preview }: { page: string; id: string; preview: string }) {
+  const { t } = useI18n()
+  const e = useUploads((all) => all[id])
+  const failed = e?.phase === 'failed'
+  return (
+    <div className="amx-cover amx-cover--up" role="status">
+      <img src={preview} alt="" draggable={false} />
+      <div className="amx-cover-veil" />
+      {!failed && <UploadRing value={uploadFraction(e)} size={28} />}
+      {failed && (
+        <div className="amx-cover-upfail" title={e?.error}>
+          <span>{t('pgchrome.coverUploadFailed')}</span>
+          <button onClick={() => retryUpload(id)}>{t('pgchrome.coverRetry')}</button>
+          <button onClick={() => clearPendingCover(page, id)}>{t('pgchrome.coverDiscard')}</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCoverY, readOnly = false }: {
   /** 缺省 = pageStore.activePage(v3 老路径);unified 传显式路径。 */
   page?: string
@@ -102,6 +143,13 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
   /** 拖动中的现值:松手时从这里取,不在 setState 的 updater 里调 setY(那会在渲染期更新父组件,C-11 的 React 警告)。 */
   const drag = useRef<{ id: number; startY: number; base: number; z: number; slack: number; cur: number } | null>(null)
   const target = page ?? activePage
+  const setCoverRef = useRef<(c: string | null) => void>(() => {})
+  useEffect(() => {
+    if (!target || readOnly) return
+    const write = (c: string): void => setCoverRef.current(c)
+    coverWriters.set(target, write)
+    return () => { if (coverWriters.get(target) === write) coverWriters.delete(target) }
+  }, [target, readOnly])
   useEffect(() => {
     const img = imgRef.current
     if (!img) return
@@ -117,6 +165,9 @@ export function NoteCover({ page, cover: coverProp, coverY, onSetCover, onSetCov
   const posY = dragY ?? savedY
   const setCover = onSetCover ?? ((c: string | null) => { if (target) void scoped.getState().setPageCover(target, c) })
   const setY = onSetCoverY ?? ((y: number) => { if (target) void scoped.getState().setPageCoverY(target, y) })
+  setCoverRef.current = setCover
+  const pending = usePendingCovers((all) => (target ? all[target] : undefined))
+  if (target && pending) return <PendingCover page={target} {...pending} />
   if (!target || !cover) return null
   const src = /^https?:\/\//i.test(cover) ? cover : toAssetUrl(cover)
   return (
@@ -227,6 +278,9 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
   ]
 
   const apply = (cover: string): void => {
+    // 明确选了别的(图库 / 链接):在传或传失败的那张作废,它传完也不再写封面,也不再挡住新封面
+    const pend = usePendingCovers.getState()[page]
+    if (pend) clearPendingCover(page, pend.id)
     setPicked(cover)
     if (onApply) onApply(cover)
     else void scoped.getState().setPageCover(page, cover) // 不自动关闭:用户可连选换图,点浮层外才关
@@ -247,14 +301,22 @@ export function CoverPicker({ page, x, y, onClose, onApply }: {
     input.onchange = () => {
       const f = input.files?.[0]
       if (!f) return
-      void (async () => {
-        try {
-          const bytes = new Uint8Array(await f.arrayBuffer())
-          const { opts } = await getAttachmentPrefs()
-          const { pageRel } = await amadeus.saveAttachment(page, f.name || 'cover.png', bytes, opts)
-          apply(joinRel(page.split('/').slice(0, -1).join('/'), pageRel))
-        } catch { /* 保存失败静默 */ }
-      })()
+      // 封面区先出本地预览 + 环(PendingCover);失败留在封面区给重试,不再静默吞掉
+      const id: string = startUpload(f.name, f.size, async ({ stage, progress, signal }) => {
+        stage('uploading')
+        const bytes = new Uint8Array(await f.arrayBuffer())
+        const { opts } = await getAttachmentPrefs()
+        const { pageRel } = await oneSaveAtATime(() => amadeus.saveAttachment(page, f.name || 'cover.png', bytes, opts, (sent, total) => progress(total > 0 ? (sent / total) * f.size : null)))
+        if (signal.aborted) return // 被下一张顶掉 / 选了别的 / 点了「不用了」:文件已存进附件,只是不当封面
+        const rel = joinRel(page.split('/').slice(0, -1).join('/'), pageRel)
+        clearPendingCover(page, id)
+        const write = coverWriters.get(page)
+        if (write) write(rel)
+        else apply(rel)
+      })
+      const prev = usePendingCovers.getState()[page]
+      if (prev) clearPendingCover(page, prev.id) // 连着换:前一张作废,它传完也不再写封面
+      usePendingCovers.setState((all) => ({ ...all, [page]: { id, preview: URL.createObjectURL(f) } }), true)
     }
     input.click()
   }

@@ -7,7 +7,7 @@
  * 结构照抄 agentLoopTruncation.test.ts:真内存 SQLite + 真 loop,fake llm 按脚本逐轮出招。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { configureTangu } from '../src/seams/runtime.js';
@@ -22,6 +22,7 @@ import { enqueueRun, abortRun } from '../src/services/agentLoop.js';
 import { subscribe } from '../src/services/eventBus.js';
 import { resolveInquiry } from '../src/services/inquiries.js';
 import { LlmError } from '../src/core/types.js';
+import { __resetQuotaRelay } from '../src/llm/quotaRelay.js';
 
 const USER = 'u1';
 let home: string;
@@ -44,7 +45,7 @@ beforeEach(async () => {
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
 
   const fakeLlm: any = {
-    resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test' }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
+    resolveModelAndKey: async (id: string) => ({ model: { provider: 'test', name: id === 'fb' ? 'Fallback' : 'test' }, apiKey: id === 'fb' ? 'kfb' : 'k', baseUrl: 'b', apiModelId: id === 'fb' ? 'fb-api' : 'm' }),
     buildProviderPayload: async (o: any) => ({ messages: o.messages.map((m: any) => ({ ...m })) }),
     streamProviderCompletion: async (o: any) => {
       llmPayloads.push(o.payload);
@@ -102,10 +103,10 @@ const userTexts = (payload: any): string => (payload.messages as any[])
   .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
   .join('\n---\n');
 
-async function runToSettled(agentConfig: Record<string, any> = {}, msg = '干活', client?: string, clientCapabilities?: string[]): Promise<any> {
+async function runToSettled(agentConfig: Record<string, any> = {}, msg = '干活', client?: string, clientCapabilities?: string[], extraInput: Record<string, unknown> = {}): Promise<any> {
   await createRun({
     id: 'R1', sessionId: 'S', userId: USER, appId: 'tangu', modelId: 'm1', assistantMessageId: 'A1',
-    input: { message: msg, userMessageId: 'U1', attachments: [], agentConfig, ...(client ? { client } : {}), ...(clientCapabilities ? { clientCapabilities } : {}) },
+    input: { message: msg, userMessageId: 'U1', attachments: [], agentConfig, ...(client ? { client } : {}), ...(clientCapabilities ? { clientCapabilities } : {}), ...extraInput },
   });
   enqueueRun('S', 'R1');
   const t0 = Date.now();
@@ -468,4 +469,164 @@ describe('凭证失效续期(反馈 6a239e58:xAI 订阅 token 过期,502 被当�
     expect(run.status).toBe('done');
     expect(refreshed).toBe(0);
   }, 20_000);
+});
+
+describe('回灌的加密推理被拒(借鉴 magpie 第三轮 19,10-28)', () => {
+  const foreign = () => { throw Object.assign(new LlmError(400, 'The encrypted content for item rs_ could not be verified. Reason: Encrypted content could not be decrypted or parsed.'), { code: 'invalid_encrypted_content' }); };
+  const reasoningToolStep = () => () => ({
+    ...todoWriteStep([{ content: '任务A', status: 'completed' }])(),
+    outputItems: [{ type: 'reasoning', id: 'rs_x', encrypted_content: 'ENC' }, { type: 'function_call', call_id: 'tc1', name: 'todo_write', arguments: '{}' }],
+  });
+  const withItems = (p: any) => (p.messages as any[]).filter((m) => Array.isArray(m.providerItems) && m.providerItems.length).length;
+  const statusOf = (phase: string) => query<any[]>(`SELECT payload FROM agent_run_events WHERE run_id = 'R1' AND type = 'status'`)
+    .then((rows) => rows.map((r) => JSON.parse(r.payload)).filter((p) => p.phase === phase)).catch(() => []);
+
+  it('被拒:拿掉推理条目重发这一轮,成了;发 reasoning_dropped', async () => {
+    script = [reasoningToolStep(), foreign, finalStep('好了')];
+    const run = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(llmPayloads.map(withItems)).toEqual([0, 1, 0]);
+    expect((await statusOf('reasoning_dropped'))[0]).toMatchObject({ dropped: 1 });
+  }, 20_000);
+
+  it('只重发一次:拿掉之后还被拒就停下报错', async () => {
+    script = [reasoningToolStep(), foreign, foreign];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(3);
+  }, 20_000);
+
+  it('流里来的被拒(502)也只重发一次:拿掉之后再被拒不走网关抖动的三次重试', async () => {
+    const foreign502 = () => { throw Object.assign(new LlmError(502, 'The encrypted content for item rs_ could not be verified.'), { code: 'invalid_encrypted_content' }); };
+    script = [reasoningToolStep(), foreign502, foreign502, finalStep('不该走到这')];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(3);
+  }, 20_000);
+
+  it('本来就没带推理:不重发(一模一样的请求只会再被拒)', async () => {
+    script = [foreign];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(1);
+    expect(await statusOf('reasoning_dropped')).toEqual([]);
+  }, 20_000);
+});
+
+describe('额度用完接力(借鉴 magpie 方案 2,10-28)', () => {
+  const quota = () => { throw Object.assign(new LlmError(429, 'The usage limit has been reached (resets in ~60 min)'), { resetsAt: Date.now() + 3_600_000 }); };
+  const setFallback = (models: Record<string, unknown>) => writeFileSync(join(home, 'config.json'), JSON.stringify({ models }));
+  beforeEach(() => __resetQuotaRelay());
+  const statusOf = (phase: string) => query<any[]>(`SELECT payload FROM agent_run_events WHERE run_id = 'R1' AND type = 'status'`)
+    .then((rows) => rows.map((r) => JSON.parse(r.payload)).filter((p) => p.phase === phase)).catch(() => []);
+
+  it('没设后备:照今天的行为停下报错,只发一次请求', async () => {
+    script = [quota];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+
+  it('设了后备:还没吐字就换后备重发这一轮,发「改用了」事件,回答记实际模型和来由', async () => {
+    setFallback({ quotaFallback: 'fb' });
+    const keys: string[] = [];
+    script = [(o) => { keys.push(o.apiKey); return quota(); }, (o) => { keys.push(o.apiKey); return finalStep('用后备答完了')(); }];
+    const run = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(keys).toEqual(['k', 'kfb']);
+    const ev = await statusOf('model_fallback');
+    expect(ev[0]).toMatchObject({ reason: 'quota', from: 'm1', to: 'fb', toName: 'Fallback' });
+    const rows = await query<any[]>(`SELECT model_id, origin FROM chat_messages WHERE session_id = 'S' AND role = 'model'`);
+    expect(rows.at(-1)).toMatchObject({ model_id: 'fb', origin: 'fallback:quota' });
+  }, 20_000);
+
+  it('后备也用完:停下报错,不往下找', async () => {
+    setFallback({ quotaFallback: 'fb' });
+    script = [quota, quota];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(llmPayloads.length).toBe(2);
+  }, 20_000);
+
+  it('「换之前先问我」开着:不换,这一轮停下,报错带上后备模型', async () => {
+    setFallback({ quotaFallback: 'fb', quotaFallbackAsk: true });
+    script = [quota];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(String(run.error)).toContain('[quota_fallback_ask:fb]');
+    expect(llmPayloads.length).toBe(1);
+  }, 20_000);
+
+  it('下一轮:重置时间没到就直接用后备,不再白发一次原模型', async () => {
+    setFallback({ quotaFallback: 'fb' });
+    script = [quota, finalStep('第一轮')];
+    expect((await runToSettled()).status).toBe('done');
+    const keys: string[] = [];
+    script = [(o) => { keys.push(o.apiKey); return finalStep('第二轮')(); }];
+    await query(`DELETE FROM agent_runs WHERE id = 'R1'`).catch(() => {});
+    await query(`DELETE FROM agent_run_events WHERE run_id = 'R1'`).catch(() => {});
+    expect((await runToSettled()).status).toBe('done');
+    expect(keys).toEqual(['kfb']);
+  }, 20_000);
+
+  it('这一轮已经答过一步(工具轮)再撞上额度:不换,免得一段回答拼了两个模型', async () => {
+    setFallback({ quotaFallback: 'fb' });
+    const keys: string[] = [];
+    script = [(o) => { keys.push(o.apiKey); return todoWriteStep([{ content: '任务A', status: 'completed' }])(); }, (o) => { keys.push(o.apiKey); return quota(); }];
+    const run = await runToSettled();
+    expect(run.status).toBe('failed');
+    expect(keys).toEqual(['k', 'k']);
+    expect(await statusOf('model_fallback')).toEqual([]);
+  }, 20_000);
+
+  it('「先问我」卡上点了「改用 X」(quotaFallbackNow):这一轮直接用后备,照样发事件、记来由', async () => {
+    setFallback({ quotaFallback: 'fb', quotaFallbackAsk: true });
+    const keys: string[] = [];
+    script = [(o) => { keys.push(o.apiKey); return finalStep('用后备答完了')(); }];
+    const run = await runToSettled({}, '干活', undefined, undefined, { quotaFallbackNow: true });
+    expect(run.status).toBe('done');
+    expect(keys).toEqual(['kfb']);
+    expect((await statusOf('model_fallback'))[0]).toMatchObject({ reason: 'quota', to: 'fb' });
+    const rows = await query<any[]>(`SELECT model_id, origin FROM chat_messages WHERE session_id = 'S' AND role = 'model'`);
+    expect(rows.at(-1)).toMatchObject({ model_id: 'fb', origin: 'fallback:quota' });
+  }, 20_000);
+
+  it('负对照:秒级限流(rate limit)照旧退避重试,不换模型', async () => {
+    setFallback({ quotaFallback: 'fb' });
+    const keys: string[] = [];
+    script = [(o) => { keys.push(o.apiKey); throw new LlmError(429, 'Rate limit reached, retry in 1s'); }, (o) => { keys.push(o.apiKey); return finalStep('好了')(); }];
+    const run = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(keys).toEqual(['k', 'k']);
+  }, 20_000);
+});
+
+describe('轮数上限(10-25:交互 run 默认不限)', () => {
+  // 95 轮工具调用再收尾:旧默认 90 会在第 90 次调用剥掉工具、追加耗尽提示(用户 10-25 导出:48 分钟、113 次调用的正常任务被截)。
+  const longScript = () => [
+    ...Array.from({ length: 95 }, () => todoWriteStep([{ content: '任务A', status: 'completed' }])), // todo 全完成,隔离完成度审计
+    finalStep('全部完成。'),
+  ];
+  const finalText = async () => {
+    const rows = await query<any[]>(`SELECT role, content FROM chat_messages WHERE session_id = 'S'`);
+    return String(rows.filter((r) => r.role === 'model').pop()?.content ?? '');
+  };
+
+  it('会话 / Agent 都没设上限 → 跑满 95 轮工具后自然收尾,没有末轮提示与耗尽提示', async () => {
+    script = longScript();
+    const run = await runToSettled();
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(96);
+    expect(llmPayloads.some((p) => userTexts(p).includes('final iteration'))).toBe(false);
+    expect(await finalText()).not.toContain('最大循环轮数');
+  }, 30_000);
+
+  it('负对照:显式 /loop 90 照旧在第 90 次调用收尾并点名来源', async () => {
+    script = longScript();
+    const run = await runToSettled({ maxIterations: 90 });
+    expect(run.status).toBe('done');
+    expect(llmPayloads.length).toBe(90);
+    expect(userTexts(llmPayloads[89])).toContain('final iteration');
+    expect(await finalText()).toContain('已达到最大循环轮数(90 轮,来自本会话 /loop 设置)');
+  }, 30_000);
 });

@@ -7,6 +7,9 @@ import type { MdMark } from '@amadeus-shared/mdMarks'
 import { isStamped, resolveBaseType } from '../blocks/database/propertyTypes'
 import { addAggRow, deleteAggRow, duplicateAggRow, getAggDb, restoreAggRow, setAggCell, setAggName, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
 import { findMdMark, markKey, patchMark, watchMdMarks } from '../store/mdMarkStore'
+import { HUMAN_CAL } from '../store/humanCalendarIo'
+import { watchHumanCal } from '../store/calendarMembers'
+import { useDbStore } from '../store/dbStore'
 import { usePageStore } from '../store/pageStore'
 import { normalizeVaultRel } from './pluginAutomation'
 import type { PluginContext, PluginDatabase, PluginNoteTask } from './types'
@@ -23,7 +26,7 @@ export const toDb = (db: AggDb): PluginDatabase => ({
   kind: db.isNoteView ? 'notes' : 'table',
   columns: db.columns.map((c) => ({ id: c.id, name: c.name, type: c.type, base: resolveBaseType(c.type) })),
   // 拷贝:宿主 store 里的 cells 是共享引用,插件原地改了会随下一次保存落盘(还绕过盖章列)
-  rows: db.rows.map((r) => ({ id: r.rowId, name: r.name, cells: copyCells(r.cells) })),
+  rows: db.rows.map((r) => ({ id: r.rowId, name: r.name, cells: copyCells(r.cells), ...(r.body?.trim() ? { hasBody: true } : {}) })),
 })
 
 const toTask = (m: MdMark): PluginNoteTask => ({
@@ -48,8 +51,12 @@ const isDue = (s: string): boolean => {
 
 const vaultKey = (): string => { const s = usePageStore.getState(); return `${s.vaultSide}:${s.vaultRoot}` }
 
-export function createDatabasesApi(scope: DataScope): NonNullable<PluginContext['databases']> {
-  const table = (path: unknown): AggDb | null => (typeof path === 'string' ? getAggDb(normalizeVaultRel(path)) : null)
+/** Only calendar-capable consumers may address the exact host-owned personal calendar. */
+export const pluginDatabasePath = (path: unknown, includeHumanCalendar = false): string =>
+  typeof path !== 'string' ? '' : path === HUMAN_CAL ? (includeHumanCalendar ? HUMAN_CAL : '') : normalizeVaultRel(path)
+
+export function createDatabasesApi(scope: DataScope, includeHumanCalendar = false): NonNullable<PluginContext['databases']> {
+  const table = (path: unknown): AggDb | null => getAggDb(pluginDatabasePath(path, includeHumanCalendar))
   const cellsOf = (db: AggDb, raw: unknown): Record<string, CellValue> => {
     const out: Record<string, CellValue> = {}
     if (raw && typeof raw === 'object') {
@@ -60,25 +67,35 @@ export function createDatabasesApi(scope: DataScope): NonNullable<PluginContext[
   return {
     subscribe: (cb) => {
       if (!scope.alive() || typeof cb !== 'function') return () => {}
+      const humanOff = includeHumanCalendar ? watchHumanCal() : () => {}
       const off = watchAllDatabases((dbs, ready) => {
         if (!scope.alive()) return
-        try { cb({ ready, databases: dbs.map(toDb) }) } catch (e) { console.error('[amadeus] ctx.databases 回调抛错', e) }
+        const human = includeHumanCalendar ? getAggDb(HUMAN_CAL) : null
+        const status = useDbStore.getState().entries[HUMAN_CAL]?.status
+        try { cb({ ready: ready && (!includeHumanCalendar || !!status && status !== 'loading'), databases: (human ? [human, ...dbs] : dbs).map(toDb) }) } catch (e) { console.error('[amadeus] ctx.databases 回调抛错', e) }
       })
-      return scope.own(off)
+      return scope.own(() => { off(); humanOff() })
     },
-    setCell: (path, rowId, colId, value) => {
+    setCell: (path, rowId, colId, value, expected) => {
       if (!scope.alive()) return false
       const db = table(path)
       const col = db?.columns.find((c) => c.id === colId)
       if (!db || !col || isStamped(col.type) || !db.rows.some((r) => r.rowId === rowId)) return false
       if (value !== undefined && !isCell(value)) return false
+      if (expected !== undefined) {
+        if (!expected || typeof expected !== 'object' || !Object.hasOwn(expected, 'value') || expected.value !== undefined && !isCell(expected.value)) return false
+        const row = db.rows.find((r) => r.rowId === rowId)!
+        if (JSON.stringify(row.cells[colId] ?? null) !== JSON.stringify(expected.value ?? null)) return false
+        // Note-view writes don't have the classic table's replayed CAS predicate.
+        if (db.isNoteView) return false
+      }
       // 笔记视图的标题列 = 笔记名:改它就是给笔记改名(同内置日历的 setAggName),不往 frontmatter 里写
       if (db.isNoteView && col.type === 'page') {
         if (typeof value !== 'string' || !value.trim()) return false
         setAggName(db, String(rowId), value)
         return true
       }
-      setAggCell(db, String(rowId), col.id, Array.isArray(value) ? [...value] : value)
+      setAggCell(db, String(rowId), col.id, Array.isArray(value) ? [...value] : value, expected ? { value: Array.isArray(expected.value) ? [...expected.value] : expected.value } : undefined)
       return true
     },
     addRow: async (path, cells, name) => {

@@ -483,3 +483,11 @@ native 无 nginx 的同源 `/auth` 代理 → 系统浏览器打开 `${VITE_AUTH
 - **M0**(本 app):Tangu Space 会话控制 + APK。骨架 + 承重 spike 已验证(见 `docs/Log`)。
 - **M1**:Inbox Space —— 需服务端把 inbox 从 hostExec 解耦成云端 user-scoped。
 - **M2**:Amadeus Space —— 触屏笔记 UI + 数据后端(Capacitor FS 本地 → 云笔记 API 同步)。
+
+### Bundled Forsion Extend
+
+Mobile uses the signed renderer in `vendor/extend-mobile.tgz`, pinned by SHA-512 and version in `extend-bundle.json`. The build verifies the official Ed25519 public key from Desktop's `builtinBundles.json`, all signed file hashes, package identity and `mobileHostApi: 1`. It never downloads plugin code at runtime. A local signed archive may be selected with `FORSION_EXTEND_PACKAGE`; `FORSION_EXTEND_INTEGRITY` can additionally pin its SHA-512.
+
+For source compatibility tests only, use `FORSION_EXTEND_TEST_ROOT=<Extend checkout> npm run build -- --mode extend-test`. Other build modes reject that override. These builds contain `forsion-extend-test-only.json`; Android release builds refuse to package them. `npm run test:account`, `npm run test:extendbundle` and `npm run e2e:extend` cover account boundaries, bundle verification and the real bundled account/store/drive UI. The browser test uses isolated API fixtures and verifies uploaded and downloaded bytes; it does not use a real account.
+
+原生验收可使用只读 AVD 与并装预览 APK；`FORSION_ANDROID_PACKAGE=com.forsion.tangu.nativepreview ANDROID_SERIAL=<serial> npm run emu:savedl` 验证原生系统下载。正式签名包构建与 `extend-test` 源码台架必须分别报告；源码台架不代表正式 APK 已验证。

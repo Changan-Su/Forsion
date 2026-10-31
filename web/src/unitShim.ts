@@ -6,7 +6,7 @@
 
 import type { UnitCloudCapabilities } from './unitCloudTransport'
 
-interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
+interface UnitMeta { instanceId: string; name: string; version: string; projection?: 'public' | 'local'; inheritWebAccount?: boolean; localCapabilities?: { vault: boolean; engine: boolean; host: boolean }; browserStorage?: boolean; account?: { apiBase: string; loginPath: string }; capabilities?: UnitCloudCapabilities }
 
 const base = (): URL => new URL('.', document.baseURI)
 
@@ -168,10 +168,14 @@ export async function installUnitShim(): Promise<boolean> {
   }
   try { await pullConfig() } catch { /* 首拉失败:偏好按缺省,连接面不受影响 */ }
   const mergedConfig = (): Record<string, unknown> => ({ modelId: '', ...remotePrefs, ...cfg })
-  const w = window as unknown as { tangu?: Record<string, unknown> }
+  const w = window as unknown as { tangu?: Record<string, unknown>; __FORSION_PRODUCT_RUNTIME__?: { market?: boolean } }
+  // 服务器 Unit 装了首方包(Forsion Extend)才有商店可开(host.ts refreshProduct 按已装的包写 market)
+  const storePages = !!visitor && w.__FORSION_PRODUCT_RUNTIME__?.market === true
   w.tangu = {
     /** 设备页标志:共享层据此知道「这是别的设备曝出来的面」(插件清单走 unit/plugins)。 */
     unitPage: true,
+    /** 服务器 Unit 的网页主入口(不是看别的设备):页面账号 = 来访者本人,Extend 的账号 / 商店页据此放行。 */
+    ...(published ? { unitPublicEntry: true } : {}),
     /** 远端身份:unitWeb 给本页的 /engine 请求盖 x-forsion-remote(工作区主人的本地投影除外,那是直通)。
      *  审批卡据此不给改命令 / 总允许(引擎对远端不兑现这两样)。 */
     remoteCaller: !local,
@@ -179,6 +183,9 @@ export async function installUnitShim(): Promise<boolean> {
     executionCapabilities: { host: local ? !!meta.localCapabilities?.host : !published },
     ...(cloud ? { cloudWeb: true } : {}),
     initialConfig: mergedConfig(),
+    // 商店:网页版装不了插件(marketTypes 空 → 不列目录、不给安装),只开插件提供的页(Extend 的会员 / 积分 / 道具)和投稿。
+    // marketList 在这里只当商店入口(rb-market / open-market)的门控键,恒空。
+    ...(storePages ? { marketTypes: [], marketList: async () => ({ items: [] }) } : {}),
     ...(visitor ? {
       account: visitor.capability,
       forsionLogin: visitor.login,

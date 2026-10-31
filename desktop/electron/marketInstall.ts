@@ -23,8 +23,23 @@ function normVer(raw: unknown): string | null {
 }
 
 /**
+ * SKILL.md frontmatter 的版本:顶层 `version:`,没有再看 `metadata:` 下缩进的 `version:`(Agent Skills 规范的写法)。
+ * ⚠️ 与 server `microserver/market/services/zipVersion.ts` 的 skillField 逐条同口径:服务端读得到、这里读成 null,
+ * 这台机器就永远收不到更新提示(2026-10-24 前两边都只认顶层)。
+ */
+export function skillVersion(text: string): string | null {
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1]
+  if (!fm) return null
+  const top = /(?:^|\n)version\s*:\s*["']?([^"'\n]+)/.exec(fm)
+  if (top) return top[1].trim() || null
+  const meta = /(?:^|\n)metadata\s*:[ \t]*\r?\n((?:(?:[ \t]+[^\n]*|\r?)(?:\n|$))*)/.exec(fm)?.[1] // 块里的空行照样算块内(YAML 合法)
+  const nested = meta && /(?:^|\n)[ \t]+version\s*:\s*["']?([^"'\n]+)/.exec(meta)
+  return nested ? nested[1].trim() || null : null
+}
+
+/**
  * 读已安装项的版本号(从 manifest),供市场「可更新」检查:
- * skill=SKILL.md frontmatter version;plugin=tangu-plugin.json version;agent=config.toml version。读不到 → null。
+ * skill=SKILL.md frontmatter version(顶层或 metadata.version);plugin=tangu-plugin.json version;agent=config.toml version。读不到 → null。
  */
 export async function readInstalledVersion(type: string, dir: string): Promise<string | null> {
   try {
@@ -40,11 +55,7 @@ export async function readInstalledVersion(type: string, dir: string): Promise<s
     if (type === 'amadeus-plugin') {
       return normVer(JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8'))?.version)
     }
-    if (type === 'skill') {
-      const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(await readFile(join(dir, 'SKILL.md'), 'utf8'))
-      const m = fm && /(?:^|\n)version\s*:\s*["']?([^"'\n]+)/.exec(fm[1])
-      return m ? normVer(m[1]) : null
-    }
+    if (type === 'skill') return normVer(skillVersion(await readFile(join(dir, 'SKILL.md'), 'utf8')))
     if (type === 'agent') {
       const m = /(?:^|\n)\s*version\s*=\s*["']([^"'\n]+)["']/.exec(await readFile(join(dir, 'config.toml'), 'utf8'))
       return m ? normVer(m[1]) : null

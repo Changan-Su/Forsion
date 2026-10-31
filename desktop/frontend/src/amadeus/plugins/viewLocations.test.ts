@@ -38,6 +38,13 @@ describe('ctx.viewLocations / openView 停靠位', () => {
     expect(ctxOf('p-old').viewLocations).toEqual(['main', 'left', 'right'])
   })
 
+  it('openView passes leaf-local filters without permitting another plugin namespace', () => {
+    const open = vi.fn()
+    usePluginStore.getState().setViewOpener(open)
+    ctxOf('tasks').openView('todo', { params: { view: 'today', db: 'T.db' } })
+    expect(open).toHaveBeenCalledWith('plugin:tasks:todo', undefined, { view: 'today', db: 'T.db' })
+  })
+
   it('④ 跟随后来接线的打开器(插件 setup 早于桌面壳接线也拿得到)', () => {
     usePluginStore.getState().setViewOpener(null)
     const ctx = ctxOf('p-late')

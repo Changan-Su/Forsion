@@ -545,12 +545,13 @@ async function groupC(browser) {
     const items = await pickMore(page, 'plugin:ai-harness:shout')
     const p = await waitPhase(page, 'done')
     const w0 = await page.evaluate(() => window.__upage.writes.length)
+    const boldPreview = await page.locator('[data-testid="inline-ai-preview"] strong').textContent()
     const req = await page.evaluate(() => window.__aiReqs.at(-1))
     if (await page.$('[data-testid="inline-ai-panel"] [data-act="replace"]')) await page.click('[data-testid="inline-ai-panel"] [data-act="replace"]')
     await page.waitForTimeout(1500)
     const disk = await page.evaluate(() => window.__upage.vault.get('Unified.md'))
     check('C8a 插件项出现在 ⋯、ctx.tangu.complete 已注入并走宿主探针(action=custom)', items.includes('plugin:ai-harness:shout') && (await page.evaluate(() => window.__plugComplete)) === 'function' && req?.action === 'custom' && req?.instruction === 'shout it', `${items.join(',')} ${JSON.stringify(req)}`)
-    check('C8b 插件结果只进预览,确认前零写入;替换后落盘', p?.preview === '**写得不太好**Better text.' && w0 === 0 && disk === '# 周报\n\n完成了登录页改版，**写得不太好**Better text.。\n\n第二段保持不动。\n', JSON.stringify({ p, w0, disk }))
+    check('C8b 插件结果渲染 Markdown 后只进预览,确认前零写入;替换后落盘仍为源码', p?.preview === '写得不太好Better text.' && boldPreview === '写得不太好' && w0 === 0 && disk === '# 周报\n\n完成了登录页改版，**写得不太好**Better text.。\n\n第二段保持不动。\n', JSON.stringify({ p, w0, disk }))
     await page.close()
   }
   // C10 预览停着时,焦点在别处的输入框(侧栏聊天 / 搜索 / 属性框)里按回车 / Esc:归那个输入框,面板不接管、零写入

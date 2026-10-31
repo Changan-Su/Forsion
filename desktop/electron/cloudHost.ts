@@ -31,6 +31,14 @@ export const signedEssentials = (entry: string): string[] => [entry, 'manifest.j
 /** Genesis 主进程给内置包主进程半身的接缝。Forsion-Extend 仓 src/desktop/host.d.ts 是它的镜像,两边同改。
  *  入口是从一次性临时文件跑起来的(见下),所以它必须是自包含单文件:`import.meta.url` 相对的邻居文件不存在,设计如此。 */
 export interface CloudHost {
+  contentSync?: {
+    roots(): Promise<Array<{prefix:string;root:string}>>
+    claim(owned:boolean): Promise<void>
+    changed(): Promise<void>
+    merge(path:string,ours:string,base:string|null,theirs:string): {content:string;conflict:boolean}|null
+    withWriteLock(path:string|string[],commit:()=>void): Promise<void>
+    trash(path:string): Promise<void>
+  }
   /** 当前账号的云端基址(无尾斜杠)与 token(空串=未登录)。token 只在主进程流转,绝不下发渲染层。 */
   getCloud(): Promise<{ base: string; token: string }>
   /** 等价 ipcMain.handle;宿主记下通道名,preload 据此只保留有人接的桥键(cloud:present)。 */
@@ -87,7 +95,23 @@ export interface CloudHost {
   /** 登记一条「还有事没做完」的判断:返回非 null 时宿主在退出前弹「退出 / 取消」(文案用它给的,按钮宿主翻)。
    *  locale = 主进程当前的界面语言(mainI18n)。返回退订。见 electron/quitGuard.ts。 */
   addQuitGuard(fn: QuitGuardFn): () => void
+  // ── 2.13.8 起(帮助改进 Forsion:契约 docs/ToBeImproved/默认数据采集方案_2026-10-28/contract.md §3;实现在 telemetryHost.ts)──
+  /** 匿名遥测的宿主那一半(2.13.8 起)。宿主只采集、转发,自己不存、不发;发不发、开没开由 Extend 定。 */
+  telemetry?: {
+    /** 订阅宿主事件。首个订阅者到来之前宿主最多缓存 50 条(启动早期的崩溃 / 启动耗时),订阅时一次性回放;返回退订。 */
+    subscribe(cb: (ev: HostTelemetryEvent) => void): () => void
+    /** 本次启动的会话 id(uuid,每次启动换)。 */
+    readonly sessionId: string
+    /** 只有正式打包版且不是台架(TANGU_HARNESS_QUIET / FORSION_TELEMETRY=off)才为 true;false → Extend 一条都不发。
+     *  联调时 FORSION_TELEMETRY=force 让 dev 版也为 true。 */
+    readonly packaged: boolean
+    /** 信封用:更新通道;Tangu 引擎版本(拿不到给 null)。 */
+    channel(): 'stable' | 'beta'
+    coreVersion(): string | null
+  }
 }
+/** CloudHost.telemetry 递出的一条宿主事件;props 字段名按白名单 telemetry-schema.json(crash / perf / feature 三类)。 */
+export type HostTelemetryEvent = { event: 'crash' | 'perf' | 'feature'; ts: string; props: Record<string, unknown> }
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>
 
 export interface LoadDesktopEntriesOpts {

@@ -27,3 +27,38 @@
    写死了 color:#fff,深色皮肤下 --accent 近白 = 白字白底(截图自查才发现)。 */
 .amx-qf-seg { margin: 8px 14px; height: 28px; }
 .amx-qf-seg button { font-size: var(--ui-font-meta, 12px); }
+
+/* 进退同命令面板(关键帧在 lcl engine.css):120ms 进、80ms 出;退场由卸载时的替身播(useExitGhost)。 */
+.amx-qf-scrim { animation: lcl-fade-in var(--palette-enter-duration) var(--ease-surface); }
+.amx-qf { animation: lcl-panel-in var(--palette-enter-duration) var(--ease-surface); }
+.amx-qf-scrim[data-lcl-exit] { animation: lcl-fade-out var(--menu-exit-duration) var(--ease-exit) forwards; }
+.amx-qf-scrim[data-lcl-exit] > .amx-qf { animation: lcl-panel-out var(--menu-exit-duration) var(--ease-exit) forwards; }
+@media (prefers-reduced-motion: reduce) {
+  .amx-qf { animation-name: lcl-fade-in; }
+  .amx-qf-scrim[data-lcl-exit] > .amx-qf { animation-name: lcl-fade-out; }
+}
+
+/* 「对话内容」一段(按正文搜会话,10-24 借鉴 Comma §2.8):有结果时面板放宽,右边出预览栏;窄于 760px / 手机不出预览栏。 */
+.amx-qf-body { flex: 1; min-height: 0; display: flex; }
+.amx-qf-body > .amx-qf-list { min-width: 0; }
+.amx-qf-wide { width: min(920px, 92vw); }
+.amx-qf-hit { align-items: flex-start; }
+.amx-qf-hitmain { flex: 1; min-width: 0; }
+.amx-qf-hitmain .amx-qf-title { display: block; max-width: none; }
+.amx-qf-snip { display: block; margin-top: 2px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amx-qf-hit .amx-qf-sub { flex: none; }
+/* 命中处垫一层主题色的浅底,不画框 */
+.amx-qf mark { background: color-mix(in srgb, var(--accent-ink) 22%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; }
+.amx-qf-preview { flex: none; width: 360px; border-left: 1px solid var(--border); padding: 14px 16px; overflow: hidden; display: flex; flex-direction: column; gap: 12px; font-size: var(--ui-font-caption, 11px); line-height: 1.6; }
+.amx-qf-pv-head { display: flex; justify-content: space-between; gap: 12px; color: var(--text-faint, var(--text-muted)); }
+.amx-qf-pv-head > span:first-child { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.amx-qf-pv-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.amx-qf-pv-empty { align-items: center; justify-content: center; text-align: center; color: var(--text-faint, var(--text-muted)); }
+.amx-qf-pv-user, .amx-qf-pv-reply { white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 6; overflow: hidden; flex: none; }
+.amx-qf-pv-user { align-self: flex-end; max-width: 85%; padding: 6px 10px; border-radius: var(--radius-md, 10px); background: var(--overlay-light, rgba(127, 127, 127, 0.14)); -webkit-line-clamp: 3; }
+.amx-qf-pv-reply { color: var(--text); }
+.amx-qf-pv-hint { flex: none; color: var(--text-faint, var(--text-muted)); }
+@media (max-width: 759px) {
+  .amx-qf-wide { width: min(680px, 92vw); }
+  .amx-qf-preview { display: none; }
+}

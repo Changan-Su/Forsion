@@ -141,6 +141,8 @@ export async function startRun(
     modelId?: string
     attachments?: Attachment[]
     agentConfig?: AgentConfig
+    /** 额度用完「先问我」卡上点了「改用 X」:这一轮直接用设置里的后备模型。 */
+    quotaFallback?: boolean
   },
 ): Promise<StartRunResult> {
   // 模型:目标不带模型,回退链只在调用方(appStore.send 的 sessionModelId:会话的 → 按目标的缺省 → 目录 defaultModelId,
@@ -166,6 +168,7 @@ export async function startRun(
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},
+      ...(params.quotaFallback ? { quota_fallback: true } : {}),
     }),
   })
   // 远端拒绝码(设备页的工作目录落在受保护位置 → REMOTE_CWD_FORBIDDEN 等)换成本地化提示;其余照旧取 detail / 原文
@@ -320,6 +323,24 @@ export async function sendUiAck(
     if (attempt === 0) await delay(400)
   }
   return outcome
+}
+
+/**
+ * 客户端动作(`client_cmd`)的 claim / result 电文(契约 tangu-agent/docs/phone-control.md §3.2)。目前只有桌面的插件沙箱
+ * 在 JS 里回执(services/pluginSandboxSurface.ts);手机那边由原生自己发。网络异常 / 5xx 重试一次,4xx(含 410)是终局。
+ * 返回响应体(2xx)或 null(其余一切)。
+ */
+export async function postClientAction(t: EngineTarget, runId: string, ackId: string, body: Record<string, unknown>): Promise<Record<string, unknown> | null> {
+  const path = `/agent/runs/${encodeURIComponent(runId)}/inquiries/${encodeURIComponent(ackId)}`
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await engineRequest(t, path, { method: 'POST', body: JSON.stringify(body) })
+      if (r.ok) return await r.json().catch(() => ({}))
+      if (r.status < 500) return null
+    } catch { /* 网络异常 → 重试一次 */ }
+    if (attempt === 0) await delay(400)
+  }
+  return null
 }
 
 /** 兑现一次 Agent Desk 截屏请求(desk_screenshot)。失败也要发——引擎那头在等,不发就是干等超时。

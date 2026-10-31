@@ -2,14 +2,21 @@ import { describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
-vi.mock('electron', () => ({ app: {}, clipboard: {}, ipcMain: {} }))
+const clipboard = vi.hoisted(() => ({ writeText: vi.fn() }))
+vi.mock('electron', () => ({ app: {}, clipboard, ipcMain: {} }))
 // 故障注入:新副本就位(临时目录改名成正式目录)那一下失败
 const inject = vi.hoisted(() => ({ failTmpRename: false }))
 vi.mock('fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('fs')>()
   return { ...real, renameSync: (from: string, to: string) => { if (inject.failTmpRename && from.endsWith('.tmp')) throw new Error('EPERM (injected)'); return real.renameSync(from, to) } }
 })
-import { browserControlCode, ensureClipCopy, syncClipVersion } from './clipExtension'
+import { browserControlCode, CHROME_EXTENSIONS_URL, ensureClipCopy, openChromeExtensions, syncClipVersion } from './clipExtension'
+
+it.skipIf(process.platform === 'darwin')('Windows/Linux open-extensions fallback returns the copy instruction', async () => {
+  clipboard.writeText.mockClear()
+  expect(await openChromeExtensions()).toEqual({ ok: false, copied: true, reason: 'unsupported' })
+  expect(clipboard.writeText).toHaveBeenCalledExactlyOnceWith(CHROME_EXTENSIONS_URL)
+})
 
 const ext = (root: string, version: string): string => {
   const dir = join(root, `src-${version}`)

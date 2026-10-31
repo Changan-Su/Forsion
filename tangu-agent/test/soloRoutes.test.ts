@@ -21,6 +21,10 @@ import { saveAgent, libDirOf } from '../src/agents/agentRegistry.js';
 import { engineLibDir } from '../src/core/tanguHome.js';
 import { validSessionFacts } from '../src/routes/sessions.js';
 import soloRouter from '../src/routes/solo.js';
+import agentsRouter from '../src/routes/agents.js';
+import trashRouter from '../src/routes/trash.js';
+import { saveTeam, getTeam } from '../src/agents/teamRegistry.js';
+import { loadTriggers, saveTriggers } from '../src/services/museTriggers.js';
 
 const USER = 'u1';
 let srv: Server;
@@ -47,6 +51,8 @@ beforeAll(async () => {
   const app = express();
   app.use(express.json());
   app.use(soloRouter);
+  app.use(agentsRouter);
+  app.use(trashRouter);
   srv = app.listen(0);
   base = `http://127.0.0.1:${(srv.address() as any).port}`;
 });
@@ -63,7 +69,7 @@ describe('POST /agent/solo/:kind/:id/open', () => {
     expect(a.body.created).toBe(true);
     const s = a.body.session;
     expect(s.projectless).toBe(true);
-    expect(s.title).toBe('Tangu Ario');
+    expect(s.title).toBe('New Chat'); // 名字不落库,桌面按 soloAgentSlug 现取
     expect(s.agent_config).toEqual({ soloAgentSlug: 'ario', agentSlug: 'ario', execMode: 'host', cwd: libDirOf('ario'), preset: null });
     expect(validSessionFacts(s.agent_config)).toBeNull();
     expect(existsSync(libDirOf('ario'))).toBe(true);
@@ -136,5 +142,96 @@ describe('非 host 形态', () => {
     configureTangu({ host, brain: {} as any, billing: {} as any, profile: createAiStudioProfile() });
     expect((await post('/agent/solo/agent/ario/open')).status).toBe(404);
     configureTangu({ host, brain: {} as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'none' }), engines });
+  });
+});
+
+describe('DELETE /agent/agents/:slug archives that agent’s solo chats (10-28)', () => {
+  it('删掉的 Agent 私聊归档(工作区不再留「已删除」那行);别的 Agent 的私聊不动', async () => {
+    await saveAgent({ slug: 'gone-me', name: 'Gone', description: 'x', systemPrompt: 'x' });
+    const mine = (await post('/agent/solo/agent/gone-me/open')).body.session.id;
+    const other = (await post('/agent/solo/agent/ario/open')).body.session.id;
+    const r = await fetch(`${base}/agent/agents/gone-me?keepFiles=1`, { method: 'DELETE', headers: { Authorization: 'Bearer x' } });
+    expect(r.status).toBe(200);
+    expect((await r.json()).ok).toBe(true);
+    expect(!!(await row(mine)).archived).toBe(true);
+    expect(!!(await row(other)).archived).toBe(false);
+  });
+});
+
+describe('uninstalling an agent into the trash and restoring it (10-28)', () => {
+  beforeAll(() => runMigration()); // 上面「非 host 形态」换过一个只有基础表的库
+  const call = async (method: string, path: string): Promise<any> => {
+    const r = await fetch(`${base}${path}`, { method, headers: { Authorization: 'Bearer x' } });
+    return { status: r.status, body: await r.json().catch(() => null) };
+  };
+  const trigger = (id: string, slug: string, enabled = true): any => ({ id, desc: id, cond: { type: 'every', every: '1d' }, cooldownHours: 1, lastFiredAt: null, enabled, createdAt: '2026-10-28T00:00:00Z', actions: [{ type: 'agent_run', agentSlug: slug, prompt: 'go' }] });
+
+  it('preview lists chats / teams / automations; uninstall archives, leaves teams, pauses rules; restore puts every piece back', async () => {
+    await saveAgent({ slug: 'penn', name: 'Penn', description: 'x', systemPrompt: 'x' });
+    await saveAgent({ slug: 'lena', name: 'Lena', description: 'x', systemPrompt: 'x' });
+    await saveTeam({ slug: 'writers', name: 'Writers', members: [{ slug: 'penn' }, { slug: 'lena' }, { slug: 'ario' }], lead: 'penn' });
+    await saveTeam({ slug: 'duo', name: 'Duo', members: [{ slug: 'penn' }, { slug: 'lena' }] });
+    await saveTriggers([trigger('weekly', 'penn'), trigger('off', 'penn', false), trigger('other', 'lena')]);
+    const chat = (await post('/agent/solo/agent/penn/open')).body.session.id;
+
+    const pv = await call('GET', '/agent/agents/penn/uninstall-preview');
+    expect(pv.body).toMatchObject({ slug: 'penn', name: 'Penn', blocked: null, chats: 1, cloud: false, automations: [{ id: 'weekly' }] });
+    expect(pv.body.teams).toEqual(expect.arrayContaining([{ slug: 'writers', name: 'Writers', dissolve: false }, { slug: 'duo', name: 'Duo', dissolve: true }]));
+    expect((await call('GET', '/agent/agents/xyra/uninstall-preview')).body.blocked).toBe('default');
+
+    const del = await call('DELETE', '/agent/agents/penn');
+    expect(del.body.ok).toBe(true);
+    expect(!!(await row(chat)).archived).toBe(true);
+    expect((await getTeam('writers'))!.members.map((m) => m.slug)).toEqual(['lena', 'ario']);
+    expect(await getTeam('duo')).toBeNull(); // 只剩一人的团队一起进回收站
+    const rules = await loadTriggers();
+    expect(rules.find((t) => t.id === 'weekly')).toMatchObject({ enabled: false, disabledBy: 'user', disabledReason: 'agent_uninstalled' });
+    expect(rules.find((t) => t.id === 'other')!.enabled).toBe(true);
+    const list = (await call('GET', '/agent/trash')).body.entries;
+    expect(list.find((e: any) => e.id === del.body.trashId)).toMatchObject({ kind: 'agent', ref: 'penn', name: 'Penn' });
+
+    const back = await call('POST', `/agent/trash/${del.body.trashId}/restore`);
+    expect(back.body).toMatchObject({ ok: true, slug: 'penn', renamed: false });
+    expect(!!(await row(chat)).archived).toBe(false);
+    const writers = (await getTeam('writers'))!;
+    expect(writers.members.map((m) => m.slug)).toEqual(['penn', 'lena', 'ario']);
+    expect(writers.lead).toBe('penn');
+    expect((await getTeam('duo'))!.members.map((m) => m.slug)).toEqual(['penn', 'lena']);
+    const after = await loadTriggers();
+    expect(after.find((t) => t.id === 'weekly')!.enabled).toBe(true);
+    expect(after.find((t) => t.id === 'off')!.enabled).toBe(false); // 卸载前就关着的不动
+    expect((await call('GET', '/agent/trash')).body.entries.some((e: any) => e.id === del.body.trashId)).toBe(false);
+  });
+
+  it('a two-member team still running blocks the delete (409); once idle its chats are archived along and come back on restore', async () => {
+    await saveAgent({ slug: 'kim', name: 'Kim', description: 'x', systemPrompt: 'x' });
+    await saveAgent({ slug: 'lee', name: 'Lee', description: 'x', systemPrompt: 'x' });
+    await saveTeam({ slug: 'pair', name: 'Pair', members: [{ slug: 'kim' }, { slug: 'lee' }] });
+    const s = (await post('/agent/solo/agent/lee/open')).body.session.id;
+    await query(`UPDATE chat_sessions SET agent_config = ? WHERE id = ?`, [JSON.stringify({ teamSlug: 'pair' }), s]); // 当成团队会话
+    await query(`INSERT INTO agent_runs (id, session_id, user_id, status, input) VALUES ('rp', ?, ?, 'running', '{}')`, [s, USER]);
+    expect((await call('DELETE', '/agent/agents/kim')).status).toBe(409);
+    expect(await getTeam('pair')).not.toBeNull();
+    await query(`UPDATE agent_runs SET status = 'completed' WHERE id = 'rp'`);
+    const del = await call('DELETE', '/agent/agents/kim');
+    expect(del.body.ok).toBe(true);
+    expect(await getTeam('pair')).toBeNull();
+    expect(!!(await row(s)).archived).toBe(true);
+    await call('POST', `/agent/trash/${del.body.trashId}/restore`);
+    expect((await getTeam('pair'))!.members.map((m) => m.slug)).toEqual(['kim', 'lee']);
+    expect(!!(await row(s)).archived).toBe(false);
+  });
+
+  it('deleteChats=1 deletes its chats (archived ones too); purge and empty work', async () => {
+    await saveAgent({ slug: 'temp', name: 'Temp', description: 'x', systemPrompt: 'x' });
+    const a = (await post('/agent/solo/agent/temp/open')).body.session.id;
+    const del = await call('DELETE', '/agent/agents/temp?deleteChats=1');
+    expect(del.body).toMatchObject({ ok: true });
+    expect(await row(a)).toBeUndefined();
+    expect((await call('DELETE', `/agent/trash/${del.body.trashId}`)).body.ok).toBe(true);
+    await saveAgent({ slug: 'temp', name: 'Temp', description: 'x', systemPrompt: 'x' });
+    await call('DELETE', '/agent/agents/temp');
+    expect((await call('DELETE', '/agent/trash')).body.removed).toBeGreaterThan(0);
+    expect((await call('GET', '/agent/trash')).body.entries).toEqual([]);
   });
 });

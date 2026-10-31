@@ -55,7 +55,7 @@ export function mimeForName(name: string): string {
 //   - 剥掉容器内的工作区前缀（/workspace/... 与 /mnt/data/... 都指向工作区根），
 //     这样 run_python 里写的 /mnt/data/x 与 read_file('/mnt/data/x') 指向同一文件，
 //     也避免 '/workspace/x' 被再套一层 workspace 目录。
-function splitPath(p: string): string[] {
+export function splitPath(p: string): string[] {
   let segs = String(p || '')
     .split('/')
     .map((s) => s.trim())

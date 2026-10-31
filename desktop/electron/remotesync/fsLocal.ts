@@ -3,10 +3,11 @@
  *  - walkLocalFiles / sha256 / atomicWrite:引擎用的本地库扫描与写入工具
  *  - createDirRemote:把一个目录当远端(folder 后端:U 盘 / NAS 挂载点;也是测试假远端)
  */
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import type { RemoteFs } from './types'
+import { writeFileDurable } from '../amadeus/fs/renameAtomic'
 
 export interface LocalFile {
   key: string
@@ -40,12 +41,13 @@ export async function walkLocalFiles(root: string): Promise<LocalFile[]> {
   return out
 }
 
-/** 原子写(同目录 tmp + rename)+ 尽力对齐 mtime(跨设备 stat 缓存命中)。 */
+/** 原子写(同目录 tmp + fsync + rename,见 writeFileDurable)+ 尽力对齐 mtime(跨设备 stat 缓存命中)。
+ *  临时名带随机后缀:writeFileDurable 独占创建,只带 pid 时崩溃留下的同名残渣会让之后每次写都 EEXIST。
+ *  不拼目标文件名:长文件名再加 UUID 会超 255 字符上限(ENAMETOOLONG);点开头,库 watcher 不当成新文件。 */
 export async function atomicWrite(absPath: string, data: Buffer, mtimeMs?: number): Promise<void> {
-  await fs.mkdir(path.dirname(absPath), { recursive: true })
-  const tmp = `${absPath}.rsync-tmp-${process.pid}`
-  await fs.writeFile(tmp, data)
-  await fs.rename(tmp, absPath)
+  const dir = path.dirname(absPath)
+  await fs.mkdir(dir, { recursive: true })
+  await writeFileDurable(absPath, path.join(dir, `.rsync-tmp-${process.pid}-${randomUUID()}`), data)
   if (mtimeMs && mtimeMs > 0) {
     await fs.utimes(absPath, new Date(mtimeMs), new Date(mtimeMs)).catch(() => {})
   }

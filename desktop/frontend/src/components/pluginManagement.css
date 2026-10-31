@@ -1,16 +1,14 @@
 .plugin-management { display: flex; flex-direction: column; gap: 12px; }
 .plugin-management-toolbar { display: flex; align-items: center; gap: 8px; }
 .plugin-management-toolbar input { min-width: 0; width: 100%; }
-.plugin-section-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: var(--ui-font-body); }
 .plugin-management-group { display: flex; flex-direction: column; gap: 6px; }
 .plugin-management-group summary { cursor: pointer; color: var(--text-faint); font-size: var(--ui-font-meta); padding-block: 6px; }
 .plugin-management-group[open] summary { margin-bottom: 6px; }
 .plugin-management-group .plugin-card + .plugin-card { margin-top: 6px; }
 .plugin-management .plugin-card--link { outline-offset: 2px; }
 .plugin-management .plugin-card--link:focus-visible { outline: 2px solid var(--signal-line); }
-.core-plugin-updates { display: flex; flex-direction: column; gap: 8px; padding-block: 12px; border-block: var(--border-width) solid var(--border); font-size: var(--ui-font-meta); }
-.core-plugin-updates > .btn { align-self: flex-start; }
-.core-plugin-update-row { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 6px 16px; }
+.core-plugin-updates { font-size: var(--ui-font-meta); }
+.core-plugin-update-row { justify-content: space-between; flex-wrap: wrap; gap: 6px 16px; }
 .plugin-update-status { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: 6px; color: var(--text-faint); font-size: var(--ui-font-caption); }
 .plugin-update-status[data-core-phase="error"], .plugin-update-status[data-core-phase="incompatible"] { color: var(--warn); }
 .plugin-update-status[data-core-phase="staged"] { color: var(--accent-ink); }
@@ -20,3 +18,19 @@
 .plugin-core-native > .hint { max-width: 40%; text-align: right; }
 
 .plugin-card-description { margin-top: 2px; color: var(--text-faint); font-size: var(--ui-font-caption); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+/* 设置 › 回收站(TrashSettings):按今天 / 更早分组,一行一项:图标、名字 · 类别、大小与附注、剩余天数、恢复 / 彻底删除。 */
+.trash-group { display: flex; flex-direction: column; gap: 6px; }
+.trash-group-label { margin-top: 6px; color: var(--text-muted); font-size: var(--ui-font-meta); font-weight: 600; }
+.trash-item { display: flex; align-items: center; gap: 12px; }
+.trash-ico { width: 34px; height: 34px; flex-shrink: 0; display: grid; place-items: center; border-radius: var(--radius-md); background: var(--overlay-light); color: var(--text-muted); }
+.trash-copy { flex: 1; min-width: 0; }
+.trash-copy b { font-size: var(--ui-font-body); }
+.trash-meta { margin-top: 2px; color: var(--text-faint); font-size: var(--ui-font-caption); }
+.trash-left { color: var(--text-faint); font-size: var(--ui-font-meta); white-space: nowrap; }
+.trash-item .btn { display: inline-flex; align-items: center; gap: 4px; }
+.trash-foot { display: flex; justify-content: flex-end; margin-top: 6px; }
+@media (max-width: 560px) {
+  .trash-item { flex-wrap: wrap; }
+  .trash-left { flex-basis: 100%; order: 3; padding-left: 46px; }
+}

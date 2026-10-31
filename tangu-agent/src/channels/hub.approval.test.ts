@@ -31,6 +31,8 @@ vi.mock('./service.js', () => ({
     releasePending() { state.calls.push(`${this.kind}:releasePending`); }
     receive = vi.fn(async () => '');
     handleInbound = vi.fn(async () => 'should not be used by drivers');
+    activeBinding = vi.fn(async () => null);
+    workspaceDir() { return `/ws/${this.kind}bot`; }
   },
 }));
 vi.mock('./wechat.js', () => ({ WechatChannel: state.driver('wechat') }));
@@ -40,6 +42,7 @@ vi.mock('../core/db.js', () => ({ query: vi.fn(async () => []) }));
 vi.mock('../seams/runtime.js', () => ({ deps: () => ({ profile: { capabilities: { hostExec: true } } }) }));
 vi.mock('./config.js', async (importOriginal) => ({
   channelHasCredentials: (await importOriginal<typeof import('./config.js')>()).channelHasCredentials, // 纯函数,用真的
+  CHANNEL_DIR_NAME: (await importOriginal<typeof import('./config.js')>()).CHANNEL_DIR_NAME,
   channelSettings: (kind: string) => state.settings[kind],
   saveChannelSettings: (kind: string, patch: any) => (state.settings[kind] = { ...state.settings[kind], ...patch }),
 }));
@@ -122,5 +125,78 @@ describe('评审二轮(09-25):凭据清空 = 完全停止,不是重启', () => {
     state.settings.qq = { ...state.settings.qq, enabled: true, appId: 'a', appSecret: 's' };
     await channelHub.applySettings('qq', { appId: 'b', appSecret: 't' });
     expect(state.calls).toEqual(['qq:driver.stop', 'qq:driver.start']);
+  });
+});
+
+describe('插件通道(ctx.registerChannel)', () => {
+  const spec = (kind = 'wecom') => ({
+    driver: {
+      kind,
+      start: async () => { state.calls.push(`${kind}:driver.start`); },
+      stop: () => { state.calls.push(`${kind}:driver.stop`); },
+      status: () => [],
+      send: async () => ({ ok: true }),
+      verify: async () => ({ accountId: `${kind}:bot`, label: 'bot' }),
+    },
+    name: { zh: '企业微信', en: 'WeCom' },
+    fields: [
+      { key: 'appId' as const, label: { zh: 'Bot ID', en: 'Bot ID' } },
+      { key: 'appSecret' as const, label: { zh: 'Secret', en: 'Secret' }, secret: true },
+    ],
+  });
+  let offs: Array<() => void> = [];
+  beforeEach(() => {
+    channelHub.stopAll(); // 单例:前面的用例已 startAll 过,这里回到「引擎未起」
+    for (const off of offs.splice(0)) off();
+    state.calls = [];
+    state.settings.wecom = { enabled: true, sessions: true, approvalMode: 'auto-edit', inboxForward: { enabled: false, senders: 'all' }, appId: 'b', appSecret: 's' };
+  });
+
+  it('kind 非法或撞名直接抛错', () => {
+    expect(() => channelHub.registerChannel({ ...spec(), driver: { ...spec().driver, kind: 'WeCom' } })).toThrow(/invalid channel kind/);
+    expect(() => channelHub.registerChannel(spec('qq'))).toThrow(/already registered/);
+    for (const k of ['we', 'tg', 'constructor']) expect(() => channelHub.registerChannel(spec(k))).toThrow(/reserved/); // Codex 评审 10-25
+  });
+
+  it('插件把 appId 声明成 secret:状态里不回显', async () => {
+    const s = spec();
+    offs.push(channelHub.registerChannel({ ...s, fields: [{ key: 'appId' as const, label: { zh: 'K', en: 'K' }, secret: true }] }));
+    const st = (await channelHub.statusAll('u1')).find((c) => c.kind === 'wecom');
+    expect(st.credentials).toMatchObject({ appId: '', appIdSet: true });
+  });
+
+  it('引擎起之前注册:startAll 带上它;状态里带卡片声明', async () => {
+    offs.push(channelHub.registerChannel(spec()));
+    expect(state.calls).toEqual([]);
+    await channelHub.startAll();
+    expect(channelHub.kinds()).toEqual(['wechat', 'telegram', 'qq', 'wecom']);
+    expect(state.calls).toContain('wecom:driver.start');
+    const st = (await channelHub.statusAll('u1')).find((c) => c.kind === 'wecom');
+    expect(st.plugin.name.en).toBe('WeCom');
+    expect(st.plugin.fields.map((f: any) => [f.key, f.secret])).toEqual([['appId', false], ['appSecret', true]]);
+    expect((await channelHub.statusAll('u1')).find((c) => c.kind === 'qq').plugin).toBeUndefined();
+  });
+
+  it('引擎已起后注册(运行期启用):立即按设置启动', async () => {
+    await channelHub.startAll();
+    state.calls = [];
+    offs.push(channelHub.registerChannel(spec()));
+    await vi.waitFor(() => expect(state.calls).toContain('wecom:driver.start'));
+  });
+
+  it('清空声明字段里的 secret = 完全停止(插件凭据口径按 fields)', async () => {
+    offs.push(channelHub.registerChannel(spec()));
+    await channelHub.applySettings('wecom', { appSecret: '' });
+    expect(state.calls).toEqual(['wecom:driver.stop', 'wecom:releasePending']);
+  });
+
+  it('撤销 = 完全停止并移除;旧撤销函数不误删重新注册的那份', () => {
+    const off1 = channelHub.registerChannel(spec());
+    off1();
+    expect(state.calls).toEqual(['wecom:driver.stop', 'wecom:releasePending']);
+    expect(channelHub.has('wecom')).toBe(false);
+    offs.push(channelHub.registerChannel(spec()));
+    off1();
+    expect(channelHub.has('wecom')).toBe(true);
   });
 });

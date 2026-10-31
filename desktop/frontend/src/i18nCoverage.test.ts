@@ -334,6 +334,8 @@ describe('i18n 覆盖', () => {
       { re: /(默认|本地|重命名|移除|添加本地|筛选)工作区/, fix: '文件夹对象写「项目」(「工作区」只指工作区面板与可写范围)' },
       { re: /笔记库|本地库|云端库|(?<![\w/-])[Vv]ault(?![\w/-])/, fix: '写「智库」(en 仍是 vault)' },
       { re: /数据库/, fix: '写「多维表」' },
+      // 10-25 用户拍板(走查续 W-18):左侧那根竖条在 zh 里是专名「Ribbon」,标题写大写、说明写小写的混排不再出现。
+      { re: /(?<![A-Za-z_.-])ribbon(?![A-Za-z_])/, fix: '写「Ribbon」(专名大写)' },
       {
         re: /空间/, fix: '指 Space 这个容器时写「Space」',
         allow: {
@@ -446,6 +448,8 @@ describe('i18n 覆盖', () => {
       'components/ModelPickerSettings.tsx  (model.contextWindow ?? 0)': [1, '上下文窗口(token 数)'],
       'views/AgentProfileView.tsx  s.usage.ctx': [1, '上下文 token 数'],
       'views/chat2/Composer2.tsx  (sessionTokens ?? 0)': [2, '会话 token 数'],
+      'views/chat2/QuoteTile.tsx  lines': [1, '长粘贴磁贴的行数(数字)'],
+      'views/chat2/QuoteTile.tsx  text.length': [1, '长粘贴磁贴的字数(数字)'],
       'views/chat2/Composer2.tsx  (ctxTokens ?? 0)': [1, '上下文 token 数'],
       'views/chat2/Composer2.tsx  (ringWindow ?? 0)': [1, '上下文窗口(token 数;Ultra 切换后按下一轮口径)'],
       'views/chat2/Composer2.tsx  Math.round(runCost)': [2, '单次运行费用(数字)'],
@@ -510,7 +514,7 @@ describe('i18n 覆盖', () => {
  * 初值 = 基线 297408ab 实测 178 处 / 30 个文件。
  */
 const ELECTRON_HAN_DEBT: Record<string, [count: number, reason: string]> = {
-  'main.ts': [36, 'IPC throw new Error(中文):渲染层原样显示;按 ipcError.ts 原因码约定,各包碰到时改码'],
+  'main.ts': [35, 'IPC throw new Error(中文):渲染层原样显示;按 ipcError.ts 原因码约定,各包碰到时改码'],
   'unitWeb.ts': [23, 'HTTP JSON detail(已带 code,设备页按 code 翻译)+ 未配对页的内联 HTML'],
   'amadeus/fs/vaultHandlers.ts': [14, '笔记 IPC 的校验错误(throw),渲染层原样显示;待改原因码'],
   'unitP2p.ts': [11, 'P2P 代理的 HTTP 错误 detail / 信道断开原因(throw)'],

@@ -30,14 +30,12 @@
 .t2c-stop:hover { background: color-mix(in srgb, var(--danger, #e0564b) 22%, transparent); }
 
 /* 引用卡:可以挂多段,每段一张;多了在这一格里滚,不把输入卡一路顶高 */
-.t2c-quotes { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; max-height: 172px; overflow-y: auto; }
-.t2c-quote { display: flex; gap: 8px; align-items: flex-start; flex: none; padding: 8px 8px 8px 10px; background: var(--overlay-light, rgba(127, 127, 127, 0.08)); border-radius: var(--radius-md, 10px); }
-.t2c-quote-mark { flex: none; margin-top: 2px; color: var(--accent-ink); }
-.t2c-quote-text { flex: 1; min-width: 0; font-size: var(--ui-font-meta, 12px); line-height: var(--ui-line-meta, 1.5); color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; }
-.t2c-quote-x { flex: none; display: grid; place-items: center; width: 20px; height: 20px; background: none; border: none; border-radius: var(--radius-sm, 6px); cursor: pointer; color: var(--text-faint, var(--text-muted)); padding: 0; transition: background var(--duration-fast), color var(--duration-fast); }
-.t2c-quote-x:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); color: var(--text); }
 
 .t2c-hint { font-size: var(--ui-font-caption, 11px); color: var(--danger, #e0564b); margin-bottom: 6px; }
+/* 附件还在读 / 传(或传失败)时底排那句话:发送键为什么灰着。窄了就省略,不挤掉右边的控件 */
+.t2c-upstatus { min-width: 0; display: inline-flex; align-items: center; gap: 4px; margin-right: 6px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2c-upstatus[data-failed] { color: var(--danger, #e0564b); }
+.t2c-upstatus > svg { flex: none; }
 .t2c-chiprow { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
 /* 芯片入场(10-17):新加进来的引用 / 附件淡入放大;一次加好几枚时依次晚 30ms(不认 sibling-index() 的环境就一起出) */
 .t2c-chiprow > * { animation: t2c-chip-in var(--duration-fast, .15s) var(--ease-out, ease-out) backwards; }
@@ -80,6 +78,13 @@
 .t2c-menu-ico { flex: none; width: 16px; height: 16px; object-fit: contain; color: var(--text-muted); }
 @media (prefers-reduced-motion: reduce) { .t2c-menu-list { animation: none; } }
 
+/* 建议层提供自然换行高度;真实输入框覆盖其上,可点可输入,无建议时布局不变。 */
+.t2c-input-wrap { position: relative; min-width: 0; }
+.t2c-input-wrap[data-suggestion] .t2c-ta { position: absolute; inset: 0; height: 100% !important; max-height: none; }
+.t2c-input-wrap[data-suggestion] .t2c-ta::placeholder { color: transparent; }
+.t2c-suggestion { font: var(--t2c-font-body, 13px)/1.6 var(--font-ui); color: var(--text-faint, var(--text-muted)); white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; }
+.t2c-suggestion-key { display: inline-block; white-space: nowrap; padding: 0 7px; border-radius: var(--radius-sm, 6px); background: var(--overlay-medium); font-size: var(--ui-font-caption, 11px); line-height: 1.7; }
+
 /* 行内引用(句子里的那枚芯片,InlineRefMirror):这一层叠在文本框上、字是透明的,只画底色和图标。
    ⚠️ 这里不许出现任何会改变文字宽度的东西(padding / margin / border / 字号):它的排版必须和文本框一字不差。 */
 .t2c-mirror { position: absolute; z-index: 1; margin: 0; border: 0; box-sizing: border-box; overflow: hidden; pointer-events: none; color: transparent; white-space: pre-wrap; overflow-wrap: break-word; }
@@ -100,14 +105,12 @@
 .t2c-pill-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 模式胶囊与 ModelPill 共用同一展开契约:224px、三列居中、菜单右缘对齐。
-   模式胶囊在底栏左侧:若外层跟着按钮逐帧变宽,绑 right:0 的菜单会横移百余 px,
-   看起来像从侧面滑入。打开时外层先占住最终宽度,按钮仍在槽内平滑展开,菜单锚点不动。 */
+   模式胶囊在底栏左侧:打开时外层先占住最终宽度,菜单锚点不动;按钮开合直接到位、只换底色(走查续八 8.4)。 */
 .mode-pill-wrap { position: relative; display: inline-flex; }
 .t2c-pill.mode-pill-btn {
   min-width: 0;
-  interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast, 0.15s), width 0.18s var(--ease-spring);
+  transition: background var(--duration-fast, 0.15s); /* 开合不补宽度,同「+」(走查续八 8.4) */
 }
 .t2c-pill.mode-pill-btn.is-open {
   display: grid;
@@ -133,13 +136,8 @@
   padding: 0;
   overflow: hidden;
   color: var(--text-muted);
-  transition:
-    background var(--duration-fast, 0.15s),
-    color var(--duration-fast, 0.15s),
-    width 0.18s var(--ease-spring),
-    grid-template-columns 0.18s var(--ease-spring),
-    gap 0.18s var(--ease-spring),
-    padding 0.18s var(--ease-spring);
+  /* 开合只换底色和字色、不补尺寸(走查续八 8.4,规矩 3):以前宽度 / 列宽 / 内边距补 180ms,菜单早没了药丸还在收。 */
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
 }
 .t2c-pill.add-pill-btn.is-open {
   grid-template-columns: 16px minmax(0, 1fr) 16px;
@@ -362,16 +360,19 @@
 }
 .t2c-voicestop:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.2)); }
 
-/* steer 等待区:输入卡上方的「待注入」队列。刻意比正文轻(半透明底、不描边),表达「还没进对话」;
- * 注入(turn_boundary)即整块消失、消息在对话区出现。边线走 overlay(相对表面,勿硬色 --border)。 */
+/* steer 等待区:输入卡上方的「待注入」队列;注入(turn_boundary)即整块消失、消息在对话区出现。
+ * 和审批托盘一样悬浮在正文之上 → 底色必须不透明(10-25 用户报「插话面板变成透明的」:原来垫的是 0.04 的
+ * --overlay-light,正文从底下滚过去就透出来)。「还没进对话」由淡色字表达;内容卡不描边(DESIGN §5)。
+ * glass 主题的磨砂在 genesis-glass/theme.css 3.5 段。 */
 .t2c-steer {
+  position: relative;
   display: flex; flex-direction: column; gap: 2px;
   padding: 6px 10px; border-radius: var(--radius-md, 12px);
-  background: var(--overlay-light, rgba(127, 127, 127, 0.07));
+  background: var(--t2c-card-surface, var(--bg-card, var(--bg)));
   border: 1px solid transparent;
-  animation: t2c-steer-in 0.18s var(--ease-out, ease);
+  box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
+  animation: ui-enter var(--menu-enter-duration) var(--ease-surface); /* 同 base.css 的 data-motion="enter" */
 }
-@keyframes t2c-steer-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .t2c-steer { animation: none; } }
 .t2c-steer-item { display: flex; align-items: center; gap: 7px; min-width: 0; padding: 2px 0; }
 .t2c-steer-ic { flex-shrink: 0; color: var(--text-faint, var(--text-muted)); }
@@ -415,17 +416,34 @@
   border: var(--border-width, 1px) solid var(--border);
   border-radius: var(--radius-md, 12px);
   box-shadow: var(--card-shadow, 0 6px 22px rgba(0, 0, 0, 0.08));
-  animation: t2c-steer-in 0.18s var(--ease-out, ease);
+  animation: ui-enter var(--menu-enter-duration) var(--ease-surface);
 }
 @media (prefers-reduced-motion: reduce) { .t2c-apv { animation: none; } }
+.t2c-apv-top { display: flex; align-items: center; gap: 2px; min-width: 0; }
 .t2c-apv-head {
-  display: flex; align-items: center; gap: 6px; width: 100%;
+  display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0;
   padding: 6px 0; border: none; background: none; cursor: pointer; text-align: left;
   color: var(--text-muted); font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px);
 }
 .t2c-apv-ic { flex-shrink: 0; color: var(--accent-ink); }
-.t2c-apv-title { flex: 1; min-width: 0; font-weight: 600; color: var(--text); }
-.t2c-apv-chev { flex-shrink: 0; transition: transform var(--duration-fast, 0.15s); }
+.t2c-apv-title { flex-shrink: 0; font-weight: 600; color: var(--text); }
+.t2c-apv-more { min-width: 0; color: var(--text-faint, var(--text-muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2c-apv-chev { flex-shrink: 0; margin-left: auto; transition: transform var(--duration-fast, 0.15s); }
+.t2c-apv-n { flex-shrink: 0; margin-left: 6px; font-family: var(--font-ui); font-size: var(--ui-font-meta, 12px); font-variant-numeric: tabular-nums; color: var(--text-muted); }
+.t2c-apv-nav {
+  display: inline-flex; flex-shrink: 0; padding: 2px; border: none; border-radius: var(--radius-sm, 6px);
+  background: none; color: var(--text-muted); cursor: pointer;
+}
+.t2c-apv-nav:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.1)); color: var(--text); }
+/* 卡片堆(10-23 方案 B):后面还有几张,就在卡顶上露几道卡沿(最多两道)。沿只在卡外、不压进卡里:
+ * 入场动画期间卡自成层叠上下文,压进去的那截会盖在卡面上。 */
+.t2c-apv[data-peek]::before, .t2c-apv[data-peek="2"]::after {
+  content: ''; position: absolute; left: 14px; right: 14px; top: -7px; height: 7px; box-sizing: border-box; pointer-events: none;
+  border: var(--border-width, 1px) solid var(--border); border-bottom: 0; border-radius: 7px 7px 0 0;
+  background: color-mix(in srgb, var(--t2c-card-surface, var(--bg-card, var(--bg))) 95%, var(--text));
+}
+.t2c-apv[data-peek="2"]::after { left: 28px; right: 28px; top: -13px; height: 6px; border-radius: 6px 6px 0 0;
+  background: color-mix(in srgb, var(--t2c-card-surface, var(--bg-card, var(--bg))) 90%, var(--text)); }
 .t2c-apv-chev.is-collapsed { transform: rotate(-90deg); }
 .t2c-apv-head:has(.is-collapsed) { padding-bottom: 0; }
 /* 卡高有上限:diff / 长命令放不下时在托盘里滚,不把整条输入区顶到窗口外 */
@@ -434,6 +452,10 @@
 .t2c-apv .t2c-apv-body > .approval-card,
 .t2c-apv .t2c-apv-body > .inquiry-card,
 .t2c-apv .t2c-apv-body > .plan-decision { border-color: transparent; box-shadow: none; background: transparent; padding: 0; opacity: 1; }
+.t2c-apv .t2c-apv-body > .t2-tasks { margin-top: 0; }
+.t2c-apv .t2c-apv-body .t2-taskcard { background: transparent; padding: 0; }
+/* Muse 后台审批(收件箱那张卡):待批时收件箱给它描了边,在卡片堆里是卡中卡,去掉(四类选择器压过 inbox 的三类) */
+.t2c-apv .t2c-apv-body .t2-taskcard.ibx-approval { border-color: transparent; }
 .t2c-apv .approval-card .approval-title { margin-bottom: 6px; }
 /* 托盘里 diff 收矮一档(流里是 320px);卡还是放不下时按钮吸在托盘底边 —— 批准 / 拒绝永远不滚出视野 */
 .t2c-apv .approval-diff { max-height: min(24vh, 220px); }
@@ -445,7 +467,7 @@
 }
 /* 换卡冷却(ApprovalTray ARM_MS):刚顶上来的那项按钮不接收点击,淡一点提示「这是新的一项」;
  * 已送出等回执(is-sent)同样锁住 —— 同一项送第二次必然 410 */
-.t2c-apv-body:is(.is-arming, .is-sent) :is(.approval-actions, .inquiry-opts, .inquiry-input) { pointer-events: none; opacity: 0.55; }
+.t2c-apv-body:is(.is-arming, .is-sent) :is(.approval-actions, .inquiry-opts, .inquiry-input, .t2-taskcard-actions) { pointer-events: none; opacity: 0.55; }
 .t2c-apv .inquiry-opts, .t2c-apv .inquiry-input { transition: opacity var(--duration-fast, 0.15s); }
 /* 计划拍板区(PlanDecision):正文在流里的计划卡上,这里只有标题 + 可选的编辑框 + 决策按钮 */
 .t2c-apv .plan-decision-title {
@@ -463,7 +485,7 @@
 .t2c-apv textarea.plan-edit:focus { border-color: var(--accent-ink); }
 .t2c-apv .plan-decision .inquiry-input { margin-top: 8px; }
 .t2c-apv-from { font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); margin-bottom: 2px; }
-/* 排队的其余几张:在展开卡之上,排得再多也只占几行(多了在自己框里滚) */
+/* Muse 私聊托盘(MuseDm)排队的其余几张:在展开卡之上,排得再多也只占几行(多了在自己框里滚) */
 .t2c-apv-rest {
   display: flex; flex-direction: column; gap: 1px;
   max-height: 108px; overflow-y: auto;
@@ -492,7 +514,7 @@
    仪器:mobile `npm run stage:phone` 的 chat-card;模拟器 `ONLY='input card' npm run emu:nativeshell`。
    必须留在文件末尾(同特异性的基础规则在上面,DESIGN §7.2)。 */
 .t2c-field { display: flex; align-items: flex-end; gap: 8px; }
-.t2c-field > .t2c-ta { flex: 1 1 auto; min-width: 0; align-self: center; }
+.t2c-field > .t2c-input-wrap { flex: 1 1 auto; min-width: 0; align-self: center; }
 .t2c-card--phone .t2c-row { margin-top: 6px; }
 .t2c-card--phone .t2c-send { width: 42px; height: 42px; }
 .t2c-card--phone .t2c-send svg { width: 21px; height: 21px; }

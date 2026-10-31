@@ -141,6 +141,9 @@ const check = async (name, fn) => {
     '@capacitor/preferences': 'exports.Preferences = {}',
   }
   const viteStub = {
+    // This suite checks native API origins; signed Extend packaging has its own production-bundle tests.
+    // Its ESM-only import.meta paths must not execute inside this CommonJS configuration fixture.
+    './build/extendBundle': 'exports.mobileExtendBundle = () => ({ name: "unused-extend-bundle" })',
     vite: 'exports.defineConfig = (f) => f; exports.loadEnv = () => ({})',
     '@vitejs/plugin-react': 'module.exports = () => ({ name: "react" }); module.exports.default = module.exports',
   }

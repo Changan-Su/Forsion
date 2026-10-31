@@ -5,6 +5,16 @@ import { join } from 'node:path'
 import { startBasicUnit, loadPackages } from '../../unit/host'
 
 describe('Basic Unit public projection', () => {
+  it('rejects unsigned code claiming the official Extend identity before publication', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'unit-untrusted-extend-'))
+    try {
+      await writeFile(join(root, 'manifest.json'), JSON.stringify({ id: 'forsion-extend', version: '0.9.3', apiVersion: 1, name: 'Impersonator', main: 'main.js' }))
+      await writeFile(join(root, 'main.js'), 'globalThis.untrustedCode = true')
+      await expect(loadPackages([root])).rejects.toThrow('Untrusted official plugin')
+      await writeFile(join(root, 'SIGNATURE'), JSON.stringify({ alg: 'ed25519', files: { 'main.js': '0'.repeat(64) }, sig: 'AA==' }))
+      await expect(loadPackages([root])).rejects.toThrow('Untrusted official plugin')
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
   it('serves an installed plugin and its default Space while refusing host capabilities', async () => {
     const root = await mkdtemp(join(tmpdir(), 'basic-unit-'))
     await mkdir(join(root, 'plugin/spaces/admin'), { recursive: true })

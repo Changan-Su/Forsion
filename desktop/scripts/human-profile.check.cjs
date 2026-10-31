@@ -1,4 +1,4 @@
-/** 「我」资料页(human/ 文件夹,10-20 界面 A)的真 Electron 台架。
+/** 「我」资料页(human/ 文件夹,10-20 界面 A)的真 Electron 台架;10-23 起也钉对话里的协作请求卡进卡片堆 + 整张撤销。
  *  会话列表和对话里的回执走假引擎(可编剧);/agent/human/** 与 Agent 的协作说明转给本检出 build 出来的真 standalone 引擎 ——
  *  保存、修改记录、撤销都落在真磁盘上,按文件断言。只有共识那份的回执是夹具:把一次真写入(actor user)的 change 改成 actor agent
  *  放进对话,id 和版本号都是真的,所以卡片上的撤销打的是真引擎。
@@ -55,11 +55,17 @@ async function run() {
 
     const base = { archived: false, model_id: 'm1', created_at: '2026-10-20 09:00:00', updated_at: '2026-10-20 09:00:00', projectless: true, project_path: null, project_name: null }
     const session = { ...base, id: 'human-chat', title: 'Human profile chat', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: home } }
+    // 10-23:7 天内的协作请求卡是交互卡片(进对话末尾的卡片堆);回执在跑到那一段时才生成(真引擎里要是最新那一笔才撤得动)
+    const deckSession = { ...base, id: 'human-deck', title: 'Human deck chat', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: home } }
+    let deckReceipt = null
     const agents = [{ slug: 'xyra', name: 'Xyra', description: 'Default helper', tools: [], model: '', thinkingLevel: '', maxIterations: null, approvalMode: '', systemPrompt: 'Be precise.', soul: '', createdBy: 'user', libraryDir: path.join(home, 'xyra', 'Library') }]
     const messages = [{ id: 'u1', session_id: session.id, role: 'user', content: '以后都先给我看计划', timestamp: 1 },
       { id: 'a1', session_id: session.id, role: 'model', content: '记下了。', agent_slug: 'xyra', timestamp: 2, tool_calls: [{ id: 'human-1', type: 'function', function: { name: 'manage_human', arguments: '{"action":"update","scope":"shared"}' } }],
         tool_results: [{ tool_call_id: 'human-1', content: JSON.stringify({ kind: 'human_update', change: receipt }), isError: false }] }]
-    stub = await startStubEngine({ agents, sessions: [session], messages, override: async ({ path: p, method, url, body }) => {
+    stub = await startStubEngine({ agents, sessions: [session, deckSession], messages, override: async ({ path: p, method, url, body }) => {
+      if (p === `/agent/sessions/${deckSession.id}/messages`) return { messages: deckReceipt ? [{ id: 'd0', session_id: deckSession.id, role: 'user', content: '对比方案时别一直问我', timestamp: Date.now() - 120_000 },
+        { id: 'd1', session_id: deckSession.id, role: 'model', content: '好,写进共识了。', agent_slug: 'xyra', timestamp: Date.now() - 60_000, tool_calls: [{ id: 'human-d1', type: 'function', function: { name: 'manage_human', arguments: '{"action":"update","scope":"shared"}' } }],
+          tool_results: [{ tool_call_id: 'human-d1', content: JSON.stringify({ kind: 'human_update', change: deckReceipt }), isError: false }] }] : [] }
       if (!p.startsWith('/agent/human/') && !/^\/agent\/agents\/[^/]+\/human(\/undo)?$/.test(p)) return undefined
       const b = method === 'GET' ? undefined : await body()
       const r = await fetch(real + p + url.search, { method, headers: { Authorization: `Bearer ${TOKEN}`, 'Content-Type': 'application/json' }, body: b === undefined ? undefined : JSON.stringify(b) })
@@ -156,6 +162,26 @@ async function run() {
     await card.getByText('本次更新已撤销', { exact: true }).waitFor()
     assert.equal(disk('HUMAN.md'), SEED['HUMAN.md'], 'Card undo restores human/HUMAN.md on disk')
     console.log('PASS consensus card view / revise deep-link to Me, card undo hits the real engine')
+
+    // ── 7 天内的请求卡进卡片堆:流里一行;卡上整张「撤销」打真引擎 → 磁盘回原样,卡离开卡片堆,流里写「已撤销」 ──
+    const third = await put('HUMAN.md', SHARED_NEXT, '要比较两个方案时，当场选一个方向。')
+    deckReceipt = { ...third.change, actor: 'agent', evidence: '你说过「对比的时候别一直问我」' }
+    assert.equal(disk('HUMAN.md'), SHARED_NEXT)
+    await win.locator('.t2s-srow, .t2o-row').filter({ hasText: 'Human deck chat' }).first().click()
+    const deckCard = win.locator(`[data-pending-deck] [data-human-update="${deckReceipt.id}"]`)
+    await deckCard.waitFor()
+    const trace = win.locator('#tocmsg-d1 [data-human-trace="pending"]')
+    await trace.waitFor()
+    assert.ok(/想请你配合 1 件事 · 在对话最下面/.test(await trace.innerText()), 'The stream keeps one line pointing at the deck')
+    assert.equal(await win.locator('#tocmsg-d1 [data-human-update]').count(), 0, 'The full card is only in the deck')
+    await shot('human-card-in-deck')
+    await win.locator('[data-pending-deck] [data-human-undo-all]').click()
+    await win.locator('#tocmsg-d1 [data-human-acked]').waitFor()
+    assert.ok((await win.locator('#tocmsg-d1 [data-human-acked]').innerText()).includes('已撤销'))
+    assert.equal(await win.locator('[data-pending-deck] [data-human-update]').count(), 0, 'Undone card leaves the deck')
+    assert.equal(disk('HUMAN.md'), SEED['HUMAN.md'], 'Card-level undo restores human/HUMAN.md on disk')
+    await shot('human-card-undone')
+    console.log('PASS request card sits in the deck; card-level undo hits the real engine, leaves the deck, stream says undone')
 
     // ── 跳转令牌是一次性的:重载后还在「我」,但不再自动展开修改记录 ──
     await win.locator('[data-ribbon-id="space:agents"], [data-id="space:agents"]').first().click()

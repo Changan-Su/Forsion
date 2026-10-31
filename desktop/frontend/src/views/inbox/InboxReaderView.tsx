@@ -8,13 +8,14 @@ import { MarketCommentNotice } from '../../components/MarketCommentNotice'
  * 正文之后的块(审批 / 任务 / 附带物品 / 反馈线程)是同一种卡:壳、卡头、卡内按钮都用聊天任务卡的 .t2-taskcard 那一套。
  */
 import { useEffect, useRef, useState } from 'react'
-import { Archive, ArchiveRestore, Check, Crown, Gift, Mail, MailOpen, MessageCircle, Star, Ticket, Trash2, X, type LucideIcon } from 'lucide-react'
+import { Archive, ArchiveRestore, Check, Crown, Gift, Inbox, Mail, MailOpen, MessageCircle, Star, Ticket, Trash2, X, type LucideIcon } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
+import { EmptyState } from '../../components/EmptyState'
 import { formatDate, formatDateTime } from '../../format/time'
 import { APP_VERSION } from '../../changelog'
 import { useApp } from '../../stores/appStore'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
-import { useInbox, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
+import { useInbox, inboxDeleteConfirm, senderOf, parseUtc, type InboxMessage } from '../../stores/inboxStore'
 import { useWorkspace, setActiveSpace, type Leaf } from '@lcl/engine'
 import { InboxBody } from './InboxBody'
 import { SenderGlyph } from './SenderGlyph'
@@ -25,6 +26,8 @@ import { openSessionFromApproval } from '../../stores/attentionOpen'
 import { openRemoteSession } from '../../stores/deviceSessionsStore' // P1-K7a
 import { runLocationsAvailable } from '../../features/runtime'
 import { hasUnknownRequirement, tierFromAuth, unmetClaimRequirements } from './claimRequirements'
+import { agentName } from '../../agentName'
+import './inboxEmptyMessages'
 import './inbox.css'
 
 /** 物品图标:kind 命中给专属,未知类型兜底礼物(服务端新增类型零改动)。线性图标,与界面其余部分一套;从前是 emoji。 */
@@ -41,11 +44,15 @@ registerMessages({
   'inbox.reader.caughtUp': { zh: '没有未读消息', en: "You're all caught up" },
 })
 
-/** 主区未选中时的空态 = 「状态 + 动作」(U-10):告诉用户还有几封没读,并给一键去读最新那封 / 全部已读。
+/** 主区未选中时的空态 = 「状态 + 动作」(U-10),三种说法(2026-10-25 第四轮 4.1):
+ *  一封都没有 → 说清这里会收到什么(列表那边就不再重复「暂无内容」,见 inboxListSource 的 quietEmpty);
+ *  有未读 → 还有几封没读 + 一键去读最新那封 / 全部已读;有信但都读过 → 「没有未读」+ 选一封读。
+ *  「一封都没有」只在列表**拉成功过**之后才说(listLoaded),免得每次打开先闪一下「收件箱是空的」。
  *  数字取服务端全量未读数(列表接口有条数上限,本地数会少报);「阅读最新一封」只在已拉到的列表里找,找不到就不给这颗钮。 */
 function InboxReaderEmpty() {
   const { t } = useI18n()
   const messages = useInbox((s) => s.messages)
+  const listLoaded = useInbox((s) => s.listLoaded)
   const serverUnread = useInbox((s) => s.unreadCount)
   const unread = messages.filter((m) => !m.read_at && !m.archived_at)
   const count = Math.max(serverUnread, unread.length)
@@ -56,20 +63,15 @@ function InboxReaderEmpty() {
     useInbox.getState().select(latest.id)
     useWorkspace.getState().openView('inbox-reader', {}, 'main')
   }
+  const readAll = (): void => useInbox.getState().readAll()
+  const state = count ? 'unread' : listLoaded && !messages.length ? 'empty' : 'caught-up'
   return (
-    <div className="ibx-reader">
-      <div className="ibx-reader-empty" data-unread={count}>
-        {count ? <Mail size={26} strokeWidth={1.5} /> : <MailOpen size={26} strokeWidth={1.5} />}
-        <div className="ibx-reader-empty-title">{count ? t('inbox.reader.unread', { n: count }) : t('inbox.reader.caughtUp')}</div>
-        {count ? (
-          <div className="ibx-reader-empty-actions">
-            {latest && <button type="button" className="btn primary sm" data-action="read-latest" onClick={readLatest}>{t('inbox.reader.readLatest')}</button>}
-            <button type="button" className={`btn ${latest ? 'ghost' : 'primary'} sm`} data-action="read-all" onClick={() => useInbox.getState().readAll()}>{t('inbox.action.readAll')}</button>
-          </div>
-        ) : (
-          <div className="ibx-reader-empty-hint">{t('inbox.reader.empty')}</div>
-        )}
-      </div>
+    <div className="ibx-reader ibx-reader--empty">
+      {state === 'unread' ? <EmptyState icon={Mail} className="ibx-reader-empty" data-unread={count} data-state={state} title={t('inbox.reader.unread', { n: count })}
+        action={latest ? { label: t('inbox.reader.readLatest'), action: 'read-latest', onClick: readLatest } : { label: t('inbox.action.readAll'), action: 'read-all', onClick: readAll }}
+        secondary={latest ? <button type="button" className="btn ghost sm" data-action="read-all" onClick={readAll}>{t('inbox.action.readAll')}</button> : undefined} />
+        : state === 'empty' ? <EmptyState icon={Inbox} className="ibx-reader-empty" data-unread={0} data-state={state} title={t('inbox.reader.emptyTitle')} line={t('inbox.reader.emptyLine')} />
+          : <EmptyState icon={MailOpen} className="ibx-reader-empty" data-unread={0} data-state={state} title={t('inbox.reader.caughtUp')} line={t('inbox.reader.empty')} />}
     </div>
   )
 }
@@ -141,7 +143,7 @@ export function InboxReaderView({ leaf }: { leaf?: Leaf }) {
             </span>
             <span className="ibx-reader-actions">
               {senderAgent && (
-                <button className="ibx-iconbtn" title={t('inbox.action.chat', { name: senderAgent.name })} onClick={chatWithSender}>
+                <button className="ibx-iconbtn" title={t('inbox.action.chat', { name: agentName(senderAgent) })} onClick={chatWithSender}>
                   <MessageCircle size={14} />
                 </button>
               )}
@@ -162,7 +164,7 @@ export function InboxReaderView({ leaf }: { leaf?: Leaf }) {
               <button
                 className="ibx-iconbtn"
                 title={t('inbox.action.delete')}
-                onClick={() => { if (window.confirm(t('inbox.deleteConfirm', { title: msg.title }))) remove(msg.id) }}
+                onClick={() => { if (window.confirm(inboxDeleteConfirm(msg))) remove(msg.id) }}
               >
                 <Trash2 size={14} />
               </button>

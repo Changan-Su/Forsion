@@ -1,0 +1,85 @@
+/* 沙箱窗口的标识与操作(SandboxChrome.tsx)。只在插件沙箱那份 Forsion 里挂。 */
+.sbx-chrome {
+  position: fixed;
+  top: 4px;
+  right: 132px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-meta);
+  -webkit-app-region: no-drag;
+}
+.sbx-chrome-row { display: flex; align-items: center; gap: 6px; height: 24px; }
+.sbx-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-light);
+  color: var(--accent-ink, var(--accent));
+  font-weight: 600;
+  white-space: nowrap;
+}
+.sbx-pill > span { font-weight: 400; color: var(--text-muted); max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.sbx-cbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  border: var(--border-width, 1px) solid var(--border);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.sbx-cbtn:hover { background: var(--menu-hover, var(--bg-hover)); }
+.sbx-cbtn.primary { border-color: transparent; background: var(--action-fill); color: var(--on-action); }
+.sbx-cbtn.primary:hover { filter: brightness(1.06); }
+.sbx-pop {
+  width: 320px; /* 位置由 OverlayAt 按「反馈」按钮给出 */
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: ui-menu-enter var(--menu-enter-duration) var(--menu-enter-ease);
+}
+.sbx-pop textarea {
+  min-height: 72px;
+  resize: vertical;
+  padding: 7px 9px;
+  border-radius: var(--radius-sm);
+  border: var(--border-width, 1px) solid var(--border);
+  background: var(--bg-input, var(--bg));
+  color: var(--text);
+  font: inherit;
+  font-size: var(--ui-font-body);
+  outline: none;
+}
+.sbx-pop textarea:focus { border-color: var(--accent); }
+.sbx-pop-actions { display: flex; justify-content: flex-end; }
+.sbx-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 460px;
+  padding: 8px 8px 8px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  border: var(--border-width, 1px) solid var(--border);
+  box-shadow: var(--card-shadow);
+  color: var(--text-muted);
+  font-size: var(--ui-font-meta);
+  line-height: 1.5;
+}
+.sbx-note > svg { color: var(--accent-ink, var(--accent)); flex: none; }
+.sbx-note-x { flex: none; display: inline-flex; padding: 3px; border: none; border-radius: var(--radius-sm); background: transparent; color: var(--text-faint); cursor: pointer; }
+.sbx-note-x:hover { color: var(--text); background: var(--menu-hover, var(--bg-hover)); }
+@media (prefers-reduced-motion: reduce) { .sbx-pop { animation: none; } }

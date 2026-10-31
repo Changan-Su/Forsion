@@ -1,6 +1,6 @@
 # External skill providers for engine plugins
 
-[中文](plugin-skill-providers.md) · [Plugin development](plugins.md)
+[中文](plugin-skill-providers.md) · [Plugin development](plugin-development.en.md)
 
 Register a live, read-only skill source inside `activate(ctx)`. The host integrates it with native skill discovery, loadouts and `use_skill` without copying files into the user's skills directory. Static bundled skills can still live in the bundle's `skills/` folder.
 

@@ -106,6 +106,7 @@ async function main() {
       const pick = items.nth(Math.floor((await items.count()) / 2))
       const want = await pick.getAttribute('title')
       await pick.click(); await win.mouse.move(760, 420); await sleep(2500)
+      await win.locator('.lcl-ftoc').first().hover(); await sleep(400) // 行只在展开时才有
       const now = await win.evaluate(() => document.querySelector('.lcl-ftoc-item[aria-current="location"]')?.title || '')
       if (now !== want) console.log(`⚠️ 目录跳转没落准:点的是「${want}」,落地后当前项是「${now}」`)
       await win.evaluate(() => { const s = document.querySelector('.t2-stream'); s.scrollTop = s.scrollHeight }); await sleep(600)

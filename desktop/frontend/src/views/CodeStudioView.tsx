@@ -358,7 +358,7 @@ function ProjectStudio({ root, extendView, onActivate, briefSaveError, retryBrie
       {isPlugin
         ? <button className="csu-address" data-action="sandbox-open" title={t('studio.sandbox')} onClick={() => openTool('sandbox')}><span>{t('studio.sandbox')}</span><Puzzle size={13} /></button>
         : <button className="csu-address" title={previewUrl || t('studio.setup')} onClick={() => openTool('setup')}><span>{prefs.devUrl || entry || t('studio.staticPreview')}</span><Settings2 size={13} /></button>}
-      <button title={t('coding.reload')} aria-label={t('coding.reload')} onClick={reload}><RotateCw size={15} /></button>
+      <button title={t('coding.reload')} aria-label={t('coding.reload')} data-press="reload" onClick={reload}><RotateCw size={15} /></button>
       {!isPlugin && <button className="csu-inspect" title={t('studio.inspect')} aria-label={t('studio.inspect')} disabled={!previewUrl || mode === 'code' || previewStatus !== 'ready'} aria-pressed={inspecting} onClick={() => setInspecting(value => !value)}><MousePointer2 size={15} /><span>{t('studio.inspectShort')}</span></button>}
       {!!window.tangu?.openExternal && !isPlugin && <button title={t('preview.openInBrowser')} aria-label={t('preview.openInBrowser')} disabled={!previewUrl} onClick={() => { if (previewUrl) void window.tangu!.openExternal!(previewUrl) }}><ExternalLink size={15} /></button>}
     </div>

@@ -5,7 +5,7 @@
  *
  * 占位符 `{var}` zh/en 逐字一致;新增键两边都要写(本文件是纯表,漏写 en 由 messages.test 钉住)。
  */
-import type { ChannelKind } from './types.js';
+import type { BuiltinChannelKind, ChannelKind } from './types.js';
 
 export type ChannelLocale = 'zh' | 'en';
 
@@ -201,13 +201,15 @@ export const CHANNEL_MESSAGES = {
   },
 
   // ── /loop ──
-  loopShow: { zh: '循环上限:{n} 轮({source})。发 /loop <1-200> 调整,/loop default 恢复默认。', en: 'Loop cap: {n} iterations ({source}). Send /loop <1-200> to change it, or /loop default to reset.' },
+  loopShow: { zh: '循环上限:{v}({source})。发 /loop <轮数> 设上限,/loop default 恢复默认(不限)。', en: 'Loop cap: {v} ({source}). Send /loop <n> to set a cap, or /loop default to go back to the default (no limit).' },
+  loopRounds: { zh: '{n} 轮', en: '{n} iterations' },
+  loopUnlimited: { zh: '不限', en: 'no limit' },
   loopSrcSession: { zh: '本会话设置', en: 'set for this session' },
   loopSrcAgent: { zh: 'Agent「{slug}」的设定', en: 'from agent {slug}' },
   loopSrcDefault: { zh: '默认', en: 'default' },
   loopSet: { zh: '✓ 本会话循环上限已设为 {n} 轮,从下一条消息起生效。', en: '✓ Loop cap for this session set to {n} iterations, from your next message.' },
-  loopReset: { zh: '✓ 已恢复默认循环上限({n} 轮)。', en: '✓ Loop cap reset to the default ({n} iterations).' },
-  loopInvalid: { zh: '请给 1–200 之间的整数,例如 /loop 50。', en: 'Give a whole number from 1 to 200, e.g. /loop 50.' },
+  loopReset: { zh: '✓ 已恢复默认循环上限({v})。', en: '✓ Loop cap reset to the default ({v}).' },
+  loopInvalid: { zh: '请给正整数,例如 /loop 50。', en: 'Give a positive whole number, e.g. /loop 50.' },
 
   // ── /compact ──
   compactBusy: { zh: '有任务正在运行,等它结束再压缩(或先回复「停止」)。', en: 'A task is running. Compact after it finishes (or reply "stop" first).' },
@@ -247,7 +249,7 @@ export function channelMsg(locale: ChannelLocale, key: ChannelMessageKey, vars?:
   return vars ? text.replace(/\{(\w+)\}/g, (m, k: string) => (k in vars ? String(vars[k]) : m)) : text;
 }
 
-export const CHANNEL_NAME: Record<ChannelKind, Pair> = {
+export const CHANNEL_NAME: Record<BuiltinChannelKind, Pair> = {
   wechat: { zh: '微信', en: 'WeChat' },
   telegram: { zh: ' Telegram ', en: 'Telegram' },
   qq: { zh: ' QQ ', en: 'QQ' },

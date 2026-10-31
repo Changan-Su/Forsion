@@ -4,7 +4,9 @@
  *     → 替用户发「接着做」(POST /agent/runs,同一会话)→ 卡片完成态;围栏原文不进正文;
  *  ② 有 path 的卡「加入造物」→ products:register(工作目录内的绝对路径, within = 工作目录)→ **原地**加入(不复制)
  *     → 会话工作目录切到那个文件夹本身,不替用户发消息;完成态由 products:isCreation 判;
- *  ③ path 爬出工作目录 → 没有按钮,只有说明;
+ *  ③ path 爬出工作目录 → 没有「加入」按钮,只有说明 +「不用了」;点「不用了」它离开卡片堆,流里写「不用了」;
+ *  10-23 起作品卡是交互卡片:7 天内没处理的进对话末尾的卡片堆,流里原处只留一行(指过去 / 结局);
+ *  ⑤ 过了 7 天的不进卡片堆,原处照旧摆整张;
  *  ④ 截图(观感自查)。先 npm run build,再 npm run check:creationcard;--nc = 负对照(围栏换成 text,卡片不该出现 → 全红)。 */
 const fs = require('fs')
 const os = require('os')
@@ -25,18 +27,23 @@ function check(name, ok, detail) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const agentDef = (slug, name) => ({ slug, name, description: '', tools: [], model: '', thinkingLevel: '', maxIterations: null, approvalMode: '', createdBy: 'user', createdAt: '2026-09-01', systemPrompt: `You are ${name}.`, soul: '', libraryDir: `/tmp/cc-lib/${slug}/Library` })
 const card = (lines) => ['```' + FENCE, ...lines, '```'].join('\n')
+const NOW = Date.now()
 const MESSAGES = {
   'cc-create': [
-    { id: 'u1', role: 'user', content: '帮我做一个番茄钟网页', timestamp: 1000 },
-    { id: 'a1', role: 'assistant', content: `好的，做一个番茄钟网页。点击下面的按钮后，我就开始搭建：\n\n${card(['name: 番茄钟'])}`, timestamp: 2000 },
+    { id: 'u1', role: 'user', content: '帮我做一个番茄钟网页', timestamp: NOW - 120_000 },
+    { id: 'a1', role: 'assistant', content: `好的，做一个番茄钟网页。点击下面的按钮后，我就开始搭建：\n\n${card(['name: 番茄钟'])}`, timestamp: NOW - 60_000 },
   ],
   'cc-add': [
-    { id: 'u2', role: 'user', content: '把刚才做的放进造物', timestamp: 1000 },
-    { id: 'a2', role: 'assistant', content: `在 pomodoro 文件夹里，点下面的按钮就能放进造物：\n\n${card(['name: Pomodoro', 'path: pomodoro'])}`, timestamp: 2000 },
+    { id: 'u2', role: 'user', content: '把刚才做的放进造物', timestamp: NOW - 120_000 },
+    { id: 'a2', role: 'assistant', content: `在 pomodoro 文件夹里，点下面的按钮就能放进造物：\n\n${card(['name: Pomodoro', 'path: pomodoro'])}`, timestamp: NOW - 60_000 },
   ],
   'cc-outside': [
-    { id: 'u3', role: 'user', content: '把上一级的东西也放进去', timestamp: 1000 },
-    { id: 'a3', role: 'assistant', content: `试试这个：\n\n${card(['name: Secrets', 'path: ../secrets'])}`, timestamp: 2000 },
+    { id: 'u3', role: 'user', content: '把上一级的东西也放进去', timestamp: NOW - 120_000 },
+    { id: 'a3', role: 'assistant', content: `试试这个：\n\n${card(['name: Secrets', 'path: ../secrets'])}`, timestamp: NOW - 60_000 },
+  ],
+  'cc-legacy': [
+    { id: 'u4', role: 'user', content: '上个月那个', timestamp: 1000 },
+    { id: 'a4', role: 'assistant', content: `之前说的：\n\n${card(['name: 旧作品'])}`, timestamp: 2000 },
   ],
 }
 
@@ -78,58 +85,75 @@ async function run(app, win, stub, seen, home, work, root) {
   const calls = () => app.evaluate(() => globalThis.__creations)
   const shots = {}
 
+  const DECK = '[data-pending-deck]'
   // ── ① 做成作品 ─────────────────────────────────────────────────────────
   await openSession(win, '番茄钟对话', 'cc-create')
-  const createCard = win.locator('[data-creation-card="create"]')
+  const createCard = win.locator(`${DECK} [data-creation-card="create"]`)
   await createCard.waitFor({ timeout: 8_000 }).catch(() => {})
   const leak = await win.evaluate(() => [...document.querySelectorAll('.t2-content')].some((el) => (el.textContent || '').includes('forsion-creation')))
   const createTitle = (await createCard.locator('.t2-taskcard-head').textContent().catch(() => '')) || ''
-  check('1 无 path 的卡渲染成「做成作品：番茄钟」+ 一颗按钮,围栏原文不进正文', /做成作品：番茄钟/.test(createTitle) && await createCard.locator('[data-creation-accept]').count() === 1 && !leak, JSON.stringify({ createTitle, leak }))
+  const trace1 = (await win.locator('#tocmsg-a1 [data-creation-trace="pending"]').textContent().catch(() => '')) || ''
+  check('1 无 path 的卡进对话末尾的卡片堆:「做成作品：番茄钟」+ 做成作品 / 不用了;流里原处一行指过去;围栏原文不进正文',
+    /做成作品：番茄钟/.test(createTitle) && await createCard.locator('[data-creation-accept]').count() === 1 && await createCard.locator('[data-creation-dismiss]').count() === 1
+      && /作品卡「番茄钟」· 在对话最下面/.test(trace1) && await win.locator('#tocmsg-a1 [data-creation-card]').count() === 0 && !leak,
+    JSON.stringify({ createTitle, trace1, leak }))
   await win.screenshot({ path: shots.createCard = path.join(home, 'creation-card-create-zh-light.png') })
   const runsBefore = stub.seen.runs.length
   await createCard.locator('[data-creation-accept]').click().catch(() => {})
-  await createCard.locator('[data-creation-done]').waitFor({ timeout: 8_000 }).catch(() => {})
+  await win.locator('#tocmsg-a1 [data-creation-trace="made"]').waitFor({ timeout: 8_000 }).catch(() => {})
   await sleep(800)
   const target = `${root}/番茄钟`
   const created = await calls()
   const patch = seen.patches.find((p) => p.id === 'cc-create')
-  const cfg = stub.seen.configs.filter((c) => c.sessionId === 'cc-create').at(-1)
+  // 配置写入按键 PATCH:cwd 那一笔之后还可能来一笔只带 extraRoots 的(笔记库根),取最后一笔带 cwd 的
+  const cfgs = stub.seen.configs.filter((c) => c.sessionId === 'cc-create')
+  const cfg = cfgs.filter((c) => c.config && 'cwd' in c.config).at(-1)
   const cont = stub.seen.runs.slice(runsBefore).find((r) => r.sessionId === 'cc-create')
   // 会话配置走按键 PATCH:只发变了的 cwd(execMode 本来就是 host);续跑那一轮带的整份配置里两样都得对
   check('1a 点「做成作品」→ products:create(番茄钟)→ PATCH 会话 project_path/project_name → 会话配置 cwd = 作品文件夹(host)',
     created.create.length === 1 && created.create[0].name === '番茄钟' && patch?.body.project_path === target && patch?.body.project_name === '番茄钟' && patch?.body.projectless === false && cfg?.config.cwd === target && cont?.agentConfig?.cwd === target && cont?.agentConfig?.execMode === 'host',
-    JSON.stringify({ created, patch, cfg }))
-  check('1b 替用户发「接着做」(同一会话),卡片进入完成态 + 两个去处按钮',
-    /作品文件夹「番茄钟」已经建好/.test(cont?.message || '') && /已在造物里：番茄钟/.test((await createCard.locator('[data-creation-done]').textContent().catch(() => '')) || '') && await createCard.locator('[data-creation-done] button').count() === 2,
-    JSON.stringify({ cont }))
+    JSON.stringify({ created, patch, cfgs: cfgs.map((c) => Object.keys(c.config || {}).join('+')) }))
+  const made1 = (await win.locator('#tocmsg-a1 [data-creation-trace="made"]').textContent().catch(() => '')) || ''
+  check('1b 替用户发「接着做」(同一会话);卡离开卡片堆,流里那行写「已做成作品」+「在造物中查看」',
+    /作品文件夹「番茄钟」已经建好/.test(cont?.message || '') && /作品卡「番茄钟」· 已做成作品/.test(made1) && await win.locator('#tocmsg-a1 [data-creation-trace="made"] button').count() === 1 && await win.locator(`${DECK} [data-creation-card]`).count() === 0,
+    JSON.stringify({ cont, made1 }))
   await win.screenshot({ path: shots.createDone = path.join(home, 'creation-card-done-zh-light.png') })
 
   // ── ② 加入造物(有 path)─────────────────────────────────────────────────
   await openSession(win, '加入已有对话', 'cc-add')
-  const addCard = win.locator('[data-creation-card="add"]')
+  const addCard = win.locator(`${DECK} [data-creation-card="add"]`)
   await addCard.waitFor({ timeout: 8_000 }).catch(() => {})
   const addText = (await addCard.textContent().catch(() => '')) || ''
-  check('2 有 path 的卡:「加入造物：Pomodoro」,说明里点名那个文件夹、说清原地加入', /加入造物：Pomodoro/.test(addText) && /「pomodoro」原地加入造物/.test(addText), addText.slice(0, 160))
+  check('2 有 path 的卡在卡片堆里:「加入造物：Pomodoro」,说明里点名那个文件夹、说清原地加入', /加入造物：Pomodoro/.test(addText) && /「pomodoro」原地加入造物/.test(addText), addText.slice(0, 160))
   const runsBeforeAdd = stub.seen.runs.length
   await addCard.locator('[data-creation-accept]').click().catch(() => {})
-  await addCard.locator('[data-creation-done]').waitFor({ timeout: 8_000 }).catch(() => {})
+  await win.locator('#tocmsg-a2 [data-creation-trace="made"]').waitFor({ timeout: 8_000 }).catch(() => {})
   await sleep(600)
   const added = await calls()
   const addPatch = seen.patches.find((p) => p.id === 'cc-add')
   const pomodoro = path.join(work, 'pomodoro')
-  check('2a 点「加入造物」→ products:register(工作目录/pomodoro, within = 工作目录)→ 会话工作目录切到那个文件夹本身(原地,不是复制品);不替用户发消息;卡片完成态',
+  check('2a 点「加入造物」→ products:register(工作目录/pomodoro, within = 工作目录)→ 会话工作目录切到那个文件夹本身(原地,不是复制品);不替用户发消息;卡离开卡片堆、流里写结局',
     added.register.length === 1 && added.register[0].source === pomodoro && added.register[0].within === work && added.register[0].strict === false && addPatch?.body.project_path === pomodoro && stub.seen.runs.length === runsBeforeAdd
-      && /已在造物里/.test((await addCard.locator('[data-creation-done]').textContent().catch(() => '')) || ''),
+      && await win.locator(`${DECK} [data-creation-card]`).count() === 0 && await win.locator('#tocmsg-a2 [data-creation-trace="made"]').count() === 1,
     JSON.stringify({ added, addPatch, runs: stub.seen.runs.length - runsBeforeAdd }))
   await win.screenshot({ path: shots.addDone = path.join(home, 'creation-card-add-done-zh-light.png') })
 
-  // ── ③ path 爬出工作目录 ───────────────────────────────────────────────────
+  // ── ③ path 爬出工作目录:没有「加入」,能「不用了」────────────────────────
   await openSession(win, '越界卡对话', 'cc-outside')
-  const outCard = win.locator('[data-creation-card="add"]')
+  const outCard = win.locator(`${DECK} [data-creation-card="add"]`)
   await outCard.waitFor({ timeout: 8_000 }).catch(() => {})
   const outText = (await outCard.textContent().catch(() => '')) || ''
-  check('3 path 爬出工作目录 → 没有按钮,只有说明;什么都没加入', await outCard.count() === 1 && await outCard.locator('[data-creation-accept]').count() === 0 && /不在这条对话的工作目录里/.test(outText) && (await calls()).register.length === 1, outText.slice(0, 160))
+  check('3 path 爬出工作目录 → 没有「加入造物」,只有说明 +「不用了」;什么都没加入', await outCard.count() === 1 && await outCard.locator('[data-creation-accept]').count() === 0 && await outCard.locator('[data-creation-dismiss]').count() === 1 && /不在这条对话的工作目录里/.test(outText) && (await calls()).register.length === 1, outText.slice(0, 160))
   await win.screenshot({ path: shots.outside = path.join(home, 'creation-card-outside-zh-light.png') })
+  await outCard.locator('[data-creation-dismiss]').click().catch(() => {})
+  await win.locator('#tocmsg-a3 [data-creation-trace="dismissed"]').waitFor({ timeout: 8_000 }).catch(() => {})
+  const dis = (await win.locator('#tocmsg-a3 [data-creation-trace="dismissed"]').textContent().catch(() => '')) || ''
+  check('3a 点「不用了」→ 卡离开卡片堆,流里那行写「不用了」', /作品卡「Secrets」· 不用了/.test(dis) && await win.locator(`${DECK} [data-creation-card]`).count() === 0, dis)
+
+  // ── ⑤ 过了 7 天的:原处照旧摆整张,不进卡片堆 ─────────────────────────────
+  await openSession(win, '旧作品对话', 'cc-legacy')
+  await win.locator('#tocmsg-a4 [data-creation-card="create"]').waitFor({ timeout: 8_000 }).catch(() => {})
+  check('5 过了 7 天的作品卡原处照旧摆整张,不进卡片堆', await win.locator('#tocmsg-a4 [data-creation-card="create"] [data-creation-accept]').count() === 1 && await win.locator(`${DECK} [data-creation-card]`).count() === 0)
   return shots
 }
 
@@ -146,6 +170,7 @@ async function main() {
     { ...base, id: 'cc-create', title: '番茄钟对话', updated_at: '2026-09-27 11:00:00', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: work } },
     { ...base, id: 'cc-add', title: '加入已有对话', updated_at: '2026-09-27 10:00:00', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: work } },
     { ...base, id: 'cc-outside', title: '越界卡对话', updated_at: '2026-09-27 09:30:00', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: work } },
+    { ...base, id: 'cc-legacy', title: '旧作品对话', updated_at: '2026-09-27 09:10:00', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: work } },
   ]
   const seen = { patches: [] }
   const stub = await startStubEngine({ agents: [agentDef('xyra', 'Xyra')], sessions, messages: [], handle: async ({ path: route }) => {

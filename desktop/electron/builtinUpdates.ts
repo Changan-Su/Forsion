@@ -18,7 +18,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { cmpVersion, gatePluginManifest } from '@amadeus-shared/ipc'
-import { installedDirFor, pendingDirFor, readManifest, type BuiltinSource, type BundleManifest } from './builtinPlugins'
+import { installedDirFor, pendingDirFor, readManifest, withPendingLock, type BuiltinSource, type BundleManifest } from './builtinPlugins'
 import { verifyBundleSignature } from './bundleSignature'
 import { downloadZip, GZIP_MAGIC } from './marketInstall'
 import { stripTopDir, untar } from './minitar'
@@ -38,9 +38,14 @@ export const registryOrder = (mirror: string | undefined): string[] =>
 export const tarballUrl = (registry: string, pkg: string, version: string): string =>
   `${registry}/${pkg}/-/${pkg.replace(/^@[^/]+\//, '')}-${version}.tgz`
 
-/** latest 的版本与 integrity;先答上的 registry 排在下载候选首位。 */
-export async function resolveLatest(pkg: string, registries: string[], fetchFn: RegistryFetch): Promise<{ version: string; integrity: string; tarballs: string[] }> {
+/**
+ * dist-tag(缺省 latest)指向的版本与 integrity;先答上的 registry 排在下载候选首位。
+ * 某个 registry 没有这个标签就问下一个(npmmirror 同步有延迟);答上的都没有 → null(引擎的本线标签可能还没发过),
+ * 一个都没答上才抛。
+ */
+export async function resolveLatest(pkg: string, registries: string[], fetchFn: RegistryFetch, tag = 'latest'): Promise<{ version: string; integrity: string; tarballs: string[] } | null> {
   const failed: string[] = []
+  let untagged = false
   for (const [i, registry] of registries.entries()) {
     try {
       const res = await fetchFn(`${registry}/${pkg.replace('/', '%2f')}`, {
@@ -49,15 +54,20 @@ export async function resolveLatest(pkg: string, registries: string[], fetchFn: 
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const doc = (await res.json()) as { 'dist-tags'?: Record<string, string>; versions?: Record<string, { dist?: { integrity?: string } }> }
-      const version = doc['dist-tags']?.latest
-      const integrity = version ? doc.versions?.[version]?.dist?.integrity?.split(/\s+/)[0] : undefined
-      if (!version || !integrity?.startsWith('sha512-')) throw new Error('no latest version with sha512 integrity')
+      const version = doc['dist-tags']?.[tag]
+      if (!version) {
+        untagged = true
+        continue
+      }
+      const integrity = doc.versions?.[version]?.dist?.integrity?.split(/\s+/)[0]
+      if (!integrity?.startsWith('sha512-')) throw new Error(`${tag}=${version} has no sha512 integrity`)
       const order = [registry, ...registries.filter((_, j) => j !== i)]
       return { version, integrity, tarballs: order.map((r) => tarballUrl(r, pkg, version)) }
     } catch (e) {
       failed.push(`${new URL(registry).host}: ${(e as Error)?.message || e}`)
     }
   }
+  if (untagged) return null
   throw new Error(failed.join(' · '))
 }
 
@@ -83,7 +93,7 @@ export interface BuiltinUpdateOpts {
   onStatus?: (status: CorePluginUpdate) => void
 }
 
-/** 只认正式版:cmpVersion 把 0.5.9-rc.1 排在 0.5.9 之上,预发布一旦进了暂存区,同号正式版就永远换不上去。 */
+/** 只认正式版:自动更新不装预发布。10-25 之前的 cmpVersion 把 0.5.9-rc.1 排在 0.5.9 之上,预发布进了暂存区同号正式版就换不上;排序已改对,这条照旧守着。 */
 const RELEASE_VERSION = /^\d+\.\d+\.\d+$/
 
 /** 查一遍各内置包;有更新的下载进暂存区。返回暂存了的 `id@version`。逐包吞错,只进 log。 */
@@ -118,6 +128,7 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
         .filter((m): m is BundleManifest => !!m)
         .reduce((v, m) => (cmpVersion(m.version, v) > 0 ? m.version : v), '0.0.0')
       const latest = await resolveLatest(pkg, o.registries, o.fetch)
+      if (!latest) throw new Error('no latest dist-tag')
       report({ latestVersion: latest.version })
       if (!RELEASE_VERSION.test(latest.version)) {
         log(`[builtin-updates] ${pkg} latest=${latest.version} 不是正式版,跳过`)
@@ -152,28 +163,31 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
       // 绝不原地递归删:删到一半被杀会留下「manifest 还在、文件缺了」的半截目录,下次启动会被当成完整更新换上。
       const staging = path.join(path.dirname(pendingPath), `.${path.basename(pendingPath)}.staging-${process.pid}`)
       const retired = `${staging}.old`
-      await fs.rm(staging, { recursive: true, force: true })
-      try {
-        for (const e of entries) {
-          const dest = safeJoin(staging, e.path)
-          await fs.mkdir(path.dirname(dest), { recursive: true })
-          await fs.writeFile(dest, e.data)
-          if (e.mode && process.platform !== 'win32') await fs.chmod(dest, e.mode) // helper 可执行位
-        }
-        // 带主进程半身的包:落暂存区之前就验签,坏发布连暂存区都不进(播种时还会再核一次)。
-        if (source.desktop) {
-          const v = await verifyBundleSignature(staging, source.desktop.signingKey, [source.desktop.entry, 'manifest.json'])
-          if (!v.ok) throw new Error(`signature: ${v.reason}`)
-        }
-        await fs.rm(retired, { recursive: true, force: true })
-        await fs.rename(pendingPath, retired).catch((err: NodeJS.ErrnoException) => {
-          if (err.code !== 'ENOENT') throw err
-        })
-        await fs.rename(staging, pendingPath)
-      } finally {
+      // 写暂存区与播种互斥(builtinPlugins.withPendingLock):首次启动预取超时后,这里可能和播种同时发生。
+      await withPendingLock(async () => {
         await fs.rm(staging, { recursive: true, force: true })
-        await fs.rm(retired, { recursive: true, force: true })
-      }
+        try {
+          for (const e of entries) {
+            const dest = safeJoin(staging, e.path)
+            await fs.mkdir(path.dirname(dest), { recursive: true })
+            await fs.writeFile(dest, e.data)
+            if (e.mode && process.platform !== 'win32') await fs.chmod(dest, e.mode) // helper 可执行位
+          }
+          // 带主进程半身的包:落暂存区之前就验签,坏发布连暂存区都不进(播种时还会再核一次)。
+          if (source.desktop) {
+            const v = await verifyBundleSignature(staging, source.desktop.signingKey, [source.desktop.entry, 'manifest.json'])
+            if (!v.ok) throw new Error(`signature: ${v.reason}`)
+          }
+          await fs.rm(retired, { recursive: true, force: true })
+          await fs.rename(pendingPath, retired).catch((err: NodeJS.ErrnoException) => {
+            if (err.code !== 'ENOENT') throw err
+          })
+          await fs.rename(staging, pendingPath)
+        } finally {
+          await fs.rm(staging, { recursive: true, force: true })
+          await fs.rm(retired, { recursive: true, force: true })
+        }
+      })
       staged.push(`${bundled.id}@${latest.version}`)
       report({ phase: 'staged', pendingVersion: latest.version })
       log(`[builtin-updates] ${bundled.id} ${have} → ${latest.version} 已下载,下次启动生效`)

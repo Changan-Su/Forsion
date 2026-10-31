@@ -8,7 +8,7 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
 import React, { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, Users, Sparkles,
-  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, Quote, type LucideIcon } from 'lucide-react'
+  Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, CircleAlert, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
@@ -18,7 +18,7 @@ import { THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/client
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
-import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useExitGhost, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
@@ -34,8 +34,10 @@ import { useApp } from '../../stores/appStore'
 import { ApprovalRulesModal } from '../../components/ApprovalRulesModal'
 import { thinkingLabel } from '../../components/thinkingLabel'
 import { AttachmentTile, isLeaving, tileKey } from '../../components/AttachmentTile'
+import { useUploads } from '../../services/uploads'
+import { addDraftFile, isInWorkspace, previewOf, release, removeDraftFile, uploadIdOf } from './composerUploads'
 import { commandsFor } from '../../commandCatalog'
-import { getCustomCommands, expandCustomCommand, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
+import { getCustomCommands, expandCustomCommand, getModelQuota, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem, normalModeItems } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
@@ -49,13 +51,17 @@ import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand, type AppRefDeliv
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
 import { AppRefIcon } from '../../components/appRefs'
 import { useCapsuleSlide } from '../../components/capsuleTabs'
-import { composeQuotes } from './quotes'
+import { PASTE_TILE_MIN, composePastes, composeQuotes, noteOf } from './quotes'
+import { ElementTile, PasteTile, QuotePreview, QuoteTile } from './QuoteTile'
+import { ELEMENT_EVENT, ELEMENT_TARGET_ATTR, composeElements, elementImages, formatElementBlock, markComposerUsed, type ElementPick } from './elementPick'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
 import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
 import { ContextUsagePop } from './ContextUsagePop'
+import { isDirectModelId } from '../chatModelCatalog'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
-import { homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
+import { focusTarget, homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
+import { agentName, agentNames } from '../../agentName'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
@@ -304,6 +310,7 @@ export function pickRecall(hist: string[], pos: number, older: boolean, stash: s
 
 export { fmtTokens } from './ContextUsagePop'
 
+
 /** 发出的正文:引用 token 行 + 引文 + 正文(上下文在前)。例外:/refine 必须留在最前 —— 引擎只认开头的 /refine
  *  (isRefineInvocation);开着「自动引用当前笔记」时几乎每条都带引用行,前置会让 /refine 静默失效。 */
 export function composeOutgoing(refs: string, quoted: string, text: string): string {
@@ -364,12 +371,16 @@ export const Composer2: React.FC<{
   onThinkingChange?: (level: NonNullable<AgentConfig['thinkingLevel']>, ultra?: boolean) => void
   /** 会话的 Ultra 开关(对标 Codex Ultra:max + 主动并行派子代理)。 */
   ultra?: boolean
+  /** 会话的 Fast 开关(对标 Codex /fast);药丸只在当前模型目录有 Fast 档时露出。 */
+  fast?: boolean
+  onFastChange?: (fast: boolean) => void
   defaultModelIds?: Partial<Record<DefaultModelSlot, string>>
   onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
   /** 模型菜单「上下文上限」:写本机该模型的窗口覆盖(null = 交还默认 272k)。只在本机引擎下传。 */
   onContextWindowChange?: (modelId: string, tokens: number | null) => void
-  maxIterations?: number
-  onMaxIterationsChange?: (n: number) => void
+  maxIterations?: number | null
+  /** null = 清掉会话上限,回到 Agent 定义 / 默认(不限)。 */
+  onMaxIterationsChange?: (n: number | null) => void
   /** 验证回路(/verify,host-only):收尾前引擎自动跑的命令;空=未配置。 */
   verifyCommand?: string
   onVerifyCommandChange?: (cmd: string) => void
@@ -407,6 +418,9 @@ export const Composer2: React.FC<{
   onStop: () => void
   /** 输入框上方的引用卡(可多段);发送时拼成正文前的引用块,见 quotes.ts。 */
   quotes?: string[]
+  /** 各段引用的回应(就地回复框写的,全文窗里可改);发送时紧跟在各自的引用块后面 */
+  quoteNotes?: Record<string, string>
+  onQuoteNote?: (quote: string, note: string) => void
   onRemoveQuote?: (index: number) => void
   onClearQuote?: () => void
   /** /btw [问题]:旁聊(会话级浮窗,主对话里什么都不发);quote = 输入框此刻挂着的引用。无会话时不给 = 命令不露出。 */
@@ -453,7 +467,7 @@ export const Composer2: React.FC<{
   sessionId, advisory, approvalTray, autoFocus, disabled, disabledPlaceholder, running, execConfig, teamApproval,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
   engineModels, engineModelId, onEngineModelChange, engineCommands,
-  thinkingLevel: sessionThinkingLevel, onThinkingChange, ultra,
+  thinkingLevel: sessionThinkingLevel, onThinkingChange, ultra, fast, onFastChange,
   defaultModelIds, onDefaultModelChange, onContextWindowChange,
   maxIterations, onMaxIterationsChange,
   verifyCommand, onVerifyCommandChange,
@@ -461,7 +475,7 @@ export const Composer2: React.FC<{
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
   agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
-  quotes = NO_QUOTES, onRemoveQuote, onClearQuote, onBtw,
+  quotes = NO_QUOTES, quoteNotes, onRemoveQuote, onClearQuote, onBtw, onQuoteNote,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
   seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, appRef, sentHistory,
   pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow,
@@ -478,6 +492,14 @@ export const Composer2: React.FC<{
   const [draft, setDraft] = useDraftField(draftKey, 'text')
   // 等待期间宽卡轮播小贴士；窄卡固定短提示，避免文案闪烁与输入区高度跳动。
   const [tipIdx, setTipIdx] = useState(0)
+  const [previewQuote, setPreviewQuote] = useState<string | null>(null)
+  // 长粘贴磁贴(借 Comma):跟着这个会话的草稿走;previewPaste = 正在看全文的那张的下标(按下标删:同一段贴两次是两张,删一张只删一张)
+  const [pastes, setPastes] = useDraftField(draftKey, 'pastes')
+  const [previewPaste, setPreviewPaste] = useState<number | null>(null)
+  // 内置浏览器点选的网页元素(elementPick.ts):同样跟着草稿走;previewElement = 正在看「发给模型的那段」的那张的 id
+  const [elements] = useDraftField(draftKey, 'elements')
+  const [previewElement, setPreviewElement] = useState<string | null>(null)
+  const quotedNote = quotes.some((q) => !!noteOf(quoteNotes, q)?.trim())
   // 触屏(Android 壳 / 手机浏览器)没有 ⌘、悬停和拖拽,只留与指针无关的几条。
   const [touchUi] = useState(() => !!window.tangu?.mobile || !!window.matchMedia?.('(hover: none)').matches)
   const waitTips = (touchUi ? TOUCH_TIP_KEYS : WAIT_TIP_KEYS).filter((k) => !engineId || k !== STEER_TIP)
@@ -499,6 +521,23 @@ export const Composer2: React.FC<{
   const [customCommands, setCustomCommands] = useState<CustomCommandInfo[]>([])
   const [attachments, setAttachments] = useDraftField(draftKey, 'attachments')
   const [wsFiles, setWsFiles] = useDraftField(draftKey, 'wsFiles')
+  /** 附件立刻传进去的那个会话(新对话 / 预览没有会话、或正在跑:只读不传,发送时再传)。 */
+  // 正在跑时不先传:引擎把会话里新上传的文件记给下一条输入,跑着的时候那是排队中的追加消息(appStore.send 先传再 steer),不是这一条。
+  const uploadSessionId = typeof sessionId === 'string' && !running ? sessionId : null
+  /** 新对话里按了发送:会话建出来、文件传完之前,那几个「→工作区」磁贴画成上传中。会话一建出来输入框就换到它的
+   *  (空)草稿上了,所以这几个磁贴单独记在这里、照样画,传完再收。 */
+  const [sendingFiles, setSendingFiles] = useState<Attachment[] | null>(null)
+  const shownWs = sendingFiles ? [...wsFiles, ...sendingFiles.filter((a) => !wsFiles.includes(a))] : wsFiles
+  const draftUploadIds = [...attachments, ...wsFiles].map(uploadIdOf).filter((x): x is string => !!x)
+  const uploadGate = useUploads((all) => {
+    let busy = false
+    for (const id of draftUploadIds) {
+      const e = all[id]
+      if (e?.phase === 'failed') return 'failed' as const
+      if (e && e.phase !== 'done') busy = true
+    }
+    return busy ? 'busy' as const : null
+  }) ?? (sendingFiles?.length ? 'busy' as const : null)
   /** 「已选择」引用条(显式加的:[[ 选择器 / 拖进来 / 粘贴本机文件)。自动那条不进这里,见 autoChip。 */
   const [refChips, setRefChips] = useDraftField(draftKey, 'refChips')
   /** 被 × 掉的自动引用(值 = 那条引用的 token):主区换一个文件即复活,不是永久关闭。 */
@@ -686,7 +725,7 @@ export const Composer2: React.FC<{
   // 这个会话正在 Mini 里通话 → 纯文字送进电话(见 sendMessage)
   const callSessionId = useSyncExternalStore(subscribeCallPresence, getCallPresence)
   const inCall = !!activeSessionId && callSessionId === activeSessionId
-  // 输入建议(promptSuggest.ts,默认关):一轮结束后猜的下一句,当占位文字显示在空输入框里,Tab 采用。
+  // 输入建议(promptSuggest.ts,默认开):一轮结束后猜的下一句,空输入框里显示,Tab 填入。
   // 只认明确给了 sessionId 的输入框(聊天视图)。和占位文字一样常驻:只有新一轮起跑才作废(appStore subscribeRun),
   // 打字 / Tab 采用都只是因为输入框不空而藏起来,删空了还在。
   const suggestion = usePromptSuggest((st) => (sessionId ? st.bySession[sessionId] : undefined) || '')
@@ -754,6 +793,14 @@ export const Composer2: React.FC<{
   const agentDef = engineId ? undefined : agents?.find((a) => a.slug === currentAgentSlug)
   const approval = execConfig.approvalMode || agentDef?.approvalMode || 'auto-edit'
   const thinkingLevel = sessionThinkingLevel || (groupChat ? undefined : agentDef?.thinkingLevel) || undefined
+  // 下一 run 的循环上限与来源:会话值 → 引擎上次报的生效值(会话来源的那份可能已被 /loop off 清掉,不认)→ Agent 定义(≥10 才生效,
+  // 同引擎 AGENT_MAX_ITERATIONS_MIN)→ 默认不限。session 传 null 用于「刚清掉、状态还没回来」的那一刻。
+  const loopCap = (session: number | null | undefined = maxIterations): [number | string, string] => {
+    if (session) return [session, 'session']
+    if (ctxInfo?.maxIterations && ctxInfo.maxIterationsSource && ctxInfo.maxIterationsSource !== 'session') return [ctxInfo.maxIterations, ctxInfo.maxIterationsSource]
+    if ((agentDef?.maxIterations ?? 0) >= 10) return [agentDef!.maxIterations!, 'agent']
+    return [t('input.slash.loopUnlimited'), 'default']
+  }
   // Ultra 入口只给真拿得到 delegate 的会话:本机(host)、非 chat、非外部引擎、非团队模式(团队成员各跑各的档)。
   const allowUltra = isHost && !isChat && !engineId && !groupChat
   // 与发送侧 settleUltra 同口径:只跟 max 同在(陈旧的「ultra + 别的档」不显示 Ultra,发送时也不带)
@@ -777,8 +824,10 @@ export const Composer2: React.FC<{
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
   const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
+  useExitGhost(modeFix.ref, openMenu === 'mode') // 关掉时留替身放 80ms 退场(走查续八 8.4)
   // 上下文占比的详情浮层:同款 absolute + 固定宽,窄屏也会捅出边缘。
-  const ctxPopFix = useEdgeNudge(openMenu === 'ctx', { boundary: '.t2-chat-view' })
+  // 右边缘贴输入卡右边缘,不越出输入卡(走查 5.13):边界 = 输入卡、边距 0。
+  const ctxPopFix = useEdgeNudge(openMenu === 'ctx', { boundary: '.t2c-card', margin: 0 })
 
   useEffect(() => {
     if (!openMenu) return
@@ -833,7 +882,6 @@ export const Composer2: React.FC<{
     const ta = taRef.current
     if (running && !compactCard && !tipTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setTipTall(true)
   }, [running, tipIdx, locale, tipTall, draft, compactCard])
-
   // 历史召回:older=true→↑ 取更旧、false→↓ 取更新;越过最新回到暂存草稿。光标置末尾。
   const recallHistory = (older: boolean) => {
     if (older && histPos === 0) histStash.current = draft // 首次进入:暂存当前草稿
@@ -962,8 +1010,7 @@ export const Composer2: React.FC<{
             // 与引擎同一公式(agentLoop:会话 → Agent 定义 → host 替我批准 / 沙箱完全放行);药丸的 approval 只画 host,沙箱缺省不在它里面
             `approval=${execConfig.approvalMode || agentDef?.approvalMode || (execConfig.execMode === 'host' ? 'auto-edit' : 'full-auto')} (${execConfig.approvalMode ? 'session' : agentDef?.approvalMode ? 'agent' : 'default'})`,
             `cwd=${execConfig.cwd || '-'}`,
-            // 会话值(下一 run 必用)优先;没有再看引擎报的生效值(Agent 定义 / 默认),别把 Agent 定义的 3 显示成 90。
-            `loop=${maxIterations || ctxInfo?.maxIterations || 90} (${maxIterations ? 'session' : ctxInfo?.maxIterationsSource || 'default'})`,
+            `loop=${loopCap().join(' (')})`,
             `verify=${verifyCommand || '-'}`,
             `tokens=${(sessionTokens ?? 0).toLocaleString()}`,
             `cost=${runCost != null ? Math.round(runCost).toLocaleString() : '-'}${costLimit != null && costLimit > 0 ? `/${costLimit.toLocaleString()}` : ''}`,
@@ -1102,7 +1149,7 @@ export const Composer2: React.FC<{
   const mentionMatches = useMemo<NormalAgentDef[]>(() => {
     if (!mention) return []
     const q = mention.query.toLowerCase()
-    return mentionPool.filter((a) => !q || a.name.toLowerCase().includes(q) || a.slug.toLowerCase().includes(q)).slice(0, 10)
+    return mentionPool.filter((a) => !q || a.slug.toLowerCase().includes(q) || agentNames(a).some((n) => n.toLowerCase().includes(q))).slice(0, 10)
   }, [mention, mentionPool])
   const mentionActive = !!mention && mentionMatches.length > 0
   useEffect(() => { setMentionIndex(0) }, [mention?.start, mention?.query])
@@ -1110,10 +1157,10 @@ export const Composer2: React.FC<{
   const pickMention = (a: NormalAgentDef) => {
     if (!mention) return
     const before = draft.slice(0, mention.start)
-    const insert = `@${a.name} `
+    const insert = `@${agentName(a)} `
     const next = before + insert + draft.slice(cursorPos)
     setDraft(next)
-    if (projectMode) setMentionedProjects((prev) => (prev.some((p) => p.path === a.slug) ? prev : [...prev, { name: a.name, path: a.slug }]))
+    if (projectMode) setMentionedProjects((prev) => (prev.some((p) => p.path === a.slug) ? prev : [...prev, { name: agentName(a), path: a.slug }]))
     else if (inGroup) setMentionedSlug(a.slug)
     else setMentionAgents((prev) => (prev.includes(a.slug) ? prev : [...prev, a.slug]))
     const caret = before.length + insert.length
@@ -1306,7 +1353,7 @@ export const Composer2: React.FC<{
     // /btw [问题](别名 /side):旁聊。运行中也走这里,不会变成 steer;输入框挂着的引用一并交给旁聊并摘掉。
     const btwMatch = /^\/(?:btw|side)(?:\s+([\s\S]*))?$/i.exec(cmd)
     if (btwMatch && onBtw) {
-      onBtw(btwMatch[1]?.trim() || undefined, quotes.join('\n\n') || undefined)
+      onBtw(btwMatch[1]?.trim() || undefined, composeQuotes(quotes, quoteNotes).trim() || undefined) // 回应一起带过去,别丢
       if (quotes.length) onClearQuote?.()
       setDraft('')
       requestAnimationFrame(autoGrow)
@@ -1314,7 +1361,7 @@ export const Composer2: React.FC<{
     }
     // 只挂引用不写字也算一条消息:芯片化之前拖引用会往草稿塞文本,所以「拖完直接回车」是能发的;
     // 不放行的话按回车毫无反应 = 哑火(评审 M2)。斜杠命令那几段都要求 text,故只在这之后判空。
-    if (!text && !allRefChips.length) return
+    if (!text && !allRefChips.length && !quotedNote && !pastes.length && !elements.length) return // 引用卡带了回应也算写了话;只挂了网页元素也能发
     // /compact [focus]:带关注点时不能走弹层菜单(那条只认裸命令),在这里直接派发
     const compactMatch = /^\/compact(?:\s+([\s\S]+))?$/i.exec(cmd)
     if (compactMatch && onCompact) {
@@ -1323,14 +1370,17 @@ export const Composer2: React.FC<{
       requestAnimationFrame(autoGrow)
       return
     }
-    const loopMatch = /^\/loop(?:\s+(\d+))?$/i.exec(cmd)
+    const loopMatch = /^\/loop(?:\s+(\d+|off|default|reset))?$/i.exec(cmd)
     if (loopMatch && onMaxIterationsChange) {
-      if (loopMatch[1]) {
-        const n = Math.min(Math.max(1, parseInt(loopMatch[1], 10)), 200)
+      if (loopMatch[1] && /^\d+$/.test(loopMatch[1])) {
+        const n = Math.max(1, parseInt(loopMatch[1], 10))
         onMaxIterationsChange(n)
         setHint(t('input.slash.loopSet', { n }))
+      } else if (loopMatch[1]) {
+        onMaxIterationsChange(null)
+        setHint(t('input.slash.loopCleared', { current: loopCap(null)[0] }))
       } else {
-        setHint(t('input.slash.loop', { current: maxIterations || ctxInfo?.maxIterations || 90 }))
+        setHint(t('input.slash.loop', { current: loopCap()[0] }))
       }
       setDraft('')
       requestAnimationFrame(autoGrow)
@@ -1390,10 +1440,10 @@ export const Composer2: React.FC<{
         .catch((e: any) => setHint(String(e?.message || e)))
       return
     }
-    if (disabled) return
+    if (disabled || uploadGate) return // 附件还在读 / 传,或传失败:底排那句话说了为什么,发送键也灰着
     // 通话中:纯文字送进电话(实时模型听到、用语音回);带附件 / 引用 / 技能的照常交给 Tangu。
     // Mini 没确认(崩了 / 刚挂)就改走普通发送并提示 —— 打的字不能丢。override(兜底重发、听写)不再进这条。
-    if (inCall && !override && text && text.length <= CALL_TEXT_MAX && !attachments.length && !wsFiles.length && !allRefChips.length && !quotes.length && !pinnedSkills.length) {
+    if (inCall && !override && text && text.length <= CALL_TEXT_MAX && !attachments.length && !wsFiles.length && !allRefChips.length && !quotes.length && !pastes.length && !elements.length && !pinnedSkills.length) {
       setDraft(''); setHistPos(0); setHint(null)
       requestAnimationFrame(autoGrow)
       return sendTextToCall(activeSessionId!, text).then(async (ok) => {
@@ -1404,12 +1454,12 @@ export const Composer2: React.FC<{
         return sent
       })
     }
-    const quoted = composeQuotes(quotes)
+    const quoted = composeQuotes(quotes, quoteNotes)
     // 「已选择」芯片 → 正文最前面的一行引用 token。行内位置在芯片化之后不再存在,统一前置(= 上下文在前)。
     // 句子里已经写了的引用不再进这一行(否则模型看到两遍、气泡也画两遍)。
     const leadChips = allRefChips.filter((c) => !(c.run && inlined?.used.has(c.run)))
     const refs = leadChips.length ? leadChips.map((c) => c.token).join(' ') + '\n' : ''
-    const outgoing = composeOutgoing(refs, quoted, text)
+    const outgoing = composeOutgoing(refs, quoted, composeElements(composePastes(text, pastes), elements))
     if (outgoing.length > MAX_INPUT_CHARS) {
       setHint(t('input.tooLong', { len: outgoing.length.toLocaleString(), max: MAX_INPUT_CHARS.toLocaleString() }))
       return
@@ -1425,7 +1475,12 @@ export const Composer2: React.FC<{
     const sentKey = draftKey
     const known = sentKey === NEW_CHAT_DRAFT ? new Set(useApp.getState().sessions.map((x) => x.id)) : null
     noteSend(outgoing, taRef.current) // 发送动效:气泡从这一行升上去(sendFlight.ts)
-    return onSend(outgoing, attachments.filter((a) => !isLeaving(a)), wsFiles.filter((a) => !isLeaving(a)), pinnedSkills.map((s) => s.id), mentions).then((accepted) => {
+    const sentAtts = attachments.filter((a) => !isLeaving(a))
+    const sentWs = wsFiles.filter((a) => !isLeaving(a))
+    const toUpload = sentWs.filter((a) => !isInWorkspace(a)) // 已经传进工作区的不再传
+    if (toUpload.length) setSendingFiles(toUpload)
+    return onSend(outgoing, [...sentAtts, ...elementImages(elements)], toUpload, pinnedSkills.map((s) => s.id), mentions).finally(() => setSendingFiles(null)).then((accepted) => {
+      if (accepted) release([...sentAtts, ...sentWs])
       if (!accepted) {
         dropSend(outgoing)
         // 新对话的第一句没发出去,而输入框已经换到刚建的会话上:那份输入跟过去,留在眼前可以重发(那边有草稿就不动)。
@@ -1435,7 +1490,14 @@ export const Composer2: React.FC<{
         return false
       }
       if (!override && draftKeyRef.current === sentKey) fadeOutDraft(taRef.current) // 输入框里的字上移淡出,再清空
+      // 发送途中又加进来的附件不跟着这条清掉(它们不在这次发出去的里面)
+      const sent = new Set([...sentAtts, ...sentWs])
+      const cur = useComposerDrafts.getState()[sentKey]
+      const keep = (list: Attachment[] = []) => list.filter((a) => !sent.has(a) && !isLeaving(a))
+      const lateAtts = keep(cur?.attachments), lateWs = keep(cur?.wsFiles)
       clearDraft(sentKey, !!override) // 引用里自动那条不在草稿里 —— 它是 activePage 的派生量,下一条消息照旧自动挂上
+      if (lateAtts.length) setDraftField(sentKey, 'attachments', lateAtts)
+      if (lateWs.length) setDraftField(sentKey, 'wsFiles', lateWs)
       if (!override) { setHistPos(0); nativeHaptic('tick') } // 手机:自己发出去的那一下给个轻震(桌面 / 网页无宿主,空操作)
       onClearQuote?.()
       requestAnimationFrame(autoGrow)
@@ -1447,35 +1509,27 @@ export const Composer2: React.FC<{
   const pickFiles = async (files: ArrayLike<File> | null) => {
     if (!files) return
     const key = draftKey // 读盘是异步的:途中切了会话,图仍归发起时那份草稿
-    const next: Attachment[] = []
+    const next: File[] = []
     const skipped: string[] = []
     for (const f of Array.from(files)) {
       if (!f.type.startsWith('image/')) { skipped.push(t('input.skip.notImage', { name: f.name })); continue }
       if (f.size > MAX_ATTACH_BYTES) { skipped.push(t('input.skip.tooBig', { name: f.name, mb: String(Math.round(MAX_ATTACH_BYTES / 1024 / 1024)) })); continue }
-      const buf = await f.arrayBuffer()
-      let bin = ''
-      const bytes = new Uint8Array(buf)
-      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-      next.push({ name: f.name, mimeType: f.type, data: btoa(bin), size: f.size })
+      next.push(f)
     }
     setHint(skipped.length ? t('input.skip.imageHint', { items: skipped.join(t('composer2.listSep')) }) : null)
-    setDraftField(key, 'attachments', (prev) => [...prev, ...next])
+    for (const f of next) addDraftFile(key, 'attachments', f, null) // 先出磁贴(本地预览),后台读;读完前发送键灰着
   }
 
   const pickWsFiles = async (files: ArrayLike<File> | null) => {
     if (!files) return
-    const next: Attachment[] = []
+    const next: File[] = []
     const skipped: string[] = []
     for (const f of Array.from(files)) {
       if (f.size > MAX_WS_BYTES) { skipped.push(t('input.skip.tooBig', { name: f.name, mb: String(Math.round(MAX_WS_BYTES / 1024 / 1024)) })); continue }
-      const buf = await f.arrayBuffer()
-      let bin = ''
-      const bytes = new Uint8Array(buf)
-      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-      next.push({ name: f.name, mimeType: f.type || 'application/octet-stream', data: btoa(bin), size: f.size })
+      next.push(f)
     }
+    for (const f of next) if (!addDraftFile(draftKey, 'wsFiles', f, uploadSessionId)) skipped.push(t('input.skip.sameName', { name: f.name })) // 会话已在:立刻传进工作区,传完才能发
     setHint(skipped.length ? t('input.skip.simple', { items: skipped.join(t('composer2.listSep')) }) : null)
-    setWsFiles((prev) => [...prev, ...next])
   }
 
   /** OS 文件落下:图片另进图片附件(edit_image 只认附件)。host 照旧给每个文件出路径芯片 —— 只拖不打字也能发,
@@ -1558,7 +1612,8 @@ export const Composer2: React.FC<{
       }
     }
     if (nextImages.length) setAttachments((prev) => [...prev, ...nextImages])
-    if (nextFiles.length) setWsFiles((prev) => [...prev, ...nextFiles])
+    const dup = nextFiles.filter((a) => !addDraftFile(draftKey, 'wsFiles', a, uploadSessionId)).map((a) => t('input.skip.sameName', { name: a.name }))
+    if (dup.length) setHint(t('input.skip.simple', { items: dup.join(t('composer2.listSep')) }))
     if (nextRefs.length) addRefChips(nextRefs)
   }
 
@@ -1586,6 +1641,26 @@ export const Composer2: React.FC<{
     return () => { card.removeEventListener(APPREF_EVENT, onRef); card.removeAttribute(APPREF_TARGET_ATTR) }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps -- addRefChips 的写入口是稳定的(useDraftField 按当前草稿键写)
 
+  // 内置浏览器点选的元素(elementPick.ts):浏览器视图找到落点输入卡,把元素送到这里挂成磁贴。截图超过附件上限就只留文字。
+  // focusin 记「最近用过」:屏上同时有几张输入卡时,元素进最近用过的那张。
+  useEffect(() => {
+    const card = cardRef.current
+    if (!card) return
+    card.setAttribute(ELEMENT_TARGET_ATTR, '')
+    const onUse = (): void => markComposerUsed(card)
+    const onPick = (e: Event): void => {
+      const pick = (e as CustomEvent<ElementPick>).detail
+      if (!pick?.id) return
+      const image = pick.image && pick.image.size <= MAX_ATTACH_BYTES ? pick.image : null
+      setDraftField(draftKeyRef.current, 'elements', (prev) => (prev.some((x) => x.id === pick.id) ? prev : [...prev, { ...pick, image }]))
+      markComposerUsed(card)
+      requestAnimationFrame(() => taRef.current?.focus())
+    }
+    card.addEventListener('focusin', onUse)
+    card.addEventListener(ELEMENT_EVENT, onPick)
+    return () => { card.removeEventListener('focusin', onUse); card.removeEventListener(ELEMENT_EVENT, onPick); card.removeAttribute(ELEMENT_TARGET_ATTR) }
+  }, [])
+
   const addContentReference = (ref: AddContentReference): void => {
     addRefChips([ref.kind === 'view' ? viewChip(ref.type, ref.title) : refChipOf(ref, vaultRoot || '')])
     requestAnimationFrame(() => taRef.current?.focus())
@@ -1608,7 +1683,7 @@ export const Composer2: React.FC<{
   const curApproval = APPROVALS.find((a) => a.id === approval) || APPROVALS[1]
   const modeLabel = groupActive
     ? t('group.modeLabel', { n: groupAgents!.length })
-    : planMode && !isChat ? t('input.planMode') : isChat ? t('input.presetChat') : (isHost ? t(curApproval.key) : t('input.normal'))
+    : planMode && !isChat ? t('input.planMode') : isChat ? t('input.presetChat') : (isHost ? t(curApproval.key) : t('input.normalWork'))
   // 收窄时药丸只剩图标,故图标随当前模式变(群聊/计划/审批档位),窄屏也能一眼看出状态。
   const ModeIcon = groupActive ? Users
     : planMode && !isChat ? ClipboardList
@@ -1668,12 +1743,12 @@ export const Composer2: React.FC<{
     items: [{ id: 'group-chat', label: groupActive ? t('group.menu.configured', { n: groupAgents!.length }) : t('group.menu.enable'), icon: <Users size={14} />, checked: groupActive, run: () => { setGroupSetupOpen(true); closeModeMenu() } }],
   } : null
   const approvalItems: Array<SheetMenuItem & { approvalId: (typeof APPROVALS)[number]['id'] }> = isHost ? APPROVALS.map(({ id, Icon, key, desc, ...a }) => ({
-    id: `approval:${id}`, approvalId: id, label: t(key), detail: t(desc), icon: <Icon size={15} className="approval-ic" />,
+    id: `approval:${id}`, approvalId: id, label: t(key), detail: t(desc), icon: <Icon size={14} className="approval-ic" />,
     checked: approval === id, danger: 'danger' in a, run: () => setApproval(id),
   })) : []
   /** 选了自定义才给编辑入口:没选这一档时打开它没有意义(规则不参与判定) */
   const editRulesItem: SheetMenuItem | null = isHost && approval === 'custom' ? {
-    id: 'approval-rules', label: t('input.approval.editRules'), detail: t('input.approval.editRulesDesc'), icon: <SlidersHorizontal size={15} className="approval-ic" />,
+    id: 'approval-rules', label: t('input.approval.editRules'), detail: t('input.approval.editRulesDesc'), icon: <SlidersHorizontal size={14} className="approval-ic" />,
     run: () => { setRulesOpen(true); closeModeMenu() },
   } : null
   const modeSheet = (): { title: string; back: string; sections: SheetMenuSection[] } => {
@@ -1693,12 +1768,12 @@ export const Composer2: React.FC<{
   // 发送 / 停止 / 通话键:桌面在底排末尾,手机在输入框右边(见上)。录音时两处都不出(录音条自带停止和发送)。
   const submitKeys = running ? (
     <>
-      {(!!draft.trim() || allRefChips.length > 0) && (
-        <ChatBoxSubmit onClick={send} disabled={disabled} title={t('input.send')} aria-label={t('input.send')} />
+      {(!!draft.trim() || allRefChips.length > 0 || quotedNote || pastes.length > 0 || elements.length > 0) && (
+        <ChatBoxSubmit onClick={send} disabled={disabled || !!uploadGate} title={t('input.send')} aria-label={t('input.send')} />
       )}
       <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
     </>
-  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pinnedSkills.length ? (
+  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pastes.length && !elements.length && !pinnedSkills.length ? (
     // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
     <ChatBoxSubmit
       className="t2c-live-control"
@@ -1711,7 +1786,7 @@ export const Composer2: React.FC<{
     </ChatBoxSubmit>
   ) : (
     // 只挂了引用、一个字没写也可发(与 send() 的放行条件同源;不同步的话按钮灰着 = 哑火)
-    <ChatBoxSubmit onClick={send} disabled={disabled || (!draft.trim() && !allRefChips.length)} title={t('input.send')} aria-label={t('input.send')} />
+    <ChatBoxSubmit onClick={send} disabled={disabled || !!uploadGate || (!draft.trim() && !allRefChips.length && !quotedNote && !pastes.length && !elements.length)} title={t('input.send')} aria-label={t('input.send')} />
   )
 
   return (
@@ -1753,17 +1828,6 @@ export const Composer2: React.FC<{
         <ChatBoxSurface ref={cardRef} data-guide-anchor="chat-composer" className={`${phoneCard ? 't2c-card--phone' : ''}${dragOver ? ' dragover' : ''}`}>
           {advisory}
           {hint && <div className="t2c-hint">{hint}</div>}
-          {quotes.length > 0 && (
-            <div className="t2c-quotes" role="group" aria-label={t('input.quote.group')}>
-              {quotes.map((quote, index) => (
-                <div className="t2c-quote" key={quote}>
-                  <Quote size={13} className="t2c-quote-mark" aria-hidden />
-                  <span className="t2c-quote-text">{quote.length > 280 ? `${quote.slice(0, 280)}…` : quote}</span>
-                  <button title={t('input.remove')} aria-label={t('input.remove')} onClick={() => (onRemoveQuote ? onRemoveQuote(index) : onClearQuote?.())} className="t2c-quote-x"><X size={12} /></button>
-                </div>
-              ))}
-            </div>
-          )}
           {allRefChips.length > 0 && (
             <div className="t2c-chiprow t2c-refrow" role="group" aria-label={t('input.ref.selected')}>
               <span className="t2c-reflabel">{t('input.ref.selected')}</span>
@@ -1785,16 +1849,27 @@ export const Composer2: React.FC<{
               ))}
             </div>
           )}
-          {(attachments.length > 0 || wsFiles.length > 0) && (
+          {(quotes.length > 0 || pastes.length > 0 || elements.length > 0 || attachments.length > 0 || shownWs.length > 0) && (
             // 附件磁贴(B2):随消息发的与「到工作区」的排在同一行。删按对象认、写回点删那一刻的草稿(draftKey 闭包),
             // 淡出那 130ms 里删了别的、切了会话都不会删错;发送时跳过正在淡出的(isLeaving)。
-            <div className="t2c-chiprow t2c-tilerow">
+            // 引用磁贴(10-23)排在最前:点一下看全文,发出去照旧是正文前的引用块(quotes.ts)。
+            <div className="t2c-chiprow t2c-tilerow" role="group" aria-label={quotes.length ? t('input.quote.group') : undefined}>
+              {quotes.map((quote, index) => (
+                <QuoteTile key={quote} text={quote} note={noteOf(quoteNotes, quote)} title={t('quote.tile.preview')} onOpen={() => setPreviewQuote(quote)} removeTitle={t('input.remove')} onRemove={() => (onRemoveQuote ? onRemoveQuote(index) : onClearQuote?.())} />
+              ))}
+              {pastes.map((p, i) => (
+                <PasteTile key={i} text={p} title={t('quote.tile.preview')} onOpen={() => setPreviewPaste(i)} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'pastes', (prev) => prev.filter((_, j) => j !== i))} />
+              ))}
+              {elements.map((el) => (
+                <ElementTile key={el.id} pick={el} onOpen={() => setPreviewElement(el.id)} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'elements', (prev) => prev.filter((x) => x.id !== el.id))} />
+              ))}
               {attachments.map((a) => (
-                <AttachmentTile key={tileKey(a)} file={a} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'attachments', (prev) => prev.filter((x) => x !== a))} />
+                <AttachmentTile key={tileKey(a)} file={a} uploadId={uploadIdOf(a)} preview={previewOf(a)} removeTitle={t('input.remove')} onRemove={() => removeDraftFile(draftKey, 'attachments', a)} />
               ))}
-              {wsFiles.map((a) => (
-                <AttachmentTile key={tileKey(a)} file={a} note={t('input.toWorkspace')} removeTitle={t('input.remove')} onRemove={() => setDraftField(draftKey, 'wsFiles', (prev) => prev.filter((x) => x !== a))} />
-              ))}
+              {shownWs.map((a) => {
+                const sending = !!sendingFiles?.includes(a)
+                return <AttachmentTile key={tileKey(a)} file={a} uploadId={uploadIdOf(a)} sending={sending} note={t('input.toWorkspace')} removeTitle={t('input.remove')} onRemove={sending ? undefined : () => removeDraftFile(draftKey, 'wsFiles', a)} />
+              })}
             </div>
           )}
           {pinnedSkills.length > 0 && (
@@ -1809,14 +1884,14 @@ export const Composer2: React.FC<{
             </div>
           )}
           {((field: React.ReactNode) => phoneCard ? <div className="t2c-field">{field}{!voiceActive && submitKeys}</div> : field)(
-          <><ChatBoxInput
+          <><div className="t2c-input-wrap" data-suggestion={showSuggestion || undefined}><ChatBoxInput
             autoSize={false}
             ref={taRef}
             className="t2c-ta"
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={showSuggestion ? suggestion : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
+            placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
             data-suggestion={showSuggestion || undefined}
             data-tip-fade={(running && !compactCard && tipFade) || undefined}
             data-tip-tall={(running && !compactCard && tipTall) || undefined}
@@ -1834,7 +1909,12 @@ export const Composer2: React.FC<{
             onSelect={(e) => setCursorPos((e.target as HTMLTextAreaElement).selectionStart || 0)}
             onPaste={(e) => {
               const files = e.clipboardData?.files
-              if (!files?.length) return // 纯文本粘贴照常,不拦
+              if (!files?.length) {
+                // 纯文本照常进输入框;太长的(借 Comma,≥5000 字)成一张磁贴,输入框留给你要说的话
+                const pasted = e.clipboardData?.getData('text/plain') ?? ''
+                if (pasted.length >= PASTE_TILE_MIN) { e.preventDefault(); setPastes((prev) => [...prev, pasted]) }
+                return
+              }
               e.preventDefault()
               const all = Array.from(files)
               const images = all.filter((f) => f.type.startsWith('image/'))
@@ -1933,7 +2013,8 @@ export const Composer2: React.FC<{
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
             }}
           />
-          <InlineRefMirror text={draft} runs={inlineRuns} chipOf={(run) => runChips.get(run)} /></>)}
+          <InlineRefMirror text={draft} runs={inlineRuns} chipOf={(run) => runChips.get(run)} />
+          {showSuggestion && <div className="t2c-suggestion" aria-hidden="true"><span>{suggestion}</span>{' '}<span className="t2c-suggestion-key">{t('input.suggestionHint')}</span></div>}</div></>)}
           {slashOpen && (
             <div className="t2c-menu">
               {slashMatches.map((it, i) => (
@@ -1961,7 +2042,7 @@ export const Composer2: React.FC<{
                   onMouseEnter={() => setMentionIndex(i)}
                   onClick={() => pickMention(a)}
                 >
-                  <span className="t2c-menu-cmd">@{a.name}</span>
+                  <span className="t2c-menu-cmd">@{agentNames(a).join(' · ')}</span>
                   <span className="t2c-menu-desc">{a.description || a.slug}</span>
                 </button>
               ))}
@@ -2091,6 +2172,12 @@ export const Composer2: React.FC<{
               </span>
             )}
             <span className="t2c-grow" />
+            {uploadGate && (
+              <span className="t2c-upstatus" data-failed={uploadGate === 'failed' || undefined} role="status">
+                {uploadGate === 'failed' && <CircleAlert size={12} aria-hidden />}
+                {t(uploadGate === 'failed' ? 'input.upload.failedGate' : 'input.upload.busyGate')}
+              </span>
+            )}
             {!isChat && !!ringWindow && ringWindow > 0 && (() => {
               const pct = Math.min(100, Math.round(((ctxTokens || 0) / ringWindow) * 100))
               // 预警跟着压缩线走:设置里把自动压缩调到 30% 时,环永远到不了 80%,按窗口判就再也不亮了
@@ -2125,6 +2212,9 @@ export const Composer2: React.FC<{
                       costLimit={costLimit}
                       ctxInfo={ringCtxInfo}
                       onCompact={onCompact ? () => { onCompact(); setOpenMenu(null) } : undefined}
+                      directModel={!isEngine && modelId && isDirectModelId(modelId, models, modelsResponse)
+                        // 新对话还没会话:按焦点设备查(新对话就跑在那里,模型目录也来自那里),别固定问本机
+                        ? { id: modelId, load: () => getModelQuota(sessionId ? targetForSession(sessionId) : focusTarget(), modelId).then((r) => r.quota) } : undefined}
                     />
                   </span>
                 </span>
@@ -2153,6 +2243,9 @@ export const Composer2: React.FC<{
                 ultra={ultraOn}
                 running={running}
                 supportedThinking={isEngine ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels}
+                fast={fast}
+                fastTier={isEngine ? undefined : models?.find((m) => m.id === modelId)?.fastTier}
+                onFastChange={isEngine ? undefined : onFastChange}
                 effectiveThinking={
                   // 只在 requested 与当前选档一致时才显示生效档——刚改档还没跑新 run 时,旧 effective 不对应当前选择
                   isEngine ? undefined : (ctxInfo?.thinkingRequested === (thinkingLevel || 'medium') ? ctxInfo?.thinkingEffective : undefined)
@@ -2183,6 +2276,25 @@ export const Composer2: React.FC<{
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{callError}</div>
           )}
         </ChatBoxSurface>
+        {previewPaste !== null && pastes[previewPaste] !== undefined && (
+          <QuotePreview
+            text={pastes[previewPaste]}
+            paste
+            onClose={() => setPreviewPaste(null)}
+            onRestore={() => {
+              const i = previewPaste, p = pastes[i]
+              setDraftField(draftKey, 'pastes', (prev) => prev.filter((_, j) => j !== i))
+              setDraft((d) => (d.trim() ? `${d.replace(/\s+$/, '')}\n${p}` : p))
+              setPreviewPaste(null)
+              requestAnimationFrame(autoGrow)
+            }}
+          />
+        )}
+        {(() => {
+          const el = previewElement !== null ? elements.find((x) => x.id === previewElement) : undefined
+          return el ? <QuotePreview text={formatElementBlock(el)} paste title={t('element.preview.title')} onClose={() => setPreviewElement(null)} /> : null
+        })()}
+        {previewQuote !== null && <QuotePreview text={previewQuote} note={noteOf(quoteNotes, previewQuote)} onNote={onQuoteNote ? (note) => onQuoteNote(previewQuote, note) : undefined} onClose={() => setPreviewQuote(null)} />}
       </div>
       {rulesOpen && <ApprovalRulesModal cfg={liveCfg} onClose={() => setRulesOpen(false)} />}
       {ultraAsk && (

@@ -84,6 +84,8 @@
 .ibx-reader-body .ibx-amadeus .page-view.unified-body { padding-top: 0; }
 /* 编辑器尾部的 40px 是给笔记留的点击缓冲;信是只读的,末尾的卡要贴着正文(16px,见下)。 */
 .ibx-reader-body .ibx-amadeus.amx-editor { padding-bottom: 0; }
+/* 滚动只归 .ibx-reader 一层:.amx-pane 自带 overflow:auto(给独立笔记页的),嵌在信里会多吃 ~24px 的内层滚动,滚轮先滚它再滚外层(10-26)。 */
+.ibx-reader-body .ibx-amadeus.amx-pane { height: auto; overflow: visible; }
 /* 纸面(标题容器 .amx-doc 与块画布 .page-view.unified-body)的 48px 左右内边距是给编辑态的块把手留的;
    只读的收件箱里正文要跟标题 / 末尾卡片对齐(实测缩进来自 .page-view,见 09-11 Log)。 */
 .ibx-reader-body .ibx-amadeus .amx-doc,
@@ -208,17 +210,5 @@
 }
 .ibx-fb-link:hover { color: var(--text); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
 
-/* ── 没选中信时的空态 ── */
-.ibx-reader-empty {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  color: var(--text-faint);
-  font-size: var(--ui-font-body, 13px);
-}
-.ibx-reader-empty-title { color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 600; }
-.ibx-reader-empty-hint { font-size: var(--ui-font-meta, 12px); }
-.ibx-reader-empty-actions { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+/* ── 没选中信时的空态:公共 EmptyState(components/emptyState.css),这里只让它占满阅读面板 ── */
+.ibx-reader.ibx-reader--empty { display: flex; flex-direction: column; }

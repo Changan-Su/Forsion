@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'vitest'
-import { cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -10,9 +10,14 @@ const app = join(fixture, 'desktop')
 mkdirSync(join(app, 'build'), { recursive: true })
 mkdirSync(join(app, 'electron'))
 mkdirSync(join(app, 'unit-web-dist'))
+symlinkSync(join(desktop, 'node_modules'), join(app, 'node_modules'), 'junction')
 mkdirSync(join(fixture, 'tangu-agent'))
-for (const file of ['electron-builder.config.cjs', 'build/distribution.cjs', 'build/backend-dependencies.cjs', 'build/dmg-layout.cjs', 'electron/builtinBundles.json']) {
+for (const file of ['electron-builder.config.cjs', 'electron/builtinBundles.json']) {
   cpSync(join(desktop, file), join(app, file))
+}
+// Keep config helpers/includes together, without copying downloaded runtimes or packaging assets.
+for (const entry of readdirSync(join(desktop, 'build'), { withFileTypes: true })) {
+  if (entry.isFile() && /\.(?:cjs|nsh)$/.test(entry.name)) cpSync(join(desktop, 'build', entry.name), join(app, 'build', entry.name))
 }
 cpSync(join(desktop, 'products'), join(app, 'products'), { recursive: true })
 cpSync(join(desktop, '../tangu-agent/package-lock.json'), join(fixture, 'tangu-agent/package-lock.json'))
@@ -21,6 +26,8 @@ afterAll(() => rmSync(fixture, { recursive: true, force: true }))
 
 function config(value?: string) {
   const env = { ...process.env }
+  // Generated NSIS template overrides belong to this fixture and are removed by afterAll.
+  env.TMPDIR = env.TEMP = env.TMP = fixture
   delete env.FORSION_PRODUCT
   delete env.FORSION_BUNDLE_EXTEND
   if (value !== undefined) env.FORSION_BUNDLE_EXTEND = value
@@ -34,7 +41,10 @@ describe('desktop distributions', () => {
     expect(c.publish.channel).toBe('latest')
     expect(c.extraMetadata.forsionBundleExtend).toBe(true)
     expect(c.extraResources.some((r: { to: string }) => r.to === 'bundled-plugins/extend')).toBe(true)
-    expect(config('1')).toEqual(c)
+    // Each subprocess produces its own NSIS include filename; only the PID is intentionally different.
+    const include = expect.stringMatching(/[/\\]\.installer-forsion-\d+\.generated\.nsh$/)
+    expect(c.nsis.include).toEqual(include)
+    expect(config('1')).toEqual({ ...c, nsis: { ...c.nsis, include } })
   })
 
   it('NoExtend excludes the plugin from resources and asar, keeps the backend/CU and isolates its feed', () => {

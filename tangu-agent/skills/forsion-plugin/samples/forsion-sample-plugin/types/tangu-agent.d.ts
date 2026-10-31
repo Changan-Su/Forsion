@@ -108,6 +108,9 @@ export interface ToolCapabilities {
   automationSafe?: boolean;
   /** Explicitly expose this plugin tool through Desktop MCP. Writes require native approval. */
   externalMcp?: boolean;
+  /** 审批卡文案(同步,收到本次调用的参数)。**只对官方签名捆绑包里的插件生效**,第三方插件写了也被忽略(卡上照旧是整份参数)。
+   *  抛错或返回非字符串 → 退回整份参数。 */
+  approvalPreview?: (args: any) => string;
 }
 
 export interface ToolDef {
@@ -230,6 +233,56 @@ export interface TanguSdk {
     opts: { kind: 'image' | 'file'; fileName: string },
     signal?: AbortSignal,
   ): Promise<{ ok: boolean; error?: string }>;
+  /** 读某通道的设置(插件通道驱动经此读自己的凭据,每次现读)。老宿主没有。 */
+  channelSettings?(kind: string): ChannelSettings;
+}
+
+/** 通道设置(config.json channels.<kind>)。凭据键 appId / appSecret / botToken 由通道自定含义。 */
+export interface ChannelSettings {
+  enabled: boolean;
+  sessions: boolean;
+  approvalMode: 'readonly' | 'auto-edit' | 'full-auto';
+  locale?: 'zh' | 'en';
+  appId?: string;
+  appSecret?: string;
+  botToken?: string;
+}
+/** 入站消息:peerId 由驱动编码(如 `single:<userid>` / `group:<chatid>`),同一聊天恒定。 */
+export interface ChannelInbound {
+  accountId: string;
+  peerId: string;
+  text: string;
+  messageId?: string;
+  /** 图片走多模态:{ name, mimeType, data: base64 }。 */
+  attachments?: Array<{ name: string; mimeType: string; data: string }>;
+  /** 文件由宿主落盘到通道工作区。 */
+  files?: Array<{ name: string; mimeType: string; buffer: Buffer }>;
+}
+export interface ChannelSendResult { ok: boolean; error?: string }
+/** 通道驱动 = 传输层。会话绑定、审批、slash、收件箱转发都在宿主管线里。 */
+export interface ChannelDriver {
+  /** 通道 kind:小写字母开头、`[a-z0-9-]`、2–16 字符,不得与内置 wechat / telegram / qq 撞。 */
+  readonly kind: string;
+  /** 起连接(幂等)。入站一律交 onMessage;它恒立即回 '',回复都经 send 推送。凭据不齐就直接返回。 */
+  start(onMessage: (msg: ChannelInbound) => Promise<string>): Promise<void>;
+  /** 停连接;宿主换凭据会 stop → start。 */
+  stop(): void;
+  status(): Array<{ accountId: string; running: boolean; label?: string }>;
+  send(accountId: string, peerId: string, text: string): Promise<ChannelSendResult>;
+  sendMedia?(accountId: string, peerId: string, buffer: Buffer, opts: { kind: 'image' | 'file'; fileName: string }, signal?: AbortSignal): Promise<ChannelSendResult>;
+  setTyping?(accountId: string, peerId: string, on: boolean): Promise<void>;
+  /** 设置页「连接」:校验凭据(失败抛错,文案给用户看),返回绑定用账号 id 与显示名。 */
+  verify(): Promise<{ accountId: string; label: string }>;
+}
+export interface ChannelText { zh: string; en: string }
+export interface PluginChannelSpec {
+  driver: ChannelDriver;
+  /** 设置卡与侧栏文件夹的显示名。 */
+  name: ChannelText;
+  /** 凭据下方的一句提示(去哪儿拿凭据)。 */
+  hint?: ChannelText;
+  /** 设置卡要填的凭据,键复用 appId / appSecret / botToken;secret 的不回显。全部填齐才启动。 */
+  fields: Array<{ key: 'appId' | 'appSecret' | 'botToken'; label: ChannelText; secret?: boolean }>;
 }
 
 /** 插件注册的 CLI 子命令(`tangu <name> ...`)。 */
@@ -272,9 +325,23 @@ export interface TanguPluginContext {
   /** 注册 `tangu <name>` 子命令(如 computer-use 的 doctor/setup)。 */
   registerCommand(cmd: PluginCommand): void;
   registerScopedRoutes(mount: (router: ScopedPluginRouter) => void): void;
+  /**
+   * 贡献一个 IM 通道(企业微信等):宿主给它整条通道管线(连接即新会话、审批、slash、收件箱转发、侧栏工作区)
+   * 和「设置 → 通道」里的一张卡(按 fields 画凭据)。停用插件时宿主完全停止该通道,绑定保留。仅本机引擎生效。
+   * 老宿主没有:`if (!ctx.registerChannel) return ctx.log('host too old')`。kind 非法或撞名会抛错(激活作废)。
+   */
+  registerChannel?(spec: PluginChannelSpec): void;
   sdk: TanguSdk;
   log(msg: string): void;
   paths: { pluginDir: string; dataDir: string };
+  /**
+   * 以用户的 Forsion 账号请求云端。**只有官方签名捆绑包里的插件有**,第三方插件恒为 undefined。
+   * 路径白名单:`GET /api/market/mine`、`POST /api/market/mine/<id>/update`(可带 `?dryRun=1`);其余 → `{ status: 403, error: 'path_not_allowed' }`。
+   * 没有云端 → `{ status: 0, error: 'no_cloud' }`。令牌由宿主带、插件拿不到;永不抛。
+   */
+  cloud?: {
+    request(req: { path: string; method?: 'GET' | 'POST'; body?: unknown; timeoutMs?: number; signal?: AbortSignal }): Promise<{ status: number; json?: any; error?: string }>;
+  };
   /** 发用户活动事件(宿主强制加 `plugin:<id>:` 前缀)——自动化 event_seen 可盯;云端 worker no-op。 */
   activity: { append(event: string, detail?: Record<string, unknown>): void };
 }

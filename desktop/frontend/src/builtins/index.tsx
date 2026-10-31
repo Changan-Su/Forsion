@@ -13,10 +13,11 @@ import { PRODUCT } from '../product'
  */
 import React, { Suspense } from 'react'
 import { create } from 'zustand'
-import { Globe, TerminalSquare } from 'lucide-react'
+import { Blocks, CalendarDays, Globe, House, Images, Sparkles, TerminalSquare, type LucideIcon } from 'lucide-react'
 import { registerView, unregisterView, addCommand, removeCommand, useWorkspace, getView, Skeleton } from '@lcl/engine'
 import { lazyRetry } from '../lazyRetry'
 import { registerMessages, useI18n } from '../i18n'
+import { SettingsSwitch } from '../components/SettingsPrimitives'
 import { useApp } from '../stores/appStore'
 import { useUnitRemote } from '../components/UnitSwitcher'
 import { windowKind } from '../windowKind'
@@ -26,6 +27,8 @@ import { museAvailable, installMuseSpace, installMuseViews, removeMuseSpace } fr
 
 import { homepageAvailable, installHomepageSpace, installHomepageViews, removeHomepageSpace, useHomepageClaimed } from './homepage'
 import { imageStudioAvailable, installImageStudioSpace, installImageStudioViews, removeImageStudioSpace } from './imageStudio'
+import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { claimedHostView } from '../../../shared/corePlugins'
 import { artificialAvailable, installArtificialSpace, installArtificialViews, removeArtificialSpace } from './artificial'
 
 // 懒载:xterm(约 300KB)只在真开终端时才解析;顺带让这个模块能被 node 环境的单测导入
@@ -84,6 +87,8 @@ interface BuiltinDef {
   id: string
   /** 视图注册名(= 命令/Space 引用名);开关时按这份清单清场 + 反注册。 */
   types: string[]
+  /** 设置 › 插件「内置功能」卡上的图标 = 它在 Ribbon / Space 里那个(走查续五 5.8)。 */
+  icon: LucideIcon
   name(): string
   description(): string
   /** 宿主具备所需能力才注册:web/移动端跑同一套渲染层,但既没有 <webview> 也没有 PTY。 */
@@ -97,12 +102,12 @@ interface BuiltinDef {
 
 export const BUILTINS: BuiltinDef[] = [
   {
-    id: 'image-studio', types: ['image-studio', 'image-studio-nav', 'image-studio-chat', 'image-studio-assets', 'image-studio-inspector'],
+    id: 'image-studio', icon: Images, types: ['image-studio', 'image-studio-nav', 'image-studio-chat', 'image-studio-assets', 'image-studio-inspector'],
     name: () => tr('imageStudio.title'), description: () => tr('imageStudio.desc'), available: imageStudioAvailable,
     install: installImageStudioViews, installSpace: installImageStudioSpace, removeSpace: removeImageStudioSpace,
   },
   {
-    id: 'browser',
+    id: 'browser', icon: Globe,
     types: ['browser'],
     name: () => tr('browser.title'),
     description: () => tr('browser.desc'),
@@ -113,7 +118,7 @@ export const BUILTINS: BuiltinDef[] = [
     },
   },
   {
-    id: 'terminal',
+    id: 'terminal', icon: TerminalSquare,
     types: ['terminal'],
     name: () => tr('terminal.title'),
     description: () => tr('terminal.desc'),
@@ -124,7 +129,7 @@ export const BUILTINS: BuiltinDef[] = [
     },
   },
   {
-    id: 'home',
+    id: 'home', icon: House,
     types: ['homepage'],
     name: () => tr('space.home'),
     description: () => tr('home.builtinDesc'),
@@ -134,7 +139,7 @@ export const BUILTINS: BuiltinDef[] = [
     removeSpace: removeHomepageSpace,
   },
   {
-    id: 'calendar',
+    id: 'calendar', icon: CalendarDays,
     types: ['calendar', 'todo-list', 'calendar-config', 'calendar-side'],
     name: () => tr('space.calendar'),
     description: () => tr('calendar.builtinDesc'),
@@ -144,7 +149,7 @@ export const BUILTINS: BuiltinDef[] = [
     removeSpace: removeCalendarSpace,
   },
   {
-    id: 'artificial',
+    id: 'artificial', icon: Blocks,
     types: ['artificial', 'product'],
     name: () => tr('space.artificial'),
     description: () => tr('artificial.builtinDesc'),
@@ -154,7 +159,7 @@ export const BUILTINS: BuiltinDef[] = [
     removeSpace: removeArtificialSpace,
   },
   {
-    id: 'muse',
+    id: 'muse', icon: Sparkles,
     types: ['muse-library', 'muse-files', 'muse-panel'],
     name: () => tr('space.muse'),
     description: () => tr('muse.builtinDesc'),
@@ -183,16 +188,8 @@ function applyBuiltin(def: BuiltinDef, on: boolean): void {
   removeCommand(`builtin-${def.id}-open`) // 无此命令时 no-op(日历不注册命令)
 }
 
-/** 日历核心插件(方案 B 并行双跑,10-17 用户定「按照B来，但是这算核心插件，不公开」):它启用期间内置日历让位 ——
- *  只撤下 Space(Ribbon 上不出现两个「日历」),不改用户的开关;插件停用 → 按开关回来。插件的 Space 另有 id
- *  (`calendar` 是宿主保留 id)。视图类型照旧注册:别的 Space 侧栏 / 仪表盘里摆着的 todo-list、calendar 不能跟着失效
- *  (Codex 评审);Agent 日程轮询 / .ics 刷新是按挂着的视图订的,没人挂就不跑。 */
-export const CALENDAR_PLUGIN_ID = 'forsion-calendar'
-
 interface BuiltinState {
   enabled: Record<string, boolean>
-  /** 日历让给了核心插件(见 CALENDAR_PLUGIN_ID) */
-  calendarYielded: boolean
   /** 应用内 http(s) 链接是否走内置浏览器(缺省关 = 交给系统浏览器,见 linksOn)。 */
   inAppLinks: boolean
   toggle(id: string, on: boolean): void
@@ -202,7 +199,6 @@ interface BuiltinState {
 export const useBuiltins = create<BuiltinState>((set, get) => ({
   enabled: Object.fromEntries(BUILTINS.map((b) => [b.id, builtinEnabled(b.id)])),
   inAppLinks: linksOn(),
-  calendarYielded: false,
   toggle: (id, on) => {
     if (id === 'calendar' && PRODUCT.nativeFeatures !== undefined) return
     const def = BUILTINS.find((b) => b.id === id)
@@ -214,22 +210,8 @@ export const useBuiltins = create<BuiltinState>((set, get) => ({
   setInAppLinks: (on) => { writeFlag(LINKS_KEY, on); set({ inAppLinks: on }) },
 }))
 
-/** 日历核心插件启用 / 停用时调(amadeusPlugins 订着插件 store)。幂等。 */
-export function setCalendarYield(yielded: boolean): void {
-  const s = useBuiltins.getState()
-  if (s.calendarYielded === yielded) return
-  useBuiltins.setState({ calendarYielded: yielded })
-  const def = BUILTINS.find((b) => b.id === 'calendar')
-  if (!def || !def.available() || !s.enabled.calendar) return
-  if (yielded) def.removeSpace?.()
-  else def.installSpace?.()
-}
-
-/** 开关落地(本窗切 / 别的窗切了经 storage 同步):日历让位期间视图跟开关走、Space 不装,插件停用时按开关回来。 */
 function applyToggle(def: BuiltinDef, on: boolean): void {
-  if (def.id !== 'calendar' || !useBuiltins.getState().calendarYielded) return applyBuiltin(def, on)
-  if (!on) applyBuiltin(def, false)
-  else if (!getView(def.types[0])) def.install()
+  applyBuiltin(def, on)
 }
 
 /** 外链去哪:遵「应用内链接」开关 —— 开着走内置浏览器标签,否则交给系统浏览器。
@@ -324,11 +306,11 @@ export const BuiltinPluginsSection: React.FC = () => {
   const { t } = useI18n()
   const enabled = useBuiltins((s) => s.enabled)
   const inAppLinks = useBuiltins((s) => s.inAppLinks)
-  const calendarYielded = useBuiltins((s) => s.calendarYielded)
+  const calendarClaimed = usePluginStore((s) => !!claimedHostView(s, 'calendar'))
   const homeClaimed = useHomepageClaimed()
   const toggle = useBuiltins((s) => s.toggle)
   const setInAppLinks = useBuiltins((s) => s.setInAppLinks)
-  const list = BUILTINS.filter((b) => b.available() && (b.id !== 'calendar' || PRODUCT.nativeFeatures === undefined))
+  const list = BUILTINS.filter((b) => b.available() && (b.id !== 'calendar' || PRODUCT.nativeFeatures === undefined && !calendarClaimed))
   if (!list.length) return null // web/移动端没有 webview/PTY,这几张卡整个不出现
 
   return (
@@ -336,24 +318,21 @@ export const BuiltinPluginsSection: React.FC = () => {
       {list.map((b) => (
         <div key={b.id} className="plugin-card">
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <PluginLogo />
+            <PluginLogo icon={b.icon} />
             <div style={{ flex: 1, minWidth: 0 }}>
               <b style={{ fontSize: 'var(--ui-font-body, 13px)' }}>{b.name()}</b>
               <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: 'var(--text-faint)', marginTop: 2 }}>{b.description()}</div>
             </div>
-            <input type="checkbox" checked={!!enabled[b.id]} onChange={(e) => toggle(b.id, e.target.checked)} style={{ cursor: 'pointer' }} />
+            <SettingsSwitch checked={!!enabled[b.id]} label={b.name()} onChange={(on) => toggle(b.id, on)} />
           </div>
-          {b.id === 'calendar' && calendarYielded && (
-            <div style={{ marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{t('calendar.yielded')}</div>
-          )}
           {b.id === 'home' && enabled.home && homeClaimed && (
             <div style={{ marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{t('home.claimed')}</div>
           )}
           {b.id === 'browser' && enabled.browser && (
-            <label style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 8, fontSize: 'var(--ui-font-meta, 12px)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={inAppLinks} onChange={(e) => setInAppLinks(e.target.checked)} />
-              {t('browser.inAppLinks')}
-            </label>
+            <div className="plugin-card-subrow">
+              <span>{t('browser.inAppLinks')}</span>
+              <SettingsSwitch checked={inAppLinks} label={t('browser.inAppLinks')} onChange={setInAppLinks} />
+            </div>
           )}
         </div>
       ))}

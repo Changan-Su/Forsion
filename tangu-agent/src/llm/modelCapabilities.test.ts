@@ -26,6 +26,10 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['OpenAI GPT-6.1 Sol', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.1-sol' }, 'openai-gpt61-sol'],
     ['Codex GPT-6.1 Sol 请求', { protocol: 'openai-responses', modelId: 'gpt-6.1-sol' }, 'codex-gpt61-sol'],
     ['Codex GPT-6.1 Sol 目录', { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6.1-sol' }, 'codex-gpt61-sol'],
+    // ⚠️ 判别式:6.1 Terra 认 none(10-27 后端 400 原文),必须落 Sol/Luna 表,不能跟 6.1 Sol 进 Astra 表
+    ['OpenAI GPT-6.1 Terra', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.1-terra' }, 'openai-gpt6'],
+    ['Codex GPT-6.1 Terra 请求', { protocol: 'openai-responses', modelId: 'gpt-6.1-terra' }, 'codex-gpt6'],
+    ['Codex GPT-6.1 Terra 目录', { provider: 'codex', baseUrl: 'https://chatgpt.com/backend-api/codex', modelId: 'gpt-6.1-terra' }, 'codex-gpt6'],
     ['未知 GPT-6.1 变体不预支档位', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6.1-luna' }, 'openai-nonreasoning'],
     ['OpenAI GPT-6 Astra', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-astra' }, 'openai-astra'],
     ['OpenAI GPT-6 Sol', { baseUrl: 'https://api.openai.com/v1', modelId: 'gpt-6-sol' }, 'openai-gpt6'],
@@ -78,16 +82,24 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['Anthropic API key(4.6)', { protocol: 'anthropic-messages', modelId: 'claude-sonnet-4-6' }, 'anthropic-messages'],
     ['Gemini 兼容层', { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', modelId: 'gemini-2.5-flash' }, 'gemini-openai-compat'],
     ['Gemini 托管 pro', { provider: 'gemini', modelId: 'gemini-2.5-pro' }, 'gemini-native-nodisable'],
-    ['Gemini 3 托管', { provider: 'google', modelId: 'gemini-3.1-pro-preview' }, 'gemini-native-nodisable'],
+    ['Gemini 3 托管', { provider: 'google', modelId: 'gemini-3.1-pro-preview' }, 'gemini-native-3'],
+    // Gemini 4 同样关不掉思考:不许落到可关的 gemini-native / gemini-openai-compat / openrouter 通用规则
+    ['Gemini 4 托管', { provider: 'gemini', modelId: 'gemini-4-argon' }, 'gemini-native-3'],
+    ['Gemini 4 兼容层', { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', modelId: 'gemini-4-argon' }, 'gemini-openai-compat-3'],
+    ['OpenRouter Gemini 4', { baseUrl: 'https://openrouter.ai/api/v1', modelId: 'google/gemini-4-argon' }, 'openrouter-gemini-3'],
     ['Gemini 2.5-flash 托管(可关)', { provider: 'gemini', modelId: 'gemini-2.5-flash' }, 'gemini-native'],
     ['Gemini 3 兼容层', { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', modelId: 'gemini-3-flash-preview' }, 'gemini-openai-compat-3'],
     // ⚠️ 同一个 host,只有路径能区分原生 REST 与兼容层;而调用方**同时**传 provider 与 baseUrl。
     // provider 规则若排在前面,配了兼容层地址的 provider 会拿到原生 generationConfig(静默失效)。
     ['provider=google + 兼容层地址', { provider: 'google', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', modelId: 'gemini-3.1-pro' }, 'gemini-openai-compat-3'],
-    ['provider=gemini + 原生 REST 地址', { provider: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', modelId: 'gemini-3.1-pro' }, 'gemini-native-nodisable'],
+    ['provider=gemini + 原生 REST 地址', { provider: 'gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', modelId: 'gemini-3.1-pro' }, 'gemini-native-3'],
     ['火山方舟转售的 GLM(不该被豆包规则吞)', { baseUrl: 'https://ark.cn-beijing.volces.com/api/v3', modelId: 'zai-org/GLM-5.3' }, 'gateway-glm53'],
     ['DeepSeek V4 flash', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-v4-flash' }, 'deepseek-v4'],
     ['DeepSeek V4 pro', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-v4-pro' }, 'deepseek-v4'],
+    // V4.1 Flash 的现役 id 没有 v4 字样:曾落到 deepseek-chat 的纯开关规则,档位静默失效
+    ['DeepSeek V4.1 flash', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-flash' }, 'deepseek-v4'],
+    // 反例:不收裸 `deepseek-pro`,否则 deepseek-prover-* 数学模型被一起吞
+    ['DeepSeek prover', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-prover-v2' }, 'deepseek-chat'],
     // 反例:v4 规则必须锚在 `deepseek-v4` 前缀,别把同 host 上的自定义 id 一起吞了。
     ['DeepSeek 自定义含 v4', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'myv4legacy' }, 'deepseek-chat'],
     ['假冒 deepseek 域名', { baseUrl: 'https://notdeepseek.com/v1', modelId: 'deepseek-v4-flash' }, 'default'],
@@ -108,6 +120,11 @@ describe('resolveModelCapability — 路由矩阵', () => {
     ['DeepSeek V4 视觉实验版', { baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-v4-flash-vision-exp' }, 'deepseek-v4'],
     ['Kimi thinking', { baseUrl: 'https://api.moonshot.cn/v1', modelId: 'kimi-k2-thinking' }, 'moonshot-thinking'],
     ['Kimi K3', { baseUrl: 'https://api.moonshot.ai/v1', modelId: 'kimi-k3' }, 'moonshot-k3'],
+    ['StepFun Step 5', { baseUrl: 'https://api.stepfun.com/v1', modelId: 'step-5-preview' }, 'stepfun'],
+    ['StepFun 3.7 flash', { baseUrl: 'https://api.stepfun.com/v1', modelId: 'step-3.7-flash' }, 'stepfun'],
+    ['StepFun 3.5 flash 2603(只收 low/high)', { baseUrl: 'https://api.stepfun.com/v1', modelId: 'step-3.5-flash-2603' }, 'stepfun-35-flash-2603'],
+    // 反例:同 host 的非推理模型不许被发 reasoning_effort(官方没说收不收 → 未知字段不发)
+    ['StepFun 视觉模型', { baseUrl: 'https://api.stepfun.com/v1', modelId: 'step-1o-turbo-vision' }, 'default'],
     ['OpenRouter', { baseUrl: 'https://openrouter.ai/api/v1', modelId: 'anthropic/claude-sonnet-4' }, 'openrouter'],
     ['Grok mini', { baseUrl: 'https://api.x.ai/v1', modelId: 'grok-3-mini' }, 'xai-grok-mini'],
     ['Grok 4.6', { baseUrl: 'https://api.x.ai/v1', modelId: 'grok-4.6' }, 'xai-grok-effort'],
@@ -197,7 +214,7 @@ describe('applyThinking — 各家线上形态', () => {
 
   // 后端 400 原文(09-22 实测):Sol/Luna 合法值 = none/low/medium/high/xhigh/max —— 能关、没有 minimal,
   // 与 Astra(没有 none)不同,别合表。
-  it.each(['gpt-6-sol', 'gpt-6-luna'])('%s:off 发 none(官方路径留在 chat/completions),minimal 折到 low,max 真档', (modelId) => {
+  it.each(['gpt-6-sol', 'gpt-6-luna', 'gpt-6.1-terra'])('%s:off 发 none(官方路径留在 chat/completions),minimal 折到 low,max 真档', (modelId) => {
     for (const q of [
       { baseUrl: 'https://api.openai.com/v1', modelId },
       { protocol: 'openai-responses', modelId },
@@ -295,6 +312,12 @@ describe('applyThinking — 各家线上形态', () => {
     expect(payload.output_config).toEqual({ effort: 'max' });
   });
 
+  it('Claude 自适应:未给 max_tokens 时补足上限(否则 8192 缺省被 max 档思考吃光),给了就不动', () => {
+    const target = { baseUrl: 'https://api.anthropic.com', modelId: 'claude-opus-5-5' };
+    expect(apply(target, 'max').payload.max_tokens).toBe(32000);
+    expect(apply(target, 'low', { max_tokens: 1600 }).payload.max_tokens).toBe(1600);
+  });
+
   it('gpt-5.6 起 effort 有真 max;5.5 到 xhigh 为止;两代都没有 minimal', () => {
     const oa = (m: string, lv: Parameters<typeof apply>[1]) =>
       apply({ baseUrl: 'https://api.openai.com/v1', modelId: m }, lv).payload;
@@ -360,6 +383,47 @@ describe('applyThinking — 各家线上形态', () => {
     expect(ds('deepseek-v4-flash', 'off')).toEqual({ thinking: { type: 'disabled' } });
     // 老 chat 线仍是纯开关,不许因本次改动多出 reasoning_effort。
     expect(ds('deepseek-chat', 'high')).toEqual({ thinking: { type: 'enabled' } });
+  });
+
+  it('DeepSeek V4.1 Flash(deepseek-flash):三档真上 wire,关思考不带 effort', () => {
+    const ds = (lv: Parameters<typeof apply>[1]) =>
+      apply({ baseUrl: 'https://api.deepseek.com/v1', modelId: 'deepseek-flash' }, lv).payload;
+    expect(ds('low')).toEqual({ thinking: { type: 'enabled' }, reasoning_effort: 'low' });
+    expect(ds('medium').reasoning_effort).toBe('high');
+    expect(ds('max').reasoning_effort).toBe('max');
+    expect(ds('off')).toEqual({ thinking: { type: 'disabled' } });
+  });
+
+  it('Gemini 3/4:思考关不掉 —— 拨「关」不许发 none / thinkingBudget:0;temperature 不发,2.5 照旧', () => {
+    const compat = { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', modelId: 'gemini-4-argon' };
+    const native = { provider: 'gemini', modelId: 'gemini-4-argon' };
+    expect(supportedThinkingLevels(cap(compat))).not.toContain('off');
+    expect(supportedThinkingLevels(cap(native))).not.toContain('off');
+    const c = apply(compat, 'off', { temperature: 0.7 });
+    expect(c.effective).toBe('minimal');
+    expect(c.payload).toEqual({ reasoning_effort: 'low' }); // 没有 'none',也没有 temperature
+    const n = apply(native, 'off', { temperature: 0.7 });
+    expect(n.effective).toBe('minimal');
+    expect(n.payload.generationConfig.thinkingConfig.thinkingBudget).not.toBe(0);
+    expect(n.payload.temperature).toBeUndefined();
+    expect(apply({ ...compat, modelId: 'gemini-3.8-flash' }, 'low', { temperature: 0.7 }).payload.temperature).toBeUndefined();
+    // OpenRouter 转发的 Gemini 4:同样不发 none、不发 temperature
+    const or = apply({ baseUrl: 'https://openrouter.ai/api/v1', modelId: 'google/gemini-4-argon' }, 'off', { temperature: 0.7 });
+    expect(or.payload).toEqual({ reasoning: { effort: 'minimal' } });
+    // 弃用说明只针对 3+;2.5 不动
+    expect(apply({ provider: 'gemini', modelId: 'gemini-2.5-pro' }, 'low', { temperature: 0.7 }).payload.temperature).toBe(0.7);
+    expect(apply({ ...compat, modelId: 'gemini-2.5-flash' }, 'low', { temperature: 0.7 }).payload.temperature).toBe(0.7);
+  });
+
+  it('StepFun:reasoning_effort low/medium/high;3.5-flash-2603 只发 low/high;关不掉', () => {
+    const sf = (m: string, lv: Parameters<typeof apply>[1]) =>
+      apply({ baseUrl: 'https://api.stepfun.com/v1', modelId: m }, lv);
+    expect(sf('step-5-preview', 'medium').payload).toEqual({ reasoning_effort: 'medium' });
+    expect(sf('step-5-preview', 'max').payload.reasoning_effort).toBe('high');
+    expect(sf('step-5-preview', 'off').payload).toEqual({ reasoning_effort: 'low' }); // 不发未知的 'none'
+    expect(sf('step-3.5-flash-2603', 'medium').payload.reasoning_effort).toBe('high');
+    expect(sf('step-3.5-flash-2603', 'off').payload.reasoning_effort).toBe('low');
+    expect(sf('step-1o-turbo-vision', 'high').payload.reasoning_effort).toBeUndefined();
   });
 
   it('GLM-5.3:思考关不掉 —— 拨「关」也发 enabled + 最弱档,绝不发 disabled', () => {
@@ -535,6 +599,13 @@ describe('modelSupportsVision — 黑名单制', () => {
       expect(modelSupportsVision(id)).toBe(true);
     }
     expect(modelSupportsVision('deepseek-v4-flash', false)).toBe(false); // admin 标 false 仍压得住
+  });
+
+  // 2026-09-10:V4.1 Flash 的现役 id `deepseek-flash` 官方支持图像输入;同代的 v4-pro 仍是纯文本。
+  it('⚠️DeepSeek V4.1 Flash 能看图,不能被整族吞;v4-pro 仍纯文本', () => {
+    expect(modelSupportsVision('deepseek-flash')).toBe(true);
+    expect(modelSupportsVision('deepseek-ai/DeepSeek-Flash')).toBe(true);
+    expect(modelSupportsVision('deepseek-v4-pro')).toBe(false);
   });
 
   it('GLM-5.3 官方明写纯文本 → 走辅助识图;但 5.3-Flash 是原生多模态,不许一起吞', () => {

@@ -17,7 +17,7 @@
   padding: 12px 14px;
   transition: border-color var(--duration-fast, 0.15s);
 }
-.t2c-card.dragover { border-color: var(--accent-ink); background: color-mix(in srgb, var(--accent-ink) 6%, var(--t2c-card-surface, var(--bg-card, var(--bg)))); }
+.t2c-card.dragover { border-color: var(--signal-line); background: var(--accent-wash); }
 
 .t2c-ta {
   width: 100%; border: none; outline: none; background: transparent; resize: none;

@@ -122,7 +122,7 @@ This version turns on Muse and Historian once for anyone who has not enabled the
 - **Reuse a method.** Skills preserve ways of doing tasks, MCP connects external tools and data, and plugins extend note blocks, views, and workspaces.
 - **Build your own environment.** Install plugins, Agents, skills, Spaces, themes, and web apps from the store. Agents can also use built-in extension-development skills to create extensions for you.
 
-[Plugins (中文)](./docs/customization/plugins.md) · [Store (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
+[Plugins (中文)](./docs/customization/plugins.md) · [Plugin development](./docs/customization/plugin-development.md) · [Store (中文)](./docs/customization/market.md) · [Skills (中文)](./docs/agents/skills.md)
 
 ## From a few sources to a research talk you can keep developing
 
@@ -240,6 +240,7 @@ Common commands:
 | `desktop/` | `npm run dist` | Produce an installer for the current platform. |
 | `desktop/` | `node scripts/dmg-layout-preview.cjs` | macOS only. Build a tiny DMG around an empty app shell to check the installer window (background, icon positions) in Finder without a full build. |
 | `desktop/` | `npm run e2e:editor` | Run the Amadeus editor end-to-end tests. |
+| `desktop/` | `npm run check:toggle` / `npm run check:toggleenter:electron` | Regress toggle ownership after two Enter presses; build first for the Electron check, which also verifies disk persistence and app restart. |
 
 If an Electron harness hangs at launch with no output and no renderer process, run `sample <electron-pid> 1`. A main thread stuck in `NSAlert runModal` under `promptToIgnorePersistentStateWithCrashHistory:` is macOS asking to reopen windows after the shared dev `Electron.app` crashed. Playwright-launched instances skip that prompt: `electron/main.ts` registers `ApplePersistenceIgnoreState` in memory only. Harnesses spawned without Playwright must set `TANGU_HARNESS_QUIET=1`. `npm run check:persistignore` (add `-- --control` for the negative control) verifies that AppKit reads the key.
 

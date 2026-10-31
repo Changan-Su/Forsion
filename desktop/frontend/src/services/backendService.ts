@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   GitIdentity, GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -12,10 +12,11 @@ import { targetCaps, type TargetCaps } from './engine/targetCaps'
 import { classify, noteReachable, noteVerdict } from './engine/health'
 import './engine/messages'
 import { AGENT_APP_ID, unitFailureMessage } from './agentRunService'
-import { localInbox } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
+import { localInbox, localizeInboxMessage } from './localInbox' // 移动端(window.tangu?.mobile)下 inbox 走设备本地存储
 import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 import { saveResponseAs } from './nativeDownload'
+import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -23,9 +24,11 @@ registerMessages({
 
 /** P1-K6:基址与鉴权头都归目标(头与改造前的 `headers(cfg.token)` 同形同序)。S3 起所有服务函数只收解析层给的
  *  EngineTarget(homeTarget / targetForSession / focusTarget / connectionTarget),本文件不读 cfg(棘轮 R1 + 品牌类型钉住)。 */
-export async function request<T>(t: EngineTarget, path: string, init?: RequestInit, opts?: { timeoutMs?: number }): Promise<T> {
+export async function request<T>(t: EngineTarget, path: string, init?: RequestInit, opts?: { timeoutMs?: number; onUploadProgress?: (sent: number, total: number) => void }): Promise<T> {
   // home 目标的第三参与改造前逐字一致(opts 原样,可能是 undefined);非 home 恒带 target(401 分流,K6 §3.5)。
-  const r = await authFetch(`${t.base}${path}`, { ...init, headers: await t.headers(true) }, t.key === 'home' ? opts : fetchOpts(t, opts?.timeoutMs))
+  // onUploadProgress(上传进度)两边都带上:authFetch 见到它改走 XHR。
+  const o = t.key === 'home' ? opts : fetchOpts(t, opts?.timeoutMs)
+  const r = await authFetch(`${t.base}${path}`, { ...init, headers: await t.headers(true) }, opts?.onUploadProgress && t.key !== 'home' ? { ...o, onUploadProgress: opts.onUploadProgress } : o)
   if (!r.ok) {
     let detail = `HTTP ${r.status}`
     let code: string | undefined
@@ -83,6 +86,8 @@ export interface SyncRunResult {
   pulled?: number
   deleted?: number
   skipped?: number
+  /** 这一轮新出的冲突副本数(老引擎不给) */
+  conflicts?: number
   /** 旧全局 xyra 记忆/日志(AI Studio 网页共享)。 */
   memory: 'pushed' | 'pulled' | 'in-sync' | 'skipped'
   logs: Array<{ date: string; pushed: number; pulled: number }>
@@ -206,7 +211,7 @@ export const updateSession = (
   t: EngineTarget,
   id: string,
   patch: {
-    title?: string; archived?: boolean; model_id?: string; emoji?: string | null
+    title?: string; title_source?: 'user' | 'auto'; archived?: boolean; model_id?: string; emoji?: string | null
     project_path?: string | null; project_name?: string | null; projectless?: boolean
   },
 ) =>
@@ -226,7 +231,7 @@ export const branchSession = (t: EngineTarget, sessionId: string, messageId: str
   ).then((r) => r.session)
 
 /** 存下来的顺便问(挂在某条消息上;引擎 chat_asides)。 */
-export interface SavedAside { id: string; message_id: string | null; turns: Array<{ question: string; quote?: string; answer: string }>; created_at: string; updated_at: string }
+export interface SavedAside { id: string; message_id: string | null; turns: Array<{ question: string; quote?: string; answer: string; attachments?: Array<{ name: string; mimeType: string; size?: number; thumb?: string }> }>; created_at: string; updated_at: string }
 
 export const listAsides = (t: EngineTarget, sessionId: string) =>
   request<{ asides: SavedAside[] }>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/asides`).then((r) => r.asides || [])
@@ -256,7 +261,7 @@ export const getBackgroundSessions = (t: EngineTarget, sessionId: string, kind?:
   ).then((r) => r.background)
 
 /** 任务卡「开个子会话」:在这个会话下开一个可见子会话,任务书当第一条消息(做完送回主会话)。 */
-export const startChildSession = (t: EngineTarget, parentId: string, body: { title: string; message: string }) =>
+export const startChildSession = (t: EngineTarget, parentId: string, body: { title: string; message: string; agent?: string }) =>
   request<{ sessionId: string; runId: string; title: string }>(t, `/agent/sessions/${encodeURIComponent(parentId)}/children`, { method: 'POST', body: JSON.stringify(body) })
 
 export const listMessages = (t: EngineTarget, sessionId: string, limit = 200, before?: number) =>
@@ -355,6 +360,34 @@ export const restoreCheckpoint = (t: EngineTarget, sessionId: string, at: number
     { method: 'POST', body: JSON.stringify({ at }) },
   )
 
+/** run_background 起的后台进程(引擎 routes/processes.ts,2026-10-25):url = 输出里认出的本机地址(只在跑着时给),last = 最后一行。 */
+export interface EngineProcess {
+  id: string
+  sessionId: string
+  command: string
+  status: 'running' | 'exited' | 'killed' | 'error'
+  exitCode: number | null
+  startedAt: number
+  endedAt: number | null
+  origin: 'remote' | 'channel' | 'unattended' | 'local'
+  url: string | null
+  last: string
+}
+
+/** 本人各会话的后台进程。老引擎没有这个路由(404)→ 当作没有。 */
+export const listEngineProcesses = (t: EngineTarget) =>
+  request<{ processes: EngineProcess[] }>(t, '/agent/processes').then((r) => r.processes || [], (e) => {
+    if (e?.status === 404) return [] as EngineProcess[]
+    throw e
+  })
+
+const processPath = (sessionId: string, pid: string) => `/agent/sessions/${encodeURIComponent(sessionId)}/processes/${encodeURIComponent(pid)}`
+export const engineProcessOutput = (t: EngineTarget, sessionId: string, pid: string) =>
+  request<EngineProcess & { output: string; truncated: boolean }>(t, `${processPath(sessionId, pid)}/output`)
+/** 用户自己点停止:引擎直接停整棵进程树,不走审批。 */
+export const stopEngineProcess = (t: EngineTarget, sessionId: string, pid: string) =>
+  request<EngineProcess>(t, `${processPath(sessionId, pid)}/kill`, { method: 'POST' })
+
 export const getSessionConfig = (t: EngineTarget, sessionId: string) =>
   request<{ agent_config: AgentConfig }>(
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/config`,
@@ -418,6 +451,10 @@ export const compactSession = (t: EngineTarget, sessionId: string, modelId?: str
 // 列表/默认模型与 run 的记账 app 对不上(见 tangu-agent routes/models.ts)。
 export const listModels = (t: EngineTarget) =>
   request<ModelsResponse>(t, `/agent/models?app_id=${encodeURIComponent(AGENT_APP_ID)}`)
+
+/** 直连模型所属来源的额度 / 余额(输入框上下文环弹层);来源查不到时 quota 为 null。 */
+export const getModelQuota = (t: EngineTarget, modelId: string) =>
+  request<{ quota: ProviderQuota | null }>(t, `/agent/models/quota?model=${encodeURIComponent(modelId)}`)
 
 /** 本机 per-model 覆盖:上下文窗口(tokens;null = 清除,交还自动识别)。落引擎 config.json 的 modelOverrides 段,对下一条消息生效。 */
 export const setModelContextWindow = (t: EngineTarget, modelId: string, contextWindow: number | null) =>
@@ -563,8 +600,15 @@ export const updateSkillCatalogEntry = (t: EngineTarget, key: string, body: { na
 export const setSkillCatalogEntryDisabled = (t: EngineTarget, key: string, disabled: boolean, agentSlug?: string) =>
   request<{ ok: boolean }>(t, `/agent/skills/catalog/${encodeURIComponent(key)}/disabled`, { method: 'PUT', body: JSON.stringify({ disabled, ...(agentSlug ? { agentSlug } : {}) }) })
 
+/** 进回收站;选了它的 Agent 清单与停用记录由引擎一起收尾,改过的内置技能 = 还原为内置版本。 */
 export const deleteSkillCatalogEntry = (t: EngineTarget, key: string, agentSlug?: string) =>
-  request<{ ok: boolean; backupPath?: string }>(t, `/agent/skills/catalog/${encodeURIComponent(key)}${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`, { method: 'DELETE' })
+  request<{ ok: boolean; trashId?: string }>(t, `/agent/skills/catalog/${encodeURIComponent(key)}${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`, { method: 'DELETE' })
+export interface SkillUninstallPreview {
+  key: string; name: string; slug: string; scope: 'user' | 'agent'; owner: string | null; size: number
+  mode: 'delete' | 'restore-builtin' | 'pause' | 'none'; picks: Array<{ slug: string; name: string }>; disabled: boolean
+}
+export const skillUninstallPreview = (t: EngineTarget, key: string, agentSlug?: string) =>
+  request<SkillUninstallPreview>(t, `/agent/skills/catalog/${encodeURIComponent(key)}/uninstall-preview${agentSlug ? `?agentSlug=${encodeURIComponent(agentSlug)}` : ''}`)
 
 export const copySkillCatalogEntry = (t: EngineTarget, key: string, body: { scope: 'user' | 'agent'; agentSlug?: string; slug?: string }, sourceAgentSlug?: string) =>
   request<{ skill: SkillCatalogEntry }>(t, `/agent/skills/catalog/${encodeURIComponent(key)}/copy${sourceAgentSlug ? `?agentSlug=${encodeURIComponent(sourceAgentSlug)}` : ''}`, { method: 'POST', body: JSON.stringify(body) }).then((r) => r.skill)
@@ -654,7 +698,7 @@ export const setWechatSessionAgent = (t: EngineTarget, sessionId: string, agentS
 export const createWechatSession = (t: EngineTarget, title?: string) =>
   request<{ sessionId: string }>(t, '/agent/wechat/sessions/new', { method: 'POST', body: JSON.stringify({ title }) }).then((r) => r.sessionId)
 
-// ── 多通道(Channels:微信/Telegram/QQ;本地后端)──
+// ── 多通道(Channels:微信/Telegram/QQ + 插件通道;本地后端)──
 export type { ChannelKind } from '../types'
 
 export interface ChannelStatus {
@@ -675,6 +719,12 @@ export interface ChannelStatus {
   accountId: string | null
   peerBound: boolean
   workspace: string
+  /** 插件通道(引擎插件 ctx.registerChannel)的卡片声明:显示名 / 提示 / 凭据字段。内置通道没有。 */
+  plugin?: {
+    name: { zh: string; en: string }
+    hint: { zh: string; en: string } | null
+    fields: Array<{ key: 'appId' | 'appSecret' | 'botToken'; label: { zh: string; en: string }; secret: boolean }>
+  }
 }
 
 export interface ChannelConfigPatch {
@@ -736,9 +786,30 @@ export const saveAgentDef = (t: EngineTarget, def: Omit<Partial<NormalAgentDef>,
     { method: slug ? 'PATCH' : 'POST', body: JSON.stringify(def) },
   ).then((r) => r.agent)
 
-/** keepFiles:只从名册移除,本机引擎把整个目录挪进 agents/.removed/ 并返回 keptAt(云端引擎忽略)。 */
-export const deleteAgentDef = (t: EngineTarget, slug: string, opts?: { keepFiles?: boolean }) =>
-  request<{ ok: boolean; keptAt?: string }>(t, `/agent/agents/${encodeURIComponent(slug)}${opts?.keepFiles ? '?keepFiles=1' : ''}`, { method: 'DELETE' })
+/** 本机引擎:整份进回收站(trashId),私聊缺省归档、deleteChats 连私聊一起删;云端引擎直接删、不回 trashId。 */
+export const deleteAgentDef = (t: EngineTarget, slug: string, opts?: { deleteChats?: boolean }) =>
+  request<{ ok: boolean; trashId?: string }>(t, `/agent/agents/${encodeURIComponent(slug)}${opts?.deleteChats ? '?deleteChats=1' : ''}`, { method: 'DELETE' })
+
+/** 卸载确认框逐项列的东西(引擎 services/agentUninstall);blocked 有值 = 不给删。 */
+export interface AgentUninstallPreview {
+  slug: string; name: string; blocked: 'invalid' | 'default' | 'muse' | null; size: number; chats: number; cloud: boolean
+  teams: Array<{ slug: string; name: string; dissolve: boolean }>
+  automations: Array<{ id: string; desc: string }>
+}
+export const agentUninstallPreview = (t: EngineTarget, slug: string) =>
+  request<AgentUninstallPreview>(t, `/agent/agents/${encodeURIComponent(slug)}/uninstall-preview`)
+
+/** 回收站(引擎 <tanguHome>/trash/,30 天;只在本机)。restorer='desktop' 的(Forsion 插件)走主进程 trashRestore。 */
+export interface TrashEntry {
+  id: string; kind: 'agent' | 'skill' | 'plugin'; ref: string; name: string; deletedAt: number; size: number
+  restorer: 'engine' | 'desktop'; items: Array<{ from: string; stored: string; role?: string }>; extra?: Record<string, unknown>
+}
+export const listTrash = (t: EngineTarget) => request<{ entries: TrashEntry[]; days: number }>(t, '/agent/trash')
+/** opts.rescan:false = 引擎插件的条目放回后先不重扫(连着放几条时,全放回再重扫一次)。 */
+export const restoreTrashEntry = (t: EngineTarget, id: string, opts?: { rescan?: boolean }) =>
+  request<{ ok: boolean; slug?: string; renamed?: boolean; path?: string; id?: string }>(t, `/agent/trash/${encodeURIComponent(id)}/restore${opts?.rescan === false ? '?rescan=0' : ''}`, { method: 'POST' })
+export const purgeTrashEntry = (t: EngineTarget, id: string) => request<{ ok: boolean }>(t, `/agent/trash/${encodeURIComponent(id)}`, { method: 'DELETE' })
+export const emptyTrash = (t: EngineTarget) => request<{ ok: boolean; removed: number }>(t, '/agent/trash', { method: 'DELETE' })
 
 /** 改 slug(= 文件夹名)。拒绝时 err.code = 引擎 agentRename.ts 的原因(builtin / exists / cloud_synced / plugin_seeded / busy …)。 */
 export const renameAgentDef = (t: EngineTarget, slug: string, next: string) =>
@@ -779,6 +850,8 @@ export interface AgentMemoryEntry { id: string; content: string; source: AgentMe
 export interface AgentMemorySnapshot {
   version: string; content: string; entries: AgentMemoryEntry[]; updatedAt: number
   tombstones: Array<{ id: string; forgottenAt: number }>
+  /** 云端(网页 / 手机)= 桌面同步上来的那份:能改(按 version 比对交换),没有版本记录与 Dream。 */
+  cloud?: boolean
 }
 export interface AgentMemoryRevision { version: string; createdAt: number; source: AgentMemorySource; content: string }
 export interface AgentMemoryDreamConfig { enabled: boolean; modelId: string; timeoutMs: number; maxOutputTokens: number; intervalHours: number }
@@ -795,6 +868,14 @@ export const putAgentMemory = (t: EngineTarget, slug: string, content: string, e
   request<AgentMemorySnapshot>(t, agentMemoryPath(slug), { method: 'PUT', body: JSON.stringify({ content, expectedVersion }) })
 export const mutateAgentMemoryEntry = (t: EngineTarget, slug: string, body: { action: 'add' | 'update' | 'forget'; id?: string; fact?: string; expectedVersion: string }) =>
   request<AgentMemorySnapshot>(t, `${agentMemoryPath(slug)}/entries`, { method: 'POST', body: JSON.stringify(body) })
+/** 把一条 Agent 记忆交给所有 Agent:原句追加进 human/AGENT.md,写成后才从这位的记忆里拿掉;409 = 读出之后改过(两边都没动)。只在宿主本机。 */
+export const promoteAgentMemoryEntry = (t: EngineTarget, slug: string, body: { id: string; expectedVersion: string }) =>
+  request<{ agentMd: { version: string }; memoryVersion: string }>(t, `${agentMemoryPath(slug)}/promote`, { method: 'POST', body: JSON.stringify(body) })
+// 画像(human/SOUL.md)的条目:列表项一行一条;version 是前 12 位。只在宿主本机(远端 403 HUMAN_REMOTE_DENIED,云端 404 HUMAN_LOCAL_ONLY)。
+export interface HumanPortrait { version: string; entries: Array<{ id: string; content: string }>; chars: number; limit: number }
+export const getHumanPortrait = (t: EngineTarget) => request<HumanPortrait>(t, '/agent/human/SOUL.md/entries')
+export const mutateHumanPortraitEntry = (t: EngineTarget, body: { action: 'add' | 'forget'; id?: string; fact?: string; expectedVersion: string }) =>
+  request<{ version: string; entries: HumanPortrait['entries']; entry?: { id: string; content: string } }>(t, '/agent/human/SOUL.md/entries', { method: 'POST', body: JSON.stringify(body) })
 export const listAgentMemoryRevisions = (t: EngineTarget, slug: string) =>
   request<{ revisions: AgentMemoryRevision[] }>(t, `${agentMemoryPath(slug)}/revisions`).then((r) => r.revisions)
 export const restoreAgentMemory = (t: EngineTarget, slug: string, version: string, expectedVersion: string) =>
@@ -809,7 +890,7 @@ export const cancelAgentMemoryDream = (t: EngineTarget, slug: string) =>
 export const listAgentLogDates = (t: EngineTarget, slug: string) =>
   request<{ dates: string[] }>(t, `/agent/agents/${encodeURIComponent(slug)}/logs`).then((r) => r.dates)
 export const getAgentLogSnapshot = (t: EngineTarget, slug: string, date: string) =>
-  request<{ date: string; content: string; version: string }>(t, `/agent/agents/${encodeURIComponent(slug)}/log?date=${encodeURIComponent(date)}`)
+  request<{ date: string; content: string; version: string; readonly?: boolean }>(t, `/agent/agents/${encodeURIComponent(slug)}/log?date=${encodeURIComponent(date)}`)
 export const getAgentLog = (t: EngineTarget, slug: string, date: string) =>
   getAgentLogSnapshot(t, slug, date).then((r) => r.content)
 export const putAgentLog = (t: EngineTarget, slug: string, date: string, content: string, expectedVersion: string) =>
@@ -835,7 +916,7 @@ export type HarnessJournalLine = { ts: string; rev?: string; action: 'upsert' | 
 export type HarnessCandidate = { line: string; needsUser: boolean; adoptable: boolean }
 /** candidates = 候选收件箱的原始行 `- [YYYY-MM-DD s:xxxx] 正文`(只读);candidateItems = 同一批行逐条带上去处。旧引擎两个键都可能没有。 */
 export const getAgentHarness = (t: EngineTarget, slug: string) =>
-  request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[]; candidates?: string[]; candidateItems?: HarnessCandidate[] }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness`)
+  request<{ entries: HarnessEntry[]; journal: HarnessJournalLine[]; candidates?: string[]; candidateItems?: HarnessCandidate[]; readonly?: boolean }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness`)
 /** 对一条候选点「采纳 / 丢弃」。line = 读到的那一行原文(身份)。失败时 err.code:HARNESS_CANDIDATE_GONE(404,已经不在了)/ _FULL / _TOO_LONG / _EQUIP。 */
 export const resolveHarnessCandidate = (t: EngineTarget, slug: string, line: string, action: 'adopt' | 'dismiss') =>
   request<{ ok: boolean; entry: HarnessEntry | null }>(t, `/agent/agents/${encodeURIComponent(slug)}/harness/candidate`, { method: 'POST', body: JSON.stringify({ line, action }) })
@@ -880,6 +961,8 @@ export type PluginInfo = {
   settling?: boolean
   /** 此刻名下注册的工具名(10-19 起的引擎才给;和核心工具撞名的已剔掉)。插件结果卡片只认这里列出的。 */
   tools?: string[]
+  /** 在跑的实例过了官方签名判定(10-28 起的引擎才给)。toolResultCards 据此放行官方插件给少数核心工具画卡。 */
+  official?: boolean
 }
 /** 重扫 / 安装的结果。reloadedIds 有 = 引擎会热插拔(10-02 起):原地升级即生效,needsRestart 只剩「没法热换」那几种(见 needsRestart);
  *  旧引擎不给 reloadedIds,只激活全新 id,原地更新一律得重启。 */
@@ -897,8 +980,12 @@ export const setPluginEnabled = (t: EngineTarget, id: string, enabled: boolean) 
   request<{ ok: boolean; enabled: boolean; active?: boolean; plugins?: PluginInfo[] }>(t, `/agent/plugins/${encodeURIComponent(id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
 /** 卸载:引擎先停掉在跑的实例(依赖者先休眠)、注销 meta、清设置/blob;文件夹由桌面侧 IPC 删。
  *  restartRequired:false(10-02 起)= 已运行期撤干净,不用重启;旧引擎给 true / 不给。 */
-export const uninstallPlugin = (t: EngineTarget, id: string) =>
-  request<{ ok: boolean; restartRequired: boolean }>(t, `/agent/plugins/${encodeURIComponent(id)}`, { method: 'DELETE' })
+/** opts.trash:插件文件(用户目录里的)也由引擎挪进回收站,回带 dirName 给主进程撤商店记录;keepSettings:设置原地不动;
+ *  bundle:只收这个捆绑包(目录名)内嵌的那份的设置,解析到别处的同 id 不动。 */
+export const uninstallPlugin = (t: EngineTarget, id: string, opts?: { trash?: boolean; keepSettings?: boolean; bundle?: string }) => {
+  const q = new URLSearchParams({ ...(opts?.trash ? { trash: '1' } : {}), ...(opts?.trash && opts.keepSettings ? { keepSettings: '1' } : {}), ...(opts?.bundle ? { bundle: opts.bundle } : {}) }).toString()
+  return request<{ ok: boolean; restartRequired: boolean; trashId?: string; dirName?: string }>(t, `/agent/plugins/${encodeURIComponent(id)}${q ? `?${q}` : ''}`, { method: 'DELETE' })
+}
 export const getPluginSettings = (t: EngineTarget, id: string, scope: string) =>
   request<{ values: Record<string, any> }>(t, `/agent/plugins/${encodeURIComponent(id)}/settings?scope=${encodeURIComponent(scope)}`).then((r) => r.values)
 export const putPluginSettings = (t: EngineTarget, id: string, scope: string, patch: Record<string, any>) =>
@@ -971,6 +1058,21 @@ export const decideMuseApproval = (t: EngineTarget, id: string, decision: 'appro
   }, { timeoutMs: 120000 }) // approve 会同步执行工具(写文件通常毫秒级;bash 可能要跑一会)
 
 /** 往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等;下周期 read_log 即见)。 */
+export const listMuseCards = (t: EngineTarget, status?: string) =>
+  request<{ cards: MuseCardInfo[] }>(t, `/agent/special/muse/cards${status ? `?status=${encodeURIComponent(status)}` : ''}`).then((r) => r.cards)
+
+export const getMuseCard = (t: EngineTarget, id: string) =>
+  request<{ card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}`).then((r) => r.card)
+
+export const decideMuseCard = (t: EngineTarget, id: string, action: string, extra?: Record<string, unknown>) =>
+  request<{ ok: boolean; card: MuseCardInfo; trigger?: { id: string } }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}/decide`, { method: 'POST', body: JSON.stringify({ ...extra, action }) })
+
+export const editMuseSummary = (t: EngineTarget, id: string, body: { index: number; expected: string; text: string }) =>
+  request<{ ok: boolean; card: MuseCardInfo }>(t, `/agent/special/muse/cards/${encodeURIComponent(id)}/summary-edit`, { method: 'POST', body: JSON.stringify(body) })
+
+export const museMessageFeedback = (t: EngineTarget, id: string, verdict: 'up' | 'down') =>
+  request<{ ok: boolean }>(t, `/agent/special/muse/messages/${encodeURIComponent(id)}/feedback`, { method: 'POST', body: JSON.stringify({ verdict }) })
+
 export const postMuseFeedback = (t: EngineTarget, text: string) =>
   request<{ ok: boolean }>(t, '/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text }) })
 
@@ -989,6 +1091,22 @@ export const getMuseLibraryFile = (t: EngineTarget, path: string) =>
 // 后端半死时一笔永不 settle 的请求会把整条链焊住 —— 停用永远排不上,等于 codex 抓的那条 bug 换了触发条件。
 export const getMuseTriggers = (t: EngineTarget) =>
   request<{ triggers: MuseTriggerInfo[] }>(t, '/agent/special/muse/triggers', undefined, { timeoutMs: 30000 }).then((r) => r.triggers)
+
+/** 触发源目录;老引擎没这条路由 → 空,构建器退回老的五个按钮。 */
+export const getTriggerSources = (t: EngineTarget) =>
+  request<{ sources: TriggerSourceInfo[] }>(t, '/agent/special/automation/sources', undefined, { timeoutMs: 30000 }).then((r) => r.sources).catch(() => [] as TriggerSourceInfo[])
+
+const pluginTriggerPath = (pluginId: string, key: string): string =>
+  `/agent/special/automation/plugin-triggers/${encodeURIComponent(pluginId)}/${encodeURIComponent(key)}`
+
+export const registerAutomationTrigger = (t: EngineTarget, pluginId: string, trigger: unknown) =>
+  request<{ ok: boolean }>(t, '/agent/special/automation/plugin-triggers', { method: 'POST', body: JSON.stringify({ pluginId, trigger }) })
+
+export const unregisterAutomationTrigger = (t: EngineTarget, pluginId: string, key: string) =>
+  request<{ ok: boolean }>(t, pluginTriggerPath(pluginId, key), { method: 'DELETE' })
+
+export const emitAutomationTrigger = (t: EngineTarget, pluginId: string, key: string, payload?: Record<string, unknown>) =>
+  request<{ ok: boolean }>(t, `${pluginTriggerPath(pluginId, key)}/emit`, { method: 'POST', body: JSON.stringify({ payload }) })
 
 export const deleteMuseTrigger = (t: EngineTarget, id: string) =>
   request<{ ok: boolean }>(t, `/agent/special/muse/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' })
@@ -1141,11 +1259,20 @@ export const UNIT_UPLOAD_BATCH_BYTES = 9 * 1024 * 1024
 /** 一个文件在上传 JSON 里大约占多少字节(内容是 base64 / 纯文本,都是 ASCII 或按 UTF-8 计)。 */
 const uploadBytes = (f: UploadFile): number => new TextEncoder().encode(JSON.stringify(f)).length + 8
 
-export const uploadWorkspaceFiles = async (t: EngineTarget, sessionId: string, files: UploadFile[]): Promise<UploadResult> => {
-  const post = (batch: UploadFile[]): Promise<UploadResult> => request<UploadResult>(t, '/agent/workspace/upload', {
-    method: 'POST',
-    body: JSON.stringify({ sessionId, files: batch }),
-  })
+/** progress:已发出的请求体占全部请求体的比例(0..1,分批时按批累计);signal:中止(移除附件 / 取消)。 */
+export const uploadWorkspaceFiles = async (t: EngineTarget, sessionId: string, files: UploadFile[], opts?: { onProgress?: (fraction: number) => void; signal?: AbortSignal }): Promise<UploadResult> => {
+  const totalBytes = opts?.onProgress ? files.reduce((n, f) => n + uploadBytes(f), 0) || 1 : 1
+  let doneBytes = 0
+  const post = (batch: UploadFile[]): Promise<UploadResult> => {
+    const batchBytes = batch.reduce((n, f) => n + uploadBytes(f), 0)
+    const onProgress = opts?.onProgress
+    return request<UploadResult>(t, '/agent/workspace/upload', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId, files: batch }),
+      ...(opts?.signal ? { signal: opts.signal } : {}),
+    }, onProgress ? { onUploadProgress: (sent, total) => onProgress(Math.min(1, (doneBytes + (total ? (sent / total) * batchBytes : 0)) / totalBytes)) } : undefined)
+      .finally(() => { doneBytes += batchBytes })
+  }
   if (t.via !== 'unit') return post(files)
   // unit 目标(K6 §3.7):按单次 ≤ 9MB 分批;单个文件本身就超 → 前端直接拒(不白传一趟换个 413)
   const tooLarge = (): Error => Object.assign(new Error(translate('engine.target.tooLarge')), { status: 413, code: 'UNIT_BODY_TOO_LARGE' })
@@ -1204,11 +1331,16 @@ export interface InboxMessage {
   id: string
   title: string
   body: string
+  /** 广播英文版(可空)。listInbox 已按界面语言挑进 title/body,视图只读那两个。 */
+  title_en?: string | null
+  body_en?: string | null
   sender_kind: 'agent' | 'server' | 'system'
   sender_id: string | null
   origin_broadcast_id: string | null
   thread?: InboxThread | string | null
   read_at: string | null
+  /** 'muse' = Muse 替用户标的已读(手机本地收件箱没有)。 */
+  read_by?: string | null
   archived_at: string | null
   attachments?: { items: InboxAttachmentItem[]; claimed: boolean; requires?: InboxClaimRequirements } | null
   expires_at?: string | null
@@ -1218,9 +1350,10 @@ export type InboxFilter = 'all' | 'unread' | 'archived'
 
 // 移动端(window.tangu?.mobile)inbox 走设备本地存储(localInbox);桌面/web 走远程 /agent/inbox。
 export const listInbox = (t: EngineTarget, filter: InboxFilter = 'all') =>
-  window.tangu?.mobile
+  (window.tangu?.mobile
     ? localInbox.list(filter)
     : request<{ messages: InboxMessage[] }>(t, `/agent/inbox?filter=${filter}&limit=200`).then((r) => r.messages)
+  ).then((ms) => ms.map((m) => localizeInboxMessage(m)))
 
 export const getInboxUnreadCount = (t: EngineTarget) =>
   window.tangu?.mobile
@@ -1248,6 +1381,10 @@ export const pullInbox = (t: EngineTarget) =>
     : request<{ pulled: boolean; added: number; detail?: string }>(t, '/agent/inbox/pull', { method: 'POST' })
 
 /** 领取广播附件(发放全在服务端)。client=`desktop/2.10.1`,服务端按它判最低版本。移动端本地收件箱无广播,不承载。 */
+/** Muse 私聊清单里的「领取」:信在 Muse 所在的那台引擎上,手机点它也打那台(手机本地收件箱领不了,所以不走下面那条)。 */
+export const claimOnEngine = (t: EngineTarget, id: string, client?: string) =>
+  request<{ ok: boolean; alreadyClaimed: boolean }>(t, `/agent/inbox/${encodeURIComponent(id)}/claim`, { method: 'POST', body: JSON.stringify({ client }) })
+
 export const claimInboxAttachment = (t: EngineTarget, id: string, client?: string) =>
   window.tangu?.mobile
     ? Promise.reject(new Error('not supported on mobile'))
@@ -1340,6 +1477,28 @@ export interface GitHosting {
   /** 引擎有「连接已有远端」。 */
   connect: boolean
 }
+/** Chat 链接悬停卡的富卡数据(GitHub / Forsion Git 的 PR、issue;引擎用这台机器上绑定的凭据去问,渲染层不直连外站)。
+ *  认不得 / 问不到 / 老引擎(404)/ 远端设备不放行 → null:卡片照出素卡,不报错。 */
+export interface LinkPreview {
+  source: 'github' | 'forsion-git'
+  kind: 'pr' | 'issue'
+  repo: string
+  number: number
+  title: string
+  state: 'open' | 'draft' | 'merged' | 'closed'
+  author?: string
+  /** 合并 / 关闭 / 创建时刻(ISO)。 */
+  at?: string
+  additions?: number
+  deletions?: number
+  changedFiles?: number
+  comments?: number
+}
+const LINK_STATES = new Set(['open', 'draft', 'merged', 'closed'])
+export const getLinkPreview = (t: EngineTarget, url: string): Promise<LinkPreview | null> =>
+  request<{ preview?: LinkPreview | null }>(t, `/agent/link-preview?url=${encodeURIComponent(url)}`, undefined, { timeoutMs: 8000 })
+    .then((r) => (r.preview && typeof r.preview.title === 'string' && typeof r.preview.repo === 'string' && LINK_STATES.has(r.preview.state) ? r.preview : null))
+    .catch(() => null)
 export const getGitHosting = (t: EngineTarget, sessionId: string): Promise<GitHosting | null> =>
   request<Partial<GitHosting>>(t, `/agent/project-context/git/hosting?sessionId=${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 8000 })
     .then((r): GitHosting => ({
@@ -1390,6 +1549,20 @@ export const getGitSettings = (t: EngineTarget) =>
 /** 逐键改;某键给 null = 恢复缺省。 */
 export const setGitSettings = (t: EngineTarget, patch: { [K in keyof GitSettings]?: GitSettings[K] | null }) =>
   request<{ settings: GitSettings }>(t, '/agent/git-settings', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings)
+/** 「设置 → 模型 → 提供方 → 发给模型之前」(引擎 routes/masking.ts)。writable=false = 引擎不在这台电脑上,不显示这一节。 */
+export interface MaskingSettings { secrets: boolean; personal: boolean; action: 'mask' | 'warn' | 'block' }
+export interface MaskAllowEntry { hash: string; kind: string; len: number; at: number }
+export interface MaskingState { writable: boolean; settings?: MaskingSettings; allow?: MaskAllowEntry[]; recent?: { values: number; sessions: number } }
+export interface MaskLogLine { t: number; sid: string; action: MaskingSettings['action']; hits: Array<{ kind: string; ph: string; head: string; len: number }> }
+export const getMasking = (t: EngineTarget) => request<MaskingState>(t, '/agent/masking')
+export const setMasking = (t: EngineTarget, patch: Partial<MaskingSettings>) =>
+  request<{ settings: MaskingSettings }>(t, '/agent/masking', { method: 'PUT', body: JSON.stringify(patch) }).then((r) => r.settings)
+/** 加进「从不遮住」:引擎只存这个值的 HMAC。 */
+export const addMaskAllow = (t: EngineTarget, value: string, kind: string) =>
+  request<{ entry: MaskAllowEntry }>(t, '/agent/masking/allow', { method: 'POST', body: JSON.stringify({ value, kind }) }).then((r) => r.entry)
+export const removeMaskAllow = (t: EngineTarget, hash: string) =>
+  request<{ allow: MaskAllowEntry[] }>(t, `/agent/masking/allow/${encodeURIComponent(hash)}`, { method: 'DELETE' }).then((r) => r.allow)
+export const getMaskLog = (t: EngineTarget) => request<{ lines: MaskLogLine[] }>(t, '/agent/masking/log').then((r) => r.lines)
 /** 删一条项目记忆。409 = 记忆在读出之后被别处改过(没有删除);调用方重载后再删。 */
 export const forgetProjectMemory = (t: EngineTarget, sessionId: string, id: string, expectedVersion: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory', { method: 'DELETE', body: JSON.stringify({ sessionId, id, expectedVersion }) }).then((r) => r.memory)
@@ -1399,6 +1572,15 @@ export const resolveProjectCandidate = (t: EngineTarget, sessionId: string, id: 
 /** 把写满压缩时合并 / 去掉的一句原样记回项目记忆。404 = 那一句已经不在记录里;放不下 → err.code 'MEMORY_FULL'。 */
 export const restoreProjectMemoryFact = (t: EngineTarget, sessionId: string, id: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory/restore', { method: 'POST', body: JSON.stringify({ sessionId, id }) }).then((r) => r.memory)
+// ── 项目文件夹搬走后重新指向(引擎 services/projectRelink.ts;只在本机引擎上,手机 / 网页拿到的是空表)──
+/** 本人会话里出现过、现在不在原处的本地项目路径(外接盘没挂上也算 —— 只拿来打标记)。 */
+export const getMissingProjects = (t: EngineTarget) =>
+  request<{ missing: string[] }>(t, '/agent/project-context/missing').then((r) => (Array.isArray(r?.missing) ? r.missing : []))
+/** 旧路径只从会话行取(sessionId = 这个项目里的任一会话)。 */
+export const getRelinkInfo = (t: EngineTarget, sessionId: string) =>
+  request<RelinkInfo>(t, `/agent/project-context/relink?sessionId=${encodeURIComponent(sessionId)}`)
+export const relinkProject = (t: EngineTarget, sessionId: string, path: string, merge = false) =>
+  request<RelinkResult>(t, '/agent/project-context/relink', { method: 'POST', body: JSON.stringify({ sessionId, path, merge }) })
 export const initProjectContext = (t: EngineTarget, sessionId: string) =>
   request<{ createdDir: boolean; createdDoc: boolean; context: ProjectContext }>(t, '/agent/project-context/init', { method: 'POST', body: JSON.stringify({ sessionId }) }).then((r) => ({ ...r, context: projectContextShape(r.context) }))
 /** 409 = 文件在读出之后被别处改过(没有写入);调用方提示用户重载。 */
@@ -1408,6 +1590,9 @@ export const putProjectSettings = (t: EngineTarget, sessionId: string, settings:
   request<{ settings: ProjectSettings | null }>(t, '/agent/project-context/settings', { method: 'PUT', body: JSON.stringify({ sessionId, settings }) }).then((r) => r.settings ?? null)
 export const createProjectSkill = (t: EngineTarget, sessionId: string, input: { slug: string; name: string; description: string; content: string }) =>
   request<{ skill: ProjectSkillInfo }>(t, '/agent/project-context/skills', { method: 'POST', body: JSON.stringify({ sessionId, ...input }) }).then((r) => r.skill)
+/** 项目技能整夹进回收站(路径取自 GET 返回的那一行,引擎只认清单里有的)。 */
+export const deleteProjectSkill = (t: EngineTarget, sessionId: string, path: string) =>
+  request<{ trashId: string }>(t, '/agent/project-context/skills', { method: 'DELETE', body: JSON.stringify({ sessionId, path }) })
 /** 图标只经这组端点改(PUT settings 保留 icon 现值)。导入图片:引擎按文件头认类型,写进项目的 `.tangu/icon.<ext>`;返回落盘后的默认项。 */
 export const uploadProjectIcon = (t: EngineTarget, sessionId: string, data: string) =>
   request<{ settings: ProjectSettings | null }>(t, '/agent/project-context/icon', { method: 'POST', body: JSON.stringify({ sessionId, data }) }).then((r) => r.settings ?? null)

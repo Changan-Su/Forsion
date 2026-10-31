@@ -97,6 +97,17 @@ export function parsePlanAnswer(answer: string): {
   };
 }
 
+/** ask_user 的参数 → 询问载荷(空问题 = null)。工具自己和托盘 run 的挂起询问(agentLoop)共用。 */
+export function askUserPayload(args: any): { question: string; options: string[]; allowFreeText: true } | null {
+  const question = String(args?.question ?? '').trim();
+  if (!question) return null;
+  const options = (Array.isArray(args?.options) ? args.options : [])
+    .map((o: any) => String(o ?? '').trim())
+    .filter(Boolean)
+    .slice(0, MAX_OPTIONS);
+  return { question, options, allowFreeText: true };
+}
+
 export const interactionProvider: ToolProvider = {
   id: 'builtin:interaction',
   tools: () => [
@@ -126,18 +137,10 @@ export const interactionProvider: ToolProvider = {
         },
       },
       execute: async (args, ctx) => {
-        const question = String(args.question ?? '').trim();
-        if (!question) return 'Error: question is required';
+        const payload = askUserPayload(args);
+        if (!payload) return 'Error: question is required';
         if (!ctx.runId) return 'Error: no run context; cannot ask the user';
-        const options = (Array.isArray(args.options) ? args.options : [])
-          .map((o: any) => String(o ?? '').trim())
-          .filter(Boolean)
-          .slice(0, MAX_OPTIONS);
-        const answer = await requestInquiry(
-          ctx.runId,
-          { question, options, allowFreeText: true },
-          ctx.signal,
-        );
+        const answer = await requestInquiry(ctx.runId, payload, ctx.signal);
         return formatInquiryResult(normalizeInquiryAnswer(answer, ctx.signal));
       },
     },

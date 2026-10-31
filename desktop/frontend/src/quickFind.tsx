@@ -1,5 +1,6 @@
 import { amadeusAvailable, sessionsAvailable } from './features/runtime'
 /** 全局快速查找(Notion quick-find 式,居中悬浮):按名称模糊搜 笔记 / 文件 / chat 会话,回车打开。
+ *  另按正文搜会话:「对话内容」一段 + 右边预览最后 3 轮,⌘↵ 跳到命中那条(10-24 借鉴 Comma §2.8)。
  *  空态显示最近(localStorage 记录,回退最近更新的会话)。ribbon 搜索图标 / ⌘P 唤起;挂在 Root。
  *
  *  分类胶囊(2026-08-20 用户要求):全部 / 笔记 / 文件 / 会话,←/→ 走。
@@ -22,7 +23,10 @@ import { useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
 import { registerMessages, useI18n } from './i18n'
 import { pageKey } from '@amadeus-shared/links'
-import { isImeKeyEvent, isMacPlatform, useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
+import { isImeKeyEvent, isMacPlatform, useExitGhost, useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
+import { listMessages, searchSessions, type SessionSearchHit } from './services/backendService'
+import { homeTarget, targetForSession } from './services/engine/targets'
+import type { MessageRecord } from './types'
 
 registerMessages({
   'quickfind.catAll': { zh: '全部', en: 'All' },
@@ -47,7 +51,78 @@ registerMessages({
   'quickfind.footNewTab': { zh: '新标签打开', en: 'Open in new tab' },
   'quickfind.createNote': { zh: '新建笔记「{name}」', en: 'Create note “{name}”' },
   'quickfind.subNewNote': { zh: '新建', en: 'New' },
+  'quickfind.secContent': { zh: '对话内容', en: 'In conversations' },
+  'quickfind.footJump': { zh: '跳到这一条', en: 'Jump to message' },
+  'quickfind.previewTurns': { zh: '最后 3 轮', en: 'Last 3 turns' },
+  'quickfind.previewEmpty': { zh: '选中一条对话内容，这里显示最后 3 轮', en: 'Select a conversation result to see its last 3 turns' },
+  'quickfind.previewHint': { zh: '↵ 打开对话 · {jump} 跳到这一条', en: '↵ open · {jump} jump to this message' },
 })
+
+/** ⌘P 正文搜索(10-24 借鉴 Comma §2.8)的查询串:不到 2 个字不搜(两个字的中文词也能搜),超过 128 字截到 128。
+ *  按**码点**截,同 searchSessions 头注:`String.slice` 劈开代理对,encodeURIComponent 当场抛。 */
+export const contentNeedle = (q: string): string | null => {
+  const cps = [...q.trim()]
+  return cps.length < 2 ? null : cps.slice(0, 128).join('').trim()
+}
+
+/** 停手 ms 再搜;换了词就清掉还在等的那次、abort 已发出去的那次(晚到的旧结果不落地)。null = 不搜。 */
+export function debouncedSearch<T>(run: (q: string, signal: AbortSignal) => Promise<T>, onResult: (q: string, r: T) => void, ms = 180) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let ctl: AbortController | undefined
+  const stop = (): void => { clearTimeout(timer); ctl?.abort(); ctl = undefined }
+  return {
+    set(q: string | null): void {
+      stop()
+      if (!q) return
+      timer = setTimeout(() => {
+        const c = (ctl = new AbortController())
+        run(q, c.signal).then((r) => { if (!c.signal.aborted) onResult(q, r) }, () => {})
+      }, ms)
+    },
+    dispose: stop,
+  }
+}
+
+/** 片段按查询词切成「命中 / 没命中」几截,命中的那截渲染成 <mark>。分词同引擎 splitTerms:空白分词,成对引号算一个短语;不分大小写。 */
+export function hitSlices(text: string, q: string): Array<{ s: string; hit: boolean }> {
+  const terms = (q.match(/"[^"]+"|[^\s"]+/g) || []).map((t) => t.replace(/"/g, '').trim()).filter(Boolean).sort((a, b) => b.length - a.length)
+  if (!terms.length) return [{ s: text, hit: false }]
+  const re = new RegExp(`(${terms.map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})`, 'iu')
+  return text.split(re).map((s, i) => ({ s, hit: i % 2 === 1 })).filter((x) => x.s)
+}
+
+const Marked = ({ text, q }: { text: string; q: string }) => <>{hitSlices(text, q).map((x, i) => (x.hit ? <mark key={i}>{x.s}</mark> : x.s))}</>
+
+/** 预览栏:最后 n 轮(一轮 = 一条提问 + 它后面的回答),只留有正文的提问 / 回答,过程消息(只调工具没说话)不算。 */
+export function lastTurns(msgs: Pick<MessageRecord, 'id' | 'role' | 'content'>[], n = 3): Array<{ id: string; user: boolean; text: string }> {
+  const said = msgs.filter((m) => typeof m.content === 'string' && m.content.trim() && m.role !== 'tool' && m.role !== 'system')
+  const starts = said.flatMap((m, i) => (m.role === 'user' ? [i] : []))
+  return said.slice(starts.length > n ? starts[starts.length - n] : 0).map((m) => ({ id: m.id, user: m.role === 'user', text: String(m.content).trim() }))
+}
+
+type Turns = ReturnType<typeof lastTurns>
+function ContentPreview({ hit, q }: { hit: SessionSearchHit; q: string }) {
+  const { t } = useI18n()
+  const [turns, setTurns] = useState<{ id: string; turns: Turns } | null>(null)
+  useEffect(() => {
+    let live = true
+    // 取一页 200 条(= 打开会话时 ChatView 那一页):过程消息也占条数,40 条会被一轮密集的工具调用占满,凑不出 3 轮(Codex 评审)。
+    // ponytail: 不缓存,换一条就重取一次;窄窗口里预览栏被 CSS 藏起来时也照取。工具更密的会话一页仍凑不满时就少几轮,要补再按 before 往前翻
+    listMessages(targetForSession(hit.id), hit.id, 200).then((ms) => { if (live) setTurns({ id: hit.id, turns: lastTurns(ms) }) }, () => {})
+    return () => { live = false }
+  }, [hit.id])
+  return (
+    <div className="amx-qf-preview" data-testid="qf-preview">
+      <div className="amx-qf-pv-head"><span>{hit.title || t('quickfind.untitledSession')}</span><span>{t('quickfind.previewTurns')}</span></div>
+      <div className="amx-qf-pv-body">
+        {turns?.id === hit.id && turns.turns.map((m) => (
+          <div key={m.id} className={m.user ? 'amx-qf-pv-user' : 'amx-qf-pv-reply'}><Marked text={m.text} q={q} /></div>
+        ))}
+      </div>
+      <div className="amx-qf-pv-hint">{t('quickfind.previewHint', { jump: isMacPlatform() ? '⌘↵' : 'Ctrl+↵' })}</div>
+    </div>
+  )
+}
 
 /** 选取模式(2026-08-25,仪表盘嵌卡要「挑一个文件」):同一个面板,回车不导航而是回调给调用方。
  *  刻意复用本面板而不另造 picker —— 模糊搜索 / 键盘 / 样式 / 最近项这一整套已经在这儿了。 */
@@ -141,6 +216,8 @@ function QuickFindInner() {
   // 输入框上(它们是原生视图,永远在页面之上)。面板改成贴顶、通栏,键盘提示那一行不画(手机没有那些键)。
   const phone = useNativeChromeInstalled()
   useNativeChromeClaim(phone ? CHROME_HIDDEN : null)
+  const scrimRef = useRef<HTMLDivElement>(null)
+  useExitGhost(scrimRef) // 关掉(卸载)时留替身放 80ms 退场
   const close = useQuickFind((s) => s.close)
   const pick = useQuickFind((s) => s.pick)
   const pages = usePageStore((s) => s.pages)
@@ -211,7 +288,24 @@ function QuickFindInner() {
   const createName = q.trim()
   const showCreate = !pick && !!createName && !!vaultRoot && amadeusAvailable() && (cat === 'all' || cat === 'note')
     && !pages.some((p) => /\.md$/i.test(p) && pageKey(p) === pageKey(createName))
-  const total = results.length + (showCreate ? 1 : 0)
+
+  // 「对话内容」一段(按正文搜会话):排在名称结果与「新建笔记」之后 —— 它是异步到的,排在前面会让
+  // 「打个新名字 + 回车 = 新建笔记」变成看手速。只在「全部 / 会话」分类出现,选取模式没有。
+  // 只收正文命中(带 hit)的:标题 / 摘要自证命中的,上面的名称匹配已经列了。
+  const needle = !pick && sessionsAvailable() ? contentNeedle(q) : null
+  const [content, setContent] = useState<{ q: string; hits: SessionSearchHit[] } | null>(null)
+  const searcher = useMemo(() => debouncedSearch(
+    (s, signal) => searchSessions(homeTarget(), s, { limit: 20, signal }),
+    (s, hits) => setContent({ q: s, hits: hits.filter((h) => h.hit) }),
+  ), [])
+  useEffect(() => { searcher.set(needle); if (!needle) setContent(null) }, [needle, searcher])
+  useEffect(() => searcher.dispose, [searcher])
+  // 只认这一个词的结果:换词后旧结果不留(还在等 / 新请求失败时,回车会打开一条不相干的旧命中 —— Codex 评审)
+  const contentHits = content && content.q === needle && (cat === 'all' || cat === 'session') ? content.hits : []
+  const hit0 = results.length + (showCreate ? 1 : 0) // 第一条「对话内容」的序号
+  const total = hit0 + contentHits.length
+  const selHit = sel >= hit0 ? contentHits[sel - hit0] : undefined
+  const wide = !phone && contentHits.length > 0
 
   useEffect(() => setSel(0), [q, pos])
   useEffect(() => inputRef.current?.focus(), [])
@@ -226,8 +320,17 @@ function QuickFindInner() {
     close()
     void usePageStore.getState().createWikiPage(createName)
   }
+  /** ↵ 打开会话;⌘↵ 打开后跳到命中那条并闪两下(#153 的跳转)。 */
+  const openHit = (h: SessionSearchHit, jump: boolean): void => {
+    const title = h.title || t('quickfind.untitledSession')
+    pushRecent({ kind: 'session', id: h.id, title, sub: t('quickfind.subSession') })
+    if (jump && h.hit) useApp.getState().setJumpTarget(h.id, h.hit.messageId) // 目标先落下再开会话(见 setJumpTarget)
+    openSession(h.id)
+    close()
+  }
   const chooseAt = (i: number, opts?: { newTab?: boolean }): void => {
     if (showCreate && i === results.length) { createNote(); return }
+    if (i >= hit0) { const h = contentHits[i - hit0]; if (h) openHit(h, !!opts?.newTab); return }
     const it = results[i]
     if (it) openItem(it, opts)
   }
@@ -258,8 +361,8 @@ function QuickFindInner() {
             : <FileText size={15} />
 
   return (
-    <div className={`amx-qf-scrim${phone ? ' amx-qf-phone' : ''}`} onMouseDown={close}>
-      <div className="amx-qf" onMouseDown={(e) => e.stopPropagation()} onKeyDown={onKey}>
+    <div ref={scrimRef} className={`amx-qf-scrim${phone ? ' amx-qf-phone' : ''}`} onMouseDown={close}>
+      <div className={`amx-qf${wide ? ' amx-qf-wide' : ''}`} onMouseDown={(e) => e.stopPropagation()} onKeyDown={onKey}>
         <div className="amx-qf-head">
           <Search size={16} className="amx-qf-searchicon" />
           <input
@@ -296,6 +399,7 @@ function QuickFindInner() {
             </button>
           ))}
         </div>}
+        <div className="amx-qf-body">
         <div className="amx-qf-list">
           {!q.trim() && results.length > 0 && <div className="amx-qf-sec">{t(pick ? 'quickfind.secPickable' : 'quickfind.secRecent')}</div>}
           {results.map((it, i) => (
@@ -321,11 +425,31 @@ function QuickFindInner() {
               <span className="amx-qf-sub">{t('quickfind.subNewNote')}</span>
             </button>
           )}
-          {results.length === 0 && !showCreate && <div className="amx-qf-empty">{t(q.trim() ? 'quickfind.emptyNoMatch' : pick ? 'quickfind.emptyNoPickable' : 'quickfind.emptyNoRecent')}</div>}
+          {contentHits.length > 0 && <div className="amx-qf-sec">{t('quickfind.secContent')}</div>}
+          {contentHits.map((h, j) => (
+            <button
+              key={`hit:${h.id}`}
+              data-testid="qf-hit"
+              className={`amx-qf-row amx-qf-hit${hit0 + j === sel ? ' sel' : ''}`}
+              onMouseMove={() => setSel(hit0 + j)}
+              onClick={(e) => openHit(h, e.metaKey || e.ctrlKey)}
+            >
+              <span className="amx-qf-icon"><MessageSquare size={15} /></span>
+              <span className="amx-qf-hitmain">
+                <span className="amx-qf-title">{h.title || t('quickfind.untitledSession')}</span>
+                <span className="amx-qf-snip"><Marked text={h.hit?.snippet ?? ''} q={content!.q} /></span>
+              </span>
+              <span className="amx-qf-sub">{h.updatedAt.startsWith(`${new Date().getFullYear()}-`) ? h.updatedAt.slice(5) : h.updatedAt}</span>
+            </button>
+          ))}
+          {results.length === 0 && !showCreate && !contentHits.length && <div className="amx-qf-empty">{t(q.trim() ? 'quickfind.emptyNoMatch' : pick ? 'quickfind.emptyNoPickable' : 'quickfind.emptyNoRecent')}</div>}
+        </div>
+        {/* 预览栏只在有「对话内容」时出;选中的不是正文命中就空着(栏不收起,免得上下走一格面板宽度跳一下)。窄于 760px 由 CSS 藏起。 */}
+        {wide && (selHit ? <ContentPreview hit={selHit} q={content!.q} /> : <div className="amx-qf-preview amx-qf-pv-empty" data-testid="qf-preview">{t('quickfind.previewEmpty')}</div>)}
         </div>
         {!phone && <div className="amx-qf-foot">{pick
           ? <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>↵</kbd> {t('quickfind.footChoose')} · <kbd>esc</kbd> {t('quickfind.footCancel')}</>
-          : <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>←→</kbd> {t('quickfind.footScope')} · <kbd>↵</kbd> {t('quickfind.footOpen')} · <kbd>{isMacPlatform() ? '⌘↵' : 'Ctrl+↵'}</kbd> {t('quickfind.footNewTab')} · <kbd>esc</kbd> {t('quickfind.footClose')}</>}</div>}
+          : <><kbd>↑↓</kbd> {t('quickfind.footSelect')} · <kbd>←→</kbd> {t('quickfind.footScope')} · <kbd>↵</kbd> {t('quickfind.footOpen')} · <kbd>{isMacPlatform() ? '⌘↵' : 'Ctrl+↵'}</kbd> {t(selHit ? 'quickfind.footJump' : 'quickfind.footNewTab')} · <kbd>esc</kbd> {t('quickfind.footClose')}</>}</div>}
       </div>
     </div>
   )

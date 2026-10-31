@@ -27,6 +27,19 @@ export interface NativeChromeSpace {
   /** The user keeps it in the bar; the others are reached through the bar's "all" cell. */
   pinned?: boolean
 }
+/** Width of the Space rail that stands at the left edge of a wide layout instead of the bottom dock (2026-10-20, Pad A2).
+ *  = NATIVE_RAIL_WIDTH (Android NativeChromeBar.kt); the browser host draws the same rail (mobile/src/browserChrome.tsx). */
+export const NATIVE_RAIL_WIDTH = 76
+/** The rail's cells for `fit` places: every Space while they fit; past that the pinned ones (Home is among them) and then
+ *  the rest in list order, one place kept for "all". List order on screen either way. Returns the cells and the Spaces
+ *  behind "all"; room for one place or none: "all" alone. ⚠️ Same rule as `ChromeState.railCells`
+ *  (mobile/android/.../NativeChromeState.kt) — change both. */
+export function nativeRailCells<T extends { id: string; pinned?: boolean }>(spaces: readonly T[], fit: number): { cells: T[]; more: T[] } {
+  if (spaces.length <= fit) return { cells: [...spaces], more: [] }
+  if (fit <= 1) return { cells: [], more: [...spaces] }
+  const ids = new Set([...spaces.filter((s) => s.pinned), ...spaces.filter((s) => !s.pinned)].slice(0, fit - 1).map((s) => s.id))
+  return { cells: spaces.filter((s) => ids.has(s.id)), more: spaces.filter((s) => !ids.has(s.id)) }
+}
 export interface NativeChromeShellState {
   mode: 'shell'
   title: string
@@ -48,8 +61,8 @@ export interface NativeChromeShellState {
   titleTap?: boolean
   /** Something behind "more" wants a look (a `RibbonItem.dot` is lit): hosts put a dot on the button. `label` = what a screen reader says. */
   moreDot?: { label: string }
-  /** dp the docked left column (wide layout) takes from the page's left edge: hosts start the left capsule after it, so
-   *  the column's own top is not under a capsule. Absent = no docked column. */
+  /** dp the docked left column (wide layout) takes from the shell's left edge: hosts start the left capsule after it (and
+   *  after their Space rail), so the column's own top is not under a capsule. Absent = no docked column. */
   leftInset?: number
   /** Most dp the left capsule may take: the view on screen lays something out in the capsule row right of it (the board's
    *  menu button and tool island). A longer title is cut. Absent = no limit. */
@@ -111,6 +124,8 @@ export function installNativeChromeHost(next: NativeChromeHost): () => void {
   }
 }
 export function nativeChromeInstalled(): boolean { return !!host }
+/** Whether the installed platform host can supply native touch feedback. */
+export function nativeHapticAvailable(): boolean { return typeof host?.haptic === 'function' }
 /** Touch feedback, where a host offers it; a no-op everywhere else (desktop, web, a phone browser). Never throws. */
 export function nativeHaptic(kind: NativeHaptic): void {
   try { host?.haptic?.(kind) } catch { /* feedback is never worth an error */ }

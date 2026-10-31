@@ -22,7 +22,9 @@ const dragEdge = (e: React.PointerEvent<HTMLDivElement>): void => {
   if (e.type === 'pointerdown') {
     if (e.button !== 0) return
     el.setPointerCapture(e.pointerId)
-    window.tangu?.miniResize?.(edge, true, cursor)
+    const shell = el.parentElement!
+    const radius = parseFloat(getComputedStyle(shell).borderTopLeftRadius) * (shell.getBoundingClientRect().width / shell.offsetWidth)
+    window.tangu?.miniResize?.(edge, true, { ...cursor, radius })
   } else if (e.type === 'pointermove') {
     if (el.hasPointerCapture(e.pointerId)) window.tangu?.miniResize?.(edge, false, cursor)
   } else {
@@ -89,7 +91,7 @@ export const MiniColumnHost: React.FC<{
       params: { ...current.mini.mainView.params, ...useWorkspace.getState().getActiveLeaf()?.params } })
   }
   return (
-    <div className="mini-card-shell mini-card-floating" data-space={direct ? 'direct' : space?.id}>
+    <div className="mini-card-shell mini-card-floating" data-space={direct ? 'direct' : space?.id} data-resizable={resizable || undefined}>
       {/* 顶栏浮在内容之上、收成两颗胶囊(手机 .mb-cap 同款,10-17 方案 A);胶囊之外的透明条是拖拽区。 */}
       <header className="mini-card-chrome">
         <div className="mini-card-cap">
@@ -144,7 +146,7 @@ export const MiniColumnHost: React.FC<{
         </section>}
       </>}
       {resizable && EDGES.map((edge) => <div key={edge} className="mini-card-edge" data-edge={edge}
-        onPointerDown={dragEdge} onPointerMove={dragEdge} onLostPointerCapture={dragEdge} />)}
+        onPointerDown={dragEdge} onPointerMove={dragEdge} onPointerUp={dragEdge} onLostPointerCapture={dragEdge} />)}
     </div>
   )
 }

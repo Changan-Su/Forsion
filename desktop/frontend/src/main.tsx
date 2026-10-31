@@ -1,4 +1,6 @@
+import './sandbox/seed' // 插件沙箱首屏的语言 / 主题:必须排第一,store 一被 import 就读 localStorage(普通实例 no-op)
 import { createRoot } from 'react-dom/client'
+import { MotionConfig } from 'framer-motion'
 import { Root } from './Root'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import './styles/base.css'
@@ -17,15 +19,23 @@ import { MiniRoot } from './MiniRoot'
 import { FloatingRoot } from './FloatingRoot'
 import { installMultiWindow } from './multiWindow'
 import { installKeepAwakeReport } from './keepAwakeReport'
+import { installTelemetryReport } from './telemetryReport'
 import { installCreationAutoVersion } from './creationAutoVersion'
 import { installSmoothCaret } from './smoothCaret'
 import { installViewportLock } from './viewportLock'
 import { applyUiFonts } from './uiFont'
 import { recordError } from './diag'
 import { installAccountTransition } from './services/accountTransition'
+import { installTabTitleBar } from './tabTitleBar'
+import { installSandboxHook } from './sandbox/sandboxWindow'
+import { installPluginSandboxSurface } from './services/pluginSandboxSurface'
+
+installSandboxHook() // 插件沙箱那份:主进程经 executeJavaScript 调的钩子(普通实例 no-op)
+installPluginSandboxSurface() // 用户那份:声明 plugin.sandbox,接 plugin_sandbox 工具的 client_cmd
 
 // Register for all desktop windows before workspace/Amadeus initialization.
 installAccountTransition()
+installTabTitleBar()
 
 // 全局错误兜底:ErrorBoundary 只接 React 渲染期异常,接不到事件回调/异步里的未捕获错误,
 // 也接不到渲染进程级崩溃。这里至少把它们记到 console(配合主进程崩溃自愈),便于诊断白屏。
@@ -70,6 +80,8 @@ try {
   installMultiWindow()
   // 有会话运行时不休眠(设置→常规,默认关):在飞 run 数报主进程;web/移动 no-op。
   installKeepAwakeReport()
+  // 帮助改进 Forsion:本窗的崩溃 / 卡顿 / 功能使用报给主进程(转给 Extend,发不发它定);没有带遥测的 Extend 时 no-op。
+  installTelemetryReport()
   // 造物里的项目:不管在哪个 Space 跑的 agent,一轮跑完宿主都存一版(git 版本历史)。
   installCreationAutoVersion()
   // 丝滑光标(默认关;设置→外观开关)。
@@ -90,10 +102,13 @@ function PreviewChat() {
 }
 
 // 不用 React.StrictMode:其开发期 double-invoke 会重复初始化 Amadeus Space 的 Milkdown 编辑器。
+// framer 也跟系统「减少动态效果」(走查续八 8.3):位移 / 缩放 / 布局动画停,只留透明度;CSS 那半在 styles/base.css。
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>
-    <ErrorBoundary>
-      {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
-    </ErrorBoundary>
+    <MotionConfig reducedMotion="user">
+      <ErrorBoundary>
+        {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
+      </ErrorBoundary>
+    </MotionConfig>
   </LocaleProvider>,
 )

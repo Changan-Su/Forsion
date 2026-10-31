@@ -8,3 +8,15 @@ export type { SelectionBarAction, SelectionBarTool, SelectionBarOrder } from './
 /** 看法胶囊 / 视图头行(真身在引擎:手机顶栏也要画它)。标准见 viewModes.tsx 顶注。 */
 export { ViewModeSwitch, ViewHead } from '../engine/viewModes'
 export type { ViewModeOption, ViewModesSpec } from '../engine/viewModes'
+/** 提示框 / 悬停卡:300ms 才出、相邻接力不重播、键盘聚焦不做动画(真身在引擎 hoverSurface.ts)。插件走 ctx.ui.attachTooltip。 */
+export { tooltipProps, attachTooltip, hideTooltip, useHoverCard } from './Tooltip'
+export type { TooltipContent, TooltipLines, TooltipOptions, HoverCardOptions, HoverSide } from './Tooltip'
+/** 落点提示:拖动排序 / 拖入时的那根线、那圈描边,换落点原地淡出淡入;松手后 land() 让被拖的那一个滑进新位置
+ *  (真身在引擎 dropIndicator.ts)。插件走 ctx.ui.dropIndicator(句柄上的 land)。 */
+export { createDropIndicator, dropRetarget, dropHide, land, landCancel, landWhenMoved, dragGrab, releasePoint } from '../engine/dropIndicator'
+export type { DropIndicator, DropRect, DropShape, DropRetargetOptions, LandPoint, LandOptions } from '../engine/dropIndicator'
+
+/** 折叠:宿主 base.css 的 data-motion="collapse" 的 React 壳(收起放完再卸载、首次挂上不播、展开完放开裁切)。
+ *  插件不用 React 就直接写 data-motion="collapse" + data-open,箭头写 data-motion="chevron"。 */
+export { AnimatedCollapse } from './Collapse'
+export { UploadRing, UploadBar, createUploadRing, createUploadBar } from './UploadProgress'

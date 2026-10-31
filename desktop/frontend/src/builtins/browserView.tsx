@@ -9,10 +9,21 @@
  * 重渲染都重新加载整页。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, ExternalLink, RotateCw, X } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ExternalLink, MousePointerClick, RotateCw, X } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
 import { BROWSER_PARTITION } from '../../../shared/browser'
-import { useI18n } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
+import type { ElementPick } from '@tangu/ui/views/chat2/elementPick'
+import { deliverElementPick, hostOf } from './elementPickDelivery'
+
+registerMessages({
+  'browser.pick': { zh: '点选元素发进对话', en: 'Pick an element to send to chat' },
+  'browser.pick.hint': { zh: '点一下要发的元素', en: 'Click the element to send' },
+  'browser.pick.keys': { zh: ' · Esc 取消 · {alt} 选上一层', en: ' · Esc cancel · {alt} parent' },
+  'browser.pick.noChat': { zh: '没找到可以放进去的对话', en: 'No chat to send it to' },
+})
+
+const ALT_KEY = typeof navigator !== 'undefined' && /Mac|iP(hone|ad)/.test(navigator.platform || navigator.userAgent) ? '⌥' : 'Alt'
 
 /** 注进 guest 的引语高亮配色:Chromium 默认的 `::target-text` 是浅紫,与本应用引用高亮的琥珀不是
  *  一套语汇 —— 网页引用点开落在哪一句,要和 PDF 引语带子、代码行高亮长一个样。
@@ -62,6 +73,7 @@ interface WebviewEl extends HTMLElement {
   stop(): void
   canGoBack(): boolean
   canGoForward(): boolean
+  getWebContentsId(): number
 }
 
 // 'webview' 不是标准 HTML 标签:一行 cast 拿到类型,免去全局 JSX.IntrinsicElements 增补。
@@ -85,6 +97,15 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
   const [loading, setLoading] = useState(false)
   const [nav, setNav] = useState({ back: false, forward: false })
   const [err, setErr] = useState<string | null>(null)
+  // 点选元素(shared/browserPick.ts):picking = 进行中那次的 guest id。只有桌面宿主有 browserPick。
+  const pickApi = window.tangu?.browserPick
+  const [picking, setPicking] = useState<number | null>(null)
+  const [pickMsg, setPickMsg] = useState<string | null>(null)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const barRef = useRef<HTMLDivElement>(null)
+  // 送进输入框那一步可能要等对话面板摆出来:视图卸载了就别再送
+  const delivery = useRef<AbortController | null>(null)
+  useEffect(() => () => delivery.current?.abort(), [])
 
   // 导航落点回写 leaf:标题进 tab、url 进 params(随布局持久化 → 重启回到同一页)。
   useEffect(() => {
@@ -170,6 +191,47 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
   // 空白起手 = 用户接下来就是要输地址,别让他再点一下。
   useEffect(() => { if (initial.current === HOME_URL) input.current?.focus() }, [])
 
+  const pick = useCallback(async () => {
+    const el = ref.current
+    if (!el || !pickApi) return
+    if (picking !== null) { void pickApi.control(picking, 'cancel'); return }
+    let id: number
+    try { id = el.getWebContentsId() } catch { return } // guest 还没挂上
+    setPicking(id)
+    setPickMsg(null)
+    el.focus() // 键盘要落进 guest:Esc / ⌥ 由页面里的点选脚本接
+    try {
+      const res = await pickApi.start(id)
+      if (!res?.ok || !res.pick) return
+      const p = res.pick
+      const item: ElementPick = {
+        id: `el-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        url: p.url, host: hostOf(p.url), title: p.title, selector: p.selector, tag: p.tag, text: p.text,
+        image: res.image ? {
+          name: `element-${p.tag}.${res.image.mimeType === 'image/png' ? 'png' : 'jpg'}`,
+          mimeType: res.image.mimeType, data: res.image.data, size: Math.floor(res.image.data.length * 3 / 4),
+        } : null,
+      }
+      delivery.current?.abort()
+      const ac = new AbortController()
+      delivery.current = ac
+      if (!await deliverElementPick(item, rootRef.current, ac.signal) && !ac.signal.aborted) setPickMsg(t('browser.pick.noChat'))
+    } catch { /* 主进程那头出错 = 这次不算 */ } finally {
+      setPicking((cur) => (cur === id ? null : cur))
+    }
+  }, [pickApi, picking, t])
+
+  // 焦点还在宿主(按完按钮没进 guest、或用户点回了地址栏)时也认 Esc / ⌥;卸载 / 跳走时把进行中的那次收掉。
+  useEffect(() => {
+    if (picking === null || !pickApi) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') { e.preventDefault(); void pickApi.control(picking, 'cancel') }
+      else if (e.key === 'Alt' && !e.repeat) { e.preventDefault(); void pickApi.control(picking, 'parent') }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => { window.removeEventListener('keydown', onKey, true); void pickApi.control(picking, 'cancel') }
+  }, [picking, pickApi])
+
   const go = useCallback((raw: string) => {
     const next = normalizeAddress(raw)
     if (!next) return
@@ -178,12 +240,13 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
   }, [])
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <div style={bar}>
-        <button className="btn ghost sm" disabled={!nav.back} onClick={() => ref.current?.goBack()} title={t('browser.back')}><ArrowLeft size={14} /></button>
-        <button className="btn ghost sm" disabled={!nav.forward} onClick={() => ref.current?.goForward()} title={t('browser.forward')}><ArrowRight size={14} /></button>
+    <div ref={rootRef} style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, position: 'relative' }}>
+      <div ref={barRef} style={bar}>
+        <button className="btn ghost sm" data-press="back" disabled={!nav.back} onClick={() => ref.current?.goBack()} title={t('browser.back')}><ArrowLeft size={14} /></button>
+        <button className="btn ghost sm" data-press="forward" disabled={!nav.forward} onClick={() => ref.current?.goForward()} title={t('browser.forward')}><ArrowRight size={14} /></button>
         <button
           className="btn ghost sm"
+          data-press={loading ? undefined : 'reload'}
           onClick={() => (loading ? ref.current?.stop() : ref.current?.reload())}
           title={loading ? t('browser.stop') : t('browser.reload')}
         >
@@ -202,9 +265,37 @@ export const BrowserView: React.FC<ViewProps> = ({ leaf, params }) => {
             border: 'var(--border-width, 1px) solid var(--border)', background: 'var(--bg)', color: 'inherit',
           }}
         />
+        {pickApi && (
+          <button
+            className="btn ghost sm"
+            data-press="pick"
+            aria-pressed={picking !== null}
+            disabled={picking === null && (url === HOME_URL || !!err)}
+            onClick={() => { void pick() }}
+            title={t('browser.pick')}
+            aria-label={t('browser.pick')}
+            style={picking !== null ? { background: 'var(--overlay-medium)', borderColor: 'var(--hover-line)' } : undefined}
+          >
+            <MousePointerClick size={14} />
+          </button>
+        )}
         <button className="btn ghost sm" onClick={() => window.tangu?.openExternal?.(url)} title={t('browser.openExternal')}><ExternalLink size={14} /></button>
       </div>
+      {picking !== null && (
+        <div
+          className="browser-pick-hint"
+          role="status"
+          style={{
+            position: 'absolute', left: '50%', top: (barRef.current?.offsetHeight ?? 36) + 12, transform: 'translateX(-50%)', zIndex: 5, pointerEvents: 'none',
+            padding: '5px 12px', borderRadius: 'var(--radius-pill, 999px)', background: 'var(--bg-card, var(--bg))', boxShadow: 'var(--card-shadow)',
+            fontSize: 'var(--ui-font-caption, 11px)', fontWeight: 500, lineHeight: 1.3, color: 'var(--text)', whiteSpace: 'nowrap',
+          }}
+        >
+          {t('browser.pick.hint')}<span style={{ color: 'var(--text-muted)' }}>{t('browser.pick.keys', { alt: ALT_KEY })}</span>
+        </div>
+      )}
       {err && <div style={{ padding: '6px 10px', fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--danger, #c0392b)' }}>{t('browser.failed', { msg: err })}</div>}
+      {pickMsg && !err && <div role="status" style={{ padding: '6px 10px', fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-muted)' }}>{pickMsg}</div>}
       <Webview
         ref={ref as unknown as React.Ref<HTMLElement>}
         src={initial.current}

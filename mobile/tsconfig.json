@@ -14,6 +14,7 @@
     "strict": true,
     "baseUrl": ".",
     "paths": {
+      "@forsion/calendar/*": ["../desktop/node_modules/@forsion/calendar/*"],
       "@/*": ["../desktop/frontend/src/*"],
       "@lcl/*": ["../lcl/*"],
       "@amadeus/*": ["../desktop/frontend/src/amadeus/*"],

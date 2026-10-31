@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { MsgSeg } from '../types'
-import { pushTextSeg, pushToolSeg, recordToUi, segmentsFromHistory, settleSegments } from './appStore'
+import { pushTextSeg, pushToolSeg, recordToUi, segmentsFromHistory, settleSegments } from '../tangu/store/tanguSlice'
 
 // Item 3 直播穿插的核心:文字/工具按发生顺序成段,连续工具并块,文字介入即分块。
 describe('msg segments (interleave + consecutive grouping)', () => {
