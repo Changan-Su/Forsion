@@ -3,7 +3,7 @@
  * 桩引擎回一份带 parent_session_id / busy / awaiting_user 的会话名册和一段「开了三个子会话 → 回来了 → 接着做 + 任务卡」的对话。
  * 断言:左栏树(子会话紧跟主会话、最后一个拐弯、个数、收起后状态冒上来)、行尾状态(在跑 / 等你 / 做完了)、对话里子会话块、
  * <child_sessions_update> 系统行、任务卡(有效期、先问卡、撤回、过期)、点「开个子会话」后卡原地变成子会话行、
- * 主区被挤窄时子会话面板不消失(720 并排 / 600 顶掉聊天列)。截图自己看。
+ * 主区被挤窄时子会话面板不消失(720 并排 / 600 顶掉聊天列);子会话发给主会话的 <session_message> 画成系统行 + 正文(10-28)。截图自己看。
  * 量的是 out/ 产物:改了源码先 `npx electron-vite build`。
  *   node ../.claude/hooks/devlock.cjs run --vehicle=e2e --what="父子会话台架" --eta=3 -- node scripts/nested-sessions.e2e.cjs
  *   SHOT_DIR=… 指定截图目录;LANG_EN=1 拍英文;DARK=1 拍深色
@@ -49,6 +49,7 @@ const parentMsgs = [
     tool_calls: K.map((_, i) => call(`s${i}`, 'start_session', { title: `t${i}`, message: 'brief' })),
     tool_results: K.map((k, i) => res(`s${i}`, 'start_session', `Started child session "t${i}" (id ${k}). It is working on its own.`)),
     content: '三家各查各的,我分成三个子会话同时查。它们查完会回来告诉我,我再合成一份对比。' },
+  { id: 'sm', role: 'user', timestamp: T + 5 * 60_000, content: `<session_message from="${K[2]}" title="查 Logseq 的同步" relation="child">\nLogseq 的同步是按文件整份覆盖的,没有三方合并。要我顺便看看它的 git 自动提交插件吗?\n</session_message>\nA message from a child session you started. It is not from the user.` },
   { id: 'cu', role: 'user', timestamp: T + 9 * 60_000, content: UPDATE },
   { id: 'a2', role: 'model', timestamp: T + 10 * 60_000, content: `两个子会话回来了,Notion 那个在等你确认要不要核企业版文档。\n\n${CARDS}` },
   { id: 'a3', role: 'model', timestamp: T + 11 * 60_000, content: '```forsion-task\nwithdraw: old-card\nreason: 你让我在这里做了\n```\n好的,这部分我直接在这里写。' },
@@ -136,6 +137,9 @@ async function main() {
         head: block?.querySelector('.t2-childs-head')?.textContent || '',
         update: document.querySelector('.t2-child-update')?.textContent || '',
         updateBubble: !!document.querySelector('#tocmsg-cu .t2-user, #tocmsg-cu .t2-bubble'),
+        sessMsg: document.querySelector('[data-session-message]')?.textContent || '',
+        sessMsgBubble: !!document.querySelector('#tocmsg-sm'),
+        sessMsgLeak: (document.querySelector('[data-session-message]')?.parentElement?.textContent || '').includes('session_message'),
         cards: [...document.querySelectorAll('#tocmsg-a2 .t2-taskcard')].map((e) => e.dataset.taskState),
         valid: !!document.querySelector('#tocmsg-a2 .t2-taskcard-expire'),
         askNote: !!document.querySelector('#tocmsg-a2 .t2-taskcard-note'),
@@ -147,6 +151,7 @@ async function main() {
     r.check('B2 等你的那行带「去回复 / 让 Tangu 回答」', chat.waitActions, '')
     r.check('B3 块头写着 1 个在等你', /1/.test(chat.head), chat.head)
     r.check('B4 <child_sessions_update> 画成系统行,不是用户气泡', !!chat.update && !chat.updateBubble, chat.update)
+    r.check('B5 <session_message> 画成系统行(谁发的 + 正文),不是用户气泡、不露标签', /查 Logseq 的同步/.test(chat.sessMsg) && /三方合并/.test(chat.sessMsg) && !chat.sessMsgBubble && !chat.sessMsgLeak, chat.sessMsg)
     r.check('C1 任务卡:普通卡带「7 天内有效」,先问卡带说明', chat.valid && chat.askNote && JSON.stringify(chat.cards) === '["open","ask"]', JSON.stringify(chat.cards))
     r.check('C2 撤回的卡写「已撤回 · 理由」,过期的卡写「已过期」', /withdrawn:.*你让我在这里做了/.test(chat.old[0] || '') && /^expired:/.test(chat.old[1] || ''), JSON.stringify(chat.old))
     r.check('C3 撤回围栏本身不出现在正文里', chat.withdrawFenceHidden, '')
@@ -155,6 +160,8 @@ async function main() {
     await win.screenshot({ path: path.join(dir, 'sidebar.png'), clip: { x: 40, y: 110, width: 270, height: 260 } })
     await win.locator('#tocmsg-a1 .t2-childs').scrollIntoViewIfNeeded()
     await win.screenshot({ path: path.join(dir, 'chat-block.png') })
+    await win.locator('[data-session-message]').scrollIntoViewIfNeeded()
+    await win.screenshot({ path: path.join(dir, 'session-message.png') })
     await win.locator('#tocmsg-a2 .t2-tasks').scrollIntoViewIfNeeded()
     await win.screenshot({ path: path.join(dir, 'cards.png') })
 

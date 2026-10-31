@@ -146,6 +146,12 @@ export function isChildBriefRun(runId: string): boolean {
   return runs.get(runId)?.input?.fromParent === true;
 }
 
+/** 兄弟会话发来的消息起的那一轮(input.fromSession.relation=sibling):收方是子会话,用户多半不在,询问同样不阻塞。
+ *  子会话发给主会话的那一轮不算 —— 用户就在主会话里。 */
+export function isSiblingMessageRun(runId: string): boolean {
+  return runs.get(runId)?.input?.fromSession?.relation === 'sibling';
+}
+
 export function isUnattendedRun(runId: string): boolean {
   const e = runs.get(runId);
   return !!e && runCategory(e.input, runId) === 'unattended';

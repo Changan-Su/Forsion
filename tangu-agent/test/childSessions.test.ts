@@ -15,9 +15,11 @@ import { toSqliteDDL } from '../src/core/dialectDDL.js';
 import { STANDALONE_SCHEMA } from '../src/db/schemaStandalone.js';
 import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
+import { LlmError } from '../src/core/types.js';
 import { createRun } from '../src/services/runStore.js';
 import { enqueueRun, activeSessionIds } from '../src/services/agentLoop.js';
 import { childSessionsProvider } from '../src/tools/builtin/childSessions.js';
+import { branchSession } from '../src/services/sessionBranch.js';
 import { CHILD_UPDATE_OPEN, deliverPendingChildReports, endsWithQuestion, markAwaitingUser } from '../src/services/childSessions.js';
 
 let home: string | null = null;
@@ -25,6 +27,10 @@ let home: string | null = null;
 let P = 'P';
 let seq = 0;
 let reply = 'child result';
+// 按会话改写模型回答(返回 undefined = 照常回 reply);payloads 记每次发给模型的消息(按会话)
+let hook: ((sid: string, n: number) => any) | null = null;
+const payloads: Array<{ sid: string; messages: any[] }> = [];
+afterEach(() => { hook = null; payloads.length = 0; });
 afterEach(() => { delete process.env.TANGU_HOME; if (home) { try { rmSync(home, { recursive: true, force: true }); } catch { /* ignore */ } home = null; } });
 
 async function setup(): Promise<void> {
@@ -35,7 +41,14 @@ async function setup(): Promise<void> {
   const fakeLlm: any = {
     resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test' }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
     buildProviderPayload: async (o: any) => ({ messages: o.messages.map((m: any) => ({ ...m })), tools: o.tools }),
-    streamProviderCompletion: async () => ({ content: reply, reasoning: '', toolCalls: [], usage: { prompt_tokens: 5, completion_tokens: 5 }, finishReason: 'stop' }),
+    streamProviderCompletion: async (o: any) => {
+      const sid = String(o.payload?.messages?.find((m: any) => typeof m.content === 'string' && m.content.includes('SID:'))?.content.match(/SID:(\S+)/)?.[1] || '');
+      payloads.push({ sid, messages: o.payload?.messages || [] });
+      const n = payloads.filter((x) => x.sid === sid).length;
+      const r = hook?.(sid, n);
+      if (r instanceof Error) throw r;
+      return r ?? { content: reply, reasoning: '', toolCalls: [], usage: { prompt_tokens: 5, completion_tokens: 5 }, finishReason: 'stop' };
+    },
   };
   const fakeBrain: any = { llm: fakeLlm, users: { getUserById: async () => ({ id: 'u1', username: 'u' }) }, memory: { getMemory: async () => ({ content: '' }) }, models: { hasDirectModel: () => false } };
   const fakeBilling: any = { canConsumeTokenPoints: async () => ({ ok: true }), consumeTokenPoints: async () => ({ ok: true }), calculateCost: async () => 0, logApiUsage: async () => {} };
@@ -105,8 +118,8 @@ describe('child sessions', () => {
     expect(String(await tool('send_to_session').execute({ session_id: cid, message: 'use the enterprise docs' }, ctx()))).toMatch(/^Sent to "A"/);
     await idle();
     expect(await updatesIn(P)).toHaveLength(2);
-    // 不是自己的子会话 → 拒
-    expect(String(await tool('send_to_session').execute({ session_id: P, message: 'x' }, ctx(cid)))).toMatch(/^Error: No such child session/);
+    // 不在同一棵树里 → 拒
+    expect(String(await tool('send_to_session').execute({ session_id: 'nope', message: 'x' }, ctx(cid)))).toMatch(/^Error: No such linked session/);
   });
 
   it('连续自动接着做 3 次后只写行不起轮;用户发一句归零', async () => {
@@ -194,10 +207,126 @@ describe('child sessions', () => {
     const B = `${P}-branch`;
     await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind, parent_session_id, fork_message_id, agent_config) VALUES (?, 'u1', 'tangu', 'branch', 'm1', 'user', ?, 'fm', ?)`,
       [B, P, JSON.stringify({ execMode: 'host', cwd: home, approvalMode: 'auto-edit' })]);
-    expect(String(await tool('send_to_session').execute({ session_id: B, message: 'hi' }, ctx()))).toMatch(/No such child session/);
+    expect(String(await tool('send_to_session').execute({ session_id: B, message: 'hi' }, ctx()))).toMatch(/No such linked session/);
     const cid = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx(B))));
     await idle();
     expect((await updatesIn(B))[0]).toContain(`id="${cid}"`);
     expect(await updatesIn(P)).toEqual([]); // 分支收尾不往主线送任何东西
+  });
+
+  it('context fork:子会话带上主会话此刻的对话(开头摘要),不拷行;fresh 不带', async () => {
+    await setup();
+    await query(`INSERT INTO chat_messages (id, session_id, role, content, timestamp) VALUES ('pm1', ?, 'user', 'We picked Postgres 17 for the ledger', 100)`, [P]);
+    const out = String(await tool('start_session').execute({ title: 'F', message: 'SID:fork Write the migration', context: 'fork' }, ctx()));
+    expect(out).toContain('with this conversation as background');
+    const f = idOf(out);
+    const fresh = idOf(String(await tool('start_session').execute({ title: 'N', message: 'SID:fresh Write the migration' }, ctx())));
+    await idle();
+    const [cp] = await query<any[]>(`SELECT summary, through_timestamp FROM session_summaries WHERE session_id = ?`, [f]);
+    expect(Number(cp.through_timestamp)).toBe(1);
+    expect(cp.summary).toContain('Postgres 17');
+    const seen = (sid: string) => JSON.stringify(payloads.find((x) => x.sid === sid)!.messages);
+    expect(seen('fork')).toContain('Postgres 17');
+    expect(seen('fork')).toContain('NOT work done in this session');
+    expect(seen('fresh')).not.toContain('Postgres 17');
+    expect(await query<any[]>(`SELECT id FROM session_summaries WHERE session_id = ?`, [fresh])).toEqual([]);
+    // 子会话自己的行里没有主会话那句
+    expect(JSON.stringify(await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = ?`, [f]))).not.toContain('Postgres 17');
+  });
+
+  it('子会话 ask_user 之后模型失败:问题照样送回主会话(Codex P2)', async () => {
+    await setup();
+    hook = (sid, n) => {
+      if (sid !== 'ask') return undefined;
+      if (n === 1) return { content: '', reasoning: '', toolCalls: [{ id: 'c1', type: 'function', function: { name: 'ask_user', arguments: JSON.stringify({ question: 'Which region should it deploy to?' }) } }], usage: { prompt_tokens: 5, completion_tokens: 5 }, finishReason: 'tool_calls' };
+      return new LlmError(400, 'bad request');
+    };
+    const cid = idOf(String(await tool('start_session').execute({ title: 'Q', message: 'SID:ask Deploy it' }, ctx())));
+    await idle();
+    const [u] = await updatesIn(P);
+    expect(u).toContain(`<child id="${cid}" title="Q" status="failed">`);
+    expect(u).toContain('Which region should it deploy to?');
+  });
+
+  it('会话互发:子会话 → 主会话、兄弟之间落成 <session_message> 并起一轮;兄弟那一轮不回报主会话', async () => {
+    await setup();
+    const a = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx())));
+    const b = idOf(String(await tool('start_session').execute({ title: 'B', message: 'b' }, ctx())));
+    await idle();
+    const before = (await runsOf(P)).length;
+    // 列表:A 看得到主会话和 B
+    const list = String(await tool('list_linked_sessions').execute({}, ctx(a)));
+    expect(list).toContain(`parent: "main" (id ${P})`);
+    expect(list).toContain(`sibling: "B" (id ${b})`);
+    expect(list).not.toContain(`id ${a})`);
+    // 兄弟
+    expect(String(await tool('send_to_session').execute({ session_id: b, message: 'schema is in db/ledger.sql' }, ctx(a)))).toMatch(/^Sent to "B"/);
+    await idle();
+    const bRuns = await runsOf(b);
+    expect(bRuns.at(-1)!.input.fromSession).toEqual({ id: a, relation: 'sibling' });
+    expect(bRuns.at(-1)!.input.message).toContain(`<session_message from="${a}" title="A" relation="sibling">`);
+    expect((await runsOf(P)).length).toBe(before); // 兄弟那一轮不叫醒主会话
+    // 子会话 → 主会话("parent" 别名)
+    expect(String(await tool('send_to_session').execute({ session_id: 'parent', message: 'found a blocker' }, ctx(a)))).toMatch(/^Sent to "main"/);
+    await idle();
+    const pr = (await runsOf(P)).at(-1)!;
+    expect(pr.input.fromSession).toEqual({ id: a, relation: 'child' });
+    expect(pr.input.message).toContain('found a blocker');
+  });
+
+  it('防回环:同一会话连续被消息叫醒 3 次后只写行;主会话派一轮归零', async () => {
+    await setup();
+    const a = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx())));
+    const b = idOf(String(await tool('start_session').execute({ title: 'B', message: 'b' }, ctx())));
+    await idle();
+    for (let i = 0; i < 3; i++) {
+      expect(String(await tool('send_to_session').execute({ session_id: b, message: `m${i}` }, ctx(a)))).toMatch(/^Sent to "B"/);
+      await idle();
+    }
+    const n = (await runsOf(b)).length;
+    expect(String(await tool('send_to_session').execute({ session_id: b, message: 'm3' }, ctx(a)))).toMatch(/will not start a turn/);
+    await idle();
+    expect((await runsOf(b)).length).toBe(n);
+    const rows = await query<any[]>(`SELECT content FROM chat_messages WHERE session_id = ? AND role = 'user'`, [b]);
+    expect(rows.some((r) => String(r.content).includes('m3'))).toBe(true);
+    // 主会话给 B 派一轮 → 计数归零,兄弟又能叫醒它
+    await tool('send_to_session').execute({ session_id: b, message: 'carry on' }, ctx());
+    await idle();
+    expect(String(await tool('send_to_session').execute({ session_id: b, message: 'm4' }, ctx(a)))).toMatch(/^Sent to "B"/);
+    await idle();
+  });
+
+  it('fork 用主会话这一轮在飞的消息(还没落库的工具结果也带上);从 fork 子会话分支,背景跟着走', async () => {
+    await setup();
+    const inflight = [
+      { role: 'system', content: 'SYSTEM PROMPT' },
+      { role: 'user', content: 'Implement the ledger schema' },
+      { role: 'assistant', content: '', tool_calls: [{ id: 't1', type: 'function', function: { name: 'read_file', arguments: '{"path":"db/ledger.sql"}' } }] },
+      { role: 'tool', tool_call_id: 't1', content: 'CREATE TABLE ledger_entries (amount_cents BIGINT)' },
+    ];
+    const f = idOf(String(await tool('start_session').execute({ title: 'F', message: 'SID:inflight Write it', context: 'fork' }, { ...ctx(), getWorkingMessages: () => inflight })));
+    await idle();
+    const [cp] = await query<any[]>(`SELECT summary FROM session_summaries WHERE session_id = ?`, [f]);
+    expect(cp.summary).toContain('ledger_entries');
+    expect(cp.summary).not.toContain('SYSTEM PROMPT');
+    const [m] = await query<any[]>(`SELECT id FROM chat_messages WHERE session_id = ? AND role = 'model' LIMIT 1`, [f]);
+    const br = await branchSession({ sourceSessionId: f, userId: 'u1', appId: 'tangu', messageId: m.id });
+    const [bcp] = await query<any[]>(`SELECT summary, through_timestamp FROM session_summaries WHERE session_id = ?`, [br!.id]);
+    expect(Number(bcp.through_timestamp)).toBe(1);
+    expect(bcp.summary).toContain('ledger_entries');
+  });
+
+  it('防回环:并发发来的几条不会一起越过上限', async () => {
+    await setup();
+    const a = idOf(String(await tool('start_session').execute({ title: 'A', message: 'a' }, ctx())));
+    const b = idOf(String(await tool('start_session').execute({ title: 'B', message: 'b' }, ctx())));
+    const c = idOf(String(await tool('start_session').execute({ title: 'C', message: 'c' }, ctx())));
+    await idle();
+    for (let i = 0; i < 2; i++) { await tool('send_to_session').execute({ session_id: c, message: `m${i}` }, ctx(a)); await idle(); }
+    const before = (await runsOf(c)).length;
+    const outs = await Promise.all([a, b, a].map((from, i) => tool('send_to_session').execute({ session_id: c, message: `x${i}` }, ctx(from))));
+    expect(outs.filter((o) => /^Sent to/.test(String(o)))).toHaveLength(1);
+    await idle();
+    expect((await runsOf(c)).length).toBe(before + 1);
   });
 });

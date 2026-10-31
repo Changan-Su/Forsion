@@ -77,7 +77,7 @@ import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
 import { MuseCardLine, MuseFeedbackRow, museCardRef } from './MuseCards'
 import { FallbackLine, FallbackModelName, QuotaChips, QuotaRemindChip, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
-import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, childIdsOf } from './ChildSessions'
+import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, SESSION_MESSAGE_OPEN, SessionMessageLine, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText, approvalPreviewText } from '../../approvalReason'
@@ -528,6 +528,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。
     // 子会话结果送回主会话(引擎落库的 <child_sessions_update> user 行):同理画成一行系统行。
     if (msg.content.startsWith(CHILD_UPDATE_OPEN)) return <div ref={rootRef}><ChildUpdateLine content={msg.content} /></div>
+    // 别的会话发来的消息(<session_message>:子会话发给主会话 / 兄弟之间):同理不是用户说的话
+    if (msg.content.startsWith(SESSION_MESSAGE_OPEN)) return <div ref={rootRef}><SessionMessageLine content={msg.content} /></div>
     // 挂起提问的答案回灌(<inquiry_update>,10-23):agent 没停下来等,答案到了这一行标出「它从这里接着用上了」
     if (msg.content.startsWith(INQUIRY_UPDATE_OPEN)) {
       const rows = parseInquiryUpdate(msg.content)
