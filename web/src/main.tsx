@@ -30,6 +30,7 @@ async function bootstrap(): Promise<void> {
   if ((window as unknown as { __FORSION_UNIT_PAGE__?: unknown }).__FORSION_UNIT_PAGE__) {
     const meta = (window as unknown as { __FORSION_UNIT_PAGE__: {
       instanceId: string; capabilities?: UnitCloudCapabilities; account?: { apiBase: string; loginPath: string }
+      inheritWebAccount?: boolean
     } }).__FORSION_UNIT_PAGE__
     const projectionBase = new URL('.', document.baseURI)
     const route = unitProjectionRoute(new URL(location.href), projectionBase)
@@ -41,7 +42,8 @@ async function bootstrap(): Promise<void> {
       } else {
         if (!meta.account) throw new Error('Invitations require an account provider')
         const { installUnitAccount } = await import('./unitAccount')
-        const visitor = await installUnitAccount({ instanceId: meta.instanceId, account: meta.account }, projectionBase)
+        const visitor = await installUnitAccount({ instanceId: meta.instanceId, account: meta.account,
+          inheritWebAccount: meta.inheritWebAccount }, projectionBase)
         if (!visitor.account.getIdentity()) { await visitor.login(); return }
         const { mountInvitePage } = await import('./invitePage')
         mountInvitePage(route.token, { apiBase, getToken: visitor.account.getToken,
