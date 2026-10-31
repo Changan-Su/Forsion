@@ -93,7 +93,7 @@ async function main() {
   }
   const app = await electron.launch({
     // -ApplePersistenceIgnoreState:强杀过的 Electron 下次启动先弹「重新打开窗口」模态框,firstWindow 等不到(台架纪律)
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
+    args: [...electron.NESTED_SANDBOX_ARGS, `--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
     cwd: ROOT,
     // FORSION_E2E_APPROVAL_DELIVERY:主进程 approvalDelivery 的 e2e 钩子(双闸,仅非打包):外部模式下改订桩的待批流、暴露 pending() 与真通知(场景 K3e–h)
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, FORSION_E2E_APPROVAL_DELIVERY: '1' },
@@ -359,7 +359,7 @@ async function main() {
     check('Q3 回执后流里留下问答记录(问题 + 我的回答)', /包管理器/.test(askAfter.record) && /pnpm/.test(askAfter.record), JSON.stringify(askAfter))
 
     // ── 场景 F:sketch 卡(agent 在对话流里画可交互 HTML 卡片)
-    // 钉四件:直播上卡(挂 tool_result 非 tool_call)/ 被引擎拒的不画 / 沙箱铁律(仅 allow-scripts
+    // 钉四件:直播上卡(挂 tool_result 非 tool_call)/ 被引擎拒的不画 / 沙箱铁律(仅 allow-scripts allow-forms
     // + 内层 CSP 真断网,在**真 Electron** 里实证而非单测纸面)/ 历史水合 back-fill 卡不丢。
     // sk1 的参数先以 tool_stream 流半截(到 `<scr` 为止,真引擎就是按模型输出切片发的),再隔 3s 才来完整 tool_call:
     // 这 3s 是草稿卡的探针窗(F0a 在 send 返回后立刻量)。半截里 `#skp` 还没被脚本改,所以草稿里应读到 SKETCH-LIVE 而非 -JS。
@@ -426,14 +426,7 @@ async function main() {
           '<button id="copybtn" class="fs-button" type="button" onclick="window.forsionSketch.copy(\'COPIED-LIST\')">复制</button>' +
           '<script>try{window.forsionSketch.ask("AUTO-ASK")}catch(e){document.body.setAttribute("data-autoask",e.message)}' +
           // 绕过卡内运行时直接 postMessage(Codex 10-09 指出的口子):宿主侧必须按「焦点 + 瞬时激活」拒掉
-          'parent.postMessage({type:"sketch-ask",text:"RAW-ASK"},"*");' +
-          // F11c 的「抢焦点冒充点击」要由卡自己的定时器发起:Playwright 的 frame.evaluate 自带 userGesture(会给子帧 5s 瞬时激活),
-          // 找 nonce 的正则拆开拼("NON"+"CE"),否则这段脚本自己的源码就会被 outerHTML 匹配到(第一次跑就是这么假红的)。
-          // 直接在 evaluate 里发等于替攻击者按了一下。台架只经 evaluate 预约时刻(data-steal-at),7s 后由这段代码自己动手。
-          'setInterval(function(){var at=Number(document.body.dataset.stealAt||0);if(!at||Date.now()<at||document.body.dataset.steal)return;' +
-          'var i=document.createElement("input");document.body.appendChild(i);i.focus();parent.postMessage({type:"sketch-ask",text:"STEAL-ASK"},"*");' +
-          'var r="sent";try{window.forsionSketch.ask("STEAL-ASK")}catch(e){r=e.message}' +
-          'document.body.dataset.steal=JSON.stringify({viaRuntime:r,nonceVisible:new RegExp("NON"+"CE = \'").test(document.documentElement.outerHTML),scripts:document.head.querySelectorAll("script").length})},100)</script>',
+          'parent.postMessage({type:"sketch-ask",text:"RAW-ASK"},"*")</script>',
       }) } },
       { type: 'tool_result', payload: { id: 'sk5', result: 'Sketch card rendered in the conversation.' } },
       { type: 'token', payload: { delta: '按钮卡在最后。' } },
@@ -520,7 +513,7 @@ async function main() {
     await inlineMessage.scrollIntoViewIfNeeded().catch(() => {})
     await win.waitForTimeout(300)
     await inlineMessage.screenshot({ path: process.env.SKETCH_INLINE_SHOT || '/tmp/sketch-inline-order.png' }).catch(() => {})
-    check('F2 ⚠️沙箱铁律:每张卡 sandbox 恒为仅 allow-scripts', skProbe.sandboxes.length === 5 && skProbe.sandboxes.every((s) => s === 'allow-scripts'), JSON.stringify(skProbe.sandboxes))
+    check('F2 ⚠️沙箱铁律:每张卡 sandbox 恒为仅 allow-scripts allow-forms', skProbe.sandboxes.length === 5 && skProbe.sandboxes.every((s) => s === 'allow-scripts allow-forms'), JSON.stringify(skProbe.sandboxes))
     check('F3 被引擎拒掉的 sketch(isError)不画卡', skProbe.count === 5, `count=${skProbe.count}`)
 
     // 卡内探针:JS 真跑 + 网络真断(内层 CSP 收口;裸 sandbox 是挡不住 fetch 的,此断言在真 Electron 里钉死)。
@@ -670,25 +663,7 @@ async function main() {
     let copied = ''
     for (let i = 0; i < 10 && copied !== 'COPIED-LIST'; i++) { await win.waitForTimeout(300); copied = await app.evaluate(({ clipboard }) => clipboard.readText()) }
     check('F11b 卡内 copy():点按钮后系统剪贴板里是卡给的文本', copied === 'COPIED-LIST', JSON.stringify({ copied }))
-    // F11c(Codex 10-09 二轮 P1)抢焦点冒充点击:用户刚在 composer 里敲了键(父文档有 5s 瞬时激活),卡内脚本 focus() 自己的控件把焦点抢到
-    // 这张 iframe 上,再①绕过运行时直接 postMessage ②经运行时 ask() ③从 outerHTML 里找 nonce —— 三条路都必须发不出去:
-    // ①没有 nonce,②子帧自己没有激活(父文档的输入传不进来),③运行时跑完已把自己的 script 删了。
-    // 预约 7s 后动手(evaluate 给子帧的那次激活 5s 内过期),6.2s 时在 composer 里敲一个键制造父文档激活。
-    const stealBefore = stub.seen.runs.length
-    if (askFr) await askFr.evaluate(() => { document.body.dataset.stealAt = String(Date.now() + 7000) }).catch(() => {})
-    await win.waitForTimeout(6200)
-    await win.locator('.t2c-ta').first().click().catch(() => {})
-    await win.keyboard.type('x')
-    await win.waitForTimeout(1800)
-    let steal = null
-    if (askFr) { const raw = await askFr.evaluate(() => document.body.dataset.steal || '').catch(() => ''); try { steal = raw ? JSON.parse(raw) : null } catch { steal = null } }
-    await win.waitForTimeout(800)
-    const stolen = stub.seen.runs.some((r) => r.message === 'STEAL-ASK')
-    await win.locator('.t2c-ta').first().click().catch(() => {})
-    await win.keyboard.press('Meta+A').catch(() => {}); await win.keyboard.press('Backspace').catch(() => {})
-    check('F11c ⚠️卡内抢焦点冒充点击(父文档 5s 内刚有输入):裸 postMessage 没 nonce、经运行时子帧没激活、outerHTML 里找不到 nonce → 都发不出去',
-      !stolen && stub.seen.runs.length === stealBefore && !!steal && /user gesture/.test(steal.viaRuntime) && steal.nonceVisible === false && steal.scripts === 0,
-      JSON.stringify({ stolen, runs: stub.seen.runs.length - stealBefore, steal }))
+    // F11c 抢焦点冒充点击搬到了 visualize.check.cjs 的默认进程模型段:卡片嵌进壳之后这里要摸卡内元素,得让帧同进程,而同进程时宿主的激活会传进卡片,测不了这道闸。
 
 
     // ── 场景 D:审批卡的「为什么问你」(B3)+ 工作区外写入警示仍在(台账里挂着的那条未验)

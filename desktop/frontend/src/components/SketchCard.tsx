@@ -11,7 +11,7 @@
  */
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
-  buildSketchDoc, readSketchTheme, subscribeThemeChange,
+  buildSketchDoc, buildSketchShell, readSketchTheme, subscribeThemeChange,
   SKETCH_CSP, SKETCH_SANDBOX, SKETCH_MIN_H, SKETCH_MAX_H, SKETCH_INITIAL_H,
 } from './sketchWrapper'
 import { useI18n } from '../i18n'
@@ -48,7 +48,7 @@ export function userTouchedFrame(frame: HTMLIFrameElement | null): boolean {
   const activation = (navigator as Navigator & { userActivation?: { isActive?: boolean } }).userActivation
   return activation?.isActive === true
 }
-// iframe 的 csp 属性:卡自导航到 frame-src 放行的本机页时,响应没声明接受这份 CSP 就拒显,否则新 realm 不受 sketchGuard 和内层 CSP 管。
+// iframe 的 csp 属性:第二道。自导航先被壳的 frame-src 挡住(buildSketchShell);万一到了 frame-src 放行的本机页,响应没声明接受这份 CSP 就拒显,否则新 realm 不受 sketchGuard 和内层 CSP 管。
 // 只有 Chromium 认它;Firefox / Safari 忽略,网页端靠宿主 frame-src 只放行同源。
 const FRAME_CSP = { csp: SKETCH_CSP } as React.IframeHTMLAttributes<HTMLIFrameElement>
 const newNonce = (): string => (crypto.randomUUID ? crypto.randomUUID() : Array.from(crypto.getRandomValues(new Uint8Array(16)), (b) => b.toString(16).padStart(2, '0')).join(''))
@@ -183,7 +183,7 @@ const SketchFrame: React.FC<{ item: SketchItem; actions?: SketchActions; stateSc
     return () => ro.disconnect()
   }, [h, open])
 
-  const doc = useMemo(() => (vars ? buildSketchDoc(mountHtml.current, vars, mountState.current, nonce.current) : ''), [vars])
+  const doc = useMemo(() => (vars ? buildSketchShell(buildSketchDoc(mountHtml.current, vars, mountState.current, nonce.current), vars['color-scheme']) : ''), [vars])
   // 草稿不给头部操作(「插入笔记」插半截没意义)。
   const headActions = item.draft ? undefined : actions
   return (

@@ -51,7 +51,7 @@ async function main() {
   const t0 = Date.now()
   let sendAt = 0 // 第一次发消息的时刻:成片从这里前 1.5s 起剪,去掉启动与导航那 30 多秒
   const app = await electron.launch({
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
+    args: [...electron.NESTED_SANDBOX_ARGS, `--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
     cwd: ROOT,
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url },
     recordVideo: { dir: OUT, size: { width: 1440, height: 900 } },
