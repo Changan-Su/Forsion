@@ -321,6 +321,18 @@ class NativeChromeBarLayoutTest {
         compose.onNodeWithTag("nativeChrome.space.s2").assertIsSelected()
     }
 
+    @Test fun thePageAnsweringMidSlideDoesNotDropTheFinger() {
+        var state by mutableStateOf(shell(spaces = spaces(4, 0)))
+        val asked = mutableListOf<String>()
+        dock(400, { state }, asked)
+        compose.onNodeWithTag("nativeChrome.space.s1").performClick() // the page has not answered yet
+        slide("nativeChrome.space.s1", "nativeChrome.space.s3")
+        compose.runOnUiThread { state = shell(spaces = spaces(4, 1)); Snapshot.sendApplyNotifications() }
+        compose.mainClock.advanceTimeBy(64)
+        lift()
+        assertEquals(listOf("s1", "s3"), asked)
+    }
+
     @Test fun slidingBackToWhereItStartedSwitchesNothing() {
         val asked = mutableListOf<String>()
         dock(400, shell(spaces = spaces(4, 1)), asked)

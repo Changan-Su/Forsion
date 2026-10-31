@@ -44,12 +44,14 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
@@ -362,6 +364,8 @@ internal fun NativeSpaceBar(
     val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.surface))
     val motion = motionOn()
     val keys = state.dock.map { cellKey(it) } + if (state.more.isNotEmpty()) listOf(ALL_CELL) else emptyList()
+    // the gesture reads this one: restarting it for a page that changed underneath would drop a finger still on the dock
+    val cells by rememberUpdatedState(keys)
     val active = activeKey(state.dock, state.more)
     val selected = rememberSelected(active)
     val scope = rememberCoroutineScope()
@@ -389,7 +393,7 @@ internal fun NativeSpaceBar(
                 .then(if (interactive) Modifier.testTag("nativeChrome.dock") else Modifier)
                 // as the top capsules: the dock keeps its touches, the strip beside it does not. Leaving, it takes none
                 // at all: a ComposeView only takes what one of its pointer inputs was hit by, the rest falls through to the page
-                .then(if (interactive) Modifier.pointerInput(keys, active) {
+                .then(if (interactive) Modifier.pointerInput(Unit) {
                     val inset = DOCK_INSET.toPx()
                     val cross = { n: Int -> view.performHapticFeedback(HapticFeedbackConstants.CLOCK_TICK); drop.hover = n }
                     awaitEachGesture {
@@ -409,27 +413,27 @@ internal fun NativeSpaceBar(
                                     if (scrubbing && !change.isConsumed) {
                                         change.consume()
                                         done = true
-                                        val key = keys.getOrNull(cellAt(x, drop.width, keys.size))
+                                        val key = cells.getOrNull(cellAt(x, drop.width, cells.size))
                                         val moves = key != null && key != ALL_CELL && key != selected.key
                                         if (moves) { selected.pick(key!!); onSpace(key.removePrefix(SPACE_CELL), false) }
                                         // "all" only opens the sheet: the selection stays with what is selected
-                                        drop.release(scope, keys.indexOf(selected.key), motion)
+                                        drop.release(scope, cells.indexOf(selected.key), motion)
                                         if (key == ALL_CELL) onAll()
                                     }
                                     break
                                 }
-                                if (scrubbing) { change.consume(); drop.drag(x, keys.size, cross); continue }
+                                if (scrubbing) { change.consume(); drop.drag(x, cells.size, cross); continue }
                                 // past that the cell's long-press has it. Going up or down: not a slide along the dock
                                 if (change.uptimeMillis >= longAt) break
                                 if (abs(moved.y) > slop && abs(moved.y) >= abs(moved.x)) break
                                 if (abs(moved.x) > slop) {
                                     change.consume()
                                     scrubbing = true
-                                    drop.begin(scope, x, keys.indexOf(selected.key), keys.size, dp, motion)
+                                    drop.begin(scope, x, cells.indexOf(selected.key), cells.size, dp, motion)
                                 }
                             }
                         } finally {
-                            if (scrubbing && !done) drop.release(scope, keys.indexOf(selected.key), motion)
+                            if (scrubbing && !done) drop.release(scope, cells.indexOf(selected.key), motion)
                         }
                     }
                 } else Modifier)
@@ -522,9 +526,10 @@ private fun rememberSelected(active: String?): Selected {
     val selected = remember { Selected() }
     selected.page = active
     val pending = selected.pending
-    LaunchedEffect(pending, active) {
+    if (pending != null && pending == active) SideEffect { selected.pending = null }
+    // keyed on the tap alone: an answer to an earlier tap does not buy this one more time
+    LaunchedEffect(pending) {
         if (pending == null) return@LaunchedEffect
-        if (pending == active) { selected.pending = null; return@LaunchedEffect }
         delay(DOCK_PENDING_MS) // the page refused or never answered: back to what it says
         selected.pending = null
     }
@@ -763,11 +768,12 @@ private fun SpaceCell(
     val iconScale = remember { Animatable(1f) }
     var wasActive by remember { mutableStateOf(active) }
     LaunchedEffect(active) {
-        if (active && !wasActive && motion) {
+        val selectedNow = active && !wasActive && motion
+        wasActive = active
+        if (selectedNow) {
             iconScale.snapTo(0.84f)
             iconScale.animateTo(1f, spring(dampingRatio = 0.55f, stiffness = ICON_STIFFNESS))
-        }
-        wasActive = active
+        } else iconScale.snapTo(1f) // a finger passing over: the spring it was cut off in must not stay behind
     }
     val badgeLabel = badge?.label.orEmpty()
     Column(
