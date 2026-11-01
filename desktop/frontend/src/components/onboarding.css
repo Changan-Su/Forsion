@@ -311,6 +311,8 @@ button.ob-progress-item:focus-visible { outline: var(--focus-ring) solid var(--s
 @container (max-height: 660px) {
   .ob-history-about .ch-about { display: none; }
   .ob-history-about .ob-history-more { border-top: 0; border-radius: var(--radius-lg); padding-top: 12px; }
+  /* 帮助改进那张卡(OnboardingImprove):四类数据行收紧,818×582 也不整页滚动、「隐私政策」留在窗内。 */
+  [data-ob-improve] .ob-history-row { min-height: 0; padding-block: 6px; }
   .ob-background-agent { padding: 14px 18px; }
   .ob-background-agents { gap: 10px; }
   .ob-background-layout { gap: 12px; }

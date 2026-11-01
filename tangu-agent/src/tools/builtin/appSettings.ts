@@ -67,7 +67,7 @@ export const appSettingsProvider: ToolProvider = {
           description:
             'Change Forsion app settings on this computer. Call app_settings first for the fields and their allowed values. Give one section and only the fields to change; the other fields stay as they are, and nothing is saved if any field is invalid. ' +
             'The user confirms every change on an approval prompt, so say why in `reason`. ' +
-            'API keys, sign-in, providers, the voice-call model and voice, MCP, hooks, channels, sandbox, remote access and approval rules cannot be changed with this tool — tell the user to change those in Settings.',
+            'API keys, sign-in, providers, the voice-call model and voice, hooks, channels, sandbox, remote access and approval rules cannot be changed with this tool — tell the user to change those in Settings. For MCP configuration, use manage_mcp.',
           parameters: {
             type: 'object',
             properties: {

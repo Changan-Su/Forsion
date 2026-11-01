@@ -22,6 +22,7 @@ import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir, isDevMode } from './forsionHome'
+import { loadTanguCreds } from './forsionAuth'
 import { clipSourceDir } from './clipExtension'
 import { amadeusConfigPath } from './amadeus/settings'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_ENV, COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
@@ -181,6 +182,19 @@ export class BackendManager {
     return () => this.listeners.delete(cb)
   }
 
+  private exitListeners = new Set<(exit: { code: number | null; signal: string | null; uptimeMs: number }) => void>()
+  /** 引擎进程**意外**退出(不是 stop() 收尾)时回调一次,带退出码 / 信号与这条进程活了多久。遥测的 engine crash 用(telemetryHost.ts)。
+   *  onStatus 替不了它:就绪后崩溃先报 starting(排重启),连续失败三次才到 crashed。 */
+  onUnexpectedExit(cb: (exit: { code: number | null; signal: string | null; uptimeMs: number }) => void): () => void {
+    this.exitListeners.add(cb)
+    return () => this.exitListeners.delete(cb)
+  }
+
+  /** 正在跑的引擎自己在 /health 里报的版本号(还没就绪过 / 没报 = null)。 */
+  engineVersion(): string | null {
+    return this.healthVersion
+  }
+
   /** dev:dist 入口 mtime 晚于子进程启动 → 包根重新 build 过,跑的是旧代码。 */
   private isDistStale(): boolean {
     if (app.isPackaged || !this.spawnedEntry || this.state !== 'ready') return false
@@ -219,11 +233,7 @@ export class BackendManager {
 
   /** 实时 forsion_token(~/.forsion/auth.json,登录态唯一真源);未登录 = null。只用于引擎调云端(TANGU_TOKEN)。 */
   private cloudToken(): string | null {
-    try {
-      const creds = JSON.parse(readFileSync(join(forsionHomeDir(), 'auth.json'), 'utf8'))
-      if (creds.token) return String(creds.token)
-    } catch { /* 无 auth.json = 未登录 */ }
-    return null
+    return loadTanguCreds()?.token || null
   }
 
   /** 外部 agent 接 Forsion MCP 端点的稳定本地密钥(设置「高级」开关开启时才被接受)。持久化到
@@ -377,7 +387,7 @@ export class BackendManager {
       // agent 的 amadeus_* 工具直连磁盘读写。给它 amadeus-config.json 的路径,让它 **实时读** 桌面当前
       // 的 lastVault —— 不再瞎猜默认路径(用户的 vault 常是自定义路径,且运行时可切换 vault)。
       env.FORSION_AMADEUS_CONFIG = amadeusConfigPath()
-      // 默认日历 = 默认笔记库根上首启播种的 Calendar.db(和 amadeus/ipc.ts ensureDefaultVault 同一个路径);引擎把它和 human/CALENDAR.db 双向镜像。
+      // 老版本种在默认笔记库根上的 Calendar.db(和 amadeus/ipc.ts defaultVaultRoot 同一个路径),还在就由引擎和 human/CALENDAR.db 双向镜像。
       // 家目录和工作区要么都是默认的、要么都被台架重定向了才给:一边真一边假就会把台架的日历合进真的 human/ 和账号云端,
       // 或者把台架的 human/ 合进真库(打包版的 defaultWorkspaceDir 不认 FORSION_WORKSPACE_DIR)。外面已经给了(含空串 = 关)就照用。
       const real = (p: string): string => { try { return realpathSync(p) } catch { return p } }
@@ -496,6 +506,7 @@ export class BackendManager {
     }
     this.lastError = `后端退出(code=${code} signal=${signal})`
     this.pushLog(`[manager] ${this.lastError}`)
+    for (const cb of this.exitListeners) { try { cb({ code, signal, uptimeMs: Date.now() - this.spawnedAt }) } catch { /* 观察者出错不影响重启 */ } }
     // 还在 spawnOnce 的就绪等待里:它自己会换端口重试。这里再排一次重启 = 两条 spawn 链并行,
     // 后起的顶掉 this.child,先起的那个成了没人管的孤儿引擎(2.11.2 反馈日志里 5 行启动对 1 行退出就是它)。
     if (this.state === 'starting') return

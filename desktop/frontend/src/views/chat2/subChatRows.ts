@@ -17,7 +17,8 @@ export function subChatRows(saved: readonly BackgroundSessionInfo[], live: reado
   const hidden = saved.filter((r) => historianOn && r.kind === 'historian')
   const rows: SubChatRow[] = saved
     .filter((r) => r.kind !== 'teamwork' && !hidden.includes(r))
-    .map((r) => ({ id: r.sessionId, title: r.title || r.kind, sessionId: r.sessionId, runId: r.runId || undefined, streaming: r.runStatus === 'running' || r.runStatus === 'queued' }))
+    // 续用的子代理:库里那行还是上一轮的「已完成」,实时流先知道它又跑起来了(/background 要等下一次轮询)。
+    .map((r) => ({ id: r.sessionId, title: r.title || r.kind, sessionId: r.sessionId, runId: r.runId || undefined, streaming: r.runStatus === 'running' || r.runStatus === 'queued' || !!live?.some((l) => l.sessionId === r.sessionId && l.streaming) }))
   for (const l of live || []) {
     if (hidden.some((h) => h.sessionId === l.sessionId || (!!h.runId && h.runId === l.runId))) continue
     // 并进 live 的行只带 runId、不带 sessionId,且 merge 只增不删:Historian 子会话跑过新 run 后,

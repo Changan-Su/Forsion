@@ -1,5 +1,7 @@
-/** 摘要栏(右侧车道多卡片,2026-10-25 用户选方案 A)的两份全局偏好:卡片顺序、每种卡片的折叠状态。
- *  按卡片种类记、不按会话记(用户定);存 localStorage,读不到 / 写不进就当没有偏好(隐私窗口、配额满)。 */
+/** 摘要栏(右侧车道多卡片,2026-10-25 用户选方案 A)的全局偏好:卡片顺序。
+ *  存 localStorage,读不到 / 写不进就当没有偏好(隐私窗口、配额满)。
+ *  ⚠️ 折叠状态**不再**记在这里:10-29 用户选第三轮方案 A,开合跟着内容走、手动的只管到这一轮结束(summaryOpen.ts)。
+ *  旧版存下的 `open` 字段读的时候直接丢掉,下次写入时就没了 —— 这是用户要的行为,别加回「按卡片种类全局记住」。 */
 import { create } from 'zustand'
 
 const KEY = 'forsion.summaryCards'
@@ -7,18 +9,13 @@ const KEY = 'forsion.summaryCards'
 interface Prefs {
   /** 用户拖过才有;没有 = 默认顺序。只记 id,不在场的卡片也留在序列里,换会话回来位置不丢。 */
   order?: string[]
-  /** 用户点过才有;没有 = 卡片自己的默认(见 SummaryRail 的 defaultOpen)。 */
-  open: Record<string, boolean>
 }
 
 function load(): Prefs {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) || '{}')
-    return {
-      order: Array.isArray(raw.order) ? raw.order.filter((k: unknown) => typeof k === 'string') : undefined,
-      open: raw.open && typeof raw.open === 'object' ? raw.open : {},
-    }
-  } catch { return { open: {} } }
+    return { order: Array.isArray(raw.order) ? raw.order.filter((k: unknown) => typeof k === 'string') : undefined }
+  } catch { return {} }
 }
 
 export const useSummaryPrefs = create<Prefs>(load)
@@ -26,11 +23,6 @@ export const useSummaryPrefs = create<Prefs>(load)
 const save = (next: Prefs): void => {
   useSummaryPrefs.setState(next, true)
   try { localStorage.setItem(KEY, JSON.stringify(next)) } catch { /* 存不进就只在本次有效 */ }
-}
-
-export const setCardOpen = (id: string, open: boolean): void => {
-  const s = useSummaryPrefs.getState()
-  if (s.open[id] !== open) save({ ...s, open: { ...s.open, [id]: open } })
 }
 
 /** undefined = 恢复默认顺序。 */

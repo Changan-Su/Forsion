@@ -23,6 +23,20 @@ describe('plugin-contract.json ↔ 宿主 CSS', () => {
   it('每个公开类名宿主都有规则', () => {
     expect(Object.keys(contract.classes).filter((c) => !new RegExp(`${esc(c)}(?![\\w-])`).test(css))).toEqual([]);
   });
+  it('插件视图的基础样式:零权重、全局 button 重置让出同一批按钮、只用公开 token 不写兜底、排在重置与表单基线之后', () => {
+    const base = readFileSync(join(ROOT, 'desktop/frontend/src/styles/base.css'), 'utf8');
+    const start = base.indexOf('/* plugin-view-base:start'), end = base.indexOf('/* plugin-view-base:end');
+    expect(start).toBeGreaterThan(base.indexOf('/* form-baseline:end */'));
+    const block = base.slice(start, end).replace(/\/\*[\s\S]*?\*\//g, '');
+    // 重置让出的那批与基础样式接管的那批必须逐字同一串:差一个字就是两头都不管(UA 灰按钮)或两头都管(插件零权重规则又输)
+    const scope = /^:where\(([^{]*?)\) \{/m.exec(block)?.[1];
+    expect(scope).toMatch(/^\[data-plugin-view-host\] button:not\(\[class\]/);
+    expect(base).toContain(`button:where(:not(${scope})) { font: inherit;`);
+    // 每条规则都整条包在 :where() 里
+    expect(block.match(/^[^\s}][^{]*\{/gm)?.filter((sel) => !sel.startsWith(':where('))).toEqual([]);
+    const bad = [...block.matchAll(/var\((--[\w-]+)([^)]*)\)/g)].filter(([, t, rest]) => !tokens.includes(t) || rest.trim()).map((m) => m[0]);
+    expect(bad).toEqual([]);
+  });
   it('since / fallbackAllowed / deprecated 只指向契约里的 token', () => {
     const pub = new Set(tokens);
     expect(Object.keys(contract.since).filter((t) => t !== '$comment' && !pub.has(t))).toEqual([]);

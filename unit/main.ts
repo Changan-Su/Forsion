@@ -2,7 +2,7 @@ import { mkdir, readFile, open, rm } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { startBasicUnit, type UnitConfig } from './host'
+import { startBasicUnit, type UnitConfig, type PluginInstallation } from './host'
 import { readConfig, writeConfig, installations } from './config'
 import { readPackage, validId } from './packages'
 import { localOwnerToken } from './localWorkspace'
@@ -10,12 +10,16 @@ import { installPackage } from './install'
 import { migrateBackend } from './backendRunner'
 import { sendControl, startControl, unitIsOffline, type ControlCommand } from './control'
 import desktop from '../desktop/package.json'
-import { stageRelease } from './releases'
+import { stageRelease, releaseSignature, UNTRUSTED_RELEASE } from './releases'
 import type { ManagementCommand } from './management'
+import { OperationError } from './errors'
 
 const dist = dirname(fileURLToPath(import.meta.url))
 const args = process.argv.slice(2)
-const commands = ['init', 'install', 'stage', 'update', 'run', 'migrate', 'enable', 'disable', 'restart', 'status', 'access']
+const referenceFlag = args.indexOf('--reference')
+const reference = referenceFlag >= 0
+if (reference) args.splice(referenceFlag, 1)
+const commands = ['init', 'install', 'stage', 'update', 'run', 'migrate', 'enable', 'disable', 'restart', 'status', 'access', 'login', 'logout', 'account']
 const action = commands.includes(args[0]) ? args.shift()! : 'run'
 const configArgument = args.shift()
 const file = resolve(configArgument || (action === 'init' ? 'forsion-unit' : 'unit.json'))
@@ -26,9 +30,10 @@ async function findInstallation(config: UnitConfig, id?: string) {
   throw new Error(`Plugin is not installed: ${id}`)
 }
 async function run() {
+  if (reference && action !== 'install' && action !== 'update') throw new Error('--reference applies to install and update')
   if (action === 'update') {
     if (!configArgument?.trim() || args.length !== 2 || args.some((arg) => !arg.trim())) {
-      throw new Error('Usage: node main.mjs update <unit.json> <plugin-id> <package-path>')
+      throw new Error('Usage: node main.mjs update <unit.json> <plugin-id> <package-path> [--reference]')
     }
     if (!validId(args[0])) throw new Error('Invalid plugin id')
   }
@@ -49,18 +54,31 @@ async function run() {
     try { await handle.writeFile(JSON.stringify(config, null, 2) + '\n') } finally { await handle.close() }
     print({ config: path, instanceId: config.instanceId }); return
   }
-  if (action === 'install') { if (!args[0]) throw new Error('A plugin package directory is required'); print(await installPackage(file, resolve(args[0]))); return }
+  if (action === 'install') { if (!args[0]) throw new Error('A plugin package directory is required'); print(await installPackage(file, resolve(args[0]), { reference })); return }
   const config = await readConfig(file)
   config.workerFile ||= resolve(dist, 'backendWorker.mjs')
   if (action === 'stage') { print(await stageRelease(config.dataDir!, resolve(args[0]), config.version)); return }
   if (action === 'update') {
     await findInstallation(config, args[0])
-    print(await installPackage(file, resolve(args[1]), { updateId: args[0] })); return
+    print(await installPackage(file, resolve(args[1]), { updateId: args[0], reference })); return
   }
   if (action === 'access') {
     if (config.workspace?.mode !== 'local') throw new Error('Public sites use their Account provider')
     const token = await localOwnerToken(config.dataDir!)
     print({ url: `http://${config.bindHost || '127.0.0.1'}:${config.port}${config.basePath}#unit-owner=${token}` }); return
+  }
+  if (action === 'login' || action === 'logout' || action === 'account') {
+    const request = (command: ControlCommand) => sendControl(config.dataDir!, command).catch((error) => { throw unitIsOffline(error) ? new Error('Unit is not running') : error })
+    if (action !== 'login') { print(await request({ action })); return }
+    const started = await request({ action, cloudUrl: args[0] }) as { url?: string; userCode?: string }
+    print(started)
+    if (!started.url) return
+    console.error('Open the link in any browser and confirm the code. Waiting for approval...')
+    for (const deadline = Date.now() + 600_000; Date.now() < deadline; await new Promise((done) => setTimeout(done, 2000))) {
+      const account = await request({ action: 'account' }) as { loggedIn?: boolean }
+      if (account.loggedIn) { print(account); return }
+    }
+    throw new Error('Sign-in timed out')
   }
   if (action !== 'run') {
     try { print(await sendControl(config.dataDir!, { action: action as ControlCommand['action'], id: args[0] })); return }
@@ -117,8 +135,40 @@ async function run() {
         if (!command.path) throw new Error('A prepared package is required')
         return stageRelease(config.dataDir!, command.path, config.version)
       }
-      if (!['enable', 'disable', 'restart', 'update', 'migrate'].includes(command.action)) throw new Error('Unknown Unit command')
+      if (command.action === 'login' || command.action === 'logout' || command.action === 'account') {
+        if (command.remote) throw new Error('The account is managed from this device only')
+        const account = unit!.account()
+        return command.action === 'login' ? account.login(command.cloudUrl) : command.action === 'logout' ? account.logout() : account.status()
+      }
+      if (!['enable', 'disable', 'restart', 'update', 'migrate', 'install', 'uninstall'].includes(command.action)) throw new Error('Unknown Unit command')
+      if (command.action === 'install') {
+        if (!command.path) throw new Error('An install package path is required')
+        // The host validates and activates first; unit.json gains the entry only once the plugin runs.
+        const installed = await unit!.install(command.path), added: PluginInstallation = { path: resolve(command.path), enabled: true }
+        config.plugins.push(added)
+        try { await writeConfig(file, config) }
+        catch (error) {
+          console.error(`[unit] Could not save unit.json after installing ${installed.id}:`, error) // remove() may replace this error in the job record
+          config.plugins.splice(config.plugins.indexOf(added), 1)
+          await installed.remove() // RollbackIncomplete keeps the version directory and reaches the job record.
+          throw error
+        }
+        return status()
+      }
       const entry = await findInstallation(config, command.id)
+      if (command.action === 'uninstall') {
+        // Files stay on disk: the version directory and dataDir/plugins/<id> survive an uninstall.
+        const index = config.plugins.indexOf(entry), restore = await unit!.uninstall(command.id!)
+        config.plugins.splice(index, 1)
+        try { await writeConfig(file, config) }
+        catch (error) {
+          console.error(`[unit] Could not save unit.json after uninstalling ${command.id}:`, error) // restore() may replace this error in the job record
+          config.plugins.splice(index, 0, entry)
+          await restore()
+          throw error
+        }
+        return status()
+      }
       const previous = { ...entry }
       if (command.action === 'update') {
         if (!command.path) throw new Error('An update package path is required')
@@ -143,8 +193,15 @@ async function run() {
     }
     executeManagement = async (command, authorize) => {
       const apply = (action: ControlCommand) => enqueue(async () => { await authorize(); return dispatch(action) })
-      if (command.action === 'update') return installPackage(file, command.path!, { updateId: command.id,
+      // Both remote paths verify the private version directory, the bytes that actually get activated.
+      const verify = async (root: string) => {
+        if (await releaseSignature(root, config.management?.trustedKeys ?? []) !== 'trusted') throw new OperationError(UNTRUSTED_RELEASE)
+      }
+      if (command.action === 'update') return installPackage(file, command.path!, { updateId: command.id, verify,
         releaseDigest: command.releaseDigest, applyUpdate: (id, path) => apply({ action: 'update', id, path }) })
+      // Same immutable version directory as update; the owner's dispatch is the only unit.json writer.
+      if (command.action === 'install') return installPackage(file, command.path!, { installId: command.id, verify,
+        releaseDigest: command.releaseDigest, applyInstall: (id, path) => apply({ action: 'install', id, path }) })
       return apply({ action: command.action, id: command.id })
     }
     control = await startControl(config.dataDir!, (command) => enqueue(() => dispatch(command)))

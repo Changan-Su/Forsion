@@ -1,7 +1,6 @@
 // calendarDate 存储编码纯逻辑:parse / serialize round-trip / allDay 判定 / 显示格式化。
 import { describe, expect, it } from 'vitest'
 import { parseCalDate, calDateToValue, fmtCalDate } from './calDate'
-import { seedCalendarDb, dbFileSchema } from './schema'
 
 describe('parseCalDate', () => {
   it('全天(仅日期)', () => {
@@ -41,34 +40,4 @@ describe('fmtCalDate', () => {
   it('跨日范围', () =>
     expect(fmtCalDate(parseCalDate('2026-07-06T10:00/2026-07-08T09:00'))).toBe('7月6日 10:00 → 7月8日 09:00'))
   it('null → 空串', () => expect(fmtCalDate(null)).toBe(''))
-})
-
-describe('seedCalendarDb', () => {
-  it('过 dbFileSchema(含 calendarDate/todo 自定义 type)', () => {
-    expect(dbFileSchema.safeParse(seedCalendarDb()).success).toBe(true)
-  })
-  it('日期列的值能被 parseCalDate 解析', () => {
-    const db = seedCalendarDb()
-    const dateCol = db.columns.find((c) => c.type === 'calendarDate')!
-    for (const r of db.rows) {
-      const v = r.cells[dateCol.id]
-      if (v != null) expect(parseCalDate(v as string)).not.toBeNull()
-    }
-  })
-  // ⚠️ 种子日期必须相对播种当天算。写死绝对日期 → 过几周全部落进待办视图恒置顶的「逾期」桶,
-  //    用户第一眼看到的就是「逾期 53 天 欢迎使用 Calendar Space」。负对照:把 day(n) 改回
-  //    '2026-07-06' 之类的字面量,这条必须变红。
-  it('种子日期相对播种当天,永远不会一开箱就逾期', () => {
-    const seeded = new Date(2030, 0, 15)
-    const db = seedCalendarDb(seeded)
-    const dateCol = db.columns.find((c) => c.type === 'calendarDate')!
-    const floor = new Date(2030, 0, 15).getTime()
-    for (const r of db.rows) {
-      const v = r.cells[dateCol.id]
-      if (v == null) continue
-      const cd = parseCalDate(v as string)!
-      expect(new Date(cd.start.slice(0, 10)).getTime()).toBeGreaterThanOrEqual(new Date('2030-01-15').getTime())
-      expect(floor).toBeGreaterThan(0)
-    }
-  })
 })

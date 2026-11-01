@@ -17,7 +17,11 @@ function backendDependencyFilter(lock) {
       throw new Error(`Production dependency would be excluded: ${name}`);
     }
   }
-  return ['**/*', ...excluded.map((name) => `!${name}{,/**/*}`)];
+  return ['**/*', ...excluded.map((name) => `!${name}{,/**/*}`),
+    // Declarations and source maps are not executable dependencies. Preserve
+    // source .ts, runtime assets, package metadata and all license notices.
+    '!**/*.d.{ts,mts,cts}', '!**/*.{js,mjs,cjs,ts,mts,cts,css}.map',
+  ];
 }
 
 module.exports = { backendDependencyFilter };

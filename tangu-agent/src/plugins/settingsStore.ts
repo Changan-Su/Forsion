@@ -193,26 +193,40 @@ export async function deletePluginFile(id: string, scope: Scope, name: string): 
   await fsp.rm(path.join(filesDirOf(id, scope), sanitizeFileName(name)), { force: true });
 }
 
-/** 卸载清理:删全局设置(config 段 + legacy 目录)、每-agent 覆盖与 blob、内存缓存。插件文件夹删除与重启由调用方负责。 */
-export async function clearPluginData(id: string): Promise<void> {
+/** 卸载:把设置交给回收站 —— 返回要挪走的路径(legacy 目录、插件数据目录、每个 Agent 的覆盖与 blob)和全局设置的快照,
+ *  并从 config 段与内存缓存里拿掉。挪文件、插件文件夹、重启都由调用方负责;恢复用 restorePluginGlobal 写回快照。 */
+export async function takePluginData(id: string): Promise<{ paths: string[]; global: unknown }> {
   sanitizeId(id);
+  let global: unknown;
   updateSection('plugins', (sec: any) => {
     if (!sec?.global || !(id in sec.global)) return undefined;
-    const { [id]: _omit, ...rest } = sec.global;
+    const { [id]: taken, ...rest } = sec.global;
+    global = taken;
     return { ...sec, global: rest };
   });
-  await fsp.rm(path.join(tanguHome(), 'plugins-config', id), { recursive: true, force: true });
+  const paths = [path.join(tanguHome(), 'plugins-config', id), path.join(tanguHome(), 'plugin-data', id)];
   let slugs: string[] = [];
   try {
     slugs = (await fsp.readdir(agentsDir(), { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
   } catch { /* 无 agents 目录 */ }
-  for (const slug of slugs) {
-    await fsp.rm(path.join(agentsDir(), slug, 'plugins', `${id}.json`), { force: true }).catch(() => {});
-    await fsp.rm(path.join(agentsDir(), slug, 'plugins', `${id}-files`), { recursive: true, force: true }).catch(() => {});
-  }
+  for (const slug of slugs) paths.push(path.join(agentsDir(), slug, 'plugins', `${id}.json`), path.join(agentsDir(), slug, 'plugins', `${id}-files`));
   for (const k of [...cache.keys()]) {
     if (k === id || k.startsWith(`${id}:`)) cache.delete(k);
   }
+  return { paths, global };
+}
+
+/** 命令行卸载(`tangu plugin uninstall`)的硬删:同 takePluginData,但不进回收站。plugin-data 留着(老行为)。 */
+export async function clearPluginData(id: string): Promise<void> {
+  const { paths } = await takePluginData(id);
+  for (const p of paths) if (path.basename(path.dirname(p)) !== 'plugin-data') await fsp.rm(p, { recursive: true, force: true }).catch(() => {});
+}
+
+export function restorePluginGlobal(id: string, value: unknown): void {
+  sanitizeId(id);
+  if (value === undefined) return;
+  updateSection('plugins', (sec: any) => ({ ...(sec || {}), global: { ...(sec?.global || {}), [id]: value } }));
+  for (const k of [...cache.keys()]) if (k === id || k.startsWith(`${id}:`)) cache.delete(k);
 }
 
 /** 路由层解析 ?scope=global|agent:<slug> → Scope。 */

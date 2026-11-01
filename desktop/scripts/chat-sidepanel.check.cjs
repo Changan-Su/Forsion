@@ -30,7 +30,7 @@
  *    它是 inset:0 的铺满层,rect 恒等于整列,量它必然「完美居中」= 假绿。
  * ⚠️ 先 npm run build:量的是 out/ 里的产物,源码改了没构建就是白测。
  * ⚠️ Amadeus 库由本脚本种在临时目录(seedVault:Alpha / Beta 两篇)。不种的话首启无 lastVault 会落到
- *    本机真实的 ~/Forsion-Dev/Amadeus:结果随那份库的第一篇而变,还会往真库里补种 Calendar.db。
+ *    本机真实的 ~/Forsion-Dev/Amadeus:结果随那份库的第一篇而变。
  *    6 还隐含 host 会话(引用是本机绝对路径,云端会话按设计不挂 —— 见 Composer2 autoChip 的 isHost 闸)。
  *
  * 用法:npm run check:chatside

@@ -274,6 +274,13 @@ describe('setFocusTarget(S4:焦点 = 新会话建在哪)', () => {
     calls.length = 0
     await useApp.getState().renameSession('s-mac', 'renamed')
     expect(calls.map((c) => [c.method, c.url])).toEqual([['PATCH', `${UNIT}/agent/sessions/s-mac`]])
+    // 用户改名带 user,Historian 据此不再动;没改字不发(失焦提交不能把标题锁住);占位标题带 auto
+    expect(JSON.parse(calls[0].body!)).toEqual({ title: 'renamed', title_source: 'user' })
+    calls.length = 0
+    await useApp.getState().renameSession('s-mac', 'renamed')
+    expect(calls).toHaveLength(0)
+    await useApp.getState().renameSession('s-mac', 'placeholder', true)
+    expect(JSON.parse(calls[0].body!)).toEqual({ title: 'placeholder', title_source: 'auto' })
   })
 
   it('归档 / 取消归档那台上的会话:请求打那台,本地挪进 / 挪出归档区;本端列表刷新不把它塞回活动列表', async () => {

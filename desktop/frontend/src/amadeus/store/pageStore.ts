@@ -32,8 +32,10 @@ import { mergeMovedText, toastRenameCopy, toastSaveFailed, writeConflictCopy } f
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
 import { registerMessages, translate } from '../../i18n'
+import { sharedEntryFor, useSharedVault } from '../../stores/sharedVaultStore'
 
 registerMessages({
+  'amadeus.share.notShared': { zh: '{name} 没有把这一页共享给你', en: "{name} hasn't shared this page with you" },
   'pagestore.error.renameUnsupportedType': { zh: '该文件类型不支持在标题栏改名', en: 'This file type cannot be renamed from the title bar' },
   'pagestore.error.fdNameTaken': { zh: '目标名称已被同名 .fd 文件夹占用', en: 'That name is already taken by a .fd folder' },
   'pagestore.error.moveIntoOwnSubpage': { zh: '不能移动到该笔记自己的子页面里', en: "A note can't be moved into its own subpages" },
@@ -1061,6 +1063,12 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const vaultHit = resolveVaultPath(wanted, get().files, src) ?? resolveVaultPath(`${wanted}.md`, get().files, src)
       if (vaultHit) {
         window.dispatchEvent(new CustomEvent('amadeus:open-file', { detail: { path: vaultHit, newTab: opts?.newTab, split: opts?.split } }))
+        return
+      }
+      // 共享页里的范围外双链:对方看不到这一页,别问要不要新建。
+      const shared = src ? sharedEntryFor(useSharedVault.getState(), src) : null
+      if (shared) {
+        void import('../../stores/appStore').then(({ useApp }) => useApp.getState().toast(translate('amadeus.share.notShared', { name: shared.ownerName ?? '' })))
         return
       }
       // 未解析:询问而非静默建根。源须是笔记(.db 独立视图等无 .fd 语义 → 走根兜底)。

@@ -70,6 +70,7 @@ const EFFECT_EXCEPTIONS = new Map([
   ['frontend/src/styles/base.css|.cm-row-v.is-max.is-ultra, .cm-effort.is-max.is-ultra .cm-effort-value|filter', 'Ultra 档位文字辉光'],
   ['frontend/src/styles/base.css|.cm-effort.is-max.is-ultra .cm-effort-range|box-shadow', 'Ultra 档位轨道辉光'],
   ['frontend/src/styles/base.css|.cm-effort.is-max.is-ultra .cm-effort-thumb|box-shadow', 'Ultra 档位滑块辉光'],
+  ['../lcl/engine/engine.css|.lcl-droplet|filter', '液滴融合滤镜:形状由 SVG 滤镜合成,高程 token 的 box-shadow 进不了这一层,只能写 drop-shadow'],
 ])
 
 const INTERACTION_EXCEPTIONS = new Map([

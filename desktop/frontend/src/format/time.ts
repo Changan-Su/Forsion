@@ -167,6 +167,19 @@ export function formatRowTime(at: TimeInput, opts: TimeOpts = {}): string {
   return d.getFullYear() === n.getFullYear() ? formatMonthDay(d) : `${d.getFullYear()}/${formatMonthDay(d)}`
 }
 
+/** 一个将来的时刻(额度重置这类):今天 / 明天「今天 09:00」/「tomorrow 09:00」,更远「9月17日 09:00」。按**日历日**算。 */
+export function formatDayTime(at: TimeInput, opts: TimeOpts = {}): string {
+  const d = toDate(at)
+  if (!d) return ''
+  const locale = opts.locale ?? currentLocale()
+  const n = new Date(opts.now ?? Date.now())
+  const days = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() - new Date(n.getFullYear(), n.getMonth(), n.getDate()).getTime()) / DAY)
+  if (days === 0 || days === 1) {
+    try { return `${new Intl.RelativeTimeFormat(intlLocale(locale), { numeric: 'auto' }).format(days, 'day')} ${formatTime(d)}` } catch { /* 极老的运行时:落到日期 */ }
+  }
+  return formatDateTime(d, { ...opts, locale })
+}
+
 /** 聊天消息操作行的时刻:今天「23:03」,6 天内「星期四 23:03」/「Thursday 23:03」,更早「9月17日 23:03」。
  *  按**日历日**算而不是 24 小时滑窗:昨晚 23 点的消息今早看是「星期X 23:00」,不是光秃秃的「23:00」。 */
 export function formatMessageTime(at: TimeInput, opts: TimeOpts = {}): string {

@@ -83,10 +83,23 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
     const cancel = () => ctrl.abort(cfg.signal?.reason)
     cfg.signal?.addEventListener('abort', cancel, { once: true })
     const timer = setTimeout(() => ctrl.abort(), timeoutMs)
-    let res: Response
     try {
-      res = await (cfg.request ?? fetch)(`${cfg.apiBase}${path}${qs}`, { method, headers, body, signal: ctrl.signal })
+      const res = await (cfg.request ?? fetch)(`${cfg.apiBase}${path}${qs}`, { method, headers, body, signal: ctrl.signal })
+      assertAccount()
+      if (res.status === 401) {
+        cfg.onUnauthorized()
+        throw new HttpError(401, null)
+      }
+      // Reading the body is part of the request: keep cancellation and timeout alive.
+      const text = await res.text()
+      assertAccount()
+      let parsed: unknown
+      try { parsed = text ? JSON.parse(text) : undefined } catch { parsed = text }
+      if (!res.ok) throw new HttpError(res.status, parsed)
+      return parsed as T
     } catch (e) {
+      if (e instanceof HttpError) throw e
+      assertAccount()
       throw new HttpError(0, null, ctrl.signal.aborted
         ? translate('amxbridge.timeout', { s: Math.round(timeoutMs / 1000) })
         : translate('amxbridge.network', { msg: e instanceof Error ? e.message : String(e) }))
@@ -94,18 +107,6 @@ export function createCloudHttp(cfg: CloudHttpCfg): CloudHttp {
       clearTimeout(timer)
       cfg.signal?.removeEventListener('abort', cancel)
     }
-    assertAccount()
-    if (res.status === 401) {
-      cfg.onUnauthorized()
-      throw new HttpError(401, null)
-    }
-    // 响应体统一宽容解析:非 JSON / 空体 → undefined(DELETE 200 等)。
-    const text = await res.text().catch(() => '')
-    assertAccount()
-    let parsed: unknown
-    try { parsed = text ? JSON.parse(text) : undefined } catch { parsed = text }
-    if (!res.ok) throw new HttpError(res.status, parsed)
-    return parsed as T
   }
 
   // XHR 版 POST multipart:唯一目的是 upload.onprogress;鉴权/401 跳转/宽容解析/HttpError 与 request 对齐。

@@ -11,6 +11,8 @@ const suites = {
     'src/tools/registryArgs.test.ts', 'test/taskOutcomes.test.ts',
   ],
   desktop: [
+    'electron/remotesync/uploadConsistency.test.ts', 'frontend/src/services/cloudHttpBody.test.ts',
+    'frontend/src/services/cloudBridgeCas.test.ts',
     'electron/amadeus/fs/vaultIntegrity.test.ts', 'electron/amadeus/fs/trashLock.test.ts', 'electron/amadeus/fs/textWriteCas.test.ts',
     'electron/amadeus/fs/renameAtomic.test.ts', 'electron/amadeus/fs/watcher.ledger.test.ts',
     'electron/amadeus/ipc.unitEvents.test.ts',

@@ -11,8 +11,9 @@ import { inheritBinding, inheritChildRows, refForSession, targetForSession } fro
 import { registerMessages, useI18n } from '../../i18n'
 import { ChatView } from '../ChatView'
 import { useDeskGrip } from './AgentDesk'
-import { subChatRows } from './subChatRows'
+import { subChatRows, type SubChatRow } from './subChatRows'
 import { BtwPanel } from './BtwPanel'
+import { agentName, agentNames } from '../../agentName'
 import './childChat.css'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
@@ -22,19 +23,23 @@ registerMessages({
   'childchat.notStarted': { zh: '正在打开成员子会话…', en: 'Opening the member’s conversation…' },
   'childchat.legacy': { zh: '这条旧子任务没有保存独立会话。新任务会保留完整记录。', en: 'This older task has no saved child conversation. New tasks retain their full history.' },
   'childchat.retry': { zh: '重新载入', en: 'Reload' },
+  'childchat.doneMore': { zh: '已完成 {n} 个', en: '{n} finished' },
+  'childchat.doneLess': { zh: '收起已完成', en: 'Hide finished' },
 })
 
 /** 委派给具名 Agent 的子会话标题就是它的 name(引擎 label = def.name),按名反查头像 —— 同 ChatView 消息头像的口径;
  *  通用子代理 / 头脑风暴座位查不到,仍画 Bot(Bot 专属 Tangu 本体)。团队成员行直接带 slug。
  *  ponytail: 同名 Agent 取第一个;要精确就让引擎在 subchat 事件里带 agentSlug(旧引擎照样只能按名认)。 */
 function SubAgentGlyph({ title, slug, working }: { title: string; slug?: string; working?: boolean }) {
-  const def = useApp((s) => s.agentDefs.find((a) => (slug ? a.slug === slug : a.name === title)))
+  const def = useApp((s) => s.agentDefs.find((a) => (slug ? a.slug === slug : agentNames(a).includes(title))))
   const url = useApp((s) => (def ? s.agentAvatars[def.slug] : undefined))
   if (!def) return <Bot size={16} />
-  return <AgentAvatar name={def.name} url={url} size={18} className={`t2o-bar-avatar${working ? ' is-working' : ''}`} initialClassName="t2o-bar-avatar-text" data-subagent-avatar={def.slug} />
+  return <AgentAvatar name={agentName(def)} url={url} size={18} className={`t2o-bar-avatar${working ? ' is-working' : ''}`} initialClassName="t2o-bar-avatar-text" data-subagent-avatar={def.slug} />
 }
 
-/** Both persisted background work and live delegate events appear in the same compact list. */
+/** Both persisted background work and live delegate events appear in the same compact list.
+ *  在跑的一律列出;跑完的收进一行「已完成 N 个」(默认收着,点开就地展开)—— 引擎给的是这个会话历来全部子会话(最多 100 条),
+ *  全列出来会把进度卡塞满、把计划挤到下面(10-25 用户报)。换会话收回。 */
 export function SubChatStatus({ sessionId }: { sessionId: string }) {
   const { t } = useI18n()
   const cfg = useApp((s) => s.cfg)
@@ -42,9 +47,11 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
   // Historian 开着时它的子会话由 HistorianStatus 那一行代表(U-04);合并 / 去重口径见 subChatRows。
   const historianOn = useApp((s) => !!s.specialEnabled.historian)
   const [saved, setSaved] = useState<BackgroundSessionInfo[]>([])
+  const [showDone, setShowDone] = useState(false)
   useEffect(() => {
     let disposed = false
     setSaved([])
+    setShowDone(false)
     const load = () => void getBackgroundSessions(targetForSession(sessionId), sessionId).then((rows) => {
       const kept = inheritChildRows(rows, sessionId) // S4:子会话跟父会话在同一台上;撞上本端会话 / 别处的行丢掉(R-16)
       if (!disposed) setSaved(kept)
@@ -56,12 +63,19 @@ export function SubChatStatus({ sessionId }: { sessionId: string }) {
   }, [cfg, sessionId])
   const rows = subChatRows(saved, live, historianOn)
   if (!rows.length) return null
+  const running = rows.filter((r) => r.streaming)
+  const done = rows.filter((r) => !r.streaming)
+  const row = (r: SubChatRow) => <button key={r.id} type="button" className="t2o-desk-row" onClick={() => useChildChat.getState().open(sessionId, r)}>
+    <SubAgentGlyph title={r.title} working={r.streaming} /><span className="t2o-desk-name">{r.title}</span>
+    <span className="t2o-desk-activity">{t(r.streaming ? 'teamdesk.status.working' : 'teamdesk.status.done')}</span>
+    <ChevronRight size={12} />
+  </button>
   return <div className="t2o-team-status" data-subchat-status>
-    {rows.map((r) => <button key={r.id} type="button" className="t2o-desk-row" onClick={() => useChildChat.getState().open(sessionId, r)}>
-      <SubAgentGlyph title={r.title} working={r.streaming} /><span className="t2o-desk-name">{r.title}</span>
-      <span className="t2o-desk-activity">{t(r.streaming ? 'teamdesk.status.working' : 'teamdesk.status.done')}</span>
-      <ChevronRight size={12} />
-    </button>)}
+    {running.map(row)}
+    {done.length > 0 && <button type="button" className="t2-tsum-more" data-subchat-done aria-expanded={showDone} onClick={() => setShowDone((v) => !v)}>
+      {showDone ? t('childchat.doneLess') : t('childchat.doneMore', { n: done.length })}
+    </button>}
+    {showDone && done.map(row)}
   </div>
 }
 
@@ -116,7 +130,7 @@ export function ChildChatPanel({ parentId }: { parentId: string }) {
         void listMessages(targetForSession(sessionId), sessionId).then((records) => {
           if (disposed) return
           useApp.setState((state) => {
-            const restored = records.map((r) => recordToUi(r, undefined, (slug) => state.agentDefs.find((a) => a.slug === slug)?.name))
+            const restored = records.map((r) => recordToUi(r, undefined, (slug) => agentName(state.agentDefs.find((a) => a.slug === slug))))
             const ids = new Set(restored.map((m) => m.id))
             return { messagesBySession: { ...state.messagesBySession, [sessionId]: [...restored, ...(state.messagesBySession[sessionId] || []).filter((m) => !ids.has(m.id))].sort((a, b) => a.timestamp - b.timestamp) } }
           })

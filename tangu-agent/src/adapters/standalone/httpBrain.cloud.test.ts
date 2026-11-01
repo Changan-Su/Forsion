@@ -10,6 +10,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import http from 'node:http'
 import { createHttpBrain } from './httpBrain.js'
+import { AMADEUS_MAX_FILE_BYTES, AmadeusTooLargeError, HumanCalendarConflictError } from '../../seams/cloudBrain.js'
 
 interface Seen { method: string; url: string; auth: string; body: string }
 let srv: http.Server | undefined
@@ -113,5 +114,46 @@ describe('brain.cloud.request', () => {
     const dead = await createHttpBrain({ cloudUrl: 'http://127.0.0.1:1', token: 't' }).cloud!.request({ path: '/api/token-quota/my' })
     expect(dead.status).toBe(0)
     expect(typeof dead.error).toBe('string')
+  })
+})
+
+describe('brain.amadeus 默认日历(/api/agent/human/CALENDAR.db)', () => {
+  const answer = (status: number, json: unknown) => {
+    respond = (_req, res) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(json)) }
+  }
+  const facet = async () => createHttpBrain({ cloudUrl: await start(), token: 't' }).amadeus!
+
+  it('读:ok 带版本与旧位置;missing = 还没有文件', async () => {
+    const a = await facet()
+    answer(200, { status: 'ok', data: { rows: [] }, version: '3:abc', legacy: 'cloud://v/Calendar.db' })
+    expect(await a.readHumanCalendar!()).toEqual({ data: { rows: [] }, version: '3:abc', legacy: 'cloud://v/Calendar.db' })
+    expect(seen[0]).toMatchObject({ method: 'GET', url: '/api/agent/human/CALENDAR.db', auth: 'Bearer t' })
+    answer(200, { status: 'missing', legacy: null })
+    expect(await a.readHumanCalendar!()).toEqual({ data: null, version: null, legacy: null })
+  })
+
+  it('旧云端(401/403/404)和坏文件(422)= 用不了;其余失败抛错,不当成没有', async () => {
+    const a = await facet()
+    for (const status of [401, 403, 404, 422]) {
+      answer(status, { error: 'x' })
+      expect(await a.readHumanCalendar!()).toBeNull()
+    }
+    answer(503, { error: 'x' })
+    await expect(a.readHumanCalendar!()).rejects.toThrow('503')
+  })
+
+  it('写:带 data + version,新建时 version 是 null;409 → 冲突错误;超限不发', async () => {
+    const a = await facet()
+    answer(200, { ok: true, version: '1:abc' })
+    await a.writeHumanCalendar!({ rows: [] }, null)
+    expect(seen[0]).toMatchObject({ method: 'PUT', url: '/api/agent/human/CALENDAR.db' })
+    expect(JSON.parse(seen[0].body)).toEqual({ data: { rows: [] }, version: null })
+    answer(409, { error: 'HUMAN_CONFLICT' })
+    await expect(a.writeHumanCalendar!({ rows: [] }, '1:abc')).rejects.toBeInstanceOf(HumanCalendarConflictError)
+    answer(500, { error: 'HUMAN_FAILED' })
+    await expect(a.writeHumanCalendar!({ rows: [] }, '1:abc')).rejects.toThrow('500')
+    const sent = seen.length
+    await expect(a.writeHumanCalendar!({ pad: 'x'.repeat(AMADEUS_MAX_FILE_BYTES) }, null)).rejects.toBeInstanceOf(AmadeusTooLargeError)
+    expect(seen).toHaveLength(sent)
   })
 })

@@ -3,6 +3,7 @@
  *  初值(value 不进 DOM)—— 克隆里一律换成静态 h1,内容取宿主里那枚控件**此刻**的值(v3 / v4 标题同一类名)。 */
 export function printClone(host: HTMLElement): HTMLElement {
   const clone = host.cloneNode(true) as HTMLElement
+  clone.removeAttribute('data-lcl-ftoc') // 纸面上没有目录,别给它留沟
   const live = [...host.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input.amx-title-input, textarea.amx-title-input')]
   clone.querySelectorAll<HTMLElement>('input.amx-title-input, textarea.amx-title-input').forEach((el, i) => {
     const src = live[i]

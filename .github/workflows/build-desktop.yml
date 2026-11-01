@@ -16,7 +16,7 @@ on:
         description: Candidate platform scope (all release gates still run)
         type: choice
         default: all
-        options: [all, android]
+        options: [all, desktop, android]
   push:
     tags:
       - 'v*'
@@ -327,6 +327,7 @@ jobs:
   # 未配 → debug 签名包(文件名带 -debug,可直接安装)。versionCode=run_number(升级安装恒递增),
   # versionName=tag 去 v 前缀。
   build-android:
+    if: github.event_name != 'workflow_dispatch' || inputs.build_target != 'desktop'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4

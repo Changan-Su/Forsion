@@ -1,5 +1,6 @@
 /** Real electron-updater/NSIS download + SHA-512 verification against loopback fixtures.
- * The payload is inert text. Installation is disabled; cache/config live in a temporary directory.
+ * Optional FORSION_UPDATE_INSTALLER supplies an actual NSIS installer; otherwise inert text.
+ * Installation is disabled; cache/config live in a temporary directory.
  */
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), http = require('node:http')
@@ -12,16 +13,25 @@ async function main() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-win-update-'))
   const output = path.join(ROOT, 'outputs/windows-issues/website-provider.cjs')
   buildSync({ entryPoints: [path.join(ROOT, 'electron/websiteUpdateProvider.ts')], bundle: true, packages: 'external', platform: 'node', format: 'cjs', outfile: output })
-  const bytes = Buffer.from('Forsion updater integrity fixture. This file is not executable.\n')
-  const sha512 = createHash('sha512').update(bytes).digest('base64')
+  const payload = process.env.FORSION_UPDATE_INSTALLER
+  const bytes = payload ? null : Buffer.from('Forsion updater integrity fixture. This file is not executable.\n')
+  const size = payload ? fs.statSync(payload).size : bytes.length
+  const hash = createHash('sha512')
+  if (payload) {
+    const header = Buffer.alloc(2); const fd = fs.openSync(payload, 'r')
+    try { fs.readSync(fd, header, 0, 2, 0) } finally { fs.closeSync(fd) }
+    assert.equal(header.toString(), 'MZ', 'Real payload must be a Windows executable')
+    for await (const chunk of fs.createReadStream(payload)) hash.update(chunk)
+  } else hash.update(bytes)
+  const sha512 = hash.digest('base64')
   const seen = []
   const server = http.createServer((req, res) => {
     seen.push(req.url)
     if (req.url.startsWith('/download')) { res.writeHead(302, { Location: '/installer.exe' }); res.end(); return }
     if (req.url.startsWith('/latest.yml')) {
-      res.end(`version: 99.0.0\nfiles:\n  - url: installer.exe\n    sha512: ${sha512}\n    size: ${bytes.length}\npath: installer.exe\nsha512: ${sha512}\n`); return
+      res.end(`version: 99.0.0\nfiles:\n  - url: installer.exe\n    sha512: ${sha512}\n    size: ${size}\npath: installer.exe\nsha512: ${sha512}\n`); return
     }
-    if (req.url.startsWith('/installer.exe')) { res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': bytes.length }); res.end(bytes); return }
+    if (req.url.startsWith('/installer.exe')) { res.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Length': size }); if (payload) fs.createReadStream(payload).pipe(res); else res.end(bytes); return }
     res.writeHead(404); res.end()
   })
   await new Promise(r => server.listen(0, '127.0.0.1', r))
@@ -33,6 +43,11 @@ async function main() {
     const results = await app.evaluate(async (_, input) => {
       const require = globalThis.__windowsProbeRequire
       const fs = require('node:fs/promises'), path = require('node:path')
+      const hashFile = async file => {
+        const hash = require('node:crypto').createHash('sha512')
+        for await (const chunk of require('node:fs').createReadStream(file)) hash.update(chunk)
+        return hash.digest('base64')
+      }
       const { NsisUpdater } = require('electron-updater')
       const { WebsiteUpdateProvider } = require(input.provider)
       const checks = []
@@ -59,7 +74,7 @@ async function main() {
       site.setFeedURL(feed(input.sha512))
       check((await site.checkForUpdates()).updateInfo.version === '99.0.0', 'real NSIS updater accepts website provider metadata')
       const downloaded = await site.downloadUpdate()
-      check(downloaded.length === 1 && (await fs.readFile(downloaded[0])).toString('base64') === input.bytes, 'website redirect downloads correct bytes with SHA-512 validation')
+      check(downloaded.length === 1 && await hashFile(downloaded[0]) === input.sha512, 'website redirect downloads correct bytes with SHA-512 validation')
       const bad = await make('corrupted')
       bad.setFeedURL(feed(Buffer.alloc(64, 7).toString('base64')))
       await bad.checkForUpdates()
@@ -70,12 +85,13 @@ async function main() {
       generic.setFeedURL({ provider: 'generic', url: input.url })
       check((await generic.checkForUpdates()).updateInfo.version === '99.0.0', 'generic GitHub-style feed parses latest.yml')
       const files = await generic.downloadUpdate()
-      check(files.length === 1 && (await fs.readFile(files[0])).toString('base64') === input.bytes, 'generic feed downloads and verifies the same payload')
+      check(files.length === 1 && await hashFile(files[0]) === input.sha512, 'generic feed downloads and verifies the same payload')
       return checks
-    }, { provider: output, home, url, sha512, size: bytes.length, bytes: bytes.toString('base64') })
+    }, { provider: output, home, url, sha512, size })
     for (const name of results) console.log(`PASS ${name}`)
     assert.ok(seen.some(p => p.startsWith('/download')) && seen.some(p => p.startsWith('/latest.yml')))
     console.log(`${results.length}/${results.length} passed`)
+    console.log(JSON.stringify({ payload: payload ? path.basename(payload) : 'inert text', size, sha512, installed: false }))
   } finally {
     if (app) await app.close().catch(() => {})
     await new Promise(r => server.close(r))

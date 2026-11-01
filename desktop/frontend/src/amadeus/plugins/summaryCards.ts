@@ -18,11 +18,11 @@ export interface SummaryCardHost {
 }
 
 export interface SummaryCardContribution {
-  /** 插件内稳定 id(宿主拼成 `plugin:<pluginId>:<id>`,收起状态和顺序按它记)。 */
+  /** 插件内稳定 id(宿主拼成 `plugin:<pluginId>:<id>`,顺序按它记)。 */
   id: string
   /** 卡头标题;给 `{ zh, en }` 跟随界面语言。 */
   title: string | { zh: string; en: string }
-  /** 用户没点过折叠时是否收起;缺省展开。 */
+  /** 没有新内容时收不收(切到一个会话、或卡片在 Agent 没跑的时候出现);之后 `count` 变大会自动展开,用户手动开 / 收管到这一轮结束。缺省展开。 */
   defaultCollapsed?: boolean
   /** 往卡片正文里渲染。返回卸载函数。正文高度上限 240px,超出由宿主内滚。 */
   mount(el: HTMLElement, host: SummaryCardHost): void | (() => void)

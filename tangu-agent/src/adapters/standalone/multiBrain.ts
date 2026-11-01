@@ -17,6 +17,7 @@ import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, 
 import { streamAnthropicMessages } from '../../llm/anthropicMessages.js';
 import { streamOpenAiResponses } from '../../llm/openaiResponses.js';
 import { fetchProviderQuota } from '../../llm/providerQuota.js';
+import { MASKED_FROM } from '../../llm/outboundMask.js';
 import WebSocket from 'ws';
 import { randomUUID } from 'node:crypto';
 
@@ -294,6 +295,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
         throw new Error(`未找到 TTS 模型 ${req.model} 对应的直连 provider(需在 provider 的 ttsModelIds 声明或用 <providerId>/<model> 形式)`);
       },
     },
+    voices: httpBrain.voices, // 云端音色只有 Forsion 账号一条路:自带连接的复刻走 /agent/tts/voices/*
     realtime: {
       // 实时语音分发:<providerId>/<model> 命中本机 provider → 直连(只接百炼:Qwen-Omni / Qwen-Audio Realtime,OpenAI 兼容事件协议);
       // 否则是 Forsion 云端的实时模型 → 委托 httpBrain(云端中转,计费在云端)。
@@ -358,7 +360,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           const send = () => p[PROTOCOL_MARK] === 'anthropic-messages' ? streamAnthropicMessages(opts)
             : p[PROTOCOL_MARK] === 'openai-responses' ? streamOpenAiResponses(opts)
             : streamOpenAiCompat(opts);
-          const tag = llmDebug.get(p);
+          const tag = llmDebug.get(p[MASKED_FROM] ?? p);
           if (!tag) return send();
           const t0 = Date.now();
           const res = await send();

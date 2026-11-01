@@ -1,15 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, realpath, stat } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, writeFile, readFile, rm, symlink, realpath, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installPackage } from '../../unit/install'
 import { readPackage } from '../../unit/packages'
 import { writeConfig, readConfig, installations } from '../../unit/config'
 import { controlAddress, startControl, sendControl } from '../../unit/control'
-import { stageRelease, resolveRelease } from '../../unit/releases'
+import { stageRelease, resolveRelease, releaseSignature, packageDigest } from '../../unit/releases'
+import { RollbackIncomplete } from '../../unit/errors'
+import { signDir, testKeyPair } from './bundleSignature.testutil'
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), 'unit-install-'))
+  const root = await realpath(await mkdtemp(join(tmpdir(), 'unit-install-')))
   const source = join(root, 'source'), file = join(root, 'state/unit.json')
   await mkdir(source)
   await writeFile(join(source, 'main.js'), 'ui v1')
@@ -43,6 +45,7 @@ describe('portable Unit installation', () => {
     try {
       await symlink(join(source, 'main.js'), join(source, 'alias.js'))
       const first = await installPackage(file, source)
+      expect(first).not.toHaveProperty('reference')
       expect(await realpath(join(first.path, 'alias.js'))).toBe(await realpath(join(first.path, 'main.js')))
       await writeFile(join(source, 'manifest.json'), JSON.stringify({ id: 'fixture', version: '1.1.0', apiVersion: 1, main: 'main.js' }))
       await writeFile(join(source, 'main.js'), 'ui v2')
@@ -54,6 +57,24 @@ describe('portable Unit installation', () => {
       expect((await stat(file)).mode & 0o777).toBe(0o600)
     } finally { await rm(root, { recursive: true, force: true }) }
   })
+  it('keeps a private copy for a reference whose dependencies are installed with npm ci', async () => {
+    const { root, source, file } = await fixture()
+    try {
+      const identity = { name: 'fixture', version: '1.0.0' }
+      await mkdir(join(source, 'backend'))
+      await writeFile(join(source, 'backend/main.mjs'), 'export default () => ({})')
+      await writeFile(join(source, 'backend/package.json'), JSON.stringify(identity))
+      await writeFile(join(source, 'backend/package-lock.json'), JSON.stringify({ ...identity, lockfileVersion: 3, packages: { '': identity } }))
+      await writeFile(join(source, 'manifest.json'), JSON.stringify({ id: 'fixture', version: '1.0.0', apiVersion: 1,
+        backend: { apiVersion: 1, main: 'backend/main.mjs', dependencies: { mode: 'npm-ci' } } }))
+      const before = await packageDigest(source)
+      const installed = await installPackage(file, source, { reference: true })
+      expect(installed.reference).toBe(false)
+      expect(installed.path.startsWith(join(root, 'state/plugins/fixture/'))).toBe(true)
+      expect(await packageDigest(source)).toBe(before)
+      expect(installations(await readConfig(file)).map((p) => p.path)).toEqual([installed.path])
+    } finally { await rm(root, { recursive: true, force: true }) }
+  }, 30_000)
   it('rejects private environment files and external symlinks before changing configuration', async () => {
     const { root, source, file } = await fixture()
     try {
@@ -62,6 +83,7 @@ describe('portable Unit installation', () => {
       await rm(join(source, '.env'))
       await symlink(file, join(source, 'external.json'))
       await expect(installPackage(file, source)).rejects.toThrow('symlink escapes')
+      await expect(installPackage(file, source, { reference: true })).rejects.toThrow('symlink escapes')
       expect(installations(await readConfig(file))).toEqual([])
     } finally { await rm(root, { recursive: true, force: true }) }
   })
@@ -75,6 +97,55 @@ describe('portable Unit installation', () => {
       await expect(readPackage(source)).rejects.toThrow('different OS')
       await writeFile(join(source, 'manifest.json'), JSON.stringify({ ...manifest, apiVersion: 2 }))
       await expect(readPackage(source)).rejects.toThrow('unsupported plugin API')
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it('classifies release signatures for remote management: covered entries, trusted keys, untouched bytes', async () => {
+    const { root, source } = await fixture()
+    const trusted = testKeyPair(), stranger = testKeyPair()
+    try {
+      await mkdir(join(source, 'backend'))
+      await writeFile(join(source, 'backend/index.mjs'), 'export default () => ({})')
+      await writeFile(join(source, 'manifest.json'), JSON.stringify({ id: 'fixture', version: '1.0.0', apiVersion: 1, main: 'main.js',
+        backend: { apiVersion: 1, main: './backend/index.mjs' } }))
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('missing')
+      await signDir(source, trusted.privateKey)
+      expect(await releaseSignature(source, [stranger.publicKeyPem, trusted.publicKeyPem])).toBe('trusted')
+      expect(await releaseSignature(source, [])).toBe('untrusted')
+      expect(await releaseSignature(source, [stranger.publicKeyPem])).toBe('untrusted')
+      await signDir(source, trusted.privateKey, ['manifest.json', 'main.js'])
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted') // backend entry not covered
+      await signDir(source, trusted.privateKey)
+      await mkdir(join(source, 'backend/node_modules/empty'), { recursive: true }) // directories carry no bytes to sign
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('trusted')
+      // Complete packages only: an unsigned file could shadow a signed module during resolution.
+      await writeFile(join(source, 'backend/node_modules/shadow.js'), 'module.exports = "unsigned"')
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted')
+      await rm(join(source, 'backend/node_modules/shadow.js'))
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('trusted')
+      await symlink('../index.mjs', join(source, 'backend/node_modules/alias.mjs'))
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted') // links cannot be signed
+      await rm(join(source, 'backend/node_modules/alias.mjs'))
+      await writeFile(join(source, 'backend/index.mjs'), 'export default () => ({ tampered: true })')
+      expect(await releaseSignature(source, [trusted.publicKeyPem])).toBe('untrusted')
+    } finally { await rm(root, { recursive: true, force: true }) }
+  })
+  it('verifies the private version directory before activation and keeps it only when a rollback is unconfirmed', async () => {
+    const { root, source, file } = await fixture()
+    const versions = join(root, 'state/plugins/fixture'), before = await readFile(file, 'utf8')
+    try {
+      let verified = '', applied = false
+      await expect(installPackage(file, source, {
+        verify: async (dir) => { verified = dir; expect(await readFile(join(dir, 'main.js'), 'utf8')).toBe('ui v1'); throw new Error('Rejected bytes') },
+        applyInstall: async () => { applied = true },
+      })).rejects.toThrow('Rejected bytes')
+      expect(verified.startsWith(versions + '/')).toBe(true) // the copy that would run, not the release it came from
+      expect(applied).toBe(false)
+      expect(await readdir(versions)).toEqual([])
+      await expect(installPackage(file, source, { applyInstall: async () => { throw new Error('Activation failed') } })).rejects.toThrow('Activation failed')
+      expect(await readdir(versions)).toEqual([])
+      await expect(installPackage(file, source, { applyInstall: async () => { throw new RollbackIncomplete('Still referenced') } })).rejects.toThrow('Still referenced')
+      expect(await readdir(versions)).toHaveLength(1)
+      expect(await readFile(file, 'utf8')).toBe(before)
     } finally { await rm(root, { recursive: true, force: true }) }
   })
   it('uses a short owner-only socket even when the data path is long', async () => {

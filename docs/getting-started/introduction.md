@@ -11,17 +11,15 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：在自己的 M
 
 **记录与连接 → 记住背景 → 团队思考与执行 → 主动跟进 → 成果沉淀。** 插件为这条路径补充工具、技能与工作空间，前一次积累成为下一次工作的起点。
 
-Forsion is a **local-first AI second brain**: block editing on your own Markdown files, editable long-term memory, Agents with distinct perspectives, persistent TEAMs for parallel work, and Muse for proactive follow-up. Plugins extend the tools and workspace; results return to the project and become a starting point for what comes next.
+## 第二大脑如何接上你的工作
 
-## 第二大脑如何接上你的工作 / How it connects your work
-
-| 能力 / Capability | 使用价值 / Value |
+| 能力 | 使用价值 |
 | --- | --- |
-| [块编辑与知识库](../amadeus/editor.md) / Markdown blocks | 直观组织本地文件，连接来源与产物。 / Organize local files and connect sources to outputs. |
-| [长期记忆](../agents/memory.md) / Memory | 检查、修改并沿用重要背景。 / Inspect, revise, and reuse useful context. |
-| [TEAM 与 Team Desk](../chat/group-chat.md) / [TEAM](../chat/group-chat.en.md) | 保存成员与职责，看见并行工作过程。 / Retain roles and follow parallel work. |
-| [Muse](../agents/muse.md) / Follow-up | 在配置范围内持续跟进，将结果带回收件箱。 / Follow up within configured boundaries and report to Inbox. |
-| [插件](../customization/plugins.md) / Plugins | 加入工具、Agent、技能与工作空间。 / Add tools, Agents, skills, and workspaces. |
+| [块编辑与知识库](../amadeus/editor.md) | 直观组织本地文件，连接来源与产物。 |
+| [长期记忆](../agents/memory.md) | 检查、修改并沿用重要背景。 |
+| [TEAM 与 Team Desk](../chat/group-chat.md) | 保存成员与职责，看见并行工作过程。 |
+| [Muse](../agents/muse.md) | 在配置范围内持续跟进，将结果带回收件箱。 |
+| [插件](../customization/plugins.md) | 加入工具、Agent、技能与工作空间。 |
 
 ## 产品家族
 

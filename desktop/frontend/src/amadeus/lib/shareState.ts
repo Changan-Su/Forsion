@@ -32,3 +32,18 @@ export function publishStateFor(path: string, publishes: PublishRow[]): PublishS
   if (anc) return { kind: 'inherited', via: anc.path, viaMode: anc.mode === 'subtree' ? 'subtree' : 'page', token: anc.token }
   return { kind: 'none' }
 }
+
+/** 到期还剩几个自然日:0 = 今天,1 = 明天;负数 = 已过期;长期共享返回 null。 */
+export function daysUntil(expiresAt: string | null | undefined, now = Date.now()): number | null {
+  if (!expiresAt) return null
+  const day = (t: number): number => new Date(t).setHours(0, 0, 0, 0)
+  return Math.round((day(new Date(expiresAt).getTime()) - day(now)) / 86_400_000)
+}
+
+/** 「我共享的」排序:有人加入的在前,先到期的在前,长期的其次;没人加入的排后面。 */
+export function byExpiry<T extends { expiresAt: string | null; participants: unknown[] }>(a: T, b: T): number {
+  const joined = Number(b.participants.length > 0) - Number(a.participants.length > 0)
+  if (joined) return joined
+  const at = (s: T): number => (s.expiresAt ? new Date(s.expiresAt).getTime() : Infinity)
+  return at(a) === at(b) ? 0 : at(a) < at(b) ? -1 : 1
+}

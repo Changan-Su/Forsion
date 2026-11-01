@@ -18,13 +18,17 @@ export const isHumanFile = (f: unknown): f is HumanFile => typeof f === 'string'
  *  agent = 这个 Agent 希望怎么和人协作(对任何和它协作的人都成立);project = 在这个项目里怎么协作。
  *  kind 'human' 也装 human/ 里另外三份(AGENT / SOUL / MEMORY),用同一套版本与历史。 */
 export type HumanScope = { kind: 'agent'; slug: string } | { kind: 'project'; cwd: string } | { kind: 'human'; file: HumanFile };
+const isTransfer = (r: { source?: { kind?: string } }): boolean => r.source?.kind === 'move' || r.source?.kind === 'promote';
 export interface HumanChange {
   id: string; scope: HumanScope; summary: string; evidence: string; at: string;
   actor: 'agent' | 'user'; beforeVersion: string; afterVersion: string; undoOf?: string;
   /** Agent 写入时引擎盖的章:它是按哪一版写法写的。没有这个字段的 agent 写入 = 2.13.1 及更早的引擎写的(那时的指引让它把自己的承诺也写进来)。
    *  界面靠它判断「这份是旧版本写的」。不用日期判:已发出去的旧版本在修复之后照样在写旧样子的文档。 */
   rules?: number;
+  /** 这一笔是从哪条路写的(画像那几条入口盖的章;界面的修改记录据此多一行来源)。没有 = 协作说明工具 / 设置页 / 旧版写的。 */
+  source?: HumanChangeSource;
 }
+export interface HumanChangeSource { kind: 'remember' | 'dream' | 'move' | 'promote' | 'user'; agent?: string; action?: 'add' | 'update' | 'forget' }
 export const HUMAN_RULES = 2;
 interface Revision extends HumanChange { before: string | null; after: string; committed: boolean }
 export interface HumanDocument {
@@ -101,21 +105,22 @@ function snapshot(loc: Location): HumanDocument {
   return {
     scope: loc.scope, path: loc.file, content: raw ?? '', version: v, exists: raw !== null,
     updatedAt: raw === null ? null : statSync(loc.file).mtime.toISOString(), maxLength: maxLengthOf(loc.scope),
-    history: records.slice().reverse().map(r => ({ ...publicChange(r), canUndo: r.id === last?.id && r.afterVersion === v && !r.undoOf })),
+    history: records.slice().reverse().map(r => ({ ...publicChange(r), canUndo: r.id === last?.id && r.afterVersion === v && !r.undoOf && !isTransfer(r) })),
   };
 }
 export async function readHuman(scope: HumanScope): Promise<HumanDocument> { return snapshot(await location(scope)); }
 
 /** 落盘前对内容 / 摘要 / 依据的校验。单独拿出来:manage_human 在把句子记进记忆之前先过这一遍,免得记忆记了、文档却因为摘要太长之类没存上。 */
-export function assertHumanInput(content: unknown, summary: unknown, evidence: unknown, actor: 'agent' | 'user', max = HUMAN_MAX_LENGTH): asserts content is string {
+export function assertHumanInput(content: unknown, summary: unknown, evidence: unknown, actor: 'agent' | 'user', max = HUMAN_MAX_LENGTH, evidenceOptional = false): asserts content is string {
   if (typeof content !== 'string' || content.length > max) throw new HumanError('HUMAN_INVALID_CONTENT', `Content must be Markdown of at most ${max} characters.`);
   if (typeof summary !== 'string' || !summary.trim() || summary.length > 240) throw new HumanError('HUMAN_INVALID_SUMMARY', 'A short change summary (1–240 characters) is required.');
-  if (actor === 'agent' && (typeof evidence !== 'string' || !evidence.trim())) throw new HumanError('HUMAN_EVIDENCE_REQUIRED', 'Say what happened in your work together that shows this update would help the human.');
+  if (actor === 'agent' && !evidenceOptional && (typeof evidence !== 'string' || !evidence.trim())) throw new HumanError('HUMAN_EVIDENCE_REQUIRED', 'Say what happened in your work together that shows this update would help the human.');
   if (evidence !== undefined && (typeof evidence !== 'string' || evidence.length > 600)) throw new HumanError('HUMAN_INVALID_EVIDENCE', 'Evidence must be at most 600 characters.');
 }
+/** source:画像那几条入口(remember 的 person 档、Dream、跨档挪、交给所有 Agent)带上;带了的 Agent 写入不要求 evidence —— 一条一句的画像没有「依据」可写,来源就是依据。 */
 export async function writeHuman(scope: HumanScope, input: {
   content?: unknown; expectedVersion: unknown; summary?: unknown; evidence?: unknown; undoId?: unknown;
-}, actor: 'agent' | 'user'): Promise<{ document: HumanDocument; change: HumanChange | null }> {
+}, actor: 'agent' | 'user', source?: HumanChangeSource): Promise<{ document: HumanDocument; change: HumanChange | null }> {
   if (typeof input.expectedVersion !== 'string') throw new HumanError('HUMAN_VERSION_REQUIRED', 'Read the current document and supply expectedVersion before editing.');
   const loc = await location(scope);
   const commit = (): { document: HumanDocument; change: HumanChange | null } => {
@@ -126,14 +131,16 @@ export async function writeHuman(scope: HumanScope, input: {
     if (input.undoId) {
       const last = records.at(-1);
       if (!last || last.id !== input.undoId || last.afterVersion !== beforeVersion || last.undoOf) throw new HumanError('HUMAN_CONFLICT', 'A later change exists. Open the current document to revise it without losing newer work.');
+      // 从某个 Agent 记忆里挪来 / 交给所有 Agent 的那一笔:整份退回会让那句话两边都没有(原条目已从记忆里拿掉);挪的那一方自己的补偿撤回带着 source,照常放行
+      if (!source && isTransfer(last)) throw new HumanError('HUMAN_UNDO_TRANSFER', 'This change moved an entry out of an agent’s memory; undo it from the chat receipt, or edit the document.');
       content = last.before ?? ''; summary = `Undo: ${last.summary}`.slice(0, 240); evidence = '';
     }
-    assertHumanInput(content, summary, evidence, actor, maxLengthOf(loc.scope));
+    assertHumanInput(content, summary, evidence, actor, maxLengthOf(loc.scope), !!source);
     const after = redactSecrets(content);
     if (after === (before ?? '')) return { document: snapshot(loc), change: null };
     const revision: Revision = { id: randomUUID(), scope: loc.scope, summary: redactSecrets(String(summary).trim()), evidence: redactSecrets(String(evidence || '')),
       at: new Date().toISOString(), actor, beforeVersion, afterVersion: version(after), before, after, committed: false,
-      ...(input.undoId ? { undoOf: String(input.undoId) } : {}), ...(actor === 'agent' ? { rules: HUMAN_RULES } : {}) };
+      ...(input.undoId ? { undoOf: String(input.undoId) } : {}), ...(actor === 'agent' ? { rules: HUMAN_RULES } : {}), ...(source ? { source } : {}) };
     const next = [...records.slice(-39), revision];
     // Write-ahead history, then the atomic Markdown replacement. A pending entry is only
     // visible if its after-version actually reached disk (including recovery after a crash).

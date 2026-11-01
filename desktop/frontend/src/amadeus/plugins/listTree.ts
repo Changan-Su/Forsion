@@ -9,7 +9,7 @@ import type { ListItem } from './types'
 /** 宿主的列表能做什么,经 `ctx.listCapabilities` 给插件做 feature-detect(老宿主没有这个字段)。
  *  'tree' = 认 `parent` / `kind: 'folder'`;'items' = 行可以拖到别的行上;'rename' = 行内改名;
  *  'group' = 认 `folderStyle: 'group'` / `defaultOpen`(组头,2026-10-14)。 */
-export const LIST_CAPABILITIES = ['tree', 'items', 'rename', 'group'] as const
+export const LIST_CAPABILITIES = ['tree', 'items', 'rename', 'group', 'folderOpen'] as const
 export type ListCapability = (typeof LIST_CAPABILITIES)[number]
 
 /** 行在列表内被拖动时的载荷类型。只在同一个列表源里有效,跨源、跨窗口都不认。 */

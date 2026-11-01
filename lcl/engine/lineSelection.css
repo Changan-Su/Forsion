@@ -1,0 +1,18 @@
+/* Selection paint only: no content wrappers, font/line-height changes or pointer interception. */
+[data-line-selection]::selection,
+[data-line-selection] *::selection { background-color: transparent !important; color: inherit !important; }
+[data-line-selection-retained] .am-ai-target { background: transparent !important; }
+.line-selection-layer {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  z-index: 70;
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  mix-blend-mode: multiply;
+}
+.line-selection-layer rect { fill: Highlight; fill-opacity: 0.3; }
+.line-selection-layer[data-mode='dark'] { mix-blend-mode: screen; }

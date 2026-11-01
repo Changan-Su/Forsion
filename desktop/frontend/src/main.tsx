@@ -19,6 +19,7 @@ import { MiniRoot } from './MiniRoot'
 import { FloatingRoot } from './FloatingRoot'
 import { installMultiWindow } from './multiWindow'
 import { installKeepAwakeReport } from './keepAwakeReport'
+import { installTelemetryReport } from './telemetryReport'
 import { installCreationAutoVersion } from './creationAutoVersion'
 import { installSmoothCaret } from './smoothCaret'
 import { installViewportLock } from './viewportLock'
@@ -79,6 +80,8 @@ try {
   installMultiWindow()
   // 有会话运行时不休眠(设置→常规,默认关):在飞 run 数报主进程;web/移动 no-op。
   installKeepAwakeReport()
+  // 帮助改进 Forsion:本窗的崩溃 / 卡顿 / 功能使用报给主进程(转给 Extend,发不发它定);没有带遥测的 Extend 时 no-op。
+  installTelemetryReport()
   // 造物里的项目:不管在哪个 Space 跑的 agent,一轮跑完宿主都存一版(git 版本历史)。
   installCreationAutoVersion()
   // 丝滑光标(默认关;设置→外观开关)。

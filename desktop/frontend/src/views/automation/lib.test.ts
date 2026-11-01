@@ -4,10 +4,10 @@
  * 负对照口径:丢字段的失败形态是静默 undefined,正向断言容易假绿;toSpec 里删掉 rowFrom 那行本测试必须红(已实跑)。
  */
 import { describe, expect, it } from 'vitest'
-import type { AutomationActionCatalogItem, MuseTriggerInfo } from '../../types'
+import type { AutomationActionCatalogItem, MuseTriggerInfo, TriggerSourceInfo } from '../../types'
 import {
-  actionsText, condText, cooldownPayload, hasUnsupportedParts, initialCooldown, stepsFrom, toSpec, triggerToUpsert,
-  watchedColumnIds, whereDraftFrom, whereText, whereToUpsert,
+  actionsText, condText, cooldownPayload, hasUnsupportedParts, initialCooldown, nextHeartbeatAt, noticeText, onlyDraftFrom, onlyDraftValid,
+  onlyText, onlyToUpsert, stepsFrom, toSpec, triggerMenu, triggerToUpsert, WEEKDAYS, watchedColumnIds, whereDraftFrom, whereText, whereToUpsert,
 } from './lib'
 
 const full: MuseTriggerInfo = {
@@ -195,5 +195,48 @@ describe('构建器 draft ↔ spec 往返', () => {
     expect(actionsText(t, [], full)).toBe(
       '✎ 电脑销售ERP/库存表.db →配件 → ✎ 电脑销售ERP/出库记录.db →订单总表 → ✎ x.db → ＋ 电脑销售ERP/出库记录.db (?配件) → automation.step.notify → automation.step.notify',
     )
+  })
+})
+
+describe('触发源目录与「只在」', () => {
+  const t = (k: string, v?: Record<string, string>): string => (v ? `${k}:${Object.values(v).join()}` : k)
+  const src = (id: string, group: TriggerSourceInfo['group']): TriggerSourceInfo =>
+    ({ id, group, name: { zh: id, en: id }, params: [], eventSource: 'poll', available: true } as unknown as TriggerSourceInfo)
+
+  it('老引擎没有目录 → 老的五项,不是空菜单', () => {
+    const items = triggerMenu([]).flatMap((g) => g.items.map((i) => i.id))
+    expect(items).toEqual(['timer', 'manual', 'db_changed', 'event_seen', 'file_chars_gte'])
+  })
+
+  it('at / every / daily_at 合成一个「定时」;插件并进外部;空组不出', () => {
+    const menu = triggerMenu([src('at', 'time'), src('every', 'time'), src('daily_at', 'time'), src('plugin:x:y', 'plugin')])
+    expect(menu.map((g) => g.group)).toEqual(['time', 'external'])
+    expect(menu[0].items.map((i) => i.id)).toEqual(['timer'])
+    expect(menu[1].items[0]).toMatchObject({ id: 'plugin:x:y', kind: 'param' })
+  })
+
+  it('「只在」往返;全空发 null(显式清空),小时只填一头不合法', () => {
+    const d = onlyDraftFrom({ only: { hours: { start: 9, end: 18 }, weekdays: WEEKDAYS }, maxPerDay: 2 } as MuseTriggerInfo)
+    expect(onlyToUpsert(d)).toEqual({ only: { hours: { start: 9, end: 18 }, weekdays: WEEKDAYS }, max_per_day: 2 })
+    expect(onlyToUpsert(onlyDraftFrom(undefined))).toEqual({ only: null, max_per_day: null })
+    expect(onlyDraftValid({ ...d, end: '' })).toBe(false)
+    expect(onlyDraftValid({ ...d, maxPerDay: '0' })).toBe(false)
+  })
+
+  it('规则说明:工作日、时段、每天几次', () => {
+    expect(onlyText(t, { only: { hours: { start: 9, end: 18 }, weekdays: WEEKDAYS }, maxPerDay: 2, cooldownHours: 0 })).toContain('automation.only.workdays')
+    expect(onlyText(t, { only: { hours: { start: 9, end: 18 }, weekdays: WEEKDAYS }, maxPerDay: 2, cooldownHours: 0 })).toContain('09:00–18:00')
+  })
+
+  it('下次心跳:睡着看 sleepUntil,没跑过周期说不上来,过点了就是现在', () => {
+    expect(nextHeartbeatAt({ sleepUntil: 500, lastCycleAt: 0, heartbeatMinutes: 15 }, 100)).toBe(500)
+    expect(nextHeartbeatAt({ lastCycleAt: null, heartbeatMinutes: 15 }, 100)).toBeNull()
+    expect(nextHeartbeatAt({ lastCycleAt: 100, heartbeatMinutes: 1 }, 1_000_000)).toBe(1_000_000)
+  })
+
+  it('暂停原因按 code 取文案,不认识的原样显示', () => {
+    expect(noticeText(t, 'trigger:computer_history_off')).toBe('automation.notice.computerOff')
+    expect(noticeText(t, 'trigger:source_missing')).toBe('automation.notice.sourceMissing')
+    expect(noticeText(t, 'something else')).toBe('something else')
   })
 })

@@ -881,8 +881,8 @@ registerMessages({
     "en": "MCP servers"
   },
   "settings.mcp.intro": {
-    "zh": "配置保存在 {path}，保存后自动重连。工具名形如 {tool}，改动对新对话生效。",
-    "en": "Saved in {path} and reconnected on save. Tools appear as {tool}; changes apply to new chats."
+    "zh": "配置保存在本机，活动运行结束后自动重连。工具名形如 {tool}，后续运行可使用新工具。",
+    "en": "Saved on this computer and reconnected after active runs finish. Tools appear as {tool}; subsequent runs can use the new tools."
   },
   "settings.mcp.toolPattern": {
     "zh": "mcp__服务器__工具",
@@ -901,8 +901,8 @@ registerMessages({
     "en": "Connection failed"
   },
   "settings.mcp.statusNotLoaded": {
-    "zh": "后端未加载（重启后生效）",
-    "en": "Not loaded by backend (takes effect after restart)"
+    "zh": "等待后端加载",
+    "en": "Waiting for the backend to load"
   },
   "settings.mcp.enable": {
     "zh": "启用",
@@ -913,12 +913,12 @@ registerMessages({
     "en": "Disable"
   },
   "settings.mcp.enabledMsg": {
-    "zh": "已启用；重启后端后连接",
-    "en": "Enabled; connects after the backend restarts"
+    "zh": "已启用；活动运行结束后连接",
+    "en": "Enabled; connects after active runs finish"
   },
   "settings.mcp.disabledMsg": {
-    "zh": "已停用；重启后端后断开",
-    "en": "Disabled; disconnects after the backend restarts"
+    "zh": "已停用；活动运行结束后断开",
+    "en": "Disabled; disconnects after active runs finish"
   },
   "settings.mcp.deleteConfirm": {
     "zh": "删除 MCP server「{name}」？",
@@ -961,8 +961,8 @@ registerMessages({
     "en": "Environment variables (one KEY=VALUE per line, optional)"
   },
   "settings.mcp.savedReconnecting": {
-    "zh": "已保存；托管后端重启重连中…",
-    "en": "Saved; managed backend is restarting and reconnecting…"
+    "zh": "配置已保存；活动运行结束后更新连接。",
+    "en": "Configuration saved; connections update after active runs finish."
   },
   "settings.theme.themeLabel": {
     "zh": "主题",

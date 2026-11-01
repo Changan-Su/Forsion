@@ -16,6 +16,12 @@ describe('subChatRows(U-04 右栏去重)', () => {
   it('Historian 开:不列 historian 子会话,teamwork 永不列', () => {
     expect(subChatRows([HIST, DISC, TEAM], [], true).map((r) => r.sessionId)).toEqual(['d1'])
   })
+  it('续用:库里那行还是「已完成」,实时流说它又跑起来了就算在跑(同一行,不多列)', () => {
+    const child = bg({ sessionId: 'c1', kind: 'delegate', title: 'Worker', runStatus: null })
+    const live: SubChat = { id: 'c1', kind: 'subagent', title: 'Worker', sessionId: 'c1', streaming: true, segs: [] }
+    expect(subChatRows([child], [live], true)).toMatchObject([{ sessionId: 'c1', streaming: true }])
+    expect(subChatRows([child], [{ ...live, streaming: false }], true)[0].streaming).toBe(false)
+  })
   it('Historian 关:旧记录照旧列出(HistorianStatus 不挂载,入口只剩这里)', () => {
     expect(subChatRows([HIST, DISC], [], false).map((r) => r.title)).toEqual(['Historian', '讨论'])
   })

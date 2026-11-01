@@ -48,7 +48,7 @@ export function AgentsDetailSpecialView() {
       cfg={s.cfg}
       sessions={s.sessions}
       onOpenSession={focusSession}
-      onOpenSettings={() => s.openSettings('agents')}
+      onOpenSettings={() => s.openSettings('agents/ag-special/muse')}
     />
   )
 }

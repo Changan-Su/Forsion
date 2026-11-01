@@ -61,6 +61,8 @@ export interface TaskCard {
   todo?: string
   /** 卡的短标识(模型写 `id:`):之后能用 `withdraw: <id>` 撤回。 */
   id?: string
+  /** 开子会话时交给哪个 Agent(模型写 `agent: coding`;引擎认得这个 slug 才用)。 */
+  agent?: string
   /** 先问卡(`ask: true`):用户点名的事、但该另开会话 —— 按钮只有「新会话 / 在这里做」,选之前什么都不开始。 */
   ask?: boolean
   /** 撤回标记(只有 `withdraw: <id>` + 可选 `reason:` 的围栏):不画卡,让同会话里那张 id 的卡变成「已撤回」。 */
@@ -127,6 +129,8 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
   let track = false
   let todo = ''
   let id = ''
+  let agent = ''
+  let skill = ''
   let ask = false
   let withdraw = ''
   let reason = ''
@@ -139,6 +143,8 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
     else if (k === 'track') track = /^(true|yes|1)$/i.test(m[2])
     else if (k === 'todo') todo = m[2]
     else if (k === 'id') id = m[2]
+    else if (k === 'agent') agent = m[2]
+    else if (k === 'skill') skill = m[2]
     else if (k === 'ask') ask = /^(true|yes|1)$/i.test(m[2])
     else if (k === 'withdraw') withdraw = m[2]
     else if (k === 'reason') reason = m[2]
@@ -150,12 +156,14 @@ export function parseTaskCard(lines: string[], opts?: { todo?: boolean }): TaskC
     const r = reason || (/^\s*reason\s*:\s*(.*?)\s*$/i.exec(lines.find((l) => /^\s*reason\s*:/i.test(l)) || '')?.[1] ?? '')
     return { title: '', prompt: '', withdraw: w, ...(r ? { reason: r.slice(0, TLDR_MAX) } : {}) }
   }
-  const prompt = body.join('\n').trim().slice(0, PROMPT_MAX)
+  // `skill:` 头:任务书开头固定一句。模型抄头部很稳,让它在正文里写这句它会改写或省掉(10-30 live:3 次里 2 次)
+  const brief = body.join('\n').trim()
+  const prompt = (brief && APPROVAL_ID_RE.test(skill) ? `Load the ${skill} skill first.\n\n${brief}` : brief).slice(0, PROMPT_MAX)
   if (!title) title = (body.find((l) => l.trim()) || '').trim()
   title = title.trim().slice(0, TITLE_MAX)
   if (!title || !prompt) return null
   // todo id 与审批 id 同一形态约束;不合法只丢这个键(卡照出,只是不回写 TODO)。
-  return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), ...(opts?.todo && APPROVAL_ID_RE.test(todo) ? { todo } : {}), ...(APPROVAL_ID_RE.test(id) ? { id } : {}), ...(ask ? { ask: true } : {}), prompt }
+  return { title, ...(tldr ? { tldr: tldr.slice(0, TLDR_MAX) } : {}), ...(track ? { track: true } : {}), ...(opts?.todo && APPROVAL_ID_RE.test(todo) ? { todo } : {}), ...(APPROVAL_ID_RE.test(agent) ? { agent } : {}), ...(APPROVAL_ID_RE.test(id) ? { id } : {}), ...(ask ? { ask: true } : {}), prompt }
 }
 
 /** 围栏正文 → 作品卡:只认 `key: value` 行(name 必填,path 可选,未知键忽略);写坏的 → null(整块还回正文)。 */

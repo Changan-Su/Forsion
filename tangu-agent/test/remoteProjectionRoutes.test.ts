@@ -76,7 +76,7 @@ describe('GET /agent/special/muse/status', () => {
     const r = await get('/agent/special/muse/status', REMOTE);
     expect(r.status).toBe(200);
     expect(r.body.remote).toBe(true);
-    expect(Object.keys(r.body.status).sort()).toEqual(['enabled', 'heartbeatMinutes', 'lastCycleAt', 'mode', 'pendingApprovals', 'running', 'sessionId', 'sleepReason', 'sleepUntil', 'spaceStamp'].sort());
+    expect(Object.keys(r.body.status).sort()).toEqual(['enabled', 'feedbackUntil', 'heartbeatMinutes', 'lastCycleAt', 'mode', 'pendingApprovals', 'running', 'sessionId', 'sleepReason', 'sleepUntil', 'spaceStamp'].sort());
     expect(r.body.status).toMatchObject({ enabled: true, mode: 'auto', heartbeatMinutes: 45 });
     expect(r.raw).not.toContain(home); // 家目录下的任何绝对路径都不许出现
   });

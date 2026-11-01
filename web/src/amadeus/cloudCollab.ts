@@ -7,6 +7,7 @@ import { subscribePresence, type PresenceUser } from './cloudPresence'
 import { ensureActiveVault, ACTIVE_VAULT_KEY } from './cloudBridge'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { cloudAccountIdentity } from '@/services/cloudAccountCache'
+import { fileAddress } from '../openTarget'
 
 export interface CollabCfg {
   apiBase: string
@@ -118,30 +119,38 @@ export function installCloudCollab(cfg: CollabCfg): void {
   window.amadeusCollab = {
     listVaults: () => call<{ vaults: any[] }>('GET', '/vaults').then((r) => r.vaults),
     activeVaultId: vid,
-    switchVault(id: string) {
+    switchVault(id: string, path?: string) {
       assertActive()
       try { localStorage.setItem(activeVaultKey, id) } catch { /* ignore */ }
-      location.reload()
+      if (path) location.assign(fileAddress(location.href, id, path))
+      else location.reload()
     },
+    fileUrl: (vaultId: string, path: string) => fileAddress(`${linkBase()}/`, vaultId, path),
     // ── 同步共享(owner)──
     pageShare: async (path: string) =>
       call<{ share: any; quota: { collab: number; publish: number } }>('GET', `/vaults/${encodeURIComponent(await vid())}/page-shares?path=${encodeURIComponent(path)}`),
-    createPageShare: async (path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null }) =>
+    createPageShare: async (path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null; attachments?: boolean }) =>
       call<any>('POST', `/vaults/${encodeURIComponent(await vid())}/page-shares`, { path, ...opts }),
-    updatePageShare: async (id: string, patch: { role?: 'editor' | 'viewer'; password?: string | null; expiresDays?: number | null; rotate?: boolean }) =>
-      call<any>('PATCH', `/vaults/${encodeURIComponent(await vid())}/page-shares/${encodeURIComponent(id)}`, patch),
+    updatePageShare: async (id: string, patch: { role?: 'editor' | 'viewer'; password?: string | null; expiresDays?: number | null; rotate?: boolean }, vaultId?: string) =>
+      call<any>('PATCH', `/vaults/${encodeURIComponent(vaultId ?? await vid())}/page-shares/${encodeURIComponent(id)}`, patch),
     revokePageShare: async (id: string) => { await call('DELETE', `/vaults/${encodeURIComponent(await vid())}/page-shares/${encodeURIComponent(id)}`) },
-    setParticipantRole: async (id: string, userId: string, role: 'editor' | 'viewer') => {
-      await call('PATCH', `/vaults/${encodeURIComponent(await vid())}/page-shares/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { role })
+    setParticipantRole: async (id: string, userId: string, role: 'editor' | 'viewer', vaultId?: string) => {
+      await call('PATCH', `/vaults/${encodeURIComponent(vaultId ?? await vid())}/page-shares/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`, { role })
     },
-    removeParticipant: async (id: string, userId: string) => {
-      await call('DELETE', `/vaults/${encodeURIComponent(await vid())}/page-shares/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`)
+    removeParticipant: async (id: string, userId: string, vaultId?: string) => {
+      await call('DELETE', `/vaults/${encodeURIComponent(vaultId ?? await vid())}/page-shares/${encodeURIComponent(id)}/members/${encodeURIComponent(userId)}`)
+    },
+    relatedItems: async (id: string) =>
+      call<{ items: Array<{ path: string; title: string; kind: 'page' | 'file'; included: boolean }>; subpages: number }>('GET', `/vaults/${encodeURIComponent(await vid())}/page-shares/${encodeURIComponent(id)}/related`),
+    setShareItem: async (id: string, path: string, included: boolean) => {
+      await call('POST', `/vaults/${encodeURIComponent(await vid())}/page-shares/${encodeURIComponent(id)}/items`, { path, included })
     },
     // ── 参与者 ──
-    sharedWithMe: () => call<{ items: Array<{ vaultId: string; path: string; title: string; role: string; ownerName: string | null }> }>('GET', '/shared-with-me').then((r) => r.items),
-    leaveShare: async (id: string) => {
+    sharedWithMe: () => call<{ items: Array<{ shareId: string; vaultId: string; path: string; title: string; role: string; ownerName: string | null; expiresAt: string | null; items: string[] }> }>('GET', '/shared-with-me').then((r) => r.items),
+    // 退出的是别人的库,不能取当前活动库。
+    leaveShare: async (id: string, vaultId?: string) => {
       const me = myUserId()
-      if (me) await call('DELETE', `/vaults/${encodeURIComponent(await vid())}/page-shares/${encodeURIComponent(id)}/members/${encodeURIComponent(me)}`)
+      if (me) await call('DELETE', `/vaults/${encodeURIComponent(vaultId ?? await vid())}/page-shares/${encodeURIComponent(id)}/members/${encodeURIComponent(me)}`)
     },
     inviteUrl: (token: string) => `${linkBase()}/invite/${token}`,
     // ── 发布(公开链接)──
@@ -166,14 +175,14 @@ export function installCloudCollab(cfg: CollabCfg): void {
       const vaults = (await call<{ vaults: Array<{ id: string; name?: string }> }>('GET', '/vaults')).vaults || []
       const myId = myUserId()
       const publishes: Array<{ token: string; mode: string; path: string; createdAt?: string; vaultId: string; vaultName: string }> = []
-      const pageShares: Array<Record<string, unknown>> = []
+      const pageShares: any[] = []
       for (const vt of vaults) {
         try {
           const pr = await call<{ shares?: Array<Record<string, unknown>> }>('GET', `/vaults/${encodeURIComponent(vt.id)}/shares`)
           for (const s of pr.shares || []) publishes.push({ ...(s as any), vaultId: vt.id, vaultName: vt.name || '' })
         } catch { /* 某库不可达则跳过 */ }
         try {
-          const ps = await call<any>('GET', `/vaults/${encodeURIComponent(vt.id)}/page-shares`)
+          const ps = await call<any>('GET', `/vaults/${encodeURIComponent(vt.id)}/page-shares?expired=1`)
           const list = ps?.shares || ps?.pageShares || (Array.isArray(ps) ? ps : [])
           for (const s of list) {
             const owner = s.created_by ?? s.createdBy

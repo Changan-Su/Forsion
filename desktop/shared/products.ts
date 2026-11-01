@@ -17,10 +17,12 @@ export const PRODUCT_SIDECAR_PATHS = [PRODUCT_SIDECAR, PRODUCT_SIDECAR_NEW, `.fo
  *  清单写 `com.demo.plugin`、目录叫 `my-plugin`,注册表报前者、装载器用后者:「在 Forsion 中加载」重载的是一个不存在的 id,
  *  Sandbox 面板永远看不到它(Codex 评审)。 */
 const SAFE_PLUGIN_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
+/** 商店新装条目的目录名 = 生效插件 id(market-<uuid>)。遥测据此认「商店插件」(frontend/src/telemetryReport.ts)。 */
+export const MARKET_ITEM_ID = /^market-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 export function effectivePluginId(dirName: string, manifestId: unknown): string | null {
   // New marketplace directories are immutable item identities. Names and manifest IDs
   // may coincide across publishers; settings, routes and storage must remain separate.
-  if (/^market-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(dirName)) return dirName
+  if (MARKET_ITEM_ID.test(dirName)) return dirName
   if (typeof manifestId === 'string' && SAFE_PLUGIN_ID.test(manifestId)) return manifestId
   return SAFE_PLUGIN_ID.test(dirName) ? dirName : null
 }

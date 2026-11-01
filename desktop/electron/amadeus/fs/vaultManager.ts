@@ -9,7 +9,7 @@ import type { CompilerIO } from '@amadeus-shared/compiler'
 import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { attachmentPaths } from './attachmentPaths'
 import { vaultRel } from './vaultRel'
-import { renameAtomic } from './renameAtomic'
+import { renameAtomic, writeFileDurable } from './renameAtomic'
 
 export interface VaultManagerHost {
   openDirectory?: () => Promise<string | null>
@@ -234,9 +234,7 @@ export class VaultManager {
     // 的路径写」。这里对**新建**(写前不存在)记一条 file.create f=… b=字节数,下次不用再推演世界。
     const existed = await fs.access(abs).then(() => true, () => false)
     await fs.mkdir(path.dirname(abs), { recursive: true })
-    const tmp = `${abs}.tmp-${process.pid}-${Date.now()}-${this.counter++}`
-    await fs.writeFile(tmp, data, 'utf8')
-    await renameAtomic(tmp, abs)
+    await writeFileDurable(abs, `${abs}.tmp-${process.pid}-${Date.now()}-${this.counter++}`, data) // 名字形状 watcher 认得出
     this.rememberWrite(abs, data, generation)
     if (!existed && this.root) this.host.logActivity?.('file.create', { f: path.relative(this.root, abs), b: Buffer.byteLength(data) })
     this.emitMutate(abs, 'write')
@@ -265,9 +263,7 @@ export class VaultManager {
   async writeVaultBytes(rel: string, bytes: Uint8Array): Promise<void> {
     const abs = this.resolveInVault(rel) // 越界即抛
     await fs.mkdir(path.dirname(abs), { recursive: true })
-    const tmp = `${abs}.tmp-${process.pid}-${Date.now()}-${this.counter++}`
-    await fs.writeFile(tmp, bytes)
-    await renameAtomic(tmp, abs)
+    await writeFileDurable(abs, `${abs}.tmp-${process.pid}-${Date.now()}-${this.counter++}`, bytes)
     this.emitMutate(abs, 'write')
   }
 
