@@ -75,7 +75,7 @@ async function findByBasename(root: string, basename: string): Promise<string | 
 }
 
 /** Must run AFTER app 'ready'. */
-export function registerAssetProtocol(getVaultRoot: () => string | null): void {
+export function registerAssetProtocol(getVaultRoot: () => string | null, resolveShared?: (vaultRel: string) => string | null): void {
   protocol.handle(ASSET_SCHEME, async (request) => {
     const root = getVaultRoot()
     if (!root) return new Response('no vault', { status: 404 })
@@ -87,7 +87,9 @@ export function registerAssetProtocol(getVaultRoot: () => string | null): void {
       return new Response('bad url', { status: 400 })
     }
 
-    let abs = path.resolve(root, vaultRel)
+    // 共享镜像里页面的相对引用按服务端目录写,文件可能绑定在别的目录,先按绑定换成它在镜像里的位置(Extend 的 sharedLocalPathFor)。
+    // 只在这里换,显示地址不动:它会被存盘算成相对路径写回所有者的页面。
+    let abs = path.resolve(root, resolveShared?.(vaultRel) ?? vaultRel)
     const rel = path.relative(root, abs)
     if (rel.startsWith('..') || path.isAbsolute(rel)) {
       return new Response('forbidden', { status: 403 })
