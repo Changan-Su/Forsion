@@ -28,7 +28,7 @@ const OUT = path.resolve(arg('out') || path.join(os.tmpdir(), 'forsion-events-ce
 const results = []
 const check = (name, ok, detail) => { results.push({ name, ok: !!ok }); console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`) }
 
-// 真服务端给的是 /api/events/art/*.webp;台架走 http,CSP 只放行 data:
+// 假云端不存图,直接内联;真服务端给的是 /api/events/art/*.webp,realFlow 核
 const art = (a, b) => 'data:image/svg+xml;base64,' + Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000"><defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs><rect width="1600" height="1000" fill="url(#g)"/><circle cx="1180" cy="430" r="240" fill="#fff" opacity=".35"/></svg>`).toString('base64')
 const t = (zh, en) => ({ zh, en })
 const pts = (n) => ({ kind: 'points', amount: n, label: t(`积分 ×${n}`, `Points ×${n}`) })
@@ -80,7 +80,9 @@ async function realFlow(sp, local) {
   await sp.locator('.ev-rail').waitFor()
   const rail = await sp.locator('.ev-rail').innerText()
   check('真后端:左栏是后台发布的四场', ['金秋七日签到', '创作者任务', '中秋投壶', '11 月维护公告'].every((x) => rail.includes(x)), rail.replace(/\n/g, ' / '))
-  // 台架走 http,CSP 拦图 → 面板退回占位;生产是 https。这里直接核接口
+  // 本地后端走 http:CSP 拦图时面板静默退回占位,接口再对也看不出来,所以要看到真图
+  const artShown = await sp.waitForFunction(() => document.querySelector('img.ev-art')?.naturalWidth > 0, null, { timeout: 3000 }).then(() => true, () => false)
+  check('真后端:主视觉真的显示出来,没退回占位', artShown)
   const feed = await (await fetch(`${local.url}/api/events/feed`, { headers: { authorization: `Bearer ${local.token}` } })).json()
   const artPath = feed.events.find((e) => e.artUrl)?.artUrl ?? ''
   const art = await fetch(local.url + artPath).catch(() => null)

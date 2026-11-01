@@ -10,6 +10,8 @@ For plugin authors. Installing plugins, bundles and the security model are cover
 
 Plugins are written in JavaScript / TypeScript, with official type definitions and templates. The built-in "Forsion extension development" skill lets the agent scaffold a plugin, theme, Space or agent straight from the official templates; see [Skills](../agents/skills.md).
 
+Engine plugins can expose live, read-only external skills through `registerSkillProvider` without copying them into the user's skills directory. See the [external skill provider contract](plugin-skill-providers.en.md).
+
 To link what your plugin produces with the native notes panel, use `ctx.app.openNote`: an Amadeus panel with the same `reuseKey` switches to the new note in place, and `activate:false` keeps the user's focus on the plugin panel. Combined with `split:"right"` / `split:"down"` on a Space's main-area entries, your plugin doesn't need to copy a document editor or chat interface into its own DOM.
 
 ```js
@@ -25,6 +27,8 @@ The left-sidebar list (`registerListSource`) can be hierarchical, drawn like the
 ```js
 ctx.listCapabilities?.includes('tree' | 'items' | 'rename')
 ```
+
+When a folder is also something to select (a parent tag, say), set `opensOnClick: true` on the folder row and detect it with `ctx.listCapabilities?.includes('folderOpen')`. Clicking the name calls `open()` and unfolds the row, only the leading arrow folds it, and the row highlights when `activeKey` points at it. Older hosts ignore the field and a click only folds, so keep a child row when the capability is missing.
 
 To group rows by whose they are (senders, accounts, sources), also set `folderStyle: 'group'` on the top-level folders: each is drawn like the first-level rows for agents and projects in the Tangu sidebar, led by an avatar (`iconUrl`), an icon in a tile (`icon`) or the first letter of the title, with `hint` as a small pill at the end (good for an unread count). Rows inside a group give up their own icon and keep only the unread dot; a group lists five rows first and puts the rest behind "View more". These groups remember their fold state only until the app restarts: a group with `defaultOpen: true` is open (say, while it holds something unread) and the host reopens it each time the flag turns from false to true; without the flag it starts folded. Groups appear in the order of your array. Search shows no hierarchy, so return flat rows when `query` is set. On a phone, a list whose only level is these group heads stays a full-screen list, and rows inside a group can still be swiped. Check `ctx.listCapabilities?.includes('group')`; hosts without it draw a plain folder.
 
@@ -100,7 +104,7 @@ A Space inside a plugin can declare a dedicated Mini view that offers only quick
 
 A plugin can also skip the full Space and open a registered compact view directly with `ctx.openMiniPanel?.(viewId, options)`; `mainViewId` sets where "Show in main panel" goes. For a wide standalone tool page, use `ctx.openFloatingPanel?.(viewId, options)`. The host adds the plugin namespace automatically and owns the window lifecycle. See [Floating Panel development](./floating-panel-development.md).
 
-When a View needs an input box with model selection, use `ctx.ui.mountChatBox`; it reuses the host component, and the plugin handles submission explicitly. See [Reusable UI components](./ui-components.md).
+When a View needs an input box with model selection, use `ctx.ui.mountChatBox`; it reuses the host component, and the plugin handles submission explicitly. Pass `modelPicker: false` to drop the model selection, `toolbar` for controls in the bottom row, `suggest` for completion such as `#`, and call `insertText` to insert at the caret. See [Reusable UI components](./ui-components.md).
 
 Settings-like pages (account, quota and credits, diagnostics, preferences) hand the host a description of the whole page through `ctx.ui.mountSettingsPage(el, { groups })`: each group has an icon, title, description, top-right buttons and items (switch, value, buttons, input, segmented, select, pick-to-run choice, stepper, code with copy, usage meters, empty / loading / error, custom block). The plugin supplies only the text, values and callbacks; the host draws them with its own settings parts and lays them out per device — on phones switches, values and single buttons stay at the right, inputs, steppers and two or more buttons move to the next line, and a pick-to-run choice becomes one button and a half sheet. Put anything outside that list in a `custom` block and mount single parts there with `ctx.ui.mountSettingsItem`. Stop copying the host's settings CSS; hosts before 2026-10-17 lack both methods, so feature-detect and keep your own page there. See [Reusable UI components](./ui-components.md).
 

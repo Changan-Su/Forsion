@@ -92,7 +92,7 @@ router.post('/agent/skills/catalog/:key/copy', authMiddleware, async (req: AuthR
 });
 
 /** GET /agent/skills 每条的对外形状(单独导出好单测:桌面「自建」徽标只认这里透传的 origin)。 */
-export function skillSummary(s: any): { id: string; name: string; description: string; icon: string | null; category: string | null; source: string; origin: 'agent' | null; builtin: boolean; shared: boolean } {
+export function skillSummary(s: any): { id: string; name: string; description: string; icon: string | null; category: string | null; source: string; origin: 'agent' | null; builtin: boolean; shared: boolean; readOnly?: boolean; sourcePluginId?: string; sourceProviderId?: string } {
   return {
     id: s.id,
     name: s.name,
@@ -101,6 +101,7 @@ export function skillSummary(s: any): { id: string; name: string; description: s
     category: s.category || null,
     // 'local'=磁盘技能(包内置/~/.tangu/skills,localAssets overlay 标注);缺省 cloud
     source: s.source || 'cloud',
+    ...(s.source === 'plugin' ? { readOnly: true, sourcePluginId: s.sourcePluginId, sourceProviderId: s.sourceProviderId } : {}),
     // 'agent'=manage_skill 自建(SKILL.md frontmatter origin,localSkills 只在用户级/agent 级根认它);其余 null。客户端据此打「自建」徽标。
     origin: s.origin === 'agent' ? 'agent' : null,
     // agent 级技能 frontmatter `shared: true`:借给别的 agent(桌面详情页打「共享」徽标)。

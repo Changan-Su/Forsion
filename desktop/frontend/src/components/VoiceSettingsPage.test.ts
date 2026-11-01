@@ -72,7 +72,7 @@ afterEach(async () => {
 })
 
 describe('语音页(设置卡片)', () => {
-  it('三张卡,每行都声明窄屏排法;没选朗读模型时四行照样能填,「去选模型」/「添加提供方」交给 onOpen', async () => {
+  it('三张卡,每行都声明窄屏排法;没选朗读模型时音色照样能看,「去选模型」/「添加提供方」交给 onOpen', async () => {
     installTangu()
     const p = await render({ mode: 'external', backendUrl: 'http://127.0.0.1:1' })
     await flush()
@@ -81,27 +81,22 @@ describe('语音页(设置卡片)', () => {
     const rows = [...el.querySelectorAll<HTMLElement>('.settings-control-row')]
     expect(rows.every((r) => r.dataset.fit === 'inline' || r.dataset.fit === 'wrap')).toBe(true)
     const read = panel('settings-voice-read')
-    expect(read.querySelectorAll('.settings-control-row').length).toBe(4)
-    expect(read.querySelectorAll('.is-disabled').length).toBe(0)
-    expect((read.querySelector('input[list="tts-voice-options"]') as HTMLInputElement).disabled).toBe(false)
-    expect((read.querySelector('input[list="tts-voice-options"]') as HTMLInputElement).placeholder).toBe('如 alloy')
-    expect(btn(read, '试听')!.disabled).toBe(true) // 试听要模型才能出声
+    expect(read.querySelector('.voice-gallery')).not.toBeNull()
     await click(btn(read, '去选模型'))
     expect(p.onOpen).toHaveBeenLastCalledWith('tts-model')
     await click(btn(panel('settings-voice-call'), '添加提供方'))
     expect(p.onOpen).toHaveBeenLastCalledWith('providers')
-    await click(btn(read, '添加提供方')) // 复刻 / 设计音色:没有百炼提供方时直接去加
-    expect(p.onOpen).toHaveBeenLastCalledWith('providers')
+    expect(read.querySelector('.voice-tile-new')).toBeNull() // 没有百炼提供方:不给新建
   })
 
-  it('写的键和时机照旧:音色走草稿 + 失焦提交,语速失焦夹到 0.5–2,自动朗读即时写', async () => {
+  it('写的键和时机照旧:音色走草稿 + 失焦提交,语速即时写,自动朗读即时写', async () => {
     const { setConfig } = installTangu()
-    const p = await render({ ttsModelId: 'openai/tts-1', ttsVoice: '', ttsSpeed: 1 })
+    const p = await render({ ttsModelId: 'mine/foo-speech', ttsVoice: '', ttsSpeed: 1 })
     await flush()
     const read = panel('settings-voice-read')
     expect(btn(read, '去选模型')).toBeUndefined()
-    expect(read.querySelector('.settings-panel-head p')?.textContent).toContain('openai/tts-1')
-    const voice = read.querySelector('input[list="tts-voice-options"]') as HTMLInputElement
+    expect(read.querySelector('.voice-link')?.textContent).toContain('mine/foo-speech')
+    const voice = read.querySelector('input.settings-voice-tts') as HTMLInputElement
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(voice, 'alloy')
       voice.dispatchEvent(new Event('input', { bubbles: true }))
@@ -109,35 +104,28 @@ describe('语音页(设置卡片)', () => {
     expect(p.edit).toHaveBeenLastCalledWith({ ttsVoice: 'alloy' })
     await act(async () => { voice.focus(); voice.blur() })
     expect(p.commitEdits).toHaveBeenCalledWith(['ttsVoice'], expect.any(Function))
-    const speed = read.querySelector('input[type="number"]') as HTMLInputElement
+    const speed = read.querySelector('input.settings-voice-speed') as HTMLInputElement
     await act(async () => {
-      speed.focus()
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(speed, '5')
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!.call(speed, '1.5')
       speed.dispatchEvent(new Event('input', { bubbles: true }))
     })
-    await act(async () => { speed.blur() })
-    expect(setConfig).toHaveBeenCalledWith({ ttsSpeed: 2 })
+    expect(setConfig).toHaveBeenCalledWith({ ttsSpeed: 1.5 })
     await click(read.querySelector('[role="switch"]'))
     expect(setConfig).toHaveBeenCalledWith({ ttsAutoSpeak: true })
   })
 
-  it('有百炼提供方:音色工作室收在「展开」后面;非本地 external 后端整行不出', async () => {
+  it('有百炼提供方:「新建音色」打开共用弹层;非本地 external 后端不给新建', async () => {
     installTangu()
     const ds = { providerId: 'bailian', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', apiKey: 'k' } as never
     await render({ mode: 'managed' }, { providers: [ds] })
     await flush()
-    const read = panel('settings-voice-read')
-    expect(read.querySelector('.tts-voice-studio')).toBeNull()
-    await click(read.querySelector('.tts-studio-toggle'))
-    expect(read.querySelector('.tts-voice-studio select.tts-clone-model')).not.toBeNull()
-    // 收起只是藏起来:工作室实例(进行中的请求、忙碌锁、填了一半的表单)留着
-    const studio = read.querySelector('.tts-voice-studio')
-    await click(read.querySelector('.tts-studio-toggle'))
-    expect(read.querySelector('.tts-voice-studio')).toBe(studio)
-    expect((studio!.parentElement as HTMLElement).hidden).toBe(true)
+    await click(panel('settings-voice-read').querySelector('.voice-tile-new'))
+    expect(document.body.querySelector('.voice-create select.voice-create-model')).not.toBeNull()
+    await click(document.body.querySelector('.voice-create .icon-btn'))
+    expect(document.body.querySelector('.voice-create')).toBeNull()
     await render({ mode: 'external', backendUrl: 'https://remote.example' }, { providers: [ds], remoteExternal: true })
     await flush()
-    expect(panel('settings-voice-read').querySelectorAll('.settings-control-row').length).toBe(3)
+    expect(panel('settings-voice-read').querySelector('.voice-tile-new')).toBeNull()
   })
 
   it('本地语音识别:下载 → 进度 → 已下载 · 在用(下完自动选它)→ 删除退回云端', async () => {

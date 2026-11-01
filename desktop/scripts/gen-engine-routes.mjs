@@ -376,6 +376,10 @@ export const CLASSIFICATION = {
   'POST /agent/tts/voices/clone': [D, 'creates a provider voice'],
   'POST /agent/tts/voices/design': [D, 'creates a provider voice'],
   'POST /agent/tts/voices/delete': [D, 'deletes a provider voice'],
+  'POST /agent/tts/cloud-voices/list': [D, 'voice management stays local, like /agent/tts/voices/*'],
+  'POST /agent/tts/cloud-voices/clone': [D, 'creates a provider voice on the signed-in account'],
+  'POST /agent/tts/cloud-voices/delete': [D, 'deletes a provider voice on the signed-in account'],
+  'POST /agent/tts/cloud-voices/sample': [D, 'voice management stays local, like /agent/tts/voices/*'],
 }
 
 const METHODS = new Set(['get', 'post', 'put', 'patch', 'delete'])

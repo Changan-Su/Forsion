@@ -27,6 +27,8 @@ interface Host {
 }
 
 interface PluginSpec {
+  skills?: boolean;
+  models?: boolean;
   version?: string;
   requires?: unknown;
   defaultEnabled?: boolean;
@@ -130,6 +132,8 @@ export default {
     ${spec.noMeta
       ? `ctx.registerToolProvider(${provider});`
       : `ctx.registerPlugin({ id: '${id}', name: '${id}', description: 'x', defaultEnabled: ${spec.defaultEnabled ?? true}, toolProvider: ${provider} });`}
+    ${spec.skills ? `g.__skillCtx = ctx; ctx.registerSkillProvider({ id: 'external', list: async () => [{ id: 'release', name: 'Release', description: 'Release fixture', content: tag }] });` : ''}
+    ${spec.models ? `g.__modelCtx = ctx; ctx.registerModelProvider({ id: 'source', listModels: async () => [{ id: 'model', name: tag }], resolveModel: async () => ({ id: 'model', name: tag }), stream: async () => ({ content: tag, reasoning: '', toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }) });` : ''}
     ${spec.route ? `ctx.registerRoutes((r) => r.userRouter.get('${spec.route}', (_req, res) => res.json({ tag })));` : ''}
     ${spec.throwInActivate ? "throw new Error('boom');" : ''}
     ${spec.hangActivateOnce ? `if (!g.__hung['a:${id}']) { g.__hung['a:${id}'] = 1; return new Promise((r) => { g.__release['${id}'] = r; }); }` : ''}
@@ -164,6 +168,75 @@ async function listen(app: any): Promise<{ base: string; server: Server }> {
   await new Promise((r) => server.once('listening', r));
   return { base: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, server };
 }
+
+describe('plugin skill sources', () => {
+  it('owns marketplace namespaces and revokes registrations on disable, re-enable and uninstall', async () => {
+    writePlugin('lc-skills', { skills: true });
+    const ids = ['market-11111111-1111-4111-8111-111111111111', 'market-22222222-2222-4222-8222-222222222222'];
+    for (const id of ids) cpSync(path.join(pluginsRoot, 'lc-skills'), path.join(pluginsRoot, id), { recursive: true });
+    rmSync(path.join(pluginsRoot, 'lc-skills'), { recursive: true });
+    const h = await host();
+    await h.boot.activateAllPlugins();
+    const { listPluginSkills } = await import('../skills/pluginSkills.js');
+    expect((await listPluginSkills()).map(skill => skill.id)).toEqual(ids.map(id => `local:plugin/${id}/external/release`));
+    const stale = (globalThis as any).__skillCtx;
+    await h.boot.setPluginEnabledLive(ids[1], false);
+    stale.registerSkillProvider({ id: 'late', list: async () => [{ id: 'release', name: 'Late', description: '', content: 'stale' }] });
+    expect((await listPluginSkills()).map(skill => skill.id)).toEqual([`local:plugin/${ids[0]}/external/release`]);
+    await h.boot.setPluginEnabledLive(ids[1], true);
+    expect(await listPluginSkills()).toHaveLength(2);
+    await h.boot.removePluginLive(ids[1]);
+    expect((await listPluginSkills()).map(skill => skill.id)).toEqual([`local:plugin/${ids[0]}/external/release`]);
+  });
+
+  it('rolls back a source registered by a failed activation', async () => {
+    writePlugin('lc-bad-skills', { skills: true, throwInActivate: true });
+    const h = await host();
+    await h.boot.activateAllPlugins();
+    const { listPluginSkills } = await import('../skills/pluginSkills.js');
+    expect(await listPluginSkills()).toEqual([]);
+  });
+});
+
+describe('plugin model sources', () => {
+  it('removes native catalog entries on disable, ignores stale registrations and restores on re-enable', async () => {
+    writePlugin('lc-models', { models: true });
+    const h = await host();
+    const { configureTangu } = await import('../seams/runtime.js');
+    const { createTanguProfile } = await import('../profiles/index.js');
+    const { withPluginModelProviders } = await import('../llm/pluginModels.js');
+    const brain = withPluginModelProviders({ models: { listGlobalModels: async () => [] }, llm: {} } as any);
+    const profile = createTanguProfile({ sandboxMode: 'none' });
+    configureTangu({ host: {} as any, brain, billing: {} as any, profile });
+    await h.boot.activateAllPlugins();
+    const { listModelCatalog } = await import('../services/modelCatalog.js');
+    expect((await listModelCatalog(profile)).models.map(m => m.id)).toEqual(['plugin:lc-models/source/model']);
+    const stale = (globalThis as any).__modelCtx;
+    await h.boot.setPluginEnabledLive('lc-models', false);
+    stale.registerModelProvider({ id: 'late' });
+    expect((await listModelCatalog(profile)).models).toEqual([]);
+    await h.boot.setPluginEnabledLive('lc-models', true);
+    expect((await listModelCatalog(profile)).models.map(m => m.id)).toEqual(['plugin:lc-models/source/model']);
+    await h.boot.removePluginLive('lc-models');
+    expect((await listModelCatalog(profile)).models).toEqual([]);
+  });
+
+  it('rolls back failed activations and refuses non-local registration', async () => {
+    writePlugin('lc-bad-models', { models: true, throwInActivate: true });
+    const h = await host();
+    const { configureTangu } = await import('../seams/runtime.js');
+    const { createTanguProfile } = await import('../profiles/index.js');
+    const { listPluginModels } = await import('../llm/pluginModels.js');
+    const profile = createTanguProfile({ sandboxMode: 'none' });
+    configureTangu({ host: {} as any, brain: {} as any, billing: {} as any, profile });
+    await h.boot.activateAllPlugins();
+    expect(await listPluginModels()).toEqual([]);
+    writePlugin('lc-cloud-models', { models: true });
+    profile.capabilities.hostExec = false;
+    await h.boot.rescanPlugins();
+    expect(await listPluginModels()).toEqual([]);
+  });
+});
 
 describe('UUID marketplace engine identity', () => {
   it('keeps same-manifest metadata and tools separate, while SDK calls accept their declared names', async () => {
@@ -207,7 +280,7 @@ describe('manifest mcpServers', () => {
     const hookOwners = () => hk.discoverHooks({ events: {}, state: {} }, 'Stop').map((x) => x.plugin?.id);
     const calls: string[] = [];
     pm.bindPluginMcp({
-      addServers: (o: { id: string }, s: Record<string, { args?: string[]; cwd?: string }>) => calls.push(`add:${o.id}:${Object.keys(s)}:${s.srv?.args?.[0] === path.join(pluginsRoot, 'lc-m', 's.js')}:${s.srv?.cwd === path.join(pluginsRoot, 'lc-m')}`),
+      addServers: (o: { id: string }, s: Record<string, { args?: string[]; cwd?: string }>) => calls.push(`add:${o.id}:${Object.keys(s)}:${typeof s.srv?.args?.[0] === 'string' && path.resolve(s.srv.args[0]) === path.join(pluginsRoot, 'lc-m', 's.js')}:${s.srv?.cwd === path.join(pluginsRoot, 'lc-m')}`),
       removeServers: async (id: string) => { calls.push(`remove:${id}`); },
     } as any);
     await h.boot.activateAllPlugins();

@@ -31,12 +31,14 @@ function blockText(node: ProseNode): string {
 }
 
 /** 在 doc 里按文档序找第一处命中。needles 依次尝试(整串优先,切词兜底 —— 与 vaultIndex.search 的摘要锚同口径),
- *  大小写不敏感。tag=true:needle 形如 `#标签`,左边须是行首或空白、右边不能再接标签字符。 */
-export function findTextHit(doc: ProseNode, needles: string[], tag = false): TextHit | null {
+ *  大小写不敏感。tag=true:needle 形如 `#标签`,左边须是行首或空白、右边不能再接标签字符。
+ *  nth:跳过前几处(月文件里两条闪念可以逐字相同,点第二条要落在第二条上);不够这么多处算这个 needle 没命中。 */
+export function findTextHit(doc: ProseNode, needles: string[], tag = false, nth = 0): TextHit | null {
   for (const raw of needles) {
     const needle = raw.trim().toLowerCase()
     if (!needle) continue
     let hit: TextHit | null = null
+    let skip = nth
     doc.descendants((node, pos) => {
       if (hit) return false
       if (!node.isTextblock) return true
@@ -50,6 +52,7 @@ export function findTextHit(doc: ProseNode, needles: string[], tag = false): Tex
           const next = hay.codePointAt(i + needle.length)
           if (next != null && TAG_CHAR.test(String.fromCodePoint(next))) continue
         }
+        if (skip-- > 0) continue
         hit = { from: pos + 1 + i, to: pos + 1 + i + needle.length, block: pos }
         break
       }

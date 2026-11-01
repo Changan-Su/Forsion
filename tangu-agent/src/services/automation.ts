@@ -182,7 +182,7 @@ export function isAutomationTool(name: string): boolean {
   return AUTOMATION_TOOL_ALLOWLIST.has(name) || declaredAutomationSafe(name);
 }
 
-export interface ExecStepRecord { type: string; tool?: string; ok: boolean; summary: string; /** skipIfEmpty 命中,本步未写。 */ skipped?: boolean }
+export interface ExecStepRecord { type: string; tool?: string; ok: boolean; summary: string; /** 观察:这一步没有执行,summary 是本应做的内容。 */ observed?: boolean; /** 观察:agent slug 或表路径。 */ target?: string; /** 观察:命中的是哪一行。 */ row?: string; /** skipIfEmpty 命中,本步未写。 */ skipped?: boolean }
 
 /**
  * 动作链来源。账本里据此区分谁点的:
@@ -469,20 +469,53 @@ export interface LaunchResult {
  *  单测里造不出确定性的并发,而 M6 要守的恰恰是那条路径;测 mimic 等于不测(本仓假绿母题)。 */
 export interface LaunchIo { runActions: typeof runActions }
 
+const clip = (text: string, max = 300): string => text.replace(/\s+/g, ' ').trim().slice(0, max);
+
+/** 观察:把这次命中本应执行的动作写成账本步骤,什么都不做。文本按这次命中展开,看到的就是真跑时的内容。 */
+export function observedSteps(t: MuseTrigger, ctx?: TriggerContext): ExecStepRecord[] {
+  const row = ctx?.row ? clip(Object.values(ctx.row.cells).map(String).find((v) => v.trim()) || ctx.row.id, 80) : '';
+  const fill = (text: string): string => { try { return expandTemplate(text, ctx); } catch { return text; } };
+  const step = (type: string, summary: string, extra: Partial<ExecStepRecord> = {}): ExecStepRecord =>
+    ({ type, ok: true, observed: true, summary: clip(summary), ...extra, ...(row ? { row } : {}) });
+  if (!t.actions?.length) {
+    return [t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG ? step('agent_run', t.prompt || t.desc, { target: t.agentSlug }) : step('wake', t.prompt || '')];
+  }
+  return t.actions.map((a) => {
+    if (a.type === 'notify' || a.type === 'remind') return step(a.type, [fill(a.title), a.body ? fill(a.body) : ''].filter(Boolean).join(' · '));
+    if (a.type === 'agent_run') return step(a.type, a.prompt, { target: a.agentSlug });
+    if (a.type === 'tool_call') return step(a.type, JSON.stringify(a.args || {}), { tool: a.tool });
+    return step(a.type, Object.entries(a.cells || {}).map(([k, v]) => `${k}: ${fill(String(v))}`).join(' · '), { target: a.path });
+  });
+}
+
+/** 观察的一次命中:只写账本,不建会话、不进收件箱、不碰模型。写失败只记日志,这次命中照常算消费。 */
+async function recordObserved(t: MuseTrigger, ctx?: TriggerContext): Promise<void> {
+  await query(
+    `INSERT INTO automation_executions (id, user_id, trigger_id, origin, status, steps, error) VALUES (?, ?, ?, 'auto', 'observed', ?, NULL)`,
+    [uuidv4(), automationUserId(), t.id, JSON.stringify(observedSteps(t, ctx))],
+  ).catch((e: any) => log(`观察记录写入失败(${t.id}):${e?.message || e}`));
+}
+
 export async function launchAutomationTriggers(hits: TriggerHit[], io: LaunchIo = { runActions }): Promise<LaunchResult> {
   const launched: string[] = [];
   const touched: Record<string, TouchedDbs> = {};
   if (!hits.length) return { launched, touched };
-  let runnable = hits;
-  try {
-    if (await anyUserRunActive()) {
-      // 让位是为了不抢模型账号;直接提醒不叫模型,该响就响。
-      runnable = hits.filter((h) => h.t.actions?.length && h.t.actions.every((a) => a.type === 'remind'));
-      if (!runnable.length) { log('用户有进行中的 run,本轮让位'); return { launched, touched }; }
-    }
-  } catch { return { launched, touched }; }
   const busy = new Set<string>();
   const ran = new Set<string>();
+  // 观察不叫模型,不用让位。走到 ran 里 = 和启用时一样烧冷却、推游标,看到的才是真实频率,转成启用后也不补做。
+  for (const { t, ctx } of hits) {
+    if (!t.observe) continue;
+    await recordObserved(t, ctx);
+    ran.add(t.id);
+  }
+  let runnable = hits.filter((h) => !h.t.observe);
+  try {
+    if (runnable.length && await anyUserRunActive()) {
+      // 让位是为了不抢模型账号;直接提醒不叫模型,该响就响。
+      runnable = runnable.filter((h) => h.t.actions?.length && h.t.actions.every((a) => a.type === 'remind'));
+      if (!runnable.length) log('用户有进行中的 run,本轮让位');
+    }
+  } catch { runnable = []; }
   for (const { t, ctx } of runnable) {
     if (busy.has(t.id)) continue; // 同规则前一个 hit 已 busy:余下不跑,整条留到下轮
     try {

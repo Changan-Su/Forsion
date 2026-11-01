@@ -5316,6 +5316,21 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .pv-confirm { font-size: var(--ui-font-caption, 11px); color: var(--danger); white-space: nowrap; }
 .pv-spin { animation: csx-spin 0.8s linear infinite; }
 .pv-rowerr { color: var(--danger); }
+.pv-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 8px 16px 0; }
+.pv-tab { padding: 3px 9px; border: 0; border-radius: var(--radius-pill, 999px); background: none; color: var(--text-muted); font: var(--ui-font-meta, 12px) var(--font-ui); cursor: pointer; }
+.pv-tab:hover { background: var(--overlay-light); }
+.pv-tab.on { background: var(--accent-light); color: var(--accent-ink, var(--accent)); font-weight: 600; }
+.pv-row-sub.is-plain { font-family: var(--font-ui); }
+.pv-warn { color: var(--danger); }
+.pv-dots { display: inline-flex; flex-shrink: 0; }
+.pv-dot { width: 20px; height: 20px; margin-left: -4px; display: grid; place-items: center; border-radius: 50%; background: var(--overlay-medium); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.pv-renew { padding: 3px 9px; border: 0; border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text); font: var(--ui-font-meta, 12px) var(--font-ui); cursor: pointer; }
+.pv-renew:hover { background: var(--overlay-medium); }
+.pv-members { display: flex; flex-direction: column; gap: 2px; padding: 2px 14px 10px; background: var(--overlay-light); }
+.pv-member { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--ui-font-body, 13px); color: var(--text); }
+.pv-member-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-member select { padding: 3px 6px; border: 0; border-radius: var(--radius-sm, 6px); background: var(--overlay-light); color: var(--text); font: var(--ui-font-meta, 12px) var(--font-ui); }
+.pv-stop { align-self: flex-start; margin-top: 4px; padding: 3px 0; border: 0; background: none; color: var(--danger); font: var(--ui-font-meta, 12px) var(--font-ui); cursor: pointer; }
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
    移动端「内容顶满」—— 浮动胶囊顶栏之下的起始留白(2026-08-13 用户拍板)

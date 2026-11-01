@@ -7,12 +7,18 @@ Split out of the forsion-plugin SKILL.md (1.63.0) because the model only sees th
 Space 管布局，View 管独立功能面，**UI component** 是 View 内可组合的部件；不要与 Amadeus 文档 Block / Dashboard Card 混用。
 开发插件 View 前先查宿主组件目录；已经公开的组件通过 `ctx.ui` 挂载，不复制聊天 JSX/CSS，也不打包第二份 React。
 
-`ctx.ui?.mountChatBox?.(el, opts)` 挂载与原生聊天同源的输入卡和模型选择器，返回 `{ update(patch), focus(), dispose() }`。
+`ctx.ui?.mountChatBox?.(el, opts)` 挂载与原生聊天同源的输入卡和模型选择器，返回 `{ update(patch), focus(), insertText(text), dispose() }`。
 `opts` 支持 `value`、`modelId`、`thinkingLevel`、`agentSlug`（初始默认）、`label`、`placeholder`、`submitLabel`、`disabled`、
-`submitOn: 'modifier-enter' | 'enter'`、`onChange(draft)`、`onSubmit(draft)`。`draft = { text, modelId, thinkingLevel }`。
+`submitOn: 'modifier-enter' | 'enter'`、`modelPicker`、`toolbar`、`suggest`、`onChange(draft)`、`onSubmit(draft)`。`draft = { text, modelId, thinkingLevel }`。
 提交返回 true 清空已提交内容；false / reject 保留，等待中防重复。默认 ⌘/Ctrl+Enter，Shift+Enter 换行，输入法确认不提交。
 模型目录与聊天共用，只展示 LLM；模型与思考档是组件局部草稿，不改全局默认/当前会话，不自动开会话或调用模型。
 **调用方必须使用回调里的模型与思考档**，不能只接 text。附件、命令、审批与运行控制属于会话编排器，不是此提示表单 API。
+三个可选插槽和一个方法（2026-10-31 起，不传时行为不变）：
+- `modelPicker: false`：不画模型和思考档，也不解析默认模型。`draft.modelId` 是传入值（没传是 `''`），`draft.thinkingLevel` 没传是 `'medium'`。
+- `toolbar(el)`：往卡片底排左侧（模型药丸前）放自己的 DOM，可返回清理函数；dispose 时调用，update 换函数时先清理再重挂，抛错由宿主隔离。`el` 在宿主挂载层里，不吃插件视图基础样式，按钮写 `.btn.sm`。
+- `suggest: { trigger, items(query) }`：宿主补全浮层，外观和键盘与笔记 `#` 补全一致（↑↓ / Enter / Tab / Esc，输入法组字时不弹，Enter 选中不提交）。`items` 回数组或 Promise，每项 `{ label, hint?, value }`，最多显示 8 项；选中把 trigger + 查询换成 `value` 加一个空格。
+- `insertText(text)`：在光标处插入（有选区则替换）并聚焦，给「#」按钮、语音转写用。
+旧宿主忽略这三个选项，也没有 `insertText`，用 `typeof box.insertText === 'function'` 探测，四项同时到位。
 插件主动在 View 卸载时 dispose（之后 `el` 立刻归还，见上「dispose 契约」）；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。
 完整双语示例与契约：`docs/customization/ui-components.md`；类型真源：`desktop/shared/chatBox.ts`。
 新增公共组件时一起维护类型、本文、原生消费者和生命周期测试，`contractDocs.test.ts` 覆盖 `ctx.ui` 嵌套方法。

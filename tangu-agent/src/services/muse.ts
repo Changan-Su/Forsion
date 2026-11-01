@@ -43,7 +43,7 @@ import { loadSchedule, entriesOf, dueHere, markEntryFired, ensureEntry, validate
 import { L } from '../tui/i18n.js';
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
-import { inboxHint, postIntroCard, recommendHint } from './museCards.js';
+import { inboxHint, postIntroCard, postObservedRuleCards, recommendHint } from './museCards.js';
 import { MUSE_ONBOARDING_DAILY_CAP, MUSE_ONBOARDING_MS, ensureMuseOnboarding, onboardingActive, readMuseOnboarding } from './museState.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
@@ -950,6 +950,7 @@ async function tick(): Promise<void> {
     if (!isWithinActiveHours(cfg, nowHour())) { log(`不在运行时段(当前 ${nowHour()} 时),跳过`); return; }
 
     await sendDailyDigestIfDue(cfg, userId);
+    await postObservedRuleCards(userId).catch((e: any) => log(`观察结果卡发送失败:${e?.message || e}`));
     // 后台让位：用户有进行中的 run → 不与之抢模型账号/速率，本轮跳过（下次巡检再来）。
     if (await anyUserRunActive()) { lastRunning = false; log('用户有进行中的 run，本轮让位'); return; }
     // 起周期的三种理由(任一即可;都不豁免 anyMuseRunActive/token/restarts 预算闸——防失控烧穿额度):

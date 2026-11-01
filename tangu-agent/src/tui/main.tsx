@@ -146,10 +146,7 @@ async function main(): Promise<void> {
   await mcp.start();
   bindPluginMcp(mcp); // 插件 manifest 声明的 MCP 要在激活插件之前就有地方挂
 
-  // 插件:进入交互 TUI 才激活全部插件（注册其工具 provider）;login/--help/worker 等路径不付此开销。
-  // TUI 无 express，忽略返回的路由挂载器（仅 standalone 用）。
-  await activateAllPlugins();
-
+  // 与 standalone 同序:先装配真实 profile,再让插件注册/校验模型来源等宿主能力。
   const mod = createTanguModule({
     host,
     brain,
@@ -157,6 +154,8 @@ async function main(): Promise<void> {
     profile: createTanguProfile({ sandboxMode, defaultModelId: cfg.defaultModelId || undefined }),
     mcp,
   });
+  // 仅交互 TUI 激活插件;无 express,忽略路由挂载器。login/--help/worker 不付此开销。
+  await activateAllPlugins();
   await mod.runMigration();
   await fixLegacyAppIds(); // 修正 runs.ts 硬编码时期误标 'ai-studio' 的本地会话(仅 standalone 本地库)
   // 终端单会话：关 run 自愈（别把上次残留 run 自动跑起来）+ historian；保留本机沙箱 janitor。

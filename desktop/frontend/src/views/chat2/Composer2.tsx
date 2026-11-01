@@ -12,6 +12,7 @@ import {
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
+import { CallHint, markCallHintSeen } from './CallHint'
 import { claimComposerPrefill, subscribeComposerPrefill } from '../../amadeus/plugins/tanguSeam'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
 import { THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
@@ -715,10 +716,11 @@ export const Composer2: React.FC<{
   // 存了模型就用它;从没动过这个开关、装了 Forsion Extend 且已登录时默认用云端的通话模型(见 services/realtimeModel.ts)。
   const realtimeStored = useRealtimeConfig()
   const cloudCallModel = useApp((s) => s.modelsResp?.realtimeModel ?? null)
+  const directProviders = useApp((s) => s.modelsResp?.directProviders)
   const forsionSignedIn = useApp((s) => !!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false) && !!window.tangu?.forsionLogin
   const { model: realtimeModel, voice: realtimeVoice } = useMemo(
-    () => resolveRealtimeCall(realtimeStored, { model: cloudCallModel, signedIn: forsionSignedIn }),
-    [realtimeStored, cloudCallModel, forsionSignedIn])
+    () => resolveRealtimeCall(realtimeStored, { model: cloudCallModel, signedIn: forsionSignedIn, providers: directProviders }),
+    [realtimeStored, cloudCallModel, forsionSignedIn, directProviders])
   const [callStarting, setCallStarting] = useState(false)
   const [callError, setCallError] = useState('')
   const phoneCall = !!window.tangu?.mobile // 手机:通话走云网关,通话卡是页面顶上的一条(mini/VoiceCallView 的 VoiceCallBar)
@@ -757,6 +759,7 @@ export const Composer2: React.FC<{
   }, [liveOwnerResolved])
   const startVoiceCall = async () => {
     if (callStarting) return
+    markCallHintSeen()
     setCallStarting(true)
     setCallError('')
     try {
@@ -1766,6 +1769,7 @@ export const Composer2: React.FC<{
   }
 
   // 发送 / 停止 / 通话键:桌面在底排末尾,手机在输入框右边(见上)。录音时两处都不出(录音条自带停止和发送)。
+  const inputEmpty = !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pastes.length && !elements.length && !pinnedSkills.length
   const submitKeys = running ? (
     <>
       {(!!draft.trim() || allRefChips.length > 0 || quotedNote || pastes.length > 0 || elements.length > 0) && (
@@ -1773,7 +1777,7 @@ export const Composer2: React.FC<{
       )}
       <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
     </>
-  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pastes.length && !elements.length && !pinnedSkills.length ? (
+  ) : callable && inputEmpty ? (
     // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
     <ChatBoxSubmit
       className="t2c-live-control"
@@ -1791,6 +1795,7 @@ export const Composer2: React.FC<{
 
   return (
     <div className="t2c">
+      <CallHint ready={callable && inputEmpty && !running && !inCall} cloud={realtimeModel === cloudCallModel?.id} />
       {groupSetupOpen && (
         <GroupChatSetup
           agents={agents || []}

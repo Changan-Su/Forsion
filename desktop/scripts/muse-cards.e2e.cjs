@@ -1,6 +1,6 @@
 /**
  * Muse 私聊里要点的卡与磨合期按钮(方案 Muse与Agent升级_2026-10-29)的真 Electron 台架。桩引擎扮一台 Muse 刚开起来的电脑:
- * 一条主动消息、一张插件卡、五张进卡片堆的卡(三问 / 设置变更 / 两周小结 / 功能推荐 / 规则)。
+ * 一条主动消息、一张插件卡、六张进卡片堆的卡(三问 / 设置变更 / 两周小结 / 功能推荐 / 观察结果 / 规则)。
  * 断言:
  *  R1 主动消息下面有「有用 / 少来点这种」,卡片消息没有;点了发 verdict,按钮变成「记下了：这类少来」,刷新不再出现
  *  R2 插件卡留在消息里,带「不感兴趣」,不进卡片堆;卡片堆 5 张
@@ -10,6 +10,7 @@
  *  R6 小结:改一条(index + text)、删一条、「都对」,记忆跟着动由引擎单测钉
  *  R7 功能卡点「不感兴趣」发 dismiss
  *  R8 规则卡写清当 · 只在 · 做;点「改一下」发 edit,打开画布定位到建好的规则;卡片堆清空
+ *  R9 观察结果卡写清天数和命中;「再看 7 天」发 extend,流里变回执
  * 量的是 out/ 产物:改了源码先 `npx electron-vite build`。
  *   node ../.claude/hooks/devlock.cjs run --vehicle=e2e --what="Muse 卡片台架" --eta=3 -- node scripts/muse-cards.e2e.cjs
  *   SHOT_DIR=… 指定截图目录;LANG_EN=1 拍英文;DARK=1 拍深色
@@ -33,6 +34,7 @@ const MSGS = [
   dm('c-settings', 4, 'proactive:card', fence('settings')),
   dm('c-summary', 5, 'proactive:card', fence('summary')),
   dm('c-feature', 6, 'proactive:card', `你常问昨天看过什么。\n\n${fence('feature')}`),
+  dm('c-observed', 6.5, 'proactive:notice', fence('rule-observed')),
   dm('c-rule', 7, 'proactive:card', `打开 Figma 时要不要提醒你先活动一下？\n\n${fence('rule')}`),
 ]
 const RULE = { desc: '打开 Figma 时提醒我活动一下', cond: { type: 'computer.app_opened', params: { app: 'Figma' } }, cooldownHours: 2, actions: [{ type: 'remind', title: '先活动一下' }], only: { weekdays: [1, 2, 3, 4, 5] }, maxPerDay: 2 }
@@ -48,6 +50,7 @@ async function main() {
     card('settings', 'settings', { patch: { activeHours: { start: 9, end: 23 } }, changes: [{ field: 'activeHours', from: null, to: { start: 9, end: 23 } }, { field: 'notify', from: 'immediate', to: 'digest' }] }),
     card('summary', 'summary', { lead: '两周下来，我记住了这几条。', items: ['晚上十点以后别提工作', '日报只要三条', '论文先给提纲再给全文'] }),
     card('feature', 'feature', { feature: 'computer-history', title: '电脑历史', why: '打开后我能回答「昨天看过什么」。' }),
+    card('rule-observed', 'rule-observed', { triggerId: 'w-paper', desc: '新论文入库后写摘要', hits: 4, days: 7 }),
     card('rule', 'rule', { rule: RULE }),
   ]
   const seen = { decide: [], feedback: [] }
@@ -127,7 +130,7 @@ async function main() {
     }))
     const s0 = await state()
     r.check('R1a 主动消息下面有反馈按钮,卡片消息没有', s0.fb === 'open' && !s0.fbOnCards, JSON.stringify(s0))
-    r.check('R2 插件卡留在消息里,不进卡片堆;卡片堆 5 张', s0.pluginBtn && !s0.pluginInDeck && s0.deckN === '5', JSON.stringify(s0))
+    r.check('R2 插件卡留在消息里,不进卡片堆;卡片堆 6 张', s0.pluginBtn && !s0.pluginInDeck && s0.deckN === '6', JSON.stringify(s0))
     await win.screenshot({ path: path.join(dir, 'plugin.png') })
     r.check('R3 围栏不进正文;待处理的卡流里一行指路', !s0.leak && s0.pointer === 'pending', JSON.stringify(s0))
     await win.screenshot({ path: path.join(dir, 'intro.png') })
@@ -188,14 +191,24 @@ async function main() {
     await win.waitForTimeout(600) // 卡片入场过渡
     await win.screenshot({ path: path.join(dir, 'feature.png') })
     await win.locator(`${inCard('feature')} button`).nth(1).click()
-    await win.waitForSelector(inCard('rule'), { timeout: 5000 }).catch(() => {})
+    await win.waitForSelector(inCard('rule-observed'), { timeout: 5000 }).catch(() => {})
     r.check('R7 功能卡「不感兴趣」发 dismiss', last().id === 'feature' && last().action === 'dismiss', JSON.stringify(last()))
+
+    // ── 观察结果卡 ──
+    await win.waitForTimeout(600) // 卡片入场过渡
+    await win.screenshot({ path: path.join(dir, 'rule-observed.png') })
+    const observedText = await win.locator(inCard('rule-observed')).innerText().catch(() => '')
+    r.check('R9a 观察结果卡写清天数和命中,四个按钮', /新论文入库后写摘要/.test(observedText) && /7 天，命中 4 次|7 d with 4 matches/.test(observedText) && await win.locator(`${inCard('rule-observed')} button`).count() === 4, observedText)
+    await win.locator(`${inCard('rule-observed')} button`, { hasText: /再看 7 天|Watch 7 more/ }).click()
+    await win.waitForSelector('#tocmsg-c-observed [data-muse-card-line="done"]', { timeout: 5000 }).catch(() => {})
+    r.check('R9b 「再看 7 天」发 extend,流里变回执', last().id === 'rule-observed' && last().action === 'extend' && /再观察 7 天|7 more days/.test(await win.locator('#tocmsg-c-observed [data-muse-card-line]').textContent().catch(() => '')), JSON.stringify(last()))
+    await win.waitForSelector(inCard('rule'), { timeout: 5000 }).catch(() => {})
 
     // ── 规则卡 ──
     await win.waitForTimeout(600) // 卡片入场过渡
     await win.screenshot({ path: path.join(dir, 'rule.png') })
     const ruleText = await win.locator(inCard('rule')).innerText().catch(() => '')
-    r.check('R8a 规则卡写清当 · 只在 · 做,三个按钮', /打开了 Figma|Opened Figma/.test(ruleText) && /工作日|Weekdays/.test(ruleText) && /直接提醒「先活动一下」|Remind you/.test(ruleText) && await win.locator(`${inCard('rule')} .t2-taskcard-actions button`).count() === 3, ruleText)
+    r.check('R8a 规则卡写清当 · 只在 · 做,四个按钮', /打开了 Figma|Opened Figma/.test(ruleText) && /工作日|Weekdays/.test(ruleText) && /直接提醒「先活动一下」|Remind you/.test(ruleText) && await win.locator(`${inCard('rule')} .t2-taskcard-actions button`).count() === 4, ruleText)
     await win.locator(`${inCard('rule')} button`, { hasText: /改一下|Change it/ }).click()
     await win.waitForSelector('.auto-canvas', { timeout: 10_000 }).catch(() => {})
     await win.waitForTimeout(600)

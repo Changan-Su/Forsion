@@ -190,6 +190,8 @@ export interface SearchBrain {
 /** 模型目录(admin 列表用)。 */
 export interface ModelsBrain {
   listGlobalModels(...args: any[]): Promise<any[]>;
+  /** Live local engine-plugin sources; no credentials and no fixed catalog mutation. */
+  listPluginModels?(): Promise<AgentModel[]>;
   /**
    * 本地直连 provider 列表(BYO-key,桌面/TUI 模型选择器用;绝不含 apiKey,baseUrl 仅供 UI 展示)。
    * 可选:仅 standalone 的 multiBrain 实现;forsionSeams/httpBrain 不实现 → 调用方跳过。
@@ -223,7 +225,10 @@ export interface ModelsBrain {
     /** 辅助模型 · 图像识别槽(主模型无原生视觉时的兜底;空 = 不启用)。 */
     visionModelId?: string | null;
     /** 云端的实时语音通话模型(不在 models 里;apiModelId = 上游模型名,客户端按它分音色家族)。老云端不给 = 没有云端通话。 */
-    realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null;
+    realtimeModel?: { id: string; name: string; apiModelId?: string | null; defaultVoice?: string } | null;
+    /** 后台给这个应用定的朗读默认模型与音色;没定 = 不默认开朗读。 */
+    ttsModelId?: string | null;
+    ttsVoice?: string | null;
     /** 云端的机器翻译模型(百炼 qwen-mt 那一类;不在 models 里 —— 它们不能聊天)。老云端不给 = 没有。 */
     translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
     /** 云端的朗读模型(不在 models 里 —— 它们只合成语音;桌面「语音朗读」的模型框列它们)。老云端不给 = 没有。 */
@@ -352,6 +357,15 @@ export interface SpeechResult {
 }
 export interface TtsBrain {
   synthesize(req: SpeechRequest): Promise<SpeechResult>;
+}
+
+/** Forsion 账号代管的通话音色(云端复刻):key 住云端,按用户隔离;只有云端实现。 */
+export interface CloudVoice { id: string; voice: string; name: string; modelId: string; hasSample: boolean }
+export interface VoicesBrain {
+  list(userId: string): Promise<{ voices: CloudVoice[]; limit: number }>;
+  clone(userId: string, req: { modelId: string; name: string; audioData: string; text?: string; language?: string }): Promise<CloudVoice>;
+  remove(userId: string, id: string): Promise<void>;
+  sample(userId: string, id: string): Promise<{ data: string; mime: string }>;
 }
 
 /** 实时语音(speech-to-speech)上游:给出 WebSocket 地址与鉴权头,连接与转发归调用方(services/realtimeVoice)。 */
@@ -485,6 +499,8 @@ export interface CloudBrainServices {
   images?: ImagesBrain;
   /** 语音合成;可选:仅 standalone multiBrain 实现(BYO-key 直连),云端未注入 → /agent/tts 返回 501。 */
   tts?: TtsBrain;
+  /** 云端音色;可选:没接云端 → /agent/tts/cloud-voices 回 501。 */
+  voices?: VoicesBrain;
   /** 实时语音;可选:standalone 实现(multiBrain 自带 key 直连百炼,否则 httpBrain 走 Forsion 云端中转);云端 worker 未注入 → /agent/realtime 拒连。 */
   realtime?: RealtimeBrain;
   /** 每-agent 云文件(Phase 2);可选:旧云端/纯本地未注入 → 同步/水合调用方跳过。 */

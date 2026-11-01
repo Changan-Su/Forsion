@@ -2956,7 +2956,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
       revealText: (needles, opts) => {
         const v = liveView()
         if (!v) return false
-        const hit = findTextHit(v.state.doc, needles, !!opts?.tag)
+        const hit = findTextHit(v.state.doc, needles, !!opts?.tag, opts?.nth)
         if (!hit) return false // 命中只在标题 / 属性里,或这篇还没装上正文:不动(调用方据此重试 / 放弃)
         // 顺序是死的(G4-01 / C-03):① 先展开藏着命中的会话折叠 —— 两个折叠插件的光标守卫会把放进隐藏区的
         // 选区弹回标题;② focus;③ 选中命中文字;④ 显式贴顶滚动。

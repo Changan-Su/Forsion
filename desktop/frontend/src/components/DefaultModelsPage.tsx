@@ -159,7 +159,7 @@ export function DefaultModelsPage(p: {
   const asrModels = [...(localReady ? [{ id: LOCAL_ASR, name: t('dm.asrLocal'), provider: t('origin.local'), source: 'direct' as const }] : []), ...cat.asr.map(asInfo)]
   const ttsValue = stored?.ttsModelId?.trim() || ''
   const ttsList = ttsValue && !find(cat.tts, ttsValue) ? [...cat.tts, { id: ttsValue, name: ttsValue, provider: ttsValue.split('/')[0], source: 'direct' as const }] : cat.tts
-  const callValue = stored ? effectiveRealtimeModel(stored, { model: models?.realtimeModel, signedIn: p.realtimeSignedIn }) : ''
+  const callValue = stored ? effectiveRealtimeModel(stored, { model: models?.realtimeModel, signedIn: p.realtimeSignedIn, providers: p.providers }) : ''
   const callList = stored ? realtimeCandidates(stored, p.providers, models?.realtimeModel, p.realtimeSignedIn) : []
   const autoMt = cat.mt[0]?.id
   const translators = [...llms, ...cat.mt.map(asInfo)]

@@ -464,6 +464,21 @@ export interface SearchHit {
   /** 1-based line number of the match within the cleaned text. */
   line: number
   score: number
+  /** Only for queries with a `tag:` condition: each line of this file carrying a target tag, in document order
+   *  (line-0 first). At most TAG_LINE_HITS_MAX (100, shared/amadeus/tagQuery) per file. Absent on plain queries
+   *  and on `-tag:`-only queries, which have no target tag. */
+  hits?: SearchHitLine[]
+}
+
+/** One line of SearchHit.hits. line = 1-based line in the cleaned text (same as BacklinkHit), 0 = the tag is in
+ *  frontmatter. text = the line with markdown syntax removed, clipped around the tag on very long lines. Tags inside
+ *  code do not count (maskCode). */
+export interface SearchHitLine {
+  line: number
+  text: string
+  /** How many times this line's first target tag appears earlier in the note, counted over the whole note even when the
+   *  list was narrowed. Absent = 0. Lets the UI locate the line by tag when its text can't be found in the editor. */
+  tagIndex?: number
 }
 
 /** 反链 / 提及的一处命中(L-16)。line = 清洗文本(剥 fm 与注释)里的 1-based 行号,0 = 属性区;
@@ -587,7 +602,11 @@ export interface TrashEntry {
 
 export interface TagCount {
   tag: string
+  /** Files carrying exactly this tag. 0 = the tag exists only as a parent prefix (`work` of `#work/urgent`). */
   count: number
+  /** Files carrying this tag or a nested one, deduplicated per file. Absent from older sources (cloud `/tags`,
+   *  older hosts): buildTagTree falls back to self + children. */
+  total?: number
 }
 
 export interface VaultInfo {

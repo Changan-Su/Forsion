@@ -22,6 +22,7 @@ import { homedir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { forsionHomeDir, tanguDataDir, defaultWorkspaceDir, isDevMode } from './forsionHome'
+import { loadTanguCreds } from './forsionAuth'
 import { clipSourceDir } from './clipExtension'
 import { amadeusConfigPath } from './amadeus/settings'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_ENV, COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
@@ -232,11 +233,7 @@ export class BackendManager {
 
   /** 实时 forsion_token(~/.forsion/auth.json,登录态唯一真源);未登录 = null。只用于引擎调云端(TANGU_TOKEN)。 */
   private cloudToken(): string | null {
-    try {
-      const creds = JSON.parse(readFileSync(join(forsionHomeDir(), 'auth.json'), 'utf8'))
-      if (creds.token) return String(creds.token)
-    } catch { /* 无 auth.json = 未登录 */ }
-    return null
+    return loadTanguCreds()?.token || null
   }
 
   /** 外部 agent 接 Forsion MCP 端点的稳定本地密钥(设置「高级」开关开启时才被接受)。持久化到

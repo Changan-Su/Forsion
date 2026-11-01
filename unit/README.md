@@ -9,7 +9,7 @@ Unit is the independently runnable Forsion framework, sharing the Genesis Deskto
 已有后台 Unit 可在同一个 listener 上增加 `webEntries`，每个入口声明自己的 `basePath`、`plugins` 和 `defaultSpace`。
 主入口仍按原 `publish` 设置发布；附加入口只能列出其显式插件及依赖，不能读取主机文件或公开后台插件。
 两者共用同一份后端生命周期和账号存储。更新插件时会重新校验所有入口，避免一次热更新留下无法重启的配置。
-`inheritWebAccount: true` 仅供同源官方 Web 迁移：先经 Unit 验证旧登录，再恢复经权限核对的智库选择，不复制无归属的内容缓存。
+`inheritWebAccount: true` 仅供同源官方 Web 迁移：先经 Unit 验证旧登录，再恢复经权限核对的智库选择，不复制无归属的内容缓存。该入口的登录存在 Unit 自己的 `localStorage` 键里，跨标签页、重启浏览器都保持（与旧 Web 一致，`/auth` 页不读也不转发这个键）；其余入口仍按标签页隔离。
 官方 Extend 在装载及更新时必须通过桌面同一固定公钥验签；自建的普通插件仍由运营方安装并列入允许清单。
 
 An existing Unit can add explicit `webEntries` on the same listener while retaining its original Admin projection.
@@ -69,6 +69,38 @@ node main.mjs access /absolute/path/my-unit/unit.json
 默认仅监听回环地址。设备所有者密钥保存在私有数据目录；访问链接用 fragment 传递密钥，网页消费后移除，仅保留在当前标签会话。实例数据目录应在发行目录外，更新代码不会覆盖数据。`init` 拒绝覆盖已有配置。
 
 The default listener is loopback-only. The owner key stays in private instance data; the browser consumes it from the URL fragment, removes it and retains it only for that tab session. Keep instance data outside the release directory so code updates preserve data. `init` refuses to overwrite existing configuration.
+
+## 云账号 / Cloud account
+
+本地模式（`--mode local`）的 Unit 可以托管 Forsion Extend 的 Node 层，不需要 Electron：同一份签名包、同一个 `registerCloud` 入口。装上它之后，这台 Unit 就能登录账号、同步笔记，并通过云端中转被同账号的其他设备访问。它在这里只是宿主服务，不进主人的网页。Extend 不随发行包提供，从 npm 取，装载时用桌面同一把固定公钥验签。
+
+A local-mode Unit can host the Node half of Forsion Extend without Electron: the same signed package and the same `registerCloud` entry. Once installed, the Unit can sign in, sync notes, and be reached by the account's other devices through the cloud relay. Here it is a host service and adds nothing to the owner's page. Extend is not part of the release; take it from npm. It is verified against the same pinned key as the desktop.
+
+```sh
+npm pack @forsion/extend && tar -xzf forsion-extend-*.tgz
+node main.mjs install /absolute/path/my-unit/unit.json ./package
+node main.mjs run /absolute/path/my-unit/unit.json
+# From another terminal. Prints a link and a code; confirm them in any browser.
+node main.mjs login /absolute/path/my-unit/unit.json https://api.forsion.net
+node main.mjs account /absolute/path/my-unit/unit.json
+node main.mjs logout /absolute/path/my-unit/unit.json
+```
+
+凭据、配对和同步状态都在 `data/cloud/`，文件权限 0600，不加密（无头设备没有钥匙串），只有本机主人经控制通道能操作，网页和本地引擎都读不到。其中任何一个文件读不出来时都按「不知道」处理：保持原样、拒绝写入，由主人修复或删除。
+
+Credentials, the relay pairing and sync state live in `data/cloud/` with mode 0600 and without encryption, since a headless device has no keychain. Only the owner can operate them, through the local control channel; neither the Web UI nor the local engine can read them. A file that cannot be read counts as unknown: it stays as it is, writes are refused, and the owner repairs or removes it.
+
+**笔记同步**：Unit 只有一个智库，所以它只能是一个账号的云镜像。第一个登录的账号绑定它，前提是智库为空（隐藏文件也算内容，只有 `.DS_Store` 不算），或者 `unit.json` 里设了 `"cloud": { "syncVault": true }`。已有笔记不会被悄悄上传。没绑定时同步落在 `data/cloud` 里的私有镜像，网页和引擎看不到；之后登录的其他账号也一样，一个账号的笔记不会进另一个账号的云端。解绑要先停 Unit，再删 `data/cloud/vault-account.json`。
+
+**Note sync**: a Unit has one vault, so it can mirror exactly one account. The first account to sign in binds it, provided the vault is empty (hidden files count as content, only `.DS_Store` does not) or `unit.json` sets `"cloud": { "syncVault": true }`. Existing notes are never uploaded silently. Without a binding, sync goes to a private mirror under `data/cloud`, which the Web UI and the engine do not see; the same applies to any later account, so one account's notes never reach another's cloud. To unbind, stop the Unit and delete `data/cloud/vault-account.json`.
+
+**设备中转**：登录后默认打开，`"cloud": { "relay": false }` 关闭。中转来的请求算另一台设备，不算工作区主人：引擎只放基础档并盖远端标记，不可逆删除只许本机。进程恢复（SIGCONT，或定时器迟到）和网络地址变化时立刻重连并重启同步，不等 45 秒看门狗。目前经中转能用 `/unit`、`/vault`、`/engine` 这些接口；经中转打开 Unit 自己的网页还不支持。
+
+**Device relay**: on once signed in; `"cloud": { "relay": false }` turns it off. A relayed request is another device, not the workspace owner: the engine allows only the base tier and marks it as remote, and irreversible deletes stay local. When the process resumes (SIGCONT or a late timer) or the network address changes, the Unit redials and restarts sync at once rather than waiting for the 45-second watchdog. Through the relay the `/unit`, `/vault` and `/engine` interfaces work; opening the Unit's own page through the relay is not supported yet.
+
+`unit/verify-cloud.mjs` 用两台真实 Unit、一个签名包和本机 server 跑完整条链路，只认本机地址。
+
+`unit/verify-cloud.mjs` runs the whole chain with two real Units, a signed package and a local server. It accepts local addresses only.
 
 ## npm 发布 / npm package
 
@@ -172,8 +204,10 @@ Admin Panel MCP 新增 `unit_status`、`unit_releases`、`unit_operations`、`un
 需同时更新 Unit 与 Server，并在实例私有 `unit.json` 顶层开启：
 
 ```json
-{"management": {"enabled": true}}
+{"management": {"enabled": true, "trustedKeys": ["-----BEGIN PUBLIC KEY-----\n…\n-----END PUBLIC KEY-----\n"]}}
 ```
+
+`trustedKeys` 可选：远程安装 / 更新接受的 ed25519 公钥（PEM 字符串数组，最多 32 把）；开启管理时这一项格式不对，Unit 拒绝启动。只放公钥，私钥由发包方自己保管、不进任何仓库或 `unit.json`。
 
 默认关闭。重启 Unit 后生效；该配置不下发浏览器。Unit 自己接管 `/api/admin/unit/*`，使用活动账户提供者重新验证原 Bearer、当前 ADMIN 账户与令牌权限，拒绝普通用户/伪造身份，并在提交与实际执行前再次验证。服务端校验不依赖模型传入的角色。
 
@@ -187,6 +221,15 @@ Admin Panel MCP 新增 `unit_status`、`unit_releases`、`unit_operations`、`un
 stage 将包复制到 Unit 私有发行目录并保存 SHA256；安装前与安装副本都会检查摘要。源目录移动不影响已登记包。MCP 不接受包路径、下载 URL 或 shell 命令；npm-ci 包先在目标平台安装依赖并封装，远程任务不执行 npm 安装。发行目录最多保留 200 项，满后由本机运维归档不用的条目。
 
 任务由 Unit 主进程持有，状态为 queued/running/succeeded/failed/interrupted，更新还显示 verifying-release/applying 阶段；保存操作人、目标、发行编号与时间；不持久化 Bearer、私有配置或完整包路径。最近 100 条任务持久化，幂等检查限于这些保留记录；同一编号换参数或换操作人会被拒绝。Unit 重启将未完成任务标为 interrupted，须先检查实际状态再决定是否重试。当前串行执行，一个任务运行时其他新任务返回 409。
+
+### 远程安装 / 卸载与签名
+
+`POST /api/admin/unit/operations` 另有两个动作（`GET /status` 的 `management.actions` 会列出，面板据此探测）：
+
+- `install`：带 `releaseId`，release 的 `pluginId` 须与请求一致，且该 id 未安装（已装 → 409，改用 update）；`requires` 须全部 active（否则 409）。Space id 不重复、原生功能依赖与 `webEntries` 校验通过后，包装进不可变版本目录、按依赖序激活，成功后才写进 `unit.json` 的 `plugins`；激活失败撤掉记录与版本目录，`unit.json` 不变，任务 failed。若撤销时停不下来或 runtime 同步失败，记录照样移除，但版本目录保留，任务 error 写明回滚不完整，重启 Unit 清掉。远程安装不改 `defaultSpace`。权限同 update（`unit.update`）。
+- `uninstall`：账户提供者（`/status` 里 `protected: true` 的插件）一律 409；任何已安装插件（不论是否 active）`requires` 它 → 409 并列出这些插件；`unit.json` 的 `webEntries` 发布它、或它提供 `defaultSpace` 时任务 failed（否则下次启动会失败，先在 `unit.json` 改）。先停用再从 `plugins` 移除；`dataDir/plugins/<id>` 与已装的版本目录都保留，不删任何文件。停用、runtime 同步或写 `unit.json` 失败时整步撤回：记录、顺序与原运行状态恢复，任务 failed，可直接重试。权限同启停（`unit.lifecycle`）。
+
+签名只针对远程 `install` 与 `update`：release 包根须带 `SIGNATURE`，格式同 `desktop/electron/bundleSignature.ts`（ed25519，列包内文件的 sha256），且须签到 `manifest.json` 与所有声明的入口（`main`、`backend.main`、`runtime.main`）。包还必须完整：除 `SIGNATURE` 外每个普通文件都在签名表里且摘要一致，多一个没签的文件、或包内有符号链接 / 特殊文件，都判 `untrusted`（Server 插件从自带的 node_modules 解析模块，没签的文件可能顶替已签的模块）。桌面端 Extend 播种 / 装载的口径不变。公钥依次试 `desktop/electron/builtinBundles.json` 里该 id 钉死的 `signingKey`、再试 `management.trustedKeys` 里任意一把；都不过 → 400 `Release is not signed by a trusted key`。提交时核一次；任务执行时把包复制进私有版本目录、摘要复核之后，对这个最终目录再做一次完整校验，通过才激活，update 同样如此。Server 插件带 bundled 依赖，这条路径的 SIGNATURE 文件数上限放宽到 200000（桌面端仍是 5000）。`GET /releases` 每项另给 `installed`（该 pluginId 当前是否已装）与 `signature`（`trusted` / `untrusted` / `missing`，按 release 摘要缓存到 Unit 重启）。本地 CLI 的 `install` / `stage` / `update` 不要求签名。
 
 `unit_plugin_action` 支持 enable/disable/restart/migrate。迁移须先停用目标模块；更新不自动迁移，失败尝试恢复旧代码，不回滚数据库。为保持远程恢复入口，停用或迁移账户提供者本身只能用本地 CLI；允许重启和更新账户提供者。Server 自身更新时其 MCP 连接可能断开，账户服务恢复前查询可能短暂失败，恢复后可继续查 Unit 保存的任务。
 

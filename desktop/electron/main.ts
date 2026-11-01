@@ -50,7 +50,7 @@ import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall
 import { createKeepAwake } from './keepAwake'
 import { createMcpLifecycle, startForsionMcp } from './mcpServer'
 import { randomBytes } from 'node:crypto'
-import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
+import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
@@ -504,6 +504,7 @@ interface TanguStoredConfig {
   /** 只读、不落盘:用户从没动过「语音通话」(config.json 里没有 tts.realtimeModel 这个键)。这时界面替他定缺省 ——
    *  装了 Forsion Extend 且已登录就默认开、用云端模型;一旦开关 / 选过模型(含关掉 → 写 ''),就按他选的来。 */
   realtimeModelUnset: boolean
+  ttsModelUnset: boolean
   /** 实时通话音色;'' = 引擎按模型家族给缺省(Omni=Tina,Qwen-Audio=longanqian)。存 tts.realtimeVoice。 */
   realtimeVoice: string
   /** 记录应用内活动日志(~/.forsion/activity;Muse 数据源+bug 排查导出);关=停止新记录。 */
@@ -589,6 +590,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   ttsAutoSpeak: false,
   realtimeModelId: '',
   realtimeModelUnset: true,
+  ttsModelUnset: true,
   realtimeVoice: '',
   activityLogEnabled: true,
   computerHistoryEnabled: false,
@@ -800,6 +802,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       realtimeVoice: tts.realtimeVoice || '',
     } : {}),
     realtimeModelUnset: tts.realtimeModel === undefined,
+    ttsModelUnset: tts.modelId === undefined,
     ...(home.asr !== undefined ? { asrModelId: asr.modelId || '', asrBackend: asr.backend === 'local' ? 'local' : 'cloud' } : {}),
     ...(home.models !== undefined ? {
       backgroundModelId: auxModels.background || '',
@@ -2696,6 +2699,7 @@ app.whenReady().then(async () => {
   const accountCore = createAccountCore({
     loadCreds: loadTanguCreds,
     saveCreds: saveTanguCreds,
+    assertCredsWritable: assertTanguCredsWritable,
     saveConfig: (patch) => saveConfig(patch),
     loadConfig,
     ensureBackend,
@@ -4573,7 +4577,7 @@ app.whenReady().then(async () => {
   // auth.json)一连就整片 401,表现为「本地会话列表加载失败 + 假的『登录已过期』」。开窗不等这条
   // (4s 封顶,离线不拖启动);无需续期时(1h 内换过)立即落到 finally,后端照常即刻起。
   void accountCore.refresh(4000).catch(() => {}).finally(() => { void ensureBackend() })
-  setInterval(() => { void accountCore.refresh() }, 24 * 3600_000) // 一直开着不关的也算「在用软件」
+  setInterval(() => { void accountCore.refresh().catch(() => {}) }, 24 * 3600_000) // 一直开着不关的也算「在用软件」;auth.json 坏了写回被拒,旧 token 照用
   // MCP 服务常驻、随 App 启动(引擎的 ASR 桥要用);外部面按设置「高级」开关(默认关)。开关值在 lifecycle 队列里现读:
   // 若先读到旧值、用户又在读完前切了开关,旧值作废(见 createMcpLifecycle)。不依赖后端就绪,工具调用时现取引擎地址。
   if (!SANDBOX) void applyForsionMcp(async () => (await loadConfig()).mcpEnabled)
