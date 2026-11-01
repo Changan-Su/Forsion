@@ -331,7 +331,7 @@ When a plugin needs the user to hold an entitlement, write `"requires": { "entit
 
 ### Space ribbon position and phone layout
 
-In `space.json`, `"ribbon": { "after": "<spaceId>" }` places the icon after that Space the first time it appears, and leaves any position the user already chose alone. `"mobile": { "listFirst": true }` opens the left list first on phones, and picking an item opens the main view. Use it only when the left panel really is such a list; by default the main view comes first and the left panel is a drawer. When the main view takes over the native header, use `ctx.ui.claimHeader?.({ title, back, onBack, toList: true })`: the system back gesture and the header arrow both call `onBack`, then the shell returns to the list. Without `toList` only `onBack` runs, which suits an overlay.
+In `space.json`, `"ribbon": { "after": "<spaceId>" }` places the icon after that Space the first time it appears, and leaves any position the user already chose alone. `"mobile": { "listFirst": true }` opens the left list first on phones, and picking an item opens the main view. Use it only when the left panel really is such a list; by default the main view comes first and the left panel is a drawer. When the main view takes over the native header, use `ctx.ui.claimHeader?.({ title, back, onBack, toList: true })`: back slides the list in, following the finger on an edge swipe, and `onBack` runs once the list is showing. A cancelled swipe calls nothing. Without `toList` the system back gesture and the header arrow only call `onBack`, which suits an overlay.
 
 ### External PDF file views (2026-10-29, feature branch)
 

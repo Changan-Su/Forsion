@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.91.0
+  version: 1.91.1
   author: Forsion
   category: Forsion
 ---
@@ -365,7 +365,7 @@ Your Space renders your own status, TODOs, schedule and Library from `ctx.agent`
 | `ctx.ui.mountSettingsPage` / `ctx.ui.mountSettingsItem` | 设置类页面(账号、额度、诊断、偏好…)用宿主的设置零件画 | 只给 groups / items 数据和回调,宿主按端排版(手机上紧凑控件留右、宽控件换行、选了就执行 → 半屏);**别再抄宿主的设置 CSS**;老宿主没有 → 可选链,保留自己画的那套 |
 | `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
 | `ctx.ui.haptic?.('tick')` | 移动端一次已接受操作的轻触反馈 | 2.13.7+；只有原生触感设备才存在，遵循系统设置。只在用户动作写入被接受后调用一次，撤销／同步不调用；不要拿浏览器震动模拟原生反馈 |
-| `ctx.ui.claimHeader?.({ title, back, onBack, toList? })` | 移动端覆盖层临时原生顶栏 | 2.13.7+；返回 `{ dispose() }`，覆盖层关闭时释放。系统返回键与顶栏箭头都走 `onBack`。`toList: true` 表示这是手机列表下面的一页，不是浮层：`onBack` 之后壳回到列表层。插件停用会自动撤销顶栏和回调；没有原生栏的宿主缺省不提供 |
+| `ctx.ui.claimHeader?.({ title, back, onBack, toList? })` | 移动端覆盖层临时原生顶栏 | 2.13.7+；返回 `{ dispose() }`，覆盖层关闭时释放。系统返回键与顶栏箭头都走 `onBack`。`toList: true` 表示这是手机列表下面的一页，不是浮层：返回时壳把列表层滑出来（边缘手势跟手，中途放弃什么都不发生），列表露出来后才调 `onBack`。插件停用会自动撤销顶栏和回调；没有原生栏的宿主缺省不提供 |
 | `ctx.ui.contextMenu(x, y, items, opts?)` / `ctx.ui.contextMenu({ anchor, align }, items, opts?)` | 宿主样式的右键菜单(和内置主页、Ribbon 的一样) | 2026-10-26 起:行可带 `icon`(词表名)/ `shortcut`(键位提示),条目可以是 `{ separator: true }` / `{ section: '小节' }`,第一个参数可以是 `{ anchor: 按钮, align: 'end' }`(宿主量按钮、管缩放),`opts.onClose`;Android 上同一份数据走原生底部抽屉;更早的宿主把这些字段静默丢掉、只认 (x, y)。2026-10-18 起;`items` = `{ label, run(), checked?, disabled?, danger? }`,视口坐标、放不下自己翻面,限高、项多 / 窗口矮时自己滚(最多 200 项);同一时刻只开一个,点外面 / Esc / 点了某项就关;返回关闭函数;老宿主没有 → `ctx.ui?.contextMenu?.(…)`。**勾选清单连勾**:`opts.keepOpen: true` 点了不关,你改完状态调返回句柄的 `close.update(items)` 换一份行 —— ⚠️勾和 `run` 都要换成新的;连点两下可能赶在重画之前(用的还是旧那份行),所以 `run` 里读**当下**的状态(ref / store),别只靠闭包,不然第二下会把第一下吞掉;空列表 = 关。更早的宿主不认 `opts`、点了照关,也没有 `update`(拿 `typeof close.update === 'function'` 判) |
 | `ctx.ui.confirm(opts)` / `ctx.ui.openDialog(opts)` | 宿主的是 / 否确认框、带挂载区的对话框 | 2026-10-26 起;`confirm` → `Promise<boolean>`(`danger` 主按钮红、焦点落「取消」;Android 原生确认框);`openDialog({ title, body?, mount?(el), actions?, width? })` 420 / 560px 居中,Esc / 遮罩 / 焦点圈 / 进出场归宿主,`run` 返回 `false` 不关。别再用 `window.confirm` 或自己画 `<dialog>`。见下「Host parts」 |
 | `ctx.ui.mountControl(el, { type: 'segmented' \| 'select', … })` | 视图头 / 工具栏里的分段与下拉 | 2026-10-26 起;分段 = 看法胶囊那一份(2–5 项),下拉 = 28px 文字钮 + ▾、点开是菜单外壳的 listbox(6 项起带搜索,Android 原生抽屉)。**设置零件是 56px 的行,别放进工具栏** |

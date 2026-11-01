@@ -55,7 +55,7 @@ import { defineMessages, hostListSource, isPluginText, pluginText } from './plug
 import { checkPluginIcon, pluginIconElement } from './pluginIcon'
 import { pluginListEmpty, setHostListEmpty } from '../../views/hostListEmpty'
 import { createDropIndicator, land as landDrop, landCancel, landWhenMoved } from '@lcl/engine/dropIndicator'
-import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, dispatchNativeChromeAction, listFirstNow, nativeChromeInstalled } from '@lcl/engine'
+import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, listFirstNow, nativeChromeInstalled, useWorkspace } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
@@ -1969,14 +1969,19 @@ export const usePluginStore = create<PluginState>((set, get) => {
       ...(nativeHapticAvailable() ? { haptic: (kind: 'tick') => { if (ctxAlive() && kind === 'tick') nativeHaptic(kind) } } : {}),
       ...(nativeChromeInstalled() ? { claimHeader: (opts: { title: string; back: string; onBack(): void; toList?: boolean }) => {
         if (!ctxAlive()) return { dispose() {} }
+        const toList = !!opts.toList && listFirstNow()
         const onBack = (): void => {
           if (!ctxAlive()) return
-          opts.onBack()
-          if (opts.toList && listFirstNow()) { offBack(); handle.release(); dispatchNativeChromeAction('left') } // 两级导航:这一页退完就回列表层
+          if (toList && listFirstNow()) useWorkspace.getState().toggleSidebar('left')
+          else opts.onBack()
         }
         const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack })
-        const offBack = pushMobileBack(onBack) // 系统返回和顶栏箭头同一件事,不然壳把左栏翻出来,插件还以为自己在这一页
-        return { dispose: scope.own('mount', () => { offBack(); handle.release() }, 'nativeHeader') }
+        // 两级导航:这一页不占返回栈,返回链照常滑出列表层,边缘手势才跟手(占了栈系统返回就只能等松手);
+        // 列表一出来(手势、返回键、页内横滑、顶栏箭头都走到这)插件才收尾。放弃手势不改 leftVisible,什么都不发生
+        const off = toList
+          ? useWorkspace.subscribe((s, prev) => { if (s.leftVisible && !prev.leftVisible && listFirstNow() && ctxAlive()) { off(); handle.release(); opts.onBack() } }) // 旋转成宽屏自动并排左栏不算返回
+          : pushMobileBack(onBack) // 系统返回和顶栏箭头同一件事
+        return { dispose: scope.own('mount', () => { off(); handle.release() }, 'nativeHeader') }
       } } : {}),
       // 行编辑字段(10-17):写的是用户的表 → 和 ctx.databases 同一道闸,没声明 'databases' 就没有这个成员。
       ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')

@@ -1733,7 +1733,8 @@ export interface PluginContext {
   ui?: {
     /** Temporary native mobile header for a view's overlay. Dispose when the overlay closes.
      *  The system back gesture and the header arrow both call `onBack`. `toList`: the header belongs to a page under
-     *  the Space's phone list rather than an overlay, so after `onBack` the shell also returns to the list.
+     *  the Space's phone list rather than an overlay, so back slides the list in (following the finger on an edge
+     *  swipe) and `onBack` runs once the list is showing, whichever way the user got there. A cancelled swipe calls nothing.
      *  Present only with native chrome; callbacks stop on plugin disable. */
     claimHeader?(opts: { title: string; back: string; onBack(): void; toList?: boolean }): { dispose(): void }
     /** Native touch feedback. Present only on a capable platform host; system preferences apply.
