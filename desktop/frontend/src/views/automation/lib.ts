@@ -114,6 +114,12 @@ export function isFinishedTrigger(tr: MuseTriggerInfo): boolean {
   return !!d && d.getTime() <= Date.now()
 }
 
+/** 一次性和手动规则没有观察(引擎 canObserve 同口径)。 */
+export const canObserve = (condType: string): boolean => condType !== 'at' && condType !== 'manual'
+export type RuleState = 'off' | 'observe' | 'on'
+/** 观察位只在开着时生效,暂停时留着。 */
+export const ruleState = (tr: Pick<MuseTriggerInfo, 'enabled' | 'observe'>): RuleState => !tr.enabled ? 'off' : tr.observe ? 'observe' : 'on'
+
 /** 执行者显示名:agentSlug 缺省=Muse(品牌名不进 i18n);有 slug 找 defs 显示名,找不到回落 slug。 */
 export function runnerName(defs: NormalAgentDef[], agentSlug?: string): string {
   if (!agentSlug) return 'Muse'

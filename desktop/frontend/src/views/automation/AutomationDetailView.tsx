@@ -10,7 +10,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import type { ViewProps } from '@lcl/engine'
 import { CapabilityMenu } from '../../components/CapabilityMenu'
 import { AutomationExtension } from './AutomationExtension'
-import { automationListSource, subscribeAutomation } from './automationListSource'
+import { automationListSource, saveRuleState, subscribeAutomation } from './automationListSource'
 import { CalendarClock, History, Pencil, Play, Settings, Sparkles, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
@@ -19,7 +19,7 @@ import { fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } f
 import { useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
 import { useDbStore } from '../../amadeus/store/dbStore'
-import { actionsText, condText, fmtTime, isFinishedTrigger, noticeText, onlyText, watchedColumnIds, whereText } from './lib'
+import { actionsText, canObserve, condText, fmtTime, isFinishedTrigger, noticeText, onlyText, ruleState, watchedColumnIds, whereText } from './lib'
 import { AutomationBuilder } from './AutomationBuilder'
 import { AutomationHome } from './AutomationHome'
 import { AutomationRunsView } from './AutomationRunsView'
@@ -319,7 +319,13 @@ const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns
         <div className="auto-card-head">
           <Zap size={17} />
           <div className="auto-card-title">{tr.desc}</div>
-          <span className={`auto-status-label ${tr.enabled ? 'on' : ''}`}>{t(tr.enabled ? 'automation.ux.on' : 'automation.ux.off')}</span>
+          {canObserve(tr.cond.type)
+            ? <div className="seg seg-sm" role="radiogroup" aria-label={t('automation.ux.stateGroup')}>
+                {([['off', 'automation.ux.pause'], ['observe', 'automation.ux.observe'], ['on', 'automation.ux.enable']] as const).map(([state, label]) => (
+                  <button key={state} role="radio" aria-checked={ruleState(tr) === state} className={ruleState(tr) === state ? 'active' : ''} onClick={() => void saveRuleState(tr, state)}>{t(label)}</button>
+                ))}
+              </div>
+            : <span className={`auto-status-label ${tr.enabled ? 'on' : ''}`}>{t(tr.enabled ? 'automation.ux.on' : 'automation.ux.off')}</span>}
           <FireButton key={tr.id} tr={tr} onResult={onRuns} />
           <button className="btn ghost sm" onClick={() => st.openBuilder(tr.id)}>{t('common.edit')}</button>
           <button className="btn ghost sm" onClick={onRuns}><History size={13} />{t('automation.ux.runResults')}</button>
@@ -353,7 +359,9 @@ const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns
         <span><Zap size={14} />{condText(t, tr.cond)}</span>
         {tr.actions?.map((step, i) => <React.Fragment key={i}><span aria-hidden="true">→</span><span>{i + 1}. {t(`automation.step.${step.type}`)}</span></React.Fragment>)}
       </div>
-      {hasOwnAction && <p className="auto-hint">{t('automation.ux.runHint')}{tr.cond.type === 'db_changed' ? ` ${t('automation.ux.dbRunHint')}` : ''}</p>}
+      {ruleState(tr) === 'observe'
+        ? <p className="auto-hint">{t('automation.ux.observeHint')}</p>
+        : hasOwnAction && <p className="auto-hint">{t('automation.ux.runHint')}{tr.cond.type === 'db_changed' ? ` ${t('automation.ux.dbRunHint')}` : ''}</p>}
 
     </div>
   )

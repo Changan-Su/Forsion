@@ -27,7 +27,9 @@ async function main() {
       if (p === '/agent/special/muse/triggers') {
         if (method === 'GET') return { triggers: rules }
         const b = await body(); requests.push(b)
-        const tr = { id: b.id || `auto-${rules.length + 1}`, desc: b.desc, enabled: b.enabled, cond: { type: b.cond_type, ...(b.time ? { time: b.time } : {}) }, actions: b.actions, cooldownHours: b.cooldown_hours || 0, lastFiredAt: null }
+        const prev = rules.find((r) => r.id === b.id)
+        const observe = b.observe ?? prev?.observe // 缺席 = 保留,和引擎 upsertTrigger 同口径
+        const tr = { id: b.id || `auto-${rules.length + 1}`, desc: b.desc, enabled: b.enabled, cond: { type: b.cond_type, ...(b.time ? { time: b.time } : {}), ...(b.params ? { params: b.params } : {}) }, actions: b.actions, cooldownHours: b.cooldown_hours || 0, lastFiredAt: null, ...(observe ? { observe, observeSince: new Date(Date.now() - 2 * 86_400_000).toISOString(), observeHits: 1 } : {}) }
         const at = rules.findIndex((r) => r.id === tr.id)
         if (at < 0) rules.push(tr); else rules[at] = tr
         return { trigger: tr, created: at < 0 }
@@ -80,7 +82,7 @@ async function main() {
     check('shared workspace collects navigation above the list in two compact rows', await win.locator('.t2sw-plug-list').evaluate((el) => el.getBoundingClientRect().top - el.closest('.t2sw-plug').getBoundingClientRect().top < 90))
     check('first visit offers four real starter templates', await win.locator('.auto-starter').count() === 4)
     await win.screenshot({ path: path.join(OUT, 'home-zh.png') })
-    for (const label of ['Muse 巡检', 'Historian 记忆维护']) {
+    for (const label of ['Muse 巡检', '史官记忆维护']) {
       await win.locator('.t2sw-plug').getByText(label, { exact: true }).click()
       await win.getByRole('button', { name: '运行结果', exact: true }).click()
       await win.locator('.wb-extend .auto-runs').waitFor()
@@ -157,7 +159,7 @@ async function main() {
     await win.locator('.auto-detail').getByRole('button', { name: '试跑', exact: true }).click()
     await win.locator('.auto-extension .auto-execution-error').waitFor()
     check('run results expose every step and full failure text', (await win.locator('.auto-extension .auto-executions').innerText()).includes('Could not deliver the second notification'))
-    await win.waitForFunction(() => document.querySelector('.wb-extend')?.getBoundingClientRect().width >= 300)
+    await win.waitForFunction(() => [...document.querySelectorAll('.wb-extend')].some((e) => e.getBoundingClientRect().width >= 280))
     await win.screenshot({ path: path.join(OUT, 'results-zh.png') })
     failExecutions = true
     await win.locator('.auto-detail').getByRole('button', { name: '试跑', exact: true }).click()
@@ -169,7 +171,7 @@ async function main() {
     check('ledger retry restores the execution results', true)
     await win.getByRole('button', { name: '更多操作', exact: true }).click()
     await win.getByRole('menuitem', { name: '启用', exact: true }).click()
-    await win.waitForFunction(() => document.querySelector('.auto-detail .auto-status-label')?.textContent === '已启用')
+    await win.waitForFunction(() => document.querySelector('.auto-detail [role="radio"][aria-checked="true"]')?.textContent === '启用')
     check('enabling preserves the complete action chain', requests.at(-1).enabled && requests.at(-1).actions.length === 2)
     await win.locator('.t2sw-plug .t2s-search input').fill('not-a-rule')
     check('sidebar search filters saved rules', await win.locator('.t2sw-plug-list .t2s-srow').filter({ hasText: 'Canvas regression' }).count() === 0)
@@ -180,7 +182,7 @@ async function main() {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1000, 820))
     await win.screenshot({ path: path.join(OUT, 'canvas-narrow-flow-zh.png') })
     await win.locator('.auto-flow-node').nth(1).click()
-    await win.waitForFunction(() => document.querySelector('.wb-extend')?.getBoundingClientRect().width >= 240)
+    await win.waitForFunction(() => [...document.querySelectorAll('.wb-extend')].some((e) => e.getBoundingClientRect().width >= 240))
     const geometry = await win.locator('.auto-workflow-builder').evaluate((el) => ({ width: el.clientWidth, scroll: el.scrollWidth, visible: !!document.querySelector('.wb-extend .auto-inspector input') }))
     check('narrow canvas uses the native configuration panel without horizontal overflow', geometry.scroll <= geometry.width + 1 && geometry.visible)
     check('narrow configuration labels remain readable', await visibleNode.locator('.auto-node-head').evaluate((el) => el.getBoundingClientRect().height < 65))
@@ -210,6 +212,40 @@ async function main() {
     await win.locator('.auto-detail .auto-card-title').filter({ hasText: 'Registry rule' }).waitFor()
     const saved = requests.at(-1)
     check('a registry source saves its params and only-conditions', saved.cond_type === 'computer.app_opened' && saved.params?.app === 'Figma' && saved.only?.weekdays?.join() === '1,2,3,4,5')
+    // 观察档:规则卡头三段控件 → 运行结果「本应执行」→ 编辑不转正 → 只有用户点启用才转正
+    const state = win.locator('.auto-card-head [role="radiogroup"]')
+    const pick = async (name) => { const n = requests.length; await state.getByRole('radio', { name, exact: true }).click(); for (let i = 0; requests.length === n && i < 100; i++) await win.waitForTimeout(50); await state.locator('[aria-checked="true"]').filter({ hasText: name }).waitFor() }
+    check('a rule offers pause, observe and enable', (await state.getByRole('radio').allInnerTexts()).join() === '暂停,观察,启用')
+    await pick('观察')
+    check('observe keeps the rule on and sends observe', requests.at(-1).enabled === true && requests.at(-1).observe === true)
+    await win.locator('.t2s-srow', { hasText: 'Registry rule' }).getByText('观察中').waitFor()
+    check('the list says the rule is observing', true)
+    check('the card warns that test runs are real', /试跑仍会真实执行/.test(await win.locator('.auto-detail').innerText()))
+    executions.length = 0
+    executions.push({ id: 'exec-observed', trigger_id: rules[0].id, origin: 'auto', status: 'observed', created_at: new Date().toISOString(), error: null, steps: [{ type: 'agent_run', ok: true, observed: true, target: 'writer', row: 'Attention Residuals', summary: '写 200 字摘要' }] })
+    await win.locator('.auto-card-head').getByRole('button', { name: '运行结果', exact: true }).click()
+    const observed = win.locator('.auto-execution').first()
+    await observed.getByText('本应执行', { exact: true }).waitFor()
+    await win.screenshot({ path: path.join(OUT, 'observed-runs.png') })
+    check('runs show what would have run and how far it has come', /Attention Residuals/.test(await observed.innerText()) && /writer/.test(await observed.innerText()) && /没有执行任何动作/.test(await observed.innerText()) && await win.getByText('观察 2 天 · 命中 1 次', { exact: true }).isVisible())
+    check('an observed row uses the hollow dot', await observed.locator('.auto-dot.observed').count() === 1)
+    await win.keyboard.press('Escape')
+    await pick('暂停')
+    check('pausing leaves observe alone', requests.at(-1).enabled === false && !('observe' in requests.at(-1)))
+    await win.locator('.auto-card-head').getByRole('button', { name: '编辑', exact: true }).click()
+    await win.locator('.auto-builder-footer').waitFor()
+    check('a paused rule can still be saved to observe', await win.locator('.auto-builder-footer').getByRole('button', { name: '保存并观察', exact: true }).isVisible())
+    await win.locator('.auto-builder-footer').getByRole('button', { name: '保存并观察', exact: true }).click()
+    await win.locator('.auto-card-head [aria-checked="true"]').filter({ hasText: '观察' }).waitFor()
+    check('save and observe turns the rule on', requests.at(-1).enabled === true && requests.at(-1).observe === true)
+    await win.locator('.auto-card-head').getByRole('button', { name: '编辑', exact: true }).click()
+    await win.locator('.auto-builder-footer').waitFor()
+    check('editing an observing rule never offers save and enable', await win.locator('.auto-builder-footer').getByRole('button', { name: '保存并启用', exact: true }).count() === 0)
+    await win.locator('.auto-builder-footer').getByRole('button', { name: '保存并观察', exact: true }).click()
+    await win.locator('.auto-card-head [aria-checked="true"]').filter({ hasText: '观察' }).waitFor()
+    check('saving an edit keeps it observing without sending observe', requests.at(-1).enabled === true && !('observe' in requests.at(-1)))
+    await pick('启用')
+    check('only the user turns it on, with observe false', requests.at(-1).enabled === true && requests.at(-1).observe === false)
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme', 'dark') })
     await win.reload({ waitUntil: 'domcontentloaded' })
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1600, 1000))

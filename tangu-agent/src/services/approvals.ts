@@ -512,7 +512,7 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
         : agent && agent !== MUSE_AGENT_SLUG
           ? labeled(`agent_run "${full(agent)}" unattended`, legacyPrompt)
           : keeps && opts.keptActions === undefined ? '(actions unchanged)' : 'wake Muse';
-    const off = args.enabled !== undefined && !args.enabled ? ' (disabled)' : '';
+    const off = args.enabled !== undefined && !args.enabled ? ' (disabled)' : args.observe === true ? ' (observe only)' : '';
     return joinParts([`manage_automation set ${args.id ? full(args.id) : '(new)'}${off}: "${full(args.desc)}"`, `when ${when || '?'}`, steps]);
   }
   // 官方插件(签名捆绑包,plugins/official.ts)自己写的卡面文案:只在兜底处生效,覆盖不了上面任何内置分支;

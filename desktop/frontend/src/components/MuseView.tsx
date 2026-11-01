@@ -303,7 +303,7 @@ export const MuseView: React.FC<{
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{tg.desc}</b>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
-                {[condText(tg), onlyText(t, tg), tg.actions?.length ? t('automation.step.remind') : t('automation.step.wake'), tg.enabled ? '' : t('special.muse.rulePaused')].filter(Boolean).join(' · ')}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: formatDateTime(tg.lastFiredAt) })}` : ''}
+                {[condText(tg), onlyText(t, tg), tg.actions?.length ? t('automation.step.remind') : t('automation.step.wake'), !tg.enabled ? t('special.muse.rulePaused') : tg.observe ? t('automation.ux.observing') : ''].filter(Boolean).join(' · ')}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: formatDateTime(tg.lastFiredAt) })}` : ''}
               </div>
               {tg.enabled && tg.notice && <div className="hint">{noticeText(t, tg.notice)}</div>}
             </span>

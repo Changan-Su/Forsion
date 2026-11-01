@@ -72,8 +72,9 @@ export interface DrainResult {
   notices: Record<string, string>;
 }
 
+// 观察中的规则一律走 launch:唤醒 Muse 的旧式规则走另一条路就会真的叫醒 Muse。
 const isAgentRule = (t: MuseTrigger): boolean =>
-  !!(t.actions && t.actions.length) || !!(t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG);
+  !!t.observe || !!(t.actions && t.actions.length) || !!(t.agentSlug && t.agentSlug !== MUSE_AGENT_SLUG);
 
 export async function drainAutomation(deps: DrainDeps, opts: { maxRounds?: number } = {}): Promise<DrainResult> {
   const maxRounds = Math.max(1, opts.maxRounds ?? DRAIN_MAX_ROUNDS);
@@ -163,7 +164,7 @@ export async function drainAutomation(deps: DrainDeps, opts: { maxRounds?: numbe
     if (rounds >= maxRounds) {
       capHit = true;
       // 最后一轮真起跑(=真写了表)的规则就是环的一环:全部停用,写明原因。只 log 不停用 = 下一 tick 从残留写入续跑。
-      const ring = [...launched];
+      const ring = launched.filter((id) => !hits.some((h) => h.t.id === id && h.t.observe)); // 观察不写表,成不了环
       const reason = `自动化环:${maxRounds} 轮内持续有 db 写入,已停用规则 ${ring.join(', ')};请检查规则后手动启用`;
       deps.log(`[automation] drain cap hit (${maxRounds} 轮仍有 db 写入,疑似规则成环):已停用规则 ${ring.join(', ')};请检查后手动启用`);
       if (deps.disableTriggers) {

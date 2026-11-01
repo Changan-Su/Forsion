@@ -149,6 +149,8 @@ export interface MuseTriggerUpsert {
   cond_type: MuseTriggerInfo['cond']['type']
   /** 新触发源的参数(按 GET /agent/special/automation/sources 的表)。 */
   params?: Record<string, string | number>
+  /** 缺席 = 保留:启停开关和编辑保存都不动观察。false = 转成启用,只有用户点的才发。 */
+  observe?: boolean
   /** 「只在」:undefined=保留,null=清空。 */
   only?: MuseTriggerInfo['only'] | null
   max_per_day?: number | null
@@ -200,7 +202,7 @@ export interface AutomationExecutionInfo {
   trigger_id: string
   origin: 'auto' | 'manual' | string
   status: string
-  steps: { type: string; tool?: string; ok: boolean; summary: string }[]
+  steps: { type: string; tool?: string; ok: boolean; summary: string; observed?: boolean; target?: string; row?: string }[]
   error: string | null
   created_at: string
 }
