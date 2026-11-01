@@ -339,4 +339,4 @@ ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})
 
 ### Space 的 Ribbon 落点和手机布局
 
-`space.json` 写 `"ribbon": { "after": "<spaceId>" }`,图标第一次出现时排在那个 Space 后面,用户已经摆过的位置不动。写 `"mobile": { "listFirst": true }`,手机上先落左栏列表,点一项进主区;只有左栏确实是这种列表才写,缺省主区是第一层、左栏是抽屉。
+`space.json` 写 `"ribbon": { "after": "<spaceId>" }`,图标第一次出现时排在那个 Space 后面,用户已经摆过的位置不动。写 `"mobile": { "listFirst": true }`,手机上先落左栏列表,点一项进主区;只有左栏确实是这种列表才写,缺省主区是第一层、左栏是抽屉。 主视图要接管原生顶栏时用 `ctx.ui.claimHeader?.({ title, back, onBack, toList: true })`:系统返回和顶栏箭头都走 `onBack`,之后壳回到列表层;不带 `toList` 时只跑 `onBack`,适合浮层。
