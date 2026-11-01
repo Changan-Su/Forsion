@@ -1964,8 +1964,9 @@ export interface PluginContext {
     request?(engineId: string, path: string, opts?: import('./engineRequest').PluginRequestOptions): Promise<unknown>
     /** Fill in and connect a channel registered by an engine plugin in this bundle, so the plugin's own UI can replace
      *  the settings card. Desktop with a local engine only. Any other kind is refused, and only the credential keys the
-     *  channel declares are accepted; both checks run in the host. Returns `{ ok: false, error }` instead of throwing. */
-    connectChannel?(kind: string, fields: Partial<Record<'appId' | 'appSecret' | 'botToken', string>>): Promise<
+     *  channel declares are accepted; both checks run in the host. `options.modelId` is the channel's default model when
+     *  it has none yet; a model chosen in the channel's settings stays. Returns `{ ok: false, error }` instead of throwing. */
+    connectChannel?(kind: string, fields: Partial<Record<'appId' | 'appSecret' | 'botToken', string>>, options?: { modelId?: string }): Promise<
       { ok: true; accountId: string; label: string; sessionId: string } | { ok: false; error: string }>
     /** Open an existing session in a native chat tab. Does not start a run. */
     openSession?(sessionId: string): Promise<void> | void

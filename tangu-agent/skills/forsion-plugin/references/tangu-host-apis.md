@@ -182,7 +182,7 @@ const box = ctx.tangu?.mountComposer?.(el, {
 
 ### 代填通道凭据:connectChannel(2026-10-31 起)
 
-`ctx.tangu.connectChannel?.(kind, fields)` 给**本包捆绑的引擎插件**注册的通道存凭据并连接,回 `{ ok: true, accountId, label, sessionId }` 或 `{ ok: false, error }`。`fields` 只收通道 `fields` 声明过的键。只在有本机引擎的桌面上有,先判存在;别的插件的通道一律拒绝,判定在宿主。重复调用幂等。
+`ctx.tangu.connectChannel?.(kind, fields, { modelId })` 给**本包捆绑的引擎插件**注册的通道存凭据并连接,回 `{ ok: true, accountId, label, sessionId }` 或 `{ ok: false, error }`。`fields` 只收通道 `fields` 声明过的键。只在有本机引擎的桌面上有,先判存在;别的插件的通道一律拒绝,判定在宿主。重复调用幂等。
 
 ## 正文 AI:ctx.tangu.complete 与 registerSelectionAction(2026-09-28 起)
 

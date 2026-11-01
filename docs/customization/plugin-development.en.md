@@ -171,7 +171,7 @@ One account can also serve many contacts: with `multiPeer: true`, each contact g
 
 For an unattended deployment whose credentials are written straight into the config, with nobody to press Connect, add `selfConnect: true`: on an account that has never connected, the first contact your driver hands over connects it for the local user. An account the user disconnected stays disconnected.
 
-When a driver implements `sendApproval`, approvals stop being text cards: the driver receives the tool name, arguments and preview, draws them itself, and answers through `respond`. Chat text can neither approve nor dismiss such a card, and it is rejected after 10 minutes with no answer. Implement `settleApproval` to learn how a card ended. A plugin's UI can fill in and connect a channel from its own bundle with `ctx.tangu.connectChannel(kind, fields)`. This is desktop only, and other plugins' channels are refused.
+When a driver implements `sendApproval`, approvals stop being text cards: the driver receives the tool name, arguments and preview, draws them itself, and answers through `respond`. Chat text can neither approve nor dismiss such a card, and it is rejected after 10 minutes with no answer. Implement `settleApproval` to learn how a card ended. A plugin's UI can fill in and connect a channel from its own bundle with `ctx.tangu.connectChannel(kind, fields, { modelId })`. This is desktop only, and other plugins' channels are refused. `modelId` becomes the channel's default model when it has none yet; a model the user chose stays.
 
 ## Automation triggers
 

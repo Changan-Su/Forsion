@@ -171,7 +171,7 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 
 凭据直接写进配置、没有人点「连接」的无人值守部署,再加 `selfConnect: true`:账号从没连过时,驱动交上来的第一个联系人会替本机用户连上。用户断开过的账号不会被连回去。
 
-驱动实现 `sendApproval` 后,审批不再发文字卡,而是把工具名、参数和预览交给驱动画,由 `respond` 兑现:文字消息批不了它,也作废不了它,10 分钟没人答按拒绝。实现 `settleApproval` 能知道卡是怎么结束的。界面半身可以用 `ctx.tangu.connectChannel(kind, fields)` 替用户填好并连接自己捆绑的通道,只在桌面可用,别的插件的通道会被拒绝。
+驱动实现 `sendApproval` 后,审批不再发文字卡,而是把工具名、参数和预览交给驱动画,由 `respond` 兑现:文字消息批不了它,也作废不了它,10 分钟没人答按拒绝。实现 `settleApproval` 能知道卡是怎么结束的。界面半身可以用 `ctx.tangu.connectChannel(kind, fields, { modelId })` 替用户填好并连接自己捆绑的通道,只在桌面可用,别的插件的通道会被拒绝。`modelId` 在通道还没选过模型时当默认模型,用户选过的不动。
 
 ## 自动化触发事件
 

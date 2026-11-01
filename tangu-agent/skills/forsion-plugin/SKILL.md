@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.89.0
+  version: 1.90.0
   author: Forsion
   category: Forsion
 ---
@@ -142,7 +142,7 @@ Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts
 - **无人值守:`spec.selfConnect: true`(配合 multiPeer)**。凭据写进配置、没人点「连接」时,账号从没连过就由第一个 peer 替本机用户连上;断开过的账号不复活。
 - **钉 Agent:入站带 `agentSlug`(2026-10-31 起)**。`onMessage({ accountId, peerId, text, agentSlug: 'xyra' })`:这个 peer 的会话用这个 Agent,优先于会话存值与通道默认;写法不合法的忽略。
 - **结构化审批卡:`driver.sendApproval(accountId, peerId, card, respond)`(2026-10-31 起,可选)**。有它就不发文字卡。`card = { approvalId, runId, toolName, arguments, preview, localOnly }`,`arguments` 是工具参数的 JSON 原串;怎么画、谁能批由驱动决定。`respond('approve' | 'reject')` 同步回布尔:`true` = 生效;`false` = 卡已结束,或此刻批不了(`sendApproval` 的结果还没回来 / `localOnly` / 这台电脑锁定了远程)。`reject` 除了卡已结束都能生效。回 `{ ok: false }` 或抛错 = 没送达,按拒绝兑现。同一 peer 一次一张,答完才出下一张;10 分钟从显示起算,超时按拒绝。文字消息不碰这张卡:「好」批不了,新消息也不作废它(新任务排在后面)。可选的 `driver.settleApproval(accountId, peerId, approvalId, outcome)`:交出去的卡结束时回调(`respond` 回 `true` 的那次除外),`outcome` 是 `approved` / `rejected`(别处答的)、`timeout`、`cancelled`(run 结束 / 被停 / 通道停止)、`undelivered`;有它时超时等提示由你写,没有就宿主发文字。询问(`ask_user`)仍是文字卡;run 的结束文本仍走 `driver.send`。
-- **界面半身替用户连接自己的通道:`ctx.tangu?.connectChannel?.(kind, fields)`(2026-10-31 起,只在桌面)**。存凭据 → `verify()` → 绑定,回 `{ ok: true, accountId, label, sessionId }` 或 `{ ok: false, error }`,不抛。只认本包捆绑的引擎插件注册的 `kind`,`fields` 只收 `spec.fields` 声明过的键,两条都由宿主判。
+- **界面半身替用户连接自己的通道:`ctx.tangu?.connectChannel?.(kind, fields, { modelId })`(2026-10-31 起,只在桌面)**。存凭据 → `verify()` → 绑定,回 `{ ok: true, accountId, label, sessionId }` 或 `{ ok: false, error }`,不抛。只认本包捆绑的引擎插件注册的 `kind`,`fields` 只收 `spec.fields` 声明过的键,两条都由宿主判。`modelId` 可选,通道还没选过模型时当默认模型,用户在通道设置里选过的不动;桌面引擎没有全局默认模型,不传时入站会回「没配模型」。
 - **只给官方插件的三样(2026-10-27 起;第三方插件写了也没用)**:`ctx.cloud`(以用户的 Forsion 账号请求云端,只放 `GET /api/market/mine` 与 `POST /api/market/mine/<id>/update[?dryRun=1]`)、工具的 `capabilities.approvalPreview(args) => string`(自己写审批卡文案)、以及进聊天(Chat 预设)会话的工具面。「官方」= 插件在 Forsion 签名的捆绑包里(包根 `SIGNATURE` 用引擎钉死的公钥验过,插件的 `tangu-plugin.json` 和入口都签在里面);其余插件拿到的 `ctx.cloud` 是 `undefined`、`approvalPreview` 被忽略(卡上照旧是参数原文)、工具进不了聊天会话。别为第三方插件设计依赖它们的功能。
 - 类型契约 `types/tangu-agent.d.ts` 是 apiVersion 1 的 API 拷贝,随模板分发;宿主升 apiVersion 时替换它并同步 manifest 的 `apiVersion`。
 

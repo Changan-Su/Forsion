@@ -2428,7 +2428,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
               },
             } : {}),
             ...(automationHost() && !hostTangu()?.mobile ? {
-              connectChannel: async (kind: string, fields: Partial<Record<'appId' | 'appSecret' | 'botToken', string>>) => {
+              connectChannel: async (kind: string, fields: Partial<Record<'appId' | 'appSecret' | 'botToken', string>>, options?: { modelId?: string }) => {
                 try {
                   if (!ctxAlive()) throw new Error('plugin disabled')
                   if (typeof kind !== 'string' || !/^[a-z][a-z0-9-]{1,15}$/.test(kind)) throw new Error('Invalid channel kind')
@@ -2439,9 +2439,12 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   const target = connectionTarget(cfg)
                   const { channels } = await engineJsonRequest<{ channels: ChannelOwnership[] }>(target, '/agent/channels')
                   const bundle = get().plugins.find((p) => p.id === pluginId)?.bundle
-                  const patch = ownedChannelPatch(channels.find((c) => c.kind === kind), fields, bundle?.dir ?? pluginId, bundle?.enginePlugins ?? [])
+                  const channel = channels.find((c) => c.kind === kind)
+                  const patch = ownedChannelPatch(channel, fields, bundle?.dir ?? pluginId, bundle?.enginePlugins ?? [])
                   if (!ctxAlive()) throw new Error('plugin disabled')
-                  await engineJsonRequest(target, `/agent/channels/${kind}/config`, { method: 'PUT', body: JSON.stringify(patch) })
+                  // Only fills an empty slot: a model the user picked in the channel's settings stays.
+                  const modelId = typeof options?.modelId === 'string' && !channel?.modelId ? options.modelId : ''
+                  await engineJsonRequest(target, `/agent/channels/${kind}/config`, { method: 'PUT', body: JSON.stringify(modelId ? { ...patch, modelId } : patch) })
                   if (!ctxAlive()) throw new Error('plugin disabled')
                   const r = await engineJsonRequest<{ accountId: string; label: string; sessionId: string }>(target, `/agent/channels/${kind}/connect`, { method: 'POST', body: '{}' })
                   return { ok: true as const, accountId: r.accountId, label: r.label, sessionId: r.sessionId }

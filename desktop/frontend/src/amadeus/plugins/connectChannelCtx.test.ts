@@ -55,6 +55,15 @@ describe('ctx.tangu.connectChannel', () => {
     expect(calls[1].body).toEqual({ appId: 'unit-1', appSecret: 'secret' })
   })
 
+  it('sets the default model only when the channel has none', async () => {
+    await ctxOf('acme', own).tangu!.connectChannel!('chat', { appId: 'x' }, { modelId: 'm1' })
+    expect(calls[1].body).toEqual({ appId: 'x', modelId: 'm1' })
+    calls.length = 0
+    channels.list = [{ ...channel('chat', { engine: 'chat-engine', bundle: 'acme-chat' }), modelId: 'chosen' }]
+    await ctxOf('acme', own).tangu!.connectChannel!('chat', { appId: 'x' }, { modelId: 'm1' })
+    expect(calls[1].body).toEqual({ appId: 'x' })
+  })
+
   it('matches the install folder name case-insensitively, as engine routes do', async () => {
     const result = await ctxOf('acme', { dir: 'Acme-Chat', enginePlugins: ['chat-engine'] }).tangu!.connectChannel!('chat', { appId: 'x' })
     expect(result.ok).toBe(true)

@@ -9,6 +9,7 @@ type ChannelField = 'appId' | 'appSecret' | 'botToken'
 /** The fragment of `GET /agent/channels` the host check needs. `owner` comes from the engine's plugin discovery. */
 export interface ChannelOwnership {
   kind: string
+  modelId?: string
   plugin?: { fields: Array<{ key: ChannelField }>; owner?: { engine: string; bundle: string | null } | null }
 }
 
