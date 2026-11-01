@@ -4,6 +4,7 @@
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
 import { leaseAccountResponse } from './accountResponse'
+import { pushMobileBack } from '../lib/mobileBack'
 import { desktopAccount } from './desktopAccount'
 import { readEntitlement } from './entitlement'
 import { setPluginViewHead, setPluginViewModes } from './pluginViewModes'
@@ -54,7 +55,7 @@ import { defineMessages, hostListSource, isPluginText, pluginText } from './plug
 import { checkPluginIcon, pluginIconElement } from './pluginIcon'
 import { pluginListEmpty, setHostListEmpty } from '../../views/hostListEmpty'
 import { createDropIndicator, land as landDrop, landCancel, landWhenMoved } from '@lcl/engine/dropIndicator'
-import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, nativeChromeInstalled } from '@lcl/engine'
+import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, dispatchNativeChromeAction, listFirstNow, nativeChromeInstalled } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
@@ -1966,10 +1967,16 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {
       ...(nativeHapticAvailable() ? { haptic: (kind: 'tick') => { if (ctxAlive() && kind === 'tick') nativeHaptic(kind) } } : {}),
-      ...(nativeChromeInstalled() ? { claimHeader: (opts: { title: string; back: string; onBack(): void }) => {
+      ...(nativeChromeInstalled() ? { claimHeader: (opts: { title: string; back: string; onBack(): void; toList?: boolean }) => {
         if (!ctxAlive()) return { dispose() {} }
-        const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack: () => { if (ctxAlive()) opts.onBack() } })
-        return { dispose: scope.own('mount', () => handle.release(), 'nativeHeader') }
+        const onBack = (): void => {
+          if (!ctxAlive()) return
+          opts.onBack()
+          if (opts.toList && listFirstNow()) { offBack(); handle.release(); dispatchNativeChromeAction('left') } // 两级导航:这一页退完就回列表层
+        }
+        const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack })
+        const offBack = pushMobileBack(onBack) // 系统返回和顶栏箭头同一件事,不然壳把左栏翻出来,插件还以为自己在这一页
+        return { dispose: scope.own('mount', () => { offBack(); handle.release() }, 'nativeHeader') }
       } } : {}),
       // 行编辑字段(10-17):写的是用户的表 → 和 ctx.databases 同一道闸,没声明 'databases' 就没有这个成员。
       ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')

@@ -1732,8 +1732,10 @@ export interface PluginContext {
    *  is retired by other mounts on the same element. Don't select host nodes with `el > …`. */
   ui?: {
     /** Temporary native mobile header for a view's overlay. Dispose when the overlay closes.
+     *  The system back gesture and the header arrow both call `onBack`. `toList`: the header belongs to a page under
+     *  the Space's phone list rather than an overlay, so after `onBack` the shell also returns to the list.
      *  Present only with native chrome; callbacks stop on plugin disable. */
-    claimHeader?(opts: { title: string; back: string; onBack(): void }): { dispose(): void }
+    claimHeader?(opts: { title: string; back: string; onBack(): void; toList?: boolean }): { dispose(): void }
     /** Native touch feedback. Present only on a capable platform host; system preferences apply.
      *  Call once for an accepted user gesture. No-op after the plugin is disabled. */
     haptic?(kind: 'tick'): void
