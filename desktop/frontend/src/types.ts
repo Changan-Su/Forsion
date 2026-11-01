@@ -924,18 +924,23 @@ declare global {
     amadeusCollab?: {
       listVaults(): Promise<Array<{ id: string; name: string; role?: string; ownerName?: string | null }>>
       activeVaultId(): Promise<string>
-      /** 切活动云库(web=localStorage+reload;桌面=切共享镜像)。 */
-      switchVault(id: string): void
+      /** 切活动云库(web=localStorage+reload,带 path 时切完直达这一页;桌面共享走镜像,不切库)。 */
+      switchVault(id: string, path?: string): void
+      /** 文件地址:不含凭据,能不能看由服务端判。 */
+      fileUrl(vaultId: string, path: string): string
       // 同步共享(owner):共享单位 = 页 + 子页面树
       pageShare(path: string): Promise<{ share: AmadeusPageShare | null; quota: AmadeusCollabQuota }>
-      createPageShare(path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null }): Promise<AmadeusPageShare>
-      updatePageShare(id: string, patch: { role?: 'editor' | 'viewer'; password?: string | null; expiresDays?: number | null; rotate?: boolean }): Promise<AmadeusPageShare>
+      createPageShare(path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null; attachments?: boolean }): Promise<AmadeusPageShare>
+      updatePageShare(id: string, patch: { role?: 'editor' | 'viewer'; password?: string | null; expiresDays?: number | null; rotate?: boolean }, vaultId?: string): Promise<AmadeusPageShare>
       revokePageShare(id: string): Promise<void>
-      setParticipantRole(id: string, userId: string, role: 'editor' | 'viewer'): Promise<void>
-      removeParticipant(id: string, userId: string): Promise<void>
+      setParticipantRole(id: string, userId: string, role: 'editor' | 'viewer', vaultId?: string): Promise<void>
+      removeParticipant(id: string, userId: string, vaultId?: string): Promise<void>
+      /** 这一页直接引用、不在共享范围里的内容(分享卡「一起共享」)。 */
+      relatedItems?(id: string): Promise<{ items: AmadeusRelatedItem[]; subpages: number }>
+      setShareItem(id: string, path: string, included: boolean): Promise<void>
       // 参与者
-      sharedWithMe(): Promise<Array<{ vaultId: string; path: string; title: string; role: string; ownerName: string | null; localPath?: string }>>
-      leaveShare(id: string): Promise<void>
+      sharedWithMe(): Promise<AmadeusSharedItem[]>
+      leaveShare(id: string, vaultId?: string): Promise<void>
       inviteUrl(token: string): string
       // 发布(公开只读链接)
       publishes(): Promise<{ shares: Array<{ token: string; mode: string; path: string; createdAt: string }>; quota: AmadeusCollabQuota }>
@@ -948,7 +953,7 @@ declare global {
       /** Public View：跨全部 vault 汇总「我发布的公开链接 + 我创建的页面协作共享」。 */
       listAllShares(): Promise<{
         publishes: Array<{ token: string; mode: string; path: string; createdAt?: string; vaultId: string; vaultName: string }>
-        pageShares: Array<Record<string, unknown>>
+        pageShares: Array<AmadeusPageShare & { vaultId: string; vaultName: string }>
         linkBase: string
       }>
       // presence
@@ -1100,7 +1105,32 @@ export interface AmadeusPageShare {
   inviteRole: 'editor' | 'viewer'
   hasPassword: boolean
   expiresAt: string | null
+  /** 带已到期记录的列表才会出现 true。 */
+  expired?: boolean
+  /** 一起共享的内容(旧服务端没有这一项)。 */
+  items?: string[]
   participants: Array<{ userId: string; username: string | null; role: 'editor' | 'viewer'; since: string }>
+}
+
+export interface AmadeusRelatedItem {
+  path: string
+  title: string
+  kind: 'page' | 'file'
+  included: boolean
+}
+
+export interface AmadeusSharedItem {
+  /** 旧服务端没有这一项,退出共享入口据此隐藏。 */
+  shareId?: string
+  vaultId: string
+  path: string
+  title: string
+  role: string
+  ownerName: string | null
+  expiresAt?: string | null
+  items?: string[]
+  /** 桌面:镜像内路径,点击本地直开。 */
+  localPath?: string
 }
 
 export interface AmadeusCollabQuota {

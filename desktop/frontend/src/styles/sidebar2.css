@@ -295,6 +295,8 @@
 .t2s-side .t2s-special-ic > svg { width: var(--t2s-icon, 13px); height: var(--t2s-icon, 13px); }
 .t2s-special.active .t2s-special-ic { color: var(--accent-ink); }
 .t2s-special-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amx-share-meta { flex: 0 0 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.amx-share-meta.is-warn { color: var(--danger); }
 .t2s-special-go { display: inline-flex; color: var(--text-faint, var(--text-muted)); opacity: 0.6; border-radius: var(--radius-sm, 6px); }
 .t2s-special-go:hover { opacity: 1; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
 
