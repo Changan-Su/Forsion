@@ -6,7 +6,7 @@
  *   - `<providerId>/<model>`:用户自己的阿里云百炼提供方,引擎带他的 key 直连;
  *   - Forsion 云端的实时模型(引擎目录里的 realtimeModel,id 不带提供方前缀):经 Forsion 服务端中转,按通话时长从额度里扣。
  *
- * 缺省:用户从没动过这个开关(realtimeModelUnset)、装了 Forsion Extend 且已登录、云端有通话模型 → 默认开、用云端那个。
+ * 缺省:用户从没动过这个开关(realtimeModelUnset)时默认开 —— 已登录且云端有通话模型 → 用云端那个;否则有百炼连接 → 用连接自己的。
  * 动过(选过模型,或关掉 = 存了 '')就听他的 —— 关掉之后不会因为登录又自己开回来。
  */
 import type { ModelsResponse, StoredDesktopConfig } from '../types'
@@ -18,7 +18,13 @@ export interface RealtimeCloud {
   model?: CloudCallModel | null
   /** 装了 Forsion Extend(有登录入口)且当前登录有效。 */
   signedIn: boolean
+  /** 用户自己的百炼连接(目录的 directProviders);没登录时默认开用它。 */
+  providers?: Array<{ providerId: string; baseUrl?: string }>
 }
+
+/** 自带百炼连接时缺省的通话模型:反应最快的一档(10-04 实测中位 1.7 秒)。 */
+const DEFAULT_DIRECT_MODEL = 'qwen3.8-omni-flash-realtime'
+export const isDashScope = (p: { baseUrl?: string }): boolean => /dashscope|aliyuncs\.com/i.test(p.baseUrl || '')
 
 // 两个家族:Qwen-Omni 与 Qwen-Audio。会话协议通用,差在音色 —— 系统音色各一套、互不相认。
 const isAudioFamilyName = (name: string): boolean => /(^|\/)qwen-audio-/i.test(name)
@@ -31,16 +37,21 @@ export const isAudioFamily = (model: string, cloud?: CloudCallModel | null): boo
 /** 没选音色时用的那个(与引擎 realtimeVoice.ts 的 defaultRealtimeVoice 同表)。 */
 export const defaultVoiceFor = (model: string, cloud?: CloudCallModel | null): string => (isAudioFamily(model, cloud) ? 'longanqian' : 'Tina')
 
+/** 云端模型的缺省音色:后台定了就用后台的。 */
+export const cloudDefaultVoice = (model: string, cloud: CloudCallModel): string => cloud.defaultVoice || defaultVoiceFor(model, cloud)
+
 /** 通话实际用的模型;'' = 通话没开(输入框不出通话键)。 */
 export function effectiveRealtimeModel(cfg: Pick<StoredDesktopConfig, 'realtimeModelId' | 'realtimeModelUnset'>, cloud: RealtimeCloud): string {
   const chosen = cfg.realtimeModelId?.trim() || ''
   if (chosen || !cfg.realtimeModelUnset) return chosen
-  return cloud.signedIn && cloud.model?.id ? cloud.model.id : ''
+  if (cloud.signedIn && cloud.model?.id) return cloud.model.id
+  const direct = cloud.providers?.find(isDashScope)
+  return direct ? `${direct.providerId}/${DEFAULT_DIRECT_MODEL}` : ''
 }
 
 /** 拨出去时交给引擎的 { model, voice }。云端模型没选音色时把缺省音色明说出来:引擎只看得到模型 id,看不出它是哪个家族。 */
 export function resolveRealtimeCall(cfg: Pick<StoredDesktopConfig, 'realtimeModelId' | 'realtimeModelUnset' | 'realtimeVoice'>, cloud: RealtimeCloud): { model: string; voice: string } {
   const model = effectiveRealtimeModel(cfg, cloud)
   const voice = cfg.realtimeVoice?.trim() || ''
-  return { model, voice: voice || (model && cloud.model && model === cloud.model.id ? defaultVoiceFor(model, cloud.model) : '') }
+  return { model, voice: voice || (model && cloud.model && model === cloud.model.id ? cloudDefaultVoice(model, cloud.model) : '') }
 }

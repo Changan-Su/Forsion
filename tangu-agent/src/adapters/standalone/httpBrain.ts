@@ -80,6 +80,17 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     'Content-Type': 'application/json',
   });
 
+  /** 云端音色接口:错误保留状态码(409 = 到上限),引擎路由原样转给界面。 */
+  const voicesCall = async <T = any>(method: string, path: string, body: unknown, timeoutMs: number): Promise<T> => {
+    const r = await fetch(`${base}/api/brain/voices${path}`, {
+      method, headers: { ...authHeaders(), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(timeoutMs),
+    });
+    const j: any = await r.json().catch(() => ({}));
+    if (!r.ok) throw new LlmError(r.status, String(j?.detail || `cloud voices ${r.status}`).slice(0, 200));
+    return j;
+  };
+
   // 所有 brain 请求加超时:thin worker 的 fetch 此前无超时,上游(模型/网关/网络)一挂死,整条 run
   // 无限 await;且 worker 按 session 串行 → 该 session 后续 run 全被堵死。默认 60s,env 可调。
   const REQ_TIMEOUT_MS = Number(process.env.TANGU_BRAIN_HTTP_TIMEOUT_MS) || 60_000;
@@ -441,7 +452,9 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
             backgroundModelId: r?.backgroundModelId ?? null,
             imageModelId: r?.imageModelId ?? null,
             visionModelId: r?.visionModelId ?? null,
-            realtimeModel: r?.realtimeModel?.id ? { id: String(r.realtimeModel.id), name: String(r.realtimeModel.name || r.realtimeModel.id), apiModelId: r.realtimeModel.apiModelId ?? null } : null,
+            realtimeModel: r?.realtimeModel?.id ? { id: String(r.realtimeModel.id), name: String(r.realtimeModel.name || r.realtimeModel.id), apiModelId: r.realtimeModel.apiModelId ?? null, ...(r.realtimeModel.defaultVoice ? { defaultVoice: String(r.realtimeModel.defaultVoice) } : {}) } : null,
+            ttsModelId: r?.ttsModelId ?? null,
+            ttsVoice: r?.ttsVoice ?? null,
             translateModels: (Array.isArray(r?.translateModels) ? r.translateModels : []).filter((m: any) => m?.id)
               .map((m: any) => ({ id: String(m.id), name: String(m.name || m.id), provider: String(m.provider || 'forsion'), apiModelId: m.apiModelId ?? null })),
             ttsModels: (Array.isArray(r?.ttsModels) ? r.ttsModels : []).filter((m: any) => m?.id)
@@ -471,6 +484,13 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         }
         return { audio: new Uint8Array(await r.arrayBuffer()), mime: r.headers.get('content-type') || 'audio/mpeg' };
       },
+    },
+    // 云端音色(GET|POST|DELETE /api/brain/voices):复刻要传样本,境外到百炼的上行很慢,给足 5 分钟。
+    voices: {
+      list: async () => voicesCall('GET', '', undefined, 20_000),
+      clone: async (_userId, req) => voicesCall('POST', '', req, 300_000),
+      remove: async (_userId, id) => { await voicesCall('DELETE', `/${encodeURIComponent(id)}`, undefined, 30_000) },
+      sample: async (_userId, id) => voicesCall('GET', `/${encodeURIComponent(id)}/sample`, undefined, 20_000),
     },
     // 实时语音通话走云端中转(ws /api/brain/realtime):key 住云端、按通话时长计费;帧协议与直连百炼相同,连接与转发仍归 services/realtimeVoice。
     realtime: {

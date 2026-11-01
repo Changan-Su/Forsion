@@ -546,3 +546,13 @@
 
 /* 发送动效:输入框里的字影子上移淡出那 200ms 先不露占位提示,两行字不叠(views/chat2/sendFlight.ts) */
 .t2c-ta[data-send-ghost]::placeholder { color: transparent; }
+
+/* 通话键的一次性气泡:贴在输入卡右上,指向发送键那一角 */
+.t2c-callhint {
+  position: absolute; right: 0; bottom: 100%; margin-bottom: 10px; z-index: 20; width: min(252px, 100%); padding: 12px 14px;
+  background: var(--bg-card, var(--bg)); color: var(--text); border-radius: var(--radius-md, 12px);
+  box-shadow: var(--card-shadow, 0 8px 28px rgba(0, 0, 0, 0.18)); line-height: 1.55;
+}
+.t2c-callhint b { display: block; margin-bottom: 2px; font-size: var(--ui-font-body); font-weight: 600; }
+.t2c-callhint span { font-size: var(--ui-font-meta); color: var(--text-muted); }
+.t2c-callhint-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }

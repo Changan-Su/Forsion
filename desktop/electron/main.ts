@@ -504,6 +504,7 @@ interface TanguStoredConfig {
   /** 只读、不落盘:用户从没动过「语音通话」(config.json 里没有 tts.realtimeModel 这个键)。这时界面替他定缺省 ——
    *  装了 Forsion Extend 且已登录就默认开、用云端模型;一旦开关 / 选过模型(含关掉 → 写 ''),就按他选的来。 */
   realtimeModelUnset: boolean
+  ttsModelUnset: boolean
   /** 实时通话音色;'' = 引擎按模型家族给缺省(Omni=Tina,Qwen-Audio=longanqian)。存 tts.realtimeVoice。 */
   realtimeVoice: string
   /** 记录应用内活动日志(~/.forsion/activity;Muse 数据源+bug 排查导出);关=停止新记录。 */
@@ -589,6 +590,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   ttsAutoSpeak: false,
   realtimeModelId: '',
   realtimeModelUnset: true,
+  ttsModelUnset: true,
   realtimeVoice: '',
   activityLogEnabled: true,
   computerHistoryEnabled: false,
@@ -800,6 +802,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       realtimeVoice: tts.realtimeVoice || '',
     } : {}),
     realtimeModelUnset: tts.realtimeModel === undefined,
+    ttsModelUnset: tts.modelId === undefined,
     ...(home.asr !== undefined ? { asrModelId: asr.modelId || '', asrBackend: asr.backend === 'local' ? 'local' : 'cloud' } : {}),
     ...(home.models !== undefined ? {
       backgroundModelId: auxModels.background || '',

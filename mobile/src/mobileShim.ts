@@ -280,7 +280,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
   const config = (): Record<string, unknown> => {
     const prefs = readPrefs()
     return {
-      modelId: '', ...prefs, realtimeModelUnset: !('realtimeModelId' in prefs),
+      modelId: '', ...prefs, realtimeModelUnset: !('realtimeModelId' in prefs), ttsModelUnset: !('ttsModelId' in prefs),
       mode: 'external', backendUrl, token, cloudUrl: cloudApiBase, cloudApiBase, sandbox: 'none',
     }
   }

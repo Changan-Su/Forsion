@@ -61,7 +61,7 @@ import { useChildChat } from '../stores/childChatStore'
 import { ChatCanvas, armCanvasEnter, chatAnchor, useChatCanvasPref, type CanvasAnchor } from './chat2/ChatCanvas'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
-import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
+import { effectiveTtsConfig, speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
 import { homeTarget, useComposerRef } from '../services/engine/targets'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
@@ -552,10 +552,11 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 朗读:配置了 TTS 模型才显示入口;点击播放/合成中的消息 = 停止。
   const [tts, setTts] = useState<TtsState>(ttsState())
   useEffect(() => subscribeTts(setTts), [])
-  const ttsEnabled = !!s.desktopConfig?.ttsModelId?.trim()
+  const ttsCfg = effectiveTtsConfig(s.desktopConfig, s.modelsResp, !!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false)
+  const ttsEnabled = !!ttsCfg?.ttsModelId?.trim()
   const speak = (id: string, text: string): void => {
     if (tts?.msgId === id) { stopSpeaking(); return }
-    speakMessage(homeTarget(), s.desktopConfig, id, text).catch((e: any) => {
+    speakMessage(homeTarget(), ttsCfg, id, text).catch((e: any) => {
       s.toast(e?.message === 'EMPTY' ? t('tts.noText') : t('tts.failed', { e: e?.message || e }), true)
     })
   }
