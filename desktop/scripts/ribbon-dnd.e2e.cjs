@@ -161,12 +161,13 @@ async function main() {
     //    但它的 drop 以前无条件吃掉再被 dropIntoFolder 拒收 = 预览骗人、松手不动。
     await fresh(page)
     await page.evaluate(() => { window.__rb.getState().addFolder('top', 'F1'); window.__rb.getState().addFolder('top', 'F2') })
-    await page.click('.rb-top .rb-more') // 6 项也遵守常驻 5 项；展开后才可拖动两个夹。
+    // 6 项也遵守常驻 5 项:两个夹挪到最前,保证都露在条上
+    await page.evaluate(() => { const s = window.__rb.getState(), o = s.order; s.setZoneOrder('top', [...o.slice(-2), ...o.slice(0, -2)]) })
     await page.waitForTimeout(300)
     s = await slots(page, 'top')
-    const [f1, f2] = s.slice(-2).map((x) => x.id)
-    await drag(page, 'top', f1, s[s.length - 1].top) // 把 F1 拖到 F2 占的槽上
-    const ord = (await orderOf(page, 'top')).slice(-2).join()
+    const [f1, f2] = s.slice(0, 2).map((x) => x.id)
+    await drag(page, 'top', f1, s[1].top) // 把 F1 拖到 F2 占的槽上
+    const ord = (await orderOf(page, 'top')).slice(0, 2).join()
     check('I1 夹拖到另一个夹上 = 换位(不再被 dropIntoFolder 静默吞掉)', ord === [f2, f1].join(), ord)
 
     // H. 展开态(宽条):槽高 34 而非 32,让位位移用的是布局常量 slotH —— 与实测槽距对不上就会歪。
@@ -309,13 +310,15 @@ async function main() {
     await wheelAt('top', 10, 8)
     const k2 = await keysOf(page)
     check('W2 滚到底夹住:露最后 5 个(⌘6..⌘9,第 10 个无号)', k2.join() === '⌘6,⌘7,⌘8,⌘9,', k2.join('|'))
-    // 「…」= 展开:滚过去的前几个点开就在条上(10-02 起「…」不再弹浮层)。
+    // 「+N」浮层列的是此刻条上没露的:滚到底后 = 滚过去的前 5 个,条本身不动(10-30 起侧边流出浮层)
+    const flyIds = (zone) => page.$$eval(`.rb-more-fly[data-rb-more-fly="${zone}"] .rb-fly-row`, (els) => els.map((e) => e.dataset.id))
+    const barBefore = (await idsIn('top')).join()
     await page.click('.rb-top .rb-more')
-    await page.waitForTimeout(150)
-    const openTop = await idsIn('top')
-    check('W3 滚过去的前几个点「…」展开后就在条上', top0.slice(0, 5).every((id) => openTop.includes(id)) && openTop.length === 10, openTop.join())
+    await page.waitForTimeout(700)
+    const openTop = await flyIds('top')
+    check('W3 滚到底点「+N」:浮层列出滚过去的前 5 个,条不动', openTop.join() === top0.slice(0, 5).join() && (await idsIn('top')).join() === barBefore, `${openTop.join()} ｜ 条 ${(await idsIn('top')).join()}`)
     await page.keyboard.press('Escape')
-    await page.waitForTimeout(100)
+    await page.waitForTimeout(500)
     await wheelAt('top', -10, 8)
     check('W4 往上滚回来:窗口复原', (await idsIn('top')).join() === top0.join(), (await idsIn('top')).join())
     await page.evaluate(() => {
@@ -336,8 +339,9 @@ async function main() {
     await wheelAt('top', -120)
     await page.setViewportSize({ width: 900, height: 800 })
 
-    // X. 「…」= 展开(10-02 用户要求):点上区「…」→ 上区铺满、命令区让出来;点 Ribbon 图标不收,点别处 / Esc /
-    //    窗口失焦(点进 iframe 视图时事件到不了本窗口)收回。命令区「…」镜像:上区与主位槽一起让出来。
+    // X. 「+N」= 侧边浮层(10-30 用户定,替换 10-02 的「…」= 展开):点上区「+N」→ 从按钮里流出浮层、列藏着的,
+    //    条与命令区都不动;再点 / 点浮层里一行 / 点别处 / Esc / 窗口失焦(点进 iframe 视图)收回。命令区「+N」镜像。
+    //    收回是倒放(0.7 × 420ms),期间 rb-open-* 还挂着,所以每次收后等 500ms 再量。
     await fresh(page)
     await page.evaluate(() => {
       const s = window.__rb.getState()
@@ -349,37 +353,40 @@ async function main() {
     const isOpen = () => page.evaluate(() => ({ top: !!document.querySelector('.rb.rb-open-top'), bottom: !!document.querySelector('.rb.rb-open-bottom') }))
     const pinBottom = () => page.$eval('.rb-pinned', (e) => Math.round(e.getBoundingClientRect().bottom))
     const pin0 = await pinBottom()
+    const OPEN = 700, CLOSE = 500
     await page.click('.rb-top .rb-more')
-    await page.waitForTimeout(150)
-    const xTop = await idsIn('top')
-    const xMore = await page.$eval('.rb-top .rb-more', (b) => ({ exp: b.getAttribute('aria-expanded'), label: b.getAttribute('aria-label') }))
-    check('X1 点上区「…」:上区 9 个全露、命令区让出来、钮变「收起」', xTop.length === 9 && !(await page.$('.rb-bottom')) && xMore.exp === 'true' && xMore.label === '收起', `${xTop.join()} ｜ ${JSON.stringify(xMore)}`)
-    check('X2 上区展开时账号卡仍贴底', (await pinBottom()) === pin0, `${pin0} → ${await pinBottom()}`)
+    await page.waitForTimeout(OPEN)
+    const xFly = await flyIds('top')
+    const xMore = await page.$eval('.rb-top .rb-more', (b) => ({ exp: b.getAttribute('aria-expanded'), label: b.getAttribute('aria-label'), n: b.textContent }))
+    check('X1 点上区「+4」:浮层列藏着的 4 个,条上仍 5 个、命令区还在,钮标「更多 Space · 4」', xFly.join() === 'tF,tG,tH,tI' && (await idsIn('top')).length === 5 && !!(await page.$('.rb-bottom')) && xMore.exp === 'true' && xMore.label === '更多 Space · 4' && xMore.n === '+4', `${xFly.join()} ｜ ${JSON.stringify(xMore)}`)
+    check('X2 浮层开着时账号卡仍贴底', (await pinBottom()) === pin0, `${pin0} → ${await pinBottom()}`)
     await page.evaluate(() => { window.__rbHits.length = 0 })
-    await page.click('.rb-top .rb-slot[data-id="tI"] .rb-btn')
-    await page.waitForTimeout(100)
-    check('X3 点展开区里的图标:照常触发、不收起', (await page.evaluate(() => window.__rbHits.join())) === 'tI' && (await isOpen()).top, JSON.stringify(await isOpen()))
-    await page.mouse.click(600, 400)
-    await page.waitForTimeout(150)
-    check('X4 点 Ribbon 以外任意处:收回,命令区回来、上区回到 5 个', !(await isOpen()).top && !!(await page.$('.rb-bottom')) && (await idsIn('top')).length === 5, `${(await idsIn('top')).length} ｜ ${JSON.stringify(await isOpen())}`)
-    await page.click('.rb-bottom .rb-more')
-    await page.waitForTimeout(150)
-    const xBot = await idsIn('bottom')
-    const homeShown = await page.$eval('.rb-home', (e) => getComputedStyle(e).display !== 'none')
-    check('X5 点命令区「…」:命令区全露、上区与主位槽让出来', (await isOpen()).bottom && !(await page.$('.rb-top')) && !homeShown && xBot.length === 6, `${xBot.join()} ｜ home=${homeShown}`)
-    await page.keyboard.press('Escape')
-    await page.waitForTimeout(150)
-    check('X6 Esc 收回', !(await isOpen()).bottom && !!(await page.$('.rb-top')), JSON.stringify(await isOpen()))
+    await page.click('.rb-more-fly .rb-slot[data-id="tI"] .rb-btn')
+    await page.waitForTimeout(CLOSE)
+    check('X3 点浮层里的一行:照常触发、浮层收回', (await page.evaluate(() => window.__rbHits.join())) === 'tI' && !(await isOpen()).top && !(await page.$('.rb-more-fly')), JSON.stringify(await isOpen()))
     await page.click('.rb-top .rb-more')
-    await page.waitForTimeout(100)
+    await page.waitForTimeout(OPEN)
+    await page.mouse.click(600, 400)
+    await page.waitForTimeout(CLOSE)
+    check('X4 点 Ribbon 以外任意处:收回,上区仍 5 个', !(await isOpen()).top && (await idsIn('top')).length === 5, `${(await idsIn('top')).length} ｜ ${JSON.stringify(await isOpen())}`)
+    await page.click('.rb-bottom .rb-more')
+    await page.waitForTimeout(OPEN)
+    const xBot = await flyIds('bottom')
+    const homeShown = await page.$eval('.rb-home', (e) => getComputedStyle(e).display !== 'none')
+    check('X5 点命令区「+N」:浮层列藏着的命令,上区与主位槽都在', (await isOpen()).bottom && !!(await page.$('.rb-top')) && homeShown && xBot.length > 0 && xBot.every((id) => !/^pin$/.test(id)), `${xBot.join()} ｜ home=${homeShown}`)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(CLOSE)
+    check('X6 Esc 收回', !(await isOpen()).bottom && !(await page.$('.rb-more-fly')), JSON.stringify(await isOpen()))
+    await page.click('.rb-top .rb-more')
+    await page.waitForTimeout(OPEN)
     await page.evaluate(() => window.dispatchEvent(new Event('blur')))
-    await page.waitForTimeout(150)
+    await page.waitForTimeout(CLOSE)
     check('X7 窗口失焦(点进 iframe 视图)收回', !(await isOpen()).top, JSON.stringify(await isOpen()))
     await page.click('.rb-top .rb-more')
-    await page.waitForTimeout(100)
+    await page.waitForTimeout(OPEN)
     await page.click('.rb-top .rb-more')
-    await page.waitForTimeout(150)
-    check('X8 再点「收起」收回', !(await isOpen()).top && (await idsIn('top')).length === 5, JSON.stringify(await isOpen()))
+    await page.waitForTimeout(CLOSE)
+    check('X8 再点「+N」收回(倒放缩回,不是直接消失)', !(await isOpen()).top && !(await page.$('.rb-more-fly')) && (await idsIn('top')).length === 5, JSON.stringify(await isOpen()))
 
     // Y. 滚动后自动归位(10-04 用户要求,设置里可关):翻过以后,点 Ribbon 以外的地方 / 点开条上的一个条目 /
     //    窗口失焦,隔 600ms 滑回原位。光滚不点不动,「…」不算,延迟内再滚就作废;开关读 localStorage,用时才读。

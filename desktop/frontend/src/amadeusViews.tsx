@@ -15,6 +15,7 @@ import {
   ChevronRight, Search, Code2, Eye, Star, StarOff, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
   Undo2, Redo2, ChevronsDown, Frame, ListIndentDecrease, ListIndentIncrease, Copy, Monitor, FolderSync, FolderMinus,
+  ArrowLeft, Globe2, Link2, LogOut, Users,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useVisualTheme as useTheme } from './stores/themeStore'
@@ -82,7 +83,10 @@ import { PresenceDots } from './components/PresenceDots'
 import { ShareCard } from './components/ShareCard'
 import { ShareStatus } from './components/ShareStatus'
 import { tipProps, tipT, fsTipLines, type TipLines } from './hoverTip'
-import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry, cloudPathFor } from './stores/entrySyncStore'
+import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry, cloudPathFor, localPathFor } from './stores/entrySyncStore'
+import { foreignVaultOwner, refreshAfterLeave, useSharedVault } from './stores/sharedVaultStore'
+import { byExpiry, daysUntil } from './amadeus/lib/shareState'
+import type { AmadeusPageShare, AmadeusSharedItem } from './types'
 import { openCloudSyncDialog } from './components/CloudSyncDialog'
 import { track } from './achievements/store'
 import { act } from './activity/log'
@@ -133,6 +137,23 @@ registerMessages({
   'amxv.sec.collections': { zh: '集合', en: 'Collections' },
   'amxv.sec.searchTip': { zh: '搜索：{q}', en: 'Search: {q}' },
   'amxv.sec.removeCollection': { zh: '移除集合', en: 'Remove collection' },
+  'amxv.sec.sharedByMe': { zh: '我共享的', en: 'Shared by me' },
+  'amxv.shared.people': { zh: '{n} 人', en: '{n} joined' },
+  'amxv.shared.waiting': { zh: '等人加入', en: 'Waiting to join' },
+  'amxv.shared.published': { zh: '已发布', en: 'Published' },
+  'amxv.shared.dueToday': { zh: '今天到期', en: 'Ends today' },
+  'amxv.shared.dueTomorrow': { zh: '明天到期', en: 'Ends tomorrow' },
+  'amxv.shared.dueInTwo': { zh: '后天到期', en: 'Ends in 2 days' },
+  'amxv.shared.otherVault': { zh: '这一页在另一个智库里，切过去再打开', en: 'This page is in another vault. Switch to it first.' },
+  'amxv.shared.open': { zh: '打开', en: 'Open' },
+  'amxv.shared.copyLink': { zh: '复制页面链接', en: 'Copy page link' },
+  'amxv.shared.linkCopied': { zh: '已复制页面链接', en: 'Page link copied' },
+  'amxv.shared.leave': { zh: '退出共享', en: 'Leave share' },
+  'amxv.shared.leaveConfirm': { zh: '退出「{title}」的共享？之后要对方重新邀请才能回来。', en: 'Leave "{title}"? You\'ll need a new invitation to come back.' },
+  'amxv.shared.left': { zh: '已退出共享', en: 'You left the share' },
+  'amxv.shared.leaveFailed': { zh: '退出失败，请重试', en: 'Could not leave. Try again.' },
+  'amxv.shared.backToMine': { zh: '回到我的智库', en: 'Back to my vault' },
+  'amxv.shared.vaultOf': { zh: '{name}的智库', en: "{name}'s vault" },
   'amxv.sec.sharedWithMe': { zh: '与我共享', en: 'Shared with me' },
   'amxv.sec.pinned': { zh: '置顶', en: 'Pinned' },
   'amxv.sec.cloudSync': { zh: '云同步', en: 'Cloud sync' },
@@ -510,7 +531,7 @@ function TrashSection() {
                 <div key={it.name} className="amx-trash-row">
                   <span className="amx-trash-ic">{it.dir ? <Folder /> : <FileText />}</span>
                   <span className="amx-trash-name" title={t('amxv.trash.origin', { path: it.original })}>
-                    {it.name}
+                    {it.original.split('/').pop() ?? it.name}
                     <span className="amx-trash-orig">{dirOfOrig(it.original)}</span>
                   </span>
                   <button
@@ -613,38 +634,119 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
   )
 }
 
-/** 「与我共享」分区(window.amadeusCollab 解闸):别人共享给我的页面;点击进入(必要时切库)。 */
+/** 到期提示的文案:只有两天内才露出,离得远的不打扰。 */
+function dueSoon(expiresAt: string | null | undefined): string | null {
+  const days = daysUntil(expiresAt)
+  if (days === null || days < 0 || days > 2) return null
+  return translate(days === 0 ? 'amxv.shared.dueToday' : days === 1 ? 'amxv.shared.dueTomorrow' : 'amxv.shared.dueInTwo')
+}
+
+/** 「我共享的」分区:行尾写人数、到期或等人加入,点击回到这一页。 */
+function SharedByMeSection() {
+  const { t } = useI18n()
+  const collab = window.amadeusCollab
+  const activeVault = useSharedVault((s) => s.activeVault)
+  const [shares, setShares] = useState<Array<AmadeusPageShare & { vaultId: string }>>([])
+  const [pubs, setPubs] = useState<Array<{ token: string; path: string; vaultId: string }>>([])
+  useEffect(() => {
+    if (!collab?.listAllShares) return
+    const load = (): void => {
+      void collab.listAllShares().then((r) => { setShares(r.pageShares.filter((s) => !s.expired).sort(byExpiry)); setPubs(r.publishes) }).catch(() => {})
+    }
+    load()
+    window.addEventListener('amadeus:shares-changed', load)
+    window.addEventListener('focus', load) // 对方加入不推送:发完链接切回来时补一次人数
+    return () => { window.removeEventListener('amadeus:shares-changed', load); window.removeEventListener('focus', load) }
+  }, [collab])
+  if (!collab || shares.length + pubs.length === 0) return null
+  const open = (vaultId: string, path: string, ev: RMouseEvent): void => {
+    if (activeVault && vaultId !== activeVault) {
+      if (window.amadeusSync) useApp.getState().toast(t('amxv.shared.otherVault'))
+      else collab.switchVault(vaultId, path)
+      return
+    }
+    const { vaultRoot, vaultSide } = usePageStore.getState()
+    const local = localPathFor(useEntrySync.getState().vaults, vaultRoot, vaultSide, path)
+    if (local) void openNote(local, newTabOf(ev))
+    else useApp.getState().toast(t('amxv.shared.otherVault'))
+  }
+  const row = (key: string, icon: ReactNode, path: string, vaultId: string, meta: string, warn = false): ReactNode => (
+    <button key={key} className="t2s-special" onClick={(ev) => open(vaultId, path, ev)}>
+      <span className="t2s-special-ic">{icon}</span>
+      <span className="t2s-special-title">{baseName(path)}</span>
+      <span className={`amx-share-meta${warn ? ' is-warn' : ''}`}>{meta}</span>
+    </button>
+  )
+  return (
+    <SideSection id="sharedby" defaultOpen label={t('amxv.sec.sharedByMe')} count={shares.length + pubs.length}>
+      {shares.map((s) => {
+        const due = dueSoon(s.expiresAt)
+        return row(s.id, <Users />, s.path, s.vaultId, due ?? (s.participants.length ? t('amxv.shared.people', { n: s.participants.length }) : t('amxv.shared.waiting')), !!due)
+      })}
+      {pubs.map((p) => row(p.token, <Globe2 />, p.path, p.vaultId, t('amxv.shared.published')))}
+    </SideSection>
+  )
+}
+
+/** 「与我共享」分区(window.amadeusCollab 解闸):别人共享给我的页面;点击进入(必要时切库直达)。 */
 function SharedWithMeSection() {
   const { t } = useI18n()
   const collab = window.amadeusCollab
-  const [items, setItems] = useState<Array<{ vaultId: string; path: string; title: string; role: string; ownerName: string | null; localPath?: string }>>([])
-  const [activeVault, setActiveVault] = useState('')
+  const items = useSharedVault((s) => s.items)
+  const activeVault = useSharedVault((s) => s.activeVault)
+  const [ctx, setCtx] = useState<{ x: number; y: number; item: AmadeusSharedItem } | null>(null)
+  useEffect(() => { void useSharedVault.getState().refresh() }, [collab])
   useEffect(() => {
-    if (!collab) return
-    void collab.sharedWithMe().then(setItems).catch(() => {})
-    void collab.activeVaultId().then(setActiveVault).catch(() => {})
-  }, [collab])
+    if (!ctx) return
+    const close = (): void => setCtx(null)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [ctx])
   if (!collab || items.length === 0) return null
+  const open = (s: AmadeusSharedItem, newTab?: { newTab?: boolean }): void => {
+    // 桌面:localPath=镜像内路径(与我共享/<slug>/…),镜像在云端侧,本地库侧要先切过去(离线可用);web:同库直开,跨库切过去再开。
+    if (s.localPath) void usePageStore.getState().switchVaultSide('cloud').then(() => openNote(s.localPath!, newTab))
+    else if (s.vaultId === activeVault) void openNote(s.path, newTab)
+    else collab.switchVault(s.vaultId, s.path)
+  }
+  const leave = (s: AmadeusSharedItem): void => {
+    if (!s.shareId || !window.confirm(t('amxv.shared.leaveConfirm', { title: s.title }))) return
+    void collab.leaveShare(s.shareId, s.vaultId).then(async () => {
+      useApp.getState().toast(t('amxv.shared.left'))
+      await refreshAfterLeave(s.vaultId)
+    }).catch(() => useApp.getState().toast(t('amxv.shared.leaveFailed'), true))
+  }
   return (
-    <div className="t2s-special-group" style={{ marginTop: 6 }}>
-      <div className="t2s-hint amx-sec-grab" style={{ padding: '2px 10px 2px', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('amxv.sec.sharedWithMe')}</div>
-      {items.map((s) => (
-        <button
-          key={`${s.vaultId}:${s.path}`}
-          className="t2s-special"
-          title={`${s.ownerName ?? ''} · ${s.role === 'viewer' ? t('amxv.role.viewer') : t('amxv.role.editor')}`}
-          onClick={(ev) => {
-            // 桌面:localPath=镜像内路径(与我共享/<slug>/…),本地直开(离线可用);web:切库或同库直开。
-            if (s.localPath) void openNote(s.localPath, newTabOf(ev))
-            else if (s.vaultId === activeVault) void openNote(s.path, newTabOf(ev))
-            else collab.switchVault(s.vaultId)
-          }}
-        >
-          <span className="t2s-special-ic"><Share2 /></span>
-          <span className="t2s-special-title">{s.title}</span>
-        </button>
-      ))}
-    </div>
+    <SideSection id="sharedwith" defaultOpen label={t('amxv.sec.sharedWithMe')} count={items.length}>
+      {items.map((s) => {
+        const due = dueSoon(s.expiresAt)
+        const owner = s.ownerName ?? ''
+        const meta = s.role === 'viewer' ? [owner, t('amxv.role.viewer')].filter(Boolean).join(' · ') : owner
+        return (
+          <button
+            key={`${s.vaultId}:${s.path}`}
+            className="t2s-special"
+            title={`${owner} · ${s.role === 'viewer' ? t('amxv.role.viewer') : t('amxv.role.editor')}`}
+            onClick={(ev) => open(s, newTabOf(ev))}
+            onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); setCtx({ x: ev.clientX, y: ev.clientY, item: s }) }}
+          >
+            <span className="t2s-special-ic"><Share2 /></span>
+            <span className="t2s-special-title">{s.title}</span>
+            <span className={`amx-share-meta${due ? ' is-warn' : ''}`}>{due ?? meta}</span>
+          </button>
+        )
+      })}
+      {ctx && (
+        <OverlayAt className="ctx-menu" x={ctx.x} y={ctx.y} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { setCtx(null); open(ctx.item) }}><FileText size={13} /> {t('amxv.shared.open')}</button>
+          <button onClick={() => {
+            setCtx(null)
+            void navigator.clipboard.writeText(collab.fileUrl(ctx.item.vaultId, ctx.item.path)).then(() => useApp.getState().toast(t('amxv.shared.linkCopied')))
+          }}><Link2 size={13} /> {t('amxv.shared.copyLink')}</button>
+          {ctx.item.shareId && <button className="danger" onClick={() => { setCtx(null); leave(ctx.item) }}><LogOut size={13} /> {t('amxv.shared.leave')}</button>}
+        </OverlayAt>
+      )}
+    </SideSection>
   )
 }
 
@@ -865,6 +967,8 @@ export function AmadeusPagesView() {
   // 云端笔记库入口:web / 移动端(库本身在云端,cloudBridge 挂 amadeusCloudVaults)恒显示;桌面仅云端模式显示,本地模式给本地 Vault 选择器。
   // ⚠️ 不能用「没有 amadeusSync」当 web 的判据:桌面没装 Forsion Extend 时 amadeusSync 也不在,那是本地机器,不是云端库。
   const cloudLib = !!(window as { amadeusCloudVaults?: unknown }).amadeusCloudVaults || vaultSide === 'cloud'
+  const foreignOwner = useSharedVault(foreignVaultOwner)
+  const foreignLabel = foreignOwner ? t('amxv.shared.vaultOf', { name: foreignOwner.ownerName ?? '' }) : null
 
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set()) // 文件夹默认全折叠
@@ -936,7 +1040,7 @@ export function AmadeusPagesView() {
     window.addEventListener('pointercancel', clear)
     return () => { window.removeEventListener('pointerup', clear); window.removeEventListener('pointercancel', clear) }
   }, [secArm])
-  const BASE_SEC_IDS = ['pinned', 'cloudsync', 'shared', 'prefs', 'tree']
+  const BASE_SEC_IDS = ['pinned', 'cloudsync', 'sharedby', 'shared', 'prefs', 'tree']
   const secPos = new Map(secOrder.map((sid, i) => [sid, i]))
   // 已存顺序里没有的分区(未来新增)排到末尾,相对次序保持默认(稳定排序)。
   const orderedSecIds = secOrder.length ? [...BASE_SEC_IDS].sort((a, b) => (secPos.get(a) ?? secOrder.length) - (secPos.get(b) ?? secOrder.length)) : BASE_SEC_IDS
@@ -1661,7 +1765,7 @@ export function AmadeusPagesView() {
         </SideSection>
       ))}
       {/* 同步库在前、Cloud工作区 在最后:它只放不属于任何同步库的东西(10-17 用户选 B)。 */}
-      <SideSection id="cloud-ws" defaultOpen label={t('amxv.sec.cloudWorkspace')}>
+      <SideSection id="cloud-ws" defaultOpen label={foreignLabel ?? t('amxv.sec.cloudWorkspace')}>
         {cloudSections.rest.length ? cloudSections.rest.map((n) => renderNode(n, 0)) : <div className="t2s-hint amx-sec-hint">{t('amxv.empty')}</div>}
       </SideSection>
     </>
@@ -1712,7 +1816,7 @@ export function AmadeusPagesView() {
         title={cloudLib ? t('amxv.cloudVaultTip') : vaultRoot || undefined}
       >
         <span className="t2s-special-ic"><FolderOpen /></span>
-        <span className="t2s-special-title">{cloudLib ? t('amxv.cloudVault') : vaultRoot ? t('amxv.vaultNamed', { name: baseName(vaultRoot) }) : t('amxv.openVault')}</span>
+        <span className="t2s-special-title">{cloudLib ? (foreignLabel ? t('amxv.vaultNamed', { name: foreignLabel }) : t('amxv.cloudVault')) : vaultRoot ? t('amxv.vaultNamed', { name: baseName(vaultRoot) }) : t('amxv.openVault')}</span>
       </button>
     </div>
   )
@@ -1776,7 +1880,13 @@ export function AmadeusPagesView() {
             matches.length ? matches.map((p) => row(p)) : <div className="t2s-hint">{t('amxv.noMatches')}</div>
           ) : (
             <>
-              {!phone && <div className="t2s-special-group">
+              {foreignOwner && <div className="t2s-special-group">
+                <button className="t2s-special amx-back-vault" onClick={() => { const own = useSharedVault.getState().ownVaults[0]; if (own) window.amadeusCollab?.switchVault(own) }}>
+                  <span className="t2s-special-ic"><ArrowLeft /></span>
+                  <span className="t2s-special-title">{t('amxv.shared.backToMine')}</span>
+                </button>
+              </div>}
+              {!phone && !foreignOwner && <div className="t2s-special-group">
                 <button className="t2s-special" data-guide-anchor="note-new" onClick={() => void ps().createPage()}>
                   <span className="t2s-special-ic"><SquarePen /></span>
                   <span className="t2s-special-title">{t('amadeus.new.note')}</span>
@@ -1795,6 +1905,7 @@ export function AmadeusPagesView() {
                 const secNodes: Record<string, ReactNode> = {
                   pinned: <PinnedSection row={row} dragPath={dragPath} />,
                   cloudsync: vaultSide === 'local' ? <CloudSyncSection dragPath={dragPath} /> : null,
+                  sharedby: foreignOwner ? null : <SharedByMeSection />,
                   shared: <SharedWithMeSection />,
                   prefs: <PrefsSections row={row} pages={pages} />,
                   tree: secTreeNode,
@@ -1808,7 +1919,7 @@ export function AmadeusPagesView() {
         {/* 回收站 + Vault 常驻侧栏底部(sticky footer),不随笔记树滚走;Vault 在回收站下方最底。
             手机上这一块排进列表末尾(见上面的 phoneFoot):钉在底部的话它会挡在 Dock 与列表之间。 */}
         {!phone && foot}
-        {phone && vaultRoot && <ListFab label={t('amadeus.new.note')} icon={<SquarePen />} onClick={() => void ps().createPage()} onMenu={(at) => setMenu({ kind: 'root', path: '', x: at.x, y: at.y })} />}
+        {phone && vaultRoot && !foreignOwner && <ListFab label={t('amadeus.new.note')} icon={<SquarePen />} onClick={() => void ps().createPage()} onMenu={(at) => setMenu({ kind: 'root', path: '', x: at.x, y: at.y })} />}
       </aside>
 
       {/* 多选菜单:只放对整批说得通的两件事。删除逐个走各自的既有流程(笔记要问独占附件,

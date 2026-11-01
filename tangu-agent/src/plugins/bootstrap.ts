@@ -4,6 +4,8 @@ import { tanguHome } from '../core/tanguHome.js';
 import { createPluginRuns, pluginEngines } from './runs.js';
 import { createPluginWorkspaces } from './workspaces.js';
 import { createPluginAutomation } from './automation.js';
+import { registerPluginSkillProvider } from '../skills/pluginSkills.js';
+import { registerPluginModelProvider } from '../llm/pluginModels.js';
 import { authMiddleware } from '../core/http.js';
 import path from 'node:path';
 /**
@@ -84,6 +86,8 @@ const sdk: Omit<TanguSdk, 'runs' | 'engines' | 'workspaces' | 'automation'> = {
 /** 一次激活的效果台账。停用时据此逐条撤销;撤销后 disposed=true,旧 ctx 的迟到注册一律忽略。 */
 interface Instance {
   plugin?: TanguPlugin;
+  /** 本次激活的官方判定(startEntry 里定,之后不变)。 */
+  official?: boolean;
   disposed: boolean;
   runtimeDisposers: (() => void)[];
   /** activate 已成功返回:此后 registerRoutes 立即挂;之前先攒着(激活失败就不必挂)。 */
@@ -153,6 +157,15 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       providerOwner.set(p.id, id);
       registerToolProvider({ ...p, origin: 'plugin', official }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
     },
+    registerSkillProvider: (provider) => {
+      if (!live('技能')) return;
+      inst.runtimeDisposers.push(registerPluginSkillProvider(id, provider));
+    },
+    registerModelProvider: (provider) => {
+      if (!live('模型来源')) return;
+      if (!deps().profile.capabilities.hostExec) throw new Error('Plugin model providers require a local engine');
+      inst.runtimeDisposers.push(registerPluginModelProvider(id, provider));
+    },
     // folder 插件进统一注册表；图标只信宿主读到的包根 icon.png。
     // 捆绑包内嵌的引擎插件默认跟随捆绑包(桌面上捆绑包缺省即启用,且只给捆绑包一个开关、拨动时级联):
     // 它自报的 defaultEnabled:false 在产品里没有任何打开入口,只会造成「卡片开着、工具一个没有」——
@@ -210,7 +223,11 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       if (live('通道')) inst.runtimeDisposers.push(channelHub.registerChannel(spec)); // 停用时 stopEntry 跑 runtimeDisposers 摘掉
     },
     sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
-      automation: { ...automation, save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }) },
+      automation: {
+        ...automation,
+        save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }),
+        registerTrigger: (spec) => { const off = automation.registerTrigger(spec); inst.runtimeDisposers.push(off); return off; }, // 停用时 stopEntry 注销
+      },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     // 只有官方插件(签名捆绑包,./official.ts)有这个键;其余插件的 ctx 上根本没有它(不是一个返回错误的空壳)。
     ...(official ? { cloud: createOfficialCloud(() => !inst.disposed) } : {}),
@@ -302,6 +319,8 @@ export interface PluginStatus {
   settling?: boolean;
   /** 此刻在跑的实例名下注册的工具名(模型看到的名字),不含和核心工具或别的插件撞名的。桌面据此只让插件给自己引擎半身的工具挂结果卡片。 */
   tools?: string[];
+  /** 在跑的实例过了官方签名判定(见 official.ts)。桌面据此放行官方插件给少数核心工具画结果卡(toolResultCards.ts)。 */
+  official?: boolean;
 }
 
 /** 生命周期限时(测试改小)。超时只是不再等,对方仍在后台跑 —— 见 withDeadline。 */
@@ -435,6 +454,7 @@ async function startEntry(e: Entry): Promise<boolean> {
         e.pluginOfficial = verified;
       }
       inst.plugin = e.plugin;
+      inst.official = official;
       await e.plugin.activate(makeContext(e.d, inst, official));
     });
     inst.activated = true;
@@ -585,7 +605,7 @@ function attachHostRouters(r: PluginRouters): void {
  * 只有激活后才知道,所以照旧先全部激活一次,再收敛:未启用或前置没齐的立即 deactivate 休眠。
  * 返回把插件路由接到三组 router 的函数——**须在 `createTanguModule` 之后调用**（彼时 `configureTangu`/`deps()` 才就绪;
  * 路由挂载器内部可能读 `deps()`）。之后运行期激活的插件路由经分发器即时生效,不再需要重启。
- * tool provider 注册是无状态的静态写入，先于 createTanguModule 也安全。
+ * standalone/TUI 先 createTanguModule 再激活:模型来源等注册需要真实 host/profile 做能力校验。
  */
 export async function activateAllPlugins(onActivate?: (id: string) => void): Promise<(r: PluginRouters) => void> {
   await serial(async () => {
@@ -712,6 +732,9 @@ export function removePluginLive(id: string): Promise<void> {
   });
 }
 
+/** 从回收站放回来的同一份代码:撤掉卸载墓碑,下一次重扫照常加载。 */
+export function forgetUninstalled(id: string): void { uninstalled.delete(id); }
+
 /** 列表用的运行态(同步读,不进串行队列)。没进生命周期的 meta(编进 app 的 builtin 等):active = 启用态,无 version。 */
 export function pluginStatus(id: string): PluginStatus {
   const e = entries.get(id) ?? [...entries.values()].find((x) => x.metaIds.has(id));
@@ -734,6 +757,7 @@ export function pluginStatus(id: string): PluginStatus {
     }
     const tools = [...owners].filter(([, o]) => o.size === 1 && o.has(e.d.manifest.id)).map(([name]) => name);
     if (tools.length) out.tools = tools;
+    if (e.inst.official) out.official = true;
   }
   return out;
 }

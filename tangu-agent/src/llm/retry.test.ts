@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, llmRetryBudgetExceeded, sleepOrAbort, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS } from './retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, llmRetryBudgetExceeded, sleepOrAbort, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, SLOW_FAIL_NO_RETRY_MS, isQuotaExhaustedLlmError, isForeignReasoningLlmError } from './retry.js';
 import { LlmError } from '../core/types.js';
 
 describe('isRetryableLlmError', () => {
@@ -24,6 +24,20 @@ describe('isRetryableLlmError', () => {
       expect(isRetryableLlmError(new LlmError(429, m))).toBe(false);
     }
     expect(isRetryableLlmError(new LlmError(429, 'Rate limit reached for requests'))).toBe(true);
+  });
+
+  it('一分钟窗口的「quota exceeded」是限流:照常重试、不算额度用完;按天的仍算(magpie d83f887a7)', () => {
+    const perMinute = [
+      'You exceeded your current quota, please check your plan and billing details. Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 15, model: gemini-2.0-flash. QuotaFailure: GenerateRequestsPerMinutePerProjectPerModel-FreeTier',
+      'Quota exceeded for aiplatform.googleapis.com/online_prediction_requests_per_minute_per_base_model with base model: gemini-2.5-pro.',
+      'Allocated quota exceeded, please increase your quota limit.',
+    ];
+    for (const m of perMinute) {
+      expect(isRetryableLlmError(new LlmError(429, m))).toBe(true);
+      expect(isQuotaExhaustedLlmError(new LlmError(429, m))).toBe(false);
+    }
+    const perDay = 'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests. QuotaFailure: GenerateRequestsPerDayPerProjectPerModel-FreeTier';
+    expect(isQuotaExhaustedLlmError(new LlmError(429, perDay))).toBe(true);
   });
 
   it('does not retry user abort', () => {
@@ -189,5 +203,22 @@ describe('isAuthExpiredLlmError', () => {
     expect(isAuthExpiredLlmError(new LlmError(502, 'Bad Gateway'))).toBe(false);
     expect(isAuthExpiredLlmError(new LlmError(429, 'Rate limit reached'))).toBe(false);
     expect(isAuthExpiredLlmError(new TypeError('fetch failed'))).toBe(false);
+  });
+});
+
+// 厂商原文(magpie foreign_seal_test.go / codex_backend_test.go / affinity.go 注释 / redact/json.go 注释)
+describe('isForeignReasoningLlmError', () => {
+  it('认得出:OpenAI / Codex 的 invalid_encrypted_content、xAI 的解不开、Anthropic 的签名无效;HTTP 400 与流里的 502 都认', () => {
+    const openai = Object.assign(new LlmError(400, 'The encrypted content for item rs_ could not be verified. Reason: Encrypted content could not be decrypted or parsed.'), { code: 'invalid_encrypted_content' });
+    const codeOnly = Object.assign(new LlmError(502, 'Request failed.'), { code: 'invalid_encrypted_content' });
+    const xai = new LlmError(400, 'Could not decrypt the provided encrypted_content. Ensure the value is the unmodified encrypted_content from a previous response.');
+    const anthropic = new LlmError(400, 'messages.1.content.0: Invalid `signature` in `thinking` block');
+    expect([openai, codeOnly, xai, anthropic].map(isForeignReasoningLlmError)).toEqual([true, true, true, true]);
+  });
+  it('不认:超长、额度、普通 400、非 LlmError', () => {
+    expect(isForeignReasoningLlmError(Object.assign(new LlmError(400, 'Your input exceeds the context window of this model.'), { code: 'context_length_exceeded' }))).toBe(false);
+    expect(isForeignReasoningLlmError(new LlmError(429, 'The usage limit has been reached'))).toBe(false);
+    expect(isForeignReasoningLlmError(new LlmError(400, "Invalid value for 'reasoning.effort'"))).toBe(false);
+    expect(isForeignReasoningLlmError(new Error('invalid_encrypted_content'))).toBe(false);
   });
 });

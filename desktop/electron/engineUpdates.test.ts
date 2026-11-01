@@ -14,6 +14,8 @@ import { tarballUrl, type RegistryFetch } from './builtinUpdates'
 import { _resetEngineUpdatesForTest, checkEngineUpdate, cleanEngineOverlays, engineOverlayRoot, loadEngineOverlayApi, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayApi } from './engineUpdates'
 
 const REG = 'https://r1.test'
+const DESKTOP = '2.1.0'
+const LINE = 'desktop-2.1.0'
 const { publicKey, privateKey } = generateKeyPairSync('ed25519')
 const pub = publicKey.export({ type: 'spki', format: 'pem' }) as string
 const api: EngineOverlayApi = {
@@ -54,7 +56,7 @@ const runtimeFiles = (): Record<string, string> => ({
   ...Object.fromEntries(overlay.SCHEMA_FILES.map((rel) => [rel, `// schema ${rel}\n`])),
 })
 const pkgJson = (version: string, extra: object = {}): string =>
-  JSON.stringify({ name: ENGINE_PACKAGE, version, dependencies: DEPS, forsion: { minDesktop: '2.0.0' }, ...extra })
+  JSON.stringify({ name: ENGINE_PACKAGE, version, dependencies: DEPS, forsion: { minDesktop: DESKTOP }, ...extra })
 /** 一份签好名的包的文件表(含 SIGNATURE);unsigned 里的文件进 tarball 但不进签名表。 */
 function signedPackage(version: string, opts: { pkg?: object; key?: typeof privateKey; unsigned?: Record<string, string> } = {}): Record<string, string> {
   const files = { 'package.json': pkgJson(version, opts.pkg), ...runtimeFiles(), 'skills/a/SKILL.md': '# a\n' }
@@ -77,10 +79,10 @@ function write(root: string, files: Record<string, string>): void {
     writeFileSync(path.join(root, rel), data)
   }
 }
-/** registry 上的 latest 是这份包;integrity 可以故意给错。 */
-function registry(version: string, buf: Buffer, integrity = sri(buf)): RegistryFetch {
+/** registry 上本线标签指向这份包(tags 可以另给);integrity 可以故意给错。 */
+function registry(version: string, buf: Buffer, integrity = sri(buf), tags: Record<string, string> = { [LINE]: version }): RegistryFetch {
   const routes: Record<string, () => Response> = {
-    [`${REG}/@forsion%2ftangu-agent`]: () => new Response(JSON.stringify({ 'dist-tags': { latest: version }, versions: { [version]: { dist: { integrity } } } })),
+    [`${REG}/@forsion%2ftangu-agent`]: () => new Response(JSON.stringify({ 'dist-tags': tags, versions: { [version]: { dist: { integrity } } } })),
     [tarballUrl(REG, ENGINE_PACKAGE, version)]: () => new Response(new Uint8Array(buf)),
   }
   return async (url) => {
@@ -89,7 +91,7 @@ function registry(version: string, buf: Buffer, integrity = sri(buf)): RegistryF
   }
 }
 const run = (fetch: RegistryFetch, runningVersion: string | null = null): Promise<string | null> =>
-  checkEngineUpdate({ engineRoot, bundledRoot, api, registries: [REG], fetch, runningVersion, log: (m) => logs.push(m), onStatus: (s) => statuses.push(s) })
+  checkEngineUpdate({ engineRoot, bundledRoot, api, desktopVersion: DESKTOP, registries: [REG], fetch, runningVersion, log: (m) => logs.push(m), onStatus: (s) => statuses.push(s) })
 const last = (): CorePluginUpdate => statuses[statuses.length - 1]
 const downloads = (): number => calls.filter((u) => u.endsWith('.tgz')).length
 const tree = (dir: string): string[] =>
@@ -208,6 +210,15 @@ describe('checkEngineUpdate', () => {
     expect(readdirSync(engineRoot)).toEqual(['2.1.1'])
   })
 
+  it('只查本线标签:latest 上号更高的别线引擎不下;本线还没发过 = 已是最新,不报错', async () => {
+    const other = tgz(signedPackage('2.1.5'))
+    expect(await run(registry('2.1.5', other, sri(other), { latest: '2.1.5' }))).toBeNull()
+    expect(last()).toMatchObject({ phase: 'current', installedVersion: '2.1.0' })
+    expect(downloads()).toBe(0)
+    expect(await run(registry('2.1.1', tgz(signedPackage('2.1.1')), undefined, { latest: '2.1.5', [LINE]: '2.1.1' }))).toBe('2.1.1')
+    expect(last()).toMatchObject({ phase: 'staged', latestVersion: '2.1.1' })
+  })
+
   it('registry 连不上:报错,不抛', async () => {
     expect(await run(async () => { throw new Error('offline') })).toBeNull()
     expect(last().phase).toBe('error')
@@ -223,7 +234,7 @@ describe('cleanEngineOverlays', () => {
     write(path.join(engineRoot, '2.1.5'), { 'package.json': 'garbage' })
     write(path.join(engineRoot, '.staging-999'), { 'x.js': 'half' })
     writeFileSync(path.join(engineRoot, 'bad.json'), JSON.stringify({ '2.0.5': 'old', '2.1.9': 'still newer than bundled' }))
-    await cleanEngineOverlays(engineRoot, bundledRoot, api, (m) => logs.push(m))
+    await cleanEngineOverlays(engineRoot, bundledRoot, api, DESKTOP, (m) => logs.push(m))
     expect(readdirSync(engineRoot).sort()).toEqual(['2.1.2', '2.1.4', 'bad.json'])
     expect(JSON.parse(readFileSync(path.join(engineRoot, 'bad.json'), 'utf8'))).toEqual({ '2.1.9': 'still newer than bundled' })
     expect(logs.join('\n')).toContain('清掉 2.1.5')
@@ -235,7 +246,7 @@ describe('cleanEngineOverlays', () => {
     await run(fetch('2.1.2'))
     await run(fetch('2.1.3'))
     api.markBad(engineRoot, '2.1.3', 'crashed on start')
-    await cleanEngineOverlays(engineRoot, bundledRoot, api)
+    await cleanEngineOverlays(engineRoot, bundledRoot, api, DESKTOP)
     expect(readdirSync(engineRoot).sort()).toEqual(['2.1.1', '2.1.2', 'bad.json'])
   })
 
@@ -243,12 +254,22 @@ describe('cleanEngineOverlays', () => {
     await run(registry('2.1.1', tgz(signedPackage('2.1.1'))))
     api.markBad(engineRoot, '2.1.0', 'old')
     write(bundledRoot, { 'package.json': pkgJson('2.1.1') }) // 用户装了新安装包
-    await cleanEngineOverlays(engineRoot, bundledRoot, api)
+    await cleanEngineOverlays(engineRoot, bundledRoot, api, DESKTOP)
     expect(readdirSync(engineRoot)).toEqual([])
   })
 
+  it('换装到新一版桌面后,旧线留下的引擎号再高、建表再相同也删掉;本线的(含 +build 修订)留着', async () => {
+    await run(registry('2.1.4', tgz(signedPackage('2.1.4')))) // 2.1.0 那条线下的
+    write(bundledRoot, { 'desktop-host.json': JSON.stringify({ version: '2.2.0+build.1' }) }) // 换装:引擎没变、建表相同
+    write(path.join(engineRoot, '2.1.2'), signedPackage('2.1.2', { pkg: { forsion: { minDesktop: '2.2.0' } } }))
+    expect(api.selectOverlay(engineRoot, bundledRoot)?.version).toBe('2.1.4') // 不收拾的话启动器挑旧线那份
+    await cleanEngineOverlays(engineRoot, bundledRoot, api, '2.2.0+build.1', (m) => logs.push(m))
+    expect(readdirSync(engineRoot)).toEqual(['2.1.2'])
+    expect(logs.join('\n')).toMatch(/清掉 2\.1\.4\(line:/)
+  })
+
   it('没有 engine 目录:不报错、不创建', async () => {
-    await cleanEngineOverlays(engineRoot, bundledRoot, api, (m) => logs.push(m))
+    await cleanEngineOverlays(engineRoot, bundledRoot, api, DESKTOP, (m) => logs.push(m))
     expect(existsSync(engineRoot)).toBe(false)
     expect(logs).toEqual([])
   })
@@ -262,7 +283,7 @@ describe('setupEngineOverlay(第一次拉起引擎之前)', () => {
   it('收拾目录,并给出「下次会跑哪一版 / 停用哪一版」两个动作', async () => {
     await run(registry('2.1.1', tgz(signedPackage('2.1.1'))))
     write(path.join(engineRoot, '.staging-1'), { 'x.js': 'half' })
-    const handle = await setupEngineOverlay({ bundledRoot, forsionHome: path.join(tmp, 'home'), loadApi: async () => api })
+    const handle = await setupEngineOverlay({ bundledRoot, forsionHome: path.join(tmp, 'home'), desktopVersion: DESKTOP, loadApi: async () => api })
     expect(handle).toMatchObject({ bundledRoot, root: engineRoot })
     expect(readdirSync(engineRoot)).toEqual(['2.1.1'])
     expect(handle!.control.active()).toBe('2.1.1')
@@ -275,7 +296,7 @@ describe('setupEngineOverlay(第一次拉起引擎之前)', () => {
   })
 
   it('安装包里的引擎没带启动器:返回 null,不碰磁盘', async () => {
-    expect(await setupEngineOverlay({ bundledRoot, forsionHome: path.join(tmp, 'home') })).toBeNull()
+    expect(await setupEngineOverlay({ bundledRoot, forsionHome: path.join(tmp, 'home'), desktopVersion: DESKTOP })).toBeNull()
     expect(existsSync(engineRoot)).toBe(false)
   })
 })

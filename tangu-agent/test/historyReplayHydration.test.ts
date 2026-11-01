@@ -21,7 +21,8 @@ import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { abortAllRuns, enqueueRun } from '../src/services/agentLoop.js';
 import { registerToolProvider } from '../src/tools/toolRegistry.js';
-import { PROTOCOL_MARK } from '../src/llm/openaiCompat.js';
+import { PROTOCOL_MARK, DIRECT_MARK, ACCOUNT_MARK } from '../src/llm/openaiCompat.js';
+import { reasoningAccountKey } from '../src/services/historyReplay.js';
 
 const PROBE_CALL = { id: 'c1', type: 'function', function: { name: 'replay_probe', arguments: '{}' } };
 /** Responses 流真正吐回来的那组 item:reasoning(带 encrypted_content)+ preamble 的 message +
@@ -61,6 +62,9 @@ afterEach(() => {
 /** 本轮 payload 上要打的协议标记(multiBrain 正是按它分发 Responses / anthropic / chat-completions);
  *  留空 = chat-completions。模型上的**静态**标记始终没有 —— 两者不一致正是评审 #2 的场景。 */
 let payloadProtocol: string | undefined;
+/** resolveModelAndKey 给出的模型标记 / key:换账号的用例改它们(直连 + account_id,或直连只有 key)。 */
+let modelMarks: Record<string, unknown> = {};
+let modelKey = 'k';
 
 async function setupLoop(): Promise<void> {
   const home = mkdtempSync(join(tmpdir(), 'tangu-replay-hydration-'));
@@ -69,6 +73,8 @@ async function setupLoop(): Promise<void> {
   payloads = [];
   scriptAt = 0;
   payloadProtocol = undefined;
+  modelMarks = {};
+  modelKey = 'k';
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'x', userId: 'u1' });
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
   // registerToolProvider 同 id 幂等覆盖,两个用例各调一次 setupLoop 不会把工具面注册成两份。
@@ -81,7 +87,7 @@ async function setupLoop(): Promise<void> {
     } as any],
   });
   const fakeLlm: any = {
-    resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test', context_window: 128_000 }, apiKey: 'k', baseUrl: 'b', apiModelId: 'm' }),
+    resolveModelAndKey: async () => ({ model: { provider: 'test', name: 'test', context_window: 128_000, ...modelMarks }, apiKey: modelKey, baseUrl: 'b', apiModelId: 'm' }),
     buildProviderPayload: async (o: any) => ({
       messages: structuredClone(o.messages), tools: o.tools,
       ...(payloadProtocol ? { [PROTOCOL_MARK]: payloadProtocol } : {}),
@@ -211,5 +217,46 @@ describe('B3 接线:hydrateHistory 按 agent_steps 重建交错', () => {
     expect(hydratedHistory().map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant', 'user']);
     expect(assistant.content).toBe('looking');
     expect(assistant.tool_calls.map((c: any) => c.id)).toEqual(['c1']);
+  });
+
+  // 10-28(借鉴 magpie #3887):同一个模型换了登录,旧推理是另一个账号签的,回灌上游回 400 invalid_encrypted_content。
+  // 落库存账号指纹(哈希,不存原值),回放对不上就不带 —— 同对不上模型。
+  it('账号闸:换了 Codex 账号(account_id 变了)不回灌上一个账号签的推理;同账号照常回灌', async () => {
+    await setupLoop();
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind) VALUES ('S', 'u1', 'tangu', 't', 'm1', 'user')`);
+    modelMarks = { [DIRECT_MARK]: true, [ACCOUNT_MARK]: 'acct-A' };
+    modelKey = 'token-1';
+    await runToDone('R1');
+    const step0 = (await query<any[]>(`SELECT llm_response FROM agent_steps WHERE run_id = 'R1' AND step_no = 0`))[0];
+    const raw = typeof step0.llm_response === 'string' ? step0.llm_response : JSON.stringify(step0.llm_response);
+    expect(JSON.parse(raw).outputItemsModel.account).toBe(reasoningAccountKey('acct-A'));
+    expect(raw).not.toContain('acct-A'); // 只存哈希
+    expect(raw).not.toContain('token-1');
+
+    modelKey = 'token-2'; // 同账号续了期:token 变了、account_id 没变 → 照常回灌
+    await runToDone('R2');
+    expect(hydratedHistory()[1].providerItems).toEqual(OUTPUT_ITEMS);
+
+    modelMarks = { [DIRECT_MARK]: true, [ACCOUNT_MARK]: 'acct-B' }; // 换了号
+    await runToDone('R3');
+    const assistant = hydratedHistory()[1];
+    expect(assistant.providerItems).toBeUndefined();
+    expect(assistant.tool_calls.map((c: any) => c.id)).toEqual(['c1']); // 交错照常,只丢 items
+  });
+
+  it('账号闸:直连没有 account_id 时按 key 判;托管面(非直连)不受影响,旧行照常回灌', async () => {
+    await setupLoop();
+    await query(`INSERT INTO chat_sessions (id, user_id, app_id, title, model_id, kind) VALUES ('S', 'u1', 'tangu', 't', 'm1', 'user')`);
+    await runToDone('R1'); // 托管面:不记账号
+    const step0 = (await query<any[]>(`SELECT llm_response FROM agent_steps WHERE run_id = 'R1' AND step_no = 0`))[0];
+    const persisted = typeof step0.llm_response === 'string' ? JSON.parse(step0.llm_response) : step0.llm_response;
+    expect(persisted.outputItemsModel.account).toBeUndefined();
+    await runToDone('R2');
+    expect(hydratedHistory()[1].providerItems).toEqual(OUTPUT_ITEMS);
+
+    modelMarks = { [DIRECT_MARK]: true }; // 换成自带 key 的直连:R1 的行没有账号 → 对不上,不带
+    modelKey = 'sk-org-1';
+    await runToDone('R3');
+    expect(hydratedHistory()[1].providerItems).toBeUndefined();
   });
 });

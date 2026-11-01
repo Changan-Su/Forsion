@@ -13,6 +13,7 @@ import { toolDiffText } from './toolDiff'
 import { registerMessages, useI18n } from '../i18n'
 import type { ApprovalRequest, ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ImageGenerationLoader } from '../views/chat2/ImageGenerationLoader'
+import { MaskTag, MaskedText, collectMasked, type MaskedValue } from './MaskedValues'
 import { isSelfWriteReceipt } from '../services/selfUpdates'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
@@ -23,6 +24,10 @@ registerMessages({
   // 不写「在输入框上方」:紧挨着的指路行 / 计划卡 / 团队 work 行已经说了在哪答,这里再写一遍是重复
   'tool.waitingYou': { zh: '等你回复', en: 'Waiting for your reply' },
   'tool.verb.readComputerHistory': { zh: '读取电脑历史', en: 'Read computer history' },
+  'tool.verb.gitStatus': { zh: '查看 Git 状况', en: 'Checked Git status' },
+  'tool.verb.gitCommit': { zh: '提交', en: 'Committed' },
+  'tool.verb.gitPush': { zh: '推送', en: 'Pushed' },
+  'tool.verb.gitPull': { zh: '拉取', en: 'Pulled' },
   'tool.thought': { zh: '思考过程', en: 'Thought process' },
   'tool.thinkingNow': { zh: '思考中', en: 'Thinking' },
   'tool.thoughtSec': { zh: '思考 {n} 秒', en: 'Thought for {n}s' },
@@ -113,6 +118,15 @@ export function describeTool(ev: ToolEvent): Desc {
       return { kind: 'search', verbKey: 'tool.verb.searched', target: String(a.query ?? ''), isFile: false }
     case 'web_fetch':
       return { kind: 'browse', verbKey: 'tool.verb.browsed', target: String(a.url ?? ''), isFile: false }
+    // 当前项目的 git(tangu-agent tools/builtin/git.ts):提交那行带信息首行,推送那行带「只推这一次」的远端名
+    case 'git_status':
+      return { kind: 'read', verbKey: 'tool.verb.gitStatus', target: '', isFile: false }
+    case 'git_commit':
+      return { kind: 'run', verbKey: 'tool.verb.gitCommit', target: String(a.message ?? '').split('\n')[0], isFile: false }
+    case 'git_push':
+      return { kind: 'run', verbKey: 'tool.verb.gitPush', target: typeof a.remote === 'string' ? a.remote : '', isFile: false }
+    case 'git_pull':
+      return { kind: 'run', verbKey: 'tool.verb.gitPull', target: '', isFile: false }
     case COMPUTER_HISTORY_TOOL:
       return { kind: 'read', verbKey: 'tool.verb.readComputerHistory', target: String(a.query ?? a.app ?? ''), isFile: false }
     default:
@@ -179,7 +193,7 @@ const ThinkRow: React.FC<{ reasoning: string; label: string; thinking: boolean }
   )
 }
 
-const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean; asking?: boolean }> = ({ ev, desc, running, waiting, asking }) => {
+const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: boolean; asking?: boolean; masked: MaskedValue[] }> = ({ ev, desc, running, waiting, asking, masked }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // 只在展开时构造 diff(P1:文件修改类工具详情渲染 diff 而非裸 JSON)
@@ -196,7 +210,7 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
         <span className="tool-row-copy">
           <span className={`tool-row-copy-text${active ? ' chat-run-shimmer-text' : ''}`}>
             <span className="tool-row-verb">{verb}</span>
-            <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}>{desc.target}</span>
+            <span className={`tool-row-target${desc.isFile ? ' file' : ''}`}><MaskedText text={desc.target} masked={masked} /></span>
           </span>
         </span>
         <Stat d={desc} />
@@ -215,14 +229,14 @@ const ToolRow: React.FC<{ ev: ToolEvent; desc: Desc; running: boolean; waiting: 
               {ev.arguments && (
                 <details className="tool-raw-args">
                   <summary>{t('tool.argsLabel')}</summary>
-                  {fmtArgs(ev.arguments)}
+                  <MaskedText text={fmtArgs(ev.arguments)} masked={masked} />
                 </details>
               )}
             </>
-          ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div>{fmtArgs(ev.arguments)}</>) : null}
+          ) : ev.arguments ? (<><div className="label">{t('tool.argsLabel')}</div><MaskedText text={fmtArgs(ev.arguments)} masked={masked} /></>) : null}
           {/* 挂起的占位结果是写给模型的英文说明,对人换成一句本地化的状态 */}
           {ev.parked ? (<><div className="label">{t('tool.resultLabel')}</div>{t(ASKS_YOU.has(ev.name) ? (asking ? 'tool.waitingYou' : 'tool.parked.askPast') : waiting ? 'tool.parked.waiting' : 'tool.parked.past')}</>)
-            : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div>{toolResultText(ev, t)}</>)}
+            : ev.result !== undefined && (<><div className="label">{t('tool.resultLabel')}</div><MaskedText text={toolResultText(ev, t)} masked={masked} /></>)}
         </div>
       </AnimatedCollapse>
     </div>
@@ -241,7 +255,9 @@ export const ToolGroup: React.FC<{
   reasoningMs?: number
   /** 思考正在进行(这一行是消息里最后一块时才传 true)。 */
   thinking?: boolean
-}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp }) => {
+  /** 这组调用所在的会话(「从不遮住」写进跑这个会话的那台引擎)。 */
+  sessionId?: string
+}> = ({ events: allEvents, running, approvals, awaitingAnswer, reasoning, reasoningMs, thinking: thinkingProp, sessionId }) => {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   // Agent 自己写成了的记忆 / 进化记录 / 协作说明,由回复下面的回执行和请求卡呈现,这里不再重复列一行(没写成的照旧留着)。
@@ -283,6 +299,7 @@ export const ToolGroup: React.FC<{
   const curDesc = curIdx >= 0 ? descs[curIdx] : null
   const curVerb = curDesc ? (curDesc.verbKey ? t(curDesc.verbKey) : groupedEvents[curIdx].name) : ''
   const showList = !!reasoning || groupedEvents.length > 0
+  const masked = collectMasked(groupedEvents)
 
   return (
     <>
@@ -313,6 +330,7 @@ export const ToolGroup: React.FC<{
               </span>
             )}
             </RollLine>
+            {masked.length > 0 && <MaskTag masked={masked} sessionId={sessionId} />}
             <span className="tool-group-status">
               {anyParked ? (parkedAsk
                 ? <PauseCircle size={13} style={{ color: 'var(--accent-ink)' }} data-waiting-you="1" aria-label={t('tool.waitingYou')}><title>{t('tool.waitingYou')}</title></PauseCircle>
@@ -323,7 +341,7 @@ export const ToolGroup: React.FC<{
           <AnimatedCollapse open={open}>
             <div className="tool-group-list">
               {!!reasoning && <ThinkRow reasoning={reasoning} label={thinkLabel} thinking={thinking} />}
-              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} asking={asksYou(ev)} />)}
+              {groupedEvents.map((ev, i) => <ToolRow key={ev.id} ev={ev} desc={descs[i]} running={!!running} waiting={waitingIds.has(ev.id)} asking={asksYou(ev)} masked={masked} />)}
             </div>
           </AnimatedCollapse>
         </div>

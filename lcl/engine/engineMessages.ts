@@ -16,8 +16,11 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   'lcl.ribbon.iconsOnly': { zh: '只显示图标', en: 'Icons only' },
   'lcl.ribbon.addSpaceOrFolder': { zh: '新建 Space 或收纳夹', en: 'New Space or folder' },
   'lcl.ribbon.addCommand': { zh: '添加命令', en: 'Add command' },
-  'lcl.ribbon.more': { zh: '更多', en: 'More' },
-  'lcl.ribbon.less': { zh: '收起', en: 'Show less' },
+  // 「+N」溢出入口与浮层(2026-10-30):按钮上只写 +N,名字给读屏 / 浮签 / 宽条与浮层标题
+  'lcl.ribbon.moreSpaces': { zh: '更多 Space', en: 'More Spaces' },
+  'lcl.ribbon.moreCommands': { zh: '更多命令', en: 'More commands' },
+  'lcl.ribbon.moreCount': { zh: '{label} · {n}', en: '{label} · {n}' },
+  'lcl.ribbon.dragToPin': { zh: '拖到左边条上即可常驻', en: 'Drag onto the bar to keep it there' },
   'lcl.ribbon.switchSpace': { zh: '切到第 {n} 个 Space', en: 'Switch to Space {n}' },
   'lcl.ribbon.newSpace': { zh: '新建 Space', en: 'New Space' },
   'lcl.ribbon.newFolder': { zh: '新建收纳夹', en: 'New folder' },

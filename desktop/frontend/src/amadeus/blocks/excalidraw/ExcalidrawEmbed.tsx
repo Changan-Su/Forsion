@@ -1,3 +1,4 @@
+import { fileReferenceKey } from '../../store/fileIdentity'
 /** `![[画板.excalidraw]]` → 可编辑的 Excalidraw 画布(照 DatabaseEmbed 的 `![[x.db]]` 先例)。
  *  文件是 Obsidian Excalidraw 插件(zsviczian)同款的 `.excalidraw.md`,同一个库两边可互开
  *  —— 格式细节见 shared/amadeus/excalidraw/format。 */
@@ -40,7 +41,7 @@ registerMessages({
 })
 
 export function ExcalidrawEmbed({ target, pagePath, readOnly = false }: { target: string; pagePath: string; readOnly?: boolean }): React.JSX.Element {
-  const entry = useDrawStore((s) => s.entries[target])
+  const entry = useDrawStore((s) => s.entries[fileReferenceKey(pagePath, target)])
   const generation = useDrawStore((s) => s.gen)
   const { t } = useI18n()
   useEffect(() => {
@@ -71,7 +72,7 @@ export function ExcalidrawEmbed({ target, pagePath, readOnly = false }: { target
       </div>
     )
   }
-  return <Board key={`${generation}:${target}`} target={target} settings={entry.settings} generation={generation} readOnly={readOnly} />
+  return <Board key={`${generation}:${entry.identity ?? target}`} target={entry.identity ?? fileReferenceKey(pagePath, target)} settings={entry.settings} generation={generation} readOnly={readOnly} />
 }
 
 /** 只在 entry 成 ok 后挂载,好把 initialData 一次性定种:<Excalidraw> 挂载后自持编辑态,

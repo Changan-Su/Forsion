@@ -13,6 +13,7 @@ import { useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { AgentAvatar } from '../../components/AgentAvatar'
 import type { NormalAgentDef } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import { agentName } from '../../agentName'
 
 interface NormalModeProps {
   active: boolean
@@ -35,11 +36,11 @@ export function normalModeItems(p: NormalModeProps, t: ReturnType<typeof useI18n
     run: () => { p.onNormalWork(); p.onClose() },
   }
   const agents: SheetMenuItem[] = p.onAgentSwitch ? list.map((a) => ({
-    id: `agent:${a.slug}`, label: a.name, icon: <Bot size={14} />, checked: p.currentAgentSlug === a.slug,
+    id: `agent:${a.slug}`, label: agentName(a), icon: <Bot size={14} />, checked: p.currentAgentSlug === a.slug,
     run: () => { p.onAgentSwitch!(a.slug); p.onClose() },
   })) : []
   const agentSwitch: SheetMenuItem | null = agents.length ? {
-    id: 'agent-switch', label: t('input.agentSwitch.section'), detail: current?.name, icon: <Bot size={14} />,
+    id: 'agent-switch', label: t('input.agentSwitch.section'), detail: agentName(current), icon: <Bot size={14} />,
     children: [{ items: agents }],
   } : null
   return { normal, agentSwitch, agents }
@@ -58,7 +59,7 @@ export function NormalModeItem(props: NormalModeProps): React.ReactElement {
   const openSub = items.agentSwitch ? () => setOpen(true) : undefined
   const current = agents.find((a) => a.slug === currentAgentSlug)
   const avatars = useApp((s) => s.agentAvatars)
-  const names = agents.map((a) => a.name)
+  const names = agents.map((a) => agentName(a))
 
   useLayoutEffect(() => {
     const row = rowRef.current
@@ -117,7 +118,7 @@ export function NormalModeItem(props: NormalModeProps): React.ReactElement {
       {openSub && (
         <button className="menu-item mode-agent-trigger" data-agent-switch aria-haspopup="menu" aria-expanded={open}
           title={t('input.agentSwitch.section')} onFocus={openSub} onClick={openSub}>
-          {current && <span className="mode-agent-name">{current.name}</span>}
+          {current && <span className="mode-agent-name">{agentName(current)}</span>}
           <ChevronRight size={13} />
         </button>
       )}

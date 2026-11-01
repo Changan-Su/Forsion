@@ -9,7 +9,7 @@
  *    这俩绝不能进引擎全局 env:用户自己的 git 继承了会加载到另一个版本的 git-core。
  *    精简:删 Git Credential Manager(自带整套 .NET 运行时 ~120MB)、git-lfs、scalar,148MB → ~23MB。
  *  - Linux:不捆(git 几乎人人有),写 .skipped → 运行时 resolveBundledGit 返回 null。
- *  - 下载失败降级为不打包(运行时回落系统 git);强制内置设 TANGU_REQUIRE_GIT=1;逃生阀 TANGU_SKIP_FETCH_GIT=1。
+ *  - 下载失败默认中止;只有显式 FORSION_ALLOW_INCOMPLETE_DEV_BUILD=1 可降级。Linux 始终用系统 Git。
  *    **下载成功但冒烟失败 = 硬报错**:坏的内置 git 会被放到 PATH 上(mac 还是前置),比没有更糟。
  *  - 许可:git 是 GPLv2。MinGit 自带 LICENSE.txt;mac 另取对应 tag 的 COPYING;两边都写 SOURCE.txt 指向源码。
  */
@@ -17,7 +17,7 @@ const { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writ
 const { execFileSync, spawnSync } = require('node:child_process');
 const os = require('node:os');
 const path = require('node:path');
-const { ghJson } = require('./fetch-python.cjs');
+const { runtimeRequired, assertSkipAllowed, pinnedRuntime, verifyArchive } = require('./runtime-policy.cjs');
 
 const gitDir = () => path.join(__dirname, 'git');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -136,14 +136,15 @@ async function fetchGit({ platformName, archName }) {
   const dest = gitDir();
   const src = sourceFor(platformName, archName);
   if (!src) return degrade(dest, `${platformName} 用系统 git`, false);
-  if (process.env.TANGU_SKIP_FETCH_GIT) return degrade(dest, 'TANGU_SKIP_FETCH_GIT');
+  if (process.env.TANGU_SKIP_FETCH_GIT) { assertSkipAllowed('git', platformName); return degrade(dest, 'TANGU_SKIP_FETCH_GIT'); }
   try {
-    const rel = await ghJson(`https://api.github.com/repos/${src.repo}/releases/latest`);
-    const asset = (rel.assets || []).find((a) => src.asset.test(a.name));
-    if (!asset) throw new Error(`${src.repo}@${rel.tag_name} 没有匹配 ${src.asset} 的资产`);
+    const item = pinnedRuntime('git', platformName, archName);
+    const rel = { tag_name: item.version };
+    const asset = { name: item.name, browser_download_url: item.url };
     console.log(`[fetch-git] ${asset.name}`);
     const buf = await download(asset.browser_download_url);
     const tmp = path.join(__dirname, asset.name);
+    verifyArchive(buf, item);
     writeFileSync(tmp, buf);
     rmSync(dest, { recursive: true, force: true });
     mkdirSync(dest, { recursive: true });
@@ -163,7 +164,7 @@ async function fetchGit({ platformName, archName }) {
     if (!existsSync(gitBin(dest, platformName))) throw new Error(`解压后 ${dest} 无 git 可执行文件`);
     console.log(`[fetch-git] ✓ ${dest} (${rel.tag_name})`);
   } catch (e) {
-    if (process.env.TANGU_REQUIRE_GIT) throw e;
+    if (e.code === 'RUNTIME_INTEGRITY' || runtimeRequired('git', platformName)) throw e;
     return degrade(dest, e.message || String(e));
   }
   // 冒烟在 try 外:下载到了却跑不起来 = 硬错(见文件头)。跨架构打包本机跑不了,留给 afterPack 对产物跑。

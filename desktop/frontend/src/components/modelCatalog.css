@@ -107,3 +107,16 @@
 /* 选择器本身很窄时(窄窗、侧栏还在)先让出模型名:来源标签收起 */
 .model-slot { container-type: inline-size; }
 @container (max-width: 240px) { .model-slot .model-select-btn .model-tag { display: none; } }
+/* 导入本机配置(LocalProviderImport.tsx):提示行的两颗按钮 + 勾选弹窗 */
+.provider-import-actions { display: flex; gap: 6px; }
+.modal.modal-sm.provider-import { height: auto; max-height: 88vh; }
+.provider-import-list { overflow: auto; padding: 0 18px; }
+.provider-import-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: var(--border-width) solid var(--border); cursor: pointer; }
+.provider-import-row:last-child { border-bottom: 0; }
+.provider-import-row.is-disabled { opacity: .5; cursor: default; }
+.provider-import-row input { margin-top: 3px; }
+.provider-import-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.provider-import-copy small, .provider-import-source { color: var(--text-muted); font-size: var(--ui-font-caption); }
+.provider-import-note { margin: 8px 18px 0; color: var(--text-muted); font-size: var(--ui-font-caption); }
+.provider-import-note.error { color: var(--danger); }
+.provider-import-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 14px 18px 16px; }

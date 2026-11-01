@@ -26,6 +26,10 @@ import type { currentRunUserId } from '../seams/runContext.js';
 import type { activeRunCount } from '../services/agentLoop.js';
 import type { createThinWorker } from '../adapters/httpWorkerHost.js';
 import type { createProfileStore } from '../profiles/profileStore.js';
+import type { PluginSkillProvider } from '../skills/pluginSkills.js';
+import type { PluginModelProvider } from '../llm/pluginModels.js';
+export type { PluginModel, PluginModelReadContext, PluginModelCallContext, PluginModelProvider, PluginModelRequest, PluginModelResult } from '../llm/pluginModels.js';
+export type { PluginSkillEntry, PluginSkillListContext, PluginSkillProvider } from '../skills/pluginSkills.js';
 import type { ChannelSettings, PluginChannelSpec } from '../channels/types.js';
 
 /** 插件契约版本。loader 只加载 `apiVersion === TANGU_PLUGIN_API` 的插件。 */
@@ -132,6 +136,9 @@ export interface TanguPluginContext {
   /** 注册工具 provider（一律 append 在核心 builtin 之后，按插件加载序——保 tool-def 稳定）。
    *  停用时撤下但**保留槽位**,再启用回到原位(不跑到队尾)。 */
   registerToolProvider(p: ToolProvider): void;
+  /** Publish live read-only skills under a host-owned namespace; revoked on disable/unload. */
+  registerSkillProvider(provider: PluginSkillProvider): void;
+  registerModelProvider(provider: PluginModelProvider): void;
   /** 登记进统一插件注册表（在「设置 → 插件」露出 + schema 面板;带 toolProvider 则顺带注册工具）。
    *  停用后 meta 仍列出(休眠:名称/图标/设置保留,toolProvider 与 promptSection 摘掉)。 */
   registerPlugin(meta: PluginMeta): void;

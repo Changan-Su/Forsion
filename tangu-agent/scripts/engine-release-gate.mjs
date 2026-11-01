@@ -10,6 +10,9 @@ const SCHEMA_SOURCES = ['src/db/migrate.ts', 'src/db/schemaStandalone.ts', 'src/
 const ENGINE_SOURCES = ['src', 'skills', 'agent-skills', 'tsconfig.json', 'package-lock.json']
 // Engine npm identities keep their existing stable/prerelease contract; metadata is Desktop-only.
 import { compareReleaseVersions, isPrerelease, parseReleaseVersion } from '../../desktop/shared/releaseVersion.mjs'
+import { engineLineTag } from '../../desktop/shared/engineLine.mjs'
+// An installer whose tree has this file checks its own line's dist-tag; older installers read only `latest`.
+const LINE_TAG_MODULE = 'desktop/shared/engineLine.mjs'
 const engineVersion = v => { const p = parseReleaseVersion(v); return p && p.version === v && !p.metadata.length }
 const desktopVersion = v => { const p = parseReleaseVersion(v); return p && p.version === v }
 const stableEngine = v => engineVersion(v) && !isPrerelease(v)
@@ -29,8 +32,15 @@ export function desktopProblems({ desktop, engine, ref, newestPublished, previou
   return problems
 }
 
-export function hotUpdateProblems({ version, baseEngine, baseDesktop, ref, publish, dependenciesMatch, schemaChanges, newestPublished, newestBundled }) {
+// One publish sets exactly one dist-tag: trusted publishing (OIDC) covers `npm publish`, not `npm dist-tag add`.
+// Line-aware installers get their own tag and `latest` stays put; a legacy stable line keeps `latest` (all it reads);
+// a legacy prerelease line is unreachable without taking `latest` from the stable line, so it gets null.
+export const hotUpdateDistTag = (baseDesktop, lineAware) =>
+  lineAware ? engineLineTag(baseDesktop) : isPrerelease(baseDesktop) ? null : 'latest'
+
+export function hotUpdateProblems({ version, baseEngine, baseDesktop, ref, publish, dependenciesMatch, schemaChanges, newestPublished, newestBundled, distTag }) {
   const problems = []
+  if (!distTag) problems.push(`desktop ${baseDesktop} only reads the latest dist-tag, which belongs to the stable line; ship this fix in the next desktop build.`)
   if (!dependenciesMatch) problems.push(`dependencies differ from desktop ${baseDesktop}; ship these changes in an installer.`)
   if (schemaChanges.length) problems.push(`schema / migration files changed since desktop ${baseDesktop} (${schemaChanges.join(', ')}); ship these changes in an installer.`)
   if (publish) {
@@ -88,24 +98,28 @@ export function runGate(root, args, env = process.env, { readPublishedVersion } 
 
   const [ref = '', event = ''] = args
   const publish = event === 'push' && ref.startsWith('tangu-v')
+  // The installer line this hotfix was cut from, beta lines included.
   const baseTag = git('tag', '--merged', 'HEAD', '--list', 'v*').split('\n')
-    .filter(t => parseReleaseVersion(t) && !isPrerelease(t)).sort(cmp).at(-1)
-  if (!baseTag) throw new Error('No stable desktop baseline is contained in this checkout')
+    .filter(t => parseReleaseVersion(t)).sort(cmp).at(-1)
+  if (!baseTag) throw new Error('No desktop baseline is contained in this checkout')
   const baseDesktop = baseTag.slice(1)
-  if (!parseReleaseVersion(baseDesktop) || isPrerelease(baseDesktop)) throw new Error(`No stable desktop baseline: ${baseTag}`)
   const basePkg = manifestAt(baseTag)
-  if (!stableEngine(basePkg.version)) throw new Error(`Invalid bundled engine version at ${baseTag}`)
+  // The launcher (overlay.ts checkOverlay) only replaces a stable bundled engine; a beta installer may bundle a prerelease one.
+  if (!stableEngine(basePkg.version)) throw new Error(`Desktop ${baseDesktop} bundles engine ${basePkg.version}; hot updates only replace a stable bundled engine.`)
+  // The whole line (original build and its +build.N revisions) may take it; checkOverlay still compares schema and dependencies.
+  const minDesktop = baseDesktop.split('+')[0]
+  const distTag = hotUpdateDistTag(baseDesktop, !!git('ls-tree', '--full-tree', '--name-only', baseTag, '--', LINE_TAG_MODULE))
   const problems = hotUpdateProblems({ version, baseEngine: basePkg.version, baseDesktop, ref, publish,
     dependenciesMatch: sortedJson(pkg.dependencies) === sortedJson(basePkg.dependencies),
     schemaChanges: changed(baseTag, SCHEMA_SOURCES),
     newestBundled: desktopEngines.map(item => item.pkg.version).filter(v => engineVersion(v)).sort(cmp).at(-1),
-    newestPublished: publish ? (readPublishedVersion ?? npmVersions)() : undefined })
+    newestPublished: publish ? (readPublishedVersion ?? npmVersions)() : undefined, distTag })
   if (publish) failOn(problems)
   else for (const problem of problems) console.log(`::warning::${problem}`)
   // A manual preview uses the baseline ENGINE number, not the independent desktop number.
   const packVersion = publish ? version : basePkg.version
-  console.log(`${PACKAGE}@${packVersion}, minimum desktop ${baseDesktop}; ${publish ? 'will publish' : 'manual preview only, not publishing'}`)
-  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `base=${baseDesktop}\nbase_engine=${basePkg.version}\npack_version=${packVersion}\npublish=${publish}\n`)
+  console.log(`${PACKAGE}@${packVersion}, minimum desktop ${minDesktop}, dist-tag ${distTag ?? '(none)'}; ${publish ? 'will publish' : 'manual preview only, not publishing'}`)
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `base=${minDesktop}\nbase_engine=${basePkg.version}\npack_version=${packVersion}\npublish=${publish}\ndist_tag=${distTag ?? ''}\n`)
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {

@@ -29,6 +29,9 @@ const { countPersonNames, personCountOf, pullVaultDbs, topByCount } = await impo
 const { useDbStore } = await import('../../store/dbStore')
 const { usePageStore } = await import('../../store/pageStore')
 
+const loadedPaths = (): string[] => [...new Set(Object.values(useDbStore.getState().entries)
+  .filter((entry) => entry.status === 'ok').map((entry) => entry.path!))].sort()
+
 const personDb = (name: string, ...names: string[]): DbFile => ({
   version: 1,
   name,
@@ -99,7 +102,10 @@ describe('pullVaultDbs:并发封顶 + 不重复发', () => {
   it('12 张 .db → 同时在飞的不超过 4 张,最终全部载入', async () => {
     usePageStore.setState({ files: Array.from({ length: 12 }, (_, i) => `d${i}.db`).concat(['笔记.md']) })
     pullVaultDbs()
-    await vi.waitFor(() => expect(Object.keys(useDbStore.getState().entries)).toHaveLength(12), { timeout: 2000 })
+    const paths = usePageStore.getState().files.filter((path) => path.endsWith('.db')).sort()
+    await vi.waitFor(() => expect(loadedPaths()).toEqual(paths), { timeout: 2000 })
+    expect(asked.slice().sort()).toEqual(paths) // 每个文件恰好一次实际读取，内部 identity/引用别名不算文件。
+    expect(new Set(paths.map((path) => useDbStore.getState().entries[path].identity)).size).toBe(12)
     expect(peak).toBeLessThanOrEqual(4)
     expect(peak).toBeGreaterThan(1) // 确实并发了,不是退化成串行
     expect(asked).not.toContain('笔记.md') // 只拉 .db
@@ -108,11 +114,23 @@ describe('pullVaultDbs:并发封顶 + 不重复发', () => {
   it('已在 store 里的库不重复发 load(第二次打开下拉只补新增的那张)', async () => {
     usePageStore.setState({ files: ['a.db', 'b.db'] })
     pullVaultDbs()
-    await vi.waitFor(() => expect(Object.keys(useDbStore.getState().entries)).toHaveLength(2), { timeout: 2000 })
+    await vi.waitFor(() => expect(loadedPaths()).toEqual(['a.db', 'b.db']), { timeout: 2000 })
+    expect(asked.slice().sort()).toEqual(['a.db', 'b.db'])
     asked = []
     usePageStore.setState({ files: ['a.db', 'b.db', 'c.db'] })
     pullVaultDbs()
-    await vi.waitFor(() => expect(Object.keys(useDbStore.getState().entries)).toHaveLength(3), { timeout: 2000 })
+    await vi.waitFor(() => expect(loadedPaths()).toEqual(['a.db', 'b.db', 'c.db']), { timeout: 2000 })
     expect(asked).toEqual(['c.db'])
+  })
+
+  it('两个消费者同时加载同一路径，只读一次并共用完成后的文件身份', async () => {
+    await Promise.all([
+      useDbStore.getState().load('same.db', 'same.db'),
+      useDbStore.getState().load('same.db', 'same.db'),
+    ])
+    expect(asked).toEqual(['same.db'])
+    expect(loadedPaths()).toEqual(['same.db'])
+    const entry = useDbStore.getState().entries['same.db']
+    expect(useDbStore.getState().entries[entry.identity!]).toBe(entry)
   })
 })

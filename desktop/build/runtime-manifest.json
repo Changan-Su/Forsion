@@ -1,0 +1,141 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-10-28",
+  "verification": "Pinned official HTTPS checksums / GitHub release asset digests reviewed in source control; not a claim of bit-for-bit reproducibility.",
+  "runtimes": {
+    "node": {
+      "darwin:arm64": {
+        "version": "v24.22.1",
+        "name": "node-v24.22.1-darwin-arm64.tar.gz",
+        "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-arm64.tar.gz",
+        "sha256": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7",
+        "sourceProof": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt",
+        "license": "https://github.com/nodejs/node/blob/v24.22.1/LICENSE"
+      },
+      "darwin:x64": {
+        "version": "v24.22.1",
+        "name": "node-v24.22.1-darwin-x64.tar.gz",
+        "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-darwin-x64.tar.gz",
+        "sha256": "d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035",
+        "sourceProof": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt",
+        "license": "https://github.com/nodejs/node/blob/v24.22.1/LICENSE"
+      },
+      "linux:arm64": {
+        "version": "v24.22.1",
+        "name": "node-v24.22.1-linux-arm64.tar.gz",
+        "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-arm64.tar.gz",
+        "sha256": "33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3",
+        "sourceProof": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt",
+        "license": "https://github.com/nodejs/node/blob/v24.22.1/LICENSE"
+      },
+      "linux:x64": {
+        "version": "v24.22.1",
+        "name": "node-v24.22.1-linux-x64.tar.gz",
+        "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-linux-x64.tar.gz",
+        "sha256": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
+        "sourceProof": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt",
+        "license": "https://github.com/nodejs/node/blob/v24.22.1/LICENSE"
+      },
+      "win32:arm64": {
+        "version": "v24.22.1",
+        "name": "node-v24.22.1-win-arm64.zip",
+        "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-arm64.zip",
+        "sha256": "a0c807319fede24c4a0d8f84564c82a619bd313b16b10c007c383c2609e99171",
+        "sourceProof": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt",
+        "license": "https://github.com/nodejs/node/blob/v24.22.1/LICENSE"
+      },
+      "win32:x64": {
+        "version": "v24.22.1",
+        "name": "node-v24.22.1-win-x64.zip",
+        "url": "https://nodejs.org/dist/v24.22.1/node-v24.22.1-win-x64.zip",
+        "sha256": "d2046d28c2c3dcd211ac5145c0bf30e2047ef9dfb306693c8c6e2eccd8b95fa5",
+        "sourceProof": "https://nodejs.org/dist/v24.22.1/SHASUMS256.txt",
+        "license": "https://github.com/nodejs/node/blob/v24.22.1/LICENSE"
+      }
+    },
+    "python": {
+      "darwin:arm64": {
+        "version": "3.12.16+20261026",
+        "name": "cpython-3.12.16+20261026-aarch64-apple-darwin-install_only.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-aarch64-apple-darwin-install_only.tar.gz",
+        "sha256": "fbf4afef53c2a6b72bb741bc06d5671a9dfaf87bd84e5aa73ac9b3d0d589f14e",
+        "sourceProof": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/678574498",
+        "license": "PSF and bundled third-party licenses; preserve distribution licenses"
+      },
+      "win32:arm64": {
+        "version": "3.12.16+20261026",
+        "name": "cpython-3.12.16+20261026-aarch64-pc-windows-msvc-install_only.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-aarch64-pc-windows-msvc-install_only.tar.gz",
+        "sha256": "ad585318bfe47980cbaa90be12a65319c5b4eec7472655428528068e710a6c9a",
+        "sourceProof": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/678574536",
+        "license": "PSF and bundled third-party licenses; preserve distribution licenses"
+      },
+      "linux:arm64": {
+        "version": "3.12.16+20261026",
+        "name": "cpython-3.12.16+20261026-aarch64-unknown-linux-gnu-install_only.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-aarch64-unknown-linux-gnu-install_only.tar.gz",
+        "sha256": "a945427411dc6851a1393533b74a4a1ac434321ae397f2ec69897a9b4fde032b",
+        "sourceProof": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/678574569",
+        "license": "PSF and bundled third-party licenses; preserve distribution licenses"
+      },
+      "darwin:x64": {
+        "version": "3.12.16+20261026",
+        "name": "cpython-3.12.16+20261026-x86_64-apple-darwin-install_only.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-apple-darwin-install_only.tar.gz",
+        "sha256": "a962e47df522889eaa7ff0d6a56203f1079f68aabb65ffdbe8455f362bc769f3",
+        "sourceProof": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/678575100",
+        "license": "PSF and bundled third-party licenses; preserve distribution licenses"
+      },
+      "win32:x64": {
+        "version": "3.12.16+20261026",
+        "name": "cpython-3.12.16+20261026-x86_64-pc-windows-msvc-install_only.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-pc-windows-msvc-install_only.tar.gz",
+        "sha256": "590dfcbe3a34c07301e6332e13e2188b98655cd072b08afa45a7998dc4c22bc5",
+        "sourceProof": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/678575209",
+        "license": "PSF and bundled third-party licenses; preserve distribution licenses"
+      },
+      "linux:x64": {
+        "version": "3.12.16+20261026",
+        "name": "cpython-3.12.16+20261026-x86_64-unknown-linux-gnu-install_only.tar.gz",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16%2B20261026-x86_64-unknown-linux-gnu-install_only.tar.gz",
+        "sha256": "6a79e922e50006b601f29e688407659da1c2b86ebcd4e9c7254cf234be8b89de",
+        "sourceProof": "https://api.github.com/repos/astral-sh/python-build-standalone/releases/assets/678575302",
+        "license": "PSF and bundled third-party licenses; preserve distribution licenses"
+      }
+    },
+    "git": {
+      "win32:x64": {
+        "version": "v2.56.0.windows.4",
+        "name": "MinGit-2.56.0.4-64-bit.zip",
+        "url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/MinGit-2.56.0.4-64-bit.zip",
+        "sha256": "e3bf78351fe777fba47ddee5950082f8a98bb0f02604fdc7ba3ee2cb68ffa877",
+        "sourceProof": "https://api.github.com/repos/git-for-windows/git/releases/assets/677312705",
+        "license": "GPL-2.0; preserve LICENSE.txt/COPYING and SOURCE.txt"
+      },
+      "win32:arm64": {
+        "version": "v2.56.0.windows.4",
+        "name": "MinGit-2.56.0.4-arm64.zip",
+        "url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/MinGit-2.56.0.4-arm64.zip",
+        "sha256": "70f7649f78088c1db1d2f3571ca46a04d5bef06e4e9d56d8ed7f9829e8c6c4db",
+        "sourceProof": "https://api.github.com/repos/git-for-windows/git/releases/assets/677313523",
+        "license": "GPL-2.0; preserve LICENSE.txt/COPYING and SOURCE.txt"
+      },
+      "darwin:arm64": {
+        "version": "v2.56.0-2",
+        "name": "dugite-native-v2.56.0-a44aeca-macOS-arm64.tar.gz",
+        "url": "https://github.com/desktop/dugite-native/releases/download/v2.56.0-2/dugite-native-v2.56.0-a44aeca-macOS-arm64.tar.gz",
+        "sha256": "1110de343de11cc6f469b782b60f36217b9199b5e06875dd65baa26dd60563c7",
+        "sourceProof": "https://api.github.com/repos/desktop/dugite-native/releases/assets/677615273",
+        "license": "GPL-2.0; preserve LICENSE.txt/COPYING and SOURCE.txt"
+      },
+      "darwin:x64": {
+        "version": "v2.56.0-2",
+        "name": "dugite-native-v2.56.0-a44aeca-macOS-x64.tar.gz",
+        "url": "https://github.com/desktop/dugite-native/releases/download/v2.56.0-2/dugite-native-v2.56.0-a44aeca-macOS-x64.tar.gz",
+        "sha256": "52cc663281e1ec2f1d76ba781193ca4847e62dbbf767f6c99ec9ec5b978a7659",
+        "sourceProof": "https://api.github.com/repos/desktop/dugite-native/releases/assets/677615299",
+        "license": "GPL-2.0; preserve LICENSE.txt/COPYING and SOURCE.txt"
+      }
+    }
+  }
+}

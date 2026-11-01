@@ -11,12 +11,13 @@
  *     noopBilling,这里不重复扣点;子聊天区渲染走 `subagent` 事件,**用量口径**另走父 run 的
  *     `usage` 事件(phase='delegate',见 backgroundUsage.ts)
  *   - 思考档继承父 run(subAgentThinkingLevel),具名 agent 的显式档优先
+ *   - 自有子 loop 可续用(SubAgentParams.resume):子会话的落库历史就是它的上下文
  *
  * 另有一条**引擎子代理**路径(engineId,见 runEngineSubAgent):子代理后端换成外部 agent CLI
  * (claude-code/codex,复用 src/engines 的 ACP 管理器)。借 DSH 的 subagent-provider 思路,但不新建
  * 注册表——engines 管理器本来就是「一 run 一进程」的 provider 目录,这里只是把它接到子代理位上。
  */
-import { createDelegateTranscript } from './delegateTranscript.js';
+import { createDelegateTranscript, delegateHandle, openDelegateTurn } from './delegateTranscript.js';
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
@@ -26,7 +27,9 @@ import { gateToolCall, requestApproval, USER_REJECT_REASON } from './approvals.j
 import { withLlmRetry } from '../llm/retry.js';
 import { publish } from './eventBus.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
-import { assistantTurnOf } from './contextBudget.js';
+import { assistantTurnOf, compactContext, compactionThreshold, estimateMessagesTokens, modelContextWindow } from './contextBudget.js';
+import { compactWorkingMessages, messageSource } from './compaction.js';
+import { compactionSettingsFor } from './compactionSettings.js';
 import { getAgent, resolveActiveSlug, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { agentIdentitySection } from './agentActivation.js';
 import { runWithAgentSlug, currentAgentSlug } from '../seams/runContext.js';
@@ -36,7 +39,7 @@ import { buildProjectMemoryContext } from './projectMemory.js';
 import { loadSkillLoadout, type SkillLoadout } from './skillLoadout.js';
 import { loadCustomTools } from '../tools/customTools.js';
 import { AUTONOMY_SECTION, TOOL_FAILURE_SECTION, hostEnvSection } from '../profiles/promptSections.js';
-import type { ChatMessage } from '../core/types.js';
+import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { effectiveRemote } from './remoteOrigin.js';
 
 // 24(原 8):8 轮连一条常规链路都跑不完 —— 09-06 青鸟视频那次,子代理第 8 轮刚诊断出根因就被截断
@@ -144,6 +147,45 @@ export interface SubAgentParams {
    *  ⚠️ 与 engineId **互斥**:外部 CLI 的工具面不经 Tangu 的闸,授予到不了它那里。delegate 已当场拒绝
    *  这个组合;直调本函数时它同样无效(引擎路只会发 `grants: []`),别以为带上就生效了。 */
   grantTools?: string[];
+  /** 续用:既有 delegate 子会话的全长 id(回报里的 subagent id 是它的前 8 位,delegate 已解析)。归属校验、占位、取回原人设与授予都在 delegate 做完才传进来;
+   *  task 即这一轮的追问。只有自有子 loop 能续用:外部 CLI 的上下文在它自己进程里,不在这份子会话里。 */
+  resume?: string;
+}
+
+/**
+ * 续用的起点 = 系统提示 + 子会话的落库历史(工具调用与结果、压缩检查点都在,与用户在子会话里续聊同一份回放)+ 这一轮的追问。
+ * 落库是唯一真源:用户可能在子会话里聊过,内存副本反而会旧;也因此重启后照样续得上。
+ * 过了压缩线就压一次,压完仍超窗口就报错,不带着注定被拒的上下文去请求。
+ * ponytail: 压缩只作用于这份内存消息、不落检查点:过线的子代理每次续用多一次摘要调用。嫌费再改走 compactSession。
+ * ponytail: 续用这一轮没有再查线:从线下起步、又连跑满 24 轮的,由上游拒收转成 delegate 的报错,下次续用时这里会压。
+ * ponytail: 上一轮 load_tools 解锁的工具不跟过来,目录段还在,要用再解锁一次。
+ * ponytail: 窗口外的老行全靠检查点;摘要失败(或压缩关掉)时这一轮最老的几行不进上下文,库里原文还在,与主循环同样失败时一致。
+ *   要到 25 轮以上的续用才碰得到;真要兜底就让 hydrateHistory 收一个不限窗口的参数。
+ */
+async function resumedMessages(
+  subId: string, system: ChatMessage, task: ChatMessage, modelId: string, modelObj: unknown, thinking: string, parentCtx: ToolContext,
+): Promise<ChatMessage[]> {
+  // 动态 import:agentLoop → registry → delegate → 本文件,静态引入成环(同 childSessions.ts)。
+  const { checkpointRowsOutsideWindow, hydrateHistory } = await import('./agentLoop.js');
+  const settings = compactionSettingsFor(undefined);
+  // 行数超出回放窗口时先落检查点,否则最老的行既不回放也没摘要(主循环在 run 收尾时做同一件事,子代理不走那里;Codex 10-30)。
+  await checkpointRowsOutsideWindow(subId, modelId, parentCtx.appId, settings, thinking as ThinkingLevel);
+  const { messages: history } = await hydrateHistory(subId, '');
+  // 水合不带推理,而 DeepSeek / GLM 带 tools 的后续请求要工具轮的 reasoning_content(没有就 400,Codex 10-30);其余端点由 compatWireMessages 剥掉。
+  const reasoning = new Map((await query<any[]>(`SELECT id, reasoning FROM chat_messages WHERE session_id = ? AND reasoning IS NOT NULL`, [subId])).map((r) => [r.id, r.reasoning]));
+  for (const m of history as any[]) {
+    const text = m.tool_calls?.length ? reasoning.get(messageSource(m)?.id) : undefined;
+    if (text) m.reasoning_content = text;
+  }
+  const messages = [system, ...history, task];
+  const windowTokens = modelContextWindow(modelId, modelObj);
+  if (estimateMessagesTokens(messages) < compactionThreshold(windowTokens, settings.reserveTokens, settings.thresholdPercent, settings.keepRecentTokens)) return messages;
+  const summarized = settings.enabled
+    ? await compactWorkingMessages(messages, modelId, parentCtx.appId, parentCtx.signal, { settings, runThinking: thinking as ThinkingLevel, windowTokens, force: true })
+    : { ok: false };
+  if (!summarized.ok) compactContext(messages);
+  if (estimateMessagesTokens(messages) >= windowTokens) throw new Error('its context no longer fits this model even after compaction. Delegate a new subagent instead.');
+  return messages;
 }
 
 /** 组装子代理拿到的任务正文:可选的父会话只读转写 + 任务 + 背景。自有 loop 与外部引擎两条路共用。
@@ -289,7 +331,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   if (p.engineId && effectiveRemote(parentCtx)) throw new Error('External engines cannot be used from a remote session. Delegate without an engine, or continue on the host computer.');
   if (p.engineId) return runEngineSubAgent(p, p.engineId);
   const runId = parentCtx.runId || '';
-  const subId = uuidv4(); // 子聊天区据此把本子代理的流式内容归到一个气泡组(同 run 内可多个子代理)
+  const subId = p.resume || uuidv4(); // 子聊天区据此把本子代理的流式内容归到一个气泡组(同 run 内可多个子代理)
   const { llm } = deps().brain;
 
   // 具名 agent:载入它的人格叠在子代理契约之上;模型/思考档随它。拿不到则退回通用子代理。
@@ -416,21 +458,29 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   const hookContextText = (v: HookVerdict): string =>
     [...v.additionalContext, ...v.systemMessages.map((m) => `⚠ ${m}`)].join('\n\n').trim();
 
-  const messages: ChatMessage[] = [
-    { role: 'system', content: sysPrompt } as ChatMessage,
-    { role: 'user', content: await buildTaskBody(p) } as ChatMessage,
-  ];
+  const taskBody = await buildTaskBody(p);
+  const systemMessage = { role: 'system', content: sysPrompt } as ChatMessage;
+  const taskMessage = { role: 'user', content: taskBody } as ChatMessage;
+  const messages: ChatMessage[] = p.resume
+    ? await resumedMessages(subId, systemMessage, taskMessage, effModelId, model, thinking, parentCtx)
+    : [systemMessage, taskMessage];
 
   const label = def?.name || p.name || 'Subagent';
-  const transcript = await createDelegateTranscript(subId, parentCtx, label, effModelId, String(messages[1].content), {
-    agentSlug: p.agentSlug || parentCtx.agentSlug || currentAgentSlug(), systemPrompt: persona || SUB_SYSTEM_PROMPT,
-    subAgentGrants: [...grants],
-  });
+  const rowAgentSlug = p.agentSlug || parentCtx.agentSlug || currentAgentSlug();
+  const transcript = p.resume
+    ? await openDelegateTurn(subId, `delegate:${subId}:${uuidv4()}`, effModelId, taskBody, rowAgentSlug)
+    : await createDelegateTranscript(subId, parentCtx, label, effModelId, taskBody, {
+      agentSlug: rowAgentSlug, systemPrompt: persona || SUB_SYSTEM_PROMPT,
+      subAgentGrants: [...grants],
+      // 续用时据此重建同一个子代理:上面的 agentSlug 混了父代理身份,分不清是不是具名委派。
+      delegateAgentSlug: p.agentSlug, delegateInstructions: p.instructions,
+    });
   if (runId) {
     // 向父 run 流宣告一个「子聊天」(子代理),前端据此在子聊天区建一个可切换条目。
     void publish(runId, 'subchat', { kind: 'subagent', id: subId, sessionId: subId, title: label, task: p.task.slice(0, 120) });
     // grants:本次委派授予了哪些管理工具 —— 审计面(UI / live 台架)唯一能看到这件事的地方。
-    void publish(runId, 'subagent', { phase: 'start', subId, sessionId: subId, messageId: transcript.messageId, label, task: p.task, grants: [...grants] });
+    // userMessageId:续用才带,面板开着时要把这句追问也画出来(首轮那句在打开面板时就从库里读到了)。
+    void publish(runId, 'subagent', { phase: 'start', subId, sessionId: subId, messageId: transcript.messageId, label, task: p.task, grants: [...grants], ...(p.resume ? { userMessageId: transcript.userMessageId } : {}) });
   }
 
   let finalContent = '';
@@ -618,7 +668,8 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   const result = (finalContent || exhaustedReport(lastTool, pendingCall, hitCap, overBudget)).slice(0, SUB_RESULT_CAP);
   await transcript.finish(finalContent || result);
   if (runId) void publish(runId, 'subagent', { phase: 'done', subId, resultChars: result.length });
-  return result;
+  // id 接在截断之后,长报告也丢不掉。只有自有子 loop 带它:外部引擎续不了,带了只会招来一次注定失败的 resume。
+  return `${result}\n\n[subagent id: ${delegateHandle(subId)} — it remembers this work. To follow up, call delegate with resume set to this id; a new subagent would start from nothing]`;
   } catch (error) {
     await transcript.finish().catch(() => {});
     if (runId) void publish(runId, 'subagent', { phase: 'done', subId, error: String(error), resultChars: 0 });

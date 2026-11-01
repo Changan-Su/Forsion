@@ -9,6 +9,19 @@ const { createFilter } = require('app-builder-lib/out/util/filter.js')
 const { Minimatch } = require('minimatch')
 
 describe('backend production packaging', () => {
+  it('drops declarations and source maps but retains executable TypeScript, data maps and licenses', () => {
+    const root = resolve('/fixture/node_modules')
+    const patterns = backendDependencyFilter({ lockfileVersion: 3, packages: {} })
+    const filter = createFilter(root, patterns.map((p: string) => new Minimatch(p, { dot: true })))
+    const stat = { isDirectory: () => false }
+    for (const name of ['pkg/a.d.ts', 'pkg/a.d.mts', 'pkg/a.d.cts', 'pkg/a.js.map', 'pkg/a.css.map']) {
+      expect(filter(join(root, name), stat), name).toBe(false)
+    }
+    for (const name of ['pkg/main.ts', 'pkg/main.mts', 'pkg/index.js', 'pkg/data.map', 'pkg/LICENSE', 'pkg/NOTICE.md', 'pkg/package.json', 'pkg/addon.node']) {
+      expect(filter(join(root, name), stat), name).toBe(true)
+    }
+  })
+
   it('uses builder matching to remove dev-only trees while retaining shared and optional runtime dependencies', () => {
     const lock = { lockfileVersion: 3, packages: {
       '': {},

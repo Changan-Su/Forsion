@@ -2447,6 +2447,24 @@ body.amx-marquee-active * {
   cursor: pointer;
 }
 .am-app .dialog-check input { flex-shrink: 0; margin: 3px 0 0; accent-color: var(--danger, #e5484d); }
+/* 卸载确认框(10-28 手动卸载规范,components/UninstallDialog):逐项写去向,每行右侧一枚去向药丸,勾选项挂在对应那行下面;
+   脚注(「30 天内可在 设置 › 回收站 恢复」)与按钮同一行。手机(原生外壳)贴底成半屏。 */
+.am-app .dialog.un-dlg { width: min(520px, calc(100vw - 32px)); }
+.am-app .un-list { display: flex; flex-direction: column; }
+.am-app .un-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 2px; }
+.am-app .un-row + .un-row { border-top: 1px solid var(--border); }
+.am-app .un-row > svg { margin-top: 2px; color: var(--text-muted); flex-shrink: 0; }
+.am-app .un-tx { flex: 1; min-width: 0; font-size: var(--ui-font-body, 13px); line-height: 1.45; color: var(--text); }
+.am-app .un-tx small { display: block; margin-top: 1px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.am-app .un-tx .dialog-check { margin-top: 6px; font-size: var(--ui-font-meta, 12px); }
+.am-app .un-pill { flex-shrink: 0; margin-top: 1px; padding: 1px 8px; border-radius: var(--radius-pill); background: var(--menu-hover); color: var(--text-sec); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
+.am-app .un-pill[data-tone='del'] { color: var(--danger, #e5484d); }
+.am-app .un-pill[data-tone='keep'] { color: var(--text); }
+.am-app .un-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.am-app .un-note { flex: 1; min-width: 160px; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+.am-app .un-foot .dialog-actions { margin: 0 0 0 auto; }
+.am-app .dialog-overlay.un-sheet { align-items: flex-end; }
+.am-app .dialog-overlay.un-sheet > .dialog { width: 100%; max-width: none; border-radius: var(--radius-lg) var(--radius-lg) 0 0; padding-bottom: calc(20px + env(safe-area-inset-bottom)); }
 .am-app .dialog-actions {
   display: flex;
   justify-content: flex-end;

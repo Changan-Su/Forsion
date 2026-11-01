@@ -3,9 +3,10 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createSerialQueue, lockedUpdateJson, writePrivateJson } from './configWrite'
+import { clearRecoveryNotice, configBackupDir, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
 
-const fsFault = vi.hoisted(() => ({ writeSyncENOSPC: false }))
+// fsyncFail:fsync 一律抛 EIO(断电前刷不下去)
+const fsFault = vi.hoisted(() => ({ writeSyncENOSPC: false, fsyncFail: false }))
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>()
   return {
@@ -14,6 +15,10 @@ vi.mock('node:fs', async (importOriginal) => {
       if (fsFault.writeSyncENOSPC) throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
       return real.writeSync(...args)
     }) as typeof real.writeSync,
+    fsyncSync: ((fd: number) => {
+      if (fsFault.fsyncFail) throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' })
+      return real.fsyncSync(fd)
+    }) as typeof real.fsyncSync,
   }
 })
 
@@ -75,7 +80,12 @@ describe('lockedUpdateJson(跨进程写锁)', () => {
   const setup = async () => {
     const file = join(await fresh(), 'config.json')
     await writeFile(file, JSON.stringify({ cloud: { url: 'u' } }))
-    return { file, lock: `${file}.lock`, leftovers: async () => (await readdir(dir)).filter((f) => f !== 'config.json') }
+    // config-backup/ 里的 .bak 是写前备份(预期);备份目录里的临时文件照样算残渣
+    const leftovers = async (): Promise<string[]> => [
+      ...(await readdir(dir)).filter((f) => f !== 'config.json' && f !== 'config-backup'),
+      ...(await readdir(join(dir, 'config-backup')).catch(() => [] as string[])).filter((f) => !f.endsWith('.bak')),
+    ]
+    return { file, lock: `${file}.lock`, leftovers }
   }
 
   it('别的进程占着锁 → 等它放锁,在它写完的内容上合并;不留锁与临时文件,0600', async () => {
@@ -162,5 +172,81 @@ describe('lockedUpdateJson(跨进程写锁)', () => {
     await expect(lockedUpdateJson(file, (c) => ({ ...c, mine: 1 }))).rejects.toThrow()
     expect(await readFile(file, 'utf8')).toBe('{ 坏掉的 json,,,')
     await expect(stat(lock)).rejects.toThrow()
+  })
+})
+
+describe('写前备份 / 读坏恢复(与引擎 core/config.ts 同一协议)', () => {
+  const bads = async (file: string): Promise<string[]> => (await readdir(configBackupDir(file)).catch(() => [] as string[])).filter((n) => n.startsWith('config.json.bad-'))
+
+  it('第一次写不留 .bak;之后写前把上一份原样存成 .bak(0600)', async () => {
+    const file = join(await fresh(), 'config.json')
+    await lockedUpdateJson(file, () => ({ a: 1 }))
+    await expect(stat(join(configBackupDir(file), 'config.json.bak'))).rejects.toThrow()
+    const first = await readFile(file, 'utf8')
+    await lockedUpdateJson(file, (c) => ({ ...c, b: 2 }))
+    expect(await readFile(join(configBackupDir(file), 'config.json.bak'), 'utf8')).toBe(first)
+    if (process.platform !== 'win32') expect((await stat(join(configBackupDir(file), 'config.json.bak'))).mode & 0o777).toBe(0o600)
+  })
+
+  for (const [label, broken] of [['零字节', ''], ['半截 JSON', '{"a": 1, "b"']] as const) {
+    it(`${label}:读时从 .bak 恢复、坏的另存 .bad-*、标记可读可清;写在恢复出来的内容上合并`, async () => {
+      const file = join(await fresh(), 'config.json')
+      await lockedUpdateJson(file, () => ({ a: 1 }))
+      await lockedUpdateJson(file, (c) => ({ ...c, b: 2 })) // .bak = { a: 1 }
+      await writeFile(file, broken)
+      expect(await readJsonRecovering(file)).toEqual({ a: 1 })
+      expect(await bads(file)).toHaveLength(1)
+      expect(await readFile(join(configBackupDir(file), (await bads(file))[0]), 'utf8')).toBe(broken)
+      const n = await readRecoveryNotice([file, join(dir, 'missing.json')])
+      expect(n?.version).toBe((await stat(join(configBackupDir(file), 'config.json.bak'))).mtimeMs)
+      await clearRecoveryNotice([file])
+      expect(await readRecoveryNotice([file])).toBeNull()
+      await writeFile(file, broken)
+      await lockedUpdateJson(file, (c) => ({ ...c, c: 3 }))
+      expect(await readJson(file)).toEqual({ a: 1, c: 3 })
+    })
+  }
+
+  it('.bak 也坏:读与写都抛、文件一个字节不动、不留 .bad', async () => {
+    const file = join(await fresh(), 'config.json')
+    await lockedUpdateJson(file, () => ({ a: 1 }))
+    await lockedUpdateJson(file, () => ({ a: 2 }))
+    await writeFile(join(configBackupDir(file), 'config.json.bak'), '{"a":')
+    await writeFile(file, '')
+    await expect(readJsonRecovering(file)).rejects.toThrow(/no usable backup/)
+    await expect(lockedUpdateJson(file, () => ({ x: 1 }))).rejects.toThrow(/no usable backup/)
+    expect(await readFile(file, 'utf8')).toBe('')
+    expect(await bads(file)).toEqual([])
+    expect(await readRecoveryNotice([file])).toBeNull()
+  })
+
+  it('备份写不进去(备份目录被占成文件)→ 整次拒写,文件一个字节不动', async () => {
+    const file = join(await fresh(), 'config.json')
+    await lockedUpdateJson(file, () => ({ a: 1 }))
+    const before = await readFile(file, 'utf8')
+    await writeFile(configBackupDir(file), 'not a dir')
+    await expect(lockedUpdateJson(file, () => ({ a: 2 }))).rejects.toThrow()
+    expect(await readFile(file, 'utf8')).toBe(before)
+  })
+
+  it('fsync 失败(magpie #1505)→ 拒写:文件原样,不留临时文件与锁', async () => {
+    const file = join(await fresh(), 'config.json')
+    await lockedUpdateJson(file, () => ({ a: 1 }))
+    const before = await readFile(file, 'utf8')
+    fsFault.fsyncFail = true
+    try {
+      await expect(lockedUpdateJson(file, () => ({ a: 2 }))).rejects.toThrow(/EIO/)
+    } finally { fsFault.fsyncFail = false }
+    expect(await readFile(file, 'utf8')).toBe(before)
+    const all = [...await readdir(dir), ...await readdir(configBackupDir(file)).catch(() => [] as string[])]
+    expect(all.filter((n) => n.endsWith('.tmp') || n.endsWith('.lock'))).toEqual([])
+  })
+
+  it('.bak 不是第二条读路径:文件不存在时读到 {},不拿 .bak 顶上', async () => {
+    const file = join(await fresh(), 'config.json')
+    await lockedUpdateJson(file, () => ({ a: 1 }))
+    await lockedUpdateJson(file, () => ({ a: 2 }))
+    rmSync(file)
+    expect(await readJsonRecovering(file)).toEqual({})
   })
 })

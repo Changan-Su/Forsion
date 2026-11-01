@@ -232,3 +232,13 @@ registerMessages({
   'projectProfile.git.err.no_model': { zh: '这条会话还没有选定模型，没法生成提交信息。可以直接手写。', en: 'This conversation has no model yet, so no message can be written for you. You can type one yourself.' },
   'projectProfile.git.err.quota_exceeded': { zh: '额度不足，没法生成提交信息。可以直接手写。', en: 'You are out of quota, so no message can be written for you. You can type one yourself.' },
 })
+
+/** 引擎 git 动作的机器码(services/gitActions.ts);有词条的按当前语言说,没有的回落引擎原文。 */
+export const GIT_ERROR_CODES = new Set([
+  'git_unavailable', 'git_timeout', 'git_failed', 'not_repo', 'already_repo', 'nothing_to_commit', 'empty_message', 'message_too_long',
+  'embedded_repo', 'too_many_files', 'large_files', 'no_identity', 'invalid_branch', 'detached', 'no_remote', 'ambiguous_remote', 'no_model', 'quota_exceeded',
+  'shared_workspace', 'nested_repo', 'untrusted_config', 'credential_files', 'git_too_old', 'changes_changed', 'hook_changed_commit',
+  'no_upstream', 'diverged', 'dirty_worktree', 'untrusted_transport', 'forsion_git_needs_setup', 'forsion_git_rate_limited', 'forsion_git_unavailable',
+  'has_remote', 'invalid_repo_name', 'no_commits', 'github_not_linked', 'github_relink_required', 'github_unavailable',
+  'github_repo_exists', 'github_api_failed', 'github_unreachable', 'invalid_remote_url', 'remote_unreachable', 'credential_denied',
+])

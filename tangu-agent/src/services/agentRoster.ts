@@ -3,7 +3,7 @@
  * delegate / start_discussion 有工具没目标。一行一个:名字、slug、描述、借出的技能;顺序按 .meta.json,
  * 内容不随会话变 → 前缀缓存照常。只在 delegate / start_discussion 可见的 run 里注入(agentLoop 门控)。
  */
-import { listAgents } from '../agents/agentRegistry.js';
+import { agentNames, listAgents } from '../agents/agentRegistry.js';
 import { listSharedAgentSkills, SHARED_SKILL_ID_RE } from '../skills/localSkills.js';
 
 export const AGENT_ROSTER_HEADER = '## Other Agents';
@@ -15,7 +15,7 @@ export async function buildAgentRoster(selfSlug: string): Promise<string> {
   const shared = await listSharedAgentSkills(selfSlug).catch(() => []);
   const lines = others.map((a) => {
     const lends = shared.filter((s) => s.ownerSlug === a.slug).map((s) => s.id.match(SHARED_SKILL_ID_RE)?.[2] || s.name);
-    return `- ${a.name} (slug: \`${a.slug}\`)${a.description ? ` — ${a.description}` : ''}${lends.length ? ` · shares skills: ${lends.join(', ')}` : ''}`;
+    return `- ${agentNames(a).join(' / ')} (slug: \`${a.slug}\`)${a.description ? ` — ${a.description}` : ''}${lends.length ? ` · shares skills: ${lends.join(', ')}` : ''}`;
   });
   return (
     `${AGENT_ROSTER_HEADER}\n` +

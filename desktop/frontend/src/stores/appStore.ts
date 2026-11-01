@@ -256,6 +256,14 @@ export function defaultModelOf(s: Pick<AppState, 'cfg' | 'modelsResp'> & { focus
 export function newChatModelId(s: Pick<AppState, 'newChatModel' | 'cfg' | 'modelsResp'> & { focusModelId?: string }): string | undefined {
   return s.newChatModel || defaultModelOf(s) || s.modelsResp?.defaultModelId || undefined
 }
+/** 写进 cfg.modelId 的值:点选的正好是云端默认 → 记成「跟随」(''),后台以后换默认,新对话跟着走
+ *  (10-28:后台把 Auto 换成 Auto-Flash,点过一次药丸的老账号一直钉在 Auto)。只认云端托管模型:
+ *  没登录时目录里的默认是引擎回显的本机记忆(profile.defaultModelId = config 里的上次选择),记成 '' 会把它清掉。
+ *  只给模型药丸的点选(setSessionModel)用:设置页 / 新手引导自带「跟随」项,且撤销 / 回填走同一个回调,套上会把已存的值改掉(Codex 10-28)。 */
+export function rememberedModelId(modelId: string, resp: Pick<ModelsResponse, 'models' | 'defaultModelId'> | null | undefined): string {
+  const def = resp?.defaultModelId
+  return def && modelId === def && resp.models?.some((m) => m.id === def && m.source === 'forsion') ? '' : modelId
+}
 /** 主区聊天此刻**实际会用**的模型 id(有会话 → 会话的;空白新对话 → newChatModelId)。
  *  = 输入栏药丸显示的那个(ChatView 的 mvModelId)。插件接缝 `ctx.tangu.activeModel()` 也读它 ——
  *  这条回退链已经被就地展开过三份、出过「发出去药丸跳回默认」的 bug,**别再抄第四份**。 */
@@ -528,7 +536,9 @@ export const useApp = create<AppState>((set, get) => ({
     // 注意:不能再用 stored.token 当「有无凭证」信号——managed 后端现在恒有 token(无 Forsion 时回退本地令牌,
     // 见 backendManager.getToken),会把新用户误判为已配置。真实凭证只看 authStatus.loggedIn(读 auth.json,
     // 不含本地回退)+ 直连 provider。
-    if (PRODUCT.onboarding !== false && stored && window.tangu?.envCheck) {
+    // 带文件地址进来的人是来看那一页的(邀请链接同意后也走这里):这次不盖住它,下次正常打开再引导。
+    const guideAllowed = PRODUCT.onboarding !== false && !(window as { __FORSION_OPEN_TARGET__?: boolean }).__FORSION_OPEN_TARGET__
+    if (guideAllowed && stored && window.tangu?.envCheck) {
       try {
         if (!localStorage.getItem(ONBOARDING_DISMISS_KEY)) {
           // void 不 await:两条 IPC 只决定要不要弹引导,不该拖住 boot 的 resolve(bootstrap 等 boot 完才往下走)。
@@ -540,7 +550,7 @@ export const useApp = create<AppState>((set, get) => ({
           }).catch(() => { /* 引导判定失败不阻断 */ })
         }
       } catch { /* 引导判定失败不阻断 */ }
-    } else if (PRODUCT.onboarding !== false && stored) {
+    } else if (guideAllowed && stored) {
       // web / 移动端(无 envCheck):登录早在挂载前由 webShim / mobileShim 完成(无 token 直接跳
       // /auth),也没有 provider / 本机环境这些概念 —— 「首启」的唯一信号就是没跳过过。
       // 步骤序同步收缩到 welcome/theme/done,见 OnboardingWizard.stepOrder。
@@ -550,7 +560,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 只在 host 生效(web/移动端没有 appVersion,这条自然 no-op):web 每次发版都全屏拦一次
     // 所有在线用户,代价与收益不成比例 —— 更新日志那边从欢迎页的抽屉照样看得到。
     // seen 与当前版本不同(含老用户首次启用本功能,seen 为空)→ 弹一次,弹完即标记不再重复。
-    if (PRODUCT.onboarding !== false) void window.tangu?.appVersion?.().then((ver) => {
+    if (guideAllowed) void window.tangu?.appVersion?.().then((ver) => {
       if (!ver) return
       let seen: string | null = null
       try { seen = localStorage.getItem(ONBOARDING_VERSION_KEY) } catch { seen = null }

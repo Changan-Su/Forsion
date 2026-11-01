@@ -77,7 +77,7 @@ export function OnboardingBackgroundAgents({ resolveTarget, onBusyChange, onStat
     <div className="ob-background-agents">
       {(['historian', 'muse'] as const).map((agent) => {
         const Icon = agent === 'historian' ? History : Sparkles
-        const name = agent === 'historian' ? 'Historian' : 'Muse'
+        const name = t(`settings.special.${agent}`)
         const enabled = response?.config[agent].enabled ?? false
         const unavailable = agent === 'muse' && response?.cloud
         return <section className="ob-background-agent" key={agent} data-agent={agent}>

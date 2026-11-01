@@ -61,6 +61,9 @@ state 校验必须保留——回环口本机任意进程都能打。
 
 ## 边界
 
+- 云同步并发回归：在 `desktop/` 运行 `npm run test:cloud-consistency`。覆盖上传期间编辑、仅上传 CAS、云桥白板/数据库冲突和正文超时；使用临时文件及合成 HTTP，不连接生产账号。
+- Cloud consistency regression: run `npm run test:cloud-consistency` from `desktop/`. Tests use temporary files and synthetic HTTP responses; no production account is accessed.
+
 - 本目录**零依赖宿主**:不 import electron 与 desktop 其他模块,纯 Node + npm 依赖,
   可独立单测(`*.test.ts`,vitest)。
 - 宿主接线在 `electron/remotesyncIpc.ts`:配置持久化、调度、IPC、vault 根解析

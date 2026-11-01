@@ -232,6 +232,11 @@ class ChannelHub {
 
   /** 本会话是否连接着某个通道(有活跃绑定)——工具门禁用(channel_send_* 只在通道会话暴露)。失败 → false。 */
   async isChannelSession(userId: string, sessionId: string): Promise<boolean> {
+    return (await this.channelBinding(userId, sessionId)) === true;
+  }
+
+  /** 同上,但查不出来 → null。隐私边界(画像、human/MEMORY.md 不进通道)用这个:读失败不等于没绑定,按连着算。 */
+  async channelBinding(userId: string, sessionId: string): Promise<boolean | null> {
     if (!this.available()) return false;
     try {
       const rows = await query<any[]>(
@@ -240,7 +245,7 @@ class ChannelHub {
       );
       return rows.length > 0;
     } catch {
-      return false;
+      return null;
     }
   }
 

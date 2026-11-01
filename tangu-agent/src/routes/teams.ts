@@ -18,6 +18,7 @@ import { isValidSlug, slugify, getAgent } from '../agents/agentRegistry.js';
 import { listTeams, getTeam, saveTeam, deleteTeam, saveTeamAvatar, readTeamAvatar, deleteTeamAvatar, readTeamsMeta, writeTeamsMeta, type TeamDef } from '../agents/teamRegistry.js';
 import { SESSION_COLS, rowToSession } from './sessions.js';
 import { withKeyLock } from '../core/keyLock.js';
+import { teamSlugPredicate, teamRunActive } from '../services/sessionCleanup.js';
 
 const router = Router();
 
@@ -156,13 +157,8 @@ router.delete('/agent/teams/:slug', authMiddleware, async (req: AuthRequest, res
   try {
     const userId = req.user!.userId;
     const appId = deps().profile.appId;
-    const pred = teamSlugPredicate('s');
     // 有活动 run 的团队不能删(fs.rm 掉正在用的 cwd = run 在已删目录上失败或写出残留);409 让前端提示先停掉。
-    const active = await query<any[]>(
-      `SELECT 1 FROM agent_runs r JOIN chat_sessions s ON s.id = r.session_id WHERE s.user_id = ? AND s.app_id = ? AND r.status IN ('queued','running') AND ${pred} LIMIT 1`,
-      [userId, appId, team.slug],
-    );
-    if (active.length) return res.status(409).json({ detail: 'run_active' });
+    if (await teamRunActive(userId, appId, team.slug)) return res.status(409).json({ detail: 'run_active' });
     const ok = await deleteTeam(team.slug);
     if (!ok) return res.status(500).json({ detail: 'delete failed (files still in use?)' });
     // 历史会话保留但归档(只读口径):它们的 cwd 已经没了,再发消息只会在不存在的目录上失败。
@@ -172,13 +168,6 @@ router.delete('/agent/teams/:slug', authMiddleware, async (req: AuthRequest, res
     res.status(500).json({ detail: e?.message || 'delete team failed' });
   }
 });
-
-function teamSlugPredicate(alias: string): string {
-  const col = `${alias}.agent_config`;
-  return getDbType() === 'sqlite'
-    ? `(${col} IS NOT NULL AND json_valid(${col}) AND json_type(${col}) = 'object' AND json_extract(${col}, '$.teamSlug') = ?)`
-    : `(${col} IS NOT NULL AND jsonb_typeof(${col}) = 'object' AND (${col} ->> 'teamSlug') = ?)`;
-}
 
 /** 独立团队会话形状(方案 §6.1):projectless + teamSlug(轨道身份,锁)+ 成员表(可变)+ cwd = 团队 Library。没有运行模式与轮数字段。 */
 export function teamSessionConfig(team: TeamDef): Record<string, unknown> {

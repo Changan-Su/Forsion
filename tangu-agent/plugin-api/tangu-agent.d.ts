@@ -182,6 +182,14 @@ export interface PluginRunStart {
   parentSessionId?: string; sessionId?: string; requestId?: string; title?: string;
   readOnly?: boolean; toolNames?: string[]; resumeSessionId?: string;
 }
+/** Saved metadata of a session owned by the authenticated user; never includes messages. */
+export interface PluginRunContext {
+  sessionId: string;
+  cwd: string | null;
+  modelId: string | null;
+  thinkingLevel: string | null;
+  approvalMode: 'readonly' | 'auto-edit' | 'full-auto' | 'custom' | null;
+}
 export interface PluginRunStatus {
   runId: string; sessionId: string; status: string; error?: string | null;
   tokens: number; summary: string; waiting: string[];
@@ -215,6 +223,8 @@ export interface TanguSdk {
     archive(id: string, userId: string): Promise<PluginWorkspace>;
   };
   runs: {
+    /** Local only. Use req.user.userId, never a body owner. Missing/foreign sessions throw. */
+    context(sessionId: string, userId: string): Promise<PluginRunContext>;
     followupParent(childSessionId: string, userId: string, requestId: string, message: string): Promise<{delivered:boolean}>;
     start(input: PluginRunStart): Promise<{ sessionId: string; runId: string }>;
     sessionRuns(sessionId: string, userId: string): Promise<Array<{runId:string; status:string; createdAt:string}>>;
@@ -293,9 +303,101 @@ export interface PluginCommand {
   run(argv: string[]): Promise<number | void>;
 }
 
+/** One read-only skill currently enabled at the external source. */
+export interface PluginSkillEntry {
+  /** Provider-local kebab-case slug, 1–64 characters. The host assigns the full id. */
+  id: string;
+  name: string;
+  description: string;
+  /** Markdown instructions without YAML frontmatter. */
+  content: string;
+  /** Optional absolute directory for relative resources; does not grant file access. */
+  dir?: string;
+}
+export interface PluginSkillListContext {
+  cwd?: string;
+  /** Always supplied by this host; aborted after 5 seconds or on provider revocation. */
+  signal?: AbortSignal;
+}
+export interface PluginSkillProvider {
+  /** Provider-local kebab-case slug, 1–64 characters. */
+  id: string;
+  /** Re-read current source state. Return only enabled skills; no persistent copy is made. */
+  list(context: PluginSkillListContext): Promise<readonly PluginSkillEntry[]>;
+}
+
+export type PluginModelThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export interface PluginModel {
+  /** Source-local ID (1–240 characters); the host percent-encodes and namespaces it. */
+  id: string;
+  name: string;
+  contextWindow?: number;
+  /** Default false. Declare true only when the source accepts image parts. */
+  supportsVision?: boolean;
+  thinkingLevels?: PluginModelThinkingLevel[];
+}
+export interface PluginModelReadContext { signal: AbortSignal }
+/** Host-bound local adapter isolation. Never send these identities upstream. */
+export interface PluginModelCallContext {
+  readonly sessionId: string;
+  readonly userId: string;
+  readonly cwd: string | null;
+}
+export interface PluginModelToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+export interface PluginModelMessage {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string | any[] | null;
+  tool_calls?: PluginModelToolCall[];
+  tool_call_id?: string;
+  reasoning_content?: string;
+}
+export interface PluginModelRequest {
+  /** The source-local model ID, not its namespaced host ID. */
+  modelId: string;
+  messages: PluginModelMessage[];
+  tools?: Tool[];
+  toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  temperature?: number;
+  maxTokens?: number;
+  thinkingLevel?: PluginModelThinkingLevel;
+  cacheKey?: string;
+  /** Absent outside a bound native run. Never inferred from cacheKey or payload fields. */
+  readonly context?: PluginModelCallContext;
+  signal: AbortSignal;
+  onToken?: (delta: string) => void;
+  onReasoning?: (delta: string) => void;
+  onToolCallDelta?: (info: { id: string; name: string; argsLen: number; args: string; argsDelta: string }) => void;
+  onResponseStart?: () => void;
+}
+export interface PluginModelResult {
+  content: string;
+  reasoning: string;
+  toolCalls: PluginModelToolCall[];
+  usage: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number };
+  finishReason?: string;
+}
+export interface PluginModelProvider {
+  /** Provider-local kebab-case slug, 1–64 characters. */
+  id: string;
+  listModels(context: PluginModelReadContext): Promise<readonly PluginModel[]>;
+  resolveModel(modelId: string, context: PluginModelReadContext): Promise<PluginModel | null>;
+  /** Exactly one inference; return tool calls to the host without executing them. */
+  stream(input: PluginModelRequest): Promise<PluginModelResult>;
+}
+
 export interface TanguPluginContext {
   registerPlugin(meta: PluginMeta): void;
   registerToolProvider(p: ToolProvider): void;
+  /** Live read-only source; IDs are local:plugin/<engineId>/<providerId>/<entryId>.
+   * Automatically revoked on disable, unload, failed activation or replacement. */
+  registerSkillProvider(provider: PluginSkillProvider): void;
+  /** Local single-inference source. Full IDs: plugin:<engineId>/<providerId>/<encodedModelId>.
+   * Automatically revoked, including in-flight requests, when this activation is disposed. */
+  registerModelProvider(provider: PluginModelProvider): void;
   /** 注册 `tangu <name>` 子命令(如 computer-use 的 doctor/setup)。 */
   registerCommand(cmd: PluginCommand): void;
   registerScopedRoutes(mount: (router: ScopedPluginRouter) => void): void;

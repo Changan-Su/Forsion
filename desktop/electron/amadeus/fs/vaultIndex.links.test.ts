@@ -132,3 +132,47 @@ describe('L-13 别名', () => {
     expect(ix.pageAliases()).toEqual({ 'Alpha.md': ['AliasA', '甲'] })
   })
 })
+
+describe('T2 tag: 行级搜索与标签计数(真 VaultIndex)', () => {
+  const TAG_VAULT: Record<string, string> = {
+    'Plan.md': '---\ntags: [产品/路线图]\n---\n这一季先做 #产品/路线图 里的三件事\n\n```\n#产品/路线图 代码里的不算\n```\n',
+    '2026-10.md': '# 2026-10\n\n### 2026-10-29T22:05:00\n\nMini 窗只放输入框 #产品/路线图\n\n### 2026-10-24T07:45:00\n\n回顾卡可以像抽牌 #产品/路线图 #设计\n\n### 2026-10-20T08:00:00\n\n别的事 #产品/用户\n',
+    'Design.md': 'only #设计\n',
+    'Plain.md': '普通笔记 提到 tag:#产品 这几个字\n',
+  }
+  it('带 tag 条件按前缀过滤、含 fm,逐行列出;代码块里的不算', async () => {
+    const ix = await setup(TAG_VAULT)
+    const hits = ix.search('tag:#产品/路线图')
+    expect(hits.map((h) => h.path)).toEqual(['2026-10.md', 'Plan.md'])
+    expect(hits[0].hits).toEqual([
+      { line: 5, text: 'Mini 窗只放输入框 #产品/路线图' },
+      { line: 9, text: '回顾卡可以像抽牌 #产品/路线图 #设计', tagIndex: 1 },
+    ])
+    expect(hits[1].hits).toEqual([{ line: 0, text: 'tags: #产品/路线图' }, { line: 1, text: '这一季先做 #产品/路线图 里的三件事' }])
+    expect(ix.search('tag:产品').find((h) => h.path === '2026-10.md')?.hits).toHaveLength(3)
+  })
+  it('多标签取交集,-tag: 排除,再套普通关键词;大小写不敏感', async () => {
+    const ix = await setup({ ...TAG_VAULT, 'Up.md': 'x #Work/A\n' })
+    expect(ix.search('tag:产品 tag:设计').map((h) => h.path)).toEqual(['2026-10.md'])
+    expect(ix.search('tag:产品 tag:设计')[0].hits).toEqual([{ line: 9, text: '回顾卡可以像抽牌 #产品/路线图 #设计', tagIndex: 1 }])
+    expect(ix.search('tag:设计 -tag:产品').map((h) => h.path)).toEqual(['Design.md'])
+    expect(ix.search('tag:产品 三件事').map((h) => h.path)).toEqual(['Plan.md'])
+    expect(ix.search('TAG:#work').map((h) => h.path)).toEqual(['Up.md'])
+    const without = ix.search('-tag:产品').map((h) => h.path).sort()
+    expect(without).toEqual(['Design.md', 'Plain.md', 'Up.md'])
+  })
+  it('不带 tag 的查询不多带 hits,也不把 `tag:` 当操作符以外的东西吞掉', async () => {
+    const ix = await setup(TAG_VAULT)
+    const plain = ix.search('普通笔记')
+    expect(plain.map((h) => h.path)).toEqual(['Plain.md'])
+    expect(plain[0]).not.toHaveProperty('hits')
+    expect(plain[0]).toEqual({ path: 'Plain.md', title: 'Plain', snippet: '普通笔记 提到 tag:#产品 这几个字', line: 1, score: expect.any(Number) })
+  })
+  it('listTags:count 不变,total 按文件去重,只作父级的前缀 count 0', async () => {
+    const ix = await setup(TAG_VAULT)
+    const rows = ix.listTags()
+    expect(rows.find((r) => r.tag === '产品/路线图')).toEqual({ tag: '产品/路线图', count: 2, total: 2 })
+    expect(rows.find((r) => r.tag === '产品')).toEqual({ tag: '产品', count: 0, total: 2 })
+    expect(rows[rows.length - 1].count).toBe(0)
+  })
+})

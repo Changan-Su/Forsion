@@ -30,6 +30,7 @@ import { draftDispatch } from './agentSelectStatus'
 import { AgentAvatar, initialFor } from './AgentAvatar'
 import { openSolo } from '../sessionNav'
 import type { AgentConfig } from '../types'
+import { agentName } from '../agentName'
 import './agentSelectStrip.css'
 
 registerMessages({
@@ -99,13 +100,13 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
 
   const items = useMemo<Candidate[]>(() => {
     const list: Candidate[] = s.agentDefs.map((a) => ({
-      id: agentId(a.slug), kind: 'agent', slug: a.slug, name: a.name, description: a.description, system: a.createdBy === 'system',
+      id: agentId(a.slug), kind: 'agent', slug: a.slug, name: agentName(a), description: a.description, system: a.createdBy === 'system',
     }))
     // 老群聊会话里的临时 / 已删 agent 也要能显示与移除 —— 过滤掉等于下一次写入时静默丢成员。
     for (const slug of cfg.groupAgents ?? []) {
       if (list.some((i) => i.id === agentId(slug))) continue
       const temp = cfg.groupTempAgents?.find((a) => a.slug === slug)
-      list.push({ id: agentId(slug), kind: 'agent', slug, name: temp?.name || slug, description: temp?.description })
+      list.push({ id: agentId(slug), kind: 'agent', slug, name: agentName(temp) || slug, description: temp?.description })
     }
     // 已钉住但已被删的单个 agent 同理:不画出来用户就退不掉它(会话仍按它跑)。
     if (cfg.agentSlug && !list.some((i) => i.id === agentId(cfg.agentSlug!))) {
@@ -250,7 +251,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   // 状态句:≥2 人 = 团队行;1 人 = 谁来接;0 人 = 发送时实际接手的人(项目默认 Agent / 团队,再兜全局默认)。
   // 「再点移除」只留在已选 pill 的 title 里。
   const dispatch = draftDispatch(cfg, sessionId ? {} : projectDefaultsForNewSession(draftProject, Array.isArray(s.teams) ? s.teams : []).config, s.defaultAgentSlug)
-  const defaultName = dispatch.kind === 'agent' && dispatch.slug ? s.agentDefs.find((a) => a.slug === dispatch.slug)?.name : undefined
+  const defaultName = dispatch.kind === 'agent' && dispatch.slug ? agentName(s.agentDefs.find((a) => a.slug === dispatch.slug)) : undefined
   const statusLine = teamCount >= TEAM_MIN
     ? t('agentSelect.team', { n: teamCount })
     : picked.length === 1

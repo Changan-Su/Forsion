@@ -165,7 +165,7 @@ it.each(['missing', 'cloudWeb', 'mobile'] as const)('offers background agents bu
   await render(wizard())
   await click('onboarding.welcome.continue')
   expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('background')
-  if (kind !== 'missing') expect(host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Muse"]')?.disabled).toBe(true)
+  if (kind !== 'missing') expect(host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="卜算子"]')?.disabled).toBe(true)
   await click('onboarding.nav.next')
   expect(host.querySelector('.ob-step-head h1')?.textContent).toBe(translate('onboarding.step.theme.title'))
   await click('onboarding.nav.next')
@@ -272,11 +272,11 @@ it('waits for the background opt-out to save before allowing navigation or skipp
   let resolve!: (config: any) => void
   vi.mocked(saveSpecialConfig).mockImplementationOnce(() => new Promise((r) => { resolve = r }))
   await render(wizard()); await click('onboarding.welcome.continue')
-  await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="Muse"]')!.click())
+  await act(async () => host.querySelector<HTMLButtonElement>('[role="switch"][aria-label="卜算子"]')!.click())
   expect(saveSpecialConfig).toHaveBeenLastCalledWith(expect.anything(), { muse: { enabled: false } })
   expect([...host.querySelectorAll<HTMLButtonElement>('.ob-footer button')].every((b) => b.disabled)).toBe(true)
   await act(async () => resolve({ historian: { enabled: true }, muse: { enabled: false } }))
-  expect(host.querySelector('[role="switch"][aria-label="Muse"]')?.getAttribute('aria-checked')).toBe('false')
+  expect(host.querySelector('[role="switch"][aria-label="卜算子"]')?.getAttribute('aria-checked')).toBe('false')
   await click('onboarding.nav.skip')
   expect(props.onFinish).toHaveBeenCalledOnce()
 })
@@ -361,6 +361,68 @@ it('never touches the computer history switch when the guide is walked or skippe
   expect(api.setEnabled).not.toHaveBeenCalled()
 })
 
+/** Forsion Extend 的 telemetry:get / set 桩(真通道在 Extend 里);preload 只在 Extend 注册了 telemetry:get 时留 telemetryReport 键。 */
+function withImprove(initial: { enabled: boolean; noticeSeen: boolean } = { enabled: true, noticeSeen: false }) {
+  let view = { available: true, installId: 'x', queued: 0, ...initial }
+  const invoke = vi.fn(async (channel: string, patch?: { enabled?: boolean; noticeSeen?: true }) => {
+    if (channel === 'telemetry:set') view = { ...view, ...(typeof patch?.enabled === 'boolean' ? { enabled: patch.enabled } : {}), ...(patch?.noticeSeen ? { noticeSeen: true } : {}) }
+    return view
+  })
+  Object.assign(window.tangu!, { telemetryReport: vi.fn(), cloudInvoke: invoke, openExternal: vi.fn() })
+  return invoke
+}
+
+it('help improve: last tab, selected on entering the step, notice recorded when shown, switch writes enabled, done page row', async () => {
+  withHistory()
+  const invoke = withImprove()
+  await toPermissions()
+  await click('onboarding.nav.next'); await flush()
+  expect(host.querySelector('.ob-step-head p')?.textContent).toBe(translate('onboarding.step.permissions.descriptionImprove'))
+  expect([...host.querySelectorAll('.ob-sections button')].map((b) => b.textContent)).toEqual(
+    [translate('onboarding.guide.computer'), translate('onboarding.guide.history'), translate('onboarding.guide.media'), translate('onboarding.guide.improve')])
+  expect(host.querySelector('.ob-sections button.active')?.textContent).toBe(translate('onboarding.guide.improve'))
+  // 面板露出来 = 看过告知;开关缺省开,四类数据各一行
+  expect(invoke).toHaveBeenCalledWith('telemetry:set', { noticeSeen: true })
+  const toggle = () => host.querySelector<HTMLButtonElement>(`[role="switch"][aria-label="${translate('onboarding.improve.title')}"]`)!
+  expect(toggle().getAttribute('aria-checked')).toBe('true')
+  expect(host.querySelectorAll('[data-ob-improve] .ob-history-row')).toHaveLength(4)
+  await act(async () => toggle().click()); await flush()
+  expect(invoke).toHaveBeenLastCalledWith('telemetry:set', { enabled: false })
+  expect(toggle().getAttribute('aria-checked')).toBe('false')
+  await click('onboarding.improve.privacy')
+  expect(window.tangu!.openExternal).toHaveBeenCalledWith('https://forsion.net/legal/privacy')
+  await click('onboarding.nav.next'); await flush()
+  const row = [...host.querySelectorAll<HTMLButtonElement>('.ob-summary button')].find((b) => b.textContent?.includes(translate('onboarding.guide.improve')))!
+  expect(row.textContent).toContain(translate('onboarding.improve.off'))
+  await act(async () => row.click()); await flush()
+  expect(host.querySelector('.ob-sections button.active')?.textContent).toBe(translate('onboarding.guide.improve'))
+})
+
+it('help improve: no tab when Extend has no telemetry channel or telemetry:get rejects; skipping never records the notice', async () => {
+  withHistory()
+  const invoke = withImprove()
+  invoke.mockRejectedValue(new Error('No handler registered'))
+  await toPermissions()
+  await click('onboarding.nav.next'); await flush()
+  expect([...host.querySelectorAll('.ob-sections button')].map((b) => b.textContent)).not.toContain(translate('onboarding.guide.improve'))
+  expect(host.querySelector('.ob-step-head p')?.textContent).toBe(translate('onboarding.step.permissions.description'))
+  await click('onboarding.nav.skip')
+  expect(invoke).not.toHaveBeenCalledWith('telemetry:set', expect.anything())
+})
+
+it('help improve: an update from 2.13.4 (computer history already seen) shows the step again and lands on help improve', async () => {
+  withHistory()
+  withImprove()
+  store.onboardingUpdate = true
+  localStorage.setItem('forsion_tangu_onboarding_done', '1')
+  localStorage.setItem('forsion_tangu_onboarding_version', '2.13.4')
+  await render(wizard()); await flush()
+  expect(host.querySelectorAll('.ob-progress-item').length).toBe(2)
+  await click('onboarding.nav.next'); await flush()
+  expect(host.querySelector('.ob-flow')?.getAttribute('data-step')).toBe('permissions')
+  expect(host.querySelector('.ob-sections button.active')?.textContent).toBe(translate('onboarding.guide.improve'))
+})
+
 it('leaves computer history out entirely on a platform without a collector', async () => {
   const api = withHistory('linux')
   status.mockResolvedValue({ ...permissions, platform: 'linux', computerUseAvailable: false })
@@ -416,7 +478,7 @@ it('after a version update with nothing new shows a single what-changed screen',
   withHistory()
   store.onboardingUpdate = true
   localStorage.setItem('forsion_tangu_onboarding_done', '1')
-  localStorage.setItem('forsion_tangu_onboarding_version', '2.13.4')
+  localStorage.setItem('forsion_tangu_onboarding_version', '2.13.8')
   await render(wizard())
   expect(host.querySelectorAll('.ob-progress-item').length).toBe(1)
   // 「跳过引导」仍在:一百多支台架靠这个按钮进主界面

@@ -38,9 +38,14 @@ export const registryOrder = (mirror: string | undefined): string[] =>
 export const tarballUrl = (registry: string, pkg: string, version: string): string =>
   `${registry}/${pkg}/-/${pkg.replace(/^@[^/]+\//, '')}-${version}.tgz`
 
-/** latest 的版本与 integrity;先答上的 registry 排在下载候选首位。 */
-export async function resolveLatest(pkg: string, registries: string[], fetchFn: RegistryFetch): Promise<{ version: string; integrity: string; tarballs: string[] }> {
+/**
+ * dist-tag(缺省 latest)指向的版本与 integrity;先答上的 registry 排在下载候选首位。
+ * 某个 registry 没有这个标签就问下一个(npmmirror 同步有延迟);答上的都没有 → null(引擎的本线标签可能还没发过),
+ * 一个都没答上才抛。
+ */
+export async function resolveLatest(pkg: string, registries: string[], fetchFn: RegistryFetch, tag = 'latest'): Promise<{ version: string; integrity: string; tarballs: string[] } | null> {
   const failed: string[] = []
+  let untagged = false
   for (const [i, registry] of registries.entries()) {
     try {
       const res = await fetchFn(`${registry}/${pkg.replace('/', '%2f')}`, {
@@ -49,15 +54,20 @@ export async function resolveLatest(pkg: string, registries: string[], fetchFn: 
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const doc = (await res.json()) as { 'dist-tags'?: Record<string, string>; versions?: Record<string, { dist?: { integrity?: string } }> }
-      const version = doc['dist-tags']?.latest
-      const integrity = version ? doc.versions?.[version]?.dist?.integrity?.split(/\s+/)[0] : undefined
-      if (!version || !integrity?.startsWith('sha512-')) throw new Error('no latest version with sha512 integrity')
+      const version = doc['dist-tags']?.[tag]
+      if (!version) {
+        untagged = true
+        continue
+      }
+      const integrity = doc.versions?.[version]?.dist?.integrity?.split(/\s+/)[0]
+      if (!integrity?.startsWith('sha512-')) throw new Error(`${tag}=${version} has no sha512 integrity`)
       const order = [registry, ...registries.filter((_, j) => j !== i)]
       return { version, integrity, tarballs: order.map((r) => tarballUrl(r, pkg, version)) }
     } catch (e) {
       failed.push(`${new URL(registry).host}: ${(e as Error)?.message || e}`)
     }
   }
+  if (untagged) return null
   throw new Error(failed.join(' · '))
 }
 
@@ -118,6 +128,7 @@ export async function checkBuiltinUpdates(o: BuiltinUpdateOpts): Promise<string[
         .filter((m): m is BundleManifest => !!m)
         .reduce((v, m) => (cmpVersion(m.version, v) > 0 ? m.version : v), '0.0.0')
       const latest = await resolveLatest(pkg, o.registries, o.fetch)
+      if (!latest) throw new Error('no latest dist-tag')
       report({ latestVersion: latest.version })
       if (!RELEASE_VERSION.test(latest.version)) {
         log(`[builtin-updates] ${pkg} latest=${latest.version} 不是正式版,跳过`)

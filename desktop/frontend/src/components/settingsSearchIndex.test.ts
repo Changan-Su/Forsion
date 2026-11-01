@@ -1,3 +1,4 @@
+import './McpImportDialog'
 import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -7,13 +8,14 @@ import './remoteSessionsCopy' // P1-K4:远程会话页的标签是模块级 regi
 import './UnitSwitcher' // 设置 › 设备的标签同样是模块级 registerMessages 片段
 import './remoteSafetyCopy' // P1-K2:急停与远程锁定区块(经 K4 扩展槽挂在远程会话页末尾)
 import './startupAppearanceCopy' // 开屏与图标:片段由 StartupAppearanceSettings 自己 import,登记表不带
+import './MaskingSettingsSection' // 提供方 › 发给模型之前:片段在组件模块里
 import { __dictSnapshot } from '../i18n'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery } from './settingsSearchIndex'
 
 // U-15 静态半边:索引项的锚点在源码里真有、子页 key 真存在、标签双语都有。
 // 真落点(本端门控下点结果 → 锚点可见)由 check:settingsmode 在真 Electron 里逐项点。
 // 锚点可以落在 SettingsModal 直接渲染的独立页组件里(P1-K4 远程会话页的三块面板)。
-const SRC = ['SettingsModal.tsx', 'RemoteSessionsSettings.tsx', 'RemoteSafetyPanel.tsx', 'StartupAppearanceSettings.tsx', 'UnitSwitcher.tsx'].map((f) => readFileSync(join(__dirname, f), 'utf8')).join('\n')
+const SRC = ['SettingsModal.tsx', 'RemoteSessionsSettings.tsx', 'RemoteSafetyPanel.tsx', 'StartupAppearanceSettings.tsx', 'UnitSwitcher.tsx', 'MaskingSettingsSection.tsx'].map((f) => readFileSync(join(__dirname, f), 'utf8')).join('\n')
 
 describe('settings search index', () => {
   it('id 唯一,每项都有检索别名', () => {

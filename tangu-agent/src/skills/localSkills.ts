@@ -18,6 +18,7 @@ import { currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
 import { listAgents } from '../agents/agentRegistry.js';
 import { disabledSkillNames } from './availability.js';
+import { getPluginSkill, isPluginSkillActive, listPluginSkills, PLUGIN_SKILL_PREFIX } from './pluginSkills.js';
 
 export const LOCAL_SKILL_PREFIX = 'local:';
 
@@ -412,7 +413,7 @@ async function builtinTreeHash(name: string): Promise<string | null> {
 /** 测试用:某个技能文件夹现在的指纹(current 算法)。 */
 export const skillTreeHash = (dir: string): Promise<string | null> => treeHash(dir);
 
-export async function listLocalSkills(): Promise<SkillRecord[]> {
+async function listFilesystemSkills(): Promise<SkillRecord[]> {
   await seedBuiltinSkills(); // 首启把内置复制进 ~/.forsion/skills(幂等;覆盖 TUI 等不走 standalone 启动的入口)
   const roots: Array<[string, SkillSource]> = [
     [builtinSkillsDir(), 'builtin'],
@@ -484,10 +485,17 @@ export async function listLocalSkills(): Promise<SkillRecord[]> {
   return [...byId.values()];
 }
 
+/** Filesystem skills plus live plugin-owned sources; namespaces never override each other. */
+export async function listLocalSkills(): Promise<SkillRecord[]> {
+  const [local, external] = await Promise.all([listFilesystemSkills(), listPluginSkills(currentRunCwd())]);
+  return [...local, ...external.filter(isPluginSkillActive)];
+}
+
 export async function getLocalSkill(id: string): Promise<SkillRecord | null> {
   if (!id.startsWith(LOCAL_SKILL_PREFIX)) return null;
+  if (id.startsWith(PLUGIN_SKILL_PREFIX)) return getPluginSkill(id, currentRunCwd());
   if (SHARED_SKILL_ID_RE.test(id)) return (await listSharedAgentSkills(null)).find((s) => s.id === id) || null;
-  const all = await listLocalSkills();
+  const all = await listFilesystemSkills();
   return all.find((s) => s.id === id) || null;
 }
 

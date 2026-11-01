@@ -15,6 +15,8 @@ vi.mock('../seams/runtime.js', () => ({
   deps: () => ({ brain: { inbox: { listBroadcasts: async () => [
     { id: 'b1', title: '维护', body: '今晚', title_en: 'Maintenance', body_en: 'Tonight', created_at: '2026-10-23 10:00:00.000001' },
     { id: 'b2', title: '老云端', body: '', created_at: '2026-10-23 10:00:00.000002' },
+    { id: 'b3', title: '更新', body: '', created_at: '2026-10-23 10:00:00.000003', kind: 'update' },
+    { id: 'b4', title: '没见过的类型', body: '', created_at: '2026-10-23 10:00:00.000004', kind: 'newsletter' },
   ] } } }),
 }));
 
@@ -22,7 +24,7 @@ import { pullBroadcastsOnce } from './inboxPull.js';
 
 describe('pullBroadcastsOnce × 英文版', () => {
   it('title_en / body_en 落进同名列,缺省为 NULL', async () => {
-    expect(await pullBroadcastsOnce('u1')).toEqual({ added: 2 });
+    expect(await pullBroadcastsOnce('u1')).toEqual({ added: 4 });
     const col = (i: number, name: string) => {
       const { sql, params } = state.inserts[i];
       const cols = sql.match(/\(([^)]+)\)\s*VALUES/)![1].split(',').map((c) => c.trim());
@@ -32,5 +34,7 @@ describe('pullBroadcastsOnce × 英文版', () => {
     };
     expect([col(0, 'title'), col(0, 'title_en'), col(0, 'body_en')]).toEqual(['维护', 'Maintenance', 'Tonight']);
     expect([col(1, 'title_en'), col(1, 'body_en'), col(1, 'origin_broadcast_id')]).toEqual([null, null, 'b2']);
+    // 广播类型:老服务端没这个字段、不认识的值都按 other
+    expect([0, 2, 3].map((i) => col(i, 'broadcast_kind'))).toEqual(['other', 'update', 'other']);
   });
 });

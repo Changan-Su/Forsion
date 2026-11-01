@@ -47,8 +47,9 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'cloud-url', tab: 'forsion', sub: 'f-conn', anchor: 'cloud-url', labelKey: 'settings.forsion.cloudUrlLabel', keywords: '云端 服务器 cloud server', needs: ['stored', 'cloud'] },
   { id: 'memory-sync', tab: 'forsion', sub: 'f-sync', anchor: 'memory-sync', labelKey: 'settings.forsion.syncLabel', keywords: '记忆 同步 memory brain sync', needs: ['stored', 'cloud'] },
   { id: 'inbox-notify', tab: 'general', sub: 'g-inbox', anchor: 'inbox-notify', labelKey: 'settings.inbox.notifyLabel', keywords: '收件箱 inbox notification', needs: ['stored'] },
-  { id: 'default-models', tab: 'model', sub: 'm-models', labelKey: 'modelsettings.defaults', keywords: '默认模型 后台任务 图像识别 图像生成 翻译 跟随 default model background vision image translate' },
+  { id: 'default-models', tab: 'model', sub: 'm-models', labelKey: 'modelsettings.defaults', keywords: '默认模型 后台任务 图像识别 图像生成 翻译 跟随 default model background vision image translate 额度用完 后备 换模型 quota fallback' },
   { id: 'model-providers', tab: 'model', sub: 'm-providers', labelKey: 'modelsettings.providers', keywords: '提供方 服务商 apikey provider' },
+  { id: 'masking', tab: 'model', sub: 'm-providers', anchor: 'masking', labelKey: 'maskset.title', keywords: '脱敏 遮住 密钥 令牌 隐私 占位符 mask redact secret privacy placeholder' },
   { id: 'web-search', tab: 'model', sub: 'm-websearch', labelKey: 'settings.sub.webSearch', keywords: '联网 搜索 search web' },
   { id: 'voice', tab: 'model', sub: 'm-voice', labelKey: 'settings.sub.voice', keywords: '语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation' },
   { id: 'theme-language', tab: 'theme', anchor: 'theme-language', labelKey: 'settings.theme.langLabel', keywords: '设计语言 主题 theme language' },
@@ -86,6 +87,7 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   // P1-K2:急停与远程锁定(经 K4 扩展槽挂在远程会话页末尾)
   { id: 'remote-safety', tab: 'remote-sessions', anchor: 'remote-safety', labelKey: 'remoteSafety.title', keywords: '急停 紧急停止 锁定 解锁 快捷键 停止远程任务 emergency stop lock unlock shortcut hotkey stop remote tasks' },
   { id: 'computer-history', tab: 'computer-history', anchor: 'computer-history', labelKey: 'settingsmodal.tab.computerHistory', keywords: '电脑历史 活动记录 隐私 排除 暂停 computer history activity privacy recording exclude pause' },
+  { id: 'mcp-json', tab: 'mcp', labelKey: 'mcpImport.open', keywords: 'JSON 导入 粘贴 配置 MCP import paste config', needs: ['host'] },
   { id: 'mcp-server', tab: 'advanced', sub: 'a-mcp', labelKey: 'settings.sub.mcpServer', keywords: '对外 端点 endpoint mcp' },
   { id: 'reset-layout', tab: 'advanced', sub: 'a-ui', anchor: 'reset-layout', labelKey: 'settingsmodal.advanced.resetLayout', keywords: '布局 恢复 layout reset' },
   { id: 'clear-data', tab: 'advanced', sub: 'a-data', labelKey: 'settings.sub.data', keywords: '清空 卸载 重置 clear reset data' },

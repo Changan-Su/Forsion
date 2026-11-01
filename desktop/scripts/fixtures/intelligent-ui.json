@@ -539,7 +539,8 @@
     ],
     "blocks": [
       { "id": "choose", "kind": "controls", "inputIds": ["tier"] },
-      { "id": "refs", "kind": "sources", "resourceIds": ["long-host"] }
+      { "id": "refs", "kind": "sources", "resourceIds": ["long-host"] },
+      { "id": "code", "kind": "text", "markdown": "```bash\necho \"a long shell line that has to scroll inside its own block instead of widening the answer\" && ls -la ~/Documents\n```" }
     ]
   },
   "repeat": {

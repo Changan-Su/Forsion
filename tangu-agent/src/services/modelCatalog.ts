@@ -39,7 +39,9 @@ export interface ModelCatalog {
   imageModelId: string | null;
   visionModelId: string | null;
   /** Forsion 云端的实时语音通话模型(不进 models;没有 = 云端没开通话 / 老云端 / 没登录)。 */
-  realtimeModel: { id: string; name: string; apiModelId?: string | null } | null;
+  realtimeModel: { id: string; name: string; apiModelId?: string | null; defaultVoice?: string } | null;
+  ttsModelId: string | null;
+  ttsVoice: string | null;
   /** Forsion 云端的机器翻译模型(不进 models:它们不能聊天;客户端的「翻译」模型槽列它们)。老云端 / 没登录 = 空。 */
   translateModels: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
   /** Forsion 云端的朗读模型(不进 models;桌面「语音朗读」的模型框列它们)。老云端 / 没登录 = 空。 */
@@ -74,6 +76,8 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
   let realtimeModel: ModelCatalog['realtimeModel'] = null;
   let translateModels: ModelCatalog['translateModels'] = [];
   let ttsModels: ModelCatalog['ttsModels'] = [];
+  let ttsModelId: string | null = null;
+  let ttsVoice: string | null = null;
   let fimModels: ModelCatalog['fimModels'] = [];
   try {
     // 优先按应用过滤(admin 的 project_model_configs);brain 未实现该可选方法 → 回退全局列表。
@@ -88,6 +92,8 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
       realtimeModel = r?.realtimeModel ?? null;
       translateModels = r?.translateModels ?? [];
       ttsModels = r?.ttsModels ?? [];
+      ttsModelId = r?.ttsModelId ?? null;
+      ttsVoice = r?.ttsVoice ?? null;
       fimModels = r?.fimModels ?? [];
     } else {
       cloud = (await deps().brain.models.listGlobalModels()) || [];
@@ -122,6 +128,15 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
     }
   }
 
+  for (const m of await deps().brain.models.listPluginModels?.() ?? []) {
+    const win = effectiveContextWindowInfo(m.id, m);
+    models.push({ id: m.id, name: m.name, provider: m.provider, source: 'direct', modelType: 'llm',
+      contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max,
+      supportsVision: m.supportsVision === true,
+      thinkingLevels: m.pluginThinkingLevels ?? thinkLv(m.provider, m.apiModelId || m.id),
+    });
+  }
+
   // 选择器按 id 选用 → 按 id 去重兜底(direct 已前缀化,正常不会撞)。
   const seen = new Set<string>();
   const unique = models.filter((m) => (seen.has(m.id) ? false : (seen.add(m.id), true)));
@@ -135,6 +150,8 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
     realtimeModel,
     translateModels,
     ttsModels,
+    ttsModelId,
+    ttsVoice,
     fimModels,
     forsion,
   };

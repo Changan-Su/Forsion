@@ -2,8 +2,7 @@
 title: Mini Panel 开发
 description: Space 适配、插件上下文和前台 Computer Use 期间的 Mini 契约。
 ---
-
-# Mini Panel 开发 / Development
+# Mini Panel 开发
 
 Space 的 `mini` 是显式能力声明。`SpaceDefinition.mini` 与 `space.json.mini` 都包含 `view`、`mainView`；各自为 `{type, params?}`，可另设 `name`。原生名称可懒求值，JSON 名称可写 `{zh,en}`。
 
@@ -34,7 +33,7 @@ ctx.openMiniPanel?.('quick', {
 
 `viewId` 和 `mainViewId` 都是当前插件内的相对 id；宿主自动补 `plugin:<pluginId>:`。省略 `mainViewId` 时，主面板打开同一个视图。旧版宿主和 Web/mobile 可能没有此原生窗口接口，必须使用可选调用并保留 `ctx.openView()` 回退。
 
-## 插件上下文 / Plugin context
+## 插件上下文
 
 `ctx.registerView({id, title, mount(el, view)})` 的第二个参数新增以下可选成员；旧宿主应先检测存在性。
 
@@ -48,7 +47,7 @@ ctx.openMiniPanel?.('quick', {
 
 关闭、切 Space 或禁用插件后，旧 context 失效。主面板修改启停偏好后，Mini 会同步清理或重新注册本地实例与 Space，不重复发送停用自动化的动作。`mount` 的清理函数应停止异步回调和订阅。完整视图与紧凑视图使用同名实体键，不复制数据。代码示例在 `tangu-agent/skills/forsion-plugin/samples/forsion-sample-bundle/`。
 
-## 前台 Computer Use / Foreground Computer Use
+## 前台 Computer Use
 
 macOS helper 在真实 HID 输入收口写入与 socket 同目录的 `foreground.json`（v1）。内容只有 `active`、`updatedAt`、`expiresAt`、`helperPid`。候选前台策略、AX 成功或 PID 后台输入不产生信号。递归物理输入作用域在首次真实输入时激活，最外层退出时结束；进行中每秒续期，租约上限 2500ms，短点击结束保留 350ms 供轮询捕获。helper 消失、文件损坏或租约过期不产生新的前台信号，不启动 helper、不截图；已经确认的前台运行状态由 session/run 和 Forsion 焦点决定何时结束。
 
@@ -60,9 +59,17 @@ Computer Use 期间（临时 Mini 全程；手动 Mini 在 `following()` 为真�
 
 Genesis 与 `tangu-computer-use` 是独立仓库，交付时需要配套更新并重新构建 helper。内置捆绑包至少使用 0.5.2；改变随包 helper 内容时必须提升 manifest 版本，桌面有意跳过同版本副本。helper 更新成功后还要重启常驻进程，协议号与路径相同不代表运行中的二进制已更新。当前信号实现针对 macOS；旧 helper 与其他平台继续保持静止面板。
 
-## 验证 / Verification
+## 验证
 
-- `desktop`: `npm run typecheck`、`npm run check:parity`、`npm run check:cssvar`、`npm run build && npm run check:minicard && npm run check:miniauto`。
+- `desktop`:
+
+```bash
+npm run typecheck
+npm run check:parity
+npm run check:cssvar
+npm run build && npm run check:minicard && npm run check:miniauto
+```
+
 - 单测：`miniAutoPanel.test.ts`、`miniForeground.test.ts`、`lcl/spaces/miniPanel.test.ts`、Space 注册表及国际化覆盖测试。
 - Computer Use 插件：`npm run check:helper-refresh`、`npm run check:helper-signal`、`npm run check:mini-foreground`；完整 Swift 类型检查覆盖新增文件与所有原生源文件。
 - Electron 测试使用临时后端、Vault、磁盘插件和前台信号，验证真实 BrowserWindow 位置不动、穿透切换及截图；不向用户应用发送物理输入。真实 HID 到信号由 native reporter 测试与收口接线检查覆盖。
@@ -71,13 +78,3 @@ Genesis 与 `tangu-computer-use` 是独立仓库，交付时需要配套更新�
 - 「拖卡片不抢焦到主窗口」的前提是 2026-09-28 在另一 App 占前台时用真实鼠标拖隔离 Electron 窗口测出来的：可聚焦 + `acceptFirstMouse` → 能拖、卡片自身获焦；`focusable:false` → 拖不动且主窗口获焦；`type:'panel'` → 能拖但主窗口获焦（在 Forsion 里等于收起卡片）。程序化 `focus()` 复现不了这个终态（`app.focus` 会先让主窗口获焦），所以台架不覆盖这一步。
 - `check:miniauto` 以 `TANGU_HARNESS_QUIET=0` 启动：Playwright 起的实例默认静默（`present()` 只 `showInactive`，结束时不会真的回焦），测回焦语义必须关掉。
 - `check:minicard` 的缩放段：真实指针按住卡片边缘的热区，光标位置用替身给出，验证只有手动 Mini 自己能改大小、对边不动、夹在最小值、内容跟着铺满、关掉再开沿用。透明无边框窗在 Windows 上没有系统缩放边，所以缩放边是卡片自己画的、三个平台走同一条路径；渲染层只报哪条边，位移由主进程读光标算。
-
-## English contract
-
-Declare distinct registered `mini.view` and `mini.mainView` targets on the Space. Mini is opt-in and never builds the full Space layout. The window opens at 320×420 and the user can drag its edges and corners between 260×160 and 640×900, so lay the view out against its container instead of a fixed size; the automatic Computer Use observer stays 320×420. Optional adapter availability does not invalidate the full Space. The host owns navigation chrome and forwards current entity params to the main panel.
-
-DOM plugins receive an optional live context with `surface`, `getParams`, `setParams`, `onParamsChanged`, and (Mini only) `showInMainPanel`. Parameter updates preserve the mounted DOM; contexts are revoked on disposal. Reuse domain data, keep entity keys consistent, and clean up subscriptions.
-
-On macOS the companion helper emits a bounded, data-only foreground lease beside its socket when it actually posts physical input. An app-wide monitor combines that lease with external focus and the main renderer's current run to open a temporary Tangu observer automatically. It waits for the targeted Chat to mount, shows without activation at the top-right of the pointer's display, preserves manual Mini state, and closes when Forsion regains focus or the run ends. It does not follow the cursor. During Computer Use, Mini passes clicks through except under the user's pointer, so it can be dragged away; the drag focuses the card itself, which does not count as returning to Forsion. When the run ends while the user stayed away, focus returns to the Forsion window that had it before the panel opened. Plugins keep the existing Mini adapter contract. Missing, expired or unsupported signals never start an automatic panel. Older helpers leave Mini as a regular panel.
-
-Delivery requires Computer Use bundle 0.5.2 or later. Bump its manifest version when replacing helper artifacts, and restart the running helper after installation. Genesis intentionally preserves same-version installed bundles. Use `check:helper-signal` to verify the packaged executable and `check:mininative` to exercise real native foreground input and Mini behavior; simulated signal tests alone do not cover delivery.

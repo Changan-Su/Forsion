@@ -11,6 +11,7 @@ import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientType
 import { streamingArgString } from '../views/streamingWrite'
 import { registerMessages, useI18n } from '../i18n'
 import { ChatWebLink } from './ChatWikiLink'
+import { CodeBlock, RunContext } from './Markdown'
 import { deriveChecklist, emptyUIState, formatUIQuantity, inputValues, readUIState, stateVars, uiExpansionKey, uiStateKey, visible, writeUIState, type UIUserState } from './intelligentUiState'
 import './IntelligentUi.css'
 import { IntelligentAppCard } from './IntelligentAppCard'
@@ -79,9 +80,11 @@ const remarkSlots = (values: string[]) => () => (tree: MdNode): void => {
 }
 function RichText({ text, values }: { text: string; values?: string[] }): React.JSX.Element {
   // 同聊天正文(components/Markdown.tsx):`**怎么选：**如果` 这种 CJK 标点贴闭合定界符的写法,不加这两个插件会原样露出 `**`。须排在 remarkGfm 之后。
-  return <ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, ...(values ? [remarkSlots(values)] : [])]} skipHtml disallowedElements={['img', 'input']} components={{
+  // 代码块用聊天正文那份(复制键 + 高亮)。不给「运行」:这里没接工作目录,也不知道会话是不是别的设备的。
+  return <RunContext.Provider value={{ allowRun: false }}><ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, ...(values ? [remarkSlots(values)] : [])]} skipHtml disallowedElements={['img', 'input']} components={{
     a: ({ href, children }) => safeUIUrl(href) ? <ChatWebLink href={href}>{children}</ChatWebLink> : <span>{children}</span>,
-  }}>{text}</ReactMarkdown>
+    pre: CodeBlock,
+  }}>{text}</ReactMarkdown></RunContext.Provider>
 }
 
 function Picture({ resource, sources, expanded, onExpand, flip }: { resource: Extract<UIResource, { kind: 'image' }>; sources: Map<string, UIResource>; expanded: boolean; onExpand: (expanded: boolean) => void; flip: string }): React.JSX.Element {

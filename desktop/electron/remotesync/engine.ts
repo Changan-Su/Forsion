@@ -278,18 +278,25 @@ export async function runSync(opts: SyncOptions): Promise<SyncReport> {
     const local = <T>(fn: () => Promise<T>): Promise<T> => (key.toLowerCase().endsWith('.db') ? withDbLock(abs, fn) : fn())
     try {
       if (kind === 'push') {
+        const before = await fs.stat(abs)
         const data = await fs.readFile(abs)
+        const after = await fs.stat(abs).catch(() => null)
+        const stable = after && before.size === data.byteLength && after.size === before.size
+          && after.mtimeMs === before.mtimeMs && after.ctimeMs === before.ctimeMs
+          && after.ino === before.ino && after.dev === before.dev
         const h = sha256(data)
-        // 条件写:远端在场 → 期望还是基线身份;远端缺席(首推/编辑赢删除复活)→ 期望不存在(create)。
+        // 条件写:仅上传绑定本轮已观察版本(含 join/conflict);双向上传仍绑定基线。缺席时要求 create。
         // 哑后端忽略该参;CAS 后端(Penzor)据此把 walk→push 窗口的并发写变成 409 而非静默覆盖。
-        const expectedId = remoteMap.get(key) ? (prev.entries[key]?.r ?? null) : null
+        const expectedId = remoteMap.get(key)
+          ? (opts.direction === 'push' ? remoteMap.get(key)!.id : prev.entries[key]?.r ?? null)
+          : null
         const ent = await withTimeout(
           (signal) => opts.remote.writeFile(key, data, localMap.get(key)?.mtimeMs ?? Date.now(), signal, expectedId),
           TRANSFER_TIMEOUT_MS,
           `push ${key}`,
         )
-        const st = await fs.stat(abs).catch(() => null)
-        prev.entries[key] = { h, r: ent.id, sz: data.byteLength, mt: st ? Math.floor(st.mtimeMs) : (localMap.get(key)?.mtimeMs ?? 0) }
+        // Cache only metadata observed with these bytes, never a later edit's stat.
+        prev.entries[key] = { h, r: ent.id, sz: data.byteLength, mt: stable ? Math.floor(before.mtimeMs) : -1 }
         report.pushed++
       } else if (kind === 'pull') {
         const remote = remoteMap.get(key)!

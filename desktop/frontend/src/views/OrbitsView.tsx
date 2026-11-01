@@ -14,7 +14,7 @@
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
  */
 import React, { useEffect, useMemo, useState } from 'react'
-import { Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
+import { Archive, Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { OverlayAt, setActiveSpace, useCommandStore, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
@@ -33,7 +33,7 @@ import { AgentAvatar } from '../components/AgentAvatar'
 import { tipProps, tipT } from '../hoverTip'
 import { formatRelative, formatRowTime } from '../format/time'
 import { TeamEditor } from '../components/TeamEditor'
-import { AgentRemoveDialog } from '../components/RemoveDialog'
+import { AgentUninstallDialog } from '../components/UninstallDialog'
 import { showDetails } from '../stores/detailsSubject'
 import * as api from '../services/backendService'
 import { usePageStore } from '../amadeus/store/pageStore'
@@ -43,8 +43,12 @@ import { isHomeSession, isIndependentOrbitConfig, isTeamImageAvatar, sessionWork
 import { runLocationsAvailable } from '../features/runtime'
 import { DeviceSessionSections, attentionBadge } from './chat2/DeviceSessionSections' // P1-K7a
 import { isOrbitPinned, readOrbitPins, toggleOrbitPin, touchOrbitPin, writeOrbitPins, type OrbitPinTimes } from './chat2/orbitPins'
+import { onProjectRelinked } from './chat2/ProjectRelink'
 import './chat2/orbits.css'
 import { homeTarget, useRemoteCapability } from '../services/engine/targets'
+import { openAgentCreation } from './agentProfileNav'
+import { askString } from '../amadeus/components/askString'
+import { agentName } from '../agentName'
 
 registerMessages({
   'orbits.filter.label': { zh: '筛选列表', en: 'Filter list' },
@@ -56,6 +60,10 @@ registerMessages({
   'orbits.plus.agent': { zh: '新建 Agent', en: 'New agent' },
   'orbits.plus.team': { zh: '新建团队', en: 'New team' },
   'orbits.plus.project': { zh: '新建项目', en: 'New project' },
+  'orbits.create.agent': { zh: '新 Agent', en: 'New agent' },
+  'orbits.create.team': { zh: '新团队', en: 'New team' },
+  'orbits.create.project': { zh: '新项目', en: 'New project' },
+  'orbits.create.projectName': { zh: '项目名称', en: 'Project name' },
   'orbits.row.menu': { zh: '更多', en: 'More' },
   'orbits.row.pin': { zh: '置顶', en: 'Pin to top' },
   'orbits.row.unpin': { zh: '取消置顶', en: 'Unpin' },
@@ -72,6 +80,7 @@ registerMessages({
   'orbits.gone.agentBadge': { zh: '已删除', en: 'Deleted' },
   'orbits.gone.engineBadge': { zh: '已卸载', en: 'Uninstalled' },
   'orbits.gone.teamBadge': { zh: '已删除', en: 'Deleted' },
+  'orbits.gone.archive': { zh: '归档历史会话', en: 'Archive past chats' },
   'orbits.team.deleteBusy': { zh: '这个团队还有会话在运行，先停掉再删', en: 'This team still has a running session; stop it before deleting' },
   'orbits.row.editAgent': { zh: '编辑 Agent', en: 'Edit agent' },
   'orbits.row.details': { zh: '查看详情', en: 'View details' },
@@ -125,6 +134,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     workspaces: state.workspaces,
     createInWorkspace: state.createInWorkspace,
     addLocalWorkspace: state.addLocalWorkspace,
+    addCloudProject: state.addCloudProject,
+    cloudProjects: state.cloudProjects,
     renameWorkspace: state.renameWorkspace,
     removeWorkspace: state.removeWorkspace,
     renameSession: state.renameSession,
@@ -172,6 +183,15 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     })
   }
   const togglePinned = (entryKey: string): void => updatePins((prev) => toggleOrbitPin(prev, entryKey))
+  // 项目重新指向了新文件夹:置顶按分组键存,跟着换键(新键已置顶 = 合并进了一个置顶的项目,留它的)
+  useEffect(() => onProjectRelinked((from, to) => updatePins((prev) => {
+    const was = prev[`ws:${from}`]
+    if (was === undefined) return prev
+    const next = { ...prev }
+    delete next[`ws:${from}`]
+    if (next[`ws:${to}`] === undefined) next[`ws:${to}`] = was
+    return next
+  })), [])
   const activatePinned = (entryKey: string): void => updatePins((prev) => touchOrbitPin(prev, entryKey))
   /** 非 Project 一级行共用同一份菜单状态；`…` 锚到按钮下方，右键锚到指针位置。 */
   const showRowMenu = (at: MenuAt, kind: RowMenu['kind'], slug: string, entryKey: string): void => {
@@ -291,7 +311,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     ...tipProps(() => [name, rowTipLine(kindKey, identKey)], { focus: true }),
     'aria-description': rowTipLine(kindKey, identKey),
   })
-  const agentNames = useMemo(() => agents.map((a) => a.name || a.slug), [agents])
+  const agentNames = useMemo(() => agents.map((a) => agentName(a)), [agents])
 
   // 高亮源 = 当前会话的轨道身份,不另造通道(§3.2)。
   const activeCfg = s.activeId ? s.configBySession[s.activeId] : undefined
@@ -397,7 +417,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const orbitRows: Array<{ key: string; at: number; node: React.ReactNode }> = []
   if (showOrbitBlock) {
     const at = (key: string): number => activityByIdent.get(key) || 0
-    for (const a of agents) orbitRows.push({ key: `agent:${a.slug}`, at: at(`agent:${a.slug}`), node: agentRow(a.slug, a.name) })
+    for (const a of agents) orbitRows.push({ key: `agent:${a.slug}`, at: at(`agent:${a.slug}`), node: agentRow(a.slug, agentName(a)) })
     for (const e of installedEngines) {
       orbitRows.push({ key: `engine:${e.id}`, at: at(`engine:${e.id}`), node: orbitRow({
         rowKey: `engine:${e.id}`, entryKey: `row:engine:${e.id}`, kind: 'engine', slug: e.id, active: activeCfg?.soloEngineId === e.id,
@@ -416,7 +436,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         name: tm.name, sub: t('orbits.tip.team'), at: at(`team:${tm.slug}`), onOpen: () => openTeam(tm.slug),
         lead: (
           <AvatarStack
-            items={tm.members.map((m) => ({ slug: m.slug, name: s.agentDefs.find((a) => a.slug === m.slug)?.name || m.slug, avatarUrl: s.agentAvatars[m.slug] }))}
+            items={tm.members.map((m) => ({ slug: m.slug, name: agentName(s.agentDefs.find((a) => a.slug === m.slug)) || m.slug, avatarUrl: s.agentAvatars[m.slug] }))}
             emoji={isTeamImageAvatar(tm.avatar) ? undefined : tm.avatar || undefined}
             imageUrl={s.teamAvatars[tm.slug]}
             size={avatarSize}
@@ -438,11 +458,20 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   }
 
 
-  /** 「+」与一级行「…」菜单的唯一一份条目:Web 浮层与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。 */
+  const createAgent = (): void => { setPlusMenu(null); openAgentCreation() }
+  const createTeam = (): void => { setPlusMenu(null); setTeamEditor({ team: null }) }
+  const createProject = (): void => {
+    setPlusMenu(null)
+    if (window.tangu?.pickDirectory) { void s.addLocalWorkspace(); return }
+    void askString(t('orbits.create.project'), '', { label: t('orbits.create.projectName') }).then((name) => {
+      if (name) void s.addCloudProject(name)
+    })
+  }
+  /** Web and native menus share the same creation callbacks as the primary action. */
   const plusMenuItems = (): SheetMenuItem[] => [
-    { id: 'new-agent', label: t('orbits.plus.agent'), icon: <UserPlus size={13} />, run: () => { setPlusMenu(null); s.openSettings('agents') } },
-    { id: 'new-team', label: t('orbits.plus.team'), icon: <UsersRound size={13} />, run: () => { setPlusMenu(null); setTeamEditor({ team: null }) } },
-    { id: 'new-project', label: t('orbits.plus.project'), icon: <FolderPlus size={13} />, run: () => { setPlusMenu(null); void s.addLocalWorkspace() } },
+    { id: 'new-agent', label: t('orbits.plus.agent'), icon: <UserPlus size={13} />, run: createAgent },
+    { id: 'new-team', label: t('orbits.plus.team'), icon: <UsersRound size={13} />, run: createTeam },
+    { id: 'new-project', label: t('orbits.plus.project'), icon: <FolderPlus size={13} />, run: createProject },
   ]
   const rowMenuItems = (m: RowMenu): SheetMenuItem[] => {
     const items: SheetMenuItem[] = []
@@ -452,6 +481,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       /* Muse:本地能私聊(10-13),所以也给「新会话(先总结记忆)」;整页的 Muse Space(带待批 / TODO 面板)留一个入口。 */
       if (!cloudAgent(m.slug)) items.push({ id: 'new-session-memory', label: t('orbits.row.newSessionMemory'), icon: <MessageSquarePlus size={13} />, run: () => { setRowMenu(null); rotateSolo('agent', 'muse') } })
       if (hasMuseSpace) items.push({ id: 'open-muse', label: t('orbits.row.openMuseSpace'), icon: <SquarePen size={13} />, run: () => { setRowMenu(null); openMuse() } })
+      items.push({ id: 'muse-settings', label: t('muse.settings'), icon: <Settings size={13} />, run: () => { setRowMenu(null); s.openSettings('agents/ag-special/muse') } })
     }
     if (m.kind === 'agent' && m.slug !== 'muse') {
       // 「新会话(先总结记忆)」= rotate 端点:归档旧私聊 + 建新,后台采记忆(§5.3)。云端 Agent 没有私聊,不给。
@@ -462,6 +492,21 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       if (m.slug !== 'xyra' && m.slug !== s.defaultAgentSlug && !cloudAgent(m.slug)) {
         items.push({ id: 'agent-delete', act: 'agent-delete', danger: true, label: t('orbits.row.deleteAgent'), icon: <Trash2 size={13} />, run: () => { const def = agents.find((a) => a.slug === m.slug) || null; setRowMenu(null); setAgentRemoving(def) } })
       }
+    }
+    if (m.kind === 'gone') {
+      // 墓碑行只靠活动会话撑着:归档掉它们这行就没了,归档区里照样找得到(删 Agent 时引擎已经这么做,这里给删得早的、别的设备上删的收尾)
+      items.push({
+        id: 'archive-gone', label: t('orbits.gone.archive'), icon: <Archive size={13} />,
+        run: () => {
+          setRowMenu(null)
+          const ident = m.entryKey.replace(/^row:gone:/, '')
+          const ids = s.sessions.filter((x) => {
+            const c = s.configBySession[x.id] || x.agent_config
+            return (c?.soloAgentSlug ? `agent:${c.soloAgentSlug}` : c?.soloEngineId ? `engine:${c.soloEngineId}` : c?.teamSlug ? `team:${c.teamSlug}` : '') === ident
+          }).map((x) => x.id)
+          void (async () => { for (const id of ids) await s.archiveSession(id, true) })()
+        },
+      })
     }
     if (m.kind === 'engine') {
       items.push({ id: 'new-session', label: t('orbits.row.newSession'), icon: <MessageSquarePlus size={13} />, run: () => { const id = m.slug; setRowMenu(null); rotateSolo('engine', id) } })
@@ -496,20 +541,32 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const FILTERS = ['all', 'agent', 'team', 'project'] as const
   const pickFilter = (kind: typeof filter): void => { setFilter(kind); localStorage.setItem('forsion_orbits_filter', kind) }
   const newSession = (): void => { s.setSessionMode('work'); openNewChat() }
+  const primaryCreate = {
+    all: { id: 'new-chat', label: t('orbits.row.newSession'), run: newSession },
+    agent: { id: 'new-agent', label: t('orbits.create.agent'), run: createAgent },
+    team: { id: 'new-team', label: t('orbits.create.team'), run: createTeam },
+    project: { id: 'new-project', label: t('orbits.create.project'), run: createProject },
+  }[filter]
 
   return (
     <div className="t2o">
       {/* 手机的整屏列表:新建在悬浮主按钮上(见文末),这里只留分类胶囊。 */}
       {phone && <ListChips label={t('orbits.filter.label')} items={FILTERS.map((id) => ({ id, label: t(`orbits.filter.${id}`) }))} value={filter} onChange={pickFilter} />}
-      {/* New session and creation menu; the four-way filter occupies its own row below. */}
+      {!phone && <div className="t2o-filters t2s-vaultseg" role="tablist" aria-label={t('orbits.filter.label')}>
+        <div className="t2s-vaultseg-thumb" style={{ transform: `translateX(${FILTERS.indexOf(filter) * 100}%)` }} />
+        {FILTERS.map((kind) => <button key={kind} role="tab" type="button"
+          data-filter={kind} aria-selected={filter === kind} className={filter === kind ? 'on' : undefined}
+          onClick={() => pickFilter(kind)}>{t(`orbits.filter.${kind}`)}</button>)}
+      </div>}
+      {/* The selected category controls the primary creation action; + keeps all three shortcuts. */}
       {!phone && <div className="t2o-head">
         <div className="t2s-special-group">
           <div className="t2s-special-row">
             {/* 尺寸由 `.t2o .t2s-special-ic > svg` 的 --t2s-icon 接管,故不传 size(传了也无效)。
-                data-act = 台架锚(check:newtab):文案随语言与改版变,台架别按文字找它。 */}
-            <button type="button" className="t2s-special" data-act="new-chat" onClick={newSession}>
+                data-act follows the action; all keeps the existing check:newtab anchor. */}
+            <button type="button" className="t2s-special" data-act={primaryCreate.id} onClick={primaryCreate.run}>
               <span className="t2s-special-ic"><SquarePen /></span>
-              <span className="t2s-special-title">{t('orbits.row.newSession')}</span>
+              <span className="t2s-special-title">{primaryCreate.label}</span>
             </button>
             <button
               type="button"
@@ -520,13 +577,6 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
             ><Plus size={14} /></button>
           </div>
         </div>
-      </div>}
-
-      {!phone && <div className="t2o-filters t2s-vaultseg" role="tablist" aria-label={t('orbits.filter.label')}>
-        <div className="t2s-vaultseg-thumb" style={{ transform: `translateX(${FILTERS.indexOf(filter) * 100}%)` }} />
-        {FILTERS.map((kind) => <button key={kind} role="tab" type="button"
-          data-filter={kind} aria-selected={filter === kind} className={filter === kind ? 'on' : undefined}
-          onClick={() => pickFilter(kind)}>{t(`orbits.filter.${kind}`)}</button>)}
       </div>}
 
       {/* 项目轨道 + 上面的轨道行:整段复用 SidebarPane(折叠持久化 / 多选 / 右键菜单全白拿;activity 排序下组拖拽禁用)。 */}
@@ -579,7 +629,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
         />
       </div>
 
-      {phone && <ListFab label={t('orbits.row.newSession')} icon={<SquarePen />} onClick={newSession} onMenu={(at) => { setRowMenu(null); setPlusMenu(at) }} />}
+      {phone && <ListFab label={primaryCreate.label} icon={<SquarePen />} onClick={primaryCreate.run} onMenu={(at) => { setRowMenu(null); setPlusMenu(at) }} />}
 
       {plusMenu && webPlusMenu && (
         <OverlayAt className="ctx-menu" x={plusMenu.x} y={plusMenu.y} onClick={(e) => e.stopPropagation()}>
@@ -594,7 +644,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       )}
       {agentRemoving && (
         // 删掉的正是当前私聊的 Agent → 换到新对话,别让人继续往已删的 Agent 发消息(同删团队)
-        <AgentRemoveDialog agent={agentRemoving} onClose={() => setAgentRemoving(null)}
+        <AgentUninstallDialog slug={agentRemoving.slug} name={agentName(agentRemoving)} onClose={() => setAgentRemoving(null)}
           onDone={() => { if (s.activeId && s.configBySession[s.activeId]?.soloAgentSlug === agentRemoving.slug) openNewChat() }} />
       )}
       {teamEditor && (

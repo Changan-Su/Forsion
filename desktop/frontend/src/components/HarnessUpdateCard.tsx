@@ -6,6 +6,7 @@ import { showDetails } from '../stores/detailsSubject'
 import { getAgentHarness, rollbackHarnessEntry, type HarnessJournalLine } from '../services/backendService'
 import { harnessChangeState, HARNESS_CHANGED_EVENT, type HarnessChange } from '../services/harnessUpdates'
 import { targetForSession } from '../services/engine/targets'
+import { agentName } from '../agentName'
 import './selfUpdates.css'
 
 registerMessages({
@@ -57,7 +58,7 @@ export function HarnessUpdateRows({ changes, sessionId }: { changes: HarnessChan
       const state = journal ? harnessChangeState(journal, change) : null
       return <article className="self-row" key={change.rev} data-harness-update={change.rev} data-harness-state={state || undefined}>
         <NotebookPen size={15} className="self-row-ic" />
-        <div className="self-row-kind human-scope">{names.find((a) => a.slug === change.agent)?.name || change.agent} · {t(`harness.act.${change.action}`)} · {t(state === 'undone' ? 'harness.undone' : 'harness.applied')}</div>
+        <div className="self-row-kind human-scope">{agentName(names.find((a) => a.slug === change.agent)) || change.agent} · {t(`harness.act.${change.action}`)} · {t(state === 'undone' ? 'harness.undone' : 'harness.applied')}</div>
         <div className="self-row-main">
           <p><strong>{change.title}</strong></p>
           <p>{change.body}</p>

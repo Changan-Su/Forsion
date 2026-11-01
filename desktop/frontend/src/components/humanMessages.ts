@@ -72,4 +72,11 @@ registerMessages({
   'human.file.memory.title': { zh: '关于我', en: 'About me' },
   'human.file.memory.caption': { zh: '你自己的本子 · 原 USER.md', en: 'Your own notes · Formerly USER.md' },
   'human.file.memory.empty': { zh: '关于你自己的事写在这里，所有 Agent 都会读到。', en: 'Write about yourself here. Every Agent reads it.' },
+  // 修改历史里每一笔的来源(引擎 HumanChange.source)
+  'human.source.remember': { zh: '{agent} 记下', en: 'Saved by {agent}' },
+  'human.source.dream': { zh: '整理记忆时', en: 'While tidying memory' },
+  'human.source.move': { zh: '从 {agent} 的记忆挪来', en: "Moved from {agent}'s memory" },
+  'human.source.promote': { zh: '从 {agent} 的记忆交给所有 Agent', en: "From {agent}'s memory, now asked of every agent" },
+  'human.source.user': { zh: '你从回执撤销', en: 'You undid it from a chat receipt' },
+  'human.portraitOverBudget': { zh: '超出 2000 字的部分 Agent 看不到', en: 'Agents only see the first 2,000 characters' },
 })

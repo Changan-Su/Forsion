@@ -795,6 +795,8 @@ const RULES: Rule[] = [
 // ── 解析 ────────────────────────────────────────────────────────────────────
 
 export interface CapabilityQuery {
+  /** Explicit capability from a registered single-inference plugin source. */
+  thinkingLevels?: readonly ThinkingLevel[];
   /** 端点根(直连的 provider.baseUrl / 托管的 default_base_url)。 */
   baseUrl?: string;
   /** provider id / 名。 */
@@ -825,6 +827,8 @@ function pathOf(baseUrl: string | undefined): string {
 
 /** 端点 + 模型 → 能力。永远返回一条(兜底 prefix),调用方无需判空。 */
 export function resolveModelCapability(q: CapabilityQuery): ModelCapability {
+  if (q.thinkingLevels?.length) return { rule: 'plugin', format: 'none', maxTokensField: 'max_tokens',
+    levels: Object.fromEntries(q.thinkingLevels.filter(isThinkingLevel).map(level => [level, level])) };
   const host = hostOf(q.baseUrl);
   const urlPath = pathOf(q.baseUrl);
   const model = q.modelId || '';

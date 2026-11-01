@@ -14,7 +14,7 @@ const listeners = vi.hoisted(() => [] as Array<(s: unknown, prev: unknown) => vo
 vi.mock('../../stores/appStore', () => ({
   useApp: Object.assign((sel: (s: typeof state) => unknown) => sel(state), { subscribe: (fn: (s: unknown, prev: unknown) => void) => { listeners.push(fn); return () => {} } }),
 }))
-vi.mock('../../stores/automationStore', () => ({ useAutomation: (sel: (s: { refreshNonce: number }) => unknown) => sel({ refreshNonce: 0 }), sessionForTrigger: () => null }))
+vi.mock('../../stores/automationStore', () => ({ useAutomation: (sel: (s: { refreshNonce: number; triggers: never[] }) => unknown) => sel({ refreshNonce: 0, triggers: [] }), sessionForTrigger: () => null }))
 vi.mock('../../services/backendService', () => ({ getAutomationExecutions: vi.fn(), getAutomationRuns: vi.fn(), getHistorianActivity: vi.fn() }))
 vi.mock('../../i18n', () => ({ useI18n: () => ({ t: (k: string) => k }), registerMessages: () => {} }))
 vi.mock('@lcl/engine', () => ({ Skeleton: () => React.createElement('i', { className: 'sk' }) }))

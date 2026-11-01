@@ -13,6 +13,7 @@ import { thinkingLabel } from '../components/thinkingLabel'
 import { AgentAvatar } from '../components/AgentAvatar'
 import { homeTarget } from '../services/engine/targets'
 import { CALL_ENDED_BACKGROUND, CALL_TEXT_FRESH_MS, endCall, getCall, getCallError, getCallPresence, onCallEvent, postCallEvent, sendCallText, setCallMic, setCallPresence, setCallSpeaker, startCall, subscribeCall, toggleMute, updateCallRun, type StartCallOptions } from '../services/realtimeCall'
+import { agentName } from '../agentName'
 import './voiceCall.css'
 
 registerMessages({
@@ -94,7 +95,7 @@ function CallCard({ sessionId, params, onClose }: { sessionId: string; params: V
   const agentSlug = typeof params.agentSlug === 'string' ? params.agentSlug : ''
   const agent = useApp((s) => s.agentDefs.find((a) => a.slug === agentSlug))
   const avatar = useApp((s) => (agentSlug ? s.agentAvatars[agentSlug] : undefined))
-  const name = agent?.name || 'Tangu'
+  const name = agentName(agent) || 'Tangu'
   const effLevel = level || agent?.thinkingLevel || 'medium'
 
   useEffect(() => {

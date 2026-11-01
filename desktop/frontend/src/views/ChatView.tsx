@@ -6,7 +6,7 @@ import type { AgentConfig, UiMessage } from '../../../../tangu-agent/src/contrac
 import type { FailedSend } from '../tangu/store/failedSend'
 import { Composer2 } from './chat2/Composer2'
 import { AgentSelectStrip } from '../components/AgentSelectStrip'
-import { displaySessionTitle } from '../sessionTitle'
+import { displaySessionTitle, soloSessionTitle } from '../sessionTitle'
 import { ProjectSelector } from '../components/ProjectSelector'
 import { RunLocationPicker, useRunPickerVisible } from '../components/RunLocationPicker' // P1-K7a
 import { useRemoteNewChatWorkspaces } from '../stores/newChatWorkspaces'
@@ -32,6 +32,7 @@ import { useHumanAckVersion } from '../components/HumanUpdateCard'
 import { creationCardsSupported, useSessionCreation } from './chat2/CreationCards'
 import { TodoList } from '../components/InquiryCard'
 import { useMusePendingApprovals, useMusePendingTodos } from './chat2/MuseDm'
+import { useMusePendingCards } from './chat2/MuseCards'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
 import { CHILD_UPDATE_OPEN, ChildFromLine, ChildSessionsPill } from './chat2/ChildSessions'
 import { RunStatsLine } from './chat2/RunStatsLine'
@@ -60,7 +61,7 @@ import { useChildChat } from '../stores/childChatStore'
 import { ChatCanvas, armCanvasEnter, chatAnchor, useChatCanvasPref, type CanvasAnchor } from './chat2/ChatCanvas'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
-import { speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
+import { effectiveTtsConfig, speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
 import { homeTarget, useComposerRef } from '../services/engine/targets'
 import type { ViewProps } from '@lcl/engine/types'
 import { useShallow } from 'zustand/react/shallow'
@@ -74,6 +75,7 @@ import { selectableChatModels } from './chatModelCatalog'
 import { useChatWaitDetailsEnabled } from '../chatWaitDetails'
 import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
 import { TargetHealthNotice, useComposerReady, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
+import { agentName, agentNames } from '../agentName'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 const EMPTY_MESSAGES: UiMessage[] = []
@@ -382,7 +384,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 否则 EditorialMessage 只能退到「Tangu」,改名后旧对话仍显示基础名。响应 agentDefs,故连上后自动纠正。
   const chatAgentName = curEngineId
     ? s.engines.find((e) => e.id === curEngineId)?.name
-    : (chatAgentSlug ? s.agentDefs.find((a) => a.slug === chatAgentSlug)?.name : undefined)
+    : (chatAgentSlug ? agentName(s.agentDefs.find((a) => a.slug === chatAgentSlug)) : undefined)
   const userName = s.authInfo?.nickname || s.authInfo?.username || undefined
   const userAvatar = s.authInfo?.avatar || undefined
   // 语音消息:该会话 agent 是否开启(voice-message 插件设置驱动);渲染语音条还需配了朗读 TTS 模型。
@@ -418,11 +420,13 @@ export function ChatView({ leaf, params }: ViewProps) {
     if (activeId) void useApp.getState().loadSessionHistory(activeId)
   }, [activeId])
 
+  const soloAgentSlug = activeSession?.agent_config?.soloAgentSlug
+  const soloAgent = soloAgentSlug ? s.agentDefs.find((a) => a.slug === soloAgentSlug) : undefined
   // 每个 leaf 维护自己的标题，避免分屏时误改第一块 Chat tab。会话清单尚未加载但 sessionId 已从
   // Mini handoff 到达时用稳定占位；不能再另挂一段「新对话」标题 effect 与本段来回改名(React #185)。
   useEffect(() => {
-    leaf.setTitle(activeSession?.title ? displaySessionTitle(activeSession.title, t) : (activeId ? 'Tangu Agent' : t('sidebar.newChat')))
-  }, [activeId, activeSession?.title, leaf, t])
+    leaf.setTitle(activeSession?.title ? soloSessionTitle(activeSession.title, soloAgent, t) : (activeId ? 'Tangu Agent' : t('sidebar.newChat')))
+  }, [activeId, activeSession?.title, soloAgent, leaf, t])
 
   // 内容级搜索命中 → 打开会话后滚到那条消息并闪一下(P3)。消息还没到齐时不动手:
   // 历史是异步拉的,早滚一次会落在错的位置;拉完仍找不到 = 命中落在更早的分页里,如实提示而不是假装跳了。
@@ -548,10 +552,11 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 朗读:配置了 TTS 模型才显示入口;点击播放/合成中的消息 = 停止。
   const [tts, setTts] = useState<TtsState>(ttsState())
   useEffect(() => subscribeTts(setTts), [])
-  const ttsEnabled = !!s.desktopConfig?.ttsModelId?.trim()
+  const ttsCfg = effectiveTtsConfig(s.desktopConfig, s.modelsResp, !!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false)
+  const ttsEnabled = !!ttsCfg?.ttsModelId?.trim()
   const speak = (id: string, text: string): void => {
     if (tts?.msgId === id) { stopSpeaking(); return }
-    speakMessage(homeTarget(), s.desktopConfig, id, text).catch((e: any) => {
+    speakMessage(homeTarget(), ttsCfg, id, text).catch((e: any) => {
       s.toast(e?.message === 'EMPTY' ? t('tts.noText') : t('tts.failed', { e: e?.message || e }), true)
     })
   }
@@ -637,13 +642,15 @@ export function ChatView({ leaf, params }: ViewProps) {
   useEffect(() => { if (!railOut) return; const t = setTimeout(() => setRailOut(false), 450); return () => clearTimeout(t) }, [railOut])
   // Muse 私聊:它后台排队的审批也进卡片堆(排在本会话的审批 / 提问之后、任务卡之前)
   const museApprovals = useMusePendingApprovals(mvCfg.soloAgentSlug === 'muse' && !params.childSurface)
+  const museCards = useMusePendingCards(mvCfg.soloAgentSlug === 'muse' && !params.childSurface, activeId, `${activeMessages.length}:${running}`)
   const deckItems = useMemo<DeckItem[]>(() => [
     ...pendingApprovals,
     ...museApprovals.map((info) => ({ kind: 'muse-approval' as const, id: `muse:${info.id}`, messageId: '', info })),
     ...pendingTasks,
     ...pendingHuman.map((h) => (h.agentName || !chatAgentName ? h : { ...h, agentName: chatAgentName })), // 同流里那张的署名
     ...pendingCreations,
-  ], [pendingApprovals, museApprovals, pendingTasks, pendingHuman, pendingCreations, chatAgentName])
+    ...museCards.map((card) => ({ kind: 'muse-card' as const, id: `muse-card:${card.id}`, messageId: '', card })),
+  ], [pendingApprovals, museApprovals, pendingTasks, pendingHuman, pendingCreations, museCards, chatAgentName])
   const deck = deckItems.length ? (
     <ApprovalTray
       // 每个会话一份托盘状态(收起 / 展开项 / 已送出锁),别从上一个会话带过来
@@ -781,7 +788,7 @@ export function ChatView({ leaf, params }: ViewProps) {
                     </> : undefined}
                     avatarUrl={m.role !== 'assistant' ? undefined : (() => {
                       // 群聊发言人:优先 agentId,缺失时按名反查 slug(agentDefs 晚到时自动纠正);仍无则不回退会话默认头像。
-                      const aid = m.agentId || (m.agentName ? s.agentDefs.find((a) => a.name === m.agentName)?.slug : undefined)
+                      const aid = m.agentId || (m.agentName ? s.agentDefs.find((a) => agentNames(a).includes(m.agentName!))?.slug : undefined)
                       if (aid) return s.agentAvatars[aid]
                       if (m.agentName) return undefined
                       return curEngineId ? undefined : chatAgentAvatar

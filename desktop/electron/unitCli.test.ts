@@ -1,14 +1,16 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { promisify } from 'node:util'
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join, relative, resolve } from 'node:path'
+import { mkdtemp, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { dirname, join, relative, resolve } from 'node:path'
 import { tmpdir } from 'node:os'
 import { build } from 'esbuild'
+import { packageDigest } from '../../unit/releases'
 
 const exec = promisify(execFile)
 let root: string, scratch: string, main: string, file: string
 const children = new Set<ChildProcess>()
+const sealed: string[] = []
 const env = { ...process.env }
 delete env.UNIT_PORT
 
@@ -29,22 +31,23 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   for (const child of children) await stop(child)
+  for (const dir of sealed.splice(0)) await exec('chmod', ['-R', 'u+w', dir])
 })
 afterAll(async () => { await rm(root, { recursive: true, force: true }) })
 
 async function cli(...args: string[]) {
   return (await exec(process.execPath, [main, ...args], { cwd: scratch || root, env, timeout: 15_000 })).stdout
 }
-const status = async () => JSON.parse(await cli('status', file))
-async function start() {
-  const child = spawn(process.execPath, [main, 'run', file], { cwd: scratch, env, stdio: ['ignore', 'pipe', 'pipe'] })
+const status = async (config = file) => JSON.parse(await cli('status', config))
+async function start(config = file) {
+  const child = spawn(process.execPath, [main, 'run', config], { cwd: scratch, env, stdio: ['ignore', 'pipe', 'pipe'] })
   children.add(child)
   let output = ''
   child.stdout!.on('data', (chunk) => { output += chunk })
   child.stderr!.on('data', (chunk) => { output += chunk })
   await expect.poll(async () => {
     if (child.exitCode !== null) throw new Error(`Unit exited before ready: ${output}`)
-    return (await status()).running
+    return (await status(config)).running
   }, { timeout: 10_000 }).toBe(true)
   return child
 }
@@ -82,6 +85,14 @@ async function fixture(id: string, version: string, failStart = false) {
   return dir
 }
 const service = async (port: number, id = 'service') => (await fetch(`http://127.0.0.1:${port}/api/${id}`)).json()
+/** The directory a host would mount read-only; afterEach restores it so the scratch tree can be removed. */
+async function sealedFixture(id: string, version: string, failStart = false) {
+  const dir = await fixture(id, version, failStart)
+  sealed.push(dir)
+  await exec('chmod', ['-R', 'a-w', dir])
+  return dir
+}
+const configuredPaths = async (config: string) => JSON.parse(await readFile(config, 'utf8')).plugins.map((p: { path: string }) => p.path)
 
 describe('Unit update CLI', () => {
   it('updates a copied package in the same Unit process and persists it across restarts', async () => {
@@ -137,6 +148,61 @@ describe('Unit update CLI', () => {
       await expect(cli('update', ...args)).rejects.toThrow('Usage: node main.mjs update <unit.json> <plugin-id> <package-path>')
     }
     await expect(cli('update', file, '../service', 'package')).rejects.toThrow('Invalid plugin id')
+    await expect(cli('stage', file, 'package', '--reference')).rejects.toThrow('--reference applies to install and update')
     expect((await status()).running).toBe(false)
   })
+})
+
+describe.skipIf(process.platform === 'win32')('Unit package references', () => {
+  it('runs two instances from one read-only directory and updates one by switching its path', async () => {
+    const peer = join(scratch, 'peer/unit.json')
+    await cli('init', dirname(peer), '--port', '0')
+    const v1 = await sealedFixture('service', '1.0.0'), v2 = await sealedFixture('service', '2.0.0')
+    const broken = await sealedFixture('service', '3.0.0', true), newcomer = await sealedFixture('newcomer', '1.0.0')
+    const shared = await Promise.all([v1, v2, broken, newcomer].map((dir) => realpath(dir)))
+    const digests = () => Promise.all(shared.map(packageDigest)), before = await digests()
+    for (const config of [file, peer]) {
+      expect(JSON.parse(await cli('install', config, v1, '--reference'))).toEqual({ id: 'service', version: '1.0.0', path: shared[0], reference: true })
+      expect(await configuredPaths(config)).toEqual([shared[0]])
+    }
+    const child = await start()
+    await start(peer)
+    const a = await status(), b = await status(peer)
+    expect(a.pid).not.toBe(b.pid)
+    expect(await service(a.port)).toMatchObject({ version: '1.0.0', pid: a.pid })
+    expect(await service(b.port)).toMatchObject({ version: '1.0.0', pid: b.pid })
+
+    // Both failures reach the installer's cleanup, which must never touch a package it did not copy.
+    await expect(cli('install', file, newcomer, '--reference')).rejects.toThrow('Stop the Unit')
+    await expect(cli('update', file, 'service', broken, '--reference')).rejects.toThrow('Rejected CLI fixture activation')
+    expect(await service(a.port)).toMatchObject({ version: '1.0.0', pid: a.pid })
+
+    expect(JSON.parse(await cli('update', file, 'service', v2, '--reference'))).toEqual({ id: 'service', version: '2.0.0', path: shared[1], reference: true })
+    expect(await service(a.port)).toMatchObject({ version: '2.0.0', pid: a.pid })
+    expect(await service(b.port)).toMatchObject({ version: '1.0.0', pid: b.pid })
+    expect(await configuredPaths(file)).toEqual([shared[1]])
+    expect(await configuredPaths(peer)).toEqual([shared[0]])
+
+    await stop(child)
+    await start()
+    expect(await service((await status()).port)).toMatchObject({ version: '2.0.0' })
+    expect(await service(b.port)).toMatchObject({ version: '1.0.0', pid: b.pid })
+    expect(await digests()).toEqual(before)
+    for (const config of [file, peer]) await expect(stat(join(dirname(config), 'plugins'))).rejects.toMatchObject({ code: 'ENOENT' })
+  }, 40_000)
+
+  it('treats an unreadable reference as unknown and leaves the configuration alone', async () => {
+    const v1 = await sealedFixture('service', '1.0.0'), next = await sealedFixture('service', '2.0.0')
+    await cli('install', file, v1, '--reference')
+    const config = await readFile(file, 'utf8')
+    await expect(cli('install', file, join(scratch, 'not-mounted'), '--reference')).rejects.toThrow('ENOENT')
+    await rename(v1, v1 + '.not-mounted')
+    await expect(cli('install', file, next, '--reference')).rejects.toThrow('ENOENT')
+    await expect(cli('disable', file, 'service')).rejects.toThrow('ENOENT')
+    await expect(cli('run', file)).rejects.toThrow('ENOENT')
+    expect(await readFile(file, 'utf8')).toBe(config)
+    await rename(v1 + '.not-mounted', v1)
+    await start()
+    expect(await service((await status()).port)).toMatchObject({ version: '1.0.0' })
+  }, 25_000)
 })

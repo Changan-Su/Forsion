@@ -39,7 +39,7 @@ export interface UnifiedPipeHandle {
   /** 全文命中跳转(评审 G4-01:全智库搜索 / 标签面板点命中):按文档序找第一处命中(needles 依次尝试,整串优先),
    *  命中藏在会话折叠(标题小节 / 列表子项)里先展开,再选中命中文字并亮到阅读位置。找不到返回 false(同块锚)。
    *  tag=true:needle 是 `#标签`,按标签边界匹配(`#work` 不落在 `#workshop` 上)。 */
-  revealText?: (needles: string[], opts?: { tag?: boolean; flash?: boolean }) => boolean
+  revealText?: (needles: string[], opts?: { tag?: boolean; flash?: boolean; nth?: number }) => boolean
   /** 让正文拿焦点、**不动选区**(评审 G4-06:从快速查找 / 日记进入已有笔记后直接打字)。编辑器还没建好 → false
    *  (调用方重试);只读 / 已退休 → true(没什么可做,别让调用方空转)。 */
   focusBody?: () => boolean
@@ -323,7 +323,7 @@ export function unifiedRevealBlock(path: string, id: string, flash = false): boo
 
 /** 搜索 / 标签命中:让 path 上那篇把第一处命中亮出来。没有 v4 实例、或那篇里没有命中 → false
  *  (调用方 amadeusNav.revealTextWhenReady 据此重试几拍再放弃,同块锚)。 */
-export function unifiedRevealText(path: string, needles: string[], opts?: { tag?: boolean; flash?: boolean }): boolean {
+export function unifiedRevealText(path: string, needles: string[], opts?: { tag?: boolean; flash?: boolean; nth?: number }): boolean {
   for (const h of byRecency(path)) if (h.revealText) return h.revealText(needles, opts)
   return false
 }

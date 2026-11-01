@@ -121,3 +121,26 @@ it('CAS 被拒(过期 base 的 writeTextFile / 过期版本的 dbWriteCas)= 没�
   expect(await runtime.vaultFace.call(IPC.dbWriteCas, ['T.db', saved.data, saved.version], 'phone-1')).toMatchObject({ ok: true })
   expect(remote).toEqual([{ channel: IPC.dbChange, payload: 'T.db', origin: 'phone-1' }])
 })
+
+it('drawing CAS has one winner for a shared base and notifies peer windows and Unit clients, excluding its origin', async () => {
+  const { IPC } = await import('@amadeus-shared/ipc')
+  const { textFingerprint } = await import('@amadeus-shared/writeConflict')
+  const file = 'board.excalidraw.md'
+  await fs.writeFile(path.join(local, file), 'base')
+  const outcomes = await Promise.all([
+    invoke(IPC.drawingWrite, file, 'desktop', textFingerprint('base')),
+    runtime.vaultFace.call(IPC.drawingWrite, [file, 'unit', textFingerprint('base')], 'phone-1'),
+  ])
+  expect(outcomes.filter(r => r.ok)).toHaveLength(1)
+  expect(outcomes.filter(r => !r.ok)).toHaveLength(1)
+  const winner = await fs.readFile(path.join(local, file), 'utf8')
+  expect(remote).toEqual([{ channel: IPC.externalChange, payload: file, origin: winner === 'desktop' ? 'host' : 'phone-1' }])
+  expect(env.sent.map(e => e.win)).toEqual(winner === 'desktop' ? [2] : [1, 2])
+  expect(env.sent.every(e => e.channel === IPC.externalChange)).toBe(true)
+  remote.length = 0
+  env.sent.length = 0
+  await fs.unlink(path.join(local, file))
+  expect(await invoke(IPC.drawingWrite, file, 'resurrection', textFingerprint(winner))).toEqual({ ok: false, current: null })
+  expect(remote).toEqual([])
+  expect(env.sent).toEqual([])
+})

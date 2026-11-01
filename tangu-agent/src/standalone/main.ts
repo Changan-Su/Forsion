@@ -28,40 +28,10 @@ import { activateAllPlugins } from '../plugins/bootstrap.js';
 import { seedExampleCommand } from '../services/customCommands.js';
 import { seedBuiltinSkills } from '../skills/localSkills.js';
 import { remoteLockGuard } from './remoteLockGuard.js'; // P1-K2
-import { drainRunsForExit } from '../services/agentLoop.js';
+import { activeRunCount, drainRunsForExit } from '../services/agentLoop.js';
 import { attachRealtimeVoice } from '../services/realtimeVoice.js';
 
-/** --print-config:打印生效配置(config.json + env 叠加),token/apiKey 脱敏(仅留尾 4 位)。 */
-function maskSecret(s?: string): string {
-  if (!s) return '';
-  return s.length <= 8 ? '***' : `***${s.slice(-4)}`;
-}
-function printEffectiveConfig(cfg: StandaloneConfig): void {
-  const providers = loadProviders(cfg).map((p) => ({
-    providerId: p.providerId, baseUrl: p.baseUrl, apiKey: maskSecret(p.apiKey),
-    modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, protocol: p.protocol,
-  }));
-  const mcp = Object.entries(loadMcpConfig().mcpServers).map(([name, s]: [string, any]) => ({
-    name, transport: s.transport || (s.command ? 'stdio' : 'http'), enabled: s.enabled !== false,
-  }));
-  const special = loadSpecialAgentsConfig();
-  const out = {
-    configFile: configFile(),
-    cloud: { url: cfg.cloudUrl, token: maskSecret(cfg.token), defaultModel: cfg.defaultModelId || '' },
-    database: { url: cfg.databaseUrl, dataDir: cfg.dataDir },
-    server: { port: cfg.port, host: cfg.host, userId: cfg.userId },
-    sandbox: cfg.sandbox,
-    providers,
-    mcp,
-    engines: loadEngines().map((e) => ({ id: e.id, name: e.name, command: e.command })),
-    enginePrefs: loadEnginePrefs(),
-    specialAgents: {
-      historian: { enabled: special.historian.enabled, modelId: special.historian.modelId },
-      muse: { enabled: special.muse.enabled, modelId: special.muse.modelId },
-    },
-  };
-  process.stdout.write(JSON.stringify(out, null, 2) + '\n');
-}
+import { printEffectiveConfig } from './diagnostics.js';
 
 /** 引擎版本标识:优先构建注入的 TANGU_WORKER_VERSION(git sha / build id,见 Dockerfile.standalone),
  *  回退 package.json 版本(发版随产品同步 bump,「引擎桌面同版发」)。/health 与 --version 共用。 */
@@ -123,8 +93,8 @@ async function main(): Promise<void> {
   await runBaseSchema(); // base schema 先于 runMigration(后者对 chat_sessions 做 ALTER)
   const { brain, providers } = buildBrain(cfg);
 
-  // MCP(~/.tangu/mcp.json):启动时连一次,server 集进程级冻结(prompt 缓存纪律,配置变更须重启)。
-  const mcp = createMcpManager();
+  // MCP:启动加载;用户配置只在没有活动 run 时重连,每个 run 的工具快照保持冻结。
+  const mcp = createMcpManager(undefined, { canReload: () => activeRunCount() === 0 });
   bootPhase = `mcp(${enabledServers(loadMcpConfig()).map(([name]) => name).join(', ') || '无'})`; // 唯一全由用户配置决定的启动步骤,点名是哪几个
   await mcp.start();
   bindPluginMcp(mcp); // 插件自带的 MCP server(manifest mcpServers)随插件启停加进 / 移出这个 manager
@@ -138,11 +108,7 @@ async function main(): Promise<void> {
   // 同理播种一条示例自定义命令进 ~/.tangu/commands/(目录已存在就跳过,不覆盖用户的)。
   seedExampleCommand();
 
-  // 插件:激活全部（tool provider 全局注册 + 收集路由挂载器）。tool provider 注册无需 deps()，先于
-  // createTanguModule 安全;路由挂载须**在 createTanguModule 之后**（彼时 configureTangu/deps() 才就绪）。
-  bootPhase = 'plugins';
-  const mountPluginRoutes = await activateAllPlugins((id) => { bootPhase = `plugin:${id}`; });
-
+  // 先装配宿主依赖:插件注册模型来源等能力会校验真实 profile,不能在 configureTangu 前激活。
   const mod = createTanguModule({
     host,
     brain,
@@ -151,6 +117,8 @@ async function main(): Promise<void> {
     mcp,
     engines,
   });
+  bootPhase = 'plugins';
+  const mountPluginRoutes = await activateAllPlugins((id) => { bootPhase = `plugin:${id}`; });
   mountPluginRoutes({ userRouter: mod.userRouter, dataRouter: mod.dataRouter, adminRouter: mod.adminRouter });
 
   bootPhase = 'migration';

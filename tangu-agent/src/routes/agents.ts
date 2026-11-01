@@ -1,7 +1,7 @@
 /**
  * Normal Agent CRUD。handler 自带 authMiddleware。
  *   GET    /agent/agents                列出全部 agent 定义
- *   POST   /agent/agents { name, systemPrompt, ... }   新建（slug 由 name 派生或显式给）
+ *   POST   /agent/agents { name | nameZh | nameEn, systemPrompt, ... }   新建（slug 显式给或由英文名推;只有中文名 → 400）
  *   PATCH  /agent/agents/:slug          更新(只改提交了的字段;按 slug 串行化、被并发删掉 → 404)
  *   DELETE /agent/agents/:slug          删除
  *
@@ -13,7 +13,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentExistsError, type AgentPatch, deleteAgent, removeAgentKeepFiles, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN } from '../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentExistsError, type AgentPatch, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugFromNames, isValidSlug, AGENT_MAX_ITERATIONS_MIN } from '../agents/agentRegistry.js';
 import {
   cloudAgentsEnabled, cloudListAgents, cloudGetAgent, cloudSaveAgent, cloudPatchAgent, cloudDeleteAgent,
   cloudSaveAgentAvatar, cloudReadAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentsMeta, cloudWriteAgentsMeta,
@@ -27,6 +27,8 @@ import { listLoadoutTools } from '../tools/toolRegistry.js';
 import { createMemoryRepository, MemoryRepositoryError } from '../services/memoryRepository.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
+import { agentUninstallPreview, uninstallAgent } from '../services/agentUninstall.js';
+import { trashDir } from '../services/trash.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
 import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates, resolveHarnessCandidate, candidateNeedsUser, candidateAdoptable, HarnessConflict, HarnessCandidateError } from '../agents/harnessStore.js';
 import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
@@ -87,16 +89,20 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
   if (!cloud && !ensureLocal(res)) return;
   try {
     const b = req.body || {};
-    if (!b.name || !b.systemPrompt) return res.status(400).json({ detail: 'name 与 systemPrompt 必填' });
+    const name = String(b.name || b.nameZh || b.nameEn || '');
+    if (!name || !b.systemPrompt) return res.status(400).json({ detail: 'name 与 systemPrompt 必填' });
     const uid = req.user!.userId;
     const scope = cloud ? null : agentSyncScope(deps().brain.agentFiles, uid);
     if (!cloud && b.cloudSync && !scope) return res.status(400).json({ detail: 'Sign in to a Forsion account before enabling cloud sync' });
     const getDef = (s: string): Promise<unknown> => (cloud ? cloudGetAgent(uid, s) : getAgent(s));
-    // POST=新建语义,但 saveAgent 是按 slug 的 upsert:派生 slug 已存在时若直接传入会**静默覆盖**
-    // 既有 agent(中文等非 ASCII 名全部派生为兜底 'agent',极易相撞)→ 这里先唯一化,撞了递增后缀。
-    // 想更新请走 PATCH /agent/agents/:slug。
-    let slug = typeof b.slug === 'string' && isValidSlug(b.slug) ? b.slug : slugify(String(b.name));
-    if (await getDef(slug)) {
+    // id = 文件夹名,用户填的要合法、不能撞;没填才由名字推(推出来的撞了递增后缀,saveAgent 是按 slug 的 upsert,
+    // 不唯一化会**静默覆盖**既有 agent)。全中文推不出来:让用户填,不转拼音。想更新请走 PATCH /agent/agents/:slug。
+    const explicit = b.slug != null && b.slug !== '';
+    if (explicit && (typeof b.slug !== 'string' || !isValidSlug(b.slug))) return res.status(400).json({ detail: 'Invalid agent id', error: 'invalid_slug' });
+    if (explicit && (await getDef(b.slug))) return res.status(409).json({ detail: 'An agent with this id already exists', error: 'exists' });
+    let slug: string = explicit ? b.slug : slugFromNames(b.nameEn, name);
+    if (!slug) return res.status(400).json({ detail: 'A Chinese-only name needs an explicit agent id', error: 'slug_required' });
+    if (!explicit && (await getDef(slug))) {
       const base = slug.slice(0, 60);
       let n = 2;
       while (await getDef(`${base}-${n}`)) n++;
@@ -106,7 +112,10 @@ router.post('/agent/agents', authMiddleware, async (req: AuthRequest, res) => {
     if (Number(b.maxIterations) > 0 && Number(b.maxIterations) < AGENT_MAX_ITERATIONS_MIN) return res.status(400).json({ detail: `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN}` });
     const input = {
       slug,
-      name: String(b.name),
+      name,
+      nameZh: b.nameZh != null ? String(b.nameZh) : undefined,
+      nameEn: b.nameEn != null ? String(b.nameEn) : undefined,
+      namePref: b.namePref != null ? b.namePref : undefined,
       description: b.description,
       model: b.model,
       tools: Array.isArray(b.tools) ? b.tools : undefined,
@@ -153,11 +162,14 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     if (!cloud && b.cloudSync && !scope) return res.status(400).json({ detail: 'Sign in to a Forsion account before enabling cloud sync' });
     if (Number(b.maxIterations) > 0 && Number(b.maxIterations) < AGENT_MAX_ITERATIONS_MIN) return res.status(400).json({ detail: `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN}` });
     // 只放**提交了的**字段(undefined = 未提交 → 保留现值)。「算不算提交」逐字段沿用旧口径:
-    // name / description / model / thinkingLevel / approvalMode / systemPrompt / soul 与三个开关按 != null(传 null = 没提交);
+    // name / nameZh / nameEn / namePref / description / model / thinkingLevel / approvalMode / systemPrompt / soul 与三个开关按 != null(传 null = 没提交);
     // maxIterations / toolsMode / toolsList 按 !== undefined(null = 显式清除);两份名单 null 或数组才算;
     // 本地 cloudSync 只能经这里打开(旧口径 `!!b.cloudSync || cur.cloudSync`),关同步走同步权限那条。
     const fields: AgentPatch = {
       name: b.name != null ? String(b.name) : undefined,
+      nameZh: b.nameZh != null ? String(b.nameZh) : undefined,
+      nameEn: b.nameEn != null ? String(b.nameEn) : undefined,
+      namePref: b.namePref != null ? b.namePref : undefined,
       description: b.description != null ? b.description : undefined,
       model: b.model != null ? b.model : undefined,
       tools: Array.isArray(b.tools) ? b.tools : undefined,
@@ -203,14 +215,29 @@ router.delete('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, re
   }
   if (!ensureLocal(res)) return;
   try {
-    // ?keepFiles=1:只从名册移除,文件挪进 agents/.removed/(返回 keptAt,桌面再决定要不要进废纸篓)
-    const result = req.query.keepFiles === '1' ? await removeAgentKeepFiles(req.params.slug) : { ok: await deleteAgent(req.params.slug) };
-    if (!result.ok && req.params.slug === MUSE_AGENT_SLUG) {
+    // 进回收站(services/agentUninstall):?deleteChats=1 连私聊一起删,缺省归档。
+    // ?keepFiles=1 是旧版桌面的参数:照旧回 keptAt(回收站里那份目录),它勾了「同时删除相关文件」会再移进系统废纸篓。
+    const r = await uninstallAgent(req.user!.userId, deps().profile.appId, req.params.slug, { deleteChats: req.query.deleteChats === '1' });
+    if (r.busy) return res.status(409).json({ detail: 'run_active' }); // 一起解散的团队还在跑(同删团队)
+    if (!r.ok && req.params.slug === MUSE_AGENT_SLUG) {
       return res.status(400).json({ detail: 'Muse 正在启用中,请先在 设置·后台智能体 关闭 Muse 再删除' });
     }
-    res.json(result);
+    const dir = r.entry?.items.find((i) => i.role === 'dir');
+    res.json({ ok: r.ok, ...(r.entry ? { trashId: r.entry.id } : {}), ...(req.query.keepFiles === '1' && dir ? { keptAt: path.join(trashDir(), r.entry!.id, dir.stored) } : {}) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete agent failed' });
+  }
+});
+
+/** 卸载确认框要列的东西:大小、私聊数、云端副本、团队(会不会一起解散)、用到它的自动化;blocked 有值 = 不给删。 */
+router.get('/agent/agents/:slug/uninstall-preview', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const preview = await agentUninstallPreview(req.user!.userId, deps().profile.appId, req.params.slug);
+    if (!preview) return res.status(404).json({ detail: 'Agent not found' });
+    res.json(preview);
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'uninstall preview failed' });
   }
 });
 

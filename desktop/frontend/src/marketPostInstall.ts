@@ -2,6 +2,7 @@
  * 市场装完的收尾,市场与插件引导卡「推荐安装」共用 —— 两处各写一份时,引导卡漏掉了捆绑包的引擎重扫(Codex 评审)。
  * 市场 / 设置是独立浮窗:这里的热重载只刷得动本窗,所以每一类都同时通知其余窗口(announce / requestMainAction)。
  */
+import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { AmadeusPlugin } from '@amadeus/plugins/types'
 import { useApp } from './stores/appStore'
 import { useTheme } from './stores/themeStore'
@@ -20,6 +21,8 @@ export async function afterMarketInstall(
   if (type !== 'amadeus-plugin' || !window.amadeus) return none
   installAmadeusPlugins()
   const { before, after, fresh } = await reloadPluginsAndAnnounce({ also: res?.id ? [res.id] : [] })
+  // 停用状态下卸载时停用记录留着(恢复要原样);从商店重装 = 要用它,打开
+  for (const p of fresh) if (usePluginStore.getState().disabledIds.includes(p.id)) usePluginStore.getState().enable(p.id)
   const engineOf = (list: AmadeusPlugin[]): string[] => list.find((p) => p.id === res?.id)?.bundle?.enginePlugins ?? []
   const had = engineOf(before), has = engineOf(after)
   // 捆绑包内嵌引擎插件:新的靠重扫即时生效;装之前就有的(升级 / 重装 / 这一版删掉了)旧代码还在引擎里,要重启。

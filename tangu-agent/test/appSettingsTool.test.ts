@@ -1,3 +1,4 @@
+import { activeRunCount, startRun, abortRun, waitForRunSettlement } from '../src/services/agentLoop.js';
 /**
  * agent 读、改本机设置(app_settings / update_app_settings,方案 9.3 的 S2a):
  *   ① 可见性:只给前台 host run、全 deferred;子代理 / 讨论 / Muse / 自动化 / 临时成员 / 沙箱不可见;通道来的 run 只有读工具;
@@ -14,7 +15,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { configureTangu } from '../src/seams/runtime.js';
+import { configureTangu, deps } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
@@ -448,5 +449,39 @@ describe('④ 审批', () => {
     expect(r.result).toContain('Remote sessions cannot change app settings');
     expect(readFileSync(cfgPath(), 'utf8')).toBe(before);
     expect((await executeTool(call('app_settings', { section: 'tts' }), { ...base(), remote } as ToolContext)).result).toContain('can read them but not change them');
+  });
+  it('MCP 管理写入逐次走控制面，读免批，完全放行免批，远程写硬拒', async () => {
+    seed();
+    const mcp = (action: string) => call('manage_mcp', { action, name: 'x', config: { command: 'test', env: { TOKEN: 'SECRET' } }, reason: 'requested' });
+    for (const mode of ['readonly', 'auto-edit']) {
+      const a = await gate(mcp('add'), { approvalMode: mode }, 'approve_always');
+      expect(a.asked.map(x => x.reason?.kind)).toEqual(['control']);
+      expect(a.asked[0].preview).not.toContain('SECRET');
+      expect((await gate(mcp('add'), { approvalMode: mode })).asked).toHaveLength(1);
+      expect((await gate(mcp('list'), { approvalMode: mode })).asked).toEqual([]);
+    }
+    expect((await gate(mcp('add'), { approvalMode: 'full-auto' })).asked).toEqual([]);
+    const denied = await gate(mcp('add'), { approvalMode: 'full-auto', remote: { via: 'lan', marked: false } });
+    expect(denied.d.action).toBe('reject');
+    expect(denied.asked).toEqual([]);
+  });
+
+});
+
+
+describe('MCP run admission barrier', () => {
+  it('starts reconciliation before registering a new run and allows immediate abort while connecting', async () => {
+    let release!: () => void;
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    const counts: number[] = [];
+    configureTangu({ ...deps(), mcp: { reloadConfig: () => { counts.push(activeRunCount()); return ready; } } as any });
+    try {
+      startRun('MCP-admission');
+      expect(counts[0]).toBe(0); // Before the fix, the first reload happened with the new run already counted.
+      expect(activeRunCount()).toBe(1);
+      abortRun('MCP-admission');
+      expect(await waitForRunSettlement('MCP-admission', 1500)).toBe(true);
+      expect(activeRunCount()).toBe(0);
+    } finally { release(); }
   });
 });

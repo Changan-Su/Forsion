@@ -1,0 +1,40 @@
+/* 网页卡片卡身(components/WebCard.tsx)。只用 token、跟主题走;状态点复用「后台」卡的 .t2-bg-dot。 */
+.wc { display: flex; gap: 14px; padding: 2px 2px 0; font-size: var(--ui-font-body); color: var(--text); min-width: 0; }
+.wc-thumb { flex: 0 0 172px; height: 108px; border-radius: var(--radius-sm); overflow: hidden; background: var(--overlay-light); }
+.wc-thumb img { width: 100%; height: 100%; object-fit: cover; object-position: top center; display: block; }
+.wc-thumb.ph { display: grid; place-items: center; color: var(--text-faint, var(--text-muted)); }
+.wc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.wc-top { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.wc-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wc-pill {
+  margin-left: auto; flex-shrink: 0; display: inline-flex; align-items: center; gap: 5px;
+  font-size: var(--ui-font-caption); padding: 2px 9px; border-radius: var(--radius-pill);
+  background: var(--overlay-light); color: var(--text-light); white-space: nowrap;
+}
+.wc-pill.ok { color: var(--green); }
+.wc-pill.muted { color: var(--text-faint, var(--text-muted)); }
+.wc-pill.danger { color: var(--danger); }
+.wc-link { display: flex; align-items: center; gap: 6px; margin-top: 3px; color: var(--text-light); font-size: var(--ui-font-meta); min-width: 0; }
+.wc-link svg { flex-shrink: 0; }
+.wc-link span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wc-link.dead span { text-decoration: line-through; color: var(--text-faint, var(--text-muted)); }
+.wc-link.faint span { color: var(--text-faint, var(--text-muted)); }
+.wc-meta { margin-top: 3px; color: var(--text-faint, var(--text-muted)); font-size: var(--ui-font-caption); overflow-wrap: anywhere; }
+.wc-acts { display: flex; align-items: center; gap: 7px; margin-top: auto; padding-top: 10px; flex-wrap: wrap; }
+.wc-acts .sp { flex: 1; }
+.wc .btn.sm svg { margin-right: 4px; vertical-align: -2px; }
+.wc-more.btn.sm { width: 28px; padding: 0; display: inline-grid; place-items: center; align-self: stretch; }
+.wc-more.btn.sm svg { margin: 0; }
+
+/* 列表里的一行(D):小缩略图 + 两行字 + ⋯ */
+.wc-row { display: flex; align-items: center; gap: 12px; padding: 9px 0; min-width: 0; font-size: var(--ui-font-body); color: var(--text); }
+.wc-row + .wc-row { box-shadow: 0 -1px 0 var(--divider, var(--overlay-light)); }
+.wc-row .wc-thumb { flex: 0 0 76px; height: 48px; }
+.wc-row .wc-more.btn.sm { align-self: center; height: 28px; }
+
+/* 窄栏:缩略图叠到上面 */
+@container (max-width: 680px) {
+  .wc { flex-direction: column; }
+  .wc-thumb { flex-basis: auto; width: 100%; height: 132px; }
+  .wc-row .wc-thumb { width: 76px; height: 48px; }
+}

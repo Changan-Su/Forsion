@@ -7,11 +7,9 @@
  * JS 壳页(正文由脚本渲染,静态 HTML 里几乎没字)在输出尾注里直说:正文没拿到、怎么读到(本会话够得着浏览器工具才提它)、
  * 重抓没用;大输出经 outputPersist 落盘。
  */
-import { request as httpRequest, Agent as HttpAgent, type IncomingMessage } from 'node:http';
-import { request as httpsRequest, Agent as HttpsAgent } from 'node:https';
-import { createUnzip, createBrotliDecompress } from 'node:zlib';
-import net from 'node:net';
-import { resolvePublicHttpUrl } from '../../core/util/urlSafety.js';
+import { fetchPublic, readBodyCapped, httpDeadline } from '../../core/util/publicHttp.js';
+export { fetchPublic, readBodyCapped } from '../../core/util/publicHttp.js';
+export type { FetchPublicInit, FetchedPage } from '../../core/util/publicHttp.js';
 import { formatToolOutput } from '../outputPersist.js';
 import { resolveTools, isDeferredIn, type ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
@@ -21,106 +19,6 @@ const FETCH_TIMEOUT_MS = 20_000;
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_CHARS = 20_000;
 const HARD_MAX_CHARS = 60_000;
-const MAX_REDIRECTS = 5;
-
-export interface FetchPublicInit {
-  method?: string;
-  headers?: Record<string, string>;
-  signal?: AbortSignal;
-}
-export interface FetchedPage {
-  status: number;
-  statusText: string;
-  headers: IncomingMessage['headers'];
-  /** 已按 content-encoding 解压的正文流。 */
-  body: NodeJS.ReadableStream;
-  /** 底层响应。不读正文(错误路径/读够了)必须调 destroy()。 */
-  raw: IncomingMessage;
-  /** 一把掐断解压器 + 底层 socket(只 destroy raw 拦不住解压器里已缓冲的膨胀)。 */
-  destroy: () => void;
-  finalUrl: URL;
-}
-
-type Resolver = typeof resolvePublicHttpUrl;
-
-// 专用 Agent,不复用连接:① Node 22.21+ 的 NODE_USE_ENV_PROXY 让**全局** Agent 走
-// HTTP_PROXY —— 代理连接不经 lookup 钩子,钉 IP 会被整个绕开,自建 Agent 不受该开关影响;
-// ② keepAlive:false 保证不同 pin 之间不共享 socket 池。
-const pinAgentHttp = new HttpAgent({ keepAlive: false });
-const pinAgentHttps = new HttpsAgent({ keepAlive: false });
-
-/** 单跳请求:连接一律用**校验时解析到的地址**(lookup 钩子),不做第二次 DNS —— 关死 rebinding;
- *  SNI/证书仍按主机名走,TLS 校验不受影响。lookup 回调必须异步调(同步回调撞上连接失败会把
- *  socket error 抛成未处理异常而不是 reject)。 */
-function requestPinned(url: URL, addresses: string[], method: string, headers: Record<string, string>, signal: AbortSignal | undefined): Promise<IncomingMessage> {
-  return new Promise((resolve, reject) => {
-    const isHttps = url.protocol === 'https:';
-    const req = (isHttps ? httpsRequest : httpRequest)(url, {
-      method,
-      headers,
-      signal,
-      agent: isHttps ? pinAgentHttps : pinAgentHttp,
-      lookup: (_host, options, cb) => {
-        process.nextTick(() => {
-          const list = addresses.map((a) => ({ address: a, family: net.isIP(a) }));
-          if (options && (options as { all?: boolean }).all) (cb as (e: null, r: typeof list) => void)(null, list);
-          else cb(null, list[0]!.address, list[0]!.family);
-        });
-      },
-    }, resolve);
-    req.on('error', reject);
-    req.end();
-  });
-}
-
-/** 手动跟随重定向,**每一跳重新解析+校验并钉住地址**;303(非 GET/HEAD)与 POST+301/302 按
- *  Fetch 语义改写 GET 并剥 body 头;重定向响应体立即 destroy 不占 socket。只支持无 body 请求
- *  (web_fetch 只发 GET;要带 body 的场景走 customTools.safeFetch)。
- *  resolver 参数是测试接缝(本地起真 http server + 假解析器即可离线验证钉 IP/重定向链)。 */
-export async function fetchPublic(rawUrl: string, init: FetchPublicInit, resolver: Resolver = resolvePublicHttpUrl): Promise<FetchedPage> {
-  let { url: current, addresses } = await resolver(rawUrl);
-  let method = (init.method ?? 'GET').toUpperCase();
-  const headers: Record<string, string> = { 'accept-encoding': 'gzip, deflate, br', ...init.headers };
-  for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const res = await requestPinned(current, addresses, method, headers, init.signal);
-    const status = res.statusCode ?? 0;
-    if ([301, 302, 303, 307, 308].includes(status)) {
-      const loc = res.headers.location;
-      res.destroy(); // 不读重定向响应体 —— 恶意慢流不许占着 socket
-      if (!loc) throw new Error(`HTTP ${status} without Location header`);
-      if (i === MAX_REDIRECTS) break; // 到限即停,不再浪费一次解析
-      const next = await resolver(new URL(loc, current).toString());
-      // 跨源跳转剥敏感头(web_fetch 自己不发这些;fetchPublic 是导出原语,按 Fetch 惯例守住)
-      if (next.url.host !== current.host) {
-        for (const k of Object.keys(headers)) if (/^(authorization|cookie|proxy-authorization)$/i.test(k)) delete headers[k];
-      }
-      ({ url: current, addresses } = next);
-      if ((status === 303 && method !== 'GET' && method !== 'HEAD') || ((status === 301 || status === 302) && method === 'POST')) {
-        method = 'GET';
-        for (const k of Object.keys(headers)) if (/^content-(type|length|encoding)$/i.test(k)) delete headers[k];
-      }
-      continue;
-    }
-    // 服务器压缩了就解(node http 不像 fetch 会自动解压)
-    const enc = String(res.headers['content-encoding'] ?? '').toLowerCase();
-    let body: NodeJS.ReadableStream = res;
-    if (enc === 'gzip' || enc === 'x-gzip' || enc === 'deflate') body = res.pipe(createUnzip());
-    else if (enc === 'br') body = res.pipe(createBrotliDecompress());
-    const destroy = (): void => {
-      if (body !== res) (body as unknown as { destroy: () => void }).destroy();
-      res.destroy();
-    };
-    if (body !== res) {
-      // pipe() 不传播两端错误:源错 → 带 error 掐解压器(消费方才会 reject 而不是挂死);
-      // 解压器错(坏 gzip/被 destroy)→ 掐 socket。error 监听同时兜住「无消费方」的错误路径
-      // (非 2xx 早退),坏压缩流不能变成进程级崩溃。
-      res.on('error', (e) => (body as unknown as { destroy: (err?: Error) => void }).destroy(e));
-      body.on('error', () => res.destroy());
-    }
-    return { status, statusText: res.statusMessage ?? '', headers: res.headers, body, raw: res, destroy, finalUrl: current };
-  }
-  throw new Error(`Too many redirects (>${MAX_REDIRECTS})`);
-}
 
 const ENTITIES: Record<string, string> = {
   '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&apos;': "'", '&nbsp;': ' ',
@@ -338,32 +236,6 @@ export function htmlToText(html: string): string {
   return convertHtml(html).text;
 }
 
-/** 读正文到字节上限(Content-Length 不可信);超限 page.destroy() **一把掐断解压器+socket**
- *  —— 只掐 socket 拦不住解压器里已缓冲的膨胀,gzip 炸弹会在 cap 后继续吐几十 MB。
- *  settled 后不再追加 chunk;destroy 无 error 收在 'close'(不挂死)。导出供测试。 */
-export function readBodyCapped(page: FetchedPage, maxBytes: number): Promise<{ buf: Buffer; truncated: boolean }> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let total = 0;
-    let settled = false;
-    const done = (err?: Error): void => {
-      if (settled) return;
-      settled = true;
-      if (err) reject(err);
-      else resolve({ buf: Buffer.concat(chunks), truncated: total > maxBytes });
-    };
-    page.body.on('data', (chunk: Buffer) => {
-      if (settled) return;
-      total += chunk.byteLength;
-      chunks.push(chunk);
-      if (total > maxBytes) { page.destroy(); done(); }
-    });
-    page.body.on('end', () => done());
-    page.body.on('close', () => done());
-    page.body.on('error', (err: Error) => done(err));
-  });
-}
-
 /** JS 壳启发(纯函数供测试)。两条任一成立,且都要求几乎没有链接:
  *  ① 内联脚本很重、整页静态文字极少。**脚本量**是关键信号 —— 大段内联 CSS 的短静态页不会误报(style 不计入)。
  *  ② 页面在加载脚本(内联或外链都算),而 <title> 之外**一个字都没有**。正文靠外链脚本拉的壳内联脚本只有几百字符,① 认不出:
@@ -441,13 +313,11 @@ export const webFetchProvider: ToolProvider = {
           HARD_MAX_CHARS,
         );
 
-        const ac = new AbortController();
-        const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
-        const onOuterAbort = (): void => ac.abort();
-        ctx.signal?.addEventListener('abort', onOuterAbort, { once: true });
+        const deadline = httpDeadline(ctx.signal, FETCH_TIMEOUT_MS);
         try {
           const page = await fetchPublic(raw, {
-            signal: ac.signal,
+            signal: deadline.signal,
+            crossOrigin: 'public-read',
             headers: { 'user-agent': 'Mozilla/5.0 (compatible; TanguAgent/1.0)', accept: 'text/html,application/json,text/*;q=0.9,*/*;q=0.5' },
           });
           const { finalUrl } = page;
@@ -460,7 +330,7 @@ export const webFetchProvider: ToolProvider = {
             page.destroy();
             return `Error: 不支持的内容类型 ${ctype || '(unknown)'}(只抓文本/HTML/JSON)`;
           }
-          const { buf, truncated } = await readBodyCapped(page, MAX_BODY_BYTES);
+          const { buf, truncated } = await readBodyCapped(page, MAX_BODY_BYTES, deadline.signal);
           const body = buf.toString('utf-8');
           const isHtml = /html/.test(ctype);
           const conv = isHtml ? convertHtml(body) : null;
@@ -475,11 +345,10 @@ export const webFetchProvider: ToolProvider = {
           const label = `web_fetch-${finalUrl.hostname.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
           return await formatToolOutput(ctx, label, header + clipped);
         } catch (e: any) {
-          if (ac.signal.aborted && !ctx.signal?.aborted) return `Error: 抓取超时(${FETCH_TIMEOUT_MS / 1000}s)`;
+          if (deadline.timedOut()) return `Error: 抓取超时(${FETCH_TIMEOUT_MS / 1000}s)`;
           return `Error: ${e?.message || e}`;
         } finally {
-          clearTimeout(timer);
-          ctx.signal?.removeEventListener('abort', onOuterAbort);
+          deadline.dispose();
         }
       },
     },

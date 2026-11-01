@@ -55,10 +55,29 @@ describe('provider-auth.json 读改写', () => {
     expect(JSON.parse(readFileSync(real, 'utf8')).xai).toMatchObject({ access_token: 'x2', refresh_token: 'r2' });
   });
 
-  it('文件坏了(半截 JSON)照旧当空处理:登录要能把它救回来', () => {
+  const bakDir = (): string => join(dirname(providerAuthFile()), 'config-backup');
+  const bads = (): string[] => readdirSync(bakDir()).filter((n) => n.startsWith('provider-auth.json.bad-'));
+
+  it('文件坏了(半截 JSON)又没有备份:当空处理,登录要能把它救回来;坏文件另存 .bad-* 不删', () => {
     saveProviderCred('xai', tok('x1'));
     writeFileSync(providerAuthFile(), '{"xai":', 'utf8');
+    expect(loadProviderCreds()).toEqual({});
     saveProviderCred('codex', tok('c1'));
     expect(Object.keys(loadProviderCreds())).toEqual(['codex']);
+    expect(bads()).toHaveLength(1);
+    expect(readFileSync(join(bakDir(), bads()[0]), 'utf8')).toBe('{"xai":');
+  });
+
+  it('写前留 .bak(0600);零字节时读 / 续期都先从 .bak 恢复,别家的登录不丢', () => {
+    saveProviderCred('xai', tok('x1'));
+    saveProviderCred('codex', tok('c1'));
+    const bak = join(bakDir(), 'provider-auth.json.bak');
+    expect(Object.keys(JSON.parse(readFileSync(bak, 'utf8')))).toEqual(['xai']);
+    if (process.platform !== 'win32') expect(statSync(bak).mode & 0o777).toBe(0o600);
+    writeFileSync(providerAuthFile(), '', 'utf8');
+    updateProviderCred('xai', (cur) => ({ ...cur!, access_token: 'x2' }));
+    expect(loadProviderCreds()).toMatchObject({ xai: { access_token: 'x2' } });
+    expect(bads()).toHaveLength(1);
+    expect(readdirSync(bakDir())).toContain('provider-auth.json.recovered');
   });
 });

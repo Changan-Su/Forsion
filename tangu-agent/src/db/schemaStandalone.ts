@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS chat_sessions (
   model_id VARCHAR(128),
   archived BOOLEAN NOT NULL DEFAULT FALSE,
   emoji VARCHAR(32),
+  title_manual BOOLEAN NOT NULL DEFAULT FALSE,
+  emoji_manual BOOLEAN NOT NULL DEFAULT FALSE,
   agent_config JSONB,
   todos JSONB,
   project_path TEXT,

@@ -15,7 +15,7 @@ export function starterSteps(starter: Starter | undefined, t: (key: string) => s
 
 /** One actionable reason per step, shared by the outline and save checklist. */
 export function stepIssue(s: StepDraft, kind: string, catalog: AutomationActionCatalogItem[]): string | null {
-  if (s.type === 'notify') return s.title.trim() ? null : 'notify'
+  if (s.type === 'notify' || s.type === 'remind') return s.title.trim() ? null : 'notify'
   if (s.type === 'agent_run') return !s.agentSlug ? 'agent' : !s.prompt.trim() ? 'prompt' : null
   if (s.type === 'db_row_add' || s.type === 'db_row_edit') {
     if (!/\.db$/i.test(s.dbPath.trim())) return 'table'

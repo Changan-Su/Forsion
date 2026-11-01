@@ -350,3 +350,22 @@ export function OverlayAt({
     </div>
   )
 }
+
+/** DOM-owned popovers share the same exit CSS as OverlayAt. Cleanup runs on the
+ * live surface immediately; only an inert visual copy survives until it fades. */
+export function removeOverlayWithExit(el: HTMLElement): void {
+  if (!el.isConnected) { el.remove(); return }
+  const ghost = el.cloneNode(true) as HTMLElement
+  const inputs = el.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')
+  ghost.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((g, i) => { g.value = inputs[i]?.value ?? g.value })
+  ghost.removeAttribute('id')
+  ghost.querySelectorAll('[id]').forEach((n) => n.removeAttribute('id'))
+  ghost.setAttribute('aria-hidden', 'true')
+  ghost.dataset.lclExit = ''
+  ghost.inert = true
+  ghost.style.pointerEvents = 'none'
+  el.replaceWith(ghost)
+  const animations = ghost.getAnimations?.() ?? []
+  if (!animations.length) ghost.remove()
+  else void Promise.allSettled(animations.map((a) => a.finished)).then(() => ghost.remove())
+}

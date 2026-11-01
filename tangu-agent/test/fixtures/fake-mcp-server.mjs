@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+// Invoke with node (also imported by Vitest's module runner).
 /**
  * 假 MCP server(src/mcp/manager.test.ts 与 live 台架 `--only mcp` 共用)。两种用法:
  *   - stdio 子进程:`node fake-mcp-server.mjs`(env FAKE_MCP_TAG 区分实例;FAKE_MCP_TOOLS 逗号分隔的工具名覆写 echo 的名字)

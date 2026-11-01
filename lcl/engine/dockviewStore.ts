@@ -226,6 +226,7 @@ export function captureSideWidths(api: DockviewApi): void {
 }
 
 type SizableGroup = { api: { setSize: (s: { width?: number; height?: number }) => void; width?: number; height?: number; setConstraints?: (c: { minimumWidth?: number; maximumWidth?: number; minimumHeight?: number; maximumHeight?: number }) => void } }
+const sideLocks = new WeakMap<SizableGroup, number>()
 
 /** 临时锁住指定侧栏的宽度(min=max=目标宽),让 close 释放的空白只被中间主区吸收 ——
  *  Dockview 默认把腾出的宽度按比例摊给所有组,侧栏会「突然变宽」而剩下的主区纹丝不动。
@@ -235,16 +236,43 @@ function lockSides(api: DockviewApi, sides: ('left' | 'right')[], keepCurrent = 
   for (const s of sides) {
     const g = (panelsAt(api, s)[0] as { group?: SizableGroup } | undefined)?.group
     if (!g) continue
+    const owners = sideLocks.get(g) ?? 0
+    sideLocks.set(g, owners + 1)
+    locked.push(g)
+    if (owners) continue // another split/toggle still owns these constraints
     // keepCurrent:钉「此刻的宽」= 用户要的「侧栏纹丝不动」。收栏那条路径必须钉目标宽 —— 它随后
     // 就要 pinSides 纠正漂移,钉当前宽会把漂移一起锁死。
     const w = (keepCurrent ? g.api.width : 0) || sideTargetWidth(api, s)
     try { g.api.setConstraints?.({ minimumWidth: w, maximumWidth: w }) } catch { /* 跨版本兜底 */ }
-    locked.push(g)
   }
-  return () => { for (const g of locked) { try { g.api.setConstraints?.({ minimumWidth: 0, maximumWidth: Number.MAX_SAFE_INTEGER }) } catch { /* ignore */ } } }
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    for (const g of locked) {
+      const owners = (sideLocks.get(g) ?? 1) - 1
+      if (owners) { sideLocks.set(g, owners); continue }
+      sideLocks.delete(g)
+      try { g.api.setConstraints?.({ minimumWidth: 0, maximumWidth: Number.MAX_SAFE_INTEGER }) } catch { /* ignore */ }
+    }
+  }
 }
 /** 收起一侧期间锁住**另一**侧(空白只给主区,免另一侧变宽再被 pinSides 弹回 = 收栏闪屏)。 */
 const lockOtherSide = (api: DockviewApi, side: 'left' | 'right'): (() => void) => lockSides(api, [side === 'left' ? 'right' : 'left'])
+
+/** Dockview defaults to distributing a new split across every sibling, including shell
+ * sidebars. Lock them before adding the group so only Main gives up space; otherwise
+ * onDidLayoutChange also persists that system redistribution as a user resize. */
+function addPanelPreservingSides(api: DockviewApi, options: Parameters<DockviewApi['addPanel']>[0]): IDockviewPanel {
+  const split = (options.params as PanelMeta | undefined)?.__loc === 'main' && options.position?.direction && options.position.direction !== 'within'
+  const release = split ? lockSides(api, ['left', 'right'], true) : () => {}
+  // A horizontal split adds another minimum-width group. If locked shell widths
+  // cannot fit it, let Dockview resize the sides rather than overflowing the window.
+  if (split && (options.position?.direction === 'right' || options.position?.direction === 'left')
+    && api.minimumWidth + DV_GROUP_MIN > api.width) release()
+  try { return api.addPanel(options) }
+  finally { if (split) setTimeout(release, 180) }
+}
 
 /** rAF 把某组的一个维度(width|height)从 from 平滑补间到 to(ease-out cubic),done 收尾。
  *  无 rAF(测试)时直接收尾。 */
@@ -361,7 +389,7 @@ export function dropAllowed(api: DockviewApi, panelId: string, target: DropTarge
  *  position 另给落点时按它开(见 besidePanePosition)。 */
 function openTabBeside(api: DockviewApi, beside: IDockviewPanel, type: string, params: Record<string, unknown>, position?: Record<string, unknown>): Leaf {
   const def = getView(type)
-  const panel = api.addPanel({
+  const panel = addPanelPreservingSides(api, {
     id: def?.singleton && !api.getPanel(type) ? type : nextId(api, type),
     component: '__frame',
     title: def ? label(def.displayName) : type,
@@ -1403,7 +1431,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 左右侧栏严禁左右分屏(与拖拽路径 dropModel.splitDirection 同一铁律):焦点在侧栏时向右分一律折叠成向下。
     // 底部面板不在此列 —— 它是横着的宽条,左右分屏才是自然动作(≈ VS Code 终端分栏)。
     const inSidebar = __loc === 'left' || __loc === 'right'
-    const panel = api.addPanel({
+    const panel = addPanelPreservingSides(api, {
       id: nextId(api, type),
       component: __loc && __loc !== 'main' ? type : '__frame', // 主区分屏 panel 同样挂 frame 宿主(支持就地切视图);非主区(含 bottom)保持 per-type 组件,与 openView 一致
       title: active.title ?? type,
