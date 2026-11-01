@@ -142,7 +142,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
   useEffect(() => {
     if (!collab || !shareId) { setRelated(null); return }
     let live = true
-    void collab.relatedItems(shareId).then((next) => {
+    void collab.relatedItems?.(shareId).then((next) => {
       if (!live) return
       // 后加的引用不自动带上,只标「新」排最前。第一次打开没有比较的基准,都不算新。
       const seenKey = `amx.share.seen.${shareId}`
@@ -151,7 +151,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
       setFresh(seen ? next.items.filter((i) => !i.included && !seen.includes(i.path)).map((i) => i.path) : [])
       try { localStorage.setItem(seenKey, JSON.stringify(next.items.map((i) => i.path))) } catch { /* 私有模式:下次全部不算新 */ }
       setRelated(next)
-    }).catch(() => { if (live) setRelated(null) }) // 旧服务端没有这个接口:分区不显示
+    }).catch(() => { if (live) setRelated(null) }) // 旧 Extend / 旧服务端没有这个接口:分区不显示
     return () => { live = false }
   }, [collab, shareId])
 
@@ -191,7 +191,7 @@ function ShareCardTarget({ path, localPath, anchor, onClose }: ShareCardProps & 
         if (!alive.current) return
         flip(item.included)
         // 文件刚被移动:清单已过时,按服务端的结果重画。
-        if ((e as { status?: number })?.status === 409) setRelated(await collab.relatedItems(share!.id).catch(() => null))
+        if ((e as { status?: number })?.status === 409) setRelated(await collab.relatedItems!(share!.id).catch(() => null))
         else err(e, t('share.opFailed'))
       })
       .finally(() => alongInFlight.current.delete(item.path))

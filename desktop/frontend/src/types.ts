@@ -936,7 +936,7 @@ declare global {
       setParticipantRole(id: string, userId: string, role: 'editor' | 'viewer', vaultId?: string): Promise<void>
       removeParticipant(id: string, userId: string, vaultId?: string): Promise<void>
       /** 这一页直接引用、不在共享范围里的内容(分享卡「一起共享」)。 */
-      relatedItems(id: string): Promise<{ items: AmadeusRelatedItem[]; subpages: number }>
+      relatedItems?(id: string): Promise<{ items: AmadeusRelatedItem[]; subpages: number }>
       setShareItem(id: string, path: string, included: boolean): Promise<void>
       // 参与者
       sharedWithMe(): Promise<AmadeusSharedItem[]>
