@@ -22,6 +22,7 @@ import { planChatRestore, planSpaceSwitch } from './sessionOpenPlan'
 import { registerSpaces, LAST_EXIT_SPACE, startupSpacePref, resolveStartupTarget, awaitedStartupSpace } from './spaces'
 import { loadUserSpaces, settleAsyncStartupSpace, parkOnStartupFallback, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
 import { installAmadeusPlugins } from './amadeusPlugins'
+import { resetGuide } from '@amadeus/plugins/guideTips'
 import { installTanguProbe } from './tanguProbe'
 import { installBuiltins } from './builtins'
 import { AccountCard } from './components/AccountCard'
@@ -494,6 +495,7 @@ export function installEngine(): void {
   // 商店/成就此前**只有 ribbon 图标一个入口**,⌘K 搜不到 —— 这是「用户发现不了」的一半根因。
   if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'store market marketplace plugin theme skill agent space 商店 应用市场 应用商店 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
+  addCommand({ id: 'guide-reset', title: () => app().tr('guideTips.command'), keywords: 'tips guide onboarding hint reset 上手 提示 引导 重置', run: () => { resetGuide(); app().toast(app().tr('guideTips.resetDone')) } })
   if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => { app().openFeedback() } })
   addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() , invoke: {
     // ⚠️ ≤300 字符(引擎 normalizeUiCommands 的截断上限)。「not documented on the web」那半句是真模型台架量出来的:

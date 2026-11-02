@@ -103,6 +103,7 @@
     "e2e:guide": "node scripts/guide-space.e2e.cjs",
     "e2e:events": "node scripts/events-center.e2e.cjs",
     "check:guide-anchors": "node scripts/guide-space.e2e.cjs --anchors",
+    "check:guide-tips": "node scripts/guide-tips.check.cjs",
     "e2e:penzor": "node scripts/penzor-space.e2e.cjs",
     "e2e:musesettings": "node scripts/muse-settings.e2e.cjs",
     "e2e:modelcatalog": "node scripts/model-catalog.e2e.cjs",

@@ -13,6 +13,7 @@ import { readQuotaPrefs, writeQuotaPrefs, type QuotaAlertPrefs, type QuotaThresh
 import { BUILTIN_STATUS_ITEMS } from '../statusbar/items'
 import { useSbPrefs } from '../statusbar/prefs'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { guideEnabled, resetGuide, setGuideEnabled } from '@amadeus/plugins/guideTips'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { SettingsPage } from './SettingsPage'
 import type { PluginSettingsGroup, PluginSettingsItem } from '../../../shared/settingsPage'
@@ -45,6 +46,8 @@ export function NotificationsTab({ onOpenInbox }: { onOpenInbox?: () => void } =
   const activePlugins = plugins.filter((p) => activeIds.includes(p.id))
   const off = !prefs.enabled
   const [quota, setQuota] = useState(readQuotaPrefs)
+  const [guideOn, setGuideOn] = useState(guideEnabled)
+  const [guideReset, setGuideReset] = useState(false)
   const patchQuota = (p: Partial<QuotaAlertPrefs>): void => { const next = { ...quota, ...p }; setQuota(next); writeQuotaPrefs(next) }
   const eventSwitch = (id: string, title: string, on: boolean): PluginSettingsItem =>
     ({ type: 'switch', id, title, value: on, disabled: off, onChange: (next: boolean) => setEventOn(id, next) })
@@ -70,6 +73,15 @@ export function NotificationsTab({ onOpenInbox }: { onOpenInbox?: () => void } =
           onChange: (v: string) => patchQuota({ threshold: Number(v) as QuotaThreshold }),
         },
         { type: 'switch', id: 'quota-left', title: t('ntf.quota.left'), desc: t('ntf.quota.leftHint'), value: quota.weeklyLeft, disabled: off, onChange: (on: boolean) => patchQuota({ weeklyLeft: on }) },
+      ],
+    },
+    // 插件的上手提示(2026-11-02):不走通知总开关 —— 它不是通知,关了通知也照样能用提示
+    {
+      id: 'guide', icon: 'sparkles', title: t('guideTips.group'), desc: t('guideTips.groupHint'),
+      items: [
+        { type: 'switch', id: 'guide-tips', title: t('guideTips.enable'), value: guideOn, onChange: (on: boolean) => { setGuideEnabled(on); setGuideOn(on) } },
+        { type: 'button', id: 'guide-reset', title: t('guideTips.reset'), desc: guideReset ? t('guideTips.resetDone') : t('guideTips.resetHint'),
+          buttons: [{ label: t('guideTips.resetBtn'), onClick: () => { resetGuide(); setGuideReset(true) } }] },
       ],
     },
     {

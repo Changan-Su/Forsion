@@ -1543,6 +1543,10 @@ export interface PluginEmptyState {
   line?: PluginText
   action?: { label: PluginText; icon?: PluginIconName | (string & {}); run(): void }
   secondary?: { label: PluginText; run(): void }
+  /** Up to 3 example lines under the title (2026-11-02+, first-use guide): show what the user could type here.
+   *  `run` usually fills your input (`box.insertText(…)`) rather than creating anything; `note` is a short grey
+   *  hint on the right. Older hosts ignore it, so the empty state must read fine without them. */
+  examples?: { label: PluginText; note?: PluginText; run(): void }[]
 }
 export interface PluginPopoverOptions {
   /** Draw the popover's content into `el`. Return a cleanup; it runs when the popover closes. */
@@ -1949,6 +1953,18 @@ export interface PluginContext {
     /** 你自己系列里的某条成就:已领取?/ 替用户领取(达成了才领得了,同成就面板的「领取」)。id 不带前缀。 */
     isClaimed?(id: string): boolean
     claim?(id: string): void
+  }
+  /** 上手提示(2026-11-02+):提示本身声明在 manifest `guide.tips`,宿主决定什么时候出(锚点在屏幕上 + `when` 成立 +
+   *  还没会 + 没被关 + 宿主的节奏允许:同一时刻全应用一处、一天最多 3 条、打开后 2 秒、停手 1.5 秒、有弹窗时等着)。
+   *  锚点 = 你自己 View 里的 `data-guide-anchor="<名字>"`,只在你的 View 里找;「会了」= `done` 里任一计数 ≥ 1,
+   *  计数就是 `ctx.achievements.track()`。旧宿主没有:`ctx.guide?.show(…)`。 */
+  guide?: {
+    /** 请宿主出这一条(manifest 里没写 `when` 的提示只能这样出;写了的也能提前叫)。仍走锚点、节奏和记账:已会 / 看过 /
+     *  关掉的不出,条件暂时不满足就等到满足(本次运行内有效)。不认识的 id 什么都不做。 */
+    show(id: string): void
+    /** `waiting` 还没出 / `seen` 用户点过知道了 / `learned` 做过那件事 / `muted` 用户关了这个插件的提示 /
+     *  `off` 用户在设置里关了上手提示,或这台设备读不了记账。 */
+    state(id: string): 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
   }
   /** Tangu 侧的只读探针(2026-08-29+):**当前主区聊天要用的模型** + **模型目录** + **当前 Space id**。
    *  聊天状态住在 Tangu 的 store 里,`ctx.app` 是 Amadeus 的页面/库面 —— 两者不通,所以单开这一截。
@@ -2467,6 +2483,8 @@ export interface AmadeusPlugin {
   changelog?: string
   /** Declarative first-run setup card (manifest `onboarding`; sanitized by the host). */
   onboarding?: PluginOnboardingSpec
+  /** First-use tips (manifest `guide`, 2026-11-02+; sanitized by the host). See `PluginGuideApi`. */
+  guide?: import('@amadeus-shared/ipc').PluginGuideSpec
   /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old,
    *  'invalid' = missing/broken manifest or unreadable main (agent Space / dev source, see `blockedReason`),
    *  'dev-fileext' = dev source declaring `fileExtensions` (unprotected outside the installed plugins dir),
