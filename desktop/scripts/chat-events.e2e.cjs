@@ -359,7 +359,7 @@ async function main() {
     check('Q3 回执后流里留下问答记录(问题 + 我的回答)', /包管理器/.test(askAfter.record) && /pnpm/.test(askAfter.record), JSON.stringify(askAfter))
 
     // ── 场景 F:sketch 卡(agent 在对话流里画可交互 HTML 卡片)
-    // 钉四件:直播上卡(挂 tool_result 非 tool_call)/ 被引擎拒的不画 / 沙箱铁律(仅 allow-scripts
+    // 钉四件:直播上卡(挂 tool_result 非 tool_call)/ 被引擎拒的不画 / 沙箱铁律(仅 allow-scripts allow-forms
     // + 内层 CSP 真断网,在**真 Electron** 里实证而非单测纸面)/ 历史水合 back-fill 卡不丢。
     // sk1 的参数先以 tool_stream 流半截(到 `<scr` 为止,真引擎就是按模型输出切片发的),再隔 3s 才来完整 tool_call:
     // 这 3s 是草稿卡的探针窗(F0a 在 send 返回后立刻量)。半截里 `#skp` 还没被脚本改,所以草稿里应读到 SKETCH-LIVE 而非 -JS。
@@ -520,7 +520,7 @@ async function main() {
     await inlineMessage.scrollIntoViewIfNeeded().catch(() => {})
     await win.waitForTimeout(300)
     await inlineMessage.screenshot({ path: process.env.SKETCH_INLINE_SHOT || '/tmp/sketch-inline-order.png' }).catch(() => {})
-    check('F2 ⚠️沙箱铁律:每张卡 sandbox 恒为仅 allow-scripts', skProbe.sandboxes.length === 5 && skProbe.sandboxes.every((s) => s === 'allow-scripts'), JSON.stringify(skProbe.sandboxes))
+    check('F2 ⚠️沙箱铁律:每张卡 sandbox 恒为仅 allow-scripts allow-forms', skProbe.sandboxes.length === 5 && skProbe.sandboxes.every((s) => s === 'allow-scripts allow-forms'), JSON.stringify(skProbe.sandboxes))
     check('F3 被引擎拒掉的 sketch(isError)不画卡', skProbe.count === 5, `count=${skProbe.count}`)
 
     // 卡内探针:JS 真跑 + 网络真断(内层 CSP 收口;裸 sandbox 是挡不住 fetch 的,此断言在真 Electron 里钉死)。

@@ -43,6 +43,7 @@
   document.addEventListener('click', (event) => {
     if (event.target.closest?.('a[href]')) event.preventDefault()
   }, true)
+  // 卡片脚本照样收得到 submit。真闸是 CSP 的 form-action 'none'(form.submit() 不走这里);这行只省掉被拦时的报错。
   document.addEventListener('submit', (event) => event.preventDefault(), true)
 
   // 直播补丁(10-09,对标 ChatGPT Intelligent UI 的流式组件):宿主把最新 html 发进来,这里**原地**打补丁 —— 不换 srcdoc、不重载。

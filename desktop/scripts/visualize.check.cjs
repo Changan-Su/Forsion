@@ -7,6 +7,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const assert = require('node:assert/strict')
+const http = require('node:http')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
 const ROOT = path.join(__dirname, '..')
 const out = path.resolve(process.env.VISUALIZE_OUT || path.join(ROOT, 'outputs/visualize-acceptance'))
@@ -21,9 +22,33 @@ const message = (id, content) => ({ id: `message-${id}`, role: 'model', content:
 let app, win
 async function main() {
   fs.mkdirSync(out, { recursive: true })
-  const messages = [message('wave', html), message('wave-other', html), message('figures', figuresHtml), message('parts', partsHtml)]
+  // 外发探针:桌面宿主 frame-src 放行 127.0.0.1,没有 form-action 'none' 时表单真能把数据送到这里(10-31 负对照实跑过)。
+  const sinkHits = []
+  const sink = http.createServer((req, res) => { sinkHits.push(req.url); res.end('leaked') })
+  await new Promise((resolve) => sink.listen(0, '127.0.0.1', resolve))
+  const sinkUrl = `http://127.0.0.1:${sink.address().port}/sink`
+  const formHtml = `<ul id="items"></ul>
+<form id="add" action="${sinkUrl}?via=submit"><input id="title" name="title" required><button id="add-btn">添加</button></form>
+<button id="request" type="button">requestSubmit</button><button id="raw" type="button">form.submit</button><button id="bypass" type="button">bypass</button>
+<form id="leak" action="${sinkUrl}?via=bypass"><input name="secret" value="1"></form>
+<script>
+const add = document.getElementById('add'), title = document.getElementById('title')
+add.addEventListener('submit', (event) => {
+  event.preventDefault()
+  const li = document.createElement('li'); li.textContent = title.value
+  document.getElementById('items').append(li); title.value = ''
+})
+document.getElementById('request').onclick = () => add.requestSubmit()
+document.getElementById('raw').onclick = () => { add.action = '${sinkUrl}?via=form.submit'; add.submit() }
+document.getElementById('bypass').onclick = () => {
+  window.addEventListener('submit', (event) => event.stopImmediatePropagation(), true)
+  document.getElementById('leak').requestSubmit()
+}
+</script>`
+  const messages = [message('wave', html), message('wave-other', html), message('figures', figuresHtml), message('parts', partsHtml), message('form', formHtml)]
   if (process.env.LIVE_SKETCH_HTML) messages.push(message('live', fs.readFileSync(process.env.LIVE_SKETCH_HTML, 'utf8')))
   if (process.env.LIVE_FIGURES_HTML) messages.push(message('live-figures', fs.readFileSync(process.env.LIVE_FIGURES_HTML, 'utf8')))
+  if (process.env.LIVE_FORM_HTML) messages.push(message('live-form', fs.readFileSync(process.env.LIVE_FORM_HTML, 'utf8')))
   const stub = await startStubEngine({ sessions: [session], messages, override: async ({ path: p, method }) => {
     if (p === '/agent/runs' && method === 'GET') return { runs: [] }
     if (p.endsWith('/config')) return { agent_config: config }
@@ -69,7 +94,7 @@ async function main() {
     await win.waitForTimeout(600)
     await card.scrollIntoViewIfNeeded()
     assert.equal(await frame.locator('#wave-amplitude').inputValue(), '40')
-    assert.equal(await card.locator('iframe').getAttribute('sandbox'), 'allow-scripts')
+    assert.equal(await card.locator('iframe').getAttribute('sandbox'), 'allow-scripts allow-forms')
     const initialPath = await frame.locator('.wave-line').first().getAttribute('d')
     await frame.locator('#wave-amplitude').fill('70')
     assert.equal(await frame.locator('#wave-amplitude-value').textContent(), '70%')
@@ -220,6 +245,46 @@ async function main() {
       console.log('PASS real-model generated chart and flow: full data, parallel stages and narrow layout')
     }
     assert.deepEqual(errors, [])
+    // <form> 卡:提交有反应(点击 / 回车 / requestSubmit / required 校验都是原生的),但任何写法都发不出去。
+    const form = win.locator('[data-sketch-call-id="form"]')
+    const fm = form.frameLocator('iframe')
+    await fm.locator('#add-btn').click()
+    assert.equal(await fm.locator('#items li').count(), 0, 'required 空值不提交')
+    await fm.locator('#title').fill('交论文')
+    await fm.locator('#add-btn').click()
+    await fm.locator('#title').fill('考试')
+    await fm.locator('#title').press('Enter')
+    await fm.locator('#title').fill('回家')
+    await fm.locator('#request').click()
+    assert.deepEqual(await fm.locator('#items li').allTextContents(), ['交论文', '考试', '回家'])
+    await fm.locator('#title').fill('secret')
+    await fm.locator('#raw').click()
+    await fm.locator('#bypass').click({ timeout: 2000 }).catch(() => {}) // form.submit() 若已带走卡片,这里点不到,由下面的探针判红
+    await win.waitForTimeout(400)
+    assert.deepEqual(sinkHits, [], 'form.submit() 与绕过 runtime 监听都发不出去')
+    assert.equal(await fm.locator('#add').count(), 1, '卡片没有被导航走')
+    console.log('PASS <form> card responds to submit; form.submit() and listener bypass reach nothing')
+
+    if (process.env.LIVE_FORM_HTML) {
+      // 真模型写的表单:每个可见输入框填上,点提交,新内容要出现在卡里。
+      const lf = win.locator('[data-sketch-call-id="live-form"]').frameLocator('iframe')
+      assert.ok(await lf.locator('form').count(), 'model used <form>')
+      const inputs = lf.locator('form input:visible')
+      for (let i = 0; i < await inputs.count(); i++) {
+        const input = inputs.nth(i), type = await input.getAttribute('type')
+        await input.fill(type === 'date' ? '2027-03-01' : type === 'number' ? '7' : '验收事项')
+      }
+      const before = await lf.locator('body').innerText()
+      await lf.locator('form button:not([type="button"]), form input[type="submit"]').first().click()
+      await win.waitForTimeout(300)
+      const after = await lf.locator('body').innerText()
+      assert.notEqual(after, before, 'real model <form> reacted')
+      assert.match(after, /验收事项/)
+      assert.deepEqual(sinkHits, [])
+      await win.locator('[data-sketch-call-id="live-form"]').screenshot({ path: path.join(out, 'live-form.png') })
+      console.log('PASS real-model <form> card adds an entry')
+    }
+
     fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify({ ok: true, liveModel: !!process.env.LIVE_SKETCH_HTML, liveFigures: !!process.env.LIVE_FIGURES_HTML, screenshots: ['light.png', 'dark.png', 'narrow.png', ...['light', 'dark', 'narrow'].flatMap((mode) => ['bar', 'line', 'flow'].map((name) => `${name}-${mode}.png`))], errors }, null, 2))
     console.log(`PASS Visualize acceptance: ${out}`)
   } catch (error) {
@@ -234,6 +299,7 @@ async function main() {
   } finally {
     if (app) await app.close()
     await stub.close()
+    sink.close()
     fs.rmSync(home, { recursive: true, force: true })
   }
 }
