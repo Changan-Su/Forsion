@@ -1,7 +1,7 @@
 /**
  * Chat Box 添加胶囊的真实 CSS 几何契约。
  *
- * A 28px ＋ 平滑展开到 224px，菜单左缘稳定、胶囊与菜单等宽、标签居中。
+ * A 宽栏 28px ＋ 直接展开到 224px，菜单左缘稳定、胶囊与菜单等宽、标签居中。
  * B 一级菜单四个入口；对话 / View 二级菜单带搜索并贴边展开。
  * C 窄容器里展开项完整保留，其他胶囊与次要按钮彻底退出布局；宽容器不误藏。
  *
@@ -32,6 +32,7 @@ function check(name, ok, detail) {
 }
 
 const BASE = fs.readFileSync(path.join(__dirname, '../frontend/src/styles/base.css'), 'utf8')
+const CHATBOX = fs.readFileSync(path.join(__dirname, '../../lcl/components/chatBox.css'), 'utf8')
 const COMPOSER = fs.readFileSync(path.join(__dirname, '../frontend/src/views/chat2/composer2.css'), 'utf8')
 const icon = (klass = '') => `<span class="fake-icon ${klass}"></span>`
 
@@ -40,6 +41,7 @@ const PAGE = `<!doctype html><html><head><meta charset="utf-8"><style>
   --radius-lg:12px; --radius-md:8px; --text:#111; --text-light:#222; --text-muted:#666; --text-faint:#999;
   --accent-ink:#3b5bdb; --font-ui:system-ui; --ease-spring:cubic-bezier(.2,.8,.2,1); --card-shadow:0 8px 28px rgba(0,0,0,.15); }
 ${BASE}
+${CHATBOX}
 ${COMPOSER}
 body { margin:0; font-family:var(--font-ui); }
 button { font:inherit; border:0; }
@@ -99,7 +101,7 @@ button { font:inherit; border:0; }
   const openW = trace.at(-1)[1]
   const mids = trace.filter(([t, w]) => t > 35 && t < 155 && w > closedW + 8 && w < openW - 8).length
   const xs = trace.map((f) => f[2])
-  check('添加胶囊展开有连续宽度动画', mids >= 3, `${closedW.toFixed(1)} → ${openW.toFixed(1)}，中间帧 ${mids}`)
+  check('宽栏添加胶囊直接到位，不补宽度动画', mids === 0, `${closedW.toFixed(1)} → ${openW.toFixed(1)}，中间帧 ${mids}`)
   check('添加菜单锚点不随胶囊横移', Math.max(...xs) - Math.min(...xs) < 3, `漂移 ${(Math.max(...xs) - Math.min(...xs)).toFixed(1)}px`)
 
   await page.evaluate(() => document.querySelectorAll('.add-pill-btn,.composer-menu--add,.add-menu-sub').forEach((el) => el.getAnimations().forEach((a) => a.finish())))
@@ -169,7 +171,7 @@ button { font:inherit; border:0; }
       overflow: row.scrollWidth - row.clientWidth,
     }
   })
-  check('窄宽度展开时只保留当前胶囊与核心动作', narrow.add && narrow.label && !narrow.mode && !narrow.ctx && !narrow.model && !narrow.mic && narrow.send, JSON.stringify(narrow))
+  check('旧版 / 原生回落布局仍可排他展开，紧凑桌面另跑真实组件台架', narrow.add && narrow.label && !narrow.mode && !narrow.ctx && !narrow.model && !narrow.mic && narrow.send, JSON.stringify(narrow))
   check('窄宽度底排不再堆叠或横向溢出', narrow.overflow <= 1, `溢出 ${narrow.overflow}px`)
 
   await page.evaluate(() => {

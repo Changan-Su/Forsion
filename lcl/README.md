@@ -24,6 +24,7 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - `desktop/frontend/src/components/chatbox`：接入共享 `ModelPill` 与宿主实时模型目录的 ChatBox、`useChatBoxSelection`。草稿选择局部保存，用户排序 / 隐藏偏好和模型思考档复用现有选择器。
 - `Composer2`：聊天会话编排器，组合上述基础组件并接入附件、引用、命令、语音、运行状态。首页复用该编排器；Coding 项目创建使用提示表单组件，在创建成功后显式移交模型与思考档。
 - 插件：`ctx.ui.mountChatBox`；详见 [公共契约](../docs/customization/ui-components.md)。
+- 桌面 / Web 卡内容宽 ≤480px 时，模型显示短名称与档位，模型 / 添加 / 模式入口展开不改变宽度；≤260px 时上下文与语音通过添加菜单访问。窄菜单用同层返回并保留完整模型名、审批说明和额度；原生手机沿用自身布局。`desktop` 的 `check:composernarrow` 与 `check:composernarrow:electron` 覆盖真实组件 / 构建后 ChatView。
 
 ## 划线条(Selection bar)
 
@@ -70,6 +71,10 @@ File reading state in Genesis is stored locally by vault, path and view kind in
 After changing file-view mount/restoration behavior, build Desktop and run
 `npm run check:fileviewmemory` (isolated Electron: Space switches, reload, drawing zoom/pan,
 Markdown scroll, image size/pan, PDF page/zoom across pane widths, media position/rate).
+
+Compact desktop/Web Chat Boxes keep trigger widths stable and show a short model/effort label. At a content width of 260px or less, Context/quota and voice remain available in Add. Compact submenus replace their parent, support keyboard entry/return, and keep full model names in the picker and accessible label. Native phone layouts retain their existing presentation. Regression commands: `desktop` → `check:composernarrow` and, after a build, `check:composernarrow:electron`.
+
+`OverlayAt` and `useClampedMenu` accept an optional DOM `boundary`. Portalled menus are clamped to its intersection with the viewport, with width/height caps and the existing cumulative zoom compensation. Callers provide scrolling on constrained surfaces. Omit it to retain viewport placement. Resize and scroll observers are removed on unmount.
 
 `engine/lineSelection.ts` provides opt-in `mountLineSelection(root, options)`. It paints continuous visual-line bands outside the content DOM while preserving native Selection, focus and clipboard behavior. Chat and watched plugin readers mount it through ViewSelectionBar; Markdown editors also supply composition suspension and pending AI ranges. Dispose the handle with its owning view. Custom selection layers and coarse pointers keep native paint. Regression: `desktop` → `npm run check:selectionlines` at 100% and 110% zoom after a fresh build.
 
