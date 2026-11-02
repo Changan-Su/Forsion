@@ -162,6 +162,7 @@ return () => { offTangu?.() }
 
 export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null): {
   getVaultRoot: () => string | null
+  resolveSharedAsset: (vaultRel: string) => string | null
   restartSync: () => Promise<void>
   stopSync: () => Promise<void>
   readExternalPlugins: () => Promise<ExternalPluginSource[]>
@@ -987,6 +988,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
 
   return {
     getVaultRoot: () => vault.getRoot(),
+    resolveSharedAsset: (vaultRel) => cloud?.resolveSharedAsset?.(vaultRel) ?? null,
     /** 登录成功后由 main 调:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)。 */
     restartSync: () => cloud?.restartAllSync() ?? Promise.resolve(),
     stopSync: () => cloud?.stopAllSync() ?? Promise.resolve(),
