@@ -6,7 +6,7 @@
  * 样式全在 sidebar2.css(t2s- 前缀,token 驱动);右键菜单复用 base.css 的 .ctx-menu。
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Bot, GitBranch, Pin, PinOff, Info, NotebookPen, Smile, CircleAlert } from 'lucide-react'
+import { Plus, MoreHorizontal, Pencil, Archive, ArchiveRestore, Trash2, ChevronRight, Folder, FolderOpen, Cloud, FolderPlus, SquarePen, Smartphone, Send, MessagesSquare, MessageSquare, Bot, GitBranch, Pin, PinOff, Info, NotebookPen, Smile, CircleAlert, Check, PanelTop } from 'lucide-react'
 import { SessionIcon, SessionIconPicker } from '../../components/SessionIcon'
 import { folderPadLeft, rowPadLeft } from '@amadeus/lib/treeIndent'
 import { SidebarRow } from '../../components/SidebarRow'
@@ -30,6 +30,7 @@ import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { AttentionDot, StatusMark } from './AttentionDot'
 import { ProjectRelinkDialog, onProjectRelinked, swapKey, useMissingProjects } from './ProjectRelink'
 import { SessionBgMark } from './BackgroundProcs'
+import { EXPAND_STEPS, expandStepOf, expandedExtra, setExpandStep } from './wsExpand'
 import { mergeStatus, nestSessions, rowStatus, type RowStatus, type TreeNode } from './sessionTree'
 import { homeTarget } from '../../services/engine/targets'
 import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
@@ -59,6 +60,9 @@ registerMessages({
   'sidebar.ws.removeFiles': { zh: '同时删除相关文件：项目里的 .tangu 文件夹（Tangu 的指令、技能、计划），移到废纸篓', en: "Also delete related files: the project's .tangu folder (Tangu instructions, skills and plans), moved to the Trash" },
   'sidebar.ws.removeAction': { zh: '移除', en: 'Remove' },
   'sidebar.kids': { zh: '{n} 个子会话 · 点一下收起或展开', en: '{n} child sessions · click to collapse or expand' },
+  'sidebar.showLess': { zh: '收起', en: 'Show less' },
+  'sidebar.ws.openMain': { zh: '在主区打开', en: 'Open in main area' },
+  'sidebar.ws.expandStep': { zh: '每次展开 {n} 条', en: 'Show {n} more per click' },
 })
 
 const COLLAPSE_KEY = 'forsion_tangu_collapsed_projects'
@@ -199,6 +203,9 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     window.addEventListener('tangu:wslimit', onChange)
     return () => window.removeEventListener('tangu:wslimit', onChange)
   }, [])
+  // 「查看更多」分段展开:数存在 wsExpand 的模块级 Map 里(重启收回),这里只负责触发重渲。
+  const [, bumpExpand] = useState(0)
+  const setExtra = (key: string, n: number): void => { if (n > 0) expandedExtra.set(key, n); else expandedExtra.delete(key); bumpExpand((x) => x + 1) }
   const [showArchived, setShowArchived] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed)
   const [kidsCollapsed, setKidsCollapsed] = useState<Set<string>>(loadKidsCollapsed)
@@ -445,6 +452,13 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     if (p.onShowWorkspaceDetails && isProjectWorkspace(w.ws) && [...allSessions, ...allArchived].some((s) => s.project_path === w.ws.path && !s.projectless)) {
       items.push({ id: 'ws-details', act: 'ws-details', label: t('sidebar.ws.details'), icon: <Info size={13} />, run: () => { const ws = w.ws; setWsMenu(null); p.onShowWorkspaceDetails?.(ws) } })
     }
+    if (!p.flat) {
+      items.push({ id: 'ws-open-main', act: 'ws-open-main', label: t('sidebar.ws.openMain'), icon: <PanelTop size={13} />, run: () => { const key = w.ws.key; setWsMenu(null); p.onOpenWorkspace(key) } })
+      const step = expandStepOf(w.ws.key)
+      for (const n of EXPAND_STEPS) {
+        items.push({ id: `ws-step-${n}`, act: 'ws-step', checked: n === step, label: t('sidebar.ws.expandStep', { n }), icon: n === step ? <Check size={13} /> : <span className="t2s-menu-blank" />, run: () => { setExpandStep(w.ws.key, n); setWsMenu(null) } })
+      }
+    }
     if (!w.ws.system) {
       items.push({ id: 'ws-rename', label: t('sidebar.ws.rename'), icon: <Pencil size={13} />, run: () => { const ws = w.ws; setWsMenu(null); startWsRename(ws) } })
       items.push({ id: 'ws-remove', act: 'ws-remove', danger: true, label: t('sidebar.ws.remove'), icon: <Trash2 size={13} />, run: () => { setWsRemoving(w.ws); setWsMenu(null) } })
@@ -678,6 +692,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
               // 平铺(Chat 模式):整组直接铺开,不画组头、不折叠、不限条数(聊天列表就该是整份)。
               if (p.flat) return <div key={ws.key} className="t2s-group-sessions t2s-flat">{nodes.map(renderNode)}</div>
               const isCollapsed = collapsedGroups.has(ws.key)
+              const extra = expandedExtra.get(ws.key) || 0
+              const shown = sessionLimit + extra
               // 组内会话行也认这一组的落点(否则松手落在会话行上 = 什么都没发生)。
               // 刻意不挂 dragLeave:落点粘住最后悬停过的组,松手落在组间那 4.5px 外边距里也照样成立
               // (列表级兜底见 .t2s-scroll 的 onDragOver/onDrop)。
@@ -764,10 +780,13 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                   </div>
                   <AnimatedCollapse open={!isCollapsed}>
                     <div className={`t2s-group-sessions${after && !isCollapsed ? ' drag-over-end' : ''}`} {...dropOn}>
-                      {nodes.slice(0, sessionLimit).map(renderNode)}
-                      {nodes.length > sessionLimit && (
-                        // 数字是**余下几条**(U-37):列表里已经摆着 sessionLimit 条,再报总数会读成「还有这么多」。
-                        <button className="t2s-viewmore" onClick={() => p.onOpenWorkspace(ws.key)}>{t('sidebar.viewMore')} · {nodes.length - sessionLimit}</button>
+                      {nodes.slice(0, shown).map(renderNode)}
+                      {(nodes.length > shown || extra > 0) && (
+                        <div className="t2s-viewmore-row">
+                          {/* 原地分段展开(不再跳主区;进主区走组菜单「在主区打开」)。数字是**余下几条**(U-37)。 */}
+                          {nodes.length > shown && <button className="t2s-viewmore" onClick={() => setExtra(ws.key, extra + expandStepOf(ws.key))}>{t('sidebar.viewMore')} · {nodes.length - shown}</button>}
+                          {extra > 0 && <button className="t2s-viewmore" onClick={() => setExtra(ws.key, 0)}>{t('sidebar.showLess')}</button>}
+                        </div>
                       )}
                     </div>
                   </AnimatedCollapse>
