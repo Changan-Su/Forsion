@@ -33,6 +33,10 @@ export interface AnchorOpts {
   /** 右缘对齐 x(「⋯」按钮下方往左展开的菜单),缺省是左缘对齐 x。 */
   alignEnd?: boolean
   margin?: number
+  /** 横向夹取的左右边界(视口 px),缺省 = 视口。笔记的划线菜单夹在编辑器面板里,不伸到文件树上;
+   *  边界比浮层还窄时退回视口。纵向照旧按视口。 */
+  boundLeft?: number
+  boundRight?: number
 }
 
 /**
@@ -49,8 +53,11 @@ export function clampMenu(
   vh: number,
   opts: AnchorOpts = {},
 ): { left: number; top: number } {
-  const { anchorTop = y, prefer = 'below', center = false, alignEnd = false, margin = 8 } = opts
-  const left = Math.max(margin, Math.min(center ? x - w / 2 : alignEnd ? x - w : x, vw - w - margin))
+  const { anchorTop = y, prefer = 'below', center = false, alignEnd = false, margin = 8, boundLeft, boundRight } = opts
+  let lo = Math.max(0, boundLeft ?? 0)
+  let hi = Math.min(vw, boundRight ?? vw)
+  if (hi - lo < w + 2 * margin) { lo = 0; hi = vw }
+  const left = Math.max(lo + margin, Math.min(center ? x - w / 2 : alignEnd ? x - w : x, hi - w - margin))
   const fits = (t: number): boolean => t >= margin && t + h <= vh - margin
   const below = y
   const above = anchorTop - h
@@ -66,7 +73,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
   ref: RefObject<HTMLDivElement | null>
   style: CSSProperties
 } {
-  const { anchorTop, prefer, center, alignEnd, margin = 8 } = opts
+  const { anchorTop, prefer, center, alignEnd, margin = 8, boundLeft, boundRight } = opts
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ left: x, top: y, maxWidth: undefined as number | undefined })
   useLayoutEffect(() => {
@@ -77,7 +84,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
       // offsetWidth/Height = 未缩放局部 px(且不含 pop-in 的 scale 动画)→ ×z 换到视口 px 再比。
       const vw = window.innerWidth
       const wV = el.offsetWidth * z
-      const v = clampMenu(x, y, wV, el.offsetHeight * z, vw, window.innerHeight, { anchorTop, prefer, center, alignEnd, margin })
+      const v = clampMenu(x, y, wV, el.offsetHeight * z, vw, window.innerHeight, { anchorTop, prefer, center, alignEnd, margin, boundLeft, boundRight })
       // 比视口还宽(窄屏 × 固定宽度浮层):夹取只能贴左边、右边照样被裁 → 给个局部 px 的上限。
       const maxWidth = wV > vw - 2 * margin ? (vw - 2 * margin) / z : undefined
       setPos((prev) => {
@@ -95,7 +102,7 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
       window.removeEventListener(UI_ZOOM_EVENT, apply)
       ro.disconnect()
     }
-  }, [x, y, anchorTop, prefer, center, alignEnd, margin])
+  }, [x, y, anchorTop, prefer, center, alignEnd, margin, boundLeft, boundRight])
   return { ref, style: { left: pos.left, top: pos.top, maxWidth: pos.maxWidth } }
 }
 
@@ -315,6 +322,8 @@ export function OverlayAt({
   center,
   alignEnd,
   margin,
+  boundLeft,
+  boundRight,
   innerRef,
   className,
   style,
@@ -328,13 +337,15 @@ export function OverlayAt({
   center?: boolean
   alignEnd?: boolean
   margin?: number
+  boundLeft?: number
+  boundRight?: number
   /** 调用方也要拿这个 DOM(如判定「点在菜单外」)时传进来;内部定位仍用自己的 ref。 */
   innerRef?: (el: HTMLDivElement | null) => void
   className?: string
   style?: CSSProperties
   children?: ReactNode
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className' | 'children'>) {
-  const p = useClampedMenu(x, y, { anchorTop, prefer, center, alignEnd, margin })
+  const p = useClampedMenu(x, y, { anchorTop, prefer, center, alignEnd, margin, boundLeft, boundRight })
   useExitGhost(p.ref)
   return (
     <div

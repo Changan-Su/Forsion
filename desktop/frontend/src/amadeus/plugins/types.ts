@@ -983,7 +983,7 @@ export interface FileGotoTarget {
 }
 
 /** A "New …" file-creation entry a plugin contributes to the file tree's right-click menu (root + folder
- *  submenus), sitting alongside the built-in 新建笔记 / 新建 Base / 新建白板. The host renders `icon`+`label`;
+ *  submenus), sitting alongside the built-in 新建笔记 / 新建多维表 / 新建白板. The host renders `icon`+`label`;
  *  on click it calls `run(parentFolder)` where parentFolder is the clicked folder's vault-relative path
  *  ('' = vault root). The plugin creates its file there (ctx.app.writeFile) and opens it (ctx.app.openFile).
  *  Pairs naturally with registerFileType so the new file gets its own icon + dedicated view. */

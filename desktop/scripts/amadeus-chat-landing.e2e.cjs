@@ -6,7 +6,7 @@
  *  ② 新会话的模型不跟着上次用的走,一直卡在同一个上。
  * 钉住的契约(断言的是 UI 发给引擎的建会话请求,不是界面自己的说法):
  *  A 在 Tangu Space 里发新对话:照旧落默认工作区(对照,别把所有 Space 都改了);
- *  B 进 Amadeus、展开右栏对话:空白新对话的项目药丸就是「Amadeus · 库名」,发出去的会话 project_path / cwd = 库根,
+ *  B 进 Amadeus、展开右栏对话:空白新对话的项目药丸就是「智库 · 库名」,发出去的会话 project_path / cwd = 库根,
  *    且不再把库另列进 extraRoots;
  *  C 在会话里把模型换成另一个,再 /new:当场建的会话带着刚换的那个模型(不带的话引擎按它启动时的缺省落库),落点仍是库;
  *  D 模型药丸「高级 → 默认辅助模型」的面板开着时,鼠标停在「模型」行上不许把面板换成主模型的(两份清单长得一样,
@@ -111,7 +111,7 @@ async function main() {
     }
     // 项目药丸按 `.project-selector:not(.runloc)` 找:左边的「运行位置」胶囊(RunLocationPicker)借了同一套类,不排掉读到的是「这台电脑」
     const pill = await win.locator('.t2-chat-view:visible .project-selector:not(.runloc) > .project-pill .project-pill-name').first().textContent({ timeout: 5000 }).catch(() => null)
-    check('B1 空白新对话的项目药丸 = 笔记库(Amadeus · vault)', !!pill && pill.includes('Amadeus') && pill.includes('vault'), JSON.stringify(pill))
+    check('B1 空白新对话的项目药丸 = 笔记库(智库 · vault)', !!pill && pill.includes('智库') && pill.includes('vault'), JSON.stringify(pill))
     await win.screenshot({ path: SHOT })
     await send('在库里的一句')
     await waitCreates(win, 2)

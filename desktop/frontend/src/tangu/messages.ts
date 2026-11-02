@@ -17,7 +17,7 @@ registerMessages({
   'chat.wait.elapsed': { zh: '已等待 {s} 秒', en: '{s}s elapsed' },
   'tip.sessions': { zh: '{count} 个会话', en: '{count} sessions' },
   'input.fileref.session': { zh: '历史会话', en: 'Past session' },
-  'app.amadeusWorkspace': { zh: 'Amadeus · {name}', en: 'Amadeus · {name}' },
+  'app.amadeusWorkspace': { zh: '智库 · {name}', en: 'Vault · {name}' },
   'app.createProjectFail': { zh: '创建项目失败：{e}', en: 'Failed to create project: {e}' },
   'ws.detail.count': { zh: '{n} 个会话', en: '{n} sessions' },
   'ws.detail.newChat': { zh: '在此项目中新建会话', en: 'New session in this project' },

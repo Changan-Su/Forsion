@@ -22,9 +22,11 @@ registerMessages({
 export type RowPeekMode = 'side' | 'center' | 'full'
 
 /** A record stays open while properties change, even when it no longer matches the current filter. */
-export function RowPeek({ title, databaseName, mode, onModeChange, onClose, onPrevious, onNext, children,
+export function RowPeek({ title, titleInProperties = false, databaseName, mode, onModeChange, onClose, onPrevious, onNext, children,
   body, bodyKey, onBodyChange, readOnly = false }: {
   title: string
+  /** The properties render the title column as the page title (its own editor), so the plain heading is skipped. */
+  titleInProperties?: boolean
   databaseName: string
   mode: RowPeekMode
   onModeChange: (mode: RowPeekMode) => void
@@ -84,7 +86,7 @@ export function RowPeek({ title, databaseName, mode, onModeChange, onClose, onPr
             <button type="button" key={id} title={t(`dbpeek.${id}`)} aria-label={t(`dbpeek.${id}`)} aria-pressed={mode === id} onClick={() => onModeChange(id)}><Icon size={16} /></button>)}
         </div>
         <div className="amx-db-peek-scroll">
-          <h1 className="amx-db-peek-title">{title}</h1>
+          {!titleInProperties && <h1 className="amx-db-peek-title">{title}</h1>}
           <div className="amx-db-peek-properties">{children}</div>
           {(onBodyChange || body !== undefined) && <section className="amx-db-peek-body" aria-label={t('dbpeek.content')}>
             {!body && !readOnly && <p className="amx-db-peek-hint">{t('dbpeek.empty')}</p>}
