@@ -226,6 +226,8 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
 
 // 从某条消息(含)处分支出新会话:继承到该点为止的历史(区别于 POST /agent/sessions 的空会话)。
 // message_id 为分支点(通常是某条 AI 回复);title 可选(缺省取源会话标题)。
+// fork_message_id 可选:分叉点记在哪条上(缺省 = message_id)。编辑重发 / 重新生成要把「旧的这一版」整份留成一支 ——
+// 复制到最后一条(message_id),分叉点却在被改那条之前的回答上,画布才把旧那支和新主线画成同一张卡下的两个孩子。
 router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
@@ -234,6 +236,7 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
     const messageId = typeof req.body?.message_id === 'string' ? req.body.message_id : '';
     if (!messageId) return res.status(400).json({ detail: 'message_id required' });
     const title = typeof req.body?.title === 'string' ? req.body.title : undefined;
+    const forkMessageId = typeof req.body?.fork_message_id === 'string' && req.body.fork_message_id ? req.body.fork_message_id : messageId;
     // 分支照抄源会话 agent_config(源会话的远程标记随之继承);远端发起的分支自己再记一笔 —— 随建会话的同一条 INSERT
     // (见 BranchSessionInput.configOverlay:先插后补会留一个无标记的窗口,复制失败时就一直无标记)。
     const remote = parseRemoteOrigin(req.headers);
@@ -242,7 +245,7 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
     // 不传标题时叫 New Chat,第一句新问题由 Historian 起名(同源标题的兄弟分支在树里认不出来)。
     const r = await branchSession({
       sourceSessionId: req.params.id, userId, appId: s.app_id, messageId, title: title ?? 'New Chat',
-      parentSessionId: s.fork_message_id && s.parent_session_id ? String(s.parent_session_id) : req.params.id, forkMessageId: messageId,
+      parentSessionId: s.fork_message_id && s.parent_session_id ? String(s.parent_session_id) : req.params.id, forkMessageId,
       ...(remote ? { configOverlay: { remoteOrigin: remoteOriginMarker(remote) } } : {}),
     });
     if (!r) return res.status(404).json({ detail: 'branch source/message not found' });
