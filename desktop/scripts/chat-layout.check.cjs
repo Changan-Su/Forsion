@@ -141,6 +141,7 @@ async function main() {
     const chipBox = await chip.boundingBox()
     check('浮层朝上开、左缘对齐芯片', popBox.y + popBox.height <= chipBox.y + 1 && Math.abs(popBox.x - chipBox.x) <= 2, { popBox, chipBox })
     check('打开即聚焦搜索框', await search.evaluate((el) => document.activeElement === el))
+    check('搜索框右侧是「换 Agent」的快捷键', /^(⇧⌘A|Ctrl\+Shift\+A)$/.test(await pop.locator('.chat-pick-search kbd').textContent()), await pop.locator('.chat-pick-search kbd').textContent())
     check('底部说明区默认是状态句', (await pop.locator('.chat-pick-desc').textContent()).includes('Xyra'))
     const rowText = await row('agent:agent-17').locator('.chat-pick-name').textContent()
     check('浮层行只放名字,不带简介', rowText === agents[17].name && !(await row('agent:agent-17').textContent()).includes(agents[17].description), rowText)
