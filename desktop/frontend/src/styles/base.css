@@ -4512,7 +4512,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   border-radius: var(--radius-pill, 999px);
 }
 
-.spin { animation: spin 0.9s linear infinite; }
+.spin, .browser-fail[data-loading] .empty-state-icon { animation: spin 0.9s linear infinite; }
 
 /* ── 应用内更新横幅(主界面顶部,启动检测到新版时出现;非侵入,可忽略) ── */
 .update-banner {

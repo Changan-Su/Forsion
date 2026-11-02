@@ -1,10 +1,10 @@
 /* SelectField / ProfileModelField 的触发器与就地展开的选项(10-26 第七轮 7.21 从 views/agentProfile.css 搬来,类名不变,台架照旧按它们找)。 */
-.profile-model-trigger { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 38px; padding: 9px 11px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--bg); color: var(--text); cursor: pointer; transition: background 140ms ease, color 140ms ease; }
+.profile-model-trigger { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; min-height: 38px; padding: 9px 11px; text-align: left; border: 1px solid var(--border); border-radius: var(--radius-sm, 8px); background: var(--bg); color: var(--text); cursor: pointer; transition: background var(--duration-fast) ease, color var(--duration-fast) ease; }
 .profile-model-trigger:disabled { cursor: default; }
 .profile-model-trigger > span { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.profile-model-trigger svg { flex-shrink: 0; transition: transform 160ms ease; }
+.profile-model-trigger svg { flex-shrink: 0; transition: transform var(--duration-fast) ease; }
 .profile-model-trigger[aria-expanded=true] svg { transform: rotate(180deg); }
-.profile-model-options { padding: 8px; background: var(--overlay-light); border-radius: var(--radius-sm, 8px); animation: select-field-enter 160ms ease both; }
+.profile-model-options { padding: 8px; background: var(--overlay-light); border-radius: var(--radius-sm, 8px); animation: select-field-enter var(--duration-fast) ease both; }
 .profile-model-results { max-height: 220px; overflow: auto; margin-top: 6px; }
 .profile-model-results button { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 36px; padding: 9px 8px; color: var(--text); background: transparent; border: 0; border-radius: var(--radius-sm, 8px); text-align: left; cursor: pointer; overflow-wrap: anywhere; font-size: var(--menu-text-size); line-height: var(--menu-line-height); }
 .profile-model-results button:hover, .profile-model-results button[aria-pressed=true], .profile-model-results button[aria-selected=true] { background: var(--overlay-medium); }
