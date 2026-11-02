@@ -6,7 +6,7 @@
 import React, { act, createRef } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-import { MonthScroll, type MonthAnchor } from './CalendarView'
+import { MonthScroll, type CalApi, type MonthAnchor } from './CalendarView'
 import { useWeekStartPref } from './calendar/dateUtils'
 
 let host: HTMLDivElement
@@ -55,4 +55,29 @@ it('没有锚点时照旧落在今天所在月', async () => {
   const anchorRef: { current: MonthAnchor | null } = { current: null }
   await mount(anchorRef, 'dow-auto')
   expect(anchorRef.current).toEqual({ y: today.getFullYear(), m: today.getMonth() })
+})
+
+// 1 号落在一周后半段时,滚到月份那一行的同时标题也要是这个月(2026-11-01 周日、周一开始的一周:曾停在 10 月,「下个月」也卡住)
+it('1 号落在周末:今天的那一行在顶上,标题是今天所在月,「下个月」能翻过去', async () => {
+  vi.useFakeTimers({ now: new Date(2026, 10, 1, 12), toFake: ['Date'] })
+  try {
+    useWeekStartPref.getState().setPref(1)
+    const anchorRef: { current: MonthAnchor | null } = { current: null }
+    const api = createRef<CalApi>()
+    const titleRef = { current: document.createElement('span') }
+    await act(async () => root.render(React.createElement(MonthScroll, {
+      ref: api, anchorRef, titleRef, events: [], selectedKey: null, onPick: () => {}, onCreate: () => {},
+      canCreate: false, onDismiss: () => false, onDraft: () => {}, colorOf: () => '',
+    })))
+    const el = host.querySelector<HTMLElement>('.amx-cal-mscroll')!
+    const rowH = (720 - 26) / 6
+    expect(anchorRef.current).toEqual({ y: 2026, m: 10 })
+    const top = el.scrollTop
+    const dates = [...host.querySelectorAll('[data-date]')].map((c) => c.getAttribute('data-date'))
+    expect(dates[Math.round(top / rowH) * 7 + 6]).toBe('2026-11-01') // 今天这一行就在顶上,没被滚出去
+    const jumped: number[] = []
+    el.scrollTo = ((o: ScrollToOptions) => { jumped.push(o.top!); el.scrollTop = o.top! }) as typeof el.scrollTo
+    await act(async () => { api.current!.next(); el.dispatchEvent(new Event('scroll')) })
+    expect(anchorRef.current).toEqual({ y: 2026, m: 11 })
+  } finally { vi.useRealTimers() }
 })

@@ -136,7 +136,7 @@ const WEEK_HALF = 40 // 纵向周窗 ±40 周
 /** Phone uses a bottom drawer and touch controls; desktop keeps the adjacent nonmodal card. */
 const DESK = !(UI_MODE === 'mobile' || (typeof window !== 'undefined' && !!window.tangu?.mobile))
 
-interface CalApi { prev(): void; next(): void; today(): void; goto(date: Date): void }
+export interface CalApi { prev(): void; next(): void; today(): void; goto(date: Date): void }
 interface CalEvent {
   key: string
   color: string
@@ -1459,6 +1459,9 @@ interface MonthProps extends GridProps {
   /** 手机:双击当场建。 */
   onCreate: (day: Date, at: Anchor) => void
 }
+// 顶上这一行算哪个月:取周末那天。月份定位滚到 1 号所在行,1 号不管落在周几,这一行都得算新月份,否则标题停在上个月、「下个月」也翻不过去。
+const monthDayOfRow = (weekStart: Date): Date => addDays(weekStart, 6)
+
 export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({ anchorRef, events, selectedKey, cutKey, onPick, canCreate, onDismiss, onDraft, colorOf, onCreate, titleRef }, ref) {
   const { t } = useI18n()
   const wrap = useRef<HTMLDivElement>(null)
@@ -1483,7 +1486,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     const el = wrap.current
     if (!el || !rowH) return
     const i = Math.max(0, Math.min(weeks.length - 1, Math.round(el.scrollTop / rowH)))
-    const mid = addDays(weeks[i], 3)
+    const mid = monthDayOfRow(weeks[i])
     const label = monthLabel(mid)
     if (anchorRef) anchorRef.current = { y: mid.getFullYear(), m: mid.getMonth() }
     if (label !== lastTitle.current) {
@@ -1514,10 +1517,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     centered.current = true
     const a = anchorRef?.current
     if (a) {
-      // 回到重挂前看的那个月:按新周首日,该月 1 号所在周的「标题日」(周首 +3)可能还落在上个月 → 再往下一行。
-      let i = Math.max(0, Math.min(weeks.length - 1, idxOfMonth(a.y, a.m)))
-      if (addDays(weeks[i], 3).getMonth() !== a.m && i + 1 < weeks.length) i += 1
-      el.scrollTop = i * rowH
+      el.scrollTop = Math.max(0, Math.min(weeks.length - 1, idxOfMonth(a.y, a.m))) * rowH // 回到重挂前看的那个月
     } else {
       el.scrollTop = idxOfMonth(today.getFullYear(), today.getMonth()) * rowH
     }
@@ -1538,7 +1538,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     const el = wrap.current
     if (!el || !rowH) return
     const i = Math.max(0, Math.min(weeks.length - 1, Math.round(el.scrollTop / rowH)))
-    const mid = addDays(weeks[i], 3)
+    const mid = monthDayOfRow(weeks[i])
     el.scrollTo({ top: Math.max(0, idxOfMonth(mid.getFullYear(), mid.getMonth() + delta)) * rowH, behavior: 'smooth' })
   }
 
