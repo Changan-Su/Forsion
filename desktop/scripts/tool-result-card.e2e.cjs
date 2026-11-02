@@ -206,9 +206,9 @@ async function main() {
     await win.locator('[data-plugin-tool-card="probe_chart"] .probe-click').click().catch(() => {})
     await win.locator('[data-plugin-tool-card="probe_chart"] .probe-quote').click().catch(() => {})
     await win.waitForTimeout(600)
-    const quote = await win.evaluate(() => [...document.querySelectorAll('.t2c-quote-text')].map((e) => e.textContent))
+    const quote = await win.evaluate(() => [...document.querySelectorAll('.t2c-tilerow .att-tile--quote .att-tile-head')].map((e) => e.textContent))
     check('T2 call.quote → 输入框上方一张引用卡', quote.length === 1 && quote[0].includes('probe quote: Mon, Tue, Wed, Thu'), JSON.stringify(quote))
-    await win.locator('.t2c-quote-x').first().click().catch(() => {})
+    await win.locator('.t2c-tilerow .att-tile--quote .att-tile-x').first().click().catch(() => {})
 
     // ── T3:在 Desk 打开 → 放回对话
     await win.locator('[data-plugin-tool-card="probe_chart"] [data-act="tool-card-desk"]').click().catch(() => {})
