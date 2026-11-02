@@ -171,7 +171,7 @@ export interface HostState {
   feedbackOpen: boolean
   feedbackDraft: string
   marketOpen: boolean
-  marketTarget: { itemId?: string; detailTab?: string; q?: string; nonce?: number } | null
+  marketTarget: { itemId?: string; detailTab?: string; q?: string; tab?: string; nonce?: number } | null
   achievementsOpen: boolean
   onboarding: boolean
   /** 这次引导是版本更新后弹的短引导(只在开机的版本检查里置上;手动重开、首启都是完整引导)。 */
@@ -196,7 +196,7 @@ export interface HostState {
    *  target(P1-K6 S2):哪台引擎回的 401;unit = 先复检账号,账号有效只记那台「引擎鉴权」,绝不重启本机引擎。 */
   handleAuthExpired(target?: TargetKey): void
   /** query = 打开时预填的搜索词(插件详情页「在市场中查找」前置插件)。 */
-  openMarket(query?: string, target?: { itemId?: string; detailTab?: string; nonce?: number }): void
+  openMarket(query?: string, target?: { itemId?: string; detailTab?: string; tab?: string; nonce?: number }): void
   closeMarket(): void
   openAchievements(): void
   closeAchievements(): void
@@ -237,7 +237,16 @@ export function writeFocusModel(ref: TargetRef, modelId: string): void {
 /** 新会话的「默认模型」(newChatModelId / activeChatModelId / send 的回退链共用):home = cfg.modelId(不变);
  *  unit 焦点 = 按设备记的那个 → 手机偏好 → 都不在那台电脑的模型表里就不给(回落目标的 defaultModelId)。 */
 export function defaultModelOf(s: Pick<AppState, 'cfg' | 'modelsResp'> & { focusModelId?: string }, ref: TargetRef = focusRef()): string | undefined {
-  if (ref.kind === 'home') return s.cfg.modelId || undefined
+  if (ref.kind === 'home') {
+    // 记住的模型已不在目录里(admin 停用 / 下架,10-25 deepseek-v4-flash)→ 不再拿它开新对话,落到目录默认。
+    // 目录没到 / 云端不可达(forsion.status=error,云端模型整段缺席)/ 直连供应商的(目录不枚举全)时照用,别误杀;
+    // 回落用这个目标自己的默认,不交给调用方读顶层 modelsResp(焦点在别的设备时那是别人的)。
+    const id = s.cfg.modelId
+    const cat = sameRef(ref, focusRef()) ? s.modelsResp : catalogFor(targetKeyOf(ref))?.models
+    const direct = !!id && !!cat?.directProviders?.some((p) => id.startsWith(`${p.providerId}/`) || p.modelIds?.includes(id))
+    const gone = !!id && !direct && !!cat?.models?.length && cat.forsion?.status !== 'error' && !cat.models.some((m) => m.id === id)
+    return (gone && cat?.defaultModelId) || id || undefined
+  }
   // P1-K6 S4:会话可能在一台已经不是焦点的电脑上 —— 用那台的目录缓存与按设备记的模型(顶层 modelsResp / focusModelId 只属于焦点)
   const onFocus = sameRef(ref, focusRef())
   const models = onFocus ? s.modelsResp?.models : catalogFor(targetKeyOf(ref))?.models?.models
@@ -536,7 +545,9 @@ export const useApp = create<AppState>((set, get) => ({
     // 注意:不能再用 stored.token 当「有无凭证」信号——managed 后端现在恒有 token(无 Forsion 时回退本地令牌,
     // 见 backendManager.getToken),会把新用户误判为已配置。真实凭证只看 authStatus.loggedIn(读 auth.json,
     // 不含本地回退)+ 直连 provider。
-    if (PRODUCT.onboarding !== false && stored && window.tangu?.envCheck) {
+    // 带文件地址进来的人是来看那一页的(邀请链接同意后也走这里):这次不盖住它,下次正常打开再引导。
+    const guideAllowed = PRODUCT.onboarding !== false && !(window as { __FORSION_OPEN_TARGET__?: boolean }).__FORSION_OPEN_TARGET__
+    if (guideAllowed && stored && window.tangu?.envCheck) {
       try {
         if (!localStorage.getItem(ONBOARDING_DISMISS_KEY)) {
           // void 不 await:两条 IPC 只决定要不要弹引导,不该拖住 boot 的 resolve(bootstrap 等 boot 完才往下走)。
@@ -548,7 +559,7 @@ export const useApp = create<AppState>((set, get) => ({
           }).catch(() => { /* 引导判定失败不阻断 */ })
         }
       } catch { /* 引导判定失败不阻断 */ }
-    } else if (PRODUCT.onboarding !== false && stored) {
+    } else if (guideAllowed && stored) {
       // web / 移动端(无 envCheck):登录早在挂载前由 webShim / mobileShim 完成(无 token 直接跳
       // /auth),也没有 provider / 本机环境这些概念 —— 「首启」的唯一信号就是没跳过过。
       // 步骤序同步收缩到 welcome/theme/done,见 OnboardingWizard.stepOrder。
@@ -558,7 +569,7 @@ export const useApp = create<AppState>((set, get) => ({
     // 只在 host 生效(web/移动端没有 appVersion,这条自然 no-op):web 每次发版都全屏拦一次
     // 所有在线用户,代价与收益不成比例 —— 更新日志那边从欢迎页的抽屉照样看得到。
     // seen 与当前版本不同(含老用户首次启用本功能,seen 为空)→ 弹一次,弹完即标记不再重复。
-    if (PRODUCT.onboarding !== false) void window.tangu?.appVersion?.().then((ver) => {
+    if (guideAllowed) void window.tangu?.appVersion?.().then((ver) => {
       if (!ver) return
       let seen: string | null = null
       try { seen = localStorage.getItem(ONBOARDING_VERSION_KEY) } catch { seen = null }

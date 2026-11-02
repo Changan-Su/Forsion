@@ -39,3 +39,10 @@
    (0,3,0) 压过 agentProfile.css 的 :hover;两份样式表的加载先后随入口而变,不能靠顺序 */
 .agent-profile.human-profile .agent-character-name, .agent-profile.human-profile .agent-character-desc { background: transparent; cursor: default; }
 .agent-profile.human-profile .human-panel + .human-panel { margin-top: 36px; }
+
+/* 搬家卡:行和回执行同一个样子(selfUpdates.css),底色即边界,不描边 */
+.portrait-move { margin-bottom: 14px; padding: 14px 16px 4px; background: var(--bg-card); border-radius: var(--radius-md); }
+.portrait-move h4 { margin: 0 0 4px; color: var(--text); font-size: var(--ui-font-heading); font-weight: 600; }
+.portrait-move-caption { margin: 0 0 8px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.portrait-move-foot { display: flex; gap: 18px; padding: 10px 0; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.portrait-move-entry { display: flex; align-items: center; gap: 6px; margin: 0 0 14px; color: var(--text-muted); font-size: var(--ui-font-meta); }

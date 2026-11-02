@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Check, ChevronDown, Search } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { Markdown } from '../components/Markdown'
@@ -9,6 +9,7 @@ import { thinkingLabel } from '../components/thinkingLabel'
 import { APPROVAL_MODE_ORDER, MODE_KEY } from '../approvalReason'
 import { isCoarsePointer } from '../touch'
 import { zoomOf } from '@lcl/engine'
+import { moveOptionFocus, type SelectOption as ProfileSelectOption } from '../components/SelectField'
 import './agentProfileMessages'
 import './profileControls.css'
 
@@ -29,17 +30,6 @@ export function useSectionNavSlide<T extends HTMLElement = HTMLElement>(selected
       { transform: 'none', width: `${to.width / z}px`, height: `${to.height / z}px` }], { duration: 200, easing: 'cubic-bezier(.2,.8,.2,1)', pseudoElement: '::before' })
   }, [selected])
   return ref
-}
-
-/** 选项列表的方向键 / Home / End(模型与普通下拉共用一份;落在搜索框里时 Home / End 留给输入框)。 */
-function moveOptionFocus(e: KeyboardEvent<HTMLDivElement>): void {
-  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
-  if (e.target instanceof HTMLInputElement && (e.key === 'Home' || e.key === 'End')) return
-  e.preventDefault(); e.stopPropagation()
-  const buttons = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>('.profile-model-results button'))
-  const current = buttons.indexOf(e.target as HTMLButtonElement)
-  const next = e.key === 'Home' ? 0 : e.key === 'End' ? buttons.length - 1 : (current + (e.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length
-  buttons[next]?.focus()
 }
 
 /** Inline disclosure keeps the searchable picker inside narrow docked panels, including at UI zoom. */
@@ -76,49 +66,8 @@ export function ProfileModelField({ models, value, onChange, label, disabled, fi
   </div>
 }
 
-export interface ProfileSelectOption { value: string; label: string }
-
-/**
- * 普通下拉(思考档位、审批模式…):和 ProfileModelField 同一颗触发器、同一块就地展开的选项,只是不带搜索
- * (10-25 第四轮 4.3:Agent「运行设置」三个同级下拉一种控件,原生 select 的高度 / 箭头 / 暗色系统样子一并去掉)。
- * 键盘:触发器上 ↑ / ↓ / Enter / 空格展开,展开后焦点落在当前项;↑ ↓ Home End 移动,Enter 选,Esc 收起并回到触发器;点外面收起。
- * `field` 落成 data-profile-field,台架按它找具体哪一个。
- */
-export function ProfileSelectField({ label, value, options, onChange, disabled, field }: {
-  label: string; value: string; options: ProfileSelectOption[]; onChange: (value: string) => void; disabled?: boolean; field?: string
-}) {
-  const [open, setOpen] = useState(false)
-  const trigger = useRef<HTMLButtonElement>(null)
-  const box = useRef<HTMLDivElement>(null)
-  const id = useId()
-  const current = options.find((o) => o.value === value) ?? options[0]
-  useEffect(() => {
-    if (!open) return
-    box.current?.querySelector<HTMLButtonElement>('[aria-selected="true"]')?.focus()
-    const outside = (e: PointerEvent): void => { if (!box.current?.parentElement?.contains(e.target as Node)) setOpen(false) }
-    document.addEventListener('pointerdown', outside, true)
-    return () => document.removeEventListener('pointerdown', outside, true)
-  }, [open])
-  const choose = (next: string): void => { if (next !== value) onChange(next); setOpen(false); trigger.current?.focus() }
-  return <div className="profile-model-field profile-select-field agent-field" data-profile-field={field}>
-    <span id={`${id}-label`}>{label}</span>
-    <button ref={trigger} type="button" className="profile-model-trigger" disabled={disabled} aria-haspopup="listbox" aria-labelledby={`${id}-label ${id}-value`} aria-expanded={open} aria-controls={`${id}-options`}
-      onClick={() => setOpen(!open)}
-      onKeyDown={(e) => { if (!open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) { e.preventDefault(); setOpen(true) } }}>
-      <span id={`${id}-value`}>{current?.label}</span><ChevronDown size={15} />
-    </button>
-    {open && <div ref={box} className="profile-model-options profile-select-options" id={`${id}-options`} role="listbox" aria-labelledby={`${id}-label`} onKeyDown={(e) => {
-      // Esc:收起、回到触发器。Tab:先把焦点交回触发器再收起,浏览器的 Tab 从触发器接着往下走(不掉回 body)。
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); trigger.current?.focus(); setOpen(false); return }
-      if (e.key === 'Tab') { trigger.current?.focus(); setOpen(false); return }
-      moveOptionFocus(e)
-    }}>
-      <div className="profile-model-results">
-        {options.map((o) => <button key={o.value} type="button" role="option" aria-selected={o.value === value} onClick={() => choose(o.value)}><span>{o.label}</span>{o.value === value && <Check size={14} />}</button>)}
-      </div>
-    </div>}
-  </div>
-}
+// 普通下拉 10-26 起是公共组件(第七轮 7.21);这里留旧名给 Agent / 团队资料与测试。
+export { SelectField as ProfileSelectField, type SelectOption as ProfileSelectOption } from '../components/SelectField'
 
 type Translate = (key: string, vars?: Record<string, string | number>) => string
 

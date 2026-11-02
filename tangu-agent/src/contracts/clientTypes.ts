@@ -124,7 +124,7 @@ export function isHomeSession(s: Pick<SessionRecord, 'location'>): boolean {
 
 /** GET /agent/special/approvals 的一行(引擎 pendingApprovals.PendingApprovalRow 镜像)。 */
 /** Muse 发进私聊、要用户点的卡(services/museCards.ts)。payload 按 kind 各一种形状,只有引擎写得进去。 */
-export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel' | 'settings' | 'intro' | 'summary' | 'rule'
+export type MuseCardKind = 'plugin' | 'feature' | 'inbox-ask' | 'inbox-list' | 'channel' | 'settings' | 'intro' | 'summary' | 'rule' | 'rule-observed'
 export interface MuseCardInfo {
   id: string
   kind: MuseCardKind
@@ -207,6 +207,11 @@ export interface MuseTriggerInfo {
   cooldownHours: number
   lastFiredAt: string | null
   enabled: boolean
+  /** 观察:开着时命中只记录本应执行的动作。暂停时这一位留着,恢复后还是观察。 */
+  observe?: boolean
+  observeSince?: string
+  /** 这一段观察命中了几次(GET 时现算)。 */
+  observeHits?: number
   createdAt: string
   /** 引擎自动停用的原因(排空封顶断环 / tool_call 不可用);用户手动启用时引擎清掉。缺席 = 用户自己停的或在跑。 */
   disabledReason?: string
@@ -512,7 +517,10 @@ export interface ModelsResponse {
   /** admin 的 app 级「辅助模型 · 图像识别」槽(本端未显式选择时跟随)。 */
   visionModelId?: string | null
   /** Forsion 云端的实时语音通话模型(不在 models 里;apiModelId = 上游模型名,音色家族按它分)。没有 = 云端没开通话 / 没登录 / 老引擎。 */
-  realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null
+  realtimeModel?: { id: string; name: string; apiModelId?: string | null; defaultVoice?: string } | null
+  /** 后台给这个应用定的朗读默认模型与音色:用户没动过朗读时跟随;没定 = 朗读不默认开。 */
+  ttsModelId?: string | null
+  ttsVoice?: string | null
   /** Forsion 云端的机器翻译模型(不在 models 里:它们不能聊天;只有「翻译」模型槽列它们)。没有 = 云端没配 / 没登录 / 老引擎。 */
   translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>
   /** Forsion 云端的朗读模型(设置页「语音朗读」模型框的候选;老引擎不给 = 没有) */
@@ -707,8 +715,14 @@ export interface ToolsResponse {
   mcp?: Array<{
     server: string
     transport: 'stdio' | 'http' | 'sse'
-    status: 'connected' | 'connecting' | 'error' | 'disabled'
+    status: 'connected' | 'connecting' | 'error' | 'disabled' | 'needs-login' | 'logging-in'
     error: string | null
+    /** 远端 server 在本机存着 OAuth 令牌(可「断开」)。旧引擎缺省。 */
+    signedIn?: boolean
+    /** 地址里带 `{userKey}`:待登录时要用户填 Key(POST /agent/mcp/:name/key),不走 OAuth。旧引擎缺省。 */
+    auth?: 'user-key'
+    /** 连接器目录 id(mcp.json 的 connector 标记)。旧引擎缺省。 */
+    connector?: string
     /** 插件自带的 server(引擎插件 manifest 的 mcpServers):不在 mcp.json 里,设置页只读展示。 */
     origin?: { pluginId: string; pluginName: string }
     tools: Array<{ name: string; description: string }>
@@ -1044,6 +1058,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   ttsSpeed?: number
   /** 新回复完成后自动朗读(仅当前活跃会话)。 */
   ttsAutoSpeak?: boolean
+  /** 只读:用户从没动过「朗读」模型(这时跟随后台的项目默认)。 */
+  ttsModelUnset?: boolean
   /** 实时语音通话模型:<providerId>/<model>(自带百炼 key)或 Forsion 云端的实时模型 id;空 = 未启用。实际用哪个见 services/realtimeModel.ts。 */
   realtimeModelId?: string
   /** 只读:用户从没动过「语音通话」(这时已登录 Forsion 的用户默认开、用云端模型)。主进程按 config.json 算出来,写它无效。 */

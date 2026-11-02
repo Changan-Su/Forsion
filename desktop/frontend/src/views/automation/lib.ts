@@ -11,6 +11,7 @@ import type {
   TriggerSourceInfo,
 } from '../../types'
 import { formatMonthDay, formatTime, toDate } from '../../format/time'
+import { formatRepeat } from '../../format/repeat'
 import { agentName } from '../../agentName'
 import './messages'
 
@@ -22,7 +23,7 @@ export function condText(t: T, cond: MuseTriggerInfo['cond']): string {
   if (cond.type === 'daily_at') return t('automation.cond.daily', { time: cond.time })
   if (cond.type === 'event_seen') return t('automation.cond.event', { match: cond.match })
   if (cond.type === 'at') return t('automation.cond.at', { time: String(cond.datetime || '').replace('T', ' ') })
-  if (cond.type === 'every') return t('automation.cond.every', { ivl: cond.interval })
+  if (cond.type === 'every') return formatRepeat(t, cond.interval)
   if (cond.type === 'file_chars_gte') return t('automation.cond.file', { path: shortPath(cond.path), n: String(cond.n) })
   if (cond.type === 'manual') return t('automation.cond.manual')
   if (cond.type === 'computer.app_opened') return t('automation.cond.appOpened', { app: paramText(cond.params, 'appName', 'app') })
@@ -113,6 +114,12 @@ export function isFinishedTrigger(tr: MuseTriggerInfo): boolean {
   const d = parseLocalDatetime(tr.cond.datetime)
   return !!d && d.getTime() <= Date.now()
 }
+
+/** 一次性和手动规则没有观察(引擎 canObserve 同口径)。 */
+export const canObserve = (condType: string): boolean => condType !== 'at' && condType !== 'manual'
+export type RuleState = 'off' | 'observe' | 'on'
+/** 观察位只在开着时生效,暂停时留着。 */
+export const ruleState = (tr: Pick<MuseTriggerInfo, 'enabled' | 'observe'>): RuleState => !tr.enabled ? 'off' : tr.observe ? 'observe' : 'on'
 
 /** 执行者显示名:agentSlug 缺省=Muse(品牌名不进 i18n);有 slug 找 defs 显示名,找不到回落 slug。 */
 export function runnerName(defs: NormalAgentDef[], agentSlug?: string): string {

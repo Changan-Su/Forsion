@@ -11,7 +11,7 @@
  * 按当前 vault 解析。远程图片一律先换成占位文本 —— agent 写的 md 里一个 `![](https://…)` 就是追踪像素。非 .md 文本仍走轻量 Markdown。
  */
 import React, { Suspense, useEffect, useMemo, useRef, useState } from 'react'
-import { FolderOpen, FileText, RefreshCw, ExternalLink, Settings, Sparkles } from 'lucide-react'
+import { FileText, RefreshCw, ExternalLink, Settings, Sparkles } from 'lucide-react'
 import { useWorkspace } from '@lcl/engine'
 import type { ViewProps } from '@lcl/engine/types'
 import './museLibrary.css'
@@ -162,7 +162,7 @@ export const MuseLibraryView: React.FC<ViewProps> = () => {
               onClick={() => pick(f)}
               style={{ alignItems: 'center', background: f.path === sel ? 'var(--overlay-light, rgba(127,127,127,.1))' : undefined, borderRadius: 'var(--radius-sm)' }}
             >
-              {f.path.startsWith('Journal/') ? <FileText size={13} /> : <FolderOpen size={13} />}
+              <FileText size={13} />
               <span className="file-name" style={{ flex: 1, fontSize: 'var(--ui-font-meta, 12px)' }}>{f.path}</span>
             </div>
           ))}

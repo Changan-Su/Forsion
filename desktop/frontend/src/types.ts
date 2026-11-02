@@ -55,6 +55,8 @@ export interface HistorianConfig {
   prompt: string
   /** 自进化自动档:判官额外提名「工作笔记候选」进各 Agent 收件箱,/refine 时供其审阅采纳(09-18 起默认开,引擎启动期一次性迁移翻开老配置)。 */
   harnessCandidates: boolean
+  /** 决策闸(beta,开发者选项):「像不像在纠正」改问 Forsion 云端的决策模型,词面兜底。旧引擎没有这个键 = 关。 */
+  decisionGate?: boolean
 }
 export interface MuseConfig {
   enabled: boolean
@@ -77,6 +79,8 @@ export interface MuseConfig {
   notify?: 'immediate' | 'digest'
   /** 难活升级给哪个 agent(slug;空=不指定)。 */
   escalateTo?: string
+  /** 新对话页的 Muse 开场建议(10-25);旧引擎没有这个键,读端按开处理。 */
+  chatStarters?: boolean
   /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
   inboxAutoRead?: string[]
   /** 用户点过「这类以后都别管」的类别。 */
@@ -101,6 +105,12 @@ export type SpecialConfigResponse =
   | { config: SpecialAgentsConfig; defaults?: { historianPrompt: string }; cloud?: boolean; remote?: undefined }
   | { config: SpecialAgentsSummary; remote: true; defaults?: undefined; cloud?: undefined }
 
+/** GET /agent/special/muse/starters 的一条:用户照原样就能发的一句话;source.label 原样出现在 text 里,桌面把它画成链接。 */
+export interface MuseStarter {
+  id: string
+  text: string
+  source: { kind: 'calendar' | 'note' | 'todo' | 'session' | 'web' | 'muse'; label: string; ref?: string }
+}
 export interface MuseTodo {
   id: string
   title: string
@@ -149,6 +159,8 @@ export interface MuseTriggerUpsert {
   cond_type: MuseTriggerInfo['cond']['type']
   /** 新触发源的参数(按 GET /agent/special/automation/sources 的表)。 */
   params?: Record<string, string | number>
+  /** 缺席 = 保留:启停开关和编辑保存都不动观察。false = 转成启用,只有用户点的才发。 */
+  observe?: boolean
   /** 「只在」:undefined=保留,null=清空。 */
   only?: MuseTriggerInfo['only'] | null
   max_per_day?: number | null
@@ -200,7 +212,7 @@ export interface AutomationExecutionInfo {
   trigger_id: string
   origin: 'auto' | 'manual' | string
   status: string
-  steps: { type: string; tool?: string; ok: boolean; summary: string }[]
+  steps: { type: string; tool?: string; ok: boolean; summary: string; observed?: boolean; target?: string; row?: string }[]
   error: string | null
   created_at: string
 }
@@ -356,7 +368,26 @@ export interface McpServerConfigEntry {
   headers?: Record<string, string>
   timeoutMs?: number
   enabled?: boolean
+  oauth?: { clientId?: string; scopes?: string[] }
+  /** 从商店连上的连接器:目录 id(宿主同步地址、引擎读 alwaysAsk)。编辑时原样带着,别丢。 */
+  connector?: string
 }
+
+/** 连接器目录的一条(electron/connectorCatalog.ts 校验过的形状)。 */
+export interface ConnectorEntry {
+  id: string
+  kind: 'remote-mcp' | 'builtin'
+  status: 'published' | 'retired'
+  order: number
+  name: { zh: string; en: string }
+  description: { zh: string; en: string }
+  url?: string
+  oauth?: { clientId?: string; scopes?: string[] }
+  auth?: { type: 'user-key'; applyUrl: string }
+  alwaysAsk?: string[]
+  iconUrl?: string
+}
+export interface ConnectorCatalog { connectors: ConnectorEntry[]; fetchedAt: number | null; offline: boolean }
 
 /** 官网更新动态的一篇(forsion.net/releases;主进程校验过形状)。 */
 export type { WebsiteRelease }
@@ -679,11 +710,14 @@ declare global {
       readHostFile?(filePath: string): Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean }>
       /** 用系统默认应用打开(预览不支持的类型)。 */
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
-      /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome 扩展页;拖拽用 startHostDrag。 */
+      /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome / Edge 扩展页;拖拽用 startHostDrag。 */
       clipExtension?: {
         /** update=false 只补缺不动已有副本;用户要(重新)装时传 true 换成随包版本(bundled)。 */
         prepare(update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }>
-        openChromeExtensions(): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }>
+        /** 本机装了哪些(按官方安装位置找);认不出 → []。 */
+        browsers(): Promise<Array<'chrome' | 'edge'>>
+        /** ok = 已停在扩展页(mac);launched = Windows 开了新窗口、地址已复制待粘贴;not-found / unsupported = 只复制了地址。 */
+        openExtensionsPage(browser: 'chrome' | 'edge'): Promise<{ ok: true } | { ok: false; copied: true; reason: 'launched' | 'not-found' | 'unsupported' }>
       }
       /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 多文件预览)。 */
       codePreviewServe?(rootDir: string): Promise<{ origin: string }>
@@ -734,6 +768,12 @@ declare global {
       connectUnpublish?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
       connectListingApply?(p: { slug: string; summary: string }): Promise<{ ok: boolean; code?: string; detail?: string; status?: string }>
       connectListingWithdraw?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
+      /** 连接器目录:refresh = 现拉(拉不到回缓存,offline: true);否则只读本机缓存。只在桌面有。 */
+      connectorsList?(refresh?: boolean): Promise<ConnectorCatalog>
+      /** 把目录条目写进 MCP 配置(带 connector 标记);已连着就原样返回。登录 / 填 Key 另走引擎。 */
+      connectorsConnect?(id: string, taken?: string[]): Promise<{ name: string; added: boolean }>
+      /** 断开的最后一步:从 MCP 配置删掉这条(只删带连接器标记的)。 */
+      connectorsRemove?(name: string): Promise<void>
       connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }> }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
@@ -924,18 +964,23 @@ declare global {
     amadeusCollab?: {
       listVaults(): Promise<Array<{ id: string; name: string; role?: string; ownerName?: string | null }>>
       activeVaultId(): Promise<string>
-      /** 切活动云库(web=localStorage+reload;桌面=切共享镜像)。 */
-      switchVault(id: string): void
+      /** 切活动云库(web=localStorage+reload,带 path 时切完直达这一页;桌面共享走镜像,不切库)。 */
+      switchVault(id: string, path?: string): void
+      /** 文件地址:不含凭据,能不能看由服务端判。 */
+      fileUrl(vaultId: string, path: string): string
       // 同步共享(owner):共享单位 = 页 + 子页面树
       pageShare(path: string): Promise<{ share: AmadeusPageShare | null; quota: AmadeusCollabQuota }>
-      createPageShare(path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null }): Promise<AmadeusPageShare>
-      updatePageShare(id: string, patch: { role?: 'editor' | 'viewer'; password?: string | null; expiresDays?: number | null; rotate?: boolean }): Promise<AmadeusPageShare>
+      createPageShare(path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null; attachments?: boolean }): Promise<AmadeusPageShare>
+      updatePageShare(id: string, patch: { role?: 'editor' | 'viewer'; password?: string | null; expiresDays?: number | null; rotate?: boolean }, vaultId?: string): Promise<AmadeusPageShare>
       revokePageShare(id: string): Promise<void>
-      setParticipantRole(id: string, userId: string, role: 'editor' | 'viewer'): Promise<void>
-      removeParticipant(id: string, userId: string): Promise<void>
+      setParticipantRole(id: string, userId: string, role: 'editor' | 'viewer', vaultId?: string): Promise<void>
+      removeParticipant(id: string, userId: string, vaultId?: string): Promise<void>
+      /** 这一页直接引用、不在共享范围里的内容(分享卡「一起共享」)。 */
+      relatedItems?(id: string): Promise<{ items: AmadeusRelatedItem[]; subpages: number }>
+      setShareItem(id: string, path: string, included: boolean): Promise<void>
       // 参与者
-      sharedWithMe(): Promise<Array<{ vaultId: string; path: string; title: string; role: string; ownerName: string | null; localPath?: string }>>
-      leaveShare(id: string): Promise<void>
+      sharedWithMe(): Promise<AmadeusSharedItem[]>
+      leaveShare(id: string, vaultId?: string): Promise<void>
       inviteUrl(token: string): string
       // 发布(公开只读链接)
       publishes(): Promise<{ shares: Array<{ token: string; mode: string; path: string; createdAt: string }>; quota: AmadeusCollabQuota }>
@@ -948,7 +993,7 @@ declare global {
       /** Public View：跨全部 vault 汇总「我发布的公开链接 + 我创建的页面协作共享」。 */
       listAllShares(): Promise<{
         publishes: Array<{ token: string; mode: string; path: string; createdAt?: string; vaultId: string; vaultName: string }>
-        pageShares: Array<Record<string, unknown>>
+        pageShares: Array<AmadeusPageShare & { vaultId: string; vaultName: string }>
         linkBase: string
       }>
       // presence
@@ -1100,7 +1145,32 @@ export interface AmadeusPageShare {
   inviteRole: 'editor' | 'viewer'
   hasPassword: boolean
   expiresAt: string | null
+  /** 带已到期记录的列表才会出现 true。 */
+  expired?: boolean
+  /** 一起共享的内容(旧服务端没有这一项)。 */
+  items?: string[]
   participants: Array<{ userId: string; username: string | null; role: 'editor' | 'viewer'; since: string }>
+}
+
+export interface AmadeusRelatedItem {
+  path: string
+  title: string
+  kind: 'page' | 'file'
+  included: boolean
+}
+
+export interface AmadeusSharedItem {
+  /** 旧服务端没有这一项,退出共享入口据此隐藏。 */
+  shareId?: string
+  vaultId: string
+  path: string
+  title: string
+  role: string
+  ownerName: string | null
+  expiresAt?: string | null
+  items?: string[]
+  /** 桌面:镜像内路径,点击本地直开。 */
+  localPath?: string
 }
 
 export interface AmadeusCollabQuota {

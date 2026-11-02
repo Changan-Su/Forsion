@@ -4,6 +4,7 @@ import { deps } from '../seams/runtime.js';
 import { HumanError, isHumanFile, readHuman, writeHuman, type HumanScope } from '../agents/humanStore.js';
 import { mirrorLegacyHuman } from '../agents/humanFolder.js';
 import { mutatePortrait, portraitEntries, PORTRAIT_SHORT_VERSION, readPortrait } from '../agents/humanPortrait.js';
+import { keepPortraitItem, movePortraitItem, readPortraitMove, startPortraitScan, undoPortraitMove } from '../agents/portraitMove.js';
 import { getAgent, isValidSlug, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { humanProjectScope } from '../services/humanContext.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
@@ -128,6 +129,23 @@ router.post('/agent/human/SOUL.md/entries', authMiddleware, async (req: AuthRequ
     if (action === 'add' && (typeof fact !== 'string' || !fact.trim() || fact.length > 4000)) throw new HumanError('PORTRAIT_INVALID', 'fact must be a non-empty sentence.');
     const r = await mutatePortrait({ action, id, fact, expectedVersion, actor: 'user', source: { kind: 'user' } });
     res.json({ ...portraitBody(r.document), ...(r.entry ? { entry: r.entry } : {}) });
+  } catch (e) { fail(res, e); }
+});
+// 搬家卡(10-30 第 2 步):人点了才扫、逐条点了才挪。同样只在本机、拒远端。
+router.get('/agent/human/SOUL.md/move', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { res.json(await readPortraitMove(req.user!.userId)); } catch (e) { fail(res, e); }
+});
+router.post('/agent/human/SOUL.md/move/scan', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try { res.json(startPortraitScan(req.user!.userId)); } catch (e) { fail(res, e); }
+});
+router.post('/agent/human/SOUL.md/move/items/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!humanLocal(req, res)) return;
+  try {
+    const act = { move: movePortraitItem, keep: keepPortraitItem, undo: undoPortraitMove }[String(req.body?.decision)];
+    if (!act) throw new HumanError('HUMAN_INVALID_ACTION', 'decision must be move, keep or undo.');
+    res.json(await act(req.user!.userId, String(req.params.id)));
   } catch (e) { fail(res, e); }
 });
 // 「让所有 Agent 都照做」:把某个 Agent 实际生效记忆里的一条原文挪进 human/AGENT.md 末尾(人点的那一下就是「人开口」,10-20 定稿)。

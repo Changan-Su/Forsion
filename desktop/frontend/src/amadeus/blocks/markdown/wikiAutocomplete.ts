@@ -223,6 +223,9 @@ export interface SelRect {
   top: number
   /** 选区行下沿(视口 px):上方没空间时翻到它之下。 */
   bottom: number
+  /** 编辑器面板的左右边(视口 px):工具栏横向夹在这里面,不伸到文件树上。没有面板(测试挂载)= 缺省,按视口夹。 */
+  paneLeft?: number
+  paneRight?: number
   /** 选区所在块的类型名(「正文」/「标题 2」/「无序列表」…),给工具栏的「转换为」按钮显示当前类型。 */
   kind: string
   /** **全覆盖**的行内格式名集合(AFFiNE 判据:选区内每一段都带这个格式才算激活;
@@ -253,6 +256,41 @@ function isImageSelection(state: EditorState): boolean {
 /** Esc 关掉工具栏 = 这个选区不再弹(直到选区变了):宿主派一笔带此 meta 的空事务(I-20)。
  *  不设这道闩,焦点从工具栏还给编辑器的那一拍 update 又把它弹回来。 */
 export const toolbarDismissKey = new PluginKey<boolean>('amx-toolbar-dismissed')
+
+/** 划线菜单的水平中心 = 选区**可见部分**各行矩形并集的中点(走查续六 6.8)。此前取首尾两个光标的中点:选了一整段、
+ *  第二行只有几个字时,中点落在左边,菜单伸到文件树上。量的是活选区的行矩形、只要横向范围 —— MarkdownBlock 里
+ *  「别量 getClientRects」那条说的是判断光标在第几行,不是这件事。量不到(没有可见行)返回 null,调用方回落旧算法。 */
+function selectionCenterX(view: EditorView, from: number, to: number, pane: DOMRect | undefined): number | null {
+  try {
+    const s0 = view.domAtPos(from)
+    const s1 = view.domAtPos(to)
+    const range = document.createRange()
+    range.setStart(s0.node, s0.offset)
+    range.setEnd(s1.node, s1.offset)
+    const top = pane?.top ?? 0
+    const bottom = pane?.bottom ?? window.innerHeight
+    let l = Infinity
+    let r = -Infinity
+    // 只量文字本身:整个被选中的段落,range.getClientRects() 会把段落的整块盒子也算进来(满宽),几段短行就被拉到中间。
+    const root = range.commonAncestorContainer
+    const walk = document.createTreeWalker(root.nodeType === Node.TEXT_NODE ? root.parentNode ?? root : root, NodeFilter.SHOW_TEXT)
+    const part = document.createRange()
+    for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+      if (!range.intersectsNode(n)) continue
+      part.selectNodeContents(n)
+      if (n === range.startContainer) part.setStart(n, range.startOffset)
+      if (n === range.endContainer) part.setEnd(n, range.endOffset)
+      for (const rc of Array.from(part.getClientRects())) {
+        if (!rc.width || rc.bottom <= top || rc.top >= bottom) continue
+        l = Math.min(l, rc.left)
+        r = Math.max(r, rc.right)
+      }
+    }
+    return r > l ? (l + r) / 2 : null
+  } catch {
+    return null
+  }
+}
 
 export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
   return $prose(() => {
@@ -336,7 +374,8 @@ export function selectionToolbarPlugin(report: (r: SelRect | null) => void) {
               })
               return vals.size === 1 ? [...vals][0] || undefined : undefined
             }
-            report({ from, to, active, align, shape: toolbarShape(editContextOf(selection)), fg: uniform('amadeusColor', 'color'), bg: uniform('amadeusBg', 'bg'), dir: fromDrag ? (selection.head < selection.anchor ? 'backward' : 'forward') : undefined, left: (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain) })
+            const pane = view.dom.closest('.dv-content-container, .mb-main')?.getBoundingClientRect()
+            report({ from, to, active, align, shape: toolbarShape(editContextOf(selection)), fg: uniform('amadeusColor', 'color'), bg: uniform('amadeusBg', 'bg'), dir: fromDrag ? (selection.head < selection.anchor ? 'backward' : 'forward') : undefined, left: selectionCenterX(view, from, to, pane) ?? (a.left + b.left) / 2, top: Math.min(a.top, b.top), bottom: Math.max(a.bottom, b.bottom), paneLeft: pane?.left, paneRight: pane?.right, kind: spans ? translate('wikiac.multiBlocks') : blockLabel(chain) })
     }
     return new Plugin({
       key: toolbarDismissKey,

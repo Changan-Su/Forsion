@@ -33,6 +33,7 @@ import { deps } from '../seams/runtime.js';
 import { createRun, setRunTerminalListener } from './runStore.js';
 import { enqueueRun } from './agentLoop.js';
 import { loadSpecialAgentsConfig, legacyMusePrompt, isWithinActiveHours, buildTodoDedupHint, resolveBackgroundModelId, type MuseConfig } from './specialAgentsConfig.js';
+import { starterHint } from './museStarters.js';
 import { MUSE_AGENT_SLUG, ensureMuseAgent, getAgent, listAgents, resolveMemorySlug } from '../agents/agentRegistry.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG, agentsDir, checkpointsDir, tanguHome } from '../core/tanguHome.js';
@@ -43,7 +44,7 @@ import { loadSchedule, entriesOf, dueHere, markEntryFired, ensureEntry, validate
 import { L } from '../tui/i18n.js';
 import { countPendingApprovals } from './pendingApprovals.js';
 import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from '../tools/builtin/inboxSend.js';
-import { inboxHint, postIntroCard, recommendHint } from './museCards.js';
+import { inboxHint, postIntroCard, postObservedRuleCards, recommendHint } from './museCards.js';
 import { MUSE_ONBOARDING_DAILY_CAP, MUSE_ONBOARDING_MS, ensureMuseOnboarding, onboardingActive, readMuseOnboarding } from './museState.js';
 import { readActivityLines, readUserActivityStamps, activityRhythm, activitySince, parseActivityTs, type ActivityRhythm } from './userActivity.js';
 import { notRemoteTaintedSql } from './remoteTaint.js';
@@ -729,6 +730,7 @@ export function buildCycleMessages(
     'If that context ends with a computer-history block, it is what the user was actually doing on this computer outside Forsion: treat it as your most direct signal of what they are working on. ' +
     tierKickoff(cfg) + ' ' +
     `Avoid the "TODOs you have already proposed" below; use add_muse_todo only for genuinely new, high-value todos (at most ${cfg.maxTodosPerWindow} this period — spend the quota sparingly). ` +
+    (cfg.chatStarters ? 'Keep the new-chat starters below useful via set_chat_starters; change one only when something more timely comes up. ' : '') +
     'Use manage_schedule to plan your own follow-ups (auto=true entries wake you up when due; remove them when done). ' +
     'Pace yourself — every cycle spends the user\'s background budget: when nothing needs you soon (the user is away, or it is outside their usual hours per the user rhythm below), ' +
     'finish briefly and call set_next_wake to sleep until they are likely back; their activity ends the sleep, and your rules and due schedule still wake you meanwhile. ' +
@@ -783,6 +785,7 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
     (await recentSessionTitles(userId)) +
     (await folderHint(cfg.allowedFolders)) +
     (await existingTodoHint(userId)) +
+    (cfg.chatStarters ? await starterHint(userId) : '') +
     (await museDmHint(userId)) +
     (await recommendHint(userId)) +
     (await inboxHint(userId, cfg)) +
@@ -950,6 +953,7 @@ async function tick(): Promise<void> {
     if (!isWithinActiveHours(cfg, nowHour())) { log(`不在运行时段(当前 ${nowHour()} 时),跳过`); return; }
 
     await sendDailyDigestIfDue(cfg, userId);
+    await postObservedRuleCards(userId).catch((e: any) => log(`观察结果卡发送失败:${e?.message || e}`));
     // 后台让位：用户有进行中的 run → 不与之抢模型账号/速率，本轮跳过（下次巡检再来）。
     if (await anyUserRunActive()) { lastRunning = false; log('用户有进行中的 run，本轮让位'); return; }
     // 起周期的三种理由(任一即可;都不豁免 anyMuseRunActive/token/restarts 预算闸——防失控烧穿额度):

@@ -297,6 +297,18 @@ export interface MuseTrigger {
   /** 每天最多触发几次(可选);firedDay 是当天计数,markTriggersFired 写。 */
   maxPerDay?: number;
   firedDay?: { day: string; n: number };
+  /**
+   * 观察:规则开着时照常判定、照常走冷却和游标,命中只记「本应执行」,动作一律不做(automation.recordObserved)。
+   * 和 enabled 是两位:enabled=false 时这一位留着,恢复后还是观察。一次性 / 手动规则没有观察(canObserve)。
+   * 只有用户能把观察改成启用,引擎绝不自动转正。
+   */
+  observe?: boolean;
+  /** 这一段观察从何时算(结果卡的 7 天、面板的累计)。 */
+  observeSince?: string;
+  /** Muse 建的规则才发结果卡:用户自己写的规则,写下来就是授权,不催。 */
+  observeBy?: 'muse';
+  /** 这一段观察的结果卡发过了;「再看 7 天」清掉。 */
+  observeReportedAt?: string;
 }
 
 /** 时段是本地小时 [start, end),start > end = 跨夜;weekdays 0=周日(Date.getDay 口径)。 */
@@ -408,6 +420,7 @@ export interface TriggerInput {
   params?: unknown;
   only?: unknown;
   max_per_day?: unknown;
+  observe?: unknown;
 }
 
 export interface ValidatedTrigger {
@@ -422,7 +435,12 @@ export interface ValidatedTrigger {
   /** 同 actions:undefined=保留,null=清空(老客户端的整量 upsert 不带这两个键,不能抹掉)。 */
   only?: TriggerOnly | null;
   maxPerDay?: number | null;
+  /** undefined=保留(启停开关和插件 ensure 的重放都不带这个键)。 */
+  observe?: boolean;
 }
+
+/** 一次性和手动规则没有观察:前者命中一次就结束,后者本来就要人点。 */
+export const canObserve = (cond: Pick<MuseTriggerCond, 'type'>): boolean => cond.type !== 'at' && cond.type !== 'manual';
 
 const MAX_WHERE = 10;
 /** where 入参:缺席/null → 无;数组 → 逐条校验(≤10 条,column 非空 ≤200,op 白名单,eq/ne 的 value ≤200)。 */
@@ -517,6 +535,9 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
   if (!po.ok) return po;
   const pm = parseMaxPerDay(input.max_per_day);
   if (!pm.ok) return pm;
+  // 模型传来的字符串不能被读成 false:那会把本该观察的规则直接转成启用。
+  if (input.observe != null && typeof input.observe !== 'boolean') return { ok: false, error: 'observe must be true or false' };
+  if (input.observe === true && !canObserve(cond)) return { ok: false, error: 'observe is not available for one-time (at) or manual rules' };
   return {
     ok: true,
     value: {
@@ -529,6 +550,7 @@ export function validateTriggerInput(input: TriggerInput, opts: { cwd?: string; 
       actions,
       ...(po.value !== undefined ? { only: po.value } : {}),
       ...(pm.value !== undefined ? { maxPerDay: pm.value } : {}),
+      ...(typeof input.observe === 'boolean' ? { observe: input.observe } : {}),
     },
   };
 }
@@ -586,7 +608,7 @@ export const isPluginTriggerId = (id: string): boolean => id.startsWith('plugin:
  * **只有 HTTP 路由传 true**;manage_automation 工具不传——否则聊天 agent 能凭空造出伪装成插件的规则,
  * 还绕过 50 条帽(这条路照样过 MAX_TRIGGERS)。
  */
-export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { allowPluginCreate?: boolean; actor?: UpsertActor } = {}):
+export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { allowPluginCreate?: boolean; actor?: UpsertActor; observeBy?: 'muse' } = {}):
   Promise<{ ok: true; trigger: MuseTrigger; created: boolean } | { ok: false; error: string }> {
   return withTriggersLock(async () => {
     const list = await loadTriggers();
@@ -626,7 +648,8 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
       // **先清游标再存规则** —— 反过来的话中途崩溃会留下「新 cond + 旧游标」这一种最坏组合。
       // 这一步只是快速路径:真正与时序无关的防线是读端的 cursorMismatch(drain 的 setCursors 会把
       // 刚删掉的键合并写回,这里删不干净;换表那类身份变化由游标自证兜住)。
-      if (condChanged || reEnabled) await dropCursors([cur.id]).catch(() => {});
+      const goesLive = !!cur.observe && (v.observe === false || !canObserve(v.cond));
+      if (condChanged || reEnabled || goesLive) await dropCursors([cur.id]).catch(() => {});
       cur.desc = v.desc;
       cur.cond = v.cond;
       cur.prompt = v.prompt;
@@ -654,6 +677,8 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
         cur.maxPerDay = v.maxPerDay ?? undefined;
         if (!cur.maxPerDay) delete cur.firedDay;
       }
+      if (goesLive) endObservation(cur);
+      else if (v.observe && !cur.observe) startObservation(cur, opts.observeBy);
       await saveTriggers(list);
       return { ok: true as const, trigger: cur, created: false };
     }
@@ -676,9 +701,54 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
       ...(v.only ? { only: v.only } : {}),
       ...(v.maxPerDay ? { maxPerDay: v.maxPerDay } : {}),
     };
+    if (v.observe) startObservation(rule, opts.observeBy);
     list.push(rule);
     await saveTriggers(list);
     return { ok: true as const, trigger: rule, created: true };
+  });
+}
+
+export class ObservationEnableRefused extends Error {}
+
+function startObservation(t: MuseTrigger, by?: 'muse'): void {
+  t.observe = true;
+  t.observeSince = new Date().toISOString();
+  delete t.observeReportedAt;
+  if (by) t.observeBy = by; else delete t.observeBy;
+}
+
+/**
+ * 转成启用:观察期还没轮到的命中不补做。表的游标由调用方先清(含 agent 的规则一轮只吃一行,余下的行还在游标外),
+ * 活动行这里截断(冷却中的行没消费)。
+ */
+function endObservation(t: MuseTrigger): void {
+  t.lastEventCursor = { ts: toActivityTs(new Date()), hash: '' };
+  delete t.observe;
+  delete t.observeSince;
+  delete t.observeBy;
+  delete t.observeReportedAt;
+}
+
+/**
+ * 结果卡的三个按钮和发卡记账。读当前规则再写,放在锁里:卡可能放了好几天,规则也许已经删了或改成启用了。
+ * 返回 false = 这条规则已经不在观察或被暂停了。mayEnable 在锁里判,判完到写之间规则改不了。
+ */
+export async function updateObservation(id: string, op: 'enable' | 'extend' | 'pause' | 'reported', mayEnable?: (t: MuseTrigger) => boolean): Promise<boolean> {
+  return withTriggersLock(async () => {
+    const list = await loadTriggers();
+    const t = list.find((x) => x.id === id);
+    if (!t?.observe || !t.enabled) return false;
+    if (op === 'enable') {
+      if (mayEnable && !mayEnable(t)) throw new ObservationEnableRefused();
+      await dropCursors([t.id]).catch(() => {});
+      endObservation(t);
+    } else if (op === 'extend') startObservation(t, t.observeBy);
+    else if (op === 'pause') {
+      t.enabled = false;
+      t.disabledBy = 'user';
+    } else t.observeReportedAt = new Date().toISOString();
+    await saveTriggers(list);
+    return true;
   });
 }
 

@@ -58,8 +58,18 @@ const all = {
   all['ai-studio:sandbox+gui'] = getToolDefinitions({ ...base, client: 'web/0.0.0' }); // work 对照:sketch 在云端 work 也在场
   all['ai-studio:sandbox+gui+chat'] = getToolDefinitions({ ...base, client: 'web/0.0.0', preset: 'chat' }); // chat GUI 真形态:≤10,400 B
 }
+// 小组件(10-31):握手了 widget.v1 的本机客户端多 widget / edits / summary 参数和 Widgets 目录项;别的键逐字节不变。与 test/tooldefs.snapshot.test.ts 的同名块逐字同改。
+{
+  const p = createTanguProfile({ sandboxMode: 'none' });
+  configureTangu({ host: stub, brain: stub, billing: stub, profile: p });
+  all['tangu-none:host+gui+widget'] = getToolDefinitions({
+    userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {},
+    execMode: 'host', cwd: '/tmp', approvalMode: 'auto-edit', client: 'desktop/0.0.0', uiCommands: [],
+    clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2', 'widget.v1'],
+  });
+}
 // 按**用户本机状态**门控的工具:read_computer_history 看 <共享域>/computer-history/state.json 是否开着 ——
 // 只有 `tangu-none:host+gui`(本机引擎 + desktop 客户端)过得了门禁,开过电脑历史的机器上会多出它。**只**从这一个键剔
 // (与 test/tooldefs.snapshot.test.ts 同改),别的键里出现它就是真漂移;定义字节由 src/services/computerHistory.test.ts 的哈希钉。
-all['tangu-none:host+gui'] = all['tangu-none:host+gui'].filter((t) => t?.function?.name !== 'read_computer_history');
+for (const key of ['tangu-none:host+gui', 'tangu-none:host+gui+widget']) all[key] = all[key].filter((t) => t?.function?.name !== 'read_computer_history');
 process.stdout.write(JSON.stringify(all, null, 2) + '\n');

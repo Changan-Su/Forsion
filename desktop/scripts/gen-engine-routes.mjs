@@ -90,6 +90,9 @@ export const CLASSIFICATION = {
   'POST /agent/human/:file/undo': [D, 'host human folder undo'],
   'GET /agent/human/SOUL.md/entries': [D, 'host portrait entries (human/SOUL.md; the route itself also refuses remote origin)'],
   'POST /agent/human/SOUL.md/entries': [D, 'host portrait entry write (receipt undo; the route itself also refuses remote origin)'],
+  'GET /agent/human/SOUL.md/move': [D, 'host portrait move card (the route itself also refuses remote origin)'],
+  'POST /agent/human/SOUL.md/move/scan': [D, 'starts the user-requested scan of Agent memories (the route itself also refuses remote origin)'],
+  'POST /agent/human/SOUL.md/move/items/:id': [D, 'moves or keeps one Agent memory entry for the portrait (the route itself also refuses remote origin)'],
   'POST /agent/agents/:slug/memory/promote': [D, 'moves an Agent memory entry into host human/AGENT.md (the route itself also refuses remote origin)'],
 
   // ── workspace.ts ──
@@ -190,6 +193,9 @@ export const CLASSIFICATION = {
   'POST /agent/skills/upload': [D, 'skill upload (design appendix C)'],
   'DELETE /agent/skills/user/:id': [D, 'delete user skill'],
   'GET /agent/tools': [A, 'tool list'],
+  'POST /agent/mcp/:name/login': [D, 'MCP OAuth sign-in: loopback callback and tokens are local to this computer'],
+  'POST /agent/mcp/:name/logout': [D, 'MCP OAuth sign-out deletes a local token'],
+  'POST /agent/mcp/:name/key': [D, 'connector user key: stored only on this computer (connector-auth.json)'],
 
   // ── agents.ts ──
   'GET /agent/agents': [A, 'Agent roster; remote callers get no persona / developer instructions and the approval mode clamped to the remote cap (P1-M1A projection)'],
@@ -338,6 +344,8 @@ export const CLASSIFICATION = {
   'POST /agent/special/approvals/:id/approve': [A, 'answer an async approval (D1/D2)'],
   'POST /agent/special/approvals/:id/reject': [A, 'answer an async approval (D1/D2)'],
   'GET /agent/special/muse/library': [A, 'Muse library'],
+  'GET /agent/special/muse/starters': [A, 'Muse chat starters shown under the new-chat composer (read-only)'],
+  'PATCH /agent/special/muse/starters/:id': [D, 'marks a starter used / dismissed and appends [feedback] to Muse LOG (memory write into an autonomous Agent)'],
   'GET /agent/special/muse/library/file': [A, 'Muse library file (read-only, realpath-bounded to the Library)'],
 
   // ── hooks.ts / wechat.ts / channels.ts —— 整组本机 ──
@@ -376,6 +384,10 @@ export const CLASSIFICATION = {
   'POST /agent/tts/voices/clone': [D, 'creates a provider voice'],
   'POST /agent/tts/voices/design': [D, 'creates a provider voice'],
   'POST /agent/tts/voices/delete': [D, 'deletes a provider voice'],
+  'POST /agent/tts/cloud-voices/list': [D, 'voice management stays local, like /agent/tts/voices/*'],
+  'POST /agent/tts/cloud-voices/clone': [D, 'creates a provider voice on the signed-in account'],
+  'POST /agent/tts/cloud-voices/delete': [D, 'deletes a provider voice on the signed-in account'],
+  'POST /agent/tts/cloud-voices/sample': [D, 'voice management stays local, like /agent/tts/voices/*'],
 }
 
 const METHODS = new Set(['get', 'post', 'put', 'patch', 'delete'])

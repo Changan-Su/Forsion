@@ -2,6 +2,7 @@ import type { ToolProvider } from '../toolRegistry.js'
 import type { ToolContext } from '../toolTypes.js'
 import type { Tool } from '../../core/types.js'
 import { sketchEnabledFor } from './sketch.js'
+import { saveCardWidget, WIDGET_PARAMS, widgetsEnabledFor } from './manageWidget.js'
 import { uiDocumentTooLarge, validateUIDocument } from '../../shared/intelligentUi.js'
 import { uiDocumentIssues } from '../../shared/intelligentUiExpr.js'
 
@@ -162,6 +163,11 @@ const INTELLIGENT_UI_V2_DEFINITION: Tool = { type: 'function', function: {
   description: 'Render a native interactive answer: plans, images, sources, comparisons, checklists, and computed cards (calculators, step guides, flashcards, quizzes) that recompute locally. Follow the schema in the Intelligent UI instructions. Each call creates one document; local interactions do not call the model. Pictures the user picks among go on the choice options as imageId, not in a gallery. No HTML/JS/CSS. Use intelligent_ui_html for charts, diagrams and animations, prose for simple answers.',
   parameters: { type: 'object', properties: { document: { type: 'string', description: 'JSON-encoded document, version 1 or 2 (computed). Order: version, id, title, inputs, state, derived, resources, blocks. Max 64 KiB.' } }, required: ['document'] },
 } }
+const INTELLIGENT_UI_WIDGET_DEFINITION: Tool = { type: 'function', function: {
+  ...INTELLIGENT_UI_V2_DEFINITION.function,
+  description: `${INTELLIGENT_UI_V2_DEFINITION.function.description} With widget it saves a card the user keeps (小组件), or changes one with the whole new document; see the "Widgets" section.`,
+  parameters: { ...INTELLIGENT_UI_V2_DEFINITION.function.parameters, properties: { ...INTELLIGENT_UI_V2_DEFINITION.function.parameters.properties, ...WIDGET_PARAMS } },
+} }
 
 export const intelligentUiProvider: ToolProvider = {
   id: 'builtin:intelligent-ui',
@@ -169,10 +175,11 @@ export const intelligentUiProvider: ToolProvider = {
     name: 'intelligent_ui', mode: 'both',
     isEnabledFor: (_profile, ctx) => intelligentUiEnabledFor(ctx),
     capabilities: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 5000 },
-    definitionFor: (ctx) => computedUiEnabledFor(ctx) ? INTELLIGENT_UI_V2_DEFINITION : INTELLIGENT_UI_DEFINITION,
+    definitionFor: (ctx) => !computedUiEnabledFor(ctx) ? INTELLIGENT_UI_DEFINITION : widgetsEnabledFor(ctx) ? INTELLIGENT_UI_WIDGET_DEFINITION : INTELLIGENT_UI_V2_DEFINITION,
     definition: INTELLIGENT_UI_DEFINITION,
-    execute: (args, ctx): string => {
+    execute: (args, ctx): string | Promise<string> => {
       try {
+        if (args.widget != null && !widgetsEnabledFor(ctx)) return 'Error: widgets cannot be saved in this session. Call intelligent_ui without widget.'
         if (typeof args.document !== 'string' || uiDocumentTooLarge(args.document)) return 'Error: document must be a JSON string up to 64 KiB.'
         const doc = validateUIDocument(JSON.parse(args.document), { maxVersion: computedUiEnabledFor(ctx) ? 2 : 1 })
         for (const block of doc.blocks) if (block.kind === 'app-card') {
@@ -180,7 +187,8 @@ export const intelligentUiProvider: ToolProvider = {
           if (!card || (block.query !== undefined && !card.acceptsQuery)) return 'Error: unavailable app card or unsupported query. Call list_intelligent_cards and use its catalog.'
         }
         const issues = uiDocumentIssues(doc)
-        return `Intelligent UI rendered: ${doc.title} (${doc.blocks.length} blocks).${issues.length ? `\nThese values show "—" at the initial values; fix them with a corrected call unless that is intended:\n- ${issues.join('\n- ')}` : ''}`
+        const rendered = `Intelligent UI rendered: ${doc.title} (${doc.blocks.length} blocks).${issues.length ? `\nThese values show "—" at the initial values; fix them with a corrected call unless that is intended:\n- ${issues.join('\n- ')}` : ''}`
+        return args.widget == null ? rendered : saveCardWidget(args, ctx, { entry: 'widget.json', title: doc.title, content: args.document }).then((r) => r.startsWith('Error') ? r : `${rendered}\n${r}`)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         // JSON 写坏时带上出错那几个字;v2 的表达式本身是 JSON 字符串,里面的文字用单引号,收尾的双引号常被漏(live 10-20 AA 分账连错两次)

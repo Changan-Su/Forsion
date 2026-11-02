@@ -227,6 +227,7 @@
 .t2sf-file .t2sf-fic { color: var(--text-faint, var(--text-muted)); }
 .t2sf-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2sf-size { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
+.t2sf-tag { flex-shrink: 0; padding: 0 5px; border-radius: 4px; background: var(--overlay-light); font-size: var(--ui-font-caption, 11px); line-height: 16px; color: var(--text-muted); }
 /* 行尾动作(M1B:远端会话「本会话的文件」的下载键)。触屏没有右键 / 悬浮 → 常显;度量与色阶同 .t2s-group-add,
    负外边距把 24px 点击区吃进行的上下内边距,行高不变。 */
 .t2sf-row-act {
@@ -295,6 +296,8 @@
 .t2s-side .t2s-special-ic > svg { width: var(--t2s-icon, 13px); height: var(--t2s-icon, 13px); }
 .t2s-special.active .t2s-special-ic { color: var(--accent-ink); }
 .t2s-special-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amx-share-meta { flex: 0 0 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.amx-share-meta.is-warn { color: var(--danger); }
 .t2s-special-go { display: inline-flex; color: var(--text-faint, var(--text-muted)); opacity: 0.6; border-radius: var(--radius-sm, 6px); }
 .t2s-special-go:hover { opacity: 1; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
 

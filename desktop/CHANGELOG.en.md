@@ -2,6 +2,33 @@
 
 <!-- English edition of CHANGELOG.md: same "## <version> (<date>)" headings, one bullet per Chinese bullet. Add both when releasing. -->
 
+## 2.13.8-beta.3 (2026-11-02)
+
+Preview build: only for people who chose the preview channel. Stable users won't receive it.
+
+- **Agents and chat**:
+  - Editing or regenerating keeps the old version as a branch, and you can edit a question in place.
+  - Child sessions can message their parent and siblings, delegates can resume with full context, and the canvas can show child sessions as branches.
+  - A fallback model takes over when quota runs out, compaction no longer hits a dead end, and secrets are masked before they reach a model.
+  - Git tools and cards in chat: status, commit, push and pull.
+  - Muse gains a settings entry, inbox tools and chat starters. Rules have an Observe state, and the two-week summary shows how many proposals you adopted.
+  - Automation triggers can use local computer events, and plugins can add their own.
+  - Agents write what they learn about you into the shared portrait, and can move older memories there on request. Agents can have Chinese and English names.
+  - Historian leaves titles and icons you set alone.
+- **Intelligent UI**: HTML cards can use the bundled three, d3, chart.js and gsap while staying offline. Forms work, and widgets can be saved, edited and keep their records. Cards can no longer navigate themselves or send data out over WebRTC.
+- **Voice**: Calls are on by default unless you turned them off, with voice cards and cloud voices.
+- **Amadeus**: Sharing covers linked pages, direct invite links and a sharing overview, delivered with Forsion Extend 0.9.6. Also new: local vault switching, a tag tree with `tag:` search and a floating table of contents. Soft line breaks show as line breaks, and whiteboard zoom and file reading positions survive Space switches.
+- **Store and plugins**: The Store installs missing prerequisite plugins in one step. Skills can be installed for chosen agents. Uninstalling goes through a 30-day Trash with undo. Plugin views get native styling and a failure card with Retry, and web cards are new.
+- **Connections**: Remote MCP servers support OAuth sign-in, and connectors appear in the Store and Settings. Import connections from CC Switch, Claude Code and Codex. Settings has provider presets and the native Anthropic protocol. GPT-6.1 Terra is supported.
+- **Quota**: The context ring shows provider quota for direct models, and you can set quota and reset reminders.
+- **Interface**:
+  - A zoom indicator appears at the bottom right. Split panes share one back, forward and left sidebar control in the leftmost pane. Ribbon overflow is now a +N droplet flyout.
+  - Narrow Chat Views keep their controls stable, Floating Panels (Settings, Store) are independent windows, and walkthrough rounds 6 to 8 are included.
+  - The phone Dock gains a droplet selection, finger-tracking swipes and a sink-away exit.
+- **Events center**: Check-ins, tasks, mini games and announcements in one panel, delivered with Forsion Extend 0.9.6.
+- **Reliability**: An unreadable config file is no longer treated as empty, note saves reach disk before the rename, cloud sync keeps concurrent edits, and the tab bar stays clickable on Windows after collapsing the bottom panel.
+- **Engine 2.13.14**, with Forsion Extend 0.9.5.
+
 ## 2.13.8-beta.2 (2026-10-25)
 
 Preview release: only offered to people who chose the preview channel; stable users won't get it.

@@ -39,7 +39,7 @@
 .t2-chat-body { position: relative; flex: 1; min-height: 0; display: flex; }
 /* ── 输入卡悬浮:正文铺满整列,从胶囊底下穿过去(2026-08-14 用户草图)──────────────
  * 高度不定(芯片行 / 多行草稿 / steer 队列都会长高),ChatView 用 ResizeObserver 把实测高写进
- * .t2-chat-col 的 --t2-composer-h;**底部留白、渐隐止点、回到底按钮三处共用它**,改一处就得想全三处。
+ * .t2-chat-col 的 --t2-composer-h;**底部留白、渐隐止点、回到底按钮、toast 落点(.t2-toast-dock)四处共用它**,改一处就得想全四处。
  * 渐隐用 mask 而不是铺一条背景色渐变:聊天区自己没有底色(主区透纸卡、侧栏透玻璃面),
  * 铺色必然在某个主题/某一侧对不上;mask 是把内容本身淡成透明,与背景是什么无关。
  *
@@ -124,8 +124,29 @@
 .t2-content > :last-child { margin-bottom: 0; }
 .t2-content p { margin: 0 0 var(--chat-paragraph-gap, .7em); }
 /* 列表:缺省项与项、列表与下一段之间都不留空(全局 reset);宽松正文时各留一点。只管顶层列表,嵌套的不加底边距。 */
-.t2-content li { margin-block: var(--chat-item-gap, 0); }
+.t2-content li { margin-block: var(--chat-item-gap, .15em); }
 .t2-content > :is(ul, ol) { margin-bottom: var(--chat-list-after, 0); }
+/* 列表 / 引用 / 任务清单照笔记编辑器的画法(走查续六 6.1):缩进 1.4em、二级空心圆、标记淡一档;
+   引用块左边 2px 圆头竖线(上下各缩 10%,border-left 做不了);任务项只留自绘复选框,勾上的那条变淡划线。 */
+.t2-content :is(ul, ol) { padding-left: 1.4em; }
+.t2-content li > :is(ul, ol) { margin-block: .15em .1em; }
+.t2-content ul ul { list-style-type: circle; }
+.t2-content li::marker { color: var(--text-muted); }
+.t2-content blockquote { margin: .5em 0 .8em; padding-left: .9em; position: relative; color: var(--text-muted); }
+.t2-content blockquote::before { content: ''; position: absolute; left: 0; top: 10%; bottom: 10%; width: 2px; border-radius: 2px; background: var(--border); }
+.t2-content li.task-list-item { list-style: none; }
+.t2-content li.task-list-item > input[type='checkbox'],
+.t2-content li.task-list-item > p:first-child > input[type='checkbox'] {
+  appearance: none; box-sizing: border-box; width: 14px; height: 14px; margin: 0 8px 0 -22px; vertical-align: -2px;
+  border: 1.5px solid var(--text-ghost); border-radius: 4px; background: var(--bg-card); opacity: 1;
+}
+.t2-content li.task-list-item > input[type='checkbox']:checked,
+.t2-content li.task-list-item > p:first-child > input[type='checkbox']:checked {
+  border-color: transparent;
+  background: var(--signal-mark) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M20 6 9 17l-5-5'/%3E%3C/svg%3E") center / 10px no-repeat;
+}
+/* 松散列表(项间空行)里复选框包在 <p> 里,两种都认 */
+.t2-content li.task-list-item:has(> input:checked, > p:first-child > input:checked) { color: var(--text-muted); text-decoration: line-through; text-decoration-color: var(--text-ghost); }
 /* 标题节奏(10-02 用户拍板 a5,与笔记同一口径):半粗、上远下近。原来没有这组规则,走浏览器默认的 700。
    首块的上边距由上面 > :first-child 清零(特异性更高)。 */
 .t2-content :is(h1, h2, h3, h4, h5, h6) { font-weight: 600; line-height: 1.35; margin: 1.3em 0 var(--chat-heading-after, 0.4em); }
@@ -155,7 +176,26 @@
    (流本身不会被顶宽:它 overflow-y:auto ⇒ 是滚动容器 ⇒ flex 自动最小尺寸恒为 0,不必写 min-width:0。)
    仪器:npm run check:chatside 的 16/17。 */
 /* 底色与内边距和笔记代码块同一份(10-02 a5:原来透明底,代码像没包起来)。 */
-.t2-content pre { border-radius: var(--radius-md, 12px); max-width: 100%; overflow-x: auto; background: var(--bg-card); padding: 12px 14px; }
+/* 字体照笔记代码块(--font-mono、约 12.9px、行高 1.6、小圆角;走查续六 6.2)。没表头的短块(一两行命令)右边让出角上的复制键,
+   有 Run 键再让一颗;有表头的块(Markdown.tsx 的 CodeBlock 决定)底色挪到外框,复制 / 运行在表头里,永远不压字。 */
+.t2-content pre {
+  border-radius: var(--radius-sm); max-width: 100%; overflow-x: auto; background: var(--bg-card); padding: 12px 44px 12px 14px;
+  font-family: var(--font-mono); font-size: .92em; line-height: 1.6;
+}
+.t2-content pre code { font-family: inherit; }
+.t2-content .code-box[data-run] > pre { padding-right: 72px; }
+.t2-content .code-box[data-code-head] { background: var(--bg-card); border-radius: var(--radius-sm); overflow: hidden; margin: 0 0 var(--chat-paragraph-gap, .7em); }
+.t2-content .code-box[data-code-head] > pre { border-radius: 0; background: transparent; padding: 2px 14px 12px; margin: 0; }
+.t2-content .code-head {
+  display: flex; align-items: center; justify-content: space-between; height: 30px; padding: 0 6px 0 14px;
+  font-size: var(--ui-font-caption, 11px); line-height: 1; color: var(--text-muted);
+}
+.t2-content .code-head-acts { display: inline-flex; align-items: center; gap: 2px; }
+.t2-content .code-head-btn {
+  display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 8px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-muted); font: inherit; cursor: pointer;
+}
+.t2-content .code-head-btn:hover { background: var(--overlay-light); color: var(--text); }
 /* 分割线 ---:比正文边框更淡的发丝线 + 上下留白 */
 .t2-content hr {
   border: none;
@@ -318,6 +358,16 @@
   transition: background var(--duration-fast, .15s);
 }
 .t2-tool .t2-relogin { align-self: center; } /* 聊天错误条是 row flex + align-items:center,跟着居中 */
+/* 失败那一行下面「重试 · 复制错误」(走查续六 6.3):和回答下那排操作同一种文字按钮,不带主题色;左缘对齐错误条里的字。
+   右栏失败卡同一颗(.t2-tsum-retry)。 */
+.t2-retry-row { display: flex; align-items: center; gap: 2px; margin: -2px 0 0 -8px; }
+.t2-retry-btn {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 8px; border: 0; border-radius: var(--radius-sm);
+  background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer;
+}
+.t2-retry-btn.lead { color: var(--text); }
+.t2-retry-btn:hover { background: var(--overlay-light); }
+.t2-tsum-retry { margin: 6px 0 0 -8px; }
 .t2-relogin:hover { background: color-mix(in srgb, var(--danger) 12%, transparent); }
 .t2-tool-name { font-weight: 600; color: var(--text); }
 .t2-tool-hint { color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
@@ -478,6 +528,13 @@
 /* ⚠️ pointer-events 是**继承**属性:悬浮层置 none 之后,里面的东西不点名就一起哑了。
    簇内各块(选择器条 / 输入卡 …)一律收回 auto。 */
 .t2-chat-col > .composer-anchor > * { pointer-events: auto; }
+/* 聊天里弹的 toast 落点(lib/chatToastDock.ts):输入卡上方 12px,托盘出现 / 输入卡变高时跟着上移;两张叠着放、间隔 8px。
+   toast 自己的 fixed + 整窗居中在这里换成跟着落点走;列窄时收到列宽减 32px。 */
+.t2-toast-dock {
+  position: absolute; left: 0; right: 0; bottom: calc(var(--t2-composer-h, 96px) + 12px); z-index: 11;
+  display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none;
+}
+.t2-toast-dock > :is(.ach-toast, .amx-toast) { position: relative; left: auto; bottom: auto; transform: none; max-width: calc(100% - 32px); box-sizing: border-box; }
 /* 唯独 .t2c 例外:它铺满整宽,可有内容的只有中间那 880px(.t2c-inner)。让它自己不吃事件,
    胶囊两侧的空当就把滚轮/框选交还给底下的正文。`:not(.t2c-inner)` 兜住卡外的浮层(群聊设置弹窗等)。 */
 .t2-chat-col > .composer-anchor > .t2c { pointer-events: none; }
@@ -493,14 +550,54 @@
    小窗(lcl/engine/miniCard.css 的 .mini-card-shell .newchat-projectbar,(0,2,0))照旧压过这里。仪器:npm run e2e:projectbar。
    折行朝上(wrap-reverse):放不下的(额外文件夹、开场那一行)排到上一行去,项目胶囊始终贴着输入卡。
    上内边距放在 inner 上:栏里什么都没有(只等开场那一行、而它没东西可说)时 inner 为空,整栏不占高度。 */
-.newchat-projectbar { max-width: 880px; width: 100%; margin: 0 auto; box-sizing: border-box; padding: 0 28px; }
+.newchat-projectbar, .t2-starters { max-width: 880px; width: 100%; margin: 0 auto; box-sizing: border-box; padding: 0 28px; }
 .newchat-projectbar-inner { display: flex; align-items: center; flex-wrap: wrap-reverse; gap: 6px; padding-top: 6px; }
 .newchat-projectbar-inner:empty { display: none; }
 @media (max-width: 1040px) {
-  .newchat-projectbar { padding-inline: 18px; }
+  .newchat-projectbar, .t2-starters { padding-inline: 18px; }
 }
 @container (max-width: 520px) {
-  .newchat-projectbar { padding-inline: 10px; }
+  .newchat-projectbar, .t2-starters { padding-inline: 10px; }
+}
+/* ── Muse 的开场建议(MuseStarters.tsx;方案 docs/ToBeImproved/Muse预制提示词方案_2026-10-25):Chat Box 正下方最多三行 ──
+   盒子同上面那一栏(和输入卡左缘对齐);行不描边,悬停只垫一层底。链接用 --accent-ink(强调色只给落点与链接),悬停才下划线。
+   有草稿时收起:居中时只淡出、留着高度(收掉高度,居中的那一块在第一个字时整体跳一下);不居中(手机)才真收掉。 */
+.t2-starters { display: flex; flex-direction: column; gap: 2px; padding-top: 10px; padding-bottom: 6px; transition: opacity var(--duration-fast, .15s); }
+.t2-starters[data-hidden] { opacity: 0; pointer-events: none; }
+.t2-starters[data-hidden]:not([data-centered]) { display: none; }
+.t2-starter {
+  display: flex; align-items: center; gap: 12px; min-width: 0;
+  padding: 8px 12px; border-radius: var(--radius-md, 10px);
+  font-family: var(--font-ui); font-size: var(--ui-font-body, 13px); line-height: 1.45; color: var(--text);
+  cursor: pointer; outline: none;
+  transition: background var(--duration-fast, .15s);
+}
+.t2-starter:hover, .t2-starter:focus-visible { background: var(--overlay-light, rgba(127,127,127,.08)); }
+.t2-starter-ic { flex: none; color: var(--text-muted); }
+.t2-starter[data-kind="muse"] .t2-starter-ic { color: var(--accent-ink); }
+.t2-starter-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2-starter-link { color: var(--accent-ink); font-weight: 500; text-decoration: none; text-underline-offset: 2px; cursor: pointer; }
+.t2-starter-link > svg { display: inline; vertical-align: -1px; margin-left: 1px; opacity: .75; }
+.t2-starter-link:hover { text-decoration: underline; }
+.t2-starter-link[data-static] { cursor: inherit; }
+.t2-starter-link[data-static]:hover { text-decoration: none; }
+.t2-starter-x {
+  flex: none; width: 24px; height: 24px; padding: 0; border: none; background: transparent;
+  border-radius: var(--radius-sm, 6px); color: var(--text-muted); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  visibility: hidden;
+}
+.t2-starter:hover .t2-starter-x, .t2-starter:focus-visible .t2-starter-x { visibility: visible; }
+.t2-starter-x:hover { background: var(--overlay-medium, rgba(127,127,127,.14)); color: var(--text); }
+/* 窄栏 / 手机:每条最多两行,别把「为什么」那半句省略掉 */
+@container (max-width: 520px) {
+  .t2-starter { align-items: flex-start; }
+  .t2-starter-text { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+}
+/* 触屏:没有悬停,× 常驻;一点输入框(键盘起来)就收起 */
+@media (hover: none) {
+  .t2-starter-x { visibility: visible; }
+  .composer-anchor:focus-within > .t2-starters { display: none; }
 }
 .t2-composer-wrap { padding: 8px 28px 18px; max-width: 880px; margin: 0 auto; width: 100%; box-sizing: border-box; display: flex; flex-direction: column; gap: 8px; }
 .t2-composer {
@@ -695,7 +792,7 @@
    * 这个区分是必须的:曾经无差别挂 250ms 过渡,开右栏时正文列宽 820→564→820 折返,
    * 补间停了 padding 还在动 44px —— 就是用户报的「面板停了字还在窜」。别把它挪出容器查询。
    * 曲线取苹果那条低回弹 spring 的贝塞尔近似;比卡片自身的 0.3s 慢一档(布局比卡片重)。 */
-  .t2-stream, .composer-anchor, .t2-chat-col > .t2-empty, .t2-jump {
+  .t2-stream, .composer-anchor, .t2-chat-col > .t2-empty, .t2-jump, .t2-toast-dock {
     transition-property: padding-right, right;
     transition-duration: 0.45s;
     transition-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
@@ -711,6 +808,8 @@
   /* 欢迎区与输入框共用可用宽度和让位动效,避免 Logo 仍以包含右侧车道的整列居中。 */
   .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-chat-col > .t2-empty { right: var(--tsum-w); }
   .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-jump { right: calc(var(--tsum-w) + 22px); }
+  /* toast 落点跟输入卡同一条中线(走查续六 6.5) */
+  .t2-chat-view:has(.t2-rail:not([data-off]) :is(.t2-tsum.show, .agent-desk-card:not(.gone))) .t2-toast-dock { right: var(--tsum-w); }
 }
 /* 退场那一刻卡片还没 display:none(等动画跑完),但已经不该吃点击 */
 @container (max-width: 759.9px) {
@@ -1334,6 +1433,13 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-child-update-item[data-status='waiting_for_user'] { color: var(--warning); }
 .t2-child-update-item[data-status='failed'] { color: var(--danger); }
 .t2-child-update-item + .t2-child-update-item::before { content: '·'; margin-right: 8px; color: var(--text-faint, var(--text-muted)); }
+/* <session_message> 落库行(别的会话发来的消息):一行谁发的 + 正文(最多 4 行,悬停看全文) */
+.t2-session-msg { display: flex; flex-direction: column; align-items: center; gap: 2px; margin: 4px 0; }
+.t2-session-msg-head { display: flex; align-items: center; gap: 6px; color: var(--text-muted); }
+.t2-session-msg-head > svg { color: var(--accent-ink); flex: none; }
+.t2-session-msg-head > a { color: var(--accent-ink); cursor: pointer; text-decoration: none; }
+.t2-session-msg-head > a:hover { text-decoration: underline; }
+.t2-session-msg-body { max-width: min(560px, 100%); color: var(--text-muted); white-space: pre-wrap; overflow-wrap: anywhere; text-align: left; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 /* 子会话顶上「来自 主会话」:按一段文字排(窄的子会话面板里会折行,不能是 flex —— 那样每一截各自竖着挤成一列) */
 .t2-child-from { display: block; text-align: center; margin: 0 0 10px; color: var(--text-muted); }
 .t2-child-from > svg { vertical-align: -2px; margin-right: 4px; }
@@ -1430,6 +1536,9 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .mb-shell[data-native-chrome] .tool-group-head { position: relative; }
 .mb-shell[data-native-chrome] .tool-group-head::after { content: ''; position: absolute; inset: -11px 0; }
 .mb-shell[data-native-chrome] .t2-content pre ~ .icon-btn::after { content: ''; position: absolute; inset: -9px; }
+.mb-shell[data-native-chrome] :is(.t2-retry-btn, .t2-content .code-head-btn) { position: relative; }
+.mb-shell[data-native-chrome] .t2-retry-btn::after { content: ''; position: absolute; inset: -9px 0; }
+.mb-shell[data-native-chrome] .t2-content .code-head-btn::after { content: ''; position: absolute; inset: -10px 0; }
 
 /* ====== 长会话:离视口远的消息跳过样式 / 排版 / 绘制 ======
    content-visibility:auto(docs/ToBeImproved/长内容渲染机制方案_2026-10-16 的 A):离得远的消息只占一个高度 —— auto = 画过一次
@@ -1537,6 +1646,20 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 }
 .t2cv-send:disabled { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); color: var(--text-faint); cursor: default; }
 .t2cv-edges path.draft { opacity: 0.45; }
+/* 子会话(方案「画布子会话显示」A):连过去的线换中性灰(分支照旧强调色;在当前这条路上时照 hot 加深);
+   简报卡不染强调色(不是你写的),标签行「子会话 · 标题 · 状态」+「简报 · Tangu 写的」 */
+.t2cv-edges path.kid { stroke: color-mix(in srgb, var(--text-muted) 45%, transparent); }
+.t2cv-turn[data-kid]:not([data-hot]) > .t2cv-link { background: color-mix(in srgb, var(--text-muted) 45%, transparent); }
+.t2cv-turn[data-kid="head"] > .t2cv-qcard { background: var(--bg-card, var(--bg)); }
+.t2cv-kidlabel { margin-bottom: 4px; }
+.t2cv-kidtag { display: flex; align-items: center; gap: 5px; min-width: 0; }
+.t2cv-kidtag > svg { flex: none; }
+.t2cv-kidtag > b { flex: none; font-weight: 600; color: var(--text); }
+.t2cv-kidtitle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-sec); }
+.t2cv-kidst { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+.t2cv-kidst[data-st="wait"] { color: var(--warning); }
+.t2cv-kidbrief { display: block; margin-top: 3px; }
+.t2cv-kidacts { margin-top: 8px; }
 /* 抓手:拖到哪都是平移(卡里的字也不选了) */
 .t2cv[data-hand] .t2cv-stage { cursor: grab; }
 .t2cv[data-hand] .t2cv-turn { user-select: none; cursor: grab; }
@@ -1705,3 +1828,23 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-musefb { display: flex; align-items: center; gap: 12px; margin-top: 4px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .t2-musefb button { border: none; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; }
 .t2-musefb button:hover { color: var(--text); }
+
+/* 编辑重发:提问原地变可改的气泡(EditBubble.tsx,方案 编辑重发分支与编辑框方案_2026-10-28 A)。同气泡底色 / 圆角 / 字号,
+   宽度撑到提问最大宽、不随字缩;高 12 行后内部滚;不加描边、不加焦点框。放文件末尾:要压过上面 520px 断点里的 .t2-user-col。 */
+.t2-user-col.t2-edit { width: 76%; align-items: stretch; }
+.t2-edit > .t2-username { align-self: flex-end; }
+.t2-edit-bubble { width: 100%; white-space: normal; }
+.t2-edit-ta {
+  display: block; width: 100%; min-height: 3.2em; max-height: calc(12 * 1.6em); field-sizing: content; overflow-y: auto;
+  resize: none; border: 0; outline: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; padding: 0;
+}
+.t2-edit-foot { display: flex; align-items: center; gap: 8px; margin-top: 2px; font-family: var(--font-ui); }
+.t2-edit-hint { display: inline-flex; align-items: center; gap: 5px; min-width: 0; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
+.t2-edit-grow { flex: 1; }
+.t2-edit-key { font-size: var(--ui-font-caption, 11px); color: var(--text-muted); margin-right: -2px; }
+.t2-edit-foot .t2-btn:disabled { opacity: .45; cursor: default; filter: none; }
+@container (max-width: 520px) {
+  .t2-user-col.t2-edit { width: 100%; }
+  .t2-edit-key { display: none; } /* 窄栏 / 手机:没有键盘可提示,只留两颗按钮 */
+}
+.mb-shell .t2-edit-foot .t2-btn { min-height: 36px; padding-inline: 16px; }

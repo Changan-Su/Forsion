@@ -3,7 +3,7 @@
  * 统一 Bearer + JSON 错误,错误信息抛 Error(detail)。
  */
 import type {
-  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
+  AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
   GitIdentity, GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
@@ -118,6 +118,16 @@ export const designTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey:
   request<{ voice: string; targetModel: string; previewAudio?: { data: string; sampleRate: number; format: string } }>(t, '/agent/tts/voices/design', { method: 'POST', body: JSON.stringify(body) })
 export const deleteTtsVoice = (t: EngineTarget, body: { baseUrl: string; apiKey: string; voice: string; kind: TtsVoiceKind }) =>
   request<{ ok: boolean }>(t, '/agent/tts/voices/delete', { method: 'POST', body: JSON.stringify(body) })
+/** Forsion 账号代管的通话音色(云端复刻):key 住云端,按用户隔离。modelId = 云端通话模型的 id。 */
+export interface CloudVoice { id: string; voice: string; name: string; modelId: string; hasSample: boolean }
+export const listCloudVoices = (t: EngineTarget) =>
+  request<{ voices: CloudVoice[]; limit: number }>(t, '/agent/tts/cloud-voices/list', { method: 'POST', body: '{}' })
+export const cloneCloudVoice = (t: EngineTarget, body: { modelId: string; name: string; audioData: string; text?: string; language?: string }) =>
+  request<CloudVoice>(t, '/agent/tts/cloud-voices/clone', { method: 'POST', body: JSON.stringify(body) })
+export const deleteCloudVoice = (t: EngineTarget, id: string) =>
+  request<{ ok: boolean }>(t, '/agent/tts/cloud-voices/delete', { method: 'POST', body: JSON.stringify({ id }) })
+export const cloudVoiceSample = (t: EngineTarget, id: string) =>
+  request<{ data: string; mime: string }>(t, '/agent/tts/cloud-voices/sample', { method: 'POST', body: JSON.stringify({ id }) })
 /** 引擎握手时认的子协议名(tangu-agent services/realtimeVoice.ts 的 REALTIME_BEARER_PROTOCOL)。 */
 export const REALTIME_BEARER_PROTOCOL = 'forsion.bearer'
 /**
@@ -223,11 +233,12 @@ export const updateSession = (
 export const deleteSession = (t: EngineTarget, id: string) =>
   requestCap<{ ok: boolean }>(t, 'hardDeleteSession', `/agent/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
-/** 从某条消息(含)处分支出新会话:继承到该点为止的历史(区别于空的新会话)。返回新会话。 */
-export const branchSession = (t: EngineTarget, sessionId: string, messageId: string, title?: string) =>
+/** 从某条消息(含)处分支出新会话:继承到该点为止的历史(区别于空的新会话)。返回新会话。
+ *  forkMessageId:分叉点另记在哪条上(缺省 = messageId)。编辑重发留旧版本时复制到最后一条、分叉点在被改那条之前;旧引擎不认这个参数,分叉点落在 messageId 上。 */
+export const branchSession = (t: EngineTarget, sessionId: string, messageId: string, title?: string, forkMessageId?: string) =>
   request<{ session: SessionRecord; copied: number }>(
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/branch`,
-    { method: 'POST', body: JSON.stringify({ message_id: messageId, ...(title ? { title } : {}) }) },
+    { method: 'POST', body: JSON.stringify({ message_id: messageId, ...(title ? { title } : {}), ...(forkMessageId ? { fork_message_id: forkMessageId } : {}) }) },
   ).then((r) => r.session)
 
 /** 存下来的顺便问(挂在某条消息上;引擎 chat_asides)。 */
@@ -560,7 +571,7 @@ export const testLocalWebSearch = (
 /** 探测一个 OpenAI 兼容端点(后端代理,避免 CORS):GET /models → 1-token chat。 */
 export const testProviderConnection = (
   t: EngineTarget,
-  probe: { baseUrl: string; apiKey?: string; modelId?: string },
+  probe: { baseUrl: string; apiKey?: string; modelId?: string; protocol?: string },
   signal?: AbortSignal,
 ) =>
   request<{ success: boolean; message: string }>(t, '/agent/providers/test', {
@@ -572,7 +583,7 @@ export const testProviderConnection = (
 /** 后端代拉上游 GET {baseUrl}/models(避 CORS),返回可选模型名列表;软失败回 []。 */
 export const fetchProviderModels = (
   t: EngineTarget,
-  probe: { baseUrl: string; apiKey?: string },
+  probe: { baseUrl: string; apiKey?: string; protocol?: string },
   signal?: AbortSignal,
 ) =>
   request<{ models: Array<{ id: string; name?: string }> }>(t, '/agent/providers/fetch-models', {
@@ -631,6 +642,15 @@ export const deleteUserCloudSkill = (t: EngineTarget, id: string) =>
 // 服务端 assets.ts 只认 camelCase appId(与 sessions 的 app_id 不同拼法,历史造成)。
 export const listTools = (t: EngineTarget) =>
   request<ToolsResponse>(t, `/agent/tools?appId=${encodeURIComponent(AGENT_APP_ID)}`)
+/** 远端 MCP 的 OAuth 登录:返回授权页地址(交给宿主开浏览器);刷新就成了 = 不带 url。之后引擎在后台等回调、重连。 */
+export const mcpLogin = (t: EngineTarget, name: string) =>
+  request<{ url?: string }>(t, `/agent/mcp/${encodeURIComponent(name)}/login`, { method: 'POST' })
+/** 「用户自带 Key」型连接器:Key 只存本机 connector-auth.json;返回重连后的状态。 */
+export const mcpSetKey = (t: EngineTarget, name: string, key: string) =>
+  request<{ status: string; error?: string }>(t, `/agent/mcp/${encodeURIComponent(name)}/key`, { method: 'POST', body: JSON.stringify({ key }) })
+/** 断开:删掉本机令牌。 */
+export const mcpLogout = (t: EngineTarget, name: string) =>
+  request<Record<string, never>>(t, `/agent/mcp/${encodeURIComponent(name)}/logout`, { method: 'POST' })
 
 // ── WeChat Remote（本地后端）──
 export interface WechatStatusResponse {
@@ -880,6 +900,13 @@ export interface HumanPortrait { version: string; entries: Array<{ id: string; c
 export const getHumanPortrait = (t: EngineTarget) => request<HumanPortrait>(t, '/agent/human/SOUL.md/entries')
 export const mutateHumanPortraitEntry = (t: EngineTarget, body: { action: 'add' | 'forget'; id?: string; fact?: string; expectedVersion: string }) =>
   request<{ version: string; entries: HumanPortrait['entries']; entry?: { id: string; content: string } }>(t, '/agent/human/SOUL.md/entries', { method: 'POST', body: JSON.stringify(body) })
+// 搬家卡:把各 Agent 记忆里关于这个人的事挪进画像。人点了才扫(scan 立刻返回,进度看 scanning);只在宿主本机。
+export interface PortraitMoveItem { id: string; memorySlug: string; agents: string[]; content: string; fact: string; state: 'pending' | 'moving' | 'moved' }
+export interface PortraitMoveView { items: PortraitMoveItem[]; scannedAt: number | null; missed: string[]; scanning: { done: number; total: number } | null; scanError: string | null }
+export const getPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t, '/agent/human/SOUL.md/move')
+export const scanPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t, '/agent/human/SOUL.md/move/scan', { method: 'POST' })
+export const decidePortraitMove = (t: EngineTarget, id: string, decision: 'move' | 'keep' | 'undo') =>
+  request<PortraitMoveView>(t, `/agent/human/SOUL.md/move/items/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ decision }) })
 export const listAgentMemoryRevisions = (t: EngineTarget, slug: string) =>
   request<{ revisions: AgentMemoryRevision[] }>(t, `${agentMemoryPath(slug)}/revisions`).then((r) => r.revisions)
 export const restoreAgentMemory = (t: EngineTarget, slug: string, version: string, expectedVersion: string) =>
@@ -1079,6 +1106,14 @@ export const museMessageFeedback = (t: EngineTarget, id: string, verdict: 'up' |
 
 export const postMuseFeedback = (t: EngineTarget, text: string) =>
   request<{ ok: boolean }>(t, '/agent/special/muse/feedback', { method: 'POST', body: JSON.stringify({ text }) })
+
+/** 新对话页的 Muse 开场建议(Muse 关着 / 开场建议关着 → 空;云端 404 由调用方当「没有」)。 */
+export const getMuseStarters = (t: EngineTarget) =>
+  request<{ starters: MuseStarter[] }>(t, '/agent/special/muse/starters', undefined, { timeoutMs: 8000 }).then((r) => r.starters || [])
+
+/** 用户点了 × / 点行发出去了。mute = 右键「别再推这类」。 */
+export const patchMuseStarter = (t: EngineTarget, id: string, status: 'dismissed' | 'used', mute?: boolean) =>
+  request<{ ok: boolean }>(t, `/agent/special/muse/starters/${encodeURIComponent(id)}`, { method: 'PATCH', body: JSON.stringify(mute ? { status, mute: true } : { status }) })
 
 /** Muse Library 目录树(Agent Space 左栏;root=绝对路径,files 为相对路径)。 */
 export const getMuseLibrary = (t: EngineTarget) =>

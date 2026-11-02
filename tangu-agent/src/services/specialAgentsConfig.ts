@@ -41,6 +41,11 @@ export interface HistorianConfig {
    * 仅在下次 /refine 时注入供审阅,由 agent 自己经 manage_harness 采纳才落 HARNESS.md(10-04 起写入不审批)——自动采集、agent 采纳。
    */
   harnessCandidates: boolean;
+  /**
+   * 决策闸(beta,开发者选项,缺省关):「这一轮像不像在纠正上一条回复」改问 Forsion 云端的决策模型(/api/brain/decision),
+   * 词面判定只在决策模型没答 / 答得含糊时兜底。要登录 Forsion 账号;用户这句和上一条回复会发给云端的决策模型。见 services/judgeSignals.ts。
+   */
+  decisionGate?: boolean;
 }
 
 export interface MuseConfig {
@@ -86,6 +91,9 @@ export interface MuseConfig {
   notify: 'immediate' | 'digest';
   /** 难活升级给哪个 agent(slug;空=由 developer_instructions 自行决定/不升级)。经 delegate 按该 agent 的模型跑。 */
   escalateTo: string;
+  /** 新对话页的开场建议(10-25 用户选方案 A,docs/ToBeImproved/Muse预制提示词方案_2026-10-25):开 = Muse 看得见 set_chat_starters、
+   *  桌面 GET /agent/special/muse/starters 有内容;关 = 工具不给、接口回空。缺省开(跟着 Muse 总开关走)。 */
+  chatStarters: boolean;
   /** 收件箱里用户点过「好」、Muse 可以自动标已读的类别(services/inboxCategory.ts)。这是一次总的授权,「询问」档也不再逐封弹审批。 */
   inboxAutoRead: string[];
   /** 用户点过「这类以后都别管」的类别:不提醒也不标。 */
@@ -132,6 +140,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     // 默认开(09-18 用户拍板,推翻 08-13「自动档默认关」):关着时这层三个月零使用(正式库 713 个 run 里 /refine 与 manage_harness 全 0)。
     // 它只提名、不写入——采纳仍要 /refine(10-04 起 manage_harness 不再审批,但候选只在 /refine 时注入);代价是判官提示词每轮多一段字段说明。
     harnessCandidates: true,
+    decisionGate: false,
   },
   muse: {
     enabled: false,
@@ -151,6 +160,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     heartbeatMinutes: 120,
     notify: 'immediate',
     escalateTo: '',
+    chatStarters: true,
     inboxAutoRead: [],
     inboxIgnored: [],
     maxDmPerDay: 0,
@@ -192,6 +202,7 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       mode: h.mode === 'assist' || h.mode === 'fork' ? h.mode : d.historian.mode,
       prompt: asStr(h.prompt, d.historian.prompt),
       harnessCandidates: asBool(h.harnessCandidates, d.historian.harnessCandidates),
+      decisionGate: asBool(h.decisionGate, false),
     },
     muse: {
       enabled: asBool(m.enabled, d.muse.enabled),
@@ -215,6 +226,7 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       ),
       notify: m.notify === 'digest' ? 'digest' : d.muse.notify,
       escalateTo: asStr(m.escalateTo, d.muse.escalateTo).trim().slice(0, 64),
+      chatStarters: asBool(m.chatStarters, d.muse.chatStarters),
       inboxAutoRead: asCategories(m.inboxAutoRead),
       inboxIgnored: asCategories(m.inboxIgnored),
       maxDmPerDay: clampInt(m.maxDmPerDay, d.muse.maxDmPerDay, 0, 24),

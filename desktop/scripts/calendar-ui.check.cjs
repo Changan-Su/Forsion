@@ -294,6 +294,33 @@ async function main() {
     await win.waitForSelector('.amx-cal-event[aria-label^="产品深度工作"]', { timeout: 5000 })
     check('日历列表:点颜色方块 = 显隐这张日历', hiddenCount === 0)
 
+    // 月视图落点:标题 = 今天所在月、今天在屏上;下一页逐月走、上一页走回原位(1 号落在周后半段的月份不卡住)
+    await win.locator('.amx-cal-title').click()
+    await win.keyboard.press('m')
+    await win.waitForSelector('.amx-cal-mscroll', { timeout: 5000 })
+    await win.waitForTimeout(400)
+    const monthLabel = (d) => `${d.getFullYear()}年${d.getMonth() + 1}月`
+    const opened = await calState(win)
+    const todayShown = await win.evaluate(() => {
+      const s = document.querySelector('.amx-cal-mscroll').getBoundingClientRect()
+      const c = document.querySelector('.amx-cal-mcell.today')?.getBoundingClientRect()
+      return !!c && c.top >= s.top - 1 && c.bottom <= s.bottom + 1
+    })
+    check('月视图:打开停在今天所在月,今天在屏上', opened.title === monthLabel(today) && opened.mini.startsWith(monthLabel(today)) && todayShown, JSON.stringify({ opened, todayShown }))
+    const walked = []
+    for (let i = 1; i <= 6; i++) {
+      await win.keyboard.press('ArrowRight')
+      await win.waitForTimeout(700)
+      walked.push((await calState(win)).title)
+    }
+    const walkOk = walked.join() === [1, 2, 3, 4, 5, 6].map((i) => monthLabel(new Date(today.getFullYear(), today.getMonth() + i, 1))).join()
+    for (let i = 0; i < 6; i++) { await win.keyboard.press('ArrowLeft'); await win.waitForTimeout(700) }
+    const backTop = (await calState(win)).top
+    check('月视图:下一页逐月走、上一页走回原位', walkOk && backTop === opened.top, JSON.stringify({ walked, backTop, top: opened.top }))
+    await win.keyboard.press('w')
+    await win.waitForSelector('.amx-cal-tscroll', { timeout: 5000 })
+    await win.waitForTimeout(400)
+
     // W-74:「周」首列跟「一周开始于」(zh 缺省周一),不再从今天起排;今天落在这一周里。
     const weekCols = await win.evaluate(() => {
       const s = document.querySelector('.amx-cal-tscroll')?.getBoundingClientRect()

@@ -1,6 +1,7 @@
 /** Real Windows caption hit testing, native double-click/maximize/minimize/close,
  * plus renderer geometry at UI zoom and display DPI. No physical pointer input.
- * npm run build && npm run check:tabtitlebar [-- --scale=1.25] */
+ * npm run build && npm run check:tabtitlebar [-- --scale=1.25]
+ * npm run check:tabinput [-- --negative-control] isolates the parked-bottom regression. */
 const fs = require('fs'), os = require('os'), path = require('path')
 const { execFileSync } = require('child_process')
 const electron = require('./lib/launch-electron.cjs')
@@ -89,16 +90,87 @@ async function geometry(page) {
     const er = edge?.getBoundingClientRect()
     const tabs = [...document.querySelectorAll('.dv-tabs-and-actions-container')].filter(el => { const r = el.getBoundingClientRect(); return r.top < 2 && r.height > 0 })
     const tr = tabs[0]?.getBoundingClientRect()
+    const prefix = document.querySelector('.dv-prefix')
+    const main = prefix?.closest('.dv-tabs-and-actions-container') ?? tabs[0]
+    const viewport = main?.querySelector('.dv-tabs-container')?.getBoundingClientRect()
+    const mainTab = [...(main?.querySelectorAll('.dv-tab') ?? [])].find(el => {
+      const r = el.getBoundingClientRect()
+      const x = r.x + r.width / 2
+      return r.width > 0 && r.height > 0 && viewport && x >= viewport.left && x < Math.min(viewport.right, innerWidth)
+    })
     const point = (name, el) => { const r = el?.getBoundingClientRect(); return r && { name, x: r.x + r.width / 2, y: r.y + r.height / 2 } }
     const lastButton = edge?.lastElementChild?.getBoundingClientRect()
     const width = area?.height > 0 ? innerWidth - area.right : 0
     return { width: innerWidth, reserved: document.documentElement.style.getPropertyValue('--windows-caption-width'), overlay: overlay?.visible, area: area?.toJSON(), captionWidth: width,
       edge: er?.toJSON(), tabs: tr?.toJSON(), lastButton: lastButton?.toJSON(),
-      points: [point('tab', tabs[0]?.querySelector('.dv-tab')), point('new-tab', tabs[0]?.querySelector('.dv-new-tab')),
+      points: [point('tab', mainTab), point('new-tab', main?.querySelector('.dv-new-tab')),
+        point('back', prefix?.querySelector('[data-press="back"]')), point('forward', prefix?.querySelector('[data-press="forward"]')),
+        point('left-panel', prefix?.querySelector('.dv-edge-toggle')),
         point('toolbar', edge?.lastElementChild),
         tr && { name: 'drag', x: (tr.left + tr.right) / 2, y: tr.top + tr.height / 2 },
         ...['minimize', 'maximize', 'close'].map((name, i) => ({ name, x: (area?.right ?? innerWidth) + width * (i + .5) / 3, y: (area?.height ?? 32) / 2 }))].filter(Boolean) }
   })
+}
+
+async function checkParkedInput(app, page) {
+  await page.locator('.rb [data-space-id="tangu"]').first().click()
+  await page.locator('.dv-prefix').waitFor()
+  await pause(800)
+  if (await page.locator('.dv-edge-bottom.is-on').count()) {
+    await page.locator('.dv-edge-bottom').click()
+    await pause(700)
+  }
+  await page.locator('.dv-new-tab').first().click()
+  await pause(350)
+  if (process.argv.includes('--negative-control')) {
+    // Restore Dockview's old zero-height-but-painted leaf, without changing its
+    // grid or the buttons' correctly computed no-drag styles.
+    await page.addStyleTag({ content: '.dockview-theme-lcl .dv-view-container > .dv-view:not(.visible) { display: block !important; }' })
+  }
+  const inputs = async (label) => {
+    const g = await geometry(page), m = await metadata(app, page)
+    const n = native(m.handle, g.points, '', path.join(output, `parked-${label}.png`), g.width)
+    const names = ['tab', 'new-tab', 'back', 'forward', 'left-panel', 'toolbar']
+    check(`parked ${label}: all tab/navigation controls are native client input`, names.every(name => n.hits.some(h => h.name === name && h.hit === 1)), n)
+  }
+  const toggle = async (open) => {
+    await page.locator('.dv-edge-bottom').click()
+    await pause(750)
+    check(`parked: bottom panel ${open ? 'opens' : 'closes'}`, ((await page.locator('.wb-view--bottom').count()) > 0) === open)
+  }
+  await inputs('before')
+  await toggle(true)
+  await inputs('open')
+  await toggle(false)
+  check('parked: an empty hidden group remains mounted', await page.locator('.dv-view-container > .dv-view:not(.visible) .dv-groupview').count() > 0)
+  await inputs('closed')
+  const inactive = page.locator('.dv-tabs-and-actions-container:has(.dv-prefix) .dv-tab:not(.dv-active-tab)').first()
+  await inactive.evaluate(el => { el.dataset.tabInputProbe = '1' })
+  await inactive.click()
+  check('parked: switching tabs still works', await page.locator('.dv-tab[data-tab-input-probe]').evaluate(el => el.classList.contains('dv-active-tab')))
+  const left = page.locator('.dv-prefix .dv-edge-toggle')
+  const wasOpen = await left.getAttribute('aria-pressed')
+  await left.click()
+  await pause(600)
+  check('parked: left panel toggle still works', await left.getAttribute('aria-pressed') !== wasOpen)
+  await inputs('left-toggle')
+  await page.locator('.rb [data-space-id="home"]').first().click()
+  await pause(500)
+  await page.locator('.rb [data-space-id="tangu"]').first().click()
+  await pause(700)
+  await inputs('space-return')
+  await page.reload()
+  await page.waitForSelector('.dv-prefix', { timeout: 30000 })
+  // Boot lands on the default Home Space. Restore the Space whose layout owns
+  // the parked group before inspecting its saved grid.
+  await page.locator('.rb [data-space-id="tangu"]').first().click()
+  await pause(700)
+  check('parked: saved hidden group survives reload', await page.locator('.dv-view-container > .dv-view:not(.visible) .dv-groupview').count() > 0)
+  await inputs('reload')
+  await toggle(true)
+  await inputs('reopened')
+  await toggle(false)
+  await inputs('closed-again')
 }
 
 async function main() {
@@ -124,6 +196,10 @@ async function main() {
         w.setTitleBarOverlay = options => { globalThis.__titlebarUpdates.push(options); original(options) }
       }
     })
+    if (process.argv.includes('--parked-only')) {
+      await checkParkedInput(app, page)
+      return
+    }
     for (const zoom of [1, 1.1, .8, .5, 1.5, 2]) {
       await page.evaluate(zoom => { document.body.style.zoom = String(zoom); document.documentElement.style.setProperty('--uiz', String(zoom)); window.dispatchEvent(new Event('forsion:uizoom')) }, zoom)
       await pause(350)
@@ -233,12 +309,13 @@ async function main() {
     check('native close closes only detached window', detached.isClosed() && !page.isClosed())
 
     check('malformed caption requests rejected', !(await page.evaluate(() => window.tangu.setTabTitleBar({ height: -1, symbolColor: 'red' }))).ok)
+    await checkParkedInput(app, page)
   } finally {
     fs.writeFileSync(path.join(output, 'results.json'), JSON.stringify(results, null, 2))
     console.log('Evidence:', output)
     if (app) await app.close()
     await stub.close()
+    if (results.some(r => !r.ok)) process.exitCode = 1
   }
-  if (results.some(r => !r.ok)) process.exitCode = 1
 }
 main().catch(e => { console.error(e); process.exitCode = 1 })

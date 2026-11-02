@@ -67,3 +67,17 @@ describe('HttpStateStore.listStepsForMessages', () => {
     expect(calls.length).toBe(0);
   });
 });
+
+describe('HttpStateStore 请求体', () => {
+  it('去掉字符串里的 U+0000(server 落 PG 的 jsonb 不收),字面量 \\u0000 原样保留', async () => {
+    stubFetch(200, { ok: true });
+    const store = createHttpStateStore({ cloudUrl: 'http://gw' });
+    await runWithRequestToken('tok', () => store.finalizeAssistantMessage({
+      messageId: 'm1', sessionId: 's1', modelId: 'x', content: 'a\u0000b \\u0000', reasoning: '',
+      toolCalls: [], toolResults: [{ id: 't1', result: 'PK\u0003\u0004\u0014\u0000' }],
+    } as any));
+    const body = calls[0].init.body as string;
+    expect(JSON.parse(body).content).toBe('ab \\u0000');
+    expect(JSON.parse(body).toolResults[0].result).toBe('PK\u0003\u0004\u0014');
+  });
+});

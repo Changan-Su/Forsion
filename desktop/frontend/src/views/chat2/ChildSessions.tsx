@@ -6,6 +6,7 @@
  *  - ForkBlock(方案「Chat 画布分支」10-18 第二轮「挂点统一」):一条回答下面一块「从这里分出 N」,分支 / 顺便问 / 子会话一行一个
  *    (行就是上面子会话那一行的样子)。点分支 = 主区就地换成那一支(⌘ 开新标签);点顺便问 / 子会话 = 右边那块子会话面板。
  *  - ChildFromLine:子会话顶上「来自 主会话」;分支顶上「从 X 分出」。
+ *  - SessionMessageLine:引擎落库的 <session_message> 用户行(子会话发给主会话 / 兄弟之间,10-28)画成一行系统行 + 正文,不摆成用户气泡。
  */
 import React, { createContext, useContext, useEffect, useState, type RefObject } from 'react'
 import { ChevronRight, CornerDownRight, CornerUpLeft, GitBranch, MessageCircleQuestion, MessageSquare, Sparkles, Split } from 'lucide-react'
@@ -49,9 +50,11 @@ registerMessages({
   'childs.pill.wait': { zh: '{n} 个等你', en: '{n} need you' },
   'childs.pill.waitOne': { zh: '{n} 个等你', en: '{n} needs you' },
   'childs.pill.title': { zh: '回到子会话', en: 'Back to child sessions' },
+  'sessmsg.from': { zh: '{title} 发来消息', en: 'Message from {title}' },
 })
 
 export const CHILD_UPDATE_OPEN = '<child_sessions_update>'
+export const SESSION_MESSAGE_OPEN = '<session_message '
 const ID_RE = /\(id ([0-9a-f-]{36})\)/i
 
 /** 这条回答里 start_session 成功开出的子会话 id(工具结果里的 `(id …)`)。 */
@@ -180,12 +183,13 @@ const NO_ASIDES: SavedAside[] = []
 /** 「从这里分出」画在哪:对话页 = 消息里、分支也列;画布卡 = 分支已经是卡,不列;卡里还要挪到正文外面(长卡的正文会被折起,块不能跟着被裁),
  *  所以 inline:false = 消息里不画,由 ChatCanvas 画在卡底;阅读栏不折,照常画在消息里、只藏分支。 */
 /** host:子会话面板挂在哪个会话下(主区正开着的那一支)。画布里共享的祖先卡属于树根,不传就开在树根下、主区看不见 */
-export interface ForkScopeValue { inline: boolean; hideBranches: boolean; host?: string }
+/** hideKids:画布开着「显示子会话」时已经画成卡的子会话,这块就不再列它们(顺便问照列) */
+export interface ForkScopeValue { inline: boolean; hideBranches: boolean; host?: string; hideKids?: ReadonlySet<string> }
 export const ForkScope = createContext<ForkScopeValue>({ inline: true, hideBranches: false })
 
 export function ForkBlock({ sessionId, messageId, childIds, onSuggest }: { sessionId: string; messageId: string; childIds: string[]; onSuggest?: (text: string) => void }) {
   const { t } = useI18n()
-  const { hideBranches, host } = useContext(ForkScope)
+  const { hideBranches, host, hideKids } = useContext(ForkScope)
   const sessions = useApp((s) => s.sessions)
   const running = useApp((s) => s.runningBySession)
   const unread = useApp((s) => s.unread)
@@ -194,7 +198,7 @@ export function ForkBlock({ sessionId, messageId, childIds, onSuggest }: { sessi
   useEffect(() => { useBtw.getState().loadSaved(sessionId) }, [sessionId])
   const branches = hideBranches ? [] : sessions.filter((x) => x.fork_message_id === messageId).sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')))
   const asides = saved.filter((a) => a.message_id === messageId)
-  const kids = childIds.map((id) => sessions.find((x) => x.id === id)).filter((x): x is SessionRecord => !!x)
+  const kids = childIds.filter((id) => !hideKids?.has(id)).map((id) => sessions.find((x) => x.id === id)).filter((x): x is SessionRecord => !!x)
   const n = branches.length + asides.length + kids.length
   if (!n) return null
   const stOf = (k: SessionRecord): RowStatus => rowStatus(k, !!attention.get(k.id), !!running[k.id], unread.has(k.id))
@@ -320,6 +324,28 @@ export function ChildUpdateLine({ content }: { content: string }) {
   )
 }
 const UPD = { finished: 1, waiting_for_user: 1, failed: 1, stopped: 1 }
+
+/** <session_message from title relation>正文</session_message>(引擎 services/childSessions.ts sendSessionMessage 写的)。 */
+export function parseSessionMessage(content: string): { from: string; title: string; body: string } | null {
+  const m = /^<session_message from="([^"]*)" title="([^"]*)" relation="[a-z]+">\n([\s\S]*?)\n<\/session_message>/.exec(content)
+  return m ? { from: unescape(m[1]), title: unescape(m[2]), body: m[3] } : null
+}
+
+export function SessionMessageLine({ content }: { content: string }) {
+  const { t } = useI18n()
+  const m = parseSessionMessage(content)
+  if (!m) return null
+  const title = displaySessionTitle(m.title, t)
+  return (
+    <div className="t2-sys t2-session-msg" data-session-message={m.from}>
+      <div className="t2-session-msg-head">
+        <CornerUpLeft size={12} />
+        <a role="button" tabIndex={0} onClick={() => openSession(m.from)} onKeyDown={(e) => { if (e.key === 'Enter') openSession(m.from) }}>{t('sessmsg.from', { title })}</a>
+      </div>
+      <div className="t2-session-msg-body" title={m.body}>{m.body}</div>
+    </div>
+  )
+}
 
 /** 子会话顶上一行:来自哪个主会话(点了回去)。第一条用户消息是主会话写的简报,不是用户本人打的字。 */
 export function ChildFromLine({ session }: { session?: SessionRecord | null }) {

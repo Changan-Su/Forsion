@@ -31,6 +31,8 @@
  *   GET      /agent/special/muse/library                Muse Library 目录树(桌面 Agent Space 左栏;含子目录)
  *   GET      /agent/special/muse/library/file?path=     读 Library 里一个文本文件(Muse 自建 Space 的 ctx.agent.library.read)
  *   POST     /agent/special/muse/feedback { text }      往 Muse 的 LOG 追加一条 [feedback] 行(任务卡落点回执等)
+ *   GET      /agent/special/muse/starters               新对话页的开场建议(Muse 关着 / chatStarters 关着 → 空)
+ *   PATCH    /agent/special/muse/starters/:id { status: dismissed|used, mute? }  用户点了 × / 点行发出去了(只认 active,写回 Muse 的 LOG)
  *   GET      /agent/special/muse/cards?status=          Muse 私聊里要用户点的卡(services/museCards.ts)
  *   GET      /agent/special/muse/cards/:id              单张卡(流里那一行按 id 读)
  *   POST     /agent/special/muse/cards/:id/decide { action }  用户点卡:效果在引擎里按 kind 白名单执行,CAS pending,不符 409
@@ -53,6 +55,7 @@ import { enqueueRun } from '../services/agentLoop.js';
 import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PROMPT, legacyMusePrompt, SPECIAL_AGENTS_DEFAULTS, type SpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
+import { listActiveStarters, markStarter } from '../services/museStarters.js';
 import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
 import { getTriggerSource, listTriggerSources } from '../services/triggerRegistry.js';
 import { emitPluginTrigger, registerPluginTrigger, unregisterPluginTrigger } from '../plugins/automation.js';
@@ -68,7 +71,7 @@ import { listApprovals, decideApproval, getApproval } from '../services/pendingA
 import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
 import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
-import { appendMuseFeedback, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
+import { appendMuseFeedback, countObservedHits, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -405,9 +408,10 @@ router.get('/agent/special/muse/triggers', authMiddleware, async (_req: AuthRequ
     // 与 disabledReason 互补:那条是「已经停了,为什么」,这条是「还开着,但为什么不动」(H3)。
     // 暂停原因(触发源没了 / 电脑历史关了)现算,关掉的那一刻面板就写明,不等下一 tick。
     const notices = getAutomationNotices();
+    const observed = new Map(await Promise.all(list.filter((t) => t.observe).map(async (t) => [t.id, await countObservedHits(t.id, t.observeSince)] as const)));
     res.json({ triggers: list.map((t) => {
       const notice = (t.enabled ? triggerUnmet(t) : null) ?? notices[t.id];
-      return { ...t, nextRunAt: nextRunAt(t), ...(notice ? { notice } : {}) };
+      return { ...t, nextRunAt: nextRunAt(t), ...(notice ? { notice } : {}), ...(observed.has(t.id) ? { observeHits: observed.get(t.id) } : {}) };
     }) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'triggers failed' });
@@ -673,6 +677,36 @@ router.post('/agent/special/muse/feedback', authMiddleware, async (req: AuthRequ
   res.json({ ok: true });
 });
 
+// ── 新对话页的开场建议(muse_starters;方案 docs/ToBeImproved/Muse预制提示词方案_2026-10-25) ──
+router.get('/agent/special/muse/starters', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  try {
+    const m = loadSpecialAgentsConfig().muse;
+    if (!m.enabled || !m.chatStarters) return res.json({ starters: [] });
+    res.json({ starters: await listActiveStarters(req.user!.userId) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'starters failed' });
+  }
+});
+
+router.patch('/agent/special/muse/starters/:id', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  const status = req.body?.status;
+  if (status !== 'dismissed' && status !== 'used') return res.status(400).json({ detail: 'status must be dismissed or used' });
+  try {
+    const userId = req.user!.userId;
+    const text = await markStarter(userId, String(req.params.id), status);
+    if (text === null) return res.status(409).json({ detail: 'starter is not active' });
+    const quoted = `"${text.replace(/\s+/g, ' ').slice(0, 200)}"`;
+    void appendMuseFeedback(userId, status === 'used'
+      ? `[feedback] chat starter ${quoted} used by user`
+      : `[feedback] chat starter ${quoted} dismissed by user${req.body?.mute ? '; the user asked not to be suggested this kind of thing again' : ''}`);
+    res.json({ ok: true });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'starter update failed' });
+  }
+});
+
 // 私聊里的卡:读与点。点卡对远端放行(手机私聊同一张卡),客户端只传 action,改什么在引擎里定。
 router.get('/agent/special/muse/cards', authMiddleware, async (req: AuthRequest, res) => {
   if (!ensureLocal(res)) return;
@@ -700,6 +734,7 @@ router.post('/agent/special/muse/cards/:id/decide', authMiddleware, async (req: 
       answers: b.answers && typeof b.answers === 'object' ? { when: String(b.answers.when || ''), pace: String(b.answers.pace || ''), focus: Array.isArray(b.answers.focus) ? b.answers.focus.map(String) : [] } : undefined,
       index: typeof b.index === 'number' ? b.index : undefined,
       expected: typeof b.expected === 'string' ? b.expected : undefined,
+      remote: !!parseRemoteOrigin(req.headers),
     });
     if (!r.ok) return res.status(r.status).json({ error: r.error, detail: r.detail });
     if (r.card.kind === 'settings' || r.card.kind === 'intro') kickMuse(); // 心跳 / 作息变了:巡检节奏下一轮就跟上

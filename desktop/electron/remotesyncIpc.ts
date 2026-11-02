@@ -12,6 +12,7 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import { BrowserWindow, app, ipcMain, shell } from 'electron'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
+import { syncVaultRoot } from './amadeus/vaultList'
 import { cloudVaultDir, hash8, isManagedCloudVault } from './amadeus/cloudPaths'
 import { isDevMode } from './forsionHome'
 import { clampMaxFile, extraBackend, extraBackendKinds } from './remotesync/backends'
@@ -130,10 +131,10 @@ async function canon(p: string): Promise<string> {
 
 const overlaps = (a: string, b: string): boolean => a === b || a.startsWith(b + path.sep) || b.startsWith(a + path.sep)
 
-/** 同步根 = 本地库;云镜像根拒绝(按 realpath 比较)。 */
+/** 同步根 = 钉住的同步库(没钉过 = 本地库);云镜像根拒绝(按 realpath 比较)。 */
 export async function resolveLocalSyncRoot(): Promise<{ root: string } | { error: string }> {
   const am = await readAmadeusConfig()
-  const root = am.localVault ?? am.lastVault
+  const root = syncVaultRoot(am) ?? am.lastVault // 切库不换同步根
   if (!root) return { error: 'no-local-vault' }
   try {
     await fs.access(root)

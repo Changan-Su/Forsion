@@ -1,0 +1,7 @@
+/* 连接器(Connectors.tsx):填 Key 表单、已下线标记、授权范围。卡片与行沿用商店 .mk-card / 设置 .file-row。 */
+.conn-keyform { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.conn-keyform input { flex: 1 1 160px; min-width: 0; }
+.conn-keyform small { flex-basis: 100%; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); line-height: 1.5; }
+.conn-row .conn-keyform { margin: 4px 0 8px; padding-inline: 10px; }
+.conn-badge { margin-left: 8px; padding: 1px 7px; border: var(--border-width) solid var(--border); border-radius: var(--radius-pill, 999px); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); font-weight: 400; }
+.conn-scopes { margin: 0 0 4px; padding-inline: 10px; overflow-wrap: anywhere; }

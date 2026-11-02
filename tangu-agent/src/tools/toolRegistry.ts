@@ -12,6 +12,7 @@ import { presetOf } from '../core/presetTable.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 import { toolDefinitionIssue, warnInvalidTool } from './toolDefinitionValidation.js';
+import { mcpDeclaredApproval } from '../mcp/connectors.js';
 
 /**
  * 操控整台电脑桌面的工具(Computer Use)。唯一的现成声明是 capabilities.concurrencyKey === 'computer-use' —— 内置捆绑的
@@ -298,6 +299,7 @@ const PLAN_MODE_TOOLS = new Set([
   'load_tools', // 纯解锁无副作用;planMode 下 deferred 白名单工具(calculator 等)须经它可达
 
   'add_muse_todo', // Muse 唯一写权限,只读 planMode 下仍可用(可见性另由 ctx.muse 收口)
+  'set_chat_starters', // 同上:只是向用户提议新对话的开场句,不碰用户资产(可见性另由 ctx.muse + muse.chatStarters 收口)
   'read_activity', // 只读用户活动日志;Muse 周期跑 planMode 故必须白名单(可见性另由 ctx.muse/activityAccess 收口)
   'read_computer_history', // 只读电脑历史;可见性另由 computerHistoryGate 收口(开关 + 本机客户端 + 非通道/团队)
 ]);
@@ -446,7 +448,8 @@ export function declaredApproval(name: string, profile?: Pick<AppProfile, 'toolL
       if (t.name === name && t.capabilities?.approval) found = t.capabilities.approval;
     }
   }
-  return found;
+  // 远端 MCP 工具不在 provider 里:连接器目录的 alwaysAsk 经 manager 注册的回调查(mcp/connectors.ts)
+  return mcpDeclaredApproval(name) ?? found;
 }
 
 /**

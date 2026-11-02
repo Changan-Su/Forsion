@@ -99,6 +99,37 @@ describe('buildTurnTree', () => {
   })
 })
 
+describe('buildTurnTree 子会话(方案「画布子会话显示」A)', () => {
+  // 子会话 K1 由主线 a2 开出(第一句是简报);K2 认不到开出它的消息;K3 开在分支 B1 自己的那一轮(c2)里
+  const K1 = [u('k1', '查 Obsidian Sync 的冲突处理(简报)'), a('k2', '按段合并'), u('k3', '附件呢?'), a('k4', '后写的赢')]
+  const K2 = [u('m1', '数大文件(简报)'), a('m2', '41 个')]
+  const K3 = [u('n1', '量一下 Yjs 包(简报)'), a('n2', '90 KB')]
+  const rows = { R, B1, K1, K2, K3 } as Record<string, UiMessage[]>
+  const tree = buildTurnTree('R', [br('B1', 'a1', 'R', '2026-10-18 10:00:00')], (s) => rows[s], [
+    { sid: 'K1', from: 'R', at: 'a2' }, { sid: 'K2', from: 'R', at: 'gone' }, { sid: 'K3', from: 'B1', at: 'c2' },
+  ])
+  it('整份对话都是自己的轮次,挂在开出它的那张卡下,排在主线之后', () => {
+    expect(tree.paths.K1).toEqual(['R:u1', 'R:u2', 'K1:k1', 'K1:k3'])
+    expect(tree.cards.get('R:u2')!.children).toEqual(['R:u3', 'K1:k1'])
+    expect(tree.cards.get('K1:k1')!.user?.id).toBe('k1')
+  })
+  it('认不到开出它的消息:挂在那一支最后一张卡下', () => {
+    expect(tree.paths.K2).toEqual(['R:u1', 'R:u2', 'R:u3', 'K2:m1'])
+  })
+  it('开在分支里的:挂在那一支自己的卡下', () => {
+    expect(tree.paths.K3).toEqual(['R:u1', 'B1:c1', 'K3:n1'])
+  })
+  it('子会话一轮都没有:不画,也不记路径', () => {
+    const t2 = buildTurnTree('R', [], (s) => (s === 'R' ? R : []), [{ sid: 'K1', from: 'R', at: 'a2' }])
+    expect(t2.paths.K1).toBeUndefined()
+  })
+  it('开出它的会话还没拉到历史:先不画', () => {
+    const t2 = buildTurnTree('R', [], (s) => (s === 'R' ? undefined : rows[s]), [{ sid: 'K1', from: 'R', at: 'a2' }])
+    expect(t2.paths.K1).toBeUndefined()
+    expect(t2.cards.size).toBe(0)
+  })
+})
+
 describe('readSteps(阅读栏顶上的轮次)', () => {
   it('不超过 8 轮全列,多了折成「1 2 … 7 8 9」,只隔一轮不折', () => {
     expect(readSteps(3, 1)).toEqual([0, 1, 2])

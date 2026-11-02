@@ -755,6 +755,12 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .dockview-theme-lcl .dv-new-tab,
 .dockview-theme-lcl .dv-nav-btn,
 .dockview-theme-lcl .dv-edge-toggle { -webkit-app-region: no-drag; }
+/* Dockview keeps collapsed grid leaves mounted (.dv-view without .visible).
+ * Their zero-height clip does not clip Electron's native drag regions: a parked
+ * bottom group's header lands at y=0 and overwrites the main tabs' no-drag holes.
+ * Remove hidden leaves from painting/hit testing without detaching the grid or
+ * its sibling Views/iframes. Dockview restores .visible when reopening them. */
+.dockview-theme-lcl .dv-view-container > .dv-view:not(.visible) { display: none; }
 /* 拖拽面板期间(WorkspaceHost 打 data-dv-dragging)临时关掉 tab 栏 / 侧栏的窗口拖拽区:
  * app-region:drag 会吞掉 Dockview 落点探测所需的 pointer/DnD 事件 → 否则拖到 tab 栏/侧栏上看不到落点框。 */
 html[data-dv-dragging] .dockview-theme-lcl .dv-tabs-and-actions-container,

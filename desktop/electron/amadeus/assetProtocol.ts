@@ -45,6 +45,9 @@ export function registerAssetSchemes(): void {
       // 结构性照不到这一条,只有 e2e:mediaembed 的 E1v/E3 能钉住。
       privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
     },
+    // Intelligent UI 卡的随包库(../iuiLibProtocol.ts)。registerSchemesAsPrivileged 只认一次调用,只好并在这里;
+    // corsEnabled:卡是无源沙箱 iframe,里面的 module 脚本按 CORS 取。
+    { scheme: 'forsion-iui', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   ])
 }
 
@@ -75,7 +78,7 @@ async function findByBasename(root: string, basename: string): Promise<string | 
 }
 
 /** Must run AFTER app 'ready'. */
-export function registerAssetProtocol(getVaultRoot: () => string | null): void {
+export function registerAssetProtocol(getVaultRoot: () => string | null, resolveShared?: (vaultRel: string) => string | null): void {
   protocol.handle(ASSET_SCHEME, async (request) => {
     const root = getVaultRoot()
     if (!root) return new Response('no vault', { status: 404 })
@@ -87,7 +90,9 @@ export function registerAssetProtocol(getVaultRoot: () => string | null): void {
       return new Response('bad url', { status: 400 })
     }
 
-    let abs = path.resolve(root, vaultRel)
+    // 共享镜像里页面的相对引用按服务端目录写,文件可能绑定在别的目录,先按绑定换成它在镜像里的位置(Extend 的 sharedLocalPathFor)。
+    // 只在这里换,显示地址不动:它会被存盘算成相对路径写回所有者的页面。
+    let abs = path.resolve(root, resolveShared?.(vaultRel) ?? vaultRel)
     const rel = path.relative(root, abs)
     if (rel.startsWith('..') || path.isAbsolute(rel)) {
       return new Response('forbidden', { status: 403 })

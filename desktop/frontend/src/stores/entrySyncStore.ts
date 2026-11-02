@@ -94,6 +94,18 @@ export function cloudPathFor(
   return `${rec.cloudName}/${nfcRel(path)}`
 }
 
+/** cloudPathFor 的反向:云端路径在当前库里是哪个文件,不在当前库返回 null。 */
+export function localPathFor(
+  vaults: AmadeusEntrySyncVault[],
+  vaultRoot: string | null,
+  vaultSide: 'local' | 'cloud',
+  cloudPath: string,
+): string | null {
+  if (!window.amadeusSync || vaultSide === 'cloud') return cloudPath
+  const prefix = `${vaults.find((v) => v.vaultRoot === vaultRoot)?.cloudName}/`
+  return cloudPath.startsWith(prefix) ? cloudPath.slice(prefix.length) : null
+}
+
 /** path 是否落在某条排除项的子树里(开启弹窗据此把上次剔除的子页面显示成未勾选,而不是一律全勾)。 */
 export function isExcludedPath(vaultRoot: string | null, path: string): boolean {
   const rec = vaultRoot ? useEntrySync.getState().vaults.find((v) => v.vaultRoot === vaultRoot) : null

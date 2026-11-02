@@ -14,6 +14,7 @@ import type { ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { useI18n } from '../i18n'
 import { takePendingRun, type PendingRun } from './runCommand'
+import { takeTerminalFocus } from './terminalFocus'
 
 /** 从当前主题的 CSS 变量取终端配色(主题切换后重取);取不到就交给 xterm 默认值。 */
 function themeFromCss(): Record<string, string> {
@@ -27,6 +28,13 @@ function themeFromCss(): Record<string, string> {
   if (fg) out.foreground = fg
   if (accent) out.cursor = accent
   return out
+}
+
+/** 没有别的输入框正拿着焦点(用户正在聊天框里打字时终端在后台起来,不抢)。 */
+function noOtherInput(el: HTMLElement): boolean {
+  const a = document.activeElement as HTMLElement | null
+  if (!a || a === document.body || el.contains(a)) return true
+  return !(a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))
 }
 
 export const TerminalView: React.FC<ViewProps> = ({ params, leaf }) => {
@@ -65,6 +73,14 @@ export const TerminalView: React.FC<ViewProps> = ({ params, leaf }) => {
     term.current = tm
     const safeFit = (): void => { try { if (el.clientWidth > 0 && el.clientHeight > 0) fit.fit() } catch { /* 0 尺寸/已卸载 */ } }
     safeFit()
+    // 等一帧再判:命令面板之类的入口要先关掉、把焦点还给 body。
+    const focusIfFree = (): void => { requestAnimationFrame(() => { if (!disposed && noOtherInput(el)) tm.focus() }) }
+    // 用户刚从入口打开(terminalFocus 的标记)才拿;布局恢复出来的不拿。
+    if (takeTerminalFocus()) focusIfFree()
+    const mountedAt = performance.now()
+    // shell 起来之前打的字先攒着,起来后一次写进去(否则「打开就打字」的头几个字会丢)。
+    let early: string[] | null = []
+    offs.push(tm.onData((d) => { early?.push(d) }).dispose)
 
     // ⚠️不要写成 `window.tangu?.pty?.spawn(…).then(…)`:pty 缺席时可选链只短路到 spawn(…),
     //   整条链求值成 undefined,再 .then 就是 TypeError(web/移动端跑同一套渲染层时必炸)。
@@ -112,6 +128,8 @@ export const TerminalView: React.FC<ViewProps> = ({ params, leaf }) => {
           try { cur.onExit({ cmd, cwd, code, output: lines.join('\n') }) } catch { /* 回传失败不影响终端 */ }
         }))
         offs.push(tm.onData((d) => api.write(id, d)).dispose)
+        if (early?.length) api.write(id, early.join(''))
+        early = null
         safeFit()
         api.resize(id, tm.cols, tm.rows)
       }).catch((e) => {
@@ -120,7 +138,14 @@ export const TerminalView: React.FC<ViewProps> = ({ params, leaf }) => {
       })
     }
 
+    // 切到已开着的终端标签 / 展开底部面板:从 0 尺寸变可见 + 有新鲜的用户手势 = 用户切过来了。
+    // 挂载后头一秒的 0→可见是布局在落位(恢复布局时也会有),不算。
+    let shown = el.clientWidth > 0 && el.clientHeight > 0
     const ro = new ResizeObserver(() => {
+      const nowShown = el.clientWidth > 0 && el.clientHeight > 0
+      const gesture = (navigator as Navigator & { userActivation?: { isActive: boolean } }).userActivation?.isActive
+      if (nowShown && !shown && gesture && performance.now() - mountedAt > 1000) focusIfFree()
+      shown = nowShown
       safeFit()
       if (ptyId) window.tangu?.pty?.resize(ptyId, tm.cols, tm.rows)
     })
