@@ -9,7 +9,7 @@ import { Image as CoverImageIcon, Smile as PageSmileIcon } from 'lucide-react'
 // 外部回灌:等打字静默 → 重读 → fm 侧直接换状态,正文侧走**同实例最小差异事务**;回灌期间冻结保存。
 // 本编辑器刻意不写 pageStore(陈旧快照经 reconcilePage 回写会复活旧内容,数据安全优先);
 // 只读它的标题聚焦请求(新建流)与 pages(wiki 补全),写侧仅 refreshPages(纯刷新)。
-import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from 'react'
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactElement } from 'react'
 import { MilkdownProvider, useInstance } from '@milkdown/react'
 import { editorViewCtx, parserCtx, serializerCtx } from '@milkdown/kit/core'
 import { NodeSelection, TextSelection, type Selection, type Transaction } from '@milkdown/kit/prose/state'
@@ -1211,6 +1211,13 @@ export interface UnifiedHistory {
 /** Let the old editor finish its cleanup before reading the live move handoff.
  * This also covers input during the destination file read / React replacement.
  */
+/** 画布满铺时主卡顶上的主标题(整页标题那层不渲染,主卡于是无题)。只是 CSS ::before 的文字,不进正文、不写盘。
+ *  ponytail: 只显示不可点改名;要在画布里改名再换成 widget decoration。 */
+function mainCardTitle(path: string): string | null {
+  const name = (path.split('/').pop() ?? path).replace(/\.md$/i, '')
+  return UNTITLED_RE.test(name) ? null : name // 未命名不显示(顶栏已有「New Page」那套占位)
+}
+
 export function UnifiedPage(props: Parameters<typeof UnifiedPageInner>[0]): ReactElement | null {
   const root = useScopedPageStore().getState().vaultRoot
   const scope = useContext(PageScopeCtx)
@@ -3477,7 +3484,7 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
           ref={bodyRef}
           className={`page-view unified-body${canvasOn ? ' amx-canvas' : ''}${fullCanvas ? ' amx-canvas-full' : ''}`}
           data-guide-anchor={canvasOn || readOnly ? undefined : 'note-body'}
-          style={mode === 'source' ? { display: 'none' } : undefined}
+          style={mode === 'source' ? { display: 'none' } : fullCanvas && mainCardTitle(path) ? { '--amx-main-title': JSON.stringify(mainCardTitle(path)) } as CSSProperties : undefined}
           aria-hidden={mode === 'source' || undefined}
           data-bare
           onFocusCapture={() => { touchActive(); bodyUsed.current = true; setFocusedBlockApply(stableApply) }}
