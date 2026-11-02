@@ -31,6 +31,8 @@ public class AppActivity extends BridgeActivity {
         //    晚一步注册 JS 侧就 registerPlugin 不到,表现为「调用永远 reject: plugin not implemented」。
         registerPlugin(SpaceShortcutsPlugin.class);
         registerPlugin(LiveIslandPlugin.class);
+        // 语音通话切后台接着打:通话期间的麦克风前台服务(CallKeepService)。
+        registerPlugin(CallKeepPlugin.class);
         // P1-K8:手机作为 Unit 的身份 + 远端引擎请求的原生中继(调用方票只在原生,见 UnitPlugin)。
         registerPlugin(UnitPlugin.class);
         // P1-DL:存到系统「下载」(Capacitor WebView 没有 DownloadListener,<a download> 在 App 里是哑弹)。

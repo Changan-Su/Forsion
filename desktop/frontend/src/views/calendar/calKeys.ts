@@ -19,8 +19,8 @@ registerMessages({
  *  同时保住 `label: string` 的调用契约。`key`/`id` 是标识符(键盘映射 + 模式枚举),永不翻译。 */
 export const MODE_ITEMS: Array<{ id: CalMode; label: string; key: string }> = [
   { id: 'day', get label() { return translate('calkeys.modeDay') }, key: 'd' },
-  { id: 'week', get label() { return translate('calkeys.modeWeek') }, key: 'w' },
   { id: '3day', get label() { return translate('calkeys.mode3day') }, key: '3' },
+  { id: 'week', get label() { return translate('calkeys.modeWeek') }, key: 'w' },
   { id: 'month', get label() { return translate('calkeys.modeMonth') }, key: 'm' },
 ]
 
