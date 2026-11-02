@@ -2006,18 +2006,25 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* 打开时药丸撑到与菜单同宽、右缘对齐。
    ⚠️ 走 min-width 不走 width:width:auto → 224px 不可插值,动画不会跑;0 → 224px 才行。
    .is-open 三段选择器是为了压过 .t2c-row .composer-chip{min-width:0}(窄屏收缩用)。 */
-/* 开合直接到位、只换底色(走查续八 8.4,规矩 3:颜色和位移同一时长、同一条曲线):以前宽度补 180ms,菜单 80ms 就退完了、
-   药丸还在收。别把 width 过渡加回来;scripts/model-menu.check.cjs 的 B 钉着「开 / 收都不补宽度」。 */
+/* 开合补宽度,跟菜单同一只表(11-02 用户:「胶囊展开关闭动画全都没了」,撤回走查续八 8.4 的「直接到位」):
+   展开 = 菜单进场 --menu-enter-duration × --menu-enter-ease,收起 = 菜单退场替身 --menu-exit-duration × --ease-exit,
+   两边一起到、一起停(8.4 当时的毛病是药丸收 180ms、菜单一帧就没)。收起的时长写在基础规则、展开的写在 .is-open:
+   过渡取「目标状态」那条规则的值。
+   ⚠️ 动的是 width 且**必须**配 interpolate-size:allow-keywords —— 没有它 fit-content → 224px 不可插值,过渡不跑。
+   ⚠️ 别改成 min-width 0 → 224px:可见区间只有 [自然宽, 224],收的时候几乎瞬变。scripts/model-menu.check.cjs 的 B 钉着。
+   ponytail: Safari 尚不支持 interpolate-size,那边降级为直接到位。 */
 .composer-chip.model-pill-btn {
   min-width: 0;
+  interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast);
+  transition: background var(--duration-fast), width var(--menu-exit-duration) var(--ease-exit);
 }
 .composer-chip.model-pill-btn.is-open {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: var(--menu-select-width);
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  transition: background var(--duration-fast), width var(--menu-enter-duration) var(--menu-enter-ease);
 }
 .composer-chip.model-pill-btn.is-max {
   color: color-mix(in srgb, #a77bff 78%, var(--text));
