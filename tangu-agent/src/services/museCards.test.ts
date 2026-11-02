@@ -26,6 +26,7 @@ vi.mock('../core/db.js', async () => {
   h.db.exec(`CREATE TABLE chat_sessions (id TEXT, user_id TEXT)`);
   h.db.exec(`CREATE TABLE chat_messages (id TEXT, session_id TEXT, content TEXT, origin TEXT)`);
   h.db.exec(`CREATE TABLE muse_cards (id TEXT PRIMARY KEY, user_id TEXT, kind TEXT, target_key TEXT, payload TEXT, status TEXT DEFAULT 'pending', result TEXT, created_at BIGINT, decided_at BIGINT)`);
+  h.db.exec(`CREATE TABLE muse_todos (id TEXT, user_id TEXT, status TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`);
   return { query: async (sql: string, params: any[] = []) => { const st = h.db.prepare(sql); return st.reader ? st.all(...params) : (st.run(...params), []); } };
 });
 vi.mock('./museDm.js', () => ({
@@ -50,20 +51,21 @@ vi.mock('./specialAgentsConfig.js', () => ({
   loadSpecialAgentsConfig: () => ({ muse: h.muse }),
   updateMuseConfig: (fn: any) => { if (h.configFails) throw new Error('config lock timeout'); const patch = fn(h.muse); Object.assign(h.muse, patch); return { muse: h.muse }; },
 }));
-vi.mock('./museState.js', () => ({ patchMuseOnboarding: async (p: any) => { Object.assign(h.onboarding, p); } }));
+vi.mock('./museState.js', () => ({ MUSE_ONBOARDING_MS: 14 * 86_400_000, patchMuseOnboarding: async (p: any) => { Object.assign(h.onboarding, p); } }));
 vi.mock('../tools/builtin/amadeus.js', () => ({ amadeusVaultPath: () => '' }));
 vi.mock('./museTriggers.js', () => ({
   validateTriggerInput: (input: any, opts: any) => { h.cwds.push(opts?.cwd); return h.valid ? { ok: true, value: { desc: 'r', enabled: input.enabled } } : { ok: false, error: 'bad' }; },
   upsertTrigger: async (v: any, _id: unknown, opts: any) => { if (h.upsert instanceof Error) throw h.upsert; h.upserts.push({ v, opts }); return h.upsert; },
 }));
 
-import { decideMuseCard, getMuseCard, inboxAskBlocked, inboxListBlocked, inboxHint, listMuseCards, pickMuseSettings, postIntroCard, postMuseCard, postSummaryCard, recommendBlocked, recommendHint, recordMessageFeedback } from './museCards.js';
+import { decideMuseCard, getMuseCard, inboxAskBlocked, inboxListBlocked, inboxHint, listMuseCards, pickMuseSettings, postIntroCard, postMuseCard, postSummaryCard, proposalStats, recommendBlocked, recommendHint, recordMessageFeedback } from './museCards.js';
 
 const DAY = 86_400_000;
 const plugin = (id = 'better-pdf') => ({ kind: 'plugin' as const, key: `plugin:${id}`, payload: { item: { id, name: 'Better PDF' } }, text: '你这周开了 9 份 PDF。' });
 
 beforeEach(() => {
   h.db.exec('DELETE FROM muse_cards');
+  h.db.exec('DELETE FROM muse_todos');
   h.dmOk = true; h.dms.length = 0; h.memory.length = 0; h.logs.length = 0;
   h.muse.inboxAutoRead = []; h.muse.inboxIgnored = [];
   for (const k of ['heartbeatMinutes', 'activeHours', 'notify', 'maxDmPerDay', 'mode', 'grantedFolders']) delete h.muse[k];
@@ -309,6 +311,70 @@ describe('第一次见面', () => {
     expect(h.muse.activeHours).toBeNull();
     expect(h.memory).toEqual([]);
     expect((await getMuseCard('u', card.id))!.status).toBe('done');
+  });
+});
+
+describe('第 14 天小结的提议采纳行', () => {
+  let seq = 0;
+  /** at 省略 = 走列缺省的 CURRENT_TIMESTAMP(真实写入的格式)。 */
+  const todo = (status: string, at?: number, user = 'u') => {
+    const id = `t${seq++}`;
+    if (at === undefined) h.db.prepare(`INSERT INTO muse_todos (id, user_id, status) VALUES (?, ?, ?)`).run(id, user, status);
+    else h.db.prepare(`INSERT INTO muse_todos (id, user_id, status, created_at) VALUES (?, ?, ?, ?)`).run(id, user, status, new Date(at).toISOString().slice(0, 19).replace('T', ' '));
+  };
+  const card = (kind: string, status: string, result: string | null = null, at = Date.now()) =>
+    h.db.prepare(`INSERT INTO muse_cards (id, user_id, kind, payload, status, result, created_at) VALUES (?, 'u', ?, '{}', ?, ?, ?)`).run(`c${seq++}`, kind, status, result, at);
+  const posted = async () => {
+    expect(await postSummaryCard('u', '两周下来：', ['晚上别提代码'])).toMatch(/^Sent/);
+    return (await listMuseCards('u')).find((c) => c.kind === 'summary')!.payload.proposals;
+  };
+
+  it('没有提议:payload 不带这一行', async () => {
+    card('plugin', 'done', 'opened'); // 推荐卡不算提议
+    expect(await posted()).toBeUndefined();
+  });
+  it('待办批准 / 注入 / 标完成算采纳;驳回和没理的只算提了', async () => {
+    for (const s of ['injected', 'done', 'dismissed', 'pending']) todo(s);
+    expect(await posted()).toMatchObject({ proposed: 4, adopted: 2 });
+  });
+  it('规则卡建成才算采纳:好 / 先观察 / 改一下都算,不用和没理的不算;观察结果卡不是提议', async () => {
+    card('rule', 'done', 'accepted'); card('rule', 'done', 'observing'); card('rule', 'done', 'editing');
+    card('rule', 'dismissed', 'dismissed'); card('rule', 'pending');
+    card('rule-observed', 'done', 'enable');
+    expect(await posted()).toMatchObject({ proposed: 5, adopted: 3 });
+  });
+  it('只数最近两周、只数这个用户', async () => {
+    const now = Date.now();
+    todo('done', now - 13 * DAY); card('rule', 'done', 'accepted', now - 13 * DAY);
+    todo('done', now - 15 * DAY); card('rule', 'done', 'accepted', now - 15 * DAY);
+    todo('done', now, 'other');
+    expect(await proposalStats('u', 'ask', now)).toMatchObject({ proposed: 2, adopted: 2 });
+  });
+  it('11 提 8 采:ask 档问升档,只问不改档;别的档不问', async () => {
+    h.muse.mode = 'ask';
+    for (let i = 0; i < 11; i++) todo(i < 8 ? 'done' : 'dismissed');
+    expect(await posted()).toEqual({ proposed: 11, adopted: 8, askUpgrade: true });
+    expect(h.muse.mode).toBe('ask');
+    expect((await proposalStats('u', 'agent'))?.askUpgrade).toBe(false);
+    expect((await proposalStats('u', 'auto'))?.askUpgrade).toBe(false);
+  });
+  it('样本不够或采纳率不够:有这一行,不问升档', async () => {
+    for (let i = 0; i < 4; i++) todo('done');
+    expect(await proposalStats('u', 'ask')).toEqual({ proposed: 4, adopted: 4, askUpgrade: false });
+    for (let i = 0; i < 3; i++) todo('pending');
+    expect(await proposalStats('u', 'ask')).toEqual({ proposed: 7, adopted: 4, askUpgrade: false });
+  });
+  it('数不出来:小结照发,只是没有这一行', async () => {
+    const realPrepare = h.db.prepare.bind(h.db);
+    const spy = vi.spyOn(h.db, 'prepare').mockImplementation((sql: string) => {
+      if (/FROM muse_todos/.test(sql)) throw new Error('no such table');
+      return realPrepare(sql);
+    });
+    try {
+      expect(await posted()).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 

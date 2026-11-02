@@ -11,6 +11,7 @@ import type {
   TriggerSourceInfo,
 } from '../../types'
 import { formatMonthDay, formatTime, toDate } from '../../format/time'
+import { formatRepeat } from '../../format/repeat'
 import { agentName } from '../../agentName'
 import './messages'
 
@@ -22,7 +23,7 @@ export function condText(t: T, cond: MuseTriggerInfo['cond']): string {
   if (cond.type === 'daily_at') return t('automation.cond.daily', { time: cond.time })
   if (cond.type === 'event_seen') return t('automation.cond.event', { match: cond.match })
   if (cond.type === 'at') return t('automation.cond.at', { time: String(cond.datetime || '').replace('T', ' ') })
-  if (cond.type === 'every') return t('automation.cond.every', { ivl: cond.interval })
+  if (cond.type === 'every') return formatRepeat(t, cond.interval)
   if (cond.type === 'file_chars_gte') return t('automation.cond.file', { path: shortPath(cond.path), n: String(cond.n) })
   if (cond.type === 'manual') return t('automation.cond.manual')
   if (cond.type === 'computer.app_opened') return t('automation.cond.appOpened', { app: paramText(cond.params, 'appName', 'app') })

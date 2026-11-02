@@ -40,11 +40,19 @@ it('① 展开项钉住:更早的消息后来插进一条,它只垫到后面;展
   await render([a, b]) // A 的消息排在前面(并行团队里先激活的成员),它的审批晚到
   expect(body().dataset.trayMsg, '正在看的提问被新插进来的审批顶掉了').toBe('m-b')
   expect(host.querySelector('.inquiry-q')?.textContent).toContain('Question from B')
-  expect(host.querySelector('.t2c-apv-more')?.textContent).toBe('还有 审批 1')
+  expect(host.querySelector('.t2c-apv-more')?.textContent).toBe('还有 1 个审批')
+  expect(host.querySelector('.t2c-apv-title')?.textContent).toBe('等你处理 · 2')
   expect(host.querySelector('.t2c-apv-n')?.textContent).toBe('2 / 2')
   expect(host.querySelector('.t2c-apv')?.getAttribute('data-peek')).toBe('1')
   await render([a]) // B 答完离开托盘 → 回落到最早那项
   expect(body().dataset.trayMsg).toBe('m-a')
+})
+
+it('①b 全是同一种:只写「等你批准 · n」,不再补「还有」(走查续六 6.6)', async () => {
+  await render([apv('a1', 'm1', '$ one'), apv('a2', 'm1', '$ two'), apv('a3', 'm1', '$ three')])
+  expect(host.querySelector('.t2c-apv-title')?.textContent).toBe('等你批准 · 3')
+  expect(host.querySelector('.t2c-apv-more')).toBeNull()
+  expect(host.querySelector('.t2c-apv-n')?.textContent).toBe('1 / 3')
 })
 
 it('② 同一项连点只送一次;没送达(返回 false)才解锁,可以重试', async () => {

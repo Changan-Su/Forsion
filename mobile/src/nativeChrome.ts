@@ -39,7 +39,7 @@ export interface ChromeLayout {
   /** How much of the page's top / bottom edge is under the chrome; `status` = the status-bar part of `top`. */
   top: number; bottom: number; status: number
   /** Each capsule's rectangle, relative to the page. */
-  plates: Array<{ id: string; x: number; y: number; w: number; h: number }>
+  plates: Array<{ id: string; x: number; y: number; w: number; h: number; motion?: 'in' | 'out' }>
   /** A screen reader (touch exploration) is on. Reported whether or not the chrome floats. */
   reader?: boolean
   /** The window is wide (same line as the shell's WIDE_QUERY, judged on the whole window): the Spaces are a rail at the
@@ -172,11 +172,26 @@ export function applyChromeLayout(e: ChromeLayout | null | undefined, doc: Docum
   for (const el of Array.from(box.children) as HTMLElement[]) if (!wanted.has(el.dataset.plate ?? '')) el.remove()
   for (const p of plates) {
     let el = (Array.from(box.children) as HTMLElement[]).find((x) => x.dataset.plate === p.id)
+    const fresh = !el
     if (!el) { el = doc.createElement('div'); el.className = 'nc-plate'; el.dataset.plate = p.id; box.appendChild(el) }
     const x = typeof p.x === 'number' && Number.isFinite(p.x) ? p.x : 0
     const y = typeof p.y === 'number' && Number.isFinite(p.y) ? p.y : 0
     el.style.cssText = `left:${dpLength(x)};top:${dpLength(y)};width:${dpLength(p.w)};height:${dpLength(p.h)}`
+    if (p.motion && p.motion !== el.dataset.motion) movePlate(el, p.motion, fresh)
+    el.dataset.motion = p.motion ?? ''
   }
+}
+
+/** The dock sinks and fades (NativeChromeBar: DOCK_SINK, DOCK_MOTION_MS, DOCK_EASE); the blur under it has to go along. */
+function movePlate(el: HTMLElement, motion: 'in' | 'out', fresh: boolean): void {
+  if (typeof el.animate !== 'function') return
+  const quiet = el.ownerDocument.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  const gone = { transform: quiet ? 'none' : `translateY(${dpLength(40)})`, opacity: '0' }
+  const here = { transform: 'none', opacity: '1' }
+  const style = getComputedStyle(el) // from where it is: it may turn round half way
+  const from = fresh ? gone : { transform: style.transform, opacity: style.opacity }
+  el.getAnimations().forEach((a) => a.cancel())
+  el.animate([from, motion === 'in' ? here : gone], { duration: quiet ? 120 : 380, easing: 'cubic-bezier(0.23, 1, 0.32, 1)', fill: motion === 'out' ? 'forwards' : 'none' })
 }
 
 /** The two top capsules' widths (dp) for what lays itself out in their row (the board's top islands, base.css). Not on

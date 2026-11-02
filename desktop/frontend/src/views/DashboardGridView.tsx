@@ -24,7 +24,7 @@ import type { DashboardCardSize, DashboardCardSurface, ViewProps } from '@lcl/en
 import { allViews, getView, label, useEdgeNudge, useWorkspace } from '@lcl/engine'
 import {
   DndContext, DragOverlay, MouseSensor, TouchSensor, pointerWithin, useSensor, useSensors,
-  type DragEndEvent, type DragMoveEvent, type DragStartEvent,
+  type Announcements, type DragEndEvent, type DragMoveEvent, type DragStartEvent, type UniqueIdentifier,
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, type SortingStrategy } from '@dnd-kit/sortable'
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
@@ -57,6 +57,13 @@ import './dashGrid.css'
 import { useVaultRelParam } from './vaultRelParam'
 
 registerMessages({
+  // 7.25 拖卡片的读屏提示(dnd-kit accessibility;界面上看不见)
+  'dashgrid.a11y.instructions': { zh: '按空格拿起这张卡片。拿起后用方向键移动，再按空格放下；按 Esc 取消。', en: 'Press Space to pick up this card. Use the arrow keys to move it, then Space to drop it, or Esc to cancel.' },
+  'dashgrid.a11y.pickedUp': { zh: '已拿起「{card}」。', en: 'Picked up “{card}”.' },
+  'dashgrid.a11y.over': { zh: '「{card}」移到第 {n} 格。', en: '“{card}” moved to position {n}.' },
+  'dashgrid.a11y.dropped': { zh: '「{card}」放在第 {n} 格。', en: '“{card}” dropped at position {n}.' },
+  'dashgrid.a11y.cancelled': { zh: '已取消，「{card}」回到原位。', en: 'Cancelled. “{card}” is back where it was.' },
+  'dashgrid.a11y.untitled': { zh: '未命名卡片', en: 'Untitled card' },
   // 加卡菜单
   'dashgrid.add.section': { zh: '分区标题', en: 'Section heading' },
   // 落盘默认名:会写进 .dashboard.md 的 widget 参数。跟随语言,不是标识符(无处比较它)。
@@ -833,6 +840,23 @@ function GridInner({ leaf }: ViewProps) {
     writeFm(setDashModeInFm(store.getState().manifest?.fmExtra ?? '', 'canvas'))
   }
 
+  // 读屏播报读最新的序与卡名(ref,下面算完 displaySeq 再填):announcements 只随语言重建,拖动中的每次重排不让 dnd-kit 反复换监听。
+  const a11yRef = useRef<{ seq: string[]; name: (id: string) => string }>({ seq: [], name: () => '' })
+  const accessibility = useMemo(() => {
+    const card = (id: UniqueIdentifier) => a11yRef.current.name(String(id))
+    const pos = (id: UniqueIdentifier) => String(a11yRef.current.seq.indexOf(String(id)) + 1)
+    return {
+      screenReaderInstructions: { draggable: t('dashgrid.a11y.instructions') },
+      announcements: {
+        onDragStart: ({ active }) => t('dashgrid.a11y.pickedUp', { card: card(active.id) }),
+        // 位置报被拖那张自己在预览序里的格子:预览序已经让过位,over 可能是被挤开的邻居
+        onDragOver: ({ active, over }) => over ? t('dashgrid.a11y.over', { card: card(active.id), n: pos(active.id) }) : undefined,
+        onDragEnd: ({ active }) => t('dashgrid.a11y.dropped', { card: card(active.id), n: pos(active.id) }),
+        onDragCancel: ({ active }) => t('dashgrid.a11y.cancelled', { card: card(active.id) }),
+      } satisfies Announcements,
+    }
+  }, [t])
+
   if (!dashPath) return <div className="amx-draw-state">{t('dashgrid.noFile')}</div>
 
   const cardOf = (id: string): { widget: ReturnType<typeof parseWidget>; title: string | null; Icon: typeof LayoutGrid | null; openable: null | (() => void) } => {
@@ -873,6 +897,8 @@ function GridInner({ leaf }: ViewProps) {
     for (const id of ordered) if (!present.includes(id)) present.push(id)
     return present
   })()
+
+  a11yRef.current = { seq: displaySeq, name: (id: string) => { const c = cardOf(id); return c.title || c.widget?.opts.title || c.widget?.opts.label || t('dashgrid.a11y.untitled') } }
 
   const composeRows = (seq: string[], rowPins: Dash3Pins) => layoutDash3Rows(seq.map((id) => {
     const profile = profileOf(blocks[id]?.content ?? '')
@@ -1070,6 +1096,7 @@ function GridInner({ leaf }: ViewProps) {
           sensors={sensors}
           // over 不再决定落点(见 planDrop)。留 pointerWithin:closestCenter 在让位时每帧都要算一遍全部卡的中心。
           collisionDetection={pointerWithin}
+          accessibility={accessibility}
           onDragStart={onDragStart}
           onDragMove={onDragMove}
           onDragEnd={onDragEnd}

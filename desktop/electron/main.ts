@@ -6,6 +6,7 @@ import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
 import { registerStartupAppearance } from './startupAppearance'
 import { MCP_NAME_RESERVED, newReservedMcpNames } from '../shared/mcpNames'
+import { createConnectorCatalog } from './connectorCatalog'
 import { buildUnitScopeGuard, openUnitHostRegularFile, withVerifiedUnitPath } from './unitHostScope'
 import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, registerPickedDirectory, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
@@ -114,6 +115,7 @@ import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
+import { syncVaultRoot } from './amadeus/vaultList'
 import { registerRemoteSync } from './remotesyncIpc'
 import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
@@ -123,6 +125,7 @@ import { effectivePluginId } from '../shared/products'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
+import { registerIuiLibProtocol } from './iuiLibProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
 import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
@@ -604,21 +607,23 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   disabledBundles: [],
 }
 
-/** 默认工作区目录(配置未填时兜底):优先落在本地笔记库(Vault)内的 Sessions/ ——
- *  会话工作区与笔记同库,agent 产物可直接被笔记引用(2026-08-03 起)。没有本地库时维持旧口径:
- *  新用户 ~/Forsion(dev→~/Forsion-Dev),仅当存在**真实** ~/Tangu 目录(老用户,迁移软链不算)
- *  才沿用 ~/Tangu。best-effort 创建。 */
+/** 默认工作区目录(配置未填时兜底)。10-29 起会话目录和智库分开:新用户落 `~/Forsion/Sessions`
+ *  (dev→~/Forsion-Dev/Sessions)。老用户不动:08-03 起旧版把会话放在本地库的 Sessions/ 并每次建好它,
+ *  库里已有这个文件夹就照旧用(看第一个库,不跟切库走);再老的、存在**真实** ~/Tangu 目录(迁移软链不算)
+ *  的沿用 ~/Tangu。best-effort 创建。 */
 async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<string> {
   let dir = stored.defaultWorkspaceDir?.trim()
   if (!dir) {
-    // 取 localVault 而非 lastVault:活动侧可能是云镜像,Sessions 落进去会整个被当笔记同步上云。
-    const vault = (await readAmadeusConfig()).localVault
-    if (vault && (await stat(vault).then((s) => s.isDirectory()).catch(() => false))) dir = join(vault, 'Sessions')
+    // 取本地同步库而非 lastVault:活动侧可能是云镜像。
+    // ponytail: 新用户自己在库里建了个叫 Sessions 的文件夹会被当成老用户,真撞上再记标记位
+    const vault = syncVaultRoot(await readAmadeusConfig())
+    const old = vault && join(vault, 'Sessions')
+    if (old && (await stat(old).then((s) => s.isDirectory()).catch(() => false))) dir = old
   }
   if (!dir) {
     const legacy = join(app.getPath('home'), 'Tangu')
     const isRealLegacyDir = await lstat(legacy).then((s) => s.isDirectory() && !s.isSymbolicLink()).catch(() => false)
-    dir = isRealLegacyDir ? legacy : forsionWorkspaceDir()
+    dir = isRealLegacyDir ? legacy : join(forsionWorkspaceDir(), 'Sessions')
   }
   await mkdir(dir, { recursive: true }).catch(() => {})
   return dir
@@ -1955,7 +1960,9 @@ function syncSessionPanels(): void {
   }
 }
 
-/** Floating Panel is a normal child window: movable/minimizable/closable, but kept above its main window. */
+/** 普通 Floating Panel(设置 / 商店…)是独立顶层窗口:主窗最小化 / 关到托盘时它照样留在桌面上,点它也不会把主窗一起拽到前面 ——
+ *  设置里「拖扩展文件夹进 Chrome 扩展页」这类跨应用拖放靠的就是这一点。别改回 parent: mainWindow(macOS 子窗随父窗隐藏 / 最小化)。
+ *  只有会话级面板(旁聊)仍挂主窗当子窗:它本来就跟着主窗的当前会话走。 */
 function openFloatingPanel(raw: unknown): { id: string } | undefined {
   const target = normalizeFloatingPanelOpenOptions(raw)
   if (!target) return undefined
@@ -1967,6 +1974,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
   if (existing && !existing.isDestroyed()) {
     existing.setTitle(target.title)
     existing.setMinimizable(!target.sessionId) // 先以普通面板开过、后被主窗绑上会话的,也收回最小化
+    if (target.sessionId && !existing.getParentWindow() && mainWindow && !mainWindow.isDestroyed()) existing.setParentWindow(mainWindow)
     if (existing.isMinimized()) existing.restore()
     present(existing)
     // 还在载入:渲染层可能已经 floatingReady 拿走了上一份 target,这份得等载入完补发(发最新的;同一份重复到达不会重挂 —— 面板按 params 做 key,设置的带落点请求靠 params.nonce 区分先后)
@@ -1976,8 +1984,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
     return { id: target.id }
   }
   const win = new BrowserWindow({
-    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
-    modal: false,
+    parent: target.sessionId && mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
     show: false,
     width: target.width,
     height: target.height,
@@ -2806,7 +2813,7 @@ app.whenReady().then(async () => {
         roots: async () => {
           const cfg=await readAmadeusConfig()
           return [{prefix:'',root:forsionWorkspaceDir()},{prefix:'agents',root:join(tanguDataDir(),'agents')},
-            {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:cfg.localVault??join(forsionWorkspaceDir(),'Amadeus')}]
+            {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:syncVaultRoot(cfg)??join(forsionWorkspaceDir(),'Amadeus')}] // 切库不换同步根(vaultList.ts)
         },
         claim: async (owned) => {
           await ensureBackend()
@@ -3494,7 +3501,7 @@ app.whenReady().then(async () => {
     if (!icon || icon.isEmpty()) icon = nativeImage.createFromDataURL(DRAG_FALLBACK_ICON)
     e.sender.startDrag({ file: filePath, icon })
   })
-  registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome 扩展页(拖拽复用上面的 fs:startDrag)
+  registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome / Edge 扩展页(拖拽复用上面的 fs:startDrag)
   if (!SANDBOX) startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
 
   ipcMain.handle('backend:getStatus', () => backend.getStatus())
@@ -3605,6 +3612,38 @@ app.whenReady().then(async () => {
     // The engine reconciles MCP settings at idle via /agent/tools or run settlement; never restart an active reply.
     return { mcpServers: servers }
   })
+  // ── 连接器目录(connectorCatalog.ts):公开端点、不要登录;拉到就对账 mcp 段里带标记的条目 ──
+  const connectorCatalog = createConnectorCatalog({
+    base: marketBase,
+    cacheFile: () => join(tanguDataDir(), 'connector-catalog.json'),
+    updateMcpServers: async (fn) => {
+      const fallback = await readMcpServers()
+      let servers: Record<string, any> = {}
+      await configQueue(() => updateHomeConfig((c) => {
+        const sec = c.mcp
+        const current = sec === undefined ? fallback : sec?.mcpServers ?? {}
+        const next = fn(current)
+        servers = next ?? current
+        if (!next) return undefined
+        c.mcp = { ...sec, mcpServers: next }
+        return c
+      }))
+      return servers
+    },
+  })
+  ipcMain.handle('connectors:list', (e, refresh?: boolean) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    return refresh ? connectorCatalog.refresh() : connectorCatalog.readCache()
+  })
+  ipcMain.handle('connectors:connect', (e, id: string, taken?: string[]) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    return connectorCatalog.connect(id, taken)
+  })
+  ipcMain.handle('connectors:remove', (e, name: string) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    return connectorCatalog.remove(name)
+  })
+  void connectorCatalog.refresh().catch(() => {}) // 启动时拉一次:离线 / 没配云端地址就留着缓存(refresh 自己不抛)
   ipcMain.handle('mcp:import', async (_e, cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => {
     const incoming = parseMcpInput(cfg?.config, cfg?.name)
     if (cfg.replaceNames !== undefined && (!Array.isArray(cfg.replaceNames) || cfg.replaceNames.some(n => typeof n !== 'string'))) throw new Error('Invalid MCP replacement names')
@@ -4623,13 +4662,14 @@ app.whenReady().then(async () => {
     },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
+  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
   amadeusReadPlugins = readExternalPlugins
   amadeusVaultFace = vaultFace
   void refreshUnitHost() // 「允许其他设备连接本机」开着就恢复出站通道
   restartAmadeusSync = restartSync
   stopAmadeusSync = stopSync
-  registerAmadeusAssetProtocol(getVaultRoot)
+  registerAmadeusAssetProtocol(getVaultRoot, resolveSharedAsset)
+  registerIuiLibProtocol()
   registerRemoteSync() // 本地库远程同步(remotely-save 式;隔离层见 electron/remotesync/)
   app.on('activate', () => showMainWindow()) // dock/tray 唤起:隐藏则显示,销毁则重建
   // GPU 进程崩溃(Windows 驱动 TDR / 睡眠恢复常见)会级联拖垮渲染器 → 白屏。监听并自愈。

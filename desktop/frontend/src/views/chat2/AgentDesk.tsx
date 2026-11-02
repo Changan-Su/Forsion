@@ -159,7 +159,8 @@ function DeskFilePane({ item, allowNative }: { item: DeskItem; allowNative: bool
   if (!rel) return <DeskPane item={item} />
   const kind = claimKind(rel, fileTypes)
   if (kind) return allowNative ? <DeskClaimPane item={item} rel={rel} /> : <DeskPane item={item} />
-  if (isDrawingPath(rel)) return <DeskShimView type="amadeus-drawing" params={{ drawingPath: rel }} k={`desk-draw:${rel}`} />
+  // 白板在 Desk 上是只读预览 + 「在白板中打开」(走查续七 7.7 A),要画就进主区那块。
+  if (isDrawingPath(rel)) return <DeskShimView type="amadeus-drawing" params={{ drawingPath: rel, preview: true }} k={`desk-draw:${rel}`} />
   if (findFileType(fileTypes, rel)) return <DeskShimView type="amadeus-plugin-file" params={{ filePath: rel }} k={`desk-ft:${rel}`} />
   if (/\.db$/i.test(rel)) return <DeskShimView type="amadeus-db" params={{ dbPath: rel }} k={`desk-db:${rel}`} />
   return <DeskPane item={item} />

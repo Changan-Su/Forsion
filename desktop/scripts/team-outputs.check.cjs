@@ -34,7 +34,7 @@ async function main() {
   try {
     const ud = path.join(home, 'userdata')
     for (const dir of [ud, `${ud}-dev`]) { fs.mkdirSync(dir, { recursive: true }); fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'test' })) }
-    app = await electron.launch({ args: [`--user-data-dir=${ud}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
+    app = await electron.launch({ args: [`--user-data-dir=${ud}`, '--lang=zh-CN', ...electron.NESTED_SANDBOX_ARGS, ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url } })
     win = await app.firstWindow()
     win.setDefaultTimeout(15000)
     const errors = []
@@ -54,8 +54,8 @@ async function main() {
     await win.waitForTimeout(1200)
     assert.equal(await card.count(), 1)
     assert.equal(await win.locator('.child-chat-panel').count(), 0)
-    await chat.frameLocator('.sketch-frame').getByRole('button', { name: 'Inspect workflow' }).click()
-    await chat.frameLocator('.sketch-frame').getByRole('button', { name: 'INTERACTION-PASSED' }).waitFor()
+    await chat.frameLocator('.sketch-frame').frameLocator('iframe').getByRole('button', { name: 'Inspect workflow' }).click()
+    await chat.frameLocator('.sketch-frame').frameLocator('iframe').getByRole('button', { name: 'INTERACTION-PASSED' }).waitFor()
     assert.equal(await chat.locator('img[alt="chart.svg"]').evaluate((el) => el.complete && el.naturalWidth > 0), true)
     await win.screenshot({ path: path.join(home, 'outputs-light.png') })
     await chat.getByRole('button', { name: 'report.txt', exact: true }).click()
@@ -66,7 +66,7 @@ async function main() {
     await win.locator('.t2s-srow, .t2o-row').filter({ hasText: session.title }).first().click()
     await chat.locator('.sketch-card').waitFor()
     assert.equal(await chat.locator('.sketch-card').count(), 1)
-    await chat.frameLocator('.sketch-frame').getByRole('button', { name: 'Inspect workflow' }).waitFor()
+    await chat.frameLocator('.sketch-frame').frameLocator('iframe').getByRole('button', { name: 'Inspect workflow' }).waitFor()
     // 按 ribbon 槽 id 点明暗钮:U-21 起收起态不挂原生 title(改自绘浮签 data-rb-tip),getByTitle 永远找不到。
     await win.locator('.rb-slot[data-id="rb-mode"] .rb-btn').click()
     await win.waitForTimeout(400)

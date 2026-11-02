@@ -39,8 +39,12 @@ it('shows cloud and custom local groups, hides non-chat/hidden models and pagina
   await click('.ob-model-pagination button:last-child')
   expect(host.querySelectorAll('.ob-model-option')).toHaveLength(3)
   expect(host.textContent).not.toMatch(/Image only|Speech only|Hidden chat/)
+  expect(host.querySelector('.ob-model-toolbar .ob-muted')?.textContent).toBe('9 个模型')
   await click('.ob-model-groups button:last-child')
   expect(host.querySelectorAll('.ob-model-option')).toHaveLength(1)
+  // 6.19:计数说清是什么;只有一页时不画「1 / 1 页」和两颗灰掉的翻页键
+  expect(host.querySelector('.ob-model-toolbar .ob-muted')?.textContent).toBe('1 个模型')
+  expect(host.querySelector('.ob-model-pagination')).toBeNull()
   await click('.ob-model-option')
   expect(onChange).toHaveBeenLastCalledWith('direct')
 })

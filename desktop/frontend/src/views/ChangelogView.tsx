@@ -3,7 +3,7 @@
  * 检测到新版时由 bootstrap 自动弹出(每版本一次);开发者模式按钮可强制弹出测试。
  */
 import { useEffect, useState } from 'react'
-import { CHANGELOG, changelogFor } from '../changelog'
+import { CHANGELOG, changelogFor, changelogMarkdown } from '../changelog'
 import { Markdown } from '../components/Markdown'
 import { CorePluginUpdates } from '../components/CorePluginUpdates'
 import { UpdateActions } from '../components/UpdateActions'
@@ -25,7 +25,7 @@ export function ChangelogEntries() {
         <div key={c.version} className="changelog-entry md-body" lang={c.fallback ? 'zh' : undefined}>
           <div className="changelog-ver">{c.version} <span className="changelog-date">{c.date}</span></div>
           {c.fallback && <div className="hint">{t('changelog.zhOnly')}</div>}
-          <Markdown content={c.lines.map((l) => `- ${l}`).join('\n')} />
+          <Markdown content={changelogMarkdown(c.lines)} />
         </div>
       ))}
     </>

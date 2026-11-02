@@ -1856,12 +1856,17 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         }
         // 自动压缩提示(H4):此前 ctx% 突然回落零提示,与手动 /compact 的明确回执反差。
         // 只认 'compacted'(forced 路径先发 'compacting' 再发 'compacted',避免一次压缩两条)。
-        if (pl.phase === 'compacted') {
-          // forced+fallback = 摘要失败退回机械折叠 → 用机械折叠措辞,不许谎称「已生成摘要」;
+        // context_over_budget(10-26):压缩后仍超成本封顶,引擎按模型真实窗口照发 —— 说一句费用会更高,每 run 一次。
+        if (pl.phase === 'compacted' || pl.phase === 'context_over_budget') {
+          // forced+fallback = 摘要失败退回机械折叠 → 用机械折叠措辞,不许谎称「已生成摘要」;trimmed = 兜底丢了最早的几条;
           // reason=overflow = 上游拒收超长输入后压缩重试(09-15),措辞说明这一轮重发过。
-          const line = pl.forced && !pl.fallback
-            ? get().tr(pl.reason === 'overflow' ? 'ctx.compacted.overflow' : 'ctx.compacted.forced')
-            : get().tr('ctx.compacted.auto', { saved: (Number(pl.savedChars) || 0).toLocaleString() })
+          const line = pl.phase === 'context_over_budget'
+            ? get().tr('ctx.overBudget', { budget: (Number(pl.budgetTokens) || 0).toLocaleString() })
+            : Number(pl.trimmed) > 0
+              ? get().tr('ctx.compacted.trimmed', { n: Number(pl.trimmed) })
+              : pl.forced && !pl.fallback
+                ? get().tr(pl.reason === 'overflow' ? 'ctx.compacted.overflow' : 'ctx.compacted.forced')
+                : get().tr('ctx.compacted.auto', { saved: (Number(pl.savedChars) || 0).toLocaleString() })
           set((s) => ({
             messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] || []), {
               // id 掺 seq(per-run 单调):中流断线恢复会 iteration-1 重进同一迭代号,纯 iteration 会撞 React key
@@ -2296,8 +2301,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const { defaultWsDir, homeDir, sessions, archivedSessions, cloudProjects, channelWorkspaces, tr: t } = get()
     const defPath = defaultWsDir || homeDir || null
     const defaultName = t('app.defaultWorkspace')
-    // 默认工作区是逻辑身份，不是某次启动算出的路径。首启时 Amadeus Vault 可能在用户已经
-    // 从旧默认目录建好会话后才就位，下次 config:get 会把默认目录切到 Vault/Sessions。
+    // 默认工作区是逻辑身份，不是某次启动算出的路径：它在版本之间换过（~/Tangu → Vault/Sessions →
+    // 10-29 起新用户 ~/Forsion/Sessions），老会话记的还是当时的路径。
     // 保留会话的真实 project_path，但把各语言下以「默认工作区」创建过的路径都收为同组别名。
     const defaultNames = new Set([defaultName, ...translationValues('app.defaultWorkspace')])
     // P1-K7a(K7 §3.4):只看本端会话 —— 已注入的「我的电脑」上的会话带着 Mac 的路径,并进来就是手机上的「幽灵本地项目」
@@ -3023,6 +3028,29 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const list = get().messagesBySession[sid] || []
     if (fromIndex < 0 || fromIndex >= list.length) return false
     const removed = list.slice(fromIndex)
+    // 编辑重发 / 重新生成 / retry:删之前把整份对话复制成一支「旧版本」分支(方案 docs/ToBeImproved/编辑重发分支与编辑框方案_2026-10-28 ①),
+    // 新的这一版就是主线。复制到最后一条落库的,分叉点在被改那条之前落库的那条(改第一句时就是它自己 —— 旧那支在画布上成并排的第二棵)。
+    // 哪些落了库以引擎为准(本地有停掉的空占位、失败后还原回来的已删条、失败但落了半截的回答,都猜不准):先读最新一页。
+    // 被删的里面没有一条落了库、有内容的回答就不留:那一版没有可看的。读失败 / 复制失败 = 这次不改,宁可不改也不丢旧内容。
+    const PAGE = 500
+    try {
+      const records = await api.listMessages(targetForSession(sid), sid, PAGE)
+      const onServer = new Set(records.map((r) => r.id))
+      const removedIds = new Set(removed.map((m) => m.id))
+      const last = records[records.length - 1]
+      if (last && records.some((r) => removedIds.has(r.id) && r.role !== 'user' && !!(r.content || '').trim())) {
+        const before = list.slice(0, fromIndex).reverse()
+        // ponytail: 改的那句比最新一页还早(>500 条之前)时,页外的按「不是占位」猜
+        const fork = before.find((m) => onServer.has(m.id))
+          || (records.length >= PAGE ? before.find((m) => m.role !== 'system' && !m.work && !!m.content.trim()) : undefined)
+          || removed.find((m) => onServer.has(m.id)) || records[0]
+        const title = (get().sessions.find((x) => x.id === sid)?.title || '').trim() || 'New Chat'
+        const branched = await api.branchSession(targetForSession(sid), sid, last.id, t('chat.oldVersion', { title }), fork.id)
+        if (inheritBinding(branched.id, sid) === 'conflict') throw new Error(t('app.cannotCreateSession'))
+        const keep = withLocation(branched)
+        set((st) => ({ sessions: [keep, ...st.sessions.filter((x) => x.id !== keep.id)] }))
+      }
+    } catch (e: any) { get().toast(t('app.keepOldFail', { e: e?.message || e }), true); return false }
     try { await api.deleteMessages(targetForSession(sid), sid, removed.map((m) => m.id)) }
     catch (e: any) { get().toast(t('app.truncateFail', { e: e?.message || e }), true); return false }
     set((s) => ({ messagesBySession: { ...s.messagesBySession, [sid]: (s.messagesBySession[sid] || []).slice(0, fromIndex) } }))

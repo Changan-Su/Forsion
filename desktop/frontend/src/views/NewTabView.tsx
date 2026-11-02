@@ -3,6 +3,7 @@
  *    搜索(快速查找的入口)→ 最近使用 → 新建(动作,只能点)→ 打开(一个 Space 一格 + 不属于任何 Space 的视图)→ 当前 Space 的侧栏面板。
  *  单击 = 开在这个标签里(侧栏面板开在其所属侧);视图类可拖入 tab bar / side bar「落点即开」。
  *  ⚠️每个可点项都带 .newtab-card / .newtab-card-label:十来个 e2e 按这两个类 + 文案找入口,长相由 .nt-* 修饰类决定(base.css)。 */
+import { requestTerminalFocus } from '../builtins/terminalFocus'
 import { useEffect, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Plus, Bot, FileText, Globe, TerminalSquare, Search, ChevronDown, ArrowUpRight, PanelLeft, PanelRight } from 'lucide-react'
@@ -140,7 +141,7 @@ export function NewTabView({ leaf }: ViewProps) {
   // 后台 Agent 详情(特殊视图,不带 drag),以及没带 Space 的插件视图。
   const freeItems: Item[] = [
     { key: 'browser', icon: <Globe size={16} />, label: t('browser.title'), run: () => ws().openView('browser', {}, 'main'), show: !!getView('browser'), drag: { type: 'browser' } },
-    { key: 'terminal', icon: <TerminalSquare size={16} />, label: t('terminal.title'), run: () => ws().openView('terminal', {}, 'main'), show: !!getView('terminal'), drag: { type: 'terminal' } },
+    { key: 'terminal', icon: <TerminalSquare size={16} />, label: t('terminal.title'), run: () => { requestTerminalFocus(); ws().openView('terminal', {}, 'main') }, show: !!getView('terminal'), drag: { type: 'terminal' } },
     { key: 'agents', icon: <Bot size={16} />, label: t('special.agents.title'), run: () => readTanguShell()?.openSpecial('agents'), show: hasBackend && (s.specialEnabled.historian || s.specialEnabled.muse) },
     ...free.map((type) => viewItem({ type, params: {} }, type)),
   ]

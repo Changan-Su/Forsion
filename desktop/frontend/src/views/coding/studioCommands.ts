@@ -13,7 +13,8 @@ export function registerStudioCommands(root: string, open: (tool: StudioTool, si
   const current = () => alive && isCurrent()
   const commands: Command[] = []
   const register = (command: Command) => { commands.push(command); addCommand(command) }
-  for (const kind of Object.keys(TITLES) as StudioTool[]) {
+  // 「项目文件」不进命令表:工具 enum 是给 Agent 的契约,它只是界面入口。
+  for (const kind of Object.keys(TITLES) as Array<keyof typeof TITLES>) {
     const id = `coding-studio.${kind}`
     register({ id, title: () => `${translate('space.coding')} · ${translate(TITLES[kind])}`, keywords: 'coding studio 编码工作室 temp panel', run: () => { if (current()) open(kind) } })
   }

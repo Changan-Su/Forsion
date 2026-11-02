@@ -37,7 +37,7 @@ function loadWrapper() {
   new Function('module', 'exports', 'require', code)(mod, mod.exports, require)
   return mod.exports
 }
-const { buildSketchDoc, SKETCH_SANDBOX, SKETCH_CSP } = loadWrapper()
+const { buildSketchDoc, sketchCsp, SKETCH_SANDBOX, SKETCH_CSP } = loadWrapper()
 const guardTag = `<script>${fs.readFileSync(path.join(COMPONENTS, 'sketchGuard.js'), 'utf8')}</script>`
 const realDoc = (body) => {
   const doc = buildSketchDoc(body, {}, null, 'nonce')
@@ -169,10 +169,10 @@ async function checkRealCard(app, win, port) {
   await card.waitFor({ timeout: 15_000 })
   await win.waitForTimeout(1200)
   const attrs = await card.evaluate((el) => ({ sandbox: el.getAttribute('sandbox'), csp: el.getAttribute('csp') }))
-  const frame = await (await card.elementHandle()).contentFrame()
+  const frame = (await (await card.elementHandle()).contentFrame()).childFrames()[0] // 外层是壳,卡片在它里面
   const inner = await frame.evaluate(() => ({ rtc: typeof RTCPeerConnection, frames: window.length, text: document.getElementById('ui-ok')?.textContent }))
   const failed = []
-  if (attrs.sandbox !== SKETCH_SANDBOX || attrs.csp !== SKETCH_CSP) failed.push(`真卡 iframe 属性不对: ${JSON.stringify(attrs)}`)
+  if (attrs.sandbox !== SKETCH_SANDBOX || attrs.csp !== sketchCsp('forsion-iui://lib/')) failed.push(`真卡 iframe 属性不对: ${JSON.stringify(attrs)}`)
   if (inner.rtc !== 'undefined' || inner.frames !== 0 || inner.text !== 'rendered') failed.push(`真卡内部不对: ${JSON.stringify(inner)}`)
   if (seen.size) failed.push(`真卡外泄: ${[...seen].join(', ')}`)
   console.log(`\n真 SketchCard: ${JSON.stringify({ ...attrs, csp: attrs.csp === SKETCH_CSP, ...inner, leaks: seen.size })}`)
@@ -206,7 +206,7 @@ async function main() {
         fs.mkdirSync(dir, { recursive: true })
         fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'probe' }))
       }
-      const app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1' } })
+      const app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ...electron.NESTED_SANDBOX_ARGS, ROOT], cwd: ROOT, env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1' } })
       try {
         const win = await app.firstWindow()
         await win.waitForSelector('#root'); await win.waitForTimeout(2000)

@@ -80,12 +80,12 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
   // 4) 复制 timestamp <= 分支点 的消息:新 uuid,保留原 timestamp 与全部字段(lastN → 只取最近 N 条)
   const msgs = lastN && lastN > 0
     ? (await query<any[]>(
-        `SELECT role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments
+        `SELECT role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin
          FROM chat_messages WHERE session_id = ? AND timestamp <= ? ORDER BY timestamp DESC LIMIT ?`,
         [sourceSessionId, throughTs, Math.floor(lastN)],
       )).reverse()
     : await query<any[]>(
-        `SELECT role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments
+        `SELECT role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin
          FROM chat_messages WHERE session_id = ? AND timestamp <= ? ORDER BY timestamp ASC`,
         [sourceSessionId, throughTs],
       );
@@ -93,12 +93,22 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
   for (const m of msgs) {
     await query(
       `INSERT INTO chat_messages
-         (id, session_id, role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         (id, session_id, role, content, timestamp, model_id, reasoning, is_error, tool_calls, tool_results, attachments, display_files, agent_slug, origin)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [uuidv4(), newId, m.role, m.content, m.timestamp, m.model_id, m.reasoning, m.is_error,
-       asJsonText(m.tool_calls), asJsonText(m.tool_results), asJsonText(m.attachments)],
+       asJsonText(m.tool_calls), asJsonText(m.tool_results), asJsonText(m.attachments), asJsonText(m.display_files),
+       m.agent_slug ?? null, m.origin ?? null],
     );
   }
+
+  // 5) fork 子会话的主会话背景(childSessions.seedForkContext 落的 through_timestamp=1 检查点)跟着走:它不在消息行里,不拷就丢了
+  // 尽力而为(同 compaction 的 fail-safe):没有这张表的宿主 / 读写失败不影响分支本身
+  try {
+    const seeds = await query<any[]>(`SELECT summary FROM session_summaries WHERE session_id = ? AND through_timestamp = 1`, [sourceSessionId]);
+    for (const s of seeds) {
+      await query(`INSERT INTO session_summaries (id, session_id, summary, through_timestamp) VALUES (?, ?, ?, 1)`, [uuidv4(), newId, s.summary]);
+    }
+  } catch { /* 背景丢了只是少上下文 */ }
 
   return { id: newId, copied: msgs.length };
 }

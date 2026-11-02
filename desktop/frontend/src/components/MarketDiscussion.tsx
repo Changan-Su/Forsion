@@ -34,7 +34,7 @@ registerMessages({
   'market.currentVersion': { zh: '当前上架版本', en: 'Current store version' },
   'market.copyId': { zh: '复制插件 ID', en: 'Copy plugin ID' },
   'market.tagAll': { zh: '所有标签', en: 'All tags' },
-  'market.compatibleOnly': { zh: '只看适配当前版本', en: 'Compatible with this version' },
+  'market.compatibleOnly': { zh: '只看适配当前版本', en: 'Compatible only' },
 })
 
 function MarketNotificationsBody({ itemId }: { itemId?: string }) {

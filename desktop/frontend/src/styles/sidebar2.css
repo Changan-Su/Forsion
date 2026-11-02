@@ -227,6 +227,7 @@
 .t2sf-file .t2sf-fic { color: var(--text-faint, var(--text-muted)); }
 .t2sf-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2sf-size { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
+.t2sf-tag { flex-shrink: 0; padding: 0 5px; border-radius: 4px; background: var(--overlay-light); font-size: var(--ui-font-caption, 11px); line-height: 16px; color: var(--text-muted); }
 /* 行尾动作(M1B:远端会话「本会话的文件」的下载键)。触屏没有右键 / 悬浮 → 常显;度量与色阶同 .t2s-group-add,
    负外边距把 24px 点击区吃进行的上下内边距,行高不变。 */
 .t2sf-row-act {

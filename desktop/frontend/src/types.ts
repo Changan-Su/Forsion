@@ -79,6 +79,8 @@ export interface MuseConfig {
   notify?: 'immediate' | 'digest'
   /** 难活升级给哪个 agent(slug;空=不指定)。 */
   escalateTo?: string
+  /** 新对话页的 Muse 开场建议(10-25);旧引擎没有这个键,读端按开处理。 */
+  chatStarters?: boolean
   /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
   inboxAutoRead?: string[]
   /** 用户点过「这类以后都别管」的类别。 */
@@ -103,6 +105,12 @@ export type SpecialConfigResponse =
   | { config: SpecialAgentsConfig; defaults?: { historianPrompt: string }; cloud?: boolean; remote?: undefined }
   | { config: SpecialAgentsSummary; remote: true; defaults?: undefined; cloud?: undefined }
 
+/** GET /agent/special/muse/starters 的一条:用户照原样就能发的一句话;source.label 原样出现在 text 里,桌面把它画成链接。 */
+export interface MuseStarter {
+  id: string
+  text: string
+  source: { kind: 'calendar' | 'note' | 'todo' | 'session' | 'web' | 'muse'; label: string; ref?: string }
+}
 export interface MuseTodo {
   id: string
   title: string
@@ -360,7 +368,26 @@ export interface McpServerConfigEntry {
   headers?: Record<string, string>
   timeoutMs?: number
   enabled?: boolean
+  oauth?: { clientId?: string; scopes?: string[] }
+  /** 从商店连上的连接器:目录 id(宿主同步地址、引擎读 alwaysAsk)。编辑时原样带着,别丢。 */
+  connector?: string
 }
+
+/** 连接器目录的一条(electron/connectorCatalog.ts 校验过的形状)。 */
+export interface ConnectorEntry {
+  id: string
+  kind: 'remote-mcp' | 'builtin'
+  status: 'published' | 'retired'
+  order: number
+  name: { zh: string; en: string }
+  description: { zh: string; en: string }
+  url?: string
+  oauth?: { clientId?: string; scopes?: string[] }
+  auth?: { type: 'user-key'; applyUrl: string }
+  alwaysAsk?: string[]
+  iconUrl?: string
+}
+export interface ConnectorCatalog { connectors: ConnectorEntry[]; fetchedAt: number | null; offline: boolean }
 
 /** 官网更新动态的一篇(forsion.net/releases;主进程校验过形状)。 */
 export type { WebsiteRelease }
@@ -683,11 +710,14 @@ declare global {
       readHostFile?(filePath: string): Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean }>
       /** 用系统默认应用打开(预览不支持的类型)。 */
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
-      /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome 扩展页;拖拽用 startHostDrag。 */
+      /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome / Edge 扩展页;拖拽用 startHostDrag。 */
       clipExtension?: {
         /** update=false 只补缺不动已有副本;用户要(重新)装时传 true 换成随包版本(bundled)。 */
         prepare(update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }>
-        openChromeExtensions(): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }>
+        /** 本机装了哪些(按官方安装位置找);认不出 → []。 */
+        browsers(): Promise<Array<'chrome' | 'edge'>>
+        /** ok = 已停在扩展页(mac);launched = Windows 开了新窗口、地址已复制待粘贴;not-found / unsupported = 只复制了地址。 */
+        openExtensionsPage(browser: 'chrome' | 'edge'): Promise<{ ok: true } | { ok: false; copied: true; reason: 'launched' | 'not-found' | 'unsupported' }>
       }
       /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 多文件预览)。 */
       codePreviewServe?(rootDir: string): Promise<{ origin: string }>
@@ -738,6 +768,12 @@ declare global {
       connectUnpublish?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
       connectListingApply?(p: { slug: string; summary: string }): Promise<{ ok: boolean; code?: string; detail?: string; status?: string }>
       connectListingWithdraw?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
+      /** 连接器目录:refresh = 现拉(拉不到回缓存,offline: true);否则只读本机缓存。只在桌面有。 */
+      connectorsList?(refresh?: boolean): Promise<ConnectorCatalog>
+      /** 把目录条目写进 MCP 配置(带 connector 标记);已连着就原样返回。登录 / 填 Key 另走引擎。 */
+      connectorsConnect?(id: string, taken?: string[]): Promise<{ name: string; added: boolean }>
+      /** 断开的最后一步:从 MCP 配置删掉这条(只删带连接器标记的)。 */
+      connectorsRemove?(name: string): Promise<void>
       connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }> }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>

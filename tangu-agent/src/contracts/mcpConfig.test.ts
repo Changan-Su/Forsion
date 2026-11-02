@@ -12,6 +12,14 @@ describe('MCP JSON input and atomic merges', () => {
   it.each([null, [], {}, { mcpServers: [] }, { test: { command: 'x', url: 'https://x' } }, { test: { command: 'x', args: [1] } }, { test: { url: 'file:///tmp/x' } }, { test: { url: 'https://x', headers: { A: 3 } } }, { test: { command: 'x', ignored: 'secret' } }, { test: { command: 'x', timeoutMs: -1 } }, { test: { command: 'x', enabled: 'false' } }])('rejects malformed/unsupported input without silently dropping fields: %j', input => {
     expect(() => parseMcpInput(input)).toThrow();
   });
+  it('keeps an oauth block on remote servers and rejects malformed ones', () => {
+    const remote = { url: 'https://mcp.example.test/mcp', oauth: { clientId: 'pre-1', scopes: ['read'] } };
+    expect(parseMcpInput({ r: remote })).toEqual({ r: remote });
+    for (const oauth of [{ clientId: '' }, { clientId: 1 }, { scopes: 'read' }, { scopes: [''] }, { clientSecret: 's' }, []]) {
+      expect(() => parseMcpInput({ r: { url: 'https://x.test', oauth } })).toThrow('invalid');
+    }
+    expect(() => parseMcpInput({ s: { command: 'x', oauth: {} } })).toThrow('invalid');
+  });
   it('does not echo JSON source or secret values in syntax/field errors', () => {
     try { parseMcpInput('{\n"secret":"KEY-MUST-NOT-APPEAR",\n}'); } catch (e) { expect(String(e)).not.toContain('KEY-MUST-NOT-APPEAR'); }
     expect(() => parseMcpInput(JSON.parse('{"__proto__":{"command":"x"}}'))).toThrow('name');

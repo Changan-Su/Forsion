@@ -16,7 +16,7 @@
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, Pencil, Plus, RotateCcw, Search, X, XCircle } from 'lucide-react'
 import { createDropIndicator, land, landWhenMoved } from '@lcl/engine'
-import { describeTool } from '../../components/ToolGroup'
+import { describeTool, toolVerb } from '../../components/ToolGroup'
 import { ContextMenu, type CtxMenu } from '../../components/RightPanel'
 import { humanizeRunError, ReloginChip } from './EditorialMessage'
 import { registerMessages, useI18n } from '../../i18n'
@@ -277,7 +277,9 @@ const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() |
 const BUILTIN = ['progress', 'bg', 'outputs', 'sources', 'scope'] as const
 const PROC_TOOLS = new Set(['run_background', 'kill_process'])
 
-export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId, teamStatus }: {
+export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId, teamStatus, onRetry }: {
+  /** 失败卡的「重试」(同 /retry);只读视图不传。 */
+  onRetry?: () => void
   /** 当前会话;新对话草稿 = null(没有后台进程,也不挂插件卡)。 */
   sessionId?: string | null
   /** Agent Desk 卡(DeskCard);栈里的一张,和别的卡一起排序。 */
@@ -376,7 +378,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
       >
         {teamStatus}
         {elapsed >= 30_000 && <div className="t2-tsum-sub">{t('tsum.elapsed', { t: fmtDur(elapsed) })}</div>}
-        {act && <div className="t2-tsum-sub" title={act.target}>{act.verbKey ? t(act.verbKey) : f.action!.name} {act.target}</div>}
+        {act && <div className="t2-tsum-sub" title={act.target}>{toolVerb(act, f.action!, t)} {act.target}</div>}
         {editing && onShowEditing && (
           <button className="t2-tsum-edit" title={`${t('tsum.editingTip')}:${editing.path}`} onClick={() => onShowEditing(editing.path)}>
             <Pencil size={11} />
@@ -385,6 +387,9 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
         )}
         {f.state === 'error' && f.error && <div className="t2-tsum-sub err" title={f.error}>{humanizeRunError(f.error, t)}</div>}
         {f.state === 'error' && <ReloginChip error={f.error ?? undefined} modelId={modelId} />}
+        {f.state === 'error' && !running && onRetry && (
+          <div className="t2-retry-row t2-tsum-retry"><button type="button" className="t2-retry-btn lead" data-testid="tsum-retry" onClick={onRetry}><RotateCcw size={13} />{t('chat.retry')}</button></div>
+        )}
         {f.attention.length > 0 && (
           <button className="t2-tsum-attn" onClick={onJumpToAttention}>
             {f.attention[0].kind === 'approval'

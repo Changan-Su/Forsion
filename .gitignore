@@ -27,6 +27,9 @@ web/public/excalidraw/
 # 内置 UI 字体:体积大、可由 build/gen-fonts.cjs 从 node_modules 再生 → 同 excalidraw,不入库
 desktop/frontend/public/fonts
 web/public/fonts/
+# Intelligent UI 卡的随包库:build/copy-iui-libs.cjs 从 node_modules 再生 → 同上不入库
+desktop/frontend/public/iui-lib
+web/public/iui-lib/
 
 # TypeScript
 *.tsbuildinfo

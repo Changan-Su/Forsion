@@ -24,9 +24,11 @@ import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled,
 import { useApp, defaultModelOf } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import { listClientSurfaces } from '../services/clientSurfaces'
+import { ConnectorSettingsBlock } from './Connectors'
+import { connectorsSupported } from '../services/connectorService'
 import {
   fetchProviderModels,
-  listModels, listTools, setModelContextWindow,
+  listModels, listTools, mcpLogin, mcpLogout, setModelContextWindow,
   testProviderConnection, syncNow as backendSyncNow, getSyncStatus as backendGetSyncStatus,
   listPlugins, listAgents, type PluginInfo, type SyncStatusResult,
   getLocalWebSearch, type LocalWebSearchRedacted,
@@ -61,6 +63,7 @@ import { ChangelogEntries, releaseNotesFor } from '../views/ChangelogView'
 import { openWhatsNew } from './WhatsNewDialog'
 import { DefaultModelsPage } from './DefaultModelsPage'
 import { VoiceSettingsPage } from './VoiceSettingsPage'
+import { PROVIDER_PRESETS, presetProviderId } from './providerPresets'
 import { catalogByKind, FETCH_ENABLE_LIMIT, guessProviderModelKind, mergeFetched, providerFieldsFromRows, rowsFromProvider, type ModelKind, type ProviderModelKind, type ProviderModelRow } from './modelKinds'
 import { realtimeCandidates } from './RealtimeVoiceSettings'
 import { AgentSettingsOverview } from './AgentSettingsOverview'
@@ -129,6 +132,17 @@ registerMessages({
   'settingsmodal.configRecovered': { zh: '上次的设置文件损坏，已恢复到 {time} 的版本', en: 'Your settings file was damaged. Restored the version from {time}.' },
   'settingsmodal.mcp.tokens': { zh: '每个请求约 {n} token', en: '~{n} tokens per request' },
   'settingsmodal.mcp.notConnected': { zh: '未连接', en: 'Not connected' },
+  'settingsmodal.mcp.needsLogin': { zh: '需要登录', en: 'Sign-in required' },
+  'settingsmodal.mcp.loggingIn': { zh: '登录中…', en: 'Signing in…' },
+  'settingsmodal.mcp.login': { zh: '登录', en: 'Sign in' },
+  'settingsmodal.mcp.loginHint': { zh: '在浏览器里登录这个服务，完成后自动连接', en: 'Sign in to this service in your browser. It connects when you finish.' },
+  'settingsmodal.mcp.loginOpened': { zh: '已在浏览器打开「{name}」的登录页，完成后会自动连接', en: 'Opened the sign-in page for "{name}" in your browser. It connects when you finish.' },
+  'settingsmodal.mcp.loginFailed': { zh: '登录没有开始：', en: 'Couldn’t start sign-in: ' },
+  'settingsmodal.mcp.logout': { zh: '断开', en: 'Sign out' },
+  'settingsmodal.mcp.logoutConfirm': { zh: '断开「{name}」？本机保存的登录会删掉，下次要重新登录。', en: 'Sign out of "{name}"? The sign-in saved on this computer will be removed.' },
+  'settingsmodal.mcp.loggedOut': { zh: '已断开「{name}」', en: 'Signed out of "{name}"' },
+  'settingsmodal.mcp.loggedIn': { zh: '已登录「{name}」，新工具从下一轮对话起可用', en: 'Signed in to "{name}". Its tools are available from your next message.' },
+  'settingsmodal.mcp.loginNotDone': { zh: '「{name}」没有登录成功：', en: 'Sign-in to "{name}" didn’t finish: ' },
   'settingsmodal.mcp.total': { zh: 'MCP 工具定义合计每个请求约 {n} token，占当前默认模型窗口的 {pct}%', en: 'MCP tool definitions take ~{n} tokens per request, {pct}% of the default model’s context window' },
   'settingsmodal.mcp.totalNoWindow': { zh: 'MCP 工具定义合计每个请求约 {n} token', en: 'MCP tool definitions take ~{n} tokens per request' },
   'settingsmodal.mcp.heavyNote': { zh: '不常用的可以关掉。按约 4 个字符 = 1 token 估算。', en: 'Turn off the ones you rarely use. Estimated at about 4 characters per token.' },
@@ -694,7 +708,7 @@ export const SettingsModal: React.FC<{
   /** 正在编辑的直连连接:rows = 每个模型一行(类型 + 纯文本),保存时再拆回 modelIds / imageModelIds / ttsModelIds / asrModelIds / noVisionModelIds。
    *  isNew = 「添加连接」(编辑区画在列表下面);否则画在被编辑的那一行下面。base = 打开时的原配置(保存时留住行表示不了的旧归属);
    *  editId 区分每次打开:拉取回包时编辑区已经换了一条连接,就不往里并。 */
-  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { rows: ProviderModelRow[]; isNew?: boolean; original?: string; base: Partial<DirectProviderConfig>; editId: number }) | null>(null)
+  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { rows: ProviderModelRow[]; isNew?: boolean; original?: string; base: Partial<DirectProviderConfig>; editId: number; preset?: string; autoId?: string }) | null>(null)
   const [manualModel, setManualModel] = useState('')
   // 语速输入的编辑态缓冲(null=未在编辑,显示已存值):清空/打半截时不反弹,blur 时非法则恢复旧值。
   const [providerTestMsg, setProviderTestMsg] = useState('')
@@ -821,6 +835,8 @@ export const SettingsModal: React.FC<{
   const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
   const mcpStatusLabel = (st: McpStatusRow): string =>
     st.status === 'connected' ? t('settings.mcp.statusConnected', { count: st.tools.length })
+      : st.status === 'needs-login' ? t('settingsmodal.mcp.needsLogin')
+      : st.status === 'logging-in' ? t('settingsmodal.mcp.loggingIn')
       : st.status === 'error' ? t('settings.mcp.statusError')
         : st.status === 'disabled' ? t('settings.mcp.statusDisabled')
           : t('settingsmodal.mcp.notConnected')
@@ -849,6 +865,35 @@ export const SettingsModal: React.FC<{
   const refreshMcp = (): void => {
     void window.tangu?.readMcpConfig?.().then((c) => setMcpServers(c.mcpServers)).catch(() => setMcpServers({}))
     void listTools(homeTarget()).then((t) => setMcpStatus(t.mcp ?? [])).catch(() => setMcpStatus([]))
+  }
+
+  // 正在等浏览器那头的 server:状态轮询看到它连上 / 退回待登录时,把「已打开登录页」那句换成结果
+  // started:见过「登录中 / 连接中」之后的待登录才算失败(点之前发出的那次轮询可能还带着上一次的待登录)
+  const mcpLoginPending = useRef<{ name: string; started: boolean } | null>(null)
+  useEffect(() => {
+    const pending = mcpLoginPending.current
+    const st = pending ? mcpStatus?.find((s) => s.server === pending.name) : undefined
+    if (!pending || !st) return
+    if (st.status === 'logging-in' || st.status === 'connecting') { pending.started = true; return }
+    if (st.status !== 'connected' && !pending.started) return
+    mcpLoginPending.current = null
+    if (st.status === 'connected') setMcpMsg(t('settingsmodal.mcp.loggedIn', { name: pending.name }))
+    else if (st.error) setMcpMsg(`${t('settingsmodal.mcp.loginNotDone', { name: pending.name })}${st.error}`)
+  }, [mcpStatus]) // eslint-disable-line react-hooks/exhaustive-deps
+  const loginMcp = (name: string): void => {
+    void mcpLogin(homeTarget(), name).then(async (r) => {
+      mcpLoginPending.current = { name, started: false }
+      if (r.url) {
+        await window.tangu?.openExternal?.(r.url)
+        setMcpMsg(t('settingsmodal.mcp.loginOpened', { name }))
+      }
+      refreshMcp()
+    }).catch((e) => setMcpMsg(`${t('settingsmodal.mcp.loginFailed')}${e instanceof Error ? e.message : String(e)}`))
+  }
+  const logoutMcp = (name: string): void => {
+    if (!window.confirm(t('settingsmodal.mcp.logoutConfirm', { name }))) return
+    void mcpLogout(homeTarget(), name).then(() => { setMcpMsg(t('settingsmodal.mcp.loggedOut', { name })); refreshMcp() })
+      .catch((e) => setMcpMsg(`${t('settings.toast.saveFailed')}${e instanceof Error ? e.message : String(e)}`))
   }
 
   const writeMcp = async (next: Record<string, McpServerConfigEntry>, msg: string, base = mcpServers): Promise<boolean> => {
@@ -2371,23 +2416,44 @@ export const SettingsModal: React.FC<{
                       if (id) setEditProvider({ ...ep, rows: mergeFetched(ep.rows, [id], ep.base.noVisionModelIds) })
                       setManualModel('')
                     }
+                    // 选预设:填地址与协议;名称只在空着或还是上一个预设填的时才换(用户自己起的名不动)
+                    const pickPreset = (id: string) => {
+                      const pr = PROVIDER_PRESETS.find((x) => x.id === id)
+                      const autoName = !ep.providerId || ep.providerId === ep.autoId
+                      const nextId = pr ? presetProviderId(pr.id, customProviders) : ''
+                      setEditProvider({ ...ep, preset: id, baseUrl: pr?.baseUrl || '', protocol: pr?.protocol, providerId: autoName ? nextId : ep.providerId, autoId: nextId })
+                    }
+                    // 导入的 openai-responses 等订阅连接不画协议选择,保存时原样留住
+                    const protocolEditable = !ep.protocol || ep.protocol === 'openai' || ep.protocol === 'anthropic-messages'
                     return (
                       <div className="provider-editor">
+                        {ep.isNew && <SettingsRow label={t('prov.preset')} description={t('prov.presetHint')} control={
+                          <select aria-label={t('prov.preset')} value={ep.preset || ''} onChange={(e) => pickPreset(e.target.value)}>
+                            <option value="">{t('prov.preset.custom')}</option>
+                            {PROVIDER_PRESETS.map((pr) => <option key={pr.id} value={pr.id}>{pr.name || t(`prov.preset.${pr.id}`)}</option>)}
+                          </select>
+                        } />}
                         <SettingsRow label={t('prov.name')} description={t('prov.nameHint')} control={
                           <input type="text" value={ep.providerId} placeholder={t('settings.customProvider.idPlaceholder')} onChange={(e) => setEditProvider({ ...ep, providerId: e.target.value.trim() })} />
                         } />
-                        <SettingsRow label="Base URL" description={t('prov.baseUrlHint')} control={
+                        <SettingsRow label="Base URL" description={t(ep.protocol === 'anthropic-messages' ? 'prov.baseUrlHintAnthropic' : 'prov.baseUrlHint')} control={
                           <input type="text" value={ep.baseUrl} placeholder={t('settings.customProvider.baseUrlPlaceholder')} onChange={(e) => setEditProvider({ ...ep, baseUrl: e.target.value.trim() })} />
                         } />
                         <SettingsRow label="API Key" description={t('prov.keyHint')} control={
                           <input type="password" value={ep.apiKey || ''} placeholder="sk-…" onChange={(e) => setEditProvider({ ...ep, apiKey: e.target.value })} />
                         } />
+                        {protocolEditable && <SettingsRow label={t('prov.protocol')} description={t('prov.protocolHint')} control={
+                          <select aria-label={t('prov.protocol')} value={ep.protocol || 'openai'} onChange={(e) => setEditProvider({ ...ep, protocol: e.target.value as 'openai' | 'anthropic-messages' })}>
+                            <option value="openai">{t('prov.protocol.openai')}</option>
+                            <option value="anthropic-messages">{t('prov.protocol.anthropic-messages')}</option>
+                          </select>
+                        } />}
                         <div className="provider-editor-models-head">
                           <strong>{ep.rows.length ? t('prov.fetched', { count: ep.rows.length }) : t('prov.models')}</strong>
                           <span className="grow" />
                           <button className="btn ghost sm" disabled={fetchingModels || !ep.baseUrl} onClick={() => {
                             setFetchingModels(true); setFetchModelsMsg('')
-                            void fetchProviderModels(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined })
+                            void fetchProviderModels(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined, protocol: ep.protocol })
                               .then((ms) => {
                                 setEditProvider((cur) => (cur?.editId === ep.editId ? { ...cur, rows: mergeFetched(cur.rows, ms.map((m) => m.id), cur.base.noVisionModelIds) } : cur))
                                 setModelSearch('')
@@ -2424,7 +2490,7 @@ export const SettingsModal: React.FC<{
                               baseUrl: ep.baseUrl.replace(/\/+$/, ''),
                               apiKey: ep.apiKey || undefined,
                               ...providerFieldsFromRows(ep.rows, ep.base),
-                              ...(ep.base.protocol ? { protocol: ep.base.protocol } : {}), // 导入的 Anthropic / Responses 连接:编辑器不画协议,保存时留住
+                              ...(ep.protocol ? { protocol: ep.protocol } : {}), // 预设 / 协议选择写进来;导入的 Responses 连接不画选择,原样留住
                             }).then((list) => {
                               // 改了名字 = 另存一条,旧的留着(与旧表单一致):各处存着的「旧名/模型」引用不会一下子全失效
                               setCustomProviders(list)
@@ -2439,7 +2505,7 @@ export const SettingsModal: React.FC<{
                             const ac = new AbortController()
                             providerTestAbort.current = ac
                             setProviderTesting(true); setProviderTestMsg('')
-                            void testProviderConnection(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined, modelId: ep.rows.find((r) => r.kind === 'llm')?.id }, ac.signal)
+                            void testProviderConnection(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined, protocol: ep.protocol, modelId: ep.rows.find((r) => r.kind === 'llm')?.id }, ac.signal)
                               .then((r) => setProviderTestMsg(`${r.success ? '✓' : '✗'} ${r.message}`))
                               .catch((e) => setProviderTestMsg(
                                 e?.name === 'AbortError' ? t('settings.test.canceled')
@@ -2540,6 +2606,7 @@ export const SettingsModal: React.FC<{
                 {tab === 'mcp' && (
                   <>
                     {showMcpImport && <McpImportDialog draft={mcpImportDraft} onDraft={setMcpImportDraft} pluginNames={(mcpStatus || []).filter(s => s.origin).map(s => s.server)} onClose={() => setShowMcpImport(false)} onSaved={r => { setMcpServers(r.mcpServers); setMcpMsg(t('mcpImport.saved', { added: r.added.length, replaced: r.replaced.length })); setShowMcpImport(false); setMcpImportDraft({ json: '', name: '' }); refreshMcp() }} />}
+                    {connectorsSupported() && <ConnectorSettingsBlock servers={mcpServers} rows={mcpStatus} onLogin={loginMcp} onMsg={setMcpMsg} onChanged={refreshMcp} />}
                     <div className="field">
                       <div className="mcp-settings-heading"><label>{t('settings.mcp.label')}</label>
                       {!editMcp && (
@@ -2558,7 +2625,7 @@ export const SettingsModal: React.FC<{
                       {mcpTotalSummary()}
                       {Object.keys(mcpServers).length > 0 && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
-                          {Object.entries(mcpServers).map(([name, sc]) => {
+                          {Object.entries(mcpServers).filter(([, sc]) => !sc.connector).map(([name, sc]) => { // 连接器在上面那一块
                             const st = mcpStatus?.find((s) => s.server === name)
                             const stLabel = sc.enabled === false
                               ? t('settings.mcp.statusDisabled')
@@ -2573,6 +2640,16 @@ export const SettingsModal: React.FC<{
                                 </span>
                                 {sc.enabled !== false && mcpTokensLabel(st)}
                                 <span className="file-size" title={st?.error || undefined}>{stLabel}</span>
+                                {sc.enabled !== false && (st?.status === 'needs-login' || st?.status === 'logging-in') && (
+                                  <button className="btn ghost sm" title={t('settingsmodal.mcp.loginHint')} onClick={() => loginMcp(name)}>
+                                    <LogIn size={13} /> {t('settingsmodal.mcp.login')}
+                                  </button>
+                                )}
+                                {st?.signedIn && (
+                                  <button className="icon-btn" title={t('settingsmodal.mcp.logout')} onClick={() => logoutMcp(name)}>
+                                    <LogOut size={13} />
+                                  </button>
+                                )}
                                 <button
                                   className="icon-btn"
                                   title={sc.enabled === false ? t('settings.mcp.enable') : t('settings.mcp.disable')}

@@ -51,5 +51,7 @@ export interface AmadeusSyncInstance {
   start(): void
   stopAllSync(): Promise<void>
   restartAllSync(): Promise<void>
+  /** 与我共享里走出页面目录的相对路径 → 文件在镜像里的位置;没有绑定覆盖 = null。老 Extend 没有这个方法。 */
+  resolveSharedAsset?(vaultRel: string): string | null
 }
 export type AmadeusSyncFactory = (deps: AmadeusSyncHostDeps) => AmadeusSyncInstance

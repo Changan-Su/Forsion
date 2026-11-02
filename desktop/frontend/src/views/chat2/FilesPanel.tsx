@@ -79,6 +79,8 @@ interface TreeCtx {
   dragOverDir: (ev: React.DragEvent, dir: string) => void
   dragLeaveDir: (dir: string) => void
   dropOnDir: (ev: React.DragEvent, dir: string) => void
+  /** 行尾小标签(绝对路径 → 文案),如编码工作室的「入口」。 */
+  tagFor?: (path: string) => string | undefined
 }
 
 /** 行内输入(重命名 / 新建文件、文件夹):Enter 提交,Esc 取消,失焦提交。 */
@@ -127,6 +129,7 @@ function FileRow({ entry, depth, ctx }: { entry: Entry; depth: number; ctx: Tree
     >
       <span className="t2s-lead"><Icon className="t2s-lead-icon t2sf-fic" /></span>
       <span className="t2sf-name">{entry.name}</span>
+      {ctx.tagFor?.(entry.path) && <span className="t2sf-tag">{ctx.tagFor(entry.path)}</span>}
       {entry.size > 0 && <span className="t2sf-size">{fmtSize(entry.size)}</span>}
     </div>
   )
@@ -351,7 +354,7 @@ function ScopeGroup({ label, title, scope, kind, open, onToggle, onOpenPreview, 
   )
 }
 
-export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEnterWorkspace, expandToPath, pinnedWorkspaceKey }: {
+export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEnterWorkspace, expandToPath, pinnedWorkspaceKey, tagFor, emptyText }: {
   workspaces: WorkspaceDescriptor[]
   /** newTab = ⌘/Ctrl 单击:强开一个新标签页(缺省则同路径已开就聚焦过去)。 */
   onOpenPreview: (t: PreviewTarget, opts?: { newTab?: boolean }) => void
@@ -362,6 +365,9 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
   expandToPath?: string | null
   /** 置顶(常驻可见)的工作区;缺席/认不出 → 退回「进入的工作区」,再退回第一个。 */
   pinnedWorkspaceKey?: string | null
+  tagFor?: (path: string) => string | undefined
+  /** 工作区根目录为空时的那句话(缺省「空文件夹」类的通用文案)。 */
+  emptyText?: string
 }) {
   const { t } = useI18n()
   const running = useApp((s) => Object.keys(s.runningBySession).length > 0)
@@ -584,7 +590,7 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
     isSel: sel.has, rowClick, openFile, onMenu,
     renaming, commitRename, creating, commitCreate,
     cancelEdit: () => { setRenaming(null); setCreating(null) },
-    dropDir, rowDragStart, dragEnd, dragOverDir, dragLeaveDir, dropOnDir,
+    dropDir, rowDragStart, dragEnd, dragOverDir, dragLeaveDir, dropOnDir, tagFor,
   }
 
   // 点工作区头 = 就地展开/收起,**各自独立**(手风琴已去掉);展开时顺带「进入」它(置顶/联动会话面板)。
@@ -681,7 +687,7 @@ export function FilesPanel({ workspaces, onOpenPreview, activeWorkspaceKey, onEn
                     <NameInput initial="" depth={1} onCommit={(n) => commitCreate(ws.path!, creating.kind, n)} onCancel={() => setCreating(null)} />
                   )}
                   {roots == null ? <div className="t2sf-loading" style={{ paddingLeft: nameLeft(1) }}>…</div>
-                    : roots.length === 0 ? <div className="t2sf-empty">{t('panel.files.empty')}</div>
+                    : roots.length === 0 ? <div className="t2sf-empty">{emptyText ?? t('panel.files.empty')}</div>
                     : roots.map((e) => e.isDir
                       ? <DirRow key={e.path} entry={e} depth={1} ctx={ctx} forceOpen={open ? expandToPath : null} />
                       : <FileRow key={e.path} entry={e} depth={1} ctx={ctx} />)}

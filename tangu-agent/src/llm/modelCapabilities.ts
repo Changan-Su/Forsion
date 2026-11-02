@@ -97,6 +97,11 @@ export interface ModelCapability {
   dropTemperature?: boolean;
   /** 思考开时必须改道 /v1/responses(chat/completions + tools + effort 会被官方拒)。 */
   viaResponses?: boolean;
+  /**
+   * 带工具的续轮把 assistant 的 reasoning_content 原样回传(compatWireMessages 放行)。deepseek / zai /
+   * 开思考的 qwen 按 format 判,不用标;format 是通用 openai-effort、官方又要求回传的族(Kimi K3)才标。
+   */
+  replayReasoning?: boolean;
 }
 
 // ── 档位映射预设 ────────────────────────────────────────────────────────────
@@ -261,6 +266,25 @@ interface Rule {
   /** 直连协议标记(订阅登录路径:anthropic-messages / openai-responses)。 */
   protocol?: RegExp;
   cap: Omit<ModelCapability, 'rule'>;
+}
+
+/**
+ * Kimi K3 / K3.1 Pro(-highspeed):思考常开,顶层 reasoning_effort 只收 low/high/max(缺省 max);
+ * temperature / top_p 固定、不传;带工具的多轮要把完整 assistant message(含 reasoning_content)原样回传。
+ * 10-26 百炼实测:K3.1 Pro 收到 'none' 回 400(「only 0.6 is allowed」),所以关思考夹到 low。
+ */
+const KIMI_K3_CAP: Omit<ModelCapability, 'rule'> = {
+  format: 'openai-effort', levels: EFFORT_LHM, maxTokensField: 'max_tokens', dropTemperature: true, replayReasoning: true,
+};
+/** K2.8 Preview:同 K3 词表,但能关 —— 10-26 百炼实测 'none' 200 且 reasoning_content 为空。 */
+const KIMI_K28_CAP: Omit<ModelCapability, 'rule'> = { ...KIMI_K3_CAP, levels: { ...EFFORT_LHM, off: 'none' } };
+
+/** 网关转售的 Kimi(`kimi/kimi-k3.1-pro`、`moonshotai/Kimi-K3…`):K2.8 一条、K3 系一条。 */
+function kimiGatewayRules(idPrefix: string, host: RegExp): Rule[] {
+  return [
+    { id: `${idPrefix}-kimi-k28`, host, model: /(^|\/)kimi-k2\.8/i, cap: KIMI_K28_CAP },
+    { id: `${idPrefix}-kimi-k3`, host, model: /(^|\/)kimi-k3/i, cap: KIMI_K3_CAP },
+  ];
 }
 
 /**
@@ -621,6 +645,9 @@ const RULES: Rule[] = [
     host: /(^|\.)(bigmodel\.cn|z\.ai)$/,
     cap: { format: 'zai', levels: TOGGLE, maxTokensField: 'max_tokens' },
   },
+  // 百炼标准域名上的 Kimi:下面三条 dashscope 规则只看 host,不先截走会被发 Qwen 的 enable_thinking +
+  // thinking_budget。maas 专属域名与其他网关走后面的 gateway-kimi-*。
+  ...kimiGatewayRules('dashscope', /(^|\.)(dashscope\.aliyuncs\.com|dashscope-intl\.aliyuncs\.com|bailian\.aliyuncs\.com)$/),
   {
     // 百炼上的**纯思考**模型(官方:「纯思考模型无此参数」)—— qwen3.7-max 的两支 preview 快照,
     // 以及带 -thinking 后缀的型号。给它们发 enable_thinking 是发未知字段,一律什么都不发。
@@ -648,7 +675,7 @@ const RULES: Rule[] = [
     id: 'moonshot-k3',
     host: /(^|\.)moonshot\.(cn|ai)$/,
     model: /^kimi-k3/i,
-    cap: { format: 'openai-effort', levels: EFFORT_LHM, maxTokensField: 'max_tokens' },
+    cap: KIMI_K3_CAP,
   },
   {
     // 火山方舟(豆包 Doubao):thinking:{type} 与 reasoning_effort 都收,但 effort 词表是
@@ -779,6 +806,9 @@ const RULES: Rule[] = [
     model: /glm-/i,
     cap: { format: 'zai', levels: TOGGLE, maxTokensField: 'max_tokens' },
   },
+  // 网关上的 Kimi K3 / K3.1 Pro / K2.8 Preview:此前落到 gateway-generic,关思考发 'none'(K3.1 Pro 回 400)、
+  // max 档被夹成 high。
+  ...kimiGatewayRules('gateway', KNOWN_GATEWAY),
   {
     id: 'gateway-self-reasoning',
     host: KNOWN_GATEWAY,

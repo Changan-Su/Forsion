@@ -26,6 +26,7 @@ import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ToolCardDeskContext, toolCardDeskFor } from '../components/PluginToolCard'
 import { ErrorBoundary } from '../components/ErrorBoundary'
 import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
+import { EditBubble } from './chat2/EditBubble'
 import { ApprovalTray, DeckPill, type DeckItem } from './chat2/ApprovalTray'
 import { pendingCreationCardsOf, pendingHumanCardsOf, pendingTaskCardsOf, tasksOf, useTaskHandledVersion } from './chat2/pendingTasks'
 import { useHumanAckVersion } from '../components/HumanUpdateCard'
@@ -34,13 +35,15 @@ import { TodoList } from '../components/InquiryCard'
 import { useMusePendingApprovals, useMusePendingTodos } from './chat2/MuseDm'
 import { useMusePendingCards } from './chat2/MuseCards'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, pendingPromptsOf } from './chat2/approvalQueue'
-import { CHILD_UPDATE_OPEN, ChildFromLine, ChildSessionsPill } from './chat2/ChildSessions'
+import { CHILD_UPDATE_OPEN, ChildFromLine, ChildSessionsPill, SESSION_MESSAGE_OPEN } from './chat2/ChildSessions'
 import { RunStatsLine } from './chat2/RunStatsLine'
 import { SessionTraceLines, useSessionTraces } from '../components/SessionTraces'
 import { SessionOpening } from '../components/SessionOpening'
 import { ExtraFolders } from '../components/ExtraFolders'
 import { inRunWindow } from '../stores/runStats'
 import { EmptyState2 } from './chat2/EmptyState2'
+import { MuseStarters } from './chat2/MuseStarters'
+import { NEW_CHAT_DRAFT } from './chat2/composerDrafts'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
 import { BgStrip } from './chat2/BackgroundProcs'
@@ -58,7 +61,7 @@ import { TeamStatus } from './chat2/TeamDesk'
 import { ChildChatPanel, SubChatStatus } from './chat2/ChildChatPanel'
 import { openBtw, quoteInMainChat } from './chat2/btwStore'
 import { useChildChat } from '../stores/childChatStore'
-import { ChatCanvas, armCanvasEnter, chatAnchor, useChatCanvasPref, type CanvasAnchor } from './chat2/ChatCanvas'
+import { ChatCanvas, armCanvasEnter, chatAnchor, useCanvasKids, useChatCanvasPref, type CanvasAnchor } from './chat2/ChatCanvas'
 import { TeamSummary } from './chat2/TeamSummary'
 import { useI18n } from '../i18n'
 import { effectiveTtsConfig, speakMessage, stopSpeaking, subscribeTts, ttsState, type TtsState } from '../services/ttsService'
@@ -130,6 +133,18 @@ function selectedCanvasSessionId(): string | undefined {
   const d = el?.closest<HTMLElement>('[data-cv-node], [data-cv-read]')?.dataset
   const k = d?.cvNode ?? d?.cvRead
   return k?.includes(':') ? k.slice(0, k.indexOf(':')) : undefined
+}
+
+/** 失败行 / 右栏失败卡的「重试」(走查续六 6.3)只送一次:删消息到新 run 起来之间 running 还没置上,连点或两处各点一下
+ *  会排两次 /retry,第二次把第一次的回答删掉重跑(Codex 评审)。run 起来或 30 秒后放开。 */
+const retrying = new Set<string>()
+function retryOnce(sid: string | null | undefined): void {
+  if (!sid || retrying.has(sid)) return
+  retrying.add(sid)
+  const done = (): void => { retrying.delete(sid); off(); clearTimeout(timer) }
+  const off = useApp.subscribe((s) => { if (s.runningBySession[sid]) done() })
+  const timer = setTimeout(done, 30_000)
+  void useApp.getState().retry(sid)
 }
 
 export function ChatView({ leaf, params }: ViewProps) {
@@ -373,7 +388,7 @@ export function ChatView({ leaf, params }: ViewProps) {
   // composer ↑↓ 历史召回:本会话已发送的用户消息(旧→新)+ steer 入队即记的补充池(被删/撤回的插话
   // 仍可从 ↑ 找回;已注入的会同时出现在消息里,按文本去重)。打断标记是机器行,不进历史。
   const sentHistory = useMemo(() => {
-    const users = activeMessages.filter((m) => m.role === 'user' && !m.content.startsWith('<turn_interrupted>') && !m.content.startsWith(APPROVAL_UPDATE_OPEN) && !m.content.startsWith(INQUIRY_UPDATE_OPEN) && !m.content.startsWith(CHILD_UPDATE_OPEN)).map((m) => m.content)
+    const users = activeMessages.filter((m) => m.role === 'user' && !m.content.startsWith('<turn_interrupted>') && !m.content.startsWith(APPROVAL_UPDATE_OPEN) && !m.content.startsWith(INQUIRY_UPDATE_OPEN) && !m.content.startsWith(CHILD_UPDATE_OPEN) && !m.content.startsWith(SESSION_MESSAGE_OPEN)).map((m) => m.content)
     const have = new Set(users)
     return [...users, ...s.steerSent.filter((x) => !have.has(x))]
   }, [activeMessages, s.steerSent])
@@ -561,7 +576,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     })
   }
   const startEdit = (id: string, content: string): void => { setEditingId(id); setEditText(content) }
-  const saveEdit = (): void => { if (editingId && editText.trim()) { s.editUserMessage(editingId, editText.trim(), activeId) } setEditingId(null) }
+  const saveEdit = (text: string): void => { if (editingId && text.trim()) { s.editUserMessage(editingId, text.trim(), activeId) } setEditingId(null) }
 
   // 传给每条消息的对象要稳住,EditorialMessage 的 memo 才挡得住「流式每来一段字,整段对话的消息都重渲一遍」。
   // handlers 按「会话 + 哪几个按钮在」整组缓存、组里按消息 id 各一份;函数体经 handlerEnv 取当下的值(提交后才会被点到),不会拿到旧闭包。
@@ -578,6 +593,7 @@ export function ChatView({ leaf, params }: ViewProps) {
     const h: MessageHandlers = {
       onCopy: (text) => env().copy(text),
       onRegenerate: readOnly ? undefined : () => env().s.regenerate(id, env().activeId),
+      onRetry: readOnly ? undefined : () => retryOnce(env().activeId),
       onBranch: childSurface ? undefined : () => void env().s.branchFromMessage(id, env().activeId),
       // 顺便问(挂在这条回答上):开在右边那块面板,不进对话
       onAside: childSurface ? undefined : () => { const e = env(); if (e.activeId) openBtw({ sessionId: e.activeId, title: e.activeSession?.title, modelId: e.mvModelId || undefined, messageId: id }) },
@@ -603,6 +619,13 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 输入卡上方那一栏的两半(JSX 在 .composer-anchor 里):项目那半只在空白新对话上;开场那半还包括已建好但没发过消息的会话。
   const projectBarOn = !activeId && (!studioChat || !!studioRoot) && (mvCfg.preset !== 'chat' || (runPickerOn && !studioChat))
   const openingOn = !hasMessages && !historyLoading && !params.miniSurface && !params.childSurface && !mvCfg.teamSlug && !mvCfg.groupChat && !mvCfg.teamMember && !mvCfg.soloEngineId && !mvCfg.engineId && s.connState === 'ok'
+  // 空对话居中 → 首发落底(freshLayout.ts):小窗 / 子会话面板 / 手机不居中 —— 手机一点输入框键盘就把它顶到键盘上沿,先居中再被顶走等于跳两次。
+  // 原生手机包里 UI_MODE 恒为 desktop,判手机还要看 window.tangu?.mobile。
+  const freshCenter = !params.miniSurface && !params.childSurface && UI_MODE !== 'mobile' && !window.tangu?.mobile
+  // 从有消息的会话点「新对话」进来:输入区从底部升回中间(只认挂载那一刻,EmptyState2 自己记)
+  const hadMessagesRef = useRef(false)
+  const freshRise = hadMessagesRef.current && !hasMessages && !activeId
+  useEffect(() => { hadMessagesRef.current = hasMessages }, [hasMessages])
   /** 流里有画出来的消息(系统消息、列表里隐藏的不算):决定底对齐的排法,也决定手机上整列跟不跟键盘走。 */
   const anyShown = (hasMessages && shownMessages.some((m) => m.role !== 'system' && !isHiddenInList(m))) || s.failedSends.length > 0
   // Agent Desk 只在会话开始后显示:草稿与已建 ID 但未发消息的新会话都不挂载,也不占右侧车道。
@@ -629,7 +652,13 @@ export function ChatView({ leaf, params }: ViewProps) {
   const teamDesk = !params.childSurface && !studioChat && UI_MODE !== 'mobile' && !!mvCfg.groupChat && (mvCfg.groupAgents?.length || 0) >= 2
   // 画布(方案「Chat 画布分支」第二步):同一棵会话树的另一种看法。偏好按树根记 —— 在画布里点到别的支,不会翻回对话。
   // 不给画布的地方:团队 / 群聊、私聊 Agent / 引擎、子会话面板、小窗、钉住会话的分屏、Coding 工作台、手机(没有这条标签栏)。
-  const treeRoot = activeSession?.fork_message_id ? (activeSession.parent_session_id || activeId) : activeId
+  // 画布开着「显示子会话」时,子会话也是那棵树上的一支(单击它的卡会把主区切过来,画布得留在原来那棵树上):
+  // 父会话是树根 → 树根;父会话是一支 → 那一支的树根;父会话自己是子会话(孙会话不画)→ 照旧自成一棵
+  const canvasKids = useCanvasKids()
+  const kidParent = useApp((s) => (canvasKids && activeSession && !activeSession.fork_message_id && activeSession.parent_session_id
+    ? s.sessions.find((x) => x.id === activeSession.parent_session_id) : undefined))
+  const kidRoot = kidParent ? (kidParent.fork_message_id ? kidParent.parent_session_id : kidParent.parent_session_id ? undefined : kidParent.id) : undefined
+  const treeRoot = activeSession?.fork_message_id ? (activeSession.parent_session_id || activeId) : kidRoot || activeId
   const canvasAllowed = !!activeId && followActive && leaf.loc === 'main' && !inSingleColumnShell() && !params.childSurface && !params.miniSurface && !params.readOnly && !studioChat
     && !mvCfg.groupChat && !mvCfg.teamSlug && !mvCfg.teamMember && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.engineId
   const [canvasPref, setCanvasPref] = useChatCanvasPref(treeRoot)
@@ -762,19 +791,8 @@ export function ChatView({ leaf, params }: ViewProps) {
               shownMessages.map((m) => {
                 if (isHiddenInList(m)) return null
                 if (m.role === 'user' && m.id === editingId) {
-                  return (
-                    <div key={m.id} className="t2-userwrap">
-                      <div className="t2-edit">
-                        <textarea className="t2-edit-ta" value={editText} autoFocus
-                          onChange={(e) => setEditText(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) saveEdit(); if (e.key === 'Escape') setEditingId(null) }} />
-                        <div className="t2-btnrow">
-                          <button className="t2-btn primary" onClick={saveEdit}>{t('chat.edit.saveResend')}</button>
-                          <button className="t2-btn ghost" onClick={() => setEditingId(null)}>{t('common.cancel')}</button>
-                        </div>
-                      </div>
-                    </div>
-                  )
+                  return <EditBubble key={m.id} original={m.content} value={editText} onChange={setEditText} userName={userName} userAvatar={userAvatar}
+                    onSend={saveEdit} onCancel={() => setEditingId(null)} />
                 }
                 return (
                   <EditorialMessage
@@ -896,11 +914,13 @@ export function ChatView({ leaf, params }: ViewProps) {
       )}
 
       {/* 空状态优先保持 view 居中;空间不足时按 composer 实高向上避让,小高度逐级精简。 */}
-      {!hasMessages && !historyLoading && !canvasOn && <EmptyState2 compact={!!params.miniSurface} title={params.miniSurface ? t('mini.chatHint') : studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />}
+      {!hasMessages && !historyLoading && !canvasOn && <EmptyState2 center={freshCenter} rise={freshRise} compact={!!params.miniSurface} title={params.miniSurface ? t('mini.chatHint') : studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />}
 
       {/* 输入区整簇(新对话的两条选择器 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
           正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
           新加与输入卡同簇的东西请一并放进来 —— 高度由 anchor 统一量成 --t2-composer-h。 */}
+      {/* 聊天里弹的 toast(成就 / 引导任务)挂到这里:输入卡上方 12px、同一条中线(lib/chatToastDock,走查续六 6.5) */}
+      <div className="t2-toast-dock" />
       <div className="composer-anchor" data-kb-rise ref={composerRef}>
         {/* Chat 固定使用创建时的当前默认 Agent，不露选择器；Work 的云会话仍可选 Agent，外部引擎仍 host-only。
             轨道方案 §4:门控去掉 `!groupChat`(06-25 那道「群聊态无单一主 agent」门的理由随选择条消失 ——
@@ -1087,6 +1107,8 @@ export function ChatView({ leaf, params }: ViewProps) {
           onWithdrawSteer={activeId ? (id) => s.withdrawSteer(activeId, id) : undefined}
           onSteerNow={activeId ? () => { void s.steerNow(activeId) } : undefined}
         />
+        {/* Muse 的开场建议(新对话、没消息时;开场那一行出现的同一组条件):Chat Box 正下方最多三行 */}
+        {openingOn && !studioChat && <MuseStarters draftKey={activeId ?? NEW_CHAT_DRAFT} centered={freshCenter} />}
       </div>
       {/* 右侧车道:摘要栏卡片栈(进度 / 后台 / 产物 / 来源 / 工作范围 / 插件卡 / Agent Desk 卡片态,2026-10-25 多卡片)。
         * 锚在整列(.t2-chat-col,含输入框区);滚动条仍在最右缘(卡片右侧留 --tsum-gut 让 thumb 落位)。
@@ -1095,6 +1117,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       {!params.childSurface && (!canvasOn || railOut) && <div className="t2-rail" data-off={canvasOn ? '' : undefined}>
         <TaskSummary
           sessionId={activeId}
+          onRetry={params.readOnly ? undefined : () => retryOnce(activeId)}
           desk={deskEnabled && activeId ? <DeskCard key="desk" sessionId={activeId} /> : null}
           teamStatus={activeId ? <>
             {teamDesk && <TeamStatus sessionId={activeId} />}

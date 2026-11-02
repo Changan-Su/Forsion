@@ -10,12 +10,14 @@ export function validSyncSlug(slug: unknown): slug is string {
 export function validLogDate(date: unknown): date is string {
   return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(`${date}T00:00:00Z`)) && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
 }
+/** 小组件的记录(10-31):Agent 文件夹和 human/ 里都有(项目卡的记录放 human)。服务端 tanguAgentFilePaths 同一张表。 */
+export const isWidgetDataPath = (p: string): boolean => /^WidgetData\/[a-z0-9][a-z0-9_-]{0,63}\/data\.db$/.test(p);
 export function validSyncPath(p: unknown): p is string {
   if (typeof p !== 'string' || !p || p.length > 1024 || /[\\\x00-\x1f:]/.test(p)) return false;
   if (p === '.memory-tombstones.json') return true;
   const parts = p.split('/');
   if (parts.some((s) => !s || s.startsWith('.') || s.endsWith('.') || s.endsWith(' '))) return false;
-  if (['config.toml', 'SOUL.md', 'HARNESS.md', 'HUMAN.md', 'MEMORY.md', 'CALENDAR.db'].includes(p)) return true; // CALENDAR.db:Agent 的日历(原 SCHEDULE.db)
+  if (['config.toml', 'SOUL.md', 'HARNESS.md', 'HUMAN.md', 'MEMORY.md', 'CALENDAR.db'].includes(p) || isWidgetDataPath(p)) return true; // CALENDAR.db:Agent 的日历(原 SCHEDULE.db)
   if (p.startsWith('LOG/')) return parts.length === 2 && p.endsWith('.md') && validLogDate(parts[1].slice(0, -3));
   return parts.length > 1 && parts[0] === 'Library';
 }

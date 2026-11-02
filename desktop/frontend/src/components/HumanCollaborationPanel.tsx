@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { FileCode2, History, Loader2, MoreHorizontal, Pencil, RefreshCw, Undo2 } from 'lucide-react'
 import { Markdown } from './Markdown'
 import { CapabilityMenu } from './CapabilityMenu'
+import { PortraitMoveCard } from './PortraitMoveCard'
 import { useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
 import { formatRelative, formatDateTime } from '../format/time'
@@ -86,6 +87,7 @@ function HumanBody({ engine, target, name, running, jump, onRewrite, draftKey }:
     {doc && !draft && !file && humanLegacy(doc) && <p className="human-notice" data-human-legacy>{t('human.legacy')} {onRewrite && <button type="button" className="profile-text-action" disabled={!!running} onClick={rewrite}><RefreshCw size={12} />{t('human.rewrite')}</button>}</p>}
     {!doc && !error && <p className="agent-profile-muted" role="status"><Loader2 size={14} className="spin" /> {t('human.loading')}</p>}
     {doc && file === 'soul' && doc.content.trim().length > PORTRAIT_LIMIT && <p className="human-notice" data-portrait-over-budget>{t('human.portraitOverBudget')}</p>}
+    {doc && file === 'soul' && !draft && <PortraitMoveCard engine={engine} />}
     {doc?.updatedAt && <p className="human-date">{t('human.updatedAt', { time: formatRelative(doc.updatedAt, { locale }) })}</p>}
     {draft ? <div className="human-editor"><textarea aria-label={file ? t('human.editFile', { name: t(`human.file.${file}.title`) }) : t('human.editLabel')} value={draft.content} maxLength={doc?.maxLength || 12000} rows={15} onChange={e => changeDraft({ ...draft, content: e.target.value })} disabled={busy} />
       <div className="human-actions"><button type="button" className="btn primary sm" disabled={busy || conflict} onClick={() => void save()}>{busy && <Loader2 size={13} className="spin" />}{t('human.save')}</button><button type="button" className="btn sm" disabled={busy} onClick={() => { changeDraft(null); setConflict(false); setLatest(null); setError('') }}>{t('human.cancel')}</button></div>

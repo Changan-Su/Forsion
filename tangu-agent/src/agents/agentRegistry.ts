@@ -32,6 +32,7 @@ import { normalizeCompactionLayer } from '../services/compactionSettings.js';
 // ⚠️ 与 approvals.ts 互相 import(它 import 本文件的 getAgent / slugify 等):两边都只在函数体里用对方的导出,
 // 所以求值顺序无关紧要。别在本文件顶层调用 normalizeApprovalMode(模块未求值完 → TDZ)。
 import { normalizeApprovalMode } from '../services/approvals.js';
+import { purgeExpiredWidgets } from '../services/widgetStore.js';
 import type { ThinkingLevel } from '../core/types.js';
 
 /** **Agent 级轮数下限**:会话 / Agent 都没给上限时交互 run 不限轮数(10-25 用户定:默认 90 截断了 48 分钟、113 次调用的
@@ -723,6 +724,7 @@ async function ensureAgentsReady(): Promise<void> {
   try { ensureHumanFolder(); } catch { /* ignore */ } // 在 USER.md 播种之后:新装机的模板也一起进 MEMORY.md
   try { await mirrorLegacyHuman(); } catch (e) { console.warn('[human mirror]', e instanceof Error ? e.message : e); } // 默认日历首次搬进 human/;离线时旧版改过的 USER.md 并进来
   await migrateGlobalMemoryToXyra().catch(() => { /* ignore */ });
+  await purgeExpiredWidgets().catch((e) => { console.warn('[widgets] purge failed:', e instanceof Error ? e.message : e); });
   cache = null;
 }
 

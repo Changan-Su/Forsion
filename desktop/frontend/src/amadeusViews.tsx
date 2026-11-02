@@ -34,6 +34,7 @@ import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle,
 import { editorModeOf, useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
+import { LocalVaultButton } from './amadeusVaultMenu'
 import { UnifiedPage, type UnifiedHistory } from '@amadeus/unified/UnifiedPage'
 import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
 import { NoteFloatingToc } from '@amadeus/unified/NoteFloatingToc'
@@ -109,7 +110,7 @@ registerMessages({
   'amxv.upload.retry': { zh: '重试', en: 'Retry' },
   'amxv.upload.remove': { zh: '移除', en: 'Remove' },
   'amxv.renameFailed': { zh: '重命名失败：{e}', en: 'Rename failed: {e}' },
-  'amxv.newBaseFailed': { zh: '新建 Base 失败：{e}', en: 'Could not create the base: {e}' },
+  'amxv.newBaseFailed': { zh: '新建多维表失败：{e}', en: 'Could not create the database: {e}' },
   'amxv.copyFailed': { zh: '复制失败：{e}', en: 'Copy failed: {e}' },
   'amxv.fileCreatorFailed': { zh: '「{label}」失败：{e}', en: '“{label}” failed: {e}' },
   'amxv.confirm.deleteNote': { zh: '删除笔记「{name}」？此操作不可撤销。', en: 'Delete the note “{name}”? This cannot be undone.' },
@@ -128,7 +129,7 @@ registerMessages({
   'amxv.trash.emptyHint': { zh: '回收站是空的。', en: 'The trash is empty.' },
 
   'amxv.missing.title': { zh: '当前库里没有这篇笔记', en: 'This note is not in the current vault' },
-  'amxv.missing.sub': { zh: '「{path}」在这一侧不存在 —— 它可能属于另一侧（本地/云端）、已改名或已删除。这里不会替你新建同名空文件。', en: '“{path}” does not exist on this side. It may belong to the other side (local/cloud), or it was renamed or deleted. No empty file is created in its place.' },
+  'amxv.missing.sub': { zh: '「{path}」不在当前库里 —— 它可能属于另一个智库或另一侧（本地/云端）、已改名或已删除。这里不会替你新建同名空文件。', en: '“{path}” is not in the current vault. It may belong to another vault or the other side (local/cloud), or it was renamed or deleted. No empty file is created in its place.' },
   'amxv.missing.close': { zh: '关闭标签页', en: 'Close tab' },
   'amxv.pluginFile.title': { zh: '这个文件归插件管理', en: 'This file belongs to a plugin' },
   'amxv.pluginFile.sub': { zh: '「{path}」是某个插件的专属格式，而那个插件没有安装或没有启用。当成笔记来编辑会改坏它的格式，所以这里不打开；启用对应的插件后再打开它。', en: '“{path}” is in a plugin’s own format, and that plugin is not installed or not enabled. Editing it as a note would break the format, so it is not opened here. Enable the plugin, then open the file again.' },
@@ -194,7 +195,7 @@ registerMessages({
   'amxv.openVaultHint': { zh: '打开一个智库文件夹开始。', en: 'Open a vault folder to get started.' },
   'amxv.cloudVault': { zh: '云端智库', en: 'Cloud vault' },
   'amxv.cloudVaultTip': { zh: '云端智库（切换 / 成员 / 分享）', en: 'Cloud vault (switch / members / sharing)' },
-  'amxv.vaultNamed': { zh: '智库：{name}', en: 'Vault: {name}' },
+  'amxv.vaultNamed': { zh: '智库 · {name}', en: 'Vault · {name}' },
   'amxv.openVault': { zh: '打开智库', en: 'Open vault' },
   'amxv.folder.actions': { zh: '文件夹操作', en: 'Folder actions' },
   'amxv.folder.newNoteHere': { zh: '在此文件夹新建笔记', en: 'New note in this folder' },
@@ -444,6 +445,59 @@ export function Breadcrumb({ path, hideLoneLeaf }: { path?: string; hideLoneLeaf
 }
 
 // ─────────────────────────────── 左:笔记库(原生 t2s 外壳) ───────────────────────────────
+
+/** 最近一次右键落在哪个元素上:右键不一定把焦点给到那一行(文件夹行是 div),菜单关掉时靠它把焦点还回去。 */
+let lastContextTarget: { el: Element | null; at: number } = { el: null, at: 0 }
+if (typeof window !== 'undefined') window.addEventListener('contextmenu', (e) => { lastContextTarget = { el: e.target instanceof Element ? e.target : null, at: Date.now() } }, true)
+
+/** 文件树右键菜单外壳(走查续六 6.9):`role="menu"`,打开时焦点进第一项,↑↓ / Home / End 走、回车执行(按钮原生),
+ *  Esc 关菜单并把焦点还给那一行 —— 只关菜单,不往下传(别连带清掉树里的选中);点菜单外面也关。
+ *  键盘焦点那一档(data-kbd)打开时就在;鼠标一动退回悬停淡底,焦点跟着鼠标走,方向键从鼠标所在那项接着走。 */
+function TreeMenu({ x, y, onClose, children }: { x: number; y: number; onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    // 右键打开的:还给右键的那一行(焦点可能还在编辑器里);点「⋯」打开的:还给那颗按钮(它就是当前焦点)。
+    const ctx = Date.now() - lastContextTarget.at < 1000 ? lastContextTarget.el : null
+    const active = document.activeElement
+    const back = ctx ? ctx.closest<HTMLElement>('button, [tabindex]') ?? ctx.querySelector<HTMLElement>('button')
+      : active instanceof HTMLElement && active !== document.body ? active : null
+    const items = (): HTMLButtonElement[] => Array.from(ref.current?.querySelectorAll<HTMLButtonElement>(':scope > button') ?? [])
+    for (const b of items()) b.setAttribute('role', 'menuitem')
+    items().find((b) => !b.disabled)?.focus({ preventScroll: true })
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.preventDefault(); e.stopPropagation()
+      close.current()
+      if (back?.isConnected) back.focus({ preventScroll: true })
+    }
+    const onDown = (e: PointerEvent): void => { if (!(e.target instanceof Node) || !ref.current?.contains(e.target)) close.current() }
+    document.addEventListener('keydown', onKey, true)
+    document.addEventListener('pointerdown', onDown, true)
+    return () => { document.removeEventListener('keydown', onKey, true); document.removeEventListener('pointerdown', onDown, true) }
+  }, [])
+  const move = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+    e.preventDefault()
+    e.currentTarget.setAttribute('data-kbd', '')
+    const list = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(':scope > button:not(:disabled)'))
+    if (!list.length) return
+    const i = list.indexOf(document.activeElement as HTMLButtonElement)
+    const n = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1 : (i + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length
+    list[i < 0 && e.key === 'ArrowUp' ? list.length - 1 : n].focus({ preventScroll: true })
+  }
+  return (
+    <OverlayAt className="ctx-menu" role="menu" x={x} y={y} innerRef={(el) => { ref.current = el }} onClick={(e) => e.stopPropagation()} onKeyDown={move}
+      data-kbd="" onMouseMove={(e) => {
+        e.currentTarget.removeAttribute('data-kbd')
+        const b = (e.target as Element).closest('button')
+        if (b && !b.disabled && b !== document.activeElement && e.currentTarget.contains(b)) b.focus({ preventScroll: true })
+      }}>
+      {children}
+    </OverlayAt>
+  )
+}
 
 /** 右键菜单目标;kind='multi' = 作用于整批选中(paths)。 */
 interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root' | 'multi' | 'vaultsec'; path: string; paths?: string[]; x: number; y: number }
@@ -1540,7 +1594,7 @@ export function AmadeusPagesView() {
             />
           ) : (
             <span className="t2s-srow-text">
-              <span className="t2s-srow-title">{ft ? fileTypeBaseName(path, ft.extensions) : isDraw ? baseName(path).replace(/\.excalidraw$/i, '') : isNote ? baseName(path) : path.split(/[\\/]/).pop()}</span>
+              <span className="t2s-srow-title">{ft ? fileTypeBaseName(path, ft.extensions) : isDraw ? baseName(path).replace(/\.excalidraw$/i, '') : isNote ? baseName(path) : isDbPath(path) ? dbBaseName(path) : path.split(/[\\/]/).pop()}</span>
               {parentOf(path) && <span className="t2s-srow-sub">{parentOf(path)}</span>}
             </span>
           )}
@@ -1644,7 +1698,7 @@ export function AmadeusPagesView() {
         />
       ) : (
         <span className="t2s-srow-title">
-          {ft ? fileTypeBaseName(path, ft.extensions) : isNote || isDraw ? baseName(path) : path.split(/[\\/]/).pop()}
+          {ft ? fileTypeBaseName(path, ft.extensions) : isNote || isDraw ? baseName(path) : isDbPath(path) ? dbBaseName(path) : path.split(/[\\/]/).pop()}
         </span>
       )}
       {/* 行尾顺序:… 在左、+ 在右(同文件夹头);+ 仅笔记有(附件/.db 没有 .fd)。 */}
@@ -1810,14 +1864,14 @@ export function AmadeusPagesView() {
   const foot = (
     <div className="t2s-foot">
       <TrashSection />
-      <button
+      {!cloudLib && amadeus?.listVaults ? <LocalVaultButton vaultRoot={vaultRoot} /> : <button
         className="t2s-special"
         onClick={() => (cloudLib ? setCloudPanel(true) : void ps().openVault())}
         title={cloudLib ? t('amxv.cloudVaultTip') : vaultRoot || undefined}
       >
         <span className="t2s-special-ic"><FolderOpen /></span>
         <span className="t2s-special-title">{cloudLib ? (foreignLabel ? t('amxv.vaultNamed', { name: foreignLabel }) : t('amxv.cloudVault')) : vaultRoot ? t('amxv.vaultNamed', { name: baseName(vaultRoot) }) : t('amxv.openVault')}</span>
-      </button>
+      </button>}
     </div>
   )
 
@@ -1925,7 +1979,7 @@ export function AmadeusPagesView() {
       {/* 多选菜单:只放对整批说得通的两件事。删除逐个走各自的既有流程(笔记要问独占附件,
           附件/其它文件是直接删)—— 别在这儿另写一套删除,那是毁档最容易出事的地方。 */}
       {menu?.kind === 'multi' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <button onClick={() => {
             const ps0 = menu.paths ?? []
             setMenu(null)
@@ -1943,11 +1997,11 @@ export function AmadeusPagesView() {
               sel.clear()
             })()
           }}><Trash2 size={13} /> {t('amxv.menu.deleteN', { n: menu.paths?.length ?? 0 })}</button>
-        </OverlayAt>
+        </TreeMenu>
       )}
 
       {menu?.kind === 'page' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <button onClick={() => { void openNote(menu.path, { newTab: true }); setMenu(null) }}><Plus size={13} /> {t('amxv.menu.openInNewTab')}</button>
           <button onClick={() => { const p = menu.path; setMenu(null); newChild(p) }}><SquarePen size={13} /> {t('amadeus.new.childNote')}</button>
           <button onClick={() => startRename(menu.path)}><Pencil size={13} /> {t('amxv.menu.rename')}</button>
@@ -1963,10 +2017,10 @@ export function AmadeusPagesView() {
           )}
           {canRevealInFileManager() && <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>}
           <button className="danger" onClick={() => { const p = menu.path; setMenu(null); void deleteNoteFlow(p) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
-        </OverlayAt>
+        </TreeMenu>
       )}
       {menu?.kind === 'asset' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           {isDbPath(menu.path) ? (
             <>
               <button onClick={() => { openDb(menu.path); setMenu(null) }}><Eye size={13} /> {t('amxv.menu.open')}</button>
@@ -2004,10 +2058,10 @@ export function AmadeusPagesView() {
           )}
           {canRevealInFileManager() && <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>}
           <button className="danger" onClick={() => { const p = menu.path; setMenu(null); if (confirmedDelete('file', p)) void ps().deletePage(p) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
-        </OverlayAt>
+        </TreeMenu>
       )}
       {menu?.kind === 'folder' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <button onClick={() => { setExpanded((prev) => new Set([...prev, ...prefixesOf(menu.path)])); void ps().createPageInFolder(menu.path); setMenu(null) }}><SquarePen size={13} /> {t('amadeus.new.note')}</button>
           <button onClick={() => newFolder(menu.path)}><FolderPlus size={13} /> {t('amxv.menu.newSubfolder')}</button>
           <button onClick={() => newBase(menu.path)}><Database size={13} /> {t('amadeus.new.database')}</button>
@@ -2042,17 +2096,17 @@ export function AmadeusPagesView() {
             }}><Share2 size={13} /> {t('amxv.menu.publishFolder')}</button>
           )}
           <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (confirmedDelete('folder', f)) void ps().deleteFolder(f) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
-        </OverlayAt>
+        </TreeMenu>
       )}
       {menu?.kind === 'vaultsec' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <button onClick={() => { const f = menu.path; setMenu(null); markVaultSection(f, false) }}><FolderMinus size={13} /> {t('amxv.menu.vaultSectionOff')}</button>
-        </OverlayAt>
+        </TreeMenu>
       )}
       {rootMenu && webRootMenu && (
-        <OverlayAt className="ctx-menu" x={rootMenu.x} y={rootMenu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={rootMenu.x} y={rootMenu.y} onClose={() => setMenu(null)}>
           <CtxMenuButtons items={rootMenuItems()} />
-        </OverlayAt>
+        </TreeMenu>
       )}
 
       {cloudPanel && <CloudVaultPanel onClose={() => setCloudPanel(false)} />}

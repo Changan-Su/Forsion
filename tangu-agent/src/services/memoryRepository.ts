@@ -191,6 +191,17 @@ export function withMemoryDirectoryLock<T>(baseDir: string, fn: () => T): T {
   finally { heldLocks.delete(root); closeSync(fd); unlinkSync(lock); }
 }
 
+/** 同上,异步等:锁被同步 / 别的进程拿着就稍等重试,约 1 秒后放弃。 */
+export async function withMemoryDirectoryLockRetry<T>(baseDir: string, fn: () => T): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try { return withMemoryDirectoryLock(baseDir, fn); }
+    catch (e) {
+      if (!(e instanceof MemoryRepositoryError && e.code === 'MEMORY_BUSY') || attempt >= 40) throw e;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+}
+
 const SOURCE_KINDS = new Set(['explicit', 'historian', 'dream', 'sync', 'manual', 'restore', 'migration', 'external-edit']);
 function validSource(x: any): x is MemorySource {
   return x && SOURCE_KINDS.has(x.kind) && ['sessionId', 'messageId', 'runId'].every(k => x[k] === undefined || typeof x[k] === 'string');

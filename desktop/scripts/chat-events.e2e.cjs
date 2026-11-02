@@ -93,7 +93,7 @@ async function main() {
   }
   const app = await electron.launch({
     // -ApplePersistenceIgnoreState:强杀过的 Electron 下次启动先弹「重新打开窗口」模态框,firstWindow 等不到(台架纪律)
-    args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
+    args: [...electron.NESTED_SANDBOX_ARGS, `--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT, '-ApplePersistenceIgnoreState', 'YES'],
     cwd: ROOT,
     // FORSION_E2E_APPROVAL_DELIVERY:主进程 approvalDelivery 的 e2e 钩子(双闸,仅非打包):外部模式下改订桩的待批流、暴露 pending() 与真通知(场景 K3e–h)
     env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, FORSION_E2E_APPROVAL_DELIVERY: '1' },
@@ -359,7 +359,7 @@ async function main() {
     check('Q3 回执后流里留下问答记录(问题 + 我的回答)', /包管理器/.test(askAfter.record) && /pnpm/.test(askAfter.record), JSON.stringify(askAfter))
 
     // ── 场景 F:sketch 卡(agent 在对话流里画可交互 HTML 卡片)
-    // 钉四件:直播上卡(挂 tool_result 非 tool_call)/ 被引擎拒的不画 / 沙箱铁律(仅 allow-scripts
+    // 钉四件:直播上卡(挂 tool_result 非 tool_call)/ 被引擎拒的不画 / 沙箱铁律(仅 allow-scripts allow-forms
     // + 内层 CSP 真断网,在**真 Electron** 里实证而非单测纸面)/ 历史水合 back-fill 卡不丢。
     // sk1 的参数先以 tool_stream 流半截(到 `<scr` 为止,真引擎就是按模型输出切片发的),再隔 3s 才来完整 tool_call:
     // 这 3s 是草稿卡的探针窗(F0a 在 send 返回后立刻量)。半截里 `#skp` 还没被脚本改,所以草稿里应读到 SKETCH-LIVE 而非 -JS。
@@ -426,14 +426,7 @@ async function main() {
           '<button id="copybtn" class="fs-button" type="button" onclick="window.forsionSketch.copy(\'COPIED-LIST\')">复制</button>' +
           '<script>try{window.forsionSketch.ask("AUTO-ASK")}catch(e){document.body.setAttribute("data-autoask",e.message)}' +
           // 绕过卡内运行时直接 postMessage(Codex 10-09 指出的口子):宿主侧必须按「焦点 + 瞬时激活」拒掉
-          'parent.postMessage({type:"sketch-ask",text:"RAW-ASK"},"*");' +
-          // F11c 的「抢焦点冒充点击」要由卡自己的定时器发起:Playwright 的 frame.evaluate 自带 userGesture(会给子帧 5s 瞬时激活),
-          // 找 nonce 的正则拆开拼("NON"+"CE"),否则这段脚本自己的源码就会被 outerHTML 匹配到(第一次跑就是这么假红的)。
-          // 直接在 evaluate 里发等于替攻击者按了一下。台架只经 evaluate 预约时刻(data-steal-at),7s 后由这段代码自己动手。
-          'setInterval(function(){var at=Number(document.body.dataset.stealAt||0);if(!at||Date.now()<at||document.body.dataset.steal)return;' +
-          'var i=document.createElement("input");document.body.appendChild(i);i.focus();parent.postMessage({type:"sketch-ask",text:"STEAL-ASK"},"*");' +
-          'var r="sent";try{window.forsionSketch.ask("STEAL-ASK")}catch(e){r=e.message}' +
-          'document.body.dataset.steal=JSON.stringify({viaRuntime:r,nonceVisible:new RegExp("NON"+"CE = \'").test(document.documentElement.outerHTML),scripts:document.head.querySelectorAll("script").length})},100)</script>',
+          'parent.postMessage({type:"sketch-ask",text:"RAW-ASK"},"*")</script>',
       }) } },
       { type: 'tool_result', payload: { id: 'sk5', result: 'Sketch card rendered in the conversation.' } },
       { type: 'token', payload: { delta: '按钮卡在最后。' } },
@@ -520,7 +513,7 @@ async function main() {
     await inlineMessage.scrollIntoViewIfNeeded().catch(() => {})
     await win.waitForTimeout(300)
     await inlineMessage.screenshot({ path: process.env.SKETCH_INLINE_SHOT || '/tmp/sketch-inline-order.png' }).catch(() => {})
-    check('F2 ⚠️沙箱铁律:每张卡 sandbox 恒为仅 allow-scripts', skProbe.sandboxes.length === 5 && skProbe.sandboxes.every((s) => s === 'allow-scripts'), JSON.stringify(skProbe.sandboxes))
+    check('F2 ⚠️沙箱铁律:每张卡 sandbox 恒为仅 allow-scripts allow-forms', skProbe.sandboxes.length === 5 && skProbe.sandboxes.every((s) => s === 'allow-scripts allow-forms'), JSON.stringify(skProbe.sandboxes))
     check('F3 被引擎拒掉的 sketch(isError)不画卡', skProbe.count === 5, `count=${skProbe.count}`)
 
     // 卡内探针:JS 真跑 + 网络真断(内层 CSP 收口;裸 sandbox 是挡不住 fetch 的,此断言在真 Electron 里钉死)。
@@ -670,25 +663,57 @@ async function main() {
     let copied = ''
     for (let i = 0; i < 10 && copied !== 'COPIED-LIST'; i++) { await win.waitForTimeout(300); copied = await app.evaluate(({ clipboard }) => clipboard.readText()) }
     check('F11b 卡内 copy():点按钮后系统剪贴板里是卡给的文本', copied === 'COPIED-LIST', JSON.stringify({ copied }))
-    // F11c(Codex 10-09 二轮 P1)抢焦点冒充点击:用户刚在 composer 里敲了键(父文档有 5s 瞬时激活),卡内脚本 focus() 自己的控件把焦点抢到
-    // 这张 iframe 上,再①绕过运行时直接 postMessage ②经运行时 ask() ③从 outerHTML 里找 nonce —— 三条路都必须发不出去:
-    // ①没有 nonce,②子帧自己没有激活(父文档的输入传不进来),③运行时跑完已把自己的 script 删了。
-    // 预约 7s 后动手(evaluate 给子帧的那次激活 5s 内过期),6.2s 时在 composer 里敲一个键制造父文档激活。
-    const stealBefore = stub.seen.runs.length
-    if (askFr) await askFr.evaluate(() => { document.body.dataset.stealAt = String(Date.now() + 7000) }).catch(() => {})
-    await win.waitForTimeout(6200)
-    await win.locator('.t2c-ta').first().click().catch(() => {})
-    await win.keyboard.type('x')
-    await win.waitForTimeout(1800)
-    let steal = null
-    if (askFr) { const raw = await askFr.evaluate(() => document.body.dataset.steal || '').catch(() => ''); try { steal = raw ? JSON.parse(raw) : null } catch { steal = null } }
-    await win.waitForTimeout(800)
-    const stolen = stub.seen.runs.some((r) => r.message === 'STEAL-ASK')
-    await win.locator('.t2c-ta').first().click().catch(() => {})
-    await win.keyboard.press('Meta+A').catch(() => {}); await win.keyboard.press('Backspace').catch(() => {})
-    check('F11c ⚠️卡内抢焦点冒充点击(父文档 5s 内刚有输入):裸 postMessage 没 nonce、经运行时子帧没激活、outerHTML 里找不到 nonce → 都发不出去',
-      !stolen && stub.seen.runs.length === stealBefore && !!steal && /user gesture/.test(steal.viaRuntime) && steal.nonceVisible === false && steal.scripts === 0,
-      JSON.stringify({ stolen, runs: stub.seen.runs.length - stealBefore, steal }))
+    // F11c 抢焦点冒充点击搬到了 visualize.check.cjs 的默认进程模型段:卡片嵌进壳之后这里要摸卡内元素,得让帧同进程,而同进程时宿主的激活会传进卡片,测不了这道闸。
+
+
+    // ── 场景 FL(10-28):HTML 卡的随包库 three / d3 / chart.js / gsap(forsion-iui: 协议 + 两层 CSP + importmap)。
+    // 钉三件:① 流式上卡(先半截、后终稿,和 sk1 同路)后 module 脚本真的 import 到五个裸名、WebGL 真出画面(读回红色像素);
+    // ② 卡里照样断网:CDN 的 fetch / import、连库协议本身的 fetch 都被挡(库只能当脚本 import,不是数据通道);
+    // ③ 协议夹在库目录里:主进程 net.fetch 一条编码过的 ../ 必须 403,而真库文件 200 且带 ACAO(卡是无源 iframe,没有它 import 不过)。
+    const libArgs = JSON.stringify({
+      title: '随包库',
+      html: '<div id="lib3d">LIB-PLACEHOLDER</div><canvas id="libc" width="120" height="80"></canvas>' +
+        '<script type="module">import * as THREE from "three";import { OrbitControls } from "three/addons/controls/OrbitControls.js";' +
+        'import * as d3 from "d3";import Chart from "chart.js/auto";import gsap from "gsap";const el=document.getElementById("lib3d");' +
+        'try{const r=new THREE.WebGLRenderer({canvas:document.getElementById("libc"),preserveDrawingBuffer:true});const scene=new THREE.Scene();' +
+        'scene.background=new THREE.Color(0xff0000);const cam=new THREE.PerspectiveCamera(50,1.5,0.1,10);new OrbitControls(cam,r.domElement);r.render(scene,cam);' +
+        'const gl=r.getContext(),px=new Uint8Array(4);gl.readPixels(60,40,1,1,gl.RGBA,gl.UNSIGNED_BYTE,px);' +
+        'el.textContent=["LIB-OK",THREE.REVISION,typeof d3.forceSimulation,typeof Chart,typeof gsap.to,px[0]>200&&px[1]<60?"RED":"px"+px.join(",")].join(" ")}' +
+        'catch(e){el.textContent="LIB-ERR "+e.message}</script>',
+    })
+    stub.script([
+      { type: 'token', payload: { delta: '随包库的卡。' } },
+      { type: 'tool_stream', payload: { id: 'sklib', name: 'intelligent_ui_html', delta: libArgs.slice(0, libArgs.indexOf('<script') + 4) } },
+      { type: 'tool_call', payload: { id: 'sklib', name: 'intelligent_ui_html', arguments: libArgs }, delay: 1500 },
+      { type: 'tool_result', payload: { id: 'sklib', result: 'Sketch card rendered in the conversation.' } },
+      { type: 'tool_call', payload: { id: 'sklibnet', name: 'intelligent_ui_html', arguments: JSON.stringify({
+        html: '<div id="libnet">NET-?</div><script type="module">const out=[];' +
+          'const t=async(k,f)=>{try{await f();out.push(k+":open")}catch{out.push(k+":blocked")}};' +
+          'await t("fetch-cdn",()=>fetch("https://esm.sh/three@0.186.1"));await t("import-cdn",()=>import("https://esm.sh/gsap@3.15.0"));' +
+          'await t("fetch-lib",()=>fetch("forsion-iui://lib/d3@7/d3.js"));document.getElementById("libnet").textContent=out.join(" ")</script>',
+      }) } },
+      { type: 'tool_result', payload: { id: 'sklibnet', result: 'Sketch card rendered in the conversation.' } },
+      { type: 'token', payload: { delta: '随包库两张卡画完。' } },
+    ])
+    await send(win, '画一张 3D 卡')
+    const libText = {}
+    for (let i = 0; i < 30 && !(/^LIB-(OK|ERR)/.test(libText.lib || '') && /blocked|open/.test(libText.net || '')); i++) {
+      await win.waitForTimeout(500)
+      for (const [k, id] of [['lib', 'lib3d'], ['net', 'libnet']]) {
+        const fr = await probeFrames(id)
+        if (fr) libText[k] = (await fr.locator(`#${id}`).textContent().catch(() => '')) || ''
+      }
+    }
+    check('FL1 随包库:流式终稿后五个裸名都 import 到,WebGL 真出画面(读回红色像素)',
+      /^LIB-OK \d+ function function function RED$/.test(libText.lib || ''), JSON.stringify(libText))
+    check('FL2 ⚠️带库的卡照样断网:CDN 的 fetch / import、库协议的 fetch 都被挡',
+      libText.net === 'fetch-cdn:blocked import-cdn:blocked fetch-lib:blocked', JSON.stringify(libText))
+    const libProto = await app.evaluate(async ({ net }) => {
+      const probe = async (u) => { try { const r = await net.fetch(u); return [r.status, r.headers.get('access-control-allow-origin')] } catch (e) { return [String(e.message)] } }
+      return { ok: await probe('forsion-iui://lib/three@0.186/three.module.js'), escape: await probe('forsion-iui://lib/..%2f..%2fmain%2findex.js'), nonJs: await probe('forsion-iui://lib/.version') }
+    })
+    check('FL3 ⚠️库协议只读库目录里的 .js:真库 200 + ACAO *,编码的 ../ 与非 .js 一律 403',
+      libProto.ok[0] === 200 && libProto.ok[1] === '*' && libProto.escape[0] === 403 && libProto.nonJs[0] === 403, JSON.stringify(libProto))
 
 
     // ── 场景 D:审批卡的「为什么问你」(B3)+ 工作区外写入警示仍在(台账里挂着的那条未验)
@@ -735,8 +760,8 @@ async function main() {
       peek: document.querySelector('.t2c-apv')?.getAttribute('data-peek'),
       more: (document.querySelector('.t2c-apv-more')?.textContent || '').trim(),
     }))
-    check('D0 五个待批审批攒进对话末尾的卡片堆(露一张 + 两道卡沿,「还有 审批 4」,1 / 5),原消息里不插整张卡、不留指路行',
-      tray.count === '5' && tray.inTail && tray.streamCards === 0 && !tray.pointer && tray.n === '1 / 5' && tray.peek === '2' && tray.more === '还有 审批 4', JSON.stringify(tray))
+    check('D0 五个待批审批攒进对话末尾的卡片堆(露一张 + 两道卡沿,只有审批时不列「还有」,1 / 5),原消息里不插整张卡、不留指路行',
+      tray.count === '5' && tray.inTail && tray.streamCards === 0 && !tray.pointer && tray.n === '1 / 5' && tray.peek === '2' && tray.more === '', JSON.stringify(tray))
     const sneaky = win.locator('.approval-card', { hasText: '[200 spaces]' }).first()
     await sneaky.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => {})
     await win.waitForTimeout(300)

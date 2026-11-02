@@ -406,6 +406,21 @@ describe('Dream routes facts about the person into the portrait', () => {
     expect(repo().snapshot().content).toBe('- 已有事实');
   });
 
+  it('a portrait group the verifier refuses falls back to memory instead of failing the whole run', async () => {
+    let verifies = 0;
+    provider = async (p) => {
+      if (p.messages[0].content.startsWith('Consolidate')) return result(toPerson(JSON.parse(p.messages[1].content)));
+      verifies += 1;
+      return result(JSON.parse(p.messages[1].content).proposal.groups.some((g: any) => g.to) ? { ok: false, reason: 'about a project' } : { ok: true });
+    };
+    seedCandidate('alpha', 'All personal projects use DuckDB.');
+    startMemoryDream('u', 'alpha'); expect((await settle()).state).toBe('completed');
+    expect(verifies).toBe(2);
+    expect(soul()).toBe('');
+    expect(repo().snapshot().content).toBe('- All personal projects use DuckDB.');
+    expect(readCandidates('alpha')).toHaveLength(0);
+  });
+
   it('a candidate from a session connected to a chat channel stays in this Agent\'s memory', async () => {
     const spy = vi.spyOn(channelHub, 'channelBinding').mockResolvedValue(true);
     try {
