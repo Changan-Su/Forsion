@@ -13,6 +13,8 @@ export function CtxMenuButtons({ items }: { items: readonly SheetMenuItem[] }): 
           type="button"
           className={it.danger ? 'danger' : undefined}
           data-act={it.act}
+          role={it.checked !== undefined ? 'menuitemradio' : undefined}
+          aria-checked={it.checked}
           disabled={it.disabled}
           onClick={it.run}
         >

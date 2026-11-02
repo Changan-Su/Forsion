@@ -30,7 +30,7 @@ import { CtxMenuButtons } from '../../components/CtxMenuButtons'
 import { AttentionDot, StatusMark } from './AttentionDot'
 import { ProjectRelinkDialog, onProjectRelinked, swapKey, useMissingProjects } from './ProjectRelink'
 import { SessionBgMark } from './BackgroundProcs'
-import { EXPAND_STEPS, expandStepOf, expandedExtra, setExpandStep } from './wsExpand'
+import { EXPAND_STEPS, WS_EXPAND_EVENT, expandStepOf, expandedExtra, setExpandStep, setExpandedExtra } from './wsExpand'
 import { mergeStatus, nestSessions, rowStatus, type RowStatus, type TreeNode } from './sessionTree'
 import { homeTarget } from '../../services/engine/targets'
 import { canTurnChatIntoNote, turnChatIntoNote } from './chatToNote'
@@ -205,7 +205,11 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
   }, [])
   // 「查看更多」分段展开:数存在 wsExpand 的模块级 Map 里(重启收回),这里只负责触发重渲。
   const [, bumpExpand] = useState(0)
-  const setExtra = (key: string, n: number): void => { if (n > 0) expandedExtra.set(key, n); else expandedExtra.delete(key); bumpExpand((x) => x + 1) }
+  useEffect(() => {
+    const onChange = (): void => bumpExpand((x) => x + 1)
+    window.addEventListener(WS_EXPAND_EVENT, onChange)
+    return () => window.removeEventListener(WS_EXPAND_EVENT, onChange)
+  }, [])
   const [showArchived, setShowArchived] = useState(false)
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(loadCollapsed)
   const [kidsCollapsed, setKidsCollapsed] = useState<Set<string>>(loadKidsCollapsed)
@@ -772,10 +776,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                         {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
                       </button>
                     )}
-                    {/* 行尾顺序:… 在左、+ 在右(同笔记树)。 */}
-                    {(!ws.system || p.onTogglePinned || (p.onShowWorkspaceDetails && isProjectWorkspace(ws))) && (
-                      <button type="button" className="t2s-group-add" title={t('sidebar.ws.menu')} onClick={(e) => openWsMenu(e, ws)}><MoreHorizontal size={14} /></button>
-                    )}
+                    {/* 行尾顺序:… 在左、+ 在右(同笔记树)。每组都有「在主区打开」与每次展开数,系统组也给菜单钮。 */}
+                    <button type="button" className="t2s-group-add" title={t('sidebar.ws.menu')} onClick={(e) => openWsMenu(e, ws)}><MoreHorizontal size={14} /></button>
                     <button type="button" className="t2s-group-add" title={t('sidebar.newChatIn', { name: workspaceGroupLabel(ws, t) })} onClick={() => p.onNewInWorkspace(ws)}><Plus size={14} /></button>
                   </div>
                   <AnimatedCollapse open={!isCollapsed}>
@@ -784,8 +786,8 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       {(nodes.length > shown || extra > 0) && (
                         <div className="t2s-viewmore-row">
                           {/* 原地分段展开(不再跳主区;进主区走组菜单「在主区打开」)。数字是**余下几条**(U-37)。 */}
-                          {nodes.length > shown && <button className="t2s-viewmore" onClick={() => setExtra(ws.key, extra + expandStepOf(ws.key))}>{t('sidebar.viewMore')} · {nodes.length - shown}</button>}
-                          {extra > 0 && <button className="t2s-viewmore" onClick={() => setExtra(ws.key, 0)}>{t('sidebar.showLess')}</button>}
+                          {nodes.length > shown && <button className="t2s-viewmore" onClick={() => setExpandedExtra(ws.key, (expandedExtra.get(ws.key) || 0) + expandStepOf(ws.key))}>{t('sidebar.viewMore')} · {nodes.length - shown}</button>}
+                          {extra > 0 && <button className="t2s-viewmore" onClick={() => setExpandedExtra(ws.key, 0)}>{t('sidebar.showLess')}</button>}
                         </div>
                       )}
                     </div>

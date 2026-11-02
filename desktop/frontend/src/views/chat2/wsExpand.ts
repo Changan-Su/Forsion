@@ -32,3 +32,10 @@ export function setExpandStep(wsKey: string, n: number): void {
 
 /** 项目 key → 在条数上限之外多露出的条数。模块级:侧栏重挂(换 Space 再回来)还在,重启就没了。 */
 export const expandedExtra = new Map<string, number>()
+export const WS_EXPAND_EVENT = 'tangu:wsexpand'
+
+/** 同时挂着几个侧栏时共用这一份:改完广播,各实例重渲(别用组件闭包里的旧值去覆盖)。 */
+export function setExpandedExtra(wsKey: string, n: number): void {
+  if (n > 0) expandedExtra.set(wsKey, n); else expandedExtra.delete(wsKey)
+  try { window.dispatchEvent(new Event(WS_EXPAND_EVENT)) } catch { /* ignore */ }
+}
