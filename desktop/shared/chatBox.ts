@@ -36,8 +36,10 @@ export interface PluginChatBoxOptions {
    *  a later update() passes a different function. Exceptions from either are logged and contained. */
   toolbar?(el: HTMLElement): void | (() => void)
   /** Host menu next to the caret. Same look and keys as the editor's `#` completion: ↑↓ Enter Tab Esc; opens only while
-   *  typing, never during IME composition; Enter on a highlighted row picks it and does not submit. */
-  suggest?: PluginChatBoxSuggest
+   *  typing, never during IME composition; Enter on a highlighted row picks it and does not submit.
+   *  2026-11-02+: an array gives several triggers (e.g. `#` tags and `[[` links); the one nearest the caret wins.
+   *  Hosts up to 2.13.x take a single object only — pass the array where `insertText` exists and still check the version. */
+  suggest?: PluginChatBoxSuggest | PluginChatBoxSuggest[]
   onChange?(draft: ChatBoxSubmission): void
   /** true clears the submitted text; false/rejection keeps it for retry. No automatic AI run. */
   onSubmit(draft: ChatBoxSubmission): boolean | Promise<boolean>

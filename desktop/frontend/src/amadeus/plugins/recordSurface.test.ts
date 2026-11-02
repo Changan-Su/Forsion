@@ -150,6 +150,14 @@ describe('ctx.ui.mountRecord 的正文与隐藏列(10-24)', () => {
     expect(el.querySelector('.plugin-record-body')!.hasAttribute('data-empty')).toBe(true)
   })
 
+  it('别处改了正文(插件 setBody 勾子任务):打开着的编辑器跟上新内容(immediate 模式自己对账)', async () => {
+    await act(async () => { handle = mountPluginRecord(el, { path: 'T.db', rowId: 'r1', body: true }) })
+    await vi.waitFor(() => expect(el.querySelector('.plugin-record-body .ProseMirror')).toBeTruthy(), { timeout: 8000 })
+    const { setAggBody, getAggDb } = await import('../store/dbAggregateStore')
+    await act(async () => { setAggBody(getAggDb('T.db')!, 'r1', '外面写的一句') })
+    await vi.waitFor(() => expect(el.querySelector('.plugin-record-body .ProseMirror')?.textContent).toContain('外面写的一句'), { timeout: 8000 })
+  })
+
   it('readOnly / 不给 body:没有正文编辑器', async () => {
     await act(async () => { handle = mountPluginRecord(el, { path: 'T.db', rowId: 'r1', body: true, readOnly: true }) })
     expect(el.querySelector('.plugin-record-body')).toBeNull()
