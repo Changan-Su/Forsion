@@ -12,6 +12,7 @@ description: 插件在桌面本地创建隐藏任务会话、Git 工作区与定
 | `ctx.tangu.openSession(id)` | 加载隐藏任务会话的真实模型/配置，再打开原生聊天；不自动开跑。 |
 | `ctx.registerScopedRoutes(register)` | 路由挂到 `/extensions/<包的安装目录名>/<engineId>`(目录名以磁盘上的为准,不听包自己声明的 id)，校验本地来源、登录用户，停用时撤销。所有者用 `req.user.userId`，不要信请求体里传来的 owner。 |
 | `ctx.paths.dataDir` | 宿主分配的稳定插件数据目录，与安装的代码分开。 |
+| `sdk.runs.context(sessionId,userId)` | 读取该用户已有会话保存的 `sessionId/cwd/modelId/thinkingLevel/approvalMode`，缺项为 `null`。只读元数据，不读取聊天正文；会话不存在、属于其他用户或参数为空时抛错。停用、非本地引擎和远程发起的运行均拒绝。 |
 | `sdk.runs.start(options)` | 创建插件拥有的隐藏 `kind=task` 会话。先保存意图，再使用固定 `requestId` 提交；结果未知时用同一 ID 重试。原生审批和提问照常生效。 |
 | `runs.status/sessionRuns/events/subscribe/stop` | 都校验插件和用户所有权；`sessionRuns` 包含原生续聊，订阅在停用时清理；事件有条数上限。 |
 | `runs.usage(sessionId,userId)` | token 合计与未报告运行数；外部缺少遥测时不能当作零。 |
@@ -19,6 +20,20 @@ description: 插件在桌面本地创建隐藏任务会话、Git 工作区与定
 | `sdk.engines.list()` | 列出本机外部引擎与可用性，不证明 CLI 已登录。 |
 
 `runs.start` 支持 `readOnly`、`toolNames` 和外部 `resumeSessionId`。工具列表只能包含所属插件的工具和显式 `ask_user`。原生只读任务使用精确的读取工具白名单，原生续聊不能自行解除。外部只读模式只接受明确适配的 Claude Code/Codex ACP 身份和能力；未知适配器拒绝。Claude 禁用内置工具与用户工具配置，受限 MCP 仍经宿主逐项审批（包括批准时修改过的参数）；Codex 使用原生 read-only 沙箱。恢复外部会话必须匹配引擎和工作目录，并要求适配器支持 session/load。
+
+## 沿用当前会话的项目与模型
+
+渲染端从 `ctx.tangu?.agentStatus?.()?.sessionId` 取得活动会话 ID，经 `ctx.tangu.request` 交给本包引擎路由。路由必须把宿主认证的 `req.user.userId` 传给 `ctx.sdk.runs.context`，不能接受请求体里的用户 ID：
+
+```js
+// Inside a handler registered with ctx.registerScopedRoutes:
+const context = await ctx.sdk.runs.context(req.body.sessionId, req.user.userId)
+res.json(context)
+```
+
+旧宿主先检测 `typeof ctx.sdk.runs?.context === 'function'`。新对话草稿没有会话 ID，或返回的 `cwd` 为 `null`，应让用户选择项目，不可猜测 home 或默认工作目录。结果是保存的会话快照，不含未保存的输入栏草稿；没有值时不自动补模型、思考档或审批档，未知非空审批档按宿主规则收紧到 `readonly`。读取普通会话元数据不授予插件执行或读取该会话正文的权限；新任务仍经 `runs.start` 创建独立会话，不可把来源 ID 当成插件任务的 `sessionId`。`approvalMode` 仅供展示，不会给新任务授权；执行沿用 `runs.start` 自身的项目审批设置与原生审批。
+
+如果要让外部来源提供推理并保留原生循环，请注册[插件模型来源](plugin-model-providers.md)，再在 `runs.start` 选择它的完整模型 ID。
 
 ## 工作区与自动化
 

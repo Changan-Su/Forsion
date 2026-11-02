@@ -38,6 +38,7 @@ import { setActiveSpace, useSpaceStore, useRibbonStore, label, OverlayAt, useNat
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfMoveOut, shelfRemoveFolder, shelfRenameFolder, shelfReorderFolder, shelfTiles, type ShelfTile } from './homeShelf'
 import type { SpaceDefinition, RibbonItem, ViewProps } from '@lcl/engine'
+import { RIBBON_ACTION_PREFIX } from '../amadeus/plugins/ribbonAction'
 import { askString } from '@amadeus/components/askString'
 import { readTanguNewChat, type TanguNewChatDispatch } from '../amadeus/plugins/tanguSeam'
 import { registerMessages, useI18n, type Locale } from '../i18n'
@@ -604,9 +605,10 @@ export function HomepageView(_props: ViewProps) {
   const pinnedSpaces = pinnedSpaceIds
     .map((id) => spaces.find((space) => space.id === id))
     .filter((space): space is SpaceDefinition => !!space)
-  const fixedHomeActions = FIXED_HOME_ACTIONS
-    .map((id) => ribbonItems.find((item) => item.id === id))
-    .filter((item): item is RibbonItem => !!item)
+  const fixedHomeActions = [
+    ...FIXED_HOME_ACTIONS.map((id) => ribbonItems.find((item) => item.id === id)).filter((item): item is RibbonItem => !!item),
+    ...ribbonItems.filter((item) => item.id.startsWith(RIBBON_ACTION_PREFIX)),
+  ]
   const spaceCount = Math.max(0, spaces.length - (spaces.some((space) => space.id === SELF_SPACE) ? 1 : 0))
 
   const reorderFolderMember = (event: DragEndEvent): void => {

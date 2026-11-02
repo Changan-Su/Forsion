@@ -10,7 +10,7 @@ The Chat Box's card surface, input, action bar and submit button are maintained 
 
 ## Using it in plugins
 
-`ctx.ui?.mountChatBox` mounts into your plugin's own View and needs no React. It currently supports text input, model selection, thinking level and keyboard submission. Attachments, commands, approvals and run controls belong to the session orchestrator; behaviour that isn't wired up is not shown.
+`ctx.ui?.mountChatBox` mounts into your plugin's own View and needs no React. It currently supports text input, model selection, thinking level and keyboard submission, plus three slots: a toolbar, suggestions and text insertion. Attachments, commands, approvals and run controls belong to the session orchestrator; behaviour that isn't wired up is not shown.
 
 For the whole "new chat" composer (the Home one: attachments, mode, project bar, run location, voice, calls), use `ctx.tangu?.mountComposer`. The host component is `NewChatComposer` in `desktop/frontend/src/views/newChatComposer.tsx`; the built-in Home and plugin mounts use the same one, and sending always has the host create the session and switch to Tangu.
 
@@ -45,6 +45,40 @@ Canonical types: `desktop/shared/chatBox.ts`.
 | `onChange(draft)` | Returns `{ text, modelId, thinkingLevel }` when the text or model selection changes. Notifies only this component's host. |
 | `onSubmit(draft)` | Return true to clear the submitted text; false or an exception keeps the draft. Repeat submissions are blocked while pending; an exception shows a retryable error. |
 | `update(patch)`, `focus()`, `dispose()` | Update, focus, idempotent unmount. Async callbacks after unmount no longer touch the UI; the host cleans up on plugin disable, reload or setup failure. |
+| `modelPicker` | Defaults to true. With `false` the model and thinking pill is not drawn and no default model is resolved. Callbacks then carry the `modelId` you passed (`''` if none) and the `thinkingLevel` you passed (`'medium'` if none). |
+| `toolbar(el)` | A slot at the left of the bottom row, before the model pill. Put your own DOM in `el` and optionally return a cleanup function. The cleanup runs on dispose, and before remounting when update passes a different function. The host logs exceptions from either and the input keeps working. |
+| `suggest` | `{ trigger, items(query) }`: a host menu beside the caret that looks and behaves like the `#` completion in notes. |
+| `insertText(text)` | Handle method. Inserts at the caret, replaces any selection, and focuses the input. Use it for a "#" button or voice transcription. It doesn't open the menu; the menu opens when the user keeps typing. |
+
+The toolbar's `el` sits inside the host mount layer and doesn't get the plugin view base styles, so give buttons in it a class such as `.btn.sm`.
+
+### Suggestions
+
+`trigger` is a non-empty string. The menu opens when the text directly before the caret is `trigger` plus a query. The trigger must be at the start of a line or after whitespace, and the query must be non-empty and made of letters, digits, `_`, `/` or `-`. `items` returns an array or a Promise of `{ label, hint?, value }`; up to 8 are shown. An empty array shows no menu, a rejection only closes it, and newer typing discards results that haven't arrived yet.
+
+```js
+const box = ctx.ui?.mountChatBox?.(el, {
+  modelPicker: false,
+  submitOn: 'enter',
+  toolbar(slot) {
+    const hash = slot.appendChild(document.createElement('button'))
+    hash.className = 'btn sm'
+    hash.textContent = '#'
+    const onClick = () => box.insertText('#')
+    hash.addEventListener('click', onClick)
+    return () => hash.removeEventListener('click', onClick)
+  },
+  suggest: {
+    trigger: '#',
+    items: (query) => myTags(query).map((tag) => ({ label: `#${tag.name}`, hint: String(tag.count), value: `#${tag.name}` })),
+  },
+  onSubmit: ({ text }) => saveMemo(text),
+})
+```
+
+↑↓ moves, Enter or Tab picks, Esc closes. Picking replaces the trigger and query with `value` plus one space, and that Enter doesn't submit. While the menu is open, ⌘/Ctrl+Enter picks too. The menu opens only while typing: moving the caret to the end of an existing `#tag` doesn't open it, and neither does IME composition, which is checked once it ends. After Esc, the menu stays closed for the rest of that word.
+
+These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. If it's missing, hide your `#` button or accept that the model pill is shown.
 
 The model catalog is shared with chat: the main model list shows only LLMs, follows the user's sorting and hiding settings, and adds no brand restrictions. The selection stays in this component and changes neither the global default nor the current conversation. The submit callback receives the choices made for that submission; your plugin must pass them into its own flow rather than showing a choice and discarding it. Mounting and editing never send a model request or create a session. Feature-detect on older hosts; don't copy internal CSS to fake support.
 
@@ -116,6 +150,26 @@ ctx.tangu?.mountChat?.(el, { agent, folder, title })
 
 `ctx.ui.mount*`, `ctx.tangu.mountChat`, `ctx.table.mount`, `ctx.dashboard.mount`, `ctx.app.mountBlocks` and a file view's `mountNoteView` all render inside a layer the host adds to `el` (`display:contents`: it generates no box, so the element's height and flex still apply to the content). `dispose()` removes that layer synchronously and the element is the plugin's again at once: clear it, put your own content in, or mount on it again without waiting. Mounting again creates a fresh instance; use the handle's `update()` to change data or options in place. One element holds one host mount at a time: mounting on an element whose previous mount was not disposed retires that mount first, fully, as if it had been disposed; its handle goes inert, and the later call wins. `mountFloatingToc` is the exception: it overlays `shell` without taking it over, so it neither retires nor is retired by other mounts. Do not reach host nodes through `el > .x` or `el.firstElementChild`. Hosts up to 2.12.2 do not give this guarantee: to support them, mount into a child element you create and replace that child when the content changes.
 
+### Leaving room for the floating TOC (2026-10-30)
+
+The ticks of `ctx.ui.mountFloatingToc` live in a gutter on the left of the scroll area, as wide as the CSS variable `--lcl-ftoc-gutter` (36px). When the space left of your text is narrower than that, move your content aside yourself, or the ticks sit on top of the text.
+
+The host sets a `data-lcl-ftoc` attribute on the `scrollContainer` you pass (its value is `side`). The attribute goes away when the scroll area is too narrow to show the TOC, so you only make room when it is needed. It does not depend on whether there are headings, so text does not jump sideways when a second heading appears.
+
+```css
+.my-article[data-lcl-ftoc] { padding-left: max(24px, var(--lcl-ftoc-gutter)); }
+```
+
+If your content is centered with space on both sides already, add only the difference, so wide windows get no extra indent (replace `720px` with your content width):
+
+```css
+.my-article[data-lcl-ftoc] > .column {
+  padding-left: max(24px, calc(var(--lcl-ftoc-gutter) - max(0px, (100% - 720px) / 2)));
+}
+```
+
+The `.lcl-ftoc-item` rows exist only while the list is open (after a 120 ms hover, or keyboard focus). These class names are not public API; don't rely on them. Older hosts have neither the variable nor the attribute, so the rules above simply don't apply and nothing breaks.
+
 ### Following the host's appearance switches (2026-10-05)
 
 Settings → Appearance has three switches the user turns on or off one by one ("Relaxed text" and "Gentle transitions" are on by default, "Dim surroundings" is off by default; which are on is up to the user): "Dim surroundings" (ribbon icons, inactive tabs and left-sidebar text recede while the user works, and return on pointer or keyboard focus), "Relaxed text" (looser line and paragraph spacing in note and chat bodies), and "Gentle transitions" (a slower view fade-in and a slower return of the surroundings). A plugin calls no API for these; it follows them by writing its styles this way:
@@ -175,6 +229,7 @@ if (!bar) drawOwnMenu(el)                           // hosts up to 2.13.3: keep 
 ```
 
 - By default the host watches the DOM selection inside `root`: the bar shows on mouse-up and goes away when the selection collapses, the content scrolls or resizes, or the user clicks elsewhere. Selections inside inputs and editable regions never show it.
+- Ordinary DOM reading selections share continuous line bands with chat, notes and translation previews. Math is measured as a unit; native dragging, keyboard extension and copying remain intact. Paint lives outside the content DOM, updates on scroll/zoom and is removed by `dispose()`. Touch pointers and custom PDF/code-editor layers keep native selection paint; `watch: false` keeps the plugin's own paint.
 - For content the host cannot see into (an iframe, a canvas, a PDF text layer you position yourself) pass `watch: false` and call `bar.show({ text, rect })` and `bar.hide()` yourself. `rect` is the selection's bounding box in viewport pixels (`range.getBoundingClientRect()` as is; the host cancels the interface zoom, so do not divide).
 - `tools` are declarative: an icon button (`icon` is a name from the plugin icon vocabulary, which gained `highlight`, `underline`, `strikethrough`, `annotate`, `copy` and `cite` for this) or a colour swatch (`color`). The host only draws the button and `run` decides what it does; once a tool has consumed the selection, clear it or call `bar.hide()` in `run`. There are no dropdowns: if you need more UI, open your own from `run`.
 - `ask` replaces what Ask Tangu does when clicked (to add a page number, for example) and `false` removes that button. Without it the host hands the text and `source` to its side chat; hosts without a side chat don't draw that button.
@@ -398,3 +453,41 @@ color-mix(in srgb, var(--green) 14%, transparent)
 ```
 
 - Check: `node check-plugin.mjs <plugin folder> --style` scans `main.js` and the folder's `.css` files and reports private classes, tokens that are not listed or are deprecated, needless fallbacks, hard-coded colors, radii of 4px or more, and shadows with a color. It only reports and does not change the exit code. CSS meant for another document (a page inside an iframe, an exported file) is skipped by putting `/* forsion-style: off */` on the same line.
+
+DOM popovers opened with `ctx.ui.popover` use the same `ui-menu-exit` animation and tokens as `OverlayAt`. Cleanup runs immediately; only an inert visual copy remains until exit completes. Reduced motion follows host policy.
+
+### Don't hand-draw what the host has a part for (2026-10-29)
+
+A plugin view that draws its own dropdowns, menus, dialogs or tab bars looks foreign in Forsion and doesn't follow the user's theme, language, UI zoom or later host fixes. Reach for the parts above first, and draw only what no part covers (your content itself: rows, cards, charts).
+
+| You need | Use | Not |
+| --- | --- | --- |
+| Several panes or tabs in a Space | native Panels in `space.json`; several views in one panel are native tabs | a tab bar inside one view |
+| A title row with buttons | `ctx.ui.setViewHead` | your own header bar |
+| A dropdown / 2–5 modes | `ctx.ui.mountControl({ type: 'select' })` / `{ type: 'segmented' }` | `<select>`, a listbox you position |
+| A ⋯ or right-click menu | `ctx.ui.contextMenu({ anchor })` | a menu div with your own class |
+| Confirm / ask for text / a small form | `ctx.ui.confirm`; for input, `ctx.ui.openDialog` with the field in `mount` | `window.prompt` (does nothing in the desktop app), `window.confirm`, `<dialog>`, a hand-made backdrop |
+| A panel anchored to a button | `ctx.ui.popover` | `position: fixed` and your own math |
+| Nothing yet | `ctx.ui.mountEmptyState`, a list source's `empty` | a centered line of text |
+| Buttons | the public `.btn` classes (`.primary` / `.ghost` / `.danger` / `.sm`) | hand-styled `<button>` |
+| Styles | `ctx.addStyle(css)` with public tokens | a `<style>` pushed into `document.head` |
+
+- Check: `node check-plugin.mjs <plugin folder> --style` lists, under "UI parts", what the plugin still draws itself where the host has a part: one line per kind, with locations and the part to switch to. When Tangu verifies a plugin in the plugin sandbox (`plugin_sandbox`), every status it gets back carries the same list. It only reports: the exit code doesn't change, and nothing blocks installing or publishing. Plugins whose UI is a web page in an iframe stay allowed; put `/* forsion-style: off */` on that page's CSS lines.
+- The rules live in the `forsion-plugin` skill's `tools/ui-reinvent.mjs` and go by how the code is written: `<select>` / `role="listbox"`, own `menu` / `dropdown` / `popup` class names or `role="menu"`, `<dialog>` / `showModal` / `window.confirm`, `tab` class names or `data-tab` / `role="tab"`, `position: fixed`, `<iframe>` / `<webview>`, `document.head.append…`, and hand-made buttons when the plugin never uses `.btn`. Library code minified onto one line (lines over 2000 characters) is skipped whole.
+- The bundle template's counter view (`samples/forsion-sample-bundle`) follows this table (view head, toolbar select, ⋯ menu, confirm dialog, empty state, `.btn`); copy from it.
+
+### Bare controls look native; a failed mount shows a card (2026-10-29)
+
+Inside a plugin view's mount element, a `<button>`, `<table>` or `<h1>`–`<h4>` without a `class` takes the host's look with no CSS of yours: a button looks like a plain `.btn` (outline, ink on hover, dimmed when disabled); a table looks like a Markdown table in notes and chat (muted medium-weight header with no fill, half-strength rules); `<h1>` / `<h2>` / `<h3>` and `<h4>` use the UI title / heading / body sizes, semibold. `<input>`, `<select>` and `<textarea>` already follow the host's form baseline.
+
+```js
+el.innerHTML = '<h2>This week</h2><button>New</button> <input placeholder="Search">' +
+  '<table><thead><tr><th>Task</th><th>Status</th></tr></thead><tbody><tr><td>Export</td><td>In progress</td></tr></tbody></table>'
+```
+
+- Your styles win: an element with a `class` is left alone, and for one without, any rule you write beats this layer, even a zero-weight `:where(…)`: the whole layer has zero specificity and `ctx.addStyle` styles come after the host's.
+- Main and destructive buttons stay `.btn.primary` / `.btn.danger`; small toolbar buttons `.btn.sm`. Buttons in the view head (`setViewHead` / `setViewModes`) are outside the mount element and don't get this layer.
+- Host-drawn parts inside your view (`ctx.ui.mount*`, `ctx.table.mount` and so on) and a `.ctx-menu` you build yourself are not affected; pages inside an iframe or webview don't get it.
+- It lives in the `plugin-view-base` block at the end of `desktop/frontend/src/styles/base.css` and uses public tokens only (`pluginContract.test.ts` checks each one). Instrument: `desktop/scripts/plugin-base-shots.cjs` (real Electron: installs `scripts/fixtures/plugin-base-sample`, shoots light and dark, measures computed styles).
+
+**Failed mount card**: when `mount` throws, or the Promise it returns rejects, the view shows a card: "Plugin view failed to load", the first line of the error (the full stack is in the console) and "Retry". Retry runs only this view's `mount` again; the plugin isn't reloaded and its other views and panels keep running. So make `mount` safe to run twice: the host can't clean up listeners or timers you set before the throw, so clean them up yourself or set them after the step that can fail. Code changes still go through a plugin reload or the sandbox's hot reload.

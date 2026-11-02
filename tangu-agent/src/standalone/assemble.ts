@@ -15,6 +15,7 @@ import { createEmbeddedHost } from '../adapters/standalone/embeddedHost.js';
 import { createHttpBrain } from '../adapters/standalone/httpBrain.js';
 import { createMultiBrain } from '../adapters/standalone/multiBrain.js';
 import { withOutboundMasking } from '../llm/outboundMask.js';
+import { withPluginModelProviders } from '../llm/pluginModels.js';
 import { createLocalAssets } from '../adapters/standalone/localAssetsBrain.js';
 import { createLocalMemoryBrain } from '../adapters/standalone/localMemoryBrain.js';
 import { setSyncSources } from '../services/memorySyncService.js';
@@ -125,7 +126,7 @@ export async function setupHost(
 export function buildBrain(cfg: StandaloneConfig): { brain: CloudBrainServices; providers: DirectProvider[] } {
   const httpBrain = createHttpBrain({ cloudUrl: cfg.cloudUrl, token: cfg.token });
   const providers = loadProviders(cfg);
-  const base = providers.length ? createMultiBrain(httpBrain, createProviderRegistry(providers)) : httpBrain;
+  const base = withPluginModelProviders(providers.length ? createMultiBrain(httpBrain, createProviderRegistry(providers)) : httpBrain);
   const localMemory = createLocalMemoryBrain();
   // 发给模型前脱敏:包在出站唯一的口子上,直连 / 订阅 / Forsion 云端一视同仁(llm/outboundMask.ts)
   const brain = { ...base, llm: withOutboundMasking(base.llm), assets: createLocalAssets(base.assets), memory: localMemory };

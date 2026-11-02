@@ -9,6 +9,7 @@ import { listAgents, listSkillCatalog, saveAgentDef, setSkillCatalogEntryDisable
 import { homeTarget } from '../services/engine/targets'
 import { useApp } from '../stores/appStore'
 import type { NormalAgentDef } from '../../../../tangu-agent/src/contracts/clientTypes'
+import { agentName } from '../agentName'
 import './marketSkillAgents.css'
 
 registerMessages({
@@ -57,7 +58,7 @@ export function nextSkillAgentChoice(choice: SkillAgentChoice, slug: string | nu
 
 export function skillAgentLabel(choice: SkillAgentChoice, agents: NormalAgentDef[]): string {
   if (choice === null) return translate('market.skillAgents.all')
-  const names = agents.filter((a) => choice.includes(a.slug)).map((a) => a.name)
+  const names = agents.filter((a) => choice.includes(a.slug)).map((a) => agentName(a))
   return names.length <= 2 ? names.join(translate('common.listSep')) : translate('market.skillAgents.count', { count: names.length })
 }
 
@@ -70,7 +71,7 @@ export function SkillAgentPicker({ agents, choice, onChange, disabled = false, h
     { id: '*', label: t('market.skillAgents.all'), icon: <Users size={14} />, selected: choice === null, onSelect: () => onChange(null) },
     ...agents.map((a) => {
       const mode = skillMode(a)
-      return { id: a.slug, label: a.name, icon: <span className="mk-agent-initial" aria-hidden="true">{a.name.slice(0, 1)}</span>, hint: t(`market.skillAgents.${mode}`), disabled: mode === 'off',
+      return { id: a.slug, label: agentName(a), icon: <span className="mk-agent-initial" aria-hidden="true">{agentName(a).slice(0, 1)}</span>, hint: t(`market.skillAgents.${mode}`), disabled: mode === 'off',
         selected: mode !== 'off' && (choice === null || choice.includes(a.slug)), onSelect: () => onChange(nextSkillAgentChoice(choice, a.slug, eligible)) }
     }),
   ]

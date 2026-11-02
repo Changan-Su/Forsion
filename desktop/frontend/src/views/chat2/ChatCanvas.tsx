@@ -960,8 +960,7 @@ export function ChatCanvas({ rootId, activeId, dir, onDir, onChat, exiting, onEx
   const commitRename = (key: string, title: string): void => {
     setRenaming(null)
     const c = tree.cards.get(key)
-    const s = c && useApp.getState().sessions.find((x) => x.id === c.sid)
-    if (c && title.trim() && title.trim() !== s?.title) void useApp.getState().renameSession(c.sid, title.trim())
+    if (c) void useApp.getState().renameSession(c.sid, title.trim())
   }
 
   // 阅读栏宽度:左边缘拖,记在本机

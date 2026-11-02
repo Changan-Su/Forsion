@@ -1,10 +1,12 @@
 /** Operators stage trusted packages locally; remote management accepts only release IDs. */
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
-import { mkdir, readdir, readFile, writeFile, rename, rm, readlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdir, readdir, readFile, writeFile, rename, rm, readlink, lstat } from 'node:fs/promises'
+import { join, posix } from 'node:path'
 import { copyPackage } from './install'
-import { readPackage } from './packages'
+import { readPackage, type PluginManifest } from './packages'
+import bundles from '../desktop/electron/builtinBundles.json'
+import { verifyBundleSignature, SIGNATURE_FILE } from '../desktop/electron/bundleSignature'
 
 export const validReleaseId = (id: unknown): id is string => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id)
 export interface StagedRelease { releaseId: string; pluginId: string; version: string; sha256: string; createdAt: string }
@@ -63,5 +65,46 @@ export async function resolveRelease(dataDir: string, id: string, pluginId: stri
   if (item.releaseId !== id || item.pluginId !== pluginId || pack.manifest.id !== pluginId || item.version !== pack.manifest.version
     || pack.manifest.backend?.dependencies?.mode === 'npm-ci' || pack.manifest.runtime?.dependencies?.mode === 'npm-ci'
     || (verifyContents && item.sha256 !== await packageDigest(path))) throw new Error('Staged release identity or content changed')
-  return { item, path }
+  return { item, path, manifest: pack.manifest }
+}
+export type ReleaseSignature = 'trusted' | 'untrusted' | 'missing'
+export const UNTRUSTED_RELEASE = 'Release is not signed by a trusted key'
+// Desktop bundles are single esbuild files and keep the 5000-file cap. Server plugins staged for
+// remote installation ship their bundled node_modules, which routinely exceed that; the bound still
+// caps the SIGNATURE table (and the memory spent parsing it) for a package an administrator uploads.
+const MAX_SIGNED_RELEASE_FILES = 200_000
+/**
+ * Remote management installs code only from packages signed by the key pinned for that id in
+ * builtinBundles.json or by one of the private unit.json management.trustedKeys. The signature must
+ * cover manifest.json and every declared entry; the local CLI does not use this gate.
+ * Unlike desktop bundles (one esbuild file), a bundled Server plugin resolves modules from its own
+ * node_modules, where an unsigned extra file or link could shadow a signed one. So the package must be
+ * complete: every regular file besides SIGNATURE is signed, and links or special files are refused.
+ */
+export async function releaseSignature(root: string, trustedKeys: readonly string[]): Promise<ReleaseSignature> {
+  try { await lstat(join(root, SIGNATURE_FILE)) }
+  catch (error) { return (error as NodeJS.ErrnoException)?.code === 'ENOENT' ? 'missing' : 'untrusted' }
+  let manifest: PluginManifest
+  try { manifest = JSON.parse(await readFile(join(root, 'manifest.json'), 'utf8')) } catch { return 'untrusted' }
+  if (!manifest || typeof manifest !== 'object') return 'untrusted'
+  const entries = [manifest.main, manifest.backend?.main, manifest.runtime?.main].filter((entry): entry is string => typeof entry === 'string' && !!entry)
+  const required = ['manifest.json', ...entries.map((entry) => posix.normalize(entry.replace(/\\/g, '/')))]
+  const pinned = bundles.find((bundle) => bundle.id === manifest.id)?.desktop?.signingKey
+  for (const key of [...(pinned ? [pinned] : []), ...trustedKeys]) {
+    const verdict = await verifyBundleSignature(root, key, required, MAX_SIGNED_RELEASE_FILES)
+    // One SIGNATURE file: once a key verifies it, the file table is the same for every other key.
+    if (verdict.ok) return await signsEveryFile(root, new Set(verdict.files)) ? 'trusted' : 'untrusted'
+  }
+  return 'untrusted'
+}
+async function signsEveryFile(root: string, signed: ReadonlySet<string>): Promise<boolean> {
+  const visit = async (dir: string, prefix: string): Promise<boolean> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const relative = prefix + entry.name
+      if (entry.isDirectory()) { if (!await visit(join(dir, entry.name), relative + '/')) return false }
+      else if (!entry.isFile() || (relative !== SIGNATURE_FILE && !signed.has(relative))) return false
+    }
+    return true
+  }
+  try { return await visit(root, '') } catch { return false }
 }

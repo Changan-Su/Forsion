@@ -18,7 +18,7 @@ import { uninstallForsionPlugin } from './pluginUninstall'
 import { amadeus } from '@amadeus/api'
 import { installAmadeusPlugins, reloadPluginsAndAnnounce } from '../amadeusPlugins'
 import { usePluginOnboarding, needsOnboarding, promptIfPending, isGate } from '../stores/pluginOnboardingStore'
-import { pluginDataSyncUserOff, setPluginDataSyncUserOff } from '../amadeus/plugins/pluginDataSync'
+import { pluginDataSyncOn, pluginDataSyncUserOff, setPluginDataSyncUserOff } from '../amadeus/plugins/pluginDataSync'
 import { registerMessages, useI18n } from '../i18n'
 import { PRODUCT } from '../product'
 import { pluginDisplayName, pluginDisplayDescription, resolvePluginDetail, localizedOnboarding, isPlacedSettingsView } from '../amadeus/plugins/display'
@@ -37,6 +37,7 @@ import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
 import type { AmadeusPlugin, SettingContribution, SettingsViewContribution } from '@amadeus/plugins/types'
 import type { PluginCapability, PluginDependency } from '@amadeus-shared/ipc'
+import type { UnmetDependency } from '../amadeus/plugins/pluginDeps'
 import { PluginLogo } from './PluginLogo'
 import { canOpenPluginsFolder } from '../amadeus/lib/hostCaps'
 import { FileOpenersPanel } from './FileOpenersPanel'
@@ -240,46 +241,62 @@ const HiddenSpaces: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
   )
 }
 
-/** 前置插件:逐条说清楚状态,给能做的那一步(去市场找 / 打开它)。 */
-const RequiredPlugins: React.FC<{ p: AmadeusPlugin }> = ({ p }) => {
+/** 商店详情页复用前置行时给的东西(MarketModal):整条未满足的链、每行商店里的情况、一键按钮。 */
+export interface RequiredPluginsStore {
+  unmet: UnmetDependency[]
+  row(dep: PluginDependency): { note?: string; find?: boolean }
+  find(query: string): void
+  foot: React.ReactNode
+}
+
+/** 前置插件:逐条说清楚状态,给能做的那一步(去市场找 / 打开它)。设置页与商店详情页共用这些行,商店那边多一句商店里的情况和一键按钮。 */
+export const RequiredPlugins: React.FC<{ p: AmadeusPlugin; store?: RequiredPluginsStore }> = ({ p, store }) => {
   const { t, locale } = useI18n()
   const plugins = usePluginStore((s) => s.plugins)
   const activeIds = usePluginStore((s) => s.activeIds)
   const disabledIds = usePluginStore((s) => s.disabledIds)
-  const deps = p.requiresPlugins ?? []
+  const direct = p.requiresPlugins ?? []
+  // 商店那边要补全整条链:前置自己缺的也列出来,否则按钮的数字和行对不上
+  const deps = store ? [...direct, ...store.unmet.map((u) => u.dep).filter((d) => !direct.some((x) => x.id === d.id))] : direct
   if (!deps.length) return null
-  const unmet = unmetPluginDeps(p, { plugins, activeIds, disabledIds })
+  const unmet = store?.unmet ?? unmetPluginDeps(p, { plugins, activeIds, disabledIds })
   const market = !!window.tangu?.marketList && !window.tangu?.unitPage
+  const hint = <div style={{ color: 'var(--text-faint)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.requiresHint')}</div>
+  const rows = deps.map((d) => {
+    const u = unmet.find((x) => x.dep.id === d.id)
+    const installed = plugins.find((x) => x.id === d.id)
+    // 前置自己也缺前置时「启用」点了没反应 —— 那就不给按钮,状态行已经说了它关着
+    const canEnable = u?.reason === 'off' && !!installed && !unmetPluginDeps(installed, { plugins, activeIds, disabledIds }).length
+    const row = store?.row(d)
+    const canFind = store ? !!row?.find : market && (u?.reason === 'missing' || u?.reason === 'version')
+    return (
+      <div key={d.id} data-dep-id={d.id} data-dep-state={u?.reason ?? 'ok'} style={store ? { display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 5 } : { display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={store ? undefined : { flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
+            {depName(d, plugins, locale)}
+            {d.minVersion && <span style={{ color: 'var(--text-faint)' }}> ≥ {d.minVersion}</span>}
+          </div>
+          <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: u ? 'var(--warn, #b8860b)' : 'var(--text-faint)' }}>
+            {!u ? t('settings.amadeusPlugins.dep.ok')
+              : u.reason === 'version' ? t('settings.amadeusPlugins.dep.version', { min: d.minVersion ?? '', have: u.have ?? '' })
+              : t(`settings.amadeusPlugins.dep.${u.reason}`)}
+            {row?.note && <span data-dep-note> · {row.note}</span>}
+          </div>
+        </div>
+        {canFind && (
+          <button className="btn ghost sm" onClick={() => (store ? store.find(d.name || d.id) : useApp.getState().openMarket(d.market || d.name || d.id))}>{t('settings.amadeusPlugins.dep.findInMarket')}</button>
+        )}
+        {canEnable && <button className="btn ghost sm" onClick={() => usePluginStore.getState().enable(d.id)}>{t('settings.amadeusPlugins.dep.enable')}</button>}
+      </div>
+    )
+  })
+  if (store) return <div className="mk-deps" data-market-deps={p.id}><div className="mk-deps-head">{t('settings.amadeusPlugins.requires')}</div>{rows}{store.foot}{hint}</div>
   return (
     <>
       <div className="hint">{t('settings.amadeusPlugins.requires')}</div>
       <div className="plugin-card" data-plugin-requires style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        {deps.map((d) => {
-          const u = unmet.find((x) => x.dep.id === d.id)
-          const installed = plugins.find((x) => x.id === d.id)
-          // 前置自己也缺前置时「启用」点了没反应 —— 那就不给按钮,状态行已经说了它关着
-          const canEnable = u?.reason === 'off' && !!installed && !unmetPluginDeps(installed, { plugins, activeIds, disabledIds }).length
-          return (
-            <div key={d.id} data-dep-id={d.id} data-dep-state={u?.reason ?? 'ok'} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 'var(--ui-font-meta, 12px)' }}>
-                  {depName(d, plugins, locale)}
-                  {d.minVersion && <span style={{ color: 'var(--text-faint)' }}> ≥ {d.minVersion}</span>}
-                </div>
-                <div style={{ fontSize: 'var(--ui-font-caption, 11px)', color: u ? 'var(--warn, #b8860b)' : 'var(--text-faint)' }}>
-                  {!u ? t('settings.amadeusPlugins.dep.ok')
-                    : u.reason === 'version' ? t('settings.amadeusPlugins.dep.version', { min: d.minVersion ?? '', have: u.have ?? '' })
-                    : t(`settings.amadeusPlugins.dep.${u.reason}`)}
-                </div>
-              </div>
-              {market && (u?.reason === 'missing' || u?.reason === 'version') && (
-                <button className="btn ghost sm" onClick={() => useApp.getState().openMarket(d.market || d.name || d.id)}>{t('settings.amadeusPlugins.dep.findInMarket')}</button>
-              )}
-              {canEnable && <button className="btn ghost sm" onClick={() => usePluginStore.getState().enable(d.id)}>{t('settings.amadeusPlugins.dep.enable')}</button>}
-            </div>
-          )
-        })}
-        <div style={{ color: 'var(--text-faint)', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('settings.amadeusPlugins.requiresHint')}</div>
+        {rows}
+        {hint}
       </div>
     </>
   )
@@ -707,6 +724,7 @@ const PluginDetail: React.FC<{
           name={pluginDisplayName(p, locale)}
           warning={runningDependents(p.id).length ? t('settings.amadeusPlugins.uninstallDependents', { name: pluginDisplayName(p, locale), list: runningDependents(p.id).map((x) => pluginDisplayName(x, locale)).join(t('common.listSep')) }) : undefined}
           vaultFolder={pluginVaultFolder(p.id, p.name)}
+          cloudData={pluginDataSyncOn(p)}
           skills={p.bundle?.skills.length ?? 0}
           agents={p.bundle?.agents ?? []}
           onConfirm={(opts) => void uninstall(opts)}

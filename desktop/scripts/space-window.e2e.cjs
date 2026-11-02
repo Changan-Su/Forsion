@@ -70,13 +70,21 @@ async function main() {
     await setMainSize(1200, 980)
     await win.waitForTimeout(500)
 
-    const topSpaces = () => win.$$eval('.rb-top .rb-slot', (els) => els.map((e) => e.dataset.id).filter((id) => id && id.startsWith('space:')))
+    // 上区条上露着的 + 「+N」浮层里的(浮层开着时)
+    const topSpaces = () => win.$$eval('.rb-top .rb-slot, .rb-more-fly[data-rb-more-fly="top"] .rb-slot', (els) => els.map((e) => e.dataset.id).filter((id) => id && id.startsWith('space:')))
     const recents = () => win.$$eval('.rb-recent .rb-recent-slot', (els) => els.map((e) => e.dataset.recentId))
     // 一个按钮此刻画出来的样子(底色 / 字色 / 透明度)。量之前把鼠标挪出图标条并等过渡走完:悬停会让中间那组的按钮回到全亮。
     const look = async (sel) => { await win.mouse.move(640, 420); await win.waitForTimeout(350); return win.$eval(sel, (e) => { const c = getComputedStyle(e); return `${c.backgroundColor}|${c.color}|${c.opacity}` }) }
     const recentBtn = (id) => `.rb-recent-slot[data-recent-id="${id}"] .rb-space`
     const activeKey = (page) => page.evaluate(() => localStorage.getItem('forsion_tangu_active_space'))
     const clickSpace = async (rid, mods) => {
+      // 藏在「+N」里的:点行浮层就收,下一个得再开一次(等液滴流完 420ms)
+      if (!(await win.locator(`.rb-top .rb-slot[data-id="${rid}"]`).count())) {
+        if (!(await win.locator('.rb-more-fly[data-rb-more-fly="top"]').count())) { await win.locator('.rb-top .rb-more').click(); await win.waitForTimeout(700) }
+        await win.locator(`.rb-more-fly .rb-slot[data-id="${rid}"] .rb-btn`).click(mods ? { modifiers: mods } : undefined)
+        await win.waitForTimeout(900)
+        return
+      }
       await win.locator(`.rb-top .rb-slot[data-id="${rid}"] .rb-btn`).click(mods ? { modifiers: mods } : undefined)
       await win.waitForTimeout(900)
     }
@@ -127,7 +135,7 @@ async function main() {
     // 10-06 用户定:当前 Space 在中间那组里不标 —— 画出来与旁边不是当前的那个一模一样(不亮、也不回到全亮),亮的只有条上那一处。
     const onBar = await look('.rb-top .rb-space.on'), midCur = await look(recentBtn(C)), midOther = await look(recentBtn(B))
     check('R2a 当前 Space 只在条上亮;中间那一处与旁边的最近项画得一样', midCur === midOther && onBar !== midCur && !/rgba\(0, 0, 0, 0\)|transparent/.test(onBar.split('|')[0]), { onBar, midCur, midOther })
-    // 排在「…」里的:展开上区挨个进一遍(点条上的按钮不收起),再收回
+    // 排在「+N」里的:从浮层挨个进一遍(clickSpace 每次重开浮层)
     await win.locator('.rb-top .rb-more').click()
     await win.waitForTimeout(500)
     const hidden = (await topSpaces()).filter((id) => !ids.includes(id) && id !== 'space:probe-win').slice(0, 5)

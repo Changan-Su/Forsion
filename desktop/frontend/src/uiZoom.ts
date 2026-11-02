@@ -73,6 +73,45 @@ export function getUiZoom(): number {
   return stored() ?? endpointDefault
 }
 
+/** 右下角缩放提示(仿 Claude 桌面):本窗用户改缩放时亮出「🔍 110% 重置」,1.5s 后淡出,悬停期间不收。
+ * 挂在 <html> 而不是 body 上,免得自己也被 body zoom 放大;跨窗重放(applyStoredUiZoom)不弹。 */
+let hud: HTMLElement | null = null
+let hudTimer: ReturnType<typeof setTimeout> | undefined
+
+function showZoomHud(): void {
+  try {
+    if (!hud) {
+      hud = document.createElement('div')
+      hud.className = 'ui-zoom-hud'
+      hud.setAttribute('role', 'status')
+      hud.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"'
+        + ' stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>'
+        + '<span class="ui-zoom-hud-pct"></span><button type="button" class="ui-zoom-hud-reset"></button>'
+      hud.querySelector('button')!.addEventListener('click', () => resetUiZoom())
+      hud.addEventListener('mouseenter', () => clearTimeout(hudTimer))
+      hud.addEventListener('mouseleave', () => { hudTimer = setTimeout(hideZoomHud, 800) })
+      document.documentElement.appendChild(hud)
+    }
+    const z = getUiZoom()
+    hud.querySelector('.ui-zoom-hud-pct')!.textContent = `${Math.round(z * 100)}%`
+    const reset = hud.querySelector<HTMLButtonElement>('.ui-zoom-hud-reset')!
+    reset.textContent = useApp.getState().tr('zoomHud.reset')
+    reset.hidden = z === endpointDefault
+    hud.dataset.open = ''
+    hud.inert = false
+    clearTimeout(hudTimer)
+    if (!hud.matches(':hover')) hudTimer = setTimeout(hideZoomHud, 1500)
+  } catch {
+    /* ignore */
+  }
+}
+
+function hideZoomHud(): void {
+  if (!hud) return
+  delete hud.dataset.open
+  hud.inert = true // 透明后别让 Tab 摸到隐形的「重置」
+}
+
 export function setUiZoom(v: number): void {
   const clamped = Math.round(Math.min(MAX, Math.max(MIN, v)) * 100) / 100
   try {
@@ -81,6 +120,7 @@ export function setUiZoom(v: number): void {
     /* ignore */
   }
   apply(clamped)
+  showZoomHud()
   broadcastPrefs() // 缩放是全端偏好:设置浮窗 / ⌘K / ⌘+- / agent 命令改的都要传给其余窗口
 }
 
@@ -95,12 +135,14 @@ export function resetUiZoom(): void {
     /* ignore */
   }
   apply(endpointDefault)
+  showZoomHud()
   broadcastPrefs()
 }
 
 /** 跨窗重放用:按**本窗**当前存值(无值=本端默认)重新应用,不写盘、不广播。 */
 export function applyStoredUiZoom(): void {
   apply(getUiZoom())
+  hideZoomHud() // 别的窗改了比例,本窗还开着的提示数字已过期
 }
 
 /** 首次进入本发布批次时回到端默认；迁移后用户再调的比例继续正常持久化。 */

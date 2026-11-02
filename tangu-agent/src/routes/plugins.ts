@@ -135,7 +135,8 @@ router.delete('/agent/plugins/:id', authMiddleware, async (req: AuthRequest, res
   try {
     // 进回收站(services/pluginUninstall):?trash=1 连用户目录里的插件文件一起挪(新版桌面);缺省只收设置,文件夹由调用方删(旧版桌面)。
     // ?keepSettings=1 =「保留设置,重装后接着用」。dirName 给桌面撤商店的安装记录用(文件夹已经不在原处了)。
-    const r = await trashEnginePlugin(req.params.id, { files: req.query.trash === '1', keepSettings: req.query.keepSettings === '1' });
+    // ?bundle=<目录名>:桌面卸捆绑包时收内嵌引擎插件的设置,核对解析到的确实是这个捆绑包里的那份。
+    const r = await trashEnginePlugin(req.params.id, { files: req.query.trash === '1', keepSettings: req.query.keepSettings === '1', ...(typeof req.query.bundle === 'string' ? { bundle: req.query.bundle } : {}) });
     res.json({ ok: true, restartRequired: false, ...(r.entry ? { trashId: r.entry.id } : {}), ...(r.dirName ? { dirName: r.dirName } : {}) });
   } catch (e: any) { res.status(400).json({ detail: e?.message || 'uninstall failed' }); }
 });

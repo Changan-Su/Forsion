@@ -318,6 +318,47 @@ export async function readComputerHistoryEvents(from: number, to: number, opts: 
   return { events: out.sort((a, b) => a.t - b.t), partial };
 }
 
+/**
+ * 触发源(services/triggerSources.ts)能看到的全部东西:切到了哪个 App、锁屏 / 醒来、「这时有动静」。
+ * 标题、网址、敲的字、点的控件都不出这个函数 —— 规则在本机匹配,交给 Muse 的也只有「打开了 X」。
+ * 排除的 App 只留「切走了」这个事实(不带名字);CU 替人操作的不算人的动作。
+ */
+export interface ChSignal {
+  t: number;
+  kind: 'app' | 'system' | 'activity';
+  app?: { name: string; bundleId?: string };
+  state?: 'locked' | 'unlocked' | 'sleep' | 'wake';
+}
+
+/** 读 [from, to] 的信号。闸关着或读的途中被清除 / 关闭 / 改排除表 → null(和工具、摘要同一套读后复核)。
+ *  ponytail: 每次现读日文件(一天几 MB,几十毫秒,且只在有电脑类规则时读),要省再做按字节续读。 */
+/** 这一刻的信号算哪一版:清除、关闭、改排除表都会变。读到的信号过了版本就不能再用。 */
+export function chSignalsVersion(): string {
+  const s = readComputerHistoryState();
+  return `${computerHistoryOn(s)}:${dataGenOf(s)}`;
+}
+
+export async function readChSignals(from: number, to: number): Promise<ChSignal[] | null> {
+  const before = readComputerHistoryState();
+  // 暂停 / 断开时盘上是一段空白:「还在用 X」「离开了很久」都判不了,不是没发生,这段时间整组不命中。
+  if (!computerHistoryOn(before) || before?.status !== 'recording') return null;
+  const { events } = await readComputerHistoryEvents(from, to);
+  await chTestSeams.afterEventsRead?.();
+  if (changedSince(before)) return null;
+  const out: ChSignal[] = [];
+  for (const e of events) {
+    if (e.origin === 'agent') continue;
+    if (e.kind === 'app') {
+      out.push(e.app && !e.app.excluded ? { t: e.t, kind: 'app', app: { name: e.app.name, ...(e.app.bundleId ? { bundleId: e.app.bundleId } : {}) } } : { t: e.t, kind: 'app' });
+    } else if (e.kind === 'system') {
+      if (e.state && e.state !== 'dropped') out.push({ t: e.t, kind: 'system', state: e.state });
+    } else {
+      out.push({ t: e.t, kind: 'activity' });
+    }
+  }
+  return out;
+}
+
 /** 最近一条事件的时刻(今天/昨天的日文件尾部 8KB 里找),状态行判「数据新不新鲜」用。没有 → null。 */
 export async function latestEventTime(now: number): Promise<number | null> {
   for (let i = 0; i < 2; i++) {

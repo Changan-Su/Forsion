@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, Check } from 'lucide-react'
-import { OverlayAt, ViewModeSwitch, clampMenu, nativeSheetPresenter, presentNativeConfirm, runNativeSheetMenu, zoomOf, UI_ZOOM_EVENT } from '@lcl/engine'
+import { removeOverlayWithExit, OverlayAt, ViewModeSwitch, clampMenu, nativeSheetPresenter, presentNativeConfirm, runNativeSheetMenu, zoomOf, UI_ZOOM_EVENT } from '@lcl/engine'
 import { mountHostReact } from '@lcl/components'
 import { HostLocaleProvider, registerMessages, subscribeLocale, translate, useI18n } from '../../i18n'
 import { EmptyState } from '../../components/EmptyState'
@@ -289,7 +289,6 @@ export function openPluginPopover(anchor: HTMLElement, opts: PluginPopoverOption
   const el = document.createElement('div')
   el.className = 'ui-popover plugin-popover'
   el.setAttribute('role', 'dialog')
-  el.dataset.motion = 'enter'
   if (opts.label) el.setAttribute('aria-label', pluginText(opts.label))
   el.style.visibility = 'hidden'
   overlayLayer(anchor).append(el)
@@ -317,7 +316,7 @@ export function openPluginPopover(anchor: HTMLElement, opts: PluginPopoverOption
     window.removeEventListener('resize', place)
     window.removeEventListener(UI_ZOOM_EVENT, place)
     runCleanup(cleanup)
-    el.remove()
+    removeOverlayWithExit(el)
     onClosed()
   }
   const onDown = (e: PointerEvent): void => {

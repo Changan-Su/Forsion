@@ -357,10 +357,10 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     setWsMenu({ ws, x: e.clientX, y: e.clientY })
   }
   const commitRename = () => {
-    if (renaming && draft.trim()) p.onRename(renaming, draft.trim())
+    if (renaming) p.onRename(renaming, draft.trim())
     setRenaming(null)
   }
-  /** 重命名入口:Android 原生半屏输入(lcl nativeSheet 可选宿主)→ 与行内输入同一条提交规则(trim 后非空才改);
+  /** 重命名入口:Android 原生半屏输入(lcl nativeSheet 可选宿主)→ 与行内输入同一条提交规则(清空 = 把标题交还给 Historian);
    *  宿主缺席 / 呈现失败 → 行内输入(桌面、网页照旧)。 */
   const startRename = (id: string): void => {
     const s = [...allSessions, ...allArchived].find((x) => x.id === id)
@@ -368,8 +368,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
     if (!nativeSheetPresenter()) { inline(); return }
     void presentNativePrompt({ title: t('sidebar.rename'), initial: s?.title || '', confirm: t('common.confirm'), cancel: t('common.cancel') }).then((out) => {
       if (!out.handled) { inline(); return }
-      const next = out.value?.text.trim()
-      if (next) p.onRename(id, next)
+      if (out.value) p.onRename(id, out.value.text.trim())
     })
   }
   const startWsRename = (ws: WorkspaceDescriptor): void => {

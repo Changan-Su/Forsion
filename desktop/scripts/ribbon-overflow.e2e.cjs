@@ -1,4 +1,4 @@
-/** Ribbon overflow: frame sampling + real pointer hits through the Unit menu.
+/** Ribbon overflow (2026-10-30): 「+N」count + side flyout that pours out of the button (lcl/engine/droplet.ts).
  * Run with a local harness: HARNESS_URL=http://localhost:5176/harness.html node scripts/ribbon-overflow.e2e.cjs
  * --electron checks the built app, default registration order and light/dark/narrow screenshots.
  */
@@ -9,44 +9,54 @@ const OUT = path.join(ROOT, 'outputs', 'ribbon-overflow')
 fs.mkdirSync(OUT, { recursive: true })
 const sleep = (page) => page.waitForTimeout(300)
 const ids = (page, zone) => page.locator(`.rb-${zone} .rb-slot`).evaluateAll((els) => els.map((el) => el.dataset.id))
+const fly = (zone) => `.rb-more-fly[data-rb-more-fly="${zone}"]`
+const rows = (page, zone) => page.locator(`${fly(zone)} [data-id]`).evaluateAll((els) => els.map((el) => el.dataset.id))
+const SETTLE = 700 // > --droplet-duration (420ms) with margin
 
-async function sample(page, zone) {
+/** Click 「+N」 in-page and sample the pour: Playwright's own click costs ~100ms, too coarse for a 420ms animation. */
+async function pour(page, zone) {
   return page.evaluate(async (zone) => {
-    const strip = document.querySelector(`.rb-${zone} .rb-strip`)
-    const slots = strip.querySelectorAll('.rb-slot')
-    const anchor = zone === 'top' ? slots[0] : slots[slots.length - 1]
-    const rows = []
-    const read = () => rows.push({ h: strip.getBoundingClientRect().height, y: anchor.getBoundingClientRect().top,
-      filled: strip.querySelectorAll('.rb-cell button').length })
-    read()
-    document.querySelector(`.rb-${zone} .rb-more`).click()
-    const start = performance.now()
-    while (performance.now() - start < 320) { await new Promise(requestAnimationFrame); read() }
-    return rows
+    const btn = document.querySelector(`[data-rb-more="${zone}"]`)
+    const n = Number(btn.textContent.match(/\+(\d+)/)[1])
+    btn.click()
+    const frames = []
+    const t0 = performance.now()
+    while (performance.now() - t0 < 600) {
+      await new Promise(requestAnimationFrame)
+      const p = document.querySelector(`.rb-more-fly[data-rb-more-fly="${zone}"]`), layer = document.querySelector('.lcl-droplet')
+      frames.push({ t: performance.now() - t0, pouring: !!p?.classList.contains('lcl-droplet-pouring'), bg: p && getComputedStyle(p).backgroundColor,
+        layer: !!layer && getComputedStyle(layer).display !== 'none', clip: p && getComputedStyle(p).clipPath })
+    }
+    return { n, frames }
   }, zone)
 }
-function verifyMotion(rows, name) {
-  const first = rows[0], last = rows.at(-1), delta = last.h - first.h
-  assert.ok(Math.abs(delta) > 20, `${name}: changes height`)
-  const middle = rows.filter((r) => r.h > Math.min(first.h, last.h) + 1 && r.h < Math.max(first.h, last.h) - 1)
-  assert.ok(middle.length >= 3, `${name}: gradual height, ${JSON.stringify(rows)}`)
-  assert.ok(Math.max(...rows.map((r) => r.y)) - Math.min(...rows.map((r) => r.y)) < 2, `${name}: anchored icons do not jump, ${JSON.stringify(rows)}`)
-  for (let i = 1; i < rows.length; i++) assert.ok((rows[i].h - rows[i - 1].h) * Math.sign(delta) >= -1, `${name}: monotonic`)
-  if (delta < 0) assert.ok(middle.some((r) => r.filled > 0), `${name}: outgoing icons retained`)
-  console.log(`PASS ${name}: ${middle.length} intermediate frames, anchor stable`)
+function verifyPour({ frames }, name) {
+  const mid = frames.filter((f) => f.t > 60 && f.t < 300)
+  assert.ok(mid.length >= 3 && mid.every((f) => f.pouring && f.layer), `${name}: liquid visible while pouring, ${JSON.stringify(mid.slice(0, 3))}`)
+  // 真面板不能早于液体停稳出现(10-29 打回):pouring 期间面板自己没有底色
+  assert.ok(mid.every((f) => /rgba\(0, 0, 0, 0\)|transparent/.test(f.bg)), `${name}: panel has no fill of its own while pouring, ${mid[0].bg}`)
+  assert.ok(new Set(mid.map((f) => f.clip)).size >= 3, `${name}: clip-path follows the liquid`)
+  const end = frames.at(-1)
+  assert.ok(!end.pouring && !end.layer && end.clip === 'none', `${name}: real panel takes over, ${JSON.stringify(end)}`)
+  console.log(`PASS ${name}: ${mid.length} pouring frames, handed over to the real panel`)
 }
+async function retractSample(page, zone) {
+  return page.evaluate(async (zone) => {
+    document.querySelector(`[data-rb-more="${zone}"]`).click()
+    await new Promise((r) => setTimeout(r, 40))
+    const p = document.querySelector(`.rb-more-fly[data-rb-more-fly="${zone}"]`), layer = document.querySelector('.lcl-droplet')
+    return { panel: !!p, pouring: !!p?.classList.contains('lcl-droplet-pouring'), layer: !!layer && getComputedStyle(layer).display !== 'none' }
+  }, zone)
+}
+const leftovers = (page) => page.evaluate(() => ({ fly: document.querySelectorAll('.rb-more-fly').length, layer: document.querySelectorAll('.lcl-droplet').length, open: document.querySelectorAll('.rb-more.is-open').length }))
 
-async function menuHit(page) {
-  await page.locator('.unitsw-pill').click()
-  await page.locator('.unitsw-menu .unitsw-row').first().waitFor()
-  await sleep(page)
-  const hit = await page.locator('.unitsw-menu .unitsw-row').first().evaluate((el) => {
+// 胶囊点开 = 设置 › 设备(10-17 撤了弹出菜单);这里只证它画出来、中心点能点中(不被裁 / 不被液体层盖)
+async function capsuleHit(page) {
+  const hit = await page.locator('.unitsw-pill').evaluate((el) => {
     const r = el.getBoundingClientRect()
-    return el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))
+    return r.width > 0 && el.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2))
   })
-  assert.ok(hit, 'Unit menu is painted and receives pointer hits outside the ribbon')
-  await page.locator('.unitsw-menu .unitsw-row').first().click()
-  await page.locator('.unitsw-menu').waitFor({ state: 'detached' })
+  assert.ok(hit, 'Unit capsule is painted and receives pointer hits')
 }
 
 async function harness() {
@@ -76,37 +86,108 @@ async function harness() {
     })
     await sleep(page)
     for (const zone of ['top', 'bottom']) {
-      verifyMotion(await sample(page, zone), `${zone} expand`)
-      verifyMotion(await sample(page, zone), `${zone} collapse`)
+      const barBefore = await ids(page, zone), other = zone === 'top' ? 'bottom' : 'top', otherBefore = await ids(page, other)
+      const sample = await pour(page, zone)
+      verifyPour(sample, `${zone} open`)
+      const listed = await rows(page, zone)
+      assert.equal(listed.length, sample.n, `${zone}: +N == rows in the flyout (${listed})`)
+      assert.ok(listed.every((id) => !barBefore.includes(id)), `${zone}: flyout lists only what the bar hides`)
+      assert.deepEqual(await ids(page, zone), barBefore, `${zone}: bar does not move`)
+      assert.deepEqual(await ids(page, other), otherBefore, `${zone}: the other zone stays`)
+      assert.equal(await page.locator(`[data-rb-more="${zone}"]`).getAttribute('aria-expanded'), 'true')
+      const r = await retractSample(page, zone)
+      assert.ok(r.panel && r.pouring && r.layer, `${zone}: clicking +N again retracts (pours back), not vanishes: ${JSON.stringify(r)}`)
+      await page.waitForTimeout(SETTLE)
+      assert.deepEqual(await leftovers(page), { fly: 0, layer: 0, open: 0 }, `${zone}: retract cleans up`)
+      console.log(`PASS ${zone}: +${sample.n} lists the hidden ${sample.n}, bar steady, retracts on second click`)
     }
-    // Wheel gesture interrupted by expansion must not commit its stale offset later.
-    await page.locator('.rb-bottom').dispatchEvent('wheel', { deltaY: -24 })
-    await page.waitForTimeout(45)
+    // Esc / click elsewhere / picking a row all retract
+    for (const how of ['esc', 'outside', 'row']) {
+      await page.locator('.rb-top .rb-more').click()
+      await page.waitForTimeout(SETTLE)
+      if (how === 'esc') await page.keyboard.press('Escape')
+      else if (how === 'outside') await page.mouse.click(700, 500)
+      else await page.locator(`${fly('top')} [data-id] .rb-btn`).first().click()
+      await page.waitForTimeout(SETTLE)
+      assert.deepEqual(await leftovers(page), { fly: 0, layer: 0, open: 0 }, `${how} retracts`)
+    }
+    console.log('PASS Esc / click elsewhere / picking a row retract the flyout')
+    // Interrupted: retract mid-pour continues from that frame, nothing left behind
+    await page.evaluate(async () => { const b = document.querySelector('[data-rb-more="top"]'); b.click(); await new Promise((r) => setTimeout(r, 120)); b.click() })
+    await page.waitForTimeout(SETTLE)
+    assert.deepEqual(await leftovers(page), { fly: 0, layer: 0, open: 0 }, 'mid-pour retract cleans up')
+    console.log('PASS retract mid-pour')
+    // Unit capsule hidden in the command flyout: hit-testable there, clicking it retracts the flyout
     await page.locator('.rb-bottom .rb-more').click()
-    await sleep(page)
-    assert.equal((await ids(page, 'bottom')).length, 9)
-    await menuHit(page)
-    assert.equal(await page.locator('.rb-open-bottom').count(), 1, 'clicking portal menu does not collapse/unmount owner')
-    await page.locator('.rb-bottom .rb-more').click()
-    await sleep(page)
+    await page.waitForTimeout(SETTLE)
+    assert.ok((await rows(page, 'bottom')).includes('rb-unit'))
+    await capsuleHit(page)
+    await page.locator('.unitsw-pill').click()
+    await page.waitForTimeout(SETTLE)
+    assert.deepEqual(await leftovers(page), { fly: 0, layer: 0, open: 0 }, 'clicking the capsule row retracts the flyout')
     // Expose Unit in a translated, clipped strip: this was invisible despite a menu DOM existing.
     await page.locator('.rb-bottom').dispatchEvent('wheel', { deltaY: -36 })
     await page.waitForTimeout(450)
     assert.ok((await ids(page, 'bottom')).includes('rb-unit'))
-    await menuHit(page)
-    console.log('PASS Unit menu receives real clicks with overflow translation and expanded zone')
-    // Negative control: the old missing height transition must be caught by the frame assertion.
-    const noMotion = await page.addStyleTag({ content: '.rb-strip { transition: none !important }' })
-    const lastNegative = await sample(page, 'top')
-    assert.throws(() => verifyMotion(lastNegative, 'negative control'), /gradual height/)
-    await noMotion.evaluate((el) => el.remove())
+    await capsuleHit(page)
+    console.log('PASS Unit capsule is clickable from the flyout and from a scrolled strip')
+    // Resize / UI zoom while open: geometry is stale, so the flyout goes at once and leaves nothing behind
     await page.locator('.rb-top .rb-more').click()
+    await page.waitForTimeout(SETTLE)
+    await page.setViewportSize({ width: 1000, height: 900 })
+    await page.waitForTimeout(120)
+    assert.deepEqual(await leftovers(page), { fly: 0, layer: 0, open: 0 }, 'resize drops the flyout')
+    await page.setViewportSize({ width: 1000, height: 1000 })
     await sleep(page)
+    // A folder pushed into +N keeps folder-level actions: its head takes the context menu and drops (an empty one has no rows)
+    await page.evaluate(() => { const s = window.__rb.getState(); s.addFolder('top', 'Hidden'); s.addFolder('top', 'Empty'); const g = window.__rb.getState(), f = g.folders.map((x) => x.id); g.setZoneOrder('top', [...'ABCDEFGHI'].map((n) => 't' + n).concat(f)) })
+    await sleep(page)
+    await page.locator('.rb-top .rb-more').click()
+    await page.waitForTimeout(SETTLE)
+    const heads = page.locator('.rb-more-fly .rb-fly-folderhead')
+    assert.equal(await heads.count(), 2, 'both hidden folders have a head')
+    await heads.first().click({ button: 'right' })
+    await page.locator('.rb-menu').waitFor()
+    assert.equal(await page.locator('.rb-more-fly').count(), 1, 'folder menu leaves the flyout open')
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(120)
+    const dropTo = await page.evaluate(() => {
+      const row = document.querySelector('.rb-more-fly .rb-fly-row[data-id]')
+      row.dispatchEvent(new DragEvent('dragstart', { bubbles: true, cancelable: true, dataTransfer: new DataTransfer() }))
+      return row.dataset.id
+    })
+    await page.waitForTimeout(80)
+    await heads.filter({ hasText: 'Empty' }).evaluate((el) => {
+      const dt = new DataTransfer()
+      el.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }))
+      el.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }))
+    })
+    await page.waitForTimeout(120)
+    const into = await page.evaluate(() => window.__rb.getState().folders.find((f) => f.name === 'Empty').items)
+    assert.deepEqual(into, [dropTo], 'an empty folder accepts a drop on its head')
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(SETTLE)
+    await page.evaluate(() => { const s = window.__rb.getState(); for (const f of [...s.folders]) s.removeFolder(f.id) })
+    await sleep(page)
+    console.log('PASS resize drops the flyout; hidden folders keep menu and drop-in')
+    // Negative control: a panel painting its own fill while pouring (the 10-29 regression) must be caught.
+    const neg = await page.addStyleTag({ content: '.lcl-droplet-pouring { background: var(--bg-card, #fff) !important }' })
+    await page.locator('.rb-bottom').dispatchEvent('wheel', { deltaY: 200 }); await page.waitForTimeout(800)
+    const negSample = await pour(page, 'top')
+    assert.throws(() => verifyPour(negSample, 'negative control'), /no fill of its own/)
+    await neg.evaluate((el) => el.remove())
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(SETTLE)
+    console.log('PASS negative control: early panel fill is caught')
     await page.emulateMedia({ reducedMotion: 'reduce' })
     await page.locator('.rb-top .rb-more').click()
     await page.waitForTimeout(40)
-    assert.ok(await page.locator('.rb-top .rb-strip').evaluate((el) => parseFloat(getComputedStyle(el).transitionDuration) < 0.001))
-    console.log('PASS reduced motion disables transitions')
+    assert.equal(await page.locator('.lcl-droplet').count(), 0, 'reduced motion: no liquid')
+    assert.equal(await page.locator(fly('top')).count(), 1)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(300)
+    assert.deepEqual(await leftovers(page), { fly: 0, layer: 0, open: 0 })
+    console.log('PASS reduced motion: fade only')
   } finally { await browser.close() }
 }
 
@@ -132,30 +213,31 @@ async function electronRun() {
     await sleep(page)
     assert.equal((await ids(page, 'bottom')).length, 5)
     await page.locator('.rb-bottom .rb-more').click()
-    await sleep(page)
-    assert.deepEqual(await ids(page, 'bottom'), ['rb-achievements', 'rb-unit', 'rb-feedback', 'rb-market', 'rb-mode', 'rb-cmd', 'rb-settings'])
-    await menuHit(page)
+    await page.waitForTimeout(SETTLE)
+    assert.deepEqual([...await rows(page, 'bottom'), ...await ids(page, 'bottom')], ['rb-achievements', 'rb-unit', 'rb-feedback', 'rb-market', 'rb-mode', 'rb-cmd', 'rb-settings'])
+    await capsuleHit(page)
+    await page.keyboard.press('Escape')
+    await page.waitForTimeout(SETTLE)
     for (const mode of ['light', 'dark']) {
       await page.evaluate((mode) => { document.documentElement.dataset.mode = mode; document.documentElement.classList.toggle('dark', mode === 'dark') }, mode)
-      await page.locator('.unitsw-pill').click()
-      await sleep(page)
+      // 冻在 190ms(液体半长、丝还连着)截一张,截图延迟盖不住 420ms,不冻拍到的已经流完了
+      await page.evaluate(async () => { document.querySelector('.rb-bottom .rb-more').click(); await new Promise(requestAnimationFrame); document.getAnimations().forEach((a) => { a.pause(); a.currentTime = 190 }) })
+      await page.screenshot({ path: path.join(OUT, `electron-${mode}-pour.png`) })
+      await page.evaluate(() => document.getAnimations().forEach((a) => a.play()))
+      await page.waitForTimeout(SETTLE)
       await page.screenshot({ path: path.join(OUT, `electron-${mode}.png`) })
-      await page.locator('.unitsw-menu .unitsw-row').first().click()
+      await page.keyboard.press('Escape')
+      await page.waitForTimeout(SETTLE)
     }
-    await page.locator('.rb-bottom .rb-more').click()
-    await sleep(page)
     await page.locator('.rb-bottom').dispatchEvent('wheel', { deltaY: -36 })
     await page.waitForTimeout(450)
-    await menuHit(page)
+    await capsuleHit(page)
     await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows()[0]; w.setMinimumSize(600, 600); w.setSize(700, 700) })
     await sleep(page)
-    await page.locator('.rb-bottom .rb-more').click()
-    await sleep(page)
-    await menuHit(page)
-    await page.locator('.unitsw-pill').click()
-    await sleep(page)
+    await page.locator('.rb-top .rb-more').click()
+    await page.waitForTimeout(SETTLE)
     await page.screenshot({ path: path.join(OUT, 'electron-narrow.png') })
-    console.log(`PASS real Electron: default order, 5 commands, menu clicks after scrolling/expanding, light/dark/narrow. Screenshots: ${OUT}`)
+    console.log(`PASS real Electron: default order, 5 commands + flyout, menu clicks from the flyout and after scrolling, light/dark/narrow. Screenshots: ${OUT}`)
   } finally { if (app) await app.close(); await stub.close(); fs.rmSync(home, { recursive: true, force: true }) }
 }
 ;(process.argv.includes('--electron') ? electronRun() : harness()).catch((e) => { console.error(e); process.exitCode = 1 })

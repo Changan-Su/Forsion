@@ -299,7 +299,9 @@ router.post('/agent/sessions/:id/children', authMiddleware, async (req: AuthRequ
     if (!message || message.length > 20_000) return res.status(400).json({ detail: 'message required (max 20000 chars)' });
     const title = typeof req.body?.title === 'string' ? req.body.title : '';
     const remote = parseRemoteOrigin(req.headers);
-    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(remote ? { remote } : {}) });
+    // 任务卡的 `agent:` 是模型写的串:认得才用,认不得跟主会话走
+    const agent = typeof req.body?.agent === 'string' ? await getAgent(req.body.agent).catch(() => null) : null;
+    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(agent ? { agentSlug: agent.slug } : {}), ...(remote ? { remote } : {}) });
     res.json({ sessionId: r.sessionId, runId: r.runId, title: r.title });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'start child session failed' });
@@ -347,7 +349,7 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const { title, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
+    const { title, title_source, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
     const icon = normalizeSessionEmoji(emoji);
     if (emoji !== undefined && emoji !== null && emoji !== '' && !icon) return res.status(400).json({ detail: 'emoji must be one emoji' });
     // 契约 C8:远端改会话的项目路径同样不许指到根 / 家目录 / 受保护目录(桌面据 project_path 给之后的 run 填 cwd)。
@@ -356,10 +358,17 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
     const sets: string[] = [];
     const params: any[] = [];
-    if (typeof title === 'string') { sets.push('title = ?'); params.push(title.trim().slice(0, 200)); }
+    if (typeof title === 'string') {
+      const nextTitle = title.trim().slice(0, 200);
+      // 只有用户自己的改名入口带 title_source:'user'。手动 = Historian 此后不再动这个标题;用户把标题清空 = 交还给 Historian。
+      // 前端发出第一句后写的占位标题带 'auto':不算手动,也盖不掉手动标题(本机列表可能还没刷到别的设备刚改的名字)。
+      sets.push(title_source === 'auto' ? 'title = CASE WHEN title_manual THEN title ELSE ? END' : 'title = ?'); params.push(nextTitle);
+      if (title_source === 'user') sets.push(`title_manual = ${nextTitle ? 'TRUE' : 'FALSE'}`);
+    }
     if (typeof archived === 'boolean') { sets.push('archived = ?'); params.push(archived); }
     if (typeof model_id === 'string') { sets.push('model_id = ?'); params.push(model_id || null); }
-    if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?'); params.push(icon); }
+    // Historian 写图标不走这里,这条路都是用户动的;清空也算,不然下一轮又被自动填上。
+    if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?', 'emoji_manual = TRUE'); params.push(icon); }
     if (typeof project_path === 'string' || project_path === null) { sets.push('project_path = ?'); params.push(project_path ? String(project_path).slice(0, 1000) : null); }
     if (typeof project_name === 'string' || project_name === null) { sets.push('project_name = ?'); params.push(project_name ? String(project_name).slice(0, 255) : null); }
     if (typeof projectless === 'boolean') { sets.push('projectless = ?'); params.push(projectless); }

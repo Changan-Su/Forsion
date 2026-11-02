@@ -10,6 +10,8 @@ description: 给 Forsion 写桌面插件与引擎插件：布局、列表源、�
 
 插件用 JavaScript / TypeScript 编写,官方提供类型定义与模板。内置的「Forsion 扩展开发」技能可以让 Agent 照官方模板直接脚手架出插件、主题、Space 或智能体的骨架,见[技能](../agents/skills.md)。
 
+引擎插件可通过公开的 `registerSkillProvider` 提供实时、只读的外部技能来源，无需复制进用户技能目录，见[外部技能来源契约](plugin-skill-providers.md)。
+
 需要让插件产物与原生笔记面板联动时,使用 `ctx.app.openNote`:同一 `reuseKey` 的 Amadeus 面板会原地切换到新笔记；`activate:false` 可保持用户焦点在插件面板。配合 Space 主区条目的 `split:"right"` / `split:"down"`,插件无需在自己的 DOM 里复制文档编辑器或聊天界面。
 
 ```js
@@ -25,6 +27,8 @@ ctx.app.openNote(path, { reuseKey, activate })
 ```js
 ctx.listCapabilities?.includes('tree' | 'items' | 'rename')
 ```
+
+文件夹同时也是可选中的东西时(比如父标签),给文件夹行写 `opensOnClick: true`,用 `ctx.listCapabilities?.includes('folderOpen')` 探测:点名字调 `open()` 并展开,只有行首的箭头负责开合,`activeKey` 指向它时整行高亮。旧宿主忽略这个字段,点一下只开合,所以探测不到时要在里面留一行子项。
 
 把行按「是谁的」归组(发信人、账号、来源)时,给最上面一级的文件夹再写 `folderStyle: 'group'`:它会画成 Tangu 左栏里 Agent / 项目那种一级行,前面是头像(`iconUrl`)、方块里的图标(`icon`)或标题的首字,`hint` 是行尾的小胶囊(适合放未读数)。组里的行不再画自己的图标,只留未读的圆点,一组先列 5 条,其余在「查看更多」后面。这种组的开合只记到应用重启:写了 `defaultOpen: true` 的组自己开着(比如里面有未读),它由假变真时宿主会重新打开这一组;不写就是收着。组的先后由你的数组顺序决定。搜索时不画层级,所以带 `query` 时请返回平铺的行。手机上,只有这一层组头的列表仍然是整屏列表,组里的行照样可以左滑。用 `ctx.listCapabilities?.includes('group')` 判断宿主认不认;不认的宿主会把它画成普通文件夹。
 
@@ -82,7 +86,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 ## 商店身份与安装目录
 
-商店给每个条目一个不会变的 ID,新上架的条目装进 `plugins/market-<ID>/`,和显示名无关,所以显示名可以重复。装在这种目录里的插件以目录名为运行身份:包里的引擎插件照常按目录名挂路由,单独上架的引擎插件 id 变成 `market-<ID>`、数据目录在 `plugin-data/market-<ID>/`,它的工具名会被宿主改写成带哈希的唯一名字(两份同 id 的插件互不顶替)。别的插件在 `requiresPlugins` 里写你 manifest 的 `id` 照样认得到,前提是只装着一份。这种条目要 2.13.4 之后的桌面版本才装得了,旧版本会提示先升级 Forsion。更早上架的条目保留原来由显示名推出的目录名;其中带引擎插件的包在桌面 2.13.3 及更早的版本上,目录名和 manifest `id` 不一样时页面调不到包里的引擎插件(每次调用都是 404,不报错)。
+商店给每个条目一个不会变的 ID,新上架的条目装进 `plugins/market-<ID>/`,和显示名无关,所以显示名可以重复。装在这种目录里的插件以目录名为运行身份:包里的引擎插件照常按目录名挂路由,单独上架的引擎插件 id 变成 `market-<ID>`、数据目录在 `plugin-data/market-<ID>/`,它的工具名会被宿主改写成带哈希的唯一名字(两份同 id 的插件互不顶替)。别的插件在 `requiresPlugins` 里写你 manifest 的 `id` 照样认得到,前提是只装着一份;想让用户从商店一键装上你,对方还要写 `market: "market-<ID>"`,商店只按 slug 精确匹配,不按显示名猜。这种条目要 2.13.4 之后的桌面版本才装得了,旧版本会提示先升级 Forsion。更早上架的条目保留原来由显示名推出的目录名;其中带引擎插件的包在桌面 2.13.3 及更早的版本上,目录名和 manifest `id` 不一样时页面调不到包里的引擎插件(每次调用都是 404,不报错)。
 
 ## 上架与更新
 
@@ -100,7 +104,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。
 
-View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。见 [可复用 UI 组件](./ui-components.md)。
+View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`，在光标处插入文字用 `insertText`。见 [可复用 UI 组件](./ui-components.md)。
 
 设置类页面（账号、额度与积分、诊断、偏好）用 `ctx.ui.mountSettingsPage(el, { groups })` 交一份整页描述：每组有图标、标题、说明、右上角按钮和若干项（开关、数值、按钮、输入框、分段、下拉、「选了就执行」、步进器、代码 + 复制、额度条、空 / 加载 / 出错、自定义块），插件只给文字、值和回调，宿主用自己的设置零件画并按端排版——手机上开关、数值、单个按钮留在右边，输入框、步进器、两个以上的按钮换到下一行，「选了就执行」换成一枚按钮 + 半屏。清单外的内容放进 `custom` 块，块里用 `ctx.ui.mountSettingsItem` 挂单件。别再抄宿主的设置 CSS；2026-10-17 之前的宿主没有这两个接口，先探测，保留自己画的那套。见 [可复用界面组件](./ui-components.md)。
 
@@ -163,9 +167,15 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 
 引擎插件可以接入一个新的聊天软件(比如企业微信),和内置的微信、Telegram、QQ 通道用同一套:连接即新会话、远程审批、`/new` `/model` 等命令、收件箱转发、侧栏里的通道文件夹都现成。装好之后「设置 → 通道」里多一张卡,填上插件要的凭据、点「连接」就能用;停用插件,这个通道随之停下,已绑定的会话还在。接口见插件开发技能「引擎插件」一节的 `ctx.registerChannel`;企业微信插件是现成的例子。
 
+## 自动化触发事件
+
+插件可以给自动化加一种自己的「当…」:用 `ctx.automation.registerTrigger` 登记,事件发生时用 `ctx.automation.emit` 发一条。登记之后它出现在自动化画布触发节点的「外部 · 插件」组,规则由用户自己写,可以加时段、星期、冷却和每天次数;用户选「直接提醒」不花额度,选「叫醒 Muse」照常过额度。
+
+只能登记自己命名空间下的:`id` 只写 key,宿主拼成 `plugin:<插件 id>:<key>`。名字中英都要有。插件停用或卸载时触发源随之注销,相关规则不删,暂停并写明原因,装回来自动恢复。事件不落盘,引擎重启会丢掉还没被规则看到的。引擎插件用 `ctx.sdk.automation` 上的同名方法。写法见插件开发技能的 `references/tangu-host-apis.md`。
+
 ## 插件数据跨设备同步
 
-插件在 manifest 里写 `"syncData": true`，它用 `ctx.saveData` 存的数据就会随 Forsion 账号同步到你的其他电脑和手机。没登录或断网时照旧只存在这台设备上，联网后再补传。两台设备都改过时，保留较晚的那次。插件详情页里有「跨设备同步插件数据」开关，可以在某台设备上单独关掉。网页版暂不同步。接口细节见插件开发技能「编辑器」一节里 `loadData/saveData` 那几条。
+插件在 manifest 里写 `"syncData": true`，它用 `ctx.saveData` 存的数据就会随 Forsion 账号同步到你的其他电脑和手机。没登录或断网时照旧只存在这台设备上，联网后再补传。两台设备都改过时，保留较晚的那次。插件详情页里有「跨设备同步插件数据」开关，可以在某台设备上单独关掉。用户卸载时没勾「保留设置」，云端那份会一起清掉；从回收站恢复后本机这份会重新传上去，别的设备还装着时也会把它的那份传回来。网页版暂不同步。接口细节见插件开发技能「编辑器」一节里 `loadData/saveData` 那几条。
 
 ## 开屏与图标
 
@@ -187,7 +197,7 @@ ctx.registerAppearance?.({ id, label, labelEn, icon, splash })
 
 ## 摘要栏卡片
 
-Tangu 聊天右侧的摘要栏(2.13.8-beta.1 之后的桌面版本)是一叠卡片:进度、后台、产物、来源、工作范围和 Agent Desk。插件可以用 `ctx.summary?.registerCard` 加一张卡,和内置卡在同一个栈里:用户能折叠、拖动排序,收起状态和顺序由宿主记住;插件卡默认排在 Agent Desk 前面。`mount` 在每个会话的摘要栏里各调用一次(换会话会卸载重挂),`host.sessionId` 是这份所在的会话;`host.update({ count, hidden })` 改卡头的计数、或者先不显示这张卡。正文最高 240px,超出由宿主滚动。只有桌面 Tangu 有摘要栏,所以用可选链;更早的版本没有 `ctx.summary`。接口细节见插件开发技能「摘要栏插件卡」一节。
+Tangu 聊天右侧的摘要栏(2.13.8-beta.1 之后的桌面版本)是一叠卡片:进度、后台、产物、来源、工作范围和 Agent Desk。插件可以用 `ctx.summary?.registerCard` 加一张卡,和内置卡在同一个栈里;插件卡默认排在 Agent Desk 前面,用户拖动排的顺序由宿主记住。卡片的开合跟着内容走:`count` 变大就自动展开;用户手动展开或收起只管到这一轮对话结束,不会被记住;`defaultCollapsed` 决定没有新内容时收不收。车道放不下时,宿主会先收起最久没有新内容的卡,或者把最后一张的正文缩短,所以别假定正文一定有 240px。`mount` 在每个会话的摘要栏里各调用一次(换会话会卸载重挂),`host.sessionId` 是这份所在的会话;`host.update({ count, hidden })` 改卡头的计数、或者先不显示这张卡。正文最高 240px(放不下时会更矮),超出由宿主滚动。只有桌面 Tangu 有摘要栏,所以用可选链;更早的版本没有 `ctx.summary`。接口细节见插件开发技能「摘要栏插件卡」一节。
 
 ```js
 ctx.summary?.registerCard({ id, title: { zh, en }, defaultCollapsed, mount(el, host) })
@@ -298,6 +308,14 @@ ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})
 默认目录使用稳定的英文插件 ID，不随显示名称或语言变化。外部 manifest 的 ID 必须匹配 `^[a-z0-9][a-z0-9-]{0,63}$`，新 ID 用英文词，已发布 ID 保持稳定。商店安装以不变的 `market-<UUID>` 为生效 ID，可能不同于 manifest ID 或历史安装目录别名；请调用 `workFolder()`，不要自行拼身份目录。未接入迁移的插件继续读取已有的显示名目录；接入者先检测两项 API，再通过 `workFolder({ preferId: true })` 取得新默认目录，校验自身数据后等待迁移完成。用户手动指定的目录优先。
 
 无 plan 的状态查询可核验上一版显示名目录的迁移日志；旧目标的写入计划仍被拒绝，手动偏好和智库 / 撤销检查照样生效。迁移前按原智库实际解析裸媒体链接，保留用户放在笔记旁边的附件的位置，而不是假定都在 `assets/` 下。
+
+### 库外 PDF 文件视图（2026-10-29，功能分支）
+
+文件类型写 `external: true` 并保留 `override: true`，即可在具备此接口的桌面宿主上接管系统「用 Forsion 打开」的库外 PDF；仍遵循「默认打开方式」。冷启动等插件首次装载后再分流。旧宿主和未声明 `external` 的插件继续使用内置预览。
+
+`mount(el, file)` 的 `file.io` 仅在库外 PDF 上提供：`readBytes(path)` 读取当前 PDF 或同目录的 `.<文件名>.annot.json`，`writeBytes(path, bytes)` 只写该批注文件或 `.broken-<时间戳>` 恢复副本；源 PDF 只读。`saveCopy(name, bytes)` 打开原生另存为，返回保存名称，取消返回 `null`，拒绝覆盖原 PDF。`ctx.app` 的文件接口仍只接受库内路径；不要把绝对路径交给它们。原目录没有写权限时显示保存错误，不把失败当成已保存。
+
+文件类型的清理函数可以返回 `Promise<void>`：普通关标签时宿主等最后一次保存完成再吊销 `file.io`；插件停用时仍立即吊销。多个标签读同一 PDF 时，不要永久保留已关闭标签的句柄。库外文件不导入库，不通过笔记写盘管线。
 
 ### 个人日历（Desktop 2.13.6+）
 

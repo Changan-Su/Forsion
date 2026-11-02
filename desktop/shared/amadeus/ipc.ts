@@ -18,6 +18,9 @@ export const IPC = {
   saveAsset: 'asset:save',
   saveVaultBytes: 'vault:save-bytes',
   readVaultBytes: 'vault:read-bytes',
+  readExternalPdf: 'pdf:external-read',
+  exportExternalPdf: 'pdf:external-export',
+  writeExternalPdfAnnotations: 'pdf:external-annotations',
   saveAttachment: 'attachment:save',
   openAttachment: 'attachment:open',
   copyAttachment: 'attachment:copy',
@@ -269,7 +272,8 @@ export interface PluginDependency {
   id: string
   /** Lowest acceptable version, compared with cmpVersion (e.g. "1.2.0"). */
   minVersion?: string
-  /** Market install slug (install_slug ≠ id). Present → the host offers a one-click install. */
+  /** Market install slug (install_slug ≠ id). The store's one-click install matches listings by this, then by `id`,
+   *  never by display name. New listings' slug is `market-<ID>`: without this field they can't be matched. */
   market?: string
   /** Display-name fallback while the prerequisite isn't installed (the host only knows its id then). */
   name?: string
@@ -460,6 +464,21 @@ export interface SearchHit {
   /** 1-based line number of the match within the cleaned text. */
   line: number
   score: number
+  /** Only for queries with a `tag:` condition: each line of this file carrying a target tag, in document order
+   *  (line-0 first). At most TAG_LINE_HITS_MAX (100, shared/amadeus/tagQuery) per file. Absent on plain queries
+   *  and on `-tag:`-only queries, which have no target tag. */
+  hits?: SearchHitLine[]
+}
+
+/** One line of SearchHit.hits. line = 1-based line in the cleaned text (same as BacklinkHit), 0 = the tag is in
+ *  frontmatter. text = the line with markdown syntax removed, clipped around the tag on very long lines. Tags inside
+ *  code do not count (maskCode). */
+export interface SearchHitLine {
+  line: number
+  text: string
+  /** How many times this line's first target tag appears earlier in the note, counted over the whole note even when the
+   *  list was narrowed. Absent = 0. Lets the UI locate the line by tag when its text can't be found in the editor. */
+  tagIndex?: number
 }
 
 /** 反链 / 提及的一处命中(L-16)。line = 清洗文本(剥 fm 与注释)里的 1-based 行号,0 = 属性区;
@@ -583,7 +602,11 @@ export interface TrashEntry {
 
 export interface TagCount {
   tag: string
+  /** Files carrying exactly this tag. 0 = the tag exists only as a parent prefix (`work` of `#work/urgent`). */
   count: number
+  /** Files carrying this tag or a nested one, deduplicated per file. Absent from older sources (cloud `/tags`,
+   *  older hosts): buildTagTree falls back to self + children. */
+  total?: number
 }
 
 export interface VaultInfo {
@@ -665,6 +688,10 @@ export interface AmadeusApi {
   /** Read a vault file's raw bytes by vault-relative path (PDF 阅读器 getDocument({data}) 等;避免自定义
    *  scheme 的跨源 XHR 限制——dev 渲染器是 http://localhost 源,XHR 到 amadeus-asset:// 会被 Chromium 拦)。 */
   readVaultBytes(path: string): Promise<Uint8Array>
+  /** Desktop file-view access; external PDFs are read-only, only their annotation sidecar is writable. */
+  readExternalPdf?(path: string, annotations?: boolean): Promise<Uint8Array | null>
+  exportExternalPdf?(path: string, name: string, bytes: Uint8Array): Promise<string | null>
+  writeExternalPdfAnnotations?(path: string, bytes: Uint8Array, backup?: number): Promise<void>
   /** Import a dragged-in file to the configured attachment location (keeps its name, de-duped).
    *  Returns the page-relative path (for `[name](rel)` links) + final basename (for `![[base]]`). */
   saveAttachment(
@@ -784,7 +811,7 @@ export interface AmadeusApi {
   /** 卸载 ~/.forsion/plugins 下的一个 Forsion 插件(按 manifest id 定位目录),挪进回收站(30 天可恢复;可选:桌面实现)。
    *  keepSettings:插件设置原地留着;vaultFolder:库里的工作文件夹(相对库根)一起进回收站;prefs:渲染层摘下的 localStorage 偏好,
    *  恢复时原样交回。旧调用只传 id = 文件 + 设置进回收站。 */
-  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineEnabled?: string[] }): Promise<{ trashId?: string; dirName?: string } | void>
+  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }): Promise<{ trashId?: string; dirName?: string } | void>
   /** 恢复主进程写的回收站条目(Forsion 插件);extra.prefs 由渲染层写回 localStorage。 */
   trashRestore?(id: string): Promise<{ kind: string; ref: string; extra?: Record<string, unknown> }>
   /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。

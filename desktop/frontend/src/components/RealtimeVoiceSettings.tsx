@@ -1,34 +1,28 @@
 /**
- * 设置 → 模型 → 语音 →「语音通话」一节(对标 GPT Live):通话音色,可就地复刻自己的声音。
- * 开 / 关和选通话模型在「默认模型 → 语音通话」(10-17 用户定方案 C):那边用下面导出的 realtimeCandidates / saveRealtimeModel。
- * 通话模型两种来源:Forsion 云端的实时模型(登录即用,按通话时长从额度里扣),或用户自己的百炼提供方(Qwen-Omni / Qwen-Audio Realtime)。
- * 从没动过这个开关、已登录 Forsion 的用户默认开着、用云端模型(口径在 services/realtimeModel.ts,与输入框同一处)。
+ * 设置 → 模型 → 语音 →「语音通话」一节(对标 GPT Live):开关、通话音色卡片,可新建自己的音色。
+ * 选哪个通话模型仍在「默认模型 → 语音通话」(10-17 用户定方案 C):那边用下面导出的 realtimeCandidates / saveRealtimeModel。
+ * 通话模型两种来源:Forsion 云端的实时模型(登录即用,从额度里扣),或用户自己的百炼提供方(Qwen-Omni / Qwen-Audio Realtime)。
+ * 没动过这个开关的用户默认开着(口径在 services/realtimeModel.ts,与输入框同一处)。
  * 开着时输入框空着发送键才变成通话键(Composer2)。
  * 百炼铁律:复刻音色只能配复刻时的 target_model —— 朗读那边的 cosyvoice / qwen3-tts 音色在这里一律不能用,换模型就得重新复刻。
  */
-import { useEffect, useRef, useState } from 'react'
-import { Loader2, Mic, Phone } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ChevronRight, LogIn, Phone } from 'lucide-react'
 import type { DirectProviderConfig, StoredDesktopConfig } from '../types'
-import { defaultVoiceFor, effectiveRealtimeModel, isAudioFamily, type CloudCallModel } from '../services/realtimeModel'
-import { cloneTtsVoice, listTtsVoices } from '../services/backendService'
+import { cloudDefaultVoice, defaultVoiceFor, effectiveRealtimeModel, isAudioFamily, isDashScope, type CloudCallModel } from '../services/realtimeModel'
+import { cloudVoiceSample, deleteCloudVoice, deleteTtsVoice, listCloudVoices, listTtsVoices, type CloudVoice, type TtsVoiceInfo } from '../services/backendService'
 import { homeTarget } from '../services/engine/targets'
 import { REALTIME_CFG_BUMP_KEY } from '../services/realtimeCall'
+import { AUDIO_VOICES, OMNI_VOICES, toggleVoicePreview, voiceSampleUrl } from '../services/voiceCatalog'
 import { registerMessages, useI18n } from '../i18n'
-import { cloneBusyText, cloneErrorText, VoiceSamplePicker, type VoiceSample } from './VoiceSamplePicker'
-import { SettingsPanel, SettingsRow } from './SettingsPrimitives'
+import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
+import { VoiceGallery, type VoiceItem } from './VoiceGallery'
+import { VoiceCreateDialog, type VoiceCreated } from './VoiceCreateDialog'
 
 // 两个家族:Qwen-Omni 与 Qwen-Audio。会话协议通用(10-04 实测:同一份 session.update、ask_tangu 照样调),
 // 差在音色 —— 系统音色各一套、互不相认,复刻音色还绑死在具体型号上。qwen-audio-3.0 两个型号没加:用复刻音色实测不出声。
 const MODELS = ['qwen3.8-omni-flash-realtime', 'qwen3.5-omni-plus-realtime', 'qwen3.5-omni-flash-realtime', 'qwen-audio-3.1-realtime-plus']
-// 百炼「Qwen-Omni-Realtime 音色列表」里的一部分(全表 36+ 种,可直接手输名字)
-const VOICES = ['Tina', 'Cindy', 'Raymond', 'Katerina', 'Ryan', 'Mia', 'Jennifer', 'Aiden']
-// qwen-audio-3.1-realtime-plus 认的系统音色(10-04 从接口的报错里抄的全表)。文档没有给名字 / 风格说明,所以只显示 ID,不编描述。
-const AUDIO_VOICES = ['longanqian', 'longanlingxin', 'longanlufeng', 'longanlingxi', 'longanxiaoxin', 'longanfengyue', 'longanyuanfei', 'longanhuan_v3.6', 'longjielidou_v3.6',
-  'longpaopao_v3.6', 'longhuohuo_v3.6', 'longchuanshu_v3.6', 'loongmary', 'loongeva_v3.6', 'loongjohn', 'daniel', 'echo', 'hannah', 'sherry',
-  'longanqian_v3.1', 'longanhuan_v3.1', 'longanlingxin_v3.1', 'longanfengyue_v3.1', 'xunanchuan_v3.1', 'beth_v3.1', 'betty_v3.1', 'cally_v3.1']
-const CUSTOM = '__custom__'
-const isDashScope = (p: DirectProviderConfig): boolean => /dashscope|aliyuncs\.com/i.test(p.baseUrl)
-const presetsFor = (m: string, cloud?: CloudCallModel | null): string[] => (isAudioFamily(m, cloud) ? AUDIO_VOICES : VOICES)
+const presetsFor = (m: string, cloud?: CloudCallModel | null): string[] => (isAudioFamily(m, cloud) ? AUDIO_VOICES : OMNI_VOICES)
 
 /** 「语音通话」的候选:云端那个(登录着,或者已经选着它 —— 不然显示不出当前值)+ 每个百炼连接 × 上面那张实时模型表。 */
 export function realtimeCandidates(stored: Pick<StoredDesktopConfig, 'realtimeModelId'>, providers: DirectProviderConfig[], cloudModel: CloudCallModel | null | undefined, signedIn: boolean): Array<{ id: string; name: string; provider: string; source: 'forsion' | 'direct' }> {
@@ -59,31 +53,24 @@ export function saveRealtimeModel(next: string, stored: StoredDesktopConfig, clo
 
 registerMessages({
   'settings.realtime.title': { zh: '语音通话', en: 'Voice call' },
-  'settings.realtime.off': { zh: '语音通话没开。在「默认模型 → 语音通话」里选一个模型就开了。', en: 'Voice calls are off. Pick a model under Default models → Voice call to turn them on.' },
+  'settings.realtime.off': { zh: '已关闭。输入框的发送键不再变成通话键；你的音色都还在。', en: 'Off. The send button stays as send, and your voices are kept.' },
   'settings.realtime.billing': { zh: '走阿里云百炼的实时语音模型（Qwen-Omni / Qwen-Audio），费用由百炼按各模型的价格收取，不同模型差别很大。', en: 'Runs on Alibaba Cloud Bailian realtime voice models (Qwen-Omni / Qwen-Audio). Bailian bills each model at its own rate, and rates differ a lot between models.' },
-  'settings.realtime.billingCloud': { zh: '走 Forsion 云端的实时语音模型，不用自己配密钥；按通话时长从你的额度里扣。', en: 'Runs on the Forsion cloud voice model, with no key to set up. Calls are charged to your quota by call time.' },
+  'settings.realtime.billingCloud': { zh: '走 Forsion 云端的实时语音模型，不用配密钥；通话用量从你的额度里扣。', en: 'Runs on the Forsion cloud voice model, with no key to set up. Calls use your quota.' },
   'settings.realtime.needProvider': { zh: '需要先在「模型 → 提供方」里添加一个阿里云百炼（DashScope）提供方。', en: 'Add an Alibaba Cloud Bailian (DashScope) provider under Models → Providers first.' },
-  'settings.realtime.needProviderOrSignIn': { zh: '登录 Forsion 账号就能直接用云端的通话模型；也可以在「模型 → 提供方」里添加自己的阿里云百炼（DashScope）提供方。', en: 'Sign in to your Forsion account to use the cloud call model, or add your own Alibaba Cloud Bailian (DashScope) provider under Models → Providers.' },
+  'settings.realtime.needProviderOrSignIn': { zh: '登录 Forsion 账号就能直接打；也可以用自己的阿里云百炼连接。', en: 'Sign in to your Forsion account to call right away, or use your own Alibaba Cloud Bailian connection.' },
+  'settings.realtime.signIn': { zh: '登录', en: 'Sign in' },
+  'settings.realtime.model': { zh: '通话模型', en: 'Call model' },
   'settings.realtime.voice': { zh: '通话音色', en: 'Call voice' },
-  'settings.realtime.voiceHint': { zh: '只用于语音通话，和下面「朗读」的音色互不通用。', en: 'Used only in voice calls; it is not shared with the read-aloud voices below.' },
-  'settings.realtime.voiceCustom': { zh: '自定义音色 ID…', en: 'Custom voice ID…' },
-  'settings.realtime.voiceMine': { zh: '我的音色 · {id}', en: 'My voice · {id}' },
-  'settings.realtime.voiceIdPlaceholder': { zh: '填百炼音色 ID，回车保存', en: 'Bailian voice ID, press Enter to save' },
-  'settings.realtime.cloneHint': { zh: '照着文案录一段，或选一个 10–20 秒的干净人声录音；复刻成功后自动采用。音色只认复刻时的通话模型：换模型后音色回到默认，之前在那个模型上复刻的会列在上面的下拉里。', en: 'Record the passage, or choose a clean 10–20 second voice recording; the clone is applied as soon as it is ready. A cloned voice only works with the call model it was made for: after switching models the voice goes back to the default, and voices you cloned for that model are listed in the menu above.' },
-  'settings.realtime.cloneBtn': { zh: '复刻', en: 'Clone' },
-  'settings.realtime.cloneRow': { zh: '复刻自己的声音', en: 'Clone your voice' },
-  'settings.realtime.cloneRowHint': { zh: '录一段或选一段录音，复刻成功后自动采用。', en: 'Record or choose a clip; the clone is applied as soon as it is ready.' },
-  'settings.realtime.cloneBtnOpen': { zh: '开始复刻', en: 'Start' },
-  'settings.realtime.cloned': { zh: '已采用复刻音色 {voice}', en: 'Now using cloned voice {voice}' },
-  'settings.realtime.voice.Tina': { zh: '甜甜 · 温暖女声', en: 'Warm female' },
-  'settings.realtime.voice.Cindy': { zh: '林欣宜 · 台湾腔女声', en: 'Taiwanese-accent female' },
-  'settings.realtime.voice.Raymond': { zh: '林川野 · 清亮男声', en: 'Clear male' },
-  'settings.realtime.voice.Katerina': { zh: '卡捷琳娜 · 御姐音', en: 'Mature female' },
-  'settings.realtime.voice.Ryan': { zh: '甜茶 · 戏感男声', en: 'Dramatic male' },
-  'settings.realtime.voice.Mia': { zh: '舒然 · 温柔女声', en: 'Gentle female' },
-  'settings.realtime.voice.Jennifer': { zh: '詹妮弗 · 美语女声', en: 'American female' },
-  'settings.realtime.voice.Aiden': { zh: '艾登 · 美语男声', en: 'American male' },
+  'settings.realtime.custom': { zh: '自定义音色 ID', en: 'Custom voice ID' },
+  'settings.realtime.customHint': { zh: '填百炼音色 ID，回车保存。', en: 'Bailian voice ID, press Enter to save.' },
+  'settings.realtime.mineCloned': { zh: '复刻', en: 'Cloned' },
+  'settings.realtime.boundTo': { zh: '绑在 {model}', en: 'Tied to {model}' },
+  'settings.realtime.boundNote': { zh: '这个音色绑在 {model} 上，在「默认模型 → 语音通话」换到它才能用。', en: 'This voice is tied to {model}. Switch to it under Default models → Voice call to use it.' },
+  'settings.realtime.deleteConfirm': { zh: '删除音色「{name}」？删除后不能恢复。', en: 'Delete the voice "{name}"? This cannot be undone.' },
 })
+
+/** 通话音色卡片的显示名:有译名走译名,Qwen-Audio 文档没给说明,只能显示 ID。 */
+export const callVoiceName = (t: (k: string) => string, v: string): string => (OMNI_VOICES.includes(v) ? t(`voice.call.${v}.name`) : v)
 
 export function RealtimeVoiceSettings({ stored, providers, onSaved, cloudModel = null, signedIn = false, cloudAccount = false, onOpen }: {
   stored: StoredDesktopConfig
@@ -93,118 +80,119 @@ export function RealtimeVoiceSettings({ stored, providers, onSaved, cloudModel =
   cloudModel?: CloudCallModel | null
   /** 装了 Forsion Extend 且当前登录有效。 */
   signedIn?: boolean
-  /** 装了 Forsion Extend(有登录入口):没有可用模型时的提示里才提「登录」。 */
+  /** 装了 Forsion Extend(有登录入口):没有可用模型时给登录按钮。 */
   cloudAccount?: boolean
-  /** 卡头的下一步:去「模型 → 提供方」加百炼连接 / 去「默认模型 → 语音通话」选模型。 */
+  /** 下一步:去「模型 → 提供方」加百炼连接 / 去「默认模型 → 语音通话」选模型。 */
   onOpen?: (target: 'providers' | 'call-model') => void
 }) {
-  const { t } = useI18n()
-  const [customId, setCustomId] = useState<string | null>(null) // 非 null = 正在填自定义音色 ID
-  const [sample, setSample] = useState<VoiceSample | null>(null)
-  const [pickerKey, setPickerKey] = useState(0) // 复刻成功后换 key = 把录音区清回初始
-  const [name, setName] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [msg, setMsg] = useState('')
-  const voiceRef = useRef<HTMLSelectElement>(null)
-  const [cloneOpen, setCloneOpen] = useState(false)
+  const { t, locale } = useI18n()
+  const [creating, setCreating] = useState(false)
+  const [note, setNote] = useState('')
+  const [customId, setCustomId] = useState('')
   const ds = providers.filter(isDashScope)
-  const model = effectiveRealtimeModel(stored, { model: cloudModel, signedIn }) // 实际生效的:存了就是存的,从没动过且已登录 = 云端那个
+  const model = effectiveRealtimeModel(stored, { model: cloudModel, signedIn, providers: ds }) // 实际生效的
   const provider = ds.find((p) => model.startsWith(p.providerId + '/'))
+  const onCloud = !!cloudModel && model === cloudModel.id
   const voice = stored.realtimeVoice || ''
   const apiModel = provider ? model.slice(provider.providerId.length + 1) : ''
   const presets = presetsFor(model, cloudModel)
-  // 账号里绑在当前通话模型上的复刻音色:换模型后从这里挑回来,不用去翻 ID
-  // 连同它属于哪个模型一起存:换模型的那一帧不能把上一个模型的音色列出来(列出来就能被选中,一接通就报错)
-  const scope = provider && apiModel ? `${model}|${provider.baseUrl}|${provider.apiKey || ''}` : '' // 换提供方 / 换密钥也算换了一份
-  const [mineOf, setMineOf] = useState<{ scope: string; voices: string[] }>({ scope: '', voices: [] })
-  const mine = scope && mineOf.scope === scope ? mineOf.voices : []
+  const candidates = realtimeCandidates(stored, providers, cloudModel, signedIn)
+  const effectiveVoice = voice || (onCloud ? cloudDefaultVoice(model, cloudModel!) : defaultVoiceFor(model, cloudModel))
+
+  // 账号里的复刻音色:绑在当前模型上的能采用,绑在别的模型上的变灰。连同它属于哪份账号一起存:换提供方 / 换密钥的那一帧不能把上一份列出来。
+  const scope = provider ? `${provider.baseUrl}|${provider.apiKey || ''}` : onCloud ? 'cloud' : ''
+  const [mineOf, setMineOf] = useState<{ scope: string; direct: TtsVoiceInfo[]; cloud: CloudVoice[]; limit: number }>({ scope: '', direct: [], cloud: [], limit: 5 })
   const [mineKey, setMineKey] = useState(0)
   useEffect(() => {
-    if (!provider || !apiModel) return
+    if (!scope) return
     let stale = false
-    listTtsVoices(homeTarget(), { baseUrl: provider.baseUrl, apiKey: provider.apiKey || '' })
-      .then((vs) => { if (!stale) setMineOf({ scope, voices: vs.filter((v) => v.targetModel === apiModel).map((v) => v.voice) }) })
-      .catch(() => { /* 列不出来就只剩系统音色和手填 */ })
+    const load = provider
+      ? listTtsVoices(homeTarget(), { baseUrl: provider.baseUrl, apiKey: provider.apiKey || '' }).then((direct) => ({ scope, direct: direct || [], cloud: [], limit: 5 }))
+      : listCloudVoices(homeTarget()).then((r) => ({ scope, direct: [], cloud: r.voices || [], limit: r.limit || 5 }))
+    load.then((v) => { if (!stale) setMineOf(v) }).catch(() => { /* 列不出来就只剩系统音色 */ })
     return () => { stale = true }
-  }, [provider?.providerId, provider?.baseUrl, provider?.apiKey, apiModel, mineKey])
-  const save = (patch: Partial<StoredDesktopConfig>) => window.tangu!.setConfig(patch).then((c) => {
+  }, [scope, mineKey])
+  const mineFor = mineOf.scope === scope ? mineOf : { direct: [] as TtsVoiceInfo[], cloud: [] as CloudVoice[], limit: 5 }
+
+  const save = (patch: Partial<StoredDesktopConfig>): Promise<void> => window.tangu!.setConfig(patch).then((c) => {
     onSaved(c)
     try { localStorage.setItem(REALTIME_CFG_BUMP_KEY, String(Date.now())) } catch { /* ignore */ } // 叫主窗重读(见 useRealtimeConfig)
   })
-  const pickVoice = (v: string): void => {
-    if (v === CUSTOM) { setCustomId(presets.includes(voice) ? '' : voice); return }
-    setCustomId(null)
-    void save({ realtimeVoice: v })
+  const toggle = (on: boolean): void => {
+    let last = ''
+    try { last = localStorage.getItem(LAST_MODEL_KEY) || '' } catch { /* ignore */ }
+    const next = !on ? '' : candidates.some((c) => c.id === last) ? last : candidates[0]?.id || ''
+    void saveRealtimeModel(next, stored, cloudModel).then((c) => { onSaved(c); setNote('') })
   }
-  const commitCustom = (): void => {
-    if (customId === null) return
-    const v = customId.trim()
-    setCustomId(null)
-    if (v && v !== voice) void save({ realtimeVoice: v }) // 空着离开 = 放弃,别把已选的音色清成默认(Codex 10-02);要默认就在下拉里选第一个
+  const pick = (id: string): void => { setNote(''); void save({ realtimeVoice: id }) }
+  const remove = (item: { id: string; name: string }, del: () => Promise<unknown>): void => {
+    if (!window.confirm(t('settings.realtime.deleteConfirm', { name: item.name }))) return
+    void del().then(() => { setMineKey((k) => k + 1); if (voice === item.id) return save({ realtimeVoice: '' }) }).catch((e: any) => setNote(`✗ ${e?.message || e}`))
   }
+  const previewSystem = (v: string): void => { const url = voiceSampleUrl('call', v, locale); if (url) void toggleVoicePreview(`call:${v}`, () => url).catch(() => {}) }
+  const previewCloud = (key: string, id: string): void => {
+    void toggleVoicePreview(key, () => cloudVoiceSample(homeTarget(), id).then((r) => URL.createObjectURL(new Blob([Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0))], { type: r.mime })))).catch((e: any) => setNote(`✗ ${e?.message || e}`))
+  }
+  const system: VoiceItem[] = presets.map((v) => ({
+    id: v, name: callVoiceName(t, v), desc: OMNI_VOICES.includes(v) ? t(`voice.call.${v}.desc`) : undefined,
+    onPreview: voiceSampleUrl('call', v, locale) ? () => previewSystem(v) : undefined,
+  }))
+  const shortModel = (m: string): string => m.replace(/-realtime.*$/, '')
+  const mine: VoiceItem[] = [
+    ...mineFor.cloud.map((v): VoiceItem => ({
+      id: v.voice, name: v.name || t('settings.realtime.mineCloned'), desc: v.modelId === cloudModel?.id ? t('settings.realtime.mineCloned') : t('settings.realtime.boundTo', { model: shortModel(v.modelId) }), bound: v.modelId !== cloudModel?.id,
+      onPreview: v.hasSample ? () => previewCloud(`call:${v.voice}`, v.id) : undefined,
+      onDelete: () => remove({ id: v.voice, name: v.name }, () => deleteCloudVoice(homeTarget(), v.id)),
+    })),
+    ...mineFor.direct.filter((v) => /omni|realtime/i.test(v.targetModel || '')).map((v): VoiceItem => ({
+      id: v.voice, name: v.voice, desc: v.targetModel === apiModel ? t('settings.realtime.mineCloned') : t('settings.realtime.boundTo', { model: shortModel(v.targetModel || '') }), bound: v.targetModel !== apiModel,
+      onDelete: () => remove({ id: v.voice, name: v.voice }, () => deleteTtsVoice(homeTarget(), { baseUrl: provider!.baseUrl, apiKey: provider!.apiKey || '', voice: v.voice, kind: v.kind })),
+    })),
+    // 手填过、账号里又列不到的音色也要看得见,不然选中态无处落
+    ...(voice && !presets.includes(voice) && !mineFor.cloud.some((v) => v.voice === voice) && !mineFor.direct.some((v) => v.voice === voice) ? [{ id: voice, name: voice }] : []),
+  ]
+  const pickItem = (item: VoiceItem): void => {
+    if (item.bound) { setNote(t('settings.realtime.boundNote', { model: item.desc?.replace(/^.*?(?=qwen)/, '') || '' })); return }
+    pick(item.id)
+  }
+  const canCreate = onCloud ? mine.length < mineFor.limit && /omni/i.test(cloudModel?.apiModelId || '') : !!provider
+  const created = (): void => setMineKey((k) => k + 1)
+  const use = (v: VoiceCreated): void => { void save({ realtimeVoice: v.voice }); setCreating(false) }
 
-  const doClone = (): void => {
-    if (!sample?.ok || !provider || busy) return
-    setBusy(true); setMsg(cloneBusyText(sample, t))
-    cloneTtsVoice(homeTarget(), { baseUrl: provider.baseUrl, apiKey: provider.apiKey || '', name, audioData: sample.dataUri, targetModel: model.slice(provider.providerId.length + 1), ...sample.script })
-      .then((r) => save({ realtimeVoice: r.voice }).then(() => {
-        setMsg([t('settings.realtime.cloned', { voice: r.voice }), r.fallbackReason ? t('voicesample.scriptMismatch') : ''].filter(Boolean).join(' '))
-        setSample(null); setPickerKey((k) => k + 1); setName(''); setMineKey((k) => k + 1)
-      }))
-      .catch((e: any) => setMsg(cloneErrorText(e, sample, t)))
-      .finally(() => setBusy(false))
-  }
-
-  // 卡头(走查续 4.5):没模型时说明为什么、右边给下一步(没得选 =「添加提供方」,有得选没选 =「去选模型」);有模型时说明走哪家、怎么计费。
-  const candidates = realtimeCandidates(stored, providers, cloudModel, signedIn)
-  const desc = model
-    ? t(cloudModel && model === cloudModel.id ? 'settings.realtime.billingCloud' : 'settings.realtime.billing')
-    : t(!candidates.length ? (cloudAccount ? 'settings.realtime.needProviderOrSignIn' : 'settings.realtime.needProvider') : 'settings.realtime.off')
-  const action = !model && onOpen
-    ? !candidates.length
-      ? <button type="button" className="btn ghost sm" onClick={() => onOpen('providers')}>{t('settings.voice.addProvider')}</button>
-      : <button type="button" className="btn ghost sm" onClick={() => onOpen('call-model')}>{t('settings.voice.chooseModel')}</button>
+  const on = !!model
+  const signInBtn = !candidates.length && cloudAccount
+    ? <button type="button" className="btn primary sm realtime-signin" onClick={() => void window.tangu?.forsionLogin?.()}><LogIn size={12} />{t('settings.realtime.signIn')}</button>
     : undefined
+  const action = candidates.length
+    ? <SettingsSwitch checked={on} label={t('settings.realtime.title')} className="realtime-switch" onChange={toggle} />
+    : signInBtn ?? (onOpen ? <button type="button" className="btn ghost sm" onClick={() => onOpen('providers')}>{t('settings.voice.addProvider')}</button> : undefined)
+  const desc = on
+    ? t(onCloud ? 'settings.realtime.billingCloud' : 'settings.realtime.billing')
+    : t(!candidates.length ? (cloudAccount ? 'settings.realtime.needProviderOrSignIn' : 'settings.realtime.needProvider') : 'settings.realtime.off')
+  const modelName = onCloud ? `Forsion · ${cloudModel!.name}` : apiModel
   return (
     <SettingsPanel className="settings-voice-call" icon={<Phone size={16} />} title={t('settings.realtime.title')} description={desc} actions={action}>
-      {model && (
+      {on && (
         <div className="settings-control-list">
-          <SettingsRow fit="wrap" label={t('settings.realtime.voice')} description={t('settings.realtime.voiceHint')} control={
-            <select ref={voiceRef} className="realtime-voice" aria-label={t('settings.realtime.voice')} value={customId !== null ? CUSTOM : voice || defaultVoiceFor(model, cloudModel)} onChange={(e) => pickVoice(e.target.value)}>
-              {presets.map((v) => <option key={v} value={v}>{isAudioFamily(model, cloudModel) ? v : `${v} · ${t(`settings.realtime.voice.${v}`)}`}</option>)}
-              {[...new Set([...(voice && !presets.includes(voice) ? [voice] : []), ...mine])].map((v) => <option key={v} value={v}>{t('settings.realtime.voiceMine', { id: v })}</option>)}
-              <option value={CUSTOM}>{t('settings.realtime.voiceCustom')}</option>
-            </select>
+          <SettingsRow fit="inline" label={t('settings.realtime.model')} control={
+            <button type="button" className="voice-link realtime-model-link" onClick={() => onOpen?.('call-model')}>{modelName}<ChevronRight size={13} /></button>
           } />
-          {customId !== null && (
-            <div className="settings-row-notes">
-              <input type="text" className="realtime-voice-custom" autoFocus aria-label={t('settings.realtime.voiceCustom')} value={customId} placeholder={t('settings.realtime.voiceIdPlaceholder')}
-                onChange={(e) => setCustomId(e.target.value)} onBlur={commitCustom}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { commitCustom(); voiceRef.current?.focus() } }} />
-            </div>
-          )}
-          {provider && (
-            <SettingsRow fit="inline" label={t('settings.realtime.cloneRow')} description={t('settings.realtime.cloneRowHint')} control={
-              <button type="button" className="btn ghost sm realtime-clone-toggle" aria-expanded={cloneOpen} onClick={() => { setCloneOpen((o) => !o); setSample(null) }}>{/* 收起 = 录音区卸载,选好的样本一并作废 */}
-                <Mic size={12} />{t(cloneOpen ? 'settings.voice.collapse' : 'settings.realtime.cloneBtnOpen')}
-              </button>
-            } />
-          )}
-          {provider && cloneOpen && (
-            <div className="settings-voice-block realtime-clone-box">
-              <p className="settings-voice-note">{t('settings.realtime.cloneHint')}</p>
-              <VoiceSamplePicker key={pickerKey} onChange={setSample} disabled={busy} />
-              <div className="settings-voice-inline">
-                <input type="text" style={{ width: 140 }} value={name} aria-label={t('settings.tts.studio.namePlaceholder')} placeholder={t('settings.tts.studio.namePlaceholder')} onChange={(e) => setName(e.target.value)} />
-                <button type="button" className="btn primary sm realtime-clone-go" disabled={!sample?.ok || busy} onClick={doClone}>
-                  {busy ? <Loader2 size={12} className="spin" /> : null} {t('settings.realtime.cloneBtn')}
-                </button>
-              </div>
-            </div>
-          )}
-          {provider && msg && <div className="settings-row-notes"><p className="settings-voice-note">{msg}</p></div>}
         </div>
       )}
+      {on && <VoiceGallery title={t('settings.realtime.voice')} system={system} mine={mine} value={effectiveVoice} previewScope="call" onPick={pickItem}
+        onNew={canCreate ? () => setCreating(true) : undefined} newHint={t('voicegallery.newCall')} />}
+      {on && provider && (
+        <div className="settings-control-list">
+          <SettingsRow fit="wrap" label={t('settings.realtime.custom')} description={t('settings.realtime.customHint')} control={
+            <input type="text" className="realtime-voice-custom" aria-label={t('settings.realtime.custom')} value={customId} onChange={(e) => setCustomId(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing && customId.trim()) { pick(customId.trim()); setCustomId('') } }} />
+          } />
+        </div>
+      )}
+      {!on && !candidates.length && cloudAccount && <VoiceGallery title={t('settings.realtime.voice')} hint={t('voicegallery.hintListen')} system={system} value="" previewScope="call" />}
+      {note && <div className="settings-row-notes"><p className="settings-voice-note" role="status">{note}</p></div>}
+      {creating && <VoiceCreateDialog kind="call" cloud={onCloud ? { modelId: cloudModel!.id, modelName: cloudModel!.name, limit: mineFor.limit } : null} provider={provider} targetModel={apiModel || undefined}
+        onCreated={created} onUse={use} onClose={() => setCreating(false)} playCloudSample={(id) => previewCloud(`call:new:${id}`, id)} />}
     </SettingsPanel>
   )
 }

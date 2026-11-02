@@ -330,6 +330,16 @@ describe('unitWeb', () => {
     } finally { b.close() }
   })
 
+  const lanAddress = Object.values(networkInterfaces()).flat().find((n) => n && n.family === 'IPv4' && !n.internal)?.address
+  it.skipIf(!lanAddress)('绑在具体局域网地址上时,本机隧道仍能用内部密钥进来', async () => {
+    const b = await boot(null, undefined, undefined, undefined, lanAddress)
+    try {
+      const url = `http://${lanAddress}:${b.handle.port}/unit/spaces`
+      expect((await fetch(url, { headers: { 'x-unit-internal': b.handle.internalSecret } })).status).toBe(200)
+      expect((await fetch(url, { headers: { 'x-unit-internal': 'wrong' } })).status).toBe(401)
+    } finally { b.close() }
+  })
+
   it('/unit/spaces:未配对 401;配对后返回 Space 配方清单(设备页 Ribbon 的数据源)', async () => {
     const b = await boot()
     try {
@@ -967,6 +977,28 @@ describe('unitWeb', () => {
       o.paired.push({ id: 'owner', name: 'owner', tokenHash: createHash('sha256').update(ownerToken).digest('hex'), createdAt: 0 })
       expect((await raw(o.base, 'POST', '/engine/agent/runs', { Authorization: `Bearer ${ownerToken}` })).status).toBe(200)
     } finally { o.close() }
+  })
+
+  it('Unit 接上云账号后:隧道来路不算工作区主人(引擎走允许清单且盖远端标记,不可逆删除只许本机),主人不变', async () => {
+    const ownerToken = 'owner-access-key-relay'
+    const seen: Array<Record<string, unknown>> = []
+    const engine = http.createServer((req, res) => { seen.push({ ...req.headers }); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}') })
+    await new Promise<void>((done) => engine.listen(0, '127.0.0.1', done))
+    const o = await boot(null, undefined, undefined, { projection: { mode: 'local', basePath: '/', product: PRODUCT },
+      getEngine: () => ({ url: `http://127.0.0.1:${(engine.address() as AddressInfo).port}`, token: 'k', remoteMark: 'mark' }) })
+    try {
+      o.paired.push({ id: 'owner', name: 'owner', tokenHash: createHash('sha256').update(ownerToken).digest('hex'), createdAt: 0 })
+      const owner = { Authorization: `Bearer ${ownerToken}` }, tunnel = { 'x-unit-internal': o.handle.internalSecret }
+      expect((await raw(o.base, 'POST', '/engine/agent/runs', owner)).status).toBe(200)
+      expect(seen.at(-1)).not.toHaveProperty('x-forsion-remote')
+      expect((await raw(o.base, 'POST', '/engine/agent/runs', tunnel)).status).toBe(403)
+      expect((await raw(o.base, 'GET', '/engine/agent/sessions', tunnel)).status).toBe(200)
+      expect(seen.at(-1)).toMatchObject({ 'x-forsion-remote': 'tunnel', 'x-forsion-remote-mark': 'mark' })
+      const empty = JSON.stringify({ ch: IPC.emptyTrash, args: [] })
+      const rpc = (headers: Record<string, string>) => fetch(`${o.base}/vault/rpc`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: empty })
+      expect((await rpc(tunnel)).status).toBe(403)
+      expect((await rpc(owner)).status).toBe(200)
+    } finally { o.close(); engine.close() }
   })
 
   it('K4 /unit/remote-access:未鉴权 401;只回调用方自己的状态;POST …/request 只为 unit / account 触发;坏断言 403', async () => {

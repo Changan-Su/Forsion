@@ -80,6 +80,13 @@ export async function previewTts(t: EngineTarget, opts: { model: string; voice?:
   await a.play()
 }
 
+/** 朗读实际用的配置:用户从没动过朗读模型、已登录、后台给了项目默认 → 跟随后台(只算出来,不落盘,后台改了会跟着变)。 */
+export function effectiveTtsConfig<T extends StoredDesktopConfig>(stored: T | null | undefined, catalog: { ttsModelId?: string | null; ttsVoice?: string | null } | null | undefined, signedIn: boolean): T | null {
+  if (!stored) return null
+  if (!stored.ttsModelUnset || !signedIn || !catalog?.ttsModelId) return stored
+  return { ...stored, ttsModelId: catalog.ttsModelId, ttsVoice: stored.ttsVoice || catalog.ttsVoice || '' }
+}
+
 /**
  * 语音条:把一段消息合成为 blob URL(调用方塞进自己的 <audio>,负责 revoke)。
  * 与朗读同一 /agent/tts 契约,但不接管全局播放状态机 —— 每个语音条独立控制播放/进度。

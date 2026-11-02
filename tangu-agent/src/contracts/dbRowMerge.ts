@@ -64,14 +64,23 @@ function replaced(X: Obj, B: Obj): boolean {
   const br = ids(B.rows), bc = ids(B.columns);
   return (br.size > 0 || bc.size > 0) && !overlap(ids(X.rows), br) && !overlap(ids(X.columns), bc);
 }
-/** 新装机首启播种、一点没动过的「我的日历」(desktop schema.ts seedCalendarDb):第一次见面时它就是「空的」,用另一边,
+/** 种子日历的表头一点没动过,也没多出任何东西(改过名字、列,加过视图都算用户的)。桌面种中文,Unit 按语言种;
+ *  老种子和 server 云库种子的「完成」列是 todo 类型。 */
+const SEED_HEADS = new Set(['我的日历|text:名称|calendarDate:日期|checkbox:完成', 'Calendar|text:Name|calendarDate:Date|checkbox:Done']);
+function seedHeader(X: Obj): boolean {
+  const cols = Array.isArray(X.columns) ? (X.columns as Obj[]) : [];
+  const only = (o: Obj, keys: string[]): boolean => Object.keys(o).every((k) => keys.includes(k));
+  if (typeof X.version !== 'number' || !only(X, ['version', 'name', 'columns', 'rows'])) return false;
+  if (!cols.every((c) => isObj(c) && typeof c.id === 'string' && only(c, ['id', 'name', 'type']))) return false;
+  return SEED_HEADS.has([X.name, ...cols.map((c) => `${c.type}:${c.name}`.replace(/^todo:/, 'checkbox:'))].join('|'));
+}
+/** 老版本首启播种、一点没动过的「我的日历」(三条示例):第一次见面时它就是「空的」,用另一边,
  *  不然每多一台设备,三条欢迎日程就在所有人的日历里多一份。日期相对播种当天(D、D+1、D+2),每一格都要和种子逐字一致:
  *  改过时间、打过勾的种子日程是用户的数据,照常并(10-20 Codex 复核:只比标题会把改过期的种子整份丢掉)。 */
 function untouchedSeed(X: Obj): boolean {
-  const cols = Array.isArray(X.columns) ? (X.columns as Obj[]) : [];
   const rows = X.rows as Obj[];
-  if (X.name !== '我的日历' || X.views !== undefined || cols.length !== 3 || rows.length !== 3) return false;
-  if (cols.map((c) => `${c.type}:${c.name}`).join('|') !== 'text:名称|calendarDate:日期|checkbox:完成') return false;
+  if (!seedHeader(X) || rows.length !== 3) return false;
+  const cols = X.columns as Obj[];
   const [n, d, k] = cols.map((c) => c.id as string);
   const first = isObj(rows[0].cells) && typeof rows[0].cells[d] === 'string' ? /^(\d{4})-(\d{2})-(\d{2})T10:00\//.exec(rows[0].cells[d] as string) : null;
   if (!first) return false;
@@ -82,6 +91,13 @@ function untouchedSeed(X: Obj): boolean {
     { [n]: '项目评审', [d]: `${day(2)}T14:00/${day(2)}T15:30` },
   ];
   return rows.every((r, i) => Object.keys(r).every((key) => key === 'id' || key === 'cells') && same(r.cells, seed[i]));
+}
+
+/** 库根上的 Calendar.db 还是没人动过的种子(零行,或原样的三条示例):默认日历搬到 human/ 之后它没用了。
+ *  解析不了 = 不知道,一律 false,当成用户的。 */
+export function isUntouchedCalendarSeed(text: string | null): boolean {
+  const X = parse(text);
+  return !!X && (untouchedSeed(X) || (seedHeader(X) && (X.rows as Obj[]).length === 0));
 }
 
 export function mergeDbFile(ours: string, base: string | null, theirs: string): DbMergeResult | null {

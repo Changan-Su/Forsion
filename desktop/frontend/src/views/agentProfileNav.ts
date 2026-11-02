@@ -1,6 +1,12 @@
 import { setActiveSpace, useWorkspace } from '@lcl/engine'
 import type { HumanJump } from '../services/humanCollaboration'
 
+/** Open the existing Agents creation form directly from another Space. */
+export function openAgentCreation(): void {
+  setActiveSpace('agents')
+  useWorkspace.getState().openView('agent-profile', { reuseKey: 'primary', creating: true, me: false }, 'main')
+}
+
 /** 在 Agents Space 主区打开某个 Agent 的详情。单独成模块:聊天区(HistorianStatus 的复盘提醒)也要跳过来,
  *  不该为两行导航把整个 AgentProfileView 拖进聊天 chunk。
  *  section:直达某个标签(提醒点开要落在「进化」而不是「配置」);sectionAt 让同一 Agent 已打开时也能再次跳转(视图按它重挂)。

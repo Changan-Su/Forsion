@@ -78,6 +78,19 @@ describe('config.json 唯一真源', () => {
     expect(existsSync(join(dir, 'mcp.json'))).toBe(true); // 未 .bak
   });
 
+  it('⚠️auth.json 读不出来 → 不迁移也不挪走(挪走 = 不存在 = 所有读者当已登出),别的遗留文件照常迁移', () => {
+    writeFileSync(join(dir, 'providers.json'), JSON.stringify([{ id: 'x' }]));
+    for (const bad of ['', '{"token":', '[]', 'null', '{"token":1}']) {
+      writeFileSync(join(dir, 'auth.json'), bad);
+      rmSync(configFile(), { force: true });
+      migrateLegacyConfig();
+      expect(getRawSection('cloud')).toBeUndefined();
+      expect(readFileSync(join(dir, 'auth.json'), 'utf8')).toBe(bad);
+      expect(existsSync(join(dir, 'auth.json.bak'))).toBe(false);
+      writeFileSync(join(dir, 'providers.json'), JSON.stringify([{ id: 'x' }]));
+    }
+  });
+
   it('全新安装(无任何遗留)→ 不落空 config.json', () => {
     migrateLegacyConfig();
     expect(configExists()).toBe(false);

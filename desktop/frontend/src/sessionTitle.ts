@@ -3,8 +3,9 @@
  * (tangu-agent `sessions.ts`),中文界面里不该原样露英文。显示层统一过这一道;
  * 落库值不改 —— `appStore` 的首条消息自动改名仍按 `=== 'New Chat'` 判「还没起过名」。
  */
+import { agentName, agentNames } from './agentName'
 import { registerMessages } from './i18n'
-import type { WorkspaceDescriptor } from './types'
+import type { NormalAgentDef, WorkspaceDescriptor } from './types'
 
 registerMessages({
   'session.untitled': { zh: '新会话', en: 'New session' },
@@ -19,6 +20,12 @@ export const ENGINE_UNTITLED_SESSION = 'New Chat'
 export function displaySessionTitle(title: string | null | undefined, t: (key: string) => string): string {
   const s = (title || '').trim()
   return !s || s === ENGINE_UNTITLED_SESSION ? t('session.untitled') : (title as string)
+}
+
+/** 私聊:没起过题时显示 Agent 现在的名字(名字随语言和改名变,引擎不落库);老会话落库的是建会话时的名字,也按没起过题算。 */
+export function soloSessionTitle(title: string | null | undefined, agent: NormalAgentDef | undefined, t: (key: string) => string): string {
+  const s = (title || '').trim()
+  return agent && (!s || s === ENGINE_UNTITLED_SESSION || agentNames(agent).includes(s)) ? agentName(agent) : displaySessionTitle(title, t)
 }
 
 /** 工作区作**组头 / 详情标题**时的显示名:无根组换成「无项目会话」,其余用落盘名(选择器里仍显示 ws.name 原文)。 */

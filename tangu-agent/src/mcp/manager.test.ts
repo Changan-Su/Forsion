@@ -401,3 +401,28 @@ describe('C2 stdio 子进程环境(P0 第三轮 E10)', () => {
     } finally { delete process.env.TANGU_TOKEN; }
   }, 20_000);
 });
+
+
+describe('idle MCP configuration reload', () => {
+  it('defers changes while a run is active, reconnects at idle, and never redirects an old tool snapshot', async () => {
+    let idle = true;
+    const m = await managerFor({ editable: stdio('old') }, { ...FAST, canReload: () => idle });
+    const old = m.toolsForRun().get('mcp__editable__echo')!;
+    expect(old).toBeTruthy();
+    idle = false;
+    writeFileSync(join(dir, 'mcp-0.json'), JSON.stringify({ mcpServers: { editable: stdio('new'), added: stdio('added') } }));
+    await m.reloadConfig();
+    expect((await m.callTool(old, { text: 'hello' })).text).toContain('old:hello');
+    expect(m.toolsForRun().has('mcp__added__echo')).toBe(false);
+    idle = true;
+    await m.reloadConfig();
+    expect((await m.callTool(old, { text: 'must not reach new' })).isError).toBe(true);
+    const fresh = m.toolsForRun().get('mcp__editable__echo')!;
+    expect((await m.callTool(fresh, { text: 'hello' })).text).toContain('new:hello');
+    expect(m.toolsForRun().has('mcp__added__echo')).toBe(true);
+    writeFileSync(join(dir, 'mcp-0.json'), JSON.stringify({ mcpServers: { editable: { ...stdio('new'), enabled: false } } }));
+    await m.reloadConfig();
+    expect(m.toolsForRun().size).toBe(0);
+    expect((await m.callTool(fresh, { text: 'after disabling' })).isError).toBe(true);
+  });
+});

@@ -23,8 +23,13 @@ vi.mock('./forsionHome', () => ({
   isDevMode: () => false,
 }))
 vi.mock('./amadeus/settings', () => ({ amadeusConfigPath: () => join(H.dir, 'amadeus-config.json') }))
+vi.mock('./forsionAuth', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./forsionAuth')>()
+  return { ...real, loadTanguCreds: vi.fn(real.loadTanguCreds) }
+})
 
 const { BackendManager, injectEngineLang } = await import('./backendManager')
+const { loadTanguCreds } = await import('./forsionAuth')
 
 const writeAuth = (token: string): void =>
   writeFileSync(join(H.dir, 'auth.json'), JSON.stringify({ token }), 'utf8')
@@ -42,6 +47,17 @@ function envDumpEngine(): { entry: string; dump: () => { local: string | null; c
 }
 
 describe('BackendManager engine credentials (C1 / C2)', () => {
+  it('云端票只从 loadTanguCreds 取:auth.json 坏了时账号层的取值策略在那边,这里另读一份就绕开了', () => {
+    rmSync(join(H.dir, 'auth.json'), { force: true })
+    vi.mocked(loadTanguCreds).mockReturnValueOnce({ token: 'from-account-layer' })
+    expect((new BackendManager() as unknown as { cloudToken(): string | null }).cloudToken()).toBe('from-account-layer')
+  })
+
+  it('auth.json 内容是 JSON null:算没有云端票,不抛(抛了引擎就起不来)', () => {
+    writeFileSync(join(H.dir, 'auth.json'), 'null')
+    expect((new BackendManager() as unknown as { cloudToken(): string | null }).cloudToken()).toBeNull()
+  })
+
   it('spawn 契约:TANGU_LOCAL_TOKEN = getToken()(≠ forsion_token),TANGU_TOKEN = forsion_token,TANGU_REMOTE_MARK_SECRET = remoteMarkSecret()', async () => {
     writeAuth('forsion-jwt-at-spawn')
     const eng = envDumpEngine()

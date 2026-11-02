@@ -44,7 +44,7 @@
   font-family: var(--font-body);
   font-size: var(--ui-font-body, 13px);
   line-height: var(--ui-line-body, 1.5);
-  white-space: pre-wrap;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 .am-ai-panel .am-ai-error {
@@ -70,3 +70,6 @@
   user-select: text;
   -webkit-user-select: text;
 }
+/* Formula layout is atomic. Wide equations/tables scroll inside the preview, never stretch the overlay. */
+.am-ai-panel .am-ai-preview .katex-display { max-width: 100%; overflow-x: auto; overflow-y: hidden; padding-block: 2px; }
+.am-ai-panel .am-ai-preview .katex { overflow-wrap: normal; word-break: normal; white-space: nowrap; }

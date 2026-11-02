@@ -192,6 +192,8 @@ export interface SearchBrain {
 /** 模型目录(admin 列表用)。 */
 export interface ModelsBrain {
   listGlobalModels(...args: any[]): Promise<any[]>;
+  /** Live local engine-plugin sources; no credentials and no fixed catalog mutation. */
+  listPluginModels?(): Promise<AgentModel[]>;
   /**
    * 本地直连 provider 列表(BYO-key,桌面/TUI 模型选择器用;绝不含 apiKey,baseUrl 仅供 UI 展示)。
    * 可选:仅 standalone 的 multiBrain 实现;forsionSeams/httpBrain 不实现 → 调用方跳过。
@@ -225,7 +227,10 @@ export interface ModelsBrain {
     /** 辅助模型 · 图像识别槽(主模型无原生视觉时的兜底;空 = 不启用)。 */
     visionModelId?: string | null;
     /** 云端的实时语音通话模型(不在 models 里;apiModelId = 上游模型名,客户端按它分音色家族)。老云端不给 = 没有云端通话。 */
-    realtimeModel?: { id: string; name: string; apiModelId?: string | null } | null;
+    realtimeModel?: { id: string; name: string; apiModelId?: string | null; defaultVoice?: string } | null;
+    /** 后台给这个应用定的朗读默认模型与音色;没定 = 不默认开朗读。 */
+    ttsModelId?: string | null;
+    ttsVoice?: string | null;
     /** 云端的机器翻译模型(百炼 qwen-mt 那一类;不在 models 里 —— 它们不能聊天)。老云端不给 = 没有。 */
     translateModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>;
     /** 云端的朗读模型(不在 models 里 —— 它们只合成语音;桌面「语音朗读」的模型框列它们)。老云端不给 = 没有。 */
@@ -356,6 +361,15 @@ export interface TtsBrain {
   synthesize(req: SpeechRequest): Promise<SpeechResult>;
 }
 
+/** Forsion 账号代管的通话音色(云端复刻):key 住云端,按用户隔离;只有云端实现。 */
+export interface CloudVoice { id: string; voice: string; name: string; modelId: string; hasSample: boolean }
+export interface VoicesBrain {
+  list(userId: string): Promise<{ voices: CloudVoice[]; limit: number }>;
+  clone(userId: string, req: { modelId: string; name: string; audioData: string; text?: string; language?: string }): Promise<CloudVoice>;
+  remove(userId: string, id: string): Promise<void>;
+  sample(userId: string, id: string): Promise<{ data: string; mime: string }>;
+}
+
 /** 实时语音(speech-to-speech)上游:给出 WebSocket 地址与鉴权头,连接与转发归调用方(services/realtimeVoice)。 */
 export interface RealtimeBrain {
   /** model = `<providerId>/<model>`(自带百炼 key 直连)或 Forsion 云端的实时模型 id(经云端中转,计费在云端)。 */
@@ -393,6 +407,13 @@ export class AmadeusTooLargeError extends Error {
     this.name = 'AmadeusTooLargeError';
   }
 }
+/** 默认日历写冲突(409):版本已前进,响应不带内容,调用方重读再重放。 */
+export class HumanCalendarConflictError extends Error {
+  constructor() {
+    super('human calendar write conflict');
+    this.name = 'HumanCalendarConflictError';
+  }
+}
 
 export interface AmadeusBrain {
   /** 全 vault 文件清单(GET tree 的 pages+files 合并;path=vault 相对路径)。 */
@@ -401,6 +422,11 @@ export interface AmadeusBrain {
   read(path: string): Promise<{ content: string; seq: number }>;
   /** 写文本文件;baseSeq=乐观锁(409 → AmadeusConflictError 带最新 seq+content),force=无条件覆盖。 */
   write(path: string, content: string, opts?: { baseSeq?: number; force?: boolean }): Promise<{ seq: number }>;
+  /** 读默认日历 human/CALENDAR.db(对端 /api/agent/human/CALENDAR.db)。data=null = 还没有这个文件;legacy = 它的旧位置
+   *  (`cloud://<vault>/Calendar.db`)。返回 null = 用不了(旧云端 / 文件坏了);其余失败抛错,不当成没有。 */
+  readHumanCalendar?(): Promise<{ data: unknown; version: string | null; legacy: string | null } | null>;
+  /** 比对交换写;version=null = 新建。409 → HumanCalendarConflictError。 */
+  writeHumanCalendar?(data: unknown, version: string | null): Promise<void>;
 }
 
 /** cloud.request 的一次请求。path 以 /api/ 开头(可带查询串);body 按 JSON 发。 */
@@ -475,6 +501,8 @@ export interface CloudBrainServices {
   images?: ImagesBrain;
   /** 语音合成;可选:仅 standalone multiBrain 实现(BYO-key 直连),云端未注入 → /agent/tts 返回 501。 */
   tts?: TtsBrain;
+  /** 云端音色;可选:没接云端 → /agent/tts/cloud-voices 回 501。 */
+  voices?: VoicesBrain;
   /** 实时语音;可选:standalone 实现(multiBrain 自带 key 直连百炼,否则 httpBrain 走 Forsion 云端中转);云端 worker 未注入 → /agent/realtime 拒连。 */
   realtime?: RealtimeBrain;
   /** 每-agent 云文件(Phase 2);可选:旧云端/纯本地未注入 → 同步/水合调用方跳过。 */
@@ -505,6 +533,8 @@ export interface InboxBrain {
     claim_requirements?: string | null;
     /** 线程判别 JSON 原文(服务端 inboxNotify.ts:{kind:'feedback',ticketId,event});普通广播为空。原样落进 inbox_messages.thread。 */
     thread?: string | null;
+    /** 广播类型:update / store / maintenance / promo / other;老服务端不给(入库时按 other)。 */
+    kind?: string | null;
   }>>;
   /** 领取广播附件(对端 POST /api/brain/inbox/broadcasts/:id/claim;发放全在服务端)。
    *  client=领取端自报的 `desktop/2.10.1`(服务端按它判最低版本)。

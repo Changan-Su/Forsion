@@ -5,6 +5,7 @@ import { dirname, extname, join } from 'node:path';
 import { deps } from '../seams/runtime.js';
 import { agentsDir, humanDir, tanguHome, userMdFile } from '../core/tanguHome.js';
 import { HUMAN_SYNC_FILES, joinFirstContact, mirrorLegacyHuman } from '../agents/humanFolder.js';
+import { mergePortrait } from '../agents/humanPortrait.js';
 import { getDeviceId } from '../core/deviceId.js';
 import { getAgent, listAgents, parseAgentConfig, trashAgent, resolveMemorySlug, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { splitLogBlocks, mergeBlocks, mergeLogHeaders, mergeText3 } from './memorySync.js';
@@ -315,6 +316,12 @@ function mergeFile(p: string, ours: string, base: string | null, theirs: string,
   }
   // 只有 Agent 的记忆按事实集合合并;human/MEMORY.md 是人的本子、和 USER.md 镜像互相 diff3,集合合并会重排行,下一轮镜像那对合不拢、丢行(10-23)
   if (agent && p === 'MEMORY.md' && base !== null) return { content: mergeFactLines(ours, base, theirs), conflict: false };
+  // 画像(human/SOUL.md,10-29):两台都往 Agent 那一节末尾各记一条,按行三方合并几乎必然合不拢。合不拢时条目行按集合合(两边新加的都留、删的都删),
+  // 其余文字取云端;本机还改了别的文字 → conflict,照旧把本机整份存成冲突副本。它没有旧位置镜像,不受上面 human/MEMORY.md 那条限制。
+  if (!agent && p === 'SOUL.md' && base !== null) {
+    const text = mergeText3(ours, base, theirs);
+    return text !== null ? { content: text, conflict: false } : mergePortrait(ours, base, theirs);
+  }
   const text = base === null ? joinFirstContact(ours, theirs) : mergeText3(ours, base, theirs);
   return text === null ? null : { content: text, conflict: false };
 }

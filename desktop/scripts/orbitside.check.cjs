@@ -410,14 +410,14 @@ async function run(app, win) {
   await sleep(350)
   await (await leftPane(win)).screenshot({ path: shots.light })
 
-  check('5 顶部不再显示 Chat/Work,筛选胶囊在 New Session 下一行', !st.hasModeBtn && await win.locator('.t2o-filters [role="tab"]').count() === 4, '')
+  check('5 顶部不再显示 Chat/Work,保留四段分类胶囊', !st.hasModeBtn && await win.locator('.t2o-filters [role="tab"]').count() === 4, '')
   const alignment = await win.evaluate(() => {
     const q = (s) => document.querySelector(s).getBoundingClientRect()
     return { title: q('.t2o-head .t2s-special-title').left, row: q('.t2o-row .t2o-name').left,
       lead: q('.t2o-head .t2s-special-ic').left, rowLead: q('.t2o-row .t2o-lead').left,
-      headBottom: q('.t2o-head').bottom, filterTop: q('.t2o-filters').top }
+      headTop: q('.t2o-head').top, filterBottom: q('.t2o-filters').bottom }
   })
-  check('5a New Session 图标槽与文字均对齐一级条目', near(alignment.title, alignment.row, .6) && near(alignment.lead, alignment.rowLead, .6) && alignment.filterTop >= alignment.headBottom - 1, JSON.stringify(alignment))
+  check('5a 分类胶囊位于新建行上方,新建图标槽与文字均对齐一级条目', near(alignment.title, alignment.row, .6) && near(alignment.lead, alignment.rowLead, .6) && alignment.headTop >= alignment.filterBottom - 1, JSON.stringify(alignment))
 
   // ── 8 一级行响应 panel 宽度 + 筛选胶囊与图标列对齐(基准 = 顶部 New Session 行;原先是档位下拉,已撤)──
   const alignedToHead = (a) => {

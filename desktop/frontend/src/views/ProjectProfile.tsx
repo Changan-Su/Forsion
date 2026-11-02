@@ -34,6 +34,7 @@ import { thinkingLabel } from '../components/thinkingLabel'
 import { APPROVAL_MODE_ORDER, MODE_KEY } from '../approvalReason'
 import { freshJump, revealRecords, type RecordJump } from '../services/recordJump'
 import { homeTarget } from '../services/engine/targets'
+import { agentName, agentNames } from '../agentName'
 
 type Tab = 'agents' | 'settings' | 'git' | 'human'
 const TABS: Array<{ id: Tab; icon: typeof Users }> = [{ id: 'agents', icon: Users }, { id: 'human', icon: FileText }, { id: 'settings', icon: Settings2 }, { id: 'git', icon: GitBranch }]
@@ -598,24 +599,24 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     ? [...new Set(config.groupAgents || s.teams.find(team => team.slug === config.teamSlug)?.members.map(m => m.slug) || [])]
     : [config.agentSlug || s.defaultSlug]
   const teamOf = (slug: string) => s.teams.find((team) => team.slug === slug)
-  const executorLabel = (ex: ProjectExecutor): string => ex.kind === 'agent' ? agentOf(ex.id)?.name || ex.id
+  const executorLabel = (ex: ProjectExecutor): string => ex.kind === 'agent' ? agentName(agentOf(ex.id)) || ex.id
     : ex.kind === 'team' ? teamOf(ex.id)?.name || ex.id
     : ex.kind === 'party' ? ex.sessions[0]?.title || t('projectProfile.party')
     : s.engines.find((e) => e.id === ex.id)?.name || ex.id
   const executorPortrait = (ex: ProjectExecutor): ReactNode => {
-    if (ex.kind === 'agent') return <AgentAvatar name={agentOf(ex.id)?.name || ex.id} url={s.avatars[ex.id]} fill />
+    if (ex.kind === 'agent') return <AgentAvatar name={agentName(agentOf(ex.id)) || ex.id} url={s.avatars[ex.id]} fill />
     if (ex.kind === 'engine') return <TerminalSquare size={26} strokeWidth={1.2} />
     const team = ex.kind === 'team' ? teamOf(ex.id) : undefined
     if (team && s.teamAvatars[team.slug] && isTeamImageAvatar(team.avatar)) return <img src={s.teamAvatars[team.slug]} alt="" />
     if (team?.avatar && !isTeamImageAvatar(team.avatar)) return <span aria-hidden="true">{team.avatar}</span>
     const cfg = s.configBySession[ex.sessions[0]?.id] || ex.sessions[0]?.agent_config
     const slugs = team ? team.members.map((m) => m.slug) : cfg?.groupAgents || []
-    return slugs.length ? <AvatarStack size={38} items={slugs.map((slug) => ({ slug, name: agentOf(slug)?.name || slug, avatarUrl: s.avatars[slug] }))} /> : <Users size={26} strokeWidth={1.2} />
+    return slugs.length ? <AvatarStack size={38} items={slugs.map((slug) => ({ slug, name: agentName(agentOf(slug)) || slug, avatarUrl: s.avatars[slug] }))} /> : <Users size={26} strokeWidth={1.2} />
   }
   const isDefault = (ex: ProjectExecutor) => (ex.kind === 'agent' && ctx?.settings?.defaultAgent === ex.id) || (ex.kind === 'team' && ctx?.settings?.defaultTeam === ex.id)
   const q = query.trim().toLowerCase()
   const listed = new Set(executors.map((ex) => ex.key))
-  const agentCandidates = s.agents.filter((a) => a.createdBy !== 'system' && !listed.has(`agent:${a.slug}`) && `${a.name} ${a.description} ${a.slug}`.toLowerCase().includes(q))
+  const agentCandidates = s.agents.filter((a) => a.createdBy !== 'system' && !listed.has(`agent:${a.slug}`) && `${agentNames(a).join(' ')} ${a.description} ${a.slug}`.toLowerCase().includes(q))
   const teamCandidates = s.teams.filter((team) => !listed.has(`team:${team.slug}`) && team.members.length >= 2 && `${team.name} ${team.description} ${team.slug}`.toLowerCase().includes(q))
   const git = ctx?.git
   const changeCount = git?.repo ? git.changesTotal ?? 0 : 0
@@ -679,8 +680,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
         {loadError && <p className="agent-profile-error" role="alert" style={{ paddingTop: 16 }}>{loadError} <button className="profile-text-action" onClick={() => setReloadAt((n) => n + 1)}>{t('projectProfile.retry')}</button></p>}
         {tab === 'human' && <>
           <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'project', sessionId: session.id }} name={workspace.name} running={running} jump={humanJump} onRewrite={rewriteHuman('projectPrompt')} />
-          {collaborationSlugs.map(slug => <details className="human-inherited" key={slug}><summary>{t('human.inherited', { name: agentOf(slug)?.name || slug })}</summary>
-            <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug }} name={agentOf(slug)?.name || slug} running={running} onRewrite={slug === carrierSlug ? rewriteHuman('agentPrompt') : undefined} />
+          {collaborationSlugs.map(slug => <details className="human-inherited" key={slug}><summary>{t('human.inherited', { name: agentName(agentOf(slug)) || slug })}</summary>
+            <HumanCollaborationPanel engine={homeTarget()} cfg={s.cfg} target={{ kind: 'agent', slug }} name={agentName(agentOf(slug)) || slug} running={running} onRewrite={slug === carrierSlug ? rewriteHuman('agentPrompt') : undefined} />
           </details>)}
         </>}
         {tab === 'agents' && <>
@@ -688,8 +689,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           {picker && <div className="team-candidate-picker"><div className="team-candidate-heading"><label className="agents-search"><Search size={13} /><input autoFocus value={query} onChange={(e) => setQuery(e.target.value)} aria-label={t('agentProfile.search')} placeholder={t('agentProfile.search')} /></label><button aria-label={t('projectProfile.closePicker')} onClick={() => setPicker(false)}><X size={14} /></button></div>
             <p className="team-profile-caption">{t('projectProfile.addHint')}</p>
             <div className="team-candidates project-candidates">
-              {agentCandidates.map((a) => <button key={a.slug} onClick={() => startWith({ kind: 'agent', slug: a.slug })}><AgentAvatar name={a.name || a.slug} url={s.avatars[a.slug]} size={16} className="agent-avatar-mini" /><span><strong>{a.name}</strong><small>{a.description}</small></span><MessageSquarePlus size={14} /></button>)}
-              {teamCandidates.map((team) => <button key={team.slug} onClick={() => startWith({ kind: 'team', team })}><Users size={16} /><span><strong>{team.name}</strong><small>{team.description || team.members.map((m) => agentOf(m.slug)?.name || m.slug).join(' · ')}</small></span><MessageSquarePlus size={14} /></button>)}
+              {agentCandidates.map((a) => <button key={a.slug} onClick={() => startWith({ kind: 'agent', slug: a.slug })}><AgentAvatar name={agentName(a)} url={s.avatars[a.slug]} size={16} className="agent-avatar-mini" /><span><strong>{agentName(a)}</strong><small>{a.description}</small></span><MessageSquarePlus size={14} /></button>)}
+              {teamCandidates.map((team) => <button key={team.slug} onClick={() => startWith({ kind: 'team', team })}><Users size={16} /><span><strong>{team.name}</strong><small>{team.description || team.members.map((m) => agentName(agentOf(m.slug)) || m.slug).join(' · ')}</small></span><MessageSquarePlus size={14} /></button>)}
               {!agentCandidates.length && !teamCandidates.length && <p className="agent-profile-muted">{t('projectProfile.noCandidates')}</p>}
             </div></div>}
           <div className="team-lineup">{executors.map((ex) => {
@@ -777,7 +778,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             <div className="project-card-head"><div><h3>{t('projectProfile.defaults')}</h3><small>{t('projectProfile.defaultsHint')}</small></div></div>
             <label className="project-field">{t('projectProfile.defaultExecutor')}<select value={execValue} onChange={(e) => setExec(e.target.value)}>
               <option value="">{t('projectProfile.defaultNone')}</option>
-              <optgroup label={t('projectProfile.agents')}>{s.agents.filter((a) => a.createdBy !== 'system').map((a) => <option key={a.slug} value={`agent:${a.slug}`}>{a.name}</option>)}</optgroup>
+              <optgroup label={t('projectProfile.agents')}>{s.agents.filter((a) => a.createdBy !== 'system').map((a) => <option key={a.slug} value={`agent:${a.slug}`}>{agentName(a)}</option>)}</optgroup>
               {s.teams.length > 0 && <optgroup label={t('projectProfile.teams')}>{s.teams.map((team) => <option key={team.slug} value={`team:${team.slug}`}>{team.name}</option>)}</optgroup>}
             </select></label>
             <label className="project-field">{t('agentProfile.approval')}<select value={settingsDraft.approvalMode || ''} onChange={(e) => patchSettings({ approvalMode: (e.target.value || undefined) as ProjectSettings['approvalMode'] })}>

@@ -366,8 +366,9 @@ const api = {
   importLocalProviders: (ids: string[]): Promise<any[]> => ipcRenderer.invoke('providers:importLocal', ids),
   deleteProvider: (providerId: string): Promise<any[]> => ipcRenderer.invoke('providers:delete', providerId),
   // ── MCP server 管理(~/.tangu/mcp.json;保存后托管后端重启重连)──
+  importMcpConfig: (cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => ipcRenderer.invoke('mcp:import', cfg),
   readMcpConfig: (): Promise<{ mcpServers: Record<string, any> }> => ipcRenderer.invoke('mcp:read'),
-  writeMcpConfig: (cfg: { mcpServers: Record<string, any> }): Promise<{ mcpServers: Record<string, any> }> =>
+  writeMcpConfig: (cfg: { mcpServers: Record<string, any>; base?: Record<string, any> }): Promise<{ mcpServers: Record<string, any> }> =>
     ipcRenderer.invoke('mcp:write', cfg),
   // ── 跨生态 agent 资产发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu)──
   discoveryScan: (): Promise<any> => ipcRenderer.invoke('discovery:scan'),
@@ -577,7 +578,7 @@ const api = {
   reportUiLocale: (locale: 'zh' | 'en'): void => ipcRenderer.send(UI_LOCALE_CHANNEL, locale),
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   /** Mini 卡片自绘缩放边:edge = n / s / e / w 的组合;start = 起手;null = 松手。位移由主进程读光标算。 */
-  miniResize: (edge: string | null, start?: boolean, cursor?: { x: number; y: number }): void => ipcRenderer.send('window:miniResize', edge, start === true, cursor),
+  miniResize: (edge: string | null, start?: boolean, cursor?: { x: number; y: number; radius?: number }): void => ipcRenderer.send('window:miniResize', edge, start === true, cursor),
   cursorScreenPoint: (): { screenX: number; screenY: number } => ipcRenderer.sendSync('window:cursorScreenPoint'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
   dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>
@@ -691,7 +692,7 @@ const AGENT_KEYS = [
   'connectListingApply', 'connectListingWithdraw', 'connectStore',
   'submitFeedback',
   'listProviders', 'saveProvider', 'deleteProvider', 'scanLocalProviders', 'importLocalProviders',
-  'readMcpConfig', 'writeMcpConfig',
+  'readMcpConfig', 'writeMcpConfig', 'importMcpConfig',
   'discoveryScan', 'discoveryImportSkills', 'discoveryImportMcp',
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',

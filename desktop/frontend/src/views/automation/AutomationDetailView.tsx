@@ -10,7 +10,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import type { ViewProps } from '@lcl/engine'
 import { CapabilityMenu } from '../../components/CapabilityMenu'
 import { AutomationExtension } from './AutomationExtension'
-import { automationListSource, subscribeAutomation } from './automationListSource'
+import { automationListSource, saveRuleState, subscribeAutomation } from './automationListSource'
 import { CalendarClock, History, Pencil, Play, Settings, Sparkles, Zap } from 'lucide-react'
 import { useApp } from '../../stores/appStore'
 import { useHomeAgentDefs } from '../../stores/homeCatalog'
@@ -19,7 +19,7 @@ import { fireAutomationTrigger, getHistorianActivity, saveAgentScheduleEntry } f
 import { useI18n } from '../../i18n'
 import { Markdown } from '../../components/Markdown'
 import { useDbStore } from '../../amadeus/store/dbStore'
-import { actionsText, condText, fmtTime, isFinishedTrigger, watchedColumnIds, whereText } from './lib'
+import { actionsText, canObserve, condText, fmtTime, isFinishedTrigger, noticeText, onlyText, ruleState, watchedColumnIds, whereText } from './lib'
 import { AutomationBuilder } from './AutomationBuilder'
 import { AutomationHome } from './AutomationHome'
 import { AutomationRunsView } from './AutomationRunsView'
@@ -319,13 +319,20 @@ const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns
         <div className="auto-card-head">
           <Zap size={17} />
           <div className="auto-card-title">{tr.desc}</div>
-          <span className={`auto-status-label ${tr.enabled ? 'on' : ''}`}>{t(tr.enabled ? 'automation.ux.on' : 'automation.ux.off')}</span>
+          {canObserve(tr.cond.type)
+            ? <div className="seg seg-sm" role="radiogroup" aria-label={t('automation.ux.stateGroup')}>
+                {([['off', 'automation.ux.pause'], ['observe', 'automation.ux.observe'], ['on', 'automation.ux.enable']] as const).map(([state, label]) => (
+                  <button key={state} role="radio" aria-checked={ruleState(tr) === state} className={ruleState(tr) === state ? 'active' : ''} onClick={() => void saveRuleState(tr, state)}>{t(label)}</button>
+                ))}
+              </div>
+            : <span className={`auto-status-label ${tr.enabled ? 'on' : ''}`}>{t(tr.enabled ? 'automation.ux.on' : 'automation.ux.off')}</span>}
           <FireButton key={tr.id} tr={tr} onResult={onRuns} />
           <button className="btn ghost sm" onClick={() => st.openBuilder(tr.id)}>{t('common.edit')}</button>
           <button className="btn ghost sm" onClick={onRuns}><History size={13} />{t('automation.ux.runResults')}</button>
           <CapabilityMenu label={t('automation.ux.actions')} items={(automationListSource.itemMenu?.({ key: JSON.stringify({ kind: 'trigger', triggerId: tr.id }), title: tr.desc }) || [])
             .filter((a) => a.id !== 'edit').map((a) => ({ id: a.id, label: a.label, danger: a.danger, onSelect: a.run }))} />
         </div>
+        {tr.enabled && tr.notice && <p className="auto-hint auto-fact-warn" data-rule-notice>{noticeText(t, tr.notice)}</p>}
         <details className="auto-properties"><summary>{t('automation.ux.properties')}</summary><div className="auto-facts">
           {isFinishedTrigger(tr) && <span className="auto-fact"><b>{t('automation.fact.status')}</b>{t('automation.finishedHint')}</span>}
           {/* 引擎自动停用(排空封顶断环 / tool_call 不可用)会写 disabledReason;用户手动启用即清。不显示的话用户只能从日志感知「规则怎么停了」 */}
@@ -337,6 +344,7 @@ const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns
           {tr.cond.type === 'db_changed' && !!tr.cond.where?.length && (
             <span className="auto-fact"><b>{t('automation.fact.where')}</b>{whereText(t, tr.cond.where)}</span>
           )}
+          {!!onlyText(t, tr) && <span className="auto-fact"><b>{t('automation.only.fact')}</b>{onlyText(t, tr)}</span>}
           <span className="auto-fact"><b>{t('automation.fact.actions')}</b>{actionsText(t, agentDefs, tr)}</span>
           {tr.prompt && <span className="auto-fact"><b>{t('automation.fact.prompt')}</b>{tr.prompt.slice(0, 80)}</span>}
           {/* db_changed 的 0 = 「不冷却」是有意义的配置(链式规则),别藏;其它触发类型 0 只是引擎默认,照旧不显示。 */}
@@ -351,7 +359,9 @@ const AutomationDetailContent: React.FC<Pick<ViewProps, 'extendView'> & { onRuns
         <span><Zap size={14} />{condText(t, tr.cond)}</span>
         {tr.actions?.map((step, i) => <React.Fragment key={i}><span aria-hidden="true">→</span><span>{i + 1}. {t(`automation.step.${step.type}`)}</span></React.Fragment>)}
       </div>
-      {hasOwnAction && <p className="auto-hint">{t('automation.ux.runHint')}{tr.cond.type === 'db_changed' ? ` ${t('automation.ux.dbRunHint')}` : ''}</p>}
+      {ruleState(tr) === 'observe'
+        ? <p className="auto-hint">{t('automation.ux.observeHint')}</p>
+        : hasOwnAction && <p className="auto-hint">{t('automation.ux.runHint')}{tr.cond.type === 'db_changed' ? ` ${t('automation.ux.dbRunHint')}` : ''}</p>}
 
     </div>
   )

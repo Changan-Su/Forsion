@@ -37,7 +37,6 @@ async function main() {
   writeFileSync(uninstaller, 'compile fixture only');
   for (const mode of ['uninstaller', 'installer']) {
     const generator = new NsisScriptGenerator();
-    generator.addIncludeDir(templates);
     generator.addIncludeDir(join(templates, 'include'));
     generator.addPluginDir('x86-unicode', join(plugins, 'x86-unicode'));
     generator.include(join(templates, 'include/StdUtils.nsh'));

@@ -155,7 +155,7 @@ describe('loop 级:私聊会话的条件绑定(存值为准)', () => {
     expect(await storedSessionFacts('S')).toEqual({ soloAgentSlug: DEFAULT_AGENT_SLUG });
     const status = await runToEnd('S', 'R1', { agentSlug: 'other', groupChat: true, groupAgents: ['other', DEFAULT_AGENT_SLUG], execMode: 'sandbox' });
     expect(status).toBe('done'); // 没进群聊分叉(进了会因 fake llm 不吐投票/或 2 人正常跑;这里以系统提示证明是单人 loop)
-    expect(lastSystem()).toContain('Tangu Arioso'); // 默认 agent 的人格,不是 Other
+    expect(lastSystem()).toContain("the user's default assistant in Forsion"); // 默认 agent 的人格,不是 Other
     expect(lastSystem()).not.toContain('You are Other.');
     expect((await storedCfg('S')).agentSlug).toBe(DEFAULT_AGENT_SLUG);
     expect((await storedCfg('S')).soloAgentSlug).toBe(DEFAULT_AGENT_SLUG);
