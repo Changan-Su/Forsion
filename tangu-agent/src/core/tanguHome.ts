@@ -66,6 +66,8 @@ export function loadTanguEnv(): void {
 // 共享域文件(desktop 也直接读写,见 forsionSharedDir 注释)
 export const authFile = (): string => join(forsionSharedDir(), 'auth.json');
 export const providerAuthFile = (): string => join(forsionSharedDir(), 'provider-auth.json');
+/** 远端 MCP 的 OAuth 令牌(mcp/oauth.ts):只存本机、不上云,C4 读拒绝。 */
+export const connectorAuthFile = (): string => join(forsionSharedDir(), 'connector-auth.json');
 export const providersFile = (): string => join(tanguHome(), 'providers.json');
 export const mcpConfigFile = (): string => join(tanguHome(), 'mcp.json');
 /** 外部 agent 引擎清单(覆盖/新增内置引擎):{ engines: EngineDef[] }。 */

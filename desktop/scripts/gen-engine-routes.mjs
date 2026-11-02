@@ -190,6 +190,8 @@ export const CLASSIFICATION = {
   'POST /agent/skills/upload': [D, 'skill upload (design appendix C)'],
   'DELETE /agent/skills/user/:id': [D, 'delete user skill'],
   'GET /agent/tools': [A, 'tool list'],
+  'POST /agent/mcp/:name/login': [D, 'MCP OAuth sign-in: loopback callback and tokens are local to this computer'],
+  'POST /agent/mcp/:name/logout': [D, 'MCP OAuth sign-out deletes a local token'],
 
   // ── agents.ts ──
   'GET /agent/agents': [A, 'Agent roster; remote callers get no persona / developer instructions and the approval mode clamped to the remote cap (P1-M1A projection)'],

@@ -15,6 +15,8 @@ import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
  *   - 名字占用设备 MCP 保留命名空间(`dev_*` / `dev`)的 server 不连接,如实列成 error(方案 §4.6-3)
  *   - 结果与**错误**都是第三方内容:McpError 的 message、HTTP 错误响应正文同样进不可信围栏(M6)
  *   - callTool 带超时;dispose 关闭全部连接(stdio 杀子进程)并撤掉重试定时器,process.on('exit') 兜底
+ *   - 远端 server 回 401(刷新也救不回)→ 「待登录」:不后台重试、不懒重连(免得反复打对方的授权服务器),
+ *     调用时回一句让用户去设置里登录;登录成功只重连这一个 server,新工具从下一个 run 起出现(oauth.ts)
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -25,6 +27,7 @@ import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/typ
 import { loadRawMcpServers, enabledServers, inferTransport, isReservedServerName, RESERVED_SERVER_ERROR, type McpServerConfig } from './config.js';
 import { bridgeTool, contentToResult, fenceMcpText, sanitizePart, type LoadedMcpTool, type McpImage } from './toolBridge.js';
 import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
+import { withBearer, loginServer, forgetServer, hasTokens, serverKey, type AuthHint } from './oauth.js';
 
 const DEFAULT_CALL_TIMEOUT_MS = 60_000;
 const CONNECT_TIMEOUT_MS = 30_000;
@@ -39,8 +42,10 @@ const STABLE_MS = 60_000; // 连上后撑过这么久再断,才把退避清零(�
 export interface McpServerStatus {
   name: string;
   transport: 'stdio' | 'http' | 'sse';
-  status: 'connected' | 'connecting' | 'error' | 'disabled';
+  status: 'connected' | 'connecting' | 'error' | 'disabled' | 'needs-login' | 'logging-in';
   toolCount: number;
+  /** 远端 server 在本机存着 OAuth 令牌(设置页据此显示「断开」)。 */
+  signedIn?: boolean;
   error?: string;
   /** 插件自带的 server:来自哪个引擎插件(用户 mcp.json 里的没有这个字段)。 */
   origin?: { pluginId: string; pluginName: string };
@@ -79,10 +84,17 @@ interface ServerEntry {
   retryAttempt: number;
   connectedAt: number;
   configError: boolean; // 缺 command/url、保留名、server 名撞名之类的确定性错误:不连接、不重试
+  needsLogin: boolean; // 401 且刷新救不回:不连接、不重试,等用户登录
+  authHint?: AuthHint;
+  loginUrl?: string; // 登录进行中:授权页地址(再点一次登录 = 重新打开它)
   origin?: McpServerStatus['origin'];
 }
 
 const ABORTED: McpCallResult = { text: 'Error: MCP call aborted (the run was stopped).', isError: true };
+const needsLoginResult = (name: string): McpCallResult => ({
+  text: `Error: MCP server "${name}" needs the user to sign in again. Ask the user to open Settings → MCP servers and click Sign in next to "${name}". Do not retry this tool until they have.`,
+  isError: true,
+});
 
 /** 等 p 落定,或 signal 先触发(返回 true = 被中止)。p 自己不因中止而取消(共享的后台连接照常走完)。 */
 async function waitOrAbort(p: Promise<unknown>, signal?: AbortSignal): Promise<boolean> {
@@ -115,6 +127,10 @@ export interface McpManager {
   addServers(origin: { id: string; name: string }, servers: Record<string, McpServerConfig>): void;
   /** 关掉并移出某插件的全部 server(stdio 杀子进程)。桥接名的归属不释放:同一插件再启用时原样认领回来。 */
   removeServers(pluginId: string): Promise<void>;
+  /** 交互登录 mcp.json 里的远端 server。返回授权页地址(宿主开浏览器);刷新就成了 = 不带 url。之后在后台等回调、换令牌、重连。 */
+  login(name: string): Promise<{ url?: string }>;
+  /** 断开:删掉本机令牌,置「待登录」。 */
+  logout(name: string): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -169,11 +185,13 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const closing = new Set<Promise<void>>();
   /** start() 之前就到的插件 server:等 mcp.json 的登记完再加。 */
   const queued: Array<[{ id: string; name: string }, Record<string, McpServerConfig>]> = [];
+  /** 在飞的交互登录:dispose 时放掉回环端口。 */
+  const logins = new AbortController();
 
   function newEntry(name: string, c: McpServerConfig, origin?: ServerEntry['origin']): ServerEntry {
     const entry: ServerEntry = {
       name, cfg: c, transport: inferTransport(c), client: null, tools: [], status: 'connecting',
-      connecting: null, pendingClient: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false,
+      connecting: null, pendingClient: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false, needsLogin: false,
       ...(origin ? { origin } : {}),
     };
     let rejected: string | undefined;
@@ -232,7 +250,8 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     }
   }
 
-  function buildTransport(name: string, cfg: McpServerConfig): StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
+  function buildTransport(entry: ServerEntry): StdioClientTransport | StreamableHTTPClientTransport | SSEClientTransport {
+    const cfg = entry.cfg;
     const t = inferTransport(cfg);
     if (t === 'stdio') {
       if (!cfg.command) throw new Error('stdio server 缺 command');
@@ -252,7 +271,9 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     }
     if (!cfg.url) throw new Error(`${t} server 缺 url`);
     const url = new URL(cfg.url);
-    const opts = { fetch: sameOriginFetch(url), requestInit: { headers: cfg.headers } };
+    // 任何一处 401(初始化、列工具、调用、后台流)都走完整的「待登录」:关连接、停重试、设置页出登录按钮
+    const onAuthRequired = (hint: AuthHint) => { entry.authHint = hint; markNeedsLogin(entry); };
+    const opts = { fetch: withBearer(sameOriginFetch(url), cfg.url, cfg.oauth, onAuthRequired), requestInit: { headers: cfg.headers } };
     return t === 'sse' ? new SSEClientTransport(url, opts) : new StreamableHTTPClientTransport(url, opts);
   }
 
@@ -281,7 +302,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   }
 
   function scheduleRetry(entry: ServerEntry): void {
-    if (disposed || entry.configError || entry.retryTimer) return;
+    if (disposed || entry.configError || entry.needsLogin || entry.retryTimer) return;
     const delay = Math.min(retryMaxMs, retryBaseMs * 2 ** Math.min(entry.retryAttempt, 20));
     entry.retryAttempt++;
     entry.retryTimer = setTimeout(() => {
@@ -300,6 +321,16 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
     if (Date.now() - entry.connectedAt >= STABLE_MS) entry.retryAttempt = 0;
     console.warn(`[mcp] ${entry.name}: 连接已断开,转后台重连`);
     scheduleRetry(entry);
+  }
+
+  /** 调用中途令牌失效:关掉这条连接(先摘掉 client,onclose 就不会排重连),等用户登录。 */
+  function markNeedsLogin(entry: ServerEntry): void {
+    entry.needsLogin = true;
+    entry.status = 'needs-login';
+    entry.error = undefined;
+    const c = entry.client;
+    entry.client = null;
+    void c?.close().catch(() => {});
   }
 
   function connect(entry: ServerEntry): Promise<void> {
@@ -322,7 +353,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       if (isHostSandboxRestricted()) throw new Error('MCP servers are unavailable while the local sandbox is enabled');
       let transport: ReturnType<typeof buildTransport>;
       try {
-        transport = buildTransport(entry.name, entry.cfg);
+        transport = buildTransport(entry);
       } catch (e) {
         entry.configError = true;
         throw e;
@@ -349,12 +380,13 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       entry.error = undefined;
       console.log(`[mcp] ${entry.name}(${entry.transport}) 已连接,${entry.tools.length} 个工具`);
     } catch (e: any) {
-      entry.status = 'error';
-      entry.error = e?.message || String(e);
+      entry.status = entry.needsLogin ? 'needs-login' : 'error';
+      entry.error = entry.needsLogin ? undefined : e?.message || String(e);
       entry.client = null;
       // 超时 / 失败的 client 要关掉:否则超时后才起来的 stdio 子进程成了孤儿
       if (client) await client.close().catch(() => {});
-      if (!disposed) {
+      if (!disposed && entry.needsLogin) console.warn(`[mcp] ${entry.name}: 需要登录`);
+      else if (!disposed) {
         console.warn(`[mcp] ${entry.name} 连接失败:`, entry.error);
         scheduleRetry(entry);
       }
@@ -438,6 +470,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       if (bound && !servers.includes(bound)) return { text: 'Error: MCP settings changed. Start a new run to use the new configuration.', isError: true };
       if (!entry) return { text: `Error: MCP server "${bridged.serverName}" is not configured`, isError: true };
       if (signal?.aborted) return ABORTED;
+      if (entry.needsLogin) return needsLoginResult(entry.name);
       // 懒重连:server 断线 / 初次没连上时,调用前按冷却(15s)尝试重连一次(后台重试正在连就搭它的车)——
       // 避免「server 挂了不重连、工具一直 hang 到 timeout」。冷却防对死 server 每调必连。
       // 等连接要跟 run 的中止赛跑:连接最长 30s,用户停掉 run 不该陪着等(连接本身照常在后台走完)。
@@ -445,6 +478,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
         const now = Date.now();
         const pending = entry.connecting ?? (!entry.configError && now - (entry.lastReconnectAt || 0) >= reconnectCooldownMs ? connect(entry) : null);
         if (pending && await waitOrAbort(pending, signal)) return ABORTED;
+        if (entry.needsLogin) return needsLoginResult(entry.name);
         if (entry.status !== 'connected' || !entry.client) {
           return { text: `Error: MCP server "${bridged.serverName}" is not connected`, isError: true };
         }
@@ -474,11 +508,50 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
         return { text: fenceMcpText(entry.name, r.text, RESULT_CAP_CHARS), isError: r.isError, images: r.images };
       } catch (e: any) {
         if (signal?.aborted) return ABORTED;
+        if (entry.needsLogin) { markNeedsLogin(entry); return needsLoginResult(entry.name); }
         // 错误信息是 server 可控的(McpError 的 message、StreamableHTTPError 里的 HTTP 响应正文)→ 与结果同一道不可信围栏;
         // 引擎自己的那句说明留在围栏外。截到 ERROR_CAP_CHARS 兼顾凭证防漏(错误信息可能回显 headers/env)。
         const fenced = fenceMcpText(entry.name, String(e?.message || e || ''), ERROR_CAP_CHARS);
         return { text: `Error: MCP call failed.${fenced ? `\n${fenced}` : ''}`, isError: true };
       }
+    },
+
+    login(name) {
+      const entry = servers.find((s) => s.name === name && !s.origin);
+      if (!entry || entry.transport === 'stdio' || !entry.cfg.url || entry.configError) return Promise.reject(new Error(`"${name}" is not a remote MCP server in your MCP config`));
+      if (entry.loginUrl) return Promise.resolve({ url: entry.loginUrl }); // 登录进行中:重开授权页
+      const url = entry.cfg.url;
+      return new Promise((resolve, reject) => {
+        entry.status = 'logging-in';
+        entry.error = undefined;
+        loginServer(url, entry.cfg.oauth, entry.authHint, (u) => { entry.loginUrl = u; resolve({ url: u }); }, logins.signal)
+          .then(async () => {
+            entry.loginUrl = undefined;
+            resolve({});
+            // 令牌按 URL 存:同一地址的条目都放出来重连(等回调期间配置改了,换上来的新条目也算)
+            const key = serverKey(url);
+            const same = servers.filter((s) => !s.origin && s.cfg.url && s.needsLogin && serverKey(s.cfg.url) === key);
+            for (const s of same) { s.needsLogin = false; s.authHint = undefined; s.retryAttempt = 0; }
+            if (servers.includes(entry) && !same.includes(entry) && entry.status === 'logging-in') entry.status = entry.client ? 'connected' : 'error';
+            await Promise.all(same.map((s) => connect(s)));
+          })
+          .catch((e: any) => {
+            entry.loginUrl = undefined;
+            if (servers.includes(entry) && entry.status === 'logging-in') {
+              entry.status = entry.client ? 'connected' : 'needs-login';
+              entry.error = String(e?.message || e).slice(0, ERROR_CAP_CHARS);
+            }
+            reject(e);
+          });
+      });
+    },
+
+    async logout(name) {
+      const entry = servers.find((s) => s.name === name && !s.origin);
+      if (!entry?.cfg.url) throw new Error(`"${name}" is not a remote MCP server in your MCP config`);
+      forgetServer(entry.cfg.url);
+      clearRetry(entry);
+      markNeedsLogin(entry);
     },
 
     listStatus() {
@@ -488,12 +561,14 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
         status: s.status,
         toolCount: s.tools.length,
         error: s.error,
+        ...(s.cfg.url && s.transport !== 'stdio' && hasTokens(s.cfg.url) ? { signedIn: true } : {}),
         ...(s.origin ? { origin: s.origin } : {}),
       }));
     },
 
     async dispose() {
       disposed = true;
+      logins.abort();
       for (const s of servers) clearRetry(s);
       // 在飞的 initialize 一并关掉(connect 随之失败),再等它们收尾 —— 返回时不留子进程、不再起新连接
       await Promise.all(servers.flatMap((s) => [s.client, s.pendingClient]).map((c) => c?.close().catch(() => {})));

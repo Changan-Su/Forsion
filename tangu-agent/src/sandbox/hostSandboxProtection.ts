@@ -63,7 +63,7 @@ export function protectedAncestors(paths: string[]): string[] {
 // ── 契约 C4:凭据 / 本机配置路径(设备能力 MCP 方案 §6.3、§6.4)。宿主沙箱开没开都生效(调用方在 fsPolicy / 审批闸)。──
 
 /** 桌面与引擎共用的凭据文件名(都在 Forsion 共享域顶层:auth / 订阅登录 / 浏览器扩展配对 / 桌面桥 / 对外 MCP 发现文件 / 本地回退令牌)。 */
-const CREDENTIAL_FILE_NAMES = ['auth.json', 'provider-auth.json', 'browser-extension.json', 'desktop-bridge.json', 'forsion-mcp.json', 'desktop-local-token'];
+const CREDENTIAL_FILE_NAMES = ['auth.json', 'provider-auth.json', 'connector-auth.json', 'browser-extension.json', 'desktop-bridge.json', 'forsion-mcp.json', 'desktop-local-token'];
 /** 引擎 home 里决定下一次 run 行为的配置(与 protectedHostPaths 同一张表,另加 Special Agent 配置)。
  *  ⚠️ 不含 plugins/:本表也是**本机**「每次都问」的那张(protectedLocalWrite),整个插件目录进来 = 本机完全通行地开发
  *  引擎插件、插件自己放在那里的数据每写一次都要批(评审 B#6)。远程那半不靠它:remoteForbiddenRoot 整片禁引擎 home,
