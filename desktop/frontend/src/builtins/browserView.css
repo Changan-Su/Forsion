@@ -1,0 +1,6 @@
+/* 内置浏览器(browserView.tsx):webview 与「打不开」空态叠在同一块舞台上 —— 空态盖住 webview,webview 不卸载。 */
+.browser-stage { position: relative; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.browser-fail { position: absolute; inset: 0; z-index: 3; display: flex; flex-direction: column; background: var(--bg-card, var(--bg)); }
+.browser-fail-code { display: block; margin-top: 2px; font-family: var(--font-mono); font-size: var(--ui-font-caption); color: var(--text-faint); }
+.browser-fail[data-loading] .empty-state-icon { animation: spin 1s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .browser-fail[data-loading] .empty-state-icon { animation: none; } }

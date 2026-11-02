@@ -509,6 +509,7 @@ export const Composer2: React.FC<{
   const waitTips = (touchUi ? TOUCH_TIP_KEYS : WAIT_TIP_KEYS).filter((k) => !engineId || k !== STEER_TIP)
   const [tipFade, setTipFade] = useState(false)
   const [compactCard, setCompactCard] = useState(false)
+  // 卡宽 ≤ 260(编码侧栏这类窄栏):占位换短句、上下文圆环收进「+」菜单;药丸去 ▾ 在 composer2.css 的 @container (max-width: 260px)。
   // 窄输入框里小贴士折成两行会被一行高裁掉后半句 → 这个 run 里一旦折行就撑到两行并保持到 run 结束(不随每条贴士跳高度)。
   const [tipTall, setTipTall] = useState(false)
   useEffect(() => {
@@ -603,7 +604,7 @@ export const Composer2: React.FC<{
   useLayoutEffect(() => {
     const card = cardRef.current
     if (!card) return
-    const observer = new ResizeObserver(([entry]) => setCompactCard(entry.contentRect.width <= 360))
+    const observer = new ResizeObserver(([entry]) => { setCompactCard(entry.contentRect.width <= 360) })
     observer.observe(card)
     return () => observer.disconnect()
   }, [])
