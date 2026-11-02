@@ -45,6 +45,8 @@
   }, true)
   // 卡片脚本照样收得到 submit。真闸是 CSP 的 form-action 'none'(form.submit() 不走这里);这行只省掉被拦时的报错。
   document.addEventListener('submit', (event) => event.preventDefault(), true)
+  // form.submit() 不派发 submit、发出去也会被拦,但同时撞上壳的 frame-src 时浏览器把帧换成错误页,卡片和里面的状态就没了;这里让它照旧什么都不做。
+  HTMLFormElement.prototype.submit = () => {}
 
   // 直播补丁(10-09,对标 ChatGPT Intelligent UI 的流式组件):宿主把最新 html 发进来,这里**原地**打补丁 —— 不换 srcdoc、不重载。
   // 同位置同标签的元素保留(只同步属性、递归子节点),文字节点原地续写,新节点标 data-fs-new 淡入;自定义元素(fs-*)内容一变整个换掉

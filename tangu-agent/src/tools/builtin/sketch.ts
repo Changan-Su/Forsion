@@ -2,7 +2,7 @@
  * sketch —— agent 在对话流里画一张可交互的 HTML 卡片(GUI 三端内联渲染)。
  * 载荷走工具**参数**:tool_calls 原样落 JSONB 不截断,前端从持久化参数 back-fill 重建
  * (exit_plan_mode 同款),零 schema 变更零迁移;result 只回短确认(display_file 同款)。
- * 渲染面契约(前端 SketchCard):sandbox iframe 仅 allow-scripts allow-forms + 内层 CSP default-src 'none' + form-action 'none'
+ * 渲染面契约(前端 SketchCard):sandbox iframe 仅 allow-scripts allow-forms + 内层 CSP default-src 'none' + form-action 'none' + 中间壳 frame-src 'none'(挡自身导航)
  * —— JS 可跑,无网络、无宿主 API、无导航;描述里必须把这个能力包络讲给模型。
  * 门禁:sketchEnabledFor 按 ctx.client 白名单(desktop|web)+ 排除子代理。CLI/TUI/自动化等无
  * client tag 的 run 不注册(default-deny);通道 run 可能带 Desktop 宿主 tag,故另由 channelSession
