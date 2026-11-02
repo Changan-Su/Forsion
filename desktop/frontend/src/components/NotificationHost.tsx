@@ -44,7 +44,7 @@ export function NotificationHost() {
             layout="position"
             initial={{ x: 6, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
-            exit={{ x: 16, opacity: 0, transition: { duration: 0.16, ease: [0.4, 0, 1, 1] } }}
+            exit={n.settle ? { opacity: 0, transition: { duration: 0.2 } } : { x: 16, opacity: 0, transition: { duration: 0.16, ease: [0.4, 0, 1, 1] } }}
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             className={`ntf ntf-${n.level}`}
           >
@@ -61,8 +61,10 @@ export function NotificationHost() {
                 <button
                   className="ntf-action"
                   onClick={() => {
+                    const before = n.action
                     try { n.action?.run() } catch { /* 插件 action 抛错不砸宿主 */ }
-                    dismiss(n.id)
+                    // 动作自己把这条换成了结果(日历撤销 → 「已撤销」,settle):留着,到点淡出
+                    if (useNotifications.getState().items.find((x) => x.id === n.id)?.action === before) dismiss(n.id)
                   }}
                 >
                   {n.action.label}
