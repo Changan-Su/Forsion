@@ -4,7 +4,7 @@
  *  经属性注册表注册(与三方插件同一入口),自我 dogfood 该 API。
  *  side-effect import 于 bootstrap,始终在场(视图依赖它们,故不做成可禁用插件)。 */
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { parseCalDate, splitSide } from '@amadeus-shared/db/calDate'
+import { parseCalDate, shiftEnd, splitSide } from '@amadeus-shared/db/calDate'
 import { fmtCalDateL } from '@amadeus/lib/calDateFmt'
 import { pageKey } from '@amadeus-shared/links'
 import { fuzzyScore } from '../../lib/fuzzy'
@@ -67,13 +67,18 @@ export function CalDateFields({ value, onChange, autoFocus }: { value: string | 
     }
     onChange(start)
   }
+  /** 改开始:结束跟着平移、时长不变(见 shiftEnd)。 */
+  const moveStart = (sDate: string, sTime: string): void => {
+    const end = sDate && cur?.end ? splitSide(shiftEnd(cur.start, sTime ? `${sDate}T${sTime}` : sDate, cur.end)!) : e
+    build(sDate, sTime, end?.date ?? s.date, end?.time ?? '', hasEnd)
+  }
 
   return (
     <>
       <label className="amx-cal-row">
         <span>{t('dbbuiltins.date')}</span>
-        <input type="date" value={s.date} autoFocus={autoFocus} onChange={(ev) => build(ev.target.value, s.time, e?.date ?? s.date, e?.time ?? '', hasEnd)} />
-        <input type="time" className="amx-cal-timein" value={s.time} title={t('dbbuiltins.allDayHint')} onChange={(ev) => build(s.date, ev.target.value, e?.date ?? s.date, e?.time ?? '', hasEnd)} />
+        <input type="date" value={s.date} autoFocus={autoFocus} onChange={(ev) => moveStart(ev.target.value, s.time)} />
+        <input type="time" className="amx-cal-timein" value={s.time} title={t('dbbuiltins.allDayHint')} onChange={(ev) => moveStart(s.date, ev.target.value)} />
       </label>
       {hasEnd && (
         <label className="amx-cal-row">
