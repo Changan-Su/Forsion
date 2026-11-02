@@ -32,7 +32,6 @@ import {
   paperSize,
   reflowPoint,
   PAPER_IDS,
-  MARGIN,
   type BoardSettings,
   type Bounds,
 } from '@amadeus-shared/excalidraw/board'
@@ -78,33 +77,6 @@ function isTextEntry(t: EventTarget | null): boolean {
   if (!(t instanceof HTMLElement)) return false
   if (t instanceof HTMLInputElement) return !NON_TEXT_INPUT.has(t.type)
   return t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || t.isContentEditable
-}
-
-/** 无限画布的「适配全图」。引擎的 zoomToFit 按整块画布算,内容会顶进浮动的工具岛 / 汉堡菜单 / 侧栏钮 / 底栏
- *  下面(走查 P2-4)—— 先扣掉这几条带再适配。放大上限 2,同引擎(zoomToFitMaxLevel)。 */
-function fitInsets(a: ExcalidrawImperativeAPI, host: HTMLElement, st: AppState): void {
-  // 用引擎自己的包围盒:elementBounds 只取 x + width,箭头 / 线的点往负方向走时会算错
-  const [minX, minY, maxX, maxY] = getCommonBounds(a.getSceneElements())
-  const hb = host.getBoundingClientRect()
-  const k = hb.width ? st.width / hb.width : 1 // DOM 尺寸 → 画布 CSS px(宿主带 UI 缩放补偿时两者不同)
-  const tops = [...host.querySelectorAll('.App-menu_top > *')].map((e) => e.getBoundingClientRect()).filter((r) => r.height)
-  const foot = host.querySelector('.layer-ui__wrapper__footer-left')?.getBoundingClientRect()
-  const GAP = 16
-  const top = (tops.length ? Math.max(...tops.map((r) => r.bottom)) - hb.top : 64) * k + GAP
-  const bottom = (foot?.height ? hb.bottom - foot.top : 56) * k + GAP
-  const side = 24
-  const w = st.width - 2 * side
-  const h = st.height - top - bottom
-  if (w <= 0 || h <= 0) return void a.zoomToFit()
-  const zoom = clampNum(Math.min(w / Math.max(1, maxX - minX), h / Math.max(1, maxY - minY)), 0.1, 2)
-  a.updateScene({
-    appState: {
-      scrollX: (side + w / 2) / zoom - (minX + maxX) / 2,
-      scrollY: (top + h / 2) / zoom - (minY + maxY) / 2,
-      zoom: { value: zoom as AppState['zoom']['value'] },
-    },
-    captureUpdate: CaptureUpdateAction.NEVER,
-  })
 }
 
 /** 往引擎自己的 DOM 里插一个挂点,并在引擎重挂那块 DOM 时**自动补回去**。
@@ -190,6 +162,8 @@ function useBoardPortalRoots(zoom: string): void {
 
 export default function ExcalidrawCanvas({
   initialData,
+  initialViewport,
+  onViewportChange,
   theme,
   langCode,
   settings,
@@ -199,6 +173,8 @@ export default function ExcalidrawCanvas({
   viewMode = false,
 }: {
   initialData: ExcalidrawInitialDataState
+  initialViewport?: { x: number; y: number; z: number } | null
+  onViewportChange?: (view: { x: number; y: number; z: number }) => void
   theme: 'light' | 'dark'
   langCode: string
   settings: BoardSettings
@@ -525,16 +501,9 @@ export default function ExcalidrawCanvas({
     [],
   )
 
-  /** 打开时适配全图(对标 Obsidian 插件缺省开的 zoomToFitOnOpen),每次挂载只做一次。
-   *  - 挂 onInitialize 而不是 onExcalidrawAPI:后者在引擎装载初始内容**之前**就来,那时场景还是空的。
-   *    再晚一帧:onInitialize 与装载后的第一次 onChange 同在一次 didUpdate 里且排在它前面,
-   *    等一帧 bounds 才是真的,下面 onScrollChange → clampView 用的就是对的页带,不会把适配结果拽走。
-   *  - 后台 tab 里挂载(画布 0×0)时先挂着,等 ResizeObserver 看见真尺寸再补。⚠️ 判尺寸看 DOM,别看
-   *    appState.width/height:引擎拿窗口尺寸当初值,DOM 是 0×0 时又不更新它 —— 按那个假尺寸适配,
-   *    露出来以后内容被裁(Codex 评审抓到)。
-   *  - 空白板不动:原点在左上、100%,就是新建时该有的样子。
-   *  - 纸张:适配到页带第一页,算法与 clampViewport 同一套余量;结果先过一遍钳制再下发,
-   *    所以随后那次 clampView 必然是空操作 —— 两边不会互相拉扯。 */
+  /** Restore only after content and real host dimensions are ready. A Space switch remounts this
+   * canvas; fitting on every mount discarded the user's camera. New boards use 100%, with distant
+   * content centered so opening an imported drawing doesn't present an empty origin. */
   const fitState = useRef<'loading' | 'pending' | 'done'>('loading')
   const tryFit = useCallback(
     (a: ExcalidrawImperativeAPI) => {
@@ -544,20 +513,22 @@ export default function ExcalidrawCanvas({
       fitState.current = 'done'
       const els = a.getSceneElements()
       const b = elementBounds(els)
+      const [minX, minY, maxX, maxY] = getCommonBounds(els)
       const page = pageRect(settings, pageRange(settings, b).min)
-      if (!page) {
-        if (els.length) fitInsets(a, host, st)
-        return
-      }
-      const zoom = clampNum(Math.min(st.width / (page.w * (1 + 2 * MARGIN)), st.height / (page.h * (1 + 2 * MARGIN))), 0.1, 2)
-      const v = { scrollX: (st.width / zoom - page.w) / 2 - page.x, scrollY: (st.height / zoom - page.h) / 2 - page.y, zoom, width: st.width, height: st.height }
+      const imported = initialData.appState
+      const importedZoom = imported?.zoom?.value
+      const remembered = initialViewport ?? (importedZoom && Number.isFinite(importedZoom)
+        ? { x: imported?.scrollX ?? 0, y: imported?.scrollY ?? 0, z: clampNum(importedZoom, 0.1, 30) } : null)
+      const zoom = remembered?.z ?? 1
+      const v = { scrollX: remembered?.x ?? (page ? (st.width - page.w) / 2 - page.x : b ? st.width / 2 - (minX + maxX) / 2 : 0),
+        scrollY: remembered?.y ?? (page ? -page.y + 48 : b ? st.height / 2 - (minY + maxY) / 2 : 0), zoom, width: st.width, height: st.height }
       const c = clampViewport(settings, v, b) ?? v
       a.updateScene({
         appState: { scrollX: c.scrollX, scrollY: c.scrollY, zoom: { value: c.zoom as AppState['zoom']['value'] } },
         captureUpdate: CaptureUpdateAction.NEVER,
       })
     },
-    [settings],
+    [settings, initialViewport, initialData],
   )
 
   /** 换排布方向 = **搬用户内容**:每个元素跟着它所在的那一页走,页内偏移不变。
@@ -706,10 +677,16 @@ export default function ExcalidrawCanvas({
         //    onScrollChange,否则一整趟平移里画布重画几十次而我们的层纹丝不动,内容就从纸和网格
         //    底下滑走(实测:25 次重画 / 0 次层更新)。这里保留一份是给 scrollToContent 之类
         //    「场景变了顺带动视口」的路径兜底,重复调用是幂等的。
-        onScrollChange={(scrollX, scrollY, zoom) => layout(clampView({ scrollX, scrollY, zoom }))}
+        onScrollChange={(scrollX, scrollY, zoom) => {
+          const v = clampView({ scrollX, scrollY, zoom })
+          layout(v)
+          if (fitState.current === 'done' && hostRef.current?.isConnected && hostRef.current.offsetWidth) onViewportChange?.({ x: v.scrollX, y: v.scrollY, z: v.zoom.value })
+        }}
         onChange={(elements, appState, files) => {
           syncRange(elements)
-          layout(clampView(appState))
+          const v = clampView(appState)
+          layout(v)
+          if (fitState.current === 'done' && hostRef.current?.isConnected && hostRef.current.offsetWidth) onViewportChange?.({ x: v.scrollX, y: v.scrollY, z: v.zoom.value })
           // 自建工具栏/面板是 portal 出去的,拿不到引擎的 React 数据流 —— 这里回捞那一小片。
           // 只比对三个字段,画一笔的过程中不会有一次重渲(理由见 boardUi.ts)。
           const so = appState.currentStrokeOptions
