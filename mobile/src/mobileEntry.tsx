@@ -24,6 +24,7 @@ import { installSpaceShortcuts } from './spaceShortcuts'
 import { installLauncherIcon } from './launcherIcon'
 import { installUnitsEntry } from './UnitsSheet'
 import { installLiveIsland } from './liveIsland'
+import { installCallKeep } from './callKeep'
 import { installNativeModelPicker } from './nativeModelPicker'
 import { installNativeSheet } from './nativeSheet'
 import { installNativeChrome } from './nativeChrome'
@@ -89,6 +90,7 @@ try {
   installUnitsEntry()
   // 灵动岛:agent 在跑时把进度 / 待审批贴到各家的岛上(Android 16 Live Updates),点岛回到那个会话。
   installLiveIsland()
+  installCallKeep()
   // 手机操控(T1):把原生 PhoneControl 登记成 client surface `phone`(设置行 + startRun 的能力声明)。
   installPhoneControl()
 } catch (err) {
