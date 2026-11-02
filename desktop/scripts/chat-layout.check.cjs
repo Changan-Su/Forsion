@@ -201,7 +201,8 @@ async function main() {
     await win.waitForTimeout(150)
     check('默认 Agent = 清空并收起', (await pop.count()) === 0)
     await openPop()
-    check('清空后什么都没勾,「默认 Agent」行打勾', (await picks()).join(',') === '')
+    const cleared = await picks()
+    check('清空后什么都没勾,只有「默认 Agent」行打勾', cleared.length === 1 && cleared[0] === '', cleared)
     await win.keyboard.press('Escape')
     // ⌘⇧A / 命令面板「换 Agent」
     await view.locator('.t2c-ta').focus()
