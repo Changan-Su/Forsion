@@ -44,7 +44,7 @@ function useChatBoxSuggest({ options, host }: BoxProps, replace: (match: ChatBox
     const el = host.input.current
     const collapsed = !!el && el.selectionStart === el.selectionEnd
     const match = suggest && el && collapsed && !composing.current && !options.disabled
-      ? matchChatBoxSuggest(value, el.selectionStart, suggest.trigger)
+      ? matchChatBoxSuggest(value, el.selectionStart, suggest.trigger, suggest.mention)
       : null
     if (!match) { dismissedAt.current = null; close(); return }
     if (dismissedAt.current === match.from) { close(); return }

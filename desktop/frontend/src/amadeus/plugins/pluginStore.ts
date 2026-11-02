@@ -4,6 +4,9 @@
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
 import { leaseAccountResponse } from './accountResponse'
+import { pushMobileBack } from '../lib/mobileBack'
+import { desktopAccount } from './desktopAccount'
+import { readEntitlement } from './entitlement'
 import { setPluginViewHead, setPluginViewModes } from './pluginViewModes'
 import { registerFont as registerHostFont } from '../../fontPresets'
 import { registerAppearance, clearPluginAppearance, useAppearance } from '../../appearance/store'
@@ -14,7 +17,7 @@ import { registerAppearance, clearPluginAppearance, useAppearance } from '../../
 import { create } from 'zustand'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { pluginHostPath } from './hostPaths'
-import { pluginRequestPath, type PluginRequestOptions } from './engineRequest'
+import { ownedChannelPatch, pluginRequestPath, type ChannelOwnership, type PluginRequestOptions } from './engineRequest'
 import { request as engineJsonRequest } from '../../services/backendService'
 
 /** window.tangu,在没有 window 的环境(vitest node 环境、云端 worker)返回 undefined 而不是抛 ReferenceError。 */
@@ -52,7 +55,7 @@ import { defineMessages, hostListSource, isPluginText, pluginText } from './plug
 import { checkPluginIcon, pluginIconElement } from './pluginIcon'
 import { pluginListEmpty, setHostListEmpty } from '../../views/hostListEmpty'
 import { createDropIndicator, land as landDrop, landCancel, landWhenMoved } from '@lcl/engine/dropIndicator'
-import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, nativeChromeInstalled } from '@lcl/engine'
+import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, listFirstNow, nativeChromeInstalled, useWorkspace } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
@@ -798,6 +801,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     minAppVersion: src.minAppVersion,
     requiresApp: src.requiresApp,
     requiresPlugins: src.requiresPlugins,
+    entitlement: src.entitlement,
     capabilities: src.capabilities,
     readme: src.readme,
     changelog: src.changelog,
@@ -1665,7 +1669,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const localData: LocalData | null = amadeus?.readPluginData && amadeus?.writePluginData
       ? { read: () => Promise.resolve(amadeus.readPluginData!(pluginId)).catch(() => null), write: (text) => amadeus.writePluginData!(pluginId, text) }
       : null
-    const hostAccount = hostTangu()?.account
+    const hostAccount = hostTangu()?.account ?? desktopAccount(hostTangu())
     const scopedAccount: PluginContext['account'] = hostAccount ? {
       status: async () => { const value = ctxAlive() ? await hostAccount.status() : { loggedIn: false }; return ctxAlive() ? value : { loggedIn: false } },
       login: () => ctxAlive() ? hostAccount.login() : Promise.reject(new Error('plugin disabled')),
@@ -1686,6 +1690,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       },
       ...(hostAccount.saveDownload ? { saveDownload: (blob: Blob, name: string) => ctxAlive()
         ? hostAccount.saveDownload!(blob, name) : Promise.resolve({ ok: false, error: 'plugin disabled' }) } : {}),
+      // Built here, over the scoped request, so all three hosts answer alike and teardown revokes it with the rest.
+      entitlements: () => readEntitlement((path) => scopedAccount!.request(path), get().plugins.find((p) => p.id === pluginId)?.entitlement),
       subscribe: (listener) => ctxAlive() ? scope.own('subscription', hostAccount.subscribe((status) => {
         if (ctxAlive()) listener(status)
       }), 'account') : () => {},
@@ -1961,10 +1967,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {
       ...(nativeHapticAvailable() ? { haptic: (kind: 'tick') => { if (ctxAlive() && kind === 'tick') nativeHaptic(kind) } } : {}),
-      ...(nativeChromeInstalled() ? { claimHeader: (opts: { title: string; back: string; onBack(): void }) => {
+      ...(nativeChromeInstalled() ? { claimHeader: (opts: { title: string; back: string; onBack(): void; toList?: boolean }) => {
         if (!ctxAlive()) return { dispose() {} }
-        const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack: () => { if (ctxAlive()) opts.onBack() } })
-        return { dispose: scope.own('mount', () => handle.release(), 'nativeHeader') }
+        const toList = !!opts.toList && listFirstNow()
+        const onBack = (): void => {
+          if (!ctxAlive()) return
+          if (toList && listFirstNow()) useWorkspace.getState().toggleSidebar('left')
+          else opts.onBack()
+        }
+        const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack })
+        // 两级导航:这一页不占返回栈,返回链照常滑出列表层,边缘手势才跟手(占了栈系统返回就只能等松手);
+        // 列表一出来(手势、返回键、页内横滑、顶栏箭头都走到这)插件才收尾。放弃手势不改 leftVisible,什么都不发生
+        const off = toList
+          ? useWorkspace.subscribe((s, prev) => { if (s.leftVisible && !prev.leftVisible && listFirstNow() && ctxAlive()) { off(); handle.release(); opts.onBack() } }) // 旋转成宽屏自动并排左栏不算返回
+          : pushMobileBack(onBack) // 系统返回和顶栏箭头同一件事
+        return { dispose: scope.own('mount', () => { off(); handle.release() }, 'nativeHeader') }
       } } : {}),
       // 行编辑字段(10-17):写的是用户的表 → 和 ctx.databases 同一道闸,没声明 'databases' 就没有这个成员。
       ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')
@@ -2420,6 +2437,30 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   if (!ctxAlive()) throw new Error('plugin disabled')
                   return result
                 } finally { opts.signal?.removeEventListener('abort', onAbort); stop.forget() }
+              },
+            } : {}),
+            ...(automationHost() && !hostTangu()?.mobile ? {
+              connectChannel: async (kind: string, fields: Partial<Record<'appId' | 'appSecret' | 'botToken', string>>, options?: { modelId?: string }) => {
+                try {
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  if (typeof kind !== 'string' || !/^[a-z][a-z0-9-]{1,15}$/.test(kind)) throw new Error('Invalid channel kind')
+                  if (!readTangu()?.hostExecution?.()) throw new Error('A local engine is required')
+                  const cfg = await readTangu()?.waitBackend?.(15_000)
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  if (!cfg || !readTangu()?.hostExecution?.()) throw new Error('Local engine is unavailable')
+                  const target = connectionTarget(cfg)
+                  const { channels } = await engineJsonRequest<{ channels: ChannelOwnership[] }>(target, '/agent/channels')
+                  const bundle = get().plugins.find((p) => p.id === pluginId)?.bundle
+                  const channel = channels.find((c) => c.kind === kind)
+                  const patch = ownedChannelPatch(channel, fields, bundle?.dir ?? pluginId, bundle?.enginePlugins ?? [])
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  // Only fills an empty slot: a model the user picked in the channel's settings stays.
+                  const modelId = typeof options?.modelId === 'string' && !channel?.modelId ? options.modelId : ''
+                  await engineJsonRequest(target, `/agent/channels/${kind}/config`, { method: 'PUT', body: JSON.stringify(modelId ? { ...patch, modelId } : patch) })
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  const r = await engineJsonRequest<{ accountId: string; label: string; sessionId: string }>(target, `/agent/channels/${kind}/connect`, { method: 'POST', body: '{}' })
+                  return { ok: true as const, accountId: r.accountId, label: r.label, sessionId: r.sessionId }
+                } catch (e) { return { ok: false as const, error: String((e as Error)?.message || e) } }
               },
             } : {}),
             ...(readTangu()?.openSession ? {

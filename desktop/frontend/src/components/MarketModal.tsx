@@ -10,7 +10,7 @@ import './MarketUpgrade.css'
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import {
   AlertCircle, ArrowLeft, ArrowRight, Bot, Check, Clock, Coins, Compass, Crown, Download, ExternalLink,
-  GitBranch, Globe, LayoutGrid, Library, Loader2, Monitor, Package, PackageOpen, Palette, Puzzle,
+  GitBranch, Globe, KeyRound, LayoutGrid, Library, Loader2, Monitor, Package, PackageOpen, Palette, Puzzle,
   RefreshCw, Search, Send, Settings, ShieldCheck, Sparkles, Trash2, Wrench, X, ChevronDown, Plug,
 } from 'lucide-react'
 import { Skeleton, useNativeChromeClaim, useNativeChromeInstalled } from '@lcl/engine'
@@ -18,7 +18,7 @@ import { registerMessages, useI18n } from '../i18n'
 import { formatDate as formatDateLabel } from '../format/time'
 import { useApp } from '../stores/appStore'
 import { Markdown } from './Markdown'
-import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, isDesktopOnlyItem, DESKTOP_ONLY_TAG, type InstalledItem } from '../services/marketService'
+import { listMarket, getMarketDetail, installMarket, listInstalled, onInstallProgress, isDesktopOnlyItem, isReservedMarketTag, itemEntitlement, type InstalledItem } from '../services/marketService'
 import { forgetUserSpace, loadUserSpaces } from '../userSpaces'
 import { useTheme } from '../stores/themeStore'
 import { pluginVaultFolder, pluginWanted, runningDependents, unmetPluginDeps, usePluginStore } from '@amadeus/plugins/pluginStore'
@@ -566,8 +566,17 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
   const desktopOnlyHere = (c: MarketCard): boolean => isDesktopOnlyItem(c) && !!window.tangu?.mobile
   const desktopBadge = (c: MarketCard) => isDesktopOnlyItem(c)
     ? <span className="mk-desktop-badge" data-market-desktop-only={c.id} title={t('market.desktopOnlyHint')}><Monitor size={11} />{t('market.desktopOnly')}</span> : null
+  /** 需要账号权益的包(保留标签 entitlement:<name>):一枚标记,不挡安装。 */
+  const entitlementLabel = (c: MarketCard): string | null => {
+    const name = itemEntitlement(c)
+    return !name ? null : name === 'business' ? t('market.requiresBusiness') : t('market.requiresEntitlement', { name })
+  }
+  const entitlementBadge = (c: MarketCard) => {
+    const label = entitlementLabel(c)
+    return label ? <span className="mk-desktop-badge" data-market-entitlement={c.id} title={t('market.requiresHint')}><KeyRound size={11} />{label}</span> : null
+  }
   /** 给人看的标签:保留标签已经画成标记了,不再当普通标签重复一遍。 */
-  const shownTags = (c: MarketCard): string[] => (c.tags || []).filter((tag) => tag !== DESKTOP_ONLY_TAG)
+  const shownTags = (c: MarketCard): string[] => (c.tags || []).filter((tag) => !isReservedMarketTag(tag))
 
   const installBtn = (c: MarketCard, extraClass = '') => {
     // 「仅桌面」先判:通用兼容性也把这枚保留标签算作 platform,排在前面的话手机上只剩一句「当前端不可用」,
@@ -738,6 +747,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           {isInstalled(c) && <span className="mk-installed-badge"><Check size={11} />{t('market.installed')}</span>}
           {waitingDeps(c) && <span className="mk-waiting-badge" data-market-waiting={c.id}>{t('settings.amadeusPlugins.waitingDeps')}</span>}
           {desktopBadge(c)}
+          {entitlementBadge(c)}
           {/* 「未声明」对挑插件没帮助，只在详情页的「Forsion 版本要求」里写(DESIGN §6 插件商店) */}
           {marketplaceCompatibility(c, appVersion, marketPlatform()) !== 'unknown' && <MarketRequirements item={c} version={appVersion} />}
         </div>
@@ -842,7 +852,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
           onConfirm={(opts) => { const a = asking; void uninstallForsionPlugin(a.plugin, a.c.name, opts, { engine: true }).then((ok) => { if (ok) return afterDialogUninstall(a.c, 'amadeus-plugin', a.c.installSlug) }) }} />}
 
         {!storeOnly && !detail && !detailLoading && !storeView && tab !== 'connector' && <div className="mk-upgrade-filters">
-          <label className="mk-filter-pill"><span>{t('market.tagLabel')}</span><select aria-label={t('market.tagLabel')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAllShort')}</option>{[...new Set(catalog.flatMap(c => c.tags || []))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>
+          <label className="mk-filter-pill"><span>{t('market.tagLabel')}</span><select aria-label={t('market.tagLabel')} value={tagFilter} onChange={e => setTagFilter(e.target.value)}><option value="">{t('market.tagAllShort')}</option>{[...new Set(catalog.flatMap(c => shownTags(c)))].sort().map(tag => <option key={tag} value={tag}>{tag}</option>)}</select><ChevronDown size={13} aria-hidden="true" /></label>
           <button type="button" className="mk-filter-chip" aria-pressed={compatibleOnly} data-market-compat-filter onClick={() => setCompatibleOnly(!compatibleOnly)}><Check size={13} aria-hidden="true" />{t('market.compatibleOnly')}</button>
           <span className="mk-filter-version">Forsion {appVersion}</span>
         </div>}
@@ -860,7 +870,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
                   {detailPlugin && <RequiredPlugins p={detailPlugin} store={depsStore(detailPlugin)} />}
                   {detail.type === 'skill' && !isInstalled(detail) && <SkillAgentPicker hint agents={skillAgents} choice={skillChoice[detail.id] ?? null} disabled={!!installing[detail.id]} onChange={(next) => setSkillChoice((m) => ({ ...m, [detail.id]: next }))} />}
                   <div className="mk-trust-row"><ShieldCheck size={17} /><div><strong>{t('market.reviewed')}</strong><span>{t('market.reviewedHint')}</span></div></div>
-                  <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{kindLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
+                  <MarketRequirements item={detail} version={appVersion} /><dl className="mk-facts"><div><dt>{t('market.forsionVersion')}</dt><dd>{requirementsText(detail)}</dd></div><div><dt>ID</dt><dd className="mk-id-value">{detail.id}<button className="btn sm ghost" onClick={() => void navigator.clipboard.writeText(detail.id)}>{t('market.copyId')}</button></dd></div>{!!detail.platforms?.length && <div><dt>{t('market.platform')}</dt><dd>{detail.platforms.join(' · ')}</dd></div>}<div><dt>{t('market.type')}</dt><dd>{kindLabel[detail.type]}</dd></div><div><dt>{t('market.version')}</dt><dd>{detail.latestVersion ? `v${detail.latestVersion}` : t('market.unknown')}</dd></div>{isDesktopOnlyItem(detail) && <div><dt>{t('market.platform')}</dt><dd>{t('market.desktopOnly')}</dd></div>}{!!entitlementLabel(detail) && <div data-market-entitlement-fact={detail.id}><dt>{t('market.access')}</dt><dd title={t('market.requiresHint')}>{entitlementLabel(detail)}</dd></div>}<div><dt>{t('market.source')}</dt><dd>{detail.source === 'github' ? 'GitHub' : detail.source === 'npm' ? 'npm' : t('market.sourceUpload')}</dd></div>{!!formatDate(detail.updatedAt || detail.createdAt) && <div><dt>{t('market.updated')}</dt><dd>{formatDate(detail.updatedAt || detail.createdAt)}</dd></div>}</dl>
                   {detail.npmPackage && <a className="mk-repo-link" href={`https://www.npmjs.com/package/${encodeURIComponent(detail.npmPackage)}`} target="_blank" rel="noreferrer"><Package size={14} />{detail.npmPackage}<ExternalLink size={12} /></a>}
                   {detail.githubRepoUrl && <a className="mk-repo-link" href={detail.githubRepoUrl} target="_blank" rel="noreferrer"><GitBranch size={14} />{t('market.openRepo')}<ExternalLink size={12} /></a>}
                 </aside>

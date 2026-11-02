@@ -47,7 +47,7 @@ Canonical types: `desktop/shared/chatBox.ts`.
 | `update(patch)`, `focus()`, `dispose()` | Update, focus, idempotent unmount. Async callbacks after unmount no longer touch the UI; the host cleans up on plugin disable, reload or setup failure. |
 | `modelPicker` | Defaults to true. With `false` the model and thinking pill is not drawn and no default model is resolved. Callbacks then carry the `modelId` you passed (`''` if none) and the `thinkingLevel` you passed (`'medium'` if none). |
 | `toolbar(el)` | A slot at the left of the bottom row, before the model pill. Put your own DOM in `el` and optionally return a cleanup function. The cleanup runs on dispose, and before remounting when update passes a different function. The host logs exceptions from either and the input keeps working. |
-| `suggest` | `{ trigger, items(query) }`: a host menu beside the caret that looks and behaves like the `#` completion in notes. |
+| `suggest` | `{ trigger, items(query), mention? }`: a host menu beside the caret that looks and behaves like the `#` completion in notes. |
 | `insertText(text)` | Handle method. Inserts at the caret, replaces any selection, and focuses the input. Use it for a "#" button or voice transcription. It doesn't open the menu; the menu opens when the user keeps typing. |
 
 The toolbar's `el` sits inside the host mount layer and doesn't get the plugin view base styles, so give buttons in it a class such as `.btn.sm`.
@@ -55,6 +55,8 @@ The toolbar's `el` sits inside the host mount layer and doesn't get the plugin v
 ### Suggestions
 
 `trigger` is a non-empty string. The menu opens when the text directly before the caret is `trigger` plus a query. The trigger must be at the start of a line or after whitespace, and the query must be non-empty and made of letters, digits, `_`, `/` or `-`. `items` returns an array or a Promise of `{ label, hint?, value }`; up to 8 are shown. An empty array shows no menu, a rejection only closes it, and newer typing discards results that haven't arrived yet.
+
+For @-style mentions, pass `mention: true`. The menu then opens on the bare `trigger` (with an empty `query`) and right after CJK text; only a Latin letter or digit directly before the trigger keeps it closed, so email addresses do not open it. Older hosts ignore the option and keep the rules above.
 
 ```js
 const box = ctx.ui?.mountChatBox?.(el, {

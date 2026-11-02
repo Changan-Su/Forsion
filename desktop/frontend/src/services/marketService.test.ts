@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { installMarket, installedMarketItem } from './marketService'
+import { installMarket, installedMarketItem, isReservedMarketTag, itemEntitlement } from './marketService'
 
 // 2026-09-21:主进程只给语言中立的原因码,Electron 还会在 invoke 的拒绝外面包一层前缀 —— 两样都不能原样上屏。
 const g = globalThis as unknown as { window?: { tangu?: Record<string, unknown> } }
@@ -12,6 +12,27 @@ it('installed lookup respects types while tolerating plugin category correction'
   const item = { type: 'amadeus-plugin', installSlug: 'same' } as const
   expect(installedMarketItem(item, { theme: [{ slug: 'same', version: '1.0.0' }] })).toBeUndefined()
   expect(installedMarketItem(item, { plugin: [{ slug: 'same', version: '1.0.0' }] })).toEqual({ slug: 'same', version: '1.0.0' })
+})
+
+describe('保留标签 entitlement:<name>', () => {
+  it('读出权益名', () => {
+    expect(itemEntitlement({ tags: ['chat', 'entitlement:business'] })).toBe('business')
+    expect(itemEntitlement({ tags: ['entitlement:team-plus'] })).toBe('team-plus')
+  })
+
+  it('没有或写坏了就没有', () => {
+    expect(itemEntitlement({ tags: ['chat'] })).toBeNull()
+    expect(itemEntitlement({ tags: undefined })).toBeNull()
+    expect(itemEntitlement({ tags: ['entitlement:'] })).toBeNull()
+    expect(itemEntitlement({ tags: ['entitlement:Not Valid'] })).toBeNull()
+  })
+
+  it('保留标签不当普通标签显示,普通标签不受影响', () => {
+    expect(isReservedMarketTag('desktop-only')).toBe(true)
+    expect(isReservedMarketTag('entitlement:business')).toBe(true)
+    expect(isReservedMarketTag('entitlements')).toBe(false)
+    expect(isReservedMarketTag('chat')).toBe(false)
+  })
 })
 
 describe('installMarket 的错误文案', () => {

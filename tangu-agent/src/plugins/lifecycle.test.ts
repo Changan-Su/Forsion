@@ -568,6 +568,43 @@ describe('热路由', () => {
   });
 });
 
+describe('捆绑包里的引擎插件:通道归属按发现目录记', () => {
+  it('归属取目录,不取插件自报;ctx 上有能力探测的键', async () => {
+    delete process.env.TANGU_PLUGINS_DIR;
+    const shared = path.join(tmp, 'shared');
+    process.env.TANGU_HOME = path.join(shared, 'tangu');
+    mkdirSync(process.env.TANGU_HOME, { recursive: true });
+    const bundle = path.join(shared, 'plugins', 'acme-chat');
+    const dir = path.join(bundle, 'tangu-plugins', 'lc-chan');
+    mkdirSync(path.join(dir, 'dist'), { recursive: true });
+    writeFileSync(path.join(bundle, 'manifest.json'), JSON.stringify({ id: 'acme', name: 'x', version: '1.0.0' }));
+    writeFileSync(path.join(dir, 'tangu-plugin.json'), JSON.stringify({ id: 'lc-chan', name: 'lc-chan', version: '1.0.0', apiVersion: 1, entry: 'dist/index.js' }));
+    writeFileSync(path.join(dir, 'package.json'), '{"type":"module"}');
+    writeFileSync(path.join(dir, 'dist', 'index.js'), `export default { activate(ctx) {
+  ctx.registerPlugin({ id: 'lc-chan', name: 'lc-chan', description: JSON.stringify(ctx.channelCapabilities) });
+  ctx.registerChannel({
+    multiPeer: true, owner: { engine: 'forged', bundle: 'forged' },
+    driver: { kind: 'lcchan', start: async () => {}, stop() {}, status: () => [], send: async () => ({ ok: true }), verify: async () => ({ accountId: 'a', label: 'a' }) },
+    name: { zh: 'x', en: 'x' }, fields: [],
+  });
+} };\n`);
+    const h = await host();
+    const { configureTangu } = await import('../seams/runtime.js');
+    const { createTanguProfile } = await import('../profiles/index.js');
+    const stub: any = new Proxy({}, { get: () => () => { throw new Error('stub'); } });
+    const hostStub: any = new Proxy({}, { get: () => () => [] });
+    configureTangu({ host: hostStub, brain: stub, billing: stub, profile: createTanguProfile({ sandboxMode: 'none' }) });
+    await h.boot.activateAllPlugins();
+    const { channelHub } = await import('../channels/hub.js');
+    expect(channelHub.has('lcchan')).toBe(true);
+    const st = (await channelHub.statusAll('u1')).find((c) => c.kind === 'lcchan');
+    expect(st.plugin.owner).toEqual({ engine: 'lc-chan', bundle: 'acme-chat' });
+    expect(st.plugin.multiPeer).toBe(true);
+    const { getPluginMeta } = await import('./registry.js');
+    expect(JSON.parse(String(getPluginMeta('lc-chan')?.description))).toEqual({ multiPeer: true, agentPin: true, sendApproval: true });
+  });
+});
+
 describe('捆绑包里的引擎插件:scoped 路由挂在安装目录名下', () => {
   it('目录名和包清单里的 id 不一样时路由跟目录名走 —— 桌面拼请求路径用的也必须是目录名(商店按 install_slug 落目录)', async () => {
     delete process.env.TANGU_PLUGINS_DIR; // 设了它 = 只认那一个目录,捆绑包整体停用

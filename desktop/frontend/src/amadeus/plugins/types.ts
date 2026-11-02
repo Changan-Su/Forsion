@@ -1343,6 +1343,9 @@ export interface PluginAccount {
   /** Save through the native Downloads provider when available. */
   saveDownload?(blob: Blob, name: string): Promise<{ ok: boolean; error?: string }>
   subscribe(listener: (status: PluginAccountStatus) => void): () => void
+  /** Does this account hold the entitlement the plugin declares in manifest `requires`? `null` = unknown (offline,
+   *  signed out, unreadable reply), which is not `false`. `true` when the plugin declares none. Older hosts lack it. */
+  entitlements?(): Promise<{ granted: boolean | null }>
 }
 
 /** An action in the selection bar — the strip that appears over selected text (2026-09-28+, review G3-07;
@@ -1729,8 +1732,11 @@ export interface PluginContext {
    *  is retired by other mounts on the same element. Don't select host nodes with `el > …`. */
   ui?: {
     /** Temporary native mobile header for a view's overlay. Dispose when the overlay closes.
+     *  The system back gesture and the header arrow both call `onBack`. `toList`: the header belongs to a page under
+     *  the Space's phone list rather than an overlay, so back slides the list in (following the finger on an edge
+     *  swipe) and `onBack` runs once the list is showing, whichever way the user got there. A cancelled swipe calls nothing.
      *  Present only with native chrome; callbacks stop on plugin disable. */
-    claimHeader?(opts: { title: string; back: string; onBack(): void }): { dispose(): void }
+    claimHeader?(opts: { title: string; back: string; onBack(): void; toList?: boolean }): { dispose(): void }
     /** Native touch feedback. Present only on a capable platform host; system preferences apply.
      *  Call once for an accepted user gesture. No-op after the plugin is disabled. */
     haptic?(kind: 'tick'): void
@@ -1959,6 +1965,12 @@ export interface PluginContext {
   tangu?: {
     /** Local authenticated JSON request to an engine plugin bundled by this plugin. */
     request?(engineId: string, path: string, opts?: import('./engineRequest').PluginRequestOptions): Promise<unknown>
+    /** Fill in and connect a channel registered by an engine plugin in this bundle, so the plugin's own UI can replace
+     *  the settings card. Desktop with a local engine only. Any other kind is refused, and only the credential keys the
+     *  channel declares are accepted; both checks run in the host. `options.modelId` is the channel's default model when
+     *  it has none yet; a model chosen in the channel's settings stays. Returns `{ ok: false, error }` instead of throwing. */
+    connectChannel?(kind: string, fields: Partial<Record<'appId' | 'appSecret' | 'botToken', string>>, options?: { modelId?: string }): Promise<
+      { ok: true; accountId: string; label: string; sessionId: string } | { ok: false; error: string }>
     /** Open an existing session in a native chat tab. Does not start a run. */
     openSession?(sessionId: string): Promise<void> | void
     activeModel(): import('./tanguSeam').TanguModelInfo | null
@@ -2445,6 +2457,8 @@ export interface AmadeusPlugin {
   /** 前置插件(manifest `requiresPlugins`,宿主已消毒):缺任何一个,本插件装着但不运行;前置没了自动暂停、回来自动恢复。
    *  判定与原因见 pluginDeps.ts;代码内注册的内置插件也可以直接写这个字段。 */
   requiresPlugins?: import('@amadeus-shared/ipc').PluginDependency[]
+  /** 声明的账号权益(manifest `requires.entitlement`)。不挡激活:插件自己画引导页,真正的闸在服务端。 */
+  entitlement?: string
   /** 声明要用的宿主敏感能力(manifest `capabilities`,主进程已按白名单过滤)。没声明的能力宿主不注入。 */
   capabilities?: import('@amadeus-shared/ipc').PluginCapability[]
   /** README.md content for the detail page (external plugins only). */

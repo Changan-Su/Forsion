@@ -13,7 +13,7 @@ vi.mock('../amadeus/store/pageStore', () => ({
 vi.mock('../amadeus/store/dbStore', () => ({ useDbStore: { getState: () => ({ flushAll: fixture.db }) } }))
 vi.mock('../amadeus/store/drawingStore', () => ({ useDrawStore: { getState: () => ({ flushAll: fixture.draw }) } }))
 vi.mock('../amadeus/unified/lifecycle', () => ({ retireAllUnifiedScopes: fixture.retire }))
-import { installAccountTransition } from './accountTransition'
+import { installAccountTransition, onAccountWillChange } from './accountTransition'
 
 let prepare: () => Promise<void>
 let changed: () => void
@@ -32,6 +32,15 @@ beforeEach(() => {
 })
 afterEach(() => { dispose(); delete window.tangu; Reflect.deleteProperty(window, 'amadeus'); document.body.innerHTML = '' })
 const settled = () => new Promise((resolve) => setTimeout(resolve, 0))
+
+it('tells in-window listeners before anything flushes, and one failing listener stops nothing', async () => {
+  const order: string[] = []
+  fixture.flush.mockImplementationOnce(async () => { order.push('flush') })
+  const off = [onAccountWillChange(() => { throw new Error('boom') }), onAccountWillChange(() => order.push('listener'))]
+  await prepare()
+  off.forEach((fn) => fn())
+  expect(order).toEqual(['listener', 'flush'])
+})
 
 it('flushes every editor before retiring cloud documents and acknowledging the host', async () => {
   let finish!: () => void

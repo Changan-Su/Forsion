@@ -167,6 +167,12 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 
 引擎插件可以接入一个新的聊天软件(比如企业微信),和内置的微信、Telegram、QQ 通道用同一套:连接即新会话、远程审批、`/new` `/model` 等命令、收件箱转发、侧栏里的通道文件夹都现成。装好之后「设置 → 通道」里多一张卡,填上插件要的凭据、点「连接」就能用;停用插件,这个通道随之停下,已绑定的会话还在。接口见插件开发技能「引擎插件」一节的 `ctx.registerChannel`;企业微信插件是现成的例子。
 
+一个账号也可以服务多个联系人:写 `multiPeer: true`,每个联系人就有自己的绑定、会话和工作目录,对话互不相通。他们用的是同一个 Agent、同一个账号身份,所以 Agent 记忆是共用的,这些会话不用项目记忆。工作目录只是把文件分开,不是沙箱:工具走主机执行时仍然能读到别的目录,所以要自己把好谁能说话、工具怎么审批。谁能说话由驱动决定;这些联系人不是通道主人,所以只有 `/stop` 算命令,收件箱不转发,桌面也切换不了连接的会话。老引擎会静默忽略这个键,先判 `ctx.channelCapabilities?.multiPeer`。入站消息带 `agentSlug` 可以给这个联系人钉一个 Agent。
+
+凭据直接写进配置、没有人点「连接」的无人值守部署,再加 `selfConnect: true`:账号从没连过时,驱动交上来的第一个联系人会替本机用户连上。用户断开过的账号不会被连回去。
+
+驱动实现 `sendApproval` 后,审批不再发文字卡,而是把工具名、参数和预览交给驱动画,由 `respond` 兑现:文字消息批不了它,也作废不了它,10 分钟没人答按拒绝。实现 `settleApproval` 能知道卡是怎么结束的。界面半身可以用 `ctx.tangu.connectChannel(kind, fields, { modelId })` 替用户填好并连接自己捆绑的通道,只在桌面可用,别的插件的通道会被拒绝。`modelId` 在通道还没选过模型时当默认模型,用户选过的不动。
+
 ## 自动化触发事件
 
 插件可以给自动化加一种自己的「当…」:用 `ctx.automation.registerTrigger` 登记,事件发生时用 `ctx.automation.emit` 发一条。登记之后它出现在自动化画布触发节点的「外部 · 插件」组,规则由用户自己写,可以加时段、星期、冷却和每天次数;用户选「直接提醒」不花额度,选「叫醒 Muse」照常过额度。
@@ -323,4 +329,14 @@ ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})
 
 ### 共享账号
 
-Unit 网页账号宿主与移动端可提供 `ctx.account`。先判断能力存在，再使用 `status()`、`login()`、`logout()`、`request(path, init)` 与 `subscribe(listener)`。`request` 只访问账号 API，不接受其他源；宿主代发凭据并保留 FormData/Blob 文件上传。账号切换会取消旧请求并使旧响应体读取失败；插件仍须取消自己的延迟任务并清空旧账号界面。可选的 `saveDownload(blob, name)` 返回 `{ ok, error? }`：Android 保存到系统下载，浏览器保存为下载文件。不要保存、导入或传递账号令牌。
+桌面(装载了 Forsion Extend 时)、Unit 网页账号宿主与移动端都提供 `ctx.account`,同一份插件代码三端能跑。先判断能力存在，再使用 `status()`、`login()`、`logout()`、`request(path, init)` 与 `subscribe(listener)`。`request` 只访问账号 API，不接受其他源；宿主代发凭据并保留 FormData/Blob 文件上传。账号切换会取消旧请求并使旧响应体读取失败；插件仍须取消自己的延迟任务并清空旧账号界面。可选的 `saveDownload(blob, name)` 返回 `{ ok, error? }`：Android 保存到系统下载，浏览器保存为下载文件。不要保存、导入或传递账号令牌。
+
+桌面的 `request` 走主进程代发,有几条限制:请求体只收 JSON 字符串(FormData 和 Blob 直接报错,大文件用预签名地址),响应体只有 JSON,自定义请求头不带过去,单次最长 120 秒,DELETE 不带请求体;`abort` 立刻拒绝,但已经发出的请求会跑完,结果丢弃。桌面的 `status()` 没有 `userId`。路径一律相对 `/api`。
+
+### 账号权益
+
+插件要用户有某项权益才能用时,在 manifest 写 `"requires": { "entitlement": "<name>" }`,数组写法照旧。插件照常激活,自己画引导页:`ctx.account.entitlements()` 回 `{ granted }`,`true` 是有,`false` 是服务端明确说没有,`null` 是不知道(离线、没登录、老服务端),别把 `null` 当成没有。没声明时回 `true`。真正的闸在服务端。`requires.plugins` 是 Unit 的包依赖,桌面和手机的前置继续写 `requiresPlugins`。商店标签写 `entitlement:<name>`,卡片上画成一枚标记,不挡安装。
+
+### Space 的 Ribbon 落点和手机布局
+
+`space.json` 写 `"ribbon": { "after": "<spaceId>" }`,图标第一次出现时排在那个 Space 后面,用户已经摆过的位置不动。写 `"mobile": { "listFirst": true }`,手机上先落左栏列表,点一项进主区;只有左栏确实是这种列表才写,缺省主区是第一层、左栏是抽屉。 主视图要接管原生顶栏时用 `ctx.ui.claimHeader?.({ title, back, onBack, toList: true })`:返回时壳把列表层滑出来(边缘手势跟手,中途放弃什么都不发生),列表露出来后才调 `onBack`;不带 `toList` 时系统返回和顶栏箭头都只跑 `onBack`,适合浮层。

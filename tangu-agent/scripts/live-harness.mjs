@@ -376,6 +376,7 @@ OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
+KEYS.push('orgchat'); OPT_IN.add('orgchat'); // --only orgchat --org-plugin <bundle>: a multi-peer channel plugin brings its own legs in verify/orgchat.live.mjs
 OPT_IN.add('appref'); // 四个 run;只在动 APP_REF_SECTION(应用 / 窗口引用那一段提示词)时才有信息量。
 const NEEDS = { dream: ['historian'], recall: ['historian', 'dream'] }; // 记忆链三连有先后依赖;其余场景自包含
 KEYS.push('marketplace', 'marketplacechat');
@@ -1190,6 +1191,13 @@ const ESTOP_LOCK_FILE = join(OUT, 'userData', 'remote-lock.json'); // P1-K2 esto
 const REMOTE_SESSION_SANDBOX = join(tmpdir(), `forsion-agent-sessions-live-${stamp}`); // P1-K9 remotesession
 const markerFile = join(workspace, 'marker.txt');
 writeFileSync(markerFile, `# 台架标记文件\ncode = ${MARKER}\n`);
+const ORG_PLUGIN = resolve(opt('org-plugin', process.env.TANGU_LIVE_ORG_PLUGIN || '.'));
+if (ONLY.has('orgchat')) {
+  if (!existsSync(join(ORG_PLUGIN, 'verify/orgchat.live.mjs'))) throw new Error('--only orgchat needs --org-plugin <bundle with verify/orgchat.live.mjs>');
+  for (const name of readdirSync(join(ORG_PLUGIN, 'tangu-plugins'))) {
+    cpSync(join(ORG_PLUGIN, 'tangu-plugins', name), join(home, 'plugins', name), { recursive: true, filter: (p) => !p.split('/').includes('node_modules') });
+  }
+}
 // plugin(10-02):隔离 home 的插件目录里放一个夹具引擎插件,它唯一的工具回一个随机标记(引擎起来时装载)。
 const PLUGIN_MARKER = `PLUG-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
 if (ONLY.has('plugin')) {
@@ -4656,6 +4664,12 @@ Then reply with only the command output.`,
       detail: ev.error || `发言序 ${sp.join('→') || '无'};并行${overlap ? '交叠' : '未交叠(串行!)'};收场 ${reason || '无'}(${ev.group.ended?.steps ?? '?'} 步 · ${ev.group.ended?.rounds ?? '?'} 周期);带发言人前缀的落库消息 ${attributed} 条;工作中发言 ${early};固定 Historian 摘要 ${hasSummary};重复发言 ${dups.length ? dups.join(',') : '无'};会话级调档 beta=${betaCfg.thinkingLevel || '缺省'} alpha=${alphaCfg.thinkingLevel || '缺省'}`,
       output: list.filter((m) => m.role === 'model').map((m) => String(m.content || '')).join('\n\n---\n\n'), ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls,
     };
+  });
+
+  // Multi-peer channel: the plugin under test owns the legs, the harness lends the real engine and model.
+  await scenario('orgchat', 'orgchat 多人通道(真驱动 × 真模型,场景在插件包里)', async () => {
+    const { default: legs } = await import(pathToFileURL(join(ORG_PLUGIN, 'verify/orgchat.live.mjs')).href);
+    return legs({ api, sleep, until, home, out: OUT, model: MODEL, log: (m) => console.log(m) });
   });
 
   // 09-20 用户报「团队模式下总是有重复内容的发言」的复现:三人闲聊式团队(不派活、不用工具),每位成员都会

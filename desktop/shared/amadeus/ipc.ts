@@ -357,6 +357,8 @@ export interface ExternalPluginSource {
   requiresApp?: string
   /** Prerequisite Forsion plugins (manifest `requiresPlugins`, sanitized by the main process). */
   requiresPlugins?: PluginDependency[]
+  /** Account entitlement this plugin declares (manifest `requires.entitlement`). Informational: the plugin still activates. */
+  entitlement?: string
   /** 插件声明要用的宿主敏感能力(manifest `capabilities`,白名单外的一律丢)。宿主只给声明过的
    *  插件注入对应的 ctx 接缝——没声明 = 拿不到,不是「拿到了但没用」。目前只有 'activeWindow'。 */
   capabilities?: PluginCapability[]
