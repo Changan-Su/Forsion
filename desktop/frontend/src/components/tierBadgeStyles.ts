@@ -1,11 +1,13 @@
 /**
- * 会员标识配色:后台按方案配置,随公开的 /api/membership/plans 下发(plan.badge = 生效值)。
+ * 会员标识配色与名称:后台按方案配置,随公开的 /api/membership/plans 下发(plan.badge = 生效配色,name / nameEn = 中英文名)。
  * 桌面 / Android 经 cloudFetch 拉一次并缓存进 localStorage(重启首帧直接用上次的色,不先画缺省再闪);
  * 网页版没有 cloudFetch,用内置缺省。DEFAULT_BADGES 与 server/src/services/membershipBadge.ts 逐字一致,改一处要改两处。
  */
 import { useSyncExternalStore } from 'react'
 
 export interface BadgeStyle { from: string; to: string; text: string }
+/** 徽章 = 配色 + 方案名(中文 / 通用槽与英文槽;没拉到时徽章显示档位键) */
+export interface TierBadgeInfo extends BadgeStyle { name?: string; nameEn?: string }
 
 export const DEFAULT_BADGES: Record<string, BadgeStyle> = {
   free: { from: '#E5E7EB', to: '#D1D5DB', text: '#374151' },
@@ -19,30 +21,32 @@ const CACHE_KEY = 'forsion_tier_badges'
 const HEX = /^#[0-9a-fA-F]{6}$/
 
 const validBadge = (b: any): b is BadgeStyle => !!b && [b.from, b.to, b.text].every((v) => typeof v === 'string' && HEX.test(v))
+const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
 
-/** 方案列表 → 档位配色;同一档位有多个方案时取月价最低那个 */
-export function badgesFromPlans(plans: unknown): Record<string, BadgeStyle> {
-  const out: Record<string, BadgeStyle> = {}
+/** 方案列表 → 档位徽章;同一档位有多个方案时取月价最低那个 */
+export function badgesFromPlans(plans: unknown): Record<string, TierBadgeInfo> {
+  const out: Record<string, TierBadgeInfo> = {}
   const price: Record<string, number> = {}
   if (!Array.isArray(plans)) return out
   for (const p of plans) {
     const tier = typeof p?.tier === 'string' ? p.tier.toLowerCase() : ''
     const monthly = Number(p?.priceMonthly) || 0
     if (!tier || !validBadge(p.badge) || (tier in price && price[tier] <= monthly)) continue
-    out[tier] = { from: p.badge.from, to: p.badge.to, text: p.badge.text }
+    out[tier] = { from: p.badge.from, to: p.badge.to, text: p.badge.text, name: str(p.name), nameEn: str(p.nameEn) }
     price[tier] = monthly
   }
   return out
 }
 
-function readCache(): Record<string, BadgeStyle> {
+function readCache(): Record<string, TierBadgeInfo> {
   try {
     const raw = JSON.parse(localStorage.getItem(CACHE_KEY) || '{}')
-    return Object.fromEntries(Object.entries(raw).filter(([, b]) => validBadge(b))) as Record<string, BadgeStyle>
+    return Object.fromEntries(Object.entries(raw).filter(([, b]) => validBadge(b))
+      .map(([k, b]: [string, any]) => [k, { from: b.from, to: b.to, text: b.text, name: str(b.name), nameEn: str(b.nameEn) }]))
   } catch { return {} }
 }
 
-let configured: Record<string, BadgeStyle> = typeof localStorage !== 'undefined' ? readCache() : {}
+let configured: Record<string, TierBadgeInfo> = typeof localStorage !== 'undefined' ? readCache() : {}
 const listeners = new Set<() => void>()
 let loading: Promise<void> | null = null
 
@@ -61,9 +65,13 @@ export function loadTierBadges(): Promise<void> {
   return loading
 }
 
-export const badgeFor = (tier: string): BadgeStyle => configured[tier] ?? DEFAULT_BADGES[tier] ?? FALLBACK
+export const badgeFor = (tier: string): TierBadgeInfo => configured[tier] ?? DEFAULT_BADGES[tier] ?? FALLBACK
 
-export function useTierBadge(tier: string): BadgeStyle {
+/** 徽章文字:英文界面用英文名,没填回落中文 / 通用名,都没有显示档位键 */
+export const badgeLabel = (tier: string, b: TierBadgeInfo, locale: string): string =>
+  (locale === 'en' && b.nameEn) || b.name || tier
+
+export function useTierBadge(tier: string): TierBadgeInfo {
   return useSyncExternalStore((l) => { listeners.add(l); void loadTierBadges(); return () => { listeners.delete(l) } }, () => badgeFor(tier))
 }
 

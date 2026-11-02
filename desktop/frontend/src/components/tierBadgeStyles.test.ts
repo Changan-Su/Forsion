@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { badgeFor, badgesFromPlans, DEFAULT_BADGES, loadTierBadges, resetTierBadgesForTest } from './tierBadgeStyles'
+import { badgeFor, badgeLabel, badgesFromPlans, DEFAULT_BADGES, loadTierBadges, resetTierBadgesForTest } from './tierBadgeStyles'
 
 const plan = (tier: string, priceMonthly: number, from: string) => ({ tier, priceMonthly, badge: { from, to: '#000000', text: '#FFFFFF' } })
 
@@ -44,5 +44,15 @@ describe('tierBadgeStyles', () => {
     await loadTierBadges()
     expect(badgeFor('pro')).toEqual(DEFAULT_BADGES.pro)
     expect(JSON.parse(localStorage.getItem('forsion_tier_badges')!)).toEqual({})
+  })
+
+  it('徽章文字跟界面语言取方案名:英文缺了回落中文 / 通用名,都没有显示档位键;名字进缓存', async () => {
+    ;(window as any).tangu = { cloudFetch: vi.fn().mockResolvedValue({ status: 200, json: [{ ...plan('pro', 99, '#123456'), name: '专业版', nameEn: 'Pro' }, { ...plan('max', 199, '#654321'), name: ' 旗舰 ', nameEn: '' }] }) }
+    await loadTierBadges()
+    expect(badgeLabel('pro', badgeFor('pro'), 'zh')).toBe('专业版')
+    expect(badgeLabel('pro', badgeFor('pro'), 'en')).toBe('Pro')
+    expect(badgeLabel('max', badgeFor('max'), 'en')).toBe('旗舰')
+    expect(badgeLabel('ultra', badgeFor('ultra'), 'zh')).toBe('ultra')
+    expect(JSON.parse(localStorage.getItem('forsion_tier_badges')!).pro).toMatchObject({ name: '专业版', nameEn: 'Pro' })
   })
 })
