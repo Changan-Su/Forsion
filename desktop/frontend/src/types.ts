@@ -55,6 +55,8 @@ export interface HistorianConfig {
   prompt: string
   /** 自进化自动档:判官额外提名「工作笔记候选」进各 Agent 收件箱,/refine 时供其审阅采纳(09-18 起默认开,引擎启动期一次性迁移翻开老配置)。 */
   harnessCandidates: boolean
+  /** 决策闸(beta,开发者选项):「像不像在纠正」改问 Forsion 云端的决策模型,词面兜底。旧引擎没有这个键 = 关。 */
+  decisionGate?: boolean
 }
 export interface MuseConfig {
   enabled: boolean

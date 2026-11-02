@@ -41,6 +41,11 @@ export interface HistorianConfig {
    * 仅在下次 /refine 时注入供审阅,由 agent 自己经 manage_harness 采纳才落 HARNESS.md(10-04 起写入不审批)——自动采集、agent 采纳。
    */
   harnessCandidates: boolean;
+  /**
+   * 决策闸(beta,开发者选项,缺省关):「这一轮像不像在纠正上一条回复」改问 Forsion 云端的决策模型(/api/brain/decision),
+   * 词面判定只在决策模型没答 / 答得含糊时兜底。要登录 Forsion 账号;用户这句和上一条回复会发给云端的决策模型。见 services/judgeSignals.ts。
+   */
+  decisionGate?: boolean;
 }
 
 export interface MuseConfig {
@@ -132,6 +137,7 @@ export const SPECIAL_AGENTS_DEFAULTS: SpecialAgentsConfig = {
     // 默认开(09-18 用户拍板,推翻 08-13「自动档默认关」):关着时这层三个月零使用(正式库 713 个 run 里 /refine 与 manage_harness 全 0)。
     // 它只提名、不写入——采纳仍要 /refine(10-04 起 manage_harness 不再审批,但候选只在 /refine 时注入);代价是判官提示词每轮多一段字段说明。
     harnessCandidates: true,
+    decisionGate: false,
   },
   muse: {
     enabled: false,
@@ -192,6 +198,7 @@ export function normalizeConfig(raw: any): SpecialAgentsConfig {
       mode: h.mode === 'assist' || h.mode === 'fork' ? h.mode : d.historian.mode,
       prompt: asStr(h.prompt, d.historian.prompt),
       harnessCandidates: asBool(h.harnessCandidates, d.historian.harnessCandidates),
+      decisionGate: asBool(h.decisionGate, false),
     },
     muse: {
       enabled: asBool(m.enabled, d.muse.enabled),
