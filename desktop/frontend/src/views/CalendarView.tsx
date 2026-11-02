@@ -1479,13 +1479,15 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
   useEffect(() => () => setVisibleRange(null, null), [setVisibleRange])
 
   const idxOfMonth = (y: number, m: number): number => Math.round(diffDays(startOfWeek(new Date(y, m, 1)), weeks[0]) / 7)
+  // 一行算它最后一天所在的月:这样 idxOfMonth 落到的行(含 1 号)一定算这个月,1 号落在周几都一样
+  const monthDayOfRow = (i: number): Date => addDays(weeks[i], 6)
   const updateTitle = (): void => {
     const el = wrap.current
     if (!el || !rowH) return
     const i = Math.max(0, Math.min(weeks.length - 1, Math.round(el.scrollTop / rowH)))
-    const mid = addDays(weeks[i], 3)
-    const label = monthLabel(mid)
-    if (anchorRef) anchorRef.current = { y: mid.getFullYear(), m: mid.getMonth() }
+    const day = monthDayOfRow(i)
+    const label = monthLabel(day)
+    if (anchorRef) anchorRef.current = { y: day.getFullYear(), m: day.getMonth() }
     if (label !== lastTitle.current) {
       lastTitle.current = label
       if (titleRef.current) { titleRef.current.textContent = label; delete titleRef.current.dataset.week }
@@ -1512,15 +1514,9 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     const el = wrap.current
     if (!el || !rowH || centered.current) return
     centered.current = true
-    const a = anchorRef?.current
-    if (a) {
-      // 回到重挂前看的那个月:按新周首日,该月 1 号所在周的「标题日」(周首 +3)可能还落在上个月 → 再往下一行。
-      let i = Math.max(0, Math.min(weeks.length - 1, idxOfMonth(a.y, a.m)))
-      if (addDays(weeks[i], 3).getMonth() !== a.m && i + 1 < weeks.length) i += 1
-      el.scrollTop = i * rowH
-    } else {
-      el.scrollTop = idxOfMonth(today.getFullYear(), today.getMonth()) * rowH
-    }
+    // 有锚点就回到重挂前看的那个月,否则落在今天所在月
+    const a = anchorRef?.current ?? { y: today.getFullYear(), m: today.getMonth() }
+    el.scrollTop = Math.max(0, Math.min(weeks.length - 1, idxOfMonth(a.y, a.m))) * rowH
     updateTitle()
   }, [rowH]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1538,8 +1534,8 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
     const el = wrap.current
     if (!el || !rowH) return
     const i = Math.max(0, Math.min(weeks.length - 1, Math.round(el.scrollTop / rowH)))
-    const mid = addDays(weeks[i], 3)
-    el.scrollTo({ top: Math.max(0, idxOfMonth(mid.getFullYear(), mid.getMonth() + delta)) * rowH, behavior: 'smooth' })
+    const day = monthDayOfRow(i)
+    el.scrollTo({ top: Math.max(0, idxOfMonth(day.getFullYear(), day.getMonth() + delta)) * rowH, behavior: 'smooth' })
   }
 
   const chipDrag = useRef<{ x: number; y: number } | null>(null)

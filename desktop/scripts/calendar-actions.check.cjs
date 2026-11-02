@@ -105,6 +105,39 @@ async function main() {
     await page.keyboard.press('Control+z'); await page.keyboard.press('Control+z')
     await desktop.close()
 
+    // Pinned clock: 2026-11-01 is a Sunday, so with a Monday week start the 1st is the last cell of its row.
+    const monthContext = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'zh-CN' })
+    const month = await monthContext.newPage()
+    month.on('pageerror', (e) => errors.push(e.message))
+    await month.clock.setFixedTime(new Date(2026, 10, 1, 12))
+    await month.goto('http://localhost:5199/calendar-actions.html')
+    await month.locator(key('short')).waitFor()
+    await month.keyboard.press('m')
+    await month.locator('.amx-cal-mscroll').waitFor()
+    const monthState = () => month.evaluate(() => {
+      const box = document.querySelector('.amx-cal-mscroll')
+      const frame = box.getBoundingClientRect(), cell = document.querySelector('.amx-cal-mcell.today').getBoundingClientRect()
+      return { title: document.querySelector('.amx-cal-title').textContent, top: box.scrollTop, todayShown: cell.top >= frame.top - 1 && cell.bottom <= frame.bottom + 1 }
+    })
+    await month.waitForTimeout(300)
+    const opened = await monthState()
+    check('month view opens on the month of today with today on screen', opened.title === '2026年11月' && opened.todayShown, JSON.stringify(opened))
+    const titles = []
+    for (let i = 0; i < 6; i++) {
+      await month.getByRole('button', { name: '下一页', exact: true }).click()
+      await month.waitForTimeout(700)
+      titles.push((await monthState()).title)
+    }
+    check('Next walks month by month', titles.join() === '2026年12月,2027年1月,2027年2月,2027年3月,2027年4月,2027年5月', titles.join())
+    for (let i = 0; i < 6; i++) {
+      await month.getByRole('button', { name: '上一页', exact: true }).click()
+      await month.waitForTimeout(700)
+    }
+    const back = await monthState()
+    check('Previous walks back to the same place', back.title === opened.title && back.top === opened.top, JSON.stringify(back))
+    await month.screenshot({ path: path.join(OUT, 'month-landing.png') })
+    await monthContext.close()
+
     const phone = await browser.newContext({ viewport: { width: 393, height: 852 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true, locale: 'zh-CN' })
     const mobile = await phone.newPage()
     mobile.on('pageerror', (e) => errors.push(e.message))
