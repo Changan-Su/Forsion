@@ -100,5 +100,14 @@ export async function branchSession(input: BranchSessionInput): Promise<{ id: st
     );
   }
 
+  // 5) fork 子会话的主会话背景(childSessions.seedForkContext 落的 through_timestamp=1 检查点)跟着走:它不在消息行里,不拷就丢了
+  // 尽力而为(同 compaction 的 fail-safe):没有这张表的宿主 / 读写失败不影响分支本身
+  try {
+    const seeds = await query<any[]>(`SELECT summary FROM session_summaries WHERE session_id = ? AND through_timestamp = 1`, [sourceSessionId]);
+    for (const s of seeds) {
+      await query(`INSERT INTO session_summaries (id, session_id, summary, through_timestamp) VALUES (?, ?, ?, 1)`, [uuidv4(), newId, s.summary]);
+    }
+  } catch { /* 背景丢了只是少上下文 */ }
+
   return { id: newId, copied: msgs.length };
 }

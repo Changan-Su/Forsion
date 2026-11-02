@@ -6,6 +6,7 @@
  *  - ForkBlock(方案「Chat 画布分支」10-18 第二轮「挂点统一」):一条回答下面一块「从这里分出 N」,分支 / 顺便问 / 子会话一行一个
  *    (行就是上面子会话那一行的样子)。点分支 = 主区就地换成那一支(⌘ 开新标签);点顺便问 / 子会话 = 右边那块子会话面板。
  *  - ChildFromLine:子会话顶上「来自 主会话」;分支顶上「从 X 分出」。
+ *  - SessionMessageLine:引擎落库的 <session_message> 用户行(子会话发给主会话 / 兄弟之间,10-28)画成一行系统行 + 正文,不摆成用户气泡。
  */
 import React, { createContext, useContext, useEffect, useState, type RefObject } from 'react'
 import { ChevronRight, CornerDownRight, CornerUpLeft, GitBranch, MessageCircleQuestion, MessageSquare, Sparkles, Split } from 'lucide-react'
@@ -49,9 +50,11 @@ registerMessages({
   'childs.pill.wait': { zh: '{n} 个等你', en: '{n} need you' },
   'childs.pill.waitOne': { zh: '{n} 个等你', en: '{n} needs you' },
   'childs.pill.title': { zh: '回到子会话', en: 'Back to child sessions' },
+  'sessmsg.from': { zh: '{title} 发来消息', en: 'Message from {title}' },
 })
 
 export const CHILD_UPDATE_OPEN = '<child_sessions_update>'
+export const SESSION_MESSAGE_OPEN = '<session_message '
 const ID_RE = /\(id ([0-9a-f-]{36})\)/i
 
 /** 这条回答里 start_session 成功开出的子会话 id(工具结果里的 `(id …)`)。 */
@@ -320,6 +323,28 @@ export function ChildUpdateLine({ content }: { content: string }) {
   )
 }
 const UPD = { finished: 1, waiting_for_user: 1, failed: 1, stopped: 1 }
+
+/** <session_message from title relation>正文</session_message>(引擎 services/childSessions.ts sendSessionMessage 写的)。 */
+export function parseSessionMessage(content: string): { from: string; title: string; body: string } | null {
+  const m = /^<session_message from="([^"]*)" title="([^"]*)" relation="[a-z]+">\n([\s\S]*?)\n<\/session_message>/.exec(content)
+  return m ? { from: unescape(m[1]), title: unescape(m[2]), body: m[3] } : null
+}
+
+export function SessionMessageLine({ content }: { content: string }) {
+  const { t } = useI18n()
+  const m = parseSessionMessage(content)
+  if (!m) return null
+  const title = displaySessionTitle(m.title, t)
+  return (
+    <div className="t2-sys t2-session-msg" data-session-message={m.from}>
+      <div className="t2-session-msg-head">
+        <CornerUpLeft size={12} />
+        <a role="button" tabIndex={0} onClick={() => openSession(m.from)} onKeyDown={(e) => { if (e.key === 'Enter') openSession(m.from) }}>{t('sessmsg.from', { title })}</a>
+      </div>
+      <div className="t2-session-msg-body" title={m.body}>{m.body}</div>
+    </div>
+  )
+}
 
 /** 子会话顶上一行:来自哪个主会话(点了回去)。第一条用户消息是主会话写的简报,不是用户本人打的字。 */
 export function ChildFromLine({ session }: { session?: SessionRecord | null }) {
