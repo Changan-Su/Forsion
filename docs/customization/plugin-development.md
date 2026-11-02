@@ -295,6 +295,62 @@ if (turn) await turn.ready
 showMyDialog({ onClose: () => turn?.done() })
 ```
 
+### 上手提示（2026-11-02 起）
+
+用户用到你插件的某个功能时，宿主替你提示一次怎么用；用过了就不再出。提示声明在 manifest，出不出由宿主定，你不用自己记「看过没有」。
+
+```json
+"guide": {
+  "tips": [
+    {
+      "id": "drag-to-calendar",
+      "at": "todo-row",
+      "style": "ring",
+      "platform": "desktop",
+      "when": { "visible": ["calendar-grid"] },
+      "done": ["todo.schedule"],
+      "title": "拖到日历上排时间",
+      "text": "按住这条待办拖进日历的时间格，就排成那半小时。",
+      "en": { "title": "Drag onto the calendar to schedule", "text": "Drop it on a time slot to book half an hour." }
+    }
+  ]
+}
+```
+
+- `at`：你自己 View 里某个元素的 `data-guide-anchor="<名字>"`。宿主只在你的 View 里找，名字不会和别的插件撞。这个元素在屏幕上，提示才可能出。
+- `style`：`line` 在锚点上沿贴一行（适合输入框）；`ring` 圈住锚点、旁边一张小卡，要写 `title`。
+- `when` 只取一种：`{ "open": "<View id>", "times": 1 }` 这个 View 打开过几次；`{ "count": "<事件>", "atLeast": 3 }` 某个计数到了；`{ "visible": ["<锚点>", …] }` 这几个锚点同时在屏幕上。不写 `when` = 只在你调 `ctx.guide.show(id)` 时出。
+- `done`：任一计数 ≥ 1 就算「会了」，这条永远不再出。计数就是 `ctx.achievements.track('<事件>')`：用户真做了那件事时报一次。裸名是你自己 track 的；`app:` 开头读宿主的官方事件（如 `app:note.wikilink`）。
+- `platform`：`desktop` / `mobile`，不写 = 都出。拖动、悬停、快捷键这类，手机上没有对应手势的写 `desktop`。
+- 文案：中文 `title` / `text` + `en` 镜像。**英文界面缺 `en` 的那条不出**，不回落中文。标题尽量 16 个字以内，正文 40 个字以内。
+- id 用小写字母、数字和 `-`，最多 12 条。坏掉的那条宿主丢掉，其余照常。
+
+宿主管的节奏：全应用同一时刻只有一处提示（和使用指南的圈注共用）；一天最多 3 条；锚点出现 2 秒后、用户停手 1.5 秒后才出；一个 View 打开一次最多出一条；有弹窗在排或开着、首启向导开着时等着。用户点「知道了」/ × / Esc 算看过，「不再提示」关掉你这个插件的全部提示，设置 → 通知 →「上手提示」可以整体关掉或重置。看过和关掉只记在这台设备上。
+
+**新版本加了功能**：给它加一条**新 id** 的提示。记账按「插件 id + 提示 id」算，老用户升级后用到时会看到这条，已经看过的旧提示不会再出。别改旧提示的 id（等于让所有人重看一遍）。
+
+运行时：
+
+```js
+inputEl.dataset.guideAnchor = 'todo-input'   // 标锚点
+ctx.achievements.track('todo.tag')            // 用户真做了那件事
+ctx.guide?.show('tags')                        // 条件写不进 manifest 时自己叫(仍走节奏和记账)
+ctx.guide?.state('tags')                       // 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
+```
+
+**空着的时候给例句**：`ctx.ui.mountEmptyState` 多了 `examples`（最多 3 条），点一下通常是把这句填进你的输入框，让用户看着它被认出来、自己按发送，别直接替用户建东西：
+
+```js
+ctx.ui.mountEmptyState(el, {
+  icon: 'list-todo', title: '还没有待办', line: '在下面写一句就行。',
+  examples: [{ label: '明天下午3点 交周报 #工作', note: '日期、标签直接打', run: () => box.insertText('明天下午3点 交周报 #工作') }],
+})
+```
+
+开发时想重看：命令面板「重置上手提示」，或设置 → 通知 →「上手提示」→ 重置；再配合 `ctx.guide.show(id)` 就能当场看到某一条。锚点 2 秒找不到、条件一直不成立时，提示就是不出，先在开发者工具里确认元素带着 `data-guide-anchor`、在你自己的 View 里。
+
+和前置条件闸（manifest `onboarding.requires`）的分工：闸 = 不做插件就用不了；提示 = 能用，告诉用户一个窍门。旧宿主不认 `guide`，什么都不出；`ctx.guide` 一律 `?.`。
+
 ## 按需展开原生主区伴随视图
 
 `registerView` 可声明 `mainCompanions`。支持 `amadeus-editor` / `chat-panel`，key 以插件 id 加 `-` 开头，最多三项。视图挂载上下文的 `view.setCompanionsVisible?.(true)` 按需展开，`false` 将这些原生视图收进本视图的标签组，保留正文、聊天草稿和分栏尺寸；窄窗与手机使用原生标签。不会关闭或改写其它视图，不重建整个 Space。旧宿主缺少此方法，所以重要的阅读布局仍可保留在 Space 配方中。

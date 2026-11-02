@@ -73,6 +73,7 @@ import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../store
 import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
 import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
+import { registerGuideTips, requestTip, tipState, unregisterGuideTips } from './guideTips'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
 import { getAggDb } from '../store/dbAggregateStore'
@@ -806,6 +807,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     readme: src.readme,
     changelog: src.changelog,
     onboarding: src.onboarding,
+    guide: src.guide,
     blocked: src.blocked,
     blockedReason: src.blockedReason,
     isDesktopOnly: src.isDesktopOnly,
@@ -1490,6 +1492,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const e = o as import('./types').PluginEmptyState
       if (!e || typeof e !== 'object' || !isPluginText(e.title)) throw new TypeError('mountEmptyState needs { title }')
       iconName(e.icon, 'mountEmptyState'); iconName(e.action?.icon, 'mountEmptyState')
+      if (e.examples !== undefined && !Array.isArray(e.examples)) throw new TypeError('mountEmptyState examples must be an array')
       return e
     }
     // 网页卡片卡身(10-28,网页卡片 A + D):形状错同步抛;按钮行 / 菜单行整理成宿主形状,update 的补丁同样整理。
@@ -2334,6 +2337,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       isClaimed: (id) => !!useAchievements.getState().claimed[`plugin:${pluginId}:${id}`],
       claim: (id) => { if (ctxAlive()) useAchievements.getState().claim(`plugin:${pluginId}:${id}`) },
     },
+    // 上手提示(2026-11-02):提示声明在 manifest guide.tips,出不出由宿主 guideTips 定;这里只给「请出一条」和读状态。
+    guide: {
+      show: (id) => { if (ctxAlive()) requestTip(pluginId, String(id ?? '')) },
+      state: (id) => tipState(pluginId, String(id ?? '')),
+    },
     // 收件箱(2026-10-17):只给首方内置包 —— 一封「系统消息」长得和宿主自己发的一样,不能让任意插件往用户面前塞。
     ...(get().plugins.find((p) => p.id === pluginId)?.locked
       ? {
@@ -2735,6 +2743,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     clearSpaceProgressOf(id) // 停用 / 换代时 Ribbon 上别留着一个不再更新的进度环 / 红点
     releasePopupsOf(`plugin:${id}:`) // 排着的 / 正在显示的弹窗号一并让出,别堵住队列
     closeSpotlight(id) // 圈注同理
+    unregisterGuideTips(id) // 上手提示同理
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
     dropPluginTriggers(id) // 注销触发源;相关规则暂停并写明原因,再启用时 setup 登记回来就恢复
     set((s) => ({
@@ -2762,6 +2771,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     set((s) => ({ settings: [...s.settings, { pluginId: id, item: workFolderSetting(id) }] }))
     const ctx = makeContext(id)
     const scope = liveScopes.get(id)!
+    registerGuideTips(id, plugin.guide?.tips) // 上手提示(manifest guide):teardown 里撤
     const fail = (e: unknown): void => {
       console.error(`[amadeus] plugin "${id}" setup failed`, e)
       useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
@@ -2856,6 +2866,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const src = sources.find((x) => x.id === cur.id)
       if (keep(cur, src)) {
         next.push({ ...pluginMeta(src), setup: cur.setup })
+        if (s0.activeIds.includes(cur.id)) registerGuideTips(cur.id, src.guide?.tips) // 只改了 manifest 的更新:新加的提示不等重启
         continue
       }
       reset.push(cur.id)

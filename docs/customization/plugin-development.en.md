@@ -295,6 +295,62 @@ if (turn) await turn.ready
 showMyDialog({ onClose: () => turn?.done() })
 ```
 
+### First-use tips (since 2026-11-02)
+
+When someone reaches a feature of your plugin, the host shows a one-time tip on how to use it, and stops once they have used it. You declare tips in the manifest; the host decides when they show, so you don't track "seen" yourself.
+
+```json
+"guide": {
+  "tips": [
+    {
+      "id": "drag-to-calendar",
+      "at": "todo-row",
+      "style": "ring",
+      "platform": "desktop",
+      "when": { "visible": ["calendar-grid"] },
+      "done": ["todo.schedule"],
+      "title": "拖到日历上排时间",
+      "text": "按住这条待办拖进日历的时间格，就排成那半小时。",
+      "en": { "title": "Drag onto the calendar to schedule", "text": "Drop it on a time slot to book half an hour." }
+    }
+  ]
+}
+```
+
+- `at`: the `data-guide-anchor="<name>"` of an element in one of your own views. The host only looks inside your views, so names can't clash with other plugins. A tip can only show while that element is on screen.
+- `style`: `line` puts one line on the anchor's top edge (good for inputs); `ring` rings the anchor with a small card beside it and needs a `title`.
+- `when`, one of: `{ "open": "<view id>", "times": 1 }` how often that view has been opened; `{ "count": "<event>", "atLeast": 3 }` a counter reached a number; `{ "visible": ["<anchor>", …] }` these anchors are on screen together. No `when` = it only shows when you call `ctx.guide.show(id)`.
+- `done`: once any of these counters is ≥ 1 the tip counts as learned and never shows again. Counters are `ctx.achievements.track('<event>')`: report it once when the user actually does the thing. Bare names are your own tracked events; an `app:` prefix reads an official host event (for example `app:note.wikilink`).
+- `platform`: `desktop` / `mobile`; leave it out for both. Dragging, hovering and shortcuts have no phone equivalent, so mark those `desktop`.
+- Text: Chinese `title` / `text` plus the `en` mirror. **In an English interface a tip without `en` doesn't show** rather than falling back to Chinese. Keep titles to about 16 Chinese characters and bodies to about 40.
+- Ids use lowercase letters, digits and `-`; up to 12 tips. A malformed tip is dropped on its own and the rest still work.
+
+The host sets the pace: one tip at a time across the whole app (shared with the user guide's spotlight); at most 3 a day; a tip waits 2 seconds after its anchor appears and 1.5 seconds after the user stops typing; at most one per view opening; it waits while a popup is queued or open, or while first-run onboarding is open. Got it / × / Esc marks a tip as seen; "Don't show again" turns off all of your plugin's tips; Settings → Notifications → Tips turns tips off or resets them. Seen and turned-off state is stored on this device only.
+
+**When a new version adds a feature**, give it a tip with a **new id**. Tips are recorded per plugin id + tip id, so people who upgrade see the new one when they get there, while old tips they have seen stay hidden. Don't rename an existing tip's id; that makes everyone see it again.
+
+At runtime:
+
+```js
+inputEl.dataset.guideAnchor = 'todo-input'   // mark an anchor
+ctx.achievements.track('todo.tag')            // the user really did the thing
+ctx.guide?.show('tags')                        // ask for a tip when its condition can't be written in the manifest (pace and records still apply)
+ctx.guide?.state('tags')                       // 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
+```
+
+**Examples in an empty state**: `ctx.ui.mountEmptyState` now takes `examples` (up to 3). Clicking one should usually put that sentence into your input so people watch it get recognised and send it themselves, rather than creating something for them:
+
+```js
+ctx.ui.mountEmptyState(el, {
+  icon: 'list-todo', title: 'No to-dos yet', line: 'Just type one below.',
+  examples: [{ label: 'Tomorrow 3pm send weekly report #work', note: 'Dates and tags work as you type', run: () => box.insertText('Tomorrow 3pm send weekly report #work') }],
+})
+```
+
+To see tips again while developing, run "Reset tips" from the command palette or use Settings → Notifications → Tips → Reset, then call `ctx.guide.show(id)` to bring up a specific tip. If a tip never shows, check in the developer tools that the element carries `data-guide-anchor` and sits inside your own view, and that its condition actually holds.
+
+How this differs from the requirement gate (manifest `onboarding.requires`): a gate means the plugin can't work until something is done; a tip means it works and here is a trick. Older hosts ignore `guide` and show nothing; always call `ctx.guide` with `?.`.
+
 ## On-demand native main companions
 
 `registerView` can declare `mainCompanions`. `amadeus-editor` / `chat-panel` are supported, keys start with the plugin id plus `-`, and there are at most three entries. `view.setCompanionsVisible?.(true)` on the view's mount context expands them on demand; `false` folds these native views into this view's tab group, keeping the document content, chat drafts and split sizes. Narrow windows and phones use native tabs. Other views are never closed or rewritten, and the Space is not rebuilt. Older hosts lack this method, so important reading layouts can still stay in the Space recipe.
