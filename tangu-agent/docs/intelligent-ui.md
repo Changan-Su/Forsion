@@ -22,6 +22,14 @@
   - 文件名、CSS 类、内部变量（`SketchCard`、`.sketch-*`、`sketchTurnSignalFor`、`sketch-ask` 消息类型）没改。
   已发的客户端（≤ 2.13.4）遇到同步来的 v2 历史只显示「这部分界面未能生成」那行；从本版起，渲染层对比自己新的版本
   显示标题、第一段文字和「这张卡要新版 Forsion 才能显示」。
+- HTML 卡的随包库（10-28，`"intelligent-ui-libs.v1"`，desktop / web 发，手机原生包不发）：客户端随包带 three（含
+  `three/addons/controls/` 两个相机控件）、d3、chart.js/auto、gsap，卡里用 `<script type="module">` 按裸名 import。仍然断网：
+  桌面经 `forsion-iui://lib/…`（`desktop/electron/iuiLibProtocol.ts`，只读库目录里的 `.js`），网页经本站 `/iui-lib/`（nginx 带
+  `Access-Control-Allow-Origin: *`——卡是无源 iframe，module 脚本按 CORS 取）；内层 CSP 只在 `script-src` 多这一个来源，
+  `connect-src` 不变。importmap 在 `sketchWrapper.ts`（`IUI_LIB_IMPORTS`），文件由 `desktop/build/copy-iui-libs.cjs` 从 npm 包现生成、不入库，
+  目录只带大版本（three 带到 0.x 次版本），装到的版本和目录名对不上就构建失败。引擎只在握手里有这一项时把工具描述里「不许用库」那句换掉
+  （`sketch.ts` 的 `WITH_LIBS`）。没握手的客户端（旧版、手机）打开带库的卡：库画的那块是模型留的一行占位字，其余照常。
+  升大版本时旧目录留着、新目录并排，卡里得记一个库代号让历史卡继续指旧目录——第一代没有代号，没代号 = 第一代。
 - 复用 `tool_stream`、`tool_call`、`tool_result` 与现有历史 JSON 存储，不创建另一套 SSE 协议或数据库表。
   `document` 是 JSON 字符串，参数完整落库；工具结果只提供短确认或纠错信息。
 - 服务端及客户端使用同一纯 TypeScript 验证器：`src/contracts/intelligentUi.ts`。渲染入口位于

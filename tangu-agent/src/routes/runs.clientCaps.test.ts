@@ -28,6 +28,11 @@ describe('normalizeClientCapabilities', () => {
     expect(normalizeClientCapabilities(['my-ns.x-1'])).toEqual(['my-ns.x-1']);
   });
 
+  it('被丢的值只记摘要:深层嵌套也照样丢掉、起得来 run(不递归序列化)', () => {
+    let deep: unknown = 'x'; for (let i = 0; i < 20_000; i++) deep = [deep];
+    expect(normalizeClientCapabilities(['phone.ui', deep, 'intelligent-ui-html.libs.v1'])).toEqual(['phone.ui']);
+  });
+
   it('≤16 项:只看前 16 个', () => {
     const many = Array.from({ length: 20 }, (_, i) => `ns${i}.x`);
     expect(normalizeClientCapabilities(many)).toHaveLength(16);

@@ -45,6 +45,9 @@ export function registerAssetSchemes(): void {
       // 结构性照不到这一条,只有 e2e:mediaembed 的 E1v/E3 能钉住。
       privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true },
     },
+    // Intelligent UI 卡的随包库(../iuiLibProtocol.ts)。registerSchemesAsPrivileged 只认一次调用,只好并在这里;
+    // corsEnabled:卡是无源沙箱 iframe,里面的 module 脚本按 CORS 取。
+    { scheme: 'forsion-iui', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
   ])
 }
 
