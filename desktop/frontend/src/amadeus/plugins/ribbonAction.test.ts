@@ -2,7 +2,8 @@
 /**
  * ctx.app.registerRibbonAction 的落点:无论用户排没排过序都在「商店」下面(明暗原来的位置);反注册清干净。
  * moveModeLastOnce:老存档里明暗紧跟商店才挪到最后,只挪一次;用户别的摆法不动。
- * 负对照:删掉 addRibbonAction 里写 bottomOrder 的那行 → 「用户排过序」那条红;去掉 moveModeLastOnce 的形状判断 → 「用户自己摆过」那条红。
+ * 负对照:删掉 addRibbonAction 里写 bottomOrder 的那行 → 「用户排过序」那条红;去掉 moveModeLastOnce 的形状判断 → 「用户自己摆过」两条红;
+ * 不挪旧位的首方图标 → 「旧版存在商店上面」那条红。
  */
 import { beforeEach, describe, expect, it } from 'vitest'
 import { rankIds, useRibbonStore } from '@lcl/engine'
@@ -56,6 +57,17 @@ describe('moveModeLastOnce', () => {
     useRibbonStore.setState({ bottomOrder: ['rb-feedback', 'rb-mode', 'rb-market', 'rb-cmd'] })
     moveModeLastOnce()
     expect(useRibbonStore.getState().bottomOrder).toEqual(['rb-feedback', 'rb-mode', 'rb-market', 'rb-cmd'])
+  })
+  it('用户换过命令面板和设置:明暗紧跟商店也不动', () => {
+    useRibbonStore.setState({ bottomOrder: ['rb-feedback', 'rb-market', 'rb-mode', 'rb-settings', 'rb-cmd'] })
+    moveModeLastOnce()
+    expect(useRibbonStore.getState().bottomOrder).toEqual(['rb-feedback', 'rb-market', 'rb-mode', 'rb-settings', 'rb-cmd'])
+  })
+  it('旧版存在商店上面的活动图标:挪到商店下面,后面不再插第二份', () => {
+    useRibbonStore.setState({ bottomOrder: ['rb-feedback', ID, 'rb-market', 'rb-mode', 'rb-cmd', 'rb-settings'] })
+    moveModeLastOnce()
+    addRibbonAction(opts)
+    expect(useRibbonStore.getState().bottomOrder).toEqual(['rb-feedback', 'rb-market', ID, 'rb-cmd', 'rb-settings', 'rb-mode'])
   })
   it('明暗收在收纳夹里:不动', () => {
     useRibbonStore.setState({ bottomOrder: ['rb-market', 'rb-mode', 'rb-cmd'], folders: [{ id: 'f', side: 'bottom', name: 'x', items: ['rb-mode'] } as never] })

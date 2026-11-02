@@ -1,5 +1,5 @@
 import { Gift, type LucideIcon } from 'lucide-react'
-import { moveTo, removeRibbonIcon, useRibbonStore } from '@lcl/engine'
+import { removeRibbonIcon, useRibbonStore } from '@lcl/engine'
 
 export const RIBBON_ACTION_PREFIX = 'rb-plugin-'
 // ponytail: 只给首方包,现在只有活动中心一个用户;要第二个图标时在这里加一个词
@@ -28,12 +28,23 @@ export function addRibbonAction(opts: RibbonActionOpts): () => void {
 }
 
 const MODE_LAST_KEY = 'forsion_ribbon_mode_last'
-/** 老存档(用户动过底部区)里明暗还停在旧默认位(紧跟商店)→ 只挪一次到区末尾,打标记后用户再拖到哪算哪(同 bootstrapEngine 里反馈那条)。
- *  ponytail: 只认「明暗紧跟商店、不在收纳夹里」的形状,别的摆法是用户自己定的,不动。 */
+const OLD_DEFAULT = ['rb-market', 'rb-mode', 'rb-cmd', 'rb-settings'].join()
+/** 老存档(用户动过底部区)还是旧默认的「商店 → 明暗 → 命令面板 → 设置」→ 只挪一次:明暗到区末尾,旧版存在商店上一格的首方图标挪到商店下面;
+ *  打标记后用户再拖到哪算哪(同 bootstrapEngine 里反馈那条)。
+ *  ponytail: 只认这四格原样相连(首方图标不算)、明暗不在收纳夹里;这四格动过任一格就是用户自己定的,不动。 */
 export function moveModeLastOnce(): void {
   try { if (localStorage.getItem(MODE_LAST_KEY)) return } catch { return }
   const rb = useRibbonStore.getState()
-  const at = rb.bottomOrder.indexOf('rb-mode')
-  if (at > 0 && rb.bottomOrder[at - 1] === 'rb-market' && !rb.folders.some((f) => f.items.includes('rb-mode'))) rb.setZoneOrder('bottom', moveTo(rb.bottomOrder, 'rb-mode', rb.bottomOrder.length - 1))
+  const order = rb.bottomOrder
+  const core = order.filter((id) => !id.startsWith(RIBBON_ACTION_PREFIX))
+  const m = core.indexOf('rb-market')
+  if (m >= 0 && core.slice(m, m + 4).join() === OLD_DEFAULT && !rb.folders.some((f) => f.items.includes('rb-mode'))) {
+    let s = order.indexOf('rb-market')
+    while (s > 0 && order[s - 1]!.startsWith(RIBBON_ACTION_PREFIX)) s--
+    const moved = order.slice(s, order.indexOf('rb-market'))
+    const rest = order.filter((id) => id !== 'rb-mode' && !moved.includes(id))
+    const at = rest.indexOf('rb-market') + 1
+    rb.setZoneOrder('bottom', [...rest.slice(0, at), ...moved, ...rest.slice(at), 'rb-mode'])
+  }
   try { localStorage.setItem(MODE_LAST_KEY, '1') } catch { /* ignore */ }
 }
