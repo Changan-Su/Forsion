@@ -412,6 +412,8 @@ export const Composer2: React.FC<{
   /** 对话中切换 Agent(拍板 ⑪:入口 = 模式菜单「普通模式 ›」的二级面板,见 NormalModeItem)。给了才渲染;团队模式 / 引擎会话 / chat 预设不渲染。 */
   onAgentSwitch?: (slug: string) => void
   currentAgentSlug?: string
+  /** 收件人芯片(AgentSelectStrip):工具行里模式芯片右边。宿主按「新对话 / 空会话」门控好再传,不传不画。 */
+  recipientChip?: React.ReactNode
   onNewSession?: () => void
   onBranch?: () => void
   onOpenSettings?: () => void
@@ -477,7 +479,7 @@ export const Composer2: React.FC<{
   verifyCommand, onVerifyCommandChange,
   preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, prepareLiveSession, skills,
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
-  agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
+  agents, onAgentSwitch, currentAgentSlug, recipientChip, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
   quotes = NO_QUOTES, quoteNotes, onRemoveQuote, onClearQuote, onBtw, onQuoteNote,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
@@ -2221,6 +2223,7 @@ export const Composer2: React.FC<{
                 )}
               </span>
             )}
+            {recipientChip}
             <span className="t2c-grow" />
             {uploadGate && (
               <span className="t2c-upstatus" data-failed={uploadGate === 'failed' || undefined} role="status">

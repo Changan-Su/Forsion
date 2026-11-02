@@ -933,9 +933,9 @@ const SCENES = {
     rows.push(['a notification: the card starts right below the capsule row, inside the screen', clear(c) && near(c.y, LAYOUT.top + 6 * zoom, 2), JSON.stringify({ card: c, capsulesEnd: LAYOUT.top })])
     return rows
   },
-  // The agent picker of a new chat. The phone's column is narrow, so the strip folds into one chip. Without a native host
-  // the chip opens a web bottom sheet (names only, ticks, team order); with one, the Android checklist — ticked in order,
-  // applied when it closes (docs/ToBeImproved/窄栏Agent选择器方案_2026-10-23, chosen 10-24).
+  // The agent picker of a new chat: the recipient chip in the composer's toolbar (same chip as the desktop, 11-02 plan A).
+  // Without a native host the chip opens a web bottom sheet (names only, ticks, team order); with one, the Android
+  // checklist — ticked in order, applied when it closes (docs/ToBeImproved/窄栏Agent选择器方案_2026-10-23, chosen 10-24).
   'agent-picker': async (page) => {
     if ((await stage.nav(page)) === 'detail') await stage.action(page, 'left')
     await stage.space(page, 'tangu'); await chip(page, 'all')
@@ -978,9 +978,9 @@ const SCENES = {
     return [
       ['web sheet: names only, the descriptions stay out of the rows', names.includes('研究员') && names.includes('编辑') && !sheetText.includes('改稿、压字数'), JSON.stringify(names)],
       ['web sheet: two picks = a team, numbered in pick order', order.join(',') === 'agent:editor=1,agent:researcher=2', order.join(',')],
-      ['web sheet: tapping the scrim closes it, the chip names both', sheetGone && sheetTeam === '编辑、研究员', sheetTeam],
+      ['web sheet: tapping the scrim closes it, the chip reads "first 等 N 位"', sheetGone && sheetTeam === '编辑 等 2 位', sheetTeam],
       ['native host: a checklist of names, no web sheet', sent?.kind === 'checklist' && items.map((i) => i.label).join('、') === '研究员、编辑' && items.every((i) => !i.detail) && noWebSheet, JSON.stringify(sent && { kind: sent.kind, items: items.map((i) => [i.label, i.detail]) })],
-      ['native host: the ticks come back in tick order', nativeTeam === '研究员、编辑', nativeTeam],
+      ['native host: the ticks come back in tick order', nativeTeam === '研究员 等 2 位', nativeTeam],
     ]
   },
 }
