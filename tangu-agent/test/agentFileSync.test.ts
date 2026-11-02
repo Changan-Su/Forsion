@@ -3,7 +3,7 @@
  * (seq/hash/CAS 与当前服务端一致)验证 push/pull/LWW/墓碑/LOG 合并/共用记忆去重/5MB 跳过。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync, chmodSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runAgentFilesSync } from '../src/services/agentFileSync.js';
@@ -395,8 +395,8 @@ describe('agentFileSync — deleting an agent from the app (10-28)', () => {
     const cloud = fakeCloud(['tester']);
     await runAgentFilesSync(cloud, 'u');
     const removed = trashDir();
-    mkdirSync(removed, { recursive: true }); chmodSync(removed, 0o555); // 挪不进去 = rename 失败(Windows 上目录被占用同理)
-    try { expect((await trashAgent('tester')).ok).toBe(false); } finally { chmodSync(removed, 0o755); }
+    writeFileSync(removed, ''); // 回收站的位置被文件占着 = 挪不进去;chmod 在 Windows 上不生效
+    try { expect((await trashAgent('tester')).ok).toBe(false); } finally { rmSync(removed); }
     expect(existsSync(join(agentsDir(), '.cloudsync-deleted', 'tester'))).toBe(false);
     await runAgentFilesSync(cloud, 'u');
     expect(existsSync(join(tDir('tester'), 'config.toml'))).toBe(true);
