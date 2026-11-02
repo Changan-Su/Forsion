@@ -17,7 +17,7 @@
 import React, { useMemo, useState, useRef, useEffect } from 'react'
 import { Loader2, MessageCircle, Star, Users } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { nativeSheetPresenter, presentNativeChecklist } from '@lcl/engine'
+import { commandHotkeyText, nativeSheetPresenter, presentNativeChecklist } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { EngineIcon } from './EngineIcon'
 import { CompactChatPicker, type ChatPickItem } from './CompactChatPicker'
@@ -51,9 +51,6 @@ registerMessages({
   'agentSelect.search': { zh: '找 Agent 或引擎', en: 'Find an agent or engine' },
   'agentSelect.switch': { zh: '换 Agent', en: 'Switch agent' },
 })
-
-/** ⌘⇧A 的提示(浮层搜索框右侧);Windows / Linux 写 Ctrl+Shift+A。 */
-const HOTKEY_HINT = /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘⇧A' : 'Ctrl+Shift+A'
 
 /**
  * ⌘⇧A / 命令面板「换 Agent」:点开当前看得见的那枚芯片 —— 已开着的优先(再按一次 = 收起),其次焦点所在的输入卡,再次第一枚。
@@ -341,7 +338,7 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
         onNative={openNative}
         onRowMenu={rowMenu}
         searchLabel={t('agentSelect.search')}
-        hotkeyHint={HOTKEY_HINT}
+        hotkeyHint={commandHotkeyText('switch-agent') || undefined} // features/tangu 注册的那条;分平台、跟用户改过的键走
         busy={!!warming}
       />
       {menu && <ContextMenu menu={menu} onClose={() => setMenu(null)} />}
