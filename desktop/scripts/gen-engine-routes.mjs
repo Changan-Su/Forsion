@@ -90,6 +90,9 @@ export const CLASSIFICATION = {
   'POST /agent/human/:file/undo': [D, 'host human folder undo'],
   'GET /agent/human/SOUL.md/entries': [D, 'host portrait entries (human/SOUL.md; the route itself also refuses remote origin)'],
   'POST /agent/human/SOUL.md/entries': [D, 'host portrait entry write (receipt undo; the route itself also refuses remote origin)'],
+  'GET /agent/human/SOUL.md/move': [D, 'host portrait move card (the route itself also refuses remote origin)'],
+  'POST /agent/human/SOUL.md/move/scan': [D, 'starts the user-requested scan of Agent memories (the route itself also refuses remote origin)'],
+  'POST /agent/human/SOUL.md/move/items/:id': [D, 'moves or keeps one Agent memory entry for the portrait (the route itself also refuses remote origin)'],
   'POST /agent/agents/:slug/memory/promote': [D, 'moves an Agent memory entry into host human/AGENT.md (the route itself also refuses remote origin)'],
 
   // ── workspace.ts ──

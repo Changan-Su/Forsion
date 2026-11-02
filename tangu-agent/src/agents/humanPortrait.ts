@@ -19,6 +19,8 @@ export const PORTRAIT_LIMIT = ABOUT_HUMAN_LIMITS['SOUL.md'];
 export const PORTRAIT_SHORT_VERSION = 12;
 /** Agent 那一节的标题。两种都认(任意 #{1,6} 级);新开一节时按这句话的语言挑。 */
 export const PORTRAIT_SECTION_TITLES = { zh: '最近认识的', en: 'Recently learned' } as const;
+/** 什么算「关于这个人」:remember 的 person 档和搬家的挑选共用一句(五轮 live 调出来的,一句都别删)。 */
+export const PERSON_IS = '"person" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them ("you …"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is "agent", even when phrased as their preference; what to call them and their language stay "person". ';
 
 const ENTRY = /^(\s*(?:[-*+]|\d+[.)])\s+)(.+?)\s*$/;
 const HEADING = /^(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;

@@ -10,7 +10,7 @@ import { MemoryRepositoryError, MEMORY_CHAR_BUDGET, normalizeMemoryFact, type Me
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 import { coveringProjectEntry, openProjectMemory, peekProjectMemory, resolveProjectMemory, PROJECT_MEMORY_CHAR_BUDGET, type ProjectMemoryRef } from '../../services/projectMemory.js';
 import { compactProjectMemory, type CompactionOutcome } from '../../services/projectMemoryCompact.js';
-import { mutatePortrait, portraitEntries, PortraitFullError, PORTRAIT_LIMIT, PORTRAIT_SHORT_VERSION, readPortrait, revertPortraitWrite } from '../../agents/humanPortrait.js';
+import { mutatePortrait, PERSON_IS, portraitEntries, PortraitFullError, PORTRAIT_LIMIT, PORTRAIT_SHORT_VERSION, readPortrait, revertPortraitWrite } from '../../agents/humanPortrait.js';
 import { HumanError, type HumanChangeSource, type HumanDocument } from '../../agents/humanStore.js';
 import { currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
@@ -45,7 +45,6 @@ const getLog = (userId: string, date?: string, signal?: AbortSignal) => deps().b
 // 档名不叫 human:10-20 live 两次,叫 human 时模型把写明只在本项目的事也塞进共识。分法照 manage_human 的 WHERE_IT_GOES「挂在谁身上」。
 // 10-30 live:「你以后改完先自己跑一遍」两轮被当成偏好写进画像;「这几周在学…」被 next-month 那条挡掉没记。第二轮只写「对你的要求归 agent」,
 // 又把「叫我阿青」也算成了对 agent 的要求(两轮留在 agent 记忆):称呼和语言要单独说死
-const PERSON_IS = '"person" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them ("you …"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is "agent", even when phrased as their preference; what to call them and their language stay "person". ';
 function buildRememberDefinition(o: { project: boolean; notes: boolean; person: boolean }): Tool {
   const several = o.project || o.person; // 不止一份记忆:不再说「当前 Agent 的」
   const scopes = [...(o.project ? ['agent', 'project'] : ['agent']), ...(o.person ? ['person'] : [])];
