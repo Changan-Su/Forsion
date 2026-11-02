@@ -1,7 +1,8 @@
 // 连接器目录的真机走查(连接器方案 P2 桌面那半):真 standalone 引擎 × 真 Electron 商店 / 设置页 × 假目录(/api/connectors)×
 // 假授权服务器 × 要 Bearer 的假 MCP × 「用户自带 Key」的假 MCP,全在 127.0.0.1、隔离 home。浏览器那一步由脚本代劳(同 mcp-oauth.electron.cjs)。
-// 走:商店连接 → 浏览器登录 → 出工具;Key 型填 Key → 连上(Key 不进配置 / 引擎日志);设置页看「已下线」与授权范围;
-//     目录改地址 → 本地条目跟着改、旧 Key 作废;设置页断开 → 令牌与条目都删掉。
+// 走:商店连接 → 浏览器登录 → 出工具;Key 型填 Key → 连上(Key 不进配置 / 引擎日志);商店「管理」直达设置 → 连接器详情
+//     (工具按远端原名、alwaysAsk 锁定、启用开关);列表看「已下线」;MCP 页只剩入口;目录改地址 → 旧 Key 作废、列表行带「填写 Key」;
+//     详情里断开 → 令牌与条目都删掉。
 // 先 `cd ../tangu-agent && npm run build` 与 `npx electron-vite build`。用法:node scripts/connectors.electron.cjs(CONN_SHOTS=<目录> 指定截图位置)
 const fs = require('node:fs')
 const os = require('node:os')
@@ -107,7 +108,7 @@ async function main() {
     await win.getByText('已在浏览器打开「演示文档」的登录页', { exact: false }).waitFor({ timeout: 5000 })
     check('browser callback page loads', await browse(opened) === 200)
     await win.locator('[data-connector="demo"][data-connector-state="connected"]').waitFor({ timeout: 20000 })
-    check('card turns Connected', await win.locator('[data-connector="demo"] [data-connector-action="connected"]').count() === 1)
+    check('card turns Connected · Manage', await win.locator('[data-connector="demo"] [data-connector-action="manage"]').count() === 1)
     check('engine lists the connector tools', ((await rowOf('demo'))?.tools.length ?? 0) > 0)
     await win.getByText('已连接「演示文档」', { exact: false }).waitFor({ timeout: 5000 })
 
@@ -130,33 +131,68 @@ async function main() {
     await shot(win, 'C-store-connected-dark')
     await win.evaluate(() => { document.documentElement.classList.remove('dark'); document.documentElement.dataset.mode = 'light' })
 
-    // ── 设置页 ──
-    await main.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'mcp', n: Date.now() } }))
-    win = await floating('[data-connector-settings]')
-    const crow = (id) => win.locator(`[data-connector-row="${id}"]`)
-    await crow('amap').getByText(/已连接 · \d+ 个工具/).waitFor({ timeout: 15000 })
-    check('settings lists connected connectors', await crow('demo').count() === 1 && await crow('gone').count() === 1)
-    check('retired connector is marked, not removed', await crow('gone').locator('.conn-badge', { hasText: '已下线' }).count() === 1 && !!cfg().gone)
-    check('scopes are shown', await crow('demo').getByText('docs.read, docs.write', { exact: false }).count() === 1)
-    check('connectors are not repeated in the manual list', await win.locator('.file-row b', { hasText: /^amap$/ }).count() === 0 && await win.locator('.file-row b', { hasText: /^mine$/ }).count() === 1)
-    await shot(win, 'D-settings-light')
+    // ── 设置 → 连接器页(方案 A):商店「已连接 · 管理」直达详情 ──
+    await win.locator('[data-connector="demo"] [data-connector-action="manage"]').click()
+    win = await floating('[data-connector-detail="demo"]')
+    const tool = (name) => win.locator(`[data-connector-tool="${name}"]`)
+    await tool('echo').waitFor({ timeout: 15000 })
+    check('store Manage opens the connector detail', await win.locator('.settings-nav button.active', { hasText: '连接器' }).count() === 1)
+    check('detail lists tools by their remote names', (await rowOf('demo')).tools.every(t => t.remoteName) && await tool('pid').count() === 1)
+    check('catalog alwaysAsk tool is shown locked', await tool('echo').locator('[data-connector-locked]').count() === 1 && await tool('pid').locator('[data-connector-locked]').count() === 0)
+    check('scopes are shown as tags', await win.locator('.conn-scope-tags .model-tag', { hasText: /^docs\.(read|write)$/ }).count() === 2)
+    check('signed-in row offers sign out', await win.locator('[data-connector-signout]').count() === 1)
+    await shot(win, 'D-detail-light')
     await win.evaluate(() => { document.documentElement.classList.add('dark'); document.documentElement.dataset.mode = 'dark' })
-    await shot(win, 'D-settings-dark')
+    await shot(win, 'D-detail-dark')
     await win.evaluate(() => { document.documentElement.classList.remove('dark'); document.documentElement.dataset.mode = 'light' })
 
-    // 目录改了地址模板 → 本地条目跟着改,按模板存的 Key 作废
+    await win.locator('[data-connector-enabled]').click()
+    await until(async () => cfg().demo?.enabled === false, 10000, 'demo turned off')
+    await win.getByText('打开开关后在这里列出工具').waitFor({ timeout: 10000 })
+    check('switch turns the connector off and keeps the sign-in', cfg().demo.enabled === false && Object.keys(auth()).some(k => k.startsWith(demo.url)))
+    await win.locator('[data-connector-enabled]').click()
+    await until(async () => cfg().demo?.enabled !== false, 10000, 'demo turned on')
+    await tool('echo').waitFor({ timeout: 20000 })
+    check('switch turns it back on', true)
+
+    await win.locator('[data-connector-back]').click()
+    const crow = (id) => win.locator(`[data-connector-row="${id}"]`)
+    await crow('amap').getByText(/已连接 · \d+ 个工具/).waitFor({ timeout: 15000 })
+    check('list shows connected connectors', await crow('demo').count() === 1 && await crow('gone').count() === 1)
+    check('retired connector is marked, not removed', await crow('gone').locator('.conn-badge', { hasText: '已下线' }).count() === 1 && !!cfg().gone)
+    await shot(win, 'D-list-light')
+    await win.evaluate(() => { document.documentElement.classList.add('dark'); document.documentElement.dataset.mode = 'dark' })
+    await shot(win, 'D-list-dark')
+    await win.evaluate(() => { document.documentElement.classList.remove('dark'); document.documentElement.dataset.mode = 'light' })
+
+    // MCP 页:只剩一行入口,手填的照旧
+    await main.evaluate(() => window.tangu.openFloatingPanel({ id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'mcp', n: Date.now() } }))
+    win = await floating('[data-connector-entry]')
+    await win.locator('.file-row b', { hasText: /^mine$/ }).waitFor({ timeout: 10000 })
+    check('MCP page keeps one entry row, no connector rows', await win.locator('[data-connector-entry]').getByText('连接器 · 3 个').count() === 1 && await win.locator('.file-row b', { hasText: /^amap$/ }).count() === 0)
+    await shot(win, 'E-mcp-entry-light')
+    await win.locator('[data-connector-entry]').click()
+    await win.locator('[data-connector-row="demo"]').waitFor({ timeout: 10000 })
+    check('MCP entry opens the connectors page', true)
+
+    // 目录改了地址模板 → 本地条目跟着改,按模板存的 Key 作废;列表行直接带「填写 Key」
     catalog.connectors[1].url = `${amap.url}?v=2&key={userKey}`
     await win.evaluate(() => window.tangu.connectorsList(true))
     check('catalog URL change synced into the MCP config', cfg().amap.url === `${amap.url}?v=2&key={userKey}`)
     await until(async () => (await rowOf('amap'))?.status === 'needs-login', 20000, 'amap needs a key again')
-    await crow('amap').getByRole('button', { name: /填写 Key/ }).waitFor({ timeout: 10000 })
-    check('old key no longer applies after the URL changed', true)
+    await win.locator('[data-connector-quick="amap"]', { hasText: '填写 Key' }).waitFor({ timeout: 10000 })
+    check('old key no longer applies; the list row asks for a key', true)
+    await win.locator('[data-connector-quick="amap"]').click()
+    await win.locator('[data-connector-detail="amap"] [data-connector-keyform="amap"]').waitFor({ timeout: 10000 })
+    check('Enter key opens the detail with the key form; the switch stays available', await win.locator('[data-connector-detail="amap"] [data-connector-enabled]').count() === 1)
+    await win.locator('[data-connector-back]').click()
 
+    await crow('demo').click()
     win.once('dialog', d => d.accept())
-    await crow('demo').locator('[data-connector-disconnect]').click()
+    await win.locator('[data-connector-disconnect="demo"]').click()
     await until(async () => !cfg().demo, 10000, 'demo removed from config')
     await crow('demo').waitFor({ state: 'detached', timeout: 10000 })
-    check('disconnect removes the entry', !cfg().demo)
+    check('disconnect removes the entry and returns to the list', !cfg().demo && await crow('amap').count() === 1)
     check('disconnect removes the token', !Object.keys(auth()).some(k => k.startsWith(demo.url)))
 
     const log = fs.readFileSync(engineLogFile, 'utf8')

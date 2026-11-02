@@ -222,6 +222,7 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
             ...(s.origin ? { origin: s.origin } : {}),
             tools: tools.map((t) => ({
               name: t.name,
+              remoteName: t.remoteName, // 远端原名:目录 alwaysAsk 按它记,桥接名经 sanitize 改写过、反推不回来
               description: t.definition.function.description || '',
             })),
             approxTokens: approxToolTokens(tools.map((t) => t.definition)),
