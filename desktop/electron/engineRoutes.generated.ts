@@ -44,6 +44,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/runs/:runId/approvals/:approvalId', access: 'allow', src: 'routes/approvals.ts', why: 'answer an approval (D1: remote approval allowed; bound to its run by P0 ②)' },
   { method: 'POST', path: '/agent/runs/:runId/captures/:shotId', access: 'allow', src: 'routes/approvals.ts', why: 'Agent Desk capture upload for a run (shotId bound to run, P0 ②)' },
   { method: 'POST', path: '/agent/runs/:runId/inquiries/:inquiryId', access: 'allow', src: 'routes/approvals.ts', why: 'answer an inquiry (D1)' },
+  { method: 'POST', path: '/agent/mcp/:name/key', access: 'deny-remote', src: 'routes/assets.ts', why: 'connector user key: stored only on this computer (connector-auth.json)' },
   { method: 'POST', path: '/agent/mcp/:name/login', access: 'deny-remote', src: 'routes/assets.ts', why: 'MCP OAuth sign-in: loopback callback and tokens are local to this computer' },
   { method: 'POST', path: '/agent/mcp/:name/logout', access: 'deny-remote', src: 'routes/assets.ts', why: 'MCP OAuth sign-out deletes a local token' },
   { method: 'GET', path: '/agent/skills', access: 'allow', src: 'routes/assets.ts', why: 'skills list' },
