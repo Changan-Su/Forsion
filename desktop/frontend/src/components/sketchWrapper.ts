@@ -162,6 +162,7 @@ export function buildSketchDoc(html: string, vars: Record<string, string> = {}, 
 
 /** 壳里只有这段中转:宿主和卡片两边都照旧 postMessage,event.source 对宿主来说就是壳。卡片的明暗跟着改,
  *  不然壳和卡片的 color-scheme 不一致时浏览器给卡片铺一层不透明底。 */
+// webhost-ok: 中转脚本里取壳自己的子帧,卡片仍在同一份 sandbox 里
 const SKETCH_SHELL_RELAY = `
 const frame = document.querySelector('iframe')
 addEventListener('message', (event) => {
@@ -178,5 +179,6 @@ export function buildSketchShell(card: string, colorScheme = 'light'): string {
   return '<!doctype html><html><head>' +
     `<meta http-equiv="Content-Security-Policy" content="${SKETCH_SHELL_CSP}">` +
     `<style>:root{color-scheme:${sanitizeVar(colorScheme)}}html,body,iframe{display:block;width:100%;height:100%;margin:0;border:0;overflow:hidden;background:transparent}</style>` +
+    // webhost-ok: 这是 HTML 卡的导航壳,不是网页宿体;子帧带同一份 sandbox
     `</head><body><iframe sandbox="${SKETCH_SANDBOX}" title="Intelligent UI" srcdoc="${srcdoc}"></iframe><script>${SKETCH_SHELL_RELAY}</script></body></html>`
 }

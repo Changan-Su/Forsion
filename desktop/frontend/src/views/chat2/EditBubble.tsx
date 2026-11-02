@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from 'react'
 import { GitBranch } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { firstChar } from './EditorialMessage'
+import '../../tangu/messages'
 
 /**
  * 编辑重发:那条提问原地变成可改的气泡(方案 docs/ToBeImproved/编辑重发分支与编辑框方案_2026-10-28 A)——

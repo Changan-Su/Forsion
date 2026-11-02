@@ -47,7 +47,7 @@ export function ComposerMenuSurface({ portal, compact = true, anchorRef, innerRe
     if (!portal || !surface) return
     const trigger = anchorRef.current?.querySelector<HTMLElement>('button')
     const first = [...surface.querySelectorAll<HTMLElement>('button.cm-row:not([tabindex="-1"]):not(:disabled),button.menu-item:not(:disabled),input:not(:disabled)')]
-      .find(el => el.checkVisibility({ checkVisibilityCSS: true, checkOpacity: true }))
+      .find(el => el.checkVisibility?.({ checkVisibilityCSS: true, checkOpacity: true }) !== false)
     ;(first || surface.querySelector<HTMLElement>('button'))?.focus({ preventScroll: true })
     return () => {
       if (surface.contains(document.activeElement) || document.activeElement === document.body) trigger?.focus({ preventScroll: true })

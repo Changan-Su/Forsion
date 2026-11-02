@@ -50,6 +50,16 @@ describe('getToolDefinitions snapshot (behavior-preserving)', () => {
       all['ai-studio:sandbox+gui'] = getToolDefinitions({ ...base, client: 'web/0.0.0' });
       all['ai-studio:sandbox+gui+chat'] = getToolDefinitions({ ...base, client: 'web/0.0.0', preset: 'chat' });
     }
+    // 小组件(10-31):与 scripts/dump-tooldefs.mjs 的同名块逐字同改。
+    {
+      const p = createTanguProfile({ sandboxMode: 'none' });
+      configureTangu({ host: stub, brain: stub, billing: stub, profile: p });
+      all['tangu-none:host+gui+widget'] = getToolDefinitions({
+        userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {},
+        execMode: 'host', cwd: '/tmp', approvalMode: 'auto-edit', client: 'desktop/0.0.0', uiCommands: [],
+        clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2', 'widget.v1'],
+      } as any);
+    }
     const here = dirname(fileURLToPath(import.meta.url));
     const snapshotPath = join(here, '../scripts/__snapshots__/tooldefs.json');
     const expected = JSON.parse(readFileSync(snapshotPath, 'utf8'));
@@ -62,16 +72,6 @@ describe('getToolDefinitions snapshot (behavior-preserving)', () => {
       expected[key] = (expected[key] as any[]).filter(
         (t) => !(ENV_GATED.includes(t?.function?.name) && !got.has(t?.function?.name)),
       );
-    }
-    // 小组件(10-31):与 scripts/dump-tooldefs.mjs 的同名块逐字同改。
-    {
-      const p = createTanguProfile({ sandboxMode: 'none' });
-      configureTangu({ host: stub, brain: stub, billing: stub, profile: p });
-      all['tangu-none:host+gui+widget'] = getToolDefinitions({
-        userId: 'u1', sessionId: 's1', appId: p.appId, profile: p, unlockTools: () => {},
-        execMode: 'host', cwd: '/tmp', approvalMode: 'auto-edit', client: 'desktop/0.0.0', uiCommands: [],
-        clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2', 'widget.v1'],
-      } as any);
     }
     // 按**用户本机状态**门控的工具(read_computer_history 看 <共享域>/computer-history/state.json):只有 `tangu-none:host+gui`
     // (本机引擎 + desktop 客户端)过得了门禁,开过电脑历史的开发机上它会多出这一条 —— **只**从这一个键的实跑里剔
