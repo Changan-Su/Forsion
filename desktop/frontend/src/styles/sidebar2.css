@@ -514,6 +514,10 @@
   text-align: left; cursor: pointer; border-radius: var(--radius-sm, 6px);
 }
 .t2s-viewmore:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
+/* 「查看更多 · N」与「收起」并排;第二颗不再带左缩进 */
+.t2s-viewmore-row { display: flex; align-items: center; gap: 1.5px; }
+.t2s-viewmore-row > .t2s-viewmore + .t2s-viewmore { margin-left: 0; }
+.t2s-menu-blank { display: inline-block; width: 13px; height: 13px; }
 
 .t2s-add-ws {
   display: flex; align-items: center; gap: 5.5px;
