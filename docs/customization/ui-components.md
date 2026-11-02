@@ -47,7 +47,7 @@ ctx.registerView({
 | `update(patch)`, `focus()`, `dispose()` | 更新、聚焦、幂等卸载。卸载后的异步回调不再修改 UI；宿主在插件禁用、重载、setup 失败时统一回收。 |
 | `modelPicker` | 默认 true。设为 `false` 时不画模型和思考档，也不解析默认模型。回调里 `modelId` 是你传的值（没传是 `''`），`thinkingLevel` 同理（没传是 `'medium'`）。 |
 | `toolbar(el)` | 卡片底排左侧的插槽，排在模型药丸前面。把自己的 DOM 放进 `el`，可返回清理函数；清理函数在 dispose 时调用，update 传入另一个函数时也会先清理再重挂。两处抛错都由宿主记录，不影响输入框。 |
-| `suggest` | `{ trigger, items(query) }`，光标旁的宿主补全浮层，外观和键盘行为与笔记里的 `#` 补全一致。 |
+| `suggest` | `{ trigger, items(query), mention? }`，光标旁的宿主补全浮层，外观和键盘行为与笔记里的 `#` 补全一致。 |
 | `insertText(text)` | handle 方法。在光标处插入，有选区时替换选区，并聚焦输入框。给「#」按钮、语音转写用，不会弹补全；用户接着打字才会弹。 |
 
 `toolbar` 的 `el` 在宿主挂载层里，不吃插件视图的基础样式，里面的按钮要写 class，比如 `.btn.sm`。
@@ -55,6 +55,8 @@ ctx.registerView({
 ### 补全 suggest
 
 `trigger` 是非空字符串；光标前紧挨「`trigger` + 查询」时触发，`trigger` 前面须是行首或空白，查询非空，字符集是字母、数字、`_`、`/`、`-`。`items` 可以返回数组或 Promise，每项是 `{ label, hint?, value }`，最多显示 8 项；空数组不显示浮层，reject 只关闭浮层。新一次输入会作废还没返回的结果。
+
+@ 提到人这类用法传 `mention: true`：只打 `trigger` 就开（此时 `query` 是空串），`trigger` 紧跟中文也开，只有紧贴拉丁字母或数字时不开（邮箱不会触发）。旧宿主忽略这个选项，仍按上面的规则。
 
 ```js
 const box = ctx.ui?.mountChatBox?.(el, {

@@ -13,8 +13,10 @@ export interface PluginChatBoxSuggestItem {
 export interface PluginChatBoxSuggest {
   /** Non-empty, e.g. `#`. Must sit at line start or after whitespace. */
   trigger: string
-  /** Called with the text typed after the trigger (letters, digits, `_`, `/`, `-`; never empty). A rejection closes the menu. */
+  /** Called with the text typed after the trigger (letters, digits, `_`, `/`, `-`; never empty unless `mention`). A rejection closes the menu. */
   items(query: string): PluginChatBoxSuggestItem[] | Promise<PluginChatBoxSuggestItem[]>
+  /** For @-style mentions: opens on the bare trigger, and the trigger may follow CJK text. Only a Latin letter or digit keeps it closed. */
+  mention?: boolean
 }
 export interface PluginChatBoxOptions {
   value?: string
@@ -61,10 +63,12 @@ const QUERY_CHAR = /^[\p{L}\p{N}_/-]/u
 
 /** The trigger + query directly before the caret, or null. Same rule as the editor's `#` completion: the trigger starts a
  *  word, the query is non-empty, and the caret is not in the middle of a word. */
-export function matchChatBoxSuggest(value: string, caret: number, trigger: string): ChatBoxSuggestMatch | null {
+export function matchChatBoxSuggest(value: string, caret: number, trigger: string, mention = false): ChatBoxSuggestMatch | null {
   if (!trigger) return null
   const escaped = trigger.replace(/[\\^$.*+?()[\]{}|/]/g, '\\$&')
-  const m = new RegExp(`(?:^|\\s)${escaped}([\\p{L}\\p{N}_/-]+)$`, 'u').exec(value.slice(0, caret))
+  // A mention opens on the bare trigger, and CJK text has no spaces to start a word with: only Latin letters and digits block it.
+  const pattern = mention ? `(?:^|[^\\p{Script=Latin}\\p{N}_])${escaped}([\\p{L}\\p{N}_/-]*)$` : `(?:^|\\s)${escaped}([\\p{L}\\p{N}_/-]+)$`
+  const m = new RegExp(pattern, 'u').exec(value.slice(0, caret))
   if (!m || QUERY_CHAR.test(value.slice(caret))) return null
   return { query: m[1], from: caret - m[1].length - trigger.length, to: caret }
 }

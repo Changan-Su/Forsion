@@ -334,6 +334,15 @@ describe('matchChatBoxSuggest', () => {
     expect(matchChatBoxSuggest('#a/b-c_1', 8, '#')).toEqual({ query: 'a/b-c_1', from: 0, to: 8 })
     expect(matchChatBoxSuggest('line\n#a', 7, '#')).toEqual({ query: 'a', from: 5, to: 7 })
   })
+  it('opens a mention on the bare trigger and after CJK text', () => {
+    expect(matchChatBoxSuggest('@', 1, '@', true)).toEqual({ query: '', from: 0, to: 1 })
+    expect(matchChatBoxSuggest('麻烦@', 3, '@', true)).toEqual({ query: '', from: 2, to: 3 })
+    expect(matchChatBoxSuggest('麻烦@张', 4, '@', true)).toEqual({ query: '张', from: 2, to: 4 })
+    expect(matchChatBoxSuggest('hi @a', 5, '@', true)).toEqual({ query: 'a', from: 3, to: 5 })
+    expect(matchChatBoxSuggest('a@b', 3, '@', true)).toBeNull()
+    expect(matchChatBoxSuggest('1@', 2, '@', true)).toBeNull()
+    expect(matchChatBoxSuggest('@张三 ', 4, '@', true)).toBeNull()
+  })
   it('escapes the trigger', () => {
     expect(matchChatBoxSuggest('x $a', 4, '$')).toEqual({ query: 'a', from: 2, to: 4 })
     expect(matchChatBoxSuggest('x /a', 4, '/')).toEqual({ query: 'a', from: 2, to: 4 })
