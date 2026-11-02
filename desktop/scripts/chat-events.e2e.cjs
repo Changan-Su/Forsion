@@ -760,8 +760,8 @@ async function main() {
       peek: document.querySelector('.t2c-apv')?.getAttribute('data-peek'),
       more: (document.querySelector('.t2c-apv-more')?.textContent || '').trim(),
     }))
-    check('D0 五个待批审批攒进对话末尾的卡片堆(露一张 + 两道卡沿,「还有 审批 4」,1 / 5),原消息里不插整张卡、不留指路行',
-      tray.count === '5' && tray.inTail && tray.streamCards === 0 && !tray.pointer && tray.n === '1 / 5' && tray.peek === '2' && tray.more === '还有 审批 4', JSON.stringify(tray))
+    check('D0 五个待批审批攒进对话末尾的卡片堆(露一张 + 两道卡沿,只有审批时不列「还有」,1 / 5),原消息里不插整张卡、不留指路行',
+      tray.count === '5' && tray.inTail && tray.streamCards === 0 && !tray.pointer && tray.n === '1 / 5' && tray.peek === '2' && tray.more === '', JSON.stringify(tray))
     const sneaky = win.locator('.approval-card', { hasText: '[200 spaces]' }).first()
     await sneaky.evaluate((el) => el.scrollIntoView({ block: 'center', behavior: 'instant' })).catch(() => {})
     await win.waitForTimeout(300)
