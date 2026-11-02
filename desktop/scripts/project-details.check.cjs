@@ -418,7 +418,9 @@ async function run(app, win, stub, seen, home, ctx) {
   const firstCommit = await profile.locator('[data-project-git-commits] .project-git-commit strong').first().textContent().catch(() => '')
   check('6g 再点提交 → POST git/commit { sessionId, 手改后的信息, expect = 新清单的指纹 };提交框收起,最近提交第一条是它,改动清空', closed && seen.gitCommits.length === 2 && seen.gitCommits[1].sessionId === 'pd-main' && seen.gitCommits[1].message === 'fix: 手改过的提交信息' && seen.gitCommits[1].expect === 'tok-2' && firstCommit === 'fix: 手改过的提交信息' && await profile.locator('[data-project-git-changes]').count() === 0, JSON.stringify({ commits: seen.gitCommits, firstCommit }))
   await writeRow.locator('[data-git-action="branch"]').click()
-  const promptInput = win.locator('.dialog .dialog-input')
+  // 刚关掉的那个框还留着 80ms 退场替身(useExitGhost,带着原来的输入值),只认活的那个
+  const liveDialog = win.locator('.dialog-overlay:not([data-lcl-exit]) .dialog')
+  const promptInput = liveDialog.locator('.dialog-input')
   await promptInput.waitFor()
   check('6h 新建分支:对话框预填「设置 → Git」里的前缀 tangu/', (await promptInput.inputValue()) === 'tangu/', await promptInput.inputValue())
   await promptInput.fill('tangu/demo-x')
@@ -570,7 +572,7 @@ async function run(app, win, stub, seen, home, ctx) {
   await details.screenshot({ path: shots.gitPublish = shot('project-git-publish-zh-light') })
   await publishBtn.click()
   await promptInput.waitFor()
-  check('6q3 对话框预填由文件夹名整理出来的仓库名(Demo Project → Demo-Project),并说明会建私有仓库、推到哪个站', (await promptInput.inputValue()) === 'Demo-Project' && /私有仓库/.test(await win.locator('.dialog').textContent()) && /git\.forsion\.example/.test(await win.locator('.dialog').textContent()), await win.locator('.dialog').textContent())
+  check('6q3 对话框预填由文件夹名整理出来的仓库名(Demo Project → Demo-Project),并说明会建私有仓库、推到哪个站', (await promptInput.inputValue()) === 'Demo-Project' && /私有仓库/.test(await liveDialog.textContent()) && /git\.forsion\.example/.test(await liveDialog.textContent()), await liveDialog.textContent())
   await promptInput.fill('我的项目')
   await promptInput.press('Enter')
   await until(async () => /仓库名/.test((await gitError.textContent().catch(() => '')) || '')) // 错误条上可能还留着上一条(6l3),等到是这一条
@@ -649,7 +651,7 @@ async function run(app, win, stub, seen, home, ctx) {
   await sleep(400) // 等 hosting 重读回来(按钮文案不变,没有可等的 DOM 变化)
   await publishGithubBtn.click()
   await promptInput.waitFor()
-  check('6s5 绑了 → 对话框预填仓库名,写明在 @dave-gh 下建私有仓库', (await promptInput.inputValue()) === 'Demo-Project' && /@dave-gh/.test(await win.locator('.dialog').textContent()) && /私有仓库/.test(await win.locator('.dialog').textContent()), await win.locator('.dialog').textContent())
+  check('6s5 绑了 → 对话框预填仓库名,写明在 @dave-gh 下建私有仓库', (await promptInput.inputValue()) === 'Demo-Project' && /@dave-gh/.test(await liveDialog.textContent()) && /私有仓库/.test(await liveDialog.textContent()), await liveDialog.textContent())
   await promptInput.press('Enter')
   await until(async () => seen.gitGithubPublishes.length === 1)
   await until(async () => (await publishGithubBtn.count()) === 0)
