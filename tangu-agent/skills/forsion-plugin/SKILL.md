@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.91.2
+  version: 1.92.0
   author: Forsion
   category: Forsion
 ---
@@ -1011,6 +1011,13 @@ const offTasks = ctx.noteTasks?.subscribe(({ ready, tasks }) => {
   renderTasks(tasks.filter((t) => t.isTask))
 })
 ctx.noteTasks?.update(task.id, { checked: true })        // false → 让用户去笔记里改:ctx.app.openNote(task.path)
+
+// 2026-11-02+:子任务 / 标签 / 记录正文 / 加列(旧宿主整条缺席,一律可选链)
+const subs = tasks.filter((t) => t.parentId)             // 缩进在带 @ 的任务下面的 - [ ](最多两层),没写 @ 的 due 为 ''
+const tags = task.tags                                    // 行里的 #标签(不含 #,口径同编辑器);text 里原样保留
+const body = ctx.databases?.readBody?.(db.path, row.id)  // 经典表一行的记录正文;笔记视图 → null
+ctx.databases?.setBody?.(db.path, row.id, next, { body }) // 整份替换;带 expected,正文被别处改过就 false
+const col = ctx.databases?.addColumn?.(db.path, { name: '标签', type: 'multiselect' }) // 返回新列 id,马上能 setCell
 ```
 
 - **表的两种 `kind`**:`table` = 经典 .db(行在文件里);`notes` = 笔记视图(一行 = 文件夹里一篇笔记,行 id 就是笔记路径,
@@ -1026,6 +1033,14 @@ ctx.noteTasks?.update(task.id, { checked: true })        // false → 让用户�
 - **笔记任务**:`id` = `路径:行号`,两次加载之间稳定,笔记里行挪了会变 —— 每次以最新回调为准,别存起来。`isTask:false` 的普通行
   (`交周报 @2026-10-20`)没有勾选框,`update({checked})` 返回 false。`update` 先反映在下一次回调里,稍后写回那一行 markdown;
   那行已经对不上时宿主自己提示用户去笔记里改。网页 / 手机宿主不能回写 → false。
+- **子任务与标签(2026-11-02+)**:带 `@` 的笔记任务下面缩进的 `- [ ]` 也进 `tasks`,带 `parentId`(父任务的 id;孙任务指向子任务,最多两层),
+  没写 `@` 的 `due` 为 `''` —— 它不是独立待办,宿主自己的待办 / 日历不收,画在父项里;勾选照样 `update(id, { checked })`。每条任务带 `tags`
+  (行里的 `#标签`)。表格行没有父子:子任务就写在那一行的记录正文里(`readBody` / `setBody`),标签存一列多选。
+- **记录正文 `readBody` / `setBody`(2026-11-02+)**:与表格「打开记录」、`mountRecord({ body })` 同一份 Markdown。`setBody` 是整份替换,
+  读-改-写一律带 `expected: { body }`(当前对不上 → false,落盘重放再比一次),别盖掉用户刚在编辑器里打的字;只写可写的经典表。
+- **加列 `addColumn(path, { name, type })`(2026-11-02+)**:经典表加一列基础类型(`text` / `number` / `checkbox` / `date` / `select` /
+  `multiselect` / `url`),返回列 id,之后马上能 `setCell`。⚠️往一张**活表**加列别用 `ctx.app.mutateDb`:那条是磁盘比对交换,看不见还没落盘的行,
+  写完一重读就把用户刚加的那一行冲掉了(2026-11-02 实拍)。
 - 两个 `subscribe` 都**立刻回调一次**,插件停用时宿主统一退订(返回的退订函数照样可以自己调)。`ready` 两边同一个意思:库已恢复、**当前这个库**拉过了;换库那一刻翻回 `false`。(2026-10-16 早些的 seams 分支上 noteTasks 在库恢复前会先给 `ready:true` + 空列表,已修。)
 - **声明的能力会写给用户看**:插件详情页在描述下面列一行「这个插件可以：读写你的多维表、读写笔记里的 @ 任务、读取前台窗口」(只列声明了的那几项,`activeWindow` / `calendar` 同理)。只声明真要用的 —— 多写一项,用户在详情页就多看到一项授权。
 - 端到端台架:Genesis `desktop` 的 `npm run check:plugindata`(真 Electron × 外置探针插件 × 预置库,核对注入闸、ready 先假后真、写口落盘、详情页那一行;10-17 起含 `"calendar"` 档的闸、成员快照与 `setColor`)。
