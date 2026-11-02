@@ -260,18 +260,29 @@ function lockSides(api: DockviewApi, sides: ('left' | 'right')[], keepCurrent = 
 /** 收起一侧期间锁住**另一**侧(空白只给主区,免另一侧变宽再被 pinSides 弹回 = 收栏闪屏)。 */
 const lockOtherSide = (api: DockviewApi, side: 'left' | 'right'): (() => void) => lockSides(api, [side === 'left' ? 'right' : 'left'])
 
-/** Dockview defaults to distributing a new split across every sibling, including shell
- * sidebars. Lock them before adding the group so only Main gives up space; otherwise
- * onDidLayoutChange also persists that system redistribution as a user resize. */
+/** Host-internal guard for Main group additions, moves and folds. Dockview otherwise
+ * redistributes the shell widths and captureSideWidths records them as user resizes.
+ * New horizontal groups must still fit within the container's minimum-size budget. */
+export function withPreservedSideWidths<T>(api: DockviewApi, change: () => T, newColumns = 0): T {
+  // 钉宽还没落地时「此刻的宽」是过渡态(刚建的侧栏约占一半):锁它会把 pinSides 挡在外面,侧栏就停在过渡宽上。
+  const release = lockSides(api, ['left', 'right'], !pinPending)
+  if (api.minimumWidth + newColumns * DV_GROUP_MIN > api.width) {
+    release()
+    // A previous mutation may still own a lease for these groups. Minimum sizes
+    // take precedence over those width locks too; keep the ownership counts so
+    // their delayed cleanups cannot release a newer operation's lease early.
+    for (const side of ['left', 'right'] as const) {
+      try { panelsAt(api, side)[0]?.group.api.setConstraints({ minimumWidth: 0, maximumWidth: Number.MAX_SAFE_INTEGER }) } catch { /* disposed group */ }
+    }
+  }
+  try { return change() }
+  finally { setTimeout(release, 180) }
+}
+
 function addPanelPreservingSides(api: DockviewApi, options: Parameters<DockviewApi['addPanel']>[0]): IDockviewPanel {
   const split = (options.params as PanelMeta | undefined)?.__loc === 'main' && options.position?.direction && options.position.direction !== 'within'
-  const release = split ? lockSides(api, ['left', 'right'], true) : () => {}
-  // A horizontal split adds another minimum-width group. If locked shell widths
-  // cannot fit it, let Dockview resize the sides rather than overflowing the window.
-  if (split && (options.position?.direction === 'right' || options.position?.direction === 'left')
-    && api.minimumWidth + DV_GROUP_MIN > api.width) release()
-  try { return api.addPanel(options) }
-  finally { if (split) setTimeout(release, 180) }
+  if (!split) return api.addPanel(options)
+  return withPreservedSideWidths(api, () => api.addPanel(options), options.position?.direction === 'right' || options.position?.direction === 'left' ? 1 : 0)
 }
 
 /** rAF 把某组的一个维度(width|height)从 from 平滑补间到 to(ease-out cubic),done 收尾。
