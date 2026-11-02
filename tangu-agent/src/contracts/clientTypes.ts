@@ -1046,6 +1046,8 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   agentDeskEnabled?: boolean
   /** 有会话运行时阻止电脑闲置休眠(桌面专属,默认关)。 */
   keepAwakeWhileRunning?: boolean
+  /** 点主窗 X 时:'ask' 先问(缺省)/ 'tray' 隐藏到托盘 / 'quit' 退出(桌面专属)。 */
+  closeAction?: 'ask' | 'tray' | 'quit'
   /** 任务概览里点来源/产物文件时开在哪:'tab'=新标签页(默认)、'desk'=Agent Desk 演出格。 */
   summaryOpenIn?: 'tab' | 'desk'
   /** 对外 MCP 端点运行态(主进程 effectiveConfig 注入,非持久化):供「高级」页展示连接信息。 */

@@ -191,6 +191,14 @@ registerMessages({
     zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
     en: 'Keeps your computer from sleeping when idle while sessions are running, and restores normal sleep when they finish. The display can still turn off. Closing the lid or choosing Sleep still works, and Windows laptops on battery may still sleep per power policy.',
   },
+  'settingsmodal.closeAction.title': { zh: '关闭窗口时', en: 'When closing the window' },
+  'settingsmodal.closeAction.description': {
+    zh: '点主窗口的关闭按钮后做什么。在后台运行时会话、Muse 和同步不中断，可从托盘图标重新打开。',
+    en: 'What the main window\'s close button does. In the background, sessions, Muse and sync keep running; reopen Forsion from the tray icon.',
+  },
+  'settingsmodal.closeAction.ask': { zh: '每次询问', en: 'Ask every time' },
+  'settingsmodal.closeAction.tray': { zh: '在后台运行', en: 'Keep running in background' },
+  'settingsmodal.closeAction.quit': { zh: '退出 Forsion', en: 'Quit Forsion' },
   'modelsettings.title': { zh: '模型', en: 'Models' },
   'modelsettings.defaults': { zh: '默认模型', en: 'Default models' },
   'modelsettings.display': { zh: '模型库', en: 'Model library' },
@@ -1818,6 +1826,23 @@ export const SettingsModal: React.FC<{
                         actions={<SettingsSwitch checked={!!stored.keepAwakeWhileRunning} onChange={(on) => void window.tangu!.setConfig({ keepAwakeWhileRunning: on }).then(setStored)} label={t('settingsmodal.keepAwake.title')} />}
                       />
                     </div>
+                    <SettingsPanel
+                      anchor="close-action"
+                      icon={<LogOut size={16} />}
+                      title={t('settingsmodal.closeAction.title')}
+                      description={t('settingsmodal.closeAction.description')}
+                      actions={
+                        <select
+                          aria-label={t('settingsmodal.closeAction.title')}
+                          value={stored.closeAction || 'ask'}
+                          onChange={(e) => void window.tangu!.setConfig({ closeAction: e.target.value as 'ask' | 'tray' | 'quit' }).then(setStored)}
+                        >
+                          <option value="ask">{t('settingsmodal.closeAction.ask')}</option>
+                          <option value="tray">{t('settingsmodal.closeAction.tray')}</option>
+                          <option value="quit">{t('settingsmodal.closeAction.quit')}</option>
+                        </select>
+                      }
+                    />
                   </>
                 )}
                 {tab === 'general' && activeSub === 'g-conn' && (
