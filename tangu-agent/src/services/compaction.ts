@@ -432,14 +432,25 @@ interface SummaryTarget {
   baseUrl: string;
   apiModelId: string;
   windowTokens: number;
+  /** 摘要模型的触发线:输入预算从它扣掉输出上限,保证「转写 + 输出」装得进摘要模型的窗口。 */
+  threshold: number;
   budgetTokens: number;
   maxTokens: number;
+}
+
+/** 第一次撞输出上限后放宽到的上限(Claude 系 max_tokens 的天花板同值);同时不超过摘要模型窗口 / 4。 */
+const SUMMARY_RETRY_MAX_TOKENS = 32_000;
+
+class SummaryTruncatedError extends Error {
+  constructor() { super('summary was truncated at the output token limit'); }
 }
 
 /**
  * 先 resolve 摘要模型,再按它**自己**的窗口(模型对象自带 / 覆盖表 / 族表)算预算 —— 换了便宜模型时不能拿本 run
  * 模型的窗口去估;4k/8k 小模型也不能照抄 6144 的输出上限(Codex 09-15 评审 #8)。
- * 输入预算 = 触发线 − 输出上限 − 提示开销;输出上限 = min(summaryMaxTokens, 有效预留/2, 窗口/4)。
+ * 输入预算 = 触发线 − 输出上限 − 提示开销;输出上限 = min(summaryMaxTokens, 窗口/4)。
+ * 10-26 起不再按「有效预留 / 2」夹:预留只管何时触发(pi #9512 同款)。272k 窗那道夹是 8192,用户把
+ * summaryMaxTokens 调大也越不过它,长会话的摘要连同推理 token 一起撞上限就只剩机械兜底(10-26 生产反馈)。
  * resolve 结束后复查取消,不再启动后续请求。
  */
 async function resolveSummaryTarget(ctx: SummarizeContext, runWindowTokens: number | undefined, signal?: AbortSignal): Promise<SummaryTarget> {
@@ -451,10 +462,32 @@ async function resolveSummaryTarget(ctx: SummarizeContext, runWindowTokens: numb
   // 刻意不传 thresholdPercent:这里算的是摘要模型**吃得下**多少转写,不是「何时触发」。按用户的百分比收紧只会让
   // 转写从最旧处多丢内容(老会话首次越线时上下文可以远超那条线),换不来任何东西。
   const threshold = compactionThreshold(windowTokens, ctx.settings.reserveTokens);
-  const effectiveReserve = Math.max(1, windowTokens - threshold);
-  const maxTokens = Math.max(256, Math.min(ctx.settings.summaryMaxTokens, Math.floor(effectiveReserve / 2), Math.floor(windowTokens / 4)));
-  const budgetTokens = Math.max(TRANSCRIPT_MIN_BUDGET, threshold - maxTokens - TRANSCRIPT_OVERHEAD_TOKENS);
-  return { modelId, model, apiKey, baseUrl, apiModelId, windowTokens, budgetTokens, maxTokens };
+  const maxTokens = Math.max(256, Math.min(ctx.settings.summaryMaxTokens, Math.floor(windowTokens / 4)));
+  return withMaxTokens({ modelId, model, apiKey, baseUrl, apiModelId, windowTokens, threshold, budgetTokens: 0, maxTokens }, maxTokens);
+}
+
+function withMaxTokens(target: SummaryTarget, maxTokens: number): SummaryTarget {
+  return { ...target, maxTokens, budgetTokens: Math.max(TRANSCRIPT_MIN_BUDGET, target.threshold - maxTokens - TRANSCRIPT_OVERHEAD_TOKENS) };
+}
+
+/**
+ * 组转写并总结。撞输出上限(多半是推理 token 吃掉了额度:DeepSeek V4 思考缺省开,托管 prefix 档不发关闭字段)
+ * → 放宽到 SUMMARY_RETRY_MAX_TOKENS 重试一次,转写按新上限重组(输入 + 输出仍装得进窗口)。还截断就照旧拒收。
+ * 正常写得完的摘要只发一次、上限与改前相同(wire 字节不变)。
+ */
+async function summarizeMessages(target: SummaryTarget, msgs: ChatMessage[], fileOps: FileOps, ctx: SummarizeContext, signal?: AbortSignal): Promise<string> {
+  const attempt = (t: SummaryTarget) => {
+    const transcript = buildTranscript(msgs, fileOps, t.budgetTokens);
+    return summarizeWith(t, transcript.text, transcript.incremental, ctx, signal);
+  };
+  try {
+    return await attempt(target);
+  } catch (e) {
+    const wider = Math.min(SUMMARY_RETRY_MAX_TOKENS, Math.floor(target.windowTokens / 4));
+    if (!(e instanceof SummaryTruncatedError) || wider <= target.maxTokens) throw e;
+    console.warn(`[agent-core] compaction summary hit the ${target.maxTokens}-token output cap; retrying once with ${wider}`);
+    return attempt(withMaxTokens(target, wider));
+  }
 }
 
 /** build/stream 接缝支持真实取消;每步之后复查,不再启动后续请求或修改检查点。 */
@@ -482,8 +515,8 @@ async function summarizeWith(target: SummaryTarget, transcript: string, incremen
   // 摘要调用上台账(A5):无 run 上下文(/compact 路由等)时静默跳过。截断的那次也已付费,先记账再判。
   await publishBackgroundUsage('compaction', target.modelId, (res as any)?.usage, { model: target.model });
   // 撞输出上限的摘要是半截(丢的恰是最近那段):落成持久检查点后每个 run 都会回放它(pi #7048)。
-  // 拒收 → run 内走机械折叠兜底,/compact 报失败。
-  if ((res as any)?.finishReason === 'length') throw new Error('summary was truncated at the output token limit');
+  // 拒收 → summarizeMessages 放宽上限重试一次;仍截断则 run 内走兜底,/compact 报失败。
+  if ((res as any)?.finishReason === 'length') throw new SummaryTruncatedError();
   return String(res?.content || '').trim();
 }
 
@@ -623,8 +656,7 @@ export async function compactWorkingMessages(
   const ctx: SummarizeContext = { modelId, appId, settings, runThinking: opts.runThinking, focus: opts.focus };
   try {
     const target = await resolveSummaryTarget(ctx, opts.windowTokens, signal);
-    const transcript = buildTranscript(original.slice(head, cut), fileOps, target.budgetTokens);
-    const text = await summarizeWith(target, transcript.text, transcript.incremental, ctx, signal);
+    const text = await summarizeMessages(target, original.slice(head, cut), fileOps, ctx, signal);
     if (!text || text.length < 8) return { ok: false, reason: 'empty summary' };
     // 压缩期间有外部改动时绝不把旧快照覆盖到新消息上;当前 loop 的 steer 是排队注入,通常不会命中。
     if (msgs.length !== original.length || msgs.some((m, i) => m !== original[i]) ||
@@ -714,8 +746,7 @@ export async function compactSession(
   let summary = '';
   try {
     const target = await resolveSummaryTarget(ctx, undefined, signal);
-    const transcript = buildTranscript(messages, fileOps, target.budgetTokens);
-    summary = await summarizeWith(target, transcript.text, transcript.incremental, ctx, signal);
+    summary = await summarizeMessages(target, messages, fileOps, ctx, signal);
   } catch (e: any) {
     signal?.throwIfAborted();
     if (e?.name === 'AbortError') throw e;
