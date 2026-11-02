@@ -50,3 +50,6 @@
 /* 更新按钮旁的来源小字(弹窗底栏与设置 → 关于共用) */
 .upd-src { min-width: 0; overflow: hidden; color: var(--text-muted); font-size: var(--ui-font-meta); white-space: nowrap; text-overflow: ellipsis; }
 .upd-src-switch { margin-left: 8px; padding: 0; border: 0; background: none; color: var(--accent-ink, var(--accent)); font: inherit; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+/* CHANGELOG 里「聊天：」下面的子列表:解析保留了一层嵌套，这里缩进一档、空心圆点(官网文章那条路的 markdown 本来就嵌套，同一条规则) */
+.md-body.wn-article li > ul { margin: 3px 0 2px; padding-left: 1.2em; list-style-type: circle; }
+.md-body.wn-article li > ul > li { margin: 0 0 2px; }

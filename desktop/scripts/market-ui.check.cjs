@@ -125,6 +125,23 @@ async function main() {
     // 夹具里 Research Companion = agent、Longform Writing = space;技能 / 主题不许混进来。
     check('插件分类下列出 agent / space 类型的条目', pluginNames.includes('Research Companion') && pluginNames.includes('Longform Writing'), pluginNames.join(' / '))
     check('插件分类不混入技能与主题', pluginNames.length === 5 && !pluginNames.includes('Source Check') && !pluginNames.includes('Slate Paper'), `${pluginNames.length} 项`)
+    // 6.15 / 6.16(走查续六):卡片上不画「未声明」;分类页只有一个分区，不再画分区标题、计数并进副标题
+    const cat = await page.evaluate(() => ({
+      unknown: document.querySelectorAll('.mk-card [data-market-compat="unknown"]').length,
+      outside: [...document.querySelectorAll('.mk-card .mk-compat')].filter((el) => !el.closest('.mk-card-eyeline') && !el.closest('button')).length,
+      heads: document.querySelectorAll('.mk-section-head').length,
+      subtitle: document.querySelector('.mk-title-subtitle')?.textContent?.trim() || '',
+    }))
+    check('卡片上不画「未声明版本要求」,兼容标签只在类型那一行', cat.unknown === 0 && cat.outside === 0, JSON.stringify(cat))
+    check('分类页不重复画分区标题，计数在副标题里', cat.heads === 0 && /共 5 项内容/.test(cat.subtitle), JSON.stringify(cat))
+    const chip = page.locator('[data-market-compat-filter]')
+    const toolbar = { pill: await page.locator('.mk-filter-pill select').count(), checkbox: await page.locator('.mk-upgrade-filters input[type=checkbox]').count(), pressed: await chip.getAttribute('aria-pressed') }
+    await chip.click()
+    toolbar.on = await chip.getAttribute('aria-pressed')
+    toolbar.filtered = await page.locator('.mk-grid .mk-card').count()
+    await chip.click()
+    toolbar.back = await page.locator('.mk-grid .mk-card').count()
+    check('工具栏是标签药丸 + 兼容开关芯片(没有系统复选框),芯片能开能关', toolbar.pill === 1 && toolbar.checkbox === 0 && toolbar.pressed === 'false' && toolbar.on === 'true' && toolbar.filtered < toolbar.back, JSON.stringify(toolbar))
     const kinds = await page.evaluate(() => Object.fromEntries([...document.querySelectorAll('.mk-grid .mk-card')].map((card) => [
       card.querySelector('.mk-card-title')?.textContent?.trim(),
       card.querySelector('.mk-card-eyeline span')?.textContent?.trim(),
@@ -136,7 +153,8 @@ async function main() {
     // 详情页的类型名不跟着归并:从「插件」分类点进 Space 条目,类型一栏仍是 Space。
     await page.locator('.mk-grid .mk-card-title', { hasText: 'Longform Writing' }).click()
     await page.locator('.mk-detail-sidebar').waitFor()
-    const spaceKind = { kind: (await page.locator('.mk-detail-kind').textContent())?.trim(), fact: (await page.locator('.mk-facts dd').first().textContent())?.trim() }
+    // 类型那一行按 dt 找(第一行早就是「Forsion 版本要求」了,按位置取会读到「—」)
+    const spaceKind = await page.evaluate(() => ({ kind: document.querySelector('.mk-detail-kind')?.textContent?.trim(), fact: [...document.querySelectorAll('.mk-facts div')].find((row) => row.querySelector('dt')?.textContent?.trim() === '类型')?.querySelector('dd')?.textContent?.trim() }))
     check('Space 条目的详情页类型仍是 Space', spaceKind.kind === 'Space' && spaceKind.fact === 'Space', JSON.stringify(spaceKind))
     await page.locator('.mk-detail-back').click()
     await page.getByRole('button', { name: '商店首页', exact: true }).click()
@@ -194,6 +212,8 @@ async function main() {
     await page.locator('.mk-detail-sidebar').waitFor()
     check('详情页显示来源、版本与上架审核说明', await page.locator('.mk-facts').isVisible() && await page.locator('.mk-trust-row').isVisible())
     check('详情页安装动作独立固定在侧栏', await page.locator('.mk-detail-actions .mk-wide-btn').count() >= 1)
+    const detailUi = await page.evaluate(() => ({ uninstall: document.querySelector('.mk-detail-sidebar [data-market-uninstall]')?.textContent?.trim() ?? null, readme: !!document.querySelector('.mk-readme.md-body') }))
+    check('详情页「卸载」写成文字按钮，README 套正文排版', detailUi.uninstall === '卸载' && detailUi.readme, JSON.stringify(detailUi))
     await page.screenshot({ path: SHOTS.detail, fullPage: true })
 
     await page.locator('.mk-detail-back').click()
@@ -297,7 +317,7 @@ async function main() {
       chrome: [document.querySelector('.settings-nav')?.textContent, document.querySelector('.settings-main-head')?.textContent, ...[...document.querySelectorAll('.mk-card-eyeline, .mk-card-foot button')].map((el) => el.textContent)].join(' '),
     }))
     check('英文「Plugins」分类下也列出 agent / space 条目', enPlugins.names.includes('Research Companion') && enPlugins.names.includes('Longform Writing') && enPlugins.names.length === 5, enPlugins.names.join(' / '))
-    check('英文卡片类型字样与说明成对', enPlugins.kinds.join() === 'Agents,Plugins,Spaces' && /Spaces and Agents/.test(enPlugins.subtitle), `${enPlugins.kinds.join()} | ${enPlugins.subtitle}`)
+    check('英文卡片类型字样与说明成对', enPlugins.kinds.join() === 'Agent,Plugin,Space' && /Spaces and Agents/.test(enPlugins.subtitle), `${enPlugins.kinds.join()} | ${enPlugins.subtitle}`)
     check('英文界面的导航、标题区与卡片按钮不含汉字', !/[\u4e00-\u9fff]/.test(enPlugins.chrome), (enPlugins.chrome.match(/[\u4e00-\u9fff]+/g) || []).slice(0, 5).join(' / '))
     await en.screenshot({ path: SHOTS.pluginsEn, fullPage: true })
     await en.close()

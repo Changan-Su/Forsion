@@ -1,9 +1,34 @@
 .mk-compat { display: inline-flex; align-items: center; padding: 3px 7px; border-radius: var(--radius-sm); color: var(--text-muted); background: var(--bg-hover); font-size: var(--ui-font-meta); white-space: nowrap; }
 .mk-compat.is-compatible { color: var(--ok, var(--accent)); }
 .mk-compat.is-version, .mk-compat.is-platform { color: var(--warning); }
-.mk-upgrade-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 0 24px 12px; font-size: var(--ui-font-meta); color: var(--text-muted); }
-.mk-upgrade-filters label, .mk-notification-settings label { display: flex; align-items: center; gap: 6px; }
-.mk-upgrade-filters select { color: var(--text); background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 5px 8px; }
+.mk-upgrade-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 0 24px 12px; font-size: var(--ui-font-meta); color: var(--text-muted); }
+.mk-notification-settings label { display: flex; align-items: center; gap: 6px; }
+/* 工具栏和右上角「排序」同一种药丸(30px、--overlay-light 底);兼容筛选是开关芯片，开着垫 --accent-light、勾跟 --accent-ink */
+.mk-filter-pill { height: 30px; padding: 0 10px 0 12px; display: inline-flex; align-items: center; gap: 6px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text-muted); font-size: var(--ui-font-body, 13px); }
+.mk-filter-pill select { max-width: 180px; padding-right: 19px; appearance: none; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; cursor: pointer; }
+.mk-filter-pill > svg { margin-left: -19px; color: var(--text-muted); pointer-events: none; }
+.mk-filter-pill:focus-within { box-shadow: inset 0 0 0 var(--border-width) var(--text-faint); }
+.mk-filter-chip { height: 30px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border: 0; border-radius: var(--radius-pill, 999px); background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-body, 13px); cursor: pointer; }
+.mk-filter-chip:hover { background: var(--overlay-light); }
+.mk-filter-chip[aria-pressed="true"] { background: var(--accent-light); color: var(--text); }
+.mk-filter-chip[aria-pressed="true"] svg { color: var(--accent-ink); }
+.mk-filter-chip[aria-pressed="false"] svg { color: var(--text-faint); }
+.mk-filter-version { margin-left: 4px; color: var(--text-faint); }
+/* 卡片顶行的兼容标签:只画已知兼容 / 需要更新两种，内容宽(「未声明」不上卡) */
+.mk-card-eyeline .mk-compat { align-self: flex-start; height: 18px; padding: 0 6px; border-radius: var(--radius-xs, 4px); font-weight: 500; }
+.mk-card-eyeline .mk-compat.is-compatible { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
+/* 详情页「卸载」:无底无框的危险色文字按钮，和「更新」拉开层级 */
+.mk-uninstall-text { width: 100%; height: 30px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--danger); font: inherit; font-size: var(--ui-font-body, 13px); cursor: pointer; }
+.mk-uninstall-text:hover:not(:disabled) { background: var(--danger-light); }
+.mk-uninstall-text:disabled { opacity: 0.5; cursor: default; }
+.mk-section-tools { justify-content: flex-end; }
+/* README 用聊天回答那套正文节奏(.md-body 的基线之上放大到阅读字号) */
+.mk-readme.md-body { font-size: 14px; line-height: 1.7; }
+.mk-readme.md-body h1 { margin: 0 0 6px; font-size: 20px; line-height: 1.35; font-weight: 650; }
+.mk-readme.md-body h2 { margin: 20px 0 6px; font-size: 16px; line-height: 1.4; font-weight: 600; }
+.mk-readme.md-body p { margin: 0 0 10px; }
+.mk-readme.md-body ul, .mk-readme.md-body ol { margin: 0 0 12px; padding-left: 1.4em; }
+.mk-readme.md-body li { margin: 0 0 4px; }
 .mk-detail-tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
 .mk-detail-tabs .btn[aria-pressed="true"] { color: var(--text); font-weight: 600; border-color: var(--signal-line); background: var(--accent-wash, var(--bg-hover)); }
 .mk-notification-settings { padding: 12px; background: var(--bg-hover); border-radius: var(--radius-md); display: grid; gap: 10px; margin-bottom: 16px; font-size: var(--ui-font-meta); }

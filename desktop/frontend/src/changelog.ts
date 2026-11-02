@@ -15,9 +15,9 @@
 import raw from '../../CHANGELOG.md?raw'
 import rawEn from '../../CHANGELOG.en.md?raw'
 
-import { latestReleasedVersion, parseChangelog, type ChangelogEntry } from './changelogParse'
+import { changelogMarkdown, latestReleasedVersion, parseChangelog, type ChangelogEntry } from './changelogParse'
 
-export { latestReleasedVersion, parseChangelog, type ChangelogEntry }
+export { changelogMarkdown, latestReleasedVersion, parseChangelog, type ChangelogEntry }
 
 export const CHANGELOG: ChangelogEntry[] = parseChangelog(raw)
 export const CHANGELOG_EN: ChangelogEntry[] = parseChangelog(rawEn)
