@@ -8,6 +8,7 @@ import { registerMiniViews } from './mini/miniViews'
 import { Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
+import { toggleSpaceOrganizer } from './views/SpaceOrganizer'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -567,8 +568,10 @@ export function installEngine(): void {
   addCommand({
     id: 'set-active-space',
     title: () => translate('bootengine.cmd.setActiveSpace'),
-    keywords: 'space switch 空间 切换',
-    run: () => { /* 人类走 ribbon / 底部条,这条只作 agent 面载体 */ },
+    keywords: 'space switch 空间 切换 收纳 organizer',
+    // 人用的那一半:开合 Space 收纳(主页上开主页那块,别处开外层那块,见 views/SpaceOrganizer)。agent 走下面的 invoke。
+    hotkey: 'mod+shift+o',
+    run: toggleSpaceOrganizer,
     invoke: {
       description:
         'Switch the window the user is talking to you from to another Space (workspace layout). '

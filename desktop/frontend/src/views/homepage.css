@@ -1295,3 +1295,55 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
  * 聚焦虚化后的字阵是一片灰。只管主题背景,换成照片 / 必应时(data-wallpaper)照旧。 */
 .hp-root[data-theme-preset='glyph']:not([data-wallpaper='true']) .hp-wallpaper-edge { display: none; }
 .hp-root[data-theme-preset='glyph']:not([data-wallpaper='true']) .hp-wallpaper-art { filter: none; transform: none; }
+
+/* ── Space 收纳:搜索、键盘选中、当前所在(views/SpaceOrganizer.tsx) ── */
+.hp-organizer-search {
+  flex: 0 1 200px;
+  min-width: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: var(--radius-pill, 999px);
+  background: var(--overlay-light);
+  color: var(--text-faint);
+}
+.hp-organizer-search:focus-within { color: var(--text-muted); background: var(--bg-hover); }
+.hp-organizer-search input { flex: 1; min-width: 0; border: 0; outline: 0; padding: 0; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); }
+.hp-organizer-search input::placeholder { color: var(--text-faint); }
+button.hp-organizer-mark { border: 0; font: inherit; cursor: pointer; }
+button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover); }
+.hp-organizer-grid .hp-tile[data-sel] { color: var(--text); background: var(--bg-hover); }
+.hp-organizer-grid .hp-tile[data-sel] .hp-tile-icon { background: var(--overlay-medium, var(--bg-hover)); color: var(--text); }
+.hp-organizer-grid .hp-tile[data-current]::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  bottom: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  translate: -50% 0;
+}
+.hp-organizer-empty { grid-column: 1 / -1; align-self: center; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); text-align: center; }
+.hp-organizer-keys { display: inline-flex; flex-wrap: wrap; justify-content: center; gap: 4px 14px; }
+.hp-organizer-panel > footer kbd {
+  display: inline-block;
+  min-width: 16px;
+  margin-right: 3px;
+  padding: 0 5px;
+  border-radius: 5px;
+  background: var(--overlay-light);
+  color: var(--text-muted);
+  font: inherit;
+  line-height: 17px;
+  text-align: center;
+}
+
+/* 主页以外按 ⌘⇧O 弹出时外面那层 .hp-root(拿主页的玻璃 token 与格子样式):从「铺满的主页舞台」改回透明浮层。
+ * z-index 120:压住工作区,让在对话框(.dialog-overlay 130,新建收纳夹的输入框)之下;拖窗区无视 z-index,no-drag 压住。
+ * 须在文件末尾:与开头的 .hp-root 同特异性。 */
+.hp-root.hp-organizer-host { position: fixed; inset: 0; z-index: 120; display: block; padding: 0; background: transparent; -webkit-app-region: no-drag; }

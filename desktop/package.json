@@ -424,6 +424,7 @@
     "check:calendarplugin": "node scripts/builtin-calendar.check.cjs",
     "check:achtoast": "node scripts/ach-toast.check.cjs",
     "check:homepage": "node scripts/builtin-homepage.check.cjs",
+    "check:spaceorganizer": "node scripts/space-organizer.check.cjs",
     "check:artificial": "node scripts/builtin-artificial.check.cjs",
     "check:sandbox": "node scripts/sandbox.check.cjs",
     "check:pluginsandbox": "node scripts/plugin-sandbox.check.cjs",
