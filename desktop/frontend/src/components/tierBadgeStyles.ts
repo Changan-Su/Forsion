@@ -1,7 +1,6 @@
 /**
  * 会员标识配色与名称:后台按方案配置,随公开的 /api/membership/plans 下发(plan.badge = 生效配色,name / nameEn = 中英文名)。
- * 桌面 / Android 经 cloudFetch 拉一次并缓存进 localStorage(重启首帧直接用上次的色,不先画缺省再闪);
- * 网页版没有 cloudFetch,用内置缺省。DEFAULT_BADGES 与 server/src/services/membershipBadge.ts 逐字一致,改一处要改两处。
+ * 桌面 / Android 经 cloudFetch、网页版经 webShim 的 membershipPlans 拉一次,缓存进 localStorage(重启首帧直接用上次的,不先画缺省再闪)。DEFAULT_BADGES 与 server/src/services/membershipBadge.ts 逐字一致,改一处要改两处。
  */
 import { useSyncExternalStore } from 'react'
 
@@ -23,18 +22,22 @@ const HEX = /^#[0-9a-fA-F]{6}$/
 const validBadge = (b: any): b is BadgeStyle => !!b && [b.from, b.to, b.text].every((v) => typeof v === 'string' && HEX.test(v))
 const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
 
-/** 方案列表 → 档位徽章;同一档位有多个方案时取月价最低那个 */
+/** 方案列表 → 档位徽章;同一档位有多个方案时配色取月价最低那个。
+ *  徽章只拿得到档位、不知道用户买的是哪个方案,所以同档位多方案时不带名字(显示档位键),免得写成别的方案名。 */
 export function badgesFromPlans(plans: unknown): Record<string, TierBadgeInfo> {
   const out: Record<string, TierBadgeInfo> = {}
   const price: Record<string, number> = {}
+  const count: Record<string, number> = {}
   if (!Array.isArray(plans)) return out
   for (const p of plans) {
     const tier = typeof p?.tier === 'string' ? p.tier.toLowerCase() : ''
+    if (tier) count[tier] = (count[tier] || 0) + 1
     const monthly = Number(p?.priceMonthly) || 0
     if (!tier || !validBadge(p.badge) || (tier in price && price[tier] <= monthly)) continue
     out[tier] = { from: p.badge.from, to: p.badge.to, text: p.badge.text, name: str(p.name), nameEn: str(p.nameEn) }
     price[tier] = monthly
   }
+  for (const tier of Object.keys(out)) if (count[tier] > 1) out[tier] = { from: out[tier].from, to: out[tier].to, text: out[tier].text }
   return out
 }
 
@@ -52,10 +55,12 @@ let loading: Promise<void> | null = null
 
 /** 拉一次方案配色(一个会话一次);失败保持上次缓存 / 缺省 */
 export function loadTierBadges(): Promise<void> {
-  const f = typeof window !== 'undefined' ? window.tangu?.cloudFetch : undefined
-  if (!f || loading) return loading ?? Promise.resolve()
-  // 桥会补 /api 前缀(同 achievements)。失败不记成已加载,下次挂载再试;成功的空列表(方案全停)= 清回缺省
-  loading = f({ path: '/membership/plans' }).then((r) => {
+  const t = typeof window !== 'undefined' ? window.tangu : undefined
+  // 桌面桥会补 /api 前缀(同 achievements);网页版没有通用 cloudFetch,走 webShim 专开的这一条
+  const req = t?.cloudFetch ? () => t.cloudFetch!({ path: '/membership/plans' }) : t?.membershipPlans ? () => t.membershipPlans!() : null
+  if (!req || loading) return loading ?? Promise.resolve()
+  // 失败不记成已加载,下次挂载再试;成功的空列表(方案全停)= 清回缺省
+  loading = req().then((r) => {
     if (r?.status !== 200 || !Array.isArray(r.json)) { loading = null; return }
     const next = badgesFromPlans(r.json)
     configured = next

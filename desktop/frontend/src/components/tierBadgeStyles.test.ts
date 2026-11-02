@@ -55,4 +55,19 @@ describe('tierBadgeStyles', () => {
     expect(badgeLabel('ultra', badgeFor('ultra'), 'zh')).toBe('ultra')
     expect(JSON.parse(localStorage.getItem('forsion_tier_badges')!).pro).toMatchObject({ name: '专业版', nameEn: 'Pro' })
   })
+
+  it('同档位多个方案:配色取最便宜的,名字不带(不知道用户买的是哪个),显示档位键', () => {
+    const out = badgesFromPlans([{ ...plan('pro', 99, '#111111'), name: 'Pro 基础' }, { ...plan('pro', 199, '#222222'), name: 'Pro 全量' }])
+    expect(out.pro).toEqual({ from: '#111111', to: '#000000', text: '#FFFFFF' })
+    expect(badgeLabel('pro', out.pro, 'zh')).toBe('pro')
+  })
+
+  it('网页版没有 cloudFetch:走 webShim 的 membershipPlans', async () => {
+    const membershipPlans = vi.fn().mockResolvedValue({ status: 200, json: [{ ...plan('pro', 99, '#123456'), name: '专业版' }] })
+    ;(window as any).tangu = { membershipPlans }
+    await loadTierBadges()
+    expect(membershipPlans).toHaveBeenCalledTimes(1)
+    expect(badgeLabel('pro', badgeFor('pro'), 'zh')).toBe('专业版')
+  })
 })
+
