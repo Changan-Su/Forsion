@@ -13,7 +13,7 @@
  *  C 圈注出现(圈 + 小卡标题)
  *  D 圈注出着时插件报了 done 事件 → 当场收掉,ctx.guide.state = learned
  *  E 当天已出满 3 条 → 不出
- *  F 有弹窗在排(ctx.app.queuePopup)→ 不出;让出后才出
+ *  F 有弹窗在排(ctx.app.queuePopup)→ 不出;让出后才出;出着时又来了弹窗 → 收掉让路、不记看过
  *  G 设置里关了上手提示 → 不出,state = off
  *  H 做过那件事(done 计数 ≥ 1)的提示从来不出
  *
@@ -142,7 +142,10 @@ async function main() {
     check('F 有弹窗在排 → 不出', (await line.count()) === 0)
     await win.evaluate(() => window.__turn.done())
     check('F 弹窗让出后才出', await waitFor(() => line.count().then((n) => n === 1), 8000))
-    await line.locator('.guide-tip-x').click()
+    // 提示出着时又来了弹窗:收掉让路,不记看过(否则压在弹窗底下还先吃掉 Esc)
+    await win.evaluate(() => { window.__turn2 = window.__guideFixture.app.queuePopup() })
+    check('F 出着时来了弹窗 → 收掉、不记看过', await waitFor(() => line.count().then((n) => n === 0), 3000) && (await state('line-tip')) === 'waiting', String(await state('line-tip')))
+    await win.evaluate(() => window.__turn2.done())
 
     // G:总开关关掉
     await reset()

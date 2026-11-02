@@ -20,6 +20,7 @@ export const GUIDE_DAILY_MAX = 3 // 全应用一天最多出几条
 export const OPEN_DELAY_MS = 2000 // 锚点出现后至少这么久才出(刚打开 View 时别抢)
 export const IDLE_MS = 1500 // 停手这么久才出(正在打字不打断)
 
+const mem = new Map<string, string>()
 const K = {
   enabled: 'guide.enabled',
   day: 'guide.day',
@@ -28,8 +29,9 @@ const K = {
   open: (p: string, v: string) => `guide.${p}.__open.${v}`,
 }
 /** undefined = 读失败(不知道);null = 没有这条。 */
-const read = (k: string): string | null | undefined => { try { return localStorage.getItem(k) } catch { return undefined } }
-const write = (k: string, v: string): void => { try { localStorage.setItem(k, v) } catch { /* 写不进就算了:下回读失败也不会出 */ } }
+const read = (k: string): string | null | undefined => { if (mem.has(k)) return mem.get(k); try { return localStorage.getItem(k) } catch { return undefined } }
+/** 写不进(存储满了)就在内存里记着这一程,否则点过 × 的一重开 View 又出、当天条数也不涨。 */
+const write = (k: string, v: string): void => { try { localStorage.setItem(k, v); mem.delete(k) } catch { mem.set(k, v) } }
 /** 本地日期键 YYYY-MM-DD(记账用,不是显示文案)。 */
 const today = (d = new Date()): string => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
@@ -40,7 +42,7 @@ let current: { pluginId: string; tip: PluginGuideTip } | null = null
 let lastInput = 0
 let timer: ReturnType<typeof setInterval> | null = null
 const shownHosts = new WeakSet<Element>() // 一个 View 打开一次最多出一条:View 重新挂载就是新的宿主元素
-const firstSeen = new WeakMap<Element, number>()
+const firstSeen = new Map<string, { el: Element; t: number }>() // 锚点连续看得见的起点;看不见了 / 换了元素就重新计
 
 export const guideEnabled = (): boolean => read(K.enabled) !== '0'
 export function setGuideEnabled(on: boolean): void {
@@ -57,6 +59,7 @@ export function resetGuide(): void {
     }
     for (const k of drop) localStorage.removeItem(k)
   } catch { /* 读不了就没什么可清 */ }
+  for (const k of [...mem.keys()]) if (k !== K.enabled && !k.includes('.__open.')) mem.delete(k)
 }
 
 /** PluginViewHost 每挂载一次记一次(manifest `when.open`)。 */
@@ -87,12 +90,21 @@ function anchor(pluginId: string, name: string): HTMLElement | null {
   return null
 }
 
+/** 真看得见:中心点打到的是锚点自己或它里面(被列表滚出去、被浮层盖住的不算;否则出提示时还会把列表滚过去)。 */
+function seenAnchor(pluginId: string, name: string): HTMLElement | null {
+  const el = anchor(pluginId, name)
+  if (!el) return null
+  const r = el.getBoundingClientRect()
+  const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+  return hit && el.contains(hit) ? el : null
+}
+
 function condOk(pluginId: string, tip: PluginGuideTip): boolean {
   const w = tip.when
   if (!w) return false // 没写 when = 只能 ctx.guide.show
   if ('open' in w) return (Number(read(K.open(pluginId, w.open)) ?? 0) || 0) >= w.times
   if ('count' in w) return counter(pluginId, w.count) >= w.atLeast
-  return w.visible.every((n) => !!anchor(pluginId, n))
+  return w.visible.every((n) => !!seenAnchor(pluginId, n))
 }
 
 export interface GuideCandidate {
@@ -145,7 +157,8 @@ function dayCount(): number | undefined {
 const isMobile = (): boolean => !!(typeof window !== 'undefined' && (window.tangu as { mobile?: boolean } | undefined)?.mobile)
 
 function tick(): void {
-  if (document.hidden || !tipsOf.size) return
+  if (document.hidden) { firstSeen.clear(); return }
+  if (!tipsOf.size) return
   const q = usePopupQueue.getState()
   const now = Date.now()
   const candidates: GuideCandidate[] = []
@@ -155,16 +168,19 @@ function tick(): void {
       const seen = read(K.seen(pluginId, tip.id))
       const done = learned(pluginId, tip)
       // 已经结束的不去量 DOM
-      const el = seen === null && muted === null && !done ? anchor(pluginId, tip.at) : null
+      const el = seen === null && muted === null && !done ? seenAnchor(pluginId, tip.at) : null
+      const key = rk(pluginId, tip.id)
       let since: number | null = null
       let hostShown = false
-      if (el) {
-        since = firstSeen.get(el) ?? now
-        if (!firstSeen.has(el)) firstSeen.set(el, now)
+      if (!el) firstSeen.delete(key)
+      else {
+        const f = firstSeen.get(key)
+        if (!f || f.el !== el) firstSeen.set(key, { el, t: now })
+        since = firstSeen.get(key)!.t
         const host = el.closest('[data-guide-owner]')
         hostShown = !!host && shownHosts.has(host)
       }
-      candidates.push({ pluginId, tip, seen, muted, learned: done, condOk: el ? condOk(pluginId, tip) : false, requested: requested.has(rk(pluginId, tip.id)), anchorSince: since, hostShown })
+      candidates.push({ pluginId, tip, seen, muted, learned: done, condOk: el ? condOk(pluginId, tip) : false, requested: requested.has(key), anchorSince: since, hostShown })
     }
   }
   const c = pickTip({
@@ -199,8 +215,10 @@ function present(c: GuideCandidate): void {
 function ensureRunning(): void {
   if (timer || typeof window === 'undefined') return
   const touch = (): void => { lastInput = Date.now() }
-  window.addEventListener('keydown', touch, true)
-  window.addEventListener('input', touch, true)
+  for (const ev of ['keydown', 'input', 'pointerdown', 'wheel', 'dragover']) window.addEventListener(ev, touch, { capture: true, passive: true })
+  window.addEventListener('pointermove', (e) => { if (e.buttons) touch() }, { capture: true, passive: true }) // 按着拖
+  // 提示出着时来了弹窗:收掉让路(不记看过),否则压在弹窗底下还先吃掉 Esc
+  usePopupQueue.subscribe((q) => { if (current && (q.active || q.waiting.length || q.blocked)) closeSpotlight(current.pluginId) })
   // 提示出着时用户做了那件事:当场收掉(会了)
   useAchievements.subscribe((s, prev) => {
     if (s.counters !== prev.counters && current && learned(current.pluginId, current.tip)) closeSpotlight(current.pluginId)
@@ -210,7 +228,7 @@ function ensureRunning(): void {
 
 /** 插件启用时登记(manifest 里消毒过的 tips);停用 / 重载时撤。 */
 export function registerGuideTips(pluginId: string, tips: PluginGuideTip[] | undefined): void {
-  if (!tips?.length) return
+  if (!tips?.length) return unregisterGuideTips(pluginId)
   tipsOf.set(pluginId, tips)
   ensureRunning()
 }
