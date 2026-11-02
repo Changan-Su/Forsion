@@ -92,11 +92,9 @@ export class VaultManager {
     this.root = p
   }
 
+  /** 只选目录,不换根:换根由调用方在校验、等完在途写之后做(ipc.ts switchLocalVault)。 */
   async openDialog(): Promise<string | null> {
-    const selected = await this.host.openDirectory?.()
-    if (!selected) return null
-    this.setRoot(selected)
-    return this.root
+    return (await this.host.openDirectory?.()) ?? null
   }
 
   private requireRoot(): string {
