@@ -32,4 +32,17 @@ describe('tierBadgeStyles', () => {
     await loadTierBadges()
     expect(badgeFor('plus')).toEqual(DEFAULT_BADGES.plus)
   })
+
+  it('路径不带 /api(桥会补);失败后能重试;成功的空列表清回缺省', async () => {
+    const cloudFetch = vi.fn().mockResolvedValueOnce({ status: 503 }).mockResolvedValueOnce({ status: 200, json: [plan('pro', 99, '#123456')] }).mockResolvedValueOnce({ status: 200, json: [] })
+    ;(window as any).tangu = { cloudFetch }
+    await loadTierBadges()
+    expect(cloudFetch.mock.calls[0][0].path).toBe('/membership/plans')
+    await loadTierBadges()
+    expect(badgeFor('pro').from).toBe('#123456')
+    resetTierBadgesForTest()
+    await loadTierBadges()
+    expect(badgeFor('pro')).toEqual(DEFAULT_BADGES.pro)
+    expect(JSON.parse(localStorage.getItem('forsion_tier_badges')!)).toEqual({})
+  })
 })

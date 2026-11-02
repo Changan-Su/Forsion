@@ -50,14 +50,14 @@ let loading: Promise<void> | null = null
 export function loadTierBadges(): Promise<void> {
   const f = typeof window !== 'undefined' ? window.tangu?.cloudFetch : undefined
   if (!f || loading) return loading ?? Promise.resolve()
-  loading = f({ path: '/api/membership/plans' }).then((r) => {
-    if (r?.status !== 200) return
+  // 桥会补 /api 前缀(同 achievements)。失败不记成已加载,下次挂载再试;成功的空列表(方案全停)= 清回缺省
+  loading = f({ path: '/membership/plans' }).then((r) => {
+    if (r?.status !== 200 || !Array.isArray(r.json)) { loading = null; return }
     const next = badgesFromPlans(r.json)
-    if (!Object.keys(next).length) return
     configured = next
     try { localStorage.setItem(CACHE_KEY, JSON.stringify(next)) } catch { /* 存不下就只用内存 */ }
     listeners.forEach((l) => l())
-  }).catch(() => {})
+  }).catch(() => { loading = null })
   return loading
 }
 
