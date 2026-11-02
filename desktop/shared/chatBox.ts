@@ -37,6 +37,7 @@ export interface PluginChatBoxOptions {
   toolbar?(el: HTMLElement): void | (() => void)
   /** Host menu next to the caret. Same look and keys as the editor's `#` completion: ↑↓ Enter Tab Esc; opens only while
    *  typing, never during IME composition; Enter on a highlighted row picks it and does not submit.
+   *  2026-11-02+: when the box sits in the lower half of the window the menu opens upward (falling back below if it doesn't fit).
    *  2026-11-02+: an array gives several triggers (e.g. `#` tags and `[[` links); the one nearest the caret wins.
    *  Hosts up to 2.13.x take a single object only — pass the array where `insertText` exists and still check the version. */
   suggest?: PluginChatBoxSuggest | PluginChatBoxSuggest[]

@@ -2204,6 +2204,9 @@ export interface PluginContext {
    *  · `duplicateRow`:复制一行(自动编号 / 创建时间重新盖),返回新行 id。
    *  · `deleteRow`:只删经典表的行,返回一个**撤销函数**(只生效一次;换了库再调不做事)。笔记视图的行是一篇笔记,
    *    这里不删(返回 null)——要删就 `ctx.app.trash(rowId)`(行 id 就是笔记路径,进回收站可恢复)。
+   *  · `addColumn(path, { name, type })`(2026-11-02+):给经典表加一列,返回新列 id(之后马上能 `setCell`);笔记视图、只读源、
+   *    不认识的类型 → null。`type` 只收基础类型(`text` / `number` / `checkbox` / `date` / `select` / `multiselect` / `url`)。
+   *    和行的写入走同一条路,不会冲掉还没落盘的行 —— 改列结构别拿 `ctx.app.mutateDb` 去抢同一张活表。
    *  · `readBody(path, rowId)`(2026-11-02+):经典表一行的记录正文(Markdown,与表格「打开记录」、`mountRecord({ body })`
    *    同一份);没写过 = `''`。笔记视图 / 找不到 → null。正文里的 `- [ ]` 就是这一行的子任务(待办插件这么用)。
    *  · `setBody(path, rowId, body, expected?)`(2026-11-02+):整份替换那一行的正文,返回是否写了。只写可写的经典表;
@@ -2217,6 +2220,8 @@ export interface PluginContext {
     addRow(path: string, cells?: Record<string, PluginCellValue>, name?: string): Promise<string | null>
     duplicateRow(path: string, rowId: string): Promise<string | null>
     deleteRow(path: string, rowId: string): (() => void) | null
+    /** 2026-11-02+;旧宿主没有:`ctx.databases.addColumn?.(…)`。 */
+    addColumn?(path: string, spec: { name: string; type: string }): string | null
     /** 2026-11-02+;旧宿主没有:`ctx.databases.readBody?.(…)`。 */
     readBody?(path: string, rowId: string): string | null
     /** 2026-11-02+;旧宿主没有:`ctx.databases.setBody?.(…)`。 */

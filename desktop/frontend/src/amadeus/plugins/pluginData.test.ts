@@ -118,6 +118,21 @@ describe('ctx.databases', () => {
     expect(rowsNow()[0].cells.c1).toBe('乙')
   })
 
+  it('addColumn:和行写入同一条路 —— 刚加还没落盘的行不丢;新列马上能写;笔记视图 / 坏类型不加', async () => {
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const api = createDatabasesApi(scope)
+    const rowId = await api.addRow('T.db', {}, '刚加的')
+    const col = api.addColumn!('T.db', { name: '标签', type: 'multiselect' })!
+    expect(col).toBeTruthy()
+    expect(api.setCell('T.db', rowId!, col, ['工作'], { value: undefined })).toBe(true)
+    expect(api.addColumn!('T.db', { name: 'x', type: 'page' })).toBeNull()
+    expect(api.addColumn!('T.db', { name: ' ', type: 'text' })).toBeNull()
+    expect(api.addColumn!('Nope.db', { name: 'x', type: 'text' })).toBeNull()
+    await useDbStore.getState().flushAll()
+    expect(disk.columns.at(-1)).toMatchObject({ id: col, name: '标签', type: 'multiselect' })
+    expect(disk.rows.find((r) => r.id === rowId)?.cells[col]).toEqual(['工作'])
+  })
+
   it('readBody / setBody:只写经典表;expected 对不上不写;落盘重放时正文已被改过也不写', async () => {
     await useDbStore.getState().reload('T.db', 'T.db')
     const api = createDatabasesApi(scope)

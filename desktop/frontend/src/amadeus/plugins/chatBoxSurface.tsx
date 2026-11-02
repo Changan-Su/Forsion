@@ -88,6 +88,8 @@ function useChatBoxSuggest({ options, host }: BoxProps, replace: (match: ChatBox
           left={menu.left}
           top={menu.top}
           anchorTop={menu.anchorTop}
+          // Prompt boxes usually sit at the bottom of a view: in the lower half the menu opens upward, over the list.
+          prefer={menu.anchorTop > window.innerHeight / 2 ? 'above' : 'below'}
           onPick={i => {
             const m = menu.match
             const typed = `${menu.trigger}${m.query}`

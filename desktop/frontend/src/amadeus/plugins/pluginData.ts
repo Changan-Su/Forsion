@@ -2,7 +2,7 @@
  *  DTO 刻意不复用宿主内部的 AggDb / MdMark:内部结构以后要改,不该牵动插件 API(同 PluginSearchHit 的口径)。
  *  写口与内置日历 / 待办走同一组函数(setAggCell / addAggRow / patchMark …),所以和打开着的界面一致。 */
 import { isRealDate, parseCalDate } from '@amadeus-shared/db/calDate'
-import type { CellValue } from '@amadeus-shared/db/schema'
+import { COLUMN_TYPES, dbId, type CellValue, type ColumnType } from '@amadeus-shared/db/schema'
 import type { MdMark } from '@amadeus-shared/mdMarks'
 import { isStamped, resolveBaseType } from '../blocks/database/propertyTypes'
 import { addAggRow, deleteAggRow, duplicateAggRow, getAggDb, restoreAggRow, setAggBody, setAggCell, setAggName, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
@@ -103,6 +103,17 @@ export function createDatabasesApi(scope: DataScope, includeHumanCalendar = fals
       const db = scope.alive() ? table(path) : null
       if (!db) return null
       return addAggRow(db, cellsOf(db, cells), typeof name === 'string' ? name : '', scope.alive).catch(() => null)
+    },
+    addColumn: (path, spec) => {
+      const db = scope.alive() ? table(path) : null
+      // 经典表才加(笔记视图的列是 frontmatter 键,另一套);走 dbStore.mutate,和行的写入同一条防抖写穿 —— 不走磁盘比对交换,
+      // 那条看不见还没落盘的新行,重读会把它冲掉(11-02 实拍:刚加的待办随「第一次加标签列」消失)
+      if (!db || db.isNoteView || db.readonly || db.writeCell || !spec || typeof spec !== 'object') return null
+      const name = typeof spec.name === 'string' ? spec.name.trim() : ''
+      if (!name || !COLUMN_TYPES.includes(spec.type as ColumnType)) return null
+      const id = dbId() // 回调外定 id,重放才是确定的(同表格的「添加列」)
+      useDbStore.getState().mutate(db.path, (d) => d.columns.some((c) => c.id === id) ? d : { ...d, columns: [...d.columns, { id, name, type: spec.type as ColumnType }] })
+      return id
     },
     readBody: (path, rowId) => {
       const db = scope.alive() ? table(path) : null
