@@ -113,17 +113,25 @@ export interface DropIndicator {
   destroy(): void
 }
 
-/** 能给后代 `position: fixed` 当包含块的祖先(transform 及独立的 scale / translate / rotate、filter、contain…),坐标要相对它算。
+/** 这个祖先会不会给后代 `position: fixed` 当包含块(transform 及独立的 scale / translate / rotate、perspective、filter、
+ *  backdrop-filter、contain: layout/paint、content-visibility、will-change 预告这些),会的话浮层坐标要相对它算。
+ *  **全仓只此一份**,自己量祖先摆 fixed 浮层的地方都调它:Amadeus 编辑器原来抄了一份,两份各改各的,
+ *  11-02 那份还把 container-type 算着,`.wb-view` 一加 container-type,块拖拽的落点线就整条偏出一个 View 左上角。
  *  ⚠️ `container-type` **不算**(2026-10-25 实测 Chromium 149 / Electron 40:`container-type: size` 里的 fixed 元素仍按视口定位)。
  *  原来把它算进来,宿主挂在聊天列(.t2-chat-col 是 size 容器)里的落点线整条偏出一个列的左上角(摘要栏拖卡片时看到的)。 */
+export function createsFixedContainingBlock(cs: CSSStyleDeclaration): boolean {
+  return cs.transform !== 'none' || cs.perspective !== 'none' || cs.filter !== 'none'
+    || (!!cs.backdropFilter && cs.backdropFilter !== 'none')
+    || (!!cs.scale && cs.scale !== 'none') || (!!cs.translate && cs.translate !== 'none') || (!!cs.rotate && cs.rotate !== 'none')
+    || /\b(layout|paint|strict|content)\b/.test(cs.contain ?? '')
+    || cs.contentVisibility === 'auto' || cs.contentVisibility === 'hidden'
+    || /\b(transform|perspective|filter|backdrop-filter|contain|scale|translate|rotate)\b/.test(cs.willChange ?? '')
+}
+
 function fixedOrigin(el: HTMLElement): { x: number; y: number } {
   for (let p = el.parentElement; p; p = p.parentElement) {
     const cs = getComputedStyle(p)
-    const cb = cs.transform !== 'none' || cs.perspective !== 'none' || cs.filter !== 'none'
-      || (!!cs.backdropFilter && cs.backdropFilter !== 'none')
-      || (!!cs.scale && cs.scale !== 'none') || (!!cs.translate && cs.translate !== 'none') || (!!cs.rotate && cs.rotate !== 'none')
-      || /\b(layout|paint|strict|content)\b/.test(cs.contain ?? '') || /\b(transform|perspective|filter|backdrop-filter|contain)\b/.test(cs.willChange ?? '')
-    if (cb) {
+    if (createsFixedContainingBlock(cs)) {
       const r = p.getBoundingClientRect()
       return { x: r.left + (Number.parseFloat(cs.borderLeftWidth) || 0), y: r.top + (Number.parseFloat(cs.borderTopWidth) || 0) }
     }
