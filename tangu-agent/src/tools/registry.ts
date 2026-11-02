@@ -31,6 +31,7 @@ import { interactionProvider } from './builtin/interaction.js';
 import { manageAgentProvider } from './builtin/manageAgent.js';
 import { manageSkillProvider } from './builtin/manageSkill.js';
 import { museTodoProvider } from './builtin/museTodo.js';
+import { museStartersProvider } from './builtin/museStarters.js';
 import { channelToolsProvider } from './builtin/channelTools.js';
 import { applyPatchProvider } from './builtin/applyPatch.js';
 import { discussProvider } from './builtin/discuss.js';
@@ -535,3 +536,4 @@ function editDistance(a: string, b: string): number {
 
 registerToolProvider(intelligentUiProvider); // Native document renderer, explicit client capability.
 registerToolProvider(childSessionsProvider); // host-only:start_session + send_to_session(deferred)(父子会话;append 末尾,保前缀缓存)
+registerToolProvider(museStartersProvider); // Muse 的新对话开场建议;仅 ctx.muse 且 muse.chatStarters 开着可见(append 末尾,保前缀缓存)
