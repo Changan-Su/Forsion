@@ -43,10 +43,15 @@ export function startupSpacePref(): string {
   try { return localStorage.getItem(DEFAULT_SPACE_KEY) || HOME_SLOT_SPACE } catch { return HOME_SLOT_SPACE } // private mode
 }
 
+/** 安卓壳在系统还原本页时注入(见 mobile AppActivity):进程在后台被杀 / 渲染进程被收后回来,而不是用户新开。 */
+export const launchRestored = (): boolean => (window as { __forsionRestored?: boolean }).__forsionRestored === true
+
 /** 「启动时进入」→ 具体 Space id。**bootstrapEngine 的两个消费点都必须走它**:
  *  第二处(用户 Space 异步装载完的补定位)漏了的话,主位/指定档指向一个 L0 用户 Space 时,
  *  冷启动回落产品默认、补定位又认不出 → 永远进不去那个 Space,而且不报错。 */
 export function resolveStartupTarget(lastExit: string): string {
+  // 手机系统还原(后台被杀 / 渲染进程被收后回来,原生 AppActivity 注入的标记):人是「回来」不是「新开」,回到上次那个 Space。
+  if (launchRestored()) return lastExit
   const pref = startupSpacePref()
   if (pref === HOME_SLOT_SPACE) return homeSlotSpaceId() ?? PRODUCT.defaultSpace
   if (pref === LAST_EXIT_SPACE) return lastExit

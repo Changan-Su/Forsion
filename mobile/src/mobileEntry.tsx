@@ -24,6 +24,7 @@ import { installSpaceShortcuts } from './spaceShortcuts'
 import { installLauncherIcon } from './launcherIcon'
 import { installUnitsEntry } from './UnitsSheet'
 import { installLiveIsland } from './liveIsland'
+import { installRestoreSnapshot } from './restoreSnapshot'
 import { installCallKeep } from './callKeep'
 import { installNativeModelPicker } from './nativeModelPicker'
 import { installNativeSheet } from './nativeSheet'
@@ -90,6 +91,8 @@ try {
   installUnitsEntry()
   // 灵动岛:agent 在跑时把进度 / 待审批贴到各家的岛上(Android 16 Live Updates),点岛回到那个会话。
   installLiveIsland()
+  // 系统还原(后台被杀后回来)时放回上次开着的会话和没发的字;Space 由 resolveStartupTarget 回到上次那个。
+  installRestoreSnapshot()
   installCallKeep()
   // 手机操控(T1):把原生 PhoneControl 登记成 client surface `phone`(设置行 + startRun 的能力声明)。
   installPhoneControl()
