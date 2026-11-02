@@ -864,7 +864,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             {/* 对话末尾:任务清单一行 + 等你处理的卡片堆,跟着最新内容走(画布模式下卡片堆回到输入框上方) */}
             {!canvasOn && (tailTodo || deck) && (
               <div className="t2-tail" data-pending-deck>
-                {tailTodo && <TodoList todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} folded />}
+                {tailTodo && <TodoList todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} stopped={tailTodo.status === 'stopped' || tailTodo.status === 'error'} folded />}
                 {deck}
               </div>
             )}

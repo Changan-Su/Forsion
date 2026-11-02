@@ -855,7 +855,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           // 没配上(重载后的历史、或 plan 事件缺失)就只渲染正文,询问仍走下面通用卡兜底。
           <PlanCard key={planInq?.inquiryId || 'plan'} plan={msg.planProposal} req={planInq} />
         )}
-        {!!msg.todos?.length && !todoInTail && <TodoList todos={msg.todos} live={todoLive} folded={!!handlers?.onJumpDeck} />}
+        {!!msg.todos?.length && !todoInTail && <TodoList todos={msg.todos} live={todoLive} stopped={msg.status === 'stopped' || msg.status === 'error'} folded={!!handlers?.onJumpDeck} />}
         {/* 判空看 body 不看 msg.content:刚开始打建议围栏时 content 非空但正文为空,
             看 content 会让整条消息只剩一个署名圆点,连「思考中」都不显示。 */}
         {/* 测试性等待详情:开启时每次调用(含工具轮之后)画「发送 N KB / 等首帧 + 已等秒数」。
