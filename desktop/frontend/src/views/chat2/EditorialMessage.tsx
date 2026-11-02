@@ -487,7 +487,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   }, [webHere, msg.toolEvents, msg.displayFiles, webCwd])
   const webOf = useCallback((ev: ToolEvent) => webPlan.get(ev.id), [webPlan])
   // 待办清单的「进行中」只在这一段还在流式、且会话的 run 还活着时转圈:停止 / 出错 / 断流后的孤儿气泡都不转。
-  // ponytail: steer 切段后旧段已 done,run 仍在跑时这份清单也停转;要跟上得在 turn_boundary 把 todos 挪到新段。
+  // steer 切段时 turn_boundary 把清单带进新段,跑着的那份在新段上转;旧段已 done,只留快照。
   const todoLive = useApp((s) => msg.status === 'streaming' && !!msg.todos?.length && (!runSid || !!s.runningBySession[runSid]))
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
