@@ -43,6 +43,8 @@ export interface UnifiedPipeHandle {
   /** 让正文拿焦点、**不动选区**(评审 G4-06:从快速查找 / 日记进入已有笔记后直接打字)。编辑器还没建好 → false
    *  (调用方重试);只读 / 已退休 → true(没什么可做,别让调用方空转)。 */
   focusBody?: () => boolean
+  /** 让标题拿焦点(未命名笔记从快速查找等入口进来时先命名)。没有标题可聚焦(只读 / 画布满铺 / Mini)→ false。 */
+  focusTitle?: () => boolean
   /** 外来 frontmatter 原文(插件的每页数据存这儿)。v3 那份在 manifest.fmExtra,v4 在 pipe.fm 里。
    *  **只读**:写口本轮不做(不带 bind 的块表面上零消费者,且 v4 fm 写要与结构键派生同场竞技,
    *  见 docs/ToBeImproved/块表面v4适配方案_2026-08-20.md §6.3)。 */
@@ -306,6 +308,12 @@ export function unifiedInsertReply(md: string, prefer?: { path: string; anchor?:
 export function unifiedFocusBody(path: string): boolean {
   for (const h of byRecency(path)) if (h.focusBody) return h.focusBody()
   return false
+}
+
+/** 标题聚焦,落点同 unifiedFocusBody。null = 还没有实例(调用方重试);false = 这个实例没有可聚焦的标题。 */
+export function unifiedFocusTitle(path: string): boolean | null {
+  for (const h of byRecency(path)) if (h.focusTitle) return h.focusTitle()
+  return null
 }
 
 /** path 上最近用过的实例手里的外来 fm 原文(插模板合并属性用,G4-09);没有实例 = null。 */

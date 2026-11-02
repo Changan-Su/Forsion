@@ -2968,6 +2968,10 @@ body.amx-marquee-active * {
 /* 任务3:$$…$$ 块公式水平居中(整块占满一行、内容居中;顺带压平 katex-display 默认外边距) */
 .math-rendered--block { display: block; width: 100%; text-align: center; margin: 6px 0; }
 .math-rendered--block .katex-display { margin: 0; text-align: center; }
+/* align / equation / gather 的自动编号是 KaTeX 的全局 CSS 计数器,笔记里每个公式都显示 (1)。
+   照 Obsidian 不自动编号;手写的 \tag{…} 走 .tag 文本,不受影响。
+   ponytail: 要文档内连续编号得自己数(每块独立渲染),等有人要再做。 */
+.am-app .katex .eqn-num { display: none; }
 
 /* 编辑本行时的实况预览:行内 $..$ 在源码上方弹浮层卡片、块级 $$..$$ 在源码下方居中渲染(见 mathLivePreview.ts)。 */
 .math-preview--inline { position: relative; display: inline-block; width: 0; height: 0; vertical-align: baseline; }

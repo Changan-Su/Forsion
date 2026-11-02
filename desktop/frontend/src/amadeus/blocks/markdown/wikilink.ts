@@ -188,7 +188,17 @@ function buildDecorations(
       )
       const onActiveLine = lineFrom !== -1 && spFrom < lineTo && spTo > lineFrom
       // 普通双链仍是「光标进入即源码」;图片是难源码编辑块,只有 `</>` 显式开门。
-      if ((!img && onActiveLine) || (img && onActiveLine && sourceFrom === from)) continue
+      // 露出的源码照样着色(目标不存在 → 黯淡),右键照样是文件菜单(props.handleDOMEvents.contextmenu)。
+      if (!img && onActiveLine) {
+        if (!parseAppRefInner(m[1])) {
+          const fileLink = isPdfLinkInner(m[1]) || !!parseMediaLinkInner(m[1])
+          const sp = fileLink ? null : splitLinkInner(m[1])
+          const ok = sp?.subpath && !sp.target ? true : isResolved(linkTarget(m[1]))
+          decos.push(Decoration.inline(from, to, { class: ok ? 'wikilink-src' : 'wikilink-src wikilink-unresolved', 'data-wiki-open': wikiOpenArg(m[1]) }))
+        }
+        continue
+      }
+      if (img && onActiveLine && sourceFrom === from) continue
       if (img) {
         const len = spTo - spFrom
         decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
@@ -471,6 +481,17 @@ export function wikilinkPlugin(
             return true
           },
           decorations: (state) => buildDecorations(state, onOpen, isResolved, iconOf),
+          // 编辑中的双链源码右键 = 同一份文件菜单(渲染态部件自己派,见 widget 里的 contextmenu);已在源码态,不给「编辑」。
+          handleDOMEvents: {
+            contextmenu: (_view, e) => {
+              const src = (e.target as HTMLElement | null)?.closest?.<HTMLElement>('.wikilink-src[data-wiki-open]')
+              if (!src) return false
+              e.stopPropagation()
+              const taken = !src.dispatchEvent(new CustomEvent('amadeus:wikilink-menu', { bubbles: true, cancelable: true, detail: { inner: src.dataset.wikiOpen, x: e.clientX, y: e.clientY } }))
+              if (taken) e.preventDefault()
+              return taken
+            },
+          },
         },
       }),
   )

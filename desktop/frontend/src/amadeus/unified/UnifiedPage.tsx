@@ -2945,6 +2945,11 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         }
         return true
       },
+      focusTitle: () => {
+        if (pipe.readOnly || pipe.retired || pipe.dead || compact || canvasModeRef.current) return false
+        setTitleFocus((n) => n + 1)
+        return true
+      },
       focusBody: () => {
         if (pipe.readOnly || pipe.retired || pipe.dead) return true
         const v = layer.getView()
@@ -3080,7 +3085,12 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
   // 信号住模块级而非本 scope:新建的落点面板由 openNote 现算,创建时那份 store 未必是这一份。
   const [titleFocus, setTitleFocus] = useState(0)
   useEffect(() => {
-    if (claimTitleFocus(path)) setTitleFocus((n) => n + 1)
+    // 还没命名的笔记(未命名 / untitled[-N])不管从哪跳来都先落标题:新建后切走再回来、双链 / 快速查找进来同理。
+    // 只给活动面板(启动恢复的后台分屏 / 同篇多开的另一扇不抢);粗指针不做(一打开就弹软键盘);画布满铺没标题。
+    const untitled = !!path && !readOnly && !compact && !canvasModeRef.current && !isCoarsePointer()
+      && (scope == null || scope === activePageScope())
+      && UNTITLED_RE.test((path.split('/').pop() ?? '').replace(/\.md$/i, ''))
+    if (claimTitleFocus(path) || untitled) setTitleFocus((n) => n + 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path])
   /** 光标记忆的回放闸(C-23,caretMemory 插件经它现读):只读 / Mini / 画布模式不放;有别的落点请求(新建流聚焦标题、
