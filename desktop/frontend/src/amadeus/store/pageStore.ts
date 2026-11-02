@@ -303,8 +303,9 @@ interface PageState {
   createPage(): Promise<void>
   /** Create a new untitled page inside `folder` (vault-relative; '' = vault root) and open it. */
   createPageInFolder(folder: string): Promise<void>
-  /** 统一实例编辑器接管 path:flush 后清空本 scope 快照(防陈旧快照经 reconcile 回写)。 */
-  releasePage(path: string): Promise<void>
+  /** 统一实例编辑器接管 path:flush 后清空本 scope 快照(防陈旧快照经 reconcile 回写)。
+   *  unifiedPath = 面板已判给 unified 的那篇:它的在途装载一并作废,别篇的在途导航不动。 */
+  releasePage(path: string, unifiedPath?: string): Promise<void>
   /** 打开某路径的笔记;不存在则先创建(日记等「打开或新建」语义)。 */
   openOrCreate(path: string): Promise<void>
   renamePage(newName: string): Promise<boolean>
@@ -839,14 +840,17 @@ function makePageStore(opts: PageStoreOptions = {}) {
       await get().loadPage(path)
     },
 
-    async releasePage(path) {
+    async releasePage(path, unifiedPath) {
       // 统一实例编辑器(UnifiedPage)接管的文件:本 scope 的 v3 快照必须交出去。留着的话,
       // 它订阅的 reconcileExternal 会拿**陈旧内容**跟磁盘做合并回写 —— unified 的保存走
       // 自写账本不进 store,快照只会越来越旧,这条链等于延时毁档。flush 在先防丢待写。
+      // 面板已归 unified 的那篇还在读盘(如读盘途中按后退回到它):作废,否则快照晚到后再没人交。
+      if (unifiedPath && get().pendingPage === unifiedPath) set({ pendingPage: null })
       if (get().activePage !== path) return
       await get().flushSave()
       if (get().activePage !== path) return // flush 间隙已切走
-      set({ activePage: null, pendingPage: null, manifest: null, blocks: {} })
+      // pendingPage 只清这一篇的:在途的别篇导航照常落地。切侧后默认页才判为 unified 时,点开的那篇正在读盘,清掉它 loadPage 就放弃了。
+      set((s) => ({ activePage: null, pendingPage: s.pendingPage === path ? null : s.pendingPage, manifest: null, blocks: {} }))
     },
 
     async renamePage(newName) {
