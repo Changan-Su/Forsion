@@ -33,7 +33,8 @@ const sessionFixtures = (projectDir, defaultDir, aliasDir) => {
     { ...base, id: 'pd-main', title: 'Demo main', updated_at: '2026-09-22 11:00:00', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: projectDir } },
     { ...base, id: 'pd-coder', title: 'Coder work', updated_at: '2026-09-22 10:00:00', agent_config: { agentSlug: 'coder', execMode: 'host', cwd: projectDir } },
     { ...base, id: 'pd-team', title: 'Demo party', updated_at: '2026-09-21 10:00:00', agent_config: { groupChat: true, groupAgents: ['xyra', 'coder'], execMode: 'host', cwd: projectDir } },
-    // 默认工作区的会话(09-23 用户:「默认文件夹也是 Project」):harness 种了 localVault,默认目录 = <vault>/Sessions
+    // 默认工作区的会话(09-23 用户:「默认文件夹也是 Project」):harness 种了 localVault 并建好 <vault>/Sessions,扮老用户 ——
+    // 10-30 起新用户落 <workspace>/Sessions,库里已有 Sessions/ 的才沿用它(main.ts ensureDefaultWorkspaceDir),不建就成了普通项目
     { ...base, id: 'pd-default', title: 'Default chat', updated_at: '2026-09-18 10:00:00', project_path: defaultDir, project_name: '默认工作区', agent_config: { agentSlug: 'xyra', execMode: 'host', cwd: defaultDir } },
     // 默认目录换过位置:旧会话按 project_name(各语言的「默认工作区」)归入默认组,但它们的真实目录是别名 —— 面板必须跟会话自己的目录走;
     // 别名恰好是家目录时引擎拒收,照旧 Agent 详情(codex 评审 09-23 的两条 P2)
@@ -1035,19 +1036,33 @@ async function run(app, win, stub, seen, home, ctx) {
   await win.waitForTimeout(400)
   check('11d Agent 行「查看详情」→ 右栏显示 Coder、主区不动;切会话后自动回到跟随', agentShown && await win.locator('[data-details-subject]').count() === 0 && await details.locator('[data-project-profile]').count() === 1)
 
-  // 11e 删除 Agent:勾「同时删除相关文件」→ DELETE ?keepFiles=1(引擎先挪)→ 挪到的目录进废纸篓;侧栏行消失
+  // 11e 删除 Agent(10-28 起统一卸载框):先问引擎 uninstall-preview,逐行写清去向(文件进回收站 / 私聊归档 / 团队成员位移出 / 自动化暂停);
+  // 勾「一并删除这些私聊」→ DELETE ?deleteChats=1 → 引擎回 trashId → 侧栏行消失、6 秒「撤销」拿 trashId 恢复,行回来
+  const agentDlg = win.locator('[data-uninstall-dialog] .dialog-overlay:not([data-lcl-exit]) .dialog')
   await orbitRow('Coder').click({ button: 'right' })
   await menuItem('agent-delete').click()
-  await dialog.waitFor()
-  const agentDialog = await dialog.evaluate((el) => ({ title: el.querySelector('.dialog-title').textContent, msg: el.querySelector('.dialog-msg').textContent, check: (el.querySelector('.dialog-check') || {}).textContent || '' }))
+  await agentDlg.locator('[data-un-row="deleteChats"]').waitFor()
+  const chatsPill = () => agentDlg.locator('[data-un-row="deleteChats"] .un-pill').textContent()
+  const agentDialog = await agentDlg.evaluate((el) => ({ title: el.querySelector('.dialog-title').textContent, rows: [...el.querySelectorAll('.un-row')].map((r) => r.textContent) }))
+  agentDialog.chatsBefore = await chatsPill()
+  await agentDlg.locator('[data-un-row="deleteChats"] input').check()
+  agentDialog.chatsAfter = await chatsPill()
   await win.waitForTimeout(350) // 对话框入场动画走完再截
   await win.screenshot({ path: shots.removeAgent = shot('remove-agent-dialog-zh-light') })
-  await dialog.locator('.dialog-check input').check()
-  await dialog.locator('.dialog-btn[data-danger]').click()
-  for (let i = 0; i < 30 && !(seen.agentDeletes.length && fs.existsSync(trashDir) && fs.readdirSync(trashDir).some((n) => n.endsWith('coder-kept'))); i++) await sleep(150)
+  await agentDlg.locator('.dialog-btn[data-danger]').click()
+  for (let i = 0; i < 30 && !seen.agentDeletes.length; i++) await sleep(150)
   await orbitRow('Coder').waitFor({ state: 'detached', timeout: 5_000 }).catch(() => {})
-  const del = seen.agentDeletes[0]
-  check('11e 删除 Agent:对话框(名册与侧栏移除、文件默认留在 agents/.removed/、勾选项);勾上确认 → DELETE ?keepFiles=1、挪到的目录进废纸篓、侧栏 Coder 行消失', /删除 Agent「Coder」/.test(agentDialog.title) && /agents\/\.removed\//.test(agentDialog.msg) && /同时删除相关文件/.test(agentDialog.check) && del?.slug === 'coder' && del.keepFiles && !fs.existsSync(del.keptAt) && fs.readdirSync(trashDir).some((n) => n.endsWith('coder-kept')) && await orbitRow('Coder').count() === 0, JSON.stringify({ agentDialog, del }))
+  const undo = win.locator('.ntf-action').filter({ hasText: '撤销' })
+  await undo.waitFor({ timeout: 5_000 }).catch(() => {})
+  const del = { ...seen.agentDeletes[0], rowGone: await orbitRow('Coder').count() === 0, undo: await undo.count() }
+  await undo.click().catch(() => {})
+  for (let i = 0; i < 30 && !seen.trashRestores.length; i++) await sleep(150)
+  await orbitRow('Coder').waitFor({ timeout: 5_000 }).catch(() => {})
+  del.restores = seen.trashRestores
+  del.rowBack = await orbitRow('Coder').count() === 1
+  const rowsOk = agentDialog.rows.length === 4 && /定义、记忆与 Library.*回收站 · 30 天/.test(agentDialog.rows[0]) && /团队「Duo」里的成员位.*移出团队/.test(agentDialog.rows[2]) && /用它的自动化 · 1 个.*Daily digest.*暂停/.test(agentDialog.rows[3])
+  check('11e 删除 Agent:统一卸载框(四行去向、私聊缺省归档,勾上变删除);确认 → DELETE ?deleteChats=1、侧栏 Coder 行消失;「撤销」按引擎回的 trashId 恢复,行回来', /删除 Agent「Coder」/.test(agentDialog.title) && rowsOk && /历史私聊 · 2 条/.test(agentDialog.rows[1]) && agentDialog.chatsBefore === '归档（只读）' && agentDialog.chatsAfter === '删除'
+    && del.slug === 'coder' && del.deleteChats && del.rowGone && del.undo === 1 && del.restores.join() === 'trash-coder-1' && del.rowBack, JSON.stringify({ agentDialog, del }))
 
   // 11f 移除工作区:勾「同时删除相关文件」→ 三个会话删掉、项目里的 .tangu 进废纸篓、项目文件夹本身还在
   await groupHead('Demo Project').click({ button: 'right' })
@@ -1076,9 +1091,9 @@ async function main() {
   const userData = path.join(home, 'userData')
   const vault = path.join(home, 'vault')
   const projectDir = path.join(home, 'Demo Project')
-  for (const dir of [userData, `${userData}-dev`, vault, projectDir]) fs.mkdirSync(dir, { recursive: true })
+  for (const dir of [userData, `${userData}-dev`, path.join(vault, 'Sessions'), projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
-  const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [],
+  const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [], agentTrash: {}, trashRestores: [],
     gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [], github: null, pushGithubUnlinkedOnce: false, gitRemotes: [], gitGithubPublishes: [], accountsGets: 0, gitPushTargets: [], pushOwnOnce: false, pushDeniedOnce: false, gitClones: [], cloneExistsOnce: false,
     repos: { forsion: [{ fullName: 'dave/notes', private: true, cloneUrl: 'https://git.forsion.example/dave/notes.git', updatedAt: '2026-10-10T08:00:00Z' }, { fullName: 'dave/plugin-demo', private: false, cloneUrl: 'https://git.forsion.example/dave/plugin-demo.git', updatedAt: null }], github: 'unlinked' },
     accounts: { forsionGit: { webUrl: 'https://git.forsion.example', username: 'dave' }, github: { linked: false }, identity: { name: 'Dave', email: 'dave@noreply.git.forsion.example', source: 'forsion' } } }
@@ -1286,14 +1301,23 @@ async function main() {
       }
     }
     if (/^\/agent\/sessions\/[^/]+$/.test(route) && method === 'DELETE') { const id = route.split('/')[3]; seen.sessionDeletes.push(id); const i = sessions.findIndex((x) => x.id === id); if (i >= 0) sessions.splice(i, 1); return { ok: true } }
-    // 删 Agent:?keepFiles=1 = 引擎把目录挪走并回 keptAt(这里造一个真目录,桌面随后把它移进 e2e 废纸篓);名册同步去掉它
+    // 删 Agent(10-28 起整份进引擎回收站):?deleteChats=1 = 私聊一起删;回 trashId,桌面的「撤销」拿它 POST /agent/trash/<id>/restore
     if (/^\/agent\/agents\/[^/]+$/.test(route) && method === 'DELETE') {
-      const slug = route.split('/')[3], keepFiles = url.searchParams.get('keepFiles') === '1'
-      const keptAt = keepFiles ? path.join(home, 'removed', `${slug}-kept`) : undefined
-      if (keptAt) { fs.mkdirSync(keptAt, { recursive: true }); fs.writeFileSync(path.join(keptAt, 'MEMORY.md'), '- x\n') }
-      seen.agentDeletes.push({ slug, keepFiles, keptAt })
-      const i = AGENTS.findIndex((a) => a.slug === slug); if (i >= 0) AGENTS.splice(i, 1)
-      return { ok: true, ...(keptAt ? { keptAt } : {}) }
+      const slug = route.split('/')[3], i = AGENTS.findIndex((a) => a.slug === slug)
+      seen.agentDeletes.push({ slug, deleteChats: url.searchParams.get('deleteChats') === '1' })
+      if (i >= 0) seen.agentTrash[`trash-${slug}-1`] = AGENTS.splice(i, 1)[0]
+      return { ok: true, trashId: `trash-${slug}-1` }
+    }
+    if (/^\/agent\/trash\/[^/]+\/restore$/.test(route) && method === 'POST') {
+      const id = decodeURIComponent(route.split('/')[3]), def = seen.agentTrash[id]
+      seen.trashRestores.push(id)
+      if (def) { AGENTS.push(def); delete seen.agentTrash[id] }
+      return { ok: true, slug: def?.slug }
+    }
+    // 卸载框的预览(引擎 services/agentUninstall,形状同 AgentUninstallPreview):两条私聊、一个团队成员位、一个自动化 → 四行都画出来
+    if (/^\/agent\/agents\/[^/]+\/uninstall-preview$/.test(route) && method === 'GET') {
+      const slug = route.split('/')[3]
+      return { slug, name: AGENTS.find((a) => a.slug === slug)?.name || slug, blocked: null, size: 4096, chats: 2, cloud: false, teams: [{ slug: 'duo', name: 'Duo', dissolve: false }], automations: [{ id: 'auto-1', desc: 'Daily digest' }] }
     }
     return undefined
   } })
