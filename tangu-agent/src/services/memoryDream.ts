@@ -264,7 +264,14 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
       // out — expanding keep here would duplicate up to a whole memory in the verify input (Codex review 09-22).
       const kept = new Set(proposal.keep);
       const compact = { keep: proposal.keep, groups: proposal.groups.filter((g) => !(g.sourceIds.length === 1 && kept.has(g.sourceIds[0]))), discarded: proposal.discarded };
-      const verification: any = await complete(portrait ? VERIFY + VERIFY_PERSON : VERIFY, JSON.stringify({ sources, proposal: compact }), Math.floor(data.config.maxOutputTokens * 0.25));
+      const verify = (): Promise<any> => complete(portrait ? VERIFY + VERIFY_PERSON : VERIFY, JSON.stringify({ sources, proposal: compact }), Math.floor(data.config.maxOutputTokens * 0.25));
+      let verification = await verify();
+      // 提议要去画像、核验不同意:这几组退回记忆再核一次。整轮作废的话候选留在收件箱,下一轮还是同样的分歧,这个 Agent 的记忆就一直整理不了。
+      if (verification?.ok !== true && proposal.groups.some((group) => group.to)) {
+        for (const group of proposal.groups) delete group.to;
+        check();
+        verification = await verify();
+      }
       if (verification?.ok !== true) throw new Error(`Memory verification rejected: ${String(verification?.reason || 'unsupported change').slice(0, 200)}`);
       check();
       // 先写画像、再照旧提交记忆:画像里已有同一句 / 被忘过(墓碑)→ 跳过,也不进记忆;写不进去(满了、比 remember 的 300 字长、读写出错)→ 这一组退回记忆,不丢。

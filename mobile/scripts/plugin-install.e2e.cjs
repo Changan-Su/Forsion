@@ -594,6 +594,7 @@ async function main() {
     await openPluginSettings()
     await tap(row, '插件详情')
     await tap(page.locator('[data-plugin-uninstall]'), '卸载')
+    await tap(page.locator('[data-uninstall-dialog] [data-danger]'), '确认卸载')
     await page.waitForTimeout(800)
     const s2 = await hostState()
     check(s2.listed === 0 && !s2.installed.includes(PLUGIN_ID), '卸载后文件没了(listPlugins / marketInstalled 都看不到)', JSON.stringify(s2))

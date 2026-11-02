@@ -4953,9 +4953,12 @@ Then reply with only the command output.`,
     await api('/agent/agents/xyra/memory/dream', { method: 'POST', body: '{}' });
     const st = await until(async () => { const d = await api('/agent/agents/xyra/memory/dream'); return d.status && !d.status.running && d.status.state !== 'idle' ? d.status : null; }, 200_000, 3000);
     const mem = await api('/agent/memory');
-    const content = String(mem.content ?? mem.memory ?? '');
+    // 10-29 起关于这个人的事实可以进画像:记忆和画像合起来两条都在才算没丢
+    const soulPath = join(home, 'human', 'SOUL.md');
+    const portrait = existsSync(soulPath) ? readFileSync(soulPath, 'utf8') : '';
+    const content = `${String(mem.content ?? mem.memory ?? '')}\n${portrait}`;
     const hit = content.includes(FACT_DB) && content.includes(FACT_CODE);
-    return { ok: st?.state === 'completed' && hit, detail: `${st ? st.state + ':' + (st.detail || '') : '200s 未结束'};MEMORY ${hit ? '含事实' : '不含事实'}`, output: `【status】${JSON.stringify(st)}\n\n【MEMORY】\n${content}` };
+    return { ok: st?.state === 'completed' && hit, detail: `${st ? st.state + ':' + (st.detail || '') : '200s 未结束'};MEMORY ${hit ? '含事实' : '不含事实'}`, output: `【status】${JSON.stringify(st)}\n\n【MEMORY + 画像】\n${content}` };
   });
 
   await scenario('recall', 'recall 新会话回忆', async () => {
