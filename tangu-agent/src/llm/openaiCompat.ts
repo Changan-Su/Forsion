@@ -54,7 +54,7 @@ export function resolveCacheKey(opts: { cacheKey?: string; agentId?: string; api
  *    严格网关见到未知键直接 400,故本函数是最后一道、也是**不看端点**的那道闸。
  * 2. `reasoning_content` **默认剥掉,只对已知收该字段的族放行**:DeepSeek 现行文档要求带 tools 的续轮
  *    把此前每条 assistant 的 reasoning_content 原样回传,否则 400;GLM(zai)线上形态相同;Qwen 只在
- *    开思考时收。其余端点(OpenAI 官方 / Azure / vLLM 类网关)对未知键没有文档 —— 未知端点绝不发未知字段。
+ *    开思考时收;Kimi K3 系官方同样要求原样回传(能力表 replayReasoning)。其余端点(OpenAI 官方 / Azure / vLLM 类网关)对未知键没有文档 —— 未知端点绝不发未知字段。
  *    该字段只挂在**本 run 内存里**的 assistant 消息上(落库与跨 run 水合都不带),天然「同轮内回灌」。
  */
 export function compatWireMessages(payload: any, target: { baseUrl?: string; provider?: string }): any[] {
@@ -68,6 +68,7 @@ export function compatWireMessages(payload: any, target: { baseUrl?: string; pro
     modelId: String(payload?.model || ''),
   });
   const replay =
+    cap.replayReasoning ||
     cap.format === 'deepseek' || cap.format === 'zai' || (cap.format === 'qwen' && payload?.enable_thinking === true);
   return msgs.map((m) => {
     if (!internal(m)) return m;
