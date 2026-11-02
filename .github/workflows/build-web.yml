@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths:
+    paths: &web_paths
       - 'web/**'
       - 'desktop/frontend/src/**'   # web 的主体渲染层(@/@amadeus 别名)
       - 'desktop/frontend/index.html' # 开屏预览复用的模板
@@ -36,6 +36,9 @@ on:
       - 'mobile/src/**'             # @mobile(手机端壳,web 按 UA 装载)
       - '.github/workflows/build-web.yml'
       # ⚠️ 以上须与 web/Dockerfile 的 COPY 源保持一致,新增 COPY 记得补这里。
+  # PR 只跑 typecheck 这道闸(含真 Extend 台架),不出镜像:原来只在 main 上跑,台架红了要等合并后才看见。
+  pull_request:
+    paths: *web_paths
 
 permissions:
   contents: read
@@ -84,6 +87,7 @@ jobs:
 
   build:
     needs: typecheck
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
