@@ -142,7 +142,7 @@ export async function markStarter(userId: string, id: string, status: 'dismissed
 export function buildStarterHint(active: Array<Pick<Starter, 'text' | 'source'>>, dismissed: string[]): string {
   const shown = active.length
     ? active.map((s) => `- ${s.text} (source: ${s.source.kind} "${s.source.label}")`).join('\n')
-    : '- (none yet)';
+    : '- (none yet: call set_chat_starters this cycle with up to three, drawn from what you see below)';
   const gone = dismissed.length ? `\nDismissed by the user recently (do not suggest these or anything similar): ${dismissed.slice(0, 15).join('; ')}` : '';
   return `\n\n[Chat starters currently shown on the new-chat page]\n${shown}${gone}`;
 }

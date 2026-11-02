@@ -141,7 +141,7 @@ describe('周期简报', () => {
     expect(hint).toContain('Dismissed by the user recently (do not suggest these or anything similar): Draft the Q4 plan');
   });
   it('一条都没有也要说一声(Muse 才知道该放了)', () => {
-    expect(buildStarterHint([], [])).toContain('- (none yet)');
+    expect(buildStarterHint([], [])).toContain('- (none yet: call set_chat_starters');
   });
   it('去重键不计大小写与句末标点', () => {
     expect(starterKey('Draft one.')).toBe(starterKey(' draft ONE '));
