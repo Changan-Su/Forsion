@@ -5,6 +5,7 @@ import { TANGU_SLICE } from '../tangu/store/tanguSlice'
 import { translate } from '../i18n'
 import { ChatView } from '../views/ChatView'
 import { ChatPreview } from '../views/chat2/ChatPreview'
+import { setDraftField, useComposerDrafts } from '../views/chat2/composerDrafts'
 import { ProcessLogView } from '../views/chat2/BackgroundProcs'
 import { BtwHost, BtwPanel, BtwSideView } from '../views/chat2/BtwPanel'
 import { btwSeedOf, btwWebVisible, openBtw, quoteInMainChat, useBtw } from '../views/chat2/btwStore'
@@ -16,7 +17,7 @@ import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/Ag
 import { hasNativeFeature, tanguProbeAvailable } from './runtime'
 import { quoteInChatPanel } from '../views/chat2/chatPanelQuote'
 import { SessionTabIcon } from '../components/SessionIcon'
-import { setTanguChatOutline, setTanguChatViews, setTanguInboxTasks, setTanguNewChat, setTanguPrefs, setTanguShell, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
+import { setTanguChatOutline, setTanguChatViews, setTanguDrafts, setTanguInboxTasks, setTanguNewChat, setTanguPrefs, setTanguShell, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
 import { inboxTasks } from '../views/chat2/inboxTasks'
 import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { isPromptSuggestOn, setPromptSuggest } from '../views/chat2/promptSuggest'
@@ -112,6 +113,15 @@ export function registerTanguViews(): void {
   setTanguInboxTasks(inboxTasks)
   setTanguPrefs({ chatAvatars: { get: isChatAvatarsOn, set: setChatAvatarsOn }, promptSuggest: { get: isPromptSuggestOn, set: setPromptSuggest } })
   setTanguNewChat({ Composer: NewChatComposer, send: sendFromNewChat, startCall: startNewChatCall, mount: mountNewChatComposer, blank: blankNewChat })
+  setTanguDrafts({
+    read: () => Object.fromEntries(Object.entries(useComposerDrafts.getState()).map(([k, d]) => [k, { text: d.text, pastes: d.pastes }])),
+    fill: (key, d) => {
+      const cur = useComposerDrafts.getState()[key]
+      if (d.text && !cur?.text) setDraftField(key, 'text', d.text)
+      if (d.pastes.length && !cur?.pastes.length) setDraftField(key, 'pastes', d.pastes)
+    },
+    subscribe: (fn) => useComposerDrafts.subscribe(fn),
+  })
   setTanguSidebarModes({ Orbits: OrbitsView, Sessions: SessionsView })
   setTanguChatOutline(TocView) // 「大纲」视图在主区是对话时画会话目录
   setTanguChatViews({ Chat: ChatView, Preview: ChatPreview }) // 宿主嵌固定会话处(图像工作室 / 插件聊天 / mini)与外观预览窗口

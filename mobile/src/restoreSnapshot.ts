@@ -11,7 +11,7 @@
 import { listFirstNow, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { launchRestored } from '@/spaces'
 import { useApp } from '@/stores/appStore'
-import { setDraftField, useComposerDrafts } from '@/views/chat2/composerDrafts'
+import { readTanguDrafts } from '@/amadeus/plugins/tanguSeam'
 
 const KEY = 'forsion_restore_v1'
 
@@ -23,7 +23,7 @@ let tookOver = false
 function save(): void {
   const drafts: Record<string, string> = {}
   const pastes: Record<string, string[]> = {}
-  for (const [key, d] of Object.entries(useComposerDrafts.getState())) {
+  for (const [key, d] of Object.entries(readTanguDrafts()?.read() ?? {})) {
     if (d.text) drafts[key] = d.text
     if (d.pastes.length) pastes[key] = d.pastes
   }
@@ -42,7 +42,7 @@ export function installRestoreSnapshot(): void {
 
   let timer = 0
   const later = (): void => { if (!timer) timer = window.setTimeout(() => { timer = 0; save() }, 1000) }
-  useComposerDrafts.subscribe(later)
+  readTanguDrafts()?.subscribe(later)
   useApp.subscribe((s, p) => { if (s.activeId !== p.activeId) later() })
   useWorkspace.subscribe((s, p) => { if (s.leftVisible !== p.leftVisible) later() })
   document.addEventListener('visibilitychange', () => { if (document.hidden) save() })
@@ -51,11 +51,9 @@ export function installRestoreSnapshot(): void {
   if (!snap) return
   const takeOver = (): void => { tookOver = true }
   for (const ev of ['pointerdown', 'keydown'] as const) window.addEventListener(ev, takeOver, { capture: true, once: true })
-  for (const [key, text] of Object.entries(snap.drafts ?? {})) {
-    if (!useComposerDrafts.getState()[key]?.text) setDraftField(key, 'text', text)
-  }
-  for (const [key, list] of Object.entries(snap.pastes ?? {})) {
-    if (!useComposerDrafts.getState()[key]?.pastes.length) setDraftField(key, 'pastes', list)
+  const drafts = readTanguDrafts()
+  for (const key of new Set([...Object.keys(snap.drafts ?? {}), ...Object.keys(snap.pastes ?? {})])) {
+    drafts?.fill(key, { text: snap.drafts?.[key] ?? '', pastes: snap.pastes?.[key] ?? [] })
   }
   if (snap.onMain) backIntoMain()
   // 会话:列表是异步拉的,本窗口首次连上时还会兜底选第一条(appStore.connect)—— 那不是人选的,照样换回上次那条;
