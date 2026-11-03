@@ -30,7 +30,7 @@ import { readTextOr, utf8Decode, withPluginDirLock, writeText, type PluginFs } f
 export interface CoreBundle {
   pkg: string
   manifest: { id: string; version: string }
-  /** 额外的闸(Extend:签名 + mobileHostApi)。抛错 = 这份不能用。拿到的是包内全部文件(相对包根)。 */
+  /** 额外的闸(Extend:签名 + mobileHostApi)。抛错 = 这份不能用。拿到的是包内全部文件(相对包根),可以删掉不该落盘的。 */
   verify?: (files: Map<string, Uint8Array>) => Promise<void> | void
 }
 
@@ -58,7 +58,10 @@ async function readOpt(fs: PluginFs, path: string): Promise<Uint8Array | null | 
   try { return await fs.readBytes(path) } catch { return (await fs.stat(path).catch(() => 'unknown')) ? 'unreadable' : null }
 }
 
-type Copy = { kind: 'missing' | 'unreadable' | 'invalid' } | { kind: 'ok'; version: string; manifest: Record<string, unknown> }
+type Copy = { kind: 'missing' | 'unreadable' | 'invalid' } | { kind: 'ok'; version: string; manifest: Record<string, unknown>; files?: Map<string, Uint8Array> }
+
+/** 这次启动验过、可以用的下载版。files = 带 verify 的包(Extend)验过的那份字节:宿主只用它,不再回盘上读。 */
+export interface VerifiedCopy { version: string; files?: ReadonlyMap<string, Uint8Array> }
 
 /**
  * 看一份副本(暂存区或已换上的那份):目录不在 → missing;读不出来 → unreadable(不知道,不能据此删,这次也不用它);
@@ -77,6 +80,7 @@ async function inspect(fs: PluginFs, dir: string, bundle: CoreBundle): Promise<C
     try { files = await readTree(fs, dir) } catch { return { kind: 'unreadable' } }
     files.delete(COMPLETE)
     try { await bundle.verify(files) } catch { return { kind: 'invalid' } }
+    return { kind: 'ok', version, manifest: m, files }
   }
   return { kind: 'ok', version, manifest: m }
 }
@@ -103,11 +107,11 @@ const MAX_UNCONFIRMED_BOOTS = 2
 /**
  * 启动时、插件第一次清点之前跑一次(installMobilePlugins 让宿主的每个方法先等它):
  * 判启动标记 → 把暂存区换进 plugins/<id> → 清掉追不上随包版 / 坏掉的副本 → 给这次要用的下载版写启动标记。
- * 返回这次启动验过、可以用的下载版 `id → 版本`:宿主(withBundled*)只认这里面的,盘上别的副本一律不用。
+ * 返回这次启动验过、可以用的下载版(`id → 版本 + 验过的字节`):宿主(withBundled*)只认这里面的,盘上别的副本一律不用。
  * 逐包吞错:出什么事都只是退回随包版。
  */
-export async function prepareCoreUpdates(fs: PluginFs, bundles: readonly CoreBundle[], appVersion: string | null, log: (m: string) => void = console.warn): Promise<Map<string, string>> {
-  const using = new Map<string, string>()
+export async function prepareCoreUpdates(fs: PluginFs, bundles: readonly CoreBundle[], appVersion: string | null, log: (m: string) => void = console.warn): Promise<Map<string, VerifiedCopy>> {
+  const using = new Map<string, VerifiedCopy>()
   await withPluginDirLock(fs, async () => {
     await recoverPluginDirs(fs).catch(() => {})
     for (const bundle of bundles) {
@@ -146,7 +150,7 @@ export async function prepareCoreUpdates(fs: PluginFs, bundles: readonly CoreBun
         else if (current.kind === 'ok' && !gatePluginManifest(current.manifest, appVersion)) {
           const strikes = boot.version === current.version && boot.strikes < MAX_UNCONFIRMED_BOOTS ? boot.strikes : 0
           await writeText(fs, bootVersionOf(id), `${current.version} ${strikes + 1}`)
-          using.set(id, current.version)
+          using.set(id, { version: current.version, files: current.files })
         }
         if (!using.has(id) && boot.version) await fs.removeDir(bootMarkerOf(id)) // 这次没用下载版:旧标记不再作数
       } catch (e) {
@@ -259,7 +263,7 @@ export async function checkCoreUpdates(o: CoreUpdatesDeps): Promise<string[]> {
       }
       const main = mainRelOf(manifest.main)
       if (!main || !files.has(main)) throw new Error(`entry ${String(manifest.main ?? 'main.js')} missing`)
-      await bundle.verify?.(new Map(files))
+      await bundle.verify?.(files) // Extend:签名不过就抛;没签的文件当场删掉,不落盘
 
       // 写暂存:先写进 .staging-core-<id>(manifest 最后写),再换成 .pending-<id>,最后写 .complete —— 没有它的暂存区启动时一律丢掉
       // (改名在浏览器台架 / 原生兜底分支上是逐个复制,不原子)。整段持目录锁,不与市场安装 / 启动换版交错。
