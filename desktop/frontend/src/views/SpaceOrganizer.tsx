@@ -29,7 +29,21 @@ registerMessages({
   'home.organizer.folderName': { zh: '收纳夹', en: 'Folder' },
   'home.organizer.noMatch': { zh: '没有叫这个名字的 Space', en: 'No Space matches' },
   'home.showAllKey': { zh: '全部 Spaces（{key}）', en: 'All Spaces ({key})' },
+  'home.organizer.titleAll': { zh: '收纳', en: 'Organizer' },
+  'home.organizer.tab.spaces': { zh: 'Space', en: 'Spaces' },
+  'home.organizer.tab.widgets': { zh: '小组件', en: 'Widgets' },
+  'home.organizer.tab.parts': { zh: '主页组件', en: 'Home parts' },
+  'home.organizer.widgetCount': { zh: '{n} 个小组件', en: '{n} widgets' },
+  'home.organizer.partCount': { zh: '{n} 个主页组件', en: '{n} Home parts' },
 })
+
+/** 主页里的收纳多两个标签(主页第三 / 四轮):小组件、主页组件;Space 标签就是原来这块。别处(⌘⇧O)只有 Space。 */
+export type OrganizerTab = 'spaces' | 'widgets' | 'parts'
+export interface OrganizerTabs {
+  tab: OrganizerTab
+  onTab: (tab: OrganizerTab) => void
+  panes: Record<'widgets' | 'parts', { node: React.ReactNode; count: number; footer: string }>
+}
 
 /** 命令「切换 Space」的 id(bootstrapEngine 注册;缺省键 mod+shift+o)。提示里的键跟着用户改的键走。 */
 export const SWITCH_SPACE_COMMAND = 'set-active-space'
@@ -115,8 +129,9 @@ export function SortableTile({
 const asTile = (space: SpaceDefinition): ShelfTile => ({ kind: 'space', id: `space:${space.id}`, space })
 
 export function SpaceOrganizer({
-  onClose, onLaunch, byKey = false, skip, onOpenFolder, onFolderMenu, onDragStart,
+  onClose, onLaunch, byKey = false, skip, onOpenFolder, onFolderMenu, onDragStart, tabs,
 }: {
+  tabs?: OrganizerTabs
   onClose: () => void
   onLaunch: (spaceId: string) => void
   /** 用快捷键 / 命令打开:搜索框聚焦、默认选中上一个用过的 Space、底部写按键。 */
@@ -235,6 +250,8 @@ export function SpaceOrganizer({
 
   const key = commandHotkeyText(SWITCH_SPACE_COMMAND)
   const count = spaces.filter((s) => s.id !== skip).length
+  const tab: OrganizerTab = tabs?.tab ?? 'spaces'
+  const pane = tab === 'spaces' ? null : tabs?.panes[tab] ?? null
   return (
     <div className="hp-organizer-stage" onClick={onClose}>
       <section className="hp-organizer-panel" aria-label={t('home.organizer.title')} onClick={(event) => event.stopPropagation()} onKeyDown={onKeyDown}>
@@ -243,9 +260,18 @@ export function SpaceOrganizer({
             {folder?.kind === 'folder'
               ? <button type="button" className="hp-organizer-mark" onClick={() => setScope(null)} aria-label={t('home.organizer.back')}><ChevronLeft size={16} /></button>
               : <span className="hp-organizer-mark"><Grid2X2 size={16} /></span>}
-            <span><strong>{t('home.organizer.title')}</strong><small>{folder?.kind === 'folder' ? folder.folder.name : t('home.spaceCount', { n: count })}</small></span>
+            <span><strong>{t(tabs ? 'home.organizer.titleAll' : 'home.organizer.title')}</strong><small>{pane
+              ? t(tab === 'widgets' ? 'home.organizer.widgetCount' : 'home.organizer.partCount', { n: pane.count })
+              : folder?.kind === 'folder' ? folder.folder.name : t('home.spaceCount', { n: count })}</small></span>
           </div>
-          <label className="hp-organizer-search">
+          {tabs && (
+            <div className="hp-organizer-tabs" role="tablist">
+              {(['spaces', 'widgets', 'parts'] as const).map((k) => (
+                <button key={k} type="button" role="tab" aria-selected={tab === k} className={tab === k ? 'on' : ''} data-tab={k} onClick={() => tabs.onTab(k)}>{t(`home.organizer.tab.${k}`)}</button>
+              ))}
+            </div>
+          )}
+          {!pane && <label className="hp-organizer-search">
             <Search size={13} />
             <input
               value={query}
@@ -255,10 +281,10 @@ export function SpaceOrganizer({
               aria-label={t('home.organizer.search')}
               onChange={(event) => { setQuery(event.target.value); setSel(event.target.value.trim() ? 0 : -1) }}
             />
-          </label>
+          </label>}
           <button type="button" onClick={onClose} aria-label={t('common.close')}><X size={16} /></button>
         </header>
-        <DndContext
+        {pane ? <div className="hp-organizer-pane" role="tabpanel">{pane.node}</div> : <DndContext
           sensors={sensors}
           collisionDetection={dockCollision}
           onDragStart={(event) => { setDrag(String(event.active.id)); onDragStart?.() }}
@@ -298,9 +324,9 @@ export function SpaceOrganizer({
               </div>
             )}
           </DragOverlay>
-        </DndContext>
+        </DndContext>}
         <footer>
-          {byKey
+          {pane ? pane.footer : byKey
             ? <span className="hp-organizer-keys"><span><kbd>← → ↑ ↓</kbd> {t('home.organizer.select')}</span><span><kbd>↵</kbd> {t('home.organizer.open')}</span><span><kbd>Esc</kbd> {t('common.close')}</span></span>
             : key ? t('home.organizer.hintKey', { key }) : t('home.organizer.hint')}
         </footer>

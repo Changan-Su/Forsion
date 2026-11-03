@@ -730,7 +730,8 @@ export interface ToolsResponse {
     connector?: string
     /** 插件自带的 server(引擎插件 manifest 的 mcpServers):不在 mcp.json 里,设置页只读展示。 */
     origin?: { pluginId: string; pluginName: string }
-    tools: Array<{ name: string; description: string }>
+    /** remoteName:远端 server 上的原名(name 是桥接名 mcp__x__y)。旧引擎缺省。 */
+    tools: Array<{ name: string; remoteName?: string; description: string }>
     /** 这个 server 的工具定义每个请求约占多少 token(名字 + 描述 + 参数 schema 的 JSON 按 4 字符 = 1 token 估)。旧引擎缺省。 */
     approxTokens?: number
   }>

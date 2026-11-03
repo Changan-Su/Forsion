@@ -110,6 +110,7 @@
     "e2e:museagentspace": "node scripts/muse-agentspace.e2e.cjs",
     "e2e:inboxamadeus": "node scripts/inbox-amadeus.e2e.cjs",
     "e2e:planlive": "node scripts/plan-live.e2e.cjs",
+    "e2e:widgetrender": "node scripts/widget-render.e2e.cjs",
     "live:harness": "cd ../tangu-agent && npm run live:harness",
     "probe:gzipupload": "node scripts/gzip-upload.probe.cjs",
     "e2e:realtimevoice": "node scripts/realtime-voice.e2e.cjs",

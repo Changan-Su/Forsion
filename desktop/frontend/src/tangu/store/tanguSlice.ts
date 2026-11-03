@@ -1312,6 +1312,9 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
         if (!pl.isError) get().deskAutoShow(sessionId, String(pl.id)) // 成功:磁盘真身顶格(覆盖直播格)
         // 插件结果卡片声明落点 desk 的:直播到达这一刻进 Desk 一次(按需加载:卡片模块拉着插件宿主,store 不静态引它)
         if (!pl.isError && !pl.parked) void import('../../components/PluginToolCard').then((m) => m.placeLiveToolCard(sessionId, String(pl.id))).catch(() => {})
+        // 动过小组件的工具回来 → 卡片区 / 仪表盘 / 主页上同一张原件重读
+        const toolName = list.find((m) => m.id === owner)?.toolEvents?.find((tt) => tt.id === pl.id)?.name
+        if (!pl.isError) void import('../../services/widgetClient').then((m) => m.noteToolResult(toolName)).catch(() => {})
         get().deskLiveClear(sessionId, String(pl.id)) // 失败/未切换成功的直播格残留在此清场(成功路径上是 no-op)
         break
       }
