@@ -260,6 +260,7 @@ describe('checklist labels with {{ }}', () => {
 })
 
 // 小组件第 3 步:原生卡读得到自己的记录(data.db 的行)。之前记一笔写进 data.db,卡看不见,账本哪里都是空的。
+// 宿主绑定优先,声明是退路:传了行(哪怕空列表)就读行;没传(普通对话卡、旧聊天记录、引擎的初值检查)声明了读自己的,没声明读空列表。
 describe('records in a widget document', () => {
   const ledger = {
     version: 2, id: 'ledger', title: 'Ledger', inputs: [], resources: [],
@@ -271,7 +272,7 @@ describe('records in a widget document', () => {
     ],
   }
   const rows = [{ id: 'r_1', cells: { item: '午饭', amount: 38 } }, { id: 'r_2', cells: { item: 'tea', amount: 12 } }]
-  it('reads records in derived values, stats, table rows, text and when', () => {
+  it('reads bound records in derived values, stats, table rows, text and when', () => {
     const doc = validateUIDocument(ledger)
     const env = documentEnv(doc, {}, new Map(), 'zh', rows)
     expect(env.text("format(total, 'number', 0)")).toBe('50')
@@ -281,31 +282,44 @@ describe('records in a widget document', () => {
     expect(env.text('{{count(filter(records,\'r\',r.amount > 30))}}')).toBe('1')
     expect(env.cell('records[0].id')).toEqual({ ok: true, value: 'r_1' })
   })
-  it('is an empty list outside a widget and at the engine\'s initial-value check', () => {
+  it('undeclared and unbound reads as an empty list, also at the engine\'s initial-value check', () => {
     const doc = validateUIDocument(ledger)
     expect(documentEnv(doc, {}, new Map(), 'en').text('{{count(records)}}')).toBe('0')
     expect(uiDocumentIssues(doc)).toEqual([])
     expect(uiDocumentIssues(validateUIDocument({ ...ledger, derived: [...ledger.derived, { id: 'first', expr: 'records[0].amount' }] }))).toEqual(['derived first: index 0 is outside the list (0 items)'])
   })
-  it('cannot be declared as an input, state or derived value, nor be a loop name', () => {
-    const reserved = /"records" is reserved: it is the list of a widget's saved records/
-    expect(() => validateUIDocument({ ...ledger, state: [{ id: 'records', initial: [] }] })).toThrow(reserved)
-    expect(() => validateUIDocument({ ...ledger, derived: [{ id: 'records', expr: '[]' }] })).toThrow(reserved)
-    expect(() => validateUIDocument({ ...ledger, inputs: [{ id: 'records', kind: 'number', label: 'n', initial: 1, min: 0, max: 5, step: 1 }], blocks: [{ id: 'c', kind: 'controls', inputIds: ['records'] }, ...ledger.blocks] })).toThrow(reserved)
-    expect(() => validateUIDocument({ ...ledger, derived: [{ id: 'x', expr: "each([1],'records',1)" }] })).toThrow(/quoted item name/)
-    // v1 没有表达式,input 叫 records 不碍事
-    expect(validateUIDocument({ version: 1, id: 'v1', title: 'v1', inputs: [{ id: 'records', kind: 'number', label: 'n', initial: 1, min: 0, max: 5, step: 1 }], resources: [], blocks: [{ id: 'c', kind: 'controls', inputIds: ['records'] }] }).version).toBe(1)
+  it('an old card that declares records still validates and reads its own value when unbound; bound rows win', () => {
+    const old = { ...ledger, state: [{ id: 'records', initial: [{ id: 'a', item: 'old', amount: 5 }] }, { id: 'n', initial: 0 }] }
+    const doc = validateUIDocument(old)
+    const vars = new Map((doc.state || []).map(s => [s.id, s.initial]))
+    expect(documentEnv(doc, {}, vars, 'zh').text("format(total, 'number', 0)")).toBe('5')
+    expect(uiDocumentIssues(doc)).toEqual([])
+    expect(documentEnv(doc, {}, vars, 'zh', rows).text("format(total, 'number', 0)")).toBe('50')
+    expect(documentEnv(doc, {}, vars, 'zh', []).text('{{count(records)}}')).toBe('0') // 绑定的空列表也是绑定
+    // derived / v2 input 叫 records 也照旧收
+    const asDerived = validateUIDocument({ ...ledger, derived: [{ id: 'records', expr: "[{amount: 7}]" }, ...ledger.derived] })
+    expect(documentEnv(asDerived, {}, new Map(), 'zh').text('{{total}}')).toBe('7')
+    expect(documentEnv(asDerived, {}, new Map(), 'zh', rows).text('{{total}}')).toBe('50')
+    const asInput = validateUIDocument({ ...ledger, derived: [], inputs: [{ id: 'records', kind: 'number', label: 'n', initial: 1, min: 0, max: 5, step: 1 }], blocks: [{ id: 'c', kind: 'controls', inputIds: ['records'] }, { id: 't', kind: 'text', markdown: '{{records}}' }] })
+    expect(documentEnv(asInput, { records: 3 }, new Map(), 'zh').text('{{records}}')).toBe('3')
+    // 前面的 derived 读 records、后面又声明 derived records:绕成圈时报错,不爆栈
+    const loop = validateUIDocument({ ...ledger, derived: [{ id: 'a', expr: 'count(records)' }, { id: 'records', expr: '[a]' }], blocks: [{ id: 't', kind: 'text', markdown: '{{a}}' }] })
+    expect(documentEnv(loop, {}, new Map(), 'zh').cell('a')).toMatchObject({ ok: false, error: expect.stringMatching(/depends on itself/) })
+    expect(documentEnv(loop, {}, new Map(), 'zh', rows).cell('a')).toEqual({ ok: true, value: 2 })
   })
-  it('no button can change it', () => {
-    const doc = { ...ledger, state: [{ id: 'n', initial: 0 }] }
-    for (const step of [{ set: 'records', to: '[]' }, { append: 'records', value: '1' }, { remove: 'records', value: '1' }, { toggle: 'records' }, { reset: 'records' }]) {
-      expect(() => validateUIDocument({ ...doc, blocks: [...doc.blocks, { id: 'a', kind: 'actions', items: [{ id: 'b', label: 'B', kind: 'set', steps: [step] }] }] })).toThrow(/reserved.*buttons cannot change it/)
-    }
-    // 按钮算新值时读得到记录
-    const parsed = validateUIDocument({ ...doc, blocks: [...doc.blocks, { id: 'a', kind: 'actions', items: [{ id: 'b', label: 'B', kind: 'set', steps: [{ set: 'n', to: 'count(records)' }] }] }] })
-    const steps = (parsed.blocks.at(-1) as { items: { steps: [] }[] }).items[0].steps
-    expect(applyUISteps(parsed, steps, {}, new Map([['n', 0]]), 'zh', rows).get('n')).toBe(2)
-    expect(applyUISteps(parsed, steps, {}, new Map([['n', 0]]), 'zh').get('n')).toBe(0)
+  it('buttons: a declared records state can be set; bound, records keeps reading the rows; steps read records', () => {
+    const doc = { ...ledger, state: [{ id: 'records', initial: [] }, { id: 'n', initial: 0 }] }
+    const setRecords = validateUIDocument({ ...doc, blocks: [...doc.blocks, { id: 'a', kind: 'actions', items: [{ id: 'b', label: 'B', kind: 'set', steps: [{ append: 'records', value: '{amount: 9}' }] }] }] })
+    const append = (setRecords.blocks.at(-1) as { items: { steps: [] }[] }).items[0].steps
+    const unbound = applyUISteps(setRecords, append, {}, new Map<string, UIValue>([['records', []], ['n', 0]]), 'zh')
+    expect(documentEnv(setRecords, {}, unbound, 'zh').text('{{total}}')).toBe('9')
+    const bound = applyUISteps(setRecords, append, {}, new Map<string, UIValue>([['records', []], ['n', 0]]), 'zh', rows)
+    expect(documentEnv(setRecords, {}, bound, 'zh', rows).text('{{total}}')).toBe('50') // 写进了 state,读的仍是行
+    expect(() => validateUIDocument({ ...ledger, blocks: [...ledger.blocks, { id: 'a', kind: 'actions', items: [{ id: 'b', label: 'B', kind: 'set', steps: [{ set: 'records', to: '[]' }] }] }] })).toThrow(/expected a state name/) // 没声明就不是 state
+    const counted = validateUIDocument({ ...doc, blocks: [...doc.blocks, { id: 'a', kind: 'actions', items: [{ id: 'b', label: 'B', kind: 'set', steps: [{ set: 'n', to: 'count(records)' }] }] }] })
+    const steps = (counted.blocks.at(-1) as { items: { steps: [] }[] }).items[0].steps
+    expect(applyUISteps(counted, steps, {}, new Map<string, UIValue>([['records', []], ['n', 0]]), 'zh', rows).get('n')).toBe(2)
+    expect(applyUISteps(counted, steps, {}, new Map<string, UIValue>([['records', []], ['n', 0]]), 'zh').get('n')).toBe(0)
   })
   it('builds {id, field: value} from rows: the row id wins, unsafe keys and odd values are left out', () => {
     expect(uiRecords([{ id: 'r_1', cells: JSON.parse('{"id":"x","__proto__":{"a":1},"amount":3,"tags":["a"],"nested":{"a":1},"bad":[1],"none":null}') }]))
