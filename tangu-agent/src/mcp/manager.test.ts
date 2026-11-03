@@ -442,6 +442,13 @@ describe('D30 配置里的密钥按值遮', () => {
     expect(redactSecrets('token=abcdefgh12345678 and Bearer abcdefgh12345678', cfg)).toBe('token=<redacted> and <redacted>')
     expect(redactSecrets('flag 1', cfg)).toBe('flag 1')
   })
+
+  it('短密码、Cookie 里的每个值都遮;Content-Type 这类普通 header 不动(Codex 评审)', () => {
+    const cfg = { env: { DB_PASSWORD: 'hunter2' }, headers: { Cookie: 'sid=s3ss10nval; theme=dark-mode', 'Content-Type': 'application/json' } }
+    expect(redactSecrets('Authentication failed for hunter2', cfg)).toBe('Authentication failed for <redacted>')
+    expect(redactSecrets('session s3ss10nval', cfg)).toBe('session <redacted>')
+    expect(redactSecrets('{"mimeType":"application/json"}', cfg)).toBe('{"mimeType":"application/json"}')
+  })
 })
 
 describe('D29 测试连接', () => {
@@ -451,6 +458,18 @@ describe('D29 测试连接', () => {
     expect(await m.probe(stdio('p'))).toMatchObject({ ok: true, tools: expect.arrayContaining(['echo']) })
     expect(m.listStatus()).toEqual([])
   }, 20_000)
+
+  it('测试连接进行中时引擎退出:dispose 关掉那个子进程,不留孤儿(Codex 评审)', async () => {
+    const pidFile = join(dir, 'probe.pid')
+    const m = await managerFor({})
+    const probing = m.probe({ command: process.execPath, args: [FIXTURE], env: { FAKE_MCP_TAG: 'p', FAKE_MCP_PIDFILE: pidFile, FAKE_MCP_INIT_DELAY_MS: '8000' } })
+    expect(await waitFor(() => existsSync(pidFile), 8000)).toBe(true)
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    await m.dispose()
+    const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
+    expect(await waitFor(() => !alive(), 4000)).toBe(true)
+    expect((await probing).ok).toBe(false)
+  }, 30_000)
 
   it('起不来的命令给出原因', async () => {
     const m = await managerFor({})

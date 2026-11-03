@@ -253,6 +253,8 @@ export function WsFileView({ leaf }: ViewProps) {
   const hostRef = useRef<HTMLDivElement | null>(null)
   const loadedRef = useRef<typeof target>(null)
   const keptScroll = useRef<KeptScroll | null>(null)
+  // 编辑器按「读完了几次」重挂,不按点了几次刷新:刷新读回来之前旧编辑器留着,滚动位置才读得到;mtime 没变也换上新内容
+  const [loadGen, setLoadGen] = useState(0)
   useEffect(() => {
     if (!target) { setLoading(false); return }
     let cancelled = false
@@ -273,7 +275,7 @@ export function WsFileView({ leaf }: ViewProps) {
           setBlobUrl(createdUrl)
         }
         loadedRef.current = target
-        setData(r); setLoading(false)
+        setData(r); setLoading(false); setLoadGen((g) => g + 1)
       } catch (e: any) {
         if (!cancelled) { setError(e?.message || 'error'); setLoading(false) }
       }
@@ -377,7 +379,7 @@ export function WsFileView({ leaf }: ViewProps) {
   else if (kind === 'markdown') {
     if (mdEditable) body = (
       <MdFileEditor
-        key={`${path}:${data.mtimeMs ?? 0}:${reloadNonce}`}
+        key={`${path}:${data.mtimeMs ?? 0}:${loadGen}`}
         path={path!}
         text={text}
         mtimeMs={data.mtimeMs}

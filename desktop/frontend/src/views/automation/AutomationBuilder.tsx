@@ -168,6 +168,12 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     return () => setLeaveGuard(null)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   const touch = (): void => { touched.current = true }
+  /** 用户主动关掉构建器(取消 / 放弃修改):有没保存的修改先问,答应了才走。 */
+  const leave = (ask = true): void => {
+    if (ask && dirtyRef.current && !window.confirm(t('automation.builder.discardConfirm'))) return
+    dirtyRef.current = false
+    if (onCancel) onCancel(); else st.closeBuilder()
+  }
   const lastMode = useRef<'observe' | undefined>(undefined)
 
   const addStep = (type: StepDraft['type']): void => {
@@ -208,7 +214,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
           <div className="auto-hint">{t('automation.builder.unsupported')}</div>
         </div>
         <div className="auto-builder-actions">
-          <button className="btn ghost" onClick={() => (onCancel ? onCancel() : st.closeBuilder())}>{t('common.cancel')}</button>
+          <button className="btn ghost" onClick={() => leave()}>{t('common.cancel')}</button>
         </div>
       </div>
     )
@@ -349,7 +355,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
     <div className={`auto-builder auto-workflow-builder ${fixedManual ? 'auto-builder-embedded' : ''}`} onPointerDownCapture={touch} onKeyDownCapture={touch}>
       <div className="auto-builder-title">
         <Workflow size={17} /><span>{editing ? t('automation.builder.editTitle') : t('automation.builder.title')}</span>
-        <button className="btn ghost sm" disabled={busy} onClick={() => (onCancel ? onCancel() : st.closeBuilder())}>{t('common.cancel')}</button>
+        <button className="btn ghost sm" disabled={busy} onClick={() => leave()}>{t('common.cancel')}</button>
       </div>
       <div className="auto-builder-workspace" hidden={!extendView && inspectorOpen}>
         <WorkflowCanvas nodes={flowNodes} selected={inspectorOpen ? selected : ''} onSelect={setSelected}>{additions}</WorkflowCanvas>
@@ -784,7 +790,7 @@ export const AutomationBuilder: React.FC<AutomationBuilderProps> = ({ editing, s
           {error ? <span role="alert">{error}</span> : issues.length ? <button onClick={() => setSelected(issues[0].node)}>{issues[0].text}{issues.length > 1 ? ` (+${issues.length - 1})` : ''}</button> : <span>{t('automation.ux.allReady')}</span>}
         </div>
         {conflict && <>
-          <button className="btn ghost sm" disabled={busy} onClick={() => { dirtyRef.current = false; st.bump(); if (onCancel) onCancel(); else st.closeBuilder() }}>{t('automation.builder.discardEdits')}</button>
+          <button className="btn ghost sm" disabled={busy} onClick={() => { st.bump(); leave(false) }}>{t('automation.builder.discardEdits')}</button>
           <button className="btn ghost sm" disabled={!canSave || busy} onClick={() => void save(lastMode.current, true)}>{t('automation.builder.saveAnyway')}</button>
         </>}
         <button className="btn ghost sm" onClick={() => setSelected('review')}>{t('automation.ux.review')}</button>

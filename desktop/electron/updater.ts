@@ -255,11 +255,15 @@ function ensureWired(): void {
   // 下载中/下载完仍要带着版本号与更新说明:UI 的「更新内容」区在 available/downloaded 两态都渲染,
   // 只发 phase 会让用户一点「下载」说明就整段消失(Codex 评审实证)。
   autoUpdater.on('download-progress', (p) => {
+    if (dl?.dropped) return // 关了测试版、作废中的那份:迟到的进度别把状态翻回 downloading
     if (dl) dl.lastAt = Date.now()
     broadcast({ ...lastStatus, phase: 'downloading', percent: Math.round(p.percent), transferred: p.transferred, total: p.total })
   })
-  autoUpdater.on('update-downloaded', (info) =>
-    broadcast({ ...lastStatus, phase: 'downloaded', version: info.version, source: feedSource ?? undefined, fallbackFrom: undefined, canSwitch: false }))
+  autoUpdater.on('update-downloaded', (info) => {
+    // 取消赶不上收尾(校验 / 改名)时 electron-updater 仍会报完成:作废了的(target 已清 / 版本对不上)不认
+    if (dl?.dropped || !target || info.version !== target.version) return
+    broadcast({ ...lastStatus, phase: 'downloaded', version: info.version, source: feedSource ?? undefined, fallbackFrom: undefined, canSwitch: false })
+  })
   autoUpdater.on('error', (err) => {
     if (busy || dl) return // 调用处自己处理(换源或报错)
     broadcast({ phase: 'error', error: err?.message || String(err) })
@@ -341,7 +345,9 @@ export async function downloadUpdate(): Promise<void> {
       const from = feedSource
       const manual = cur.manual
       const next = manual ?? (autoSwitched ? null : otherSource())
-      if (!next || (await useSource(next)) !== 'ok') {
+      const switched = !!next && (await useSource(next)) === 'ok'
+      if (cur.dropped) return // 换源那一下 await 期间关了测试版
+      if (!switched) {
         broadcast({ ...lastStatus, phase: 'error', error: downloadErrorCode(err) })
         return
       }

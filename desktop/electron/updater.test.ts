@@ -187,3 +187,21 @@ it('names common local download failures with stable codes', async () => {
   expect(downloadErrorCode(Object.assign(new Error('x'), { code: 'EBUSY' }))).toBe('file-busy')
   expect(downloadErrorCode(new Error('socket hang up'))).toBe('socket hang up')
 })
+
+it('a late "downloaded" event for a dropped prerelease is ignored (Codex review)', async () => {
+  updater.beta = true
+  answers.set('/website/config', site({ version: '2.13.3' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  answers.set('/releases?per_page=', [{ tag_name: 'v2.14.0-beta.1', prerelease: true }])
+  let finish!: () => void
+  updater.download.push(() => new Promise<void>((resolve) => { finish = resolve }))
+  const { checkForUpdates, downloadUpdate, channelChanged, getUpdaterStatus } = await import('./updater')
+  await checkForUpdates()
+  const downloading = downloadUpdate()
+  await new Promise((r) => setTimeout(r, 0))
+  channelChanged(false)
+  updater.events.get('update-downloaded')!({ version: '2.14.0-beta.1' }) // 取消没赶上收尾
+  finish()
+  await downloading
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'idle' })
+})

@@ -67,7 +67,8 @@ const WikiAnchor = ({ href, children, node: _node, ...rest }: any) => {
     const path = cwd ? resolveAgainst(cwd, file.path) : file.path
     const anchor = file.line ? `#L${file.line}${file.end ? `-L${file.end}` : ''}` : ''
     const label = textOf(children)
-    return <ChatWikiLink inner={`${path}${anchor}${label ? `|${label}` : ''}`} />
+    // 链接文字就是地址本身(模型常这么写)时不当别名,引用条照「文件名:行号」显示
+    return <ChatWikiLink inner={`${path}${anchor}${label && label !== href ? `|${label}` : ''}`} />
   }
   return <a href={href} {...rest}>{children}</a>
 }

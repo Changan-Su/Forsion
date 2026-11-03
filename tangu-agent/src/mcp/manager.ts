@@ -173,17 +173,24 @@ export function sessionGone(e: unknown, hadSession: boolean): boolean {
   }
 }
 
-const SECRET_ENV_KEY = /token|secret|passw|api[-_]?key|access[-_]?key|private[-_]?key|auth|credential|cookie|session/i;
+const SECRET_NAME = /token|secret|passw|api[-_]?key|access[-_]?key|private[-_]?key|auth|credential|cookie|session/i;
+/** 开关 / 数字这类值:名字像密钥也不遮,遮了会把正常结果里的 true、8080 一起改掉 */
+const PLAIN_VALUE = /^(?:true|false|yes|no|on|off|\d{1,6})$/i;
 /**
- * 配置里的密钥值按值遮掉(D30):env 里名字像密钥的、全部 header 值(含去掉 Bearer / Basic 前缀的那段)。
- * 服务器把令牌回显进结果或报错时,不带 sk- / Bearer 特征的裸令牌出站规则认不出,这里先遮。
- * 短于 8 个字符的不遮:那多半是 `1`、`true` 这类开关值,遮了会把正常结果改坏。
+ * 配置里的密钥值按值遮掉(D30):名字像密钥的 env 与 header(Authorization / Cookie / X-Api-Key……),
+ * header 再拆出去掉 Bearer / Basic 前缀的那段和 Cookie 里每个值。服务器把令牌回显进结果或报错时,
+ * 不带 sk- / Bearer 特征的裸令牌出站规则认不出,这里先遮。Content-Type 这类普通 header 不动。
  */
 export function redactSecrets(text: string, cfg: Pick<McpServerConfig, 'env' | 'headers'>): string {
   const values = new Set<string>();
-  for (const [k, v] of Object.entries(cfg.env ?? {})) if (typeof v === 'string' && SECRET_ENV_KEY.test(k)) values.add(v);
-  for (const v of Object.values(cfg.headers ?? {})) if (typeof v === 'string') { values.add(v); values.add(v.replace(/^(?:bearer|basic|token)\s+/i, '')); }
-  for (const v of [...values].filter((v) => v.length >= 8).sort((a, b) => b.length - a.length)) text = text.split(v).join('<redacted>');
+  for (const [k, v] of Object.entries(cfg.env ?? {})) if (typeof v === 'string' && SECRET_NAME.test(k)) values.add(v);
+  for (const [k, v] of Object.entries(cfg.headers ?? {})) {
+    if (typeof v !== 'string' || !SECRET_NAME.test(k)) continue;
+    values.add(v);
+    values.add(v.replace(/^(?:bearer|basic|token)\s+/i, ''));
+    for (const pair of v.split(';')) values.add(pair.slice(pair.indexOf('=') + 1).trim());
+  }
+  for (const v of [...values].filter((v) => v.length >= 3 && !PLAIN_VALUE.test(v)).sort((a, b) => b.length - a.length)) text = text.split(v).join('<redacted>');
   return text;
 }
 
@@ -213,6 +220,8 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const nameOwner = new Map<string, string>();
   /** removeServers 里还没关完的 server:dispose 要等它们,否则停用后马上退出会留下 stdio 子进程。 */
   const closing = new Set<Promise<void>>();
+  /** 在飞的「测试连接」:dispose 一并关掉。 */
+  const probing = new Set<Client>();
   /** start() 之前就到的插件 server:等 mcp.json 的登记完再加。 */
   const queued: Array<[{ id: string; name: string }, Record<string, McpServerConfig>]> = [];
   /** 在飞的交互登录:dispose 时放掉回环端口。 */
@@ -454,6 +463,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const api: McpManager = {
     async probe(cfg) {
       // 只连一次、列完工具就关:不登记名字、不认领桥接名、不排重试,运行中的 server 一概不碰(D29)
+      if (disposed) return { ok: false, error: 'disposed' };
       // 不走 newEntry:那里会登记名字归属和 servers 列表
       const entry: ServerEntry = {
         name: '(probe)', cfg, transport: inferTransport(cfg), client: null, tools: [], status: 'connecting',
@@ -469,6 +479,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
         if (isHostSandboxRestricted()) throw new Error('MCP servers are unavailable while the local sandbox is enabled');
         const c = new Client({ name: 'tangu-agent', version: '1.0.0' });
         client = c;
+        probing.add(c); // dispose 要能关掉它,否则引擎退出时留下 stdio 子进程
         const timeout = new Promise<never>((_, rej) => {
           timer = setTimeout(() => rej(new Error(`connect timed out (${connectTimeoutMs / 1000}s)`)), connectTimeoutMs);
           timer.unref?.();
@@ -480,6 +491,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
         return entry.needsLogin ? { ok: false, needsLogin: true, error: 'needs-login' } : { ok: false, error: red(entry, String(e?.message || e)).slice(0, 500) };
       } finally {
         if (timer) clearTimeout(timer);
+        if (client) probing.delete(client);
         await client?.close().catch(() => {});
       }
     },
@@ -686,7 +698,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       unregisterApproval();
       for (const s of servers) clearRetry(s);
       // 在飞的 initialize 一并关掉(connect 随之失败),再等它们收尾 —— 返回时不留子进程、不再起新连接
-      await Promise.all(servers.flatMap((s) => [s.client, s.pendingClient]).map((c) => c?.close().catch(() => {})));
+      await Promise.all([...servers.flatMap((s) => [s.client, s.pendingClient]), ...probing].map((c) => c?.close().catch(() => {})));
       // 等收尾有上限:SSE 流开了却迟迟不发 endpoint 时,close 不会让 SDK 的 start() 结束,干等会拖满连接超时。
       // 超时后照样返回 —— 迟到的连接在 doConnect 里见 disposed 自己关掉。
       let cap: ReturnType<typeof setTimeout> | undefined;
