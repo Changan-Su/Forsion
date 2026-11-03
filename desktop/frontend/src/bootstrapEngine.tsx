@@ -9,6 +9,7 @@ import { Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, S
 import type { LucideIcon, LucideProps } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
 import { toggleSpaceOrganizer } from './views/SpaceOrganizer'
+import { requestHomeEdit } from './views/homeWidgets'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -565,6 +566,16 @@ export function installEngine(): void {
         else if (/\.md$/i.test(norm)) await nav.openNote(norm, newTab)
         else nav.openFile(norm, newTab)
       },
+    },
+  })
+  // 主页编辑态(主页第四轮):摆小组件、挪时钟 / 输入框 / 坞。只给人用,不进 Agent 的命令面。
+  addCommand({
+    id: 'edit-home',
+    title: () => translate('home.edit'),
+    keywords: 'home edit widgets layout 主页 编辑 小组件 摆放',
+    run: () => {
+      if (useSpaceStore.getState().activeSpaceId !== 'home') setActiveSpace('home')
+      requestHomeEdit()
     },
   })
   addCommand({

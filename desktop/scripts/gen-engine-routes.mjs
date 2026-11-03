@@ -95,6 +95,11 @@ export const CLASSIFICATION = {
   'POST /agent/human/SOUL.md/move/items/:id': [D, 'moves or keeps one Agent memory entry for the portrait (the route itself also refuses remote origin)'],
   'POST /agent/agents/:slug/memory/promote': [D, 'moves an Agent memory entry into host human/AGENT.md (the route itself also refuses remote origin)'],
 
+  // ── widgets.ts:小组件原件和记录是本机文件,和 human/ 同一个边界 ──
+  'GET /agent/widgets': [D, 'host widget originals list (the route itself also refuses remote origin)'],
+  'GET /agent/widgets/:id': [D, 'host widget original + records (the route itself also refuses remote origin)'],
+  'POST /agent/widgets/:id/restore': [D, 'undo a widget soft delete on the host (the route itself also refuses remote origin)'],
+
   // ── workspace.ts ──
   'GET /agent/workspace/list': [A, 'session workspace listing'],
   'GET /agent/workspace/read': [A, 'session workspace read'],
