@@ -648,7 +648,9 @@ export function HomepageView(_props: ViewProps) {
     else showOrganizer()
   }
   const askAgentForWidget = (): void => {
-    setDraftField(NEW_CHAT_DRAFT, 'text', t('home.lib.askDraft'))
+    // 已写了一半的草稿不盖掉:前缀接在后面另起一行
+    const ask = t('home.lib.askDraft')
+    setDraftField(NEW_CHAT_DRAFT, 'text', (cur) => (cur?.trim() ? `${cur}\n${ask}` : ask))
     setOrganizerOpen(false)
     setEditing(false)
     requestAnimationFrame(() => rootRef.current?.querySelector<HTMLTextAreaElement>('.hp-composer .t2c-ta')?.focus())

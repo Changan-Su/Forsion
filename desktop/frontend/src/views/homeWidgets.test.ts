@@ -35,4 +35,10 @@ describe('home widget layout', () => {
     expect(removeCenterPart(l, 'composer').center).toContain('composer')
     expect(removeCenterPart(l, 'clock').center).not.toContain('clock')
   })
+
+  it('restores the status card at full width only', () => {
+    const l = removeFromHome(DEFAULT_HOME_LAYOUT, STATUS_CARD)
+    expect(moveOnHome(l, STATUS_CARD, { area: 'row', index: 0 })?.row).toEqual([{ id: STATUS_CARD, w: 4 }])
+    expect(moveOnHome({ ...l, row: [{ id: 'w_a', w: 1 }] }, STATUS_CARD, { area: 'row', index: 0 })).toBeNull()
+  })
 })

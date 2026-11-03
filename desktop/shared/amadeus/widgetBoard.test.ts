@@ -5,6 +5,7 @@ import { readDash3Layout } from './dashboard3'
 import { extractFrontmatterExtra } from './compiler/split'
 
 const P = 'Dashboards/卡片区.dashboard.md'
+const DASH3_BLOCK = /^dashboard3:.*(?:\r?\n[ \t]+.*)*/m
 const ids = (raw: string) => {
   const r = readBoardWidgets(raw, P)
   if (!r.ok) throw new Error(r.error)
@@ -66,5 +67,18 @@ describe('board edits', () => {
     const badLayout = raw.replace(/^dashboard3:.*$/m, 'dashboard3: oops')
     expect(addWidgetToBoard(badLayout, P, '', { id: 'w_b' }).ok).toBe(false)
     expect(removeWidgetFromBoard(badLayout, P, 'w_a').ok).toBe(false)
+    const stale = raw.replace(DASH3_BLOCK, 'dashboard3: { zz: [0, 6, 5] }')
+    expect(addWidgetToBoard(stale, P, '', { id: 'w_b' }).ok).toBe(false)
+  })
+
+  it('keeps a canvas board on the canvas', () => {
+    const raw = text(addWidgetToBoard(null, P, 'x', { id: 'w_a' }))
+    const r = readBoardWidgets(raw, P)
+    const block = r.ok ? r.items[0].blockId : ''
+    const canvas = raw.replace(DASH3_BLOCK, `dashboard2: { ${block}: [0, 0, 408, 216] }`)
+    const next = text(addWidgetToBoard(canvas, P, '', { id: 'w_b' }))
+    expect(ids(next)).toEqual(['w_a', 'w_b'])
+    expect(next).not.toContain('dashboard3')
+    expect(next).toContain('dashboard2')
   })
 })

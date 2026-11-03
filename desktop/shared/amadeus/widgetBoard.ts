@@ -9,7 +9,8 @@ import { compile } from './compiler/compile'
 import { parsePageSource } from './compiler/page'
 import { bumpNextId, generateColumnId, generatePageId, generateRowId, nextBlockId } from './compiler/names'
 import { COMPILER_VERSION, PAGE_SCHEMA, type BlockId, type PageManifest } from './compiler/types'
-import { moveCard, readDash3Layout, reconcileGrid, setDash3InFm, orderedIds, clampCell, type Dash3Layout } from './dashboard3'
+import { readDash2Layout } from './dashboard'
+import { moveCard, readDash3Layout, readDashMode, reconcileGrid, setDash3InFm, orderedIds, clampCell, grid3IsStale, type Dash3Layout } from './dashboard3'
 
 export interface WidgetRef {
   id: string
@@ -41,16 +42,21 @@ export function widgetRefSource(ref: WidgetRef): string {
   return ['```widget', `id: ${ref.id}`, ...(ref.scope === 'all' ? ['scope: all'] : []), '```'].join('\n')
 }
 
-interface Board { manifest: PageManifest; contents: Record<BlockId, string>; layout: Dash3Layout }
+/** canvas = 这块板按画布打开(显式 dashLayout,或只排过 dashboard2):不碰 dashboard3,写了路由就会把它切成网格。 */
+interface Board { manifest: PageManifest; contents: Record<BlockId, string>; layout: Dash3Layout; canvas: boolean }
 
 function load(raw: string, path: string, now: string): { ok: true; board: Board } | { ok: false; error: string } {
   const page = parsePageSource(path, raw, now)
   if (page.manifest.schemaTooNew) return { ok: false, error: 'board written by a newer format' }
   const lay = readDash3Layout(page.manifest.fmExtra ?? '')
   if (!lay.ok) return { ok: false, error: lay.error }
+  const fm = page.manifest.fmExtra ?? ''
+  const mode = readDashMode(fm)
+  const c2 = readDash2Layout(fm)
+  const canvas = mode ? mode === 'canvas' : !Object.keys(lay.layout).length && c2.ok && Object.keys(c2.layout).length > 0
   const contents: Record<BlockId, string> = {}
   for (const [id, b] of Object.entries(page.blocks)) contents[id] = b.content
-  return { ok: true, board: { manifest: page.manifest, contents, layout: lay.layout } }
+  return { ok: true, board: { manifest: page.manifest, contents, layout: lay.layout, canvas } }
 }
 
 function widgetsOf(b: Board): BoardWidget[] {
@@ -77,6 +83,7 @@ function emptyBoard(title: string, now: string): Board {
     },
     contents: {},
     layout: {},
+    canvas: false,
   }
 }
 
@@ -89,9 +96,11 @@ function editBoard(raw: string | null, path: string, title: string, edit: (b: Bo
     const l = load(raw, path, now)
     if (!l.ok) return l
     board = l.board
+    // 布局键和块对不上(块 id 整体换过):仪表盘那边冻结不动,这里也不能拿缺省几何整篇写回
+    if (!board.canvas && grid3IsStale(board.layout, Object.keys(board.manifest.blocks))) return { ok: false, error: 'board layout does not match its blocks' }
   }
   if (!edit(board)) return { ok: true, text: raw ?? '', changed: false }
-  const fmExtra = setDash3InFm(board.manifest.fmExtra ?? '', board.layout)
+  const fmExtra = board.canvas ? board.manifest.fmExtra ?? '' : setDash3InFm(board.manifest.fmExtra ?? '', board.layout)
   if (fmExtra === null) return { ok: false, error: 'frontmatter is not valid YAML' }
   try {
     return { ok: true, text: compile({ ...board.manifest, fmExtra }, board.contents), changed: true }

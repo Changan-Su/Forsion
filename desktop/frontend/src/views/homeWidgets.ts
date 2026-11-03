@@ -44,17 +44,30 @@ export function sanitizeHomeLayout(raw: unknown): HomeLayout {
 }
 
 let cached: HomeLayout | null = null
+/** 读不到(存储被拒)≠ 没摆过:这时只在内存里改、不写回,免得缺省盖掉真摆放。读不懂的那份先备份到 `.corrupt` 再当缺省。 */
+let readFailed = false
 const subs = new Set<() => void>()
+const notify = (): void => { for (const f of subs) f() }
 export function readHomeLayout(): HomeLayout {
   if (cached) return cached
-  try { cached = sanitizeHomeLayout(JSON.parse(localStorage.getItem(HOME_WIDGETS_KEY) ?? 'null')) } catch { cached = DEFAULT_HOME_LAYOUT }
+  let raw: string | null
+  try { raw = localStorage.getItem(HOME_WIDGETS_KEY); readFailed = false } catch { readFailed = true; return DEFAULT_HOME_LAYOUT }
+  try { cached = sanitizeHomeLayout(JSON.parse(raw ?? 'null')) } catch {
+    try { localStorage.setItem(`${HOME_WIDGETS_KEY}.corrupt`, raw ?? '') } catch { readFailed = true }
+    cached = DEFAULT_HOME_LAYOUT
+  }
   return cached
 }
 export function saveHomeLayout(next: HomeLayout): void {
+  readHomeLayout()
   cached = sanitizeHomeLayout(next)
-  try { localStorage.setItem(HOME_WIDGETS_KEY, JSON.stringify(cached)) } catch { /* 存不下:这次会话里照样生效 */ }
-  for (const f of subs) f()
+  if (!readFailed) try { localStorage.setItem(HOME_WIDGETS_KEY, JSON.stringify(cached)) } catch { /* 存不下:这次会话里照样生效 */ }
+  notify()
 }
+// 别的窗口改了摆放:丢掉缓存重读,免得这边拿旧布局整份写回
+globalThis.addEventListener?.('storage', (e) => {
+  if (e.key === HOME_WIDGETS_KEY || e.key === null) { cached = null; notify() }
+})
 export const useHomeLayout = (): HomeLayout => useSyncExternalStore((f) => { subs.add(f); return () => subs.delete(f) }, readHomeLayout)
 
 const rowUsed = (l: HomeLayout): number => l.row.reduce((s, c) => s + c.w, 0)
@@ -78,7 +91,7 @@ export function moveOnHome(l: HomeLayout, id: string, to: HomeSlot): HomeLayout 
   const cell = l.row.find((c) => c.id === id)
   const rest = removeFromHome(l, id)
   if (to.area === 'row') {
-    const w = cell?.w ?? 1
+    const w = id === STATUS_CARD ? 4 : cell?.w ?? 1
     if (rowUsed(rest) + w > ROW_CELLS) return null
     const row = [...rest.row]
     row.splice(Math.min(to.index, row.length), 0, { id, w })

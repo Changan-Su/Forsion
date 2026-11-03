@@ -12,7 +12,7 @@ import { streamingArgString } from '../views/streamingWrite'
 import { registerMessages, useI18n } from '../i18n'
 import { ChatWebLink } from './ChatWikiLink'
 import { CodeBlock, RunContext } from './Markdown'
-import { deriveChecklist, emptyUIState, formatUIQuantity, inputValues, readUIState, stateVars, uiExpansionKey, uiStateKey, visible, writeUIState, type UIUserState } from './intelligentUiState'
+import { deriveChecklist, emptyUIState, formatUIQuantity, inputValues, readUIState, stateVars, subscribeUIState, uiExpansionKey, uiStateKey, visible, writeUIState, type UIUserState } from './intelligentUiState'
 import './IntelligentUi.css'
 import { IntelligentAppCard } from './IntelligentAppCard'
 
@@ -196,6 +196,8 @@ export function NativeDocument({ doc, complete, live, stateKey, onAsk, head, rec
   const [state, setState] = useState<UIUserState>(() => stateKey ? readUIState(stateKey) : emptyUIState())
   const [notice, setNotice] = useState('')
   const root = useRef<HTMLElement>(null)
+  const self = useRef({}).current
+  useEffect(() => stateKey ? subscribeUIState((key, from) => { if (key === stateKey && from !== self) setState(readUIState(stateKey)) }) : undefined, [stateKey, self])
   // Blocks fade in only for a document that was seen arriving; replayed history stays still.
   const streamed = useRef(live).current
   const values = inputValues(doc, state)
@@ -213,7 +215,7 @@ export function NativeDocument({ doc, complete, live, stateKey, onAsk, head, rec
   }))
   const update = (fn: (s: UIUserState) => UIUserState): void => setState(previous => {
     const next = fn(previous)
-    if (stateKey) writeUIState(stateKey, next)
+    if (stateKey) writeUIState(stateKey, next, undefined, self)
     return next
   })
   const copy = async (text: string): Promise<void> => {

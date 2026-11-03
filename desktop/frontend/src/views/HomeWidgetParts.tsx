@@ -89,7 +89,8 @@ export function PartFrame({ part, editing, children, onRemove, onGrip }: { part:
   return (
     <div className="hp-part-frame" data-home-part={part}>
       <div className="hp-part-tab" onPointerDown={(e) => onGrip(e, part)}><EditCtrls onRemove={onRemove} /></div>
-      <div className="hp-part-inert">{children}</div>
+      {/* 下排自己管:卡身不可点,删除 / 宽度 / 把手 / 落点照常 */}
+      {part === 'row' ? children : <div className="hp-part-inert">{children}</div>}
     </div>
   )
 }

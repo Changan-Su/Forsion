@@ -13,12 +13,12 @@ import { currentLocale, translateFor } from '../i18n'
 
 export type BoardKind = 'rail' | 'today'
 const NAME_KEY: Record<BoardKind, string> = { rail: 'amadeus.default.cardsBoard', today: 'amadeus.default.todayBoard' }
-const pathOf = (kind: BoardKind, locale: 'zh' | 'en'): string => `Dashboards/${translateFor(locale, NAME_KEY[kind])}.dashboard.md`
+export const boardPath = (kind: BoardKind, locale: 'zh' | 'en'): string => `Dashboards/${translateFor(locale, NAME_KEY[kind])}.dashboard.md`
 
 /** 当前语言的名字在前;两份都在时取当前语言那份。 */
 async function locate(kind: BoardKind): Promise<{ path: string; raw: string | null }> {
   const mine = currentLocale() === 'en' ? 'en' : 'zh'
-  const paths = [pathOf(kind, mine), pathOf(kind, mine === 'zh' ? 'en' : 'zh')]
+  const paths = [boardPath(kind, mine), boardPath(kind, mine === 'zh' ? 'en' : 'zh')]
   for (const path of paths) {
     const raw = await amadeus.readTextFile(path).catch(() => null)
     if (raw != null) return { path, raw }
@@ -33,7 +33,12 @@ const subs = new Set<() => void>()
 const emit = (): void => { for (const f of subs) f() }
 const paths = new Set<string>()
 
+// ⚠️ 库还没装上时 readTextFile 也回 null(和「文件不存在」分不开):这时只能说「还不知道」,
+// 不能当没有这块板 —— 重启后落在对话里,卡片区先读到 null 就再也不重读了(真机台架 W7b 实证)。
+const vaultOpen = (): boolean => !!usePageStore.getState().vaultRoot
+
 async function refresh(kind: BoardKind): Promise<void> {
+  if (!vaultOpen()) { states[kind] = { status: 'loading' }; emit(); return }
   try {
     const { path, raw } = await locate(kind)
     paths.add(path)
@@ -52,6 +57,8 @@ function wire(): void {
   amadeus.onExternalChange?.((p) => { if (paths.has(p)) { void refresh('rail'); void refresh('today') } })
   amadeus.onStructureChange?.(() => { void refresh('rail'); void refresh('today') })
   window.addEventListener('focus', () => { void refresh('rail'); void refresh('today') })
+  // 库装上 / 换了库:板是相对路径,按新库重读
+  usePageStore.subscribe((s, prev) => { if (s.vaultRoot !== prev.vaultRoot) { void refresh('rail'); void refresh('today') } })
 }
 
 export function useBoardWidgets(kind: BoardKind): BoardState {
@@ -68,6 +75,7 @@ export function boardItems(kind: BoardKind): BoardWidget[] {
 async function mutate(target: BoardKind | { path: string }, edit: (raw: string | null, path: string, title: string) => BoardEdit): Promise<void> {
   const kind = typeof target === 'string' ? target : null
   const title = kind ? translateFor(currentLocale() === 'en' ? 'en' : 'zh', NAME_KEY[kind]) : ''
+  if (!vaultOpen()) throw new Error('vault is not open')
   for (let attempt = 0; attempt < 4; attempt++) {
     const { path, raw } = kind ? await locate(kind) : { path: (target as { path: string }).path, raw: await amadeus.readTextFile((target as { path: string }).path) }
     const r = edit(raw, path, title)

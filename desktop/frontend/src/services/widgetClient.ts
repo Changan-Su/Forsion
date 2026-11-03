@@ -66,11 +66,13 @@ async function load(id: string): Promise<void> {
   emit()
 }
 
+const stale = new Set<string>()
 function ensure(id: string, force = false): void {
   if (!force && cache.has(id)) return
-  if (inflight.has(id)) return
+  // 读的半路原件又变了:这次读回来的可能是旧的,读完再读一遍
+  if (inflight.has(id)) { if (force) stale.add(id); return }
   if (!cache.has(id)) cache.set(id, { status: 'loading' })
-  const p = load(id).finally(() => inflight.delete(id))
+  const p = load(id).finally(() => { inflight.delete(id); if (stale.delete(id)) ensure(id, true) })
   inflight.set(id, p)
 }
 
