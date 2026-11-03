@@ -116,6 +116,18 @@ describe('控制通道', () => {
     await sbx.dispose()
   })
 
+  it('改了 requiresPlugins 再 start → 重起(内置包只在启动时播种),没改就地重载', async () => {
+    const f = fakeSpawn({ states: ['running'] })
+    const sbx = sandbox(tmp(), f); const dir = pluginDir()
+    await sbx.exec('start', { dir })
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'reading-log', name: 'Reading log', version: '0.1.0', main: 'main.js', apiVersion: 1, requiresPlugins: ['forsion-calendar'] }))
+    await sbx.exec('start', { dir })
+    expect(f.seen).toHaveLength(2)
+    await sbx.exec('start', { dir })
+    expect(f.seen).toHaveLength(2)
+    await sbx.dispose()
+  })
+
   it('负对照:令牌不对 → 不收这个连接,start 报没起来', async () => {
     const f = fakeSpawn({ token: () => 'wrong' })
     const sbx = createPluginSandbox({

@@ -9,7 +9,7 @@
  *
  * 普通实例里 window.tangu.sandbox 不存在,这里的函数全是 no-op。
  */
-import { useRibbonStore, useSpaceStore, useWorkspace, activeMainPanel, addRibbonIcon, removeRibbonIcon, setActiveSpace, type RibbonItem } from '@lcl/engine'
+import { useRibbonStore, useSpaceStore, useWorkspace, activeMainPanel, addRibbonIcon, removeRibbonIcon, setActiveSpace, label as spaceLabel, type RibbonItem } from '@lcl/engine'
 import { useNotifications } from '../stores/notificationStore'
 import { useUiStore } from '../amadeus/store/uiStore'
 import { usePluginStore } from '../amadeus/plugins/pluginStore'
@@ -210,10 +210,11 @@ function scroll(target: string, amount: number): { did: string; label: string } 
 /** space:切到插件带的那个 Space(按 id 或名字)。 */
 function space(pluginId: string, want: string): { did: string; label: string } | { error: string } {
   const own = ownSpaces(pluginId)
-  const sp = useSpaceStore.getState().spaces.find((x) => own.includes(x.id) && (x.id === want || String(x.name).toLowerCase() === want.trim().toLowerCase()))
+  // 配方的名字注册成按语言求值的函数:String() 出来是函数源码(Codex 评审),按引擎的 label() 取
+  const sp = useSpaceStore.getState().spaces.find((x) => own.includes(x.id) && (x.id === want || spaceLabel(x.name).toLowerCase() === want.trim().toLowerCase()))
   if (!sp) return { error: `this plugin has no Space "${want}"; its Spaces: ${own.join(', ') || 'none'}` }
   setActiveSpace(sp.id)
-  return { did: `switched to Space ${sp.id}`, label: String(sp.name) }
+  return { did: 'switched Space', label: `${sp.id} "${spaceLabel(sp.name)}"` }
 }
 
 /** 选中焦点输入框里原有的字(type 缺省替换)。没有可输入的焦点 = false。 */
@@ -326,6 +327,7 @@ export function sandboxPluginsLoaded(): void {
   if (!self || settled) return
   settled = true
   loads += 1
+  pureRibbon(self.pluginId)
   land(self.pluginId)
   window.tangu?.sandbox?.changed()
 }
@@ -354,12 +356,18 @@ export function installSandboxHook(): void {
     reload: async () => {
       const before = usePluginStore.getState().views.some((v) => v.pluginId === pid)
       const hadSpace = ownSpaces(pid).length > 0
+      const wasOn = useSpaceStore.getState().activeSpaceId
+      const onMine = ownSpaces(pid).includes(wasOn)
       await reloadDevPlugin(pid).catch((e) => console.warn('[sandbox] reload failed', e))
       await rescanSpaces().catch((e) => console.warn('[sandbox] space rescan failed', e))
       loads += 1
+      // 换配方时旧的那份先注销、活动 Space 被挪回 tangu(Codex 评审):还在就回到原来那个插件 Space
+      if (onMine && ownSpaces(pid).includes(wasOn) && useSpaceStore.getState().activeSpaceId !== wasOn) setActiveSpace(wasOn)
       // 第一次没装上、这次装上了(或这次才带上 Space):落过去(reloadDevPlugin 只恢复「之前开着的」)
-      if (!before || (!hadSpace && ownSpaces(pid).length)) land(pid)
+      else if (!before || (!hadSpace && ownSpaces(pid).length)) land(pid)
       else refocusPluginView(pid)
+      // 插件 Space 的归属是撤完图标之后才删的,订阅那一刻还算它在:扫完再对一遍,最后一个 Space 没了主位要回来(Codex 评审)
+      pureRibbon(pid)
       window.tangu?.sandbox?.changed()
     },
   }

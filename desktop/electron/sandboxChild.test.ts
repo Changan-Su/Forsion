@@ -45,6 +45,10 @@ describe('files 的路径', () => {
     const b = setup()
     expect(sandboxFilePath('out.csv', b, false)).toBe(join(b.dir, 'out.csv'))
     expect(sandboxFilePath('link/out.csv', b, false)).toBeNull()
+    symlinkSync(join(b.outside, 'key.txt'), join(b.dir, 'export.csv')) // 已经在的软链指出去:save 会写穿(Codex 评审)
+    expect(sandboxFilePath('export.csv', b, false)).toBeNull()
+    symlinkSync(join(b.outside, 'nope.txt'), join(b.dir, 'dangling.csv')) // 悬空软链同理
+    expect(sandboxFilePath('dangling.csv', b, false)).toBeNull()
     expect(sandboxFilePath('', b, false)).toBeNull()
   })
 })

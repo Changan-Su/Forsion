@@ -191,6 +191,8 @@ interface Child {
   lastOp?: { op: string; at: number; target?: string }
   shot?: string
   shotAt?: number
+  /** 起它时被测插件点名的内置包(排好序拼起来):变了 = start 要重起而不是就地重载。 */
+  needs?: string
 }
 
 const HELLO_MS = 45_000
@@ -397,13 +399,16 @@ export function createPluginSandbox(deps: SandboxDeps) {
     if (disposed) return { ok: false, code: 'error', error: 'Forsion is quitting' }
     const manifest = await readSandboxManifest(dir)
     let c = child && !child.exited ? child : null
-    if (c && (c.dir !== dir || c.manifest.pluginId !== manifest.pluginId)) { await stop(); c = null }
+    // 改了 requiresPlugins:内置包只在子进程启动时播种,就地重载装不上新点名的那个,得重起(Codex 评审)
+    const needs = [...await sandboxRequiredPlugins(dir)].sort().join(',')
+    if (c && (c.dir !== dir || c.manifest.pluginId !== manifest.pluginId || c.needs !== needs)) { await stop(); c = null }
     if (c) {
       // 同一个插件:就地重载(改过 manifest 也算),不重开窗口
       if (sessionId) c.sessionId = sessionId
       await request(c, 'reload', {}, 30_000)
     } else {
       c = await spawnChild(dir, manifest, sessionId)
+      c.needs = needs
     }
     const st = await settle(c)
     // 等界面落定再截:插件的 Space / 视图是装载落定之后才开出来的,马上截只截到一页空白(11-03 台架抓到)
@@ -450,6 +455,9 @@ export function createPluginSandbox(deps: SandboxDeps) {
         return note(c, op, ok(await readStatus(c), image, typeof r.error === 'string' ? r.error.slice(0, 300) : undefined), typeof args.command === 'string' ? args.command : undefined)
       }
       if (CHILD_OPS.has(op)) {
+        // 动手的动作排进同一队:两个对话同时 type 会先后把焦点抢走,字打进别的框、回执也串(Codex 评审)
+        return await queued(async () => {
+        if (child !== c || c.exited) return { ok: false, code: 'no_sandbox', error: 'the sandbox stopped meanwhile' }
         const r = await request(c, op, args, 25_000)
         const st = await readStatus(c)
         const base = ok(st, typeof r.image === 'string' ? r.image : undefined, typeof r.error === 'string' ? r.error.slice(0, 500) : undefined)
@@ -462,6 +470,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
           base.text = text
         }
         return note(c, op, base, typeof action?.target === 'string' ? action.target : undefined)
+        })
       }
       return { ok: false, code: 'unsupported', error: `unknown sandbox action "${op}"` }
     } catch (e) {

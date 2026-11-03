@@ -21,6 +21,8 @@
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:node .claude/hooks/devlock.cjs run --vehicle=e2e --what="plugin sandbox" -- npm run check:pluginsandbox
  * `SHOT_DIR=<目录>` 额外落沙箱窗口截图(子进程自己截的那张)与对话卡截图;`-- --focus` 加跑第 10 项(会抢几秒前台)。
+ * computer use 走查:`STAGE_ELECTRON=<单独身份的 Electron 拷贝>/Contents/MacOS/Electron`(gui-verify §4.2)+ `SBX_HOLD=1`:
+ * 右栏卡出来以后停住、打印 HOLD,等 `<临时 home>/kick` 出现(最多 30 分钟)再接着跑。
  */
 const fs = require('fs')
 const os = require('os')
@@ -128,6 +130,7 @@ async function main() {
     app = await electron.launch({
       args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT],
       cwd: ROOT,
+      ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
       timeout: 45_000,
     })
@@ -234,6 +237,13 @@ async function main() {
     const miss = await act('click', { target: 'No such button anywhere' })
     check('12e 负对照:沙箱外的路径不收;点不存在的东西 → 报找不到,不乱点', /not usable/.test(outside.r.error || '') && /nothing visible says/.test(miss.r.error || ''), JSON.stringify({ outside: outside.r.error, miss: miss.r.error }))
 
+    // 改 space.json(换个名字)= 换配方:旧的先注销、活动 Space 会被挪走,重载完要回到它上面(Codex 评审)
+    const sj = path.join(PLUGIN, 'spaces', 'fixture-shelf', 'space.json')
+    fs.writeFileSync(sj, fs.readFileSync(sj, 'utf8').replace('Fixture shelf', 'Fixture shelf 2'))
+    const back = await until(async () => { const s = await status(); const o = await exec('read', {}); return s?.activeSpace === 'fixture-shelf' && o.ok && /Fixture shelf 2/.test(JSON.parse(o.text).action?.outline || '') && s }, 20_000)
+    const sw = await act('space', { space: 'Fixture shelf 2' })
+    check('12f 改了 space.json → 重载后还在这个插件 Space 上;按显示名字也切得过去', !!back && sw.r.ok && !sw.r.error, JSON.stringify({ active: (await status())?.activeSpace, space: sw.r.error || sw.a?.target }))
+
     // ── 6 对话卡 ──
     const card = await until(() => win.locator('[data-sandbox-card]').first().isVisible().catch(() => false), 30_000)
     if (SHOT_DIR && card) await win.locator('[data-sandbox-card]').first().screenshot({ path: path.join(SHOT_DIR, 'sandbox-card.png') })
@@ -247,6 +257,12 @@ async function main() {
     const railImg = rail ? await until(() => win.locator(`${railSel} img`).count().then((n) => n === 1), 8_000) : false
     if (SHOT_DIR && rail) await win.locator(railSel).first().screenshot({ path: path.join(SHOT_DIR, 'sandbox-rail.png') })
     check('13a 右栏沙箱卡:在发起的对话里出现,带缩略图、运行中、最近一步', rail && railImg && /运行中/.test(railText) && /最近一步/.test(railText), railText)
+    if (process.env.SBX_HOLD) {
+      // 走查的人要的是「刚起好、用户第一次看到」的样子:父窗抬回普通层、排到前面
+      await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.isVisible()); w.setAlwaysOnTop(false); w.show() })
+      console.log(`HOLD ${path.join(home, 'kick')}`)
+      await until(() => fs.existsSync(path.join(home, 'kick')), 30 * 60_000)
+    }
 
     // ── 5 setup 抛错 ──
     writePlugin(`throw new Error('SBX_SETUP_EXPLODED')\n`)

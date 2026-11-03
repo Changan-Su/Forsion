@@ -11,7 +11,7 @@
  */
 import { app, BrowserWindow, dialog, ipcMain, type WebContents } from 'electron'
 import { connect, type Socket } from 'node:net'
-import { watch, realpathSync, type FSWatcher } from 'node:fs'
+import { watch, lstatSync, realpathSync, type FSWatcher } from 'node:fs'
 import { basename, dirname, isAbsolute, resolve, sep } from 'node:path'
 import { mtFor } from './mainI18n'
 import './pluginSandbox' // 窗口标题的文案片段(PLUGIN_SANDBOX_MESSAGES)在那边注册
@@ -85,7 +85,9 @@ export function sandboxFilePath(p: string, base: { dir: string; root: string }, 
   if (!p || p.length > 4096) return null
   const abs = isAbsolute(p) ? resolve(p) : resolve(base.dir, p)
   const real = (x: string): string | null => { try { return realpathSync(x) } catch { return null } }
-  const target = mustExist ? real(abs) : (() => { const d = real(dirname(abs)); return d && resolve(d, basename(abs)) })()
+  // 已经在的(哪怕是软链)一律按它真实指向核:save 到一个指出去的软链 = 写穿到沙箱外面(Codex 评审);只有还不存在的才按父目录核
+  const there = (() => { try { lstatSync(abs); return true } catch { return false } })()
+  const target = mustExist || there ? real(abs) : (() => { const d = real(dirname(abs)); return d && resolve(d, basename(abs)) })()
   if (!target) return null
   const inside = (root: string): boolean => { const r = root && real(root); return !!r && (target === r || target.startsWith(r + sep)) }
   return inside(base.dir) || inside(base.root) ? target : null
@@ -184,8 +186,9 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
       if (!loc) return STARTING
       if ('error' in loc) return loc.error
       clickAt(wc, loc)
-      label = loc.label
-      if (loc.covered) did += ` (another element was on top of it: ${loc.covered})`
+      // 元素名是插件的字:只进 target(引擎圈进数据区),did 只放宿主自己的话(Codex 评审:covered 曾拼进 did,漏出围栏)
+      label = loc.covered ? `${loc.label}; another element was on top of it: ${loc.covered}` : loc.label
+      if (loc.covered) did += ' (something else was on top of it, see target)'
       return null
     }
     if (op === 'space' || op === 'scroll') {
@@ -260,7 +263,7 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
     armed = { paths: paths as string[] }
     await fileInputs(true)
     void pushState()
-    return { action: { did: `the next file dialog will answer with ${paths.length} path(s): ${(paths as string[]).join(', ')}`, target: '', outline: '', newLogs: [], newNotices: [] } }
+    return { action: { did: `the next file dialog will answer with ${paths.length} path(s)`, target: (paths as string[]).join(', '), outline: '', newLogs: [], newNotices: [] } }
   }
 
   // 窗口标题写明是沙箱(以前就叫 Forsion,和用户那份分不清);页面自己的 <title> 不许盖掉它
