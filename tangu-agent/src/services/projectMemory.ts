@@ -5,15 +5,18 @@
  *   - agent 级 = 每个 agent 自己的 MEMORY.md(换个项目也成立的;原有那一套,不动)。
  *   - 项目级 = 只在某个项目里成立的事实(命令、目录、约定、用户针对这个项目提的要求),这个项目里干活的 agent 共用一份。
  *
- * 存本机用户目录 `tanguHome()/project-memory/<项目 realpath 的哈希>/`,不写进项目目录 —— 与 project-settings.json 同一取舍:
+ * 存本机用户目录 `tanguHome()/project-memory/<项目路径转成的可读名>-<哈希 8 位>/`,不写进项目目录 —— 与 project-settings.json 同一取舍:
  * 这类内容取决于本人意愿,不该进仓库;也免得 clone 来的仓自带一份「记忆」进系统提示。代价:项目目录挪了位置,这份记忆就对不上了。
+ * 11-03 改成 Claude Code 的样子:按 git 根认项目(同一个仓的 worktree、子文件夹共用一份)、目录名看得懂、`MEMORY.md` 是一行一条的索引、
+ * 整份常驻(存多少就看多少)。旧的按文件夹哈希建的目录、回退到老引擎时它新建的目录,下次打开时并进来(absorbStrays)。
  * 落盘沿用 createMemoryRepository(版本 / CAS / 墓碑 / 外部编辑对账),没有新的写盘协议。不走云同步,不过 Dream;
  *  写满时由模型压一遍(projectMemoryCompact.ts),这里只存它留下的记录(COMPACTED.json)。
  *
  * 归属只认会话存档的 project_path(humanProjectScope 的做法),绝不接受模型或客户端给的路径。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { cpSync, lstatSync, mkdirSync, readdirSync, renameSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
 import { assertSafeChain } from './projectContext.js';
@@ -21,19 +24,67 @@ import { humanProjectScope } from './humanContext.js';
 import { query } from '../core/db.js';
 import { atomicWriteMemoryFile, createMemoryRepository, isMemoryTombstoneActive, memoryFactFingerprint, normalizeMemoryFact, readMemoryFile, withMemoryDirectoryLock, MemoryRepositoryError, type MemorySnapshot } from './memoryRepository.js';
 
-/** 一个项目的记忆总量(字符)。比 agent 级(20,000)小:它整份都可能进系统提示。 */
-export const PROJECT_MEMORY_CHAR_BUDGET = 8000;
-/** 每个 run 注入的上限(字符,不含段头)。 */
-export const PROJECT_MEMORY_RECALL_CHARS = 1500;
+/** 一个项目的记忆总量(字符,只算条目正文)。整份常驻系统提示,所以比 agent 级(20,000)小;写满时压缩(projectMemoryCompact.ts)。
+ *  11-03 以前是存 8000、每轮只给最新的 1500:超过 1500 的旧条目记着却看不见,1500–8000 之间又不触发压缩。 */
+export const PROJECT_MEMORY_CHAR_BUDGET = 4000;
+/** 每个 run 注入的上限(字符,只算条目正文,不含段头和每行的 id 前缀)= 总量:存的就是看得到的。 */
+export const PROJECT_MEMORY_RECALL_CHARS = PROJECT_MEMORY_CHAR_BUDGET;
 const ROOT = 'project-memory';
 const MARKER = 'PROJECT.json';
 
+/** project = 记忆认的那个目录(git 根,见 projectMemoryRoot),不一定是会话绑的文件夹。 */
 export interface ProjectMemoryRef { project: string; name: string; dir: string }
 
 export function refOf(project: string): ProjectMemoryRef {
-  const key = createHash('sha256').update(project).digest('hex').slice(0, 32);
-  return { project, name: path.basename(project), dir: path.join(tanguHome(), ROOT, key) };
+  const root = projectMemoryRoot(project);
+  return { project: root, name: path.basename(root), dir: path.join(tanguHome(), ROOT, memoryDirName(root)) };
 }
+
+/** 项目记忆按哪个目录认(11-03):往上找最近的 `.git`,和 projectDoc 找项目根同一个口径,嵌套的独立仓各算各的;
+ *  worktree 的 `.git` 是个文件(gitdir: …/.git/worktrees/<名>),顺着 commondir 认回主检出 —— 同一个仓的 worktree 共用一份。
+ *  家目录和它上面不算根(家目录本身是 dotfiles 仓时,不能把家里所有文件夹并成一个项目)。只读几个小文件,绝不往 .git 指向的地方写。
+ *  找不到 → 文件夹自己(以前的口径)。 */
+export function projectMemoryRoot(project: string): string {
+  const own = path.resolve(project);
+  const home = path.resolve(homedir());
+  let dir = own;
+  for (let hop = 0; hop < 64; hop++) {
+    if (isInsideOrSame(home, dir)) break; // 到了家目录或它上面
+    const dotGit = path.join(dir, '.git');
+    let kind: 'dir' | 'file' | null = null;
+    try { const st = lstatSync(dotGit); kind = st.isDirectory() ? 'dir' : st.isFile() ? 'file' : null; } catch { /* 没有:往上 */ }
+    if (kind === 'dir') return dir;
+    if (kind === 'file') return worktreeMain(dir, dotGit) ?? dir;
+    const up = path.dirname(dir);
+    if (up === dir) break;
+    dir = up;
+  }
+  return own;
+}
+const isInsideOrSame = (child: string, parent: string): boolean => { const rel = path.relative(parent, child); return !rel.startsWith('..') && !path.isAbsolute(rel); };
+
+/** worktree 的主检出;子模块(没有 commondir)、bare 仓的 worktree、读不了 → null(这一层就是它自己的根)。 */
+function worktreeMain(dir: string, dotGit: string): string | null {
+  try {
+    const m = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf8').slice(0, 4096));
+    if (!m) return null;
+    const gitdir = path.resolve(dir, m[1]);
+    const common = path.resolve(gitdir, readFileSync(path.join(gitdir, 'commondir'), 'utf8').trim());
+    if (path.basename(common) !== '.git') return null;
+    return realpathSync(path.dirname(common));
+  } catch { return null; }
+}
+
+/** 记忆目录名:项目路径的各段用 `-` 连起来(像 Claude Code 的 ~/.claude/projects/<路径>),再接 8 位哈希 ——
+ *  `/a-b` 和 `/a/b` 连出来一样、长路径会超过文件名 255 字节,有哈希就不撞;太长从左边截,留下最像项目名的那截。 */
+export function memoryDirName(root: string): string {
+  const hash = createHash('sha256').update(root).digest('hex').slice(0, 8);
+  let readable = root.split(/[\\/]+/).filter(Boolean).join('-').replace(/[<>:"|?*\x00-\x1f]/g, '_').replace(/^[.-]+|[. ]+$/g, '');
+  while (Buffer.byteLength(readable) > 120) { const cut = readable.indexOf('-'); readable = cut >= 0 ? readable.slice(cut + 1) : [...readable].slice(1).join(''); }
+  return `${readable || 'project'}-${hash}`;
+}
+/** 11-03 以前的目录名:会话那个文件夹 realpath 的 sha256 前 32 位。只给找旧目录用。 */
+const legacyDirName = (project: string): string => createHash('sha256').update(project).digest('hex').slice(0, 32);
 
 // 团队成员的工作会话、讨论会话、子 agent 的记录会话,建行时都不带 project_path(teamRuns / discussion / delegateTranscript)——
 // 它们在哪个项目里干活,看的是父会话。别的种类(Muse、自动化、普通会话)不往上找:它们的父链不是「在同一个项目里替它干活」。
@@ -67,16 +118,18 @@ export async function resolveProjectMemory(userId: string, sessionId: string): P
   return scope && scope.kind === 'project' ? refOf(scope.cwd) : null;
 }
 
-/** 写路径用:建目录(逐段拒软链)+ 留一个写明项目路径的标记文件(哈希目录名人读不懂)。 */
+/** 写路径用:建目录(逐段拒软链)+ 留一个写明项目路径的标记文件(目录名截过、带哈希,以它为准)。 */
 export async function openProjectMemory(ref: ProjectMemoryRef): Promise<ReturnType<typeof createMemoryRepository>> {
   await assertSafeChain(tanguHome(), `${ROOT}/${path.basename(ref.dir)}`, false);
+  absorbStrays(ref);
   mkdirSync(ref.dir, { recursive: true });
   if (readMemoryFile(ref.dir, MARKER) === null) atomicWriteMemoryFile(ref.dir, MARKER, JSON.stringify({ project: ref.project }));
   return createMemoryRepository(ref.dir);
 }
 
-/** 只读:这份记忆存在吗。不建目录(readMemoryFile 会顺手把目录建出来,所以先自己 lstat)。 */
+/** 这份记忆存在吗。不建目录(readMemoryFile 会顺手把目录建出来,所以先自己 lstat);旧目录先并进来(只有那时会动盘)。 */
 function exists(ref: ProjectMemoryRef): boolean {
+  absorbStrays(ref);
   try { return lstatSync(path.join(ref.dir, 'MEMORY.md')).isFile(); } catch { return false; }
 }
 
@@ -340,8 +393,8 @@ export async function addProjectFact(ref: ProjectMemoryRef, fact: string, sessio
   }
 }
 
-/** 系统提示里的项目记忆段。放不下时留最新的(更可能还成立),展示仍按存入顺序;空 → ''。
- *  ponytail: 不按查询打分,整段常驻(项目内的约定与当前消息的字面相关性很弱);条目多到放不下再照 memoryRecall 的做法加打分。 */
+/** 系统提示里的项目记忆段:索引整份常驻(像 Claude Code 的 MEMORY.md),展示按存入顺序;空 → ''。
+ *  ponytail: 不按查询打分(项目内的约定与当前消息的字面相关性很弱);手改写超了总量时才截,留最新的。 */
 export async function buildProjectMemoryContext(userId: string, sessionId: string, maxChars = PROJECT_MEMORY_RECALL_CHARS): Promise<string> {
   const ref = await resolveProjectMemory(userId, sessionId);
   if (!ref) return '';
@@ -350,9 +403,11 @@ export async function buildProjectMemoryContext(userId: string, sessionId: strin
   const lines = snapshot.entries.map((e) => `[project_memory_id=${e.id}] ${e.content}`);
   const keep: string[] = [];
   let used = 0;
-  for (const line of [...lines].reverse()) {
-    if (used + line.length + 1 > maxChars) break;
-    keep.unshift(line); used += line.length + 1;
+  // 正常情况下整份都放得下(总量 = 注入量,只算正文);手改 MEMORY.md 写超了才会走到截断,那时留最新的
+  for (const [i, line] of [...lines.entries()].reverse()) {
+    const cost = snapshot.entries[i].content.length + 1;
+    if (used + cost > maxChars + 1) break;
+    keep.unshift(line); used += cost;
   }
   if (!keep.length) return '';
   const hidden = lines.length - keep.length;
@@ -365,26 +420,52 @@ export async function buildProjectMemoryContext(userId: string, sessionId: strin
 // 旧文件夹已经不在,realpath 算不出来:先按调用方给的几种写法(原样 / 最深的现存上级 realpath + 余下部分)找哈希目录,
 // 都不中再扫各目录的 PROJECT.json 标记。找到后整个目录改名到新 realpath 的哈希下;新位置已经有一份 → 合并去重。
 // 全程同步:本进程里别的记忆写入插不进来(它们也都是同步事务)。返回 undo / commit,由调用方在会话库写成之后 commit、失败时 undo。
-const HASH_DIR = /^[0-9a-f]{32}$/;
+/** rehomeDir 换位时的临时目录名(`<目录>.relink-<tag>` / `.before-<tag>`)。 */
+const TEMP_DIR = /\.(relink|before)-[0-9a-f]{8}$/;
 /** 合并时不按 8000 字封顶:两份并起来超了也全留下,下一次写入撞满时由压缩去合(projectMemoryCompact.ts),不丢。 */
 const MERGE_CAP = 200_000;
 
 const isRealDir = (dir: string): boolean => { try { return lstatSync(dir).isDirectory(); } catch { return false; } };
 const lockHeld = (dir: string): boolean => { try { lstatSync(path.join(dir, '.memory.lock')); return true; } catch { return false; } };
 
-/** 旧项目的记忆目录;没有 → null。只读,不建目录。 */
-export function findProjectMemoryDir(keys: readonly string[]): string | null {
-  for (const key of keys) { const dir = refOf(key).dir; if (isRealDir(dir)) return dir; }
+/** project-memory 下的各份记忆目录(换位时的临时目录不算)。 */
+function memoryDirs(): string[] {
   const root = path.join(tanguHome(), ROOT);
   let names: string[];
-  try { names = readdirSync(root).filter((n) => HASH_DIR.test(n)); } catch { return null; }
-  for (const name of names) {
-    const dir = path.join(root, name);
-    if (!isRealDir(dir)) continue;
-    try { if (keys.includes(JSON.parse(readMemoryFile(dir, MARKER) ?? 'null')?.project)) return dir; } catch { /* 坏标记 / 读不了:不是它 */ }
-  }
-  return null;
+  try { names = readdirSync(root); } catch { return []; }
+  return names.filter((n) => !TEMP_DIR.test(n)).map((n) => path.join(root, n)).filter(isRealDir);
 }
+/** 标记文件里写的项目路径;没有 / 写坏了 → null。 */
+function markerOf(dir: string): string | null {
+  try { const p = JSON.parse(readMemoryFile(dir, MARKER) ?? 'null')?.project; return typeof p === 'string' ? p : null; } catch { return null; }
+}
+
+/** 旧项目的记忆目录;没有 → null。只读,不建目录。按原来那个路径本身找(旧的哈希名 / 它当根时的新名 / 标记),
+ *  不往上找 git 根:旧文件夹多半已经不在,往上走会认到外层仓的那份,「重新指向」就把别人的记忆搬走了。 */
+export function findProjectMemoryDir(keys: readonly string[]): string | null {
+  for (const key of keys) {
+    for (const name of [memoryDirName(path.resolve(key)), legacyDirName(key)]) { const dir = path.join(tanguHome(), ROOT, name); if (isRealDir(dir)) return dir; }
+  }
+  return memoryDirs().find((dir) => { const p = markerOf(dir); return p !== null && keys.includes(p); }) ?? null;
+}
+
+/** 已经并过的(按目录),每个进程只扫一次。 */
+const absorbed = new Set<string>();
+/** 别的目录里属于同一个项目的记忆并进来:11-03 以前按文件夹哈希建的旧目录、同一个仓的 worktree / 子文件夹各自那份、
+ *  回退到老引擎时它新建的那份(老引擎还按旧哈希名找)。原来那个文件夹已经不在的不动 —— 认不准它属于哪个仓,交给「重新指向」。
+ *  有人拿着锁正在写 / 换位失败 → 这次跳过,下次打开再来;绝不因此让读写失败。 */
+function absorbStrays(ref: ProjectMemoryRef): void {
+  if (absorbed.has(ref.dir)) return;
+  let done = true;
+  for (const dir of memoryDirs()) {
+    if (dir === ref.dir) continue;
+    const project = markerOf(dir);
+    if (project === null || !existsSync(project) || projectMemoryRoot(project) !== ref.project) continue;
+    try { rehomeDir(dir, ref).commit(); } catch { done = false; }
+  }
+  if (done) absorbed.add(ref.dir);
+}
+export function resetProjectMemoryAbsorbForTests(): void { absorbed.clear(); }
 
 /** 一份记忆有几条(对话框「项目记忆(N 条)」);读不了当 0。 */
 export function projectMemoryCount(dir: string | null): number {
@@ -423,16 +504,21 @@ function mergeProjectMemory(src: string, into: string): void {
 
 export interface ProjectMemoryMove { kind: 'none' | 'moved' | 'merged'; undo(): void; commit(): void }
 
-/** 把旧项目的记忆搬到新 realpath 名下(见上)。有写入方拿着锁(.memory.lock)→ MEMORY_BUSY,什么都不动。 */
+/** 把旧项目的记忆搬到新位置名下(见上)。有写入方拿着锁(.memory.lock)→ MEMORY_BUSY,什么都不动。 */
 export function rehomeProjectMemory(fromKeys: readonly string[], to: string): ProjectMemoryMove {
   const src = findProjectMemoryDir(fromKeys);
-  const dst = refOf(to).dir;
-  if (!src || src === dst) return { kind: 'none', undo() {}, commit() {} };
+  return src ? rehomeDir(src, refOf(to)) : { kind: 'none', undo() {}, commit() {} };
+}
+
+/** 把 src 这份并到 ref 名下:ref 那边还没有 → 整个改名过去;已经有 → 合并去重。重新指向和 absorbStrays 共用。 */
+function rehomeDir(src: string, ref: ProjectMemoryRef): ProjectMemoryMove {
+  const dst = ref.dir;
+  if (src === dst) return { kind: 'none', undo() {}, commit() {} };
   if (lockHeld(src) || (isRealDir(dst) && lockHeld(dst))) throw new MemoryRepositoryError('MEMORY_BUSY', 'Project memory is being written. Try again in a moment.');
   if (!isRealDir(dst)) {
     const marker = readMemoryFile(src, MARKER);
     renameSync(src, dst);
-    try { atomicWriteMemoryFile(dst, MARKER, JSON.stringify({ project: to })); } catch (e) { renameSync(dst, src); throw e; }
+    try { atomicWriteMemoryFile(dst, MARKER, JSON.stringify({ project: ref.project })); } catch (e) { renameSync(dst, src); throw e; }
     return {
       kind: 'moved',
       undo() { if (marker !== null) atomicWriteMemoryFile(dst, MARKER, marker); renameSync(dst, src); },

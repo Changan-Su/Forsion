@@ -589,10 +589,10 @@ describe('项目会话:只在这个项目成立的候选落项目记忆,不进 a
   const filler = (i: number): string => `Fact ${String(i).padStart(2, '0')} ${'x'.repeat(280)}`;
   const fillUp = async (): Promise<string[]> => {
     const repo = await openProjectMemory((await resolveProjectMemory(USER, 'SP'))!);
-    for (let i = 0; (i + 1) * 289 <= PROJECT_MEMORY_CHAR_BUDGET - 100; i++) repo.mutate({ action: 'add', fact: filler(i), cap: PROJECT_MEMORY_CHAR_BUDGET });
+    for (let i = 0; repo.snapshot().content.length + filler(i).length + 1 <= PROJECT_MEMORY_CHAR_BUDGET; i++) repo.mutate({ action: 'add', fact: filler(i), cap: PROJECT_MEMORY_CHAR_BUDGET });
     return projectFacts();
   };
-  const NEW_FACT = `The build output goes to dist and ${'y'.repeat(200)}`;
+  const NEW_FACT = `The build output goes to dist and ${'y'.repeat(260)}`; // 比塞满后剩下的地方长(一条 filler 286 字),又不超过候选的 300 字
   const logged = async (action: string): Promise<any[]> => query<any[]>(`SELECT detail FROM special_agent_log WHERE action = ?`, [action]);
 
   it('满了、压不成 → 不写:不为了腾地方动已有条目', async () => {
