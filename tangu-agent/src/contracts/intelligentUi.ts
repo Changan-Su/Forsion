@@ -2,7 +2,7 @@
  * No HTML, styles, network actions or arbitrary component names. v1 has no expressions; v2 adds
  * state, derived values and expressions over a fixed function list (intelligentUiExpr.ts). */
 import { validAppCardId } from './intelligentCards.js'
-import { compileExpr, documentScope, EXPR_LIMITS, interpolationSources, reservedUIName, UI_NAME, uiValueIssue, type ExprScope, type UIValue } from './intelligentUiExpr.js'
+import { compileExpr, documentScope, EXPR_LIMITS, interpolationSources, reservedUIName, UI_NAME, UI_RECORDS, uiValueIssue, type ExprScope, type UIValue } from './intelligentUiExpr.js'
 export type { UIValue } from './intelligentUiExpr.js'
 export type UICondition = { input: string; equals: string | number } | { expr: string }
 export type UIStateVar = { id: string; initial: UIValue }
@@ -63,6 +63,8 @@ function list<T>(x: unknown, p: string, max: number, parse: (x: unknown, p: stri
   if (!Array.isArray(x) || x.length > max) fail(p, `expected array (max ${max})`)
   return x.map((v, i) => parse(v, `${p}[${i}]`))
 }
+/** Said to the model when it declares or sets records, so the next call reads it instead. */
+const RECORDS_RESERVED = `"${UI_RECORDS}" is reserved: it is the list of a widget's saved records, each {id, field: value}, read-only; read it without declaring it (for your own value pick another name)`
 function unique<T extends { id: string }>(xs: T[], p: string): T[] {
   if (new Set(xs.map(x => x.id)).size !== xs.length) fail(p, 'duplicate IDs')
   return xs
@@ -109,6 +111,7 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
   }
   const inputs = unique(list(d.inputs, 'inputs', 8, (v, p): UIInput => {
     const o = obj(v, p), common = { id: id(o.id, `${p}.id`), label: str(o.label, `${p}.label`, 160) }
+    if (v2 && common.id === UI_RECORDS) fail(`${p}.id`, RECORDS_RESERVED)
     if (o.kind === 'number') {
       const min = num(o.min, `${p}.min`), max = num(o.max, `${p}.max`, min), step = num(o.step, `${p}.step`, 0.001)
       const initial = num(o.initial, `${p}.initial`, min, max)
@@ -135,6 +138,7 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
   const declare = (x: unknown, p: string): string => {
     const name = str(x, p, 40)
     if (!UI_NAME.test(name)) fail(p, `"${name}" is not a name (letters, digits, underscore; not starting with a digit)`)
+    if (name === UI_RECORDS) fail(p, RECORDS_RESERVED)
     if (reservedUIName(name)) fail(p, `"${name}" is a keyword`)
     if (names.has(name) || inputMap.has(name)) fail(p, `"${name}" is already declared`)
     names.add(name)
@@ -147,7 +151,7 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
   })
   const inputIds = new Set(inputs.map(i => i.id))
   const derived = !v2 || d.derived === undefined ? [] : list(d.derived, 'derived', 32, (v, p) => {
-    const o = obj(v, p), source = expr(o.expr, `${p}.expr`, { inputs: inputIds, names: new Set(names) })
+    const o = obj(v, p), source = expr(o.expr, `${p}.expr`, { inputs: inputIds, names: new Set([UI_RECORDS, ...names]) })
     return { id: declare(o.id, `${p}.id`), expr: source }
   })
   const scope = documentScope({ inputs, state, derived })
@@ -242,7 +246,12 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
         if (a.kind === 'copy') return { ...base, kind: 'copy' as const, text: str(a.text, `${q}.text`, 10000) }
         if (a.kind === 'open') return { ...base, kind: 'open' as const, resourceId: resourceRef(a.resourceId, `${q}.resourceId`, 'source') }
         if (a.kind === 'set' && v2) {
-          const target = (x: unknown, r: string): string => { const t = str(x, r, 40); if (!state.some(s => s.id === t)) fail(r, 'expected a state name'); return t }
+          const target = (x: unknown, r: string): string => {
+            const t = str(x, r, 40)
+            if (t === UI_RECORDS) fail(r, `${RECORDS_RESERVED}; buttons cannot change it`)
+            if (!state.some(s => s.id === t)) fail(r, 'expected a state name')
+            return t
+          }
           const steps = list(a.steps, `${q}.steps`, 8, (v, r): UISetStep => {
             const s = obj(v, r)
             if (s.set !== undefined) return { set: target(s.set, `${r}.set`), to: expr(s.to, `${r}.to`, scope) }

@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { parseUIDraft, validateUIDocument, type UIDocument } from './intelligentUi.js'
-import { applyUISteps, compileExpr, documentEnv, evaluate, uiDocumentIssues, uiTableRows, uiText, type UIValue } from './intelligentUiExpr.js'
+import { applyUISteps, compileExpr, documentEnv, evaluate, uiDocumentIssues, uiRecords, uiTableRows, uiText, type UIValue } from './intelligentUiExpr.js'
 // 画廊:手写的 v2 文档,一份三用 —— 这里当校验器单测,技能里的例子照它写,desktop 的回放台架拿它截图。
 const gallery: Record<string, UIDocument> = JSON.parse(readFileSync(new URL('../../../desktop/scripts/fixtures/intelligent-ui-gallery.json', import.meta.url), 'utf8'))
 const loan = () => structuredClone(gallery.loan) as unknown as Record<string, any>
@@ -256,5 +256,61 @@ describe('checklist labels with {{ }}', () => {
     const hidden = { ...doc, inputs: [doc.inputs[0], { id: 'n', kind: 'number', label: 'N', initial: 0, min: 0, max: 5, step: 1 }],
       blocks: [{ id: 'c', kind: 'controls', inputIds: ['people', 'n'] }, { id: 'l', kind: 'checklist', items: [{ id: 'p', label: 'Per person {{10 / n}}', when: { input: 'n', equals: 1 } }] }] }
     expect(uiDocumentIssues(validateUIDocument(hidden, { maxVersion: 2 }), 'zh')).toEqual([])
+  })
+})
+
+// 小组件第 3 步:原生卡读得到自己的记录(data.db 的行)。之前记一笔写进 data.db,卡看不见,账本哪里都是空的。
+describe('records in a widget document', () => {
+  const ledger = {
+    version: 2, id: 'ledger', title: 'Ledger', inputs: [], resources: [],
+    derived: [{ id: 'total', expr: 'sum(each(records,\'r\',r.amount))' }],
+    blocks: [
+      { id: 'sum', kind: 'stats', items: [{ label: 'Total', value: "format(total, 'number', 0)" }, { label: 'Entries', value: '{{count(records)}}' }] },
+      { id: 'list', kind: 'table', columns: ['Item', 'Amount'], rows: "each(records,'r',[r.item,r.amount])" },
+      { id: 'big', kind: 'text', markdown: 'Big ones: {{count(filter(records,\'r\',r.amount > 30))}}', when: { expr: 'count(records) > 0' } },
+    ],
+  }
+  const rows = [{ id: 'r_1', cells: { item: '午饭', amount: 38 } }, { id: 'r_2', cells: { item: 'tea', amount: 12 } }]
+  it('reads records in derived values, stats, table rows, text and when', () => {
+    const doc = validateUIDocument(ledger)
+    const env = documentEnv(doc, {}, new Map(), 'zh', rows)
+    expect(env.text("format(total, 'number', 0)")).toBe('50')
+    expect(env.text('{{count(records)}}')).toBe('2')
+    const table = env.cell("each(records,'r',[r.item,r.amount])")
+    expect(table.ok && uiTableRows(table.value, 2)).toEqual([['午饭', '38'], ['tea', '12']])
+    expect(env.text('{{count(filter(records,\'r\',r.amount > 30))}}')).toBe('1')
+    expect(env.cell('records[0].id')).toEqual({ ok: true, value: 'r_1' })
+  })
+  it('is an empty list outside a widget and at the engine\'s initial-value check', () => {
+    const doc = validateUIDocument(ledger)
+    expect(documentEnv(doc, {}, new Map(), 'en').text('{{count(records)}}')).toBe('0')
+    expect(uiDocumentIssues(doc)).toEqual([])
+    expect(uiDocumentIssues(validateUIDocument({ ...ledger, derived: [...ledger.derived, { id: 'first', expr: 'records[0].amount' }] }))).toEqual(['derived first: index 0 is outside the list (0 items)'])
+  })
+  it('cannot be declared as an input, state or derived value, nor be a loop name', () => {
+    const reserved = /"records" is reserved: it is the list of a widget's saved records/
+    expect(() => validateUIDocument({ ...ledger, state: [{ id: 'records', initial: [] }] })).toThrow(reserved)
+    expect(() => validateUIDocument({ ...ledger, derived: [{ id: 'records', expr: '[]' }] })).toThrow(reserved)
+    expect(() => validateUIDocument({ ...ledger, inputs: [{ id: 'records', kind: 'number', label: 'n', initial: 1, min: 0, max: 5, step: 1 }], blocks: [{ id: 'c', kind: 'controls', inputIds: ['records'] }, ...ledger.blocks] })).toThrow(reserved)
+    expect(() => validateUIDocument({ ...ledger, derived: [{ id: 'x', expr: "each([1],'records',1)" }] })).toThrow(/quoted item name/)
+    // v1 没有表达式,input 叫 records 不碍事
+    expect(validateUIDocument({ version: 1, id: 'v1', title: 'v1', inputs: [{ id: 'records', kind: 'number', label: 'n', initial: 1, min: 0, max: 5, step: 1 }], resources: [], blocks: [{ id: 'c', kind: 'controls', inputIds: ['records'] }] }).version).toBe(1)
+  })
+  it('no button can change it', () => {
+    const doc = { ...ledger, state: [{ id: 'n', initial: 0 }] }
+    for (const step of [{ set: 'records', to: '[]' }, { append: 'records', value: '1' }, { remove: 'records', value: '1' }, { toggle: 'records' }, { reset: 'records' }]) {
+      expect(() => validateUIDocument({ ...doc, blocks: [...doc.blocks, { id: 'a', kind: 'actions', items: [{ id: 'b', label: 'B', kind: 'set', steps: [step] }] }] })).toThrow(/reserved.*buttons cannot change it/)
+    }
+    // 按钮算新值时读得到记录
+    const parsed = validateUIDocument({ ...doc, blocks: [...doc.blocks, { id: 'a', kind: 'actions', items: [{ id: 'b', label: 'B', kind: 'set', steps: [{ set: 'n', to: 'count(records)' }] }] }] })
+    const steps = (parsed.blocks.at(-1) as { items: { steps: [] }[] }).items[0].steps
+    expect(applyUISteps(parsed, steps, {}, new Map([['n', 0]]), 'zh', rows).get('n')).toBe(2)
+    expect(applyUISteps(parsed, steps, {}, new Map([['n', 0]]), 'zh').get('n')).toBe(0)
+  })
+  it('builds {id, field: value} from rows: the row id wins, unsafe keys and odd values are left out', () => {
+    expect(uiRecords([{ id: 'r_1', cells: JSON.parse('{"id":"x","__proto__":{"a":1},"amount":3,"tags":["a"],"nested":{"a":1},"bad":[1],"none":null}') }]))
+      .toEqual([{ id: 'r_1', amount: 3, tags: ['a'], none: null }])
+    const env = documentEnv(validateUIDocument(ledger), {}, new Map(), 'en', rows)
+    expect(env.name('records')).toBe(env.name('records')) // 一次渲染同一份
   })
 })

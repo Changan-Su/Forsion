@@ -2848,6 +2848,15 @@ try {
     const t2 = await ask(sid, '记一笔：午饭 38 元');
     const before = w0 && existsSync(dataFile(w0)) ? readFileSync(dataFile(w0), 'utf8') : '';
     checks.recorded = !t2.error && (before ? JSON.parse(before).rows.length : 0) === 1;
+    // 第 3 步:原生卡读得到自己的记录(表达式里的 records);HTML 卡怎么读记录归桌面那半,这里只记下是哪种。
+    const wR = agentWidgets().find((w) => w.manifest.id === w0?.manifest.id);
+    // 只看表达式(expr / value / rows / to / disabled 和文字里的 {{ }}),标题、标签里写了 records 不算
+    const exprs = (x, k = '') => typeof x === 'string' ? (['expr', 'value', 'rows', 'to', 'disabled'].includes(k) ? [x] : [...x.matchAll(/\{\{([\s\S]*?)\}\}/g)].map((m) => m[1]))
+      : Array.isArray(x) ? x.flatMap((v) => exprs(v, k)) : x && typeof x === 'object' ? Object.entries(x).flatMap(([kk, v]) => exprs(v, kk)) : [];
+    let json = null;
+    try { json = wR?.manifest.entry === 'widget.json' ? JSON.parse(readFileSync(join(wR.dir, 'widget.json'), 'utf8')) : null; } catch { /* 读不了就是没绑上 */ }
+    checks.recordsBound = !!wR && (wR.manifest.entry === 'widget.html' || exprs(json).some((src) => /\brecords\b/.test(src)));
+    checks.recordsBoundVia = wR?.manifest.entry ?? 'none'; // 只记录,不算过没过
 
     const rev0 = agentWidgets().find((w) => w.manifest.id === w0?.manifest.id)?.manifest.rev; // 模型可能第一轮就自己补过一版
     const t3 = await ask(sid, '把标题改成「东京账本」，再加一行显示换算成人民币的总数');
@@ -2893,7 +2902,7 @@ try {
 
     const turns = [t1, t2, t3, t4, t5, t6, t7, t8];
     writeFileSync(join(OUT, 'widget-evidence.json'), JSON.stringify({ checks, turns: turns.map((t) => ({ tools: t.toolCalls, cards: cards(t).map(({ html, document, ...rest }) => ({ ...rest, htmlChars: html?.length, documentChars: document?.length })), results: t.toolResults.map((r) => ({ name: r.name, isError: r.isError, result: String(r.result).slice(0, 300) })), reply: t.content })) }, null, 2));
-    const { usedEdits, staleSeen, ...must } = checks;
+    const { usedEdits, staleSeen, recordsBoundVia, ...must } = checks;
     return { ok: Object.values(must).every(Boolean), detail: JSON.stringify(checks), output: t4.content, toolCalls: turns.flatMap((t) => t.toolCalls), ttftMs: ttft(t1), tokens: turns.reduce((n, t) => n + (tokensOf(t) || 0), 0) };
   });
 
