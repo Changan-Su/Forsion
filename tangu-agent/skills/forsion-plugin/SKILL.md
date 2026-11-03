@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.92.0
+  version: 1.93.0
   author: Forsion
   category: Forsion
 ---
@@ -66,12 +66,12 @@ Plugin authors: run the same checker before every release. It is the generic hal
 
 When `plugin_sandbox` is in your tool catalog (the desktop app, a work session on this computer), verify every desktop plugin you write there **before** you tell the user it works, and never install it into their Forsion yourself:
 
-1. `plugin_sandbox` `{"action":"start","path":"<plugin folder with manifest.json>"}` (relative paths resolve against the working folder). You get the load status (registered views, hidden Spaces, setup error, mount errors, the plugin's own console) and a screenshot of the sandbox window, with the plugin's first view open.
+1. `plugin_sandbox` `{"action":"start","path":"<plugin folder with manifest.json>"}` (relative paths resolve against the working folder). You get the load status (registered views, the Space folders it ships and which were shown or hidden and why, setup error, mount errors, the plugin's own console) and a screenshot of the sandbox window, already on the plugin's first Space (or its first view when it ships no Space).
 2. Fix what you see in the files. Saving reloads the sandbox by itself; look again with `plugin_sandbox_inspect` (`status`, `screenshot` with an optional `view` id, `logs`).
-3. Exercise behaviour with `plugin_sandbox_inspect` `{"action":"command","command":"<command id>","args":{...}}`: it runs a command the plugin registered with `ctx.registerCommand`, passing `args` to `run(args)`. Register the actions you need to test as commands.
-4. Tell the user it is running in the sandbox. They can open the window from the sandbox card in the chat, try it, report a problem back to this chat, and install it with **Install in my Forsion**, which asks them first.
+3. Use it like a person would, with `plugin_sandbox_inspect` (2026-11-03+; never computer use on the sandbox window): `read` gives an outline of the screen with `[e12]` references; `click` / `type` / `press` take a `target` (a reference, `css:<selector>`, or a control's visible text), `type` replaces the field's text unless `append` is true, `press` takes keys such as `Enter`, `ArrowDown`, `Mod+K`; `scroll` (`amount` pixels, negative = up) and `space` (switch to one of the plugin's Spaces). Each returns a screenshot after the page settles, plus console lines and toasts that appeared meanwhile. Before clicking something that opens a file picker (`<input type="file">` included), call `files` with `paths` inside the plugin folder (put test fixtures there); a native picker cannot be seen or clicked. Commands still work too: `{"action":"command","command":"<command id>","args":{...},"screenshot":true}` runs one the plugin registered with `ctx.registerCommand`.
+4. Tell the user it is running in the sandbox. They can open the window from the sandbox card in the chat or the sandbox card in the right-hand summary panel, try it, report a problem back to this chat, and install it with **Install in my Forsion**, which asks them first.
 
-What the sandbox is: a separate Forsion with its own empty vault and data, signed out, **without the Tangu engine**, where only this plugin is loaded. So a bundle's engine half (`plugins/`, `agents/`, `skills/`), anything that needs a signed-in account or cloud sync, and plugins that declare `fileExtensions` (blocked for dev copies) cannot be verified there; say so and test those after the user installs. Only one sandbox runs at a time; `reset` wipes its data and starts fresh; `stop` closes it.
+What the sandbox is: a separate Forsion with its own empty vault and data, signed out, **without the Tangu engine**, where only this plugin is loaded, plus the built-in plugins it lists in `requiresPlugins` (others, such as Forsion Extend or Calendar, are not there; declare what you depend on). The Ribbon shows only this plugin's Spaces. So a bundle's engine half (`plugins/`, `agents/`, `skills/`), anything that needs a signed-in account or cloud sync, and plugins that declare `fileExtensions` (blocked for dev copies) cannot be verified there; say so and test those after the user installs. Only one sandbox runs at a time; `reset` wipes its data and starts fresh; `stop` closes it.
 
 No `plugin_sandbox` (mobile, web, cloud sessions, older desktop builds)? Fall back to `tools/check-plugin.mjs` and ask the user to try it. Coding Studio's Sandbox panel also has a **My Forsion** tier: that one loads the dev copy into the user's real app and real notes and is not isolated.
 

@@ -30,6 +30,7 @@ import { flipSiblings, watchStackMotion } from './summaryMotion'
 import { useSummaryCards, type SummaryCardEntry } from '../../amadeus/plugins/summaryCards'
 import { refreshProcesses, useProcessPolling, useSessionProcesses } from './processStore'
 import { BgRow, PROCESS_CAP } from './BackgroundProcs'
+import { SandboxRailCard, useSandboxRail } from './SandboxRailCard'
 
 registerMessages({
   'tsum.title': { zh: '任务概览', en: 'Task overview' },
@@ -274,7 +275,7 @@ const fmtDur = (ms: number): string => {
 }
 const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() || p
 /** 内置卡的默认顺序;插件卡按注册顺序插在 Desk 前面(用户定)。 */
-const BUILTIN = ['progress', 'bg', 'outputs', 'sources', 'scope'] as const
+const BUILTIN = ['progress', 'sandbox', 'bg', 'outputs', 'sources', 'scope'] as const
 const PROC_TOOLS = new Set(['run_background', 'kill_process'])
 
 export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId, teamStatus, onRetry }: {
@@ -329,6 +330,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
     setPluginState((s) => ({ ...s, [key]: { ...s[key], ...patch } })), [])
   const prefs = useSummaryPrefs()
   const sessKey = sessionId ?? ''
+  const sbx = useSandboxRail(sessionId) // 这个对话起的插件沙箱(别的对话看不到)
 
   const elapsed = running && f.startedAt ? now - f.startedAt : 0
   const done = f.todos.filter((x) => x.status === 'completed').length
@@ -345,6 +347,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   // 开合(summaryOpen.ts):每张在场的卡报一次「现在有几条」,变多了就开;在渲染里按存着的上一份推一步,提交后写回
   const sigs: CardSig[] = []
   if (hasFacts(f) || teamStatus) sigs.push({ id: 'progress', count: f.todos.length + f.attention.length, dflt: true })
+  if (sbx) sigs.push({ id: 'sandbox', count: 1, dflt: true })
   if (sessionId && procs.length) sigs.push({ id: 'bg', count: procs.length, live: runningProcs > 0, dflt: runningProcs > 0 })
   if (f.outputs.length > 0) sigs.push({ id: 'outputs', count: f.outputs.length, dflt: true })
   if (f.sources.length > 0) sigs.push({ id: 'sources', count: f.sources.length, dflt: false })
@@ -498,6 +501,9 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
     )
   }
 
+  if (sbx && sessionId) {
+    cards.sandbox = <SandboxRailCard key="sandbox" live={sbx} sessionId={sessionId} open={isOpen('sandbox', true)} onToggle={toggle('sandbox')} bodyCap={fit.cap.sandbox} squeezed={fit.squeezed.includes('sandbox')} />
+  }
   if (sessionId) {
     for (const p of plugins) {
       cards[p.key] = <PluginCard key={`${p.key}:${sessionId}`} entry={p} sessionId={sessionId} cwd={cwd ?? null} state={pluginState[p.key]} setState={patchPlugin}
