@@ -371,6 +371,8 @@ export interface McpServerConfigEntry {
   oauth?: { clientId?: string; scopes?: string[] }
   /** 从商店连上的连接器:目录 id(宿主同步地址、引擎读 alwaysAsk)。编辑时原样带着,别丢。 */
   connector?: string
+  /** 按远端工具名收紧:off 不下发、ask 每次都问(连接器设置页写)。编辑时原样带着。 */
+  tools?: Record<string, 'ask' | 'off'>
 }
 
 /** 连接器目录的一条(electron/connectorCatalog.ts 校验过的形状)。 */
@@ -614,6 +616,8 @@ declare global {
       /** 网页版专用(webShim):协议更新状态 GET /api/auth/terms 与确认 POST /api/auth/terms/agree。
        *  桌面 / Android 走 cloudFetch;网页版不给 cloudFetch(有它会顺带打开只给桌面的成就 / 插件数据同步)。见 components/TermsUpdateDialog。 */
       termsStatus?(): Promise<{ status: number; json?: any }>
+      /** 网页版:公开会员方案列表(会员徽章的配色与中英文名);桌面 / Android 走 cloudFetch */
+      membershipPlans?(): Promise<{ status: number; json?: any }>
       termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>

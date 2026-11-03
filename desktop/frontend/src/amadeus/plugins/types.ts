@@ -267,6 +267,9 @@ export interface PluginAppApi extends BlockSurfaceApi {
 
   /** 页面(笔记)清单,vault 相对路径。插件声明为自定义文件类型的后缀已被主进程排除在外。**不截断**。 */
   listPages?(): Promise<string[]>
+  /** 全库笔记里的 `#标签` 及其出现篇数(2026-11-02+),按篇数从多到少;层级标签 `工作/设计` 原样给出。
+   *  口径同编辑器 `#` 补全与标签树。旧宿主没有:`ctx.app.listTags?.()`。 */
+  listTags?(): Promise<Array<{ tag: string; count: number }>>
   /** **文件树可见的**非页面文件(附件 / 图片 / .db / PDF…),vault 相对路径。**不截断**。
    *  ⚠️范围有洞,别声称「库里所有图片」:主进程的遍历跳过一切**点目录 / 点文件 / node_modules**,
    *  所以经 `saveAsset()` 落进 `.amadeus/` 的页面附件**枚举不到**(codex 评审指出)。 */
@@ -463,9 +466,15 @@ export interface PluginNoteTask {
   /** 是不是勾选项(`- [ ]`);false = 普通行,`checked` 恒 false 且不能勾 */
   isTask: boolean
   checked: boolean
-  /** 日期,与多维表日期列同一种写法:`YYYY-MM-DD` / `YYYY-MM-DDTHH:mm` / 区间 `a/b` */
+  /** 日期,与多维表日期列同一种写法:`YYYY-MM-DD` / `YYYY-MM-DDTHH:mm` / 区间 `a/b`。
+   *  子任务(有 `parentId`)没写 `@` 时是 `''`。 */
   due: string
   remind?: string
+  /** 2026-11-02+:这一行缩进在某条带 `@` 的任务下面(`- [ ]`,最多两层)→ 父任务的 `id`。没写 `@` 的子任务也在列表里,
+   *  它不是独立的待办,画在父任务里;勾选照样走 `update(id, { checked })`。旧宿主没有这个字段,也不给没写 `@` 的子任务。 */
+  parentId?: string
+  /** 2026-11-02+:行文本里的 `#标签`(不含 `#`,口径同编辑器标签),没有就是空数组;`text` 里原样保留。旧宿主没有这个字段。 */
+  tags?: string[]
 }
 
 /** A read-only view of the ACTIVE NOTE. Amadeus is single-active-page (one page per panel, shared by
@@ -2211,6 +2220,14 @@ export interface PluginContext {
    *  · `duplicateRow`:复制一行(自动编号 / 创建时间重新盖),返回新行 id。
    *  · `deleteRow`:只删经典表的行,返回一个**撤销函数**(只生效一次;换了库再调不做事)。笔记视图的行是一篇笔记,
    *    这里不删(返回 null)——要删就 `ctx.app.trash(rowId)`(行 id 就是笔记路径,进回收站可恢复)。
+   *  · `addColumn(path, { name, type })`(2026-11-02+):给经典表加一列,返回新列 id(之后马上能 `setCell`);笔记视图、只读源、
+   *    不认识的类型 → null。`type` 只收基础类型(`text` / `number` / `checkbox` / `date` / `select` / `multiselect` / `url`)。
+   *    和行的写入走同一条路,不会冲掉还没落盘的行 —— 改列结构别拿 `ctx.app.mutateDb` 去抢同一张活表。
+   *  · `readBody(path, rowId)`(2026-11-02+):经典表一行的记录正文(Markdown,与表格「打开记录」、`mountRecord({ body })`
+   *    同一份);没写过 = `''`。笔记视图 / 找不到 → null。正文里的 `- [ ]` 就是这一行的子任务(待办插件这么用)。
+   *  · `setBody(path, rowId, body, expected?)`(2026-11-02+):整份替换那一行的正文,返回是否写了。只写可写的经典表;
+   *    给 `expected: { body }` 时当前正文对不上就不写(返回 false),落盘重放时再比一次 —— 勾一条子任务这种「读-改-写」
+   *    一律带上它,别盖掉用户刚在编辑器里打的字。打开着的 `mountRecord` 正文编辑器会换成新内容。
    *  ⚠️日期值的写法:`YYYY-MM-DD`、`YYYY-MM-DDTHH:mm`,区间用 `/` 连两头。
    *  旧宿主没有:`if (ctx.databases) …`。 */
   databases?: {
@@ -2219,6 +2236,12 @@ export interface PluginContext {
     addRow(path: string, cells?: Record<string, PluginCellValue>, name?: string): Promise<string | null>
     duplicateRow(path: string, rowId: string): Promise<string | null>
     deleteRow(path: string, rowId: string): (() => void) | null
+    /** 2026-11-02+;旧宿主没有:`ctx.databases.addColumn?.(…)`。 */
+    addColumn?(path: string, spec: { name: string; type: string }): string | null
+    /** 2026-11-02+;旧宿主没有:`ctx.databases.readBody?.(…)`。 */
+    readBody?(path: string, rowId: string): string | null
+    /** 2026-11-02+;旧宿主没有:`ctx.databases.setBody?.(…)`。 */
+    setBody?(path: string, rowId: string, body: string, expected?: { body: string }): boolean
   }
   /** 笔记正文里的 `@` 时间任务(2026-10-16+;待办视图里「笔记」那一组的来源)。
    *  **只有 manifest `capabilities` 里声明了 `'noteTasks'` 才注入**。

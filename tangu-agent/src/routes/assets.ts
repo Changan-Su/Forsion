@@ -211,7 +211,9 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
     const mcpManager = deps().mcp;
     const mcp = mcpManager
       ? mcpManager.listStatus().map((s) => {
-          const tools = [...mcpManager.toolsForRun([s.name]).values()];
+          // 清单连按工具关掉的也给(设置页要列出来、能改回);token 只算真下发的
+          const tools = [...mcpManager.toolsForRun([s.name], { includeOff: true }).values()];
+          const live = [...mcpManager.toolsForRun([s.name]).values()];
           return {
             server: s.name,
             transport: s.transport,
@@ -223,9 +225,10 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
             ...(s.origin ? { origin: s.origin } : {}),
             tools: tools.map((t) => ({
               name: t.name,
+              remoteName: t.remoteName, // 远端原名:目录 alwaysAsk 按它记,桥接名经 sanitize 改写过、反推不回来
               description: t.definition.function.description || '',
             })),
-            approxTokens: approxToolTokens(tools.map((t) => t.definition)),
+            approxTokens: approxToolTokens(live.map((t) => t.definition)),
           };
         })
       : [];

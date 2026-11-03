@@ -58,6 +58,8 @@ ctx.registerView({
 
 @ 提到人这类用法传 `mention: true`：只打 `trigger` 就开（此时 `query` 是空串），`trigger` 紧跟中文也开，只有紧贴拉丁字母或数字时不开（邮箱不会触发）。旧宿主忽略这个选项，仍按上面的规则。
 
+2026-11-02 起 `suggest` 也可以是一组，例如 `#` 标签一份、`[[` 关联一份（后者传 `mention: true`，紧跟中文也开）；光标前同时对上几个时，离光标最近的那个打开。输入框在窗口下半部分时浮层朝上开，放不下再翻到下面。更早的宿主只认单个对象。
+
 ```js
 const box = ctx.ui?.mountChatBox?.(el, {
   modelPicker: false,

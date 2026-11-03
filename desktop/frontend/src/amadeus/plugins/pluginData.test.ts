@@ -118,6 +118,39 @@ describe('ctx.databases', () => {
     expect(rowsNow()[0].cells.c1).toBe('乙')
   })
 
+  it('addColumn:和行写入同一条路 —— 刚加还没落盘的行不丢;新列马上能写;笔记视图 / 坏类型不加', async () => {
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const api = createDatabasesApi(scope)
+    const rowId = await api.addRow('T.db', {}, '刚加的')
+    const col = api.addColumn!('T.db', { name: '标签', type: 'multiselect' })!
+    expect(col).toBeTruthy()
+    expect(api.setCell('T.db', rowId!, col, ['工作'], { value: undefined })).toBe(true)
+    expect(api.addColumn!('T.db', { name: 'x', type: 'page' })).toBeNull()
+    expect(api.addColumn!('T.db', { name: ' ', type: 'text' })).toBeNull()
+    expect(api.addColumn!('Nope.db', { name: 'x', type: 'text' })).toBeNull()
+    await useDbStore.getState().flushAll()
+    expect(disk.columns.at(-1)).toMatchObject({ id: col, name: '标签', type: 'multiselect' })
+    expect(disk.rows.find((r) => r.id === rowId)?.cells[col]).toEqual(['工作'])
+  })
+
+  it('readBody / setBody:只写经典表;expected 对不上不写;落盘重放时正文已被改过也不写', async () => {
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const api = createDatabasesApi(scope)
+    expect(api.readBody!('T.db', 'r1')).toBe('')
+    expect(api.readBody!('T.db', 'nope')).toBeNull()
+    expect(api.setBody!('T.db', 'r1', '- [ ] a', { body: '别的' })).toBe(false)
+    expect(api.setBody!('T.db', 'nope', 'x')).toBe(false)
+    expect(api.setBody!('T.db', 'r1', 1 as unknown as string)).toBe(false)
+    expect(api.setBody!('T.db', 'r1', '- [ ] a', { body: '' })).toBe(true)
+    expect(api.readBody!('T.db', 'r1')).toBe('- [ ] a')
+    await useDbStore.getState().flushAll()
+    expect(disk.rows[0].body).toBe('- [ ] a')
+    // 同一份 expected 第二次:当前正文已变 → 拒
+    expect(api.setBody!('T.db', 'r1', '- [x] a', { body: '' })).toBe(false)
+    expect(api.setBody!('T.db', 'r1', '- [x] a', { body: '- [ ] a' })).toBe(true)
+    expect(api.readBody!('T.db', 'r1')).toBe('- [x] a')
+  })
+
   it('快照是拷贝:插件原地改它不动宿主的表;插件停用后旧撤销函数不再写', async () => {
     await useDbStore.getState().reload('T.db', 'T.db')
     let snap: { databases: Array<{ rows: Array<{ cells: Record<string, unknown> }> }> } | null = null
@@ -170,6 +203,15 @@ describe('ctx.noteTasks.update', () => {
     expect(api.update('n.md:3', {})).toBe(false)
     expect(api.update('n.md:3', { checked: true, due: '2026-10-21T09:00' })).toBe(true)
     expect(useMdMarkStore.getState().overlay['n.md:3']).toEqual({ checked: true, due: '2026-10-21T09:00' })
+  })
+
+  it('子任务:给 parentId 与 tags,没写 @ 的子任务也能勾', () => {
+    useMdMarkStore.setState({ marks: [mark({ tags: ['工作'] }), mark({ line: 4, text: '子项', due: '', parentId: 'n.md:3', raw: '  - [ ] 子项' })], overlay: {}, ready: true })
+    let tasks: Array<{ id: string; parentId?: string; tags?: string[] }> = []
+    createNoteTasksApi(scope).subscribe((x) => { tasks = x.tasks })()
+    expect(tasks.map((t) => [t.id, t.parentId ?? null, t.tags])).toEqual([['n.md:3', null, ['工作']], ['n.md:4', 'n.md:3', []]])
+    expect(createNoteTasksApi(scope).update('n.md:4', { checked: true })).toBe(true)
+    expect(useMdMarkStore.getState().overlay['n.md:4']).toEqual({ checked: true })
   })
 
   it('防抖期间换了库:排着的改动丢掉,不写到新库同位置的另一条上', async () => {

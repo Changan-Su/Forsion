@@ -582,6 +582,10 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // 插件侧的可选链只挡得住「宿主没这个方法」,挡不住「方法在但 window.amadeus 是 undefined」,
     // 也挡不住主进程 requireRoot() 抛。一半空值一半异常是最难写对的 API。
     listPages: () => listCached('pages'),
+    listTags: async () => {
+      if (!amadeus?.listTags) return []
+      try { return (await amadeus.listTags() || []).filter((t) => t.count > 0).map((t) => ({ tag: t.tag, count: t.count })).sort((a, b) => b.count - a.count) } catch { return [] }
+    },
     listFiles: () => listCached('files'),
     searchVault: async (q) => {
       if (!amadeus?.search) return []

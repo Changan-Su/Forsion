@@ -58,6 +58,8 @@ The toolbar's `el` sits inside the host mount layer and doesn't get the plugin v
 
 For @-style mentions, pass `mention: true`. The menu then opens on the bare `trigger` (with an empty `query`) and right after CJK text; only a Latin letter or digit directly before the trigger keeps it closed, so email addresses do not open it. Older hosts ignore the option and keep the rules above.
 
+Since 2026-11-02 `suggest` can also be a list, for example one entry for `#` tags and one for `[[` links (the latter with `mention: true` so it opens right after CJK text). When several match before the caret, the one nearest the caret opens. When the box sits in the lower half of the window the menu opens upward, falling back below if it doesn't fit. Earlier hosts accept a single object only.
+
 ```js
 const box = ctx.ui?.mountChatBox?.(el, {
   modelPicker: false,
