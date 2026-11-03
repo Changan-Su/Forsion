@@ -220,6 +220,7 @@ import { realUseLive } from './lib/real-use-live.mjs';
 import { humanRealLive } from './lib/human-real-live.mjs';
 import { humanPortraitLive } from './lib/human-portrait-live.mjs';
 import { portraitMoveLive } from './lib/portrait-move-live.mjs';
+import { importLive } from './lib/import-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
@@ -269,6 +270,7 @@ KEYS.push('realuse');
 KEYS.push('humanreal');
 KEYS.push('humanportrait');
 KEYS.push('portraitmove');
+KEYS.push('import');
 KEYS.push('projmem');
 KEYS.push('skillcreate');
 KEYS.push('projdedupe');
@@ -370,6 +372,7 @@ OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanportrait'); // 画像(human/SOUL.md)写没写:每轮 4 个 run + 另一个 agent 读一次;只在动 remember 的 person 档 / 画像注入时才有信息量。
+OPT_IN.add('import'); // 从其他 AI 导入(11-03):后台模型拆条 / 归位 / 拦截;不跑对话。动了 services/externalImport 的提示 / 后处理才有信息量。--import-neg = 负对照
 OPT_IN.add('portraitmove'); // 搬家的后台模型挑得准不准(10-30):不跑对话,只有人点的那几个接口;动了 agents/portraitMove.ts 的提示才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
@@ -1385,6 +1388,8 @@ const child = spawn(process.execPath, [
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
   ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
+  // import:假家目录(场景里种文件,引擎每次扫描现读);负对照关掉 blocked 那段提示和兜底正则
+  ...(ONLY.has('import') ? { TANGU_IMPORT_HOME: join(home, '..', 'import-src'), ...(argv.includes('--import-neg') ? { TANGU_IMPORT_UNGUARDED: '1' } : {}) } : {}),
   // fast:wire 上带没带 service_tier 只有 llm-debug 那行看得见(响应里的 service_tier 恒回 default,判不了)
   ...(ONLY.has('fast') ? { TANGU_LLM_DEBUG: '1' } : {}),
   // cumusic / cusend:Jev 每次请求的图和回答落进产物目录(不含密钥),场景跑完挪进自己的 <key>-evidence/jev/
@@ -2107,6 +2112,10 @@ try {
   // ── 搬家:后台模型从 agent 记忆里挑「关于这个人」的条目、写成第二人称(10-30);设计见 lib/portrait-move-live.mjs ──
   await scenario('portraitmove', `portraitmove 搬家:该挑的全挑、对 Agent 的要求和项目的事一条不挑 ×${SELF_ROUNDS} 轮`, () =>
     portraitMoveLive({ api, OUT, MODEL, home, rounds: SELF_ROUNDS }));
+
+  // ── 从其他 AI 导入:拆条 / 归位 / 拦截 / 合并,导入后整次撤销(11-03);设计见 lib/import-live.mjs ──
+  await scenario('import', `import 从其他 AI 导入:注入句不进可勾的去处、偏好进协作说明、项目的事进项目 ×${SELF_ROUNDS} 轮${argv.includes('--import-neg') ? '(负对照)' : ''}`, () =>
+    importLive({ api, OUT, MODEL, home, src: join(home, '..', 'import-src'), rounds: SELF_ROUNDS, neg: argv.includes('--import-neg') }));
 
   // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
   //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目
