@@ -16,6 +16,12 @@ describe('chat Markdown file links', () => {
     const box = document.createElement('div'); box.innerHTML = html
     expect(box.textContent).toBe('见 a.ts:42 和 这段')
   })
+  it('没有工作目录(插件说明之类)时相对路径不当文件,绝对路径照样当', () => {
+    const html = render('[guide](docs/setup.md) [b](a.ts:3) [c](/abs/c.ts:9)')
+    expect(html).toContain('href="docs/setup.md"')
+    expect(html).not.toContain('a.ts:3"')
+    expect(html).toContain('data-wiki="/abs/c.ts"')
+  })
   it('网址照旧是网页链接;javascript: 照旧被清空', () => {
     const html = render('[a](https://example.org/a.ts) [b](javascript:alert(1))', '/repo')
     expect(html).toContain('href="https://example.org/a.ts"')

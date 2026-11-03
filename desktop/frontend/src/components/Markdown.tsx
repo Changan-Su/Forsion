@@ -61,16 +61,18 @@ const WikiAnchor = ({ href, children, node: _node, ...rest }: any) => {
   if (typeof href === 'string' && /^https?:\/\//i.test(href)) {
     return cards ? <ChatLinkWithCard href={href} {...rest}>{children}</ChatLinkWithCard> : <ChatWebLink href={href} {...rest}>{children}</ChatWebLink>
   }
-  // 指向文件的普通链接(`src/a.ts:42`)→ 走 [[路径#L行]] 那条文件引用:按会话工作目录拼绝对路径,点开跳到那一行(D25)
+  // 指向文件的普通链接(`src/a.ts:42`)→ 走 [[路径#L行]] 那条文件引用:按会话工作目录拼绝对路径,点开跳到那一行(D25)。
+  // 没有工作目录的地方(插件说明、更新说明……)只认绝对路径:相对路径拿去库里找,会打开一篇同名的无关笔记
   const file = typeof href === 'string' ? parseFileHref(href) : null
-  if (file) {
+  if (file && (cwd || /^\/|^[A-Za-z]:[\\/]/.test(file.path))) {
     const path = cwd ? resolveAgainst(cwd, file.path) : file.path
     const anchor = file.line ? `#L${file.line}${file.end ? `-L${file.end}` : ''}` : ''
     const label = textOf(children)
     // 链接文字就是地址本身(模型常这么写)时不当别名,引用条照「文件名:行号」显示
     return <ChatWikiLink inner={`${path}${anchor}${label && label !== href ? `|${label}` : ''}`} />
   }
-  return <a href={href} {...rest}>{children}</a>
+  // 没转成引用条的照缺省清洗(urlTransform 为文件链接放行过,这里收回去)
+  return <a href={typeof href === 'string' ? defaultUrlTransform(href) : href} {...rest}>{children}</a>
 }
 
 /** react-markdown 缺省会把 `a.ts:42`、`file://`、`C:\…` 当未知协议清空;只对认得出的文件链接放行,其余照缺省。 */
