@@ -5,3 +5,40 @@
 .conn-row .conn-keyform { margin: 4px 0 8px; padding-inline: 10px; }
 .conn-badge { margin-left: 8px; padding: 1px 7px; border: var(--border-width) solid var(--border); border-radius: var(--radius-pill, 999px); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); font-weight: 400; }
 .conn-scopes { margin: 0 0 4px; padding-inline: 10px; overflow-wrap: anywhere; }
+
+/* 设置 → 连接器页(列表 → 详情)。卡片与行沿用设置页 .settings-panel / .settings-control-row。 */
+.conn-notice { margin: 0 4px 10px; }
+.conn-notice.is-error { color: var(--danger); }
+.conn-foot { margin: 6px 4px 12px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); }
+.conn-link { padding: 0; border: 0; background: none; color: var(--text-muted); font: inherit; cursor: pointer; }
+.conn-link:hover { color: var(--text); }
+.conn-list-row { cursor: pointer; }
+.conn-list-row:hover { background: var(--overlay-subtle); }
+.conn-list-row:focus-visible { outline: 2px solid var(--focus-ring, var(--accent)); outline-offset: -2px; }
+.conn-list-copy { display: flex; align-items: center; gap: 11px; }
+.conn-logo { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--text-muted); overflow: hidden; }
+.settings-row-control.conn-list-control { flex: 0 0 auto; align-items: center; gap: 10px; }
+.conn-status { display: inline-flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
+.conn-chevron { color: var(--text-faint); }
+.btn.ghost.conn-back { margin: -6px 0 8px -8px; color: var(--text-muted); border-color: transparent; background: transparent; }
+.btn.ghost.conn-back:hover { border-color: transparent; color: var(--text); }
+.conn-detail .settings-panel-icon { overflow: hidden; }
+.conn-danger { color: var(--danger); }
+.conn-error { color: var(--danger); }
+.conn-retired { justify-content: flex-start; gap: 8px; background: color-mix(in srgb, var(--warning) 9%, transparent); color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.conn-retired svg { flex: 0 0 auto; color: var(--warning); }
+.conn-scope-tags { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.conn-tools-empty { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.conn-tool .settings-control-copy, .conn-tool .settings-control-copy > span { min-width: 0; }
+.conn-tool small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-tool-name { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-meta, 12px); font-weight: 500; }
+.settings-row-control.conn-tool-approval { flex: 0 0 auto; }
+.conn-locked { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
+.conn-tool.is-off .settings-control-copy { opacity: 0.55; }
+.conn-tool-approval select { width: 132px; }
+.conn-more { width: 100%; justify-content: center; gap: 4px; border: 0; background: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); cursor: pointer; }
+.conn-more:hover { color: var(--text); }
+/* MCP 页顶上那一行入口 */
+.conn-mcp-entry { margin-bottom: 12px; border: 0; background: var(--overlay-subtle); font: inherit; }
+.conn-mcp-entry .file-name { display: inline-flex; align-items: center; gap: 8px; }
+.conn-mcp-entry small { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); overflow: hidden; text-overflow: ellipsis; }

@@ -4,14 +4,17 @@
  * 流程见 services/connectorService.ts。
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, ExternalLink, KeyRound, LogIn, Plug, Store, Unplug } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight, ExternalLink, Info, KeyRound, Lock, LogIn, LogOut, Plug, Store, Unplug, Wrench } from 'lucide-react'
 import { Skeleton } from '@lcl/engine'
 import './Connectors.css'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
-import type { ConnectorCatalog, ConnectorEntry } from '../types'
+import type { ConnectorCatalog, ConnectorEntry, McpServerConfigEntry } from '../types'
+import { SettingsPanel, SettingsRow, SettingsState, SettingsSwitch } from './SettingsPrimitives'
+import { listTools, mcpLogout } from '../services/backendService'
+import { homeTarget } from '../services/engine/targets'
 import {
-  connectConnector, connectorDescription, connectorName, connectorRows, disconnectConnector, submitConnectorKey,
+  connectConnector, connectorDescription, connectorName, connectorRows, disconnectConnector, loginConnector, submitConnectorKey,
   type ConnectResult, type McpRow,
 } from '../services/connectorService'
 
@@ -19,7 +22,6 @@ registerMessages({
   'connectors.tab': { zh: '连接器', en: 'Connectors' },
   'connectors.subtitle': { zh: '由 Forsion 官方收录。连接后，Agent 可以用你在这些服务里的数据，登录只保存在这台电脑上', en: 'Curated by Forsion. Once connected, agents can use your data in these services. Sign-ins stay on this computer.' },
   'connectors.connect': { zh: '连接', en: 'Connect' },
-  'connectors.connected': { zh: '已连接', en: 'Connected' },
   'connectors.connecting': { zh: '连接中…', en: 'Connecting…' },
   'connectors.signIn': { zh: '登录', en: 'Sign in' },
   'connectors.enterKey': { zh: '填写 Key', en: 'Enter key' },
@@ -37,9 +39,6 @@ registerMessages({
   'connectors.empty': { zh: '暂时还没有连接器', en: 'No connectors yet' },
   'connectors.retry': { zh: '重试', en: 'Retry' },
   'connectors.server': { zh: '服务地址 {host}', en: 'Server {host}' },
-  'connectors.section': { zh: '连接器', en: 'Connectors' },
-  'connectors.sectionHint': { zh: '从商店连上的官方连接器。断开会删掉这台电脑上保存的登录或 Key', en: 'Official connectors you added from the store. Disconnecting removes the sign-in or key saved on this computer.' },
-  'connectors.none': { zh: '还没有连接器', en: 'No connectors yet' },
   'connectors.addFromStore': { zh: '去商店添加', en: 'Add from the store' },
   'connectors.retired': { zh: '已下线', en: 'Retired' },
   'connectors.retiredHint': { zh: 'Forsion 已不再提供这个连接器。它还能用，你可以随时断开', en: 'Forsion no longer offers this connector. It still works, and you can disconnect it any time.' },
@@ -50,10 +49,51 @@ registerMessages({
   'connectors.statusConnecting': { zh: '连接中…', en: 'Connecting…' },
   'connectors.statusError': { zh: '连接出错', en: 'Connection error' },
   'connectors.statusPending': { zh: '等待接入', en: 'Waiting to connect' },
-  'connectors.scopes': { zh: '授权范围：{scopes}', en: 'Access: {scopes}' },
   'connectors.disconnect': { zh: '断开', en: 'Disconnect' },
   'connectors.disconnectConfirm': { zh: '断开「{name}」？这台电脑上保存的登录或 Key 会删掉，Agent 也不能再用它', en: 'Disconnect "{name}"? The sign-in or key saved on this computer will be removed and agents can no longer use it.' },
   'connectors.disconnected': { zh: '已断开「{name}」', en: 'Disconnected "{name}"' },
+  'connectors.pageHint': { zh: 'Forsion 官方收录的服务。连接后 Agent 能用你在这些服务里的数据；登录和 Key 只保存在这台电脑上。', en: 'Services curated by Forsion. Once connected, agents can use your data in them. Sign-ins and keys stay on this computer.' },
+  'connectors.connectedCount': { zh: '已连接 · {n}', en: 'Connected · {n}' },
+  'connectors.openRowHint': { zh: '点一行看登录、权限和工具', en: 'Open one to see its sign-in, access and tools' },
+  'connectors.manualHint': { zh: '自己添加的 MCP 服务器在「MCP 服务器」页，不算连接器。', en: 'MCP servers you added yourself are on the MCP servers page.' },
+  'connectors.allConnectors': { zh: '全部连接器', en: 'All connectors' },
+  'connectors.status': { zh: '状态', en: 'Status' },
+  'connectors.tokens': { zh: '每次请求约 {n} token', en: 'About {n} tokens per request' },
+  'connectors.notSignedIn': { zh: '还没登录，Agent 暂时用不了它；登录后工具从下一轮对话起可用', en: 'Not signed in, so agents can’t use it yet. Tools appear from your next message after you sign in.' },
+  'connectors.noKeyYet': { zh: '还没填 Key，Agent 暂时用不了它', en: 'No key yet, so agents can’t use it.' },
+  'connectors.loggingInHint': { zh: '已在浏览器打开 {host} 的登录页，完成后会自动连上', en: 'Opened the {host} sign-in page in your browser. It connects when you finish.' },
+  'connectors.disabledHint': { zh: '已停用：登录保留，Agent 暂时看不到它的工具', en: 'Turned off. The sign-in is kept, but agents can’t see its tools.' },
+  'connectors.reopen': { zh: '重新打开', en: 'Open again' },
+  'connectors.signInRow': { zh: '登录', en: 'Sign-in' },
+  'connectors.signedInOAuth': { zh: '已用 {name} 账号登录（OAuth），登录信息只保存在这台电脑上', en: 'Signed in with your {name} account (OAuth). The sign-in is saved only on this computer.' },
+  'connectors.signInAgain': { zh: '重新登录', en: 'Sign in again' },
+  'connectors.signOut': { zh: '退出登录', en: 'Sign out' },
+  'connectors.keySaved': { zh: '已填 Key，只保存在这台电脑上', en: 'Key saved, only on this computer' },
+  'connectors.keyMissing': { zh: '还没填', en: 'Not set' },
+  'connectors.changeKey': { zh: '更换 Key', en: 'Change key' },
+  'connectors.access': { zh: '申请的权限', en: 'Access requested' },
+  'connectors.accessByConsent': { zh: '{name} 没有单列权限，按你在授权页上选的为准', en: '{name} doesn’t list scopes. Access follows what you chose on its consent page.' },
+  'connectors.curated': { zh: 'Forsion 官方收录', en: 'Curated by Forsion' },
+  'connectors.toolsTitle': { zh: '工具', en: 'Tools' },
+  'connectors.tools': { zh: '工具 · {n}', en: 'Tools · {n}' },
+  'connectors.toolsHint': { zh: '默认跟随对话的审批档：「只读」「自动改文件」会先问你，「完全通行」直接执行。可以把单个工具改成每次都问，或关掉不给 Agent 用。', en: 'By default this follows the conversation’s approval mode: Read only and Auto-edit ask first, Full access runs right away. You can set a tool to always ask, or turn it off so agents can’t use it.' },
+  'connectors.toolsAfterSignIn': { zh: '登录之后在这里列出工具', en: 'Its tools are listed here after you sign in.' },
+  'connectors.toolsAfterKey': { zh: '填好 Key、连上之后在这里列出工具', en: 'Its tools are listed here once you add a key and it connects.' },
+  'connectors.toolsWhenOff': { zh: '打开开关后在这里列出工具', en: 'Turn it on to list its tools here.' },
+  'connectors.moreTools': { zh: '还有 {n} 个工具', en: '{n} more tools' },
+  'connectors.approval.follow': { zh: '跟随审批档', en: 'Follow approval mode' },
+  'connectors.approval.ask': { zh: '每次都问', en: 'Always ask' },
+  'connectors.approval.off': { zh: '关闭', en: 'Off' },
+  'connectors.approval.label': { zh: '「{tool}」的审批', en: 'Approval for {tool}' },
+  'connectors.approval.locked': { zh: '每次都问 · Forsion 设定', en: 'Always asks · set by Forsion' },
+  'connectors.lockedHint': { zh: 'Forsion 在目录里把这个工具设成每次都问，「完全通行」档也会问', en: 'Forsion set this tool to always ask, even in Full access.' },
+  'connectors.bridgedHint': { zh: '审批卡上的工具名形如 {example}', en: 'Approval cards show tool names like {example}' },
+  'connectors.retiredBanner': { zh: 'Forsion 已不再提供这个连接器。它还能用，你可以随时断开；断开后不能再从商店连回来。', en: 'Forsion no longer offers this connector. It still works and you can disconnect any time, but you can’t add it again from the store.' },
+  'connectors.emptyTitle': { zh: '还没有连接器', en: 'No connectors yet' },
+  'connectors.emptyBody': { zh: '在商店里连上 Notion、Linear、Figma 这类服务后，Agent 就能读写你在里面的内容。', en: 'Connect services like Notion, Linear or Figma in the store and agents can work with your content there.' },
+  'connectors.mcpEntry': { zh: '连接器 · {n} 个', en: 'Connectors · {n}' },
+  'connectors.mcpEntryHint': { zh: '从商店连上的官方连接器在单独一页管理', en: 'Official connectors from the store are managed on their own page' },
+  'connectors.manage': { zh: '已连接 · 管理', en: 'Connected · Manage' },
 })
 
 const hostOf = (url?: string): string => { try { return new URL(url || '').host } catch { return '' } }
@@ -175,7 +215,7 @@ export function ConnectorStore({ query, onNotice }: { query: string; onNotice: (
                 <div className="mk-card-foot">
                   <span className="mk-card-meta" title={c.url?.split('?')[0]}>{hostOf(c.url)}</span>
                   {row?.status === 'connected'
-                    ? <button className="btn sm" disabled data-connector-action="connected"><Check size={13} />{t('connectors.connected')}</button>
+                    ? <button className="btn sm" data-connector-action="manage" onClick={() => useApp.getState().openSettings(`connectors/conn:${row.server}`)}>{t('connectors.manage')} <ChevronRight size={13} /></button>
                     : keyFor ? null
                       : <button className="btn sm primary" disabled={isBusy} data-connector-action={oauthLogin ? 'login' : 'connect'} onClick={() => void run(c, () => connectConnector(c))}>
                         {isBusy ? t('connectors.connecting') : oauthLogin ? <><LogIn size={13} />{t('connectors.signIn')}</> : <><Plug size={13} />{t('connectors.connect')}</>}
@@ -190,84 +230,233 @@ export function ConnectorStore({ query, onNotice }: { query: string; onNotice: (
   )
 }
 
-/** 设置 → MCP 服务器顶部:已连接的连接器(状态、登录 / 填 Key / 断开)、已下线标记、授权范围,末尾「去商店添加」。 */
-export function ConnectorSettingsBlock({ servers, rows, onLogin, onMsg, onChanged }: {
-  servers: Record<string, { connector?: string; enabled?: boolean }>
-  rows: McpRow[] | undefined
-  onLogin: (name: string) => void
-  onMsg: (msg: string) => void
-  onChanged: () => void
-}) {
+/** 设置 → 连接器页(连接器设置方案 A,2026-11-02):已连接的列表 → 单个连接器的详情(状态 / 登录或 Key / 权限 / 工具)。
+ *  自己读 mcp.json 与引擎状态并轮询;MCP 页只留一行入口。审批下拉要等引擎按工具的设置(方案第二步),这一步工具行只显示「跟随审批档」或目录锁定的「每次都问」。 */
+export function ConnectorSettingsPage({ initialServer, onOpenMcp }: { initialServer?: string; onOpenMcp?: () => void }) {
   const { t, locale } = useI18n()
+  const [servers, setServers] = useState<Record<string, McpServerConfigEntry> | null>(null)
+  const [rows, setRows] = useState<McpRow[] | null>(null)
   const [catalog, setCatalog] = useState<ConnectorEntry[]>([])
+  const [selected, setSelected] = useState<string | null>(initialServer ?? null)
+  const [notice, setNotice] = useState<{ text: string; error: boolean } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [keyOpen, setKeyOpen] = useState<string | null>(null)
-  useEffect(() => { void window.tangu?.connectorsList?.(false).then((c) => setCatalog(c.connectors)).catch(() => {}) }, [])
+  const [allTools, setAllTools] = useState(false)
   const resultText = useResultText()
-  const mine = Object.entries(servers).filter(([, sc]) => typeof sc.connector === 'string')
 
-  const statusLabel = (row: McpRow | undefined): string =>
-    !row ? t('connectors.statusPending')
-      : row.status === 'connected' ? t('connectors.statusConnected', { n: row.tools.length })
-        : row.status === 'needs-login' ? t(row.auth === 'user-key' ? 'connectors.statusNeedsKey' : 'connectors.statusNeedsLogin')
-          : row.status === 'logging-in' ? t('connectors.statusLoggingIn')
-            : row.status === 'connecting' ? t('connectors.statusConnecting')
-              : row.status === 'disabled' ? t('settings.mcp.statusDisabled')
-                : t('connectors.statusError')
+  const refresh = useCallback(() => {
+    void window.tangu?.readMcpConfig?.().then((c) => setServers(c.mcpServers)).catch(() => setServers({}))
+    void listTools(homeTarget()).then((r) => setRows(r.mcp ?? [])).catch(() => setRows([]))
+  }, [])
+  useEffect(() => {
+    void window.tangu?.connectorsList?.(false).then((c) => setCatalog(c.connectors)).catch(() => {})
+    refresh()
+    const timer = setInterval(refresh, 2000) // 浏览器那头登录完、引擎重连都靠轮询看到
+    return () => clearInterval(timer)
+  }, [refresh])
+  /** 进详情:顺带决定填 Key 表单开不开(列表行的「填写 Key」直接开着进)。 */
+  const open = (name: string | null, withKey = false): void => { setSelected(name); setAllTools(false); setKeyOpen(withKey ? name : null); setNotice(null) }
 
-  const disconnect = async (name: string, label: string): Promise<void> => {
-    if (!window.confirm(t('connectors.disconnectConfirm', { name: label }))) return
-    setBusy(name)
-    try { await disconnectConnector(name); onMsg(t('connectors.disconnected', { name: label })) } catch (e) { onMsg(`${t('settings.toast.saveFailed')}${e instanceof Error ? e.message : String(e)}`) } finally { setBusy(null); onChanged() }
+  const say = (text: string, error = false): void => setNotice({ text, error })
+  const errText = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+  const mine = Object.entries(servers ?? {}).filter(([, sc]) => typeof sc.connector === 'string')
+  const items = mine.map(([name, sc]) => {
+    const c = catalog.find((x) => x.id === sc.connector)
+    const row = rows?.find((r) => r.server === name && !r.origin)
+    const label = c ? connectorName(c, locale) : name
+    const off = sc.enabled === false
+    const attention = !off && !!row && ['needs-login', 'error'].includes(row.status)
+    return { name, sc, c, row, label, off, attention }
+  }).sort((a, b) => Number(!!b.attention) - Number(!!a.attention)
+    || Number(a.c?.status === 'retired') - Number(b.c?.status === 'retired')
+    || (a.c?.order ?? 1e9) - (b.c?.order ?? 1e9) || a.label.localeCompare(b.label))
+
+  const statusLabel = (it: typeof items[number]): string =>
+    it.off ? t('settings.mcp.statusDisabled')
+      : !it.row ? t('connectors.statusPending')
+        : it.row.status === 'connected' ? t('connectors.statusConnected', { n: it.row.tools.length })
+          : it.row.status === 'needs-login' ? t(it.row.auth === 'user-key' ? 'connectors.statusNeedsKey' : 'connectors.statusNeedsLogin')
+            : it.row.status === 'logging-in' ? t('connectors.statusLoggingIn')
+              : it.row.status === 'connecting' ? t('connectors.statusConnecting')
+                : it.row.status === 'disabled' ? t('settings.mcp.statusDisabled')
+                  : t('connectors.statusError')
+  const dot = (it: typeof items[number]): string => (it.off ? '' : it.row?.status === 'connected' ? 'ok' : it.row?.status === 'error' ? 'err' : '')
+  const act = async (name: string, step: () => Promise<void>): Promise<void> => {
+    setBusy(name); setNotice(null)
+    try { await step() } catch (e) { say(`${t('settings.toast.saveFailed')}${errText(e)}`, true) } finally { setBusy(null); refresh() }
   }
-  const saveKey = async (name: string, label: string, key: string): Promise<void> => {
-    setBusy(name)
-    try {
-      const r = await submitConnectorKey(name, key)
-      if (r.kind === 'needs-key') onMsg(t('connectors.keyRejected'))
-      else { setKeyOpen(null); const m = resultText(r, label); if (m) onMsg(m.text) }
-    } catch (e) { onMsg(`${t('connectors.failed', { name: label })}${e instanceof Error ? e.message : String(e)}`) } finally { setBusy(null); onChanged() }
+  const login = (it: typeof items[number]): Promise<void> => act(it.name, async () => {
+    const m = resultText(await loginConnector(it.name), it.label)
+    if (m) say(m.text, m.error)
+  })
+  const saveKey = (it: typeof items[number], key: string): Promise<void> => act(it.name, async () => {
+    const r = await submitConnectorKey(it.name, key)
+    if (r.kind === 'needs-key') { say(t('connectors.keyRejected'), true); return }
+    setKeyOpen(null)
+    const m = resultText(r, it.label)
+    if (m) say(m.text, m.error)
+  })
+  const signOut = (it: typeof items[number]): void => {
+    if (!window.confirm(t('settingsmodal.mcp.logoutConfirm', { name: it.label }))) return
+    void act(it.name, async () => { await mcpLogout(homeTarget(), it.name); say(t('settingsmodal.mcp.loggedOut', { name: it.label })) })
   }
+  const disconnect = (it: typeof items[number]): void => {
+    if (!window.confirm(t('connectors.disconnectConfirm', { name: it.label }))) return
+    void act(it.name, async () => { await disconnectConnector(it.name); open(null); say(t('connectors.disconnected', { name: it.label })) })
+  }
+  const setEnabled = (it: typeof items[number], on: boolean): Promise<void> => act(it.name, async () => {
+    const next = await window.tangu!.writeMcpConfig!({ mcpServers: { ...servers, [it.name]: { ...it.sc, enabled: on } }, base: servers ?? {} })
+    setServers(next.mcpServers)
+    say(t(on ? 'settings.mcp.enabledMsg' : 'settings.mcp.disabledMsg'))
+  })
+  /** 按工具收紧:写 mcp.json 的 tools(跟随 = 删掉这一项)。引擎只改 tools 不重连,下一轮对话起生效,关掉的立刻拒调用。 */
+  const setToolSetting = (it: typeof items[number], remote: string, value: 'follow' | 'ask' | 'off'): Promise<void> => act(it.name, async () => {
+    const tools = { ...it.sc.tools }
+    if (value === 'follow') delete tools[remote]
+    else tools[remote] = value
+    const entry: McpServerConfigEntry = { ...it.sc }
+    if (Object.keys(tools).length) entry.tools = tools
+    else delete entry.tools
+    const next = await window.tangu!.writeMcpConfig!({ mcpServers: { ...servers, [it.name]: entry }, base: servers ?? {} })
+    setServers(next.mcpServers)
+  })
+  const quickAction = (it: typeof items[number]): React.ReactNode => {
+    if (it.off || it.row?.status !== 'needs-login') return null
+    const key = it.row.auth === 'user-key'
+    return (
+      <button className="btn sm" disabled={busy === it.name} data-connector-quick={it.sc.connector}
+        onClick={(e) => { e.stopPropagation(); if (key) open(it.name, true); else void login(it) }}>
+        {key ? <><KeyRound size={13} />{t('connectors.enterKey')}</> : <><LogIn size={13} />{t('connectors.signIn')}</>}
+      </button>
+    )
+  }
+  const noticeLine = notice && <p className={`hint conn-notice${notice.error ? ' is-error' : ''}`} role="status">{notice.text}</p>
+
+  if (!servers || !rows) return <Skeleton variant="list" />
+  const it = selected ? items.find((x) => x.name === selected) : undefined
+
+  if (!it) {
+    const openStore = (): void => useApp.getState().openMarket(undefined, { tab: 'connector', nonce: Date.now() })
+    return (
+      <div data-connector-settings>
+        {noticeLine}
+        {items.length === 0 ? (
+          <SettingsState icon={<Plug size={20} />} title={t('connectors.emptyTitle')} description={t('connectors.emptyBody')}
+            actions={<button className="btn primary sm" data-connector-add onClick={openStore}><Store size={13} />{t('connectors.addFromStore')}</button>} />
+        ) : (
+          <SettingsPanel icon={<Plug size={16} />} title={t('connectors.connectedCount', { n: items.length })} description={t('connectors.openRowHint')}
+            actions={<button className="btn sm" data-connector-add onClick={openStore}><Store size={13} />{t('connectors.addFromStore')}</button>}>
+            {items.map((x) => (
+              <div key={x.name} className="settings-control-row settings-setting-row conn-list-row" role="button" tabIndex={0} data-connector-row={x.sc.connector}
+                onClick={() => open(x.name)} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(x.name) } }}>
+                <div className="settings-control-copy conn-list-copy">
+                  <span className="conn-logo">{x.c ? <ConnectorIcon c={x.c} size={18} /> : <Plug size={18} />}</span>
+                  <span>
+                    <strong>{x.label}{x.c?.status === 'retired' && <span className="conn-badge">{t('connectors.retired')}</span>}</strong>
+                    <small>{hostOf(x.c?.url ?? x.sc.url)}</small>
+                  </span>
+                </div>
+                <div className="settings-row-control conn-list-control">
+                  <span className="conn-status" title={x.row?.error || undefined}><span className={`settings-status-dot ${dot(x)}`} />{statusLabel(x)}</span>
+                  {quickAction(x)}
+                  <ChevronRight size={15} className="conn-chevron" aria-hidden="true" />
+                </div>
+              </div>
+            ))}
+          </SettingsPanel>
+        )}
+        <p className="hint conn-foot">
+          {t('connectors.manualHint')}
+          {onOpenMcp && <> <button type="button" className="conn-link" onClick={onOpenMcp}>{t('settingsmodal.tab.mcp')} ›</button></>}
+        </p>
+      </div>
+    )
+  }
+
+  const { c, row, sc, label, off } = it
+  const keyType = row?.auth === 'user-key' || c?.auth?.type === 'user-key'
+  const host = hostOf(c?.url ?? sc.url)
+  const locked = new Set(c?.alwaysAsk ?? [])
+  const tools = row?.status === 'connected' && !off ? row.tools : []
+  const TOOL_PREVIEW = 8
+  const shownTools = allTools ? tools : tools.slice(0, TOOL_PREVIEW)
+  const fmtTok = (n: number): string => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n))
+  const isBusy = busy === it.name
+
+  // 开关跟配置走、任何状态都在:连不上的服务要能先停掉,不必断开(断开会删登录 / Key)。关了再开 = 立刻重连一次。
+  const toggle = <SettingsSwitch checked={!off} label={t(off ? 'settings.mcp.enable' : 'settings.mcp.disable')} disabled={isBusy} onChange={(on) => void setEnabled(it, on)} data-connector-enabled />
+  const statusRow = (description: React.ReactNode, action?: React.ReactNode) => (
+    <SettingsRow label={t('connectors.status')} fit="inline" description={description} control={<>{action}{toggle}</>} />
+  )
+  const status = off ? statusRow(t('connectors.disabledHint'))
+    : row?.status === 'connected'
+      ? statusRow(<>{statusLabel(it)}{typeof row.approxTokens === 'number' && <> · {t('connectors.tokens', { n: fmtTok(row.approxTokens) })}</>}</>)
+      : row?.status === 'needs-login'
+        ? statusRow(t(keyType ? 'connectors.noKeyYet' : 'connectors.notSignedIn'),
+          keyType ? null : <button className="btn sm primary" disabled={isBusy} data-connector-login onClick={() => void login(it)}><LogIn size={13} />{t('connectors.signIn')}</button>)
+        : row?.status === 'logging-in'
+          ? statusRow(t('connectors.loggingInHint', { host }), <button className="btn sm ghost" disabled={isBusy} onClick={() => void login(it)}><ExternalLink size={12} />{t('connectors.reopen')}</button>)
+          : row?.status === 'error'
+            ? statusRow(<span className="conn-error">{t('connectors.statusError')}{row.error ? `:${row.error}` : ''}</span>)
+            : statusRow(statusLabel(it))
 
   return (
-    <div className="field" data-connector-settings>
-      <div className="mcp-settings-heading">
-        <label>{t('connectors.section')}</label>
-        <div className="mcp-settings-actions"><button className="btn ghost sm" data-connector-add onClick={() => useApp.getState().openMarket(undefined, { tab: 'connector', nonce: Date.now() })}><Store size={13} /> {t('connectors.addFromStore')}</button></div>
-      </div>
-      <div className="hint" style={{ marginBottom: 8 }}>{t('connectors.sectionHint')}</div>
-      {mine.length === 0 ? <div className="hint" style={{ marginBottom: 10 }}>{t('connectors.none')}</div> : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 10 }}>
-          {mine.map(([name, sc]) => {
-            const c = catalog.find((x) => x.id === sc.connector)
-            const row = rows?.find((r) => r.server === name)
-            const label = c ? connectorName(c, locale) : name
-            const needsKey = row?.auth === 'user-key' && row.status === 'needs-login'
-            const scopes = c?.oauth?.scopes
+    <div data-connector-settings data-connector-detail={sc.connector}>
+      <button type="button" className="btn ghost sm conn-back" data-connector-back onClick={() => open(null)}><ChevronLeft size={14} />{t('connectors.allConnectors')}</button>
+      {noticeLine}
+      <SettingsPanel className="conn-detail"
+        icon={c ? <ConnectorIcon c={c} size={20} /> : <Plug size={16} />}
+        title={<>{label}{c?.status === 'retired' && <span className="conn-badge">{t('connectors.retired')}</span>}</>}
+        description={<><span title={(c?.url ?? sc.url ?? '').split('?')[0]}>{host}</span> · {t('connectors.curated')}</>}
+        actions={<button className="btn sm ghost conn-danger" disabled={isBusy} data-connector-disconnect={sc.connector} onClick={() => disconnect(it)}><Unplug size={13} />{t('connectors.disconnect')}</button>}>
+        {c?.status === 'retired' && <div className="settings-control-row conn-retired"><Info size={14} />{t('connectors.retiredBanner')}</div>}
+        {status}
+        {keyType
+          ? <SettingsRow label="Key" fit="wrap" description={row?.status === 'connected' ? t('connectors.keySaved') : t('connectors.keyMissing')}
+            control={keyOpen === it.name || off ? null : <button className="btn sm ghost" disabled={isBusy} data-connector-key onClick={() => setKeyOpen(it.name)}><KeyRound size={13} />{t(row?.status === 'connected' ? 'connectors.changeKey' : 'connectors.enterKey')}</button>}>
+            {keyOpen === it.name && !off && c && <KeyForm c={c} busy={isBusy} onSubmit={(key) => void saveKey(it, key)} />}
+          </SettingsRow>
+          : row?.signedIn
+            ? <SettingsRow label={t('connectors.signInRow')} fit="wrap" description={t('connectors.signedInOAuth', { name: label })}
+              control={<>{!off && <button className="btn sm ghost" disabled={isBusy} onClick={() => void login(it)}><LogIn size={13} />{t('connectors.signInAgain')}</button>}
+                <button className="btn sm ghost" disabled={isBusy} data-connector-signout onClick={() => signOut(it)}><LogOut size={13} />{t('connectors.signOut')}</button></>} />
+            : null}
+        {!keyType && (
+          <SettingsRow label={t('connectors.access')}
+            description={c?.oauth?.scopes?.length
+              ? <span className="conn-scope-tags">{c.oauth.scopes.map((x) => <span key={x} className="model-tag" data-color="gray">{x}</span>)}</span>
+              : t('connectors.accessByConsent', { name: label })} />
+        )}
+      </SettingsPanel>
+      <SettingsPanel icon={<Wrench size={16} />} title={tools.length ? t('connectors.tools', { n: tools.length }) : t('connectors.toolsTitle')}
+        description={tools.length ? t('connectors.toolsHint') : undefined}>
+        {tools.length === 0
+          ? <div className="settings-control-row conn-tools-empty">{t(off ? 'connectors.toolsWhenOff' : keyType ? 'connectors.toolsAfterKey' : 'connectors.toolsAfterSignIn')}</div>
+          : shownTools.map((tool) => {
+            const remote = tool.remoteName ?? tool.name
+            const setting = sc.tools?.[remote] ?? 'follow'
+            const desc = tool.description.replace(/^\[MCP·[^\]]*\]\s*/, '') // 引擎给模型加的来源前缀,这里已经在连接器页里了
             return (
-              <div key={name} className="conn-row" data-connector-row={sc.connector}>
-                <div className="file-row" style={{ cursor: 'default' }}>
-                  <span className="file-name">
-                    <b>{label}</b>
-                    {c?.status === 'retired' && <span className="conn-badge" title={t('connectors.retiredHint')}>{t('connectors.retired')}</span>}
-                    <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>{hostOf(c?.url)}</span>
-                  </span>
-                  <span className="file-size" title={row?.error || undefined}>{sc.enabled === false ? t('settings.mcp.statusDisabled') : statusLabel(row)}</span>
-                  {sc.enabled !== false && row && row.auth !== 'user-key' && (row.status === 'needs-login' || row.status === 'logging-in') && (
-                    <button className="btn ghost sm" onClick={() => onLogin(name)}><LogIn size={13} /> {t('connectors.signIn')}</button>
-                  )}
-                  {sc.enabled !== false && needsKey && keyOpen !== name && (
-                    <button className="btn ghost sm" onClick={() => setKeyOpen(name)}><KeyRound size={13} /> {t('connectors.enterKey')}</button>
-                  )}
-                  <button className="icon-btn" title={t('connectors.disconnect')} disabled={busy === name} data-connector-disconnect={sc.connector} onClick={() => void disconnect(name, label)}><Unplug size={13} /></button>
+              <div key={tool.name} className={`settings-control-row settings-setting-row conn-tool${setting === 'off' && !locked.has(remote) ? ' is-off' : ''}`} data-connector-tool={remote}>
+                <div className="settings-control-copy"><span><strong className="conn-tool-name">{remote}</strong>{desc && <small title={desc}>{desc}</small>}</span></div>
+                <div className="settings-row-control conn-tool-approval">
+                  {locked.has(remote)
+                    ? <span className="conn-locked" title={t('connectors.lockedHint')} data-connector-locked><Lock size={12} />{t('connectors.approval.locked')}</span>
+                    : <select value={setting} disabled={isBusy || !tool.remoteName} aria-label={t('connectors.approval.label', { tool: remote })} data-connector-approval={remote}
+                      onChange={(e) => void setToolSetting(it, remote, e.target.value as 'follow' | 'ask' | 'off')}>
+                      <option value="follow">{t('connectors.approval.follow')}</option>
+                      <option value="ask">{t('connectors.approval.ask')}</option>
+                      <option value="off">{t('connectors.approval.off')}</option>
+                    </select>}
                 </div>
-                {scopes?.length ? <div className="hint conn-scopes">{t('connectors.scopes', { scopes: scopes.join(', ') })}</div> : null}
-                {keyOpen === name && c && <KeyForm c={c} busy={busy === name} onSubmit={(key) => void saveKey(name, label, key)} />}
               </div>
             )
           })}
-        </div>
-      )}
+        {tools.length > TOOL_PREVIEW && !allTools && (
+          <button type="button" className="settings-control-row conn-more" onClick={() => setAllTools(true)}>{t('connectors.moreTools', { n: tools.length - TOOL_PREVIEW })}<ChevronDown size={12} /></button>
+        )}
+      </SettingsPanel>
+      {tools[0] && <p className="hint conn-foot">{t('connectors.bridgedHint', { example: tools[0].name })}</p>}
     </div>
   )
 }

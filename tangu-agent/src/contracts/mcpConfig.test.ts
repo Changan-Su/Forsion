@@ -20,6 +20,13 @@ describe('MCP JSON input and atomic merges', () => {
     }
     expect(() => parseMcpInput({ s: { command: 'x', oauth: {} } })).toThrow('invalid');
   });
+  it('keeps per-tool settings (ask / off only) and rejects anything that could loosen approval', () => {
+    const remote = { url: 'https://mcp.example.test/mcp', tools: { search: 'ask', move: 'off' } };
+    expect(parseMcpInput({ r: remote })).toEqual({ r: remote });
+    for (const tools of [{ search: 'allow' }, { search: true }, { '': 'off' }, ['off'], 'off']) {
+      expect(() => parseMcpInput({ r: { url: 'https://x.test', tools } })).toThrow('invalid');
+    }
+  });
   it('does not echo JSON source or secret values in syntax/field errors', () => {
     try { parseMcpInput('{\n"secret":"KEY-MUST-NOT-APPEAR",\n}'); } catch (e) { expect(String(e)).not.toContain('KEY-MUST-NOT-APPEAR'); }
     expect(() => parseMcpInput(JSON.parse('{"__proto__":{"command":"x"}}'))).toThrow('name');

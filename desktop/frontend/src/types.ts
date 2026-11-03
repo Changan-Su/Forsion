@@ -371,6 +371,8 @@ export interface McpServerConfigEntry {
   oauth?: { clientId?: string; scopes?: string[] }
   /** 从商店连上的连接器:目录 id(宿主同步地址、引擎读 alwaysAsk)。编辑时原样带着,别丢。 */
   connector?: string
+  /** 按远端工具名收紧:off 不下发、ask 每次都问(连接器设置页写)。编辑时原样带着。 */
+  tools?: Record<string, 'ask' | 'off'>
 }
 
 /** 连接器目录的一条(electron/connectorCatalog.ts 校验过的形状)。 */
