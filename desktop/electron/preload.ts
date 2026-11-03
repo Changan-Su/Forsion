@@ -378,8 +378,6 @@ const api = {
     ipcRenderer.invoke('mcp:write', cfg),
   // ── 跨生态 agent 资产发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu)──
   discoveryScan: (): Promise<any> => ipcRenderer.invoke('discovery:scan'),
-  discoveryImportSkills: (ids: string[]): Promise<{ imported: string[] }> =>
-    ipcRenderer.invoke('discovery:importSkills', ids),
   discoveryImportMcp: (names: string[]): Promise<{ imported: string[]; reserved?: string[] }> =>
     ipcRenderer.invoke('discovery:importMcp', names),
   // ── 拖入式主题(~/.tangu/themes/;主进程读盘成字符串,渲染端 <style> 注入)──
@@ -700,7 +698,7 @@ const AGENT_KEYS = [
   'listProviders', 'saveProvider', 'deleteProvider', 'scanLocalProviders', 'importLocalProviders',
   'readMcpConfig', 'writeMcpConfig', 'importMcpConfig',
   'connectorsList', 'connectorsConnect', 'connectorsRemove',
-  'discoveryScan', 'discoveryImportSkills', 'discoveryImportMcp',
+  'discoveryScan', 'discoveryImportMcp',
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',

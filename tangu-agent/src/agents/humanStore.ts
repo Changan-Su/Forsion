@@ -28,7 +28,7 @@ export interface HumanChange {
   /** 这一笔是从哪条路写的(画像那几条入口盖的章;界面的修改记录据此多一行来源)。没有 = 协作说明工具 / 设置页 / 旧版写的。 */
   source?: HumanChangeSource;
 }
-export interface HumanChangeSource { kind: 'remember' | 'dream' | 'move' | 'promote' | 'user'; agent?: string; action?: 'add' | 'update' | 'forget' }
+export interface HumanChangeSource { kind: 'remember' | 'dream' | 'move' | 'promote' | 'user' | 'import'; agent?: string; action?: 'add' | 'update' | 'forget' }
 export const HUMAN_RULES = 2;
 interface Revision extends HumanChange { before: string | null; after: string; committed: boolean }
 export interface HumanDocument {

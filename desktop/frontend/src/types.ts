@@ -317,17 +317,9 @@ export interface GitSettings {
   identityEmail: string
 }
 
-// ── 跨生态 agent 资产发现(desktop discovery:scan;~/.claude、~/.codex、~/.hermes)──
+// ── 跨生态 MCP 发现(desktop discovery:scan;~/.claude、~/.codex、~/.hermes)──
 
 export type DiscoveryEcosystem = 'claude-code' | 'codex' | 'hermes'
-
-export interface DiscoveredSkill {
-  ecosystem: DiscoveryEcosystem
-  id: string
-  name: string
-  description: string
-  sourceDir: string
-}
 
 export interface DiscoveredMcp {
   ecosystem: DiscoveryEcosystem
@@ -336,7 +328,6 @@ export interface DiscoveredMcp {
 }
 
 export interface DiscoveryResult {
-  skills: DiscoveredSkill[]
   mcpServers: DiscoveredMcp[]
 }
 
@@ -870,7 +861,6 @@ declare global {
       readMcpConfig?(): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
       writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry>; base?: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
       discoveryScan?(): Promise<DiscoveryResult>
-      discoveryImportSkills?(ids: string[]): Promise<{ imported: string[] }>
       discoveryImportMcp?(names: string[]): Promise<{ imported: string[]; reserved?: string[] }>
       envCheck?(): Promise<EnvProbeResult[]>
       envRun?(installId: string): Promise<{ exitCode: number }>
