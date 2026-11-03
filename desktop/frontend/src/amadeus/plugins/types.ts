@@ -331,6 +331,16 @@ export interface PluginAppApi extends BlockSurfaceApi {
    *  和收件箱未读角标同一种红;和进度环同时有时只画红点。别的插件的 Space / 内置 Space → false。
    *  插件停用时宿主自己收掉。旧宿主没有:`ctx.app.setSpaceDot?.(…)`。 */
   setSpaceDot?(spaceId: string, on: boolean): boolean
+  /** Ribbon 下区加一格(2026-10-31+,活动中心):落在「商店」下面(2026-11-02 起,明暗原来的位置),主页入口排同时显示;手机在「⋯」底单里。只对首方内置包生效,
+   *  别的插件调了什么都不发生。`id` 拼成 `rb-plugin-<id>`;`icon` 只认宿主给这个接缝的词(现为 `gift`)。返回反注册,
+   *  插件停用时宿主也收。下区只常驻 5 格,这一格在时「反馈」会收进「更多」。旧宿主没有:`ctx.app.registerRibbonAction?.(…)`。 */
+  registerRibbonAction?(opts: {
+    id: string
+    icon: string
+    title: string | (() => string)
+    run(): void
+    dot?: { get(): boolean; subscribe(cb: () => void): () => void; label?: () => string }
+  }): () => void
   /** 同步总开关(2026-10-20+,蓬洲云「同步」页):笔记库 / Agents 与记忆 / 插件数据三样的开关与状态,宿主
    *  services/syncSetup.ts 是真身。只给首方内置包、只在有本地库远程同步的桌面挂;别的插件 get() 恒 null、set 恒失败。
    *  旧宿主没有:`ctx.app.sync?.get()`。 */
@@ -759,6 +769,11 @@ export interface ListItem {
    *  closed and the one holding `activeKey()` is opened for you. `icon` overrides the folder glyph.
    *  A `primary` action from `itemMenu(folder)` is drawn as the `+` button on the row. */
   kind?: 'folder'
+  /** Folder rows only (2026-10-31+, feature-detect with `ctx.listCapabilities?.includes('folderOpen')`):
+   *  clicking the name calls `open()` and unfolds the row, and only the leading arrow folds it. The row
+   *  highlights when it is `activeKey`. Use it when a folder is also a thing to select, like a parent tag.
+   *  Older hosts ignore the field and the click only folds, so keep a child row for them. */
+  opensOnClick?: boolean
   /** Folder rows only (2026-10-14+): 'group' draws a top-level folder as a group head — the taller
    *  first-level row the Tangu sidebar uses for agents and projects: a 30px lead (`iconUrl` as a round
    *  avatar, else `icon` in a tile, else the first letter of the title), the title with a fold arrow, and
@@ -968,7 +983,7 @@ export interface FileGotoTarget {
 }
 
 /** A "New …" file-creation entry a plugin contributes to the file tree's right-click menu (root + folder
- *  submenus), sitting alongside the built-in 新建笔记 / 新建 Base / 新建白板. The host renders `icon`+`label`;
+ *  submenus), sitting alongside the built-in 新建笔记 / 新建多维表 / 新建白板. The host renders `icon`+`label`;
  *  on click it calls `run(parentFolder)` where parentFolder is the clicked folder's vault-relative path
  *  ('' = vault root). The plugin creates its file there (ctx.app.writeFile) and opens it (ctx.app.openFile).
  *  Pairs naturally with registerFileType so the new file gets its own icon + dedicated view. */
@@ -1275,7 +1290,9 @@ export interface PluginSelectionBarOptions {
   source?(sel: PluginSelectionBarSelection): { title?: string; path?: string; page?: number } | undefined
   /** Default `true`: the host watches the DOM selection inside the element you passed (bar on mouse-up; gone when
    *  the selection collapses, the element scrolls or resizes, or the user clicks elsewhere). Set `false` when the
-   *  text lives where the host cannot see it (an iframe, a canvas) and drive the bar with `show()` / `hide()`. */
+   *  text lives where the host cannot see it (an iframe, a canvas) and drive the bar with `show()` / `hide()`.
+   *  Watched reading surfaces share the host's continuous line selection paint; native Selection/copy are preserved.
+   *  Custom PDF/code-editor layers and coarse pointers retain native paint. `watch:false` keeps custom paint. */
   watch?: boolean
 }
 
@@ -1326,6 +1343,9 @@ export interface PluginAccount {
   /** Save through the native Downloads provider when available. */
   saveDownload?(blob: Blob, name: string): Promise<{ ok: boolean; error?: string }>
   subscribe(listener: (status: PluginAccountStatus) => void): () => void
+  /** Does this account hold the entitlement the plugin declares in manifest `requires`? `null` = unknown (offline,
+   *  signed out, unreadable reply), which is not `false`. `true` when the plugin declares none. Older hosts lack it. */
+  entitlements?(): Promise<{ granted: boolean | null }>
 }
 
 /** An action in the selection bar — the strip that appears over selected text (2026-09-28+, review G3-07;
@@ -1523,6 +1543,10 @@ export interface PluginEmptyState {
   line?: PluginText
   action?: { label: PluginText; icon?: PluginIconName | (string & {}); run(): void }
   secondary?: { label: PluginText; run(): void }
+  /** Up to 3 example lines under the title (2026-11-02+, first-use guide): show what the user could type here.
+   *  `run` usually fills your input (`box.insertText(…)`) rather than creating anything; `note` is a short grey
+   *  hint on the right. Older hosts ignore it, so the empty state must read fine without them. */
+  examples?: { label: PluginText; note?: PluginText; run(): void }[]
 }
 export interface PluginPopoverOptions {
   /** Draw the popover's content into `el`. Return a cleanup; it runs when the popover closes. */
@@ -1642,7 +1666,7 @@ export interface PluginContext {
    *  folder rows, 'items' = dragging rows onto rows, 'rename' = in-place rename, 'group' = group heads
    *  (`folderStyle: 'group'`, `defaultOpen`; 2026-10-14+). Older hosts lack the field — treat a missing
    *  entry as "not supported" and keep emitting flat rows there. */
-  readonly listCapabilities?: readonly ('tree' | 'items' | 'rename' | 'group')[]
+  readonly listCapabilities?: readonly ('tree' | 'items' | 'rename' | 'group' | 'folderOpen')[]
   /** Show a top-right notification card (2026-07-23+). Source is auto-labelled with the plugin
    *  name and users can mute per plugin in 设置 → 通知与状态栏 — treat it as a mutable hint, not a
    *  data channel. error level is sticky (manual close) by default. Old hosts lack this API:
@@ -1712,8 +1736,11 @@ export interface PluginContext {
    *  is retired by other mounts on the same element. Don't select host nodes with `el > …`. */
   ui?: {
     /** Temporary native mobile header for a view's overlay. Dispose when the overlay closes.
+     *  The system back gesture and the header arrow both call `onBack`. `toList`: the header belongs to a page under
+     *  the Space's phone list rather than an overlay, so back slides the list in (following the finger on an edge
+     *  swipe) and `onBack` runs once the list is showing, whichever way the user got there. A cancelled swipe calls nothing.
      *  Present only with native chrome; callbacks stop on plugin disable. */
-    claimHeader?(opts: { title: string; back: string; onBack(): void }): { dispose(): void }
+    claimHeader?(opts: { title: string; back: string; onBack(): void; toList?: boolean }): { dispose(): void }
     /** Native touch feedback. Present only on a capable platform host; system preferences apply.
      *  Call once for an accepted user gesture. No-op after the plugin is disabled. */
     haptic?(kind: 'tick'): void
@@ -1743,7 +1770,9 @@ export interface PluginContext {
     contextMenu?(x: number, y: number, items: PluginContextMenuEntry[], opts?: { keepOpen?: boolean; onClose?(): void }): PluginMenuHandle
     contextMenu?(at: PluginAnchor, items: PluginContextMenuEntry[], opts?: { keepOpen?: boolean; onClose?(): void }): PluginMenuHandle
     /** Shared prompt input + live model catalog. Local draft; the plugin owns submission.
-     *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure. */
+     *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure.
+     *  `modelPicker` / `toolbar` / `suggest` / `insertText` arrived together: older hosts ignore the options, so check
+     *  `typeof box.insertText === 'function'` on the returned handle. */
     mountChatBox?(
       el: HTMLElement,
       opts: import('../../../../shared/chatBox').PluginChatBoxOptions,
@@ -1925,6 +1954,18 @@ export interface PluginContext {
     isClaimed?(id: string): boolean
     claim?(id: string): void
   }
+  /** 上手提示(2026-11-02+):提示本身声明在 manifest `guide.tips`,宿主决定什么时候出(锚点在屏幕上 + `when` 成立 +
+   *  还没会 + 没被关 + 宿主的节奏允许:同一时刻全应用一处、一天最多 3 条、打开后 2 秒、停手 1.5 秒、有弹窗时等着)。
+   *  锚点 = 你自己 View 里的 `data-guide-anchor="<名字>"`,只在你的 View 里找;「会了」= `done` 里任一计数 ≥ 1,
+   *  计数就是 `ctx.achievements.track()`。旧宿主没有:`ctx.guide?.show(…)`。 */
+  guide?: {
+    /** 请宿主出这一条(manifest 里没写 `when` 的提示只能这样出;写了的也能提前叫)。仍走锚点、节奏和记账:已会 / 看过 /
+     *  关掉的不出,条件暂时不满足就等到满足(本次运行内有效)。不认识的 id 什么都不做。 */
+    show(id: string): void
+    /** `waiting` 还没出 / `seen` 用户点过知道了 / `learned` 做过那件事 / `muted` 用户关了这个插件的提示 /
+     *  `off` 用户在设置里关了上手提示,或这台设备读不了记账。 */
+    state(id: string): 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
+  }
   /** Tangu 侧的只读探针(2026-08-29+):**当前主区聊天要用的模型** + **模型目录** + **当前 Space id**。
    *  聊天状态住在 Tangu 的 store 里,`ctx.app` 是 Amadeus 的页面/库面 —— 两者不通,所以单开这一截。
    *
@@ -1940,6 +1981,12 @@ export interface PluginContext {
   tangu?: {
     /** Local authenticated JSON request to an engine plugin bundled by this plugin. */
     request?(engineId: string, path: string, opts?: import('./engineRequest').PluginRequestOptions): Promise<unknown>
+    /** Fill in and connect a channel registered by an engine plugin in this bundle, so the plugin's own UI can replace
+     *  the settings card. Desktop with a local engine only. Any other kind is refused, and only the credential keys the
+     *  channel declares are accepted; both checks run in the host. `options.modelId` is the channel's default model when
+     *  it has none yet; a model chosen in the channel's settings stays. Returns `{ ok: false, error }` instead of throwing. */
+    connectChannel?(kind: string, fields: Partial<Record<'appId' | 'appSecret' | 'botToken', string>>, options?: { modelId?: string }): Promise<
+      { ok: true; accountId: string; label: string; sessionId: string } | { ok: false; error: string }>
     /** Open an existing session in a native chat tab. Does not start a run. */
     openSession?(sessionId: string): Promise<void> | void
     activeModel(): import('./tanguSeam').TanguModelInfo | null
@@ -2087,11 +2134,22 @@ export interface PluginContext {
    *  - **异步等待**:后端就绪(cfg 已加载且连通)且库已恢复才发,最多等 60s;超时 / 没开库 → 整批不发,
    *    errors 里 `No vault is open`;单条坏规则(key 形态 / path / where / actions)只拒那一条,其余照发;
    *  - 恒传 `enabled:true`:用户在自动化面板里单独关掉的插件规则,下次插件重载会被开回来;
-   *  - 插件被用户**禁用** → 本插件全部规则 `enabled=false`(不删);再启用时引擎重新播种游标(停用期间的行不爆发)。
+   *  - 插件被用户**禁用或卸载** → 本插件全部规则 `enabled=false`(不删,引擎不在时下次启动补上);再启用 / 恢复 / 重装时
+   *    setup 里的 ensure 把规则开回来,引擎重新播种游标(停用期间的行不爆发)。所以 ensure 要放在 setup 里,别只放在一次性操作里。
    *  ⚠️**非 Tangu 宿主上整个 `ctx.automation` 不存在**(纯 Amadeus 壳 / unit 设备页 / 云端 / 台架)——一律
-   *  `void ctx.automation?.ensure(rules)`(别 await 阻塞 setup)。 */
+   *  `void ctx.automation?.ensure(rules)`(别 await 阻塞 setup)。
+   *
+   *  `registerTrigger` / `emit`(2026-10-30+)= 给「当…」加一种插件自己的事件,用户在自动化画布的「外部 · 插件」组里用,
+   *  规则怎么写由用户定(和 ensure 种规则是两回事):
+   *  - `id` 只是 key(`[a-z0-9-]+`),宿主拼成 `plugin:<pluginId>:<id>`,碰不到别家;`name` 中英都要有;
+   *  - `params` 是规则要填的参数表;规则填了的参数要和事件 payload 同名字段相等才算命中,payload 没这个字段不比;
+   *  - `emit(id, payload)`:payload 只留字符串 / 数字 / 布尔(至多 20 个字段),动作模板里用 `{{row.字段}}`;
+   *    事件只在内存里,引擎重启丢掉还没被规则看到的;Muse 能提醒用户,但不能建「叫醒自己」的插件规则;
+   *  - 插件停用 / 卸载 = 注销,相关规则不删,暂停并写明原因,装回来自动恢复。 */
   automation?: {
     ensure(rules: PluginAutomationRule[]): Promise<{ ok: boolean; errors: string[] }>
+    registerTrigger(trigger: PluginAutomationTrigger): Promise<{ ok: boolean; error?: string }>
+    emit(id: string, payload?: Record<string, unknown>): void
   }
   /** 日历成员登记(2026-09-02+)。Calendar Space 是显式成员制 —— 插件种下的任务表不会自动进日历,
    *  用这条把 `dbPath`(库相对路径)以 `dateColId` 为日期锚(可选 `checkboxColId` 为完成勾选)登记进去。
@@ -2342,6 +2400,24 @@ export interface TableAction {
   title?: string
 }
 
+/** `ctx.automation.registerTrigger` 的入参。 */
+export interface PluginAutomationTrigger {
+  id: string
+  name: { zh: string; en: string }
+  params?: Array<{
+    key: string
+    /** `app` = 选 App;`number` / `text` = 输入框。 */
+    type: 'app' | 'number' | 'text'
+    name: { zh: string; en: string }
+    required?: boolean
+    min?: number
+    max?: number
+    default?: string | number
+  }>
+  /** `computer_history` = 电脑历史关着时这个触发源灰掉、已有规则暂停。 */
+  requires?: Array<'computer_history'>
+}
+
 /** `ctx.automation.ensure` 的一条规则 = 引擎 upsert 入参的**子集**(只有 db_changed 触发;id / vault /
  *  agent_slug / prompt 由宿主定或不开放)。字段含义见 `MuseTriggerUpsert` / `AutomationActionSpec`。 */
 export interface PluginAutomationRule {
@@ -2397,6 +2473,8 @@ export interface AmadeusPlugin {
   /** 前置插件(manifest `requiresPlugins`,宿主已消毒):缺任何一个,本插件装着但不运行;前置没了自动暂停、回来自动恢复。
    *  判定与原因见 pluginDeps.ts;代码内注册的内置插件也可以直接写这个字段。 */
   requiresPlugins?: import('@amadeus-shared/ipc').PluginDependency[]
+  /** 声明的账号权益(manifest `requires.entitlement`)。不挡激活:插件自己画引导页,真正的闸在服务端。 */
+  entitlement?: string
   /** 声明要用的宿主敏感能力(manifest `capabilities`,主进程已按白名单过滤)。没声明的能力宿主不注入。 */
   capabilities?: import('@amadeus-shared/ipc').PluginCapability[]
   /** README.md content for the detail page (external plugins only). */
@@ -2405,6 +2483,8 @@ export interface AmadeusPlugin {
   changelog?: string
   /** Declarative first-run setup card (manifest `onboarding`; sanitized by the host). */
   onboarding?: PluginOnboardingSpec
+  /** First-use tips (manifest `guide`, 2026-11-02+; sanitized by the host). See `PluginGuideApi`. */
+  guide?: import('@amadeus-shared/ipc').PluginGuideSpec
   /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old,
    *  'invalid' = missing/broken manifest or unreadable main (agent Space / dev source, see `blockedReason`),
    *  'dev-fileext' = dev source declaring `fileExtensions` (unprotected outside the installed plugins dir),

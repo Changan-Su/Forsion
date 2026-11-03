@@ -62,7 +62,7 @@ export const WorkspaceDetailView: React.FC<{
   }
 
   const commitRename = () => {
-    if (renaming && draft.trim()) onRename(renaming, draft.trim())
+    if (renaming) onRename(renaming, draft.trim())
     setRenaming(null)
   }
 

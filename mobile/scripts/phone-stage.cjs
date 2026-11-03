@@ -338,6 +338,19 @@ const SCENES = {
       ['the last row scrolls clear of the dock and of the main button', scroller.lastBottom <= (fab?.y ?? 0), `last row bottom ${Math.round(scroller.lastBottom)} / button top ${Math.round(fab?.y ?? 0)}`],
     ]
   },
+  'tangu-fab': async (page) => {
+    // 6.20 A (walkthrough round 6): scrolling down by more than 8 dp moves the main button out of the way, scrolling back
+    // up by more than 8 dp (or to the top) brings it back; a nudge either way does nothing
+    const sc = `${LIST} .t2s-scroll`
+    const at = async (y) => { await page.evaluate(([q, v]) => { document.querySelector(q).scrollTop = v }, [sc, y]); await page.waitForTimeout(350); return page.evaluate((q) => document.querySelector(q)?.hasAttribute('data-away'), `${LIST} .pl-fab`) }
+    const seen = { nudge: await at(5), down: await at(160) }
+    fs.writeFileSync(path.join(OUT, `tangu-fab-down${DARK ? '-dark' : ''}.png`), await page.screenshot())
+    seen.smallUp = await at(155)
+    seen.up = await at(140)
+    seen.downAgain = await at(200)
+    seen.top = await at(0)
+    return [['the main button leaves while scrolling down and comes back on a scroll up or at the top', JSON.stringify(seen) === JSON.stringify({ nudge: false, down: true, smallUp: true, up: false, downAgain: true, top: false }), JSON.stringify(seen)]]
+  },
   'tangu-swipe': async (page) => {
     // the gesture itself (a pointer drag on the row's track) is pushed in as pointer events; then the buttons are used
     const sw = `${LIST} [data-timeline] .pl-swipe`

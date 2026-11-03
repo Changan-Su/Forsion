@@ -1,14 +1,14 @@
 /**
  * Muse 工作区：状态 pill(权限档 / 待批数)→ 待批准(ask/agent 档越界动作,批准=引擎按原参数代执行)→
- * 当前思考 → 追踪中(Muse 自己 SCHEDULE.db 的 auto 条目=自触发/Track)→ 盯任务 → TODO 清单
+ * 当前思考 → 追踪中(Muse 自己 SCHEDULE.db 的 auto 条目=自触发/Track)→ 盯任务 → 待办清单
  * (注入已有会话 / 新会话执行)。嵌在「后台智能体」视图(AgentsDetailView)与 Muse Space 右栏使用,外层容器负责 padding/滚动。
  */
 import React, { useEffect, useState } from 'react'
-import { Sparkles, RefreshCw, Play, Check, XCircle, Crosshair, Trash2, ShieldCheck, ShieldX, MessageSquarePlus, Repeat, FolderOpen } from 'lucide-react'
+import { Sparkles, RefreshCw, Play, Check, X, XCircle, Crosshair, Trash2, ShieldCheck, ShieldQuestion, MessageSquarePlus, Repeat, FolderOpen, Settings, Pause, Pencil } from 'lucide-react'
 import { setActiveSpace, useWorkspace } from '@lcl/engine'
 import { syncAgentSpace } from '../builtins/agentSpaceSync'
 import {
-  getMuseStatus, getMuseTodos, patchMuseTodo, injectMuseTodos, listMessages, getMuseTriggers, deleteMuseTrigger,
+  getMuseStatus, getMuseTodos, patchMuseTodo, injectMuseTodos, listMessages, getMuseTriggers, deleteMuseTrigger, saveMuseTrigger,
   listMuseApprovals, decideMuseApproval, getAgentSchedules, deleteAgentScheduleEntry, postMuseFeedback,
 } from '../services/backendService'
 import { useApp } from '../stores/appStore'
@@ -16,17 +16,31 @@ import { openNewChat } from '../sessionNav'
 import type { AgentScheduleEntry, MuseStatusInfo, MuseTodo, MuseTriggerInfo, PendingApprovalInfo, SessionRecord, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
+import { formatRepeat } from '../format/repeat'
 import { fmtCalDateYL } from '@amadeus/lib/calDateFmt'
 import { parseCalDate } from '@amadeus-shared/db/calDate'
 import { useAutomation } from '../stores/automationStore'
 import { deleteWithUndo, isPendingDelete } from '../views/automation/automationListSource'
+import { condText as ruleCondText, nextHeartbeatAt, noticeText, onlyText, triggerToUpsert } from '../views/automation/lib'
+import '../views/automation/messages'
 import { homeTarget, targetForSession } from '../services/engine/targets'
 import { previewNeedsScrollHint } from './approvalText'
+import { SelectField } from './SelectField'
 
 registerMessages({
   'special.muse.off': { zh: '未开启', en: 'Off' },
   'special.muse.goSettings': { zh: '去设置', en: 'Settings' },
+  'special.muse.approvalWrite': { zh: 'Muse 请求写入文件', en: 'Muse wants to write a file' },
+  'special.muse.approvalRun': { zh: 'Muse 请求执行 {tool}', en: 'Muse wants to run {tool}' },
   'special.muse.sleeping': { zh: '休眠至 {time}', en: 'Sleeping until {time}' },
+  'special.muse.nextHeartbeat': { zh: '下次心跳 · {time}', en: 'Next heartbeat · {time}' },
+  'special.muse.heartbeatOff': { zh: '心跳关着，只有下面的规则和日程会叫醒我', en: 'Heartbeat is off. Only the rules below and my schedule wake me' },
+  'special.muse.heartbeatSleep': { zh: 'Muse 自己定的：{reason}', en: 'Muse set this itself: {reason}' },
+  'special.muse.heartbeatEvery': { zh: '每 {n} 分钟，或你一有动静', en: 'Every {n} min, or when you\u2019re active' },
+  'special.muse.rulePause': { zh: '暂停', en: 'Pause' },
+  'special.muse.ruleResume': { zh: '恢复', en: 'Resume' },
+  'special.muse.ruleEdit': { zh: '在画布里打开', en: 'Open in canvas' },
+  'special.muse.rulePaused': { zh: '已暂停', en: 'Paused' },
   'special.muse.sleepingTitle': {
     zh: 'Muse 判断暂时没事可做，跳过心跳到这个时刻；你一有动作、规则命中或日程到期都会提前叫醒它。理由：{reason}',
     en: 'Muse found nothing to do and skips its heartbeat until then; your activity, a rule or a due schedule wakes it earlier. Reason: {reason}',
@@ -39,6 +53,19 @@ const hhmm = (ms: number): string => {
 }
 
 const arr = <T,>(v: unknown): T[] => (Array.isArray(v) ? v : [])
+
+/** 改文件的工具:标题写「Muse 请求写入文件」,其余写工具名。 */
+const WRITE_TOOLS: ReadonlySet<string> = new Set(['write_file', 'edit_file', 'multi_edit', 'apply_patch'])
+/** pending_approvals.reason 是引擎 JSON.stringify 的 ApprovalReason → 「为什么问你」那行。坏串 / 旧行 / 认不出的 kind → 不写。
+ *  ponytail: 没用 approvalReason.ts 的 approvalReasonText —— 那是 Tangu 界面文件,宿主不许直连(check:tanguboundary);
+ *  这里只照抄 kind → 词条的映射,mode 档不写(Muse 的档位不是聊天那套,套聊天档名会说错)。 */
+const reasonText = (raw: string | null, t: (k: string, v?: Record<string, string>) => string): string => {
+  let r: { kind?: unknown; rule?: unknown } | null = null
+  try { r = raw ? JSON.parse(raw) : null } catch { return '' }
+  if (r?.kind === 'custom-ask') return t('approval.why.customAsk', { rule: String(r.rule ?? '').slice(0, 200) })
+  if (r?.kind === 'escalate' || r?.kind === 'protected' || r?.kind === 'control' || r?.kind === 'always') return t(`approval.why.${r.kind}`)
+  return ''
+}
 
 export const MuseView: React.FC<{
   cfg: TanguDesktopConfig
@@ -56,10 +83,10 @@ export const MuseView: React.FC<{
   const [target, setTarget] = useState<string>('')
   const [msg, setMsg] = useState('')
   const [busy, setBusy] = useState<string>('') // 正在裁决的审批 id(approve 会同步执行工具)
-  // 本面板只管 Muse 唤醒式规则(无动作链/无执行者;legacy 落盘可能有显式 agentSlug:'muse'=同义);
-  // 带动作的自动化在自动化 Space 统一管理
+  // 本面板只列 Muse 的时机:叫醒它的规则(无动作链/无执行者;legacy 落盘可能有显式 agentSlug:'muse'=同义)
+  // 和只做直接提醒的规则;别的自动化在自动化 Space 统一管理
   useAutomation((s) => s.refreshNonce) // 删除进入 / 撤出撤销窗口时重渲
-  const museTriggers = triggers.filter((tg) => !tg.actions?.length && (!tg.agentSlug || tg.agentSlug === 'muse') && !isPendingDelete({ kind: 'trigger', triggerId: tg.id }))
+  const museTriggers = triggers.filter((tg) => (!tg.actions?.length || tg.actions.every((a) => a.type === 'remind')) && (!tg.agentSlug || tg.agentSlug === 'muse') && !isPendingDelete({ kind: 'trigger', triggerId: tg.id }))
   const shownTracks = tracks.filter((e) => !isPendingDelete({ kind: 'schedule', slug: 'muse', rowId: e.id }))
 
   const load = async (): Promise<void> => {
@@ -156,8 +183,15 @@ export const MuseView: React.FC<{
       setBusy('')
     }
   }
+  const toggleRule = async (tg: MuseTriggerInfo): Promise<void> => {
+    try {
+      const saved = await saveMuseTrigger(homeTarget(), { ...triggerToUpsert({ ...tg, enabled: !tg.enabled }), actor: 'user' })
+      setTriggers((p) => p.map((x) => (x.id === tg.id ? { ...x, ...saved } : x)))
+    } catch (e) { fail(e) }
+  }
+  const openRule = (id: string): void => { useApp.getState().closeSettings(); setActiveSpace('automation'); void useAutomation.getState().openRule(id) }
   const condText = (tg: MuseTriggerInfo): string =>
-    tg.cond.type === 'file_chars_gte'
+    'params' in tg.cond ? ruleCondText(t, tg.cond) : tg.cond.type === 'file_chars_gte'
       ? t('special.muse.trigFile', { path: tg.cond.path.split(/[\\/]/).pop() || tg.cond.path, n: tg.cond.n })
 
       : tg.cond.type === 'event_seen'
@@ -167,7 +201,7 @@ export const MuseView: React.FC<{
           : tg.cond.type === 'at'
             ? tg.cond.datetime.replace('T', ' ')
             : tg.cond.type === 'every'
-              ? `every ${tg.cond.interval}`
+              ? formatRepeat(t, tg.cond.interval)
               : '—'
   const modeLabel = (m: MuseStatusInfo['mode']): string =>
     m === 'auto' ? t('settings.special.m.modeAuto') : m === 'agent' ? t('settings.special.m.modeAgent') : t('settings.special.m.modeAsk')
@@ -175,6 +209,7 @@ export const MuseView: React.FC<{
   const running = !!status?.running
   // Muse 自己定的休眠(set_next_wake):醒着 / 跑着时不显示;过期的休眠引擎侧已当醒着,这里再兜一次。
   const sleepUntil = !running && status?.sleepUntil && status.sleepUntil > Date.now() ? status.sleepUntil : 0
+  const nextHeartbeat = nextHeartbeatAt(status)
   const pendingN = approvals.length || status?.pendingApprovals || 0
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
@@ -187,7 +222,7 @@ export const MuseView: React.FC<{
         {pendingN > 0 && <span className="conn-pill" style={{ fontSize: 'var(--ui-font-meta, 12px)', fontWeight: 400, color: 'var(--accent-ink)' }}>{t('special.muse.pending', { n: pendingN })}</span>}
         {/* 没开:一行「未开启 · 去设置」,不再是一颗两行的长胶囊(10-25 第四轮 4.1);status 还没回来时不说话。 */}
         {status && !status.enabled ? <span className="muse-off-line" data-state="disabled">
-          {t('special.muse.off')} · <button type="button" className="muse-off-link" data-action="muse-settings" onClick={() => useApp.getState().openSettings('agents/ag-special')}>{t('special.muse.goSettings')}</button>
+          {t('special.muse.off')} · <button type="button" className="muse-off-link" data-action="muse-settings" onClick={() => useApp.getState().openSettings('agents/ag-special/muse')}>{t('special.muse.goSettings')}</button>
         </span> : status && <span
           className="conn-pill"
           data-state={running ? 'running' : sleepUntil ? 'sleeping' : 'idle'}
@@ -199,6 +234,8 @@ export const MuseView: React.FC<{
         </span>}
         <button className="icon-btn" title={t('muse.openLibrary')} onClick={() => useWorkspace.getState().openView('muse-files', {}, 'main', { newTab: true })}><FolderOpen size={13} /></button>
         <button className="icon-btn" onClick={() => void load()}><RefreshCw size={13} /></button>
+        {/* Muse 开着时 Space 里唯一去设置的路;关着时上面那行「去设置」已经有了 */}
+        {status?.enabled && <button className="icon-btn" data-action="muse-settings" title={t('muse.settings')} aria-label={t('muse.settings')} onClick={() => useApp.getState().openSettings('agents/ag-special/muse')}><Settings size={13} /></button>}
       </div>
 
       {/* 待批准:ask/agent 档下 Muse 的越界写入 / 命令。批准 = 引擎按当时的原参数直接执行(写类先留检查点),不再经模型。 */}
@@ -206,23 +243,35 @@ export const MuseView: React.FC<{
         <div className="field">
           <label style={{ display: 'flex', alignItems: 'center', gap: 6 }}><ShieldCheck size={13} /> {t('special.muse.approvals')}</label>
           {approvals.length === 0 && <div className="hint">{t('special.muse.approvalsEmpty')}</div>}
-          {approvals.map((a) => (
-            <div key={a.id} className="file-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
-              <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
+          {approvals.map((a) => {
+            const why = reasonText(a.reason, t)
+            return (
+              // 7.18:和聊天里的 ApprovalCard 同一套 approval-* 排法(标题 → 为什么问你 → 预览占满宽 → 一行说明 → 按钮一排)。
+              // 不直接挂 ApprovalCard:它吃的是 approval_request 事件,还会给「总允许」,Muse 的队列兑现不了。
+              <div key={a.id} className="approval-card muse-approval" data-muse-approval={a.id} style={{ marginTop: 6 }}>
+                <div className="approval-title">
+                  <ShieldQuestion size={15} style={{ color: 'var(--accent-ink)' }} />
+                  {WRITE_TOOLS.has(a.tool) ? t('special.muse.approvalWrite') : t('special.muse.approvalRun', { tool: a.tool })}
+                </div>
+                {why && <div className="approval-why">{why}</div>}
                 {/* 批准 = 引擎按原参数直接执行:预览必须多行原样(`# 注释\nrm` 折成一行会像注释),超长给滚动与提示 */}
-                <b style={{ display: 'block', fontFamily: 'var(--font-mono, monospace)', fontSize: 'var(--ui-font-meta, 12px)', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 240, overflow: 'auto' }}>{a.preview}</b>
-                {previewNeedsScrollHint(a.preview) && <div className="hint">{t('approval.previewScrollHint')}</div>}
-                <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
+                <div className="approval-preview" style={{ maxHeight: 240, overflow: 'auto', overflowWrap: 'anywhere' }}>{a.preview}</div>
+                {previewNeedsScrollHint(a.preview) && <div className="approval-why">{t('approval.previewScrollHint')}</div>}
+                <div className="approval-why">
                   {a.tool}{a.cwd ? ` · ${a.cwd}` : ''} · {String(a.created_at).replace('T', ' ').slice(5, 16)}
                   {a.note && <div>{t('special.muse.approvalNote', { note: a.note })}</div>}
                 </div>
-              </span>
-              <button className="btn primary sm" disabled={busy === a.id} title={t('special.muse.approve')} onClick={() => void decide(a, 'approve')}>
-                <ShieldCheck size={12} /> {t('special.muse.approve')}
-              </button>
-              <button className="icon-btn" disabled={busy === a.id} title={t('special.muse.reject')} onClick={() => void decide(a, 'reject')}><ShieldX size={13} /></button>
-            </div>
-          ))}
+                <div className="approval-actions">
+                  <button className="btn primary sm" disabled={busy === a.id} onClick={() => void decide(a, 'approve')}>
+                    <Check size={13} /> {t('special.muse.approve')}
+                  </button>
+                  <button className="btn danger sm" disabled={busy === a.id} onClick={() => void decide(a, 'reject')}>
+                    <X size={13} /> {t('special.muse.reject')}
+                  </button>
+                </div>
+              </div>
+            )
+          })}
         </div>
       )}
 
@@ -246,7 +295,7 @@ export const MuseView: React.FC<{
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{e.name}</b>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
-                {fmtCalDateYL(parseCalDate(e.date)) || e.date}{e.repeat ? ` · ${t('automation.schedule.every', { ivl: e.repeat })}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: formatDateTime(e.lastRun) })}` : ''}
+                {fmtCalDateYL(parseCalDate(e.date)) || e.date}{e.repeat ? ` · ${formatRepeat(t, e.repeat)}` : ''}{e.lastRun ? ` · ${t('special.muse.trigFired', { t: formatDateTime(e.lastRun) })}` : ''}
                 {e.description && <div>{e.description}</div>}
               </div>
             </span>
@@ -267,15 +316,28 @@ export const MuseView: React.FC<{
             {t('special.muse.watchesAll')}
           </a>
         </label>
+        {status?.enabled && (
+          <div className="file-row" data-next-heartbeat style={{ cursor: 'default', alignItems: 'flex-start' }}>
+            <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
+              <b>{nextHeartbeat ? t('special.muse.nextHeartbeat', { time: formatDateTime(nextHeartbeat) }) : t('special.muse.heartbeatOff')}</b>
+              {nextHeartbeat ? <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
+                {sleepUntil ? t('special.muse.heartbeatSleep', { reason: status.sleepReason || '—' }) : t('special.muse.heartbeatEvery', { n: status.heartbeatMinutes })}
+              </div> : null}
+            </span>
+          </div>
+        )}
         {museTriggers.length === 0 && <div className="hint">{t('special.muse.watchesHint')}</div>}
         {museTriggers.map((tg) => (
-          <div key={tg.id} className="file-row" style={{ cursor: 'default', alignItems: 'flex-start' }}>
+          <div key={tg.id} className="file-row muse-rule-row" data-rule-id={tg.id} style={{ cursor: 'default', alignItems: 'flex-start' }}>
             <span className="file-name" style={{ flex: 1, whiteSpace: 'normal' }}>
               <b>{tg.desc}</b>
               <div style={{ color: 'var(--text-muted)', fontSize: 'var(--ui-font-meta, 12px)', marginTop: 2 }}>
-                {condText(tg)}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: formatDateTime(tg.lastFiredAt) })}` : ''}
+                {[condText(tg), onlyText(t, tg), tg.actions?.length ? t('automation.step.remind') : t('automation.step.wake'), !tg.enabled ? t('special.muse.rulePaused') : tg.observe ? t('automation.ux.observing') : ''].filter(Boolean).join(' · ')}{tg.lastFiredAt ? ` · ${t('special.muse.trigFired', { t: formatDateTime(tg.lastFiredAt) })}` : ''}
               </div>
+              {tg.enabled && tg.notice && <div className="hint">{noticeText(t, tg.notice)}</div>}
             </span>
+            <button className="icon-btn" title={t(tg.enabled ? 'special.muse.rulePause' : 'special.muse.ruleResume')} onClick={() => void toggleRule(tg)}>{tg.enabled ? <Pause size={13} /> : <Play size={13} />}</button>
+            <button className="icon-btn" title={t('special.muse.ruleEdit')} onClick={() => openRule(tg.id)}><Pencil size={13} /></button>
             <button className="icon-btn" title={t('special.muse.watchDelete')} onClick={() => removeTrigger(tg.id, tg.desc)}><Trash2 size={13} /></button>
           </div>
         ))}
@@ -309,10 +371,10 @@ export const MuseView: React.FC<{
       {/* 注入区:已有会话 / 新会话 */}
       {todos.length > 0 && (
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select value={target} onChange={(e) => setTarget(e.target.value)} style={{ maxWidth: 240 }}>
-            <option value="">{t('special.muse.pickSession')}</option>
-            {sessions.map((s) => <option key={s.id} value={s.id}>{s.title || s.id.slice(0, 8)}</option>)}
-          </select>
+          <div style={{ flex: '1 1 100%', maxWidth: 320, minWidth: 0 }}>
+            <SelectField size="sm" field="muse-target" ariaLabel={t('special.muse.pickSession')} value={target} onChange={setTarget}
+              options={[{ value: '', label: t('special.muse.pickSession') }, ...sessions.map((s) => ({ value: s.id, label: s.title || s.id.slice(0, 8) }))]} />
+          </div>
           <button className="btn primary sm" disabled={!target || !sel.size} onClick={() => void inject()}>
             <Play size={12} /> {t('special.muse.inject')}
           </button>

@@ -9,6 +9,7 @@ import type {
   StreamOpts,
   StreamResult,
   FimCompletionOpts,
+  DecisionResult,
 } from '../../seams/cloudBrain.js';
 import { imageMimeOf, fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
 import {
@@ -18,6 +19,7 @@ import {
   AmadeusNotFoundError,
   AmadeusTooLargeError,
   GitHostingError,
+  HumanCalendarConflictError,
 } from '../../seams/cloudBrain.js';
 import { LlmError } from '../../core/types.js';
 import { streamIdleGuard, mapStreamAbort } from '../../llm/streamIdle.js';
@@ -78,6 +80,17 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     Authorization: `Bearer ${typeof cfg.token === 'function' ? cfg.token() : cfg.token}`,
     'Content-Type': 'application/json',
   });
+
+  /** 云端音色接口:错误保留状态码(409 = 到上限),引擎路由原样转给界面。 */
+  const voicesCall = async <T = any>(method: string, path: string, body: unknown, timeoutMs: number): Promise<T> => {
+    const r = await fetch(`${base}/api/brain/voices${path}`, {
+      method, headers: { ...authHeaders(), ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(timeoutMs),
+    });
+    const j: any = await r.json().catch(() => ({}));
+    if (!r.ok) throw new LlmError(r.status, String(j?.detail || `cloud voices ${r.status}`).slice(0, 200));
+    return j;
+  };
 
   // 所有 brain 请求加超时:thin worker 的 fetch 此前无超时,上游(模型/网关/网络)一挂死,整条 run
   // 无限 await;且 worker 按 session 串行 → 该 session 后续 run 全被堵死。默认 60s,env 可调。
@@ -320,6 +333,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
             // 不会红 —— 只是 historyReplay 写侧在整条托管链路上恒空,跨 run 思考延续性永远为零。
             // 老服务端不发这个字段(与「空组」同义):保持 undefined,绝不造一个空数组。
             if (Array.isArray(ev.outputItems) && ev.outputItems.length) result.outputItems = ev.outputItems;
+          } else if (ev.t === 'notice' && typeof ev.kind === 'string') {
+            opts.onNotice?.({ kind: ev.kind, from: ev.from, to: ev.to, toName: ev.toName });
           } else if (ev.t === 'error') {
             throw new LlmError(ev.status || 502, ev.message || 'brain stream error');
           }
@@ -440,7 +455,9 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
             backgroundModelId: r?.backgroundModelId ?? null,
             imageModelId: r?.imageModelId ?? null,
             visionModelId: r?.visionModelId ?? null,
-            realtimeModel: r?.realtimeModel?.id ? { id: String(r.realtimeModel.id), name: String(r.realtimeModel.name || r.realtimeModel.id), apiModelId: r.realtimeModel.apiModelId ?? null } : null,
+            realtimeModel: r?.realtimeModel?.id ? { id: String(r.realtimeModel.id), name: String(r.realtimeModel.name || r.realtimeModel.id), apiModelId: r.realtimeModel.apiModelId ?? null, ...(r.realtimeModel.defaultVoice ? { defaultVoice: String(r.realtimeModel.defaultVoice) } : {}) } : null,
+            ttsModelId: r?.ttsModelId ?? null,
+            ttsVoice: r?.ttsVoice ?? null,
             translateModels: (Array.isArray(r?.translateModels) ? r.translateModels : []).filter((m: any) => m?.id)
               .map((m: any) => ({ id: String(m.id), name: String(m.name || m.id), provider: String(m.provider || 'forsion'), apiModelId: m.apiModelId ?? null })),
             ttsModels: (Array.isArray(r?.ttsModels) ? r.ttsModels : []).filter((m: any) => m?.id)
@@ -470,6 +487,29 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         }
         return { audio: new Uint8Array(await r.arrayBuffer()), mime: r.headers.get('content-type') || 'audio/mpeg' };
       },
+    },
+    // 决策模型走云端中转(POST /api/brain/decision):Key 住云端、按次 / 每 1k 输入计费;只发文本。超时短:调用方都有自己的启发式可退。
+    decision: {
+      decide: async (req) => {
+        const r = await fetch(`${base}/api/brain/decision`, {
+          method: 'POST',
+          headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ state: req.state, questions: req.questions, ...(req.modelId ? { modelId: req.modelId } : {}), projectSource: 'tangu' }),
+          signal: req.signal ? AbortSignal.any([req.signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
+        });
+        if (!r.ok) {
+          const j: any = await r.json().catch(() => ({}));
+          throw new LlmError(r.status, `cloud decision ${r.status}: ${String(j?.detail || '').slice(0, 200)}`);
+        }
+        return (await r.json()) as DecisionResult;
+      },
+    },
+    // 云端音色(GET|POST|DELETE /api/brain/voices):复刻要传样本,境外到百炼的上行很慢,给足 5 分钟。
+    voices: {
+      list: async () => voicesCall('GET', '', undefined, 20_000),
+      clone: async (_userId, req) => voicesCall('POST', '', req, 300_000),
+      remove: async (_userId, id) => { await voicesCall('DELETE', `/${encodeURIComponent(id)}`, undefined, 30_000) },
+      sample: async (_userId, id) => voicesCall('GET', `/${encodeURIComponent(id)}/sample`, undefined, 20_000),
     },
     // 实时语音通话走云端中转(ws /api/brain/realtime):key 住云端、按通话时长计费;帧协议与直连百炼相同,连接与转发仍归 services/realtimeVoice。
     realtime: {
@@ -512,7 +552,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       listBroadcasts: async (since?: string) => {
         const r = await getJson<{ broadcasts: Array<{
           id: string; title: string; body: string | null; created_at: string; title_en?: string | null; body_en?: string | null;
-          attachments?: string | null; expires_at?: string | null; claimed?: boolean; claim_requirements?: string | null; thread?: string | null;
+          attachments?: string | null; expires_at?: string | null; claimed?: boolean; claim_requirements?: string | null; thread?: string | null; kind?: string | null;
         }> }>(
           `/api/brain/inbox/broadcasts${since ? `?since=${encodeURIComponent(since)}` : ''}`,
         );
@@ -549,7 +589,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     agentFiles: {
       getManifest: async (_userId: string, opts?: { signal?: AbortSignal }) => {
         // device / client:服务端按设备记版本,回答这个账号还有没有旧客户端在用 USER.md(新版据此停镜像)
-        const q = `paths=human,human-folder,agent-calendar&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
+        const q = `paths=human,human-folder,agent-calendar,widget-data&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
         const r = await getJson<{ agents: any[]; paths?: string[]; legacy?: string[]; legacySeenAt?: number | null }>(`/api/brain/agents/manifest?${q}`, opts?.signal);
         return Object.assign(r?.agents ?? [], Array.isArray(r?.paths) ? { paths: r.paths } : {},
           Array.isArray(r?.legacy) ? { legacy: r.legacy.filter((x): x is string => typeof x === 'string'), legacySeenAt: typeof r?.legacySeenAt === 'number' ? r.legacySeenAt : null } : {});
@@ -643,6 +683,23 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         if (!r.ok) throw new Error(`amadeus write ${r.status}: ${await r.text().catch(() => '')}`);
         const j: any = await r.json().catch(() => ({}));
         return { seq: Number(j?.seq) || 0 };
+      },
+      readHumanCalendar: async () => {
+        const r = await fetch(`${base}/api/agent/human/CALENDAR.db`, { headers: authHeaders(), signal: reqSignal() });
+        // 401/403/404 = 旧云端(没这条路由、派发票没登记):worker 先于 server 上线那段窗口,退回库里的日历。422 = 文件坏了,同本机跳过
+        if ([401, 403, 404, 422].includes(r.status)) return null;
+        if (!r.ok) throw new Error(`human calendar read ${r.status}: ${await r.text().catch(() => '')}`);
+        const j: any = await r.json();
+        const legacy = typeof j?.legacy === 'string' ? j.legacy : null;
+        return j?.status === 'ok' ? { data: j.data, version: String(j.version), legacy } : { data: null, version: null, legacy };
+      },
+      writeHumanCalendar: async (data: unknown, version: string | null) => {
+        const body = JSON.stringify({ data, version });
+        if (Buffer.byteLength(body, 'utf-8') > AMADEUS_MAX_FILE_BYTES) throw new AmadeusTooLargeError('human/CALENDAR.db');
+        const r = await fetch(`${base}/api/agent/human/CALENDAR.db`, { method: 'PUT', headers: authHeaders(), body, signal: reqSignal() });
+        if (r.status === 409) throw new HumanCalendarConflictError();
+        if (r.status === 413) throw new AmadeusTooLargeError('human/CALENDAR.db');
+        if (!r.ok) throw new Error(`human calendar write ${r.status}: ${await r.text().catch(() => '')}`);
       },
     },
     // ── Forsion Git:站点信息 + 当前用户的推拉凭据(对端 server microserver/git/routes/user.ts)。

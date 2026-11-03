@@ -23,21 +23,22 @@
 import { useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
-  DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, pointerWithin,
+  DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter,
   useDraggable, useDroppable, useSensor, useSensors,
-  type CollisionDetection,
   type DragCancelEvent, type DragEndEvent, type DragOverEvent, type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import {
-  ArrowUp, Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
+  ArrowUp, Check, FolderMinus, Grid2X2, Image, LogOut,
   Mic, Pencil, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { setActiveSpace, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
+import { commandHotkeyText, setActiveSpace, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
+import { SortableTile, SpaceOrganizer, SWITCH_SPACE_COMMAND, TileVisual, dockCollision, setHomeOrganizerToggle } from './SpaceOrganizer'
 import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfMoveOut, shelfRemoveFolder, shelfRenameFolder, shelfReorderFolder, shelfTiles, type ShelfTile } from './homeShelf'
 import type { SpaceDefinition, RibbonItem, ViewProps } from '@lcl/engine'
+import { RIBBON_ACTION_PREFIX } from '../amadeus/plugins/ribbonAction'
 import { askString } from '@amadeus/components/askString'
 import { readTanguNewChat, type TanguNewChatDispatch } from '../amadeus/plugins/tanguSeam'
 import { registerMessages, useI18n, type Locale } from '../i18n'
@@ -67,37 +68,7 @@ const FIXED_HOME_ACTIONS = ['rb-market', 'rb-achievements'] as const
 const THEME_PRESETS: HomepageThemePreset[] = ['orbit', 'path', 'paper', 'rings', 'glyph']
 const WALLPAPER_SOURCES: HomepageWallpaperSource[] = ['theme', 'bing', 'image']
 
-/** 指针拖放以「指针真正在谁里面」为准,避免 body zoom 下 active rect 中心偏移选错落点;
- * 键盘拖放没有 pointerCoordinates,回落 closestCenter 保留方向键可访问性。 */
-const dockCollision: CollisionDetection = (args) => {
-  const hits = pointerWithin(args)
-  return hits.length ? hits : closestCenter(args)
-}
-
 type Tile = ShelfTile
-
-function TileVisual({ tile }: { tile: Tile }) {
-  if (tile.kind === 'space') {
-    return (
-      <>
-        <span className="hp-tile-icon">{tile.space.icon && <tile.space.icon size={21} />}</span>
-        <span className="hp-tile-name">{label(tile.space.name)}</span>
-      </>
-    )
-  }
-  return (
-    <>
-      <span className="hp-tile-icon hp-fpreview">
-        {tile.members.slice(0, 4).map((member) => (
-          <span key={member.id} className="hp-fmini">{member.icon && <member.icon size={11} />}</span>
-        ))}
-        {tile.members.length === 0 && <FolderOpen size={19} />}
-      </span>
-      <span className="hp-tile-name">{tile.folder.name}</span>
-      <span className="hp-folder-count">{tile.members.length}</span>
-    </>
-  )
-}
 
 function loadPinnedSpaceIds(): string[] {
   try {
@@ -163,46 +134,6 @@ function PinnedSpaceZone({
       {actions.map((item) => <FixedHomeAction key={item.id} item={item} />)}
       {spaces.map((space) => <PinnedSpaceTile key={space.id} space={space} onLaunch={onLaunch} />)}
     </div>
-  )
-}
-
-function SortableTile({
-  tile, over, open, onOpen, onLaunch, onMenu,
-}: {
-  tile: Tile
-  over: boolean
-  open: boolean
-  onOpen: (event: React.MouseEvent, id: string) => void
-  onLaunch: (spaceId: string) => void
-  onMenu: (event: React.MouseEvent, id: string) => void
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tile.id })
-  const name = tile.kind === 'space' ? label(tile.space.name) : tile.folder.name
-  const style: React.CSSProperties = {
-    transform: DndCSS.Transform.toString(transform),
-    transition: transition ? `${transition}, color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out)` : undefined,
-  }
-  return (
-    <button
-      ref={setNodeRef}
-      type="button"
-      style={style}
-      className={`hp-tile${tile.kind === 'folder' ? ' hp-folder' : ''}${isDragging ? ' dragging' : ''}${open ? ' on' : ''}`}
-      data-id={tile.id}
-      data-over={over || undefined}
-      aria-label={name}
-      title={name}
-      {...attributes}
-      {...listeners}
-      onClick={(event) => {
-        if (isDragging) return
-        if (tile.kind === 'folder') { event.stopPropagation(); onOpen(event, tile.id) }
-        else onLaunch(tile.space.id)
-      }}
-      onContextMenu={tile.kind === 'folder' ? (event) => onMenu(event, tile.id) : undefined}
-    >
-      <TileVisual tile={tile} />
-    </button>
   )
 }
 
@@ -355,6 +286,7 @@ export function HomepageView(_props: ViewProps) {
   const [drag, setDrag] = useState<string | null>(null)
   const [over, setOver] = useState<string | null>(null)
   const [organizerOpen, setOrganizerOpen] = useState(false)
+  const [organizerByKey, setOrganizerByKey] = useState(false)
   const [openFolder, setOpenFolder] = useState<{ id: string; dx: number; dy: number } | null>(null)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [leaving, setLeaving] = useState(false)
@@ -567,8 +499,8 @@ export function HomepageView(_props: ViewProps) {
     setMenu({ x: e.clientX, y: e.clientY, kind, id })
   }
 
-  const openFolderTile = (e: React.MouseEvent, id: string): void => {
-    const tileRect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const openFolderTile = (el: HTMLElement, id: string): void => {
+    const tileRect = el.getBoundingClientRect()
     const rootRect = rootRef.current?.getBoundingClientRect()
     setMenu(null)
     setOrganizerOpen(false)
@@ -604,9 +536,10 @@ export function HomepageView(_props: ViewProps) {
   const pinnedSpaces = pinnedSpaceIds
     .map((id) => spaces.find((space) => space.id === id))
     .filter((space): space is SpaceDefinition => !!space)
-  const fixedHomeActions = FIXED_HOME_ACTIONS
-    .map((id) => ribbonItems.find((item) => item.id === id))
-    .filter((item): item is RibbonItem => !!item)
+  const fixedHomeActions = [
+    ...FIXED_HOME_ACTIONS.map((id) => ribbonItems.find((item) => item.id === id)).filter((item): item is RibbonItem => !!item),
+    ...ribbonItems.filter((item) => item.id.startsWith(RIBBON_ACTION_PREFIX)),
+  ]
   const spaceCount = Math.max(0, spaces.length - (spaces.some((space) => space.id === SELF_SPACE) ? 1 : 0))
 
   const reorderFolderMember = (event: DragEndEvent): void => {
@@ -652,13 +585,18 @@ export function HomepageView(_props: ViewProps) {
     if (phone && !composerFocused) setPillDraft(rootRef.current?.querySelector<HTMLTextAreaElement>('.hp-composer .t2c-ta')?.value.trim() ?? '')
   }, [phone, composerFocused])
 
-  const showOrganizer = (): void => {
+  const showOrganizer = (byKey = false): void => {
+    setOrganizerByKey(byKey)
     exitComposerInputMode()
     setWallpaperOpen(false)
     setOpenFolder(null)
     setMenu(null)
     setOrganizerOpen(true)
   }
+  // 命令「切换 Space」(⌘⇧O)在主页上开合的是这一块:收纳夹弹层、退场动效都在主页这边
+  const toggleOrganizer = useRef(() => {})
+  toggleOrganizer.current = () => (organizerOpen ? setOrganizerOpen(false) : showOrganizer(true))
+  useEffect(() => setHomeOrganizerToggle(() => toggleOrganizer.current()), [])
 
   /** 参考旧桌面的空白右键语义:不弹一枚孤立菜单,直接进入可见、可拖拽的二级收纳层。
    *  控件和壁纸表单有自己的右键语义,必须排除(格子本身都是 <button>,已被首条挡住)。
@@ -835,7 +773,7 @@ export function HomepageView(_props: ViewProps) {
                           type="button"
                           className="hp-tile hp-more"
                           onClick={(event) => { event.stopPropagation(); showOrganizer() }}
-                          title={t('home.showAll')}
+                          title={commandHotkeyText(SWITCH_SPACE_COMMAND) ? t('home.showAllKey', { key: commandHotkeyText(SWITCH_SPACE_COMMAND) }) : t('home.showAll')}
                         >
                           <span className="hp-tile-icon"><Grid2X2 size={20} /></span>
                           <span className="hp-tile-name">{t('home.showAllCount', { n: String(hiddenCount) })}</span>
@@ -1048,53 +986,15 @@ export function HomepageView(_props: ViewProps) {
       {/* 全部 Spaces 不是 Dock 的第二行,而是参考旧 Desktop 的独立应用抽屉。
           同一份 Tile / DnD 回写逻辑保证它仍只是 ribbon 数据的另一种视图。 */}
       {organizerOpen && (
-        <div className="hp-organizer-stage" onClick={() => setOrganizerOpen(false)}>
-          <section className="hp-organizer-panel" aria-label={t('home.organizer.title')} onClick={(event) => event.stopPropagation()}>
-            <header className="hp-organizer-head">
-              <div>
-                <span className="hp-organizer-mark"><Grid2X2 size={16} /></span>
-                <span><strong>{t('home.organizer.title')}</strong><small>{t('home.spaceCount', { n: spaceCount })}</small></span>
-              </div>
-              <button type="button" onClick={() => setOrganizerOpen(false)} aria-label={t('common.close')}><X size={16} /></button>
-            </header>
-            <DndContext
-              sensors={sensors}
-              collisionDetection={dockCollision}
-              onDragStart={dragStart}
-              onDragOver={dragOver}
-              onDragCancel={dragCancel}
-              onDragEnd={dragEnd}
-            >
-              <SortableContext items={tiles.map((tile) => tile.id)} strategy={rectSortingStrategy}>
-                <div className="hp-organizer-grid">
-                  {tiles.map((tile) => (
-                    <SortableTile
-                      key={tile.id}
-                      tile={tile}
-                      over={over === tile.id}
-                      open={false}
-                      onOpen={openFolderTile}
-                      onLaunch={(spaceId) => { setOrganizerOpen(false); launchSpace(spaceId) }}
-                      onMenu={(event, id) => menuAt(event, 'folder', id)}
-                    />
-                  ))}
-                  <button type="button" className="hp-organizer-new" onClick={newFolder}>
-                    <span><FolderPlus size={22} /></span>
-                    <small>{t('home.newFolder')}</small>
-                  </button>
-                </div>
-              </SortableContext>
-              <DragOverlay dropAnimation={null}>
-                {activeTile && (
-                  <div className={`hp-tile hp-drag-overlay${activeTile.kind === 'folder' ? ' hp-folder' : ''}`}>
-                    <TileVisual tile={activeTile} />
-                  </div>
-                )}
-              </DragOverlay>
-            </DndContext>
-            <footer>{t('home.organizer.hint')}</footer>
-          </section>
-        </div>
+        <SpaceOrganizer
+          skip={SELF_SPACE}
+          byKey={organizerByKey}
+          onClose={() => setOrganizerOpen(false)}
+          onLaunch={launchSpace}
+          onOpenFolder={openFolderTile}
+          onFolderMenu={(event, id) => menuAt(event, 'folder', id)}
+          onDragStart={() => setMenu(null)}
+        />
       )}
 
       {/* 收纳夹从点击源放大到中央,形成独立的二级应用层。成员重排仍写 ribbon folder.items。 */}

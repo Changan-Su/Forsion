@@ -1,13 +1,21 @@
 /**
  * sketch 卡片的宿主包装文档 + 主题桥(单测钉住安全边界 —— sketchWrapper.test.ts)。
  * 隔离配方(2026-08-21 真 Chromium 实证,勿凭 spec 推理改动):
- * - iframe sandbox **仅 allow-scripts**:绝不加 allow-same-origin(加了=模型 HTML 跑进宿主
- *   origin,拿到 DOM/localStorage);不加 allow-forms/allow-popups/allow-top-navigation。
+ * - iframe sandbox **仅 allow-scripts + allow-forms**:绝不加 allow-same-origin(加了=模型 HTML 跑进宿主
+ *   origin,拿到 DOM/localStorage);不加 allow-popups/allow-top-navigation。
+ * - allow-forms(10-31 真 Chromium 实证)与内层 CSP 的 form-action 'none' **必须成对**:没有前者,浏览器在派发
+ *   submit 之前就拦下提交,卡里的 submit 监听、回车、requestSubmit() 全部静默无反应;没有后者,default-src 管不到
+ *   form-action,而桌面宿主 frame-src 放行本机端口,form.submit() 能把数据带出去。
  * - 裸 sandbox 挡不住网络:宿主 CSP 有 connect-src/img-src https:,srcdoc 继承之,卡内可以
  *   fetch 任意 https —— 必须注入内层 CSP default-src 'none' 才真断网,且 meta 须是 head 首元素。
  * - 刻意不给 'unsafe-eval':桌面宿主 CSP 有它而 web/mobile 没有,统一禁掉三端行为才一致。
  * - srcdoc 的 event.origin 是字符串 "null":高度消息只认 event.source === iframe.contentWindow。
  * - 包装脚本放 <head>(模型 HTML 之前):残缺的模型标记吞不掉它。
+ * - 卡片不直接挂在宿主下面,中间隔一层壳(buildSketchShell,10-31 真 Chromium 实证):帧的自身导航(location.* / meta refresh /
+ *   绕开 runtime 监听的 <a>)只由**父文档**的 frame-src 裁决,内层 CSP 管不到,而宿主 frame-src 要给别的 iframe 放行本机端口、
+ *   YouTube、B 站,卡片能把数据带到这些地址。壳的 frame-src 'none' 不挡 srcdoc,只挡导航。
+ *   试过不行的:Navigation API 在不透明源帧里不触发 navigate;宿主等 iframe 再次 load 时请求已经到了;iframe 的 csp 属性在响应时才判。
+ * - CSP 和 sandbox 都挡不住 WebRTC,卡内由 sketchGuard.js 封堵(三端共用,头注写了为什么不用 setWebRTCIPHandlingPolicy)。
  *
  * 主题桥(08-21 二轮):把宿主的语义 token 以 --fs-* 注进卡内。首帧走 srcdoc 内联(无闪),
  * 之后换肤走 postMessage 就地改 documentElement.style —— **不重建 srcdoc**,否则 iframe 重载、
@@ -17,14 +25,41 @@
  */
 
 import sketchCss from './sketch.css?raw'
+import sketchGuard from './sketchGuard.js?raw'
 import sketchRuntime from './sketchRuntime.js?raw'
 import sketchFigures from './sketchFigures.js?raw'
 import { serializeSketchState } from './sketchState'
+import { currentPlatform } from '../services/platform'
 
-/** 内层 CSP:inline JS/CSS 可跑;无网络、无 eval、无外链资源;图片/媒体/字体仅 data:/blob:。 */
+/** 内层 CSP:inline JS/CSS 可跑;无网络、无 eval、无外链资源;图片/媒体/字体仅 data:/blob:;表单只在卡内派发 submit、发不出去。 */
 export const SKETCH_CSP =
-  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:"
-export const SKETCH_SANDBOX = 'allow-scripts'
+  "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src data:; form-action 'none'"
+/** 随包库(build/copy-iui-libs.cjs 生成,目录名逐字一致):键是模型写的裸名,值相对库根。引擎那句说明在
+ *  tangu-agent/src/tools/builtin/sketch.ts(IUI_LIBS_CAP),两边列的库要一致。 */
+export const IUI_LIB_IMPORTS: Record<string, string> = {
+  three: 'three@0.186/three.module.js', 'three/addons/': 'three@0.186/addons/',
+  d3: 'd3@7/d3.js', 'chart.js/auto': 'chart.js@4/auto.js', 'chart.js': 'chart.js@4/auto.js', gsap: 'gsap@3/gsap.js',
+}
+/** 库根:桌面走应用自己的 forsion-iui: 协议,网页走本站同一份;手机原生包没带这份文件 → null(卡照旧不能用库)。
+ *  网页按 document.baseURI 解析:静态站 base 是 '/',Unit 投影(正式网页 /web/、设备页隧道)是 './' + 注入的 <base href>。 */
+export function iuiLibBase(): string | null {
+  const p = currentPlatform()
+  return p === 'desktop' ? 'forsion-iui://lib/' : p === 'web' ? new URL(`${import.meta.env.BASE_URL}iui-lib/`, document.baseURI).href : null
+}
+/** 内层 CSP 只多一个来源:script-src 放行库根(桌面整个 scheme,网页带路径只认 /iui-lib/);connect-src 仍是 'none'。 */
+export function sketchCsp(base: string | null = iuiLibBase()): string {
+  if (!base) return SKETCH_CSP
+  return SKETCH_CSP.replace("script-src 'unsafe-inline'", `script-src 'unsafe-inline' ${base.startsWith('forsion-iui:') ? 'forsion-iui:' : base}`)
+}
+function iuiImportMap(base: string | null): string {
+  if (!base) return ''
+  const imports = Object.fromEntries(Object.entries(IUI_LIB_IMPORTS).map(([k, v]) => [k, base + v]))
+  return `<script type="importmap">${JSON.stringify({ imports }).replace(/</g, '\\u003c')}</script>`
+}
+export const SKETCH_SANDBOX = 'allow-scripts allow-forms'
+/** 壳的 CSP。⚠️只能写这一条:srcdoc 子文档继承父文档的 CSP,多写 default-src 就把卡片的内联脚本也禁了;
+ *  ⚠️不能换成 'self':srcdoc 的 self 是宿主地址,卡片照样导航得过去(10-31 实测)。 */
+export const SKETCH_SHELL_CSP = "frame-src 'none'"
 export const SKETCH_MIN_H = 40
 export const SKETCH_MAX_H = 2400
 /** iframe 初始高度:内容高度上报前的占位(定值防 ChatView 贴底 ResizeObserver 抖滚动)。 */
@@ -110,11 +145,40 @@ export function buildSketchDoc(html: string, vars: Record<string, string> = {}, 
   const initial = (serializeSketchState(state) ?? 'null')
     .replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
   // nonce 是宿主生成的随机串(ask / copy 的授权令牌,见 sketchRuntime.js 头注);只允许 [A-Za-z0-9-],拼不出提前闭合的引号
+  const libBase = iuiLibBase()
   const runtime = sketchRuntime.replace('__SKETCH_INITIAL_STATE__', () => initial).replace('__SKETCH_NONCE__', () => nonce.replace(/[^A-Za-z0-9-]/g, ''))
+  // 属性位置的 shadowrootmode 改掉,初始解析就建不出 shadow 树(值可以写成字符引用,不能按值匹配)。
+  // ponytail: 不做 HTML 分词,脚本里恰好写 `shadowrootmode =` 也会被改到;真碰上再换分词。
   return '<!doctype html><html><head>' +
-    `<meta http-equiv="Content-Security-Policy" content="${SKETCH_CSP}">` +
+    `<meta http-equiv="Content-Security-Policy" content="${sketchCsp(libBase)}">` +
+    `<script>${sketchGuard}</script>` +
+    // importmap 必须早于卡里任何 module 脚本:跟在封堵脚本(它必须是第一个脚本)后面,在运行时脚本和模型 HTML 之前
+    iuiImportMap(libBase) +
     '<meta name="viewport" content="width=device-width, initial-scale=1">' +
     `<style>${varsBlock(vars)}${SKETCH_SERIES_CSS}${sketchCss}</style>` +
     `<script>${runtime};\n${sketchFigures}</script>` +
-    `</head><body>${html}</body></html>`
+    `</head><body>${html.replace(/([\s/"'])shadowrootmode(?=\s*=)/gi, '$1data-shadowrootmode')}</body></html>`
+}
+
+/** 壳里只有这段中转:宿主和卡片两边都照旧 postMessage,event.source 对宿主来说就是壳。卡片的明暗跟着改,
+ *  不然壳和卡片的 color-scheme 不一致时浏览器给卡片铺一层不透明底。 */
+// webhost-ok: 中转脚本里取壳自己的子帧,卡片仍在同一份 sandbox 里
+const SKETCH_SHELL_RELAY = `
+const frame = document.querySelector('iframe')
+addEventListener('message', (event) => {
+  if (event.source === parent) {
+    const scheme = event.data?.type === 'sketch-theme' && event.data.vars?.['color-scheme']
+    if (scheme) document.documentElement.style.colorScheme = scheme
+    frame.contentWindow?.postMessage(event.data, '*')
+  } else if (event.source === frame.contentWindow) parent.postMessage(event.data, '*')
+})`
+
+/** 卡片文档(buildSketchDoc)→ 宿主 iframe 的 srcdoc。两层都要带 sandbox:子帧的权限不会超过父帧。 */
+export function buildSketchShell(card: string, colorScheme = 'light'): string {
+  const srcdoc = card.replace(/&/g, '&amp;').replace(/"/g, '&quot;')
+  return '<!doctype html><html><head>' +
+    `<meta http-equiv="Content-Security-Policy" content="${SKETCH_SHELL_CSP}">` +
+    `<style>:root{color-scheme:${sanitizeVar(colorScheme)}}html,body,iframe{display:block;width:100%;height:100%;margin:0;border:0;overflow:hidden;background:transparent}</style>` +
+    // webhost-ok: 这是 HTML 卡的导航壳,不是网页宿体;子帧带同一份 sandbox
+    `</head><body><iframe sandbox="${SKETCH_SANDBOX}" title="Intelligent UI" srcdoc="${srcdoc}"></iframe><script>${SKETCH_SHELL_RELAY}</script></body></html>`
 }

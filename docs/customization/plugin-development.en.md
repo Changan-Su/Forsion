@@ -10,6 +10,8 @@ For plugin authors. Installing plugins, bundles and the security model are cover
 
 Plugins are written in JavaScript / TypeScript, with official type definitions and templates. The built-in "Forsion extension development" skill lets the agent scaffold a plugin, theme, Space or agent straight from the official templates; see [Skills](../agents/skills.md).
 
+Engine plugins can expose live, read-only external skills through `registerSkillProvider` without copying them into the user's skills directory. See the [external skill provider contract](plugin-skill-providers.en.md).
+
 To link what your plugin produces with the native notes panel, use `ctx.app.openNote`: an Amadeus panel with the same `reuseKey` switches to the new note in place, and `activate:false` keeps the user's focus on the plugin panel. Combined with `split:"right"` / `split:"down"` on a Space's main-area entries, your plugin doesn't need to copy a document editor or chat interface into its own DOM.
 
 ```js
@@ -25,6 +27,8 @@ The left-sidebar list (`registerListSource`) can be hierarchical, drawn like the
 ```js
 ctx.listCapabilities?.includes('tree' | 'items' | 'rename')
 ```
+
+When a folder is also something to select (a parent tag, say), set `opensOnClick: true` on the folder row and detect it with `ctx.listCapabilities?.includes('folderOpen')`. Clicking the name calls `open()` and unfolds the row, only the leading arrow folds it, and the row highlights when `activeKey` points at it. Older hosts ignore the field and a click only folds, so keep a child row when the capability is missing.
 
 To group rows by whose they are (senders, accounts, sources), also set `folderStyle: 'group'` on the top-level folders: each is drawn like the first-level rows for agents and projects in the Tangu sidebar, led by an avatar (`iconUrl`), an icon in a tile (`icon`) or the first letter of the title, with `hint` as a small pill at the end (good for an unread count). Rows inside a group give up their own icon and keep only the unread dot; a group lists five rows first and puts the rest behind "View more". These groups remember their fold state only until the app restarts: a group with `defaultOpen: true` is open (say, while it holds something unread) and the host reopens it each time the flag turns from false to true; without the flag it starts folded. Groups appear in the order of your array. Search shows no hierarchy, so return flat rows when `query` is set. On a phone, a list whose only level is these group heads stays a full-screen list, and rows inside a group can still be swiped. Check `ctx.listCapabilities?.includes('group')`; hosts without it draw a plain folder.
 
@@ -82,7 +86,7 @@ None of these exist on older hosts, so check with optional chaining.
 
 ## Store identity and install folders
 
-The Store gives every listing an ID that never changes. New listings install into `plugins/market-<ID>/`, unrelated to the display name, so display names may repeat. A plugin in such a folder runs under the folder name: engine plugins inside a bundle still mount their routes under it, a standalone engine plugin's id becomes `market-<ID>` with its data under `plugin-data/market-<ID>/`, and the host rewrites its tool names to unique hashed names (two plugins sharing an id never replace each other). Other plugins can still list your manifest `id` in `requiresPlugins` as long as only one copy is installed. These listings need a desktop version after 2.13.4; older versions ask the person to update Forsion first. Older listings keep the folder name derived from their display name; for those, a bundle with an engine plugin whose folder name differs from its manifest `id` cannot reach that engine plugin from its pages on desktop 2.13.3 and earlier (every call returns 404, with no error shown).
+The Store gives every listing an ID that never changes. New listings install into `plugins/market-<ID>/`, unrelated to the display name, so display names may repeat. A plugin in such a folder runs under the folder name: engine plugins inside a bundle still mount their routes under it, a standalone engine plugin's id becomes `market-<ID>` with its data under `plugin-data/market-<ID>/`, and the host rewrites its tool names to unique hashed names (two plugins sharing an id never replace each other). Other plugins can still list your manifest `id` in `requiresPlugins` as long as only one copy is installed; for a one-click install from the Store they also need `market: "market-<ID>"`, because the Store matches the exact slug and never guesses from the display name. These listings need a desktop version after 2.13.4; older versions ask the person to update Forsion first. Older listings keep the folder name derived from their display name; for those, a bundle with an engine plugin whose folder name differs from its manifest `id` cannot reach that engine plugin from its pages on desktop 2.13.3 and earlier (every call returns 404, with no error shown).
 
 ## Publishing and updates
 
@@ -100,7 +104,7 @@ A Space inside a plugin can declare a dedicated Mini view that offers only quick
 
 A plugin can also skip the full Space and open a registered compact view directly with `ctx.openMiniPanel?.(viewId, options)`; `mainViewId` sets where "Show in main panel" goes. For a wide standalone tool page, use `ctx.openFloatingPanel?.(viewId, options)`. The host adds the plugin namespace automatically and owns the window lifecycle. See [Floating Panel development](./floating-panel-development.md).
 
-When a View needs an input box with model selection, use `ctx.ui.mountChatBox`; it reuses the host component, and the plugin handles submission explicitly. See [Reusable UI components](./ui-components.md).
+When a View needs an input box with model selection, use `ctx.ui.mountChatBox`; it reuses the host component, and the plugin handles submission explicitly. Pass `modelPicker: false` to drop the model selection, `toolbar` for controls in the bottom row, `suggest` for completion such as `#`, and call `insertText` to insert at the caret. See [Reusable UI components](./ui-components.md).
 
 Settings-like pages (account, quota and credits, diagnostics, preferences) hand the host a description of the whole page through `ctx.ui.mountSettingsPage(el, { groups })`: each group has an icon, title, description, top-right buttons and items (switch, value, buttons, input, segmented, select, pick-to-run choice, stepper, code with copy, usage meters, empty / loading / error, custom block). The plugin supplies only the text, values and callbacks; the host draws them with its own settings parts and lays them out per device — on phones switches, values and single buttons stay at the right, inputs, steppers and two or more buttons move to the next line, and a pick-to-run choice becomes one button and a half sheet. Put anything outside that list in a `custom` block and mount single parts there with `ctx.ui.mountSettingsItem`. Stop copying the host's settings CSS; hosts before 2026-10-17 lack both methods, so feature-detect and keep your own page there. See [Reusable UI components](./ui-components.md).
 
@@ -163,9 +167,21 @@ Plugins can also receive file events in your vault: files created, deleted, rena
 
 An engine plugin can bring in another chat app (WeCom, for example) and reuse everything the built-in WeChat, Telegram and QQ channels have: a fresh session on connect, remote approvals, commands such as `/new` and `/model`, inbox forwarding, and the channel folder in the sidebar. Once installed, Settings → Channels shows a card for it; fill in the credentials the plugin asks for and click Connect. Disabling the plugin stops the channel and keeps the sessions it was bound to. For the API, see `ctx.registerChannel` in the engine plugin section of the plugin development skill; the WeCom plugin is a working example.
 
+One account can also serve many contacts: with `multiPeer: true`, each contact gets its own binding, session and working folder, so their conversations stay apart. They all use the same agent under the same account, so agent memory is shared, and these sessions have no project memory. The working folder only keeps files apart and is not a sandbox: tools running on the host can still read other folders, so be careful about who may talk and how tools are approved. The driver decides who may talk. These contacts do not own the channel, so `/stop` is the only command, inbox messages are not forwarded, and the desktop cannot switch the connected session. Older engines silently ignore the key, so check `ctx.channelCapabilities?.multiPeer` first. An inbound message can carry `agentSlug` to pin an agent for that contact.
+
+For an unattended deployment whose credentials are written straight into the config, with nobody to press Connect, add `selfConnect: true`: on an account that has never connected, the first contact your driver hands over connects it for the local user. An account the user disconnected stays disconnected.
+
+When a driver implements `sendApproval`, approvals stop being text cards: the driver receives the tool name, arguments and preview, draws them itself, and answers through `respond`. Chat text can neither approve nor dismiss such a card, and it is rejected after 10 minutes with no answer. Implement `settleApproval` to learn how a card ended. A plugin's UI can fill in and connect a channel from its own bundle with `ctx.tangu.connectChannel(kind, fields, { modelId })`. This is desktop only, and other plugins' channels are refused. `modelId` becomes the channel's default model when it has none yet; a model the user chose stays.
+
+## Automation triggers
+
+A plugin can add its own "when" to automations: register it with `ctx.automation.registerTrigger`, then call `ctx.automation.emit` when the event happens. Once registered it appears in the "External and plugins" group of the automation canvas trigger node. Users write the rules themselves and can restrict them by hours, weekdays, cooldown and a daily limit. "Remind me directly" costs no budget; "Wake Muse" goes through the usual budget checks.
+
+You can only register inside your own namespace: `id` is a key, and the host builds `plugin:<plugin id>:<key>`. Names need both zh and en. When the plugin is disabled or uninstalled the trigger is unregistered; its rules are kept, paused with a stated reason, and resume once it is back. Events are not saved to disk, so an engine restart loses any a rule has not seen yet. Engine plugins use the same methods on `ctx.sdk.automation`. See `references/tangu-host-apis.md` in the plugin development skill for the code.
+
 ## Plugin data sync across devices
 
-A plugin that sets `"syncData": true` in its manifest has the data it saves with `ctx.saveData` synced to your other computers and phones through your Forsion account. When you are signed out or offline, the data stays on this device as before and is uploaded once you are back online. If two devices both changed it, the later change wins. The plugin's detail page has a "Sync plugin data across devices" switch to turn it off on one device. The web version does not sync yet. For the API, see the `loadData/saveData` notes in the editor section of the plugin development skill.
+A plugin that sets `"syncData": true` in its manifest has the data it saves with `ctx.saveData` synced to your other computers and phones through your Forsion account. When you are signed out or offline, the data stays on this device as before and is uploaded once you are back online. If two devices both changed it, the later change wins. The plugin's detail page has a "Sync plugin data across devices" switch to turn it off on one device. If someone uninstalls the plugin without ticking "Keep settings", the copy in the cloud is cleared too; restoring from the Trash uploads this device's copy again, and any other device that still has the plugin uploads its copy as well. The web version does not sync yet. For the API, see the `loadData/saveData` notes in the editor section of the plugin development skill.
 
 ## Startup and icons
 
@@ -279,6 +295,62 @@ if (turn) await turn.ready
 showMyDialog({ onClose: () => turn?.done() })
 ```
 
+### First-use tips (since 2026-11-02)
+
+When someone reaches a feature of your plugin, the host shows a one-time tip on how to use it, and stops once they have used it. You declare tips in the manifest; the host decides when they show, so you don't track "seen" yourself.
+
+```json
+"guide": {
+  "tips": [
+    {
+      "id": "drag-to-calendar",
+      "at": "todo-row",
+      "style": "ring",
+      "platform": "desktop",
+      "when": { "visible": ["calendar-grid"] },
+      "done": ["todo.schedule"],
+      "title": "拖到日历上排时间",
+      "text": "按住这条待办拖进日历的时间格，就排成那半小时。",
+      "en": { "title": "Drag onto the calendar to schedule", "text": "Drop it on a time slot to book half an hour." }
+    }
+  ]
+}
+```
+
+- `at`: the `data-guide-anchor="<name>"` of an element in one of your own views. The host only looks inside your views, so names can't clash with other plugins. A tip can only show while that element is on screen.
+- `style`: `line` puts one line on the anchor's top edge (good for inputs); `ring` rings the anchor with a small card beside it and needs a `title`.
+- `when`, one of: `{ "open": "<view id>", "times": 1 }` how often that view has been opened; `{ "count": "<event>", "atLeast": 3 }` a counter reached a number; `{ "visible": ["<anchor>", …] }` these anchors are on screen together. No `when` = it only shows when you call `ctx.guide.show(id)`.
+- `done`: once any of these counters is ≥ 1 the tip counts as learned and never shows again. Counters are `ctx.achievements.track('<event>')`: report it once when the user actually does the thing. Bare names are your own tracked events; an `app:` prefix reads an official host event (for example `app:note.wikilink`).
+- `platform`: `desktop` / `mobile`; leave it out for both. Dragging, hovering and shortcuts have no phone equivalent, so mark those `desktop`.
+- Text: Chinese `title` / `text` plus the `en` mirror. **In an English interface a tip without `en` doesn't show** rather than falling back to Chinese. Keep titles to about 16 Chinese characters and bodies to about 40.
+- Ids use lowercase letters, digits and `-`; up to 12 tips. A malformed tip is dropped on its own and the rest still work.
+
+The host sets the pace: one tip at a time across the whole app (shared with the user guide's spotlight); at most 3 a day; a tip waits 2 seconds after its anchor appears and 1.5 seconds after the user stops typing; at most one per view opening; it waits while a popup is queued or open, or while first-run onboarding is open. Got it / × / Esc marks a tip as seen; "Don't show again" turns off all of your plugin's tips; Settings → Notifications → Tips turns tips off or resets them. Seen and turned-off state is stored on this device only.
+
+**When a new version adds a feature**, give it a tip with a **new id**. Tips are recorded per plugin id + tip id, so people who upgrade see the new one when they get there, while old tips they have seen stay hidden. Don't rename an existing tip's id; that makes everyone see it again.
+
+At runtime:
+
+```js
+inputEl.dataset.guideAnchor = 'todo-input'   // mark an anchor
+ctx.achievements.track('todo.tag')            // the user really did the thing
+ctx.guide?.show('tags')                        // ask for a tip when its condition can't be written in the manifest (pace and records still apply)
+ctx.guide?.state('tags')                       // 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
+```
+
+**Examples in an empty state**: `ctx.ui.mountEmptyState` now takes `examples` (up to 3). Clicking one should usually put that sentence into your input so people watch it get recognised and send it themselves, rather than creating something for them:
+
+```js
+ctx.ui.mountEmptyState(el, {
+  icon: 'list-todo', title: 'No to-dos yet', line: 'Just type one below.',
+  examples: [{ label: 'Tomorrow 3pm send weekly report #work', note: 'Dates and tags work as you type', run: () => box.insertText('Tomorrow 3pm send weekly report #work') }],
+})
+```
+
+To see tips again while developing, run "Reset tips" from the command palette or use Settings → Notifications → Tips → Reset, then call `ctx.guide.show(id)` to bring up a specific tip. If a tip never shows, check in the developer tools that the element carries `data-guide-anchor` and sits inside your own view, and that its condition actually holds.
+
+How this differs from the requirement gate (manifest `onboarding.requires`): a gate means the plugin can't work until something is done; a tip means it works and here is a trick. Older hosts ignore `guide` and show nothing; always call `ctx.guide` with `?.`.
+
 ## On-demand native main companions
 
 `registerView` can declare `mainCompanions`. `amadeus-editor` / `chat-panel` are supported, keys start with the plugin id plus `-`, and there are at most three entries. `view.setCompanionsVisible?.(true)` on the view's mount context expands them on demand; `false` folds these native views into this view's tab group, keeping the document content, chat drafts and split sizes. Narrow windows and phones use native tabs. Other views are never closed or rewritten, and the Space is not rebuilt. Older hosts lack this method, so important reading layouts can still stay in the Space recipe.
@@ -305,7 +377,17 @@ Plugins that declare both `databases` and `calendar` receive `human://CALENDAR.d
 
 ### Shared account
 
-Unit web account hosts and the mobile app may provide `ctx.account`. Check that it exists before using `status()`, `login()`, `logout()`, `request(path, init)` and `subscribe(listener)`. `request` only reaches the account API and accepts no other origin; the host supplies credentials and preserves FormData/Blob file uploads. Switching accounts cancels old requests and makes reads from old response bodies fail; plugins must still cancel their own deferred tasks and clear the previous account's UI. The optional `saveDownload(blob, name)` returns `{ ok, error? }`: Android saves to the system Downloads, and browsers save a download file. Never store, import or forward account tokens.
+Desktop (with Forsion Extend loaded), Unit web account hosts and the mobile app all provide `ctx.account`, so the same plugin code runs on all three. Check that it exists before using `status()`, `login()`, `logout()`, `request(path, init)` and `subscribe(listener)`. `request` only reaches the account API and accepts no other origin; the host supplies credentials and preserves FormData/Blob file uploads. Switching accounts cancels old requests and makes reads from old response bodies fail; plugins must still cancel their own deferred tasks and clear the previous account's UI. The optional `saveDownload(blob, name)` returns `{ ok, error? }`: Android saves to the system Downloads, and browsers save a download file. Never store, import or forward account tokens.
+
+On desktop, `request` is sent by the main process, which brings a few limits: request bodies must be JSON strings (FormData and Blob throw; use a presigned URL for large files), responses are JSON only, custom headers do not travel, each call has a 120-second cap, and DELETE sends no body. `abort` rejects at once, but a request already sent runs to completion and its result is dropped. Desktop `status()` has no `userId`. Paths are always relative to `/api`.
+
+### Account entitlements
+
+When a plugin needs the user to hold an entitlement, write `"requires": { "entitlement": "<name>" }` in the manifest. The array form still works. The plugin activates as usual and draws its own onboarding page: `ctx.account.entitlements()` returns `{ granted }`, where `true` means they have it, `false` means the server said they do not, and `null` means unknown (offline, signed out, an older server). Do not treat `null` as no. With nothing declared it returns `true`. The real gate is on the server. `requires.plugins` is Unit's package dependency list; desktop and mobile prerequisites stay in `requiresPlugins`. A store tag `entitlement:<name>` shows as a badge on the card and does not block installing.
+
+### Space ribbon position and phone layout
+
+In `space.json`, `"ribbon": { "after": "<spaceId>" }` places the icon after that Space the first time it appears, and leaves any position the user already chose alone. `"mobile": { "listFirst": true }` opens the left list first on phones, and picking an item opens the main view. Use it only when the left panel really is such a list; by default the main view comes first and the left panel is a drawer. When the main view takes over the native header, use `ctx.ui.claimHeader?.({ title, back, onBack, toList: true })`: back slides the list in, following the finger on an edge swipe, and `onBack` runs once the list is showing. A cancelled swipe calls nothing. Without `toList` the system back gesture and the header arrow only call `onBack`, which suits an overlay.
 
 ### External PDF file views (2026-10-29, feature branch)
 

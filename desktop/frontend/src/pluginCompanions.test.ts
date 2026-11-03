@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mock = vi.hoisted(() => ({ state: {} as any }))
 vi.mock('@lcl/engine', () => ({ getView: () => ({ displayName: 'Native view' }), useWorkspace: { getState: () => mock.state } }))
+vi.mock('@lcl/engine/dockviewStore', () => ({ withPreservedSideWidths: (_api: unknown, change: () => unknown) => change() }))
 import { setPluginCompanions } from './pluginCompanions'
 import type { ViewContribution } from './amadeus/plugins/types'
 

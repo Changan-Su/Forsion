@@ -29,7 +29,7 @@ export function OnboardingModelChoice({ models, value, onChange }: {
         <input aria-label={t('onboarding.guide.searchModels')} placeholder={t('onboarding.guide.searchModels')} value={query}
           onChange={(e) => { setQuery(e.target.value); setPage(0) }} />
       </label>
-      <span className="ob-muted">{filtered.length}</span>
+      <span className="ob-muted">{t(filtered.length === 1 ? 'onboarding.guide.modelCountOne' : 'onboarding.guide.modelCount', { n: filtered.length })}</span>
     </div>
     <div className="ob-model-browser">
       <nav className="ob-model-groups" aria-label={t('onboarding.model.choiceLabel')}>
@@ -58,11 +58,11 @@ export function OnboardingModelChoice({ models, value, onChange }: {
           </button>)}
           {!filtered.length && <p className="ob-muted">{t('onboarding.guide.noResults')}</p>}
         </div>
-        <div className="ob-model-pagination">
+        {pages > 1 && <div className="ob-model-pagination">
           <span>{t('onboarding.guide.pages', { page: currentPage + 1, pages })}</span>
           <button className="icon-btn" aria-label={t('onboarding.guide.prevPage')} disabled={currentPage === 0} onClick={() => setPage(currentPage - 1)}><ChevronLeft size={16} /></button>
           <button className="icon-btn" aria-label={t('onboarding.guide.nextPage')} disabled={currentPage === pages - 1} onClick={() => setPage(currentPage + 1)}><ChevronRight size={16} /></button>
-        </div>
+        </div>}
       </div>
     </div>
     <div className="ob-model-selection" role="status"><span>{t('onboarding.guide.selected')}</span><strong>{value ? selected?.name || value : t('onboarding.guide.followDefault')}</strong>

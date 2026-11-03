@@ -14,7 +14,7 @@ Tangu（Forsion Desktop）**智能体（Agent）**开发模板 —— 最小可�
 | `SOUL.md` | 人格，注入为 `## Persona` 块（按它行事、不逐字背诵） | 建议 |
 | `Library/` | 随身参考资料，`library_order` 建议阅读顺序 | 可选 |
 
-config.toml 可识别字段（全部可缺省）：`name`（名册显示，缺省=slug）、`version`（**必须带引号**——商店更新检查用正则读带引号值）、`description`、`model`（覆盖会话模型）、`model_reasoning_effort`（off/low/medium/high）、`approval_mode`（readonly/auto-edit/full-auto）、`max_iterations`（≤200）、`tools`（工具白名单，空=继承）、`library_order`、`apps`（限定出现在哪些 app，空=不限）、`avatar`（Library 内的文件名，png/jpeg/gif/webp ≤1MB）、`share_default_memory`、`developer_instructions`（多行用 `'''…'''`）。
+config.toml 可识别字段（全部可缺省）：`name`（名册显示，缺省=slug）、`name_zh` / `name_en`（中文名 / 英文名，界面按语言显示，英文名不能有汉字；不写时 `name` 当中文名）、`name_pref`（`zh` / `en` 固定显示某一个，缺省跟随界面）、`version`（**必须带引号**——商店更新检查用正则读带引号值）、`description`、`model`（覆盖会话模型）、`model_reasoning_effort`（off/low/medium/high）、`approval_mode`（readonly/auto-edit/full-auto）、`max_iterations`（≤200）、`tools`（工具白名单，空=继承）、`library_order`、`apps`（限定出现在哪些 app，空=不限）、`avatar`（Library 内的文件名，png/jpeg/gif/webp ≤1MB）、`share_default_memory`、`developer_instructions`（多行用 `'''…'''`）。
 
 ## 这些东西**不要**放进模板
 

@@ -43,6 +43,7 @@ export function mountHostReact(el: HTMLElement, node: ReactNode, onDispose?: () 
   const previous = mountByEl.get(el)
   const layer = el.appendChild(document.createElement('div'))
   layer.style.display = 'contents'
+  layer.dataset.hostMount = '' // 插件视图的基础样式(base.css plugin-view-base)认这个标记,不碰宿主画的零件
   const root = createRoot(layer)
   root.render(node)
   let alive = true

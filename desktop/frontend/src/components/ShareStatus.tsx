@@ -6,6 +6,7 @@ import { useEffect, useState, type MouseEvent } from 'react'
 import { Users, Globe2 } from 'lucide-react'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useEntrySync, cloudPathFor } from '../stores/entrySyncStore'
+import { sharedEntryFor, useSharedVault } from '../stores/sharedVaultStore'
 import { publishStateFor, type PublishState } from '../amadeus/lib/shareState'
 import { registerMessages, useI18n } from '../i18n'
 
@@ -16,6 +17,10 @@ registerMessages({
   'sharestatus.pubTitle': { zh: '本页已公开发布 · 点击管理', en: 'This page is published publicly — click to manage' },
   'sharestatus.inherited': { zh: '已随文件夹发布', en: 'Published via folder' },
   'sharestatus.published': { zh: '已发布', en: 'Published' },
+  'sharestatus.fromOwner': { zh: '{name} 共享 · {role}', en: 'Shared by {name} · {role}' },
+  'sharestatus.fromOwnerTitle': { zh: '这一页是别人共享给你的', en: 'Someone shared this page with you' },
+  'sharestatus.canEdit': { zh: '可编辑', en: 'Can edit' },
+  'sharestatus.readOnly': { zh: '只读', en: 'Read-only' },
 })
 
 const baseName = (p: string): string => (p.split('/').pop() ?? p).replace(/\.md$/i, '')
@@ -32,6 +37,18 @@ export function ShareStatus({ path: localPath, refreshKey, onOpen }: ShareStatus
   const vaultSide = usePageStore((s) => s.vaultSide)
   const vaults = useEntrySync((s) => s.vaults)
   const path = cloudPathFor(vaults, vaultRoot, vaultSide, localPath)
+  const { t } = useI18n()
+  const shared = useSharedVault((s) => sharedEntryFor(s, localPath))
+  if (shared) {
+    const role = t(shared.role === 'viewer' ? 'sharestatus.readOnly' : 'sharestatus.canEdit')
+    return (
+      <span className="amx-sharestat">
+        <span className="amx-sharestat-chip is-static" title={t('sharestatus.fromOwnerTitle')}>
+          <Users size={12} /> {t('sharestatus.fromOwner', { name: shared.ownerName ?? '', role })}
+        </span>
+      </span>
+    )
+  }
   return <ShareStatusTarget key={JSON.stringify([vaultRoot, vaultSide, localPath, path])} path={path ?? ''} refreshKey={refreshKey} onOpen={onOpen} />
 }
 

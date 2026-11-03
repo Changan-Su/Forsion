@@ -1,12 +1,15 @@
 /** 独立 .db 数据库视图:树上点 .db 在应用内打开表格(多实例,params.dbPath 认领文件并随布局持久化)。
  *  ref = 完整 vault 相对路径 —— 与 dbAggregateStore 的 load(p,p) 同一约定,与嵌入/聚合共享同一 dbStore entry。 */
 import { useEffect } from 'react'
+import { registerMessages, useI18n } from '../i18n'
 import type { ViewProps } from '@lcl/engine'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { useVaultRelParam } from './vaultRelParam'
 import { useDbStore } from '@amadeus/store/dbStore'
 import { DatabaseEmbed } from '@amadeus/blocks/database/DatabaseEmbed'
 import '@amadeus/blocks' // 属性类型/块注册 side-effect,独立挂载时不能指望编辑器先加载
+
+registerMessages({ 'amxdbview.noFile': { zh: '未指定多维表文件。', en: 'No database file specified.' } })
 
 const dbBase = (p: string): string => (p.split(/[\\/]/).pop() || p).replace(/\.db$/i, '')
 
@@ -15,6 +18,7 @@ export function AmadeusDbView({ leaf }: ViewProps) {
   /** 活动视图名:与笔记嵌入 `![[db|视图名]]` 同语义 —— 每处(tab / 仪表盘卡)各记各的。
    *  仪表盘卡经 ViewCard.setParams 落进围栏,独立 tab 随布局持久化;都是免费的。 */
   const viewName = typeof leaf.params.view === 'string' && leaf.params.view ? leaf.params.view : null
+  const { t } = useI18n()
   const mode = useTheme((s) => s.mode)
   const name = useDbStore((s) => (dbPath ? s.entries[dbPath]?.data?.name : undefined))
   const gen = useDbStore((s) => s.gen) // 缓存整片作废后重读(见 dbStore 的 gen)
@@ -25,7 +29,7 @@ export function AmadeusDbView({ leaf }: ViewProps) {
   useEffect(() => {
     if (dbPath) leaf.setTitle(name || dbBase(dbPath))
   }, [dbPath, name]) // eslint-disable-line react-hooks/exhaustive-deps
-  if (!dbPath) return <div className="amx-db amx-db-state">未指定数据库文件。</div>
+  if (!dbPath) return <div className="amx-db amx-db-state">{t('amxdbview.noFile')}</div>
   return (
     /* 编辑器同款契约域(.am-app+bridge 取色,镜像 mode/flat),外层滚动由 .amx-dbview 管 */
     <div className="am-app tangu-lovable amx-pane amx-dbview" data-mode={mode}>

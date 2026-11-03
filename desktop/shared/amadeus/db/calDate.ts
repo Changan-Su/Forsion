@@ -43,6 +43,21 @@ export function splitSide(side: string): { date: string; time: string } {
   return { date, time: time ?? '' }
 }
 
+/** 开始从 oldStart 改到 newStart 时,结束跟着平移、时长不变 —— 只改开始会把一小时的事挪成「结束早于开始」。
+ *  三侧都带时刻按天 + 分钟平移,否则只按天平移结束日期、结束时刻原样。按墙上时间算(Date 进位),不受夏令时影响。 */
+export function shiftEnd(oldStart: string, newStart: string, end: string | undefined): string | undefined {
+  if (!end) return end
+  const ymd = (side: string): number[] => splitSide(side).date.split('-').map(Number)
+  const mins = (side: string): number => { const [h, m] = splitSide(side).time.split(':').map(Number); return h * 60 + m }
+  const [oy, om, od] = ymd(oldStart), [ny, nm, nd] = ymd(newStart), [ey, em, ed] = ymd(end)
+  const days = Math.round((Date.UTC(ny, nm - 1, nd) - Date.UTC(oy, om - 1, od)) / 86_400_000)
+  const timed = oldStart.includes('T') && newStart.includes('T') && end.includes('T')
+  const at = new Date(ey, em - 1, ed + days, 0, timed ? mins(end) + mins(newStart) - mins(oldStart) : 0)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  const date = `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`
+  return end.includes('T') ? `${date}T${timed ? `${pad(at.getHours())}:${pad(at.getMinutes())}` : splitSide(end).time}` : date
+}
+
 /** 人类可读(zh):`7月6日 10:00–11:00` / 全天 `7月6日` / 跨天 `7月6日 → 7月8日`。 */
 /** 月日文案的格式化口径。shared 层不依赖 i18n(server/引擎也用这份),所以做成参数:
  *  渲染层传 fmtCalDateL(见 amadeus/lib/calDateFmt)拿到跟随语言的版本;不传即原中文。 */

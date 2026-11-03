@@ -166,6 +166,14 @@ let state: CallState | null = null
 let lastError: string | null = null
 const listeners = new Set<() => void>()
 let teardown: ((reason?: string) => void) | null = null
+/** 手机宿主:通话期间的系统保活(安卓 microphone 前台服务 + 「通话中」通知),装上了切后台就不挂断。
+ *  start 必须在前台、拿到麦克风之后调(Android 14+ 的硬条件);返回 false = 没起成,照旧离开前台即挂断。 */
+export interface CallKeepHost { start(): Promise<boolean>; stop(): void }
+let callKeep: CallKeepHost | null = null
+/** 保活是全局一份:谁最后要的归谁。晚到的回执只在没有更新的通话要过保活时才撤(Codex 11-02)。 */
+let keepSeq = 0
+export const setCallKeepHost = (h: CallKeepHost | null): void => { callKeep = h }
+
 let controls: { mic(id: string): Promise<void>; speaker(id: string): Promise<void>; run(run: StartCallOptions['run']): void; text(text: string): boolean } | null = null
 
 const emit = (): void => listeners.forEach((l) => l())
@@ -281,10 +289,12 @@ export async function startCall(o: StartCallOptions): Promise<void> {
   // 关窗即挂断:渲染进程直接没了,finish 不一定跑得到 —— 走之前撤掉,主窗的形象当场收声(没撤也有心跳超时兜底)。
   const voiceBye = (): void => postCallVoice(null)
   window.addEventListener('pagehide', voiceBye)
-  // 手机:离开前台(切到别的 App / 锁屏)就挂断 —— 系统会把后台应用的麦克风静音,电话却还按时长计费;通话期间请系统别熄屏。
-  // ponytail: 想让它在后台接着打,得给安卓加一个麦克风类型的前台服务;熄屏靠 Screen Wake Lock,系统 WebView 不支持时照旧会熄。
+  // 手机:离开前台(切到别的 App / 锁屏)时,系统会把后台应用的麦克风静音,电话却还按时长计费。宿主起好了保活(callKeep,
+  // 安卓 microphone 前台服务)就接着打;没起成 / 没有宿主就挂断。通话期间请系统别熄屏。
+  // ponytail: 熄屏靠 Screen Wake Lock,系统 WebView 不支持时照旧会熄(有保活时熄屏也不断)。
   const phone = !!window.tangu?.mobile
-  const onHidden = (): void => { if (document.hidden) finish(CALL_ENDED_BACKGROUND) }
+  let kept = false
+  const onHidden = (): void => { if (document.hidden && !kept) finish(CALL_ENDED_BACKGROUND) }
   let wake: WakeLockSentinel | null = null
   if (phone) {
     document.addEventListener('visibilitychange', onHidden)
@@ -300,6 +310,7 @@ export async function startCall(o: StartCallOptions): Promise<void> {
     window.removeEventListener('pagehide', voiceBye)
     document.removeEventListener('visibilitychange', onHidden)
     void wake?.release().catch(() => {})
+    if (kept) { kept = false; callKeep?.stop() }
     if (current) voiceBye() // 被新通话顶掉的旧通话不许撤:那个 key 已经归新通话
     flush()
     try { ws?.close() } catch { /* ignore */ }
@@ -337,6 +348,12 @@ export async function startCall(o: StartCallOptions): Promise<void> {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: micConstraints(o.micId) })
     if (ended) { stream.getTracks().forEach((t) => t.stop()); return }
+    // 拿到麦克风、人还在前台(刚点的通话):起保活。起成之前就切走了照旧挂断;起成时已挂断而且没有更新的通话要过保活,就地撤掉。
+    if (phone && callKeep && !document.hidden) {
+      const keep = callKeep
+      const seq = ++keepSeq
+      void keep.start().then((ok) => { if (!ok) return; if (!ended) kept = true; else if (seq === keepSeq) keep.stop() }, () => {})
+    }
     if (o.speakerId) await setSink(o.speakerId)
     const to = await realtimeSocket(o.target)
     if (ended) return // 等鉴权头期间被挂断 / 被新通话顶掉

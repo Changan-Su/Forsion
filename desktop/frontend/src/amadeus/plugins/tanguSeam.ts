@@ -376,6 +376,26 @@ export function readTanguPrefs(): TanguPrefs | null {
   return prefs
 }
 
+/** 输入框里没发出去的纯文本(手机系统还原用,mobile/src/restoreSnapshot.ts):Tangu 在激活时交出来。**宿主内部接缝**。
+ *  只有文字和长粘贴 —— 附件是 base64,不出这道缝。key 同 Composer2 的草稿键(会话 id / 'new')。没交 → 不还原草稿。 */
+export interface TanguDraftText { text: string; pastes: string[] }
+export interface TanguDrafts {
+  read(): Record<string, TanguDraftText>
+  /** 只填空着的那份:那个会话里已经有字 / 长粘贴就不动。 */
+  fill(key: string, d: TanguDraftText): void
+  subscribe(fn: () => void): () => void
+}
+
+let drafts: TanguDrafts | null = null
+
+export function setTanguDrafts(p: TanguDrafts | null): void {
+  drafts = p
+}
+
+export function readTanguDrafts(): TanguDrafts | null {
+  return drafts
+}
+
 /** 新对话输入区发出第一句(核心插件化 2e-3)。 */
 export type TanguNewChatDispatch = (
   text: string,

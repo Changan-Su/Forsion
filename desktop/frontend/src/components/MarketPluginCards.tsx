@@ -29,7 +29,7 @@ export function openMarketItem(item: { id: string; name: string }, comments = fa
   if (window.tangu?.openFloatingPanel) void window.tangu.openFloatingPanel({ id: 'market', title: item.name, builtin: 'market', params: { itemId: item.id, detailTab: comments ? 'comments' : 'overview', nonce: Date.now() } })
   else useApp.getState().openMarket(undefined, { itemId: item.id, detailTab: comments ? 'comments' : 'overview', nonce: Date.now() })
 }
-export function MarketPluginCards({ event }: { event: ToolEvent }) {
+export function MarketPluginCards({ event, onDismiss }: { event: ToolEvent; onDismiss?: () => void }) {
   const { t } = useI18n()
   const version = useMarketVersion()
   const [installed, setInstalled] = useState<Record<string, InstalledItem[]>>({})
@@ -74,7 +74,7 @@ export function MarketPluginCards({ event }: { event: ToolEvent }) {
         <div className="mk-chat-card-top"><div className="mk-chat-icon"><Puzzle size={22} /></div><div><strong>{item.name}</strong><span>{item.author} · {item.latestVersion ? `v${item.latestVersion}` : '—'}</span></div><MarketRequirements item={item} version={version} /></div>
         <p>{item.summary || item.description}</p>
         {!!item.tags?.length && <div className="mk-tags">{item.tags.slice(0, 4).map(tag => <span key={tag}>{tag}</span>)}</div>}
-        <div className="mk-chat-card-actions">{item.type === 'skill' && !done && !unavailable && <SkillAgentPicker agents={skillAgents} choice={skillChoice[item.id] ?? null} disabled={!!busy} onChange={(next) => setSkillChoice((m) => ({ ...m, [item.id]: next }))} />}<button className="btn sm" onClick={() => openMarketItem(item)}>{t('market.cardDetails')}</button><button className={`btn sm ${done ? '' : 'primary'}`} disabled={!!busy || (done && !update) || !!unavailable} onClick={() => void install(item)} data-market-card-install={item.id}>
+        <div className="mk-chat-card-actions">{item.type === 'skill' && !done && !unavailable && <SkillAgentPicker agents={skillAgents} choice={skillChoice[item.id] ?? null} disabled={!!busy} onChange={(next) => setSkillChoice((m) => ({ ...m, [item.id]: next }))} />}{onDismiss && <button className="btn sm ghost" data-market-card-dismiss={item.id} onClick={onDismiss}>{t('museCard.notInterested')}</button>}<button className="btn sm" onClick={() => openMarketItem(item)}>{t('market.cardDetails')}</button><button className={`btn sm ${done ? '' : 'primary'}`} disabled={!!busy || (done && !update) || !!unavailable} onClick={() => void install(item)} data-market-card-install={item.id}>
           {working ? <Loader2 size={13} className="spin" /> : done ? <Check size={13} /> : <Download size={13} />}
           {working ? p?.phase === 'download' && p.total ? `${Math.round((p.received || 0) / p.total * 100)}%` : t(p?.phase === 'install' ? 'market.installPhaseInstall' : 'market.installPhaseResolve') : done && !update ? `${t('market.cardInstalled')}${entry?.version ? ` v${entry.version}` : ''}` : unavailable ? t('market.cardUnavailable') : update ? t('market.update') : t('market.cardInstall')}
         </button></div>

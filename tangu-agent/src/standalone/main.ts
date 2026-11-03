@@ -108,11 +108,7 @@ async function main(): Promise<void> {
   // 同理播种一条示例自定义命令进 ~/.tangu/commands/(目录已存在就跳过,不覆盖用户的)。
   seedExampleCommand();
 
-  // 插件:激活全部（tool provider 全局注册 + 收集路由挂载器）。tool provider 注册无需 deps()，先于
-  // createTanguModule 安全;路由挂载须**在 createTanguModule 之后**（彼时 configureTangu/deps() 才就绪）。
-  bootPhase = 'plugins';
-  const mountPluginRoutes = await activateAllPlugins((id) => { bootPhase = `plugin:${id}`; });
-
+  // 先装配宿主依赖:插件注册模型来源等能力会校验真实 profile,不能在 configureTangu 前激活。
   const mod = createTanguModule({
     host,
     brain,
@@ -121,6 +117,8 @@ async function main(): Promise<void> {
     mcp,
     engines,
   });
+  bootPhase = 'plugins';
+  const mountPluginRoutes = await activateAllPlugins((id) => { bootPhase = `plugin:${id}`; });
   mountPluginRoutes({ userRouter: mod.userRouter, dataRouter: mod.dataRouter, adminRouter: mod.adminRouter });
 
   bootPhase = 'migration';

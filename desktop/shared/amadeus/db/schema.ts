@@ -336,36 +336,6 @@ export function emptyNoteView(name: string, folder: string): DbFile {
   }
 }
 
-/** Amadeus 默认工作区首启种子:一张经典多维表,自带 calendarDate + todo 两个内置注册类型的列,
- *  首启即让 Calendar Space 有内容。type 用注册类型字符串(依赖 DbColumn.type: string + zod z.string())。
- *
- *  ⚠️ 日期必须**相对播种当天**算,不能写死绝对日期:待办视图的「逾期」桶恒展开置顶且不受任何
- *  窗口裁剪,写死的种子过几周就变成用户打开应用第一眼看到的「逾期 53 天 欢迎使用 Calendar Space」——
- *  红色是这个面板最稀缺的信号,不能让给内置演示数据。 */
-export function seedCalendarDb(today = new Date()): DbFile {
-  const nameId = dbId()
-  const dateId = dbId()
-  const doneId = dbId()
-  const day = (n: number): string => {
-    const d = new Date(today.getFullYear(), today.getMonth(), today.getDate() + n)
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  }
-  return {
-    version: DB_VERSION,
-    name: '我的日历',
-    columns: [
-      { id: nameId, name: '名称', type: 'text' },
-      { id: dateId, name: '日期', type: 'calendarDate' },
-      { id: doneId, name: '完成', type: 'checkbox' },
-    ],
-    rows: [
-      { id: dbId(), cells: { [nameId]: '欢迎使用 Calendar Space', [dateId]: `${day(0)}T10:00/${day(0)}T11:00`, [doneId]: true } },
-      { id: dbId(), cells: { [nameId]: '整理本周任务', [dateId]: day(1) } },
-      { id: dbId(), cells: { [nameId]: '项目评审', [dateId]: `${day(2)}T14:00/${day(2)}T15:30` } },
-    ],
-  }
-}
-
 export type DbParseResult = { ok: true; data: DbFile } | { ok: false; error: string }
 
 /** 宽容读 + 严格拒:JSON 损坏 / 结构不符 / 版本过新(前向保护)都返回错误而非异常。 */

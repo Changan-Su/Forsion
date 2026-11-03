@@ -24,6 +24,7 @@ import { withKeyLock } from '../core/keyLock.js';
 
 const router = Router();
 const ENGINE_ID_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/i;
+const ENGINE_UNTITLED = 'New Chat';
 
 function ensureLocal(res: any): boolean {
   if (!deps().profile.capabilities.hostExec) {
@@ -41,7 +42,7 @@ async function resolveSolo(kind: string, id: string): Promise<{ kind: SoloKind; 
     if (!def) return null;
     const cwd = def.libraryDir || libDirOf(id);
     return {
-      kind, title: def.name, cwd, memSlug: resolveMemorySlug(def),
+      kind, title: ENGINE_UNTITLED, cwd, memSlug: resolveMemorySlug(def), // 名字随语言和改名变,不落库:桌面按 agent_config.soloAgentSlug 现取
       modelId: def.model || null,
       agentConfig: { soloAgentSlug: id, agentSlug: id, execMode: 'host', cwd, preset: null },
     };

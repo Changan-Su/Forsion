@@ -34,6 +34,7 @@ import {
   getLocalWebSearch, type LocalWebSearchRedacted,
 } from '../services/backendService'
 import { ChannelsTab } from './ChannelsTab'
+import { DecisionGateField, disableDecisionGate } from './DecisionGateField'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
 import type {
   AmadeusSyncStatus, AuthStatusInfo, BackendStatusInfo, DirectProviderConfig, DiscoveryResult, McpServerConfigEntry, MirrorTestResult, ModelsResponse,
@@ -62,6 +63,7 @@ import { ChangelogEntries, releaseNotesFor } from '../views/ChangelogView'
 import { openWhatsNew } from './WhatsNewDialog'
 import { DefaultModelsPage } from './DefaultModelsPage'
 import { VoiceSettingsPage } from './VoiceSettingsPage'
+import { PROVIDER_PRESETS, presetProviderId } from './providerPresets'
 import { catalogByKind, FETCH_ENABLE_LIMIT, guessProviderModelKind, mergeFetched, providerFieldsFromRows, rowsFromProvider, type ModelKind, type ProviderModelKind, type ProviderModelRow } from './modelKinds'
 import { realtimeCandidates } from './RealtimeVoiceSettings'
 import { AgentSettingsOverview } from './AgentSettingsOverview'
@@ -711,7 +713,7 @@ export const SettingsModal: React.FC<{
   /** 正在编辑的直连连接:rows = 每个模型一行(类型 + 纯文本),保存时再拆回 modelIds / imageModelIds / ttsModelIds / asrModelIds / noVisionModelIds。
    *  isNew = 「添加连接」(编辑区画在列表下面);否则画在被编辑的那一行下面。base = 打开时的原配置(保存时留住行表示不了的旧归属);
    *  editId 区分每次打开:拉取回包时编辑区已经换了一条连接,就不往里并。 */
-  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { rows: ProviderModelRow[]; isNew?: boolean; original?: string; base: Partial<DirectProviderConfig>; editId: number }) | null>(null)
+  const [editProvider, setEditProvider] = useState<(DirectProviderConfig & { rows: ProviderModelRow[]; isNew?: boolean; original?: string; base: Partial<DirectProviderConfig>; editId: number; preset?: string; autoId?: string }) | null>(null)
   const [manualModel, setManualModel] = useState('')
   // 语速输入的编辑态缓冲(null=未在编辑,显示已存值):清空/打半截时不反弹,blur 时非法则恢复旧值。
   const [providerTestMsg, setProviderTestMsg] = useState('')
@@ -1317,10 +1319,8 @@ export const SettingsModal: React.FC<{
       ['m-models', t('modelsettings.defaults')],
       ['m-display', t('modelsettings.display')],
       ...(isDesktop ? [['m-providers', t('modelsettings.providers')] as [string, string]] : []),
-      ...(isDesktop ? ([
-        ...(wsRed ? [['m-websearch', t('settings.sub.webSearch')] as [string, string]] : []),
-        ...(stored ? [['m-voice', t('settings.sub.voice')] as [string, string]] : []),
-      ] as Array<[string, string]>) : []),
+      ...(isDesktop && wsRed ? [['m-websearch', t('settings.sub.webSearch')] as [string, string]] : []),
+      ...((isDesktop || window.tangu?.mobile) && stored ? [['m-voice', t('settings.sub.voice')] as [string, string]] : []),
     ],
     // 主题**刻意不设中分类**(用户拍板):设计语言/配色/明暗/界面大小/阴影/玻璃/光标 各自一张小卡就够,
     // 硬分成三栏反而把「换个主题顺手调下明暗」拆成两次点击。别再加回来。
@@ -2422,23 +2422,44 @@ export const SettingsModal: React.FC<{
                       if (id) setEditProvider({ ...ep, rows: mergeFetched(ep.rows, [id], ep.base.noVisionModelIds) })
                       setManualModel('')
                     }
+                    // 选预设:填地址与协议;名称只在空着或还是上一个预设填的时才换(用户自己起的名不动)
+                    const pickPreset = (id: string) => {
+                      const pr = PROVIDER_PRESETS.find((x) => x.id === id)
+                      const autoName = !ep.providerId || ep.providerId === ep.autoId
+                      const nextId = pr ? presetProviderId(pr.id, customProviders) : ''
+                      setEditProvider({ ...ep, preset: id, baseUrl: pr?.baseUrl || '', protocol: pr?.protocol, providerId: autoName ? nextId : ep.providerId, autoId: nextId })
+                    }
+                    // 导入的 openai-responses 等订阅连接不画协议选择,保存时原样留住
+                    const protocolEditable = !ep.protocol || ep.protocol === 'openai' || ep.protocol === 'anthropic-messages'
                     return (
                       <div className="provider-editor">
+                        {ep.isNew && <SettingsRow label={t('prov.preset')} description={t('prov.presetHint')} control={
+                          <select aria-label={t('prov.preset')} value={ep.preset || ''} onChange={(e) => pickPreset(e.target.value)}>
+                            <option value="">{t('prov.preset.custom')}</option>
+                            {PROVIDER_PRESETS.map((pr) => <option key={pr.id} value={pr.id}>{pr.name || t(`prov.preset.${pr.id}`)}</option>)}
+                          </select>
+                        } />}
                         <SettingsRow label={t('prov.name')} description={t('prov.nameHint')} control={
                           <input type="text" value={ep.providerId} placeholder={t('settings.customProvider.idPlaceholder')} onChange={(e) => setEditProvider({ ...ep, providerId: e.target.value.trim() })} />
                         } />
-                        <SettingsRow label="Base URL" description={t('prov.baseUrlHint')} control={
+                        <SettingsRow label="Base URL" description={t(ep.protocol === 'anthropic-messages' ? 'prov.baseUrlHintAnthropic' : 'prov.baseUrlHint')} control={
                           <input type="text" value={ep.baseUrl} placeholder={t('settings.customProvider.baseUrlPlaceholder')} onChange={(e) => setEditProvider({ ...ep, baseUrl: e.target.value.trim() })} />
                         } />
                         <SettingsRow label="API Key" description={t('prov.keyHint')} control={
                           <input type="password" value={ep.apiKey || ''} placeholder="sk-…" onChange={(e) => setEditProvider({ ...ep, apiKey: e.target.value })} />
                         } />
+                        {protocolEditable && <SettingsRow label={t('prov.protocol')} description={t('prov.protocolHint')} control={
+                          <select aria-label={t('prov.protocol')} value={ep.protocol || 'openai'} onChange={(e) => setEditProvider({ ...ep, protocol: e.target.value as 'openai' | 'anthropic-messages' })}>
+                            <option value="openai">{t('prov.protocol.openai')}</option>
+                            <option value="anthropic-messages">{t('prov.protocol.anthropic-messages')}</option>
+                          </select>
+                        } />}
                         <div className="provider-editor-models-head">
                           <strong>{ep.rows.length ? t('prov.fetched', { count: ep.rows.length }) : t('prov.models')}</strong>
                           <span className="grow" />
                           <button className="btn ghost sm" disabled={fetchingModels || !ep.baseUrl} onClick={() => {
                             setFetchingModels(true); setFetchModelsMsg('')
-                            void fetchProviderModels(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined })
+                            void fetchProviderModels(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined, protocol: ep.protocol })
                               .then((ms) => {
                                 setEditProvider((cur) => (cur?.editId === ep.editId ? { ...cur, rows: mergeFetched(cur.rows, ms.map((m) => m.id), cur.base.noVisionModelIds) } : cur))
                                 setModelSearch('')
@@ -2475,7 +2496,7 @@ export const SettingsModal: React.FC<{
                               baseUrl: ep.baseUrl.replace(/\/+$/, ''),
                               apiKey: ep.apiKey || undefined,
                               ...providerFieldsFromRows(ep.rows, ep.base),
-                              ...(ep.base.protocol ? { protocol: ep.base.protocol } : {}), // 导入的 Anthropic / Responses 连接:编辑器不画协议,保存时留住
+                              ...(ep.protocol ? { protocol: ep.protocol } : {}), // 预设 / 协议选择写进来;导入的 Responses 连接不画选择,原样留住
                             }).then((list) => {
                               // 改了名字 = 另存一条,旧的留着(与旧表单一致):各处存着的「旧名/模型」引用不会一下子全失效
                               setCustomProviders(list)
@@ -2490,7 +2511,7 @@ export const SettingsModal: React.FC<{
                             const ac = new AbortController()
                             providerTestAbort.current = ac
                             setProviderTesting(true); setProviderTestMsg('')
-                            void testProviderConnection(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined, modelId: ep.rows.find((r) => r.kind === 'llm')?.id }, ac.signal)
+                            void testProviderConnection(homeTarget(), { baseUrl: ep.baseUrl, apiKey: ep.apiKey || undefined, protocol: ep.protocol, modelId: ep.rows.find((r) => r.kind === 'llm')?.id }, ac.signal)
                               .then((r) => setProviderTestMsg(`${r.success ? '✓' : '✗'} ${r.message}`))
                               .catch((e) => setProviderTestMsg(
                                 e?.name === 'AbortError' ? t('settings.test.canceled')
@@ -2576,10 +2597,10 @@ export const SettingsModal: React.FC<{
 
                 {/* 语音页三张卡(10-25 走查续 4.5),各管输入框上的一个键(10-02 用户报「通话音色和朗读混在一起、很误导」):
                     语音通话 = 空输入框的发送键 / 本地语音识别 = 麦克风键 / 朗读 = 回复的朗读(TTS:OpenAI 兼容 /audio/speech)。 */}
-                {tab === 'model' && isDesktop && activeSub === 'm-voice' && (
+                {tab === 'model' && activeSub === 'm-voice' && (
                   <VoiceSettingsPage cfg={p.cfg} stored={stored} setStored={setStored} providers={customProviders}
                     remoteExternal={stored?.mode === 'external' && !(stored?.backendUrl || '').includes('localhost') && !(stored?.backendUrl || '').includes('127.0.0.1')}
-                    cloudModel={models?.realtimeModel} cloudAccount={cloudAccount} signedIn={realtimeSignedIn}
+                    cloudModel={models?.realtimeModel} ttsDefault={models} cloudAccount={cloudAccount} signedIn={realtimeSignedIn}
                     edit={edit} commitEdits={commitEdits} commitErrorHint={commitErrorHint}
                     onOpen={(target) => {
                       if (target === 'providers') { openSubPage('model', 'm-providers'); return }
@@ -2821,7 +2842,7 @@ export const SettingsModal: React.FC<{
                   else openAgentProfile(slug)
                   p.onClose()
                 }} />}
-                {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} localHost={!!(isDesktop && stored?.mode === 'managed')} />}
+                {tab === 'agents' && activeSub === 'ag-special' && <SpecialAgentsTab cfg={p.cfg} localHost={!!(isDesktop && stored?.mode === 'managed')} initialRole={initialTarget.pane === 'muse' ? 'muse' : undefined} />}
                 {tab === 'hooks' && <HooksTab cfg={p.cfg} />}
                 {/* 统一插件页:Forsion 插件(含捆绑包,带 Amadeus 时)/ Tangu 引擎插件 两个中分类。
                     设备页(unitPage)与 Android App 不传级联三件套:cfg 缺省=cascadeAfterToggle 不级联 —— 否则捆绑包
@@ -3638,6 +3659,7 @@ export const SettingsModal: React.FC<{
                             requestDevCommandsSync() // 设置在浮窗里的形态:命令表各窗一份,得让主窗重算
                       }} />} />
                     </div>
+                    <DecisionGateField />
                     <div className="field">
                       <SettingsRow fit="wrap" label={t('settings.developer.summaryElevation')} description={t('settings.developer.summaryElevationHint')} control={
                         <div className="seg" role="group" aria-label={t('settings.developer.summaryElevation')}>
@@ -3720,6 +3742,7 @@ export const SettingsModal: React.FC<{
                           // 留着开 = 用户看不见的地方一直在采样,默认拒的信任故事当场破。
                           void window.tangu?.setConfig?.({ activeWindowEnabled: false }).then(setStored)
                           setActiveWindowCommand(false)
+                          disableDecisionGate() // 同理:开关在这一页,藏起来还开着就一直把原话发云端
                           requestDevCommandsSync() // 两个 localStorage 开关已同步清掉;config 那条由主进程自己推
                           setDevMode(false)
                           setDevClicks(0)

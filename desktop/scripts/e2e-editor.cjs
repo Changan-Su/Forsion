@@ -31,7 +31,10 @@ function ping() {
 
 async function main() {
   let vite = null
-  if (!(await ping())) {
+  if (await ping()) {
+    // 端口上可能是别的检出留下的 vite:测的是它的代码,不是这里的。worktree 里跑先换个空闲端口。
+    console.log(`复用已在跑的服务 ${URL}:测的是那个进程的代码,不一定是这个检出`)
+  } else {
     const port = new (require('url').URL)(URL).port || '5173'
     // Launch the installed JS entry directly: Windows cannot spawn the npx.cmd shim without a shell.
     const viteEntry = path.join(path.dirname(require.resolve('vite/package.json')), 'bin/vite.js')

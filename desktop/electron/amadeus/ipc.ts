@@ -6,18 +6,18 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
-import { IPC, gatePluginManifest, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
+import { IPC, gatePluginManifest, sanitizeGuide, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
-import { serializeDb, seedCalendarDb } from '@amadeus-shared/db/schema'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
+import { trashSeedCalendar } from './fs/seedCalendar'
 import { casRejected, registerVaultHandlers, VAULT_WRITE_EVENTS, type VaultFace } from './fs/vaultHandlers'
 import { createPageHistory } from './fs/pageHistory'
 export type { VaultFace } from './fs/vaultHandlers'
 import { VaultWatcher } from './fs/watcher'
 import { VaultIndex } from './fs/vaultIndex'
 import { vaultRel } from './fs/vaultRel'
-import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig } from './settings'
+import { adoptLegacyCloudState, currentCloudAccountId, readConfig, updateConfig, writeConfig, type AmadeusConfig } from './settings'
 import { defaultWorkspaceDir, forsionHomeDir, isDevMode, tanguDataDir } from '../forsionHome'
 import { getProduct } from '../productsRegistry'
 import { externalCreations } from '../productTrust'
@@ -28,6 +28,7 @@ import { logActivity, logNoteEdit } from '../activityLog'
 import { loadTanguCreds } from '../forsionAuth'
 import { fetchLinkMeta, searchImages } from './linkMeta'
 import { cloudVaultDir, isManagedCloudVault, migrateCloudMirrorDir } from './cloudPaths'
+import { forgetPatch, normalizeLocal, samePath, switchPatch, syncVaultRoot, vaultDirName, vaultList } from './vaultList'
 import type { AmadeusSyncFactory } from './cloudSeam'
 import { readPluginIconDataUrl } from '../pluginIcon'
 import { mt } from '../mainI18n'
@@ -162,6 +163,7 @@ return () => { offTangu?.() }
 
 export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory: AmadeusSyncFactory | null = null): {
   getVaultRoot: () => string | null
+  resolveSharedAsset: (vaultRel: string) => string | null
   restartSync: () => Promise<void>
   stopSync: () => Promise<void>
   readExternalPlugins: () => Promise<ExternalPluginSource[]>
@@ -219,6 +221,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // A detached renderer may still hold a document from a previous cloud root.
   // Its late relative-path IPC must fail instead of targeting the new root.
   const rendererRoots = new Map<number, string | null>()
+  const BINDS_ROOT = new Set<string>([IPC.restoreVault, IPC.openVault, IPC.switchVault, IPC.createVault])
   const remoteRoots = new Map<string, string | null>()
   const pendingVaultWrites = new Set<Promise<unknown>>()
   const writesVault = (channel: string): boolean => !!VAULT_WRITE_EVENTS[channel] ||
@@ -228,7 +231,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   const handle = (channel: string, fn: (e: unknown, ...args: any[]) => unknown): void => {
     vaultHandlers.set(channel, fn)
     ipcMain.handle(channel, async (e, ...a) => {
-      const mayBind = channel === IPC.restoreVault || channel === IPC.openVault
+      const mayBind = BINDS_ROOT.has(channel)
       if (!mayBind && rendererRoots.has(e.sender.id) && rendererRoots.get(e.sender.id) !== vault.getRoot()) {
         throw new Error('The active vault changed; reload the current account before editing')
       }
@@ -281,11 +284,14 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   )
 
   const rememberPage = (pagePath: string): Promise<void> => writeConfig({ lastPage: vaultRel(pagePath) })
+  const defaultVaultRoot = (): string => path.join(defaultWorkspaceDir(), 'Amadeus')
 
   /** 切到某个根:统一收口(setRoot + watcher + index + 返回渲染端所需载荷)。 */
   const activateRoot = async (root: string, keepLastPage: boolean): Promise<{ root: string; pages: string[]; folders: string[]; lastPage?: string }> => {
     vault.setRoot(root)
     watcher.start(root)
+    // 只有默认库是我们种过的;失败不挡开库,下次再试
+    if (path.resolve(root) === defaultVaultRoot()) await trashSeedCalendar(vault).catch((e) => console.warn('[amadeus] seed calendar cleanup failed', e))
     const pages = await vault.listPages()
     const folders = await vault.listFolders()
     await index.build()
@@ -299,31 +305,83 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     }
   }
 
-  /** 首启无 lastVault:自带默认工作区 ~/Forsion/Amadeus(dev→~/Forsion-Dev/Amadeus)+ 种子 Calendar.db。
-   *  幂等:目录已存在不动,Calendar.db 已存在不覆盖(用户后来选过别的 vault 则走不到这里)。 */
+  /** 首启无 lastVault:自带默认工作区 ~/Forsion/Amadeus(dev→~/Forsion-Dev/Amadeus)。不种日历,默认日历是引擎的 human/CALENDAR.db。
+   *  幂等:目录已存在不动(用户后来选过别的 vault 则走不到这里)。 */
   const ensureDefaultVault = async (): Promise<{ root: string; pages: string[]; folders: string[] }> => {
-    const root = path.join(defaultWorkspaceDir(), 'Amadeus')
+    const root = defaultVaultRoot()
     await fs.mkdir(root, { recursive: true })
-    vault.setRoot(root)
-    try {
-      await fs.access(path.join(root, 'Calendar.db'))
-    } catch {
-      await vault.writeTextFile('Calendar.db', serializeDb(seedCalendarDb()))
-    }
     await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
     return activateRoot(root, false)
   }
 
+  const localConfig = async (): Promise<AmadeusConfig> => normalizeLocal(await readConfig(), isManagedCloudVault)
+  /** 本地侧换库:校验 → 记清单、钉同步库(vaultList.ts)→ 等在途写落盘 → 换根。
+   *  ⚠️ 等写的循环退出到 activateRoot 里的 setRoot 之间不许有 await:否则旧窗口的写能在空档里通过根校验,
+   *  读的是旧库、落盘时根已换成新库(Codex 评审 P0)。setRoot 之后旧窗口的写一律被 handle() 的根校验拒掉。 */
+  const switchLocalVault = async (root: string): Promise<Awaited<ReturnType<typeof activateRoot>>> => {
+    if (isManagedCloudVault(root)) throw new Error('cloud-vault-forbidden')
+    if (!(await fs.stat(root).then((s) => s.isDirectory(), () => false))) throw new Error('vault-missing')
+    await updateConfig((cfg) => { Object.assign(cfg, switchPatch(normalizeLocal(cfg, isManagedCloudVault), root)) })
+    while (pendingVaultWrites.size) await Promise.allSettled([...pendingVaultWrites])
+    return activateRoot(root, true) // 同步跑到 vault.setRoot
+  }
+
   handle(IPC.openVault, async () => {
     const root = await vault.openDialog()
-    if (!root) return null
-    await writeConfig({ lastVault: root, localVault: root, lastPage: undefined })
-    return activateRoot(root, false)
+    return root ? switchLocalVault(root) : null
+  })
+
+  handle(IPC.switchVault, async (_e, root: unknown) => {
+    const listed = vaultList(await localConfig()).find((v) => typeof root === 'string' && samePath(v.root, root))
+    if (!listed) throw new Error('vault-not-listed')
+    return switchLocalVault(listed.root)
+  })
+
+  // 新建 = <工作区>/Vaults/<名>;同名文件夹已在就报错,不悄悄并进别人的文件夹。
+  handle(IPC.createVault, async (_e, name: unknown) => {
+    const dir = vaultDirName(name)
+    if (!dir) throw new Error('invalid-name')
+    const parent = path.join(defaultWorkspaceDir(), 'Vaults')
+    await fs.mkdir(parent, { recursive: true })
+    const root = path.join(parent, dir)
+    await fs.mkdir(root)
+    return switchLocalVault(root)
+  })
+
+  // 清单 / 移出 / 显示不绑根:别的窗口还停在旧库时也要能看菜单。
+  ipcMain.handle(IPC.listVaults, async () => {
+    const cfg = await localConfig()
+    const pinned = syncVaultRoot(cfg)
+    const owned = contentSyncOwned(currentCloudAccountId())
+    const home = app.getPath('home')
+    return Promise.all(vaultList(cfg).filter((v) => !isManagedCloudVault(v.root)).map(async (v) => ({
+      root: v.root,
+      name: path.basename(v.root),
+      display: v.root.startsWith(home + path.sep) ? `~${v.root.slice(home.length)}` : v.root,
+      current: samePath(v.root, cfg.localVault),
+      sync: owned && samePath(v.root, pinned),
+      pinned: samePath(v.root, pinned),
+      exists: await fs.stat(v.root).then((s) => s.isDirectory(), () => false),
+    })))
+  })
+  ipcMain.handle(IPC.forgetVault, async (_e, root: unknown) => {
+    let ok = false
+    if (typeof root === 'string') await updateConfig((cfg) => {
+      const patch = forgetPatch(normalizeLocal(cfg, isManagedCloudVault), root)
+      if (!patch) return false
+      Object.assign(cfg, patch)
+      ok = true
+    })
+    return ok
+  })
+  ipcMain.handle(IPC.revealVault, async (_e, root: unknown) => {
+    const listed = vaultList(await localConfig()).find((v) => typeof root === 'string' && samePath(v.root, root))
+    if (listed) shell.showItemInFolder(listed.root)
   })
 
   handle(IPC.restoreVault, async () => {
     let { lastVault } = await readConfig()
-    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区 + 种子多维表(不再落欢迎页)
+    if (!lastVault) return ensureDefaultVault() // 首启:自带默认工作区(不再落欢迎页)
     // A saved cloud root may belong to a previous account (or the old unowned
     // mirror). Never mount it for a different account, including signed-out boot.
     if (isManagedCloudVault(lastVault) && (!cloud || !currentCloudAccountId() || lastVault !== cloudVaultDir())) {
@@ -624,7 +682,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     type DevManifest = {
       id?: unknown; name?: unknown; nameEn?: unknown; version?: unknown; description?: unknown; descriptionEn?: unknown
       main?: unknown; apiVersion?: unknown; minAppVersion?: unknown; requiresApp?: unknown; requiresPlugins?: unknown
-      capabilities?: unknown; onboarding?: unknown; events?: unknown; fileExtensions?: unknown
+      capabilities?: unknown; onboarding?: unknown; guide?: unknown; events?: unknown; fileExtensions?: unknown
     }
     for (const product of products) {
       const pdir = product.root
@@ -693,6 +751,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         readme,
         changelog,
         onboarding: sanitizeOnboarding(m?.onboarding),
+        guide: sanitizeGuide(m?.guide),
         events: sanitizeEvents(m?.events),
         // fileExtensions 刻意不透出:声明了就已经 blocked,再把它传下去只会让下游误以为这套后缀受保护。
         blocked: blocked ?? undefined,
@@ -856,7 +915,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   // 卸载 Forsion 插件:按 manifest id 定位目录(id 可与目录名不同;与 listPlugins 同一 pluginIdOf 门禁)整删。
   // 只动 ~/.forsion/plugins;内嵌 agent 已播种进引擎的按「播种一次」语义保留(活体),
   // 内嵌引擎插件需重启引擎后消失(调用方负责提示/重启)。
-  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineEnabled?: string[] }) => {
+  handle(IPC.uninstallPlugin, async (_e, id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }) => {
     if (typeof id !== 'string' || !SAFE_PLUGIN_ID.test(id)) throw new Error('invalid-plugin-id') // 原因码,渲染层 ipcErrorText 译
     // ⚠️开发副本正遮蔽同 id 的安装版时必须拒绝:这里只扫全局目录,删掉的是**安装版**,而跑着的是开发副本 ——
     // 用户看到「已卸载」,插件却还在;等哪天撤下开发副本,它才凭空消失(且没有任何提示)。先撤开发副本再卸载。
@@ -907,9 +966,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
       ? Object.fromEntries(Object.entries(opts.prefs).filter(([k, v]) => typeof k === 'string' && typeof v === 'string')) : undefined
     let name = id
     try { name = String((JSON.parse(await fs.readFile(path.join(target, 'manifest.json'), 'utf8')) as { name?: unknown }).name || id) } catch { /* 用 id */ }
-    // engineEnabled:卸载前开着的内嵌引擎插件(卸载时先关了它们),恢复时渲染层重扫后再开回来
-    const engineEnabled = Array.isArray(opts?.engineEnabled) ? opts.engineEnabled.filter((x): x is string => typeof x === 'string').slice(0, 50) : []
-    const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineEnabled.length ? { engineEnabled } : {}) } })
+    // engineTrash:内嵌引擎插件的设置在引擎那边的回收站条目,恢复时渲染层连带放回
+    const engineTrash = Array.isArray(opts?.engineTrash) ? opts.engineTrash.filter((x): x is string => typeof x === 'string').slice(0, 50) : []
+    const entry = await moveToDesktopTrash({ ref: id, name, paths, extra: { pluginId: id, dirName: path.basename(target), ...(prefs && Object.keys(prefs).length ? { prefs } : {}), ...(engineTrash.length ? { engineTrash } : {}) } })
     vault.setPluginFileExtensions(collectPluginExts()) // 重算(含墓碑):保护不随卸载失效
     return { ...(entry ? { trashId: entry.id } : {}), dirName: path.basename(target) }
   })
@@ -990,6 +1049,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
 
   return {
     getVaultRoot: () => vault.getRoot(),
+    resolveSharedAsset: (vaultRel) => cloud?.resolveSharedAsset?.(vaultRel) ?? null,
     /** 登录成功后由 main 调:重读凭据、拉起云端双向同步(修「已登录仍显示登录提示 + 同步没开」)。 */
     restartSync: () => cloud?.restartAllSync() ?? Promise.resolve(),
     stopSync: () => cloud?.stopAllSync() ?? Promise.resolve(),
@@ -1000,7 +1060,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         const fn = vaultHandlers.get(channel)
         if (!fn) throw new Error(`unknown vault channel: ${channel}`)
         const key = origin ?? 'remote'
-        const mayBind = channel === IPC.restoreVault || channel === IPC.openVault
+        const mayBind = BINDS_ROOT.has(channel)
         if (!mayBind && remoteRoots.has(key) && remoteRoots.get(key) !== vault.getRoot()) {
           throw new Error('The active vault changed; reload the current account before editing')
         }

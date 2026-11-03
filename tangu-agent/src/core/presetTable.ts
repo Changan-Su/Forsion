@@ -97,6 +97,7 @@ export const CHAT_PRESET_DEFERRED: ReadonlySet<string> = new Set([
   // 商店投稿更新(官方 Forsion Extend 捆绑包里的引擎插件提供,见 CHAT_PRESET_OFFICIAL_PLUGIN):查 / 提交作者自己条目的新版本。
   // 提交那件每次由用户在卡上确认(approval:'always');定义与目录行文案(英文)在插件里。
   'store_check_update', 'store_submit_update',
+  'manage_widget', // 小组件:可见性由 widget.v1 握手管(见 manageWidget.ts)
 ]);
 
 /** chat 面里由官方插件(而不是核心)提供的工具。第三方插件注册同名工具照旧被 chat 面拒。 */

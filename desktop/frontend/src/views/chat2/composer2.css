@@ -78,6 +78,13 @@
 .t2c-menu-ico { flex: none; width: 16px; height: 16px; object-fit: contain; color: var(--text-muted); }
 @media (prefers-reduced-motion: reduce) { .t2c-menu-list { animation: none; } }
 
+/* 建议层提供自然换行高度;真实输入框覆盖其上,可点可输入,无建议时布局不变。 */
+.t2c-input-wrap { position: relative; min-width: 0; }
+.t2c-input-wrap[data-suggestion] .t2c-ta { position: absolute; inset: 0; height: 100% !important; max-height: none; }
+.t2c-input-wrap[data-suggestion] .t2c-ta::placeholder { color: transparent; }
+.t2c-suggestion { font: var(--t2c-font-body, 13px)/1.6 var(--font-ui); color: var(--text-faint, var(--text-muted)); white-space: pre-wrap; overflow-wrap: anywhere; pointer-events: none; }
+.t2c-suggestion-key { display: inline-block; white-space: nowrap; padding: 0 7px; border-radius: var(--radius-sm, 6px); background: var(--overlay-medium); font-size: var(--ui-font-caption, 11px); line-height: 1.7; }
+
 /* 行内引用(句子里的那枚芯片,InlineRefMirror):这一层叠在文本框上、字是透明的,只画底色和图标。
    ⚠️ 这里不许出现任何会改变文字宽度的东西(padding / margin / border / 字号):它的排版必须和文本框一字不差。 */
 .t2c-mirror { position: absolute; z-index: 1; margin: 0; border: 0; box-sizing: border-box; overflow: hidden; pointer-events: none; color: transparent; white-space: pre-wrap; overflow-wrap: break-word; }
@@ -98,18 +105,22 @@
 .t2c-pill-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 模式胶囊与 ModelPill 共用同一展开契约:224px、三列居中、菜单右缘对齐。
-   模式胶囊在底栏左侧:打开时外层先占住最终宽度,菜单锚点不动;按钮开合直接到位、只换底色(走查续八 8.4)。 */
+   模式胶囊在底栏左侧:打开时外层先占住最终宽度,菜单锚点不动。
+   开合补宽度、跟菜单同一只表(11-02 撤回走查续八 8.4 的「直接到位」,注释见 base.css .model-pill-btn):
+   收起 = 菜单退场时长 / 曲线(写在基础规则),展开 = 菜单进场(写在 .is-open)。 */
 .mode-pill-wrap { position: relative; display: inline-flex; }
 .t2c-pill.mode-pill-btn {
   min-width: 0;
+  interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast, 0.15s); /* 开合不补宽度,同「+」(走查续八 8.4) */
+  transition: background var(--duration-fast, 0.15s), width var(--menu-exit-duration) var(--ease-exit);
 }
 .t2c-pill.mode-pill-btn.is-open {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: 224px;
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  transition: background var(--duration-fast, 0.15s), width var(--menu-enter-duration) var(--menu-enter-ease);
 }
 .mode-pill-wrap.is-open { width: 224px; flex-shrink: 0; }
 .mode-pill-btn.is-open > svg { justify-self: center; }
@@ -129,8 +140,10 @@
   padding: 0;
   overflow: hidden;
   color: var(--text-muted);
-  /* 开合只换底色和字色、不补尺寸(走查续八 8.4,规矩 3):以前宽度 / 列宽 / 内边距补 180ms,菜单早没了药丸还在收。 */
-  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+  /* 开合补尺寸、跟菜单同一只表(11-02 撤回走查续八 8.4,同模式 / 模型胶囊):收起走菜单退场,展开走菜单进场。 */
+  --pill-size-motion: var(--menu-exit-duration) var(--ease-exit);
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s),
+    width var(--pill-size-motion), grid-template-columns var(--pill-size-motion), gap var(--pill-size-motion), padding var(--pill-size-motion);
 }
 .t2c-pill.add-pill-btn.is-open {
   grid-template-columns: 16px minmax(0, 1fr) 16px;
@@ -140,6 +153,7 @@
   padding: 4px 9px;
   color: var(--text);
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  --pill-size-motion: var(--menu-enter-duration) var(--menu-enter-ease);
 }
 .add-pill-plus { justify-self: center; transition: transform 0.2s var(--ease-spring); }
 .add-pill-btn.is-open .add-pill-plus { transform: rotate(45deg); }
@@ -251,12 +265,12 @@
 /* 窄 Chat View 的排他展开：当前胶囊完整保留，其他胶囊 / 次要控制直接退出布局。
    发送（以及运行时停止）永远保留，避免为了观感牺牲核心动作。 */
 @container (max-width: 600px) {
-  .t2c-row:has(> .add-pill-wrap.is-open) > .t2c-capsule-peer:not(.add-pill-wrap),
-  .t2c-row:has(> .mode-pill-wrap.is-open) > .t2c-capsule-peer:not(.mode-pill-wrap),
-  .t2c-row:has(> .model-pill-wrap.is-open) > .t2c-capsule-peer:not(.model-pill-wrap),
-  .t2c-row:has(> .add-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
-  .t2c-row:has(> .mode-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
-  .t2c-row:has(> .model-pill-wrap.is-open) > .t2c-collapse-on-capsule-open {
+  .t2c-row:not([data-compact]):has(> .add-pill-wrap.is-open) > .t2c-capsule-peer:not(.add-pill-wrap),
+  .t2c-row:not([data-compact]):has(> .mode-pill-wrap.is-open) > .t2c-capsule-peer:not(.mode-pill-wrap),
+  .t2c-row:not([data-compact]):has(> .model-pill-wrap.is-open) > .t2c-capsule-peer:not(.model-pill-wrap),
+  .t2c-row:not([data-compact]):has(> .add-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
+  .t2c-row:not([data-compact]):has(> .mode-pill-wrap.is-open) > .t2c-collapse-on-capsule-open,
+  .t2c-row:not([data-compact]):has(> .model-pill-wrap.is-open) > .t2c-collapse-on-capsule-open {
     display: none;
   }
 }
@@ -507,7 +521,7 @@
    仪器:mobile `npm run stage:phone` 的 chat-card;模拟器 `ONLY='input card' npm run emu:nativeshell`。
    必须留在文件末尾(同特异性的基础规则在上面,DESIGN §7.2)。 */
 .t2c-field { display: flex; align-items: flex-end; gap: 8px; }
-.t2c-field > .t2c-ta { flex: 1 1 auto; min-width: 0; align-self: center; }
+.t2c-field > .t2c-input-wrap { flex: 1 1 auto; min-width: 0; align-self: center; }
 .t2c-card--phone .t2c-row { margin-top: 6px; }
 .t2c-card--phone .t2c-send { width: 42px; height: 42px; }
 .t2c-card--phone .t2c-send svg { width: 21px; height: 21px; }
@@ -539,3 +553,35 @@
 
 /* 发送动效:输入框里的字影子上移淡出那 200ms 先不露占位提示,两行字不叠(views/chat2/sendFlight.ts) */
 .t2c-ta[data-send-ghost]::placeholder { color: transparent; }
+
+/* 通话键的一次性气泡:贴在输入卡右上,指向发送键那一角 */
+.t2c-callhint {
+  position: absolute; right: 0; bottom: 100%; margin-bottom: 10px; z-index: 20; width: min(252px, 100%); padding: 12px 14px;
+  background: var(--bg-card, var(--bg)); color: var(--text); border-radius: var(--radius-md, 12px);
+  box-shadow: var(--card-shadow, 0 8px 28px rgba(0, 0, 0, 0.18)); line-height: 1.55;
+}
+.t2c-callhint b { display: block; margin-bottom: 2px; font-size: var(--ui-font-body); font-weight: 600; }
+.t2c-callhint span { font-size: var(--ui-font-meta); color: var(--text-muted); }
+.t2c-callhint-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }
+
+/* A: stable single-row controls. Native phone cards retain their own layout. */
+.t2c-row[data-compact] { gap: 6px; }
+.t2c-row[data-compact] .mode-pill-wrap,
+.t2c-row[data-compact] .mode-pill-wrap.is-open { flex: none; width: 28px; }
+.t2c-row[data-compact] .t2c-pill.mode-pill-btn,
+.t2c-row[data-compact] .t2c-pill.mode-pill-btn.is-open { display: flex; width: 28px; height: 28px; padding: 0; justify-content: center; }
+.t2c-row[data-compact] .mode-pill-btn > .t2c-pill-label,
+.t2c-row[data-compact] .mode-pill-btn > svg:last-child { display: none; }
+.add-pill-wrap[data-compact] .t2c-pill.add-pill-btn.is-open {
+  width: 28px; padding: 0; display: flex; justify-content: center;
+}
+.add-pill-wrap[data-compact] .add-pill-label,
+.add-pill-wrap[data-compact] .add-pill-chevron { display: none; }
+/* Override the old exclusive-open rule: opening a menu does not remove its peers. */
+.t2c-row[data-compact] > .t2c-capsule-peer,
+.t2c-row[data-compact] > .t2c-collapse-on-capsule-open { display: inline-flex; }
+.t2c-row[data-compact] .t2c-stop { width: 32px; padding-inline: 0; justify-content: center; }
+.t2c-row[data-compact] .t2c-stop-label { display: none; }
+.t2c-row[data-tight] > .model-pill-wrap { flex: 1 1 auto; }
+.t2c-overflow-ring { width: 14px; height: 14px; border: 2px solid var(--text-faint); border-radius: 50%; flex: none; }
+.t2c-ctxring-pop.composer-menu--compact { display: flex; flex-direction: column; padding: 8px; width: 320px; }

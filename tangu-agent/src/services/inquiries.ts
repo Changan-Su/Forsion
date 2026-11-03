@@ -7,7 +7,7 @@
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { trackPrompt, untrackPrompt, type AnswerBy } from './pendingPromptIndex.js';
-import { isChildBriefRun, isUnattendedRun } from './remoteActivity.js';
+import { isChildBriefRun, isSiblingMessageRun, isUnattendedRun } from './remoteActivity.js';
 
 export interface InquiryRequestPayload {
   question: string;
@@ -40,6 +40,16 @@ export const INQUIRY_UNATTENDED_ANSWER =
 export const INQUIRY_CHILD_ANSWER =
   "[No answer] You are a child session started by another session, so ask_user can't reach the user from here. This is a system note, not an answer: do not assume one. Finish what you can, then end your turn with the question as your last line; it goes back to the session that started you, which will answer it or ask the user.";
 
+/** 兄弟会话发来消息的那一轮里的询问当场兑现(同上:用户不在这个子会话里)。 */
+export const INQUIRY_SIBLING_ANSWER =
+  "[No answer] This turn was started by a message from a sibling session, so ask_user can't reach the user from here. This is a system note, not an answer: do not assume one. If the sender should answer, ask it with send_to_session; otherwise finish what you can and end your turn with the question as your last line.";
+
+// 子会话那一轮短路掉的问题(runId → 问题):收尾送回主会话时一并带上(childSessions.deliverNow 读,回报落库后清)。
+// ponytail: 只在内存,引擎重启前没送出的问题丢失(回报本身重启后照样补送);要跨重启得落列。
+const childAsked = new Map<string, string[]>();
+export const peekChildQuestions = (runId: string): string[] => childAsked.get(runId) || [];
+export const clearChildQuestions = (runId: string): void => { childAsked.delete(runId); };
+
 /** 登记一次询问:发事件 + await 用户答案。 */
 export function requestInquiry(
   runId: string,
@@ -49,7 +59,12 @@ export function requestInquiry(
   if (signal?.aborted) return Promise.resolve('(用户中止了运行)');
   if (isUnattendedRun(runId)) return Promise.resolve(INQUIRY_UNATTENDED_ANSWER);
   // 计划审批不短路:用户在子会话里开了计划模式,批准卡照常挂在子会话里等用户(Codex 评审 P1)
-  if (isChildBriefRun(runId) && payload.kind !== 'plan') return Promise.resolve(INQUIRY_CHILD_ANSWER);
+  if (isChildBriefRun(runId) && payload.kind !== 'plan') {
+    const q = String(payload.question || '').trim().slice(0, 2_000);
+    if (q) childAsked.set(runId, [...(childAsked.get(runId) || []), q].slice(-5));
+    return Promise.resolve(INQUIRY_CHILD_ANSWER);
+  }
+  if (isSiblingMessageRun(runId) && payload.kind !== 'plan') return Promise.resolve(INQUIRY_SIBLING_ANSWER);
   const inquiryId = nextInquiryId();
   return new Promise<string>((resolve) => {
     const onAbort = (): void => {

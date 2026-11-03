@@ -356,6 +356,15 @@ describe('human/ in the cloud — two devices', () => {
     for (const d of [a, b]) { d.use(); expect(d.human('MEMORY.md')).toBe('Name: Lin Xia\nLikes: tea\nGoal: ship the app'); }
   });
 
+  it('a corrupt vault Calendar.db is not copied into human/, where it would take the default calendar down with it', async () => {
+    const [a] = two();
+    a.use();
+    writeFileSync(a.calendar, '{broken');
+    await mirrorLegacyHuman();
+    expect(existsSync(join(humanDir(), 'CALENDAR.db'))).toBe(false);
+    expect(readFileSync(a.calendar, 'utf8')).toBe('{broken');
+  });
+
   it('a corrupt human/CALENDAR.db never overwrites the vault calendar', async () => {
     const [a] = two();
     a.use();
@@ -651,3 +660,57 @@ describe('human/ deletes (10-28)', () => {
     rmSync(a.root, { recursive: true, force: true }); rmSync(b.root, { recursive: true, force: true });
   });
 });
+
+// 10-29 画像写入:两台各往画像里记一条,按行三方合并合不拢 —— 条目行按集合合,不出冲突副本;正文两边都改了照旧出副本
+describe('human/SOUL.md (the portrait) on two devices', () => {
+  const START = '# Lin\n\nShe wrote this.\n\n## Recently learned\n\n- one\n';
+  const entries = (t: string) => t.split('\n').filter((l) => l.startsWith('- ')).map((l) => l.slice(2)).sort();
+  async function editSoul(d: ReturnType<typeof device>, next: (s: string) => string) {
+    d.use();
+    const doc = await readHuman({ kind: 'human', file: 'SOUL.md' });
+    await writeHuman({ kind: 'human', file: 'SOUL.md' }, { content: next(doc.content), summary: 'Edit', expectedVersion: doc.version }, 'user');
+  }
+  async function pair() {
+    const cloud = fakeCloud(['human', 'human-folder']);
+    const [a, b] = two();
+    await a.enroll(cloud); await editSoul(a, () => START); await a.sync(cloud);
+    await b.enroll(cloud); await b.sync(cloud);
+    expect(b.human('SOUL.md')).toBe(START);
+    return { cloud, a, b };
+  }
+  const settle = async (cloud: any, a: any, b: any) => { await a.sync(cloud); await b.sync(cloud); await a.sync(cloud); await b.sync(cloud); };
+
+  it('each device adds an entry offline: both stay and no conflict copy appears', async () => {
+    const { cloud, a, b } = await pair();
+    await editSoul(a, (s) => `${s}- from a\n`);
+    await editSoul(b, (s) => `${s}- from b\n`);
+    await settle(cloud, a, b);
+    for (const d of [a, b]) {
+      expect(entries(d.human('SOUL.md'))).toEqual(['from a', 'from b', 'one']);
+      expect(d.human('SOUL.md')).toContain('She wrote this.');
+      expect(d.conflictCopies()).toEqual([]);
+    }
+    expect(a.human('SOUL.md')).toBe(b.human('SOUL.md'));
+  });
+
+  it('one device deletes an entry while the other adds one', async () => {
+    const { cloud, a, b } = await pair();
+    await editSoul(a, (s) => s.replace('- one\n', '- two\n- three\n').replace('- two\n', ''));
+    await a.sync(cloud); await b.sync(cloud);
+    await editSoul(a, (s) => s.replace('- three\n', ''));
+    await editSoul(b, (s) => `${s}- four\n`);
+    await settle(cloud, a, b);
+    for (const d of [a, b]) { expect(entries(d.human('SOUL.md'))).toEqual(['four']); expect(d.conflictCopies()).toEqual([]); }
+  });
+
+  it('both devices rewrite the same paragraph: one version wins and the other is kept as a conflict copy, as before', async () => {
+    const { cloud, a, b } = await pair();
+    await editSoul(a, (s) => s.replace('She wrote this.', 'She wrote this on A.'));
+    await editSoul(b, (s) => s.replace('She wrote this.', 'She wrote this on B.'));
+    await settle(cloud, a, b);
+    expect(a.human('SOUL.md')).toBe(b.human('SOUL.md'));
+    expect(a.human('SOUL.md')).toContain('She wrote this on A.');
+    expect(b.conflictCopies()).toHaveLength(1);
+  });
+});
+

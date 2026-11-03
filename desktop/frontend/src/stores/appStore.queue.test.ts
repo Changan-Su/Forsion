@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-const service = vi.hoisted(() => ({ start: vi.fn(), steer: vi.fn(), compact: vi.fn(), del: vi.fn() }))
+const service = vi.hoisted(() => ({ start: vi.fn(), steer: vi.fn(), compact: vi.fn(), del: vi.fn(), list: vi.fn() }))
 vi.mock('../services/agentRunService', async (original) => ({
   ...await original<typeof import('../services/agentRunService')>(),
   startRun: service.start, steerRun: service.steer,
 }))
 vi.mock('../services/backendService', async (original) => ({
   ...await original<typeof import('../services/backendService')>(),
-  compactSession: service.compact, deleteMessages: service.del,
+  compactSession: service.compact, deleteMessages: service.del, listMessages: service.list,
 }))
 import { useApp } from './appStore'
 import '../tangu/store/standalone' // 测试不走 activateTangu:自己装 Tangu 的 store 半身(界面热更新 3c)
@@ -25,6 +25,7 @@ beforeEach(() => {
     subscribeRun: vi.fn((sid, runId) => useApp.setState({ runningBySession: { [sid]: runId } })),
   })
   service.steer.mockResolvedValue({ ok: true, userMessageId: 'u-steer' })
+  service.list.mockResolvedValue([])
   service.start.mockResolvedValue({ runId: 'next', assistantMessageId: 'next-a', userMessageId: 'next-u' })
 })
 afterEach(() => { useApp.setState(initial, true); vi.useRealTimers(); vi.unstubAllGlobals() })

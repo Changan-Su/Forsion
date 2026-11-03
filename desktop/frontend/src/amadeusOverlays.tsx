@@ -1,7 +1,9 @@
 /** Amadeus 全局浮层(Root 级挂载):左栏折叠会卸载面板,浮层不能住在面板/侧栏里。
  *  复用 engine 命令面板的 cmd-* 外观;cmd-row/cmd-path 两个补充类在 amadeus-host.css。
  *  组件随 overlay 状态整体卸载 → 每次打开都是干净的输入态,无需重置。 */
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { createPortal } from 'react-dom'
+import { chatToastDock } from './lib/chatToastDock'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { ConfirmDialog } from '@amadeus/components/Dialogs'
@@ -13,6 +15,7 @@ import { DeleteAssetsHost } from '@amadeus/components/askDeleteAssets'
 import { NewDrawingHost } from '@amadeus/components/askNewDrawing'
 import { CloudSyncDialogHost } from './components/CloudSyncDialog'
 import { AutomationBuilderHost } from './amadeusAutomation'
+import { SpaceOrganizerHost } from './views/SpaceOrganizer'
 import { fdDirOf } from '@amadeus/lib/fd'
 import { resolveFileName } from '@amadeus/lib/vaultFiles'
 import { parsePdfLinkInner } from '@amadeus-shared/pdfLink'
@@ -59,6 +62,8 @@ export function AmadeusOverlays() {
   const overlay = useUiOverlay((s) => s.overlay)
   const templateCtx = useUiOverlay((s) => s.templateCtx)
   const toast = useUiStore((s) => s.toast) // 插件 notify / 字数统计等的全局吐司(自动 2.6s 消失)
+  // 聊天列可见时挂到输入卡上方(走查续六 6.5,见 lib/chatToastDock);每条新吐司查一次落点
+  const toastDock = useMemo(() => (toast ? chatToastDock() : null), [toast])
   // 斜杠菜单「模板」经 CustomEvent 解耦触发(vendored MarkdownBlock 不 import 桌面 store)。
   useEffect(() => {
     const onPick = (e: Event): void => {
@@ -89,7 +94,7 @@ export function AmadeusOverlays() {
     window.addEventListener('amadeus:toast', onToast)
     return () => window.removeEventListener('amadeus:toast', onToast)
   }, [])
-  // 正文 #标签 胶囊点击(编辑器 tagPill 发事件解耦,L-14)→ 左栏标签视图定位该标签。
+  // 正文 #标签 胶囊点击(编辑器 tagPill 发事件解耦,L-14)→ 左栏全文搜索按这个标签找。
   useEffect(() => {
     const onOpenTag = (e: Event): void => {
       const tag = (e as CustomEvent<{ tag?: string }>).detail?.tag
@@ -195,7 +200,9 @@ export function AmadeusOverlays() {
       <NewDrawingHost />
       <CloudSyncDialogHost />
       <AutomationBuilderHost />
-      {toast && <BottomToast key={toast} text={toast} />}
+      {/* ⌘⇧O(命令「切换 Space」)在主页以外弹出的 Space 收纳;只在主窗口(独立窗 / Mini 卡不切 Space) */}
+      {windowKind() === 'main' && <SpaceOrganizerHost />}
+      {toast && (toastDock ? createPortal(<BottomToast key={toast} text={toast} />, toastDock) : <BottomToast key={toast} text={toast} />)}
     </>
   )
 }

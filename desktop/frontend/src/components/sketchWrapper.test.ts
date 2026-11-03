@@ -8,17 +8,44 @@ import { runInNewContext } from 'node:vm'
 vi.mock('./sketch.css?raw', async () => ({
   default: (await import('node:fs')).readFileSync(new URL('./sketch.css', import.meta.url), 'utf8'),
 }))
-import { buildSketchDoc, SKETCH_CSP, SKETCH_SANDBOX, SKETCH_STATIC_VARS, SKETCH_VARS } from './sketchWrapper'
+import { buildSketchDoc, buildSketchShell, IUI_LIB_IMPORTS, SKETCH_CSP, SKETCH_SANDBOX, SKETCH_SHELL_CSP, SKETCH_STATIC_VARS, SKETCH_VARS } from './sketchWrapper'
 
 describe('sketch 包装器安全不变式', () => {
-  it('sandbox 恒为仅 allow-scripts(绝不 allow-same-origin/forms/popups)', () => {
-    expect(SKETCH_SANDBOX).toBe('allow-scripts')
+  it('sandbox 恒为 allow-scripts + allow-forms(绝不 allow-same-origin/popups/top-navigation)', () => {
+    expect(SKETCH_SANDBOX).toBe('allow-scripts allow-forms')
+  })
+
+  it('allow-forms 必须配 form-action none(default-src 管不到 form-action)', () => {
+    expect(SKETCH_SANDBOX.split(' ')).toContain('allow-forms')
+    expect(SKETCH_CSP.split('; ')).toContain("form-action 'none'")
   })
 
   it('内层 CSP 收口网络且不给 eval', () => {
     expect(SKETCH_CSP).toContain("default-src 'none'")
     expect(SKETCH_CSP).not.toContain('unsafe-eval')
     expect(SKETCH_CSP).not.toContain('https:')
+  })
+
+  it('WebRTC 守卫紧跟 CSP,先于文档里任何别的脚本', () => {
+    const doc = buildSketchDoc('<b>hi</b>')
+    const after = doc.slice(doc.indexOf('<head>') + '<head>'.length).replace(/^<meta[^>]*>/, '')
+    expect(after.startsWith('<script>/* 卡内的 WebRTC 封堵')).toBe(true)
+    expect(doc).toContain("'RTCPeerConnection'")
+  })
+
+  it('初始 HTML 里的 shadowrootmode 被剥掉(大小写不敏感),解析不出声明式 shadow 树', () => {
+    const doc = buildSketchDoc('<div><template ShadowRootMode="closed"></template></div>')
+    expect(doc.slice(doc.indexOf('<body>'))).toContain('data-shadowrootmode="closed"')
+    expect(doc.slice(doc.indexOf('<body>'))).not.toMatch(/[^-]shadowrootmode/i)
+    // 分隔符是 / 或紧贴上一个属性的引号时,解析器一样认
+    for (const html of ['<template/shadowrootmode=open>', '<template a="b"shadowrootmode=open>', '<template\nSHADOWROOTMODE\n=open>']) {
+      expect(buildSketchDoc(html).slice(buildSketchDoc(html).indexOf('<body>'))).not.toMatch(/[^-]shadowrootmode/i)
+    }
+  })
+
+  it('属性位置以外的 shadowrootmode 原样保留', () => {
+    const html = '<p>shadowrootmode</p><script>t.shadowRootMode; ({ shadowrootmode: 1 })</script><i data-shadowrootmode="x"></i>'
+    expect(buildSketchDoc(html)).toContain(html)
   })
 
   it('CSP meta 是 head 第一个元素(模型 HTML 只能收紧不能放松)', () => {
@@ -37,17 +64,98 @@ describe('sketch 包装器安全不变式', () => {
   })
 
   it('runs both raw bootstrap scripts without accidental IIFE chaining', () => {
-    const script = buildSketchDoc('').match(/<script>([\s\S]*?)<\/script>/)![1]
+    const script = [...buildSketchDoc('').matchAll(/<script>([\s\S]*?)<\/script>/g)][1][1] // 第一个是 sketchGuard
     const ready: Function[] = []
     const register = vi.fn()
     runInNewContext(script, {
-      window: { addEventListener() {} }, HTMLElement: class {},
+      window: { addEventListener() {} }, HTMLElement: class {}, HTMLFormElement: class {},
       document: { readyState: 'loading', addEventListener: (name: string, cb: Function) => { if (name === 'DOMContentLoaded') ready.push(cb) } },
       customElements: { get: () => undefined, define: register },
     })
     expect(ready).toHaveLength(2)
     ready[1]()
     expect(register.mock.calls.map(([name]) => name)).toEqual(['fs-chart', 'fs-flow', 'fs-compare', 'fs-choice', 'fs-checklist'])
+  })
+})
+
+describe('sketch 导航壳', () => {
+  it('壳的 CSP 只收紧 frame-src:别的指令会被卡片继承,self 又放行宿主地址', () => {
+    expect(SKETCH_SHELL_CSP).toBe("frame-src 'none'")
+    const shell = buildSketchShell('<p>card</p>')
+    expect(shell.indexOf('<meta http-equiv="Content-Security-Policy"')).toBe(shell.indexOf('<head>') + '<head>'.length)
+  })
+
+  it('子帧也带同一份 sandbox,卡片文档只出现在 srcdoc 属性里', () => {
+    const card = buildSketchDoc('<a href="x">a & b</a><script>"\'</script>')
+    const shell = buildSketchShell(card)
+    expect(shell).toContain(`<iframe sandbox="${SKETCH_SANDBOX}"`)
+    const srcdoc = shell.match(/srcdoc="([^"]*)"/)![1]
+    expect(srcdoc.replace(/&quot;/g, '"').replace(/&amp;/g, '&')).toBe(card)
+    expect(shell.slice(shell.indexOf('</iframe>'))).not.toContain('a &amp; b')
+  })
+
+  it('color-scheme 是半可信输入:闭合不了壳的 style', () => {
+    expect(buildSketchShell('', 'dark</style><script>alert(1)</script>')).not.toContain('</style><script>alert')
+  })
+})
+
+// 随包库(10-28,方案页 docs/ToBeImproved/IntelligentUI卡内库方案_2026-10-27):卡能 import three / d3 / chart.js / gsap,
+// 但仍然断网 —— 内层 CSP 相对基线只许多 script-src 一个来源,connect-src 一个字都不许出现。
+describe('sketch 随包库', () => {
+  const policyOf = (doc: string) => doc.match(/Content-Security-Policy" content="([^"]*)"/)![1]
+  const directives = (csp: string) => Object.fromEntries(csp.split(';').map((d) => d.trim().split(/\s+/)).map(([k, ...v]) => [k, v]))
+  const importMapOf = (doc: string) => JSON.parse(doc.match(/<script type="importmap">([^<]*)<\/script>/)?.[1] ?? 'null')
+  const onPlatform = (tangu: object | undefined, fn: () => void) => {
+    vi.stubGlobal('window', { tangu }); vi.stubGlobal('document', { baseURI: 'https://web.example/chat/s1' })
+    try { fn() } finally { vi.unstubAllGlobals() }
+  }
+  const expectOnlyExtraScriptSource = (doc: string, source: string) => {
+    const got = directives(policyOf(doc)), base = directives(SKETCH_CSP)
+    expect(got['script-src']).toEqual([...base['script-src'], source])
+    expect({ ...got, 'script-src': base['script-src'] }).toEqual(base)
+    expect(policyOf(doc)).not.toMatch(/connect-src|unsafe-eval|https:(?!\/\/web\.example\/iui-lib\/)/)
+  }
+
+  it('桌面:只多 forsion-iui:,importmap 指向应用自己的协议', () => {
+    onPlatform({}, () => {
+      const doc = buildSketchDoc('')
+      expectOnlyExtraScriptSource(doc, 'forsion-iui:')
+      expect(importMapOf(doc).imports.three).toBe('forsion-iui://lib/three@0.186/three.module.js')
+    })
+  })
+
+  it('网页:只多本站带路径的 /iui-lib/(不是整站、更不是 https:)', () => {
+    onPlatform({ cloudWeb: true }, () => {
+      const doc = buildSketchDoc('')
+      expectOnlyExtraScriptSource(doc, 'https://web.example/iui-lib/')
+      expect(importMapOf(doc).imports.d3).toBe('https://web.example/iui-lib/d3@7/d3.js')
+    })
+  })
+
+  it('手机原生包没带库:CSP 与今天逐字相同,没有 importmap', () => {
+    onPlatform({ mobile: true }, () => {
+      const doc = buildSketchDoc('')
+      expect(policyOf(doc)).toBe(SKETCH_CSP)
+      expect(importMapOf(doc)).toBeNull()
+    })
+  })
+
+  it('importmap 在封堵脚本之后、运行时和模型 HTML 之前;键正好是引擎说明里列的那几个', () => {
+    const doc = buildSketchDoc('<script type="module">import * as THREE from "three"</script>')
+    const [guard, runtime] = [...doc.matchAll(/<script>/g)].map((m) => m.index)
+    const map = doc.indexOf('<script type="importmap">')
+    expect(guard).toBeLessThan(map) // sketchGuard 必须是第一个脚本
+    expect(map).toBeLessThan(runtime)
+    expect(runtime).toBeLessThan(doc.indexOf('<script type="module">'))
+    expect(Object.keys(importMapOf(doc).imports).sort()).toEqual(['chart.js', 'chart.js/auto', 'd3', 'gsap', 'three', 'three/addons/'])
+  })
+
+  it('importmap 指的文件都已生成(build/copy-iui-libs.cjs 的目录名与这里一致)', async () => {
+    const { existsSync } = await import('node:fs')
+    for (const rel of Object.values(IUI_LIB_IMPORTS)) {
+      const p = new URL(`../../public/iui-lib/${rel}${rel.endsWith('/') ? 'controls/OrbitControls.js' : ''}`, import.meta.url)
+      expect(existsSync(p), rel).toBe(true)
+    }
   })
 })
 
@@ -114,6 +222,6 @@ describe('sketch 主题桥', () => {
     expect(doc).toContain('\\u003c/script>')
     expect(doc).not.toContain('__SKETCH_INITIAL_STATE__')
     expect(doc).toContain('$&\\u2028')
-    expect(doc.match(/<script>/g)).toHaveLength(1)
+    expect(doc.match(/<script>/g)).toHaveLength(2) // sketchGuard + 运行时,状态值没有多拼出一个
   })
 })

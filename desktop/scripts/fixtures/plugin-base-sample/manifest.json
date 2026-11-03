@@ -1,0 +1,10 @@
+{
+  "id": "plugin-base-sample",
+  "name": "插件基础样式样例",
+  "nameEn": "Plugin base look sample",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "description": "只写裸 button / input / table / 标题的视图,和一个第一次挂载就抛错的视图。由 scripts/plugin-base-shots.cjs 驱动。",
+  "descriptionEn": "A view written with bare button / input / table / headings only, and a view whose first mount throws. Driven by scripts/plugin-base-shots.cjs.",
+  "main": "main.js"
+}

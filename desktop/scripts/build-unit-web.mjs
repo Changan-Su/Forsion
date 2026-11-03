@@ -58,6 +58,10 @@ if (!existsSync(rootNodeModules)) {
   console.log(`[build-unit-web] 仓根临时软链 node_modules → web/node_modules(构建后拆除)`)
 }
 
+// Intelligent UI 卡的随包库进 web/public(不入库;这里直接调 vite,不经 web 的 prepare-assets)
+const libs = spawnSync(process.execPath, [resolve(desktopRoot, 'build/copy-iui-libs.cjs'), '--out', 'public/iui-lib'], { cwd: webRoot, stdio: 'inherit' })
+if (libs.status !== 0) process.exit(libs.status ?? 1)
+
 console.log(`[build-unit-web] vite build --base=./ → ${outDir}`)
 const r = runTool('npx', ['vite', 'build', '--base=./', '--outDir', outDir, '--emptyOutDir'], {
   cwd: webRoot,

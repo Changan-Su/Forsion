@@ -23,9 +23,13 @@ interface RunCtx {
   displayAgentSlug?: string;
   /** 本 run 的工作目录(host 模式;项目级技能 <cwd>/.forsion/skills 据此扫描)。 */
   cwd?: string;
+  /** Bound by runLoop from the already loaded run row, never from a provider payload. */
+  sessionId?: string;
+  remote?: boolean;
 }
 
 const als = new AsyncLocalStorage<RunCtx>();
+const requestOrigin = new AsyncLocalStorage<boolean>();
 // ⚠️ 模块加载时就启用(Node < 24 的 ALS 基于 async_hooks,首次 run/enterWith 才装钩子):懒启用时,钩子装上之前
 // 建好的 promise 不受追踪,续延跑在进程级兜底资源(eid 0)上 —— 第一个 run 的 enterRunContext 就把它的
 // {userId, runId, clientTag} 写进了兜底资源,之后顶层代码与开机就起的长跑循环(渠道轮询、TUI)都会读到它,
@@ -46,11 +50,13 @@ export function enterRunContext(
   clientTag?: string,
 ): void {
   const prev = als.getStore();
+  const sameRun = !!runId && runId === prev?.runId && userId === prev?.userId;
   als.enterWith({
     userId,
     runId,
     agentSlug,
     displayAgentSlug: displayAgentSlug ?? agentSlug,
+    ...(sameRun ? { sessionId: prev?.sessionId, remote: prev?.remote } : {}),
     // 同一 run 解析 agentSlug 时会再次 enter；未显式覆盖就保留已解析出的客户端标签。
     // 只在同一个 run 内沿用(runId 相同,或不指定 runId 的作用域细化如 Historian):排队接力的下一个 run 是在
     // 上一个 run 的收尾上下文里起的,不能继承它的标签(外部引擎 loop 之后不再设 client,会一直带着)。
@@ -88,6 +94,29 @@ export function setRunCwd(cwd?: string): void {
 /** 当前 run 的 cwd(项目级技能扫描用;非 host / 不在 run 内 → undefined)。 */
 export function currentRunCwd(): string | undefined {
   return als.getStore()?.cwd;
+}
+
+/** Trusted runLoop only: attach identity from its loaded row and normalized origin. */
+export function setRunSessionContext(sessionId: string, remote: boolean): void {
+  const s = als.getStore();
+  if (s?.runId && s.userId) als.enterWith({ ...s, sessionId, remote });
+}
+
+export function currentRunSessionId(): string | undefined {
+  return als.getStore()?.sessionId;
+}
+
+export function currentRunIsRemote(): boolean {
+  return als.getStore()?.remote === true;
+}
+
+/** HTTP-only origin, separate from run identity so inline/background calls carry no fake session. */
+export function runWithRemoteRequest<T>(remote: boolean, fn: () => T): T {
+  return requestOrigin.run(remote, fn);
+}
+
+export function currentRequestIsRemote(): boolean {
+  return requestOrigin.getStore() === true;
 }
 
 /** 当前 run 激活的 agent slug(本地记忆层据此选 agent 文件夹;不在 run 上下文内时 undefined)。 */

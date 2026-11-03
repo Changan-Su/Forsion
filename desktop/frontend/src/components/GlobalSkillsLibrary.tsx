@@ -13,6 +13,7 @@ import { EmptyState } from './EmptyState'
 import './globalSkillsLibrary.css'
 import { homeTarget } from '../services/engine/targets'
 import { SkillUninstallDialog } from './UninstallDialog'
+import { agentName } from '../agentName'
 
 registerMessages({
   'globalSkills.title': { zh: '全局技能', en: 'Global skills' },
@@ -242,7 +243,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
       await run(async () => { const imported = await importSkillCatalogEntry(homeTarget(), { scope: 'user', sourcePath: draft.sourcePath, ...(draft.slug.trim() ? { slug: draft.slug.trim() } : {}) }); setSelected({ kind: 'catalog', key: imported.key }) }, t('globalSkills.imported'))
     } else {
       if (draft.target === 'agent' && !draft.agentSlug) return
-      const targetName = draft.target === 'user' ? t('globalSkills.mine') : agents.find((a) => a.slug === draft.agentSlug)?.name || draft.agentSlug
+      const targetName = draft.target === 'user' ? t('globalSkills.mine') : agentName(agents.find((a) => a.slug === draft.agentSlug)) || draft.agentSlug
       await run(async () => {
         const copied = await copySkillCatalogEntry(homeTarget(), draft.key, { scope: draft.target, ...(draft.target === 'agent' ? { agentSlug: draft.agentSlug } : {}), ...(draft.slug.trim() ? { slug: draft.slug.trim() } : {}) })
         if (draft.target === 'user') setSelected({ kind: 'catalog', key: copied.key })
@@ -317,7 +318,7 @@ export function GlobalSkillsLibrary({ cfg, localHost, initialSkillKey, onImportC
               <p>{t('globalSkills.bodyHint')}</p>
             </>}
             {editor.kind === 'import' && <><p>{t('globalSkills.importHint')}</p><label>{t('globalSkills.sourceFolder')}<input value={editor.sourcePath} readOnly /></label><label>{t('globalSkills.slugOverride')}<input value={editor.slug} onChange={(e) => setEditor({ ...editor, slug: e.target.value })} placeholder={t('globalSkills.slugHint')} /></label></>}
-            {editor.kind === 'copy' && <>{editor.target === 'agent' && (agents.length ? <label>{t('globalSkills.chooseAgent')}<select value={editor.agentSlug} onChange={(e) => setEditor({ ...editor, agentSlug: e.target.value })}>{agents.map((agent) => <option key={agent.slug} value={agent.slug}>{agent.name}</option>)}</select></label> : <p>{t('globalSkills.noAgent')}</p>)}<label>{t('globalSkills.slugOverride')}<input value={editor.slug} onChange={(e) => setEditor({ ...editor, slug: e.target.value })} placeholder={t('globalSkills.slugHint')} /></label></>}
+            {editor.kind === 'copy' && <>{editor.target === 'agent' && (agents.length ? <label>{t('globalSkills.chooseAgent')}<select value={editor.agentSlug} onChange={(e) => setEditor({ ...editor, agentSlug: e.target.value })}>{agents.map((agent) => <option key={agent.slug} value={agent.slug}>{agentName(agent)}</option>)}</select></label> : <p>{t('globalSkills.noAgent')}</p>)}<label>{t('globalSkills.slugOverride')}<input value={editor.slug} onChange={(e) => setEditor({ ...editor, slug: e.target.value })} placeholder={t('globalSkills.slugHint')} /></label></>}
             <div className="gsk-form-actions"><button className="btn primary sm" type="button" disabled={busy || (editor.kind === 'copy' && (editor.target === 'agent' && !editor.agentSlug || editor.target === 'user' && !editor.slug.trim())) || (editor.kind === 'create' && (!editor.name.trim() || !editor.description.trim() || !editor.slug.trim() || !editor.content.trim())) || (editor.kind === 'edit' && (!editor.name.trim() || !editor.description.trim() || !editor.content.trim()))} onClick={() => void saveEditor()}>{busy && <Loader2 size={13} className="spin" />}{t(editor.kind === 'import' ? 'globalSkills.importAction' : editor.kind === 'copy' ? 'globalSkills.copyAction' : 'globalSkills.save')}</button><button className="btn ghost sm" type="button" onClick={() => setEditor(null)}>{t('globalSkills.cancel')}</button></div>
           </div>
         </> : selectedCatalog ? <>

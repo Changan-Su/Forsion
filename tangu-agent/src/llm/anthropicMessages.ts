@@ -225,6 +225,8 @@ export function openaiToAnthropicBody(payload: any): any {
   }
   // 思考开时 Anthropic 拒 temperature≠1,索性不发。
   if (!thinkOn && typeof payload.temperature === 'number') body.temperature = payload.temperature;
+  // Fast 档(multiBrain 只对官方 api.anthropic.com + 支持的模型写)。注意 fast 与标准档不共用提示缓存。
+  if (payload.speed === 'fast') body.speed = 'fast';
   if (payload[PROTOCOL_MARK] === 'anthropic-messages') applyCacheBreakpoints(body);
   return body;
 }

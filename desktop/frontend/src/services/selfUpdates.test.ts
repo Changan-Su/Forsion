@@ -23,6 +23,25 @@ describe('memory receipts', () => {
     expect(memoryChanges([event(receipt({ action: 'update' }))])[0].action).toBe('update')
     expect(memoryChanges([event(receipt({ action: 'forget', entry: undefined, id: 'm-9' }))])).toEqual([{ callId: 'call-1', action: 'forget', scope: 'agent', entryId: 'm-9', content: '' }])
   })
+  it('reads portrait writes (scope person) like any other memory row', () => {
+    const person = receipt({ scope: 'person', version: 'a1b2c3d4e5f6', entry: { id: 'p0123456789', content: 'Call them Lin.' }, chars: 40, limit: 2000 })
+    expect(memoryChanges([event(person)])).toEqual([{ callId: 'call-1', action: 'add', scope: 'person', entryId: 'p0123456789', content: 'Call them Lin.' }])
+    expect(memoryChanges([event(receipt({ scope: 'person', action: 'forget', entry: undefined, id: 'p0123456789' }))])).toEqual([{ callId: 'call-1', action: 'forget', scope: 'person', entryId: 'p0123456789', content: '' }])
+    expect(memoryChanges([event(receipt({ scope: 'person', duplicate: true }))])).toEqual([]) // 画像里本来就有这一句:没写,不出行
+  })
+  it('keeps where a cross-scope rewrite came from, so undo can put the earlier sentence back', () => {
+    const moved = receipt({ action: 'update', scope: 'person', entry: { id: 'p1', content: 'Call them Lin.' }, moved: { from: 'agent', id: 'm-3', content: 'The user wants to be called Master.' } })
+    expect(memoryChanges([event(moved)])).toEqual([{ callId: 'call-1', action: 'update', scope: 'person', entryId: 'p1', content: 'Call them Lin.', moved: { from: 'agent', id: 'm-3', content: 'The user wants to be called Master.' } }])
+    const fromProject = receipt({ action: 'update', scope: 'agent', entry: { id: 'm-4', content: 'x' }, moved: { from: 'project', id: 'q-1', content: 'y', project: 'Forsion' } })
+    expect(memoryChanges([event(fromProject)])[0].moved).toEqual({ from: 'project', id: 'q-1', content: 'y', project: 'Forsion' })
+    expect(memoryChanges([event(receipt({ action: 'update', scope: 'person', duplicate: true, entry: { id: 'p1', content: 'Call them Lin.' }, moved: { from: 'agent', id: 'm-3', content: 'old' } }))])[0].moved?.targetExisted).toBe(true) // 目标已有同一句:出行,但撤销不许删它
+  })
+  it('drops a malformed moved but keeps the rewrite row', () => {
+    const bad = (moved: unknown) => memoryChanges([event(receipt({ action: 'update', scope: 'person', entry: { id: 'p1', content: 'c' }, moved }))])
+    for (const m of [{ from: 'global', id: 'm', content: 'x' }, { from: 'person', id: 'm', content: 'x' }, { from: 'agent', id: '', content: 'x' }, { from: 'agent', id: 'm' }, 'agent', null]) {
+      expect(bad(m)).toEqual([{ callId: 'call-1', action: 'update', scope: 'person', entryId: 'p1', content: 'c' }])
+    }
+  })
   it('ignores what did not write: duplicates, list, errors, plain-text receipts, unfinished and foreign calls', () => {
     expect(memoryChanges([
       event(receipt({ duplicate: true })),

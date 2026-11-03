@@ -18,6 +18,65 @@ describe('rankIds', () => {
   })
 })
 
+describe('配方 ribbon.after:新图标排在锚点后面', () => {
+  beforeEach(reset)
+  const add = (id: string, after?: string): void => useRibbonStore.getState().addRibbonIcon({ id, side: 'top', ...(after ? { after } : {}) })
+  const shown = (): string[] => { const s = useRibbonStore.getState(); return rankIds(s.items.map((i) => i.id), s.order) }
+
+  it('没摆过顺序:紧跟锚点,不写持久顺序(以后内置 Space 调序照样生效)', () => {
+    for (const id of ['space:home', 'space:tangu', 'space:amadeus']) add(id)
+    add('space:plug', 'space:tangu')
+    expect(shown()).toEqual(['space:home', 'space:tangu', 'space:plug', 'space:amadeus'])
+    expect(useRibbonStore.getState().order).toEqual([])
+  })
+
+  it('用户摆过顺序:只插这一个,其余一动不动', () => {
+    useRibbonStore.setState({ order: ['space:amadeus', 'space:tangu', 'space:home'] })
+    for (const id of ['space:home', 'space:tangu', 'space:amadeus']) add(id)
+    add('space:plug', 'space:tangu')
+    expect(useRibbonStore.getState().order).toEqual(['space:amadeus', 'space:tangu', 'space:plug', 'space:home'])
+    expect(shown()).toEqual(['space:amadeus', 'space:tangu', 'space:plug', 'space:home'])
+  })
+
+  it('用户把它拖到别处之后,每次启动再注册也不挪回去', () => {
+    useRibbonStore.setState({ order: ['space:plug', 'space:amadeus', 'space:tangu'] })
+    for (const id of ['space:tangu', 'space:amadeus']) add(id)
+    add('space:plug', 'space:tangu')
+    expect(useRibbonStore.getState().order).toEqual(['space:plug', 'space:amadeus', 'space:tangu'])
+    expect(shown()[0]).toBe('space:plug')
+  })
+
+  it('用户把它收进夹子:不从夹子里拽出来', () => {
+    useRibbonStore.setState({ order: ['space:tangu', 'folder:x'], folders: [{ id: 'folder:x', name: 'x', zone: 'top', items: ['space:plug'] }] })
+    add('space:tangu')
+    add('space:plug', 'space:tangu')
+    expect(useRibbonStore.getState().order).toEqual(['space:tangu', 'folder:x'])
+  })
+
+  it('锚点不在:排到末尾,顺序不动', () => {
+    useRibbonStore.setState({ order: ['space:home'] })
+    add('space:home')
+    add('space:plug', 'space:gone')
+    expect(useRibbonStore.getState().order).toEqual(['space:home'])
+    expect(shown()).toEqual(['space:home', 'space:plug'])
+  })
+
+  it('卸载后重装:按新图标重新排', () => {
+    useRibbonStore.setState({ order: ['space:tangu', 'space:plug', 'space:home'] })
+    useRibbonStore.getState().removeRibbonIcon('space:plug')
+    add('space:plug', 'space:home')
+    expect(useRibbonStore.getState().order).toEqual(['space:tangu', 'space:home', 'space:plug'])
+  })
+
+  it('不写 after 的图标照旧追加', () => {
+    useRibbonStore.setState({ order: ['space:home'] })
+    add('space:home')
+    add('space:plug')
+    expect(useRibbonStore.getState().order).toEqual(['space:home'])
+    expect(useRibbonStore.getState().items.map((i) => i.id)).toEqual(['space:home', 'space:plug'])
+  })
+})
+
 describe('reorderBase (codex#2: 保住异步未加载项)', () => {
   it('持久序里当前不可见的 id 不被抹掉', () => {
     // space:user 还没加载(visible 只有 tangu),拖动 tangu 不能丢 user 的存档位

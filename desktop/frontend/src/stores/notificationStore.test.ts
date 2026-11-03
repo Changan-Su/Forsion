@@ -86,6 +86,17 @@ describe('notificationStore', () => {
     expect(items[0].count).toBe(2)
   })
 
+  it('settle:原地换成结果,计数回 1、拿掉动作钮', () => {
+    const run = (): void => {}
+    const a = notifyApp({ text: '已删除', dedupeKey: 'u', action: { label: '撤销', run } })
+    notifyApp({ text: '已删除', dedupeKey: 'u', action: { label: '撤销', run } })
+    const b = notifyApp({ text: '已撤销', dedupeKey: 'u', action: undefined, durationMs: 1200, settle: true })
+    expect(b).toBe(a)
+    const [n] = useNotifications.getState().items
+    expect(n).toMatchObject({ text: '已撤销', count: 1, settle: true, durationMs: 1200 })
+    expect(n.action).toBeUndefined()
+  })
+
   it('同屏上限 4 条,溢出排队,关掉顶上补位', () => {
     for (let i = 0; i < 6; i++) notifyApp({ text: `n${i}`, level: 'error' })
     let st = useNotifications.getState()

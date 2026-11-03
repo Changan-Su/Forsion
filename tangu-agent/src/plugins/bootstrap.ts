@@ -4,6 +4,8 @@ import { tanguHome } from '../core/tanguHome.js';
 import { createPluginRuns, pluginEngines } from './runs.js';
 import { createPluginWorkspaces } from './workspaces.js';
 import { createPluginAutomation } from './automation.js';
+import { registerPluginSkillProvider } from '../skills/pluginSkills.js';
+import { registerPluginModelProvider } from '../llm/pluginModels.js';
 import { authMiddleware } from '../core/http.js';
 import path from 'node:path';
 /**
@@ -155,6 +157,15 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       providerOwner.set(p.id, id);
       registerToolProvider({ ...p, origin: 'plugin', official }); // 全局注册表,append 在核心 builtin 之后;打 plugin 标(chat 正向面只认核心 provider)
     },
+    registerSkillProvider: (provider) => {
+      if (!live('技能')) return;
+      inst.runtimeDisposers.push(registerPluginSkillProvider(id, provider));
+    },
+    registerModelProvider: (provider) => {
+      if (!live('模型来源')) return;
+      if (!deps().profile.capabilities.hostExec) throw new Error('Plugin model providers require a local engine');
+      inst.runtimeDisposers.push(registerPluginModelProvider(id, provider));
+    },
     // folder 插件进统一注册表；图标只信宿主读到的包根 icon.png。
     // 捆绑包内嵌的引擎插件默认跟随捆绑包(桌面上捆绑包缺省即启用,且只给捆绑包一个开关、拨动时级联):
     // 它自报的 defaultEnabled:false 在产品里没有任何打开入口,只会造成「卡片开着、工具一个没有」——
@@ -209,10 +220,16 @@ function makeContext(d: DiscoveredPlugin, inst: Instance, official = false): Tan
       if (inst.activated) mountRoutes(id, inst);
     },
     registerChannel: (spec) => {
-      if (live('通道')) inst.runtimeDisposers.push(channelHub.registerChannel(spec)); // 停用时 stopEntry 跑 runtimeDisposers 摘掉
+      // owner 取发现目录(同 registerScopedRoutes),不信插件自报。停用时 stopEntry 跑 runtimeDisposers 摘掉。
+      if (live('通道')) inst.runtimeDisposers.push(channelHub.registerChannel(spec, { engine: id, bundle: d.bundled ? path.basename(path.dirname(path.dirname(d.dir))) : null }));
     },
+    channelCapabilities: { multiPeer: true, agentPin: true, sendApproval: true },
     sdk: { ...sdk, runs: { ...runs, start: p => runs.start({ ...p, ...(p.toolNames ? { toolNames: p.toolNames.map(translateTool) } : {}) }) }, engines: pluginEngines,
-      automation: { ...automation, save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }) },
+      automation: {
+        ...automation,
+        save: (key, input) => automation.save(key, { ...input, tool: translateTool(input.tool) }),
+        registerTrigger: (spec) => { const off = automation.registerTrigger(spec); inst.runtimeDisposers.push(off); return off; }, // 停用时 stopEntry 注销
+      },
       workspaces: createPluginWorkspaces(id, path.join(tanguHome(), 'plugin-data', id), () => !inst.disposed) },
     // 只有官方插件(签名捆绑包,./official.ts)有这个键;其余插件的 ctx 上根本没有它(不是一个返回错误的空壳)。
     ...(official ? { cloud: createOfficialCloud(() => !inst.disposed) } : {}),
@@ -590,7 +607,7 @@ function attachHostRouters(r: PluginRouters): void {
  * 只有激活后才知道,所以照旧先全部激活一次,再收敛:未启用或前置没齐的立即 deactivate 休眠。
  * 返回把插件路由接到三组 router 的函数——**须在 `createTanguModule` 之后调用**（彼时 `configureTangu`/`deps()` 才就绪;
  * 路由挂载器内部可能读 `deps()`）。之后运行期激活的插件路由经分发器即时生效,不再需要重启。
- * tool provider 注册是无状态的静态写入，先于 createTanguModule 也安全。
+ * standalone/TUI 先 createTanguModule 再激活:模型来源等注册需要真实 host/profile 做能力校验。
  */
 export async function activateAllPlugins(onActivate?: (id: string) => void): Promise<(r: PluginRouters) => void> {
   await serial(async () => {

@@ -4,6 +4,9 @@
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
 import { leaseAccountResponse } from './accountResponse'
+import { pushMobileBack } from '../lib/mobileBack'
+import { desktopAccount } from './desktopAccount'
+import { readEntitlement } from './entitlement'
 import { setPluginViewHead, setPluginViewModes } from './pluginViewModes'
 import { registerFont as registerHostFont } from '../../fontPresets'
 import { registerAppearance, clearPluginAppearance, useAppearance } from '../../appearance/store'
@@ -14,7 +17,7 @@ import { registerAppearance, clearPluginAppearance, useAppearance } from '../../
 import { create } from 'zustand'
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { pluginHostPath } from './hostPaths'
-import { pluginRequestPath, type PluginRequestOptions } from './engineRequest'
+import { ownedChannelPatch, pluginRequestPath, type ChannelOwnership, type PluginRequestOptions } from './engineRequest'
 import { request as engineJsonRequest } from '../../services/backendService'
 
 /** window.tangu,在没有 window 的环境(vitest node 环境、云端 worker)返回 undefined 而不是抛 ReferenceError。 */
@@ -52,17 +55,17 @@ import { defineMessages, hostListSource, isPluginText, pluginText } from './plug
 import { checkPluginIcon, pluginIconElement } from './pluginIcon'
 import { pluginListEmpty, setHostListEmpty } from '../../views/hostListEmpty'
 import { createDropIndicator, land as landDrop, landCancel, landWhenMoved } from '@lcl/engine/dropIndicator'
-import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, nativeChromeInstalled } from '@lcl/engine'
+import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, listFirstNow, nativeChromeInstalled, useWorkspace } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
-import { getMuseTriggers, listPlugins, patchInboxMessage, postInboxMessage, saveMuseTrigger, setPluginEnabled } from '../../services/backendService'
+import { emitAutomationTrigger, getMuseTriggers, listPlugins, patchInboxMessage, postInboxMessage, registerAutomationTrigger, saveMuseTrigger, setPluginEnabled, unregisterAutomationTrigger } from '../../services/backendService'
 import { buildPluginTriggerUpserts, isPluginOwnedRule, normalizeVaultRel } from './pluginAutomation'
 import { MUTATE_DB_RETRIES, mutateDbCas, mutateHumanCalendar } from './pluginDb'
 import { useDbStore } from '../store/dbStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
 import { createDatabasesApi, createNoteTasksApi, pluginDatabasePath } from './pluginData'
-import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pushPluginData, type LocalData } from './pluginDataSync'
+import { loadSyncedPluginData, notePluginDataEdit, pluginDataSyncOn, pluginSyncSnapshot, pushPluginData, type LocalData } from './pluginDataSync'
 import { createCalendarApi } from './pluginCalendar'
 import { createCalendarEventsApi } from './pluginCalendarEvents'
 import { createSpacesApi } from './pluginSpaces'
@@ -70,6 +73,7 @@ import { clearSpaceProgressOf, setSpaceDot, setSpaceProgress } from '../../store
 import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSync, startSyncSetup, subscribeSync } from '../../services/syncSetup'
 import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
+import { registerGuideTips, requestTip, tipState, unregisterGuideTips } from './guideTips'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
 import { getAggDb } from '../store/dbAggregateStore'
@@ -98,6 +102,7 @@ import type {
   ViewContribution,
   ListSourceContribution,
   PluginAutomationRule,
+  PluginAutomationTrigger,
   TableSpec,
   PluginViewLocation,
 } from './types'
@@ -108,6 +113,7 @@ import { createEffectScope, type EffectRecord, type EffectScope } from './effect
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
 import { windowKind } from '../../windowKind'
+import { addRibbonAction } from './ribbonAction'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
 import { connectionTarget, homeTarget } from '../../services/engine/targets'
@@ -131,6 +137,8 @@ export const PLUGIN_ENABLE_STAMP_KEY = 'amadeus.plugins.enableStamp'
 /** 主窗欠这些捆绑包内嵌引擎插件一个 true:宿主自己关掉的(父插件被关 / 在等前置),或用户明确开了捆绑包。
  *  父插件跑起来时**只**补开这些 —— 用户在别处(TUI / CLI)关掉的不在里面,不会被翻回来(Codex 10-02)。只主窗读写。 */
 const OWED_KEY = 'amadeus.plugins.bundleEngineOwed'
+/** 规则还没停用成功的插件(pendingDisable 的落盘那份):引擎不在时卸载,关掉 App 再开,没这份就没人记得要关,规则一直跑。 */
+const RULES_OWED_KEY = 'amadeus.plugins.rulesOwed'
 
 /** 外置插件来源:**unit 设备页**(B 端渲染,方案 §11.4 —— 本页就是某台设备曝出来的网页)从该设备的
  *  `unit/plugins` 面拉(相对 base:局域网直连与 server 隧道子路径同一写法);其余环境走
@@ -252,7 +260,7 @@ export function pluginVaultFolder(pluginId: string, name: string): string | null
   return (custom ? [v] : [`${PLUGINS_ROOT}/${sanitizeFolderName(name, pluginId)}`, defaultWorkFolder(pluginId)]).find((f) => folders.includes(f)) ?? null
 }
 
-/** 卸载时插件存在 localStorage 里的偏好(`plugin.<id>.*`)的快照,交给回收站、恢复时原样写回;卸载成功后再 dropPluginPrefs 摘掉。 */
+/** 卸载时插件存在 localStorage 里的偏好(`plugin.<id>.*` + 同步状态与开关)的快照,交给回收站、恢复时原样写回;卸载成功后再 dropPluginPrefs 摘掉。 */
 export function pluginPrefs(pluginId: string): Record<string, string> {
   const out: Record<string, string> = {}
   try {
@@ -261,7 +269,7 @@ export function pluginPrefs(pluginId: string): Record<string, string> {
       if (k?.startsWith(`plugin.${pluginId}.`)) out[k] = localStorage.getItem(k) ?? ''
     }
   } catch { /* 存储不可用:没有可摘的 */ }
-  return out
+  return { ...out, ...pluginSyncSnapshot(pluginId) }
 }
 export function dropPluginPrefs(prefs: Record<string, string>): void {
   for (const k of Object.keys(prefs)) try { localStorage.removeItem(k) } catch { /* ignore */ }
@@ -412,6 +420,7 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   // 文件订阅与语言订阅同一条纪律:插件自己能退订,但最终责任人是宿主 —— 停用时统一收掉,
   // 否则被禁用的插件还在被外部改动唤醒(它的回调里往往就是一次 readFile + 重建内部状态)。
   const fileUnsubs = new Set<() => void>()
+  const ribbonActions = new Set<() => void>()
   const api: PluginAppApi = {
     // 两条路由通用(v4 不设 activePage;正文也不进 store —— 一律取块表面那份统一派生,别再各写各的)。
     getActivePage: () => noteOf(usePageStore.getState()),
@@ -610,6 +619,13 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     // Ribbon 上自己那个 Space 图标的进度环(2026-10-18,蓬洲云传文件):只认这个插件自己带的 Space;拆插件时 teardown 收掉
     setSpaceProgress: (spaceId, progress) => (ok() && typeof spaceId === 'string' ? setSpaceProgress(pluginId, spaceId, progress) : false),
     setSpaceDot: (spaceId, on) => (ok() && typeof spaceId === 'string' ? setSpaceDot(pluginId, spaceId, on) : false),
+    // Ribbon 下区一格(2026-10-31,活动中心):同 runCommand 只给首方包;插件停用时 revokeSurface 收掉
+    registerRibbonAction: (opts) => {
+      if (!ok() || !opts || !usePluginStore.getState().plugins.find((p) => p.id === pluginId)?.locked) return () => {}
+      const off = addRibbonAction(opts)
+      ribbonActions.add(off)
+      return () => { ribbonActions.delete(off); off() }
+    },
     // 同步总开关(2026-10-20,蓬洲云「同步」页):只给首方包(同 spotlight 认 locked)、只在有本地库远程同步的桌面
     ...(typeof window !== 'undefined' && window.remoteSync && !hostTangu()?.mobile ? { sync: syncSeam(pluginId, ok) } : {}),
     // 自己弹出来的弹窗排队(2026-10-19,Extend 公告):同一时间只露一个,插件排在宿主的协议更新 / What's new 后面;停用时 teardown 收掉
@@ -618,7 +634,10 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
       if (!ok()) return false
       const [{ parseDeepLink }, { resolveDeepLink }] = await Promise.all([import('../../deepLinkPlan'), import('../../deepLinkInstall')])
       const intent = parseDeepLink(String(url ?? ''))
-      return intent ? resolveDeepLink(intent).catch(() => false) : false
+      if (!intent) return false
+      // 浮窗里 resolveDeepLink 不落地(deep link 只在主窗):转给主窗,这里只知道发出去了
+      if (windowKind() !== 'main' && hostTangu()?.requestMainAction) { hostTangu()?.requestMainAction?.('open-link', String(url)); return true }
+      return resolveDeepLink(intent).catch(() => false)
     },
     // 在系统文件管理器里定位库内路径(2026-08-29+)。桥缺席时**整条方法不挂**,同 watchFile 的
     // 纪律 —— 挂个空壳会让插件的「有这个方法就画按钮」分支画出一颗点了没反应的按钮。
@@ -668,6 +687,8 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
   return {
     api,
     revokeSurface: () => {
+      ribbonActions.forEach((off) => off())
+      ribbonActions.clear()
       alive = false
       surface.revoke()
       for (const u of Array.from(fileUnsubs)) {
@@ -709,19 +730,22 @@ function writeDisabled(ids: string[]): void {
 
 /** 读持久化的禁用插件 id(直读 localStorage,不依赖 store 是否已 init)。
  *  供 userSpaces 在启动装载时过滤「被禁用插件的内嵌 Space」——那一刻插件宿主可能还没装配。 */
-function readOwed(): Set<string> {
+function readOwed(key = OWED_KEY): Set<string> {
   try {
-    return new Set(JSON.parse(localStorage.getItem(OWED_KEY) || '[]') as string[])
+    return new Set(JSON.parse(localStorage.getItem(key) || '[]') as string[])
   } catch {
     return new Set()
   }
 }
-// ponytail: 同步读改写,绝不跨 await 攥着旧副本;只主窗写,没有跨窗口竞写。
-function editOwed(fn: (owed: Set<string>) => void): void {
-  const owed = readOwed()
+// ponytail: 同步读改写,绝不跨 await 攥着旧副本;没变化不写,start 销账才不会拿旧副本盖掉别的窗口刚记的。
+//   两窗同一拍都改了才会丢一条;要根治就让主进程当唯一写者。
+function editOwed(fn: (owed: Set<string>) => void, key = OWED_KEY): void {
+  const owed = readOwed(key)
+  const before = owed.size
   fn(owed)
+  if (owed.size === before) return
   try {
-    localStorage.setItem(OWED_KEY, JSON.stringify([...owed]))
+    localStorage.setItem(key, JSON.stringify([...owed]))
   } catch {
     /* ignore */
   }
@@ -778,10 +802,12 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     minAppVersion: src.minAppVersion,
     requiresApp: src.requiresApp,
     requiresPlugins: src.requiresPlugins,
+    entitlement: src.entitlement,
     capabilities: src.capabilities,
     readme: src.readme,
     changelog: src.changelog,
     onboarding: src.onboarding,
+    guide: src.guide,
     blocked: src.blocked,
     blockedReason: src.blockedReason,
     isDesktopOnly: src.isDesktopOnly,
@@ -944,7 +970,7 @@ export interface PluginDisableState {
   /** 正在飞(原始 disable 或重放尚未结束)→ 边沿来了也不叠一次。 */
   pending: boolean
 }
-// ponytail: 墓碑住内存,重启即丢 —— 落 localStorage + 装配时重放是下一步,本轮先把就绪边沿这条路接上。
+// 只看本次运行;跨重启那份在 RULES_OWED_KEY,主窗 loadExternal 后重放。
 const pendingDisable = new Map<string, PluginDisableState>()
 /** 非 null = 这个插件的自动化规则**还没停用**(供设置页/排障露出;与 getPluginEnsureState 同一条路)。 */
 export function getPluginDisableState(pluginId: string): PluginDisableState | null {
@@ -979,10 +1005,71 @@ function ensureReadySubscription(): void {
   readySub = { probe, off: probe.subscribeReady(onBackendReadyEdge) }
 }
 
+/** 渲染层插件登记的触发源(引擎只放内存,后端重启后在就绪边沿补登)。只主窗登记:别的窗口拆插件不该注销主窗的。 */
+const liveTriggers = new Map<string, Map<string, PluginAutomationTrigger>>()
+// 插件重载 = 注销 + 登记,乱序就成了登记完又被注销:同一条链上发。
+let triggerOps: Promise<unknown> = Promise.resolve()
+function triggerOp<T>(send: (target: ReturnType<typeof connectionTarget>) => Promise<T>): Promise<T | null> {
+  const op = async (): Promise<T | null> => {
+    const cfg = (await readTangu()?.waitBackend?.(ENSURE_WAIT_MS)) ?? null
+    return cfg ? send(connectionTarget(cfg)) : null
+  }
+  const next = triggerOps.then(op, op)
+  triggerOps = next.catch(() => {})
+  return next
+}
+
+// 没注销成的(后端没起来 / 请求失败):源还在引擎里,规则就不会暂停。下次就绪边沿补;再登记回来就不欠了。
+const owedTriggerDrops = new Set<string>()
+const dropKey = (pluginId: string, key: string): string => JSON.stringify([pluginId, key])
+
+function sendTriggerDrop(pluginId: string, key: string): void {
+  const owed = dropKey(pluginId, key)
+  owedTriggerDrops.add(owed)
+  void triggerOp((target) => unregisterAutomationTrigger(target, pluginId, key))
+    .then((r) => { if (r) owedTriggerDrops.delete(owed) })
+    .catch((e) => console.warn(`[amadeus] plugin "${pluginId}" 注销触发源失败`, e))
+}
+
+async function registerPluginTrigger(pluginId: string, trigger: PluginAutomationTrigger): Promise<{ ok: boolean; error?: string }> {
+  if (windowKind() !== 'main') return { ok: true }
+  ensureReadySubscription()
+  owedTriggerDrops.delete(dropKey(pluginId, trigger.id))
+  const mine = liveTriggers.get(pluginId) ?? new Map<string, PluginAutomationTrigger>()
+  mine.set(trigger.id, trigger)
+  liveTriggers.set(pluginId, mine)
+  try {
+    return (await triggerOp((target) => registerAutomationTrigger(target, pluginId, trigger))) ? { ok: true } : { ok: false, error: 'engine not ready' }
+  } catch (e) {
+    return { ok: false, error: errMsg(e) }
+  }
+}
+
+function dropPluginTriggers(pluginId: string): void {
+  const mine = liveTriggers.get(pluginId)
+  liveTriggers.delete(pluginId)
+  for (const key of mine?.keys() ?? []) sendTriggerDrop(pluginId, key)
+}
+
+function emitPluginTrigger(pluginId: string, key: string, payload?: Record<string, unknown>): void {
+  void triggerOp((target) => emitAutomationTrigger(target, pluginId, key, payload)).catch((e) => console.warn(`[amadeus] plugin "${pluginId}" 触发事件失败`, e))
+}
+
+function replayPluginTriggers(): void {
+  for (const owed of [...owedTriggerDrops]) {
+    const [pluginId, key] = JSON.parse(owed) as [string, string]
+    sendTriggerDrop(pluginId, key)
+  }
+  for (const [pluginId, mine] of liveTriggers) {
+    for (const trigger of mine.values()) void registerPluginTrigger(pluginId, trigger).then((r) => { if (!r.ok) console.warn(`[amadeus] plugin "${pluginId}" 补登触发源失败`, r.error) })
+  }
+}
+
 /** 后端 !ok→ok 边沿的唯一入口:欠账都在这里补 —— 没种下的规则(ensure)、没停用的规则(disable)、
- *  没关掉的捆绑包内嵌引擎插件。 */
+ *  没关掉的捆绑包内嵌引擎插件、引擎重启丢掉的插件触发源。 */
 function onBackendReadyEdge(): void {
   replayFailedEnsures()
+  replayPluginTriggers()
   replayPendingDisables()
   void syncBundleEngines().catch((e) => console.warn('[amadeus] 捆绑包内嵌引擎插件对齐失败', e))
 }
@@ -1193,6 +1280,7 @@ async function disablePluginRules(pluginId: string, replay = false): Promise<voi
   const prev = replay ? pendingDisable.get(pluginId) : null
   const st: PluginDisableState = { at: Date.now(), errors: [], replays: prev?.replays ?? 0, lastReplayAt: prev?.lastReplayAt ?? 0, pending: true }
   pendingDisable.set(pluginId, st)
+  editOwed((o) => o.add(pluginId), RULES_OWED_KEY)
   const errors: string[] = []
   const cfg = (await readTangu()?.waitBackend?.(ENSURE_WAIT_MS)) ?? null
   if (!cfg) errors.push('引擎后端未就绪(等待超时),规则尚未停用')
@@ -1220,7 +1308,10 @@ async function disablePluginRules(pluginId: string, replay = false): Promise<voi
   // 身份守卫(同 ensure):等待期间墓碑被换人(第二次 disable)或作废(enable)→ 这份结果不许覆盖它。
   if (pendingDisable.get(pluginId) !== st) return
   if (errors.length) Object.assign(st, { at: Date.now(), errors, pending: false })
-  else pendingDisable.delete(pluginId) // 关成了 = 没有欠账
+  else { // 关成了 = 没有欠账
+    pendingDisable.delete(pluginId)
+    editOwed((o) => o.delete(pluginId), RULES_OWED_KEY)
+  }
 }
 
 /** 待停用墓碑的重放:节流同 ensure(≥30s/插件),但**刻意不封顶** —— 与 ensure 语义不对称:
@@ -1401,6 +1492,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const e = o as import('./types').PluginEmptyState
       if (!e || typeof e !== 'object' || !isPluginText(e.title)) throw new TypeError('mountEmptyState needs { title }')
       iconName(e.icon, 'mountEmptyState'); iconName(e.action?.icon, 'mountEmptyState')
+      if (e.examples !== undefined && !Array.isArray(e.examples)) throw new TypeError('mountEmptyState examples must be an array')
       return e
     }
     // 网页卡片卡身(10-28,网页卡片 A + D):形状错同步抛;按钮行 / 菜单行整理成宿主形状,update 的补丁同样整理。
@@ -1580,7 +1672,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     const localData: LocalData | null = amadeus?.readPluginData && amadeus?.writePluginData
       ? { read: () => Promise.resolve(amadeus.readPluginData!(pluginId)).catch(() => null), write: (text) => amadeus.writePluginData!(pluginId, text) }
       : null
-    const hostAccount = hostTangu()?.account
+    const hostAccount = hostTangu()?.account ?? desktopAccount(hostTangu())
     const scopedAccount: PluginContext['account'] = hostAccount ? {
       status: async () => { const value = ctxAlive() ? await hostAccount.status() : { loggedIn: false }; return ctxAlive() ? value : { loggedIn: false } },
       login: () => ctxAlive() ? hostAccount.login() : Promise.reject(new Error('plugin disabled')),
@@ -1601,6 +1693,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       },
       ...(hostAccount.saveDownload ? { saveDownload: (blob: Blob, name: string) => ctxAlive()
         ? hostAccount.saveDownload!(blob, name) : Promise.resolve({ ok: false, error: 'plugin disabled' }) } : {}),
+      // Built here, over the scoped request, so all three hosts answer alike and teardown revokes it with the rest.
+      entitlements: () => readEntitlement((path) => scopedAccount!.request(path), get().plugins.find((p) => p.id === pluginId)?.entitlement),
       subscribe: (listener) => ctxAlive() ? scope.own('subscription', hostAccount.subscribe((status) => {
         if (ctxAlive()) listener(status)
       }), 'account') : () => {},
@@ -1876,10 +1970,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
     // 与 table/dashboard 一样动态 import 破环;形态错误同步抛,让插件能当场走自己的降级 UI。
     ...(typeof document !== 'undefined' ? { ui: {
       ...(nativeHapticAvailable() ? { haptic: (kind: 'tick') => { if (ctxAlive() && kind === 'tick') nativeHaptic(kind) } } : {}),
-      ...(nativeChromeInstalled() ? { claimHeader: (opts: { title: string; back: string; onBack(): void }) => {
+      ...(nativeChromeInstalled() ? { claimHeader: (opts: { title: string; back: string; onBack(): void; toList?: boolean }) => {
         if (!ctxAlive()) return { dispose() {} }
-        const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack: () => { if (ctxAlive()) opts.onBack() } })
-        return { dispose: scope.own('mount', () => handle.release(), 'nativeHeader') }
+        const toList = !!opts.toList && listFirstNow()
+        const onBack = (): void => {
+          if (!ctxAlive()) return
+          if (toList && listFirstNow()) useWorkspace.getState().toggleSidebar('left')
+          else opts.onBack()
+        }
+        const handle = claimNativeChrome({ mode: 'page', title: String(opts.title), back: String(opts.back), onBack })
+        // 两级导航:这一页不占返回栈,返回链照常滑出列表层,边缘手势才跟手(占了栈系统返回就只能等松手);
+        // 列表一出来(手势、返回键、页内横滑、顶栏箭头都走到这)插件才收尾。放弃手势不改 leftVisible,什么都不发生
+        const off = toList
+          ? useWorkspace.subscribe((s, prev) => { if (s.leftVisible && !prev.leftVisible && listFirstNow() && ctxAlive()) { off(); handle.release(); opts.onBack() } }) // 旋转成宽屏自动并排左栏不算返回
+          : pushMobileBack(onBack) // 系统返回和顶栏箭头同一件事
+        return { dispose: scope.own('mount', () => { off(); handle.release() }, 'nativeHeader') }
       } } : {}),
       // 行编辑字段(10-17):写的是用户的表 → 和 ctx.databases 同一道闸,没声明 'databases' 就没有这个成员。
       ...(get().plugins.find((p) => p.id === pluginId)?.capabilities?.includes('databases')
@@ -1977,7 +2082,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
       mountChatBox: (el, opts) => {
-        if (!ctxAlive()) return { update() {}, focus() {}, dispose() {} }
+        if (!ctxAlive()) return { update() {}, focus() {}, insertText() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
         if (typeof opts?.onSubmit !== 'function') throw new TypeError('mountChatBox needs onSubmit')
         let mounted: import('../../../../shared/chatBox').PluginChatBoxHandle | null = null
@@ -1994,6 +2099,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return {
           update(patch) { if (!cancelled) { Object.assign(pending, patch); mounted?.update(patch) } },
           focus() { if (!cancelled) { focusPending = true; mounted?.focus() } },
+          insertText(text) {
+            if (cancelled) return
+            if (mounted) mounted.insertText(text)
+            else { pending.value = (pending.value ?? '') + String(text); focusPending = true }
+          },
           dispose,
         }
       },
@@ -2227,6 +2337,11 @@ export const usePluginStore = create<PluginState>((set, get) => {
       isClaimed: (id) => !!useAchievements.getState().claimed[`plugin:${pluginId}:${id}`],
       claim: (id) => { if (ctxAlive()) useAchievements.getState().claim(`plugin:${pluginId}:${id}`) },
     },
+    // 上手提示(2026-11-02):提示声明在 manifest guide.tips,出不出由宿主 guideTips 定;这里只给「请出一条」和读状态。
+    guide: {
+      show: (id) => { if (ctxAlive()) requestTip(pluginId, String(id ?? '')) },
+      state: (id) => tipState(pluginId, String(id ?? '')),
+    },
     // 收件箱(2026-10-17):只给首方内置包 —— 一封「系统消息」长得和宿主自己发的一样,不能让任意插件往用户面前塞。
     ...(get().plugins.find((p) => p.id === pluginId)?.locked
       ? {
@@ -2272,6 +2387,8 @@ export const usePluginStore = create<PluginState>((set, get) => {
       ? {
           automation: {
             ensure: (rules: PluginAutomationRule[]) => ensurePluginAutomation(pluginId, rules),
+            registerTrigger: async (trigger: PluginAutomationTrigger) => (ctxAlive() ? registerPluginTrigger(pluginId, trigger) : { ok: false, error: 'plugin disabled' }),
+            emit: (id: string, payload?: Record<string, unknown>) => { if (ctxAlive()) emitPluginTrigger(pluginId, id, payload) },
           },
         }
       : {}),
@@ -2328,6 +2445,30 @@ export const usePluginStore = create<PluginState>((set, get) => {
                   if (!ctxAlive()) throw new Error('plugin disabled')
                   return result
                 } finally { opts.signal?.removeEventListener('abort', onAbort); stop.forget() }
+              },
+            } : {}),
+            ...(automationHost() && !hostTangu()?.mobile ? {
+              connectChannel: async (kind: string, fields: Partial<Record<'appId' | 'appSecret' | 'botToken', string>>, options?: { modelId?: string }) => {
+                try {
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  if (typeof kind !== 'string' || !/^[a-z][a-z0-9-]{1,15}$/.test(kind)) throw new Error('Invalid channel kind')
+                  if (!readTangu()?.hostExecution?.()) throw new Error('A local engine is required')
+                  const cfg = await readTangu()?.waitBackend?.(15_000)
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  if (!cfg || !readTangu()?.hostExecution?.()) throw new Error('Local engine is unavailable')
+                  const target = connectionTarget(cfg)
+                  const { channels } = await engineJsonRequest<{ channels: ChannelOwnership[] }>(target, '/agent/channels')
+                  const bundle = get().plugins.find((p) => p.id === pluginId)?.bundle
+                  const channel = channels.find((c) => c.kind === kind)
+                  const patch = ownedChannelPatch(channel, fields, bundle?.dir ?? pluginId, bundle?.enginePlugins ?? [])
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  // Only fills an empty slot: a model the user picked in the channel's settings stays.
+                  const modelId = typeof options?.modelId === 'string' && !channel?.modelId ? options.modelId : ''
+                  await engineJsonRequest(target, `/agent/channels/${kind}/config`, { method: 'PUT', body: JSON.stringify(modelId ? { ...patch, modelId } : patch) })
+                  if (!ctxAlive()) throw new Error('plugin disabled')
+                  const r = await engineJsonRequest<{ accountId: string; label: string; sessionId: string }>(target, `/agent/channels/${kind}/connect`, { method: 'POST', body: '{}' })
+                  return { ok: true as const, accountId: r.accountId, label: r.label, sessionId: r.sessionId }
+                } catch (e) { return { ok: false as const, error: String((e as Error)?.message || e) } }
               },
             } : {}),
             ...(readTangu()?.openSession ? {
@@ -2602,7 +2743,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
     clearSpaceProgressOf(id) // 停用 / 换代时 Ribbon 上别留着一个不再更新的进度环 / 红点
     releasePopupsOf(`plugin:${id}:`) // 排着的 / 正在显示的弹窗号一并让出,别堵住队列
     closeSpotlight(id) // 圈注同理
+    unregisterGuideTips(id) // 上手提示同理
     lastEnsure.delete(id) // 旧规则集不随重新启用被重放;再启用时插件自己 setup 里会重新 ensure
+    dropPluginTriggers(id) // 注销触发源;相关规则暂停并写明原因,再启用时 setup 登记回来就恢复
     set((s) => ({
       ...dropSlices(s, id),
       activeIds: s.activeIds.filter((x) => x !== id),
@@ -2628,6 +2771,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     set((s) => ({ settings: [...s.settings, { pluginId: id, item: workFolderSetting(id) }] }))
     const ctx = makeContext(id)
     const scope = liveScopes.get(id)!
+    registerGuideTips(id, plugin.guide?.tips) // 上手提示(manifest guide):teardown 里撤
     const fail = (e: unknown): void => {
       console.error(`[amadeus] plugin "${id}" setup failed`, e)
       useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
@@ -2667,6 +2811,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     // 上一轮停用留下的「待停用」欠账作废:插件又跑起来了,再让边沿去关它的规则就是倒着走。
     pendingDisable.delete(id)
+    editOwed((o) => o.delete(id), RULES_OWED_KEY)
     pendingRulesOff.delete(id)
     return true
   }
@@ -2721,6 +2866,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const src = sources.find((x) => x.id === cur.id)
       if (keep(cur, src)) {
         next.push({ ...pluginMeta(src), setup: cur.setup })
+        if (s0.activeIds.includes(cur.id)) registerGuideTips(cur.id, src.guide?.tips) // 只改了 manifest 的更新:新加的提示不等重启
         continue
       }
       reset.push(cur.id)
@@ -2808,7 +2954,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       reconcile() // 依赖它的先停,再停它
       // 连带停掉的依赖方也要收:它们的预设已撤,选中的图标 / 开屏不能留着。
       for (const stopped of new Set([id, ...before])) if (!get().activeIds.includes(stopped)) clearPluginAppearance(stopped)
-      // 用户明确禁用 → 它种下的自动化规则一并停(只此一条路;非 Tangu 宿主没有探针就没有规则可关)。
+      // 用户明确禁用 → 它种下的自动化规则一并停(卸载走 applySources 那条;非 Tangu 宿主没有探针就没有规则可关)。
       if (wasOn && automationHost()) {
         void disablePluginRules(id).catch((e) => console.warn(`[amadeus] plugin "${id}" 停用自动化规则失败`, e))
       }
@@ -2839,6 +2985,12 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return // 读不到来源 ≠ 来源都没了:保持现状
       }
       applySources(sources)
+      // 上次运行没关成的规则(走到这里在跑的都已被 start 销账)
+      if (windowKind() === 'main' && automationHost()) {
+        for (const id of readOwed(RULES_OWED_KEY)) {
+          if (!pendingDisable.has(id)) void disablePluginRules(id).catch((e) => console.warn(`[amadeus] plugin "${id}" 停用规则重放失败`, e))
+        }
+      }
       const appearance = useAppearance.getState().value
       for (const asset of [appearance.icon, appearance.splash]) {
         if (asset?.pluginId && !get().activeIds.includes(asset.pluginId)) clearPluginAppearance(asset.pluginId)

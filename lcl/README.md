@@ -24,6 +24,7 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - `desktop/frontend/src/components/chatbox`：接入共享 `ModelPill` 与宿主实时模型目录的 ChatBox、`useChatBoxSelection`。草稿选择局部保存，用户排序 / 隐藏偏好和模型思考档复用现有选择器。
 - `Composer2`：聊天会话编排器，组合上述基础组件并接入附件、引用、命令、语音、运行状态。首页复用该编排器；Coding 项目创建使用提示表单组件，在创建成功后显式移交模型与思考档。
 - 插件：`ctx.ui.mountChatBox`；详见 [公共契约](../docs/customization/ui-components.md)。
+- 桌面 / Web 卡内容宽 ≤480px 时，模型显示短名称与档位，模型 / 添加 / 模式入口展开不改变宽度；≤260px 时上下文与语音通过添加菜单访问。窄菜单用同层返回并保留完整模型名、审批说明和额度；原生手机沿用自身布局。`desktop` 的 `check:composernarrow` 与 `check:composernarrow:electron` 覆盖真实组件 / 构建后 ChatView。
 
 ## 划线条(Selection bar)
 
@@ -65,6 +66,20 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 
 ## English contract
 
+File reading state in Genesis is stored locally by vault, path and view kind in
+`desktop/frontend/src/amadeus/lib/fileViewMemory.ts`, separately from document content.
+After changing file-view mount/restoration behavior, build Desktop and run
+`npm run check:fileviewmemory` (isolated Electron: Space switches, reload, drawing zoom/pan,
+Markdown scroll, image size/pan, PDF page/zoom across pane widths, media position/rate).
+
+Compact desktop/Web Chat Boxes keep trigger widths stable and show a short model/effort label. At a content width of 260px or less, Context/quota and voice remain available in Add. Compact submenus replace their parent, support keyboard entry/return, and keep full model names in the picker and accessible label. Native phone layouts retain their existing presentation. Regression commands: `desktop` → `check:composernarrow` and, after a build, `check:composernarrow:electron`.
+
+`OverlayAt` and `useClampedMenu` accept an optional DOM `boundary`. Portalled menus are clamped to its intersection with the viewport, with width/height caps and the existing cumulative zoom compensation. Callers provide scrolling on constrained surfaces. Omit it to retain viewport placement. Resize and scroll observers are removed on unmount.
+
+`engine/lineSelection.ts` provides opt-in `mountLineSelection(root, options)`. It paints continuous visual-line bands outside the content DOM while preserving native Selection, focus and clipboard behavior. Chat and watched plugin readers mount it through ViewSelectionBar; Markdown editors also supply composition suspension and pending AI ranges. Dispose the handle with its owning view. Custom selection layers and coarse pointers keep native paint. Regression: `desktop` → `npm run check:selectionlines` at 100% and 110% zoom after a fresh build.
+
 Space owns layout; View owns a navigable feature; UI components compose the inside of a View. Amadeus document Blocks and Dashboard Cards have different responsibilities. Use `@lcl/components` for host-independent primitives and application adapters for services. Inputs and callbacks are explicit; a component must not implicitly target the active session. DOM plugins consume `ctx.ui` mounts, with lifecycle cleanup owned by the host. Settings parts (panels, rows, switches, buttons, inputs, meters, steppers, sheets) currently live in the application layer (`components/SettingsPrimitives`, `components/SettingsPage`) because their CSS source of truth is `base.css`; plugins reach them through `ctx.ui.mountSettingsPage` / `mountSettingsItem`. Keep types, documentation, consumers, and lifecycle coverage together when changing public APIs.
 
 Main splits opened by file links or the split command preserve the current sidebar widths, including user-resized widths, when the split fits; narrow containers allow the sides to yield to the Main groups' minimum widths. Regression: build `desktop`, then run `npm run check:mainsplitwidth` under the repository's `devlock.cjs run --vehicle=e2e`; it clicks real Excalidraw/database links and checks geometry on every frame, saved widths, closing, and subsequent sidebar dragging in an isolated Electron profile. `desktop/frontend/src/mainSplitWidth.test.ts` uses real Dockview to cover narrow containers and overlapping split/sidebar-collapse operations.
+
+Plugin native companions use the same host sizing guard when adding, folding or reopening Main groups. `npm run check:mainsplitwidth -- --extended` adds the built-in PDF reader, actual Better PDF / Notebook / Bluebird packages, a generic plugin file contribution, and public companion API operations; plugin checks run at 110% zoom. Set `SPLIT_PLUGIN_ROOT` to the package directory if it differs from `~/.forsion-dev/plugins`. Only package files are copied into the isolated profile; plugin user data is excluded. `pluginCompanions.geometry.test.ts` covers real Dockview widths, narrow containers and interleaved sidebar animations.

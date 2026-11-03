@@ -17,9 +17,10 @@
  *   POST /agent/tts/voices/delete { baseUrl, apiKey, voice, kind } → { ok }
  * 铁律:音色只能配 enrollment/design 时的 target_model 合成(前端采用音色时联动切模型)。CosyVoice / Qwen-Audio-TTS 音色走 WS 合成。
  */
-import { Router } from 'express';
+import { Router, type Response } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
+import type { VoicesBrain } from '../seams/cloudBrain.js';
 import { dashScopeApiBase } from '../adapters/standalone/multiBrain.js';
 import { wellFormed } from '../llm/wellFormedJson.js';
 
@@ -285,5 +286,20 @@ router.post('/agent/tts/voices/delete', authMiddleware, async (req: AuthRequest,
     res.status(502).json({ detail: e?.message || 'delete voice failed' });
   }
 });
+
+// 云端音色:经 brain.voices 落到 Forsion 云端,按账号隔离;自带连接的复刻在上面的 /agent/tts/voices/*。
+const cloudVoiceHandler = (run: (v: VoicesBrain, userId: string, body: any) => Promise<unknown>) => async (req: AuthRequest, res: Response) => {
+  const voices = deps().brain.voices;
+  if (!voices) { res.status(501).json({ detail: '当前环境不支持云端音色' }); return; }
+  try {
+    res.json(await run(voices, req.user!.userId, req.body || {}));
+  } catch (e: any) {
+    res.status(e?.status >= 400 ? e.status : 502).json({ detail: e?.message || 'cloud voice request failed' });
+  }
+};
+router.post('/agent/tts/cloud-voices/list', authMiddleware, cloudVoiceHandler((v, userId) => v.list(userId)));
+router.post('/agent/tts/cloud-voices/clone', authMiddleware, cloudVoiceHandler((v, userId, b) => v.clone(userId, b)));
+router.post('/agent/tts/cloud-voices/delete', authMiddleware, cloudVoiceHandler(async (v, userId, b) => { await v.remove(userId, String(b.id || '')); return { ok: true }; }));
+router.post('/agent/tts/cloud-voices/sample', authMiddleware, cloudVoiceHandler((v, userId, b) => v.sample(userId, String(b.id || ''))));
 
 export default router;

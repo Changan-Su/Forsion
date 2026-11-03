@@ -25,7 +25,7 @@ import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd } from '../seams/runContext.js';
+import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
@@ -36,9 +36,10 @@ import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
-import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
+import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, PLUGIN_AWARENESS_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
 import { canonicalToolName, resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
+import { WIDGET_SECTION, widgetsEnabledFor } from '../tools/builtin/manageWidget.js';
 import { LEGACY_HTML_CARD_TOOL, SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
@@ -49,7 +50,7 @@ import { resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
 import {
   effectiveContextWindowInfo, INPUT_HARD_RATIO, INPUT_WARN_RATIO, compactionThreshold,
-  estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
+  estimateTokensRough, estimateMessagesTokens, compactContext, trimOldestToFit, capToolResult, capHistoryContent, pinMessage,
   ContextUsageTracker, CompactionAttemptGuard, assistantTurnOf, markLossy, HISTORY_MSG_MAX_CHARS,
 } from './contextBudget.js';
 import {
@@ -64,7 +65,7 @@ import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
 import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
-import { isChildBriefRun, isUnattendedRun, registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
+import { isChildBriefRun, isSiblingMessageRun, isUnattendedRun, registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
 import { requestInquiry } from './inquiries.js';
 import { askUserPayload, formatInquiryResult, isSystemAnswer, normalizeInquiryAnswer } from '../tools/builtin/interaction.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
@@ -81,7 +82,8 @@ import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, i
 import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
-import { CORRECTION_SIGNAL, NUDGE_SIGNAL, looksLikeCorrection, noteUserStop, takePendingStop, toolLoopSignal } from './judgeSignals.js';
+import { CORRECTION_SIGNAL, NUDGE_SIGNAL, correctionVerdict, looksLikeCorrection, noteUserStop, takePendingStop, toolLoopSignal, verdictLine } from './judgeSignals.js';
+import { loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query } from '../core/db.js';
 import { SELF_OWNER, ownerAlive } from './runOwner.js';
@@ -108,6 +110,8 @@ const consumeTokenPoints = (userId: string, amount: number) => deps().billing.co
 const calculateCost = (modelId: string, tin: number, tout: number, model?: any, cached?: number) =>
   deps().billing.calculateCost(modelId, tin, tout, model, cached);
 const logApiUsage = (...args: any[]) => (deps().billing.logApiUsage as any)(...args);
+/** 决策闸(beta):Historian 开着、开发者选项里打开了 historian.decisionGate。读配置失败 = 关。 */
+const decisionGateOn = (): boolean => { try { const h = loadSpecialAgentsConfig().historian; return h.enabled && !!h.decisionGate; } catch { return false; } };
 const getUserById = (id: string) => deps().brain.users.getUserById(id);
 
 const abortControllers = new Map<string, AbortController>();
@@ -823,7 +827,7 @@ export function sessionHasActiveRun(sessionId: string): boolean {
  * 首帧;窗口起点每 HYDRATE_BLOCK 行才挪一次,所以约每 5 个 run 才多一次摘要调用(增量,带上一检查点)。
  * 分步回放(agent_steps)与 hydrate 同源,故窗口算术只数 DB 行。无 run 上下文 → 用量台账静默跳过(与手动 /compact 同)。
  */
-async function checkpointRowsOutsideWindow(
+export async function checkpointRowsOutsideWindow(
   sessionId: string, modelId: string, appId: string, settings: CompactionSettings, runThinking: ThinkingLevel,
 ): Promise<void> {
   if (!settings.enabled || !modelId) return;
@@ -992,6 +996,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const clientTag = typeof input.client === 'string' ? input.client : undefined;
   // 远程污点(契约 C1/C3/C5):只认 input.remote(路由解析 / 派生 run 显式抄写),审批档据此钳到上限。
   const remote = remoteOf(input);
+  setRunSessionContext(sessionId, !!remote || !!input.remoteTainted);
   const remoteCap = remote ? remoteApprovalCap() : undefined;
   // 界面面(set_ui_setting / run_ui_command / list_ui_commands)的能力握手 + 目录快照。
   // 与 clientTag 同源同链;run 内冻结(prompt 缓存纪律,同 mcpTools)。
@@ -1226,7 +1231,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const modeSessionId = profile.capabilities.hostExec
     // 父子会话的派生轮(start_session / send_to_session 起的子会话轮、回报后自动接着做的主会话轮)也跟本会话现档:中途收紧当场生效(Codex 10-17 #6)。
     // 这两个字段只由引擎内部 createRun 写,POST /agent/runs 按字段名组装 input、客户端塞不进来。
-    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.childReport === true, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
+    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.childReport === true || !!input.fromSession, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
     : undefined;
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
@@ -1293,6 +1298,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 整个 run 调过的工具名(allToolCalls 在插话边界会清空,这份不清)与本轮攒下的复盘信号(services/judgeSignals.ts)。
   const runToolNames: string[] = [];
   const judgeSignals: string[] = [];
+  let correctionCheck: Promise<void> | null = null; // 决策闸(beta)在问的那一下:收尾照常交给 Historian,它数完轮次再等这个
   /**
    * Tool calls are stored separately from assistant text. Stamp the finalized-text offset at which
    * each call happened so clients can reconstruct interleaving after reload without a DB migration.
@@ -1324,8 +1330,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
     // Historian 首帧标题:只看用户消息,与模型回复并行;放在群聊分支前,两条路都覆盖。落库后推事件让侧栏立刻刷新。
-    // 子会话回报那一轮(childReport)的「用户消息」是机器写的 <child_sessions_update>,不拿它起标题
-    if (!input.childReport) onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
+    // 子会话回报那一轮(childReport)/ 会话消息那一轮(fromSession)的「用户消息」是机器写的,不拿它起标题
+    if (!input.childReport && !input.fromSession) onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
       (title) => { void publish(runId, 'session_title', { sessionId, title }).catch(() => {}); });
     // 经工作区上传进来的附件(手机 / 桌面原生选择器读成工作区附件的文件)落在会话沙箱目录,host 工具的 cwd 是工作区 —— 按桌面本机附件
     // 同一格式(正文第一行的路径 token)把它们的绝对路径拼进**落库**的这条用户消息:模型这一轮与之后每一轮回放都看得见。
@@ -1554,9 +1560,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
     // 通道会话判定(每 run 一次):channel_send_* 只在「连接着通道的会话」暴露(P0-3),
     // 回复风格段也据此分裁(通道端纯文本渲染)。绑定可中途建立/解除 → 按 run 重查;非 host 恒 false。
-    const channelSession = profile.capabilities.hostExec
-      ? await channelHub.isChannelSession(userId, sessionId)
-      : false;
+    const channelBinding = profile.capabilities.hostExec ? await channelHub.channelBinding(userId, sessionId) : false;
+    const channelSession = channelBinding === true;
+    const channelUnknown = channelBinding === null; // 工具和回复风格照「没连」走,隐私边界按「连着」走
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
     const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset, sandboxExec: profile.features.sandbox });
     // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
@@ -1627,6 +1633,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, ps.noPreamble ? { noPreamble: true } : undefined));
     // 应用 / 窗口引用(`[[app://…]]` / `[[window://…]]`):紧跟输出风格段(它是「标识符进反引号」的例外);通道会话是纯文本,不注入。
     if (!channelSession) systemParts.push(APP_REF_SECTION);
+    // 想到插件:有商店面才说(同 search_marketplace 的门)。计划模式没有这个工具;通道会话画不出插件卡与任务卡。
+    if (deps().brain.marketplace && !planMode && !channelSession) systemParts.push(PLUGIN_AWARENESS_SECTION);
     // 发给模型前脱敏开着:告诉模型占位符能直接用(否则真模型会拒绝「看不到的 key」,live 台架 10-28 实测)。随设置静态,不碎前缀缓存。
     { const ms = maskSettings(); if (ms.action === 'mask' && (ms.secrets || ms.personal) && !maskSkipped) systemParts.push(MASKING_SECTION); }
     // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段);
@@ -1653,6 +1661,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       systemParts.push(SKETCH_SECTION);
       if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
       if (computedUiEnabled) systemParts.push(INTELLIGENT_UI_V2_SECTION);
+      if (widgetsEnabledFor({ ...visualGate, execMode, clientCapabilities })) systemParts.push(WIDGET_SECTION);
       if (visualsPref === 'less') systemParts.push(SKETCH_LESS_NOTE);
       // 常驻段稳定,但本轮信号按消息正则取 3 种值 → 跟记忆易变段同一落点(B1),别留在稳定前缀里。
       if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
@@ -1660,8 +1669,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     ctxMark('guidance');
     // 4) 人的文件夹 human/(所有 agent 可见,半稳定):人写给所有 Agent 的 AGENT.md、人自己写的 MEMORY.md(原 USER.md)、
     //    Agent 们对人的认识 SOUL.md。替换原来那段 USER.md,不并排加(提示词体量)。HUMAN.md 共识走下面协作说明那段。读失败不阻断。
+    //    连着聊天通道的会话(别人也可能在读)不注入人的本子和画像,只留 AGENT.md 那段要求(10-29 画像写入方案 细节 5)。
     try {
-      const aboutHuman = renderAboutHuman();
+      const aboutHuman = renderAboutHuman({ private: channelBinding === false });
       if (aboutHuman) systemParts.push(aboutHuman);
     } catch { /* ignore */ }
     ctxMark('profile');
@@ -1793,7 +1803,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const projectScoped = projectRef ? true : undefined;
     const projectPath = projectRef?.project;
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped, projectPath,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, channelUnknown, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped, projectPath,
       visuals: visualsPref, // run 冻结的可视化档位:与上面拼提示用的同一个值,set_ui_setting 中途改了也到下一次 run 才生效
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
@@ -1989,11 +1999,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       throughTs: number; throughRowId?: string; partial: boolean;
       pending?: { summary: string; toolCallId: string; messageId: string };
     } = { throughTs: checkpointThrough.ts, throughRowId: checkpointThrough.rowId, partial: checkpointThrough.partial };
+    // 本 run 兜底裁剪丢过消息(trimOldestToFit):之后的摘要都没见过那几条,边界却可能越过它们 → 本 run 起不再推进
+    // 持久检查点(否则下个 run 的 hydrate 永远跳过那几行,Codex 10-26 #1)。下个 run 从 DB 原样 hydrate,照常落。
+    let trimmedThisRun = false;
     /** 一次成功的 run 内压缩 → 按边界落检查点。返回本次是否已落库(pending 的算未落)。 */
     const recordBoundary = async (summary: string, b?: CompactBoundary): Promise<boolean> => {
       if (!b) return false;
       // 范围里有机械折叠过 / 按硬帽截过的消息:摘要没见过原文,只留在本 run 内存里,不推进持久检查点
-      if (b.lossy) { checkpoint.pending = undefined; return false; }
+      if (b.lossy || trimmedThisRun) { checkpoint.pending = undefined; return false; }
       if (b.pendingToolCallId) {
         checkpoint.pending = { summary, toolCallId: b.pendingToolCallId, messageId: currentAssistantId };
         return false;
@@ -2036,6 +2049,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // protocol 同理必须带上:anthropic-messages 直连的 legacy claude,少了它会报 off 生效而 wire 实发预算。
     const thinkingEffective = clampThinkingLevel(
       resolveModelCapability({
+        thinkingLevels: model?.pluginThinkingLevels,
         baseUrl: (model as any)?.defaultBaseUrl || baseUrl,
         provider: model?.provider,
         modelId: apiModelId || modelId,
@@ -2201,7 +2215,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const directive =
           '## Mentioned Agents for This Turn\n' +
           'The user @-mentioned the following agents for this message. When their expertise fits the request, involve them and then synthesize the result into your reply. Two ways, pick per the task:\n' +
-          '- `delegate` with the matching `agentSlug` — a quick one-shot subtask (the subagent runs with that agent\'s persona and returns a single report). Use for fetch/search/analysis you just need an answer to.\n' +
+          '- `delegate` with the matching `agentSlug` — a quick subtask (the subagent runs with that agent\'s persona and returns a report). Use for fetch/search/analysis you just need an answer to.\n' +
           '- `start_discussion` with `peer` = the matching slug — a genuine back-and-forth deliberation (a fork of you debates them until both sides are done; collect it with `wait_discussion`). Use when the question benefits from real discussion/disagreement.\n' +
           'Mentioned agents:\n' +
           mentioned.map((a) => `- ${a.name} (slug: \`${a.slug}\`)${a.description ? ` — ${a.description}` : ''}`).join('\n');
@@ -2539,7 +2553,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       // 托盘 run 的 ask_user 也挂起(10-23 方案「待确认卡片」B):问题照发进对话末尾的卡片堆、不等,先给模型占位结果;
       // 用户答了,在迭代边界把答案放回原工具消息 + 一行 <inquiry_update>。子会话 / 无人值守照旧走工具里的当场代答;计划审阅不挂(只读模式下没别的可做)。
-      const ask = approvalTray && effCall.function.name === 'ask_user' && !isChildBriefRun(runId) && !isUnattendedRun(runId)
+      const ask = approvalTray && effCall.function.name === 'ask_user' && !isChildBriefRun(runId) && !isSiblingMessageRun(runId) && !isUnattendedRun(runId)
         ? askUserPayload(safeParse(effCall.function.arguments)) : null;
       if (ask) {
         const entry: ParkedCall = { call, effCall, preview: ask.question, preCtxText, parallelGroup };
@@ -2810,8 +2824,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
 
     // 复盘信号:这一轮开头的话像在纠正上一条回复(前面得真有过回复;系统驱动的 run 的开场白不算用户的话)。
-    if (!deferBypass && workingMessages.some((m) => m.role === 'assistant') && looksLikeCorrection(String(input.message || ''))) {
-      judgeSignals.push(CORRECTION_SIGNAL);
+    // 决策闸(beta,开发者选项;Historian 开着才问)开着:改问云端决策模型、词面兜底(judgeSignals.correctionVerdict)。
+    // 不挡主循环:这里只起请求,run 收尾交给 Historian 之前才等它。远程 run 不问:用户原话不经这条路发出去。
+    if (!deferBypass && workingMessages.some((m) => m.role === 'assistant')) {
+      const decision = !effectiveRemote({ remote, runId }) && decisionGateOn() ? deps().brain.decision : undefined;
+      if (decision) {
+        const prev = [...workingMessages].reverse().find((m) => m.role === 'assistant');
+        correctionCheck = correctionVerdict(decision, prev?.content, String(input.message || '')).then((v) => {
+          try { deps().host.log(`[historian] ${verdictLine(v)}`); } catch { /* 日志不挡信号 */ }
+          if (v.correction) judgeSignals.push(CORRECTION_SIGNAL);
+        });
+      } else if (looksLikeCorrection(String(input.message || ''))) judgeSignals.push(CORRECTION_SIGNAL);
     }
     let usedTools = false; // 本 run 是否真的执行过工具(循环耗尽提示的前提:没用工具的纯聊天/单轮 run 不该报"耗尽")
     let midstreamResumes = 0; // 中流断线恢复次数(整 run 累计上限 MIDSTREAM_MAX_RESUMES,防慢性抖动供应商刷成本)
@@ -2832,6 +2855,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const compactAt = compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens, compactionCfg.thresholdPercent, compactionCfg.keepRecentTokens);
     let hookVetoedCompaction = false; // PreCompact hook 否决过 → 不再按估算拦请求,交给 provider 裁决
     let overflowRecovered = false; // 上游报「输入超窗口」后压缩重试:每 run 一次
+    let overBudgetNotified = false; // 压缩后仍超成本封顶、按真实窗口照发:每 run 提示一次
     let reasoningStripped = false; // 回灌的加密推理被拒后拿掉重发:每 run 一次
     let toolsOverhead = 0; // 本轮工具定义头的粗估 token(只在没有实测基准时计入,见 ContextUsageTracker.estimate)
     // 登记给 GET /agent/sessions/:id/status:必须在 contextUsage / compactAt / toolsOverhead 都初始化之后 —— getRunStatus 读它们,
@@ -2866,12 +2890,28 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const persisted = await recordBoundary(cr.summary, cr.boundary);
         void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration });
       } else {
+        // 上游拒收时实测的下界 = 窗口(与摘要那边同一口径):估算可能还在触发线下,但 provider 已经说装不下了 → 照裁。
+        const floor = reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured;
+        const rough = estimateMessagesTokens(workingMessages) + toolsOverhead; // 折叠前:与 measured 同一份消息
+        const scale = floor && rough > 0 ? Math.max(1, floor / rough) : 1;
         const r = compactContext(workingMessages);
-        if (r.changed) {
+        if (r.changed) contextUsage.invalidate();
+        // 机械折叠也压不下(最近 20 条受保护、折过的不再折):从最旧处成段丢,直到回到触发线的 70% 以下。
+        // 实测比粗估大(截图按定额估)时目标按比例收紧。没有这一步,摘要一失败就只剩「估算 ≥ 窗口 → 报废」
+        // (10-26 生产:Opus / DeepSeek 两个长会话都是摘要撞输出上限后死在这里)。
+        // ponytail: 70% 是给后续几轮留的余量,不是算出来的最优值。
+        // 「最近一条 user」只认落过库的真消息:工具截图 / 恢复提示也是 role:user,按它保护会把真正的任务裁掉(Codex 10-26 #2)。
+        const trim = reason === 'overflow' || contextUsage.estimate(workingMessages, toolsOverhead) > compactAt
+          ? trimOldestToFit(workingMessages, Math.floor((compactAt * 0.7) / scale), toolsOverhead, (m) => !!messageSource(m))
+          : { dropped: 0 };
+        if (trim.dropped) { contextUsage.invalidate(); trimmedThisRun = true; }
+        if (r.changed || trim.dropped) {
           changed = true;
-          contextUsage.invalidate();
-          // 只在真折叠了才宣告,且带 savedChars:fallback 是机械折叠,不许对用户谎称「已生成摘要」
-          void publish(runId, 'status', { phase: 'compacted', forced: true, fallback: true, reason, savedChars: r.savedChars, iteration });
+          // 只在真改动了才宣告,且带 savedChars / trimmed:fallback 是机械兜底,不许对用户谎称「已生成摘要」
+          void publish(runId, 'status', {
+            phase: 'compacted', forced: true, fallback: true, reason, savedChars: r.savedChars, iteration,
+            ...(trim.dropped ? { trimmed: trim.dropped } : {}),
+          });
         } else {
           console.warn(`[agent-core] run=${runId} 压缩未改动上下文: ${cr.reason}`);
         }
@@ -2881,6 +2921,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       void publish(runId, 'status', { phase: 'compaction_budget', iteration, beforeTokens, afterTokens, changed: afterTokens < beforeTokens });
       return changed;
     };
+    let modelFallbackNoted = false; // 服务端「停用模型已改用 X」的提示,一个 run 只记一次
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
       runStat.iteration = iteration + 1;
@@ -2938,8 +2979,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const effectiveToolsText = lastIter || !toolDefs?.length ? '' : toolsJson;
       const effectiveToolsBytes = Buffer.byteLength(effectiveToolsText, 'utf8');
       // 末轮说明不在 workingMessages 里,预算检查给它留 ~80 token,别让本该优雅收尾的最后一发撞 provider 输入上限(Codex 09-13 #8)。
-      if (!hookVetoedCompaction && contextUsage.estimate(workingMessages, lastIter ? 0 : toolsOverhead) + (lastIter ? 80 : 0) >= ctxWindowTokens) {
+      // 硬墙在模型**真实**窗口(ctxWindowMax;人填的覆盖更大时取覆盖):272k 是成本封顶(09-22),不是 provider 的上限。
+      // 压缩 + 兜底裁剪之后仍在封顶之上,只剩裁不掉的最新内容 → 照常发请求、提示一次,不在自己设的线上报废(10-26)。
+      const sendTokens = contextUsage.estimate(workingMessages, lastIter ? 0 : toolsOverhead) + (lastIter ? 80 : 0);
+      if (!hookVetoedCompaction && sendTokens >= Math.max(ctxWindowTokens, ctxWindowMax)) {
         throw new Error('Context remains over the model input budget after compaction. Reduce large attachments or use a larger-context model; the original conversation has been preserved.');
+      }
+      if (!hookVetoedCompaction && sendTokens >= ctxWindowTokens && !overBudgetNotified) {
+        overBudgetNotified = true;
+        void publish(runId, 'status', { phase: 'context_over_budget', warning: 'context_over_budget', estTokens: sendTokens, budgetTokens: ctxWindowTokens, windowTokens: ctxWindowMax, iteration });
       }
 
       // attachments 恒传空:图片已由 hydrateHistory 物化进最新 user 消息的 parts(每轮字节一致,
@@ -2962,7 +3010,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         attachments: [],
         thinkingLevel,
         // Fast 档只给主循环:压缩 / Historian / 子代理等后台调用不跟(多数模型的 Fast 额度消耗更快)。
-        fast: agentConfig.fast === true,
+        fast: agentConfig.fast === 'ultra' ? 'ultra' : agentConfig.fast === true,
         stream: true,
         cacheKey: sessionId, // OpenAI prompt_cache_key:同会话粘同机,提升自动前缀缓存命中(P2)
         // B4 两个实验闸的身份载体(缺省档两者都不读它们,行为零变化):
@@ -3039,6 +3087,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             },
             onToken: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
             onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
+            // 会话钉着的模型已被 admin 停用、服务端改用了别的:记进时间线(诊断导出可见),每个 run 只记一次。
+            onNotice: (n) => {
+              if (n.kind !== 'model_fallback' || modelFallbackNoted) return;
+              modelFallbackNoted = true;
+              console.warn(`[agent-core] run=${runId} 模型 ${n.from} 已停用,服务端改用 ${n.to}`);
+              void publish(runId, 'status', { phase: 'model_fallback', from: n.from, to: n.to, toName: n.toName });
+            },
             onToolCallDelta: (info) => {
               if (sampling.signal.aborted) return;
               emitted = turnStarted = true;
@@ -3669,7 +3724,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // MEMORY/LOG 必须与 run 内 remember/log_event 落同一文件夹,否则共用默认记忆的 agent 会被写歪。
     // 上一轮被用户按停留下的信号排最前(那句写的是「上一轮」,其余写的是「这一轮」)。
     if (pendingStop) judgeSignals.unshift(pendingStop);
-    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, !!(remote || effectiveRemote({ runId })), judgeSignals).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
+    const runRemote = !!(remote || effectiveRemote({ runId }));
+    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, runRemote, correctionCheck ? correctionCheck.then(() => judgeSignals) : judgeSignals).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。
     // 登记在飞:下个 run(排队中的可能立刻起跑)hydrate 前先等它,别让窗口起点越过还没落检查点的老行。
     {

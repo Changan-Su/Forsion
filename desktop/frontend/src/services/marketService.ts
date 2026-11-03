@@ -16,6 +16,17 @@ registerMessages({
  *  包自己的 manifest `isDesktopOnly` 仍是手机端安装时的硬闸(mobileMarket),这枚标签只是让人在下载之前就知道。 */
 export const DESKTOP_ONLY_TAG = 'desktop-only'
 export const isDesktopOnlyItem = (item: Pick<MarketCard, 'tags'>): boolean => !!item.tags?.includes(DESKTOP_ONLY_TAG)
+/** 保留标签 `entitlement:<name>`:用这个包要账号有对应权益。走标签的理由同上。只是一枚标记,不挡安装:闸在服务端,
+ *  包的 manifest `requires.entitlement` 决定插件自己怎么引导。 */
+const ENTITLEMENT_TAG = /^entitlement:([a-z0-9][a-z0-9-]{0,63})$/
+export const itemEntitlement = (item: Pick<MarketCard, 'tags'>): string | null => {
+  for (const tag of item.tags ?? []) {
+    const hit = ENTITLEMENT_TAG.exec(tag)
+    if (hit) return hit[1]
+  }
+  return null
+}
+export const isReservedMarketTag = (tag: string): boolean => tag === DESKTOP_ONLY_TAG || ENTITLEMENT_TAG.test(tag)
 
 function bridge(): NonNullable<typeof window.tangu> {
   const t = window.tangu

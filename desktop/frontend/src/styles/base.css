@@ -273,6 +273,7 @@ html[data-glass='off'] * {
  * The html:root specificity also wins over older installed first-party theme CSS. */
 html:root[data-mode='light'] {
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.025), 0 8px 24px -6px rgba(0, 0, 0, 0.05);
+  --droplet-shadow: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.03)) drop-shadow(0 6px 12px rgba(0, 0, 0, 0.06)); /* 液体的影子 ≈ --card-shadow,跟形状走 */
   /* 半浮:住在纸里、身下没有正文的卡(摘要栏卡片缺省)。影子收近收淡,让输入卡做唯一的主浮(2026-10-28 用户定) */
   --card-shadow-low: 0 1px 2px rgba(0, 0, 0, 0.025), 0 4px 10px -6px rgba(0, 0, 0, 0.07);
   --btn-shadow: none;
@@ -281,6 +282,7 @@ html:root[data-mode='light'] {
 /* 暗色同一档「淡」:层次主要靠底色小台阶,阴影只在浮层边缘留一点(10-03 用户定 d3;.35/.6 + 顶边微光被否「太重」,别往重里调)。 */
 html:root[data-mode='dark'] {
   --card-shadow: 0 1px 3px rgba(0, 0, 0, 0.10), 0 8px 24px -6px rgba(0, 0, 0, 0.18);
+  --droplet-shadow: drop-shadow(0 1px 1.5px rgba(0, 0, 0, 0.12)) drop-shadow(0 6px 12px rgba(0, 0, 0, 0.2));
   --card-shadow-low: 0 1px 2px rgba(0, 0, 0, 0.12), 0 4px 10px -6px rgba(0, 0, 0, 0.22);
   --btn-shadow: none;
   --icon-shadow: none;
@@ -320,7 +322,9 @@ body {
   overflow: hidden;
   transition: background var(--duration-slow), color var(--duration-slow);
 }
-button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
+/* 插件视图里没写 class 的按钮让给文件末尾的 plugin-view-base(那边零权重,插件自己写的规则才都压得过);:where 不加特异性,别处照旧 (0,0,1)。
+ * 括号里那串与 plugin-view-base 的按钮选择器逐字一致(pluginContract.test.ts 核对),改一处两处一起改。 */
+button:where(:not([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *))) { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
 input, textarea, select { font: inherit; color: var(--text); }
 /* 多选的勾选框(状态栏条目、导入勾选、待办完成…)跟主题的墨色走,不用系统蓝;二态设置一律是 SettingsSwitch(走查续五 5.1)。 */
 input[type='checkbox'] { accent-color: var(--accent-ink); }
@@ -566,6 +570,8 @@ a:hover { color: var(--accent-ink); }
   background: var(--overlay-medium);
 }
 .project-pill > svg { justify-self: center; flex: none; color: var(--text-faint); }
+/* 编码工作室的新对话:项目固定,只显示不可点的那枚(ChatView 的 data-studio-project),图标与字照样隔开。 */
+.project-pill[data-studio-project] { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }
 .project-pill-name { min-width: 0; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .project-pill.is-open .project-pill-name { width: 100%; max-width: none; text-align: center; }
 /* 额外文件夹:项目胶囊后面的「添加文件夹」和加进来的那几枚(components/ExtraFolders.tsx)。外形就是项目胶囊;
@@ -962,6 +968,9 @@ a:hover { color: var(--accent-ink); }
 }
 .ctx-menu button > svg { flex-shrink: 0; } /* 折行时图标别被挤成小点 */
 .ctx-menu button:hover { background: var(--menu-hover); color: var(--text); }
+/* 键盘可走的菜单(role=menu,文件树右键 6.9):键盘焦点那一档 = 选中底 + 2px 焦点线;打开时焦点就在第一项。
+   鼠标一动就退出这一档(data-kbd 由 TreeMenu 摘掉),悬停仍是上面那层淡底;再按方向键回来。 */
+.ctx-menu[role='menu'][data-kbd] button[role='menuitem']:focus { outline: calc(2 * var(--focus-ring)) solid var(--sel-line); outline-offset: calc(-2 * var(--focus-ring)); background: var(--overlay-medium); color: var(--text); }
 .ctx-menu button.danger { color: var(--danger); }
 .ctx-menu button.danger:hover { background: var(--danger-light); }
 .ctx-menu button:disabled { opacity: .4; cursor: default; background: transparent; }
@@ -970,6 +979,13 @@ a:hover { color: var(--accent-ink); }
 /* 菜单小节标题(说明这一串选项是干什么的);`.ctx-menu` 是右键菜单外壳的唯一正典,变体写在它旁边。 */
 /* 分组小标题全 app 一种写法(10-02 c1):与斜杠菜单分组、块菜单「转换为」、多维表菜单小节同为 12px / 中等 / 次要色。 */
 .ctx-menu .ctx-head { padding: 4px 8px 5px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-muted); }
+/* 两行项(CtxItem.detail):名字 + 小字路径 / 状态,超长截断;checked 的勾靠右(底部智库菜单) */
+.ctx-menu .ctx-text { display: flex; flex-direction: column; flex: 1; min-width: 0; line-height: 1.35; }
+.ctx-menu .ctx-text > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-menu .ctx-detail { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.ctx-menu .ctx-check { margin-left: auto; color: var(--text-muted); }
+/* 带两行项的是选择菜单,走 select 宽度(操作菜单的 184px 会把「打开文件夹作为智库…」挤折行) */
+.ctx-menu:has(.ctx-detail) { width: var(--menu-select-width); max-width: min(var(--menu-select-width), calc(100vw - 16px)); }
 
 /* ─── 主区 ─── */
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
@@ -1194,6 +1210,15 @@ a:hover { color: var(--accent-ink); }
   line-height: 1.55;
 }
 .msg-content pre code { background: none; padding: 0; font-size: inherit; }
+/* Markdown 里打不开的图片(Markdown.tsx 的 MdImage):一块淡底说明,不留浏览器的破图标。 */
+.md-img-broken {
+  display: flex; align-items: center; gap: 8px; width: min(100%, 360px); height: 64px; padding: 0 14px; box-sizing: border-box;
+  border: 0; border-radius: var(--radius-sm); background: var(--overlay-light); color: var(--text-muted);
+  font: inherit; font-size: var(--ui-font-meta, 12px); text-align: left; cursor: pointer;
+}
+.md-img-broken:disabled { cursor: default; }
+.md-img-broken svg { flex: none; color: var(--text-faint); }
+.md-img-broken span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-error {
   color: var(--danger);
   background: var(--danger-light);
@@ -1981,18 +2006,25 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* 打开时药丸撑到与菜单同宽、右缘对齐。
    ⚠️ 走 min-width 不走 width:width:auto → 224px 不可插值,动画不会跑;0 → 224px 才行。
    .is-open 三段选择器是为了压过 .t2c-row .composer-chip{min-width:0}(窄屏收缩用)。 */
-/* 开合直接到位、只换底色(走查续八 8.4,规矩 3:颜色和位移同一时长、同一条曲线):以前宽度补 180ms,菜单 80ms 就退完了、
-   药丸还在收。别把 width 过渡加回来;scripts/model-menu.check.cjs 的 B 钉着「开 / 收都不补宽度」。 */
+/* 开合补宽度,跟菜单同一只表(11-02 用户:「胶囊展开关闭动画全都没了」,撤回走查续八 8.4 的「直接到位」):
+   展开 = 菜单进场 --menu-enter-duration × --menu-enter-ease,收起 = 菜单退场替身 --menu-exit-duration × --ease-exit,
+   两边一起到、一起停(8.4 当时的毛病是药丸收 180ms、菜单一帧就没)。收起的时长写在基础规则、展开的写在 .is-open:
+   过渡取「目标状态」那条规则的值。
+   ⚠️ 动的是 width 且**必须**配 interpolate-size:allow-keywords —— 没有它 fit-content → 224px 不可插值,过渡不跑。
+   ⚠️ 别改成 min-width 0 → 224px:可见区间只有 [自然宽, 224],收的时候几乎瞬变。scripts/model-menu.check.cjs 的 B 钉着。
+   ponytail: Safari 尚不支持 interpolate-size,那边降级为直接到位。 */
 .composer-chip.model-pill-btn {
   min-width: 0;
+  interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast);
+  transition: background var(--duration-fast), width var(--menu-exit-duration) var(--ease-exit);
 }
 .composer-chip.model-pill-btn.is-open {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: var(--menu-select-width);
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  transition: background var(--duration-fast), width var(--menu-enter-duration) var(--menu-enter-ease);
 }
 .composer-chip.model-pill-btn.is-max {
   color: color-mix(in srgb, #a77bff 78%, var(--text));
@@ -4487,7 +4519,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   border-radius: var(--radius-pill, 999px);
 }
 
-.spin { animation: spin 0.9s linear infinite; }
+.spin, .browser-fail[data-loading] .empty-state-icon { animation: spin 0.9s linear infinite; }
 
 /* ── 应用内更新横幅(主界面顶部,启动检测到新版时出现;非侵入,可忽略) ── */
 .update-banner {
@@ -4880,7 +4912,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .mk-icon-img { display: block; width: 100%; height: 100%; object-fit: contain; border-radius: inherit; }
 .mk-featured-art .mk-icon-img { width: 96px; height: 96px; border-radius: var(--radius-lg); }
 .mk-card-content { min-width: 0; display: flex; flex-direction: column; }
-.mk-card-eyeline { min-height: 17px; display: flex; align-items: center; gap: 8px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-weight: 620; }
+.mk-card-eyeline { min-height: 17px; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; color: var(--text-faint); font-size: var(--ui-font-caption, 11px); font-weight: 620; }
 .mk-installed-badge { display: inline-flex; align-items: center; gap: 3px; color: var(--accent-ink); }
 /* 「仅桌面」:信息位,不抢「已安装」的强调色。 */
 .mk-desktop-badge { display: inline-flex; align-items: center; gap: 3px; color: var(--text-light); white-space: nowrap; }
@@ -5312,6 +5344,21 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 .pv-confirm { font-size: var(--ui-font-caption, 11px); color: var(--danger); white-space: nowrap; }
 .pv-spin { animation: csx-spin 0.8s linear infinite; }
 .pv-rowerr { color: var(--danger); }
+.pv-tabs { display: flex; flex-wrap: wrap; gap: 2px; padding: 8px 16px 0; }
+.pv-tab { padding: 3px 9px; border: 0; border-radius: var(--radius-pill, 999px); background: none; color: var(--text-muted); font: var(--ui-font-meta, 12px) var(--font-ui); cursor: pointer; }
+.pv-tab:hover { background: var(--overlay-light); }
+.pv-tab.on { background: var(--accent-light); color: var(--accent-ink, var(--accent)); font-weight: 600; }
+.pv-row-sub.is-plain { font-family: var(--font-ui); }
+.pv-warn { color: var(--danger); }
+.pv-dots { display: inline-flex; flex-shrink: 0; }
+.pv-dot { width: 20px; height: 20px; margin-left: -4px; display: grid; place-items: center; border-radius: 50%; background: var(--overlay-medium); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.pv-renew { padding: 3px 9px; border: 0; border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text); font: var(--ui-font-meta, 12px) var(--font-ui); cursor: pointer; }
+.pv-renew:hover { background: var(--overlay-medium); }
+.pv-members { display: flex; flex-direction: column; gap: 2px; padding: 2px 14px 10px; background: var(--overlay-light); }
+.pv-member { display: flex; align-items: center; gap: 8px; min-height: 28px; font-size: var(--ui-font-body, 13px); color: var(--text); }
+.pv-member-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-member select { padding: 3px 6px; border: 0; border-radius: var(--radius-sm, 6px); background: var(--overlay-light); color: var(--text); font: var(--ui-font-meta, 12px) var(--font-ui); }
+.pv-stop { align-self: flex-start; margin-top: 4px; padding: 3px 0; border: 0; background: none; color: var(--danger); font: var(--ui-font-meta, 12px) var(--font-ui); cursor: pointer; }
 
 /* ══════════════════════════════════════════════════════════════════════════════════════
    移动端「内容顶满」—— 浮动胶囊顶栏之下的起始留白(2026-08-13 用户拍板)
@@ -5465,6 +5512,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --press-recoil-duration: 150ms;
   --menu-exit-duration: 80ms; /* 菜单、二级面板、命令面板退场 */
   --palette-enter-duration: 120ms; /* 命令面板、⌘P 进场 */
+  --droplet-duration: 420ms; /* 液滴展开(lcl/engine/droplet.ts):浮层从发起它的按钮里流出来;收起 0.7 倍倒放(10-30 用户定) */
   --collapse-duration: var(--duration-base); /* 折叠展开 / 收起同长度(不算浮层退场,不缩短),箭头同一份 */
   --collapse-ease: var(--ease-drawer);
   --tip-delay: 300ms; /* 提示框首次出现 */
@@ -5535,7 +5583,7 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
    关掉那一下会把进场再放一遍、「弹」出来一次。这里列的 = 所有写了 [data-lcl-exit] 退场规则的类(上面的菜单名单 + 遮罩 +
    8.4 补的几处);新加退场规则必须加进来,否则退场被这条吃掉。check:motion 钉着。
    不写成 html:root :is(…) 开头:那是 check:motion 读进场 / 退场名单的格式。 */
-[data-lcl-exit]:not(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
+[data-lcl-exit]:not(.lcl-ftoc-rail, .ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
   .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar,
   .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, [data-motion~='toast']) { animation: none !important; }
@@ -5643,3 +5691,92 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
 .ui-zoom-hud-reset:hover { background: var(--border); }
 .ui-zoom-hud-reset[hidden] { display: none; }
 @media (prefers-reduced-motion: reduce) { .ui-zoom-hud { transition: none; translate: none; } }
+
+/* plugin-view-base:start —— 插件视图的基础样式(2026-10-29,插件开发体验 1B)。
+ * 插件在自己的视图里裸写(没写 class)的 <button> / <table> / <h1>–<h4>,不写样式也是宿主那一份的样子:
+ * 按钮同裸 .btn(描边成形、悬停转墨色),表格同笔记 / 会话的 Markdown 表格(DESIGN §6:表头不垫底、格线淡一半),
+ * 标题按界面字号档。<input> / <select> / <textarea> 由上面的「表单控件基线」管,这里不另写。
+ * · 权重:整条包在 :where() 里 = (0,0,0),插件自己写的任何规则(哪怕也是零权重,ctx.addStyle 排在后面)都压得过。
+ *   按钮能零权重,是因为文件头的全局重置 `button {…}`(0,0,1)把这些按钮让了出来 —— 重置里那串选择器与下面逐字一致。
+ *   零权重之间靠顺序:这块必须在 `*` 重置与表单基线之后(DESIGN §7.2,别往上挪)。
+ * · 只管没写 class 的:写了 class 就当插件在自己管样式(公开类 .btn 等的观感也就不动)。宿主替插件画的零件
+ *   (mountHostReact 那一层 data-host-mount)和插件自建的 .ctx-menu 里面一概不碰。
+ *   ponytail: 插件视图套插件视图、中间隔着一层宿主零件时,里面那份也不碰;真遇到再按最近的祖先判。
+ * · 视图头(setViewHead / setViewModes 的按钮)不在挂载点里,不吃这层,那里用 .btn.sm。
+ * · 值只用 plugin-contract.json 的公开 token、不写兜底(pluginContract.test.ts 按这对标记逐个对)。 */
+:where([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *)) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font: inherit;
+  font-size: var(--ui-font-body);
+  color: var(--text);
+  background: none;
+  border: 1px solid var(--overlay-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--duration-fast), color var(--duration-fast);
+}
+:where([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *):hover:not(:disabled)) { border-color: var(--accent-ink); color: var(--accent-ink); }
+:where([data-plugin-view-host] button:not([class], [data-plugin-view-host] [data-host-mount] *, .ctx-menu *):disabled) { opacity: 0.5; cursor: not-allowed; }
+:where([data-plugin-view-host] table:not([class], [data-plugin-view-host] [data-host-mount] *)) { border-collapse: collapse; }
+:where([data-plugin-view-host] table:not([class], [data-plugin-view-host] [data-host-mount] *) > :is(thead, tbody, tfoot) > tr > :is(th, td)) {
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+}
+:where([data-plugin-view-host] table:not([class], [data-plugin-view-host] [data-host-mount] *) > :is(thead, tbody, tfoot) > tr > th) { font-weight: 500; color: var(--text-muted); }
+:where([data-plugin-view-host] :is(h1, h2, h3, h4):not([class], [data-plugin-view-host] [data-host-mount] *)) { font-weight: 600; color: var(--text); }
+:where([data-plugin-view-host] h1:not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-title); line-height: var(--ui-line-title); }
+:where([data-plugin-view-host] h2:not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-heading); line-height: var(--ui-line-heading); }
+:where([data-plugin-view-host] :is(h3, h4):not([class], [data-plugin-view-host] [data-host-mount] *)) { font-size: var(--ui-font-body); line-height: var(--ui-line-body); }
+/* plugin-view-base:end */
+
+/* Compact Chat Box: menu size never changes the trigger's layout width. */
+.model-pill-compact { display: none; }
+.model-pill-wrap[data-compact], .model-pill-wrap[data-compact].is-open { min-width: 0; flex: 0 1 auto; max-width: 180px; }
+.model-pill-wrap[data-compact] .composer-chip.model-pill-btn {
+  display: flex; width: auto; max-width: 100%; min-width: 0; gap: 4px; padding: 4px 8px;
+}
+.model-pill-wrap[data-compact] .model-pill-btn > .pill-marquee,
+.model-pill-wrap[data-compact] .model-pill-btn > .pill-ultra-label,
+.model-pill-wrap[data-compact] .model-pill-btn > svg:first-of-type { display: none; }
+.model-pill-wrap[data-compact] .model-pill-compact { display: inline-flex; min-width: 0; overflow: hidden; white-space: nowrap; }
+.model-pill-compact > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.model-pill-compact > span:not(:first-child) { flex: none; }
+.model-pill-wrap[data-compact] .model-pill-btn > svg:last-of-type { flex: none; }
+.cm-main { display: contents; }
+.cm-main[hidden] { display: none; }
+.composer-menu.composer-menu--compact, .t2c-ctxring-pop.composer-menu--compact {
+  position: fixed; right: auto; bottom: auto; margin: 0; width: var(--menu-select-width);
+  min-width: 0; overflow: auto; overscroll-behavior: contain; pointer-events: auto;
+  font-family: var(--font-ui); color: var(--text); scrollbar-width: thin;
+}
+.composer-menu--compact .cm-sub--inline {
+  position: static; width: 100%; max-width: none; max-height: none; min-width: 0;
+  padding: 0; border: 0; box-shadow: none; background: none; animation: none;
+}
+.composer-menu--compact .add-menu-sub-scroll { max-height: none; overflow: visible; }
+.composer-menu--compact .cm-advanced-reveal { transition: none; }
+.composer-menu-header {
+  position: sticky; top: calc(-1 * var(--menu-shell-padding, 5px)); z-index: 1;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  min-height: 32px; padding: 4px 6px 7px; background: var(--bg-card); color: var(--text-muted);
+  font-size: var(--ui-font-meta); line-height: var(--ui-line-meta);
+}
+.composer-menu-header > span { min-width: 0; }
+.composer-menu-header button { display: inline-flex; align-items: center; gap: 4px; padding: 3px; color: inherit; border: 0; background: none; cursor: pointer; }
+.composer-menu-header > button:last-child { flex: none; margin-left: auto; }
+.composer-menu--compact .approval-item { flex-wrap: wrap; }
+.composer-menu--compact .approval-hover-desc {
+  display: none; position: static; width: 100%; max-width: none; padding: 5px 0 0 22px;
+  border: 0; box-shadow: none; background: none; transform: none; transition: none;
+  opacity: 1; visibility: visible;
+}
+.composer-menu--compact .approval-item:hover .approval-hover-desc,
+.composer-menu--compact .approval-item:focus-visible .approval-hover-desc { display: block; transform: none; }
+.mode-normal-row[data-inline] { flex-wrap: wrap; }
+.mode-normal-row[data-inline] > .cm-sub--inline { flex-basis: 100%; }

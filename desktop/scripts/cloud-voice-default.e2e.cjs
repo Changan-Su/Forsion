@@ -1,7 +1,7 @@
 /**
  * 语音通话的云端缺省(真 Electron × 假引擎 × 假 Forsion 云端,不花额度、不连真账号):
  *   A 已登录 Forsion、从没动过「语音通话」、云端有通话模型 → 输入框直接有通话键;拨出去交给引擎的是云端那个模型 + 明说的缺省音色;
- *     设置 → 模型 → 默认模型的「语音通话」选着云端那个(标「云端」)、说明是按通话时长扣额度,语音页给出通话音色,而且**看一眼不落盘**;
+ *     设置 → 模型 → 默认模型的「语音通话」选着云端那个(标「云端」)、说明从额度里扣,语音页给出通话音色,而且**看一眼不落盘**;
  *     选「未开启」= 落盘空串、通话键当场消失;重启后仍然关着(不会因为登录着又自己开回来);再选云端模型 = 落盘云端模型。
  *   B 没登录(同一份云端目录)→ 没有通话键;默认模型里「语音通话」没得选,语音页提示「登录 Forsion 账号就能直接用云端的通话模型」。
  *   C 设置窗开着的时候登录(登录前的模型目录里没有云端通话模型)→ 「语音通话」当场变成云端模型,和主窗的通话键对得上。
@@ -123,11 +123,11 @@ async function main() {
     await sp.screenshot({ path: path.join(out, 'a2-defaults.png') }).catch(() => {})
     await goSub(sp, '语音')
     Object.assign(view, {
-      voice: await sp.locator('select.realtime-voice').first().inputValue().catch(() => ''),
-      clone: await sp.locator('.realtime-clone-toggle').count(),
+      voice: await sp.locator('.settings-voice-call .voice-tile[data-on]').first().getAttribute('data-voice').catch(() => ''),
+      clone: await sp.locator('.settings-voice-call .voice-tile-new').count(),
     })
-    check('A2 默认模型里「语音通话」选着 Forsion Voice(标「云端」),说明按通话时长扣额度;语音页音色缺省 Tina,没有「复刻」(那是自带百炼才有的)',
-      /^Forsion Voice/.test(view.label) && view.origin === 'cloud' && /按通话时长/.test(view.hint) && view.voice === 'Tina' && view.clone === 0, JSON.stringify(view))
+    check('A2 默认模型里「语音通话」选着 Forsion Voice(标「云端」),说明从额度里扣;语音页音色缺省 Tina,云端也能新建音色(从前只有自带百炼才有的)',
+      /^Forsion Voice/.test(view.label) && view.origin === 'cloud' && /额度/.test(view.hint) && view.voice === 'Tina' && view.clone === 1, JSON.stringify(view))
     await sp.screenshot({ path: path.join(out, 'a2-settings.png') }).catch(() => {})
     check('A2b 只是看一眼设置:不落盘(仍算「没动过」)', cfgOf(home).realtimeModel === undefined, JSON.stringify(cfgOf(home)))
     await closeSettings(sp)
@@ -145,7 +145,7 @@ async function main() {
     await pickCall(sp, '未开启')
     const offSaved = await until(async () => cfgOf(home).realtimeModel === '', 5000)
     await goSub(sp, '语音')
-    const selGone = (await until(async () => (await sp.locator('select.realtime-voice').count()) === 0, 3000)) ? 0 : 1 // 落盘在前、设置窗重画在后:等一下再数
+    const selGone = (await until(async () => (await sp.locator('.settings-voice-call .voice-gallery').count()) === 0, 3000)) ? 0 : 1 // 落盘在前、设置窗重画在后:等一下再数
     await closeSettings(sp)
     const gone = await until(async () => (await liveBtn(win).count()) === 0, 8000)
     check('A4 选「未开启」:config 落盘空串、语音页音色收起、主窗通话键当场消失', !!offSaved && selGone === 0 && !!gone, JSON.stringify({ cfg: cfgOf(home), selGone, gone: !!gone }))

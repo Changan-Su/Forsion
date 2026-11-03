@@ -12,7 +12,7 @@
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import { uninstallAgent } from '../../services/agentUninstall.js';
-import { listAgents, getAgent, saveAgent, patchAgent, slugify, isValidSlug, AGENT_MAX_ITERATIONS_MIN, KEEP_APPROVAL_MODE, type AgentPatch, type NormalAgentDef } from '../../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, patchAgent, slugFromNames, isValidSlug, agentNames, AGENT_MAX_ITERATIONS_MIN, KEEP_APPROVAL_MODE, type AgentPatch, type NormalAgentDef } from '../../agents/agentRegistry.js';
 import { THINKING_LEVELS } from '../../llm/modelCapabilities.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
@@ -44,8 +44,10 @@ export const manageAgentProvider: ToolProvider = {
             type: 'object',
             properties: {
               action: { type: 'string', enum: ['create', 'update', 'delete', 'list'], description: 'The operation' },
-              slug: { type: 'string', description: 'Unique agent identifier (lowercase alphanumerics and hyphens); required for update/delete, optional for create (derived from name)' },
+              slug: { type: 'string', description: 'Unique agent identifier (lowercase alphanumerics and hyphens); required for update/delete. Optional for create when an English name is given; required for a Chinese-only name' },
               name: { type: 'string', description: 'Display name (required for create/update)' },
+              name_zh: { type: 'string', description: 'Chinese name, shown when the app is in Chinese (optional)' },
+              name_en: { type: 'string', description: 'English name, shown when the app is in English; no Chinese characters (optional)' },
               description: { type: 'string', description: 'One-sentence summary' },
               system_prompt: { type: 'string', description: 'The agent\'s development instructions (what to do / how to do it / what to read; required for create/update)' },
               soul: { type: 'string', description: 'Persona definition (SOUL.md; tone/values; optional)' },
@@ -67,7 +69,7 @@ export const manageAgentProvider: ToolProvider = {
           if (action === 'list') {
             const all = await listAgents();
             if (!all.length) return '(no local agents)';
-            return all.map((a) => `- ${a.slug}: ${a.name}${a.description ? ` — ${a.description}` : ''}`).join('\n');
+            return all.map((a) => `- ${a.slug}: ${agentNames(a).join(' / ')}${a.description ? ` — ${a.description}` : ''}`).join('\n');
           }
           if (action === 'delete') {
             const slug = String(args.slug || '');
@@ -87,10 +89,11 @@ export const manageAgentProvider: ToolProvider = {
             // 错误语要告诉模型怎么改:捆绑技能等旧材料可能还教它传 approval_mode,别让它卡在这一步。
             if (args.approval_mode !== undefined) return 'Error: approval_mode can only be changed by the user in Settings. Nothing was saved; call again without approval_mode.';
             if (!args.name || !args.system_prompt) return 'Error: create/update requires name and system_prompt.';
-            // slug 归一必须与 saveAgent 的落盘规则一致(非法 slug → slugify(name)),否则可以用
+            // slug 归一必须与 saveAgent 的落盘规则一致(非法 slug → 由名字推),否则可以用
             // 大写等非法变体让守卫查不到 existing、saveAgent 却归一回自己的 slug(Codex 评审 #2)。
             const requested = args.slug ? String(args.slug) : '';
-            const slug = requested && isValidSlug(requested) ? requested : slugify(String(args.name));
+            const slug = requested && isValidSlug(requested) ? requested : slugFromNames(args.name_en, args.name);
+            if (!slug) return 'Error: a Chinese-only name cannot produce a slug. Nothing was saved; call again with slug (lowercase letters, digits, hyphens).';
             const existing = await getAgent(slug);
             if (action === 'update' && !existing) return `Error: agent not found: ${slug} (use action=list to see agents).`;
             // 守卫对「某一份」agent 快照判:预读判一次(快速失败、报错顺序照旧);覆盖已有 agent 的路径在 patchAgent 里
@@ -124,6 +127,8 @@ export const manageAgentProvider: ToolProvider = {
             // (09-25 审批档那条 P1 的同类窗口)。覆盖已有的走 patchAgent:在按 slug 串行化的保存里现读、只改传了的字段。
             const fields: AgentPatch = {
               name: String(args.name),
+              nameZh: args.name_zh != null ? String(args.name_zh) : undefined,
+              nameEn: args.name_en != null ? String(args.name_en) : undefined,
               systemPrompt: String(args.system_prompt),
               description: args.description != null ? String(args.description) : undefined,
               model: args.model != null ? String(args.model) : undefined,
@@ -146,7 +151,7 @@ export const manageAgentProvider: ToolProvider = {
               })
               : await saveAgent({ ...fields, slug, name: String(args.name), systemPrompt: String(args.system_prompt), approvalMode: KEEP_APPROVAL_MODE, mustNotExist: true });
             // create 撞上已有 slug = 覆盖(设计如此,见上;readonly / auto-edit 的审批卡已写「overwrites」),但完全放行档不弹卡 ——
-            // 回执必须点破,否则纯中文名不带 slug(slugify → 'agent')连建两个,模型两次都以为「建好了」,第一个已被悄悄替换。
+            // 回执必须点破,否则同一个 slug 连建两个,模型两次都以为「建好了」,第一个已被悄悄替换。
             const verb = action === 'update'
               ? 'Updated agent'
               : existing ? 'Overwrote existing agent' : 'Created agent';

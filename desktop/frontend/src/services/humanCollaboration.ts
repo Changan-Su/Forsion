@@ -10,6 +10,8 @@ export interface HumanChange {
   beforeVersion: string; afterVersion: string; undoOf?: string
   /** 引擎给 Agent 的写入盖的章:按哪一版写法写的。没有 = 修复之前的引擎写的(那时它会把自己的承诺也写进来)。 */
   rules?: number
+  /** 这一笔从哪来(10-29 画像写入):remember 记下 / Dream 整理 / 跨档挪来 / 从记忆交给所有 Agent / 用户从回执撤销。老引擎不带。 */
+  source?: { kind: 'remember' | 'dream' | 'move' | 'promote' | 'user'; agent?: string; action?: 'add' | 'update' | 'forget' }
 }
 export interface HumanDocument {
   scope: HumanScope; path: string; content: string; version: string; exists: boolean; updatedAt: string | null;

@@ -81,4 +81,43 @@ describe('asset protocol: which file a note image resolves to', () => {
     await fs.writeFile(path.join(root, 'notes', 'attachments', 'x.png'), 'SHADOW')
     expect(await load(stored, 'notes'), `落盘写成了 ${stored}`).toEqual({ status: 200, body: 'ROOT' })
   })
+
+  describe('共享镜像里走出页面目录的相对路径', () => {
+    const pageDir = '与我共享/页-1'
+    const mapTo = (target: string | null) => registerAssetProtocol(() => root, (rel) => (rel.startsWith(`${pageDir}/`) ? target : null))
+
+    beforeEach(async () => {
+      await fs.mkdir(path.join(root, '与我共享', 'x-2'), { recursive: true })
+      await fs.writeFile(path.join(root, '与我共享', 'x-2', 'x.png'), 'SHARED')
+    })
+
+    it('按绑定换到文件在镜像里的位置,存回去的引用一字不变', async () => {
+      mapTo('与我共享/x-2/x.png')
+      expect(await load('![](../资料/x.png)', pageDir)).toEqual({ status: 200, body: 'SHARED' })
+      expect(toStoredMarkdown(toDisplayMarkdown('![](../资料/x.png)', pageDir), pageDir)).toBe('![](../资料/x.png)')
+    })
+
+    it('按镜像折叠会越出库根、或落到自己库的同路径文件时,仍按绑定取', async () => {
+      mapTo('与我共享/x-2/x.png')
+      expect(await load('![](../../../资料/x.png)', pageDir)).toEqual({ status: 200, body: 'SHARED' })
+      expect(await load('![](../../attachments/x.png)', pageDir)).toEqual({ status: 200, body: 'SHARED' })
+    })
+
+    it('没有绑定覆盖 = 照原路径取;没装解析器的老 Extend 同样', async () => {
+      mapTo(null)
+      expect((await load('![](../资料/x.png)', pageDir)).status).toBe(404)
+      await fs.mkdir(path.join(root, pageDir), { recursive: true })
+      await fs.writeFile(path.join(root, pageDir, 'near.png'), 'NEAR')
+      expect(await load('![](near.png)', pageDir)).toEqual({ status: 200, body: 'NEAR' })
+      registerAssetProtocol(() => root)
+      expect((await load('![](../资料/x.png)', pageDir)).status).toBe(404)
+    })
+
+    it('解析结果越出库根 = 403,指向目录 = 404', async () => {
+      mapTo('../secret.png')
+      expect((await load('![](../资料/x.png)', pageDir)).status).toBe(403)
+      mapTo('与我共享/x-2')
+      expect((await load('![](../资料/x.png)', pageDir)).status).toBe(404)
+    })
+  })
 })

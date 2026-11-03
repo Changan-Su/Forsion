@@ -30,7 +30,7 @@ router.post('/agent/trash/:id/restore', authMiddleware, async (req: AuthRequest,
     if (entry.restorer !== 'engine') return res.status(409).json({ detail: 'Restored by the desktop app', error: 'restorer_desktop' });
     if (entry.kind === 'agent') return res.json({ ok: true, ...(await restoreAgent(req.user!.userId, entry)) });
     if (entry.kind === 'skill') return res.json({ ok: true, ...(await restoreSkill(entry)) });
-    if (entry.kind === 'plugin') return res.json({ ok: true, ...(await restoreEnginePlugin(entry)) });
+    if (entry.kind === 'plugin') return res.json({ ok: true, ...(await restoreEnginePlugin(entry, { rescan: req.query.rescan !== '0' })) });
     res.status(400).json({ detail: `cannot restore ${entry.kind}` });
   } catch (e: any) {
     if (e?.code === 'plugin_reinstalled') return res.status(409).json({ detail: e.message, error: e.code });

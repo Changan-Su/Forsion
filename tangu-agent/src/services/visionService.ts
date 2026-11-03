@@ -15,6 +15,7 @@ import { getRawSection } from '../core/config.js';
 import { modelSupportsVision } from '../llm/modelCapabilities.js';
 import { toImageParts } from './imageAttachments.js';
 import type { ChatMessage } from '../core/types.js';
+import { PLUGIN_MODEL_PREFIX, resolvePluginModel } from '../llm/pluginModels.js';
 
 const DESCRIBE_SYSTEM_PROMPT =
   'You are an image-understanding assistant. Describe the given image(s) so that another AI, which cannot see them, can act on your description alone. ' +
@@ -118,6 +119,7 @@ export async function shouldDescribeImages(modelId: string, appId?: string, expl
 export async function mainModelSupportsVision(modelId: string, appId?: string): Promise<boolean> {
   const id = (modelId || '').trim();
   if (!id) return true;
+  if (id.startsWith(PLUGIN_MODEL_PREFIX)) return (await resolvePluginModel(id)).model.supportsVision === true;
   const { noVision } = await loadSlots(appId);
   if (noVision.has(id)) return false;
   // 直连黑名单按 provider 归属判:`a/gemma3` 只吃 provider a 的名单,不吃 b 的(否则同名模型互相误伤)。

@@ -226,6 +226,8 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
 
 // 从某条消息(含)处分支出新会话:继承到该点为止的历史(区别于 POST /agent/sessions 的空会话)。
 // message_id 为分支点(通常是某条 AI 回复);title 可选(缺省取源会话标题)。
+// fork_message_id 可选:分叉点记在哪条上(缺省 = message_id)。编辑重发 / 重新生成要把「旧的这一版」整份留成一支 ——
+// 复制到最后一条(message_id),分叉点却在被改那条之前的回答上,画布才把旧那支和新主线画成同一张卡下的两个孩子。
 router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
@@ -234,6 +236,7 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
     const messageId = typeof req.body?.message_id === 'string' ? req.body.message_id : '';
     if (!messageId) return res.status(400).json({ detail: 'message_id required' });
     const title = typeof req.body?.title === 'string' ? req.body.title : undefined;
+    const forkMessageId = typeof req.body?.fork_message_id === 'string' && req.body.fork_message_id ? req.body.fork_message_id : messageId;
     // 分支照抄源会话 agent_config(源会话的远程标记随之继承);远端发起的分支自己再记一笔 —— 随建会话的同一条 INSERT
     // (见 BranchSessionInput.configOverlay:先插后补会留一个无标记的窗口,复制失败时就一直无标记)。
     const remote = parseRemoteOrigin(req.headers);
@@ -242,7 +245,7 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
     // 不传标题时叫 New Chat,第一句新问题由 Historian 起名(同源标题的兄弟分支在树里认不出来)。
     const r = await branchSession({
       sourceSessionId: req.params.id, userId, appId: s.app_id, messageId, title: title ?? 'New Chat',
-      parentSessionId: s.fork_message_id && s.parent_session_id ? String(s.parent_session_id) : req.params.id, forkMessageId: messageId,
+      parentSessionId: s.fork_message_id && s.parent_session_id ? String(s.parent_session_id) : req.params.id, forkMessageId,
       ...(remote ? { configOverlay: { remoteOrigin: remoteOriginMarker(remote) } } : {}),
     });
     if (!r) return res.status(404).json({ detail: 'branch source/message not found' });
@@ -299,7 +302,9 @@ router.post('/agent/sessions/:id/children', authMiddleware, async (req: AuthRequ
     if (!message || message.length > 20_000) return res.status(400).json({ detail: 'message required (max 20000 chars)' });
     const title = typeof req.body?.title === 'string' ? req.body.title : '';
     const remote = parseRemoteOrigin(req.headers);
-    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(remote ? { remote } : {}) });
+    // 任务卡的 `agent:` 是模型写的串:认得才用,认不得跟主会话走
+    const agent = typeof req.body?.agent === 'string' ? await getAgent(req.body.agent).catch(() => null) : null;
+    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(agent ? { agentSlug: agent.slug } : {}), ...(remote ? { remote } : {}) });
     res.json({ sessionId: r.sessionId, runId: r.runId, title: r.title });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'start child session failed' });
@@ -347,7 +352,7 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const { title, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
+    const { title, title_source, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
     const icon = normalizeSessionEmoji(emoji);
     if (emoji !== undefined && emoji !== null && emoji !== '' && !icon) return res.status(400).json({ detail: 'emoji must be one emoji' });
     // 契约 C8:远端改会话的项目路径同样不许指到根 / 家目录 / 受保护目录(桌面据 project_path 给之后的 run 填 cwd)。
@@ -356,10 +361,17 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
     const sets: string[] = [];
     const params: any[] = [];
-    if (typeof title === 'string') { sets.push('title = ?'); params.push(title.trim().slice(0, 200)); }
+    if (typeof title === 'string') {
+      const nextTitle = title.trim().slice(0, 200);
+      // 只有用户自己的改名入口带 title_source:'user'。手动 = Historian 此后不再动这个标题;用户把标题清空 = 交还给 Historian。
+      // 前端发出第一句后写的占位标题带 'auto':不算手动,也盖不掉手动标题(本机列表可能还没刷到别的设备刚改的名字)。
+      sets.push(title_source === 'auto' ? 'title = CASE WHEN title_manual THEN title ELSE ? END' : 'title = ?'); params.push(nextTitle);
+      if (title_source === 'user') sets.push(`title_manual = ${nextTitle ? 'TRUE' : 'FALSE'}`);
+    }
     if (typeof archived === 'boolean') { sets.push('archived = ?'); params.push(archived); }
     if (typeof model_id === 'string') { sets.push('model_id = ?'); params.push(model_id || null); }
-    if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?'); params.push(icon); }
+    // Historian 写图标不走这里,这条路都是用户动的;清空也算,不然下一轮又被自动填上。
+    if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?', 'emoji_manual = TRUE'); params.push(icon); }
     if (typeof project_path === 'string' || project_path === null) { sets.push('project_path = ?'); params.push(project_path ? String(project_path).slice(0, 1000) : null); }
     if (typeof project_name === 'string' || project_name === null) { sets.push('project_name = ?'); params.push(project_name ? String(project_name).slice(0, 255) : null); }
     if (typeof projectless === 'boolean') { sets.push('projectless = ?'); params.push(projectless); }

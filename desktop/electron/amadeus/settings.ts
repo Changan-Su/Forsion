@@ -31,6 +31,9 @@ export interface AmadeusConfig extends CloudAccountConfig {
   lastVault?: string
   localVault?: string
   lastPage?: string
+  /** Local vaults this device has opened; syncVault = the one content sync stays bound to (see vaultList.ts). */
+  vaults?: import('./vaultList').VaultEntry[]
+  syncVault?: string
   /** Read snapshot owner; pass it back on asynchronous cloud config writes. */
   cloudAccountId?: string | null
 }
@@ -87,6 +90,7 @@ export async function readConfig(accountId = currentCloudAccountId()): Promise<A
   // asynchronous work from modifying the persisted owner map behind our back.
   return structuredClone({
     lastVault: stored.lastVault, localVault: stored.localVault, lastPage: stored.lastPage,
+    vaults: stored.vaults, syncVault: stored.syncVault,
     cloudSync: own?.cloudSync, entrySync: own?.entrySync ?? [], cloudAccountId: accountId,
   })
 }

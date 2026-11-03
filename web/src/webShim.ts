@@ -102,9 +102,11 @@ export async function installWebShim(): Promise<boolean> {
 
   const account = getWebAccount()
   const token = account.getToken()
-  if (!token) { gotoLogin(); return false }
+  // 带着文件地址来的,登录完要回到这一页。
+  const returnUrl = location.search ? location.href : undefined
+  if (!token) { gotoLogin(returnUrl); return false }
   const status = await account.authStatus()
-  if (status.tokenValid === false) { await account.clearSession(token); gotoLogin(undefined, true); return false }
+  if (status.tokenValid === false) { await account.clearSession(token); gotoLogin(returnUrl, true); return false }
 
   // 2) API 基址:VITE_API_URL 覆盖,否则同源 location.origin+/api
   //    —— dev 经 vite proxy、prod 经本 app 自己的 nginx 把 /api 代理到 Forsion server(→ tangu worker)。
@@ -193,6 +195,8 @@ export async function installWebShim(): Promise<boolean> {
     // 协议更新提示(components/TermsUpdateDialog):网页版不给通用 cloudFetch,只开这两条
     termsStatus: () => cloudJson('GET', '/auth/terms'),
     termsAgree: (version: string) => cloudJson('POST', '/auth/terms/agree', { version }),
+    // 会员徽章(components/tierBadgeStyles):配色与中英文方案名
+    membershipPlans: () => cloudJson('GET', '/membership/plans'),
   }
 
   // The same transport guard serves regular Web and Unit visitors, using the

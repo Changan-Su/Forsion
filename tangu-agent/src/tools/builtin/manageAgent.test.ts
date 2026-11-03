@@ -88,11 +88,13 @@ describe('manage_agent · 成功回执', () => {
     expect(updated).not.toMatch(HAN);
   });
 
-  it('纯中文名不带 slug 连建两个:第二个回执是 Overwrote(不是 Created),省略的 soul 沿用第一个', async () => {
-    const first = await exec({ action: 'create', name: '代码审查员', system_prompt: 'review code', soul: 'strict' });
+  it('纯中文名不带 slug → 报错不落盘;显式 slug 连建两个:第二个回执是 Overwrote(不是 Created),省略的 soul 沿用第一个', async () => {
+    expect(await exec({ action: 'create', name: '代码审查员', system_prompt: 'review code', soul: 'strict' })).toMatch(/^Error: a Chinese-only name cannot produce a slug\./);
+    expect(await getAgent('agent')).toBeNull();
+    const first = await exec({ action: 'create', slug: 'agent', name: '代码审查员', system_prompt: 'review code', soul: 'strict' });
     expect(first).toMatch(/^Created agent: agent \(代码审查员\)\./);
     expect(first).not.toMatch(/replaced/);
-    const second = await exec({ action: 'create', name: '写作助手', system_prompt: 'help write' });
+    const second = await exec({ action: 'create', slug: 'agent', name: '写作助手', system_prompt: 'help write' });
     expect(second).toMatch(/^Overwrote existing agent: agent \(写作助手\)\. It replaced the agent that already had this slug; fields you omitted were kept from that agent\. To add a separate agent, pass a different slug\./);
     const stored = await getAgent('agent');
     expect(stored?.name).toBe('写作助手');

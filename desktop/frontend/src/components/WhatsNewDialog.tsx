@@ -12,7 +12,7 @@ import { ArrowUpRight, X } from 'lucide-react'
 import { renderPublicMarkdown } from '@amadeus-shared/publishing/publicMarkdown'
 import { mountPublishedMedia } from '@amadeus-shared/publishing/mediaPlayer'
 import { buildWhatsNewEntries, parseWebsiteReleases, WEBSITE_ORIGIN, WEBSITE_RELEASES_URL, websiteReleaseUrl, type WebsiteRelease, type WhatsNewEntry } from '../../../shared/websiteReleases'
-import { APP_VERSION, changelogFor } from '../changelog'
+import { APP_VERSION, changelogFor, changelogMarkdown } from '../changelog'
 import { registerMessages, useI18n } from '../i18n'
 import { windowKind } from '../windowKind'
 import { POPUP_PRIORITY, usePopupTurn } from '../stores/popupQueue'
@@ -183,7 +183,7 @@ function WhatsNewArticle({ entry }: { entry: WhatsNewEntry }) {
       </div>
       <h2 className="wn-title">{entry.displayVersion ? `Forsion ${entry.displayVersion}` : published?.title || `Forsion ${entry.version}`}</h2>
       {published ? <div ref={ref} className="amadeus-published" dangerouslySetInnerHTML={{ __html: published.html }} />
-        : entry.lines ? <Markdown content={entry.lines.map((l) => `- ${l}`).join('\n')} />
+        : entry.lines ? <Markdown content={changelogMarkdown(entry.lines)} />
         : entry.notes ? <Markdown content={entry.notes} />
         : null}
     </article>

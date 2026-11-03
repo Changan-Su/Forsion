@@ -1,57 +1,53 @@
 /**
- * 设置 → 模型 → 语音(10-25 走查续 4.5 换成设置卡片 + 行,和「常规」「Space」「通知」同一套):
- *  - 语音通话(RealtimeVoiceSettings):卡头说明 + 下一步(添加提供方 / 去选模型);有通话模型时下面是音色与复刻
+ * 设置 → 模型 → 语音(10-25 走查续 4.5 换成设置卡片 + 行;10-31 音色改成卡片,方案 B):
+ *  - 语音通话(RealtimeVoiceSettings):开关 + 通话模型 + 通话音色卡片
  *  - 本地语音识别(AsrModelChoice):卡头右边「下载」→ 进度 →「已下载」
- *  - 朗读:卡头右边「去选模型」(选好就不出);四行 = 音色 + 试听 / 语速 / 回复完自动朗读 / 复刻·设计音色。
- *    没选朗读模型时四行照样能填(只是不出声),不置灰;只有「试听」要模型才能按。
+ *  - 朗读:朗读模型 + 朗读音色卡片 + 语速 + 回复完自动朗读。没选朗读模型时音色也能先选(只是不出声)。
  * 每行声明窄屏排法 fit(SettingsRow):开关、单个按钮留在右边,输入框换到下一行占满。
- * 纯排法迁移:写的键与时机和旧页一致(ttsVoice 走草稿 + 失焦提交,ttsSpeed 失焦夹到 0.5–2,ttsAutoSpeak 即时写)。
+ * 通话音色和朗读音色互不通用,所以各放一份,不混排。
  */
-import { useState, type ReactNode } from 'react'
-import { Loader2, Play, Volume2 } from 'lucide-react'
+import { useEffect, useState, type ReactNode } from 'react'
+import { ChevronRight, Volume2 } from 'lucide-react'
 import type { DirectProviderConfig, StoredDesktopConfig, TanguDesktopConfig } from '../types'
 import type { CloudCallModel } from '../services/realtimeModel'
-import { previewTts } from '../services/ttsService'
+import { isDashScope } from '../services/realtimeModel'
+import { effectiveTtsConfig } from '../services/ttsService'
+import { deleteTtsVoice, listTtsVoices, synthesizeTts, type TtsVoiceInfo } from '../services/backendService'
+import { BAILIAN_READ_VOICES, OPENAI_READ_VOICES, toggleVoicePreview, voiceSampleUrl } from '../services/voiceCatalog'
 import { homeTarget } from '../services/engine/targets'
 import { registerMessages, useI18n } from '../i18n'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { RealtimeVoiceSettings } from './RealtimeVoiceSettings'
 import { AsrModelChoice } from './AsrModelChoice'
-import { TtsVoiceStudio } from './TtsVoiceStudio'
+import { VoiceGallery, type VoiceItem } from './VoiceGallery'
+import { VoiceCreateDialog, type VoiceCreated } from './VoiceCreateDialog'
 
 registerMessages({
+  'settings.tts.unknownBinding': { zh: '绑定模型未知', en: 'Unknown model' },
+  'settings.tts.unknownBindingHint': { zh: '不知道这个音色绑在哪个模型上，没法用于朗读。可以删掉重新复刻。', en: "We can't tell which model this voice is tied to, so it can't be used for read-aloud. You can delete it and clone again." },
   'settings.voice.secRead': { zh: '朗读', en: 'Read aloud' },
   'settings.voice.addProvider': { zh: '添加提供方', en: 'Add provider' },
   'settings.voice.chooseModel': { zh: '去选模型', en: 'Choose model' },
-  'settings.voice.collapse': { zh: '收起', en: 'Hide' },
-  'settings.voice.readNoModel': { zh: '还没选朗读模型。下面几项可以先填，选好模型以后生效。', en: 'No read-aloud model yet. You can fill in the options below now; they take effect once you pick one.' },
-  'settings.voice.readModel': { zh: '用「{model}」朗读回复；换模型在「默认模型 → 朗读」。', en: 'Replies are read aloud with {model}. Change it under Default models → Read aloud.' },
-  'settings.tts.voiceHint': { zh: '部分服务（如 OpenAI）必填；留空就不传音色，用模型默认的。', en: 'Required by some services, such as OpenAI. Leave it empty to use the model default.' },
-  'settings.tts.voiceLabel': { zh: '音色', en: 'Voice' },
+  'settings.voice.readDesc': { zh: '点消息下方的朗读键，或让新回复读出来。', en: 'Tap the read-aloud button under a message, or have new replies read out.' },
+  'settings.voice.readNoModel': { zh: '还没选朗读模型。下面几项可以先设，选好模型以后生效。', en: 'No read-aloud model yet. You can set the options below now; they take effect once you pick one.' },
+  'settings.voice.readModelRow': { zh: '朗读模型', en: 'Read-aloud model' },
+  'settings.tts.voiceLabel': { zh: '朗读音色', en: 'Read-aloud voice' },
+  'settings.tts.customVoice': { zh: '自定义音色', en: 'Custom voice' },
+  'settings.tts.customVoiceHint': { zh: '部分服务（如 OpenAI）必填；留空就不传音色，用模型默认的。', en: 'Required by some services, such as OpenAI. Leave it empty to use the model default.' },
   'settings.tts.speedLabel': { zh: '语速', en: 'Speed' },
-  'settings.tts.speedHint': { zh: '0.5 到 2 倍', en: '0.5× to 2×' },
-  'settings.tts.studio.row': { zh: '复刻 / 设计音色', en: 'Clone or design a voice' },
-  'settings.tts.studio.rowHint': { zh: '复刻你的声音，或用一句话设计一个。', en: 'Clone your voice, or design one from a description.' },
-  'settings.tts.studio.rowNeedProvider': { zh: '需要一个指向阿里云百炼（DashScope）的提供方。', en: 'Needs a provider pointing at Alibaba Cloud Bailian (DashScope).' },
-  'settings.tts.studio.open': { zh: '展开', en: 'Show' },
+  'settings.tts.mineDelete': { zh: '删除音色「{name}」？删除后不能恢复。', en: 'Delete the voice "{name}"? This cannot be undone.' },
+  'settings.tts.previewNoModel': { zh: '选好朗读模型后才能试听这个音色。', en: 'Pick a read-aloud model to preview this voice.' },
 })
 
-// 系统音色候选(datalist 可输可选;百炼无音色列表 API,静态维护常用项;全量见百炼「Qwen-TTS 音色列表」文档)。
-// ⚠️ 表在模块作用域,只能存**文案 key**:写死字面量会在模块加载时冻结,切语言不会更新。
-// 第一列是音色 id(发给接口的标识符,永不翻译),第二列是显示名的 key,渲染时 t() 解析。
-const TTS_VOICE_SUGGESTIONS: Array<[string, string]> = [
-  ['Cherry', 'settingsmodal.tts.voice.cherry'], ['Serena', 'settingsmodal.tts.voice.serena'],
-  ['Ethan', 'settingsmodal.tts.voice.ethan'], ['Chelsie', 'settingsmodal.tts.voice.chelsie'],
-  ['Nofish', 'settingsmodal.tts.voice.nofish'], ['Jennifer', 'settingsmodal.tts.voice.jennifer'],
-  ['Ryan', 'settingsmodal.tts.voice.ryan'], ['Katerina', 'settingsmodal.tts.voice.katerina'],
-  ['Dylan', 'settingsmodal.tts.voice.dylan'], ['Jada', 'settingsmodal.tts.voice.jada'],
-  ['Sunny', 'settingsmodal.tts.voice.sunny'], ['Rocky', 'settingsmodal.tts.voice.rocky'],
-  ['Kiki', 'settingsmodal.tts.voice.kiki'], ['Marcus', 'settingsmodal.tts.voice.marcus'],
-  ['Roy', 'settingsmodal.tts.voice.roy'], ['Peter', 'settingsmodal.tts.voice.peter'],
-  ['alloy', 'settingsmodal.tts.voice.openai'], ['echo', 'settingsmodal.tts.voice.openai'],
-  ['fable', 'settingsmodal.tts.voice.openai'], ['onyx', 'settingsmodal.tts.voice.openai'],
-  ['nova', 'settingsmodal.tts.voice.openai'], ['shimmer', 'settingsmodal.tts.voice.openai'],
-]
+// 与后端 routes/tts.ts 的 DASHSCOPE_VC/VD_MODEL 保持一致(列表项缺 targetModel 时按 kind 兜底)。
+// voice-enrollment 那一类(kind=cosy)不兜底:它底下有十来个模型,猜错就是一对配不上的模型和音色 → 不知道绑的是谁就不给用。
+const KIND_MODEL: Record<'clone' | 'design', string> = { clone: 'qwen3-tts-vc-2026-01-22', design: 'qwen3-tts-vd-2026-01-26' }
+const boundModel = (v: TtsVoiceInfo): string => v.targetModel || (v.kind === 'cosy' ? '' : KIND_MODEL[v.kind])
+/** 绑在通话模型上的音色(Qwen-Omni / *-realtime):朗读用不了。 */
+const callOnly = (targetModel?: string): boolean => /omni|realtime/i.test(targetModel || '')
+/** 这个朗读模型认哪张系统音色表;认不出来就只剩「自定义音色」。 */
+const readVoicesFor = (model: string): string[] => (/tts-1|gpt-.*tts|openai/i.test(model) ? OPENAI_READ_VOICES : !model || /qwen3?-tts/i.test(model) ? BAILIAN_READ_VOICES : [])
+const COLLAPSED = 8
 
 /** 语音页要去的地方:模型 → 提供方 / 默认模型里的「语音通话」「朗读」那一行。 */
 export type VoiceSettingsTarget = 'providers' | 'call-model' | 'tts-model'
@@ -63,6 +59,8 @@ export function VoiceSettingsPage(p: {
   setStored: (c: StoredDesktopConfig) => void
   providers: DirectProviderConfig[]
   cloudModel?: CloudCallModel | null
+  /** 后台给的朗读默认(用户没动过时跟随)。 */
+  ttsDefault?: { ttsModelId?: string | null; ttsVoice?: string | null } | null
   cloudAccount: boolean
   signedIn: boolean
   edit: (patch: Partial<StoredDesktopConfig>) => void
@@ -86,97 +84,93 @@ export function VoiceSettingsPage(p: {
 }
 
 function ReadAloudPanel(p: Parameters<typeof VoiceSettingsPage>[0] & { stored: StoredDesktopConfig }) {
-  const { t } = useI18n()
-  const { stored, setStored } = p
-  const [speedText, setSpeedText] = useState<string | null>(null)
-  const [testing, setTesting] = useState(false)
-  const [testMsg, setTestMsg] = useState('')
-  const [studioOpen, setStudioOpen] = useState(false)
-  const [studioMounted, setStudioMounted] = useState(false)
+  const { t, locale } = useI18n()
+  const { setStored } = p
+  const stored = effectiveTtsConfig(p.stored, p.ttsDefault, p.signedIn)!
   const model = (stored.ttsModelId || '').trim()
+  const voice = stored.ttsVoice || ''
+  const [note, setNote] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [showAll, setShowAll] = useState(false)
+  const [voices, setVoices] = useState<TtsVoiceInfo[]>([])
+  const [reload, setReload] = useState(0)
+  // 非本地 external 后端不给新建:本地 providers 文件到不了远端 registry,采用的音色无法合成。
+  const ds = p.remoteExternal ? undefined : p.providers.find(isDashScope)
+  const auth = ds ? { baseUrl: ds.baseUrl, apiKey: ds.apiKey || '' } : null
+  useEffect(() => {
+    if (!auth) return
+    let stale = false
+    listTtsVoices(homeTarget(), auth).then((v) => { if (!stale) setVoices(v || []) }).catch(() => { /* 列不出来就只剩系统音色 */ })
+    return () => { stale = true }
+  }, [auth?.baseUrl, auth?.apiKey, reload])
 
-  // 百炼音色工作室:有指向阿里云百炼的 provider 才可用(域名判定与后端 isDashScopeBase 一致)。
-  // 非本地 external 后端整行不出:本地 providers 文件到不了远端 registry,采用的音色无法合成(判定同上方 externalWarning)。
-  const { remoteExternal } = p
-  const ds = p.providers.find((cp) => /dashscope|aliyuncs\.com/i.test(cp.baseUrl))
-
-  const test = (): void => {
-    setTesting(true); setTestMsg('')
-    previewTts(homeTarget(), { model, voice: (stored.ttsVoice || '').trim() || undefined, speed: stored.ttsSpeed }, t('settings.tts.testText'))
-      .then(() => setTestMsg(`✓ ${t('settings.tts.testOk')}`))
-      .catch((e: any) => setTestMsg(`✗ ${e?.message || e}`))
-      .finally(() => setTesting(false))
+  const save = (patch: Partial<StoredDesktopConfig>): void => { setNote(''); void window.tangu!.setConfig(patch).then(setStored).catch((e: any) => setNote(`✗ ${e?.message || e}`)) }
+  const preview = (v: string): void => {
+    const url = voiceSampleUrl('read', v, locale)
+    if (!url && !model) { setNote(t('settings.tts.previewNoModel')); return }
+    void toggleVoicePreview(`read:${v}`, () => url || previewTtsUrl(v)).catch((e: any) => setNote(`✗ ${e?.message || e}`))
   }
+  // 系统音色没有样音、复刻 / 设计的音色:现合成一句(走当前朗读模型)
+  const previewTtsUrl = (v: string): Promise<string> => synthesizeTts(homeTarget(), { text: t('settings.tts.testText'), model, voice: v, ...(stored.ttsSpeed && stored.ttsSpeed !== 1 ? { speed: stored.ttsSpeed } : {}) }).then((b) => URL.createObjectURL(b))
+  const presets = readVoicesFor(model)
+  const list = showAll ? presets : presets.slice(0, COLLAPSED)
+  const named = (v: string): boolean => BAILIAN_READ_VOICES.includes(v)
+  const system: VoiceItem[] = (list.includes(voice) || !presets.includes(voice) ? list : [...list.slice(0, -1), voice]).map((v) => ({
+    id: v, name: named(v) ? t(`voice.read.${v}.name`) : v, desc: named(v) ? t(`voice.read.${v}.desc`) : undefined, onPreview: () => preview(v),
+  }))
+  const mine: VoiceItem[] = voices.filter((v) => !callOnly(v.targetModel)).map((v) => ({
+    // 百炼没回绑定模型的音色:用不了,但要能删
+    id: v.voice, name: v.voice, desc: boundModel(v) || t('settings.tts.unknownBinding'), bound: !boundModel(v), onPreview: boundModel(v) === model.slice((ds?.providerId.length ?? -1) + 1) ? () => preview(v.voice) : undefined,
+    onDelete: () => { if (window.confirm(t('settings.tts.mineDelete', { name: v.voice }))) void deleteTtsVoice(homeTarget(), { ...auth!, voice: v.voice, kind: v.kind }).then(() => setReload((n) => n + 1)).catch((e: any) => setNote(`✗ ${e?.message || e}`)) },
+  }))
+  const pickVoice = (item: VoiceItem): void => {
+    if (item.bound) { setNote(t('settings.tts.unknownBindingHint')); return }
+    const bound = voices.find((v) => v.voice === item.id)
+    // 百炼铁律:音色只认创建时的模型,采用时把朗读模型一起切过去
+    save(bound && ds ? { ttsModelId: `${ds.providerId}/${boundModel(bound)}`, ttsVoice: item.id } : { ttsVoice: item.id })
+  }
+  const use = (v: VoiceCreated): void => { if (ds) save({ ttsModelId: `${ds.providerId}/${v.targetModel}`, ttsVoice: v.voice }); setCreating(false) }
   const voiceError = p.commitErrorHint('ttsVoice')
-
   return (
     <SettingsPanel className="settings-voice-read" icon={<Volume2 size={16} />} title={t('settings.voice.secRead')}
-      description={model ? t('settings.voice.readModel', { model }) : t('settings.voice.readNoModel')}
+      description={t(model ? 'settings.voice.readDesc' : 'settings.voice.readNoModel')}
       actions={model ? undefined : <button type="button" className="btn ghost sm" onClick={() => p.onOpen('tts-model')}>{t('settings.voice.chooseModel')}</button>}>
+      {model && (
+        <div className="settings-control-list">
+          <SettingsRow fit="inline" label={t('settings.voice.readModelRow')} control={
+            <button type="button" className="voice-link" onClick={() => p.onOpen('tts-model')}>{model}<ChevronRight size={13} /></button>
+          } />
+        </div>
+      )}
+      <VoiceGallery title={t('settings.tts.voiceLabel')} system={system} mine={mine} value={voice} previewScope="read" onPick={pickVoice}
+        onNew={auth ? () => setCreating(true) : undefined} newHint={t('voicegallery.newRead')}
+        trailing={presets.length > COLLAPSED ? <button type="button" className="voice-link" onClick={() => setShowAll((v) => !v)}>{showAll ? t('voicegallery.fewer') : t('voicegallery.all', { n: presets.length })}<ChevronRight size={12} /></button> : undefined} />
       <div className="settings-control-list">
-        <SettingsRow fit="wrap" className="settings-voice-tts-row" label={t('settings.tts.voiceLabel')} description={t('settings.tts.voiceHint')} control={
-          <span className="settings-voice-inline settings-voice-tts">
-            <input
-              type="text"
-              list="tts-voice-options"
-              aria-label={t('settings.tts.voice')}
-              value={stored.ttsVoice ?? ''}
-              onChange={(e) => p.edit({ ttsVoice: e.target.value })}
-              onBlur={() => void p.commitEdits(['ttsVoice'], (v) => ({ ttsVoice: (v.ttsVoice || '').trim() }))}
-              placeholder={t('settings.tts.voicePlaceholder')}
-            />
-            {/* 系统音色候选(可输可选);复刻 / 设计音色经下方工作室「使用」自动填入 */}
-            <datalist id="tts-voice-options">
-              {TTS_VOICE_SUGGESTIONS.map(([v, labelKey]) => <option key={v} value={v} label={t(labelKey)} />)}
-            </datalist>
-            <button type="button" className="btn ghost sm settings-voice-test" disabled={testing || !model} onClick={test}>
-              {testing ? <Loader2 size={12} className="spin" /> : <Play size={12} />}{t('settings.tts.testBtn')}
-            </button>
-          </span>
+        <SettingsRow fit="wrap" className="settings-voice-tts-row" label={t('settings.tts.customVoice')} description={t('settings.tts.customVoiceHint')} control={
+          <input type="text" className="settings-voice-tts" aria-label={t('settings.tts.customVoice')} value={p.stored.ttsVoice ?? ''}
+            onChange={(e) => p.edit({ ttsVoice: e.target.value })}
+            onBlur={() => void p.commitEdits(['ttsVoice'], (v) => ({ ttsVoice: (v.ttsVoice || '').trim() }))}
+            placeholder={t('settings.tts.voicePlaceholder')} />
         } />
-        {(voiceError || testMsg) && (
+        {(voiceError || note) && (
           <div className="settings-row-notes">
             {voiceError}
-            {testMsg && <p className="settings-voice-note" role="status">{testMsg}</p>}
+            {note && <p className="settings-voice-note" role="status">{note}</p>}
           </div>
         )}
-        <SettingsRow fit="wrap" label={t('settings.tts.speedLabel')} description={t('settings.tts.speedHint')} control={
-          <input
-            type="number"
-            className="settings-number-input settings-voice-speed"
-            aria-label={t('settings.tts.speedLabel')}
-            min={0.5}
-            max={2}
-            step={0.1}
-            value={speedText ?? String(stored.ttsSpeed ?? 1)}
-            onChange={(e) => setSpeedText(e.target.value)}
-            onBlur={() => {
-              const n = Number(speedText)
-              const v = speedText !== null && Number.isFinite(n) && n > 0 ? Math.min(Math.max(n, 0.5), 2) : (stored.ttsSpeed ?? 1)
-              setSpeedText(null)
-              void window.tangu!.setConfig({ ttsSpeed: v }).then(setStored)
-            }}
-          />
+        <SettingsRow fit="wrap" label={t('settings.tts.speedLabel')} control={
+          <span className="voice-slider">
+            <input type="range" className="settings-voice-speed" aria-label={t('settings.tts.speedLabel')} min={0.5} max={2} step={0.1} value={stored.ttsSpeed ?? 1}
+              onChange={(e) => void window.tangu!.setConfig({ ttsSpeed: Number(e.target.value) }).then(setStored)} />
+            <span>{(stored.ttsSpeed ?? 1).toFixed(1)}×</span>
+          </span>
         } />
         <SettingsRow fit="inline" label={t('settings.tts.autoSpeak')} description={t('settings.tts.autoSpeakHint')} control={
           <SettingsSwitch checked={stored.ttsAutoSpeak === true} label={t('settings.tts.autoSpeak')}
             onChange={(on) => void window.tangu!.setConfig({ ttsAutoSpeak: on }).then(setStored)} />
         } />
-        {!remoteExternal && (
-          <SettingsRow fit="inline" label={t('settings.tts.studio.row')} description={t(ds ? 'settings.tts.studio.rowHint' : 'settings.tts.studio.rowNeedProvider')} control={
-            ds
-              ? <button type="button" className="btn ghost sm tts-studio-toggle" aria-expanded={studioOpen} onClick={() => { setStudioMounted(true); setStudioOpen((o) => !o) }}>{t(studioOpen ? 'settings.voice.collapse' : 'settings.tts.studio.open')}</button>
-              : <button type="button" className="btn ghost sm" onClick={() => p.onOpen('providers')}>{t('settings.voice.addProvider')}</button>
-          } />
-        )}
-        {/* 第一次展开以后一直挂着,收起只是藏起来(Codex 评审 P2):工作室里有进行中的复刻 / 设计请求和忙碌锁,
-            卸载会丢掉锁,收起再展开就能再发一次,先发的那个晚回来会把新音色覆盖掉。 */}
-        {!remoteExternal && ds && studioMounted && (
-          <div className="settings-voice-studio-wrap" hidden={!studioOpen}>
-            <TtsVoiceStudio cfg={p.cfg} provider={ds} onApplied={() => void window.tangu!.getConfig().then(setStored)} />
-          </div>
-        )}
       </div>
+      {creating && <VoiceCreateDialog kind="read" provider={ds} onCreated={() => setReload((n) => n + 1)} onUse={use} onClose={() => setCreating(false)} />}
     </SettingsPanel>
   )
 }

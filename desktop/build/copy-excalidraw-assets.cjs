@@ -77,14 +77,30 @@ const PEN_PATCHES = [
     `if(c.type==="freedraw"){let __fp=${PEN_HOOK}?.freedraw(c,t,this.state);if(__fp!==void 0)__fp&&(this.scene.mutateElement(c,__fp,{informMutation:!1,isDragging:!1}),this.setState({newElement:c}));else{let C=c.points,B=i.x-c.x,d=i.y-c.y,E=C.length>0&&C[C.length-1];if(!(E&&E[0]===B&&E[1]===d)){let p=this.state.currentStrokeOptions,u=c.simulatePressure?c.pressures:[...c.pressures,p?.constantPressure?1:o.pressure];this.scene.mutateElement(c,{points:[...C,k(B,d)],pressures:u},{informMutation:!1,isDragging:!1}),this.setState({newElement:c})}}}`,
   ],
 ]
-function patchEngine(src) {
-  for (const [from, to] of PEN_PATCHES) {
+/** 文案补丁(走查续七 7.6):引擎不导出 i18n,语言包是模块私有的。插两个钩子,逻辑在
+ *  frontend/src/amadeus/blocks/excalidraw/boardText.ts:
+ *  - 文案查表 `L` 的最开头:宿主给了某个键的译文就用宿主的(白板菜单的「复制 / 创建副本」对齐图像工作室)。
+ *  - 快捷键格式化 `gA`:宿主给了就用宿主的(mac 写 ⇧⌘E 这类系统符号)。
+ *  两个钩子都是「宿主不答(undefined)就走引擎原路」;规则同上(逐字匹配、恰好一次),改了把 TEXT_PATCH 加一。 */
+const TEXT_PATCH = 1
+const TEXT_PATCHES = [
+  // `$0` = 当前语言 { code }
+  ['L=(A,e,t)=>{if($0.code.startsWith(X0))', 'L=(A,e,t)=>{let __fl=globalThis.__forsionBoardText?.label(A,$0.code);if(__fl!==void 0)return __fl;if($0.code.startsWith(X0))'],
+  ['var gA=A=>A.replace(', 'var gA=A=>globalThis.__forsionBoardText?.shortcut(A)??A.replace('],
+]
+function applyPatches(src, patches, what) {
+  for (const [from, to] of patches) {
     const n = src.split(from).length - 1
-    if (n !== 1) throw new Error(`[excalidraw-assets] 手写笔补丁点命中 ${n} 次(应为 1):${from.slice(0, 60)}…  fork 版本变了?见 PEN_PATCHES 的注释`)
+    if (n !== 1) throw new Error(`[excalidraw-assets] ${what}补丁点命中 ${n} 次(应为 1):${from.slice(0, 60)}…  fork 版本变了?见补丁表的注释`)
     src = src.replace(from, () => to)
   }
-  return `${src}\n;globalThis.__forsionPenPatch=${PEN_PATCH};\n`
+  return src
 }
+function patchEngine(src) {
+  src = applyPatches(applyPatches(src, PEN_PATCHES, '手写笔'), TEXT_PATCHES, '文案')
+  return `${src}\n;globalThis.__forsionPenPatch=${PEN_PATCH};globalThis.__forsionTextPatch=${TEXT_PATCH};\n`
+}
+const STAMP = `+pen${PEN_PATCH}+text${TEXT_PATCH}`
 const nonEmpty = (p) => {
   try {
     return fs.statSync(p).size > 0
@@ -97,7 +113,7 @@ const nonEmpty = (p) => {
 // 留下一个「装过了但白板 404」的坑(而 404 要到用户点开画板才暴露)。
 const complete = Object.keys(SRC).every((f) => nonEmpty(path.join(outDir, f))) && fs.existsSync(path.join(outDir, 'fonts'))
 try {
-  if (complete && fs.readFileSync(stamp, 'utf8') === `${version}+pen${PEN_PATCH}`) process.exit(0)
+  if (complete && fs.readFileSync(stamp, 'utf8') === `${version}${STAMP}`) process.exit(0)
 } catch {
   /* 无戳 / 读不动 → 重拷 */
 }
@@ -116,5 +132,5 @@ fs.mkdirSync(outDir, { recursive: true })
 fs.cpSync(FONTS, path.join(outDir, 'fonts'), { recursive: true })
 fs.copyFileSync(SRC['excalidraw.css'], path.join(outDir, 'excalidraw.css'))
 fs.writeFileSync(path.join(outDir, 'excalidraw.js'), engine)
-fs.writeFileSync(stamp, `${version}+pen${PEN_PATCH}`)
+fs.writeFileSync(stamp, `${version}${STAMP}`)
 console.log('[excalidraw-assets] engine + fonts', version, '->', outDir)

@@ -2,6 +2,7 @@
 import { readFile, readdir, realpath, stat } from 'node:fs/promises'
 import { isAbsolute, resolve, sep } from 'node:path'
 import { isSafePluginExt } from '../desktop/shared/amadeus/pluginFiles'
+import { parseManifestRequires } from '../desktop/shared/amadeus/manifestRequires'
 import { isNativeFeatureId, nativeFeatureSpaceIds, type NativeFeatureId } from '../desktop/shared/nativeFeatures'
 import { CORE_BUNDLE_IDS } from '../desktop/shared/corePlugins'
 import bundles from '../desktop/electron/builtinBundles.json'
@@ -65,7 +66,10 @@ export async function readPackage(dir: string, appVersion?: string): Promise<Ins
   if (!validId(manifest.id) || manifest.apiVersion !== 1) throw new Error('Invalid plugin identity or unsupported plugin API')
   versionAtLeast(manifest.version, '0.0.0')
   if (manifest.minAppVersion && appVersion && !versionAtLeast(appVersion, manifest.minAppVersion)) throw new Error(`Plugin ${manifest.id} requires Unit ${manifest.minAppVersion}`)
-  if (manifest.requires && (!Array.isArray(manifest.requires) || !manifest.requires.every(validId))) throw new Error('Invalid plugin dependencies')
+  // `requires` may be an array or { plugins?, entitlement? }. Normalized here so every later reader sees string[].
+  const declared = manifest.requires ? parseManifestRequires(manifest.requires) : { plugins: [] }
+  if (!declared || !declared.plugins.every(validId)) throw new Error('Invalid plugin dependencies')
+  if (manifest.requires) manifest.requires = declared.plugins as string[]
   const pinned = bundles.find((b) => b.id === manifest.id)?.desktop?.signingKey
   let signed: Record<string, string> | undefined
   if (pinned) {
@@ -97,6 +101,7 @@ export async function readPackage(dir: string, appVersion?: string): Promise<Ins
     // Only UI fields enter the public projection. Backend entries/config are private.
     result.ui = { id: manifest.id, name: manifest.name, nameEn: manifest.nameEn, version: manifest.version,
       apiVersion: manifest.apiVersion, minAppVersion: manifest.minAppVersion,
+      ...(declared.entitlement ? { entitlement: declared.entitlement } : {}),
       description: manifest.description, descriptionEn: manifest.descriptionEn, onboarding: manifest.onboarding, fileExtensions: Array.isArray(manifest.fileExtensions) ? manifest.fileExtensions.filter(isSafePluginExt).map((v) => v.trim().toLowerCase()).slice(0, 8) : [], code,
       // 首方核心包(Forsion Extend):页面据 locked 才放出它的商店页、「Forsion 云端」子页与首方接缝(同桌面内置包)。
       // Official signed bundles must pass the host's pinned key above before receiving locked privileges.

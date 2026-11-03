@@ -7,6 +7,12 @@ import { isDesktopPermissionId, type DesktopPermissionId } from '../desktopPermi
 export const IPC = {
   openVault: 'vault:open',
   restoreVault: 'vault:restore',
+  // 本机多智库(第 1 步):清单 / 切换 / 新建 / 移出清单 / 在访达中显示
+  listVaults: 'vaults:list',
+  switchVault: 'vaults:switch',
+  createVault: 'vaults:create',
+  forgetVault: 'vaults:forget',
+  revealVault: 'vaults:reveal',
   listPages: 'vault:list',
   listFiles: 'vault:files',
   loadPage: 'page:load',
@@ -241,6 +247,75 @@ export function sanitizeOnboarding(raw: unknown): PluginOnboardingSpec | undefin
   return out.intro || out.steps || out.settings || out.recommends || out.requires ? out : undefined
 }
 
+/** One first-use tip a plugin declares (manifest `guide.tips`, 2026-11-02+). The host decides when it shows:
+ *  its anchor (`data-guide-anchor` inside the plugin's own view) is on screen, `when` holds, the user hasn't done
+ *  the thing yet (`done`), hasn't dismissed it, and the host's pacing allows. Plain hint, never a gate. */
+export interface PluginGuideTip {
+  id: string
+  /** `data-guide-anchor` name inside the plugin's own views. */
+  at: string
+  /** `line` = one quiet line on the anchor's top edge; `ring` = ring around it + a small card (needs `title`). */
+  style: 'line' | 'ring'
+  /** Only one of these; absent = shows only when the plugin calls `ctx.guide.show(id)`. */
+  when?: { open: string; times: number } | { count: string; atLeast: number } | { visible: string[] }
+  /** Any of these counters ≥ 1 = learned, never shows again. Bare = the plugin's own `achievements.track()` name;
+   *  `app:` prefix = an official host event. */
+  done?: string[]
+  platform?: 'desktop' | 'mobile'
+  title?: string
+  text: string
+  en?: { title?: string; text?: string }
+}
+export interface PluginGuideSpec { tips: PluginGuideTip[] }
+
+const TIP_ID = /^[a-z0-9][a-z0-9-]{0,47}$/
+const EVENT_NAME = /^(app:)?[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/
+
+/** Validate + cap a raw manifest `guide` value. A malformed tip drops on its own; the rest of the plugin is untouched.
+ *  Counts up to 12 valid, distinct tips (same rule as `requires`: junk early in the list can't eat real tips). */
+export function sanitizeGuide(raw: unknown): PluginGuideSpec | undefined {
+  const list = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).tips : undefined
+  if (!Array.isArray(list)) return undefined
+  const tips: PluginGuideTip[] = []
+  const seen = new Set<string>()
+  for (const it of list.slice(0, 64)) {
+    if (tips.length >= 12) break
+    const o = it as Record<string, unknown>
+    if (!o || typeof o !== 'object' || typeof o.id !== 'string' || !TIP_ID.test(o.id) || seen.has(o.id)) continue
+    if (typeof o.at !== 'string' || !REQ_ID.test(o.at)) continue
+    const style = o.style === 'ring' ? 'ring' : o.style === 'line' ? 'line' : null
+    const text = str(o.text, 160)
+    const title = str(o.title, 60)
+    if (!style || !text || (style === 'ring' && !title)) continue
+    const w = o.when as Record<string, unknown> | undefined
+    let when: PluginGuideTip['when']
+    if (w && typeof w === 'object') {
+      if (typeof w.open === 'string' && REQ_ID.test(w.open)) when = { open: w.open, times: Math.max(1, Math.min(99, Math.floor(Number(w.times) || 1))) }
+      else if (typeof w.count === 'string' && EVENT_NAME.test(w.count)) when = { count: w.count, atLeast: Math.max(1, Math.min(9999, Math.floor(Number(w.atLeast) || 1))) }
+      else if (Array.isArray(w.visible)) {
+        const names = w.visible.filter((n): n is string => typeof n === 'string' && REQ_ID.test(n)).slice(0, 4)
+        if (names.length) when = { visible: names }
+      }
+      if (!when) continue // 写了 when 但一样都认不出:丢这条,别把它降级成「只能手动叫」
+    }
+    const tip: PluginGuideTip = { id: o.id, at: o.at, style, text }
+    if (when) tip.when = when
+    if (title) tip.title = title
+    if (Array.isArray(o.done)) {
+      const done = o.done.filter((e): e is string => typeof e === 'string' && EVENT_NAME.test(e)).slice(0, 4)
+      if (done.length) tip.done = done
+    }
+    if (o.platform === 'desktop' || o.platform === 'mobile') tip.platform = o.platform
+    const en = o.en as Record<string, unknown> | undefined
+    const enText = str(en?.text, 160)
+    const enTitle = str(en?.title, 60)
+    if (enText) tip.en = enTitle ? { title: enTitle, text: enText } : { text: enText }
+    seen.add(o.id)
+    tips.push(tip)
+  }
+  return tips.length ? { tips } : undefined
+}
+
 /** An activity event a plugin declares it emits (manifest `events`), for the automation builder's
  *  event catalog. Names are relative — the host prefixes `plugin:<id>:` everywhere they surface. */
 export interface PluginEventDecl {
@@ -272,7 +347,8 @@ export interface PluginDependency {
   id: string
   /** Lowest acceptable version, compared with cmpVersion (e.g. "1.2.0"). */
   minVersion?: string
-  /** Market install slug (install_slug ≠ id). Present → the host offers a one-click install. */
+  /** Market install slug (install_slug ≠ id). The store's one-click install matches listings by this, then by `id`,
+   *  never by display name. New listings' slug is `market-<ID>`: without this field they can't be matched. */
   market?: string
   /** Display-name fallback while the prerequisite isn't installed (the host only knows its id then). */
   name?: string
@@ -350,6 +426,8 @@ export interface ExternalPluginSource {
   requiresApp?: string
   /** Prerequisite Forsion plugins (manifest `requiresPlugins`, sanitized by the main process). */
   requiresPlugins?: PluginDependency[]
+  /** Account entitlement this plugin declares (manifest `requires.entitlement`). Informational: the plugin still activates. */
+  entitlement?: string
   /** 插件声明要用的宿主敏感能力(manifest `capabilities`,白名单外的一律丢)。宿主只给声明过的
    *  插件注入对应的 ctx 接缝——没声明 = 拿不到,不是「拿到了但没用」。目前只有 'activeWindow'。 */
   capabilities?: PluginCapability[]
@@ -360,6 +438,8 @@ export interface ExternalPluginSource {
   changelog?: string
   /** Declarative first-run setup card (manifest `onboarding`, sanitized by the main process). */
   onboarding?: PluginOnboardingSpec
+  /** First-use tips (manifest `guide`, 2026-11-02+; sanitized by `sanitizeGuide`). */
+  guide?: PluginGuideSpec
   /** Activity events the plugin declares it emits (manifest `events`, sanitized) — automation builder catalog. */
   events?: PluginEventDecl[]
   /** File suffixes this plugin claims as a custom file type (manifest `fileExtensions`, e.g. ['.mindmap.md']).
@@ -463,6 +543,21 @@ export interface SearchHit {
   /** 1-based line number of the match within the cleaned text. */
   line: number
   score: number
+  /** Only for queries with a `tag:` condition: each line of this file carrying a target tag, in document order
+   *  (line-0 first). At most TAG_LINE_HITS_MAX (100, shared/amadeus/tagQuery) per file. Absent on plain queries
+   *  and on `-tag:`-only queries, which have no target tag. */
+  hits?: SearchHitLine[]
+}
+
+/** One line of SearchHit.hits. line = 1-based line in the cleaned text (same as BacklinkHit), 0 = the tag is in
+ *  frontmatter. text = the line with markdown syntax removed, clipped around the tag on very long lines. Tags inside
+ *  code do not count (maskCode). */
+export interface SearchHitLine {
+  line: number
+  text: string
+  /** How many times this line's first target tag appears earlier in the note, counted over the whole note even when the
+   *  list was narrowed. Absent = 0. Lets the UI locate the line by tag when its text can't be found in the editor. */
+  tagIndex?: number
 }
 
 /** 反链 / 提及的一处命中(L-16)。line = 清洗文本(剥 fm 与注释)里的 1-based 行号,0 = 属性区;
@@ -586,7 +681,26 @@ export interface TrashEntry {
 
 export interface TagCount {
   tag: string
+  /** Files carrying exactly this tag. 0 = the tag exists only as a parent prefix (`work` of `#work/urgent`). */
   count: number
+  /** Files carrying this tag or a nested one, deduplicated per file. Absent from older sources (cloud `/tags`,
+   *  older hosts): buildTagTree falls back to self + children. */
+  total?: number
+}
+
+/** One row of the bottom vault menu. `current` = open on the local side. */
+export interface LocalVaultRow {
+  root: string
+  name: string
+  /** root with the home folder shown as ~ */
+  display: string
+  current: boolean
+  /** Content sync is on and bound to this vault (shown as 云同步). */
+  sync: boolean
+  /** The vault sync stays bound to, on or off; it can't be removed from the list. */
+  pinned: boolean
+  /** False when the folder was moved or deleted outside Forsion (row stays, greyed out). */
+  exists: boolean
 }
 
 export interface VaultInfo {
@@ -632,6 +746,15 @@ export interface AmadeusApi {
   openVault(): Promise<VaultInfo | null>
   /** Re-open the last vault (persisted across launches), or null if none/unavailable. */
   restoreVault(): Promise<VaultInfo | null>
+  /** Local vault list (optional: web / mobile hosts have one vault). */
+  listVaults?(): Promise<LocalVaultRow[]>
+  /** Open a listed local vault; throws when the folder is gone. */
+  switchVault?(root: string): Promise<VaultInfo>
+  /** Create `<workspace>/Vaults/<name>` and open it; throws on a bad name or an existing folder. */
+  createVault?(name: string): Promise<VaultInfo>
+  /** Drop a row from the list (files stay). False for the open vault or the sync vault. */
+  forgetVault?(root: string): Promise<boolean>
+  revealVault?(root: string): Promise<void>
   listPages(): Promise<string[]>
   /** All non-page files (attachments/.db/…), vault-relative — for the vault tree. */
   listFiles(): Promise<string[]>
@@ -791,7 +914,7 @@ export interface AmadeusApi {
   /** 卸载 ~/.forsion/plugins 下的一个 Forsion 插件(按 manifest id 定位目录),挪进回收站(30 天可恢复;可选:桌面实现)。
    *  keepSettings:插件设置原地留着;vaultFolder:库里的工作文件夹(相对库根)一起进回收站;prefs:渲染层摘下的 localStorage 偏好,
    *  恢复时原样交回。旧调用只传 id = 文件 + 设置进回收站。 */
-  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineEnabled?: string[] }): Promise<{ trashId?: string; dirName?: string } | void>
+  uninstallPlugin?(id: string, opts?: { keepSettings?: boolean; vaultFolder?: string; prefs?: Record<string, string>; engineTrash?: string[] }): Promise<{ trashId?: string; dirName?: string } | void>
   /** 恢复主进程写的回收站条目(Forsion 插件);extra.prefs 由渲染层写回 localStorage。 */
   trashRestore?(id: string): Promise<{ kind: string; ref: string; extra?: Record<string, unknown> }>
   /** 该 Agent 是不是**这个插件的捆绑包播种的**(引擎新播种时写 agents/<slug>/.bundle-origin = bundle 目录名)。

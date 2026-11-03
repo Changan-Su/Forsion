@@ -66,7 +66,9 @@ export function inlineBrToBreak(tree: MdNode): void {
 
 export const inlineBrRemark = $remark('amadeusInlineBr', () => () => (tree: MdNode): void => inlineBrToBreak(tree))
 
-/** hardbreak + `html` attr:带原文的换行原样写回。其余与 preset 同款(toDOM / leafText / isInline 都不动)。 */
+/** hardbreak + `html` attr:带原文的换行原样写回。
+ *  软换行(isInline,源文里单个 `\n`)渲染成 `<br>` 而不是 preset 的 `<span> </span>`:Obsidian 缺省(严格换行关)
+ *  就是一个 `\n` 一行,同一份笔记在 Amadeus 里挤成一段(用户 2026-10-29 实报)。只改显示,isInline 不动 → 落盘仍是 `\n`。 */
 export const hardbreakWithHtmlSchema = hardbreakSchema.extendSchema((prev) => (ctx) => {
   const base = prev(ctx)
   return {
@@ -76,11 +78,14 @@ export const hardbreakWithHtmlSchema = hardbreakSchema.extendSchema((prev) => (c
     // ⚠️ 剪贴板 HTML 是外来的:属性值只认「恰是一个 `<br…>` 标签」,否则当普通换行 —— 这个值会原样写进 .md,
     //    不验就是一条看不见的注入口(编辑器里只显示换行,落盘却是任意 HTML;评审返修 D-06-paste-trust)。
     parseDOM: [
+      // 须排在 preset 的裸 `br` 前:那条给 isInline:false,粘贴 / DOM 往返后软换行会落成 `\` 换行。
+      { tag: 'br[data-is-inline="true"]', getAttrs: () => ({ isInline: true, html: null }) },
       { tag: 'br[data-md-br]', getAttrs: (dom) => ({ html: brSource((dom as HTMLElement).getAttribute('data-md-br')) }) },
       ...(base.parseDOM ?? []),
     ],
     toDOM: (node) => {
       const spec = base.toDOM!(node) as [string, Record<string, unknown>, ...unknown[]]
+      if (node.attrs.isInline) return ['br', spec[1]] as never
       return typeof node.attrs.html === 'string' && spec[0] === 'br'
         ? [spec[0], { ...spec[1], 'data-md-br': node.attrs.html }, ...spec.slice(2)] as never
         : spec as never

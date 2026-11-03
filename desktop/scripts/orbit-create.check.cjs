@@ -65,7 +65,7 @@ async function main() {
     check('+ retains all three cross-category creation choices', await win.locator('.ctx-menu button').count() === 3)
     await win.locator('.ctx-menu').getByRole('button', { name: '新建 Agent', exact: true }).click()
     await win.locator('.agent-create-form').waitFor()
-    check('+ New agent directly opens the native creation form', await win.locator('.agent-create-form input').count() === 2 && await win.locator('.agent-create-form textarea').count() === 1)
+    check('+ New agent directly opens the native creation form', await win.locator('.agent-create-form input').count() === 4 && await win.locator('.agent-create-form textarea').count() === 1)
     await win.locator('.agent-create-form').getByRole('button', { name: '放弃修改', exact: true }).click()
     await back(); await select('agent'); await primary().click(); await win.locator('.agent-create-form').waitFor()
     check('Agent primary action opens creation even when the Agents view already exists', await win.locator('.agent-create-form').isVisible())

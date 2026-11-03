@@ -11,6 +11,9 @@ import { buildUnitScopeGuard, openUnitHostRegularFile, withVerifiedUnitPath } fr
 import { composeUnitRoots, createFileProjectRegistry, createUnitSessionRoots, registerPickedDirectory, seedGatedEngine, type LocalProjectRegistry, type UnitSessionRootsSource } from './unitLocalRoots'
 import { normalizeHostSandboxConfig, type HostSandboxConfig } from '../shared/hostSandboxConfig'
 import { startMiniPassThrough, readComputerUseForeground, topRightPosition } from './miniForeground'
+import { createMiniResizeQueue } from './miniResizeQueue'
+import { miniResizeShape } from './miniResizeShape'
+import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { createPluginSandbox, type PluginSandboxUiSeed } from './pluginSandbox'
 import { sandboxSelf, startSandboxChild, sandboxForward } from './sandboxChild'
@@ -48,7 +51,7 @@ import { downloadUrlFor, installCommandFor, requiredProgram } from './envInstall
 import { createKeepAwake } from './keepAwake'
 import { createMcpLifecycle, startForsionMcp } from './mcpServer'
 import { randomBytes } from 'node:crypto'
-import { loadTanguCreds, saveTanguCreds, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
+import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
@@ -112,6 +115,7 @@ import { attachHostChannel, startP2pProxy, type P2pProxyHandle } from './unitP2p
 import { P2pManager, DEFAULT_STUN } from './p2pWindow'
 import type { ExternalPluginSource } from '@amadeus-shared/ipc'
 import { readConfig as readAmadeusConfig } from './amadeus/settings'
+import { syncVaultRoot } from './amadeus/vaultList'
 import { registerRemoteSync } from './remotesyncIpc'
 import { registerRemoteSyncBackend } from './remotesync/backends'
 import { logActivity, setActivityLogEnabled, pruneActivity, exportActivity, flushAllNoteEdits } from './activityLog'
@@ -121,6 +125,7 @@ import { effectivePluginId } from '../shared/products'
 import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
+import { registerIuiLibProtocol } from './iuiLibProtocol'
 import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
 import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
@@ -457,7 +462,7 @@ interface TanguStoredConfig {
   /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;纯渲染层 UI 记忆)。 */
   lastUltra: boolean
   /** 上次的 Fast 开关(新会话照它起步;纯渲染层 UI 记忆)。 */
-  lastFast: boolean
+  lastFast: boolean | 'ultra'
   cloudUrl: string // managed:传给 tangu-server 的 Forsion 云端
   sandbox: 'auto' | 'docker' | 'none'
   hostSandbox?: HostSandboxConfig
@@ -502,6 +507,7 @@ interface TanguStoredConfig {
   /** 只读、不落盘:用户从没动过「语音通话」(config.json 里没有 tts.realtimeModel 这个键)。这时界面替他定缺省 ——
    *  装了 Forsion Extend 且已登录就默认开、用云端模型;一旦开关 / 选过模型(含关掉 → 写 ''),就按他选的来。 */
   realtimeModelUnset: boolean
+  ttsModelUnset: boolean
   /** 实时通话音色;'' = 引擎按模型家族给缺省(Omni=Tina,Qwen-Audio=longanqian)。存 tts.realtimeVoice。 */
   realtimeVoice: string
   /** 记录应用内活动日志(~/.forsion/activity;Muse 数据源+bug 排查导出);关=停止新记录。 */
@@ -587,6 +593,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   ttsAutoSpeak: false,
   realtimeModelId: '',
   realtimeModelUnset: true,
+  ttsModelUnset: true,
   realtimeVoice: '',
   activityLogEnabled: true,
   computerHistoryEnabled: false,
@@ -600,21 +607,23 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   disabledBundles: [],
 }
 
-/** 默认工作区目录(配置未填时兜底):优先落在本地笔记库(Vault)内的 Sessions/ ——
- *  会话工作区与笔记同库,agent 产物可直接被笔记引用(2026-08-03 起)。没有本地库时维持旧口径:
- *  新用户 ~/Forsion(dev→~/Forsion-Dev),仅当存在**真实** ~/Tangu 目录(老用户,迁移软链不算)
- *  才沿用 ~/Tangu。best-effort 创建。 */
+/** 默认工作区目录(配置未填时兜底)。10-29 起会话目录和智库分开:新用户落 `~/Forsion/Sessions`
+ *  (dev→~/Forsion-Dev/Sessions)。老用户不动:08-03 起旧版把会话放在本地库的 Sessions/ 并每次建好它,
+ *  库里已有这个文件夹就照旧用(看第一个库,不跟切库走);再老的、存在**真实** ~/Tangu 目录(迁移软链不算)
+ *  的沿用 ~/Tangu。best-effort 创建。 */
 async function ensureDefaultWorkspaceDir(stored: TanguStoredConfig): Promise<string> {
   let dir = stored.defaultWorkspaceDir?.trim()
   if (!dir) {
-    // 取 localVault 而非 lastVault:活动侧可能是云镜像,Sessions 落进去会整个被当笔记同步上云。
-    const vault = (await readAmadeusConfig()).localVault
-    if (vault && (await stat(vault).then((s) => s.isDirectory()).catch(() => false))) dir = join(vault, 'Sessions')
+    // 取本地同步库而非 lastVault:活动侧可能是云镜像。
+    // ponytail: 新用户自己在库里建了个叫 Sessions 的文件夹会被当成老用户,真撞上再记标记位
+    const vault = syncVaultRoot(await readAmadeusConfig())
+    const old = vault && join(vault, 'Sessions')
+    if (old && (await stat(old).then((s) => s.isDirectory()).catch(() => false))) dir = old
   }
   if (!dir) {
     const legacy = join(app.getPath('home'), 'Tangu')
     const isRealLegacyDir = await lstat(legacy).then((s) => s.isDirectory() && !s.isSymbolicLink()).catch(() => false)
-    dir = isRealLegacyDir ? legacy : forsionWorkspaceDir()
+    dir = isRealLegacyDir ? legacy : join(forsionWorkspaceDir(), 'Sessions')
   }
   await mkdir(dir, { recursive: true }).catch(() => {})
   return dir
@@ -798,6 +807,7 @@ async function loadConfig(): Promise<TanguStoredConfig> {
       realtimeVoice: tts.realtimeVoice || '',
     } : {}),
     realtimeModelUnset: tts.realtimeModel === undefined,
+    ttsModelUnset: tts.modelId === undefined,
     ...(home.asr !== undefined ? { asrModelId: asr.modelId || '', asrBackend: asr.backend === 'local' ? 'local' : 'cloud' } : {}),
     ...(home.models !== undefined ? {
       backgroundModelId: auxModels.background || '',
@@ -1729,6 +1739,15 @@ function createWindow(): void {
 
   mainWindow.webContents.setWindowOpenHandler(openUrlHandler(mainWindow.webContents))
   hardenNav(mainWindow.webContents)
+  // The audio graph runs in this renderer. Protecting only the browser process
+  // leaves the renderer's Windows timer policy at its system-managed default.
+  const audioContents = mainWindow.webContents
+  audioContents.on('did-finish-load', () => {
+    if (audioContents.isDestroyed()) return
+    void protectWindowsAudioClock(audioContents.getOSProcessId()).then(result => {
+      if (result.detail) console.warn('[audio-clock] Windows timer protection unavailable:', result.detail)
+    })
+  })
   // deep link 推送门:reload(Cmd+R)换掉渲染层监听者但 webContents 不变 → 每次开载都翻回「未就绪」,
   // 等新一代渲染层来 drain(否则 push 进虚空,URL 丢失)。
   mainWindow.webContents.on('did-start-loading', () => {
@@ -1941,7 +1960,9 @@ function syncSessionPanels(): void {
   }
 }
 
-/** Floating Panel is a normal child window: movable/minimizable/closable, but kept above its main window. */
+/** 普通 Floating Panel(设置 / 商店…)是独立顶层窗口:主窗最小化 / 关到托盘时它照样留在桌面上,点它也不会把主窗一起拽到前面 ——
+ *  设置里「拖扩展文件夹进 Chrome 扩展页」这类跨应用拖放靠的就是这一点。别改回 parent: mainWindow(macOS 子窗随父窗隐藏 / 最小化)。
+ *  只有会话级面板(旁聊)仍挂主窗当子窗:它本来就跟着主窗的当前会话走。 */
 function openFloatingPanel(raw: unknown): { id: string } | undefined {
   const target = normalizeFloatingPanelOpenOptions(raw)
   if (!target) return undefined
@@ -1953,6 +1974,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
   if (existing && !existing.isDestroyed()) {
     existing.setTitle(target.title)
     existing.setMinimizable(!target.sessionId) // 先以普通面板开过、后被主窗绑上会话的,也收回最小化
+    if (target.sessionId && !existing.getParentWindow() && mainWindow && !mainWindow.isDestroyed()) existing.setParentWindow(mainWindow)
     if (existing.isMinimized()) existing.restore()
     present(existing)
     // 还在载入:渲染层可能已经 floatingReady 拿走了上一份 target,这份得等载入完补发(发最新的;同一份重复到达不会重挂 —— 面板按 params 做 key,设置的带落点请求靠 params.nonce 区分先后)
@@ -1962,8 +1984,7 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
     return { id: target.id }
   }
   const win = new BrowserWindow({
-    parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
-    modal: false,
+    parent: target.sessionId && mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
     show: false,
     width: target.width,
     height: target.height,
@@ -2005,6 +2026,28 @@ let miniSession: MiniSessionContext = { sessionId: null, runId: null }
 let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
 /** 电脑历史控制器(只在带 agent 后端的形态建;见 electron/computerHistory.ts)。 */
 let computerHistory: ComputerHistory | null = null
+
+/** 电脑历史落盘后踢一下引擎巡检:「打开 Steam 时」不用等 5 分钟。不带任何内容,引擎自己重读磁盘判定;窗口关着也要到,所以不经渲染层。
+ *  ≥5s 节流(切 App 很频繁),最后一次不丢;失败无所谓,下一个巡检周期照样看到。 */
+const COMPUTER_KICK_MS = 5_000
+let computerKickAt = 0
+let computerKickTimer: ReturnType<typeof setTimeout> | null = null
+function kickAutomationForComputer(): void {
+  if (computerKickTimer) return
+  computerKickTimer = setTimeout(() => {
+    computerKickTimer = null
+    computerKickAt = Date.now()
+    const st = backend.getStatus()
+    if (st.state !== 'ready' || !st.url) return
+    void fetch(`${st.url.replace(/\/+$/, '')}/agent/special/automation/kick`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${backend.getToken()}`, 'Content-Type': 'application/json' },
+      body: '{"scope":"computer"}',
+      signal: AbortSignal.timeout(5_000),
+    }).catch(() => {})
+  }, Math.max(0, computerKickAt + COMPUTER_KICK_MS - Date.now()))
+  computerKickTimer.unref?.()
+}
 let autoMiniWindow: BrowserWindow | null = null
 let autoMiniSessionId: string | null = null
 /** 最后获焦的 Forsion 窗口(自动 Mini 除外);自动 Mini 开场时快照成 autoMiniReturnTo,本轮跑完还给用户。 */
@@ -2038,8 +2081,15 @@ const MINI_MAX = { width: 640, height: 900 }
 /** 用户拉过的尺寸:关掉再开沿用(只记在本次运行里)。ponytail: 不落盘,要跨重启记住时照 detached-windows.json 的写法加。 */
 let miniSize = { width: MINI_CARD_WIDTH, height: MINI_CARD_HEIGHT }
 /** 正在拖缩放边:起手时的窗口与光标;null = 没在拖。 */
-let miniResizeFrom: { bounds: Rect; cursor: Electron.Point } | null = null
+let miniResizeFrom: { bounds: Rect; cursor: Electron.Point; radius: number } | null = null
 let miniResizeDock: MiniDockState | null = null
+let miniResizeMaskActive = false
+const miniResizeUpdates = createMiniResizeQueue(bounds => setMiniBounds(bounds, false))
+function clearIdleMiniResizeMask(): void {
+  if (!miniResizeMaskActive || miniResizeFrom || miniDock || !miniWindow || miniWindow.isDestroyed()) return
+  miniResizeMaskActive = false
+  miniWindow.setShape([])
+}
 const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细线难发现
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
@@ -2104,11 +2154,16 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     show: !QUIET_WINDOWS,
     webPreferences: satelliteWebPreferences(),
   })
+  // The transparent Windows HWND can start a few DIP larger than constructor
+  // width/height at fractional DPI. Restore the remembered CONTENT rect after
+  // native creation, just as the resize path does, before the renderer paints.
+  if (process.platform === 'win32') miniWindow.setContentBounds({ x: wa.x + wa.width - width - 24, y: wa.y + 24, width, height })
   if (QUIET_WINDOWS) miniWindow.showInactive()
   miniWindow.setAlwaysOnTop(true, 'floating')
   miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
   hardenNav(miniWindow.webContents)
   miniWindow.webContents.on('did-finish-load', () => {
+    miniResizeUpdates.cancel()
     miniResizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
     miniResizeDock = null
     if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
@@ -2120,11 +2175,18 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
   if (process.platform === 'win32') miniDockMotion = createMiniDockMotion(miniWindow)
   miniWindow.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (!isMainFrame || isInPlace) return // SketchCard/media iframe loads are not Mini reloads
+    miniResizeUpdates.cancel(); miniResizeFrom = null; miniResizeDock = null
     if (miniDock && !miniDockMotion) setMiniBounds(expandedBounds(miniBounds(), miniDock.edge, miniDock.workArea), false)
     miniDockMotion?.reset(false); miniDock = null; stopMiniPoll()
   })
   miniWindow.on('move', onMiniMoved)
+  // Chromium stores this region in physical pixels. Drop it BEFORE ordinary
+  // native dragging can cross to a monitor with another scale.
+  miniWindow.on('will-move', clearIdleMiniResizeMask)
+  miniWindow.on('resize', clearIdleMiniResizeMask)
   miniWindow.on('closed', () => {
+    miniResizeUpdates.cancel()
+    miniResizeMaskActive = false
     console.log('[win] mini closed'); stopMiniPassThrough?.(); stopMiniPassThrough = null
     miniDockMotion?.stop(); miniDockMotion = null
     if (miniSettleTimer) clearTimeout(miniSettleTimer)
@@ -2255,7 +2317,17 @@ function setMiniBounds(r: Rect, animate = true): void {
   suppressMiniMoved = true
   // Partial setBounds reuses the rounded OUTER size on Windows, growing it on each move
   // at 125% DPI. Write the complete CONTENT rect instead; its size remains stable.
-  if (process.platform === 'win32') miniWindow.setContentBounds(r)
+  if (process.platform === 'win32') {
+    // Keep BOTH the old and new HWND extents rounded between the native calls.
+    // Growing a rounded region before its HWND would clip halfway down the old
+    // height and briefly expose square corners, just like shrinking stale paint.
+    if (miniResizeFrom) miniWindow.setShape(miniResizeShape(Math.min(previous.width, r.width), Math.min(previous.height, r.height), miniResizeFrom.radius))
+    miniWindow.setContentBounds(r)
+    if (miniResizeFrom) {
+      miniWindow.setShape(miniResizeShape(r.width, r.height, miniResizeFrom.radius))
+      miniResizeMaskActive = true
+    }
+  }
   else miniWindow.setBounds(changed, animate && process.platform === 'darwin')
   // 单个定时器:连发(拖缩放边)时后一次顺延,前一次的定时器不会提前放开抑制
   if (miniMovedTimer) clearTimeout(miniMovedTimer)
@@ -2265,6 +2337,7 @@ function setMiniBounds(r: Rect, animate = true): void {
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
 function onMiniMoved(): void {
   if (!miniWindow || suppressMiniMoved || miniResizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
+  clearIdleMiniResizeMask()
   if (miniDock) { miniDockMotion?.reset(); miniDock = null; stopMiniPoll() }
   miniDragging = true
   if (miniSettleTimer) clearTimeout(miniSettleTimer)
@@ -2475,6 +2548,7 @@ app.whenReady().then(async () => {
         for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('computerHistory:changed', view)
         refreshTrayMenu()
       },
+      onSignal: kickAutomationForComputer,
     })
     registerComputerHistoryIpc(computerHistory, isTrustedSender)
   }
@@ -2632,6 +2706,7 @@ app.whenReady().then(async () => {
   const accountCore = createAccountCore({
     loadCreds: loadTanguCreds,
     saveCreds: saveTanguCreds,
+    assertCredsWritable: assertTanguCredsWritable,
     saveConfig: (patch) => saveConfig(patch),
     loadConfig,
     ensureBackend,
@@ -2738,7 +2813,7 @@ app.whenReady().then(async () => {
         roots: async () => {
           const cfg=await readAmadeusConfig()
           return [{prefix:'',root:forsionWorkspaceDir()},{prefix:'agents',root:join(tanguDataDir(),'agents')},
-            {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:cfg.localVault??join(forsionWorkspaceDir(),'Amadeus')}]
+            {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:syncVaultRoot(cfg)??join(forsionWorkspaceDir(),'Amadeus')}] // 切库不换同步根(vaultList.ts)
         },
         claim: async (owned) => {
           await ensureBackend()
@@ -3426,7 +3501,7 @@ app.whenReady().then(async () => {
     if (!icon || icon.isEmpty()) icon = nativeImage.createFromDataURL(DRAG_FALLBACK_ICON)
     e.sender.startDrag({ file: filePath, icon })
   })
-  registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome 扩展页(拖拽复用上面的 fs:startDrag)
+  registerClipExtensionIpc() // Forsion Clip 手动安装:复制出包的扩展文件夹、打开 Chrome / Edge 扩展页(拖拽复用上面的 fs:startDrag)
   if (!SANDBOX) startClipVersionSync(localEngineRef) // Forsion 更新后连着的 Clip 换成随包版本并重载
 
   ipcMain.handle('backend:getStatus', () => backend.getStatus())
@@ -4288,6 +4363,7 @@ app.whenReady().then(async () => {
   ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown, point: unknown) => {
     if (!isTrustedSender(e) || !miniWindow || miniWindow.isDestroyed() || e.sender !== miniWindow.webContents) return
     if (typeof edge !== 'string' || !/^(?=.)[ns]?[ew]?$/.test(edge)) {
+      miniResizeUpdates.flush()
       const dock = miniResizeDock
       miniResizeFrom = null
       miniResizeDock = null
@@ -4305,22 +4381,23 @@ app.whenReady().then(async () => {
       return
     }
     if (miniDock && !miniDock.expanded) return // 折叠在屏幕边上时不改大小:缩窄会把露在屏内的那条把手也带出去
-    const p = point as Partial<Electron.Point> | null
+    const p = point as (Partial<Electron.Point> & { radius?: number }) | null
     const cursor = p && Number.isFinite(p.x) && Number.isFinite(p.y)
       ? { x: Math.round(p.x!), y: Math.round(p.y!) } : screen.getCursorScreenPoint()
     if (start === true || !miniResizeFrom) {
+      miniResizeUpdates.flush()
       // 刚拖到边上、还没判贴边就开始拉:那次判定作废,免得拉到一半被折叠
       if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
       miniDragging = false
       miniResizeDock = miniDock ? { ...miniDock } : null
       miniDockMotion?.reset(); miniDock = null; stopMiniPoll()
-      miniResizeFrom = { bounds: miniBounds(), cursor }
+      miniResizeFrom = { bounds: miniBounds(), cursor, radius: p && Number.isFinite(p.radius) ? Math.max(0, Math.min(64, p.radius!)) : 16 }
     }
     const from = miniResizeFrom
     const next = resizeFromEdge(from.bounds, edge, cursor.x - from.cursor.x, cursor.y - from.cursor.y, MINI_MIN, MINI_MAX,
       screen.getDisplayMatching(from.bounds).workArea)
     miniSize = { width: next.width, height: next.height }
-    setMiniBounds(next, false)
+    miniResizeUpdates.push(next)
   })
   ipcMain.on('window:miniSession', (e, raw: unknown) => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return
@@ -4356,7 +4433,7 @@ app.whenReady().then(async () => {
     if (!req) return
     // 只有要用户回主窗看结果的才把主窗抢到前面:重开引导、带着草稿 / 引用去聊天、打开 Agent、设置 › 设备里选了去处、设置里点「在蓬洲云中查看」(open-space)。其余(⌘K 重算、测试通知卡、恢复布局、
     // 成就弹窗、撤 Space)用户还在设置浮窗里,别打断。
-    if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote' || req.action === 'open-agents' || req.action === 'open-agent' || req.action === 'unit-route' || req.action === 'open-space') showMainWindow()
+    if (req.action === 'onboarding' || req.action === 'chat-draft' || req.action === 'chat-quote' || req.action === 'open-agents' || req.action === 'open-agent' || req.action === 'unit-route' || req.action === 'open-space' || req.action === 'open-link') showMainWindow()
     const deliver = (): void => {
       // extensions-changed 也要到两扇 mini(手开的 / 自动弹的):它们和分离窗一样各握一份插件实例(见 amadeusPlugins.ts)。
       const recipients = req.action === 'skills-changed' || req.action === 'agents-changed' || req.action === 'extensions-changed'
@@ -4376,6 +4453,9 @@ app.whenReady().then(async () => {
     if (!isTrustedSender(e)) return
     const state = normalizeUiSync(raw)
     if (!state) return
+    // An idle resize mask belongs to the old CSS radius/zoom. No HWND resize is
+    // pending now, so let the card paint the new theme's corners itself.
+    clearIdleMiniResizeMask()
     // ⚠️ 不从 prefs['tangu_locale'] 取主进程语言(P1-KF):那是手选键,任何字体 / 缩放广播都带着它的 null → 曾把中文界面的主进程文案重置成系统英文。
     // 语言走下面的 ui:locale(发方窗口自己切语言时 i18n.tsx 会报;收方重放后也会再报一次同值,主进程同值不动)。
     for (const w of BrowserWindow.getAllWindows()) {
@@ -4536,7 +4616,7 @@ app.whenReady().then(async () => {
   // auth.json)一连就整片 401,表现为「本地会话列表加载失败 + 假的『登录已过期』」。开窗不等这条
   // (4s 封顶,离线不拖启动);无需续期时(1h 内换过)立即落到 finally,后端照常即刻起。
   void accountCore.refresh(4000).catch(() => {}).finally(() => { void ensureBackend() })
-  setInterval(() => { void accountCore.refresh() }, 24 * 3600_000) // 一直开着不关的也算「在用软件」
+  setInterval(() => { void accountCore.refresh().catch(() => {}) }, 24 * 3600_000) // 一直开着不关的也算「在用软件」;auth.json 坏了写回被拒,旧 token 照用
   // MCP 服务常驻、随 App 启动(引擎的 ASR 桥要用);外部面按设置「高级」开关(默认关)。开关值在 lifecycle 队列里现读:
   // 若先读到旧值、用户又在读完前切了开关,旧值作废(见 createMcpLifecycle)。不依赖后端就绪,工具调用时现取引擎地址。
   if (!SANDBOX) void applyForsionMcp(async () => (await loadConfig()).mcpEnabled)
@@ -4582,13 +4662,14 @@ app.whenReady().then(async () => {
     },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
+  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
   amadeusReadPlugins = readExternalPlugins
   amadeusVaultFace = vaultFace
   void refreshUnitHost() // 「允许其他设备连接本机」开着就恢复出站通道
   restartAmadeusSync = restartSync
   stopAmadeusSync = stopSync
-  registerAmadeusAssetProtocol(getVaultRoot)
+  registerAmadeusAssetProtocol(getVaultRoot, resolveSharedAsset)
+  registerIuiLibProtocol()
   registerRemoteSync() // 本地库远程同步(remotely-save 式;隔离层见 electron/remotesync/)
   app.on('activate', () => showMainWindow()) // dock/tray 唤起:隐藏则显示,销毁则重建
   // GPU 进程崩溃(Windows 驱动 TDR / 睡眠恢复常见)会级联拖垮渲染器 → 白屏。监听并自愈。

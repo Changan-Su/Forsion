@@ -10,6 +10,8 @@ description: 给 Forsion 写桌面插件与引擎插件：布局、列表源、�
 
 插件用 JavaScript / TypeScript 编写,官方提供类型定义与模板。内置的「Forsion 扩展开发」技能可以让 Agent 照官方模板直接脚手架出插件、主题、Space 或智能体的骨架,见[技能](../agents/skills.md)。
 
+引擎插件可通过公开的 `registerSkillProvider` 提供实时、只读的外部技能来源，无需复制进用户技能目录，见[外部技能来源契约](plugin-skill-providers.md)。
+
 需要让插件产物与原生笔记面板联动时,使用 `ctx.app.openNote`:同一 `reuseKey` 的 Amadeus 面板会原地切换到新笔记；`activate:false` 可保持用户焦点在插件面板。配合 Space 主区条目的 `split:"right"` / `split:"down"`,插件无需在自己的 DOM 里复制文档编辑器或聊天界面。
 
 ```js
@@ -25,6 +27,8 @@ ctx.app.openNote(path, { reuseKey, activate })
 ```js
 ctx.listCapabilities?.includes('tree' | 'items' | 'rename')
 ```
+
+文件夹同时也是可选中的东西时(比如父标签),给文件夹行写 `opensOnClick: true`,用 `ctx.listCapabilities?.includes('folderOpen')` 探测:点名字调 `open()` 并展开,只有行首的箭头负责开合,`activeKey` 指向它时整行高亮。旧宿主忽略这个字段,点一下只开合,所以探测不到时要在里面留一行子项。
 
 把行按「是谁的」归组(发信人、账号、来源)时,给最上面一级的文件夹再写 `folderStyle: 'group'`:它会画成 Tangu 左栏里 Agent / 项目那种一级行,前面是头像(`iconUrl`)、方块里的图标(`icon`)或标题的首字,`hint` 是行尾的小胶囊(适合放未读数)。组里的行不再画自己的图标,只留未读的圆点,一组先列 5 条,其余在「查看更多」后面。这种组的开合只记到应用重启:写了 `defaultOpen: true` 的组自己开着(比如里面有未读),它由假变真时宿主会重新打开这一组;不写就是收着。组的先后由你的数组顺序决定。搜索时不画层级,所以带 `query` 时请返回平铺的行。手机上,只有这一层组头的列表仍然是整屏列表,组里的行照样可以左滑。用 `ctx.listCapabilities?.includes('group')` 判断宿主认不认;不认的宿主会把它画成普通文件夹。
 
@@ -82,7 +86,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 ## 商店身份与安装目录
 
-商店给每个条目一个不会变的 ID,新上架的条目装进 `plugins/market-<ID>/`,和显示名无关,所以显示名可以重复。装在这种目录里的插件以目录名为运行身份:包里的引擎插件照常按目录名挂路由,单独上架的引擎插件 id 变成 `market-<ID>`、数据目录在 `plugin-data/market-<ID>/`,它的工具名会被宿主改写成带哈希的唯一名字(两份同 id 的插件互不顶替)。别的插件在 `requiresPlugins` 里写你 manifest 的 `id` 照样认得到,前提是只装着一份。这种条目要 2.13.4 之后的桌面版本才装得了,旧版本会提示先升级 Forsion。更早上架的条目保留原来由显示名推出的目录名;其中带引擎插件的包在桌面 2.13.3 及更早的版本上,目录名和 manifest `id` 不一样时页面调不到包里的引擎插件(每次调用都是 404,不报错)。
+商店给每个条目一个不会变的 ID,新上架的条目装进 `plugins/market-<ID>/`,和显示名无关,所以显示名可以重复。装在这种目录里的插件以目录名为运行身份:包里的引擎插件照常按目录名挂路由,单独上架的引擎插件 id 变成 `market-<ID>`、数据目录在 `plugin-data/market-<ID>/`,它的工具名会被宿主改写成带哈希的唯一名字(两份同 id 的插件互不顶替)。别的插件在 `requiresPlugins` 里写你 manifest 的 `id` 照样认得到,前提是只装着一份;想让用户从商店一键装上你,对方还要写 `market: "market-<ID>"`,商店只按 slug 精确匹配,不按显示名猜。这种条目要 2.13.4 之后的桌面版本才装得了,旧版本会提示先升级 Forsion。更早上架的条目保留原来由显示名推出的目录名;其中带引擎插件的包在桌面 2.13.3 及更早的版本上,目录名和 manifest `id` 不一样时页面调不到包里的引擎插件(每次调用都是 404,不报错)。
 
 ## 上架与更新
 
@@ -100,7 +104,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。
 
-View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。见 [可复用 UI 组件](./ui-components.md)。
+View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`，在光标处插入文字用 `insertText`。见 [可复用 UI 组件](./ui-components.md)。
 
 设置类页面（账号、额度与积分、诊断、偏好）用 `ctx.ui.mountSettingsPage(el, { groups })` 交一份整页描述：每组有图标、标题、说明、右上角按钮和若干项（开关、数值、按钮、输入框、分段、下拉、「选了就执行」、步进器、代码 + 复制、额度条、空 / 加载 / 出错、自定义块），插件只给文字、值和回调，宿主用自己的设置零件画并按端排版——手机上开关、数值、单个按钮留在右边，输入框、步进器、两个以上的按钮换到下一行，「选了就执行」换成一枚按钮 + 半屏。清单外的内容放进 `custom` 块，块里用 `ctx.ui.mountSettingsItem` 挂单件。别再抄宿主的设置 CSS；2026-10-17 之前的宿主没有这两个接口，先探测，保留自己画的那套。见 [可复用界面组件](./ui-components.md)。
 
@@ -163,9 +167,21 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 
 引擎插件可以接入一个新的聊天软件(比如企业微信),和内置的微信、Telegram、QQ 通道用同一套:连接即新会话、远程审批、`/new` `/model` 等命令、收件箱转发、侧栏里的通道文件夹都现成。装好之后「设置 → 通道」里多一张卡,填上插件要的凭据、点「连接」就能用;停用插件,这个通道随之停下,已绑定的会话还在。接口见插件开发技能「引擎插件」一节的 `ctx.registerChannel`;企业微信插件是现成的例子。
 
+一个账号也可以服务多个联系人:写 `multiPeer: true`,每个联系人就有自己的绑定、会话和工作目录,对话互不相通。他们用的是同一个 Agent、同一个账号身份,所以 Agent 记忆是共用的,这些会话不用项目记忆。工作目录只是把文件分开,不是沙箱:工具走主机执行时仍然能读到别的目录,所以要自己把好谁能说话、工具怎么审批。谁能说话由驱动决定;这些联系人不是通道主人,所以只有 `/stop` 算命令,收件箱不转发,桌面也切换不了连接的会话。老引擎会静默忽略这个键,先判 `ctx.channelCapabilities?.multiPeer`。入站消息带 `agentSlug` 可以给这个联系人钉一个 Agent。
+
+凭据直接写进配置、没有人点「连接」的无人值守部署,再加 `selfConnect: true`:账号从没连过时,驱动交上来的第一个联系人会替本机用户连上。用户断开过的账号不会被连回去。
+
+驱动实现 `sendApproval` 后,审批不再发文字卡,而是把工具名、参数和预览交给驱动画,由 `respond` 兑现:文字消息批不了它,也作废不了它,10 分钟没人答按拒绝。实现 `settleApproval` 能知道卡是怎么结束的。界面半身可以用 `ctx.tangu.connectChannel(kind, fields, { modelId })` 替用户填好并连接自己捆绑的通道,只在桌面可用,别的插件的通道会被拒绝。`modelId` 在通道还没选过模型时当默认模型,用户选过的不动。
+
+## 自动化触发事件
+
+插件可以给自动化加一种自己的「当…」:用 `ctx.automation.registerTrigger` 登记,事件发生时用 `ctx.automation.emit` 发一条。登记之后它出现在自动化画布触发节点的「外部 · 插件」组,规则由用户自己写,可以加时段、星期、冷却和每天次数;用户选「直接提醒」不花额度,选「叫醒 Muse」照常过额度。
+
+只能登记自己命名空间下的:`id` 只写 key,宿主拼成 `plugin:<插件 id>:<key>`。名字中英都要有。插件停用或卸载时触发源随之注销,相关规则不删,暂停并写明原因,装回来自动恢复。事件不落盘,引擎重启会丢掉还没被规则看到的。引擎插件用 `ctx.sdk.automation` 上的同名方法。写法见插件开发技能的 `references/tangu-host-apis.md`。
+
 ## 插件数据跨设备同步
 
-插件在 manifest 里写 `"syncData": true`，它用 `ctx.saveData` 存的数据就会随 Forsion 账号同步到你的其他电脑和手机。没登录或断网时照旧只存在这台设备上，联网后再补传。两台设备都改过时，保留较晚的那次。插件详情页里有「跨设备同步插件数据」开关，可以在某台设备上单独关掉。网页版暂不同步。接口细节见插件开发技能「编辑器」一节里 `loadData/saveData` 那几条。
+插件在 manifest 里写 `"syncData": true`，它用 `ctx.saveData` 存的数据就会随 Forsion 账号同步到你的其他电脑和手机。没登录或断网时照旧只存在这台设备上，联网后再补传。两台设备都改过时，保留较晚的那次。插件详情页里有「跨设备同步插件数据」开关，可以在某台设备上单独关掉。用户卸载时没勾「保留设置」，云端那份会一起清掉；从回收站恢复后本机这份会重新传上去，别的设备还装着时也会把它的那份传回来。网页版暂不同步。接口细节见插件开发技能「编辑器」一节里 `loadData/saveData` 那几条。
 
 ## 开屏与图标
 
@@ -279,6 +295,62 @@ if (turn) await turn.ready
 showMyDialog({ onClose: () => turn?.done() })
 ```
 
+### 上手提示（2026-11-02 起）
+
+用户用到你插件的某个功能时，宿主替你提示一次怎么用；用过了就不再出。提示声明在 manifest，出不出由宿主定，你不用自己记「看过没有」。
+
+```json
+"guide": {
+  "tips": [
+    {
+      "id": "drag-to-calendar",
+      "at": "todo-row",
+      "style": "ring",
+      "platform": "desktop",
+      "when": { "visible": ["calendar-grid"] },
+      "done": ["todo.schedule"],
+      "title": "拖到日历上排时间",
+      "text": "按住这条待办拖进日历的时间格，就排成那半小时。",
+      "en": { "title": "Drag onto the calendar to schedule", "text": "Drop it on a time slot to book half an hour." }
+    }
+  ]
+}
+```
+
+- `at`：你自己 View 里某个元素的 `data-guide-anchor="<名字>"`。宿主只在你的 View 里找，名字不会和别的插件撞。这个元素在屏幕上，提示才可能出。
+- `style`：`line` 在锚点上沿贴一行（适合输入框）；`ring` 圈住锚点、旁边一张小卡，要写 `title`。
+- `when` 只取一种：`{ "open": "<View id>", "times": 1 }` 这个 View 打开过几次；`{ "count": "<事件>", "atLeast": 3 }` 某个计数到了；`{ "visible": ["<锚点>", …] }` 这几个锚点同时在屏幕上。不写 `when` = 只在你调 `ctx.guide.show(id)` 时出。
+- `done`：任一计数 ≥ 1 就算「会了」，这条永远不再出。计数就是 `ctx.achievements.track('<事件>')`：用户真做了那件事时报一次。裸名是你自己 track 的；`app:` 开头读宿主的官方事件（如 `app:note.wikilink`）。
+- `platform`：`desktop` / `mobile`，不写 = 都出。拖动、悬停、快捷键这类，手机上没有对应手势的写 `desktop`。
+- 文案：中文 `title` / `text` + `en` 镜像。**英文界面缺 `en` 的那条不出**，不回落中文。标题尽量 16 个字以内，正文 40 个字以内。
+- id 用小写字母、数字和 `-`，最多 12 条。坏掉的那条宿主丢掉，其余照常。
+
+宿主管的节奏：全应用同一时刻只有一处提示（和使用指南的圈注共用）；一天最多 3 条；锚点出现 2 秒后、用户停手 1.5 秒后才出；一个 View 打开一次最多出一条；有弹窗在排或开着、首启向导开着时等着。用户点「知道了」/ × / Esc 算看过，「不再提示」关掉你这个插件的全部提示，设置 → 通知 →「上手提示」可以整体关掉或重置。看过和关掉只记在这台设备上。
+
+**新版本加了功能**：给它加一条**新 id** 的提示。记账按「插件 id + 提示 id」算，老用户升级后用到时会看到这条，已经看过的旧提示不会再出。别改旧提示的 id（等于让所有人重看一遍）。
+
+运行时：
+
+```js
+inputEl.dataset.guideAnchor = 'todo-input'   // 标锚点
+ctx.achievements.track('todo.tag')            // 用户真做了那件事
+ctx.guide?.show('tags')                        // 条件写不进 manifest 时自己叫(仍走节奏和记账)
+ctx.guide?.state('tags')                       // 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
+```
+
+**空着的时候给例句**：`ctx.ui.mountEmptyState` 多了 `examples`（最多 3 条），点一下通常是把这句填进你的输入框，让用户看着它被认出来、自己按发送，别直接替用户建东西：
+
+```js
+ctx.ui.mountEmptyState(el, {
+  icon: 'list-todo', title: '还没有待办', line: '在下面写一句就行。',
+  examples: [{ label: '明天下午3点 交周报 #工作', note: '日期、标签直接打', run: () => box.insertText('明天下午3点 交周报 #工作') }],
+})
+```
+
+开发时想重看：命令面板「重置上手提示」，或设置 → 通知 →「上手提示」→ 重置；再配合 `ctx.guide.show(id)` 就能当场看到某一条。锚点 2 秒找不到、条件一直不成立时，提示就是不出，先在开发者工具里确认元素带着 `data-guide-anchor`、在你自己的 View 里。
+
+和前置条件闸（manifest `onboarding.requires`）的分工：闸 = 不做插件就用不了；提示 = 能用，告诉用户一个窍门。旧宿主不认 `guide`，什么都不出；`ctx.guide` 一律 `?.`。
+
 ## 按需展开原生主区伴随视图
 
 `registerView` 可声明 `mainCompanions`。支持 `amadeus-editor` / `chat-panel`，key 以插件 id 加 `-` 开头，最多三项。视图挂载上下文的 `view.setCompanionsVisible?.(true)` 按需展开，`false` 将这些原生视图收进本视图的标签组，保留正文、聊天草稿和分栏尺寸；窄窗与手机使用原生标签。不会关闭或改写其它视图，不重建整个 Space。旧宿主缺少此方法，所以重要的阅读布局仍可保留在 Space 配方中。
@@ -313,4 +385,14 @@ ctx.app.writeFileScoped?.(path, text, expectedRoot, {create:true})
 
 ### 共享账号
 
-Unit 网页账号宿主与移动端可提供 `ctx.account`。先判断能力存在，再使用 `status()`、`login()`、`logout()`、`request(path, init)` 与 `subscribe(listener)`。`request` 只访问账号 API，不接受其他源；宿主代发凭据并保留 FormData/Blob 文件上传。账号切换会取消旧请求并使旧响应体读取失败；插件仍须取消自己的延迟任务并清空旧账号界面。可选的 `saveDownload(blob, name)` 返回 `{ ok, error? }`：Android 保存到系统下载，浏览器保存为下载文件。不要保存、导入或传递账号令牌。
+桌面(装载了 Forsion Extend 时)、Unit 网页账号宿主与移动端都提供 `ctx.account`,同一份插件代码三端能跑。先判断能力存在，再使用 `status()`、`login()`、`logout()`、`request(path, init)` 与 `subscribe(listener)`。`request` 只访问账号 API，不接受其他源；宿主代发凭据并保留 FormData/Blob 文件上传。账号切换会取消旧请求并使旧响应体读取失败；插件仍须取消自己的延迟任务并清空旧账号界面。可选的 `saveDownload(blob, name)` 返回 `{ ok, error? }`：Android 保存到系统下载，浏览器保存为下载文件。不要保存、导入或传递账号令牌。
+
+桌面的 `request` 走主进程代发,有几条限制:请求体只收 JSON 字符串(FormData 和 Blob 直接报错,大文件用预签名地址),响应体只有 JSON,自定义请求头不带过去,单次最长 120 秒,DELETE 不带请求体;`abort` 立刻拒绝,但已经发出的请求会跑完,结果丢弃。桌面的 `status()` 没有 `userId`。路径一律相对 `/api`。
+
+### 账号权益
+
+插件要用户有某项权益才能用时,在 manifest 写 `"requires": { "entitlement": "<name>" }`,数组写法照旧。插件照常激活,自己画引导页:`ctx.account.entitlements()` 回 `{ granted }`,`true` 是有,`false` 是服务端明确说没有,`null` 是不知道(离线、没登录、老服务端),别把 `null` 当成没有。没声明时回 `true`。真正的闸在服务端。`requires.plugins` 是 Unit 的包依赖,桌面和手机的前置继续写 `requiresPlugins`。商店标签写 `entitlement:<name>`,卡片上画成一枚标记,不挡安装。
+
+### Space 的 Ribbon 落点和手机布局
+
+`space.json` 写 `"ribbon": { "after": "<spaceId>" }`,图标第一次出现时排在那个 Space 后面,用户已经摆过的位置不动。写 `"mobile": { "listFirst": true }`,手机上先落左栏列表,点一项进主区;只有左栏确实是这种列表才写,缺省主区是第一层、左栏是抽屉。 主视图要接管原生顶栏时用 `ctx.ui.claimHeader?.({ title, back, onBack, toList: true })`:返回时壳把列表层滑出来(边缘手势跟手,中途放弃什么都不发生),列表露出来后才调 `onBack`;不带 `toList` 时系统返回和顶栏箭头都只跑 `onBack`,适合浮层。

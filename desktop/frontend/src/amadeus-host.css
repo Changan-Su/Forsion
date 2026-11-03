@@ -102,6 +102,11 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
  * 拖拽手柄绝对定位到左侧留白、悬浮显示;右侧操作留在 22px 右列。
  * 「拖到行两侧边缘裂出新列」的投放区不再牺牲:拖拽中经 .stack[data-dnd] 绝对定位浮回页边距(见文末)。 */
 .am-app .page-view { padding-left: 48px; padding-right: 48px; }
+/* 目录的沟(DESIGN §6「悬浮目录」):窄时正文右移,目录 + 块手柄(50)排在正文左边,不再叠在一起。
+   属性由 FloatingToc 打,Mini / 触屏 / 源码 / 画布没有目录就不让;全宽时 --amx-page-max 是 100%,括号里自然是 0。 */
+.amx-pane[data-lcl-ftoc] :is(.page-view, .amx-doc) {
+  padding-left: max(48px, calc(var(--lcl-ftoc-gutter) + 50px - max(0px, (100% - var(--amx-page-max, 920px)) / 2)));
+}
 .am-app .edge-zone { flex-basis: 0; }
 .am-app .column { padding-left: 0; padding-right: 0; }
 .am-app .block-body { padding-left: 2px; }
@@ -334,10 +339,43 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 
 /* ── 标签面板 ── */
 .amx-tag { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.amx-tag.active { color: var(--accent-ink, var(--accent, var(--text))); }
 .amx-tag-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .amx-tag-count { flex: 0 0 auto; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
-.amx-tag-page { padding-left: 24px; }
+/* 标签树(方案 T2):一行 = 箭头 + 名字 + 含子标签的计数。箭头和名字是两个按钮,点名字跳 tag: 搜索。 */
+.amx-tagtree-search { margin-top: 8px; }
+.amx-tagtree-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.amx-tagtree-sort { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); text-transform: none; letter-spacing: 0; }
+.amx-tagtree-sort button {
+  border: none; background: transparent; color: var(--text-muted); font: inherit;
+  padding: 1px 8px; border-radius: var(--radius-pill, 999px); cursor: pointer;
+}
+.amx-tagtree-sort button:hover { color: var(--text); }
+.amx-tagtree-sort button.on { background: var(--bg-card); color: var(--text); }
+.amx-tagtree-row { display: flex; align-items: center; gap: 2px; padding-left: calc(var(--amx-tag-depth, 0) * 14px); }
+.amx-tagtree-row > .amx-list-item { flex: 1 1 auto; min-width: 0; }
+.amx-tagtree-chev, .amx-tagtree-gap { flex: 0 0 18px; width: 18px; height: 18px; }
+.amx-tagtree-chev {
+  display: inline-flex; align-items: center; justify-content: center; padding: 0; border: none; background: transparent;
+  color: var(--text-muted); border-radius: var(--radius-sm, 6px); cursor: pointer;
+}
+.amx-tagtree-chev svg { transition: transform var(--collapse-duration) var(--collapse-ease); }
+.amx-tagtree-chev.open svg { transform: rotate(90deg); }
+.amx-tagtree-chev:hover:not(:disabled) { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
+.amx-tagtree-chev:disabled { cursor: default; }
+
+/* tag: 搜索的逐行结果:文件名 + 处数,下面一行一处命中。 */
+.amx-taghit-cap { padding: 2px 10px 4px; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
+.amx-taghit-group { display: flex; flex-direction: column; gap: 1px; margin-bottom: 6px; }
+.amx-taghit-file { font-weight: 500; }
+.amx-taghit-line { padding: 3px 8px; margin-left: 10px; width: calc(100% - 10px); white-space: normal; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); background: var(--overlay-light, rgba(127, 127, 127, 0.08)); }
+.amx-taghit-line:hover { background: var(--overlay-medium, rgba(127, 127, 127, 0.16)); }
+.amx-taghit-pill {
+  white-space: nowrap;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent-ink) 12%, transparent);
+  border-radius: var(--radius-pill, 999px);
+  padding: 0 0.35em;
+}
 
 /* ── 局部关系图(右栏 tab;可拖节点/平移/缩放,hover 高亮相邻) ── */
 .amx-graph { display: block; width: 100%; height: auto; touch-action: none; cursor: grab; }
@@ -381,6 +419,8 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 }
 .amx-sharestat-chip:hover { color: var(--text); background: var(--overlay-med, rgba(127, 127, 127, 0.16)); }
 .amx-sharestat-chip svg { flex: 0 0 auto; }
+.amx-sharestat-chip.is-static { cursor: default; }
+.amx-sharestat-chip.is-static:hover { color: var(--text-muted); background: var(--overlay-light, rgba(127, 127, 127, 0.1)); }
 .amx-sharestat-chip.is-pub { color: var(--accent-ink, var(--accent)); background: var(--accent-light, rgba(127, 127, 127, 0.14)); }
 
 /* ── Callout 标注(> [!note] …,Obsidian 语法;纯装饰,序列化零影响) ── */
@@ -827,6 +867,25 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
    → 表头 140 / 数据行 161·187 错位(2026-09-02 实报)。外层单列 grid minmax(max-content, 1fr):列宽按最宽的那一行只算一次,
    每行被拉到同一个定宽,行内 1fr 对同一份剩余空间解析 → 轨道逐像素相同;不溢出时仍填满容器。仪器:check:erp E9/E9b。 */
 .amx-db-scroll { overflow-x: auto; display: grid; grid-template-columns: minmax(max-content, 1fr); }
+/* 横向放不下时两侧边缘淡出(走查续六 6.12):右边还有列 → 右缘 64px 渐隐,收到约 18%(被切的那列还看得见一点);
+   滚到最右收掉右边那条,滚离最左才出左边那条。mask 不铺色(背景色、主题色一换就穿帮,同 DESIGN「悬浮输入区」为什么用 mask)。
+   滚动驱动的动画,和手机聊天表格那条(chat2.css t2-table-edges)同一做法:不溢出时时间线不活动 = 变量停在 0 = 没有渐隐。
+   ⚠️ mask 也作用于 fixed 定位的后代、出了盒子就看不见 —— 格子里的弹层(关联行选择器等)开着时收掉(:has 点名类,不是通配结尾)。 */
+@property --amx-db-fade-l { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --amx-db-fade-r { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@keyframes amx-db-scroll-edges {
+  0% { --amx-db-fade-l: 0px; --amx-db-fade-r: 64px; }
+  6%, 94% { --amx-db-fade-l: 64px; --amx-db-fade-r: 64px; }
+  100% { --amx-db-fade-l: 64px; --amx-db-fade-r: 0px; }
+}
+@supports (animation-timeline: scroll()) {
+  .amx-db-scroll:not(:has(.amx-db-popwrap)) {
+    -webkit-mask-image: linear-gradient(to right, rgb(0 0 0 / .18), #000 var(--amx-db-fade-l), #000 calc(100% - var(--amx-db-fade-r)), rgb(0 0 0 / .18));
+    mask-image: linear-gradient(to right, rgb(0 0 0 / .18), #000 var(--amx-db-fade-l), #000 calc(100% - var(--amx-db-fade-r)), rgb(0 0 0 / .18));
+    animation: amx-db-scroll-edges linear both;
+    animation-timeline: scroll(self inline);
+  }
+}
 /* 行线常驻;表头行同样吃 border-top → 上下各一条(首个数据行的 border-top 即表头下缘线) */
 .amx-db-row { display: grid; align-items: stretch; border-top: 1px solid var(--border); }
 /* 列分隔线弱化;最后一列数据列(其后是加列按钮列)不画 */
@@ -929,6 +988,20 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-drawview { overflow: hidden; }
 .amx-drawview .amx-draw { height: 100%; border: none; border-radius: 0; }
 .amx-drawview .amx-draw.amx-draw-state { height: auto; }
+/* Desk 白板磁贴(走查续七 7.7 A,AmadeusDrawingView 的 params.preview):只画图 —— 引擎的工具条 / 菜单 / 提示 / 缩放栏全收,
+   上面盖一层挡住选中、拖动和滚轮平移(双击 = 在白板中打开),右下角一颗「在白板中打开」。 */
+.amx-drawview:has(> .amx-drawpreview-shield) { position: relative; }
+.amx-boardhost[data-preview] .excalidraw .layer-ui__wrapper,
+.amx-boardhost[data-preview] .excalidraw .LoadingMessage { display: none; }
+.amx-drawpreview-shield { position: absolute; inset: 0; z-index: 4; }
+.amx-drawpreview-open {
+  position: absolute; right: 12px; bottom: 12px; z-index: 5;
+  display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+  border: 0; border-radius: var(--radius-sm); background: var(--bg-card); color: var(--text);
+  font: inherit; font-size: var(--ui-font-meta, 12px); box-shadow: var(--btn-shadow); cursor: pointer;
+}
+.amx-drawpreview-open svg { color: var(--text-muted); }
+.amx-drawpreview-open:hover { background: color-mix(in srgb, var(--bg-card) 92%, var(--text)); }
 
 /* ── 白板:纸张 + 网格两层 ──────────────────────────────────────────────────
    两层都 portal 进 <Excalidraw> 内部,z-index 3 压过两张画布(1/2),DOM 靠前让位给 wysiwyg(3)/UI(4)。
@@ -1334,6 +1407,10 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .amx-db-card { display: flex; flex-direction: column; gap: 5px; background: var(--bg-card, var(--bg)); border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 10px); box-shadow: var(--card-shadow); padding: 8px 10px; cursor: pointer; user-select: none; }
 .amx-db-card-title { font-size: var(--ui-font-body, 13px); font-weight: 600; color: var(--text); word-break: break-word; }
 .amx-db-card-prop { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
+/* 卡片属性行的列名(走查续六 6.10):淡字、定宽 3.2em 让值对齐,过长省略;带列名的行不折行,值占剩下的宽。 */
+.amx-db-card-prop[data-named] { flex-wrap: nowrap; align-items: baseline; gap: 6px; }
+.amx-db-card-key { flex: 0 0 3.2em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-faint, var(--text-muted)); font-size: var(--db-meta-size, var(--ui-font-meta, 12px)); }
+.amx-db-card-prop[data-named] > .amx-db-card-text { flex: 1 1 0; min-width: 0; }
 .amx-db-card-text { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
 .amx-db-card-check { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .amx-db-card-add { flex-direction: row; align-items: center; justify-content: center; gap: 4px; border: 1px solid transparent; box-shadow: none; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); }
@@ -1547,7 +1624,6 @@ html.dark .amx-cal-chip-ev, html.dark .amx-cal-event {
 .amx-cal-tscroll { position: relative; flex: 1; min-width: 0; min-height: 0; overflow: auto; }
 .amx-cal-tgrid2 { display: grid; position: relative; }
 /* 悬停时「点下去会建在哪」(默认 1 小时)与按住拖出时的预览块:命令式定位,默认隐藏,不挡指针。 */
-.amx-cal-hoverslot { position: absolute; display: none; z-index: 3; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--overlay-medium, var(--bg-hover)); pointer-events: none; }
 .amx-cal-making { position: absolute; display: none; z-index: 6; box-sizing: border-box; border-radius: var(--radius-sm, 6px); background: var(--amx-event-color); color: #fff; box-shadow: 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); padding: 3px 8px; font-size: var(--ui-font-caption, 11px); line-height: 1.3; font-weight: 600; font-variant-numeric: tabular-nums; overflow: hidden; pointer-events: none; }
 .amx-cal-thead2 { position: sticky; top: 0; z-index: 8; background: var(--bg); border-left: 1px solid var(--amx-cal-line, var(--border)); border-bottom: 1px solid var(--amx-cal-line, var(--border)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; }
 .amx-cal-thead2.today .amx-cal-tdate { color: var(--accent-ink, var(--accent, #6c5ce7)); }
@@ -1629,6 +1705,7 @@ html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-f
 .amx-cal-card-title { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-title, 16px); line-height: 22px; font-weight: 600; outline: none; padding: 2px; border-radius: 4px; }
 .amx-cal-card-title::placeholder { color: var(--text-faint, var(--text-muted)); font-weight: 500; }
 .amx-cal-card-title:focus { background: var(--bg-hover, var(--overlay-light)); }
+textarea.amx-cal-card-title { display: block; resize: none; field-sizing: content; max-height: calc(4lh + 4px); overflow-y: auto; overflow-wrap: anywhere; }
 
 /* 行基座(时间/属性共用):图标 + 内容 */
 .amx-cal-card-row { display: flex; gap: 8px; padding: 6px; border-radius: var(--radius-sm, 6px); }
@@ -1929,6 +2006,8 @@ html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-f
 .amxc-row.on { background: var(--accent-light); color: var(--accent-ink, var(--accent)); }
 .amxc-row.static { cursor: default; }
 .amxc-row.dim { opacity: 0.75; }
+.amxc-row-ic { flex: 0 0 auto; display: inline-flex; color: var(--text-muted); }
+.amxc-row-ck { flex: 0 0 13px; display: inline-flex; }
 .amxc-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .amxc-tag { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); background: var(--overlay-light); border-radius: var(--radius-pill, 999px); padding: 1px 8px; }
 .amxc-ic { flex-shrink: 0; border: 0; background: none; color: var(--text-muted); cursor: pointer; border-radius: var(--radius-sm, 6px); padding: 3px; display: inline-flex; }
@@ -1958,7 +2037,7 @@ html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-f
 /* 分享卡片(ShareCard:Share|Publish 双 tab 浮层,锚定分享按钮) */
 .amxc-cardwrap { position: fixed; inset: 0; z-index: 240; -webkit-app-region: no-drag; }
 .amxc-card {
-  position: fixed; width: 360px; max-height: min(520px, calc(100vh - 48px)); overflow-y: auto;
+  position: fixed; width: 360px; max-height: min(640px, calc(100vh - 48px)); overflow-y: auto;
   padding: 8px 12px 12px;
   background: var(--bg-card, var(--surface)); color: var(--text);
   border: var(--border-width, 1px) solid var(--border); border-radius: var(--radius-md, 12px);
@@ -2270,3 +2349,14 @@ html:root .amx-cal-cardwrap.amx-cal-drawer[data-lcl-exit] { animation-name: ui-f
 .amx-uprow-ring { margin-left: auto; margin-right: 6px; }
 .amx-uprow.is-failed .t2s-srow-title, .amx-uprow.is-failed .t2s-lead-icon { color: var(--danger); }
 .amx-uprow.is-failed .t2s-srow-menu { opacity: 0.7; }
+/* 日历 · 走查续七(与插件 @forsion/calendar 的 calendar.css 同步)。放文件末尾:和 .dragging / .selected 同特异性,靠先后。
+ * 7.10 A:重叠的事件阶梯错开(eventLayout),后一条压在前一条上;1px 卡片底色的零模糊描边把两块分开(不算高程阴影)。悬停浮上来,选中仍在最上。 */
+.amx-cal-event.stacked { box-shadow: 0 0 0 1px var(--bg-card, var(--bg)); }
+.amx-cal-event:hover { z-index: 3; }
+.amx-cal-event.selected { z-index: 4; }
+.amx-cal-event.stacked.selected { box-shadow: 0 0 0 1px var(--bg-card, var(--bg)), 0 2px 8px color-mix(in srgb, var(--amx-event-color) 35%, transparent); }
+.amx-cal-event.dragging { box-shadow: 0 4px 14px color-mix(in srgb, var(--amx-event-color) 30%, transparent); z-index: 50; }
+/* 7.11:暗色那条(0,2,1)压过了选中(0,2,0),选中又变回浅色块 —— 选中在暗色下同样实心 + 白字。 */
+html.dark .amx-cal-chip-ev.selected, html.dark .amx-cal-event.selected { --amx-ev-fill: var(--amx-event-color); color: #fff; }
+/* 7.12:月视图跨天条在一周一行里只在头一段写标题(当周第一格例外),后面的段只画色块。 */
+.amx-cal-mcell:not(:first-child) > .amx-cal-chip-ev.continues-left:not(.amx-cal-draft) { color: transparent; }

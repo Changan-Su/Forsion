@@ -4,7 +4,7 @@ import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { ToolEvent } from '../types'
-import { ToolGroup } from './ToolGroup'
+import { ToolGroup, describeTool, toolVerb } from './ToolGroup'
 
 describe('ToolGroup as the process line', () => {
   let host: HTMLDivElement
@@ -68,5 +68,24 @@ describe('ToolGroup as the process line', () => {
     await render({ events: [], reasoning: '想', running: false, thinking: true })
     expect(head().getAttribute('aria-busy')).toBe('false')
     expect(host.querySelectorAll('.chat-run-shimmer-text')).toHaveLength(0)
+  })
+  it('unknown tools say something human: MCP name, plugin name, grep as search, first string as target (round 6, 6.4)', async () => {
+    const ev = (name: string, args: unknown): ToolEvent => ({ id: name, name, arguments: JSON.stringify(args), done: true, result: 'ok' })
+    const tt = (k: string) => k
+    const mcp = describeTool(ev('mcp__github__search_issues', { q: 'sheet input radius', limit: 5 }))
+    expect([toolVerb(mcp, ev('mcp__github__search_issues', {}), tt), mcp.target]).toEqual(['Github · search issues', 'sheet input radius'])
+    const cal = ev('forsion_calendar__find_free_slots', { date: '2026-10-28' })
+    const owned = describeTool(cal, (n) => (n === cal.name ? '日历' : undefined))
+    expect([toolVerb(owned, cal, tt), owned.target, owned.unowned]).toEqual(['日历 · find free slots', '2026-10-28', false])
+    const raw = describeTool(cal, () => undefined)
+    expect([toolVerb(raw, cal, tt), raw.unowned]).toEqual(['forsion_calendar__find_free_slots', true]) // 名单里没有:原名,不猜
+    expect(describeTool(ev('grep', { pattern: 'amx-sheet-input' }))).toMatchObject({ kind: 'search', target: 'amx-sheet-input' })
+    expect(describeTool(ev('x_tool', { n: 3, flag: true })).target).toBe('{"n":3,"flag":true}')
+    // 开子会话:收起写「开了 N 个子会话」,展开每步「子会话 + 标题」
+    await render({ events: [ev('start_session', { title: '查 Obsidian Sync', message: 'brief' }), { ...ev('start_session', { title: '查 Notion 离线', message: 'b' }), id: 's2' }] })
+    expect(longSum()).toBe('开了 2 个子会话')
+    expect(host.querySelector('.tool-group-sum-short')?.textContent).toBe('开了 2 个子会话')
+    await act(async () => head().click())
+    expect([...host.querySelectorAll('.tool-row-copy-text')].map((e) => e.textContent)).toEqual(['子会话查 Obsidian Sync', '子会话查 Notion 离线'])
   })
 })
