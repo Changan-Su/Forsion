@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { Check, Ellipsis, House, LayoutDashboard, LayoutGrid, PanelRight } from 'lucide-react'
 import { validateUIDocument, type UIDocument } from '../../../../tangu-agent/src/contracts/intelligentUi'
 import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { IntelligentUi, NativeDocument } from './IntelligentUi'
+import { readTanguIntelligentUi } from '../amadeus/plugins/tanguSeam'
 import { ContextMenu, type CtxMenu } from './RightPanel'
 import { panelToast } from './PanelNotice'
 import { registerMessages, useI18n } from '../i18n'
@@ -136,6 +136,9 @@ export function WidgetMeta({ saved, html, deleted, sessionSlug }: { saved: Saved
 export function ChatIntelligentUi({ event, live, stateScope, onAsk, sessionId }: { event: ToolEvent; live: boolean; stateScope?: string; onAsk?: (text: string) => void; sessionId?: string }): React.JSX.Element {
   const saved = event.done && !event.isError ? savedWidgetOf(event.result) : null
   const desktop = currentPlatform() === 'desktop'
+  const ui = readTanguIntelligentUi()
+  if (!ui) return <></> // 只在 Tangu 的对话里用到,Tangu 激活时已交出渲染件
+  const { IntelligentUi } = ui
   if (!saved || !desktop) return <IntelligentUi event={event} live={live} stateScope={stateScope} onAsk={onAsk} />
   return <ChatWidgetCall event={event} live={live} onAsk={onAsk} saved={saved} sessionId={sessionId} />
 }
@@ -162,6 +165,8 @@ function ChatWidgetCall({ event, live, onAsk, saved, sessionId }: { event: ToolE
     )
   }
   const records = latest && latest.rev === saved.rev ? rowsOf(latest) : undefined
+  const IntelligentUi = readTanguIntelligentUi()?.IntelligentUi
+  if (!IntelligentUi) return <></>
   return (
     <div data-widget-id={saved.id} data-widget-live="">
       <IntelligentUi event={event} live={live} onAsk={onAsk} records={records} stateKey={widgetStateKey(saved.id)}
@@ -196,7 +201,8 @@ export function WidgetHost({ id, onRemove, titled }: { id: string; onRemove?: ()
   if (w.deletedAt) return <WidgetPlaceholder kind="deleted" id={id} onRemove={onRemove} />
   if (w.entry !== 'widget.json') return <div className="wgt-ph"><span>{t('widget.htmlChatOnly')}</span></div>
   const doc = docOf(w)
-  if (!doc) return <WidgetPlaceholder kind="unreadable" id={id} />
+  const NativeDocument = readTanguIntelligentUi()?.NativeDocument
+  if (!doc || !NativeDocument) return <WidgetPlaceholder kind="unreadable" id={id} />
   return (
     <div className={`wgt-host${titled ? ' wgt-titled' : ''}`} data-widget-id={id}>
       <NativeDocument key={`${id}:${w.rev}`} doc={doc} complete live={false} stateKey={widgetStateKey(id)} records={rowsOf(w)} />

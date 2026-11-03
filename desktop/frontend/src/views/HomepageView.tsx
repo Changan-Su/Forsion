@@ -40,7 +40,7 @@ import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfMoveOut, shelfRemo
 import type { SpaceDefinition, RibbonItem, ViewProps } from '@lcl/engine'
 import { RIBBON_ACTION_PREFIX } from '../amadeus/plugins/ribbonAction'
 import { askString } from '@amadeus/components/askString'
-import { readTanguNewChat, type TanguNewChatDispatch } from '../amadeus/plugins/tanguSeam'
+import { readTanguDrafts, readTanguNewChat, type TanguNewChatDispatch } from '../amadeus/plugins/tanguSeam'
 import { registerMessages, useI18n, type Locale } from '../i18n'
 import { formatLongDate, formatTime } from '../format/time'
 import {
@@ -54,7 +54,6 @@ import { watchAccountName } from '../services/accountName'
 import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
 import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './homeWidgets'
 import { HomeRail, HomeRow, PartFrame, PartsLibrary, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
-import { NEW_CHAT_DRAFT, setDraftField } from './chat2/composerDrafts'
 import type { OrganizerTab } from './SpaceOrganizer'
 import './homepage.css'
 
@@ -648,9 +647,8 @@ export function HomepageView(_props: ViewProps) {
     else showOrganizer()
   }
   const askAgentForWidget = (): void => {
-    // 已写了一半的草稿不盖掉:前缀接在后面另起一行
-    const ask = t('home.lib.askDraft')
-    setDraftField(NEW_CHAT_DRAFT, 'text', (cur) => (cur?.trim() ? `${cur}\n${ask}` : ask))
+    // 经 Tangu 的草稿接缝只填空着的那份:已写了一半的草稿原样留着(新对话草稿的键是 'new')
+    readTanguDrafts()?.fill('new', { text: t('home.lib.askDraft'), pastes: [] })
     setOrganizerOpen(false)
     setEditing(false)
     requestAnimationFrame(() => rootRef.current?.querySelector<HTMLTextAreaElement>('.hp-composer .t2c-ta')?.focus())
