@@ -33,8 +33,9 @@
 .conn-tool small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .conn-tool-name { font-family: var(--font-mono, ui-monospace, monospace); font-size: var(--ui-font-meta, 12px); font-weight: 500; }
 .settings-row-control.conn-tool-approval { flex: 0 0 auto; }
-.conn-locked, .conn-follow { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
-.conn-follow { color: var(--text-faint); }
+.conn-locked { display: inline-flex; align-items: center; gap: 5px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
+.conn-tool.is-off .settings-control-copy { opacity: 0.55; }
+.conn-tool-approval select { width: 132px; }
 .conn-more { width: 100%; justify-content: center; gap: 4px; border: 0; background: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); cursor: pointer; }
 .conn-more:hover { color: var(--text); }
 /* MCP 页顶上那一行入口 */

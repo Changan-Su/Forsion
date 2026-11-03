@@ -76,12 +76,15 @@ registerMessages({
   'connectors.curated': { zh: 'Forsion 官方收录', en: 'Curated by Forsion' },
   'connectors.toolsTitle': { zh: '工具', en: 'Tools' },
   'connectors.tools': { zh: '工具 · {n}', en: 'Tools · {n}' },
-  'connectors.toolsHint': { zh: '默认跟随对话的审批档：「只读」「自动改文件」会先问你，「完全通行」直接执行。', en: 'By default this follows the conversation’s approval mode: Read only and Auto-edit ask first, Full access runs right away.' },
+  'connectors.toolsHint': { zh: '默认跟随对话的审批档：「只读」「自动改文件」会先问你，「完全通行」直接执行。可以把单个工具改成每次都问，或关掉不给 Agent 用。', en: 'By default this follows the conversation’s approval mode: Read only and Auto-edit ask first, Full access runs right away. You can set a tool to always ask, or turn it off so agents can’t use it.' },
   'connectors.toolsAfterSignIn': { zh: '登录之后在这里列出工具', en: 'Its tools are listed here after you sign in.' },
   'connectors.toolsAfterKey': { zh: '填好 Key、连上之后在这里列出工具', en: 'Its tools are listed here once you add a key and it connects.' },
   'connectors.toolsWhenOff': { zh: '打开开关后在这里列出工具', en: 'Turn it on to list its tools here.' },
   'connectors.moreTools': { zh: '还有 {n} 个工具', en: '{n} more tools' },
-  'connectors.approval.follow': { zh: '跟随审批档', en: 'Follows approval mode' },
+  'connectors.approval.follow': { zh: '跟随审批档', en: 'Follow approval mode' },
+  'connectors.approval.ask': { zh: '每次都问', en: 'Always ask' },
+  'connectors.approval.off': { zh: '关闭', en: 'Off' },
+  'connectors.approval.label': { zh: '「{tool}」的审批', en: 'Approval for {tool}' },
   'connectors.approval.locked': { zh: '每次都问 · Forsion 设定', en: 'Always asks · set by Forsion' },
   'connectors.lockedHint': { zh: 'Forsion 在目录里把这个工具设成每次都问，「完全通行」档也会问', en: 'Forsion set this tool to always ask, even in Full access.' },
   'connectors.bridgedHint': { zh: '审批卡上的工具名形如 {example}', en: 'Approval cards show tool names like {example}' },
@@ -306,6 +309,17 @@ export function ConnectorSettingsPage({ initialServer, onOpenMcp }: { initialSer
     setServers(next.mcpServers)
     say(t(on ? 'settings.mcp.enabledMsg' : 'settings.mcp.disabledMsg'))
   })
+  /** 按工具收紧:写 mcp.json 的 tools(跟随 = 删掉这一项)。引擎只改 tools 不重连,下一轮对话起生效,关掉的立刻拒调用。 */
+  const setToolSetting = (it: typeof items[number], remote: string, value: 'follow' | 'ask' | 'off'): Promise<void> => act(it.name, async () => {
+    const tools = { ...it.sc.tools }
+    if (value === 'follow') delete tools[remote]
+    else tools[remote] = value
+    const entry: McpServerConfigEntry = { ...it.sc }
+    if (Object.keys(tools).length) entry.tools = tools
+    else delete entry.tools
+    const next = await window.tangu!.writeMcpConfig!({ mcpServers: { ...servers, [it.name]: entry }, base: servers ?? {} })
+    setServers(next.mcpServers)
+  })
   const quickAction = (it: typeof items[number]): React.ReactNode => {
     if (it.off || it.row?.status !== 'needs-login') return null
     const key = it.row.auth === 'user-key'
@@ -420,14 +434,20 @@ export function ConnectorSettingsPage({ initialServer, onOpenMcp }: { initialSer
           ? <div className="settings-control-row conn-tools-empty">{t(off ? 'connectors.toolsWhenOff' : keyType ? 'connectors.toolsAfterKey' : 'connectors.toolsAfterSignIn')}</div>
           : shownTools.map((tool) => {
             const remote = tool.remoteName ?? tool.name
+            const setting = sc.tools?.[remote] ?? 'follow'
             const desc = tool.description.replace(/^\[MCP·[^\]]*\]\s*/, '') // 引擎给模型加的来源前缀,这里已经在连接器页里了
             return (
-              <div key={tool.name} className="settings-control-row settings-setting-row conn-tool" data-connector-tool={remote}>
+              <div key={tool.name} className={`settings-control-row settings-setting-row conn-tool${setting === 'off' && !locked.has(remote) ? ' is-off' : ''}`} data-connector-tool={remote}>
                 <div className="settings-control-copy"><span><strong className="conn-tool-name">{remote}</strong>{desc && <small title={desc}>{desc}</small>}</span></div>
                 <div className="settings-row-control conn-tool-approval">
                   {locked.has(remote)
                     ? <span className="conn-locked" title={t('connectors.lockedHint')} data-connector-locked><Lock size={12} />{t('connectors.approval.locked')}</span>
-                    : <span className="conn-follow">{t('connectors.approval.follow')}</span>}
+                    : <select value={setting} disabled={isBusy || !tool.remoteName} aria-label={t('connectors.approval.label', { tool: remote })} data-connector-approval={remote}
+                      onChange={(e) => void setToolSetting(it, remote, e.target.value as 'follow' | 'ask' | 'off')}>
+                      <option value="follow">{t('connectors.approval.follow')}</option>
+                      <option value="ask">{t('connectors.approval.ask')}</option>
+                      <option value="off">{t('connectors.approval.off')}</option>
+                    </select>}
                 </div>
               </div>
             )
