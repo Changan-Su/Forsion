@@ -1013,7 +1013,7 @@ export interface TanguState {
   setSessionModel(modelId: string, sessionId?: string | null, remember?: boolean): void
   setSessionThinking(level: NonNullable<AgentConfig['thinkingLevel']>, sessionId?: string | null, remember?: boolean, ultra?: boolean): void
   /** Fast 档开关(对标 Codex /fast):写会话键 fast,并记成新会话的起步值。 */
-  setSessionFast(fast: boolean, sessionId?: string | null): void
+  setSessionFast(fast: boolean | 'ultra', sessionId?: string | null): void
   /** 本机某模型的上下文窗口覆盖(tokens;null = 交还自动识别,即缺省上限 272k)。模型菜单「上下文上限」写这里,与设置页
    *  输入框是同一份 modelOverrides;只在本机引擎可用(云端 worker 404)。写完重拉模型列表并作废该模型的 context_info,
    *  进度环当场换分母。失败只 toast。 */

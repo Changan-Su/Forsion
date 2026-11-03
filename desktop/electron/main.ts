@@ -462,7 +462,7 @@ interface TanguStoredConfig {
   /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;纯渲染层 UI 记忆)。 */
   lastUltra: boolean
   /** 上次的 Fast 开关(新会话照它起步;纯渲染层 UI 记忆)。 */
-  lastFast: boolean
+  lastFast: boolean | 'ultra'
   cloudUrl: string // managed:传给 tangu-server 的 Forsion 云端
   sandbox: 'auto' | 'docker' | 'none'
   hostSandbox?: HostSandboxConfig
