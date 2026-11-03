@@ -265,10 +265,10 @@ async function run(app, win, stub, seen, home, ctx) {
   // ── 4h2 原地改一条(11-03):点铅笔 → 输入框 → 回车 → PATCH 带 sessionId + id + 新句子 + 读出时的版本;Esc 放弃不发请求 ──
   const editRow = memCard.locator('[data-project-memory-entry="pm-3"]')
   await editRow.locator('button[aria-label="修改这条记忆"]').click()
-  await editRow.locator('input.project-memory-edit').press('Escape')
-  const escaped = await editRow.locator('input.project-memory-edit').count() === 0 && seen.memoryEdits.length === 0
+  await editRow.locator('textarea.project-memory-edit').press('Escape')
+  const escaped = await editRow.locator('textarea.project-memory-edit').count() === 0 && seen.memoryEdits.length === 0
   await editRow.locator('button[aria-label="修改这条记忆"]').click()
-  const editBox = editRow.locator('input.project-memory-edit')
+  const editBox = editRow.locator('textarea.project-memory-edit')
   await editBox.fill('这个项目的界面文案先写中文稿，再补英文；两种都要给。')
   await memCard.screenshot({ path: shots.memoryEditing = shot('project-memory-editing-zh-light') })
   await editBox.press('Enter')

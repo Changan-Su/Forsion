@@ -754,10 +754,11 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
         // 项目那组只在项目会话里收(非项目会话里模型硬给也不认);同一句两组都交了 → 算项目级,不进 agent 级 raw 层(没收的那几条也算)。
         const projectRaw: unknown[] = projectRef && Array.isArray((j as any).project_memory_candidates) ? (j as any).project_memory_candidates : [];
         const factOf = (c: unknown): unknown => (c && typeof c === 'object' ? (c as any).fact : c);
-        const projectAll = cleanCands(projectRaw.map(factOf), PROJECT_FACTS_MAX_PER_ROUND);
+        const projectAll = cleanCands(projectRaw.map(factOf), projectRaw.length); // 排除 agent 级时看全部,写入才封顶(Codex 评审 11-03)
         // 只收约定类;进度、内容、没标类别的(旧格式的裸字符串)都不写 —— 没标类别就没过这道闸,不能当约定收
         const projectFacts = cleanCands(projectRaw.filter((c) => !!c && typeof c === 'object' && PROJECT_FACT_KINDS.has(String((c as any).kind))).map(factOf), PROJECT_FACTS_MAX_PER_ROUND);
-        if (projectAll.length > projectFacts.length) log(`项目记忆候选没收 ${projectAll.length - projectFacts.length} 条(进度 / 内容 / 没标类别):${projectRaw.filter((c) => !(c && typeof c === 'object' && PROJECT_FACT_KINDS.has(String((c as any).kind)))).map((c) => (c && typeof c === 'object' ? `${(c as any).kind}:` : 'bare:') + String(factOf(c) ?? '').slice(0, 60)).join(' | ')}`);
+        const dropped = projectRaw.filter((c) => !(c && typeof c === 'object' && PROJECT_FACT_KINDS.has(String((c as any).kind))));
+        if (dropped.length) log(`项目记忆候选没收 ${dropped.length} 条(进度 / 内容 / 没标类别):${dropped.map((c) => (c && typeof c === 'object' ? `${String((c as any).kind).slice(0, 20)}:` : 'bare:') + redactSecrets(String(factOf(c) ?? '')).slice(0, 60)).join(' | ')}`);
         const candidates = cleanCands(rawCands, RAW_MAX_PER_ROUND + projectAll.length)
           .filter((c) => !projectAll.some((f) => normalizeMemoryFact(f) === normalizeMemoryFact(c)))
           .slice(0, RAW_MAX_PER_ROUND);

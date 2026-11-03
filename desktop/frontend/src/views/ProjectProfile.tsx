@@ -252,15 +252,16 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
       else setError(String(e?.message || e))
     } finally { setBusy('') }
   }
-  // 项目记忆:原地改一条(带版本,同删除)。回车保存、Esc 放弃;没改动就当放弃。
-  const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
+  // 项目记忆:原地改一条。回车保存、Esc 放弃;没改动就当放弃。版本取开始改的那一刻的:改的途中界面重载过(别处改了),
+  // 拿新版本去写会把别处的改动盖掉 —— 带旧版本让引擎回 409(Codex 评审 11-03)
+  const [editing, setEditing] = useState<{ id: string; text: string; version: string } | null>(null)
   const saveMemory = async (): Promise<void> => {
-    if (!editing || !ctx?.memory?.version || busy) return
+    if (!editing || !ctx?.memory || busy) return
     const text = editing.text.trim()
     if (!text || text === ctx.memory.entries.find((e) => e.id === editing.id)?.content) { setEditing(null); return }
     clear(); setBusy(`memory:${editing.id}`)
     try {
-      const memory = await editProjectMemory(homeTarget(), session.id, editing.id, text, ctx.memory.version)
+      const memory = await editProjectMemory(homeTarget(), session.id, editing.id, text, editing.version)
       setCtx((c) => (c ? { ...c, memory } : c)); setEditing(null); setNotice(t('projectProfile.memoryEdited'))
     } catch (e: any) {
       if (e?.status === 409 || e?.status === 404) { setEditing(null); setReloadAt((n) => n + 1); setError(t('projectProfile.memoryEditConflict')) }
@@ -764,14 +765,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               {ctx.memory.file && window.tangu?.revealHostPath && <button type="button" title={t('projectProfile.openMemory')} aria-label={t('projectProfile.openMemory')} onClick={() => reveal(ctx.memory!.file!)}><FolderOpen size={14} /></button>}</div>
             {ctx.memory.entries.length ? <ul className="project-list project-memory-list">{ctx.memory.entries.map((entry) => <li key={entry.id} className="project-memory-row" data-project-memory-entry={entry.id}>
               {editing?.id === entry.id
-                ? <input className="project-memory-edit" autoFocus maxLength={300} value={editing.text} aria-label={t('projectProfile.memoryEdit')} disabled={!!busy}
-                    onChange={(e) => setEditing({ id: entry.id, text: e.target.value })}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); void saveMemory() } else if (e.key === 'Escape') { e.preventDefault(); setEditing(null) } }} />
+                ? <textarea className="project-memory-edit" rows={1} autoFocus maxLength={300} value={editing.text} aria-label={t('projectProfile.memoryEdit')} disabled={!!busy}
+                    onChange={(e) => setEditing({ ...editing, text: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void saveMemory() } else if (e.key === 'Escape') { e.preventDefault(); setEditing(null) } }} />
                 : <span>{entry.content}</span>}
               <div className="project-memory-actions">
                 {editing?.id === entry.id
                   ? <button type="button" title={t('projectProfile.memoryEditSave')} aria-label={t('projectProfile.memoryEditSave')} disabled={!!busy} onClick={() => void saveMemory()}>{busy === `memory:${entry.id}` ? <Loader2 size={13} className="spin" /> : <Check size={13} />}</button>
-                  : <button type="button" title={t('projectProfile.memoryEdit')} aria-label={t('projectProfile.memoryEdit')} disabled={!!busy} onClick={() => { clear(); setEditing({ id: entry.id, text: entry.content }) }}><Pencil size={13} /></button>}
+                  : <button type="button" title={t('projectProfile.memoryEdit')} aria-label={t('projectProfile.memoryEdit')} disabled={!!busy} onClick={() => { if (ctx.memory?.version) { clear(); setEditing({ id: entry.id, text: entry.content, version: ctx.memory.version }) } }}><Pencil size={13} /></button>}
                 <button type="button" className="danger" title={editing?.id === entry.id ? t('projectProfile.memoryEditCancel') : t('projectProfile.memoryForget')} aria-label={editing?.id === entry.id ? t('projectProfile.memoryEditCancel') : t('projectProfile.memoryForget')} disabled={!!busy} onClick={() => (editing?.id === entry.id ? setEditing(null) : void forgetMemory(entry.id))}>{busy === `memory:${entry.id}` && editing?.id !== entry.id ? <Loader2 size={13} className="spin" /> : <X size={13} />}</button>
               </div>
             </li>)}</ul> : <p className="agent-profile-muted">{t('projectProfile.memoryEmpty')}</p>}

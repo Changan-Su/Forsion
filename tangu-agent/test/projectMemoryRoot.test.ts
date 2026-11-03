@@ -7,11 +7,11 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createMemoryRepository, isMemoryTombstoneActive } from '../src/services/memoryRepository.js';
-import { editProjectMemory, memoryDirName, openProjectMemory, projectMemoryRoot, projectMemoryView, refOf, resetProjectMemoryAbsorbForTests, PROJECT_MEMORY_CHAR_BUDGET } from '../src/services/projectMemory.js';
+import { editProjectMemory, findProjectMemoryDir, memoryDirName, openProjectMemory, rehomeProjectMemory, projectMemoryRoot, projectMemoryView, refOf, resetProjectMemoryAbsorbForTests, PROJECT_MEMORY_CHAR_BUDGET } from '../src/services/projectMemory.js';
 
 let base: string;
 let prevHome: string | undefined;
@@ -118,6 +118,18 @@ describe('旧目录并进来', () => {
     expect(readdirSync(memRoot())).toEqual([memoryDirName(proj)]);
   });
 
+  it('旧目录正被别的进程写(拿着锁):这次不动它;锁放了以后,下次启动再并进来', async () => {
+    const proj = mk('locked-project');
+    const stray = legacy(proj, ['Written while another process held the lock.']);
+    writeFileSync(path.join(stray, '.memory.lock'), JSON.stringify({ pid: 1, createdAt: Date.now() }));
+    expect(await facts(proj)).toEqual([]);
+    expect(existsSync(stray)).toBe(true);
+    unlinkSync(path.join(stray, '.memory.lock'));
+    resetProjectMemoryAbsorbForTests();
+    expect(await facts(proj)).toEqual(['Written while another process held the lock.']);
+    expect(existsSync(stray)).toBe(false);
+  });
+
   it('原来那个文件夹已经不在了:不动它(认不准属于哪个仓,交给「重新指向」)', async () => {
     const main = mk('repo4');
     git(main, 'init', '-q');
@@ -138,5 +150,27 @@ describe('界面上改一条', () => {
     expect(view.entries).toEqual([expect.objectContaining({ id: entry.id, content: 'Docs are written in Chinese first, then English.' })]);
     expect(view.file).toBe(path.join(memRoot(), memoryDirName(proj), 'MEMORY.md'));
     expect((await projectMemoryView(mk('no-memory-yet'))).file).toBeUndefined();
+  });
+});
+
+describe('重新指向', () => {
+  it('会话在仓的子文件夹里、整个仓搬走了:按旧子文件夹的路径找得到存在旧仓根名下的那份,搬到新位置的仓根名下', async () => {
+    const repo = mk('moving-repo');
+    git(repo, 'init', '-q');
+    const pkg = mk('moving-repo/pkg');
+    (await openProjectMemory(refOf(pkg))).mutate({ action: 'add', fact: 'Build with make dist.', cap: PROJECT_MEMORY_CHAR_BUDGET });
+    const moved = path.join(base, 'moved-repo');
+    renameSync(repo, moved);
+    expect(findProjectMemoryDir([pkg])).toBe(path.join(memRoot(), memoryDirName(repo)));
+    rehomeProjectMemory([pkg], realpathSync(path.join(moved, 'pkg'))).commit();
+    expect(await facts(realpathSync(moved))).toEqual(['Build with make dist.']);
+  });
+
+  it('只搬走了子文件夹、仓还在原处:不把仓自己的那份当成它的', () => {
+    const repo = mk('staying-repo');
+    git(repo, 'init', '-q');
+    mkdirSync(path.join(memRoot(), memoryDirName(repo)), { recursive: true });
+    writeFileSync(path.join(memRoot(), memoryDirName(repo), 'PROJECT.json'), JSON.stringify({ project: repo }));
+    expect(findProjectMemoryDir([path.join(repo, 'gone-sub')])).toBeNull();
   });
 });

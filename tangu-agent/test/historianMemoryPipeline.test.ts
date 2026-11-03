@@ -487,6 +487,15 @@ describe('项目会话:只在这个项目成立的候选落项目记忆,不进 a
     expect(prompt()).toContain('"progress" and "content" entries are dropped');
   });
 
+  it('一次给了不止 3 条:没收的排在前面时,后面那条约定照写;排除 agent 级时看的是全部(Codex 评审 11-03)', async () => {
+    await seedProjectSession();
+    const req = 'Agents must not edit files under vendor in this project';
+    llmScript = [judgedRaw([req, '用户偏好中文回复'], [{ kind: 'progress', fact: 'Step 1 done' }, { kind: 'progress', fact: 'Step 2 done' }, { kind: 'content', fact: 'The paper says X' }, { kind: 'request', fact: req }])];
+    await onUserRunDone('SP', USER);
+    expect(await projectFacts()).toEqual([req]);
+    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).map((r) => r.text)).toEqual(['用户偏好中文回复']);
+  });
+
   it('没标类别的裸字符串(旧格式)不写进项目记忆', async () => {
     await seedProjectSession();
     llmScript = [judgedRaw([], ['Notes live under docs/lectures', { fact: 'No kind given here' }, { kind: 'guess', fact: 'Unknown kind' }])];

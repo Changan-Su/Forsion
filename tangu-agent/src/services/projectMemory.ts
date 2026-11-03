@@ -15,7 +15,7 @@
  * 归属只认会话存档的 project_path(humanProjectScope 的做法),绝不接受模型或客户端给的路径。
  */
 import { createHash, randomUUID } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, rmdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
@@ -46,10 +46,11 @@ export function refOf(project: string): ProjectMemoryRef {
  *  找不到 → 文件夹自己(以前的口径)。 */
 export function projectMemoryRoot(project: string): string {
   const own = path.resolve(project);
-  const home = path.resolve(homedir());
+  const homes = [path.resolve(homedir())];
+  try { homes.push(realpathSync(homedir())); } catch { /* 家目录读不了:只按字面比 */ } // 家目录本身是软链时,realpath 过的项目路径只对得上它的真身(Codex 评审 11-03)
   let dir = own;
   for (let hop = 0; hop < 64; hop++) {
-    if (isInsideOrSame(home, dir)) break; // 到了家目录或它上面
+    if (homes.some((home) => isInsideOrSame(home, dir))) break; // 到了家目录或它上面
     const dotGit = path.join(dir, '.git');
     let kind: 'dir' | 'file' | null = null;
     try { const st = lstatSync(dotGit); kind = st.isDirectory() ? 'dir' : st.isFile() ? 'file' : null; } catch { /* 没有:往上 */ }
@@ -457,7 +458,18 @@ export function findProjectMemoryDir(keys: readonly string[]): string | null {
   for (const key of keys) {
     for (const name of [memoryDirName(path.resolve(key)), legacyDirName(key)]) { const dir = path.join(tanguHome(), ROOT, name); if (isRealDir(dir)) return dir; }
   }
-  return memoryDirs().find((dir) => { const p = markerOf(dir); return p !== null && keys.includes(p); }) ?? null;
+  const dirs = memoryDirs();
+  const exact = dirs.find((dir) => { const p = markerOf(dir); return p !== null && keys.includes(p); });
+  if (exact) return exact;
+  // 会话在仓里的子文件夹、整个仓一起搬走了:记忆存在旧仓根名下(标记写的是旧仓根)。取标记是某个旧路径的上级、且那个文件夹已经不在了的,
+  // 最深的那份。仓还在原处(只搬走了子文件夹)时不动它 —— 那是仓自己的记忆(Codex 评审 11-03)。
+  let best: { dir: string; depth: number } | null = null;
+  for (const dir of dirs) {
+    const p = markerOf(dir);
+    if (p === null || existsSync(p) || !keys.some((k) => isInsideOrSame(path.resolve(k), p))) continue;
+    if (!best || p.length > best.depth) best = { dir, depth: p.length };
+  }
+  return best?.dir ?? null;
 }
 
 /** 已经并过的(按目录),每个进程只扫一次。 */
@@ -472,9 +484,23 @@ function absorbStrays(ref: ProjectMemoryRef): void {
     if (dir === ref.dir) continue;
     const project = markerOf(dir);
     if (project === null || !existsSync(project) || projectMemoryRoot(project) !== ref.project) continue;
-    try { rehomeDir(dir, ref).commit(); } catch { done = false; }
+    try { absorbDir(dir, ref); } catch { done = false; }
   }
   if (done) absorbed.add(ref.dir);
+}
+
+/** 把 src 并进 ref。全程拿着 src 的锁:别的进程(回退后的老引擎)正往 src 写 → MEMORY_BUSY,这次不动,下次再来。
+ *  不整个改名过去:锁文件在 src 里,改名会把别人等着的那把锁一起挪走(Codex 评审 11-03)。并完把 src 里除锁以外的都清掉 ——
+ *  等着这把锁的写入方拿到锁时看到的是空目录,它新写的东西带着标记,下次启动再并进来,不丢。代价:并过来的条目换了 id、编辑史不跟过来。 */
+function absorbDir(src: string, ref: ProjectMemoryRef): void {
+  withMemoryDirectoryLock(src, () => {
+    withMemoryDirectoryLock(ref.dir, () => {
+      if (readMemoryFile(ref.dir, MARKER) === null) atomicWriteMemoryFile(ref.dir, MARKER, JSON.stringify({ project: ref.project }));
+      mergeProjectMemory(src, ref.dir);
+    });
+    for (const name of readdirSync(src)) if (name !== '.memory.lock') rmSync(path.join(src, name), { recursive: true, force: true });
+  });
+  try { rmdirSync(src); } catch { /* 放锁之后有人又写进来了:下次启动再并 */ }
 }
 export function resetProjectMemoryAbsorbForTests(): void { absorbed.clear(); }
 
