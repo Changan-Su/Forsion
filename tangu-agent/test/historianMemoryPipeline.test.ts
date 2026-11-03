@@ -468,8 +468,31 @@ describe('项目会话:只在这个项目成立的候选落项目记忆,不进 a
     await updateRunStatus(`R-${id}`, 'done');
   };
   const projectFacts = async (id = 'SP'): Promise<string[]> => ((await peekProjectMemory((await resolveProjectMemory(USER, id))!))?.entries ?? []).map((e) => e.content);
-  const judged = (memory: string[], project: string[]): string => JSON.stringify({ title: '新标题', log: '', memory_candidates: memory, project_memory_candidates: project });
+  // 项目那组的每条都带类别(11-03);直接给字符串 = 当成约定类。要测没标类别 / 进度 / 内容时自己给对象或裸串(见下面 judgedRaw)
+  const judged = (memory: string[], project: string[]): string => judgedRaw(memory, project.map((fact) => ({ kind: 'convention', fact })));
+  const judgedRaw = (memory: string[], project: unknown[]): string => JSON.stringify({ title: '新标题', log: '', memory_candidates: memory, project_memory_candidates: project });
   const prompt = (): string => String(llmPayloads[0].messages.at(-1).content) + JSON.stringify(llmPayloads[0].messages);
+
+  it('项目候选按类别收(11-03):命令 / 位置 / 约定 / 坑 / 用户要求写;进度、内容、没标类别的不写,也不掉进 agent 级', async () => {
+    await seedProjectSession();
+    const cmd = 'Unit tests run with npm run test:unit';
+    const progress = 'Lecture 4 notes have reached section 2.1.5';
+    const content = 'Eq. (21) decays with the gap between the two lowest levels';
+    llmScript = [judgedRaw([progress, '用户偏好中文回复'], [{ kind: 'progress', fact: progress }, { kind: 'command', fact: cmd }, { kind: 'content', fact: content }]),
+      judgedRaw([], ['Notes live under docs/lectures'])];
+    await onUserRunDone('SP', USER);
+    expect(await projectFacts()).toEqual([cmd]);
+    expect(parseRawLines(readFileSync(rawFile(), 'utf8')).map((r) => r.text)).toEqual(['用户偏好中文回复']); // 进度那句交在项目组里:两组都不收
+    expect(prompt()).toContain('"kind"');
+    expect(prompt()).toContain('"progress" and "content" entries are dropped');
+  });
+
+  it('没标类别的裸字符串(旧格式)不写进项目记忆', async () => {
+    await seedProjectSession();
+    llmScript = [judgedRaw([], ['Notes live under docs/lectures', { fact: 'No kind given here' }, { kind: 'guess', fact: 'Unknown kind' }])];
+    await onUserRunDone('SP', USER);
+    expect(await projectFacts()).toEqual([]);
+  });
 
   it('两组分开落:项目那组直接写进项目记忆;同一句两组都交只算项目级;过不了形状闸的不写、排进待确认清单等用户点头', async () => {
     await seedProjectSession();
