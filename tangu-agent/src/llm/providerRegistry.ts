@@ -30,6 +30,8 @@ export interface DirectProvider {
   /** 模型 → Fast 档说明。Codex 订阅来自 /models 目录(见 fetchProviderCatalog);官方 OpenAI / Anthropic 由 OFFICIAL_FAST 按模型名派生。
    *  不在表里的模型开了 Fast 也不发。 */
   fastTiers?: Record<string, string>;
+  /** 官方 OpenAI 的 Ultrafast 档(service_tier "ultrafast",只认 Responses):模型 → 「{倍数}x price」。由 OFFICIAL_ULTRAFAST 派生。 */
+  ultrafastTiers?: Record<string, string>;
   /** 由订阅登录(provider-auth.json)派生:apiKey 是会过期的 access_token,调用前要续期(multiBrain)。显式配置的同名 provider 不带它。 */
   oauth?: boolean;
 }
@@ -60,11 +62,15 @@ const OFFICIAL_FAST: Record<string, Array<[RegExp, string]>> = {
   ],
   'api.anthropic.com': [[/^claude-opus-5-5$/, '2']],
 };
+/** OpenAI Ultrafast(11-03 真 key 实测):只有 Responses 认 service_tier "ultrafast",chat/completions 与不支持的模型都 400 Invalid service_tier。 */
+const OFFICIAL_ULTRAFAST: Record<string, Array<[RegExp, string]>> = {
+  'api.openai.com': [[/^(gpt-6-astra|gpt-6\.1-sol)$/, '6']],
+};
 
-function officialFastTiers(p: DirectProvider): Record<string, string> | undefined {
+function officialFastTiers(p: DirectProvider, table: Record<string, Array<[RegExp, string]>>): Record<string, string> | undefined {
   let host = '';
   try { host = new URL(p.baseUrl).hostname.toLowerCase(); } catch { return undefined; } // 全等比对:api.openai.com.evil.tld 不算官方
-  const rules = OFFICIAL_FAST[host];
+  const rules = table[host];
   if (!rules || p.oauth || (host === 'api.anthropic.com' && p.protocol !== 'anthropic-messages')) return undefined;
   const out: Record<string, string> = {};
   for (const mid of p.modelIds ?? []) {
@@ -79,8 +85,9 @@ export function createProviderRegistry(providers: DirectProvider[]): ProviderReg
   const byId = new Map<string, DirectProvider>();
   for (const p of providers) {
     if (!p?.providerId || !p?.baseUrl) continue;
-    const fastTiers = p.fastTiers ?? officialFastTiers(p);
-    byId.set(p.providerId, { ...p, baseUrl: p.baseUrl.replace(/\/+$/, ''), ...(fastTiers ? { fastTiers } : {}) });
+    const fastTiers = p.fastTiers ?? officialFastTiers(p, OFFICIAL_FAST);
+    const ultrafastTiers = officialFastTiers(p, OFFICIAL_ULTRAFAST);
+    byId.set(p.providerId, { ...p, baseUrl: p.baseUrl.replace(/\/+$/, ''), ...(fastTiers ? { fastTiers } : {}), ...(ultrafastTiers ? { ultrafastTiers } : {}) });
   }
 
   function resolve(modelId: string): ResolvedModel | null {

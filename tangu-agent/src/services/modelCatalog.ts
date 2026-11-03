@@ -121,7 +121,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
     for (const mid of p.modelIds ?? []) {
       const id = `${p.providerId}/${mid}`;
       const win = effectiveContextWindowInfo(id);
-      models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl), ...(p.fastTiers?.[mid] ? { fastTier: p.fastTiers[mid] } : {}) });
+      models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl), ...(p.fastTiers?.[mid] ? { fastTier: p.fastTiers[mid] } : {}), ...(p.ultrafastTiers?.[mid] ? { ultrafastTier: p.ultrafastTiers[mid] } : {}) });
     }
     for (const mid of p.imageModelIds ?? []) {
       models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'image_gen', contextWindow: 0, contextWindowSource: 'default', supportsVision: false });

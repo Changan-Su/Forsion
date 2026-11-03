@@ -332,8 +332,9 @@ export interface AgentConfig {
   ultra?: boolean
   /** Fast 档(对标 Codex /fast):Codex 订阅带 service_tier=priority(多数模型额度消耗更快);官方 OpenAI / Anthropic API 带
    *  service_tier=fast / speed=fast(约 2 倍单价)。换更快的出字速度。会话键,与思考档无关。
+   *  'ultra' = 极速档(官方 OpenAI service_tier=ultrafast,约 6 倍单价);模型没有极速档时按 Fast 发。
    *  引擎只在模型目录声明了这一档(ModelInfo.fastTier)时上 wire,其余模型开着也不发;只作用于主循环,后台调用不跟。 */
-  fast?: boolean
+  fast?: boolean | 'ultra'
   enabledSkillIds?: string[]
   /** 本条消息经 /skill 显式点选的技能 id(per-message,加性:并入可用集 + 强制使用;不持久化、不收窄目录)。 */
   requestedSkillIds?: string[]
@@ -486,6 +487,8 @@ export interface ModelInfo {
    *  或官方 API 的单价倍数(「2x price」,见 providerRegistry OFFICIAL_FAST)。
    *  缺席 = 这个模型没有 Fast 档,界面不露开关。 */
   fastTier?: string
+  /** 极速档说明(「6x price」);缺席 = 没有极速档。 */
+  ultrafastTier?: string
 }
 
 /** GET /agent/models/quota 的 quota:直连来源的额度 / 余额(口径见 llm/providerQuota.ts)。 */
@@ -1091,7 +1094,7 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;chat 槽没有 Ultra)。 */
   lastUltra?: boolean
   /** 上次的 Fast 开关(新会话照它起步;模型没有 Fast 档时引擎不发,药丸也不显示)。 */
-  lastFast?: boolean
+  lastFast?: boolean | 'ultra'
   backendState?: BackendStatusInfo
   /** 主进程附带的用户主目录(本机模式 cwd 兜底)。 */
   homeDir?: string

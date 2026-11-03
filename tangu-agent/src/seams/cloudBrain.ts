@@ -40,8 +40,9 @@ export interface BuildPayloadOpts {
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   attachments?: any[];
   thinkingLevel?: ThinkingLevel;
-  /** Fast 档(会话键 fast):直连 provider 的 fastTiers 列了这个模型时上 wire(Codex 订阅 / 官方 OpenAI / 官方 Anthropic,见 multiBrain)。托管面忽略。 */
-  fast?: boolean;
+  /** Fast 档(会话键 fast):直连 provider 的 fastTiers 列了这个模型时上 wire(Codex 订阅 / 官方 OpenAI / 官方 Anthropic,见 multiBrain)。
+   *  'ultra' = 极速档,只对 ultrafastTiers 列了的模型(官方 OpenAI astra / 6.1-sol)生效,其余按 Fast。托管面忽略。 */
+  fast?: boolean | 'ultra';
   stream?: boolean;
   /** 缓存路由键(传 sessionId):OpenAI 官方 API 的 prompt_cache_key,同会话请求粘到同一推理机提升前缀缓存命中。 */
   cacheKey?: string;
@@ -198,7 +199,7 @@ export interface ModelsBrain {
    * 本地直连 provider 列表(BYO-key,桌面/TUI 模型选择器用;绝不含 apiKey,baseUrl 仅供 UI 展示)。
    * 可选:仅 standalone 的 multiBrain 实现;forsionSeams/httpBrain 不实现 → 调用方跳过。
    */
-  listDirectProviders?(): Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; noVisionModelIds?: string[]; fastTiers?: Record<string, string> }>;
+  listDirectProviders?(): Array<{ providerId: string; baseUrl?: string; modelIds?: string[]; imageModelIds?: string[]; ttsModelIds?: string[]; noVisionModelIds?: string[]; fastTiers?: Record<string, string>; ultrafastTiers?: Record<string, string> }>;
   /**
    * modelId 是否命中本地直连 provider(`<providerId>/<模型>` 或 modelIds 精确匹配)。
    * 可选:仅 standalone 的 multiBrain 实现。agentLoop 据此在云端不可达(未登录 Forsion)时

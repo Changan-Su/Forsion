@@ -7,10 +7,10 @@
  *
  * 「Forsion 只是其中一个 provider」即在此体现:Forsion 是兜底的托管面,直连 provider 与其平级。
  */
-import { imageMimeOf, fimUnsupportedError, type FimCompletionOpts, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
+import { imageMimeOf, fimUnsupportedError, type FimCompletionOpts, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type StreamResult, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
-import { isAuthExpiredLlmError } from '../../llm/retry.js';
+import { isAuthExpiredLlmError, isQuotaExhaustedLlmError } from '../../llm/retry.js';
 import { LlmError } from '../../core/types.js';
 import { loadLocalWebSearchConfig, hasLocalSearchProvider, runLocalSearch } from './localSearch.js';
 import { buildOpenAiCompatPayload, tuneOpenAiDirectPayload, streamOpenAiCompat, DIRECT_MARK, PROTOCOL_MARK, ACCOUNT_MARK } from '../../llm/openaiCompat.js';
@@ -243,7 +243,7 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
       ...httpBrain.models,
       // 直连 provider 目录(模型选择器/Providers 页用;剥掉 apiKey,baseUrl 仅供 UI 展示)。
       listDirectProviders: () =>
-        registry.list().map((p) => ({ providerId: p.providerId, baseUrl: p.baseUrl, modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, noVisionModelIds: p.noVisionModelIds, ...(p.fastTiers ? { fastTiers: p.fastTiers } : {}) })),
+        registry.list().map((p) => ({ providerId: p.providerId, baseUrl: p.baseUrl, modelIds: p.modelIds, imageModelIds: p.imageModelIds, ttsModelIds: p.ttsModelIds, noVisionModelIds: p.noVisionModelIds, ...(p.fastTiers ? { fastTiers: p.fastTiers } : {}), ...(p.ultrafastTiers ? { ultrafastTiers: p.ultrafastTiers } : {}) })),
       hasDirectModel: (modelId: string) => registry.has(modelId),
       providerQuota: async (modelId: string) => {
         const pid = registry.resolve(modelId)?.model.provider;
@@ -341,8 +341,12 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
           // 主机的模型表(providerRegistry OFFICIAL_FAST);别的网关没有,未知端点不发未知字段。
           //   Codex 订阅(account 标记 + Responses):service_tier "priority",与 Codex CLI /fast 同 wire(它的后端拒 "fast")。
           //   官方 Anthropic:speed "fast";官方 OpenAI(chat / responses 都认):service_tier "fast"。
+          //   极速档(fast='ultra')只有官方 OpenAI 的 ultrafastTiers:service_tier "ultrafast",且只认 Responses → 改道;没有就按 Fast 发。
           const fastProvider = opts.fast && resolved?.apiModelId ? registry.list().find((p) => p.providerId === (opts.model as any).provider) : undefined;
-          if (fastProvider?.fastTiers?.[resolved!.apiModelId!]) {
+          if (opts.fast === 'ultra' && !payload[ACCOUNT_MARK] && fastProvider?.ultrafastTiers?.[resolved!.apiModelId!]) {
+            payload.service_tier = 'ultrafast';
+            payload[PROTOCOL_MARK] = 'openai-responses';
+          } else if (fastProvider?.fastTiers?.[resolved!.apiModelId!]) {
             if (payload[ACCOUNT_MARK]) { if (payload[PROTOCOL_MARK] === 'openai-responses') payload.service_tier = 'priority'; }
             else if (payload[PROTOCOL_MARK] === 'anthropic-messages') payload.speed = 'fast';
             else payload.service_tier = 'fast';
@@ -361,9 +365,19 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
         const p = opts.payload as any;
         if (p?.[DIRECT_MARK]) {
           // 订阅登录的原生端点据协议再分发;缺省 OpenAI 兼容。
-          const send = () => p[PROTOCOL_MARK] === 'anthropic-messages' ? streamAnthropicMessages(opts)
+          const sendOnce = () => p[PROTOCOL_MARK] === 'anthropic-messages' ? streamAnthropicMessages(opts)
             : p[PROTOCOL_MARK] === 'openai-responses' ? streamOpenAiResponses(opts)
             : streamOpenAiCompat(opts);
+          // 官方 API 的 Fast / 极速档有独立限额(未开通的组织限额为 0):429 就降一档立刻重发(极速 → 快速 → 标准),不等通用重试白撞三次。
+          // 降档会让 Anthropic 那一轮提示缓存整段不命中(两档不共用缓存),比卡住强。Codex 订阅的 priority 不在此列。
+          // ponytail: 不记冷却,下一轮仍先试快档(撞 429 只花几百毫秒);频繁撞再加按 retry-after 的冷却。
+          const send = async (): Promise<StreamResult> => {
+            try { return await sendOnce(); } catch (err) {
+              if (!(err instanceof LlmError && err.status === 429 && !isQuotaExhaustedLlmError(err)) || p[ACCOUNT_MARK] || !downgradeSpeedTier(p)) throw err;
+              console.warn(`[multiBrain] ${p.model} 快档被限流(429),降到 ${p.service_tier || p.speed || 'standard'} 重发`);
+              return send();
+            }
+          };
           const tag = llmDebug.get(p[MASKED_FROM] ?? p);
           if (!tag) return send();
           const t0 = Date.now();
@@ -380,4 +394,12 @@ export function createMultiBrain(httpBrain: CloudBrainServices, registry: Provid
       },
     },
   };
+}
+
+/** 官方 API 速度档降一级(原地改 payload):ultrafast → fast → 标准;Anthropic speed fast → 标准。已是标准返回 false。 */
+export function downgradeSpeedTier(p: any): boolean {
+  if (p.service_tier === 'ultrafast') { p.service_tier = 'fast'; return true; }
+  if (p.service_tier === 'fast') { delete p.service_tier; return true; }
+  if (p.speed === 'fast') { delete p.speed; return true; }
+  return false;
 }

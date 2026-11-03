@@ -52,6 +52,9 @@ registerMessages({
   'pill.fastDesc': { zh: '约 {speed} 倍速度', en: '{speed}x speed' },
   'pill.fastDescUsage': { zh: '约 {speed} 倍速度，额度消耗更快', en: '{speed}x speed, higher usage' },
   'pill.fastDescPrice': { zh: '更快出字，约 {price} 倍单价', en: 'Faster output, {price}x price' },
+  'pill.rowUltrafast': { zh: '极速模式', en: 'Ultrafast mode' },
+  'pill.ultrafastTag': { zh: '极速', en: 'Ultrafast' },
+  'pill.ultrafastDesc': { zh: '比快速更快，约 {price} 倍单价', en: 'Faster than Fast, {price}x price' },
 })
 
 /** Fast 说明原文 → 当前语言:Codex 目录给速度(「2x speed, increased usage」),官方 API 给单价倍数(「2x price」);认不出的格式原样显示。 */
@@ -220,10 +223,12 @@ export const ModelPill: React.FC<{
   running?: boolean
   /** 当前模型支持的思考档；不支持的档仍可选，由引擎换到相近档位（先往低、没有再往高）。 */
   supportedThinking?: string[]
-  /** 会话的 Fast 开关;fastTier(当前模型目录里的 Fast 说明)缺席或不给 onFastChange 时不露这一行。 */
-  fast?: boolean
+  /** 会话的 Fast 开关;fastTier(当前模型目录里的 Fast 说明)缺席或不给 onFastChange 时不露这一行。
+   *  'ultra' = 极速档:只在 ultrafastTier 在场时多露一行「极速模式」;换到没有极速档的模型时按 Fast 显示(引擎同口径)。 */
+  fast?: boolean | 'ultra'
   fastTier?: string
-  onFastChange?: (fast: boolean) => void
+  ultrafastTier?: string
+  onFastChange?: (fast: boolean | 'ultra') => void
   /** 本 run 实际生效档；与请求档不同则在推理强度摘要中显示降档。 */
   effectiveThinking?: string
   /** 高级区需要全量目录（主模型列表可能已按云端会话过滤，不能拿它代替）。 */
@@ -245,7 +250,7 @@ export const ModelPill: React.FC<{
 }> = ({
   className, scopeKey, onSelectionChange, menuPortal = false, open: controlledOpen, onOpenChange,
   disabled, modelId, groups, onSelect, thinkingLevel, onThinkingChange, allowUltra = false, ultra, running = false, supportedThinking, effectiveThinking,
-  fast, fastTier, onFastChange, modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title, icon, hub,
+  fast, fastTier, ultrafastTier, onFastChange, modelsResponse, defaultModelIds, onDefaultModelChange, onContextWindowChange, emptyLabel, footnote, title, icon, hub,
 }) => {
   const { t } = useI18n()
   const pickerPrefs = useModelPickerPreferences()
@@ -353,10 +358,15 @@ export const ModelPill: React.FC<{
   const effortText = isUltra ? t('pill.ultra') : effortDisplay(effLevel, t)
   const showFast = !!onFastChange && !!fastTier
   const fastOn = showFast && !!fast
+  const showUltrafast = showFast && !!ultrafastTier
+  const ultrafastOn = showUltrafast && fast === 'ultra'
   const fastText = fastTier ? fastTierText(fastTier, t) : ''
+  const ultrafastPrice = ultrafastTier ? /(\d+(?:\.\d+)?)x price/i.exec(ultrafastTier)?.[1] : undefined
+  const ultrafastText = ultrafastPrice ? t('pill.ultrafastDesc', { price: ultrafastPrice }) : ultrafastTier || ''
+  const speedTag = ultrafastOn ? t('pill.ultrafastTag') : t('pill.fastTag')
   const compactName = label.replace(/^gpt-[0-9.]+-(luna|sol|astra|terra)$/i, (_, name: string) => name[0].toUpperCase() + name.slice(1))
   const compactEffort = isUltra ? 'Ultra' : ({ off: '', minimal: 'Min', low: 'L', medium: 'M', high: 'H', xhigh: 'XH', max: 'Max' } as const)[effLevel]
-  const effort = `${effLevel !== 'off' ? ` · ${effortText}` : ''}${fastOn ? ` · ${t('pill.fastTag')}` : ''}`
+  const effort = `${effLevel !== 'off' ? ` · ${effortText}` : ''}${fastOn ? ` · ${speedTag}` : ''}`
   const lastStop = THINKING_LEVELS.length - (allowUltra ? 0 : 1)
   const effortIndex = isUltra ? lastStop : Math.max(0, THINKING_LEVELS.indexOf(effLevel))
   const effortPct = `${(effortIndex / lastStop) * 100}%`
@@ -443,9 +453,10 @@ export const ModelPill: React.FC<{
       ...THINKING_LEVELS.map(lv => ({ value: lv, label: effortDisplay(lv, t) })),
       ...(allowUltra ? [{ value: 'ultra', label: t('pill.ultra'), detail: t('pill.ultraTitle') }] : []),
     ] }] })
-    if (showFast) fields.push({ id: 'speed', label: t('pill.rowFast'), value: fastOn ? 'fast' : 'standard', groups: [{ label: '', options: [
+    if (showFast) fields.push({ id: 'speed', label: t('pill.rowFast'), value: ultrafastOn ? 'ultra' : fastOn ? 'fast' : 'standard', groups: [{ label: '', options: [
       { value: 'standard', label: t('pill.speedStandard') },
       { value: 'fast', label: t('pill.fastTag'), detail: fastText },
+      ...(showUltrafast ? [{ value: 'ultra', label: t('pill.ultrafastTag'), detail: ultrafastText }] : []),
     ] }] })
     if (onDefaultModelChange) for (const { slot, label } of slotRows) fields.push({ id: slot, label, value: defaultModelIds?.[slot] || '', groups: [
       { label: '', options: [{ value: '', label: t('pill.followCloudDefault') }] }, ...toGroups(groupCatalog(slotModels(slot))),
@@ -468,7 +479,7 @@ export const ModelPill: React.FC<{
       if (onSelectionChange) onSelectionChange(patch)
       else { if (patch.modelId !== undefined) onSelect(patch.modelId); if (patch.thinkingLevel) onThinkingChange?.(patch.thinkingLevel, patch.ultra) }
     }
-    if ('speed' in changes) onFastChange?.(changes.speed === 'fast')
+    if ('speed' in changes) onFastChange?.(changes.speed === 'ultra' ? 'ultra' : changes.speed === 'fast')
     for (const { slot } of slotRows) if (slot in changes) onDefaultModelChange?.(slot, changes[slot])
     if ('context' in changes && !('model' in changes) && modelId) onContextWindowChange?.(modelId, changes.context === 'max' ? ctx?.maxTokens ?? null : null)
   }
@@ -563,7 +574,7 @@ export const ModelPill: React.FC<{
         {isUltra
           ? <span className="pill-ultra-label"><MarqueeLabel text={label} /><span className="pill-ultra-tag">{effortText}</span></span>
           : <MarqueeLabel text={label + effort} />}
-        <span className="model-pill-compact" aria-hidden="true"><span>{compactName}</span>{compactEffort && <span className="model-pill-compact-effort"> · {compactEffort}</span>}{fastOn && <span> · {t('pill.fastTag')}</span>}</span>
+        <span className="model-pill-compact" aria-hidden="true"><span>{compactName}</span>{compactEffort && <span className="model-pill-compact-effort"> · {compactEffort}</span>}{fastOn && <span> · {speedTag}</span>}</span>
         <ChevronDown size={10} />
       </button>
       {open && !nativeOpen && (
@@ -657,6 +668,19 @@ export const ModelPill: React.FC<{
             >
               <span className="cm-fast-text"><span className="cm-row-k">{t('pill.rowFast')}</span><span className="cm-fast-note">{fastText}</span></span>
               <span className={`settings-switch${fastOn ? ' active' : ''}`} aria-hidden="true"><span /></span>
+            </button>
+          )}
+          {/* 极速:只对有极速档的模型(官方 OpenAI astra / 6.1-sol)露出;开它连带开 Fast,关它退回 Fast,关 Fast 一并关掉。 */}
+          {showUltrafast && (
+            <button type="button"
+              role="switch"
+              aria-checked={ultrafastOn}
+              className="cm-row cm-fast-row"
+              onMouseEnter={cancelHover}
+              onClick={() => onFastChange!(ultrafastOn ? true : 'ultra')}
+            >
+              <span className="cm-fast-text"><span className="cm-row-k">{t('pill.rowUltrafast')}</span><span className="cm-fast-note">{ultrafastText}</span></span>
+              <span className={`settings-switch${ultrafastOn ? ' active' : ''}`} aria-hidden="true"><span /></span>
             </button>
           )}
 
