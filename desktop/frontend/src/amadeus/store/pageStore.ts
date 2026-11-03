@@ -2201,9 +2201,12 @@ export const usePageStore = Object.assign(
 // 它收不到就一直是旧内容,而它下一次防抖保存会把陈旧文档写回盘 —— 正是上面这段注释里
 // 已经翻过一次车的那个失败模式,只不过换成了「按面板」维度。reconcileExternal 自己会判
 // 「这条改动是不是我这篇」,喂多了不会误伤。
-amadeus?.onExternalChange?.((p) => {
+amadeus?.onExternalChange?.((p) => reconcileLocalWrite(p))
+
+/** 本窗口绕过编辑器直接写了一篇笔记(如小组件摆进看板)后回灌:writeTextFile 的回灌事件只发给别的窗口。 */
+export function reconcileLocalWrite(p: string): void {
   for (const s of stores.values()) void s.getState().reconcileExternal(p)
-})
+}
 
 /** 笔记改名后的 .fd 跟随改名(pageStore.renamePage 与 noteViewStore.renameNote 共用)。
  *  renameFolder 内部自带 flushSave / activePage 重映射 / refreshStructure / 失败置 error。 */

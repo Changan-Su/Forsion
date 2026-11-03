@@ -1879,6 +1879,9 @@ const zh: Dict = {
   // 参照物:createPageInFolder 早就用的是 `untitled.md`,这批是当年漏掉的。
   'amadeus.default.note': '未命名',
   'amadeus.default.dashboard': '未命名仪表盘',
+  // 小组件的两块板(services/widgetPlaces.ts):文件名跟语言走,找的时候两个名字都认
+  'amadeus.default.cardsBoard': '卡片区',
+  'amadeus.default.todayBoard': '今天',
   'amadeus.default.drawing': '未命名白板',
   'amadeus.default.database': '未命名多维表',
   'amadeus.default.folder': '新文件夹',
@@ -3679,6 +3682,8 @@ const en: Dict = {
   // ── Default names for on-disk artifacts (see the zh block for the discipline) ──
   'amadeus.default.note': 'Untitled',
   'amadeus.default.dashboard': 'Untitled dashboard',
+  'amadeus.default.cardsBoard': 'Cards',
+  'amadeus.default.todayBoard': 'Today',
   'amadeus.default.drawing': 'Untitled whiteboard',
   'amadeus.default.database': 'Untitled database',
   'amadeus.default.folder': 'New folder',

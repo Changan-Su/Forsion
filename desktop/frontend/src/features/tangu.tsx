@@ -17,7 +17,8 @@ import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/Ag
 import { hasNativeFeature, tanguProbeAvailable } from './runtime'
 import { quoteInChatPanel } from '../views/chat2/chatPanelQuote'
 import { SessionTabIcon } from '../components/SessionIcon'
-import { setTanguChatOutline, setTanguChatViews, setTanguDrafts, setTanguInboxTasks, setTanguNewChat, setTanguPrefs, setTanguShell, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
+import { setTanguChatOutline, setTanguChatViews, setTanguDrafts, setTanguInboxTasks, setTanguIntelligentUi, setTanguNewChat, setTanguPrefs, setTanguShell, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
+import { IntelligentUi, NativeDocument } from '../components/IntelligentUi'
 import { inboxTasks } from '../views/chat2/inboxTasks'
 import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { isPromptSuggestOn, setPromptSuggest } from '../views/chat2/promptSuggest'
@@ -113,6 +114,7 @@ export function registerTanguViews(): void {
   setTanguInboxTasks(inboxTasks)
   setTanguPrefs({ chatAvatars: { get: isChatAvatarsOn, set: setChatAvatarsOn }, promptSuggest: { get: isPromptSuggestOn, set: setPromptSuggest } })
   setTanguNewChat({ Composer: NewChatComposer, send: sendFromNewChat, startCall: startNewChatCall, mount: mountNewChatComposer, blank: blankNewChat })
+  setTanguIntelligentUi({ IntelligentUi, NativeDocument }) // 卡片区 / 仪表盘 / 主页上的小组件经它画
   setTanguDrafts({
     read: () => Object.fromEntries(Object.entries(useComposerDrafts.getState()).map(([k, d]) => [k, { text: d.text, pastes: d.pastes }])),
     fill: (key, d) => {

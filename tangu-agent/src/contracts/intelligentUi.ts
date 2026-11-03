@@ -2,7 +2,7 @@
  * No HTML, styles, network actions or arbitrary component names. v1 has no expressions; v2 adds
  * state, derived values and expressions over a fixed function list (intelligentUiExpr.ts). */
 import { validAppCardId } from './intelligentCards.js'
-import { compileExpr, documentScope, EXPR_LIMITS, interpolationSources, reservedUIName, UI_NAME, uiValueIssue, type ExprScope, type UIValue } from './intelligentUiExpr.js'
+import { compileExpr, documentScope, EXPR_LIMITS, interpolationSources, reservedUIName, UI_NAME, UI_RECORDS, uiValueIssue, type ExprScope, type UIValue } from './intelligentUiExpr.js'
 export type { UIValue } from './intelligentUiExpr.js'
 export type UICondition = { input: string; equals: string | number } | { expr: string }
 export type UIStateVar = { id: string; initial: UIValue }
@@ -147,7 +147,8 @@ export function validateUIDocument(raw: unknown, options: { draft?: boolean; max
   })
   const inputIds = new Set(inputs.map(i => i.id))
   const derived = !v2 || d.derived === undefined ? [] : list(d.derived, 'derived', 32, (v, p) => {
-    const o = obj(v, p), source = expr(o.expr, `${p}.expr`, { inputs: inputIds, names: new Set(names) })
+    // records 不声明也能读(宿主绑定的,或空列表);声明了的同名值照旧进 names
+    const o = obj(v, p), source = expr(o.expr, `${p}.expr`, { inputs: inputIds, names: new Set([UI_RECORDS, ...names]) })
     return { id: declare(o.id, `${p}.id`), expr: source }
   })
   const scope = documentScope({ inputs, state, derived })

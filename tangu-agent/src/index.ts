@@ -26,6 +26,7 @@ import memoryMaintenanceRouter from './routes/memoryMaintenance.js';
 import assetsRouter from './routes/assets.js';
 import agentsRouter from './routes/agents.js';
 import humanRouter from './routes/human.js';
+import widgetsRouter from './routes/widgets.js'; // 小组件只读:仪表盘 / 卡片区 / 主页按 id 读原件和记录(本机专用)
 import soloRouter from './routes/solo.js';
 import trashRouter from './routes/trash.js';
 import { startTrashJanitor, stopTrashJanitor } from './services/trash.js';
@@ -107,6 +108,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(assetsRouter);
   dataRouter.use(agentsRouter);
   dataRouter.use(humanRouter);
+  dataRouter.use(widgetsRouter);
   dataRouter.use(soloRouter);
   dataRouter.use(trashRouter);
   dataRouter.use(teamsRouter);

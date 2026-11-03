@@ -14,7 +14,7 @@
  * 出现/收起仍是纯 CSS(容器查询 + 过渡,见 chat2.css `.t2-tsum`);窄了整栈收掉,后台进程退到输入框上方那一行。
  */
 import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, Pencil, Plus, RotateCcw, Search, X, XCircle } from 'lucide-react'
+import { AlertTriangle, ArrowDownToLine, ArrowUpToLine, CheckCircle2, ChevronRight, CircleStop, FileText, FolderOpen, Globe, GripVertical, LayoutGrid, MinusCircle, Pencil, Plus, RotateCcw, Search, X, XCircle } from 'lucide-react'
 import { createDropIndicator, land, landWhenMoved } from '@lcl/engine'
 import { describeTool, toolVerb } from '../../components/ToolGroup'
 import { ContextMenu, type CtxMenu } from '../../components/RightPanel'
@@ -29,6 +29,10 @@ import { fitCards, setUserOpen, stepOpen, syncOpen, useSummaryOpen, type CardSig
 import { flipSiblings, watchStackMotion } from './summaryMotion'
 import { useSummaryCards, type SummaryCardEntry } from '../../amadeus/plugins/summaryCards'
 import { refreshProcesses, useProcessPolling, useSessionProcesses } from './processStore'
+import { WidgetHost, railShows, useSessionAgentSlug, useWidgetTitle } from '../../components/WidgetHost'
+import { useWidgets } from '../../services/widgetClient'
+import { moveOnBoard, removeFromBoard, setRailScope, useBoardWidgets } from '../../services/widgetPlaces'
+import { currentPlatform } from '../../services/platform'
 import { BgRow, PROCESS_CAP } from './BackgroundProcs'
 
 registerMessages({
@@ -69,6 +73,7 @@ const MOVE_HOLD_MS = 600
 
 /** 列表卡正文的封顶高度,和 chat2.css `.t2-card-body` 的 max-height 同值(限长量高度用)。 */
 const BODY_MAX = 240
+const RAIL_WIDGETS_MAX = 3
 
 /** 来源图标按类别分:文件 / 目录 / 网页 / 搜索。 */
 const SRC_ICON = { file: FileText, dir: FolderOpen, web: Globe, search: Search } as const
@@ -277,6 +282,18 @@ const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() |
 const BUILTIN = ['progress', 'bg', 'outputs', 'sources', 'scope'] as const
 const PROC_TOOLS = new Set(['run_background', 'kill_process'])
 
+/** 卡片区里的一张小组件:卡头 = 名字 + 归属,正文 = 原生文档(240 封顶内滚,开合同别的卡)。 */
+function RailWidgetCard({ id, open, onToggle, bodyCap, squeezed }: { id: string; open: boolean; onToggle: (o: boolean) => void; bodyCap?: number; squeezed?: boolean }) {
+  const { t } = useI18n()
+  const { title, owner } = useWidgetTitle(id)
+  return (
+    <SummaryCard id={`widget:${id}`} open={open} onToggle={onToggle} bodyCap={bodyCap} squeezed={squeezed} bodyClassName="wgt-rail-body"
+      head={<><LayoutGrid size={13} /><span>{title || t('widget.kind')}</span>{owner && <span className="t2-card-hint">{owner}</span>}</>}>
+      <WidgetHost id={id} onRemove={() => void removeFromBoard('rail', id).catch(() => {})} />
+    </SummaryCard>
+  )
+}
+
 export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, onJumpToAttention, onShowEditing, onOpenFile, extraRoots = [], lockedRoots = [], onAddRoot, onRemoveRoot, modelId, teamStatus, onRetry }: {
   /** 失败卡的「重试」(同 /retry);只读视图不传。 */
   onRetry?: () => void
@@ -329,6 +346,12 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
     setPluginState((s) => ({ ...s, [key]: { ...s[key], ...patch } })), [])
   const prefs = useSummaryPrefs()
   const sessKey = sessionId ?? ''
+  // 钉在卡片区的小组件(Dashboards/卡片区.dashboard.md):按显示范围筛,最多 3 张,顺序 = 板上的顺序。手机不画。
+  const railBoard = useBoardWidgets('rail')
+  const railRefs = railBoard.status === 'ok' && currentPlatform() === 'desktop' ? railBoard.items.map((w) => w.ref) : []
+  const railStates = useWidgets(railRefs.map((r) => r.id))
+  const sessionSlug = useSessionAgentSlug(sessionId)
+  const railWidgets = railRefs.flatMap((r, i) => (railShows(r, railStates[i], sessionSlug, cwd) ? [{ ref: r, st: railStates[i] }] : [])).slice(0, RAIL_WIDGETS_MAX)
 
   const elapsed = running && f.startedAt ? now - f.startedAt : 0
   const done = f.todos.filter((x) => x.status === 'completed').length
@@ -351,6 +374,8 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   // 只数用户自己加的:笔记库根是系统并进来的(异步加载完才到),不算「来了新东西」
   if (cwd) sigs.push({ id: 'scope', count: 1 + extraRoots.filter((r) => !lockedRoots.includes(r)).length, dflt: false })
   if (sessionId) for (const p of plugins) if (!pluginState[p.key]?.hidden) sigs.push({ id: p.key, count: pluginState[p.key]?.count ?? 0, dflt: !p.defaultCollapsed })
+  // 记一笔多一行 = 计数变多 → 收着的卡自己打开(同其它卡的规则)
+  for (const w of railWidgets) sigs.push({ id: `widget:${w.ref.id}`, count: w.st.status === 'ok' && w.st.widget.records.status === 'ok' ? w.st.widget.records.rows.length : 0, dflt: true })
   const stored = useSummaryOpen((st) => st.by[sessKey])
   const sess = stepOpen(stored, sigs, running)
   useLayoutEffect(() => syncOpen(sessKey, sigs, running))
@@ -504,10 +529,17 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
         open={isOpen(p.key, !p.defaultCollapsed)} onToggle={toggle(p.key)} bodyCap={fit.cap[p.key]} squeezed={fit.squeezed.includes(p.key)} />
     }
   }
+  for (const { ref } of railWidgets) {
+    const k = `widget:${ref.id}`
+    cards[k] = <RailWidgetCard key={k} id={ref.id} open={isOpen(k, true)} onToggle={toggle(k)} bodyCap={fit.cap[k]} squeezed={fit.squeezed.includes(k)} />
+  }
   if (desk) cards.desk = desk
 
-  const defaults = [...BUILTIN, ...(sessionId ? plugins.map((p) => p.key) : []), 'desk']
-  const ordered = orderCards(Object.keys(cards), defaults, prefs.order)
+  const widgetKeys = railWidgets.map((w) => `widget:${w.ref.id}`)
+  const defaults = [...BUILTIN, ...(sessionId ? plugins.map((p) => p.key) : []), ...widgetKeys, 'desk']
+  // 小组件之间的先后只认板上的顺序(拖动写回板),和别的卡的相对位置照旧记在本机
+  let wi = 0
+  const ordered = orderCards(Object.keys(cards), defaults, prefs.order).map((k) => (k.startsWith('widget:') ? widgetKeys[wi++] : k))
   // .show = 有 Desk 之外的卡在场(藏起来的插件卡不算);Desk 自己在不在场由 CSS 的 :has(.agent-desk-card:not(.gone)) 判
   const show = ordered.some((k) => k !== 'desk' && !pluginState[k]?.hidden)
 
@@ -601,12 +633,20 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   useEffect(() => () => dragOff.current?.(), [])
   const orderedRef = useRef(ordered)
   orderedRef.current = ordered
+  const railScopeRef = useRef<Record<string, 'all' | undefined>>({})
+  railScopeRef.current = Object.fromEntries(railWidgets.map((w) => [`widget:${w.ref.id}`, w.ref.scope]))
   const api = useMemo<RailApi>(() => {
     const seq = (): string[] => fullOrder(defaultsRef.current, useSummaryPrefs.getState().order)
     return {
       grip: (id, e) => {
         dragOff.current?.()
-        dragOff.current = dragCard(stackRef.current, id, e, (before) => setCardOrder(moveCard(seq(), id, before)))
+        dragOff.current = dragCard(stackRef.current, id, e, (before) => {
+          setCardOrder(moveCard(seq(), id, before))
+          if (!id.startsWith('widget:')) return
+          const vis = moveCard(orderedRef.current, id, before).filter((k) => k.startsWith('widget:'))
+          const next = vis[vis.indexOf(id) + 1]
+          void moveOnBoard('rail', id.slice(7), next ? next.slice(7) : null).catch(() => {})
+        })
       },
       menu: (id, e) => {
         e.preventDefault(); e.stopPropagation()
@@ -621,6 +661,11 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
             run: () => setCardOrder(moveCard(seq(), id, null)) },
           { label: t('tsum.card.reset'), icon: <RotateCcw size={13} />, separatorBefore: true, disabled: !useSummaryPrefs.getState().order,
             run: () => setCardOrder(undefined) },
+          ...(id.startsWith('widget:') ? [
+            { label: t('widget.railAll'), icon: <LayoutGrid size={13} />, separatorBefore: true, checked: railScopeRef.current[id] === 'all',
+              run: () => void setRailScope(id.slice(7), railScopeRef.current[id] === 'all' ? undefined : 'all').catch(() => {}) },
+            { label: t('widget.removeHere'), icon: <MinusCircle size={13} />, run: () => void removeFromBoard('rail', id.slice(7)).catch(() => {}) },
+          ] : []),
         ] })
       },
     }
