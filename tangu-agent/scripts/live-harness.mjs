@@ -18,7 +18,7 @@
  *   npm run live:harness -- --only musereview [--hand]   # Muse 每周装备巡检:巡检完当场替各 agent 收起(只认巡检名单里的、不出卡片)→ 它下一次 run 就生效;--hand 再在对话里让 Muse 看一遍(改 LOADOUT_REVIEW_PROMPT / review_loadout 报告 / propose 代收那一支后跑)
  *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
  *   npm run live:harness -- --only projmem                  # 记忆分项目级 / 全局级(10-04):落点、同项目不同 agent 共用、跨项目隔离(改 services/projectMemory.ts / remember 的 scope 后跑)
- *   npm run live:harness -- --only projkind                 # 判官的项目候选按类别收(11-03):讲课式对话里「讲到哪了」和讲义内容不进项目记忆,沿用符号那类要求照收(只记不判);负对照 = 在没有这次改动的旧代码上跑同一个场景(--kind base),进度 / 内容会进去
+ *   npm run live:harness -- --only projkind [--projkind-philosophy]   # 判官的项目候选按类别收(11-03):讲课式对话里「讲到哪了」和讲义内容不进项目记忆,沿用符号那类要求照收(只记不判);负对照 = 在没有这次改动的旧代码上跑同一个场景(--kind base),进度 / 内容会进去
  *   npm run live:harness -- --only projcompact              # 项目记忆写满时的压缩(10-05):前台记一条触发压缩 → 现行的留着、带网址的不动、去掉的原句能恢复;后台复盘那条路量到几次记几次(改 services/projectMemoryCompact.ts / remember 写满那条路 / localHistorian 的项目记忆写入后跑);`--compact-rounds N` 前台那条腿另外加跑 N 次、出成功率;引擎环境变量 `TANGU_COMPACT_DEBUG=1` 把模型的原样回答记进 engine.log
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
  *   npm run live:harness -- --only selfmodel --rounds 5 --model xai/grok-4.7   # 主体性探针(10-02):自己的资料库 vs 用户目录 / 提醒真落盘 / 教训落哪个存储 / 自我认知,按轮出通过率;改 Personal Folder 段 / 记忆·协作·工作笔记段后跑
@@ -399,6 +399,11 @@ KEYS.push('storeupdate', 'storeupdatechat'); OPT_IN.add('storeupdate'); OPT_IN.a
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
 const SELF_ROUNDS = Number(opt('rounds', 3)); // selfmodel:每轮一个新 agent,出通过率
+// projkind:--projkind-philosophy 给判官换一段自定义「判断哲学」(设置里可填的那一栏),要它记「关键结论、重要产出」——
+// 真实环境里把讲课进度和讲义内容招进项目记忆的就是这种配法;不带 = 内置提示(Luna 在内置提示下本来就不记进度,负对照分不出来)
+const PROJKIND_PHILOSOPHY = argv.includes('--projkind-philosophy')
+  ? '你是 Historian,在后台维护用户的长期记忆。读最近的对话,判断有没有值得长期留下的信息:稳定的事实、关键结论、明确的偏好、重要的产出。有就用简洁的中文概括写进去;只是闲聊或一次性的内容就什么都不写。不要编造。'
+  : '';
 const COMPACT_ROUNDS = Number(opt('compact-rounds', 0)); // projcompact:前台那条腿另外加跑几次(每次一个新项目),给压缩的成功率一个分母
 const SELF_PROBES = new Set(opt('self-probes', 'library,libneg,remind,lesson,self').split(',')); // selfmodel 只跑其中几条(省额度地加轮数)
 { // --only 写错 / 缺上游 → 直接拒,别跑出 0/0 或靠猜答的假绿(Codex 09-12)
@@ -2249,7 +2254,7 @@ try {
   await scenario('projkind', 'projkind 项目记忆:判官只收约定类,讲到哪了和讲义内容不进', async () => {
     const slug = 'live-pk';
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Tutor', systemPrompt: 'Be concise and respond in Chinese. Never call the remember tool; memory is handled in the background.' }) });
-    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent' } }) });
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent', ...(PROJKIND_PHILOSOPHY ? { prompt: PROJKIND_PHILOSOPHY } : {}) } }) });
     const m = randomUUID().slice(0, 4);
     const term = `Kessler-${m} 权重`; // 讲义里的专名:出现在项目记忆里 = 记了内容
     const p = join(workspace, 'pk-notes'); mkdirSync(join(p, 'lectures'), { recursive: true });
