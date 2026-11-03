@@ -30,6 +30,8 @@ registerMessages({
   'aiImport.sources.paste': { zh: '粘贴 ChatGPT、Claude 等的回复…', en: 'Paste the reply from ChatGPT, Claude or another AI…' },
   'aiImport.sources.foot': { zh: '读这些文件只在这台电脑上进行，确认前什么都不写。', en: 'Files are read only on this computer. Nothing is saved until you confirm.' },
   'aiImport.sources.next': { zh: '下一步：整理 {n} 个来源', en: 'Next: sort {n} sources' },
+  'aiImport.sources.nextMcp': { zh: '下一步', en: 'Next' },
+  'aiImport.sources.mcp': { zh: '另有 MCP 服务器 {n} 个，不经整理，下一步直接列出', en: "Plus {n} MCP servers; they aren't sorted and are listed in the next step" },
   'aiImport.count.about': { zh: '关于你 {n} 条', en: '{n} about you' },
   'aiImport.count.rules': { zh: '偏好 {n} 份', en: '{n} preference files' },
   'aiImport.count.project': { zh: '项目记忆 {n} 条', en: '{n} project notes' },
@@ -77,6 +79,7 @@ registerMessages({
   'aiImport.notice.missed': { zh: '有 {n} 段没整理成功，可以再整理一次', en: "{n} parts couldn't be sorted. You can sort again" },
   'aiImport.tool.pasted': { zh: '粘贴的回复', en: 'Pasted reply' },
   'aiImport.done.summary': { zh: '导入了 {n} 项：画像 {person} · 协作说明 {agent} · 项目记忆 {project} · 技能 {skill}', en: 'Imported {n} items: Portrait {person} · Collaboration {agent} · Project memory {project} · Skills {skill}' },
+  'aiImport.done.mcpOnly': { zh: '导入了 {n} 个 MCP 服务器，是停用的，在 MCP 页打开', en: 'Imported {n} MCP servers, turned off; turn them on in the MCP page' },
   'aiImport.done.mcp': { zh: '另有 MCP {n} 个，是停用的，在 MCP 页管理（撤销不含它们）', en: "Plus {n} MCP servers, turned off; manage them in the MCP page (undo doesn't include them)" },
   'aiImport.done.skipped': { zh: '{n} 项没写：已经有了，或者放不下了', en: "{n} items weren't saved: already there, or no room left" },
   'aiImport.done.from': { zh: '来自 {sources} · {time}', en: 'From {sources} · {time}' },
@@ -186,10 +189,11 @@ export function ExternalImportSheet({ engine, onClose }: { engine: EngineTarget;
     setPlan(p); setEdits({}); setEditing('')
     setPicked(new Set([...p.items.filter((i) => i.checked).map((i) => i.id), ...p.skills.filter((s) => s.checked).map((s) => s.key)]))
     setStep('review')
-    void window.tangu?.discoveryScan?.().then((r) => { if (alive.current) setMcp(r.mcpServers) }).catch(() => {})
   }
   // 打开时:整理在跑就接着看进度;刚整理好(半小时内)就直接到单上;否则选来源
   useEffect(() => {
+    // MCP 走 Electron 那边扫(不经模型);只有 MCP 的人也能往下走
+    void window.tangu?.discoveryScan?.().then((r) => { if (alive.current) setMcp(r.mcpServers) }).catch(() => {})
     void (async () => {
       try {
         const [s, v] = await Promise.all([cachedScan(engine, true), getImportPlan(engine)])
@@ -274,9 +278,10 @@ export function ExternalImportSheet({ engine, onClose }: { engine: EngineTarget;
     sum = t('aiImport.sources.sum')
     body = <>
       {sec(t('aiImport.sources.local'), scan.tools.length ? t('aiImport.sources.localCount', { n: scan.tools.length }) : '', '')}
-      {scan.tools.length ? scan.tools.map((x) => <label key={x.id} className="imp-tool"><input type="checkbox" checked={tools.has(x.id)} onChange={() => setTools((s) => { const m = new Set(s); if (m.has(x.id)) m.delete(x.id); else m.add(x.id); return m })} />
+      {scan.tools.length || mcp.length ? scan.tools.map((x) => <label key={x.id} className="imp-tool"><input type="checkbox" checked={tools.has(x.id)} onChange={() => setTools((s) => { const m = new Set(s); if (m.has(x.id)) m.delete(x.id); else m.add(x.id); return m })} />
         <span className="imp-copy"><span><b>{label(x.id)}</b></span><small>{counts(x)}</small></span></label>)
         : <div className="imp-ais">{t('aiImport.sources.none')}</div>}
+      {!!mcp.length && <div className="imp-ais">{t('aiImport.sources.mcp', { n: mcp.length })}</div>}
       {sec(t('aiImport.sources.web'), '', '')}
       <div className="imp-ais">{t('aiImport.sources.webNote')}</div>
       <div className="imp-step"><span>{t('aiImport.sources.step1')}</span><span className="grow" /><button type="button" className="btn ghost sm" onClick={copyPrompt}><Copy size={13} /> {t(copied ? 'aiImport.sources.copied' : 'aiImport.sources.copy')}</button></div>
@@ -284,7 +289,7 @@ export function ExternalImportSheet({ engine, onClose }: { engine: EngineTarget;
       <textarea className="imp-paste" value={pasted} placeholder={t('aiImport.sources.paste')} onChange={(e) => setPasted(e.target.value)} rows={5} />
     </>
     foot = <><span className="grow">{t('aiImport.sources.foot')}</span><button type="button" className="btn ghost sm" onClick={onClose}>{t('aiImport.cancel')}</button>
-      <button type="button" className="btn primary sm" disabled={!n || busy} onClick={() => void start()}>{busy && <Loader2 size={13} className="spin" />}{t('aiImport.sources.next', { n })}</button></>
+      <button type="button" className="btn primary sm" disabled={(!n && !mcp.length) || busy} onClick={() => void start()}>{busy && <Loader2 size={13} className="spin" />}{n ? t('aiImport.sources.next', { n }) : t('aiImport.sources.nextMcp')}</button></>
   }
   if (step === 'working') {
     sum = t('aiImport.working.sum')
@@ -324,9 +329,9 @@ export function ExternalImportSheet({ engine, onClose }: { engine: EngineTarget;
     const c = result.ledger.counts
     body = undone
       ? <div className="imp-done" role="status"><CircleCheck size={16} /><span className="grow">{t('aiImport.done.undone')}{!!undone.kept?.length && <small>{t('aiImport.done.kept', { list: undone.kept.join(t('aiImport.join')) })}</small>}</span></div>
-      : <div className="imp-done" role="status" data-ai-import-result><CircleCheck size={16} /><span className="grow">{t('aiImport.done.summary', { n: c.person + c.agent + c.project + c.skill, ...c })}
+      : <div className="imp-done" role="status" data-ai-import-result><CircleCheck size={16} /><span className="grow">{c.person + c.agent + c.project + c.skill || !result.mcp ? t('aiImport.done.summary', { n: c.person + c.agent + c.project + c.skill, ...c }) : t('aiImport.done.mcpOnly', { n: result.mcp })}
         {!!result.skipped && <small>{t('aiImport.done.skipped', { n: result.skipped })}</small>}
-        {!!result.mcp && <small>{t('aiImport.done.mcp', { n: result.mcp })}</small>}</span>
+        {!!result.mcp && !!(c.person + c.agent + c.project + c.skill) && <small>{t('aiImport.done.mcp', { n: result.mcp })}</small>}</span>
         {!!(c.person + c.agent + c.project + c.skill) && <button type="button" className="btn ghost sm" disabled={busy} onClick={() => void undo()}>{busy ? <Loader2 size={13} className="spin" /> : <Undo2 size={13} />} {t('aiImport.done.undo')}</button>}</div>
     foot = <><span className="grow" /><button type="button" className="btn primary sm" onClick={onClose}>{t('aiImport.done.finish')}</button></>
   }

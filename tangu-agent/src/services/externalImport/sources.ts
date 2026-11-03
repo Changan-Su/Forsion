@@ -23,7 +23,7 @@ export const SNIPPET_MAX = 8000;
 export const PASTE_MAX = 64 * 1024;
 /** 一个项目的记忆文件多过这个数就不逐条拆(本机 Forsion 项目的 Claude Code 记忆有 649 个);第二期改成挂只读资料。 */
 export const PROJECT_FILES_MAX = 40;
-const SKILL_FILES_MAX = 2000;
+export const SKILL_FILES_MAX = 2000;
 
 const fp = (...parts: string[]): string => createHash('sha256').update(parts.join('\n')).digest('hex').slice(0, 16);
 const read = (file: string): string | null => { try { return readFileSync(file, 'utf8'); } catch { return null; } };
@@ -136,10 +136,11 @@ function countFiles(dir: string): { files: number; scripts: number } {
   return { files: filesN, scripts };
 }
 
-function skillAt(tool: typeof IMPORT_TOOLS[number], dir: string, name: string): ExternalSkill | null {
+/** rel = 在技能根下的相对路径(Hermes 带分类 `<分类>/<名>`),做 key 用:跨分类同名的不撞。 */
+function skillAt(tool: typeof IMPORT_TOOLS[number], dir: string, name: string, rel = name): ExternalSkill | null {
   const raw = read(join(dir, 'SKILL.md')); if (raw === null) return null;
   const { meta } = parseFrontmatter(raw);
-  return { key: `${tool}:${name}`, tool, name, description: (meta.description || '').replace(/\s+/g, ' ').slice(0, 300), dir, ...countFiles(dir), mentionsOther: OTHER_AGENT.test(raw) };
+  return { key: `${tool}:${rel}`, tool, name, description: (meta.description || '').replace(/\s+/g, ' ').slice(0, 300), dir, ...countFiles(dir), mentionsOther: OTHER_AGENT.test(raw) };
 }
 
 function scanSkills(h: ReturnType<typeof importHomes>, only: ReadonlySet<string>): ExternalSkill[] {
@@ -149,7 +150,7 @@ function scanSkills(h: ReturnType<typeof importHomes>, only: ReadonlySet<string>
     for (const name of dirs(root)) {
       const s = skillAt(tool, join(root, name), name);
       if (s) { out.push(s); continue; }
-      if (tool === 'hermes') for (const inner of dirs(join(root, name))) { const x = skillAt(tool, join(root, name, inner), inner); if (x) out.push(x); } // <分类>/<名>
+      if (tool === 'hermes') for (const inner of dirs(join(root, name))) { const x = skillAt(tool, join(root, name, inner), inner, `${name}/${inner}`); if (x) out.push(x); } // <分类>/<名>
     }
   }
   return out;

@@ -19,12 +19,12 @@ import { coveringProjectEntry, openProjectMemory, PROJECT_MEMORY_CHAR_BUDGET, re
 import { HUMAN_FOLDER_MAX_LENGTH, HumanError, readHuman, writeHuman, type HumanScope } from '../../agents/humanStore.js';
 import { isPortraitFactForgotten, mutatePortrait, PERSON_IS, PORTRAIT_SCOPE, portraitEntries } from '../../agents/humanPortrait.js';
 import { listLocalSkills, LOCAL_SKILL_PREFIX, treeHash, builtinSkillsDir } from '../../skills/localSkills.js';
-import { IMPORT_TOOLS, isImportTool, pastedSnippets, scanSources, skillFingerprint, type ExternalSkill, type ImportNotice, type ImportTool, type Snippet } from './sources.js';
+import { IMPORT_TOOLS, isImportTool, pastedSnippets, scanSources, skillFingerprint, SKILL_FILES_MAX, type ExternalSkill, type ImportNotice, type ImportTool, type Snippet } from './sources.js';
 
 export type ImportDest = 'person' | 'agent' | 'project' | 'past' | 'blocked';
 export type ItemFlag = 'merged' | 'sensitive' | 'known' | 'conflict' | 'forgotten';
 export interface PlanItem { id: string; text: string; dest: ImportDest; project?: string; sources: ImportTool[]; flags: ItemFlag[]; conflictWith?: string; checked: boolean; locked: boolean }
-export interface PlanSkill { key: string; tool: ImportTool; name: string; target: string; description: string; scripts: number; files: number; flags: Array<'renamed' | 'mentions-other' | 'too-big'>; checked: boolean; locked: boolean }
+export interface PlanSkill { key: string; fp: string; tool: ImportTool; name: string; target: string; description: string; scripts: number; files: number; flags: Array<'renamed' | 'mentions-other' | 'too-big'>; checked: boolean; locked: boolean }
 export interface ImportPlan { id: string; createdAt: number; lang: 'zh' | 'en'; items: PlanItem[]; skills: PlanSkill[]; notices: ImportNotice[]; missed: number; fingerprints: string[] }
 export interface PlanView { state: 'idle' | 'running' | 'done' | 'error'; done: number; total: number; plan: ImportPlan | null; error: string | null }
 type Write =
@@ -117,6 +117,22 @@ async function askModel(userId: string, modelId: string, lang: string, part: Sni
   });
 }
 
+/** 原文里命中兜底正则的行拿出来,原样列成「不能导入」,其余照常送模型 —— 模型改写一下就绕过正则的路堵上(Codex 评审)。 */
+function splitSteering(list: Snippet[]): { clean: Snippet[]; blocked: RawItem[] } {
+  if (UNGUARDED) return { clean: list, blocked: [] };
+  const blocked: RawItem[] = []; const clean: Snippet[] = [];
+  for (const s of list) {
+    const keep: string[] = [];
+    for (const line of s.text.split('\n')) {
+      const t = line.replace(/^\s*(?:[-*+]|\d+[.)]|\[[^\]]*\]\s*-)\s*/, '').trim();
+      if (t && STEERING.test(t)) blocked.push({ text: redactSecrets(t).slice(0, FACT_MAX), dest: 'blocked', from: [s.fp] }); else keep.push(line);
+    }
+    const text = keep.join('\n');
+    if (text.trim()) clean.push(text === s.text ? s : { ...s, text });
+  }
+  return { clean, blocked };
+}
+
 const batches = (list: Snippet[]): Snippet[][] => {
   const out: Snippet[][] = []; let cur: Snippet[] = [], size = 0;
   for (const s of list) { if (cur.length && size + s.text.length > BATCH_CHARS) { out.push(cur); cur = []; size = 0; } cur.push(s); size += s.text.length; }
@@ -132,14 +148,20 @@ async function skillTaken(): Promise<{ taken: Set<string>; importedBefore: Set<s
   const importedBefore = new Set<string>();
   for (const n of safeList(skillsDir())) {
     taken.add(n);
-    try { const o = JSON.parse(readMemoryFile(join(skillsDir(), n), '.import-origin.json') ?? 'null'); if (o?.tool && o?.name) importedBefore.add(`${o.tool}:${o.name}`); } catch { /* 不是导入的 */ }
-    const old = (readMemoryFile(join(skillsDir(), n), 'SKILL.md') ?? '').match(/^x-imported-from:\s*(\S+)/m)?.[1];
-    // 06-11 那版撞名时存成 <原名>-<来源>
-    if (old) importedBefore.add(`${old}:${n.endsWith(`-${old}`) ? n.slice(0, -old.length - 1) : n}`);
+    if (n.startsWith('.')) continue; // .DS_Store、.import-tmp-*:不是技能
+    try {
+      const o = JSON.parse(readMemoryFile(join(skillsDir(), n), '.import-origin.json') ?? 'null'); if (o?.key || (o?.tool && o?.name)) importedBefore.add(o.key ?? `${o.tool}:${o.name}`);
+    } catch { /* 不是导入的 / 不是目录 */ }
+    try {
+      const old = (readMemoryFile(join(skillsDir(), n), 'SKILL.md') ?? '').match(/^x-imported-from:\s*(\S+)/m)?.[1];
+      // 06-11 那版撞名时存成 <原名>-<来源>
+      if (old) importedBefore.add(`${old}:${n.endsWith(`-${old}`) ? n.slice(0, -old.length - 1) : n}`);
+    } catch { /* 同上 */ }
   }
   return { taken, importedBefore };
 }
 const safeList = (dir: string): string[] => { try { return readdirSync(dir); } catch { return []; } };
+const hasLink = (dir: string): boolean => { try { return readdirSync(dir, { recursive: true, withFileTypes: true }).some((e) => e.isSymbolicLink()); } catch { return true; } };
 const SHORT: Record<string, string> = { 'claude-code': 'claude', 'gemini-cli': 'gemini' };
 function freeName(name: string, tool: ImportTool, taken: Set<string>): string {
   const base = `${name}-${SHORT[tool] ?? tool}`.replace(/[^a-zA-Z0-9_.-]+/g, '-');
@@ -156,9 +178,9 @@ async function planSkills(found: ExternalSkill[]): Promise<PlanSkill[]> {
     const renamed = !safe || claimed.has(s.name);
     const target = renamed ? freeName(safe ? s.name : 'imported-skill', s.tool, claimed) : s.name;
     claimed.add(target);
-    const tooBig = s.files > 2000;
+    const tooBig = s.files > SKILL_FILES_MAX;
     const flags: PlanSkill['flags'] = [...(renamed ? ['renamed' as const] : []), ...(s.mentionsOther ? ['mentions-other' as const] : []), ...(tooBig ? ['too-big' as const] : [])];
-    skills.push({ key: s.key, tool: s.tool, name: s.name, target, description: s.description, scripts: s.scripts, files: s.files, flags, checked: !renamed && !tooBig, locked: tooBig });
+    skills.push({ key: s.key, fp: skillFingerprint(s), tool: s.tool, name: s.name, target, description: s.description, scripts: s.scripts, files: s.files, flags, checked: !renamed && !tooBig, locked: tooBig });
   }
   return skills;
 }
@@ -168,14 +190,15 @@ async function buildPlan(userId: string, input: { tools: string[]; pasted?: unkn
   const snippets = [...scan.snippets, ...pastedSnippets(input.pasted, scan.notices)];
   // 整理吃全部片段:seen 只给提示行数「新的」(点过「忽略」再手动打开也照样列);导进去过的会被「已有」灰掉
   const known = await knownTexts([...new Set(snippets.flatMap((s) => (s.project ? [s.project] : [])))]);
-  const parts = batches(snippets);
+  const { clean, blocked } = splitSteering(snippets);
+  const parts = batches(clean);
   job.total = parts.length;
   let modelId: string | null = null;
   if (parts.length) {
     modelId = await resolveBackgroundModelId(loadSpecialAgentsConfig().historian.modelId);
     if (!modelId) throw new ImportError('IMPORT_NO_MODEL', 'No background model is available.');
   }
-  const raw: RawItem[] = []; let missed = 0;
+  const raw: RawItem[] = [...blocked]; let missed = 0;
   for (const part of parts) {
     try { raw.push(...await askModel(userId, modelId!, input.lang, part, known)); }
     catch (e) { console.warn('[import] batch failed:', e instanceof Error ? e.message : e); missed += part.length; }
@@ -246,7 +269,8 @@ const cleanEdit = (v: unknown): string | null => {
 };
 
 async function copySkill(s: PlanSkill, found: ExternalSkill[]): Promise<Write | null> {
-  const src = found.find((x) => x.key === s.key); if (!src) return null;
+  const src = found.find((x) => x.key === s.key);
+  if (!src || skillFingerprint(src) !== s.fp || src.files !== s.files || src.scripts !== s.scripts || src.files > SKILL_FILES_MAX) return null; // 看单之后源头变了 / 变大了:不拷,记成没写
   const dest = join(skillsDir(), s.target);
   if (existsSync(dest)) return null; // 整理之后这里又有了同名的:不覆盖
   const tmp = join(skillsDir(), `.import-tmp-${randomUUID()}`);
@@ -254,7 +278,7 @@ async function copySkill(s: PlanSkill, found: ExternalSkill[]): Promise<Write | 
     // 技能目录本身是软链(装技能常这么装)就拷它指向的那份;里面的软链一律不拷,免得把链到的别处(~/.ssh 之类)带进来
     const from = realpathSync(src.dir);
     cpSync(from, tmp, { recursive: true, errorOnExist: true, filter: (f) => f === from || !lstatSync(f).isSymbolicLink() });
-    atomicWriteMemoryFile(tmp, '.import-origin.json', JSON.stringify({ tool: s.tool, name: s.name, from: src.dir, at: Date.now() }));
+    atomicWriteMemoryFile(tmp, '.import-origin.json', JSON.stringify({ key: s.key, tool: s.tool, name: s.name, from: src.dir, at: Date.now() }));
     renameSync(tmp, dest);
   } catch (e) { rmSync(tmp, { recursive: true, force: true }); throw e; }
   return { kind: 'skill', dir: dest, name: s.target, hash: await treeHash(dest) };
@@ -264,6 +288,7 @@ async function copySkill(s: PlanSkill, found: ExternalSkill[]): Promise<Write | 
 export async function applyPlan(input: { planId?: unknown; items?: unknown; skills?: unknown }): Promise<{ ledger: Ledger; skipped: number }> {
   const plan = lastPlan;
   if (!plan || plan.id !== input.planId) throw new ImportError('IMPORT_PLAN_GONE', 'This list is out of date; sort again.');
+  lastPlan = null; // 先认领:同一份单并发点两次,第二次直接过期,不会写两遍(Codex 评审)
   const picked = new Map<string, string | null>();
   if (Array.isArray(input.items)) for (const it of input.items) if (it && typeof it.id === 'string') picked.set(it.id, cleanEdit((it as any).text));
   const items = plan.items.filter((i) => picked.has(i.id) && !i.locked);
@@ -272,12 +297,16 @@ export async function applyPlan(input: { planId?: unknown; items?: unknown; skil
   const text = (i: PlanItem): string => picked.get(i.id) ?? i.text;
   const wantSkills = new Set(Array.isArray(input.skills) ? input.skills.map(String) : []);
   const chosen = plan.skills.filter((s) => wantSkills.has(s.key) && !s.locked);
+  ledger.sources = [...new Set([...items.flatMap((i) => i.sources), ...chosen.map((s) => s.tool)])];
+  // 账先落盘、每写一笔就更新:账写不进去就一笔都不写,中途断了账里也有已经写了的(Codex 评审)
+  writeLedger(ledger);
+  const record = (w: Write, kind: keyof Ledger['counts'], n = 1): void => { ledger.writes.push(w); ledger.counts[kind] += n; writeLedger(ledger); };
   try {
     // 画像:一条一条加(mutatePortrait 自己去重);勾上的「过去的事」也是关于这个人的
     for (const i of items.filter((x) => x.dest === 'person' || x.dest === 'past')) {
       const r = await mutatePortrait({ action: 'add', fact: text(i), actor: 'user', source: { kind: 'import' } });
       if (r.duplicate || !r.change) { skipped++; continue; }
-      ledger.writes.push({ kind: 'person', content: r.entry?.content ?? text(i) }); ledger.counts.person++;
+      record({ kind: 'person', content: r.entry?.content ?? text(i) }, 'person');
     }
     // 协作说明:文件末尾一节,一行一条;放不下的不写
     const rules = items.filter((x) => x.dest === 'agent').map(text);
@@ -285,11 +314,17 @@ export async function applyPlan(input: { planId?: unknown; items?: unknown; skil
       const scope: HumanScope = { kind: 'human', file: 'AGENT.md' };
       const doc = await readHuman(scope);
       const heading = sectionHeading(plan.lang, ledger.at);
+      const have = new Set(doc.content.split('\n').map((l) => normalizeMemoryFact(l.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, ''))).filter(Boolean));
       const lines: string[] = []; let next = `${doc.content.replace(/\s*$/, '')}${doc.content.trim() ? '\n\n' : ''}## ${heading}\n`;
-      for (const r of rules) { const add = `- ${r}\n`; if (next.length + add.length > HUMAN_FOLDER_MAX_LENGTH) { skipped++; continue; } next += add; lines.push(r); }
+      for (const r of rules) {
+        const add = `- ${r}\n`;
+        // 文件里已经有这句(人改过的那条正好和已有的一样)、或放不下:不写
+        if (have.has(normalizeMemoryFact(r)) || next.length + add.length > HUMAN_FOLDER_MAX_LENGTH) { skipped++; continue; }
+        next += add; lines.push(r); have.add(normalizeMemoryFact(r));
+      }
       if (lines.length) {
         await writeHuman(scope, { content: next, expectedVersion: doc.version, summary: heading }, 'user', { kind: 'import' });
-        ledger.writes.push({ kind: 'agent', lines, heading }); ledger.counts.agent += lines.length;
+        record({ kind: 'agent', lines, heading }, 'agent', lines.length);
       }
     }
     // 项目记忆:以用户的名义记(manual),放不下就停
@@ -299,17 +334,15 @@ export async function applyPlan(input: { planId?: unknown; items?: unknown; skil
       if (snap.entries.some((e) => normalizeMemoryFact(e.content) === normalizeMemoryFact(fact)) || coveringProjectEntry(snap.entries, fact)) { skipped++; continue; }
       try { repo.mutate({ action: 'add', fact, cap: PROJECT_MEMORY_CHAR_BUDGET, expectedVersion: snap.version, evidenceIds: [`import:${ledger.id}`], source: { kind: 'manual' } }); }
       catch (e) { if (e instanceof MemoryRepositoryError && (e.code === 'MEMORY_FULL' || e.code === 'MEMORY_VERSION_CONFLICT')) { skipped++; continue; } throw e; }
-      ledger.writes.push({ kind: 'project', project: i.project!, content: fact }); ledger.counts.project++;
+      record({ kind: 'project', project: i.project!, content: fact }, 'project');
     }
     if (chosen.length) {
       const found = scanSources(new Set(chosen.map((s) => s.tool))).skills;
-      for (const s of chosen) { const w = await copySkill(s, found); if (w) { ledger.writes.push(w); ledger.counts.skill++; } else skipped++; }
+      for (const s of chosen) { const w = await copySkill(s, found); if (w) record(w, 'skill'); else skipped++; }
     }
     addSeen(plan.fingerprints); // 整份写完:看过这份单的不再算「新的」,没勾的也一样(人已经决定过了)。中途失败的下次照样提示
   } finally {
-    ledger.sources = [...new Set([...items.flatMap((i) => i.sources), ...chosen.map((s) => s.tool)])];
-    if (ledger.writes.length) writeLedger(ledger); // 中途失败也记下已经写了的,撤销照样能撤
-    lastPlan = null;
+    if (!ledger.writes.length) rmSync(join(root(), ledgerFile(ledger.id)), { force: true }); // 一笔没写:不留空账
   }
   return { ledger, skipped };
 }
@@ -327,18 +360,23 @@ export async function undoImport(id: string): Promise<Ledger> {
       const scope: HumanScope = { kind: 'human', file: 'AGENT.md' };
       const doc = await readHuman(scope);
       const left = [...w.lines];
-      const out = doc.content.split('\n').filter((l) => { const i = l.startsWith('- ') ? left.indexOf(l.slice(2)) : -1; if (i >= 0) left.splice(i, 1); return i < 0; });
+      let out = doc.content.split('\n');
+      // 只在导入写的那一节里删,人自己在别处写的同一句不碰(Codex 评审);同一天导入两次标题一样,从后往前每一节里找
+      for (let h = out.length - 1; h >= 0 && left.length; h--) {
+        if (out[h] !== `## ${w.heading}`) continue;
+        let end = h + 1; while (end < out.length && !out[end].startsWith('#')) end++;
+        const section = out.slice(h + 1, end).filter((l) => { const i = l.startsWith('- ') ? left.indexOf(l.slice(2)) : -1; if (i >= 0) left.splice(i, 1); return i < 0; });
+        out = [...out.slice(0, h), ...(section.every((l) => !l.trim()) ? [] : [out[h], ...section]), ...out.slice(end)];
+      }
       kept.push(...left);
-      const h = out.indexOf(`## ${w.heading}`);
-      if (h >= 0) { let end = h + 1; while (end < out.length && !out[end].startsWith('#')) end++; if (out.slice(h + 1, end).every((l) => !l.trim())) out.splice(h, end - h); }
       const next = out.join('\n').replace(/\n{3,}/g, '\n\n');
       if (next !== doc.content) await writeHuman(scope, { content: next.trim() ? next : '', expectedVersion: doc.version, summary: `Undo: ${w.heading}` }, 'user', { kind: 'import', action: 'forget' });
     } else if (w.kind === 'project') {
       const repo = await openProjectMemory(refOf(w.project)); const snap = repo.snapshot();
-      const e = snap.entries.find((x) => x.content === w.content);
+      const e = snap.entries.find((x) => x.content === w.content && x.evidenceIds.includes(`import:${ledger.id}`));
       if (e) repo.mutate({ action: 'forget', id: e.id, expectedVersion: snap.version, source: { kind: 'manual' } }); else kept.push(w.content);
     } else if (w.kind === 'skill') {
-      if (existsSync(w.dir) && w.hash && (await treeHash(w.dir)) === w.hash) rmSync(w.dir, { recursive: true, force: true }); else if (existsSync(w.dir)) kept.push(w.name);
+      if (existsSync(w.dir) && w.hash && !hasLink(w.dir) && (await treeHash(w.dir)) === w.hash) rmSync(w.dir, { recursive: true, force: true }); else if (existsSync(w.dir)) kept.push(w.name);
     }
   }
   const done = { ...ledger, undoneAt: Date.now(), kept };
