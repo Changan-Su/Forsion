@@ -11,7 +11,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, 
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createMemoryRepository, isMemoryTombstoneActive } from '../src/services/memoryRepository.js';
-import { memoryDirName, openProjectMemory, projectMemoryRoot, projectMemoryView, refOf, resetProjectMemoryAbsorbForTests, PROJECT_MEMORY_CHAR_BUDGET } from '../src/services/projectMemory.js';
+import { editProjectMemory, memoryDirName, openProjectMemory, projectMemoryRoot, projectMemoryView, refOf, resetProjectMemoryAbsorbForTests, PROJECT_MEMORY_CHAR_BUDGET } from '../src/services/projectMemory.js';
 
 let base: string;
 let prevHome: string | undefined;
@@ -125,5 +125,18 @@ describe('旧目录并进来', () => {
     const stray = legacy(vanished, ['Belongs to a folder that no longer exists.']);
     expect(await facts(main)).toEqual([]);
     expect(existsSync(stray)).toBe(true);
+  });
+});
+
+describe('界面上改一条', () => {
+  it('同一个 id 换成新句子、带版本;版本旧了不写;视图里带 MEMORY.md 的路径', async () => {
+    const proj = mk('edit-project');
+    const snap = (await openProjectMemory(refOf(proj))).mutate({ action: 'add', fact: 'Docs are written in Chinese first.', cap: PROJECT_MEMORY_CHAR_BUDGET });
+    const [entry] = snap.entries;
+    await expect(editProjectMemory(proj, entry.id, 'Docs are written in Chinese first, then English.', 'stale')).rejects.toMatchObject({ code: 'MEMORY_VERSION_CONFLICT' });
+    const view = await editProjectMemory(proj, entry.id, 'Docs are written in Chinese first, then English.', snap.version);
+    expect(view.entries).toEqual([expect.objectContaining({ id: entry.id, content: 'Docs are written in Chinese first, then English.' })]);
+    expect(view.file).toBe(path.join(memRoot(), memoryDirName(proj), 'MEMORY.md'));
+    expect((await projectMemoryView(mk('no-memory-yet'))).file).toBeUndefined();
   });
 });

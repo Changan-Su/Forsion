@@ -1602,6 +1602,9 @@ export const addMaskAllow = (t: EngineTarget, value: string, kind: string) =>
 export const removeMaskAllow = (t: EngineTarget, hash: string) =>
   request<{ allow: MaskAllowEntry[] }>(t, `/agent/masking/allow/${encodeURIComponent(hash)}`, { method: 'DELETE' }).then((r) => r.allow)
 export const getMaskLog = (t: EngineTarget) => request<{ lines: MaskLogLine[] }>(t, '/agent/masking/log').then((r) => r.lines)
+/** 改一条项目记忆(一句话,≤300 字)。409 = 读出之后被别处改过(没有改);放不下 → err.code 'MEMORY_FULL'。 */
+export const editProjectMemory = (t: EngineTarget, sessionId: string, id: string, fact: string, expectedVersion: string) =>
+  request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory', { method: 'PATCH', body: JSON.stringify({ sessionId, id, fact, expectedVersion }) }).then((r) => r.memory)
 /** 删一条项目记忆。409 = 记忆在读出之后被别处改过(没有删除);调用方重载后再删。 */
 export const forgetProjectMemory = (t: EngineTarget, sessionId: string, id: string, expectedVersion: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory', { method: 'DELETE', body: JSON.stringify({ sessionId, id, expectedVersion }) }).then((r) => r.memory)

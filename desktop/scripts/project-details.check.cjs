@@ -57,7 +57,7 @@ function contextFixture(projectDir) {
     plans: [{ name: 'plan-20260921-101500.md', path: path.join(projectDir, '.tangu', 'plans', 'plan-20260921-101500.md'), mtimeMs: Date.now() - 86_400_000, size: 1200, title: 'Ship v1' }],
     settings: null,
     // 项目记忆(10-04):形状 = 引擎 services/projectMemory.ts 的 ProjectMemoryView;一条长的看折行
-    memory: { version: 'v1', limit: 8000, chars: 212, entries: [
+    memory: { version: 'v1', limit: 4000, chars: 212, file: path.join(projectDir, '.memory-fixture', 'MEMORY.md'), entries: [
       { id: 'pm-1', content: '这个仓的测试用 npm run test:unit 跑，npm test 是故意坏的。', updatedAt: Date.now() - 3_600_000 },
       { id: 'pm-2', content: 'Release builds are cut only from the release-2026 branch; never tag from main. The changelog entry is written before the tag, and the build number comes from the CI run rather than from package.json.', updatedAt: Date.now() - 1_800_000 },
       { id: 'pm-3', content: '这个项目的界面文案一律先写中文稿，再补英文。', updatedAt: Date.now() - 600_000 },
@@ -253,14 +253,31 @@ async function run(app, win, stub, seen, home, ctx) {
   await memCard.scrollIntoViewIfNeeded()
   await win.waitForTimeout(200)
   await memCard.screenshot({ path: shots.memoryLight = shot('project-memory-zh-light') })
-  await memCard.locator('[data-project-memory-entry="pm-1"] button').click()
+  check('4f2 有记忆时卡头带「打开记忆文件夹」(不点:真 Electron 里会弹出 Finder)', await memCard.locator('button[aria-label="打开记忆文件夹"]').count() === 1)
+  await memCard.locator('[data-project-memory-entry="pm-1"] button.danger').click()
   await memCard.locator('[data-project-memory-entry="pm-1"]').waitFor({ state: 'detached' })
   const forget = seen.memoryForgets[0]
   check('4g 点删除 → DELETE /agent/project-context/memory 带 sessionId + 条目 id + 读出时的版本;该条消失、其余还在', !!forget && forget.sessionId === 'pd-main' && forget.id === 'pm-1' && forget.expectedVersion === 'v1' && await memRows.count() === 2, JSON.stringify(forget))
   seen.memoryConflictOnce = true
-  await memCard.locator('[data-project-memory-entry="pm-3"] button').click()
+  await memCard.locator('[data-project-memory-entry="pm-3"] button.danger').click()
   await profile.locator('.agent-profile-error').waitFor()
   check('4h 别处刚改过(409)→ 提示重新载入、这一条没被删', (await profile.locator('.agent-profile-error').textContent()).includes('重新载入') && await memRows.count() === 2 && seen.memoryForgets.length === 2, `forgets=${seen.memoryForgets.length}`)
+  // ── 4h2 原地改一条(11-03):点铅笔 → 输入框 → 回车 → PATCH 带 sessionId + id + 新句子 + 读出时的版本;Esc 放弃不发请求 ──
+  const editRow = memCard.locator('[data-project-memory-entry="pm-3"]')
+  await editRow.locator('button[aria-label="修改这条记忆"]').click()
+  await editRow.locator('input.project-memory-edit').press('Escape')
+  const escaped = await editRow.locator('input.project-memory-edit').count() === 0 && seen.memoryEdits.length === 0
+  await editRow.locator('button[aria-label="修改这条记忆"]').click()
+  const editBox = editRow.locator('input.project-memory-edit')
+  await editBox.fill('这个项目的界面文案先写中文稿，再补英文；两种都要给。')
+  await memCard.screenshot({ path: shots.memoryEditing = shot('project-memory-editing-zh-light') })
+  await editBox.press('Enter')
+  await editRow.locator('span').waitFor()
+  const edit = seen.memoryEdits[0]
+  check('4h2 改一条:Esc 放弃不发请求;回车 → PATCH 带 sessionId + id + 新句子 + 版本;那一行换成新句子、提示已保存',
+    escaped && !!edit && edit.sessionId === 'pd-main' && edit.id === 'pm-3' && edit.fact === '这个项目的界面文案先写中文稿，再补英文；两种都要给。' && typeof edit.expectedVersion === 'string' && Object.keys(edit).length === 4
+      && (await editRow.locator('span').textContent()).includes('两种都要给') && (await profile.locator('.profile-save-notice, .agent-profile-notice').first().textContent().catch(() => '')).includes('已保存'),
+    JSON.stringify({ escaped, edit }))
   // ── 4i 待确认候选:记忆卡里另起一组,逐条「采纳 / 丢弃」;采纳才进记忆,那条不在了就重载 ──
   const pending = memCard.locator('[data-project-memory-candidates]')
   const pendRows = pending.locator('[data-project-memory-candidate]')
@@ -1093,7 +1110,7 @@ async function main() {
   const projectDir = path.join(home, 'Demo Project')
   for (const dir of [userData, `${userData}-dev`, path.join(vault, 'Sessions'), projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
-  const seen = { memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [], agentTrash: {}, trashRestores: [],
+  const seen = { memoryEdits: [], memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [], agentTrash: {}, trashRestores: [],
     gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [], github: null, pushGithubUnlinkedOnce: false, gitRemotes: [], gitGithubPublishes: [], accountsGets: 0, gitPushTargets: [], pushOwnOnce: false, pushDeniedOnce: false, gitClones: [], cloneExistsOnce: false,
     repos: { forsion: [{ fullName: 'dave/notes', private: true, cloneUrl: 'https://git.forsion.example/dave/notes.git', updatedAt: '2026-10-10T08:00:00Z' }, { fullName: 'dave/plugin-demo', private: false, cloneUrl: 'https://git.forsion.example/dave/plugin-demo.git', updatedAt: null }], github: 'unlinked' },
     accounts: { forsionGit: { webUrl: 'https://git.forsion.example', username: 'dave' }, github: { linked: false }, identity: { name: 'Dave', email: 'dave@noreply.git.forsion.example', source: 'forsion' } } }
@@ -1254,6 +1271,13 @@ async function main() {
       return { settings: gitSettings }
     }
     // 删一条项目记忆:同引擎,带版本;版本对不上(或被要求演一次冲突)→ 409,什么都不删
+    if (route === '/agent/project-context/memory' && method === 'PATCH') {
+      const b = await body(); seen.memoryEdits.push(b)
+      if (b.expectedVersion !== ctx.memory.version) return { __code: 409, body: { detail: 'Memory changed since it was read', code: 'MEMORY_VERSION_CONFLICT' } }
+      const entries = ctx.memory.entries.map((e) => (e.id === b.id ? { ...e, content: b.fact, updatedAt: Date.now() } : e))
+      ctx.memory = { ...ctx.memory, version: `ve${seen.memoryEdits.length}`, entries, chars: entries.reduce((n, e) => n + e.content.length, 0) }
+      return { memory: ctx.memory }
+    }
     if (route === '/agent/project-context/memory' && method === 'DELETE') {
       const b = await body(); seen.memoryForgets.push(b)
       if (seen.memoryConflictOnce) { seen.memoryConflictOnce = false; ctx.memory = { ...ctx.memory, version: 'v-changed' }; return { __code: 409, body: { detail: 'Memory changed since it was read', code: 'MEMORY_VERSION_CONFLICT' } } }

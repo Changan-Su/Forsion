@@ -217,6 +217,8 @@ export async function resolveProjectCandidate(project: string, id: string, adopt
 /** 界面看到的一份项目记忆(项目详情 › 设置里的那一块)。candidates = 等用户点头的后台候选(不是记忆,不进系统提示)。 */
 export interface ProjectMemoryView {
   version: string | null;
+  /** 这份记忆的 MEMORY.md(本机绝对路径,界面拿它「打开记忆文件夹」);还没有记忆 → 不带。 */
+  file?: string;
   entries: Array<{ id: string; content: string; updatedAt: number }>;
   chars: number;
   limit: number;
@@ -232,12 +234,21 @@ export async function projectMemoryView(project: string): Promise<ProjectMemoryV
   const compaction = readCompaction(ref);
   return {
     version: snapshot?.version ?? null,
+    ...(snapshot ? { file: path.join(ref.dir, 'MEMORY.md') } : {}),
     entries: (snapshot?.entries ?? []).map(({ id, content, updatedAt }) => ({ id, content, updatedAt })),
     chars: snapshot?.content.length ?? 0,
     limit: PROJECT_MEMORY_CHAR_BUDGET,
     candidates: readPending(ref).filter((p) => !p.dismissed).map(({ id, fact, at }) => ({ id, content: fact, at })),
     ...(compaction ? { compacted: { at: compaction.at, before: compaction.before, after: compaction.after, removed: compaction.removed.map(({ id, content }) => ({ id, content })) } } : {}),
   };
+}
+
+/** 用户在界面上改一条(11-03):以用户的名义换成新句子,同一个 id;带版本,别处刚改过 → MEMORY_VERSION_CONFLICT;放不下 → MEMORY_FULL。 */
+export async function editProjectMemory(project: string, id: string, fact: string, expectedVersion: string): Promise<ProjectMemoryView> {
+  const ref = refOf(project);
+  if (!exists(ref)) throw new MemoryRepositoryError('MEMORY_NOT_FOUND', 'This project has no saved memory.');
+  (await openProjectMemory(ref)).mutate({ action: 'update', id, fact, expectedVersion, cap: PROJECT_MEMORY_CHAR_BUDGET, source: { kind: 'manual' } });
+  return projectMemoryView(project);
 }
 
 /** 用户在界面上删一条。带版本:别处刚改过 → MEMORY_VERSION_CONFLICT(界面重新载入再删),不建目录。 */
