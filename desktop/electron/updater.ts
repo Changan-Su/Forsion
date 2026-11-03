@@ -73,8 +73,17 @@ let feedSource: UpdateSource | null = null
 /** 我们自己 await 的 checkForUpdates 进行中:它的事件(checking / error)由调用处处理,别广播 */
 let busy = false
 /** 下载进行中:取消令牌、最后一次有进度的时刻、手动要换去的那边 */
-type Download = { token: CancellationToken; lastAt: number; manual: UpdateSource | null }
+type Download = { token: CancellationToken; lastAt: number; manual: UpdateSource | null; dropped?: boolean }
 let dl: Download | null = null
+
+/** 下载失败的常见本机原因换成稳定代码,界面按代码出文案(D27);其余照原文。 */
+export function downloadErrorCode(err: any): string {
+  const code = String(err?.code ?? '')
+  if (code === 'ENOSPC') return 'disk-full'
+  if (code === 'EACCES' || code === 'EPERM') return 'no-permission'
+  if (code === 'EBUSY' || code === 'ETXTBSY') return 'file-busy'
+  return err?.message || String(err)
+}
 
 function broadcast(status: UpdaterStatus): void {
   lastStatus = status
@@ -328,11 +337,12 @@ export async function downloadUpdate(): Promise<void> {
       await autoUpdater.downloadUpdate(cur.token)
       return // update-downloaded 事件负责广播
     } catch (err: any) {
+      if (cur.dropped) return // 关了测试版,这份测试包不要了(channelChanged 已重置状态)
       const from = feedSource
       const manual = cur.manual
       const next = manual ?? (autoSwitched ? null : otherSource())
       if (!next || (await useSource(next)) !== 'ok') {
-        broadcast({ ...lastStatus, phase: 'error', error: err?.message || String(err) })
+        broadcast({ ...lastStatus, phase: 'error', error: downloadErrorCode(err) })
         return
       }
       if (!manual) autoSwitched = true
@@ -345,6 +355,18 @@ export async function downloadUpdate(): Promise<void> {
       dl = null
     }
   }
+}
+
+/**
+ * 关掉测试版时,还在下 / 已下好 / 正提示的测试包作废,回到空闲,调用方随后重查一次正式版(D27)。
+ * 不然 runCheck 见到 downloaded 会原样返回,用户关了测试版还被提示「重启安装」那个测试包。
+ * 打开测试版不动:手上那份正式版照样能装。
+ */
+export function channelChanged(beta: boolean): void {
+  if (beta || !target || !isPrerelease(target.version)) return
+  if (dl) { dl.dropped = true; dl.token.cancel() }
+  target = null
+  broadcast({ phase: 'idle' })
 }
 
 /** 下载中手动换到另一边(底栏的「换 GitHub / 换官网」)。 */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { embedsOfParagraph, noteRefInsert, remarkWiki, splitWiki, wikiLabel } from './wikiChat'
+import { embedsOfParagraph, noteRefInsert, parseFileHref, remarkWiki, resolveAgainst, splitWiki, wikiLabel } from './wikiChat'
 import { parsePdfLinkInner } from '@amadeus-shared/pdfLink'
 
 describe('noteRefInsert ↔ splitWiki 往返契约(Composer 插入 → 气泡渲染)', () => {
@@ -174,5 +174,27 @@ describe('嵌入段 embedsOfParagraph(聊天里独占一段的 `![[…]]` → �
     expect(emb.children.map((k: any) => k.type)).toEqual(['text', 'link'])
     expect(emb.children[1].url).toBe('#wiki=' + encodeURIComponent('/abs/a.png'))
     expect(plain.data).toBeUndefined()
+  })
+})
+
+describe('parseFileHref(普通 Markdown 链接指向文件,D25)', () => {
+  it('认 :行号、:行-行、:行:列、#L 两种写法和 file://', () => {
+    expect(parseFileHref('src/a.ts:42')).toEqual({ path: 'src/a.ts', line: 42 })
+    expect(parseFileHref('src/a.ts:12-30')).toEqual({ path: 'src/a.ts', line: 12, end: 30 })
+    expect(parseFileHref('a.ts:12:5')).toEqual({ path: 'a.ts', line: 12 })
+    expect(parseFileHref('/abs/x.py#L7-L9')).toEqual({ path: '/abs/x.py', line: 7, end: 9 })
+    expect(parseFileHref('file:///Users/me/My%20Docs/a.md')).toEqual({ path: '/Users/me/My Docs/a.md' })
+    expect(parseFileHref('C:\\work\\a.ts:3')).toEqual({ path: 'C:\\work\\a.ts', line: 3 })
+  })
+  it('行号写错只丢行号,文件照样打开', () => {
+    expect(parseFileHref('src/a.ts:0')).toEqual({ path: 'src/a.ts' })
+    expect(parseFileHref('src/a.ts:12-3')).toEqual({ path: 'src/a.ts', line: 12 })
+  })
+  it('网址、锚点、mailto、没有扩展名也没有行号的都不认', () => {
+    for (const href of ['https://x.org/a.ts', '#toc-1', 'mailto:a@b.c', 'docs/README', 'page.html?x=1', 'javascript:alert(1)']) expect(parseFileHref(href)).toBeNull()
+  })
+  it('相对路径按工作目录拼,消掉 . 和 ..', () => {
+    expect(resolveAgainst('/repo/app', './src/../lib/a.ts')).toBe('/repo/app/lib/a.ts')
+    expect(resolveAgainst('/repo', '/etc/hosts')).toBe('/etc/hosts')
   })
 })

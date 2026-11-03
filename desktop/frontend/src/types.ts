@@ -148,6 +148,8 @@ export interface MuseStatusInfo {
  *  actions:数组=设置;null=显式清空(回到 Muse/agentSlug 旧语义);缺席=保留旧值。 */
 export interface MuseTriggerUpsert {
   id?: string
+  /** 打开编辑器时那份规则的 rev:引擎比对,对不上回 409(编辑期间被 Muse / 引擎改过)。不带 = 不比对。 */
+  expectedRev?: string
   /** 谁发起的这次 upsert(引擎按它决定「能不能把停用的规则开回来」):
    *  'plugin-ensure' = 插件每次 setup 的**幂等重放**(不是用户意图)—— 引擎自动停用(排空封顶断环 / 配置错误)
    *  与用户显式停用都不许被它开回来,否则安全闸每次启动自动松开、停用原因还被抹掉;

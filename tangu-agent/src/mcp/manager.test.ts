@@ -9,7 +9,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createMcpManager, sessionGone, type McpManager, type McpManagerOptions } from './manager.js';
+import { createMcpManager, redactSecrets, sessionGone, type McpManager, type McpManagerOptions } from './manager.js';
 import type { LoadedMcpTool } from './toolBridge.js';
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { startHttpServer, RED_DOT_PNG_B64 } from '../../test/fixtures/fake-mcp-server.mjs';
@@ -426,3 +426,36 @@ describe('idle MCP configuration reload', () => {
     expect((await m.callTool(fresh, { text: 'after disabling' })).isError).toBe(true);
   });
 });
+
+describe('D30 配置里的密钥按值遮', () => {
+  it('server 把 env 里的令牌回显进结果:模型看到的是 <redacted>,名字不像密钥的 env 照原样', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const m = await managerFor({ s: { ...stdio('s', 'echo,env'), env: { FAKE_MCP_TAG: 's', FAKE_MCP_TOOLS: 'echo,env', API_TOKEN: 'plainvalue-7f3k2', WORK_ROOT: '/srv/project-root' } } })
+    const env = m.toolsForRun().get('mcp__s__env')!
+    expect((await m.callTool(env, { text: 'API_TOKEN' })).text).not.toContain('plainvalue-7f3k2')
+    expect((await m.callTool(env, { text: 'API_TOKEN' })).text).toContain('<redacted>')
+    expect((await m.callTool(env, { text: 'WORK_ROOT' })).text).toContain('/srv/project-root')
+  }, 20_000)
+
+  it('header 值连带去掉 Bearer 前缀的那段都遮;短开关值不动', () => {
+    const cfg = { headers: { Authorization: 'Bearer abcdefgh12345678' }, env: { SESSION_FLAG: '1' } }
+    expect(redactSecrets('token=abcdefgh12345678 and Bearer abcdefgh12345678', cfg)).toBe('token=<redacted> and <redacted>')
+    expect(redactSecrets('flag 1', cfg)).toBe('flag 1')
+  })
+})
+
+describe('D29 测试连接', () => {
+  it('按未保存的配置连一次列出工具,不登记进状态、不占名字', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const m = await managerFor({})
+    expect(await m.probe(stdio('p'))).toMatchObject({ ok: true, tools: expect.arrayContaining(['echo']) })
+    expect(m.listStatus()).toEqual([])
+  }, 20_000)
+
+  it('起不来的命令给出原因', async () => {
+    const m = await managerFor({})
+    const r = await m.probe({ command: join(dir, 'no-such-binary') })
+    expect(r.ok).toBe(false)
+    expect(r.ok === false && r.error).toBeTruthy()
+  }, 20_000)
+})

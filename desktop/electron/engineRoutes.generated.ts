@@ -47,6 +47,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/mcp/:name/key', access: 'deny-remote', src: 'routes/assets.ts', why: 'connector user key: stored only on this computer (connector-auth.json)' },
   { method: 'POST', path: '/agent/mcp/:name/login', access: 'deny-remote', src: 'routes/assets.ts', why: 'MCP OAuth sign-in: loopback callback and tokens are local to this computer' },
   { method: 'POST', path: '/agent/mcp/:name/logout', access: 'deny-remote', src: 'routes/assets.ts', why: 'MCP OAuth sign-out deletes a local token' },
+  { method: 'POST', path: '/agent/mcp/probe', access: 'deny-remote', src: 'routes/assets.ts', why: 'MCP connection test: starts the given stdio command or contacts the URL from this computer' },
   { method: 'GET', path: '/agent/skills', access: 'allow', src: 'routes/assets.ts', why: 'skills list' },
   { method: 'GET', path: '/agent/skills/catalog', access: 'allow', src: 'routes/assets.ts', why: 'skill catalog' },
   { method: 'POST', path: '/agent/skills/catalog', access: 'deny-remote', src: 'routes/assets.ts', why: 'create skill' },

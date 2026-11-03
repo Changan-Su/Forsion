@@ -55,7 +55,7 @@ import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccoun
 import { createAccountCore } from './accountCore'
 import { importMcp, importSkills, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
-import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, channelChanged } from './updater'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
@@ -4014,6 +4014,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
     await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
+    channelChanged(!!on)
     return { ok: true }
   })
   // 下载来源:auto(按地区:大陆官网、其他地区 GitHub)/ website / github。同样落 updater 段、每次现读。

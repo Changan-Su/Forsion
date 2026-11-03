@@ -649,6 +649,9 @@ export const mcpLogin = (t: EngineTarget, name: string) =>
 export const mcpSetKey = (t: EngineTarget, name: string, key: string) =>
   request<{ status: string; error?: string }>(t, `/agent/mcp/${encodeURIComponent(name)}/key`, { method: 'POST', body: JSON.stringify({ key }) })
 /** 断开:删掉本机令牌。 */
+/** 「测试连接」:按还没保存的配置连一次、列工具后断开(只在本机引擎)。 */
+export const mcpProbe = (t: EngineTarget, config: unknown) =>
+  request<{ ok: true; tools: string[] } | { ok: false; error: string; needsLogin?: boolean }>(t, '/agent/mcp/probe', { method: 'POST', body: JSON.stringify({ config }) }, { timeoutMs: 45000 })
 export const mcpLogout = (t: EngineTarget, name: string) =>
   request<Record<string, never>>(t, `/agent/mcp/${encodeURIComponent(name)}/logout`, { method: 'POST' })
 

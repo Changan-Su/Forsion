@@ -3,7 +3,7 @@
  * 高亮配色在 base.css 用主题 token 写(.hljs-*),不引第三方主题 CSS。
  */
 import React, { useContext, useEffect, useMemo, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 // 模型最爱写 `**注意：**后面`(CJK 标点贴闭合定界符),CommonMark 判不成立、显示字面 `**`。
 // 只换解析、不落盘;须排在 remarkGfm 之后(删除线那个要压过 gfm 的 `~`)。理由同 amadeus/blocks/markdown/cjkFriendly.ts。
@@ -20,14 +20,18 @@ import { Copy, Check, Play, ImageOff } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { isShellLang, runInTerminal, stripPrompt, type RunResult } from '../builtins/runCommand'
 import { normalizeMath } from '../services/mathNormalize'
-import { remarkWiki } from './wikiChat'
+import { parseFileHref, remarkWiki, resolveAgainst } from './wikiChat'
 import { ChatWebLink, ChatWikiLink } from './ChatWikiLink'
 import { ChatLinkWithCard } from './ChatLinkCard'
 import { ChatEmbed, type EmbedCtx } from './ChatEmbed'
 import { whenNear } from '../lib/nearViewport'
+import { installCopyTex } from './selectionBar/selectionMarkdown'
 
 /** 网页链接的悬停预览卡(ChatLinkCard)。⚠️ 缺省关、只由聊天回答开:本组件还给市场 README / 收件箱 / 更新日志渲第三方文本,
  *  那里的链接不该一悬停就让引擎去问 GitHub。 */
+// Every surface that renders chat Markdown also gets clean ⌘C over formulas (D24).
+if (typeof document !== 'undefined') installCopyTex()
+
 const LinkCardContext = React.createContext(false)
 
 /** 代码块细表头(语言 + 复制,走查续六 6.2 A)。⚠️ 缺省关、只由聊天回答开:别处的代码块各有自己的底色,表头的样式只写在 .t2-content 里。 */
@@ -48,14 +52,28 @@ const LANG_NAMES: Record<string, string> = {
 
 // [[双链]] 经 remarkWiki 变成 #wiki= 链接,在这里拦下渲染;http(s) 走网页引用条(Desk 内置浏览器
 // + 链接文字当引语定位;聊天回答里另带悬停预览卡);其余(mailto/相对/锚点)维持默认 <a>。
+const textOf = (n: React.ReactNode): string => typeof n === 'string' || typeof n === 'number' ? String(n) : Array.isArray(n) ? n.map(textOf).join('') : React.isValidElement(n) ? textOf((n.props as { children?: React.ReactNode }).children) : ''
+
 const WikiAnchor = ({ href, children, node: _node, ...rest }: any) => {
   const cards = useContext(LinkCardContext)
+  const cwd = useContext(RunContext)?.cwd
   if (typeof href === 'string' && href.startsWith('#wiki=')) return <ChatWikiLink inner={decodeURIComponent(href.slice(6))} />
   if (typeof href === 'string' && /^https?:\/\//i.test(href)) {
     return cards ? <ChatLinkWithCard href={href} {...rest}>{children}</ChatLinkWithCard> : <ChatWebLink href={href} {...rest}>{children}</ChatWebLink>
   }
+  // 指向文件的普通链接(`src/a.ts:42`)→ 走 [[路径#L行]] 那条文件引用:按会话工作目录拼绝对路径,点开跳到那一行(D25)
+  const file = typeof href === 'string' ? parseFileHref(href) : null
+  if (file) {
+    const path = cwd ? resolveAgainst(cwd, file.path) : file.path
+    const anchor = file.line ? `#L${file.line}${file.end ? `-L${file.end}` : ''}` : ''
+    const label = textOf(children)
+    return <ChatWikiLink inner={`${path}${anchor}${label ? `|${label}` : ''}`} />
+  }
   return <a href={href} {...rest}>{children}</a>
 }
+
+/** react-markdown 缺省会把 `a.ts:42`、`file://`、`C:\…` 当未知协议清空;只对认得出的文件链接放行,其余照缺省。 */
+const urlTransform = (url: string, key: string): string => defaultUrlTransform(url) || (key === 'href' && parseFileHref(url) ? url : '')
 
 /** 代码块「运行」的回传口:聊天消息给 onRun(把结果作为用户消息发回会话);别处(工作区文件预览等)不给 = 只跑不回传。 */
 const RunContext = React.createContext<{ onRun?: (r: RunResult) => void; cwd?: string; allowRun: boolean } | undefined>(undefined)
@@ -227,6 +245,7 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
               remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
               rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
               components={components}
+              urlTransform={urlTransform}
             >
               {normalizeMath(content)}
             </ReactMarkdown>

@@ -143,6 +143,8 @@ export interface McpManager {
   login(name: string): Promise<{ url?: string }>;
   /** 断开:删掉本机令牌,置「待登录」。 */
   logout(name: string): Promise<void>;
+  /** 设置里「测试连接」:按这份(还没保存的)配置连一次、列工具后断开,不影响已登记的 server。 */
+  probe(cfg: McpServerConfig): Promise<{ ok: true; tools: string[] } | { ok: false; error: string; needsLogin?: boolean }>;
   /** 「用户自带 Key」型:存 Key(本机 connector-auth.json)并重连。返回重连后的状态。 */
   setKey(name: string, key: string): Promise<{ status: McpServerStatus['status']; error?: string }>;
   dispose(): Promise<void>;
@@ -169,6 +171,20 @@ export function sessionGone(e: unknown, hadSession: boolean): boolean {
   } catch {
     return false;
   }
+}
+
+const SECRET_ENV_KEY = /token|secret|passw|api[-_]?key|access[-_]?key|private[-_]?key|auth|credential|cookie|session/i;
+/**
+ * 配置里的密钥值按值遮掉(D30):env 里名字像密钥的、全部 header 值(含去掉 Bearer / Basic 前缀的那段)。
+ * 服务器把令牌回显进结果或报错时,不带 sk- / Bearer 特征的裸令牌出站规则认不出,这里先遮。
+ * 短于 8 个字符的不遮:那多半是 `1`、`true` 这类开关值,遮了会把正常结果改坏。
+ */
+export function redactSecrets(text: string, cfg: Pick<McpServerConfig, 'env' | 'headers'>): string {
+  const values = new Set<string>();
+  for (const [k, v] of Object.entries(cfg.env ?? {})) if (typeof v === 'string' && SECRET_ENV_KEY.test(k)) values.add(v);
+  for (const v of Object.values(cfg.headers ?? {})) if (typeof v === 'string') { values.add(v); values.add(v.replace(/^(?:bearer|basic|token)\s+/i, '')); }
+  for (const v of [...values].filter((v) => v.length >= 8).sort((a, b) => b.length - a.length)) text = text.split(v).join('<redacted>');
+  return text;
 }
 
 export function createMcpManager(configFile?: string, opts: McpManagerOptions = {}): McpManager {
@@ -201,8 +217,8 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const queued: Array<[{ id: string; name: string }, Record<string, McpServerConfig>]> = [];
   /** 在飞的交互登录:dispose 时放掉回环端口。 */
   const logins = new AbortController();
-  /** 报错 / 日志里的 Key 换回 `{userKey}`。 */
-  const red = (entry: ServerEntry, text: string): string => redactKey(text, entry.userKey);
+  /** 报错 / 日志 / 结果里的 Key 换回 `{userKey}`,配置里的密钥值按值遮掉(D30)。 */
+  const red = (entry: ServerEntry, text: string): string => redactSecrets(redactKey(text, entry.userKey), entry.cfg);
   // 连接器目录的 alwaysAsk:桥接名 → 持有它的 mcp.json 条目 → 目录缓存。认领时才有 remoteName,所以由这里答、不在审批侧反推。
   const unregisterApproval = setMcpApprovalLookup((bridged) => {
     const serverName = owner.get(bridged);
@@ -436,6 +452,37 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   }
 
   const api: McpManager = {
+    async probe(cfg) {
+      // 只连一次、列完工具就关:不登记名字、不认领桥接名、不排重试,运行中的 server 一概不碰(D29)
+      // 不走 newEntry:那里会登记名字归属和 servers 列表
+      const entry: ServerEntry = {
+        name: '(probe)', cfg, transport: inferTransport(cfg), client: null, tools: [], status: 'connecting',
+        connecting: null, pendingClient: null, retryTimer: null, retryAttempt: 0, connectedAt: 0, configError: false, needsLogin: false, boundRemote: new Map(),
+      };
+      if (entry.transport !== 'stdio' && isUserKeyUrl(cfg.url)) {
+        entry.userKey = loadUserKey(cfg.url!);
+        if (!entry.userKey) return { ok: false, needsLogin: true, error: 'needs-key' };
+      }
+      let client: Client | null = null;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        if (isHostSandboxRestricted()) throw new Error('MCP servers are unavailable while the local sandbox is enabled');
+        const c = new Client({ name: 'tangu-agent', version: '1.0.0' });
+        client = c;
+        const timeout = new Promise<never>((_, rej) => {
+          timer = setTimeout(() => rej(new Error(`connect timed out (${connectTimeoutMs / 1000}s)`)), connectTimeoutMs);
+          timer.unref?.();
+        });
+        const listed = await Promise.race([(async () => { await c.connect(buildTransport(entry)); return c.listTools(); })(), timeout]);
+        if (entry.needsLogin) return { ok: false, needsLogin: true, error: 'needs-login' };
+        return { ok: true, tools: (listed.tools ?? []).map((t) => t.name).sort() };
+      } catch (e: any) {
+        return entry.needsLogin ? { ok: false, needsLogin: true, error: 'needs-login' } : { ok: false, error: red(entry, String(e?.message || e)).slice(0, 500) };
+      } finally {
+        if (timer) clearTimeout(timer);
+        await client?.close().catch(() => {});
+      }
+    },
     async start() {
       // 磁盘视图:保留名的 server 也列出来(error + 原因),用户在 MCP 设置里看得到它为什么没起来
       const raw = loadRawMcpServers(configFile);
