@@ -172,6 +172,8 @@ describe('apply and undo', () => {
     expect(existsSync(join(home, 'skills', 'deploy-claude'))).toBe(false);
     expect(readFileSync(join(home, 'skills', 'deploy', 'SKILL.md'), 'utf8')).toContain('mine');
     expect((await undoImport(ledger.id)).undoneAt).toBe(undone.undoneAt); // 撤第二次是空操作
+    // 撤销 = 回到导入前,不算人删过:再整理一次,同一句照常勾上
+    expect((await planned()).items.find((i) => i.text.includes('阿青'))).toMatchObject({ checked: true, flags: ['merged'] });
   });
   it('undo leaves a rule the person edited after importing', async () => {
     await seedAgentMd('# 我的规矩\n- 先想再写\n');

@@ -5,6 +5,7 @@
 .imp-body { flex: 1; min-height: 0; overflow: auto; padding: 0 18px 4px; }
 .imp-sec { margin: 14px 0 4px; display: flex; align-items: baseline; gap: 8px; font-size: var(--ui-font-meta); font-weight: 600; color: var(--text); }
 .imp-sec small { font-weight: 400; color: var(--text-muted); font-size: var(--ui-font-caption); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-sec > span:first-child, .imp-sec > small:last-child { flex: none; white-space: nowrap; }
 .imp-sec .grow { flex: 1; }
 .imp-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: var(--border-width) solid var(--border); }
 .imp-row:last-child { border-bottom: 0; }

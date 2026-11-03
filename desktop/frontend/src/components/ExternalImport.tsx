@@ -76,8 +76,7 @@ registerMessages({
   'aiImport.notice.truncated': { zh: '贴的内容太长，只读了前面一部分，剩下的可以分开贴', en: 'The pasted text was too long, so only the first part was read. Paste the rest separately' },
   'aiImport.notice.missed': { zh: '有 {n} 段没整理成功，可以再整理一次', en: "{n} parts couldn't be sorted. You can sort again" },
   'aiImport.tool.pasted': { zh: '粘贴的回复', en: 'Pasted reply' },
-  'aiImport.done.title': { zh: '导入了 {n} 项', en: 'Imported {n} items' },
-  'aiImport.done.counts': { zh: '画像 {person} · 协作说明 {agent} · 项目记忆 {project} · 技能 {skill}', en: 'Portrait {person} · Collaboration {agent} · Project memory {project} · Skills {skill}' },
+  'aiImport.done.summary': { zh: '导入了 {n} 项：画像 {person} · 协作说明 {agent} · 项目记忆 {project} · 技能 {skill}', en: 'Imported {n} items: Portrait {person} · Collaboration {agent} · Project memory {project} · Skills {skill}' },
   'aiImport.done.mcp': { zh: '另有 MCP {n} 个，是停用的，在 MCP 页管理（撤销不含它们）', en: "Plus {n} MCP servers, turned off; manage them in the MCP page (undo doesn't include them)" },
   'aiImport.done.skipped': { zh: '{n} 项没写：已经有了，或者放不下了', en: "{n} items weren't saved: already there, or no room left" },
   'aiImport.done.from': { zh: '来自 {sources} · {time}', en: 'From {sources} · {time}' },
@@ -148,7 +147,7 @@ export function ExternalImportEntry({ engine }: { engine: EngineTarget }) {
   if (recent && last) {
     const n = last.counts.person + last.counts.agent + last.counts.project + last.counts.skill
     return <>{sheet}<div className="imp-done" data-ai-import-done><CircleCheck size={16} />
-      <span className="grow">{t('aiImport.done.title', { n })}: {t('aiImport.done.counts', last.counts)}
+      <span className="grow">{t('aiImport.done.summary', { n, ...last.counts })}
         <small>{t('aiImport.done.from', { sources: last.sources.map(label).join(t('aiImport.join')), time: formatRelative(last.at, { locale }) })}</small>
         {error && <small role="alert">{error}</small>}</span>
       <button type="button" className="btn ghost sm" disabled={busy} onClick={() => void undo()}>{busy ? <Loader2 size={13} className="spin" /> : <Undo2 size={13} />} {t('aiImport.done.undo')}</button>
@@ -325,7 +324,7 @@ export function ExternalImportSheet({ engine, onClose }: { engine: EngineTarget;
     const c = result.ledger.counts
     body = undone
       ? <div className="imp-done" role="status"><CircleCheck size={16} /><span className="grow">{t('aiImport.done.undone')}{!!undone.kept?.length && <small>{t('aiImport.done.kept', { list: undone.kept.join(t('aiImport.join')) })}</small>}</span></div>
-      : <div className="imp-done" role="status" data-ai-import-result><CircleCheck size={16} /><span className="grow">{t('aiImport.done.title', { n: c.person + c.agent + c.project + c.skill })}: {t('aiImport.done.counts', c)}
+      : <div className="imp-done" role="status" data-ai-import-result><CircleCheck size={16} /><span className="grow">{t('aiImport.done.summary', { n: c.person + c.agent + c.project + c.skill, ...c })}
         {!!result.skipped && <small>{t('aiImport.done.skipped', { n: result.skipped })}</small>}
         {!!result.mcp && <small>{t('aiImport.done.mcp', { n: result.mcp })}</small>}</span>
         {!!(c.person + c.agent + c.project + c.skill) && <button type="button" className="btn ghost sm" disabled={busy} onClick={() => void undo()}>{busy ? <Loader2 size={13} className="spin" /> : <Undo2 size={13} />} {t('aiImport.done.undo')}</button>}</div>
