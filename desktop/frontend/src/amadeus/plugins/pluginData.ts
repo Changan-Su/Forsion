@@ -2,10 +2,10 @@
  *  DTO 刻意不复用宿主内部的 AggDb / MdMark:内部结构以后要改,不该牵动插件 API(同 PluginSearchHit 的口径)。
  *  写口与内置日历 / 待办走同一组函数(setAggCell / addAggRow / patchMark …),所以和打开着的界面一致。 */
 import { isRealDate, parseCalDate } from '@amadeus-shared/db/calDate'
-import type { CellValue } from '@amadeus-shared/db/schema'
+import { COLUMN_TYPES, dbId, type CellValue, type ColumnType } from '@amadeus-shared/db/schema'
 import type { MdMark } from '@amadeus-shared/mdMarks'
 import { isStamped, resolveBaseType } from '../blocks/database/propertyTypes'
-import { addAggRow, deleteAggRow, duplicateAggRow, getAggDb, restoreAggRow, setAggCell, setAggName, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
+import { addAggRow, deleteAggRow, duplicateAggRow, getAggDb, restoreAggRow, setAggBody, setAggCell, setAggName, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
 import { findMdMark, markKey, patchMark, watchMdMarks } from '../store/mdMarkStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
 import { watchHumanCal } from '../store/calendarMembers'
@@ -32,6 +32,7 @@ export const toDb = (db: AggDb): PluginDatabase => ({
 const toTask = (m: MdMark): PluginNoteTask => ({
   id: markKey(m), path: m.path, title: m.title, heading: m.heading, text: m.text,
   isTask: m.isTask, checked: m.checked, due: m.due, ...(m.remind ? { remind: m.remind } : {}),
+  ...(m.parentId ? { parentId: m.parentId } : {}), tags: [...(m.tags ?? [])],
 })
 
 /** 插件给的值是不是一个合法的单元格值(信任边界:插件代码不一定是 TS)。 */
@@ -102,6 +103,34 @@ export function createDatabasesApi(scope: DataScope, includeHumanCalendar = fals
       const db = scope.alive() ? table(path) : null
       if (!db) return null
       return addAggRow(db, cellsOf(db, cells), typeof name === 'string' ? name : '', scope.alive).catch(() => null)
+    },
+    addColumn: (path, spec) => {
+      const db = scope.alive() ? table(path) : null
+      // 经典表才加(笔记视图的列是 frontmatter 键,另一套);走 dbStore.mutate,和行的写入同一条防抖写穿 —— 不走磁盘比对交换,
+      // 那条看不见还没落盘的新行,重读会把它冲掉(11-02 实拍:刚加的待办随「第一次加标签列」消失)
+      if (!db || db.isNoteView || db.readonly || db.writeCell || !spec || typeof spec !== 'object') return null
+      const name = typeof spec.name === 'string' ? spec.name.trim() : ''
+      if (!name || !COLUMN_TYPES.includes(spec.type as ColumnType)) return null
+      const id = dbId() // 回调外定 id,重放才是确定的(同表格的「添加列」)
+      useDbStore.getState().mutate(db.path, (d) => d.columns.some((c) => c.id === id) ? d : { ...d, columns: [...d.columns, { id, name, type: spec.type as ColumnType }] })
+      return id
+    },
+    readBody: (path, rowId) => {
+      const db = scope.alive() ? table(path) : null
+      const row = db && !db.isNoteView ? db.rows.find((r) => r.rowId === rowId) : undefined
+      return row ? row.body ?? '' : null
+    },
+    setBody: (path, rowId, body, expected) => {
+      const db = scope.alive() ? table(path) : null
+      const row = db?.rows.find((r) => r.rowId === rowId)
+      // 只写经典表(笔记视图的正文是笔记文件;只读源 / 可编辑投影没有正文),同 mountRecord({ body })
+      if (!db || !row || db.isNoteView || db.readonly || db.writeCell || typeof body !== 'string') return false
+      if (expected !== undefined) {
+        if (!expected || typeof expected !== 'object' || typeof expected.body !== 'string') return false
+        if ((row.body ?? '') !== expected.body) return false
+      }
+      setAggBody(db, row.rowId, body, expected ? { body: expected.body } : undefined)
+      return true
     },
     duplicateRow: async (path, rowId) => {
       const db = scope.alive() ? table(path) : null

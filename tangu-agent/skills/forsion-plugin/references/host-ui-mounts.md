@@ -17,6 +17,7 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 - `modelPicker: false`：不画模型和思考档，也不解析默认模型。`draft.modelId` 是传入值（没传是 `''`），`draft.thinkingLevel` 没传是 `'medium'`。
 - `toolbar(el)`：往卡片底排左侧（模型药丸前）放自己的 DOM，可返回清理函数；dispose 时调用，update 换函数时先清理再重挂，抛错由宿主隔离。`el` 在宿主挂载层里，不吃插件视图基础样式，按钮写 `.btn.sm`。
 - `suggest: { trigger, items(query), mention? }`：`mention: true` 时只打 `trigger` 就开（`query` 为空串），紧跟中文也开，紧贴拉丁字母或数字不开。宿主补全浮层，外观和键盘与笔记 `#` 补全一致（↑↓ / Enter / Tab / Esc，输入法组字时不弹，Enter 选中不提交）。`items` 回数组或 Promise，每项 `{ label, hint?, value }`，最多显示 8 项；选中把 trigger + 查询换成 `value` 加一个空格。
+- `suggest` 也可以是数组（2026-11-02+）：几种触发各给一份（例如 `#` 标签 + `[[` 关联），离光标最近的那个打开；更早的宿主只认单个对象，传数组前用同一轮的 `ctx.databases.setBody` 之类判宿主版本。输入卡在窗口下半部分时浮层朝上开（放不下再翻到下面）。
 - `insertText(text)`：在光标处插入（有选区则替换）并聚焦，给「#」按钮、语音转写用。
 旧宿主忽略这三个选项，也没有 `insertText`，用 `typeof box.insertText === 'function'` 探测，四项同时到位。
 插件主动在 View 卸载时 dispose（之后 `el` 立刻归还，见上「dispose 契约」）；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。

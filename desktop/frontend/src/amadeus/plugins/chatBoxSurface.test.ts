@@ -203,6 +203,17 @@ describe('public Chat Box slots', () => {
     await press('Enter')
     expect(onSubmit).toHaveBeenCalledTimes(1)
   })
+  it('takes several triggers: the one nearest the caret opens, and the pick replaces that trigger', async () => {
+    const links = { trigger: '[[', mention: true, items: (q: string) => ['评审议程', 'Q4 路线图'].filter(t => t.startsWith(q)).map(t => ({ label: t, value: `[[${t}]]` })) }
+    await act(async () => { box = mountPluginChatBox(el, { submitOn: 'enter', suggest: [tags, links], onSubmit: () => false }) })
+    await typeText('准备评审 #设')
+    expect(rows()).toEqual(['#设计3'])
+    await press('Enter')
+    await typeText('准备评审 #设计 关联[[评')
+    expect(rows()).toEqual(['评审议程'])
+    await press('Enter')
+    expect(input().value).toBe('准备评审 #设计 关联[[评审议程]] ')
+  })
   it('replaces only the query when the caret is mid-text', async () => {
     await act(async () => { box = mountPluginChatBox(el, { suggest: tags, onSubmit: () => false }) })
     await typeText('a #设 b', 4)
