@@ -907,6 +907,24 @@ export const getPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t,
 export const scanPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t, '/agent/human/SOUL.md/move/scan', { method: 'POST' })
 export const decidePortraitMove = (t: EngineTarget, id: string, decision: 'move' | 'keep' | 'undo') =>
   request<PortraitMoveView>(t, `/agent/human/SOUL.md/move/items/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ decision }) })
+
+// ── 从其他 AI 导入(11-03,引擎 services/externalImport;只许本机)──
+export type ImportTool = 'claude-code' | 'codex' | 'gemini-cli' | 'hermes' | 'cursor' | 'windsurf' | 'pasted'
+export interface ImportLedger { id: string; at: number; sources: ImportTool[]; counts: Record<'person' | 'agent' | 'project' | 'skill', number>; undoneAt?: number; kept?: string[] }
+export interface ImportScan { tools: Array<{ id: ImportTool; about: number; rules: number; project: number; notes: number; skills: number }>; fresh: number; freshTools: ImportTool[]; last: ImportLedger | null }
+export interface ImportPlanItem { id: string; text: string; dest: 'person' | 'agent' | 'project' | 'past' | 'blocked'; project?: string; sources: ImportTool[]; flags: Array<'merged' | 'sensitive' | 'known' | 'conflict' | 'forgotten'>; conflictWith?: string; checked: boolean; locked: boolean }
+export interface ImportPlanSkill { key: string; tool: ImportTool; name: string; target: string; description: string; scripts: number; files: number; flags: Array<'renamed' | 'mentions-other' | 'too-big'>; checked: boolean; locked: boolean }
+export interface ImportNotice { tool: ImportTool; kind: 'too-many' | 'persona' | 'truncated'; path: string; count?: number; project?: string }
+export interface ImportPlan { id: string; createdAt: number; items: ImportPlanItem[]; skills: ImportPlanSkill[]; notices: ImportNotice[]; missed: number }
+export interface ImportPlanView { state: 'idle' | 'running' | 'done' | 'error'; done: number; total: number; plan: ImportPlan | null; error: string | null }
+export const scanImport = (t: EngineTarget) => request<ImportScan>(t, '/agent/import/scan')
+export const getImportPlan = (t: EngineTarget) => request<ImportPlanView>(t, '/agent/import/plan')
+export const startImportPlan = (t: EngineTarget, body: { tools: ImportTool[]; pasted?: string; lang: 'zh' | 'en' }) =>
+  request<ImportPlanView>(t, '/agent/import/plan', { method: 'POST', body: JSON.stringify(body) })
+export const applyImport = (t: EngineTarget, body: { planId: string; items: Array<{ id: string; text?: string }>; skills: string[] }) =>
+  request<{ ledger: ImportLedger; skipped: number }>(t, '/agent/import/apply', { method: 'POST', body: JSON.stringify(body) })
+export const undoImport = (t: EngineTarget, id: string) => request<ImportLedger>(t, '/agent/import/undo', { method: 'POST', body: JSON.stringify({ id }) })
+export const ignoreImport = (t: EngineTarget) => request<{ ok: true }>(t, '/agent/import/ignore', { method: 'POST' })
 export const listAgentMemoryRevisions = (t: EngineTarget, slug: string) =>
   request<{ revisions: AgentMemoryRevision[] }>(t, `${agentMemoryPath(slug)}/revisions`).then((r) => r.revisions)
 export const restoreAgentMemory = (t: EngineTarget, slug: string, version: string, expectedVersion: string) =>
