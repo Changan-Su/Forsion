@@ -195,6 +195,8 @@ export async function installWebShim(): Promise<boolean> {
     // 协议更新提示(components/TermsUpdateDialog):网页版不给通用 cloudFetch,只开这两条
     termsStatus: () => cloudJson('GET', '/auth/terms'),
     termsAgree: (version: string) => cloudJson('POST', '/auth/terms/agree', { version }),
+    // 会员徽章(components/tierBadgeStyles):配色与中英文方案名
+    membershipPlans: () => cloudJson('GET', '/membership/plans'),
   }
 
   // The same transport guard serves regular Web and Unit visitors, using the
