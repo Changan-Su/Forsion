@@ -760,7 +760,7 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       </div>
                     ) : ws.kind === 'channel' ? (
                       // 通道文件夹:纯展开折叠(与普通工作区一致)。行尾连接状态点。
-                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { p.onActivateEntry?.(en.key); isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
+                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
                         <span className="t2s-group-label">{workspaceGroupLabel(ws, t)}</span>
                         {pinned && <Pin className="t2o-pin-mark" aria-hidden="true" />}
@@ -768,8 +768,9 @@ export const SidebarPane: React.FC<SidebarPaneProps> = (p) => {
                       </button>
                     ) : (
                       // 点组头 = 纯展开/折叠,**不跳主区**(用户拍板;进工作区详情走「查看更多」或组菜单)。
+                      // 也**不算激活**(11-03 用户:置顶区不许因为展开折叠换顺序);开组里的会话才算(见会话行 onClick)。
                       // 已展开再点 = 折叠(toggleGroup 不动 activeWorkspaceKey,不会被联动 effect 弹回);收起时点 = 展开自己。
-                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { p.onActivateEntry?.(en.key); isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
+                      <button className="t2s-group-toggle t2s-folder-row" onClick={() => { isCollapsed ? enterGroup(ws.key) : toggleGroup(ws.key) }}>
                         {wsLead(ws, isCollapsed)}
                         <span className={`t2s-group-label${isMissing(ws) ? ' t2s-missing-name' : ''}`}>{workspaceGroupLabel(ws, t)}</span>
                         {isMissing(ws) && <span className="t2s-missing"><CircleAlert aria-hidden="true" />{t('relink.missing')}</span>}

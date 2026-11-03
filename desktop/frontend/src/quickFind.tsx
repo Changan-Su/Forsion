@@ -27,6 +27,7 @@ import { isImeKeyEvent, isMacPlatform, useExitGhost, useNativeChromeClaim, useNa
 import { listMessages, searchSessions, type SessionSearchHit } from './services/backendService'
 import { homeTarget, targetForSession } from './services/engine/targets'
 import type { MessageRecord } from './types'
+import { windowKind } from './windowKind'
 
 registerMessages({
   'quickfind.catAll': { zh: '全部', en: 'All' },
@@ -286,13 +287,16 @@ function QuickFindInner() {
   // 只在「全部 / 笔记」分类、有智库时出现,选取模式没有。落盘走 createWikiPage → birthAndOpen(G4-12 素文件出生)。
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const createName = q.trim()
-  const showCreate = !pick && !!createName && !!vaultRoot && amadeusAvailable() && (cat === 'all' || cat === 'note')
+  // Mini 窗只做找文件(11-03):「新建笔记」靠主窗的 amadeus:navigate-note 监听落地、「对话内容」的跳转目标留在 Mini 自己的 store,
+  // 交给主窗都会丢 —— 两样在 Mini 里不给(Codex 评审)。
+  const mini = windowKind() === 'mini'
+  const showCreate = !pick && !mini && !!createName && !!vaultRoot && amadeusAvailable() && (cat === 'all' || cat === 'note')
     && !pages.some((p) => /\.md$/i.test(p) && pageKey(p) === pageKey(createName))
 
   // 「对话内容」一段(按正文搜会话):排在名称结果与「新建笔记」之后 —— 它是异步到的,排在前面会让
   // 「打个新名字 + 回车 = 新建笔记」变成看手速。只在「全部 / 会话」分类出现,选取模式没有。
   // 只收正文命中(带 hit)的:标题 / 摘要自证命中的,上面的名称匹配已经列了。
-  const needle = !pick && sessionsAvailable() ? contentNeedle(q) : null
+  const needle = !pick && !mini && sessionsAvailable() ? contentNeedle(q) : null
   const [content, setContent] = useState<{ q: string; hits: SessionSearchHit[] } | null>(null)
   const searcher = useMemo(() => debouncedSearch(
     (s, signal) => searchSessions(homeTarget(), s, { limit: 20, signal }),

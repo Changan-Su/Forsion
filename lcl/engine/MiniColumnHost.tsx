@@ -1,6 +1,6 @@
 /** One dedicated Space surface; no desktop layout, tabs, ribbon or mobile chrome. */
 import { Suspense, useEffect, useReducer, useRef, useState } from 'react'
-import { Check, ChevronDown, ExternalLink, Plus, X } from 'lucide-react'
+import { Check, ChevronDown, ExternalLink, Plus, Search, X } from 'lucide-react'
 import { getActiveSpace, setActiveSpace, setActiveSpaceCold, useSpaceStore } from './spaceRegistry'
 import { getView, subscribeViews } from './viewRegistry'
 import { label } from './types'
@@ -38,7 +38,9 @@ export const MiniColumnHost: React.FC<{
   direct?: { title?: string; view: DirectMiniViewTarget; mainView: DirectMiniViewTarget } | null
   /** 用户可拖边改卡片大小(只有宿主认这扇窗时才真的动)。 */
   resizable?: boolean
-}> = ({ buildDefault, direct, resizable }) => {
+  /** 右胶囊最前的搜索钮(宿主给快速查找;不给就不画)。 */
+  onSearch?: () => void
+}> = ({ buildDefault, direct, resizable, onSearch }) => {
   const registered = useSpaceStore((s) => s.spaces)
   const activeId = useSpaceStore((s) => s.activeSpaceId)
   const [, refreshViews] = useReducer((n) => n + 1, 0)
@@ -109,6 +111,8 @@ export const MiniColumnHost: React.FC<{
         </div>
         <div className="mini-card-drag-title" />
         <div className="mini-card-cap">
+          {onSearch && <button className="mini-card-action" aria-label={t('lcl.mini.search')} title={t('lcl.mini.search')}
+            onClick={onSearch}><Search size={15} /></button>}
           {picker?.create && <button className="mini-card-action" aria-label={picker.create.label} title={picker.create.label}
             disabled={picker.create.disabled} onClick={() => currentMiniChrome()?.create?.onCreate()}><Plus size={15} /></button>}
           <button className="mini-card-action" aria-label={t('lcl.mini.showMain')}

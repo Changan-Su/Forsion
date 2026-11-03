@@ -5472,11 +5472,11 @@ Then reply with only the command output.`,
     const starters = asList(await api('/agent/special/muse/starters').catch(() => []), 'starters');
     const labelsOk = starters.every((x) => String(x.text || '').includes(String(x.source?.label || '\u0000')));
     const zh = starters.filter((x) => /[\u4e00-\u9fff]/.test(x.text)).length;
-    const ok = calls.length > 0 && starters.length > 0 && labelsOk;
+    const ok = calls.length > 0 && starters.length >= 3 && labelsOk; // 11-03 用户:默认填满三条
     const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
     const detail = [
       `set_chat_starters 调了 ${calls.length} 次${calls.length ? '' : ' ← 红'}`,
-      `新对话页 ${starters.length} 条${starters.length ? '' : ' ← 红'}${labelsOk ? '' : ';有 label 不在句子里 ← 红'}`,
+      `新对话页 ${starters.length} 条${starters.length >= 3 ? '' : '(要满 3 条)← 红'}${labelsOk ? '' : ';有 label 不在句子里 ← 红'}`,
       `中文 ${zh}/${starters.length}(只记)`,
       starters.map((x) => `[${x.source?.kind}「${x.source?.label}」${x.source?.ref ? ` → ${x.source.ref}` : ''}] ${x.text}`).join(' | '),
     ].join(';');

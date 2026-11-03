@@ -142,9 +142,13 @@ export async function markStarter(userId: string, id: string, status: 'dismissed
 export function buildStarterHint(active: Array<Pick<Starter, 'text' | 'source'>>, dismissed: string[]): string {
   const shown = active.length
     ? active.map((s) => `- ${s.text} (source: ${s.source.kind} "${s.source.label}")`).join('\n')
-    : '- (none yet: call set_chat_starters this cycle with up to three, drawn from what you see below)';
+    : `- (none yet: call set_chat_starters this cycle with ${MAX_STARTERS}, drawn from what you see below)`;
+  // 11-03 用户:默认至少填满三条。少于三条(用户 × 掉 / 用掉了一条,或上周期只给了一条)就明说缺几条,这一周期补齐。
+  const short = active.length && active.length < MAX_STARTERS
+    ? `\nOnly ${active.length} of ${MAX_STARTERS} shown: this cycle, call set_chat_starters with these plus ${MAX_STARTERS - active.length} new one(s) to fill it back up.`
+    : '';
   const gone = dismissed.length ? `\nDismissed by the user recently (do not suggest these or anything similar): ${dismissed.slice(0, 15).join('; ')}` : '';
-  return `\n\n[Chat starters currently shown on the new-chat page]\n${shown}${gone}`;
+  return `\n\n[Chat starters currently shown on the new-chat page]\n${shown}${short}${gone}`;
 }
 
 export async function starterHint(userId: string): Promise<string> {

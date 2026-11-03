@@ -187,8 +187,23 @@ function buildDecorations(
         (standalone && state.selection instanceof NodeSelection && selFrom === pos && selTo === pos + node.nodeSize)
       )
       const onActiveLine = lineFrom !== -1 && spFrom < lineTo && spTo > lineFrom
-      // 普通双链仍是「光标进入即源码」;图片是难源码编辑块,只有 `</>` 显式开门。
-      if ((!img && onActiveLine) || (img && onActiveLine && sourceFrom === from)) continue
+      // 普通双链:光标**进到这条链接里**才露源码(11-03 用户:输入过程中就该渲染 —— 刚打完 `]]`、同一行接着打字,
+      // 它已经是带右键菜单的链接;此前按「光标所在行」露源码,整行打完、光标离开才渲染)。两端算外面:光标停在 `]]` 后面
+      // 也渲染;←/→ 走进去、右键「编辑」都会落进链接内,照旧露源码。图片是难源码编辑块,只有 `</>` 显式开门。
+      // 露出的源码照样着色(目标不存在 → 黯淡),右键照样是文件菜单(props.handleDOMEvents.contextmenu)。
+      // 选区任一端落在链接里面 = 在编辑它(Shift 扩选从里面拉出来也不收);整条被圈在选区里 = 选中了它,保持渲染。
+      const within = (x: number): boolean => x > from && x < to
+      const caretInside = onActiveLine && (within(selFrom) || within(selTo))
+      if (!img && caretInside) {
+        if (!parseAppRefInner(m[1])) {
+          const fileLink = isPdfLinkInner(m[1]) || !!parseMediaLinkInner(m[1])
+          const sp = fileLink ? null : splitLinkInner(m[1])
+          const ok = sp?.subpath && !sp.target ? true : isResolved(linkTarget(m[1]))
+          decos.push(Decoration.inline(from, to, { class: ok ? 'wikilink-src' : 'wikilink-src wikilink-unresolved', 'data-wiki-open': wikiOpenArg(m[1]) }))
+        }
+        continue
+      }
+      if (img && onActiveLine && sourceFrom === from) continue
       if (img) {
         const len = spTo - spFrom
         decos.push(Decoration.inline(from, to, { class: 'wikilink-src-hidden' }))
@@ -434,6 +449,24 @@ function adjacentPlainWiki(view: EditorView, dir: 'up' | 'down'): number | null 
   return target?.sourceFrom == null ? null : target.sourceFrom + 2
 }
 
+/** ←/→ 贴着一条已渲染的普通双链:走进它的源码(`]]` 前 / `[[` 后),而不是整条跳过。
+ *  双链只在光标进到里面时才露源码(11-03),渲染体是藏起来的源码 + 部件,浏览器的方向键会把它当一个字跨过去 ——
+ *  不接这一下,键盘就再也改不了链接。图片嵌入不管(它只认 `</>` 开门)。 */
+function stepIntoWiki(view: EditorView, dir: 'left' | 'right'): number | null {
+  const sel = view.state.selection
+  if (!(sel instanceof TextSelection) || !sel.empty || !sel.$head.parent.isTextblock || sel.$head.parent.type.spec.code) return null
+  const s = buildBlockString(sel.$head.parent)
+  const off = sel.$head.parentOffset
+  WIKILINK_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = WIKILINK_RE.exec(s))) {
+    if (imageEmbed(m[1], m.index > 0 && s[m.index - 1] === '!')) continue
+    if (dir === 'left' && m.index + m[0].length === off) return sel.head - 2
+    if (dir === 'right' && m.index === off) return sel.head + 2
+  }
+  return null
+}
+
 export function wikilinkPlugin(
   onOpen: WikiOpen,
   isResolved: (name: string) => boolean = () => true,
@@ -462,15 +495,33 @@ export function wikilinkPlugin(
           },
         },
         props: {
-          // 失焦 → 全部渲染成链接;聚焦 → 仅光标所在行露源码(每个 Amadeus 块是独立编辑器)。焦点态读 editorFocus。
+          // 失焦 → 全部渲染成链接;聚焦 → 光标进到链接里才露源码(每个 Amadeus 块是独立编辑器)。焦点态读 editorFocus。
           handleKeyDown: (view, event) => {
-            if ((event.key !== 'ArrowUp' && event.key !== 'ArrowDown') || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false
+            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false
+            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+              const at = stepIntoWiki(view, event.key === 'ArrowLeft' ? 'left' : 'right')
+              if (at == null) return false
+              view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, at)).scrollIntoView())
+              return true
+            }
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return false
             const pos = adjacentPlainWiki(view, event.key === 'ArrowUp' ? 'up' : 'down')
             if (pos == null) return false
             view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).scrollIntoView())
             return true
           },
           decorations: (state) => buildDecorations(state, onOpen, isResolved, iconOf),
+          // 编辑中的双链源码右键 = 同一份文件菜单(渲染态部件自己派,见 widget 里的 contextmenu);已在源码态,不给「编辑」。
+          handleDOMEvents: {
+            contextmenu: (_view, e) => {
+              const src = (e.target as HTMLElement | null)?.closest?.<HTMLElement>('.wikilink-src[data-wiki-open]')
+              if (!src) return false
+              e.stopPropagation()
+              const taken = !src.dispatchEvent(new CustomEvent('amadeus:wikilink-menu', { bubbles: true, cancelable: true, detail: { inner: src.dataset.wikiOpen, x: e.clientX, y: e.clientY } }))
+              if (taken) e.preventDefault()
+              return taken
+            },
+          },
         },
       }),
   )

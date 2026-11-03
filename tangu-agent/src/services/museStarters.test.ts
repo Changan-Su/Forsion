@@ -140,6 +140,10 @@ describe('周期简报', () => {
     expect(hint).toContain(`- ${cal.text} (source: calendar "产品周会")`);
     expect(hint).toContain('Dismissed by the user recently (do not suggest these or anything similar): Draft the Q4 plan');
   });
+  it('不满三条要说缺几条(11-03:默认填满三条)', () => {
+    expect(buildStarterHint([cal as any], [])).toContain(`Only 1 of ${MAX_STARTERS} shown`);
+    expect(buildStarterHint([cal, note, muse] as any, [])).not.toContain('Only ');
+  });
   it('一条都没有也要说一声(Muse 才知道该放了)', () => {
     expect(buildStarterHint([], [])).toContain('- (none yet: call set_chat_starters');
   });
