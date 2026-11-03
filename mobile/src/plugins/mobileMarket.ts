@@ -28,7 +28,7 @@ import {
 } from '../../../desktop/shared/marketPackage'
 import { effectivePluginId } from '../../../desktop/shared/products'
 import { KNOWN_APPS } from '../../../desktop/shared/knownApps'
-import { PLUGINS_DIR, backupDirOf, mainRelOf, pluginDirNames, readManifest, recoverPluginDirs, requiredDesktopApp, stagingDirOf, tombstoneExtensions } from './pluginHost'
+import { PLUGINS_DIR, commitStagedDir, mainRelOf, pluginDirNames, readManifest, recoverPluginDirs, requiredDesktopApp, stagingDirOf, tombstoneExtensions } from './pluginHost'
 import { withPluginDirLock, type PluginFs } from './pluginFs'
 import { UnpackLimitError, countCentralHeaders, unpackCapped } from './zipUnpack'
 
@@ -404,7 +404,6 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
       //      改名失败 / 进程被杀 → recoverPluginDirs 把旧版挪回去(这里当场做一次,下次清点 / 安装时还会再做)。
       const dir = `${PLUGINS_DIR}/${slug}`
       const staging = stagingDirOf(slug)
-      const backup = backupDirOf(slug)
       await withPluginDirLock(deps.fs, async () => {
         await recoverPluginDirs(deps.fs)
         await deps.fs.removeDir(staging)
@@ -415,15 +414,7 @@ export function createMobileMarket(deps: MobileMarketDeps): MobileMarket {
           await deps.fs.removeDir(staging).catch(() => {})
           throw e
         }
-        try {
-          if (await deps.fs.stat(dir)) await deps.fs.rename(dir, backup)
-          await deps.fs.rename(staging, dir)
-        } catch (e) {
-          await recoverPluginDirs(deps.fs).catch(() => {})
-          throw e
-        }
-        // 新版已就位。备份删不掉不算安装失败:recoverPluginDirs 看到「备份在、正式在、暂存不在」会补删。
-        await deps.fs.removeDir(backup).catch(() => {})
+        await commitStagedDir(deps.fs, slug)
       })
       return { ok: true, path: dir, files: files.length, type: effType, slug, id: pluginId }
     },

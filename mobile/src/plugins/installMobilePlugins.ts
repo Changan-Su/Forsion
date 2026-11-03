@@ -13,10 +13,13 @@ import { registerMessages, translate } from '@/i18n'
 import { APP_VERSION } from '@/changelog'
 import { capacitorPluginFs, hasNativeMarketDownload, isDebuggableAndroid, nativeMarketDownload } from './capacitorPluginFs'
 import { createPluginHost, type MobilePluginHost } from './pluginHost'
+import type { PluginFs } from './pluginFs'
 import { createFetchDownload, createMobileMarket, type MobileMarket } from './mobileMarket'
-import { withBundledCalendar } from './bundledCalendar'
+import { calendarCoreBundle, withBundledCalendar } from './bundledCalendar'
 import { withBundledExtend } from './bundledExtend'
 import { isCorePlugin } from '../../../desktop/shared/corePlugins'
+import { registryOrder } from '../../../desktop/shared/npmRegistry'
+import { confirmCoreBoot, createCoreUpdater, prepareCoreUpdates, type CoreBundle } from './coreUpdates'
 
 registerMessages({
   'mobilemarket.noCloud': { zh: '还没有连接 Forsion 云端，无法使用应用市场', en: 'Not connected to Forsion cloud, so the market is unavailable' },
@@ -63,28 +66,49 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
   // 门禁用的宿主版本 = 渲染层随包的 CHANGELOG 版本(移动端与桌面同一份渲染层源码,插件 API 能力按它算);
   // 顶节是 Unreleased 时 APP_VERSION 为空 → 传 null,不按 0.0.0 误杀声明了 minAppVersion 的插件。
   const version = () => APP_VERSION || null
-  const host = withBundledExtend(withBundledCalendar(createPluginHost(fs, { appVersion: version }), version), version)
+  // 核心插件的 npm 更新(coreUpdates.ts):上次下好的新版在插件第一次清点之前换上,所以宿主的每个方法先等这一步。
+  const coreBundles: CoreBundle[] = [calendarCoreBundle]
+  const coreReady = prepareCoreUpdates(fs, coreBundles, version()).catch(() => new Map<string, string>())
+  void coreReady.then((using) => confirmWhenStarted(fs, using))
+  const host = afterCoreReady(withBundledExtend(withBundledCalendar(createPluginHost(fs, { appVersion: version }), version, coreReady), version), coreReady)
+  const mirror = async (): Promise<string> => {
+    const cfg = (await window.tangu?.getConfig?.().catch(() => null)) as { mirror?: unknown } | null
+    return typeof cfg?.mirror === 'string' ? cfg.mirror : 'default'
+  }
+  const download = hasNativeMarketDownload() ? nativeMarketDownload() : createFetchDownload()
   const market = createMobileMarket({
     fs,
     appVersion: () => APP_VERSION,
     cloudApiBase: opts.cloudApiBase,
     fetch: (input, init) => window.fetch(input, init),
     // 真机:原生下载(不吃 CORS、流式落盘、字节上限在传输中强制);浏览器台架 / dev 预览:fetch(下载主机得给 CORS,同样读到上限即停)。
-    download: hasNativeMarketDownload() ? nativeMarketDownload() : createFetchDownload(),
+    download,
     // 下载地址只认 https;debug 包额外放行回环明文(台架用 adb reverse 从宿主机发包,原生层按同一条件放行)。
     allowLoopbackHttp: isDebuggableAndroid(),
-    mirror: async () => {
-      const cfg = (await window.tangu?.getConfig?.().catch(() => null)) as { mirror?: unknown } | null
-      return typeof cfg?.mirror === 'string' ? cfg.mirror : 'default'
-    },
+    mirror,
     reservedIds: async () => {
       const { usePluginStore } = await import('@/amadeus/plugins/pluginStore')
       return usePluginStore.getState().plugins.filter((p) => p.builtin || isCorePlugin(p)).map((p) => p.id)
     },
     t: (key, vars) => translate(key, vars),
   })
+  // 只在正式包里自动更新(同桌面 enabled: app.isPackaged);debug 包可在 localStorage 指一个回环 registry 给台架用。
+  const devRegistry = isDebuggableAndroid() ? loopbackRegistry() : null
+  const core = createCoreUpdater({
+    fs, bundles: coreBundles, appVersion: version, download,
+    enabled: hasNativeMarketDownload() && (!isDebuggableAndroid() || !!devRegistry),
+    registries: async () => devRegistry ? [devRegistry] : registryOrder(await mirror()),
+    fetch: (url, init) => window.fetch(url, init),
+  })
+  core.schedule()
   const t = window.tangu as unknown as Record<string, unknown> | undefined
   if (t) {
+    // 设置页「核心插件更新」卡(CorePluginUpdates.tsx)按这两个在不在出现;手机上「重启」= 重新载入 WebView,换版在下次启动做。
+    t.getCorePluginUpdates = async () => core.snapshot()
+    t.onCorePluginUpdates = core.subscribe
+    t.relaunchApp = async () => { window.location.reload() }
+    const checkApp = t.checkForUpdates as (() => Promise<unknown>) | undefined
+    if (checkApp) t.checkForUpdates = () => { void core.check(); return checkApp() }
     // Only this app build has the verified bundled renderer and host account transport.
     if (typeof window.tangu?.account?.request === 'function' && typeof window.tangu?.account?.status === 'function') t.extendMobile = true
     t.marketTypes = market.marketTypes
@@ -100,4 +124,50 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
     t.spacesList = host.listSpaces
   }
   return { host, market }
+}
+
+/** 宿主的每个方法先等核心插件换版(prepareCoreUpdates)做完:换版要在第一次清点之前,而 main.tsx 一装好就开始清点。 */
+function afterCoreReady(host: MobilePluginHost, ready: Promise<unknown>): MobilePluginHost {
+  const wrapped = {} as Record<string, unknown>
+  for (const [k, fn] of Object.entries(host)) wrapped[k] = async (...args: unknown[]) => { await ready; return (fn as (...a: unknown[]) => unknown)(...args) }
+  return wrapped as unknown as MobilePluginHost
+}
+
+/** 激活之后再等这么久没报 setup 失败才算起来了:async setup 的 reject 在激活之后才到(activeIds 先加)。 */
+const SETTLE_MS = 5000
+
+/** 用下载版启动的核心插件:setup 成功(或被用户关着、这次没挑下载版)就删启动标记;setup 失败 → 留着,连续两次就退回随包版。
+ *  ponytail: 「激活后 5 秒没报错」当作 async setup 成功;更慢才 reject 的会被当成成功,要更准就让 pluginStore 记 setup 落定。 */
+async function confirmWhenStarted(fs: PluginFs, using: Map<string, string>): Promise<void> {
+  if (!using.size) return
+  const { usePluginStore } = await import('@/amadeus/plugins/pluginStore')
+  const pending = new Map(using)
+  const settling = new Set<string>()
+  const confirm = (id: string, version: string): void => { pending.delete(id); void confirmCoreBoot(fs, id, version).catch(() => {}) }
+  const judge = (s: ReturnType<typeof usePluginStore.getState>): void => {
+    if (!s.initialized) return
+    for (const [id, version] of pending) {
+      if (s.lastSetupError[id]) { pending.delete(id); continue }
+      const p = s.plugins.find((x) => x.id === id)
+      if (s.disabledIds.includes(id) || (p && p.version !== version)) confirm(id, version)
+      else if (s.activeIds.includes(id) && !settling.has(id)) {
+        settling.add(id)
+        setTimeout(() => {
+          const now = usePluginStore.getState()
+          if (pending.has(id) && !now.lastSetupError[id] && now.activeIds.includes(id)) confirm(id, version)
+          if (!pending.size) off()
+        }, SETTLE_MS)
+      }
+    }
+    if (!pending.size) off()
+  }
+  const off = usePluginStore.subscribe(judge)
+  judge(usePluginStore.getState())
+}
+
+/** debug 包:localStorage `forsion.dev.coreRegistry` 指一个回环 registry(台架经 adb reverse 发假包)。别的地址一律不认。 */
+function loopbackRegistry(): string | null {
+  let v = ''
+  try { v = (localStorage.getItem('forsion.dev.coreRegistry') || '').replace(/\/+$/, '') } catch { return null }
+  return /^http:\/\/(127\.0\.0\.1|localhost):\d+$/.test(v) ? v : null
 }

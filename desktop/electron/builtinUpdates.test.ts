@@ -216,6 +216,23 @@ describe('minitar 两份一致', () => {
     const body = (file: string, header: number) => readFileSync(file, 'utf8').split('\n').slice(header).join('\n')
     expect(body(path.join(__dirname, 'minitar.ts'), 5)).toBe(body(path.join(__dirname, '../../tangu-agent/src/plugins/minitar.ts'), 1))
   })
+  it('shared/minitar.ts(手机运行时那份)= 引擎那份只把 Buffer 换成 Uint8Array,别的一个字不差', () => {
+    const from = (file: string) => { const s = readFileSync(file, 'utf8'); return s.slice(s.indexOf('const BLOCK = 512;')) }
+    const swaps: Array<[string, string]> = [
+      ['  data: Buffer;', '  data: Uint8Array;'],
+      ["function readStr(b: Buffer, off: number, len: number): string {\n  const slice = b.subarray(off, off + len);\n  const nul = slice.indexOf(0);\n  return slice.subarray(0, nul === -1 ? len : nul).toString('utf8');",
+        "const utf8 = new TextDecoder('utf-8');\n\nfunction readStr(b: Uint8Array, off: number, len: number): string {\n  const slice = b.subarray(off, off + len);\n  const nul = slice.indexOf(0);\n  return utf8.decode(slice.subarray(0, nul === -1 ? slice.length : nul));"],
+      ['function readOctal(b: Buffer,', 'function readOctal(b: Uint8Array,'],
+      ['function checksum(h: Buffer)', 'function checksum(h: Uint8Array)'],
+      ["function paxPath(data: Buffer): string | undefined {\n  const s = data.toString('utf8');", 'function paxPath(data: Uint8Array): string | undefined {\n  const s = utf8.decode(data);'],
+      ['export function untar(buf: Buffer)', 'export function untar(buf: Uint8Array)'],
+      ['data: Buffer.from(data), mode:', 'data: new Uint8Array(data), mode:'],
+      ['export function stripTopDir(entries: TarEntry[]): TarEntry[] {', 'export function stripTopDir<T extends { path: string }>(entries: T[]): T[] {'],
+    ]
+    let engine = from(path.join(__dirname, '../../tangu-agent/src/plugins/minitar.ts'))
+    for (const [a, b] of swaps) { expect(engine).toContain(a); engine = engine.replace(a, b) }
+    expect(from(path.join(__dirname, '../shared/minitar.ts'))).toBe(engine)
+  })
 })
 
 it('reports checking, download, staged, cached pending and per-package failure to the UI', async () => {
