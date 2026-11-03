@@ -40,7 +40,7 @@ export interface BuildPayloadOpts {
   toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
   attachments?: any[];
   thinkingLevel?: ThinkingLevel;
-  /** Fast 档(会话键 fast):直连 Codex 订阅且模型目录声明了这一档时,请求带 service_tier=priority。托管面忽略。 */
+  /** Fast 档(会话键 fast):直连 provider 的 fastTiers 列了这个模型时上 wire(Codex 订阅 / 官方 OpenAI / 官方 Anthropic,见 multiBrain)。托管面忽略。 */
   fast?: boolean;
   stream?: boolean;
   /** 缓存路由键(传 sessionId):OpenAI 官方 API 的 prompt_cache_key,同会话请求粘到同一推理机提升前缀缓存命中。 */

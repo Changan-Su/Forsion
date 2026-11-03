@@ -45,16 +45,19 @@ registerMessages({
   'pill.ultra': { zh: 'Ultra', en: 'Ultra' },
   'pill.ultraNote': { zh: '思考拉满，主动并行派子代理', en: 'Max thinking + parallel subagents' },
   'pill.ultraTitle': { zh: 'Ultra：思考拉满 + 主动并行派子代理（额度消耗会成倍增加）', en: 'Ultra: max thinking plus proactive parallel subagents (uses several times the quota)' },
-  // Fast 对标 Codex /fast(service_tier=priority);说明取模型目录的原文再翻译,见 fastTierText。
+  // Fast 对标 Codex /fast;说明取引擎给的原文再翻译,见 fastTierText。
   'pill.rowFast': { zh: '快速模式', en: 'Fast mode' },
   'pill.fastTag': { zh: '快速', en: 'Fast' },
   'pill.speedStandard': { zh: '标准', en: 'Standard' },
   'pill.fastDesc': { zh: '约 {speed} 倍速度', en: '{speed}x speed' },
   'pill.fastDescUsage': { zh: '约 {speed} 倍速度，额度消耗更快', en: '{speed}x speed, higher usage' },
+  'pill.fastDescPrice': { zh: '更快出字，约 {price} 倍单价', en: 'Faster output, {price}x price' },
 })
 
-/** 模型目录给的 Fast 说明(英文原文,如「2x speed, increased usage」)→ 当前语言;认不出的格式原样显示。 */
+/** Fast 说明原文 → 当前语言:Codex 目录给速度(「2x speed, increased usage」),官方 API 给单价倍数(「2x price」);认不出的格式原样显示。 */
 export function fastTierText(desc: string, t: (key: string, vars?: Record<string, string>) => string): string {
+  const price = /(\d+(?:\.\d+)?)x price/i.exec(desc)?.[1]
+  if (price) return t('pill.fastDescPrice', { price })
   const speed = /(\d+(?:\.\d+)?)x speed/i.exec(desc)?.[1]
   if (!speed) return desc
   return t(/increased usage/i.test(desc) ? 'pill.fastDescUsage' : 'pill.fastDesc', { speed })

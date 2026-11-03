@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { pcmToWav, createMultiBrain } from './multiBrain.js';
 import { createProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
+import { openaiToAnthropicBody } from '../../llm/anthropicMessages.js';
 
 vi.mock('../../llm/providerOAuth.js', () => ({ freshOAuthCred: vi.fn() }));
 // 假 WebSocket:只记有没有被建出来(真的会连百炼)。
@@ -292,10 +293,45 @@ describe('Fast 档:只在 Codex 订阅且目录列了这一档时发 service_tie
     expect((await payloadFor()).service_tier).toBe('priority');
   });
 
-  it('没开、目录里没有这个模型、或不是 Codex 订阅 → 不发', async () => {
+  it('没开、目录里没有这个模型、或 provider 没声明这个模型 → 不发', async () => {
     expect((await build(false, 'codex/gpt-6-luna')).service_tier).toBeUndefined();
     expect((await build(undefined, 'codex/gpt-6-luna')).service_tier).toBeUndefined();
     expect((await build(true, 'codex/gpt-5.5')).service_tier).toBeUndefined();
-    expect((await build(true, 'openai/gpt-6-luna')).service_tier).toBeUndefined();
+    expect((await build(true, 'openai/gpt-6-luna')).service_tier).toBeUndefined(); // 官方 host 但 modelIds 没列 → 没有 fastTiers
+  });
+});
+
+describe('Fast 档:官方 OpenAI / Anthropic API(BYOK)', () => {
+  const providers = [
+    { providerId: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk', modelIds: ['gpt-6-luna', 'gpt-5.5', 'gpt-5-nano', 'gpt-6-sol-2026-09-01'] },
+    { providerId: 'gw', baseUrl: 'https://api.openai.com.evil.tld/v1', apiKey: 'sk', modelIds: ['gpt-6-luna'] },
+    { providerId: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', apiKey: 'sk', protocol: 'anthropic-messages', modelIds: ['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5'] },
+  ];
+  const registry = createProviderRegistry(providers as any);
+  const build = (modelId: string, fast = true) => {
+    const brain = createMultiBrain({ llm: {}, assets: {} } as any, registry);
+    const r = registry.resolve(modelId)!;
+    return brain.llm.buildProviderPayload({ model: r.model, apiModelId: r.apiModelId, messages: [{ role: 'user', content: 'hi' }], thinkingLevel: 'low', fast });
+  };
+
+  it('模型表按官方价目给单价倍数;仿冒 host、价表外的模型、研究预览的 Opus 都没有', () => {
+    const tiers = Object.fromEntries(registry.list().map((p) => [p.providerId, p.fastTiers]));
+    expect(tiers.openai).toEqual({ 'gpt-6-luna': '2x price', 'gpt-5.5': '2.5x price', 'gpt-6-sol-2026-09-01': '2x price' });
+    expect(tiers.gw).toBeUndefined();
+    expect(tiers.anthropic).toEqual({ 'claude-opus-5-5': '2x price' });
+  });
+
+  it('OpenAI 发 service_tier "fast";Anthropic 发 speed "fast";不支持的模型 / 没开都不发', async () => {
+    expect((await build('openai/gpt-6-luna')).service_tier).toBe('fast');
+    expect((await build('openai/gpt-5-nano')).service_tier).toBeUndefined();
+    expect((await build('gw/gpt-6-luna')).service_tier).toBeUndefined();
+    expect((await build('openai/gpt-6-luna', false)).service_tier).toBeUndefined();
+    const opus = await build('anthropic/claude-opus-5-5');
+    expect(opus.speed).toBe('fast');
+    expect(opus.service_tier).toBeUndefined();
+    expect(openaiToAnthropicBody(opus).speed).toBe('fast');
+    expect((await build('anthropic/claude-opus-5')).speed).toBeUndefined();
+    expect((await build('anthropic/claude-sonnet-5-5')).speed).toBeUndefined();
+    expect(openaiToAnthropicBody(await build('anthropic/claude-opus-5-5', false)).speed).toBeUndefined();
   });
 });

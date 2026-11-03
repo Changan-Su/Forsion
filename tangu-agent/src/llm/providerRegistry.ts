@@ -27,7 +27,8 @@ export interface DirectProvider {
   noVisionModelIds?: string[];
   protocol?: DirectProviderProtocol; // 缺省 'openai';订阅登录据此切到原生端点
   accountId?: string; // Codex 订阅:chatgpt-account-id 头取值
-  /** Codex 订阅:模型 → Fast 档说明(来自 /models 目录,见 fetchProviderCatalog)。不在表里的模型开了 Fast 也不发 service_tier。 */
+  /** 模型 → Fast 档说明。Codex 订阅来自 /models 目录(见 fetchProviderCatalog);官方 OpenAI / Anthropic 由 OFFICIAL_FAST 按模型名派生。
+   *  不在表里的模型开了 Fast 也不发。 */
   fastTiers?: Record<string, string>;
   /** 由订阅登录(provider-auth.json)派生:apiKey 是会过期的 access_token,调用前要续期(multiBrain)。显式配置的同名 provider 不带它。 */
   oauth?: boolean;
@@ -42,11 +43,44 @@ export interface ProviderRegistry {
   setCreds(providerId: string, apiKey: string, accountId?: string, fastTiers?: Record<string, string>): void;
 }
 
+/**
+ * 官方 API(BYOK)的 Fast 档:模型 → 「{倍数}x price」(界面 fastTierText 解析)。11-03 按两家文档 + 真 key 探针核实:
+ * - api.openai.com:请求带 service_tier "fast"(旧值 priority 同效),chat / responses 都认;价表没列的模型 200 照常、回 default(静默不生效)。
+ * - api.anthropic.com:请求带 speed "fast";不支持的模型 400。Opus 5 / 4.8 是研究预览(未开通的组织 fast 限额为 0 → 429),只放 Opus 5.5。
+ * 倍数 = Fast 单价 ÷ 标准单价(两家价目页)。
+ */
+const OFFICIAL_FAST: Record<string, Array<[RegExp, string]>> = {
+  'api.openai.com': [
+    [/^gpt-5\.5$/, '2.5'],
+    [/^gpt-5-mini$/, '1.8'],
+    [/^(gpt-4\.1(-mini)?|o3)$/, '1.75'],
+    [/^gpt-4o$/, '1.7'],
+    [/^gpt-4o-mini$/, '1.67'],
+    [/^(gpt-6(\.1)?-(astra|sol|luna|terra)|gpt-5\.6-(sol|terra|luna)|gpt-5\.4(-mini)?|gpt-5\.[12]|gpt-5|gpt-5\.3-codex)$/, '2'],
+  ],
+  'api.anthropic.com': [[/^claude-opus-5-5$/, '2']],
+};
+
+function officialFastTiers(p: DirectProvider): Record<string, string> | undefined {
+  let host = '';
+  try { host = new URL(p.baseUrl).hostname.toLowerCase(); } catch { return undefined; } // 全等比对:api.openai.com.evil.tld 不算官方
+  const rules = OFFICIAL_FAST[host];
+  if (!rules || p.oauth || (host === 'api.anthropic.com' && p.protocol !== 'anthropic-messages')) return undefined;
+  const out: Record<string, string> = {};
+  for (const mid of p.modelIds ?? []) {
+    const bare = mid.replace(/-\d{4}-?\d{2}-?\d{2}$/, ''); // 带日期的快照同族同价
+    const hit = rules.find(([re]) => re.test(bare));
+    if (hit) out[mid] = `${hit[1]}x price`;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 export function createProviderRegistry(providers: DirectProvider[]): ProviderRegistry {
   const byId = new Map<string, DirectProvider>();
   for (const p of providers) {
     if (!p?.providerId || !p?.baseUrl) continue;
-    byId.set(p.providerId, { ...p, baseUrl: p.baseUrl.replace(/\/+$/, '') });
+    const fastTiers = p.fastTiers ?? officialFastTiers(p);
+    byId.set(p.providerId, { ...p, baseUrl: p.baseUrl.replace(/\/+$/, ''), ...(fastTiers ? { fastTiers } : {}) });
   }
 
   function resolve(modelId: string): ResolvedModel | null {

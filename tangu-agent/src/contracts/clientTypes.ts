@@ -330,7 +330,8 @@ export interface AgentConfig {
   /** Ultra 档(对标 Codex Ultra):思考恒 max + 主动把可并行的活拆给 delegate 子代理。会话键,与 thinkingLevel 分开存 ——
    *  塞进 thinkingLevel 的话,读回时会被引擎的 normalizeThinkingLevel 归成 max,开关静默消失。只有本机非 chat 会话给入口。 */
   ultra?: boolean
-  /** Fast 档(对标 Codex /fast):请求带 service_tier=priority,换更快的出字速度、多数模型额度消耗更快。会话键,与思考档无关。
+  /** Fast 档(对标 Codex /fast):Codex 订阅带 service_tier=priority(多数模型额度消耗更快);官方 OpenAI / Anthropic API 带
+   *  service_tier=fast / speed=fast(约 2 倍单价)。换更快的出字速度。会话键,与思考档无关。
    *  引擎只在模型目录声明了这一档(ModelInfo.fastTier)时上 wire,其余模型开着也不发;只作用于主循环,后台调用不跟。 */
   fast?: boolean
   enabledSkillIds?: string[]
@@ -481,7 +482,8 @@ export interface ModelInfo {
   supportsVision?: boolean
   /** 该模型真正支持的思考档(引擎能力表下发;仅 llm)。思考菜单据此把不支持的档标灰。缺省=不知道,全可选。 */
   thinkingLevels?: string[]
-  /** 模型目录给的 Fast 档说明原文(Codex `/models` 的 service_tiers,如「1.5x speed」「2x speed, increased usage」)。
+  /** Fast 档说明原文:Codex `/models` 的 service_tiers(如「1.5x speed」「2x speed, increased usage」),
+   *  或官方 API 的单价倍数(「2x price」,见 providerRegistry OFFICIAL_FAST)。
    *  缺席 = 这个模型没有 Fast 档,界面不露开关。 */
   fastTier?: string
 }
