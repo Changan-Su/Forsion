@@ -82,11 +82,13 @@ function readScroll(root: HTMLElement | null): KeptScroll | null {
   }
   return null
 }
+/** 已经在原位 → true;不在就写一次、返回 false(下一帧再看它站没站住)。 */
 function writeScroll(root: HTMLElement | null, kept: KeptScroll): boolean {
   const el = root?.getElementsByClassName(kept.cls)[0] as HTMLElement | undefined
   if (!el) return false
+  if (Math.abs(el.scrollTop - kept.top) < 2 && Math.abs(el.scrollLeft - kept.left) < 2) return true
   el.scrollTop = kept.top; el.scrollLeft = kept.left
-  return Math.abs(el.scrollTop - kept.top) < 2
+  return false
 }
 
 /** 本机 .md 编辑器:frontmatter 原样保留(剥离喂 Milkdown、保存拼回);800ms debounce 原子写回;
@@ -287,10 +289,15 @@ export function WsFileView({ leaf }: ViewProps) {
     const kept = keptScroll.current
     if (!kept || !data) return
     keptScroll.current = null
-    // 编辑器重挂是异步的,内容撑开前写不进去:逐帧再试,最多约 20 帧(文件变短就停在能到的最底处)
+    // 编辑器重挂是异步的,内容撑开前写不进去;CodeMirror 换整篇内容后下一帧 measure 还会把滚动锚点拉回顶部。
+    // 所以逐帧写到连续 3 帧都站在原位才停,最多约 30 帧(文件变短就停在能到的最底处)
     let frames = 0
+    let held = 0
     let raf = 0
-    const apply = (): void => { if (!writeScroll(hostRef.current, kept) && ++frames < 20) raf = requestAnimationFrame(apply) }
+    const apply = (): void => {
+      held = writeScroll(hostRef.current, kept) ? held + 1 : 0
+      if (held < 3 && ++frames < 30) raf = requestAnimationFrame(apply)
+    }
     apply()
     return () => cancelAnimationFrame(raf)
   }, [data])
