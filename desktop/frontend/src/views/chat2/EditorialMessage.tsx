@@ -24,7 +24,7 @@ import { splitLeadingQuotes } from './quotes'
 import { QuotePreview, QuoteTile, findQuoteSource } from './QuoteTile'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
-import { IntelligentUi } from '../../components/IntelligentUi'
+import { ChatIntelligentUi } from '../../components/WidgetHost'
 import { SketchCards } from '../../components/SketchCard'
 import { PluginToolCard, useToolCardOf, type ToolCardClaim } from '../../components/PluginToolCard'
 import { HostWebCard, LocalWebCard, isHtmlFile, planWebCards, useSessionCwd, webCardsHere, type WebCardSpec } from './WebCards'
@@ -791,7 +791,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                     : part.t === 'pluginCard'
                       ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
                     : part.t === 'intelligent'
-                      ? <IntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />
+                      ? <ChatIntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} />
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
                 </Fragment>
               ) : null
@@ -895,7 +895,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {(msg.toolEvents || []).filter(ev => isSandboxCardTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSandboxCard key={`sandbox-${ev.id}`} event={ev} />)}
         {(() => { const gitEvs = (msg.toolEvents || []).filter(ev => isGitTool(ev) && ev.done && !inlineToolIds.has(ev.id)); return gitEvs.length ? <GitToolCard key={`git-${gitEvs[0].id}`} events={gitEvs} sessionId={runSid} /> : null })()}
-        {trailingIntelligent.map(ev => <IntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
+        {trailingIntelligent.map(ev => <ChatIntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} />)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}
         {/* 审批卡在托盘里批(ApprovalTray);托盘在输入框上方的视图(预览 / 画布)流里留一行指路,对话末尾有卡片堆的不留(卡就在下面)。已兑现的不留痕 —— 结局看工具卡。

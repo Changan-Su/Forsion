@@ -6,7 +6,7 @@ import remarkCjkFriendly from 'remark-cjk-friendly/parseOnly'
 import remarkCjkFriendlyStrikethrough from 'remark-cjk-friendly-gfm-strikethrough/parseOnly'
 import { Check, ChevronDown, Copy, ExternalLink, Maximize2, Minimize2, Minus, Plus, RotateCcw, Zap } from 'lucide-react'
 import { parseUIDraft, safeUIUrl, snapUIValue, UI_VERSION, validateUIDocument, type UIBlock, type UIDocument, type UIInput, type UIResource, type UISetStep } from '../../../../tangu-agent/src/contracts/intelligentUi'
-import { applyUISteps, documentEnv, sameValue, truthy, UI_SLOT, uiTableRows, uiText, type DocumentEnv, type UIValue } from '../../../../tangu-agent/src/contracts/intelligentUiExpr'
+import { applyUISteps, documentEnv, sameValue, truthy, UI_SLOT, uiTableRows, uiText, type DocumentEnv, type UIRecordRow, type UIValue } from '../../../../tangu-agent/src/contracts/intelligentUiExpr'
 import type { ToolEvent } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { streamingArgString } from '../views/streamingWrite'
 import { registerMessages, useI18n } from '../i18n'
@@ -48,7 +48,9 @@ export function intelligentDocumentOf(ev: ToolEvent, live: boolean): { doc?: UID
   return { doc: text ? parseUIDraft(text) : undefined, complete: false }
 }
 
-export function IntelligentUi({ event, live, stateScope, onAsk }: { event: ToolEvent; live: boolean; stateScope?: string; onAsk?: (text: string) => void }): React.JSX.Element {
+/** head = 标题下一行(小组件卡头的版本、归属、去处);records = 小组件 data.db 的行(原生文档的只读 `records`);
+ *  stateKey = 界面状态的存放键:小组件按 id 存一份,对话 / 卡片区 / 仪表盘 / 主页共用。 */
+export function IntelligentUi({ event, live, stateScope, onAsk, head, records, stateKey }: { event: ToolEvent; live: boolean; stateScope?: string; onAsk?: (text: string) => void; head?: React.ReactNode; records?: readonly UIRecordRow[]; stateKey?: string }): React.JSX.Element {
   const { t } = useI18n()
   const current = useMemo(() => intelligentDocumentOf(event, live), [event.arguments, event.done, event.isError, event.result, live])
   const last = useRef<UIDocument | undefined>(undefined)
@@ -66,7 +68,8 @@ export function IntelligentUi({ event, live, stateScope, onAsk }: { event: ToolE
   }, [doc, event.done, event.arguments])
   if (newer) return <section className="intelligent-ui">{newer.title && <h3 className="iui-title">{newer.title}</h3>}{newer.lead && <div className="iui-prose"><RichText text={newer.lead} /></div>}<div className="iui-status" role="status">{t('iui.newer')}</div></section>
   if (!doc) return live && !event.done ? <div className="intelligent-ui"><Skeleton /></div> : <div className="iui-status" role="status">{t('iui.invalid')}</div>
-  return <NativeDocument key={uiStateKey(stateScope || '', event.id, doc.id)} doc={doc} complete={current.complete} live={live && !event.done} stateKey={stateScope ? uiStateKey(stateScope, event.id, doc.id) : undefined} onAsk={onAsk} />
+  const key = stateKey ?? (stateScope ? uiStateKey(stateScope, event.id, doc.id) : undefined)
+  return <NativeDocument key={key ?? uiStateKey('', event.id, doc.id)} doc={doc} complete={current.complete} live={live && !event.done} stateKey={key} onAsk={onAsk} head={head} records={records} />
 }
 
 type MdNode = { type: string; value?: string; children?: MdNode[] }
@@ -187,7 +190,7 @@ function Table({ block, env }: { block: Extract<UIBlock, { kind: 'table' }>; env
   </table></div>
 }
 
-function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocument; complete: boolean; live: boolean; stateKey?: string; onAsk?: (text: string) => void }): React.JSX.Element {
+export function NativeDocument({ doc, complete, live, stateKey, onAsk, head, records }: { doc: UIDocument; complete: boolean; live: boolean; stateKey?: string; onAsk?: (text: string) => void; head?: React.ReactNode; records?: readonly UIRecordRow[] }): React.JSX.Element {
   const { t, locale } = useI18n()
   // Hydrate before the first paint. Model defaults are never written over the user's state.
   const [state, setState] = useState<UIUserState>(() => stateKey ? readUIState(stateKey) : emptyUIState())
@@ -198,7 +201,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
   const values = inputValues(doc, state)
   const vars = stateVars(doc, state)
   // v2: every derived value and expression of this render, computed lazily against one step budget.
-  const env = documentEnv(doc, values, vars, locale === 'en' ? 'en' : 'zh')
+  const env = documentEnv(doc, values, vars, locale === 'en' ? 'en' : 'zh', records)
   const shows = (when: UIBlock['when']): boolean => visible(when, values, env)
   const resources = new Map(doc.resources.map(r => [r.id, r]))
   // Sources a visible sources block already lists; a hidden block must not strip a picture of its attribution.
@@ -234,12 +237,12 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
   const moves = (nextValues: Record<string, string | number>, nextVars: Map<string, UIValue>): boolean => {
     if (live) return false
     if (doc.version === 2) return true
-    const next = documentEnv(doc, nextValues, nextVars, env.locale)
+    const next = documentEnv(doc, nextValues, nextVars, env.locale, records)
     return doc.blocks.some(b => visible(b.when, values, env) !== visible(b.when, nextValues, next) || (b.kind === 'checklist' && b.items.some(i => visible(i.when, values, env) !== visible(i.when, nextValues, next))))
   }
   const runSteps = (steps: UISetStep[]): void => {
     let next: Map<string, UIValue>
-    try { next = applyUISteps(doc, steps, values, vars, env.locale) } catch { setNotice(t('iui.setFailed')); return }
+    try { next = applyUISteps(doc, steps, values, vars, env.locale, records) } catch { setNotice(t('iui.setFailed')); return }
     const apply = (): void => update(s => ({ ...s, vars: Object.fromEntries(next) }))
     if (moves(values, next)) reflow(root.current, apply); else apply()
   }
@@ -327,6 +330,7 @@ function NativeDocument({ doc, complete, live, stateKey, onAsk }: { doc: UIDocum
   }
   return <section ref={root} className="intelligent-ui" aria-label={doc.title} data-document-id={doc.id} data-complete={complete} data-streamed={streamed || undefined}>
     <h3 className="iui-title">{doc.title}</h3>
+    {head}
     {doc.blocks.filter(b => shows(b.when) && !(b.kind === 'gallery' && b.resourceIds.length && b.resourceIds.every(id => optionImages.has(id)))).map(block => <div key={block.id} className={`iui-block iui-block-${block.kind}`} data-block-id={block.id} data-flip={`b:${block.id}`}>
       {block.title && !OWN_TITLE.has(block.kind) && <h4>{block.title}</h4>}{draw(block)}
     </div>)}
