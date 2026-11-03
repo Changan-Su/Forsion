@@ -168,8 +168,8 @@ async function main() {
     await capture('hooks-dark-en')
     f = await open('skills/k-library')
     await f.locator('[data-gsk-empty]').waitFor({ timeout: 10_000 }).catch(() => {})
-    check('5.3 技能库 · 英文:No skills yet / Import from other agents', (await f.locator('[data-gsk-empty] .empty-state-title').textContent().catch(() => '')) === 'No skills yet'
-      && await f.locator('[data-gsk-empty] button', { hasText: 'Import from other agents' }).count() === 1)
+    check('5.3 技能库 · 英文:No skills yet / Import from other AIs', (await f.locator('[data-gsk-empty] .empty-state-title').textContent().catch(() => '')) === 'No skills yet'
+      && await f.locator('[data-gsk-empty] button', { hasText: 'Import from other AIs' }).count() === 1)
     await capture('skills-en')
     f = await open('about')
     note('About(英文)截图', 'beta 开关行只在宿主有 setUpdateBeta 时出现')
