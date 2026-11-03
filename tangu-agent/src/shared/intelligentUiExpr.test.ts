@@ -312,5 +312,8 @@ describe('records in a widget document', () => {
       .toEqual([{ id: 'r_1', amount: 3, tags: ['a'], none: null }])
     const env = documentEnv(validateUIDocument(ledger), {}, new Map(), 'en', rows)
     expect(env.name('records')).toBe(env.name('records')) // 一次渲染同一份
+    // 直接读字段不过 sized():和 state 一样截断,1 MB 的备注显示 160 遍也撑不爆渲染层(Codex 11-03)
+    const [big] = uiRecords([{ id: 'r', cells: { note: 'x'.repeat(1_000_000), tags: Array(500).fill('t'.repeat(2000)), ...Object.fromEntries(Array.from({ length: 40 }, (_, i) => [`f${i}`, i])) } }]) as Record<string, any>[]
+    expect([big.note.length, big.tags.length, big.tags[0].length, Object.keys(big).length]).toEqual([1000, 200, 1000, 33])
   })
 })

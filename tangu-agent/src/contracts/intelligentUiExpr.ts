@@ -229,15 +229,29 @@ export const UI_RECORDS = 'records'
 export const reservedUIName = (id: string): boolean => KEYWORDS.has(id) || FORBIDDEN.has(id) || id === UI_RECORDS
 /** One data.db row; cells are whatever the file holds, so they are checked again here. */
 export type UIRecordRow = { id: string; cells: Record<string, unknown> }
-const cellValue = (x: unknown): boolean => x === null || typeof x === 'string' || typeof x === 'boolean'
-  || (typeof x === 'number' && Number.isFinite(x)) || (Array.isArray(x) && x.every(v => typeof v === 'string'))
+/** Same bounds as a stored state value (uiValueIssue): a field read directly skips sized(), so a 1 MB note
+ * shown in many places would otherwise cost no steps (Codex 11-03). Display only; data.db is not touched. */
+const RECORD_TEXT = 1000, RECORD_FIELDS = 32
+const clip = (x: string): string => x.length > RECORD_TEXT ? `${x.slice(0, RECORD_TEXT - 1)}…` : x
+function cellValue(x: unknown): UIValue | undefined {
+  if (x === null || typeof x === 'boolean' || (typeof x === 'number' && Number.isFinite(x))) return x
+  if (typeof x === 'string') return clip(x)
+  if (Array.isArray(x) && x.every(v => typeof v === 'string')) return x.slice(0, EXPR_LIMITS.list).map(clip)
+  return undefined
+}
 /** Rows as the documents read them: {id, field: value}. The row id wins over a field named id. Values that
- * are not text, numbers, true/false, null or lists of text are left out.
- * ponytail: no cap here; past 200 rows each() hits the list limit and the totals show "—". */
+ * are not text, numbers, true/false, null or lists of text are left out; long text is cut to 1000 characters,
+ * lists to 200 items, a record to its first 32 fields.
+ * ponytail: rows are not capped; past 200 rows each() hits the list limit and the totals show "—". */
 export function uiRecords(rows: readonly UIRecordRow[]): UIValue[] {
   return rows.map(r => {
     const out: { [key: string]: UIValue } = {}
-    for (const [k, v] of Object.entries(r.cells || {})) if (!FORBIDDEN.has(k) && cellValue(v)) out[k] = v as UIValue
+    let n = 0
+    for (const [k, v] of Object.entries(r.cells || {})) {
+      if (n >= RECORD_FIELDS) break
+      const value = FORBIDDEN.has(k) || k === 'id' || k.length > 80 ? undefined : cellValue(v)
+      if (value !== undefined) { out[k] = value; n++ }
+    }
     out.id = r.id
     return out
   })
