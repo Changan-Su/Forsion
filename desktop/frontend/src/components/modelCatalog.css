@@ -51,7 +51,7 @@
 .cm-ctx-custom { margin: 4px 0 0; }
 .cm-ctx-custom-k { flex: none; color: var(--text); }
 .cm-ctx-custom.active .cm-ctx-custom-k { color: var(--accent-ink); }
-.cm-ctx-custom-bad { color: var(--danger); }
+.cm-sub .cm-ctx-custom-bad { color: var(--danger); }
 @media (max-width: 480px) {
   .model-catalog-model { flex-wrap: wrap; }
   .model-catalog-model select { max-width: 100%; }
