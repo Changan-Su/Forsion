@@ -213,3 +213,48 @@ describe('切块 / 剪贴板结构化复制(normalizeFragmentMd)', () => {
     } finally { await b.destroy() }
   })
 })
+
+// 块公式的复制键(排在 `</>` 左边;只读视图也挂、靠到最右);复制纯 LaTeX,不带 `$$`。
+describe('块公式复制键', () => {
+  it('块公式挂复制键、排在 </> 之前,点了写纯 LaTeX;行内公式不挂', async () => {
+    const { mathLivePreviewPlugin } = await import('./mathLivePreview')
+    const b = await bootEditor('$$\nT = \\frac{a}{b}\n$$\n\n行内 $x$ 一个\n', { extra: [mathLivePreviewPlugin()] })
+    try {
+      const block = b.view.dom.querySelector('.math-rendered--block')!
+      const btns = [...block.querySelectorAll(':scope > .amx-src-btn')]
+      expect(btns.map((x) => x.classList.contains('amx-src-btn--copy'))).toEqual([true, false])
+      expect(b.view.dom.querySelector('.math-rendered:not(.math-rendered--block) .amx-src-btn--copy')).toBeNull()
+      let wrote = ''
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (s: string) => { wrote = s } } })
+      ;(btns[0] as HTMLButtonElement).click()
+      await new Promise((r) => setTimeout(r, 0))
+      expect(wrote).toBe('T = \\frac{a}{b}')
+      expect(btns[0].classList.contains('is-copied')).toBe(true)
+    } finally { await b.destroy() }
+  })
+  it('键盘按在复制键 / </> 上不改文档(按键不冒到编辑器的键位表)', async () => {
+    const { mathLivePreviewPlugin } = await import('./mathLivePreview')
+    const { TextSelection } = await import('@milkdown/kit/prose/state')
+    const b = await bootEditor('前面一段文字\n\n$$\nE=mc^2\n$$\n', { extra: [mathLivePreviewPlugin()] })
+    try {
+      const before = b.md()
+      b.view.dispatch(b.view.state.tr.setSelection(TextSelection.create(b.view.state.doc, 2, 5)))
+      for (const btn of b.view.dom.querySelectorAll('.math-rendered--block > .amx-src-btn')) {
+        for (const key of ['Enter', ' ', 'Backspace']) btn.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+      }
+      expect(b.md()).toBe(before)
+    } finally { await b.destroy() }
+  })
+  it('只读视图:没有 </>,复制键照样在、带 --solo', async () => {
+    const { mathLivePreviewPlugin } = await import('./mathLivePreview')
+    const b = await bootEditor('seed\n', { extra: [mathLivePreviewPlugin()] })
+    try {
+      b.view.setProps({ editable: () => false })
+      b.view.dispatch(b.view.state.tr.insertText('$$E=mc^2$$', 1))
+      const block = b.view.dom.querySelector('.math-rendered--block')!
+      const btns = [...block.querySelectorAll(':scope > .amx-src-btn')]
+      expect(btns.length).toBe(1)
+      expect(btns[0].classList.contains('amx-src-btn--solo')).toBe(true)
+    } finally { await b.destroy() }
+  })
+})
