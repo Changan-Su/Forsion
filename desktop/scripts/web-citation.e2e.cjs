@@ -184,6 +184,20 @@ async function main() {
       !!look && (look.deco.includes('underline') || look.link !== look.text),
       look ? `下划线=${look.deco} 链接色=${look.link} 正文色=${look.text}` : 'null')
 
+    // W0d 2026-11-04 用户定:网页链接走强调色(--signal),和 Amadeus 正文网页链接同一画法。
+    const sig = await win.evaluate((sel) => {
+      const a = document.querySelector(sel)
+      if (!a) return null
+      const probe = document.createElement('span')
+      probe.style.color = 'var(--signal)'
+      a.parentElement.appendChild(probe)
+      const want = getComputedStyle(probe).color
+      probe.remove()
+      return { link: getComputedStyle(a).color, want }
+    }, `.t2-content a[href^="${base}"]`)
+    check('W0d 聊天网页链接是强调色 --signal', !!sig && sig.link === sig.want, sig ? `链接色=${sig.link} 强调色=${sig.want}` : 'null')
+    if (process.env.WEBCITE_SHOT) await win.screenshot({ path: process.env.WEBCITE_SHOT + '/webcite-0-chat.png' })
+
     // W0c 全局兜底:`.t2-content` 之外的网页链接(收件箱/更新日志/市场 README/右栏记忆/设置…
     // 凡是走 <Markdown> 的地方)也必须看得出可点 —— 那条规则住 base.css,聊天那条(chat2.css)
     // 特异性更高、盖不住它。少了它,聊天之外每一处网页链接都是隐形的。
