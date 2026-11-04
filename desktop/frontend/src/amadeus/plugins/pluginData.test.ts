@@ -28,7 +28,7 @@ vi.mock('../../amadeusPlugins', () => ({ ensureAmadeusReady: () => {} }))
 const { useDbStore } = await import('../store/dbStore')
 const { usePageStore } = await import('../store/pageStore')
 const { useMdMarkStore } = await import('../store/mdMarkStore')
-const { createDatabasesApi, createNoteTasksApi } = await import('./pluginData')
+const { createDatabasesApi, createNoteTasksApi, pluginDbStep } = await import('./pluginData')
 
 const base = (): DbFile => ({
   version: 1,
@@ -185,6 +185,10 @@ describe('ctx.databases', () => {
     expect(api.mutate!('T.db', () => { throw new Error('boom') })).toBe(false)
     expect(api.mutate!('T.db', (d) => ({ ...d, source: { folder: 'Notes' } }))).toBe(false)
     expect(api.mutate!('T.db', () => null)).toBe(false)
+    expect(api.mutate!('T.db', (d) => ({ ...d, columns: d.columns.map((c, i) => i ? c : { ...c, type: 'updated' as const }) }))).toBe(false)
+    expect(api.mutate!('T.db', (d) => ({ ...d, rows: d.rows.filter((r) => r.cells.c1 !== '没有这行') }))).toBe(false) // 内容没变 = 不排队
+    expect(writeDatabaseCas).not.toHaveBeenCalled()
+    expect(pluginDbStep({ ...base(), source: { folder: 'N' } } as DbFile, (d) => ({ ...d, source: undefined }))).toBeNull() // 重放时输入已是笔记视图
     expect(api.mutate!('Nope.db', (d) => d)).toBe(false)
     expect(useDbStore.getState().entries['T.db'].data).toEqual(before)
     vi.restoreAllMocks()

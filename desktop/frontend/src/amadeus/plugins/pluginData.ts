@@ -55,6 +55,7 @@ const isDue = (s: string): boolean => {
  *  宿主定的:经典表 / 笔记视图不能互换、首列(身份列)还是原来那一列、行 id 与列 id 不重复、盖章列的值
  *  (已有行留原值,新行由宿主盖 —— 插件伪造不了编号与创建时间;修改时间由 dbStore.mutate 统一盖)。 */
 export function pluginDbStep(d: DbFile, fn: (db: DbFile) => DbFile | null): DbFile | null {
+  if (d.source) return null // 重放时表可能已被别处改成笔记视图:输入也要核
   let out: unknown
   try { out = fn(structuredClone(d)) } catch (e) { console.error('[amadeus] ctx.databases.mutate 回调抛错', e); return null }
   if (out === null) return d
@@ -63,7 +64,8 @@ export function pluginDbStep(d: DbFile, fn: (db: DbFile) => DbFile | null): DbFi
   const next = parsed.data as DbFile
   const unique = (ids: string[]): boolean => new Set(ids).size === ids.length
   if (next.source || next.version > DB_VERSION || !unique(next.rows.map((r) => r.id)) || !unique(next.columns.map((c) => c.id))) return null
-  if (d.columns.length && next.columns[0]?.id !== d.columns[0].id) return null // 首列是卡片标题、别的表关联芯片上的字
+  // 首列 = 标识列:id 和类型都不许动(改成「修改时间」会让 stampUpdatedRows 把标题盖成时间戳;界面也不让改它的类型)
+  if (d.columns.length && (next.columns[0]?.id !== d.columns[0].id || next.columns[0].type !== d.columns[0].type)) return null // 首列是卡片标题、别的表关联芯片上的字
   const stamped = next.columns.filter((c) => isStamped(c.type)).map((c) => c.id)
   const before = new Map(d.rows.map((r) => [r.id, r]))
   const rows = next.rows.map((r) => {
@@ -74,7 +76,10 @@ export function pluginDbStep(d: DbFile, fn: (db: DbFile) => DbFile | null): DbFi
   })
   // 新行逐条盖章:每次都看已经盖好的那些行,编号才不撞
   rows.forEach((r, i) => { if (!before.has(r.id)) rows[i] = { ...r, cells: { ...newRowCells({ ...next, rows }), ...r.cells } } })
-  return { ...next, version: Math.max(d.version, next.version), rows }
+  const result: DbFile = { ...next, version: Math.max(d.version, next.version), rows }
+  // 内容上没变(克隆 + 解析总是新对象)就原样返回 d:不排队,免得重放时在别人的新数据上做了调用时没做的事
+  const norm = dbFileSchema.safeParse(d)
+  return norm.success && JSON.stringify(norm.data) === JSON.stringify(result) ? d : result
 }
 
 const vaultKey = (): string => { const s = usePageStore.getState(); return `${s.vaultSide}:${s.vaultRoot}` }
@@ -152,7 +157,12 @@ export function createDatabasesApi(scope: DataScope, includeHumanCalendar = fals
       const tried = pluginDbStep(cur, fn)
       if (!tried || tried === cur) return false
       // 和表格界面同一个写口:防抖写穿,撞上别人的新版本时按顺序重放(所以 fn 必须是纯函数)
-      useDbStore.getState().mutate(db.path, (d) => pluginDbStep(d, fn) ?? d)
+      useDbStore.getState().mutate(db.path, (d) => {
+      const out = pluginDbStep(d, fn)
+      // ponytail: 重放时不合规只能整笔作废(套用旧结果会盖掉别人的改动),只留一条警告;要回报给插件再加回调
+      if (!out) console.warn('[amadeus] ctx.databases.mutate:落盘重放时结果不合规,这笔改动作废', db.path)
+      return out ?? d
+    })
       return true
     },
     readBody: (path, rowId) => {
