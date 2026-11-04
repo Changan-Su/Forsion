@@ -924,6 +924,269 @@ const test = async (name, fn) => {
     assert.equal(dec(await dl('https://h/ok', opts)), 'PK\x03\x04rest')
   })
 
+  // ── 核心插件 npm 更新(coreUpdates.ts)──────────────────────────────────────────
+  const core = await loadAll(['../src/plugins/coreUpdates.ts'])
+  const zlib = require('node:zlib')
+  const { createHash } = require('node:crypto')
+  /** npm pack 形状的 tgz:条目都在 package/ 下。files: 相对路径 → 文本。 */
+  const tgzOf = (files) => {
+    const blocks = []
+    for (const [name, text] of Object.entries(files)) {
+      const data = Buffer.from(text)
+      const h = Buffer.alloc(512)
+      h.write(`package/${name}`, 0, 100, 'utf8')
+      h.write('0000644\0', 100); h.write('0000000\0', 108); h.write('0000000\0', 116)
+      h.write(data.length.toString(8).padStart(11, '0') + '\0', 124); h.write('00000000000\0', 136)
+      h.write('        ', 148); h.write('0', 156); h.write('ustar\0', 257); h.write('00', 263)
+      let sum = 0; for (const b of h) sum += b
+      h.write(sum.toString(8).padStart(6, '0') + '\0 ', 148)
+      blocks.push(h, data, Buffer.alloc((512 - (data.length % 512)) % 512))
+    }
+    blocks.push(Buffer.alloc(1024))
+    return new Uint8Array(zlib.gzipSync(Buffer.concat(blocks)))
+  }
+  const sri = (b) => `sha512-${createHash('sha512').update(b).digest('base64')}`
+  const calFiles = (version, extra = {}) => ({ 'manifest.json': JSON.stringify({ id: 'forsion-calendar', version, apiVersion: 1, main: 'main.js' }), 'main.js': `/* ${version} */`, 'spaces/todo/space.json': '{}', ...extra })
+  const CAL = { pkg: '@forsion/calendar', manifest: { id: 'forsion-calendar', version: '0.1.3' } }
+  const REG = 'https://registry.npmjs.org'
+  /** 假 registry:latest = version,tarball = tgz;integrity 缺省就是 tgz 的真摘要。 */
+  const npm = (version, tgz, integrity = sri(tgz)) => {
+    const calls = { packument: 0, download: 0 }
+    return {
+      calls,
+      fetch: async (url) => { calls.packument++; assert.equal(url, `${REG}/@forsion%2fcalendar`); return new Response(JSON.stringify({ 'dist-tags': { latest: version }, versions: { [version]: { dist: { integrity } } } })) },
+      download: async (url) => { calls.download++; assert.equal(url, `${REG}/@forsion/calendar/-/calendar-${version}.tgz`); return tgz },
+    }
+  }
+  const checkWith = (fs, reg, o = {}) => {
+    const states = []
+    return core.checkCoreUpdates({ fs, bundles: [o.bundle || CAL], appVersion: () => o.app || '2.13.9', registries: async () => [REG], fetch: reg.fetch, download: reg.download, log: () => {}, onStatus: (st) => states.push(st) })
+      .then((staged) => ({ staged, last: states.at(-1), states }))
+  }
+  const names = (fs) => [...fs.files.keys()].sort()
+  /** prepareCoreUpdates 的结果 → [[id, 版本]]。 */
+  const ver = (m) => [...m].map(([id, c]) => [id, c.version])
+
+  await test('核心插件更新:npm 有新版 → 核 integrity、解包、写进 .pending-<id>(最后写 .complete);正在用的那份不动', async () => {
+    const fs = memFs()
+    const r = await checkWith(fs, npm('0.1.5', tgzOf(calFiles('0.1.5'))))
+    assert.deepEqual(r.staged, ['forsion-calendar@0.1.5'])
+    assert.deepEqual(r.last, { id: 'forsion-calendar', packageName: '@forsion/calendar', phase: 'staged', installedVersion: '0.1.3', latestVersion: '0.1.5', pendingVersion: '0.1.5' })
+    assert.ok(r.states.some((st) => st.phase === 'downloading'))
+    assert.deepEqual(names(fs), ['plugins/.pending-forsion-calendar/.complete', 'plugins/.pending-forsion-calendar/main.js', 'plugins/.pending-forsion-calendar/manifest.json', 'plugins/.pending-forsion-calendar/spaces/todo/space.json'])
+    assert.equal(dec(fs.files.get('plugins/.pending-forsion-calendar/.complete')), '0.1.5')
+    // 再查一遍:已暂存 → 不重下
+    const reg = npm('0.1.5', tgzOf(calFiles('0.1.5')))
+    assert.equal((await checkWith(fs, reg)).last.phase, 'staged'); assert.equal(reg.calls.download, 0)
+  })
+
+  await test('核心插件更新:任何一道闸不过 → 暂存区一个字节都不写', async () => {
+    const cases = [
+      ['integrity 不符', npm('0.1.5', tgzOf(calFiles('0.1.5')), sri(new Uint8Array([1]))), /integrity mismatch/],
+      ['manifest id 不对', npm('0.1.5', tgzOf({ ...calFiles('0.1.5'), 'manifest.json': JSON.stringify({ id: 'evil', version: '0.1.5' }) })), /is not forsion-calendar@0.1.5/],
+      ['manifest 版本不对', npm('0.1.5', tgzOf(calFiles('0.1.4'))), /is not forsion-calendar@0.1.5/],
+      ['入口文件不在包里', npm('0.1.5', tgzOf({ 'manifest.json': JSON.stringify({ id: 'forsion-calendar', version: '0.1.5' }) })), /entry main.js missing/],
+      ['路径越界', npm('0.1.5', tgzOf({ ...calFiles('0.1.5'), '../escape.js': 'x' })), /unsafe path/],
+      ['不是 gzip', { ...npm('0.1.5', new Uint8Array(0)), download: async () => enc('<html>rate limited</html>') }, /not a gzip|integrity/],
+    ]
+    for (const [label, reg, err] of cases) {
+      const fs = memFs()
+      const r = await checkWith(fs, reg)
+      assert.equal(r.last.phase, 'error', label); assert.match(r.last.error, err, label)
+      assert.deepEqual(names(fs), [], label)
+    }
+  })
+
+  await test('核心插件更新:预发布 / 比随包旧 / 宿主太旧 → 不下载(只升不降、等 App 升级)', async () => {
+    for (const [label, reg, app, phase] of [
+      ['预发布', npm('0.1.6-rc.1', tgzOf(calFiles('0.1.6-rc.1'))), '2.13.9', 'incompatible'],
+      ['npm latest 被挪回旧版', npm('0.1.2', tgzOf(calFiles('0.1.2'))), '2.13.9', 'current'],
+      ['同版本', npm('0.1.3', tgzOf(calFiles('0.1.3'))), '2.13.9', 'current'],
+    ]) {
+      const fs = memFs()
+      const r = await checkWith(fs, reg, { app })
+      assert.equal(r.last.phase, phase, label); assert.equal(reg.calls.download, 0, label); assert.deepEqual(names(fs), [], label)
+    }
+    const fs = memFs()
+    const gated = npm('0.1.5', tgzOf({ ...calFiles('0.1.5'), 'manifest.json': JSON.stringify({ id: 'forsion-calendar', version: '0.1.5', apiVersion: 1, minAppVersion: '2.13.8-beta.3' }) }))
+    const r = await checkWith(fs, gated, { app: '2.13.8-beta.2' })
+    assert.equal(r.last.phase, 'incompatible'); assert.deepEqual(names(fs), [])
+  })
+
+  await test('核心插件更新:写暂存写到一半被杀 → 没有 .pending;下次启动照常用随包版、残留清掉', async () => {
+    const fs = memFs()
+    fs.failWriteAt = 2
+    const r = await checkWith(fs, npm('0.1.5', tgzOf(calFiles('0.1.5'))))
+    assert.equal(r.last.phase, 'error')
+    assert.ok(!names(fs).some((n) => n.includes('.pending-')))
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})), [])
+    assert.deepEqual(names(fs), [])
+  })
+
+  await test('核心插件更新:下次启动换上暂存版(plugins/<id>),写启动标记;setup 成功后确认 → 标记删掉', async () => {
+    const fs = memFs()
+    await checkWith(fs, npm('0.1.5', tgzOf(calFiles('0.1.5'))))
+    const using = await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})
+    assert.deepEqual(ver(using), [['forsion-calendar', '0.1.5']])
+    assert.equal(dec(fs.files.get('plugins/forsion-calendar/main.js')), '/* 0.1.5 */')
+    assert.ok(!names(fs).some((n) => n.includes('.pending-') || n.includes('.staging-') || n.includes('.backup-')))
+    assert.equal(dec(fs.files.get('plugins/.core-boot-forsion-calendar/version')), '0.1.5 1')
+    assert.equal(dec(fs.files.get('plugins/forsion-calendar/.complete')), '0.1.5')
+    // 宿主照常把它列出来(withBundledCalendar 的 choose 按版本挑它)
+    assert.deepEqual((await host(fs, '2.13.9').listPlugins()).map((p) => `${p.id}@${p.version}`), ['forsion-calendar@0.1.5'])
+    await core.confirmCoreBoot(fs, 'forsion-calendar', '0.1.5')
+    assert.ok(!names(fs).some((n) => n.includes('.core-boot-')))
+    // 正常的第二次启动:还用 0.1.5,不删
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})), [['forsion-calendar', '0.1.5']])
+    assert.ok(fs.files.has('plugins/forsion-calendar/main.js'))
+  })
+
+  await test('核心插件更新:暂存区没有 .complete(改名复制到一半)→ 丢掉,不换上', async () => {
+    const fs = memFs()
+    await checkWith(fs, npm('0.1.5', tgzOf(calFiles('0.1.5'))))
+    fs.files.delete('plugins/.pending-forsion-calendar/.complete')
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})), [])
+    assert.deepEqual(names(fs), [])
+  })
+
+  await test('核心插件更新:连续两次用下载版启动没起来 → 删掉下载版、记坏版本、退回随包;这一版不再下载,更高的照常', async () => {
+    const fs = memFs()
+    await checkWith(fs, npm('0.1.5', tgzOf(calFiles('0.1.5'))))
+    await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {}) // 换上并记了一次,之后 setup 抛错 / 崩溃,没人确认
+    // 一次没确认(也可能只是用户秒关)→ 还给机会
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})), [['forsion-calendar', '0.1.5']])
+    assert.equal(dec(fs.files.get('plugins/.core-boot-forsion-calendar/version')), '0.1.5 2')
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})), [])
+    assert.ok(!fs.files.has('plugins/forsion-calendar/main.js'))
+    assert.deepEqual(names(fs), ['plugins/.core-bad-forsion-calendar'])
+    const again = npm('0.1.5', tgzOf(calFiles('0.1.5')))
+    assert.equal((await checkWith(fs, again)).last.phase, 'incompatible'); assert.equal(again.calls.download, 0)
+    assert.equal((await checkWith(fs, npm('0.1.6', tgzOf(calFiles('0.1.6'))))).last.phase, 'staged')
+  })
+
+  await test('核心插件更新:App 升级后随包版追上下载版 → 启动时删掉下载副本;门禁挡下的下载版不写启动标记', async () => {
+    const fs = memFs()
+    await checkWith(fs, npm('0.1.5', tgzOf(calFiles('0.1.5'))))
+    await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})
+    await core.confirmCoreBoot(fs, 'forsion-calendar', '0.1.5')
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [{ ...CAL, manifest: { ...CAL.manifest, version: '0.1.5' } }], '2.13.9', () => {})), [])
+    assert.deepEqual(names(fs), [])
+    const fs2 = memFs()
+    for (const [k, v] of Object.entries(calFiles('0.1.5', { 'manifest.json': JSON.stringify({ id: 'forsion-calendar', version: '0.1.5', minAppVersion: '3.0.0' }), '.complete': '0.1.5' }))) put(fs2, `plugins/forsion-calendar/${k}`, v)
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs2, [CAL], '2.13.9', () => {})), [])
+    assert.ok(!names(fs2).some((n) => n.includes('.core-boot-')))
+  })
+
+  await test('核心插件更新:verify 不过(Extend 的签名闸)→ 不写暂存;已换上的副本 verify 不过 → 启动时删掉', async () => {
+    const strict = { ...CAL, verify: (files) => { if (!files.has('SIGNATURE')) throw new Error('unsigned') } }
+    const fs = memFs()
+    const r = await checkWith(fs, npm('0.1.5', tgzOf(calFiles('0.1.5'))), { bundle: strict })
+    assert.match(r.last.error, /unsigned/); assert.deepEqual(names(fs), [])
+    for (const [k, v] of Object.entries(calFiles('0.1.5', { '.complete': '0.1.5' }))) put(fs, `plugins/forsion-calendar/${k}`, v)
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})), [['forsion-calendar', '0.1.5']], 'without verify the same copy is usable')
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [strict], '2.13.9', () => {})), [])
+    assert.deepEqual(names(fs), [])
+  })
+
+  await test('核心插件更新:正式目录换到一半(没有 .complete)→ 当坏副本删掉、不用;manifest 读不出来 → 不删、这次也不用', async () => {
+    const fs = memFs()
+    for (const [k, v] of Object.entries(calFiles('0.1.5'))) put(fs, `plugins/forsion-calendar/${k}`, v)
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})), [])
+    assert.deepEqual(names(fs), [])
+    for (const [k, v] of Object.entries(calFiles('0.1.5', { '.complete': '0.1.5' }))) put(fs, `plugins/forsion-calendar/${k}`, v)
+    fs.failReadOf = 'plugins/forsion-calendar/manifest.json'
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})), [])
+    assert.ok(fs.files.has('plugins/forsion-calendar/main.js'), 'a read failure is not proof the copy is bad')
+    fs.failReadOf = null
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})), [['forsion-calendar', '0.1.5']])
+  })
+
+  await test('核心插件更新:丢旧暂存区删到一半被杀 → 剩下的半截不会被换上(.complete 先失效)', async () => {
+    const fs = memFs()
+    await checkWith(fs, npm('0.1.5', tgzOf(calFiles('0.1.5'))))
+    const removeDir = fs.removeDir
+    fs.removeDir = async (p) => {
+      if (p !== 'plugins/.pending-forsion-calendar') return removeDir(p)
+      fs.files.delete(`${p}/main.js`); throw new Error('killed')
+    }
+    await checkWith(fs, npm('0.1.6', tgzOf(calFiles('0.1.6')))) // 下更高版本时先丢旧暂存区,删到一半被杀
+    fs.removeDir = removeDir
+    assert.ok(fs.files.has('plugins/.pending-forsion-calendar/manifest.json'))
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [CAL], '2.13.9', () => {})), [])
+    assert.deepEqual(names(fs), [])
+  })
+
+  // ── Forsion Extend 的 npm 更新:手机运行时验签(extendVerify.ts,与构建期同一份规则)──────────────────────
+  const xv = await loadAll(['../src/plugins/extendVerify.ts'])
+  const { generateKeyPairSync, sign } = require('node:crypto')
+  const signer = generateKeyPairSync('ed25519')
+  const testKey = signer.publicKey.export({ type: 'spki', format: 'pem' })
+  /** 签好名的 Extend 包内文件;unsigned = 包里另带的、没签的文件。 */
+  const extFiles = (version, { manifest = {}, unsigned = {} } = {}) => {
+    const files = { 'manifest.json': JSON.stringify({ id: 'forsion-extend', version, apiVersion: 1, main: 'dist/main.js', mobileHostApi: 1, ...manifest }), 'package.json': JSON.stringify({ name: '@forsion/extend', version }), 'dist/main.js': `/* extend ${version} */`, 'spaces/guide/space.json': '{}' }
+    const hashes = Object.fromEntries(Object.entries(files).map(([p, t]) => [p, createHash('sha256').update(t).digest('hex')]).sort(([a], [b]) => (a < b ? -1 : 1)))
+    return { ...files, ...unsigned, SIGNATURE: JSON.stringify({ alg: 'ed25519', files: hashes, sig: sign(null, Buffer.from(JSON.stringify(hashes)), signer.privateKey).toString('base64') }) }
+  }
+  const EXT = { pkg: '@forsion/extend', manifest: { id: 'forsion-extend', version: '0.9.5' }, verify: (files) => xv.verifyMobileExtend(files, testKey) }
+  const extNpm = (version, tgz) => ({
+    calls: {},
+    fetch: async () => new Response(JSON.stringify({ 'dist-tags': { latest: version }, versions: { [version]: { dist: { integrity: sri(tgz) } } } })),
+    download: async (url) => { assert.equal(url, `${REG}/@forsion/extend/-/extend-${version}.tgz`); return tgz },
+  })
+
+  await test('Extend 更新:签名对上钉的公钥 → 暂存(没签的文件不落盘)→ 下次启动换上并重新验签', async () => {
+    const fs = memFs()
+    const r = await checkWith(fs, extNpm('0.9.7', tgzOf(extFiles('0.9.7', { unsigned: { 'dist/evil.js': 'never', constructor: 'x', toString: 'y' } }))), { bundle: EXT })
+    assert.equal(r.last.phase, 'staged', r.last.error)
+    assert.ok(!fs.files.has('plugins/.pending-forsion-extend/dist/evil.js'), 'unsigned files are dropped before they reach disk')
+    assert.ok(!fs.files.has('plugins/.pending-forsion-extend/constructor') && !fs.files.has('plugins/.pending-forsion-extend/toString'), 'names on Object.prototype are not signed')
+    assert.ok(fs.files.has('plugins/.pending-forsion-extend/SIGNATURE'))
+    // 换上之后盘上又多了没签的 Space / README:宿主只用验过的那份快照,看不到它们
+    fs.files.set('plugins/forsion-extend/spaces/unsigned/space.json', enc('{"evil":1}'))
+    fs.files.set('plugins/forsion-extend/README.md', enc('# not signed'))
+    const using = await core.prepareCoreUpdates(fs, [EXT], '2.13.9', () => {})
+    assert.deepEqual(ver(using), [['forsion-extend', '0.9.7']])
+    const shown = xv.extendFromVerifiedFiles(using.get('forsion-extend').files)
+    assert.equal(shown.code, '/* extend 0.9.7 */'); assert.equal(shown.manifest.version, '0.9.7'); assert.equal(shown.readme, '')
+    assert.deepEqual(shown.recipes.map((r) => r.slug), ['guide'])
+    // 盘上被改了一个字节 → 下次启动验签不过:删掉、退回随包版
+    fs.files.set('plugins/forsion-extend/dist/main.js', enc('/* tampered */'))
+    assert.deepEqual(ver(await core.prepareCoreUpdates(fs, [EXT], '2.13.9', () => {})), [])
+    assert.ok(!names(fs).some((n) => n.startsWith('plugins/forsion-extend/')))
+  })
+
+  await test('Extend 更新:换了私钥 / 改了签过的文件 / 没有 SIGNATURE / 缺 mobileHostApi → 不写暂存', async () => {
+    const other = generateKeyPairSync('ed25519')
+    const foreign = { ...EXT, verify: (files) => xv.verifyMobileExtend(files, other.publicKey.export({ type: 'spki', format: 'pem' })) }
+    const tampered = { ...extFiles('0.9.7'), 'dist/main.js': '/* swapped */' }
+    const { SIGNATURE: _drop, ...unsignedPkg } = extFiles('0.9.7')
+    for (const [label, files, bundle, err] of [
+      ['别的私钥签的', extFiles('0.9.7'), foreign, /pinned public key/],
+      ['签过的文件被改', tampered, EXT, /signed hash/],
+      ['没有 SIGNATURE', unsignedPkg, EXT, /SIGNATURE is missing/],
+      ['缺 mobileHostApi', extFiles('0.9.7', { manifest: { mobileHostApi: undefined } }), EXT, /mobileHostApi/],
+    ]) {
+      const fs = memFs()
+      const r = await checkWith(fs, extNpm('0.9.7', tgzOf(files)), { bundle })
+      assert.equal(r.last.phase, 'error', label); assert.match(r.last.error, err, label); assert.deepEqual(names(fs), [], label)
+    }
+  })
+
+  await test('Extend 更新:真发布的签名包(mobile/vendor 里随仓的那份)用手机这份验签(noble ed25519)对钉的公钥能过,改一个字节就不过', async () => {
+    const pin = require('../extend-bundle.json')
+    const files = core.unpackTarball(new Uint8Array(require('node:fs').readFileSync(path.join(__dirname, '..', pin.path))))
+    await xv.verifyMobileExtend(files)
+    assert.equal(JSON.parse(dec(files.get('manifest.json'))).version, pin.version)
+    files.set('dist/main.js', enc('/* tampered */'))
+    await assert.rejects(xv.verifyMobileExtend(files), /signed hash/)
+  })
+
+  await test('核心插件更新:gzip 解压总量封顶(炸弹)', async () => {
+    const bomb = new Uint8Array(zlib.gzipSync(Buffer.alloc(4096)))
+    assert.throws(() => core.gunzipCapped(bomb, 1024), /too large/)
+    assert.equal(core.gunzipCapped(bomb, 8192).length, 4096)
+  })
+
   const failed = results.filter((r) => !r[1]).length
   console.log(`\n${results.length - failed}/${results.length} passed`)
   process.exit(failed ? 1 : 0)
