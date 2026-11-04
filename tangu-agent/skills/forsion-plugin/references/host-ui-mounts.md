@@ -36,6 +36,12 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 **正文与持久化归调用方**:不读写活动库、不改当前笔记、不自动保存、不调模型。保存前必须同步调 `getValue()`(含最新一笔编辑事务)。
 `update({ value })` 换文档,`insertMarkdown` 追加附件/嵌入(只读时无效),`dispose()` 幂等(之后 `el` 立刻归还,见上「dispose 契约」);宿主在插件禁用/重载/setup 失败时统一回收,旧句柄不再改内容。
 老宿主没有此方法时明确提示升级,不要拿 textarea 冒充原生编辑器。完整契约:`docs/customization/ui-components.md`;类型真源:`desktop/shared/markdownEditor.ts`。
+**`vault: true`(2.13.8 起)接上当前库**:`[[` 补全笔记 / 文件名,点双链在视图旁边打开那篇笔记(⌘ / Ctrl 点击 = 新标签页),解析不到的显示成灰色;正文仍归调用方,编辑器不往库里写。缺省关;老宿主不认、也没法单独检测 —— 它和 `ctx.ui.mountMarkdown` 同版到,有 `mountMarkdown` 就说明 `vault` 有效。
+
+### 只读 Markdown ctx.ui.mountMarkdown(2.13.8 起)
+
+`ctx.ui?.mountMarkdown?.(el, { markdown })` → `{ update({ markdown }), dispose() }`:按聊天回答的画法渲染(GFM、`$公式$` / `$$公式$$`、`[[双链]]` 点开当前库那篇笔记)。
+段内单个换行就是换行(和编辑器写出来的一致);代码块只有复制、没有运行;`![[嵌入]]` 只显示成链接。够轻,列表每行挂一个也行;外层带 `.md-body`,要收紧段距在自己容器里覆盖。dispose 契约同上。
 
 ### 原生悬浮目录 ctx.ui.mountFloatingToc(2026-09-07 起)
 
