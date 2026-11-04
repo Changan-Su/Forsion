@@ -2,9 +2,9 @@
  *  DTO 刻意不复用宿主内部的 AggDb / MdMark:内部结构以后要改,不该牵动插件 API(同 PluginSearchHit 的口径)。
  *  写口与内置日历 / 待办走同一组函数(setAggCell / addAggRow / patchMark …),所以和打开着的界面一致。 */
 import { isRealDate, parseCalDate } from '@amadeus-shared/db/calDate'
-import { COLUMN_TYPES, dbId, type CellValue, type ColumnType } from '@amadeus-shared/db/schema'
+import { COLUMN_TYPES, DB_VERSION, dbFileSchema, dbId, type CellValue, type ColumnType, type DbFile } from '@amadeus-shared/db/schema'
 import type { MdMark } from '@amadeus-shared/mdMarks'
-import { isStamped, resolveBaseType } from '../blocks/database/propertyTypes'
+import { isStamped, newRowCells, resolveBaseType } from '../blocks/database/propertyTypes'
 import { addAggRow, deleteAggRow, duplicateAggRow, getAggDb, restoreAggRow, setAggBody, setAggCell, setAggName, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
 import { findMdMark, markKey, patchMark, watchMdMarks } from '../store/mdMarkStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
@@ -48,6 +48,33 @@ const isDue = (s: string): boolean => {
   const [a, b, ...rest] = s.split('/')
   const c = parseCalDate(s)
   return !!c && !rest.length && isRealDate(a) && (b === undefined || (c.end === b && isRealDate(b)))
+}
+
+/** 插件对一张表的一次改动(ctx.databases.mutate)。null = 不收:回调抛错、结构不对、动了只有宿主能定的东西。
+ *  回调拿的是拷贝,原地改不到宿主的快照;结果过 dbFileSchema(读写盘用的同一份,所以不会多丢字段)。
+ *  宿主定的:经典表 / 笔记视图不能互换、首列(身份列)还是原来那一列、行 id 与列 id 不重复、盖章列的值
+ *  (已有行留原值,新行由宿主盖 —— 插件伪造不了编号与创建时间;修改时间由 dbStore.mutate 统一盖)。 */
+export function pluginDbStep(d: DbFile, fn: (db: DbFile) => DbFile | null): DbFile | null {
+  let out: unknown
+  try { out = fn(structuredClone(d)) } catch (e) { console.error('[amadeus] ctx.databases.mutate 回调抛错', e); return null }
+  if (out === null) return d
+  const parsed = dbFileSchema.safeParse(out)
+  if (!parsed.success) { console.warn('[amadeus] ctx.databases.mutate:返回的不是有效的表结构', parsed.error.issues[0]); return null }
+  const next = parsed.data as DbFile
+  const unique = (ids: string[]): boolean => new Set(ids).size === ids.length
+  if (next.source || next.version > DB_VERSION || !unique(next.rows.map((r) => r.id)) || !unique(next.columns.map((c) => c.id))) return null
+  if (d.columns.length && next.columns[0]?.id !== d.columns[0].id) return null // 首列是卡片标题、别的表关联芯片上的字
+  const stamped = next.columns.filter((c) => isStamped(c.type)).map((c) => c.id)
+  const before = new Map(d.rows.map((r) => [r.id, r]))
+  const rows = next.rows.map((r) => {
+    if (!stamped.length) return r
+    const old = before.get(r.id), cells = { ...r.cells }
+    for (const id of stamped) { if (old && Object.hasOwn(old.cells, id)) cells[id] = old.cells[id]; else delete cells[id] }
+    return { ...r, cells }
+  })
+  // 新行逐条盖章:每次都看已经盖好的那些行,编号才不撞
+  rows.forEach((r, i) => { if (!before.has(r.id)) rows[i] = { ...r, cells: { ...newRowCells({ ...next, rows }), ...r.cells } } })
+  return { ...next, version: Math.max(d.version, next.version), rows }
 }
 
 const vaultKey = (): string => { const s = usePageStore.getState(); return `${s.vaultSide}:${s.vaultRoot}` }
@@ -114,6 +141,19 @@ export function createDatabasesApi(scope: DataScope, includeHumanCalendar = fals
       const id = dbId() // 回调外定 id,重放才是确定的(同表格的「添加列」)
       useDbStore.getState().mutate(db.path, (d) => d.columns.some((c) => c.id === id) ? d : { ...d, columns: [...d.columns, { id, name, type: spec.type as ColumnType }] })
       return id
+    },
+    mutate: (path, fn) => {
+      const db = scope.alive() ? table(path) : null
+      // 同 addColumn:只改可写的经典表(笔记视图的行在笔记里;只读源 / 可编辑投影没有自己的行)
+      if (!db || db.isNoteView || db.readonly || db.writeCell || typeof fn !== 'function') return false
+      const cur = useDbStore.getState().entries[db.path]?.data
+      if (!cur) return false
+      // 先在当前快照上试一次:抛错 / 结构不对当场回 false,不等落盘时才悄悄丢掉
+      const tried = pluginDbStep(cur, fn)
+      if (!tried || tried === cur) return false
+      // 和表格界面同一个写口:防抖写穿,撞上别人的新版本时按顺序重放(所以 fn 必须是纯函数)
+      useDbStore.getState().mutate(db.path, (d) => pluginDbStep(d, fn) ?? d)
+      return true
     },
     readBody: (path, rowId) => {
       const db = scope.alive() ? table(path) : null
