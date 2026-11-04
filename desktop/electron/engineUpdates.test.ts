@@ -59,7 +59,8 @@ const pkgJson = (version: string, extra: object = {}): string =>
   JSON.stringify({ name: ENGINE_PACKAGE, version, dependencies: DEPS, forsion: { minDesktop: DESKTOP }, ...extra })
 /** 一份签好名的包的文件表(含 SIGNATURE);unsigned 里的文件进 tarball 但不进签名表。 */
 function signedPackage(version: string, opts: { pkg?: object; key?: typeof privateKey; unsigned?: Record<string, string> } = {}): Record<string, string> {
-  const files = { 'package.json': pkgJson(version, opts.pkg), ...runtimeFiles(), 'skills/a/SKILL.md': '# a\n' }
+  const ui = { [overlay.UI_FILES.main]: '"use strict";\n', [overlay.UI_FILES.manifest]: JSON.stringify({ id: 'tangu', main: overlay.UI_FILES.main, forDesktop: DESKTOP }) }
+  const files = { 'package.json': pkgJson(version, opts.pkg), ...runtimeFiles(), ...ui, 'skills/a/SKILL.md': '# a\n' }
   const hashes = Object.fromEntries(Object.entries(files).map(([rel, data]) => [rel, createHash('sha256').update(data).digest('hex')]))
   const sig = sign(null, Buffer.from(overlay.canonicalFiles(hashes), 'utf8'), opts.key ?? privateKey).toString('base64')
   return { ...files, ...opts.unsigned, SIGNATURE: JSON.stringify({ alg: 'ed25519', files: hashes, sig }) }

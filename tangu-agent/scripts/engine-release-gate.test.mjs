@@ -4,7 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { cmp, desktopProblems, hotUpdateDistTag, hotUpdateProblems, runGate } from './engine-release-gate.mjs'
+import { cmp, desktopProblems, hotUpdateDistTag, hotUpdateProblems, packageScope, runGate } from './engine-release-gate.mjs'
 
 const desktop = { desktop: '2.13.6', engine: '3.0.0', ref: 'v2.13.6', newestPublished: '2.13.6', previousEngine: '2.13.5' }
 test('desktop may share its number with a published engine; engine may be above or below desktop', () => {
@@ -136,4 +136,56 @@ test('a hotfix cut from a beta installer uses that beta as its line and baseline
   const legacy = fixture('8.1.0-beta.1')
   legacy.write('tangu-agent/package.json', legacy.pkg('2.0.1'))
   assert.throws(() => runGate(legacy.root, ['tangu-v2.0.1', 'push'], {}, { readPublishedVersion: () => '2.0.0' }), /only reads the latest dist-tag/)
+})
+
+// ── 界面热更新 4c:热更新包两半(引擎 + Tangu 界面),相对基准桌面只许动这两半 ──
+const BOUNDARY = { tangu: { dirs: ['desktop/frontend/src/tangu/'], files: ['desktop/frontend/src/features/tangu.tsx'] }, contracts: { dirs: ['tangu-agent/src/contracts/'] } }
+test('package scope: engine and Tangu UI files ship; contracts, host files and the shared table do not; docs and tests do not count', () => {
+  assert.deepEqual(packageScope([
+    'tangu-agent/src/agent.ts', 'tangu-agent/package.json', 'desktop/frontend/src/tangu/Chat.tsx', 'desktop/frontend/src/features/tangu.tsx',
+    'tangu-agent/src/contracts/events.ts', 'desktop/frontend/src/stores/appStore.ts', 'desktop/frontend/src/coreTangu/sharedModules.generated.ts', 'lcl/engine/index.ts', 'desktop/package.json',
+    'docs/x.md', 'desktop/README.md', '.github/workflows/a.yml', 'desktop/frontend/src/stores/appStore.test.ts', 'desktop/frontend/src/__tests__/a.ts',
+  ], BOUNDARY), {
+    ui: ['desktop/frontend/src/tangu/Chat.tsx', 'desktop/frontend/src/features/tangu.tsx'],
+    host: ['tangu-agent/src/contracts/events.ts', 'desktop/frontend/src/stores/appStore.ts', 'desktop/frontend/src/coreTangu/sharedModules.generated.ts', 'lcl/engine/index.ts', 'desktop/package.json'],
+  })
+  // 基准 tag 上没有边界清单(4a 之前):分不出界面文件,一律算宿主
+  assert.deepEqual(packageScope(['desktop/frontend/src/tangu/Chat.tsx', 'tangu-agent/src/a.ts'], null), { ui: [], host: ['desktop/frontend/src/tangu/Chat.tsx'] })
+})
+test('hot update rules for the UI half: host files, a base desktop without the loader, and forDesktop', () => {
+  assert.deepEqual(hotUpdateProblems({ ...hot, uiChanges: ['desktop/frontend/src/tangu/Chat.tsx'], forDesktop: '8.0.0' }), [])
+  assert.match(hotUpdateProblems({ ...hot, hostChanges: ['desktop/frontend/src/stores/appStore.ts'] }).join(), /outside the Tangu package.*appStore\.ts.*installer/)
+  assert.match(hotUpdateProblems({ ...hot, uiChanges: ['desktop/frontend/src/tangu/Chat.tsx'], uiLoader: false }).join(), /cannot load a Tangu UI update/)
+  assert.match(hotUpdateProblems({ ...hot, forDesktop: '8.0.1' }).join(), /must be built for desktop 8\.0\.0/)
+  assert.match(hotUpdateProblems({ ...hot, hostChanges: Array.from({ length: 12 }, (_, i) => `h${i}.ts`) }).join(), /h7\.ts and 4 more/)
+})
+test('real git baseline: the UI half may change, host files may not (renames count on both sides), forDesktop is the checkout', () => {
+  const ui = { 'desktop/scripts/tangu-boundary.json': JSON.stringify(BOUNDARY), 'desktop/electron/coreTangu.ts': '// loader\n',
+    'desktop/frontend/src/tangu/Chat.tsx': 'export const v = 1\n', 'desktop/frontend/src/stores/appStore.ts': 'export const s = 1\n' }
+  const registry = { readPublishedVersion: () => '2.0.0' }
+  const publish = (f) => runGate(f.root, ['tangu-v2.0.1', 'push'], { GITHUB_OUTPUT: path.join(f.repo, 'out') }, registry)
+  const bump = (f) => { f.write('tangu-agent/package.json', f.pkg('2.0.1')); f.write('docs/notes.md', 'why\n') }
+
+  const ok = fixture('8.0.0', '2.0.0', ui); bump(ok)
+  ok.write('desktop/frontend/src/tangu/Chat.tsx', 'export const v = 2\n')
+  publish(ok)
+  assert.match(readFileSync(path.join(ok.repo, 'out'), 'utf8'), /for_desktop=8\.0\.0\n/)
+
+  const host = fixture('8.0.0', '2.0.0', ui); bump(host)
+  host.write('desktop/frontend/src/stores/appStore.ts', 'export const s = 2\n')
+  assert.throws(() => publish(host), /outside the Tangu package changed since desktop 8\.0\.0 \(desktop\/frontend\/src\/stores\/appStore\.ts\)/)
+
+  const moved = fixture('8.0.0', '2.0.0', ui); bump(moved)
+  moved.git('mv', 'desktop/frontend/src/stores/appStore.ts', 'desktop/frontend/src/tangu/appStore.ts')
+  moved.git('-c', 'commit.gpgsign=false', 'commit', '-qm', 'move a host store into the Tangu dir')
+  assert.throws(() => publish(moved), /outside the Tangu package changed since desktop 8\.0\.0 \(desktop\/frontend\/src\/stores\/appStore\.ts\)/)
+
+  const shell = fixture('8.0.0', '2.0.0', ui); bump(shell)
+  shell.write('desktop/package.json', JSON.stringify({ version: '8.0.1' }))
+  assert.throws(() => publish(shell), /must be built for desktop 8\.0\.0/)
+
+  // 基准桌面没有 4b 的加载器:界面文件的改动带不过去
+  const old = fixture('8.0.0', '2.0.0', { 'desktop/scripts/tangu-boundary.json': JSON.stringify(BOUNDARY), 'desktop/frontend/src/tangu/Chat.tsx': 'export const v = 1\n' }); bump(old)
+  old.write('desktop/frontend/src/tangu/Chat.tsx', 'export const v = 2\n')
+  assert.throws(() => publish(old), /cannot load a Tangu UI update/)
 })

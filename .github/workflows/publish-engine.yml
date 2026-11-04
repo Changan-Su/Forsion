@@ -10,6 +10,10 @@ name: publish-engine
 # 一次引擎热更新 = 从它所针对的那个桌面正式版(v* tag)拉出来的修复分支:只改引擎、不带迁移、不动依赖。
 # 这三条下面都是机器判定,不满足就不发 —— 发出去也没有一台桌面会收,而 npm 版本号用掉就收不回来。
 #
+# 一个包两半(界面热更新 4c,施工图 docs/ToBeImproved/Tangu界面热更新落地计划_2026-10-23.md §5):包里还带着 Tangu 的界面半身
+# ui/main.js + manifest.json(forDesktop = 基准桌面版本,桌面端要求恰好相等)。门禁另加两条:相对基准桌面 tag 只许动引擎和
+# 边界清单里的 Tangu 界面文件(共享模块表、契约目录和别的宿主文件一个都不许碰),desktop/package.json 的版本 = 基准桌面。
+#
 # 桌面与引擎独立编号。引擎更新须高于目标桌面的随包引擎;minDesktop 单独记录目标桌面版本。
 #
 # 按安装包线分发(2026-10-28):一次发布只打一个 dist-tag(trusted publishing 只管 npm publish,不能另跑 npm dist-tag add)。
@@ -60,6 +64,13 @@ jobs:
           npm test
           git diff --exit-code -- package.json package-lock.json
       - run: npm run build
+      # 界面半身:对着这份检出的共享模块表打 ../tangu-agent/ui/main.js;build-tangu-ui 自己核对没把宿主文件 / 共享包打进去、表没过期
+      - name: Build the Tangu UI half
+        working-directory: desktop
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          node build/link-lcl.cjs
+          node scripts/build-tangu-ui.mjs
 
       - name: Sign and pack
         env:
@@ -69,7 +80,7 @@ jobs:
             echo "::error::Missing TANGU_ENGINE_SIGNING_KEY. Forsion Desktop refuses an unsigned engine, so there is nothing worth publishing."
             exit 1
           fi
-          node scripts/pack-engine.mjs --version "${{ steps.gate.outputs.pack_version }}" --min-desktop "${{ steps.gate.outputs.base }}"
+          node scripts/pack-engine.mjs --version "${{ steps.gate.outputs.pack_version }}" --min-desktop "${{ steps.gate.outputs.base }}" --for-desktop "${{ steps.gate.outputs.for_desktop }}"
 
       # 真启动器 + 真引擎:把这份 dist 打成新版放进一个临时家目录,看启动器选不选它、改一个字节后退不退回。
       # 用脚本当场生成的测试钥匙;发版私钥与钉死的公钥对不对得上,上一步签完的回验已经核过。

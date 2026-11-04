@@ -3,7 +3,8 @@
 桌面端装好之后,Tangu 引擎的修复可以不重装安装包就送到用户手里:引擎发到 npm(`@forsion/tangu-agent`),桌面后台下载、核对,
 下次拉起引擎时换上。终端里的 `tangu` 跟着用同一份。
 
-这条通道是**快修通道**,不是主发版通道。它送得到的只有引擎的 `dist`(加上随包的技能);对话界面、依赖、数据库结构都还是随安装包走。
+这条通道是**快修通道**,不是主发版通道。它送得到的是引擎的 `dist`(加上随包的技能),以及从 4c 起的 **Tangu 界面半身**
+(对话、会话侧栏这些 Tangu 自己的界面文件,见下文「一个包两半」);宿主的其余界面、依赖、数据库结构都还是随安装包走。
 
 ## 它怎么工作
 
@@ -41,6 +42,30 @@ npm  @forsion/tangu-agent@2.13.5          ~/.forsion/engine/2.13.5/        安�
 - `minDesktop` 取基线的整条线(`v8.1.0+build.2` 拉的 hotfix 写 `8.1.0`),原版与各修订都能收;建表 / 依赖照旧由 `checkOverlay` 把关。基线安装包自带的引擎得是正式版号,否则启动器不收任何热更新,门禁拒发。
 - 本机 `engine/` 目录是各安装包共用的。桌面启动时(`cleanEngineOverlays`)会删掉 `minDesktop` 不在本线上的旧引擎:那只能是换装前的安装包下的,号可能更高,建表碰巧相同时启动器会挑中它。换装后若先在终端跑 `tangu`、还没打开桌面,会挑到它一次,这个窗口不管。
 
+## 一个包两半(界面热更新,2026-11-04 起)
+
+施工图:仓根 `docs/ToBeImproved/Tangu界面热更新落地计划_2026-10-23.md` §5、§7 第 4 步。
+
+```
+package.json     name / bin / exports / dependencies 照旧;forsion.minDesktop
+manifest.json    { id: "tangu", main: "ui/main.js", forDesktop: "<基准桌面版本>" }
+ui/main.js       界面半身:desktop 的 scripts/build-tangu-ui.mjs 打的 iife(CSS 以文本打在里面)
+dist/ skills/ agent-skills/   引擎半身
+SIGNATURE        覆盖上面全部文件;ui/main.js 与 manifest.json 是必须出现的条目(缺了 = 签名不过,整版不收)
+```
+
+- **界面跟着正在跑的引擎走**:桌面主进程(`desktop/electron/coreTangu.ts`)从引擎选中的那份目录读 `ui/main.js`,
+  对着同一刻读到的 `SIGNATURE` 验签(`verifySignedBytes`),`forDesktop` 恰好等于这份桌面的版本才用;不等就照用热更新的引擎、
+  界面用安装包自带的那份(`resources/tangu-server/ui/main.js`)—— 和以前「只热更了引擎」一样。
+- **界面坏了两半一起退**:热更新那版的界面求值 / 激活抛错,或开头一分钟里被 ErrorBoundary 接住两次,整版记进 `bad.json`(引擎下次拉起也退回自带的),窗口重载成自带界面。
+- **门禁多两条**(`engine-release-gate.mjs`):相对基准桌面 tag,改动只能落在 `tangu-agent/`(契约目录 `src/contracts/` 除外,宿主也编着一份)
+  和 `desktop/scripts/tangu-boundary.json` 列出的 Tangu 界面文件里(文档、CI、测试不算);`desktop/package.json` 的版本必须等于基准桌面。
+  共享模块表 `desktop/frontend/src/coreTangu/sharedModules.generated.ts` 是宿主文件:界面要用表里没有的宿主模块,只能随安装包发。
+  基准桌面没有 4b 的加载器(`desktop/electron/coreTangu.ts`)时,界面文件的改动一律拒发。
+- **老桌面不收**:新包的 `minDesktop` = 基准桌面,比它旧的安装包(如 2.13.5–2.13.7)按 `minDesktop` 拒收;它们本来也不会读界面半身。
+- **版本号只有一个**:只改界面也要重发整份包(约多 1–2 MB),引擎下次启动也换成这个号(代码没变)。
+  安装包里自带的那份界面用的也是随包引擎的版本号;桌面发版复用同一个引擎号时,两份界面的字节可能不同,只影响诊断上的标签。
+
 ## 什么样的新版会被收下
 
 判定只有一份实现:`src/boot/overlay.ts` 的 `checkOverlay`。更新器落盘前、启动器每次拉起前跑的是同一个函数。五条全过才收:
@@ -59,9 +84,9 @@ npm  @forsion/tangu-agent@2.13.5          ~/.forsion/engine/2.13.5/        安�
 
 一次热更新 = 从它所针对的那个桌面版本(正式版或预发布)拉出来的修复分支。**不要从 main 的最新提交发**:main 上有没随安装包发出去的功能、依赖和迁移。
 
-1. 从目标桌面 tag 开分支:`git switch -c hotfix/tangu-2.13.5 v2.13.4`,把修复放进去(只动引擎,不动依赖、不动迁移)。
+1. 从目标桌面 tag 开分支:`git switch -c hotfix/tangu-2.13.5 v2.13.4`,把修复放进去(只动引擎和 Tangu 界面文件,不动依赖、不动迁移、不动宿主文件)。
 2. 把 `tangu-agent/package.json` 与 lock 的版本号抬到新的引擎版本（`desktop/package.json` 不动）。**桌面和引擎独立编号**：引擎须高于目标桌面自带的引擎，以及 npm 已发布的引擎版本；无需高于桌面版本号。桌面 `v2.13.6` 与引擎 `tangu-v2.13.6` 可同时存在。
-3. 本机验证:`npm run build && npm run e2e:overlay`,再跑这次修复相关的测试。发 npm 前的验证不能比发安装包松:npm 版本撤不回,坏版本只能向前修。
+3. 本机验证:`npm run build && npm run e2e:overlay`;动了界面的再在 desktop 跑 `node scripts/build-tangu-ui.mjs` 和 `npm run e2e:coretangu`,再跑这次修复相关的测试。发 npm 前的验证不能比发安装包松:npm 版本撤不回,坏版本只能向前修。
 4. 推分支,推 tag `tangu-v2.13.5`。`publish-engine.yml` 构建、过门禁、签名、端到端核对,然后按门禁选的 dist-tag 发 npm(见上文「按安装包线分发」;Actions 日志里那行 `dist-tag …` 就是它)。
 5. 把修复照常合进 main。
 
@@ -118,12 +143,15 @@ ed25519。公钥编在 `src/boot/signingKey.ts`,随每一份安装包发出去�
 | `node scripts/engine-overlay-packaged.check.cjs`(desktop) | 同一套核对,换成打包后的 Electron 与安装包里的原生依赖;build-desktop 在三个平台上各跑一遍 |
 | `src/boot/overlay.test.ts` | 判定函数的每一条 |
 | `desktop/electron/engineUpdates.test.ts` | 只查本线标签、下载、只落签名表里的文件、落位、启动时收拾目录 |
-| `scripts/engine-release-gate.test.mjs`(tangu-agent) | 版本号身份、依赖 / 迁移守卫、按基线安装包选 dist-tag |
+| `scripts/engine-release-gate.test.mjs`(tangu-agent) | 版本号身份、依赖 / 迁移守卫、按基线安装包选 dist-tag;改动只许落在 Tangu 包里(挪文件两头都算)、forDesktop = 基准桌面 |
+| `node scripts/build-tangu-ui.mjs`(desktop) | 界面半身:没把宿主文件 / 共享包打进去、宿主模块都在边界基线里、共享模块表没过期 |
+| `npm run e2e:coretangu`(desktop) | 真 Electron 运行时加载界面半身;`--nc=dup` / `--nc=broken` 负对照 |
+| `desktop/electron/coreTangu.test.ts` | 界面挑哪一份:forDesktop 精确匹配、内存里的字节验签、跟着正在跑的引擎、失败 / 崩溃只认交给该窗口的那份 |
 | `desktop/electron/backendManager.test.ts` | 新版起不来 / 一用就崩时停用并退回 |
 
 ## 已知的边界
 
-- **只惠及桌面。** web、mobile、云端 worker 用的是各自镜像里的引擎。
+- **只惠及桌面。** web、mobile、云端 worker 用的是各自镜像里的引擎;手机的 Tangu 界面是编进去的,不经运行时加载。
 - **桌面里的「登录模型提供商」仍跑安装包自带的那份代码**(主进程直接 import 引擎的 `llm/providerOAuth.js`,不经启动器)。这块的修复要随安装包发。
 - **随包的 Chrome 扩展不跟着热更新**:扩展目录始终指安装包那份,新引擎必须与安装包里的扩展兼容。
 - **第一份带启动器的桌面版之前的安装包收不到热更新**:它们没有启动器,也没有更新器。
