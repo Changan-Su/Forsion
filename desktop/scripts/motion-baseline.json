@@ -26,7 +26,7 @@
     "frontend/src/styles/sidebar2.css": 4,
     "frontend/src/styles/unitSwitcher.css": 3,
     "frontend/src/theme/spaceAmbient.css": 3,
-    "frontend/src/views/agentProfile.css": 20,
+    "frontend/src/views/agentProfile.css": 18,
     "frontend/src/views/chat2/chat2.css": 10,
     "frontend/src/views/chat2/composer2.css": 11,
     "frontend/src/views/chat2/orbits.css": 3,
@@ -53,7 +53,7 @@
     "frontend/src/views/CalendarConfigView.tsx": 1,
     "frontend/src/views/DashboardCanvasView.tsx": 3,
     "frontend/src/views/DashboardGridView.tsx": 3,
-    "frontend/src/views/chat2/Composer2.tsx": 4,
+    "frontend/src/views/chat2/Composer2.tsx": 3,
     "frontend/src/views/dashFilterBar.tsx": 1
   },
   "tsLiterals": {
@@ -82,10 +82,10 @@
     "frontend/src/components/syncSetup.css": 1,
     "frontend/src/styles/base.css": 12,
     "frontend/src/views/chat2/chat2.css": 5,
+    "frontend/src/views/chat2/composer2.css": 4,
     "frontend/src/views/coding/studio.css": 3,
     "../lcl/components/uploadProgress.css": 1,
-    "../lcl/engine/engine.css": 4,
-    "frontend/src/views/chat2/composer2.css": 4
+    "../lcl/engine/engine.css": 4
   },
   "deprecatedTokens": {
     "frontend/src/achievements/achievements.css": 14,
@@ -100,13 +100,11 @@
     "frontend/src/styles/base.css": 26,
     "frontend/src/styles/sidebar2.css": 1,
     "frontend/src/views/DashboardCompactViews.css": 6,
-    "frontend/src/views/HomepageView.tsx": 2,
     "frontend/src/views/chat2/chat2.css": 11,
     "frontend/src/views/chat2/composer2.css": 6,
     "frontend/src/views/coding/launchpad.css": 16,
     "frontend/src/views/coding/studio.css": 11,
     "frontend/src/views/dashGrid.css": 15,
-    "frontend/src/views/homepage.css": 47,
     "../lcl/components/selectionBar.css": 1,
     "../lcl/components/uploadProgress.css": 2,
     "../lcl/engine/engine.css": 5,

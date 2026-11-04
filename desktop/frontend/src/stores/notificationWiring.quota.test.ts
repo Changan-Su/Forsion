@@ -33,5 +33,5 @@ describe('蓬洲云额度满的提醒', () => {
     expect(calls().at(-1)).toEqual(['error', 'ntf.remoteSyncFail'])
     round(['pull logs/413.md: penzor GET 401: unauthorized'])
     expect((notifyApp as any).mock.calls.length).toBe(5)
-  })
+  }, 20_000) // 冷启动 import appStore 整张模块图单跑就要 ~4.6s,全量高负载下会撞缺省 5s
 })
