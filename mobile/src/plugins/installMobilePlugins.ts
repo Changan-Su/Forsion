@@ -16,10 +16,10 @@ import { createPluginHost, type MobilePluginHost } from './pluginHost'
 import type { PluginFs } from './pluginFs'
 import { createFetchDownload, createMobileMarket, type MobileMarket } from './mobileMarket'
 import { calendarCoreBundle, withBundledCalendar } from './bundledCalendar'
-import { withBundledExtend } from './bundledExtend'
+import { extendCoreBundle, withBundledExtend } from './bundledExtend'
 import { isCorePlugin } from '../../../desktop/shared/corePlugins'
 import { registryOrder } from '../../../desktop/shared/npmRegistry'
-import { confirmCoreBoot, createCoreUpdater, prepareCoreUpdates, type CoreBundle } from './coreUpdates'
+import { confirmCoreBoot, createCoreUpdater, prepareCoreUpdates, type CoreBundle, type VerifiedCopy } from './coreUpdates'
 
 registerMessages({
   'mobilemarket.noCloud': { zh: '还没有连接 Forsion 云端，无法使用应用市场', en: 'Not connected to Forsion cloud, so the market is unavailable' },
@@ -67,10 +67,10 @@ export function installMobilePlugins(opts: { cloudApiBase: () => string }): Mobi
   // 顶节是 Unreleased 时 APP_VERSION 为空 → 传 null,不按 0.0.0 误杀声明了 minAppVersion 的插件。
   const version = () => APP_VERSION || null
   // 核心插件的 npm 更新(coreUpdates.ts):上次下好的新版在插件第一次清点之前换上,所以宿主的每个方法先等这一步。
-  const coreBundles: CoreBundle[] = [calendarCoreBundle]
-  const coreReady = prepareCoreUpdates(fs, coreBundles, version()).catch(() => new Map<string, string>())
+  const coreBundles: CoreBundle[] = [calendarCoreBundle, extendCoreBundle]
+  const coreReady = prepareCoreUpdates(fs, coreBundles, version()).catch(() => new Map<string, VerifiedCopy>())
   void coreReady.then((using) => confirmWhenStarted(fs, using))
-  const host = afterCoreReady(withBundledExtend(withBundledCalendar(createPluginHost(fs, { appVersion: version }), version, coreReady), version), coreReady)
+  const host = afterCoreReady(withBundledExtend(withBundledCalendar(createPluginHost(fs, { appVersion: version }), version, coreReady), version, coreReady), coreReady)
   const mirror = async (): Promise<string> => {
     const cfg = (await window.tangu?.getConfig?.().catch(() => null)) as { mirror?: unknown } | null
     return typeof cfg?.mirror === 'string' ? cfg.mirror : 'default'
@@ -138,10 +138,10 @@ const SETTLE_MS = 5000
 
 /** 用下载版启动的核心插件:setup 成功(或被用户关着、这次没挑下载版)就删启动标记;setup 失败 → 留着,连续两次就退回随包版。
  *  ponytail: 「激活后 5 秒没报错」当作 async setup 成功;更慢才 reject 的会被当成成功,要更准就让 pluginStore 记 setup 落定。 */
-async function confirmWhenStarted(fs: PluginFs, using: Map<string, string>): Promise<void> {
+async function confirmWhenStarted(fs: PluginFs, using: Map<string, VerifiedCopy>): Promise<void> {
   if (!using.size) return
   const { usePluginStore } = await import('@/amadeus/plugins/pluginStore')
-  const pending = new Map(using)
+  const pending = new Map([...using].map(([id, c]) => [id, c.version]))
   const settling = new Set<string>()
   const confirm = (id: string, version: string): void => { pending.delete(id); void confirmCoreBoot(fs, id, version).catch(() => {}) }
   const judge = (s: ReturnType<typeof usePluginStore.getState>): void => {
