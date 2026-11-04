@@ -401,6 +401,8 @@ it('ctx.ui.mountMarkdown 画公式与双链,update 换正文,代码块没有运�
   expect(el.querySelector('.katex')).not.toBeNull()
   expect(el.querySelector('.wikilink')?.textContent).toContain('笔记一')
   expect(el.querySelector('[aria-label*="Run"], [title*="运行"], [title*="Run"]')).toBeNull()
+  await act(async () => { h.update({ markdown: '第一行\n第二行' }) })
+  expect(el.querySelectorAll('br').length).toBe(1) // 段内单个换行 = 换行(Amadeus 笔记写法)
   await act(async () => { h.update({ markdown: '**新**' }) })
   expect(el.querySelector('strong')?.textContent).toBe('新')
   expect(el.querySelector('.katex')).toBeNull()

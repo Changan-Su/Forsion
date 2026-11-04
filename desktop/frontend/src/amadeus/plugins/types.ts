@@ -1765,7 +1765,7 @@ export interface PluginContext {
       opts: import('../../../../shared/markdownEditor').PluginMarkdownEditorOptions,
     ): import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle
     /** Read-only Markdown, drawn like a chat answer (2.13.8+): GFM, `$math$` / `$$math$$`, and `[[links]]` that open the
-     *  note in the open vault (unresolved ones read dimmed). Code blocks get a copy button but never a run button;
+     *  note from the open vault beside the view (unresolved ones read dimmed). A single newline is a line break, as the editor writes it. Code blocks get a copy button but never a run button;
      *  `![[embeds]]` stay links. Cheap enough for one per list row. Change it with `update({ markdown })`. */
     mountMarkdown?(
       el: HTMLElement,

@@ -145,7 +145,7 @@ const md = ctx.ui?.mountMarkdown?.(el, { markdown })
 md?.update({ markdown: next }); md?.dispose()
 ```
 
-Renders Markdown the way a chat answer is drawn: GFM, `$math$` / `$$math$$`, and `[[links]]` that open the note in the open vault (unresolved ones read dimmed). Code blocks get a copy button but never a run button; `![[embeds]]` show as links and don't expand. It is light enough for one per list row. Like the other mounts, `el` is yours again as soon as `dispose()` returns, and the host takes the mount back when the plugin is disabled. The outer layer carries `.md-body`; override its paragraph spacing inside your own container if you need it tighter.
+Renders Markdown the way a chat answer is drawn: GFM, `$math$` / `$$math$$`, and `[[links]]` that open the note from the open vault beside the view (unresolved ones read dimmed). A single newline inside a paragraph is a line break, matching what `mountMarkdownEditor` writes. Code blocks get a copy button but never a run button; `![[embeds]]` show as links and don't expand. It is light enough for one per list row. Like the other mounts, `el` is yours again as soon as `dispose()` returns, and the host takes the mount back when the plugin is disabled. The outer layer carries `.md-body`; override its paragraph spacing inside your own container if you need it tighter.
 
 ### Plugin Chat Box selection and Director hand-off (2026-09-30)
 

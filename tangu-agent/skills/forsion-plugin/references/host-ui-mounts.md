@@ -41,7 +41,7 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 ### 只读 Markdown ctx.ui.mountMarkdown(2.13.8 起)
 
 `ctx.ui?.mountMarkdown?.(el, { markdown })` → `{ update({ markdown }), dispose() }`:按聊天回答的画法渲染(GFM、`$公式$` / `$$公式$$`、`[[双链]]` 点开当前库那篇笔记)。
-代码块只有复制、没有运行;`![[嵌入]]` 只显示成链接。够轻,列表每行挂一个也行;外层带 `.md-body`,要收紧段距在自己容器里覆盖。dispose 契约同上。
+段内单个换行就是换行(和编辑器写出来的一致);代码块只有复制、没有运行;`![[嵌入]]` 只显示成链接。够轻,列表每行挂一个也行;外层带 `.md-body`,要收紧段距在自己容器里覆盖。dispose 契约同上。
 
 ### 原生悬浮目录 ctx.ui.mountFloatingToc(2026-09-07 起)
 
