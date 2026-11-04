@@ -195,6 +195,11 @@ async function main() {
       probe.remove()
       return { link: getComputedStyle(a).color, want }
     }, `.t2-content a[href^="${base}"]`)
+    const ext = await win.evaluate((sel) => {
+      const cs = getComputedStyle(document.querySelector(sel), '::after')
+      return { content: cs.content, w: cs.width, mask: (cs.maskImage || cs.webkitMaskImage || '').slice(0, 20) }
+    }, `.t2-content a[href^="${base}"]`)
+    check('W0e 聊天网页链接末尾挂 ↗ 外链图标(::after mask)', ext.content === '""' && ext.mask.startsWith('url(') && parseFloat(ext.w) > 4, JSON.stringify(ext))
     check('W0d 聊天网页链接是强调色 --signal', !!sig && sig.link === sig.want, sig ? `链接色=${sig.link} 强调色=${sig.want}` : 'null')
     if (process.env.WEBCITE_SHOT) await win.screenshot({ path: process.env.WEBCITE_SHOT + '/webcite-0-chat.png' })
 
