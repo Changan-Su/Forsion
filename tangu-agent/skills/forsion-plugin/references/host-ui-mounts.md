@@ -285,6 +285,31 @@ ctx.registerSelectionAction({
 - Hosts up to 2.13.3 ignore the new fields: the action stays note-only, sits under "AI ▾ → Plugins", and `cx`
   has only `text` / `markdown` / `pagePath`. Write `run` so it works with just those.
 
+### Tool island: ctx.ui.mountToolIsland (2026-11-04+)
+
+The capsule a "hold a tool and work" view (PDF annotation and the like) switches tools with — the same skin as the Mini window's top bar, a highlight that slides to the current tool, the shortcut letter in each button's corner. Centred at the top of `root`; docked at the bottom centre when `root` is narrower than 520 px.
+
+```js
+const isle = ctx.ui?.mountToolIsland?.(pageArea, {
+  tools: [
+    { id: 'hand', icon: 'hand', title: zh ? '抓手' : 'Hand' }, 'separator',
+    { id: 'select', icon: 'mouse-pointer-2', title: zh ? '选择' : 'Select', key: 'V' }, 'separator',
+    { id: 'highlight', icon: 'highlighter', title: zh ? '高亮' : 'Highlight', key: 'H' },
+  ],
+  active: 'select',
+  onPick: (id) => { setTool(id); isle.setActive(id); isle.showRow(id === 'highlight') },
+  slots: { topRight: findButton, bottomRight: pager },      // your own elements; the host wraps and places them
+})
+if (!isle) drawOwnBar(pageArea)                               // older hosts
+else isle.row.append(colorDots)                               // the row under the island is yours
+```
+
+- Controlled: a click only calls `onPick`; call `setActive(id)` yourself (also for a temporary Space-held hand). `key` is display only — bind keys yourself.
+- `icon` names: `hand`, `mouse-pointer-2`, `highlighter`, `underline`, `sticky-note`, `type`, `shapes`, `pen-line`, `eraser` (plus the rest of the vocabulary). `'separator'` draws a divider.
+- `row` is usable at once; add children, don't replace its class. `showRow(open)`: in 180 ms, out 80 ms, no slide under reduced motion. It sits above the island while docked at the bottom.
+- Clicks don't steal focus from your view; keyboard focus stays on the same button across `setActive` / `update`.
+- Overlays `root` without taking it over (static `root` → `relative` while mounted, restored on `dispose()`). Leave ~56 px at the top of your content. Wrong shapes throw `TypeError`; the host disposes it on disable / reload.
+
 ### Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
 
 For any settings-like page (account, quota, diagnostics, preferences — inside `registerSettingsView`, `registerStoreView` or your own view) describe the page as data and let the host draw it with its own settings parts. Do **not** copy the host's `.settings-*` CSS into your plugin: the copy breaks on phones (blank gaps, controls pushed off the row) and never follows later host changes.

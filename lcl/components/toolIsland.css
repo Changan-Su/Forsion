@@ -1,0 +1,114 @@
+/* 工具岛(ToolIsland.tsx)。皮 = Mini 窗顶栏的胶囊 .mini-card-cap:卡片底 + 细描边 + 胶囊圆角 + 卡片阴影,不做毛玻璃
+   (PDF 页是白纸,糊出来是一块灰)。条下那一排、四角的小岛用同一张皮(.lcl-isle-cap)。
+   字号只用 --ui-font-* 角色;不写 ::-webkit-scrollbar。 */
+.lcl-isle-cap {
+  -webkit-app-region: no-drag; /* 岛贴着视图顶,压到标签栏的拖拽区时按下去不该是拖窗口 */
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding: 3px;
+  box-sizing: border-box;
+  border: var(--border-width, 1px) solid var(--border, rgba(0, 0, 0, 0.08));
+  border-radius: var(--radius-pill, 999px);
+  background: var(--bg-card, var(--bg, #fff));
+  box-shadow: var(--card-shadow);
+  color: var(--text);
+  font-family: var(--font-ui);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.lcl-isle {
+  position: relative;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.lcl-isle-btn {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-pill, 999px);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--pill-select-duration, 200ms) var(--ease-surface), background-color var(--duration-fast, 120ms) var(--ease-out, ease);
+}
+.lcl-isle-btn:hover:not([data-on]) { background: var(--overlay-light); color: var(--text); }
+.lcl-isle-btn[data-on] { color: var(--accent-ink); }
+.lcl-isle-btn:focus-visible { outline: var(--focus-ring, 1px) solid var(--signal-line, var(--accent-ink)); outline-offset: -2px; }
+.lcl-isle-btn svg { width: 17px; height: 17px; }
+.lcl-isle-btn i {
+  position: absolute;
+  right: 4px;
+  bottom: 2px;
+  font: 500 calc(var(--ui-font-caption, 11px) - 3px) / 1 var(--font-ui);
+  font-style: normal;
+  opacity: 0.5;
+  pointer-events: none;
+}
+/* 选中底块:一枚,跟着 active 滑过去(位置由 ToolIsland 量了写进 transform / width) */
+.lcl-isle-thumb {
+  position: absolute;
+  left: 0;
+  top: 3px;
+  height: 32px;
+  border-radius: var(--radius-pill, 999px);
+  background: color-mix(in oklab, var(--accent-ink) 11%, transparent);
+  pointer-events: none;
+  transition: transform var(--pill-select-duration, 200ms) var(--ease-surface), width var(--pill-select-duration, 200ms) var(--ease-surface);
+}
+.lcl-isle-sep { flex: 0 0 auto; width: 1px; height: 16px; margin: 0 3px; background: var(--border, rgba(0, 0, 0, 0.08)); }
+
+/* ── 布局:叠在视图上的一层,只有岛本身接指针 ── */
+.lcl-isle-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30; /* 视图内的浮层:在悬浮目录(.lcl-ftoc-frame 20)之上,在划线条 / 右键菜单(100)之下 */
+  pointer-events: none;
+}
+.lcl-isle-main {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  max-width: calc(100% - 24px);
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+/* 窄了(< 520,宿主写 data-dock)停到底部,那一排翻到岛上方 */
+.lcl-isle-layer[data-dock='bottom'] .lcl-isle-main { top: auto; bottom: 12px; flex-direction: column-reverse; }
+.lcl-isle-main > *, .lcl-isle-slot { pointer-events: auto; }
+.lcl-isle-slot { position: absolute; }
+.lcl-isle-slot[hidden] { display: none; }
+.lcl-isle-slot[data-at='top-left'] { left: 12px; top: 12px; }
+.lcl-isle-slot[data-at='top-right'] { right: 12px; top: 12px; }
+.lcl-isle-slot[data-at='bottom-left'] { left: 12px; bottom: 12px; }
+.lcl-isle-slot[data-at='bottom-right'] { right: 12px; bottom: 12px; }
+/* 岛下那一排(色点、笔型、粗细):进 180ms 减速,出 80ms 加速;收着时不占指针 */
+.lcl-isle-row {
+  gap: 8px;
+  padding: 5px 8px;
+  max-width: 100%;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 80ms var(--ease-exit), transform 80ms var(--ease-exit), visibility 0s linear 80ms;
+}
+.lcl-isle-layer[data-dock='bottom'] .lcl-isle-row { transform: translateY(4px); }
+.lcl-isle-row[data-open], .lcl-isle-layer[data-dock='bottom'] .lcl-isle-row[data-open] {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity 180ms var(--ease-surface), transform 180ms var(--ease-surface), visibility 0s;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lcl-isle-thumb { transition: none; }
+  .lcl-isle-row, .lcl-isle-layer[data-dock='bottom'] .lcl-isle-row { transform: none; }
+}

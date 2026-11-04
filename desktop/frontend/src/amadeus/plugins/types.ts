@@ -1315,6 +1315,45 @@ export interface PluginSelectionBarHandle {
   dispose(): void
 }
 
+/** One tool on `ctx.ui.mountToolIsland`. */
+export interface PluginToolIslandTool {
+  id: string
+  /** A name from the plugin icon vocabulary (`hand`, `mouse-pointer-2`, `highlighter`, `underline`, `sticky-note`,
+   *  `type`, `shapes`, `pen-line`, `eraser`, …). */
+  icon: string
+  /** Tooltip and accessible name (already in the user's language). */
+  title: string
+  /** Shortcut letter drawn in the button's corner. Display only: bind the key yourself. */
+  key?: string
+}
+
+/** Options of `ctx.ui.mountToolIsland`. */
+export interface PluginToolIslandOptions {
+  /** The tools in order; `'separator'` draws a thin divider between groups. */
+  tools: Array<PluginToolIslandTool | 'separator'>
+  /** The current tool (its button gets the sliding highlight). */
+  active?: string
+  /** A button was clicked (or pressed with Enter / Space). The host does not change `active` by itself:
+   *  call `setActive(id)` when you switch. */
+  onPick(id: string): void
+  /** Your own elements for the four corners (12 px from the edges). The host wraps each in the same capsule
+   *  and positions it; what is inside stays yours. */
+  slots?: { topLeft?: HTMLElement; topRight?: HTMLElement; bottomLeft?: HTMLElement; bottomRight?: HTMLElement }
+}
+
+export interface PluginToolIslandHandle {
+  /** The row under the island (above it while docked at the bottom), for what the current tool needs: colour
+   *  dots, pen types, widths. Usable at once; fill it with your own elements, don't replace its class. */
+  row: HTMLElement
+  /** Show / hide `row` (in 180 ms, out 80 ms; no slide under reduced motion). */
+  showRow(open: boolean): void
+  setActive(id: string): void
+  /** Swap any options; keyboard focus stays on the same button. */
+  update(opts: Partial<PluginToolIslandOptions>): void
+  /** Idempotent. Takes the host's layer out of `root` synchronously (your slot elements and `row` go with it). */
+  dispose(): void
+}
+
 export interface PluginFloatingTocHandle {
   /** Force a rescan after a DOM change that MutationObserver cannot see. Observed changes rescan on their own: the first
    *  after a quiet spell on the next frame, then at most every 500 ms while content keeps changing (2026-10-16+);
@@ -1797,6 +1836,14 @@ export interface PluginContext {
      *  A view that never calls this gets no bar. Feature-detect on older hosts (`ctx.ui?.mountSelectionBar`) and
      *  keep drawing your own menu there. The host disposes it on disable / reload. */
     mountSelectionBar?(root: HTMLElement, opts?: PluginSelectionBarOptions): PluginSelectionBarHandle
+    /** The host's tool island for your own view (2026-11-04+): a capsule of tool buttons centred at the top of
+     *  `root`, docked at the bottom when `root` is narrower than 520 px; the current tool gets a highlight that
+     *  slides over. Same skin as the Mini window's top bar. Like `mountFloatingToc` it overlays `root` without
+     *  taking it over (`root` becomes `position: relative` while mounted if it was static). Clicking a button
+     *  doesn't take focus from your view; a keyboard user's focus stays on the same button across `update` /
+     *  `setActive`. Leave about 56 px at the top of your content for it. Feature-detect on older hosts
+     *  (`ctx.ui?.mountToolIsland`) and draw your own bar there. The host disposes it on disable / reload. */
+    mountToolIsland?(root: HTMLElement, opts: PluginToolIslandOptions): PluginToolIslandHandle
     /** The host's settings parts as one page description (2026-10-17+): groups of rows (switch, value, buttons,
      *  input, segmented, select, pick-to-run choice, stepper, code + copy), usage meters, empty / loading / error
      *  states, and `custom` blocks for anything else. You give data and callbacks; the host draws them with its own
