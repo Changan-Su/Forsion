@@ -64,6 +64,7 @@ import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
 import { DOMParser as PmDOMParser, DOMSerializer, Fragment, Slice, type MarkType, type Node as ProseNode } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
+import { splitBlock } from '@milkdown/kit/prose/commands'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react'
@@ -533,6 +534,7 @@ export function MilkdownInner({
   onSlashPick,
   readOnly = false,
   unified = false,
+  standalone = false,
   attachmentPagePath,
   extraPlugins,
   onAskTangu,
@@ -570,6 +572,8 @@ export function MilkdownInner({
   /** v4 统一实例模式(UnifiedPage):不挂 softBreakRemark(标准 md 分段落盘),Enter/Shift+Enter/
    *  方向键出块/块重排全部放行 PM 原生 —— 整篇一个实例,没有「邻块」可跳。 */
   unified?: boolean
+  /** 独立编辑器(PlainMarkdownEditor:插件卡片、记录页):没有邻块可切 —— Shift+Enter 就地分段,别把光标后的内容切走交给 no-op 的 insertAfter(丢字)。 */
+  standalone?: boolean
   /** 有值时,整份附件选区会同时写入 OS 原生图片/文件剪贴板。 */
   attachmentPagePath?: string
   /** 宿主追加的 Milkdown 插件(UnifiedPage 的块交互层等)。⚠️ 须传稳定引用:编辑器只建一次。 */
@@ -681,6 +685,7 @@ export function MilkdownInner({
         if (event.shiftKey) {
           // unified:放行 PM 原生 = 段内硬换行(Notion 语义);块世界才是「切块」。
           if (unified) return false
+          if (standalone) return splitBlock(view.state, view.dispatch)
           // 切块,不是「新建空块」:光标后还有内容就把它切到新块去,只有在块尾才是新建空块。
           // splitTail 返回 null = 已在块尾(或结构切不动)→ 退回旧行为。
           keysRef.current.insertAfter(splitTail(view, serialize) ?? undefined)
@@ -2359,6 +2364,7 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
           // transaction when an external addToHistory=false update supersedes it.
           onChange={immediate ? noop : (md) => onChange(entitiesToTabs(md))}
           extraPlugins={immediatePlugins}
+          standalone
           keys={keys}
           saveImage={async () => null}
           saveFiles={async () => {}}
