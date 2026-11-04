@@ -16,7 +16,8 @@
  *
  * 2026-11-04 加「单篇改名先问服务端候选」一组:此前每次改名逐篇 GET 全库,几百篇的库一改标题就撞全局限流 429。
  * 假服务端的 /ref-candidates 照 server/microserver/amadeus/routes.ts 的同名端点建模(`[[..]]` 笔记名的 pageKey 命中)。
- * 负对照(实跑过):桥不把候选交给 propagateNoteRenames(去掉 `only`)→ 该组前 3 条红(逐篇读了全库)。
+ * 负对照(实跑过):桥不把候选交给 propagateNoteRenames(去掉 `only`)→ 该组第 1、2、5 条红(逐篇读了全库);
+ * 不用候选随附的原文(read 照旧 GET)→ 第 2、5 条红;patient 不等 429 → 第 4 条红(提示链接没能更新)。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCloudAmadeusBridge } from '../../../../web/src/amadeus/cloudBridge'
@@ -36,6 +37,7 @@ let trees = 0
 const toasts: Array<{ text: string; level?: string }> = []
 let beforePut: (path: string) => void = () => {}
 let failPut: (path: string) => boolean = () => false
+let limitPut: (path: string) => boolean = () => false
 let afterGet: (path: string) => void = () => {}
 let getDelay: (path: string) => number = () => 0
 const fileGets: string[] = []
@@ -62,6 +64,7 @@ beforeEach(() => {
   files.clear(); puts.length = 0; toasts.length = 0; trees = 0; fileGets.length = 0; refCandidatesOn = true
   beforePut = () => {}
   failPut = () => false
+  limitPut = () => false
   afterGet = () => {}
   getDelay = () => 0
   const data = new Map<string, string>()
@@ -94,6 +97,7 @@ beforeEach(() => {
     if (p.endsWith('/file') && method === 'PUT') {
       beforePut(body.path)
       if (failPut(body.path)) return json({ detail: 'boom' }, 500)
+      if (limitPut(body.path)) return json({ detail: '请求过于频繁，请稍后再试', code: 'RATE_LIMITED' }, 429)
       const cur = files.get(body.path)
       if (!body.force && (cur?.seq ?? 0) !== body.baseSeq) return json({ code: 'CONFLICT', seq: cur?.seq ?? 0, content: cur?.content ?? '' }, 409)
       const seq = (cur?.seq ?? 0) + 1
@@ -106,7 +110,7 @@ beforeEach(() => {
       const names = new Set((body.names as string[]).map((n) => n.toLowerCase()))
       const noteOf = (inner: string): string => { const cut = inner.search(/\\\||[#|]/); return cut < 0 ? inner : inner.slice(0, cut) }
       const hit = (c: string): boolean => [...c.matchAll(/\[\[([^\]\n]+)\]\]/g)].some((m) => names.has(pageKey(noteOf(m[1]).trim())))
-      return json({ paths: [...files].filter(([k, f]) => k.endsWith('.md') && hit(f.content)).map(([k]) => k) })
+      return json({ files: [...files].filter(([k, f]) => k.endsWith('.md') && hit(f.content)).map(([path, f]) => ({ path, content: f.content, seq: f.seq })) })
     }
     if (p.endsWith('/file')) {
       const path = url.searchParams.get('path') ?? ''
@@ -201,13 +205,16 @@ describe('cloud bridge: rename / move rewrites [[links]] vault-wide (G2-04)', ()
     seed({ 'notes/A.md': 'x [[B]]\n', 'B.md': 'b\n' })
     const { bridge } = await boot()
     let moved = false
-    afterGet = (p) => {
+    // 重写刚读完这篇(逐篇读 = GET 之后;原文随候选来 = 第一次 PUT 之前),别的设备把它扔进了回收站
+    const toTrash = (p: string): void => {
       if (p !== 'notes/A.md' || moved) return
-      moved = true // 重写刚读完这篇,别的设备把它扔进了回收站
+      moved = true
       const f = files.get('notes/A.md')!
       files.delete('notes/A.md')
       files.set('.trash/A.md', f)
     }
+    afterGet = toTrash
+    beforePut = toTrash
     await bridge.renamePageFile('B.md', 'C')
     expect(moved).toBe(true)
     expect(files.has('notes/A.md')).toBe(false)
@@ -326,12 +333,46 @@ describe('cloud bridge: 单篇改名先问服务端候选,不逐篇读全库(11-
     expect(toasts).toEqual([])
   })
 
-  it('frontmatter 里的 [[链接]] 也在候选里:只读那一篇并改写', async () => {
+  it('frontmatter 里的 [[链接]] 也在候选里:原文随候选来,一篇不读、一次 PUT 改写', async () => {
     seed({ ...bulk(50), 'moc.md': '---\nup: "[[untitled]]"\n---\nbody\n', 'untitled.md': '\n' })
     const { bridge } = await boot()
     await bridge.renamePageFile('untitled.md', 'Temp')
     expect(files.get('moc.md')!.content).toBe('---\nup: "[[Temp]]"\n---\nbody\n')
-    expect(others()).toEqual(['moc.md'])
+    expect(others()).toEqual([])
+    expect(puts).toEqual(['moc.md'])
+  })
+
+  it('候选随附的那版过期了(取完之后别处写过)→ 409 回头重取,按现文重算,对方的字不丢', async () => {
+    seed({ 'moc.md': 'x [[untitled]]\n', 'untitled.md': '\n' })
+    const { bridge } = await boot()
+    let raced = false
+    beforePut = (p) => {
+      if (p !== 'moc.md' || raced) return
+      raced = true
+      const cur = files.get('moc.md')!
+      files.set('moc.md', { content: `${cur.content}别的设备刚写的一行\n`, seq: cur.seq + 1 })
+    }
+    await bridge.renamePageFile('untitled.md', 'Temp')
+    expect(files.get('moc.md')!.content).toBe('x [[Temp]]\n别的设备刚写的一行\n')
+    expect(toasts).toEqual([])
+  })
+
+  it('改写撞上限流(429)→ 等一等再发,不记成「链接没能更新」', async () => {
+    seed({ 'moc.md': 'x [[untitled]]\n', 'untitled.md': '\n' })
+    const { bridge } = await boot()
+    let limited = 2
+    limitPut = (p) => p === 'moc.md' && limited-- > 0
+    vi.useFakeTimers({ toFake: ['setTimeout'] })
+    try {
+      const done = bridge.renamePageFile('untitled.md', 'Temp')
+      for (let i = 0; i < 20 && files.get('moc.md')!.content.includes('untitled'); i++) await vi.advanceTimersByTimeAsync(5_000)
+      expect(await done).toBe('Temp.md')
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(limited).toBeLessThan(0)
+    expect(files.get('moc.md')!.content).toBe('x [[Temp]]\n')
+    expect(toasts).toEqual([])
   })
 
   it('新名撞上别处的同名笔记(遮蔽):被抢的裸名链接补成路径限定', async () => {
@@ -339,7 +380,7 @@ describe('cloud bridge: 单篇改名先问服务端候选,不逐篇读全库(11-
     const { bridge } = await boot()
     await bridge.renamePageFile('a/untitled.md', 'Temp')
     expect(files.get('a/x.md')!.content).toBe('[[b/Temp]]\n')
-    expect(others()).toEqual(['a/x.md'])
+    expect(others()).toEqual([])
   })
 
   it('旧服务端(没有 /ref-candidates)→ 回落全库扫,引用照样跟上', async () => {
