@@ -513,8 +513,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     return f
   }
 
-  const putFile = async (path: string, content: string, baseSeq: number, force = false): Promise<PutResultDto> => {
-    const r = await http.put<PutResultDto>(fileUrl(), { path, content, baseSeq, ...(force ? { force: true } : {}) })
+  const putFile = async (path: string, content: string, baseSeq: number, force = false, expectedHash?: string): Promise<PutResultDto> => {
+    const r = await http.put<PutResultDto>(fileUrl(), { path, content, baseSeq, ...(force ? { force: true } : {}), ...(expectedHash ? { expectedHash } : {}) })
     noteSeq(path, r.seq)
     seqFp.set(path, { seq: r.seq, fp: textFingerprint(content) })
     pageCache.delete(path) // 单点咽喉:任何文本写(fm 外科写/画板/trash meta…)后缓存失效;savePage 随手回填
@@ -848,7 +848,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   // 大库挪文件夹照样会撞限流,正解是服务端 /move 带 rewriteLinks。旧服务端没有这个端点 → 回落全库扫(行为同以前)。
   // 候选随附原文 + seq:改一篇被上百篇引用的笔记时一篇只剩一次 PUT(此前读 + 再读 + 写三次,台架 120 篇引用 → 59 篇没改上)。
   // 还撞限流(429)就等一等再发,等够一个限流窗才算失败:宁可改名慢,不留断链。
-  type Known = { content: string; seq: number }
+  type Known = { content: string; seq: number; hash?: string }
   const patient = async <T,>(fn: () => Promise<T>): Promise<T> => {
     for (const ms of [2_000, 5_000, 10_000, 20_000, 30_000]) {
       try {
@@ -864,21 +864,22 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
    *  删了 / 挪进 .trash,SSE 的 forgetSeq 清掉状态后它按 baseSeq 0 把原路径重建,或走 recovered 另存,还记成「改写成功」。
    *  这里现取现比:不在了 → 'gone'(路径已变,记入失败清单);内容不是读到的那版 → 交回现文重算;
    *  PUT 恒带取到的 seq(>0,服务端对不存在的路径只会 409 不会创建),409 就回头重取。
-   *  known = 候选随附的那版:第一发直接拿它的 seq 写,省掉现取;它过期了就是 409,照常回头重取。 */
+   *  known = 候选随附的那版:第一发直接拿它的 seq + content_hash 写,省掉现取;过期了就是 409,照常回头重取。
+   *  只带 seq 不够(评审复现):那篇被换成另一份新文件也从 seq 1 数起,旧原文会把它盖掉 —— 没 hash 就不走这条捷径。 */
   const updateExisting = (p: string, text: string, base: string, known?: Known): Promise<TextWriteResult | 'gone'> =>
     enqueue([p], async () => {
       await ensureVault()
       for (let attempt = 0; attempt < 3; attempt++) {
         let f: Known
         try {
-          f = attempt === 0 && known ? known : await patient(() => getFile(p))
+          f = attempt === 0 && known?.hash ? known : await patient(() => getFile(p))
         } catch (e) {
           if (is404(e)) return 'gone' as const
           throw e
         }
         if (textFingerprint(f.content) !== base) return { ok: false as const, current: f.content }
         try {
-          await patient(() => putFile(p, text, f.seq))
+          await patient(() => putFile(p, text, f.seq, false, attempt === 0 ? known?.hash : undefined))
           return { ok: true as const }
         } catch (e) {
           if (!is409(e)) throw e // 取完之后别处抢先写了 / 删了:回头重取(删了就是 'gone')
@@ -895,7 +896,9 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       if (!Array.isArray(r?.files)) return undefined
       const out = new Map<string, Known>()
       for (const f of r.files as Array<Partial<FileDto>>) {
-        if (typeof f?.path === 'string' && typeof f.content === 'string' && typeof f.seq === 'number') out.set(f.path, { content: f.content, seq: f.seq })
+        if (typeof f?.path === 'string' && typeof f.content === 'string' && typeof f.seq === 'number') {
+          out.set(f.path, { content: f.content, seq: f.seq, hash: typeof f.hash === 'string' ? f.hash : undefined })
+        }
       }
       return out
     } catch {
