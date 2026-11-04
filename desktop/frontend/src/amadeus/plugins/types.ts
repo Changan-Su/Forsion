@@ -1755,7 +1755,8 @@ export interface PluginContext {
     haptic?(kind: 'tick'): void
     /** The native model menu. Selection stays local; never writes global defaults. Feature-detect on older hosts. */
     mountModelPicker?(el: HTMLElement, opts: import("../../../../shared/pluginModelPicker").PluginModelPickerOptions): import("../../../../shared/pluginModelPicker").PluginModelPickerHandle
-    /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access.
+    /** Native Amadeus editor for Markdown owned by the caller (API drafts, etc.). No active-vault access unless you
+     *  pass `vault: true` (2.13.8+; older hosts ignore it — `ctx.ui.mountMarkdown` arrived in the same version).
      *  By default a row of buttons switches between the visual editor, Markdown source and the published preview;
      *  `modes: false` draws no row and keeps the visual editor only (an editor inside your own card or cell).
      *  Hosts up to 2.13.2 ignore `modes` and always draw the row. */
@@ -1763,6 +1764,13 @@ export interface PluginContext {
       el: HTMLElement,
       opts: import('../../../../shared/markdownEditor').PluginMarkdownEditorOptions,
     ): import('../../../../shared/markdownEditor').PluginMarkdownEditorHandle
+    /** Read-only Markdown, drawn like a chat answer (2.13.8+): GFM, `$math$` / `$$math$$`, and `[[links]]` that open the
+     *  note from the open vault beside the view (unresolved ones read dimmed). A single newline is a line break, as the editor writes it. Code blocks get a copy button but never a run button;
+     *  `![[embeds]]` stay links. Cheap enough for one per list row. Change it with `update({ markdown })`. */
+    mountMarkdown?(
+      el: HTMLElement,
+      opts: import('../../../../shared/markdownEditor').PluginMarkdownOptions,
+    ): import('../../../../shared/markdownEditor').PluginMarkdownHandle
     /** 在视口坐标 (x, y) 开一个宿主样式的右键菜单(2026-10-18+),和内置主页、Ribbon 的右键菜单一个样子;放不下自己翻面。
      *  `items`:`{ label, run(), checked?, disabled?, danger? }`(给了 `checked` 的那一组前面画勾)。同一时刻只开一个,
      *  点菜单外 / Esc / 窗口失焦 / 点了某一项都会关;返回关闭函数。旧宿主没有:`ctx.ui?.contextMenu?.(…)`。
