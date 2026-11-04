@@ -1,0 +1,22 @@
+import { mountHostReact } from '@lcl/components'
+import { Markdown } from '../../components/Markdown'
+import { HostLocaleProvider } from '../../i18n'
+import type { PluginMarkdownHandle, PluginMarkdownOptions } from '../../../../shared/markdownEditor'
+
+/** ctx.ui.mountMarkdown:聊天那套只读渲染(GFM、公式、双链点开笔记)。不跑代码块、不开内联嵌入和链接预览卡 —— 插件给的是任意文本。 */
+export function mountPluginMarkdown(el: HTMLElement, initial: PluginMarkdownOptions): PluginMarkdownHandle {
+  const options = { ...initial }
+  const tree = () => (
+    <HostLocaleProvider>
+      <div className="md-body">
+        <Markdown content={options.markdown} allowRun={false} />
+      </div>
+    </HostLocaleProvider>
+  )
+  let alive = true
+  const mounted = mountHostReact(el, tree(), () => { alive = false })
+  return {
+    update(patch) { if (alive) { Object.assign(options, patch); mounted.render(tree()) } },
+    dispose: mounted.dispose,
+  }
+}

@@ -71,7 +71,7 @@ import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown, fromAssetUrl 
 import { ATTACHMENT_CLIP_MIME, recentAttachmentCopy, rememberAttachmentCopy } from '../../lib/attachmentClipboard'
 import { writeImageToClipboard } from '../../../lib/imageClipboard'
 import { tabsToEntities, entitiesToTabs } from '@amadeus-shared/indentIo'
-import { resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from '@amadeus-shared/links'
+import { linkTarget, resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from '@amadeus-shared/links'
 import { resolveFileLink } from '../../lib/vaultFiles'
 import { wikiFilesEnabled } from '../../lib/wikiFiles'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
@@ -2279,10 +2279,21 @@ export function MarkdownBlock({
  *  双链建议无候选(输入 [[ 仅作纯文本)。资源不做 display/stored 变换 —— 外部文件原文往返无损。
  *  缩进编解码(indentIo)**要**做:它绕过 toDisplay/toStoredMarkdown,不包一层的话行首制表符
  *  段落在悬浮预览/工作区编辑里仍会被 remark 读成缩进代码块。 */
-export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immediate = false }: {
+/** 插件视图里点双链:笔记开在旁边那半屏(⌘/Ctrl → 新标签页),别就地换掉插件那个标签;文件 / PDF / 未解析交 openWikiLink(同样开在旁边)。 */
+function openVaultWiki(name: string, o?: { newTab?: boolean }): void {
+  const ps = usePageStore.getState()
+  const note = resolvePageName(linkTarget(name), ps.pages)
+  // ponytail: `[[笔记#标题]]` 只开到笔记、不滚到标题;要滚时换 openNoteAtHeading(它目前只认 newTab、不认 split)
+  if (note) void import('../../../amadeusNav').then((m) => m.openNote(note, o?.newTab ? { newTab: true } : { split: true }))
+  else ps.openWikiLink(name, undefined, { newTab: o?.newTab, split: !o?.newTab })
+}
+
+export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immediate = false, vault = false }: {
   initial: string
   onChange: (md: string) => void
   readOnly?: boolean
+  /** 接上当前库的双链:补全页面 / 文件名、点开、未解析黯淡(插件 mountMarkdownEditor 的 vault 选项)。缺省不碰库。 */
+  vault?: boolean
   /** Record peeks may unmount immediately after typing. Persist transactions before listener's 200ms debounce. */
   immediate?: boolean
 }) {
@@ -2346,8 +2357,18 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
           keys={keys}
           saveImage={async () => null}
           saveFiles={async () => {}}
-          onOpenWiki={noop}
-          getPageNames={() => []}
+          onOpenWiki={vault ? openVaultWiki : noop}
+          getPageNames={vault ? () => usePageStore.getState().pages : () => []}
+          getFiles={vault ? () => (wikiFilesEnabled() ? usePageStore.getState().files : []) : undefined}
+          isWikiResolved={vault ? (n) => {
+            const { pages, files } = usePageStore.getState()
+            return !!resolvePageName(n, pages) || !!resolveFileLink(n, files)
+          } : undefined}
+          wikiIcon={vault ? (n) => {
+            const { pages, icons } = usePageStore.getState()
+            const p = resolvePageName(n, pages)
+            return p ? icons[p] : undefined
+          } : undefined}
           focusPlace={null}
           onFocused={noop}
           readOnly={readOnly}

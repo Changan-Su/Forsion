@@ -32,6 +32,7 @@ vi.mock('../blocks/excalidraw/forkRuntime', () => ({
 const { createPluginViewSurface } = await import('./viewSurface')
 const { mountPluginChatBox } = await import('./chatBoxSurface')
 const { mountPluginMarkdownEditor } = await import('./markdownEditorSurface')
+const { mountPluginMarkdown } = await import('./markdownSurface')
 const { mountPluginTable } = await import('./tableSurface')
 const { mountPluginDashboard } = await import('./dashboardSurface')
 const { mountPluginFloatingToc } = await import('./floatingTocSurface')
@@ -51,6 +52,7 @@ const cases: Array<[name: string, mount: Mount, selector: string]> = [
   ['mountNoteView(插件文件视图)', (el) => view.surface.mountNoteView(el), '.plugin-note-surface'],
   ['ctx.ui.mountChatBox', (el) => mountPluginChatBox(el, { value: '', onSubmit: async () => true }).dispose, 'textarea'],
   ['ctx.ui.mountMarkdownEditor', (el) => mountPluginMarkdownEditor(el, { value: '# a' }).dispose, '.amx-publishing-editor'],
+  ['ctx.ui.mountMarkdown', (el) => mountPluginMarkdown(el, { markdown: 'a' }).dispose, '.md-body'],
   ['ctx.table.mount', (el) => mountPluginTable('contract', el, { id: 't', columns: [{ key: 'name', label: 'Name', kind: 'text' }], rows: [{ id: 'r1', cells: { name: 'x' } }] }).dispose, '.amx-plugtable'],
   ['ctx.dashboard.mount', (el) => mountPluginDashboard('contract', el, { recipe: { cards: [{ kind: 'stat', id: 'k', label: 'L', value: '1', w: 4, h: 2 }] } }).dispose, '[data-stub="dashboard"]'],
   ['ctx.ui.mountFloatingToc', (el) => mountPluginFloatingToc(el, { scrollContainer: el }).dispose, '.lcl-ftoc-mount-layer'],
@@ -149,6 +151,7 @@ describe.each<[name: string, start: (el: HTMLElement) => () => void]>([
   ['ctx.ui.mountChatBox → update', (el) => { const h = mountPluginChatBox(el, { value: '', onSubmit: async () => true }); return () => h.update({ placeholder: 'late' }) }],
   ['ctx.ui.mountMarkdownEditor → update', (el) => { const h = mountPluginMarkdownEditor(el, { value: 'a' }); return () => h.update({ value: 'late' }) }],
   ['ctx.ui.mountMarkdownEditor → insertMarkdown', (el) => { const h = mountPluginMarkdownEditor(el, { value: 'a' }); return () => h.insertMarkdown('late') }],
+  ['ctx.ui.mountMarkdown → update', (el) => { const h = mountPluginMarkdown(el, { markdown: 'a' }); return () => h.update({ markdown: 'late' }) }],
   ['ctx.table.mount → update', (el) => { const h = mountPluginTable('contract', el, tableSpec('x')); return () => h.update(tableSpec('late')) }],
 ])('旧句柄在 el 被后来的挂载接走之后是哑的:%s', (_name, start) => {
   it('后来那份原样留着,el 里只有它一层,它自己的 dispose 收得掉', async () => {
@@ -389,4 +392,18 @@ it('ctx.ui.attachTooltip:悬停出宿主提示框、不往插件元素里加节�
   expect(document.querySelector('.lcl-tip'), '句柄已哑').toBeNull()
   expect(() => ctx.ui!.attachTooltip!({} as HTMLElement, 'x')).not.toThrow() // 停用之后:哑句柄,不抛
   expect(errors).toEqual([])
+})
+
+// ctx.ui.mountMarkdown(2.13.8):聊天那套只读渲染 —— 公式、双链真的画出来,update 换正文,代码块不给运行钮。
+it('ctx.ui.mountMarkdown 画公式与双链,update 换正文,代码块没有运行钮', async () => {
+  let h!: ReturnType<typeof mountPluginMarkdown>
+  await act(async () => { h = mountPluginMarkdown(el, { markdown: '面积 $x^2$ 见 [[笔记一]]\n\n```sh\nls\n```' }) })
+  expect(el.querySelector('.katex')).not.toBeNull()
+  expect(el.querySelector('.wikilink')?.textContent).toContain('笔记一')
+  expect(el.querySelector('[aria-label*="Run"], [title*="运行"], [title*="Run"]')).toBeNull()
+  await act(async () => { h.update({ markdown: '**新**' }) })
+  expect(el.querySelector('strong')?.textContent).toBe('新')
+  expect(el.querySelector('.katex')).toBeNull()
+  await act(async () => { h.dispose() })
+  expect(el.childElementCount).toBe(0)
 })

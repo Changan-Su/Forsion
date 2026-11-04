@@ -76,6 +76,7 @@ function EditorSurface({
           onChange={change}
           readOnly={options.readOnly}
           immediate
+          vault={options.vault}
         />
       )}
       {mode === 'source' && (

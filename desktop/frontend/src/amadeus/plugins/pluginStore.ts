@@ -2060,6 +2060,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
           dispose,
         }
       },
+      mountMarkdown: (el, opts) => {
+        if (!(el instanceof HTMLElement) || typeof opts?.markdown !== 'string') throw new TypeError('mountMarkdown needs an HTMLElement and Markdown')
+        if (!ctxAlive()) return { update() {}, dispose() {} }
+        const pending = { ...opts }
+        let mounted: import('../../../../shared/markdownEditor').PluginMarkdownHandle | null = null
+        let cancelled = false
+        const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'markdown')
+        const mine = claimHostMount(el)
+        void import('./markdownSurface').then(m => {
+          if (cancelled) return
+          if (!mine()) { dispose(); return }
+          mounted = m.mountPluginMarkdown(el, pending)
+        }).catch(e => console.error(`[amadeus] plugin "${pluginId}" Markdown mount failed`, e))
+        return { update(patch) { if (!cancelled) { Object.assign(pending, patch); mounted?.update(patch) } }, dispose }
+      },
       mountModelPicker: (el, opts) => {
         if (!ctxAlive()) return { update() {}, dispose() {} }
         if (!(el instanceof HTMLElement) || !['asr', 'translation'].includes(opts?.kind) || typeof opts?.onChange !== 'function') throw new TypeError('mountModelPicker needs an element, kind and onChange')
