@@ -133,9 +133,11 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
         // 11-03:笔记库那类项目里,判官把「讲到哪了」和讲义内容记成了项目记忆 —— 光说「别记进度」(上面的负面清单)没拦住。
         // 改成每条必须先标类别,只收前五类;进度、内容和没标类别的都不写(见下面 PROJECT_FACT_KINDS)。
         '"project_memory_candidates": an array (usually empty) of NEW facts that hold only inside this project, each an object {"kind": K, "fact": "one sentence"}. ' +
-        'K is one of: "command" (a command or workflow proven to work here), "location" (where something lives in this project), "convention" (how things are done here), ' +
+        'K is one of: "command" (a command or workflow proven to work here), "location" (the path of a file, folder or tool of this project), "convention" (how things are done here), ' +
         '"landmine" (a trap found here), "request" (what the user wants agents to do or avoid in this project), ' +
-        '"progress" (where a task, lesson, reading or document stands; what was done or covered), "content" (subject matter itself: what a paper, lecture, note or file says). ' +
+        '"progress" (where a task, lesson, reading or document stands or stopped, what was done or covered, where to continue), ' +
+        '"content" (subject matter itself: what a paper, lecture, note or file says, or which chapter, section or page of a source it corresponds to). ' +
+        'Test each entry: would an agent starting an unrelated task in this project next month need it? A fact about one document, lesson or session is "progress" or "content", never "location". ' +
         'Label every entry honestly: only the first five kinds are saved; "progress" and "content" entries are dropped, which is the expected outcome for them. ' +
         'Same gate and same form for "fact" as memory_candidates; at most 3 entries. ' +
         'Skip whatever a [Project memory] block below already says. ' +
