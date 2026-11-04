@@ -5,6 +5,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { EditorView } from '@milkdown/kit/prose/view'
+import { TextSelection } from '@milkdown/kit/prose/state'
 import { addEditorExtension, clearEditorExtensions } from '../../plugins/editorExtensions'
 import { PlainMarkdownEditor } from './MarkdownBlock'
 
@@ -137,5 +138,20 @@ describe('记录正文即时保存', () => {
     })
     expect(editor.state.doc.textContent).toBe('Start')
     expect(changed).not.toHaveBeenCalled()
+  })
+})
+
+// 独立编辑器没有邻块可切(2026-11-04 评审):Shift+Enter 曾把光标后的内容 splitTail 切走、交给 no-op 的 insertAfter —— 丢字还立刻存盘。
+// 负对照:去掉 MarkdownBlock 里 `if (standalone) return splitBlock(...)` 那行 → 本条红(剩 'Sta\n')。
+describe('独立编辑器的 Shift+Enter', () => {
+  it('就地分段,光标后的内容留在下一行', async () => {
+    const changed = vi.fn()
+    const editor = await mount(changed)
+    changed.mockClear()
+    act(() => {
+      editor.dispatch(editor.state.tr.setSelection(TextSelection.create(editor.state.doc, 4)))
+      editor.someProp('handleKeyDown', (f) => f(editor, new KeyboardEvent('keydown', { key: 'Enter', shiftKey: true })))
+    })
+    expect(changed).toHaveBeenLastCalledWith('Sta\nrt\n')
   })
 })

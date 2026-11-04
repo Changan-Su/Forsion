@@ -1,6 +1,6 @@
 // 聊天气泡里的单个 [[双链]]:解析(vault 绝对路径→相对;resolvePageName 全库匹配)→ 可点链接打开笔记。
 // class/data-wiki 与编辑器同款 → 全局挂载的 WikiHoverPreview 悬停浮卡直接吃到,零接线。
-import { isValidElement, useMemo, type ReactNode } from 'react'
+import { createContext, isValidElement, useContext, useMemo, type ReactNode } from 'react'
 import { UI_MODE, getView } from '@lcl/engine'
 import { linkTarget, resolvePageName } from '@amadeus-shared/links'
 import { isHostPath, mediaLabel, parseBlockSubpath, parseLineSubpath, parseMediaLinkInner, parsePdfLinkInner, splitLinkInner, webCiteKey, withTextFragment, type LineLoc, type MediaLoc } from '@amadeus-shared/pdfLink'
@@ -22,6 +22,9 @@ registerMessages({
 
 /** 聊天里的一条 [[…]]。应用 / 窗口引用(目标带 app:// / window://)先认,画成引用芯片;其余才是笔记 / 会话 / 文件那一套。
  *  拆成两个组件是因为后者一上来就是一串 hook,不能在它里面提前返回。 */
+/** 笔记链接开在旁边那半屏(插件视图里的只读 Markdown 开这个:就地打开会把插件那个标签换掉)。缺省 false = 聊天里原样。 */
+export const WikiOpensBeside = createContext(false)
+
 export function ChatWikiLink({ inner }: { inner: string }) {
   const app = parseAppRefInner(inner)
   return app ? <AppRefChip appRef={app} /> : <NoteWikiLink inner={inner} />
@@ -41,6 +44,7 @@ function NoteWikiLink({ inner }: { inner: string }) {
   const files = usePageStore((s) => s.files)
   const root = usePageStore((s) => s.vaultRoot)
   const label = wikiLabel(inner)
+  const beside = useContext(WikiOpensBeside)
   // PDF 引用 `[[书.pdf#page=18]]`(read_document 教 agent 这么写):点开就是那一页。
   // ⚠️ 必须吃**原始 inner**——linkTarget 会把 `#page=` 砍掉,页码就此蒸发(pageStore 同款警告)。
   // ⚠️vault 懒引导:files 只在有人调过 ensureAmadeusReady 之后才有值,空了引用条会全判「未解析」。
@@ -195,7 +199,7 @@ function NoteWikiLink({ inner }: { inner: string }) {
       className="wikilink"
       data-wiki={path}
       onClick={(e) => {
-        const nt = newTabOf(e) // ⌘/Ctrl+点击 → 新标签页(事件对象别带进异步回调,先取出来)
+        const nt = newTabOf(e) ?? (beside ? { split: true as const } : undefined) // ⌘/Ctrl+点击 → 新标签页(事件对象别带进异步回调,先取出来)
         // 懒加载防 barrel 循环,web 侧同样可用;带标题/块锚点 → 打开后滚到那个位置
         void import('../amadeusNav').then((m) => (
           blockId ? m.openNoteAtBlock(path, blockId, nt)

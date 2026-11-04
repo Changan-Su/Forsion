@@ -2041,16 +2041,26 @@ export const usePluginStore = create<PluginState>((set, get) => {
         if (!cancelled) {
           // 调用这一刻就认领 el:动态 import 落地时 el 已经交给了后来的挂载 → 这次作废(见 claimHostMount)
           const mine = claimHostMount(el)
-          void import('./markdownEditorSurface').then(m => {
-            if (cancelled) return
-            if (!mine()) { dispose(); return }
-            mounted = m.mountPluginMarkdownEditor(el, pending)
-            if (focusPending) mounted.focus()
-          }).catch(e => {
+          const fail = (e: unknown): void => {
             console.error('[amadeus] Markdown editor mount failed', e)
             if (cancelled || !mine()) return
             failure = mountHostReact(el, String(e))
-          })
+          }
+          void import('./markdownEditorSurface').then(m => {
+            // 插件常在自己的浮层 / 卡片进页面之前就挂(宿主 popover 的内容也是异步放进去的):Milkdown 在脱离文档的元素上建起来,
+            // 第一阵输入只改了 DOM、进不了编辑器状态(onChange 一次不来,下一笔事务还会把字抹掉)。等 el 进了文档再建。
+            // ponytail: 每帧看一眼,dispose / 被接走即停;永远不进文档的 el 就一直等着
+            const start = (): void => {
+              if (cancelled) return
+              if (!mine()) { dispose(); return }
+              if (!el.isConnected) { requestAnimationFrame(start); return }
+              try {
+                mounted = m.mountPluginMarkdownEditor(el, pending)
+                if (focusPending) mounted.focus()
+              } catch (e) { fail(e) }
+            }
+            start()
+          }).catch(fail)
         }
         return {
           getValue() { return mounted?.getValue() ?? pending.value },
@@ -2059,6 +2069,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
           focus() { if (!cancelled) { focusPending = true; mounted?.focus() } },
           dispose,
         }
+      },
+      mountMarkdown: (el, opts) => {
+        if (!(el instanceof HTMLElement) || typeof opts?.markdown !== 'string') throw new TypeError('mountMarkdown needs an HTMLElement and Markdown')
+        if (!ctxAlive()) return { update() {}, dispose() {} }
+        const pending = { ...opts }
+        let mounted: import('../../../../shared/markdownEditor').PluginMarkdownHandle | null = null
+        let cancelled = false
+        const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'markdown')
+        const mine = claimHostMount(el)
+        void import('./markdownSurface').then(m => {
+          if (cancelled) return
+          if (!mine()) { dispose(); return }
+          mounted = m.mountPluginMarkdown(el, pending)
+        }).catch(e => console.error(`[amadeus] plugin "${pluginId}" Markdown mount failed`, e))
+        return { update(patch) { if (!cancelled) { Object.assign(pending, patch); mounted?.update(patch) } }, dispose }
       },
       mountModelPicker: (el, opts) => {
         if (!ctxAlive()) return { update() {}, dispose() {} }
