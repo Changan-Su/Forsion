@@ -91,6 +91,13 @@ describe('ctx.ui.mountToolIsland', () => {
     expect(document.activeElement).toBe(btn('highlight'))
   })
 
+  it('换了顺序(React 搬动节点,真浏览器里搬动即失焦)焦点也还在原来那颗', () => {
+    const h = mount({ active: 'select' })
+    btn('highlight').focus()
+    h.update({ tools: [...tools()].reverse() })
+    expect((document.activeElement as HTMLElement).dataset.tool).toBe('highlight')
+  })
+
   it('row:同一个元素摆在岛下,showRow 开合;slots 包进四角,update 能换;onPick 抛错不连累宿主', () => {
     const row = document.createElement('div')
     const dots = row.appendChild(document.createElement('span'))

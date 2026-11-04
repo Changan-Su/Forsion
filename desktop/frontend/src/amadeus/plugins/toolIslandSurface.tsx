@@ -71,11 +71,15 @@ export function mountPluginToolIsland(root: HTMLElement, pluginId: string, row: 
   let disposed = false
   const render = (): void => {
     if (disposed) return
-    const hadFocus = layer.contains(document.activeElement)
+    const focused = document.activeElement
+    const hadFocus = layer.contains(focused)
+    const focusedTool = focused instanceof HTMLElement ? focused.dataset.tool : undefined
     flushSync(() => mounted.render(tree()))
-    // 按钮按 id 作 key,同一颗按钮 DOM 不换,焦点自己留着;只有那颗被拿掉了才落到 body —— 交给当前工具那颗
+    // 按钮按 id 作 key,同一颗按钮 DOM 不换,焦点多半自己留着。但换了顺序 React 会搬动节点(搬动即失焦),那颗被拿掉了
+    // 也会落到 body:还给同一颗,没了就给当前工具那颗
     if (hadFocus && !layer.contains(document.activeElement)) {
-      strip.querySelector<HTMLElement>('.lcl-isle-btn[data-on]')?.focus()
+      const btns = [...strip.querySelectorAll<HTMLElement>('.lcl-isle-btn')]
+      ;(btns.find((b) => b.dataset.tool === focusedTool) ?? btns.find((b) => b.hasAttribute('data-on')))?.focus()
     }
   }
 
