@@ -686,6 +686,8 @@
   text-underline-offset: 2px;
 }
 .t2-content .citelink:hover { text-decoration-color: currentColor; }
+/* 用户气泡开头的斜杠命令:和输入框里那一枚同一画法(composer2.css .t2c-tok) */
+.t2-user .t2-cmd { color: var(--signal); background: color-mix(in srgb, var(--signal) 14%, transparent); border-radius: var(--radius-sm, 6px); padding: 0 0.15em; }
 .t2-content .wikilink:hover, .t2-user .wikilink:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .t2-content .wikilink.wikilink-unresolved, .t2-user .wikilink.wikilink-unresolved {
   color: var(--text-muted);
