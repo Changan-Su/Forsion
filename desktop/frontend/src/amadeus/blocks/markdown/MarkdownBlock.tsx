@@ -126,7 +126,7 @@ import { ASK_ALT, askString, askStringOrAlt } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
 import { droppedTextMarkdown, isPlainMultiline, plainLinesToParagraphs, singleLinePasteMode } from './plainPaste'
 import { autolinkInputRule, autolinkSerializer } from './autolink'
-import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
+import { parseBlockSubpath, splitLinkInner, wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
 import { unescapeHighlightAtLineStart, unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠;I-17:行首 ==高亮== 同理
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
@@ -2283,8 +2283,13 @@ export function MarkdownBlock({
 function openVaultWiki(name: string, o?: { newTab?: boolean }): void {
   const ps = usePageStore.getState()
   const note = resolvePageName(linkTarget(name), ps.pages)
-  // ponytail: `[[笔记#标题]]` 只开到笔记、不滚到标题;要滚时换 openNoteAtHeading(它目前只认 newTab、不认 split)
-  if (note) void import('../../../amadeusNav').then((m) => m.openNote(note, o?.newTab ? { newTab: true } : { split: true }))
+  if (note) {
+    const where = o?.newTab ? { newTab: true } : { split: true }
+    const { subpath } = splitLinkInner(name)
+    const block = subpath ? parseBlockSubpath(subpath) : null
+    const heading = subpath && !block && !subpath.startsWith('^') ? subpath : null // 同 ChatWikiLink:块锚 → 标题 → 只开笔记
+    void import('../../../amadeusNav').then((m) => block ? m.openNoteAtBlock(note, block, where) : heading ? m.openNoteAtHeading(note, heading, where) : m.openNote(note, where))
+  }
   else ps.openWikiLink(name, undefined, { newTab: o?.newTab, split: !o?.newTab })
 }
 

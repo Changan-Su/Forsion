@@ -1,5 +1,6 @@
 import { mountHostReact } from '@lcl/components'
 import { Markdown } from '../../components/Markdown'
+import { WikiOpensBeside } from '../../components/ChatWikiLink'
 import { HostLocaleProvider } from '../../i18n'
 import type { PluginMarkdownHandle, PluginMarkdownOptions } from '../../../../shared/markdownEditor'
 
@@ -8,9 +9,11 @@ export function mountPluginMarkdown(el: HTMLElement, initial: PluginMarkdownOpti
   const options = { ...initial }
   const tree = () => (
     <HostLocaleProvider>
-      <div className="md-body">
-        <Markdown content={options.markdown} allowRun={false} />
-      </div>
+      <WikiOpensBeside.Provider value>
+        <div className="md-body">
+          <Markdown content={options.markdown} allowRun={false} />
+        </div>
+      </WikiOpensBeside.Provider>
     </HostLocaleProvider>
   )
   let alive = true
