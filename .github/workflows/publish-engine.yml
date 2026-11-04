@@ -64,12 +64,14 @@ jobs:
           npm test
           git diff --exit-code -- package.json package-lock.json
       - run: npm run build
-      # 界面半身:对着这份检出的共享模块表打 ../tangu-agent/ui/main.js;build-tangu-ui 自己核对没把宿主文件 / 共享包打进去、表没过期
+      # 界面半身:对着这份检出的共享模块表打 ../tangu-agent/ui/main.js;build-tangu-ui 自己核对没把宿主文件 / 共享包打进去、表没过期。
+      # 先跑 desktop 的 typecheck:esbuild 不核对「宿主模块真有这个导出」,引错了要到用户那里求值时才炸(Codex 4c 评审)
       - name: Build the Tangu UI half
         working-directory: desktop
         run: |
           npm ci --ignore-scripts --no-audit --no-fund
           node build/link-lcl.cjs
+          npm run typecheck
           node scripts/build-tangu-ui.mjs
 
       - name: Sign and pack

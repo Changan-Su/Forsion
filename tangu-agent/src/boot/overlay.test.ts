@@ -150,16 +150,15 @@ describe('verifyEngineSignature', () => {
     expect(verifyEngineSignature(dir, pub)).toMatch(/package\.json is not covered/);
   });
 
-  it('没带界面半身(ui/main.js、manifest.json)的热更新包不过', () => {
-    for (const rel of Object.values(UI_FILES)) {
-      const dir = path.join(engineRoot, `no-${rel.replace(/\W/g, '-')}`);
-      const files: Record<string, string> = { 'package.json': pkgJson('2.1.1'), ...runtimeFiles(), ...uiFiles() };
-      delete files[rel];
-      write(dir, files);
-      const hashes = Object.fromEntries(Object.entries(files).map(([r, data]) => [r, createHash('sha256').update(data).digest('hex')]));
-      write(dir, { SIGNATURE: JSON.stringify({ alg: 'ed25519', files: hashes, sig: sign(null, Buffer.from(canonicalFiles(hashes)), privateKey).toString('base64') }) });
-      expect(verifyEngineSignature(dir, pub)).toBe(`${rel} is not covered by SIGNATURE`);
-    }
+  it('没带界面半身的包(只热更引擎)照收;带了却没签进去的界面文件不收', () => {
+    const dir = path.join(engineRoot, 'engine-only');
+    const files: Record<string, string> = { 'package.json': pkgJson('2.1.1'), ...runtimeFiles() };
+    write(dir, files);
+    const hashes = Object.fromEntries(Object.entries(files).map(([r, data]) => [r, createHash('sha256').update(data).digest('hex')]));
+    write(dir, { SIGNATURE: JSON.stringify({ alg: 'ed25519', files: hashes, sig: sign(null, Buffer.from(canonicalFiles(hashes)), privateKey).toString('base64') }) });
+    expect(verifyEngineSignature(dir, pub)).toBeNull();
+    write(dir, { [UI_FILES.main]: 'evil' });
+    expect(verifyEngineSignature(dir, pub)).toBe(`${UI_FILES.main} is not covered by SIGNATURE`);
   });
 
   it('没有 SIGNATURE 或格式不对不过', () => {

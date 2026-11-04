@@ -15,10 +15,10 @@ import { engineLineTag } from '../../desktop/shared/engineLine.mjs'
 const LINE_TAG_MODULE = 'desktop/shared/engineLine.mjs'
 // 界面热更新 4c:热更新包带着 Tangu 的界面半身,它直接拿宿主的共享模块(desktop/frontend/src/coreTangu/sharedModules.generated.ts)。
 // 所以相对基准桌面 tag,改动只能落在「Tangu 包」里:引擎(tangu-agent/,契约目录除外 —— 宿主也编着一份)+ 边界清单里的界面文件。
-// 不进安装包也不进热更新包的(文档、CI、测试)不算。
+// 不进安装包也不进热更新包的(仓根 docs/、CI、仓根的 .md、测试)不算;别处的 .md 照算 —— CHANGELOG、使用手册是 ?raw 打进宿主的。
 const BOUNDARY = 'desktop/scripts/tangu-boundary.json'
 const UI_LOADER = 'desktop/electron/coreTangu.ts' // 基准桌面有它才会读热更新包里的界面半身(4b 起)
-const NOT_SHIPPED = /^(?:docs\/|\.github\/)|(?:^|\/)__tests__\/|\.md$|\.(?:test|spec)\.[cm]?[tj]sx?$/
+const NOT_SHIPPED = /^(?:docs\/|\.github\/|[^/]+\.md$)|(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?[tj]sx?$/
 /** 改动的文件分三类:Tangu 包里的(不返回)、界面半身的(ui)、宿主的(host = 热更新带不走)。cfg = 基准 tag 上的边界清单。 */
 export function packageScope(paths, cfg) {
   const contracts = cfg?.contracts?.dirs ?? ['tangu-agent/src/contracts/']

@@ -144,10 +144,12 @@ test('package scope: engine and Tangu UI files ship; contracts, host files and t
   assert.deepEqual(packageScope([
     'tangu-agent/src/agent.ts', 'tangu-agent/package.json', 'desktop/frontend/src/tangu/Chat.tsx', 'desktop/frontend/src/features/tangu.tsx',
     'tangu-agent/src/contracts/events.ts', 'desktop/frontend/src/stores/appStore.ts', 'desktop/frontend/src/coreTangu/sharedModules.generated.ts', 'lcl/engine/index.ts', 'desktop/package.json',
-    'docs/x.md', 'desktop/README.md', '.github/workflows/a.yml', 'desktop/frontend/src/stores/appStore.test.ts', 'desktop/frontend/src/__tests__/a.ts',
+    'docs/x.md', 'README.md', '.github/workflows/a.yml', 'desktop/frontend/src/stores/appStore.test.ts', 'desktop/frontend/src/__tests__/a.ts',
+    'desktop/CHANGELOG.md', 'desktop/frontend/src/assets/manual/amadeus-manual.zh.md', // ?raw 打进宿主的 Markdown 照算
   ], BOUNDARY), {
     ui: ['desktop/frontend/src/tangu/Chat.tsx', 'desktop/frontend/src/features/tangu.tsx'],
-    host: ['tangu-agent/src/contracts/events.ts', 'desktop/frontend/src/stores/appStore.ts', 'desktop/frontend/src/coreTangu/sharedModules.generated.ts', 'lcl/engine/index.ts', 'desktop/package.json'],
+    host: ['tangu-agent/src/contracts/events.ts', 'desktop/frontend/src/stores/appStore.ts', 'desktop/frontend/src/coreTangu/sharedModules.generated.ts', 'lcl/engine/index.ts', 'desktop/package.json',
+      'desktop/CHANGELOG.md', 'desktop/frontend/src/assets/manual/amadeus-manual.zh.md'],
   })
   // 基准 tag 上没有边界清单(4a 之前):分不出界面文件,一律算宿主
   assert.deepEqual(packageScope(['desktop/frontend/src/tangu/Chat.tsx', 'tangu-agent/src/a.ts'], null), { ui: [], host: ['desktop/frontend/src/tangu/Chat.tsx'] })

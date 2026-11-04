@@ -27,7 +27,8 @@ export const ENGINE_ENTRIES = { standalone: 'dist/standalone/main.js', tui: 'dis
 /** 定义本机数据库长什么样的文件;新版与自带的不一样就不收。 */
 export const SCHEMA_FILES = ['dist/db/migrate.js', 'dist/db/schemaStandalone.js', 'dist/core/dialectDDL.js'] as const;
 /** 界面半身(Tangu 界面热更新 4c):桌面主进程从选中的那份目录里读它们(desktop/electron/coreTangu.ts)。
- *  热更新包必须带上、且被签名覆盖;安装包自带的那份引擎没有 manifest.json,只检查热更新目录,不碍事。 */
+ *  pack-engine.mjs 打的包必带;这里不把它们列为必需条目 —— 没有界面半身的包(只热更引擎)照收,界面用安装包自带的那份。
+ *  带了就和别的文件一样必须被签名覆盖(下面「目录里不能有签名表以外的东西」那条),主进程读的时候还会对着 SIGNATURE 再验一次字节。 */
 export const UI_FILES = { main: 'ui/main.js', manifest: 'manifest.json' } as const;
 const RELEASE = /^\d+\.\d+\.\d+$/;
 const MAX_FILES = 5000;
@@ -120,7 +121,7 @@ export function verifyEngineSignature(dir: string, publicKeyPem: string = ENGINE
   }
   const files = readSignedTable(text, publicKeyPem);
   if (typeof files === 'string') return files;
-  for (const rel of ['package.json', ...Object.values(ENGINE_ENTRIES), ...Object.values(UI_FILES)]) if (!(rel in files)) return `${rel} is not covered by ${SIGNATURE_FILE}`;
+  for (const rel of ['package.json', ...Object.values(ENGINE_ENTRIES)]) if (!(rel in files)) return `${rel} is not covered by ${SIGNATURE_FILE}`;
   // 入口会 import 相邻文件,所以目录里不能有签名表以外的东西:多出来的一个 node_modules 就能把依赖解析劫走。
   let present: string[];
   try {

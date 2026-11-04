@@ -51,7 +51,7 @@ package.json     name / bin / exports / dependencies 照旧;forsion.minDesktop
 manifest.json    { id: "tangu", main: "ui/main.js", forDesktop: "<基准桌面版本>" }
 ui/main.js       界面半身:desktop 的 scripts/build-tangu-ui.mjs 打的 iife(CSS 以文本打在里面)
 dist/ skills/ agent-skills/   引擎半身
-SIGNATURE        覆盖上面全部文件;ui/main.js 与 manifest.json 是必须出现的条目(缺了 = 签名不过,整版不收)
+SIGNATURE        覆盖上面全部文件(pack-engine 必带界面半身;验签这边没有界面半身的包照收,界面用自带的)
 ```
 
 - **界面跟着正在跑的引擎走**:桌面主进程(`desktop/electron/coreTangu.ts`)从引擎选中的那份目录读 `ui/main.js`,
@@ -59,7 +59,8 @@ SIGNATURE        覆盖上面全部文件;ui/main.js 与 manifest.json 是必须
   界面用安装包自带的那份(`resources/tangu-server/ui/main.js`)—— 和以前「只热更了引擎」一样。
 - **界面坏了两半一起退**:热更新那版的界面求值 / 激活抛错,或开头一分钟里被 ErrorBoundary 接住两次,整版记进 `bad.json`(引擎下次拉起也退回自带的),窗口重载成自带界面。
 - **门禁多两条**(`engine-release-gate.mjs`):相对基准桌面 tag,改动只能落在 `tangu-agent/`(契约目录 `src/contracts/` 除外,宿主也编着一份)
-  和 `desktop/scripts/tangu-boundary.json` 列出的 Tangu 界面文件里(文档、CI、测试不算);`desktop/package.json` 的版本必须等于基准桌面。
+  和 `desktop/scripts/tangu-boundary.json` 列出的 Tangu 界面文件里(仓根 `docs/`、CI、仓根的 `.md`、测试不算;别处的 `.md` 照算,
+  CHANGELOG、使用手册是 `?raw` 打进宿主的);`desktop/package.json` 的版本必须等于基准桌面。发布前先跑 desktop 的 typecheck 再打界面半身。
   共享模块表 `desktop/frontend/src/coreTangu/sharedModules.generated.ts` 是宿主文件:界面要用表里没有的宿主模块,只能随安装包发。
   基准桌面没有 4b 的加载器(`desktop/electron/coreTangu.ts`)时,界面文件的改动一律拒发。
 - **老桌面不收**:新包的 `minDesktop` = 基准桌面,比它旧的安装包(如 2.13.5–2.13.7)按 `minDesktop` 拒收;它们本来也不会读界面半身。

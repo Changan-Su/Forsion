@@ -58,7 +58,8 @@ if (!/^\d+\.\d+\.\d+$/.test(version)) fail(`version ${JSON.stringify(version)} i
 if (!parseReleaseVersion(minDesktop)) fail(`min-desktop ${JSON.stringify(minDesktop)} is not a valid Desktop release version.`)
 const desktopPkg = path.join(root, '..', 'desktop', 'package.json')
 const forDesktop = arg('--for-desktop') || (existsSync(desktopPkg) ? JSON.parse(readFileSync(desktopPkg, 'utf8')).version : undefined)
-if (!forDesktop || !parseReleaseVersion(forDesktop)) fail(`Pass --for-desktop <version>: the Forsion Desktop whose shared module table the UI half was built against (got ${JSON.stringify(forDesktop)}).`)
+// 桌面端逐字比较(=== app.getVersion()):带 v 前缀、空格的写法 parseReleaseVersion 认,桌面却永远对不上,所以要求它就是规范写法
+if (!forDesktop || parseReleaseVersion(forDesktop)?.version !== forDesktop) fail(`Pass --for-desktop <version>: the Forsion Desktop whose shared module table the UI half was built against (got ${JSON.stringify(forDesktop)}).`)
 // 界面半身:必须是 build-tangu-ui.mjs 的产物(严格模式开头、sourceURL 结尾),别把半截文件或别的东西签进去
 const UI_SOURCE_URL = '//# sourceURL=forsion-core://tangu/main.js'
 const uiSrc = path.join(root, UI_FILES.main)
