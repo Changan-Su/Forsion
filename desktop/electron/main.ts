@@ -1526,7 +1526,11 @@ const coreTangu = createCoreTangu({
     return version === undefined || h.api.checkOverlay(dir, h.bundledRoot).ok ? { version: v, dir } : null
   },
   runningOverlay: () => (backend.getStatus().state === 'ready' ? backend.engineOverlayVersion() : undefined),
-  verify: (signature, files) => engineOverlay?.api.verifySignedBytes?.(signature, files) ?? 'the engine overlay API cannot verify bytes',
+  // 验过返回 null:别写成 `fn?.() ?? '…'` —— null 会被 ?? 当成「没这个函数」,热更新版界面就永远不收(4d 演练抓到的)
+  verify: (signature, files) => {
+    const fn = engineOverlay?.api.verifySignedBytes
+    return fn ? fn(signature, files) : 'the engine overlay API cannot verify bytes'
+  },
   demote: (version, reason) => engineOverlay?.control.demote(version, reason),
   log: (m) => console.log(m),
 })
