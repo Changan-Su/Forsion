@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
     paths: ['desktop/frontend/src/views/CalendarView.tsx', 'desktop/frontend/src/views/calendar/**', 'desktop/frontend/src/amadeus/store/dbAggregateStore*', 'desktop/frontend/src/amadeus/store/humanCalendar*', 'desktop/frontend/src/amadeus/store/calendarMembers.ts', 'desktop/frontend/src/amadeus/plugins/pluginDb*', 'desktop/frontend/src/amadeus/plugins/recordSurface*', 'desktop/frontend/src/harness/calendarActions.tsx', 'desktop/frontend/calendar-actions.html', 'desktop/scripts/calendar-actions.check.cjs', 'mobile/scripts/calendar-phone.check.cjs', 'mobile/scripts/calendar-todo.check.cjs', 'mobile/src/plugins/**', 'desktop/frontend/src/amadeus/plugins/pluginCalendar*', 'desktop/frontend/src/amadeus/plugins/pluginData*', 'desktop/shared/corePlugins*', 'mobile/scripts/phone-stage.cjs', '.github/workflows/calendar-actions.yml']
+# PR 再推送就取消上一轮;main / tag / 手动运行各按 run_id 自成一组,不排队、不被取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   calendar:
     runs-on: ubuntu-latest
