@@ -27,23 +27,27 @@ describe('EditorialMessage inline Sketch ordering', () => {
       { t: 'tools', events: [rejected] },
       { t: 'intelligent', event: ok },
     ])
-    // 重写的那份还在生成、或者又被拒收:前一份照旧画着,不能让回答里一时什么都没有
+    // 重试一开始就只能画新卡;失败的残缺内容撤下,错误记录保留。
     expect(partitionToolSegment([rejected, streaming], [], true)).toEqual([
       { t: 'tools', events: [rejected] },
-      { t: 'intelligent', event: rejected },
       { t: 'intelligent', event: streaming },
     ])
     const again: ToolEvent = { ...rejected, id: 'bad2' }
-    expect(partitionToolSegment([rejected, again]).filter((p) => p.t === 'intelligent')).toEqual([
-      { t: 'intelligent', event: rejected },
-      { t: 'intelligent', event: again },
-    ])
-    // 被拒收后没有重写(模型改用文字):那份照旧画出来,由文档自己标明内容不完整
+    expect(partitionToolSegment([rejected, again]).filter((p) => p.t === 'intelligent')).toEqual([])
+    // 没有重试时也不把被拒收的内容当回答,只留工具错误。
     expect(partitionToolSegment([rejected, done('read', 'read_file')])).toEqual([
       { t: 'tools', events: [rejected] },
-      { t: 'intelligent', event: rejected },
       { t: 'tools', events: [done('read', 'read_file')] },
     ])
+  })
+  it('removes failed native cards even when a retry is in another text/tool segment', () => {
+    for (const error of [{ isError: true, result: 'Invalid document' }, { result: 'Error: invalid document' }]) {
+      const rejected: ToolEvent = { ...done('bad', 'intelligent_ui'), ...error }
+      expect(partitionToolSegment([rejected], [], true)).toEqual([{ t: 'tools', events: [rejected] }])
+      const retry: ToolEvent = { id: 'retry', name: 'intelligent_ui', done: false }
+      expect(partitionToolSegment([retry], [], true)).toEqual([{ t: 'intelligent', event: retry }])
+      expect(partitionToolSegment([rejected])).toEqual([{ t: 'tools', events: [rejected] }])
+    }
   })
   it('keeps git tool rows and puts one Git card after a run of consecutive git calls', () => {
     const running: ToolEvent = { id: 'gp2', name: 'git_push', done: false }
