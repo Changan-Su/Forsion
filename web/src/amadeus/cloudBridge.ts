@@ -45,7 +45,7 @@ import type {
   VaultInfo,
 } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
-import { resolvePageName, stripForIndex } from '@amadeus-shared/links'
+import { pageKey, resolvePageName, stripForIndex } from '@amadeus-shared/links'
 import { hasTagFilter, parseSearchQuery, tagSearchRemote } from '@amadeus-shared/tagQuery'
 import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { findEmbedBlock } from './shareBridge'
@@ -842,7 +842,10 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   // per-path 队列,盘上刚被编辑器 / 别的设备写过就按现文重算,不盲盖)。自己写的 SSE 被回声抑制吃掉 → 开着这些笔记的编辑器
   // 由这里 fireExternal 叫它们回灌(桌面那边是 notifyAll(externalChange))。没能改写的 → 提示,绝不静默吞。
   // ⚠️ 必须在 rename/move 的队列任务**之外**调用:任务占着新旧路径的 key,里面再 writeTextFile(newPath) = 自锁。
-  // ponytail: 全库逐篇 GET(无批量读端点),与桌面「朴素全库读扫」同一量级;嫌慢的正解是服务端 /move 带 rewriteLinks。
+  // 单篇改名 / 移动先问服务端 /ref-candidates 拿候选(一次请求):此前全库逐篇 GET,几百篇的库一改标题就打穿全局限流
+  // (200/分/IP),扫描自己的读 + 在途保存一起 429,还把读失败的几十篇报成「链接没能更新」(11-04)。
+  // ponytail: 文件夹操作仍全库扫 —— 夹里附件换了位置,别的笔记里指向它们的是 `](相对路径)`,不是笔记名,服务端候选认不出;
+  // 大库挪文件夹照样会撞限流,正解是服务端 /move 带 rewriteLinks。旧服务端没有这个端点 → 回落全库扫(行为同以前)。
   /** 传播专用写口(G2-04 复核 P1):**只更新已存在的文件**的比对交换写。不能借 writeTextFile —— 读完之后那篇被别处
    *  删了 / 挪进 .trash,SSE 的 forgetSeq 清掉状态后它按 baseSeq 0 把原路径重建,或走 recovered 另存,还记成「改写成功」。
    *  这里现取现比:不在了 → 'gone'(路径已变,记入失败清单);内容不是读到的那版 → 交回现文重算;
@@ -870,8 +873,18 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     })
   // 同一趟里重算正文的图片 / 附件相对引用(assets.rebaseFileRefs):「文件在不在」问操作之后那棵树的原始文件表
   // (点目录里的 .amadeus/ 也在里面;visiblePath 滤掉的那份不能用)。只在真有引用要改时才取一次。
+  const refCandidates = async (pairs: Record<string, string>): Promise<Set<string> | undefined> => {
+    const names = [...new Set(Object.entries(pairs).flatMap(([o, n]) => [pageKey(o), pageKey(n)]))]
+    try {
+      const r = await http.post<{ paths?: unknown }>(`/amadeus/vaults/${encodeURIComponent(vid())}/ref-candidates`, { names })
+      return Array.isArray(r?.paths) ? new Set(r.paths.filter((p): p is string => typeof p === 'string')) : undefined
+    } catch {
+      return undefined // 旧服务端(404)/ 一时失败:全库扫,宁慢不漏
+    }
+  }
   const propagateRenames = async (pairs: Record<string, string>, pagesBefore: string[], folder?: readonly [string, string]): Promise<void> => {
     let paths: Promise<Set<string>> | null = null
+    const only = folder ? undefined : await refCandidates(pairs)
     const res = await propagateNoteRenames(
       {
         exists: async (f) => (await (paths ??= fetchTree(true).then((t) => new Set(t.files.map((x) => x.path))))).has(f),
@@ -887,7 +900,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       },
       pairs,
       pagesBefore,
-      { folder },
+      { folder, only },
     )
     for (const p of res.rewritten) fireExternal(p)
     toastRenameRewriteFailed(res.failed.map((f) => f.path))
