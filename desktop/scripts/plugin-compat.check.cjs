@@ -46,13 +46,13 @@ function memberPaths(source) {
   return out
 }
 
-/** `ctx.a?.b.c(` / `ctx().a.b` chains → [{ path: ['a','b','c'], line }]. */
+/** `ctx.a?.b.c(` / `ctx().a!.b!(` chains → [{ path: ['a','b','c'], line }]. */
 function scanUsage(text, names = []) {
   const ids = ['ctx', ...names].map((n) => n.replace(/[$]/g, '\\$')).join('|')
-  const re = new RegExp(`(?<![\\w$.])(?:${ids})(?:\\(\\))?((?:\\s*\\??\\.\\s*[A-Za-z_$][\\w$]*)+)`, 'g')
+  const re = new RegExp(`(?<![\\w$.])(?:${ids})(?:\\(\\))?((?:\\s*!?\\s*\\??\\.\\s*[A-Za-z_$][\\w$]*)+)`, 'g')
   const hits = []
   for (const m of text.matchAll(re)) {
-    const segs = m[1].split(/\??\./).map((s) => s.trim()).filter(Boolean)
+    const segs = m[1].replace(/[\s!?]/g, '').split('.').filter(Boolean)
     hits.push({ path: segs, line: text.slice(0, m.index).split('\n').length })
   }
   return hits
@@ -95,10 +95,10 @@ function selfTest() {
   const now = memberPaths(types)
   for (const p of ['app.listTags', 'ui.chatBoxCapabilities', 'databases.setBody']) assert(now.has(p), p)
   const then = memberPaths(types.replace('setBody?(): boolean', '').replace('; listTags?(): string[]', ''))
-  const code = "const ok = !!ctx().ui?.mountChatBox && !!ctx().databases?.setBody\nctx.app.listTags?.()\nc.databases.setBody(x)\nfoo.ctx.databases.setBody"
+  const code = "const ok = !!ctx().ui?.mountChatBox && !!ctx().databases?.setBody\nctx.app.listTags?.()\nc.databases.setBody(x)\nfoo.ctx.databases.setBody\nctx().databases!.setBody!(p)"
   const got = findings([['a.ts', code]], now, then, ['c'])
   assert.deepStrictEqual([...got.keys()].sort(), ['app.listTags', 'databases.setBody'])
-  assert.deepStrictEqual(got.get('databases.setBody'), ['a.ts:1', 'a.ts:3']) // `foo.ctx` is not the plugin ctx
+  assert.deepStrictEqual(got.get('databases.setBody'), ['a.ts:1', 'a.ts:3', 'a.ts:5']) // `foo.ctx` is not the plugin ctx; `!` doesn't end a chain
   console.log('plugin-compat self-test ok')
 }
 
