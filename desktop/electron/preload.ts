@@ -42,8 +42,11 @@ const api = {
   /** Tangu 界面半身(界面热更新 4b;electron/coreTangu.ts):这次用哪份界面(null = 用编进宿主的那份),以及报告界面坏了。 */
   coreTangu: {
     load: (): Promise<{ source: 'overlay' | 'bundled'; version: string; code: string } | null> => ipcRenderer.invoke('coreTangu:load'),
-    /** 这份界面坏了:热更新版整版记坏;主进程随后重载这个窗口(渲染层自己 reload 会被 hardenNav 拦下)。 */
-    failed: (source: 'overlay' | 'bundled', version: string, reason: string): Promise<void> => ipcRenderer.invoke('coreTangu:failed', source, version, reason),
+    /** 这个窗口拿到的那份求值 / 激活失败:热更新版整版记坏,自带的改走编进宿主的那份;主进程随后重载这个窗口
+     *  (渲染层自己 reload 会被 hardenNav 拦下)。哪一份由主进程按自己的记录认,不传版本号。 */
+    failed: (reason: string): Promise<void> => ipcRenderer.invoke('coreTangu:failed', reason),
+    /** 开头一分钟里被 ErrorBoundary 接住一次(栈里有这份包):主进程跨重载累计,够数了同 failed。 */
+    crashed: (reason: string): Promise<void> => ipcRenderer.invoke('coreTangu:crashed', reason),
   },
   desktopPermissionsStatus: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:status'),
   desktopPermissionRequest: (id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:request', id, options),

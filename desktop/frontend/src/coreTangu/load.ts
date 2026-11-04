@@ -7,16 +7,18 @@
  * - 其余(dev、网页、主进程答 null):动态 import 编进宿主的那份。手机不经这里,mobileEntry 直接静态引。
  *
  * 失败的退路 —— 从不原地重来(installTanguSlice 只装一次,视图也可能已经注册了一半),一律由主进程重载这个窗口:
- * - 热更新那版求值 / 激活抛错,或激活后 60 秒内被 ErrorBoundary 接住两次(栈里有这份包):整版记坏(主进程连引擎一起退)→ 重载,
- *   主进程下次给自带的;
- * - 自带的那份也坏了:这个窗口记个标记 → 重载,走编进宿主的那份(安装包本身的 bug,最后一道兜底)。
+ * - 热更新那版求值 / 激活抛错,或激活后 60 秒内被 ErrorBoundary 接住两次(栈里有这份包;主进程跨重载累计):整版记坏
+ *   (主进程连引擎一起退)→ 重载,主进程下次给自带的;
+ * - 自带的那份也坏了:主进程记下这个窗口、之后答 null(这里另记一个 sessionStorage 标记双保险)→ 重载,走编进宿主的那份
+ *   (安装包本身的 bug,最后一道兜底)。
+ * 上报只带原因,哪一份由主进程按它交给这个窗口的记录认。
  */
 import type { TanguHost } from '../amadeus/plugins/tanguSeam'
 import { createHostRequire } from './hostRequire'
 
 type Activate = (host: TanguHost) => void
 interface CorePackage { source: 'overlay' | 'bundled'; version: string; code: string }
-interface Bridge { load(): Promise<CorePackage | null>; failed(source: CorePackage['source'], version: string, reason: string): Promise<void> }
+interface Bridge { load(): Promise<CorePackage | null>; failed(reason: string): Promise<void>; crashed(reason: string): Promise<void> }
 
 export const SOURCE_MARK = 'forsion-core://tangu/' // 包末尾的 sourceURL,栈帧里认这份包
 const STATIC_FLAG = 'forsion.coreTangu.static'
@@ -24,7 +26,6 @@ const CRASH_WINDOW_MS = 60_000
 
 let current: CorePackage | null = null
 let activatedAt = 0
-let crashes = 0
 let failing = false
 
 const bridge = (): Bridge | undefined => (typeof window === 'undefined' ? undefined : (window as unknown as { tangu?: { coreTangu?: Bridge } }).tangu?.coreTangu)
@@ -38,7 +39,7 @@ async function fail(pkg: CorePackage, error: unknown): Promise<void> {
   const reason = (error as Error)?.message || String(error)
   console.error(`[core-tangu] ${pkg.source} UI ${pkg.version} failed:`, error)
   if (pkg.source === 'bundled') { try { sessionStorage.setItem(STATIC_FLAG, '1') } catch { /* 存不住就只能指望主进程 */ } }
-  await bridge()?.failed(pkg.source, pkg.version, reason).catch(() => {})
+  await bridge()?.failed(reason).catch(() => {})
 }
 
 export async function loadTanguEntry(): Promise<Activate> {
@@ -83,12 +84,14 @@ export async function loadTanguEntry(): Promise<Activate> {
   return (await import('@tangu/ui/features/tangu')).activateTangu
 }
 
-/** ErrorBoundary 接住一次渲染崩溃时调。只算热更新那版、激活后一分钟内、栈里有这份包的;两次就整版退。 */
+/** ErrorBoundary 接住一次渲染崩溃时调。只报热更新那版、激活后一分钟内、栈里有这份包的;
+ *  次数由主进程按版本跨重载累计(electron/coreTangu.ts,两次就整版退并重载),这里不计数 —— 重载一次就清零了(Codex 4b 评审)。 */
 export function noteRenderCrash(error: unknown): void {
   const pkg = current
-  if (!pkg || pkg.source !== 'overlay' || !activatedAt || Date.now() - activatedAt > CRASH_WINDOW_MS) return
+  if (!pkg || pkg.source !== 'overlay' || failing || !activatedAt || Date.now() - activatedAt > CRASH_WINDOW_MS) return
   if (!String((error as Error)?.stack ?? '').includes(SOURCE_MARK)) return
-  if (++crashes >= 2) void fail(pkg, error)
+  console.error(`[core-tangu] overlay UI ${pkg.version} crashed while rendering:`, error)
+  void bridge()?.crashed((error as Error)?.message || String(error)).catch(() => {})
 }
 
 /** 这个窗口用的是哪份 Tangu 界面(诊断用);编进宿主的那份 = null。 */
