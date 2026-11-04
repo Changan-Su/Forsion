@@ -465,6 +465,12 @@
 }
 .t2s-st.wait::before { width: 7px; height: 7px; background: var(--warning); box-shadow: 0 0 0 3px var(--warning-light); }
 .t2s-st.done::before { width: 6px; height: 6px; background: var(--accent-ink); opacity: 0.5; }
+.t2s-st-count {
+  width: auto; min-width: 16px; height: 16px; padding-inline: 4px; border-radius: var(--radius-pill, 999px);
+  background: var(--danger); color: var(--on-danger);
+  font-size: var(--ui-font-caption, 11px); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.t2s-st-count::before { content: none; }
 @keyframes t2s-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .t2s-st.run::before { animation: none; } }
 /* 主会话行尾的子会话个数(点一下收起 / 展开,触屏没有 hover 箭头时靠它) */

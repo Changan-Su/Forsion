@@ -40,7 +40,7 @@ export interface TargetAttention {
 
 /** 私聊的「有新消息 / 等你」(引擎 GET /agent/sessions/attention,只拉本端):Muse 主动发来的未读、它问了一句在等回答、
  *  它后台有待批(pending_approvals,不在上面那份 run 内存索引里)。run 跑完的未读照旧在 appStore.unread。 */
-export interface DmAttention { unread: boolean; awaiting: boolean }
+export interface DmAttention { unread: boolean; awaiting: boolean; count: number }
 
 interface AttentionState {
   byTarget: Record<string, TargetAttention>
@@ -77,7 +77,7 @@ function sanitizeDm(raw: unknown): Record<string, DmAttention> {
   if (!Array.isArray(raw)) return out
   for (const r of raw.slice(0, MAX_SESSIONS)) {
     if (!r || typeof r.id !== 'string' || !r.id || r.id.length > 64) continue
-    out[r.id] = { unread: r.unread === true, awaiting: r.awaiting === true }
+    out[r.id] = { unread: r.unread === true, awaiting: r.awaiting === true, count: r.unread === true ? count(r.count) : 0 } // 老引擎不回 count → 0,行尾照旧只画点
   }
   return out
 }
@@ -86,6 +86,7 @@ const inflight = new Set<string>()
 const reading = new Set<string>() // POST /read 在途的会话 id(列表引用每变一次都会问一遍,别叠请求)
 let dmDisabled = false // 老引擎没有这个端点(404):本次启动不再拉
 let dmLoaded = false
+let lastDmReport: Record<string, DmAttention> = {} // 引擎上一次原样报的(本地 markRead 先熄不改它,免得把「刚读过」当成新来的)
 const listTried = new Set<string>() // 为它补拉过会话列表的私聊 id(见 refresh)
 let installs = 0
 let teardown: (() => void) | null = null
@@ -98,7 +99,7 @@ export const useAttention = create<AttentionState>((set, get) => ({
     const cur = get().dm[sessionId]
     const listed = useApp.getState().sessions.some((x) => x.id === sessionId && x.awaiting_user)
     if (!cur?.unread && !listed) return
-    if (cur?.unread) set((s) => ({ dm: { ...s.dm, [sessionId]: { ...cur, unread: false } } }))
+    if (cur?.unread) set((s) => ({ dm: { ...s.dm, [sessionId]: { ...cur, unread: false, count: 0 } } }))
     if (reading.has(sessionId)) return
     // 等你不在本地先熄:引擎说了算(Muse 后台待批、回报没送回的子会话读了也留着;老引擎不回 awaiting = 没清)。
     reading.add(sessionId)
@@ -134,7 +135,10 @@ export const useAttention = create<AttentionState>((set, get) => ({
           // 先拉一遍列表再弹(Codex 10-18 #2)。每个 id 只补拉一次 —— 列表分页没带上它时不至于每 20s 重拉。
           const st = useApp.getState()
           const unknown = Object.keys(dm).filter((id) => !st.sessions.some((x) => x.id === id) && !listTried.has(id))
-          if (unknown.length) { unknown.forEach((id) => listTried.add(id)); await st.refreshSessions(st.cfg).catch(() => {}) }
+          // 已在列表里的私聊又来了新的主动消息:引擎那边 updated_at 已前移,重拉列表它才排到最上面(列表按最近活动排)
+          const fresh = !first && Object.entries(dm).some(([id, d]) => d.unread && (!lastDmReport[id]?.unread || d.count > lastDmReport[id].count))
+          lastDmReport = dm
+          if (unknown.length || fresh) { unknown.forEach((id) => listTried.add(id)); await st.refreshSessions(st.cfg).catch(() => {}) }
           readActiveDm()
           if (!first) notifyNewWaits(prev, dm) // 启动那一拉不弹:那些是之前就在等的
         })
@@ -307,6 +311,7 @@ export function __resetAttentionForTests(): void {
   inflight.clear()
   dmDisabled = false
   dmLoaded = false
+  lastDmReport = {}
   listTried.clear()
   reading.clear()
   useAttention.setState({ byTarget: {}, dm: {} })

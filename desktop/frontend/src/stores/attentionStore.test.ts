@@ -168,7 +168,7 @@ describe('私聊 attention(Muse 主动发来 / 等你)', () => {
     state.dm.mockImplementation(async () => json({ sessions: [{ id: 'dm1', unread: true, awaiting: false }, { id: 7 }] }))
     await useAttention.getState().refresh()
     await flush()
-    expect(useAttention.getState().dm).toEqual({ dm1: { unread: true, awaiting: false } })
+    expect(useAttention.getState().dm).toEqual({ dm1: { unread: true, awaiting: false, count: 0 } }) // 老引擎不回 count → 0
     expect(state.notify).not.toHaveBeenCalled()
 
     state.dm.mockImplementation(async (path: string) => (path.endsWith('/read') ? json({ ok: true }) : json({ sessions: [{ id: 'dm1', unread: true, awaiting: true }, { id: 'p1', unread: false, awaiting: true }] })))
@@ -180,7 +180,7 @@ describe('私聊 attention(Muse 主动发来 / 等你)', () => {
     const off = useAttention.getState().install()
     useApp.setState({ activeId: 'dm1' } as any)
     await flush()
-    expect(useAttention.getState().dm.dm1).toEqual({ unread: false, awaiting: true }) // 等你听引擎的(这里 /read 没回 awaiting:false)
+    expect(useAttention.getState().dm.dm1).toEqual({ unread: false, awaiting: true, count: 0 }) // 等你听引擎的(这里 /read 没回 awaiting:false)
     expect(state.dm.mock.calls.some(([path, init]) => path === '/agent/sessions/dm1/read' && (init as any)?.method === 'POST')).toBe(true)
     off()
   })
@@ -228,6 +228,25 @@ describe('私聊 attention(Muse 主动发来 / 等你)', () => {
     await useAttention.getState().refresh()
     await flush()
     expect(refreshSessions).toHaveBeenCalledTimes(1)
+  })
+
+  it('已在列表里的私聊又来了主动消息(新未读 / 条数涨)→ 重拉列表,好按最近活动排到最上面;没变化不拉', async () => {
+    const refreshSessions = vi.fn(async () => [])
+    useApp.setState({ sessions: [solo], configBySession: {}, activeId: null, refreshSessions } as any)
+    await useAttention.getState().refresh() // 启动那一拉
+    await flush()
+    state.dm.mockImplementation(async () => json({ sessions: [{ id: 'dm1', unread: true, awaiting: false, count: 1 }] }))
+    await useAttention.getState().refresh()
+    await flush()
+    expect(useAttention.getState().dm.dm1.count).toBe(1)
+    expect(refreshSessions).toHaveBeenCalledTimes(1)
+    await useAttention.getState().refresh() // 没变
+    await flush()
+    expect(refreshSessions).toHaveBeenCalledTimes(1)
+    state.dm.mockImplementation(async () => json({ sessions: [{ id: 'dm1', unread: true, awaiting: false, count: 3 }] }))
+    await useAttention.getState().refresh()
+    await flush()
+    expect(refreshSessions).toHaveBeenCalledTimes(2)
   })
 
   it('老引擎没有这个端点(404)→ 本次启动不再拉', async () => {

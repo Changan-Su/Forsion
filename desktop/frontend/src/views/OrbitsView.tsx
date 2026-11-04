@@ -23,7 +23,7 @@ import { SidebarRow } from '../components/SidebarRow'
 import { ListChips, ListFab, ListHint } from '../components/phoneList'
 import { EngineIcon } from '../components/EngineIcon'
 import { useApp } from '../stores/appStore'
-import { useSessionAttention, useSoloStatus } from '../stores/attentionStore' // P1-K3
+import { useAttention, useSessionAttention, useSoloStatus } from '../stores/attentionStore' // P1-K3
 import { StatusMark } from './chat2/AttentionDot'
 import type { RowStatus } from './chat2/sessionTree'
 import { openSpecial } from './SpecialViews'
@@ -278,6 +278,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     const v = soloStatus.get(soloSession.get(ident) || '') || ''
     return v === 'run' ? '' : v
   }
+  const dmAttention = useAttention((st) => st.dm)
+  /** 它主动发来、还没读的条数(行尾红点上的数;老引擎不报 = 0,照旧只画点)。 */
+  const soloCount = (ident: string): number => dmAttention[soloSession.get(ident) || '']?.count || 0
   /** 有活跃 run 的私聊 agent(按运行中的 run 反查,O(running) 不是 O(会话×agent))。 */
   const runningSolo = useMemo(() => {
     const out = new Set<string>()
@@ -336,9 +339,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const orbitRow = (o: {
     rowKey: string; entryKey: string; kind: RowMenu['kind']; slug: string; active: boolean; gone?: boolean
     tip: Record<string, unknown>; leadClass?: string; lead: React.ReactNode; name: string; badge?: string; sub: string; at: number; onOpen: () => void
-    status?: RowStatus
+    status?: RowStatus; count?: number
   }): React.ReactElement => {
-    const mark = o.status ? <StatusMark status={o.status} title={o.status === 'done' ? t('orbits.st.new') : undefined} /> : null
+    const mark = o.status ? <StatusMark status={o.status} count={o.count} title={o.status === 'done' ? t('orbits.st.new') : undefined} /> : null
     const pinned = isOrbitPinned(pinnedEntries, o.entryKey)
     const open = (): void => { activatePinned(o.entryKey); o.onOpen() }
     if (phone) {
@@ -399,7 +402,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       rowKey: `agent:${slug}`, entryKey, kind: 'agent', slug, active,
       tip: rowTip(name || slug, isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct', `agent:${slug}`),
       name: name || slug, sub: t(isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct'), at: activityByIdent.get(`agent:${slug}`) || 0,
-      status: soloMark(`agent:${slug}`),
+      status: soloMark(`agent:${slug}`), count: soloCount(`agent:${slug}`),
       onOpen: () => {
         if (museSpaceOnly) openMuse()
         else if (cloud) { openNewChat(); useApp.getState().selectNewChatAgent(slug) }
