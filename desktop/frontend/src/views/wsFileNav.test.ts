@@ -26,13 +26,23 @@ beforeEach(() => {
 })
 
 describe('openWsFile × 本机 PDF', () => {
-  it('插件认领了 → openFile(绝对路径),不开 wsfile', async () => {
+  it('插件认领了 → openFile(绝对路径)开新标签,不开 wsfile、不顶掉当前标签', async () => {
     m.claimed = true
-    openWsFile(target('/Users/a/Desktop/Book.PDF'), { newTab: true })
+    openWsFile(target('/Users/a/Desktop/Book.PDF'))
     await settle()
     expect(m.match).toHaveBeenCalledWith('/Users/a/Desktop/Book.PDF')
     expect(m.openFile).toHaveBeenCalledWith('/Users/a/Desktop/Book.PDF', { newTab: true })
     expect(m.openView).not.toHaveBeenCalled()
+  })
+  it('插件认领了、同一份已在插件视图里开着 → 交给 openFile 聚焦它;⌘ 点(newTab)照样另开', async () => {
+    m.claimed = true
+    m.panels = [{ id: 'v1', params: { __type: 'amadeus-plugin-file', filePath: '/Users/a/Book.pdf' } }]
+    openWsFile(target('/Users/a/Book.pdf'))
+    await settle()
+    expect(m.openFile).toHaveBeenLastCalledWith('/Users/a/Book.pdf', undefined)
+    openWsFile(target('/Users/a/Book.pdf'), { newTab: true })
+    await settle()
+    expect(m.openFile).toHaveBeenLastCalledWith('/Users/a/Book.pdf', { newTab: true })
   })
   it('没认领 → 照旧 wsfile 标签', async () => {
     openWsFile(target('/Users/a/Desktop/Book.pdf'))

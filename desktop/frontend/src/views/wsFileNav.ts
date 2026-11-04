@@ -52,8 +52,11 @@ export function openWsFile(target: PreviewTarget, opts?: { newTab?: boolean; lin
     // 懒加载两个模块:pluginStore / amadeusNav 静态引进来会和 tanguSlice 绕出环;非 PDF 一个微任务都不多等。
     if (/\.pdf$/i.test(path)) {
       void Promise.all([import('../amadeus/plugins/pluginStore'), import('../amadeusNav')]).then(([ps, nav]) => {
-        if (ps.matchFileType(path)) nav.openFile(path, { newTab: opts?.newTab })
-        else openHostTab(target, path, opts)
+        if (!ps.matchFileType(path)) { openHostTab(target, path, opts); return }
+        // 同 wsfile 的开法:同一份已开着就聚焦,否则新标签 —— openFile 缺省是就地换掉当前标签,不能让它顶掉用户正看着的那页
+        const api = (useWorkspace.getState() as unknown as { api?: { panels: PanelLike[] } }).api
+        const open = !opts?.newTab && !!api?.panels.some((p) => p.params?.__type === 'amadeus-plugin-file' && p.params?.filePath === path)
+        nav.openFile(path, open ? undefined : { newTab: true })
       }).catch(() => openHostTab(target, path, opts))
       return
     }
