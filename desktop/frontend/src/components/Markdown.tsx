@@ -38,6 +38,7 @@ registerMessages({
   'code.copied': { zh: '已复制', en: 'Copied' },
   'code.plainText': { zh: '文本', en: 'Text' },
   'md.imageBroken': { zh: '图片无法显示 · {alt}', en: 'Image unavailable · {alt}' },
+  'md.copyTex': { zh: '复制 LaTeX', en: 'Copy LaTeX' },
 })
 /** 表头上的语言名:常见几种写全称,其余照 fence 原样。 */
 const LANG_NAMES: Record<string, string> = {
@@ -188,6 +189,49 @@ const MdImage = ({ node: _node, src, alt, ...rest }: any) => {
   )
 }
 
+/** 块公式包一层 `div.md-math`,把 KaTeX 留在 `<annotation>` 里的 LaTeX 源码挂到 data-tex 上(复制键用,不从屏幕上的字拼)。
+ *  排在 rehype-katex 之后;段落里的 `$$x$$` 是行内公式(没有 katex-display),不包。 */
+const texOf = (n: any): string => n?.tagName === 'annotation'
+  ? (n.children || []).map((c: any) => c.value ?? '').join('')
+  : (n?.children || []).reduce((acc: string, c: any) => acc || texOf(c), '')
+const rehypeMathBox = () => (tree: any) => {
+  const walk = (n: any): void => {
+    if (!n.children) return
+    n.children = n.children.map((c: any) => {
+      if (c.type === 'element' && c.tagName === 'span' && n.tagName !== 'p' && c.properties?.className?.includes?.('katex-display')) {
+        return { type: 'element', tagName: 'div', properties: { className: ['md-math'], dataTex: texOf(c) }, children: [c] }
+      }
+      walk(c)
+      return c
+    })
+  }
+  walk(tree)
+}
+
+/** 块公式右上角的复制键(同代码块角上那颗,常驻);复制纯 LaTeX,不带 `$$`。 */
+const MathBox = ({ node: _node, className, children, ...rest }: any) => {
+  const { t } = useI18n()
+  const [copied, setCopied] = useState(false)
+  if (className !== 'md-math') return <div className={className} {...rest}>{children}</div>
+  const tex: string = rest['data-tex'] ?? ''
+  const copy = () => {
+    navigator.clipboard.writeText(tex).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <div className="md-math" style={{ position: 'relative', paddingInline: 32 }}>
+      {children}
+      {tex && (
+        <button className="icon-btn" onClick={copy} title={t('md.copyTex')} aria-label={t('md.copyTex')} style={{ position: 'absolute', top: 2, right: 6, width: 24, height: 24 }}>
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+      )}
+    </div>
+  )
+}
+
 /** 手机上宽表格在自己的框里横向滑(chat2.css 末尾):一行放得下的格子不折行,放不下的照常折 ——
  *  CSS 数不了字,这里把后一种标出来(约 13 个汉字宽:汉字算 1,其余算半个多一点)。别处没有样式认这个标记。 */
 const cellEm = (n: any): number => n?.type === 'text'
@@ -203,7 +247,7 @@ const Th = tableCell('th')
  */
 export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean; /** 代码块细表头;缺省关,见 CodeHeadContext。 */ codeHead?: boolean }> = React.memo(
   ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false, codeHead = false }) => {
-    const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th, img: MdImage }
+    const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th, img: MdImage, div: MathBox }
     if (anchorPrefix) {
       const counter = { i: 0 }
       const heading = (level: 1 | 2 | 3) => {
@@ -225,7 +269,7 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
           <CodeHeadContext.Provider value={codeHead}>
             <ReactMarkdown
               remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
-              rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
+              rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeMathBox]}
               components={components}
             >
               {normalizeMath(content)}
