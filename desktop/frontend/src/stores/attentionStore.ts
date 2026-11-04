@@ -86,7 +86,9 @@ const inflight = new Set<string>()
 const reading = new Set<string>() // POST /read 在途的会话 id(列表引用每变一次都会问一遍,别叠请求)
 let dmDisabled = false // 老引擎没有这个端点(404):本次启动不再拉
 let dmLoaded = false
-let lastDmReport: Record<string, DmAttention> = {} // 引擎上一次原样报的(本地 markRead 先熄不改它,免得把「刚读过」当成新来的)
+/** 引擎上一次报的每条私聊「最近一条主动消息」签名(at:count)。本地 markRead 先熄不改它,免得把「刚读过」当成新来的;
+ *  读过后再来一条时条数可能不变,所以要带 at(老引擎不报 at = 只能按条数认,读过后同数的那条认不出,Codex 11-04)。 */
+let lastDmSig: Record<string, string> = {}
 const listTried = new Set<string>() // 为它补拉过会话列表的私聊 id(见 refresh)
 let installs = 0
 let teardown: (() => void) | null = null
@@ -136,8 +138,12 @@ export const useAttention = create<AttentionState>((set, get) => ({
           const st = useApp.getState()
           const unknown = Object.keys(dm).filter((id) => !st.sessions.some((x) => x.id === id) && !listTried.has(id))
           // 已在列表里的私聊又来了新的主动消息:引擎那边 updated_at 已前移,重拉列表它才排到最上面(列表按最近活动排)
-          const fresh = !first && Object.entries(dm).some(([id, d]) => d.unread && (!lastDmReport[id]?.unread || d.count > lastDmReport[id].count))
-          lastDmReport = dm
+          const sig: Record<string, string> = {}
+          for (const r of Array.isArray(j.sessions) ? j.sessions as any[] : []) {
+            if (dm[r?.id]?.unread) sig[r.id] = `${Number(r.at) || 0}:${dm[r.id].count}`
+          }
+          const fresh = !first && Object.entries(sig).some(([id, v]) => v !== lastDmSig[id])
+          lastDmSig = sig
           if (unknown.length || fresh) { unknown.forEach((id) => listTried.add(id)); await st.refreshSessions(st.cfg).catch(() => {}) }
           readActiveDm()
           if (!first) notifyNewWaits(prev, dm) // 启动那一拉不弹:那些是之前就在等的
@@ -311,7 +317,7 @@ export function __resetAttentionForTests(): void {
   inflight.clear()
   dmDisabled = false
   dmLoaded = false
-  lastDmReport = {}
+  lastDmSig = {}
   listTried.clear()
   reading.clear()
   useAttention.setState({ byTarget: {}, dm: {} })

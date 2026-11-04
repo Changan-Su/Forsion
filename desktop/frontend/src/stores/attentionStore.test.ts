@@ -247,6 +247,17 @@ describe('私聊 attention(Muse 主动发来 / 等你)', () => {
     await useAttention.getState().refresh()
     await flush()
     expect(refreshSessions).toHaveBeenCalledTimes(2)
+    // 两次轮询之间读过、又来一条:条数还是 1,靠 at 认出来(Codex 11-04)
+    state.dm.mockImplementation(async () => json({ sessions: [{ id: 'dm1', unread: true, awaiting: false, count: 1, at: 200 }] }))
+    await useAttention.getState().refresh()
+    await flush()
+    state.dm.mockImplementation(async () => json({ sessions: [{ id: 'dm1', unread: true, awaiting: false, count: 1, at: 300 }] }))
+    await useAttention.getState().refresh()
+    await flush()
+    expect(refreshSessions).toHaveBeenCalledTimes(4)
+    await useAttention.getState().refresh() // 没变
+    await flush()
+    expect(refreshSessions).toHaveBeenCalledTimes(4)
   })
 
   it('老引擎没有这个端点(404)→ 本次启动不再拉', async () => {
