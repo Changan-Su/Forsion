@@ -47,6 +47,11 @@
   background: transparent; color: var(--text); font: inherit;
 }
 .model-picker-search input::placeholder { color: var(--text-faint); }
+/* 上下文上限的「自定义」行:同搜索框的壳,前面一个标签、后面勾 */
+.cm-ctx-custom { margin: 4px 0 0; }
+.cm-ctx-custom-k { flex: none; color: var(--text); }
+.cm-ctx-custom.active .cm-ctx-custom-k { color: var(--accent-ink); }
+.cm-ctx-custom-bad { color: var(--danger); }
 @media (max-width: 480px) {
   .model-catalog-model { flex-wrap: wrap; }
   .model-catalog-model select { max-width: 100%; }

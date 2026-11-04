@@ -40,7 +40,12 @@ describe('上下文上限行(模型窗口 > 缺省上限才露;选项写本机 m
 
   it('1M 模型默认封在 272k:露出「默认 / 最大」两档,勾默认', () => {
     expect(contextLimitOptions(m({ contextWindow: cap, contextWindowSource: 'family', maxContextWindow: 1_000_000 }), cap))
-      .toEqual({ current: cap, defaultTokens: cap, maxTokens: 1_000_000, selected: 'default' })
+      .toEqual({ current: cap, defaultTokens: cap, midTokens: 512_000, maxTokens: 1_000_000, selected: 'default' })
+  })
+  it('512k 档:模型窗口超过 512k 才有;覆盖值正好 512k 勾它;其它手填值算自定义(selected=null)', () => {
+    expect(contextLimitOptions(m({ contextWindow: 512_000, contextWindowSource: 'override', maxContextWindow: 1_000_000 }), cap)?.selected).toBe('mid')
+    expect(contextLimitOptions(m({ contextWindow: cap, contextWindowSource: 'family', maxContextWindow: 400_000 }), cap))
+      .toEqual({ current: cap, defaultTokens: cap, maxTokens: 400_000, selected: 'default' })
   })
   it('开到最大 = 覆盖值等于模型窗口 → 勾最大;设置页手填的其它值两档都不勾,行上照实显示', () => {
     expect(contextLimitOptions(m({ contextWindow: 1_000_000, contextWindowSource: 'override', maxContextWindow: 1_000_000 }), cap)?.selected).toBe('max')
@@ -56,7 +61,7 @@ describe('上下文上限行(模型窗口 > 缺省上限才露;选项写本机 m
   })
   it('Ultra(09-27):行上显示拉满后的窗口,勾选仍是本机存的设置;手动覆盖照旧;本来不超上限的不变', () => {
     expect(contextLimitOptions(m({ contextWindow: cap, contextWindowSource: 'family', maxContextWindow: 1_000_000 }), cap, true))
-      .toEqual({ current: 1_000_000, defaultTokens: cap, maxTokens: 1_000_000, selected: 'default' })
+      .toEqual({ current: 1_000_000, defaultTokens: cap, midTokens: 512_000, maxTokens: 1_000_000, selected: 'default' })
     expect(contextLimitOptions(m({ contextWindow: 500_000, contextWindowSource: 'override', maxContextWindow: 1_000_000 }), cap, true))
       .toMatchObject({ current: 500_000, selected: null })
     expect(ultraContextWindow(m({ contextWindow: cap, contextWindowSource: 'model', maxContextWindow: 1_000_000 }))).toBe(1_000_000)
