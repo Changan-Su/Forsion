@@ -10,7 +10,8 @@
  *   · 其余第三方包(lucide-react、react-markdown、remark-*、diff…)→ 打进包;
  *   · Tangu 的 CSS 以文本打进包,收进 css 字段,由加载器在宿主样式之后整块注入。
  * 产物的函数体约定(4b 的加载器照此求值):`new Function('require', code)`;require 由 coreTangu/hostRequire.ts 按
- * 共享表给;返回 { exports: features/tangu 的导出, css: 全部 Tangu CSS 按 import 顺序拼好 }。
+ * 共享表给;返回 { exports: features/tangu 的导出, css: 求值时跑到的 Tangu CSS 按 import 顺序拼好,
+ * onCss(fn): 之后动态 import 的模块带出来的 CSS 交给 fn }。
  *
  * 共享表 frontend/src/coreTangu/sharedModules.generated.ts = 这次构建实际 require 的全部模块(type-only 的 import 已被
  * esbuild 摘掉,所以比边界基线小),宿主侧逐个 `import * as`,打包版没有静态引 Tangu 时这些模块也还在宿主产物里。
@@ -57,12 +58,13 @@ export function tanguUiPlugin({ root, classify, entry, alias = ALIAS }) {
   return {
     name: 'tangu-ui',
     setup(b) {
-      // 虚拟入口 = 真入口的全部导出 + 一个取 CSS 的函数;CSS 收在虚拟模块 tangu-ui:css 里(不用 banner 定义全局:
-      // 那样 "use strict" 就不在函数体第一句,整包变成非严格模式)
+      // 虚拟入口 = 真入口的全部导出 + 取 CSS 的两个函数;CSS 收在虚拟模块 tangu-ui:css 里(不用 banner 定义全局:
+      // 那样 "use strict" 就不在函数体第一句,整包变成非严格模式)。求值时就跑到的 CSS 进 __css();动态 import 的模块
+      // 到加载时才跑到它的 CSS,交给 __onCss 登记的接收方(加载器另插一个 <style>,同 Vite 懒加载 chunk 的 CSS)。
       b.onResolve({ filter: /^tangu-ui:(entry|css)$/ }, (args) => ({ path: args.path, namespace: 'tangu-ui' }))
       b.onLoad({ filter: /.*/, namespace: 'tangu-ui' }, (args) => args.path === 'tangu-ui:css'
-        ? { contents: 'export const sheets = []', loader: 'js' }
-        : { contents: `export * from ${JSON.stringify(entry)}\nimport { sheets } from 'tangu-ui:css'\nexport const __css = () => sheets.join('\\n')`, loader: 'js', resolveDir: path.dirname(entry) })
+        ? { contents: 'export const sheets = []\nlet sink = null\nexport const addSheet = (css) => { if (sink) sink(css); else sheets.push(css) }\nexport const onSheet = (fn) => { sink = fn }', loader: 'js' }
+        : { contents: `export * from ${JSON.stringify(entry)}\nimport { sheets, onSheet } from 'tangu-ui:css'\nexport const __css = () => sheets.join('\\n')\nexport const __onCss = onSheet`, loader: 'js', resolveDir: path.dirname(entry) })
       b.onResolve({ filter: /.*/ }, async (args) => {
         if (args.pluginData === 'tangu-ui:inner') return undefined
         const spec = args.path
@@ -80,7 +82,7 @@ export function tanguUiPlugin({ root, classify, entry, alias = ALIAS }) {
         return { path: r.path, sideEffects: r.sideEffects }
       })
       b.onLoad({ filter: /\.css$/ }, (args) => ({
-        contents: `import { sheets } from 'tangu-ui:css'\nsheets.push(${JSON.stringify(readFileSync(args.path, 'utf8'))})`,
+        contents: `import { addSheet } from 'tangu-ui:css'\naddSheet(${JSON.stringify(readFileSync(args.path, 'utf8'))})`,
         loader: 'js',
       }))
     },
@@ -104,7 +106,7 @@ export const buildOptions = ({ plugin, outfile }) => ({
   globalName: '__tanguUi',
   // 函数体第一句 = 严格模式指令(Tangu 源码是 ESM,本来就是严格模式;入口是虚拟 JS 文件,esbuild 不会自己加)
   banner: { js: '"use strict";' },
-  footer: { js: `return { exports: __tanguUi, css: __tanguUi.__css() };\n//# sourceURL=${SOURCE_URL}` },
+  footer: { js: `return { exports: __tanguUi, css: __tanguUi.__css(), onCss: __tanguUi.__onCss };\n//# sourceURL=${SOURCE_URL}` },
   // 标识符不混淆:崩溃栈和诊断快照里要看得懂函数名
   minifyWhitespace: true,
   minifySyntax: true,
@@ -118,19 +120,23 @@ export const buildOptions = ({ plugin, outfile }) => ({
  * 核对一次构建(纯函数,bundle.test.ts 直接喂它):
  *  · 包里的仓内文件只能是 Tangu / 契约(P3:混进一个宿主文件 = 两份 store,症状是「状态不同步」不报错);
  *  · 包里不许打进共享第三方包(两份 React);
- *  · 外部模块 = 共享表的键,一条不多一条不少;宿主那几条 ⊆ 边界基线;
- *  · 产物里不许留 import("host:…") / import("react…")。
+ *    包按它自己 package.json 里声明的名字认(npm 别名 `react-copy: npm:react` 装进来的也是 React);
+ *  · 外部模块 = 共享表的键,宿主那几条 ⊆ 边界基线;共享表源码必须和 renderTable 生成的一字不差(键对、指向的模块也对);
+ *  · 产物里不许留 import("host:…") / import("react…");
+ *  · .mjs / .mts 文件对外部模块的 default import(esbuild 按 Node 语义 __toESM(…, 1),整个命名空间当 default)。
  * 返回 { errors, externals }。
  */
-export function analyzeBuild({ metafile, code, cwd = process.cwd(), root, classify, baseline, table }) {
+export function analyzeBuild({ metafile, code, cwd = process.cwd(), root, classify, baseline, tableSource, readName = readPackageName }) {
   const errors = []
   for (const input of Object.keys(metafile.inputs)) {
     if (/^[a-z-]+:/.test(input) && !input.startsWith('/')) continue // esbuild 的虚拟命名空间
     const abs = path.resolve(cwd, input) // metafile 的路径相对 esbuild 的工作目录
     const nm = posix(abs).lastIndexOf('/node_modules/')
     if (nm >= 0) {
-      const pkg = packageOf(posix(abs).slice(nm + '/node_modules/'.length))
-      if (SHARED_PACKAGES.includes(pkg)) errors.push(`shared package ${pkg} was bundled (${input}); it must come from the host`)
+      const dir = packageOf(posix(abs).slice(nm + '/node_modules/'.length))
+      const declared = readName(posix(abs).slice(0, nm) + '/node_modules/' + dir)
+      const pkg = [dir, declared].find((n) => SHARED_PACKAGES.includes(n))
+      if (pkg) errors.push(`shared package ${pkg} was bundled (${input}); it must come from the host`)
       continue
     }
     const rel = posix(path.relative(root, abs))
@@ -142,14 +148,25 @@ export function analyzeBuild({ metafile, code, cwd = process.cwd(), root, classi
     if (e.startsWith(HOST) && !baseline.includes(e.slice(HOST.length))) errors.push(`${e} is not in the boundary baseline tanguHostDeps (check:tanguboundary); the shared table may only shrink`)
     else if (!e.startsWith(HOST) && !isShared(e)) errors.push(`${e} is external but not a shared package`)
   }
-  if (table) {
-    const keys = [...table].sort()
+  if (tableSource != null && tableSource !== renderTable(externals)) {
+    const keys = tableKeys(tableSource)
     const missing = externals.filter((e) => !keys.includes(e)), stale = keys.filter((k) => !externals.includes(k))
-    if (missing.length || stale.length) errors.push(`shared module table is out of date (missing: ${missing.join(', ') || '-'}; stale: ${stale.join(', ') || '-'}). Run node scripts/build-tangu-ui.mjs --write-table`)
+    errors.push(`shared module table is out of date (missing: ${missing.join(', ') || '-'}; stale: ${stale.join(', ') || '-'}${missing.length || stale.length ? '' : '; an import was edited by hand'}). Run node scripts/build-tangu-ui.mjs --write-table`)
   }
   const raw = code.match(/\bimport\s*\(\s*["'`](?:host:|react|zustand|framer-motion)[^"'`]*/)
   if (raw) errors.push(`dynamic ${raw[0]}…) survived the build; the host cannot serve it`)
+  for (const m of code.matchAll(/__toESM\(__require\("([^"]+)"\),\s*1\)/g)) {
+    errors.push(`a .mjs/.mts file default-imports ${m[1]}; esbuild then hands it the whole namespace as default. Import it from a .ts/.tsx file or use named imports`)
+  }
   return { errors, externals }
+}
+
+const tableKeys = (src) => [...src.matchAll(/^  '([^']+)': /gm)].map((m) => m[1])
+const names = new Map()
+/** node_modules 下一个包目录在它 package.json 里声明的名字;读不到 = null。 */
+function readPackageName(dir) {
+  if (!names.has(dir)) { try { names.set(dir, JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')).name ?? null) } catch { names.set(dir, null) } }
+  return names.get(dir)
 }
 
 /** 共享表源码。键与 require 的参数一字不差;CSS 只要宿主产物里有它,值是空对象。 */
@@ -182,7 +199,6 @@ export function renderTable(externals) {
   ].join('\n')
 }
 
-const tableKeys = (src) => [...src.matchAll(/^  '([^']+)': /gm)].map((m) => m[1])
 
 async function main() {
   const arg = (n) => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : undefined }
@@ -196,9 +212,9 @@ async function main() {
   const code = result.outputFiles[0].text
   const write = process.argv.includes('--write-table')
   const tablePath = path.join(GENESIS, TABLE)
-  let table = null
-  try { table = tableKeys(readFileSync(tablePath, 'utf8')) } catch { /* 第一次生成 */ }
-  const { errors, externals } = analyzeBuild({ metafile: result.metafile, code, root, classify, baseline: cfg.baseline.tanguHostDeps, table: write ? null : table ?? [] })
+  let tableSource = ''
+  try { tableSource = readFileSync(tablePath, 'utf8') } catch { /* 第一次生成 */ }
+  const { errors, externals } = analyzeBuild({ metafile: result.metafile, code, root, classify, baseline: cfg.baseline.tanguHostDeps, tableSource: write ? null : tableSource })
   if (errors.length) {
     for (const e of errors) console.error(`✗ ${e}`)
     console.error(`\ntangu-ui: ${errors.length} problem(s); see scripts/build-tangu-ui.mjs`)
