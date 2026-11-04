@@ -27,7 +27,7 @@ jobs:
         working-directory: desktop
       - run: npx vitest run frontend/src/views/calendar frontend/src/amadeus/store/dbAggregateStore.test.ts frontend/src/amadeus/plugins/pluginCalendarEvents.test.ts frontend/src/amadeus/plugins/pluginCalendar.test.ts frontend/src/amadeus/plugins/pluginDb.test.ts frontend/src/amadeus/plugins/recordSurface.test.ts frontend/src/amadeus/store/humanCalendar.test.ts frontend/src/amadeus/store/humanCalendarIo.test.ts frontend/src/amadeus/plugins/pluginData.test.ts frontend/src/amadeus/plugins/nativeFeedback.test.ts frontend/src/amadeus/plugins/viewLocations.test.ts shared/corePlugins.test.ts electron/builtinPlugins.test.ts
         working-directory: desktop
-      - run: npx playwright-core install --with-deps chromium
+      - run: npx playwright-core install chromium # 不带 --with-deps,原因见 build-web.yml
         working-directory: desktop
       - run: node scripts/calendar-actions.check.cjs
         working-directory: desktop
