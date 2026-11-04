@@ -143,6 +143,12 @@ describe('public Chat Box mount', () => {
     await act(async () => { ctx.ui!.mountChatBox!(el, { value: 'Must stay revoked', onSubmit: () => false }); box!.update({ value: 'Too late' }) })
     expect(el.querySelector('textarea')).toBeNull()
   })
+  it('lists the behaviour a handle cannot reveal, so plugins need no proxy API to detect it', async () => {
+    let ctx!: PluginContext
+    await act(async () => { usePluginStore.getState().init([{ id: 'chatbox-caps', name: 'Caps', version: '1', setup(c) { ctx = c } }]) })
+    // Arrays are exercised in 'takes several triggers' below; the upward menu needs layout, which jsdom doesn't have.
+    expect(ctx.ui!.chatBoxCapabilities).toEqual(['suggestMany', 'suggestAbove'])
+  })
 })
 
 describe('public Chat Box slots', () => {

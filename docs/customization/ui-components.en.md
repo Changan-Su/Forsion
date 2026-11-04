@@ -60,6 +60,8 @@ For @-style mentions, pass `mention: true`. The menu then opens on the bare `tri
 
 Since 2026-11-02 `suggest` can also be a list, for example one entry for `#` tags and one for `[[` links (the latter with `mention: true` so it opens right after CJK text). When several match before the caret, the one nearest the caret opens. When the box sits in the lower half of the window the menu opens upward, falling back below if it doesn't fit. Earlier hosts accept a single object only.
 
+Before passing a list, check `ctx.ui.chatBoxCapabilities?.includes('suggestMany')` (2026-11-04+; the upward menu is `'suggestAbove'`). Treat a host without that field as supporting neither. Don't infer it from `insertText` or any other API: 2.13.8-beta.3 has `insertText` but takes no list.
+
 ```js
 const box = ctx.ui?.mountChatBox?.(el, {
   modelPicker: false,
@@ -82,7 +84,7 @@ const box = ctx.ui?.mountChatBox?.(el, {
 
 ↑↓ moves, Enter or Tab picks, Esc closes. Picking replaces the trigger and query with `value` plus one space, and that Enter doesn't submit. While the menu is open, ⌘/Ctrl+Enter picks too. The menu opens only while typing: moving the caret to the end of an existing `#tag` doesn't open it, and neither does IME composition, which is checked once it ends. After Esc, the menu stays closed for the rest of that word.
 
-These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. If it's missing, hide your `#` button or accept that the model pill is shown.
+These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. Behaviour added later that the handle can't reveal (a list of `suggest` triggers, the upward menu) is listed in `ctx.ui.chatBoxCapabilities`. If it's missing, hide your `#` button or accept that the model pill is shown.
 
 The model catalog is shared with chat: the main model list shows only LLMs, follows the user's sorting and hiding settings, and adds no brand restrictions. The selection stays in this component and changes neither the global default nor the current conversation. The submit callback receives the choices made for that submission; your plugin must pass them into its own flow rather than showing a choice and discarding it. Mounting and editing never send a model request or create a session. Feature-detect on older hosts; don't copy internal CSS to fake support.
 

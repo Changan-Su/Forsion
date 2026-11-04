@@ -57,6 +57,7 @@
     "e2e:plugview": "node scripts/plugin-view.e2e.cjs",
     "e2e:eventsspace": "node scripts/events-space-switch.repro.cjs",
     "check:listsrc": "node scripts/plugin-listsrc.check.cjs",
+    "check:plugincompat": "node scripts/plugin-compat.check.cjs",
     "e2e:latex": "node scripts/e2e-editor.cjs --script=latex-suite.e2e.cjs",
     "e2e:activewindow": "node scripts/active-window.e2e.cjs",
     "check:plugindata": "node scripts/plugin-data.e2e.cjs",

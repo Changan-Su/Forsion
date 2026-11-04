@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.92.1
+  version: 1.92.2
   author: Forsion
   category: Forsion
 ---
@@ -186,6 +186,9 @@ mod+J、布局记忆和移动端抽屉,自造的一样都没有,还和别的 Spa
   拆不开的 DOM 可以整块搬进另一个 view 的 `el`(事件监听跟着走),样式随之注入。
 - ⚠️ **iframe 一搬就重新加载**,而宿主开合底部面板会把主区整列摘下重挂 —— 主区里的 iframe 同样重载。
   靠 postMessage 驱动的预览要在帧**每次**报告就绪时把时间、播放状态补发回去,不能只听第一次(否则画面一直是黑的)。
+- **一个检测只开它自己那一块**:缺哪个能力就只少那一块,别拿一个接口当「新宿主」暗号、整块退回旧版(拿 `setBody` 判底部输入框,
+  会让只缺子任务的宿主连输入框位置也退回去)。选项层面、`?.` 看不出来的查能力清单:`ctx.listCapabilities`、
+  `ctx.ui.chatBoxCapabilities`、`ctx.table.caps`。
 - **先 feature-detect 再依赖**:旧宿主静默忽略 `layout.bottom`;旧桌面宿主把 `openView(id, { location: 'bottom' })`
   当主区打开,会把当前主视图导航走。查 `ctx.viewLocations?.includes('bottom')`(移动端没有底部面板,不含它)。
   主视图让出内容的判据 = 配方传给它的参数(如 `{ "timeline": "bottom" }`)**且** `viewLocations` 含 bottom;任一不满足就在 view 内自绘。
