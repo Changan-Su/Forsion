@@ -55,6 +55,8 @@ export function attachSourceButton(host: HTMLElement, view: EditorView, reveal: 
     if (typeof reveal === 'function') reveal()
     else revealSource(view, reveal)
   })
+  // 键盘按下(Tab 到这颗键再按回车 / 空格)不往上冒:否则 ProseMirror 的键位表拿去改别处的选区(删字、插段),按钮反而没按下去。
+  b.addEventListener('keydown', (e) => e.stopPropagation())
   host.classList.add('amx-has-src-btn')
   host.appendChild(b)
 }
@@ -92,6 +94,8 @@ export function attachCopyButton(host: HTMLElement, view: EditorView, text: stri
       }, 1500)
     }).catch(() => {})
   })
+  // 键盘按下(Tab 到这颗键再按回车 / 空格)不往上冒:否则 ProseMirror 的键位表拿去改别处的选区(删字、插段),按钮反而没按下去。
+  b.addEventListener('keydown', (e) => e.stopPropagation())
   host.classList.add('amx-has-src-btn')
   host.appendChild(b)
 }
