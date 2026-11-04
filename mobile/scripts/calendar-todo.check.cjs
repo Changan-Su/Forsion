@@ -1,4 +1,7 @@
-/** Full mobile entry + real local vault bridge + touch. Native chrome/haptic stand-in is explicit. */
+/** Full mobile entry + real local vault bridge + touch. Native chrome/haptic stand-in is explicit.
+ *  Default: the pinned renderer from desktop/node_modules (what the App bundles).
+ *  FORSION_CALENDAR_PACKAGE=<npm tgz>: run the real npm updater (coreUpdates.ts) against that package with a stubbed
+ *  registry, relaunch, and assert the downloaded version replaced the bundled one before running the same flow. */
 const assert = require('node:assert/strict')
 const path = require('node:path')
 const fs = require('node:fs')
@@ -23,6 +26,24 @@ async function main() {
     page.on('request', (r) => { const u = new URL(r.url()); if (/\.(tsx?|jsx?)$/.test(u.pathname)) loaded.set(u.pathname, u.pathname + u.search) })
     await stubApi(page, unknown); await page.goto('http://localhost:5296/', { waitUntil: 'domcontentloaded' })
     await page.locator('.mb-shell').waitFor({ timeout: 180000 }); await installChrome(page)
+    const pkg = process.env.FORSION_CALENDAR_PACKAGE && path.resolve(process.env.FORSION_CALENDAR_PACKAGE)
+    const pkgVersion = pkg && JSON.parse(require('node:child_process').execFileSync('tar', ['-xzOf', pkg, 'package/manifest.json'], { encoding: 'utf8' })).version
+    if (pkg) {
+      const tgz = fs.readFileSync(pkg)
+      const staged = await page.evaluate(async ({ updatesUrl, fsUrl, bundleUrl, versionUrl, b64, integrity, version }) => {
+        const { checkCoreUpdates } = await import(updatesUrl), { capacitorPluginFs } = await import(fsUrl)
+        const { calendarCoreBundle } = await import(bundleUrl), { APP_VERSION } = await import(versionUrl)
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
+        return checkCoreUpdates({
+          fs: capacitorPluginFs(), bundles: [calendarCoreBundle], appVersion: () => APP_VERSION, registries: async () => ['https://registry.npmjs.org'],
+          fetch: async () => new Response(JSON.stringify({ 'dist-tags': { latest: version }, versions: { [version]: { dist: { integrity } } } })),
+          download: async () => bytes, log: () => {},
+        })
+      }, { updatesUrl: moduleUrl('src/plugins/coreUpdates.ts'), fsUrl: moduleUrl('src/plugins/capacitorPluginFs.ts'), bundleUrl: moduleUrl('src/plugins/bundledCalendar.ts'), versionUrl: moduleUrl('../desktop/frontend/src/changelog.ts'),
+        b64: tgz.toString('base64'), integrity: `sha512-${require('node:crypto').createHash('sha512').update(tgz).digest('base64')}`, version: pkgVersion })
+      assert.deepEqual(staged, [`forsion-calendar@${pkgVersion}`], 'the npm package passes every updater gate and is staged')
+      await page.reload({ waitUntil: 'domcontentloaded' }); await page.locator('.mb-shell').waitFor({ timeout: 180000 }); await installChrome(page)
+    }
     await page.evaluate(async ({ chromeUrl, storeUrl, pageUrl, dbUrl, configUrl, spaceUrl, layout }) => {
       const host = await import(chromeUrl), engine = window.__stage.engine
       window.__todoTicks = 0
@@ -43,6 +64,7 @@ async function main() {
     await stage.space(page, 'forsion-todo')
     const root = page.locator('.fc-view-todo .amx-todo'); await root.locator('[data-task="db:PhoneTasks.db:one"]').waitFor()
     assert.ok(await page.evaluate(() => window.__todoPhone.usePluginStore.getState().plugins.some((p) => p.id === 'forsion-calendar' && p.preinstalled)), 'the bundled mobile renderer is core')
+    if (pkg) assert.equal(await page.evaluate(() => window.__todoPhone.usePluginStore.getState().plugins.find((p) => p.id === 'forsion-calendar')?.version), pkgVersion, 'the downloaded version replaced the bundled one on relaunch')
     const ticks = () => page.evaluate(() => window.__todoTicks), before = await ticks()
     const one = root.locator('[data-task="db:PhoneTasks.db:one"]')
     await one.getByRole('checkbox').tap(); await one.getByRole('checkbox', { checked: true }).waitFor()
