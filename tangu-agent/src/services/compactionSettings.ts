@@ -12,6 +12,9 @@
  *                    等价(行为不变)。1M 窗口的模型按预留算要 950k 才压,每轮重读几十万 token —— 调到 20–35 即可
  *                    在 200–350k 处压。只会把触发线往下拉(见 contextBudget.compactionThreshold)。
  *   keepRecentTokens 压缩后原样保留的最近上下文(按 token 走,不按条数);缺省 20000(pi 同值)
+ *   idleMinutes      距上一条消息超过这么久(分钟)再开口,先摘要压缩再发(借 Claude Code 的按时间压缩):隔了这么久
+ *                    各家的提示缓存都凉了(Anthropic 5 分钟 / 1 小时、OpenAI 内存缓存最多 1 小时),整段长历史要按全价重读,
+ *                    不如先压。缺省 60;0 = 关
  *   summaryMaxTokens 摘要输出上限;缺省 6144(原 1200 对长任务不够写 Next steps),另受 reserve/2 封顶
  *   thinking         摘要调用的思考档:'off'(缺省,与改前 wire 一致)| 某档 | 'inherit'(跟随本 run)
  *   model            摘要用另一个(更便宜的)模型;缺省 = 本 run 模型
@@ -28,6 +31,7 @@ export interface CompactionSettings {
   reserveTokens: number;
   thresholdPercent: number;
   keepRecentTokens: number;
+  idleMinutes: number;
   summaryMaxTokens: number;
   thinking: ThinkingLevel | 'inherit';
   model?: string;
@@ -40,6 +44,7 @@ export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
   reserveTokens: 16_384,
   thresholdPercent: 95,
   keepRecentTokens: 20_000,
+  idleMinutes: 60,
   summaryMaxTokens: 6_144,
   thinking: 'off',
 };
@@ -48,6 +53,7 @@ const LIMITS = {
   reserveTokens: [2_048, 200_000],
   thresholdPercent: [10, 95],
   keepRecentTokens: [0, 500_000],
+  idleMinutes: [0, 10_080],
   summaryMaxTokens: [512, 32_000],
 } as const;
 
@@ -59,7 +65,7 @@ export function normalizeCompactionLayer(raw: unknown): Partial<CompactionSettin
   const r = raw as Record<string, unknown>;
   const out: Partial<CompactionSettings> = {};
   if (typeof r.enabled === 'boolean') out.enabled = r.enabled;
-  for (const key of ['reserveTokens', 'thresholdPercent', 'keepRecentTokens', 'summaryMaxTokens'] as const) {
+  for (const key of ['reserveTokens', 'thresholdPercent', 'keepRecentTokens', 'idleMinutes', 'summaryMaxTokens'] as const) {
     const n = Number(r[key]);
     const [lo, hi] = LIMITS[key];
     if (Number.isFinite(n)) out[key] = Math.min(hi, Math.max(lo, Math.floor(n)));

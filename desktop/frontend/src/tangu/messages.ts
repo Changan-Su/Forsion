@@ -83,6 +83,7 @@ registerMessages({
   'ctx.compacted.auto': { zh: '上下文已自动压缩（节省约 {saved} 字符）', en: 'Context auto-compacted (~{saved} chars saved)' },
   'ctx.compacted.forced': { zh: '上下文到达自动压缩阈值，已生成摘要压缩', en: 'Context reached the auto-compact threshold; summarized and compacted' },
   'ctx.compacted.overflow': { zh: '上下文超出模型上限，已生成摘要压缩并重试本轮', en: 'Context exceeded the model limit; summarized, compacted and retried this turn' },
+  'ctx.compacted.idle': { zh: '距上次对话已超过 {n} 分钟，缓存已失效，先生成摘要压缩再继续', en: 'More than {n} minutes since the last message and the cache has expired; summarized and compacted before continuing' },
   'ctx.compacted.trimmed': { zh: '摘要没能生成，已从本轮上下文里去掉最早的 {n} 条消息（对话记录里还在）', en: 'Could not summarize the context; dropped the {n} oldest messages from this turn (they are still in the conversation)' },
   'ctx.overBudget': { zh: '上下文压缩后仍超过 {budget} tokens 的预算，本轮按模型上限照常发送，费用会更高', en: 'Context is still over the {budget}-token budget after compaction; sending it within the model limit, which costs more' },
   'ctx.sec.persona': { zh: '人格/指令', en: 'Persona/instructions' },
