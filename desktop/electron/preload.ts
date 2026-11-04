@@ -39,6 +39,12 @@ ipcRenderer.on('appearance:changed', (_event, value: StartupAppearance) => {
 const api = {
   /** 宿主平台('darwin' | 'win32' | 'linux');渲染层据此调标题栏/交通灯留白等。 */
   platform: process.platform as string,
+  /** Tangu 界面半身(界面热更新 4b;electron/coreTangu.ts):这次用哪份界面(null = 用编进宿主的那份),以及报告界面坏了。 */
+  coreTangu: {
+    load: (): Promise<{ source: 'overlay' | 'bundled'; version: string; code: string } | null> => ipcRenderer.invoke('coreTangu:load'),
+    /** 这份界面坏了:热更新版整版记坏;主进程随后重载这个窗口(渲染层自己 reload 会被 hardenNav 拦下)。 */
+    failed: (source: 'overlay' | 'bundled', version: string, reason: string): Promise<void> => ipcRenderer.invoke('coreTangu:failed', source, version, reason),
+  },
   desktopPermissionsStatus: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:status'),
   desktopPermissionRequest: (id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:request', id, options),
   desktopPermissionsVerify: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:verify'),

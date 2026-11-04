@@ -53,8 +53,8 @@ export function classifier(cfg) {
 }
 
 /** esbuild 插件:把 import 分成「打进包 / 宿主那份 / 共享第三方」,Tangu 的 CSS 改成文本。
- *  root = 仓根(绝对路径);classify(rel) → 'tangu' | 'contract' | 'host'。 */
-export function tanguUiPlugin({ root, classify, entry, alias = ALIAS }) {
+ *  root = 仓根(绝对路径);classify(rel) → 'tangu' | 'contract' | 'host';shared 只给负对照换(core-tangu.e2e --nc=dup)。 */
+export function tanguUiPlugin({ root, classify, entry, alias = ALIAS, shared = SHARED_PACKAGES }) {
   return {
     name: 'tangu-ui',
     setup(b) {
@@ -68,7 +68,7 @@ export function tanguUiPlugin({ root, classify, entry, alias = ALIAS }) {
       b.onResolve({ filter: /.*/ }, async (args) => {
         if (args.pluginData === 'tangu-ui:inner') return undefined
         const spec = args.path
-        if (isShared(spec) && bare(spec)) return { path: spec, external: true }
+        if (shared.includes(packageOf(spec)) && bare(spec)) return { path: spec, external: true }
         if (bare(spec)) return undefined // 其余第三方包照常解析、打进包
         const a = alias.find(([k]) => spec === k || spec.startsWith(k + '/'))
         const target = a ? path.join(root, a[1] + spec.slice(a[0].length)) : spec

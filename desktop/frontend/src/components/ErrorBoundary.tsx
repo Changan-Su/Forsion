@@ -4,6 +4,7 @@
  * 故意全程内联样式 + 读 document.lang:崩溃时主题 CSS/i18n 可能也已坏,兜底界面不能再依赖它们。
  */
 import React from 'react'
+import { noteRenderCrash } from '../coreTangu/load'
 
 type Props = {
   children: React.ReactNode
@@ -17,6 +18,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
   static getDerivedStateFromError(error: Error): State { return { error } }
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error('[tangu] render crash:', error, info?.componentStack)
+    noteRenderCrash(error) // 热更新版的 Tangu 界面开头一分钟里崩两次 → 整版退回自带的(coreTangu/load.ts)
   }
   render() {
     const { error } = this.state
