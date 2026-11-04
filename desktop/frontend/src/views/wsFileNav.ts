@@ -51,12 +51,14 @@ export function openWsFile(target: PreviewTarget, opts?: { newTab?: boolean; lin
     // 本机的 .pdf 听「默认打开方式」:插件(声明了 external)认领库外 PDF 就进它的视图,没认领照旧 wsfile 预览。
     // 懒加载两个模块:pluginStore / amadeusNav 静态引进来会和 tanguSlice 绕出环;非 PDF 一个微任务都不多等。
     if (/\.pdf$/i.test(path)) {
-      void Promise.all([import('../amadeus/plugins/pluginStore'), import('../amadeusNav')]).then(([ps, nav]) => {
-        if (!ps.matchFileType(path)) { openHostTab(target, path, opts); return }
+      void Promise.all([import('../amadeus/plugins/pluginStore'), import('../amadeusNav'), import('../openFileInstall')]).then(([ps, nav, ofi]) => {
+        // 库里的那份按库内路径开:按绝对路径会另开一份库外视图,两份写同一个批注文件,后写的盖掉先写的
+        const file = ofi.vaultRelOf(path) ?? path
+        if (!ps.matchFileType(file)) { openHostTab(target, path, opts); return }
         // 同 wsfile 的开法:同一份已开着就聚焦,否则新标签 —— openFile 缺省是就地换掉当前标签,不能让它顶掉用户正看着的那页
         const api = (useWorkspace.getState() as unknown as { api?: { panels: PanelLike[] } }).api
-        const open = !opts?.newTab && !!api?.panels.some((p) => p.params?.__type === 'amadeus-plugin-file' && p.params?.filePath === path)
-        nav.openFile(path, open ? undefined : { newTab: true })
+        const open = !opts?.newTab && !!api?.panels.some((p) => p.params?.__type === 'amadeus-plugin-file' && p.params?.filePath === file)
+        nav.openFile(file, open ? undefined : { newTab: true })
       }).catch(() => openHostTab(target, path, opts))
       return
     }

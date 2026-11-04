@@ -38,8 +38,7 @@ export function mountPluginToolIsland(root: HTMLElement, pluginId: string, row: 
   }
   placeSlots()
   const originalPosition = root.style.position
-  const pos = getComputedStyle(root).position
-  const madeRelative = !pos || pos === 'static'
+  const madeRelative = getComputedStyle(root).position === 'static'
   if (madeRelative) root.style.position = 'relative'
   root.appendChild(layer)
 
@@ -79,7 +78,7 @@ export function mountPluginToolIsland(root: HTMLElement, pluginId: string, row: 
     // 也会落到 body:还给同一颗,没了就给当前工具那颗
     if (hadFocus && !layer.contains(document.activeElement)) {
       const btns = [...strip.querySelectorAll<HTMLElement>('.lcl-isle-btn')]
-      ;(btns.find((b) => b.dataset.tool === focusedTool) ?? btns.find((b) => b.hasAttribute('data-on')))?.focus()
+      ;(btns.find((b) => b.dataset.tool === focusedTool) ?? btns.find((b) => b.hasAttribute('data-on')))?.focus({ preventScroll: true })
     }
   }
 

@@ -6,13 +6,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const m = vi.hoisted(() => ({
   panels: [] as Array<{ id: string; params: Record<string, unknown> }>,
   openView: vi.fn(), activate: vi.fn(), openFile: vi.fn(), claimed: false,
-  match: vi.fn(),
+  match: vi.fn(), rel: null as string | null,
 }))
 vi.mock('@lcl/engine', () => ({ useWorkspace: { getState: () => ({ api: { panels: m.panels }, openView: m.openView, activateLeaf: m.activate }) } }))
 vi.mock('../builtins', () => ({ openLocalHtml: () => false }))
 vi.mock('../services/fileKinds', () => ({ b64ToBytes: () => new Uint8Array() }))
 vi.mock('../amadeus/plugins/pluginStore', () => ({ matchFileType: m.match }))
 vi.mock('../amadeusNav', () => ({ openFile: m.openFile }))
+vi.mock('../openFileInstall', () => ({ vaultRelOf: () => m.rel }))
 import { openWsFile } from './wsFileNav'
 
 const settle = () => new Promise((r) => setTimeout(r, 0))
@@ -23,6 +24,7 @@ beforeEach(() => {
   m.panels = []
   m.match.mockImplementation(() => (m.claimed ? { id: 'pdf' } : undefined))
   m.claimed = false
+  m.rel = null
 })
 
 describe('openWsFile × 本机 PDF', () => {
@@ -43,6 +45,15 @@ describe('openWsFile × 本机 PDF', () => {
     openWsFile(target('/Users/a/Book.pdf'), { newTab: true })
     await settle()
     expect(m.openFile).toHaveBeenLastCalledWith('/Users/a/Book.pdf', { newTab: true })
+  })
+  it('库里的那份按库内路径开(不另开一份库外视图去抢同一个批注文件)', async () => {
+    m.claimed = true
+    m.rel = 'Papers/Book.pdf'
+    m.panels = [{ id: 'v1', params: { __type: 'amadeus-plugin-file', filePath: 'Papers/Book.pdf' } }]
+    openWsFile(target('/Users/a/Vault/Papers/Book.pdf'))
+    await settle()
+    expect(m.match).toHaveBeenCalledWith('Papers/Book.pdf')
+    expect(m.openFile).toHaveBeenCalledWith('Papers/Book.pdf', undefined)
   })
   it('没认领 → 照旧 wsfile 标签', async () => {
     openWsFile(target('/Users/a/Desktop/Book.pdf'))

@@ -308,7 +308,7 @@ else isle.row.append(colorDots)                               // the row under t
 - `icon` names: `hand`, `mouse-pointer-2`, `highlighter`, `underline`, `sticky-note`, `type`, `shapes`, `pen-line`, `eraser` (plus the rest of the vocabulary). `'separator'` draws a divider.
 - `row` is usable at once; add children, don't replace its class. `showRow(open)`: in 180 ms, out 80 ms, no slide under reduced motion. It sits above the island while docked at the bottom.
 - Clicks don't steal focus from your view; keyboard focus stays on the same button across `setActive` / `update`.
-- Overlays `root` without taking it over (static `root` → `relative` while mounted, restored on `dispose()`). Leave ~56 px at the top of your content. Wrong shapes throw `TypeError`; the host disposes it on disable / reload.
+- Overlays `root` without taking it over (static `root` → `relative` while mounted, restored on `dispose()`). Leave ~56 px at the top of your content. Pass the non-scrolling frame as `root`; pointer events on the island bubble to `root`, so skip `e.target.closest('.lcl-isle-layer')` in pan / draw handlers. Wrong shapes throw `TypeError`; the host disposes it on disable / reload.
 
 ### Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
 

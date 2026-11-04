@@ -266,7 +266,7 @@ else isle.row.append(colorDots)                     // 岛下那一排归插件�
 - `row`:岛下那一排(停底部时在岛上方),放当前工具要的东西 —— 色点、笔型、粗细。句柄一返回就能往里放;只放子元素,别换它的 class。`showRow(true/false)` 开合:进 180ms 减速、出 80ms 加速,减少动态效果时不位移。
 - `slots`:四角(离边 12px)放插件自己的元素,宿主只包同一张胶囊皮、定好位置;`update({ slots })` 能换。停到底部时底边两角和岛挤在一条线上,窄的时候少放点。
 - 点按钮不抢焦点(焦点留在视图里,视图的快捷键照样有人听);键盘用户 Tab 进来的焦点在 `setActive` / `update` 之后还在同一颗按钮上。
-- 和 `mountFloatingToc` 一样是叠在 `root` 上的一层,不接管它(`root` 是 static 时挂载期间设成 `relative`,`dispose()` 还原),和别的挂载互不影响。内容顶上留出约 56px 给岛。句柄有 `row` / `showRow` / `setActive` / `update(opts)` / `dispose()`;形状不对(没有 `tools` 数组、没有 `onPick`、`slots` 不是元素)同步抛 `TypeError`;插件停用或重载时宿主统一收掉。
+- 和 `mountFloatingToc` 一样是叠在 `root` 上的一层,不接管它(`root` 是 static 时挂载期间设成 `relative`,`dispose()` 还原),和别的挂载互不影响。内容顶上留出约 56px 给岛。`root` 传不滚动的那一层框(岛是 `root` 里的一层,传滚动容器它会跟着内容滚走);岛和四角上的指针事件会冒泡到 `root`,自己的拖动 / 落笔处理里跳过 `e.target.closest('.lcl-isle-layer')`。句柄有 `row` / `showRow` / `setActive` / `update(opts)` / `dispose()`;形状不对(没有 `tools` 数组、没有 `onPick`、`slots` 不是元素)同步抛 `TypeError`;插件停用或重载时宿主统一收掉。
 - 白板(Excalidraw)自带的工具岛不换,位置本来就一样。
 
 ### 设置零件 (2026-10-17)

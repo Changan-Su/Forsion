@@ -1841,7 +1841,9 @@ export interface PluginContext {
      *  slides over. Same skin as the Mini window's top bar. Like `mountFloatingToc` it overlays `root` without
      *  taking it over (`root` becomes `position: relative` while mounted if it was static). Clicking a button
      *  doesn't take focus from your view; a keyboard user's focus stays on the same button across `update` /
-     *  `setActive`. Leave about 56 px at the top of your content for it. Feature-detect on older hosts
+     *  `setActive`. Leave about 56 px at the top of your content for it. Pass the frame that doesn't scroll (the island
+     *  is a layer inside `root`, so a scrolling `root` takes it along). Pointer events on the island and slots bubble to
+     *  `root`: skip `e.target.closest('.lcl-isle-layer')` in your own pan / draw handlers. Feature-detect on older hosts
      *  (`ctx.ui?.mountToolIsland`) and draw your own bar there. The host disposes it on disable / reload. */
     mountToolIsland?(root: HTMLElement, opts: PluginToolIslandOptions): PluginToolIslandHandle
     /** The host's settings parts as one page description (2026-10-17+): groups of rows (switch, value, buttons,

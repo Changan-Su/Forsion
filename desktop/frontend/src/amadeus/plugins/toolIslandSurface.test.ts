@@ -25,7 +25,11 @@ const width = (w: number): void => { Object.defineProperty(root, 'clientWidth', 
 
 beforeEach(() => {
   vi.stubGlobal('IS_REACT_ACT_ENVIRONMENT', true)
-  vi.stubGlobal('ResizeObserver', class { constructor(cb: () => void) { resize = cb } observe() {} disconnect() { resize = undefined } })
+  vi.stubGlobal('ResizeObserver', class {
+    constructor(private cb: () => void) {}
+    observe(el: Element) { if (el === root) resize = this.cb } // 只认看 root 的那个(条自己也看着自己的尺寸)
+    disconnect() {}
+  })
   root = document.createElement('div')
   document.body.append(root)
 })
@@ -130,7 +134,9 @@ describe('ctx.ui.mountToolIsland', () => {
 
   it('dispose:同步摘掉那一层、还原 root 的 position,插件放进 root 的东西不动;幂等', async () => {
     const own = root.appendChild(document.createElement('p'))
+    const cs = vi.spyOn(window, 'getComputedStyle').mockReturnValueOnce({ position: 'static' } as CSSStyleDeclaration)
     const h = mount()
+    cs.mockRestore()
     expect(root.style.position).toBe('relative')
     await act(async () => { h.dispose() })
     expect(root.querySelector('.lcl-isle-layer')).toBeNull()

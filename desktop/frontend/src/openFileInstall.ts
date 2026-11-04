@@ -16,7 +16,7 @@ const windowsPath = (x: string): boolean => /^(?:[a-z]:\/|\/\/[^/]+\/[^/]+\/)/i.
 
 /** 绝对路径 → 本地库内的相对路径;不在库里(或当前是云端库)→ null。
  *  Windows 路径不分大小写(`c:\vault\a.md` 与库根 `C:\Vault` 是同一处),按盘符形态判。 */
-function vaultRelOf(path: string): string | null {
+export function vaultRelOf(path: string): string | null {
   const ps = usePageStore.getState()
   if (ps.vaultSide !== 'local' || !ps.vaultRoot) return null
   const root = norm(ps.vaultRoot) + '/'

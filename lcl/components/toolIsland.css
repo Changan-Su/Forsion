@@ -72,11 +72,14 @@
   pointer-events: none;
 }
 .lcl-isle-main {
+  /* 居中不用 transform:变换过的盒子会变成里面 position: fixed 的参照,插件放进 row 的弹层就错位了 */
   position: absolute;
-  left: 50%;
+  left: 0;
+  right: 0;
   top: 12px;
+  width: fit-content;
   max-width: calc(100% - 24px);
-  transform: translateX(-50%);
+  margin-inline: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
