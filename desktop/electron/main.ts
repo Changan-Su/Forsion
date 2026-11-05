@@ -1320,10 +1320,12 @@ async function doRefreshUnitHost(): Promise<void> {
       return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken(), remoteMark: backend.remoteMarkSecret() }
     }, unitSessionRootsSource()),
     confirmPair: async (info: { name: string; code: string; ip: string; expires: number }): Promise<boolean> => {
+      // 门铃实际开在的固定口(第一个被占会落到第二个):Clip 在这个口上等令牌。先记下 —— 打开互联会关掉门铃
+      const bellPort = unitDoorbell?.port ?? want
       if (!(await askPair(info, doorbell))) return false
-      // 门铃上点了「允许并打开」:先打开互联、等正式服务在同一个口上起来,再放行批准 ——
+      // 门铃上点了「允许并打开」:先打开互联、等正式服务(或转发入口)在门铃那个口上起来,再放行批准 ——
       // 令牌经共用的 unitPairStore 由正式服务交出,Clip 拿到令牌后紧接着的 /unit/meta、/unit/browser-control 不会撞上换服务的空档
-      return doorbell ? enableUnitHostFromDoorbell(info.expires, want) : true
+      return doorbell ? enableUnitHostFromDoorbell(info.expires, bellPort) : true
     },
     browserControlCode: () => browserControlCode(localEngineRef),
     pairedDevices: {
