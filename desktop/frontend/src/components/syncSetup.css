@@ -20,3 +20,15 @@
 .sync-setup-bar { width: 120px; height: 4px; border-radius: 2px; background: var(--overlay-light); overflow: hidden; }
 .sync-setup-bar i { display: block; height: 100%; background: var(--signal-mark, var(--accent)); transition: width 0.3s ease; }
 .sync-setup-link { border: 0; background: none; padding: 0; color: var(--text-muted); text-decoration: underline; text-underline-offset: 3px; font-size: var(--ui-font-meta); cursor: pointer; }
+
+/* Agents 逐个选(2026-11-05):上面那个勾只显示「勾了几个」,点它不全选;下面每个 Agent 一个勾,卜算子灰着勾不了。
+   放在文件末尾:和 .sync-setup-row:first-of-type 同特异性,要盖住它(这一行是 div,会被当成第一个 div) */
+.sync-setup-row.sync-setup-group { align-items: start; cursor: default; border-top: var(--border-width) solid var(--border); }
+.sync-setup-group > .sync-setup-mark { margin-top: 6px; pointer-events: none; }
+.sync-setup-kids { display: grid; gap: 2px; margin-top: 8px; max-height: 196px; overflow-y: auto; }
+.sync-setup-kid { display: flex; align-items: center; gap: 8px; min-height: 26px; font-size: var(--ui-font-body); cursor: pointer; }
+.sync-setup-kid input { width: 14px; height: 14px; margin: 0; flex: none; }
+.sync-setup-kid-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-setup-slug { color: var(--text-faint); font-size: var(--ui-font-meta); white-space: nowrap; }
+.sync-setup-kid.is-locked { cursor: default; color: var(--text-faint); }
+.sync-setup-lk { margin-left: auto; padding-left: 8px; color: var(--text-faint); font-size: var(--ui-font-meta); white-space: nowrap; }

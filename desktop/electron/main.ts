@@ -1,6 +1,6 @@
 import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpConfig'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
-import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner } from './contentSyncHost'
+import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner,agentContentHooks } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
 import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
@@ -19,7 +19,7 @@ import { createPluginSandbox, type PluginSandboxUiSeed } from './pluginSandbox'
 import { sandboxSelf, startSandboxChild, sandboxForward } from './sandboxChild'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
-import { normalizeUiSync, UI_LOCALE_CHANNEL } from '../shared/uiSync'
+import { normalizeUiAppearance, normalizeUiSync, UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync'
 /**
  * Tangu 桌面 GUI — Electron 主进程。
  * 负责:建窗 + 配置持久化(IPC)+ 托管内置 tangu-server(managed 模式,backendManager)。
@@ -103,7 +103,7 @@ import { registerIpc as registerAmadeusIpc } from './amadeus/ipc'
 import type { AmadeusSyncFactory } from './amadeus/cloudSeam'
 import { engineCapsState, pairingWriters, type UnitHubFactory, type UnitHubInstance } from './unitHubSeam' // 设备互联云端通道的接缝(Forsion Extend 0.6 起)
 import { makeCallerHeaders } from './unitCaller'
-import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice } from './unitWeb'
+import { newPairStore, startUnitWeb, type UnitWebHandle, type PairedDevice, startClipEntrance, CLIP_ENTRANCE_PORTS, type ClipEntranceHandle } from './unitWeb'
 import { createRemoteSessions, lookupRosterUnit, registerRemoteSessionsIpc, REMOTE_SESSIONS_FILE, withRemoteCap } from './remoteSessions' // P1-K4
 import { normalizeCap } from '../shared/remoteSessions' // P1-K4
 import { createRemoteSafety } from './remoteSafety' // P1-K2
@@ -1020,6 +1020,11 @@ let unitHubFactory: UnitHubFactory | null = null // Extend 装载时登记(setUn
 let unitWeb: UnitWebHandle | null = null
 /** 互联关着时的本机门铃(只听回环、只收 Forsion Clip 的配对请求,见 startUnitWeb 的 opts.doorbell);和 unitWeb 不会同时在。 */
 let unitDoorbell: UnitWebHandle | null = null
+/** 互联开着、互联口又不在 Clip 的固定口上时,回环固定口上的转发入口(startClipEntrance);门铃 / 互联口本身就在固定口上时不开。 */
+let unitEntrance: ClipEntranceHandle | null = null
+/** Forsion Clip 的本机固定口(安装版 8791 / 8793,开发版 8792 / 8794;Clip 四个都探)。FORSION_CLIP_ENTRANCE=0 关掉(台架缺省关)。 */
+const clipEntrancePorts = (): readonly number[] => (app.isPackaged ? CLIP_ENTRANCE_PORTS.packaged : CLIP_ENTRANCE_PORTS.dev)
+const clipEntranceOn = (): boolean => process.env.FORSION_CLIP_ENTRANCE !== '0'
 /** 配对在途表:门铃收下的请求,打开互联后由正式服务交出令牌(两者共用这一份)。 */
 const unitPairStore = newPairStore()
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
@@ -1034,6 +1039,8 @@ let unitHostCloudUrl = DEFAULT_CLOUD_URL
 let unitHostPairing: { unitId: string; secret: string } | null = null
 // P1-KF:主进程文案(mt)的界面语言 = 渲染层报来的生效语言(ui:locale),上次的值落 userData/ui-locale.json 供窗口载入前用。
 const uiLocale = createUiLocaleSync({ file: () => join(app.getPath('userData'), UI_LOCALE_FILE), log: (m) => console.log(m) })
+/** 渲染层报来的本机外观(主题色 / 背景色 / 明暗),给已配对的 Forsion Clip 跟随;语言另取 mainLocale()。 */
+let uiAppearance: { skin: string; bg: string; mode: 'light' | 'dark' } | null = null
 // P1-K3:远程来源 run 的待批 → 系统通知(点击打开会话,通知上不放「批准」);60s 没人答 → 经 unit-hub 投收件箱给手机。逻辑全在 approvalDelivery.ts。
 // e2e 钩子双闸(非打包 + 显式 FORSION_E2E_APPROVAL_DELIVERY=1,同 FORSION_UNIT_AUTO_PAIR 口径;打包版 isPackaged 恒 true → 天然失效):
 // chat-events 台架是外部模式(桩引擎),这条订阅本该 idle —— 钩子让它改订 TANGU_BACKEND_URL,并把真 Notification 挂到
@@ -1275,7 +1282,8 @@ async function enableUnitHostFromDoorbell(expires: number, port: number): Promis
   for (const w of BrowserWindow.getAllWindows()) w.webContents.send('config:changed') // 开着的设置页跟着翻成「开」
   if (backend.getStatus().state !== 'ready') await ensureBackend() // 没起 / 崩了才拉起(外部引擎模式下本机引擎也要常驻)
   await refreshUnitHost()
-  return unitWeb?.port === port && Date.now() < expires
+  // Clip 在门铃那个固定口上等:互联口就落在它上面,或固定口上已换成转发入口,都算接上了
+  return (unitWeb?.port === port || unitEntrance?.port === port) && Date.now() < expires
 }
 async function doRefreshUnitHost(): Promise<void> {
   const stored = await loadConfig()
@@ -1289,10 +1297,12 @@ async function doRefreshUnitHost(): Promise<void> {
   if (unitHub) { unitHub.stop(); unitHub = null } // stop() 也让 caps 上报器停报(onChannelDown)
   if (unitWeb) { const w = unitWeb; unitWeb = null; await w.close() } // 必须等旧服务真放掉端口,否则新起撞自己
   if (unitDoorbell) { const d = unitDoorbell; unitDoorbell = null; await d.close() }
+  if (unitEntrance) { const en = unitEntrance; unitEntrance = null; await en.close() }
   remoteSessions.notifyChanged() // P1-K4:父开关 / 账号可能变了(换号收掉旧账号的确认框)
   // 互联关着 → 开门铃:Clip 发来配对请求时弹「允许并打开」,一键打开互联并配好(Clip 安装引导第二步)。
-  // dev 要显式 FORSION_UNIT_DOORBELL=1:开发版与安装版常同时开着,dev 的门铃会占住 8791,安装版再打开互联就被挤到随机端口
-  const doorbell = !stored.unitHostEnabled && (app.isPackaged || process.env.FORSION_UNIT_DOORBELL === '1')
+  // 门铃开在 Clip 的固定口上:安装版 8791 / 8793、开发版 8792 / 8794,两份同开互不挤占(以前 dev 门铃占 8791 把安装版挤到了随机口)。
+  // 台架起的隔离实例缺省关(launch-electron 设 FORSION_CLIP_ENTRANCE=0),别让用户真浏览器里的 Clip 找到它们。
+  const doorbell = !stored.unitHostEnabled && clipEntranceOn()
   if (!stored.unitHostEnabled && !doorbell) return
   // 实例 id:首次开启生成并回写(/unit/meta 自证身份,防 DHCP 换主誊错设备)。
   let instanceId = stored.unitInstanceId
@@ -1301,7 +1311,7 @@ async function doRefreshUnitHost(): Promise<void> {
     await saveConfig({ unitInstanceId: instanceId })
   }
   // 端口保持稳定(便于手输 IP 直连;Clip 也只找这个口):首选已存端口/8791
-  const want = stored.unitWebPort || 8791
+  const want = stored.unitWebPort || clipEntrancePorts()[0]
   // 本机项目根种子没做完之前,远端的 /engine 一律 503(seedGatedEngine):远端没有窗口抢在种子之前改 project_path。
   if (!doorbell) void localProjectRegistry().ready().then(() => unitSessionRootsSource().ensureSeeded()).then(() => unitHub?.engineChanged()) // P1-K7a:种子做完 = starting → ready
   const webDeps = {
@@ -1310,10 +1320,12 @@ async function doRefreshUnitHost(): Promise<void> {
       return { url: st.state === 'ready' ? (st.url ?? null) : null, token: backend.getToken(), remoteMark: backend.remoteMarkSecret() }
     }, unitSessionRootsSource()),
     confirmPair: async (info: { name: string; code: string; ip: string; expires: number }): Promise<boolean> => {
+      // 门铃实际开在的固定口(第一个被占会落到第二个):Clip 在这个口上等令牌。先记下 —— 打开互联会关掉门铃
+      const bellPort = unitDoorbell?.port ?? want
       if (!(await askPair(info, doorbell))) return false
-      // 门铃上点了「允许并打开」:先打开互联、等正式服务在同一个口上起来,再放行批准 ——
+      // 门铃上点了「允许并打开」:先打开互联、等正式服务(或转发入口)在门铃那个口上起来,再放行批准 ——
       // 令牌经共用的 unitPairStore 由正式服务交出,Clip 拿到令牌后紧接着的 /unit/meta、/unit/browser-control 不会撞上换服务的空档
-      return doorbell ? enableUnitHostFromDoorbell(info.expires, want) : true
+      return doorbell ? enableUnitHostFromDoorbell(info.expires, bellPort) : true
     },
     browserControlCode: () => browserControlCode(localEngineRef),
     pairedDevices: {
@@ -1406,7 +1418,8 @@ async function doRefreshUnitHost(): Promise<void> {
       }).catch(() => mgr.closePeer(peerId))
       return sdp
     },
-    meta: { instanceId, name: hostname(), version: app.getVersion() },
+    meta: { instanceId, name: hostname(), version: app.getVersion(), build: (app.isPackaged ? 'packaged' : 'dev') as 'packaged' | 'dev' },
+    appearance: () => (uiAppearance ? { ...uiAppearance, locale: mainLocale() } : null),
     webDistDir: (): string | null => {
       const env = process.env.TANGU_UNIT_WEB_DIST
       if (env && existsSync(env)) return env
@@ -1423,8 +1436,10 @@ async function doRefreshUnitHost(): Promise<void> {
   unitPairedCache = await configQueue(async () => (await loadConfig()).unitPairedDevices || [])
   await remoteSessions.ready // P1-K4:迁移读完再开门(之前闸本就 fail closed,这里只为首个请求拿到真状态)
   if (doorbell) {
-    // 门铃不退到随机端口:Clip 只找 8791(或用户存过的端口);被占(另一个 Forsion 开着)就不开,Clip 那边照旧提示
-    try { unitDoorbell = await startUnitWeb(webDeps, { port: want, pairs: unitPairStore, doorbell: { origins: [CLIP_ORIGIN] } }) } catch (e: any) { console.log(`[unit-web] 门铃没开(端口被占?):${e?.message || e}`) }
+    // 门铃不退到随机端口:Clip 只探固定口;两个都被占就不开,Clip 那边照旧提示没找到
+    for (const port of clipEntrancePorts()) {
+      try { unitDoorbell = await startUnitWeb(webDeps, { port, pairs: unitPairStore, doorbell: { origins: [CLIP_ORIGIN] } }); break } catch (e: any) { console.log(`[unit-web] 门铃没开在 ${port}(端口被占?):${e?.message || e}`) }
+    }
     return
   }
   try {
@@ -1438,6 +1453,10 @@ async function doRefreshUnitHost(): Promise<void> {
     }
     if (unitWeb.port !== stored.unitWebPort) await saveConfig({ unitWebPort: unitWeb.port })
     console.log(`[unit-web] 已启动:${unitLanUrl() ?? `http://127.0.0.1:${unitWeb.port}`}`)
+    // 互联口不在 Clip 的固定口上(撞过口、退到随机口后一直记着):回环固定口上另开转发入口,Clip 照样找得到
+    if (clipEntranceOn() && !clipEntrancePorts().includes(unitWeb.port)) {
+      unitEntrance = await startClipEntrance({ ports: clipEntrancePorts(), origins: [CLIP_ORIGIN], target: () => unitWeb, log: (m) => console.log(m) }).catch(() => null)
+    }
   } catch (e: any) {
     console.error('[unit-web] 启动失败:', e?.message || e)
     return
@@ -2858,7 +2877,8 @@ app.whenReady().then(async () => {
           const r=await fetch(st.url.replace(/\/+$/,'')+'/agent/sync/content-owner',{method:'PUT',headers:{Authorization:`Bearer ${backend.getToken()}`,'Content-Type':'application/json'},body:JSON.stringify({enabled:true}),signal:AbortSignal.timeout(15000)})
           if(!r.ok)throw new Error('Content sync refresh failed')
         },
-        merge: mergeSyncContent,
+        merge: (path,ours,base,theirs) => mergeSyncContent(path,ours,base,theirs,tanguDataDir()),
+        agentFiles: agentContentHooks(tanguDataDir(),()=>{const c=loadTanguCreds();return forsionAccountId(c.cloudUrl||'',c.token||'')}),
         withWriteLock:(path,commit)=>withContentWriteLock(path,tanguDataDir(),commit),
         trash: (p) => shell.trashItem(p),
       },
@@ -4515,6 +4535,12 @@ app.whenReady().then(async () => {
   ipcMain.on(UI_LOCALE_CHANNEL, (e, v: unknown) => {
     if (!isTrustedSender(e)) return
     uiLocale.report(v)
+  })
+  // 本机外观 → 已配对的 Forsion Clip(/unit/appearance)。只在内存里记最后一次;没报过 = 404,Clip 跟系统。
+  ipcMain.on(UI_APPEARANCE_CHANNEL, (e, v: unknown) => {
+    if (!isTrustedSender(e)) return
+    const a = normalizeUiAppearance(v)
+    if (a) uiAppearance = a
   })
   ipcMain.on('window:closeSelf', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
   // 系统浏览器兜底(内置浏览器关掉 / mini 窗 / 用户点「用系统浏览器打开」);只放 http(s),

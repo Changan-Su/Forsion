@@ -4,7 +4,8 @@
  */
 import type { PromptSectionCtx, PromptSections } from '../seams/appProfile.js';
 import type { Preset } from '../core/presetTable.js';
-import { amadeusPromptSection, amadeusCloudPromptSection } from '../tools/builtin/amadeus.js';
+import { amadeusPromptSection, amadeusCloudPromptSection, amadeusVaultExists, amadeusVaultPath } from '../tools/builtin/amadeus.js';
+import { machineEnvironmentLines, machineFacts } from '../tools/hostEnvironment.js';
 
 /** 工具失败恢复指引(Harness-Bench:工具错误后恢复不了占失败 24.6%,仅次于输出契约)。
  *  ⚠️ 引擎级契约:由 agentLoop 直接注入,**不进** guidance 数组——per-app promptGuidance
@@ -139,7 +140,7 @@ export const MEMORY_LOG_GUIDANCE =
 
 /** host 模式(本地直连):真实文件系统 + shell 的执行环境说明。
  *  coding 预设下浏览器引导行退场(browser_* 已转 deferred,提示词与工具面必须一致);默认文本逐字节不动。 */
-export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { coding?: boolean }): string {
+export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { coding?: boolean; machine?: string }): string {
   // 额外工作文件夹:用户在「工作范围」里显式加的,已并入可写根(fsPolicy.writableRoots)。
   // 只报路径不预拉清单——列内容会把系统块吹大,让模型自己 list_dir 更省。
   const extra = (extraRoots || []).filter((r) => r && r !== cwd)
@@ -149,11 +150,15 @@ export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { cod
       + 'relative paths still resolve against the current working directory only:\n'
       + extra.map((r) => `  - \`${r}\``).join('\n') + '\n'
     : ''
+  // 这台机器的事实(系统 / run_bash 的 shell / 家目录 / 笔记库 / 设备名 / PATH 上的工具):整个进程内不变,不打穿前缀缓存。
+  const machine = opts?.machine ?? machineEnvironmentLines(machineFacts(vaultOrNull()))
   return (
     '## Local Execution Environment (important)\n' +
     `You are running on the **user's own machine**; the current working directory is \`${cwd || process.cwd()}\`.\n` +
+    machine +
     extraLine +
     '- Use `run_bash` to run shell commands; `list_dir`/`read_file` to inspect; `edit_file` for precise local edits and `write_file` for new files — all act on the real filesystem (relative paths resolve against the current working directory).\n' +
+    '- For file operations prefer the file tools — `move_path`, `copy_path`, `delete_path` (recoverable) and `open_path` move, copy, delete and open files the same way on every OS. Keep `run_bash` for real command-line programs (git, npm, builds); for multi-step data processing write a short python3 script.\n' +
     '- When a task involves existing files, or you are unsure what is in the working directory, call `list_dir` first instead of assuming it is empty.\n' +
     (opts?.coding ? '' : '- For live web information prefer `web_search` (fast API); use `browser_search` only when web_search fails or you must interact with the results page. To open a page, click, type, or take a screenshot use `browser_navigate` / `browser_snapshot` / `browser_click` / `browser_type` / `browser_screenshot`. When the user refers to something already open in their own browser, call `browser_tabs` first.\n') +
     '- To change an existing file, edit only the affected lines — use `edit_file` (one region), `multi_edit` (several regions of one file), or `apply_patch`; do NOT re-read and re-emit a whole file for a small change (it wastes tokens and risks clobbering unrelated content). `read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix so old_string matches the file\'s raw text.\n' +
@@ -161,6 +166,10 @@ export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { cod
     // 破坏性操作事故链拆解(借 Codex 5.6 Destructive Actions:目标解析→递归展开→不可恢复,逐环加锁)
     '- Never make `~`, `/`, the working directory root, or another broad directory the target of a recursive delete/overwrite; scope destructive commands to the narrowest specific path. Prefer recoverable operations (move to trash or a backup location) over permanent deletion. After deleting anything material, tell the user what was removed and whether it can be restored.'
   );
+}
+
+function vaultOrNull(): string | null {
+  try { return amadeusVaultExists() ? amadeusVaultPath() : null } catch { return null }
 }
 
 /** sandbox 模式:文件输出位置(最常见的「产物丢失」原因:模型把文件写到工作区之外)。

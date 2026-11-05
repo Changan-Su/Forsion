@@ -3847,7 +3847,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4015,6 +4015,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [
@@ -5031,7 +5110,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5199,6 +5278,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [
@@ -7737,7 +7895,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7905,6 +8063,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [
@@ -8921,7 +9158,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9089,6 +9326,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [
@@ -10086,7 +10402,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10254,6 +10570,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [
@@ -12553,7 +12948,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12721,6 +13116,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [

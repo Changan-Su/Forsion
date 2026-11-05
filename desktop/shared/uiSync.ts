@@ -95,6 +95,16 @@ export function normalizeUiSync(raw: unknown): UiSyncPayload | null {
 // 且任何字体 / 缩放变更的广播都带着它的 null —— 主进程拿它当语言源,中文界面(区域 = CN、系统英文)下弹的就是英文通知。
 // 这里报的是渲染层按 CLAUDE.md 四级链判完的**结论**(i18n.tsx currentLocale),主进程只认它。
 /** 渲染层 → 主进程:本窗生效界面语言(ipcRenderer.send,单向)。 */
+/** 本机外观(主题色 / 背景色 / 明暗)→ 主进程:已配对的 Forsion Clip 经 /unit/appearance 跟随。单向,主进程只收命名过的颜色。 */
+export const UI_APPEARANCE_CHANNEL = 'ui:appearance'
+/** 载荷来自渲染层:颜色 id 只认短的小写字母 id(自定义色 = 'custom' 不下发,收方回落缺省);明暗只认 light / dark。 */
+export function normalizeUiAppearance(v: unknown): { skin: string; bg: string; mode: 'light' | 'dark' } | null {
+  if (!v || typeof v !== 'object') return null
+  const { skin, bg, mode } = v as Record<string, unknown>
+  const id = (x: unknown): x is string => typeof x === 'string' && /^[a-z][a-z0-9-]{0,23}$/.test(x) && x !== 'custom'
+  if (!id(skin) || !id(bg) || (mode !== 'light' && mode !== 'dark')) return null
+  return { skin, bg, mode }
+}
 export const UI_LOCALE_CHANNEL = 'ui:locale'
 /** 载荷来自渲染层(插件也够得着 window.tangu):只认 'zh' | 'en',其余一律丢弃(不当成「跟随系统」)。 */
 export function normalizeUiLocale(v: unknown): 'zh' | 'en' | null {

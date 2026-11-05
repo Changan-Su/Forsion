@@ -91,8 +91,9 @@ export const OnboardingWizard: React.FC<{
   const [signedIn, setSignedIn] = useState(false)
   useEffect(() => { void window.tangu?.authStatus?.().then((a) => setSignedIn(!!a?.loggedIn)).catch(() => {}) }, [])
   const [connected, setConnected] = useState(false)
-  // 登录后的同步三个勾(10-20):默认都勾;真露出来过才在结束时按勾的开,没看到不替用户开(留给首登卡片问)
-  const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean>>({ notes: true, agents: true, plugins: true })
+  // 登录后的同步三个勾(10-20):真露出来过才在结束时按勾的开,没看到不替用户开(留给首登卡片问)。
+  // Agents 那个勾在旧同步里是账号总闸(= 所有 Agent),11-05 Agent 逐个选定案后缺省不勾(新同步里它不起作用,逐个选在蓬洲云 › 同步)
+  const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean>>({ notes: true, agents: false, plugins: true })
   const syncSeen = useRef(false)
   const onSyncSeen = useCallback(() => { syncSeen.current = true }, [])
   const addAgent = useRef(false)
