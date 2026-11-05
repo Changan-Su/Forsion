@@ -6,7 +6,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const PACKAGE = '@forsion/tangu-agent'
-const SCHEMA_SOURCES = ['src/db/migrate.ts', 'src/db/schemaStandalone.ts', 'src/core/dialectDDL.ts']
+export const SCHEMA_SOURCES = ['src/db/migrate.ts', 'src/db/schemaStandalone.ts', 'src/core/dialectDDL.ts']
 const ENGINE_SOURCES = ['src', 'skills', 'agent-skills', 'tsconfig.json', 'package-lock.json']
 // Engine npm identities keep their existing stable/prerelease contract; metadata is Desktop-only.
 import { compareReleaseVersions, isPrerelease, parseReleaseVersion } from '../../desktop/shared/releaseVersion.mjs'

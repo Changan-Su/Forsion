@@ -145,6 +145,7 @@ ed25519。公钥编在 `src/boot/signingKey.ts`,随每一份安装包发出去�
 | `src/boot/overlay.test.ts` | 判定函数的每一条 |
 | `desktop/electron/engineUpdates.test.ts` | 只查本线标签、下载、只落签名表里的文件、落位、启动时收拾目录 |
 | `scripts/engine-release-gate.test.mjs`(tangu-agent) | 版本号身份、依赖 / 迁移守卫、按基线安装包选 dist-tag;改动只许落在 Tangu 包里(挪文件两头都算)、forDesktop = 基准桌面 |
+| `node scripts/hot-update-scope.mjs`(desktop) | 一项改动能不能走热更新:只动引擎和 Tangu 界面 / 另外只动插件接口层(接口层还没进包)/ 只能随安装包。PR 上自动跑(`hot-update-scope.yml`,只提示不拦);`--history --since <日期>` 统计 main 上每个 PR;`--verify` 核接口层清单 `plugin-ctx-boundary.json` 没被宿主在运行时引用 |
 | `node scripts/build-tangu-ui.mjs`(desktop) | 界面半身:没把宿主文件 / 共享包打进去、宿主模块都在边界基线里、共享模块表没过期 |
 | `npm run e2e:coretangu`(desktop) | 真 Electron 运行时加载界面半身;`--nc=dup` / `--nc=broken` 负对照 |
 | `npm run drill:coretangu`(desktop,macOS) | 打包形态演练:装好的 .app 副本换上本检出的代码,N → 落位 N+1 → 重启后两半都是 N+1;签名坏 / forDesktop 不符 / 依赖变了 / 界面激活就抛四个负对照界面都停在 N、真模型对话照常;再用老桌面自己的判定代码看新包。窗口静默,抢了前台就中止 |
