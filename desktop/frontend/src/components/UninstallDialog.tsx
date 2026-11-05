@@ -159,6 +159,8 @@ export async function afterRestore(kind: TrashEntry['kind'], desktopExtra?: Reco
     window.tangu?.requestMainAction?.('agents-changed')
   } else if (kind === 'skill') {
     window.tangu?.requestMainAction?.('skills-changed')
+  } else if (kind === 'file') {
+    // Agent 删掉的文件(delete_path):放回原处就完了,没有要重扫 / 接回的东西
   } else if (desktopExtra?.engine) {
     // 引擎插件(引擎不在时主进程挪的那份):文件夹回来了,让引擎重扫。
     const { rescanPlugins } = await import('../services/backendService')

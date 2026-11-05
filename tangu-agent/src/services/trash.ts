@@ -9,7 +9,8 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
 
-export type TrashKind = 'agent' | 'skill' | 'plugin';
+/** file = Agent 用 delete_path 删掉的文件或文件夹(11-05,tools/hostFileOps.ts):恢复就是原样放回原处,不接任何设置。 */
+export type TrashKind = 'agent' | 'skill' | 'plugin' | 'file';
 /** parent:挪走时原处上级目录的真实路径(恢复时上级被换成软链就拒绝,免得挪到链接指向的地方);placed:恢复落到哪(重试时认得改名后的那份)。 */
 export interface TrashItem { from: string; stored: string; role?: string; parent?: string; placed?: string }
 export interface TrashEntry {

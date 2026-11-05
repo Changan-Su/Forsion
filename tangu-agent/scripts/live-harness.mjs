@@ -280,6 +280,7 @@ KEYS.push('imageedit');
 KEYS.push('titlelang');
 KEYS.push('titlemanual');
 KEYS.push('windowscmd');
+KEYS.push('shellreal'); // Agent 设备隔离 U1/U2/U3:最近文件 / 批量改名 / 大文件 / git + npm / 删除,判据看磁盘;Windows 上同样跑
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -313,6 +314,7 @@ OPT_IN.add('imageedit'); // --only imageedit:edit_image 跨轮取图 + 改自己
 OPT_IN.add('titlemanual'); // --only titlemanual:两个会话 7 个 run,改手动标题 / 图标标记后跑
 OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英文对话被起成中文标题);4 个会话 5 个 run,改起标题 / 摘要的提示词、transcript、scriptCheck 后跑
 OPT_IN.add('windowscmd'); // Windows Issue #77: exact cmd reads and rejected negative controls through real model/tool/SSE.
+OPT_IN.add('shellreal'); // --only shellreal:5 个 run,真模型在夹具目录里做真实的文件 / git / npm 活(scripts/lib/shell-real-live.mjs)
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
 for (const k of CU_WEB_KEYS) OPT_IN.add(k); // --only cuweb,cuwebdead:Electron 窗口上的后台 AXPress(cuwebdead 会动真鼠标;要 --cu-plugin)
@@ -5141,6 +5143,11 @@ Then reply with only the command output.`,
   await scenario('windowscmd', 'Windows cmd 只读命令 × 真实审批', async () => {
     const { windowsCmdLive } = await import('./lib/windows-cmd-live.mjs');
     return windowsCmdLive({ run, workspace, OUT });
+  });
+
+  await scenario('shellreal', 'shellreal 真实任务:最近文件 / 批量改名 / 大文件 / git + npm / 删除 + 环境说明', async () => {
+    const { shellRealLive } = await import('./lib/shell-real-live.mjs');
+    return shellRealLive({ run, workspace, OUT, shared, argv });
   });
 
   await scenario('muse', `muse 心跳周期(${MUSE_MODE})`, async () => {

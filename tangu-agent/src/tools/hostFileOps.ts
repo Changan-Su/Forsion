@@ -12,24 +12,22 @@
  *  - not offered under the host OS sandbox (hostSandboxPolicy is default-deny); the sandboxed broker has no
  *    recursive copy or trash, and run_bash inside the sandbox covers these there.
  *
- * delete_path is recoverable by default: the item moves into Forsion's trash (`<forsion home>/trash/<day>/…`) and
- * the result says where. Items there are cleared after 30 days.
+ * delete_path is recoverable by default: the item goes to the engine's Trash (services/trash.ts, kind 'file') — the
+ * same place deleted agents, skills and plugins go. The user restores it from Settings › Trash; it is cleared after 30 days.
  */
 import { execFile } from 'node:child_process';
 import { promises as fs, realpathSync, statSync, type Stats } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { forsionSharedDir } from '../core/tanguHome.js';
 import { credentialPaths, credentialReadTarget, pathWithin } from '../sandbox/hostSandboxProtection.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
+import { moveToTrash, trashDir, TRASH_DAYS } from '../services/trash.js';
 import { checkReadPath, checkWritePath } from './fsPolicy.js';
 import { fromShellPath } from './hostShell.js';
 import { forgetRead } from './readState.js';
 import { withWriteLock } from './writeLock.js';
 import type { ToolContext, ToolImpl } from './toolTypes.js';
-
-const TRASH_KEEP_DAYS = 30;
 
 function abs(ctx: ToolContext, p: unknown): string {
   return path.resolve(ctx.cwd || process.cwd(), fromShellPath(String(p ?? '')));
@@ -85,29 +83,6 @@ async function destinationFor(from: string, to: string): Promise<string> {
   const st = await statOrNull(to);
   if (st?.isDirectory() && real(to) !== real(from)) return path.join(to, path.basename(from));
   return to;
-}
-
-export function trashRoot(): string {
-  return path.join(forsionSharedDir(), 'trash');
-}
-
-/** Best-effort: remove day folders older than TRASH_KEEP_DAYS. Never throws. */
-async function pruneTrash(now = Date.now()): Promise<void> {
-  try {
-    for (const day of await fs.readdir(trashRoot())) {
-      const t = Date.parse(`${day}T00:00:00`);
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(day) || !Number.isFinite(t)) continue;
-      if (now - t > (TRASH_KEEP_DAYS + 1) * 86_400_000) await fs.rm(path.join(trashRoot(), day), { recursive: true, force: true });
-    }
-  } catch { /* no trash yet */ }
-}
-
-/** Where a deleted item goes: <trash>/<YYYY-MM-DD>/<HHMMSS>-<rand>-<name>. */
-function trashSlot(name: string, now = new Date()): string {
-  const pad = (n: number): string => String(n).padStart(2, '0');
-  const day = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-  const stamp = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}-${Math.random().toString(36).slice(2, 6)}`;
-  return path.join(trashRoot(), day, `${stamp}-${name}`);
 }
 
 const pathParam = (what: string) => ({ type: 'string', description: `${what} (relative to the current working directory, or absolute)` });
@@ -224,7 +199,7 @@ export const HOST_FILE_OP_TOOLS: Record<string, FileOpTool> = {
       function: {
         name: 'delete_path',
         description: 'Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). ' +
-          'Recoverable by default: the item moves to Forsion\'s trash (kept 30 days) and the result gives its path there, so it can be restored with move_path. ' +
+          'Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. ' +
           'Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.',
         parameters: {
           type: 'object',
@@ -242,7 +217,7 @@ export const HOST_FILE_OP_TOOLS: Record<string, FileOpTool> = {
       if (!st) return `Error: ${shown(ctx, target)} does not exist`;
       if (tooBroad(target)) return `Error: refusing to delete ${target} (a filesystem root or your home folder).`;
       if (credentialReadTarget(target) || (st.isDirectory() && holdsCredentials(target))) return `Error: ${target} is or contains protected credential files and cannot be deleted.`;
-      if (pathWithin(trashRoot(), target)) return `Error: refusing to delete ${target}: it contains Forsion's trash.`;
+      if (pathWithin(trashDir(), target)) return `Error: refusing to delete ${target}: it contains the Forsion Trash.`;
       const why = guardWrite(ctx, target); if (why) return `Error: ${why}`;
       const kind = st.isDirectory() ? 'folder' : 'file';
       try {
@@ -251,11 +226,10 @@ export const HOST_FILE_OP_TOOLS: Record<string, FileOpTool> = {
           forgetRead(ctx, target);
           return `Permanently deleted ${kind} ${shown(ctx, target)}.`;
         }
-        const slot = trashSlot(path.basename(target));
-        await movePath(target, slot);
+        const entry = await moveToTrash({ kind: 'file', ref: path.basename(target), name: path.basename(target), paths: [{ path: target }] });
+        if (!entry) return `Error: ${shown(ctx, target)} could not be moved to the Trash`;
         forgetRead(ctx, target);
-        void pruneTrash();
-        return `Moved ${kind} ${shown(ctx, target)} to Forsion's trash: ${slot} (kept ${TRASH_KEEP_DAYS} days). To restore it: move_path from that path back to ${target}.`;
+        return `Moved ${kind} ${shown(ctx, target)} to the Forsion Trash. The user can restore it from Settings › Trash for ${TRASH_DAYS} days.`;
       } catch (e: any) {
         return `Error: ${e?.message || e}`;
       }

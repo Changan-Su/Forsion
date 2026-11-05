@@ -2,7 +2,8 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { HOST_FILE_OP_TOOLS, openPathKnownSafe, trashRoot } from './hostFileOps.js';
+import { HOST_FILE_OP_TOOLS, openPathKnownSafe } from './hostFileOps.js';
+import { listTrash, restoreTrashItems, trashDir } from '../services/trash.js';
 import type { ToolContext } from './toolTypes.js';
 
 const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'tangu-fileops-')));
@@ -62,13 +63,16 @@ describe('copy_path', () => {
 });
 
 describe('delete_path', () => {
-  it('moves to Forsion’s trash by default and says where; permanent only when asked', async () => {
+  it('moves to the Forsion Trash by default (restorable there); permanent only when asked', async () => {
     put('old/notes.md', 'keep me');
     const r = await call('delete_path', { path: 'old' });
-    const slot = /trash: (.+) \(kept 30 days\)/.exec(r)?.[1] || '';
-    expect(slot.startsWith(trashRoot())).toBe(true);
-    expect(readFileSync(path.join(slot, 'notes.md'), 'utf8')).toBe('keep me');
+    expect(r).toBe('Moved folder old to the Forsion Trash. The user can restore it from Settings › Trash for 30 days.');
     expect(existsSync(path.join(ws, 'old'))).toBe(false);
+    const [entry] = await listTrash();
+    expect(entry).toMatchObject({ kind: 'file', name: 'old', restorer: 'engine' });
+    expect(readFileSync(path.join(trashDir(), entry.id, entry.items[0].stored, 'notes.md'), 'utf8')).toBe('keep me');
+    await restoreTrashItems(entry);
+    expect(readFileSync(path.join(ws, 'old', 'notes.md'), 'utf8')).toBe('keep me');
     put('tmp.log');
     expect(await call('delete_path', { path: 'tmp.log', permanent: true })).toBe('Permanently deleted file tmp.log.');
     expect(existsSync(path.join(ws, 'tmp.log'))).toBe(false);
