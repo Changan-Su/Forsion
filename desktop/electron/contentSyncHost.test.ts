@@ -60,6 +60,19 @@ describe('agent files on the new sync use the same rules and memory repository a
   expect(await hooks.commit('agents/muse/MEMORY.md',Buffer.from('x'),null,()=>{})).toBe(false)
   // 写的时候本机又改了:不落盘
   await expect(hooks.commit('agents/xyra/MEMORY.md',Buffer.from('- x\n'),sha('stale'),()=>{})).rejects.toThrow('changed')
+  // 编辑器里直接改过的:仓库读时先收下,合并看到的就是这份,照常提交
+  const disk=readFileSync(join(dir,'MEMORY.md'),'utf8')+'- typed in an editor\n';writeFileSync(join(dir,'MEMORY.md'),disk)
+  expect(await hooks.commit('agents/xyra/MEMORY.md',Buffer.from(disk+'- merged\n'),sha(disk),()=>{})).toBe(true)
+  expect(repo.snapshot().content).toContain('typed in an editor')
+ })
+ it('prepare leaves the memory lock alone when nothing needs projecting',async()=>{
+  const dir=join(home,'agents','quiet');const repo=createMemoryRepository(dir);repo.add('- a');repo.forget(repo.snapshot().entries[0].id)
+  const hooks=agentContentHooks(home,()=>null);await hooks.prepare()
+  const projected=readFileSync(join(dir,'.memory-tombstones.json'),'utf8')
+  // 引擎正拿着锁记东西:平常这一轮什么都没变,不该撞锁(remember 撞上锁不重试)
+  writeFileSync(join(dir,'.memory.lock'),'engine');const warn=vi.spyOn(console,'warn').mockImplementation(()=>{})
+  await hooks.prepare();expect(warn).not.toHaveBeenCalled();expect(readFileSync(join(dir,'.memory.lock'),'utf8')).toBe('engine')
+  expect(readFileSync(join(dir,'.memory-tombstones.json'),'utf8')).toBe(projected);warn.mockRestore();rmSync(join(dir,'.memory.lock'))
  })
  it('reads the engine sync shadow of the same account as the first baseline',async()=>{
   const dir=join(home,'agents','christen');mkdirSync(dir,{recursive:true})

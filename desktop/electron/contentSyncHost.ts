@@ -101,6 +101,15 @@ export function agentContentHooks(memoryBase:string,identity:()=>string|null){
     const want=serializeTombstones(tombstones)
     if(disk!==want)atomicWriteMemoryFile(dir,MEMORY_TOMBSTONES,want)
   }
+  /** 不拿锁先看一眼:仓库里的墓碑和盘上的投影一样就不用动。读不懂的(坏了、读失败)交给拿锁那条路去报。 */
+  const projectionStale=(dir:string):boolean=>{
+    let disk:string|null=null
+    try{disk=readFileSync(join(dir,MEMORY_TOMBSTONES),'utf8')}catch(e:any){if(e?.code!=='ENOENT')return true}
+    let state:any=null
+    try{state=JSON.parse(readFileSync(join(dir,'.memory-state.json'),'utf8'))}catch(e:any){if(e?.code!=='ENOENT')return true}
+    const tombstones=Array.isArray(state?.tombstones)?state.tombstones:[]
+    return disk===null?tombstones.length>0:disk!==serializeTombstones(tombstones)
+  }
   return {
     async prepare():Promise<void>{
       let names:string[]=[];try{names=readdirSync(agentsRoot)}catch{return}
@@ -108,8 +117,7 @@ export function agentContentHooks(memoryBase:string,identity:()=>string|null){
         if(!validAgentSyncSlug(slug)||agentSlugLocalOnly(slug))continue
         const dir=join(agentsRoot,slug)
         try{
-          if(!lstatSync(dir).isDirectory())continue
-          if(!existsSync(join(dir,'.memory-state.json'))&&!existsSync(join(dir,MEMORY_TOMBSTONES)))continue
+          if(!lstatSync(dir).isDirectory()||!projectionStale(dir))continue // 平常什么都没变:不碰锁(引擎的 remember 撞上锁会直接报错,不重试)
           withMemoryDirectoryLock(dir,()=>project(dir))
         }catch(e){console.warn('[content-sync] memory tombstones not projected:',slug,e instanceof Error?e.message:e)} // 引擎正拿着锁 / 仓库坏了:这一轮先不传它的墓碑
       }
@@ -125,7 +133,9 @@ export function agentContentHooks(memoryBase:string,identity:()=>string|null){
           const repo=createMemoryRepository(at.dir)
           if(at.rel==='MEMORY.md'){
             const text=bytes.toString('utf8');if(!Buffer.from(text).equals(bytes))throw Error('MEMORY.md is not UTF-8 text')
-            repo.commit({expectedVersion:repo.snapshot().version,content:text,source:{kind:'sync'}})
+            // 仓库读到的得和合并时读的那份一样(上次提交中途断了、外部改过的,load 会先改写一遍):不一样就这轮不落,下一轮重读重合
+            const snap=repo.snapshot();if(snap.content!==(current??''))throw Error('Local file changed during download')
+            repo.commit({expectedVersion:snap.version,content:text,source:{kind:'sync'}})
           }else{
             const incoming=parseTombstones(bytes.toString('utf8'));if(!incoming)throw Error('Invalid memory tombstones file')
             repo.mergeTombstones(validateMemoryTombstones(incoming))

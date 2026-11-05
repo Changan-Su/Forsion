@@ -19,6 +19,7 @@ import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.
 import { createMemoryRepository, withMemoryDirectoryLock, type MemoryTombstone } from './memoryRepository.js';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_INLINE_BASE = 1024 * 1024;
 const TOMBSTONES = '.memory-tombstones.json';
 const TEXT_EXTS = new Set(['.md', '.toml', '.txt', '.json', '.yaml', '.yml', '.csv', '.html', '.xml', '.js', '.ts', '.py']);
 const sha256 = (value: Buffer | string): string => createHash('sha256').update(value).digest('hex');
@@ -276,9 +277,10 @@ async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, sco
     const text = rows || TEXT_EXTS.has(extname(p).toLowerCase());
     try {
       if (p.startsWith('LOG/')) await reconcileLog(cloud, uid, slug, dir, p, remote.get(p), signal, guard, result);
-      else await reconcileFile(cloud, uid, slug, dir, p, remote.get(p), prev, signal, guard, result, agentsDir(), rows ? { merge: true, text: true, persist } : text ? { merge: true, persist } : {});
+      // 影子逐份落盘只给日历 / 小组件 / 记忆(合并结果推上去却没记下基线就崩,会拿旧基线把别的设备恢复的行当成删了);其余文本攒到这个 Agent 结束一起落
+      else await reconcileFile(cloud, uid, slug, dir, p, remote.get(p), prev, signal, guard, result, agentsDir(), rows ? { merge: true, text: true, persist } : p === 'MEMORY.md' ? { merge: true, persist } : text ? { merge: true } : {});
     } catch (e) { fail(result, e); guard(); }
-    if (text && !p.startsWith('LOG/')) { guard(); persist(); }
+    if (rows || p === 'MEMORY.md') { guard(); persist(); }
   }
   guard(); withMemoryDirectoryLock(dir, () => atomicSyncWrite(agentsDir(), join(dir, `.cloudsync-${scope}.json`), JSON.stringify(prev), guard));
 }
@@ -373,7 +375,8 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   else if (Math.floor(statSync(abs).mtimeMs) < live!.mtimeMs) decision = { kind: 'conflict' };
   else decision = { kind: 'none' };
   const record = (seq: number | undefined, cloudHash: string | undefined, mtime?: number, base?: Buffer): void => {
-    prev.files[p] = { seq, hash: cloudHash, lastCloudMtimeMs: mtime, ...(opts.merge && base ? { base: base.toString('utf8') } : {}) };
+    // 基线原文只记 1 MiB 以内的(影子文件每次整份重写);更大的没有基线,两边都改了照旧出副本
+    prev.files[p] = { seq, hash: cloudHash, lastCloudMtimeMs: mtime, ...(opts.merge && base && base.length <= MAX_INLINE_BASE ? { base: base.toString('utf8') } : {}) };
   };
   // 推送 / 落盘之前先给这一份的影子标上 pending 并落盘(10-20 Codex 复核两轮):云端收下了却没等到回执(断网、崩溃),
   // 或者本地落了盘、影子没来得及记就崩,旧影子都会出错 —— 旧原文当基线,会把别的设备随后恢复的行当成「这边删了」;
@@ -485,7 +488,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
   if (decision.kind === 'adopt') { record(live?.seq, live?.hash ?? undefined, live?.mtimeMs, initial ?? undefined); result.skipped++; return; }
   if (decision.kind === 'none') {
     // 两边都没动 = 本地这份就是基线;老版本留下的影子没记原文,这里补上
-    if (opts.merge && modern && pe && initial && base === null) pe.base = initial.toString('utf8');
+    if (opts.merge && modern && pe && initial && base === null && initial.length <= MAX_INLINE_BASE) pe.base = initial.toString('utf8');
     result.skipped++; return;
   }
   if (!initial) return;
