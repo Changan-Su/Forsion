@@ -10,9 +10,10 @@
  * 新服务端 → 合并端点 /brain/llm/build-and-stream 的请求体;老服务端(合并端点 404)→
  * 回落的 /brain/llm/build-payload 请求体。
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import http from 'node:http'
 import { createHttpBrain } from './httpBrain.js'
+import { hostOriginHeaders } from '../../core/hostOrigin.js'
 
 const buildOpts = {
   model: { id: 'm', name: 'M', provider: 'openai' } as any,
@@ -27,7 +28,7 @@ const done = 'data: ' + JSON.stringify({
 }) + '\n\n'
 
 /** combined=true 时合并端点回 SSE;false 时回 404(模拟老服务端)。返回每个路径收到的请求体。 */
-async function runOnce(combined: boolean): Promise<Record<string, any>> {
+async function runOnce(combined: boolean, heads: Record<string, http.IncomingHttpHeaders> = {}): Promise<Record<string, any>> {
   const seen: Record<string, any> = {}
   const srv = http.createServer((req, res) => {
     let body = ''
@@ -35,6 +36,7 @@ async function runOnce(combined: boolean): Promise<Record<string, any>> {
     req.on('end', () => {
       const path = (req.url || '').replace(/^.*\/api\/brain\/llm\//, '')
       seen[path] = JSON.parse(body || '{}')
+      heads[path] = req.headers
       if (path === 'build-and-stream' && !combined) {
         res.writeHead(404, { 'Content-Type': 'text/html' })
         return res.end('Cannot POST')
@@ -74,5 +76,36 @@ describe('httpBrain 上报 client', () => {
     expect(seen['build-payload']?.client).toBe('desktop/9.9.9')
     expect(seen['build-payload']?.projectSource).toBe('tangu')
     expect(seen['stream']?.payload?.built).toBe(true)
+  })
+})
+
+describe('httpBrain 上报宿主客户端与系统', () => {
+  afterEach(() => { vi.unstubAllEnvs() })
+
+  it('宿主注入了 TANGU_HOST_CLIENT:每个云端请求都带 X-Forsion-Client 与 X-Forsion-Env', async () => {
+    vi.stubEnv('TANGU_HOST_CLIENT', 'desktop/2.13.8')
+    const heads: Record<string, http.IncomingHttpHeaders> = {}
+    await runOnce(false, heads)
+    for (const p of ['build-and-stream', 'build-payload', 'stream']) {
+      expect(heads[p]?.['x-forsion-client']).toBe('desktop/2.13.8')
+      expect(heads[p]?.['x-forsion-env']).toBe(hostOriginHeaders()['X-Forsion-Env'])
+    }
+  })
+
+  it('没有宿主(云端节点 / 命令行):两个头都不发', async () => {
+    vi.stubEnv('TANGU_HOST_CLIENT', '')
+    const heads: Record<string, http.IncomingHttpHeaders> = {}
+    await runOnce(true, heads)
+    expect(heads['build-and-stream']?.['x-forsion-client']).toBeUndefined()
+    expect(heads['build-and-stream']?.['x-forsion-env']).toBeUndefined()
+  })
+
+  it('hostOriginHeaders:宿主标签走严格形状,系统名映射成闭集', () => {
+    expect(hostOriginHeaders({ TANGU_HOST_CLIENT: 'desktop/2.13.8' }, 'darwin')).toEqual({ 'X-Forsion-Client': 'desktop/2.13.8', 'X-Forsion-Env': 'macos' })
+    expect(hostOriginHeaders({ TANGU_HOST_CLIENT: 'desktop/2.13.8' }, 'win32')).toEqual({ 'X-Forsion-Client': 'desktop/2.13.8', 'X-Forsion-Env': 'windows' })
+    expect(hostOriginHeaders({ TANGU_HOST_CLIENT: 'desktop/2.13.8' }, 'freebsd')).toEqual({ 'X-Forsion-Client': 'desktop/2.13.8' })
+    expect(hostOriginHeaders({ TANGU_HOST_CLIENT: 'muse/2.13.14' }, 'linux')).toEqual({})
+    expect(hostOriginHeaders({ TANGU_HOST_CLIENT: 'desktop/2.13.8\r\nX-Evil: 1' }, 'linux')).toEqual({})
+    expect(hostOriginHeaders({}, 'linux')).toEqual({})
   })
 })
