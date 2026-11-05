@@ -26,6 +26,10 @@ export const SIGNATURE_FILE = 'SIGNATURE';
 export const ENGINE_ENTRIES = { standalone: 'dist/standalone/main.js', tui: 'dist/tui/main.js' } as const;
 /** 定义本机数据库长什么样的文件;新版与自带的不一样就不收。 */
 export const SCHEMA_FILES = ['dist/db/migrate.js', 'dist/db/schemaStandalone.js', 'dist/core/dialectDDL.js'] as const;
+/** 界面半身(Tangu 界面热更新 4c):桌面主进程从选中的那份目录里读它们(desktop/electron/coreTangu.ts)。
+ *  pack-engine.mjs 打的包必带;这里不把它们列为必需条目 —— 没有界面半身的包(只热更引擎)照收,界面用安装包自带的那份。
+ *  带了就和别的文件一样必须被签名覆盖(下面「目录里不能有签名表以外的东西」那条),主进程读的时候还会对着 SIGNATURE 再验一次字节。 */
+export const UI_FILES = { main: 'ui/main.js', manifest: 'manifest.json' } as const;
 const RELEASE = /^\d+\.\d+\.\d+$/;
 const MAX_FILES = 5000;
 const SAFE_REL = /^(?!\/)(?!.*(^|\/)\.\.(\/|$))[^\0]+$/;

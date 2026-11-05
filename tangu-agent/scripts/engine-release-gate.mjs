@@ -13,6 +13,25 @@ import { compareReleaseVersions, isPrerelease, parseReleaseVersion } from '../..
 import { engineLineTag } from '../../desktop/shared/engineLine.mjs'
 // An installer whose tree has this file checks its own line's dist-tag; older installers read only `latest`.
 const LINE_TAG_MODULE = 'desktop/shared/engineLine.mjs'
+// 界面热更新 4c:热更新包带着 Tangu 的界面半身,它直接拿宿主的共享模块(desktop/frontend/src/coreTangu/sharedModules.generated.ts)。
+// 所以相对基准桌面 tag,改动只能落在「Tangu 包」里:引擎(tangu-agent/,契约目录除外 —— 宿主也编着一份)+ 边界清单里的界面文件。
+// 不进安装包也不进热更新包的(仓根 docs/、CI、仓根的 .md、测试)不算;别处的 .md 照算 —— CHANGELOG、使用手册是 ?raw 打进宿主的。
+const BOUNDARY = 'desktop/scripts/tangu-boundary.json'
+const UI_LOADER = 'desktop/electron/coreTangu.ts' // 基准桌面有它才会读热更新包里的界面半身(4b 起)
+const NOT_SHIPPED = /^(?:docs\/|\.github\/|[^/]+\.md$)|(?:^|\/)__tests__\/|\.(?:test|spec)\.[cm]?[tj]sx?$/
+/** 改动的文件分三类:Tangu 包里的(不返回)、界面半身的(ui)、宿主的(host = 热更新带不走)。cfg = 基准 tag 上的边界清单。 */
+export function packageScope(paths, cfg) {
+  const contracts = cfg?.contracts?.dirs ?? ['tangu-agent/src/contracts/']
+  const isUi = f => !!cfg && (cfg.tangu.dirs.some(d => f.startsWith(d)) || cfg.tangu.files.includes(f))
+  const host = [], ui = []
+  for (const f of paths) {
+    if (NOT_SHIPPED.test(f)) continue
+    if (f.startsWith('tangu-agent/') && !contracts.some(d => f.startsWith(d))) continue
+    ;(isUi(f) ? ui : host).push(f)
+  }
+  return { host, ui }
+}
+const listOf = (files) => files.length > 8 ? `${files.slice(0, 8).join(', ')} and ${files.length - 8} more` : files.join(', ')
 const engineVersion = v => { const p = parseReleaseVersion(v); return p && p.version === v && !p.metadata.length }
 const desktopVersion = v => { const p = parseReleaseVersion(v); return p && p.version === v }
 const stableEngine = v => engineVersion(v) && !isPrerelease(v)
@@ -38,8 +57,11 @@ export function desktopProblems({ desktop, engine, ref, newestPublished, previou
 export const hotUpdateDistTag = (baseDesktop, lineAware) =>
   lineAware ? engineLineTag(baseDesktop) : isPrerelease(baseDesktop) ? null : 'latest'
 
-export function hotUpdateProblems({ version, baseEngine, baseDesktop, ref, publish, dependenciesMatch, schemaChanges, newestPublished, newestBundled, distTag }) {
+export function hotUpdateProblems({ version, baseEngine, baseDesktop, ref, publish, dependenciesMatch, schemaChanges, newestPublished, newestBundled, distTag, hostChanges = [], uiChanges = [], uiLoader = true, forDesktop }) {
   const problems = []
+  if (hostChanges.length) problems.push(`files outside the Tangu package changed since desktop ${baseDesktop} (${listOf(hostChanges)}); a hot update only carries the engine and the Tangu UI files, so ship these changes in an installer.`)
+  if (uiChanges.length && !uiLoader) problems.push(`desktop ${baseDesktop} cannot load a Tangu UI update (UI files changed: ${listOf(uiChanges)}); ship these changes in an installer.`)
+  if (forDesktop !== undefined && forDesktop !== baseDesktop) problems.push(`desktop/package.json says ${forDesktop}, but the UI half must be built for desktop ${baseDesktop} (forDesktop is an exact match).`)
   if (!distTag) problems.push(`desktop ${baseDesktop} only reads the latest dist-tag, which belongs to the stable line; ship this fix in the next desktop build.`)
   if (!dependenciesMatch) problems.push(`dependencies differ from desktop ${baseDesktop}; ship these changes in an installer.`)
   if (schemaChanges.length) problems.push(`schema / migration files changed since desktop ${baseDesktop} (${schemaChanges.join(', ')}); ship these changes in an installer.`)
@@ -108,18 +130,24 @@ export function runGate(root, args, env = process.env, { readPublishedVersion } 
   if (!stableEngine(basePkg.version)) throw new Error(`Desktop ${baseDesktop} bundles engine ${basePkg.version}; hot updates only replace a stable bundled engine.`)
   // The whole line (original build and its +build.N revisions) may take it; checkOverlay still compares schema and dependencies.
   const minDesktop = baseDesktop.split('+')[0]
-  const distTag = hotUpdateDistTag(baseDesktop, !!git('ls-tree', '--full-tree', '--name-only', baseTag, '--', LINE_TAG_MODULE))
+  const inBase = (file) => !!git('ls-tree', '--full-tree', '--name-only', baseTag, '--', file)
+  const distTag = hotUpdateDistTag(baseDesktop, inBase(LINE_TAG_MODULE))
+  // --no-renames:把宿主文件挪进 Tangu 目录也要算宿主改了(否则只列出新路径,界面包会多打进一份宿主模块)
+  const scope = packageScope(git('diff', '--name-only', '--no-renames', baseTag).split('\n').filter(Boolean),
+    inBase(BOUNDARY) ? JSON.parse(git('show', `${baseTag}:${BOUNDARY}`)) : null)
   const problems = hotUpdateProblems({ version, baseEngine: basePkg.version, baseDesktop, ref, publish,
     dependenciesMatch: sortedJson(pkg.dependencies) === sortedJson(basePkg.dependencies),
     schemaChanges: changed(baseTag, SCHEMA_SOURCES),
     newestBundled: desktopEngines.map(item => item.pkg.version).filter(v => engineVersion(v)).sort(cmp).at(-1),
-    newestPublished: publish ? (readPublishedVersion ?? npmVersions)() : undefined, distTag })
+    newestPublished: publish ? (readPublishedVersion ?? npmVersions)() : undefined, distTag,
+    hostChanges: scope.host, uiChanges: scope.ui, uiLoader: inBase(UI_LOADER), forDesktop: desktop })
   if (publish) failOn(problems)
   else for (const problem of problems) console.log(`::warning::${problem}`)
   // A manual preview uses the baseline ENGINE number, not the independent desktop number.
   const packVersion = publish ? version : basePkg.version
-  console.log(`${PACKAGE}@${packVersion}, minimum desktop ${minDesktop}, dist-tag ${distTag ?? '(none)'}; ${publish ? 'will publish' : 'manual preview only, not publishing'}`)
-  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `base=${minDesktop}\nbase_engine=${basePkg.version}\npack_version=${packVersion}\npublish=${publish}\ndist_tag=${distTag ?? ''}\n`)
+  console.log(`${PACKAGE}@${packVersion}, minimum desktop ${minDesktop}, UI built for desktop ${desktop}, dist-tag ${distTag ?? '(none)'}; ${publish ? 'will publish' : 'manual preview only, not publishing'}`)
+  // for_desktop = 这份检出的桌面版本:界面半身是对着它的共享模块表打的(发布时上面已要求它等于基准桌面)
+  if (env.GITHUB_OUTPUT) appendFileSync(env.GITHUB_OUTPUT, `base=${minDesktop}\nbase_engine=${basePkg.version}\npack_version=${packVersion}\npublish=${publish}\ndist_tag=${distTag ?? ''}\nfor_desktop=${desktop}\n`)
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
