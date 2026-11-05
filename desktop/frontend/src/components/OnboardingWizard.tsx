@@ -194,7 +194,7 @@ export const OnboardingWizard: React.FC<{
         <section className="ob3-card ob3-update changelog"><ChangelogEntries /></section>
         {improveNotice && signedIn && <section className="ob3-card"><ImproveRow signedIn={signedIn} /></section>}
       </div>
-      case 'start': return <StartScreen returning={returning} syncPick={syncPick} onSyncPick={setSyncPick} onSyncSeen={onSyncSeen}
+      case 'start': return <StartScreen resolveTarget={onboardingTarget} returning={returning} syncPick={syncPick} onSyncPick={setSyncPick} onSyncSeen={onSyncSeen}
         onConnected={onConnected} onSignedIn={onSignedIn} onReconnect={onReconnect} onBusyChange={onBusyChange} />
       case 'theme': return <ThemeScreen themeLang={themeLang} themeSkin={themeSkin} themeMode={themeMode} themeModePref={themeModePref} themeSeed={themeSeed}
         onThemeChange={onThemeChange} onSeedChange={onSeedChange} />

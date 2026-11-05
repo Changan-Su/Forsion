@@ -14,14 +14,15 @@ export function stepOrder(caps: { host: boolean }): Step[] {
   return caps.host ? ['start', 'theme', 'you', 'team'] : ['theme']
 }
 
+/** 新引导随 2.13.8 发(11-05 用户定):上次看引导时记下的版本早于它(或没有记录)的老用户完整走一遍,之后才按更新内容。 */
+export const FULL_GUIDE_BEFORE = '2.13.8'
+
 /**
  * 哪一版起有这一步(老用户在升级短引导里看到它)。以后引导里再加新屏,在这里记上引入它的版本;不记 = 只有完整引导里有。
- * ⚠️ 2.14.0 = 新引导预计随之发出的版本:发版时核对实际版本号。
+ * 「关于你」「团队」和新引导同一版出现:看过 2.13.8 及以后引导的人已经走过它们,早于的走完整版 —— 两边必须是同一个版本,
+ * 否则在 2.13.8 走完整版的人升到下一版会把这两屏当新增再看一遍。
  */
-export const STEP_SINCE: Partial<Record<Step, string>> = { you: '2.14.0', team: '2.14.0' }
-
-/** 上次看引导时记下的版本早于它(或没有记录)的老用户:新引导完整走一遍(11-05 用户定),之后才按更新内容。 */
-export const FULL_GUIDE_BEFORE = '2.13.8'
+export const STEP_SINCE: Partial<Record<Step, string>> = { you: FULL_GUIDE_BEFORE, team: FULL_GUIDE_BEFORE }
 export const needsFullGuide = (seen: string | null): boolean => !seen || cmpVersion(seen, FULL_GUIDE_BEFORE) < 0
 
 /**

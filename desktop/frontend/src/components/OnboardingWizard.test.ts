@@ -160,7 +160,8 @@ it('desktop: four screens in order; Continue saves About you, Get started writes
   expect(api.saveMuseIntro).not.toHaveBeenCalled()
   await next()
   expect(api.saveSpecialConfig).toHaveBeenCalledExactlyOnceWith(expect.anything(), { muse: { modelId: 'm1' } })
-  expect(api.saveMuseIntro).toHaveBeenCalledExactlyOnceWith(expect.anything(), { when: 'anytime', proactivity: 'high', focus: ['study'], focusText: 'my thesis' })
+  // 只带改过的:「什么时候能找你」没动 → 不带
+  expect(api.saveMuseIntro).toHaveBeenCalledExactlyOnceWith(expect.anything(), { proactivity: 'high', focus: ['study'], focusText: 'my thesis' })
   expect(api.saveAgentDef).toHaveBeenCalledExactlyOnceWith(expect.anything(), { disabled: true }, 'coder')
   expect(props.onFinish).toHaveBeenCalledTimes(1)
   expect(localStorage.getItem(ONBOARDING_DISMISS_KEY)).toBe('1')
@@ -177,8 +178,8 @@ it('signed in: Muse follows the cloud model by default and nothing is written fo
   await next()
   expect(api.saveSpecialConfig).not.toHaveBeenCalled()
   expect(api.saveAgentDef).not.toHaveBeenCalled()
-  // 三问照答一次(缺省值也记下 introAt,私聊里不再弹那张卡)
-  expect(api.saveMuseIntro).toHaveBeenCalledExactlyOnceWith(expect.anything(), { when: 'anytime', proactivity: 'normal', focus: [], focusText: '' })
+  // 一问都没动:发一个空的(只记下第一次见面答过,私聊里不再弹那张卡),不带任何值
+  expect(api.saveMuseIntro).toHaveBeenCalledExactlyOnceWith(expect.anything(), {})
   expect(props.onFinish).toHaveBeenCalledTimes(1)
 })
 
@@ -273,26 +274,34 @@ it('upgrading from before 2.13.8 walks the whole new guide as "Welcome back", sh
   expect(ch.setEnabled).not.toHaveBeenCalled()
 })
 
-it('upgrading from 2.13.8 shows what changed plus the screens new since then; from this version only what changed', async () => {
+it('upgrading from 2.13.8 or later shows only what changed (the four screens were already walked)', async () => {
   store.onboardingUpdate = true
   localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
-  localStorage.setItem(ONBOARDING_VERSION_KEY, '2.13.8')
+  for (const seen of ['2.13.8', '2.13.9']) {
+    localStorage.setItem(ONBOARDING_VERSION_KEY, seen)
+    await render()
+    expect(stepNow()).toBe('welcome')
+    expect(host.querySelector('.ob-flow')?.getAttribute('data-mode')).toBe('update')
+    expect(host.querySelector('[data-changelog]')).not.toBeNull()
+    expect(host.querySelectorAll('.ob3-dots button')).toHaveLength(0)
+    expect(host.querySelector('.ob-skip')).toBeNull()
+    expect(primary().textContent).toBe(translate('onboarding.update.continue'))
+    await act(async () => root.unmount())
+    root = createRoot(host)
+  }
   await render()
-  expect(stepNow()).toBe('welcome')
-  expect(host.querySelector('.ob-flow')?.getAttribute('data-mode')).toBe('update')
-  expect(host.querySelector('[data-changelog]')).not.toBeNull()
-  expect(host.querySelectorAll('.ob3-dots button')).toHaveLength(3)
-  await next()
-  expect(stepNow()).toBe('you')
-  await act(async () => root.unmount())
-  root = createRoot(host)
-  localStorage.setItem(ONBOARDING_VERSION_KEY, '2.14.0')
-  await render()
-  expect(stepNow()).toBe('welcome')
-  expect(host.querySelector('.ob-skip')).toBeNull()
-  expect(primary().textContent).toBe(translate('onboarding.update.continue'))
   await next()
   expect(props.onFinish).toHaveBeenCalledTimes(1)
+})
+
+it('team: settings that match none of the options stay unselected and are not written over', async () => {
+  vi.mocked(api.getSpecialConfig).mockResolvedValue({ config: { historian: { enabled: true }, muse: { ...museConfig, heartbeatMinutes: 90, activeHours: { start: 8, end: 22 } } } } as any)
+  await toTeam()
+  const pressed = [...host.querySelectorAll('[data-ob-muse] .ob3-pill[aria-pressed="true"]')].map((b) => b.textContent)
+  expect(pressed).toEqual([])
+  await next()
+  expect(api.saveSpecialConfig).not.toHaveBeenCalled()
+  expect(api.saveMuseIntro).toHaveBeenCalledExactlyOnceWith(expect.anything(), {})
 })
 
 it('help improve: the update screen shows the notice once to a signed-in user who has not seen it', async () => {

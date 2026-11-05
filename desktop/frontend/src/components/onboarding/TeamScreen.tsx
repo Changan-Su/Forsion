@@ -26,8 +26,10 @@ import '../computerHistoryMessages'
 import '../../views/chat2/museIntroMessages'
 
 const MUSE_FALLBACK = { name: 'Muse', nameZh: '卜算子', nameEn: 'Muse', slug: 'muse' }
-const proactivityOf = (minutes?: number): Proactivity => (minutes && minutes <= 60 ? 'high' : minutes && minutes >= 180 ? 'low' : 'normal')
-const whenOf = (h?: { start: number; end: number } | null): typeof INTRO_WHEN[number] => (h && h.start === 9 && h.end === 21 ? 'daytime' : 'anytime')
+type When = typeof INTRO_WHEN[number]
+/** 读回现在的设置对应哪一档;对不上任何一档(自己设过别的间隔 / 时段)就一个都不选中 —— 没动它就不写,免得有损映射把原值盖掉。 */
+const proactivityOf = (minutes?: number): Proactivity | null => (Object.entries({ high: 60, normal: 120, low: 180 }).find(([, m]) => m === (minutes ?? 120))?.[0] as Proactivity) ?? null
+const whenOf = (h?: { start: number; end: number } | null): When | null => (!h ? 'anytime' : h.start === 9 && h.end === 21 ? 'daytime' : null)
 
 export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAgent, onBusyChange }: {
   resolveTarget: () => Promise<EngineTarget>
@@ -47,8 +49,10 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
   // 草稿
   const [museOn, setMuseOn] = useState(true)
   const [modelId, setModelId] = useState('')
-  const [when, setWhen] = useState<typeof INTRO_WHEN[number]>('anytime')
-  const [pro, setPro] = useState<Proactivity>('normal')
+  const [when, setWhen] = useState<When | null>('anytime')
+  const [pro, setPro] = useState<Proactivity | null>('normal')
+  /** 读到的现状:三问只发和它不一样的(仓规「默认值不覆盖用户设过的值」)。 */
+  const [initial, setInitial] = useState<{ when: When | null; pro: Proactivity | null }>({ when: 'anytime', pro: 'normal' })
   const [focus, setFocus] = useState<string[]>([])
   const [focusText, setFocusText] = useState('')
   const [historianOn, setHistorianOn] = useState(true)
@@ -73,7 +77,8 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
         if (cfg.remote || !cfg.config?.muse || !cfg.config?.historian) throw new Error('special config incomplete')
         const c = cfg.config
         setConfig(c); setMuseOn(c.muse.enabled !== false); setModelId(c.muse.modelId || ''); setHistorianOn(c.historian.enabled !== false)
-        setWhen(whenOf(c.muse.activeHours)); setPro(proactivityOf(c.muse.heartbeatMinutes))
+        const w = whenOf(c.muse.activeHours), p = proactivityOf(c.muse.heartbeatMinutes)
+        setWhen(w); setPro(p); setInitial({ when: w, pro: p })
         setAgents(list); setDefaultSlug(meta.defaultSlug || 'xyra'); setModels(mdl)
         setAgentOn(Object.fromEntries(list.map((a) => [a.slug, !a.disabled])))
       } catch (e) { if (live) setLoadError(String((e as Error)?.message || e)) }
@@ -99,8 +104,8 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
   const llms = (models?.models || []).filter((m) => !m.modelType || m.modelType === 'llm')
   const locked = (slug: string): boolean => slug === defaultSlug || slug === 'xyra'
 
-  const state = useRef({ config, museOn, modelId, when, pro, focus, focusText, historianOn, agentOn, agents, chDraft, signedIn })
-  state.current = { config, museOn, modelId, when, pro, focus, focusText, historianOn, agentOn, agents, chDraft, signedIn }
+  const state = useRef({ config, museOn, modelId, when, pro, initial, focus, focusText, historianOn, agentOn, agents, chDraft, signedIn })
+  state.current = { config, museOn, modelId, when, pro, initial, focus, focusText, historianOn, agentOn, agents, chDraft, signedIn }
   const historyRef = useRef(history)
   historyRef.current = history
   useEffect(() => {
@@ -117,7 +122,16 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
         if (s.modelId !== (s.config.muse.modelId || '')) musePatch.modelId = s.modelId
         const hist = s.historianOn !== (s.config.historian.enabled !== false)
         if (Object.keys(musePatch).length || hist) await tryIt(() => saveSpecialConfig(target, { ...(Object.keys(musePatch).length ? { muse: musePatch } : {}), ...(hist ? { historian: { enabled: s.historianOn } } : {}) }))
-        if (s.museOn) await tryIt(() => saveMuseIntro(target, { when: s.when, proactivity: s.pro, focus: s.focus, focusText: s.focusText.trim() }))
+        // 只带改过的;一个都没改也发一次(空的):记下「第一次见面已经答过」,私聊里不再弹那张卡,别的什么都不动
+        if (s.museOn) {
+          const text = s.focusText.trim()
+          await tryIt(() => saveMuseIntro(target, {
+            ...(s.when && s.when !== s.initial.when ? { when: s.when } : {}),
+            ...(s.pro && s.pro !== s.initial.pro ? { proactivity: s.pro } : {}),
+            ...(s.focus.length ? { focus: s.focus } : {}),
+            ...(text ? { focusText: text } : {}),
+          }))
+        }
         for (const a of s.agents) {
           const on = s.agentOn[a.slug]
           if (on === undefined || on === !a.disabled) continue

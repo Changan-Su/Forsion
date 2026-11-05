@@ -27,7 +27,7 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 [data-platform='mac'] .ob3-top { padding-left: 88px; }
 .ob3-top button, .ob3-top a, .ob3-top [role='group'] { -webkit-app-region: no-drag; }
 .ob3-dots { display: flex; gap: 6px; align-items: center; min-height: 20px; }
-.ob3-dots button { width: 6px; height: 6px; padding: 0; border: 0; border-radius: var(--radius-pill); background: var(--text-faint); opacity: .35; cursor: default; transition: width var(--motion-fast, 160ms) ease, opacity var(--motion-fast, 160ms) ease; }
+.ob3-dots button { width: 6px; height: 6px; padding: 0; border: 0; border-radius: var(--radius-pill); background: var(--text-faint); opacity: .35; cursor: default; transition: opacity var(--motion-fast, 160ms) ease, background-color var(--motion-fast, 160ms) ease; }
 .ob3-dots button.done { opacity: .6; cursor: pointer; }
 .ob3-dots button.on { width: 18px; background: var(--text); opacity: .8; }
 .ob3-top-r { display: flex; align-items: center; gap: 14px; }
@@ -47,7 +47,7 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 
 /* 卡片 */
 .ob3-card { position: relative; background: var(--bg-card); border: 1px solid transparent; border-radius: var(--radius-lg); box-shadow: var(--card-shadow-low); padding: 18px 20px; min-width: 0; }
-.ob3-card.pick { border-color: var(--accent-ink); box-shadow: 0 0 0 .5px var(--accent-ink), var(--card-shadow-low); }
+.ob3-card.pick { border-color: var(--accent-ink); outline: .5px solid var(--accent-ink); } /* 外环用 outline:阴影只放高程 token(check:shadowcontract) */
 .ob3-two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: stretch; }
 .ob3-choice { display: flex; flex-direction: column; gap: 10px; }
 .ob3-choice-h { display: flex; align-items: center; gap: 10px; }
@@ -111,10 +111,11 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-ctrl { display: grid; gap: 16px; align-content: start; }
 .ob3-field { display: grid; gap: 8px; }
 .ob3-field > span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
-.ob3-styles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
-.ob3-style { padding: 10px; display: grid; gap: 8px; text-align: left; font: inherit; color: var(--text); cursor: pointer; }
+.ob3-styles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ob3-style { padding: 10px 12px; display: grid; gap: 4px; align-content: start; text-align: left; font: inherit; color: var(--text); cursor: pointer; }
 .ob3-style strong { font-weight: 500; }
-.ob3-style small { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+/* 主题自带的说明偏长(写给主题作者看的):只露两行,全文在 title 里 */
+.ob3-style small { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); line-height: 1.45; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .ob3-seg { position: relative; display: inline-flex; justify-self: start; padding: 2px; border-radius: var(--radius-pill); background: var(--overlay-medium, rgba(127, 127, 127, .12)); }
 .ob3-seg button { border: 0; background: transparent; font: inherit; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); padding: 4px 12px; border-radius: var(--radius-pill); white-space: nowrap; display: inline-flex; gap: 5px; align-items: center; cursor: pointer; }
 .ob3-seg button.on { background: var(--seg-thumb); box-shadow: var(--seg-thumb-shadow); color: var(--text); }
@@ -126,7 +127,7 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-sw button.on { color: var(--text); font-weight: 500; }
 .ob3-sw input[type='color'] { width: 32px; height: 24px; padding: 0; border: 0; background: none; cursor: pointer; }
 .ob3-preview { padding: 0; overflow: hidden; display: grid; min-height: 360px; }
-.ob3-preview > * { min-width: 0; }
+.ob3-preview > * { min-width: 0; height: 100%; }
 
 /* 关于你 */
 .ob3-you { display: grid; gap: 10px; padding: 14px 16px 12px; }
@@ -173,8 +174,9 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-own:focus-within { box-shadow: inset 0 0 0 1px var(--accent-ink); }
 .ob3-own svg { flex: none; color: var(--text-faint); }
 .ob3-own input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 1px 0; }
-.ob3-roster { display: grid; gap: 2px; padding: 12px 12px 8px; align-content: start; }
-.ob3-roster h3 { margin: 0 6px 4px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-faint); display: flex; justify-content: space-between; gap: 8px; }
+.ob3-roster { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 12px 12px 8px; align-content: start; }
+.ob3-roster h3 { margin: 0 6px 4px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-faint); display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
+.ob3-roster h3 span:last-child { text-align: right; min-width: 0; }
 .ob3-mem { display: flex; align-items: center; gap: 10px; padding: 3px 6px; border-radius: var(--radius-md); }
 .ob3-mem > div { flex: 1; min-width: 0; }
 .ob3-mem strong { font-weight: 500; }
@@ -182,9 +184,9 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-mem .lk { color: var(--text-faint); display: inline-flex; align-items: center; gap: 3px; font-size: var(--ui-font-caption, 11px); white-space: nowrap; }
 .ob3-av { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border-radius: 50%; overflow: hidden; background: var(--overlay-light, rgba(127, 127, 127, .08)); color: var(--text); font-weight: 600; font-size: var(--ui-font-meta, 12px); }
 .ob3-tag { font-style: normal; font-size: var(--ui-font-caption, 11px); line-height: 15px; padding: 0 5px; border-radius: var(--radius-pill); background: var(--overlay-medium, rgba(127, 127, 127, .12)); color: var(--text-muted); margin-left: 4px; vertical-align: 1px; font-weight: 400; }
-.ob3-add { display: flex; align-items: center; gap: 10px; padding: 7px 6px 3px; border: 0; background: transparent; font: inherit; color: var(--text); text-align: left; cursor: pointer; border-radius: var(--radius-md); }
+.ob3-add { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 7px 6px 3px; border: 0; background: transparent; font: inherit; color: var(--text); text-align: left; cursor: pointer; border-radius: var(--radius-md); }
 .ob3-add .ob3-av { background: transparent; box-shadow: inset 0 0 0 1px var(--overlay-medium, rgba(127, 127, 127, .2)); color: var(--text-muted); }
-.ob3-add small { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); margin-left: 8px; }
+.ob3-add small { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); margin-left: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ob3-ch { display: grid; gap: 8px; padding: 14px 18px; grid-template-rows: auto auto 1fr; }
 .ob3-ch dl { margin: 0; display: grid; gap: 6px; }
 .ob3-ch dl div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }

@@ -8,7 +8,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import { Check, ChevronRight, Cloud, Cpu, ExternalLink, Image, Info, KeyRound, Languages, Loader2, LogIn, MessageCircle, Phone, Plus, Scale, ShieldCheck, Bug, Bot, Gauge, MousePointerClick, WifiOff } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { testProviderConnection } from '../../services/backendService'
-import { connectionTarget } from '../../services/engine/targets'
+import type { EngineTarget } from '../../services/engine/targets'
 import { track } from '../../achievements/store'
 import { FORSION_PRIVACY_URL } from '../../appCompliance'
 import { SettingsSwitch } from '../SettingsPrimitives'
@@ -22,6 +22,8 @@ const SUB_HINTS: Record<string, string> = { codex: 'ob3.channels.sub.codex', xai
 const errText = (e: unknown): string => String((e as Error)?.message || e).replace(/^Error invoking remote method '[^']+': Error: /, '')
 
 export interface StartProps {
+  /** 现读主机连接(外壳给;登录 / 加渠道后 token 可能刚换过)。 */
+  resolveTarget: () => Promise<EngineTarget>
   returning: boolean
   syncPick: Record<SyncKind, boolean>
   onSyncPick: (next: Record<SyncKind, boolean>) => void
@@ -118,7 +120,7 @@ export function StartScreen(p: StartProps): React.ReactNode {
 
   const channelsCard = <section className={`ob3-card ob3-choice${(subConnected || keyCount > 0) ? ' pick' : ''}`} data-ob-channels="">
     <div className="ob3-choice-h"><KeyRound size={20} aria-hidden="true" /><strong>{t('ob3.channels.title')}</strong><em>{t('ob3.channels.many')}</em></div>
-    {panel ? <KeyForm local={panel === 'local'} onDone={(saved) => { setPanel(null); if (saved) { refresh(); p.onReconnect() } }} /> : <>
+    {panel ? <KeyForm local={panel === 'local'} resolveTarget={p.resolveTarget} onDone={(saved) => { setPanel(null); if (saved) { refresh(); p.onReconnect() } }} /> : <>
       <span className="ob3-sub">{t('ob3.channels.lead')}</span>
       <div className="ob3-provs">
         <button type="button" className={`ob3-prov${keyCount > 0 ? ' on' : ''}`} data-channel="key" onClick={() => setPanel('key')}>
@@ -147,7 +149,7 @@ export function StartScreen(p: StartProps): React.ReactNode {
 }
 
 /** API Key / 本机模型 / 更多 Provider 共用的一张表:选预设就填好地址与协议,只剩 key。存的就是设置 › 模型里那一份。 */
-function KeyForm({ local, onDone }: { local: boolean; onDone: (saved: boolean) => void }): React.ReactNode {
+function KeyForm({ local, resolveTarget, onDone }: { local: boolean; resolveTarget: () => Promise<EngineTarget>; onDone: (saved: boolean) => void }): React.ReactNode {
   const { t } = useI18n()
   const [preset, setPreset] = useState(local ? '' : 'openai')
   const first = PROVIDER_PRESETS.find((x) => x.id === preset)
@@ -174,7 +176,7 @@ function KeyForm({ local, onDone }: { local: boolean; onDone: (saved: boolean) =
     } catch (e) { setMsg(t('onboarding.connect.saveFail', { e: errText(e) })); setBusy(false) }
   }
   const test = (): void => {
-    void window.tangu?.getConfig().then((c) => testProviderConnection(connectionTarget({ backendUrl: c.backendUrl, token: c.token, modelId: '' }), {
+    void resolveTarget().then((target) => testProviderConnection(target, {
       baseUrl: url, apiKey: key || undefined, modelId: models.split(',').map((s) => s.trim()).filter(Boolean)[0],
     })).then((r) => setMsg(`${r.success ? '✓' : '✗'} ${r.message}`)).catch((e) => setMsg(t('onboarding.connect.testFail', { e: errText(e) })))
   }

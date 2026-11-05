@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { needsFullGuide, stepOrder, updateOrder } from './onboardingFlow'
+import { FULL_GUIDE_BEFORE, STEP_SINCE, needsFullGuide, stepOrder, updateOrder } from './onboardingFlow'
 
 describe('stepOrder', () => {
   it('桌面四屏:开始 → 外观 → 关于你 → 团队', () => {
@@ -25,17 +25,25 @@ describe('needsFullGuide', () => {
 
 describe('updateOrder', () => {
   const full = stepOrder({ host: true })
-  it('2.13.8 升上来:更新内容 + 关于你 + 团队', () => {
-    expect(updateOrder(full, '2.13.8')).toEqual(['welcome', 'you', 'team'])
-  })
-  it('已经看过 2.14.0 的:只有更新内容', () => {
+  it('关于你 / 团队和新引导同一版出现:2.13.8 及以后看过引导的人升级只看更新内容(不再看一遍)', () => {
+    expect(updateOrder(full, '2.13.8')).toEqual(['welcome'])
     expect(updateOrder(full, '2.14.0')).toEqual(['welcome'])
   })
-  it('本机没有这一屏的内容就不列', () => {
-    expect(updateOrder(full, '2.13.8', (s) => s !== 'team')).toEqual(['welcome', 'you'])
+  it('以后新加的屏:记了版本才在短引导里出现,本机没有这一屏的内容就不列', () => {
+    const later = (seen: string, available?: (s: 'welcome' | 'start' | 'theme' | 'you' | 'team') => boolean) => {
+      const since = { ...STEP_SINCE }
+      try { STEP_SINCE.team = '2.14.0'; return updateOrder(full, seen, available) } finally { Object.assign(STEP_SINCE, since) }
+    }
+    expect(later('2.13.9')).toEqual(['welcome', 'team'])
+    expect(later('2.13.9', (s) => s !== 'team')).toEqual(['welcome'])
+    expect(later('2.14.0')).toEqual(['welcome'])
   })
-  it('开始和外观老用户都看过,不进短引导', () => {
-    expect(updateOrder(full, '2.13.8')).not.toContain('start')
-    expect(updateOrder(full, '2.13.8')).not.toContain('theme')
+  it('开始和外观不进短引导', () => {
+    expect(updateOrder(full, '2.0.0')).not.toContain('start')
+    expect(updateOrder(full, '2.0.0')).not.toContain('theme')
+  })
+  it('STEP_SINCE 里引导自带的屏和完整引导的分界是同一个版本', () => {
+    expect(STEP_SINCE.you).toBe(FULL_GUIDE_BEFORE)
+    expect(STEP_SINCE.team).toBe(FULL_GUIDE_BEFORE)
   })
 })

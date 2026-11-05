@@ -34,7 +34,7 @@ export function ThemeScreen(p: ThemeProps): React.ReactNode {
             {listLanguages().map((th) => {
               const on = th.manifest.id === p.themeLang
               const desc = locale === 'en' ? th.manifest.descriptionEn || th.manifest.description : th.manifest.description
-              return <button key={th.manifest.id} type="button" role="radio" aria-checked={on} className={`ob3-card ob3-style${on ? ' pick' : ''}`}
+              return <button key={th.manifest.id} type="button" role="radio" aria-checked={on} className={`ob3-card ob3-style${on ? ' pick' : ''}`} title={desc || undefined}
                 onClick={() => p.onThemeChange(th.manifest.id, p.themeSkin, p.themeModePref)}>
                 <strong>{th.manifest.name}</strong>{desc && <small>{desc}</small>}
               </button>
