@@ -149,8 +149,9 @@ export const OnboardingWizard: React.FC<{
   const [cloudUrl, setCloudUrl] = useState('')
   const [loggingIn, setLoggingIn] = useState(false)
   const [loggedIn, setLoggedIn] = useState(false)
-  // 登录后「同步到蓬洲云」三个勾(云同步开启方案 2026-10-20):默认都勾上,走完引导时按勾的开;这一步就算点过头,之后不再弹首登卡片
-  const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean>>({ notes: true, agents: true, plugins: true })
+  // 登录后「同步到蓬洲云」三个勾(云同步开启方案 2026-10-20):走完引导时按勾的开;这一步就算点过头,之后不再弹首登卡片。
+  // Agents 那个勾在旧同步里是账号总闸(= 所有 Agent),11-05 Agent 逐个选定案后缺省不勾(新同步里它不起作用,逐个选在蓬洲云 › 同步)
+  const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean>>({ notes: true, agents: false, plugins: true })
   // 真看到过那三个勾才算点过头:「跳过引导」在哪一步都能按,没看到就别替用户按默认全开(留给之后的首登卡片问)
   const syncSeen = useRef(false)
   const [device, setDevice] = useState<{ url: string; userCode: string } | null>(null)
