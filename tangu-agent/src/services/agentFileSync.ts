@@ -13,7 +13,7 @@ import { splitLogBlocks, mergeBlocks, mergeLogHeaders } from './memorySync.js';
 import { migrateScheduleFile } from './agentSchedule.js';
 import { agentSlugLocalOnly, logText, mergeAgentSyncContent, serializeTombstones, type AgentMergeDeps } from '../contracts/agentSyncRules.js';
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
-import { agentSyncDefault, agentSyncPermission, agentSyncScope, setAgentSyncPermission, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal, pendingAgentRemovals, clearAgentRemoval } from './cloudSyncAccount.js';
+import { agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal, pendingAgentRemovals, clearAgentRemoval } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, isConflictCopyPath, isWidgetDataPath, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository, withMemoryDirectoryLock, type MemoryTombstone } from './memoryRepository.js';
@@ -165,10 +165,12 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   for (const [slug, files] of bySlug) {
     if (!validSyncSlug(slug) || agentSlugLocalOnly(slug) || (onlySlug && slug !== onlySlug) || known.has(slug)) continue;
     const dir = agentSyncDir(slug);
-    const owned = agentSyncPermission(slug, scope).enabled;
-    if (existsSync(dir) && !owned) continue;
-    const consent = owned ? captureAgentSyncPermission(slug, scope) : guard;
-    if (owned) watch(slug);
+    // 11-05 Agent 逐个选:云端有、本机没有的 Agent 不再自动建出来开同步(原来 config.toml 带 cloud_sync = true 或账号总闸开着就建,
+    // 等于一台设备的选择替所有设备做了;每个 Agent 的许可存在它自己的目录里,本机没有目录就不可能是这台选的)。
+    // 本机已有目录的照旧按许可(含总闸)走。
+    if (!existsSync(dir) || !agentSyncPermission(slug, scope).enabled) continue;
+    const consent = captureAgentSyncPermission(slug, scope);
+    watch(slug);
     if (!files.some((f) => f.relPath === 'config.toml' && !f.deleted)) continue;
     guard();
     try {
@@ -176,14 +178,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
       if (!config || config.deleted || config.isBinary || !config.content) continue;
       verifyBytes(config, Buffer.from(config.content));
       const def = parseAgentConfig(slug, config.content, '');
-      // 账号总闸开着(登录后缺省开)也算:另一台开总闸时上传的 config.toml 里多半没有 cloud_sync
-      if (!def.cloudSync && agentSyncDefault(scope) !== true) continue;
-      // Cloud discovery authorizes only a new directory, never a pre-existing agent/account.
       assertSyncPath(agentsDir(), dir); mkdirSync(agentsDir(), { recursive: true });
-      if (!owned) {
-        try { mkdirSync(dir); } catch (e) { if ((e as NodeJS.ErrnoException).code === 'EEXIST') continue; throw e; }
-        guard(); setAgentSyncPermission(slug, scope, true, false); watch(slug);
-      }
       agents.push(def); known.add(slug);
     } catch (e) { fail(result, e); guard(); }
   }

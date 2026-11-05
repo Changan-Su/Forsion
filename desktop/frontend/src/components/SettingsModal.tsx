@@ -164,7 +164,7 @@ registerMessages({
   'settings.forsionCloud.sync': { zh: '云端智库', en: 'Cloud vault' },
   // 「Agents 与记忆」的开关搬进蓬洲云「同步」页(云同步开启方案 2026-10-20),这里只留一条指路 + 立即同步
   'settings.forsion.syncManaged': { zh: '开关在蓬洲云 › 同步', en: 'Turn it on or off in Penzor Cloud › Sync' },
-  'settings.forsion.syncManagedHint': { zh: '登录后默认开着；智库、Agents 与记忆、插件数据都在那一页管。', en: 'On by default after you sign in. Notes, agents & memory, and plugin data are all managed on that page.' },
+  'settings.forsion.syncManagedHint': { zh: '登录后笔记和插件默认开着，Agent 逐个选、默认不同步；都在那一页管。', en: 'Notes and plugins are on by default after you sign in; agents are chosen one by one and aren’t synced by default. All managed on that page.' },
   'settings.forsion.openPenzorSync': { zh: '打开', en: 'Open' },
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
   'settingsmodal.cloudAccountDescription': { zh: 'Forsion 云端 · 管理个人主页、登录资料和账号安全。', en: 'Forsion Cloud · Your profile, sign-in details and account security.' },
