@@ -148,7 +148,8 @@ export function analyzeBuild({ metafile, code, cwd = process.cwd(), root, classi
     if (e.startsWith(HOST) && !baseline.includes(e.slice(HOST.length))) errors.push(`${e} is not in the boundary baseline tanguHostDeps (check:tanguboundary); the shared table may only shrink`)
     else if (!e.startsWith(HOST) && !isShared(e)) errors.push(`${e} is external but not a shared package`)
   }
-  if (tableSource != null && tableSource !== renderTable(externals)) {
+  // Windows 检出(core.autocrlf)把表换成 CRLF;只比内容,不比换行
+  if (tableSource != null && tableSource.replace(/\r\n/g, '\n') !== renderTable(externals)) {
     const keys = tableKeys(tableSource)
     const missing = externals.filter((e) => !keys.includes(e)), stale = keys.filter((k) => !externals.includes(k))
     errors.push(`shared module table is out of date (missing: ${missing.join(', ') || '-'}; stale: ${stale.join(', ') || '-'}${missing.length || stale.length ? '' : '; an import was edited by hand'}). Run node scripts/build-tangu-ui.mjs --write-table`)
