@@ -564,7 +564,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           {rows.map((r) => (
             <div key={r.callId} className="t2-apv-update-row" data-status={r.answered ? 'approved' : 'rejected'}>
               {r.answered ? <CircleCheck size={12} /> : <CircleX size={12} />}
-              <span className="t2-apv-update-what">{t(r.answered ? 'chat.inquiry.updateAnswered' : 'chat.inquiry.updateNone', { q: r.question })}</span>
+              <span className="t2-apv-update-what is-question" title={r.question}>{t(r.answered ? 'chat.inquiry.updateAnswered' : 'chat.inquiry.updateNone', { q: r.question })}</span>
               {r.answered && <span className="t2-apv-update-preview" title={r.answer}>{r.answer}</span>}
             </div>
           ))}
