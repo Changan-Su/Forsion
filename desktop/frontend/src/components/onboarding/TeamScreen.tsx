@@ -23,7 +23,6 @@ import { hasDesktopPermissions } from '../DesktopPermissions'
 import { INTRO_FOCUS, INTRO_WHEN, PROACTIVITY, FOCUS_TEXT_MAX, type Proactivity } from '../onboardingFlow'
 import { useApp } from '../../stores/appStore'
 import '../computerHistoryMessages'
-import '../../views/chat2/museIntroMessages'
 
 const MUSE_FALLBACK = { name: 'Muse', nameZh: '卜算子', nameEn: 'Muse', slug: 'muse' }
 type When = typeof INTRO_WHEN[number]
@@ -203,9 +202,9 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
           </select>
         </div>
         <div className="ob3-sep" />
-        {pills(t('museCard.q.when'), INTRO_WHEN, (v) => `museCard.when.${v}`, (v) => v === when, setWhen)}
+        {pills(t('ob3.q.when'), INTRO_WHEN, (v) => `ob3.when.${v}`, (v) => v === when, setWhen)}
         {pills(t('ob3.q.proactivity'), PROACTIVITY, (v) => `ob3.pro.${v}`, (v) => v === pro, setPro)}
-        {pills(t('ob3.q.focus'), INTRO_FOCUS, (v) => `museCard.focus.${v}`, (v) => focus.includes(v), (v) => setFocus((f) => (f.includes(v) ? f.filter((x) => x !== v) : [...f, v])),
+        {pills(t('ob3.q.focus'), INTRO_FOCUS, (v) => `ob3.focus.${v}`, (v) => focus.includes(v), (v) => setFocus((f) => (f.includes(v) ? f.filter((x) => x !== v) : [...f, v])),
           <label className="ob3-own"><PenLine size={12} aria-hidden="true" /><input value={focusText} maxLength={FOCUS_TEXT_MAX} disabled={!museOn} placeholder={t('ob3.q.focusOwn')} aria-label={t('ob3.q.focusOwn')} onChange={(e) => setFocusText(e.target.value)} /></label>)}
       </section>
       <div className="r">

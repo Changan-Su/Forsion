@@ -153,7 +153,7 @@ it('desktop: four screens in order; Continue saves About you, Get started writes
   expect(host.querySelector('[data-agent="muse"]')).toBeNull()
   await type(host.querySelector<HTMLSelectElement>('[data-ob-muse-model] select')!, 'm1')
   await clickText(translate('ob3.pro.high'))
-  await clickText(translate('museCard.focus.study'))
+  await clickText(translate('ob3.focus.study'))
   await type(host.querySelector<HTMLInputElement>('.ob3-own input')!, ' my thesis ')
   await act(async () => sw('Coder').click())
   expect(primary().textContent).toBe(translate('ob3.getStarted'))
@@ -286,7 +286,7 @@ it('team: after a partial failure, a choice changed back is still written on ret
 it('team: the focus memory is not written twice when a retry follows a partial failure', async () => {
   vi.mocked(api.saveAgentDef).mockRejectedValueOnce(new Error('agent write failed'))
   await toTeam()
-  await clickText(translate('museCard.focus.study'))
+  await clickText(translate('ob3.focus.study'))
   await act(async () => sw('Coder').click())
   await next()
   await next()

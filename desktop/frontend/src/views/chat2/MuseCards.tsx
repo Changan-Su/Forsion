@@ -8,7 +8,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { create } from 'zustand'
 import { AlarmClock, ArrowDown, CircleCheck, CircleX, Eye, Gift, Inbox, MessageCircle, Puzzle, Settings, Sparkles } from 'lucide-react'
 import { registerMessages, useI18n } from '../../i18n'
-import './museIntroMessages'
 import { useApp } from '../../stores/appStore'
 import { useAttention } from '../../stores/attentionStore'
 import { claimOnEngine, decideMuseCard, editMuseSummary, getMuseCard, getMuseStatus, listMuseCards, museMessageFeedback } from '../../services/backendService'
@@ -65,11 +64,19 @@ registerMessages({
   'museCard.val.perDay': { zh: '{n} 条', en: '{n} a day' },
   'museCard.intro': { zh: '先认识一下', en: 'Getting to know you' },
   'museCard.introBody': { zh: '我是 Muse。我在后台替你盯事情、整理东西，有要紧的才来找你。先问三句，不答就按缺省来。', en: 'I’m Muse. I work in the background, keeping an eye on things and tidying up, and come to you when something matters. Three quick questions; skip them and I’ll use the defaults.' },
+  'museCard.q.when': { zh: '什么时候能找你', en: 'When can I reach you?' },
+  'museCard.when.anytime': { zh: '随时', en: 'Anytime' },
+  'museCard.when.daytime': { zh: '白天 9–21 点', en: 'Daytime, 9:00–21:00' },
+  'museCard.when.open': { zh: '只在我开着 Forsion 时', en: 'Only while Forsion is open' },
   'museCard.q.pace': { zh: '多久说一次', en: 'How often should I speak up?' },
   'museCard.pace.as-needed': { zh: '有事才说', en: 'Only when it matters' },
   'museCard.pace.daily': { zh: '每天一条', en: 'Once a day' },
   'museCard.pace.free': { zh: '想到就说', en: 'Whenever something comes up' },
   'museCard.q.focus': { zh: '最想让我盯什么（可多选）', en: 'What should I watch most? (pick any)' },
+  'museCard.focus.schedule': { zh: '日程', en: 'Schedule' },
+  'museCard.focus.study': { zh: '学习', en: 'Study' },
+  'museCard.focus.projects': { zh: '项目', en: 'Projects' },
+  'museCard.focus.inbox': { zh: '收件箱', en: 'Inbox' },
   'museCard.done': { zh: '好了', en: 'Done' },
   'museCard.skip': { zh: '跳过', en: 'Skip' },
   'museCard.introDone': { zh: '记下了，就按你说的来', en: 'Got it. I’ll work that way.' },
