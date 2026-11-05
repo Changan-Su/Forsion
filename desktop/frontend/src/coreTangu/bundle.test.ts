@@ -33,6 +33,8 @@ const run = (patch: Partial<typeof clean>) => analyzeBuild({ ...clean, ...patch 
 
 describe('analyzeBuild', () => {
   it('a clean build passes', () => expect(run({})).toBe(''))
+  it('a CRLF checkout of the table (Windows, core.autocrlf) still matches', () => expect(run({ tableSource: (renderTable(EXTERNALS) as string).replace(/\n/g, '\r\n') })).toBe(''))
+  it('a hand-edited table is red', () => expect(run({ tableSource: (renderTable(EXTERNALS) as string).replace('m0 from', 'm0  from') })).toMatch(/edited by hand/))
   it('a host file bundled into the package is red (P3: two copies of a store)', () => {
     expect(run({ metafile: meta([...Object.keys(clean.metafile.inputs), 'desktop/frontend/src/stores/appStore.ts'], EXTERNALS) })).toMatch(/host file bundled.*appStore/)
   })
