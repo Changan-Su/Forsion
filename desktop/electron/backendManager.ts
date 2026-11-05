@@ -176,6 +176,24 @@ export class BackendManager {
   private readonly localEngineToken = randomBytes(32).toString('hex')
   /** 远端来源标记密钥(TANGU_REMOTE_MARK_SECRET):同样每次启动一枚,只在主进程与引擎之间。 */
   private readonly remoteMark = randomBytes(32).toString('hex')
+  /** 电脑历史数据钥匙(hex)。经 stdin 私有通道交给引擎:每次拉起时发一次,钥匙后到(引导里才打开电脑历史)就当场补发 ——
+   *  不走 env(要换就得重起引擎,会断掉在跑的会话;env 还会出现在 ps 里),不走 HTTP(本机令牌渲染层 / 设备页反代也有)。 */
+  private computerHistoryKeyHex: string | null = null
+
+  /** 钥匙就绪:记下(之后每次拉起都带上),引擎在跑就当场发。 */
+  setComputerHistoryKey(hex: string): void {
+    if (hex === this.computerHistoryKeyHex) return
+    this.computerHistoryKeyHex = hex
+    if (this.child) this.sendHostMessage(this.child, { computerHistoryKey: hex })
+  }
+
+  /** 主进程 → 引擎的私有通道(引擎侧 tangu-agent/src/core/hostChannel.ts):一行一条 JSON。写不进(引擎刚退)就算了,
+   *  下次拉起会重发。 */
+  private sendHostMessage(child: ChildProcess, msg: Record<string, unknown>): void {
+    const stdin = child.stdin
+    if (!stdin || stdin.destroyed || !stdin.writable) return
+    try { stdin.write(`${JSON.stringify(msg)}\n`) } catch { /* EPIPE:引擎已退 */ }
+  }
 
   onStatus(cb: (st: BackendStatus) => void): () => void {
     this.listeners.add(cb)
@@ -374,6 +392,8 @@ export class BackendManager {
       env.TANGU_HOME = tanguDataDir() // 三重保险之③:软链被删也不分脑(引擎私有数据在 tangu/ 子目录;auth/config/activity 引擎经 forsionSharedDir 落父目录=共享域)
       env.TANGU_LOCAL_TOKEN = this.localEngineToken
       env.TANGU_REMOTE_MARK_SECRET = this.remoteMark
+      // stdin 是主进程独占的私有通道(电脑历史钥匙,见 setComputerHistoryKey);引擎读完这个开关就从自己的 env 删掉
+      env.FORSION_HOST_STDIN = '1'
       const cloudToken = this.cloudToken()
       env.TANGU_TOKEN = cloudToken ?? ''
       // 渲染层直接起的 run 会在请求体自报 desktop/<版本>;微信/TG/QQ 则由引擎后台起 run,
@@ -456,9 +476,11 @@ export class BackendManager {
       }
       const child = spawn(cmd, args, {
         env,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       })
+      child.stdin?.on('error', () => { /* 引擎退出后写 = EPIPE,忽略(下次拉起重发) */ })
+      if (this.computerHistoryKeyHex) this.sendHostMessage(child, { computerHistoryKey: this.computerHistoryKeyHex })
       this.spawnedEntry = entry
       this.spawnedAt = Date.now()
       this.child = child

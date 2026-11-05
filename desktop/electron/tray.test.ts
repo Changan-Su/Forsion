@@ -15,7 +15,7 @@ import type { ComputerHistoryState } from '../shared/computerHistory'
 
 const base: TrayHandlers = { show: vi.fn(), checkUpdates: vi.fn(), quit: vi.fn() }
 const st = (over: Partial<ComputerHistoryState>): ComputerHistoryState =>
-  ({ v: 1, enabled: true, pausedUntil: null, status: 'recording', since: 0, updatedAt: 0, platform: 'darwin', dataGen: 0, ...over })
+  ({ v: 1, enabled: true, pausedUntil: null, status: 'recording', since: 0, updatedAt: 0, platform: 'darwin', dataGen: 0, userTurnedOff: false, ...over })
 const labels = (items: Electron.MenuItemConstructorOptions[]) => items.filter((i) => i.type !== 'separator').map((i) => i.label)
 
 describe('tray', () => {

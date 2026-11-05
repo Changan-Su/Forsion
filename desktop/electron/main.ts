@@ -95,7 +95,7 @@ import { appIconDataUrls } from './appIcons'
 import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MIN_HEIGHT, normalizeProbe } from './appDock'
 import { normalizeDockCandidates, normalizeDockSelection, normalizeDockWindow, type DockState, type DockWindow } from '../shared/appDock'
 import { permissionHelperAppPath, registerDesktopPermissions } from './desktopPermissions'
-import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ComputerHistoryConfig } from './computerHistory'
+import { ComputerHistory, readSelfBundleId, registerComputerHistoryIpc, stopComputerHistoryForWipe, type ChKeyVault, type ComputerHistoryConfig } from './computerHistory'
 import { createWindowsRecorderResolver, launchWindowsRecorder, recorderBinDir, windowsRecorderSource } from './computerHistoryWin'
 import { COMPUTER_HISTORY_DESKTOP_CONFIG_FILE } from '../shared/computerHistory'
 // Amadeus Space:vendored 笔记后端(vault IPC + 资产协议)。renderImport 别名后保持 verbatim。
@@ -2053,6 +2053,24 @@ let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
 /** 电脑历史控制器(只在带 agent 后端的形态建;见 electron/computerHistory.ts)。 */
 let computerHistory: ComputerHistory | null = null
 
+/**
+ * 电脑历史数据钥匙的保管处 = 设备凭据 device-secrets.json 的 computerHistoryKey 槽(safeStorage:macOS 钥匙串 / Windows DPAPI)。
+ * 读不出(锁定 / 系统加密这次用不了 / 文件读不懂)报 unavailable,控制器据此不录 —— 绝不当「没有」去铸新的盖掉旧钥匙。
+ * dev 台架:TANGU_CH_TEST_KEY(64 位 hex)直接当钥匙用、不碰钥匙串(台架零改动、不弹框;e2e 拿同一把解日文件)。**打包版无视它。**
+ */
+function computerHistoryKeyVault(): ChKeyVault {
+  const testKey = app.isPackaged ? '' : (process.env.TANGU_CH_TEST_KEY || '').trim()
+  if (testKey) return { read: async () => ({ state: 'ok', hex: testKey }), store: async () => false }
+  return {
+    read: async () => {
+      const r = await deviceSecrets.computerHistoryKey() // 内部先等 init(配置队列的第一个使用者)
+      if (r.state === 'ok') return { state: 'ok', hex: r.value }
+      return { state: 'unavailable', reason: deviceSecrets.status().lastError || (r.state === 'insecure' ? 'secret-store-insecure' : 'secret-locked') }
+    },
+    store: (hex) => deviceSecrets.storeComputerHistoryKey(hex),
+  }
+}
+
 /** 电脑历史落盘后踢一下引擎巡检:「打开 Steam 时」不用等 5 分钟。不带任何内容,引擎自己重读磁盘判定;窗口关着也要到,所以不经渲染层。
  *  ≥5s 节流(切 App 很频繁),最后一次不丢;失败无所谓,下一个巡检周期照样看到。 */
 const COMPUTER_KICK_MS = 5_000
@@ -2575,6 +2593,9 @@ app.whenReady().then(async () => {
         refreshTrayMenu()
       },
       onSignal: kickAutomationForComputer,
+      keyVault: computerHistoryKeyVault(),
+      // 钥匙到手就交给引擎(stdin 私有通道;之后每次拉起引擎也会重发)
+      onKey: (hex) => backend.setComputerHistoryKey(hex),
     })
     registerComputerHistoryIpc(computerHistory, isTrustedSender)
   }
