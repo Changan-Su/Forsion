@@ -4083,7 +4083,7 @@
       "type": "function",
       "function": {
         "name": "delete_path",
-        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item moves to Forsion's trash (kept 30 days) and the result gives its path there, so it can be restored with move_path. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5346,7 +5346,7 @@
       "type": "function",
       "function": {
         "name": "delete_path",
-        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item moves to Forsion's trash (kept 30 days) and the result gives its path there, so it can be restored with move_path. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8131,7 +8131,7 @@
       "type": "function",
       "function": {
         "name": "delete_path",
-        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item moves to Forsion's trash (kept 30 days) and the result gives its path there, so it can be restored with move_path. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9394,7 +9394,7 @@
       "type": "function",
       "function": {
         "name": "delete_path",
-        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item moves to Forsion's trash (kept 30 days) and the result gives its path there, so it can be restored with move_path. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10638,7 +10638,7 @@
       "type": "function",
       "function": {
         "name": "delete_path",
-        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item moves to Forsion's trash (kept 30 days) and the result gives its path there, so it can be restored with move_path. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -13184,7 +13184,7 @@
       "type": "function",
       "function": {
         "name": "delete_path",
-        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item moves to Forsion's trash (kept 30 days) and the result gives its path there, so it can be restored with move_path. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
         "parameters": {
           "type": "object",
           "properties": {

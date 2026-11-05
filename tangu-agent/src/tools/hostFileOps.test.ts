@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -38,6 +38,33 @@ describe('move_path', () => {
     put('d/box/x.txt');
     expect(await call('move_path', { from: 'd/box', to: '.' })).toMatch(/already exists and is a folder/);
     expect(await call('move_path', { from: 'box', to: 'box/inner' })).toMatch(/into itself/);
+  });
+
+  it('overwrite puts the replaced file in the Trash, and brings it back when the move fails', async () => {
+    put('ow/new.txt', 'NEW');
+    put('ow/old.txt', 'OLD');
+    expect(await call('move_path', { from: 'ow/new.txt', to: 'ow/old.txt', overwrite: true })).toMatch(/replaced is in the Forsion Trash/);
+    expect(readFileSync(path.join(ws, 'ow', 'old.txt'), 'utf8')).toBe('NEW');
+    expect((await listTrash()).some((e) => e.kind === 'file' && e.name === 'old.txt')).toBe(true);
+    // The source's folder is read-only: the rename fails after the destination was set aside → it comes back.
+    put('locked/src.txt', 'SRC');
+    put('keep.txt', 'KEEP');
+    chmodSync(path.join(ws, 'locked'), 0o555);
+    try {
+      expect(await call('move_path', { from: 'locked/src.txt', to: 'keep.txt', overwrite: true })).toMatch(/^Error: .*back in place/);
+      expect(readFileSync(path.join(ws, 'keep.txt'), 'utf8')).toBe('KEEP');
+      expect(readFileSync(path.join(ws, 'locked', 'src.txt'), 'utf8')).toBe('SRC');
+    } finally {
+      chmodSync(path.join(ws, 'locked'), 0o755);
+    }
+  });
+
+  it('a link to a folder is that folder: the item goes inside', async () => {
+    mkdirSync(path.join(ws, 'real-dir'));
+    symlinkSync(path.join(ws, 'real-dir'), path.join(ws, 'dir-link'));
+    put('n.txt', 'N');
+    expect(await call('move_path', { from: 'n.txt', to: 'dir-link' })).toMatch(/^Moved/);
+    expect(readFileSync(path.join(ws, 'real-dir', 'n.txt'), 'utf8')).toBe('N');
   });
 
   it('never moves the home folder or a folder holding credentials, and stays out of protected paths', async () => {
@@ -98,5 +125,6 @@ describe('open_path approval', () => {
     expect(openPathKnownSafe('Tool.app', ws)).toBe(false);
     expect(openPathKnownSafe('looks.pdf', ws)).toBe(false);
     expect(openPathKnownSafe('nothing.pdf', ws)).toBe(false);
+    expect(openPathKnownSafe('//attacker/share/report.pdf', ws)).toBe(false); // UNC: never even looked at
   });
 });

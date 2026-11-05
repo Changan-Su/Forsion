@@ -114,6 +114,16 @@ describe('isKnownSafeBash · Windows + bash', () => {
     ]) expect(winBash(c), c).toBe(false);
   });
 
+  it('a path that climbs must name the same file for MSYS programs and for the credential check', () => {
+    // MSYS: `..` above /c is `/`, so ../../../c/Users from C:\work\sub is C:\Users; Node would say C:\c\Users.
+    const at = (c: string) => isKnownSafeBash(c, 'C:\\work\\sub', 'win32', 'bash');
+    expect(at('cat ../notes.md')).toBe(true);
+    expect(at('cat ../../work/sub/a.txt')).toBe(true);
+    for (const c of ['cat ../../../c/Users/me/auth.json', 'cat -- -x/../../../../c/Users/me/auth.json', 'cat /c/..', 'ls /c/../tmp']) {
+      expect(at(c), c).toBe(false);
+    }
+  });
+
   it('cmd.exe stays on the cmd rules', () => {
     expect(isKnownSafeBash('dir /b', process.cwd(), 'win32', 'cmd')).toBe(true);
     expect(isKnownSafeBash('ls -la', process.cwd(), 'win32', 'cmd')).toBe(false);

@@ -38,7 +38,7 @@ describe('resolveWindowsShell', () => {
 describe('windowsBashEnv', () => {
   it('keeps PATH key casing, drops entries bash would resolve against the working directory, strips startup hooks', () => {
     const env = windowsBashEnv(
-      { Path: 'C:\\Windows\\System32;;.;tools;\\\\server\\share\\bin;C:\\Tools', BASH_ENV: 'C:\\evil.sh', BASH_FUNC_ls__: '() { evil; }', SHELLOPTS: 'xtrace', HOME: 'C:\\Users\\me' },
+      { Path: 'C:\\Windows\\System32;;.;tools;\\\\server\\share\\bin;//attacker/share/bin;C:\\Tools', BASH_ENV: 'C:\\evil.sh', BASH_FUNC_ls__: '() { evil; }', SHELLOPTS: 'xtrace', HOME: 'C:\\Users\\me' },
       { kind: 'bash', bin: bundled, pathDirs: ['C:\\g\\ucrt64\\bin', 'C:\\g\\usr\\bin'] },
       'ls -t | head -3',
     );
@@ -70,6 +70,10 @@ describe('paths between Windows and bash', () => {
     expect(msysToWindowsPath('/c/Users/me/a b.txt')).toBe('C:\\Users\\me\\a b.txt');
     expect(msysToWindowsPath('/d')).toBe('D:\\');
     expect(msysToWindowsPath('/proc/self')).toBe('/proc/self');
+    // MSYS normalizes before it maps the drive: /c/../c/x is C:\x (the file bash opens), not C:\c\x
+    expect(msysToWindowsPath('/c/../c/Users/me/auth.json')).toBe('C:\\Users\\me\\auth.json');
+    expect(msysToWindowsPath('/c/./Users/../Users/me')).toBe('C:\\Users\\me');
+    expect(msysToWindowsPath('/c/..')).toBe('/c/..');
     expect(msysToWindowsPath('relative/path')).toBe('relative/path');
     expect(fromShellPath('/c/x', 'win32')).toBe('C:\\x');
     expect(fromShellPath('/c/x', 'darwin')).toBe('/c/x');

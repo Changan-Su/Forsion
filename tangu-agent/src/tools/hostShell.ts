@@ -55,7 +55,7 @@ export function windowsBashCandidates(env: NodeJS.ProcessEnv): string[] {
 export function resolveWindowsShell(env: NodeJS.ProcessEnv, exists: (p: string) => boolean): HostShell {
   if (/^cmd(\.exe)?$/i.test(env.TANGU_WINDOWS_SHELL?.trim() || '')) return { kind: 'cmd' };
   for (const bin of windowsBashCandidates(env)) {
-    if (!path.win32.isAbsolute(bin) || !/(^|[\\/])bash\.exe$/i.test(bin) || /[\\/]system32[\\/]/i.test(bin)) continue;
+    if (!path.win32.isAbsolute(bin) || /^[\\/]{2}/.test(bin) || !/(^|[\\/])bash\.exe$/i.test(bin) || /[\\/]system32[\\/]/i.test(bin)) continue;
     if (!exists(bin)) continue;
     return { kind: 'bash', bin, pathDirs: bashPathDirs(bin, exists) };
   }
@@ -86,7 +86,7 @@ export function windowsBashEnv(base: NodeJS.ProcessEnv, shell: HostShell, comman
     env[k] = v;
   }
   const key = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'Path';
-  const kept = String(env[key] || '').split(';').map((p) => p.trim()).filter((p) => p && path.win32.isAbsolute(p) && !p.startsWith('\\\\'));
+  const kept = String(env[key] || '').split(';').map((p) => p.trim()).filter((p) => p && path.win32.isAbsolute(p) && !/^[\\/]{2}/.test(p)); // no UNC in either spelling: a share on PATH runs its exes
   env[key] = [...(shell.pathDirs || []), ...kept].join(';');
   env[RUN_VAR] = command;
   return env;
@@ -131,7 +131,10 @@ export function hostShellSummary(platform: NodeJS.Platform = process.platform, s
  * hands them straight to the file tools; Node on Windows would read `/c/Users` as `<current drive>:\c\Users`.
  */
 export function msysToWindowsPath(p: string): string {
-  const m = /^\/([a-zA-Z])(?:\/(.*))?$/.exec(p);
+  // MSYS drops `.` / `..` before it maps the drive (`/c/../c/x` is C:\x, not C:\c\x); do the same, or the
+  // credential check looks at a different file than the one bash opens.
+  const n = p.startsWith('/') && !p.startsWith('//') ? path.posix.normalize(p) : p;
+  const m = /^\/([a-zA-Z])(?:\/(.*))?$/.exec(n);
   if (!m) return p;
   return `${m[1].toUpperCase()}:\\${(m[2] || '').replace(/\//g, '\\')}`;
 }

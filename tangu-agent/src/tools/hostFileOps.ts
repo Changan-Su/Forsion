@@ -22,7 +22,7 @@ import path from 'node:path';
 import { credentialPaths, credentialReadTarget, pathWithin } from '../sandbox/hostSandboxProtection.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 import { toolSubprocessEnv } from '../sandbox/credentialEnv.js';
-import { moveToTrash, trashDir, TRASH_DAYS } from '../services/trash.js';
+import { moveToTrash, restoreTrashItems, trashDir, TRASH_DAYS, type TrashEntry } from '../services/trash.js';
 import { checkReadPath, checkWritePath } from './fsPolicy.js';
 import { fromShellPath } from './hostShell.js';
 import { forgetRead } from './readState.js';
@@ -65,22 +65,35 @@ function guardWrite(ctx: ToolContext, p: string): string | null {
   return v.hardDeny ? v.reason : null;
 }
 
-/** Move one path, also across volumes (rename fails with EXDEV there: copy, then remove the original). */
+/** Move one path, also across volumes (rename fails with EXDEV there: copy, then remove the original). Nothing may be
+ *  at `to`. A copy that fails is removed again (the original is still whole); once the copy is whole the move has
+ *  happened, and failing to remove the original is reported with `copied: true`. */
 async function movePath(from: string, to: string): Promise<void> {
   await fs.mkdir(path.dirname(to), { recursive: true });
   try {
     await fs.rename(from, to);
+    return;
   } catch (e: any) {
     if (e?.code !== 'EXDEV') throw e;
+  }
+  if (await statOrNull(to)) throw new Error(`${to} appeared while moving; nothing was changed`);
+  try {
     await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false, preserveTimestamps: true, verbatimSymlinks: true });
+  } catch (e) {
+    await fs.rm(to, { recursive: true, force: true }).catch(() => {});
+    throw e;
+  }
+  try {
     await fs.rm(from, { recursive: true, force: false });
+  } catch (e: any) {
+    throw Object.assign(new Error(`copied to ${to}, but the original could not be removed: ${e?.message || e}`), { copied: true });
   }
 }
 
 /** `to` an existing folder → put `from` inside it, as mv / cp do. Exception: `to` is `from` itself under another
  *  spelling (a case-only rename on macOS / Windows) → a plain rename. */
 async function destinationFor(from: string, to: string): Promise<string> {
-  const st = await statOrNull(to);
+  const st = await fs.stat(to).catch(() => null); // follows links: a link to a folder is that folder, as for mv
   if (st?.isDirectory() && real(to) !== real(from)) return path.join(to, path.basename(from));
   return to;
 }
@@ -129,15 +142,30 @@ export const HOST_FILE_OP_TOOLS: Record<string, FileOpTool> = {
       const existing = caseRename ? null : await statOrNull(to);
       if (existing?.isDirectory()) return `Error: ${shown(ctx, to)} already exists and is a folder; folders are never merged. Pick another name.`;
       if (existing && args.overwrite !== true) return `Error: ${shown(ctx, to)} already exists. Pass overwrite: true to replace it, or pick another name.`;
+      // The file being replaced goes to the Trash first, not away for good: if the move then fails (a locked source on
+      // Windows, a full disk mid-copy) it comes back, and if it succeeds the user can still get it back.
+      let replaced: TrashEntry | null = null;
       try {
-        if (existing) await fs.rm(to, { force: true });
+        if (existing) {
+          replaced = await moveToTrash({ kind: 'file', ref: path.basename(to), name: path.basename(to), paths: [{ path: to }] });
+          if (!replaced) return `Error: could not move the existing ${shown(ctx, to)} out of the way; nothing was changed.`;
+        }
         await movePath(from, to);
       } catch (e: any) {
-        return `Error: ${e?.message || e}`;
+        let note = '';
+        if (replaced && !e?.copied) {
+          note = await restoreTrashItems(replaced).then(
+            (placed) => { const back = placed.get(path.resolve(to)); return back && back !== path.resolve(to) ? ` The file it would have replaced is back at ${back}.` : ' The file it would have replaced is back in place.'; },
+            () => ' The file it would have replaced is in the Forsion Trash (Settings › Trash).',
+          );
+        } else if (replaced) note = ' The file it replaced is in the Forsion Trash (Settings › Trash).';
+        forgetRead(ctx, to);
+        return `Error: ${e?.message || e}.${note}`;
       }
       forgetRead(ctx, from);
       forgetRead(ctx, to);
-      return `Moved ${shown(ctx, from)} → ${shown(ctx, to)}${st.isDirectory() ? ' (folder)' : ''}.`;
+      return `Moved ${shown(ctx, from)} → ${shown(ctx, to)}${st.isDirectory() ? ' (folder)' : ''}.` +
+        (replaced ? ` The file it replaced is in the Forsion Trash (Settings › Trash) for ${TRASH_DAYS} days.` : '');
     }),
   },
 
@@ -299,6 +327,9 @@ const BUNDLE_EXT = /\.(app|appex|bundle|framework|plugin|prefpane|workflow|actio
 export function openPathKnownSafe(rawPath: string, cwd: string): boolean {
   try {
     const literal = path.resolve(cwd || process.cwd(), fromShellPath(String(rawPath || '')));
+    // UNC / device paths (\\host\share, //host/share, \\?\…): even looking at one on Windows sends the user's
+    // credentials to that host, before any approval. Ask instead, and touch nothing.
+    if (/^[\\/]{2}/.test(literal) || /^[\\/]{2}/.test(String(rawPath || ''))) return false;
     const resolved = realpathSync(literal);
     const st = statSync(resolved);
     if (credentialReadTarget(literal)) return false;

@@ -41,7 +41,8 @@ export async function pathSize(p: string): Promise<number> {
   if (!st) return 0;
   if (!st.isDirectory()) return st.size;
   let n = 0;
-  for (const e of await fs.readdir(p)) n += await pathSize(path.join(p, e));
+  // 读不了的子目录(权限 000)不挡删除:大小只是个参考数
+  for (const e of await fs.readdir(p).catch(() => [] as string[])) n += await pathSize(path.join(p, e));
   return n;
 }
 
@@ -50,7 +51,7 @@ async function move(from: string, to: string): Promise<void> {
   try { await fs.rename(from, to); }
   catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'EXDEV' || await exists(to)) throw e;
-    try { await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false }); }
+    try { await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true }); }
     catch (c) { await fs.rm(to, { recursive: true, force: true }).catch(() => {}); throw c; }
     await fs.rm(from, { recursive: true, force: true });
   }

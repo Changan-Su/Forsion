@@ -193,7 +193,9 @@ export async function restoreFromTrash(entry: Pick<TrashEntry, 'id' | 'kind' | '
   }
   const r = await restoreTrashEntry(homeTarget(), entry.id)
   await afterRestore(entry.kind)
-  return r.renamed && r.slug ? { renamedTo: r.slug } : {}
+  // 文件(Agent 删掉的)按落回的完整路径报,看得出放到了哪
+  const renamedTo = r.renamed ? (r.slug ?? r.path) : undefined
+  return renamedTo ? { renamedTo } : {}
 }
 
 /** 恢复失败说人话:重装过的插件、原处上级被换成软链各有一句,其余带原因。 */

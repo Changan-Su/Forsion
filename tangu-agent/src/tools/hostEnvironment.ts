@@ -95,19 +95,17 @@ export function pathTools(
   return out;
 }
 
+/** Read once per process: these lines sit in the system prompt prefix, and a device rename or a new PATH entry
+ *  mid-run should not change it (prompt cache). Only the vault can appear later (first-run setup creates it). */
+let machineCache: Omit<MachineFacts, 'vault'> | null = null;
+
 export function machineFacts(vault: string | null): MachineFacts {
-  const shell = hostShell();
-  const { tools, missing } = pathTools(process.env, process.platform, shell);
-  return {
-    platform: process.platform,
-    system: systemLabel(),
-    deviceName: deviceName(),
-    shell,
-    home: os.homedir(),
-    vault,
-    tools,
-    missing,
-  };
+  if (!machineCache) {
+    const shell = hostShell();
+    const { tools, missing } = pathTools(process.env, process.platform, shell);
+    machineCache = { platform: process.platform, system: systemLabel(), deviceName: deviceName(), shell, home: os.homedir(), tools, missing };
+  }
+  return { ...machineCache, vault };
 }
 
 /** The lines that go into the host environment section. */
