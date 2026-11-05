@@ -1152,7 +1152,7 @@ export const Composer2: React.FC<{
   const mentionPool = useMemo<NormalAgentDef[]>(() => {
     // 私聊:候选 = 项目(借 NormalAgentDef 的 slug/name/description 三个字段承载,slug = 路径;不进 delegate 池)。
     if (projectMode) return (mentionProjects || []).map((p) => ({ slug: p.path, name: p.name, description: p.path } as NormalAgentDef))
-    if (!inGroup) return agents || []
+    if (!inGroup) return (agents || []).filter((a) => !a.disabled) // 停用的不进 @ 候选
     const saved = (agents || []).filter((a) => groupAgents!.includes(a.slug))
     const seen = new Set(saved.map((a) => a.slug))
     return [...saved, ...(groupTempAgents || []).filter((a) => !seen.has(a.slug))]
@@ -1741,7 +1741,7 @@ export const Composer2: React.FC<{
   const normalProps = {
     active: !planMode && !groupActive && approval === 'auto-edit',
     disabled: running,
-    agents: agents || [],
+    agents: (agents || []).filter((a) => !a.disabled || a.slug === currentAgentSlug),
     currentAgentSlug,
     onNormalWork: onNormalWork || (() => {}),
     onAgentSwitch: !isEngine && !groupActive ? onAgentSwitch : undefined,
@@ -1831,7 +1831,7 @@ export const Composer2: React.FC<{
       <CallHint ready={callable && inputEmpty && !running && !inCall} cloud={realtimeModel === cloudCallModel?.id} />
       {groupSetupOpen && (
         <GroupChatSetup
-          agents={agents || []}
+          agents={(agents || []).filter((a) => !a.disabled || !!groupAgents?.includes(a.slug))}
           models={models}
           initialAgents={groupAgents || []}
           initialTempAgents={groupTempAgents}

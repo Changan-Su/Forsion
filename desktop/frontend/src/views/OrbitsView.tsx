@@ -246,7 +246,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   // 云端(web)的 agent 定义没有 libraryDir ⇒ 开不了私聊(引擎 solo 端点 404),但照样列出,点击改为「用该 Agent 开新对话」
   // (09-27 用户报 web 看不到默认 Agent)。Muse 开的是 Space:web 上没注册它的 Space,只在本地(有 libraryDir)或 Space 已注册时列。
   const hasMuseSpace = useSpaceStore((st) => st.spaces.some((x) => x.id === 'muse'))
-  const agents = useMemo(() => s.agentDefs.filter((a) => a.slug === 'muse' ? (hasMuseSpace || !!a.libraryDir) : a.createdBy !== 'system'), [s.agentDefs, hasMuseSpace])
+  const agents = useMemo(() => s.agentDefs.filter((a) => !a.disabled && (a.slug === 'muse' ? (hasMuseSpace || !!a.libraryDir) : a.createdBy !== 'system')), [s.agentDefs, hasMuseSpace])
   const cloudAgent = (slug: string): boolean => !agents.find((a) => a.slug === slug)?.libraryDir
   const installedEngines = useMemo(() => s.engines.filter((e) => e.status !== 'not-installed'), [s.engines])
   /** 幽灵会话(creview 09-16):活动会话里带轨道身份、但对应实体已不在(agent 删了 / 引擎卸了 / 团队删了但会话未归档)——
