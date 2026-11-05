@@ -28,9 +28,11 @@ const boundary = createRequire(import.meta.url)('./tangu-boundary.check.cjs')
 const GENESIS = boundary.GENESIS
 const CTX_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'plugin-ctx-boundary.json')
 const SCHEMA = SCHEMA_SOURCES.map((f) => `tangu-agent/${f}`)
-// 开发工具(检查脚本、台架、harness 页、类型声明)不进安装包也不进热更新包;desktop/scripts 里只有这两份影响界面包。
+// 开发工具(检查脚本、台架、harness 页、类型声明)不进安装包也不进热更新包;desktop/scripts 里 build-tangu-ui / tangu-boundary 影响界面包,build-unit-web 产出进安装包(pack / dist 先跑它)。
 // 发布门禁(packageScope)对热更新分支更严,连它们也不许碰 —— 这里答的是「这项改动要不要等安装包才能到用户手里」。
-const TOOLING = /^desktop\/scripts\/(?!build-tangu-ui\.mjs$|tangu-boundary\.json$)/
+const TOOLING = /^desktop\/scripts\/(?!build-tangu-ui\.mjs$|build-unit-web\.mjs$|tangu-boundary\.json$)/
+// 引擎包里实际带的(tangu-agent/package.json 的 files + 包本身);tangu-agent 下别的(docs、scripts、test、plugin-api 类型)不随包发
+const ENGINE_SHIPPED = /^tangu-agent\/(?:(?:src|skills|agent-skills)\/|package\.json$)/
 
 export const VERDICTS = {
   none: '不用发版(只有文档 / 测试 / CI / 开发工具 / 插件接口类型)',
@@ -52,7 +54,7 @@ export function classify(paths, { tanguCfg, ctxCfg, depsChanged = false, desktop
     if (SCHEMA.includes(f)) g.schema.push(f)
     if (uiSet.has(f)) continue
     if (tooling.includes(f)) { g.notShipped.push(f); continue }
-    if (!hostSet.has(f)) { (f.startsWith('tangu-agent/') ? g.engine : g.notShipped).push(f); continue }
+    if (!hostSet.has(f)) { (ENGINE_SHIPPED.test(f) ? g.engine : g.notShipped).push(f); continue }
     const k = ['types', 'layer', 'needsSplit', 'writesUserData'].find((key) => sets[key].has(f))
     ;(k ? g[k] : g.host).push(f)
   }
@@ -90,7 +92,9 @@ export function reverseImports(files, ctxCfg) {
   for (const [f, src] of files) {
     if (inside.has(f) || boundary.EXEMPT.test(f) || /\.(test|spec)\.[cm]?[tj]sx?$/.test(f)) continue
     for (const m of boundary.stripComments(src).matchAll(boundary.IMPORT_RE)) {
-      const spec = m[1] || m[3] || m[4] || m[5] || m[6]
+      let spec = m[1] || m[3] || m[4] || m[5] || m[6]
+      // CSS 的 @import 'x.css' 不带 ./ 也是相对路径
+      if (m[5] && !/^(?:[./]|@\/|[a-z]+:)/i.test(spec)) spec = './' + spec
       const to = boundary.resolveIn(files, f, spec)
       if (to && layer.has(to) && !boundary.typeOnly(boundary.lastStmt(m[0]))) out.push({ from: f, to })
     }
@@ -176,6 +180,10 @@ function selftest() {
     }],
     ['any other host file → installer', () => assert.equal(v([`${P}chatBoxSurface.tsx`, 'desktop/frontend/src/amadeus/store/dbAggregateStore.ts']).verdict, 'installer')],
     ['contracts are host', () => assert.equal(v(['tangu-agent/src/contracts/events.ts']).verdict, 'installer')],
+    ['engine files outside the package need no release', () => {
+      assert.equal(v(['tangu-agent/scripts/pack-engine.mjs', 'tangu-agent/docs/x.md', 'tangu-agent/test/a.ts', 'tangu-agent/plugin-api/tangu-agent.d.ts']).verdict, 'none')
+      assert.equal(v(['tangu-agent/skills/code-review/SKILL.md']).verdict, 'tangu')
+    }],
     ['schema or engine deps → installer', () => {
       assert.equal(v(['tangu-agent/src/db/migrate.ts']).verdict, 'installer')
       assert.equal(v(['tangu-agent/src/agent.ts'], { depsChanged: true }).verdict, 'installer')
@@ -183,6 +191,7 @@ function selftest() {
     ['dev tooling, harness pages and type declarations do not count; the UI build script does', () => {
       assert.equal(v(['desktop/scripts/plugin-compat.check.cjs', 'desktop/frontend/src/views/harness.tsx', 'desktop/shared/x.d.ts', 'tangu-agent/src/a.ts']).verdict, 'tangu')
       assert.equal(v(['desktop/scripts/build-tangu-ui.mjs']).verdict, 'installer')
+      assert.equal(v(['desktop/scripts/build-unit-web.mjs']).verdict, 'installer')
     }],
     ['desktop/package.json counts only when its dependencies change', () => {
       assert.equal(v(['desktop/package.json', 'tangu-agent/src/a.ts']).verdict, 'tangu')
@@ -201,6 +210,10 @@ function selftest() {
         ['desktop/frontend/src/views/B.tsx', "import type { X } from '@/amadeus/plugins/chatBoxSurface'\n"],
       ])
       assert.deepEqual(reverseImports(files, ctxCfg), [{ from: 'desktop/frontend/src/views/A.tsx', to: `${P}chatBoxSurface.tsx` }])
+    }],
+    ['reverse imports: a bare CSS @import is relative', () => {
+      const files = new Map([[`${P}parts.css`, '.a{}\n'], ['desktop/frontend/src/amadeus/plugins/host.css', "@import 'parts.css';\n"]])
+      assert.deepEqual(reverseImports(files, { layer: [`${P}parts.css`] }), [{ from: `${P}host.css`, to: `${P}parts.css` }])
     }],
   ]
   let failed = 0
