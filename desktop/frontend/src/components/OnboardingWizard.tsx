@@ -48,8 +48,8 @@ const onboardingTarget = async () => {
   const c = await window.tangu.getConfig()
   return connectionTarget({ backendUrl: c.backendUrl, token: c.token, modelId: '' })
 }
-/** 本机有引擎和配置接口(桌面):才有开始 / 关于你 / 团队三屏。 */
-const onHost = (): boolean => !!PRODUCT.agentBackend && !!window.tangu?.getConfig
+/** 桌面本机(有本机环境探测 envCheck 的宿主)才有开始 / 关于你 / 团队三屏。网页 / 手机 / Unit 页的垫片也有 getConfig,不能拿它判。 */
+const onHost = (): boolean => !!PRODUCT.agentBackend && typeof window.tangu?.envCheck === 'function'
 const readKey = (key: string): string | null => {
   try { return localStorage.getItem(key) } catch { return null }
 }

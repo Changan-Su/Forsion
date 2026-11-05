@@ -70,7 +70,7 @@ beforeEach(() => {
   window.tangu = {
     getConfig: vi.fn().mockResolvedValue({ backendUrl: '', token: '', modelId: '' }), setConfig: vi.fn(),
     authStatus: vi.fn().mockResolvedValue({ loggedIn: false }), authProviders: vi.fn().mockResolvedValue([]), listProviders: vi.fn().mockResolvedValue([]),
-    forsionLogin: vi.fn(), platform: 'darwin',
+    forsionLogin: vi.fn(), platform: 'darwin', envCheck: vi.fn(),
   } as unknown as Window['tangu']
   HTMLDialogElement.prototype.showModal ??= function (this: HTMLDialogElement) { this.setAttribute('open', '') }
   HTMLDialogElement.prototype.close ??= function (this: HTMLDialogElement) { this.removeAttribute('open') }
@@ -335,8 +335,10 @@ it('help improve: greyed out until signed in', async () => {
   expect(invoke).not.toHaveBeenCalledWith('telemetry:set', expect.anything())
 })
 
-it('web, phone and desktops without an engine get only the appearance screen', async () => {
-  PRODUCT.agentBackend = false
+it.each(['no engine', 'web / phone shim'] as const)('%s: only the appearance screen', async (kind) => {
+  // 网页 / 手机的垫片也有 getConfig,只是没有本机环境探测
+  if (kind === 'no engine') PRODUCT.agentBackend = false
+  else delete (window.tangu as any).envCheck
   await render()
   expect(stepNow()).toBe('theme')
   expect(host.querySelector('.ob-skip')).toBeNull()
