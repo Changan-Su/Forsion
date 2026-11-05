@@ -519,7 +519,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     realtime: {
       endpoint: (model: string) => ({
         url: `${base.replace(/^http/, 'ws')}/api/brain/realtime?model=${encodeURIComponent(model)}&projectSource=tangu`,
-        headers: { Authorization: authHeaders().Authorization },
+        headers: { Authorization: authHeaders().Authorization, ...origin },
       }),
     },
     images: {

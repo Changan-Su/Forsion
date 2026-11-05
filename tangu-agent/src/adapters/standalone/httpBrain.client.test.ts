@@ -92,6 +92,15 @@ describe('httpBrain 上报宿主客户端与系统', () => {
     }
   })
 
+  it('实时语音的 WebSocket 握手也带这两个头', () => {
+    vi.stubEnv('TANGU_HOST_CLIENT', 'desktop/2.13.8')
+    const brain = createHttpBrain({ cloudUrl: 'http://127.0.0.1:1', token: 't' })
+    const ep = brain.realtime!.endpoint('qwen-omni')
+    expect(ep.headers['X-Forsion-Client']).toBe('desktop/2.13.8')
+    expect(ep.headers.Authorization).toBe('Bearer t')
+    expect(ep.headers['Content-Type']).toBeUndefined()
+  })
+
   it('没有宿主(云端节点 / 命令行):两个头都不发', async () => {
     vi.stubEnv('TANGU_HOST_CLIENT', '')
     const heads: Record<string, http.IncomingHttpHeaders> = {}
