@@ -22,6 +22,8 @@ export function contentSyncOwned(account:string|null):boolean {
 export function mergeSyncContent(path:string,ours:string,base:string|null,theirs:string,memoryBase?:string):{content:string;conflict:boolean}|null {
   const agent=parseAgentContentPath(path)
   if(agent){
+    // 记忆仓库提交到一半:盘上那份 MEMORY.md 是旧的,照它合出来的会先传上云(落盘那道检查在上传之后)。这一轮先不合,调用方记错、下一轮再来
+    if(memoryBase&&agent.rel==='MEMORY.md'&&(agent.area==='human'||agent.slug&&validAgentSyncSlug(agent.slug)))refuseMidCommit(agent.area==='human'?join(memoryBase,'human'):join(memoryBase,'agents',agent.slug!))
     const merged=mergeAgentSyncContent(path,ours,base,theirs,{diff3:diff3Merge})
     if(!merged||!memoryBase||agent.area!=='agents'||!agent.slug||agent.rel!=='MEMORY.md'||!validAgentSyncSlug(agent.slug))return merged
     const forgotten=localTombstones(join(memoryBase,'agents',agent.slug))

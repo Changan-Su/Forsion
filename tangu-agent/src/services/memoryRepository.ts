@@ -293,15 +293,19 @@ export function createMemoryRepository(baseDir: string) {
    * 云同步落到盘上的墓碑(新同步下载 / 宿主投影的 .memory-tombstones.json):仓库里没有的并进来,记忆跟着滤(2026-11-05,
    * 新同步不再经引擎提交,别的设备忘掉的事实靠这里进仓库)。读不到 / 读不懂当没有这份:只会少滤,不会多删,也不改写那个文件。
    */
-  function importProjection(s: MemoryState): MemoryState {
+  function withProjection(tombstones: MemoryTombstone[]): MemoryTombstone[] {
     let raw: string | null;
-    try { raw = readMemoryFile(baseDir, projectionFile); } catch { return s; }
+    try { raw = readMemoryFile(baseDir, projectionFile); } catch { return tombstones; }
     const wire = raw === null ? null : parseTombstones(raw);
-    if (!wire?.length) return s;
+    if (!wire?.length) return tombstones;
     let incoming: MemoryTombstone[];
-    try { incoming = validateMemoryTombstones(wire); } catch { return s; }
-    const merged = mergeTombstoneLists(s.tombstones, incoming) as MemoryTombstone[];
-    if (sameTombstones(merged, s.tombstones)) return s;
+    try { incoming = validateMemoryTombstones(wire); } catch { return tombstones; }
+    const merged = mergeTombstoneLists(tombstones, incoming) as MemoryTombstone[];
+    return sameTombstones(merged, tombstones) ? tombstones : merged;
+  }
+  function importProjection(s: MemoryState): MemoryState {
+    const merged = withProjection(s.tombstones);
+    if (merged === s.tombstones) return s;
     s.tombstones = merged;
     return persist(nextState(s, filterForgottenMemory(s.content, merged), { kind: 'sync' }), s.content);
   }
@@ -327,6 +331,8 @@ export function createMemoryRepository(baseDir: string) {
     }
     if (markdown === null) fail('MEMORY.md disappeared while metadata exists; refusing to treat this as empty memory.');
     if (markdown !== s.content) {
+      // 外部改的(多半是同步刚落下的那份)先按并上盘上墓碑之后的口径滤:别的设备「恢复」了的事实不能被本机旧的「忘掉」滤掉
+      s.tombstones = withProjection(s.tombstones);
       const filtered = filterForgottenMemory(markdown, s.tombstones);
       return persist(nextState(s, filtered, { kind: 'external-edit' }), markdown);
     }

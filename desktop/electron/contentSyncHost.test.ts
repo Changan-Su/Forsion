@@ -78,6 +78,8 @@ describe('agent files on the new sync use the same rules and memory repository a
   const dir=join(home,'agents','xyra'),repo=createMemoryRepository(dir);repo.add('- a')
   const state=JSON.parse(readFileSync(join(dir,'.memory-state.json'),'utf8'));writeFileSync(join(dir,'.memory-state.json'),JSON.stringify({...state,projectionPending:true}))
   let wrote=false;await expect(withContentWriteLock(join(dir,'MEMORY.md'),home,()=>{wrote=true})).rejects.toThrow('finishing a commit');expect(wrote).toBe(false)
+  // 合并在上传之前:这时就拒,别拿盘上旧的那份合出来先传上云
+  expect(()=>mergeSyncContent('agents/xyra/MEMORY.md','- a\n','- a\n','- a\n- b\n',home)).toThrow('finishing a commit')
   await withContentWriteLock(join(dir,'config.toml'),home,()=>{wrote=true});expect(wrote).toBe(true)
   writeFileSync(join(dir,'.memory-state.json'),JSON.stringify(state));wrote=false
   await withContentWriteLock(join(dir,'MEMORY.md'),home,()=>{wrote=true});expect(wrote).toBe(true)
