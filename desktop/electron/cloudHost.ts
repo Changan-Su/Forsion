@@ -38,10 +38,9 @@ export interface CloudHost {
     merge(path:string,ours:string,base:string|null,theirs:string): {content:string;conflict:boolean}|null
     withWriteLock(path:string|string[],commit:()=>void): Promise<void>
     trash(path:string): Promise<void>
-    /** 2.13.8 起:Agent 文件夹(agents/、human/)的记忆仓库提交、墓碑投影与旧同步影子(contentSyncHost.agentContentHooks)。老宿主没有 → Extend 照旧整份写。 */
+    /** 2.13.8 起:Agent 文件夹(agents/、human/)的墓碑投影与旧同步影子(contentSyncHost.agentContentHooks)。老宿主没有 → 没有投影、没有基线。 */
     agentFiles?: {
       prepare(): Promise<void>
-      commit(path:string,bytes:Buffer,expected:string|null,guard:()=>void): Promise<boolean>
       baseline(path:string): Promise<{seq:number;hash:string;base?:string;pending:boolean}|null>
     }
   }

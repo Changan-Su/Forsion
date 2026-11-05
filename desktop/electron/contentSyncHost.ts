@@ -1,15 +1,13 @@
 import { readFileSync,existsSync,mkdirSync,writeFileSync,renameSync,realpathSync,openSync,closeSync,unlinkSync,lstatSync,readdirSync,constants } from 'node:fs'
 import { createHash } from 'node:crypto'
-import { join,relative,sep } from 'node:path'
+import { basename,dirname,join,relative,sep } from 'node:path'
 import { diff3Merge } from 'node-diff3'
 import { withDbLock } from './amadeus/fs/dbLock'
 import { withTextWriteLock } from './amadeus/fs/vaultHandlers'
 import { forsionHomeDir } from './forsionHome'
 import { mergeDbFile } from '../../tangu-agent/src/contracts/dbRowMerge'
 import { mergeText3With,splitLogBlocks,mergeBlocks,mergeLogHeaders } from '../../tangu-agent/src/contracts/contentMerge'
-import { agentSlugLocalOnly,mergeAgentSyncContent,parseAgentContentPath,parseTombstones,serializeTombstones,validAgentSyncSlug,MEMORY_TOMBSTONES } from '../../tangu-agent/src/contracts/agentSyncRules'
-// Agent 记忆仓库只引了 node 内置模块:新同步落 MEMORY.md / 墓碑时走同一个仓库提交(版本、墓碑过滤),锁也用它那把(可重入)
-import { atomicWriteMemoryFile,createMemoryRepository,filterForgottenMemory,readMemoryFile,validateMemoryTombstones,withMemoryDirectoryLock,type MemoryTombstone } from '../../tangu-agent/src/services/memoryRepository'
+import { agentSlugLocalOnly,dropForgottenFacts,mergeAgentSyncContent,mergeTombstoneLists,parseAgentContentPath,parseTombstones,sameTombstones,serializeTombstones,validAgentSyncSlug,MEMORY_TOMBSTONES,type WireTombstone } from '../../tangu-agent/src/contracts/agentSyncRules'
 const mergeText3=(ours:string,base:string,theirs:string)=>mergeText3With(ours,base,theirs,diff3Merge)
 const sha256=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex')
 
@@ -27,7 +25,7 @@ export function mergeSyncContent(path:string,ours:string,base:string|null,theirs
     const merged=mergeAgentSyncContent(path,ours,base,theirs,{diff3:diff3Merge})
     if(!merged||!memoryBase||agent.area!=='agents'||!agent.slug||agent.rel!=='MEMORY.md'||!validAgentSyncSlug(agent.slug))return merged
     const forgotten=localTombstones(join(memoryBase,'agents',agent.slug))
-    return forgotten.length?{...merged,content:filterForgottenMemory(merged.content,forgotten)}:merged
+    return forgotten.length?{...merged,content:dropForgottenFacts(merged.content,forgotten,sha256)}:merged
   }
   if(path.toLowerCase().endsWith('.db'))return mergeDbFile(ours,base,theirs,{fieldColumns:/(^|\/)WidgetData\/[^/]+\/data\.db$/.test(path)})
   if(/\/LOG\/\d{4}-\d{2}-\d{2}\.md$/.test(path)){
@@ -41,7 +39,10 @@ export function mergeSyncContent(path:string,ours:string,base:string|null,theirs
 export async function withContentWriteLock(abs:string|string[],memoryBase:string,commit:()=>void):Promise<void>{
   const paths=[...new Set(typeof abs==='string'?[abs]:abs)].sort()
   const bases=[...new Set(paths.flatMap(p=>{const rel=relative(memoryBase,p).split(sep),base=rel[0]==='human'?join(memoryBase,'human'):rel[0]==='agents'&&rel[1]?join(memoryBase,'agents',rel[1]):null;return base&&existsSync(base)?[base]:[]}))].sort()
-  const memory=()=>bases.reduceRight<()=>void>((next,base)=>()=>withContentMemoryLock(base,next),commit)()
+  // 记忆仓库提交到一半断了(状态写了、MEMORY.md 还没换):这时盘上那份是旧的,照它合出来的写下去,引擎下次读会判成要人工恢复。
+  // 先不写,等引擎自己补完那半(它下次读记忆时就补),下一轮重读重合
+  const memoryFiles=paths.filter(p=>basename(p)==='MEMORY.md'&&bases.includes(dirname(p)))
+  const memory=()=>bases.reduceRight<()=>void>((next,base)=>()=>withContentMemoryLock(base,next),()=>{for(const p of memoryFiles)refuseMidCommit(dirname(p));commit()})()
   const databases=paths.filter(p=>/\.db$/i.test(p)&&!bases.some(b=>p.startsWith(b+sep)))
   const db=()=>databases.reduceRight<()=>Promise<void>>((next,p)=>()=>withDbLock(p,next),async()=>memory())()
   await paths.reduceRight<()=>Promise<void>>((next,p)=>()=>withTextWriteLock(p,next),db)()
@@ -62,6 +63,10 @@ export function setOfflineContentOwner(memoryBase:string,identity:string,owned:b
 
 /** Mirrors the engine's .memory.lock protocol, like the existing dbLock host
  * adapter. Keep filename, exclusive/no-follow flags and fail-on-busy semantics aligned. */
+function atomicWrite(abs:string,text:string):void{
+  if(existsSync(abs)&&!lstatSync(abs).isFile())throw Error('Not a regular file')
+  const temp=abs+`.tmp-${process.pid}-${Date.now()}`;writeFileSync(temp,text,{mode:0o600});renameSync(temp,abs)
+}
 function withContentMemoryLock<T>(base:string,fn:()=>T):T{
   mkdirSync(base,{recursive:true});const root=realpathSync(base),lock=join(root,'.memory.lock');let fd:number
   try{fd=openSync(lock,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY|constants.O_NOFOLLOW,0o600)}
@@ -70,80 +75,55 @@ function withContentMemoryLock<T>(base:string,fn:()=>T):T{
   finally{closeSync(fd);unlinkSync(lock)}
 }
 
-/** 这台已知的墓碑:记忆仓库里的 + 已经落到盘上的 .memory-tombstones.json。只读,读不到 / 坏了当没有(只用来多滤几行)。 */
-function localTombstones(dir:string):MemoryTombstone[]{
-  const out:MemoryTombstone[]=[]
-  try{const state=JSON.parse(readFileSync(join(dir,'.memory-state.json'),'utf8'));if(Array.isArray(state?.tombstones))out.push(...state.tombstones)}catch{}
-  try{out.push(...(parseTombstones(readFileSync(join(dir,MEMORY_TOMBSTONES),'utf8'))??[]))}catch{}
-  return out.filter(t=>t&&typeof t.fingerprint==='string'&&Number.isFinite(t.forgottenAt))
+function refuseMidCommit(dir:string):void{
+  let raw:string;try{raw=readFileSync(join(dir,'.memory-state.json'),'utf8')}catch(e:any){if(e?.code==='ENOENT')return;throw e}
+  let pending:unknown;try{pending=JSON.parse(raw)?.projectionPending}catch{throw Error('Memory state unreadable; retry after the engine opens it')}
+  if(pending!==false)throw Error('Memory is finishing a commit; retry next round')
+}
+/** 记忆仓库(.memory-state.json)里的墓碑:没有仓库 = [];读不了 / 坏了 = null(不知道)。 */
+function stateTombstones(dir:string):WireTombstone[]|null{
+  let raw:string;try{raw=readFileSync(join(dir,'.memory-state.json'),'utf8')}catch(e:any){return e?.code==='ENOENT'?[]:null}
+  try{const t=JSON.parse(raw)?.tombstones;return Array.isArray(t)?parseTombstones(JSON.stringify({schemaVersion:1,tombstones:t})):null}catch{return null}
+}
+/** 盘上的投影 .memory-tombstones.json:没有 = [];读不了 / 坏了 = null。 */
+function diskTombstones(dir:string):WireTombstone[]|null{
+  let raw:string;try{raw=readFileSync(join(dir,MEMORY_TOMBSTONES),'utf8')}catch(e:any){return e?.code==='ENOENT'?[]:null}
+  return parseTombstones(raw)
+}
+/** 这台已知的墓碑:仓库里的并上盘上的(同一条取较晚的那次、恢复时间取最晚,和引擎同一个口径)。读不到的那份当没有:只用来多滤几行。 */
+function localTombstones(dir:string):WireTombstone[]{
+  return mergeTombstoneLists(stateTombstones(dir)??[],diskTombstones(dir)??[])
 }
 
 /**
- * 新同步(Forsion Extend contentSync)对 Agent 文件夹多要的三件事(2026-11-05,方案 ⑤ 第 1–3 步)。老 Extend 不认这些成员,照旧整份写。
- * - prepare:每轮扫描前,把每个 Agent 记忆仓库里的墓碑投影成 agents/<slug>/.memory-tombstones.json(和旧同步上传的字节一样),
- *   新同步才看得见、传得上去;盘上已有的(别的设备传下来的)先并进仓库。
- * - commit:MEMORY.md 落盘走记忆仓库提交(留版本、按墓碑滤),墓碑文件落盘先并进仓库再写投影。别的路径返回 false,调用方照常写。
+ * 新同步(Forsion Extend contentSync)对 Agent 文件夹多要的两件事(2026-11-05,方案 ⑤ 第 1–3 步)。老 Extend 不认这些成员。
+ * - prepare:每轮扫描前,把每个 Agent 记忆仓库里的墓碑并进 agents/<slug>/.memory-tombstones.json(和旧同步上传的字节一样),
+ *   新同步才看得见、传得上去。盘上已有的(别的设备传下来的)由引擎的记忆仓库下次读时并进去,这里不碰仓库、不拿记忆锁
+ *   (引擎的 remember 撞上锁直接报错,不重试)。MEMORY.md 本身照常经 withContentWriteLock 落盘,引擎按外部修改收下、按墓碑滤。
  * - baseline:第一次接手账号时,旧同步(引擎 agentFileSync)记下的影子 .cloudsync-<账号>.json:本机没改过就直接拉云端,可合并文件拿它的原文当基线。
+ * 宿主只引契约目录(check:tanguboundary):记忆仓库的文件格式在这里只读,写只写投影那一个文件。
  */
 export interface AgentFileBaseline { seq:number; hash:string; base?:string; pending:boolean }
 export function agentContentHooks(memoryBase:string,identity:()=>string|null){
   const agentsRoot=join(memoryBase,'agents')
-  const agentDir=(path:string):{dir:string;rel:string}|null=>{
-    const at=parseAgentContentPath(path)
-    if(!at||at.area!=='agents'||!at.slug||!validAgentSyncSlug(at.slug)||agentSlugLocalOnly(at.slug))return null
-    return {dir:join(agentsRoot,at.slug),rel:at.rel}
-  }
-  const project=(dir:string):void=>{
-    const repo=createMemoryRepository(dir),disk=readMemoryFile(dir,MEMORY_TOMBSTONES)
-    if(disk!==null){const incoming=parseTombstones(disk);if(!incoming)throw Error('Invalid memory tombstones file');repo.mergeTombstones(validateMemoryTombstones(incoming))}
-    const tombstones=repo.snapshot().tombstones
-    if(!tombstones.length&&disk===null)return
-    const want=serializeTombstones(tombstones)
-    if(disk!==want)atomicWriteMemoryFile(dir,MEMORY_TOMBSTONES,want)
-  }
-  /** 不拿锁先看一眼:仓库里的墓碑和盘上的投影一样就不用动。读不懂的(坏了、读失败)交给拿锁那条路去报。 */
-  const projectionStale=(dir:string):boolean=>{
-    let disk:string|null=null
-    try{disk=readFileSync(join(dir,MEMORY_TOMBSTONES),'utf8')}catch(e:any){if(e?.code!=='ENOENT')return true}
-    let state:any=null
-    try{state=JSON.parse(readFileSync(join(dir,'.memory-state.json'),'utf8'))}catch(e:any){if(e?.code!=='ENOENT')return true}
-    const tombstones=Array.isArray(state?.tombstones)?state.tombstones:[]
-    return disk===null?tombstones.length>0:disk!==serializeTombstones(tombstones)
+  /** 要写的投影;不用写 / 拿不准(读不了、坏了)= null。盘上那份已经包含仓库里的全部(语义上)就不写,省得每轮重传。 */
+  const projection=(dir:string):string|null=>{
+    const state=stateTombstones(dir),disk=diskTombstones(dir)
+    if(!state||!disk)return null
+    const merged=mergeTombstoneLists(state,disk)
+    return merged.length&&!sameTombstones(merged,disk)?serializeTombstones(merged):null
   }
   return {
     async prepare():Promise<void>{
       let names:string[]=[];try{names=readdirSync(agentsRoot)}catch{return}
       for(const slug of names){
         if(!validAgentSyncSlug(slug)||agentSlugLocalOnly(slug))continue
-        const dir=join(agentsRoot,slug)
+        const dir=join(agentsRoot,slug),abs=join(dir,MEMORY_TOMBSTONES)
         try{
-          if(!lstatSync(dir).isDirectory()||!projectionStale(dir))continue // 平常什么都没变:不碰锁(引擎的 remember 撞上锁会直接报错,不重试)
-          withMemoryDirectoryLock(dir,()=>project(dir))
-        }catch(e){console.warn('[content-sync] memory tombstones not projected:',slug,e instanceof Error?e.message:e)} // 引擎正拿着锁 / 仓库坏了:这一轮先不传它的墓碑
+          if(!lstatSync(dir).isDirectory()||projection(dir)===null)continue
+          await withTextWriteLock(abs,async()=>{const want=projection(dir);if(want!==null)atomicWrite(abs,want)}) // 和新同步落这个文件同一把锁
+        }catch(e){console.warn('[content-sync] memory tombstones not projected:',slug,e instanceof Error?e.message:e)}
       }
-    },
-    async commit(path:string,bytes:Buffer,expected:string|null,guard:()=>void):Promise<boolean>{
-      const at=agentDir(path);if(!at||(at.rel!=='MEMORY.md'&&at.rel!==MEMORY_TOMBSTONES))return false
-      const abs=join(at.dir,at.rel)
-      await withTextWriteLock(abs,async()=>{
-        withMemoryDirectoryLock(at.dir,()=>{
-          guard()
-          const current=readMemoryFile(at.dir,at.rel)
-          if((current===null?null:sha256(Buffer.from(current)))!==expected)throw Error('Local file changed during download')
-          const repo=createMemoryRepository(at.dir)
-          if(at.rel==='MEMORY.md'){
-            const text=bytes.toString('utf8');if(!Buffer.from(text).equals(bytes))throw Error('MEMORY.md is not UTF-8 text')
-            // 仓库读到的得和合并时读的那份一样(上次提交中途断了、外部改过的,load 会先改写一遍):不一样就这轮不落,下一轮重读重合
-            const snap=repo.snapshot();if(snap.content!==(current??''))throw Error('Local file changed during download')
-            repo.commit({expectedVersion:snap.version,content:text,source:{kind:'sync'}})
-          }else{
-            const incoming=parseTombstones(bytes.toString('utf8'));if(!incoming)throw Error('Invalid memory tombstones file')
-            repo.mergeTombstones(validateMemoryTombstones(incoming))
-            atomicWriteMemoryFile(at.dir,MEMORY_TOMBSTONES,serializeTombstones(repo.snapshot().tombstones))
-          }
-        })
-      })
-      return true
     },
     async baseline(path:string):Promise<AgentFileBaseline|null>{
       const id=identity(),split=id?.lastIndexOf('::')??-1;if(!id||split<0)return null

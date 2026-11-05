@@ -6,7 +6,7 @@ import {join} from 'node:path'
 vi.mock('./amadeus/fs/vaultHandlers',()=>({withTextWriteLock:async(_p:string,fn:()=>Promise<void>)=>fn()}))
 import {setOfflineContentOwner,mergeSyncContent,withContentWriteLock,agentContentHooks} from './contentSyncHost'
 import {createMemoryRepository} from '../../tangu-agent/src/services/memoryRepository'
-import {parseTombstones,serializeTombstones} from '../../tangu-agent/src/contracts/agentSyncRules'
+import {mergeTombstoneLists,parseTombstones,serializeTombstones} from '../../tangu-agent/src/contracts/agentSyncRules'
 import {cloudAccountScope,agentSyncDefault,setAgentSyncDefault} from '../../tangu-agent/src/services/cloudSyncAccount'
 let home:string,prev:string|undefined
 beforeEach(()=>{home=mkdtempSync(join(tmpdir(),'forsion-sync-host-'));prev=process.env.TANGU_HOME;process.env.TANGU_HOME=home})
@@ -42,37 +42,45 @@ describe('agent files on the new sync use the same rules and memory repository a
   // 有基线:两台各记一条,不出副本
   expect(mergeSyncContent('agents/xyra/MEMORY.md','- a\n- mac\n','- a\n','- a\n- win\n')).toEqual({content:'- a\n- mac\n- win\n',conflict:false})
  })
- it('commit writes MEMORY.md through the repository and imports tombstones before projecting them',async()=>{
-  const dir=join(home,'agents','xyra');const repo=createMemoryRepository(dir);repo.add('- keep');repo.add('- gone')
-  const hooks=agentContentHooks(home,()=>null),sha=(s:string)=>createHash('sha256').update(s).digest('hex')
-  const before=repo.snapshot()
-  expect(await hooks.commit('agents/xyra/MEMORY.md',Buffer.from('- keep\n- gone\n- from cloud\n'),sha(readFileSync(join(dir,'MEMORY.md'),'utf8')),()=>{})).toBe(true)
-  const after=repo.snapshot();expect(after.version).not.toBe(before.version);expect(after.content).toContain('from cloud')
-  // 别的设备忘了「gone」:墓碑文件落盘 → 并进仓库 → 记忆里那条跟着滤掉,投影照旧同步格式
-  const other=createMemoryRepository(join(home,'agents','other'));other.add('- gone');other.forget(other.snapshot().entries[0].id)
-  const wire=serializeTombstones(other.snapshot().tombstones)
-  expect(await hooks.commit('agents/xyra/.memory-tombstones.json',Buffer.from(wire),null,()=>{})).toBe(true)
-  expect(repo.snapshot().content).not.toContain('gone');expect(readFileSync(join(dir,'.memory-tombstones.json'),'utf8')).toBe(wire)
-  // 本机新忘的一条:prepare 投影到盘上,新同步扫描时就能传上去
-  repo.forget(repo.snapshot().entries.find(e=>e.content.includes('keep'))!.id);await hooks.prepare()
-  expect(parseTombstones(readFileSync(join(dir,'.memory-tombstones.json'),'utf8'))!.length).toBe(2)
-  expect(await hooks.commit('agents/xyra/config.toml',Buffer.from('x'),null,()=>{})).toBe(false)
-  expect(await hooks.commit('agents/muse/MEMORY.md',Buffer.from('x'),null,()=>{})).toBe(false)
-  // 写的时候本机又改了:不落盘
-  await expect(hooks.commit('agents/xyra/MEMORY.md',Buffer.from('- x\n'),sha('stale'),()=>{})).rejects.toThrow('changed')
-  // 编辑器里直接改过的:仓库读时先收下,合并看到的就是这份,照常提交
-  const disk=readFileSync(join(dir,'MEMORY.md'),'utf8')+'- typed in an editor\n';writeFileSync(join(dir,'MEMORY.md'),disk)
-  expect(await hooks.commit('agents/xyra/MEMORY.md',Buffer.from(disk+'- merged\n'),sha(disk),()=>{})).toBe(true)
-  expect(repo.snapshot().content).toContain('typed in an editor')
+ it('a restoration beats an older forget of the same fact when filtering a merge',()=>{
+  const dir=join(home,'agents','xyra'),repo=createMemoryRepository(dir);repo.add('- 养了一只猫');repo.forget(repo.snapshot().entries[0].id)
+  const forgotten=repo.snapshot().tombstones[0]
+  // 仓库里那条后来恢复了(时间 200),盘上的投影还停在「100 忘掉」:不能拿旧的那条把恢复的事实滤掉
+  const state=JSON.parse(readFileSync(join(dir,'.memory-state.json'),'utf8'));state.tombstones=[{...forgotten,forgottenAt:100,restoredAt:200}]
+  writeFileSync(join(dir,'.memory-state.json'),JSON.stringify(state));writeFileSync(join(dir,'.memory-tombstones.json'),serializeTombstones([{...forgotten,forgottenAt:100}]))
+  expect(mergeSyncContent('agents/xyra/MEMORY.md','- a\n- 养了一只猫\n','- a\n','- a\n- win\n',home)!.content).toContain('养了一只猫')
  })
- it('prepare leaves the memory lock alone when nothing needs projecting',async()=>{
+ it('prepare projects local forgets for upload, and the engine takes the downloaded ones in on its next read',async()=>{
+  const dir=join(home,'agents','xyra'),repo=createMemoryRepository(dir);repo.add('- keep');repo.add('- gone');repo.add('- mine')
+  const hooks=agentContentHooks(home,()=>null)
+  repo.forget(repo.snapshot().entries.find(e=>e.content.includes('mine'))!.id);await hooks.prepare()
+  expect(parseTombstones(readFileSync(join(dir,'.memory-tombstones.json'),'utf8'))!.map(t=>t.content)).toEqual(['- mine'])
+  // 别的设备忘了「gone」:新同步把并好的投影落到盘上(这里直接写),引擎下次读记忆时并进仓库、记忆里那条跟着滤掉
+  const other=createMemoryRepository(join(home,'agents','other'));other.add('- gone');other.forget(other.snapshot().entries[0].id)
+  const both=mergeTombstoneLists(repo.snapshot().tombstones,other.snapshot().tombstones)
+  writeFileSync(join(dir,'.memory-tombstones.json'),serializeTombstones(both))
+  const after=repo.snapshot();expect(after.content).not.toContain('gone');expect(after.tombstones.length).toBe(2)
+  // 并好之后再读、再 prepare:什么都不动(不重写投影、不涨版本)
+  const before=readFileSync(join(dir,'.memory-tombstones.json'),'utf8');await hooks.prepare()
+  expect(readFileSync(join(dir,'.memory-tombstones.json'),'utf8')).toBe(before);expect(repo.snapshot().version).toBe(after.version)
+  // 坏掉的投影:不改写、也不当成「没有」
+  writeFileSync(join(dir,'.memory-tombstones.json'),'{broken');await hooks.prepare();expect(readFileSync(join(dir,'.memory-tombstones.json'),'utf8')).toBe('{broken')
+  expect(repo.snapshot().tombstones.length).toBe(2)
+ })
+ it('prepare never takes the memory lock',async()=>{
   const dir=join(home,'agents','quiet');const repo=createMemoryRepository(dir);repo.add('- a');repo.forget(repo.snapshot().entries[0].id)
-  const hooks=agentContentHooks(home,()=>null);await hooks.prepare()
-  const projected=readFileSync(join(dir,'.memory-tombstones.json'),'utf8')
-  // 引擎正拿着锁记东西:平常这一轮什么都没变,不该撞锁(remember 撞上锁不重试)
+  // 引擎正拿着锁记东西(remember 撞上锁不重试):投影照写,锁原样
   writeFileSync(join(dir,'.memory.lock'),'engine');const warn=vi.spyOn(console,'warn').mockImplementation(()=>{})
-  await hooks.prepare();expect(warn).not.toHaveBeenCalled();expect(readFileSync(join(dir,'.memory.lock'),'utf8')).toBe('engine')
-  expect(readFileSync(join(dir,'.memory-tombstones.json'),'utf8')).toBe(projected);warn.mockRestore();rmSync(join(dir,'.memory.lock'))
+  await agentContentHooks(home,()=>null).prepare();expect(warn).not.toHaveBeenCalled();expect(readFileSync(join(dir,'.memory.lock'),'utf8')).toBe('engine')
+  expect(parseTombstones(readFileSync(join(dir,'.memory-tombstones.json'),'utf8'))!.length).toBe(1);warn.mockRestore();rmSync(join(dir,'.memory.lock'))
+ })
+ it('does not write MEMORY.md over a memory commit that stopped half way',async()=>{
+  const dir=join(home,'agents','xyra'),repo=createMemoryRepository(dir);repo.add('- a')
+  const state=JSON.parse(readFileSync(join(dir,'.memory-state.json'),'utf8'));writeFileSync(join(dir,'.memory-state.json'),JSON.stringify({...state,projectionPending:true}))
+  let wrote=false;await expect(withContentWriteLock(join(dir,'MEMORY.md'),home,()=>{wrote=true})).rejects.toThrow('finishing a commit');expect(wrote).toBe(false)
+  await withContentWriteLock(join(dir,'config.toml'),home,()=>{wrote=true});expect(wrote).toBe(true)
+  writeFileSync(join(dir,'.memory-state.json'),JSON.stringify(state));wrote=false
+  await withContentWriteLock(join(dir,'MEMORY.md'),home,()=>{wrote=true});expect(wrote).toBe(true)
  })
  it('reads the engine sync shadow of the same account as the first baseline',async()=>{
   const dir=join(home,'agents','christen');mkdirSync(dir,{recursive:true})

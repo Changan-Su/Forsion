@@ -10,7 +10,7 @@
  */
 import { mergeDbFile, unionLines } from './dbRowMerge.js';
 import { mergeText3With, splitLogBlocks, mergeBlocks, mergeLogHeaders } from './contentMerge.js';
-import { LEGACY_PERSONAS, LEGACY_PERSONA_PROMPTS_ZH } from '../agents/legacyPersonas.js';
+import { LEGACY_PERSONAS, LEGACY_PERSONA_PROMPTS_ZH } from './legacyPersonas.js';
 
 // ── 路径:哪些上云 ─────────────────────────────────────────────────────────────
 
@@ -201,6 +201,25 @@ export function mergeTombstoneLists(ours: readonly WireTombstone[], theirs: read
     merged.set(t.fingerprint, prev ? { ...winner, ...(prev.restoredAt || t.restoredAt ? { restoredAt: Math.max(prev.restoredAt ?? 0, t.restoredAt ?? 0) } : {}), evidenceIds: [...new Set([...prev.evidenceIds, ...t.evidenceIds])].sort() } : t);
   }
   return [...merged.values()].sort((a, b) => a.fingerprint.localeCompare(b.fingerprint));
+}
+/** 两份墓碑说的是不是同一件事(不看键序、证据顺序):投影 / 导入只在真有新内容时才落盘,不然每轮重写一遍、来回推。 */
+export function sameTombstones(a: readonly WireTombstone[], b: readonly WireTombstone[]): boolean {
+  const key = (l: readonly WireTombstone[]): string => JSON.stringify([...l].sort((x, y) => x.fingerprint.localeCompare(y.fingerprint))
+    .map((t) => [t.fingerprint, t.id, t.content, t.forgottenAt, t.restoredAt ?? null, [...t.evidenceIds].sort()]));
+  return key(a) === key(b);
+}
+/** 事实行的身份:去掉列表符号、压空白、小写。记忆仓库的指纹 = sha256(这个),引擎和宿主同一份。 */
+export function normalizeMemoryFact(fact: string): string {
+  return fact.trim().replace(/^[-*+]\s+/, '').replace(/\s+/g, ' ').toLowerCase();
+}
+export function isMemoryTombstoneActive(tombstone: { forgottenAt: number; restoredAt?: number }): boolean {
+  return tombstone.forgottenAt >= (tombstone.restoredAt ?? 0);
+}
+/** 按墓碑滤掉忘掉的事实行(只按指纹;按证据那半在记忆仓库里)。sha256 由调用方给:契约不引 node 内置模块。 */
+export function dropForgottenFacts(content: string, tombstones: readonly WireTombstone[], sha256: (text: string) => string): string {
+  const hashes = new Set(tombstones.filter(isMemoryTombstoneActive).map((t) => t.fingerprint));
+  if (!hashes.size) return content;
+  return content.split('\n').filter((line) => !hashes.has(sha256(normalizeMemoryFact(line)))).join('\n');
 }
 
 /** config.toml 里顶层的 `key = 值` 一行一个;多行字符串、表头这类看不懂的返回 null(就不按出厂认)。 */
