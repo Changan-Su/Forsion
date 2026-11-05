@@ -12,7 +12,7 @@ import type { SecretStorageStatus } from '../shared/secretStorage' // P1-K5
 import type { RemoteSessionsApi, RemoteSessionsView } from '../shared/remoteSessions' // P1-K4
 import type { RemoteSafetyApi, RemoteSafetyState } from '../shared/remoteSafety' // P1-K2
 import { APPROVAL_OPEN_CHANNEL, type ApprovalOpenPayload } from '../shared/approvalOpen' // P1-K3
-import { UI_LOCALE_CHANNEL } from '../shared/uiSync' // P1-KF
+import { UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync' // P1-KF
 import { PRODUCT } from './product'
 import { cloudPresent } from './cloudPresent'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
@@ -591,6 +591,8 @@ const api = {
   },
   // P1-KF:本窗**生效**界面语言(i18n.tsx 四级链的结论)→ 主进程文案(托盘 / 系统通知 / 对话框)。单向,主进程只认 zh/en。
   reportUiLocale: (locale: 'zh' | 'en'): void => ipcRenderer.send(UI_LOCALE_CHANNEL, locale),
+  /** 本机外观(主题色 / 背景色 / 明暗)→ 主进程,给已配对的 Forsion Clip 跟随。单向。 */
+  reportUiAppearance: (a: { skin: string; bg: string; mode: 'light' | 'dark' }): void => ipcRenderer.send(UI_APPEARANCE_CHANNEL, a),
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   /** Mini 卡片自绘缩放边:edge = n / s / e / w 的组合;start = 起手;null = 松手。位移由主进程读光标算。 */
   miniResize: (edge: string | null, start?: boolean, cursor?: { x: number; y: number; radius?: number }): void => ipcRenderer.send('window:miniResize', edge, start === true, cursor),

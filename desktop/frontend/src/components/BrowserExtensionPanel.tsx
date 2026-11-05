@@ -21,7 +21,7 @@ registerMessages({
   'settings.browserExt.portBusy': { zh: '端口 {port} 不可用：{error}', en: 'Port {port} is unavailable: {error}' },
   'settings.browserExt.unavailable': { zh: '当前引擎不支持浏览器扩展（需要本机引擎）。', en: 'The current engine does not support the browser extension (a local engine is required).' },
   'settings.browserExt.code': { zh: '连接码', en: 'Connect code' },
-  'settings.browserExt.codeHint': { zh: '粘贴到 Forsion Clip 的设置 ›「桌面联动与 MCP」，只需要一次。', en: 'Paste it into Forsion Clip settings › Desktop & MCP. You only need to do this once.' },
+  'settings.browserExt.codeHint': { zh: '粘贴到 Forsion Clip 的设置 ›「连接」›「高级」，只需要一次。', en: 'Paste it into Forsion Clip settings › Connection › Advanced. You only need to do this once.' },
   'settings.browserExt.manual': { zh: '手动配对', en: 'Pair manually' },
   'settings.browserExt.manualHint': { zh: '用连接码配对浏览器控制，外部引擎或连不上时用。', en: 'Pair browser control with a connect code, for an external engine or if it can’t connect.' },
   'settings.browserExt.show': { zh: '展开', en: 'Show' },
@@ -48,12 +48,12 @@ registerMessages({
     en: 'Drag “Forsion Clip” below onto the extensions page. If that doesn’t work, click “Load unpacked” and choose the extension folder (in the dialog, press Ctrl+L, paste the path, press Enter, then click Select Folder).',
   },
   'settings.browserExt.step3': {
-    zh: '装好后 Clip 会打开欢迎页并请求连接：在 Forsion 弹出的确认框里核对配对码，点「允许」。剪藏和浏览器控制一次配好。',
-    en: 'Once installed, Clip opens a welcome page and asks to connect. Check the pairing code in the Forsion prompt and click Allow. Clipping and browser control are set up in one go.',
+    zh: '装好后 Clip 会自动找到 Forsion 并请求连接：在 Forsion 弹出的确认框里核对配对码，点「允许」。剪藏和浏览器控制一次配好。',
+    en: 'Once installed, Clip finds Forsion and asks to connect. Check the pairing code in the Forsion prompt and click Allow. Clipping and browser control are set up in one go.',
   },
   'settings.browserExt.step3HostOff': {
-    zh: '装好后 Clip 会打开欢迎页并请求连接，Forsion 会弹出提示：点「允许并打开」，会顺带打开「设置 › 设备 › 允许其他设备连接本机」，剪藏和浏览器控制一次配好。不想打开它也行：把下面的连接码粘到 Clip 里（这样只有浏览器控制，剪藏存不进本机智库）。',
-    en: 'Once installed, Clip opens a welcome page and asks to connect. In the Forsion prompt, click “Allow and turn on”. This also turns on Settings › Devices › Allow other devices to connect, and sets up clipping and browser control in one go. To keep it off, paste the connect code below into Clip instead (browser control only; clips can’t go into your local vault).',
+    zh: '装好后 Clip 会自动找到 Forsion 并请求连接，Forsion 会弹出提示：点「允许并打开」，会顺带打开「设置 › 设备 › 允许其他设备连接本机」，剪藏和浏览器控制一次配好。不想打开它也行：把下面的连接码粘到 Clip 里（这样只有浏览器控制，剪藏存不进本机智库）。',
+    en: 'Once installed, Clip finds Forsion and asks to connect. In the Forsion prompt, click “Allow and turn on”. This also turns on Settings › Devices › Allow other devices to connect, and sets up clipping and browser control in one go. To keep it off, paste the connect code below into Clip instead (browser control only; clips can’t go into your local vault).',
   },
   'settings.browserExt.openFolder': { zh: '打开扩展文件夹', en: 'Open extension folder' },
   'settings.browserExt.edgeWarning': {
