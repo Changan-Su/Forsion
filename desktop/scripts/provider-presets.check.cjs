@@ -99,7 +99,7 @@ async function main() {
     await look('light', 'zh')
     let fl = await openAdd()
     let s = await state(fl)
-    check('P1 有服务商下拉:自定义 + 11 家预设', s.presets.length === 12 && s.presets[0] === '' && s.presets.includes('anthropic') && s.presets.includes('opencode'), s.presets)
+    check('P1 有服务商下拉:自定义 + 12 家预设', s.presets.length === 13 && s.presets[0] === '' && s.presets.includes('anthropic') && s.presets.includes('opencode') && s.presets.includes('opencode-go'), s.presets)
     await pick(fl, 0, 'anthropic'); await pause(200)
     s = await state(fl)
     check('P2 选 Anthropic:名称 / 地址 / 原生协议 / 地址说明', s.name === 'anthropic' && s.baseUrl === 'https://api.anthropic.com/v1' && s.protocol === 'anthropic-messages' && s.urlHint.includes('Anthropic'), s)
