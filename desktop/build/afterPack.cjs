@@ -100,6 +100,8 @@ exports.default = async function afterPack(context) {
       console.log('[afterPack] 内置 git 未捆(.skipped)→ 跳过 git 检查');
     } else {
       require('./fetch-git.cjs').smokeGit(gitRoot, electronPlatformName);
+      // Windows 的 run_bash 用这份 bash:拷贝过滤器丢了 usr/bin 的哪个 exe / dll 只在产物上现形
+      if (electronPlatformName === 'win32') require('./fetch-git.cjs').smokeBash(gitRoot);
     }
   }
 

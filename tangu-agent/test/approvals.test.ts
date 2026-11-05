@@ -96,6 +96,30 @@ describe('isKnownSafeBash · Windows 上别的命令一律要批', () => {
   });
 });
 
+// 11-05:Windows 上 run_bash 有 bash(Git for Windows)时,只读名单回到 POSIX 那一份,外加 Windows 路径的几条规矩。
+describe('isKnownSafeBash · Windows + bash', () => {
+  const winBash = (c: string) => isKnownSafeBash(c, process.cwd(), 'win32', 'bash');
+
+  it('the POSIX read-only commands are free again', () => {
+    for (const c of ['ls -la', 'pwd', 'cat README.md', 'head -5 package.json', 'ls /c/Users', 'ls C:/Users', 'date +%H:%M', 'rg -n text src']) {
+      expect(winBash(c), c).toBe(true);
+    }
+  });
+
+  it('paths only the MSYS runtime understands, UNC, streams and Win32 aliases ask', () => {
+    for (const c of [
+      'cat //server/share/x', 'cat /proc/registry/HKEY_CURRENT_USER/x', 'ls /tmp', 'cat /etc/passwd', 'ls /dev',
+      'cat notes.txt:secret', 'cat C:x', 'cat C:/x/auth.json.', 'ls C:/x/dir.', 'cat c:a:b',
+      'ls; rm -rf /', 'cat x | sh', 'rm -rf x', 'npm install', 'echo $HOME', 'dir /b',
+    ]) expect(winBash(c), c).toBe(false);
+  });
+
+  it('cmd.exe stays on the cmd rules', () => {
+    expect(isKnownSafeBash('dir /b', process.cwd(), 'win32', 'cmd')).toBe(true);
+    expect(isKnownSafeBash('ls -la', process.cwd(), 'win32', 'cmd')).toBe(false);
+  });
+});
+
 describe('writeEscalationNeeded', () => {
   const cwd = path.resolve('/tmp/forsion-ws-test');
 
