@@ -223,6 +223,8 @@ async function main() {
     await size(390, 844); await geometry('en-narrow-theme'); await size(1024, 720)
     await next(); await ready.you(); await size(390, 844); await geometry('en-narrow-you'); await size(1024, 720)
     await next(); await ready.team()
+    // ② 里开过又关掉(真主进程:开 → 关让 dataGen +1 并落盘):这台不再算「从没动过」,团队屏不替他预开
+    if (historyOffered) await win.waitForSelector('[data-ob-history][data-ch-draft="off"]')
     await geometry('en-dark-team')
     await size(390, 844); await geometry('en-narrow-team')
     await size(900, 640); await zoom(1.1); await geometry('en-dark-zoom110-team')
