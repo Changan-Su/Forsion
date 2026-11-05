@@ -12,6 +12,7 @@
     "dev": "electron-vite dev --noSandbox",
     "check:marketplace-upgrade": "node scripts/marketplace-upgrade.e2e.cjs",
     "check:portrait-receipt": "node scripts/portrait-receipt.check.cjs",
+    "check:tanguui": "node scripts/build-tangu-ui.mjs",
     "check:visualize": "node scripts/visualize.check.cjs",
     "check:intelligent-ui": "node scripts/intelligent-ui.e2e.cjs",
     "check:sketchrtc": "node scripts/sketch-rtc.check.cjs",

@@ -224,6 +224,9 @@ function selftest() {
   console.log('tangu-boundary selftest: 43/43 PASS')
 }
 
+// 界面热更新 4a:共享表生成器(tangu-ui-shared.mjs)和界面包构建(build-tangu-ui.mjs)用同一份划分与 alias
+module.exports = { GENESIS, CONFIG, ALIAS, SRC, EXT, IMPORT_RE, stripComments, readConfig: () => JSON.parse(fs.readFileSync(CONFIG, 'utf8')) }
+if (require.main !== module) return
 if (process.argv.includes('--selftest')) { selftest(); process.exit(0) }
 const cfg = JSON.parse(fs.readFileSync(CONFIG, 'utf8'))
 const { errors, notes, current } = analyze(readRepo(), cfg)
