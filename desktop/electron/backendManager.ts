@@ -111,6 +111,15 @@ export function resolveBundledGit(): { pathDirs: string[]; gitBin: string } | nu
   return existsSync(bin) ? { pathDirs: [binDir], gitBin: bin } : null
 }
 
+/** 内置 bash(Windows 才有,build/fetch-git.cjs 在 MinGit 里放的 usr/bin/bash.exe):引擎 run_bash 用它跑命令,
+ *  缺了(老包 / 捆包失败)引擎回落 cmd.exe(tangu-agent tools/hostShell.ts)。 */
+export function resolveBundledBash(): string | null {
+  if (process.platform !== 'win32') return null
+  const dir = app.isPackaged ? join(process.resourcesPath, 'git') : join(__dirname, '..', '..', 'build', 'git')
+  const bin = join(dir, 'usr', 'bin', 'bash.exe')
+  return existsSync(bin) ? bin : null
+}
+
 /** 随包 LibreOffice 转换引擎(build/fetch-office.cjs)的入口模块;打包=resources/office,
  *  dev=desktop/build/office(`npm run fetch-office` 后才有)。布局与 fetch-office.cjs 的 kitEntry 一致。 */
 export function resolveOfficeKit(): string | null {
@@ -434,6 +443,9 @@ export class BackendManager {
       // read_document 先用它把 docx/xlsx/pptx 转 PDF 再按真页读;不设 = 走原来的系统 LibreOffice/纯文本兜底。
       const officeKit = resolveOfficeKit()
       if (officeKit) env.TANGU_OFFICE_KIT = officeKit
+      // Windows:run_bash 用随包的 bash(外面已给的照用,方便指到自己装的 Git for Windows)
+      const bash = resolveBundledBash()
+      if (bash && !env.TANGU_BASH_BIN) env.TANGU_BASH_BIN = bash
 
       // 中国大陆镜像(可逆:仅注入子进程 env,不改用户全局 dotfile;关掉即恢复直连)。pip/npm/git 子进程继承之。
       if (s.mirror === 'china') {

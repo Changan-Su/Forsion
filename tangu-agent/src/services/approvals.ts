@@ -14,6 +14,8 @@ import { mcpSettingsPreview } from './mcpSettings.js';
  */
 import path from 'node:path';
 import { prepareReadOnlyCmd } from '../tools/cmdReadOnly.js';
+import { hostShell, msysToWindowsPath, windowsToMsysPath, type HostShellKind } from '../tools/hostShell.js';
+import { openPathKnownSafe } from '../tools/hostFileOps.js';
 import { randomUUID } from 'node:crypto';
 import { publish } from './eventBus.js';
 import { isOutsideWorkspace, writableRoots, protectedLocalWrite, protectedRemoteWrite } from '../tools/fsPolicy.js';
@@ -129,13 +131,16 @@ export function toolNeedsApproval(name: string, rawMode: ApprovalMode | undefine
   if (mode === 'custom') mode = customRules().base;
   if (!mode || mode === 'full-auto') return false;
   // git_commit 同写文件档:只动本机仓库、可撤回(10-28 用户定「有权限就直接做」;push / pull 经 capabilities.approval:'command' 进跑命令档)
-  const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch' || name === 'git_commit' || opts?.widgetWrite === true;
+  const writesFiles = name === 'write_file' || name === 'edit_file' || name === 'multi_edit' || name === 'apply_patch' || name === 'git_commit' ||
+    name === 'move_path' || name === 'copy_path' || name === 'delete_path' || opts?.widgetWrite === true;
   // 跑命令档(auto-edit 也要批):run_bash / kill_process / MCP 任意能力 / 后台起进程 / 给进程喂 stdin。
   // run_background + write_process_input = 启动任意 shell 进程并向其喂输入,危险性同 run_bash,纳入此档。
   // browser_task = 自主 agent 以用户身份操作已登录网站(点按/提交),危险性同档。
   const runsCommands =
     name === 'run_bash' || name === 'kill_process' || name === 'run_background' ||
     name === 'write_process_input' || name === 'browser_task' || name.startsWith('mcp__') ||
+    // open_path 可能拉起程序(.app / .exe / 脚本);纯文档 / 普通文件夹在 gateToolCall 里按 openPathKnownSafe 先放行。
+    name === 'open_path' ||
     // 接管了用户自己的 Chrome(browserTools.userBrowserEndpoint)时,点按 / 输入 / 页内执行 JS 就是以用户身份
     // 操作已登录网站,与 browser_task 同档;没接管时它们只动 Tangu 自己的后台浏览器,照旧免批。由调用方判定后传入。
     (opts?.userBrowser === true && USER_BROWSER_ACTIONS.has(name)) ||
@@ -402,6 +407,10 @@ function rawPreview(call: ToolCall, opts: { keptActions?: unknown[] | null; prof
   if (name === 'edit_file') return `edit ${pathLine(args.path)}`;
   if (name === 'multi_edit') return `multi_edit ${pathLine(args.path)} (${Array.isArray(args.edits) ? args.edits.length : '?'} edits)`;
   if (name === 'run_background') return `bg$ ${String(args.command ?? '').trim()}`;
+  if (name === 'move_path') return `move ${pathLine(args.from)} → ${pathLine(args.to)}${args.overwrite === true ? ' (overwrite)' : ''}`;
+  if (name === 'copy_path') return `copy ${pathLine(args.from)} → ${pathLine(args.to)}${args.overwrite === true ? ' (overwrite)' : ''}`;
+  if (name === 'delete_path') return `${args.permanent === true ? 'delete permanently' : 'move to trash'} ${pathLine(args.path)}`;
+  if (name === 'open_path') return `open ${pathLine(args.path)}`;
   // 带 widget 的卡:不把整份 HTML 铺到卡上
   if (widgetWrite(call) && name !== 'manage_widget') {
     const w = args.widget && typeof args.widget === 'object' ? args.widget : {};
@@ -807,13 +816,61 @@ const SAFE_SEARCH_FLAGS = ['-n', '-i', '-l', '-c', '-v', '-w', '-F', '--files', 
 const SAFE_RG_FLAGS = new Set(SAFE_SEARCH_FLAGS);
 const SAFE_GREP_FLAGS = new Set([...SAFE_SEARCH_FLAGS, '-r', '-E', '-L']);
 
+/** A relative operand that climbs (`../..`): MSYS programs resolve it in their own tree, where `..` above `/c` is
+ *  `/` (so `../../c/Users` from C:\work is C:\Users), while Node resolves it the Windows way (C:\c\Users).
+ *  Classified only when both land on the same file. */
+function sameMsysTarget(rel: string, cwd: string): boolean {
+  const msys = path.posix.normalize(`${windowsToMsysPath(path.win32.resolve(cwd))}/${rel}`);
+  if (!/^\/[a-zA-Z](\/|$)/.test(msys)) return false;
+  const strip = (x: string) => path.win32.normalize(x).replace(/(?<!^[A-Za-z]:)\\+$/, '').toLowerCase();
+  return strip(msysToWindowsPath(msys)) === strip(path.win32.resolve(cwd, rel));
+}
+
+/**
+ * Windows + Git for Windows bash: rewrite operands into the paths Node will check, or refuse to classify.
+ * Bash takes `/c/Users/x/.forsion/auth.json`; Node would resolve that to `<drive>:\\c\\Users…` and miss the credential
+ * check, so drive paths are converted first. Every other root path (`/proc/registry/…`, `/dev`, `/tmp`, `/usr`) lives
+ * inside the MSYS runtime's own namespace, which Node cannot see → not known-safe. Also refused, as in cmdReadOnly.ts:
+ * UNC (`//host/share` sends the user's credentials over the network), alternate data streams and drive-relative
+ * `C:x` (a colon anywhere but `C:/`), and Win32 aliases with trailing dots (`auth.json.` opens `auth.json`).
+ */
+function windowsBashOperands(args: string[], cwd: string): string[] | null {
+  const out: string[] = [];
+  for (const a of args) {
+    // A relative path that climbs must land on the same file both ways — also one spelled like an option (`-x/../..`
+    // after `--` is an operand to cat).
+    if (!a.startsWith('/') && !a.includes(':') && a.split('/').includes('..') && !sameMsysTarget(a, cwd)) return null;
+    // Options are matched against fixed allowlists below; `+FORMAT` is date's format (may contain colons). A path
+    // spelled `+x/…` stays relative, and Node and bash resolve it the same way.
+    if (a.startsWith('-') || a.startsWith('+')) { out.push(a); continue; }
+    if (a.startsWith('//')) return null;
+    let p = a;
+    if (p.startsWith('/')) {
+      p = msysToWindowsPath(p); // normalizes `..` first, as MSYS does
+      if (!/^[A-Z]:\\/.test(p)) return null; // /proc, /tmp, /dev, /usr …: MSYS's own tree
+    } else if (p.includes(':') && !/^[a-zA-Z]:[\\/]/.test(p)) return null;
+    if (p.indexOf(':', 2) >= 0) return null;
+    if (p.split(/[\\/]/).some((seg) => seg !== '.' && seg !== '..' && /[. ]$/.test(seg))) return null;
+    out.push(p);
+  }
+  return out;
+}
+
 /** Only simple unquoted word tokens are classified. Shell parsing remains the shell's job. */
-export function isKnownSafeBash(command: string, cwd: string = process.cwd(), platform: NodeJS.Platform = process.platform): boolean {
+export function isKnownSafeBash(
+  command: string,
+  cwd: string = process.cwd(),
+  platform: NodeJS.Platform = process.platform,
+  shell: HostShellKind = hostShell(platform).kind,
+): boolean {
   const cmd = String(command || '').trim();
-  if (platform === 'win32') return prepareReadOnlyCmd(cmd, cwd) !== null;
+  // Windows without bash: cmd.exe grammar (dir / type only, see cmdReadOnly.ts). With bash: the POSIX list below.
+  if (platform === 'win32' && shell !== 'bash') return prepareReadOnlyCmd(cmd, cwd) !== null;
   // Deny substitutions, expansions, quotes, shell operators, escapes and control characters.
   if (!cmd || /[^A-Za-z0-9_./:@%+=, \-]/.test(cmd)) return false;
-  const [program, ...args] = cmd.split(/ +/);
+  const [program, ...rawArgs] = cmd.split(/ +/);
+  const args = platform === 'win32' ? windowsBashOperands(rawArgs, cwd) : rawArgs;
+  if (!args) return false;
   if ((SAFE_BASH_PROGRAMS.has(program) || program === 'rg' || program === 'grep') && touchesCredentials(program, args, cwd)) return false;
   if (SAFE_BASH_PROGRAMS.has(program)) return true;
   if (program === 'date') return args.every((a) => a === '-u' || a === '--utc' || a.startsWith('+'));
@@ -1215,6 +1272,12 @@ export async function gateToolCall(
   if (!forceAsk && !alwaysAsk && name === 'run_bash' && isKnownSafeBash(bashCommandOf(call), ctx.cwd)) {
     // known-safe git 读的是仓库里可被改写的配置:没人看过卡,就在写拒绝 profile 里跑(G5 方案 B;其余 known-safe 程序不读仓库配置,不包)。
     return /^git( |$)/.test(bashCommandOf(call).trim()) ? { action: 'approve', writeProtect: true } : { action: 'approve' };
+  }
+  // 打开一份普通文档 / 一个普通文件夹:免审批(和只读 bash 同档)。远程污点 run 和无人值守 run 不走这条 ——
+  // 驱动它的人不在这台电脑前,屏幕上凭空弹窗没人看。
+  if (!forceAsk && !alwaysAsk && name === 'open_path' && !remote && !ctx.approvalDeferral && !ctx.unattended &&
+      openPathKnownSafe(String(parseCallArgs(call).path ?? ''), ctx.cwd || process.cwd())) {
+    return { action: 'approve' };
   }
 
   // 控制面(H1):host 会话 mode 为空 = 不审批的云端口径,与 toolNeedsApproval 一致;custom 已降解成 base。

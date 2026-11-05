@@ -19,7 +19,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { smokePython } = require('../build/fetch-python.cjs');
-const { smokeGit } = require('../build/fetch-git.cjs');
+const { smokeGit, smokeBash } = require('../build/fetch-git.cjs');
 const { OFFICE_GATE } = require('../build/afterPack.cjs');
 const { kitEntry, enginePackage, VC_DLLS } = require('../build/fetch-office.cjs');
 
@@ -82,6 +82,7 @@ for (const dll of VC_DLLS) fs.renameSync(path.join(aside, dll), path.join(bin, d
 console.log('\n④ 内置 git(MinGit)');
 try {
   smokeGit(path.join(resources, 'git'), 'win32');
+  smokeBash(path.join(resources, 'git')); // run_bash 的 bash:GNU sort / find 排在 System32 前、/c/ 映射、小工具缺不缺 DLL
   const out = execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', 'git --version'],
     { encoding: 'utf8', env: { ...process.env, PATH: `${process.env.PATH};${path.join(resources, 'git', 'cmd')}` } });
   console.log(`  cmd.exe 经 PATH 找到:${out.trim()}`);

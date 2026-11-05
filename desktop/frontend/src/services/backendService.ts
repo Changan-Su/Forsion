@@ -825,7 +825,7 @@ export const agentUninstallPreview = (t: EngineTarget, slug: string) =>
 
 /** 回收站(引擎 <tanguHome>/trash/,30 天;只在本机)。restorer='desktop' 的(Forsion 插件)走主进程 trashRestore。 */
 export interface TrashEntry {
-  id: string; kind: 'agent' | 'skill' | 'plugin'; ref: string; name: string; deletedAt: number; size: number
+  id: string; kind: 'agent' | 'skill' | 'plugin' | 'file'; ref: string; name: string; deletedAt: number; size: number
   restorer: 'engine' | 'desktop'; items: Array<{ from: string; stored: string; role?: string }>; extra?: Record<string, unknown>
 }
 export const listTrash = (t: EngineTarget) => request<{ entries: TrashEntry[]; days: number }>(t, '/agent/trash')

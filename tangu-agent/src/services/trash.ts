@@ -9,7 +9,8 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { tanguHome } from '../core/tanguHome.js';
 
-export type TrashKind = 'agent' | 'skill' | 'plugin';
+/** file = Agent 用 delete_path 删掉的文件或文件夹(11-05,tools/hostFileOps.ts):恢复就是原样放回原处,不接任何设置。 */
+export type TrashKind = 'agent' | 'skill' | 'plugin' | 'file';
 /** parent:挪走时原处上级目录的真实路径(恢复时上级被换成软链就拒绝,免得挪到链接指向的地方);placed:恢复落到哪(重试时认得改名后的那份)。 */
 export interface TrashItem { from: string; stored: string; role?: string; parent?: string; placed?: string }
 export interface TrashEntry {
@@ -40,7 +41,8 @@ export async function pathSize(p: string): Promise<number> {
   if (!st) return 0;
   if (!st.isDirectory()) return st.size;
   let n = 0;
-  for (const e of await fs.readdir(p)) n += await pathSize(path.join(p, e));
+  // 读不了的子目录(权限 000)不挡删除:大小只是个参考数
+  for (const e of await fs.readdir(p).catch(() => [] as string[])) n += await pathSize(path.join(p, e));
   return n;
 }
 
@@ -49,7 +51,7 @@ async function move(from: string, to: string): Promise<void> {
   try { await fs.rename(from, to); }
   catch (e) {
     if ((e as NodeJS.ErrnoException).code !== 'EXDEV' || await exists(to)) throw e;
-    try { await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false }); }
+    try { await fs.cp(from, to, { recursive: true, errorOnExist: true, force: false, verbatimSymlinks: true }); }
     catch (c) { await fs.rm(to, { recursive: true, force: true }).catch(() => {}); throw c; }
     await fs.rm(from, { recursive: true, force: true });
   }
