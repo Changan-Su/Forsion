@@ -13,6 +13,7 @@
 const fs = require('fs')
 const os = require('os')
 const net = require('net')
+const http = require('http')
 const path = require('path')
 const { chromium } = require('playwright-core')
 const electron = require('./lib/launch-electron.cjs') // 台架统一入口:临时默认工作区,绝不打开开发者真实的 ~/Forsion-Dev/Amadeus
@@ -69,6 +70,7 @@ async function main() {
   }
   let app = null
   let ctx = null
+  let articleServer = null
   try {
     app = await electron.launch({
       ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
@@ -135,6 +137,37 @@ async function main() {
     check('外观跟着 Forsion(连上后取到并缓存)', !!look && ['light', 'dark'].includes(look.mode) && look.locale === 'zh', look)
     const capsule = await waitFor(async () => { const t = await panel.locator('body').innerText(); return /本机 Forsion/.test(t) ? t : null }, 15000, '侧栏胶囊写「本机 Forsion」')
     check('侧栏胶囊写「本机 Forsion」', !!capsule)
+
+    // ③ 用户每天走的路:剪一篇网页 → 侧栏里点保存 → 文件真的落在 Forsion 当前智库的「Forsion Clip」文件夹里
+    const vaultNow = await rpc('desktop-vault')
+    console.log('VAULT', JSON.stringify(vaultNow))
+    check('Forsion 有打开的智库(新用户第一次保存就靠它)', vaultNow?.ok && typeof vaultNow.data.root === 'string', vaultNow)
+    const TITLE = '慢阅读:把收藏变成思考'
+    articleServer = http.createServer((_q, r) => { r.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); r.end(`<!doctype html><html lang="zh"><head><meta charset="utf-8"><title>${TITLE}</title></head><body><article><h1>${TITLE}</h1><p>收藏很容易,读完很难。这是一篇台架合成的文章,用来验证剪藏能真的存进 Forsion。</p><p>第二段:让收藏回到每天用的地方。</p></article></body></html>`) })
+    const articlePort = await new Promise((r) => articleServer.listen(0, '127.0.0.1', () => r(articleServer.address().port)))
+    // 真侧栏和网页在同一个窗口里:文章开在侧栏这页所在的窗口(Playwright 的 newPage 会另开窗口,Clip 只看当前窗口的网页)
+    await panel.evaluate(async (url) => { const w = await chrome.windows.getCurrent(); await chrome.tabs.create({ url, windowId: w.id, active: false }) }, `http://127.0.0.1:${articlePort}/slow-reading.html`)
+    await sleep(1500)
+    await panel.bringToFront()
+    await panel.reload() // 侧栏打开时对窗口里的网页取正文
+    await waitFor(async () => (await panel.locator('body').innerText()).includes('让收藏回到每天用的地方'), 20000, '侧栏取到文章正文(标题在输入框里,innerText 不含)').catch(async (e) => {
+      console.log('TABS', JSON.stringify(await rpc('tabs').catch((err) => String(err))))
+      console.log('ALLTABS', JSON.stringify(await panel.evaluate(async () => (await chrome.tabs.query({})).map((t) => [t.id, t.windowId, t.active, t.url]))))
+      console.log('PANEL', (await panel.locator('body').innerText()).replace(/\s+/g, ' ').slice(0, 600))
+      throw e
+    })
+    const clipsDir = path.join(vaultNow.data.root, 'Forsion Clip')
+    const before = fs.existsSync(clipsDir) ? fs.readdirSync(clipsDir) : []
+    await panel.locator('button.cl-save').click()
+    const savedFile = await waitFor(async () => {
+      if (!fs.existsSync(clipsDir)) return null
+      const f = fs.readdirSync(clipsDir).find((x) => x.endsWith('.md') && !before.includes(x))
+      return f && fs.readFileSync(path.join(clipsDir, f), 'utf8').includes('让收藏回到每天用的地方') ? f : null
+    }, 30000, '剪藏落进 Forsion 智库')
+    check('侧栏点保存:剪藏落进 Forsion 当前智库的 Forsion Clip 文件夹', !!savedFile, { savedFile, clipsDir })
+    await waitFor(async () => /已保存|Saved/.test(await panel.locator('body').innerText()), 10000, '侧栏写明已保存')
+    check('侧栏写明已保存(报错不出现)', true)
+    if (process.env.SHOTS) { await sleep(400); await panel.screenshot({ path: path.join(process.env.SHOTS, 'e2e-saved-light.png') }) }
     if (process.env.SHOTS) {
       fs.mkdirSync(process.env.SHOTS, { recursive: true })
       await panel.keyboard.press('Escape').catch(() => {})
@@ -173,6 +206,7 @@ async function main() {
     console.log(`\n${checks} checks passed`)
   } finally {
     try { await ctx?.close() } catch { /* ignore */ }
+    try { articleServer?.close() } catch { /* ignore */ }
     if (app) { await Promise.race([app.close().catch(() => {}), sleep(5000)]); try { app.process().kill('SIGKILL') } catch { /* ignore */ } }
   }
 }
