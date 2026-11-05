@@ -288,8 +288,10 @@ describe('BackendManager 引擎热更新起不来时退回', () => {
     const launcher = join(dir, 'launch.cjs')
     writeFileSync(launcher, [
       "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
-      "require('node:http').createServer((_q, s) => s.end(JSON.stringify({ version: '0.0.0-test' }))).listen(port, '127.0.0.1')", // = App 版本
+      // 自带引擎的版本,故意和 App 版本(0.0.0-test)不同:桌面与引擎各自编号以后,拿 App 版本比会把退回自带误记成在跑热更新
+      "require('node:http').createServer((_q, s) => s.end(JSON.stringify({ version: '2.13.8' }))).listen(port, '127.0.0.1')",
     ].join('\n'), 'utf8')
+    vi.spyOn(BackendManager, 'bundledEngineVersion').mockReturnValue('2.13.8')
     vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(launcher)
     vi.spyOn(BackendManager, 'resolveLaunch').mockReturnValue([launcher, 'standalone'])
     process.env.TANGU_NODE_BIN = process.execPath

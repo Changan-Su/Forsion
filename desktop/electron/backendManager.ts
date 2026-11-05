@@ -270,6 +270,18 @@ export class BackendManager {
     return null
   }
 
+  /** 安装包里那份引擎(打包 = resources/tangu-server;dev = 仓里的 tangu-agent)的包根。 */
+  static engineRoot(): string | null {
+    const entry = BackendManager.resolveEntry()
+    return entry ? dirname(dirname(dirname(entry))) : null // …/dist/standalone/main.js
+  }
+
+  /** 安装包自带的引擎版本号;读不到 = null。 */
+  static bundledEngineVersion(): string | null {
+    const root = BackendManager.engineRoot()
+    try { return root ? String(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version) : null } catch { return null }
+  }
+
   /** 拉起引擎的脚本与它前面的参数:打包版经启动器(由它在自带的与热更新下来的之间挑),dev 直接跑包根 dist。 */
   static resolveLaunch(): string[] | null {
     const entry = BackendManager.resolveEntry()
@@ -460,9 +472,10 @@ export class BackendManager {
       if (ok && this.child === child && child.exitCode === null && child.signalCode === null) {
         this.restartCount = 0
         // 实际跑起来的是哪一版,以引擎自己报的为准:拉起前的判断是「启动器会挑中谁」,而启动器可能在重试之间
-        // 把新版记成坏的、退回了别的。引擎报的版本等于 App 版本 = 跑的是自带的(两者同号发版)。
+        // 把新版记成坏的、退回了别的。报的是自带引擎的版本 = 跑的是自带的(桌面与引擎已各自编号,别再和 App 版本比:
+        // 2.13.7 带的是引擎 2.13.8,比 App 版本会把退回自带误记成「在跑热更新 2.13.8」)。
         if (this.overlayVersion && this.healthVersion && this.healthVersion !== this.overlayVersion) {
-          this.overlayVersion = this.healthVersion === app.getVersion() ? null : this.healthVersion
+          this.overlayVersion = this.healthVersion === BackendManager.bundledEngineVersion() ? null : this.healthVersion
           this.overlayExits = 0
         }
         this.setState('ready', null)

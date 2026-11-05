@@ -76,6 +76,7 @@ import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPlugin
 import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
+import { createCoreTangu } from './coreTangu'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
 import { createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, telemetryPackaged } from './telemetryHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
@@ -1508,6 +1509,31 @@ function initEngineOverlay(): Promise<void> {
     if (engineOverlay) backend.setEngineOverlay(engineOverlay.control)
   })().catch((e) => console.warn('[engine-updates] 初始化失败(忽略,引擎照常跑自带的):', (e as Error)?.message)))
 }
+
+// Tangu 界面半身的运行时加载(界面热更新 4b;electron/coreTangu.ts):界面跟着引擎走,从引擎选中的那份目录读 ui/main.js。
+// 打包版走它;dev 要 TANGU_UI=bundle(读仓里 tangu-agent/ui/main.js,先跑 desktop 的 node scripts/build-tangu-ui.mjs)。
+const coreTanguOn = PRODUCT.agentBackend && (app.isPackaged || process.env.TANGU_UI === 'bundle')
+const coreTangu = createCoreTangu({
+  bundledRoot: BackendManager.engineRoot() ?? join(process.resourcesPath, 'tangu-server'),
+  desktopVersion: app.getVersion(),
+  overlay: async (version) => {
+    await initEngineOverlay()
+    const h = engineOverlay
+    const v = version ?? h?.control.active()
+    if (!h || !v) return null
+    const dir = join(h.root, v)
+    // 不带版本 = active() 已经按 checkOverlay 挑过;点名某一版(正在跑的那版)要再核一遍,磁盘上的它可能已经变了
+    return version === undefined || h.api.checkOverlay(dir, h.bundledRoot).ok ? { version: v, dir } : null
+  },
+  runningOverlay: () => (backend.getStatus().state === 'ready' ? backend.engineOverlayVersion() : undefined),
+  // 验过返回 null:别写成 `fn?.() ?? '…'` —— null 会被 ?? 当成「没这个函数」,热更新版界面就永远不收(4d 演练抓到的)
+  verify: (signature, files) => {
+    const fn = engineOverlay?.api.verifySignedBytes
+    return fn ? fn(signature, files) : 'the engine overlay API cannot verify bytes'
+  },
+  demote: (version, reason) => engineOverlay?.control.demote(version, reason),
+  log: (m) => console.log(m),
+})
 
 // 串行化:连续 config:set(如先改 cloudUrl 再改 sandbox)触发的多次 ensureBackend
 // 排队执行,避免并发 start() 双 spawn/端口竞争。
@@ -2995,6 +3021,29 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('config:get', () => effectiveConfig())
+  // 每个窗口拿到的是哪一份记在 coreTangu 里(按 webContents id);失败 / 崩溃上报只认那份记录,不信渲染层传来的版本号
+  const coreTanguTracked = new Set<number>()
+  ipcMain.handle('coreTangu:load', async (e) => {
+    if (!coreTanguOn || !isTrustedSender(e)) return null
+    const id = e.sender.id
+    if (!coreTanguTracked.has(id)) {
+      coreTanguTracked.add(id)
+      e.sender.once('destroyed', () => { coreTanguTracked.delete(id); coreTangu.forget(id) })
+    }
+    return coreTangu.load(id)
+  })
+  // 渲染层自己 location.reload() 是 file: 导航,会被 hardenNav 拦下:重载一律从这里发
+  ipcMain.handle('coreTangu:failed', (e, reason: unknown) => {
+    if (coreTanguOn && isTrustedSender(e) && coreTangu.failed(e.sender.id, reason)) e.sender.reload()
+  })
+  ipcMain.handle('coreTangu:crashed', (e, reason: unknown) => {
+    if (coreTanguOn && isTrustedSender(e) && coreTangu.crashed(e.sender.id, reason)) e.sender.reload()
+  })
+  // 引擎退回了(或换了版)而界面还是热更新的那一版:拿着它的窗口重载一次,重载后界面跟着引擎走
+  backend.onStatus((st) => {
+    if (st.state !== 'ready' || !coreTanguOn) return
+    for (const id of coreTangu.engineReady()) webContents.fromId(id)?.reload()
+  })
   ipcMain.handle('config:recoveryNotice', (e) => (isTrustedSender(e) ? readRecoveryNotice(recoverableConfigFiles()) : null))
   ipcMain.handle('config:clearRecoveryNotice', (e) => (isTrustedSender(e) ? clearRecoveryNotice(recoverableConfigFiles()) : undefined))
   registerDocumentTaskIpc(ipcMain, join(app.getPath('userData'), 'document-task-receipts.json'), isTrustedSender)

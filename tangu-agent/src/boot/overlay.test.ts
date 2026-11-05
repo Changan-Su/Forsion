@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ENGINE_ENTRIES, ENGINE_PACKAGE, SCHEMA_FILES, canonicalFiles, checkOverlay, cmpVersion, markBad, readBad, selectOverlay, verifyEngineSignature } from './overlay.js';
+import { ENGINE_ENTRIES, ENGINE_PACKAGE, SCHEMA_FILES, canonicalFiles, checkOverlay, cmpVersion, markBad, readBad, selectOverlay, verifyEngineSignature, verifySignedBytes } from './overlay.js';
 import { ENGINE_SIGNING_KEY } from './signingKey.js';
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -154,6 +154,19 @@ describe('verifyEngineSignature', () => {
     expect(verifyEngineSignature(dir, pub)).toMatch(/malformed/);
     rmSync(path.join(dir, 'SIGNATURE'));
     expect(verifyEngineSignature(dir, pub)).toMatch(/no readable SIGNATURE/);
+  });
+});
+
+describe('verifySignedBytes', () => {
+  it('收下签名表里哈希对得上的字节;字节被换、SIGNATURE 连同字节一起被换(别的钥匙)、或不在签名表里都不收', () => {
+    const dir = overlay('2.1.1', { files: { 'ui/main.js': 'UI' } });
+    const sig = readFileSync(path.join(dir, 'SIGNATURE'), 'utf8');
+    expect(verifySignedBytes(sig, { 'ui/main.js': Buffer.from('UI') }, pub)).toBeNull();
+    expect(verifySignedBytes(sig, { 'ui/main.js': Buffer.from('EVIL') }, pub)).toMatch(/does not match its signed hash/);
+    expect(verifySignedBytes(sig, { 'ui/other.js': Buffer.from('UI') }, pub)).toMatch(/not covered/);
+    const forged = overlay('2.1.2', { files: { 'ui/main.js': 'EVIL' }, key: generateKeyPairSync('ed25519').privateKey });
+    expect(verifySignedBytes(readFileSync(path.join(forged, 'SIGNATURE'), 'utf8'), { 'ui/main.js': Buffer.from('EVIL') }, pub)).toMatch(/pinned public key/);
+    expect(verifySignedBytes('not json', {}, pub)).toMatch(/no readable SIGNATURE/);
   });
 });
 

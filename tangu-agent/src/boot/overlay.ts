@@ -69,15 +69,15 @@ function listFiles(dir: string): string[] {
   return out;
 }
 
-/** 核对 dir 下的 SIGNATURE:返回 null = 通过,否则是原因。 */
-export function verifyEngineSignature(dir: string, publicKeyPem: string = ENGINE_SIGNING_KEY): string | null {
+/** 解析 SIGNATURE 的文本并对钉死的公钥验签:通过返回签名表(相对路径 → sha256),否则是原因。 */
+function readSignedTable(text: string, publicKeyPem: string): Record<string, string> | string {
   let parsed: { alg?: unknown; sig?: unknown; files?: unknown };
   try {
-    parsed = readJson(path.join(dir, SIGNATURE_FILE));
+    parsed = JSON.parse(text);
   } catch (e) {
     return `no readable ${SIGNATURE_FILE}: ${(e as Error)?.message || e}`;
   }
-  if (parsed.alg !== 'ed25519' || typeof parsed.sig !== 'string' || !parsed.files || typeof parsed.files !== 'object') return `${SIGNATURE_FILE} is malformed`;
+  if (!parsed || parsed.alg !== 'ed25519' || typeof parsed.sig !== 'string' || !parsed.files || typeof parsed.files !== 'object') return `${SIGNATURE_FILE} is malformed`;
   const files = parsed.files as Record<string, string>;
   const entries = Object.entries(files);
   if (entries.length === 0 || entries.length > MAX_FILES) return `${SIGNATURE_FILE} lists ${entries.length} files`;
@@ -91,6 +91,32 @@ export function verifyEngineSignature(dir: string, publicKeyPem: string = ENGINE
   } catch (e) {
     return `signature check failed: ${(e as Error)?.message || e}`;
   }
+  return files;
+}
+
+/** 已经读进内存的几份字节是不是签过的:对着同一刻读到的 SIGNATURE 文本验签,再逐个核哈希。
+ *  桌面主进程读界面半身(ui/main.js、manifest.json)时用 —— checkOverlay 验的是目录,验完到读文件之间
+ *  文件连同 SIGNATURE 一起被换掉的话,这里拿到的字节对不上钉死的公钥(Codex 4b 评审)。 */
+export function verifySignedBytes(signatureText: string, files: Record<string, Uint8Array>, publicKeyPem: string = ENGINE_SIGNING_KEY): string | null {
+  const table = readSignedTable(signatureText, publicKeyPem);
+  if (typeof table === 'string') return table;
+  for (const [rel, bytes] of Object.entries(files)) {
+    if (!Object.hasOwn(table, rel)) return `${rel} is not covered by ${SIGNATURE_FILE}`;
+    if (createHash('sha256').update(bytes).digest('hex') !== table[rel]) return `${rel} does not match its signed hash`;
+  }
+  return null;
+}
+
+/** 核对 dir 下的 SIGNATURE:返回 null = 通过,否则是原因。 */
+export function verifyEngineSignature(dir: string, publicKeyPem: string = ENGINE_SIGNING_KEY): string | null {
+  let text: string;
+  try {
+    text = readFileSync(path.join(dir, SIGNATURE_FILE), 'utf8');
+  } catch (e) {
+    return `no readable ${SIGNATURE_FILE}: ${(e as Error)?.message || e}`;
+  }
+  const files = readSignedTable(text, publicKeyPem);
+  if (typeof files === 'string') return files;
   for (const rel of ['package.json', ...Object.values(ENGINE_ENTRIES)]) if (!(rel in files)) return `${rel} is not covered by ${SIGNATURE_FILE}`;
   // 入口会 import 相邻文件,所以目录里不能有签名表以外的东西:多出来的一个 node_modules 就能把依赖解析劫走。
   let present: string[];
@@ -101,7 +127,7 @@ export function verifyEngineSignature(dir: string, publicKeyPem: string = ENGINE
   }
   for (const rel of present) if (rel !== SIGNATURE_FILE && !(rel in files)) return `${rel} is not covered by ${SIGNATURE_FILE}`;
   const have = new Set(present);
-  for (const [rel, digest] of entries) {
+  for (const [rel, digest] of Object.entries(files)) {
     if (!have.has(rel)) return `${rel} is missing`;
     if (sha256(path.join(dir, ...rel.split('/'))) !== digest) return `${rel} does not match its signed hash`;
   }
