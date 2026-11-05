@@ -953,6 +953,8 @@ declare global {
       onUiChanged?(cb: (state: import('../../shared/uiSync').UiSyncPayload) => void): () => void
       /** P1-KF:把本窗**生效**界面语言报给主进程(托盘 / 系统通知 / 对话框跟它走)。只有桌面 preload 有;web / 手机 / 设备页缺席 = 不报。 */
       reportUiLocale?(locale: 'zh' | 'en'): void
+      /** 本机外观报给主进程(已配对的 Forsion Clip 经 /unit/appearance 跟随)。只有桌面 preload 有。 */
+      reportUiAppearance?(appearance: { skin: string; bg: string; mode: 'light' | 'dark' }): void
       closeSelf?(): void
       miniResize?(edge: string | null, start?: boolean, cursor?: { x: number; y: number; radius?: number }): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */

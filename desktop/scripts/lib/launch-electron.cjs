@@ -51,7 +51,9 @@ const workspaceEnv = exports.workspaceEnv = (env) => {
 exports.NESTED_SANDBOX_ARGS = ['--disable-site-isolation-trials']
 
 exports.launch = (opts = {}) => {
-  const env = workspaceEnv(opts.env)
+  // 台架实例缺省不开 Forsion Clip 的本机固定口(8792 / 8794):否则用户真浏览器里的 Clip 会找到它、向它请求配对。
+  // 要测 Clip 连接的台架显式传 FORSION_CLIP_ENTRANCE=1。
+  const env = { FORSION_CLIP_ENTRANCE: '0', ...(workspaceEnv(opts.env) ?? process.env) }
   const desktop = env?.FORSION_TEST_DESKTOP === 'left' && process.platform === 'win32'
     ? ['-r', path.join(__dirname, 'background-desktop.cjs')] : []
   return _electron.launch({ ...opts, env, args: [...desktop, ...(opts.args ?? []), ...MAC_FLAGS] })
