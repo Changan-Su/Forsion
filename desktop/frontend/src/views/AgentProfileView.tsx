@@ -238,7 +238,7 @@ export function AgentsRosterView() {
         <CapabilityMenu label={t('agentProfile.actionsFor', { name: agentName(a) })} className="agents-roster-more" items={[
           { id: 'up', label: t('agentProfile.moveUp'), icon: <ArrowUp size={14} />, disabled: rosterBusy || agents[0]?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) - 1]?.slug || a.slug) },
           { id: 'down', label: t('agentProfile.moveDown'), icon: <ArrowDown size={14} />, disabled: rosterBusy || agents.at(-1)?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) + 1]?.slug || a.slug, true) },
-          { id: 'default', label: t('agentProfile.makeDefault'), icon: <Star size={14} />, disabled: rosterBusy || a.slug === defaultSlug, onSelect: () => void setDefault(a.slug) },
+          { id: 'default', label: t('agentProfile.makeDefault'), icon: <Star size={14} />, disabled: rosterBusy || a.slug === defaultSlug || !!a.disabled, onSelect: () => void setDefault(a.slug) },
           { id: 'disable', label: t(a.disabled ? 'agentProfile.enable' : 'agentProfile.disable'), icon: a.disabled ? <Eye size={14} /> : <EyeOff size={14} />, disabled: rosterBusy || (!a.disabled && (a.slug === 'xyra' || a.slug === defaultSlug || a.slug === 'muse')), onSelect: () => void toggleDisabled(a) },
           { id: 'delete', label: t('agentProfile.delete'), icon: <Trash2 size={14} />, danger: true, disabled: rosterBusy || a.slug === 'xyra' || a.slug === defaultSlug, onSelect: () => { setRosterError(''); setRemoving(a) } },
         ]}><MoreHorizontal size={15} /></CapabilityMenu>

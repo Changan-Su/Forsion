@@ -252,7 +252,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   /** 幽灵会话(creview 09-16):活动会话里带轨道身份、但对应实体已不在(agent 删了 / 引擎卸了 / 团队删了但会话未归档)——
    *  它们被 inOrbit 从项目区剔除,若不给一行入口,切走之后就再也回不去。每个身份一行「墓碑」,点击直接打开最新那条会话。 */
   const tombstones = useMemo(() => {
-    const have = { agent: new Set(agents.map((a) => a.slug)), engine: new Set(installedEngines.map((e) => e.id)), team: new Set(teams.map((t) => t.slug)) }
+    // 存在性按完整名单判:停用的 Agent 只是从轨道上收起,不是删了(否则它的私聊会当「已删除」墓碑冒出来)
+    const have = { agent: new Set(s.agentDefs.map((a) => a.slug)), engine: new Set(installedEngines.map((e) => e.id)), team: new Set(teams.map((t) => t.slug)) }
     const out = new Map<string, { kind: 'agent' | 'engine' | 'team'; id: string; sessionId: string }>()
     for (const x of s.sessions) {
       const c = s.configBySession[x.id]
@@ -262,7 +263,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       if (!out.has(key)) out.set(key, { kind: ident[0], id: ident[1], sessionId: x.id }) // s.sessions 按 updated_at 降序 → 第一条即最新
     }
     return [...out.values()]
-  }, [s.sessions, s.configBySession, agents, installedEngines, teams])
+  }, [s.sessions, s.configBySession, s.agentDefs, installedEngines, teams])
   /** 私聊行尾状态(10-18 Muse 私聊方案 B):身份 → 它最新那条私聊的状态(等你 / 有新消息);在跑仍是图标角那颗转圈点。 */
   const soloStatus = useSoloStatus()
   const soloSession = useMemo(() => {

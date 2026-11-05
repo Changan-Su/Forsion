@@ -318,6 +318,11 @@ router.put('/agent/agents-meta', authMiddleware, async (req: AuthRequest, res) =
   if (!cloud && !ensureLocal(res)) return;
   try {
     const b = req.body || {};
+    // 停用的 Agent 不能当默认:默认 Agent 在侧栏 / 选择器里收起就找不回来了(先启用再设)
+    if (!cloud && typeof b.defaultSlug === 'string' && b.defaultSlug) {
+      const target = await getAgent(b.defaultSlug).catch(() => null);
+      if (target?.disabled) return void res.status(400).json({ detail: 'Turn this agent back on before making it the default.' });
+    }
     res.json(cloud
       ? await cloudWriteAgentsMeta(req.user!.userId, { order: b.order, defaultSlug: b.defaultSlug })
       : await writeAgentsMeta({ order: b.order, defaultSlug: b.defaultSlug }));

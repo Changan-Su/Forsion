@@ -51,8 +51,6 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
   const [modelId, setModelId] = useState('')
   const [when, setWhen] = useState<When | null>('anytime')
   const [pro, setPro] = useState<Proactivity | null>('normal')
-  /** 读到的现状:三问只发和它不一样的(仓规「默认值不覆盖用户设过的值」)。 */
-  const [initial, setInitial] = useState<{ when: When | null; pro: Proactivity | null }>({ when: 'anytime', pro: 'normal' })
   const [focus, setFocus] = useState<string[]>([])
   const [focusText, setFocusText] = useState('')
   const [historianOn, setHistorianOn] = useState(true)
@@ -65,6 +63,10 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
   const [aboutOpen, setAboutOpen] = useState(false)
   const dialogRef = useRef<HTMLDialogElement>(null)
   const avatars = useApp((s) => s.agentAvatars)
+  /** 盘上现在是什么:读到时记下,每写成一笔就跟着更新。只发和它不一样的(仓规「默认值不覆盖用户设过的值」);
+   *  部分写失败后重试时也按它算,用户中途改回原值的那一项照样写得回去(Codex 评审 P2)。 */
+  const base = useRef<{ museEnabled: boolean; modelId: string; historian: boolean; when: When | null; pro: Proactivity | null
+    disabled: Record<string, boolean>; introDone: boolean; introMemo: string } | null>(null)
 
   useEffect(() => {
     let live = true
@@ -78,18 +80,23 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
         const c = cfg.config
         setConfig(c); setMuseOn(c.muse.enabled !== false); setModelId(c.muse.modelId || ''); setHistorianOn(c.historian.enabled !== false)
         const w = whenOf(c.muse.activeHours), p = proactivityOf(c.muse.heartbeatMinutes)
-        setWhen(w); setPro(p); setInitial({ when: w, pro: p })
+        setWhen(w); setPro(p)
+        base.current = { museEnabled: c.muse.enabled !== false, modelId: c.muse.modelId || '', historian: c.historian.enabled !== false, when: w, pro: p,
+          disabled: Object.fromEntries(list.map((a) => [a.slug, !!a.disabled])), introDone: false, introMemo: JSON.stringify({ focus: [], text: '' }) }
         setAgents(list); setDefaultSlug(meta.defaultSlug || 'xyra'); setModels(mdl)
         setAgentOn(Object.fromEntries(list.map((a) => [a.slug, !a.disabled])))
       } catch (e) { if (live) setLoadError(String((e as Error)?.message || e)) }
     })()
     return () => { live = false }
   }, [resolveTarget])
-  // 电脑历史的草稿:读到状态那一刻定一次。开着的显示开;新装机且用户没亲手关过 → 预先打开;其余显示关。
+  // 电脑历史的草稿:读到状态那一刻定一次。开着的显示开;新装机、而且看得出从没动过 → 预先打开;其余显示关。
+  // 「从没动过」= 没有关过的记号(userTurnedOff,随电脑历史加密那件加)且 dataGen 为 0(关闭 / 清除 / 改排除表都会让它 +1,跨重启持久)。
+  // 引导完成记号证明不了这件事:登录过的老用户从没见过引导,也可能在设置里关过它(Codex 评审 P1)。
   useEffect(() => {
     if (!chState || chDraft !== null) return
     const turnedOff = (chState as { userTurnedOff?: boolean }).userTurnedOff === true
-    setChDraft(chState.enabled || (fresh && !turnedOff))
+    const untouched = !turnedOff && !((chState.dataGen ?? 0) > 0)
+    setChDraft(chState.enabled || (fresh && untouched))
   }, [chState, chDraft, fresh])
   useEffect(() => {
     const d = dialogRef.current
@@ -104,38 +111,53 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
   const llms = (models?.models || []).filter((m) => !m.modelType || m.modelType === 'llm')
   const locked = (slug: string): boolean => slug === defaultSlug || slug === 'xyra'
 
-  const state = useRef({ config, museOn, modelId, when, pro, initial, focus, focusText, historianOn, agentOn, agents, chDraft, signedIn })
-  state.current = { config, museOn, modelId, when, pro, initial, focus, focusText, historianOn, agentOn, agents, chDraft, signedIn }
+  const state = useRef({ museOn, modelId, when, pro, focus, focusText, historianOn, agentOn, agents, chDraft })
+  state.current = { museOn, modelId, when, pro, focus, focusText, historianOn, agentOn, agents, chDraft }
   const historyRef = useRef(history)
   historyRef.current = history
   useEffect(() => {
     commitRef.current = async () => {
-      const s = state.current
-      if (!s.config) return // 没读到现状就不写:读失败 ≠ 缺省
+      const s = state.current, b = base.current
+      if (!b) return // 没读到现状就不写:读失败 ≠ 缺省
       onBusyChange(true)
-      const target = await resolveTarget()
       const errors: string[] = []
-      const tryIt = async (fn: () => Promise<unknown>): Promise<void> => { try { await fn() } catch (e) { errors.push(String((e as Error)?.message || e)) } }
+      const tryIt = async (fn: () => Promise<unknown>, onOk: () => void): Promise<void> => {
+        try { await fn(); onOk() } catch (e) { errors.push(String((e as Error)?.message || e)) }
+      }
       try {
+        const target = await resolveTarget()
         const musePatch: Record<string, unknown> = {}
-        if (s.museOn !== (s.config.muse.enabled !== false)) musePatch.enabled = s.museOn
-        if (s.modelId !== (s.config.muse.modelId || '')) musePatch.modelId = s.modelId
-        const hist = s.historianOn !== (s.config.historian.enabled !== false)
-        if (Object.keys(musePatch).length || hist) await tryIt(() => saveSpecialConfig(target, { ...(Object.keys(musePatch).length ? { muse: musePatch } : {}), ...(hist ? { historian: { enabled: s.historianOn } } : {}) }))
-        // 只带改过的;一个都没改也发一次(空的):记下「第一次见面已经答过」,私聊里不再弹那张卡,别的什么都不动
+        if (s.museOn !== b.museEnabled) musePatch.enabled = s.museOn
+        if (s.modelId !== b.modelId) musePatch.modelId = s.modelId
+        const hist = s.historianOn !== b.historian
+        if (Object.keys(musePatch).length || hist) {
+          await tryIt(() => saveSpecialConfig(target, { ...(Object.keys(musePatch).length ? { muse: musePatch } : {}), ...(hist ? { historian: { enabled: s.historianOn } } : {}) }),
+            () => { b.museEnabled = s.museOn; b.modelId = s.modelId; b.historian = s.historianOn })
+        }
+        // 只带改过的;一个都没改也发一次(空的):记下「第一次见面已经答过」,私聊里不再弹那张卡,别的什么都不动。
+        // 关注那两项写的是记忆:写成过一次的同一份不再重发(重试不重复记)。
         if (s.museOn) {
           const text = s.focusText.trim()
-          await tryIt(() => saveMuseIntro(target, {
-            ...(s.when && s.when !== s.initial.when ? { when: s.when } : {}),
-            ...(s.pro && s.pro !== s.initial.pro ? { proactivity: s.pro } : {}),
-            ...(s.focus.length ? { focus: s.focus } : {}),
-            ...(text ? { focusText: text } : {}),
-          }))
+          const memo = JSON.stringify({ focus: s.focus, text })
+          const newMemo = memo !== b.introMemo
+          const body = {
+            ...(s.when && s.when !== b.when ? { when: s.when } : {}),
+            ...(s.pro && s.pro !== b.pro ? { proactivity: s.pro } : {}),
+            ...(newMemo && s.focus.length ? { focus: s.focus } : {}),
+            ...(newMemo && text ? { focusText: text } : {}),
+          }
+          if (!b.introDone || Object.keys(body).length) {
+            await tryIt(() => saveMuseIntro(target, body), () => {
+              if (s.when) b.when = s.when
+              if (s.pro) b.pro = s.pro
+              b.introMemo = memo; b.introDone = true
+            })
+          }
         }
         for (const a of s.agents) {
           const on = s.agentOn[a.slug]
-          if (on === undefined || on === !a.disabled) continue
-          await tryIt(() => saveAgentDef(target, { disabled: !on }, a.slug))
+          if (on === undefined || on === !b.disabled[a.slug]) continue
+          await tryIt(() => saveAgentDef(target, { disabled: !on }, a.slug), () => { b.disabled[a.slug] = !on })
         }
         const h = historyRef.current
         if (h.api && h.view && s.chDraft !== null && s.chDraft !== h.view.state.enabled) {

@@ -259,6 +259,52 @@ it('computer history: someone who turned it off before is not switched back on',
   expect(ch.setEnabled).not.toHaveBeenCalled()
 })
 
+it('computer history: an install whose recorder was ever turned off or cleared (dataGen > 0) is not pre-switched on', async () => {
+  const ch = withHistory({ dataGen: 2 })
+  await toTeam()
+  expect(sw(translate('ob3.ch.title')).getAttribute('aria-checked')).toBe('false')
+  await next()
+  expect(ch.setEnabled).not.toHaveBeenCalled()
+})
+
+it('team: after a partial failure, a choice changed back is still written on retry', async () => {
+  vi.mocked(api.saveAgentDef).mockRejectedValueOnce(new Error('agent write failed'))
+  await toTeam()
+  await act(async () => sw('卜算子').click())
+  await act(async () => sw('Coder').click())
+  await next()
+  expect(api.saveSpecialConfig).toHaveBeenLastCalledWith(expect.anything(), { muse: { enabled: false } })
+  expect(stepNow()).toBe('team')
+  // 用户把卜算子改回开:盘上已经是关,重试时要把「开」写回去
+  await act(async () => sw('卜算子').click())
+  await next()
+  expect(api.saveSpecialConfig).toHaveBeenLastCalledWith(expect.anything(), { muse: { enabled: true } })
+  expect(api.saveAgentDef).toHaveBeenLastCalledWith(expect.anything(), { disabled: true }, 'coder')
+  expect(props.onFinish).toHaveBeenCalledTimes(1)
+})
+
+it('team: the focus memory is not written twice when a retry follows a partial failure', async () => {
+  vi.mocked(api.saveAgentDef).mockRejectedValueOnce(new Error('agent write failed'))
+  await toTeam()
+  await clickText(translate('museCard.focus.study'))
+  await act(async () => sw('Coder').click())
+  await next()
+  await next()
+  expect(vi.mocked(api.saveMuseIntro).mock.calls.map((c) => c[1])).toEqual([{ focus: ['study'] }])
+  expect(props.onFinish).toHaveBeenCalledTimes(1)
+})
+
+it('team: failing to reach the engine on Get started reports it and leaves the buttons usable', async () => {
+  await toTeam()
+  vi.mocked(window.tangu!.getConfig!).mockRejectedValueOnce(new Error('host gone'))
+  await next()
+  expect(stepNow()).toBe('team')
+  expect(host.querySelector('.ob3-foot [role="alert"]')?.textContent).toContain('host gone')
+  expect(host.querySelector<HTMLButtonElement>('.ob-skip')!.disabled).toBe(false)
+  await next()
+  expect(props.onFinish).toHaveBeenCalledTimes(1)
+})
+
 it('upgrading from before 2.13.8 walks the whole new guide as "Welcome back", showing current values', async () => {
   const ch = withHistory()
   store.onboardingUpdate = true

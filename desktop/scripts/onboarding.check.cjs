@@ -122,6 +122,8 @@ async function main() {
       console.log(`PASS ${name} (${state.mainH}px${scrolls ? `, scrolls ${state.scrollH - state.mainH}px` : ', no scroll'})`)
     }
     const stepNow = () => win.locator('.ob-flow').getAttribute('data-step')
+    /** 每次重载都会重放开屏(#tangu-splash 盖在最上面):等它退掉再量 / 截图,否则截到的是开屏。 */
+    const settle = () => win.waitForFunction(() => !document.getElementById('tangu-splash'), null, { timeout: 30000 })
     async function next() {
       const previous = await stepNow()
       await win.locator('[data-ob-primary]').click()
@@ -136,7 +138,7 @@ async function main() {
     }
     async function fresh() {
       await win.evaluate(() => { localStorage.removeItem('forsion_tangu_onboarding_done'); localStorage.removeItem('forsion_tangu_onboarding_version') })
-      await win.reload(); await win.waitForSelector('.ob-flow[data-step="start"]')
+      await win.reload(); await win.waitForSelector('.ob-flow[data-step="start"]'); await settle()
       await ready.start()
     }
     const historyEnabled = () => win.evaluate(() => window.tangu.computerHistory?.get().then((v) => v.state.enabled) ?? null)
@@ -237,12 +239,12 @@ async function main() {
 
     // ④ 升级:上次看引导早于 2.13.8 → 完整引导、「欢迎回来」;2.13.8 及以后 → 只有「更新了什么」
     await win.evaluate(() => { localStorage.setItem('forsion_tangu_onboarding_done', '1'); localStorage.setItem('forsion_tangu_onboarding_version', '2.13.4') })
-    await win.reload(); await win.waitForSelector('.ob-flow[data-mode="full"][data-step="start"]')
+    await win.reload(); await win.waitForSelector('.ob-flow[data-mode="full"][data-step="start"]'); await settle()
     assert.equal(await win.locator('[data-ob-title]').innerText(), 'Welcome back')
     await geometry('en-dark-welcome-back')
     await win.locator('.ob-skip').click(); await win.waitForSelector('.ob-flow', { state: 'detached' })
     await win.evaluate(() => localStorage.setItem('forsion_tangu_onboarding_version', '2.13.8'))
-    await win.reload(); await win.waitForSelector('.ob-flow[data-mode="update"][data-step="welcome"]')
+    await win.reload(); await win.waitForSelector('.ob-flow[data-mode="update"][data-step="welcome"]'); await settle()
     await win.waitForSelector('.ob3-update .changelog-entry')
     assert.equal(await win.locator('.ob3-dots button').count(), 0, 'what changed only')
     await geometry('en-dark-update-welcome')
