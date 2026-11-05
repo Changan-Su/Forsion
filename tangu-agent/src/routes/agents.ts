@@ -13,7 +13,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentExistsError, type AgentPatch, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugFromNames, isValidSlug, AGENT_MAX_ITERATIONS_MIN } from '../agents/agentRegistry.js';
+import { listAgents, getAgent, saveAgent, patchAgent, AgentNotFoundError, AgentExistsError, type AgentPatch, saveAgentAvatar, readAgentAvatar, deleteAgentAvatar, readAgentsMeta, writeAgentsMeta, resolveMemorySlug, listLibraryFiles, readLibraryFile, writeLibraryFile, deleteLibraryFile, MUSE_AGENT_SLUG, slugFromNames, isValidSlug, AGENT_MAX_ITERATIONS_MIN, agentUndeletableReason } from '../agents/agentRegistry.js';
 import {
   cloudAgentsEnabled, cloudListAgents, cloudGetAgent, cloudSaveAgent, cloudPatchAgent, cloudDeleteAgent,
   cloudSaveAgentAvatar, cloudReadAgentAvatar, cloudDeleteAgentAvatar, cloudReadAgentsMeta, cloudWriteAgentsMeta,
@@ -161,6 +161,11 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
     const scope = cloud ? null : agentSyncScope(deps().brain.agentFiles, req.user!.userId);
     if (!cloud && b.cloudSync && !scope) return res.status(400).json({ detail: 'Sign in to a Forsion account before enabling cloud sync' });
     if (Number(b.maxIterations) > 0 && Number(b.maxIterations) < AGENT_MAX_ITERATIONS_MIN) return res.status(400).json({ detail: `max_iterations must be at least ${AGENT_MAX_ITERATIONS_MIN}` });
+    // 停用:默认 Agent 不许(同「删不掉」那条规则);Muse 由后台 Agent 开关管,不在这里停
+    if (b.disabled === true) {
+      if (slug === MUSE_AGENT_SLUG) return res.status(400).json({ detail: 'Turn Muse off in the background agent settings instead' });
+      if (!cloud && agentUndeletableReason(slug) === 'default') return res.status(400).json({ detail: 'The default agent cannot be disabled' });
+    }
     // 只放**提交了的**字段(undefined = 未提交 → 保留现值)。「算不算提交」逐字段沿用旧口径:
     // name / nameZh / nameEn / namePref / description / model / thinkingLevel / approvalMode / systemPrompt / soul 与三个开关按 != null(传 null = 没提交);
     // maxIterations / toolsMode / toolsList 按 !== undefined(null = 显式清除);两份名单 null 或数组才算;
@@ -184,6 +189,7 @@ router.patch('/agent/agents/:slug', authMiddleware, async (req: AuthRequest, res
       shareDefaultMemory: b.shareDefaultMemory != null ? !!b.shareDefaultMemory : undefined,
       cloudSync: cloud ? (b.cloudSync != null ? !!b.cloudSync : undefined) : (b.cloudSync ? true : undefined),
       activityAccess: b.activityAccess != null ? !!b.activityAccess : undefined,
+      disabled: b.disabled != null ? !!b.disabled : undefined,
       // null=显式清除(saveAgent 收 null → undefined 落盘);缺省保留现值
       toolsMode: b.toolsMode,
       toolsList: b.toolsList,
