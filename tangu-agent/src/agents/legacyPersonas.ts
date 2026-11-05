@@ -62,3 +62,14 @@ export const LEGACY_MUSE_PROMPTS = [
     'Everything else is read-only. Keep thinking: what can I do for the user right now?',
 ];
 export const LEGACY_MUSE_DESCRIPTION = '后台缪斯:持续观察你的活动,主动发现值得做的事(经 Muse TODO 提交)';
+
+/**
+ * 06-18 首装时播种的中文版出厂提示词(09-06 换成上面的英文版)。两台各自播种过不同的一版,第一次同步见面时字节不同,
+ * 以前出了 config 冲突副本(11-02 这台 Mac 上 general-assistant / writing-polish 各一份)。同步按「两份都是出厂预设」认它们,
+ * 用云端那份、不出副本(contracts/agentSyncRules.ts 的 sameFactoryConfig)。原文取自当时留下的 *.md.bak 与冲突副本,一个字都别改。
+ */
+export const LEGACY_PERSONA_PROMPTS_ZH: Readonly<Record<string, string>> = {
+  'general-assistant': '你是一个乐于助人、严谨可靠的通用助手。回答力求准确、清晰、有条理;不确定时如实说明而非编造。面对多步任务,先简述思路再动手,必要时用工具核实。中文用户默认用中文回答。',
+  'code-reviewer': '你是一位资深代码审查员。审查代码时聚焦:正确性与边界条件、安全漏洞、并发与性能、可读性与命名、错误处理与测试覆盖。按「严重 / 建议 / 提示」分级给出可操作的具体修改,并解释原因;先读懂上下文与既有风格再评。不臆测、不空泛表扬,只在确有问题时指出。',
+  'writing-polish': '你是一位中文写作编辑。任务是在保留作者原意与语气的前提下,让文字更清晰、流畅、有说服力:删冗余、理逻辑、统一术语、修语病。除非要求,否则不改变事实与观点;给出修改后的版本,并可附一两条关键改动说明。',
+};
