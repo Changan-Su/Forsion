@@ -103,27 +103,31 @@ export function contextRingWindow(o: {
   return { window: (ultra ? ultraContextWindow(o.model) : o.model?.contextWindow) || o.contextWindow, stale }
 }
 
-/** 1M 级模型在默认(272k)与最大之间多给的一档。 */
+/** 1M 级模型在默认与最大之间多给的一档(老引擎缺省 272k 时);新引擎下它就是 1M 级模型的缺省。 */
 export const CTX_MID_TOKENS = 512_000
 /** 自定义档的下限(k);与设置页手填的下限 4000 token 同量级,再小压缩会一直转。 */
 export const CTX_CUSTOM_MIN_K = 16
 
-/** 「上下文上限」行:模型本身窗口 > 缺省上限才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。
- *  模型窗口超过 512k 时多一档 512k;selected=null = 自定义(菜单里手填 / 设置页填的其它值)。
+/** 「上下文上限」行:模型本身窗口 > 缺省才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。
+ *  缺省 = 引擎按模型下发的 defaultContextWindow(11-06 起 1M 级 512k,其余 272k);老引擎没有它 → min(max, cap)。
+ *  另给一档 alt:缺省低于 512k 而模型超过 512k → 512k(老引擎);缺省是 512k → 272k(想省点的人不用手填)。
+ *  selected=null = 自定义(菜单里手填 / 设置页填的其它值)。
  *  ultra:行上显示 Ultra 下实际用的窗口;选项与勾选仍描述本机存的按模型设置(关掉 Ultra 后照它)。 */
-export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined, ultra = false): { current: number; defaultTokens: number; midTokens?: number; maxTokens?: number; selected: 'default' | 'mid' | 'max' | null } | null {
+export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined, ultra = false): { current: number; defaultTokens: number; altTokens?: number; maxTokens?: number; selected: 'default' | 'alt' | 'max' | null } | null {
   const max = model?.maxContextWindow
   if (!model?.contextWindow || !max || !cap) return null
   const overridden = model.contextWindowSource === 'override'
-  if (max <= cap && !overridden) return null
+  const def = Math.min(max, model.defaultContextWindow || cap)
+  if (max <= def && !overridden) return null
+  const alt = max > CTX_MID_TOKENS && def < CTX_MID_TOKENS ? CTX_MID_TOKENS : def > cap ? cap : undefined
   return {
     current: (ultra && ultraContextWindow(model)) || model.contextWindow,
-    defaultTokens: Math.min(max, cap),
-    ...(max > CTX_MID_TOKENS && cap < CTX_MID_TOKENS ? { midTokens: CTX_MID_TOKENS } : {}),
-    ...(max > cap ? { maxTokens: max } : {}),
+    defaultTokens: def,
+    ...(alt ? { altTokens: alt } : {}),
+    ...(max > def ? { maxTokens: max } : {}),
     // 手填的其它值(如 500000)算自定义,行上照实显示当前值
-    selected: !overridden ? 'default' : max > cap && model.contextWindow === max ? 'max'
-      : max > CTX_MID_TOKENS && cap < CTX_MID_TOKENS && model.contextWindow === CTX_MID_TOKENS ? 'mid' : null,
+    selected: !overridden ? 'default' : max > def && model.contextWindow === max ? 'max'
+      : alt && model.contextWindow === alt ? 'alt' : null,
   }
 }
 
@@ -503,7 +507,7 @@ export const ModelPill: React.FC<{
     ] })
     if (ctx) fields.push({ id: 'context', label: t('pill.rowContext'), value: ctx.selected || 'custom', groups: [{ label: '', options: [
       { value: 'default', label: t('pill.ctxDefault', { n: fmtWindow(ctx.defaultTokens) }), detail: t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) }) },
-      ...(ctx.midTokens ? [{ value: 'mid', label: fmtWindow(ctx.midTokens) }] : []),
+      ...(ctx.altTokens ? [{ value: 'alt', label: fmtWindow(ctx.altTokens) }] : []),
       ...(ctx.maxTokens ? [{ value: 'max', label: t('pill.ctxMax', { n: fmtWindow(ctx.maxTokens) }) }] : []),
     ] }] })
     return fields
@@ -522,8 +526,8 @@ export const ModelPill: React.FC<{
     }
     if ('speed' in changes) onFastChange?.(changes.speed === 'ultra' ? 'ultra' : changes.speed === 'fast')
     for (const { slot } of slotRows) if (slot in changes) onDefaultModelChange?.(slot, changes[slot])
-    // 原生菜单填不了数,自定义只在网页面板里;这里只有默认 / 512k / 最大
-    if ('context' in changes && !('model' in changes) && modelId) onContextWindowChange?.(modelId, changes.context === 'max' ? ctx?.maxTokens ?? null : changes.context === 'mid' ? ctx?.midTokens ?? null : null)
+    // 原生菜单填不了数,自定义只在网页面板里;这里只有默认 / 另一档(512k 或 272k)/ 最大
+    if ('context' in changes && !('model' in changes) && modelId) onContextWindowChange?.(modelId, changes.context === 'max' ? ctx?.maxTokens ?? null : changes.context === 'alt' ? ctx?.altTokens ?? null : null)
   }
   /** 合并菜单;条目数超过原生上限时先去掉高级,还放不下返回 null。 */
   const hubMenu = (extra: SheetMenuItem[]): SheetMenu | null => {
@@ -800,10 +804,10 @@ export const ModelPill: React.FC<{
                     <span className="grow">{t('pill.ctxDefault', { n: fmtWindow(ctx.defaultTokens) })}</span>
                     <span className="mi-check">{ctx.selected === 'default' ? '✓' : ''}</span>
                   </button>
-                  {ctx.midTokens && (
-                    <button type="button" className={`menu-item${ctx.selected === 'mid' ? ' active' : ''}`} onClick={() => pickContext(ctx.midTokens!)}>
-                      <span className="grow">{fmtWindow(ctx.midTokens)}</span>
-                      <span className="mi-check">{ctx.selected === 'mid' ? '✓' : ''}</span>
+                  {ctx.altTokens && (
+                    <button type="button" className={`menu-item${ctx.selected === 'alt' ? ' active' : ''}`} onClick={() => pickContext(ctx.altTokens!)}>
+                      <span className="grow">{fmtWindow(ctx.altTokens)}</span>
+                      <span className="mi-check">{ctx.selected === 'alt' ? '✓' : ''}</span>
                     </button>
                   )}
                   {ctx.maxTokens && (

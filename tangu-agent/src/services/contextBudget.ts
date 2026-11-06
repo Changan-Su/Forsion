@@ -13,7 +13,8 @@
  *
  * 模型上下文窗口:见 modelContextWindowInfo 的优先级链 —— 人填的(env 覆盖 / 用户本机 modelOverrides /
  *    admin 在模型上填的 context_window)> 上游实测的(contextWindowStore 从超长报错里回学)> 手写族表 > 272k 兜底。
- *    run 实际用的是 effectiveContextWindowInfo:自动识别出的窗口再大也封顶 272k,只有人填的覆盖能开更大(09-22)。
+ *    run 实际用的是 effectiveContextWindowInfo:自动识别出的窗口封顶缺省上限(09-22 起 272k;11-06 起 1M 级模型 512k),
+ *    只有人填的覆盖能开更大。
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -56,6 +57,27 @@ export const CONTEXT_WINDOW_TOKENS = (() => {
   const v = Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS);
   return Number.isFinite(v) && v >= 4_000 ? Math.floor(v) : 272_000;
 })();
+
+/** 环境变量是否钉了上限(运维 / 台架):钉了就一律按它,1M 档也不例外 —— 台架靠它把 1M 模型压到小窗口复现。 */
+const CAP_PINNED_BY_ENV = (() => {
+  const v = Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS);
+  return Number.isFinite(v) && v >= 4_000;
+})();
+
+/** 1M 级模型(自动识别窗口 ≥ 它)的缺省上限改用 LONG_CONTEXT_DEFAULT_TOKENS(11-06 用户定)。 */
+export const LONG_CONTEXT_MIN_TOKENS = 1_000_000;
+/** 1M 级模型的缺省上限:512k。触发线 512k − 5% ≈ 486k,离真实窗口还有一半余量。 */
+export const LONG_CONTEXT_DEFAULT_TOKENS = 512_000;
+
+/**
+ * 某个自动识别窗口对应的缺省上限(11-06 用户定):支持 1M 的模型缺省 512k,其余照旧 272k(CONTEXT_WINDOW_TOKENS)。
+ * 按「≥ 1M」判而不是「> 512k」:族表把 GPT-6.1 这类目录报 500k 的仍定 272k,别让它们意外跳档。
+ * env 钉了 TANGU_CONTEXT_WINDOW_TOKENS 时两档都按 env。
+ */
+export function defaultContextWindowCap(autoTokens: number): number {
+  if (CAP_PINNED_BY_ENV) return CONTEXT_WINDOW_TOKENS;
+  return autoTokens >= LONG_CONTEXT_MIN_TOKENS ? LONG_CONTEXT_DEFAULT_TOKENS : CONTEXT_WINDOW_TOKENS;
+}
 
 /** 入站 user 消息:估算超窗口 50% → 拒绝(run 直接失败,消息不落库)。 */
 export const INPUT_HARD_RATIO = 0.5;
@@ -157,7 +179,8 @@ function overrideWindow(modelId?: string | null): number | undefined {
 
 /**
  * run 实际用的窗口(09-22 用户拍板,对标 Codex 模型目录的 context_window 272k / max_context_window 分离):
- * 自动识别出的窗口(模型自报 / 回学 / 族表 / 兜底)一律封顶 CONTEXT_WINDOW_TOKENS —— 1M 族按「窗口 − 预留」
+ * 自动识别出的窗口(模型自报 / 回学 / 族表 / 兜底)一律封顶缺省上限(11-06 起按 defaultContextWindowCap:1M 级 512k,
+ * 其余 272k)—— 1M 族按「窗口 − 预留」
  * 要到 950k 才压缩,生产实报一条会话顶着 387k 逐轮重读(09-20)。人填的覆盖不封顶:那就是「开启更高上下文」的开关
  * (聊天框模型菜单与设置页写的都是 modelOverrides)。max = 自动识别出的窗口(封顶前、不看覆盖),界面据此判断能开多大。
  * 摘要目标仍用 modelContextWindow(未封顶):它问的是摘要模型吃得下多少,不是会话预算。
@@ -168,7 +191,7 @@ export function effectiveContextWindowInfo(modelId?: string | null, modelObj?: a
   const override = overrideWindow(modelId);
   return override
     ? { tokens: override, source: 'override', max: auto.tokens }
-    : { tokens: uncapped ? auto.tokens : Math.min(auto.tokens, CONTEXT_WINDOW_TOKENS), source: auto.source, max: auto.tokens };
+    : { tokens: uncapped ? auto.tokens : Math.min(auto.tokens, defaultContextWindowCap(auto.tokens)), source: auto.source, max: auto.tokens };
 }
 
 /** 覆盖之外的自动识别链:模型自报 > 回学 > 族表 > 兜底。 */
