@@ -1,4 +1,4 @@
-import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users, Terminal } from 'lucide-react'
+import { MessageCircle, MessageCircleQuestion, BookOpen, FolderOpen, Bot, Users, Terminal, GitCompareArrows } from 'lucide-react'
 import { addCommand, registerView, useWorkspace } from '@lcl/engine'
 import { activeChatModelId, useApp } from '../stores/appStore'
 import { TANGU_SLICE } from '../tangu/store/tanguSlice'
@@ -7,6 +7,7 @@ import { ChatView } from '../views/ChatView'
 import { ChatPreview } from '../views/chat2/ChatPreview'
 import { setDraftField, useComposerDrafts } from '../views/chat2/composerDrafts'
 import { ProcessLogView } from '../views/chat2/BackgroundProcs'
+import { ChangesView } from '../views/chat2/ChangesView'
 import { BtwHost, BtwPanel, BtwSideView } from '../views/chat2/BtwPanel'
 import { btwSeedOf, btwWebVisible, openBtw, quoteInMainChat, useBtw } from '../views/chat2/btwStore'
 import { FilesPanel, bumpDir } from '../views/chat2/FilesPanel'
@@ -145,6 +146,8 @@ export function registerTanguViews(): void {
   registerView({ type: 'memory', kind: 'aux', displayName: () => app().tr('panel.tab.memory'), icon: BookOpen, factory: () => <MemoryPanelView />, singleton: true })
   registerView({ type: 'subchats', kind: 'aux', displayName: () => app().tr('panel.tab.subchats'), icon: MessageCircle, factory: () => <SubchatsView />, singleton: true })
   // 后台进程的输出(摘要栏「后台」卡点行 → Desk 里开;Desk 不收文件时开标签页)
+  // 改动审阅页(任务概览「改动」卡的「审阅全部」→ Desk 宽格里开;Desk 不收文件时开标签页)
+  registerView({ type: 'tangu-changes', kind: 'page', displayName: () => translate('changes.title'), icon: GitCompareArrows, factory: (props) => <ChangesView {...props} />, closable: true, singleton: false })
   registerView({ type: 'process-log', kind: 'page', displayName: () => translate('bg.view'), icon: Terminal, factory: (props) => <ProcessLogView {...props} />, closable: true, singleton: false })
   registerView({ type: 'session-files', kind: 'aux', displayName: () => app().tr('panel.tab.workspace'), icon: FolderOpen, factory: () => <SessionFilesView />, singleton: true })
   // 主区特殊视图(按需从侧栏打开,不进默认布局)。旧 'wechat' 视图已退役:恢复布局时未注册类型被引擎自动剔除。

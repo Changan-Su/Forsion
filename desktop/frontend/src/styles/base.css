@@ -1409,6 +1409,18 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .tool-card-body .wsfile-diff .d2h-file-wrapper, .approval-card .wsfile-diff .d2h-file-wrapper { margin-bottom: 4px; border-color: var(--border); }
 /* diff2html 自带的英文 CHANGED/ADDED 角标不过 t(),聊天面藏掉(文件预览面保留) */
 .tool-card-body .wsfile-diff .d2h-tag, .approval-card .wsfile-diff .d2h-tag { display: none; }
+/* 工具行 / 审批卡的 diff 颜色跟主题的 --green / --danger 走(文件改动记录方案 11-06,和回执的 .ct-diff 同一套比例),
+   不用 diff2html 自带的亮绿亮黄;改的是它读的变量,亮暗两套一起换 */
+.tool-card-body .wsfile-diff, .approval-card .wsfile-diff {
+  --d2h-ins-bg-color: color-mix(in srgb, var(--green) 17%, transparent); --d2h-dark-ins-bg-color: color-mix(in srgb, var(--green) 17%, transparent);
+  --d2h-del-bg-color: color-mix(in srgb, var(--danger) 11%, transparent); --d2h-dark-del-bg-color: color-mix(in srgb, var(--danger) 11%, transparent);
+  --d2h-ins-highlight-bg-color: color-mix(in srgb, var(--green) 36%, transparent); --d2h-dark-ins-highlight-bg-color: color-mix(in srgb, var(--green) 36%, transparent);
+  --d2h-del-highlight-bg-color: color-mix(in srgb, var(--danger) 26%, transparent); --d2h-dark-del-highlight-bg-color: color-mix(in srgb, var(--danger) 26%, transparent);
+  --d2h-change-ins-color: var(--d2h-ins-bg-color); --d2h-dark-change-ins-color: var(--d2h-ins-bg-color);
+  --d2h-change-del-color: var(--d2h-del-bg-color); --d2h-dark-change-del-color: var(--d2h-del-bg-color);
+  --d2h-ins-border-color: transparent; --d2h-dark-ins-border-color: transparent; --d2h-del-border-color: transparent; --d2h-dark-del-border-color: transparent;
+  --d2h-ins-label-color: var(--green); --d2h-dark-ins-label-color: var(--green); --d2h-del-label-color: var(--danger); --d2h-dark-del-label-color: var(--danger);
+}
 .wsfile-diff-raw { font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); white-space: pre-wrap; word-break: break-word; margin: 4px 0; }
 .tool-raw-args summary { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); margin: 6px 0 2px; cursor: pointer; user-select: none; }
 .approval-card .approval-diff { max-height: 320px; overflow-y: auto; margin-top: 8px; }

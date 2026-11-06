@@ -34,6 +34,8 @@ import { useWidgets } from '../../services/widgetClient'
 import { moveOnBoard, removeFromBoard, setRailScope, useBoardWidgets } from '../../services/widgetPlaces'
 import { currentPlatform } from '../../services/platform'
 import { BgRow, PROCESS_CAP } from './BackgroundProcs'
+import { useChangesCard } from './changeTrail'
+import { ChangeScopeSeg, ChangesCardBody } from './ChangesCard'
 
 registerMessages({
   'tsum.title': { zh: '任务概览', en: 'Task overview' },
@@ -279,7 +281,7 @@ const fmtDur = (ms: number): string => {
 }
 const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() || p
 /** 内置卡的默认顺序;插件卡按注册顺序插在 Desk 前面(用户定)。 */
-const BUILTIN = ['progress', 'bg', 'outputs', 'sources', 'scope'] as const
+const BUILTIN = ['progress', 'bg', 'changes', 'outputs', 'sources', 'scope'] as const
 const PROC_TOOLS = new Set(['run_background', 'kill_process'])
 
 /** 卡片区里的一张小组件:卡头 = 名字 + 归属,正文 = 原生文档(240 封顶内滚,开合同别的卡)。 */
@@ -324,7 +326,11 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   onRemoveRoot?: (path: string) => void
 }) {
   const { t } = useI18n()
-  const f = useMemo(() => summarizeTask(messages, running, hostCwd), [messages, running, hostCwd])
+  const f0 = useMemo(() => summarizeTask(messages, running, hostCwd), [messages, running, hostCwd])
+  // 「改动」卡(方案 C):引擎给得出真改动时,写盘工具改的文件归它(带增减、能撤销),「产物」只留展示出来的文件和图
+  const changes = useChangesCard(sessionId)
+  const displayed = useMemo(() => new Set(messages.flatMap((m) => (m.displayFiles || []).map((d) => d.path || d.name))), [messages])
+  const f = useMemo(() => (changes.show ? { ...f0, outputs: f0.outputs.filter((o) => displayed.has(o.path || o.name)) } : f0), [f0, changes.show, displayed])
   // 「正在编辑」事实:进行中的编辑类工具调用的目标文件(参数还在流式时也尽力提取)。
   const editing = useMemo(() => (running && onShowEditing ? findLiveEdit(messages, cwd) : null), [messages, running, cwd, onShowEditing])
   const [now, setNow] = useState(() => Date.now())
@@ -369,6 +375,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   const sigs: CardSig[] = []
   if (hasFacts(f) || teamStatus) sigs.push({ id: 'progress', count: f.todos.length + f.attention.length, dflt: true })
   if (sessionId && procs.length) sigs.push({ id: 'bg', count: procs.length, live: runningProcs > 0, dflt: runningProcs > 0 })
+  if (sessionId && changes.show) sigs.push({ id: 'changes', count: changes.files.length, dflt: true })
   if (f.outputs.length > 0) sigs.push({ id: 'outputs', count: f.outputs.length, dflt: true })
   if (f.sources.length > 0) sigs.push({ id: 'sources', count: f.sources.length, dflt: false })
   // 只数用户自己加的:笔记库根是系统并进来的(异步加载完才到),不算「来了新东西」
@@ -440,6 +447,15 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
       <SummaryCard key="bg" id="bg" bodyCap={fit.cap.bg} squeezed={fit.squeezed.includes('bg')} open={isOpen('bg', runningProcs > 0)} onToggle={toggle('bg')} head={<span>{t('tsum.bg')}</span>}
         count={full ? `${runningProcs}/${PROCESS_CAP}` : procs.length} countTitle={full ? t('tsum.bg.cap', { n: PROCESS_CAP }) : undefined}>
         {procs.map((p) => <BgRow key={p.id} p={p} sessionId={sessionId} />)}
+      </SummaryCard>
+    )
+  }
+
+  if (sessionId && changes.show) {
+    cards.changes = (
+      <SummaryCard key="changes" id="changes" bodyCap={fit.cap.changes} squeezed={fit.squeezed.includes('changes')} open={isOpen('changes', true)} onToggle={toggle('changes')}
+        head={<span>{t('changes.title')}</span>} actions={<ChangeScopeSeg scope={changes.scope} />} count={changes.files.length || undefined}>
+        <ChangesCardBody sessionId={sessionId} scope={changes.scope} win={changes.win} files={changes.files} loading={changes.loading} cwd={cwd} />
       </SummaryCard>
     )
   }
