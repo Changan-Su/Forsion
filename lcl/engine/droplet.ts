@@ -42,7 +42,8 @@ export interface Droplet {
   /** 立刻清场(不放动画):组件卸载、被别的面板顶掉时用。 */
   cancel(): void
   /** 倒放途中又要开:从此刻掉头往前放、停在打开,返回 true;这次 retract() 的 Promise 作废(不再 resolve),
-   *  之后要收再调 retract()。不在倒放(没收、已收完、减少动态效果)返回 false,调用方照旧 cancel() 再流出一滴。
+   *  之后要收再调 retract()。不在倒放(没收、已收完、被 cancel)返回 false,调用方照旧 cancel() 再流出一滴。
+   *  减少动态效果那支(只淡入淡出)同样有:淡出途中从此刻的透明度淡回来。
    *  可选:别的展开方式(动效主题的拉伸 / 平移)可以不实现,调用方写 `d.reopen?.()`。 */
   reopen?(): boolean
 }
@@ -109,13 +110,35 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
     const fade = (from: number, to: number, duration: number): Animation =>
       panel.animate([{ opacity: from }, { opacity: to }], { duration, easing: curve('--ease-calm', 'ease') })
     panel.style.visibility = ''
-    const enter = opts.settled ? null : fade(0, 1, ms('--duration-fast', 150))
+    let enter = opts.settled ? null : fade(0, 1, ms('--duration-fast', 150))
+    let exit: Animation | null = null
     let closing: Promise<void> | null = null
-    // 淡入还没走完就收:从此刻的透明度接着淡出,不先跳回 1(11-06 动效第三轮)
-    const leave = (): Animation => { const o = +getComputedStyle(panel).opacity; enter?.cancel(); return fade(o, 0, ms('--menu-exit-duration', 80)) }
+    let gen = 0 // 掉头(reopen)后旧那次淡出的收尾作废
     return {
-      retract: () => (closing ??= leave().finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined)),
+      retract() {
+        if (closing) return closing
+        // 淡入还没走完就收:从此刻的透明度接着淡出,不先跳回 1(11-06 动效第三轮)
+        const o = +getComputedStyle(panel).opacity
+        enter?.cancel()
+        const ex = (exit = fade(o, 0, ms('--menu-exit-duration', 80)))
+        const g = ++gen
+        closing = new Promise<void>((resolve) => {
+          ex.finished.then(() => { if (g !== gen) return; panel.style.visibility = 'hidden'; resolve() }, () => { if (g === gen) resolve() })
+        })
+        return closing
+      },
       cancel: () => { panel.getAnimations().forEach((a) => a.cancel()); panel.style.visibility = '' },
+      // 淡出途中又要开:从此刻的透明度淡回来,不从 0 重来
+      reopen() {
+        if (!closing || !exit || exit.playState !== 'running') return false
+        gen++
+        closing = null
+        const o = +getComputedStyle(panel).opacity
+        exit.cancel()
+        exit = null
+        enter = fade(o, 1, ms('--duration-fast', 150))
+        return true
+      },
     }
   }
   ensureFilter()
