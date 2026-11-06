@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { createLocalMemoryBrain, MEMORY_SOFT_CAP } from '../src/adapters/standalone/localMemoryBrain.js';
 
 let dir: string;
-const mk = () => createLocalMemoryBrain({ baseDir: dir, deviceId: 'devA' });
+const mk = () => createLocalMemoryBrain({ baseDir: dir, deviceId: 'devA', deviceName: null });
 
 beforeEach(() => { dir = mkdtempSync(join(tmpdir(), 'tangu-mem-')); });
 afterEach(() => { try { rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ } });
@@ -42,6 +42,18 @@ describe('localMemoryBrain log', () => {
     expect(content).toContain('# 2026-06-23');
     expect(content).toContain('### 10:00\n@devA did a thing');
     expect(content).toContain('### 11:30\n@devA did another');
+  });
+
+  it('log headings carry this device’s name (shown instead of the device id); merging ignores that tail', async () => {
+    const b = createLocalMemoryBrain({ baseDir: dir, deviceId: 'devA', deviceName: 'MacBook Pro' });
+    await b.appendLogEntry('u', 'did a thing', { date: '2026-06-24', time: '10:00' });
+    const { content } = await b.getLog('u', '2026-06-24');
+    expect(content).toContain('### 10:00 · MacBook Pro\n@devA did a thing');
+    // 同一块经云端 Brain 转一圈回来没了尾巴:合并时是同一块,留本机带名字的那份
+    const { mergeBlocks, splitLogBlocks } = await import('../src/contracts/contentMerge.js');
+    const merged = mergeBlocks(splitLogBlocks(content).blocks, ['### 10:00\n@devA did a thing']);
+    expect(merged.merged).toEqual(['### 10:00 · MacBook Pro\n@devA did a thing']);
+    expect(merged.onlyInB).toEqual([]);
   });
 
   it('appendLogEntry rejects empty', async () => {

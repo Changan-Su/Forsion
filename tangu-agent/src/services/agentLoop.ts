@@ -93,6 +93,8 @@ import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
+import { filterTaggedEntries, foldNote } from '../contracts/deviceTags.js';
+import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 import { buildProjectMemoryContext, resolveProjectMemory } from './projectMemory.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
@@ -1527,7 +1529,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
     const suppressCompanionPersona = ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG;
     const notesApply = execMode === 'host' && !inlineMemberDef && !suppressCompanionPersona;
-    const harnessEntries = notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [];
+    // 按条标适用范围(11-06,contracts/deviceTags.ts):指令、人格、工作笔记、记忆里标了别台 / 别的系统的,这一轮不拼进来,折成一行。
+    // 本机引擎 = 这台电脑;云端 run 不在任何一台电脑上,标了的一律折起来。每个 run 现读(同步页上改了名,下一轮就对得上)。
+    const tagCtx = runTagContext(!!profile.capabilities.hostExec);
+    const harnessTagged = filterTaggedEntries(notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [], (e) => e.title, tagCtx);
+    const harnessEntries = harnessTagged.kept; // 别台的装备条目也不收起本机的工具
     const shelved = shelvedOf(harnessEntries);
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
     const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig, shelved.skills);
@@ -1568,10 +1574,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
-    if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(String(agentConfig.systemPrompt));
+    if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(textForThisDevice(String(agentConfig.systemPrompt), tagCtx));
     // 2) SOUL.md 人格(身份/稳定)
     if (agentConfig.soul && String(agentConfig.soul).trim() && !suppressCompanionPersona) {
-      systemParts.push('## Persona\nThe following is your persona; act according to its tone and values, but do not recite it verbatim.\n\n' + String(agentConfig.soul).trim());
+      systemParts.push('## Persona\nThe following is your persona; act according to its tone and values, but do not recite it verbatim.\n\n' + textForThisDevice(String(agentConfig.soul).trim(), tagCtx));
     }
     // 2') 身份段(当前名字 / 简介):人格正文常写死旧名,不注入则改名后模型仍自称旧名(09-18)。随人格一起被 coding 预设抑制。
     if (agentProfile && !suppressCompanionPersona) systemParts.push(agentIdentitySection(agentProfile));
@@ -1593,7 +1599,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     随人格一起被 coding 预设抑制。
     //     条目在本 run 开头已读好(harnessEntries,见 loadSkillLoadout 上方)。
     const harnessBlock = renderHarnessSection(harnessEntries);
-    if (harnessBlock) systemParts.push(harnessBlock);
+    const harnessFold = foldNote(harnessTagged.skipped);
+    if (harnessBlock || harnessFold) systemParts.push([harnessBlock || '## My Evolution Record (self-curated)', harnessFold].filter(Boolean).join('\n'));
     ctxMark('harness');
     // HUMAN is collaboration context, including projectless Chat and Coding. It never
     // changes tool permissions. All documents are read anew at each user turn.
@@ -1756,7 +1763,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // (P1 · M1A,G7)。run 自己带远程污点时不藏 —— 远端内容回到远端 run 不是洗白。显式的 search_sessions / read_session 另见工具。
       // 远程污点只存在于本机引擎(hostExec):云端 / thin worker 不带这个键,免得 PG 谓词与网关路由为一个恒空的集合跑一遍。
       const hideRemoteSessions = profile.capabilities.hostExec && !effectiveRemote({ remote, runId });
-      const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug,
+      const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug, deviceTags: tagCtx,
         query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
       if (volatilePlacement === 'system') {
         if (memoryContext.content) systemParts.push(MEMORY_BLOCK_HEADER + memoryContext.content);
