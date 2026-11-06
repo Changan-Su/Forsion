@@ -73,24 +73,27 @@ function stripComments(src) {
   return out
 }
 
+/** import 指到的仓内路径(不管文件在不在扫描范围里);第三方包 → null。 */
+function baseOf(from, spec) {
+  if (spec.startsWith('.')) return path.posix.join(path.posix.dirname(from), spec).replace(/\?.*$/, '')
+  const a = ALIAS.find(([k]) => spec === k || spec.startsWith(k + '/'))
+  return a ? path.posix.normalize(a[1] + spec.slice(a[0].length)).replace(/\?.*$/, '') : null
+}
+/** 解析到 files(Map 或 Set)里实际有的文件;第三方包 / 解析不到 → null。hot-update-scope.mjs 也用它。 */
+function resolveIn(files, from, spec) {
+  const base = baseOf(from, spec)
+  if (!base) return null
+  for (const e of EXT) if (files.has(base + e)) return base + e
+  if (/\.js$/.test(base)) for (const e of ['.ts', '.tsx']) if (files.has(base.replace(/\.js$/, e))) return base.replace(/\.js$/, e)
+  return null
+}
+
 /** files: Map<rel path, source>。返回 { errors, notes, current }。纯函数,--selftest 直接喂它。 */
 function analyze(files, cfg) {
   const isTangu = (f) => cfg.tangu.dirs.some((d) => f.startsWith(d)) || cfg.tangu.files.includes(f)
   const contractDirs = cfg.contracts?.dirs || []
   const isContract = (f) => contractDirs.some((d) => f.startsWith(d))
-  /** import 指到的仓内路径(不管文件在不在扫描范围里);第三方包 → null。 */
-  const baseOf = (from, spec) => {
-    if (spec.startsWith('.')) return path.posix.join(path.posix.dirname(from), spec).replace(/\?.*$/, '')
-    const a = ALIAS.find(([k]) => spec === k || spec.startsWith(k + '/'))
-    return a ? path.posix.normalize(a[1] + spec.slice(a[0].length)).replace(/\?.*$/, '') : null
-  }
-  const resolve = (from, spec) => {
-    const base = baseOf(from, spec)
-    if (!base) return null
-    for (const e of EXT) if (files.has(base + e)) return base + e
-    if (/\.js$/.test(base)) for (const e of ['.ts', '.tsx']) if (files.has(base.replace(/\.js$/, e))) return base.replace(/\.js$/, e)
-    return null
-  }
+  const resolve = (from, spec) => resolveIn(files, from, spec)
   const errors = [], notes = []
   const used = new Set(), hostDeps = new Set()
   const known = new Set(cfg.baseline.hostImports)
@@ -224,6 +227,9 @@ function selftest() {
   console.log('tangu-boundary selftest: 43/43 PASS')
 }
 
+// 界面热更新 4a:共享表生成器(tangu-ui-shared.mjs)和界面包构建(build-tangu-ui.mjs)用同一份划分与 alias
+module.exports = { GENESIS, CONFIG, ALIAS, SRC, EXT, EXEMPT, IMPORT_RE, stripComments, lastStmt, typeOnly, baseOf, resolveIn, readRepo, readConfig: () => JSON.parse(fs.readFileSync(CONFIG, 'utf8')) }
+if (require.main !== module) return
 if (process.argv.includes('--selftest')) { selftest(); process.exit(0) }
 const cfg = JSON.parse(fs.readFileSync(CONFIG, 'utf8'))
 const { errors, notes, current } = analyze(readRepo(), cfg)

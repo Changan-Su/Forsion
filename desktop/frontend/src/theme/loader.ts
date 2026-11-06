@@ -186,6 +186,8 @@ export function applyTheme(
   syncWindowMaterial();
 
   if (opts?.persist !== false) {
+    // 本机外观报给主进程(Forsion Clip 连上后跟随);只报用户自己的全局外观,Space 临时外观(persist=false)不报。
+    try { window.tangu?.reportUiAppearance?.({ skin: skinId, bg: bgId, mode }); } catch { /* 无 preload */ }
     try {
       localStorage.setItem('forsion_theme_lang', cssId);
       localStorage.setItem('forsion_theme_skin', skinId);

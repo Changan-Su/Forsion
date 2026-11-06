@@ -15,7 +15,7 @@ import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { IPC } from '@amadeus-shared/ipc'
 import type { VaultFace } from './amadeus/ipc'
-import { newPairStore, startUnitWeb, VAULT_RPC_ALLOW, VAULT_RPC_LOCAL_ONLY, engineRouteAccess, engineTarget, normalizeEnginePath, type PairStore, type PairedDevice, type UnitWebDeps } from './unitWeb'
+import { newPairStore, startUnitWeb, VAULT_RPC_ALLOW, VAULT_RPC_LOCAL_ONLY, engineRouteAccess, engineTarget, normalizeEnginePath, type PairStore, type PairedDevice, type UnitWebDeps, startClipEntrance } from './unitWeb'
 import { ENGINE_ROUTES } from './engineRoutes.generated'
 import { PRODUCT } from './product'
 import { signProxyCaller, type ProxyCaller, type UnitCaller } from './unitCaller'
@@ -244,6 +244,68 @@ describe('unitWeb', () => {
       expect((await fetch(`${b.base}/unit/browser-control`, { headers: { 'x-unit-p2p': b.handle.p2pSecret } })).status).toBe(403)
       available = false
       expect((await fetch(`${b.base}/unit/browser-control`, { headers: { Authorization: `Bearer ${token}` } })).status).toBe(404)
+    } finally { b.close() }
+  })
+
+  it('Forsion Clip 本机入口:只听回环、只放 Clip 用到的几条路、配对请求只认 Clip 的 Origin,鉴权照正式服务走', async () => {
+    const CLIP = 'chrome-extension://gpajikakdmhjebadgcbmhidkkajclfoi'
+    const code = `tangu:47655:${'ab'.repeat(24)}`
+    const b = await boot(null, undefined, undefined, { browserControlCode: async () => code, meta: { instanceId: 'inst-1', name: '测试机', version: '9.9.9', build: 'dev' } })
+    let target: typeof b.handle | null = b.handle
+    const entrance = await startClipEntrance({ ports: [0], origins: [CLIP], target: () => target })
+    try {
+      expect(entrance).not.toBeNull()
+      const base = `http://127.0.0.1:${entrance!.port}`
+      expect(entrance!.port).toBeGreaterThan(0)
+      const meta = (await (await fetch(`${base}/unit/meta`)).json()) as any
+      expect(meta).toMatchObject({ instanceId: 'inst-1', build: 'dev', pair: true })
+      // 只放 Clip 用到的路:设备页 / 插件 / 主机文件一律 404(正式服务上它们照常)
+      for (const p of ['/unit/plugins', '/unit/config', '/unit/hostfile?path=/ws/ok.md', '/', '/unit%2Fplugins', '/engine/agent/sessions/%2e%2e/%2e%2e/unit/plugins', '/engine/agent/sessionsX']) {
+        expect((await fetch(`${base}${p}`)).status, p).toBe(404)
+      }
+      // 网页 / 没带 Origin:不弹框
+      expect((await fetch(`${base}/unit/pair/request`, { method: 'POST', body: '{}' })).status).toBe(403)
+      expect((await fetch(`${base}/unit/pair/request`, { method: 'POST', body: '{}', headers: { Origin: 'https://evil.example' } })).status).toBe(403)
+      const req = (await (await fetch(`${base}/unit/pair/request`, { method: 'POST', body: '{"name":"Forsion Clip (Chrome)"}', headers: { Origin: CLIP } })).json()) as any
+      expect(req.code).toMatch(/^\d{6}$/)
+      b.approve(true)
+      await tick()
+      const poll = (await (await fetch(`${base}/unit/pair/poll?id=${req.requestId}`)).json()) as any
+      expect(poll.status).toBe('approved')
+      const auth = { Authorization: `Bearer ${poll.token}` }
+      expect((await fetch(`${base}/unit/whoami`)).status).toBe(401)
+      expect((await fetch(`${base}/unit/whoami`, { headers: auth })).status).toBe(200)
+      // 一次配对领 Tangu 连接码:入口是本机套接字 + 局域网配对令牌 → 照样给
+      expect(await (await fetch(`${base}/unit/browser-control`, { headers: auth })).json()).toEqual({ code })
+      expect((await fetch(`${base}/vault/rpc`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ ch: IPC.listPages, args: [] }) })).status).toBe(200)
+      // 正式服务换服务的空档:503,Clip 按「还在等」处理
+      target = null
+      expect((await fetch(`${base}/unit/meta`)).status).toBe(503)
+    } finally { await entrance?.close(); b.close() }
+  })
+
+  it('Forsion Clip 本机入口:第一个口被占就用下一个,都被占返回 null', async () => {
+    const first = await startClipEntrance({ ports: [0], origins: [], target: () => null })
+    try {
+      const busy = first!.port
+      const second = await startClipEntrance({ ports: [busy, 0], origins: [], target: () => null })
+      expect(second?.port).toBeGreaterThan(0)
+      expect(second?.port).not.toBe(busy)
+      await second?.close()
+      expect(await startClipEntrance({ ports: [busy], origins: [], target: () => null })).toBeNull()
+    } finally { await first?.close() }
+  })
+
+  it('/unit/appearance:未配对 401,没上报过 404,上报过给已配对设备', async () => {
+    let appearance: { skin: string; bg: string; mode: 'light' | 'dark'; locale: 'zh' | 'en' } | null = null
+    const b = await boot(null, undefined, undefined, { appearance: () => appearance })
+    try {
+      expect((await fetch(`${b.base}/unit/appearance`)).status).toBe(401)
+      const token = await pairUp(b)
+      const auth = { Authorization: `Bearer ${token}` }
+      expect((await fetch(`${b.base}/unit/appearance`, { headers: auth })).status).toBe(404)
+      appearance = { skin: 'sage', bg: 'sage', mode: 'dark', locale: 'en' }
+      expect(await (await fetch(`${b.base}/unit/appearance`, { headers: auth })).json()).toEqual({ appearance })
     } finally { b.close() }
   })
 

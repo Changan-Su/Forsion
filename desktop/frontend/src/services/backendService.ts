@@ -825,7 +825,7 @@ export const agentUninstallPreview = (t: EngineTarget, slug: string) =>
 
 /** 回收站(引擎 <tanguHome>/trash/,30 天;只在本机)。restorer='desktop' 的(Forsion 插件)走主进程 trashRestore。 */
 export interface TrashEntry {
-  id: string; kind: 'agent' | 'skill' | 'plugin'; ref: string; name: string; deletedAt: number; size: number
+  id: string; kind: 'agent' | 'skill' | 'plugin' | 'file'; ref: string; name: string; deletedAt: number; size: number
   restorer: 'engine' | 'desktop'; items: Array<{ from: string; stored: string; role?: string }>; extra?: Record<string, unknown>
 }
 export const listTrash = (t: EngineTarget) => request<{ entries: TrashEntry[]; days: number }>(t, '/agent/trash')
@@ -1035,6 +1035,10 @@ export const getSpecialConfig = (t: EngineTarget) =>
 
 export const saveSpecialConfig = (t: EngineTarget, patch: { historian?: Partial<SpecialAgentsConfig['historian']>; muse?: Partial<SpecialAgentsConfig['muse']> }) =>
   request<{ config: SpecialAgentsConfig }>(t, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)
+
+/** 首启引导「认识你的 Agents 团队」答的第一次见面(本机专用;写完 introAt,私聊不再发那张卡)。 */
+export const saveMuseIntro = (t: EngineTarget, body: { when?: string; proactivity?: string; focus?: string[]; focusText?: string }) =>
+  request<{ ok: boolean; config: SpecialAgentsConfig }>(t, '/agent/special/muse/intro', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.config)
 
 export interface SessionHistorianStatus {
   running: boolean

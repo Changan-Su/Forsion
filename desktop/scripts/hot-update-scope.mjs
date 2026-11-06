@@ -1,0 +1,277 @@
+#!/usr/bin/env node
+/**
+ * 这次改动能不能走热更新(插件接口层热更新方案 A,2026-11-05;方案页在仓根 docs/ToBeImproved/插件接口层热更新方案_2026-11-04/)。
+ * 只提示、不拦:PR 上把结论写进检查摘要,退出码恒为 0(--selftest 除外)。
+ *
+ *   node scripts/hot-update-scope.mjs --base <ref> [--head <ref>]                        一个改动(PR):分类 + 结论
+ *   node scripts/hot-update-scope.mjs --history [--since 2026-11-05] [--ref origin/main]   main 上逐个提交统计(一个月后量比例用)
+ *   node scripts/hot-update-scope.mjs --verify                                            接口层清单里的文件有没有被宿主别的文件在运行时引用
+ *   node scripts/hot-update-scope.mjs --selftest
+ *
+ * 四档结论:
+ *   none       只动了文档 / 测试 / CI,或插件接口类型(types.ts 没有运行时导出)→ 不用发版
+ *   tangu      只动了引擎和 Tangu 界面(规则同热更新门禁:engine-release-gate.mjs 的 packageScope),没碰建表 / 迁移、
+ *              没改引擎依赖 → 现在就能走热更新
+ *   layer      另外还动了插件接口层(plugin-ctx-boundary.json)→ 接口层进包以后才能走热更新
+ *   installer  动了别的宿主文件,或建表 / 引擎依赖 → 只能随安装包
+ * 分类用两份清单(tangu-boundary.json、plugin-ctx-boundary.json):当前检出的为准,并上改动前后两头的版本,改名 / 删掉的文件按它原来的类算;
+ * --history 回放旧提交时也一样(今天的清单 + 那个提交时的清单)。
+ */
+import { execFileSync } from 'node:child_process'
+import { appendFileSync, readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import assert from 'node:assert/strict'
+import { SCHEMA_SOURCES, packageScope } from '../../tangu-agent/scripts/engine-release-gate.mjs'
+
+const boundary = createRequire(import.meta.url)('./tangu-boundary.check.cjs')
+const GENESIS = boundary.GENESIS
+const CTX_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), 'plugin-ctx-boundary.json')
+const SCHEMA = SCHEMA_SOURCES.map((f) => `tangu-agent/${f}`)
+// 开发工具(检查脚本、台架、harness 页、类型声明)不进安装包也不进热更新包;desktop/scripts 里 build-tangu-ui / tangu-boundary 影响界面包,build-unit-web 产出进安装包(pack / dist 先跑它)。
+// 发布门禁(packageScope)对热更新分支更严,连它们也不许碰 —— 这里答的是「这项改动要不要等安装包才能到用户手里」。
+const TOOLING = /^desktop\/scripts\/(?!build-tangu-ui\.mjs$|build-unit-web\.mjs$|tangu-boundary\.json$)/
+// 引擎包里实际带的(tangu-agent/package.json 的 files + 包本身);tangu-agent 下别的(docs、scripts、test、plugin-api 类型)不随包发
+const ENGINE_SHIPPED = /^tangu-agent\/(?:(?:src|skills|agent-skills)\/|package\.json$)/
+
+export const VERDICTS = {
+  none: '不用发版(只有文档 / 测试 / CI / 开发工具 / 插件接口类型)',
+  tangu: '能走热更新(只动了引擎和 Tangu 界面)',
+  layer: '接口层进包以后能走热更新(动了插件接口层,没动别的宿主文件)',
+  installer: '只能随安装包',
+}
+
+/** 改动的文件分组 + 结论。纯函数:selftest 直接喂。 */
+export function classify(paths, { tanguCfg, ctxCfg, depsChanged = false, desktopManifestChanged = false }) {
+  // desktop/package.json 只改了版本号或开发用的 scripts 不算宿主改动(见 desktopShipped)
+  if (!desktopManifestChanged) paths = paths.filter((f) => f !== 'desktop/package.json')
+  const sets = Object.fromEntries(['layer', 'needsSplit', 'writesUserData', 'types'].map((k) => [k, new Set(ctxCfg[k] || [])]))
+  const tooling = paths.filter((f) => TOOLING.test(f) || boundary.EXEMPT.test(f))
+  const { host, ui } = packageScope(paths.filter((f) => !tooling.includes(f)), tanguCfg)
+  const hostSet = new Set(host), uiSet = new Set(ui)
+  const g = { engine: [], ui, layer: [], needsSplit: [], writesUserData: [], types: [], host: [], schema: [], notShipped: [] }
+  for (const f of paths) {
+    if (SCHEMA.includes(f)) g.schema.push(f)
+    if (uiSet.has(f)) continue
+    if (tooling.includes(f)) { g.notShipped.push(f); continue }
+    if (!hostSet.has(f)) { (ENGINE_SHIPPED.test(f) ? g.engine : g.notShipped).push(f); continue }
+    const k = ['types', 'layer', 'needsSplit', 'writesUserData'].find((key) => sets[key].has(f))
+    ;(k ? g[k] : g.host).push(f)
+  }
+  const notes = []
+  if (g.schema.length) notes.push(`改了建表 / 迁移(${g.schema.join(', ')}):热更新门禁不收`)
+  if (depsChanged) notes.push('改了引擎的 dependencies:热更新门禁不收')
+  if (g.needsSplit.length) notes.push(`动了还没拆开的 ${g.needsSplit.map((f) => path.basename(f)).join(' / ')}:接口层进包前要先拆`)
+  if (g.writesUserData.length) notes.push(`动了写用户数据的 ${g.writesUserData.map((f) => path.basename(f)).join(' / ')}:进包前写盘那几步要留宿主或按写盘协议复核`)
+  const verdict = g.host.length || g.schema.length || depsChanged ? 'installer'
+    : g.layer.length || g.needsSplit.length || g.writesUserData.length ? 'layer'
+    : g.engine.length || g.ui.length ? 'tangu'
+    : 'none'
+  return { verdict, groups: g, notes }
+}
+
+/** 清单自洽:接口层文件不能同时是 Tangu 界面文件,各组之间不重复。 */
+export function configProblems(tanguCfg, ctxCfg) {
+  const problems = [], seen = new Map()
+  const isTangu = (f) => tanguCfg.tangu.dirs.some((d) => f.startsWith(d)) || tanguCfg.tangu.files.includes(f)
+  for (const k of ['layer', 'needsSplit', 'writesUserData', 'types']) {
+    for (const f of ctxCfg[k] || []) {
+      if (isTangu(f)) problems.push(`${f} 在 plugin-ctx-boundary.json 的 ${k} 里,但它是 Tangu 界面文件(tangu-boundary.json)`)
+      if (seen.has(f)) problems.push(`${f} 同时在 ${seen.get(f)} 和 ${k} 里`)
+      seen.set(f, k)
+    }
+  }
+  return problems
+}
+
+/** 宿主别的文件在运行时引用接口层文件的地方(只引类型不算;接口层自己、待拆的、写盘的、类型文件之间互引不算)。 */
+export function reverseImports(files, ctxCfg) {
+  const layer = new Set(ctxCfg.layer || [])
+  const inside = new Set(['layer', 'needsSplit', 'writesUserData', 'types'].flatMap((k) => ctxCfg[k] || []))
+  const out = []
+  for (const [f, src] of files) {
+    if (inside.has(f) || boundary.EXEMPT.test(f) || /\.(test|spec)\.[cm]?[tj]sx?$/.test(f)) continue
+    for (const m of boundary.stripComments(src).matchAll(boundary.IMPORT_RE)) {
+      let spec = m[1] || m[3] || m[4] || m[5] || m[6]
+      // CSS 的 @import 'x.css' 不带 ./ 也是相对路径
+      if (m[5] && !/^(?:[./]|@\/|[a-z]+:)/i.test(spec)) spec = './' + spec
+      const to = boundary.resolveIn(files, f, spec)
+      if (to && layer.has(to) && !boundary.typeOnly(boundary.lastStmt(m[0]))) out.push({ from: f, to })
+    }
+  }
+  return out
+}
+
+const CTX_KEYS = ['layer', 'needsSplit', 'writesUserData', 'types']
+const TANGU_CFG_PATH = 'desktop/scripts/tangu-boundary.json', CTX_CFG_PATH = 'desktop/scripts/plugin-ctx-boundary.json'
+/** 键排好序再序列化:只是挪了顺序不算改动。 */
+export const stable = (v) => JSON.stringify(v, (_k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) : x))
+/** 引擎 package.json 里门禁在意的:dependencies(热更新门禁不收依赖变化)。读不到 / 解析不了 = null,和读得到的比一律算变了。 */
+export const engineDeps = (j) => (j ? stable(j.dependencies ?? {}) : null)
+/** desktop/package.json 里到得了用户手里的:除版本号和开发用 scripts 之外都算(devDependencies 也会被 vite 打进包,main / optionalDependencies 进安装包)。 */
+const BUILD_SCRIPT = /^(?:pre|post)?(?:build|pack|dist|install)(?::|$)/
+export const desktopShipped = (j) => (j ? stable({ ...j, version: undefined, scripts: Object.fromEntries(Object.entries(j.scripts ?? {}).filter(([k]) => BUILD_SCRIPT.test(k))) }) : null)
+/** 几版清单并起来,排前面的优先:同一个文件只认第一次出现的类。 */
+export function unionCfg(list) {
+  const cfgs = list.filter((c) => c?.tanguCfg && c?.ctxCfg)
+  const uniq = (a) => [...new Set(a)]
+  const tanguCfg = { ...cfgs[0].tanguCfg, tangu: { dirs: uniq(cfgs.flatMap((c) => c.tanguCfg.tangu?.dirs ?? [])), files: uniq(cfgs.flatMap((c) => c.tanguCfg.tangu?.files ?? [])) } }
+  const ctxCfg = Object.fromEntries(CTX_KEYS.map((k) => [k, []])), seen = new Set()
+  for (const c of cfgs) for (const k of CTX_KEYS) for (const f of c.ctxCfg[k] ?? []) if (!seen.has(f)) { seen.add(f); ctxCfg[k].push(f) }
+  return { tanguCfg, ctxCfg }
+}
+
+const gitRaw = (...a) => execFileSync('git', a, { cwd: GENESIS, encoding: 'utf8', maxBuffer: 64 << 20 })
+const git = (...a) => gitRaw(...a).trim()
+const lines = (s) => s.split('\n').filter(Boolean)
+const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'))
+const showJson = (rev, file) => { try { return JSON.parse(execFileSync('git', ['show', `${rev}:${file}`], { cwd: GENESIS, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'ignore'] })) } catch { return null } }
+const configs = () => ({ tanguCfg: boundary.readConfig(), ctxCfg: readJson(CTX_FILE) })
+const cfgAt = (rev) => ({ tanguCfg: showJson(rev, TANGU_CFG_PATH), ctxCfg: showJson(rev, CTX_CFG_PATH) })
+
+const withCfg = ({ paths, depsChanged, desktopManifestChanged }, cfg) => [paths, { ...cfg, depsChanged, desktopManifestChanged }]
+
+function changeBetween(from, to) {
+  // -z:中文等文件名不被 git 加引号转义
+  const paths = gitRaw('diff', '--name-only', '--no-renames', '-z', from, to).split('\0').filter(Boolean)
+  const differs = (file, pick) => paths.includes(file) && pick(showJson(from, file)) !== pick(showJson(to, file))
+  return { paths, depsChanged: differs('tangu-agent/package.json', engineDeps), desktopManifestChanged: differs('desktop/package.json', desktopShipped) }
+}
+
+function reportOne(base, head) {
+  const current = configs()
+  for (const p of configProblems(current.tanguCfg, current.ctxCfg)) console.log(`::warning title=热更新范围清单::${p}`)
+  const mergeBase = git('merge-base', base, head)
+  const cfg = unionCfg([current, cfgAt(head), cfgAt(mergeBase)])
+  const r = classify(...withCfg(changeBetween(mergeBase, head), cfg))
+  const label = { engine: '引擎', ui: 'Tangu 界面', layer: '插件接口层', needsSplit: '接口层(待拆)', writesUserData: '接口层(写用户数据)', types: '插件接口类型', host: '别的宿主文件', notShipped: '文档 / 测试 / CI / 开发工具' }
+  const rows = Object.entries(label).filter(([k]) => r.groups[k].length)
+    .map(([k, name]) => `| ${name} | ${r.groups[k].length} | ${r.groups[k].slice(0, 6).map((f) => `\`${f}\``).join('<br>')}${r.groups[k].length > 6 ? `<br>…还有 ${r.groups[k].length - 6} 个` : ''} |`)
+  const md = [`### 热更新范围:${VERDICTS[r.verdict]}`, '', ...r.notes.map((n) => `- ${n}`), '', '| 类别 | 文件数 | 文件 |', '|---|---|---|', ...rows, '',
+    '只提示、不拦。规则:能走热更新 = 只动了引擎和 Tangu 界面(同热更新门禁);接口层进包是待定方案,先量一个月。'].join('\n')
+  console.log(md)
+  console.log(`::notice title=热更新范围::${VERDICTS[r.verdict]}`)
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, md + '\n')
+}
+
+function history(ref, since) {
+  const current = configs()
+  const commits = lines(git('rev-list', '--first-parent', `--since=${since}`, ref))
+  const all = { none: [], tangu: [], layer: [], installer: [] }
+  const plugin = { none: [], tangu: [], layer: [], installer: [] }
+  for (const c of commits) {
+    const parents = git('rev-list', '--parents', '-n', '1', c).split(' ')
+    if (parents.length < 2) continue
+    const change = changeBetween(parents[1], c)
+    const { paths } = change
+    // 今天的清单 + 那个提交时的清单;改了清单本身的提交再并上改之前的(删掉 / 改名的文件按原来的类算)
+    const touchedCfg = paths.includes(CTX_CFG_PATH) || paths.includes(TANGU_CFG_PATH)
+    const cfg = unionCfg([current, cfgAt(c), ...(touchedCfg ? [cfgAt(parents[1])] : [])])
+    const pluginFiles = new Set(CTX_KEYS.flatMap((k) => cfg.ctxCfg[k]))
+    const r = classify(...withCfg(change, cfg))
+    const line = `${c.slice(0, 9)} ${git('log', '-1', '--format=%s', c).slice(0, 72)}`
+    all[r.verdict].push(line)
+    if (paths.some((f) => pluginFiles.has(f))) plugin[r.verdict].push(line)
+  }
+  const pct = (n, d) => (d ? `${Math.round((n * 100) / d)}%` : '-')
+  const table = (t) => { const n = Object.values(t).reduce((s, v) => s + v.length, 0); return Object.keys(VERDICTS).map((k) => `  ${VERDICTS[k]}: ${t[k].length} / ${n}(${pct(t[k].length, n)})`).join('\n') }
+  console.log(`${ref} 自 ${since} 起 ${commits.length} 个提交(first-parent:一次合并或一次直推算一个)\n\n全部:\n${table(all)}\n\n其中动了插件接口层或接口类型的:\n${table(plugin)}`)
+  for (const k of ['tangu', 'layer']) if (plugin[k].length) console.log(`\n接口改动里「${VERDICTS[k]}」的:\n  ${plugin[k].join('\n  ')}`)
+}
+
+function verify() {
+  const cfg = configs()
+  const problems = configProblems(cfg.tanguCfg, cfg.ctxCfg)
+  const files = boundary.readRepo()
+  for (const k of ['layer', 'needsSplit', 'writesUserData', 'types']) for (const f of cfg.ctxCfg[k] || []) if (!files.has(f)) problems.push(`${f}(${k})不存在了`)
+  for (const { from, to } of reverseImports(files, cfg.ctxCfg)) problems.push(`宿主在运行时引用了接口层文件:${from} → ${to}(进包后就是两份;要么改走 ctx / 接缝,要么把它挪进 needsSplit)`)
+  for (const p of problems) console.log(`::warning title=插件接口层清单::${p}`)
+  console.log(problems.length ? `\n插件接口层清单:${problems.length} 处要看(只提示)` : '插件接口层清单 OK —— 接口层文件没有被宿主别的文件在运行时引用')
+}
+
+function selftest() {
+  const tanguCfg = { tangu: { dirs: ['desktop/frontend/src/tangu/'], files: [] }, contracts: { dirs: ['tangu-agent/src/contracts/'] } }
+  const P = 'desktop/frontend/src/amadeus/plugins/'
+  const ctxCfg = { layer: [`${P}chatBoxSurface.tsx`], needsSplit: [`${P}pluginStore.ts`], writesUserData: [`${P}pluginData.ts`], types: [`${P}types.ts`] }
+  const v = (paths, o = {}) => classify(paths, { tanguCfg, ctxCfg, ...o })
+  const cases = [
+    ['docs and tests only', () => assert.equal(v(['docs/a.md', `${P}chatBoxSurface.test.ts`, '.github/workflows/x.yml']).verdict, 'none')],
+    ['plugin types only', () => assert.equal(v([`${P}types.ts`, 'docs/customization/plugin-development.md']).verdict, 'none')],
+    ['engine + Tangu UI', () => assert.equal(v(['tangu-agent/src/agent.ts', 'desktop/frontend/src/tangu/Chat.tsx']).verdict, 'tangu')],
+    ['interface layer', () => assert.equal(v([`${P}chatBoxSurface.tsx`, `${P}types.ts`]).verdict, 'layer')],
+    ['pluginStore and write paths count as layer, with notes', () => {
+      const r = v([`${P}pluginStore.ts`, `${P}pluginData.ts`])
+      assert.equal(r.verdict, 'layer')
+      assert.match(r.notes.join(), /先拆.*写盘/s)
+    }],
+    ['any other host file → installer', () => assert.equal(v([`${P}chatBoxSurface.tsx`, 'desktop/frontend/src/amadeus/store/dbAggregateStore.ts']).verdict, 'installer')],
+    ['contracts are host', () => assert.equal(v(['tangu-agent/src/contracts/events.ts']).verdict, 'installer')],
+    ['engine files outside the package need no release', () => {
+      assert.equal(v(['tangu-agent/scripts/pack-engine.mjs', 'tangu-agent/docs/x.md', 'tangu-agent/test/a.ts', 'tangu-agent/plugin-api/tangu-agent.d.ts']).verdict, 'none')
+      assert.equal(v(['tangu-agent/skills/code-review/SKILL.md']).verdict, 'tangu')
+    }],
+    ['schema or engine deps → installer', () => {
+      assert.equal(v(['tangu-agent/src/db/migrate.ts']).verdict, 'installer')
+      assert.equal(v(['tangu-agent/src/agent.ts'], { depsChanged: true }).verdict, 'installer')
+    }],
+    ['dev tooling, harness pages and type declarations do not count; the UI build script does', () => {
+      assert.equal(v(['desktop/scripts/plugin-compat.check.cjs', 'desktop/frontend/src/views/harness.tsx', 'desktop/shared/x.d.ts', 'tangu-agent/src/a.ts']).verdict, 'tangu')
+      assert.equal(v(['desktop/scripts/build-tangu-ui.mjs']).verdict, 'installer')
+      assert.equal(v(['desktop/scripts/build-unit-web.mjs']).verdict, 'installer')
+    }],
+    ['desktop/package.json counts only when its dependencies change', () => {
+      assert.equal(v(['desktop/package.json', 'tangu-agent/src/a.ts']).verdict, 'tangu')
+      assert.equal(v(['desktop/package.json', 'tangu-agent/src/a.ts'], { desktopManifestChanged: true }).verdict, 'installer')
+    }],
+    ['manifests: key order does not count; version and dev scripts do not ship; devDependencies, main and build scripts do', () => {
+      const m = { version: '1.0.0', main: 'out/main.js', scripts: { dev: 'vite', build: 'b' }, dependencies: { a: '1', b: '2' }, devDependencies: { v: '1' } }
+      assert.equal(engineDeps({ dependencies: { b: '2', a: '1' } }), engineDeps(m))
+      assert.equal(desktopShipped({ ...m, version: '1.0.1', scripts: { dev: 'vite --x', build: 'b' } }), desktopShipped(m))
+      for (const changed of [{ ...m, devDependencies: { v: '2' } }, { ...m, main: 'x.js' }, { ...m, scripts: { dev: 'vite', build: 'c' } }, { ...m, scripts: { ...m.scripts, 'build:unitweb': 'u' } }]) assert.notEqual(desktopShipped(changed), desktopShipped(m))
+      assert.notEqual(desktopShipped(null), desktopShipped(m))
+      assert.notEqual(engineDeps(null), engineDeps(m))
+    }],
+    ['renamed or deleted files keep the class they had before', () => {
+      const old = { tanguCfg, ctxCfg: { layer: [`${P}oldSurface.tsx`] } }
+      const cfg = unionCfg([{ tanguCfg, ctxCfg: { layer: [`${P}newSurface.tsx`], needsSplit: [`${P}pluginStore.ts`] } }, { tanguCfg, ctxCfg: { layer: [`${P}pluginStore.ts`] } }, old])
+      assert.equal(classify([`${P}oldSurface.tsx`, `${P}newSurface.tsx`], { tanguCfg, ctxCfg: cfg.ctxCfg }).verdict, 'layer')
+      assert.deepEqual(cfg.ctxCfg.needsSplit, [`${P}pluginStore.ts`], 'the newest list wins')
+    }],
+    ['?raw markdown in the host counts', () => assert.equal(v(['desktop/CHANGELOG.md']).verdict, 'installer')],
+    ['config: a layer file may not be a Tangu file, nor listed twice', () => {
+      assert.match(configProblems(tanguCfg, { layer: ['desktop/frontend/src/tangu/x.ts'] }).join(), /Tangu 界面文件/)
+      assert.match(configProblems(tanguCfg, { layer: [`${P}a.ts`], types: [`${P}a.ts`] }).join(), /同时在 layer 和 types/)
+    }],
+    ['reverse imports: runtime import from the host is reported, type-only and layer-internal are not', () => {
+      const files = new Map([
+        [`${P}chatBoxSurface.tsx`, 'export const mount = 1\n'],
+        [`${P}pluginStore.ts`, "import { mount } from './chatBoxSurface'\n"],
+        ['desktop/frontend/src/views/A.tsx', "import { mount } from '@/amadeus/plugins/chatBoxSurface'\n"],
+        ['desktop/frontend/src/views/B.tsx', "import type { X } from '@/amadeus/plugins/chatBoxSurface'\n"],
+      ])
+      assert.deepEqual(reverseImports(files, ctxCfg), [{ from: 'desktop/frontend/src/views/A.tsx', to: `${P}chatBoxSurface.tsx` }])
+    }],
+    ['reverse imports: a bare CSS @import is relative', () => {
+      const files = new Map([[`${P}parts.css`, '.a{}\n'], ['desktop/frontend/src/amadeus/plugins/host.css', "@import 'parts.css';\n"]])
+      assert.deepEqual(reverseImports(files, { layer: [`${P}parts.css`] }), [{ from: `${P}host.css`, to: `${P}parts.css` }])
+    }],
+  ]
+  let failed = 0
+  for (const [name, fn] of cases) { try { fn(); console.log(`PASS  ${name}`) } catch (e) { failed++; console.log(`FAIL  ${name}\n      ${e.message.split('\n')[0]}`) } }
+  console.log(`hot-update-scope selftest: ${cases.length - failed}/${cases.length} PASS`)
+  process.exit(failed ? 1 : 0)
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const arg = (n) => { const i = process.argv.indexOf(n); return i > 0 ? process.argv[i + 1] : undefined }
+  if (process.argv.includes('--selftest')) selftest()
+  else try {
+    if (process.argv.includes('--verify')) verify()
+    else if (process.argv.includes('--history')) history(arg('--ref') || 'origin/main', arg('--since') || '2026-11-05')
+    else reportOne(arg('--base') || 'origin/main', arg('--head') || 'HEAD')
+  } catch (e) {
+    // 只提示:自己出错也不挡 PR
+    console.log(`::warning title=热更新范围::没算出来:${(e && e.message) || e}`)
+  }
+}

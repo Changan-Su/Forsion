@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { defaultCalendarFile, ensureHumanFolder, humanDir, LEGACY_USER_MD_TEMPLATES, readHumanFile, readUserMdForPrompt, tanguHome, USER_MD_TEMPLATE, userMdFile } from '../core/tanguHome.js';
+import { defaultCalendarFile, ensureHumanFolder, humanDir, readHumanFile, readUserMdForPrompt, tanguHome, userMdFile } from '../core/tanguHome.js';
 import { atomicSyncWrite, conflictCopyName, readSyncBytes } from '../services/agentSyncPaths.js';
 import { withMemoryDirectoryLock } from '../services/memoryRepository.js';
 import { mergeText3 } from '../services/memorySync.js';
@@ -14,7 +14,7 @@ import { withDbLock } from '../services/amadeusDb.js';
 import { commitHumanFromMirror } from './humanStore.js';
 
 /** human/ 里上云的几份(云端 __human__ 槽位;服务端 tanguAgentFilePaths 的 HUMAN_SLOT_FILES 同一张表,外加搬家标记 .layout)。 */
-export const HUMAN_SYNC_FILES = ['HUMAN.md', 'AGENT.md', 'SOUL.md', 'MEMORY.md', 'CALENDAR.db'] as const;
+export { HUMAN_SYNC_FILES } from '../contracts/agentSyncRules.js';
 /** 镜像基线:上次两边一致时的原文。只在本机,不上云。另记一项 LEGACY_KEY:服务端上次说的「还有谁在用旧位置」。 */
 const MIRROR_STATE = '.legacy-mirror.json';
 /** 和镜像对的键(USER.md、Calendar.db@…)撞不上:点开头。值 = JSON `{ families, seenAt }`。 */
@@ -23,13 +23,9 @@ const LEGACY_KEY = '.legacy';
  *  null = 服务端没说(老服务端 / 查失败)。 */
 export interface LegacyClients { families: string[]; seenAt: number | null }
 
-/** 没有基线时两份文本怎么合:一边是空的或新装机的空模板就用另一边,否则按行取并集(一行都不丢)。同步和镜像共用。 */
-export function joinFirstContact(ours: string, theirs: string): string {
-  const blank = (s: string): boolean => !s.trim() || s === USER_MD_TEMPLATE || LEGACY_USER_MD_TEMPLATES.includes(s);
-  if (blank(ours)) return theirs;
-  if (blank(theirs)) return ours;
-  return unionLines(ours, theirs);
-}
+/** 没有基线时两份文本怎么合:见 contracts/agentSyncRules.ts(同步和镜像共用)。 */
+export { joinFirstContact } from '../contracts/agentSyncRules.js';
+import { joinFirstContact } from '../contracts/agentSyncRules.js';
 
 interface MirrorPair { key: string; legacy: string; legacyRoot: string; human: string; db: boolean }
 
@@ -123,8 +119,9 @@ function mirrorPair(p: MirrorPair, state: Record<string, string>, home: string, 
     renameSync(tmp, p.legacy);
   };
   const keepCopy = (text: string, name: string): void => {
-    let copy = conflictCopyName(name, new Date());
-    for (let n = 2; existsSync(join(dir, copy)); n++) copy = `${conflictCopyName(name, new Date())}.${n}`;
+    const now = new Date();
+    let copy = conflictCopyName(name, now);
+    for (let n = 2; existsSync(join(dir, copy)); n++) copy = conflictCopyName(name, now, n);
     atomicSyncWrite(home, join(dir, copy), text);
   };
   const keepLegacyCopy = (): void => keepCopy(L!, basename(p.legacy));

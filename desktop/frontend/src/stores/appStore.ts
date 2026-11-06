@@ -25,6 +25,7 @@ import { getClientSurface, notifyClientSurfaces } from '../services/clientSurfac
 import { windowKind } from '../windowKind'
 import type { SettingsTarget as SettingsTab } from '../components/SettingsModal'
 import { ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } from '../components/OnboardingWizard'
+import { needsFullGuide } from '../components/onboardingFlow'
 import { act } from '../activity/log'
 import { notifyApp } from './notificationStore'
 import { agentWriteKnown, noteAgentWriteEnd, noteAgentWriteLive, noteAgentWriteStart } from './agentWriteLedger'
@@ -577,7 +578,8 @@ export const useApp = create<AppState>((set, get) => ({
       // 走完 / 跳过过引导的人只看「更新了什么」+ 这一版新增的步骤(OnboardingWizard 的 updateMode);没走过的照常走完整引导。
       let dismissed = false
       try { dismissed = !!localStorage.getItem(ONBOARDING_DISMISS_KEY) } catch { dismissed = false }
-      set({ onboarding: true, onboardingUpdate: dismissed })
+      // 11-05 用户定:上次看引导早于 2.13.8(或没记录)的老用户,新引导完整走一遍(第一屏写「欢迎回来」);之后才按更新内容。
+      set({ onboarding: true, onboardingUpdate: dismissed && !needsFullGuide(seen) })
     }).catch(() => {})
     // 登录态变化(含 CLI tangu login 等外部来源,主进程 auth.json watcher 广播)→ 刷新 authInfo。
     // managed 后端的重连由上面 onBackendStatus 的 ready 分支承接(登录变化会触发后端带新 token 重启)。

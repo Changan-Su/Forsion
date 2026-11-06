@@ -38,6 +38,8 @@ export interface EngineOverlayApi {
   readBad(engineRoot: string): Record<string, string>
   markBad(engineRoot: string, version: string, reason: string): void
   cmpVersion(a: string, b: string): number
+  /** 读进内存的字节对着 SIGNATURE 文本验签(界面半身用;4b 起的引擎才有)。 */
+  verifySignedBytes?(signature: string, files: Record<string, Uint8Array>): string | null
 }
 
 /** 从安装包那份引擎里取挑选 / 核对的实现;没有(引擎 dist 还是没带启动器的旧版)返回 null,调用方就当这条通道不存在。 */

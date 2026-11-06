@@ -78,6 +78,10 @@ export interface DeviceSecrets {
   setExternalToken(v: string): Promise<void>
   callerSecret(): Promise<SlotRead>
   setCallerSecret(v: string | null): Promise<void>
+  /** 电脑历史数据钥匙(hex)。ok + null = 确定没有;locked / insecure / 没初始化 = 拿不到(调用方绝不当「没有」去铸新的)。 */
+  computerHistoryKey(): Promise<SlotRead>
+  /** 新铸的电脑历史钥匙落盘,并从磁盘字节读回解密核对;false = 没存住(系统加密不可用 / 文件读不懂 / 核对不上),一律不落明文。 */
+  storeComputerHistoryKey(hex: string): Promise<boolean>
   remoteSessionsPermitted(): boolean
   retry(): Promise<SecretStorageStatus>
   /** 重新登记本机(清空配对槽)。只在配对锁定时可用(否则抛 not-locked:任何可信渲染层代码都不许随手换掉本机身份);
@@ -223,6 +227,16 @@ export function createDeviceSecrets(o: { store: SecretStore; warn?: (m: string) 
       if (!(await ready('setCallerSecret()'))) throw new Error('device-secrets-not-ready')
       await store.set('unitCallerSecret', v) // level ≠ os → SecretStoreInsecureError,不落盘
     },
+    async computerHistoryKey() {
+      if (!(await ready('computerHistoryKey()'))) return { state: 'locked' }
+      const r = await store.get('computerHistoryKey')
+      // 空槽而这次运行存不下新钥匙(macOS / Windows 加密不可用):照实回「没有」,由 storeComputerHistoryKey 判存不住
+      return r
+    },
+    async storeComputerHistoryKey(hex) {
+      if (!(await ready('storeComputerHistoryKey()'))) return false
+      return store.setVerified('computerHistoryKey', hex) // 写后从磁盘重读核对;不可用 / 读不懂 / 不许明文 → false,不落盘
+    },
     remoteSessionsPermitted() {
       if (!done) return false // 没初始化完:fail closed
       const st = status()
@@ -343,6 +357,9 @@ export const setExternalToken = (v: string): Promise<void> => impl().setExternal
 /** P2 桌面作调用方:/units/:id/caller-secret 的结果只能经它落盘;insecure 时不铸票。 */
 export const callerSecret = (): Promise<SlotRead> => impl().callerSecret()
 export const setCallerSecret = (v: string | null): Promise<void> => impl().setCallerSecret(v)
+/** 电脑历史数据钥匙(electron/computerHistory.ts 的 keyVault)。 */
+export const computerHistoryKey = (): Promise<SlotRead> => impl().computerHistoryKey()
+export const storeComputerHistoryKey = (hex: string): Promise<boolean> => impl().storeComputerHistoryKey(hex)
 /** 「允许远程会话」开关的门控(K4:isEnabled = 存档 enabled && 这里;false 时 setEnabled(true) 抛 secret-store-insecure)。 */
 export const remoteSessionsPermitted = (): boolean => impl().remoteSessionsPermitted()
 export const wipe = (): Promise<void> => impl().wipe()

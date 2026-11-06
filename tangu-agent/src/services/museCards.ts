@@ -17,7 +17,7 @@ import { ObservationEnableRefused, loadTriggers, updateObservation, upsertTrigge
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
 import type { MuseCardInfo, MuseCardKind } from '../contracts/clientTypes.js';
 import { loadSpecialAgentsConfig, updateMuseConfig, type MuseConfig } from './specialAgentsConfig.js';
-import { MUSE_ONBOARDING_MS, patchMuseOnboarding } from './museState.js';
+import { MUSE_ONBOARDING_MS, ensureMuseOnboarding, patchMuseOnboarding } from './museState.js';
 import { normalizeMemoryFact } from './memoryRepository.js';
 import { AUTO_READ_CATEGORIES, NEEDS_USER, inboxCategory, unclaimedAttachment, type InboxCategory } from './inboxCategory.js';
 
@@ -207,6 +207,28 @@ async function applyIntro(userId: string, a: Required<IntroAnswers>): Promise<vo
   if (a.when === 'open') await rememberForMuse(userId, 'Only reach out to the user while they have Forsion open.');
   if (a.pace === 'as-needed') await rememberForMuse(userId, 'The user wants you to speak up only when something matters.');
   if (a.focus.length) await rememberForMuse(userId, `The user most wants you to keep an eye on: ${a.focus.join(', ')}.`);
+}
+
+/** 首启引导「认识你的 Agents 团队」:主动程度 → 醒来间隔(越主动越勤;普通 = 缺省 120,11-05 用户定)。界面上不显示时间。 */
+export const INTRO_PROACTIVITY = { high: 60, normal: 120, low: 180 } as const;
+export type IntroProactivity = keyof typeof INTRO_PROACTIVITY;
+/** 自己写的那条关注:单行、最多 60 字。 */
+export const INTRO_FOCUS_TEXT_MAX = 60;
+export const cleanFocusText = (v: unknown): string => (typeof v === 'string' ? v.replace(/\s+/g, ' ').trim().slice(0, INTRO_FOCUS_TEXT_MAX) : '');
+
+/**
+ * 引导里答的「第一次见面」:和私聊卡同一套映射(applyIntro),外加主动程度与自己写的关注;写 introAt,之后私聊不再发那张卡。
+ * 只给本机用(路由 deny-remote):自由文本只从这里进 Muse 记忆,私聊卡那条对远端放行的路仍只认选项。
+ * Muse 还没跑过时 onboarding 记录不存在 —— 先建(当新用户),不然 introAt 落不下、第一次醒来又会发卡。
+ */
+export async function applyOnboardingIntro(userId: string, a: { when?: string; proactivity?: string; focus?: string[]; focusText?: unknown }, now = Date.now()): Promise<void> {
+  await applyIntro(userId, introAnswers({ when: a.when, focus: a.focus }));
+  const minutes = (INTRO_PROACTIVITY as Record<string, number>)[String(a.proactivity || '')];
+  if (minutes) updateMuseConfig(() => ({ heartbeatMinutes: minutes }));
+  const text = cleanFocusText(a.focusText);
+  if (text) await rememberForMuse(userId, `The user also asked you to keep an eye on: ${text}`);
+  await ensureMuseOnboarding(false, now);
+  await patchMuseOnboarding({ introAt: now });
 }
 
 /** 小结里的一条对应一条 Muse 记忆:改 / 删跟着动记忆。按归一后的内容找(写入时的去重也是这个口径,可能并进了写法不同的旧条目);
