@@ -339,7 +339,8 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
       outs.forEach((a) => a.cancel())
       outs = []
       shows = kids().map((k, i) => k.animate([{ opacity: from[i] ?? 0 }, { opacity: 1 }], { delay: Math.max(0, D * 0.22 - t), duration: D * 0.3, easing: surface, fill: 'backwards' }))
-      for (const a of [swell, grow, clip]) { a.updatePlaybackRate(1); a.play() }
+      // 只改速率、不 play():刚调完 retract() 的同一帧里它们还停在终点,play() 遇到「正向 + 在终点」会倒回 0 重放(Codex 评审 P3)
+      for (const a of [swell, grow, clip]) { a.updatePlaybackRate(1); if (a.playState === 'paused') a.play() }
       handoff = handoffAt(t)
       return true
     },
