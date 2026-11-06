@@ -2240,6 +2240,13 @@ export interface PluginContext {
    *  · `setBody(path, rowId, body, expected?)`(2026-11-02+):整份替换那一行的正文,返回是否写了。只写可写的经典表;
    *    给 `expected: { body }` 时当前正文对不上就不写(返回 false),落盘重放时再比一次 —— 勾一条子任务这种「读-改-写」
    *    一律带上它,别盖掉用户刚在编辑器里打的字。打开着的 `mountRecord` 正文编辑器会换成新内容。
+   *  · `mutate(path, fn)`(2026-11-04+):**和表格界面同一个写口** —— 用户在表格里能做的(改列名 / 类型 / 选项、删列、
+   *    挪行挪列、建视图、改筛选排序分组……)插件都能做,不用再等宿主一项一项开。`fn` 拿到这张表的 DbFile 拷贝
+   *    (格式同 `ctx.app.mutateDb`),返回新的 DbFile 即写、返回 `null` 不写;返回是否写了。只改可写的经典表。
+   *    ⚠️`fn` 必须是**纯函数**:写盘前撞上别人的新版本时,宿主会重读再把它重放一遍;新行 / 新列的 id 在 `fn`
+   *    **外面**先生成好(否则每次重放 id 都不同)。宿主不收的结果(抛错、结构不对、换掉首列、id 重复、把经典表
+   *    改成笔记视图)当场回 false;盖章列(编号 / 创建时间 / 修改时间)的值由宿主定,插件写了也不算。
+   *    删行时指回本行的关联不会自动摘(表格界面的删除会),要摘自己在同一个 `fn` 里摘。
    *  ⚠️日期值的写法:`YYYY-MM-DD`、`YYYY-MM-DDTHH:mm`,区间用 `/` 连两头。
    *  旧宿主没有:`if (ctx.databases) …`。 */
   databases?: {
@@ -2254,6 +2261,8 @@ export interface PluginContext {
     readBody?(path: string, rowId: string): string | null
     /** 2026-11-02+;旧宿主没有:`ctx.databases.setBody?.(…)`。 */
     setBody?(path: string, rowId: string, body: string, expected?: { body: string }): boolean
+    /** 2026-11-04+;旧宿主没有:`ctx.databases.mutate?.(…)`。 */
+    mutate?(path: string, fn: (db: import('../../../../shared/amadeus/db/schema').DbFile) => import('../../../../shared/amadeus/db/schema').DbFile | null): boolean
   }
   /** 笔记正文里的 `@` 时间任务(2026-10-16+;待办视图里「笔记」那一组的来源)。
    *  **只有 manifest `capabilities` 里声明了 `'noteTasks'` 才注入**。
