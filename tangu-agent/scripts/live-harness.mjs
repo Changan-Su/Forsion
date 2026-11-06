@@ -38,6 +38,7 @@
  *                                                           #   两句不点名工具的话(「第三格报错了,改好重跑」「最后加一格算平均分的平方」)→ 须用 notebook_read / notebook_edit / notebook_run,
  *                                                           #   不把 .ipynb 当原始 JSON 读写、不在 shell 里跑 Python;改和跑各弹一张审批;文件仍是合法的 nbformat 4、别的格子没动、输出存进了文件。
  *                                                           #   格子里的代码在本机真跑(审批守门只放笔记本工具)。负对照 --notebook-neg = 不摆插件、同样两句(须红)。改插件 tools.ts 的工具说明后跑
+ *   npm run live:harness -- --only devscope [--devscope-neg]   # 记忆按条标适用范围(11-06):改 remember 的 appliesTo、记忆 / 指令 / 人格 / 工作笔记按设备挑、deviceTags 契约后跑;负对照不写设备表(须红)
  *   npm run live:harness -- --only pluginicon                # 改 skills/forsion-plugin「Startup appearance」一节里图标作用范围那两句后跑:须装载手册并答出「桌面端退出后仍保留、安卓桌面只跟内置图标」
  *   npm run live:harness -- --only storename                 # 改名「商店」(10-05):改 skills/forsion-plugin / forsion-connect 里的商店叫法后跑;两问不点名技能,须装载技能并用新名字指路
  *   npm run live:harness -- --only plugin                    # 引擎插件热插拔(10-02):夹具插件开着调得到、停用后调不到、再启用回来(改 plugins/bootstrap 生命周期后跑)
@@ -281,6 +282,7 @@ KEYS.push('titlelang');
 KEYS.push('titlemanual');
 KEYS.push('windowscmd');
 KEYS.push('shellreal'); // Agent 设备隔离 U1/U2/U3:最近文件 / 批量改名 / 大文件 / git + npm / 删除,判据看磁盘;Windows 上同样跑
+KEYS.push('devscope'); // 记忆按条标适用范围(11-06):读只拼本机适用的 + 折叠行;remember 的 appliesTo 落成 [本机名] / [系统] / 不标
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -315,6 +317,7 @@ OPT_IN.add('titlemanual'); // --only titlemanual:两个会话 7 个 run,改手�
 OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英文对话被起成中文标题);4 个会话 5 个 run,改起标题 / 摘要的提示词、transcript、scriptCheck 后跑
 OPT_IN.add('windowscmd'); // Windows Issue #77: exact cmd reads and rejected negative controls through real model/tool/SSE.
 OPT_IN.add('shellreal'); // --only shellreal:5 个 run,真模型在夹具目录里做真实的文件 / git / npm 活(scripts/lib/shell-real-live.mjs)
+OPT_IN.add('devscope'); // --only devscope:4 个 run(scripts/lib/device-scope-live.mjs);--devscope-neg = 负对照(不写设备表,须红)
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
 for (const k of CU_WEB_KEYS) OPT_IN.add(k); // --only cuweb,cuwebdead:Electron 窗口上的后台 AXPress(cuwebdead 会动真鼠标;要 --cu-plugin)
@@ -5168,6 +5171,10 @@ Then reply with only the command output.`,
     return windowsCmdLive({ run, workspace, OUT });
   });
 
+  await scenario('devscope', 'devscope 记忆按条标适用范围:读只拼本机的 + 折叠行 / 只在这台 / 这个系统 / 所有设备', async () => {
+    const { deviceScopeLive } = await import('./lib/device-scope-live.mjs');
+    return deviceScopeLive({ run, api, shared, OUT, argv });
+  });
   await scenario('shellreal', 'shellreal 真实任务:最近文件 / 批量改名 / 大文件 / git + npm / 删除 + 环境说明', async () => {
     const { shellRealLive } = await import('./lib/shell-real-live.mjs');
     return shellRealLive({ run, workspace, OUT, shared, argv });
