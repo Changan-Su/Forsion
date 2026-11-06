@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { applyMcpSnapshot, mergeMcpImport, parseMcpInput, patchMcpEntry } from './mcpConfig.js';
 
 describe('MCP JSON input and atomic merges', () => {
-  const entry = { command: 'npx', args: ['-y', 'test-mcp', '/a path/with spaces'], env: { KEY: 'secret' }, cwd: '/a path', timeoutMs: 1200, enabled: false };
+  const entry = { command: 'npx', args: ['-y', 'test-mcp', '/a path/with spaces'], env: { KEY: 'secret' }, cwd: '/a path', timeoutMs: 1200, enabled: false, deferLoading: false };
   it('accepts the three advertised shapes without losing arrays, credentials, flags or working directory', () => {
     for (const input of [{ mcpServers: { test: entry } }, { test: entry }]) expect(parseMcpInput(JSON.stringify(input))).toEqual({ test: entry });
     expect(parseMcpInput(entry, 'test')).toEqual({ test: entry });
     expect(() => parseMcpInput(entry)).toThrow('nameRequired');
     expect(parseMcpInput({ name: { type: 'streamable-http', url: 'https://example.test/mcp', headers: { Authorization: 'Bearer key' } } })).toEqual({ name: { transport: 'http', url: 'https://example.test/mcp', headers: { Authorization: 'Bearer key' } } });
   });
-  it.each([null, [], {}, { mcpServers: [] }, { test: { command: 'x', url: 'https://x' } }, { test: { command: 'x', args: [1] } }, { test: { url: 'file:///tmp/x' } }, { test: { url: 'https://x', headers: { A: 3 } } }, { test: { command: 'x', ignored: 'secret' } }, { test: { command: 'x', timeoutMs: -1 } }, { test: { command: 'x', enabled: 'false' } }])('rejects malformed/unsupported input without silently dropping fields: %j', input => {
+  it.each([null, [], {}, { mcpServers: [] }, { test: { command: 'x', url: 'https://x' } }, { test: { command: 'x', args: [1] } }, { test: { url: 'file:///tmp/x' } }, { test: { url: 'https://x', headers: { A: 3 } } }, { test: { command: 'x', ignored: 'secret' } }, { test: { command: 'x', timeoutMs: -1 } }, { test: { command: 'x', enabled: 'false' } }, { test: { command: 'x', deferLoading: 'no' } }])('rejects malformed/unsupported input without silently dropping fields: %j', input => {
     expect(() => parseMcpInput(input)).toThrow();
   });
   it('keeps an oauth block on remote servers and rejects malformed ones', () => {

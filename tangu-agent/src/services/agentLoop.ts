@@ -30,7 +30,7 @@ import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
-import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
@@ -1783,7 +1783,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // deferred 工具目录(P0-2,借 pi deferred-tools):defer 工具的定义不进 defs,系统提示只留
     // 一行/工具的目录(列全量、不随解锁状态变——稳定文本护前缀缓存);模型经 load_tools 按需解锁,
     // 解锁只活在本 run(与 use_skill 每-run 按需同模式;hydrate 不带 tool_calls,历史重放无数据源)。
-    // 系统驱动的 run(Muse/自动化)不吃这套:registry 全量可见,目录段也不注入。
+    // 系统驱动的 run(Muse/自动化)的内置工具不吃这套:registry 全量可见;MCP 工具照样按需(11-06,见 toolRegistry.isMcpDeferred)。
     const toolsMode = agentConfig.toolsMode === 'allow' || agentConfig.toolsMode === 'deny' ? agentConfig.toolsMode : undefined;
     const toolsList = Array.isArray(agentConfig.toolsList)
       ? (agentConfig.toolsList as unknown[]).filter((t): t is string => typeof t === 'string').map(canonicalToolName)
@@ -1802,6 +1802,38 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const projectRef = profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
     const projectScoped = projectRef ? true : undefined;
     const projectPath = projectRef?.project;
+    // MCP 工具(deps().mcp 仅 standalone/TUI 装配):run 开始取一次快照、run 内冻结——
+    // server 集/工具集变更只对之后的 run 生效,杜绝 run 中途 defs 漂移打爆前缀缓存。
+    // agent_config.enabledMcpServers(string[],缺省=全部已连接 server)做会话级过滤。
+    // 取在门禁字段之前(11-06):MCP 缺省按需加载,下面拼「Additional Tools」目录时就要知道有哪些 MCP 工具。
+    let mcpTools: Map<string, import('../mcp/toolBridge.js').LoadedMcpTool> | undefined;
+    if (deps().mcp && !planMode && ps.externalTools) {
+      const enabledMcp = Array.isArray(agentConfig.enabledMcpServers) ? agentConfig.enabledMcpServers : undefined;
+      await deps().mcp!.reloadConfig?.();
+      const snapshot = deps().mcp!.toolsForRun(enabledMcp);
+      if (snapshot.size) {
+        mcpTools = snapshot;
+        console.log(`[agent-core] run=${runId} mcp tools: ${[...snapshot.keys()].join(', ')}`);
+      }
+    }
+
+    // 自定义工具（HTTP/JS）：从 custom_tools 表 + 启用技能自带工具加载，喂给 LLM 并在云端执行。
+    // 计划模式下整体跳过(外部副作用不可知,不属于只读集);chat 同(PRESET_TABLE.externalTools=false)。
+    // profile.features.customTools=false 的 app(Connect manifest / admin 覆盖)同样整体跳过:此前该开关无人读。
+    // 同 MCP 取在门禁字段之前(11-06):目录 / defs / load_tools 的撞名判定要看同一份自定义工具名。
+    let customTools: Map<string, LoadedCustomTool> | undefined;
+    if (!planMode && ps.externalTools && profile.features.customTools) {
+      try {
+        const loaded = await loadCustomTools(appId, agentConfig);
+        if (loaded.length) {
+          customTools = new Map(loaded.map((t) => [t.name, t]));
+          console.log(`[agent-core] run=${runId} custom tools: ${loaded.map((t) => `${t.name}(${t.executor})`).join(', ')}`);
+        }
+      } catch (e) {
+        console.warn('[agent-core] loadCustomTools failed:', e);
+      }
+    }
+
     const toolGateCtx = {
       userId, sessionId, appId, runId, client: clientTag, channelSession, channelUnknown, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped, projectPath,
       visuals: visualsPref, // run 冻结的可视化档位:与上面拼提示用的同一个值,set_ui_setting 中途改了也到下一次 run 才生效
@@ -1826,6 +1858,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       inDiscussion: isTeamMember || undefined, // 团队成员不可再起讨论 / 派遣 / 界面动作(防裂变;与旧群聊发言人同款)
       ephemeral: !!inlineMemberDef || undefined, // 临时成员:记忆 / 日志 / 人格 / 工作笔记等持久写面全关(没有自己的文件夹可写)
       computerUseUnavailable: undefined as NoImagesReason | undefined, // 见下
+      customTools, mcpTools, // 目录(listDeferredTools)要列按需加载的 MCP、按自定义工具判撞名;toolCtx 原样展开
     };
     // 这一 run 里确有 Computer Use 工具才等上面那次判定(没有就无事可做,不为它多等)。
     // ponytail: 最多等 2s、可中止 —— 网络卡住时不能让「停止」和首帧陪着等到 HTTP 超时。没等到 = 这一 run 照旧给工具
@@ -1837,16 +1870,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         new Promise<''>((res) => { const t = setTimeout(res, 2000, ''); t.unref?.(); ac.signal.addEventListener('abort', () => res(''), { once: true }); }),
       ])) || undefined;
     }
-    const deferredCatalog = deferBypass ? [] : listDeferredTools(toolGateCtx as ToolContext);
+    // Muse / 自动化 run 的内置工具全量可见,目录里只剩按需加载的 MCP(与 getToolDefinitions 的 deferBypass 同一判据)。
+    // canUnlock:下面 toolCtx 一定挂 unlockTools,这里的 toolGateCtx 还没有。
+    const deferredCatalog = listDeferredTools(toolGateCtx as ToolContext, { builtins: !deferBypass, canUnlock: true });
     // 历史里用过的 deferred 工具延续解锁(见 deferredUnlocksFromHistory);目录文本不变,只影响 defs。
     const unlockedTools = deferredUnlocksFromHistory(history, deferredCatalog);
-    if (deferredCatalog.length) {
-      systemParts.push(
-        '## Additional Tools (load on demand)\n' +
-          'These tools exist but are not loaded into context yet. When a task needs one, FIRST call `load_tools` with the exact tool names (one call may load several), wait for its result, then call the loaded tools normally. Do not invent parameters for tools you have not loaded.\n' +
-          deferredCatalog.map((d) => `- ${d.name}: ${d.hint}`).join('\n'),
-      );
-    }
+    const deferSection = deferredCatalogSection(deferredCatalog);
+    if (deferSection) systemParts.push(deferSection);
     // 工具不在工具面里,模型自己只会说「用不了」甚至「请启用插件」—— 把真正的原因和出路写给它,由它告诉用户。
     // 只在这类 run 出现(别的 run 系统提示一个字节不变);列出名字是因为技能 / 用户会按名字提到它们。
     // 名字在这里**重新核一次**:上面那次等待期间 run 可能被远端 steer 染上远程污点、插件可能被停用 —— 那时这组工具是被别的闸
@@ -2324,36 +2354,6 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         newAssistantId: currentAssistantId,
       });
     };
-
-    // 自定义工具（HTTP/JS）：从 custom_tools 表 + 启用技能自带工具加载，喂给 LLM 并在云端执行。
-    // 计划模式下整体跳过(外部副作用不可知,不属于只读集);chat 同(PRESET_TABLE.externalTools=false)。
-    // profile.features.customTools=false 的 app(Connect manifest / admin 覆盖)同样整体跳过:此前该开关无人读。
-    let customTools: Map<string, LoadedCustomTool> | undefined;
-    if (!planMode && ps.externalTools && profile.features.customTools) {
-      try {
-        const loaded = await loadCustomTools(appId, agentConfig);
-        if (loaded.length) {
-          customTools = new Map(loaded.map((t) => [t.name, t]));
-          console.log(`[agent-core] run=${runId} custom tools: ${loaded.map((t) => `${t.name}(${t.executor})`).join(', ')}`);
-        }
-      } catch (e) {
-        console.warn('[agent-core] loadCustomTools failed:', e);
-      }
-    }
-
-    // MCP 工具(deps().mcp 仅 standalone/TUI 装配):run 开始取一次快照、run 内冻结——
-    // server 集/工具集变更只对之后的 run 生效,杜绝 run 中途 defs 漂移打爆前缀缓存。
-    // agent_config.enabledMcpServers(string[],缺省=全部已连接 server)做会话级过滤。
-    let mcpTools: Map<string, import('../mcp/toolBridge.js').LoadedMcpTool> | undefined;
-    if (deps().mcp && !planMode && ps.externalTools) {
-      const enabledMcp = Array.isArray(agentConfig.enabledMcpServers) ? agentConfig.enabledMcpServers : undefined;
-      await deps().mcp!.reloadConfig?.();
-      const snapshot = deps().mcp!.toolsForRun(enabledMcp);
-      if (snapshot.size) {
-        mcpTools = snapshot;
-        console.log(`[agent-core] run=${runId} mcp tools: ${[...snapshot.keys()].join(', ')}`);
-      }
-    }
 
     // view_image 等工具产出的图片回流:工具把 data URL 交回这里,本轮工具跑完后物化成一条
     // user 图像消息追加到对话尾部(尾部追加 → 不动前缀,缓存安全;复用 toImageParts)。
