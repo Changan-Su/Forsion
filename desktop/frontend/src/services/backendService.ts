@@ -1036,6 +1036,10 @@ export const getSpecialConfig = (t: EngineTarget) =>
 export const saveSpecialConfig = (t: EngineTarget, patch: { historian?: Partial<SpecialAgentsConfig['historian']>; muse?: Partial<SpecialAgentsConfig['muse']> }) =>
   request<{ config: SpecialAgentsConfig }>(t, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)
 
+/** 首启引导「认识你的 Agents 团队」答的第一次见面(本机专用;写完 introAt,私聊不再发那张卡)。 */
+export const saveMuseIntro = (t: EngineTarget, body: { when?: string; proactivity?: string; focus?: string[]; focusText?: string }) =>
+  request<{ ok: boolean; config: SpecialAgentsConfig }>(t, '/agent/special/muse/intro', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.config)
+
 export interface SessionHistorianStatus {
   running: boolean
   activity: HistorianActivityItem[]
