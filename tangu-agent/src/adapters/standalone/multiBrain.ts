@@ -36,8 +36,15 @@ function gifSize(size?: string): string {
   return size ? GIF_RATIO_SIZE[size] || size : 'auto';
 }
 
+function checkDirectImageOptions(apiModelId: string, req: ImageGenRequest): void {
+  if ((req.outputFormat === 'gif' || req.complexity !== undefined) && !/^gpt-image-2\.6-(sunburst|flare)(?:$|-)/i.test(apiModelId)) {
+    throw new LlmError(400, 'GIF output and complexity require a GPT Image 2.6 model.');
+  }
+}
+
 /** 直连用户自有 OpenAI 兼容端点生图(BYO-key);返回 b64。 */
 async function generateDirectImage(baseUrl: string, apiKey: string | undefined, apiModelId: string, req: ImageGenRequest): Promise<ImageGenResult> {
+  checkDirectImageOptions(apiModelId, req);
   const raw = req.size || '1:1';
   const size = req.outputFormat === 'gif' ? gifSize(req.size)
     : DIRECT_IMG_SIZE[raw] || (/^\d+x\d+$/.test(raw) ? raw : '1024x1024');
@@ -59,6 +66,7 @@ async function generateDirectImage(baseUrl: string, apiKey: string | undefined, 
 
 /** Multipart edit requests use the same provider routing as generation. */
 async function editDirectImage(baseUrl: string, apiKey: string | undefined, model: string, req: ImageEditRequest): Promise<ImageGenResult> {
+  checkDirectImageOptions(model, req);
   const form = new FormData();
   form.append('model', model); form.append('prompt', req.prompt); form.append('n', String(req.n || 1));
   const sizes: Record<string, string> = { '1:1': '1024x1024', '3:2': '1536x1024', '16:9': '1536x1024', '2:3': '1024x1536', '9:16': '1024x1536' };
