@@ -129,3 +129,34 @@ describe('Agent memory management', () => {
     expect(host.textContent).toContain('409 conflict')
   })
 })
+
+describe('applies-to labels (11-06)', () => {
+  const tagged = (): AgentMemorySnapshot => {
+    const lines = ['写论文用 LaTeX', '[MacBook Pro] TeX Live 2026', '[Windows] Fluent 截断路径']
+    return { version: 'v1', content: lines.join('\n'), updatedAt: 1000, tombstones: [], deviceTags: { self: 'MacBook Pro', os: 'macOS', others: ['Windows desktop'] },
+      entries: lines.map((content, i) => ({ id: `f${i}`, content, source: { kind: 'explicit' }, evidenceIds: [], createdAt: 1000, updatedAt: 1000 })) }
+  }
+  it('shows a small label before tagged entries, edits only the text, and sends the chosen scope on add', async () => {
+    vi.mocked(api.getAgentMemorySnapshot).mockResolvedValue(tagged())
+    vi.mocked(api.mutateAgentMemoryEntry).mockResolvedValue(tagged())
+    await render()
+    const chips = [...host.querySelectorAll('.device-scope-chip')].map((c) => [c.textContent, c.getAttribute('data-scope')])
+    expect(chips).toEqual([['MacBook Pro', 'self'], ['Windows', 'other']])
+    expect(host.querySelector('[data-memory-entry-id="f1"] p')?.textContent).toBe('MacBook ProTeX Live 2026')
+    // 编辑框里只有正文:保存时引擎沿用原标签
+    const edit = [...host.querySelectorAll('[data-memory-entry-id="f1"] button')].find((b) => b.textContent === 'agentMemory.edit') as HTMLButtonElement
+    await act(async () => edit.click())
+    expect((host.querySelector('[data-memory-entry-id="f1"] textarea') as HTMLTextAreaElement).value).toBe('TeX Live 2026')
+    await click('common.cancel')
+    const select = host.querySelector('select.device-scope-select') as HTMLSelectElement
+    expect([...select.options].map((o) => o.value)).toEqual(['all', 'this-computer', 'this-os'])
+    await act(async () => { select.value = 'this-computer'; select.dispatchEvent(new Event('change', { bubbles: true })) })
+    await setText('agentMemory.fact', '模板在笔记库')
+    await click('agentMemory.add')
+    expect(vi.mocked(api.mutateAgentMemoryEntry).mock.calls.at(-1)![2]).toEqual({ action: 'add', fact: '模板在笔记库', expectedVersion: 'v1', appliesTo: 'this-computer' })
+  })
+  it('has no scope menu where there is no computer (cloud copy / old engine)', async () => {
+    await render()
+    expect(host.querySelector('select.device-scope-select')).toBeNull()
+  })
+})

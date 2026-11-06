@@ -35,6 +35,9 @@ export interface McpServerConfig {
   tools?: Record<string, 'ask' | 'off'>;
   /** stdio 子进程的工作目录。只由插件自带的 server 设(= 插件目录,见 pluginServers.ts);mcp.json 里写了也照用。 */
   cwd?: string;
+  /** false = 工具定义每次请求整份下发。缺省(含 true)按需加载:系统提示的「Additional Tools」目录每个工具一行,
+   *  模型用 load_tools 装上再调 —— 一个连接器的工具定义动辄几十 KB,不用也每次请求都重读(11-06 取证)。 */
+  deferLoading?: boolean;
 }
 
 export interface McpConfig {

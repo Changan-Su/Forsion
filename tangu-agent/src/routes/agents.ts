@@ -32,6 +32,8 @@ import { trashDir } from '../services/trash.js';
 import { agentSyncPermission, agentSyncScope, setAgentSyncPermission } from '../services/cloudSyncAccount.js';
 import { loadHarness, readJournal, applyHarnessEdit, peekHarnessCandidates, resolveHarnessCandidate, candidateNeedsUser, candidateAdoptable, HarnessConflict, HarnessCandidateError } from '../agents/harnessStore.js';
 import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
+import { deviceTagContext, factWithScope } from '../services/deviceTagContext.js';
+import type { DeviceTagContext } from '../contracts/deviceTags.js';
 import { parseRemoteOrigin, clampApprovalMode, remoteApprovalCap } from '../services/remoteOrigin.js';
 
 const router = Router();
@@ -354,13 +356,16 @@ async function cloudRead(res: any, read: () => Promise<unknown | null>): Promise
   }
 }
 
+/** 记忆快照都带上本机的设备上下文:读和写回的那份一样,界面换了快照标签不会掉回只认系统名(11-06 截图发现写完后 [设备名] 变回原文)。 */
+const withDeviceTags = <T extends object>(snapshot: T): T & { deviceTags: DeviceTagContext } => ({ ...snapshot, deviceTags: deviceTagContext() });
 router.get('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest, res) => {
   if (cloudAgentsEnabled()) return cloudRead(res, () => cloudReadMemory(req.user!.userId, req.params.slug));
   if (!ensureLocal(res)) return;
   try {
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
-    res.json(createMemoryRepository(store.baseDir).snapshot());
+    // deviceTags:界面给每条记一个适用范围的小标签、给「记一条」的菜单写本机名(contracts/deviceTags.ts,11-06)
+    res.json(withDeviceTags(createMemoryRepository(store.baseDir).snapshot()));
     // 后台同步一次(不阻塞响应):云端 worker 侧写的新记忆 / 日志迟一拍到位,重开视图即最新。
     // 带的是归属(显示)agent 的 slug,不是上面解析出的记忆桶;不带 slug 是空操作。没开云同步的 agent 不发任何请求,
     // 开了的在什么都没变时是 2 个请求(清单 + 墓碑;没变的日志按清单哈希跳过)。
@@ -382,7 +387,7 @@ router.put('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
     if (typeof req.body?.expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required; reload memory before saving.' });
     if (typeof req.body?.content !== 'string') return res.status(400).json({ detail: 'content must be a string' });
-    res.json(createMemoryRepository(store.baseDir).commit({ expectedVersion: req.body.expectedVersion, content: req.body.content, source: { kind: 'manual' } }));
+    res.json(withDeviceTags(createMemoryRepository(store.baseDir).commit({ expectedVersion: req.body.expectedVersion, content: req.body.content, source: { kind: 'manual' } })));
   } catch (e: any) {
     res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message || 'write memory failed', code: e?.code });
   }
@@ -403,7 +408,7 @@ router.post('/agent/agents/:slug/memory/restore', authMiddleware, async (req: Au
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
     if (typeof req.body?.expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required' });
-    res.json(createMemoryRepository(store.baseDir).restore(String(req.body?.version ?? ''), req.body.expectedVersion));
+    res.json(withDeviceTags(createMemoryRepository(store.baseDir).restore(String(req.body?.version ?? ''), req.body.expectedVersion)));
   } catch (e: any) { res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message, code: e?.code }); }
 });
 
@@ -413,10 +418,19 @@ router.post('/agent/agents/:slug/memory/entries', authMiddleware, async (req: Au
   try {
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
-    const { action, id, fact, expectedVersion } = req.body ?? {};
+    const { action, id, expectedVersion } = req.body ?? {};
+    let { fact } = req.body ?? {};
     if (!['add', 'update', 'forget'].includes(action)) return res.status(400).json({ detail: 'Invalid action' });
     if (typeof expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required' });
-    res.json(createMemoryRepository(store.baseDir).mutate({ action, id, fact, expectedVersion, source: { kind: 'manual' } }));
+    const repo = createMemoryRepository(store.baseDir);
+    // 适用范围(11-06):appliesTo 给了就换标签;改一条没给 → 沿用旧条目的(界面编辑框里只有正文)
+    if (action !== 'forget' && typeof fact === 'string') {
+      const old = action === 'update' ? repo.snapshot().entries.find((e) => e.id === id)?.content ?? null : null;
+      const scoped = factWithScope(fact.trim(), req.body?.appliesTo, deviceTagContext(), old);
+      if (scoped === null) return res.status(400).json({ detail: 'Invalid appliesTo', code: 'MEMORY_INVALID' });
+      fact = scoped;
+    }
+    res.json(withDeviceTags(repo.mutate({ action, id, fact, expectedVersion, source: { kind: 'manual' } })));
   } catch (e: any) { res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message, code: e?.code }); }
 });
 

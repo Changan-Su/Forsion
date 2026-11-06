@@ -516,7 +516,9 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
         for (const t of s.tools) {
           if (owner.get(t.name) !== s.name) continue;
           if (!opts?.includeOff && s.cfg.tools?.[t.remoteName] === 'off') continue; // 用户在连接器设置里关掉的:Agent 看不到
-          snapshotEntries.set(t, s); out.set(t.name, t);
+          // 配置 deferLoading:false → 本 run 快照里的这一份标成常驻(副本也要登记归属,callTool 按对象认 server)
+          const v: LoadedMcpTool = s.cfg.deferLoading === false ? { ...t, deferLoading: false } : t;
+          snapshotEntries.set(v, s); out.set(t.name, v);
         }
       }
       return out;
