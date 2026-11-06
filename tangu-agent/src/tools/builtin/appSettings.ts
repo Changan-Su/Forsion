@@ -15,6 +15,7 @@ import type { ToolContext } from '../toolTypes.js';
 import { publish } from '../../services/eventBus.js';
 import { READABLE_SECTIONS, WRITABLE_SECTIONS, renderAppSettings, updateAppSettings } from '../../services/appSettings.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
+import { uiSurfaceEnabledFor } from './uiCommands.js';
 import { deps } from '../../seams/runtime.js';
 
 /** 只给「人在这轮对话里」的前台 run(同 sessionSettings.enabledFor)。 */
@@ -23,6 +24,10 @@ function enabledFor(_p: unknown, ctx: ToolContext): boolean {
 }
 /** 这条 run 能不能改(通道来的 / 远程污点的只读)。 */
 const canWrite = (ctx: ToolContext): boolean => ctx.runOrigin !== 'channel' && !effectiveRemote(ctx);
+/** 发起端能不能开设置页:run_ui_command 注册着(同一个判定源),且客户端目录里有 open-settings(web / 手机未必有)。
+ *  不满足就不提这条路 —— 指向一个不存在的工具 / 命令,模型只会撞一次拒绝。 */
+const canOpenSettingsPages = (ctx: ToolContext): boolean =>
+  uiSurfaceEnabledFor(ctx) && (ctx.uiCommands || []).some((c) => c.id === 'open-settings');
 
 export const appSettingsProvider: ToolProvider = {
   id: 'builtin:app_settings',
@@ -50,7 +55,7 @@ export const appSettingsProvider: ToolProvider = {
           },
         },
       },
-      execute: (args, ctx) => renderAppSettings({ section: typeof args?.section === 'string' ? args.section : undefined, writable: canWrite(ctx) }),
+      execute: (args, ctx) => renderAppSettings({ section: typeof args?.section === 'string' ? args.section : undefined, writable: canWrite(ctx), canOpenPages: canOpenSettingsPages(ctx) }),
     },
     {
       name: 'update_app_settings',

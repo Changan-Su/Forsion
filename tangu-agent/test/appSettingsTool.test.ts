@@ -147,6 +147,25 @@ describe('② 读', () => {
     expect(out).toContain('update_app_settings');
   });
 
+  it('发起端开得了设置页才教「顺手打开那一页」(GUI + 目录里有 open-settings);别的形态一句不提', async () => {
+    seed();
+    const OPEN = [{ id: 'open-settings', description: 'Open settings' }];
+    const text = async (ctx: ToolContext): Promise<string> => String((await executeTool(call('app_settings', { section: 'tts' }), ctx)).result);
+    const gui = { ...base(), client: 'desktop/1', uiCommands: OPEN };
+    const yes = await text(gui);
+    expect(yes).toContain('"id": "open-settings"');
+    expect(yes).toContain('open-settings "voice"'); // 落点 id 仍在段首,那句指的就是它
+    for (const ctx of [
+      base(), // TUI / 无客户端:没有 run_ui_command
+      { ...base(), client: 'tui/1', uiCommands: OPEN }, // 非 GUI:run_ui_command 不注册
+      { ...gui, uiCommands: [{ id: 'open-note', description: 'x' }] }, // GUI 但这端没有 open-settings
+      { ...gui, planMode: true }, // 计划模式:run_ui_command 不注册
+      { ...gui, channelSession: true }, // 通道会话:同上
+    ] as ToolContext[]) {
+      expect(await text(ctx)).not.toContain('run_ui_command with');
+    }
+  });
+
   it('表外的段、段里表外的键、任何密钥和地址,一个字都不出现', () => {
     seed();
     for (const out of [renderAppSettings({ writable: true }), ...Object.keys(APP_SETTINGS).map((s) => renderAppSettings({ section: s, writable: false })), renderAppSettings({ section: 'providers', writable: true })]) {
