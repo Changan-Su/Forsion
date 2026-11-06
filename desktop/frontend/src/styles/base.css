@@ -4683,7 +4683,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow);
-  animation: fade-up var(--duration-fast) var(--ease-out);
+  /* 不在菜单进 / 退名单里:开合走液滴(2026-11-05,AccountCard.tsx 调 emergeDroplet,从头像里流出、倒放缩回) */
 }
 .account-pop .ap-head {
   display: flex;
@@ -5554,7 +5554,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 /* 名单 = 所有「弹出来的菜单」;10-02 去掉匹配不到任何元素的 .add-menu,补上 Chat 的 / @ 菜单、账户菜单、仪表盘添加菜单。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar) {
+  .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar) {
   animation: ui-menu-enter var(--menu-enter-duration) var(--menu-enter-ease);
   transform-origin: top left;
 }
@@ -5562,20 +5562,20 @@ html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transf
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
     .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar) { animation: none; }
+    .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar) { animation: none; }
 }
 /* 退场:与上面的进场是**同一张名单**(check:motion 钉着)。OverlayAt 卸载时留下的替身(data-lcl-exit,见 menuAnchor.tsx
    useExitGhost)缩到 0.99、淡出、加速离开;不加模糊(filter 会让菜单成为 fixed 后代的包含块,DESIGN §4)。
    不在 OverlayAt 里的菜单关掉照旧立刻消失。减少动态效果时只淡出。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
+  .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
   animation: ui-menu-exit var(--menu-exit-duration) var(--ease-exit) forwards;
 }
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
     .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
+    .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
     animation-name: ui-fade-out;
   }
 }
@@ -5585,7 +5585,7 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
    不写成 html:root :is(…) 开头:那是 check:motion 读进场 / 退场名单的格式。 */
 [data-lcl-exit]:not(.lcl-ftoc-rail, .ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar,
+  .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar,
   .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, [data-motion~='toast']) { animation: none !important; }
 /* 替身里的子元素不重放自己的进场(命令面板 / ⌘P / 确认框的面板本身除外:它跟着遮罩一起退,见 engine.css / amadeus styles.css)。 */
 [data-lcl-exit] :not(.cmd-panel, .amx-qf, .dialog) { animation: none !important; }
