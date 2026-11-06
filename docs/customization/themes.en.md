@@ -60,7 +60,11 @@ Themes control how things look (structure beyond color: fonts, radii, shadows, l
 - **Motion token declarations are removed**: `--duration-*`, `--ease-*`, `--menu-enter-duration` / `--menu-exit-duration`, `--droplet-duration`, `--collapse-duration`, `--tip-*`, `--hovercard-*`, `--switch-edge-*` and the rest, on any selector. An `@property` block that registers one of these names is removed too, and `settings` entries in `theme.json` that use these names have no effect. Settings shows "N motion settings in this theme were ignored" under the theme.
 - **Your own `@keyframes` get the prefix** `t-<theme id>-`. References to them in `animation` / `animation-name` inside `theme.css` are rewritten too, so they keep working; you just can't replace a built-in animation by reusing its name. References passed through a custom property (`--a: fade 1s; animation: var(--a)`) aren't rewritten, so write them in `animation` directly.
 - **Your own `@layer` names get the same prefix.**
+- **`@import` is always removed**, because an external stylesheet would skip all of the steps above. For Google Fonts, list them under `fonts.google` in `theme.json` and Forsion loads them. For other fonts, use `@font-face`.
 - **The system's Reduce motion setting always wins.** That rule sits in the first layer Forsion declares, so even `!important` in a theme can't override it.
+- **The browser then reads the result again.** If it still finds a motion token, the `forsion-guard` layer or an unprefixed keyframe, none of the theme's styles are loaded, and Settings says so.
+
+This only covers Forsion's own **timing**: the tokens, keyframes and layers above. A `transition` or `animation` you write directly on your own selectors, such as a color change on button hover, is still part of your theme and works as usual. When the system's Reduce motion setting is on, it applies to them too: animations stop, and transitions are limited to quick color and opacity changes.
 
 To make the interface move differently, wait for motion themes to open up and submit one separately. Don't change motion inside a theme package.
 

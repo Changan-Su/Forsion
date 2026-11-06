@@ -144,7 +144,7 @@ Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts
 - **正文行距、段距和切视图的时长归用户的外观开关管**(见下文「外观开关:跟着宿主走」):主题别用更高权重的规则把笔记 / 对话正文的
   `line-height`、段间距或 `wb-view-enter` 的时长写死 —— 写死了,用户拨那几个开关就没有反应。
 - 可选 `settings[]`(number/select/boolean/color)让用户在设置页调主题内参数:`key` **就是** CSS 自定义属性名,宿主把值写进 `:root` 内联变量,主题用 `var(--key, 默认值)` 消费。参考本仓内置 `genesis-glass` 主题(`desktop/frontend/src/theme/themes/genesis-glass/`)。
-- **动效归宿主管,主题别碰**:装进来时宿主先过一遍 `theme.css` —— 动效 token(`--duration-*`、`--ease-*`、`--menu-enter/exit-*`、`--droplet-duration`、`--collapse-*`、`--tip-*`、`--hovercard-*`、`--switch-edge-*` 等)的声明在任何选择器上都删掉,`@property` 注册它们的整块也删;`settings[]` 用这些名字的项不生效;主题自己的 `@keyframes` 与 `@layer` 名加前缀 `t-<id>-`(`animation` / `animation-name` 里的引用一起改写,经 `var()` 转手的不改写);系统「减少动态效果」在宿主最先声明的层里,`!important` 也压不过。设置页会提示「N 项动效已忽略」。
+- **动效归宿主管,主题别碰**:装进来时宿主先过一遍 `theme.css` —— 动效 token(`--duration-*`、`--ease-*`、`--menu-enter/exit-*`、`--droplet-duration`、`--collapse-*`、`--tip-*`、`--hovercard-*`、`--switch-edge-*` 等)的声明在任何选择器上都删掉,`@property` 注册它们的整块也删;`settings[]` 用这些名字的项不生效;主题自己的 `@keyframes` 与 `@layer` 名加前缀 `t-<id>-`(`animation` / `animation-name` 里的引用一起改写,经 `var()` 转手的不改写);`@import` 一律删(谷歌字体写 `theme.json` 的 `fonts.google`);处理完浏览器再读一遍,还漏着就整套样式不加载;系统「减少动态效果」在宿主最先声明的层里,`!important` 也压不过。设置页会提示「N 项动效已忽略」。主题在自己选择器上直接写的 `transition` / `animation` 不在收口范围内,照常生效(减少动态效果下动画停、过渡只剩短的颜色 / 透明度)。
 
 ## Space(samples/forsion-sample-space)
 
