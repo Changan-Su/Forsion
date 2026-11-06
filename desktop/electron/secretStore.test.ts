@@ -91,8 +91,11 @@ describe('decideLevel', () => {
     expect(decideLevel('darwin', boom).level).toBe('unavailable')
     expect(decideLevel('linux', boom).level).toBe('plaintext')
   })
-  it('槽策略:只有 unitCallerSecret 不许明文', () => {
-    expect(SLOT_POLICY).toEqual({ unitPairing: { allowPlaintext: true }, externalToken: { allowPlaintext: true }, unitCallerSecret: { allowPlaintext: false } })
+  it('槽策略:unitCallerSecret 与电脑历史钥匙不许明文', () => {
+    expect(SLOT_POLICY).toEqual({
+      unitPairing: { allowPlaintext: true }, externalToken: { allowPlaintext: true },
+      unitCallerSecret: { allowPlaintext: false }, computerHistoryKey: { allowPlaintext: false },
+    })
   })
 })
 
