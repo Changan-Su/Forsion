@@ -5,6 +5,7 @@
  */
 import React from 'react'
 import { noteRenderCrash } from '../coreTangu/load'
+import { reloadWindow } from '../reloadWindow'
 
 type Props = {
   children: React.ReactNode
@@ -39,7 +40,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button style={{ padding: '6px 12px' }} onClick={() => this.setState({ error: null })}>{zh ? '重试' : 'Retry'}</button>
           <button style={{ padding: '6px 12px' }} onClick={() => { try { void navigator.clipboard.writeText(detail) } catch { /* ignore */ } }}>{zh ? '复制错误' : 'Copy error'}</button>
-          <button style={{ padding: '6px 12px' }} onClick={() => location.reload()}>{zh ? '重新加载' : 'Reload'}</button>
+          <button style={{ padding: '6px 12px' }} onClick={() => reloadWindow()}>{zh ? '重新加载' : 'Reload'}</button>
         </div>
       </div>
     )

@@ -3064,6 +3064,9 @@ app.whenReady().then(async () => {
     if (st.state !== 'ready' || !coreTanguOn) return
     for (const id of coreTangu.engineReady()) webContents.fromId(id)?.reload()
   })
+  // 渲染层要整窗重载(错误页「重新加载」、Space 窗口定义变了、切移动端 UI 预览)走这里:
+  // 打包版页面是 file:,渲染层自己 location.reload() 会被 hardenNav 当导航拦下、静默无效(reloadWindow.ts)
+  ipcMain.handle('app:reloadWindow', (e) => { if (isTrustedSender(e)) e.sender.reload() })
   ipcMain.handle('config:recoveryNotice', (e) => (isTrustedSender(e) ? readRecoveryNotice(recoverableConfigFiles()) : null))
   ipcMain.handle('config:clearRecoveryNotice', (e) => (isTrustedSender(e) ? clearRecoveryNotice(recoverableConfigFiles()) : undefined))
   registerDocumentTaskIpc(ipcMain, join(app.getPath('userData'), 'document-task-receipts.json'), isTrustedSender)

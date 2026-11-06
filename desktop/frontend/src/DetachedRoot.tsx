@@ -16,6 +16,7 @@ import { detachedId } from './windowKind'
 import { installFileDropGuard } from './fileDropGuard'
 import { listSkills } from './services/backendService'
 import { homeTarget } from './services/engine/targets'
+import { reloadWindow } from './reloadWindow'
 
 /** 独立窗默认布局 = 主区空占位(home,不可关);真正的视图随后由 detachedReady 注入或从持久化恢复。 */
 function buildDetachedDefault(): void {
@@ -50,7 +51,7 @@ function useWindowSpace(): 'plain' | 'wait' | 'stuck' | 'ready' {
     const settle = (): void => {
       const sp = useSpaceStore.getState().spaces.find((s) => s.id === id)
       if (mounted) {
-        if (sp !== mounted && !reloading) { reloading = true; location.reload() }
+        if (sp !== mounted && !reloading) { reloading = true; reloadWindow() }
         return
       }
       if (!sp) return
