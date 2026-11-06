@@ -254,6 +254,34 @@ if (!bar) drawOwnMenu(el)                           // hosts up to 2.13.3: keep 
 
 Add actions with `ctx.registerSelectionAction`; they are listed under "⋯ → Plugins". Without `scope` an action appears in notes only, as before. `scope: 'all'` lists it in every view that has opted in, `'own'` only in the plugin's own views, and an array names views (`'note'`, `'chat'`, `'<pluginId>:<viewId>'`). `when({ view, editable, length })` must return true for the action to be listed; it never receives the selected text, which only reaches the plugin through `run(cx)` after the user picks the action. The markdown `run` returns goes to the host's result card: Replace / Insert below / Copy / Discard in an editable note, where nothing is written until the user clicks, and read-only (Copy / Close) everywhere else. `output: 'none'` means the plugin handles the result and the host shows no card. `cx.pagePath` is only set in notes. Hosts up to 2.13.3 ignore the new fields: the action stays note-only, listed under "AI ▾ → Plugins".
 
+### The tool island (2026-11-04)
+
+The capsule a "hold a tool and work" view (PDF annotation, whiteboard) switches tools with. The host owns placement and skin: centred at the top of `root`, docked at the bottom centre when `root` is narrower than 520 px (Mini card, phone, portrait pad); the skin is the Mini window's top-bar capsule (`--bg-card`, hairline border, pill radius, card shadow, no frosted glass); the current tool sits on a highlight that slides over, and a small letter in each button's corner shows its shortcut. The strip is maintained in `@lcl/components` (`ToolIsland`); the layout classes are in `toolIsland.css` next to it.
+
+```js
+const isle = ctx.ui?.mountToolIsland?.(pageArea, {
+  tools: [
+    { id: 'hand', icon: 'hand', title: zh ? '抓手' : 'Hand' }, 'separator',
+    { id: 'select', icon: 'mouse-pointer-2', title: zh ? '选择' : 'Select', key: 'V' }, 'separator',
+    { id: 'highlight', icon: 'highlighter', title: zh ? '高亮' : 'Highlight', key: 'H' },
+    { id: 'ink', icon: 'pen-line', title: zh ? '手写' : 'Draw', key: 'P' },
+  ],
+  active: 'select',
+  onPick: (id) => { setTool(id); isle.setActive(id); isle.showRow(id === 'highlight' || id === 'ink') },
+  slots: { topRight: findButton, bottomLeft: zoomControls, bottomRight: pager },
+})
+if (!isle) drawOwnBar(pageArea)                     // older hosts without it: keep your own bar
+else isle.row.append(colorDots)                     // the row under the island is yours to fill
+```
+
+- Selection is controlled: a click only calls `onPick`; the host never switches by itself. Call `setActive(id)` when you switch (a temporary hand while Space is held, and back, goes through it too). `key` only draws the letter — bind the key yourself.
+- `icon` is a name from the plugin icon vocabulary, which gained `hand`, `mouse-pointer-2`, `highlighter`, `sticky-note`, `type`, `shapes`, `pen-line` and `eraser` for this (the older `highlight` / `annotate` still work). `'separator'` draws a divider between groups.
+- `row`: the row under the island (above it while docked at the bottom) for what the current tool needs — colour dots, pen types, widths. It is usable as soon as the handle returns; add children, don't replace its class. `showRow(true/false)` opens and closes it: in over 180 ms easing out, out over 80 ms easing in, no slide under reduced motion.
+- `slots`: your own elements for the four corners (12 px from the edges); the host wraps each in the same capsule and positions it, and `update({ slots })` swaps them. Docked at the bottom, the two bottom corners share a line with the island — put less there when narrow.
+- Clicking a button doesn't take focus from your view, so your shortcuts keep working; a keyboard user's focus stays on the same button across `setActive` / `update`.
+- Like `mountFloatingToc` it is a layer over `root` that doesn't take `root` over (a static `root` becomes `relative` while mounted and is restored on `dispose()`), so it coexists with other mounts. Leave about 56 px at the top of your content for it. Pass the frame that doesn't scroll as `root` (the island is a layer inside it, so a scrolling `root` takes it along); pointer events on the island and slots bubble to `root`, so skip `e.target.closest('.lcl-isle-layer')` in your own pan / draw handlers. The handle has `row` / `showRow` / `setActive` / `update(opts)` / `dispose()`; a wrong shape (no `tools` array, no `onPick`, a slot that isn't an element) throws `TypeError` synchronously; the host disposes it on disable / reload.
+- The whiteboard's own (Excalidraw) tool island isn't replaced; it already sits in the same place.
+
 ### Settings parts (2026-10-17)
 
 The small parts used by settings and store pages are open to plugins: group panels, setting rows, switches, buttons, inputs, segmented controls and selects, plus the new values, usage meters, steppers, code with copy, half-sheet choices and confirmations, and empty / loading / error states. The main entry is `ctx.ui.mountSettingsPage(el, schema)`: the plugin hands over a description of the whole page (which groups, which items in each group, values and callbacks) and the host draws it per device. `ctx.ui.mountSettingsItem(el, item)` mounts one part at a time to fill gaps (for example inside a `custom` block). The host's own Settings → Notifications page uses the same renderer. Canonical types: `desktop/shared/settingsPage.ts`; the renderer is the app-level `components/SettingsPage`.

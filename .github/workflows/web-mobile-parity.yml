@@ -22,6 +22,11 @@ on:
     paths: *paths
 permissions:
   contents: read
+# PR 再推送就取消上一轮;main / tag / 手动运行各按 run_id 自成一组,不排队、不被取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   browser:
     runs-on: ubuntu-latest
@@ -30,6 +35,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            mobile/package-lock.json
+            web/package-lock.json
       - run: npm ci --ignore-scripts --no-audit --no-fund
         working-directory: desktop
       - run: node desktop/build/link-lcl.cjs
@@ -39,7 +49,7 @@ jobs:
         working-directory: web
       - run: npm run typecheck && npm run build
         working-directory: web
-      - run: npx playwright-core install --with-deps chromium
+      - run: npx playwright-core install chromium # 不带 --with-deps,原因见 build-web.yml
         working-directory: desktop
       - run: npm run e2e:mobile
         working-directory: web
