@@ -4891,7 +4891,10 @@ function installHostTelemetry(): void {
   })
 }
 
+// 退出收尾链(冲刷新同步 → 停后端 → app.exit)正在走:再按退出只等它,不重复收尾、不提前退(提前退会掐断还在推的改动)
+let exitChain: Promise<void> | null = null
 app.on('before-quit', (e) => {
+  if (exitChain) { e.preventDefault(); return }
   // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
   // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了
   if (quitGuards.intercept()) { e.preventDefault(); isQuitting = false; return }
@@ -4914,9 +4917,10 @@ app.on('before-quit', (e) => {
   const st = backend.getStatus().state
   if (flushing || st === 'ready' || st === 'starting') {
     e.preventDefault()
-    void (flushing ?? Promise.resolve())
+    exitChain = (flushing ?? Promise.resolve())
       .then(() => { const now = backend.getStatus().state; return now === 'ready' || now === 'starting' ? backend.stop() : undefined })
       .finally(() => app.exit(0))
+    void exitChain
   }
 })
 

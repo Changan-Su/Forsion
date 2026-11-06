@@ -31,6 +31,7 @@ it('quit waits for pending pushes up to the cap, only once per quit, and never b
   let done = false
   const waiting = f.quit(5000)!
   void waiting.then(() => { done = true })
+  expect(f.quit(5000)).toBe(waiting) // 等的时候又按了一次退出:同一个 promise,不另起、也不放行
   await vi.advanceTimersByTimeAsync(1000); expect(done).toBe(false)
   finish(); await vi.advanceTimersByTimeAsync(0); expect(done).toBe(true)
   expect(f.quit()).toBeNull() // 重启那条路冲过了,紧跟着的 before-quit 不再冲

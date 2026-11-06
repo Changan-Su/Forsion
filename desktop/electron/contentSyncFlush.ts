@@ -14,6 +14,7 @@ export function createContentFlush(deps: { focused(): boolean; log?(m: string): 
   const hooks = new Set<FlushHook>()
   let timer: ReturnType<typeof setTimeout> | null = null
   let quitDone = false
+  let inflight: Promise<void> | null = null
   const stopTimer = () => { if (timer) { clearTimeout(timer); timer = null } }
   /** 挨个叫;插件那边抛错 / 给了坏值都当没事(不能因为插件坏了就退不出去)。 */
   const call = (reason: FlushReason): Promise<void>[] => {
@@ -41,19 +42,20 @@ export function createContentFlush(deps: { focused(): boolean; log?(m: string): 
     focus(): void { stopTimer() },
     suspend(): void { void call('suspend') },
     /** 退出前叫一次(before-quit / 重启前)。有要等的 → promise(最多 wait 毫秒,成败都放行);没有 → null,调用方照常退。
-     *  一次退出只冲一次:重启那条路冲过了,紧跟着的 before-quit 不再冲。 */
+     *  一次退出只冲一次:重启那条路冲过了,紧跟着的 before-quit 不再冲;还在等的时候又按了一次退出,拿到的是同一个 promise。 */
     quit(wait = 5000): Promise<void> | null {
-      if (quitDone) return null
+      if (quitDone) return inflight
       quitDone = true
       stopTimer()
       const pending = call('quit')
       if (!pending.length) return null
-      return new Promise<void>((resolve) => {
+      inflight = new Promise<void>((resolve) => {
         const t = setTimeout(() => { deps.log?.(`[content-flush] quit: gave up waiting after ${wait}ms`); resolve() }, wait)
         void Promise.allSettled(pending).then(() => { clearTimeout(t); resolve() })
-      })
+      }).finally(() => { inflight = null })
+      return inflight
     },
     /** 重启 / 装更新没成:下次退出再冲一次。 */
-    reset(): void { quitDone = false },
+    reset(): void { quitDone = false; inflight = null },
   }
 }
