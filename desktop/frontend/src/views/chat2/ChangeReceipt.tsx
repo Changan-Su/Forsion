@@ -29,6 +29,7 @@ registerMessages({
   'changes.why.deleted': { zh: '这个文件被删掉了（删除会先进 Forsion 回收站）', en: 'This file was deleted (deletions go to the Forsion trash first)' },
   'changes.why.reverted': { zh: '已经回到改之前的样子', en: 'Back to how it was before the change' },
   'changes.why.same': { zh: '内容没变（只改了权限之类）', en: 'Content unchanged (only permissions or similar changed)' },
+  'changes.why.tooMuch': { zh: '这次的改动太多，这里放不下，打开文件看', en: 'Too many changes to show here — open the file' },
   'changes.loading': { zh: '正在读改动…', en: 'Loading changes…' },
   'changes.loadFailed': { zh: '读不到这份改动', en: 'Couldn’t load this change' },
   'changes.undo': { zh: '撤销', en: 'Undo' },
@@ -90,6 +91,7 @@ export function whyKey(f: FileChange): string {
   return f.reverted ? 'changes.why.reverted'
     : f.kind === 'deleted' ? 'changes.why.deleted'
     : f.adds == null ? `changes.why.${f.reason || 'nosnap'}`
+    : f.truncated && (f.adds || f.dels) ? 'changes.why.tooMuch'
     : 'changes.why.same'
 }
 const hasDiff = (f: FileChange): boolean => !f.reverted && f.kind !== 'deleted' && f.adds != null && !(f.adds === 0 && f.dels === 0)

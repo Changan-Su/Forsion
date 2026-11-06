@@ -144,6 +144,9 @@ export const CLASSIFICATION = {
   'GET /agent/link-preview': [D, 'host-only: reads GitHub / Forsion Git PR and issue metadata with the credentials linked on this machine'],
   'GET /agent/sessions/:id/checkpoints': [A, 'list code checkpoints'],
   'POST /agent/sessions/:id/checkpoints/restore': [D, 'restores host files from checkpoints (design appendix C)'],
+  'GET /agent/sessions/:id/changes': [A, "read this session's code changes from checkpoints (per-turn file list + line counts); same reach as workspace/read"],
+  'GET /agent/sessions/:id/changes/diff': [A, "read this session's code changes from checkpoints (line diff); same reach as workspace/read"],
+  'GET /agent/sessions/:id/changes/git': [A, "read-only uncommitted git changes of the session's own project folder; same reach as workspace/read"],
   'GET /agent/compaction': [A, 'read compaction settings'],
   'PUT /agent/compaction': [D, 'global compaction config'],
 
