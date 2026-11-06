@@ -1315,6 +1315,45 @@ export interface PluginSelectionBarHandle {
   dispose(): void
 }
 
+/** One tool on `ctx.ui.mountToolIsland`. */
+export interface PluginToolIslandTool {
+  id: string
+  /** A name from the plugin icon vocabulary (`hand`, `mouse-pointer-2`, `highlighter`, `underline`, `sticky-note`,
+   *  `type`, `shapes`, `pen-line`, `eraser`, …). */
+  icon: string
+  /** Tooltip and accessible name (already in the user's language). */
+  title: string
+  /** Shortcut letter drawn in the button's corner. Display only: bind the key yourself. */
+  key?: string
+}
+
+/** Options of `ctx.ui.mountToolIsland`. */
+export interface PluginToolIslandOptions {
+  /** The tools in order; `'separator'` draws a thin divider between groups. */
+  tools: Array<PluginToolIslandTool | 'separator'>
+  /** The current tool (its button gets the sliding highlight). */
+  active?: string
+  /** A button was clicked (or pressed with Enter / Space). The host does not change `active` by itself:
+   *  call `setActive(id)` when you switch. */
+  onPick(id: string): void
+  /** Your own elements for the four corners (12 px from the edges). The host wraps each in the same capsule
+   *  and positions it; what is inside stays yours. */
+  slots?: { topLeft?: HTMLElement; topRight?: HTMLElement; bottomLeft?: HTMLElement; bottomRight?: HTMLElement }
+}
+
+export interface PluginToolIslandHandle {
+  /** The row under the island (above it while docked at the bottom), for what the current tool needs: colour
+   *  dots, pen types, widths. Usable at once; fill it with your own elements, don't replace its class. */
+  row: HTMLElement
+  /** Show / hide `row` (in 180 ms, out 80 ms; no slide under reduced motion). */
+  showRow(open: boolean): void
+  setActive(id: string): void
+  /** Swap any options; keyboard focus stays on the same button. */
+  update(opts: Partial<PluginToolIslandOptions>): void
+  /** Idempotent. Takes the host's layer out of `root` synchronously (your slot elements and `row` go with it). */
+  dispose(): void
+}
+
 export interface PluginFloatingTocHandle {
   /** Force a rescan after a DOM change that MutationObserver cannot see. Observed changes rescan on their own: the first
    *  after a quiet spell on the next frame, then at most every 500 ms while content keeps changing (2026-10-16+);
@@ -1809,6 +1848,16 @@ export interface PluginContext {
      *  A view that never calls this gets no bar. Feature-detect on older hosts (`ctx.ui?.mountSelectionBar`) and
      *  keep drawing your own menu there. The host disposes it on disable / reload. */
     mountSelectionBar?(root: HTMLElement, opts?: PluginSelectionBarOptions): PluginSelectionBarHandle
+    /** The host's tool island for your own view (2026-11-04+): a capsule of tool buttons centred at the top of
+     *  `root`, docked at the bottom when `root` is narrower than 520 px; the current tool gets a highlight that
+     *  slides over. Same skin as the Mini window's top bar. Like `mountFloatingToc` it overlays `root` without
+     *  taking it over (`root` becomes `position: relative` while mounted if it was static). Clicking a button
+     *  doesn't take focus from your view; a keyboard user's focus stays on the same button across `update` /
+     *  `setActive`. Leave about 56 px at the top of your content for it. Pass the frame that doesn't scroll (the island
+     *  is a layer inside `root`, so a scrolling `root` takes it along). Pointer events on the island and slots bubble to
+     *  `root`: skip `e.target.closest('.lcl-isle-layer')` in your own pan / draw handlers. Feature-detect on older hosts
+     *  (`ctx.ui?.mountToolIsland`) and draw your own bar there. The host disposes it on disable / reload. */
+    mountToolIsland?(root: HTMLElement, opts: PluginToolIslandOptions): PluginToolIslandHandle
     /** The host's settings parts as one page description (2026-10-17+): groups of rows (switch, value, buttons,
      *  input, segmented, select, pick-to-run choice, stepper, code + copy), usage meters, empty / loading / error
      *  states, and `custom` blocks for anything else. You give data and callbacks; the host draws them with its own
@@ -2240,6 +2289,13 @@ export interface PluginContext {
    *  · `setBody(path, rowId, body, expected?)`(2026-11-02+):整份替换那一行的正文,返回是否写了。只写可写的经典表;
    *    给 `expected: { body }` 时当前正文对不上就不写(返回 false),落盘重放时再比一次 —— 勾一条子任务这种「读-改-写」
    *    一律带上它,别盖掉用户刚在编辑器里打的字。打开着的 `mountRecord` 正文编辑器会换成新内容。
+   *  · `mutate(path, fn)`(2026-11-04+):**和表格界面同一个写口** —— 用户在表格里能做的(改列名 / 类型 / 选项、删列、
+   *    挪行挪列、建视图、改筛选排序分组……)插件都能做,不用再等宿主一项一项开。`fn` 拿到这张表的 DbFile 拷贝
+   *    (格式同 `ctx.app.mutateDb`),返回新的 DbFile 即写、返回 `null` 不写;返回是否写了。只改可写的经典表。
+   *    ⚠️`fn` 必须是**纯函数**:写盘前撞上别人的新版本时,宿主会重读再把它重放一遍;新行 / 新列的 id 在 `fn`
+   *    **外面**先生成好(否则每次重放 id 都不同)。宿主不收的结果(抛错、结构不对、换掉首列、id 重复、把经典表
+   *    改成笔记视图)当场回 false;盖章列(编号 / 创建时间 / 修改时间)的值由宿主定,插件写了也不算。
+   *    删行时指回本行的关联不会自动摘(表格界面的删除会),要摘自己在同一个 `fn` 里摘。
    *  ⚠️日期值的写法:`YYYY-MM-DD`、`YYYY-MM-DDTHH:mm`,区间用 `/` 连两头。
    *  旧宿主没有:`if (ctx.databases) …`。 */
   databases?: {
@@ -2254,6 +2310,8 @@ export interface PluginContext {
     readBody?(path: string, rowId: string): string | null
     /** 2026-11-02+;旧宿主没有:`ctx.databases.setBody?.(…)`。 */
     setBody?(path: string, rowId: string, body: string, expected?: { body: string }): boolean
+    /** 2026-11-04+;旧宿主没有:`ctx.databases.mutate?.(…)`。 */
+    mutate?(path: string, fn: (db: import('../../../../shared/amadeus/db/schema').DbFile) => import('../../../../shared/amadeus/db/schema').DbFile | null): boolean
   }
   /** 笔记正文里的 `@` 时间任务(2026-10-16+;待办视图里「笔记」那一组的来源)。
    *  **只有 manifest `capabilities` 里声明了 `'noteTasks'` 才注入**。

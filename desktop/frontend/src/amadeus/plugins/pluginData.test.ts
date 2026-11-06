@@ -28,7 +28,7 @@ vi.mock('../../amadeusPlugins', () => ({ ensureAmadeusReady: () => {} }))
 const { useDbStore } = await import('../store/dbStore')
 const { usePageStore } = await import('../store/pageStore')
 const { useMdMarkStore } = await import('../store/mdMarkStore')
-const { createDatabasesApi, createNoteTasksApi } = await import('./pluginData')
+const { createDatabasesApi, createNoteTasksApi, pluginDbStep } = await import('./pluginData')
 
 const base = (): DbFile => ({
   version: 1,
@@ -149,6 +149,62 @@ describe('ctx.databases', () => {
     expect(api.setBody!('T.db', 'r1', '- [x] a', { body: '' })).toBe(false)
     expect(api.setBody!('T.db', 'r1', '- [x] a', { body: '- [ ] a' })).toBe(true)
     expect(api.readBody!('T.db', 'r1')).toBe('- [x] a')
+  })
+
+  it('mutate:和表格同一个写口 —— 改列名、加选项、挪行、建视图一次写完;盖章列伪造不了;刚加没落盘的行不丢', async () => {
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const api = createDatabasesApi(scope)
+    const fresh = await api.addRow('T.db', {}, '刚加的')
+    const newRow = 'r-new', view = 'v-board'
+    expect(api.mutate!('T.db', (d) => {
+      d.columns[0].name = '事项' // 原地改也行:拿到的是拷贝
+      d.columns.push({ id: 's1', name: '状态', type: 'select', options: ['待办', '完成'] })
+      d.rows.unshift({ id: newRow, cells: { c1: '乙', no: 99, s1: '待办' } })
+      d.rows[2].cells.no = 42
+      d.views = [{ id: view, name: '看板', type: 'kanban', groupBy: 's1' }]
+      return d
+    })).toBe(true)
+    const now = useDbStore.getState().entries['T.db'].data as DbFile
+    expect(now.columns.map((c) => c.name)).toEqual(['事项', '日期', '编号', '状态'])
+    expect(now.rows.map((r) => r.id)).toEqual([newRow, 'r1', fresh])
+    expect(now.rows.find((r) => r.id === 'r1')?.cells.no).toBe(3) // 已有行的编号不让改
+    expect(now.rows.find((r) => r.id === newRow)?.cells.no).not.toBe(99) // 新行的编号由宿主盖
+    await useDbStore.getState().flushAll()
+    expect(disk.views).toEqual([{ id: view, name: '看板', type: 'kanban', groupBy: 's1' }])
+    expect(disk.rows.map((r) => r.id)).toEqual([newRow, 'r1', fresh])
+  })
+
+  it('mutate 不收的:换掉首列、id 重复、结构不对、回调抛错、改成笔记视图、没改动、找不到的表', async () => {
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const api = createDatabasesApi(scope)
+    const before = structuredClone(useDbStore.getState().entries['T.db'].data)
+    vi.spyOn(console, 'error').mockImplementation(() => {}); vi.spyOn(console, 'warn').mockImplementation(() => {})
+    expect(api.mutate!('T.db', (d) => ({ ...d, columns: [...d.columns].reverse() }))).toBe(false)
+    expect(api.mutate!('T.db', (d) => ({ ...d, rows: [...d.rows, { id: 'r1', cells: {} }] }))).toBe(false)
+    expect(api.mutate!('T.db', (d) => ({ ...d, rows: 'nope' } as unknown as DbFile))).toBe(false)
+    expect(api.mutate!('T.db', () => { throw new Error('boom') })).toBe(false)
+    expect(api.mutate!('T.db', (d) => ({ ...d, source: { folder: 'Notes' } }))).toBe(false)
+    expect(api.mutate!('T.db', () => null)).toBe(false)
+    expect(api.mutate!('T.db', (d) => ({ ...d, columns: d.columns.map((c, i) => i ? c : { ...c, type: 'updated' as const }) }))).toBe(false)
+    expect(api.mutate!('T.db', (d) => ({ ...d, rows: d.rows.filter((r) => r.cells.c1 !== '没有这行') }))).toBe(false) // 内容没变 = 不排队
+    expect(writeDatabaseCas).not.toHaveBeenCalled()
+    expect(pluginDbStep({ ...base(), source: { folder: 'N' } } as DbFile, (d) => ({ ...d, source: undefined }))).toBeNull() // 重放时输入已是笔记视图
+    expect(api.mutate!('Nope.db', (d) => d)).toBe(false)
+    expect(useDbStore.getState().entries['T.db'].data).toEqual(before)
+    vi.restoreAllMocks()
+  })
+
+  it('mutate 落盘前撞上别人的新版本:重读后把 fn 重放到新数据上,别人刚加的行还在', async () => {
+    await useDbStore.getState().reload('T.db', 'T.db')
+    const api = createDatabasesApi(scope)
+    expect(api.mutate!('T.db', (d) => ({ ...d, columns: d.columns.map((c) => c.id === 'c1' ? { ...c, name: '事项' } : c) }))).toBe(true)
+    // 别的写者在防抖窗口里往磁盘加了一行,版本号变了 —— 第一次 CAS 失败,宿主重读后重放
+    disk = { ...disk, rows: [...disk.rows, { id: 'other', cells: { c1: '别人加的' } }] }; version = 'v-other'
+    writeDatabaseCas.mockImplementationOnce(async () => ({ ok: false, conflict: true, version } as never))
+    await useDbStore.getState().flushAll()
+    expect(writeDatabaseCas).toHaveBeenCalledTimes(2) // 第一次撞版本,重读重放后第二次写成
+    expect(disk.columns[0].name).toBe('事项')
+    expect(disk.rows.map((r) => r.id)).toContain('other')
   })
 
   it('快照是拷贝:插件原地改它不动宿主的表;插件停用后旧撤销函数不再写', async () => {

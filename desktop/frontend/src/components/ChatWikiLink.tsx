@@ -264,6 +264,16 @@ export async function openFileCitation(path: string, name: string, line: LineLoc
   const { activeId, desktopConfig } = useApp.getState()
   if (await openElsewhere(activeId, path, name, nt)) return
   if (!nt && UI_MODE !== 'mobile' && deskAcceptsFiles(!!desktopConfig?.agentDeskEnabled) && activeId) {
+    // 本机的 .pdf 听「默认打开方式」(同 openPdfCitation):插件认领了就在这一格开它的视图,没认领照旧 wsfile。
+    // 库里的那份按库内路径开(同 openWsFile:按绝对路径会多出一份库外视图,两份写同一个批注文件)。
+    if (/\.pdf$/i.test(path)) {
+      const [{ matchFileType }, { vaultRelOf }] = await Promise.all([import('../amadeus/plugins/pluginStore'), import('../openFileInstall')])
+      const file = vaultRelOf(path) ?? path
+      if (matchFileType(file)) {
+        useApp.getState().deskShowFile(activeId, path, { type: 'amadeus-plugin-file', params: { filePath: file } })
+        return
+      }
+    }
     const top = useApp.getState().deskBySession[activeId]?.items?.[0]
     const same = top?.view?.type === 'wsfile' && top.view.params?.path === path
     const params: Record<string, unknown> = { path, name }
