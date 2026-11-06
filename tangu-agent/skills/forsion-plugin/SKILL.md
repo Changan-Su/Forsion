@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.94.0
+  version: 1.95.0
   author: Forsion
   category: Forsion
 ---
@@ -353,6 +353,7 @@ Your Space renders your own status, TODOs, schedule and Library from `ctx.agent`
 | `ctx.ui.attachTooltip(el, content, opts?)` | 按钮 / 图标的悬停提示,和宿主自己的按钮同一个 | 2026-10-23 起;300ms 才出、弹着移到相邻触发点直接接力、键盘聚焦立刻出不做动画、按下 / 滚动即收;`content` = 一行或几行(首行标题);`side` 缺省 top、放不下翻面;句柄 `{ update, dispose }`,禁用时宿主统一收;留 `aria-label`、去掉 `title`;老宿主没有 → 可选链,照旧 `title`。见下「Tooltips」 |
 | `ctx.ui.dropIndicator(opts?)` | 自己视图里拖动排序 / 拖进去时的落点线、「放进去」描边,和宿主编辑器 / 侧栏 / 标签条同一个 | 2026-10-24 起;句柄 `{ line, zone, hide, dispose }`,传视口坐标(`line({x,y,w})` 横线 y=上沿、`{axis:'v'}` 竖线、`zone({x,y,w,h})` 描边);换落点原地淡出淡入、颜色 `--signal-line`;给 `key`(行 id)滚动才不算换落点;dragleave / drop 时 `hide()`,禁用时宿主统一收;老宿主没有 → 可选链,照旧自己画。2026-10-25 起句柄多一个 `land?(行或找它的函数, 松手处)`:挪完之后被拖的那一行从松手处滑进新位置(160ms,减少动态效果下直接到位),邻居不让位。见下「Drop indicators」 |
 | `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
+| `ctx.ui.mountToolIsland` | 「拿着工具干活」的视图(PDF 批注一类)换工具的那颗胶囊 | 2026-11-04 起;顶部居中、`root` 窄于 520px 停底部,宿主管位置 / 皮 / 滑过去的选中底块;**选中受控**(`onPick` 里自己 `setActive`),`key` 只画字母不绑键;句柄的 `row` 是岛下那一排、归插件画,`slots` 放四角;老宿主没有 → 可选链,保留自己的那条(见 references「Tool island」) |
 | `ctx.ui.mountSettingsPage` / `ctx.ui.mountSettingsItem` | 设置类页面(账号、额度、诊断、偏好…)用宿主的设置零件画 | 只给 groups / items 数据和回调,宿主按端排版(手机上紧凑控件留右、宽控件换行、选了就执行 → 半屏);**别再抄宿主的设置 CSS**;老宿主没有 → 可选链,保留自己画的那套 |
 | `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
 | `ctx.ui.haptic?.('tick')` | 移动端一次已接受操作的轻触反馈 | 2.13.7+；只有原生触感设备才存在，遵循系统设置。只在用户动作写入被接受后调用一次，撤销／同步不调用；不要拿浏览器震动模拟原生反馈 |
@@ -595,7 +596,7 @@ createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一�
 - `dispose()` 同步摘掉这一层,**之后 `el` 立刻还给你**:清空它、放自己的内容、在同一个 `el` 上再挂,都不用等。
 - dispose 再挂 = 一份全新的实例(输入焦点、排序筛选这些状态不带过来)。只是换数据 / 换参数就用句柄的 `update()`。
 - 一个 `el` 同一时刻只有一份宿主界面:上一份没 dispose 就在同一个 `el` 上再挂,宿主先把上一份完整收掉(等同于你 dispose 了它,句柄此后不再生效),再挂新的;谁后调用谁留下,不看谁先加载完。要并排放两份,就各给一个子节点。
-  `mountFloatingToc` 例外:它是叠在 `shell` 上的一层,不占用 `shell`,不收掉 `shell` 上别的挂载,也不被它们收掉。
+  `mountFloatingToc` / `mountToolIsland` 例外:它们是叠在 `shell` / `root` 上的一层,不占用它,不收掉它上面别的挂载,也不被它们收掉。
 - 别用 `el > .x` 去选宿主渲染的节点,也别假设它是 `el.firstElementChild` —— 中间隔着那一层。
 - 2.12.2 及更早的宿主没有这条保证:dispose 之后那一拍里清空 `el`,宿主的卸载会报一条页面错误,或者再挂之后一片空白。
   要兼容它们,就把宿主内容挂进你自己建的子节点(`const slot = el.appendChild(document.createElement('div'))`),换内容时连子节点一起换掉。
@@ -611,6 +612,7 @@ The full contracts, examples and old-host fallbacks for these mounts live in [re
 - Tooltips and motion tokens: ctx.ui.attachTooltip (2026-10-23+)
 - Drop indicators: ctx.ui.dropIndicator (2026-10-24+)
 - Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
+- Tool island: ctx.ui.mountToolIsland (2026-11-04+)
 - Host parts: dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n (2026-10-26+)
 - Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
 - 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg(2026-10-10 起)
