@@ -398,7 +398,7 @@ export const listChanges = (t: EngineTarget, sessionId: string, bounds?: number[
   ).then((r) => r.windows || [])
 
 /** 会话所在 Git 项目里还没提交的改动(含命令改的、你手改的;只看不撤)。available=false = 不是 Git 仓 / 没装 git / 没有目录。 */
-export interface GitChangesInfo { available: boolean; reason?: 'nogit' | 'notrepo' | 'nocwd'; root?: string; files: FileChange[]; truncatedFiles?: boolean }
+export interface GitChangesInfo { available: boolean; reason?: 'nogit' | 'notrepo' | 'nocwd' | 'untrusted'; root?: string; files: FileChange[]; truncatedFiles?: boolean }
 export const gitChanges = (t: EngineTarget, sessionId: string) =>
   request<GitChangesInfo>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/changes/git?diff=1`)
 

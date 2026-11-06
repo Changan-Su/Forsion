@@ -61,7 +61,9 @@ type Kind = 'write' | 'edit' | 'run' | 'read' | 'search' | 'browse' | 'session' 
 /** verbKey 空时 label 是现成的人话名字(MCP / 插件工具);两个都没有就退回原工具名。unowned = 插件名单里还没认出主人。 */
 interface Desc { kind: Kind; verbKey: string; label?: string; unowned?: boolean; target: string; adds?: number; dels?: number; isFile: boolean
   /** 写 / 改到的文件全路径:摘要按文件数算(同一个文件改三次只算一个),不按调用数。 */
-  file?: string }
+  file?: string
+  /** 一次改了好几个文件(apply_patch):全部路径,摘要按它们算。 */
+  files?: string[] }
 
 /** 过程行里的动作名:内置工具走词条,MCP / 插件工具走人话名字,都取不到就是原名(不猜)。 */
 export function toolVerb(d: Desc, ev: ToolEvent, t: (key: string) => string): string {
@@ -82,7 +84,9 @@ function lineCount(s: string): number {
 }
 /** 一次替换的真增减:按行比 old / new(只改了一行里几个字 = +1 −1,不是两段各自的行数)。太长就退回各数各的。 */
 export function editStat(oldS: string, newS: string): { adds: number; dels: number } {
-  if (oldS.length + newS.length > 200_000) return { adds: lineCount(newS), dels: lineCount(oldS) }
+  // 逐行比是 O((N+M)·D),整段改写的大片段在渲染里同步算会卡(describeTool 每次渲染都调):
+  // 行数大了就退回各数各的(只是过程行的估数,真增减看回执,那份是引擎算的)
+  if (oldS.length + newS.length > 200_000 || lineCount(oldS) + lineCount(newS) > 800) return { adds: lineCount(newS), dels: lineCount(oldS) }
   // 片段末尾没有换行时补一个:「x」→「x\ny」是加了一行,不是删一行加两行
   const nl = (x: string): string => (x && !x.endsWith('\n') ? x + '\n' : x)
   let adds = 0, dels = 0
@@ -104,13 +108,24 @@ function diffStat(patch: string): { adds: number; dels: number } {
 }
 const baseName = (p: string): string => p.split(/[/\\]/).filter(Boolean).pop() || p
 
+/** apply_patch 里动到的全部文件(Codex 式 `*** Update File:` 与 git 式 `+++ b/…`;/dev/null 不算)。 */
+function patchPaths(patch: string): string[] {
+  const out = new Set<string>()
+  for (const m of patch.matchAll(/^(?:\*\*\* (?:Update|Add|Delete) File: |\+\+\+ (?:b\/)?)(.+)$/gm)) {
+    const p = m[1].trim()
+    if (p && p !== '/dev/null') out.add(p)
+  }
+  return [...out]
+}
+
 /** 过程行摘要里「写入 N 文件 · 编辑 M 文件」的 N / M:按不同文件数,先写后改的同一个文件只算在写入里。导出给单测。 */
-export function countFiles(descs: readonly Pick<Desc, 'kind' | 'file'>[]): { write: number; edit: number } {
+export function countFiles(descs: readonly Pick<Desc, 'kind' | 'file' | 'files'>[]): { write: number; edit: number } {
   const wrote = new Set<string>(), edited = new Set<string>()
   let w = 0, e = 0
   for (const d of descs) {
-    if (d.kind === 'write') { if (d.file) wrote.add(d.file); else w++ }
-    else if (d.kind === 'edit') { if (d.file) edited.add(d.file); else e++ }
+    const paths = d.files?.length ? d.files : d.file ? [d.file] : []
+    if (d.kind === 'write') { if (paths.length) for (const p of paths) wrote.add(p); else w++ }
+    else if (d.kind === 'edit') { if (paths.length) for (const p of paths) edited.add(p); else e++ }
   }
   for (const f of wrote) edited.delete(f)
   return { write: wrote.size + w, edit: edited.size + e }
@@ -136,7 +151,7 @@ export function describeTool(ev: ToolEvent, pluginName?: (tool: string) => strin
       const patch = String(a.patch ?? a.input ?? a.diff ?? ev.arguments ?? '')
       const { adds, dels } = diffStat(patch)
       const m = patch.match(/(?:\*\*\* (?:Update|Add|Delete) File: |\+\+\+ |--- )([^\n]+)/)
-      return { kind: 'edit', verbKey: 'tool.verb.edited', target: m ? baseName(m[1].trim()) : 'patch', adds, dels, isFile: true, file: m ? m[1].trim() : undefined }
+      return { kind: 'edit', verbKey: 'tool.verb.edited', target: m ? baseName(m[1].trim()) : 'patch', adds, dels, isFile: true, file: m ? m[1].trim() : undefined, files: patchPaths(patch) }
     }
     case 'run_bash': case 'run_background':
       return { kind: 'run', verbKey: 'tool.verb.ran', target: String(a.command ?? a.cmd ?? '').split('\n')[0], isFile: false }

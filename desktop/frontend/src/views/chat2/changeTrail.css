@@ -93,6 +93,7 @@
 .ct-rv-li { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); font: inherit; text-align: left; cursor: pointer; }
 .ct-rv-li .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
 .ct-rv-li:hover, .ct-rv-li.on { background: var(--overlay-light); }
+.ct-rv-listnote { padding: 12px 8px 0; }
 .ct-rv-grp { color: var(--text-faint); font-size: var(--ui-font-caption); padding: 10px 8px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ct-rv-file { margin-bottom: 18px; scroll-margin-top: 60px; }
 .ct-rv-fh { display: flex; align-items: center; gap: 8px; padding: 0 2px 6px; font-size: var(--ui-font-body); min-width: 0; }

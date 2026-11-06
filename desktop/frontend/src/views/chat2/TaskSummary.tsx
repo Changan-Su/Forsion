@@ -330,7 +330,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
   // 「改动」卡(方案 C):引擎给得出真改动时,写盘工具改的文件归它(带增减、能撤销),「产物」只留展示出来的文件和图
   const changes = useChangesCard(sessionId)
   const displayed = useMemo(() => new Set(messages.flatMap((m) => (m.displayFiles || []).map((d) => d.path || d.name))), [messages])
-  const f = useMemo(() => (changes.show ? { ...f0, outputs: f0.outputs.filter((o) => displayed.has(o.path || o.name)) } : f0), [f0, changes.show, displayed])
+  const f = useMemo(() => (changes.show && !changes.failed ? { ...f0, outputs: f0.outputs.filter((o) => displayed.has(o.path || o.name)) } : f0), [f0, changes.show, changes.failed, displayed])
   // 「正在编辑」事实:进行中的编辑类工具调用的目标文件(参数还在流式时也尽力提取)。
   const editing = useMemo(() => (running && onShowEditing ? findLiveEdit(messages, cwd) : null), [messages, running, cwd, onShowEditing])
   const [now, setNow] = useState(() => Date.now())
@@ -455,7 +455,7 @@ export function TaskSummary({ sessionId, desk, messages, running, cwd, hostCwd, 
     cards.changes = (
       <SummaryCard key="changes" id="changes" bodyCap={fit.cap.changes} squeezed={fit.squeezed.includes('changes')} open={isOpen('changes', true)} onToggle={toggle('changes')}
         head={<span>{t('changes.title')}</span>} actions={<ChangeScopeSeg scope={changes.scope} />} count={changes.files.length || undefined}>
-        <ChangesCardBody sessionId={sessionId} scope={changes.scope} win={changes.win} files={changes.files} loading={changes.loading} cwd={cwd} />
+        <ChangesCardBody sessionId={sessionId} scope={changes.scope} win={changes.win} files={changes.files} loading={changes.loading} failed={changes.failed} cwd={cwd} />
       </SummaryCard>
     )
   }

@@ -10,7 +10,7 @@ import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
 import { useSessionCwd } from './WebCards'
 import { ChangeNums, FileDiff } from './FileDiff'
-import { FileTags, UndoConfirm, fileIcon, undoable } from './ChangeReceipt'
+import { FileTags, UndoConfirm, fileIcon, undoable, whyKey } from './ChangeReceipt'
 import {
   canUndoChanges, isProsePath, loadGitChanges, loadWindowDiffs, splitPath, totals, undoChanges, useChangeTrail,
   type FileChange, type GitChangesInfo, type ReviewScope,
@@ -20,7 +20,10 @@ import './ChangesCard' // 「改动 / 本轮 / 本会话 / 未提交」几个词
 import './changeTrail.css'
 
 registerMessages({
-  'changes.review.files': { zh: '{n} 个文件', en: '{n} file(s)' },
+  'changes.review.head.turn': { zh: '这一轮改了 {n} 个文件', en: 'This turn changed {n} file(s)' },
+  'changes.review.head.session': { zh: '这个会话改了 {n} 个文件', en: 'This session changed {n} file(s)' },
+  'changes.review.head.git': { zh: '{n} 个文件没提交', en: '{n} uncommitted file(s)' },
+  'changes.review.sessionNote': { zh: '几轮里改过同一个文件的，合成一份看；单看某一轮切到「本轮」，或点那条回复下面的回执', en: 'A file changed in several turns shows as one combined diff; to see a single turn, switch to “Turn” or open the receipt under that reply' },
   'changes.review.root': { zh: '工作目录', en: 'Working folder' },
   'changes.undo.session': { zh: '撤销本会话的改动', en: 'Undo this session’s changes' },
   'changes.confirm.sessionTitle': { zh: '撤销本会话的改动？', en: 'Undo this session’s changes?' },
@@ -30,6 +33,7 @@ registerMessages({
   'changes.git.nogit': { zh: '这台电脑上没有 Git', en: 'Git isn’t available on this computer' },
   'changes.git.notrepo': { zh: '工作目录不在 Git 仓库里', en: 'The working folder isn’t in a Git repository' },
   'changes.git.nocwd': { zh: '这个会话没有工作目录', en: 'This session has no working folder' },
+  'changes.git.untrusted': { zh: '这个仓库的 Git 配置里带了过滤器，为安全起见不在这里跑 git diff', en: 'This repository’s Git config defines filters, so git diff isn’t run here for safety' },
   'changes.git.note': { zh: '未提交 = Git 里还没提交的全部改动，命令改的也在。这里只能看，撤销请用 Git。', en: 'Uncommitted = everything Git hasn’t committed yet, including changes made by commands. View only here — use Git to undo.' },
   'changes.git.truncated': { zh: '文件太多，只列了前 300 个', en: 'Too many files — showing the first 300' },
   'changes.cmd.hint': { zh: '想看命令改的，切到「未提交」（会话目录在 Git 仓库里时）。', en: 'To see changes made by commands, switch to “Uncommitted” (when the session folder is in a Git repository).' },
@@ -38,7 +42,7 @@ registerMessages({
 type Loaded =
   | { kind: 'loading' }
   | { kind: 'error'; message: string }
-  | { kind: 'ok'; files: FileChange[]; git?: GitChangesInfo }
+  | { kind: 'ok'; files: FileChange[]; git?: GitChangesInfo; scope: ReviewScope; since?: number }
 
 export function ChangesView({ params }: ViewProps) {
   const { t } = useI18n()
@@ -66,17 +70,18 @@ export function ChangesView({ params }: ViewProps) {
   useEffect(() => {
     if (!sid) return
     let alive = true
-    setData((d) => (d.kind === 'ok' ? d : { kind: 'loading' }))
+    // 同一档重拉(撤销 / 新一轮跑完)时先留着旧的,不闪;换了档就当场清掉 —— 别让上一档的文件配着这一档的「撤销」
+    setData((d) => (d.kind === 'ok' && d.scope === scope && d.since === since ? d : { kind: 'loading' }))
     const p: Promise<Loaded> = scope === 'git'
-      ? loadGitChanges(sid).then((g) => ({ kind: 'ok', files: g.files, git: g }))
+      ? loadGitChanges(sid).then((g) => ({ kind: 'ok', files: g.files, git: g, scope }))
       : since == null
-        ? Promise.resolve({ kind: 'ok', files: [] })
-        : loadWindowDiffs(sid, { since, until: null }).then((files) => ({ kind: 'ok', files }))
+        ? Promise.resolve({ kind: 'ok', files: [], scope, since })
+        : loadWindowDiffs(sid, { since, until: null }).then((files) => ({ kind: 'ok', files, scope, since }))
     p.then((r) => { if (alive) setData(r) }, (e) => { if (alive) setData({ kind: 'error', message: (e as Error)?.message || String(e) }) })
     return () => { alive = false }
   }, [sid, scope, since, trailKey, rev])
 
-  const files = data.kind === 'ok' ? data.files : []
+  const files = data.kind === 'ok' && data.scope === scope && (scope === 'git' || data.since === since) ? data.files : []
   const groups = useMemo(() => {
     const m = new Map<string, Array<FileChange & { name: string }>>()
     for (const f of files) {
@@ -109,14 +114,15 @@ export function ChangesView({ params }: ViewProps) {
   return (
     <div className="ct-review" data-change-review-page data-scope={scope}>
       <div className="ct-rv-bar">
-        <span className="ttl">{t('changes.title')}</span>
+        {/* 方案 C2:一句话标题(这一轮 / 这个会话改了几个文件)+ 合计在左,档位与整体撤销在右 */}
+        <span className="ttl">{files.length ? t(`changes.review.head.${scope}`, { n: files.length }) : t('changes.title')}</span>
+        {files.length > 0 && <ChangeNums adds={tot.adds} dels={tot.dels} />}
+        <span className="sp" />
         <span className="ct-seg" role="group" aria-label={t('changes.title')}>
           {(['turn', 'session', 'git'] as const).map((k) => (
             <button key={k} type="button" aria-pressed={scope === k} data-change-scope={k} onClick={() => { setScope(k); setFocus(undefined) }}>{t(`changes.scope.${k}`)}</button>
           ))}
         </span>
-        {files.length > 0 && <span className="ct-note">{t('changes.review.files', { n: files.length })} <ChangeNums adds={tot.adds} dels={tot.dels} /></span>}
-        <span className="sp" />
         {canUndo && undoAll.length > 0 && (
           <button type="button" className="ct-act" disabled={running} data-change-undo-all
             onClick={() => setConfirm({ files: undoAll, title: t(scope === 'session' ? 'changes.confirm.sessionTitle' : 'changes.confirm.turnTitle') })}>
@@ -144,6 +150,7 @@ export function ChangesView({ params }: ViewProps) {
                   ))}
                 </div>
               ))}
+              {scope === 'session' && <div className="ct-note ct-rv-listnote">{t('changes.review.sessionNote')}</div>}
             </nav>
             <div>
               {groups.flatMap(([dir, fs]) => fs.map((f) => (
@@ -163,8 +170,8 @@ export function ChangesView({ params }: ViewProps) {
                     )}
                   </div>
                   {f.patch
-                    ? <FileDiff patch={f.patch} prose={isProsePath(f.path)} truncated={f.truncated} />
-                    : <div className="ct-note">{t(f.reverted ? 'changes.why.reverted' : f.kind === 'deleted' ? 'changes.why.deleted' : `changes.why.${f.reason || 'nosnap'}`)}</div>}
+                    ? <FileDiff patch={f.patch} prose={isProsePath(f.path)} truncated={f.truncated} createdHead={f.kind === 'created' ? 7 : undefined} />
+                    : <div className="ct-note">{t(whyKey(f))}</div>}
                 </section>
               )))}
               <div className="ct-rv-cmd">

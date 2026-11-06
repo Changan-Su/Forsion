@@ -166,7 +166,7 @@ async function main() {
       const page = win.locator('[data-change-review-page]').first()
       await page.waitFor({ timeout: 10000 })
       await page.locator('[data-rv-file]').first().waitFor({ timeout: 10000 })
-      r.check('C6 审阅页列出本轮文件', (await page.locator('[data-rv-file]').count()) >= 3, `n=${await page.locator('[data-rv-file]').count()}`)
+      r.check('C6 审阅页列出本轮文件、一句话标题', (await page.locator('[data-rv-file]').count()) >= 3 && /这一轮改了 4 个文件/.test(await page.locator('.ct-rv-bar .ttl').innerText()), `n=${await page.locator('[data-rv-file]').count()}`)
       await win.mouse.move(1400, 120)
       await shot('c3-review-turn-light')
       await page.locator('[data-change-scope="git"]').click()

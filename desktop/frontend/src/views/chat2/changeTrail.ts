@@ -25,7 +25,7 @@ export type { FileChange, GitChangesInfo }
 
 registerMessages({
   'changes.undo.done': { zh: '已撤销 {n} 个文件', en: 'Undid {n} file(s)' },
-  'changes.undo.kept': { zh: '已撤销 {n} 个文件；{kept} 个在 Tangu 改完后又被改过，原样留着', en: 'Undid {n} file(s); {kept} changed again after Tangu’s edit were left as they are' },
+  'changes.undo.kept': { zh: '已撤销 {n} 个文件；{kept} 个在 Tangu 改完后又被改过（或判断不出），原样留着', en: 'Undid {n} file(s); {kept} changed again after Tangu’s edit (or couldn’t be checked) were left as they are' },
   'changes.undo.skipped': { zh: '已撤销 {n} 个文件；{bad} 个当时没存下原样，撤销不了', en: 'Undid {n} file(s); {bad} had no saved copy and can’t be undone' },
   'changes.undo.failed': { zh: '{bad} 个文件撤销失败', en: '{bad} file(s) couldn’t be undone' },
   'changes.undo.busy': { zh: '正在运行，先停下再撤销', en: 'A run is in progress — stop it before undoing' },
@@ -111,14 +111,16 @@ async function fetchWindows(sid: string, entry: SessionTrail): Promise<void> {
     const wins = await listChanges(t, sid, entry.bounds)
     const windows: Record<number, ChangeWindowInfo> = {}
     for (const w of wins) windows[w.since] = w
-    if (useChangeTrail.getState().by[sid]?.key !== entry.key) return // 期间又变了,以新的为准
-    patch(sid, { ...entry, status: 'ok', windows })
+    const now = useChangeTrail.getState().by[sid]
+    if (now?.key !== entry.key) return // 期间又变了,以新的为准
+    // 分界 / 挂载点取现在的:运行开始后 driver 已经把它们往前推了(键不变),别拿发请求时那份盖回去
+    patch(sid, { ...now, status: 'ok', windows })
   } catch (e) {
     if (isMissing(e)) unsupportedTargets.add(t.key)
-    if (useChangeTrail.getState().by[sid]?.key !== entry.key) return
+    const now = useChangeTrail.getState().by[sid]
+    if (now?.key !== entry.key) return
     // 读失败 ≠ 没改动:留着上一份(没有上一份就不画),不当成「这轮没改文件」
-    const prev = useChangeTrail.getState().by[sid]
-    patch(sid, { ...entry, status: isMissing(e) ? 'unsupported' : 'error', windows: prev?.windows ?? {} })
+    patch(sid, { ...now, status: isMissing(e) ? 'unsupported' : 'error' })
   }
 }
 const patch = (sid: string, entry: SessionTrail): void => useChangeTrail.setState((s) => ({ by: { ...s.by, [sid]: entry } }))
@@ -186,15 +188,21 @@ export function useHasChanges(sid: string | null | undefined): boolean {
 /** 任务概览「改动」卡的数据:本轮 = 最新一轮;本会话 = [0,∞) 整段(切过去才拉)。 */
 export function useChangesCard(sid: string | null | undefined): {
   show: boolean; scope: CardScope; win: TurnWindow | null; files: FileChange[]; loading: boolean
+  /** 这一档读失败了(不是「没改」):卡里如实说,「产物」也别再把写盘文件让给这张卡。 */
+  failed: boolean
 } {
   const show = useHasChanges(sid)
   const scope = useChangeTrail((s) => s.scope)
+  const trailStatus = useChangeTrail((s) => (sid ? s.by[sid]?.status : undefined))
   const latest = useLatestTurnChanges(sid)
   const session = useSessionChanges(sid, show && scope === 'session')
   if (scope === 'session') {
-    return { show, scope, win: { since: 0, until: null }, files: session.files, loading: session.status === 'loading' && !session.files.length }
+    const failed = session.status === 'error'
+    return { show, scope, win: { since: 0, until: null }, files: session.files, loading: session.status === 'loading' && !session.files.length, failed }
   }
-  return { show, scope, win: latest?.win ?? null, files: latest?.files ?? [], loading: false }
+  // 最新一轮还没数据:在拉 = 加载中;拉失败 = 失败;都不是才是「这一轮没改」
+  const failed = !latest && trailStatus === 'error'
+  return { show, scope, win: latest?.win ?? null, files: latest?.files ?? [], loading: !latest && trailStatus === 'loading', failed }
 }
 
 /** 「本会话」一段([0,∞)):按需拉,键跟着回合分界走(新一轮结束就重拉)。 */
@@ -208,20 +216,24 @@ export function useSessionChanges(sid: string | null | undefined, enabled: boole
     if (unsupportedTargets.has(t.key)) return
     useChangeTrail.setState((s) => ({ session: { ...s.session, [sid]: { key: turnKey, status: 'loading', files: entry?.files ?? [] } } }))
     listChanges(t, sid).then((wins) => {
+      if (useChangeTrail.getState().session[sid]?.key !== turnKey) return // 晚到的旧回应别盖新的
       useChangeTrail.setState((s) => ({ session: { ...s.session, [sid]: { key: turnKey, status: 'ok', files: wins[0]?.files ?? [] } } }))
     }, (e) => {
       if (isMissing(e)) unsupportedTargets.add(t.key)
+      if (useChangeTrail.getState().session[sid]?.key !== turnKey) return
       useChangeTrail.setState((s) => ({ session: { ...s.session, [sid]: { key: turnKey, status: isMissing(e) ? 'unsupported' : 'error', files: s.session[sid]?.files ?? [] } } }))
     })
   }, [sid, enabled, turnKey]) // eslint-disable-line react-hooks/exhaustive-deps
   return { status: entry?.status ?? 'loading', files: entry?.files ?? [] }
 }
 
-const diffKey = (sid: string, w: TurnWindow, path: string): string => `${sid}|${w.since}|${w.until ?? ''}|${path}`
+// 键里带 rev:撤销之后换一套键,撤销前发出、晚到的回应只会落进没人读的旧键
+const diffKey = (sid: string, rev: number, w: TurnWindow, path: string): string => `${sid}|${rev}|${w.since}|${w.until ?? ''}|${path}`
 
-/** 一个文件在一段里的 diff(展开时才拉;同一个键只拉一次,撤销后随 rev 清掉)。 */
+/** 一个文件在一段里的 diff(展开时才拉;同一个键只拉一次,撤销后随 rev 换键)。 */
 export function useFileDiff(sid: string | undefined, w: TurnWindow, path: string, enabled: boolean): FileChange | 'loading' | 'error' | undefined {
-  const k = sid ? diffKey(sid, w, path) : ''
+  const rev = useChangeTrail((s) => (sid ? s.rev[sid] ?? 0 : 0))
+  const k = sid ? diffKey(sid, rev, w, path) : ''
   const v = useChangeTrail((s) => (k ? s.diffs[k] : undefined))
   useEffect(() => {
     if (!sid || !enabled || v !== undefined) return
@@ -252,7 +264,8 @@ export async function undoChanges(sid: string, at: number, paths: string[]): Pro
   const app = useApp.getState()
   if (app.runningBySession[sid]) { app.toast(translate('changes.undo.busy'), true); return false }
   try {
-    const r = await restoreCheckpoint(targetForSession(sid), sid, at, { paths, keepEdited: true })
+    // 「本会话」那一档的起点是 0;恢复接口要正的毫秒时刻,1 和 0 圈到的检查点一样(全部)
+    const r = await restoreCheckpoint(targetForSession(sid), sid, Math.max(1, at), { paths, keepEdited: true })
     const n = r.restored.length + r.deleted.length
     if (r.failed.length) app.toast(translate('changes.undo.failed', { bad: r.failed.length }), true)
     else if (r.conflicts?.length) app.toast(translate('changes.undo.kept', { n, kept: r.conflicts.length }), true)

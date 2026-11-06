@@ -10,7 +10,7 @@ import './changeTrail.css'
 
 registerMessages({
   'changes.diff.line': { zh: '⋯ 第 {n} 行', en: '⋯ Line {n}' },
-  'changes.diff.more': { zh: '⋯ 还有 {n} 行没显示', en: '⋯ {n} more lines not shown' },
+  'changes.diff.more': { zh: '⋯ 还有 {n} 行', en: '⋯ {n} more lines' },
   'changes.diff.truncated': { zh: '⋯ 后面太长，没显示', en: '⋯ The rest is too long to show' },
 })
 

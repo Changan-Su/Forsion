@@ -20,7 +20,7 @@ import './changeTrail.css'
 registerMessages({
   'changes.rcpt.title': { zh: '改了 {n} 个文件', en: 'Changed {n} file(s)' },
   'changes.tag.created': { zh: '新建', en: 'New' },
-  'changes.tag.deleted': { zh: '已删除', en: 'Deleted' },
+  'changes.tag.deleted': { zh: '已删除（在回收站）', en: 'Deleted (in Trash)' },
   'changes.tag.reverted': { zh: '已撤销', en: 'Undone' },
   'changes.tag.editedLater': { zh: '之后你也改过', en: 'You edited it later' },
   'changes.why.binary': { zh: '二进制文件，没法逐行对比', en: 'Binary file — can’t compare line by line' },
@@ -28,6 +28,7 @@ registerMessages({
   'changes.why.nosnap': { zh: '当时没存下原样（太大或读不了），没法对比，也撤销不了', en: 'No copy was saved at the time (too large or unreadable), so it can’t be compared or undone' },
   'changes.why.deleted': { zh: '这个文件被删掉了（删除会先进 Forsion 回收站）', en: 'This file was deleted (deletions go to the Forsion trash first)' },
   'changes.why.reverted': { zh: '已经回到改之前的样子', en: 'Back to how it was before the change' },
+  'changes.why.same': { zh: '内容没变（只改了权限之类）', en: 'Content unchanged (only permissions or similar changed)' },
   'changes.loading': { zh: '正在读改动…', en: 'Loading changes…' },
   'changes.loadFailed': { zh: '读不到这份改动', en: 'Couldn’t load this change' },
   'changes.undo': { zh: '撤销', en: 'Undo' },
@@ -84,13 +85,22 @@ export function UndoConfirm({ title, message, files, cwd, onConfirm, onClose }: 
   )
 }
 
+/** 没有 diff 可看时那一句说明(撤销过 / 删了 / 比不了 / 内容没变)。 */
+export function whyKey(f: FileChange): string {
+  return f.reverted ? 'changes.why.reverted'
+    : f.kind === 'deleted' ? 'changes.why.deleted'
+    : f.adds == null ? `changes.why.${f.reason || 'nosnap'}`
+    : 'changes.why.same'
+}
+const hasDiff = (f: FileChange): boolean => !f.reverted && f.kind !== 'deleted' && f.adds != null && !(f.adds === 0 && f.dels === 0)
+
 function FileBody({ sid, win, f }: { sid: string; win: TurnWindow; f: FileChange }) {
   const { t } = useI18n()
-  const plain = f.reverted ? 'changes.why.reverted' : f.kind === 'deleted' ? 'changes.why.deleted' : f.adds == null ? `changes.why.${f.reason || 'nosnap'}` : null
+  const plain = hasDiff(f) ? null : whyKey(f)
   const d = useFileDiff(sid, win, f.path, !plain)
   if (plain) return <div className="ct-row-msg ct-note">{t(plain)}</div>
   if (d === 'loading' || d === undefined) return <div className="ct-row-msg ct-note">{t('changes.loading')}</div>
-  if (d === 'error' || !d.patch) return <div className="ct-row-msg ct-note">{d === 'error' ? t('changes.loadFailed') : t(`changes.why.${d.reason || 'nosnap'}`)}</div>
+  if (d === 'error' || !d.patch) return <div className="ct-row-msg ct-note">{d === 'error' ? t('changes.loadFailed') : t(whyKey(d))}</div>
   return <div className="ct-row-diff"><FileDiff patch={d.patch} prose={isProsePath(f.path)} truncated={d.truncated} createdHead={f.kind === 'created' ? 7 : undefined} /></div>
 }
 

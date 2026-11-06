@@ -98,3 +98,18 @@ describe('helpers', () => {
     expect(isProsePath('/a/x.ts')).toBe(false)
   })
 })
+
+describe('codex review follow-ups', () => {
+  it('apply_patch touching several files counts each file', () => {
+    const p1 = '*** Begin Patch\n*** Update File: a.ts\n@@\n-x\n+y\n*** Update File: b.ts\n@@\n-x\n+y\n*** End Patch'
+    const p2 = '*** Begin Patch\n*** Update File: a.ts\n@@\n-y\n+z\n*** Add File: c.ts\n+new\n*** End Patch'
+    const d = [p1, p2].map((patch, i) => describeTool({ id: String(i), name: 'apply_patch', arguments: JSON.stringify({ patch }), done: true }))
+    expect(countFiles(d)).toEqual({ write: 0, edit: 3 })
+  })
+  it('a huge rewrite falls back to plain line counts instead of diffing in render', () => {
+    const big = (tag: string) => Array.from({ length: 1000 }, (_, i) => `${tag}${i}`).join('\n')
+    const t0 = Date.now()
+    expect(editStat(big('a'), big('b'))).toEqual({ adds: 1000, dels: 1000 })
+    expect(Date.now() - t0).toBeLessThan(200)
+  })
+})

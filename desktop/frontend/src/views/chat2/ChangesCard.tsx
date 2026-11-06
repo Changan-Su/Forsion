@@ -40,8 +40,8 @@ export function ChangeScopeSeg({ scope }: { scope: CardScope }) {
   )
 }
 
-export function ChangesCardBody({ sessionId, scope, win, files, loading, cwd }: {
-  sessionId: string; scope: CardScope; win: TurnWindow | null; files: FileChange[]; loading: boolean; cwd?: string
+export function ChangesCardBody({ sessionId, scope, win, files, loading, failed, cwd }: {
+  sessionId: string; scope: CardScope; win: TurnWindow | null; files: FileChange[]; loading: boolean; failed?: boolean; cwd?: string
 }) {
   const { t } = useI18n()
   const running = useApp((s) => !!s.runningBySession[sessionId])
@@ -49,7 +49,7 @@ export function ChangesCardBody({ sessionId, scope, win, files, loading, cwd }: 
   const canUndo = canUndoChanges(sessionId)
   const tot = totals(files)
   if (!files.length) {
-    return <div className="ct-note" style={{ padding: '4px 0' }}>{loading ? t('changes.loading') : running && scope === 'turn' ? t('changes.card.running') : t('changes.card.turnEmpty')}</div>
+    return <div className="ct-note" style={{ padding: '4px 0' }}>{loading ? t('changes.loading') : failed ? t('changes.loadFailed') : running && scope === 'turn' ? t('changes.card.running') : t(scope === 'session' ? 'changes.empty.session' : 'changes.card.turnEmpty')}</div>
   }
   return (
     <>
