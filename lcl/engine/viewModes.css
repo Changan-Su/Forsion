@@ -21,14 +21,22 @@
   position: absolute;
   top: 2px;
   bottom: 2px;
-  left: 2px;
-  width: calc((100% - 4px) / var(--seg-n, 2));
+  /* 按左右两条边定位、两条边拉伸过去,写法与 .t2s-vaultseg-thumb 同一份(那边有完整说明,水滴复用方案第 4 条,2026-11-05):
+     落点与原来 `width:(100%−4px)/n + translateX(i·100%)` 逐像素相同;后沿晚 --seg-edge-lag 出发、不过冲,哪条是后沿看
+     data-dir(ViewModeSwitch 经 useSegDir 写)。插件拿到的看法胶囊就是这一颗。⚠️ 别再写 width,否则 right 被忽略、后沿不动。
+     token 在宿主 base.css :root,这里只写同值兜底。 */
+  left: calc(2px + (100% - 4px) * var(--seg-i, 0) / var(--seg-n, 2));
+  right: calc(2px + (100% - 4px) * (var(--seg-n, 2) - var(--seg-i, 0) - 1) / var(--seg-n, 2));
   border-radius: var(--radius-pill, 999px);
   background: var(--seg-thumb, var(--bg-card, #fff));
   box-shadow: var(--seg-thumb-shadow, 0 1px 2px rgba(0, 0, 0, 0.08));
-  transition: transform 0.3s cubic-bezier(0.32, 1.25, 0.5, 1);
-  transform: translateX(calc(var(--seg-i, 0) * 100%));
+  transition:
+    left var(--seg-edge-duration, 280ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1)),
+    right var(--seg-edge-duration, 280ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1));
 }
+.lcl-vmode-thumb[data-dir='r'] { transition-delay: var(--seg-edge-lag, 80ms), 0s; }
+.lcl-vmode-thumb[data-dir='l'] { transition-delay: 0s, var(--seg-edge-lag, 80ms); }
+@media (prefers-reduced-motion: reduce) { .lcl-vmode-thumb[data-dir] { transition-delay: 0s; } }
 
 /* 选择器都带上 .lcl-vmode 前缀(0,2,1):宿主视图常有 `.csu button` / `.dt button { color: inherit }` 这种宽规则,
    同特异性时谁后加载谁赢,胶囊会被它们压成别的样子 */
@@ -57,7 +65,8 @@
   color: var(--text-faint, var(--text-muted));
   cursor: pointer;
   transform: none;
-  transition: color 0.25s var(--ease-out, ease);
+  /* 字色与滑块前沿同一时长、同一条曲线(DESIGN §3 规矩 3) */
+  transition: color var(--seg-edge-duration, 280ms) var(--ease-surface, cubic-bezier(0.22, 1, 0.36, 1));
 }
 .lcl-vmode .lcl-vmode-pill > button:hover { background: none; color: var(--text-muted, var(--text)); }
 .lcl-vmode .lcl-vmode-pill > button.on { color: var(--text); }

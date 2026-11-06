@@ -5535,6 +5535,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --canvas-switch-hud: 160ms; /* 进场:胶囊 / 说明淡入多久;空白处说明被卡盖住时让开 */
   --switch-edge-duration: 120ms; /* 开关旋钮左右两条边各自的时长 */
   --switch-edge-lag: 30ms; /* 开关旋钮后沿晚出发多久(离开时拉长、落地时回缩) */
+  --seg-edge-duration: 280ms; /* 分段胶囊滑块左右两条边各自的时长(sidebar2.css .t2s-vaultseg-thumb / LCL .lcl-vmode-thumb;水滴复用方案第 4 条,11-05) */
+  --seg-edge-lag: 80ms; /* 分段胶囊滑块后沿晚出发多久:离开时拉长、落地回缩,不过冲 */
   --pill-select-duration: 200ms; /* 新对话 Agent / 引擎药丸选中、标签展开(走查续八 8.6) */
   --toast-enter-duration: 180ms; /* 两种吐司进场:从贴着的那条边 6px 滑进 + 淡入(走查续八 8.5 A;右上通知卡在 NotificationHost 同值) */
   --toast-exit-duration: 140ms; /* 底部吐司退场;右上通知卡 160ms 右移 16px(NotificationHost) */
