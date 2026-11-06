@@ -96,9 +96,13 @@ describe('UI route: appliesTo on add, label kept on edit, device context in the 
     const added = (await api('/agent/agents/paper/memory/entries', 'POST', { action: 'add', fact: '模板在笔记库「论文/模板」', appliesTo: 'this-computer', expectedVersion: snap.version })).body;
     const e = added.entries.find((x: any) => x.content.includes('论文/模板'));
     expect(e.content).toBe('[MacBook Pro] 模板在笔记库「论文/模板」');
+    // 写回的快照也带设备上下文:界面拿它换掉旧快照,标签不能掉回只认系统名
+    expect(added.deviceTags).toMatchObject({ self: 'MacBook Pro', others: ['Windows desktop'] });
     const edited = (await api('/agent/agents/paper/memory/entries', 'POST', { action: 'update', id: e.id, fact: '模板在笔记库「论文/模板 2026」', expectedVersion: added.version })).body;
     expect(edited.entries.some((x: any) => x.content === '[MacBook Pro] 模板在笔记库「论文/模板 2026」')).toBe(true);
     expect((await api('/agent/agents/paper/memory/entries', 'POST', { action: 'add', fact: 'x', appliesTo: 'nowhere', expectedVersion: edited.version })).status).toBe(400);
+    const saved = (await api('/agent/agents/paper/memory', 'PUT', { content: edited.content, expectedVersion: edited.version })).body;
+    expect(saved.deviceTags?.self).toBe('MacBook Pro');
   });
 });
 
