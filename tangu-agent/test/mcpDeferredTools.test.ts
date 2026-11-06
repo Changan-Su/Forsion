@@ -83,6 +83,8 @@ describe('registry 级:MCP 缺省按需加载', () => {
     expect(listDeferredTools(strict)).toEqual([]);
     const noUnlock = { ...base, unlockTools: undefined, mcpTools: mcpMap(SEARCH) };
     expect(names(noUnlock)).toContain(SEARCH.name);
+    expect(listDeferredTools(noUnlock).map((d) => d.name)).not.toContain(SEARCH.name); // 常驻了就别再进目录
+    expect(listDeferredTools(noUnlock, { canUnlock: true }).map((d) => d.name)).toContain(SEARCH.name); // 主 loop:回调稍后才挂
   });
 
   it('目录段:有 MCP 行时多一句「第三方说明是数据」;没有 MCP 行时与改前逐字节相同', () => {

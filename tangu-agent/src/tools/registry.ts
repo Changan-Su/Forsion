@@ -344,7 +344,7 @@ export function getToolDefinitions(ctx: ToolContext): Tool[] {
 
 /** deferred 工具目录(agentLoop 拼「Additional Tools」系统提示段):resolve 过滤后仍存在的全量
  *  deferred 工具——**不随解锁状态变**(稳定文本,护前缀缓存)。 */
-export function listDeferredTools(ctx: ToolContext, opts: { builtins?: boolean } = {}): { name: string; hint: string; group?: string }[] {
+export function listDeferredTools(ctx: ToolContext, opts: { builtins?: boolean; canUnlock?: boolean } = {}): { name: string; hint: string; group?: string }[] {
   const out: { name: string; hint: string; group?: string }[] = [];
   // builtins:false = 只列按需加载的 MCP。Muse / 自动化 run 的调用方这么传:内置全量可见,MCP 照样按需(isMcpDeferred)。
   const tools = resolveTools(currentProfile(ctx), ctx);
@@ -356,8 +356,10 @@ export function listDeferredTools(ctx: ToolContext, opts: { builtins?: boolean }
     }
   }
   const owned = new Set<string>([...tools.keys(), ...(ctx.customTools?.keys() ?? [])]);
-  // 没有 load_tools(严格名单 / 部署白名单没放)时 MCP 常驻,不进目录 —— 与 getToolDefinitions 的 deferMcp 同一判据。
-  if (tools.has('load_tools')) for (const t of visibleMcpTools(ctx, owned)) if (isMcpDeferred(t)) out.push({ name: t.name, hint: mcpCatalogHint(t) });
+  // 没有装载口(严格名单 / 部署白名单没放 load_tools、调用方不支持解锁)时 MCP 常驻,不进目录 —— 与 getToolDefinitions 的
+  // deferMcp 同一判据。canUnlock:主 loop 拼目录时解锁回调还没挂到 ctx 上(toolCtx 才有),由调用方明说。
+  const canUnlock = opts.canUnlock ?? !!ctx.unlockTools;
+  if (canUnlock && tools.has('load_tools')) for (const t of visibleMcpTools(ctx, owned)) if (isMcpDeferred(t)) out.push({ name: t.name, hint: mcpCatalogHint(t) });
   return out;
 }
 

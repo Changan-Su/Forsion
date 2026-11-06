@@ -1871,7 +1871,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ])) || undefined;
     }
     // Muse / 自动化 run 的内置工具全量可见,目录里只剩按需加载的 MCP(与 getToolDefinitions 的 deferBypass 同一判据)。
-    const deferredCatalog = listDeferredTools(toolGateCtx as ToolContext, { builtins: !deferBypass });
+    // canUnlock:下面 toolCtx 一定挂 unlockTools,这里的 toolGateCtx 还没有。
+    const deferredCatalog = listDeferredTools(toolGateCtx as ToolContext, { builtins: !deferBypass, canUnlock: true });
     // 历史里用过的 deferred 工具延续解锁(见 deferredUnlocksFromHistory);目录文本不变,只影响 defs。
     const unlockedTools = deferredUnlocksFromHistory(history, deferredCatalog);
     const deferSection = deferredCatalogSection(deferredCatalog);
