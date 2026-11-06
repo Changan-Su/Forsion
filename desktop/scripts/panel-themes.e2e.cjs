@@ -7,6 +7,8 @@
  *     预览开着换图标不重播;账号卡开着变高,倒放按现在的矩形(底层与面板偏差 ≤ 2px);
  *   · 平移:两种层都不出现,面板上有透明度 + 缩放动画;
  *   · 两种主题下开到 60ms 就收:内容只淡不先蹦出来。
+ *   · 收起途中再点源 = 从这一帧掉头、停在打开,不撤掉从头重来(拉伸 / 平移 / 只淡入淡出;11-06 用户选的观感);
+ *     拉伸接手后描边从透明淡进来(同液滴)。
  *  负对照:拿只补了导入、没改走 openPanel 的构建跑,拉伸 / 平移两条必须报红。
  *  用法:npm run build && node scripts/panel-themes.e2e.cjs   截图 → outputs/panel-themes/ */
 const fs = require('fs'), os = require('os'), path = require('path')
@@ -40,7 +42,7 @@ const sample = (page, sel, { act = null, ms = 650, close = null, t = 0 } = {}) =
     const f = { t: Math.round(performance.now() - t0), exists: !!p, stretch: !!st && getComputedStyle(st).display !== 'none', droplet: !!dr && getComputedStyle(dr).display !== 'none' }
     if (p) {
       const cs = getComputedStyle(p)
-      f.pouring = p.classList.contains('lcl-droplet-pouring'); f.vis = cs.visibility
+      f.pouring = p.classList.contains('lcl-droplet-pouring'); f.vis = cs.visibility; f.bc = cs.borderTopColor
       // 内容实际透明度:平移主题动的是面板本身;收完到卸载之间面板 visibility: hidden(那一帧透明度已回 1),算 0
       f.kids = cs.visibility === 'hidden' ? 0 : +cs.opacity * Math.min(1, ...[...p.children].map((k) => +getComputedStyle(k).opacity))
       f.props = [...new Set(p.getAnimations().flatMap((a) => a.effect?.getKeyframes().flatMap((k) => Object.keys(k).filter((x) => !['offset', 'easing', 'composite', 'computedOffset'].includes(x))) ?? []))].sort().join(',')
@@ -63,6 +65,40 @@ function verifyStretch(frames, name) {
   check(`${name}: 拉伸主题出 .lcl-stretch、不出液滴`, F.some((f) => f.stretch) && !F.some((f) => f.droplet), JSON.stringify(F.slice(0, 3)))
   const end = F.at(-1)
   check(`${name}: 拉伸停稳后真面板接手`, !!end && !end.pouring && !end.stretch && end.kids === 1 && end.vis !== 'hidden', JSON.stringify(end))
+  // 接手那一帧描边不整条一帧出现:从透明淡进来(同液滴,11-06 用户选的观感)
+  const li = F.findIndex((f) => !f.pouring && f.t > 50)
+  if (end?.bc && !/rgba\(0, 0, 0, 0\)|transparent/.test(end.bc)) check(`${name}: 拉伸接手后描边从透明淡进来`, li > 0 && F[li].bc !== end.bc, JSON.stringify({ land: F[li]?.bc, end: end.bc }))
+}
+/** 面板此刻看得见多少(0–100):clip-path 露出的面积 × 透明度;inset 按 1–4 个值展开(Chrome 按 margin 简写序列化)。 */
+const READ_VIS = `(sel) => {
+  const p = document.querySelector(sel); if (!p) return { exists: false, vis: 0 }
+  const cs = getComputedStyle(p)
+  if (cs.visibility === 'hidden') return { exists: true, vis: 0 }
+  const iv = /inset\\(([^)]*)\\)/.exec(cs.clipPath)?.[1].split(' round ')[0].trim().split(/\\s+/).map(parseFloat)
+  let area = 100
+  if (iv) { const [t, r = t, b = t, l = r] = iv, W = p.offsetWidth, H = p.offsetHeight; area = 100 * Math.max(0, W - r - l) * Math.max(0, H - t - b) / (W * H) }
+  return { exists: true, vis: Math.round(area * +cs.opacity), pouring: p.classList.contains('lcl-droplet-pouring'), kids: Math.min(1, ...[...p.children].map((k) => +getComputedStyle(k).opacity)) }
+}`
+/** 收起途中再点源(11-06 用户选的「掉头」):页内一气做完 —— 点开、停稳、点源收、等 wait 毫秒、再点源,逐帧记看得见多少。 */
+const turnAround = (page, sel, src, wait) => page.evaluate(async ({ sel, src, wait, READ_VIS }) => {
+  const raf = () => new Promise(requestAnimationFrame), read = (0, eval)(READ_VIS), click = () => document.querySelector(src)?.click()
+  click()
+  let t0 = performance.now(); while (performance.now() - t0 < 700) await raf()
+  click()
+  t0 = performance.now(); while (performance.now() - t0 < wait) await raf()
+  const at = read(sel)
+  click()
+  const frames = []
+  t0 = performance.now(); while (performance.now() - t0 < 700) { await raf(); frames.push(read(sel)) }
+  return { at, frames }
+}, { sel, src, wait, READ_VIS })
+/** 掉头 = 再触发之后看得见的部分不塌回去(重来的话拉伸只剩一条缝、平移 / 淡入淡出透明度回到 0),最后停在打开。
+ *  「当时正在收」:拉伸倒放挂着 pouring(前 80ms 形状几乎没缩,面积还在 99% 左右);平移 / 淡出看透明度已经降了。 */
+function verifyTurn(r, name) {
+  const lo = Math.min(...r.frames.slice(0, 6).map((f) => f.vis)), end = r.frames.at(-1)
+  const closing = r.at.exists && (r.at.pouring || r.at.vis < 99) && r.at.vis > 30
+  check(`${name}: 收起途中再点 = 从这一帧掉头(不塌回去重来)`, closing && lo >= Math.max(25, r.at.vis * 0.6), JSON.stringify({ at: r.at, first: r.frames.slice(0, 6).map((f) => f.vis) }))
+  check(`${name}: 掉头后停在打开`, end.exists && end.vis >= 99 && !end.pouring && end.kids === 1, JSON.stringify(end))
 }
 function verifyGlide(frames, name) {
   const F = frames.filter((f) => f.exists)
@@ -183,7 +219,38 @@ async function main() {
       await win.screenshot({ path: path.join(OUT, `account-${theme}-180ms.png`), clip: { x: 0, y: vh - 380, width: 360, height: 380 } })
       await win.evaluate(() => document.getAnimations().forEach((a) => a.play()))
       await win.waitForTimeout(500); await win.keyboard.press('Escape'); await waitGone(win, '.account-pop')
+      // 收起途中再点:拉伸倒放 266ms 里第 80ms、平移退场 80ms(先慢后快)里第 25ms 再点
+      const w = theme === 'stretch' ? 80 : 25
+      await win.waitForTimeout(150); verifyTurn(await turnAround(win, '.account-pop', avatar, w), `账号卡(${theme})`)
+      await win.keyboard.press('Escape'); await waitGone(win, '.account-pop'); await win.waitForTimeout(150)
+      verifyTurn(await turnAround(win, '.rb-more-fly', more, w), `Ribbon「+N」(${theme})`)
+      await win.keyboard.press('Escape'); await waitGone(win, '.rb-more-fly'); await win.waitForTimeout(150)
+      if (theme === 'stretch') {
+        // 悬停预览:Esc 收到一半又回到图标。页内发事件(Ribbon 用 onMouseOver 认图标),省掉 Playwright 鼠标的几十毫秒:
+        // 先在条上非图标处 mouseover 一次,清掉「指针停着的 Space」,回到图标才算重新进来
+        await hover(iconA); await win.waitForSelector('.rb-peek'); await win.waitForTimeout(700)
+        const r = await win.evaluate(async ({ R, icon }) => {
+          const raf = () => new Promise(requestAnimationFrame), read = (0, eval)(R), over = (el) => el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+          over(document.querySelector('.rb'))
+          window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+          let t0 = performance.now(); while (performance.now() - t0 < 80) await raf()
+          const at = read('.rb-peek')
+          over(document.querySelector(icon))
+          const frames = []
+          t0 = performance.now(); while (performance.now() - t0 < 700) { await raf(); frames.push(read('.rb-peek')) }
+          return { at, frames }
+        }, { R: READ_VIS, icon: iconA })
+        verifyTurn(r, '悬停预览(stretch)')
+        await away(); await win.keyboard.press('Escape'); await waitGone(win, '.rb-peek'); await win.waitForTimeout(150)
+      }
     }
+    // 只淡入淡出(减少动态效果那支):Genesis 主题走 droplet.ts 的淡入淡出、拉伸主题走 panelMotion 的 fadeOnly
+    for (const theme of ['genesis', 'stretch']) {
+      await win.evaluate((th) => { const r = document.documentElement; r.dataset.motionTheme = th; r.dataset.motionFade = 'on' }, theme)
+      verifyTurn(await turnAround(win, '.account-pop', avatar, 10), `账号卡(只淡入淡出 · ${theme})`) // 淡出 80ms 先快后慢:一帧之后就再点
+      await win.keyboard.press('Escape'); await waitGone(win, '.account-pop'); await win.waitForTimeout(150)
+    }
+    await win.evaluate(() => { delete document.documentElement.dataset.motionFade })
 
     // Mini 胶囊下拉
     await win.evaluate(() => window.tangu.openMini({ sessionId: 'pt-a' }))
@@ -199,6 +266,8 @@ async function main() {
       await mini.keyboard.press('Escape'); await waitGone(mini, '.mini-card-popover'); await mini.waitForTimeout(150)
       verifyEarly(await sample(mini, '.mini-card-popover', { act: miniSrc, close: miniSrc, t: 60, ms: 600 }), `Mini 下拉(${theme})`)
       await waitGone(mini, '.mini-card-popover'); await mini.waitForTimeout(150)
+      verifyTurn(await turnAround(mini, '.mini-card-popover', miniSrc, theme === 'stretch' ? 80 : 25), `Mini 下拉(${theme})`)
+      await mini.keyboard.press('Escape'); await waitGone(mini, '.mini-card-popover'); await mini.waitForTimeout(150)
     }
     check('没有渲染层报错(含悬停预览的 ReferenceError)', errors.length === 0, JSON.stringify(errors))
     console.log(`SCREENSHOTS ${OUT}`)
