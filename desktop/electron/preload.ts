@@ -48,6 +48,8 @@ const api = {
     /** 开头一分钟里被 ErrorBoundary 接住一次(栈里有这份包):主进程跨重载累计,够数了同 failed。 */
     crashed: (reason: string): Promise<void> => ipcRenderer.invoke('coreTangu:crashed', reason),
   },
+  /** 整窗重载,由主进程发(渲染层自己 location.reload() 在打包版的 file: 页面上会被 hardenNav 拦下)。渲染层用 reloadWindow.ts。 */
+  reloadWindow: (): Promise<void> => ipcRenderer.invoke('app:reloadWindow'),
   desktopPermissionsStatus: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:status'),
   desktopPermissionRequest: (id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:request', id, options),
   desktopPermissionsVerify: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:verify'),

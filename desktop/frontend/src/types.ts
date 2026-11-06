@@ -489,6 +489,8 @@ declare global {
     tangu?: {
       /** 宿主平台('darwin' | 'win32' | 'linux');静态值,渲染层据此调标题栏留白。 */
       platform?: string
+      /** 整窗重载,由主进程发(打包版里渲染层自己 location.reload() 会被拦下);渲染层统一用 reloadWindow.ts。 */
+      reloadWindow?(): Promise<void>
       /** 只读状态检查:不安装 helper、不触发系统授权。 */
       desktopPermissionsStatus?(): Promise<DesktopPermissionsSnapshot>
       /** 仅由用户点击触发:打开系统授权引导;Computer Use 缺失时安装/启动。 */
