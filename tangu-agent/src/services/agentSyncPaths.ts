@@ -3,24 +3,15 @@ import { constants, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFi
 import { dirname, join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { agentsDir } from '../core/tanguHome.js';
+import { validAgentFilePath } from '../contracts/agentSyncRules.js';
 
 export function validSyncSlug(slug: unknown): slug is string {
   return typeof slug === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(slug) && !slug.startsWith('__');
 }
-export function validLogDate(date: unknown): date is string {
-  return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(Date.parse(`${date}T00:00:00Z`)) && new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
-}
-/** 小组件的记录(10-31):Agent 文件夹和 human/ 里都有(项目卡的记录放 human)。服务端 tanguAgentFilePaths 同一张表。 */
-export const isWidgetDataPath = (p: string): boolean => /^WidgetData\/[a-z0-9][a-z0-9_-]{0,63}\/data\.db$/.test(p);
-export function validSyncPath(p: unknown): p is string {
-  if (typeof p !== 'string' || !p || p.length > 1024 || /[\\\x00-\x1f:]/.test(p)) return false;
-  if (p === '.memory-tombstones.json') return true;
-  const parts = p.split('/');
-  if (parts.some((s) => !s || s.startsWith('.') || s.endsWith('.') || s.endsWith(' '))) return false;
-  if (['config.toml', 'SOUL.md', 'HARNESS.md', 'HUMAN.md', 'MEMORY.md', 'CALENDAR.db'].includes(p) || isWidgetDataPath(p)) return true; // CALENDAR.db:Agent 的日历(原 SCHEDULE.db)
-  if (p.startsWith('LOG/')) return parts.length === 2 && p.endsWith('.md') && validLogDate(parts[1].slice(0, -3));
-  return parts.length > 1 && parts[0] === 'Library';
-}
+/** 路径表、副本名和服务端 / 新同步共用一份:contracts/agentSyncRules.ts。 */
+export { validLogDate, isWidgetDataPath, conflictCopyName, isConflictCopyPath } from '../contracts/agentSyncRules.js';
+/** Agent 文件夹里的相对路径能不能上云(服务端 isValidAgentFileAddress 同一张表)。 */
+export const validSyncPath = (p: unknown): p is string => validAgentFilePath(p);
 
 /** Reject symlinks at every component; both reads and atomic writes use this fence. */
 export function assertSyncPath(root: string, target: string): string {
@@ -67,17 +58,4 @@ export function atomicSyncWrite(root: string, file: string, bytes: string | Buff
     guard(); assertSyncPath(root, file); assertSyncPath(root, temp);
     renameSync(temp, file);
   } finally { if (fd !== undefined) closeSync(fd); try { unlinkSync(temp); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; } }
-}
-
-/** 冲突副本名:`notes (conflict 2026-07-19 1532).md`。同步出副本、human/ 镜像出副本共用。 */
-export function conflictCopyName(relPath: string, now: Date): string {
-  const slash = relPath.lastIndexOf('/');
-  const dir = slash < 0 ? '' : relPath.slice(0, slash + 1);
-  const base = slash < 0 ? relPath : relPath.slice(slash + 1);
-  const dot = base.lastIndexOf('.');
-  const stem = dot > 0 ? base.slice(0, dot) : base;
-  const ext = dot > 0 ? base.slice(dot) : '';
-  const p = (n: number): string => String(n).padStart(2, '0');
-  const stamp = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())} ${p(now.getHours())}${p(now.getMinutes())}`;
-  return `${dir}${stem} (conflict ${stamp})${ext}`;
 }

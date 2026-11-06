@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedAt": "2026-10-28",
+  "reviewedAt": "2026-11-05",
   "verification": "Pinned official HTTPS checksums / GitHub release asset digests reviewed in source control; not a claim of bit-for-bit reproducibility.",
   "runtimes": {
     "node": {
@@ -135,6 +135,24 @@
         "sha256": "52cc663281e1ec2f1d76ba781193ca4847e62dbbf767f6c99ec9ec5b978a7659",
         "sourceProof": "https://api.github.com/repos/desktop/dugite-native/releases/assets/677615299",
         "license": "GPL-2.0; preserve LICENSE.txt/COPYING and SOURCE.txt"
+      }
+    },
+    "gitbash": {
+      "win32:x64": {
+        "version": "v2.56.0.windows.4",
+        "name": "Git-2.56.0.4-64-bit.tar.bz2",
+        "url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/Git-2.56.0.4-64-bit.tar.bz2",
+        "sha256": "0dae059764ba7c447c9604eb6cb0f4afaf2d90b003ecf1c8cf2dbe5a13e4442c",
+        "sourceProof": "https://api.github.com/repos/git-for-windows/git/releases/assets/677312841",
+        "license": "GPL-3.0 (bash, coreutils) and per-package licenses; only named usr/bin members are extracted, see fetch-git.cjs BASH_TOOLS and SOURCE.txt"
+      },
+      "win32:arm64": {
+        "version": "v2.56.0.windows.4",
+        "name": "Git-2.56.0.4-arm64.tar.bz2",
+        "url": "https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.4/Git-2.56.0.4-arm64.tar.bz2",
+        "sha256": "e3903db2fea42263b4df0d2f581ca8e07ec1c7c9f878156a8d01284f35011642",
+        "sourceProof": "https://api.github.com/repos/git-for-windows/git/releases/assets/677313662",
+        "license": "GPL-3.0 (bash, coreutils) and per-package licenses; only named usr/bin members are extracted, see fetch-git.cjs BASH_TOOLS and SOURCE.txt"
       }
     }
   }

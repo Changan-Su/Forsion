@@ -98,7 +98,7 @@ export function SortableTile({
   const name = tile.kind === 'space' ? label(tile.space.name) : tile.folder.name
   const style: React.CSSProperties = {
     transform: DndCSS.Transform.toString(transform),
-    transition: transition ? `${transition}, color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out)` : undefined,
+    transition: transition ? `${transition}, color var(--duration-fast) var(--ease-surface), background var(--duration-fast) var(--ease-surface)` : undefined,
   }
   return (
     <button

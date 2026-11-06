@@ -496,6 +496,8 @@ declare global {
     tangu?: {
       /** 宿主平台('darwin' | 'win32' | 'linux');静态值,渲染层据此调标题栏留白。 */
       platform?: string
+      /** 整窗重载,由主进程发(打包版里渲染层自己 location.reload() 会被拦下);渲染层统一用 reloadWindow.ts。 */
+      reloadWindow?(): Promise<void>
       /** 只读状态检查:不安装 helper、不触发系统授权。 */
       desktopPermissionsStatus?(): Promise<DesktopPermissionsSnapshot>
       /** 仅由用户点击触发:打开系统授权引导;Computer Use 缺失时安装/启动。 */
@@ -960,6 +962,8 @@ declare global {
       onUiChanged?(cb: (state: import('../../shared/uiSync').UiSyncPayload) => void): () => void
       /** P1-KF:把本窗**生效**界面语言报给主进程(托盘 / 系统通知 / 对话框跟它走)。只有桌面 preload 有;web / 手机 / 设备页缺席 = 不报。 */
       reportUiLocale?(locale: 'zh' | 'en'): void
+      /** 本机外观报给主进程(已配对的 Forsion Clip 经 /unit/appearance 跟随)。只有桌面 preload 有。 */
+      reportUiAppearance?(appearance: { skin: string; bg: string; mode: 'light' | 'dark' }): void
       closeSelf?(): void
       miniResize?(edge: string | null, start?: boolean, cursor?: { x: number; y: number; radius?: number }): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */

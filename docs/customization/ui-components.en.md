@@ -60,6 +60,8 @@ For @-style mentions, pass `mention: true`. The menu then opens on the bare `tri
 
 Since 2026-11-02 `suggest` can also be a list, for example one entry for `#` tags and one for `[[` links (the latter with `mention: true` so it opens right after CJK text). When several match before the caret, the one nearest the caret opens. When the box sits in the lower half of the window the menu opens upward, falling back below if it doesn't fit. Earlier hosts accept a single object only.
 
+Before passing a list, check `ctx.ui.chatBoxCapabilities?.includes('suggestMany')` (2026-11-04+; the upward menu is `'suggestAbove'`). Treat a host without that field as supporting neither. Don't infer it from `insertText` or any other API: 2.13.8-beta.3 has `insertText` but takes no list.
+
 ```js
 const box = ctx.ui?.mountChatBox?.(el, {
   modelPicker: false,
@@ -82,7 +84,7 @@ const box = ctx.ui?.mountChatBox?.(el, {
 
 ↑↓ moves, Enter or Tab picks, Esc closes. Picking replaces the trigger and query with `value` plus one space, and that Enter doesn't submit. While the menu is open, ⌘/Ctrl+Enter picks too. The menu opens only while typing: moving the caret to the end of an existing `#tag` doesn't open it, and neither does IME composition, which is checked once it ends. After Esc, the menu stays closed for the rest of that word.
 
-These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. If it's missing, hide your `#` button or accept that the model pill is shown.
+These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. Behaviour added later that the handle can't reveal (a list of `suggest` triggers, the upward menu) is listed in `ctx.ui.chatBoxCapabilities`. If it's missing, hide your `#` button or accept that the model pill is shown.
 
 The model catalog is shared with chat: the main model list shows only LLMs, follows the user's sorting and hiding settings, and adds no brand restrictions. The selection stays in this component and changes neither the global default nor the current conversation. The submit callback receives the choices made for that submission; your plugin must pass them into its own flow rather than showing a choice and discarding it. Mounting and editing never send a model request or create a session. Feature-detect on older hosts; don't copy internal CSS to fake support.
 
@@ -125,7 +127,7 @@ Support for loading external plugins on mobile needs to be confirmed separately;
 `ctx.ui?.mountMarkdownEditor` mounts the native Amadeus / Milkdown editor with visual editing, Markdown source and a publishing preview. The caller owns and saves the document entirely: the editor doesn't read or write the active vault, doesn't modify the current note and never calls a model on its own. The syntax follows CommonMark, GFM, CJK emphasis, `![[video link]]` and Obsidian callouts; a folded callout is written `> [!note]- Title`.
 
 ```js
-ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, modes, onChange })
+ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, modes, vault, onChange })
 ```
 
 `modes: false` (since 2026-10-12) draws no row of "Amadeus editor / Markdown source / Preview" buttons and keeps the visual editor only. Use it when the editor sits inside your own card, cell or form field; by default all three modes are available. `update({ modes })` turns the row off or on at any time; turning it off while the source or preview is showing returns to the visual editor. Hosts up to 2.13.2 ignore the field and always draw the row: to support them, hide that row in your own stylesheet as a fallback and select no other host node.
@@ -135,6 +137,17 @@ ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, modes, onChange })
 ```
 
 `handle.getValue()` synchronously reads the latest transaction; call it immediately before saving. `update({value})` switches documents, `insertMarkdown(text)` appends uploaded attachments or embeds, `focus()` focuses and `dispose()` cleans up idempotently. Plugin disable/reload and main-view teardown also take the mount back, and old handles can no longer change the content. On older hosts without this API, ask the user to update explicitly; don't fake a native editor. There is no autosave, and the editor and publishing renderer share the same Amadeus Markdown semantics.
+
+`vault: true` (since 2.13.8) connects the editor to the open vault: typing `[[` completes note and file names, clicking a link opens that note beside the view (⌘ / Ctrl+click: a new tab), and links that don't resolve read dimmed. The caller still owns and saves the text, and the editor writes nothing to the vault; with no vault open, links stay plain text. Off by default. Older hosts ignore the field and you can't detect it on its own: it arrived in the same version as `ctx.ui.mountMarkdown` below, so if `mountMarkdown` exists, `vault` is honoured.
+
+### Read-only Markdown: ctx.ui.mountMarkdown (since 2.13.8)
+
+```js
+const md = ctx.ui?.mountMarkdown?.(el, { markdown })
+md?.update({ markdown: next }); md?.dispose()
+```
+
+Renders Markdown the way a chat answer is drawn: GFM, `$math$` / `$$math$$`, and `[[links]]` that open the note from the open vault beside the view (unresolved ones read dimmed). A single newline inside a paragraph is a line break, matching what `mountMarkdownEditor` writes. Code blocks get a copy button but never a run button; `![[embeds]]` show as links and don't expand. It is light enough for one per list row. Like the other mounts, `el` is yours again as soon as `dispose()` returns, and the host takes the mount back when the plugin is disabled. The outer layer carries `.md-body`; override its paragraph spacing inside your own container if you need it tighter.
 
 ### Plugin Chat Box selection and Director hand-off (2026-09-30)
 

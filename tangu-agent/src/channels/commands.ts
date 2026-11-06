@@ -514,7 +514,7 @@ export class ChannelCommandCenter {
 
   private async cmdAgents(rt: ChannelCommandRuntime): Promise<string> {
     const L = rt.locale;
-    const all = await rt.listAgents();
+    const all = (await rt.listAgents()).filter((a) => !a.disabled);
     if (!all.length) return channelMsg(L, 'agentsEmpty');
     const s = await rt.readSession();
     const cur = currentAgentSlug(rt, s?.agentConfig || {});
