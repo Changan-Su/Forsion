@@ -40,6 +40,15 @@ const sample = (page, sel, { ms = 650, act = null, key = null } = {}) => page.ev
       bg: cs?.backgroundColor, beforeShown: !!before && before.content !== 'none' && +before.opacity > 0 && !/rgba\(0, 0, 0, 0\)|transparent/.test(before.backgroundColor),
       layer: !!layer && getComputedStyle(layer).display !== 'none', clip: cs?.clipPath, vis: cs?.visibility,
       kids: p ? [...p.children].map((k) => +getComputedStyle(k).opacity) : [], mark: p?.dataset.probe ?? null, hole: !!layer && 'hole' in layer.dataset,
+      bc: cs?.borderTopColor,
+      // 面板此刻露出的面积(%):按 clip-path 的 inset 算(Chrome 按 margin 简写序列化,1–4 个值都要认);没裁 = 100,藏起 / 不在 = 0
+      area: (() => {
+        if (!p || cs.visibility === 'hidden') return 0
+        const iv = /inset\(([^)]*)\)/.exec(cs.clipPath)?.[1].split(' round ')[0].trim().split(/\s+/).map(parseFloat)
+        if (!iv) return 100
+        const [t, r = t, b = t, l = r] = iv, W = p.offsetWidth, H = p.offsetHeight
+        return Math.round(100 * Math.max(0, W - r - l) * Math.max(0, H - t - b) / (W * H))
+      })(),
       // 液体本体(第二个 <i>,按面板矩形摆)与面板此刻矩形的最大偏差:液滴量到的若是面板定位前的矩形,这里会差出一截
       geo: (() => { const b = layer?.querySelectorAll('i')[1]; if (!b || !p) return null; const x = b.getBoundingClientRect(), y = p.getBoundingClientRect(); return Math.round(Math.max(Math.abs(x.left - y.left), Math.abs(x.top - y.top), Math.abs(x.width - y.width), Math.abs(x.height - y.height))) })(),
       drop: (() => { const i = layer?.querySelector('i'); if (!i) return null; const r = i.getBoundingClientRect(); return { cx: r.x + r.width / 2, cy: r.y + r.height / 2 } })() })
@@ -56,6 +65,9 @@ function verifyPour(frames, name) {
   check(`${name}: 液体长成的就是面板最终的位置(偏差 ≤ 2px)`, mid.every((f) => f.geo !== null && f.geo <= 2), JSON.stringify(mid.map((f) => f.geo)))
   const end = frames.at(-1)
   check(`${name}: 0.9D 后真面板接手`, end.exists && !end.pouring && !end.layer && end.clip === 'none' && end.kids.every((o) => o === 1), JSON.stringify(end))
+  // 接手那一帧描边不整条一帧出现:从透明淡进来(11-06 动效第三轮,用户选的观感)
+  const li = frames.findIndex((f) => f.exists && !f.pouring && f.t > 50)
+  if (end.bc && !/rgba\(0, 0, 0, 0\)|transparent/.test(end.bc)) check(`${name}: 接手后描边从透明淡进来`, li > 0 && frames[li].bc !== end.bc, JSON.stringify({ land: frames[li]?.bc, end: end.bc }))
 }
 function verifyRetract(frames, name) {
   check(`${name}: 收起倒放(液体重新出现)`, frames.some((f) => f.exists && f.layer && f.pouring), JSON.stringify(frames.slice(0, 2)))
@@ -82,6 +94,9 @@ async function freezeShot(page, file, clip) {
 function verifyRepour(frames, name) {
   const end = frames.at(-1)
   check(`${name}: 倒放中途再触发 = 重新流出、停在打开`, frames.every((f) => f.exists) && !end.pouring && !end.layer && end.vis !== 'hidden' && end.kids.every((o) => o === 1), JSON.stringify(frames.find((f) => !f.exists) ?? end))
+  // 从这一帧掉头往前放,不撤掉从一滴重来(11-06 动效第三轮,用户选的观感):再触发后面板露出的面积不塌回一滴
+  const a = frames.filter((f) => f.t < 200).map((f) => f.area)
+  check(`${name}: 倒放中途再触发 = 从这一帧掉头(不塌回一滴)`, a.length > 3 && Math.min(...a) >= 40, JSON.stringify(a.slice(0, 8)))
 }
 /** 重新流出之后源还压在液体上:旧那滴倒放的收尾晚一拍才到,不许把新那滴给源抬的 z-index 撤掉(Codex 评审 P2)。 */
 const srcStillRaised = async (page, src, name) => {
@@ -183,6 +198,7 @@ async function main() {
     await win.mouse.move(pb.x, pb.y, { steps: 3 })
     const sw = await sample(win, '.rb-peek', { ms: 300 })
     check('悬停预览: 换图标不重挂、不重播液滴', sw.every((f) => f.exists && f.mark === 'same-card' && !f.layer && !f.pouring), JSON.stringify(sw.find((f) => f.layer || f.mark !== 'same-card')))
+    check('悬停预览: 换图标时描边不重新淡入(一直在)', sw.every((f) => f.bc === sw.at(-1).bc), JSON.stringify([...new Set(sw.map((f) => f.bc))]))
     await away()
     const rb = await sample(win, '.rb-peek', { ms: 700 })
     verifyRetract(rb, '悬停预览(移开)')

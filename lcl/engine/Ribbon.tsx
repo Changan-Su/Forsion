@@ -175,6 +175,8 @@ export function Ribbon() {
   }
   const toggleMore = (zone: RibbonZone): void => {
     if (moreFly === zone && !moreClosing.current) { closeMore(); return }
+    // 倒放到一半又点同一区:从这一帧掉头、停在打开(不撤掉从一滴重来)
+    if (moreFly === zone && droplet.current?.reopen?.()) { moreClosing.current = false; return }
     droplet.current?.cancel() // 开着另一区的:直接让位,不叠两滴;倒放到一半又点:撤掉在途那滴
     droplet.current = null
     moreClosing.current = false
@@ -267,9 +269,10 @@ export function Ribbon() {
     peekFor.current = id
     if (!id) return
     if (blockHard) return
-    if (peek?.spaceId === id) { // 从卡里回到它自己的图标;正倒放着收 = 重新从这枚图标流出来(同悬浮目录)
+    if (peek?.spaceId === id) { // 从卡里回到它自己的图标;正倒放着收 = 从这一帧掉头(同悬浮目录),掉不了头再从这枚图标流出来
       cancelPeekClose()
-      if (peekClosing.current && peekRef.current) pourPeek(peekRef.current, id, false)
+      if (peekClosing.current && peekDropFor.current === id && peekDrop.current?.reopen?.()) peekClosing.current = false
+      else if (peekClosing.current && peekRef.current) pourPeek(peekRef.current, id, false)
     }
     else if (peek) openPeek(id) // 已经弹着:换图标不再等
     else peekOpenTimer.current = window.setTimeout(() => { if (peekFor.current === id) openPeek(id) }, PEEK_OPEN_DELAY)

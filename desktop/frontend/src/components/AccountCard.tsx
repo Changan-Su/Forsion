@@ -339,10 +339,11 @@ export const AccountCard: React.FC<{
     if (window.tangu?.accountQuota || window.tangu?.forsionLogin) showMenu(el)
     else if (hasCloudPages) openCloudPage('account')
   }
-  // 菜单开着时再点头像 = 收起(倒放);正倒放着又点 = 重新流出来(同悬浮目录)
+  // 菜单开着时再点头像 = 收起(倒放);正倒放着又点 = 从这一帧掉头、停在打开(同悬浮目录)
   const activate = (e: React.MouseEvent | React.KeyboardEvent): void => {
     if (!menu) { activateOn(e.currentTarget as HTMLElement); return }
-    if (dropClosing.current && popRef.current) pour(popRef.current)
+    if (dropClosing.current && drop.current?.reopen?.()) dropClosing.current = false
+    else if (dropClosing.current && popRef.current) pour(popRef.current)
     else dismissMenu()
   }
   const stateClass = engineDown ? ' engine-down' : expired ? ' expired' : ''
