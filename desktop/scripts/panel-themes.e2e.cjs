@@ -1,0 +1,182 @@
+/** 动效主题 × 按钮长出的面板(动效第三轮,2026-11-06;DESIGN §3「动效主题」):真 Electron(out/ 构建)里,
+ *  Space 悬停预览、头像账号卡、Mini 胶囊下拉、Ribbon「+N」都要按 <html data-motion-theme> 走 openPanel ——
+ *  #477 那三处原来直接调 emergeDroplet,拉伸 / 平移主题下照样流液滴(Ribbon.tsx 合并后还丢了导入,一悬停就渲染崩溃)。
+ *  逐帧采样:
+ *   · 拉伸:出现 .lcl-stretch、从不出现 .lcl-droplet,停稳后真面板接手(没有 pouring、底层藏起);
+ *     悬停预览的底层颜色 = 卡的 ::before 材质(不传 color 就是透明,形状看不见);
+ *     预览开着换图标不重播;账号卡开着变高,倒放按现在的矩形(底层与面板偏差 ≤ 2px);
+ *   · 平移:两种层都不出现,面板上有透明度 + 缩放动画;
+ *   · 两种主题下开到 60ms 就收:内容只淡不先蹦出来。
+ *  负对照:拿只补了导入、没改走 openPanel 的构建跑,拉伸 / 平移两条必须报红。
+ *  用法:npm run build && node scripts/panel-themes.e2e.cjs   截图 → outputs/panel-themes/ */
+const fs = require('fs'), os = require('os'), path = require('path')
+const electron = require('./lib/launch-electron.cjs')
+const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
+const ROOT = path.resolve(__dirname, '..'), OUT = path.join(ROOT, 'outputs', 'panel-themes')
+fs.mkdirSync(OUT, { recursive: true })
+const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-panel-themes-'))
+const results = []
+const check = (name, ok, detail = '') => { results.push(!!ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${ok || !detail ? '' : ' ' + String(detail).slice(0, 300)}`) }
+const pause = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/** 页内逐帧记:哪种层在、面板状态、底层与面板的偏差、面板上的动画属性。act:先点哪个;close:t 毫秒后做什么。 */
+const sample = (page, sel, { act = null, ms = 650, close = null, t = 0 } = {}) => page.evaluate(async ({ sel, act, ms, close, t }) => {
+  const raf = () => new Promise(requestAnimationFrame)
+  if (act) document.querySelector(act)?.click()
+  const w0 = performance.now()
+  while (!document.querySelector(sel) && performance.now() - w0 < 1500) await raf()
+  const t0 = performance.now(), frames = []
+  let closed = false
+  while (performance.now() - t0 < ms) {
+    if (close && !closed && performance.now() - t0 >= t) {
+      closed = true
+      if (close.startsWith('key:')) window.dispatchEvent(new KeyboardEvent('keydown', { key: close.slice(4), bubbles: true }))
+      else document.querySelector(close)?.click()
+      frames.push({ mark: 'close' })
+    }
+    await raf()
+    const p = document.querySelector(sel), st = document.querySelector('.lcl-stretch'), dr = document.querySelector('.lcl-droplet')
+    const f = { t: Math.round(performance.now() - t0), exists: !!p, stretch: !!st && getComputedStyle(st).display !== 'none', droplet: !!dr && getComputedStyle(dr).display !== 'none' }
+    if (p) {
+      const cs = getComputedStyle(p)
+      f.pouring = p.classList.contains('lcl-droplet-pouring'); f.vis = cs.visibility
+      // 内容实际透明度:平移主题动的是面板本身;收完到卸载之间面板 visibility: hidden(那一帧透明度已回 1),算 0
+      f.kids = cs.visibility === 'hidden' ? 0 : +cs.opacity * Math.min(1, ...[...p.children].map((k) => +getComputedStyle(k).opacity))
+      f.props = [...new Set(p.getAnimations().flatMap((a) => a.effect?.getKeyframes().flatMap((k) => Object.keys(k).filter((x) => !['offset', 'easing', 'composite', 'computedOffset'].includes(x))) ?? []))].sort().join(',')
+      f.mark = p.dataset.probe ?? null
+      const body = st?.querySelector('i')
+      if (body && f.stretch) {
+        const a = body.getBoundingClientRect(), b = p.getBoundingClientRect()
+        f.geo = Math.round(Math.max(Math.abs(a.left - b.left), Math.abs(a.top - b.top), Math.abs(a.width - b.width), Math.abs(a.height - b.height)))
+        f.fill = getComputedStyle(body).backgroundColor
+      }
+    }
+    frames.push(f)
+  }
+  return frames
+}, { sel, act, ms, close, t })
+const waitGone = (page, sel) => page.waitForFunction((sel) => !document.querySelector(sel) && !document.querySelector('.lcl-droplet, .lcl-stretch, .lcl-droplet-pouring'), sel, { timeout: 3000 }).catch(() => {})
+
+function verifyStretch(frames, name) {
+  const F = frames.filter((f) => f.exists)
+  check(`${name}: 拉伸主题出 .lcl-stretch、不出液滴`, F.some((f) => f.stretch) && !F.some((f) => f.droplet), JSON.stringify(F.slice(0, 3)))
+  const end = F.at(-1)
+  check(`${name}: 拉伸停稳后真面板接手`, !!end && !end.pouring && !end.stretch && end.kids === 1 && end.vis !== 'hidden', JSON.stringify(end))
+}
+function verifyGlide(frames, name) {
+  const F = frames.filter((f) => f.exists)
+  check(`${name}: 平移主题不出液滴 / 拉伸层`, F.length > 3 && !F.some((f) => f.stretch || f.droplet || f.pouring), JSON.stringify(F.find((f) => f.stretch || f.droplet || f.pouring)))
+  check(`${name}: 平移主题面板淡入 + 微缩`, F.some((f) => /opacity/.test(f.props) && /scale/.test(f.props)), JSON.stringify(F.slice(0, 2).map((f) => f.props)))
+}
+function verifyEarly(frames, name) {
+  const i = frames.findIndex((f) => f.mark === 'close')
+  const seq = [frames.slice(0, i).filter((f) => f.exists).at(-1), ...frames.slice(i + 1).filter((f) => f.exists)].filter(Boolean).map((f) => f.kids)
+  let rise = 0
+  for (let k = 1; k < seq.length; k++) rise = Math.max(rise, seq[k] - seq[k - 1])
+  check(`${name}: 开到 60ms 就收,内容只淡不先蹦出来(升 ≤ 0.05)`, seq.length > 1 && rise <= 0.05 && !frames.at(-1).exists, JSON.stringify(seq.slice(0, 6)))
+}
+
+async function main() {
+  const userData = path.join(temp, 'userdata')
+  const session = (id) => ({ id, title: id, created_at: '2026-11-06T00:00:00Z', updated_at: '2026-11-06T00:00:00Z', agent_config: { execMode: 'host' } })
+  const stub = await startStubEngine({ sessions: [session('pt-a'), session('pt-b')] })
+  fs.mkdirSync(userData + '-dev', { recursive: true })
+  fs.writeFileSync(path.join(userData + '-dev', 'tangu-desktop-config.json'), JSON.stringify({ mode: 'external', backendUrl: stub.url, token: 'pt-token' }))
+  let app
+  try {
+    app = await electron.launch({ args: [`--user-data-dir=${userData}`, '--lang=zh-CN', ROOT], cwd: ROOT,
+      env: { ...process.env, TANGU_HOME: temp, TANGU_BACKEND_URL: stub.url, TANGU_HARNESS_QUIET: '1', PI_CU_SOCKET_PATH: path.join(temp, 'bridge.sock') } })
+    // 台架窗(含之后开的 Mini)一律压在普通窗口之下(-1),不盖住用户在用的 App
+    await app.evaluate(({ app: a }) => {
+      if (process.platform !== 'darwin') return
+      a.on('browser-window-created', (_e, w) => { const orig = w.setAlwaysOnTop.bind(w); w.setAlwaysOnTop = (flag) => orig(flag, 'normal', -1); orig(true, 'normal', -1) })
+    })
+    const win = await app.firstWindow(), errors = []
+    win.on('pageerror', (e) => errors.push(`main: ${e.message}`))
+    win.on('console', (m) => { if (m.type() === 'error' && /render crash|is not defined/.test(m.text())) errors.push(`main: ${m.text().slice(0, 160)}`) })
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1512, 950))
+    await win.waitForSelector('.dv-groupview', { timeout: 30000, state: 'attached' })
+    check('主窗口跳过引导', await skipOnboarding(win))
+    await win.waitForSelector('.rb [data-space-id]', { timeout: 30000 })
+    await win.waitForTimeout(800)
+    const setTheme = (p, th) => p.evaluate((th) => { document.documentElement.dataset.motionTheme = th }, th)
+    const away = () => win.mouse.move(1100, 600)
+    const center = (sel) => win.evaluate((sel) => { const r = document.querySelector(sel).getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 } }, sel)
+    const ids = await win.evaluate(() => { const cur = document.querySelector('.rb .rb-space.on')?.dataset.spaceId; return [...document.querySelectorAll('.rb .rb-strip-in [data-space-id]')].map((b) => b.dataset.spaceId).filter((id, i, a) => id !== cur && a.indexOf(id) === i) })
+    const iconA = `.rb .rb-strip-in [data-space-id="${ids[0]}"]`, iconB = `.rb .rb-strip-in [data-space-id="${ids[1]}"]`
+    const hover = async (sel) => { await away(); await waitGone(win, '.rb-peek'); await win.waitForTimeout(250); const c = await center(sel); await win.mouse.move(c.x, c.y, { steps: 3 }) }
+    const avatar = '.ribbon-account, .account-card', more = '.rb-bottom .rb-more'
+
+    for (const theme of ['stretch', 'glide']) {
+      await setTheme(win, theme)
+      const verify = theme === 'stretch' ? verifyStretch : verifyGlide
+      // 悬停预览
+      await hover(iconA)
+      const pk = await sample(win, '.rb-peek')
+      verify(pk, `悬停预览(${theme})`)
+      if (theme === 'stretch') {
+        const fills = pk.filter((f) => f.fill).map((f) => f.fill)
+        check('悬停预览(stretch): 底层颜色 = 卡的 ::before 材质(不是透明)', fills.length > 0 && fills.every((c) => !/rgba\(0, 0, 0, 0\)|transparent/.test(c)), JSON.stringify(fills.slice(0, 2)))
+        await win.evaluate(() => { document.querySelector('.rb-peek').dataset.probe = 'same' })
+        const b = await center(iconB); await win.mouse.move(b.x, b.y, { steps: 3 })
+        const sw = await sample(win, '.rb-peek', { ms: 300 })
+        check('悬停预览(stretch): 换图标不重挂、不重播', sw.every((f) => f.exists && f.mark === 'same' && !f.stretch && !f.pouring), JSON.stringify(sw.find((f) => f.stretch || f.mark !== 'same')))
+      }
+      await win.keyboard.press('Escape'); await waitGone(win, '.rb-peek')
+      await hover(iconA)
+      verifyEarly(await sample(win, '.rb-peek', { close: 'key:Escape', t: 60, ms: 600 }), `悬停预览(${theme})`)
+      await away(); await waitGone(win, '.rb-peek')
+      // 账号卡
+      verify(await sample(win, '.account-pop', { act: avatar }), `账号卡(${theme})`)
+      if (theme === 'stretch') {
+        // 开着时卡片变高(额度展开 / 账号列表异步长出):倒放要按现在的矩形,不能跳回展开时那块
+        await win.evaluate(() => { const x = document.createElement('div'); x.style.height = '80px'; document.querySelector('.account-pop').appendChild(x) })
+        await win.waitForTimeout(150)
+        const grown = await sample(win, '.account-pop', { act: avatar, ms: 600 })
+        const gl = grown.filter((f) => f.exists && f.stretch)
+        check('账号卡(stretch): 开着变高,倒放按现在的矩形(偏差 ≤ 2px)', gl.length >= 3 && gl.every((f) => f.geo !== undefined && f.geo <= 2), JSON.stringify(gl.map((f) => f.geo)))
+        check('账号卡(stretch): 变高后照样收完卸载', !grown.at(-1).exists)
+      } else { await win.keyboard.press('Escape') }
+      await waitGone(win, '.account-pop'); await win.waitForTimeout(150)
+      verifyEarly(await sample(win, '.account-pop', { act: avatar, close: avatar, t: 60, ms: 600 }), `账号卡(${theme})`)
+      await waitGone(win, '.account-pop'); await win.waitForTimeout(150)
+      // Ribbon「+N」(本来就走 openPanel,一起钉住)
+      verify(await sample(win, '.rb-more-fly', { act: more }), `Ribbon「+N」(${theme})`)
+      await win.keyboard.press('Escape'); await waitGone(win, '.rb-more-fly'); await win.waitForTimeout(150)
+      verifyEarly(await sample(win, '.rb-more-fly', { act: more, close: more, t: 60, ms: 600 }), `Ribbon「+N」(${theme})`)
+      await waitGone(win, '.rb-more-fly')
+      // 截图:拉伸 / 平移各冻一帧(180ms)
+      await win.evaluate(() => { window.__fz = false; const mo = new MutationObserver(() => { const p = document.querySelector('.account-pop'); if (!p || !p.getAnimations().length && !document.querySelector('.lcl-stretch')) return; mo.disconnect(); document.getAnimations().forEach((a) => { a.pause(); a.currentTime = 180 }); window.__fz = true }); mo.observe(document.body, { childList: true, subtree: true }) })
+      await win.evaluate((s) => document.querySelector(s).click(), avatar)
+      await win.waitForFunction(() => window.__fz, null, { timeout: 3000 }).catch(() => {})
+      await win.waitForTimeout(60)
+      const vh = await win.evaluate(() => innerHeight)
+      await win.screenshot({ path: path.join(OUT, `account-${theme}-180ms.png`), clip: { x: 0, y: vh - 380, width: 360, height: 380 } })
+      await win.evaluate(() => document.getAnimations().forEach((a) => a.play()))
+      await win.waitForTimeout(500); await win.keyboard.press('Escape'); await waitGone(win, '.account-pop')
+    }
+
+    // Mini 胶囊下拉
+    await win.evaluate(() => window.tangu.openMini({ sessionId: 'pt-a' }))
+    let mini
+    for (let i = 0; i < 200; i++) { mini = app.windows().find((w) => w.url().includes('window=mini')); if (mini) break; await pause(50) }
+    if (!mini) throw new Error('Mini window missing')
+    mini.on('pageerror', (e) => errors.push(`mini: ${e.message}`))
+    await mini.waitForSelector('.mini-card-space', { timeout: 30000 }); await mini.waitForTimeout(800)
+    const miniSrc = (await mini.evaluate(() => !document.querySelector('.mini-card-space').disabled)) ? '.mini-card-space' : '.mini-card-picker'
+    for (const theme of ['stretch', 'glide']) {
+      await setTheme(mini, theme)
+      ;(theme === 'stretch' ? verifyStretch : verifyGlide)(await sample(mini, '.mini-card-popover', { act: miniSrc }), `Mini 下拉(${theme})`)
+      await mini.keyboard.press('Escape'); await waitGone(mini, '.mini-card-popover'); await mini.waitForTimeout(150)
+      verifyEarly(await sample(mini, '.mini-card-popover', { act: miniSrc, close: miniSrc, t: 60, ms: 600 }), `Mini 下拉(${theme})`)
+      await waitGone(mini, '.mini-card-popover'); await mini.waitForTimeout(150)
+    }
+    check('没有渲染层报错(含悬停预览的 ReferenceError)', errors.length === 0, JSON.stringify(errors))
+    console.log(`SCREENSHOTS ${OUT}`)
+  } finally { if (app) await app.close().catch(() => {}); await stub.close() }
+  const pass = results.filter(Boolean).length
+  console.log(`${pass}/${results.length} passed`)
+  if (results.some((ok) => !ok)) process.exitCode = 1
+}
+main().catch((e) => { console.error(e); process.exitCode = 1 })

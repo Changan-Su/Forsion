@@ -227,7 +227,8 @@ export function Ribbon() {
     peekDropFor.current = id
     const own = peekSrc.current
     const src = own?.isConnected && own.dataset.spaceId === id ? own : rootRef.current?.querySelector<HTMLElement>(`[data-space-id="${CSS.escape(id)}"]`)
-    if (src) peekDrop.current = emergeDroplet(src, el, { color: getComputedStyle(el, '::before').backgroundColor, settled })
+    // 按动效主题:液滴 / 拉伸 / 淡入微缩(材质在 ::before 上,颜色要传;settled = 换图标不重播)
+    if (src) peekDrop.current = openPanel(src, el, { color: getComputedStyle(el, '::before').backgroundColor, settled })
   }
   const blockHard = !!drag || !!menu || !!iconPick || !!fly || !!moreFly
   // 左面板展开着也弹 —— 弹别的 Space 的(2026-10-14 用户定:悬停本来就是为了呼出别的侧边栏)。
