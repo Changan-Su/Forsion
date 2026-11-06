@@ -424,6 +424,15 @@ a:hover { color: var(--accent-ink); }
       scroll-behavior: auto !important;
     }
   }
+  /* 设置 → 外观 → 动效主题 →「只淡入淡出」(theme/motionTheme.tsx):和上面同一套,只是由用户在应用里打开;
+     面板在 JS 里只淡入 150 / 淡出 80ms(LCL reducedMotion() 认 data-motion-fade),framer 由 HostMotionConfig 切到 always。 */
+  :root[data-motion-fade='on'] *, :root[data-motion-fade='on'] *::before, :root[data-motion-fade='on'] *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-property: color, background-color, border-color, opacity, box-shadow !important;
+    transition-duration: var(--duration-fast) !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ─── 应用骨架 ─── */
@@ -5550,7 +5559,16 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --toast-exit-duration: 140ms; /* 底部吐司退场;右上通知卡 160ms 右移 16px(NotificationHost) */
   --draw-duration: 600ms; /* 描线 */
   --land-duration: 160ms; /* 拖动排序松手落位:被拖的那一个从松手处滑进新位置(LCL land(),曲线同落点线 --lcl-drop-ease) */
+  --stretch-open-duration: 380ms; /* 动效主题「拉伸」的面板展开(lcl/engine/panelMotion.ts stretchOpen):远端那条边 0–0.78 倍、侧边 0.2–1 倍;收起 0.7 倍倒放 */
 }
+/* 动效主题(theme/motionTheme.tsx,方案 A2 2026-11-06):分段胶囊的选中块与开关旋钮按 <html data-motion-theme> 分派。
+ * Genesis / 拉伸 = 两条边各走、后沿晚出发(离开时拉长、落地回缩;就是上面两对 token,今天的样子);
+ * 平移 = 后沿不晚,整块平移、不拉伸;
+ * 水滴 = 选中块自己的过渡关掉、一换格就在终点,由 lcl/engine/segFlow.ts 在它身后流过去。旋钮的过渡留着:
+ *   流的时候它藏着,自己 150ms 早就走完(悬停时前沿探 2px 也还要这条过渡)。
+ * 面板(openPanel)在 JS 里按同一个属性分派。菜单 / 提示 / 吐司 / 折叠不跟动效主题。 */
+:root[data-motion-theme='glide'] { --seg-edge-lag: 0ms; --switch-edge-lag: 0ms; }
+:root[data-motion-theme='droplet'] :is(.t2s-vaultseg-thumb, .lcl-vmode-thumb) { transition: none; }
 @keyframes ui-menu-enter {
   from { opacity: 0; scale: 0.985; }
   to { opacity: 1; scale: 1; }

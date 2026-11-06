@@ -94,6 +94,8 @@ export type { LineSelectionOptions, LineSelectionHandle } from './lineSelection'
 
 export { switchSpace, setSpaceBarOrder, spaceSwitchDirection, type SpaceSwitchMotion } from './spaceTransition'
 export { SPRING_PAGE, SPRING_ROW, reducedMotion, springAt, springEasing, springMotion, type Spring } from './spring'
+export { openPanel, stretchOpen, fadeScaleOpen, motionTheme, MOTION_THEME_IDS, type MotionThemeId } from './panelMotion'
+export { flowThumb, useSegFlow, useKnobFlow } from './segFlow'
 
 /** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */
 export {

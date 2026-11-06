@@ -320,7 +320,7 @@ export function installNativeChrome(): void {
   void plugin.addListener('ime', keyboardRise).catch(() => {})
   // Skin / mode / custom colour changes repaint the bar (same attributes the model picker watches + inline vars);
   // switching glass off makes the capsules solid.
-  new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-glass', 'style', 'class'] })
+  new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-glass', 'data-motion-theme', 'data-motion-fade', 'style', 'class'] })
   subscribeAccountChip(send) // sign-in / sign-out / a new picture repaints the avatar
   // Badges: the stores change far more often than the answer does (every streamed token touches useApp) → re-send only
   // when the set of dots changed.

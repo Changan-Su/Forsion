@@ -1,0 +1,83 @@
+/* 设置 → 外观 →「动效主题」卡片(components/MotionThemeSection.tsx;方案 A2 2026-11-06)。
+ * 外框沿用 .theme-card(同设计语言卡的描边 / 选中态 / 勾);预览区是静态示意:左上一颗按钮、下面它长出的面板,
+ * 右下一条分段胶囊和选中块。悬停 / 键盘焦点时在卡里放一遍那套的面板展开 + 选中块换格(放完停在终态;移开回静态)。
+ * 时长取各套的真值 token,不写死毫秒:面板 水滴 --droplet-duration / 拉伸 --stretch-open-duration / 平移 --menu-enter-duration;
+ * 选中块两条边 --seg-edge-duration,后沿晚的那 80ms 折进关键帧的位置里(不读 --seg-edge-lag:平移主题会把它改成 0,
+ * 而卡片要各画各的样子,不跟当前选中的那套)。
+ * 减少动态效果 / 只淡入淡出:base.css 的 @layer forsion-guard 把关键帧压成 0,等于不放。 */
+.motion-theme-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); }
+.settings-motion-theme > .motion-theme-grid { padding: 14px 15px 4px; }
+.motion-card .motion-preview { position: relative; overflow: hidden; }
+
+.motion-preview .mp-btn {
+  position: absolute; left: 12px; top: 10px; width: 22px; height: 9px;
+  border-radius: var(--radius-pill, 999px);
+  background: color-mix(in srgb, var(--theme-preview-text) 22%, transparent);
+}
+.motion-preview .mp-panel {
+  position: absolute; left: 12px; top: 23px; width: 46%; height: 36px;
+  display: flex; flex-direction: column; gap: 4px; padding: 7px 6px;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--theme-preview-surface);
+  box-shadow: var(--card-shadow, 0 1px 3px rgba(0, 0, 0, 0.08));
+  transform-origin: 6px 0;
+}
+.motion-preview .mp-panel i { display: block; height: 3px; border-radius: 2px; background: color-mix(in srgb, var(--theme-preview-text) 16%, transparent); }
+.motion-preview .mp-panel i:nth-child(2) { width: 72%; }
+.motion-preview .mp-panel i:nth-child(3) { width: 50%; }
+.motion-preview .mp-seg {
+  position: absolute; right: 12px; bottom: 10px; width: 62px; height: 16px;
+  border-radius: var(--radius-pill, 999px);
+  background: color-mix(in srgb, var(--theme-preview-text) 9%, transparent);
+}
+.motion-preview .mp-thumb {
+  position: absolute; top: 2px; bottom: 2px; left: 2px; right: calc(50% + 1px);
+  border-radius: var(--radius-pill, 999px);
+  background: var(--theme-preview-surface);
+  box-shadow: var(--btn-shadow, 0 1px 2px rgba(0, 0, 0, 0.1));
+}
+
+/* 面板:Genesis / 水滴 = 从按钮里流出(圆从按钮处长开);拉伸 = 远端先走、侧边后撑开;平移 = 淡入微缩 */
+.motion-card:is(:hover, :focus-visible) [data-motion-preview='genesis'] .mp-panel,
+.motion-card:is(:hover, :focus-visible) [data-motion-preview='droplet'] .mp-panel { animation: mp-panel-pour var(--droplet-duration) var(--ease-surface) both; }
+.motion-card:is(:hover, :focus-visible) [data-motion-preview='stretch'] .mp-panel { animation: mp-panel-stretch var(--stretch-open-duration) var(--ease-surface) both; }
+.motion-card:is(:hover, :focus-visible) [data-motion-preview='glide'] .mp-panel { animation: mp-panel-glide var(--menu-enter-duration) var(--ease-surface) both; }
+
+/* 选中块:Genesis / 拉伸 = 两条边各走、后沿晚(离开时拉长、落地回缩);平移 = 整块平移;水滴 = 拉成细颈流过去再落地 */
+.motion-card:is(:hover, :focus-visible) :is([data-motion-preview='genesis'], [data-motion-preview='stretch']) .mp-thumb {
+  animation: mp-thumb-stretch calc(var(--seg-edge-duration) * 9 / 7) var(--ease-surface) both;
+}
+.motion-card:is(:hover, :focus-visible) [data-motion-preview='glide'] .mp-thumb { animation: mp-thumb-glide var(--seg-edge-duration) var(--ease-surface) both; }
+.motion-card:is(:hover, :focus-visible) [data-motion-preview='droplet'] .mp-thumb { animation: mp-thumb-goo var(--droplet-duration) var(--ease-surface) both; }
+
+@keyframes mp-panel-pour {
+  from { clip-path: circle(0 at 6px 0); }
+  to { clip-path: circle(140% at 6px 0); }
+}
+@keyframes mp-panel-stretch {
+  0% { clip-path: inset(0 70% 100% 0 round 6px); }
+  20% { clip-path: inset(0 70% 72% 0 round 6px); }
+  78% { clip-path: inset(0 14% 0 0 round 6px); }
+  100% { clip-path: inset(0 0 0 0 round 6px); }
+}
+@keyframes mp-panel-glide {
+  from { opacity: 0; scale: 0.985; }
+  to { opacity: 1; scale: 1; }
+}
+/* 前沿(右边)0 → 78% 到位,后沿(左边)22% 才出发、100% 到位:即 280ms 两条边、后沿晚 80ms */
+@keyframes mp-thumb-stretch {
+  0% { left: 2px; right: calc(50% + 1px); }
+  22% { left: 2px; }
+  78% { right: 2px; }
+  100% { left: calc(50% + 1px); right: 2px; }
+}
+@keyframes mp-thumb-glide {
+  from { left: 2px; right: calc(50% + 1px); }
+  to { left: calc(50% + 1px); right: 2px; }
+}
+@keyframes mp-thumb-goo {
+  0% { left: 2px; right: calc(50% + 1px); scale: 1; }
+  14% { scale: 1.06; }
+  45% { left: 12%; right: 10%; scale: 1 0.55; }
+  100% { left: calc(50% + 1px); right: 2px; scale: 1; }
+}

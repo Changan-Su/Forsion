@@ -1,4 +1,5 @@
-import type { ButtonHTMLAttributes, ReactNode } from 'react'
+import { useRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
+import { useKnobFlow } from '@lcl/engine'
 
 export function SettingsPanel(props: {
   icon?: ReactNode
@@ -58,9 +59,12 @@ export function SettingsSwitch({ checked, onChange, label, disabled, ...rest }: 
   label: string
   disabled?: boolean
 } & Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onChange' | 'onClick' | 'role' | 'type'>) {
+  const ref = useRef<HTMLButtonElement>(null)
+  useKnobFlow(checked, ref) // 动效主题是水滴时旋钮流过去(lcl segFlow.ts);别的主题照旧 CSS 拉伸 / 平移
   return (
     <button
       {...rest}
+      ref={ref}
       type="button"
       role="switch"
       aria-checked={checked}

@@ -28,7 +28,8 @@ import { useWorkspace } from './workspaceStore'
 import { getView, subscribeViews } from './viewRegistry'
 import { computeSideWidth } from './sideWidth'
 import { SpacePeek } from './SpacePeek'
-import { emergeDroplet, type Droplet } from './droplet'
+import { type Droplet } from './droplet'
+import { openPanel } from './panelMotion'
 import { PEEK_CLOSE_DELAY, PEEK_OPEN_DELAY, peekShouldClose, peekViews, type PeekZone } from './spacePeekRules'
 import type { PersistedPanel } from './layoutPersist'
 
@@ -608,7 +609,7 @@ export function Ribbon() {
     const y = moreFly === 'top' ? Math.max(8, Math.min(b.top - 6, window.innerHeight - h - 8)) : Math.max(8, b.bottom + 6 - h)
     el.style.left = `${((rootRef.current?.getBoundingClientRect().right ?? 44) + 4) / z}px`
     el.style.top = `${y / z}px`
-    if (!droplet.current) droplet.current = emergeDroplet(btn, el)
+    if (!droplet.current) droplet.current = openPanel(btn, el) // 按动效主题:液滴 / 拉伸 / 淡入微缩
   }, [moreFly, moreTail.length]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { droplet.current?.cancel(); droplet.current = null }, [])
   // 藏着的都被拖回条上了(或窗口变高全露出来了):浮层没东西可列,缩回

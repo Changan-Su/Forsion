@@ -28,8 +28,12 @@ export function springAt(t: number, v0: number, { response, damping }: Spring): 
 }
 
 /** The system's "remove animations" (Android: accessibility → remove animations). */
+/** 系统「减少动态效果」,或宿主的「只淡入淡出」(<html data-motion-fade="on">,动效主题那一节最后一行)。 */
 export function reducedMotion(): boolean {
-  try { return !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches } catch { return false }
+  try {
+    if (typeof document !== 'undefined' && document.documentElement.dataset.motionFade === 'on') return true
+    return !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  } catch { return false }
 }
 
 let supported: boolean | undefined

@@ -362,7 +362,7 @@ internal fun NativeSpaceBar(
     val scheme = remember(theme) { theme.colorScheme() }
     val look = remember(theme, state.frosted) { CapsuleLook(theme, state.frosted) }
     val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.surface))
-    val motion = motionOn()
+    val motion = motionOn(theme)
     val keys = state.dock.map { cellKey(it) } + if (state.more.isNotEmpty()) listOf(ALL_CELL) else emptyList()
     // the gesture reads this one: restarting it for a page that changed underneath would drop a finger still on the dock
     val cells by rememberUpdatedState(keys)
@@ -370,6 +370,7 @@ internal fun NativeSpaceBar(
     val selected = rememberSelected(active)
     val scope = rememberCoroutineScope()
     val drop = remember { DockDrop() }
+    drop.style = DockMotion.of(theme.motion)
     val dp = density.density
     val hover = drop.hover.takeIf { it in keys.indices }?.let { keys[it] }
     val target = keys.indexOf(selected.key)
@@ -474,7 +475,7 @@ internal fun NativeDockHost(
     if (wanted) last = state
     var stays by remember { mutableStateOf(wanted) }
     val shown = remember { Animatable(if (wanted) 1f else 0f) }
-    val motion = motionOn()
+    val motion = motionOn(last?.theme)
     LaunchedEffect(wanted) {
         if (wanted) stays = true
         val to = if (wanted) 1f else 0f
@@ -503,11 +504,12 @@ private fun cellKey(space: ChromeSpace) = SPACE_CELL + space.id
 private fun activeKey(cells: List<ChromeSpace>, more: List<ChromeSpace>): String? =
     cells.firstOrNull { it.active }?.let(::cellKey) ?: ALL_CELL.takeIf { more.any { it.active } }
 
-/** The system's "remove animations" (Android: accessibility → remove animations). */
+/** The system's "remove animations" (Android: accessibility → remove animations), and the page's "Fade only". */
 @Composable
-private fun motionOn(): Boolean {
+private fun motionOn(theme: SheetTheme?): Boolean {
     val resolver = LocalContext.current.contentResolver
-    return remember(resolver) { Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) != 0f }
+    val system = remember(resolver) { Settings.Global.getFloat(resolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) != 0f }
+    return system && theme?.motionFade != true
 }
 
 /**
@@ -559,6 +561,15 @@ private class DockDrop {
     private var offset = 0f
     private var count = 0
     private var dp = 1f
+    /** The motion theme, set by the bar at every composition (DockMotion). */
+    var style = DockMotion.POUR
+
+    /** Under a finger: Droplet / Genesis pull a tail; Stretch spans tail to head; Glide is the head alone. */
+    private fun dragged(): DropShape = when (style) {
+        DockMotion.POUR -> dragShape(head, tail, cell(), cellH(), dp)
+        DockMotion.STRETCH -> spanShape(head, tail, cell(), cellH())
+        DockMotion.GLIDE -> spanShape(head, head, cell(), cellH())
+    }
 
     private fun cell() = if (count > 0) width / count else 0f
     private fun centre(i: Int) = (i + 0.5f) * cell()
@@ -577,11 +588,17 @@ private class DockDrop {
         val h0 = from?.headH ?: cellH()
         val x1 = centre(target)
         rest = target
+        val how = style
+        val total = how.flowMs()
         val start = withFrameNanos { it }
         while (true) {
-            val t = withFrameNanos { (it - start) / 1_000_000f } / DROP_FLOW_MS
+            val t = withFrameNanos { (it - start) / 1_000_000f } / total
             if (t >= 1f) break
-            shape = flowShape(t, x0, x1, w0, h0, cell(), cellH(), dp)
+            shape = when (how) {
+                DockMotion.POUR -> flowShape(t, x0, x1, w0, h0, cell(), cellH(), dp)
+                DockMotion.STRETCH -> stretchShape(t, x0, x1, w0, h0, cell(), cellH())
+                DockMotion.GLIDE -> glideShape(t, x0, x1, w0, h0, cell(), cellH())
+            }
         }
         shape = null
     }
@@ -608,7 +625,7 @@ private class DockDrop {
                     if (!motion) { head = clampX(finger); tail = head; shape = dragShape(head, head, cell(), cellH(), dp); return@withFrameNanos }
                     head = clampX(finger) + offset * (1f - settleAt((now - start) / 1_000_000f))
                     tail = tailAfter(tail, head, dt)
-                    shape = dragShape(head, tail, cell(), cellH(), dp)
+                    shape = dragged()
                 }
             }
         }
@@ -640,7 +657,7 @@ private class DockDrop {
                     last = now
                     head = from + (x - from) * settleAt(ms)
                     tail = tailAfter(tail, head, dt)
-                    shape = dragShape(head, tail, cell(), cellH(), dp)
+                    shape = dragged()
                 }
             }
             rest = to
@@ -696,7 +713,7 @@ internal fun NativeSpaceRail(state: ChromeState, insets: Insets, onAll: () -> Un
                 val fit = ((maxHeight + RAIL_CELL_GAP) / (RAIL_CELL_HEIGHT + RAIL_CELL_GAP)).toInt()
                 val (cells, more) = state.railCells(fit)
                 val selected = rememberSelected(activeKey(cells, more))
-                val motion = motionOn()
+                val motion = motionOn(state.theme)
                 Column(verticalArrangement = Arrangement.spacedBy(RAIL_CELL_GAP)) {
                     SpaceCells(
                         state, cells, more, cell, Modifier.size(RAIL_CELL_WIDTH, RAIL_CELL_HEIGHT),
