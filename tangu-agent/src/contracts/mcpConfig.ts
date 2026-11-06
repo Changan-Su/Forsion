@@ -15,6 +15,8 @@ export interface McpConfigEntry {
   connector?: string;
   /** 按远端工具名收紧(连接器设置页写):off = 不下发给 Agent、调用也拒;ask = 不看审批档每次都问。只能收紧,放不开目录的 alwaysAsk。 */
   tools?: Record<string, McpToolSetting>;
+  /** false = 工具定义每次请求整份下发;缺省按需加载(系统提示只列目录,模型 load_tools 装上再调)。 */
+  deferLoading?: boolean;
 }
 export type McpToolSetting = 'ask' | 'off';
 export type McpServerMap = Record<string, McpConfigEntry>;
@@ -24,7 +26,7 @@ export class McpInputError extends Error {
   }
 }
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
-const FIELDS = new Set(['command', 'args', 'env', 'url', 'transport', 'type', 'headers', 'timeoutMs', 'enabled', 'cwd', 'oauth', 'connector', 'tools']);
+const FIELDS = new Set(['command', 'args', 'env', 'url', 'transport', 'type', 'headers', 'timeoutMs', 'enabled', 'cwd', 'oauth', 'connector', 'tools', 'deferLoading']);
 /** 与 server 连接器模块的 ID_RE 一致。 */
 export const CONNECTOR_ID_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
 export const mcpNameKey = (name: string): string => name.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -62,6 +64,7 @@ export function validateMcpEntry(value: unknown, name: string): McpConfigEntry {
     if (!object(tl) || Object.keys(tl).length > 1000 || Object.entries(tl).some(([k, x]) => !k || k.length > 256 || (x !== 'ask' && x !== 'off'))) throw new McpInputError('invalid', `${name}.tools`);
   }
   if (Object.hasOwn(v, 'enabled') && typeof v.enabled !== 'boolean') throw new McpInputError('invalid', `${name}.enabled`);
+  if (Object.hasOwn(v, 'deferLoading') && typeof v.deferLoading !== 'boolean') throw new McpInputError('invalid', `${name}.deferLoading`);
   if (Object.hasOwn(v, 'timeoutMs') && (typeof v.timeoutMs !== 'number' || !Number.isInteger(v.timeoutMs) || v.timeoutMs < 1 || v.timeoutMs > 2_147_483_647)) throw new McpInputError('invalid', `${name}.timeoutMs`);
   return v as McpConfigEntry;
 }

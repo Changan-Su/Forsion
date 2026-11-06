@@ -21,7 +21,7 @@ import { createDelegateTranscript, delegateHandle, openDelegateTurn } from './de
 import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
-import { getToolDefinitions, listDeferredTools, executeTool, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, listDeferredTools, deferredCatalogSection, executeTool, type ToolContext } from '../tools/registry.js';
 import { SUB_AGENT_DENY_TOOLS, isSubAgentDenied, canonicalToolName } from '../tools/toolRegistry.js';
 import { gateToolCall, requestApproval, USER_REJECT_REASON } from './approvals.js';
 import { withLlmRetry } from '../llm/retry.js';
@@ -422,18 +422,15 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   };
   // deferred 目录段(与主 loop / 群聊同款):不注入的话子代理看得见 load_tools 却不知道能装什么。
   // 门禁字段用**同一个 subCtx**,目录与真实工具面天然不分叉(agentLoop 那边是手抄一份 toolGateCtx
-  // 才做到的同一件事)。Muse/自动化 run 全量可见、也没有 load_tools → 不注入目录,免得广而告之取不回。
-  const deferBypass = !!subCtx.muse || !!subCtx.automationOrigin;
+  // 才做到的同一件事)。Muse/自动化 run 的内置工具全量可见、目录里不列;按需加载的 MCP 照列,load_tools 也随之露出。
   // 管理面从目录里滤掉:不告诉模型它能装(与 unlockTools 的硬拦同一份判定,见 denyProbe)。
   // 本次授予的那几个**也滤**:它们已预解锁进首轮 defs,目录段的原话是「exist but are not loaded yet」,
   // 再列一行模型就会先白花一轮 load_tools(live 09-15 实测:授了 manage_schedule 的子代理仍先 load_tools 再调)。
   // 目录在子代理 run 内只算一次,滤掉授予项不影响稳定性。
-  const deferredCatalog = deferBypass ? [] : listDeferredTools(subCtx).filter((d) => !isSubAgentDenied(denyProbe, d.name) && !grants.has(d.name));
-  const deferSection = deferredCatalog.length
-    ? '## Additional Tools (load on demand)\n' +
-      'These tools exist but are not loaded into context yet. When a task needs one, FIRST call `load_tools` with the exact tool names (one call may load several), wait for its result, then call the loaded tools normally. Do not invent parameters for tools you have not loaded.\n' +
-      deferredCatalog.map((d) => `- ${d.name}: ${d.hint}`).join('\n')
-    : null;
+  // Muse/自动化:内置全量可见,目录里只剩按需加载的 MCP(与 getToolDefinitions 的 deferBypass 同一判据)。
+  const deferBypass = !!subCtx.muse || !!subCtx.automationOrigin;
+  const deferredCatalog = listDeferredTools(subCtx, { builtins: !deferBypass }).filter((d) => !isSubAgentDenied(denyProbe, d.name) && !grants.has(d.name));
+  const deferSection = deferredCatalogSection(deferredCatalog);
   // 项目记忆(父会话所在的那个项目):子 agent 与父会话同一个会话 id,remember 的项目级它本来就写得进,提示里也该看得到已有的。
   // 读不到只丢这一段(同主循环)。
   let projectMemory: string | null = null;
