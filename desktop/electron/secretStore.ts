@@ -9,7 +9,7 @@
  * Linux 的 basic_text 用的是内置固定口令,任何一份 userData 拷贝都能解开,等同明文。
  *   - unitPairing / externalToken:**只在 Linux** 的 plaintext 时兼容回落(enc:'plain',0600,状态标降级)—— 这就是今天的行为,
  *     无钥匙串的 Linux 设备页不能因此回退。
- *   - unitCallerSecret(P2):fail-closed,plaintext 时 set 抛 secret-store-insecure,不落盘。
+ *   - unitCallerSecret(P2)/ computerHistoryKey(电脑历史数据钥匙):fail-closed,plaintext 时 set 抛 secret-store-insecure,不落盘。
  *   - macOS / Windows 的加密用不了(level=unavailable:钥匙串被拒绝 / 没解锁 / DPAPI 失败)时**任何槽都不落盘**
  *     (抛 secret-store-unavailable):那不是「这台机器没有钥匙串」,而是这一次运行拿不到;回落明文会让 Mac 上的配对明文躺盘。
  *     Chromium OSCrypt(os_crypt_mac.mm DeriveKey)一个进程只试一次钥匙串、成败都不再试 → 进程内 retry 救不回,只能重启
@@ -37,8 +37,10 @@ export const SLOT_POLICY: Record<SecretSlot, SlotPolicy> = {
   unitPairing: { allowPlaintext: true },
   externalToken: { allowPlaintext: true },
   unitCallerSecret: { allowPlaintext: false },
+  // 电脑历史数据钥匙:明文存它 = 加密形同虚设(钥匙和密文躺在同一个用户目录里),系统加密不可用时就不录
+  computerHistoryKey: { allowPlaintext: false },
 }
-export const ALL_SLOTS: readonly SecretSlot[] = ['unitPairing', 'externalToken', 'unitCallerSecret']
+export const ALL_SLOTS: readonly SecretSlot[] = ['unitPairing', 'externalToken', 'unitCallerSecret', 'computerHistoryKey']
 
 export type SlotRead = { state: 'ok'; value: string | null } | { state: 'locked' } | { state: 'insecure' }
 

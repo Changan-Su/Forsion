@@ -4,7 +4,7 @@
  * 三行默认勾上,「开始同步」按勾的开,「稍后」什么都不开、以后不再弹(蓬洲云左栏「同步」挂点等着)。
  * 点了开始之后第一次同步时主窗底部一条进度,传完自己收走。只在桌面主窗、引导走完之后;手机 / 网页没有本地库远程同步。
  */
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { Fragment, useEffect, useState, useSyncExternalStore } from 'react'
 import { Bot, NotebookPen, Puzzle, RefreshCw, UserRound } from 'lucide-react'
 import { PenzorIcon } from '../amadeus/components/icons'
 import { setActiveSpace, useSpaceStore } from '@lcl/engine'
@@ -46,8 +46,10 @@ registerMessages({
   'syncSetup.c.notes': { zh: '笔记', en: 'Notes' },
   'syncSetup.c.notesNamed': { zh: '「{name}」{n} 个文件 · {size}', en: '“{name}” · {n} files · {size}' },
   'syncSetup.c.notesHint': { zh: 'Amadeus 里的智库', en: 'Your Amadeus vault' },
-  'syncSetup.c.agentsN': { zh: '{n} 个 Agent 的设置、记忆和日志', en: 'Settings, memory and logs of {n} agents' },
-  'syncSetup.c.agentsHint': { zh: '每个 Agent 的设置、记忆和日志', en: 'Each agent’s settings, memory and logs' },
+  // 11-05 Agent 逐个选(docs/ToBeImproved/Agent设备隔离方案_2026-11-04/round2.html):默认一个都不勾,没有全选,卜算子锁住
+  'syncSetup.c.agentsPick': { zh: '逐个选，默认一个都不同步', en: 'Choose each one; none are synced by default' },
+  'syncSetup.c.muse': { zh: '卜算子', en: 'Muse' },
+  'syncSetup.c.museLocked': { zh: '暂不开放同步', en: 'Sync not available yet' },
   'syncSetup.c.profile': { zh: '我的资料', en: 'About me' },
   'syncSetup.c.profileHint': { zh: '你的资料和默认日历', en: 'Your profile and default calendar' },
   'syncSetup.c.plugins': { zh: '插件', en: 'Plugins' },
@@ -61,8 +63,11 @@ registerMessages({
 
 type Cat = 'notes' | 'agents' | 'profile' | 'plugins'
 interface SetupPreview { token: string; upload: number; download: number; bytes: number }
-interface ContentLite { sources?: Array<{ path: string; size: number; files?: number }> }
-interface ContentSetup { preview: SetupPreview | null; legacy?: boolean; error?: string; recount?: boolean; notes?: { files: number; size: number }; agents?: number }
+interface ContentLite { sources?: Array<{ path: string; size: number; files?: number; agent?: boolean; name?: string; nameEn?: string }> }
+interface AgentLite { slug: string; name?: string; nameEn?: string }
+interface ContentSetup { preview: SetupPreview | null; legacy?: boolean; error?: string; recount?: boolean; notes?: { files: number; size: number }; agents?: AgentLite[] }
+/** 后台 Agent 暂不开放同步(和 Extend core/syncScopes LOCKED_AGENTS 同一份) */
+const LOCKED_AGENTS = new Set(['muse'])
 /** Extend 的内容同步通道;回 ok:false 抛错(错误串原样,好认出老 Extend 的「not a Forsion Extend channel」)。 */
 async function invokeContent<T>(channel: string, ...args: unknown[]): Promise<T> {
   const r = await window.tangu?.cloudInvoke?.(channel, ...args) as { ok?: boolean; value?: T; error?: string } | undefined
@@ -81,16 +86,19 @@ function openPenzor(): void {
 }
 
 export function SyncSetupHost(): React.JSX.Element | null {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [name, setName] = useState('')
   useEffect(() => watchAccountName(setName), [])
   const s = useSync()
   const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [picked, setPicked] = useState<Record<SyncKind, boolean>>({ notes: true, agents: true, plugins: true })
+  // 旧同步那版:Agents 那一行是账号总闸(= 所有 Agent),11-05 起缺省不勾,逐个开在 Agent 设置里
+  const [picked, setPicked] = useState<Record<SyncKind, boolean>>({ notes: true, agents: false, plugins: true })
   const [watching, setWatching] = useState(false)
-  // 新同步那版:四类勾选 → Extend 按勾选算建议配置并给预览(换算只在 Extend 一处),开始 = 拿预览凭据确认
-  const [cpicked, setCpicked] = useState<Record<Cat, boolean>>({ notes: true, agents: true, profile: true, plugins: true })
+  // 新同步那版:三类勾选 + Agent 逐个勾 → Extend 按勾选算建议配置并给预览(换算只在 Extend 一处),开始 = 拿预览凭据确认。
+  // Agents 恒发 agents:false + agentSlugs:撞上老 Extend(不认 agentSlugs)就是一个都不开,不会整类开
+  const [cpicked, setCpicked] = useState<Record<Exclude<Cat, 'agents'>, boolean>>({ notes: true, profile: true, plugins: true })
+  const [apicked, setApicked] = useState<string[]>([])
   const [setup, setSetup] = useState<ContentSetup | null>(null)
   const [nonce, setNonce] = useState(0)
   const main = windowKind() === 'main'
@@ -99,7 +107,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
 
   useEffect(() => { if (main && window.remoteSync) startSyncSetup() }, [main])
   const contentMode = !!s?.contentRules
-  const picks = JSON.stringify(cpicked)
+  const picks = JSON.stringify({ ...cpicked, agents: false, agentSlugs: apicked })
   useEffect(() => {
     if (!turn || !contentMode) return
     let live = true
@@ -110,7 +118,10 @@ export function SyncSetupHost(): React.JSX.Element | null {
         if (!live) return
         if (preview === null) { markSyncDecided(); setOpen(false); return } // 这台已经开过新同步:不按卡片覆盖
         const src = snap.sources ?? [], notes = src.find((x) => x.path === 'Amadeus')
-        setSetup((x) => ({ recount: x?.recount, preview, notes: notes ? { files: notes.files ?? 0, size: notes.size } : undefined, agents: src.filter((x) => /^agents\/[^/]+$/.test(x.path)).length }))
+        // 只列真 Agent(Extend 标的 agent:有 config.toml、名字合法);老 Extend 不标 = 一个都不列(它也不认逐个勾)
+        const agents = src.filter((x) => x.agent && /^agents\/[^/]+$/.test(x.path)).map((x) => ({ slug: x.path.slice(7), name: x.name, nameEn: x.nameEn }))
+          .sort((a, b) => Number(LOCKED_AGENTS.has(a.slug)) - Number(LOCKED_AGENTS.has(b.slug)))
+        setSetup((x) => ({ recount: x?.recount, preview, notes: notes ? { files: notes.files ?? 0, size: notes.size } : undefined, agents }))
       } catch (e) {
         if (!live) return
         const m = String((e as Error)?.message ?? e)
@@ -173,9 +184,8 @@ export function SyncSetupHost(): React.JSX.Element | null {
     if (size > max) return t('syncSetup.notesOver', { size: fmtBytes(size), max: fmtBytes(max) })
     return t('syncSetup.notesSize', { size: fmtBytes(size), max: fmtBytes(max), pct: String(Math.max(1, Math.round(size / max * 100))) })
   })()
-  const crows: Array<[Cat, React.JSX.Element, string, string]> = [
+  const crows: Array<[Exclude<Cat, 'agents'>, React.JSX.Element, string, string]> = [
     ['notes', <NotebookPen size={15} />, t('syncSetup.c.notes'), s.notes.rootName && setup?.notes ? t('syncSetup.c.notesNamed', { name: s.notes.rootName, n: String(setup.notes.files), size: fmtBytes(setup.notes.size) }) : t('syncSetup.c.notesHint')],
-    ['agents', <Bot size={15} />, t('syncSetup.agents'), setup?.agents ? t('syncSetup.c.agentsN', { n: String(setup.agents) }) : t('syncSetup.c.agentsHint')],
     ['profile', <UserRound size={15} />, t('syncSetup.c.profile'), t('syncSetup.c.profileHint')],
     ['plugins', <Puzzle size={15} />, t('syncSetup.c.plugins'), t('syncSetup.c.pluginsHint')],
   ]
@@ -197,11 +207,37 @@ export function SyncSetupHost(): React.JSX.Element | null {
             {fresh ? <div className="sync-setup-body">
               <p className="sync-setup-lead">{t('syncSetup.c.lead')}</p>
               {crows.map(([k, icon, title, sub]) => (
-                <label key={k} className="sync-setup-row">
-                  <input type="checkbox" checked={cpicked[k]} disabled={busy} onChange={(e) => { setCpicked({ ...cpicked, [k]: e.target.checked }); setSetup((x) => x && { ...x, recount: false }) }} />
-                  <span className="sync-setup-tile">{icon}</span>
-                  <span className="sync-setup-copy"><b>{title}</b><small>{sub}</small></span>
-                </label>
+                <Fragment key={k}>
+                  <label className="sync-setup-row">
+                    <input type="checkbox" checked={cpicked[k]} disabled={busy} onChange={(e) => { setCpicked({ ...cpicked, [k]: e.target.checked }); setSetup((x) => x && { ...x, recount: false }) }} />
+                    <span className="sync-setup-tile">{icon}</span>
+                    <span className="sync-setup-copy"><b>{title}</b><small>{sub}</small></span>
+                  </label>
+                  {k === 'notes' && !!setup?.agents?.length && (
+                    // Agents:勾了几个这一项就算勾上;上面那个勾只是显示,点它不会全选
+                    <div className="sync-setup-row sync-setup-group" data-testid="sync-setup-agents">
+                      <input type="checkbox" className="sync-setup-mark" checked={apicked.length > 0} readOnly tabIndex={-1} aria-hidden="true" />
+                      <span className="sync-setup-tile"><Bot size={15} /></span>
+                      <span className="sync-setup-copy"><b>{t('syncSetup.agents')}</b><small>{t('syncSetup.c.agentsPick')}</small>
+                        <span className="sync-setup-kids">
+                          {setup.agents.map((a) => {
+                            const locked = LOCKED_AGENTS.has(a.slug)
+                            const name = locked ? t('syncSetup.c.muse') : (locale === 'en' ? a.nameEn ?? a.name : a.name ?? a.nameEn) ?? a.slug
+                            return (
+                              <label key={a.slug} className={`sync-setup-kid${locked ? ' is-locked' : ''}`} data-agent={a.slug}>
+                                <input type="checkbox" checked={!locked && apicked.includes(a.slug)} disabled={busy || locked}
+                                  onChange={(e) => { setApicked(e.target.checked ? [...apicked, a.slug] : apicked.filter((x) => x !== a.slug)); setSetup((x) => x && { ...x, recount: false }) }} />
+                                <span className="sync-setup-kid-name">{name}</span>
+                                {name.toLowerCase() !== a.slug && <span className="sync-setup-slug">{a.slug}</span>}
+                                {locked && <span className="sync-setup-lk">{t('syncSetup.c.museLocked')}</span>}
+                              </label>
+                            )
+                          })}
+                        </span>
+                      </span>
+                    </div>
+                  )}
+                </Fragment>
               ))}
               <p className="sync-setup-hint">{counts}</p>
             </div> : <div className="sync-setup-body">
@@ -220,7 +256,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
               <span className="sync-setup-acts">
                 <button className="btn" disabled={busy} onClick={later}>{t('syncSetup.later')}</button>
                 {fresh
-                  ? <button className="btn primary" disabled={busy || !pv || !Object.values(cpicked).some(Boolean)} onClick={() => void startContent()}>{t('syncSetup.start')}</button>
+                  ? <button className="btn primary" disabled={busy || !pv || (!Object.values(cpicked).some(Boolean) && !apicked.length)} onClick={() => void startContent()}>{t('syncSetup.start')}</button>
                   : <button className="btn primary" disabled={busy} onClick={() => void start()}>{t(s.contentRules?'syncSetup.chooseScope':'syncSetup.start')}</button>}
               </span>
             </div>

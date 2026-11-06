@@ -315,6 +315,7 @@ export const CLASSIFICATION = {
   // ── special.ts(Historian / Muse / 自动化 / 日程 / 异步审批)──
   'GET /agent/special/config': [A, 'renderer auth probe; remote callers get only on/off + two cadence values (P1-K10b projection)'],
   'POST /agent/special/config': [D, 'special-agent config write (design appendix C)'],
+  'POST /agent/special/muse/intro': ['deny-remote', 'first-run onboarding answers write free text into Muse memory; local only'],
   'GET /agent/special/historian/activity': [A, 'Historian activity'],
   'GET /agent/special/muse/todos': [A, 'Muse todos'],
   'GET /agent/special/muse/todos/:id': [A, 'Muse todo'],

@@ -111,6 +111,15 @@ export function resolveBundledGit(): { pathDirs: string[]; gitBin: string } | nu
   return existsSync(bin) ? { pathDirs: [binDir], gitBin: bin } : null
 }
 
+/** 内置 bash(Windows 才有,build/fetch-git.cjs 在 MinGit 里放的 usr/bin/bash.exe):引擎 run_bash 用它跑命令,
+ *  缺了(老包 / 捆包失败)引擎回落 cmd.exe(tangu-agent tools/hostShell.ts)。 */
+export function resolveBundledBash(): string | null {
+  if (process.platform !== 'win32') return null
+  const dir = app.isPackaged ? join(process.resourcesPath, 'git') : join(__dirname, '..', '..', 'build', 'git')
+  const bin = join(dir, 'usr', 'bin', 'bash.exe')
+  return existsSync(bin) ? bin : null
+}
+
 /** 随包 LibreOffice 转换引擎(build/fetch-office.cjs)的入口模块;打包=resources/office,
  *  dev=desktop/build/office(`npm run fetch-office` 后才有)。布局与 fetch-office.cjs 的 kitEntry 一致。 */
 export function resolveOfficeKit(): string | null {
@@ -176,6 +185,24 @@ export class BackendManager {
   private readonly localEngineToken = randomBytes(32).toString('hex')
   /** 远端来源标记密钥(TANGU_REMOTE_MARK_SECRET):同样每次启动一枚,只在主进程与引擎之间。 */
   private readonly remoteMark = randomBytes(32).toString('hex')
+  /** 电脑历史数据钥匙(hex)。经 stdin 私有通道交给引擎:每次拉起时发一次,钥匙后到(引导里才打开电脑历史)就当场补发 ——
+   *  不走 env(要换就得重起引擎,会断掉在跑的会话;env 还会出现在 ps 里),不走 HTTP(本机令牌渲染层 / 设备页反代也有)。 */
+  private computerHistoryKeyHex: string | null = null
+
+  /** 钥匙就绪:记下(之后每次拉起都带上),引擎在跑就当场发。 */
+  setComputerHistoryKey(hex: string): void {
+    if (hex === this.computerHistoryKeyHex) return
+    this.computerHistoryKeyHex = hex
+    if (this.child) this.sendHostMessage(this.child, { computerHistoryKey: hex })
+  }
+
+  /** 主进程 → 引擎的私有通道(引擎侧 tangu-agent/src/core/hostChannel.ts):一行一条 JSON。写不进(引擎刚退)就算了,
+   *  下次拉起会重发。 */
+  private sendHostMessage(child: ChildProcess, msg: Record<string, unknown>): void {
+    const stdin = child.stdin
+    if (!stdin || stdin.destroyed || !stdin.writable) return
+    try { stdin.write(`${JSON.stringify(msg)}\n`) } catch { /* EPIPE:引擎已退 */ }
+  }
 
   onStatus(cb: (st: BackendStatus) => void): () => void {
     this.listeners.add(cb)
@@ -270,6 +297,18 @@ export class BackendManager {
     return null
   }
 
+  /** 安装包里那份引擎(打包 = resources/tangu-server;dev = 仓里的 tangu-agent)的包根。 */
+  static engineRoot(): string | null {
+    const entry = BackendManager.resolveEntry()
+    return entry ? dirname(dirname(dirname(entry))) : null // …/dist/standalone/main.js
+  }
+
+  /** 安装包自带的引擎版本号;读不到 = null。 */
+  static bundledEngineVersion(): string | null {
+    const root = BackendManager.engineRoot()
+    try { return root ? String(JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version) : null } catch { return null }
+  }
+
   /** 拉起引擎的脚本与它前面的参数:打包版经启动器(由它在自带的与热更新下来的之间挑),dev 直接跑包根 dist。 */
   static resolveLaunch(): string[] | null {
     const entry = BackendManager.resolveEntry()
@@ -362,6 +401,8 @@ export class BackendManager {
       env.TANGU_HOME = tanguDataDir() // 三重保险之③:软链被删也不分脑(引擎私有数据在 tangu/ 子目录;auth/config/activity 引擎经 forsionSharedDir 落父目录=共享域)
       env.TANGU_LOCAL_TOKEN = this.localEngineToken
       env.TANGU_REMOTE_MARK_SECRET = this.remoteMark
+      // stdin 是主进程独占的私有通道(电脑历史钥匙,见 setComputerHistoryKey);引擎读完这个开关就从自己的 env 删掉
+      env.FORSION_HOST_STDIN = '1'
       const cloudToken = this.cloudToken()
       env.TANGU_TOKEN = cloudToken ?? ''
       // 渲染层直接起的 run 会在请求体自报 desktop/<版本>;微信/TG/QQ 则由引擎后台起 run,
@@ -422,6 +463,9 @@ export class BackendManager {
       // read_document 先用它把 docx/xlsx/pptx 转 PDF 再按真页读;不设 = 走原来的系统 LibreOffice/纯文本兜底。
       const officeKit = resolveOfficeKit()
       if (officeKit) env.TANGU_OFFICE_KIT = officeKit
+      // Windows:run_bash 用随包的 bash(外面已给的照用,方便指到自己装的 Git for Windows)
+      const bash = resolveBundledBash()
+      if (bash && !env.TANGU_BASH_BIN) env.TANGU_BASH_BIN = bash
 
       // 中国大陆镜像(可逆:仅注入子进程 env,不改用户全局 dotfile;关掉即恢复直连)。pip/npm/git 子进程继承之。
       if (s.mirror === 'china') {
@@ -444,9 +488,11 @@ export class BackendManager {
       }
       const child = spawn(cmd, args, {
         env,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       })
+      child.stdin?.on('error', () => { /* 引擎退出后写 = EPIPE,忽略(下次拉起重发) */ })
+      if (this.computerHistoryKeyHex) this.sendHostMessage(child, { computerHistoryKey: this.computerHistoryKeyHex })
       this.spawnedEntry = entry
       this.spawnedAt = Date.now()
       this.child = child
@@ -460,9 +506,10 @@ export class BackendManager {
       if (ok && this.child === child && child.exitCode === null && child.signalCode === null) {
         this.restartCount = 0
         // 实际跑起来的是哪一版,以引擎自己报的为准:拉起前的判断是「启动器会挑中谁」,而启动器可能在重试之间
-        // 把新版记成坏的、退回了别的。引擎报的版本等于 App 版本 = 跑的是自带的(两者同号发版)。
+        // 把新版记成坏的、退回了别的。报的是自带引擎的版本 = 跑的是自带的(桌面与引擎已各自编号,别再和 App 版本比:
+        // 2.13.7 带的是引擎 2.13.8,比 App 版本会把退回自带误记成「在跑热更新 2.13.8」)。
         if (this.overlayVersion && this.healthVersion && this.healthVersion !== this.overlayVersion) {
-          this.overlayVersion = this.healthVersion === app.getVersion() ? null : this.healthVersion
+          this.overlayVersion = this.healthVersion === BackendManager.bundledEngineVersion() ? null : this.healthVersion
           this.overlayExits = 0
         }
         this.setState('ready', null)

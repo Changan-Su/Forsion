@@ -207,7 +207,7 @@ import { promisify } from 'node:util';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, symlinkSync, cpSync, appendFileSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { createServer as createHttpServer } from 'node:http';
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID, createHash, randomBytes, createCipheriv, createDecipheriv } from 'node:crypto';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname, resolve, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -280,6 +280,7 @@ KEYS.push('imageedit');
 KEYS.push('titlelang');
 KEYS.push('titlemanual');
 KEYS.push('windowscmd');
+KEYS.push('shellreal'); // Agent 设备隔离 U1/U2/U3:最近文件 / 批量改名 / 大文件 / git + npm / 删除,判据看磁盘;Windows 上同样跑
 // autocompact 要把模型窗口钉小(--window)才灌得满;窗口小了别的场景会被连累(系统提示+工具头就 13k+),所以它只能单独跑。
 const WINDOW = Number(opt('window', process.env.TANGU_LIVE_WINDOW || 0)) || 0;
 // P1-K9 · C3:--remote-cap <档> = 起引擎前经 K4 的新写入口写 remote.maxApprovalMode(缺省不写 = 引擎按 auto-edit)
@@ -313,6 +314,7 @@ OPT_IN.add('imageedit'); // --only imageedit:edit_image 跨轮取图 + 改自己
 OPT_IN.add('titlemanual'); // --only titlemanual:两个会话 7 个 run,改手动标题 / 图标标记后跑
 OPT_IN.add('titlelang'); // --only titlelang:标题跟随对话语言(10-20:英文对话被起成中文标题);4 个会话 5 个 run,改起标题 / 摘要的提示词、transcript、scriptCheck 后跑
 OPT_IN.add('windowscmd'); // Windows Issue #77: exact cmd reads and rejected negative controls through real model/tool/SSE.
+OPT_IN.add('shellreal'); // --only shellreal:5 个 run,真模型在夹具目录里做真实的文件 / git / npm 活(scripts/lib/shell-real-live.mjs)
 OPT_IN.add('novision'); // --only novision:主模型没有图像输入时的转写状态与送达(一个 run + 一次转写)
 OPT_IN.add('cuoff'); // --only cuoff:主模型看不到图 → Computer Use 不可用并告诉用户(一个 run)
 for (const k of CU_WEB_KEYS) OPT_IN.add(k); // --only cuweb,cuwebdead:Electron 窗口上的后台 AXPress(cuwebdead 会动真鼠标;要 --cu-plugin)
@@ -1371,6 +1373,27 @@ if (ONLY.has('notebook') && !NOTEBOOK_NEG) {
 // account(10-10):假 Forsion 云端(额度 / 套餐 / 积分是已知数),只在跑它时起;显式给了 TANGU_LIVE_CLOUD_URL 的以那个为准。
 const FAKE_CLOUD = (ONLY.has('account') || ONLY.has('webpublish') || ONLY.has('pluginaware') || SIM) && !process.env.TANGU_LIVE_CLOUD_URL ? await startFakeCloud(TOKEN, { connect: SIM?.url }) : null;
 
+// computerhistory:日文件逐行加密(desktop/electron/computerHistoryCrypto.ts),钥匙像桌面那样经 stdin 私有通道交给引擎
+// (core/hostChannel.ts);只在跑这个场景时接管 stdin,别的场景的引擎环境不变
+const CH_LIVE = ONLY.has('computerhistory');
+const CH_KEY = randomBytes(32);
+const CH_KID = createHash('sha256').update('forsion-ch-kid/1').update(CH_KEY).digest('hex').slice(0, 8);
+const chEncrypt = (json) => {
+  const iv = randomBytes(12);
+  const c = createCipheriv('aes-256-gcm', CH_KEY, iv);
+  c.setAAD(Buffer.from('forsion-computer-history/1'));
+  const ct = Buffer.concat([c.update(json, 'utf8'), c.final()]);
+  return `ch1.${CH_KID}.${Buffer.concat([iv, ct, c.getAuthTag()]).toString('base64')}`;
+};
+/** 台架自己读回日文件(往里并事件)时用:明文行原样,密文行用同一把钥匙解开。 */
+const chDecrypt = (line) => {
+  if (line.startsWith('{')) return line;
+  const buf = Buffer.from(line.split('.')[2] || '', 'base64');
+  const d = createDecipheriv('aes-256-gcm', CH_KEY, buf.subarray(0, 12));
+  d.setAAD(Buffer.from('forsion-computer-history/1'));
+  d.setAuthTag(buf.subarray(buf.length - 16));
+  return Buffer.concat([d.update(buf.subarray(12, buf.length - 16)), d.final()]).toString('utf8');
+};
 const child = spawn(process.execPath, [
   ...(FAULT_FILE ? ['--import', pathToFileURL(join(root, 'scripts', 'lib', 'llm-fault-preload.mjs')).href] : []),
   entry, '--port', String(port), '--host', '127.0.0.1', '--data-dir', join(home, 'state.db'),
@@ -1398,7 +1421,9 @@ const child = spawn(process.execPath, [
   // P1-K9 remotesession:会话沙箱目录单独一份(缺省是整机共享的 os.tmpdir()/forsion-agent-sessions),但**留在 os.tmpdir() 下**,与生产同一类位置 ——
   // 放进产物目录(常在 /private/tmp 下)会让模型「find /tmp」碰巧找到附件,判据失真(09-28 首跑实测)
   ...(ONLY.has('remotesession') ? { AGENT_SANDBOX_SESSION_DIR: REMOTE_SESSION_SANDBOX } : {}),
-}, stdio: ['ignore', 'pipe', 'pipe'] });
+  ...(CH_LIVE ? { FORSION_HOST_STDIN: '1' } : {}),
+}, stdio: [CH_LIVE ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+if (CH_LIVE) child.stdin.write(`${JSON.stringify({ computerHistoryKey: CH_KEY.toString('hex') })}\n`);
 child.stdout.on('data', (d) => appendFileSync(engineLog, d));
 child.stderr.on('data', (d) => appendFileSync(engineLog, d));
 let childExit = null;
@@ -5143,6 +5168,11 @@ Then reply with only the command output.`,
     return windowsCmdLive({ run, workspace, OUT });
   });
 
+  await scenario('shellreal', 'shellreal 真实任务:最近文件 / 批量改名 / 大文件 / git + npm / 删除 + 环境说明', async () => {
+    const { shellRealLive } = await import('./lib/shell-real-live.mjs');
+    return shellRealLive({ run, workspace, OUT, shared, argv });
+  });
+
   await scenario('muse', `muse 心跳周期(${MUSE_MODE})`, async () => {
     // P1 · M1A(K9 G7):Muse 起周期前先各留一段远程会话(经隧道头)与本机会话。远程那段的原话(标题里的 rmark)与它的 run.done 活动行
     // (s=R…)不许进 Muse 的周期简报,本机那段的活动行(s=L…)照常在(正对照:活动尾部真的被读了)。判据读 state.db 里 Muse run 的
@@ -7334,7 +7364,13 @@ Then reply with only the command output.`,
     ];
     rmSync(join(chDir, 'events'), { recursive: true, force: true });
     mkdirSync(join(chDir, 'events'), { recursive: true });
-    for (const e of evs) appendFileSync(join(chDir, 'events', `${actDay(new Date(e.t))}.jsonl`), JSON.stringify(e) + '\n');
+    // 真桌面写的是密文;锁屏那条留成明文 = 迁移前的老行(读端两种都认)。盘上字节里不许出现文档名 / PR 号 ——
+    // 答复里答得出它们,只能是引擎经 stdin 拿到钥匙解开了
+    for (const e of evs) appendFileSync(join(chDir, 'events', `${actDay(new Date(e.t))}.jsonl`), (e.kind === 'system' ? JSON.stringify(e) : chEncrypt(JSON.stringify(e))) + '\n');
+    for (const f of readdirSync(join(chDir, 'events'))) {
+      const raw = readFileSync(join(chDir, 'events', f), 'utf8');
+      if (raw.includes(CH_MARK) || raw.includes(CH_PR)) throw new Error('computerhistory fixture leaked plaintext');
+    }
   };
   const CH_CFG = { preset: 'chat', execMode: 'sandbox', cwd: undefined };
   const CH_ASK = '我休息之前在做什么?';
@@ -7436,8 +7472,8 @@ Then reply with only the command output.`,
       const byFile = new Map();
       for (const e of pad) { const f = join(chDir, 'events', `${actDay(new Date(e.t))}.jsonl`); byFile.set(f, [...(byFile.get(f) || []), e]); }
       for (const [f, extra] of byFile) {
-        const old = existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
-        writeFileSync(f, [...old, ...extra].sort((x, y) => x.t - y.t).map((e) => JSON.stringify(e)).join('\n') + '\n');
+        const old = existsSync(f) ? readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(chDecrypt(l))) : [];
+        writeFileSync(f, [...old, ...extra].sort((x, y) => x.t - y.t).map((e) => (e.kind === 'system' ? JSON.stringify(e) : chEncrypt(JSON.stringify(e)))).join('\n') + '\n');
       }
     }
     await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ muse: { enabled: true, modelId: MODEL, mode: MUSE_MODE, heartbeatMinutes: 1, supervisorPollMinutes: 1, maxIterationsPerCycle: 6, allowedFolders: [workspace], notify: 'immediate' } }) });

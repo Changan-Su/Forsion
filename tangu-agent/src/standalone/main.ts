@@ -23,6 +23,7 @@ import { loadMcpConfig, enabledServers } from '../mcp/config.js';
 import { loadEngines, loadEnginePrefs } from '../engines/config.js';
 import { applySpecialAgentEnableMigration, loadSpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadTanguEnv, configFile } from '../core/tanguHome.js';
+import { startHostChannel } from '../core/hostChannel.js';
 import { migrateLegacyConfig } from '../core/config.js';
 import { activateAllPlugins } from '../plugins/bootstrap.js';
 import { seedExampleCommand } from '../services/customCommands.js';
@@ -47,6 +48,7 @@ function engineVersion(): string {
 let bootPhase = 'config';
 
 async function main(): Promise<void> {
+  startHostChannel(); // 桌面拉起时的私有 stdin 通道(电脑历史钥匙);先于一切,开关读完即从 env 删掉
   loadTanguEnv(); // ~/.tangu/.env → process.env(不覆盖真实环境);须先于 parseConfig
   migrateLegacyConfig(); // 首启把散落 legacy 配置收进 ~/.tangu/config.json(旧文件→.bak);幂等,须先于 parseConfig
   const cfg = parseConfig(process.argv.slice(2));

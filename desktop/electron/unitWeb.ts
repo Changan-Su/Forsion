@@ -186,7 +186,10 @@ export interface UnitWebDeps {
   /** 主机目录列表/条目 stat(工作台文件面板/悬停提示):钳制同上,目录类可指根本身;越界=null。 */
   readHostDir: (p: string) => Promise<Array<{ name: string; isDir: boolean; size: number; path: string }> | null>
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
-  meta: { instanceId: string; name: string; version: string }
+  /** build:安装版 / 开发版 —— 同一台电脑上两份 Forsion 同名同版本,Forsion Clip 靠它分开写(旧版不报)。 */
+  meta: { instanceId: string; name: string; version: string; build?: 'packaged' | 'dev' }
+  /** 这台 Forsion 当前的外观(渲染层上报的主题色 / 背景色 / 明暗 / 语言),给已配对的 Forsion Clip 跟随。缺省 / 还没上报 = 404。 */
+  appearance?: () => UnitAppearance | null
   /** Explicit web publishing only exposes code/layout. Host data keeps the pairing boundary. */
   projection?: { mode: 'public' | 'local'; basePath: string; product: ProductProfile; inheritWebAccount?: boolean; capabilities?: () => object; localCapabilities?: () => { vault: boolean; engine: boolean; host: boolean } }
   /** P2P 应答(方案 §12,可缺省):收 offer SDP 出 answer SDP,DataChannel 开门后由主进程把
@@ -222,6 +225,9 @@ export interface UnitWebHandle {
   proxyCallerKey: string
   close: () => Promise<void>
 }
+
+/** 渲染层上报、经 /unit/appearance 给已配对设备读的外观(只有命名过的颜色;自定义色不下发)。 */
+export interface UnitAppearance { skin: string; bg: string; mode: 'light' | 'dark'; locale: 'zh' | 'en' }
 
 interface PendingPair { id: string; name: string; code: string; ip: string; expires: number; status: 'pending' | 'approved' | 'denied'; token?: string }
 /** 配对请求的在途表。主进程在门铃与正式服务之间传同一份:门铃收下的请求,打开互联后由正式服务把令牌交出去。 */
@@ -667,6 +673,13 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       json(res, 200, { ok: true })
       return
     }
+    if (path === '/unit/appearance' && req.method === 'GET') {
+      if (!authed(req)) { json(res, 401, { detail: 'Not paired', code: 'UNPAIRED' }); return }
+      const appearance = deps.appearance?.() ?? null
+      if (!appearance) { json(res, 404, { detail: 'Appearance is not available', code: 'APPEARANCE_UNAVAILABLE' }); return }
+      json(res, 200, { appearance })
+      return
+    }
     // P2P 信令(方案 §12):A 经隧道/配对面送 offer,这端出 answer。**信任裁决 = T2 权限等价体**:
     // 同账号(隧道 owner 已验)或已配对设备即许,无 B 侧确认框——T1 的 6 位码是给无账号 LAN 配对的,
     // P2P 的身份已由信令来路背书;连上之后的能力面与该来路完全一致(同一个 unitWeb)。
@@ -907,4 +920,68 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       })
     })
   })
+}
+
+
+// ── Forsion Clip 的本机固定入口 ──
+// 互联口第一次撞口后会退到随机口并一直记着(便于别的设备手输 IP 直连),Clip 却只能到固定口找 Forsion。
+// 所以互联开着、而互联口又不在固定口上时,另在回环上开一个固定口,把 Clip 用得到的那几条路转给正式服务:
+// 只听 127.0.0.1;只放 CLIP_ENTRANCE_PATHS;配对请求必须带 Clip 的 Origin(网页伪造不了,同门铃)。
+// 鉴权、来路判断(via=lan + 本机套接字)都由正式服务照旧做 —— 这里只是同一台机器上的第二个门牌号。
+/** 安装版 / 开发版各自的固定口(先试前一个,被占再试后一个);Clip 四个都探。 */
+export const CLIP_ENTRANCE_PORTS = { packaged: [8791, 8793], dev: [8792, 8794] } as const
+const CLIP_ENTRANCE_EXACT = new Set(['/unit/meta', '/unit/pair/request', '/unit/pair/poll', '/unit/browser-control', '/unit/whoami', '/unit/remote-access', '/unit/appearance', '/vault/rpc', '/engine/agent/models'])
+const CLIP_ENTRANCE_PREFIX = ['/engine/agent/sessions', '/engine/agent/runs']
+/** 入口放行的路径(去掉查询串后比;规整掉重复斜杠、点段与转义,大小写敏感 —— 引擎侧另有一层鉴权)。 */
+export function clipEntranceAllows(rawUrl: string): boolean {
+  let path: string
+  try { path = decodeURIComponent((rawUrl || '/').split('?')[0]) } catch { return false }
+  if (path.includes('\\') || /\/\.{1,2}(\/|$)/.test(path) || path.includes('//')) return false
+  if (CLIP_ENTRANCE_EXACT.has(path)) return true
+  return CLIP_ENTRANCE_PREFIX.some((p) => path === p || path.startsWith(p + '/'))
+}
+
+export interface ClipEntranceHandle { port: number; close: () => Promise<void> }
+
+export function startClipEntrance(opts: {
+  ports: readonly number[]
+  origins: string[]
+  /** 正式服务(换服务期间可能为 null → 503,Clip 那边按「还在等」处理)。 */
+  target: () => UnitWebHandle | null
+  log?: (m: string) => void
+}): Promise<ClipEntranceHandle | null> {
+  const send = (res: http.ServerResponse, status: number, body: unknown): void => {
+    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+    res.end(JSON.stringify(body))
+  }
+  const server = http.createServer((req, res) => {
+    if (!isLoopback(req.socket.remoteAddress)) { send(res, 403, LOCAL_ONLY_BODY); return }
+    if (!clipEntranceAllows(req.url || '/')) { send(res, 404, { detail: 'Not available on this entrance', code: 'NOT_FOUND' }); return }
+    const path = (req.url || '/').split('?')[0]
+    if (path === '/unit/pair/request' && !opts.origins.includes(String(req.headers.origin || ''))) { send(res, 403, { detail: 'Only Forsion Clip can request pairing here', code: 'ORIGIN_REJECTED' }); return }
+    const target = opts.target()
+    if (!target) { send(res, 503, HOST_OFF_BODY); return }
+    void target.handleRequest(req, res)
+  })
+  server.requestTimeout = 5 * 60 * 1000
+  const sockets = new Set<Duplex>()
+  server.on('connection', (socket) => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) })
+  const tryListen = (port: number): Promise<boolean> => new Promise((resolve) => {
+    const onError = (): void => { server.off('listening', onListen); resolve(false) }
+    const onListen = (): void => { server.off('error', onError); resolve(true) }
+    server.once('error', onError)
+    server.once('listening', onListen)
+    server.listen(port, '127.0.0.1')
+  })
+  return (async () => {
+    for (const port of opts.ports) {
+      if (await tryListen(port)) {
+        const bound = (server.address() as AddressInfo).port
+        opts.log?.(`[unit-web] Forsion Clip 本机入口:http://127.0.0.1:${bound}`)
+        return { port: bound, close: () => new Promise<void>((r) => { server.close(() => r()); for (const s of sockets) s.destroy() }) }
+      }
+    }
+    opts.log?.(`[unit-web] Forsion Clip 本机入口没开:${opts.ports.join(' / ')} 都被占用`)
+    return null
+  })()
 }

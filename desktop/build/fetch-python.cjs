@@ -10,7 +10,7 @@
  *  - 解释器到手后按 python-requirements.txt 预装办公/数据库(对标 DSH 桌面端开箱即用)。
  *    **装库失败硬报错、不降级**:提示词和内置技能按「库都在」写,有解释器没库的包比没 Python 更坑。
  */
-const { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } = require('node:fs');
+const { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } = require('node:fs');
 const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
@@ -75,6 +75,10 @@ async function fetchPython({ platformName, archName }) {
     if (!existsSync(path.join(dest, 'bin')) && !existsSync(path.join(dest, 'python.exe'))) {
       throw new Error(`解压后 ${dest} 无解释器`);
     }
+    // Windows 包只有 python.exe:另放一份 python3.exe(它只是个小启动器,真身在旁边的 python3xx.dll),
+    // 让 Agent 在 Mac 和 Windows 上都能写 `python3`(run_bash 在 Windows 上也是 bash,见 fetch-git.cjs)。
+    const winPy = path.join(dest, 'python.exe');
+    if (existsSync(winPy) && !existsSync(path.join(dest, 'python3.exe'))) copyFileSync(winPy, path.join(dest, 'python3.exe'));
     console.log(`[fetch-python] ✓ ${dest}`);
   } catch (e) {
     if (e.code === 'RUNTIME_INTEGRITY' || runtimeRequired('python', platformName)) throw e;

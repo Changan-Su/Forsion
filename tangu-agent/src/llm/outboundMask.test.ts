@@ -34,6 +34,13 @@ describe('findSensitive', () => {
 });
 
 describe('maskPayload / restore', () => {
+  it('会话键标记不扫(UUID 的数字段能凑成卡号,扫了就把普通请求整个拦下)', () => {
+    const sid = '41111111-1111-4115-a111-111111111111';
+    const r = maskPayload({ model: 'gpt', messages: [{ role: 'user', content: 'Hello' }], __tangu_session: sid }, { ...ON, personal: true, action: 'block' });
+    expect(r.hits).toEqual([]);
+    expect(r.payload.__tangu_session).toBe(sid);
+  });
+
   it('masks every string in the payload, keeps the input untouched and placeholders stable', () => {
     const msgs = [{ role: 'tool', tool_call_id: 'call_1', content: ENV }, { role: 'assistant', content: 'ok', tool_calls: [{ id: 'c2', type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command: `curl -H "Authorization: Bearer ${KEY}" https://api.openai.com` }) } }] }];
     const payload = { model: 'gpt', messages: msgs, __tangu_direct: true };

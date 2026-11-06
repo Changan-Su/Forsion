@@ -20,6 +20,8 @@ const KEYS: Record<string, string> = {
   'not-user-plugin': 'ipcerr.notUserPlugin',
   'plugin-not-found': 'ipcerr.pluginNotFound',
   'mcp-name-reserved': 'ipcerr.mcpNameReserved',
+  // 电脑历史:有记录用这会儿取不到的密钥加密(词条在 components/computerHistoryMessages.ts)
+  'ch-records-locked': 'computerHistory.recordsLocked',
 }
 
 export function ipcErrorText(e: unknown): string {

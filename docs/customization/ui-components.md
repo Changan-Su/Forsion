@@ -60,6 +60,8 @@ ctx.registerView({
 
 2026-11-02 起 `suggest` 也可以是一组，例如 `#` 标签一份、`[[` 关联一份（后者传 `mention: true`，紧跟中文也开）；光标前同时对上几个时，离光标最近的那个打开。输入框在窗口下半部分时浮层朝上开，放不下再翻到下面。更早的宿主只认单个对象。
 
+传数组前先看 `ctx.ui.chatBoxCapabilities?.includes('suggestMany')`（2026-11-04 起；朝上开对应 `'suggestAbove'`）。没有这个字段的宿主一律当不支持。别拿 `insertText` 或别的接口当暗号：2.13.8-beta.3 有 `insertText`，却不收数组。
+
 ```js
 const box = ctx.ui?.mountChatBox?.(el, {
   modelPicker: false,
@@ -82,7 +84,7 @@ const box = ctx.ui?.mountChatBox?.(el, {
 
 ↑↓ 移动，Enter 或 Tab 选中，Esc 关闭。选中后把「`trigger` + 查询」换成 `value` 加一个空格，这次 Enter 不会提交；浮层开着时 ⌘/Ctrl+Enter 同样是选中。只在用户打字时弹：把光标挪到已有的 `#标签` 后面不弹，输入法组字时不弹，组字结束后再判断。Esc 之后，同一个词继续打字不再弹。
 
-这四项一起加入。旧宿主会忽略三个选项，也没有 `insertText`，所以用 handle 探测：`typeof box.insertText === 'function'`。不支持时自己隐藏 `#` 按钮，或者接受模型药丸照常显示。
+这四项一起加入。旧宿主会忽略三个选项，也没有 `insertText`，所以用 handle 探测：`typeof box.insertText === 'function'`。之后加入、handle 看不出来的行为（数组形式的 `suggest`、浮层朝上）列在 `ctx.ui.chatBoxCapabilities`。不支持时自己隐藏 `#` 按钮，或者接受模型药丸照常显示。
 
 模型目录与聊天共用，主模型只展示 LLM，遵守用户的排序和隐藏设置，不额外按品牌限制。选择停留在此组件，不修改全局默认或当前会话。提交回调拿到的是当次选择；插件必须将它们传给自己的业务流程，不能展示了选择却丢弃它。挂载和编辑不发起模型请求、不自动创建会话。旧宿主必须 feature-detect，不复制内部 CSS 伪装支持。
 

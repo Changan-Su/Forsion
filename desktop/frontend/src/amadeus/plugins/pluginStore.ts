@@ -112,6 +112,7 @@ import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/i
 import { createEffectScope, type EffectRecord, type EffectScope } from './effectScope'
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
+import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
 import { windowKind } from '../../windowKind'
 import { addRibbonAction } from './ribbonAction'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
@@ -2110,6 +2111,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       mountWebCard: uiMountWebCard,
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
+      chatBoxCapabilities: CHAT_BOX_CAPABILITIES,
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, insertText() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
