@@ -3,7 +3,7 @@
  * Historian 带本机路径的候选不进共用记忆。合成数据,不碰真账号 / 真记忆。
  */
 import { beforeAll, afterAll, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { Server } from 'node:http';
@@ -61,6 +61,13 @@ describe('this device', () => {
     const ctx = deviceTagContext(home, 'darwin');
     expect(ctx).toEqual({ self: 'MacBook Pro', os: 'macOS', others: ['Windows desktop'] });
     expect(deviceTagContext(home, 'win32').os).toBe('Windows');
+  });
+  it('also knows the names other devices used before a rename (aliases), but not this device’s own old names', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'tangu-device-alias-'));
+    writeFileSync(join(dir, 'content-sync-device.json'), JSON.stringify({ id: 'me', name: 'Desk' }));
+    writeFileSync(join(dir, 'content-sync-devices.json'), JSON.stringify({ devices: [{ id: 'me', name: 'Desk', aliases: ['Old desk'] }, { id: 'pc', name: 'Windows desktop', aliases: ['Gaming PC', 'Desk'] }] }));
+    expect(deviceTagContext(dir, 'darwin').others).toEqual(['Windows desktop', 'Gaming PC']);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -122,6 +129,12 @@ describe('prompt: only what applies here, the rest folds into one English line',
     expect(winCtx.content).not.toContain('TeX Live');
     expect(winCtx.stable).toContain('(1 more entry applies only to other computers: 1 on "MacBook Pro")');
   });
+  it('memory recall in the cloud: device names unknown, but the model is told what a leading [name] means', async () => {
+    const ctx = await runWithAgentSlug('paper', () => buildAgentMemoryContext({ userId: 'fixture-user', appId: 'tangu', agentSlug: 'paper', query: '', deviceTags: { self: null, os: null, others: [] } }));
+    expect(ctx.stable).not.toContain('Fluent'); // 系统名照样认得、照样折
+    expect(ctx.stable).toContain('[MacBook Pro] TeX Live 2026');
+    expect(ctx.stable).toContain('this run is not on any of the user’s computers');
+  });
   it('instructions / persona text', () => {
     expect(textForThisDevice('Be brief.\n- [Windows] use D:\\x', { self: 'MacBook Pro', os: 'macOS', others: [] }))
       .toBe('Be brief.\n(1 more part applies only to other computers: 1 on Windows)');
@@ -138,7 +151,7 @@ describe('rename: this device’s [old] tags become [new]', () => {
     const old = before.entries.find((e) => e.content.includes('TeX Live 2026'))!;
     setDevice('Studio Mac');
     const r = await reconcileDeviceRename();
-    expect(r).toMatchObject({ from: 'MacBook Pro', to: 'Studio Mac', pending: [] });
+    expect(r).toMatchObject({ from: ['MacBook Pro'], to: 'Studio Mac', pending: [] });
     expect(memoryOf('paper')).toContain('- [Studio Mac] TeX Live 2026');
     expect(memoryOf('paper')).not.toContain('[MacBook Pro]');
     expect(memoryOf('paper')).toContain('- [Windows desktop] 求解器在 D 盘');
@@ -146,6 +159,42 @@ describe('rename: this device’s [old] tags become [new]', () => {
     const after = createMemoryRepository(join(agentsDir(), 'paper')).snapshot();
     expect(after.entries.find((e) => e.content.includes('TeX Live 2026'))!.evidenceIds).toContain(old.id);
     expect(await reconcileDeviceRename()).toBeNull(); // 记下了新名字,再对一次是空操作
+  });
+  it('waits for the folder lock instead of writing over a concurrent writer, then catches up across two renames', async () => {
+    const dir = join(agentsDir(), 'paper'), lock = join(dir, '.memory.lock');
+    writeFileSync(lock, '{}'); // 桌面同步 / 另一个写者正拿着这把锁
+    setDevice('Desk B');
+    const r1 = await reconcileDeviceRename();
+    expect(r1).toMatchObject({ from: ['Studio Mac'], to: 'Desk B', pending: ['paper'] });
+    expect(memoryOf('paper')).toContain('- [Studio Mac] TeX Live 2026'); // 锁着的时候一个字都没动
+    expect(readFileSync(join(dir, 'SOUL.md'), 'utf8')).toContain('[Studio Mac]');
+    setDevice('Desk C'); // 没换完又改了一次名
+    expect((await reconcileDeviceRename())?.pending).toEqual(['paper']);
+    rmSync(lock);
+    const r3 = await reconcileDeviceRename();
+    expect(r3?.from).toEqual(expect.arrayContaining(['Studio Mac', 'Desk B']));
+    expect(r3?.pending).toEqual([]);
+    expect(memoryOf('paper')).toContain('- [Desk C] TeX Live 2026');
+    expect(readFileSync(join(dir, 'SOUL.md'), 'utf8')).toBe('- [Desk C] quiet keyboard at night\n- [Windows desktop] other');
+    expect(await reconcileDeviceRename()).toBeNull();
+  });
+  it('config.toml: tags at the start of a value too; a name the string cannot hold leaves the file as it is', async () => {
+    const dir = join(agentsDir(), 'tomlcase'); mkdirSync(dir, { recursive: true });
+    const cfg = 'name = "T"\ninstructions = "[Desk C] single line"\nprompt = \"\"\"\n[Desk C] multi\n- [Windows desktop] other\n\"\"\"\n';
+    writeFileSync(join(dir, 'config.toml'), cfg);
+    setDevice("Alice's Mac");
+    const r = await reconcileDeviceRename();
+    expect(r?.files).toContain('tomlcase/config.toml');
+    expect(readFileSync(join(dir, 'config.toml'), 'utf8')).toBe(cfg.split('[Desk C]').join("[Alice's Mac]"));
+    // 反斜杠在基本字符串里是转义:原样换进去解析出来就不对了 → 这份不写,记进 skipped,不算没换完(不会一直重试)
+    const held = 'name = "T"\nprompt = """\n[Alice\'s Mac] multi\n"""\n';
+    writeFileSync(join(dir, 'config.toml'), held);
+    setDevice('Lab\\Box');
+    const r2 = await reconcileDeviceRename();
+    expect(r2).toMatchObject({ pending: [], skipped: ['tomlcase/config.toml'] });
+    expect(readFileSync(join(dir, 'config.toml'), 'utf8')).toBe(held);
+    expect(memoryOf('paper')).toContain('- [Lab\\Box] TeX Live 2026'); // 别的文件照换
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
@@ -166,9 +215,19 @@ describe('Dream keeps device labels', () => {
   });
 });
 
+describe('Dream without device names (cloud)', () => {
+  it('treats any leading bracket as a label: never merges [x] facts with untagged ones', () => {
+    const sources = [{ id: 'm1', fact: '[Studio Mac] 编译用 latexmk', kind: 'memory' as const }, { id: 'm2', fact: '编译用 latexmk', kind: 'memory' as const }];
+    const cloud = { self: null, os: null, others: [] };
+    expect(() => validateDreamProposal({ groups: [{ fact: '编译用 latexmk', sourceIds: ['m1', 'm2'] }], discarded: [] }, sources, { portrait: false, tags: cloud })).toThrow(/different devices/);
+    const p = validateDreamProposal({ keep: ['m2'], groups: [{ fact: '编译用 latexmk -pdf', sourceIds: ['m1'] }], discarded: [] }, sources, { portrait: false, tags: cloud });
+    expect(p.groups.map((g) => g.fact)).toContain('[Studio Mac] 编译用 latexmk -pdf');
+  });
+});
+
 describe('Historian: facts with a local path', () => {
   it('recognises local absolute paths, not URLs', () => {
-    for (const t of ['模板在 /Users/su/Documents/论文', 'TeX at ~/texlive', '用 C:\\Fluent\\x 跑', 'share \\\\nas\\docs\\a', '路径：/home/a/b']) expect(hasLocalPath(t)).toBe(true);
+    for (const t of ['模板在 /Users/su/Documents/论文', 'TeX at ~/texlive', '用 C:\\Fluent\\x 跑', 'share \\\\nas\\docs\\a', '路径：/home/a/b', 'repo in /workspace/app', 'data at /data/runs']) expect(hasLocalPath(t)).toBe(true);
     for (const t of ['see https://x.com/Users/a', 'api /api/v1/x', '写论文用 LaTeX']) expect(hasLocalPath(t)).toBe(false);
   });
 });

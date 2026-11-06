@@ -4,7 +4,7 @@ import { currentAgentSlug, currentDisplayAgentSlug, currentRunUserId } from '../
 import { DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
 import { searchSessions, sessionToolScope, type SessionHit } from './sessionSearch.js';
 import { isMemoryTombstoneActive, normalizeMemoryFact } from './memoryRepository.js';
-import { filterTaggedEntries, foldNote, lineTag, tagLegend, type DeviceTagContext } from '../contracts/deviceTags.js';
+import { filterTaggedEntries, foldNote, lineTag, rawTagLabel, tagLegend, type DeviceTagContext } from '../contracts/deviceTags.js';
 import { runTagContext } from './deviceTagContext.js';
 
 export interface AgentMemoryContextInput {
@@ -121,7 +121,8 @@ export async function buildAgentMemoryContext(input: AgentMemoryContextInput): P
   // 只拼本机适用的:不标的 + 标了本机名 / 本机系统的;别台的折成 §1 末尾一行(11-06)。§2 打分也只在这些里挑。
   const tagCtx = input.deviceTags ?? runTagContext(!!deps().profile?.capabilities?.hostExec);
   const byDevice = filterTaggedEntries(entries, (e) => String(e.content || ''), tagCtx);
-  const tagged = byDevice.skipped.length > 0 || byDevice.kept.some((e) => lineTag(String(e.content || ''), tagCtx));
+  // 不在任何一台电脑上(云端)认不得设备名:行首有方括号就把说明带上,让模型自己判断哪些只在某台成立
+  const tagged = byDevice.skipped.length > 0 || byDevice.kept.some((e) => lineTag(String(e.content || ''), tagCtx) || (!tagCtx.self && rawTagLabel(String(e.content || ''))));
   const fold = foldNote(byDevice.skipped);
   entries = byDevice.kept;
   const scanned: RecallEntry[] = [];

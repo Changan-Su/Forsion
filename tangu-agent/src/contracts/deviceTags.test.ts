@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   appliesToOf, classifyTag, filterTaggedEntries, filterTaggedText, foldNote, isReservedDeviceName, labelFor, lineTag,
-  renameDeviceTag, sameDeviceName, tagLegend, withTag, type DeviceTagContext,
+  rawTagLabel, renameDeviceTag, sameDeviceName, tagLegend, withTag, type DeviceTagContext,
 } from './deviceTags.js';
 
 const mac: DeviceTagContext = { self: 'MacBook Pro', os: 'macOS', others: ['Windows desktop'] };
@@ -25,6 +25,15 @@ describe('device tags: what counts as a tag', () => {
     expect(lineTag('[Windows]: https://example.com', mac)).toBeNull();
     expect(lineTag('- [ ] todo', mac)).toBeNull();
     expect(lineTag('[Windows]', mac)).toBeNull();
+  });
+  it('object prototype keys are not system names', () => {
+    for (const k of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(classifyTag(k, mac)).toBeNull();
+      expect(isReservedDeviceName(k)).toBe(false);
+    }
+    expect(filterTaggedText('- [constructor] stays', mac).text).toBe('- [constructor] stays');
+    expect(rawTagLabel('- [Note] x')).toBe('Note');
+    expect(rawTagLabel('no tag')).toBeNull();
   });
   it('reserved names and name equality', () => {
     expect(isReservedDeviceName(' Linux ')).toBe(true);
@@ -88,6 +97,10 @@ describe('device tags: reading (only what applies here; the rest folds into one 
     expect(f.skipped).toEqual([{ label: 'Windows', kind: 'os' }, { label: 'Windows', kind: 'os' }]);
     expect(foldNote(f.skipped, 'part')).toBe('(2 more parts apply only to other computers: 2 on Windows)');
     expect(filterTaggedText(soul, win).text).toContain('Use the copy in D:\\solve.');
+  });
+  it('free text: an indented heading still drops its section; an item keeps its paragraphs after a blank line', () => {
+    const text = ['intro', '  ## [Windows] Setup', 'windows body', '## Next', '- [Windows] item', '', '  more about the item', '', '- kept', 'end'].join('\n');
+    expect(filterTaggedText(text, mac).text).toBe(['intro', '## Next', '- kept', 'end'].join('\n'));
   });
   it('legend names this computer, or says the run is on none of them', () => {
     expect(tagLegend(mac)).toContain('this computer is "MacBook Pro" (macOS)');

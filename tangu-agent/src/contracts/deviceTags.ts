@@ -33,7 +33,8 @@ export const APPLIES_TO: readonly AppliesTo[] = ['all', 'this-computer', 'this-o
 export function osOfPlatform(platform: string | null | undefined): DeviceOs | null {
   return platform === 'darwin' ? 'macOS' : platform === 'win32' ? 'Windows' : platform === 'linux' ? 'Linux' : null;
 }
-const OS_KEYS: Record<string, DeviceOs> = { macos: 'macOS', windows: 'Windows', linux: 'Linux' };
+// Map,不用普通对象:`[constructor] …` 这类原型上的键不能被认成系统标签(Codex 评审 11-06)
+const OS_KEYS: ReadonlyMap<string, DeviceOs> = new Map([['macos', 'macOS'], ['windows', 'Windows'], ['linux', 'Linux']]);
 
 /** 名字比较口径:去头尾空白、连续空白当一个、不分大小写(同一账号里不许两台同名也按这个判)。 */
 export function deviceNameKey(name: string): string {
@@ -41,7 +42,7 @@ export function deviceNameKey(name: string): string {
 }
 export function sameDeviceName(a: string, b: string): boolean { return !!deviceNameKey(a) && deviceNameKey(a) === deviceNameKey(b); }
 /** 设备名不能和系统名撞(`[Windows]` 只能是系统)。 */
-export function isReservedDeviceName(name: string): boolean { return deviceNameKey(name) in OS_KEYS; }
+export function isReservedDeviceName(name: string): boolean { return OS_KEYS.has(deviceNameKey(name)); }
 /** 能当标签的名字:非空、不超 64、不含控制字符和方括号(方括号会把标签截断)。 */
 export function validTagName(name: string): boolean {
   const n = String(name ?? '').trim();
@@ -51,7 +52,7 @@ export function validTagName(name: string): boolean {
 export function classifyTag(label: string, ctx: DeviceTagContext): DeviceTag | null {
   const key = deviceNameKey(label);
   if (!key) return null;
-  const os = OS_KEYS[key];
+  const os = OS_KEYS.get(key);
   if (os) return { kind: 'os', label: label.trim(), os };
   if (ctx.self && deviceNameKey(ctx.self) === key) return { kind: 'device', label: label.trim(), self: true };
   if (ctx.others.some((o) => deviceNameKey(o) === key)) return { kind: 'device', label: label.trim(), self: false };
@@ -82,6 +83,8 @@ export function withTag(fact: string, label: string | null, ctx: DeviceTagContex
 }
 /** 一句话行首认得的标签原文(没有 → null)。 */
 export function tagOf(line: string, ctx: DeviceTagContext): string | null { return lineTag(line, ctx)?.tag.label ?? null; }
+/** 行首方括号的原文,认不认得都算(`[Note] x` → 'Note')。不知道设备名的地方(云端)拿它保守处理:不跨前缀合并、提示模型。 */
+export function rawTagLabel(line: string): string | null { const m = TAG_LINE.exec(String(line ?? '')); return m ? m[2].trim() : null; }
 /** 适用范围 → 写进内容的标签。本机名 / 系统未知(云端)时返回 null:写不了带本机条件的内容。 */
 export function labelFor(appliesTo: AppliesTo, ctx: DeviceTagContext): string | null {
   if (appliesTo === 'this-computer') return ctx.self && validTagName(ctx.self) ? ctx.self.trim() : null;
@@ -126,13 +129,14 @@ export function filterTaggedText(text: string, ctx: DeviceTagContext): { text: s
   for (const line of lines) {
     const f = FENCE.exec(line);
     if (fence) { if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null; if (!dropHeading && dropIndent < 0) out.push(line); continue; }
-    const heading = /^(#{1,6})\s/.exec(line);
+    const heading = /^ {0,3}(#{1,6})\s/.exec(line); // 前面最多三个空格仍是标题(和 lineTag 认法一致,Codex 评审 11-06)
     if (dropHeading) {
       if (!heading || heading[1].length > dropHeading) { if (f) fence = f[1]; continue; }
       dropHeading = 0;
     }
     if (dropIndent >= 0) {
-      if (line.trim() && indentOf(line) > dropIndent) { if (f) fence = f[1]; continue; }
+      // 空行不结束:列表项空一行后缩进更深的段落仍属于它;下一个缩进不更深的非空行才结束
+      if (!line.trim() || indentOf(line) > dropIndent) { if (f) fence = f[1]; continue; }
       dropIndent = -1;
     }
     if (f) { fence = f[1]; out.push(line); continue; }
@@ -167,7 +171,7 @@ export function foldNote(skipped: readonly SkippedTag[], noun: 'entry' | 'part' 
 
 /** 一句话说明标签怎么读(有标了的内容进提示词时放在那段前面一次;英文)。 */
 export function tagLegend(ctx: DeviceTagContext): string {
-  if (!ctx.self) return 'Lines starting with [name] apply only to that computer or operating system; this run is not on any of the user’s computers.';
+  if (!ctx.self) return 'Lines starting with a computer or operating-system name in brackets (like [MacBook Pro] or [Windows]) apply only to that computer or system; this run is not on any of the user’s computers.';
   return `Lines starting with [name] apply only to that computer or operating system; this computer is ${JSON.stringify(ctx.self)}${ctx.os ? ` (${ctx.os})` : ''}.`;
 }
 

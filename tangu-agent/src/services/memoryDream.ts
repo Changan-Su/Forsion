@@ -14,7 +14,7 @@ import { getAgent, resolveMemorySlug } from '../agents/agentRegistry.js';
 import type { ThinkingLevel } from '../core/types.js';
 import { thinkingHeadroom } from '../llm/openaiCompat.js';
 import { mutatePortrait } from '../agents/humanPortrait.js';
-import { deviceNameKey, tagOf, withTag, type DeviceTagContext } from '../contracts/deviceTags.js';
+import { deviceNameKey, rawTagLabel, tagOf, withTag, type DeviceTagContext } from '../contracts/deviceTags.js';
 import { NO_DEVICE, runTagContext } from './deviceTagContext.js';
 
 export interface MemoryDreamConfig { enabled: boolean; modelId: string; timeoutMs: number; maxOutputTokens: number; intervalHours: number }
@@ -102,11 +102,13 @@ export function validateDreamProposal(raw: unknown, sources: Source[], gate: Dre
     if (evidence.some((s) => s.kind === 'candidate' && !s.evidence)) throw new Error('Candidate has no verifiable source conversation');
     // 适用范围(11-06,contracts/deviceTags.ts):行首 `[设备名]` / `[系统]` 是事实的一部分。标签不同的不许合成一条;
     // 合出来的那句标签以来源为准(模型漏了 / 多了 / 写错了就按来源改回来),不信模型自己写的。
+    // 不知道设备名(云端 / 没登记过):行首方括号一律当标签,宁可不合也不把别台的事实合成所有设备都读的一条(Codex 评审 11-06)
     const tagCtx = gate.tags ?? NO_DEVICE;
-    const labels = new Map(evidence.map((s) => { const l = tagOf(s.fact, tagCtx); return [l === null ? '' : deviceNameKey(l), l] as const; }));
+    const labelOf = (fact: string) => tagOf(fact, tagCtx) ?? (tagCtx.self ? null : rawTagLabel(fact));
+    const labels = new Map(evidence.map((s) => { const l = labelOf(s.fact); return [l === null ? '' : deviceNameKey(l), l] as const; }));
     if (labels.size > 1) throw new Error('Memory proposal merges facts that hold on different devices');
     const label = [...labels.values()][0] ?? null;
-    if ((tagOf(group.fact, tagCtx) ?? '') !== (label ?? '')) group.fact = withTag(group.fact, label, tagCtx);
+    if (deviceNameKey(labelOf(group.fact) ?? '') !== deviceNameKey(label ?? '')) group.fact = withTag(group.fact, label, tagCtx);
     if (label) delete group.to; // 只在某台 / 某个系统成立的,不进所有 Agent、所有设备都读的画像
     // 去画像的门在代码里核:含已有记忆条目、含通道候选、这一轮写不了画像 → 去掉 to,照旧进记忆(不丢、不整轮失败)
     if (group.to !== 'person' || !gate.portrait || evidence.some((s) => s.kind !== 'candidate' || gate.noPortrait?.has(s.id))) delete group.to;

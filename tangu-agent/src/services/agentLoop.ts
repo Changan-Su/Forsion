@@ -93,7 +93,7 @@ import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
-import { filterTaggedEntries, foldNote } from '../contracts/deviceTags.js';
+import { filterTaggedEntries, filterTaggedText, foldNote } from '../contracts/deviceTags.js';
 import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 import { buildProjectMemoryContext, resolveProjectMemory } from './projectMemory.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
@@ -1533,7 +1533,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 本机引擎 = 这台电脑;云端 run 不在任何一台电脑上,标了的一律折起来。每个 run 现读(同步页上改了名,下一轮就对得上)。
     const tagCtx = runTagContext(!!profile.capabilities.hostExec);
     const harnessTagged = filterTaggedEntries(notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [], (e) => e.title, tagCtx);
-    const harnessEntries = harnessTagged.kept; // 别台的装备条目也不收起本机的工具
+    // 标题没标、正文里有标了别台的行:正文也按本机挑(Codex 评审 11-06),折掉的算进同一行
+    const harnessEntries = harnessTagged.kept.map((e) => { const b = filterTaggedText(e.body, tagCtx); harnessTagged.skipped.push(...b.skipped); return b.skipped.length ? { ...e, body: b.text } : e; }); // 别台的装备条目也不收起本机的工具
     const shelved = shelvedOf(harnessEntries);
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
     const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig, shelved.skills);
