@@ -96,10 +96,14 @@ export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { bounda
       const v = clampMenu(x - left, y - top, wV, hV, vw, vh, { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, center, alignEnd, margin, boundLeft: boundLeft === undefined ? undefined : boundLeft - left, boundRight: boundRight === undefined ? undefined : boundRight - left })
       // 比视口还宽(窄屏 × 固定宽度浮层):夹取只能贴左边、右边照样被裁 → 给个局部 px 的上限。
       const maxWidth = boundary || el.offsetWidth * z > availableWidth ? availableWidth / z : undefined
-      setPos((prev) => {
-        const next = { left: (v.left + left) / z, top: (v.top + top) / z, maxWidth, maxHeight }
-        return prev.left === next.left && prev.top === next.top && prev.maxWidth === next.maxWidth && prev.maxHeight === next.maxHeight ? prev : next
-      })
+      const next = { left: (v.left + left) / z, top: (v.top + top) / z, maxWidth, maxHeight }
+      // 同步写进 DOM:setPos 要等下一次渲染才落到元素上,而父组件的 layout effect 在这之前跑(子先父后)——
+      // 量浮层矩形的调用方(账号卡的液滴从头像流出,DESIGN §3)会量到没夹过的初始位置。下一次渲染写的是同值。
+      el.style.left = `${next.left}px`
+      el.style.top = `${next.top}px`
+      el.style.maxWidth = maxWidth === undefined ? '' : `${maxWidth}px` // 清空那条也要同步写:同一批更新里先有后无,React 前后都是 undefined 不会替你清(Codex 评审 P2)
+      el.style.maxHeight = maxHeight === undefined ? '' : `${maxHeight}px`
+      setPos((prev) => (prev.left === next.left && prev.top === next.top && prev.maxWidth === next.maxWidth && prev.maxHeight === next.maxHeight ? prev : next))
     }
     apply()
     window.addEventListener('resize', apply) // 开着菜单缩窗口时重夹,防跑出屏
