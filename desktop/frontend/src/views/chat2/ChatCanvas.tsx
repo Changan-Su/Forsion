@@ -46,6 +46,7 @@ import { splitLeadingQuotes } from './quotes'
 import { buildTurnTree, readSteps, type KidSpec, type TurnTree } from './canvasTree'
 import { ContextMenu, type CtxItem, type CtxMenu } from '../../components/RightPanel'
 import { SELBAR_VIEWPORT_MOVED } from '../../components/selectionBar/ViewSelectionBar'
+import { reducedMotion } from '@lcl/engine/spring'
 
 registerMessages({
   'chatcanvas.seg.aria': { zh: '对话的看法', en: 'Chat layout' },
@@ -275,7 +276,7 @@ function answerLead(c: { answers: UiMessage[]; user?: UiMessage }): string {
   return [...s].length > 16 ? `${[...s].slice(0, 16).join('')}…` : s
 }
 // 卡里:「从这里分出」不画在消息里(会被折起的正文裁掉),画在卡底,分支不列(已经是卡);阅读栏:照常画在消息里,分支不列
-const reduceMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+const reduceMotion = (): boolean => reducedMotion()
 /** 「跳到某处」那条曲线:快出、落点带一点点过冲(约 1.5%),同 Amadeus 画布聚焦 */
 const settleCurve = (t: number): number => { const u = t - 1; return 1 + 1.5 * u ** 3 + 0.5 * u ** 2 }
 

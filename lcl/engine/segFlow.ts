@@ -39,12 +39,15 @@ function splitAlpha(c: string): { rgb: string; a: number } {
   return { rgb: `rgb(${p[0]}, ${p[1]}, ${p[2]})`, a: p.length > 3 ? p[3] : 1 }
 }
 
-const flows = new WeakMap<HTMLElement, () => void>()
 type Rect = { x: number; y: number; w: number; h: number }
+/** 正在流的那一次:stop = 收掉融球层、交还滑块;where = 头此刻在哪(相对 host)。 */
+const flows = new WeakMap<HTMLElement, { stop: () => void; where: () => Rect }>()
 
-/** 让 thumb 从 from 流到 to(两者是相对 host 的盒子,单位 = host 的 CSS px)。thumb 此刻应已在 to。 */
+/** 让 thumb 从 from 流到 to(两者是相对 host 的盒子,单位 = host 的 CSS px)。thumb 此刻应已在 to。
+ *  上一次还没流完(连点):从头此刻的位置接着流,不跳回上一个目标格。 */
 export function flowThumb(host: HTMLElement, thumb: HTMLElement, from: Rect, to: Rect, opt: { kind?: 'seg' | 'knob'; duration?: number; fromColor?: string } = {}): void {
-  flows.get(host)?.()
+  const prior = flows.get(host)
+  if (prior) { from = prior.where(); prior.stop() }
   if (reducedMotion() || typeof thumb.animate !== 'function') return
   const kind = opt.kind ?? 'seg'
   const filter = ensureFilter(kind)
@@ -91,9 +94,12 @@ export function flowThumb(host: HTMLElement, thumb: HTMLElement, from: Rect, to:
   const vis = thumb.style.visibility
   thumb.style.visibility = 'hidden'
   const hand = layer.animate([{ opacity: to0.a }, { opacity: to0.a }], { duration: D * 0.9 })
-  const done = (): void => { anims.forEach((a) => a.cancel()); hand.cancel(); layer.remove(); thumb.style.visibility = vis; if (flows.get(host) === done) flows.delete(host) }
-  flows.set(host, done)
-  hand.finished.then(done, () => {})
+  const flow = {
+    stop: (): void => { anims.forEach((a) => a.cancel()); hand.cancel(); layer.remove(); thumb.style.visibility = vis; if (flows.get(host) === flow) flows.delete(host) },
+    where: (): Rect => boxIn(host, head),
+  }
+  flows.set(host, flow)
+  hand.finished.then(flow.stop, () => {})
 }
 
 /** 相对 host 的盒子(host 的 CSS px,扣掉缩放)。 */

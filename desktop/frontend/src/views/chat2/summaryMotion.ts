@@ -7,6 +7,7 @@
  *  DESIGN §3 规矩 6:栈 data-still / data-moved(刚挂上、刚换会话、刚被 dockview 搬家)时不播;减少动态效果时不播。
  *  Agent Desk 卡有自己的进出场,插件卡正文是插件自己的 DOM,都不归这里管。 */
 import { LAND_MS } from '@lcl/engine'
+import { reducedMotion } from '@lcl/engine/spring'
 
 /** 会长出 / 缩回的行:卡片正文(和子会话状态块)的直接子元素里认这几种。进度卡的「正在 xx」「已运行 m:ss」「正在编辑」
  *  也算:它们每次工具调用都出现 / 消失一次,不播的话下面每张卡都跟着一下子挪一行(跳变探针抓到过)。换字不重挂,不会反复播。 */
@@ -23,7 +24,7 @@ const isRowHost = (n: Node): n is HTMLElement =>
 /** 这一刻该不该播。 */
 export function quiet(stack: HTMLElement): boolean {
   return stack.hasAttribute('data-still') || stack.hasAttribute('data-moved') || stack.offsetParent === null
-    || window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || reducedMotion()
 }
 
 /** 折叠那一档(--collapse-duration × --collapse-ease)直接从 :root 读:Tangu UI 不 import 宿主的 theme/motionTokens(check:tangu-boundary)。 */

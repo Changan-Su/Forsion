@@ -46,6 +46,7 @@ export function fadeScaleOpen(source: HTMLElement, panel: HTMLElement): Droplet 
   const enter = panel.animate([{ opacity: 0, scale: '0.985' }, { opacity: 1, scale: '1' }],
     { duration: ms('--menu-enter-duration', 180), easing: curve('--menu-enter-ease', 'cubic-bezier(0.2, 0, 0.2, 1)') })
   let closing: Promise<void> | null = null
+  let dead = false // cancel 之后旧的收尾不再碰面板(马上重开时面板已归新的那一次)
   return {
     retract() {
       if (closing) return closing
@@ -53,10 +54,10 @@ export function fadeScaleOpen(source: HTMLElement, panel: HTMLElement): Droplet 
       // 不用 fill: forwards(理由同 droplet.ts 的倒放):收完由这里把面板藏起来
       const exit = panel.animate([{ opacity: 1, scale: '1' }, { opacity: 0, scale: '0.99' }],
         { duration: ms('--menu-exit-duration', 80), easing: curve('--ease-exit', 'cubic-bezier(0.4, 0, 1, 1)') })
-      closing = exit.finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined).finally(() => { panel.style.transformOrigin = origin })
+      closing = exit.finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined).finally(() => { if (!dead) panel.style.transformOrigin = origin })
       return closing
     },
-    cancel() { panel.getAnimations().forEach((a) => a.cancel()); panel.style.visibility = ''; panel.style.transformOrigin = origin },
+    cancel() { dead = true; panel.getAnimations().forEach((a) => a.cancel()); panel.style.visibility = ''; panel.style.transformOrigin = origin },
   }
 }
 
@@ -152,7 +153,7 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement): Droplet {
   const shows = kids().map((k) => k.animate([{ opacity: 0 }, { opacity: 1 }], { delay: D * 0.3, duration: D * 0.3, easing: surface, fill: 'backwards' }))
   // 形状长满 → 真面板接手:去掉 pouring、撤掉裁切(fill 留着会把阴影也裁掉)、底层藏起来留给倒放
   grow.finished.then(() => {
-    if (closing) return
+    if (closing || dead) return
     panel.classList.remove(POURING)
     clip?.cancel()
     clip = null
@@ -160,6 +161,8 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement): Droplet {
   }, () => {})
 
   let closing: Promise<void> | null = null
+  // cancel 之后旧的收尾不再碰面板:收到一半又重开时,新的一次已经给面板挂上 pouring,旧 promise 的 finally 晚一拍才跑
+  let dead = false
   return {
     retract() {
       if (closing) return closing
@@ -175,10 +178,11 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement): Droplet {
       kids().forEach((k) => k.animate([{ opacity: 1 }, { opacity: 0, offset: 0.3 }, { opacity: 0 }], { duration: D * 0.7 }))
       const rate = -1 / 0.7
       for (const a of [grow, clip]) { a.updatePlaybackRate(rate); a.play() }
-      closing = grow.finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined).finally(() => { layer.remove(); clip?.cancel(); panel.classList.remove(POURING) })
+      closing = grow.finished.then(() => { if (!dead) panel.style.visibility = 'hidden' }, () => undefined).finally(() => { layer.remove(); if (dead) return; clip?.cancel(); panel.classList.remove(POURING) })
       return closing
     },
     cancel() {
+      dead = true
       for (const a of [grow, ...shows]) a.cancel()
       clip?.cancel()
       panel.getAnimations({ subtree: true }).forEach((a) => a.cancel())

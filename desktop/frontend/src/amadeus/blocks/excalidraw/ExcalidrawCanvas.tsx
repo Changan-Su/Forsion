@@ -36,6 +36,7 @@ import {
   type BoardSettings,
   type Bounds,
 } from '@amadeus-shared/excalidraw/board'
+import { reducedMotion } from '@lcl/engine/spring'
 
 registerMessages({
   'excalicanvas.addPage': { zh: '＋ 新建页面', en: '+ New page' },
@@ -289,7 +290,7 @@ export default function ExcalidrawCanvas({
   const [fullHint, setFullHint] = useState<{ x: number; y: number } | null>(null)
   // 「减少动态效果」下全局把动画压成 0.001ms,onAnimationEnd 会立刻卸掉胶囊 → 那档改用计时器,CSS 那边去掉动画
   useEffect(() => {
-    if (!fullHint || !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    if (!fullHint || !reducedMotion()) return
     const id = window.setTimeout(() => setFullHint(null), 3000)
     return () => window.clearTimeout(id)
   }, [fullHint])

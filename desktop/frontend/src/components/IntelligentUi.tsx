@@ -15,6 +15,7 @@ import { CodeBlock, RunContext } from './Markdown'
 import { deriveChecklist, emptyUIState, formatUIQuantity, inputValues, readUIState, stateVars, subscribeUIState, uiExpansionKey, uiStateKey, visible, writeUIState, type UIUserState } from './intelligentUiState'
 import './IntelligentUi.css'
 import { IntelligentAppCard } from './IntelligentAppCard'
+import { reducedMotion } from '@lcl/engine/spring'
 
 registerMessages({
   'iui.loading': { zh: '正在组织内容…', en: 'Composing…' },
@@ -141,7 +142,7 @@ const segmented = (input: ChoiceInput): boolean => input.options.length <= 4 && 
  * hence the CSS zoom divisor (the interface zoom setting). */
 const FLIP = 'iui-flip'
 function reflow(root: HTMLElement | null, apply: () => void): void {
-  if (!root || typeof root.animate !== 'function' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return apply()
+  if (!root || typeof root.animate !== 'function' || reducedMotion()) return apply()
   const parts = (): HTMLElement[] => [...root.querySelectorAll<HTMLElement>('[data-flip]')]
   // Where things are on screen now: mid-glide positions included, so a second click continues from there.
   const before = new Map(parts().map(el => [el.dataset.flip, el.getBoundingClientRect()]))

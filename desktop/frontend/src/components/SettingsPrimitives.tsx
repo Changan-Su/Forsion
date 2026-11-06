@@ -1,5 +1,5 @@
 import { useRef, type ButtonHTMLAttributes, type ReactNode } from 'react'
-import { useKnobFlow } from '@lcl/engine'
+import { useKnobFlow } from '@lcl/engine/segFlow'
 
 export function SettingsPanel(props: {
   icon?: ReactNode

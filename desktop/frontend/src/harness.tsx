@@ -761,7 +761,8 @@ if (new URLSearchParams(location.search).has('dock')) {
   applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), mtDark ? 'dark' : 'light')
   void Promise.all([import('@lcl/engine'), import('./components/SettingsPrimitives'), import('./theme/motionTheme'), import('./components/MotionThemeSection')])
     .then(([lcl, { SettingsSwitch }, mt, { MotionThemeSection, MotionFadeRow }]) => {
-      ;(window as unknown as { __mt: unknown }).__mt = { setMotionTheme: mt.setMotionTheme, setFadeOnly: mt.setFadeOnly }
+      // openPanel:M5 在页内直接拿同一块面板「收到一半 cancel 再开」(台架那个按钮收完才卸载,造不出这一步)
+      ;(window as unknown as { __mt: unknown }).__mt = { setMotionTheme: mt.setMotionTheme, setFadeOnly: mt.setFadeOnly, openPanel: lcl.openPanel }
       function Seg(): React.ReactElement {
         const [v, setV] = useState('日')
         return <lcl.ViewModeSwitch testId="mt-seg" spec={{ value: v, onChange: setV, modes: ['日', '周', '月', '年'].map((l) => ({ value: l, label: l })) }} />

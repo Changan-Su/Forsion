@@ -11,7 +11,8 @@ import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type Mode
  */
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
-import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu, useKnobFlow } from '@lcl/engine'
+import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu } from '@lcl/engine'
+import { useKnobFlow } from '@lcl/engine/segFlow'
 import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'

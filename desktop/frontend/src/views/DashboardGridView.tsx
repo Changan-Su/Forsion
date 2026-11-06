@@ -27,7 +27,8 @@ import {
   type Announcements, type DragEndEvent, type DragMoveEvent, type DragStartEvent, type UniqueIdentifier,
 } from '@dnd-kit/core'
 import { SortableContext, useSortable, type SortingStrategy } from '@dnd-kit/sortable'
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
+import { useReducedMotionPref } from '../theme/motionTheme'
 import { useQuickFind } from '../quickFind'
 import { fileMatchViewType } from '../viewFileMatch'
 import { PageScopeCtx, setActivePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
@@ -300,7 +301,7 @@ function GridInner({ leaf }: ViewProps) {
   const activePage = usePageStore((s) => s.activePage)
   const fmExtra = usePageStore((s) => s.manifest?.fmExtra ?? '')
   const pinned = useAmadeusPrefs((s) => !!dashPath && s.pins.includes(dashPath))
-  const reduceMotion = useReducedMotion()
+  const reduceMotion = useReducedMotionPref()
 
   const [addMenu, setAddMenu] = useState(false)
   const [noteMenu, setNoteMenu] = useState<{ x: number; y: number } | null>(null)

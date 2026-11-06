@@ -20,6 +20,7 @@ import { useSpaceAppearance, receiveSpaceAppearance, setSpaceAppearance } from '
 import { resolveSpaceAppearance } from '../theme/spaceAppearance'
 import '../theme/calm' // 「呼吸感」三个外观开关:落 <html data-calm-*>,每个窗口加载一次(见该文件)
 import { suggestMotionTheme } from '../theme/motionTheme' // 动效主题:落 <html data-motion-theme>,每个窗口加载一次(见该文件)
+import { reducedMotion } from '@lcl/engine/spring'
 
 type Mode = 'light' | 'dark'
 type ModePref = 'light' | 'dark' | 'system'
@@ -43,7 +44,7 @@ function persistPref(pref: ModePref): void {
  */
 function withModeTransition(fn: () => void): Promise<void> {
   const doc = document as Document & { startViewTransition?: (cb: () => void) => { ready?: Promise<void> } | undefined }
-  const reduce = (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false } })()
+  const reduce = reducedMotion()
   if (typeof doc.startViewTransition === 'function' && !reduce) {
     return new Promise<void>((resolve, reject) => {
       const vt = doc.startViewTransition!(() => { try { fn(); resolve() } catch (e) { reject(e); throw e } })

@@ -1,3 +1,4 @@
+import { reducedMotion } from '@lcl/engine/spring'
 // 不引 store:AgentHarnessPanel 也在设置弹窗里用,拉进 appStore 会连带 pluginStore 的模块级副作用(mock 了 i18n 的测试直接挂)
 
 /** 一次性落到某几条记录的令牌(对话里的留痕 / 更新卡点「查看」):at 变了才跳。texts = 那几条的原文(活动流里整串截过 300 字,按包含比);
@@ -26,7 +27,7 @@ export function revealRecords(jump: RecordJump, rows: Iterable<HTMLElement>, fal
     while (sc && !(/(auto|scroll)/.test(getComputedStyle(sc).overflowY) && sc.scrollHeight > sc.clientHeight)) sc = sc.parentElement
     if (sc) {
       const top = sc.scrollTop + target.getBoundingClientRect().top - sc.getBoundingClientRect().top - Math.max(16, (sc.clientHeight - target.offsetHeight) / 2)
-      sc.scrollTo({ top: Math.max(0, top), behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' })
+      sc.scrollTo({ top: Math.max(0, top), behavior: reducedMotion() ? 'auto' : 'smooth' })
     }
     for (const el of hit) {
       el.removeAttribute('data-record-flash'); void el.offsetWidth // 连点两次「查看」也要重新亮一遍

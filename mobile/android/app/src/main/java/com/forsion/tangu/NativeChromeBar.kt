@@ -363,6 +363,8 @@ internal fun NativeSpaceBar(
     val look = remember(theme, state.frosted) { CapsuleLook(theme, state.frosted) }
     val cell = CellColors(Color(theme.accent), Color(theme.muted), Color(theme.warning), Color(theme.surface))
     val motion = motionOn(theme)
+    // the gesture below is started once (pointerInput(Unit)): it reads this, so Fade only turned on mid-session holds at once
+    val motionNow by rememberUpdatedState(motion)
     val keys = state.dock.map { cellKey(it) } + if (state.more.isNotEmpty()) listOf(ALL_CELL) else emptyList()
     // the gesture reads this one: restarting it for a page that changed underneath would drop a finger still on the dock
     val cells by rememberUpdatedState(keys)
@@ -375,7 +377,8 @@ internal fun NativeSpaceBar(
     val hover = drop.hover.takeIf { it in keys.indices }?.let { keys[it] }
     val target = keys.indexOf(selected.key)
     val grown = animateFloatAsState(if (drop.scrubbing && motion) DOCK_GROWN else 1f, tween(DOCK_MOTION_MS, easing = DOCK_EASE), label = "dockGrown")
-    LaunchedEffect(target, drop.width, keys.size, drop.scrubbing, drop.settling) { drop.follow(target, keys.size, dp, motion) }
+    // motion is a key: turning Fade only on during a flow restarts it, and without motion it settles in place
+    LaunchedEffect(target, drop.width, keys.size, drop.scrubbing, drop.settling, motion) { drop.follow(target, keys.size, dp, motion) }
     DisposableEffect(Unit) { onDispose { onPlate("dock", null) } }
     MaterialTheme(colorScheme = scheme) { Box(
         Modifier.fillMaxSize()
@@ -418,7 +421,7 @@ internal fun NativeSpaceBar(
                                         val moves = key != null && key != ALL_CELL && key != selected.key
                                         if (moves) { selected.pick(key!!); onSpace(key.removePrefix(SPACE_CELL), false) }
                                         // "all" only opens the sheet: the selection stays with what is selected
-                                        drop.release(scope, cells.indexOf(selected.key), motion)
+                                        drop.release(scope, cells.indexOf(selected.key), motionNow)
                                         if (key == ALL_CELL) onAll()
                                     }
                                     break
@@ -430,11 +433,11 @@ internal fun NativeSpaceBar(
                                 if (abs(moved.x) > slop) {
                                     change.consume()
                                     scrubbing = true
-                                    drop.begin(scope, x, cells.indexOf(selected.key), cells.size, dp, motion)
+                                    drop.begin(scope, x, cells.indexOf(selected.key), cells.size, dp, motionNow)
                                 }
                             }
                         } finally {
-                            if (scrubbing && !done) drop.release(scope, cells.indexOf(selected.key), motion)
+                            if (scrubbing && !done) drop.release(scope, cells.indexOf(selected.key), motionNow)
                         }
                     }
                 } else Modifier)

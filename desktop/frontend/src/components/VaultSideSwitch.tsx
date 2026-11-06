@@ -6,7 +6,8 @@
  * (mobile/src/UnitsSheet.tsx);那张弹层没上架(无 unitsList 桥)时才留原胶囊。样式在 styles/sidebar2.css。
  */
 import React, { useEffect, useRef, useState } from 'react'
-import { useSegDir, useSegFlow } from '@lcl/engine'
+import { useSegDir } from '@lcl/engine'
+import { useSegFlow } from '@lcl/engine/segFlow'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n } from '../i18n'
 import type { AmadeusSyncStatus } from '../types'

@@ -1,3 +1,4 @@
+import { reducedMotion as hostReducedMotion } from '@lcl/engine/spring'
 // 发送动效(用户 10-17 选 B,方案页 docs/ToBeImproved/发送动画方案_2026-10-17):
 // 刚发出的那条用户消息从输入框后面升到原位,上面的对话被一起托上去;输入框里的字上移淡出。
 // 只认「这次按发送的那段正文」:切会话、加载历史、别的设备同步来的消息都不动。
@@ -10,7 +11,7 @@ const TTL = 20_000 // 服务端受理之后消息才上屏;冷启动的引擎可
 
 let pending: { text: string; top: number; at: number } | null = null
 
-const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+const reducedMotion = (): boolean => hostReducedMotion()
 const zoomOf = (el: Element): number => (el as Element & { currentCSSZoom?: number }).currentCSSZoom || 1
 const canAnimate = (el: Element): boolean => typeof (el as HTMLElement).animate === 'function'
 

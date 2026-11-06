@@ -19,10 +19,12 @@
  *  the shell says so (the same event, `rise` 0) and what was riding comes back down from where it is.
  *
  *  A motion cut short by the next one (the keyboard reversed mid-way) starts the next from where the element is drawn.
- *  With animations turned off in the system (`prefers-reduced-motion`) nothing travels.
+ *  With animations turned off in the system (`prefers-reduced-motion`) or Fade only on, nothing travels.
  *
  *  Motion is `translate` through the Web Animations API: it runs on the compositor, composes with whatever `transform`
  *  the element has, and leaves no inline style behind. */
+import { reducedMotion } from '@lcl/engine/spring'
+
 export interface ImeRise { rise?: unknown; ms?: unknown; at?: unknown; ease?: unknown }
 
 /** Android's curve for a keyboard an app follows; used until the shell has reported the device's own. */
@@ -36,7 +38,7 @@ let last = { ms: 285, ease: EASE }
 let riding: { els: HTMLElement[]; anims: Animation[]; rise: number; timer: number } | null = null
 
 const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
-const still = (): boolean => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false } }
+const still = (): boolean => reducedMotion()
 /** How far above its layout place the element is drawn right now (its own px): a motion of ours still under way. */
 const lifted = (el: Element): number => -(parseFloat((getComputedStyle(el).translate || '').split(' ')[1]) || 0)
 

@@ -27,8 +27,8 @@ export function springAt(t: number, v0: number, { response, damping }: Spring): 
   return 1 + Math.exp(-damping * w * t) * (((v0 - damping * w) / wd) * Math.sin(wd * t) - Math.cos(wd * t))
 }
 
-/** The system's "remove animations" (Android: accessibility → remove animations). */
-/** 系统「减少动态效果」,或宿主的「只淡入淡出」(<html data-motion-fade="on">,动效主题那一节最后一行)。 */
+/** The system's "remove animations" (Android: accessibility → remove animations), or the host's Fade only
+ *  (<html data-motion-fade="on">, the last row of the Motion theme section). Desktop code asks this, not matchMedia. */
 export function reducedMotion(): boolean {
   try {
     if (typeof document !== 'undefined' && document.documentElement.dataset.motionFade === 'on') return true

@@ -1,6 +1,7 @@
 /** First-run decisions, one screen at a time. Advanced configuration stays in its owning space. */
 import React, { useEffect, useRef, useState } from 'react'
-import { MotionConfig, motion } from 'framer-motion'
+import { motion } from 'framer-motion'
+import { HostMotionConfig } from '../theme/motionTheme'
 import {
   ArrowRight, ArrowLeft, Bot, Check, ChevronRight, Cloud, Flag, KeyRound, Loader2, LogIn, ExternalLink,
   MonitorCog, FolderOpen, Sun, Moon, X, FileText, RefreshCw, Palette, ShieldCheck, Sparkles, Wrench, Globe2, Zap, BookOpen, CircleAlert, RotateCcw,
@@ -418,8 +419,8 @@ export const OnboardingWizard: React.FC<{
   return <div className="ob-shell ob-flow" data-step={step} data-dir={dir} data-mode={updateMode ? 'update' : 'full'}>
     <aside className="ob-rail">
       <div className="ob-brand"><BrandLogo size={30} /><strong>{PRODUCT_DISPLAY_NAME}</strong></div>
-      {/* reducedMotion="user":系统开了「减弱动态效果」时,当前项的底不滑、直接到位。 */}
-      <MotionConfig reducedMotion="user">
+      {/* 系统开了「减弱动态效果」或「只淡入淡出」时,当前项的底不滑、直接到位(宿主同一份配置,别写死 reducedMotion="user")。 */}
+      <HostMotionConfig>
         <nav className="ob-progress" aria-label={t('onboarding.progress.label')}>
           {/* 完整引导的欢迎页不占一格;更新后的短引导里它就是「更新内容」那一步。 */}
           {STEP_ORDER.filter((s) => updateMode || s !== 'welcome').map((s) => {
@@ -436,7 +437,7 @@ export const OnboardingWizard: React.FC<{
                 </div>
           })}
         </nav>
-      </MotionConfig>
+      </HostMotionConfig>
       <div className="ob-rail-foot"><LocaleToggle /><span>{version}</span></div>
     </aside>
     <main className="ob-stage">

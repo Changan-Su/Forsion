@@ -12,6 +12,9 @@
  *  M2 开关旋钮:Genesis / 拉伸 = 中途拉长(宽 > 静止 + 1.5px);平移 = 宽度不变;水滴 = 开关里有融球层、旋钮藏过
  *  M3 面板:Genesis / 水滴 = 液滴(lcl-droplet 层);拉伸 = lcl-stretch 层 + 远端先走(某帧高度已露出 ≥ 50%、宽度 ≤ 85%);
  *     平移 = 只有透明度 + 缩放动画,没有液滴 / 拉伸层
+ *  M4 水滴连点(0 → 3,流到一半再点 1):新的一次从融球头此刻的位置接着流(新尾巴离旧头 ≤ 3px),不跳回第 3 格;流完落在第 1 格、滑块露出来
+ *  M5 拉伸面板收到一半 cancel 再开(同一块面板,FloatingToc 收起中又点开就是这样):下一拍新的一次仍挂着 pouring、拉伸层还在
+ *     (旧 promise 的收尾晚一拍才跑,不能把新的一次的 pouring 摘掉)
  *  F 只淡入淡出(拉伸主题下打开):胶囊 / 旋钮点了下一帧就在终点、没有中间帧;面板只有透明度动画、没有液滴 / 拉伸层
  *  S 设置一节:四张卡;点「平移」卡 → <html data-motion-theme="glide">、那张卡 aria-checked;「只淡入淡出」开关写 data-motion-fade;
  *    系统减少动态效果时开关打开且灰掉
@@ -85,6 +88,52 @@ function assessSeg(s) {
     hiddenSeen: s.frames.some((f) => f.hidden), flowMax: Math.max(...s.frames.map((f) => f.flow)),
     lastHidden: last.hidden, lastFlow: last.flow,
   }
+}
+
+/** 页内(水滴主题):先回第 0 格,点第 3 格,流到 wait ms 时记融球头的位置,再点第 1 格,读新融球层的尾巴;等流完看落点。 */
+const RAPID = async ({ wait, duration }) => {
+  const pill = document.querySelector('[data-testid="mt-seg"] .lcl-vmode-pill')
+  const thumb = pill.querySelector('.lcl-vmode-thumb')
+  const btns = [...pill.querySelectorAll(':scope > button')]
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  btns[0].click(); await sleep(duration)
+  const pr = pill.getBoundingClientRect()
+  const cx = (el) => { const r = el.getBoundingClientRect(); return r.left + r.width / 2 - pr.left }
+  btns[3].click()
+  await sleep(wait)
+  const old = pill.querySelector('.lcl-flow')
+  const head = old?.children[1] // 顺序:尾、头、颈(segFlow.ts)
+  const headX = head ? cx(head) : null
+  btns[1].click()
+  await sleep(0) // React 晚一个任务才提交这次点击;读的必须是新的那层(旧层已撤)
+  const now = pill.querySelector('.lcl-flow')
+  const tail = now && now !== old ? now.children[0] : null // 尾巴只缩放(以中心),中心 = 这一次的起点
+  const tailX = tail ? cx(tail) : null
+  const cell = (pr.width - 4) / btns.length
+  await sleep(duration)
+  const tr = thumb.getBoundingClientRect()
+  return { headX, tailX, cell3X: 2 + 3.5 * cell, endL: tr.left - pr.left, want: 2 + cell, hidden: getComputedStyle(thumb).visibility === 'hidden', layers: pill.querySelectorAll('.lcl-flow').length }
+}
+
+/** 页内(拉伸主题):同一块面板开 → 收到一半 cancel → 马上再开;等一拍(旧 promise 的 finally 是微任务)看新的一次还挂着 pouring。 */
+const REOPEN = async ({ hold, mid }) => {
+  const btn = document.querySelector('[data-testid="mt-btn"]')
+  const panel = document.createElement('div')
+  panel.dataset.testid = 'mt-reopen'
+  Object.assign(panel.style, { position: 'fixed', left: `${btn.getBoundingClientRect().left}px`, top: `${btn.getBoundingClientRect().bottom + 6}px`, width: '220px', height: '140px', borderRadius: '12px', background: 'var(--bg-card)', zIndex: '5' })
+  panel.textContent = 'reopen'
+  document.body.appendChild(panel)
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+  const d1 = window.__mt.openPanel(btn, panel)
+  await sleep(hold)
+  void d1.retract()
+  await sleep(mid)
+  d1.cancel()
+  const d2 = window.__mt.openPanel(btn, panel)
+  await sleep(0); await sleep(0)
+  const r = { pouring: panel.classList.contains('lcl-droplet-pouring'), layer: document.querySelectorAll('.lcl-stretch').length }
+  d2.cancel(); panel.remove()
+  return { ...r, layersLeft: document.querySelectorAll('.lcl-stretch').length }
 }
 
 /** 页内:拨一下开关,逐帧记旋钮宽度、可见性、融球层块数。 */
@@ -186,6 +235,21 @@ async function main() {
     if (id === 'stretch') record('M3 stretch 面板:拉伸层 + 远端先走,没有液滴', pn.stretchLayer && pn.farLeads && !pn.droplet && pn.closed && !pn.layersLeft, pn)
     else if (id === 'glide') record('M3 glide 面板:只有透明度 + 缩放,没有液滴 / 拉伸层', !pn.droplet && !pn.stretchLayer && pn.props.includes('opacity') && pn.props.includes('scale') && !pn.props.includes('clipPath') && pn.closed, pn)
     else record(`M3 ${id} 面板:液滴流出,没有拉伸层`, pn.droplet && !pn.stretchLayer && pn.closed && !pn.layersLeft, pn)
+  }
+
+  // ── M4:水滴连点从当前位置接着流 ──
+  await setTheme(p, 'droplet')
+  {
+    const m = await p.evaluate(RAPID, { wait: 150, duration: 620 })
+    const near = m.headX != null && m.tailX != null && Math.abs(m.tailX - m.headX) <= 3
+    record('M4 droplet 连点:新的一次从融球头此刻的位置接着流,不跳回第 3 格;落点准、滑块露出来', near && Math.abs(m.tailX - m.cell3X) > 6 && Math.abs(m.endL - m.want) <= 0.5 && !m.hidden && m.layers === 0,
+      { ...m, headX: m.headX && r1(m.headX), tailX: m.tailX && r1(m.tailX), cell3X: r1(m.cell3X) })
+  }
+  // ── M5:拉伸面板收到一半 cancel 再开 ──
+  await setTheme(p, 'stretch')
+  {
+    const m = await p.evaluate(REOPEN, { hold: 420, mid: 90 })
+    record('M5 stretch 收到一半 cancel 再开:新的一次仍挂着 pouring、拉伸层在,收尾不留层', m.pouring && m.layer === 1 && m.layersLeft === 0, m)
   }
 
   // ── N1:拉伸主题下后沿延迟设 0 → 「后沿晚出发 + 中途拉长」必须判假 ──

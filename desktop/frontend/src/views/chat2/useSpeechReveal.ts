@@ -1,11 +1,12 @@
 import { useLayoutEffect, useState } from 'react'
 import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import { reducedMotion } from '@lcl/engine/spring'
 
 /** Presentation only: the complete remark is already persisted before this short reveal starts. */
 export function useSpeechReveal(message: UiMessage): UiMessage {
   const [frame, setFrame] = useState({ id: '', at: 0, count: Infinity })
   const at = message.revealAt || 0
-  const eligible = !!at && Date.now() - at < 2000 && !window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  const eligible = !!at && Date.now() - at < 2000 && !reducedMotion()
   const count = frame.id === message.id && frame.at === at ? frame.count : eligible ? 0 : Infinity
   useLayoutEffect(() => {
     if (!eligible || !message.content) return

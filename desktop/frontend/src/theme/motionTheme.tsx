@@ -88,6 +88,13 @@ export function useMotionPrefs(): { theme: MotionThemeId; fadeChosen: boolean; s
   return { theme: theme as MotionThemeId, fadeChosen: f === '1', systemReduce: sys === '1' }
 }
 
+/** 组件里问「要不要动」:系统减少动态效果或「只淡入淡出」任一开着就不动。别再直接读 matchMedia / framer 的 useReducedMotion
+ *  (那两个只认系统,「只淡入淡出」管不到);非 React 代码用 LCL 的 reducedMotion()。 */
+export function useReducedMotionPref(): boolean {
+  const { fadeChosen, systemReduce } = useMotionPrefs()
+  return fadeChosen || systemReduce
+}
+
 /** 根上的 framer 配置:「只淡入淡出」开着时 framer 也只留透明度(always);否则跟系统(user)。main.tsx / mobileEntry.tsx 共用。 */
 export function HostMotionConfig({ children }: { children: React.ReactNode }): React.ReactElement {
   const { fadeChosen } = useMotionPrefs()

@@ -12,6 +12,7 @@ import { zoomOf } from '@lcl/engine'
 import { moveOptionFocus, type SelectOption as ProfileSelectOption } from '../components/SelectField'
 import './agentProfileMessages'
 import './profileControls.css'
+import { reducedMotion } from '@lcl/engine/spring'
 
 /** 标签条(`.agent-section-nav`)选中底的滑动:选中底画在选中格自己的 ::before 上(标签按字数分宽),
  *  换选中时从上一格的矩形滑过来(FLIP,WAAPI 动伪元素)。第一次渲染、上一格已不在、减弱动效时直接切。返回值挂到 nav 的 ref 上。 */
@@ -22,7 +23,7 @@ export function useSectionNavSlide<T extends HTMLElement = HTMLElement>(selected
     const cur = ref.current?.querySelector<HTMLElement>(':scope > .selected') ?? null
     const old = prev.current
     prev.current = cur
-    if (!cur || !old || old === cur || !old.isConnected || matchMedia('(prefers-reduced-motion: reduce)').matches) return
+    if (!cur || !old || old === cur || !old.isConnected || reducedMotion()) return
     // 矩形是视口 px(含界面缩放),动画写的是元素自己的 CSS px:按累计 zoom 换算,否则 120% 下会冲过头再一跳
     const z = zoomOf(cur), from = old.getBoundingClientRect(), to = cur.getBoundingClientRect()
     if (!to.width) return

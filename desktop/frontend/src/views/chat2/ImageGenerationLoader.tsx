@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { registerMessages, useI18n } from '../../i18n'
+import { reducedMotion } from '@lcl/engine/spring'
 import {
   IMAGE_GENERATION_GRID,
   createSnakeGame,
@@ -147,8 +148,8 @@ export function ImageGenerationLoader() {
     let raf = 0
     let last = -Infinity
     const frame = (time: number): void => {
-      if (time - last >= 32) { drawAmbient(canvas, reduced.matches ? 0 : time); last = time }
-      if (!reduced.matches) raf = requestAnimationFrame(frame)
+      if (time - last >= 32) { drawAmbient(canvas, reducedMotion() ? 0 : time); last = time }
+      if (!reducedMotion()) raf = requestAnimationFrame(frame)
     }
     frame(0)
     const redraw = (): void => {
@@ -158,7 +159,7 @@ export function ImageGenerationLoader() {
     }
     reduced.addEventListener?.('change', redraw)
     const theme = new MutationObserver(redraw)
-    theme.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-mode', 'data-skin', 'data-bg', 'data-theme'] })
+    theme.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-motion-fade'] })
     return () => {
       cancelAnimationFrame(raf)
       reduced.removeEventListener?.('change', redraw)
