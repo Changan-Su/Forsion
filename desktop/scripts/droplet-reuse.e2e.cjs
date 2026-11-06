@@ -6,7 +6,8 @@
  *   · 反复开合不空屏(内容不透明度 1);倒放到一半又悬停 / 又点源按钮 = 重新流出来、停在打开(同悬浮目录)。
  *  --neg 负对照:倾倒期让面板自己上底色,上面那条必须报红(退出码非 0 = 负对照成立)。
  *  动效第三轮(11-06)加:开到 60 / 150ms 就收,内容只淡不先蹦出来(三处 + Ribbon「+N」);「+N」倒放到一半又点 = 重新流出来。
- *  这两条的负对照 = 拿没修的构建跑(倒放从 1 淡出、「+N」吞掉那一下点击),必须报红。
+ *  账号卡还没流完就变高又马上收:按新矩形重建要从同一个进度接着(不先跳成长满、内容不蹦到 1)。
+ *  这三条的负对照 = 拿没修的构建跑(倒放从 1 淡出、「+N」吞掉那一下点击、重建用 settled),必须报红。
  *  用法:npm run build && node scripts/droplet-reuse.e2e.cjs [--neg]   截图 → outputs/droplet-reuse/ */
 const fs = require('fs'), os = require('os'), path = require('path')
 const electron = require('./lib/launch-electron.cjs')
@@ -110,6 +111,35 @@ const earlyRetract = (page, sel, { open = null, close, t }) => page.evaluate(asy
   for (let i = 1; i < seq.length; i++) rise = Math.max(rise, seq[i] - seq[i - 1])
   return { rise: Math.round(rise * 100) / 100, seq: seq.slice(0, 6).map((x) => Math.round(x * 100) / 100), gone: !document.querySelector(sel) }
 }, { sel, open, close, t })
+/** 还没流完就变了尺寸、又马上收(账号卡刚开、账号列表就长出来,紧接着 Esc):retract 按新矩形重建那一份要从同一个进度接着,
+ *  不能先跳成长满(液体一下子变大)、内容推到 1 再淡(第三轮 Codex 评审 P2)。记收的那一刻前后的内容透明度与液体裁切面积。 */
+const growThenClose = (page, sel, { open, close, growAt = 60, closeAt = 110 }) => page.evaluate(async ({ sel, open, close, growAt, closeAt }) => {
+  const raf = () => new Promise(requestAnimationFrame)
+  const read = () => {
+    const p = document.querySelector(sel); if (!p) return null
+    const cs = getComputedStyle(p)
+    // inset() 按 margin 简写序列化:左右相等时只写三个值,所以按 1–4 个值展开,别只认四个值的写法
+    const iv = /inset\(([^)]*)\)/.exec(cs.clipPath)?.[1].split(' round ')[0].trim().split(/\s+/).map(parseFloat)
+    const m = iv && [null, iv[0], iv[1] ?? iv[0], iv[2] ?? iv[0], iv[3] ?? iv[1] ?? iv[0]], W = p.offsetWidth, H = p.offsetHeight
+    return { kids: cs.visibility === 'hidden' ? 0 : Math.min(1, ...[...p.children].map((k) => +getComputedStyle(k).opacity)), area: m ? Math.round(100 * Math.max(0, W - +m[2] - +m[4]) * Math.max(0, H - +m[1] - +m[3]) / (W * H)) : (cs.visibility === 'hidden' ? 0 : 100) }
+  }
+  document.querySelector(open)?.click()
+  const w0 = performance.now(); while (!document.querySelector(sel) && performance.now() - w0 < 1500) await raf()
+  const t0 = performance.now(); let grown = false
+  while (performance.now() - t0 < closeAt) { await raf(); if (!grown && performance.now() - t0 >= growAt) { const x = document.createElement('div'); x.style.height = '60px'; document.querySelector(sel).appendChild(x); grown = true } }
+  const before = read()
+  if (close.startsWith('key:')) window.dispatchEvent(new KeyboardEvent('keydown', { key: close.slice(4), bubbles: true })); else document.querySelector(close)?.click()
+  const seq = [before]
+  const t1 = performance.now()
+  while (performance.now() - t1 < 600) { await raf(); const r = read(); if (!r) break; seq.push(r) }
+  return { seq: seq.slice(0, 6), gone: !document.querySelector(sel) }
+}, { sel, open, close, growAt, closeAt })
+const checkGrowClose = (r, name) => {
+  const k = r.seq.map((f) => f.kids), a = r.seq.map((f) => f.area)
+  let rise = 0, jump = 0
+  for (let i = 1; i < k.length; i++) { rise = Math.max(rise, k[i] - k[i - 1]); jump = Math.max(jump, a[i] - a[i - 1]) }
+  check(`${name}: 没流完就变高又收,内容不先蹦出来、液体不先跳成长满`, rise <= 0.05 && jump <= 8 && r.gone, JSON.stringify(r))
+}
 const checkEarly = (r, name) => check(`${name}: 开到一半就收,内容只淡不先蹦出来(升 ≤ 0.05)`, r.rise <= 0.05 && r.gone, JSON.stringify(r))
 const NEG_CSS = `.lcl-droplet-pouring.account-pop, .lcl-droplet-pouring.mini-card-popover { background-color: #c33 !important }
   .rb-peek.lcl-droplet-pouring::before { opacity: 1 !important }`
@@ -226,6 +256,8 @@ async function main() {
       await waitNoDrop(win); await win.waitForTimeout(150)
       checkEarly(await earlyRetract(win, '.account-pop', { open: avatarBtn, close: avatarBtn, t }), `账号卡(${t}ms 收)`)
     }
+    await waitNoDrop(win); await win.waitForTimeout(150)
+    checkGrowClose(await growThenClose(win, '.account-pop', { open: avatarBtn, close: 'key:Escape' }), '账号卡')
     // Ribbon「+N」(底区):倒放到一半又点它 = 重新流出来、停在打开(11-06 第三轮,原来这一下被吞掉、照样收完);开到一半就收同上
     const more = '.rb-bottom .rb-more', moreFly = '.rb-more-fly'
     await waitNoDrop(win); await win.waitForTimeout(150)

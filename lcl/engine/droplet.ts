@@ -30,6 +30,8 @@ export interface DropletOptions {
   color?: string
   /** 跳过流出,直接是接手后的样子(只为之后能倒放缩回这个源)。 */
   settled?: boolean
+  /** 内部用(retract 按新矩形重建):从流出的这一毫秒接着,不放前面那段;已到 D 等同 settled。 */
+  at?: number
 }
 
 export interface Droplet {
@@ -212,6 +214,9 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
     // 同一帧里放到底再接手:页面不会画出中间态(finish 是同步的,接手也同步做,不等 finished 的微任务)
     for (const a of [swell, grow, handoff, ...shows]) a.finish()
     land()
+  } else if (opts.at !== undefined) {
+    // 重建:停在原来那一滴此刻的进度(液体大小、内容透明度都接得上),紧接着的 retract() 从这里倒放
+    for (const a of [swell, grow, handoff, ...shows, clip]) a.currentTime = Math.min(opts.at, D)
   }
 
   let rebuilt: Droplet | null = null
@@ -234,8 +239,11 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
       const off = (a: DOMRect, b: { left: number; top: number; width: number; height: number }): boolean =>
         Math.max(Math.abs(a.left - b.left), Math.abs(a.top - b.top), Math.abs(a.width - b.width), Math.abs(a.height - b.height)) > 1
       if (off(pn, pr) || off(sn, s)) {
+        // 还没流完就变了尺寸又收(账号卡刚开、账号列表就长出来,马上 Esc):从同一个进度重建,
+        // 不能用 settled —— 那会先跳成长满、内容推到 1 再倒放(第三轮 Codex 评审 P2)
+        const at = grow.playState === 'finished' ? undefined : Math.min(D, Number(grow.currentTime ?? D))
         cancel()
-        rebuilt = emergeDroplet(source, panel, { ...opts, settled: true })
+        rebuilt = emergeDroplet(source, panel, at === undefined ? { ...opts, settled: true } : { ...opts, settled: false, at })
         return (closing = rebuilt.retract())
       }
       // 内容此刻的透明度:开到一半就收时淡入还没走完(0.22D 之前还没开始),从这里接着淡,
