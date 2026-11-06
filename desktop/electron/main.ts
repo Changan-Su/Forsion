@@ -62,6 +62,7 @@ import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, MINI_ACCELERATOR, mergeTrayReports, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
+import { createContentFlush } from './contentSyncFlush'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
 import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
 import { APPROVAL_OPEN_CHANNEL } from '../shared/approvalOpen' // P1-K3
@@ -952,6 +953,8 @@ const backend = new BackendManager()
 let mainWindow: BrowserWindow | null = null
 // 托盘常驻:关窗默认只隐藏;仅托盘「退出」/before-quit 置 true 后才放行真正关闭。
 let isQuitting = false
+// 新同步的冲刷时机(electron/contentSyncFlush.ts):切走窗口 1 秒后 / 合盖前 / 退出前,让还在静默期里的改动立刻推
+const contentFlush = createContentFlush({ focused: () => !!BrowserWindow.getFocusedWindow(), log: (m) => console.warn(m) })
 // 退出前问一次(electron/quitGuard.ts):内置包的主进程半身经 CloudHost.addQuitGuard 登记「还有事没做完」
 const quitGuards = createQuitGuards({
   locale: mainLocale,
@@ -2873,6 +2876,8 @@ app.whenReady().then(async () => {
       },
       // ── 0.10 起:退出前问一次(蓬洲云还有文件在传)──
       addQuitGuard: (fn) => quitGuards.add(fn),
+      // ── 2.13.8 起(新同步频率 F2):失焦 / 合盖 / 退出时叫一次 ──
+      addFlushHook: (fn) => contentFlush.add(fn),
       // ── 2.13.8 起:帮助改进 Forsion 的宿主事件(崩溃 / 性能 / 功能使用),见 telemetryHost.ts ──
       telemetry: telemetry.seam,
       contentSync: {
@@ -2945,12 +2950,14 @@ app.whenReady().then(async () => {
       isQuitting = true
       // Stop before relaunch/quitAndInstall so before-quit cannot bypass either with app.exit.
       try {
+        await contentFlush.quit() // 还在静默期里的改动先推上去(最多等 5 秒);冲过了,紧跟着的 before-quit 不再冲
         await backend.stop()
         if (install) installUpdate()
         else { app.relaunch(); app.quit() }
       } catch (error) {
         isQuitting = false
         quitGuards.reset()
+        contentFlush.reset()
         throw error
       }
     },
@@ -3054,6 +3061,7 @@ app.whenReady().then(async () => {
   // Windows 在用户主动睡眠时终止电源请求,唤醒后手里的 id 已失效 → 重新申请(macOS 断言跨睡眠保留,重申无害)。
   // 设备互联通道:合盖期间的出站长连多半已是半开连接(不报错也收不到东西)→ 唤醒即重拨,别等 45s 读看门狗。
   // 睡眠会让「暂停到点」的计时器迟到 → keepAwake 重排;电脑历史采集器重新核一次状态。
+  powerMonitor.on('suspend', () => contentFlush.suspend()) // 合盖前把还在静默期里的改动推上去(来不及等,能推多少推多少)
   powerMonitor.on('resume', () => {
     keepAwake.rearm()
     computerHistory?.recheck()
@@ -4050,6 +4058,9 @@ app.whenReady().then(async () => {
   }
   app.on('browser-window-focus', syncAppRefAccelerator)
   app.on('browser-window-blur', () => setImmediate(syncAppRefAccelerator)) // 失焦那一刻 getFocusedWindow 可能还是它
+  // 新同步:切走 1 秒后才冲刷(1 秒内回到本应用任一窗口就不算)
+  app.on('browser-window-blur', () => contentFlush.blur())
+  app.on('browser-window-focus', () => contentFlush.focus())
   // 按下快捷键时那扇窗口的截图(附进输入框,同 ChatGPT)。只截这次运行里经手过的窗口(按快捷键 / 列候选时记下的);
   // macOS 由助手截(屏幕录制权限在它身上;没授权就没有图,绝不为此弹框),Windows 用系统自带的窗口截图。截不到 → null,只挂引用。
   ipcMain.handle('appRefs:snapshot', async (e, raw: unknown) => {
@@ -4897,11 +4908,15 @@ app.on('before-quit', (e) => {
   remoteSafety.dispose() // P1-K2:断活动流、注销急停热键、放掉强制防休眠(锁文件原样留着 = 锁跨重启)
   flushAllNoteEdits() // 活动日志:5 分钟合并窗口内未落盘的 note.edit 冲出去
   void computerHistory?.dispose() // 电脑历史:断订阅、缓冲同步落盘、state 改成非录制态(同步部分当场做完,不等返回的 promise)
+  // 新同步还在静默期里的改动先推上去(最多等 5 秒;没有要推的 = null,不等)。要在停后端之前:合并、通知引擎都要它在
+  const flushing = contentFlush.quit()
   // 优雅停后端(SIGTERM→3s→SIGKILL);停完再真正退出。
   const st = backend.getStatus().state
-  if (st === 'ready' || st === 'starting') {
+  if (flushing || st === 'ready' || st === 'starting') {
     e.preventDefault()
-    void backend.stop().finally(() => app.exit(0))
+    void (flushing ?? Promise.resolve())
+      .then(() => { const now = backend.getStatus().state; return now === 'ready' || now === 'starting' ? backend.stop() : undefined })
+      .finally(() => app.exit(0))
   }
 })
 
