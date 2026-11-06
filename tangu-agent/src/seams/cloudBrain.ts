@@ -320,7 +320,21 @@ export interface ImageGenRequest {
    *  'xhigh'/'max' 仅 gpt-image-2.5+ 有,档位直接换算成 output_tokens(实测 low 425 → xhigh 1650)。
    *  ⚠️不传就不发这个字段 —— 让上游用自己的缺省,别在这里替用户选贵档。 */
   quality?: string;
+  outputFormat?: 'png' | 'gif';
+  frameCount?: number;
+  frameDurationMs?: number;
+  complexity?: 'low' | 'medium' | 'high';
   signal?: AbortSignal;
+}
+
+/** Fields shared by the hosted JSON, direct JSON and direct multipart image requests. */
+export function imageOutputFields(req: ImageGenRequest) {
+  return {
+    ...(req.outputFormat ? { output_format: req.outputFormat } : {}),
+    ...(req.outputFormat === 'gif' && req.frameCount !== undefined ? { frame_count: req.frameCount } : {}),
+    ...(req.outputFormat === 'gif' && req.frameDurationMs !== undefined ? { frame_duration_ms: req.frameDurationMs } : {}),
+    ...(req.complexity ? { complexity: req.complexity } : {}),
+  };
 }
 export interface ImageGenResult {
   /** `mime` must describe the bytes: Seedream answers JPEG even when everything else is PNG, and edit_image
