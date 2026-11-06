@@ -155,7 +155,9 @@ describe('② 读', () => {
     const yes = await text(gui);
     expect(yes).toContain('"id": "open-settings"');
     expect(yes).toContain('open-settings "voice"'); // 落点 id 仍在段首,那句指的就是它
+    expect(await text({ ...gui, toolsStrict: true, toolsList: ['app_settings', 'run_ui_command'] })).toContain('"id": "open-settings"');
     for (const ctx of [
+      { ...gui, toolsStrict: true, toolsList: ['app_settings'] }, // 严格白名单里没有 run_ui_command(Codex 评审)
       base(), // TUI / 无客户端:没有 run_ui_command
       { ...base(), client: 'tui/1', uiCommands: OPEN }, // 非 GUI:run_ui_command 不注册
       { ...gui, uiCommands: [{ id: 'open-note', description: 'x' }] }, // GUI 但这端没有 open-settings

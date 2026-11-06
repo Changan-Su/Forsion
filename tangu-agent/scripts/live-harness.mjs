@@ -4353,13 +4353,14 @@ Then reply with only the command output.`,
   //    --settingsnav-no-voice = 负对照:清单里删掉 voice、渲染端把它当未知落点拒掉 → 开不到语音页,必须红。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
     const noVoice = argv.includes('--settingsnav-no-voice');
-    const TARGETS_ALL = 'Pages: general, forsion, model, connectors, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, connectors, mcp-json, mcp-server, reset-layout, clear-data, language.';
-    const TARGETS = noVoice ? TARGETS_ALL.replace(' voice,', '') : TARGETS_ALL;
+    const TARGETS = 'Pages: general, forsion, model, connectors, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, connectors, mcp-json, mcp-server, reset-layout, clear-data, language.';
+    // ⚠️ 上面那行字面量的变量名别改:desktop settingsTarget.test.ts 按 `const TARGETS = '…';` 逐字找它。
+    const SHOWN = noVoice ? TARGETS.replace(' voice,', '') : TARGETS;
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
-      params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
+      params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${SHOWN}` } } } };
     const VOICE = new Set(['voice', 'model/m-voice']);
-    const known = new Set(TARGETS.replace(/Pages: |Settings: /g, '').split(/[,.]\s*/).filter(Boolean));
+    const known = new Set(SHOWN.replace(/Pages: |Settings: /g, '').split(/[,.]\s*/).filter(Boolean));
     const asked = [], opened = [];
     const ev = await run(`live-settingsnav-${Date.now()}`, '怎么设置Forsion的语音模型', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
       ui: { locale: { value: 'zh', allowed: ['zh', 'en'] } }, uiCommands: [ENTRY],
