@@ -146,7 +146,9 @@
 @keyframes mb-view-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) {
   .mb-view, .mb-sheet, .mb-sheet-scrim { animation: none; }
-  .mb-drawer, .mb-main, .mb-push-dim { transition: none !important; }
+  @layer forsion-guard { /* 在护栏层里(styles/layers.css):否则 base.css 的「减少动态效果」(层内 !important)会压过这条「一下到位」 */
+    .mb-drawer, .mb-main, .mb-push-dim { transition: none !important; }
+  }
 }
 
 /* ── push 连贯式抽屉(2026-08-05 Obsidian 式改版):面板是 .mb-body 内的绝对定位列,

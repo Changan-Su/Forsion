@@ -2996,10 +2996,18 @@ export const SettingsModal: React.FC<{
                           />
                         ))}
                       </div>
-                      {/* 选中主题自曝的可调参数(有才渲染);key 带 lang 使换主题时重挂,存值副本跟着重取。 */}
+                      {/* 选中主题自曝的可调参数(有才渲染);key 带 lang 使换主题时重挂,存值副本跟着重取。
+                          磁盘主题里写了动效 token 的,收口时已删掉(theme/motionGuard.ts),这里说一句。 */}
                       {(() => {
                         const cur = listLanguages().find((th) => th.manifest.id === p.themeLang)
-                        return cur ? <ThemeSettingsPanel key={p.themeLang} entry={cur} /> : null
+                        if (!cur) return null
+                        const ignored = cur.motionIgnored?.length ?? 0
+                        return (
+                          <>
+                            <ThemeSettingsPanel key={p.themeLang} entry={cur} />
+                            {ignored > 0 && <div className="hint" data-theme-motion-ignored={ignored} style={{ marginTop: 6 }}>{t('settings.theme.motionIgnored', { n: ignored })}</div>}
+                          </>
+                        )
                       })()}
                       <div className="hint" style={{ marginTop: 6 }}>{t('settings.theme.dropHint')}</div>
                     </section>

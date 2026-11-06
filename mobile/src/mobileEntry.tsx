@@ -3,6 +3,7 @@
  * 复用 desktop 的主题/i18n/引擎装配(installEngine 注册视图/命令/Space —— inbox/amadeus 的 host gate
  * 在移动端 M0 自然不注册),但渲染 MobileRoot(单列 MobileShell)而非 desktop 的 Dockview Root。
  */
+import '@/styles/layers.css' // 层序:必须是第一份 CSS(forsion-guard 最先声明,见 styles/layers.css)
 import { createRoot } from 'react-dom/client'
 import { MotionConfig } from 'framer-motion'
 import { MobileRoot } from './MobileRoot'

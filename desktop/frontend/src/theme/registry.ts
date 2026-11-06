@@ -8,6 +8,7 @@
  * 旧单轴 preset(lovable/echo/qbird/dreamer/custom)首启自动迁移到 (lang, skin);背景色缺省承接 skin。
  */
 import type { ThemeManifest, ThemeEntry } from './manifest';
+import { guardThemeCss } from './motionGuard';
 
 export type { ThemeManifest, ThemeEntry, ThemePreview } from './manifest';
 
@@ -46,14 +47,16 @@ function buildRegistry(): Record<string, ThemeEntry> {
 /** 语言注册表:bundle 项(import.meta.glob,Genesis 与 Glass)+ 运行时合并进来的磁盘主题。**可变**。 */
 export const themeRegistry: Record<string, ThemeEntry> = buildRegistry();
 
-/** 合并磁盘主题(来自 window.tangu.listThemes,manifest 为不可信用户文件);bundle 项(有 cssUrl)不可被覆盖。 */
+/** 合并磁盘主题(来自 window.tangu.listThemes,manifest 为不可信用户文件);bundle 项(有 cssUrl)不可被覆盖。
+ *  CSS 先过动效收口(motionGuard.ts):动效 token 的声明删掉、主题自己的关键帧与层名加前缀。 */
 export function mergeDiskThemes(list: Array<{ id: string; manifest: Record<string, unknown>; css: string }>): void {
   for (const t of list) {
     const id = String((t.manifest?.id as string) || t.id || '').trim();
     if (!id) continue;
     const existing = themeRegistry[id];
     if (existing && existing.cssUrl) continue; // bundle 基底(lovable)不可被磁盘覆盖
-    themeRegistry[id] = { manifest: { ...t.manifest, id } as unknown as ThemeManifest, cssText: t.css };
+    const guarded = guardThemeCss(String(t.css ?? ''), id);
+    themeRegistry[id] = { manifest: { ...t.manifest, id } as unknown as ThemeManifest, cssText: guarded.css, motionIgnored: guarded.report.tokens };
   }
 }
 

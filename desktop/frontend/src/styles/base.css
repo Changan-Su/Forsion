@@ -1,3 +1,4 @@
+@layer forsion-guard; /* 层序兜底:入口已先 import styles/layers.css;单独引 base.css 的页面(分享页等)也由这里最先声明 */
 /**
  * Tangu Desktop 基础样式:token 契约缺省值(=素纸亮色,FOUC 兜底)+ 重置 + 组件语义类。
  * 组件只引用语义 CSS 变量,主题文件([data-theme=…])整块替换 token —— 即全部换肤面。
@@ -250,10 +251,13 @@
   }
 }
 
-/* 主题切换瞬间抑制全树过渡(loader.ts 挂/摘) */
-.theme-no-transition,
-.theme-no-transition * {
-  transition: none !important;
+/* 主题切换瞬间抑制全树过渡(loader.ts 挂/摘)。在护栏层里:否则下面「减少动态效果」那条(层内 !important)
+   会压过它,开着减少动态效果的人切主题时颜色要淡 150ms 而不是一下到位;同一层里按权重,(0,1,0) 照旧赢。 */
+@layer forsion-guard {
+  .theme-no-transition,
+  .theme-no-transition * {
+    transition: none !important;
+  }
 }
 
 /* 明暗切换的整页交叉淡入(themeStore.setMode 用 startViewTransition 触发) */
@@ -407,14 +411,18 @@ a:hover { color: var(--accent-ink); }
 
 /* 无障碍:尊重系统「减少动态效果」(DESIGN §3 规矩 8「留反馈,去点缀」,走查续八 8.3):关键帧一律压掉(转圈、骨架屏闪光照旧停);
    过渡只留颜色 / 底色 / 边色 / 透明度 / 阴影,时长 --duration-fast —— 位移、缩放、尺寸不动,拨开关底色仍渐变过去。
-   framer-motion 由 Root / MobileRoot 根上的 <MotionConfig reducedMotion="user"> 跟系统(只留透明度)。 */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-property: color, background-color, border-color, opacity, box-shadow !important;
-    transition-duration: var(--duration-fast) !important;
-    scroll-behavior: auto !important;
+   framer-motion 由 Root / MobileRoot 根上的 <MotionConfig reducedMotion="user"> 跟系统(只留透明度)。
+   放在 @layer forsion-guard(styles/layers.css 最先声明):层内 !important 压过任何不分层的 !important,
+   主题 / 插件写 `animation-duration: 2s !important` 也压不过它(动效收口,check:motiontheme 带负对照)。 */
+@layer forsion-guard {
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-property: color, background-color, border-color, opacity, box-shadow !important;
+      transition-duration: var(--duration-fast) !important;
+      scroll-behavior: auto !important;
+    }
   }
 }
 
