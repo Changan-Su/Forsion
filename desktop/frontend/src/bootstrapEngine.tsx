@@ -1,6 +1,5 @@
 import { registerAmadeusViews } from './features/amadeus'
 import { inboxAvailable } from './features/runtime'
-import { activateTangu } from '@tangu/ui/features/tangu'
 import { registerOperationsViews } from './features/operations'
 import { amadeusAvailable } from './features/runtime'
 import { registerMiniViews } from './mini/miniViews'
@@ -49,6 +48,7 @@ import { syncDevCommands } from './devCommands'
 import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
 import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './amadeus/plugins/pluginStore'
 import { moveModeLastOnce } from './amadeus/plugins/ribbonAction'
+import type { TanguHost } from './amadeus/plugins/tanguSeam'
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
@@ -93,7 +93,10 @@ const ThemeModeIcon = ((props: LucideProps) => {
 
 let installed = false
 
-export function installEngine(): void {
+/** activateTangu = Tangu 唯一的入口(features/tangu.tsx 导出的那个):静态 import 进来的(dev / 网页 / 手机),
+ *  或者打包版从界面包里取出来的(coreTangu/load.ts,界面热更新 4b)。这里不静态引它:一引,打包版的主产物里
+ *  就多了一份 Tangu 的模块状态,和运行时加载的那份各管各的。 */
+export function installEngine(activateTangu: (host: TanguHost) => void): void {
   if (installed) return
   installed = true
 

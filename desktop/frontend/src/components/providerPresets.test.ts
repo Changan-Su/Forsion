@@ -15,7 +15,7 @@ const SAMPLE: Record<string, string> = {
   gemini: 'gemini-3-pro',
 }
 // ponytail: 已知没有专属规则的网关 —— 只发 prefix 兜底;OpenCode 上的 Kimi K3 因此跑不到 moonshot-k3 那条(见日志)
-const NO_RULE = new Set(['xai', 'opencode'])
+const NO_RULE = new Set(['xai', 'opencode', 'opencode-go'])
 
 describe('provider presets', () => {
   it('every preset host hits an engine capability rule (or is a known exemption)', () => {
@@ -24,6 +24,13 @@ describe('provider presets', () => {
       const rule = resolveModelCapability({ baseUrl: p.baseUrl, protocol: p.protocol, modelId: SAMPLE[p.id] }).rule
       expect(rule, `${p.id} → ${rule}`).not.toMatch(/^default/)
     }
+  })
+
+  it('OpenCode Go is a key preset whose base serves both /models and /chat/completions', () => {
+    // /inference/go/openai/v1/models 是 404(11-05 探针):拉模型只拼 {baseUrl}/models,base 必须是 /inference/go/v1
+    expect(PROVIDER_PRESETS.find((p) => p.id === 'opencode-go')).toEqual({
+      id: 'opencode-go', name: 'OpenCode Go', baseUrl: 'https://opencode.ai/inference/go/v1', protocol: 'openai',
+    })
   })
 
   it('Anthropic uses the native Messages protocol', () => {

@@ -245,8 +245,8 @@ const Th = tableCell('th')
  * anchorPrefix:传入时给 h1/h2/h3 渲染稳定 id(`${anchorPrefix}-${第n个标题}`)+ data-toc-level,
  * 供右侧「目录」扫描跳转。不传则零影响(记忆/日志面板等普通渲染)。
  */
-export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean; /** 代码块细表头;缺省关,见 CodeHeadContext。 */ codeHead?: boolean }> = React.memo(
-  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false, codeHead = false }) => {
+export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean; /** 代码块细表头;缺省关,见 CodeHeadContext。 */ codeHead?: boolean; /** 段内单个换行就换行(Amadeus 笔记写法);缺省按标准 Markdown 当空格。 */ breaks?: boolean }> = React.memo(
+  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false, codeHead = false, breaks = false }) => {
     const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th, img: MdImage, div: MathBox }
     if (anchorPrefix) {
       const counter = { i: 0 }
@@ -268,7 +268,7 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
           <LinkCardContext.Provider value={linkCards}>
           <CodeHeadContext.Provider value={codeHead}>
             <ReactMarkdown
-              remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
+              remarkPlugins={breaks ? [remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki, remarkSoftBreaks] : [remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
               rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeMathBox]}
               components={components}
             >
@@ -281,6 +281,18 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
     )
   },
 )
+
+/** 段内单个换行就是换行(Amadeus 笔记的写法,见 blocks/markdown/softBreak.ts);标准 Markdown 把它当空格。只动文本节点,代码不受影响。 */
+function remarkSoftBreaks() {
+  const walk = (node: { type: string; value?: string; children?: any[] }): void => {
+    if (!node.children) return
+    node.children = node.children.flatMap((c) => {
+      if (c.type !== 'text' || !c.value.includes('\n')) { walk(c); return [c] }
+      return c.value.split(/\r?\n/).flatMap((value: string, i: number) => (i ? [{ type: 'break' }, { type: 'text', value }] : [{ type: 'text', value }]))
+    })
+  }
+  return walk
+}
 
 /** 代码块与 run 上下文也给 Intelligent UI 的 markdown 用(IntelligentUi.tsx RichText),免得那边再写一份。 */
 export { CodeBlock, RunContext }

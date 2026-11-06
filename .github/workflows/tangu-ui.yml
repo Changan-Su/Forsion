@@ -1,0 +1,40 @@
+name: tangu-ui
+
+# Tangu 界面半身(界面热更新第 4 步):打一遍 tangu-agent/ui/main.js,核对包里没混进宿主文件 / 第二份 React、
+# 共享模块表(frontend/src/coreTangu/sharedModules.generated.ts)没过期且不超出边界基线。
+# 规则见 desktop/scripts/build-tangu-ui.mjs 文件头;核对规则的负对照在 frontend/src/coreTangu/bundle.test.ts。
+
+on:
+  pull_request:
+    paths: &paths
+      - 'desktop/frontend/src/**'
+      - 'lcl/**'
+      - 'tangu-agent/src/contracts/**'
+      - 'desktop/scripts/build-tangu-ui.mjs'
+      - 'desktop/scripts/tangu-boundary.*'
+      - 'desktop/package-lock.json'
+      - '.github/workflows/tangu-ui.yml'
+  push:
+    branches: [main]
+    paths: *paths
+
+permissions:
+  contents: read
+
+jobs:
+  bundle:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - run: npm ci --ignore-scripts --no-audit --no-fund
+      - run: node build/link-lcl.cjs
+      - run: npx vitest run frontend/src/coreTangu/
+      - run: node scripts/build-tangu-ui.mjs

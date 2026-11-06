@@ -14,6 +14,8 @@ vi.mock('./tableSurface', () => ({ mountPluginTable: surface.mount }))
 vi.mock('./dashboardSurface', () => ({ mountPluginDashboard: surface.mount }))
 vi.mock('./chatBoxSurface', () => ({ mountPluginChatBox: surface.mount }))
 const { usePluginStore } = await import('./pluginStore')
+/** 编辑器等 el 进了文档才建(见 pluginStore mountMarkdownEditor):测试里的元素一律先挂进 body。 */
+const attached = (): HTMLDivElement => document.body.appendChild(document.createElement('div'))
 function context(id: string, fail = false): PluginContext {
   let ref!: PluginContext
   usePluginStore.getState().init([
@@ -24,7 +26,7 @@ function context(id: string, fail = false): PluginContext {
       setup(c) {
         ref = c
         if (fail) {
-          c.ui!.mountMarkdownEditor!(document.createElement('div'), {
+          c.ui!.mountMarkdownEditor!(attached(), {
             value: '# Failed',
           })
           throw new Error('setup failed')
@@ -64,13 +66,14 @@ beforeEach(() => {
     )
 })
 afterEach(() => {
+  document.body.replaceChildren()
   for (const id of [...usePluginStore.getState().activeIds])
     usePluginStore.getState().disable(id)
 })
 describe('native Markdown plugin mount lifecycle', () => {
   it('a failed mount shows its error in a host-owned node: plugin nodes stay, dispose takes the error away', async () => {
     const c = context('failing')
-    const el = document.createElement('div')
+    const el = attached()
     const own = el.appendChild(document.createElement('p'))
     const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
     surface.mount.mockImplementationOnce(() => { throw new Error('editor exploded') })
@@ -86,7 +89,7 @@ describe('native Markdown plugin mount lifecycle', () => {
     const { claimHostMount } = await import('@lcl/components')
     const c = context('reloaded')
     usePluginStore.getState().disable('reloaded') // the old context is dead; a late task of its still calls in
-    const el = document.createElement('div')
+    const el = attached()
     const stillMine = claimHostMount(el) // the new context's request, import still loading
     const quiet = vi.spyOn(console, 'warn').mockImplementation(() => {})
     c.ui!.mountMarkdownEditor!(el, { value: '# late' })
@@ -102,7 +105,7 @@ describe('native Markdown plugin mount lifecycle', () => {
   it('a request loses its element to a later mount while its import is still loading: it never mounts', async () => {
     const { mountHostReact } = await import('@lcl/components')
     const c = context('outrun')
-    const el = document.createElement('div')
+    const el = attached()
     const h = c.ui!.mountMarkdownEditor!(el, { value: '# Draft' })
     mountHostReact(el, 'later mount') // the plugin hands the same element to something else, without disposing
     await vi.dynamicImportSettled()
@@ -113,7 +116,7 @@ describe('native Markdown plugin mount lifecycle', () => {
   })
   it('revokes a pending import before it creates an editor', async () => {
     const c = context('pending')
-    const h = c.ui!.mountMarkdownEditor!(document.createElement('div'), {
+    const h = c.ui!.mountMarkdownEditor!(attached(), {
       value: '# Draft',
     })
     usePluginStore.getState().disable('pending')
@@ -124,7 +127,7 @@ describe('native Markdown plugin mount lifecycle', () => {
   it('retains the latest value after disposal and ignores stale update / insert / focus', async () => {
     const c = context('live')
     const changes = vi.fn()
-    const h = c.ui!.mountMarkdownEditor!(document.createElement('div'), {
+    const h = c.ui!.mountMarkdownEditor!(attached(), {
       value: '# Draft',
       onChange: changes,
     })
@@ -146,7 +149,7 @@ describe('native Markdown plugin mount lifecycle', () => {
   it('reconciles empty source and prevents inserts into a read-only pending mount', async () => {
     const c = context('readonly')
     const changes = vi.fn()
-    const h = c.ui!.mountMarkdownEditor!(document.createElement('div'), {
+    const h = c.ui!.mountMarkdownEditor!(attached(), {
       value: '# Draft',
       readOnly: true,
       onChange: changes,
@@ -160,7 +163,7 @@ describe('native Markdown plugin mount lifecycle', () => {
   })
   it('carries modes:false from an update made while the import is pending, and forwards later updates', async () => {
     const c = context('nomodes')
-    const h = c.ui!.mountMarkdownEditor!(document.createElement('div'), {
+    const h = c.ui!.mountMarkdownEditor!(attached(), {
       value: '# Draft',
     })
     h.update({ modes: false })
@@ -179,5 +182,21 @@ describe('native Markdown plugin mount lifecycle', () => {
     expect(() =>
       c.ui!.mountMarkdownEditor!({} as HTMLElement, { value: '' }),
     ).toThrow(TypeError)
+  })
+  it('an element outside the document waits: the editor is built once it is attached, and never if disposed first', async () => {
+    const c = context('detached')
+    const el = document.createElement('div')
+    const h = c.ui!.mountMarkdownEditor!(el, { value: '# Later' })
+    await vi.dynamicImportSettled()
+    await new Promise((r) => requestAnimationFrame(r))
+    expect(surface.mount).not.toHaveBeenCalled()
+    document.body.append(el)
+    await vi.waitFor(() => expect(surface.mount).toHaveBeenCalledTimes(1))
+    expect(h.getValue()).toBe('# Later')
+    const gone = document.createElement('div')
+    c.ui!.mountMarkdownEditor!(gone, { value: 'x' }).dispose()
+    document.body.append(gone)
+    await new Promise((r) => requestAnimationFrame(r))
+    expect(surface.mount).toHaveBeenCalledTimes(1)
   })
 })
