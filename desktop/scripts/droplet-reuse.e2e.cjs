@@ -5,6 +5,8 @@
  *   · 预览已开着时换图标:卡不重挂、不重播液滴,之后收起缩回的是新图标;
  *   · 反复开合不空屏(内容不透明度 1);倒放到一半又悬停 / 又点源按钮 = 重新流出来、停在打开(同悬浮目录)。
  *  --neg 负对照:倾倒期让面板自己上底色,上面那条必须报红(退出码非 0 = 负对照成立)。
+ *  动效第三轮(11-06)加:开到 60 / 150ms 就收,内容只淡不先蹦出来(三处 + Ribbon「+N」);「+N」倒放到一半又点 = 重新流出来。
+ *  这两条的负对照 = 拿没修的构建跑(倒放从 1 淡出、「+N」吞掉那一下点击),必须报红。
  *  用法:npm run build && node scripts/droplet-reuse.e2e.cjs [--neg]   截图 → outputs/droplet-reuse/ */
 const fs = require('fs'), os = require('os'), path = require('path')
 const electron = require('./lib/launch-electron.cjs')
@@ -86,6 +88,29 @@ const srcStillRaised = async (page, src, name) => {
   check(`${name}: 重新流出后源的层级没被旧倒放撤掉`, !!z, `zIndex=${JSON.stringify(z)}`)
 }
 const midRetract = (page, sel) => page.waitForFunction((sel) => document.querySelector(sel)?.classList.contains('lcl-droplet-pouring'), sel, { timeout: 2000, polling: 'raf' })
+/** 开到 t 毫秒就收(动效第三轮,11-06):收的那一刻起内容透明度只降不升。原来倒放一律从 1 淡出,
+ *  淡入还没开始(0.22D 之前)就收 = 内容在缩回去的液体里先蹦到 0.9 再淡掉(探针 motion-r3.probe.cjs 量到)。
+ *  open:页内点哪个(null = 页外已经在开,等面板挂上);close:'key:Escape' 或要点的选择器。 */
+const earlyRetract = (page, sel, { open = null, close, t }) => page.evaluate(async ({ sel, open, close, t }) => {
+  const raf = () => new Promise(requestAnimationFrame)
+  // 收完到卸载之间面板 visibility: hidden(那一帧内容透明度已回 1),算 0
+  const kids = () => { const p = document.querySelector(sel); if (!p) return null; const cs = getComputedStyle(p); return cs.visibility === 'hidden' ? 0 : +cs.opacity * Math.min(1, ...[...p.children].map((k) => +getComputedStyle(k).opacity)) }
+  if (open) document.querySelector(open)?.click()
+  const w0 = performance.now()
+  while (!document.querySelector(sel) && performance.now() - w0 < 1500) await raf()
+  const t0 = performance.now()
+  while (performance.now() - t0 < t) await raf()
+  const before = kids()
+  if (close.startsWith('key:')) window.dispatchEvent(new KeyboardEvent('keydown', { key: close.slice(4), bubbles: true }))
+  else document.querySelector(close)?.click()
+  const seq = [before]
+  const t1 = performance.now()
+  while (performance.now() - t1 < 500) { await raf(); const k = kids(); if (k === null) break; seq.push(k) }
+  let rise = 0
+  for (let i = 1; i < seq.length; i++) rise = Math.max(rise, seq[i] - seq[i - 1])
+  return { rise: Math.round(rise * 100) / 100, seq: seq.slice(0, 6).map((x) => Math.round(x * 100) / 100), gone: !document.querySelector(sel) }
+}, { sel, open, close, t })
+const checkEarly = (r, name) => check(`${name}: 开到一半就收,内容只淡不先蹦出来(升 ≤ 0.05)`, r.rise <= 0.05 && r.gone, JSON.stringify(r))
 const NEG_CSS = `.lcl-droplet-pouring.account-pop, .lcl-droplet-pouring.mini-card-popover { background-color: #c33 !important }
   .rb-peek.lcl-droplet-pouring::before { opacity: 1 !important }`
 
@@ -152,6 +177,11 @@ async function main() {
     await win.evaluate(() => window.dispatchEvent(new Event('resize')))
     await win.waitForTimeout(600)
     check('悬停预览: 倒放中改窗口 = 收完', await win.evaluate(() => !document.querySelector('.rb-peek')))
+    for (const t of [60, 150]) {
+      await away(); await waitNoDrop(win); await win.waitForTimeout(250); pa = await center(iconA); await win.mouse.move(pa.x, pa.y, { steps: 3 })
+      checkEarly(await earlyRetract(win, '.rb-peek', { close: 'key:Escape', t }), `悬停预览(${t}ms 收)`)
+    }
+    await away(); await waitNoDrop(win); await win.waitForTimeout(200)
     // 截图:亮 / 暗各一张倾倒中段 + 接手后
     for (const m of ['light', 'dark']) {
       await setMode(m); await away(); await waitNoDrop(win); await win.waitForTimeout(400)
@@ -192,6 +222,24 @@ async function main() {
     check('账号卡: 开着时变高,倒放按现在的矩形(偏差 ≤ 2px)', gl.length >= 3 && gl.every((f) => f.geo !== null && f.geo <= 2), JSON.stringify(gl.length ? gl.map((f) => f.geo) : grown.slice(0, 4).map(({ kids, ...f }) => f)))
     check('账号卡: 变高后照样倒放完卸载', !grown.at(-1).exists)
     await win.waitForTimeout(300)
+    for (const t of [60, 150]) {
+      await waitNoDrop(win); await win.waitForTimeout(150)
+      checkEarly(await earlyRetract(win, '.account-pop', { open: avatarBtn, close: avatarBtn, t }), `账号卡(${t}ms 收)`)
+    }
+    // Ribbon「+N」(底区):倒放到一半又点它 = 重新流出来、停在打开(11-06 第三轮,原来这一下被吞掉、照样收完);开到一半就收同上
+    const more = '.rb-bottom .rb-more', moreFly = '.rb-more-fly'
+    await waitNoDrop(win); await win.waitForTimeout(150)
+    await sample(win, moreFly, { act: more, ms: 520 })
+    await win.evaluate((s) => document.querySelector(s).click(), more); await midRetract(win, moreFly); await win.waitForTimeout(60)
+    verifyRepour(await sample(win, moreFly, { act: more, ms: 700 }), 'Ribbon「+N」')
+    await srcStillRaised(win, more, 'Ribbon「+N」')
+    verifyRetract(await sample(win, moreFly, { act: more, ms: 600 }), 'Ribbon「+N」(重新流出后再点)')
+    const closeMoreFly = async () => { if (await win.$(moreFly)) { await win.keyboard.press('Escape'); await win.waitForTimeout(500) } } // 没修的构建上状态会乱:兜底收掉,让后面照样报红而不是超时
+    for (const t of [60, 150]) {
+      await closeMoreFly(); await waitNoDrop(win); await win.waitForTimeout(150)
+      checkEarly(await earlyRetract(win, moreFly, { open: more, close: more, t }), `Ribbon「+N」(${t}ms 收)`)
+    }
+    await closeMoreFly()
     for (const m of ['light', 'dark']) {
       await setMode(m); await waitNoDrop(win); await win.waitForTimeout(200)
       await armFreeze(win, 150); await win.evaluate((s) => document.querySelector(s).click(), avatarBtn)
@@ -234,6 +282,12 @@ async function main() {
     await mini.evaluate((s) => document.querySelector(s).click(), miniSrc); await midRetract(mini, '.mini-card-popover'); await mini.waitForTimeout(60)
     verifyRepour(await sample(mini, '.mini-card-popover', { act: miniSrc, ms: 700 }), 'Mini 下拉')
     await srcStillRaised(mini, miniSrc, 'Mini 下拉')
+    await mini.keyboard.press('Escape'); await waitNoDrop(mini); await mini.waitForTimeout(150)
+    for (const t of [60, 150]) {
+      await waitNoDrop(mini); await mini.waitForTimeout(150)
+      checkEarly(await earlyRetract(mini, '.mini-card-popover', { open: miniSrc, close: miniSrc, t }), `Mini 下拉(${t}ms 收)`)
+    }
+    await waitNoDrop(mini); await sample(mini, '.mini-card-popover', { act: miniSrc, ms: 520 })
     await mini.keyboard.press('Escape'); await mini.waitForTimeout(600)
     const box = await mini.evaluate(() => { const r = document.querySelector('.mini-card-shell').getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: Math.min(r.height, 300) } })
     for (const m of ['light', 'dark']) {

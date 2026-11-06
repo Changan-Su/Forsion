@@ -101,10 +101,12 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
     const fade = (from: number, to: number, duration: number): Animation =>
       panel.animate([{ opacity: from }, { opacity: to }], { duration, easing: curve('--ease-calm', 'ease') })
     panel.style.visibility = ''
-    if (!opts.settled) fade(0, 1, ms('--duration-fast', 150))
+    const enter = opts.settled ? null : fade(0, 1, ms('--duration-fast', 150))
     let closing: Promise<void> | null = null
+    // 淡入还没走完就收:从此刻的透明度接着淡出,不先跳回 1(11-06 动效第三轮)
+    const leave = (): Animation => { const o = +getComputedStyle(panel).opacity; enter?.cancel(); return fade(o, 0, ms('--menu-exit-duration', 80)) }
     return {
-      retract: () => (closing ??= fade(1, 0, ms('--menu-exit-duration', 80)).finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined)),
+      retract: () => (closing ??= leave().finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined)),
       cancel: () => { panel.getAnimations().forEach((a) => a.cancel()); panel.style.visibility = '' },
     }
   }
@@ -236,6 +238,9 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
         rebuilt = emergeDroplet(source, panel, { ...opts, settled: true })
         return (closing = rebuilt.retract())
       }
+      // 内容此刻的透明度:开到一半就收时淡入还没走完(0.22D 之前还没开始),从这里接着淡,
+      // 别先跳回 1 再淡 —— 收得早,内容会在缩回去的液体里闪一下(11-06 动效第三轮,探针 motion-r3.probe.cjs 量到 0 → 0.9)
+      const from = kids().map((k) => +getComputedStyle(k).opacity)
       handoff.cancel()
       shows.forEach((a) => a.cancel())
       const t = Math.min(D, Number(grow.currentTime ?? D)) // 开到一半被收:从这一帧接着倒放
@@ -247,7 +252,7 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
       const rate = -1 / 0.7
       // 别用 fill: forwards:面板不卸载时,取消填充动画和隐藏面板撞在同一帧,Chromium 会把内容的透明度留在 0,
       // 元素上已没有动画,再展开就是空屏(10-30 用户报,连开 33 次空 16 次)。所以写成保持到结束,收完由下面藏起面板
-      kids().forEach((k) => k.animate([{ opacity: 1 }, { opacity: 0, offset: 0.3 }, { opacity: 0 }], { duration: D * 0.7 }))
+      kids().forEach((k, i) => k.animate([{ opacity: from[i] ?? 1 }, { opacity: 0, offset: 0.3 }, { opacity: 0 }], { duration: D * 0.7 }))
       for (const a of [swell, grow, clip]) { a.updatePlaybackRate(rate); a.play() }
       closing = grow.finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined).finally(() => { layer.remove(); restoreSource() })
       return closing
