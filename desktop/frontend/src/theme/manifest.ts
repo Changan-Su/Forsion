@@ -80,4 +80,6 @@ export interface ThemeEntry {
   cssText?: string;
   /** 磁盘主题里被动效收口删掉的动效 token(主题卡下面提示一行;动效归宿主管)。 */
   motionIgnored?: string[];
+  /** 收口后浏览器再读一遍仍有漏网的(或收口出错):这套主题的样式整套不加载,cssText 为空,主题卡下面说一句。 */
+  cssRejected?: boolean;
 }

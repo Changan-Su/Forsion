@@ -3005,7 +3005,9 @@ export const SettingsModal: React.FC<{
                         return (
                           <>
                             <ThemeSettingsPanel key={p.themeLang} entry={cur} />
-                            {ignored > 0 && <div className="hint" data-theme-motion-ignored={ignored} style={{ marginTop: 6 }}>{t('settings.theme.motionIgnored', { n: ignored })}</div>}
+                            {cur.cssRejected
+                              ? <div className="hint" data-theme-motion-rejected="" style={{ marginTop: 6 }}>{t('settings.theme.motionRejected')}</div>
+                              : ignored > 0 && <div className="hint" data-theme-motion-ignored={ignored} style={{ marginTop: 6 }}>{t('settings.theme.motionIgnored', { n: ignored })}</div>}
                           </>
                         )
                       })()}
