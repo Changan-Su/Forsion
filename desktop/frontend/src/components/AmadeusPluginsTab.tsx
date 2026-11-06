@@ -32,6 +32,8 @@ import { BuiltinPluginsSection } from '../builtins'
 import { useApp } from '../stores/appStore'
 import { track } from '../achievements/store'
 import { panelToast } from './PanelNotice'
+import { LocalPluginVersions } from './MarketPluginAutoUpdate'
+import { afterMarketInstall } from '../marketPostInstall'
 import { ipcErrorText } from '../ipcError'
 import { windowKind } from '../windowKind'
 import type { TanguDesktopConfig } from '../types'
@@ -734,6 +736,10 @@ const PluginDetail: React.FC<{
           ? window.tangu?.setBundleEnabled && <BundleSwitch p={p} />
           : <PluginSwitch p={p} onFlip={toggleHere} />}
       </div>
+      {!p.dev && !p.builtin && !p.preinstalled && !p.locked && !p.agent && (
+        <LocalPluginVersions type="amadeus-plugin" pluginId={p.id} name={pluginDisplayName(p, locale)} say={panelToast}
+          onRolledBack={async (res) => { await afterMarketInstall('amadeus-plugin', res, true, panelToast) }} />
+      )}
       {p.locked && !!window.tangu?.setBundleEnabled && (
         <div className="hint">
           {t('settings.amadeusPlugins.lockedHint')}

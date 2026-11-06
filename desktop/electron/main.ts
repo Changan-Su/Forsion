@@ -73,6 +73,7 @@ import { readThemesDir, seedDefaultThemes } from './themes'
 import { builtinBundleSources, builtinPluginIds, bundleOff, bundleRestartPending, initBundleSwitches, lockedPluginIds, seedBuiltinBundles, setBundleOff } from './builtinPlugins'
 import { createCorePluginUpdater, prefetchOnFirstBoot } from './corePluginUpdates'
 import { createMarketPluginUpdater, type MarketUpdateItem } from './marketPluginUpdates'
+import { compareMarketVersions } from '../shared/marketPluginUpdates'
 import { BUILTIN_BUNDLES } from './builtinPlugins'
 import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdates'
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
@@ -2749,6 +2750,14 @@ app.whenReady().then(async () => {
       if (!r.ok) throw new Error(`resolve: HTTP ${r.status}`)
       return await r.json() as MarketUpdateItem
     },
+    // 默认自动更新(11-06):旧版装上、还没记进 state.json 的商店插件按安装目录名认领(撞名的不认)。
+    catalog: async () => {
+      const base = await marketBase()
+      const r = await fetch(`${base}/api/market/items`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(30_000) })
+      if (!r.ok) throw new Error(`resolve: HTTP ${r.status}`)
+      const data = await r.json() as { items?: MarketUpdateItem[] }
+      return Array.isArray(data.items) ? data.items : []
+    },
     download: async (item) => {
       const { info, buf } = await downloadMarketPackage(item.id)
       if (info.installSlug !== item.installSlug || info.type !== item.type) throw new Error('resolve: market identity changed')
@@ -2759,6 +2768,8 @@ app.whenReady().then(async () => {
     },
   })
   if (PRODUCT.market) await marketPluginUpdater.init().catch((e) => console.warn('[market-updates] initialization failed:', e))
+  // 手动拷进插件目录的插件:每出现一个新版本就留一份,换版后能在 设置 → 插件 里回退。后台跑,排在安装 / 卸载同一条队列里。
+  if (PRODUCT.market) void marketPluginUpdater.exclusive(() => marketPluginUpdater.keepLocalVersions()).catch((e) => console.warn('[market-updates] keep local versions:', e))
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
   // 内置插件捆绑包(电脑操作 / Forsion Extend)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
   // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆内置包 → 不播。
@@ -4225,6 +4236,8 @@ app.whenReady().then(async () => {
     // (slug = 内置 id,或目录里的 manifest 是内置 id)时,覆盖再回滚会把它连同用户数据一起删掉。
     const occupant = await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined)
     if (builtinPluginIds().has(info.installSlug) || (typeof occupant === 'string' && builtinPluginIds().has(occupant))) throw new Error('install: builtin')
+    // 解压是原地覆盖:先把装着的那一版留进版本库(.plugin-versions),之后能一键回退。
+    if (effType === 'plugin' || effType === 'amadeus-plugin') await marketPluginUpdater.keepBeforeInstall(effType, info.installSlug, info.version)
     const files = await extractZipToDir(buf, dest, MARKET_MANIFEST[effType] || [])
     // 插件家族:清掉同 slug 在「另一插件目录」里那份**误装的旧副本**(修复前 Forsion 插件被装进引擎位等),
     // 消除 split-brain 双份。⚠ 身份守卫:若那份带对方类型的合法 manifest(是恰好同 slug 的**另一个合法插件**),
@@ -4249,7 +4262,13 @@ app.whenReady().then(async () => {
       await rm(dest, { recursive: true, force: true }).catch(() => {})
       throw new Error('install: builtin')
     }
-    await marketPluginUpdater.forget(effType, info.installSlug, false)
+    if (effType === 'plugin' || effType === 'amadeus-plugin') {
+      // 从版本页装了比最新版旧的 = 固定在这一版(自动更新对它关掉,「恢复自动更新」解除)。查不到最新版时按用户点名的版本算固定。
+      const latest = await fetch(`${await marketBase()}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(15_000) })
+        .then((r) => r.ok ? r.json() as Promise<MarketUpdateItem> : null, () => null)
+      const pinned = !!version && (compareMarketVersions(version, latest?.latestVersion) ?? -1) < 0
+      await marketPluginUpdater.recordInstall({ id, name: latest?.name, type: effType, slug: info.installSlug, pinned })
+    } else await marketPluginUpdater.forget(effType, info.installSlug, false)
     return { ok: true, path: dest, files, type: effType, slug: info.installSlug, ...(pluginId ? { id: pluginId } : {}) }
   }))
 
@@ -4263,6 +4282,23 @@ app.whenReady().then(async () => {
     if (on) void marketPluginUpdater.check().catch((err) => console.warn('[market-updates]', err))
     return state
   })
+  ipcMain.handle('market:setAutoUpdateAll', async (e, on: boolean) => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    const state = await marketPluginUpdater.setAutoUpdateAll(on)
+    if (on) void marketPluginUpdater.check().catch((err) => console.warn('[market-updates]', err))
+    return state
+  })
+  // 回退到本机留着的旧版本(.plugin-versions):换目录,不联网。商店插件随之固定在这一版。
+  // 返回值与 market:install 同形(type / slug / Forsion 插件的装载 id),渲染层走同一条装后重载。
+  ipcMain.handle('market:rollback', async (e, type: string, slug: string, version: string) => marketPluginUpdater.exclusive(async () => {
+    if (!isTrustedSender(e)) throw new Error('Untrusted sender')
+    const r = await marketPluginUpdater.rollback(type, slug, version)
+    const dest = marketItemDir(tanguHomeDir(), r.type, r.slug)!
+    const pluginId = r.type === 'amadeus-plugin'
+      ? effectivePluginId(r.slug, await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined))
+      : null
+    return { ...r, path: dest, ...(pluginId ? { id: pluginId } : {}) }
+  }))
   ipcMain.handle('market:checkUpdates', (e) => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
     return marketPluginUpdater.check()

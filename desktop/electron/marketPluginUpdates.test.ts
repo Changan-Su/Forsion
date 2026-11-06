@@ -111,3 +111,135 @@ it('version comparison rejects unknown versions and respects prerelease order', 
   expect(compareMarketVersions('v1.1.0+build', '1.1.0')).toBe(0)
   expect(compareMarketVersions('1.0.0', '2.0.0')).toBe(-1)
 })
+
+// ── 11-06: default on, global switch, version store, rollback and pin ──
+async function installed(home: string, type: MarketPluginType, slug: string, manifest: Record<string, unknown>, body = 'code') {
+  const dir = marketItemDir(home, type, slug)!
+  await rm(dir, { recursive: true, force: true }); await mkdir(dir, { recursive: true })
+  await writeFile(join(dir, MARKET_MANIFEST[type][0]), JSON.stringify(manifest)); await writeFile(join(dir, 'main.js'), body)
+  return dir
+}
+const kept = (home: string, type: MarketPluginType, slug: string, version: string) => join(home, '.plugin-versions', type, slug, version)
+async function catalogFixture() {
+  const f = await fixture()
+  const options = { ...f.options, catalog: vi.fn(async () => [{ ...f.item }, { id: 'other', name: 'Other', type: 'skill', installSlug: 'test-plugin' }]) }
+  const updater = createMarketPluginUpdater(options); await updater.init()
+  return { ...f, options, updater }
+}
+it('default on: a store install without its own choice is found through the catalog and updated', async () => {
+  const f = await catalogFixture()
+  await f.updater.check()
+  expect(f.download).toHaveBeenCalledTimes(1)
+  expect(f.updater.snapshot()).toMatchObject({ autoUpdateAll: true, items: [{ id: 'market-id', autoUpdate: true, pendingVersion: '1.1.0' }] })
+  expect(f.updater.snapshot().items[0].autoUpdateChoice).toBeUndefined()
+})
+it('an explicit per-plugin off from an older build stays off; the global switch only moves plugins without a choice', async () => {
+  const f = await fixture()
+  await mkdir(join(f.home, '.market-updates'), { recursive: true })
+  await writeFile(join(f.home, '.market-updates', 'state.json'), JSON.stringify({ items: [{ id: 'market-id', name: 'Test', type: 'amadeus-plugin', slug: 'test-plugin', autoUpdate: false, phase: 'idle' }] }))
+  const a = createMarketPluginUpdater(f.options); await a.init(); await a.check()
+  expect(a.snapshot().items[0]).toMatchObject({ autoUpdate: false, autoUpdateChoice: false }); expect(f.download).not.toHaveBeenCalled()
+  const g = await catalogFixture(); await g.updater.setAutoUpdateAll(false); await g.updater.check()
+  expect(g.download).not.toHaveBeenCalled(); expect(g.updater.snapshot().items[0]).toMatchObject({ autoUpdate: false })
+  const again = createMarketPluginUpdater(g.options); await again.init(); expect(again.snapshot().autoUpdateAll).toBe(false)
+  await again.setAutoUpdateAll(true); await again.check(); expect(g.download).toHaveBeenCalledTimes(1)
+})
+it('an unreadable state file is not rewritten from defaults', async () => {
+  const f = await fixture()
+  await mkdir(join(f.home, '.market-updates'), { recursive: true }); await writeFile(join(f.home, '.market-updates', 'state.json'), '{"items":[{"id":')
+  const u = createMarketPluginUpdater({ ...f.options, catalog: async () => [f.item] })
+  await expect(u.init()).rejects.toThrow(); await u.check()
+  expect(f.download).not.toHaveBeenCalled(); expect(await readFile(join(f.home, '.market-updates', 'state.json'), 'utf8')).toBe('{"items":[{"id":')
+})
+it('an applied update keeps the old version; rollback swaps it back, pins, and resuming auto-update releases the pin', async () => {
+  const f = await catalogFixture(); await f.updater.check()
+  const next = createMarketPluginUpdater(f.options); await next.init()
+  expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('new')
+  expect(await readFile(join(kept(f.home, 'amadeus-plugin', 'test-plugin', '1.0.0'), 'main.js'), 'utf8')).toBe('old')
+  expect(next.snapshot().items[0].keptVersions).toMatchObject([{ version: '1.0.0', compatible: true }])
+  const r = await next.rollback('amadeus-plugin', 'test-plugin', '1.0.0')
+  expect(r).toEqual({ ok: true, type: 'amadeus-plugin', slug: 'test-plugin', version: '1.0.0' })
+  expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('old')
+  expect(next.snapshot().items[0]).toMatchObject({ pinnedVersion: '1.0.0', autoUpdate: false, installedVersion: '1.0.0', keptVersions: [{ version: '1.1.0', compatible: true }] })
+  await next.check(); expect(f.download).toHaveBeenCalledTimes(1) // pinned: no download
+  await next.setAutoUpdateAll(true); await next.check(); expect(f.download).toHaveBeenCalledTimes(1) // the global switch does not unpin
+  await next.setAutoUpdate('market-id', true); expect(next.snapshot().items[0].pinnedVersion).toBeUndefined()
+  await next.check(); expect(f.download).toHaveBeenCalledTimes(2)
+})
+it('pinning by installing an older version drops an update staged before it', async () => {
+  const f = await catalogFixture(); await f.updater.check()
+  expect(f.updater.snapshot().items[0].pendingVersion).toBe('1.1.0')
+  await f.updater.exclusive(() => f.updater.recordInstall({ id: 'market-id', type: 'amadeus-plugin', slug: 'test-plugin', pinned: true }))
+  expect(f.updater.snapshot().items[0]).toMatchObject({ pinnedVersion: '1.0.0', autoUpdate: false }); expect(f.updater.snapshot().items[0].pendingVersion).toBeUndefined()
+  await expect(lstat(join(f.home, '.market-updates', 'amadeus-plugin', 'test-plugin'))).rejects.toMatchObject({ code: 'ENOENT' })
+  const next = createMarketPluginUpdater(f.options); await next.init()
+  expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('old')
+})
+it('a staged update is discarded at startup when the plugin was pinned after it was downloaded', async () => {
+  const f = await catalogFixture(); await f.updater.check()
+  const state = JSON.parse(await readFile(join(f.home, '.market-updates', 'state.json'), 'utf8'))
+  state.items[0].pinnedVersion = '1.0.0'
+  await writeFile(join(f.home, '.market-updates', 'state.json'), JSON.stringify(state))
+  const next = createMarketPluginUpdater(f.options); await next.init()
+  expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('old'); expect(next.snapshot().items[0].pendingVersion).toBeUndefined()
+})
+it('manual installs keep the replaced version, the store keeps the two most recent, and uninstall removes it', async () => {
+  const f = await catalogFixture()
+  for (const v of ['1.0.0', '1.1.0', '1.2.0', '1.3.0']) {
+    await f.updater.exclusive(() => f.updater.keepBeforeInstall('amadeus-plugin', 'test-plugin', `${v}-next`))
+    await installed(f.home, 'amadeus-plugin', 'test-plugin', { id: 'different-id', version: `${v}-next` }, v)
+    await new Promise((r) => setTimeout(r, 15))
+  }
+  await f.updater.exclusive(() => f.updater.recordInstall({ id: 'market-id', type: 'amadeus-plugin', slug: 'test-plugin', pinned: false }))
+  expect(f.updater.snapshot().items[0].keptVersions!.map((v) => v.version)).toEqual(['1.2.0-next', '1.1.0-next'])
+  await f.updater.exclusive(() => f.updater.forget('amadeus-plugin', 'test-plugin'))
+  await expect(lstat(join(f.home, '.plugin-versions', 'amadeus-plugin', 'test-plugin'))).rejects.toMatchObject({ code: 'ENOENT' })
+})
+it('a kept version this Forsion cannot run is listed as incompatible and refused', async () => {
+  const f = await catalogFixture()
+  await mkdir(kept(f.home, 'amadeus-plugin', 'test-plugin', '0.9.0'), { recursive: true })
+  await writeFile(join(kept(f.home, 'amadeus-plugin', 'test-plugin', '0.9.0'), 'manifest.json'), JSON.stringify({ id: 'different-id', version: '0.9.0', minAppVersion: '9.0.0' }))
+  await writeFile(join(kept(f.home, 'amadeus-plugin', 'test-plugin', '0.9.0'), 'main.js'), 'ancient')
+  await f.updater.check(); await f.updater.refresh()
+  expect(f.updater.snapshot().items[0].keptVersions).toMatchObject([{ version: '0.9.0', compatible: false }])
+  await expect(f.updater.rollback('amadeus-plugin', 'test-plugin', '0.9.0')).rejects.toThrow('incompatible')
+  expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('old')
+})
+it('hand-copied plugins keep each version they show and can roll back; linked dev roots and core packages are left alone', async () => {
+  const f = await fixture()
+  const dir = await installed(f.home, 'amadeus-plugin', 'hand-made', { id: 'hand-made', version: '1.0.0' }, 'v1')
+  await installed(f.home, 'amadeus-plugin', 'core-pkg', { id: 'core-pkg', version: '1.0.0' })
+  await mkdir(join(f.home, 'dev-src'), { recursive: true }); await writeFile(join(f.home, 'dev-src', 'manifest.json'), '{"id":"dev","version":"1.0.0"}'); await writeFile(join(f.home, 'dev-src', 'main.js'), 'x')
+  await symlink(join(f.home, 'dev-src'), marketItemDir(f.home, 'amadeus-plugin', 'dev')!)
+  const u = createMarketPluginUpdater({ ...f.options, protectedIds: () => new Set(['core-pkg']) }); await u.init()
+  await u.exclusive(() => u.keepLocalVersions())
+  await installed(f.home, 'amadeus-plugin', 'hand-made', { id: 'hand-made', version: '1.1.0' }, 'v2')
+  await u.exclusive(() => u.keepLocalVersions())
+  expect(u.snapshot().local.map((x) => x.slug).sort()).toEqual(['hand-made', 'test-plugin'])
+  expect(u.snapshot().local.find((x) => x.slug === 'hand-made')).toMatchObject({ version: '1.1.0', keptVersions: [{ version: '1.0.0', compatible: true }] })
+  await expect(lstat(join(f.home, '.plugin-versions', 'amadeus-plugin', 'dev'))).rejects.toMatchObject({ code: 'ENOENT' })
+  await expect(lstat(join(f.home, '.plugin-versions', 'amadeus-plugin', 'core-pkg'))).rejects.toMatchObject({ code: 'ENOENT' })
+  await u.exclusive(() => u.rollback('amadeus-plugin', 'hand-made', '1.0.0'))
+  expect(await readFile(join(dir, 'main.js'), 'utf8')).toBe('v1')
+  expect(u.snapshot().local.find((x) => x.slug === 'hand-made')).toMatchObject({ version: '1.0.0', keptVersions: [{ version: '1.1.0', compatible: true }] })
+})
+it('startup puts back a live folder left mid-rollback, and files a finished one as a kept version', async () => {
+  const f = await fixture()
+  const store = join(f.home, '.plugin-versions', 'amadeus-plugin', 'test-plugin')
+  await mkdir(store, { recursive: true }); await rename(f.target, join(store, '.swap-crash'))
+  const a = createMarketPluginUpdater(f.options); await a.init()
+  expect(await readFile(join(f.target, 'main.js'), 'utf8')).toBe('old')
+  await installed(f.home, 'amadeus-plugin', 'stray', { id: 'stray', version: '2.0.0' }, 'live')
+  const strayStore = join(f.home, '.plugin-versions', 'amadeus-plugin', 'stray'); await mkdir(join(strayStore, '.swap-done'), { recursive: true })
+  await writeFile(join(strayStore, '.swap-done', 'manifest.json'), '{"id":"stray","version":"2.1.0"}'); await writeFile(join(strayStore, '.swap-done', 'main.js'), 'replaced')
+  const b = createMarketPluginUpdater(f.options); await b.init()
+  expect(await readFile(join(strayStore, '2.1.0', 'main.js'), 'utf8')).toBe('replaced')
+  expect(b.snapshot().local.find((x) => x.slug === 'stray')?.keptVersions).toMatchObject([{ version: '2.1.0' }])
+})
+it('a normal reinstall keeps the plugin pinned (at the version now installed)', async () => {
+  const f = await catalogFixture()
+  await f.updater.exclusive(() => f.updater.recordInstall({ id: 'market-id', type: 'amadeus-plugin', slug: 'test-plugin', pinned: true }))
+  await installed(f.home, 'amadeus-plugin', 'test-plugin', { id: 'different-id', version: '1.0.5' })
+  await f.updater.exclusive(() => f.updater.recordInstall({ id: 'market-id', type: 'amadeus-plugin', slug: 'test-plugin', pinned: false }))
+  expect(f.updater.snapshot().items[0]).toMatchObject({ pinnedVersion: '1.0.5', autoUpdate: false })
+})

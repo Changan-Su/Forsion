@@ -8,6 +8,7 @@ import { setPluginEnabled, installPluginFromNpm, rescanPlugins, type PluginInfo 
 import { panelToast } from './PanelNotice'
 import { PluginUninstallDialog } from './UninstallDialog'
 import { uninstallEnginePlugin } from './pluginUninstall'
+import { LocalPluginVersions } from './MarketPluginAutoUpdate'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { TanguDesktopConfig } from '../types'
 import { useI18n } from '../i18n'
@@ -189,6 +190,10 @@ export const PluginsTab: React.FC<{
               )
             })()}
           </div>
+          {p.source === 'folder' && userIds.has(p.id) && (
+            <LocalPluginVersions type="plugin" pluginId={p.id} name={nm(p)} say={panelToast}
+              onRolledBack={async () => { await rescanPlugins(homeTarget()).catch(() => null); onReload() }} />
+          )}
         </div>
       ))}
       {asking && <PluginUninstallDialog
