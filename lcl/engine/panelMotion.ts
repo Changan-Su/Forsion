@@ -90,7 +90,7 @@ export function easeOf(css: string): (x: number) => number {
 }
 
 /** 拉伸展开。缝(源与面板之间)和液滴一样要 ≤ 12px,远了看着就不是从按钮里长出来的。 */
-export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: DropletOptions = {}): Droplet {
+export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: DropletOptions & { /** 内部用(收起前按新矩形重建):从这一毫秒接着 */ at?: number } = {}): Droplet {
   if (reducedMotion() || typeof panel.animate !== 'function' || !panel.parentElement) return fadeOnly(panel, opts.settled)
   panel.style.visibility = ''
   const D = ms('--stretch-open-duration', 380)
@@ -178,6 +178,10 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: Dropl
     for (const a of [grow, ...shows]) a.finish()
     clip?.finish()
     land()
+  } else if (opts.at !== undefined) {
+    // 重建:停在原来那一份此刻的进度(形状、内容透明度都接得上),紧接着的 retract() 从这里倒放
+    for (const a of [grow, ...shows]) a.currentTime = Math.min(opts.at, D)
+    if (clip) clip.currentTime = Math.min(opts.at, D)
   }
 
   const cancelSelf = (): void => {
@@ -199,8 +203,10 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: Dropl
       const off = (a: DOMRect, b: { left: number; top: number; width: number; height: number }): boolean =>
         Math.max(Math.abs(a.left - b.left), Math.abs(a.top - b.top), Math.abs(a.width - b.width), Math.abs(a.height - b.height)) > 1
       if (off(pn, pr) || off(sn, s)) {
+        // 还没长满就变了尺寸又收:从同一个进度重建,别先跳成长满、内容推到 1 再倒放(同 droplet.ts)
+        const at = grow.playState === 'finished' ? undefined : Math.min(D, Number(grow.currentTime ?? D))
         cancelSelf()
-        rebuilt = stretchOpen(source, panel, { ...opts, settled: true })
+        rebuilt = stretchOpen(source, panel, at === undefined ? { ...opts, settled: true } : { ...opts, settled: false, at })
         return (closing = rebuilt.retract())
       }
       // 内容此刻的透明度:开到一半就收时淡入还没走完,从这里接着淡(动效第三轮,同 droplet.ts)

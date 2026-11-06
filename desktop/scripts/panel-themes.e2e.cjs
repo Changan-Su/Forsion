@@ -69,6 +69,32 @@ function verifyGlide(frames, name) {
   check(`${name}: 平移主题不出液滴 / 拉伸层`, F.length > 3 && !F.some((f) => f.stretch || f.droplet || f.pouring), JSON.stringify(F.find((f) => f.stretch || f.droplet || f.pouring)))
   check(`${name}: 平移主题面板淡入 + 微缩`, F.some((f) => /opacity/.test(f.props) && /scale/.test(f.props)), JSON.stringify(F.slice(0, 2).map((f) => f.props)))
 }
+/** 还没长满就变高、又马上收:重建要从同一个进度接着(不先跳成长满、内容不蹦到 1)。 */
+const growThenClose = (page, sel, open) => page.evaluate(async ({ sel, open }) => {
+  const raf = () => new Promise(requestAnimationFrame)
+  const read = () => {
+    const p = document.querySelector(sel); if (!p) return null
+    const cs = getComputedStyle(p)
+    // inset() 按 margin 简写序列化:左右相等时只写三个值,所以按 1–4 个值展开,别只认四个值的写法
+    const iv = /inset\(([^)]*)\)/.exec(cs.clipPath)?.[1].split(' round ')[0].trim().split(/\s+/).map(parseFloat)
+    const m = iv && [null, iv[0], iv[1] ?? iv[0], iv[2] ?? iv[0], iv[3] ?? iv[1] ?? iv[0]], W = p.offsetWidth, H = p.offsetHeight
+    return { kids: cs.visibility === 'hidden' ? 0 : +cs.opacity * Math.min(1, ...[...p.children].map((k) => +getComputedStyle(k).opacity)), area: m ? Math.round(100 * Math.max(0, W - +m[2] - +m[4]) * Math.max(0, H - +m[1] - +m[3]) / (W * H)) : (cs.visibility === 'hidden' ? 0 : 100) }
+  }
+  document.querySelector(open)?.click()
+  const w0 = performance.now(); while (!document.querySelector(sel) && performance.now() - w0 < 1500) await raf()
+  const t0 = performance.now(); let grown = false
+  while (performance.now() - t0 < 110) { await raf(); if (!grown && performance.now() - t0 >= 60) { const x = document.createElement('div'); x.style.height = '60px'; document.querySelector(sel).appendChild(x); grown = true } }
+  const seq = [read()]
+  window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+  const t1 = performance.now()
+  while (performance.now() - t1 < 600) { await raf(); const r = read(); if (!r) break; seq.push(r) }
+  return { seq: seq.slice(0, 6), gone: !document.querySelector(sel) }
+}, { sel, open })
+function verifyGrowClose(r, name) {
+  let rise = 0, jump = 0
+  for (let i = 1; i < r.seq.length; i++) { rise = Math.max(rise, r.seq[i].kids - r.seq[i - 1].kids); jump = Math.max(jump, r.seq[i].area - r.seq[i - 1].area) }
+  check(`${name}: 没长满就变高又收,内容不先蹦出来、形状不先跳成长满`, rise <= 0.05 && jump <= 8 && r.gone, JSON.stringify(r))
+}
 function verifyEarly(frames, name) {
   const i = frames.findIndex((f) => f.mark === 'close')
   const seq = [frames.slice(0, i).filter((f) => f.exists).at(-1), ...frames.slice(i + 1).filter((f) => f.exists)].filter(Boolean).map((f) => f.kids)
@@ -137,6 +163,8 @@ async function main() {
         const gl = grown.filter((f) => f.exists && f.stretch)
         check('账号卡(stretch): 开着变高,倒放按现在的矩形(偏差 ≤ 2px)', gl.length >= 3 && gl.every((f) => f.geo !== undefined && f.geo <= 2), JSON.stringify(gl.map((f) => f.geo)))
         check('账号卡(stretch): 变高后照样收完卸载', !grown.at(-1).exists)
+        await waitGone(win, '.account-pop'); await win.waitForTimeout(150)
+        verifyGrowClose(await growThenClose(win, '.account-pop', avatar), '账号卡(stretch)')
       } else { await win.keyboard.press('Escape') }
       await waitGone(win, '.account-pop'); await win.waitForTimeout(150)
       verifyEarly(await sample(win, '.account-pop', { act: avatar, close: avatar, t: 60, ms: 600 }), `账号卡(${theme})`)
