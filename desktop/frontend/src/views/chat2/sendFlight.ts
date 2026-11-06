@@ -1,4 +1,4 @@
-import { reducedMotion as hostReducedMotion } from '@lcl/engine/spring'
+import { reducedMotion as hostReducedMotion } from '@lcl/engine'
 // 发送动效(用户 10-17 选 B,方案页 docs/ToBeImproved/发送动画方案_2026-10-17):
 // 刚发出的那条用户消息从输入框后面升到原位,上面的对话被一起托上去;输入框里的字上移淡出。
 // 只认「这次按发送的那段正文」:切会话、加载历史、别的设备同步来的消息都不动。

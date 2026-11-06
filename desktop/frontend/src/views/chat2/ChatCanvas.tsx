@@ -35,7 +35,7 @@ import {
   CanvasChrome, CanvasMiniMap, fitViewport, gridLayerStyle, hostSize, recallViewport, rememberViewport, useCanvasGestures, useCanvasViewport, zoomAt,
   type Box, type CanvasViewportApi, type Viewport,
 } from '../../amadeus/unified/canvasKit'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, reducedMotion } from '@lcl/engine'
 import { EditorialMessage, type FileCtx, type MessageHandlers } from './EditorialMessage'
 import { openBtw } from './btwStore'
 import { ForkBlock, ForkScope, childIdsOf, type ForkScopeValue } from './ChildSessions'
@@ -46,7 +46,6 @@ import { splitLeadingQuotes } from './quotes'
 import { buildTurnTree, readSteps, type KidSpec, type TurnTree } from './canvasTree'
 import { ContextMenu, type CtxItem, type CtxMenu } from '../../components/RightPanel'
 import { SELBAR_VIEWPORT_MOVED } from '../../components/selectionBar/ViewSelectionBar'
-import { reducedMotion } from '@lcl/engine/spring'
 
 registerMessages({
   'chatcanvas.seg.aria': { zh: '对话的看法', en: 'Chat layout' },

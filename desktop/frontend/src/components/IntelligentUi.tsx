@@ -15,7 +15,7 @@ import { CodeBlock, RunContext } from './Markdown'
 import { deriveChecklist, emptyUIState, formatUIQuantity, inputValues, readUIState, stateVars, subscribeUIState, uiExpansionKey, uiStateKey, visible, writeUIState, type UIUserState } from './intelligentUiState'
 import './IntelligentUi.css'
 import { IntelligentAppCard } from './IntelligentAppCard'
-import { reducedMotion } from '@lcl/engine/spring'
+import { reducedMotion } from '@lcl/engine'
 
 registerMessages({
   'iui.loading': { zh: '正在组织内容…', en: 'Composing…' },

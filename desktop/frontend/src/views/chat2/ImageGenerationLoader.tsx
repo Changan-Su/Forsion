@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react'
 import { registerMessages, useI18n } from '../../i18n'
-import { reducedMotion } from '@lcl/engine/spring'
+import { reducedMotion } from '@lcl/engine'
 import {
   IMAGE_GENERATION_GRID,
   createSnakeGame,

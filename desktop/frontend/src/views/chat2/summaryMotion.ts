@@ -6,8 +6,7 @@
  *  ⚠️ 不用 LCL 的 useExitGhost:那是整块面板卸载时用的,残影外面还包一层壳;这里要的是栈里逐张 / 逐行的。
  *  DESIGN §3 规矩 6:栈 data-still / data-moved(刚挂上、刚换会话、刚被 dockview 搬家)时不播;减少动态效果时不播。
  *  Agent Desk 卡有自己的进出场,插件卡正文是插件自己的 DOM,都不归这里管。 */
-import { LAND_MS } from '@lcl/engine'
-import { reducedMotion } from '@lcl/engine/spring'
+import { LAND_MS, reducedMotion } from '@lcl/engine'
 
 /** 会长出 / 缩回的行:卡片正文(和子会话状态块)的直接子元素里认这几种。进度卡的「正在 xx」「已运行 m:ss」「正在编辑」
  *  也算:它们每次工具调用都出现 / 消失一次,不播的话下面每张卡都跟着一下子挪一行(跳变探针抓到过)。换字不重挂,不会反复播。 */

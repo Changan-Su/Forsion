@@ -8,11 +8,10 @@ import { DEFAULT_APPROVAL, DEFAULT_THINKING } from '../../../../tangu-agent/src/
 import { thinkingLabel } from '../components/thinkingLabel'
 import { APPROVAL_MODE_ORDER, MODE_KEY } from '../approvalReason'
 import { isCoarsePointer } from '../touch'
-import { zoomOf } from '@lcl/engine'
+import { zoomOf, reducedMotion } from '@lcl/engine'
 import { moveOptionFocus, type SelectOption as ProfileSelectOption } from '../components/SelectField'
 import './agentProfileMessages'
 import './profileControls.css'
-import { reducedMotion } from '@lcl/engine/spring'
 
 /** 标签条(`.agent-section-nav`)选中底的滑动:选中底画在选中格自己的 ::before 上(标签按字数分宽),
  *  换选中时从上一格的矩形滑过来(FLIP,WAAPI 动伪元素)。第一次渲染、上一格已不在、减弱动效时直接切。返回值挂到 nav 的 ref 上。 */
