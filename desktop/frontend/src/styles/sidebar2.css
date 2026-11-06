@@ -151,6 +151,10 @@
      ⚠️ 别再写 width:left + right + width 三者同时有值时 right 被忽略,后沿就不动了(orbits.css 原来那条四格宽度就是这么删的)。 */
   left: calc(2px + (100% - 4px) * var(--seg-i, 0) / var(--seg-n, 2));
   right: calc(2px + (100% - 4px) * (var(--seg-n, 2) - var(--seg-i, 0) - 1) / var(--seg-n, 2));
+  /* 中途改目标时两条边可能交叉(0→3 刚起步就点 2:按上一个目标算方向是「往左」,左沿立刻出发、右沿还停在 0 附近),
+     宽度会被夹成 0、滑块塌成一条缝。保底一格:比一格窄时按 CSS 定位规则忽略 right,滑块按一格宽被左沿推着走,
+     不塌;平时宽度恰好一格或更长,这条不起作用。check:segstretch S2b 钉着。 */
+  min-width: calc((100% - 4px) / var(--seg-n, 2));
   border-radius: var(--radius-pill, 999px);
   background: var(--seg-thumb);
   border: none;

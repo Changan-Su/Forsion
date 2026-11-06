@@ -16,6 +16,8 @@
  *     e 落定:与改之前那套(left:2px + width:(100%−4px)/n + translateX(i·100%))的落点逐像素相同(容差 0.5px),
  *       且 ≤ 480ms 到位(280 + 80 = 360ms,留余量)
  *  S2 中途反悔(120ms 时点回原格):收敛回原格,两条边不越出两格并起来的范围
+ *  S2b 中途改目标(0→3 起步后 10 / 40ms 改点 2;按上一个目标算方向是 l,滑块其实还在 0 附近、要往右走):
+ *      宽度始终 ≥ 一格(不塌成一条缝),收敛到第 2 格,不越出 0..3 格(Codex 评审 P1:两条边会交叉,宽度被夹成 0)
  *  S3 减少动态效果:点了之后第一帧就在目标位置
  *  S4 负对照:同一套采样量旧写法(transform 0.3s cubic-bezier(0.32, 1.25, 0.5, 1))跨三格必须量出过冲 > 2px —— 证明 S1b 抓得住
  *     (那条曲线冲过头约为行程的 2%:一格 57px 只有 1.2px,所以拿三格量;方案页实测侧栏筛选 3.5–3.9px 同一量级)
@@ -45,8 +47,8 @@ const record = (name, ok, detail) => {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? '  | ' + detail : ''}`)
 }
 
-/** 页内:点第 idx 格,逐帧记滑块两条边(相对轨道左沿)。reverseAt = 多少 ms 后点回原格。 */
-const SAMPLE = async ({ pillSel, idx, reverseAt, duration }) => {
+/** 页内:点第 idx 格,逐帧记滑块两条边(相对轨道左沿)。reverseAt = 多少 ms 后改点 thenIdx(缺省点回原格)。 */
+const SAMPLE = async ({ pillSel, idx, reverseAt, thenIdx, duration }) => {
   const pill = document.querySelector(pillSel)
   const thumb = pill.querySelector('.t2s-vaultseg-thumb, .lcl-vmode-thumb')
   const btns = [...pill.querySelectorAll(':scope > button')]
@@ -61,14 +63,14 @@ const SAMPLE = async ({ pillSel, idx, reverseAt, duration }) => {
     const tick = () => {
       const t = performance.now() - t0
       frames.push({ t, ...box() })
-      if (reverseAt != null && !reversed && t >= reverseAt) { reversed = true; btns[from].click() }
+      if (reverseAt != null && !reversed && t >= reverseAt) { reversed = true; btns[thenIdx ?? from].click() }
       if (t < duration) requestAnimationFrame(tick)
       else res()
     }
     requestAnimationFrame(tick)
   })
   // 旧写法的落点:同一条轨道里摆一颗按原 CSS 定位的影子(无过渡),量它的盒子
-  const end = reverseAt != null ? from : idx
+  const end = reverseAt != null ? thenIdx ?? from : idx
   const ghost = document.createElement('div')
   ghost.style.cssText = `position:absolute;top:2px;bottom:2px;left:2px;width:calc((100% - 4px) / ${btns.length});transform:translateX(${end * 100}%);transition:none;visibility:hidden`
   pill.appendChild(ghost)
@@ -183,6 +185,21 @@ async function main() {
       lo >= 2 - 0.5 && hi <= 2 + 3 * cell + 0.5 && Math.abs(last.l - 2) <= 0.5 && Math.abs(last.r - (2 + cell)) <= 0.5 && rv.dir === 'l',
       JSON.stringify({ lo: Math.round(lo * 10) / 10, hi: Math.round(hi * 10) / 10, end: [Math.round(last.l * 10) / 10, Math.round(last.r * 10) / 10], cell: Math.round(cell * 10) / 10, dir: rv.dir }))
 
+    for (const at of [10, 40]) {
+      const back = await p.evaluate(SAMPLE, { pillSel: LCL4, idx: 0, reverseAt: null, duration: 500 })
+      if (back.frames[back.frames.length - 1].l > 2.5) throw new Error('S2b 起点没回到第 0 格')
+      const mt = await p.evaluate(SAMPLE, { pillSel: LCL4, idx: 3, reverseAt: at, thenIdx: 2, duration: 760 })
+      const c = (mt.W - 4) / mt.n
+      const minW = Math.min(...mt.frames.map((f) => f.r - f.l))
+      const lo2 = Math.min(...mt.frames.map((f) => f.l))
+      const hi2 = Math.max(...mt.frames.map((f) => f.r))
+      const end2 = mt.frames[mt.frames.length - 1]
+      const r1 = (x) => Math.round(x * 10) / 10
+      record(`S2b 中途改目标(0→3,${at}ms 改点 2):宽度始终 ≥ 一格、收敛到第 2 格、不越出 0..3 格`,
+        minW >= c - 0.5 && lo2 >= 2 - 0.5 && hi2 <= 2 + 4 * c + 0.5 && Math.abs(end2.l - (2 + 2 * c)) <= 0.5 && Math.abs(end2.r - (2 + 3 * c)) <= 0.5,
+        JSON.stringify({ minW: r1(minW), cell: r1(c), lo: r1(lo2), hi: r1(hi2), end: [r1(end2.l), r1(end2.r)], dir: mt.dir }))
+    }
+
     const neg = await p.evaluate(SAMPLE_LEGACY, { pillSel: LCL4, from: 0, to: 3, duration: 520 })
     const na = assess(neg, 3)
     record('S4 负对照:旧写法(transform + 过冲曲线)0→3 同一套采样量得出过冲 > 2px、没有拉长', na.over > 2 && !na.lagSeen && na.maxW <= na.cell + 0.5, JSON.stringify({ over: na.over, lagSeen: na.lagSeen, maxW: na.maxW, cell: na.cell }))
@@ -195,6 +212,13 @@ async function main() {
     await p.waitForSelector(QF, { timeout: 20000 })
     await p.waitForTimeout(400)
     await runSteps(p, '⌘P 四格', QF, [1, 3, 2, 0])
+    const mt = await p.evaluate(SAMPLE, { pillSel: QF, idx: 3, reverseAt: 10, thenIdx: 2, duration: 760 })
+    const c = (mt.W - 4) / mt.n
+    const minW = Math.min(...mt.frames.map((f) => f.r - f.l))
+    const end2 = mt.frames[mt.frames.length - 1]
+    record('S2b ⌘P 中途改目标(0→3,10ms 改点 2):宽度始终 ≥ 一格、收敛到第 2 格',
+      minW >= c - 0.5 && Math.abs(end2.l - (2 + 2 * c)) <= 0.5 && Math.abs(end2.r - (2 + 3 * c)) <= 0.5,
+      JSON.stringify({ minW: Math.round(minW * 10) / 10, cell: Math.round(c * 10) / 10, end: [Math.round(end2.l * 10) / 10, Math.round(end2.r * 10) / 10] }))
     await p.close()
   }
 
