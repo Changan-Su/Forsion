@@ -1789,11 +1789,15 @@ export interface PluginContext {
     /** Shared prompt input + live model catalog. Local draft; the plugin owns submission.
      *  Feature-detect on older hosts. The host disposes mounts on disable/reload/setup failure.
      *  `modelPicker` / `toolbar` / `suggest` / `insertText` arrived together: older hosts ignore the options, so check
-     *  `typeof box.insertText === 'function'` on the returned handle. */
+     *  `typeof box.insertText === 'function'` on the returned handle. Later additions that a handle can't reveal
+     *  (an array of `suggest` triggers, the menu opening upward) are listed in `chatBoxCapabilities`. */
     mountChatBox?(
       el: HTMLElement,
       opts: import('../../../../shared/chatBox').PluginChatBoxOptions,
     ): import('../../../../shared/chatBox').PluginChatBoxHandle
+    /** What this host's Chat Box does beyond the options it has always taken (2026-11-04+), see `CHAT_BOX_CAPABILITIES`.
+     *  Missing field = none of them: e.g. pass `suggest` as an array only when this includes `'suggestMany'`. */
+    readonly chatBoxCapabilities?: readonly import('../../../../shared/chatBox').ChatBoxCapability[]
     mountFloatingToc(
       shell: HTMLElement,
       opts: PluginFloatingTocOptions,

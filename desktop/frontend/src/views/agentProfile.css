@@ -20,6 +20,7 @@
 .agents-roster-item strong { font-size: var(--ui-font-body, 13px); font-weight: 600; }
 .agents-roster-item strong svg { display: inline; margin-left: 5px; vertical-align: -1px; color: var(--accent-ink); }
 .agents-roster-item small { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agents-roster-off { margin-left: 6px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--overlay-medium, rgba(127, 127, 127, .12)); color: var(--text-muted); font-size: var(--ui-font-caption, 11px); font-style: normal; font-weight: 500; }
 .agents-roster-more { position: absolute; right: 3px; top: 16px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; opacity: 0; }
 .agents-roster-row:hover .agents-roster-more, .agents-roster-more:focus-visible, .agents-roster-more[aria-expanded=true] { opacity: 1; }
 .agents-roster-more:hover { background: var(--overlay-medium); color: var(--text); }

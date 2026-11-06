@@ -14,9 +14,23 @@
  *
  *  用法:面板挂上、定好位之后 `const d = emergeDroplet(按钮, 面板)`;要收时 `await d.retract()` 再卸载面板
  *  (retract 结束时面板已 visibility: hidden,卸载晚一帧也不闪;不卸载就调 `d.cancel()` 还原);
- *  组件卸载时 `d.cancel()`。源与面板之间的缝要 ≤ 12px,再远丝连不上。减少动态效果时只淡入 / 淡出。 */
+ *  组件卸载时 `d.cancel()`。源与面板之间的缝要 ≤ 12px,再远丝连不上。减少动态效果时只淡入 / 淡出。
+ *
+ *  选项(2026-11-05 水滴复用第一批:悬停预览 / 账号卡 / Mini 胶囊):
+ *  - `color`:液体的颜色,缺省读面板自身底色。底色画在 ::before 上的面板(Space 悬停预览 .rb-peek,卡里是活的 View,
+ *    DESIGN §4)自身是透明的,不传就看不见液体。
+ *  - `settled`:直接到「已接手」的状态,不放流出动画 —— 面板已经开着、只是换了源(预览换图标),之后收起要缩回新的源。
+ *  半透明底色(玻璃卡面、暗色下的半透明白)拆成「不透明色 + 整层透明度」:融球的透明度阈值会把半透明整块吃掉。
+ *  源被关在别的层叠上下文里、z-index 抬不过液体层时(账号卡的头像),液体层按源的轮廓挖洞,源照样露在上面。 */
 import { zoomOf } from './menuAnchor'
 import { reducedMotion } from './spring'
+
+export interface DropletOptions {
+  /** 液体颜色;缺省 = 面板自身的 background-color。 */
+  color?: string
+  /** 跳过流出,直接是接手后的样子(只为之后能倒放缩回这个源)。 */
+  settled?: boolean
+}
 
 export interface Droplet {
   /** 倒放收回;resolve 时面板已缩成一滴、不可见,由调用方卸载。重复调用返回同一个 Promise。 */
@@ -51,17 +65,43 @@ export function ms(name: string, fallback: number): number {
 export const curve = (name: string, fallback: string): string => root().getPropertyValue(name).trim() || fallback
 
 type Box = { x: number; y: number; w: number; h: number; r: number }
+/** 「rgba(r, g, b, a)」→ 不透明色 + 透明度;认不出的格式原样、当不透明。 */
+export function splitAlpha(color: string): { rgb: string; alpha: number } {
+  const m = /^rgba?\(([^)]+)\)$/.exec(color.trim())
+  if (!m) return { rgb: color, alpha: 1 }
+  const p = m[1].split(/[\s,/]+/).filter(Boolean)
+  if (p.length < 4) return { rgb: color, alpha: 1 }
+  const a = p[3].endsWith('%') ? parseFloat(p[3]) / 100 : parseFloat(p[3])
+  return Number.isFinite(a) && a < 1 ? { rgb: `rgb(${p[0]}, ${p[1]}, ${p[2]})`, alpha: Math.max(0, a) } : { rgb: color, alpha: 1 }
+}
+
+/** 圆角:百分比(头像 50%)按短边折成 px。 */
+function radiusOf(el: HTMLElement, w: number, h: number): number {
+  const v = getComputedStyle(el).borderTopLeftRadius.trim()
+  const n = parseFloat(v)
+  if (!Number.isFinite(n)) return 0
+  return v.endsWith('%') ? (n / 100) * Math.min(w, h) : n
+}
+
+/** 液体层上按源的轮廓挖洞(局部 px):整层矩形 + 圆角矩形,evenodd 填充 = 中间透明。 */
+function holeMask(W: number, H: number, b: Box): string {
+  const { x, y, w, h } = b, r = Math.min(b.r, w / 2, h / 2)
+  const rr = `M${x + r} ${y}H${x + w - r}A${r} ${r} 0 0 1 ${x + w} ${y + r}V${y + h - r}A${r} ${r} 0 0 1 ${x + w - r} ${y + h}H${x + r}A${r} ${r} 0 0 1 ${x} ${y + h - r}V${y + r}A${r} ${r} 0 0 1 ${x + r} ${y}Z`
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='${W}' height='${H}'><path fill-rule='evenodd' d='M0 0H${W}V${H}H0Z${rr}'/></svg>`
+  return `url("data:image/svg+xml,${encodeURIComponent(svg)}")`
+}
+
 const inset = (b: Box, p: Box, z: number): string =>
   `inset(${(b.y - p.y) / z}px ${(p.x + p.w - b.x - b.w) / z}px ${(p.y + p.h - b.y - b.h) / z}px ${(b.x - p.x) / z}px round ${b.r / z}px)`
 
-export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet {
+export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: DropletOptions = {}): Droplet {
   const kids = (): HTMLElement[] => Array.from(panel.children) as HTMLElement[]
   if (reducedMotion() || typeof panel.animate !== 'function' || !panel.parentElement) {
     // 减少动态效果:留反馈、去点缀(DESIGN §3 规矩 8)—— 只淡入 / 淡出,不形变
     const fade = (from: number, to: number, duration: number): Animation =>
       panel.animate([{ opacity: from }, { opacity: to }], { duration, easing: curve('--ease-calm', 'ease') })
     panel.style.visibility = ''
-    fade(0, 1, ms('--duration-fast', 150))
+    if (!opts.settled) fade(0, 1, ms('--duration-fast', 150))
     let closing: Promise<void> | null = null
     return {
       retract: () => (closing ??= fade(1, 0, ms('--menu-exit-duration', 80)).finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined)),
@@ -77,6 +117,7 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet 
   const s = source.getBoundingClientRect()
   const pr = panel.getBoundingClientRect()
   const pcs = getComputedStyle(panel)
+  const fill = splitAlpha(opts.color ?? pcs.backgroundColor)
   const radius = parseFloat(pcs.borderTopLeftRadius) || 12
   const pz = zoomOf(panel)
   const p: Box = { x: pr.left, y: pr.top, w: pr.width, h: pr.height, r: radius * pz }
@@ -93,6 +134,7 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet 
   layer.className = 'lcl-droplet'
   layer.setAttribute('aria-hidden', 'true')
   layer.style.zIndex = String((parseInt(pcs.zIndex, 10) || 1) - 1)
+  if (fill.alpha < 1) layer.style.opacity = String(fill.alpha)
   panel.parentElement.insertBefore(layer, panel)
   const z = zoomOf(layer)
   Object.assign(layer.style, {
@@ -107,7 +149,7 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet 
   }
   const blob = (b: { x: number; y: number; w: number; h: number }, r: number): HTMLElement => {
     const el = document.createElement('i')
-    Object.assign(el.style, { left: `${(b.x - ux) / z}px`, top: `${(b.y - uy) / z}px`, width: `${b.w / z}px`, height: `${b.h / z}px`, borderRadius: `${r / z}px`, background: pcs.backgroundColor })
+    Object.assign(el.style, { left: `${(b.x - ux) / z}px`, top: `${(b.y - uy) / z}px`, width: `${b.w / z}px`, height: `${b.h / z}px`, borderRadius: `${r / z}px`, background: fill.rgb })
     layer.appendChild(el)
     return el
   }
@@ -115,9 +157,28 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet 
   const srcWas = { position: source.style.position, zIndex: source.style.zIndex }
   if (getComputedStyle(source).position === 'static') source.style.position = 'relative'
   source.style.zIndex = String((parseInt(pcs.zIndex, 10) || 1) + 1)
-  const restoreSource = (): void => { source.style.position = srcWas.position; source.style.zIndex = srcWas.zIndex }
-  const srcBlob = blob({ x: s.left, y: s.top, w: s.width, h: s.height }, (parseFloat(getComputedStyle(source).borderTopLeftRadius) || 8) * zoomOf(source))
+  // 只还原一次:倒放中途被 cancel() 后马上又对同一个源流出新的一滴,旧倒放的 finally 晚一拍才到,不能把新那滴抬的层级撤掉
+  let restored = false
+  const restoreSource = (): void => {
+    if (restored) return
+    restored = true
+    source.style.position = srcWas.position
+    source.style.zIndex = srcWas.zIndex
+  }
+  const srcR = (radiusOf(source, source.offsetWidth, source.offsetHeight) || 8) * zoomOf(source)
+  const srcBlob = blob({ x: s.left, y: s.top, w: s.width, h: s.height }, srcR)
   const body = blob(p, 0)
+  // 源被自己的层叠上下文关在液体层下面(账号卡:头像在 .shell-host 的 isolation 里,面板 portal 在 body 上,
+  // 上面抬的 z-index 出不了那个上下文):命中测试看源中心最上面是不是液体,是就在液体层上按源的轮廓挖个洞,
+  // 源从洞里露出来 —— 看起来仍是「源压在液体上」。能压上去的(悬停预览、「+N」、目录)不挖,液体照常垫在图标底下。
+  layer.style.pointerEvents = 'auto'
+  const hit = document.elementFromPoint(s.left + s.width / 2, s.top + s.height / 2)
+  layer.style.pointerEvents = ''
+  if (hit && layer.contains(hit)) {
+    const mask = holeMask(parseFloat(layer.style.width), parseFloat(layer.style.height), { x: (s.left - ux) / z, y: (s.top - uy) / z, w: s.width / z, h: s.height / z, r: srcR / z })
+    Object.assign(layer.style, { maskImage: mask, webkitMaskImage: mask, maskSize: '100% 100%', webkitMaskSize: '100% 100%', maskRepeat: 'no-repeat', webkitMaskRepeat: 'no-repeat' })
+    layer.dataset.hole = ''
+  }
 
   // 三段同一时间轴:源鼓起再缩没(丝在 0.6 断)/ 液体从一滴胀成面板 / 面板的裁切跟着液体
   const pour = (el: HTMLElement, zz: number): Animation => el.animate(
@@ -133,16 +194,27 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet 
   let clip: Animation | null = pour(panel, pz)
   const shows = kids().map((k) => k.animate([{ opacity: 0 }, { opacity: 1 }], { delay: D * 0.22, duration: D * 0.3, easing: surface, fill: 'backwards' }))
   // 液体停稳(0.9D)→ 真面板一帧接手:去掉 pouring、撤掉裁切(fill 留着会把阴影也裁掉)、液体层藏起来留给倒放
-  const handoff = layer.animate([{ opacity: 1 }, { opacity: 1 }], { duration: D * 0.9 })
-  handoff.finished.then(() => {
+  const handoff = layer.animate([{ opacity: fill.alpha }, { opacity: fill.alpha }], { duration: D * 0.9 })
+  let closing: Promise<void> | null = null
+  const land = (): void => {
+    // 已经在倒放就别接手:settled 时 finish() 让 handoff.finished 立刻 resolve,下面那个 then(land) 排在微任务里,
+    // 紧接着同步调的 retract()(开着时变了尺寸 → 重建一滴马上倒放)会被它晚一拍撤掉裁切、藏起液体,倒放就没了
+    if (closing) return
     panel.classList.remove(POURING)
     clip?.cancel()
     clip = null
     layer.style.display = 'none'
-  }, () => {})
+  }
+  handoff.finished.then(land, () => {})
+  if (opts.settled) {
+    // 同一帧里放到底再接手:页面不会画出中间态(finish 是同步的,接手也同步做,不等 finished 的微任务)
+    for (const a of [swell, grow, handoff, ...shows]) a.finish()
+    land()
+  }
 
-  let closing: Promise<void> | null = null
+  let rebuilt: Droplet | null = null
   const cancel = (): void => {
+    rebuilt?.cancel()
     for (const a of [swell, grow, handoff, ...shows]) a.cancel()
     clip?.cancel()
     panel.getAnimations({ subtree: true }).forEach((a) => a.cancel()) // 带 subtree:收到一半又展开时,内容的淡出还在跑
@@ -154,6 +226,16 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement): Droplet 
   return {
     retract() {
       if (closing) return closing
+      // 开着期间面板换了位置 / 尺寸(账号卡展开额度、账号列表异步长高,OverlayAt 重新夹了位置)或源挪了:
+      // 液体本体和裁切还按流出时的矩形,倒放会先跳回旧位置。按现在的矩形重建一滴(直接停在接手后),再倒放它
+      const pn = panel.getBoundingClientRect(), sn = source.getBoundingClientRect()
+      const off = (a: DOMRect, b: { left: number; top: number; width: number; height: number }): boolean =>
+        Math.max(Math.abs(a.left - b.left), Math.abs(a.top - b.top), Math.abs(a.width - b.width), Math.abs(a.height - b.height)) > 1
+      if (off(pn, pr) || off(sn, s)) {
+        cancel()
+        rebuilt = emergeDroplet(source, panel, { ...opts, settled: true })
+        return (closing = rebuilt.retract())
+      }
       handoff.cancel()
       shows.forEach((a) => a.cancel())
       const t = Math.min(D, Number(grow.currentTime ?? D)) // 开到一半被收:从这一帧接着倒放

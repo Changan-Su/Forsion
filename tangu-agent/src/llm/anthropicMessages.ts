@@ -20,7 +20,8 @@
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
 import { isStreamContextOverflow } from '../services/contextWindowStore.js';
-import { PROTOCOL_MARK } from './openaiCompat.js';
+import { PROTOCOL_MARK, RUN_MARK, SESSION_MARK } from './openaiCompat.js';
+import { buildOpenCodeHeaders, isOpenCodeHost } from './opencodeGo.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { stringifyWellFormed } from './wellFormedJson.js';
 
@@ -266,6 +267,8 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
   // block_binding 只能配 adaptive / enabled:disabled 上带它本身就是 400(那时也没有思考块回传)。
   const canBind = body.thinking?.type === 'adaptive' || body.thinking?.type === 'enabled';
   const url = anthropicMessagesUrl(baseUrl);
+  // 同一 run 内重发(binding 回退)用同一个会话头,所以在 send 外面算一次。
+  const openCodeHeaders = isOpenCodeHost(url) ? buildOpenCodeHeaders(payload?.[SESSION_MARK] || payload?.[RUN_MARK]) : {};
   const bindKey = `${url}\n${apiKey}\n${body.model}`; // 带上端点:同一个 key 换到别的代理,那边没点名要过
   const send = (bind: boolean): Promise<Response> =>
     fetch(url, {
@@ -277,6 +280,8 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
         // Claude Code 的中转(ANTHROPIC_AUTH_TOKEN,导入本机配置会带进来)认 Bearer;Anthropic 自家只认 x-api-key,不给它多发
         ...(isAnthropicHost(url) ? {} : { authorization: `Bearer ${apiKey}` }),
         ...(bind ? { 'anthropic-beta': THINKING_BINDING_BETA } : {}),
+        // OpenCode Go 的 /anthropic/v1 同样要求会话头(缺了 400,见 opencodeGo.ts)
+        ...openCodeHeaders,
       },
       body: stringifyWellFormed(
         bind ? { ...body, thinking: { ...body.thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } } } : body,
