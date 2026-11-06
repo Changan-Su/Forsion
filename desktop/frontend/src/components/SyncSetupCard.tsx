@@ -15,6 +15,7 @@ import { applySyncChoices, getSync, markSyncDecided, openPenzorSync, setSync, st
 import { notifyApp } from '../stores/notificationStore'
 import { POPUP_PRIORITY, usePopupTurn } from '../stores/popupQueue'
 import { watchAccountName } from '../services/accountName'
+import { formatDateTime } from '../format/time'
 import './syncSetup.css'
 
 registerMessages({
@@ -59,10 +60,25 @@ registerMessages({
   'syncSetup.c.counting': { zh: '正在算要传多少…', en: 'Working out what will move…' },
   'syncSetup.c.recount': { zh: '文件刚有变化，已经重新算过，请再点一次「开始同步」。', en: 'Files just changed, so this was recalculated. Press Start syncing again.' },
   'syncSetup.c.tune': { zh: '以后在「蓬洲云 › 同步」里细调', en: 'Fine-tune later in Penzor Cloud › Sync' },
+  'syncSetup.c.askTitle': { zh: '{name} 在云端已经有一份', en: '{name} already has a copy in the cloud' },
+  'syncSetup.c.askWhen': { zh: '云端那份最后改于 {cloud}，这台最后改于 {local}。选一次，以后自动合。', en: 'Cloud copy last changed: {cloud}. This computer: {local}. Choose once; after that it merges automatically.' },
+  'syncSetup.c.askMerge': { zh: '合在一起', en: 'Merge them' },
+  'syncSetup.c.askMergeDesc': { zh: '记忆、日志、日程按条合并；两边都改了的设置用较新的那份，另一份放进本机回收', en: 'Memory, logs and schedules merge entry by entry. Where both sides changed settings, the newer copy wins and the other goes to the recycle folder' },
+  'syncSetup.c.askCloud': { zh: '以云端为准', en: 'Use the cloud copy' },
+  'syncSetup.c.askCloudDesc': { zh: '这台的整份先放进本机回收，再换成云端那份', en: 'This computer’s copy goes to the recycle folder first, then the cloud copy replaces it' },
+  'syncSetup.c.askLocal': { zh: '以这台为准', en: 'Use this computer’s copy' },
+  'syncSetup.c.askLocalDesc': { zh: '云端那份先进存档，再换成这台的', en: 'The cloud copy is archived first, then replaced with this computer’s' },
+  'syncSetup.c.askRecommended': { zh: '建议', en: 'Recommended' },
+  'syncSetup.c.askFoot': { zh: '回收在 agents/.removed，能找回', en: 'Recycled files are in agents/.removed and can be recovered' },
 })
 
 type Cat = 'notes' | 'agents' | 'profile' | 'plugins'
-interface SetupPreview { token: string; upload: number; download: number; bytes: number }
+/** 第一次打开、云端已有一份且不一样的 Agent(Extend 预览里算好的);选择随「开始同步」一起交给 Extend */
+type AgentChoice = 'merge' | 'cloud' | 'local'
+const ASK_CHOICES: Array<[AgentChoice, 'syncSetup.c.askMerge' | 'syncSetup.c.askCloud' | 'syncSetup.c.askLocal', 'syncSetup.c.askMergeDesc' | 'syncSetup.c.askCloudDesc' | 'syncSetup.c.askLocalDesc']> = [
+  ['merge', 'syncSetup.c.askMerge', 'syncSetup.c.askMergeDesc'], ['cloud', 'syncSetup.c.askCloud', 'syncSetup.c.askCloudDesc'], ['local', 'syncSetup.c.askLocal', 'syncSetup.c.askLocalDesc']]
+interface AgentAskLite { slug: string; cloudMtime: number | null; localMtime: number | null }
+interface SetupPreview { token: string; upload: number; download: number; bytes: number; agentAsks?: AgentAskLite[] }
 interface ContentLite { sources?: Array<{ path: string; size: number; files?: number; agent?: boolean; name?: string; nameEn?: string }> }
 interface AgentLite { slug: string; name?: string; nameEn?: string }
 interface ContentSetup { preview: SetupPreview | null; legacy?: boolean; error?: string; recount?: boolean; notes?: { files: number; size: number }; agents?: AgentLite[] }
@@ -100,6 +116,7 @@ export function SyncSetupHost(): React.JSX.Element | null {
   const [cpicked, setCpicked] = useState<Record<Exclude<Cat, 'agents'>, boolean>>({ notes: true, profile: true, plugins: true })
   const [apicked, setApicked] = useState<string[]>([])
   const [setup, setSetup] = useState<ContentSetup | null>(null)
+  const [choices, setChoices] = useState<Record<string, AgentChoice>>({})
   const [nonce, setNonce] = useState(0)
   const main = windowKind() === 'main'
   // 自动弹出的卡片排进宿主的弹窗队列(协议更新、What's new 在前;引导开着时不出)
@@ -166,7 +183,9 @@ export function SyncSetupHost(): React.JSX.Element | null {
   const startContent = async (): Promise<void> => {
     if (!setup?.preview) return
     setBusy(true)
-    try { await invokeContent('penzor:sync:apply', setup.preview.token) }
+    const asks = setup.preview.agentAsks ?? []
+    const chosen = Object.fromEntries(asks.map((a) => [a.slug, choices[a.slug] ?? 'merge']))
+    try { await invokeContent('penzor:sync:apply', setup.preview.token, ...(asks.length ? [chosen] : [])) }
     catch (e) {
       setBusy(false)
       const m = String((e as Error)?.message ?? e)
@@ -190,6 +209,8 @@ export function SyncSetupHost(): React.JSX.Element | null {
     ['plugins', <Puzzle size={15} />, t('syncSetup.c.plugins'), t('syncSetup.c.pluginsHint')],
   ]
   const pv = setup?.preview
+  const when = (ms: number | null): string => ms ? formatDateTime(ms, { locale }) : '—'
+  const agentName = (slug: string): string => { const a = setup?.agents?.find((x) => x.slug === slug); return (locale === 'en' ? a?.nameEn ?? a?.name : a?.name ?? a?.nameEn) ?? slug }
   const counts = setup?.error ? t('syncSetup.failed', { error: setup.error }) : !pv ? t('syncSetup.c.counting')
     : (setup?.recount ? t('syncSetup.c.recount') + ' ' : '') + (pv.bytes > 0 ? t('syncSetup.c.counts', { up: String(pv.upload), down: String(pv.download), size: fmtBytes(pv.bytes) }) : t('syncSetup.c.countsPlain', { up: String(pv.upload), down: String(pv.download) }))
   const rows: Array<[SyncKind, React.JSX.Element, string, string]> = [
@@ -240,6 +261,23 @@ export function SyncSetupHost(): React.JSX.Element | null {
                 </Fragment>
               ))}
               <p className="sync-setup-hint">{counts}</p>
+              {!!pv?.agentAsks?.length && (
+                <div className="sync-setup-asks" data-testid="sync-setup-asks">
+                  {pv.agentAsks.map((a) => (
+                    <div key={a.slug} className="sync-setup-ask" role="radiogroup" aria-label={agentName(a.slug)} data-agent={a.slug}>
+                      <b>{t('syncSetup.c.askTitle', { name: agentName(a.slug) })}</b>
+                      <small>{t('syncSetup.c.askWhen', { cloud: when(a.cloudMtime), local: when(a.localMtime) })}</small>
+                      {ASK_CHOICES.map(([c, title, desc]) => (
+                        <label key={c} className="sync-setup-opt">
+                          <input type="radio" name={`ask-${a.slug}`} checked={(choices[a.slug] ?? 'merge') === c} disabled={busy} onChange={() => setChoices({ ...choices, [a.slug]: c })} />
+                          <span><b>{t(title)}</b>{c === 'merge' && <em>{t('syncSetup.c.askRecommended')}</em>}<small>{t(desc)}</small></span>
+                        </label>
+                      ))}
+                    </div>
+                  ))}
+                  <p className="sync-setup-hint">{t('syncSetup.c.askFoot')}</p>
+                </div>
+              )}
             </div> : <div className="sync-setup-body">
               <p className="sync-setup-lead">{s.contentRules?t('syncSetup.scopeLead'):t('syncSetup.lead', { name })}</p>
               <p className="sync-setup-hint">{s.storage?.complete && s.storage.usedBytes != null ? t(s.storage.enforcement ? 'syncSetup.storageEnforced' : 'syncSetup.storage', { used: fmtBytes(s.storage.usedBytes), max: fmtBytes(s.storage.limitBytes) }) : t('syncSetup.storageUnknown')}</p>
