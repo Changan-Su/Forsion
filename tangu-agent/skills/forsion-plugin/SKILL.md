@@ -1039,6 +1039,14 @@ const tags = task.tags                                    // 行里的 #标签(�
 const body = ctx.databases?.readBody?.(db.path, row.id)  // 经典表一行的记录正文;笔记视图 → null
 ctx.databases?.setBody?.(db.path, row.id, next, { body }) // 整份替换;带 expected,正文被别处改过就 false
 const col = ctx.databases?.addColumn?.(db.path, { name: '标签', type: 'multiselect' }) // 返回新列 id,马上能 setCell
+
+// 2026-11-04+:整张表一次改,和表格界面同一条写口;fn 是纯函数,id 在外面先生成
+const viewId = crypto.randomUUID()
+ctx.databases?.mutate?.(db.path, (d) => {
+  d.columns.find((c) => c.id === statusCol)?.options?.push('搁置')
+  d.views = [...(d.views ?? []), { id: viewId, name: '看板', type: 'kanban', groupBy: statusCol }]
+  return d
+})
 ```
 
 - **表的两种 `kind`**:`table` = 经典 .db(行在文件里);`notes` = 笔记视图(一行 = 文件夹里一篇笔记,行 id 就是笔记路径,
@@ -1062,6 +1070,14 @@ const col = ctx.databases?.addColumn?.(db.path, { name: '标签', type: 'multise
 - **加列 `addColumn(path, { name, type })`(2026-11-02+)**:经典表加一列基础类型(`text` / `number` / `checkbox` / `date` / `select` /
   `multiselect` / `url`),返回列 id,之后马上能 `setCell`。⚠️往一张**活表**加列别用 `ctx.app.mutateDb`:那条是磁盘比对交换,看不见还没落盘的行,
   写完一重读就把用户刚加的那一行冲掉了(2026-11-02 实拍)。
+- **整表改 `mutate(path, fn)`(2026-11-04+)**:表格界面自己用的那条写口。`fn` 拿到当前表(含还没落盘的改动)的一份拷贝,返回改好的整张表
+  (原地改完 `return d` 也行),返回 `null` = 不改。改列结构、批量改格、调行序、建 / 改视图都走这里;只改一格仍用 `setCell`(能带 expected)。
+  ⚠️ 落盘撞上别处的新版本时,宿主重读后**在新数据上再跑一次 `fn`** —— `fn` 必须是纯函数:新行 / 新列 / 视图的 id 在外面先生成好,
+  里面别调计数器、别发请求、别读外面会变的状态;按 id 找行和列,别按下标。返回 false = 没这张表 / 笔记视图 / 只读 / 叠加源、`fn` 抛错、
+  返回的不是合法表结构、换掉或删掉了首列(改它的类型也算)、行或列 id 重复、改了 `source`、版本号比宿主认识的新、或者内容上没改动(不排队)。
+  返回 true 之后,重放时结果才不合规(比如别处刚加了同 id 的列)这笔就整笔作废,只在控制台留一条警告 —— 用随机 id 就碰不上。盖章列(自动编号、创建时间、
+  修改时间)的格子归宿主:已有行保持原值,新行由宿主盖,改过的行宿主自己刷新修改时间。删行时别的行指向它的关联格不会自动清,要清就在 `fn` 里一起改。
+  旧宿主没有这个成员:一律 `?.`,缺席时退回 `addColumn` / `setCell` 那几条细写口,别退回 `ctx.app.mutateDb`(见上条)。
 - 两个 `subscribe` 都**立刻回调一次**,插件停用时宿主统一退订(返回的退订函数照样可以自己调)。`ready` 两边同一个意思:库已恢复、**当前这个库**拉过了;换库那一刻翻回 `false`。(2026-10-16 早些的 seams 分支上 noteTasks 在库恢复前会先给 `ready:true` + 空列表,已修。)
 - **声明的能力会写给用户看**:插件详情页在描述下面列一行「这个插件可以：读写你的多维表、读写笔记里的 @ 任务、读取前台窗口」(只列声明了的那几项,`activeWindow` / `calendar` 同理)。只声明真要用的 —— 多写一项,用户在详情页就多看到一项授权。
 - 端到端台架:Genesis `desktop` 的 `npm run check:plugindata`(真 Electron × 外置探针插件 × 预置库,核对注入闸、ready 先假后真、写口落盘、详情页那一行;10-17 起含 `"calendar"` 档的闸、成员快照与 `setColor`)。
