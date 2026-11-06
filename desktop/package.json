@@ -55,6 +55,7 @@
     "e2e:spacewindow-input": "node scripts/space-window-input.e2e.cjs",
     "e2e:ribbon-overflow": "node scripts/ribbon-overflow.e2e.cjs",
     "e2e:droplet-reuse": "node scripts/droplet-reuse.e2e.cjs",
+    "probe:motion": "node scripts/motion-r3.probe.cjs",
     "check:ribbon-menu": "node scripts/ribbon-menu.check.cjs",
     "e2e:mindmap": "node scripts/mindmap.e2e.cjs",
     "e2e:canvas": "node scripts/canvas.e2e.cjs",
