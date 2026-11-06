@@ -408,6 +408,7 @@
     "check:blockops": "node scripts/e2e-editor.cjs --check=block-file-ops",
     "check:selection-display": "node scripts/e2e-editor.cjs --check=selection-display",
     "check:quickfind": "node scripts/e2e-editor.cjs --check=quickfind-cats",
+    "check:segstretch": "node scripts/e2e-editor.cjs --check=seg-stretch",
     "check:findbar": "node scripts/findbar.check.cjs",
     "check:cssvar": "node scripts/css-var-override.check.cjs",
     "check:shadowcontract": "node scripts/shadow-contract.check.cjs",

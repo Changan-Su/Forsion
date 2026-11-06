@@ -23,7 +23,7 @@
     "frontend/src/components/syncSetup.css": 1,
     "frontend/src/mini/voiceCall.css": 3,
     "frontend/src/styles/base.css": 85,
-    "frontend/src/styles/sidebar2.css": 4,
+    "frontend/src/styles/sidebar2.css": 2,
     "frontend/src/styles/unitSwitcher.css": 3,
     "frontend/src/theme/spaceAmbient.css": 3,
     "frontend/src/views/agentProfile.css": 20,
@@ -42,8 +42,7 @@
     "../lcl/engine/engine.css": 16,
     "../lcl/engine/miniCard.css": 2,
     "../lcl/engine/singleColumn.css": 10,
-    "../lcl/engine/skeleton.css": 4,
-    "../lcl/engine/viewModes.css": 2
+    "../lcl/engine/skeleton.css": 4
   },
   "menusWithoutExit": {
     "frontend/src/amadeus/blocks/markdown/MarkdownBlock.tsx": 1,
@@ -98,7 +97,6 @@
     "frontend/src/components/IntelligentUi.css": 5,
     "frontend/src/components/onboarding.css": 7,
     "frontend/src/styles/base.css": 26,
-    "frontend/src/styles/sidebar2.css": 1,
     "frontend/src/views/DashboardCompactViews.css": 6,
     "frontend/src/views/HomepageView.tsx": 2,
     "frontend/src/views/chat2/chat2.css": 11,
@@ -111,7 +109,6 @@
     "../lcl/components/uploadProgress.css": 2,
     "../lcl/engine/engine.css": 5,
     "../lcl/engine/miniCard.css": 1,
-    "../lcl/engine/singleColumn.css": 1,
-    "../lcl/engine/viewModes.css": 1
+    "../lcl/engine/singleColumn.css": 1
   }
 }
