@@ -280,7 +280,9 @@ function judgeSeg(r, theme) {
       if (off > 2.5) issues.push(`融球不是从上一格长出来: 尾 [${tail}] vs 上一格 [${src.map((x) => x.toFixed(1))}] 偏 ${off.toFixed(1)}px`)
     }
   }
-  if (theme === 'fade' && r.frames.length > 2 && (Math.abs(r.frames[2].l - target[0]) > 1.5)) issues.push(`只淡入淡出下滑块没直接到位: 第 2 帧 ${r.frames[2].l} vs ${target[0].toFixed(1)}`)
+  // 只淡入淡出:点了下一帧就在(第一次点的那一格)—— 中途改目标那一轮,第 2 帧还在第一个目标上
+  const first = r.cells[r.to]
+  if (theme === 'fade' && r.frames.length > 2 && (Math.abs(r.frames[2].l - first[0]) > 1.5)) issues.push(`只淡入淡出下滑块没直接到位: 第 2 帧 ${r.frames[2].l} vs ${first[0].toFixed(1)}`)
   return issues
 }
 
