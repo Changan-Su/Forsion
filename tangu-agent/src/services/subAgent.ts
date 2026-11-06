@@ -41,6 +41,7 @@ import { loadCustomTools } from '../tools/customTools.js';
 import { AUTONOMY_SECTION, TOOL_FAILURE_SECTION, hostEnvSection } from '../profiles/promptSections.js';
 import type { ChatMessage, ThinkingLevel } from '../core/types.js';
 import { effectiveRemote } from './remoteOrigin.js';
+import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 
 // 24(原 8):8 轮连一条常规链路都跑不完 —— 09-06 青鸟视频那次,子代理第 8 轮刚诊断出根因就被截断
 // (use_skill → 定位脚本 → 转录 → ASR → 落盘 → 报告 已占 7 轮,一次报错就没了)。
@@ -339,7 +340,7 @@ export async function runSubAgent(p: SubAgentParams): Promise<string> {
   const def = p.agentSlug ? await getAgent(p.agentSlug).catch(() => null) : null;
   const persona = def
     ? [def.systemPrompt, def.soul, def.name?.trim() ? agentIdentitySection({ name: def.name.trim(), description: String(def.description || '').trim() }) : '']
-      .map((s) => String(s || '').trim()).filter(Boolean).join('\n\n')
+      .map((s) => String(s || '').trim()).filter(Boolean).map((s) => textForThisDevice(s, runTagContext(!!deps().profile.capabilities.hostExec))).join('\n\n') // 别台的段落折成一行(11-06)
     : (p.instructions ? String(p.instructions).trim() : '');
   // 项目级指令(AGENTS.md/CLAUDE.md)必须跟着走:子代理拿的是**同一个 cwd 和同一套文件工具**,
   // 主 agent 一句「按项目约定来」不构成传递 —— 不注入的话「禁止改 generated/」这类约束委派后就失效(codex)。
