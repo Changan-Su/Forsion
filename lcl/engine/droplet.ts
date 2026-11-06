@@ -2,7 +2,9 @@
  *
  *  ① 源控件先鼓一下 ② 一滴液体从源朝面板的那条边冒出来,胀成面板 ③ 中间连着的丝在液体快长好时被拉断
  *  ④ 内容浮在液体上、按液体当前轮廓露出来(不等液体长完)⑤ 液体停稳那一刻真面板一帧接手(同色、不叠淡)。
- *  收起 = 倒放(0.7 倍时长):内容先淡掉,液体缩回一滴、被源吸回去。打断(开到一半就收)从当前帧接着倒放。
+ *  收起 = 倒放(0.7 倍时长):内容先淡掉,液体缩回一滴、被源吸回去。打断(开到一半就收)从当前帧接着倒放;
+ *  倒放途中又要开(再点源 / 指针回来),调用方先试 `reopen()`:从这一帧掉头往前放,不撤掉从一滴重来。
+ *  ⑥ 接手后 1px 描边从透明淡进来(--duration-fast):底色、投影接得住,只有描边会整条一帧出现(11-06 动效第三轮,用户选)。
  *
  *  做法:面板是调用方自己的真 DOM(React 管),这里只在它身上挂 `lcl-droplet-pouring`(去底色 / 描边 / 阴影)
  *  并给它动 clip-path;液体是面板前面插的一层兄弟节点(SVG 融球滤镜:模糊 + 透明度阈值),绝不包住面板 ——
@@ -30,6 +32,8 @@ export interface DropletOptions {
   color?: string
   /** 跳过流出,直接是接手后的样子(只为之后能倒放缩回这个源)。 */
   settled?: boolean
+  /** 内部用(retract 按新矩形重建):从流出的这一毫秒接着,不放前面那段;已到 D 等同 settled。 */
+  at?: number
 }
 
 export interface Droplet {
@@ -37,6 +41,10 @@ export interface Droplet {
   retract(): Promise<void>
   /** 立刻清场(不放动画):组件卸载、被别的面板顶掉时用。 */
   cancel(): void
+  /** 倒放途中又要开:从此刻掉头往前放、停在打开,返回 true;这次 retract() 的 Promise 作废(不再 resolve),
+   *  之后要收再调 retract()。不在倒放(没收、已收完、减少动态效果)返回 false,调用方照旧 cancel() 再流出一滴。
+   *  可选:别的展开方式(动效主题的拉伸 / 平移)可以不实现,调用方写 `d.reopen?.()`。 */
+  reopen?(): boolean
 }
 
 const FILTER_ID = 'lcl-droplet-goo'
@@ -101,10 +109,12 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
     const fade = (from: number, to: number, duration: number): Animation =>
       panel.animate([{ opacity: from }, { opacity: to }], { duration, easing: curve('--ease-calm', 'ease') })
     panel.style.visibility = ''
-    if (!opts.settled) fade(0, 1, ms('--duration-fast', 150))
+    const enter = opts.settled ? null : fade(0, 1, ms('--duration-fast', 150))
     let closing: Promise<void> | null = null
+    // 淡入还没走完就收:从此刻的透明度接着淡出,不先跳回 1(11-06 动效第三轮)
+    const leave = (): Animation => { const o = +getComputedStyle(panel).opacity; enter?.cancel(); return fade(o, 0, ms('--menu-exit-duration', 80)) }
     return {
-      retract: () => (closing ??= fade(1, 0, ms('--menu-exit-duration', 80)).finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined)),
+      retract: () => (closing ??= leave().finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined)),
       cancel: () => { panel.getAnimations().forEach((a) => a.cancel()); panel.style.visibility = '' },
     }
   }
@@ -192,24 +202,40 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
   const grow = pour(body, z)
   panel.classList.add(POURING)
   let clip: Animation | null = pour(panel, pz)
-  const shows = kids().map((k) => k.animate([{ opacity: 0 }, { opacity: 1 }], { delay: D * 0.22, duration: D * 0.3, easing: surface, fill: 'backwards' }))
-  // 液体停稳(0.9D)→ 真面板一帧接手:去掉 pouring、撤掉裁切(fill 留着会把阴影也裁掉)、液体层藏起来留给倒放
-  const handoff = layer.animate([{ opacity: fill.alpha }, { opacity: fill.alpha }], { duration: D * 0.9 })
+  let shows = kids().map((k) => k.animate([{ opacity: 0 }, { opacity: 1 }], { delay: D * 0.22, duration: D * 0.3, easing: surface, fill: 'backwards' }))
+  let outs: Animation[] = [] // 倒放时内容的淡出(掉头时只撤它们,不碰内容自己的 CSS 动画)
   let closing: Promise<void> | null = null
-  const land = (): void => {
-    // 已经在倒放就别接手:settled 时 finish() 让 handoff.finished 立刻 resolve,下面那个 then(land) 排在微任务里,
+  let gen = 0 // 每次倒放 / 掉头 +1:旧那一次的收尾(掉头后 grow.finished 还是同一个 Promise)不再碰面板
+  let landed = false
+  // 液体停稳(0.9D)→ 真面板一帧接手:去掉 pouring、撤掉裁切(fill 留着会把阴影也裁掉)、液体层藏起来留给倒放。
+  // 描边(pouring 期间透明)从透明淡进来;edge = false 只给 settled:面板本来就开着,描边一直在
+  const land = (edge = true): void => {
+    // 已经在倒放就别接手:settled 时 finish() 让 handoff.finished 立刻 resolve,then(land) 排在微任务里,
     // 紧接着同步调的 retract()(开着时变了尺寸 → 重建一滴马上倒放)会被它晚一拍撤掉裁切、藏起液体,倒放就没了
-    if (closing) return
+    if (closing || landed) return
+    landed = true
     panel.classList.remove(POURING)
     clip?.cancel()
     clip = null
     layer.style.display = 'none'
+    if (edge) panel.animate([{ borderColor: 'transparent' }, {}], { duration: ms('--duration-fast', 150), easing: calm })
   }
-  handoff.finished.then(land, () => {})
+  /** 接手的计时器:液体走到 0.9D 那一刻接手;t = 此刻在时间轴上的位置(掉头时从中途接着计)。 */
+  const handoffAt = (t: number): Animation => {
+    const h = layer.animate([{ opacity: fill.alpha }, { opacity: fill.alpha }], { duration: D * 0.9 })
+    h.currentTime = Math.min(t, D * 0.9)
+    const g = gen
+    h.finished.then(() => { if (g === gen) land() }, () => {})
+    return h
+  }
+  let handoff = handoffAt(0)
   if (opts.settled) {
     // 同一帧里放到底再接手:页面不会画出中间态(finish 是同步的,接手也同步做,不等 finished 的微任务)
     for (const a of [swell, grow, handoff, ...shows]) a.finish()
-    land()
+    land(false)
+  } else if (opts.at !== undefined) {
+    // 重建:停在原来那一滴此刻的进度(液体大小、内容透明度都接得上),紧接着的 retract() 从这里倒放
+    for (const a of [swell, grow, handoff, ...shows, clip]) a.currentTime = Math.min(opts.at, D)
   }
 
   let rebuilt: Droplet | null = null
@@ -231,13 +257,22 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
       const pn = panel.getBoundingClientRect(), sn = source.getBoundingClientRect()
       const off = (a: DOMRect, b: { left: number; top: number; width: number; height: number }): boolean =>
         Math.max(Math.abs(a.left - b.left), Math.abs(a.top - b.top), Math.abs(a.width - b.width), Math.abs(a.height - b.height)) > 1
+      if (rebuilt) return (closing = rebuilt.retract()) // 重建的那滴掉头过(reopen)又收
       if (off(pn, pr) || off(sn, s)) {
+        // 还没流完就变了尺寸又收(账号卡刚开、账号列表就长出来,马上 Esc):从同一个进度重建,
+        // 不能用 settled —— 那会先跳成长满、内容推到 1 再倒放(第三轮 Codex 评审 P2)
+        const at = grow.playState === 'finished' ? undefined : Math.min(D, Number(grow.currentTime ?? D))
         cancel()
-        rebuilt = emergeDroplet(source, panel, { ...opts, settled: true })
+        rebuilt = emergeDroplet(source, panel, at === undefined ? { ...opts, settled: true } : { ...opts, settled: false, at })
         return (closing = rebuilt.retract())
       }
+      // 内容此刻的透明度:开到一半就收时淡入还没走完(0.22D 之前还没开始),从这里接着淡,
+      // 别先跳回 1 再淡 —— 收得早,内容会在缩回去的液体里闪一下(11-06 动效第三轮,探针 motion-r3.probe.cjs 量到 0 → 0.9)
+      const from = kids().map((k) => +getComputedStyle(k).opacity)
       handoff.cancel()
       shows.forEach((a) => a.cancel())
+      outs.forEach((a) => a.cancel())
+      landed = false
       const t = Math.min(D, Number(grow.currentTime ?? D)) // 开到一半被收:从这一帧接着倒放
       layer.style.display = ''
       panel.classList.add(POURING)
@@ -247,11 +282,43 @@ export function emergeDroplet(source: HTMLElement, panel: HTMLElement, opts: Dro
       const rate = -1 / 0.7
       // 别用 fill: forwards:面板不卸载时,取消填充动画和隐藏面板撞在同一帧,Chromium 会把内容的透明度留在 0,
       // 元素上已没有动画,再展开就是空屏(10-30 用户报,连开 33 次空 16 次)。所以写成保持到结束,收完由下面藏起面板
-      kids().forEach((k) => k.animate([{ opacity: 1 }, { opacity: 0, offset: 0.3 }, { opacity: 0 }], { duration: D * 0.7 }))
+      outs = kids().map((k, i) => k.animate([{ opacity: from[i] ?? 1 }, { opacity: 0, offset: 0.3 }, { opacity: 0 }], { duration: D * 0.7 }))
       for (const a of [swell, grow, clip]) { a.updatePlaybackRate(rate); a.play() }
-      closing = grow.finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined).finally(() => { layer.remove(); restoreSource() })
+      // 掉头(reopen)后 grow 往前放到底,grow.finished 照样 resolve:按 gen 认出这次收起已作废 —— 不藏面板、不收尾、不 resolve
+      const g = ++gen
+      closing = new Promise<void>((resolve) => {
+        const done = (hide: boolean): void => {
+          if (g !== gen) return
+          if (hide) panel.style.visibility = 'hidden'
+          layer.remove()
+          restoreSource()
+          resolve()
+        }
+        grow.finished.then(() => done(true), () => done(false))
+      })
       return closing
     },
     cancel,
+    reopen() {
+      if (rebuilt) {
+        if (!closing || !rebuilt.reopen?.()) return false
+        closing = null
+        return true
+      }
+      // 只在倒放进行中掉头;已收完(面板藏了、液体层已拿掉)/ 被 cancel 就让调用方重新流出一滴。
+      // 别看 playbackRate:刚调完 retract() 的那一帧倒放的速率还没生效,读到的仍是 1(Codex 评审 P3)
+      if (!closing || !clip || grow.playState !== 'running') return false
+      gen++
+      closing = null
+      const t = Math.min(D, Number(grow.currentTime ?? 0))
+      // 内容从此刻的透明度回到 1,不早于 0.22D 露出(同流出)
+      const from = kids().map((k) => +getComputedStyle(k).opacity)
+      outs.forEach((a) => a.cancel())
+      outs = []
+      shows = kids().map((k, i) => k.animate([{ opacity: from[i] ?? 0 }, { opacity: 1 }], { delay: Math.max(0, D * 0.22 - t), duration: D * 0.3, easing: surface, fill: 'backwards' }))
+      for (const a of [swell, grow, clip]) { a.updatePlaybackRate(1); a.play() }
+      handoff = handoffAt(t)
+      return true
+    },
   }
 }

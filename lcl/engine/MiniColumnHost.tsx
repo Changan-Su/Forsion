@@ -72,9 +72,10 @@ export const MiniColumnHost: React.FC<{
     const src = capRef.current?.querySelector<HTMLElement>(openMenu === 'space' ? '.mini-card-space' : '.mini-card-picker')
     if (openMenu && el && src) drop.current = openPanel(src, el) // 按动效主题:液滴 / 拉伸 / 淡入微缩
   }
-  // 再点同一颗 = 收;正倒放着又点它 = 重新流出来(同悬浮目录)
+  // 再点同一颗 = 收;正倒放着又点它 = 从这一帧掉头、停在打开(同悬浮目录)
   const toggleMenu = (which: 'space' | 'picker'): void => {
     if (openMenu !== which) setMenu(which)
+    else if (dropClosing.current && drop.current?.reopen?.()) dropClosing.current = false
     else if (dropClosing.current) pour()
     else dismissMenu()
   }
