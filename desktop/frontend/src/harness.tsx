@@ -2,7 +2,7 @@
 // 真浏览器裸挂 MarkdownBlock,给 Playwright 自动化实测 slash / markdown 触发层用。
 // window.__harness 暴露块状态供断言;不进产物(electron-vite build 只打 index.html)。
 import type React from 'react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { setAssetUrlBuilder } from '@amadeus-shared/assets'
 import './harnessBridge' // ⚠️须早于任何拉到 amadeus/api 的 import(见该文件)
@@ -753,6 +753,51 @@ if (new URLSearchParams(location.search).has('dock')) {
       </div>,
     )
   })
+} else if (new URLSearchParams(location.search).has('motionthemes')) {
+  // 动效主题台架(scripts/motion-themes.check.cjs,方案 A2 2026-11-06):真 LCL 看法胶囊、真 SettingsSwitch、按钮 + 真 openPanel
+  // 长出的面板、设置里真的「动效主题」一节。偏好走真 theme/motionTheme.tsx(写 <html data-motion-theme / data-motion-fade>),
+  // 台架经 window.__mt 切。`&dark` 走真主题。
+  const mtDark = new URLSearchParams(location.search).has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), mtDark ? 'dark' : 'light')
+  void Promise.all([import('@lcl/engine'), import('./components/SettingsPrimitives'), import('./theme/motionTheme'), import('./components/MotionThemeSection')])
+    .then(([lcl, { SettingsSwitch }, mt, { MotionThemeSection, MotionFadeRow }]) => {
+      ;(window as unknown as { __mt: unknown }).__mt = { setMotionTheme: mt.setMotionTheme, setFadeOnly: mt.setFadeOnly }
+      function Seg(): React.ReactElement {
+        const [v, setV] = useState('日')
+        return <lcl.ViewModeSwitch testId="mt-seg" spec={{ value: v, onChange: setV, modes: ['日', '周', '月', '年'].map((l) => ({ value: l, label: l })) }} />
+      }
+      function Sw(): React.ReactElement {
+        const [on, setOn] = useState(false)
+        return <SettingsSwitch data-testid="mt-switch" checked={on} label="switch" onChange={setOn} />
+      }
+      function Panel(): React.ReactElement {
+        const btn = useRef<HTMLButtonElement>(null)
+        const panel = useRef<HTMLDivElement>(null)
+        const drop = useRef<{ retract(): Promise<void>; cancel(): void } | null>(null)
+        const [open, setOpen] = useState(false)
+        useLayoutEffect(() => { if (open && btn.current && panel.current) drop.current = lcl.openPanel(btn.current, panel.current) }, [open])
+        return (
+          <div style={{ position: 'relative' }}>
+            <button ref={btn} type="button" className="btn" data-testid="mt-btn"
+              onClick={() => { if (!open) setOpen(true); else void drop.current?.retract().then(() => { drop.current = null; setOpen(false) }) }}>Open</button>
+            {open && <div ref={panel} data-testid="mt-panel" style={{ position: 'absolute', left: 0, top: 'calc(100% + 6px)', width: 220, height: 140, padding: 12, borderRadius: 12, background: 'var(--bg-card)', boxShadow: 'var(--card-shadow)' }}>panel</div>}
+          </div>
+        )
+      }
+      createRoot(document.getElementById('root')!).render(
+        <div style={{ position: 'fixed', inset: 0, padding: 32, background: 'var(--bg)', display: 'flex', gap: 48, overflow: 'auto' }}>
+          <div className="am-app tangu-lovable" style={{ display: 'flex', flexDirection: 'column', gap: 28, alignItems: 'flex-start', width: 280 }}>
+            <Seg />
+            <Sw />
+            <Panel />
+          </div>
+          {/* 设置窗里没有 .am-app 祖先(Amadeus 的旧规则会把 .theme-grid 改成 flex),这一块单放 */}
+          <div style={{ width: 720 }}>
+            <MotionThemeSection anchor="motion-theme"><MotionFadeRow anchor="motion-fade" /></MotionThemeSection>
+          </div>
+        </div>,
+      )
+    })
 } else if (new URLSearchParams(location.search).has('peek')) {
   // Space 左面板悬停预览(scripts/space-peek.check.cjs):真 Shell(Ribbon + Dockview)+ 真 SpaceButton + 三个替身 Space。
   // a / b 各有左栏(b 两个 View → 卡片头部出页签),c 没有左栏(悬停不弹)。左栏替身里摆齐预览要扛住的几样东西:

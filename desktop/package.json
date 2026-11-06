@@ -409,6 +409,7 @@
     "check:selection-display": "node scripts/e2e-editor.cjs --check=selection-display",
     "check:quickfind": "node scripts/e2e-editor.cjs --check=quickfind-cats",
     "check:segstretch": "node scripts/e2e-editor.cjs --check=seg-stretch",
+    "check:motionthemes": "node scripts/e2e-editor.cjs --check=motion-themes",
     "check:findbar": "node scripts/findbar.check.cjs",
     "check:cssvar": "node scripts/css-var-override.check.cjs",
     "check:shadowcontract": "node scripts/shadow-contract.check.cjs",

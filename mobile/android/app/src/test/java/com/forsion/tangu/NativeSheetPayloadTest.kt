@@ -212,4 +212,13 @@ class NativeSheetPayloadTest {
         assertFalse(Character.isHighSurrogate(straddling.last()))
         assertTrue(prompt.accepts(SheetAnswer.Text(straddling)))
     }
+    @Test fun themeCarriesTheMotionThemeAndFadeOnly() {
+        val base = JSONObject(theme)
+        assertEquals("genesis", NativeJson.theme(base).motion)
+        assertEquals(false, NativeJson.theme(base).motionFade)
+        assertEquals("stretch", NativeJson.theme(JSONObject(theme).put("motionTheme", "stretch")).motion)
+        assertEquals("glide", NativeJson.theme(JSONObject(theme).put("motionTheme", "glide")).motion)
+        assertEquals("genesis", NativeJson.theme(JSONObject(theme).put("motionTheme", "wobble")).motion)
+        assertEquals(true, NativeJson.theme(JSONObject(theme).put("motionFade", true)).motionFade)
+    }
 }
