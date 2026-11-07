@@ -11,7 +11,6 @@ import {
   FileText, Star, Heart, Home, Target, Zap, Globe, Music, Image, Video, Code, Terminal, LayoutGrid, Sparkles,
   Boxes, ListTree, ListTodo, Server, ServerCog, Cloud,
 } from 'lucide-react'
-import { Trash2 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
   registerSpace, unregisterSpace, addRibbonIcon, removeRibbonIcon, setActiveSpace, useSpaceStore,
@@ -28,7 +27,6 @@ import { useApp } from './stores/appStore'
 import { currentLocale, registerMessages } from './i18n'
 
 registerMessages({
-  'spaces.delete': { zh: '删除 Space…', en: 'Delete Space…' },
 })
 import { track } from './achievements/store'
 import { act } from './activity/log'
@@ -215,13 +213,7 @@ function installUserSpace(spec: SpaceSpec, dirSlug: string = spec.id, iconUrl?: 
     side: 'top',
     ...ribbonPlacement(spec),
     component: ({ expanded }) => <SpaceButton space={def} expanded={expanded} />,
-    // 右键项(Ribbon 把「在新窗口中打开」排在它前面)。原先是右键直接弹删除确认,现在先过一层菜单。
-    menu: () => [{
-      label: app().tr('spaces.delete'),
-      icon: Trash2,
-      danger: true,
-      onClick: () => { if (window.confirm(app().tr('spaces.deleteConfirm', { name: label(def.name) }))) void deleteUserSpace(spec.id) },
-    }],
+    // 右键菜单(含「删除 Space…」)是 LCL 对象层那一份(objects/space.tsx),在哪儿右键 Space 都一样,不再挂在 Ribbon 条目上。
   })
 }
 

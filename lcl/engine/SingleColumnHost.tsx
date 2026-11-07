@@ -13,7 +13,8 @@
 import { Suspense, createElement, startTransition, useEffect, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject } from 'react'
 import { flushSync } from 'react-dom'
 import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal } from 'lucide-react'
-import { useSpaceStore, setActiveSpace, getActiveSpace, pinSpaceToHome, redirectOpenFromOnePage, landOnMainPage } from './spaceRegistry'
+import { useSpaceStore, setActiveSpace, getActiveSpace, redirectOpenFromOnePage, landOnMainPage } from './spaceRegistry'
+import { objectContextMenuHandler, openObjectMenu } from './objectMenu'
 import { switchSpace } from './spaceTransition'
 import { useDotted, useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
@@ -666,10 +667,9 @@ function DrawerFoot() {
                    (2026-09-06 Amadeus→Note),按文案找的仪器当天就红。 */
                 data-space={sp.id}
                 onClick={() => switchSpaceKeepDrawer(sp.id)}
-                /* 长按 = 把这个 Space 固定到系统桌面(安卓 WebView 的长按就是 contextmenu)。
-                   宿主没实现(桌面 / web)时 pinSpaceToHome 返回 false —— 那就当普通长按,
-                   连默认菜单都别拦,免得白白吃掉一个原生行为。 */
-                onContextMenu={(e) => { if (pinSpaceToHome(sp.id, label(sp.name))) e.preventDefault() }}
+                /* 长按 = Space 的对象菜单(安卓 WebView 的长按就是 contextmenu;和电脑上右键 Ribbon 同一份:
+                   打开 / 添加到主屏幕 / 删除…)。一项都列不出时不拦,原生长按照旧。 */
+                onContextMenu={objectContextMenuHandler(() => ({ refs: [{ type: 'space', id: sp.id }], place: { kind: 'phone-tabbar' } }))}
               >
                 {Icon && <Icon size={20} />}
                 <span className="mb-tab-label">{label(sp.name)}</span>
@@ -1073,7 +1073,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         spacesAll: () => { void presentAllSpaces(trRef.current) },
         // 点当前那格不换 Space,只落回它的固定主视图(见 enterSpace);换 Space 后的落点由 afterLayout 钩子负责。
         space: enterSpace,
-        spaceLong: (id) => { const sp = useSpaceStore.getState().spaces.find((x) => x.id === id); if (sp) pinSpaceToHome(sp.id, label(sp.name)) },
+        // 原生底栏的长按:同一份 Space 对象菜单(原生 sheet 不看坐标;万一回落到网页菜单,放在屏幕中下方)
+        spaceLong: (id) => { openObjectMenu({ refs: [{ type: 'space', id }], place: { kind: 'phone-tabbar' }, x: window.innerWidth / 2, y: window.innerHeight * 0.6 }) },
       })
     }
     push()

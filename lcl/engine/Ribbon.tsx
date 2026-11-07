@@ -8,7 +8,7 @@
  *  - 左面板收起时,指针停在 Space 图标上 → 右侧浮出那个 Space 的左面板(SpacePeek),可直接操作;移开即收。 */
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, ChevronsLeft, ChevronsRight, CircleMinus, Folder as FolderIcon, FolderMinus, FolderOutput, FolderPlus, LayoutGrid, MonitorDown, Pencil, Plus, Shapes, Zap } from 'lucide-react'
+import { ChevronsLeft, ChevronsRight, CircleMinus, Folder as FolderIcon, FolderMinus, FolderOutput, FolderPlus, LayoutGrid, Pencil, Plus, Shapes, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useRibbonStore, useDotted, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
@@ -23,6 +23,8 @@ import { engineTr, useEngineI18n } from './i18nSeam'
 import { label } from './types'
 import type { Command, RibbonItem, RibbonMenuEntry } from './types'
 import { OverlayAt, UI_ZOOM_EVENT, zoomOf } from './menuAnchor'
+import { closeMenu, openMenu, openObjectMenu } from './objectMenu'
+import type { SheetMenuItem, SheetMenuSection } from './nativeSheetMenu'
 import { delegateTooltips, hideTooltip } from './hoverSurface'
 import { useWorkspace } from './workspaceStore'
 import { getView, subscribeViews } from './viewRegistry'
@@ -44,6 +46,15 @@ interface FlyState { key: string; zone: RibbonZone; folderId?: string; top: numb
 /** opener = 发起这个菜单的那一格的 key(槽 = 条目 id,收纳夹浮层行 = 所在收纳夹 id,最近使用 = `recent:<id>`,＋ = `plus:<区>`);菜单开着时那一格挂
  *  data-menu-open(底色 --overlay-medium,同会话行右键时的样子),关了就掉。空白处 / 整条右键没有发起格。 */
 interface MenuState { x: number; y: number; entries: RibbonMenuEntry[]; opener?: string }
+/** 菜单本身由 LCL 共用渲染器画(objectMenu.openMenu,沿用 .rb-menu 这个 class);Ribbon 只记「开着 + 发起格」给高亮、拦悬停、Esc 用。 */
+interface MenuOpen { opener?: string }
+const toItems = (entries: RibbonMenuEntry[]): SheetMenuItem[] => entries.map((en, i) => ({
+  id: `rb-${i}`,
+  label: en.label,
+  ...(en.icon ? { icon: <en.icon size={13} aria-hidden="true" /> } : {}),
+  ...(en.danger ? { danger: true } : {}),
+  run: en.onClick,
+}))
 /** 一个区切出来的样子:露出的一窗 + 其余(进「…」);start = 窗口在整区里的起点,max = 滚轮最多挪几格。 */
 interface Part { shown: Entry[]; tail: Entry[]; start: number; max: number }
 
@@ -136,7 +147,18 @@ export function Ribbon() {
   const [over, setOver] = useState<{ zone: RibbonZone; index: number } | null>(null) // 条上落点(槽下标),驱动让位预览
   const [overFolder, setOverFolder] = useState<string | null>(null) // 收纳夹/「…」高亮
   const [fly, setFly] = useState<FlyState | null>(null)
-  const [menu, setMenu] = useState<MenuState | null>(null)
+  const [menu, setMenuOpen] = useState<MenuOpen | null>(null)
+  // 共用渲染器一次只开一个菜单:别处再开一个,Ribbon 这份的 onClose 先跑(untrack),所以 openTok 非空 = 开着的就是 Ribbon 自己的
+  const openTok = useRef<MenuOpen | null>(null)
+  const track = (tok: MenuOpen): void => { openTok.current = tok; setMenuOpen(tok) }
+  const untrack = (tok: MenuOpen) => (): void => { if (openTok.current === tok) openTok.current = null; setMenuOpen((c) => (c === tok ? null : c)) }
+  /** 开菜单,或关掉 Ribbon 自己开的那个(别处开着的对象菜单不归 Ribbon 管)。 */
+  const setMenu = (m: (Omit<MenuState, 'entries'> & { entries?: RibbonMenuEntry[]; sections?: SheetMenuSection[] }) | null): void => {
+    if (!m) { if (openTok.current) closeMenu(); return }
+    const tok: MenuOpen = { opener: m.opener }
+    openMenu({ x: m.x, y: m.y, className: 'rb-menu', menu: { sections: m.sections ?? [{ items: toItems(m.entries ?? []) }] }, onClose: untrack(tok) })
+    track(tok)
+  }
   // 图标选择器:current=当前图标名(高亮),apply(name)=选中回调(空串=清除回默认)。
   const [iconPick, setIconPick] = useState<{ x: number; y: number; current?: string; apply: (name: string) => void } | null>(null)
   const [slots, setSlots] = useState(99) // 两区合计可容纳的槽位数
@@ -947,25 +969,27 @@ export function Ribbon() {
       ],
     })
   }
-  /** 图标自己的右键项(条上的格子、收纳夹浮层的行、中间的最近使用共用):Space 图标先给「在新窗口中打开」「添加到桌面」
-   *  (宿主能开窗 / 能写桌面快捷方式才有),后面跟条目自带的(RibbonItem.menu,如用户 Space 的删除)。 */
-  const itemMenu = (item: RibbonItem): MenuState['entries'] => {
+  /** 图标自己的右键菜单(条上的格子、收纳夹浮层的行、中间的最近使用共用)。Space 图标出 LCL 对象菜单(打开 / 在新窗口中打开 /
+   *  添加到桌面 / 删除…,在哪儿右键 Space 都是这一份,见 objects.ts);条目自带的 RibbonItem.menu 和 `extra`(收纳夹里的「移出收纳夹」)
+   *  作「本处」那一节。没有任何项 = 返回 false,不拦右键。 */
+  const openItemMenu = (item: RibbonItem, x: number, y: number, opener: string, extra: RibbonMenuEntry[] = [], folderId?: string): boolean => {
+    const own = [...(item.menu?.() ?? []), ...extra]
+    const placeSections: SheetMenuSection[] = own.length ? [{ items: toItems(own) }] : []
     const sid = spaceIdOf(item.id)
-    const open = getDetachApi()?.openSpace
-    const toDesktop = getDetachApi()?.addSpaceToDesktop
-    return [
-      ...(sid && open ? [{ label: t('lcl.ribbon.openInNewWindow'), icon: AppWindow, onClick: () => open(sid) }] : []),
-      ...(sid && toDesktop ? [{ label: t('lcl.ribbon.addToDesktop'), icon: MonitorDown, onClick: () => toDesktop(sid) }] : []),
-      ...(item.menu?.() ?? []),
-    ]
+    const tok: MenuOpen = { opener }
+    const onClose = untrack(tok)
+    let opened = false
+    if (sid) opened = openObjectMenu({ refs: [{ type: 'space', id: sid }], place: { kind: 'ribbon', ...(folderId ? { container: folderId } : {}) }, placeSections, x, y, className: 'rb-menu', onClose })
+    else if (placeSections.length) { openMenu({ x, y, className: 'rb-menu', menu: { sections: placeSections }, onClose }); opened = true }
+    if (!opened) return false
+    track(tok)
+    return true
   }
   const itemCtx = (item: RibbonItem, opener: string = item.id) => (e: React.MouseEvent): void => {
     if (e.defaultPrevented) return // 组件自己接了右键(主位槽)
-    const entries = itemMenu(item)
-    if (!entries.length) { ctxOpener.current = { ev: e.nativeEvent, key: opener }; return } // 没有自己的项 → 放它冒泡到区菜单,发起格照记
+    if (!openItemMenu(item, e.clientX, e.clientY, opener)) { ctxOpener.current = { ev: e.nativeEvent, key: opener }; return } // 没有自己的项 → 放它冒泡到区菜单,发起格照记
     e.preventDefault()
     e.stopPropagation()
-    setMenu({ x: e.clientX, y: e.clientY, entries, opener })
   }
   const cmdCtx = (cmdId: string, opener: string = `cmd:${cmdId}`) => (e: React.MouseEvent): void => {
     e.preventDefault()
@@ -1139,7 +1163,9 @@ export function Ribbon() {
       onContextMenu={e.kind === 'cmd' ? cmdCtx(e.cmd.id, folder.id) : (ev) => {
         ev.preventDefault()
         ev.stopPropagation()
-        setMenu({ x: ev.clientX, y: ev.clientY, opener: folder.id, entries: [...(e.kind === 'item' ? itemMenu(e.item) : []), { label: t('lcl.ribbon.moveOut'), icon: FolderOutput, onClick: () => { st().moveOutOfFolder(e.id); const persisted = folder.zone === 'top' ? st().order : st().bottomOrder; st().setZoneOrder(folder.zone, [...reorderBase(persisted, (folder.zone === 'top' ? topE : botE).map((x) => x.id), e.id), e.id]) } }] })
+        const moveOut: RibbonMenuEntry = { label: t('lcl.ribbon.moveOut'), icon: FolderOutput, onClick: () => { st().moveOutOfFolder(e.id); const persisted = folder.zone === 'top' ? st().order : st().bottomOrder; st().setZoneOrder(folder.zone, [...reorderBase(persisted, (folder.zone === 'top' ? topE : botE).map((x) => x.id), e.id), e.id]) } }
+        if (e.kind === 'item') openItemMenu(e.item, ev.clientX, ev.clientY, folder.id, [moveOut], folder.id)
+        else setMenu({ x: ev.clientX, y: ev.clientY, opener: folder.id, entries: [moveOut] })
       }}
     >
       {renderEntry(e, true)}
@@ -1296,17 +1322,6 @@ export function Ribbon() {
           onEnter={peek.spaceId === useSpaceStore.getState().activeSpaceId ? undefined : () => { closePeek(); switchSpace(peek.spaceId) }}
         />,
         rootRef.current.parentElement,
-      )}
-
-      {menu && (
-        <div className="rb-menu-backdrop" onMouseDown={() => setMenu(null)} onContextMenu={(e) => { e.preventDefault(); setMenu(null) }}>
-          <OverlayAt className="rb-menu" x={menu.x} y={menu.y} onMouseDown={(e) => e.stopPropagation()}>
-            {menu.entries.map((en, i) => (
-              // 标签保持裸文本节点:台架按 `button:text-is(…)` 认行(space-window.e2e)。
-              <button key={i} type="button" className={en.danger ? 'danger' : undefined} onClick={() => { setMenu(null); en.onClick() }}>{en.icon && <en.icon size={13} aria-hidden="true" />}{en.label}</button>
-            ))}
-          </OverlayAt>
-        </div>
       )}
 
       {iconPick && (

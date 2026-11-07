@@ -182,6 +182,23 @@ describe('openObject', () => {
     open.mockImplementationOnce(() => { throw new Error('locked') })
     expect(await openObject(sp('tangu'))).toEqual({ ref: sp('tangu'), ok: false, reason: 'locked' })
   })
+
+  it('同步的类型同步打开:调用返回时已经开好(插件打开 Space 后紧接着在那里开视图)', () => {
+    const open = vi.fn()
+    registerObjectType(spaceType({ open }))
+    void openObject(sp('tangu'))
+    expect(open).toHaveBeenCalledTimes(1)
+  })
+
+  it('verify 返回 Promise 时等它;verify 抛错 = 失败,不打开', async () => {
+    const open = vi.fn()
+    registerObjectType(spaceType({ open, verify: () => Promise.resolve('gone') }))
+    expect(await openObject(sp('tangu'))).toEqual({ ref: sp('tangu'), ok: false, reason: 'gone' })
+    __resetObjectsForTest()
+    registerObjectType(spaceType({ open, verify: () => { throw new Error('boom') } }))
+    expect(await openObject(sp('tangu'))).toEqual({ ref: sp('tangu'), ok: false, reason: 'boom' })
+    expect(open).not.toHaveBeenCalled()
+  })
 })
 
 describe('objectFocus', () => {

@@ -31,13 +31,14 @@ import {
 import { SortableContext, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import {
-  ArrowUp, Check, FolderMinus, Grid2X2, Image, LogOut,
+  ArrowUp, Check, FolderMinus, Grid2X2, Image,
   Mic, Pencil, Plus, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { commandHotkeyText, setActiveSpace, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
+import { commandHotkeyText, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, openObject, objectContextMenuHandler, type SheetMenuItem, type SheetMenuSection, type Place } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
-import { SortableTile, SpaceOrganizer, SWITCH_SPACE_COMMAND, TileVisual, dockCollision, setHomeOrganizerToggle } from './SpaceOrganizer'
-import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfMoveOut, shelfRemoveFolder, shelfRenameFolder, shelfReorderFolder, shelfTiles, type ShelfTile } from './homeShelf'
+import { SortableTile, SpaceOrganizer, SWITCH_SPACE_COMMAND, TileVisual, dockCollision, moveOutItem, setHomeOrganizerToggle } from './SpaceOrganizer'
+import { spaceOpensElsewhere, spaceRef } from '../objects/space'
+import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfRemoveFolder, shelfRenameFolder, shelfReorderFolder, shelfTiles, type ShelfTile } from './homeShelf'
 import type { SpaceDefinition, RibbonItem, ViewProps } from '@lcl/engine'
 import { RIBBON_ACTION_PREFIX } from '../amadeus/plugins/ribbonAction'
 import { askString } from '@amadeus/components/askString'
@@ -210,14 +211,13 @@ function useDockTiles(): { tiles: Tile[]; topIds: string[] } {
   return shelfTiles(spaces, order, folders, SELF_SPACE)
 }
 
-interface MenuState { x: number; y: number; kind: 'folder' | 'member' | 'cards' | 'blank'; id?: string }
+interface MenuState { x: number; y: number; kind: 'folder' | 'cards' | 'blank'; id?: string }
 
 registerMessages({
   'home.organizeSpaces': { zh: '整理 Space', en: 'Organize Spaces' },
   'home.folderMenu.renameTitle': { zh: '重命名收纳夹', en: 'Rename folder' },
   'home.folderMenu.rename': { zh: '重命名', en: 'Rename' },
   'home.folderMenu.dissolve': { zh: '解散收纳夹', en: 'Dissolve folder' },
-  'home.folderMenu.moveOut': { zh: '移出收纳夹', en: 'Move out' },
   // 手机(布局「二」):收起的输入条 + 带一行近况的大卡片
   'home.pill': { zh: '问点什么…', en: 'Ask anything…' },
   'home.cards.editTitle': { zh: '主页卡片', en: 'Home cards' },
@@ -430,11 +430,17 @@ export function HomepageView(_props: ViewProps) {
     }, LEAVE_MS)
     return true
   }
-  /** 点磁贴进某个 Space。主页开在自己的窗口里时(Space 窗口锁在主页上,切不走):改成把那个 Space 开到它自己的窗口。 */
+  /** 点磁贴进某个 Space:走对象层的打开(objects/space.tsx,窗口锁写在那里)。就地切的才先放主页的离场动效;
+   *  主页开在自己的窗口里时(锁在主页上)会开到那个 Space 自己的窗口去,不放。 */
   const launchSpace = (spaceId: string): void => {
-    const open = WINDOW_SPACE_ID ? getDetachApi()?.openSpace : undefined
-    if (open) open(spaceId)
-    else leaveThen(() => setActiveSpace(spaceId))
+    if (spaceOpensElsewhere(spaceId)) void openObject(spaceRef(spaceId))
+    else leaveThen(() => { void openObject(spaceRef(spaceId)) })
+  }
+  /** Space 的右键:LCL 对象菜单(和 Ribbon 上右键同一份)+ 本处那一节;先收掉主页自己的菜单与收纳夹弹层。 */
+  const spaceMenuAt = (event: React.MouseEvent, spaceId: string, place: Place, sections: () => SheetMenuSection[] = () => []): void => {
+    setMenu(null)
+    setOpenFolder(null)
+    objectContextMenuHandler(() => ({ refs: [spaceRef(spaceId)], place, placeSections: sections }))(event)
   }
 
   const hasTangu = spaces.some((s) => s.id === 'tangu')
@@ -484,11 +490,8 @@ export function HomepageView(_props: ViewProps) {
   }
 
   // ── 收纳:重排 / 拖进收纳夹 ────────────────────────────────────────────────
-  // 收纳的写法(两条不变式)都在 homeShelf.ts;这里只管收纳层的开合。
-  const moveOut = (itemId: string): void => {
-    shelfMoveOut(itemId)
-    setOrganizerOpen(true) // 移出即回到收纳层,让用户立刻看到它回到了顶层。
-  }
+  // 收纳的写法(两条不变式)都在 homeShelf.ts;这里只管收纳层的开合。移出收纳夹走 Space 对象菜单里的「本处」一项
+  // (moveOutItem),移出后回到收纳层,让用户立刻看到它回到了顶层。
 
   const newFolder = (): void => {
     setMenu(null)
@@ -676,9 +679,6 @@ export function HomepageView(_props: ViewProps) {
         { id: 'organize', label: t('home.organizeSpaces'), icon: <Grid2X2 size={13} />, run: () => { setMenu(null); showOrganizer() } },
       ]
     }
-    if (m.kind === 'member') {
-      return [{ id: 'move-out', label: t('home.folderMenu.moveOut'), icon: <LogOut size={13} />, run: () => { moveOut(m.id!); setMenu(null); setOpenFolder(null) } }]
-    }
     return [
       {
         id: 'rename', label: t('home.folderMenu.rename'), icon: <Pencil size={13} />,
@@ -743,7 +743,7 @@ export function HomepageView(_props: ViewProps) {
               <button
                 key={id} type="button" className="hp-status-card" data-space-id={space.id}
                 onClick={(event) => { event.stopPropagation(); launchSpace(space.id) }}
-                onContextMenu={(event) => menuAt(event, 'cards')}
+                onContextMenu={(event) => spaceMenuAt(event, space.id, { kind: 'home-card' }, () => [{ title: t('home.cards.editTitle'), items: menuItems({ x: 0, y: 0, kind: 'cards' }) }])}
               >
                 <span className="hp-status-card-icon">{space.icon && <space.icon />}</span>
                 <span className="hp-status-card-name">{label(space.name)}</span>
@@ -787,6 +787,7 @@ export function HomepageView(_props: ViewProps) {
                           onOpen={openFolderTile}
                           onLaunch={launchSpace}
                           onMenu={(event, id) => menuAt(event, 'folder', id)}
+                          spacePlace={{ kind: 'home-dock' }}
                         />
                       ))}
                       {hiddenCount > 0 && (
@@ -1137,7 +1138,7 @@ export function HomepageView(_props: ViewProps) {
                         key={member.id}
                         member={member}
                         onLaunch={(id) => { setOpenFolder(null); launchSpace(id) }}
-                        onMenu={(event, id) => menuAt(event, 'member', id)}
+                        onMenu={(event) => spaceMenuAt(event, member.id, { kind: 'home-folder', container: folderOpen.id }, () => [{ items: [moveOutItem(`space:${member.id}`, () => { setOpenFolder(null); setOrganizerOpen(true) })] }])}
                       />
                     ))}
                   </div>

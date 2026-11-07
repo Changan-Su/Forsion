@@ -55,7 +55,7 @@ import { defineMessages, hostListSource, isPluginText, pluginText } from './plug
 import { checkPluginIcon, pluginIconElement } from './pluginIcon'
 import { pluginListEmpty, setHostListEmpty } from '../../views/hostListEmpty'
 import { createDropIndicator, land as landDrop, landCancel, landWhenMoved } from '@lcl/engine/dropIndicator'
-import { setActiveSpace, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, listFirstNow, nativeChromeInstalled, useWorkspace } from '@lcl/engine'
+import { openObject, useCommandStore, useSpaceStore, nativeHaptic, nativeHapticAvailable, claimNativeChrome, listFirstNow, nativeChromeInstalled, useWorkspace } from '@lcl/engine'
 import { AUTO_WORK_FOLDER_KEY, pluginDisplayName } from './display'
 // 自动化播种 / 禁用即关规则:backendService 依赖图干净(http / agentRunService / localInbox,均不引 appStore),
 // 可静态 import;cfg 必须经 tanguSeam 探针的 waitBackend 拿(appStore 与本模块有 import 环)。
@@ -602,10 +602,11 @@ function makeAppApi(pluginId: string, getName: () => string): { api: PluginAppAp
     vaultRoot: () => usePageStore.getState().vaultRoot || null,
     // 切 Space / 跑命令 / 开 forsion:// 链接(2026-10-17,使用指南的「带我去」)。deepLinkInstall 动态 import:它经 amadeusNav
     // 反向引本模块,静态引会绕出模块环。切 Space 同步换整个布局,推一帧再 resolve(同 resolveDeepLink 的 view 分支)。
+    // 走对象层的打开(objects/space.tsx):认 Space 窗口锁 —— 锁着的窗口里开到那个 Space 自己的窗口,不把这扇窗切走。
     openSpace: async (id) => {
       if (!ok() || typeof id !== 'string') return false
       if (!useSpaceStore.getState().spaces.some((x) => x.id === id)) return false
-      setActiveSpace(id)
+      if (!(await openObject({ type: 'space', id }, 'here', { kind: 'plugin', container: pluginId })).ok) return false
       await new Promise((r) => requestAnimationFrame(() => r(null)))
       return true
     },

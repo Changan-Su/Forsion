@@ -249,6 +249,8 @@ export function resetSpaceLayouts(only?: string): void {
  *  接缝形态与 setRibbonActions / setEngineI18n 同款:引擎只留一个口子,绝不 import feature。 */
 let spacePin: ((id: string, name: string) => void) | null = null
 export function setSpacePinHandler(fn: ((id: string, name: string) => void) | null): void { spacePin = fn }
+/** 宿主能不能把 Space 钉到手机主屏(对象层的能力 `caps.pinHome`)。 */
+export function canPinSpaceToHome(): boolean { return !!spacePin }
 /** 有宿主实现则请求固定(系统自己弹确认框),返回是否发出了请求。 */
 export function pinSpaceToHome(id: string, name: string): boolean {
   if (!spacePin) return false

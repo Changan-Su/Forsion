@@ -4,7 +4,7 @@
  * 安全(方案 §4.3):只导航不执行;view 白名单 default-deny——注册表在场 = 已启用(插件禁用即反注册),
  * browser/terminal 明确拒(任意网页可唤起 = 现成钓鱼面);aux 类无独立打开意义,拒。
  */
-import { getView, useWorkspace, setActiveSpace, useSpaceStore } from '@lcl/engine'
+import { getView, useWorkspace, openObject, useSpaceStore } from '@lcl/engine'
 import type { ViewDefinition } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { usePageStore } from '@amadeus/store/pageStore'
@@ -68,7 +68,8 @@ export function whenWorkspaceReady(timeoutMs = 8000): Promise<void> {
 function switchSpace(id: string): boolean {
   const st = useSpaceStore.getState()
   if (!st.spaces.some((s) => s.id === id)) return false
-  setActiveSpace(id) // 同 id no-op;未注册在上面已拒
+  // 走对象层的打开(同步换好,后面接着开 view 不赛跑;认 Space 窗口锁)。同 id no-op;未注册在上面已拒
+  void openObject({ type: 'space', id }, 'here', { kind: 'deeplink' })
   return true
 }
 

@@ -1,11 +1,13 @@
 /**
  * 设置 → Spaces:列出所有已注册 Space —— 内置只读,用户/市场安装的可卸载。
- * 数据源 = useSpaceStore(与 ribbon 图标同一单例,增删即时反映);卸载复用 userSpaces.deleteUserSpace
+ * 数据源 = useSpaceStore(与 ribbon 图标同一单例,增删即时反映);卸载走对象动作 space.delete(objects/space.tsx,内部仍是 userSpaces.deleteUserSpace)
  * (按 id→磁盘目录映射删配方 + 撤 ribbon 图标 + 清命名布局)。判定内置/用户用 isUserSpace。
  */
 import React from 'react'
-import { useSpaceStore, label } from '@lcl/engine'
-import { isUserSpace, deleteUserSpace, pluginOfSpace } from '../userSpaces'
+import { useSpaceStore, label, executeAction, objectCaps } from '@lcl/engine'
+import { isUserSpace, pluginOfSpace } from '../userSpaces'
+import { installObjectLayer } from '../objects/install'
+import { spaceRef } from '../objects/space'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
 import { pluginDisplayDescription } from '../amadeus/plugins/display'
 import { DEFAULT_SPACE_KEY, LAST_EXIT_SPACE, HOME_SLOT_SPACE, startupSpacePref } from '../spaces'
@@ -55,9 +57,11 @@ export const SpacesTab: React.FC<{ phone?: boolean }> = ({ phone }) => {
   const changeHomeSlot = (v: string): void => { setHomeSlot(v); setHomeSlotSpace(v) }
   const homeSlotName = label(spaces.find((sp) => sp.id === homeSlot)?.name ?? '—')
 
+  // 与右键「删除 Space…」同一条对象动作(确认、执行前重验都在对象层的执行口里)。设置是独立浮窗,装配幂等,这里补一次。
   const uninstall = async (id: string, name: string): Promise<void> => {
-    if (!window.confirm(t('spaces.deleteConfirm', { name }))) return
-    if (await deleteUserSpace(id)) panelToast(t('settings.spaces.uninstalled', { name }))
+    installObjectLayer()
+    const [r] = await executeAction('space.delete', [spaceRef(id)], { place: { kind: 'settings' }, caps: objectCaps() })
+    if (r?.ok) panelToast(t('settings.spaces.uninstalled', { name }))
   }
 
   return (

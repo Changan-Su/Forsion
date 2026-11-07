@@ -324,6 +324,9 @@ html.rb-pointer-dragging, html.rb-pointer-dragging * { cursor: grabbing !importa
 .rb-peek-body { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; }
 
 .rb-menu-backdrop { position: fixed; inset: 0; z-index: 1100; -webkit-app-region: no-drag; }
+/* Ribbon 的菜单由 LCL 共用渲染器画(objectMenu.tsx:.ctx-menu + 这个 class)。要压在收纳夹 /「…」浮层(.rb-fly 900)上面,
+   原来靠一层 z 1100 的遮罩;没有遮罩了,菜单自己站在那一层。 */
+.ctx-menu.rb-menu { z-index: 1100; }
 .rb-menu {
   position: fixed;
   width: max-content;

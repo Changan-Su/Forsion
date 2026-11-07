@@ -42,6 +42,12 @@ describe('parseDeepLink 实体短径', () => {
     expect(parseDeepLink('forsion://session/a b')).toBe(null)
     expect(parseDeepLink('forsion://agent/<script>')).toBe(null)
   })
+
+  it('space id 与 Space 注册同一口径(带点的插件 Space 也能链;冒号不是 Space id)', () => {
+    expect(parseDeepLink('forsion://space/acme.notes')).toEqual({ kind: 'space', ref: 'acme.notes', params: {} })
+    expect(parseDeepLink('forsion://open?space=acme.notes&view=calendar')?.space).toBe('acme.notes')
+    expect(parseDeepLink('forsion://space/a:b')).toBe(null)
+  })
 })
 
 describe('parseDeepLink 通用径 open', () => {

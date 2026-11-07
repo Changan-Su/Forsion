@@ -6,7 +6,7 @@ import { registerMiniViews } from './mini/miniViews'
 /** 真实引擎装配:注册视图(会话/对话)+ ribbon + 命令 + 默认布局。替代 demoBootstrap。 */
 import { Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
-import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
+import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, openObject, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
 import { toggleSpaceOrganizer } from './views/SpaceOrganizer'
 import { requestHomeEdit } from './views/homeWidgets'
 import type { ViewProps } from '@lcl/engine'
@@ -33,6 +33,7 @@ import { PRODUCT } from './product'
 import { useTheme, useVisualTheme, toggleVisibleMode } from './stores/themeStore'
 import { notifyApp, useNotifications } from './stores/notificationStore'
 import { cycleLocale, registerMessages, subscribeLocale, translate, useI18n } from './i18n'
+import { installObjectLayer } from './objects/install'
 import { WorkspaceView, OutlineView } from './views/WorkspaceView'
 import { NewTabView } from './views/NewTabView'
 import { HomeEmptyView } from './views/HomeEmpty'
@@ -104,6 +105,8 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // 引擎自带的 lcl.* 文案先并进宿主字典,切语言走宿主 context 当场生效。
   registerMessages(LCL_MESSAGES)
   setEngineI18n(useI18n, translate)
+  // 对象层(LCL 对象统一):能力 / 确认 / 失败上报 + Space 等对象类型与动作。三端都经这里装,不另补。
+  installObjectLayer()
   // 标签页标题是建面板那一刻快照进布局的:切语言后没被视图改过名的面板(「主页」等)按新语言重取(W-10)
   subscribeLocale(() => useWorkspace.getState().retitleDefaults?.())
 
@@ -602,7 +605,10 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
         const id = String(a.id || '').trim()
         const known = useSpaceStore.getState().spaces.map((sp) => sp.id)
         if (!known.includes(id)) throw new Error(`no such Space "${id}" here. Available: ${known.join(', ')}`)
-        setActiveSpace(id)
+        // 走对象层的打开(认 Space 窗口锁);打不开(锁着又开不了新窗口)要让 Agent 知道
+        return openObject({ type: 'space', id }, 'here', { kind: 'agent' }).then((r) => {
+          if (!r.ok) throw new Error(`could not open Space "${id}": ${r.reason}`)
+        })
       },
       state: () => {
         const st = useSpaceStore.getState()

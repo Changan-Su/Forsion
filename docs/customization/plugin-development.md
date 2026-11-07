@@ -289,7 +289,7 @@ registerSettingsView({ category: 'forsion', ... })
 
 2026-10-17 起，宿主给插件多了几条接缝（随 Forsion Extend 的「使用指南」Space 一起加的）：
 
-- `ctx.app.openSpace?(id)`：切到某个 Space，布局建好后 resolve；不认识的 id 返回 `false`。
+- `ctx.app.openSpace?(id)`：切到某个 Space，布局建好后 resolve；不认识的 id 返回 `false`。2.13.8 起和 Ribbon 上点它同一个口径：本窗口是锁在某个 Space 上的 Space 窗口时，改为把那个 Space 开到它自己的窗口，本窗口不切走；锁着又开不了新窗口时返回 `false`。
 - `ctx.app.openLink?(url)`：在应用内打开 `forsion://` 链接，只导航不执行。插件页、收件箱信和笔记正文里的 `forsion://` 链接，宿主本来就在应用内处理，不经过系统。
 - `ctx.app.runCommand?(id)`：执行命令面板里已有的命令。**只对首方内置包生效**，其他插件调用一律返回 `false`。
 - `ctx.app.spotlight?`（2026-10-19 起，**只对首方内置包生效**）：在真界面上圈住宿主标好的一处（锚点名：`ribbon-spaces`、`chat-composer`、`note-new`、`note-body`、`note-canvas`、`agent-new`），旁边一张小卡写「第几步 / 做什么」。不压暗、不拦点击，同一时刻只有一处；目标在收着的侧栏里会先展开那一栏。返回的 Promise 给出结果：`ok`（知道了 / Esc）、`mute`（不再提示，插件自己记下别再圈）、`gone`（目标消失）、`missing`（不认识的锚点、等 2 秒仍不在屏幕上，或不是首方包）、`replaced`（被下一次顶掉）；传 `null` 收起，得到 `closed`。旧宿主没有这个方法，用 `?.` 并照老做法。
