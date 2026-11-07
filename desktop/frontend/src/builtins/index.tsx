@@ -1,3 +1,4 @@
+import { requestTerminalFocus } from './terminalFocus'
 import { hasNativeFeature } from '../features/runtime'
 import { PRODUCT } from '../product'
 /**
@@ -48,7 +49,6 @@ registerMessages({
   'browser.stop': { zh: '停止', en: 'Stop' },
   'browser.placeholder': { zh: '输入网址或搜索词', en: 'Enter a URL or search' },
   'browser.openExternal': { zh: '用系统浏览器打开', en: 'Open in system browser' },
-  'browser.failed': { zh: '加载失败：{msg}', en: 'Load failed: {msg}' },
   'browser.inAppLinks': { zh: '应用内链接用内置浏览器打开', en: 'Open in-app links in the built-in browser' },
   'terminal.title': { zh: '终端', en: 'Terminal' },
   'terminal.desc': { zh: '应用内的真终端（登录 shell，支持 vim/top/ssh）。', en: 'A real terminal inside the app (login shell; vim/top/ssh work).' },
@@ -242,6 +242,7 @@ export function openBrowser(url?: string): void {
 /** 开一个内置终端标签(cwd 可选:调用方有工作目录就传,否则家目录)。 */
 export function openTerminal(cwd?: string): void {
   if (!getView('terminal')) return
+  requestTerminalFocus()
   useWorkspace.getState().openView('terminal', cwd ? { cwd } : {}, 'main', { newTab: true })
 }
 

@@ -10,8 +10,9 @@
  *     不生效的后果不是报错,是正文左移 296px、输入框不动,中线歪掉。
  *  ③ 卡片折叠用原生 `<details>`(2026-10-25 起每段一张卡,`.t2-card`)。折叠得量**卡片自身**
  *     高度:关闭的 <details> 走 content-visibility:hidden,子元素的 rect 仍报旧尺寸,拿它判必假绿。
- *  ④ 卡头的计数紧贴折叠箭头靠右(第二轮 demo 两个 margin-left:auto 把计数推到中间,用户点名「太丑」);
- *     列表卡正文封顶 240 内滚,底部渐隐只在还有没露出来的内容时出现;拖动块悬停才露。
+ *  ④ 卡头(10-29 用户定的卡头 3):折叠箭头紧挨标题,计数贴卡头右缘(第二轮 demo 两个 margin-left:auto 把计数推到中间,
+ *     用户点名「太丑」);拖动把手和计数叠在同一格,鼠标停在卡头上才换成把手(停在正文上不换)。
+ *     列表卡正文封顶 240 内滚,底部渐隐只在还有没露出来的内容时出现。
  * 另外钉住:收起时必须真的不占位、且进出确实有过渡(否则是硬闪不是丝滑)。
  *
  * 页面注入仓里**真实的 base.css + chat2.css**(不复制样式),故不会与源码漂移。
@@ -58,11 +59,11 @@ const HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
       <div class="t2-rail" id="rail">
         <aside class="t2-tsum show" id="tsum">
           <details class="t2-card t2-tsum-in" id="prog" open>
-            <summary class="t2-card-head"><span class="t2-card-title"><span>已完成</span></span><span class="t2-card-end"><svg class="t2-tsum-chev" width="12" height="12" viewBox="0 0 24 24"></svg></span></summary>
+            <summary class="t2-card-head"><span class="t2-card-title"><span>已完成</span><svg class="t2-tsum-chev" width="12" height="12" viewBox="0 0 24 24"></svg></span><span class="t2-card-end"><span class="t2-card-slot"><span class="t2-card-grip"></span></span></span></summary>
             <div class="t2-card-body"><button class="t2-tsum-attn" id="attn">需要批准</button></div>
           </details>
           <details class="t2-card" id="sec" open>
-            <summary class="t2-card-head" id="sectitle"><span class="t2-card-grip" id="grip"></span><span class="t2-card-title"><span>来源</span></span><span class="t2-card-end"><span class="t2-tsum-count" id="count">2</span><svg class="t2-tsum-chev" width="12" height="12" viewBox="0 0 24 24"></svg></span></summary>
+            <summary class="t2-card-head" id="sectitle"><span class="t2-card-title"><span id="sectx">来源</span><svg class="t2-tsum-chev" width="12" height="12" viewBox="0 0 24 24"></svg></span><span class="t2-card-end"><span class="t2-card-slot"><span class="t2-tsum-count" id="count">2</span><span class="t2-card-grip" id="grip"></span></span></span></summary>
             <div class="t2-card-body" id="secbody"><button class="t2-tsum-row act" id="row">a.md</button></div>
           </details>
         </aside>
@@ -153,8 +154,8 @@ async function at(p, width, cls) {
     ['opacity', 'scale', 'translate', 'display'].every((k) => wide.transProps.includes(k)) && !/^0s/.test(wide.transDur),
     `${wide.transProps} / ${wide.transDur}`)
 
-  // ⑥ 卡片折叠:.t2-card 是原生 <details>,确认关得上、内容真的失活、默认 ▸ 没漏出来、chevron 贴右缘、
-  //    计数紧贴 chevron、且收起是**过渡**不是硬切。量的是**卡片自身**高度(见头注 ③)。
+  // ⑥ 卡片折叠:.t2-card 是原生 <details>,确认关得上、内容真的失活、默认 ▸ 没漏出来、箭头紧挨标题、
+  //    计数贴右缘、且收起是**过渡**不是硬切。量的是**卡片自身**高度(见头注 ③)。
   await at(p, 1400, 't2-tsum show')
   const secH = () => p.evaluate(() => document.getElementById('sec').getBoundingClientRect().height)
   const openH = await secH()
@@ -167,13 +168,17 @@ async function at(p, width, cls) {
     const title = document.getElementById('sectitle').getBoundingClientRect()
     const chev = document.querySelector('#sectitle .t2-tsum-chev').getBoundingClientRect()
     const count = document.getElementById('count').getBoundingClientRect()
+    const grip = document.getElementById('grip').getBoundingClientRect()
+    const tx = document.getElementById('sectx').getBoundingClientRect()
     const cs = getComputedStyle(document.getElementById('sec'))
     return {
       closedH: document.getElementById('sec').getBoundingClientRect().height,
       titleH: title.height,
       padY: parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth),
-      chevGapToRight: title.right - chev.right,
-      countToChev: chev.left - count.right,
+      chevToText: chev.left - tx.right,
+      countToRight: title.right - count.right,
+      slotDx: Math.abs(grip.right - count.right),
+      slotDy: Math.abs((grip.top + grip.bottom) / 2 - (count.top + count.bottom) / 2),
       closedFocusable: (document.getElementById('row').focus(), document.activeElement.id === 'row'),
       listStyle: st.listStyleType,
       cursor: st.cursor,
@@ -188,9 +193,20 @@ async function at(p, width, cls) {
   check('折叠后行 Tab 不到(内容真的失活,不只是看不见)', !sec.closedFocusable)
   check('卡头去掉了原生 ▸ 且是可点样式', sec.listStyle === 'none' && sec.cursor === 'pointer',
     `list-style=${sec.listStyle} cursor=${sec.cursor}`)
-  check('chevron 贴卡头右缘', Math.abs(sec.chevGapToRight) <= 1, `距右缘=${sec.chevGapToRight.toFixed(1)}px`)
-  check('⚠️计数紧贴 chevron 靠右(不被推到中间)', sec.countToChev >= 0 && sec.countToChev <= 6, `计数右缘到 chevron=${sec.countToChev.toFixed(1)}px`)
+  check('⚠️折叠箭头紧挨标题(卡头 3)', sec.chevToText >= 2 && sec.chevToText <= 6, `标题右缘到箭头=${sec.chevToText.toFixed(1)}px`)
+  check('⚠️计数贴卡头右缘(不被推到中间)', Math.abs(sec.countToRight) <= 1, `距右缘=${sec.countToRight.toFixed(1)}px`)
+  check('拖动把手和计数叠在同一格', sec.slotDx <= 1 && sec.slotDy <= 1, `右缘差=${sec.slotDx.toFixed(1)} 中线差=${sec.slotDy.toFixed(1)}`)
   await p.evaluate(() => { document.getElementById('sec').open = true })
+  await p.waitForTimeout(400)
+
+  // ⑥b 规矩 6:开合按会话存,换会话那一下同一张卡的 open 会变 —— 栈 data-still 时直接到位,不播展开 / 收起
+  await p.evaluate(() => { document.getElementById('tsum').setAttribute('data-still', '') })
+  await p.evaluate(() => { document.getElementById('sec').open = false })
+  await p.waitForTimeout(40)
+  const stillH = await secH()
+  check('⚠️栈 data-still 时折叠直接到位(换会话不播)', Math.abs(stillH - sec.closedH) <= 1, `40ms 后=${stillH.toFixed(1)} 折叠=${sec.closedH.toFixed(1)}`)
+  await p.evaluate(() => { document.getElementById('tsum').removeAttribute('data-still'); document.getElementById('sec').open = true })
+  await p.waitForTimeout(400)
 
   // ⑦ 列表卡正文封顶 240 内滚;底部渐隐只在下面还有内容时出现(滚到底收掉;没溢出不渐隐)
   await p.evaluate(() => { document.getElementById('secbody').innerHTML = '<button class="t2-tsum-row act">a.md</button>'.repeat(30) })
@@ -211,16 +227,37 @@ async function at(p, width, cls) {
   const short = await fade()
   check('⚠️没溢出时不渐隐(最后一行不被抹淡)', short.fade === '0px' && short.scroll === 0, `--t2-card-fade=${short.fade} 可滚=${short.scroll}`)
 
-  // ⑧ 拖动块:平时不露,悬停卡片才露
-  const gripOp = () => p.evaluate(() => Number(getComputedStyle(document.getElementById('grip')).opacity))
+  // ⑦b 限长给正文加封顶(TaskSummary 的 bodyCap)时子元素不被 flex 压扁:scrollHeight 照旧报自然高度,
+  //    否则量出来变矮 → 撤封顶 → 又变高,来回翻(Codex 评审 P1;插件根自带 overflow:auto 时最容易压扁)
+  await p.evaluate(() => { const b = document.getElementById('secbody'); b.innerHTML = '<div style="height:240px;overflow:auto"></div>'; b.style.maxHeight = '134px' })
+  await p.waitForTimeout(400) // 封顶变化本身有过渡(--collapse-duration)
+  const capped = await p.evaluate(() => {
+    const b = document.getElementById('secbody')
+    const out = { scroll: b.scrollHeight, h: b.getBoundingClientRect().height }
+    b.innerHTML = '<button class="t2-tsum-row act" id="row">a.md</button>'; b.style.maxHeight = ''
+    return out
+  })
+  await p.waitForTimeout(400)
+  check('⚠️正文封顶时子元素不被压扁(scrollHeight 仍是自然高度)', capped.scroll >= 240 && Math.abs(capped.h - 134) <= 1, `scrollHeight=${capped.scroll} 高=${capped.h.toFixed(1)}`)
+
+  // ⑧ 拖动把手:平时露计数;鼠标停在卡头上计数淡出、把手淡入;停在正文上不换
+  const slot = () => p.evaluate(() => ({ grip: Number(getComputedStyle(document.getElementById('grip')).opacity), count: Number(getComputedStyle(document.getElementById('count')).opacity) }))
   await p.mouse.move(5, 5)
   await p.waitForTimeout(250)
-  const idle = await gripOp()
-  const box = await p.evaluate(() => { const r = document.getElementById('sec').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + 20 } })
-  await p.mouse.move(box.x, box.y)
+  const idle = await slot()
+  const box = await p.evaluate(() => {
+    const h = document.getElementById('sectitle').getBoundingClientRect(), b = document.getElementById('secbody').getBoundingClientRect()
+    return { x: h.left + h.width / 2, head: (h.top + h.bottom) / 2, body: (b.top + b.bottom) / 2 }
+  })
+  await p.mouse.move(box.x, box.body)
   await p.waitForTimeout(250)
-  const hover = await gripOp()
-  check('⚠️拖动块平时不露、悬停才露', idle === 0 && hover === 1, `平时=${idle} 悬停=${hover}`)
+  const onBody = await slot()
+  await p.mouse.move(box.x, box.head)
+  await p.waitForTimeout(250)
+  const onHead = await slot()
+  check('⚠️平时露计数、不露把手', idle.grip === 0 && idle.count === 1, `把手=${idle.grip} 计数=${idle.count}`)
+  check('停在正文上不换', onBody.grip === 0 && onBody.count === 1, `把手=${onBody.grip} 计数=${onBody.count}`)
+  check('⚠️停在卡头上计数换成把手', onHead.grip === 1 && onHead.count === 0, `把手=${onHead.grip} 计数=${onHead.count}`)
 
   // ⑨ 立体感三档(开发者选项,TaskSummary 把 SummaryElevation 写到 .t2-tsum[data-elev];2026-10-28 用户定缺省「半浮」)。
   //    浮 = 和输入卡同一枚投影 + 同族圆角;半浮 = 低一档的影子 + 圆角小一档;平 = 不投影;拿起来的那张三档都照旧浮。

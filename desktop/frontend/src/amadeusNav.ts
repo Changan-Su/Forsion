@@ -151,7 +151,7 @@ async function openNoteInner(path: string, opts?: OpenWhere & { reuseKey?: strin
  *  见 shared 的 findHeadingIndex;找不到就只开笔记不动(与大纲跳转同语义:宁可不动,
  *  不静默跳到别的标题)。就绪竞态:openNote 等到实例挂上,但 doc 可能还空着
  *  (unifiedHeadings 给空)—— 重试几拍再放弃。v3 渲染的笔记没有 unified 实例,同样自然放弃。 */
-export async function openNoteAtHeading(path: string, heading: string, opts?: { newTab?: boolean }): Promise<void> {
+export async function openNoteAtHeading(path: string, heading: string, opts?: OpenWhere): Promise<void> {
   await openNote(path, opts)
   await revealHeadingWhenReady(path, heading)
 }
@@ -186,7 +186,7 @@ export async function revealHeadingWhenReady(path: string, heading: string): Pro
  *  ⚠️ 只在 v4 渲染的笔记上有效 —— `^id` 是外来格式,来源只有从 Obsidian 导入的素文件,
  *     而素文件恒走 UnifiedPage;v3 老笔记按构造不可能带 `^id`,unifiedRevealBlock 返 false 后
  *     自然停在「只开了笔记」,与本轮之前的行为一致。 */
-export async function openNoteAtBlock(path: string, blockId: string, opts?: { newTab?: boolean }): Promise<void> {
+export async function openNoteAtBlock(path: string, blockId: string, opts?: OpenWhere): Promise<void> {
   await openNote(path, opts)
   await revealBlockWhenReady(path, blockId)
 }
@@ -213,6 +213,22 @@ export async function revealTextWhenReady(path: string, needles: string[], opts?
   for (let tries = 0; tries < 5; tries++) {
     if (unifiedRevealText(path, needles, opts)) {
       setTimeout(() => unifiedRevealText(path, needles, { ...opts, flash: true }), 600)
+      return true
+    }
+    await new Promise((r) => setTimeout(r, 250))
+  }
+  return false
+}
+
+/** `tag:` 搜索点到一行:先按这行的文字找(nth = 它前面有几条逐字相同的行),找不到(行里有链接,摘录和正文对不上)
+ *  退到这行实际命中的标签第 tagNth 处。两个找法在同一拍试,文字对不上时不用白等完重试。v3 同 revealTextWhenReady。 */
+export async function revealLineWhenReady(path: string, line: { text: string; nth: number; tag: string | null; tagNth: number }): Promise<boolean> {
+  const attempt = (flash?: boolean): boolean =>
+    unifiedRevealText(path, [line.text], { nth: line.nth, flash }) ||
+    (!!line.tag && unifiedRevealText(path, [`#${line.tag}`], { tag: true, nth: line.tagNth, flash }))
+  for (let tries = 0; tries < 5; tries++) {
+    if (attempt()) {
+      setTimeout(() => attempt(true), 600)
       return true
     }
     await new Promise((r) => setTimeout(r, 250))

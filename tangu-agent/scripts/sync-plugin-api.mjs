@@ -20,6 +20,15 @@ const targets = existsSync(pluginsDir)
       .filter((f) => existsSync(f))
   : [];
 
+// 官方模板同样消费公开契约,不能等作者复制后才发现类型落后于宿主。
+for (const rel of [
+  ['forsion-sample-plugin', 'types', 'tangu-agent.d.ts'],
+  ['forsion-sample-bundle', 'tangu-plugins', 'sample-bundle-tool', 'types', 'tangu-agent.d.ts'],
+]) {
+  const f = join(root, 'skills', 'forsion-plugin', 'samples', ...rel);
+  if (existsSync(f)) targets.push(f);
+}
+
 // 外部独立仓插件的 types/ 拷贝(相对 tangu-agent 根的路径段;单独 checkout 里可能不存在 → existsSync 过滤,不崩)。
 // tangu-computer-use 在 Forsion/Forsion-Instrumentality-Project/(插件生态目录,07-16 从 Forsion-Genesis 移出)。
 for (const rel of [['..', '..', 'Forsion-Instrumentality-Project', 'tangu-computer-use']]) {

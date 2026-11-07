@@ -17,6 +17,8 @@ vi.mock('../../agents/agentRegistry.js', async (orig) => ({
   ...(await orig<typeof import('../../agents/agentRegistry.js')>()),
   ...reg,
 }));
+// 删除走 services/agentUninstall:这里只关心守卫,让它落到注册表的 deleteAgent 上。
+vi.mock('../../services/agentUninstall.js', () => ({ uninstallAgent: async (_u: string, _a: string, slug: string) => ({ ok: await reg.deleteAgent(slug) }) }));
 // 执行身份 = subby(具名子代理在自己的 ALS 里跑)。
 vi.mock('../../seams/runContext.js', () => ({ currentAgentSlug: () => 'subby', currentDisplayAgentSlug: () => '' }));
 

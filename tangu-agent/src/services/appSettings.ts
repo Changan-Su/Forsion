@@ -188,8 +188,20 @@ function renderProviders(): string[] {
   return out;
 }
 
-/** app_settings 的返回文本。section 缺省 = 全部(每段只有几行)。 */
-export function renderAppSettings(opts: { section?: string; writable: boolean }): string {
+/**
+ * 发起端能开设置页时追加的那句(run_ui_command 在、目录里有 open-settings)。
+ * 为什么写在结果里:app_settings 10-05 上线后,「X 怎么设置」模型几乎都走 load_tools → app_settings,读完就照
+ * `open-settings "voice"` 写一句「设置 → 语音」收尾,页面从没打开过 —— 「打开那一页」只写在 open-settings 目录项里,
+ * 而走这条路的模型从不调 list_ui_commands,看不见它(live settingsnav 10-05 起 23 次只过 1 次)。
+ * 调用形状写成具体 JSON:抽象说法(落点标签)它已经读过、没照做。
+ */
+export const OPEN_SETTINGS_HINT =
+  'The user\'s window can open these pages. When the user asks where or how to set something, also open its page: '
+  + 'call run_ui_command with {"id": "open-settings", "args": {"tab": "<the id after open-settings on that section\'s first line>"}}, '
+  + 'then say which page you opened. Do not open pages when the user only asks for a current value.';
+
+/** app_settings 的返回文本。section 缺省 = 全部(每段只有几行)。`canOpenPages` = 发起端能开设置页(见 OPEN_SETTINGS_HINT)。 */
+export function renderAppSettings(opts: { section?: string; writable: boolean; canOpenPages?: boolean }): string {
   const want = (opts.section || '').trim();
   if (want && !READABLE_SECTIONS.includes(want)) {
     return `Error: unknown section "${want}". Sections you can read: ${READABLE_SECTIONS.join(', ')}. Every other setting is outside this tool — tell the user where to change it (run_ui_command open-settings).`;
@@ -200,6 +212,7 @@ export function renderAppSettings(opts: { section?: string; writable: boolean })
       ? 'Change them with update_app_settings (one section per call; the user confirms each change).'
       : 'This session can read them but not change them.',
     'Settings that are not listed here (API keys, sign-in, MCP, hooks, channels, sandbox, remote access, approval rules, plugins, appearance) cannot be read or changed with this tool.',
+    ...(opts.canOpenPages ? [OPEN_SETTINGS_HINT] : []),
     '',
   ];
   for (const [name, spec] of Object.entries(APP_SETTINGS)) {

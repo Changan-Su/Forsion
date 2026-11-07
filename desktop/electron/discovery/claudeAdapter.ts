@@ -1,38 +1,19 @@
 /**
- * Claude Code 生态扫描(裁剪移植自 Agents-Manager ClaudeCodeAdapter,只取 skills + MCP):
- * - 技能:~/.claude/skills/<dir>/SKILL.md(gray-matter 解析 name/description)
+ * Claude Code 生态扫描(裁剪移植自 Agents-Manager ClaudeCodeAdapter,只取 MCP):
  * - MCP:~/.claude.json 顶层 mcpServers + ~/.claude/mcp-servers.json + ~/.claude/.mcp.json
  *   (存在哪个读哪个,按名去重,先到先得)
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
-import type { DiscoveredMcp, DiscoveredSkill, DiscoveryResult } from './types'
-import { asStringArray, asStringRecord, parseSkillMeta, safeIsDir, safeReaddir } from './scanUtil'
+import type { DiscoveredMcp, DiscoveryResult } from './types'
+import { asStringArray, asStringRecord } from './scanUtil'
 
 const ECOSYSTEM = 'claude-code' as const
 
 export function scanClaude(home = homedir()): DiscoveryResult {
   const root = join(home, '.claude')
-  return {
-    skills: scanSkills(join(root, 'skills')),
-    mcpServers: scanMcp(home, root),
-  }
-}
-
-function scanSkills(dir: string): DiscoveredSkill[] {
-  if (!existsSync(dir)) return []
-  const out: DiscoveredSkill[] = []
-  for (const entry of safeReaddir(dir)) {
-    const skillDir = join(dir, entry)
-    if (!safeIsDir(skillDir)) continue
-    const skillFile = join(skillDir, 'SKILL.md')
-    if (!existsSync(skillFile)) continue
-    const meta = parseSkillMeta(skillFile, entry)
-    if (!meta) continue
-    out.push({ ecosystem: ECOSYSTEM, id: entry, name: meta.name, description: meta.description, sourceDir: skillDir })
-  }
-  return out
+  return { mcpServers: scanMcp(home, root) }
 }
 
 function scanMcp(home: string, root: string): DiscoveredMcp[] {

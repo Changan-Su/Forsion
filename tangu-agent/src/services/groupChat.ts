@@ -29,7 +29,7 @@ import { publish, drain, type AgentEvent } from './eventBus.js';
 import { updateRunStatus } from './runStore.js';
 import { completeHistorianTask } from './historianSession.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
-import { getAgent, type NormalAgentDef } from '../agents/agentRegistry.js';
+import { agentNames, getAgent, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { compactSession, getLatestSummary } from './compaction.js';
 import { activateMember as realActivateMember, type ActivateMember, type MemberOutcome } from './teamRuns.js';
@@ -118,14 +118,14 @@ export function teamDue(st: TeamState, cap: number): string[] {
   }
   return out;
 }
-/** 从一段发言里按出现顺序解析被 @ 的成员(按 @<name> 或 @<slug>;排除自己;去重)。模型不守约定 = 无人被点名。 */
-export function parseMentions(text: string, participants: Array<{ slug: string; name: string }>, selfSlug: string): string[] {
+/** 从一段发言里按出现顺序解析被 @ 的成员(按 @任一名字 或 @<slug>;排除自己;去重)。模型不守约定 = 无人被点名。 */
+export function parseMentions(text: string, participants: Array<{ slug: string; name: string; nameZh?: string; nameEn?: string }>, selfSlug: string): string[] {
   // 词法边界:@Ann 不能命中 @Anna(名字 / slug 后面不能紧跟字母数字 _ -);同一位置多个命中取最长;重叠命中只算一个。
   const esc = (k: string): string => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const hits: Array<{ i: number; len: number; slug: string }> = [];
   for (const a of participants) {
     if (a.slug === selfSlug) continue;
-    for (const key of new Set([a.name, a.slug].filter(Boolean))) {
+    for (const key of new Set([...agentNames(a), a.slug])) {
       const re = new RegExp(`@${esc(key)}(?![\\p{L}\\p{N}_-])`, 'gu');
       let m: RegExpExecArray | null;
       while ((m = re.exec(text))) { hits.push({ i: m.index, len: m[0].length, slug: a.slug }); if (!m[0].length) re.lastIndex++; }
@@ -275,7 +275,7 @@ export async function runGroupChat(p: GroupChatParams): Promise<void> {
     }
 
     const maxRounds = roundCap(p.agentConfig.groupMaxRounds);
-    const roster = participants.map((a) => `- ${a.name}(${a.slug})：${a.description || '——'}`).join('\n');
+    const roster = participants.map((a) => `- ${agentNames(a).join(' / ')}(${a.slug})：${a.description || '——'}`).join('\n');
 
     // ③ 已读指针(seen[slug] = transcript 中已注入到该成员的条数);成员的私有上下文住在各自的工作会话里(teamRuns.ts),这里不再持有。
     const seen = new Map<string, number>();

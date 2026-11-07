@@ -28,7 +28,7 @@ const render = async (initial: string, withFix: boolean): Promise<string> => {
 
 describe('收件箱正文:单个换行', () => {
   // 负对照 —— 这条**必须**是「不挂就不换行」,它证明上一条不是白测的。
-  it('不挂插件:软换行被渲染成空格(CommonMark 本来的语义,笔记与分享页保持这样)', async () => {
+  it('不挂插件:软换行被渲染成空格(裸 preset 的语义;生产装配里笔记已由 inlineBr.ts 改显示成 <br>,见 inlineBr.test.ts)', async () => {
     const html = await render('第一行\n第二行', false)
     expect(html).not.toContain('<br')
     expect(html).toContain('data-is-inline="true"')

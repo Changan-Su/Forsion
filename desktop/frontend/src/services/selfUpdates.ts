@@ -2,20 +2,26 @@ import type { HistorianActivityItem, ToolEvent } from '../types'
 import { harnessChanges, harnessChangeState, type HarnessChangeState } from './harnessUpdates'
 import { humanChanges } from './humanCollaboration'
 
+/** person = 画像(human/SOUL.md,所有 Agent 都读,10-29)。 */
+export type MemoryScope = 'agent' | 'project' | 'person'
 /** 引擎 remember 回执里的一次改动(tangu-agent `tools/builtin/memoryLog.ts`;字段只增不改)。
  *  回执里没有 Agent 的 slug:撤销时由调用方按「这条发言是谁说的 / 会话的 Agent」给,引擎那头自己折叠共用记忆。 */
 export interface MemoryChange {
   /** 工具调用 id(行的 key;同一条回执重放时去重)。 */
   callId: string
   action: 'add' | 'update' | 'forget'
-  scope: 'agent' | 'project'
+  scope: MemoryScope
   /** scope 'project':项目名(引擎给的目录名)。 */
   project?: string
   entryId?: string
   /** add / update:落库的那一句;forget:空(回执不带被忘掉的原句)。 */
   content: string
+  /** 跨档取代(remember update 带 from):原来那条在哪一档、原句。引擎已把它从那一档拿掉;撤销时按原句放回去。 */
+  /** targetExisted = 目标档原本就有这一句(挪的时候只拿掉了旧的):撤销时放回旧的,不动这一句 */
+  moved?: { from: MemoryScope; id: string; content: string; project?: string; targetExisted?: boolean }
 }
 const MEMORY_ACTIONS = new Set(['add', 'update', 'forget'])
+const MEMORY_SCOPES = new Set(['agent', 'project', 'person'])
 
 /** 只认 remember 自己落库的成功回执(重开历史会话照样还原);list、没写进去的重复、报错、老后端的纯文本回执都不算。
  *  另认一种:重写协作说明时 manage_human 替 Agent 挪进记忆的句子(回执 moved[].memory,引擎 `tools/builtin/manageHuman.ts`)—— 同样是记忆里多了一条,同样上屏、能撤销。 */
@@ -33,11 +39,15 @@ export function memoryChanges(events: ToolEvent[] = []): MemoryChange[] {
         })
         continue
       }
-      if (r?.ok !== true || !MEMORY_ACTIONS.has(r.action) || (r.scope !== 'agent' && r.scope !== 'project') || r.duplicate) continue
+      if (r?.ok !== true || !MEMORY_ACTIONS.has(r.action) || !MEMORY_SCOPES.has(r.scope) || (r.duplicate && !r.moved)) continue // 挪过去时目标已有同一句:旧的那条照样拿掉了,要出行
       const entryId = typeof r.entry?.id === 'string' ? r.entry.id : typeof r.id === 'string' ? r.id : undefined
       const content = typeof r.entry?.content === 'string' ? r.entry.content : ''
       if (r.action !== 'forget' && (!entryId || !content)) continue
-      changes.set(ev.id, { callId: ev.id, action: r.action, scope: r.scope, ...(typeof r.project === 'string' ? { project: r.project } : {}), ...(entryId ? { entryId } : {}), content })
+      // 形状不对的 moved 只丢掉这一半:这一行照旧是一次改写,只是不说「原来那条从哪拿掉」、也不给按原句放回
+      const m = r.moved
+      const moved = m && MEMORY_SCOPES.has(m.from) && m.from !== r.scope && typeof m.id === 'string' && m.id && typeof m.content === 'string' && m.content
+        ? { from: m.from, id: m.id, content: m.content, ...(typeof m.project === 'string' ? { project: m.project } : {}), ...(r.duplicate ? { targetExisted: true } : {}) } : undefined
+      changes.set(ev.id, { callId: ev.id, action: r.action, scope: r.scope, ...(typeof r.project === 'string' ? { project: r.project } : {}), ...(entryId ? { entryId } : {}), content, ...(moved ? { moved } : {}) })
     } catch { /* 纯文本回执(报错、老后端)不出行 */ }
   }
   return [...changes.values()]

@@ -322,3 +322,15 @@ describe('任务卡:id / ask / withdraw(子会话与任务卡第 3 步)', () => 
     expect(r.tasks).toEqual([{ title: 'x', prompt: 'p' }])
   })
 })
+
+describe('任务卡 skill 头', () => {
+  const card = (head: string) => splitSuggestions(`做好了\n\n\`\`\`forsion-task\ntitle: 做个插件\nagent: coding\n${head}---\n做一个转写插件\n\`\`\``, { kinds: ['task'] }).tasks[0]
+  it('任务书开头固定一句,不靠模型写', () => {
+    expect(card('skill: forsion-plugin\n').prompt).toBe('Load the forsion-plugin skill first.\n\n做一个转写插件')
+  })
+  it('不合法的值只丢这个键', () => {
+    expect(card('skill: a b\n').prompt).toBe('做一个转写插件')
+    expect(card('').prompt).toBe('做一个转写插件')
+  })
+})
+

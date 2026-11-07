@@ -13,7 +13,20 @@ import {
   type ComputerHistoryDeps, type ComputerHistoryPersistPatch,
 } from './computerHistory'
 import { createSerialQueue } from './configWrite'
+import { chKeyFromHex, encryptLine, readChLine } from './computerHistoryCrypto'
+import type { ChKeyVault } from './computerHistory'
 import type { ComputerHistoryEvent, ComputerHistoryState } from '../shared/computerHistory'
+
+/** 控制器测试的数据钥匙:内存里的保管处(生产 = 设备凭据槽)。 */
+const TEST_KEY_HEX = 'ab'.repeat(32)
+const TEST_KEY = chKeyFromHex(TEST_KEY_HEX)!
+function memVault(hex: string | null = TEST_KEY_HEX) {
+  let cur = hex
+  return {
+    read: vi.fn(async () => ({ state: 'ok' as const, hex: cur })),
+    store: vi.fn(async (h: string) => { cur = h; return true }),
+  }
+}
 
 const DAY = 86_400_000
 const cleanups: Array<() => unknown> = []
@@ -27,8 +40,13 @@ function tmpRoot(): string {
   return path.join(dir, 'computer-history')
 }
 const at = (y: number, mo: number, d: number, h: number, mi = 0): number => new Date(y, mo - 1, d, h, mi).getTime()
+/** 日文件的事件(明文行与测试钥匙加密的行都认;解不开就报错,别让测试把「读不出」当成「没有」)。 */
 const lines = (file: string): ComputerHistoryEvent[] =>
-  readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
+  readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => {
+    const r = readChLine(l, TEST_KEY)
+    if (r.kind !== 'plain' && r.kind !== 'enc') throw new Error(`unreadable line: ${l.slice(0, 40)}`)
+    return JSON.parse(r.text) as ComputerHistoryEvent
+  })
 const readState = (root: string): ComputerHistoryState => JSON.parse(readFileSync(path.join(root, 'state.json'), 'utf8'))
 const expectPrivateMode = (p: string, mode: number): void => {
   // Windows uses ACLs; chmod's POSIX permission bits are not represented by stat.mode there.
@@ -229,7 +247,7 @@ describe('ComputerHistoryStore', () => {
   it('writeState:commit 否决时不落盘、不留临时文件', async () => {
     const root = tmpRoot()
     const store = new ComputerHistoryStore(root)
-    const s = (status: ComputerHistoryState['status']): ComputerHistoryState => ({ v: 1, enabled: true, pausedUntil: null, status, since: 0, updatedAt: 0, platform: 'darwin', dataGen: 0 })
+    const s = (status: ComputerHistoryState['status']): ComputerHistoryState => ({ v: 1, enabled: true, pausedUntil: null, status, since: 0, updatedAt: 0, platform: 'darwin', dataGen: 0, userTurnedOff: false })
     await store.writeState(s('disconnected'))
     await store.writeState(s('recording'), () => false)
     expect(readState(root).status).toBe('disconnected')
@@ -589,7 +607,7 @@ function makeController(sockPath: string, over: Partial<ComputerHistoryDeps> = {
   const ch = new ComputerHistory({
     root, platform: 'darwin', socketPath: sockPath, externalSocket: false, helperAppPath: () => helperApp,
     // 函数形态的补丁(后台补落)在「写盘」这一刻求值 —— 这里就是调用那一刻;mock 记下的永远是对象
-    persist: (p) => persist(typeof p === 'function' ? p() : p), onChanged, launchHelper, tmExclude: async () => {}, ...over,
+    persist: (p) => persist(typeof p === 'function' ? p() : p), onChanged, launchHelper, tmExclude: async () => {}, keyVault: memVault(), ...over,
   })
   cleanups.push(async () => { ch.dispose(); await ch.flush().catch(() => {}) }) // 等队列里的写落完再删临时目录
   const installHelper = () => {
@@ -629,6 +647,27 @@ describe('ComputerHistory × helper 订阅', () => {
     expect(await ch.days()).toEqual([localDay(t)])
     expect((await ch.recent(1, t + 3_600_000)).map((s) => s.title)).toEqual(['Docs']) // end 超过现在按现在算
     expect(await ch.recentApps()).toEqual([safari])
+  })
+
+  it('落盘后才通知自动化:切 App / 系统事件 / 离开后的第一条动静;普通动静不吵', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const onSignal = vi.fn()
+    const { ch, root } = makeController(helper.sockPath, { onSignal })
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().state.status === 'recording')
+    const t = Date.now()
+    const file = path.join(root, 'events', `${localDay(t)}.jsonl`)
+    const safari = { name: 'Safari', bundleId: 'com.apple.Safari' }
+    helper.push({ t, kind: 'app', app: safari, title: 'Docs' })
+    await waitFor(() => onSignal.mock.calls.length === 1, 3_000)
+    expect(lines(file)).toHaveLength(1) // 通知时盘上已经有了:引擎重读得到
+    helper.push({ t: t + 1, kind: 'text', app: safari, text: 'hello' })
+    await waitFor(() => lines(file).length === 2, 3_000)
+    await ch.flush()
+    expect(onSignal).toHaveBeenCalledTimes(1) // 打字不算信号
+    helper.push({ t: t + 2, kind: 'system', state: 'locked' })
+    await waitFor(() => onSignal.mock.calls.length === 2, 3_000)
   })
 
   it('断线 → disconnected → 退避后重连回到 recording', async () => {
@@ -1672,5 +1711,352 @@ describe('ComputerHistory × helper 订阅', () => {
     await ch.flush()
     expect(seen).toEqual([false]) // 读到一半的读者复核时拿不到 state → 整份作废;新来的读者当关
     expect(readState(root)).toMatchObject({ enabled: true, status: 'paused', dataGen: gen + 2 })
+  })
+})
+
+// ── 静态加密(computerHistoryCrypto + 设备凭据里的钥匙)────────────────────────────────────────────
+
+describe('ComputerHistoryStore × 加密', () => {
+  const evLineAt = (t: number, title = `w${t}`): string => `${JSON.stringify({ t, kind: 'window', app: { name: 'Safari', bundleId: 'com.apple.Safari' }, title })}\n`
+  const encStore = (vault: ChKeyVault = memVault()) => {
+    const root = tmpRoot()
+    const keys: string[] = []
+    const store = new ComputerHistoryStore(root, undefined, vault, (hex) => keys.push(hex))
+    return { root, store, vault, keys }
+  }
+  const OTHER = chKeyFromHex('cd'.repeat(32))!
+
+  it('追加只写密文(标题 / 输入一个字都不落明文),0600;钥匙到手交给 onKey 一次', async () => {
+    const { store, keys } = encStore()
+    const t = at(2026, 9, 26, 10)
+    await store.append([{ t, kind: 'text', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, title: 'Diary', text: 'my secret words' }])
+    const file = path.join(store.eventsDir, '2026-09-26.jsonl')
+    const raw = readFileSync(file, 'utf8')
+    for (const leak of ['secret', 'Diary', 'Notes', String(t)]) expect(raw.includes(leak), leak).toBe(false)
+    expect(raw.split('\n').filter(Boolean).every((l) => l.startsWith('ch1.'))).toBe(true)
+    expect(lines(file)).toEqual([{ t, kind: 'text', app: { name: 'Notes', bundleId: 'com.apple.Notes' }, title: 'Diary', text: 'my secret words' }])
+    expectPrivateMode(file, 0o600)
+    expect(keys).toEqual([TEST_KEY_HEX])
+    expect((await store.readRange(t - 1, t + 1)).events.map((e) => e.text)).toEqual(['my secret words'])
+  })
+
+  it('槽里确定没有 → 铸一把存好再用(并发两批也只铸一次);存不住 → 抛错、一行都不写', async () => {
+    const vault = memVault(null)
+    const { store, keys } = encStore(vault)
+    const t = at(2026, 9, 26, 10)
+    await Promise.all([store.append([{ t, kind: 'app', app: { name: 'A' } }]), store.append([{ t: t + 1, kind: 'app', app: { name: 'B' } }])])
+    expect(vault.store).toHaveBeenCalledTimes(1)
+    expect(keys).toHaveLength(1)
+    expect(vault.store.mock.calls[0][0]).toBe(keys[0])
+    const mine = chKeyFromHex(keys[0])!
+    const raw = readFileSync(path.join(store.eventsDir, '2026-09-26.jsonl'), 'utf8').split('\n').filter(Boolean)
+    expect(raw.map((l) => readChLine(l, mine).kind)).toEqual(['enc', 'enc'])
+
+    const failing = { read: vi.fn(async () => ({ state: 'ok' as const, hex: null })), store: vi.fn(async () => false) }
+    const f = encStore(failing)
+    const err = await f.store.append([{ t, kind: 'app', app: { name: 'A' } }]).catch((e) => e)
+    expect(err.code).toBe('ch-key-unavailable')
+    expect(existsSync(f.store.eventsDir)).toBe(false)
+    expect(f.store.keyState).toBe('unavailable')
+    expect(f.store.keyError).toBe('key-store-failed')
+  })
+
+  it('读失败 ≠ 没有:槽读不出 / 槽里的不像钥匙 → 不铸新的去盖(store 一次都不调),追加抛错不写', async () => {
+    for (const vault of [
+      { read: vi.fn(async () => ({ state: 'unavailable' as const, reason: 'os-crypto-unavailable' })), store: vi.fn(async () => true) },
+      { read: vi.fn(async () => ({ state: 'ok' as const, hex: 'not-a-key' })), store: vi.fn(async () => true) },
+      { read: vi.fn(async () => { throw new Error('io') }), store: vi.fn(async () => true) },
+    ]) {
+      const { store } = encStore(vault)
+      expect((await store.append([{ t: Date.now(), kind: 'app', app: { name: 'A' } }]).catch((e) => e)).code).toBe('ch-key-unavailable')
+      expect(vault.store).not.toHaveBeenCalled()
+      expect(store.keyState).toBe('unavailable')
+      expect(existsSync(store.eventsDir)).toBe(false)
+    }
+  })
+
+  it('退出兜底 appendSync:手上没钥匙就不写(不回落明文);有钥匙写密文', async () => {
+    const { store } = encStore()
+    mkdirSync(store.eventsDir, { recursive: true })
+    const t = at(2026, 9, 26, 10)
+    store.appendSync([{ t, kind: 'text', app: { name: 'A' }, text: 'bye' }])
+    expect(readdirSync(store.eventsDir)).toEqual([])
+    await store.loadKey(false)
+    store.appendSync([{ t, kind: 'text', app: { name: 'A' }, text: 'bye' }])
+    const raw = readFileSync(path.join(store.eventsDir, '2026-09-26.jsonl'), 'utf8')
+    expect(raw.includes('bye')).toBe(false)
+    expect(lines(path.join(store.eventsDir, '2026-09-26.jsonl')).map((e) => e.text)).toEqual(['bye'])
+  })
+
+  it('迁移:明文行改写成密文(事件不变、0600、不留 tmp);别的钥匙加的行原样留;再跑一次不动文件', async () => {
+    const { store } = encStore()
+    mkdirSync(store.eventsDir, { recursive: true })
+    const t1 = at(2026, 9, 25, 9), t2 = at(2026, 9, 26, 9)
+    const foreign = encryptLine(OTHER, JSON.stringify({ t: t2 + 5, kind: 'app', app: { name: 'X' } }))
+    const f1 = path.join(store.eventsDir, '2026-09-25.jsonl')
+    const f2 = path.join(store.eventsDir, '2026-09-26.jsonl')
+    writeFileSync(f1, evLineAt(t1, 'Plain title') + evLineAt(t1 + 1), { mode: 0o644 })
+    writeFileSync(f2, evLineAt(t2) + `${foreign}\n` + encryptLine(TEST_KEY, JSON.stringify({ t: t2 + 9, kind: 'app', app: { name: 'Y' } })) + '\n')
+    expect(await store.migrate()).toBe(true)
+    const raw1 = readFileSync(f1, 'utf8')
+    expect(raw1.includes('Plain title')).toBe(false)
+    expect(raw1.split('\n').filter(Boolean).every((l) => l.startsWith('ch1.'))).toBe(true)
+    expect(lines(f1).map((e) => e.t)).toEqual([t1, t1 + 1])
+    expectPrivateMode(f1, 0o600)
+    const raw2 = readFileSync(f2, 'utf8').split('\n').filter(Boolean)
+    expect(raw2[1]).toBe(foreign) // 解不开的原样留,不当残行删
+    expect(raw2.map((l) => readChLine(l, TEST_KEY).kind)).toEqual(['enc', 'locked', 'enc'])
+    expect(readdirSync(store.eventsDir).filter((f) => f.endsWith('.tmp'))).toEqual([])
+    const before = [readFileSync(f1, 'utf8'), readFileSync(f2, 'utf8')]
+    const fresh = new ComputerHistoryStore(store.root, undefined, memVault())
+    expect(await fresh.migrate()).toBe(true) // 没有明文了:不取钥匙也不重写
+    expect([readFileSync(f1, 'utf8'), readFileSync(f2, 'utf8')]).toEqual(before)
+  })
+
+  it('迁移:拿不到钥匙 → 一个字节都不动、回 false;没有明文就不碰钥匙(全是密文 / 没有文件)', async () => {
+    const vault = { read: vi.fn(async () => ({ state: 'unavailable' as const, reason: 'secret-locked' })), store: vi.fn(async () => true) }
+    const { store } = encStore(vault)
+    mkdirSync(store.eventsDir, { recursive: true })
+    const f = path.join(store.eventsDir, '2026-09-26.jsonl')
+    writeFileSync(f, evLineAt(at(2026, 9, 26, 9)))
+    expect(await store.migrate()).toBe(false)
+    expect(readFileSync(f, 'utf8')).toBe(evLineAt(at(2026, 9, 26, 9)))
+    expect(vault.store).not.toHaveBeenCalled()
+
+    const quiet = memVault()
+    const q = encStore(quiet)
+    mkdirSync(q.store.eventsDir, { recursive: true })
+    writeFileSync(path.join(q.store.eventsDir, '2026-09-26.jsonl'), encryptLine(TEST_KEY, '{"t":1,"kind":"app"}') + '\n')
+    expect(await q.store.migrate()).toBe(true)
+    expect(quiet.read).not.toHaveBeenCalled()
+  })
+
+  it('迁移中途写不进(目录只读):原文件完好、不留 tmp,错误抛出(下次再迁)', async () => {
+    const { store } = encStore()
+    mkdirSync(store.eventsDir, { recursive: true })
+    const f = path.join(store.eventsDir, '2026-09-26.jsonl')
+    writeFileSync(f, evLineAt(at(2026, 9, 26, 9)), { mode: 0o600 })
+    const restore = blockAccess(store.eventsDir, 0o500, '(W)', 0o700)
+    try {
+      await expect(store.migrate()).rejects.toBeTruthy()
+    } finally { restore() }
+    expect(readFileSync(f, 'utf8')).toBe(evLineAt(at(2026, 9, 26, 9)))
+    expect(readdirSync(store.eventsDir)).toEqual(['2026-09-26.jsonl'])
+    expect(await store.migrate()).toBe(true) // 恢复可写后接着迁
+    expect(lines(f).map((e) => e.title)).toEqual([`w${at(2026, 9, 26, 9)}`])
+  })
+
+  it('保留期:截止那天有解不开的行 → 整份不动(不当残行删);更早的整天照删;能解的日子照常按时间裁', async () => {
+    const { store } = encStore()
+    mkdirSync(store.eventsDir, { recursive: true })
+    const now = at(2026, 10, 10, 12)
+    const cutoffT = now - 7 * DAY
+    const cut = path.join(store.eventsDir, `${localDay(cutoffT)}.jsonl`)
+    const old = path.join(store.eventsDir, `${localDay(cutoffT - 2 * DAY)}.jsonl`)
+    const lockedBody = encryptLine(OTHER, JSON.stringify({ t: cutoffT - 1000, kind: 'app' })) + '\n' + encryptLine(TEST_KEY, JSON.stringify({ t: cutoffT - 1, kind: 'app' })) + '\n'
+    writeFileSync(cut, lockedBody)
+    writeFileSync(old, encryptLine(OTHER, '{"t":1,"kind":"app"}') + '\n')
+    const removed = await store.prune(now)
+    expect(removed).toEqual([path.basename(old)])
+    expect(readFileSync(cut, 'utf8')).toBe(lockedBody)
+
+    // 同一天全是这把钥匙加的:过期行照常删,期内的留下(密文原样)
+    const keepLine = encryptLine(TEST_KEY, JSON.stringify({ t: cutoffT + 1, kind: 'app' }))
+    writeFileSync(cut, encryptLine(TEST_KEY, JSON.stringify({ t: cutoffT - 1, kind: 'app' })) + '\n' + keepLine + '\n')
+    await store.prune(now)
+    expect(readFileSync(cut, 'utf8')).toBe(keepLine + '\n')
+  })
+
+  it('按时间清除:跨界那天有解不开的行 → 能删的整天删掉,那份文件原样不动,抛 ch-records-locked;「全部」不用解密', async () => {
+    const { store } = encStore()
+    mkdirSync(store.eventsDir, { recursive: true })
+    const since = at(2026, 9, 26, 12)
+    const boundary = path.join(store.eventsDir, '2026-09-26.jsonl')
+    const after = path.join(store.eventsDir, '2026-09-27.jsonl')
+    const body = encryptLine(OTHER, JSON.stringify({ t: since + 1, kind: 'app' })) + '\n'
+    writeFileSync(boundary, body)
+    writeFileSync(after, encryptLine(TEST_KEY, JSON.stringify({ t: since + DAY, kind: 'app' })) + '\n')
+    const err = await store.clear({ sinceMs: since }).catch((e) => e)
+    expect(err.code).toBe('ch-records-locked')
+    expect(existsSync(after)).toBe(false)
+    expect(readFileSync(boundary, 'utf8')).toBe(body)
+    await store.clear({ all: true })
+    expect(readdirSync(store.eventsDir)).toEqual([])
+  })
+
+  it('按时间清除:能解的跨界那天按事件时间重写(明文行顺手加密)', async () => {
+    const { store } = encStore()
+    mkdirSync(store.eventsDir, { recursive: true })
+    const since = at(2026, 9, 26, 12)
+    const f = path.join(store.eventsDir, '2026-09-26.jsonl')
+    writeFileSync(f, evLineAt(since - 2, 'early plain') + encryptLine(TEST_KEY, JSON.stringify({ t: since - 1, kind: 'app' })) + '\n' + evLineAt(since + 1, 'late'))
+    await store.clear({ sinceMs: since })
+    expect(lines(f).map((e) => e.t)).toEqual([since - 2, since - 1])
+    expect(readFileSync(f, 'utf8').includes('early plain')).toBe(false)
+  })
+
+  it('readRange 报出解不开的行数(调用方据此不说「没有」);全是明文时不碰钥匙', async () => {
+    const vault = memVault()
+    const { store } = encStore(vault)
+    mkdirSync(store.eventsDir, { recursive: true })
+    const t = at(2026, 9, 26, 10)
+    writeFileSync(path.join(store.eventsDir, '2026-09-26.jsonl'), evLineAt(t))
+    expect(await store.readRange(t - 1, t + 1)).toMatchObject({ locked: 0 })
+    expect(vault.read).not.toHaveBeenCalled()
+    writeFileSync(path.join(store.eventsDir, '2026-09-27.jsonl'), encryptLine(OTHER, JSON.stringify({ t: t + DAY, kind: 'app' })) + '\n')
+    const r = await store.readRange(t - 1, t + DAY + 1)
+    expect(r.events.map((e) => e.t)).toEqual([t])
+    expect(r.locked).toBe(1)
+  })
+
+  it('recentApps 解密后再挑 app 行(跳过解不开的)', async () => {
+    const { store } = encStore()
+    const t = at(2026, 9, 26, 10)
+    await store.append([
+      { t, kind: 'app', app: { name: 'Safari', bundleId: 'com.apple.Safari' } },
+      { t: t + 1, kind: 'window', app: { name: 'Mail', bundleId: 'com.apple.mail' }, title: 'x' },
+    ])
+    writeFileSync(path.join(store.eventsDir, '2026-09-26.jsonl'), encryptLine(OTHER, JSON.stringify({ t: t + 2, kind: 'app', app: { name: 'Z', bundleId: 'z' } })) + '\n', { flag: 'a' })
+    expect(await store.recentApps(10)).toEqual([{ name: 'Safari', bundleId: 'com.apple.Safari' }])
+  })
+})
+
+describe('ComputerHistory × 加密钥匙', () => {
+  it('开着但钥匙拿不到:绝不连 helper(不录明文)、状态 disconnected + keyError;钥匙恢复后打开设置页即重试 → recording、写的是密文', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    let available = false
+    const vault = {
+      read: vi.fn(async () => (available ? { state: 'ok' as const, hex: TEST_KEY_HEX } : { state: 'unavailable' as const, reason: 'os-crypto-unavailable' })),
+      store: vi.fn(async () => true),
+    }
+    const keys: string[] = []
+    const { ch, root, onChanged } = makeController(helper.sockPath, { keyVault: vault, onKey: (h) => keys.push(h) })
+    await ch.start({ computerHistoryEnabled: true })
+    await waitFor(() => ch.view().keyError !== undefined)
+    expect(ch.view()).toMatchObject({ keyError: 'os-crypto-unavailable', state: { status: 'disconnected', enabled: true } })
+    expect(onChanged.mock.calls.some(([v]) => v.keyError === 'os-crypto-unavailable')).toBe(true)
+    await new Promise((r) => setTimeout(r, 300))
+    expect(helper.requests).toHaveLength(0)
+    expect(vault.store).not.toHaveBeenCalled()
+
+    available = true
+    ch.get() // 用户打开设置页
+    await waitFor(() => ch.view().state.status === 'recording')
+    expect(ch.view().keyError).toBeUndefined()
+    expect(keys).toEqual([TEST_KEY_HEX])
+    const t = Date.now()
+    helper.push({ t, kind: 'app', app: { name: 'Safari', bundleId: 'com.apple.Safari' }, title: 'Bank statement' })
+    const file = path.join(root, 'events', `${localDay(t)}.jsonl`)
+    await waitFor(() => existsSync(file) && lines(file).length >= 1, 3_000)
+    expect(readFileSync(file, 'utf8').includes('Bank statement')).toBe(false)
+  })
+
+  it('启动时有老版本的明文:功能关着也迁成密文(只在有明文时才取钥匙)', async () => {
+    const root = tmpRoot()
+    mkdirSync(path.join(root, 'events'), { recursive: true })
+    const t = Date.now() - 60_000
+    const f = path.join(root, 'events', `${localDay(t)}.jsonl`)
+    writeFileSync(f, `${JSON.stringify({ t, kind: 'window', app: { name: 'A' }, title: 'old plain' })}\n`, { mode: 0o600 })
+    const vault = memVault(null)
+    const { ch } = makeController(path.join(root, 'nosock'), { root, keyVault: vault })
+    await ch.start({ computerHistoryEnabled: false })
+    await waitFor(() => !readFileSync(f, 'utf8').includes('old plain'))
+    expect(vault.store).toHaveBeenCalledTimes(1)
+    const key = chKeyFromHex(vault.store.mock.calls[0][0])!
+    expect(readChLine(readFileSync(f, 'utf8').trim(), key)).toMatchObject({ kind: 'enc' })
+  })
+
+  it('时间线读到解不开的记录:recent() 抛 ch-records-locked,不画成「这段时间没有记录」', async () => {
+    const root = tmpRoot()
+    mkdirSync(path.join(root, 'events'), { recursive: true })
+    const t = Date.now() - 60_000
+    writeFileSync(path.join(root, 'events', `${localDay(t)}.jsonl`), encryptLine(chKeyFromHex('cd'.repeat(32))!, JSON.stringify({ t, kind: 'app', app: { name: 'A' } })) + '\n')
+    const { ch } = makeController(path.join(root, 'nosock'), { root })
+    await ch.start({ computerHistoryEnabled: false })
+    await expect(ch.recent(1)).rejects.toMatchObject({ code: 'ch-records-locked' })
+  })
+})
+
+describe('ComputerHistory × userTurnedOff(用户亲手关过)', () => {
+  it('开着被关掉才算;落 state.json、跨重启;暂停 / 本来就关着再关都不算;渲染层直写配置关掉也算', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const a = makeController(helper.sockPath)
+    await a.ch.start({})
+    expect(a.ch.view().state.userTurnedOff).toBe(false)
+    await a.ch.setEnabled(false) // 本来就关着
+    expect(a.ch.view().state.userTurnedOff).toBe(false)
+    await a.ch.setEnabled(true)
+    await a.ch.pause(3_600_000)
+    expect(a.ch.view().state.userTurnedOff).toBe(false)
+    await a.ch.setEnabled(false)
+    expect(a.ch.view().state.userTurnedOff).toBe(true)
+    await a.ch.flush()
+    await waitFor(() => readState(a.root).userTurnedOff === true)
+    await a.ch.dispose()
+
+    const b = makeController(helper.sockPath, { root: a.root })
+    expect(b.ch.view().state.userTurnedOff).toBe(true)
+    await b.ch.start({})
+    await b.ch.setEnabled(true)
+    expect(b.ch.view().state.userTurnedOff).toBe(true) // 再打开也不抹掉
+    await b.ch.dispose()
+
+    const c = makeController(helper.sockPath)
+    await c.ch.start({ computerHistoryEnabled: true })
+    c.ch.applyConfig({ computerHistoryEnabled: false })
+    expect(c.ch.view().state.userTurnedOff).toBe(true)
+  })
+
+  it('老 state.json 没有这个字段:有文件且 enabled:false → 关过;enabled:true / 没有文件 / 坏文件 → 没关过', () => {
+    const cases: Array<[string | null, boolean]> = [
+      [JSON.stringify({ v: 1, enabled: false, status: 'off', dataGen: 3 }), true],
+      [JSON.stringify({ v: 1, enabled: true, status: 'recording', dataGen: 3 }), false],
+      [JSON.stringify({ v: 1, enabled: true, userTurnedOff: true }), true],
+      [JSON.stringify({ v: 1, enabled: false, userTurnedOff: false }), false],
+      ['{not json', false],
+      [null, false],
+    ]
+    for (const [body, want] of cases) {
+      const root = tmpRoot()
+      if (body !== null) { mkdirSync(root, { recursive: true }); writeFileSync(path.join(root, 'state.json'), body) }
+      const { ch } = makeController(path.join(root, 'nosock'), { root })
+      expect(ch.view().state.userTurnedOff, String(body)).toBe(want)
+    }
+  })
+})
+
+describe('ComputerHistory × 加密钥匙(暂停中)', () => {
+  it('开着但启动时在暂停:照样取钥匙交给引擎(引擎暂停期间也能读已有记录),不连 helper', async () => {
+    const helper = fakeHelper()
+    await helper.listen()
+    const keys: string[] = []
+    const { ch } = makeController(helper.sockPath, { onKey: (h) => keys.push(h) })
+    await ch.start({ computerHistoryEnabled: true, computerHistoryPausedUntil: Date.now() + 3_600_000 })
+    await waitFor(() => keys.length === 1)
+    expect(keys).toEqual([TEST_KEY_HEX])
+    expect(ch.view().state.status).toBe('paused')
+    await new Promise((r) => setTimeout(r, 200))
+    expect(helper.requests).toHaveLength(0)
+  })
+})
+
+describe('ComputerHistoryStore × 迁移扫描读失败', () => {
+  it('扫描时读不了 ≠ 没有明文:不记「迁完」,恢复后下一次照样迁', async () => {
+    if (process.platform === 'win32') return // 用 POSIX 权限造读失败;Windows 的 ACL 版本由 Windows agent 验
+    const root = tmpRoot()
+    const store = new ComputerHistoryStore(root, undefined, memVault())
+    mkdirSync(store.eventsDir, { recursive: true })
+    const f = path.join(store.eventsDir, '2026-09-26.jsonl')
+    writeFileSync(f, `${JSON.stringify({ t: at(2026, 9, 26, 9), kind: 'app', app: { name: 'A' }, title: 'still plain' })}\n`, { mode: 0o600 })
+    const restore = blockAccess(f, 0o000, '(R)', 0o600)
+    try {
+      expect(await store.migrate()).toBe(false)
+    } finally { restore() }
+    expect(readFileSync(f, 'utf8').includes('still plain')).toBe(true) // 没动
+    expect(await store.migrate()).toBe(true)
+    expect(readFileSync(f, 'utf8').includes('still plain')).toBe(false)
+    expect(lines(f).map((e) => e.title)).toEqual(['still plain'])
   })
 })

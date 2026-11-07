@@ -27,6 +27,11 @@ on:
     branches: [main]
     paths: *parity_paths
 
+# PR 再推送就取消上一轮;main / tag / 手动运行各按 run_id 自成一组,不排队、不被取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   parity:
     runs-on: ubuntu-latest

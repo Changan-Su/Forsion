@@ -9,9 +9,11 @@ import { GripVertical, MonitorUp, PanelBottom } from 'lucide-react'
 import { useStatusStore } from '@lcl/engine'
 import { translate, useI18n } from '../i18n'
 import { NOTIFY_EVENTS, eventDefaultOn, notifyApp, useNotifications } from '../stores/notificationStore'
+import { readQuotaPrefs, writeQuotaPrefs, type QuotaAlertPrefs, type QuotaThreshold } from '../stores/quotaAlerts'
 import { BUILTIN_STATUS_ITEMS } from '../statusbar/items'
 import { useSbPrefs } from '../statusbar/prefs'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
+import { guideEnabled, resetGuide, setGuideEnabled } from '@amadeus/plugins/guideTips'
 import { SettingsPanel, SettingsRow, SettingsSwitch } from './SettingsPrimitives'
 import { SettingsPage } from './SettingsPage'
 import type { PluginSettingsGroup, PluginSettingsItem } from '../../../shared/settingsPage'
@@ -43,6 +45,10 @@ export function NotificationsTab({ onOpenInbox }: { onOpenInbox?: () => void } =
   const activeIds = usePluginStore((s) => s.activeIds)
   const activePlugins = plugins.filter((p) => activeIds.includes(p.id))
   const off = !prefs.enabled
+  const [quota, setQuota] = useState(readQuotaPrefs)
+  const [guideOn, setGuideOn] = useState(guideEnabled)
+  const [guideReset, setGuideReset] = useState(false)
+  const patchQuota = (p: Partial<QuotaAlertPrefs>): void => { const next = { ...quota, ...p }; setQuota(next); writeQuotaPrefs(next) }
   const eventSwitch = (id: string, title: string, on: boolean): PluginSettingsItem =>
     ({ type: 'switch', id, title, value: on, disabled: off, onChange: (next: boolean) => setEventOn(id, next) })
 
@@ -55,6 +61,27 @@ export function NotificationsTab({ onOpenInbox }: { onOpenInbox?: () => void } =
         { type: 'switch', id: 'os', title: t('ntf.osEnable'), desc: t('ntf.osEnableHint'), value: prefs.osEnabled, disabled: off, onChange: setOsEnabled },
         // 收件箱另有一个开关(走查续五 W-76):指过去,点得动
         ...(onOpenInbox ? [{ type: 'button' as const, id: 'inbox-xref', title: t('ntf.inboxXref'), buttons: [{ label: `${t('settings.tab.general')} › ${t('settings.inbox.title')}`, onClick: onOpenInbox }] }] : []),
+      ],
+    },
+    {
+      // 额度提醒(stores/quotaAlerts.ts):缺省都关;判断与弹卡在主窗(notificationWiring F 段)
+      id: 'quota', icon: 'zap', title: t('ntf.quota.group'), desc: t('ntf.quota.groupHint'),
+      items: [
+        {
+          type: 'segmented', id: 'quota-used', title: t('ntf.quota.used'), desc: t('ntf.quota.usedHint'), disabled: off, value: String(quota.threshold),
+          options: [{ value: '0', label: t('ntf.quota.off') }, ...[50, 80, 95].map((n) => ({ value: String(n), label: `${n}%` }))],
+          onChange: (v: string) => patchQuota({ threshold: Number(v) as QuotaThreshold }),
+        },
+        { type: 'switch', id: 'quota-left', title: t('ntf.quota.left'), desc: t('ntf.quota.leftHint'), value: quota.weeklyLeft, disabled: off, onChange: (on: boolean) => patchQuota({ weeklyLeft: on }) },
+      ],
+    },
+    // 插件的上手提示(2026-11-02):不走通知总开关 —— 它不是通知,关了通知也照样能用提示
+    {
+      id: 'guide', icon: 'sparkles', title: t('guideTips.group'), desc: t('guideTips.groupHint'),
+      items: [
+        { type: 'switch', id: 'guide-tips', title: t('guideTips.enable'), value: guideOn, onChange: (on: boolean) => { setGuideEnabled(on); setGuideOn(on) } },
+        { type: 'button', id: 'guide-reset', title: t('guideTips.reset'), desc: guideReset ? t('guideTips.resetDone') : t('guideTips.resetHint'),
+          buttons: [{ label: t('guideTips.resetBtn'), onClick: () => { resetGuide(); setGuideReset(true) } }] },
       ],
     },
     {

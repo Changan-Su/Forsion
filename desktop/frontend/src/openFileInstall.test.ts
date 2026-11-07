@@ -10,7 +10,7 @@ vi.mock('@amadeus/store/pageStore', () => ({ usePageStore: { getState: () => m.p
 vi.mock('./amadeusNav', () => ({ openNote: m.note, openFile: m.file, opensAsTab: () => true }))
 vi.mock('./views/wsFileNav', () => ({ openWsFile: m.external, hostTargetFor: (path: string) => path }))
 vi.mock('./deepLinkInstall', () => ({ whenWorkspaceReady: async () => {} }))
-vi.mock('./amadeusPlugins', () => ({ ensureAmadeusReady: () => {} }))
+vi.mock('./amadeusPlugins', () => ({ ensureAmadeusReady: () => {}, whenAmadeusPluginsReady: async () => {} }))
 vi.mock('./windowKind', () => ({ windowKind: () => 'main' }))
 import { openExternalFile } from './openFileInstall'
 
@@ -58,4 +58,19 @@ describe('system file open identity', () => {
     expect(m.activate).not.toHaveBeenCalled()
     expect(m.external).toHaveBeenCalled()
   })
+})
+
+it('system Open With sends an external PDF through the default opener without a vault', () => {
+  m.page.vaultRoot = ''
+  openExternalFile('C:\\Downloads\\Paper.PDF')
+  expect(m.file).toHaveBeenCalledWith('C:/Downloads/Paper.PDF', { newTab: true })
+  expect(m.external).not.toHaveBeenCalled()
+})
+
+it('reuses an external PDF tab when Open With is repeated', () => {
+  m.page.vaultRoot = ''
+  m.panels = [{ id: 'external-pdf', params: { filePath: 'C:/Downloads/Paper.PDF' } }]
+  openExternalFile('c:\\downloads\\paper.pdf')
+  expect(m.activate).toHaveBeenCalledWith('external-pdf')
+  expect(m.file).not.toHaveBeenCalled()
 })

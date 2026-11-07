@@ -182,6 +182,14 @@ export interface PluginRunStart {
   parentSessionId?: string; sessionId?: string; requestId?: string; title?: string;
   readOnly?: boolean; toolNames?: string[]; resumeSessionId?: string;
 }
+/** Saved metadata of a session owned by the authenticated user; never includes messages. */
+export interface PluginRunContext {
+  sessionId: string;
+  cwd: string | null;
+  modelId: string | null;
+  thinkingLevel: string | null;
+  approvalMode: 'readonly' | 'auto-edit' | 'full-auto' | 'custom' | null;
+}
 export interface PluginRunStatus {
   runId: string; sessionId: string; status: string; error?: string | null;
   tokens: number; summary: string; waiting: string[];
@@ -215,6 +223,8 @@ export interface TanguSdk {
     archive(id: string, userId: string): Promise<PluginWorkspace>;
   };
   runs: {
+    /** Local only. Use req.user.userId, never a body owner. Missing/foreign sessions throw. */
+    context(sessionId: string, userId: string): Promise<PluginRunContext>;
     followupParent(childSessionId: string, userId: string, requestId: string, message: string): Promise<{delivered:boolean}>;
     start(input: PluginRunStart): Promise<{ sessionId: string; runId: string }>;
     sessionRuns(sessionId: string, userId: string): Promise<Array<{runId:string; status:string; createdAt:string}>>;
@@ -257,8 +267,25 @@ export interface ChannelInbound {
   attachments?: Array<{ name: string; mimeType: string; data: string }>;
   /** 文件由宿主落盘到通道工作区。 */
   files?: Array<{ name: string; mimeType: string; buffer: Buffer }>;
+  /** 钉这个 peer 的会话用哪个 Agent(优先于会话存值与通道默认);写法不合法的忽略。 */
+  agentSlug?: string;
 }
 export interface ChannelSendResult { ok: boolean; error?: string }
+/** 结构化审批卡(driver.sendApproval):怎么画、谁能批由驱动决定。 */
+export interface ChannelApprovalCard {
+  approvalId: string;
+  runId: string;
+  toolName: string;
+  /** 工具参数的 JSON 原串(批准后执行的就是它)。 */
+  arguments: string;
+  /** 摘要 + 完整改动,与文字卡同一份。 */
+  preview: string;
+  /** true = 只能在执行设备本机批准:respond('approve') 恒回 false,仍可 reject。 */
+  localOnly: boolean;
+}
+export type ChannelApprovalAction = 'approve' | 'reject';
+/** 卡片怎么结束的:approved / rejected = 别处答的(桌面等);cancelled = run 结束 / 被停 / 通道停止。 */
+export type ChannelApprovalOutcome = 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'undelivered';
 /** 通道驱动 = 传输层。会话绑定、审批、slash、收件箱转发都在宿主管线里。 */
 export interface ChannelDriver {
   /** 通道 kind:小写字母开头、`[a-z0-9-]`、2–16 字符,不得与内置 wechat / telegram / qq 撞。 */
@@ -271,12 +298,25 @@ export interface ChannelDriver {
   send(accountId: string, peerId: string, text: string): Promise<ChannelSendResult>;
   sendMedia?(accountId: string, peerId: string, buffer: Buffer, opts: { kind: 'image' | 'file'; fileName: string }, signal?: AbortSignal): Promise<ChannelSendResult>;
   setTyping?(accountId: string, peerId: string, on: boolean): Promise<void>;
+  /**
+   * 有它就不发文字审批卡:卡片交给驱动,respond 兑现(true = 生效;false = 卡已结束,或此刻批不了:还没送达 / 只能本机批 / 已锁定远程)。
+   * 沿用文字卡那条每 peer 一张的队列与 10 分钟超时(从显示起算);该 peer 的文字消息不再作用于它。回 ok:false 或抛错 = 没送达,按拒绝兑现。
+   */
+  sendApproval?(accountId: string, peerId: string, card: ChannelApprovalCard, respond: (action: ChannelApprovalAction) => boolean): Promise<ChannelSendResult>;
+  /** 交出去的卡结束了(respond 回 true 的那次除外),驱动据此收卡。有它时宿主不再发超时之类的文字提示。 */
+  settleApproval?(accountId: string, peerId: string, approvalId: string, outcome: ChannelApprovalOutcome): void | Promise<void>;
   /** 设置页「连接」:校验凭据(失败抛错,文案给用户看),返回绑定用账号 id 与显示名。 */
   verify(): Promise<{ accountId: string; label: string }>;
 }
 export interface ChannelText { zh: string; en: string }
 export interface PluginChannelSpec {
   driver: ChannelDriver;
+  /**
+   * 一个账号服务多个 peer:每个 peer 一条绑定 + 一个会话 + 一个工作目录。缺省 = 第一个发消息的 peer 认领,其余拒绝。
+   * 准入归驱动:它交上来的 peer 都会开会话。这些 peer 不是通道主人:只有 /stop 算命令,收件箱不转发。peerId ≤ 128 字符。
+   * 老引擎静默忽略这个键,先判 ctx.channelCapabilities?.multiPeer。
+   */
+  multiPeer?: boolean;
   /** 设置卡与侧栏文件夹的显示名。 */
   name: ChannelText;
   /** 凭据下方的一句提示(去哪儿拿凭据)。 */
@@ -293,9 +333,101 @@ export interface PluginCommand {
   run(argv: string[]): Promise<number | void>;
 }
 
+/** One read-only skill currently enabled at the external source. */
+export interface PluginSkillEntry {
+  /** Provider-local kebab-case slug, 1–64 characters. The host assigns the full id. */
+  id: string;
+  name: string;
+  description: string;
+  /** Markdown instructions without YAML frontmatter. */
+  content: string;
+  /** Optional absolute directory for relative resources; does not grant file access. */
+  dir?: string;
+}
+export interface PluginSkillListContext {
+  cwd?: string;
+  /** Always supplied by this host; aborted after 5 seconds or on provider revocation. */
+  signal?: AbortSignal;
+}
+export interface PluginSkillProvider {
+  /** Provider-local kebab-case slug, 1–64 characters. */
+  id: string;
+  /** Re-read current source state. Return only enabled skills; no persistent copy is made. */
+  list(context: PluginSkillListContext): Promise<readonly PluginSkillEntry[]>;
+}
+
+export type PluginModelThinkingLevel = 'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export interface PluginModel {
+  /** Source-local ID (1–240 characters); the host percent-encodes and namespaces it. */
+  id: string;
+  name: string;
+  contextWindow?: number;
+  /** Default false. Declare true only when the source accepts image parts. */
+  supportsVision?: boolean;
+  thinkingLevels?: PluginModelThinkingLevel[];
+}
+export interface PluginModelReadContext { signal: AbortSignal }
+/** Host-bound local adapter isolation. Never send these identities upstream. */
+export interface PluginModelCallContext {
+  readonly sessionId: string;
+  readonly userId: string;
+  readonly cwd: string | null;
+}
+export interface PluginModelToolCall {
+  id: string;
+  type: 'function';
+  function: { name: string; arguments: string };
+}
+export interface PluginModelMessage {
+  role: 'user' | 'assistant' | 'system' | 'tool';
+  content: string | any[] | null;
+  tool_calls?: PluginModelToolCall[];
+  tool_call_id?: string;
+  reasoning_content?: string;
+}
+export interface PluginModelRequest {
+  /** The source-local model ID, not its namespaced host ID. */
+  modelId: string;
+  messages: PluginModelMessage[];
+  tools?: Tool[];
+  toolChoice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
+  temperature?: number;
+  maxTokens?: number;
+  thinkingLevel?: PluginModelThinkingLevel;
+  cacheKey?: string;
+  /** Absent outside a bound native run. Never inferred from cacheKey or payload fields. */
+  readonly context?: PluginModelCallContext;
+  signal: AbortSignal;
+  onToken?: (delta: string) => void;
+  onReasoning?: (delta: string) => void;
+  onToolCallDelta?: (info: { id: string; name: string; argsLen: number; args: string; argsDelta: string }) => void;
+  onResponseStart?: () => void;
+}
+export interface PluginModelResult {
+  content: string;
+  reasoning: string;
+  toolCalls: PluginModelToolCall[];
+  usage: { prompt_tokens: number; completion_tokens: number; cached_tokens?: number; cache_write_tokens?: number; reasoning_tokens?: number };
+  finishReason?: string;
+}
+export interface PluginModelProvider {
+  /** Provider-local kebab-case slug, 1–64 characters. */
+  id: string;
+  listModels(context: PluginModelReadContext): Promise<readonly PluginModel[]>;
+  resolveModel(modelId: string, context: PluginModelReadContext): Promise<PluginModel | null>;
+  /** Exactly one inference; return tool calls to the host without executing them. */
+  stream(input: PluginModelRequest): Promise<PluginModelResult>;
+}
+
 export interface TanguPluginContext {
   registerPlugin(meta: PluginMeta): void;
   registerToolProvider(p: ToolProvider): void;
+  /** Live read-only source; IDs are local:plugin/<engineId>/<providerId>/<entryId>.
+   * Automatically revoked on disable, unload, failed activation or replacement. */
+  registerSkillProvider(provider: PluginSkillProvider): void;
+  /** Local single-inference source. Full IDs: plugin:<engineId>/<providerId>/<encodedModelId>.
+   * Automatically revoked, including in-flight requests, when this activation is disposed. */
+  registerModelProvider(provider: PluginModelProvider): void;
   /** 注册 `tangu <name>` 子命令(如 computer-use 的 doctor/setup)。 */
   registerCommand(cmd: PluginCommand): void;
   registerScopedRoutes(mount: (router: ScopedPluginRouter) => void): void;
@@ -305,6 +437,8 @@ export interface TanguPluginContext {
    * 老宿主没有:`if (!ctx.registerChannel) return ctx.log('host too old')`。kind 非法或撞名会抛错(激活作废)。
    */
   registerChannel?(spec: PluginChannelSpec): void;
+  /** 本引擎的通道管线认哪些字段;老引擎没有这个键。 */
+  channelCapabilities?: { multiPeer: true; agentPin: true; sendApproval: true };
   sdk: TanguSdk;
   log(msg: string): void;
   paths: { pluginDir: string; dataDir: string };

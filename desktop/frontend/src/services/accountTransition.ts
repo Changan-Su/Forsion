@@ -1,3 +1,11 @@
+const willChange = new Set<() => void>()
+/** Runs as a switch starts. Use this, not a second `onAuthWillChange`: the host takes a window's first ack as final, so
+ *  another subscriber would release the switch before this window's editors have flushed. */
+export function onAccountWillChange(cb: () => void): () => void {
+  willChange.add(cb)
+  return () => { willChange.delete(cb) }
+}
+
 /** The host waits for every window before changing credentials or the cloud vault. */
 export function installAccountTransition(): () => void {
   if (!window.tangu?.onAuthWillChange) return () => {}
@@ -12,6 +20,7 @@ export function installAccountTransition(): () => void {
     lockedRoot = null
   }
   const offPrepare = window.tangu.onAuthWillChange(async () => {
+    willChange.forEach((cb) => { try { cb() } catch { /* one listener cannot stop the switch */ } })
     const request = ++version
     if (!lockedRoot) {
       // Menus/dialogs are portaled outside #root; freeze those editors as well.

@@ -23,10 +23,11 @@ import { useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
 import { registerMessages, useI18n } from './i18n'
 import { pageKey } from '@amadeus-shared/links'
-import { isImeKeyEvent, isMacPlatform, useExitGhost, useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
+import { isImeKeyEvent, isMacPlatform, useExitGhost, useNativeChromeClaim, useNativeChromeInstalled, useSegDir, type NativeChromeClaim } from '@lcl/engine'
 import { listMessages, searchSessions, type SessionSearchHit } from './services/backendService'
 import { homeTarget, targetForSession } from './services/engine/targets'
 import type { MessageRecord } from './types'
+import { windowKind } from './windowKind'
 
 registerMessages({
   'quickfind.catAll': { zh: '全部', en: 'All' },
@@ -227,6 +228,8 @@ function QuickFindInner() {
   // 光标在这条线上的位置:-1 = 正文(= 全部),0.. = 分类格。每次唤起都从 -1 起(面板关掉即卸载)。
   const [pos, setPos] = useState(-1)
   const cat = catAt(pos)
+  /** 分类胶囊滑块往哪边拉(写进 data-dir,后沿晚出发;见 sidebar2.css .t2s-vaultseg-thumb)。 */
+  const segDir = useSegDir(pos + 1)
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -286,13 +289,16 @@ function QuickFindInner() {
   // 只在「全部 / 笔记」分类、有智库时出现,选取模式没有。落盘走 createWikiPage → birthAndOpen(G4-12 素文件出生)。
   const vaultRoot = usePageStore((s) => s.vaultRoot)
   const createName = q.trim()
-  const showCreate = !pick && !!createName && !!vaultRoot && amadeusAvailable() && (cat === 'all' || cat === 'note')
+  // Mini 窗只做找文件(11-03):「新建笔记」靠主窗的 amadeus:navigate-note 监听落地、「对话内容」的跳转目标留在 Mini 自己的 store,
+  // 交给主窗都会丢 —— 两样在 Mini 里不给(Codex 评审)。
+  const mini = windowKind() === 'mini'
+  const showCreate = !pick && !mini && !!createName && !!vaultRoot && amadeusAvailable() && (cat === 'all' || cat === 'note')
     && !pages.some((p) => /\.md$/i.test(p) && pageKey(p) === pageKey(createName))
 
   // 「对话内容」一段(按正文搜会话):排在名称结果与「新建笔记」之后 —— 它是异步到的,排在前面会让
   // 「打个新名字 + 回车 = 新建笔记」变成看手速。只在「全部 / 会话」分类出现,选取模式没有。
   // 只收正文命中(带 hit)的:标题 / 摘要自证命中的,上面的名称匹配已经列了。
-  const needle = !pick && sessionsAvailable() ? contentNeedle(q) : null
+  const needle = !pick && !mini && sessionsAvailable() ? contentNeedle(q) : null
   const [content, setContent] = useState<{ q: string; hits: SessionSearchHit[] } | null>(null)
   const searcher = useMemo(() => debouncedSearch(
     (s, signal) => searchSessions(homeTarget(), s, { limit: 20, signal }),
@@ -375,7 +381,7 @@ function QuickFindInner() {
             onMouseUp={() => setPos(-1)}
           />
         </div>
-        {/* 分类胶囊:复用「本地|云端」「文档|画布」那颗 `.t2s-vaultseg`(凹轨道 + 滑块弹性平移),
+        {/* 分类胶囊:复用「本地|云端」「文档|画布」那颗 `.t2s-vaultseg`(凹轨道 + 滑块两条边拉伸过去),
             只是从两格变成四格 —— 格数与当前格走 CSS 变量(见 sidebar2.css)。
             ⚠️ 整条 mousedown preventDefault:点格子不夺焦点,点完还能接着打字。 */}
         {!pick && <div
@@ -384,7 +390,7 @@ function QuickFindInner() {
           aria-label={t('quickfind.scopeLabel')}
           style={{ '--seg-n': SEGS.length, '--seg-i': pos + 1 } as React.CSSProperties}
         >
-          <div className="t2s-vaultseg-thumb" />
+          <div className="t2s-vaultseg-thumb" data-dir={segDir} />
           {SEGS.map((c, i) => (
             <button
               key={c.id}

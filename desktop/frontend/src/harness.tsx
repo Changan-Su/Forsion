@@ -63,6 +63,8 @@ import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import { parseTags, stripForIndex } from '@amadeus-shared/links'
+import { hasTagFilter, parseSearchQuery, tagCounts, tagDocFromRaw, tagSearch, type TagSearchDoc } from '@amadeus-shared/tagQuery'
+import type { SearchHit } from '@amadeus-shared/ipc'
 import { noteFmMeta } from '@amadeus-shared/linkIndex'
 import { setRecentsProvider } from './amadeus/lib/recents'
 import { parseBody } from '@amadeus-shared/compiler/markers'
@@ -651,6 +653,12 @@ if (new URLSearchParams(location.search).has('dock')) {
       },
       split: (): string | null => useWorkspace.getState().splitActive('right')?.id ?? null,
       activate: (leafId: string): void => useWorkspace.getState().activateLeaf(leafId),
+      /** 把 leafId 所在的组整组挪到 toId 那组的右边(真实拖组走的同一个 moveTo)。 */
+      moveGroupRightOf: (leafId: string, toId: string): void => {
+        const api = useWorkspace.getState().api
+        const to = api?.getPanel(toId)?.group
+        if (to) api?.getPanel(leafId)?.group.api.moveTo({ group: to, position: 'right' })
+      },
       stack: (leafId: string): { keys: string[]; idx: number } => {
         const st = useNav.getState().stacks[leafId]
         return { keys: st?.entries.map((e) => e.key) ?? [], idx: st?.idx ?? -1 }
@@ -728,6 +736,23 @@ if (new URLSearchParams(location.search).has('dock')) {
       createRoot(host).render(<div className="am-app"><CommandPalette /><AmadeusOverlays /></div>)
       ;(window as unknown as { __qf: unknown }).__qf = { useQuickFind, useCommandStore, useUiOverlay, usePageStore, useWorkspace }
     })
+} else if (new URLSearchParams(location.search).has('segs')) {
+  // 分段胶囊滑块「拉伸」逐帧仪器(scripts/seg-stretch.check.cjs,水滴复用方案第 4 条):真 LCL 看法胶囊(插件拿到的就是这一颗)
+  // 四格、两格各一颗,切格走真 onClick → 真 useSegDir 写 data-dir。⌘P 那颗 .t2s-vaultseg 走 ?qf。`&dark` 走真主题。
+  const segsDark = new URLSearchParams(location.search).has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), segsDark ? 'dark' : 'light')
+  void import('@lcl/engine').then(({ ViewModeSwitch }) => {
+    function Seg({ id, labels }: { id: string; labels: string[] }): React.ReactElement {
+      const [v, setV] = useState(labels[0])
+      return <ViewModeSwitch testId={id} spec={{ value: v, onChange: setV, modes: labels.map((l) => ({ value: l, label: l })) }} />
+    }
+    createRoot(document.getElementById('root')!).render(
+      <div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0, padding: 32, background: 'var(--bg)', display: 'flex', flexDirection: 'column', gap: 24, alignItems: 'flex-start' }}>
+        <Seg id="seg4" labels={['日', '周', '月', '年']} />
+        <Seg id="seg2" labels={['文档', '画布']} />
+      </div>,
+    )
+  })
 } else if (new URLSearchParams(location.search).has('peek')) {
   // Space 左面板悬停预览(scripts/space-peek.check.cjs):真 Shell(Ribbon + Dockview)+ 真 SpaceButton + 三个替身 Space。
   // a / b 各有左栏(b 两个 View → 卡片头部出页签),c 没有左栏(悬停不弹)。左栏替身里摆齐预览要扛住的几样东西:
@@ -973,9 +998,9 @@ if (new URLSearchParams(location.search).has('dock')) {
     // ?running 起步就在跑;右下角「运行」按钮来回切,看流星渐快 / 渐慢
     const [running, setRunning] = useState(modelPillParams.has('running'))
     const [defaults, setDefaults] = useState({ backgroundModelId: '', imageModelId: '', visionModelId: '' })
-    // ?fast[=<目录说明>] 露出 Fast 行(缺省扮「2x speed, increased usage」那一类),?fast&faston 起步就开着
-    const [fast, setFast] = useState(modelPillParams.has('faston'))
-    const fastProps = modelPillParams.has('fast') ? { fast, fastTier: modelPillParams.get('fast') || '2x speed, increased usage', onFastChange: setFast } : {}
+    // ?fast[=<目录说明>] 露出 Fast 行(缺省扮「2x speed, increased usage」那一类),?fast&faston 起步就开着;?ultrafast[=<说明>] 再露极速行(缺省「6x price」)
+    const [fast, setFast] = useState<boolean | 'ultra'>(modelPillParams.has('faston'))
+    const fastProps = modelPillParams.has('fast') ? { fast, fastTier: modelPillParams.get('fast') || '2x speed, increased usage', ...(modelPillParams.has('ultrafast') ? { ultrafastTier: modelPillParams.get('ultrafast') || '6x price' } : {}), onFastChange: setFast } : {}
     // 「上下文上限」行:GLM-4.7 扮 1M 模型(缺省封在 272k);选「最大」= 本机覆盖成 1M(与真 store 同形)
     const [ctxOverride, setCtxOverride] = useState<number | null>(new URLSearchParams(location.search).has('ctxmax') ? 1_000_000 : null)
     const modelsResponse = {
@@ -1171,7 +1196,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     writeDatabase: (p: string, data: unknown) => { mem.set(p, JSON.stringify(data)); return Promise.resolve() },
   })
   const STOCK = '库存表.db', OUT = '出库记录.db', ORDER = '订单总表.db', TASK = '任务表.db'
-  // 任务表的日期相对今天算(seedCalendarDb 同款):甘特轴恒含今天,写死 2026-03 会让轴拉到半年宽、今日线在屏外
+  // 任务表的日期相对今天算:甘特轴恒含今天,写死 2026-03 会让轴拉到半年宽、今日线在屏外
   const erpDay = (n: number): string => {
     const t = new Date()
     const d = new Date(t.getFullYear(), t.getMonth(), t.getDate() + n)
@@ -1537,7 +1562,9 @@ if (new URLSearchParams(location.search).has('dock')) {
     })
   }
   registerView({ type: 'amadeus-pdf', kind: 'entity', embeddable: true, idParam: 'probePath', fileMatch: VIEW_FILE_MATCH['amadeus-pdf'], displayName: 'File Probe', icon: Square, factory: (p) => <DashFileProbe {...p} /> })
-  const gridIds = ['1', '2', '3', '4', '5', '6', '7']
+  // `&cards=4x3,6x5`:换成这组尺寸的文本卡,给探针复现具体几何。
+  const sized = new URLSearchParams(location.search).get('cards')?.split(',').map((s) => s.split('x').map(Number))
+  const gridIds = sized ? sized.map((_, i) => String(i + 1)) : ['1', '2', '3', '4', '5', '6', '7']
   usePageStore.setState({
     activePage: DASH_FILE, vaultRoot: '/harness', status: 'ready', pages: [DASH_FILE, '笔记甲.md'], files: ['手册.pdf', '图.png'],
     manifest: {
@@ -1550,11 +1577,13 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 钉「手调=硬值 / 未动=可弹」的分界(2026-08-31 打回后收窄)。
       fmExtra: [
         'tags: [harness]', 'dashboard3:',
-        '  "1": [0, 12, 1]', '  "2": [1, 3, 2]', '  "3": [2, 3, 2]', '  "4": [3, 6, 5]',
-        '  "5": [4, 12, 1]', '  "6": [5, 6, 3]', '  "7": [6, 6, 3]',
+        ...(sized ? sized.map(([w, h], i) => `  "${i + 1}": [${i}, ${w}, ${h}]`) : [
+          '  "1": [0, 12, 1]', '  "2": [1, 3, 2]', '  "3": [2, 3, 2]', '  "4": [3, 6, 5]',
+          '  "5": [4, 12, 1]', '  "6": [5, 6, 3]', '  "7": [6, 6, 3]',
+        ]),
       ].join('\n'),
     },
-    blocks: {
+    blocks: sized ? Object.fromEntries(gridIds.map((id) => [id, { id, type: 'markdown', content: `卡片 ${id}` }])) : {
       1: { id: '1', type: 'markdown', content: '```section\ntitle: 今天\n```' },
       2: { id: '2', type: 'markdown', content: '```clock\ntz: Asia/Shanghai\n```' },
       3: { id: '3', type: 'markdown', content: '随手记：把常看的东西摆成一页。' },
@@ -1725,6 +1754,41 @@ if (new URLSearchParams(location.search).has('dock')) {
     },
   }
   createRoot(document.getElementById('root')!).render(<CanvasPlugHarness />)
+} else if (new URLSearchParams(location.search).has('tagpanels')) {
+  // 标签树 + tag: 搜索的真面板(scripts/tag-tree.check.cjs):内存库走与主进程同一份 tagCounts / tagSearch,界面是生产组件。
+  const g = window as unknown as { amadeus: Record<string, unknown>; __vault: Map<string, string> }
+  const seed: Record<string, string> = {
+    'Plan.md': '---\ntags: [产品/路线图]\n---\n这一季先做 #产品/路线图 里的三件事\n',
+    '2026-10.md': '# 2026-10\n\n### 2026-10-29T22:05:00\n\nMini 窗只放输入框 #产品/路线图\n\n### 2026-10-24T07:45:00\n\n回顾卡可以像抽牌 #产品/路线图 #设计\n\n### 2026-10-19T19:12:00\n\n别的事 #产品/用户\n',
+    'Design.md': '暗色下卡片只比主区亮一档 #设计\n\n好的动效是看不见的 #设计\n',
+    'Forsion.md': '更新日志 #Forsion/发版\n\n标签重命名 #Forsion/闪念盒\n\n`#代码` 里的不算\n',
+    'Read.md': '第三章 #读书\n',
+  }
+  for (const [p, text] of Object.entries(seed)) g.__vault.set(p, text)
+  const docs = (): TagSearchDoc[] => [...g.__vault].filter(([p]) => p.endsWith('.md')).map(([p, text]) => tagDocFromRaw(p, text))
+  Object.assign(g.amadeus, {
+    listTags: () => Promise.resolve(tagCounts(docs())),
+    search: (query: string) => {
+      const parsed = parseSearchQuery(query)
+      const text = hasTagFilter(parsed) ? parsed.text.toLowerCase() : query.trim().toLowerCase()
+      const textHit = (d: TagSearchDoc): SearchHit | null => (d.plain.toLowerCase().includes(text) ? { path: d.path, title: d.title, snippet: d.plain.slice(0, 80), line: 1, score: 1 } : null)
+      if (hasTagFilter(parsed)) return Promise.resolve(tagSearch(docs(), parsed, textHit, text ? [text] : []))
+      return Promise.resolve(docs().flatMap((d) => textHit(d) ?? []))
+    },
+  })
+  usePageStore.setState({ vaultRoot: '/harness', status: 'ready' })
+  const dark = new URLSearchParams(location.search).has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), dark ? 'dark' : 'light')
+  void import('./amadeusPanels').then(({ AmadeusSearchView, AmadeusTagsView }) => {
+    createRoot(document.getElementById('root')!).render(
+      <HostLocaleProvider>
+        <div className="amadeus-root am-app tangu-lovable" data-mode={dark ? 'dark' : 'light'} style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'row', gap: 12, padding: 12, background: 'var(--sidebar-bg)' }}>
+          <div data-panel="tags" style={{ width: 280, height: '100%' }}><AmadeusTagsView /></div>
+          <div data-panel="search" style={{ width: 300, height: '100%' }}><AmadeusSearchView /></div>
+        </div>
+      </HostLocaleProvider>,
+    )
+  })
 } else if (new URLSearchParams(location.search).has('plugview')) {
   // 种一页真块:插件若用块表面(getPage/mountBlocks/insertBlockAfter)在台架里也成立。
   const iso = new Date().toISOString()
@@ -1905,22 +1969,7 @@ if (new URLSearchParams(location.search).has('dock')) {
     readTextFile: (p: string) => Promise.resolve(vault.get(p) ?? null),
     // 标签 / 别名面(评审 L-14 `#` 补全、L-13 `[[` 别名候选):用与主进程索引同一份解析(正文 #标签 + fm tags / aliases),
     // 由内存 vault 现算 —— 仪器往 `__upage.vault` 塞一篇带标签的笔记即可喂出候选。见 scripts/wiki-suggest.check.cjs。
-    listTags: () => {
-      const counts = new Map<string, { tag: string; count: number }>()
-      for (const [p, text] of vault) {
-        if (!p.endsWith('.md')) continue
-        const seen = new Set<string>()
-        for (const t of [...parseTags(stripForIndex(text)), ...noteFmMeta(text).tags]) {
-          const k = t.toLowerCase()
-          if (seen.has(k)) continue
-          seen.add(k)
-          const c = counts.get(k)
-          if (c) c.count++
-          else counts.set(k, { tag: t, count: 1 })
-        }
-      }
-      return Promise.resolve([...counts.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag)))
-    },
+    listTags: () => Promise.resolve(tagCounts([...vault].filter(([p]) => p.endsWith('.md')).map(([p, text]) => tagDocFromRaw(p, text)))),
     pageAliases: () => {
       const out: Record<string, string[]> = {}
       for (const [p, text] of vault) if (p.endsWith('.md')) { const a = noteFmMeta(text).aliases; if (a.length) out[p] = a }
@@ -2294,8 +2343,12 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 页面排版选项(C-21)挂壳上,同生产 EditorScope。`&udark` = 暗色壳(截图自查用)。
       const [path, setPath] = useState('Unified.md')
       const pageStyle = useNotePageStyle(null, path)
-      return (
-        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: 'fixed', inset: 0 }}>
+      // `&uwb`:外面再套生产的 View 容器(真类名 `.wb-view`,吃 engine.css 的真规则),错开一个侧栏 + 标签条。
+      //   编辑器的浮层要按祖先判断 fixed 包含块;没有这层祖先,`.wb-view` 的 CSS 一变(10-31 加 container-type),
+      //   落点线整条偏出一个 View 左上角,而台架全绿(11-02)。仪器 unified-page D3。
+      const wb = new URLSearchParams(location.search).has('uwb')
+      const pane = (
+        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: wb ? 'absolute' : 'fixed', inset: 0 }}>
           {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger="Unified.md" />}
           <UPageHost onPath={setPath} />
           {/* `&umbar`:移动端底栏胶囊 + ⋯ sheet(生产同一个 AmxMobileBar),sheet 里只放页面排版那几行(C-21)。 */}
@@ -2313,6 +2366,7 @@ if (new URLSearchParams(location.search).has('dock')) {
           )}
         </div>
       )
+      return wb ? <div className="wb-view wb-view--main" style={{ position: 'fixed', left: 300, top: 40, width: 'calc(100% - 300px)', height: 'calc(100% - 40px)' }}>{pane}</div> : pane
     }
     // 生产的编辑器挂在 LocaleProvider 之下(useI18n 跟界面语言);台架原来没包,useI18n 一律回落中文,英文界面的
     // 断言写不了(评审 §0 台架边界)。包 HostLocaleProvider(不接管 setter、不探 IP),仪器用 `__upage.setLocale` 切。

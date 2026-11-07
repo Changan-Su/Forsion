@@ -5,6 +5,7 @@ import type { NormalAgentDef, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import './agentSettingsOverview.css'
 import { homeTarget } from '../services/engine/targets'
+import { agentName } from '../agentName'
 
 registerMessages({
   'agentSettings.rosterTitle': { zh: 'Agent 名册', en: 'Agent roster' },
@@ -57,7 +58,7 @@ export function AgentSettingsOverview({ cfg, onOpenAgent }: { cfg: TanguDesktopC
       <div className="settings-panel-head"><span className="settings-panel-icon"><Bot size={16} /></span><div><strong>{t('agentSettings.rosterTitle')}</strong><p>{t('agentSettings.rosterDescription')}</p></div></div>
       <div className="agso-default">
         <span>{t('agentSettings.default')}</span>
-        {agents === null ? <Loader2 size={14} className="spin" /> : current ? <button type="button" onClick={() => onOpenAgent(current.slug)}><strong>{current.name}</strong><small>{current.description}</small><ChevronRight size={15} /></button> : <p>{t('agentSettings.noAgents')}</p>}
+        {agents === null ? <Loader2 size={14} className="spin" /> : current ? <button type="button" onClick={() => onOpenAgent(current.slug)}><strong>{agentName(current)}</strong><small>{current.description}</small><ChevronRight size={15} /></button> : <p>{t('agentSettings.noAgents')}</p>}
       </div>
       <div className="agso-actions"><button className="btn ghost sm" type="button" onClick={() => onOpenAgent(current?.slug || 'xyra')}>{t('agentSettings.open')}<ChevronRight size={13} /></button></div>
     </section>

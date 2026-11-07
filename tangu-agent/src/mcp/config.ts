@@ -1,11 +1,11 @@
 /**
  * MCP 配置:~/.tangu/mcp.json。schema 字段兼容 .claude.json / codex / hermes 的 mcp 配置,
  * 便于跨生态导入(desktop discovery 复制时基本零转换):
- *   { "mcpServers": { "<name>": { command?, args?, env?, url?, transport?, headers?, timeoutMs?, enabled? } } }
+ *   { "mcpServers": { "<name>": { command?, args?, env?, url?, transport?, headers?, timeoutMs?, enabled?, tools? } } }
  * 类型推断(同 Agents-Manager):有 command → stdio;有 url → transport 显式 sse 否则 streamable-http。
  *
- * **加载语义(prompt 缓存纪律)**:mcp.json 的 server 集在**后端进程启动时**冻结——manager 启动连一次,
- * 配置变更只对重启后的进程/新 run 生效(desktop 改配置走 ensureBackend 重启链)。
+ * **加载语义(prompt 缓存纪律)**:mcp.json 的 server 集在**每个 run 内**冻结——manager 启动连一次,
+ * 配置变更在活动 run 全部结束后由 manager.reloadConfig 接入,也可重启加载。
  * 绝不在 run 中途增删工具,否则同会话 defs 漂移打爆前缀缓存。插件自带的 server(pluginServers.ts)随插件
  * 启停在 run 之间增删 —— toolsForRun 每 run 取一次快照,与 tools/list_changed 同一条「只对之后的 run 生效」。
  */
@@ -27,8 +27,17 @@ export interface McpServerConfig {
   timeoutMs?: number;
   /** false=配置保留但不连接(导入的外来配置默认 false,用户显式启用)。缺省 true。 */
   enabled?: boolean;
+  /** 远端 server 要预注册 OAuth client 时写(oauth.ts);其余靠 DCR,不用写。 */
+  oauth?: { clientId?: string; scopes?: string[] };
+  /** 连接器目录 id(宿主从商店连上时写):alwaysAsk 只认带这个标记的条目(mcp/connectors.ts)。 */
+  connector?: string;
+  /** 按远端工具名收紧:off 不下发、调用也拒;ask 每次都问。改它不重连(manager.reloadConfig 原地换)。 */
+  tools?: Record<string, 'ask' | 'off'>;
   /** stdio 子进程的工作目录。只由插件自带的 server 设(= 插件目录,见 pluginServers.ts);mcp.json 里写了也照用。 */
   cwd?: string;
+  /** false = 工具定义每次请求整份下发。缺省(含 true)按需加载:系统提示的「Additional Tools」目录每个工具一行,
+   *  模型用 load_tools 装上再调 —— 一个连接器的工具定义动辄几十 KB,不用也每次请求都重读(11-06 取证)。 */
+  deferLoading?: boolean;
 }
 
 export interface McpConfig {

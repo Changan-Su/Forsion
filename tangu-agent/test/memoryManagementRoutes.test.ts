@@ -169,8 +169,13 @@ describe('versioned Agent memory management', () => {
     // 10-04 记忆分级:只有会话属于一个项目时,定义才多出 scope 并要求每次都选(别的会话 / 云端聊天面拿到的还是上面这份精简定义)
     const scoped = (tool as any).definitionFor({ projectScoped: true, execMode: 'host' }).function;
     expect(scoped.parameters.required).toEqual(['action', 'fact', 'scope']);
-    expect(scoped.parameters.properties.scope.enum).toEqual(['agent', 'project']);
-    expect((tool as any).definitionFor({ execMode: 'sandbox' })).toBe(tool.definition);
+    // 10-29 画像写入:本机会话多一档 person(写 human/SOUL.md);连着聊天通道的会话(和云端、子代理、远端)照旧是两档 / 精简定义
+    expect(scoped.parameters.properties.scope.enum).toEqual(['agent', 'project', 'person']);
+    expect((tool as any).definitionFor({ projectScoped: true, execMode: 'host', channelSession: true }).function.parameters.properties.scope.enum).toEqual(['agent', 'project']);
+    expect((tool as any).definitionFor({ execMode: 'sandbox', channelSession: true })).toBe(tool.definition);
+    // 11-06 适用范围:本机会话多一个 appliesTo(同 person 那道门);通道 / 云端 / 子代理拿到的精简定义逐字不变
+    expect(scoped.parameters.properties.appliesTo.enum).toEqual(['all', 'this-computer', 'this-os']);
+    expect((tool.definition as any).function.parameters.properties.appliesTo).toBeUndefined();
     expect((tool as any).definitionFor({ projectScoped: true, execMode: 'host' })).toBe((tool as any).definitionFor({ projectScoped: true, execMode: 'host' })); // 同一份对象:逐轮字节一致
     const ctx = { userId: 'fixture-user', sessionId: 'name-session', runId: 'name-run', appId: 'tangu' };
     const run = (args: any) => runWithAgentSlug('name-fixture', () => tool.execute(args, ctx)) as Promise<string>;

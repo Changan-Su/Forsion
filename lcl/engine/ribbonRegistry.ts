@@ -119,6 +119,13 @@ const persistV2 = (s: Pick<RibbonState, 'bottomOrder' | 'folders' | 'commandItem
 const setV2 = (set: Setter) => (fn: (s: RibbonState) => Partial<RibbonState>): void =>
   set((s) => { const patch = fn(s); persistV2({ ...s, ...patch }); return patch })
 
+/** 没摆过顺序时注册序就是显示序:把 item 排到 anchor 后面;anchor 还没注册 → 末尾。 */
+function placeAfter(items: RibbonItem[], item: RibbonItem, anchor: string): RibbonItem[] {
+  const rest = items.filter((i) => i.id !== item.id)
+  const at = rest.findIndex((i) => i.id === anchor)
+  return at < 0 ? [...rest, item] : [...rest.slice(0, at + 1), item, ...rest.slice(at + 1)]
+}
+
 export const useRibbonStore = create<RibbonState>((set) => {
   const setp = setV2(set)
   return {
@@ -132,7 +139,17 @@ export const useRibbonStore = create<RibbonState>((set) => {
     },
     ...loadV2(),
     addRibbonIcon: (item) =>
-      set((s) => ({ items: [...s.items.filter((i) => i.id !== item.id), item] })),
+      set((s) => {
+        if (!item.after) return { items: [...s.items.filter((i) => i.id !== item.id), item] }
+        const items = placeAfter(s.items, item, item.after)
+        // 上区用户拖过(order 非空)时,新图标排位看 order:没收过它、也不在收纳夹里才插进去。其余顺序一字不动。
+        const known = s.order.includes(item.id) || s.folders.some((f) => f.items.includes(item.id))
+        const at = s.order.indexOf(item.after)
+        if (item.side === 'bottom' || known || at < 0) return { items }
+        const order = [...s.order.slice(0, at + 1), item.id, ...s.order.slice(at + 1)]
+        try { localStorage.setItem(ORDER_KEY, JSON.stringify(order)) } catch { /* ignore */ }
+        return { items, order }
+      }),
     // 删除图标(如删用户 Space):同时清持久顺序 + 收纳夹成员,否则留幽灵(夹计数虚高、同 id 重建会诈尸回夹)。
     removeRibbonIcon: (id) => setp((s) => {
       const order = s.order.filter((x) => x !== id)

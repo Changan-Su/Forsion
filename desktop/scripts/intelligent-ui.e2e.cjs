@@ -9,6 +9,7 @@ const ROOT = path.resolve(__dirname, '..'), OUT = path.join(ROOT, 'outputs/intel
 const fixtures = require('./fixtures/intelligent-ui.json')
 const DEMO = process.argv.includes('--demo')
 const PREVIEW = process.argv.includes('--preview')
+const RETRY_ONLY = process.argv.includes('--retry-only')
 const evidence = process.argv.find(s => s.startsWith('--evidence='))?.slice(11)
 const SESSION = { id: 's1', title: 'Forsion Intelligent UI', summary: '', model_id: 'm1', archived: false, agent_config: null, project_path: '/tmp/intelligent-ui-demo', project_name: 'Intelligent UI', created_at: '2026-10-09 09:00:00', updated_at: '2026-10-09 09:00:00' }
 const argsOf = doc => JSON.stringify({ document: JSON.stringify(doc) })
@@ -34,6 +35,51 @@ async function reveal(win, target) {
   await heading.evaluate(el => el.scrollIntoView({ block: 'start', behavior: 'instant' }))
   await win.waitForTimeout(250)
   assert.ok(await heading.evaluate(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom < innerHeight }), 'screenshot shows the intended document heading')
+}
+async function checkFailedRetry(win, stub, check) {
+  const originalMessages = stub.state.messages
+  const failed = { version: 1, id: 'retry-failed', title: 'Retry drawing', inputs: [], resources: [], blocks: [{ id: 'text', kind: 'text', markdown: 'FAILED-CARD-CONTENT' }] }
+  const retried = { ...failed, id: 'retry-new', blocks: [{ id: 'text', kind: 'text', markdown: 'RETRY-CARD-CONTENT' }] }
+  const rejectedArgs = argsOf(failed), retryArgs = argsOf(retried)
+  const oldCard = win.locator('[data-document-id="retry-failed"]'), newCard = win.locator('[data-document-id="retry-new"]')
+  stub.script([
+    { type: 'tool_stream', payload: { id: 'retry-bad', name: 'intelligent_ui', delta: rejectedArgs } },
+    { type: 'tool_call', payload: { id: 'retry-bad', name: 'intelligent_ui', arguments: rejectedArgs }, delay: 1500 },
+    { type: 'tool_result', payload: { id: 'retry-bad', result: 'Error: invalid document', isError: true } },
+    { type: 'token', payload: { delta: 'Retrying the drawing.' } },
+    { type: 'tool_stream', payload: { id: 'retry-ok', name: 'intelligent_ui', delta: retryArgs }, delay: 1500 },
+    { type: 'tool_call', payload: { id: 'retry-ok', name: 'intelligent_ui', arguments: retryArgs }, delay: 1500 },
+    { type: 'tool_result', payload: { id: 'retry-ok', result: 'Intelligent UI rendered.' } },
+  ])
+  await send(win, 'Check Intelligent UI drawing failure and retry')
+  await oldCard.waitFor()
+  check('initial draft renders while streaming', await oldCard.textContent().then(s => s.includes('FAILED-CARD-CONTENT')))
+  await oldCard.waitFor({ state: 'detached' })
+  check('failed draft is removed as soon as the tool rejects it', await oldCard.count() === 0)
+  await newCard.waitFor()
+  check('retry streams across a text segment without a duplicate', await oldCard.count() === 0 && await newCard.count() === 1 && await newCard.getAttribute('data-complete') === 'false')
+  await win.waitForSelector('[data-document-id="retry-new"][data-complete="true"]')
+  check('completed retry is the only remaining card', await oldCard.count() === 0 && await newCard.count() === 1)
+  await win.screenshot({ path: path.join(OUT, 'retry-completed.png') })
+  const history = record('retry-history', 'retry-ok', retried)
+  const rejected = record('retry-history', 'retry-bad', failed)
+  rejected.tool_results[0] = { ...rejected.tool_results[0], content: 'Error: invalid document', isError: true }
+  history.content = 'Retrying the drawing.'
+  history.tool_calls = [{ ...rejected.tool_calls[0], ui_content_offset: 0 }, { ...history.tool_calls[0], ui_content_offset: history.content.length }]
+  history.tool_results = [...rejected.tool_results, ...history.tool_results]
+  for (const segmented of [true, false]) {
+    const replay = JSON.parse(JSON.stringify(history))
+    if (!segmented) replay.tool_calls.forEach(c => { delete c.ui_content_offset })
+    stub.state.messages = [replay]
+    await win.reload(); await openSession(win)
+    await newCard.waitFor()
+    check(`${segmented ? 'segmented' : 'legacy'} history has only the successful retry`, await oldCard.count() === 0 && await newCard.count() === 1 && !(await win.locator('.t2-asst-col').innerText()).includes('FAILED-CARD-CONTENT'))
+  }
+  stub.state.messages = [rejected]
+  await win.reload(); await openSession(win)
+  await win.locator('.t2-asst-col').waitFor()
+  check('failed call without a retry keeps its error record only', await win.locator('.tool-group').count() > 0 && await oldCard.count() === 0 && !(await win.locator('.t2-asst-col').innerText()).includes('FAILED-CARD-CONTENT'))
+  stub.state.messages = originalMessages
 }
 async function main() {
   fs.mkdirSync(OUT, { recursive: true })
@@ -67,6 +113,12 @@ async function main() {
       await win.screenshot({ path: path.join(OUT, 'preview-dinner.png') })
       console.log(`PREVIEW_READY ${OUT}`)
       await new Promise(resolve => app.on('close', resolve))
+      return
+    }
+    if (RETRY_ONLY) {
+      await checkFailedRetry(win, stub, check)
+      fs.writeFileSync(path.join(OUT, 'retry-results.json'), JSON.stringify({ checks }, null, 2))
+      console.log(`${checks.length} retry checks passed. Screenshots: ${OUT}`)
       return
     }
     const args = argsOf(fixtures.dinner)
@@ -150,7 +202,7 @@ async function main() {
     await media.locator('.iui-image-toggle').first().click()
     check('image source is an ordinary attributed link', await media.getByRole('link', { name: 'github.com', exact: true }).first().getAttribute('href') === 'https://github.com/sachinchoolur/lightGallery')
     await reveal(win, media); await win.screenshot({ path: path.join(OUT, 'media-light.png') })
-    check('historical Sketch is still sandboxed', await win.locator('iframe.sketch-frame').getAttribute('sandbox') === 'allow-scripts')
+    check('historical Sketch is still sandboxed', await win.locator('iframe.sketch-frame').getAttribute('sandbox') === 'allow-scripts allow-forms')
     const sources = win.locator('[data-document-id="research"]')
     await reveal(win, sources); await win.screenshot({ path: path.join(OUT, 'research-light.png') })
     const brief = sources.locator('.iui-source summary > span').first()
@@ -238,11 +290,16 @@ async function main() {
     const fold = win.locator('[data-document-id="dinner"] [data-block-id="steps"] details'), tick = win.locator('[data-document-id="dinner"] .iui-check-rows input').first()
     check('a fold opens and closes by height, a tick settles in', await fold.evaluate(el => getComputedStyle(el, '::details-content').transitionProperty.includes('block-size'))
       && await tick.evaluate(el => getComputedStyle(el, '::after').transitionProperty.includes('scale')))
+    // Clicked and read in one turn: a 150ms glide could end before a second evaluate arrives.
+    const chevronTurns = () => win.locator('[data-document-id="dinner"] [data-block-id="steps"] summary').evaluate(el => {
+      el.click(); const turns = el.querySelector('svg').getAnimations().some(a => a.transitionProperty === 'transform'); el.click(); return turns })
+    check('a fold chevron turns', await chevronTurns())
     await win.emulateMedia({ reducedMotion: 'reduce' })
     await reveal(win, pick); await cards.nth(0).hover(); await cards.nth(0).getByRole('button', { name: '展开原图', exact: true }).click()
     check('reduced motion: a picture changes size without gliding', await pick.locator('.iui-pick-card[data-expanded]').count() === 1 && await gliding() === 0)
     await cards.nth(0).getByRole('button', { name: '收起原图', exact: true }).click()
-    check('reduced motion removes chevron transitions', await win.locator('[data-document-id="dinner"] [data-block-id="steps"] summary svg').evaluate(el => parseFloat(getComputedStyle(el).transitionDuration) <= 0.00001))
+    // base.css keeps color and opacity fades under reduced motion, so a duration above zero is expected here; what must go is the turn.
+    check('reduced motion removes chevron transitions', !await chevronTurns())
     await win.evaluate(() => { localStorage.setItem('tangu_locale', 'en'); localStorage.setItem('forsion_theme_pref', 'dark') })
     await win.reload(); await openSession(win); await media.scrollIntoViewIfNeeded()
     check('English native controls', await win.getByRole('button', { name: 'Copy list', exact: true }).count() >= 1)
@@ -260,6 +317,7 @@ async function main() {
     await win.unroute('**/1-480.jpg'); await retry.click()
     await win.waitForFunction(() => document.querySelector('[data-document-id="images"] img')?.naturalWidth > 0)
     check('failed image can be retried', await media.locator('img').count() === 3)
+    await checkFailedRetry(win, stub, check)
     fs.writeFileSync(path.join(OUT, 'results.json'), JSON.stringify({ checks, p95Ms: timings[Math.ceil(timings.length * .95) - 1], evidence: evidence || null }, null, 2))
     console.log(`${checks.length} checks passed. Screenshots: ${OUT}`)
     if (DEMO) {

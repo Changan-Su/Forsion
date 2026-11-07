@@ -25,7 +25,7 @@ import { runMigration } from '../src/db/migrate.js';
 import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun } from '../src/services/agentLoop.js';
-import { CONTEXT_WINDOW_TOKENS } from '../src/services/contextBudget.js';
+import { defaultContextWindowCap } from '../src/services/contextBudget.js';
 import { resetModelOverridesForTest } from '../src/services/modelOverrides.js';
 
 const ULTRA_HEAD = ULTRA_SECTION.split('\n')[0];
@@ -170,7 +170,7 @@ describe('Ultra:模型支持更高的上下文就拉满(09-27,不封顶 272k)', 
     const on = await ctxInfo((await runOnce({ ultra: true, thinkingLevel: 'max' })).id);
     expect(on).toMatchObject({ ctxWindow: 1_000_000, ctxWindowSource: 'model', ctxWindowMax: 1_000_000, ultra: true });
     const off = await ctxInfo((await runOnce({ thinkingLevel: 'max' })).id);
-    expect(off).toMatchObject({ ctxWindow: CONTEXT_WINDOW_TOKENS, ctxWindowSource: 'model', ctxWindowMax: 1_000_000, ultra: false });
+    expect(off).toMatchObject({ ctxWindow: defaultContextWindowCap(1_000_000), ctxWindowSource: 'model', ctxWindowMax: 1_000_000, ultra: false });
     expect(on.compactAt).toBeGreaterThan(off.compactAt);
   });
 

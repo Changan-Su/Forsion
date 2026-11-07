@@ -23,12 +23,13 @@ import { loadMcpConfig, enabledServers } from '../mcp/config.js';
 import { loadEngines, loadEnginePrefs } from '../engines/config.js';
 import { applySpecialAgentEnableMigration, loadSpecialAgentsConfig } from '../services/specialAgentsConfig.js';
 import { loadTanguEnv, configFile } from '../core/tanguHome.js';
+import { startHostChannel } from '../core/hostChannel.js';
 import { migrateLegacyConfig } from '../core/config.js';
 import { activateAllPlugins } from '../plugins/bootstrap.js';
 import { seedExampleCommand } from '../services/customCommands.js';
 import { seedBuiltinSkills } from '../skills/localSkills.js';
 import { remoteLockGuard } from './remoteLockGuard.js'; // P1-K2
-import { drainRunsForExit } from '../services/agentLoop.js';
+import { activeRunCount, drainRunsForExit } from '../services/agentLoop.js';
 import { attachRealtimeVoice } from '../services/realtimeVoice.js';
 
 import { printEffectiveConfig } from './diagnostics.js';
@@ -47,6 +48,7 @@ function engineVersion(): string {
 let bootPhase = 'config';
 
 async function main(): Promise<void> {
+  startHostChannel(); // 桌面拉起时的私有 stdin 通道(电脑历史钥匙);先于一切,开关读完即从 env 删掉
   loadTanguEnv(); // ~/.tangu/.env → process.env(不覆盖真实环境);须先于 parseConfig
   migrateLegacyConfig(); // 首启把散落 legacy 配置收进 ~/.tangu/config.json(旧文件→.bak);幂等,须先于 parseConfig
   const cfg = parseConfig(process.argv.slice(2));
@@ -93,8 +95,8 @@ async function main(): Promise<void> {
   await runBaseSchema(); // base schema 先于 runMigration(后者对 chat_sessions 做 ALTER)
   const { brain, providers } = buildBrain(cfg);
 
-  // MCP(~/.tangu/mcp.json):启动时连一次,server 集进程级冻结(prompt 缓存纪律,配置变更须重启)。
-  const mcp = createMcpManager();
+  // MCP:启动加载;用户配置只在没有活动 run 时重连,每个 run 的工具快照保持冻结。
+  const mcp = createMcpManager(undefined, { canReload: () => activeRunCount() === 0 });
   bootPhase = `mcp(${enabledServers(loadMcpConfig()).map(([name]) => name).join(', ') || '无'})`; // 唯一全由用户配置决定的启动步骤,点名是哪几个
   await mcp.start();
   bindPluginMcp(mcp); // 插件自带的 MCP server(manifest mcpServers)随插件启停加进 / 移出这个 manager
@@ -108,11 +110,7 @@ async function main(): Promise<void> {
   // 同理播种一条示例自定义命令进 ~/.tangu/commands/(目录已存在就跳过,不覆盖用户的)。
   seedExampleCommand();
 
-  // 插件:激活全部（tool provider 全局注册 + 收集路由挂载器）。tool provider 注册无需 deps()，先于
-  // createTanguModule 安全;路由挂载须**在 createTanguModule 之后**（彼时 configureTangu/deps() 才就绪）。
-  bootPhase = 'plugins';
-  const mountPluginRoutes = await activateAllPlugins((id) => { bootPhase = `plugin:${id}`; });
-
+  // 先装配宿主依赖:插件注册模型来源等能力会校验真实 profile,不能在 configureTangu 前激活。
   const mod = createTanguModule({
     host,
     brain,
@@ -121,6 +119,8 @@ async function main(): Promise<void> {
     mcp,
     engines,
   });
+  bootPhase = 'plugins';
+  const mountPluginRoutes = await activateAllPlugins((id) => { bootPhase = `plugin:${id}`; });
   mountPluginRoutes({ userRouter: mod.userRouter, dataRouter: mod.dataRouter, adminRouter: mod.adminRouter });
 
   bootPhase = 'migration';

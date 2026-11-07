@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import {
   CONTEXT_WINDOW_TOKENS,
+  LONG_CONTEXT_DEFAULT_TOKENS,
+  defaultContextWindowCap,
   INPUT_HARD_RATIO,
   INPUT_WARN_RATIO,
   compactionThreshold,
@@ -12,6 +14,8 @@ import {
   estimateMessageTokens,
   estimateMessagesTokens,
   compactContext,
+  trimOldestToFit,
+  pinMessage,
   capToolResult,
   capHistoryContent,
 } from './contextBudget.js';
@@ -58,8 +62,11 @@ describe('modelContextWindowInfo 来源标注', () => {
 
 describe('effectiveContextWindowInfo — 自动识别的窗口封顶 272k,人填的覆盖才开更大(09-22,对标 Codex)', () => {
   it('族表 / admin 自报的大窗口封顶到缺省上限,max 留住模型本身的窗口;小于上限的原样', () => {
-    expect(effectiveContextWindowInfo('claude-opus-5')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'family', max: 1_000_000 })
-    expect(effectiveContextWindowInfo('pr-glm', { context_window: 1_000_000 })).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'model', max: 1_000_000 })
+    // 11-06:支持 1M 的模型缺省 512k,其余(含 400k / 500k 级)仍 272k
+    expect(effectiveContextWindowInfo('claude-opus-5')).toEqual({ tokens: LONG_CONTEXT_DEFAULT_TOKENS, source: 'family', max: 1_000_000 })
+    expect(effectiveContextWindowInfo('pr-glm', { context_window: 1_000_000 })).toEqual({ tokens: LONG_CONTEXT_DEFAULT_TOKENS, source: 'model', max: 1_000_000 })
+    expect(effectiveContextWindowInfo('pr-big', { context_window: 1_048_576 })).toEqual({ tokens: LONG_CONTEXT_DEFAULT_TOKENS, source: 'model', max: 1_048_576 })
+    expect(effectiveContextWindowInfo('pr-mid', { context_window: 500_000 })).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'model', max: 500_000 })
     expect(effectiveContextWindowInfo('claude-haiku-4-5')).toEqual({ tokens: 200_000, source: 'family', max: 200_000 })
     expect(effectiveContextWindowInfo('whatever')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default', max: CONTEXT_WINDOW_TOKENS })
   })
@@ -152,6 +159,8 @@ describe('modelContextWindow', () => {
     expect(modelContextWindow('claude-haiku-5-5')).toBe(1_000_000); // Haiku 5.5 起也是 1M
     expect(modelContextWindow('claude-3-5-sonnet-20241022')).toBe(200_000); // 族名后直接跟日期的老 id 不许被当成 1M 族
     expect(modelContextWindow('kimi-k3')).toBe(1_000_000);
+    expect(modelContextWindow('kimi/kimi-k2.8-preview')).toBe(1_000_000);
+    expect(modelContextWindow('kimi/kimi-k2.7-code')).not.toBe(1_000_000);
     expect(modelContextWindow('kimi-k2-thinking')).toBe(CONTEXT_WINDOW_TOKENS);
     expect(modelContextWindow('gemini-2.5-pro')).toBe(1_000_000);
     expect(modelContextWindow('gemini-embedding-001')).toBe(CONTEXT_WINDOW_TOKENS); // 非主线 gemini 变体保守
@@ -180,6 +189,9 @@ describe('contextBudget constants', () => {
     // CI 不设 TANGU_CONTEXT_WINDOW_TOKENS
     if (!process.env.TANGU_CONTEXT_WINDOW_TOKENS) {
       expect(CONTEXT_WINDOW_TOKENS).toBe(272_000);
+      expect(LONG_CONTEXT_DEFAULT_TOKENS).toBe(512_000);
+      expect(defaultContextWindowCap(1_000_000)).toBe(512_000);
+      expect(defaultContextWindowCap(999_999)).toBe(272_000);
     }
     expect(CONTEXT_WINDOW_TOKENS).toBeGreaterThanOrEqual(4_000);
   });
@@ -333,3 +345,56 @@ describe('770k-token incident gate math', () => {
     expect(estimateTokensRough(small)).toBeLessThan(CONTEXT_WINDOW_TOKENS * INPUT_WARN_RATIO);
   });
 });
+
+describe('trimOldestToFit — 摘要失败后的最后兜底:从最旧处成段丢到放得下', () => {
+  const m = (role: string, content: string, extra: any = {}) => ({ role, content, ...extra }) as any;
+  const big = (tag: string) => tag + ' ' + 'x'.repeat(4_000); // ≈1k token
+  const convo = () => [
+    m('system', 'SYS'),
+    m('user', big('OLD-ASK')),
+    m('assistant', big('A1'), { tool_calls: [{ id: 't1' }] }), m('tool', big('R1'), { tool_call_id: 't1' }),
+    m('assistant', big('A2')),
+    m('user', big('CURRENT-ASK')),
+    m('assistant', big('A3'), { tool_calls: [{ id: 't3' }] }), m('tool', big('R3'), { tool_call_id: 't3' }),
+  ];
+
+  it('丢最旧的段直到估算 ≤ 目标;工具调用与结果一起丢,不留孤立 tool;留标记', () => {
+    const msgs = convo();
+    expect(trimOldestToFit(msgs, 3_500)).toEqual({ dropped: 4 });
+    const text = msgs.map((x: any) => String(x.content).split(' ')[0]);
+    expect(text).toEqual(['SYS', '[Context', 'CURRENT-ASK', 'A3', 'R3']);
+    expect(String(msgs[1].content)).toContain('4 earlier messages were dropped');
+    expect(msgs.some((x: any, i: number) => x.role === 'tool' && msgs[i - 1]?.role !== 'assistant')).toBe(false);
+  });
+
+  it('最近一条 user、最后一段、锚定消息都不丢;放不下就停在那里', () => {
+    const msgs = convo();
+    pinMessage(msgs[4]);
+    expect(trimOldestToFit(msgs, 0)).toEqual({ dropped: 3 });
+    expect(msgs.map((x: any) => String(x.content).split(' ')[0])).toEqual(['SYS', '[Context', 'A2', 'CURRENT-ASK', 'A3', 'R3']);
+  });
+
+  it('已在目标内 → 不动;再丢一次 → 只改标记里的计数,不叠第二条标记', () => {
+    const msgs = convo();
+    expect(trimOldestToFit(msgs, 1_000_000)).toEqual({ dropped: 0 });
+    expect(msgs).toHaveLength(8);
+    trimOldestToFit(msgs, 6_500); // 丢 OLD-ASK
+    msgs.splice(2, 0, m('assistant', big('LATER'))); // 标记之后又来了旧内容
+    expect(trimOldestToFit(msgs, 4_500)).toEqual({ dropped: 3 }); // LATER + A1/R1
+    const markers = msgs.filter((x: any) => String(x.content).startsWith('[Context trimmed'));
+    expect(markers).toHaveLength(1);
+    expect(String(markers[0].content)).toMatch(/^\[Context trimmed: \d+ earlier/);
+    expect(Number(/\d+/.exec(String(markers[0].content))![0])).toBe(4);
+  });
+
+  it('「最近一条 user」只认真消息:工具截图之类的合成 user 不顶替任务本身', () => {
+    const real = new Set<any>();
+    const msgs = [m('system', 'SYS'), m('user', big('HUMAN-ASK')),
+      m('assistant', big('A1'), { tool_calls: [{ id: 't1' }] }), m('tool', big('R1'), { tool_call_id: 't1' }),
+      m('user', big('SCREENSHOT'))];
+    real.add(msgs[1]);
+    trimOldestToFit(msgs, 0, 0, (x) => real.has(x));
+    expect(msgs.map((x: any) => String(x.content).split(' ')[0])).toEqual(['SYS', '[Context', 'HUMAN-ASK', 'SCREENSHOT']);
+  });
+});
+

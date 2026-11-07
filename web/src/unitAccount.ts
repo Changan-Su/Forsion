@@ -7,8 +7,30 @@ const randomId = () => Array.from(crypto.getRandomValues(new Uint8Array(24)), (n
 export async function installUnitAccount(meta: {
   instanceId: string; account: { apiBase: string; loginPath: string }; inheritWebAccount?: boolean
 }, base: URL) {
+  // The official public entry keeps its login across tabs and browser restarts, as the old Web did;
+  // other entries stay tab-scoped. The key is this Unit's own: /auth never reads or forwards it.
+  const tokenKey = `unit:${meta.instanceId}:account`
+  let storage: Pick<Storage, 'getItem' | 'setItem' | 'removeItem'> = sessionStorage
+  if (meta.inheritWebAccount) {
+    try {
+      const shared = localStorage
+      storage = {
+        getItem: (key) => shared.getItem(key) ?? sessionStorage.getItem(key),
+        // A full localStorage must not block sign-in: that login then stays in this tab only.
+        setItem: (key, value) => {
+          try { shared.setItem(key, value); sessionStorage.removeItem(key) }
+          catch { shared.removeItem(key); sessionStorage.setItem(key, value) }
+        },
+        removeItem: (key) => { shared.removeItem(key); sessionStorage.removeItem(key) },
+      }
+      // Another tab can replace or clear the shared login, also while this one is still starting.
+      window.addEventListener('storage', (event) => {
+        if (event.key === tokenKey && event.oldValue !== event.newValue) location.reload()
+      })
+    } catch { /* storage denied: tab-scoped */ }
+  }
   const account = createBrowserAccount({ apiBase: new URL(meta.account.apiBase, location.origin).href,
-    storage: sessionStorage, tokenKey: `unit:${meta.instanceId}:account`,
+    storage, tokenKey,
     identityUrl: new URL('unit/account', base).href, allowedPaths: [new URL('unit', base).pathname] })
   const url = new URL(location.href)
   const stateKey = `unit:${meta.instanceId}:login-state`

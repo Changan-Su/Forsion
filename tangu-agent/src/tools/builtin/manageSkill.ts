@@ -19,7 +19,8 @@ import { skillsDir, agentsDir, DEFAULT_AGENT_SLUG } from '../../core/tanguHome.j
 import { slugify } from '../../agents/agentRegistry.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { parseFrontmatter, isBuiltinSkillName, isUntouchedSeedMirror } from '../../skills/localSkills.js';
-import { moveSkillToTrash } from '../../skills/catalog.js';
+import { listSkillCatalog } from '../../skills/catalog.js';
+import { uninstallSkill } from '../../services/skillUninstall.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
 
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -138,10 +139,13 @@ export const manageSkillProvider: ToolProvider = {
             if (await isBuiltinSkillName(slug)) return `Error: "${slug}" is a built-in skill and cannot be deleted`;
             if (await isUntouchedSeedMirror(path.join(root, slug))) return `Error: "${slug}" is a read-only skill shipped with the app; it cannot be deleted`;
             if (!(await fileExists(skillMdPath(root, slug)))) return `Skill not found: ${slug}${scopeTag}`;
-            // 整个文件夹移进回收目录(与设置页删技能同一处、同一命名、同一套检查),不直接删:
-            // 技能里可能带着脚本和资料,模型删错了还找得回来。挪不动(跨盘、回收目录不是真目录)就报错、原样留着。
-            const backup = await moveSkillToTrash(path.join(root, slug), `${scope}-${scope === 'agent' ? scopeAgentSlug() : 'global'}-${slug}`);
-            return `Deleted skill "${slug}"${scopeTag}. Its folder was moved to ${backup} (move it back to restore).`;
+            // 进回收站(与设置页删技能同一处 services/skillUninstall):技能里可能带着脚本和资料,删错了 30 天内能在设置里恢复;
+            // 选了它的 Agent 清单、停用记录一并收尾。挪不动就报错、原样留着。
+            const dir = path.join(root, slug);
+            const row = (await listSkillCatalog(scope === 'agent' ? scopeAgentSlug() : undefined)).find((r) => r.path === dir);
+            if (!row) return `Skill not found: ${slug}${scopeTag}`;
+            await uninstallSkill(row);
+            return `Deleted skill "${slug}"${scopeTag}. It is in the trash for 30 days; the user can restore it in Settings › System › Trash.`;
           }
 
           if (action === 'create' || action === 'update') {

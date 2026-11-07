@@ -19,7 +19,9 @@
  */
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
-import { PROTOCOL_MARK } from './openaiCompat.js';
+import { isStreamContextOverflow } from '../services/contextWindowStore.js';
+import { PROTOCOL_MARK, RUN_MARK, SESSION_MARK } from './openaiCompat.js';
+import { buildOpenCodeHeaders, isOpenCodeHost } from './opencodeGo.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { stringifyWellFormed } from './wellFormedJson.js';
 
@@ -61,6 +63,7 @@ function applyCacheBreakpoints(body: any): void {
 }
 
 /** {baseUrl}(可能带或不带 /v1)→ /v1/messages 完整端点。 */
+const isAnthropicHost = (url: string): boolean => { try { return /(^|\.)anthropic\.com$/i.test(new URL(url).hostname) } catch { return false } };
 export function anthropicMessagesUrl(baseUrl: string): string {
   const base = (baseUrl || 'https://api.anthropic.com').replace(/\/+$/, '');
   return base.endsWith('/v1') ? `${base}/messages` : `${base}/v1/messages`;
@@ -223,6 +226,8 @@ export function openaiToAnthropicBody(payload: any): any {
   }
   // 思考开时 Anthropic 拒 temperature≠1,索性不发。
   if (!thinkOn && typeof payload.temperature === 'number') body.temperature = payload.temperature;
+  // Fast 档(multiBrain 只对官方 api.anthropic.com + 支持的模型写)。注意 fast 与标准档不共用提示缓存。
+  if (payload.speed === 'fast') body.speed = 'fast';
   if (payload[PROTOCOL_MARK] === 'anthropic-messages') applyCacheBreakpoints(body);
   return body;
 }
@@ -262,6 +267,8 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
   // block_binding 只能配 adaptive / enabled:disabled 上带它本身就是 400(那时也没有思考块回传)。
   const canBind = body.thinking?.type === 'adaptive' || body.thinking?.type === 'enabled';
   const url = anthropicMessagesUrl(baseUrl);
+  // 同一 run 内重发(binding 回退)用同一个会话头,所以在 send 外面算一次。
+  const openCodeHeaders = isOpenCodeHost(url) ? buildOpenCodeHeaders(payload?.[SESSION_MARK] || payload?.[RUN_MARK]) : {};
   const bindKey = `${url}\n${apiKey}\n${body.model}`; // 带上端点:同一个 key 换到别的代理,那边没点名要过
   const send = (bind: boolean): Promise<Response> =>
     fetch(url, {
@@ -270,7 +277,11 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
         'Content-Type': 'application/json',
         'anthropic-version': ANTHROPIC_VERSION,
         'x-api-key': apiKey,
+        // Claude Code 的中转(ANTHROPIC_AUTH_TOKEN,导入本机配置会带进来)认 Bearer;Anthropic 自家只认 x-api-key,不给它多发
+        ...(isAnthropicHost(url) ? {} : { authorization: `Bearer ${apiKey}` }),
         ...(bind ? { 'anthropic-beta': THINKING_BINDING_BETA } : {}),
+        // OpenCode Go 的 /anthropic/v1 同样要求会话头(缺了 400,见 opencodeGo.ts)
+        ...openCodeHeaders,
       },
       body: stringifyWellFormed(
         bind ? { ...body, thinking: { ...body.thinking, block_binding: { prefix_mismatch_behavior: 'drop_block' } } } : body,
@@ -387,7 +398,10 @@ async function runAnthropicStream(opts: StreamOpts, guard: StreamIdleGuard): Pro
           break;
         }
         case 'error': {
-          throw new LlmError(502, ev.error?.message || 'Anthropic stream error');
+          // 流里的超长(代理把 400 包进 SSE 时会这样)按 400 抛,同 openaiResponses:压缩后重试,不当 5xx 重发
+          const msg = ev.error?.message || 'Anthropic stream error';
+          const overflow = isStreamContextOverflow(ev.error?.type, msg);
+          throw Object.assign(new LlmError(overflow ? 400 : 502, msg), ev.error?.type ? { code: ev.error.type } : {});
         }
         default:
           break; // ping / message_stop / content_block_stop

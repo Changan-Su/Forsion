@@ -16,6 +16,7 @@ import { useApp } from '@/stores/appStore'
 import { LocaleProvider, resolveInitialLocale, translate } from '@/i18n'
 import '@/i18n.generated'
 import { installEngine } from '@/bootstrapEngine'
+import { activateTangu } from '@tangu/ui/features/tangu' // 手机照旧静态编进 APK(界面热更新只做桌面)
 import { installSmoothCaret } from '@/smoothCaret'
 import { installViewportLock } from '@/viewportLock'
 import { applyUiFonts } from '@/uiFont'
@@ -24,6 +25,8 @@ import { installSpaceShortcuts } from './spaceShortcuts'
 import { installLauncherIcon } from './launcherIcon'
 import { installUnitsEntry } from './UnitsSheet'
 import { installLiveIsland } from './liveIsland'
+import { installRestoreSnapshot } from './restoreSnapshot'
+import { installCallKeep } from './callKeep'
 import { installNativeModelPicker } from './nativeModelPicker'
 import { installNativeSheet } from './nativeSheet'
 import { installNativeChrome } from './nativeChrome'
@@ -53,7 +56,7 @@ try {
   // 那一刻的 displayName 是裸键且被快照进标签标题(desktop 实测:主页标签写着 `space.home`)。
   // ⚠️check:parity 抓不到这条(`setTr(translate)` 不是「导入名直接调用」那种形态,属它已登记的假阴性)。
   useApp.getState().setTr(translate)
-  installEngine()
+  installEngine(activateTangu)
   installNativeModelPicker()
   // Android 原生半屏(菜单 / 输入 / 确认)与原生顶栏:都是可选宿主,非 Android 或插件缺席时整段早退。
   // 顶栏必须在首次渲染前装上,单列壳首帧就不画 Web 胶囊顶栏(否则先闪一下再消失)。
@@ -89,6 +92,9 @@ try {
   installUnitsEntry()
   // 灵动岛:agent 在跑时把进度 / 待审批贴到各家的岛上(Android 16 Live Updates),点岛回到那个会话。
   installLiveIsland()
+  // 系统还原(后台被杀后回来)时放回上次开着的会话和没发的字;Space 由 resolveStartupTarget 回到上次那个。
+  installRestoreSnapshot()
+  installCallKeep()
   // 手机操控(T1):把原生 PhoneControl 登记成 client surface `phone`(设置行 + startRun 的能力声明)。
   installPhoneControl()
 } catch (err) {

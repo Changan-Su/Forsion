@@ -442,6 +442,7 @@ describe('i18n 覆盖', () => {
       'tangu/store/tanguSlice.ts  Math.round(runCost)': [1, '单次运行费用(数字千分位)'],
       'tangu/store/tanguSlice.ts  costLimit': [1, '费用上限(数字)'],
       'tangu/store/tanguSlice.ts  (Number(pl.savedChars) || 0)': [1, '压缩省下的字数(数字)'],
+      'tangu/store/tanguSlice.ts  (Number(pl.budgetTokens) || 0)': [1, '上下文预算 token 数(数字)'],
       'components/FeedbackModal.tsx  text.trim().length': [1, '反馈字数(数字)'],
       'components/FeedbackModal.tsx  FEEDBACK_TEXT_LIMIT': [1, '字数上限常量(数字)'],
       'components/ModelPickerSettings.tsx  model.maxContextWindow!': [1, '上下文窗口上限(token 数)'],
@@ -514,7 +515,7 @@ describe('i18n 覆盖', () => {
  * 初值 = 基线 297408ab 实测 178 处 / 30 个文件。
  */
 const ELECTRON_HAN_DEBT: Record<string, [count: number, reason: string]> = {
-  'main.ts': [36, 'IPC throw new Error(中文):渲染层原样显示;按 ipcError.ts 原因码约定,各包碰到时改码'],
+  'main.ts': [35, 'IPC throw new Error(中文):渲染层原样显示;按 ipcError.ts 原因码约定,各包碰到时改码'],
   'unitWeb.ts': [23, 'HTTP JSON detail(已带 code,设备页按 code 翻译)+ 未配对页的内联 HTML'],
   'amadeus/fs/vaultHandlers.ts': [14, '笔记 IPC 的校验错误(throw),渲染层原样显示;待改原因码'],
   'unitP2p.ts': [11, 'P2P 代理的 HTTP 错误 detail / 信道断开原因(throw)'],

@@ -28,7 +28,7 @@ import { join } from 'node:path';
 import { agentsDir } from '../core/tanguHome.js';
 import { getDeviceId } from '../core/deviceId.js';
 import { atomicSyncWrite, conflictCopyName, readSyncBytes } from './agentSyncPaths.js';
-import { MemoryRepositoryError, withMemoryDirectoryLock } from './memoryRepository.js';
+import { withMemoryDirectoryLock, withMemoryDirectoryLockRetry } from './memoryRepository.js';
 import { mergeDbFile } from './dbRowMerge.js';
 
 // ── DbFile 最小镜像(desktop schema.ts;zod 在桌面侧,这里结构性容错即可) ────────
@@ -92,15 +92,7 @@ const serialize = (db: DbFile): string => `${JSON.stringify(db, null, 2)}\n`;
 const readText = (file: string): string | null => readSyncBytes(agentsDir(), file)?.toString('utf8') ?? null;
 
 /** 在 Agent 文件夹那把跨进程锁里同步跑 fn(锁被同步 / 别的进程拿着就稍等重试,约 1 秒后放弃)。 */
-async function locked<T>(slug: string, fn: () => T): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    try { return withMemoryDirectoryLock(join(agentsDir(), slug), fn); }
-    catch (e) {
-      if (!(e instanceof MemoryRepositoryError && e.code === 'MEMORY_BUSY') || attempt >= 40) throw e;
-      await new Promise((r) => setTimeout(r, 25));
-    }
-  }
-}
+const locked = <T>(slug: string, fn: () => T): Promise<T> => withMemoryDirectoryLockRetry(join(agentsDir(), slug), fn);
 
 /** SCHEDULE.db → CALENDAR.db(须已拿着锁)。改名前每台只有自己的行,所以没盖章的行都盖本机;
  *  CALENDAR.db 已经在了(别的设备先推了一份下来)就按行并集合进去再删旧名;合不了(哪份坏了)两份都不动,读侧回落旧名。 */
@@ -119,25 +111,9 @@ function migrateUnlocked(slug: string): void {
   if ('conflict' in merged && merged.conflict) renameSync(legacy, join(agentsDir(), slug, conflictCopyName('SCHEDULE.db', new Date())));
   else unlinkSync(legacy);
 }
-/** 同步合并之后调(agentFileSync):同一行两台都改了(一台到点写了 lastRun、另一台改了描述),合并取了一边的整行;
- *  lastRun 取各份里最晚的那个,免得排它的那台把同一次再跑一遍。ISO 串按字典序比就是按时间比。 */
-export function keepLatestRuns(merged: string, ...sides: string[]): string {
-  const db = parseDb(merged);
-  if (!db) return merged;
-  const latest = new Map<string, string>();
-  for (const side of sides) {
-    for (const r of parseDb(side)?.rows ?? []) {
-      const v = r.cells?.lastRun;
-      if (typeof v === 'string' && v > (latest.get(r.id) ?? '')) latest.set(r.id, v);
-    }
-  }
-  let changed = false;
-  for (const r of db.rows) {
-    const v = latest.get(r.id);
-    if (v && v > String(r.cells.lastRun ?? '')) { r.cells.lastRun = v; changed = true; }
-  }
-  return changed ? serialize(db) : merged;
-}
+/** 同步合并之后调:lastRun 取各份里最晚的那个。规则在 contracts/agentSyncRules.ts(两套同步共用)。 */
+export { keepLatestRuns } from '../contracts/agentSyncRules.js';
+import { keepLatestRuns } from '../contracts/agentSyncRules.js';
 
 /** 同步这个 Agent 之前调(agentFileSync):先改好名,清单里才有 CALENDAR.db。同步的,调用方已在锁外。 */
 export function migrateScheduleFile(slug: string): void {

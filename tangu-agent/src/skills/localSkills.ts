@@ -18,6 +18,7 @@ import { currentDisplayAgentSlug, currentRunCwd } from '../seams/runContext.js';
 import type { SkillRecord } from '../core/types.js';
 import { listAgents } from '../agents/agentRegistry.js';
 import { disabledSkillNames } from './availability.js';
+import { getPluginSkill, isPluginSkillActive, listPluginSkills, PLUGIN_SKILL_PREFIX } from './pluginSkills.js';
 
 export const LOCAL_SKILL_PREFIX = 'local:';
 
@@ -45,10 +46,13 @@ function agentSkillsDir(slug: string): string {
   return path.join(agentsDir(), slug, 'skills');
 }
 /** 项目级技能目录 <cwd>/.tangu/skills(对标 Claude Code 的 .claude/skills)。
- *  返回两个:先 legacy `.forsion/skills`(v2.3.3 发出去的旧位置,只读兼容),再新位置 ——
- *  同 id 后者赢。⚠️两个名字都**不许**进 projectDoc 的 PROJECT_ROOT_MARKERS。 */
+ *  按优先级从低到高:别家 agent 的项目技能 `.claude/skills` / `.agents/skills`(11-03 原地读,不复制)、
+ *  legacy `.forsion/skills`(v2.3.3 发出去的旧位置,只读兼容)、新位置 —— 同 id 后者赢。
+ *  ⚠️这些名字都**不许**进 projectDoc 的 PROJECT_ROOT_MARKERS。 */
 function projectSkillsDirs(cwd: string): string[] {
   return [
+    path.join(cwd, '.claude', 'skills'),
+    path.join(cwd, '.agents', 'skills'),
     path.join(cwd, LEGACY_WORKSPACE_DIR_NAME, 'skills'),
     path.join(cwd, WORKSPACE_DIR_NAME, 'skills'),
   ];
@@ -61,7 +65,7 @@ export async function listProjectSkills(cwd: string): Promise<Array<{ skill: Ski
   const scanned = await Promise.all(dirs.map((d) => scanDir(d, 'project')));
   const byId = new Map<string, { skill: SkillRecord; dir: string; legacy: boolean }>();
   scanned.forEach((skills, i) => {
-    for (const s of skills) byId.set(s.id, { skill: s, dir: path.join(dirs[i], s.id.slice(LOCAL_SKILL_PREFIX.length)), legacy: i === 0 });
+    for (const s of skills) byId.set(s.id, { skill: s, dir: path.join(dirs[i], s.id.slice(LOCAL_SKILL_PREFIX.length)), legacy: i === dirs.length - 2 });
   });
   return [...byId.values()];
 }
@@ -204,7 +208,7 @@ type HashVariant = 'current' | 'v2' | 'legacy';
  *  镜像会在下一次内置更新时算出不同的 curHash → 被误判成「用户改过」→ 永久停更。也就是把本次要修的
  *  病换个人群复发。所以判定处必须**两种算法都认**(`legacy=true` 复现旧值),更新/自愈时再把指纹
  *  改写成新算法值,逐台迁移过去。 */
-async function treeHash(dir: string, variant: HashVariant = 'current'): Promise<string | null> {
+export async function treeHash(dir: string, variant: HashVariant = 'current'): Promise<string | null> {
   const files: string[] = [];
   const walk = async (rel: string): Promise<void> => {
     const entries = await fs.readdir(path.join(dir, rel), { withFileTypes: true });
@@ -412,7 +416,7 @@ async function builtinTreeHash(name: string): Promise<string | null> {
 /** 测试用:某个技能文件夹现在的指纹(current 算法)。 */
 export const skillTreeHash = (dir: string): Promise<string | null> => treeHash(dir);
 
-export async function listLocalSkills(): Promise<SkillRecord[]> {
+async function listFilesystemSkills(): Promise<SkillRecord[]> {
   await seedBuiltinSkills(); // 首启把内置复制进 ~/.forsion/skills(幂等;覆盖 TUI 等不走 standalone 启动的入口)
   const roots: Array<[string, SkillSource]> = [
     [builtinSkillsDir(), 'builtin'],
@@ -484,10 +488,17 @@ export async function listLocalSkills(): Promise<SkillRecord[]> {
   return [...byId.values()];
 }
 
+/** Filesystem skills plus live plugin-owned sources; namespaces never override each other. */
+export async function listLocalSkills(): Promise<SkillRecord[]> {
+  const [local, external] = await Promise.all([listFilesystemSkills(), listPluginSkills(currentRunCwd())]);
+  return [...local, ...external.filter(isPluginSkillActive)];
+}
+
 export async function getLocalSkill(id: string): Promise<SkillRecord | null> {
   if (!id.startsWith(LOCAL_SKILL_PREFIX)) return null;
+  if (id.startsWith(PLUGIN_SKILL_PREFIX)) return getPluginSkill(id, currentRunCwd());
   if (SHARED_SKILL_ID_RE.test(id)) return (await listSharedAgentSkills(null)).find((s) => s.id === id) || null;
-  const all = await listLocalSkills();
+  const all = await listFilesystemSkills();
   return all.find((s) => s.id === id) || null;
 }
 

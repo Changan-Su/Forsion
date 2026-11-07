@@ -24,9 +24,27 @@ export interface ChannelInbound {
   messageId?: string;
   attachments?: InboundImage[];
   files?: InboundFile[];
+  /** 钉这个 peer 的会话用哪个 Agent(优先于会话存值与通道默认)。内置通道不带;写法不合法的忽略。 */
+  agentSlug?: string;
 }
 
 export interface SendResult { ok: boolean; error?: string }
+
+/** 结构化审批卡(driver.sendApproval):工具调用的完整内容,怎么画、谁能批由驱动决定。 */
+export interface ChannelApprovalCard {
+  approvalId: string;
+  runId: string;
+  toolName: string;
+  /** 工具参数的 JSON 原串(批准后执行的就是它)。 */
+  arguments: string;
+  /** 摘要 + 完整改动,与文字卡同一份。 */
+  preview: string;
+  /** true = 只能在执行设备本机批准:respond('approve') 恒回 false,仍可 reject。 */
+  localOnly: boolean;
+}
+export type ChannelApprovalAction = 'approve' | 'reject';
+/** 卡片怎么结束的:approved / rejected = 别处答的(桌面等);cancelled = run 结束 / 被停 / 通道停止。 */
+export type ChannelApprovalOutcome = 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'undelivered';
 
 /** 通道驱动(传输层):连接生命周期 + 收发。会话映射/审批/slash/交付全在通道无关管线里。 */
 export interface ChannelDriver {
@@ -42,6 +60,14 @@ export interface ChannelDriver {
   send(accountId: string, peerId: string, text: string): Promise<SendResult>;
   sendMedia?(accountId: string, peerId: string, buffer: Buffer, opts: { kind: 'image' | 'file'; fileName: string }, signal?: AbortSignal): Promise<SendResult>;
   setTyping?(accountId: string, peerId: string, on: boolean): Promise<void>;
+  /**
+   * 有它就不发文字审批卡:卡片交给驱动,respond 兑现(true = 生效;false = 卡已结束,或此刻批不了:还没送达 / 只能本机批 / 已锁定远程)。
+   * 卡片沿用文字卡那条每 peer 一张的队列与 10 分钟超时;该 peer 的文字消息不再作用于它(「好」批不了,新消息也不作废它)。
+   * 回 ok:false 或抛错 = 没送达,按拒绝兑现。
+   */
+  sendApproval?(accountId: string, peerId: string, card: ChannelApprovalCard, respond: (action: ChannelApprovalAction) => boolean): Promise<SendResult>;
+  /** 交出去的卡结束了(respond 回 true 的那次除外),驱动据此收卡。有它时宿主不再发超时之类的文字提示。 */
+  settleApproval?(accountId: string, peerId: string, approvalId: string, outcome: ChannelApprovalOutcome): void | Promise<void>;
 }
 
 /** 每通道设置(config.json channels 段;见 channels/config.ts)。 */
@@ -84,6 +110,17 @@ export interface PluginChannelSpec {
     /** 「连接」按钮:校验凭据(失败抛错,文案给用户看),返回绑定用的账号 id 与卡片上的显示名。 */
     verify(): Promise<{ accountId: string; label: string }>;
   };
+  /**
+   * 一个账号服务多个 peer:每个 peer 一条绑定 + 一个会话 + 一个工作目录,互不相通。缺省 false = 内置通道的单联系人语义
+   * (第一个发消息的 peer 认领,其余拒绝)。准入归驱动:它交上来的 peer 都会开会话,跑在连接这个账号的用户身份下。
+   * 这些 peer 不是通道主人,所以只有 /stop 算命令(其余 /x 当普通消息),收件箱不转发,桌面也不能切换连接的会话。
+   */
+  multiPeer?: boolean;
+  /**
+   * 配合 multiPeer,给凭据直接播种进配置、没人点「连接」的无人值守部署:账号从没连过时,驱动交上来的第一个 peer 替本机用户连上。
+   * 断开过的账号不复活。缺省 false = 没连接就回「未绑定」。
+   */
+  selfConnect?: boolean;
   /** 设置卡与侧栏文件夹的显示名。 */
   name: ChannelText;
   /** 凭据下方的一句提示(去哪儿拿凭据)。 */
@@ -91,3 +128,6 @@ export interface PluginChannelSpec {
   /** 设置卡要填的凭据,键复用通道设置的 appId / appSecret / botToken;secret 的不回显。全部填齐才算有凭据。 */
   fields: Array<{ key: 'appId' | 'appSecret' | 'botToken'; label: ChannelText; secret?: boolean }>;
 }
+
+/** 通道归哪个插件:宿主按发现目录记,不是插件自报(ctx.tangu.connectChannel 据此判「本包的通道」)。 */
+export interface ChannelOwner { engine: string; bundle: string | null }

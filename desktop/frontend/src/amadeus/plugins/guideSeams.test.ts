@@ -14,7 +14,7 @@ vi.mock('../api', () => ({
   amadeus: { listPlugins: async () => env.sources, listPages: async () => [], listFiles: async () => [] },
 }))
 const { usePluginStore } = await import('./pluginStore')
-const { useCommandStore } = await import('@lcl/engine')
+const { useCommandStore, useRibbonStore } = await import('@lcl/engine')
 const { track, useAchievements } = await import('../../achievements/store')
 const { inboxCardOf } = await import('./inboxCards')
 
@@ -40,6 +40,19 @@ describe('使用指南接缝', () => {
     await usePluginStore.getState().loadExternal()
     expect(seen()).toEqual({ ext: true, extMissing: false, third: false })
     expect(ran).toEqual(['x'])
+  })
+
+  it('registerRibbonAction:只有首方内置包能加,插件卸载时收掉', async () => {
+    useRibbonStore.setState({ items: [], bottomOrder: [] })
+    env.sources = [
+      src({ id: 'forsion-extend', preinstalled: true, locked: true, bundleOff: false, code: "ctx.app.registerRibbonAction({ id: 'events', icon: 'gift', title: 'x', run() {} })" }),
+      src({ id: 'third', code: "ctx.app.registerRibbonAction({ id: 'fake', icon: 'gift', title: 'x', run() {} })" }),
+    ]
+    await usePluginStore.getState().loadExternal()
+    expect(useRibbonStore.getState().items.map((i) => i.id)).toEqual(['rb-plugin-events'])
+    env.sources = []
+    await usePluginStore.getState().loadExternal()
+    expect(useRibbonStore.getState().items).toEqual([])
   })
 
   it('achievements.count:读官方计数与自己的计数,读不到别家插件的', async () => {

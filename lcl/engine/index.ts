@@ -21,7 +21,7 @@ export { label } from './types'
 
 export { Shell } from './Shell'
 export { startOpenDrag } from './WorkspaceHost'
-export { useViewModes, useViewModesOf, viewModesOf, viewModeTarget, nextViewMode, installViewModeCommands, inSingleColumnShell, ViewModeSwitch, ViewHead, VIEW_MODE_NEXT } from './viewModes'
+export { useViewModes, useViewModesOf, viewModesOf, viewModeTarget, nextViewMode, installViewModeCommands, inSingleColumnShell, ViewModeSwitch, ViewHead, VIEW_MODE_NEXT, useSegDir } from './viewModes'
 export type { ViewModeOption, ViewModesSpec } from './viewModes'
 export { openMainBesideThisTask, mainOpensBeside } from './openBeside'
 export { SingleColumnHost, accountMenuRows, drawerPreview, useWideLayout } from './SingleColumnHost'
@@ -60,11 +60,14 @@ export {
 } from './layoutPersist'
 export type { PersistedPanel, LayoutBlob } from './layoutPersist'
 /** 视口锚定的 fixed 浮层(右键菜单/补全/弹出层):自带 CSS zoom 反补偿 + 越界翻面。别再手写 left/top。 */
-export { OverlayAt, useExitGhost, useClampedMenu, clampMenu, useEdgeNudge, nestedPanelPlacement, nestedPanelTop, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
+export { OverlayAt, useExitGhost, removeOverlayWithExit, useClampedMenu, clampMenu, useEdgeNudge, nestedPanelPlacement, nestedPanelTop, zoomOf, UI_ZOOM_EVENT } from './menuAnchor'
 export type { NestedPanelPlacement } from './menuAnchor'
 export type { AnchorOpts } from './menuAnchor'
+// 液滴展开(DESIGN §3):小按钮长出贴着的面板。宿主组件(账号卡)用;插件暂不开放。
+export { emergeDroplet } from './droplet'
+export type { Droplet, DropletOptions } from './droplet'
 /** 落点提示(拖动时的落点线 / 放进去的描边):换落点原地淡出淡入。见 dropIndicator.ts 顶注。 */
-export { createDropIndicator, dropRetarget, dropHide, DROP_IN_MS, DROP_OUT_MS, land, landCancel, landWhenMoved, landOffset, dragGrab, releasePoint, LAND_MS } from './dropIndicator'
+export { createDropIndicator, createsFixedContainingBlock, dropRetarget, dropHide,DROP_IN_MS, DROP_OUT_MS, land, landCancel, landWhenMoved, landOffset, dragGrab, releasePoint, LAND_MS } from './dropIndicator'
 export type { DropIndicator, DropRect, DropShape, DropRetargetOptions, LandPoint, LandOptions } from './dropIndicator'
 export { setEngineI18n, useEngineI18n, engineTr } from './i18nSeam'
 /** 输入法组字守卫:面板输入框的 onKeyDown 第一行问它,组字中的 Enter/↑↓/Esc 归输入法(评审 G4-02)。 */
@@ -89,6 +92,8 @@ export type { ExtendViewController, ExtendViewOptions, ExtendViewHandle, ExtendV
 export { ExtendViewHost } from './ExtendViewHost'
 
 export { contentStorageKey } from './contentStorageScope'
+export { mountLineSelection } from './lineSelection'
+export type { LineSelectionOptions, LineSelectionHandle } from './lineSelection'
 
 export { switchSpace, setSpaceBarOrder, spaceSwitchDirection, type SpaceSwitchMotion } from './spaceTransition'
 export { SPRING_PAGE, SPRING_ROW, reducedMotion, springAt, springEasing, springMotion, type Spring } from './spring'

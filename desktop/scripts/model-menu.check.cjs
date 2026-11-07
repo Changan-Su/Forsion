@@ -2,8 +2,9 @@
  * 模型 / Effort 菜单的几何契约 —— 全是 CSS 层面的、改样式会静默塌掉的东西:
  *
  *  A 打开时药丸撑到与菜单同宽、右缘对齐(用户要的「展开对齐」)。
- *  B 开合不补宽度(走查续八 8.4,规矩 3):药丸直接到位、只换底色 —— 以前补 180ms,菜单 80ms 退完了药丸还在收。
- *    钉法:开 / 收各采样一遍宽度轨迹,头一帧之后不许停在中间宽度上。
+ *  B 开合补宽度,跟菜单同一只表(11-02 撤回走查续八 8.4 的「直接到位」,用户报「胶囊展开关闭动画全都没了」):
+ *    ＋ / 模式 / 模型三颗胶囊,开 / 收各采样一遍宽度轨迹:必须有中间帧(在补),且展开在菜单进场 180ms、
+ *    收起在菜单退场 80ms 前后走完(各留一帧多余量)—— 8.4 当时的毛病是药丸还在收、菜单早没了。
  *  C 子面板不被菜单裁掉:.composer-menu 通用规则带 overflow-y:auto,变体必须改回 visible,
  *    否则子面板整块被裁 → 表现为「点了行没反应」。用 elementFromPoint 打命中,裁切会漏出来。
  *  D 主面板固定为「高级 → 模型 → Effort」且 Effort 是可拖动 range；Max 有独立渐变 / 星点层。
@@ -59,7 +60,8 @@ button { font: inherit; background: none; border: 0; cursor: pointer; }
 <div class="t2c-card" style="position:fixed;visibility:hidden;pointer-events:none"><textarea class="t2c-ta"></textarea></div>
 <div class="model-stage t2c-card">
 <div class="row t2c-row">
-  <button class="t2c-pill">模式</button>
+  <span class="add-pill-wrap"><button class="t2c-pill add-pill-btn">${ic(16).replace('<svg', '<svg class="add-pill-plus"')}<span class="add-pill-label">添加</span>${ic(16).replace('<svg', '<svg class="add-pill-chevron"')}</button></span>
+  <span class="mode-pill-wrap"><button class="t2c-pill mode-pill-btn">${ic(13)}<span class="t2c-pill-label">询问</span>${ic(10)}</button></span>
   <span class="model-pill-wrap" data-cmenu>
     <button class="composer-chip model-pill-btn">
       ${ic(13)}<span class="pill-marquee"><span class="pill-marquee__inner">GLM-4.7 · 深</span></span>${ic(10)}
@@ -104,32 +106,37 @@ const box = (sel) => {
   const p = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1000, height: 700 } })
   await p.setContent(PAGE)
 
-  // ── B:开 / 收**各采样一遍宽度轨迹**,中途不许停在两端之间(不补宽度,走查续八 8.4)。 ──
-  const closedW = (await p.evaluate(box, '.model-pill-btn')).w
-  const trace = (openIt) => p.evaluate((on) => new Promise((res) => {
-    const el = document.querySelector('.model-pill-btn')
-    document.querySelector('.model-pill-wrap').classList.toggle('is-open', on)
+  // ── B:三颗胶囊开 / 收**各采样一遍宽度轨迹**:要有中间帧,且在菜单那只表上走完(撤回走查续八 8.4)。 ──
+  const trace = (pill, openIt) => p.evaluate(([sel, on]) => new Promise((res) => {
+    const el = document.querySelector(`.${sel}-btn`)
+    document.querySelector(`.${sel}-wrap`).classList.toggle('is-open', on)
     el.classList.toggle('is-open', on)
     const out = []
     const t0 = performance.now()
     const tick = () => {
       out.push([performance.now() - t0, el.getBoundingClientRect().width])
-      if (performance.now() - t0 < 240) requestAnimationFrame(tick)
+      if (performance.now() - t0 < 320) requestAnimationFrame(tick)
       else res(out)
     }
     requestAnimationFrame(tick)
-  }), openIt)
-  const midOf = (tr, lo, hi) => tr.filter(([, w]) => w > lo + 2 && w < hi - 2).length
-
-  const opening = await trace(true)
-  const openW = opening[opening.length - 1][1]
-  check('展开不补宽度:直接到位,没有中间帧', openW > closedW + 8 && midOf(opening, closedW, openW) === 0,
-    `${closedW.toFixed(1)} → ${openW.toFixed(1)},中间帧 ${midOf(opening, closedW, openW)}`)
-  await p.evaluate(() => document.querySelector('.model-pill-btn').classList.add('is-open'))
-
-  const closing = await trace(false)
-  check('收回不补宽度:直接到位,没有中间帧', midOf(closing, closedW, openW) === 0,
-    `${openW.toFixed(1)} → ${closedW.toFixed(1)},中间帧 ${midOf(closing, closedW, openW)}`)
+  }), [pill, openIt])
+  const midOf = (tr, lo, hi) => tr.filter(([, w]) => w > lo + 2 && w < hi - 2)
+  // 量「第一个中间帧 → 最后一个中间帧」的跨度,不量离切类名多久:页面刚起时第一次过渡会晚一两帧起步。
+  const lastMid = (tr, lo, hi) => { const ts = midOf(tr, lo, hi).map(([t]) => t); return ts.length ? Math.max(...ts) - Math.min(...ts) : 0 }
+  const closedW = (await p.evaluate(box, '.model-pill-btn')).w
+  for (const pill of ['add-pill', 'mode-pill', 'model-pill']) {
+    const w0 = (await p.evaluate(box, `.${pill}-btn`)).w
+    const opening = await trace(pill, true)
+    const openW = opening[opening.length - 1][1]
+    check(`${pill} 展开补宽度,菜单进场 180ms 内走完`,
+      openW > w0 + 8 && midOf(opening, w0, openW).length >= 3 && lastMid(opening, w0, openW) <= 180 + 34,
+      `${w0.toFixed(1)} → ${openW.toFixed(1)},中间帧 ${midOf(opening, w0, openW).length},补间跨度 ${lastMid(opening, w0, openW).toFixed(0)}ms`)
+    const closing = await trace(pill, false)
+    const endW = closing[closing.length - 1][1]
+    check(`${pill} 收起补宽度,菜单退场 80ms 前后走完`,
+      Math.abs(endW - w0) < 1 && midOf(closing, w0, openW).length >= 1 && lastMid(closing, w0, openW) <= 80 + 34,
+      `${openW.toFixed(1)} → ${endW.toFixed(1)},中间帧 ${midOf(closing, w0, openW).length},补间跨度 ${lastMid(closing, w0, openW).toFixed(0)}ms`)
+  }
 
   // 复位到打开态,继续量几何
   await p.evaluate(() => {

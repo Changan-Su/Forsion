@@ -25,9 +25,14 @@ describe('public native feedback seam', () => {
     const header = ctx.ui!.claimHeader!({ title: 'Task', back: 'Back', onBack: back })
     expect(nativeChromeState()).toMatchObject({ mode: 'page', title: 'Task' })
     dispatchNativeChromeAction('back'); expect(back).toHaveBeenCalledTimes(1)
+    const sysBack = (detail?: unknown) => window.dispatchEvent(new CustomEvent('forsion:mobile-back', { cancelable: true, detail }))
+    expect(sysBack({ probe: true })).toBe(false) // 问「接不接」:答接,不动手
+    expect(back).toHaveBeenCalledTimes(1)
+    sysBack(); expect(back).toHaveBeenCalledTimes(2)
     usePluginStore.getState().disable('feedback-probe')
     ctx.ui!.haptic!('tick'); dispatchNativeChromeAction('back'); header.dispose()
-    expect(tick).toHaveBeenCalledTimes(1); expect(back).toHaveBeenCalledTimes(1)
+    expect(window.dispatchEvent(new CustomEvent('forsion:mobile-back', { cancelable: true }))).toBe(true) // 释放后不再接
+    expect(tick).toHaveBeenCalledTimes(1); expect(back).toHaveBeenCalledTimes(2)
     expect(nativeChromeState().mode).not.toBe('page')
   })
 })

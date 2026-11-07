@@ -3,7 +3,7 @@
  * 高亮配色在 base.css 用主题 token 写(.hljs-*),不引第三方主题 CSS。
  */
 import React, { useContext, useEffect, useMemo, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 // 模型最爱写 `**注意：**后面`(CJK 标点贴闭合定界符),CommonMark 判不成立、显示字面 `**`。
 // 只换解析、不落盘;须排在 remarkGfm 之后(删除线那个要压过 gfm 的 `~`)。理由同 amadeus/blocks/markdown/cjkFriendly.ts。
@@ -16,30 +16,68 @@ import { toJsxRuntime } from 'hast-util-to-jsx-runtime'
 import { Fragment, jsx, jsxs } from 'react/jsx-runtime'
 import rehypeKatex from 'rehype-katex'
 import 'katex/dist/katex.min.css'
-import { Copy, Check, Play } from 'lucide-react'
-import { useI18n } from '../i18n'
+import { Copy, Check, Play, ImageOff } from 'lucide-react'
+import { registerMessages, useI18n } from '../i18n'
 import { isShellLang, runInTerminal, stripPrompt, type RunResult } from '../builtins/runCommand'
 import { normalizeMath } from '../services/mathNormalize'
-import { remarkWiki } from './wikiChat'
+import { parseFileHref, remarkWiki, resolveAgainst } from './wikiChat'
 import { ChatWebLink, ChatWikiLink } from './ChatWikiLink'
 import { ChatLinkWithCard } from './ChatLinkCard'
 import { ChatEmbed, type EmbedCtx } from './ChatEmbed'
 import { whenNear } from '../lib/nearViewport'
+import { installCopyTex } from './selectionBar/selectionMarkdown'
 
 /** 网页链接的悬停预览卡(ChatLinkCard)。⚠️ 缺省关、只由聊天回答开:本组件还给市场 README / 收件箱 / 更新日志渲第三方文本,
  *  那里的链接不该一悬停就让引擎去问 GitHub。 */
+// Every surface that renders chat Markdown also gets clean ⌘C over formulas (D24).
+if (typeof document !== 'undefined') installCopyTex()
+
 const LinkCardContext = React.createContext(false)
+
+/** 代码块细表头(语言 + 复制,走查续六 6.2 A)。⚠️ 缺省关、只由聊天回答开:别处的代码块各有自己的底色,表头的样式只写在 .t2-content 里。 */
+const CodeHeadContext = React.createContext(false)
+
+registerMessages({
+  'code.copy': { zh: '复制', en: 'Copy' },
+  'code.copied': { zh: '已复制', en: 'Copied' },
+  'code.plainText': { zh: '文本', en: 'Text' },
+  'md.imageBroken': { zh: '图片无法显示 · {alt}', en: 'Image unavailable · {alt}' },
+  'md.copyTex': { zh: '复制 LaTeX', en: 'Copy LaTeX' },
+})
+/** 表头上的语言名:常见几种写全称,其余照 fence 原样。 */
+const LANG_NAMES: Record<string, string> = {
+  ts: 'TypeScript', typescript: 'TypeScript', tsx: 'TSX', js: 'JavaScript', javascript: 'JavaScript', jsx: 'JSX',
+  py: 'Python', python: 'Python', sh: 'Shell', bash: 'Shell', zsh: 'Shell', shell: 'Shell', json: 'JSON',
+  html: 'HTML', css: 'CSS', md: 'Markdown', markdown: 'Markdown', yaml: 'YAML', yml: 'YAML', sql: 'SQL',
+}
 
 // [[双链]] 经 remarkWiki 变成 #wiki= 链接,在这里拦下渲染;http(s) 走网页引用条(Desk 内置浏览器
 // + 链接文字当引语定位;聊天回答里另带悬停预览卡);其余(mailto/相对/锚点)维持默认 <a>。
+const textOf = (n: React.ReactNode): string => typeof n === 'string' || typeof n === 'number' ? String(n) : Array.isArray(n) ? n.map(textOf).join('') : React.isValidElement(n) ? textOf((n.props as { children?: React.ReactNode }).children) : ''
+
 const WikiAnchor = ({ href, children, node: _node, ...rest }: any) => {
   const cards = useContext(LinkCardContext)
+  const cwd = useContext(RunContext)?.cwd
   if (typeof href === 'string' && href.startsWith('#wiki=')) return <ChatWikiLink inner={decodeURIComponent(href.slice(6))} />
   if (typeof href === 'string' && /^https?:\/\//i.test(href)) {
     return cards ? <ChatLinkWithCard href={href} {...rest}>{children}</ChatLinkWithCard> : <ChatWebLink href={href} {...rest}>{children}</ChatWebLink>
   }
-  return <a href={href} {...rest}>{children}</a>
+  // 指向文件的普通链接(`src/a.ts:42`)→ 走 [[路径#L行]] 那条文件引用:按会话工作目录拼绝对路径,点开跳到那一行(D25)。
+  // 没有工作目录的地方(插件说明、更新说明……)只认绝对路径:相对路径拿去库里找,会打开一篇同名的无关笔记
+  const file = typeof href === 'string' ? parseFileHref(href) : null
+  if (file && (cwd || /^\/|^[A-Za-z]:[\\/]/.test(file.path))) {
+    const path = cwd ? resolveAgainst(cwd, file.path) : file.path
+    const anchor = file.line ? `#L${file.line}${file.end ? `-L${file.end}` : ''}` : ''
+    const label = textOf(children)
+    // 链接文字就是地址本身(模型常这么写)时不当别名,引用条照「文件名:行号」显示
+    return <ChatWikiLink inner={`${path}${anchor}${label && label !== href ? `|${label}` : ''}`} />
+  }
+  // 没转成引用条的照缺省清洗(urlTransform 为文件链接放行过,这里收回去)
+  return <a href={typeof href === 'string' ? defaultUrlTransform(href) : href} {...rest}>{children}</a>
 }
+
+/** react-markdown 缺省会把 `a.ts:42`、`file://`、`C:\…` 当未知协议清空;只对认得出的文件链接放行,其余照缺省。 */
+const urlTransform = (url: string, key: string): string => defaultUrlTransform(url) || (key === 'href' && parseFileHref(url) ? url : '')
 
 /** 代码块「运行」的回传口:聊天消息给 onRun(把结果作为用户消息发回会话);别处(工作区文件预览等)不给 = 只跑不回传。 */
 const RunContext = React.createContext<{ onRun?: (r: RunResult) => void; cwd?: string; allowRun: boolean } | undefined>(undefined)
@@ -96,8 +134,12 @@ const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknow
   const preRef = React.useRef<HTMLPreElement>(null)
   const highlighted = useHighlighted(preRef, node)
   const runCtx = useContext(RunContext)
+  const lang = fenceLang(node)
   // Run 键靠 window.tangu.pty 门控:web/移动端没有 PTY,自然不露。
-  const runnable = runCtx?.allowRun !== false && isShellLang(fenceLang(node)) && !!window.tangu?.pty
+  const runnable = runCtx?.allowRun !== false && isShellLang(lang) && !!window.tangu?.pty
+  // 表头只给「有语言或超过 3 行」且不止两行的块;一两行的命令仍是角上的图标键(pre 右边留出位置,不压字)。
+  const lines = hastText((node as HastNode | undefined)?.children?.find((n) => n.tagName === 'code')).replace(/\n$/, '').split('\n').length
+  const head = useContext(CodeHeadContext) && lines > 2 && (!!lang || lines > 3)
   const copy = () => {
     const text = preRef.current?.innerText ?? ''
     navigator.clipboard.writeText(text).then(() => {
@@ -109,8 +151,24 @@ const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknow
     const cmd = stripPrompt(preRef.current?.innerText ?? '')
     if (cmd) runInTerminal(cmd, { cwd: runCtx?.cwd, onExit: runCtx?.onRun })
   }
+  if (head) {
+    return (
+      <div className="code-box" data-code-head="">
+        <div className="code-head">
+          <span className="code-head-lang">{lang ? LANG_NAMES[lang.toLowerCase()] ?? lang : t('code.plainText')}</span>
+          <span className="code-head-acts">
+            {runnable && <button type="button" className="code-head-btn" onClick={run} title={t('terminal.runTitle')} aria-label={t('terminal.runTitle')} data-testid="code-run"><Play size={13} /></button>}
+            <button type="button" className="code-head-btn" onClick={copy} title={t('common.copyCode')}>
+              {copied ? <Check size={13} /> : <Copy size={13} />}{t(copied ? 'code.copied' : 'code.copy')}
+            </button>
+          </span>
+        </div>
+        <pre ref={preRef} {...props}>{highlighted ?? children}</pre>
+      </div>
+    )
+  }
   return (
-    <div style={{ position: 'relative' }}>
+    <div className="code-box" data-run={runnable || undefined} style={{ position: 'relative' }}>
       <pre ref={preRef} {...props}>{highlighted ?? children}</pre>
       {runnable && (
         <button
@@ -135,6 +193,66 @@ const CodeBlock: React.FC<React.HTMLAttributes<HTMLPreElement> & { node?: unknow
   )
 }
 
+/** 图片打不开:换成一块说明(走查续六 6.7),不留浏览器的破图标。alt 是用户内容,不翻;点它试着用系统浏览器开原地址。 */
+const MdImage = ({ node: _node, src, alt, ...rest }: any) => {
+  const { t } = useI18n()
+  const [broken, setBroken] = useState(false)
+  useEffect(() => setBroken(false), [src])
+  if (!broken) return <img src={src} alt={alt} {...rest} onError={() => setBroken(true)} />
+  const open = typeof src === 'string' && /^https?:\/\//i.test(src)
+    // 外面包着链接(README 徽章之类)时只开图片地址这一下,别再冒泡给外层链接
+    ? (e: React.MouseEvent) => { e.preventDefault(); e.stopPropagation(); void (window.tangu?.openExternal?.(src) ?? window.open(src, '_blank', 'noopener')) }
+    : undefined
+  return (
+    <button type="button" className="md-img-broken" title={typeof src === 'string' ? src : undefined} onClick={open} disabled={!open}>
+      <ImageOff size={18} /><span>{t('md.imageBroken', { alt: alt || '' })}</span>
+    </button>
+  )
+}
+
+/** 块公式包一层 `div.md-math`,把 KaTeX 留在 `<annotation>` 里的 LaTeX 源码挂到 data-tex 上(复制键用,不从屏幕上的字拼)。
+ *  排在 rehype-katex 之后;段落里的 `$$x$$` 是行内公式(没有 katex-display),不包。 */
+const texOf = (n: any): string => n?.tagName === 'annotation'
+  ? (n.children || []).map((c: any) => c.value ?? '').join('')
+  : (n?.children || []).reduce((acc: string, c: any) => acc || texOf(c), '')
+const rehypeMathBox = () => (tree: any) => {
+  const walk = (n: any): void => {
+    if (!n.children) return
+    n.children = n.children.map((c: any) => {
+      if (c.type === 'element' && c.tagName === 'span' && n.tagName !== 'p' && c.properties?.className?.includes?.('katex-display')) {
+        return { type: 'element', tagName: 'div', properties: { className: ['md-math'], dataTex: texOf(c) }, children: [c] }
+      }
+      walk(c)
+      return c
+    })
+  }
+  walk(tree)
+}
+
+/** 块公式右上角的复制键(同代码块角上那颗,常驻);复制纯 LaTeX,不带 `$$`。 */
+const MathBox = ({ node: _node, className, children, ...rest }: any) => {
+  const { t } = useI18n()
+  const [copied, setCopied] = useState(false)
+  if (className !== 'md-math') return <div className={className} {...rest}>{children}</div>
+  const tex: string = rest['data-tex'] ?? ''
+  const copy = () => {
+    navigator.clipboard.writeText(tex).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 1500)
+    })
+  }
+  return (
+    <div className="md-math" style={{ position: 'relative', paddingInline: 32 }}>
+      {children}
+      {tex && (
+        <button className="icon-btn" onClick={copy} title={t('md.copyTex')} aria-label={t('md.copyTex')} style={{ position: 'absolute', top: 2, right: 6, width: 24, height: 24 }}>
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+      )}
+    </div>
+  )
+}
+
 /** 手机上宽表格在自己的框里横向滑(chat2.css 末尾):一行放得下的格子不折行,放不下的照常折 ——
  *  CSS 数不了字,这里把后一种标出来(约 13 个汉字宽:汉字算 1,其余算半个多一点)。别处没有样式认这个标记。 */
 const cellEm = (n: any): number => n?.type === 'text'
@@ -148,9 +266,9 @@ const Th = tableCell('th')
  * anchorPrefix:传入时给 h1/h2/h3 渲染稳定 id(`${anchorPrefix}-${第n个标题}`)+ data-toc-level,
  * 供右侧「目录」扫描跳转。不传则零影响(记忆/日志面板等普通渲染)。
  */
-export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean }> = React.memo(
-  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false }) => {
-    const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th }
+export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean; /** 代码块细表头;缺省关,见 CodeHeadContext。 */ codeHead?: boolean; /** 段内单个换行就换行(Amadeus 笔记写法);缺省按标准 Markdown 当空格。 */ breaks?: boolean }> = React.memo(
+  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false, codeHead = false, breaks = false }) => {
+    const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th, img: MdImage, div: MathBox }
     if (anchorPrefix) {
       const counter = { i: 0 }
       const heading = (level: 1 | 2 | 3) => {
@@ -169,19 +287,34 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
       <RunContext.Provider value={{ ...run, allowRun }}>
         <EmbedContext.Provider value={embeds}>
           <LinkCardContext.Provider value={linkCards}>
+          <CodeHeadContext.Provider value={codeHead}>
             <ReactMarkdown
-              remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
-              rehypePlugins={[[rehypeKatex, { throwOnError: false }]]}
+              remarkPlugins={breaks ? [remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki, remarkSoftBreaks] : [remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
+              rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeMathBox]}
               components={components}
+              urlTransform={urlTransform}
             >
               {normalizeMath(content)}
             </ReactMarkdown>
+          </CodeHeadContext.Provider>
           </LinkCardContext.Provider>
         </EmbedContext.Provider>
       </RunContext.Provider>
     )
   },
 )
+
+/** 段内单个换行就是换行(Amadeus 笔记的写法,见 blocks/markdown/softBreak.ts);标准 Markdown 把它当空格。只动文本节点,代码不受影响。 */
+function remarkSoftBreaks() {
+  const walk = (node: { type: string; value?: string; children?: any[] }): void => {
+    if (!node.children) return
+    node.children = node.children.flatMap((c) => {
+      if (c.type !== 'text' || !c.value.includes('\n')) { walk(c); return [c] }
+      return c.value.split(/\r?\n/).flatMap((value: string, i: number) => (i ? [{ type: 'break' }, { type: 'text', value }] : [{ type: 'text', value }]))
+    })
+  }
+  return walk
+}
 
 /** 代码块与 run 上下文也给 Intelligent UI 的 markdown 用(IntelligentUi.tsx RichText),免得那边再写一份。 */
 export { CodeBlock, RunContext }

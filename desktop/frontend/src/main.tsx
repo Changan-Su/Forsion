@@ -12,6 +12,7 @@ import { useApp } from './stores/appStore'
 import { LocaleProvider, resolveInitialLocale, translate } from './i18n'
 import './i18n.generated' // 注册全量翻译字典(渲染前)
 import { installEngine } from './bootstrapEngine'
+import { loadTanguEntry } from './coreTangu/load'
 import { readTanguChatViews } from './amadeus/plugins/tanguSeam'
 import { windowKind } from './windowKind'
 import { DetachedRoot } from './DetachedRoot'
@@ -19,6 +20,7 @@ import { MiniRoot } from './MiniRoot'
 import { FloatingRoot } from './FloatingRoot'
 import { installMultiWindow } from './multiWindow'
 import { installKeepAwakeReport } from './keepAwakeReport'
+import { installTelemetryReport } from './telemetryReport'
 import { installCreationAutoVersion } from './creationAutoVersion'
 import { installSmoothCaret } from './smoothCaret'
 import { installViewportLock } from './viewportLock'
@@ -60,36 +62,61 @@ try { initSeed = localStorage.getItem('forsion_theme_seed') || undefined } catch
 // 在 applyTheme 覆写 forsion_theme_lang 之前先抓住原始值:磁盘语言(soft/用户主题)首屏未加载会被回退到 lovable,
 // initThemes 据此把它接回来。
 try { persistedLang = localStorage.getItem('forsion_theme_lang') } catch { /* private mode */ }
-// 主题/引擎初始化是模块级副作用,跑在 React 挂载之前 —— 任一处抛错都会让 React 永不挂载 = 白屏。
-// 包 try/catch:即便初始化失败也继续挂载(退化样式总好过白屏)。
-try {
-  applyTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), resolveInitialEffectiveMode(), { customColor: initSeed })
-  preloadAllThemes()
-  document.documentElement.style.removeProperty('background') // 交还给主题 CSS
-  // 合并 ~/.tangu/themes 的磁盘主题(soft 也在其中),并把首屏被回退的磁盘语言接回来。
-  void useTheme.getState().initThemes(persistedLang)
-  // ⚠️**先接翻译再注册引擎**:appStore 的缺省 `tr` 是 `(k) => k`,而 LocaleProvider 要等 React 挂载
-  // 才 setTr。installEngine() 里的 registerSpaces() → Space.build() → openView() 就发生在这之前,
-  // 那一刻取到的 displayName 会是裸键、且被**快照**进标签页标题(实测:主页标签写着 `space.home`)。
-  // 详见 i18n.translate 的注释。这行不能挪进 React。
-  useApp.getState().setTr(translate)
-  // 注册引擎贡献项(视图/命令/ribbon/状态项),须在 WorkspaceHost 挂载前。
-  installEngine()
-  // 多窗接线:把引擎 detach 缝接到 window.tangu(桌面);web/移动 no-op。须在任何 WbTab 渲染前设好缝。
-  installMultiWindow()
-  // 有会话运行时不休眠(设置→常规,默认关):在飞 run 数报主进程;web/移动 no-op。
-  installKeepAwakeReport()
-  // 造物里的项目:不管在哪个 Space 跑的 agent,一轮跑完宿主都存一版(git 版本历史)。
-  installCreationAutoVersion()
-  // 丝滑光标(默认关;设置→外观开关)。
-  installSmoothCaret()
-  // 视口滚动锁:页面本身永不该滚;滚起来就弹回去(见 viewportLock.ts 的病理与实测)。
-  installViewportLock()
-  // 界面字体覆盖(设置→外观;缺席=跟随主题,不注入任何声明)。
-  applyUiFonts()
-} catch (err) {
-  console.error('[tangu] init failed, continue to mount:', err)
-  recordError('init', err) // 被 catch 吞掉的启动错误不派发 window 'error',手动记进导出日志
+// Tangu 入口:打包版从引擎选中的目录取界面包(界面热更新 4b,coreTangu/load.ts),其余动态 import 编进宿主的那份。
+// 拿到之后再装主题 / 引擎、挂 React:dev 里 Tangu 的 <style> 是在 import 求值时插进去的、早于主题样式,打包版照这个先后。
+// ⚠️别写成顶层 await:Tangu 的 chunk 和共享表要从本入口的 chunk 里取宿主模块,入口等它们、它们等入口求值完 = 死锁,
+// 白屏且一个报错都没有(4b 实测)。
+void loadTanguEntry().then(boot, (err) => {
+  console.error('[tangu] Tangu UI failed to load:', err)
+  recordError('init', err)
+})
+
+function boot(activateTangu: Parameters<typeof installEngine>[0]): void {
+  // 主题/引擎初始化是模块级副作用,跑在 React 挂载之前 —— 任一处抛错都会让 React 永不挂载 = 白屏。
+  // 包 try/catch:即便初始化失败也继续挂载(退化样式总好过白屏)。
+  try {
+    applyTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), resolveInitialEffectiveMode(), { customColor: initSeed })
+    preloadAllThemes()
+    document.documentElement.style.removeProperty('background') // 交还给主题 CSS
+    // 合并 ~/.tangu/themes 的磁盘主题(soft 也在其中),并把首屏被回退的磁盘语言接回来。
+    void useTheme.getState().initThemes(persistedLang)
+    // ⚠️**先接翻译再注册引擎**:appStore 的缺省 `tr` 是 `(k) => k`,而 LocaleProvider 要等 React 挂载
+    // 才 setTr。installEngine() 里的 registerSpaces() → Space.build() → openView() 就发生在这之前,
+    // 那一刻取到的 displayName 会是裸键、且被**快照**进标签页标题(实测:主页标签写着 `space.home`)。
+    // 详见 i18n.translate 的注释。这行不能挪进 React。
+    useApp.getState().setTr(translate)
+    // 注册引擎贡献项(视图/命令/ribbon/状态项),须在 WorkspaceHost 挂载前。
+    installEngine(activateTangu)
+    // 多窗接线:把引擎 detach 缝接到 window.tangu(桌面);web/移动 no-op。须在任何 WbTab 渲染前设好缝。
+    installMultiWindow()
+    // 有会话运行时不休眠(设置→常规,默认关):在飞 run 数报主进程;web/移动 no-op。
+    installKeepAwakeReport()
+    // 帮助改进 Forsion:本窗的崩溃 / 卡顿 / 功能使用报给主进程(转给 Extend,发不发它定);没有带遥测的 Extend 时 no-op。
+    installTelemetryReport()
+    // 造物里的项目:不管在哪个 Space 跑的 agent,一轮跑完宿主都存一版(git 版本历史)。
+    installCreationAutoVersion()
+    // 丝滑光标(默认关;设置→外观开关)。
+    installSmoothCaret()
+    // 视口滚动锁:页面本身永不该滚;滚起来就弹回去(见 viewportLock.ts 的病理与实测)。
+    installViewportLock()
+    // 界面字体覆盖(设置→外观;缺席=跟随主题,不注入任何声明)。
+    applyUiFonts()
+  } catch (err) {
+    console.error('[tangu] init failed, continue to mount:', err)
+    recordError('init', err) // 被 catch 吞掉的启动错误不派发 window 'error',手动记进导出日志
+  }
+
+  // 不用 React.StrictMode:其开发期 double-invoke 会重复初始化 Amadeus Space 的 Milkdown 编辑器。
+  // framer 也跟系统「减少动态效果」(走查续八 8.3):位移 / 缩放 / 布局动画停,只留透明度;CSS 那半在 styles/base.css。
+  createRoot(document.getElementById('root')!).render(
+    <LocaleProvider>
+      <MotionConfig reducedMotion="user">
+        <ErrorBoundary>
+          {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
+        </ErrorBoundary>
+      </MotionConfig>
+    </LocaleProvider>,
+  )
 }
 
 // 外观预览窗口(#preview)的样例对话是 Tangu 交出来的(核心插件化 2e-7);installEngine() 已在上面跑过,槽已注册
@@ -97,15 +124,3 @@ function PreviewChat() {
   const Preview = readTanguChatViews()?.Preview
   return Preview ? <Preview /> : null
 }
-
-// 不用 React.StrictMode:其开发期 double-invoke 会重复初始化 Amadeus Space 的 Milkdown 编辑器。
-// framer 也跟系统「减少动态效果」(走查续八 8.3):位移 / 缩放 / 布局动画停,只留透明度;CSS 那半在 styles/base.css。
-createRoot(document.getElementById('root')!).render(
-  <LocaleProvider>
-    <MotionConfig reducedMotion="user">
-      <ErrorBoundary>
-        {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
-      </ErrorBoundary>
-    </MotionConfig>
-  </LocaleProvider>,
-)

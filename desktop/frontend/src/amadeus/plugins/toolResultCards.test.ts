@@ -51,6 +51,28 @@ describe('① 认领:只认自家引擎半身名下的工具', () => {
   })
 })
 
+describe('①b 官方插件画核心工具(网页卡片 A + D)', () => {
+  const plugins = [{ id: 'forsion-extend', bundle: bundle(['store-update']) }, { id: 'third', bundle: bundle(['third-engine']) }]
+  const r = (pluginId: string, tool: string, match?: (c: { tool: string; args: unknown }) => boolean) => ({ pluginId, item: { tool, mount, ...(match ? { match } : {}) } })
+  const engine = { 'store-update': ['store_submit_update'], 'third-engine': ['x'] }
+
+  it('名单里的官方插件 + 捆绑包里有官方引擎插件在跑 → 认;任一条不满足都不认', () => {
+    expect(claimToolCard([r('forsion-extend', 'publish_web_page')], plugins, engine, 'publish_web_page', { official: ['store-update'] })?.pluginId).toBe('forsion-extend')
+    expect(claimToolCard([r('forsion-extend', 'publish_web_page')], plugins, engine, 'publish_web_page', { official: [] }), '引擎没判官方').toBeUndefined()
+    expect(claimToolCard([r('forsion-extend', 'write_file')], plugins, engine, 'write_file', { official: ['store-update'] }), '不在名单里的核心工具').toBeUndefined()
+    expect(claimToolCard([r('third', 'publish_web_page')], plugins, engine, 'publish_web_page', { official: ['third-engine'] }), '不在名单里的插件').toBeUndefined()
+  })
+
+  it('match 按参数收窄;返回 false / 抛错 = 不认', () => {
+    const webOnly = (c: { args: unknown }) => (c.args as { section?: string }).section === 'web_pages'
+    const o = (args: unknown) => ({ official: ['store-update'], args })
+    expect(claimToolCard([r('forsion-extend', 'forsion_account', webOnly)], plugins, engine, 'forsion_account', o({ section: 'web_pages' }))).toBeDefined()
+    expect(claimToolCard([r('forsion-extend', 'forsion_account', webOnly)], plugins, engine, 'forsion_account', o({ section: 'usage' }))).toBeUndefined()
+    expect(claimToolCard([r('forsion-extend', 'forsion_account', () => { throw new Error('x') })], plugins, engine, 'forsion_account', o({}))).toBeUndefined()
+    expect(claimToolCard([r('forsion-extend', 'store_submit_update', () => false)], plugins, engine, 'store_submit_update', o({})), '自家工具同样过 match').toBeUndefined()
+  })
+})
+
 describe('② ctx.registerToolResultRenderer', () => {
   it('收下形状对的,落点缺省 inline;缺 tool / mount 的拒收', () => {
     const ctx = ctxOf('chart', { bundle: bundle(['chart-engine']) })

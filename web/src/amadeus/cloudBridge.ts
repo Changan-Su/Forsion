@@ -28,8 +28,6 @@ import { joinRel } from '@amadeus-shared/assets'
 import { contentStorageKey } from '@lcl/engine/contentStorageScope'
 import { cloudVaultMarkerPath, cloudVaultNamesFrom, parseCloudVaultMarker, type CloudVaultDevice } from '@amadeus-shared/entrySync'
 import { dbFileSchema, parseDb, serializeDb, type DbFile } from '@amadeus-shared/db/schema'
-import { parseDrawing, withSceneJson } from '@amadeus-shared/excalidraw/format'
-import { mergeScenes, type SceneLike } from '@amadeus-shared/excalidraw/reconcile'
 import { parseFmObject, setFmExtraOnSource } from '@amadeus-shared/db/pageFrontmatter'
 import type {
   AmadeusApi,
@@ -47,7 +45,8 @@ import type {
   VaultInfo,
 } from '@amadeus-shared/ipc'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
-import { resolvePageName, stripForIndex } from '@amadeus-shared/links'
+import { pageKey, resolvePageName, stripForIndex } from '@amadeus-shared/links'
+import { hasTagFilter, parseSearchQuery, tagSearchRemote } from '@amadeus-shared/tagQuery'
 import { sliceEmbedSubpath, splitNoteEmbed } from '@amadeus-shared/noteEmbed'
 import { findEmbedBlock } from './shareBridge'
 import { propagateNoteRenames, queueStructureOps } from '@amadeus-shared/propagateNoteRenames'
@@ -514,8 +513,8 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     return f
   }
 
-  const putFile = async (path: string, content: string, baseSeq: number, force = false): Promise<PutResultDto> => {
-    const r = await http.put<PutResultDto>(fileUrl(), { path, content, baseSeq, ...(force ? { force: true } : {}) })
+  const putFile = async (path: string, content: string, baseSeq: number, force = false, expectedHash?: string): Promise<PutResultDto> => {
+    const r = await http.put<PutResultDto>(fileUrl(), { path, content, baseSeq, ...(force ? { force: true } : {}), ...(expectedHash ? { expectedHash } : {}) })
     noteSeq(path, r.seq)
     seqFp.set(path, { seq: r.seq, fp: textFingerprint(content) })
     pageCache.delete(path) // 单点咽喉:任何文本写(fm 外科写/画板/trash meta…)后缓存失效;savePage 随手回填
@@ -843,25 +842,44 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
   // per-path 队列,盘上刚被编辑器 / 别的设备写过就按现文重算,不盲盖)。自己写的 SSE 被回声抑制吃掉 → 开着这些笔记的编辑器
   // 由这里 fireExternal 叫它们回灌(桌面那边是 notifyAll(externalChange))。没能改写的 → 提示,绝不静默吞。
   // ⚠️ 必须在 rename/move 的队列任务**之外**调用:任务占着新旧路径的 key,里面再 writeTextFile(newPath) = 自锁。
-  // ponytail: 全库逐篇 GET(无批量读端点),与桌面「朴素全库读扫」同一量级;嫌慢的正解是服务端 /move 带 rewriteLinks。
+  // 单篇改名 / 移动先问服务端 /ref-candidates 拿候选(一次请求):此前全库逐篇 GET,几百篇的库一改标题就打穿全局限流
+  // (200/分/IP),扫描自己的读 + 在途保存一起 429,还把读失败的几十篇报成「链接没能更新」(11-04)。
+  // ponytail: 文件夹操作仍全库扫 —— 夹里附件换了位置,别的笔记里指向它们的是 `](相对路径)`,不是笔记名,服务端候选认不出;
+  // 大库挪文件夹照样会撞限流,正解是服务端 /move 带 rewriteLinks。旧服务端没有这个端点 → 回落全库扫(行为同以前)。
+  // 候选随附原文 + seq:改一篇被上百篇引用的笔记时一篇只剩一次 PUT(此前读 + 再读 + 写三次,台架 120 篇引用 → 59 篇没改上)。
+  // 还撞限流(429)就等一等再发,等够一个限流窗才算失败:宁可改名慢,不留断链。
+  type Known = { content: string; seq: number; hash?: string }
+  const patient = async <T,>(fn: () => Promise<T>): Promise<T> => {
+    for (const ms of [2_000, 5_000, 10_000, 20_000, 30_000]) {
+      try {
+        return await fn()
+      } catch (e) {
+        if (!(e instanceof HttpError && e.status === 429)) throw e
+      }
+      await new Promise((r) => setTimeout(r, ms))
+    }
+    return fn()
+  }
   /** 传播专用写口(G2-04 复核 P1):**只更新已存在的文件**的比对交换写。不能借 writeTextFile —— 读完之后那篇被别处
    *  删了 / 挪进 .trash,SSE 的 forgetSeq 清掉状态后它按 baseSeq 0 把原路径重建,或走 recovered 另存,还记成「改写成功」。
    *  这里现取现比:不在了 → 'gone'(路径已变,记入失败清单);内容不是读到的那版 → 交回现文重算;
-   *  PUT 恒带取到的 seq(>0,服务端对不存在的路径只会 409 不会创建),409 就回头重取。 */
-  const updateExisting = (p: string, text: string, base: string): Promise<TextWriteResult | 'gone'> =>
+   *  PUT 恒带取到的 seq(>0,服务端对不存在的路径只会 409 不会创建),409 就回头重取。
+   *  known = 候选随附的那版:第一发直接拿它的 seq + content_hash 写,省掉现取;过期了就是 409,照常回头重取。
+   *  只带 seq 不够(评审复现):那篇被换成另一份新文件也从 seq 1 数起,旧原文会把它盖掉 —— 没 hash 就不走这条捷径。 */
+  const updateExisting = (p: string, text: string, base: string, known?: Known): Promise<TextWriteResult | 'gone'> =>
     enqueue([p], async () => {
       await ensureVault()
       for (let attempt = 0; attempt < 3; attempt++) {
-        let f: FileDto
+        let f: Known
         try {
-          f = await getFile(p)
+          f = attempt === 0 && known?.hash ? known : await patient(() => getFile(p))
         } catch (e) {
           if (is404(e)) return 'gone' as const
           throw e
         }
         if (textFingerprint(f.content) !== base) return { ok: false as const, current: f.content }
         try {
-          await putFile(p, text, f.seq)
+          await patient(() => putFile(p, text, f.seq, false, attempt === 0 ? known?.hash : undefined))
           return { ok: true as const }
         } catch (e) {
           if (!is409(e)) throw e // 取完之后别处抢先写了 / 删了:回头重取(删了就是 'gone')
@@ -871,24 +889,47 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     })
   // 同一趟里重算正文的图片 / 附件相对引用(assets.rebaseFileRefs):「文件在不在」问操作之后那棵树的原始文件表
   // (点目录里的 .amadeus/ 也在里面;visiblePath 滤掉的那份不能用)。只在真有引用要改时才取一次。
+  const refCandidates = async (pairs: Record<string, string>): Promise<Map<string, Known> | undefined> => {
+    const names = [...new Set(Object.entries(pairs).flatMap(([o, n]) => [pageKey(o), pageKey(n)]))]
+    try {
+      const r = await patient(() => http.post<{ files?: unknown }>(`/amadeus/vaults/${encodeURIComponent(vid())}/ref-candidates`, { names }))
+      if (!Array.isArray(r?.files)) return undefined
+      const out = new Map<string, Known>()
+      for (const f of r.files as Array<Partial<FileDto>>) {
+        if (typeof f?.path === 'string' && typeof f.content === 'string' && typeof f.seq === 'number') {
+          out.set(f.path, { content: f.content, seq: f.seq, hash: typeof f.hash === 'string' ? f.hash : undefined })
+        }
+      }
+      return out
+    } catch {
+      return undefined // 旧服务端(404)/ 一时失败:全库扫,宁慢不漏
+    }
+  }
   const propagateRenames = async (pairs: Record<string, string>, pagesBefore: string[], folder?: readonly [string, string]): Promise<void> => {
     let paths: Promise<Set<string>> | null = null
+    const known = folder ? undefined : await refCandidates(pairs)
     const res = await propagateNoteRenames(
       {
         exists: async (f) => (await (paths ??= fetchTree(true).then((t) => new Set(t.files.map((x) => x.path))))).has(f),
         read: async (p) => {
+          const k = known?.get(p)
+          if (k) return k.content
           try {
-            return (await getFile(p)).content
+            return (await patient(() => getFile(p))).content
           } catch (e) {
             if (is404(e)) return null
             throw e
           }
         },
-        write: updateExisting,
+        write: (p, text, base) => {
+          const k = known?.get(p)
+          known?.delete(p) // 只用一次:冲突重算后再写就按现取的走
+          return updateExisting(p, text, base, k)
+        },
       },
       pairs,
       pagesBefore,
-      { folder },
+      { folder, only: known && new Set(known.keys()) },
     )
     for (const p of res.rewritten) fireExternal(p)
     toastRenameRewriteFailed(res.failed.map((f) => f.path))
@@ -1122,8 +1163,19 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
     search: async (query) => {
       await ensureVault()
       // 服务端按 path ILIKE 也算命中 → 点开头路径(.trash/、库标记)会漏进结果;与树同一把 visiblePath 尺子。
-      const hits = await http.get<SearchHit[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/search`, { q: query })
-      return hits.filter((h) => visiblePath(h.path))
+      const textSearch = async (q: string): Promise<SearchHit[]> =>
+        (await http.get<SearchHit[]>(`/amadeus/vaults/${encodeURIComponent(vid())}/search`, { q })).filter((h) => visiblePath(h.path))
+      const parsed = parseSearchQuery(query)
+      if (!hasTagFilter(parsed)) return textSearch(query)
+      // 服务端不懂 `tag:`,/tags/pages 也只认确切标签:在这里拼,结果与本地索引同形(含 hits),但只看前 50 篇。
+      const base = `/amadeus/vaults/${encodeURIComponent(vid())}`
+      return tagSearchRemote(parsed, {
+        listTags: () => http.get<TagCount[]>(`${base}/tags`),
+        pagesByTag: async (tag) => (await http.get<{ paths: string[] }>(`${base}/tags/pages`, { tag })).paths.filter(visiblePath),
+        allPages: async () => (await fetchTree()).pages.filter(visiblePage),
+        textSearch,
+        readText: async (p) => (await getFile(p)).content,
+      })
     },
     backlinks: async (pagePath) => {
       await ensureVault()
@@ -1452,7 +1504,7 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         }
         const r = parseDb(f.content)
         return r.ok
-          ? { status: 'ok', path: resolved, data: r.data } // path = 解析后的 vault 相对路径(写回锚点)
+          ? { status: 'ok', path: resolved, data: r.data, version: String(f.seq) } // path = 解析后的 vault 相对路径(写回锚点)
           : { status: 'corrupt', path: resolved, message: r.error }
       }
       return { status: 'missing' }
@@ -1464,16 +1516,22 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
         const parsed = dbFileSchema.parse(data) // 防御性校验:坏数据拒写(抛给 dbStore 静默重试)
         const content = serializeDb(parsed)
         const base = await baseSeqFor(dbPath)
+        await putFile(dbPath, content, base)
+      }),
+    writeDatabaseCas: (dbPath, data, baseVersion) =>
+      enqueue([dbPath], async () => {
+        await ensureVault()
+        if (!/^(0|[1-9]\d*)$/.test(baseVersion) || !Number.isSafeInteger(Number(baseVersion))) {
+          throw new Error('Invalid database version')
+        }
+        const content = serializeDb(dbFileSchema.parse(data))
         try {
-          await putFile(dbPath, content, base)
+          const result = await putFile(dbPath, content, Number(baseVersion))
+          return { ok: true, version: String(result.seq) }
         } catch (e) {
-          if (is409(e)) {
-            // 云端更新在先:采纳服务端版本(拉新 seq),让 dbStore 经 onDbExternalChange 热重载。
-            try { await getFile(dbPath) } catch { /* 拉不到就等 SSE */ }
-            setTimeout(() => fireDb(dbPath), 0)
-            return
-          }
-          throw e
+          if (!is409(e)) throw e
+          // Keep pending operations in dbStore; it reloads and replays them on this version.
+          return { ok: false, version: baseVersion }
         }
       }),
 
@@ -1494,35 +1552,29 @@ export function createCloudAmadeusBridge(cfg: CloudBridgeCfg): AmadeusApi {
       }
       return { status: 'missing' }
     },
-    writeDrawing: (drawingPath, source) =>
-      enqueue([drawingPath], async () => {
+    writeDrawing: (drawingPath, source, fingerprint) =>
+      enqueue([drawingPath], async (): Promise<TextWriteResult> => {
         await ensureVault()
-        const base = await baseSeqFor(drawingPath)
+        let base: number
+        try {
+          const fresh = await getFile(drawingPath)
+          if (fingerprint !== undefined && textFingerprint(fresh.content) !== fingerprint) {
+            return { ok: false, current: fresh.content }
+          }
+          base = fresh.seq
+        } catch (e) {
+          if (!is404(e)) throw e
+          if (fingerprint !== undefined || everKnown.has(drawingPath)) return { ok: false, current: null }
+          base = 0
+        }
         try {
           await putFile(drawingPath, source, base)
+          return { ok: true }
         } catch (e) {
-          // 真并发(drawingStore 写前已预读,剩毫秒窗):拉服务端最新,元素级合并后按新 seq 重写
-          // —— 不同元素无损并集、同元素 version 高者胜;解析不出(坏档)才回落「后写胜」强写。
           if (!is409(e)) throw e
-          try {
-            const f = await getFile(drawingPath) // noteSeq 顺带对齐
-            const mine = parseDrawing(source)
-            const theirs = parseDrawing(f.content)
-            const mineScene = mine ? (JSON.parse(mine.sceneJson) as SceneLike) : null
-            const theirScene = theirs ? (JSON.parse(theirs.sceneJson) as SceneLike) : null
-            if (mineScene && theirScene) {
-              const next = withSceneJson(f.content, JSON.stringify(mergeScenes(mineScene, theirScene)))
-              if (next) {
-                await putFile(drawingPath, next, f.seq)
-                return
-              }
-            }
-          } catch {
-            /* 合并失败 → 强写兜底 */
-          }
-          const body = (e as HttpError).body as ConflictBody | null
-          if (body && typeof body.seq === 'number') noteSeq(drawingPath, body.seq)
-          await putFile(drawingPath, source, seqMap.get(drawingPath) ?? 0, true)
+          // The shared drawing store owns bounded re-read/merge/retry. Never force stale text.
+          try { return { ok: false, current: (await getFile(drawingPath)).content } }
+          catch (readError) { if (is404(readError)) return { ok: false, current: null }; throw readError }
         }
       }),
 

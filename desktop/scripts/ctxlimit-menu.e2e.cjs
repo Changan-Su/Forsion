@@ -58,8 +58,8 @@ async function main() {
     const open = async () => { if (!(await menu.count())) { await pill.click(); await menu.waitFor({ timeout: 5000 }) } }
 
     await open()
-    // 只取主面板的直接子行:折叠的高级区(辅助 / 生图 / 识图槽)也在 DOM 里
-    const rowOrder = await menu.locator(':scope > .cm-row').evaluateAll((els) => els.map((e) => e.dataset.paneTrigger || (e.classList.contains('cm-advanced-toggle') ? 'advanced' : '?')))
+    // 只取主面板(.cm-main,10-30 起行包在它里面)的直接子行:折叠的高级区(辅助 / 生图 / 识图槽)也在 DOM 里
+    const rowOrder = await menu.locator(':scope > .cm-main > .cm-row').evaluateAll((els) => els.map((e) => e.dataset.paneTrigger || (e.classList.contains('cm-advanced-toggle') ? 'advanced' : '?')))
     check('T1 1M 模型露出「上下文上限」行,显示 272k', (await ctxRow.count()) === 1 && /272k/.test(await ctxRow.innerText()), await ctxRow.innerText().catch(() => '(none)'))
     check('T2 该行位于「高级」与「模型」之间', JSON.stringify(rowOrder) === JSON.stringify(['advanced', 'context', 'model']), JSON.stringify(rowOrder))
     // 悬停意图(10-05 用户实报):模型面板开着,朝它划过「上下文上限」行不许被那一行抢走;停住才切

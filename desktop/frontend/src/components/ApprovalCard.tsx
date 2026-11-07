@@ -78,6 +78,7 @@ export const wasDecidedHere = (approvalId: string): boolean => decidedHere.has(a
 export const isRemoteApprover = (sessionId?: string): boolean => capsForRef(refForSession(sessionId)).remoteApprover
 import { SPOOF_RE, WIDE_BLANK_RE } from './approvalText'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
+import { useGitApproval } from '../views/chat2/GitToolCard'
 
 const TA_MAX_PX = 480
 
@@ -112,6 +113,8 @@ export const ApprovalCard: React.FC<{
   const cmdWideBlank = WIDE_BLANK_RE.test(cmd)
   const resolved = req.status !== 'pending'
   const diff = useMemo(() => (isBash ? null : toolDiffText(req.name, req.arguments)), [isBash, req.name, req.arguments])
+  // git_commit / git_push / git_pull:标题与卡身换成结构化的(提交哪些文件、推到哪个站、用谁的账号,现读);读不到照旧显示引擎写的说明
+  const git = useGitApproval(req.name, req.arguments, sessionId, !resolved && !remote)
 
   // 「总允许」对 escalate / custom-ask / protected 无效(引擎不落),按钮不给 —— 规则见 approvalReason.ts。
   const alwaysWorks = alwaysAllowWorks(req.reason) && !remote
@@ -136,7 +139,7 @@ export const ApprovalCard: React.FC<{
     <div className={`approval-card${resolved ? ' resolved' : ''}`}>
       <div className="approval-title">
         <ShieldQuestion size={15} style={{ color: 'var(--accent-ink)' }} />
-        {t('approval.requestExec', { name: req.name })}
+        {git ? git.title : t('approval.requestExec', { name: req.name })}
         {resolved && (
           <span style={{ fontWeight: 400, fontSize: 'var(--ui-font-meta, 12px)', color: 'var(--text-faint)' }}>
             {req.status === 'approved' ? t('approval.statusApproved') : req.status === 'rejected' ? t('approval.statusRejected') : t('approval.statusExpired')}
@@ -173,7 +176,8 @@ export const ApprovalCard: React.FC<{
         <>
           {/* preview 恒显:引擎把越界警示(英文「⚠ Write outside the workspace · 」)与控制面要害(建什么、到点无人值守跑什么)
               拼进这个字符串;本地化的原因走上面的 why 行。旧事件没有 reason 时它仍是唯一的警示载体,diff 只能附加不能替换 */}
-          <div className="approval-preview">{approvalPreviewText(req, t as (k: string, v?: Record<string, unknown>) => string)}</div>
+          {(!git || /^⚠/.test(req.preview || '')) && <div className="approval-preview">{approvalPreviewText(req, t as (k: string, v?: Record<string, unknown>) => string)}</div>}
+          {git?.body}
           {diff && <div className="approval-diff"><DiffView text={diff} side={false} /></div>}
           {remote && !resolved && approveHere && <div className="approval-why" data-remote-readonly>{t('approval.remoteReadOnly')}</div>}
           {!resolved && !approveHere && <div className="approval-why" data-local-only>{t('approval.localOnly')}</div>}

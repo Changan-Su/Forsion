@@ -43,8 +43,6 @@ Space 里的内容以标签页打开,支持拖拽分屏、拖出独立窗口、�
 
 新建标签页:每个 Space 在「打开」里占一格,名字和图标用 Space 自己的。点格子 = 把 `layout.main` 的第一项开在当前标签里;`layout.main` 的其余项、以及所属插件注册的其他视图,进这一格的展开菜单,菜单末尾是「进入 Space」。主区只有不带文件路径的 `chat` / `amadeus-editor` 的 Space 不出格子(它们的入口是「新建」和「最近使用」);没带 Space 的插件视图列在「不属于任何 Space」。
 
-**English:** `splitFrom` selects an earlier Main item by zero-based index; omitted means the previous item. Shell panels surround the entire Main subtree, preserving its internal splits. The left panel spans the window height; the right panel sits beside all Main views; the bottom panel spans Main and right. Saved interleaved layouts are repaired on restore. Pinned views: an item in `layout.main`, `left` or `right` may set `"pinned": true`, meaning that panel always keeps at least one view of that type. It cannot be closed or dragged out of its panel; opening a different type on it opens a new tab, while the same type still navigates in place. Extra tabs of the same type can be closed; only the last one in the panel is protected. The bottom panel does not support pinning. Saved Space layouts are reset once when upgrading to a version with pinned views. Main page: one item in `layout.main` may set `"mainPage": true` (at most one, Main only). Entering the Space (switching to it, launching into it, or clicking its icon again while already in it) brings that view to the front instead of whatever was in front when you left; other tabs stay open behind it, and the view is opened if Main has none. Without it, a Space reopens the way you left it. The built-in Home Space declares one. Usually pair it with `"pinned": true`, or an in-place open right after switching can replace it.
-
 ## 下一步
 
 - [工作区与界面](../getting-started/workspace.md)
@@ -54,5 +52,3 @@ Space 里的内容以标签页打开,支持拖拽分屏、拖出独立窗口、�
 ## Mini Panel
 
 已适配的 Space 可在独立悬浮面板中使用，当前包括 Tangu、Amadeus 和 ToDo List。详见 [Mini Panel](./mini-panel.md)。插件作者可阅读 [适配契约](../customization/mini-panel-development.md)。
-
-Adapted Spaces can also provide a compact floating panel. Current built-in adapters cover Tangu, Amadeus and ToDo List.

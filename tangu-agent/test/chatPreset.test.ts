@@ -72,12 +72,13 @@ describe('registry 级:chat 正向工具面', () => {
     expect(names(native)).toEqual([...core, 'intelligent_ui_html', 'search_marketplace', 'intelligent_ui']);
     // 10-20 HTML 卡改名 sketch → intelligent_ui_html(工具名 + 描述里的几处提名):GUI 端 11,753 → 11,773、带 intelligent_ui 的 12,427 → 12,460,
     // 预算 12,450 → 12,500;带 v2 的 12,645 → 12,678,仍在 12,700 内。
-    expect(bytes(native)).toBeLessThanOrEqual(12_500);
+    // 11-02 HTML 卡加 <form> 与导航那句说明(#393 #397)后实测 12,514,预算 12,500 → 12,550。
+    expect(bytes(native)).toBeLessThanOrEqual(12_550);
     // 10-20 计算层:带 intelligent-ui.v2 的客户端换两段描述(intelligent_ui 多「计算卡」、sketch 把计算器让出去),
     // 实测 12,427 → 12,645(+218 B),预算 12,700;不带 v2 的客户端逐字不变(上一行)。
     const computed = { ...native, clientCapabilities: ['intelligent-ui.v1', 'intelligent-ui.v2'] };
     expect(names(computed)).toEqual(names(native));
-    expect(bytes(computed)).toBeLessThanOrEqual(12_700);
+    expect(bytes(computed)).toBeLessThanOrEqual(12_750);
     // 对照:work 面(25 个),chat 是过滤出来的子集,不是重排
     // 28 → 23:E2(§五「延迟候选」)把 amadeus 日历 CRUD ×5 转成静态 deferred,云端 sandbox 面同受影响。
     // chat 面本身逐字未变(上面那条 toEqual 仍绿):两个日历读工具本就在 CHAT_PRESET_DEFERRED 里。
@@ -353,7 +354,7 @@ describe('loop 级:preset 是会话事实(空白会话锁,替换 D9)', () => {
     expect(lastSystem().split('\n').filter((l) => l.includes('apply_patch')).every((l) => l.includes('not available'))).toBe(true); // 只准出现在覆盖句里
     // 默认人格保留(persona:'keep'),其 systemPrompt 明文要求调 remember/log_event → 记忆指引里的「不适用」句必须在人格之后压过它
     const sys = lastSystem();
-    const personaAt = sys.indexOf('Tangu Arioso');
+    const personaAt = sys.indexOf("the user's default assistant in Forsion");
     const overrideAt = sys.indexOf('do not apply in this conversation');
     expect(personaAt).toBeGreaterThan(-1);
     expect(overrideAt).toBeGreaterThan(personaAt);

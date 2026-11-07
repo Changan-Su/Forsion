@@ -10,7 +10,9 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { resolveTools } from '../tools/toolRegistry.js';
+import { parseRemoteOrigin } from '../services/remoteOrigin.js';
+import { resolveTools, isMcpDeferred, mcpCatalogHint } from '../tools/toolRegistry.js';
+import type { LoadedMcpTool } from '../mcp/toolBridge.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 
 import { runWithAgentSlug } from '../seams/runContext.js';
@@ -18,9 +20,10 @@ import { isValidSlug } from '../agents/agentRegistry.js';
 import { listSharedAgentSkills } from '../skills/localSkills.js';
 import {
   SkillCatalogError, listSkillCatalog, getSkillCatalogDetail, createCatalogSkill,
-  updateCatalogSkill, setCatalogSkillDisabled, deleteCatalogSkill, copyCatalogSkill,
+  updateCatalogSkill, setCatalogSkillDisabled, copyCatalogSkill,
   importCatalogSkill,
 } from '../skills/catalog.js';
+import { skillUninstallPreview, uninstallSkillByKey } from '../services/skillUninstall.js';
 
 const router = Router();
 
@@ -72,7 +75,13 @@ router.put('/agent/skills/catalog/:key/disabled', authMiddleware, async (req: Au
 });
 router.delete('/agent/skills/catalog/:key', authMiddleware, async (req: AuthRequest, res) => {
   if (!localSkillsOnly(res)) return;
-  try { res.json({ ok: true, ...await deleteCatalogSkill(req.params.key, agentSlugArg(req)) }); }
+  // 进回收站(services/skillUninstall):顺手从 Agent 清单移除、清掉停用记录;改过的内置技能 = 还原为内置版本。
+  try { res.json({ ok: true, trashId: (await uninstallSkillByKey(req.params.key, agentSlugArg(req))).id }); }
+  catch (e) { catalogError(res, e); }
+});
+router.get('/agent/skills/catalog/:key/uninstall-preview', authMiddleware, async (req: AuthRequest, res) => {
+  if (!localSkillsOnly(res)) return;
+  try { res.json(await skillUninstallPreview(req.params.key, agentSlugArg(req))); }
   catch (e) { catalogError(res, e); }
 });
 router.post('/agent/skills/catalog/:key/copy', authMiddleware, async (req: AuthRequest, res) => {
@@ -85,7 +94,7 @@ router.post('/agent/skills/catalog/:key/copy', authMiddleware, async (req: AuthR
 });
 
 /** GET /agent/skills 每条的对外形状(单独导出好单测:桌面「自建」徽标只认这里透传的 origin)。 */
-export function skillSummary(s: any): { id: string; name: string; description: string; icon: string | null; category: string | null; source: string; origin: 'agent' | null; builtin: boolean; shared: boolean } {
+export function skillSummary(s: any): { id: string; name: string; description: string; icon: string | null; category: string | null; source: string; origin: 'agent' | null; builtin: boolean; shared: boolean; readOnly?: boolean; sourcePluginId?: string; sourceProviderId?: string } {
   return {
     id: s.id,
     name: s.name,
@@ -94,6 +103,7 @@ export function skillSummary(s: any): { id: string; name: string; description: s
     category: s.category || null,
     // 'local'=磁盘技能(包内置/~/.tangu/skills,localAssets overlay 标注);缺省 cloud
     source: s.source || 'cloud',
+    ...(s.source === 'plugin' ? { readOnly: true, sourcePluginId: s.sourcePluginId, sourceProviderId: s.sourceProviderId } : {}),
     // 'agent'=manage_skill 自建(SKILL.md frontmatter origin,localSkills 只在用户级/agent 级根认它);其余 null。客户端据此打「自建」徽标。
     origin: s.origin === 'agent' ? 'agent' : null,
     // agent 级技能 frontmatter `shared: true`:借给别的 agent(桌面详情页打「共享」徽标)。
@@ -162,8 +172,22 @@ router.delete('/agent/skills/user/:id', authMiddleware, async (req: AuthRequest,
   }
 });
 
+/** 工具定义每个请求大约占多少 token:名字 + 描述 + 参数 schema 序列化成 JSON,按约 4 字符 = 1 token(不调分词器,界面标「约」)。 */
+export function approxToolTokens(defs: unknown[]): number {
+  return Math.ceil(defs.reduce<number>((n, d) => n + JSON.stringify(d).length, 0) / 4);
+}
+
+/** MCP server 每次请求的实际开销:常驻的算整份定义;按需加载的(11-06 起缺省)平时只占「Additional Tools」目录里一行
+ *  (与 agentLoop 拼目录同一格式),装上之后那一 run 才多出整份定义。设置页「每次请求约 N token」据此不再虚高。 */
+export function approxMcpServerTokens(live: LoadedMcpTool[]): number {
+  const always = live.filter((t) => !isMcpDeferred(t)).map((t) => t.definition);
+  const catalog = live.filter((t) => isMcpDeferred(t)).reduce<number>((n, t) => n + `- ${t.name}: ${mcpCatalogHint(t)}\n`.length, 0);
+  return approxToolTokens(always) + Math.ceil(catalog / 4);
+}
+
 router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
   try {
+    await deps().mcp?.reloadConfig?.();
     // 走 profileStore(appId 可指定):清单反映 admin 覆盖(tool_builtins 白名单等)后的**生效集**,
     // 与 run 的 resolveProfile 同源——admin 面板/Tangu Manager 看到的即真实可用工具。
     const appIdQ = typeof req.query.appId === 'string' && req.query.appId ? req.query.appId : undefined;
@@ -194,17 +218,27 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
     // MCP 分区(仅 standalone/TUI 装配了 deps().mcp;server 状态 + 各 server 工具)
     const mcpManager = deps().mcp;
     const mcp = mcpManager
-      ? mcpManager.listStatus().map((s) => ({
-          server: s.name,
-          transport: s.transport,
-          status: s.status,
-          error: s.error || null,
-          ...(s.origin ? { origin: s.origin } : {}),
-          tools: [...mcpManager.toolsForRun([s.name]).values()].map((t) => ({
-            name: t.name,
-            description: t.definition.function.description || '',
-          })),
-        }))
+      ? mcpManager.listStatus().map((s) => {
+          // 清单连按工具关掉的也给(设置页要列出来、能改回);token 只算真下发的
+          const tools = [...mcpManager.toolsForRun([s.name], { includeOff: true }).values()];
+          const live = [...mcpManager.toolsForRun([s.name]).values()];
+          return {
+            server: s.name,
+            transport: s.transport,
+            status: s.status,
+            error: s.error || null,
+            ...(s.signedIn ? { signedIn: true } : {}),
+            ...(s.auth ? { auth: s.auth } : {}),
+            ...(s.connector ? { connector: s.connector } : {}),
+            ...(s.origin ? { origin: s.origin } : {}),
+            tools: tools.map((t) => ({
+              name: t.name,
+              remoteName: t.remoteName, // 远端原名:目录 alwaysAsk 按它记,桥接名经 sanitize 改写过、反推不回来
+              description: t.definition.function.description || '',
+            })),
+            approxTokens: approxMcpServerTokens(live),
+          };
+        })
       : [];
 
     res.json({
@@ -220,6 +254,33 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list tools failed' });
   }
+});
+
+// MCP OAuth 登录 / 断开(mcp/oauth.ts):只给本机 —— 回调在本机回环上,远端设备完成不了;令牌也只存本机。
+// (路径写成字面量:desktop 的 gen-engine-routes 要逐条抽取并分类,unitWeb 把这两条标成 deny-remote)
+async function mcpAuthAction(req: AuthRequest, res: any, act: (mcp: NonNullable<ReturnType<typeof deps>['mcp']>, name: string) => Promise<unknown>) {
+  if (parseRemoteOrigin(req.headers)) return res.status(403).json({ code: 'LOCAL_ONLY', detail: 'MCP sign-in is only available on the computer running the engine.' });
+  const mcp = deps().mcp;
+  if (!mcp) return res.status(404).json({ detail: 'MCP is not available in this engine' });
+  try {
+    await mcp.reloadConfig?.(); // 宿主刚写进来的条目(商店连接器)先接上;有 run 在跑时 reload 自己会让开
+    res.json(await act(mcp, String(req.params.name)));
+  } catch (e: any) {
+    res.status(400).json({ detail: String(e?.message || e).slice(0, 500) });
+  }
+}
+router.post('/agent/mcp/:name/login', authMiddleware, (req: AuthRequest, res) => mcpAuthAction(req, res, (mcp, name) => mcp.login(name)));
+// 「用户自带 Key」:Key 只进本机 connector-auth.json,不回显、不进日志(报错里也只给模板)
+router.post('/agent/mcp/:name/key', authMiddleware, (req: AuthRequest, res) => mcpAuthAction(req, res, (mcp, name) => mcp.setKey(name, String(req.body?.key ?? ''))));
+router.post('/agent/mcp/:name/logout', authMiddleware, (req: AuthRequest, res) => mcpAuthAction(req, res, async (mcp, name) => { await mcp.logout(name); return {}; }));
+// 「测试连接」(D29):按导入框里还没保存的配置连一次、列工具后断开。stdio 会起本机命令 = 和保存后自动连接同一件事,所以同样只给本机
+router.post('/agent/mcp/probe', authMiddleware, async (req: AuthRequest, res) => {
+  if (parseRemoteOrigin(req.headers)) return res.status(403).json({ code: 'LOCAL_ONLY', detail: 'MCP connection tests run only on the computer running the engine.' });
+  const mcp = deps().mcp;
+  if (!mcp) return res.status(404).json({ detail: 'MCP is not available in this engine' });
+  const cfg = req.body?.config;
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg) || (!cfg.command && !cfg.url)) return res.status(400).json({ detail: 'config needs a command or url' });
+  res.json(await mcp.probe(cfg));
 });
 
 export default router;

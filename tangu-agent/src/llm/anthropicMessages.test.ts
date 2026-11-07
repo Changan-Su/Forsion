@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { openaiToAnthropicBody, streamAnthropicMessages } from './anthropicMessages.js';
-import { tuneOpenAiDirectPayload, PROTOCOL_MARK as PROTOCOL } from './openaiCompat.js';
+import { tuneOpenAiDirectPayload, PROTOCOL_MARK as PROTOCOL, SESSION_MARK } from './openaiCompat.js';
+import { openCodeSessionId } from './opencodeGo.js';
 
 describe('openaiToAnthropicBody', () => {
   // 能力表 → wire 端到端:Opus 5.5 思考常开(disabled 是 400),display 缺省 omitted 会让工具间旁白静默。
@@ -100,6 +101,32 @@ describe('用户自有 API key 路径', () => {
     // 同上,这两条是删除订阅 OAuth 分支的回归闸。
     expect(seen.Authorization).toBeUndefined();
     expect(seen['anthropic-beta']).toBeUndefined();
+  });
+
+  it('Anthropic 以外的地址(Claude Code 中转):x-api-key 之外再带 Bearer;Anthropic 自家仍然只有 x-api-key', async () => {
+    const seen: any[] = [];
+    vi.stubGlobal('fetch', (_u: string, init: any) => {
+      seen.push(init.headers);
+      return Promise.resolve({ ok: false, status: 401, body: null, json: () => Promise.resolve({ error: { message: 'x' } }) });
+    });
+    for (const baseUrl of ['https://relay.example.com', 'https://api.anthropic.com/v1']) {
+      await streamAnthropicMessages({ apiKey: 'sk-relay-1', baseUrl, payload: { model: 'claude-x', messages: [] } } as any).catch(() => {});
+    }
+    expect(seen[0]).toMatchObject({ 'x-api-key': 'sk-relay-1', authorization: 'Bearer sk-relay-1' });
+    expect(seen[1].authorization).toBeUndefined();
+  });
+
+  it('OpenCode Go 的 /anthropic/v1:带会话头;别的中转不带', async () => {
+    const seen: any[] = [];
+    vi.stubGlobal('fetch', (_u: string, init: any) => {
+      seen.push(init.headers);
+      return Promise.resolve({ ok: false, status: 401, body: null, json: () => Promise.resolve({ error: { message: 'x' } }) });
+    });
+    for (const baseUrl of ['https://opencode.ai/inference/go/anthropic/v1', 'https://relay.example.com']) {
+      await streamAnthropicMessages({ apiKey: 'k', baseUrl, payload: { model: 'qwen3.8-max', messages: [], [SESSION_MARK]: 'sess-1' } } as any).catch(() => {});
+    }
+    expect(seen[0]['x-opencode-session']).toBe(openCodeSessionId('sess-1'));
+    expect(seen[1]).not.toHaveProperty('x-opencode-session');
   });
 });
 
@@ -223,6 +250,19 @@ describe('Anthropic 直连的缓存断点与思考延续性', () => {
     const res = await streamAnthropicMessages({ apiKey: 'k', baseUrl: 'https://api.anthropic.com', payload: { model: 'claude-x', messages: [] } } as any);
     expect(res.usage.cached_tokens).toBeUndefined();
     expect(res.usage.prompt_tokens).toBe(5);
+  });
+
+  it('流里的 error 事件:超长按 400(压缩后重试),过载仍是 502', async () => {
+    const { isContextOverflowError } = await import('../services/contextWindowStore.js');
+    const failWith = (error: any) => {
+      const sse = `data: ${JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 5 } } })}\n` + `data: ${JSON.stringify({ type: 'error', error })}\n`;
+      vi.stubGlobal('fetch', () => Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) }));
+      return streamAnthropicMessages({ apiKey: 'k', baseUrl: 'https://api.anthropic.com', payload: { model: 'claude-x', messages: [] } } as any).catch((e) => e);
+    };
+    const tooLong = await failWith({ type: 'invalid_request_error', message: 'prompt is too long: 210000 tokens > 200000 maximum' });
+    expect([tooLong.status, isContextOverflowError(tooLong)]).toEqual([400, true]);
+    const overloaded = await failWith({ type: 'overloaded_error', message: 'Overloaded' });
+    expect([overloaded.status, overloaded.code]).toEqual([502, 'overloaded_error']);
   });
 });
 

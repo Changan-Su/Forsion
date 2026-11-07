@@ -7,6 +7,7 @@ import { parseReleaseVersion } from '../../shared/updateVersion'
 export interface ChangelogEntry {
   version: string
   date: string // YYYY-MM-DD(可空)
+  /** 要点;二级列表保留缩进(每层两个空格,例「  子条目」),渲染时经 changelogMarkdown 还原成嵌套列表 */
   lines: string[]
   /** 英文界面下这一节没有英文版,显示的是中文原文 */
   fallback?: boolean
@@ -14,7 +15,7 @@ export interface ChangelogEntry {
 
 // 「## <version> (<date>)」起一节;date 可用 () /（）/ — 分隔,亦可省略。
 const HEADING_RE = /^##\s+(.+?)\s*(?:[（(]\s*(\d{4}-\d{2}-\d{2})\s*[）)]|[—-]\s*(\d{4}-\d{2}-\d{2}))?\s*$/
-const BULLET_RE = /^\s*[-*]\s+(.*\S)\s*$/
+const BULLET_RE = /^(\s*)[-*]\s+(.*\S)\s*$/
 
 /** 解析 CHANGELOG.md → 版本条目(每个 `## 版本` 一节,其下 `- `/`* ` 行为要点)。 */
 export function parseChangelog(md: string): ChangelogEntry[] {
@@ -29,10 +30,14 @@ export function parseChangelog(md: string): ChangelogEntry[] {
       continue
     }
     const b = BULLET_RE.exec(line)
-    if (b && cur) cur.lines.push(b[1])
+    // 缩进按两格一层(制表符算一层);What's new / 关于页把「聊天：」下面的子条目画成下一级，而不是十几条并列的大项
+    if (b && cur) cur.lines.push('  '.repeat(Math.floor(b[1].replace(/\t/g, '  ').length / 2)) + b[2])
   }
   return entries.filter((e) => e.version && e.lines.length)
 }
+
+/** 要点 → markdown 列表(保留嵌套)。 */
+export const changelogMarkdown = (lines: string[]): string => lines.map((l) => l.replace(/^ */, (indent) => `${indent}- `)).join('\n')
 
 /**
  * 当前已发布版本。更新日志允许把 `Unreleased` 放在顶部，因此不能再用 CHANGELOG[0]：

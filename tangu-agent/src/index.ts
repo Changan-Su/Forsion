@@ -26,9 +26,14 @@ import memoryMaintenanceRouter from './routes/memoryMaintenance.js';
 import assetsRouter from './routes/assets.js';
 import agentsRouter from './routes/agents.js';
 import humanRouter from './routes/human.js';
+import externalImportRouter from './routes/externalImport.js';
+import widgetsRouter from './routes/widgets.js'; // 小组件只读:仪表盘 / 卡片区 / 主页按 id 读原件和记录(本机专用)
 import soloRouter from './routes/solo.js';
+import trashRouter from './routes/trash.js';
+import { startTrashJanitor, stopTrashJanitor } from './services/trash.js';
 import teamsRouter from './routes/teams.js';
 import projectContextRouter from './routes/projectContext.js';
+import maskingRouter from './routes/masking.js';
 import pluginsRouter from './routes/plugins.js';
 import specialRouter from './routes/special.js';
 import commandsRouter from './routes/commands.js';
@@ -55,6 +60,7 @@ import { startInboxPull, stopInboxPull } from './services/inboxPull.js';
 import { startChannels, stopChannels } from './channels/hub.js';
 import { startBrowserExtensionBridge, stopBrowserExtensionBridge } from './services/browserExtension.js';
 import { disposeAllProcesses } from './tools/processRegistry.js';
+import { startDeviceRenameWatch } from './services/deviceTagContext.js';
 
 export interface TanguModule {
   /** session 亲和路由(runs/SSE/workspace/approvals):fleet 模式按 session 哈希转发到 worker。 */
@@ -104,9 +110,13 @@ export function createTanguModule(d: TanguDeps): TanguModule {
   dataRouter.use(assetsRouter);
   dataRouter.use(agentsRouter);
   dataRouter.use(humanRouter);
+  dataRouter.use(externalImportRouter); // 从其他 AI 导入:/agent/import/*
+  dataRouter.use(widgetsRouter);
   dataRouter.use(soloRouter);
+  dataRouter.use(trashRouter);
   dataRouter.use(teamsRouter);
   dataRouter.use(projectContextRouter);
+  dataRouter.use(maskingRouter);
   dataRouter.use(pluginsRouter);
   dataRouter.use(specialRouter);
   dataRouter.use(hooksRouter);
@@ -160,6 +170,10 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     void startChannels().catch((e: any) => console.warn('[tangu] Channels 启动失败:', e?.message || e));
     // Tangu for Chrome 扩展的本机桥:只在本地形态(能碰用户浏览器的地方)起;云端 / worker 不起。
     if (deps().profile.capabilities.hostExec) startBrowserExtensionBridge();
+    // 回收站 30 天到期清理(启动一次 + 每天一次):回收站只在本机。
+    if (deps().profile.capabilities.hostExec) startTrashJanitor();
+    // 同步页上给这台改了名:把这台写过的 `[旧名]` 标签换成 `[新名]`(启动对一次 + 盯着设备文件;记忆按条标适用范围,11-06)。
+    if (deps().profile.capabilities.hostExec) startDeviceRenameWatch();
 
     // 配置驱动 profile:启动 app_profile_overrides 轮询(admin panel 改 → 本进程 ≤刷新窗口收敛)。
     // thin worker 无本地 DB(host.query 抛)→ 传 profilePolling:false,用基线 profile(admin 覆盖暂不下达,后续可经 state-API 取)。
@@ -178,6 +192,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     stopInboxPull();
     stopChannels();
     stopBrowserExtensionBridge();
+    stopTrashJanitor();
     deps().profileStore.dispose();
     abortAllRuns();
     disposeAllProcesses(); // run_background 的子进程(防热加载/退出泄漏)

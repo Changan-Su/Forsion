@@ -3,13 +3,16 @@
  * (seq/hash/CAS 与当前服务端一致)验证 push/pull/LWW/墓碑/LOG 合并/共用记忆去重/5MB 跳过。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync, mkdirSync, utimesSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { runAgentFilesSync } from '../src/services/agentFileSync.js';
-import { agentSyncScope, setAgentSyncPermission } from '../src/services/cloudSyncAccount.js';
-import { saveAgent } from '../src/agents/agentRegistry.js';
-import { agentsDir } from '../src/core/tanguHome.js';
+import { agentSyncScope, setAgentSyncDefault, setAgentSyncPermission } from '../src/services/cloudSyncAccount.js';
+import { deleteAgent, listAgents, trashAgent, saveAgent } from '../src/agents/agentRegistry.js';
+import { listTrash, trashDir } from '../src/services/trash.js';
+import { restoreAgent } from '../src/services/agentUninstall.js';
+import { agentsDir, humanDir } from '../src/core/tanguHome.js';
+import { createWidget, deleteRecord, findWidgetByName, purgeExpiredWidgets, readRecords, restoreWidget, setRecord, softDeleteWidget, type WidgetPlace } from '../src/services/widgetStore.js';
 import { createHash } from 'node:crypto';
 import { AgentFileConflictError, type AgentFilesBrain } from '../src/seams/cloudBrain.js';
 
@@ -309,5 +312,361 @@ describe('agentFileSync — size cap', () => {
     const r = await runAgentFilesSync(cloud, 'u');
     expect(r.skipped).toBeGreaterThan(0);
     expect(await cloud.getFile('u', 'tester', 'Library/big.bin')).toBeNull();
+  });
+});
+
+describe('agentFileSync — deleting an agent from the app (10-28)', () => {
+  const live = (cloud: ReturnType<typeof fakeCloud>, slug: string) => [...cloud._rows].filter(([k, r]) => k.startsWith(`${slug}\0`) && !r.deleted).map(([k]) => k.split('\0')[1]);
+  const listed = async (slug: string) => (await listAgents()).some((a) => a.slug === slug);
+  // 11-05 Agent 逐个选:云端有、本机没有的 Agent 不再自动建出来;另一台要先自己开这个 Agent 的同步(目录 + 许可)才拉
+  const optIn = (cloud: ReturnType<typeof fakeCloud>, slug: string) => { mkdirSync(join(agentsDir(), slug), { recursive: true }); setAgentSyncPermission(slug, agentSyncScope(cloud, 'u')!, true); };
+
+  for (const [name, del] of [['deleteAgent', (s: string) => deleteAgent(s)], ['trashAgent', async (s: string) => (await trashAgent(s)).ok]] as const) {
+    it(`${name}: the cloud copy is deleted and the agent is not pulled back`, async () => {
+      await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+      writeFileSync(join(tDir('tester'), 'MEMORY.md'), 'mem line');
+      const cloud = fakeCloud(['tester']);
+      await runAgentFilesSync(cloud, 'u');
+      expect(live(cloud, 'tester')).toContain('config.toml');
+      expect((await del('tester')) ? true : false).toBe(true);
+      const r = await runAgentFilesSync(cloud, 'u');
+      expect(r.error ?? '').toBe('');
+      expect(existsSync(tDir('tester'))).toBe(false);
+      expect(await listed('tester')).toBe(false);
+      expect(live(cloud, 'tester')).toEqual([]);
+      expect(existsSync(join(agentsDir(), '.cloudsync-deleted', 'tester'))).toBe(false); // 记录用完就清
+      await runAgentFilesSync(cloud, 'u');
+      expect(existsSync(tDir('tester'))).toBe(false);
+    });
+  }
+
+  it('account-wide switch (no per-agent consent file) is covered too', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x' });
+    const cloud = fakeCloud();
+    setAgentSyncDefault(agentSyncScope(cloud, 'u')!, true);
+    await runAgentFilesSync(cloud, 'u');
+    expect(live(cloud, 'tester')).toContain('config.toml');
+    await deleteAgent('tester');
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(tDir('tester'))).toBe(false);
+    expect(live(cloud, 'tester')).toEqual([]);
+  });
+
+  it('an agent that never synced (or has sync off) leaves no record and touches nothing', async () => {
+    await saveAgent({ slug: 'local-only', name: 'Local', systemPrompt: 'x' });
+    await deleteAgent('local-only');
+    expect(existsSync(join(agentsDir(), '.cloudsync-deleted'))).toBe(false);
+  });
+
+  it('other devices drop the agent on their next sync', async () => {
+    const homeA = home;
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    const homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
+    try {
+      process.env.TANGU_HOME = homeB;
+      optIn(cloud, 'tester');
+      await runAgentFilesSync(cloud, 'u'); // B 自己开了这个 Agent,拉下来
+      expect(await listed('tester')).toBe(true);
+      process.env.TANGU_HOME = homeA;
+      await deleteAgent('tester');
+      await runAgentFilesSync(cloud, 'u');
+      process.env.TANGU_HOME = homeB;
+      const r = await runAgentFilesSync(cloud, 'u');
+      expect(r.error ?? '').toBe('');
+      expect(await listed('tester')).toBe(false);
+    } finally { process.env.TANGU_HOME = homeA; rmSync(homeB, { recursive: true, force: true }); }
+  });
+
+  it('a new agent created under the same slug before the next sync is pushed, not overwritten by the old one', async () => {
+    await saveAgent({ slug: 'tester', name: 'Old', systemPrompt: 'old prompt', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    await deleteAgent('tester');
+    await saveAgent({ slug: 'tester', name: 'New', systemPrompt: 'new prompt', cloudSync: true });
+    setAgentSyncPermission('tester', agentSyncScope(cloud, 'u')!, true, true);
+    const r = await runAgentFilesSync(cloud, 'u');
+    expect(r.error ?? '').toBe('');
+    expect(readFileSync(join(tDir('tester'), 'config.toml'), 'utf8')).toContain('New');
+    expect((await cloud.getFile('u', 'tester', 'config.toml'))!.content).toContain('New');
+  });
+
+  // 10-28 Codex 复核补的四条
+  it('a failed local removal withdraws its record (no later cloud or local delete)', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    const removed = trashDir();
+    writeFileSync(removed, ''); // 回收站的位置被文件占着 = 挪不进去;chmod 在 Windows 上不生效
+    try { expect((await trashAgent('tester')).ok).toBe(false); } finally { rmSync(removed); }
+    expect(existsSync(join(agentsDir(), '.cloudsync-deleted', 'tester'))).toBe(false);
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(join(tDir('tester'), 'config.toml'))).toBe(true);
+    expect(live(cloud, 'tester')).toContain('config.toml');
+  });
+
+  it('another device’s unpushed edit does not bring the agent back; that device keeps its copy in its trash', async () => {
+    const homeA = home;
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    const homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
+    try {
+      process.env.TANGU_HOME = homeB;
+      optIn(cloud, 'tester');
+      await runAgentFilesSync(cloud, 'u');
+      writeFileSync(join(agentsDir(), 'tester', 'config.toml'), readFileSync(join(agentsDir(), 'tester', 'config.toml'), 'utf8').replace('Tester', 'Tester edited offline'));
+      process.env.TANGU_HOME = homeA;
+      await deleteAgent('tester'); await runAgentFilesSync(cloud, 'u');
+      process.env.TANGU_HOME = homeB;
+      expect((await runAgentFilesSync(cloud, 'u')).error ?? '').toBe('');
+      expect(await listed('tester')).toBe(false);
+      const kept = (await listTrash()).filter((e) => e.ref === 'tester');
+      expect(readFileSync(join(trashDir(), kept[0].id, kept[0].items[0].stored, 'config.toml'), 'utf8')).toContain('edited offline');
+      expect(existsSync(join(agentsDir(), '.cloudsync-deleted'))).toBe(false); // 收到的删除不再记(会误删之后同名新建的)
+      process.env.TANGU_HOME = homeA;
+      await runAgentFilesSync(cloud, 'u');
+      expect(existsSync(tDir('tester'))).toBe(false);
+      expect(live(cloud, 'tester')).toEqual([]);
+    } finally { process.env.TANGU_HOME = homeA; rmSync(homeB, { recursive: true, force: true }); }
+  });
+
+  // 10-28 回收站:恢复 = 照原样接着同步(删除记录撤掉、影子丢掉,整份重新上传),不被「云端是删除标记」再踢回回收站
+  it('restoring from the trash after the delete synced brings it back here and in the cloud', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    writeFileSync(join(tDir('tester'), 'MEMORY.md'), 'mem line');
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    const { entry } = await trashAgent('tester');
+    await runAgentFilesSync(cloud, 'u');
+    expect(live(cloud, 'tester')).toEqual([]);
+    expect(await restoreAgent('u', entry!)).toEqual({ slug: 'tester', renamed: false });
+    expect(await listed('tester')).toBe(true);
+    expect((await runAgentFilesSync(cloud, 'u')).error ?? '').toBe('');
+    expect(existsSync(join(tDir('tester'), 'config.toml'))).toBe(true);
+    expect(readFileSync(join(tDir('tester'), 'MEMORY.md'), 'utf8')).toBe('mem line');
+    expect(live(cloud, 'tester')).toEqual(expect.arrayContaining(['config.toml', 'MEMORY.md']));
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(join(tDir('tester'), 'config.toml'))).toBe(true);
+  });
+
+  it('restoring before the next sync keeps the cloud copy', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    const { entry } = await trashAgent('tester');
+    await restoreAgent('u', entry!);
+    expect(existsSync(join(agentsDir(), '.cloudsync-deleted', 'tester'))).toBe(false);
+    expect((await runAgentFilesSync(cloud, 'u')).error ?? '').toBe('');
+    expect(live(cloud, 'tester')).toContain('config.toml');
+    expect(existsSync(join(tDir('tester'), 'config.toml'))).toBe(true);
+  });
+
+  // 11-05 起:删掉它的那台(A)本机已经没有目录,不会再自动拉回来——要用的话在 A 上重新开它的同步
+  it('an agent restored on the device that received the delete goes back to the cloud, but not onto the device that deleted it', async () => {
+    const homeA = home;
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    const homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
+    try {
+      process.env.TANGU_HOME = homeB;
+      optIn(cloud, 'tester');
+      await runAgentFilesSync(cloud, 'u');
+      process.env.TANGU_HOME = homeA;
+      await deleteAgent('tester'); await runAgentFilesSync(cloud, 'u');
+      process.env.TANGU_HOME = homeB;
+      await runAgentFilesSync(cloud, 'u');
+      const kept = (await listTrash()).find((e) => e.ref === 'tester')!;
+      await restoreAgent('u', kept);
+      await runAgentFilesSync(cloud, 'u');
+      expect(live(cloud, 'tester')).toContain('config.toml');
+      process.env.TANGU_HOME = homeA;
+      await runAgentFilesSync(cloud, 'u');
+      expect(await listed('tester')).toBe(false);
+      expect(live(cloud, 'tester')).toContain('config.toml'); // A 不拉,也不把云端那份删掉
+    } finally { process.env.TANGU_HOME = homeA; rmSync(homeB, { recursive: true, force: true }); }
+  });
+
+  it('deleting before the first sync finished (no shadow yet) still records it', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    const config = readFileSync(join(tDir('tester'), 'config.toml'), 'utf8');
+    await cloud.putFile('u', 'tester', 'config.toml', { content: config, isBinary: false, size: config.length, mtimeMs: Date.now(), baseSeq: 0 }); // 上传了一半
+    await deleteAgent('tester');
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(tDir('tester'))).toBe(false);
+    expect(live(cloud, 'tester')).toEqual([]);
+  });
+
+  it('legacy rows without seq are deleted even when their mtime is ahead of this clock', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    await deleteAgent('tester');
+    for (const [k, r] of cloud._rows) if (k.startsWith('tester\0')) cloud._rows.set(k, { ...r, seq: undefined, hash: undefined, mtimeMs: future() });
+    await runAgentFilesSync(cloud, 'u');
+    expect(live(cloud, 'tester')).toEqual([]);
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(tDir('tester'))).toBe(false);
+  });
+
+  it('a failed cloud delete keeps the record and still does not pull the agent back', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    await runAgentFilesSync(cloud, 'u');
+    await deleteAgent('tester');
+    const real = cloud.deleteFile;
+    cloud.deleteFile = async () => { throw new Error('offline'); };
+    const r = await runAgentFilesSync(cloud, 'u');
+    expect(r.ok).toBe(false);
+    expect(existsSync(tDir('tester'))).toBe(false);
+    expect(existsSync(join(agentsDir(), '.cloudsync-deleted', 'tester'))).toBe(true);
+    cloud.deleteFile = real;
+    await runAgentFilesSync(cloud, 'u');
+    expect(existsSync(tDir('tester'))).toBe(false);
+    expect(live(cloud, 'tester')).toEqual([]);
+  });
+});
+
+describe('agentFileSync — widget records', () => {
+  const place: WidgetPlace = { agentSlug: 'tester' };
+  const dataOf = (id: string) => join(tDir('tester'), 'WidgetData', id, 'data.db');
+  const rowsOf = (id: string) => (JSON.parse(readFileSync(dataOf(id), 'utf8')).rows as Array<{ cells: { note?: string } }>).map((r) => r.cells.note).sort();
+  const conflictCopies = (id: string) => readdirSync(join(tDir('tester'), 'WidgetData', id)).filter((f) => f.includes('conflict'));
+  const sync = async (cloud: any) => { const r = await runAgentFilesSync(cloud, 'u', { onlySlug: 'tester' }); expect(r).toMatchObject({ ok: true }); return r; };
+  const ledger = async () => (await createWidget(place, { name: 'ledger', entry: 'widget.html', content: '<p>ledger</p>' })).widget.manifest.id;
+  /** 两台设备共用一个云:homeB 是第二台,定义和记录都从云端拉下来。 */
+  async function twoDevices(cloud: any, id: string, run: (on: (h: string) => void, homeA: string, homeB: string) => Promise<void>) {
+    const homeA = home, homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
+    const on = (h: string) => { process.env.TANGU_HOME = h; };
+    try {
+      await sync(cloud);
+      on(homeB);
+      await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'be helpful', cloudSync: true });
+      setAgentSyncPermission('tester', agentSyncScope(cloud, 'u')!, true, true);
+      await sync(cloud);
+      expect(existsSync(dataOf(id))).toBe(true);
+      await run(on, homeA, homeB);
+    } finally { on(homeA); rmSync(homeB, { recursive: true, force: true }); }
+  }
+  async function cloudWithLedger() {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'be helpful', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    cloud._paths = ['human', 'human-folder', 'agent-calendar', 'widget-data'];
+    const id = await ledger();
+    await setRecord(place, id, { note: 'base' });
+    return { cloud, id };
+  }
+
+  it('keeps both rows when two devices record offline, with no conflict copy', async () => {
+    const { cloud, id } = await cloudWithLedger();
+    await twoDevices(cloud, id, async (on, homeA, homeB) => {
+      on(homeA); await setRecord(place, id, { note: 'from A' });
+      on(homeB); await setRecord(place, id, { note: 'from B' });
+      for (const h of [homeA, homeB, homeA, homeB]) { on(h); await sync(cloud); }
+      for (const h of [homeA, homeB]) { on(h); expect(rowsOf(id)).toEqual(['base', 'from A', 'from B']); expect(conflictCopies(id)).toEqual([]); }
+      expect(cloud._rows.get(`tester\0WidgetData/${id}/data.db`)).toMatchObject({ isBinary: false });
+    });
+  });
+
+  it('lets a row deleted on one device stay deleted while the other device records', async () => {
+    const { cloud, id } = await cloudWithLedger();
+    const row = await setRecord(place, id, { note: 'typo' });
+    await twoDevices(cloud, id, async (on, homeA, homeB) => {
+      on(homeA); expect(await deleteRecord(place, id, row.id)).toBe(true);
+      on(homeB); await setRecord(place, id, { note: 'from B' });
+      for (const h of [homeA, homeB, homeA, homeB]) { on(h); await sync(cloud); }
+      for (const h of [homeA, homeB]) { on(h); expect(rowsOf(id)).toEqual(['base', 'from B']); }
+    });
+  });
+
+  it('keeps the local row in a conflict copy when both devices change the same row', async () => {
+    const { cloud, id } = await cloudWithLedger();
+    const row = await setRecord(place, id, { note: 'shared' });
+    await twoDevices(cloud, id, async (on, homeA, homeB) => {
+      on(homeA); await setRecord(place, id, { note: 'A says' }, row.id); await sync(cloud);
+      on(homeB); await setRecord(place, id, { note: 'B says' }, row.id); await sync(cloud);
+      expect(rowsOf(id)).toEqual(['A says', 'base']);
+      const [copy] = conflictCopies(id);
+      expect(readFileSync(join(tDir('tester'), 'WidgetData', id, copy), 'utf8')).toContain('B says');
+    });
+  });
+
+  it('never puts records on a server that does not declare widget-data, and keeps them locally', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'be helpful', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    cloud._paths = ['human', 'human-folder', 'agent-calendar'];
+    const id = await ledger();
+    await setRecord(place, id, { note: 'stays here' });
+    const r = await sync(cloud);
+    expect(r.error).toBeUndefined();
+    expect([...cloud._puts.keys()].filter((k) => k.includes('WidgetData'))).toEqual([]);
+    expect([...cloud._puts.keys()]).toContain('tester/Library/Widgets/ledger/manifest.json'); // 定义照常走 Library
+    expect(rowsOf(id)).toEqual(['stays here']);
+  });
+
+  it('merges by rows on first contact when the server starts declaring widget-data after both devices recorded', async () => {
+    const { cloud, id } = await cloudWithLedger();
+    await twoDevices(cloud, id, async (on, homeA, homeB) => {
+      cloud._paths = ['human', 'human-folder', 'agent-calendar'];
+      for (const h of [homeA, homeB]) { on(h); rmSync(join(tDir('tester'), `.cloudsync-${agentSyncScope(cloud, 'u')}.json`), { force: true }); }
+      cloud._rows.delete(`tester\0WidgetData/${id}/data.db`);
+      on(homeA); await setRecord(place, id, { note: 'from A', place: 'Tokyo' }); // 两边各多一列、类型相同:日历那条「按类型对列」会把 mood 的值记到 place 上
+      on(homeB); await setRecord(place, id, { note: 'from B', mood: 'ok' });
+      cloud._paths = ['human', 'human-folder', 'agent-calendar', 'widget-data'];
+      for (const h of [homeA, homeB, homeA, homeB]) { on(h); await sync(cloud); }
+      const db = JSON.parse(readFileSync(dataOf(id), 'utf8'));
+      expect(db.rows.map((r: any) => r.cells).sort((a: any, b: any) => String(a.note).localeCompare(String(b.note)))).toEqual([{ note: 'base' }, { note: 'from A', place: 'Tokyo' }, { note: 'from B', mood: 'ok' }]);
+    });
+  });
+
+  it('syncs records of user and project widgets through the human slot, by rows', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'be helpful', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    cloud._paths = ['human', 'human-folder', 'agent-calendar', 'widget-data'];
+    setAgentSyncDefault(agentSyncScope(cloud, 'u')!, true);
+    const { widget } = await createWidget(place, { name: 'shared', scope: 'user', entry: 'widget.html', content: '<p>x</p>' });
+    const id = widget.manifest.id, rel = `WidgetData/${id}/data.db`;
+    await setRecord(place, id, { note: 'base' });
+    await sync(cloud);
+    expect(cloud._rows.get(`__human__\0${rel}`)).toMatchObject({ isBinary: false });
+    const homeA = home, homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
+    const on = (h: string) => { process.env.TANGU_HOME = h; };
+    const rows = () => (JSON.parse(readFileSync(join(humanDir(), rel), 'utf8')).rows as any[]).map((r) => r.cells.note).sort();
+    try {
+      on(homeB);
+      await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'be helpful', cloudSync: true });
+      setAgentSyncPermission('tester', agentSyncScope(cloud, 'u')!, true, true);
+      setAgentSyncDefault(agentSyncScope(cloud, 'u')!, true);
+      await sync(cloud);
+      expect(rows()).toEqual(['base']);
+      const addOffline = (note: string) => { const db = JSON.parse(readFileSync(join(humanDir(), rel), 'utf8')); db.rows.push({ id: `r_${note}`, cells: { note } }); writeFileSync(join(humanDir(), rel), JSON.stringify(db)); };
+      addOffline('from B');
+      on(homeA); addOffline('from A');
+      for (const h of [homeA, homeB, homeA, homeB]) { on(h); await sync(cloud); }
+      for (const h of [homeA, homeB]) { on(h); expect(rows()).toEqual(['base', 'from A', 'from B']); }
+    } finally { on(homeA); rmSync(homeB, { recursive: true, force: true }); }
+  });
+
+  it('a restore on one device beats a stale purge on another that never saw it', async () => {
+    const { cloud, id } = await cloudWithLedger();
+    await twoDevices(cloud, id, async (on, homeA, homeB) => {
+      on(homeA); await softDeleteWidget(place, id); await sync(cloud);
+      on(homeB); await sync(cloud);
+      expect(findWidgetByName(place, 'ledger')?.manifest.deletedAt).toBeTruthy();
+      on(homeA); await restoreWidget(place, id); await sync(cloud); // 这台在第 29 天恢复
+      on(homeB); expect(await purgeExpiredWidgets(Date.now() + 31 * 24 * 3600_000)).toBe(1); // 那台离线,第 31 天清掉了
+      expect(findWidgetByName(place, 'ledger')).toBeNull();
+      await sync(cloud);
+      for (const h of [homeA, homeB]) {
+        on(h); await sync(cloud);
+        const w = findWidgetByName(place, 'ledger')!;
+        expect(w.manifest.deletedAt).toBeUndefined();
+        expect(readFileSync(join(w.dir, 'widget.html'), 'utf8')).toContain('<p>ledger</p>');
+        expect(readRecords(w).rows.map((r) => r.cells.note)).toEqual(['base']);
+      }
+    });
   });
 });

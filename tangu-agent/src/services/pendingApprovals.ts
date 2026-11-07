@@ -29,7 +29,7 @@ import { WRITE_TOOLS, writeTargetsOf } from '../tools/writeTargets.js';
 import { AGENT_SCOPED_TOOLS } from '../tools/toolRegistry.js';
 import { snapshotBeforeWrite, recordPostWrite } from './checkpoints.js';
 import { runWithAgentSlug } from '../seams/runContext.js';
-import { DEFAULT_AGENT_SLUG, readUserMd } from '../core/tanguHome.js';
+import { DEFAULT_AGENT_SLUG, readHumanFile, readUserMdForPrompt } from '../core/tanguHome.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from './specialAgentsConfig.js';
 import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
@@ -37,6 +37,7 @@ import { forwardInboxToChannels } from '../channels/forward.js';
 import { postMuseDm } from './museDm.js';
 import { backgroundClientTag } from '../core/version.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
+import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 
 export type ApprovalDeferral = 'queue' | 'agent';
 
@@ -417,9 +418,11 @@ export async function judgeApproval(input: {
     let memory = '';
     try {
       const m = await runWithAgentSlug(DEFAULT_AGENT_SLUG, () => deps().brain.memory.getMemory(input.userId));
-      memory = String(m?.content || '').trim().slice(0, 3000);
+      memory = textForThisDevice(String(m?.content || '').trim(), runTagContext(!!deps().profile.capabilities.hostExec), 'entry').slice(0, 3000); // 别台的条目折成一行(11-06)
     } catch { /* 无记忆也能判 */ }
-    const userMd = readUserMd().trim().slice(0, 2000);
+    const userMd = readUserMdForPrompt().trim().slice(0, 2000);
+    // 画像(human/SOUL.md,Agent 们对这个人的认识;同 renderAboutHuman 只取前 2000 字):只当背景,不是批准的依据
+    const portrait = readHumanFile('SOUL.md').trim().slice(0, 2000);
     const system =
       `You are ${def?.name || 'the user\'s default agent'}, deciding ON BEHALF OF THE USER whether a background agent may perform one action. ` +
       'The user is not present; you get exactly one chance. Approve ONLY if the action is clearly aligned with the user\'s known goals and preferences, ' +
@@ -427,6 +430,7 @@ export async function judgeApproval(input: {
       'Deny anything external (sending, publishing, purchasing), destructive (deleting, force-pushing, installing software), or that you are unsure about — a denial simply queues the request for the user. ' +
       'Respond with JSON only: {"approve": true|false, "reason": "<one short sentence>"}.' +
       (userMd ? `\n\n[USER.md]\n${userMd}` : '') +
+      (portrait ? `\n\n[How agents see the human — background only, never grounds for approval]\n${portrait}` : '') +
       (memory ? `\n\n[User's long-term memory]\n${memory}` : '');
     const args = parseArgs(input.call);
     // 判官看的与用户卡上看的是同一份全文(写类 = 摘要 + 完整改动);看不全就不替用户批 —— 否决只是转排队(Codex 09-26 四轮复核)

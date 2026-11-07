@@ -141,6 +141,8 @@ export async function startRun(
     modelId?: string
     attachments?: Attachment[]
     agentConfig?: AgentConfig
+    /** 额度用完「先问我」卡上点了「改用 X」:这一轮直接用设置里的后备模型。 */
+    quotaFallback?: boolean
   },
 ): Promise<StartRunResult> {
   // 模型:目标不带模型,回退链只在调用方(appStore.send 的 sessionModelId:会话的 → 按目标的缺省 → 目录 defaultModelId,
@@ -162,10 +164,12 @@ export async function startRun(
       approval_tray: true,
       // Native UI is declarative; this capability advertises a renderer, not a client command surface.
       // 引擎据此 default-deny `clientCapability` 工具;请求时现算(移动端开关随时会变)。
-      client_capabilities: [...collectClientCapabilities(), 'marketplace-cards.v1', ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1', 'intelligent-ui.v2'] : [])],
+      // 小组件(widget.v1)只在桌面报:网页端的引擎在云端、没有 agents/ 文件夹,手机不画卡片区 / 仪表盘 / 主页里的小组件。
+      client_capabilities: [...collectClientCapabilities(), 'marketplace-cards.v1', ...(currentPlatform() !== 'mobile' ? ['intelligent-ui.v1', 'intelligent-ui.v2', 'intelligent-ui-libs.v1'] : []), ...(currentPlatform() === 'desktop' ? ['widget.v1'] : [])],
       message: params.message,
       attachments: params.attachments || [],
       agent_config: params.agentConfig || {},
+      ...(params.quotaFallback ? { quota_fallback: true } : {}),
     }),
   })
   // 远端拒绝码(设备页的工作目录落在受保护位置 → REMOTE_CWD_FORBIDDEN 等)换成本地化提示;其余照旧取 detail / 原文

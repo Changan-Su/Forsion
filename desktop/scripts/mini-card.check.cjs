@@ -60,7 +60,7 @@ async function main() {
         emptyBottom: document.querySelector('.t2-empty')?.getBoundingClientRect().bottom, composerTop: document.querySelector('.composer-anchor')?.getBoundingClientRect().top }
     })
     // 10-17 方案 A:顶栏浮成两颗胶囊(左 Space ▾ │ 会话 ▾,右 新会话 · 主面板 · 关闭),视图不再自带一条栏,对话从胶囊底下滚过
-    check('floating capsule header: two caps, new/main/close, session picker inside', geo.caps === 2 && geo.actions === 3 && geo.ownBar === 0 && geo.picker === 'mini-latest' && geo.old === 0, JSON.stringify(geo))
+    check('floating capsule header: two caps, search/new/main/close, session picker inside', geo.caps === 2 && geo.actions === 4 && geo.ownBar === 0 && geo.picker === 'mini-latest' && geo.old === 0, JSON.stringify(geo))
     check('chat scrolls under the capsules (stream starts at the card top)', geo.streamTop === 0 && geo.height < 50)
     check('no overflow or composer overlap', geo.overflow === 0 && geo.emptyBottom <= geo.composerTop)
     await mini.screenshot({ path: path.join(shots, 'tangu-light.png') })
@@ -88,6 +88,21 @@ async function main() {
     check('dedicated Amadeus picker restores vault', await mini.locator('.mini-amadeus .amx-pane').count() === 1)
     check('no full-workspace Amadeus chrome', await mini.locator('.mini-amadeus .amx-toolbar,.mini-amadeus .amx-title-actions,.mini-amadeus .amx-props').count() === 0)
     await mini.screenshot({ path: path.join(shots, 'amadeus-light.png') })
+    // 11-03:Mini 窗的文件搜索 = 主窗那份快速查找。胶囊上的搜索钮与 ⌘P 都能叫出来,面板不溢出卡片,选中的笔记就地在 Mini 里开。
+    await mini.getByRole('button', { name: '搜索文件', exact: true }).click()
+    await mini.locator('.amx-qf-input').waitFor()
+    await mini.keyboard.type('Mini')
+    await mini.locator('.amx-qf-row', { hasText: 'Mini note' }).first().waitFor()
+    const qf = await mini.evaluate(() => { const r = document.querySelector('.amx-qf').getBoundingClientRect(); return { left: r.left, right: r.right, vw: innerWidth, top: r.top } })
+    check('Mini search: capsule button opens quick find inside the card', qf.left >= 0 && qf.right <= qf.vw && qf.top >= 40, JSON.stringify(qf))
+    await mini.screenshot({ path: path.join(shots, 'amadeus-search.png') })
+    await mini.keyboard.press('Enter')
+    await mini.waitForTimeout(800)
+    check('Mini search: picking a note opens it in Mini, panel closes', await mini.locator('.amx-qf').count() === 0 && await mini.locator('.mini-amadeus .amx-pane').count() === 1)
+    await mini.keyboard.press(process.platform === 'darwin' ? 'Meta+P' : 'Control+P')
+    check('Mini search: Mod+P opens it too', await mini.locator('.amx-qf-input').isVisible().catch(() => false))
+    await mini.keyboard.press('Escape')
+    await mini.waitForTimeout(200)
     await mini.getByRole('button', { name: '在主面板显示', exact: true }).click()
     await win.waitForFunction(() => [...document.querySelectorAll('.amx-pane')].some((el) => el.textContent.includes('A compact panel')))
     check('main panel receives same note', true)
@@ -259,6 +274,16 @@ async function main() {
     // Compare to the actual chosen content size. Mixed-DPI Chromium pointer-up coordinates
     // can round the last gesture; exact resize deltas are checked above, independently.
     check('reopened card keeps the size the user chose', reopened.width === kept.width && reopened.height === kept.height && kept.width > 260 && kept.height > 160, JSON.stringify({ kept, reopened }))
+    const reopenCycles = []
+    for (let cycle = 0; cycle < 5; cycle++) {
+      await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
+      for (let i = 0; i < 100 && app.windows().some(w => w.url().includes('window=mini')); i++) await pause(50)
+      await win.evaluate(() => window.tangu.openMini({ spaceId: 'calendar' }))
+      for (let i = 0; i < 200; i++) { mini = app.windows().find(w => w.url().includes('window=mini')); if (mini) break; await pause(50) }
+      await mini.waitForSelector('.mini-todo .amx-todo', { timeout: 30000 })
+      reopenCycles.push(await bounds())
+    }
+    check('five close/open cycles never accumulate fractional-DPI size drift', reopenCycles.every(b => b.width === kept.width && b.height === kept.height), JSON.stringify({ kept, reopenCycles }))
     await mini.screenshot({ path: path.join(shots, 'todo-reopened.png') })
     await mini.getByRole('button', { name: '关闭 Mini Panel', exact: true }).click()
     check('no renderer errors', errors.length === 0, JSON.stringify(errors))

@@ -18,11 +18,12 @@
 //       锁定 / 只读 → 按钮 aria-disabled、点了给说明、零写入;源码模式 → 不接、提示;
 //       一篇 v4 笔记都没开 → 按钮不出现(用户 09-29 拍板),实例挂上 / 卸下随之出现 / 消失;
 //       F8(Codex 复核 P1)插入后在画布里改了形状颜色(只在 frontmatter、文档不变)→ 回执撤销拒撤,颜色与回答都在。
-//   G = 对标 ChatGPT Space(2026-10-01):笔记里的 ```forsion-sketch 交互块按对话 sketch 卡同一沙箱渲染(只 allow-scripts、
+//   G = 对标 ChatGPT Space(2026-10-01):笔记里的 ```forsion-sketch 交互块按对话 sketch 卡同一沙箱渲染(只 allow-scripts allow-forms、
 //       代码块工具条收掉、打开不写盘);对话 sketch 卡「插入笔记」→ 围栏落盘 + 笔记里出卡;整段对话「整理成笔记」→
 //       complete 收到对话记录 + 指令,新建以模型一级标题命名的笔记(标题剥出正文)、重名加 -2、没有 complete 时入口不出现。
 //   H = 划线条(2026-10-13):工具栏 = 本视图的工具 + 动作区(问 Tangu、翻译、⋯ 里的插件动作);翻译进同一张预览卡、
-//       目标语言按界面语言定且卡头能换、卡上写明谁译的;排法设置(工具在前 / 动作在前);插件动作的 scope / when / output。
+//       目标语言按界面语言定且卡头能换、卡上写明谁译的;排法设置(工具在前 / 动作在前);插件动作的 scope / when / output;
+//       H4 选两行时工具栏按选区各行的并集居中(走查续六 6.8;夹在编辑器面板内由 lcl menuAnchor.test 的 boundLeft/Right 钉)。
 // 宿主接缝用台架假探针顶替(tanguSeam.setTanguProbe;与生产同一模块实例)。探针的 complete 是假的(流式吐 __aiReply),
 // 真模型那半在 tangu-agent 的 live 台架 `--only inline`。
 // 用法:npm run check:editorai(由 e2e-editor 自起/复用 Vite;worktree 里设 HARNESS_URL)。
@@ -545,12 +546,13 @@ async function groupC(browser) {
     const items = await pickMore(page, 'plugin:ai-harness:shout')
     const p = await waitPhase(page, 'done')
     const w0 = await page.evaluate(() => window.__upage.writes.length)
+    const boldPreview = await page.locator('[data-testid="inline-ai-preview"] strong').textContent()
     const req = await page.evaluate(() => window.__aiReqs.at(-1))
     if (await page.$('[data-testid="inline-ai-panel"] [data-act="replace"]')) await page.click('[data-testid="inline-ai-panel"] [data-act="replace"]')
     await page.waitForTimeout(1500)
     const disk = await page.evaluate(() => window.__upage.vault.get('Unified.md'))
     check('C8a 插件项出现在 ⋯、ctx.tangu.complete 已注入并走宿主探针(action=custom)', items.includes('plugin:ai-harness:shout') && (await page.evaluate(() => window.__plugComplete)) === 'function' && req?.action === 'custom' && req?.instruction === 'shout it', `${items.join(',')} ${JSON.stringify(req)}`)
-    check('C8b 插件结果只进预览,确认前零写入;替换后落盘', p?.preview === '**写得不太好**Better text.' && w0 === 0 && disk === '# 周报\n\n完成了登录页改版，**写得不太好**Better text.。\n\n第二段保持不动。\n', JSON.stringify({ p, w0, disk }))
+    check('C8b 插件结果渲染 Markdown 后只进预览,确认前零写入;替换后落盘仍为源码', p?.preview === '写得不太好Better text.' && boldPreview === '写得不太好' && w0 === 0 && disk === '# 周报\n\n完成了登录页改版，**写得不太好**Better text.。\n\n第二段保持不动。\n', JSON.stringify({ p, w0, disk }))
     await page.close()
   }
   // C10 预览停着时,焦点在别处的输入框(侧栏聊天 / 搜索 / 属性框)里按回车 / Esc:归那个输入框,面板不接管、零写入
@@ -1048,7 +1050,7 @@ async function groupF(browser) {
 async function groupG(browser) {
   const SK = '<b id="sk">交互</b><script>document.getElementById("sk").textContent = "已运行"</script>'
   const md = '# 标题\n\n第一段。\n\n```forsion-sketch\n' + SK + '\n```\n'
-  // G1 笔记里的交互块:嵌入层渲成 sketch 卡(沙箱只 allow-scripts)、源码与代码块工具条都不露、打开零写入
+  // G1 笔记里的交互块:嵌入层渲成 sketch 卡(沙箱只 allow-scripts allow-forms)、源码与代码块工具条都不露、打开零写入
   {
     const page = await openF(browser, md)
     await page.waitForSelector('.unified-body .unified-embed .sketch-frame', { timeout: 8000 }).catch(() => {})
@@ -1058,8 +1060,8 @@ async function groupG(browser) {
       const tools = host?.querySelector(':scope > .amx-code-tools')
       return { sandbox: f?.getAttribute('sandbox'), tools: tools ? getComputedStyle(tools).display : 'absent', writes: window.__upage.writes?.length ?? 0 }
     })
-    check('G1 ```forsion-sketch → sketch 卡(sandbox=allow-scripts),代码块工具条收掉,打开零写入',
-      st.sandbox === 'allow-scripts' && (st.tools === 'none' || st.tools === 'absent') && st.writes === 0 && (await vault(page)) === md, JSON.stringify(st))
+    check('G1 ```forsion-sketch → sketch 卡(sandbox=allow-scripts allow-forms),代码块工具条收掉,打开零写入',
+      st.sandbox === 'allow-scripts allow-forms' && (st.tools === 'none' || st.tools === 'absent') && st.writes === 0 && (await vault(page)) === md, JSON.stringify(st))
     await page.close()
   }
   // G2 对话 sketch 卡「插入笔记」→ 围栏原样落盘(HTML 里的 \\( 不被公式归一改写),笔记里随即出卡
@@ -1220,6 +1222,38 @@ async function groupH(browser) {
     await page.waitForTimeout(400)
     const st = await page.evaluate(() => ({ ran: window.__ran.slice(), panel: !!document.querySelector('[data-testid="inline-ai-panel"]'), writes: window.__upage.writes.length, target: !!document.querySelector('.am-ai-target') }))
     check("H3d output:'none':run 被调用、不出卡、不标目标、零写入", st.ran.length === 1 && st.ran[0] === 'stays in English|note|Unified.md' && !st.panel && !st.target && st.writes === 0, `${JSON.stringify(st)} tb=${tb5.join(',')} more=${more5.join(',')}`)
+    await page.close()
+  }
+  // H4 走查续六 6.8:选一整段(第一行满、末行只有几个字)→ 工具栏按选区各行矩形的并集居中。
+  //   旧算法取首尾两个光标的中点,末行很短时中点落在左边、菜单伸到文件树上(负对照:改回 (a.left+b.left)/2 即红)。
+  {
+    const long = '这一段要写得足够长才会换行。'.repeat(12) + '尾巴'
+    const page = await open(browser, `# 周报\n\n${long}\n`)
+    await installProbe(page, { complete: true })
+    const pts = await page.evaluate(({ PM, text }) => {
+      const w = document.createTreeWalker(document.querySelector(PM), NodeFilter.SHOW_TEXT)
+      let n
+      while ((n = w.nextNode())) {
+        const i = n.data.indexOf(text)
+        if (i < 0) continue
+        const at = (k) => { const r = document.createRange(); r.setStart(n, k); r.setEnd(n, k + 1); return r.getBoundingClientRect() }
+        const a = at(i), b = at(i + text.length - 1)
+        return { x0: a.left + 1, y0: a.top + a.height / 2, x1: b.right - 1, y1: b.top + b.height / 2 }
+      }
+      return null
+    }, { PM, text: long })
+    await page.mouse.move(pts.x0, pts.y0)
+    await page.mouse.down()
+    await page.mouse.move(pts.x1, pts.y1, { steps: 8 })
+    await page.mouse.up()
+    await page.waitForTimeout(500)
+    const g = await page.evaluate(() => {
+      const rs = [...window.getSelection().getRangeAt(0).getClientRects()].filter((x) => x.width)
+      const l = Math.min(...rs.map((x) => x.left)), r = Math.max(...rs.map((x) => x.right))
+      const tb = document.querySelector('[data-testid="inline-toolbar"]')?.getBoundingClientRect()
+      return { lines: new Set(rs.map((x) => Math.round(x.top))).size, union: Math.round((l + r) / 2), tb: tb ? Math.round(tb.left + tb.width / 2) : null }
+    })
+    check('H4 选两行以上:划线菜单按各行矩形的并集居中(不按首尾两点的中点)', g.lines >= 2 && g.tb !== null && Math.abs(g.tb - g.union) <= 2, JSON.stringify(g))
     await page.close()
   }
 }

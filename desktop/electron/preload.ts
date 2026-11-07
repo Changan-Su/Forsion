@@ -12,7 +12,7 @@ import type { SecretStorageStatus } from '../shared/secretStorage' // P1-K5
 import type { RemoteSessionsApi, RemoteSessionsView } from '../shared/remoteSessions' // P1-K4
 import type { RemoteSafetyApi, RemoteSafetyState } from '../shared/remoteSafety' // P1-K2
 import { APPROVAL_OPEN_CHANNEL, type ApprovalOpenPayload } from '../shared/approvalOpen' // P1-K3
-import { UI_LOCALE_CHANNEL } from '../shared/uiSync' // P1-KF
+import { UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync' // P1-KF
 import { PRODUCT } from './product'
 import { cloudPresent } from './cloudPresent'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
@@ -39,6 +39,17 @@ ipcRenderer.on('appearance:changed', (_event, value: StartupAppearance) => {
 const api = {
   /** 宿主平台('darwin' | 'win32' | 'linux');渲染层据此调标题栏/交通灯留白等。 */
   platform: process.platform as string,
+  /** Tangu 界面半身(界面热更新 4b;electron/coreTangu.ts):这次用哪份界面(null = 用编进宿主的那份),以及报告界面坏了。 */
+  coreTangu: {
+    load: (): Promise<{ source: 'overlay' | 'bundled'; version: string; code: string } | null> => ipcRenderer.invoke('coreTangu:load'),
+    /** 这个窗口拿到的那份求值 / 激活失败:热更新版整版记坏,自带的改走编进宿主的那份;主进程随后重载这个窗口
+     *  (渲染层自己 reload 会被 hardenNav 拦下)。哪一份由主进程按自己的记录认,不传版本号。 */
+    failed: (reason: string): Promise<void> => ipcRenderer.invoke('coreTangu:failed', reason),
+    /** 开头一分钟里被 ErrorBoundary 接住一次(栈里有这份包):主进程跨重载累计,够数了同 failed。 */
+    crashed: (reason: string): Promise<void> => ipcRenderer.invoke('coreTangu:crashed', reason),
+  },
+  /** 整窗重载,由主进程发(渲染层自己 location.reload() 在打包版的 file: 页面上会被 hardenNav 拦下)。渲染层用 reloadWindow.ts。 */
+  reloadWindow: (): Promise<void> => ipcRenderer.invoke('app:reloadWindow'),
   desktopPermissionsStatus: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:status'),
   desktopPermissionRequest: (id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:request', id, options),
   desktopPermissionsVerify: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:verify'),
@@ -64,6 +75,8 @@ const api = {
     },
   } satisfies ComputerHistoryApi,
   getConfig: (): Promise<any> => ipcRenderer.invoke('config:get'),
+  configRecoveryNotice: (): Promise<{ at: number; version: number } | null> => ipcRenderer.invoke('config:recoveryNotice'),
+  clearConfigRecoveryNotice: (): Promise<void> => ipcRenderer.invoke('config:clearRecoveryNotice'),
   documentTasks: {
     claim: (key, signature) => ipcRenderer.invoke('documentTasks:claim', key, signature),
     complete: (key, token, sessionId) => ipcRenderer.invoke('documentTasks:complete', key, token, sessionId),
@@ -282,6 +295,8 @@ const api = {
   codePreviewServePath: (filePath: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:servePath', filePath),
   /** 无本机路径的 HTML(云沙箱/对话内联):把文本挂到令牌根,同样拿到真实源。 */
   codePreviewServeHtml: (html: string): Promise<{ url: string }> => ipcRenderer.invoke('codePreview:serveHtml', html),
+  /** 网页卡片的缩略图:主进程离屏截一张 http(s) 页面(见 electron/pageThumb.ts);拍不到 → null。 */
+  pageThumb: (url: string, version?: string): Promise<{ dataUrl: string; title: string } | null> => ipcRenderer.invoke('pageThumb:capture', url, version),
   /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
   codeProjectsRoot: (): Promise<string> => ipcRenderer.invoke('codeProjects:root'),
   codeStudioWatch: (root: string | null) => ipcRenderer.invoke('codeStudio:watch', root),
@@ -337,11 +352,13 @@ const api = {
     ipcRenderer.invoke('fs:mkdir', parentDir, name),
   trashHostPath: (p: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('fs:trash', p),
   revealHostPath: (p: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('fs:reveal', p),
-  /** Forsion Clip 手动安装:把随包的扩展复制到用户找得到的位置(版本变了才覆盖)/ 替用户打开 Chrome 扩展页(mac;别处复制地址)。拖拽走 startHostDrag。 */
+  /** Forsion Clip 手动安装:把随包的扩展复制到用户找得到的位置(版本变了才覆盖)/ 替用户打开 Chrome / Edge 扩展页
+   *  (mac 直达;Windows 开新窗口 + 复制地址;别处复制地址)。拖拽走 startHostDrag。 */
   clipExtension: {
-    /** update=false:只补缺,不动已有副本(Chrome 正从那里加载);用户要(重新)装的那一下才传 true 换成随包版本。 */
+    /** update=false:只补缺,不动已有副本(浏览器正从那里加载);用户要(重新)装的那一下才传 true 换成随包版本。 */
     prepare: (update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }> => ipcRenderer.invoke('clipExt:prepare', update === true),
-    openChromeExtensions: (): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }> => ipcRenderer.invoke('clipExt:openChrome'),
+    browsers: (): Promise<Array<'chrome' | 'edge'>> => ipcRenderer.invoke('clipExt:browsers'),
+    openExtensionsPage: (browser: 'chrome' | 'edge'): Promise<{ ok: true } | { ok: false; copied: true; reason: 'launched' | 'not-found' | 'unsupported' }> => ipcRenderer.invoke('clipExt:openExtensions', browser),
   },
   /** 原生拖出:在元素 onDragStart 里 e.preventDefault() 后调用,主进程接管系统级拖拽。 */
   startHostDrag: (filePath: string): void => ipcRenderer.send('fs:startDrag', filePath),
@@ -357,15 +374,21 @@ const api = {
   // ── 直连 provider 管理(~/.tangu/providers.json;managed 模式保存后自动重启后端加载)──
   listProviders: (): Promise<any[]> => ipcRenderer.invoke('providers:list'),
   saveProvider: (provider: Record<string, any>): Promise<any[]> => ipcRenderer.invoke('providers:save', provider),
+  /** 本机 CC Switch / Claude Code / Codex 里能导入的连接(只有 key 末 4 位)。 */
+  scanLocalProviders: (force?: boolean): Promise<any[]> => ipcRenderer.invoke('providers:scanLocal', force),
+  importLocalProviders: (ids: string[]): Promise<any[]> => ipcRenderer.invoke('providers:importLocal', ids),
   deleteProvider: (providerId: string): Promise<any[]> => ipcRenderer.invoke('providers:delete', providerId),
   // ── MCP server 管理(~/.tangu/mcp.json;保存后托管后端重启重连)──
+  importMcpConfig: (cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, any> }) => ipcRenderer.invoke('mcp:import', cfg),
+  // 连接器目录(connectorCatalog.ts):只在桌面(有本机引擎)出现 —— 商店的「连接器」分类与设置页那一块按这组键门控
+  connectorsList: (refresh?: boolean): Promise<any> => ipcRenderer.invoke('connectors:list', refresh),
+  connectorsConnect: (id: string, taken?: string[]): Promise<{ name: string; added: boolean }> => ipcRenderer.invoke('connectors:connect', id, taken),
+  connectorsRemove: (name: string): Promise<void> => ipcRenderer.invoke('connectors:remove', name),
   readMcpConfig: (): Promise<{ mcpServers: Record<string, any> }> => ipcRenderer.invoke('mcp:read'),
-  writeMcpConfig: (cfg: { mcpServers: Record<string, any> }): Promise<{ mcpServers: Record<string, any> }> =>
+  writeMcpConfig: (cfg: { mcpServers: Record<string, any>; base?: Record<string, any> }): Promise<{ mcpServers: Record<string, any> }> =>
     ipcRenderer.invoke('mcp:write', cfg),
   // ── 跨生态 agent 资产发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu)──
   discoveryScan: (): Promise<any> => ipcRenderer.invoke('discovery:scan'),
-  discoveryImportSkills: (ids: string[]): Promise<{ imported: string[] }> =>
-    ipcRenderer.invoke('discovery:importSkills', ids),
   discoveryImportMcp: (names: string[]): Promise<{ imported: string[]; reserved?: string[] }> =>
     ipcRenderer.invoke('discovery:importMcp', names),
   // ── 拖入式主题(~/.tangu/themes/;主进程读盘成字符串,渲染端 <style> 注入)──
@@ -407,6 +430,8 @@ const api = {
   marketUpdateStatus: () => ipcRenderer.invoke('market:updateStatus'),
   marketSetAutoUpdate: (id: string, on: boolean) => ipcRenderer.invoke('market:setAutoUpdate', id, on),
   marketCheckUpdates: (): Promise<void> => ipcRenderer.invoke('market:checkUpdates'),
+  marketSetAutoUpdateAll: (on: boolean): Promise<import('../shared/marketPluginUpdates').MarketPluginUpdates> => ipcRenderer.invoke('market:setAutoUpdateAll', on),
+  marketRollback: (type: string, slug: string, version: string, market?: { id: string; name?: string }): Promise<import('../shared/marketPluginUpdates').PluginRollbackResult & { path: string; id?: string }> => ipcRenderer.invoke('market:rollback', type, slug, version, market),
   onMarketUpdateStatus: (cb: (state: import('../shared/marketPluginUpdates').MarketPluginUpdates) => void): (() => void) => {
     let off = false, received = false
     const listener = (_e: unknown, state: import('../shared/marketPluginUpdates').MarketPluginUpdates): void => { received = true; cb(state) }
@@ -427,7 +452,8 @@ const api = {
     ipcRenderer.invoke('market:uninstall', type, slug),
   // ── 后端插件卸载(仅 ~/.tangu/plugins 用户目录;设置清理走后端 DELETE,重启由前端触发)──
   pluginsUserInstalled: (): Promise<Array<{ id: string; slug: string }>> => ipcRenderer.invoke('plugins:userInstalled'),
-  pluginsUninstall: (id: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id),
+  pluginsUninstall: (id: string, movedSlug?: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('plugins:uninstall', id, movedSlug),
+  marketForget: (type: string, slug: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('market:forget', type, slug),
   // ── 用户自定义 Space(~/.tangu/spaces;数据化布局配方,market type='space' 同目录)──
   spacesList: (): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> => ipcRenderer.invoke('spaces:list'),
   spacesSave: (slug: string, json: string): Promise<{ ok: boolean }> => ipcRenderer.invoke('spaces:save', slug, json),
@@ -567,9 +593,11 @@ const api = {
   },
   // P1-KF:本窗**生效**界面语言(i18n.tsx 四级链的结论)→ 主进程文案(托盘 / 系统通知 / 对话框)。单向,主进程只认 zh/en。
   reportUiLocale: (locale: 'zh' | 'en'): void => ipcRenderer.send(UI_LOCALE_CHANNEL, locale),
+  /** 本机外观(主题色 / 背景色 / 明暗)→ 主进程,给已配对的 Forsion Clip 跟随。单向。 */
+  reportUiAppearance: (a: { skin: string; bg: string; mode: 'light' | 'dark' }): void => ipcRenderer.send(UI_APPEARANCE_CHANNEL, a),
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   /** Mini 卡片自绘缩放边:edge = n / s / e / w 的组合;start = 起手;null = 松手。位移由主进程读光标算。 */
-  miniResize: (edge: string | null, start?: boolean, cursor?: { x: number; y: number }): void => ipcRenderer.send('window:miniResize', edge, start === true, cursor),
+  miniResize: (edge: string | null, start?: boolean, cursor?: { x: number; y: number; radius?: number }): void => ipcRenderer.send('window:miniResize', edge, start === true, cursor),
   cursorScreenPoint: (): { screenX: number; screenY: number } => ipcRenderer.sendSync('window:cursorScreenPoint'),
   // 跨窗撕拽:实时坐标(节流 send)+ 最终落点路由(invoke)+ 目标窗接收订阅(on)。
   dragUpdate: (screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void =>
@@ -604,6 +632,11 @@ const api = {
     typeof channel === 'string' && cloudPresent().has(channel)
       ? ipcRenderer.invoke(channel, ...args)
       : Promise.reject(new Error(`not a Forsion Extend channel: ${String(channel)}`)),
+  /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程,主进程整形后经 CloudHost.telemetry 转给 Extend。
+   *  只进不出、没有读接口。键在不在 = Extend 有没有注册 telemetry:get(见下方 CLOUD_KEYS):没有 Extend 遥测就没人收,
+   *  渲染层也拿它做同步判断(引导第 7 步「帮助改进」在本机有没有)。 */
+  telemetryReport: (kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void =>
+    ipcRenderer.send('host-telemetry:report', kind, props),
 
   // ── 屏幕共享 ────────────────────────────────────────────────────────────────
   /** 可共享的屏幕/窗口(带 dataURL 缩略图)。选源 UI 由调用方自己画 —— 宿主不提供选择器。 */
@@ -677,9 +710,10 @@ const AGENT_KEYS = [
   'connectMeta', 'connectList', 'connectPublish', 'connectUnpublish',
   'connectListingApply', 'connectListingWithdraw', 'connectStore',
   'submitFeedback',
-  'listProviders', 'saveProvider', 'deleteProvider',
-  'readMcpConfig', 'writeMcpConfig',
-  'discoveryScan', 'discoveryImportSkills', 'discoveryImportMcp',
+  'listProviders', 'saveProvider', 'deleteProvider', 'scanLocalProviders', 'importLocalProviders',
+  'readMcpConfig', 'writeMcpConfig', 'importMcpConfig',
+  'connectorsList', 'connectorsConnect', 'connectorsRemove',
+  'discoveryScan', 'discoveryImportMcp',
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
@@ -697,7 +731,7 @@ const AGENT_KEYS = [
   'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketForget', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketSetAutoUpdateAll', 'marketRollback', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),
@@ -713,6 +747,8 @@ const CLOUD_KEYS: Record<string, string> = {
   connectListingApply: 'connect:listingApply', connectListingWithdraw: 'connect:listingWithdraw', connectStore: 'connect:store',
   // 设备名册(0.6 起):没有 Extend 就不列账号名下的其他设备;unitHostStatus / 局域网探针 / 已配对设备 / P2P 留宿主,局域网直连照常。
   unitsList: 'units:list', unitsUpdate: 'units:update', unitsRemove: 'units:remove', unitsOpenInBrowser: 'units:openInBrowser',
+  // 帮助改进(2.13.8 起):通道是宿主自己的 host-telemetry:report,但只在 Extend 接得住(注册了 telemetry:get)时才留
+  telemetryReport: 'telemetry:get',
 }
 for (const [k, channel] of Object.entries(CLOUD_KEYS)) if (!cloudPresent().has(channel)) delete (api as Record<string, unknown>)[k]
 if (!cloudPresent().size) delete (api as Record<string, unknown>).cloudInvoke
@@ -735,6 +771,7 @@ if (sandboxSelf) {
   (api as Record<string, unknown>).pluginSandbox = {
     exec: (op: string, args: Record<string, unknown>, origin: unknown) => ipcRenderer.invoke('pluginSandbox:exec', op, args, origin),
     state: () => ipcRenderer.invoke('pluginSandbox:state'),
+    lastShot: (sessionId: string) => ipcRenderer.invoke('pluginSandbox:lastShot', sessionId),
     show: () => ipcRenderer.invoke('pluginSandbox:show'),
     stop: () => ipcRenderer.invoke('pluginSandbox:stop'),
     reset: () => ipcRenderer.invoke('pluginSandbox:reset'),

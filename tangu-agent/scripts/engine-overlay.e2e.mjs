@@ -52,6 +52,10 @@ const hostFile = path.join(installer, 'desktop-host.json')
 mkdirSync(installer, { recursive: true })
 for (const name of ['dist', 'skills', 'agent-skills', 'package.json']) cpSync(path.join(root, name), path.join(installer, name), { recursive: true })
 if (hostText) writeFileSync(hostFile, hostText)
+// 界面半身(4c):CI 先跑了 desktop 的 build-tangu-ui.mjs,用真的那份;本机没打过就放一份形状对的占位(这里只验引擎那半怎么挑)
+const realUi = existsSync(path.join(root, 'ui', 'main.js'))
+if (realUi) cpSync(path.join(root, 'ui'), path.join(installer, 'ui'), { recursive: true })
+else { mkdirSync(path.join(installer, 'ui')); writeFileSync(path.join(installer, 'ui', 'main.js'), '"use strict";\nreturn { exports: {}, css: "" };\n//# sourceURL=forsion-core://tangu/main.js\n') }
 symlinkSync(path.join(root, 'node_modules'), depsLink, 'junction')
 const testKey = generateKeyPairSync('ed25519')
 writeFileSync(path.join(installer, 'dist', 'boot', 'signingKey.js'), `export const ENGINE_SIGNING_KEY = ${JSON.stringify(testKey.publicKey.export({ type: 'spki', format: 'pem' }))};\n`)
@@ -66,7 +70,7 @@ const check = (ok, what, detail = '') => {
 /** 签好名的包的暂存目录(= 解到用户目录后的样子)。 */
 function pack(version, minDesktop) {
   const out = path.join(tmp, `pack-${version}-${minDesktop}`)
-  execFileSync(process.execPath, [path.join(source, 'scripts', 'pack-engine.mjs'), '--root', installer, '--stage-only', '--version', version, '--min-desktop', minDesktop, '--out', out], { env: signingEnv, stdio: ['ignore', 'ignore', 'inherit'] })
+  execFileSync(process.execPath, [path.join(source, 'scripts', 'pack-engine.mjs'), '--root', installer, '--stage-only', '--version', version, '--min-desktop', minDesktop, '--for-desktop', desktop, '--out', out], { env: signingEnv, stdio: ['ignore', 'ignore', 'inherit'] })
   return path.join(out, 'package')
 }
 function install(stage, version) {
@@ -112,6 +116,13 @@ try {
   const packedManifest = JSON.parse(readFileSync(path.join(stage, 'package.json'), 'utf8'))
   check(existsSync(path.join(stage, 'dist', 'contracts', 'releaseVersion.mjs')), 'signed engine package includes the shared version contract')
   check(packedManifest.repository?.url === 'git+https://github.com/Changan-Su/Forsion.git', 'npm package identifies the repository required by trusted publishing')
+  // 一个包两半(界面热更新 4c):ui/main.js 原样带上、manifest.json 写明对着哪版桌面打的,两份都在签名表里、也在 npm 的 files 里
+  const uiManifest = JSON.parse(readFileSync(path.join(stage, 'manifest.json'), 'utf8'))
+  const signed = JSON.parse(readFileSync(path.join(stage, 'SIGNATURE'), 'utf8')).files
+  check(uiManifest.id === 'tangu' && uiManifest.main === 'ui/main.js' && uiManifest.forDesktop === desktop, `manifest.json: tangu / ui/main.js / forDesktop ${desktop}`, JSON.stringify(uiManifest))
+  check(readFileSync(path.join(stage, 'ui', 'main.js'), 'utf8') === readFileSync(path.join(installer, 'ui', 'main.js'), 'utf8') && 'ui/main.js' in signed && 'manifest.json' in signed,
+    `界面半身${realUi ? '' : '(占位)'}原样进包、被签名覆盖`)
+  check(['ui', 'manifest.json'].every((f) => packedManifest.files?.includes(f)), 'npm files 白名单带上 ui/ 与 manifest.json', JSON.stringify(packedManifest.files))
   // 干扰项:新版目录上层的野 node_modules。引擎的第一批 import 里就有 express,解析被它劫走的话直接起不来。
   mkdirSync(path.join(tmp, 'node_modules', 'express'), { recursive: true })
   writeFileSync(path.join(tmp, 'node_modules', 'express', 'package.json'), '{"name":"express","version":"0.0.0","main":"index.js"}')

@@ -15,6 +15,7 @@ import {
   ChevronRight, Search, Code2, Eye, Star, StarOff, Paperclip, FileDown, FileImage,
   Database, ExternalLink, FileText, Share2, Cloud, CloudOff, Pin, PenTool, Upload, LayoutDashboard,
   Undo2, Redo2, ChevronsDown, Frame, ListIndentDecrease, ListIndentIncrease, Copy, Monitor, FolderSync, FolderMinus,
+  ArrowLeft, Globe2, Link2, LogOut, Users,
 } from 'lucide-react'
 import { useApp } from './stores/appStore'
 import { useVisualTheme as useTheme } from './stores/themeStore'
@@ -33,6 +34,7 @@ import { PageStyleMenuItems, pageStyleAttrs, pageStyleEntries, setNotePageStyle,
 import { editorModeOf, useUiOverlay } from './amadeusOverlayStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { amadeus } from '@amadeus/api'
+import { LocalVaultButton } from './amadeusVaultMenu'
 import { UnifiedPage, type UnifiedHistory } from '@amadeus/unified/UnifiedPage'
 import { SEG_SLOT } from '@amadeus/unified/CanvasModeSeg'
 import { NoteFloatingToc } from '@amadeus/unified/NoteFloatingToc'
@@ -82,7 +84,10 @@ import { PresenceDots } from './components/PresenceDots'
 import { ShareCard } from './components/ShareCard'
 import { ShareStatus } from './components/ShareStatus'
 import { tipProps, tipT, fsTipLines, type TipLines } from './hoverTip'
-import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry, cloudPathFor } from './stores/entrySyncStore'
+import { useEntrySync, ensureEntrySyncSubscribed, isSyncedEntry, cloudPathFor, localPathFor } from './stores/entrySyncStore'
+import { foreignVaultOwner, refreshAfterLeave, useSharedVault } from './stores/sharedVaultStore'
+import { byExpiry, daysUntil } from './amadeus/lib/shareState'
+import type { AmadeusPageShare, AmadeusSharedItem } from './types'
 import { openCloudSyncDialog } from './components/CloudSyncDialog'
 import { track } from './achievements/store'
 import { act } from './activity/log'
@@ -105,7 +110,7 @@ registerMessages({
   'amxv.upload.retry': { zh: '重试', en: 'Retry' },
   'amxv.upload.remove': { zh: '移除', en: 'Remove' },
   'amxv.renameFailed': { zh: '重命名失败：{e}', en: 'Rename failed: {e}' },
-  'amxv.newBaseFailed': { zh: '新建 Base 失败：{e}', en: 'Could not create the base: {e}' },
+  'amxv.newBaseFailed': { zh: '新建多维表失败：{e}', en: 'Could not create the database: {e}' },
   'amxv.copyFailed': { zh: '复制失败：{e}', en: 'Copy failed: {e}' },
   'amxv.fileCreatorFailed': { zh: '「{label}」失败：{e}', en: '“{label}” failed: {e}' },
   'amxv.confirm.deleteNote': { zh: '删除笔记「{name}」？此操作不可撤销。', en: 'Delete the note “{name}”? This cannot be undone.' },
@@ -124,7 +129,7 @@ registerMessages({
   'amxv.trash.emptyHint': { zh: '回收站是空的。', en: 'The trash is empty.' },
 
   'amxv.missing.title': { zh: '当前库里没有这篇笔记', en: 'This note is not in the current vault' },
-  'amxv.missing.sub': { zh: '「{path}」在这一侧不存在 —— 它可能属于另一侧（本地/云端）、已改名或已删除。这里不会替你新建同名空文件。', en: '“{path}” does not exist on this side. It may belong to the other side (local/cloud), or it was renamed or deleted. No empty file is created in its place.' },
+  'amxv.missing.sub': { zh: '「{path}」不在当前库里 —— 它可能属于另一个智库或另一侧（本地/云端）、已改名或已删除。这里不会替你新建同名空文件。', en: '“{path}” is not in the current vault. It may belong to another vault or the other side (local/cloud), or it was renamed or deleted. No empty file is created in its place.' },
   'amxv.missing.close': { zh: '关闭标签页', en: 'Close tab' },
   'amxv.pluginFile.title': { zh: '这个文件归插件管理', en: 'This file belongs to a plugin' },
   'amxv.pluginFile.sub': { zh: '「{path}」是某个插件的专属格式，而那个插件没有安装或没有启用。当成笔记来编辑会改坏它的格式，所以这里不打开；启用对应的插件后再打开它。', en: '“{path}” is in a plugin’s own format, and that plugin is not installed or not enabled. Editing it as a note would break the format, so it is not opened here. Enable the plugin, then open the file again.' },
@@ -133,6 +138,23 @@ registerMessages({
   'amxv.sec.collections': { zh: '集合', en: 'Collections' },
   'amxv.sec.searchTip': { zh: '搜索：{q}', en: 'Search: {q}' },
   'amxv.sec.removeCollection': { zh: '移除集合', en: 'Remove collection' },
+  'amxv.sec.sharedByMe': { zh: '我共享的', en: 'Shared by me' },
+  'amxv.shared.people': { zh: '{n} 人', en: '{n} joined' },
+  'amxv.shared.waiting': { zh: '等人加入', en: 'Waiting to join' },
+  'amxv.shared.published': { zh: '已发布', en: 'Published' },
+  'amxv.shared.dueToday': { zh: '今天到期', en: 'Ends today' },
+  'amxv.shared.dueTomorrow': { zh: '明天到期', en: 'Ends tomorrow' },
+  'amxv.shared.dueInTwo': { zh: '后天到期', en: 'Ends in 2 days' },
+  'amxv.shared.otherVault': { zh: '这一页在另一个智库里，切过去再打开', en: 'This page is in another vault. Switch to it first.' },
+  'amxv.shared.open': { zh: '打开', en: 'Open' },
+  'amxv.shared.copyLink': { zh: '复制页面链接', en: 'Copy page link' },
+  'amxv.shared.linkCopied': { zh: '已复制页面链接', en: 'Page link copied' },
+  'amxv.shared.leave': { zh: '退出共享', en: 'Leave share' },
+  'amxv.shared.leaveConfirm': { zh: '退出「{title}」的共享？之后要对方重新邀请才能回来。', en: 'Leave "{title}"? You\'ll need a new invitation to come back.' },
+  'amxv.shared.left': { zh: '已退出共享', en: 'You left the share' },
+  'amxv.shared.leaveFailed': { zh: '退出失败，请重试', en: 'Could not leave. Try again.' },
+  'amxv.shared.backToMine': { zh: '回到我的智库', en: 'Back to my vault' },
+  'amxv.shared.vaultOf': { zh: '{name}的智库', en: "{name}'s vault" },
   'amxv.sec.sharedWithMe': { zh: '与我共享', en: 'Shared with me' },
   'amxv.sec.pinned': { zh: '置顶', en: 'Pinned' },
   'amxv.sec.cloudSync': { zh: '云同步', en: 'Cloud sync' },
@@ -173,7 +195,7 @@ registerMessages({
   'amxv.openVaultHint': { zh: '打开一个智库文件夹开始。', en: 'Open a vault folder to get started.' },
   'amxv.cloudVault': { zh: '云端智库', en: 'Cloud vault' },
   'amxv.cloudVaultTip': { zh: '云端智库（切换 / 成员 / 分享）', en: 'Cloud vault (switch / members / sharing)' },
-  'amxv.vaultNamed': { zh: '智库：{name}', en: 'Vault: {name}' },
+  'amxv.vaultNamed': { zh: '智库 · {name}', en: 'Vault · {name}' },
   'amxv.openVault': { zh: '打开智库', en: 'Open vault' },
   'amxv.folder.actions': { zh: '文件夹操作', en: 'Folder actions' },
   'amxv.folder.newNoteHere': { zh: '在此文件夹新建笔记', en: 'New note in this folder' },
@@ -424,6 +446,59 @@ export function Breadcrumb({ path, hideLoneLeaf }: { path?: string; hideLoneLeaf
 
 // ─────────────────────────────── 左:笔记库(原生 t2s 外壳) ───────────────────────────────
 
+/** 最近一次右键落在哪个元素上:右键不一定把焦点给到那一行(文件夹行是 div),菜单关掉时靠它把焦点还回去。 */
+let lastContextTarget: { el: Element | null; at: number } = { el: null, at: 0 }
+if (typeof window !== 'undefined') window.addEventListener('contextmenu', (e) => { lastContextTarget = { el: e.target instanceof Element ? e.target : null, at: Date.now() } }, true)
+
+/** 文件树右键菜单外壳(走查续六 6.9):`role="menu"`,打开时焦点进第一项,↑↓ / Home / End 走、回车执行(按钮原生),
+ *  Esc 关菜单并把焦点还给那一行 —— 只关菜单,不往下传(别连带清掉树里的选中);点菜单外面也关。
+ *  键盘焦点那一档(data-kbd)打开时就在;鼠标一动退回悬停淡底,焦点跟着鼠标走,方向键从鼠标所在那项接着走。 */
+function TreeMenu({ x, y, onClose, children }: { x: number; y: number; onClose: () => void; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    // 右键打开的:还给右键的那一行(焦点可能还在编辑器里);点「⋯」打开的:还给那颗按钮(它就是当前焦点)。
+    const ctx = Date.now() - lastContextTarget.at < 1000 ? lastContextTarget.el : null
+    const active = document.activeElement
+    const back = ctx ? ctx.closest<HTMLElement>('button, [tabindex]') ?? ctx.querySelector<HTMLElement>('button')
+      : active instanceof HTMLElement && active !== document.body ? active : null
+    const items = (): HTMLButtonElement[] => Array.from(ref.current?.querySelectorAll<HTMLButtonElement>(':scope > button') ?? [])
+    for (const b of items()) b.setAttribute('role', 'menuitem')
+    items().find((b) => !b.disabled)?.focus({ preventScroll: true })
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape') return
+      e.preventDefault(); e.stopPropagation()
+      close.current()
+      if (back?.isConnected) back.focus({ preventScroll: true })
+    }
+    const onDown = (e: PointerEvent): void => { if (!(e.target instanceof Node) || !ref.current?.contains(e.target)) close.current() }
+    document.addEventListener('keydown', onKey, true)
+    document.addEventListener('pointerdown', onDown, true)
+    return () => { document.removeEventListener('keydown', onKey, true); document.removeEventListener('pointerdown', onDown, true) }
+  }, [])
+  const move = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return
+    e.preventDefault()
+    e.currentTarget.setAttribute('data-kbd', '')
+    const list = Array.from(e.currentTarget.querySelectorAll<HTMLButtonElement>(':scope > button:not(:disabled)'))
+    if (!list.length) return
+    const i = list.indexOf(document.activeElement as HTMLButtonElement)
+    const n = e.key === 'Home' ? 0 : e.key === 'End' ? list.length - 1 : (i + (e.key === 'ArrowDown' ? 1 : -1) + list.length) % list.length
+    list[i < 0 && e.key === 'ArrowUp' ? list.length - 1 : n].focus({ preventScroll: true })
+  }
+  return (
+    <OverlayAt className="ctx-menu" role="menu" x={x} y={y} innerRef={(el) => { ref.current = el }} onClick={(e) => e.stopPropagation()} onKeyDown={move}
+      data-kbd="" onMouseMove={(e) => {
+        e.currentTarget.removeAttribute('data-kbd')
+        const b = (e.target as Element).closest('button')
+        if (b && !b.disabled && b !== document.activeElement && e.currentTarget.contains(b)) b.focus({ preventScroll: true })
+      }}>
+      {children}
+    </OverlayAt>
+  )
+}
+
 /** 右键菜单目标;kind='multi' = 作用于整批选中(paths)。 */
 interface Ctx { kind: 'page' | 'folder' | 'asset' | 'root' | 'multi' | 'vaultsec'; path: string; paths?: string[]; x: number; y: number }
 
@@ -613,38 +688,119 @@ function PrefsSections({ row, pages }: { row: (path: string) => ReactNode; pages
   )
 }
 
-/** 「与我共享」分区(window.amadeusCollab 解闸):别人共享给我的页面;点击进入(必要时切库)。 */
+/** 到期提示的文案:只有两天内才露出,离得远的不打扰。 */
+function dueSoon(expiresAt: string | null | undefined): string | null {
+  const days = daysUntil(expiresAt)
+  if (days === null || days < 0 || days > 2) return null
+  return translate(days === 0 ? 'amxv.shared.dueToday' : days === 1 ? 'amxv.shared.dueTomorrow' : 'amxv.shared.dueInTwo')
+}
+
+/** 「我共享的」分区:行尾写人数、到期或等人加入,点击回到这一页。 */
+function SharedByMeSection() {
+  const { t } = useI18n()
+  const collab = window.amadeusCollab
+  const activeVault = useSharedVault((s) => s.activeVault)
+  const [shares, setShares] = useState<Array<AmadeusPageShare & { vaultId: string }>>([])
+  const [pubs, setPubs] = useState<Array<{ token: string; path: string; vaultId: string }>>([])
+  useEffect(() => {
+    if (!collab?.listAllShares) return
+    const load = (): void => {
+      void collab.listAllShares().then((r) => { setShares(r.pageShares.filter((s) => !s.expired).sort(byExpiry)); setPubs(r.publishes) }).catch(() => {})
+    }
+    load()
+    window.addEventListener('amadeus:shares-changed', load)
+    window.addEventListener('focus', load) // 对方加入不推送:发完链接切回来时补一次人数
+    return () => { window.removeEventListener('amadeus:shares-changed', load); window.removeEventListener('focus', load) }
+  }, [collab])
+  if (!collab || shares.length + pubs.length === 0) return null
+  const open = (vaultId: string, path: string, ev: RMouseEvent): void => {
+    if (activeVault && vaultId !== activeVault) {
+      if (window.amadeusSync) useApp.getState().toast(t('amxv.shared.otherVault'))
+      else collab.switchVault(vaultId, path)
+      return
+    }
+    const { vaultRoot, vaultSide } = usePageStore.getState()
+    const local = localPathFor(useEntrySync.getState().vaults, vaultRoot, vaultSide, path)
+    if (local) void openNote(local, newTabOf(ev))
+    else useApp.getState().toast(t('amxv.shared.otherVault'))
+  }
+  const row = (key: string, icon: ReactNode, path: string, vaultId: string, meta: string, warn = false): ReactNode => (
+    <button key={key} className="t2s-special" onClick={(ev) => open(vaultId, path, ev)}>
+      <span className="t2s-special-ic">{icon}</span>
+      <span className="t2s-special-title">{baseName(path)}</span>
+      <span className={`amx-share-meta${warn ? ' is-warn' : ''}`}>{meta}</span>
+    </button>
+  )
+  return (
+    <SideSection id="sharedby" defaultOpen label={t('amxv.sec.sharedByMe')} count={shares.length + pubs.length}>
+      {shares.map((s) => {
+        const due = dueSoon(s.expiresAt)
+        return row(s.id, <Users />, s.path, s.vaultId, due ?? (s.participants.length ? t('amxv.shared.people', { n: s.participants.length }) : t('amxv.shared.waiting')), !!due)
+      })}
+      {pubs.map((p) => row(p.token, <Globe2 />, p.path, p.vaultId, t('amxv.shared.published')))}
+    </SideSection>
+  )
+}
+
+/** 「与我共享」分区(window.amadeusCollab 解闸):别人共享给我的页面;点击进入(必要时切库直达)。 */
 function SharedWithMeSection() {
   const { t } = useI18n()
   const collab = window.amadeusCollab
-  const [items, setItems] = useState<Array<{ vaultId: string; path: string; title: string; role: string; ownerName: string | null; localPath?: string }>>([])
-  const [activeVault, setActiveVault] = useState('')
+  const items = useSharedVault((s) => s.items)
+  const activeVault = useSharedVault((s) => s.activeVault)
+  const [ctx, setCtx] = useState<{ x: number; y: number; item: AmadeusSharedItem } | null>(null)
+  useEffect(() => { void useSharedVault.getState().refresh() }, [collab])
   useEffect(() => {
-    if (!collab) return
-    void collab.sharedWithMe().then(setItems).catch(() => {})
-    void collab.activeVaultId().then(setActiveVault).catch(() => {})
-  }, [collab])
+    if (!ctx) return
+    const close = (): void => setCtx(null)
+    window.addEventListener('click', close)
+    return () => window.removeEventListener('click', close)
+  }, [ctx])
   if (!collab || items.length === 0) return null
+  const open = (s: AmadeusSharedItem, newTab?: { newTab?: boolean }): void => {
+    // 桌面:localPath=镜像内路径(与我共享/<slug>/…),镜像在云端侧,本地库侧要先切过去(离线可用);web:同库直开,跨库切过去再开。
+    if (s.localPath) void usePageStore.getState().switchVaultSide('cloud').then(() => openNote(s.localPath!, newTab))
+    else if (s.vaultId === activeVault) void openNote(s.path, newTab)
+    else collab.switchVault(s.vaultId, s.path)
+  }
+  const leave = (s: AmadeusSharedItem): void => {
+    if (!s.shareId || !window.confirm(t('amxv.shared.leaveConfirm', { title: s.title }))) return
+    void collab.leaveShare(s.shareId, s.vaultId).then(async () => {
+      useApp.getState().toast(t('amxv.shared.left'))
+      await refreshAfterLeave(s.vaultId)
+    }).catch(() => useApp.getState().toast(t('amxv.shared.leaveFailed'), true))
+  }
   return (
-    <div className="t2s-special-group" style={{ marginTop: 6 }}>
-      <div className="t2s-hint amx-sec-grab" style={{ padding: '2px 10px 2px', fontSize: 'var(--ui-font-caption, 11px)' }}>{t('amxv.sec.sharedWithMe')}</div>
-      {items.map((s) => (
-        <button
-          key={`${s.vaultId}:${s.path}`}
-          className="t2s-special"
-          title={`${s.ownerName ?? ''} · ${s.role === 'viewer' ? t('amxv.role.viewer') : t('amxv.role.editor')}`}
-          onClick={(ev) => {
-            // 桌面:localPath=镜像内路径(与我共享/<slug>/…),本地直开(离线可用);web:切库或同库直开。
-            if (s.localPath) void openNote(s.localPath, newTabOf(ev))
-            else if (s.vaultId === activeVault) void openNote(s.path, newTabOf(ev))
-            else collab.switchVault(s.vaultId)
-          }}
-        >
-          <span className="t2s-special-ic"><Share2 /></span>
-          <span className="t2s-special-title">{s.title}</span>
-        </button>
-      ))}
-    </div>
+    <SideSection id="sharedwith" defaultOpen label={t('amxv.sec.sharedWithMe')} count={items.length}>
+      {items.map((s) => {
+        const due = dueSoon(s.expiresAt)
+        const owner = s.ownerName ?? ''
+        const meta = s.role === 'viewer' ? [owner, t('amxv.role.viewer')].filter(Boolean).join(' · ') : owner
+        return (
+          <button
+            key={`${s.vaultId}:${s.path}`}
+            className="t2s-special"
+            title={`${owner} · ${s.role === 'viewer' ? t('amxv.role.viewer') : t('amxv.role.editor')}`}
+            onClick={(ev) => open(s, newTabOf(ev))}
+            onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); setCtx({ x: ev.clientX, y: ev.clientY, item: s }) }}
+          >
+            <span className="t2s-special-ic"><Share2 /></span>
+            <span className="t2s-special-title">{s.title}</span>
+            <span className={`amx-share-meta${due ? ' is-warn' : ''}`}>{due ?? meta}</span>
+          </button>
+        )
+      })}
+      {ctx && (
+        <OverlayAt className="ctx-menu" x={ctx.x} y={ctx.y} onClick={(e) => e.stopPropagation()}>
+          <button onClick={() => { setCtx(null); open(ctx.item) }}><FileText size={13} /> {t('amxv.shared.open')}</button>
+          <button onClick={() => {
+            setCtx(null)
+            void navigator.clipboard.writeText(collab.fileUrl(ctx.item.vaultId, ctx.item.path)).then(() => useApp.getState().toast(t('amxv.shared.linkCopied')))
+          }}><Link2 size={13} /> {t('amxv.shared.copyLink')}</button>
+          {ctx.item.shareId && <button className="danger" onClick={() => { setCtx(null); leave(ctx.item) }}><LogOut size={13} /> {t('amxv.shared.leave')}</button>}
+        </OverlayAt>
+      )}
+    </SideSection>
   )
 }
 
@@ -865,6 +1021,8 @@ export function AmadeusPagesView() {
   // 云端笔记库入口:web / 移动端(库本身在云端,cloudBridge 挂 amadeusCloudVaults)恒显示;桌面仅云端模式显示,本地模式给本地 Vault 选择器。
   // ⚠️ 不能用「没有 amadeusSync」当 web 的判据:桌面没装 Forsion Extend 时 amadeusSync 也不在,那是本地机器,不是云端库。
   const cloudLib = !!(window as { amadeusCloudVaults?: unknown }).amadeusCloudVaults || vaultSide === 'cloud'
+  const foreignOwner = useSharedVault(foreignVaultOwner)
+  const foreignLabel = foreignOwner ? t('amxv.shared.vaultOf', { name: foreignOwner.ownerName ?? '' }) : null
 
   const [query, setQuery] = useState('')
   const [expanded, setExpanded] = useState<Set<string>>(new Set()) // 文件夹默认全折叠
@@ -936,7 +1094,7 @@ export function AmadeusPagesView() {
     window.addEventListener('pointercancel', clear)
     return () => { window.removeEventListener('pointerup', clear); window.removeEventListener('pointercancel', clear) }
   }, [secArm])
-  const BASE_SEC_IDS = ['pinned', 'cloudsync', 'shared', 'prefs', 'tree']
+  const BASE_SEC_IDS = ['pinned', 'cloudsync', 'sharedby', 'shared', 'prefs', 'tree']
   const secPos = new Map(secOrder.map((sid, i) => [sid, i]))
   // 已存顺序里没有的分区(未来新增)排到末尾,相对次序保持默认(稳定排序)。
   const orderedSecIds = secOrder.length ? [...BASE_SEC_IDS].sort((a, b) => (secPos.get(a) ?? secOrder.length) - (secPos.get(b) ?? secOrder.length)) : BASE_SEC_IDS
@@ -1436,7 +1594,7 @@ export function AmadeusPagesView() {
             />
           ) : (
             <span className="t2s-srow-text">
-              <span className="t2s-srow-title">{ft ? fileTypeBaseName(path, ft.extensions) : isDraw ? baseName(path).replace(/\.excalidraw$/i, '') : isNote ? baseName(path) : path.split(/[\\/]/).pop()}</span>
+              <span className="t2s-srow-title">{ft ? fileTypeBaseName(path, ft.extensions) : isDraw ? baseName(path).replace(/\.excalidraw$/i, '') : isNote ? baseName(path) : isDbPath(path) ? dbBaseName(path) : path.split(/[\\/]/).pop()}</span>
               {parentOf(path) && <span className="t2s-srow-sub">{parentOf(path)}</span>}
             </span>
           )}
@@ -1540,7 +1698,7 @@ export function AmadeusPagesView() {
         />
       ) : (
         <span className="t2s-srow-title">
-          {ft ? fileTypeBaseName(path, ft.extensions) : isNote || isDraw ? baseName(path) : path.split(/[\\/]/).pop()}
+          {ft ? fileTypeBaseName(path, ft.extensions) : isNote || isDraw ? baseName(path) : isDbPath(path) ? dbBaseName(path) : path.split(/[\\/]/).pop()}
         </span>
       )}
       {/* 行尾顺序:… 在左、+ 在右(同文件夹头);+ 仅笔记有(附件/.db 没有 .fd)。 */}
@@ -1661,7 +1819,7 @@ export function AmadeusPagesView() {
         </SideSection>
       ))}
       {/* 同步库在前、Cloud工作区 在最后:它只放不属于任何同步库的东西(10-17 用户选 B)。 */}
-      <SideSection id="cloud-ws" defaultOpen label={t('amxv.sec.cloudWorkspace')}>
+      <SideSection id="cloud-ws" defaultOpen label={foreignLabel ?? t('amxv.sec.cloudWorkspace')}>
         {cloudSections.rest.length ? cloudSections.rest.map((n) => renderNode(n, 0)) : <div className="t2s-hint amx-sec-hint">{t('amxv.empty')}</div>}
       </SideSection>
     </>
@@ -1706,14 +1864,14 @@ export function AmadeusPagesView() {
   const foot = (
     <div className="t2s-foot">
       <TrashSection />
-      <button
+      {!cloudLib && amadeus?.listVaults ? <LocalVaultButton vaultRoot={vaultRoot} /> : <button
         className="t2s-special"
         onClick={() => (cloudLib ? setCloudPanel(true) : void ps().openVault())}
         title={cloudLib ? t('amxv.cloudVaultTip') : vaultRoot || undefined}
       >
         <span className="t2s-special-ic"><FolderOpen /></span>
-        <span className="t2s-special-title">{cloudLib ? t('amxv.cloudVault') : vaultRoot ? t('amxv.vaultNamed', { name: baseName(vaultRoot) }) : t('amxv.openVault')}</span>
-      </button>
+        <span className="t2s-special-title">{cloudLib ? (foreignLabel ? t('amxv.vaultNamed', { name: foreignLabel }) : t('amxv.cloudVault')) : vaultRoot ? t('amxv.vaultNamed', { name: baseName(vaultRoot) }) : t('amxv.openVault')}</span>
+      </button>}
     </div>
   )
 
@@ -1776,7 +1934,13 @@ export function AmadeusPagesView() {
             matches.length ? matches.map((p) => row(p)) : <div className="t2s-hint">{t('amxv.noMatches')}</div>
           ) : (
             <>
-              {!phone && <div className="t2s-special-group">
+              {foreignOwner && <div className="t2s-special-group">
+                <button className="t2s-special amx-back-vault" onClick={() => { const own = useSharedVault.getState().ownVaults[0]; if (own) window.amadeusCollab?.switchVault(own) }}>
+                  <span className="t2s-special-ic"><ArrowLeft /></span>
+                  <span className="t2s-special-title">{t('amxv.shared.backToMine')}</span>
+                </button>
+              </div>}
+              {!phone && !foreignOwner && <div className="t2s-special-group">
                 <button className="t2s-special" data-guide-anchor="note-new" onClick={() => void ps().createPage()}>
                   <span className="t2s-special-ic"><SquarePen /></span>
                   <span className="t2s-special-title">{t('amadeus.new.note')}</span>
@@ -1795,6 +1959,7 @@ export function AmadeusPagesView() {
                 const secNodes: Record<string, ReactNode> = {
                   pinned: <PinnedSection row={row} dragPath={dragPath} />,
                   cloudsync: vaultSide === 'local' ? <CloudSyncSection dragPath={dragPath} /> : null,
+                  sharedby: foreignOwner ? null : <SharedByMeSection />,
                   shared: <SharedWithMeSection />,
                   prefs: <PrefsSections row={row} pages={pages} />,
                   tree: secTreeNode,
@@ -1808,13 +1973,13 @@ export function AmadeusPagesView() {
         {/* 回收站 + Vault 常驻侧栏底部(sticky footer),不随笔记树滚走;Vault 在回收站下方最底。
             手机上这一块排进列表末尾(见上面的 phoneFoot):钉在底部的话它会挡在 Dock 与列表之间。 */}
         {!phone && foot}
-        {phone && vaultRoot && <ListFab label={t('amadeus.new.note')} icon={<SquarePen />} onClick={() => void ps().createPage()} onMenu={(at) => setMenu({ kind: 'root', path: '', x: at.x, y: at.y })} />}
+        {phone && vaultRoot && !foreignOwner && <ListFab label={t('amadeus.new.note')} icon={<SquarePen />} onClick={() => void ps().createPage()} onMenu={(at) => setMenu({ kind: 'root', path: '', x: at.x, y: at.y })} />}
       </aside>
 
       {/* 多选菜单:只放对整批说得通的两件事。删除逐个走各自的既有流程(笔记要问独占附件,
           附件/其它文件是直接删)—— 别在这儿另写一套删除,那是毁档最容易出事的地方。 */}
       {menu?.kind === 'multi' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <button onClick={() => {
             const ps0 = menu.paths ?? []
             setMenu(null)
@@ -1832,11 +1997,11 @@ export function AmadeusPagesView() {
               sel.clear()
             })()
           }}><Trash2 size={13} /> {t('amxv.menu.deleteN', { n: menu.paths?.length ?? 0 })}</button>
-        </OverlayAt>
+        </TreeMenu>
       )}
 
       {menu?.kind === 'page' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <button onClick={() => { void openNote(menu.path, { newTab: true }); setMenu(null) }}><Plus size={13} /> {t('amxv.menu.openInNewTab')}</button>
           <button onClick={() => { const p = menu.path; setMenu(null); newChild(p) }}><SquarePen size={13} /> {t('amadeus.new.childNote')}</button>
           <button onClick={() => startRename(menu.path)}><Pencil size={13} /> {t('amxv.menu.rename')}</button>
@@ -1852,10 +2017,10 @@ export function AmadeusPagesView() {
           )}
           {canRevealInFileManager() && <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>}
           <button className="danger" onClick={() => { const p = menu.path; setMenu(null); void deleteNoteFlow(p) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
-        </OverlayAt>
+        </TreeMenu>
       )}
       {menu?.kind === 'asset' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           {isDbPath(menu.path) ? (
             <>
               <button onClick={() => { openDb(menu.path); setMenu(null) }}><Eye size={13} /> {t('amxv.menu.open')}</button>
@@ -1893,10 +2058,10 @@ export function AmadeusPagesView() {
           )}
           {canRevealInFileManager() && <button onClick={() => { void amadeus.revealInFileManager(menu.path); setMenu(null) }}><FolderOpen size={13} /> {t('amxv.menu.reveal')}</button>}
           <button className="danger" onClick={() => { const p = menu.path; setMenu(null); if (confirmedDelete('file', p)) void ps().deletePage(p) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
-        </OverlayAt>
+        </TreeMenu>
       )}
       {menu?.kind === 'folder' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <button onClick={() => { setExpanded((prev) => new Set([...prev, ...prefixesOf(menu.path)])); void ps().createPageInFolder(menu.path); setMenu(null) }}><SquarePen size={13} /> {t('amadeus.new.note')}</button>
           <button onClick={() => newFolder(menu.path)}><FolderPlus size={13} /> {t('amxv.menu.newSubfolder')}</button>
           <button onClick={() => newBase(menu.path)}><Database size={13} /> {t('amadeus.new.database')}</button>
@@ -1931,17 +2096,17 @@ export function AmadeusPagesView() {
             }}><Share2 size={13} /> {t('amxv.menu.publishFolder')}</button>
           )}
           <button className="danger" onClick={() => { const f = menu.path; setMenu(null); if (confirmedDelete('folder', f)) void ps().deleteFolder(f) }}><Trash2 size={13} /> {t('amxv.menu.delete')}</button>
-        </OverlayAt>
+        </TreeMenu>
       )}
       {menu?.kind === 'vaultsec' && (
-        <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <button onClick={() => { const f = menu.path; setMenu(null); markVaultSection(f, false) }}><FolderMinus size={13} /> {t('amxv.menu.vaultSectionOff')}</button>
-        </OverlayAt>
+        </TreeMenu>
       )}
       {rootMenu && webRootMenu && (
-        <OverlayAt className="ctx-menu" x={rootMenu.x} y={rootMenu.y} onClick={(e) => e.stopPropagation()}>
+        <TreeMenu x={rootMenu.x} y={rootMenu.y} onClose={() => setMenu(null)}>
           <CtxMenuButtons items={rootMenuItems()} />
-        </OverlayAt>
+        </TreeMenu>
       )}
 
       {cloudPanel && <CloudVaultPanel onClose={() => setCloudPanel(false)} />}
@@ -2661,7 +2826,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     // `activePage ?? activeNotePath` 全线取到上一篇(A=v3 → B=v4 直接切、或后退再前进都能复现;
     // Codex 评审 high)。占着谁交谁,releasePage 内部照旧先 flush 再清。
     const held = myPs().activePage
-    void myPs().releasePage(held ?? notePath)
+    void myPs().releasePage(held ?? notePath, notePath)
   }, [unifiedRoute, notePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 恢复的 tab 一挂载就有笔记名(不必等激活)。

@@ -27,24 +27,39 @@ describe('EditorialMessage inline Sketch ordering', () => {
       { t: 'tools', events: [rejected] },
       { t: 'intelligent', event: ok },
     ])
-    // 重写的那份还在生成、或者又被拒收:前一份照旧画着,不能让回答里一时什么都没有
+    // 重试一开始就只能画新卡;失败的残缺内容撤下,错误记录保留。
     expect(partitionToolSegment([rejected, streaming], [], true)).toEqual([
       { t: 'tools', events: [rejected] },
-      { t: 'intelligent', event: rejected },
       { t: 'intelligent', event: streaming },
     ])
     const again: ToolEvent = { ...rejected, id: 'bad2' }
-    expect(partitionToolSegment([rejected, again]).filter((p) => p.t === 'intelligent')).toEqual([
-      { t: 'intelligent', event: rejected },
-      { t: 'intelligent', event: again },
-    ])
-    // 被拒收后没有重写(模型改用文字):那份照旧画出来,由文档自己标明内容不完整
+    expect(partitionToolSegment([rejected, again]).filter((p) => p.t === 'intelligent')).toEqual([])
+    // 没有重试时也不把被拒收的内容当回答,只留工具错误。
     expect(partitionToolSegment([rejected, done('read', 'read_file')])).toEqual([
       { t: 'tools', events: [rejected] },
-      { t: 'intelligent', event: rejected },
       { t: 'tools', events: [done('read', 'read_file')] },
     ])
   })
+  it('removes failed native cards even when a retry is in another text/tool segment', () => {
+    for (const error of [{ isError: true, result: 'Invalid document' }, { result: 'Error: invalid document' }]) {
+      const rejected: ToolEvent = { ...done('bad', 'intelligent_ui'), ...error }
+      expect(partitionToolSegment([rejected], [], true)).toEqual([{ t: 'tools', events: [rejected] }])
+      const retry: ToolEvent = { id: 'retry', name: 'intelligent_ui', done: false }
+      expect(partitionToolSegment([retry], [], true)).toEqual([{ t: 'intelligent', event: retry }])
+      expect(partitionToolSegment([rejected])).toEqual([{ t: 'tools', events: [rejected] }])
+    }
+  })
+  it('keeps git tool rows and puts one Git card after a run of consecutive git calls', () => {
+    const running: ToolEvent = { id: 'gp2', name: 'git_push', done: false }
+    const events = [done('read', 'read_file'), done('gs', 'git_status'), done('gc', 'git_commit'), done('gp', 'git_push'), done('run', 'run_bash'), running]
+    const parts = partitionToolSegment(events)
+    expect(parts.map((part) => part.t === 'tools' ? `tools:${part.events.map((ev) => ev.id).join(',')}` : part.t === 'git' ? `git:${part.events.map((ev) => ev.id).join(',')}` : part.t)).toEqual([
+      'tools:read,gs,gc,gp',
+      'git:gs,gc,gp',
+      'tools:run,gp2', // 还在跑的 git 调用不出卡
+    ])
+  })
+
   it('places every completed Sketch immediately after its own tool call', () => {
     const events = [done('read1', 'read_file'), done('sk1', 'sketch'), done('run1', 'run_bash'), done('sk2', 'sketch')]
     const sketches: SketchItem[] = [
@@ -52,7 +67,7 @@ describe('EditorialMessage inline Sketch ordering', () => {
       { callId: 'sk2', html: '<p>TWO</p>' },
     ]
     const parts = partitionToolSegment(events, sketches)
-    expect(parts.map((part) => part.t === 'tools' ? `tools:${part.events.map((ev) => ev.id).join(',')}` : part.t === 'sketch' ? `sketch:${part.item.callId}` : `intelligent:${part.event.id}`)).toEqual([
+    expect(parts.map((part) => part.t === 'tools' ? `tools:${part.events.map((ev) => ev.id).join(',')}` : part.t === 'sketch' ? `sketch:${part.item.callId}` : part.t === 'git' ? `git:${part.events.map((ev) => ev.id).join(',')}` : `intelligent:${part.event.id}`)).toEqual([
       'tools:read1,sk1',
       'sketch:sk1',
       'tools:run1,sk2',

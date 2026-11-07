@@ -270,3 +270,17 @@ describe('httpBrain done 帧的 outputItems', () => {
     expect((await streamOn('https://cloud-items-empty.test')).outputItems).toBeUndefined();
   });
 });
+
+describe('httpBrain notice 帧(服务端停用模型改用替代,2026-10-25)', () => {
+  it('notice 帧 → onNotice;正文 / usage 照旧', async () => {
+    const notice = `data: ${JSON.stringify({ t: 'notice', kind: 'model_fallback', from: 'deepseek-v4-flash', to: 'auto', toName: 'Auto' })}\n\n`;
+    vi.stubGlobal('fetch', () => Promise.resolve(new Response(notice + doneFrame, { status: 200, headers: { 'Content-Type': 'text/event-stream' } })));
+    const brain = createHttpBrain({ cloudUrl: 'https://cloud-notice.test', token: 't' });
+    const seen: unknown[] = [];
+    const r = await brain.llm.streamProviderCompletion({
+      apiKey: 'x', baseUrl: '', payload: await brain.llm.buildProviderPayload(opts), onNotice: (n) => seen.push(n),
+    });
+    expect(seen).toEqual([{ kind: 'model_fallback', from: 'deepseek-v4-flash', to: 'auto', toName: 'Auto' }]);
+    expect(r.content).toBe('hi');
+  });
+});

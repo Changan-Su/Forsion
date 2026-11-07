@@ -25,6 +25,7 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：把材料、�
 | 从 Obsidian 迁过来 | [Amadeus 总览](amadeus/overview.md) → [编辑器](amadeus/editor.md) |
 | 在手机 / 浏览器上用 | [浏览器版与移动端](reference/web-and-mobile.md) |
 | 把工作台改造成自己的样子 | [插件](customization/plugins.md) → [商店](customization/market.md) |
+| 给 Forsion 写插件 | [插件开发](customization/plugin-development.md) → [插件任务 SDK](customization/plugin-tasks.md) |
 | 出问题了 | [常见问题](reference/faq.md) |
 
 ## 入门
@@ -34,7 +35,6 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：把材料、�
 - [快速上手](getting-started/quickstart.md) — 从项目笔记到记忆、多 Agent、主动跟进与插件
 - [核心概念](getting-started/concepts.md) — Agent、会话、Space、审批档位这些词各指什么
 - [工作区与界面](getting-started/workspace.md) — Ribbon、标签页、状态栏、通知、内置浏览器与终端
-- [Floating Panel 开发](customization/floating-panel-development.md) — 第六种面板表面、跨端行为与插件 API
 
 ## 对话
 
@@ -76,14 +76,18 @@ Forsion（扶桑）是一个**本地优先的 AI 第二大脑**：把材料、�
 
 ## 个性化
 
-- [Mini Panel 开发](customization/mini-panel-development.md) — 插件适配、实体参数交接与自动前台面板契约
-- [Floating Panel 开发](customization/floating-panel-development.md) — 原生悬浮窗口、Web 浮层与插件开放接口
-- [可复用界面组件](customization/ui-components.md) — Chat Box 与 Markdown 编辑器在 View / 插件中的挂载契约
-
 - [外观与主题](customization/themes.md) — 设计语言、配色、玻璃、字体三档
-- [插件](customization/plugins.md) — 桌面插件与引擎插件、捆绑包、扩展点、安全模型
+- [插件](customization/plugins.md) — 桌面插件与引擎插件、捆绑包、安装渠道、安全模型
 - [商店](customization/market.md) — 技能 / 插件(含代理与空间)/ 主题 / 网站应用
 - [成就系统](customization/achievements.md) — 边探索边解锁
+
+## 开发者
+
+- [插件开发](customization/plugin-development.md) — 起步、布局与面板、列表源、审批、宿主零件、卡片与各类扩展点
+- [插件任务 SDK](customization/plugin-tasks.md) — 本地任务、只读外部引擎、隔离 Git 工作区、定时与 Desktop MCP
+- [可复用界面组件](customization/ui-components.md) — Chat Box 与 Markdown 编辑器在 View / 插件中的挂载契约
+- [Mini Panel 开发](customization/mini-panel-development.md) — 插件适配、实体参数交接与自动前台面板契约
+- [Floating Panel 开发](customization/floating-panel-development.md) — 原生悬浮窗口、Web 浮层与插件开放接口
 
 ## 参考
 

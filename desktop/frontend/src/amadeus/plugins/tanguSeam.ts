@@ -14,6 +14,7 @@ import type { TanguSliceModule } from '../../stores/appStore'
 import { createContext, createElement, type ComponentProps, type ComponentType, type ReactElement } from 'react'
 import type { BtwSeed } from '@tangu/ui/views/chat2/btwStore'
 import type { FilesPanel } from '@tangu/ui/views/chat2/FilesPanel'
+import type { IntelligentUi, NativeDocument } from '@tangu/ui/components/IntelligentUi'
 import type { SpecialKind } from '@tangu/ui/tangu/store/tanguSlice'
 import type { CtxItem } from '../../components/RightPanel'
 import type { ViewProps } from '@lcl/engine'
@@ -374,6 +375,36 @@ export function setTanguPrefs(p: TanguPrefs | null): void {
 
 export function readTanguPrefs(): TanguPrefs | null {
   return prefs
+}
+
+/** 输入框里没发出去的纯文本(手机系统还原用,mobile/src/restoreSnapshot.ts):Tangu 在激活时交出来。**宿主内部接缝**。
+ *  只有文字和长粘贴 —— 附件是 base64,不出这道缝。key 同 Composer2 的草稿键(会话 id / 'new')。没交 → 不还原草稿。 */
+export interface TanguDraftText { text: string; pastes: string[] }
+export interface TanguDrafts {
+  read(): Record<string, TanguDraftText>
+  /** 只填空着的那份:那个会话里已经有字 / 长粘贴就不动。 */
+  fill(key: string, d: TanguDraftText): void
+  subscribe(fn: () => void): () => void
+}
+
+let drafts: TanguDrafts | null = null
+
+export function setTanguDrafts(p: TanguDrafts | null): void {
+  drafts = p
+}
+
+export function readTanguDrafts(): TanguDrafts | null {
+  return drafts
+}
+
+/** 小组件的渲染件(小组件第 3 步):卡怎么画在 Tangu 里,宿主的 WidgetHost(卡片区、仪表盘、主页)经这里取。没交 → 画「读不到」占位。 */
+export interface TanguIntelligentUi { IntelligentUi: typeof IntelligentUi; NativeDocument: typeof NativeDocument }
+let intelligentUi: TanguIntelligentUi | null = null
+export function setTanguIntelligentUi(p: TanguIntelligentUi | null): void {
+  intelligentUi = p
+}
+export function readTanguIntelligentUi(): TanguIntelligentUi | null {
+  return intelligentUi
 }
 
 /** 新对话输入区发出第一句(核心插件化 2e-3)。 */

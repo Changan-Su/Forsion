@@ -16,6 +16,11 @@
  *     排除 App / 域名、只记标题的 App 丢 text / click / key;text / click / key 不带 url 时按最近一条
  *     app / window 事件的情境补判。匹配口径与 helper 的 recorderBundleMatches 一致(不分大小写、`.*` 前缀通配)。
  *  5. 写盘失败不吞:整批退回缓冲(封顶)重试,连续失败把状态降级,别让托盘 / 设置 / 引擎继续说「记录中」。
+ *  6. 静态加密(computerHistoryCrypto.ts):日文件逐行 AES-256-GCM,钥匙在设备凭据的 computerHistoryKey 槽(safeStorage),
+ *     经 deps.onKey 交给引擎(stdin 私有通道)。**拿不到钥匙就不录**(状态落 disconnected + view.keyError),绝不回落明文。
+ *     读失败 ≠ 空:解不开的行(没钥匙 / 别的钥匙)是「未知」—— 不当残行删、不当没有;重写(保留期 / 清除)遇到它整份文件不动。
+ *     旧的明文行在同一条写队列里一次性迁移(逐文件 tmp + rename,幂等;读端永远两种行都认)。
+ *     Linux 本来就 unsupported(不录、没有旧文件);钥匙等级不是 os(basic_text 之类)一律按拿不到处理。
  */
 import net from 'node:net'
 import { execFile } from 'node:child_process'
@@ -28,6 +33,7 @@ import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { appIconDataUrls } from './appIcons'
 import { launchWindowsRecorder, type WindowsRecorderTarget } from './computerHistoryWin'
 import { createSerialQueue } from './configWrite'
+import { chKeyFromHex, encryptLine, newChKeyHex, readChLine, type ChKey } from './computerHistoryCrypto'
 import {
   COMPUTER_HISTORY_KEEP_DAYS, COMPUTER_HISTORY_PROTOCOL,
   type ComputerHistoryEvent, type ComputerHistoryExclude, type ComputerHistorySession,
@@ -47,6 +53,8 @@ const HEALTHY_MS = 30_000
 const SUBSCRIBE_TIMEOUT_MS = 5_000
 /** `open -n` 的节流:helper 靠 flock 让多余实例自行退出,但也别每次重试都起一个进程。 */
 const LAUNCH_THROTTLE_MS = 30_000
+/** 隔了这么久才来的第一批事件也算信号(没锁屏的离开:回来的第一下是点击或打字,不是切 App)。 */
+const SIGNAL_IDLE_MS = 60_000
 /** 单行上限:helper 侧文本已封顶 500 字,远超此值 = 对端不是我们的 helper,直接断。 */
 const MAX_LINE_BYTES = 1024 * 1024
 const PAUSE_MAX_MS = 7 * DAY_MS
@@ -376,18 +384,123 @@ export function foldSessions(events: readonly ComputerHistoryEvent[], opts: { mi
 
 // ── 落盘 ─────────────────────────────────────────────────────────────────────
 
-/** `<root>/events/YYYY-MM-DD.jsonl` + `<root>/state.json`。目录 0700、文件 0600。调用方负责串行(单写者)。 */
+/** 数据钥匙的保管处(主进程 = 设备凭据 device-secrets.json 的 computerHistoryKey 槽,safeStorage)。 */
+export interface ChKeyVault {
+  /** ok + hex:null = 确定没有(可以铸新的);unavailable = 存着却读不出 / 存储读不懂 / 系统加密这次用不了 —— 绝不铸新的去盖。 */
+  read(): Promise<{ state: 'ok'; hex: string | null } | { state: 'unavailable'; reason: string }>
+  /** 存一把新钥匙,并从磁盘字节读回核对。false = 没存住:调用方绝不拿它加密任何东西(重启就丢,用它加密的记录跟着丢)。 */
+  store(hex: string): Promise<boolean>
+}
+
+/** 上一次取钥匙的结论。unknown = 还没取过(或单测的明文模式)。 */
+export type ChKeyState = 'unknown' | 'ok' | 'absent' | 'unavailable'
+
+/** 重写日文件时各类行怎么处理(rewriteLines)。 */
+interface RewriteOpts {
+  /** 按事件时间留不留(缺省全留)。 */
+  keep?: (t: number) => boolean
+  /** 解不开的行:keep = 原样留(迁移);abort = 整份文件不动、抛 ch-records-locked
+   *  (保留期 / 清除要按时间取舍,而它的时间在密文里 —— 不知道就不替用户删,也不当残行删)。 */
+  onLocked: 'keep' | 'abort'
+}
+
+/**
+ * `<root>/events/YYYY-MM-DD.jsonl` + `<root>/state.json`。目录 0700、文件 0600。调用方负责串行(单写者)。
+ * 给了 vault = 加密模式(生产恒是):新写的每行都是密文,没钥匙宁可抛错也不写明文;不给 vault 只剩单测里的明文模式。
+ */
 export class ComputerHistoryStore {
   private rootReady = false
   /** 关门(「清空数据」的 dispose discard):在途那笔写的后续步骤不再建目录 / 写文件,免得把马上要整删的目录建回来。 */
   private closed = false
+  private key: ChKey | null = null
+  /** 取钥匙排成一条链:同时只有一次在问 vault,也不会两次各铸一把。 */
+  private keyChain: Promise<unknown> = Promise.resolve()
+  keyState: ChKeyState = 'unknown'
+  /** keyState = unavailable 时的原因码(设置页提示原样带出)。 */
+  keyError: string | null = null
+  /** 本进程里明文行已迁完(之后新写的都是密文;降级跑过旧版又升回来的,下次启动重扫)。 */
+  private migrated = false
 
-  constructor(readonly root: string, private readonly tmExclude?: (root: string) => Promise<unknown>) {}
+  constructor(
+    readonly root: string,
+    private readonly tmExclude?: (root: string) => Promise<unknown>,
+    private readonly vault?: ChKeyVault,
+    /** 钥匙到手(取到或新铸):交给引擎。 */
+    private readonly onKey?: (hex: string) => void,
+  ) {}
 
   get eventsDir(): string { return path.join(this.root, 'events') }
   get statePath(): string { return path.join(this.root, 'state.json') }
+  get encrypted(): boolean { return !!this.vault }
+  get hasKey(): boolean { return !!this.key }
 
   close(): void { this.closed = true }
+
+  /**
+   * 取钥匙;create = 槽里确定没有时铸一把(只在要写的时候)。拿不到 → null,keyState / keyError 说原因。
+   * 只有「确定没有」(ok + null)才铸新的;读不出 / 形状不对 / 存不住一律 unavailable、不盖 —— 盖了已有的记录就永远解不开。
+   * 失败不缓存:下一次调用重新问(设备凭据里「锁定」的槽不会再碰钥匙串,不会弹框风暴)。
+   */
+  loadKey(create: boolean): Promise<ChKey | null> {
+    if (this.key || !this.vault) return Promise.resolve(this.key)
+    const run = this.keyChain.then(() => this.loadKeyOnce(create))
+    this.keyChain = run.catch(() => {})
+    return run
+  }
+
+  private async loadKeyOnce(create: boolean): Promise<ChKey | null> {
+    if (this.key) return this.key
+    const vault = this.vault!
+    let r: Awaited<ReturnType<ChKeyVault['read']>>
+    try { r = await vault.read() } catch (e) { return this.keyFail(`key-read-failed: ${errText(e)}`) }
+    if (r.state === 'unavailable') return this.keyFail(r.reason || 'key-unavailable')
+    if (r.hex !== null) {
+      const k = chKeyFromHex(r.hex)
+      return k ? this.keyOk(k, r.hex) : this.keyFail('key-malformed')
+    }
+    if (!create) {
+      this.keyState = 'absent'
+      this.keyError = null
+      return null
+    }
+    const hex = newChKeyHex()
+    let ok = false
+    try { ok = await vault.store(hex) } catch (e) { return this.keyFail(`key-store-failed: ${errText(e)}`) }
+    return ok ? this.keyOk(chKeyFromHex(hex)!, hex) : this.keyFail('key-store-failed')
+  }
+
+  private keyOk(k: ChKey, hex: string): ChKey {
+    this.key = k
+    this.keyState = 'ok'
+    this.keyError = null
+    try { this.onKey?.(hex) } catch { /* 交给引擎失败不影响落盘 */ }
+    return k
+  }
+
+  private keyFail(reason: string): null {
+    this.keyState = 'unavailable'
+    this.keyError = reason
+    return null
+  }
+
+  /** 一批事件 → 按本地日期分好的行。加密模式下逐行加密(调用方已确认有钥匙)。 */
+  private linesByDay(events: readonly ComputerHistoryEvent[]): Map<string, string> {
+    const byDay = new Map<string, string>()
+    for (const ev of events) {
+      const day = localDay(ev.t)
+      const json = JSON.stringify(ev)
+      byDay.set(day, (byDay.get(day) ?? '') + (this.vault ? encryptLine(this.key!, json) : json) + '\n')
+    }
+    return byDay
+  }
+
+  /** 一行 → 事件 | 'locked'(密文但解不开:未知)| null(残行)。 */
+  private decode(line: string, key: ChKey | null): ComputerHistoryEvent | 'locked' | null {
+    const r = readChLine(line, key)
+    if (r.kind === 'locked') return 'locked'
+    if (r.kind === 'broken') return null
+    return parseLine(r.text)
+  }
 
   /** 建目录;首次建出根目录时打一次 Time Machine 排除(粘性,best-effort):7 天保留期管不住进了备份的副本。 */
   async ensureRoot(): Promise<void> {
@@ -401,19 +514,22 @@ export class ComputerHistoryStore {
     this.rootReady = true
   }
 
+  /** 追加。加密模式下没钥匙(取不到 / 存不住)→ 抛 ch-key-unavailable,一行都不写(绝不回落明文)。 */
   async append(events: readonly ComputerHistoryEvent[]): Promise<void> {
     if (!events.length) return
+    if (this.vault && !(await this.loadKey(true))) throw codeError('ch-key-unavailable', this.keyError ?? 'ch-key-unavailable')
     await this.ensureRoot()
-    for (const [day, lines] of groupByDay(events)) {
+    for (const [day, lines] of this.linesByDay(events)) {
       if (this.closed) throw codeError('store_closed') // ensureRoot 慢了一拍、期间关了门:别再写(会建出日文件)
       await appendFile(path.join(this.eventsDir, `${day}.jsonl`), lines, { encoding: 'utf8', mode: 0o600 })
     }
   }
 
-  /** 退出时的同步兜底(before-quit 等不了异步)。 */
+  /** 退出时的同步兜底(before-quit 等不了异步)。加密模式下手上没钥匙就不写(宁可丢最后 ≤1s,也不落明文)。 */
   appendSync(events: readonly ComputerHistoryEvent[]): void {
     if (!events.length || !existsSync(this.eventsDir)) return
-    for (const [day, lines] of groupByDay(events)) {
+    if (this.vault && !this.key) return
+    for (const [day, lines] of this.linesByDay(events)) {
       appendFileSync(path.join(this.eventsDir, `${day}.jsonl`), lines, { encoding: 'utf8', mode: 0o600 })
     }
   }
@@ -422,7 +538,7 @@ export class ComputerHistoryStore {
     try { return (await readdir(this.eventsDir)).filter((f) => DAY_FILE_RE.test(f)).sort() } catch { return [] }
   }
 
-  /** 盘上有事件的日子(YYYY-MM-DD);清除后剩下的空文件不算。 */
+  /** 盘上有事件的日子(YYYY-MM-DD);清除后剩下的空文件不算。只看文件名与大小,不解密。 */
   async days(): Promise<string[]> {
     const out: string[] = []
     for (const f of await this.dayFiles()) {
@@ -434,6 +550,7 @@ export class ComputerHistoryStore {
 
   /** 保留期:删整天都早于 now - keepDays 的日文件 + 崩溃留下的重写临时文件;截止时刻落在其中的那天按事件时间原子重写,
    *  只留 t >= now - keepDays 的行(否则那天凌晨的事件要多留近一天)。返回删掉的文件名(重写的不算)。
+   *  整天删按文件名,不用解密;截止那天有解不开的行 → 这一小时不动它(下小时再来,整天过期后按文件名删)。
    *  不需要像清除那样挡 dispose 的同步追加:截止那天至少是 6 天前,sanitizeEvent 不收早于 1 天的事件,追加落不到它头上。 */
   async prune(now: number, keepDays = COMPUTER_HISTORY_KEEP_DAYS): Promise<string[]> {
     const cutoffT = now - keepDays * DAY_MS
@@ -447,27 +564,43 @@ export class ComputerHistoryStore {
         removed.push(f)
       } else if (DAY_FILE_RE.test(f) && f.slice(0, 10) === cutoff) {
         const file = path.join(this.eventsDir, f)
+        await this.loadKey(false)
         // 每小时都逐行过一遍(流式 + 前缀正则,便宜;一行没丢就不动文件)。⚠️不能凭首行跳过:文本事件带的是最后一次编辑的
         // 时间,却在去抖之后才写入,日文件里的 t 不严格递增 —— 首行在期内不代表后面没有过期行(creview4 P1)。
-        if (await this.rewriteKeeping(file, (t) => t >= cutoffT)) removed.push(f)
+        try {
+          if (await this.rewriteLines(file, { keep: (t) => t >= cutoffT, onLocked: 'abort' })) removed.push(f)
+        } catch (e) {
+          if (errCode(e) !== 'ch-records-locked') throw e
+        }
       }
     }
     return removed
   }
 
-  /** 日文件只留 keep(t) 为真的行(解析不了的残行一并删),原子重写(tmp + rename);一行不剩就删文件,一行没丢就不动。
-   *  返回文件是否被删。调用方负责串行(单写者)。
-   *  跑在主进程上:流式按 64KB 分块读(块与块之间让出事件循环),每行只用前缀正则取 t(不逐行 JSON.parse),
-   *  重度用户一天几十 MB 的日文件也不会把主进程 / 同一写队列里的追加卡住。 */
-  private async rewriteKeeping(file: string, keep: (t: number) => boolean): Promise<boolean> {
-    const kept: string[] = []
-    let total = 0
+  /** 重写一个日文件:按 opts 取舍各行(残行一并删;留下的明文行有钥匙就顺手加密),原子重写(tmp + rename);
+   *  残行含「kid 是这把钥匙、认证却失败」的密文行:一个安装只有一把钥匙、GCM 认证是确定的,它永远解不开(半截写入 / 坏扇区),
+   *  与明文残行同一口径删 —— 当成 locked 会让一条崩溃截断的行永远挡住那一天的按时间清除。
+   *  没钥匙时只可能是整份老明文(有密文行就 abort 了):照样按时间裁、留下的仍是明文 —— 只删不增,拒绝重写反而留住用户要删的。
+   *  一行不剩就删文件,一行没变就不动。返回文件是否被删。调用方负责串行(单写者)并先 loadKey。
+   *  跑在主进程上:流式按 64KB 分块读(块与块之间让出事件循环),明文行只用前缀正则取 t(不逐行 JSON.parse),
+   *  密文行解一次 AES-GCM(微秒级)—— 重度用户一天几十 MB 的日文件也不会把主进程 / 同一写队列里的追加卡住。 */
+  private async rewriteLines(file: string, opts: RewriteOpts): Promise<boolean> {
+    const key = this.key
+    const out: string[] = []
+    let changed = false
     let carry = ''
     const take = (line: string): void => {
       if (!line) return
-      total++
-      const t = eventT(line)
-      if (t !== null && keep(t)) kept.push(line)
+      const r = readChLine(line, key)
+      if (r.kind === 'locked') {
+        if (opts.onLocked === 'abort') throw codeError('ch-records-locked')
+        out.push(line)
+        return
+      }
+      const t = r.kind === 'broken' ? null : eventT(r.text)
+      if (t === null || (opts.keep && !opts.keep(t))) { changed = true; return }
+      if (r.kind === 'plain' && key) { out.push(encryptLine(key, r.text)); changed = true; return }
+      out.push(line)
     }
     for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 64 * 1024 })) {
       const parts = (carry + (chunk as string)).split('\n')
@@ -475,11 +608,12 @@ export class ComputerHistoryStore {
       for (const line of parts) take(line)
     }
     take(carry)
-    if (!kept.length) { await rm(file, { force: true }); return true }
-    if (kept.length === total) return false
+    if (!out.length) { await rm(file, { force: true }); return true }
+    if (!changed) return false
     const tmp = `${file}.${process.pid}-${randomUUID()}.tmp`
     try {
-      await writeFile(tmp, kept.join('\n') + '\n', { encoding: 'utf8', mode: 0o600 })
+      await writeFile(tmp, out.join('\n') + '\n', { encoding: 'utf8', mode: 0o600 })
+      if (this.closed) throw codeError('store_closed')
       await rename(tmp, file)
     } catch (e) {
       await rm(tmp, { force: true }).catch(() => {})
@@ -488,43 +622,90 @@ export class ComputerHistoryStore {
     return false
   }
 
-  /** all:删全部日文件;sinceMs:删 t >= sinceMs 的事件(整天落在范围内的直接删,跨界那天原子重写)。 */
+  /** all:删全部日文件(不用解密);sinceMs:删 t >= sinceMs 的事件 —— 整天落在范围内的直接删,跨界那天原子重写。
+   *  跨界那天有解不开的行:先把能删的整天删完,再抛 ch-records-locked(那份文件原样不动,设置页提示只能「全部」)。 */
   async clear(opts: { sinceMs?: number; all?: boolean }): Promise<void> {
     let names: string[] = []
     try { names = await readdir(this.eventsDir) } catch { return }
+    const since = opts.sinceMs as number
+    const boundary: string[] = []
     for (const f of names) {
       const file = path.join(this.eventsDir, f)
       if (opts.all) { if (DAY_FILE_RE.test(f) || f.endsWith('.tmp')) await rm(file, { force: true }); continue }
       const range = dayRange(f)
-      const since = opts.sinceMs as number
       if (!range || range[1] <= since) continue
       if (range[0] >= since) { await rm(file, { force: true }); continue }
-      await this.rewriteKeeping(file, (t) => t < since) // 解析不了的残行一并删(可能正是范围内事件的半截)
+      boundary.push(file)
     }
+    if (!boundary.length) return
+    await this.loadKey(false)
+    let locked: unknown = null
+    for (const file of boundary) {
+      try {
+        await this.rewriteLines(file, { keep: (t) => t < since, onLocked: 'abort' }) // 残行一并删(可能正是范围内事件的半截)
+      } catch (e) {
+        if (errCode(e) !== 'ch-records-locked') throw e
+        locked = e
+      }
+    }
+    if (locked) throw locked
   }
 
-  /** [from, to] 内的事件,按 t 升序。 */
-  async readRange(from: number, to: number): Promise<ComputerHistoryEvent[]> {
+  /**
+   * 把日文件里的明文行(老版本写的)改写成密文:逐文件 tmp + rename,解不开的行原样留。只在写队列里调。
+   * 返回 true = 没有要迁的了(本进程之后不再扫);false = 有明文但这会儿拿不到钥匙,什么都没动(下次再来)。
+   * 只在真有明文行时才取钥匙(create:有旧数据要保护,值得为它铸一把)。中途崩了:已迁的是完整的密文文件,
+   * 没迁的仍是完整的明文文件,读端两种都认,下次启动接着迁。
+   */
+  async migrate(): Promise<boolean> {
+    if (!this.vault || this.migrated) return true
+    const files: string[] = []
+    let scanFailed = false
+    for (const f of await this.dayFiles()) {
+      const r = await hasPlainLine(path.join(this.eventsDir, f))
+      if (r === 'error') scanFailed = true // 读不了 ≠ 没有明文:这一份下次再扫,本进程不记「迁完」
+      else if (r) files.push(f)
+    }
+    if (!files.length) { if (!scanFailed) this.migrated = true; return !scanFailed }
+    if (!(await this.loadKey(true))) return false
+    for (const f of files) {
+      if (this.closed) throw codeError('store_closed')
+      await this.rewriteLines(path.join(this.eventsDir, f), { onLocked: 'keep' })
+    }
+    if (scanFailed) return false
+    this.migrated = true
+    return true
+  }
+
+  /** [from, to] 内的事件,按 t 升序;locked = 读到的日文件里解不开的行数(时间也在密文里,按整份文件算)。 */
+  async readRange(from: number, to: number): Promise<{ events: ComputerHistoryEvent[]; locked: number }> {
     const out: ComputerHistoryEvent[] = []
+    let locked = 0
+    let key: ChKey | null = null
+    let keyAsked = false
     for (const f of await this.dayFiles()) {
       const range = dayRange(f)
       if (!range || range[1] <= from || range[0] > to) continue
       let text = ''
       try { text = await readFile(path.join(this.eventsDir, f), 'utf8') } catch { continue }
       for (const line of text.split('\n')) {
-        const ev = parseLine(line)
+        if (!line) continue
+        if (!keyAsked && !line.startsWith('{')) { keyAsked = true; key = await this.loadKey(false) } // 全是明文就不碰钥匙
+        const ev = this.decode(line, key)
+        if (ev === 'locked') { locked++; continue }
         if (ev && ev.t >= from && ev.t <= to) out.push(ev)
       }
     }
-    return out.sort((a, b) => a.t - b.t)
+    return { events: out.sort((a, b) => a.t - b.t), locked }
   }
 
-  /** 最近出现过的 App(新的在前,去重,跳过被排除的)。只解析 kind:"app" 行;有界:每个日文件只读尾部 tailBytes、
-   *  总共不超过 maxBytes —— 重度用户一天几 MB,整读七天再逐行正则会把主进程卡上百毫秒。 */
+  /** 最近出现过的 App(新的在前,去重,跳过被排除的)。有界:每个日文件只读尾部 tailBytes、总共不超过 maxBytes ——
+   *  重度用户一天几 MB,整读七天会把主进程卡上百毫秒。解不开的行跳过(这是选择器的候选,不是「有没有」的判断)。 */
   async recentApps(limit: number, maxBytes = RECENT_APPS_SCAN_BYTES, tailBytes = RECENT_APPS_TAIL_BYTES): Promise<Array<{ name: string; bundleId: string }>> {
     const out: Array<{ name: string; bundleId: string }> = []
     const seen = new Set<string>()
     let budget = maxBytes
+    const key = await this.loadKey(false)
     for (const f of (await this.dayFiles()).reverse()) {
       if (budget <= 0) break
       let text = ''
@@ -535,8 +716,9 @@ export class ComputerHistoryStore {
       } catch { continue }
       const lines = text.split('\n')
       for (let i = lines.length - 1; i >= 0; i--) {
-        if (!/"kind"\s*:\s*"app"/.test(lines[i])) continue
-        const app = parseLine(lines[i])?.app
+        if (!lines[i] || (lines[i].startsWith('{') && !/"kind"\s*:\s*"app"/.test(lines[i]))) continue
+        const ev = this.decode(lines[i], key)
+        const app = ev && ev !== 'locked' && ev.kind === 'app' ? ev.app : undefined
         if (!app?.bundleId || app.excluded || seen.has(app.bundleId)) continue
         seen.add(app.bundleId)
         out.push({ name: app.name, bundleId: app.bundleId })
@@ -568,13 +750,17 @@ export class ComputerHistoryStore {
   }
 }
 
-function groupByDay(events: readonly ComputerHistoryEvent[]): Map<string, string> {
-  const byDay = new Map<string, string>()
-  for (const ev of events) {
-    const day = localDay(ev.t)
-    byDay.set(day, (byDay.get(day) ?? '') + JSON.stringify(ev) + '\n')
-  }
-  return byDay
+/** 文件里有没有明文行(以 `{` 开头的行):流式找,找到就停。读不了 = 'error'(不知道,不当「没有」:迁移不记完成,下次再扫)。 */
+async function hasPlainLine(file: string): Promise<boolean | 'error'> {
+  let atLineStart = true
+  try {
+    for await (const chunk of createReadStream(file, { encoding: 'utf8', highWaterMark: 64 * 1024 })) {
+      const s = chunk as string
+      if ((atLineStart && s.startsWith('{')) || s.includes('\n{')) return true
+      if (s.length) atLineStart = s.endsWith('\n')
+    }
+  } catch { return 'error' }
+  return false
 }
 
 /** 读文件最后 maxBytes 字节;没从头读时第一行多半是半截(可能还切在多字节字符中间),丢掉。 */
@@ -592,12 +778,19 @@ async function readTail(file: string, maxBytes: number): Promise<{ text: string;
   }
 }
 
-/** state.json 里的 dataGen(读不到 / 老文件没有 = 0)。 */
-function readDataGen(file: string): number {
+/**
+ * 盘上 state.json 里要接着用的:dataGen(读不到 / 老文件没有 = 0),userTurnedOff(用户亲手关过)。
+ * userTurnedOff 老文件没有这个字段时按盘上推:有 state.json 且 enabled:false = 开过又关了(没开过的机器不建目录、
+ * 不写 state.json)。读不到 / 没有文件 = 没关过。
+ */
+function readPersistedState(file: string): { dataGen: number; userTurnedOff: boolean } {
   try {
-    const g = (JSON.parse(readFileSync(file, 'utf8')) as { dataGen?: unknown })?.dataGen
-    return typeof g === 'number' && Number.isSafeInteger(g) && g >= 0 ? g : 0
-  } catch { return 0 }
+    const o = JSON.parse(readFileSync(file, 'utf8')) as { dataGen?: unknown; userTurnedOff?: unknown; enabled?: unknown }
+    const g = o?.dataGen
+    const dataGen = typeof g === 'number' && Number.isSafeInteger(g) && g >= 0 ? g : 0
+    const userTurnedOff = typeof o?.userTurnedOff === 'boolean' ? o.userTurnedOff : o?.enabled === false
+    return { dataGen, userTurnedOff }
+  } catch { return { dataGen: 0, userTurnedOff: false } }
 }
 
 function parseLine(line: string): ComputerHistoryEvent | null {
@@ -759,6 +952,12 @@ export interface ComputerHistoryDeps {
   openFolder?(dir: string): Promise<unknown>
   now?(): number
   onChanged?(view: ComputerHistoryView): void
+  /** 新的 App 切换 / 系统事件落了盘,或离开一阵后第一条动静落了盘:自动化的「电脑上」规则该看一眼了。主进程踢引擎,自己节流。 */
+  onSignal?(): void
+  /** 数据钥匙的保管处(主进程 = 设备凭据的 computerHistoryKey 槽)。必填:电脑历史只写密文。 */
+  keyVault: ChKeyVault
+  /** 钥匙到手(取到或新铸):交给引擎(backendManager 的 stdin 私有通道)。 */
+  onKey?(hex: string): void
 }
 
 export class ComputerHistory {
@@ -790,8 +989,15 @@ export class ComputerHistory {
   private persistError: string | null = null
   private persistRetryTimer?: ReturnType<typeof setTimeout>
   private persistRetryDelay = PERSIST_RETRY_MIN_MS
-  /** 清除的原子重写进行中(dispose 的同步追加会被它的 rename 吞掉,此时不插)。 */
+  /** 清除 / 迁移的原子重写进行中(dispose 的同步追加会被它的 rename 吞掉,此时不插)。 */
   private rewriting = false
+  /** 用户亲手关过(enabled 由开变关;暂停不算)。落 state.json,跨重启;首启引导据此决定老用户要不要预开。 */
+  private userTurnedOff: boolean
+  /** 取钥匙在途(排在写队列里,含随后的迁移)。 */
+  private keyLoading = false
+  /** 想录但钥匙拿不到:不连 helper(绝不回落明文),状态落 disconnected,view 带 keyError。用户的动作(开关 / 打开设置页)
+   *  与每小时巡检才清掉它再试一次 —— 不自己循环重试(macOS 上每次解密失败都可能再弹一次钥匙串框)。 */
+  private keyBlocked = false
 
   private enabled = false
   private pausedUntil: number | null = null
@@ -830,6 +1036,7 @@ export class ComputerHistory {
   private lastLaunchAt = 0
 
   private buffer: ComputerHistoryEvent[] = []
+  private lastAppendAt = 0
   private flushTimer?: ReturnType<typeof setTimeout>
   private retryTimer?: ReturnType<typeof setTimeout>
   private pauseTimer?: ReturnType<typeof setTimeout>
@@ -842,13 +1049,18 @@ export class ComputerHistory {
     this.now = d.now ?? Date.now
     this.store = new ComputerHistoryStore(d.root, d.tmExclude ?? (d.platform === 'darwin'
       ? (root) => execFileP('/usr/bin/tmutil', ['addexclusion', root], { timeout: 10_000 })
-      : undefined))
+      : undefined), d.keyVault, d.onKey)
     this.ready = new Promise((r) => { this.markReady = r })
     const t = this.now()
-    // 代次跨重启单调:接着盘上 state.json 的往下数(老文件没有这个字段 = 0)
-    this.dataGen = readDataGen(this.store.statePath)
+    // 代次跨重启单调:接着盘上 state.json 的往下数(老文件没有这个字段 = 0);「关过」同样从盘上接着用
+    const persisted = readPersistedState(this.store.statePath)
+    this.dataGen = persisted.dataGen
+    this.userTurnedOff = persisted.userTurnedOff
     this.diskDataGen = this.dataGen
-    this.state = { v: 1, enabled: false, pausedUntil: null, status: this.supported() ? 'off' : 'unsupported', since: t, updatedAt: t, platform: d.platform, dataGen: this.dataGen }
+    this.state = {
+      v: 1, enabled: false, pausedUntil: null, status: this.supported() ? 'off' : 'unsupported', since: t, updatedAt: t, platform: d.platform,
+      dataGen: this.dataGen, userTurnedOff: this.userTurnedOff,
+    }
   }
 
   private isDarwin(): boolean { return this.d.platform === 'darwin' }
@@ -877,15 +1089,56 @@ export class ComputerHistory {
     }
     this.started = true
     this.armPauseTimer()
-    if (existsSync(this.d.root)) await this.enqueue(() => this.store.prune(this.now())).catch(() => {})
+    if (existsSync(this.d.root)) {
+      await this.enqueue(() => this.store.prune(this.now())).catch(() => {})
+      // 老版本留下的明文行:开没开都迁(只在真有明文时才取钥匙 —— 全是密文 / 没有文件就不碰钥匙串)
+      void this.migrateInQueue().catch((e) => console.warn('[computer-history] migrate failed', errCode(e) || e))
+    }
     this.pruneTimer = setInterval(() => {
       void this.enqueue(() => this.store.prune(this.now())).catch(() => {})
+      void this.migrateInQueue().catch(() => {}) // 上次没迁成(钥匙 / 盘的一时故障)的,每小时再来
+      this.unblockKey() // 钥匙拿不到的,每小时也再试一次
       this.recheck() // 睡眠会让暂停计时器迟到;每小时兜一次
     }, PRUNE_EVERY_MS)
     this.pruneTimer.unref?.()
     this.offHelperIdle = this.d.onHelperIdle?.(() => this.helperIdle())
     this.refresh()
     this.markReady()
+  }
+
+  /** 迁移排进写队列;重写今天的文件期间置 rewriting(dispose 的同步追加会被 rename 吞掉,那一下宁可不插)。 */
+  private migrateInQueue(): Promise<void> {
+    return this.enqueue(async () => {
+      this.rewriting = true
+      try { await this.store.migrate() } finally { this.rewriting = false }
+    })
+  }
+
+  /** 想录才取钥匙(create:要写就得有):排进写队列,取到后顺手迁移旧明文,回来按结论重算状态。
+   *  keyBlocked 时只有 force(用户动作 / 每小时巡检)才再试;再试期间提示照挂着,结论出来才换。 */
+  private ensureKey(force = false): void {
+    if (this.keyLoading || (this.keyBlocked && !force) || this.disposed) return
+    this.keyLoading = true
+    void this.enqueue(async () => {
+      if (!await this.store.loadKey(true)) return
+      this.rewriting = true
+      try { await this.store.migrate() } finally { this.rewriting = false }
+    }).catch((e) => console.warn('[computer-history] key / migrate failed', errCode(e) || e)).finally(() => {
+      this.keyLoading = false
+      if (this.disposed) return
+      const blocked = !this.store.hasKey
+      if (blocked !== this.keyBlocked) {
+        this.keyBlocked = blocked
+        if (blocked) console.warn('[computer-history] encryption key unavailable, not recording:', this.store.keyError)
+        this.emit() // 状态可能本来就是 disconnected(签名不变不推),keyError 的有无要推给设置页
+      }
+      this.refresh()
+    })
+  }
+
+  /** 用户动作 / 每小时巡检:钥匙拿不到的再试一次(开着就试,暂停中也要 —— 引擎读已有记录要用)。 */
+  private unblockKey(): void {
+    if (this.keyBlocked && this.enabled && this.supported()) this.ensureKey(true)
   }
 
   /** 权限页据此把「运行中的 helper 协议太老」也判成需要更新(→「更新并重启助手」)。只在功能开着时要求:
@@ -973,7 +1226,10 @@ export class ComputerHistory {
     for (const k of ['computerHistoryEnabled', 'computerHistoryPausedUntil', 'computerHistoryExclude'] as const) if (k in cfg) this.owed.delete(k)
     const repaid = !this.owed.size && this.clearPersistRetry()
     const excludeChanged = this.readConfig(cfg)
-    if (wasEnabled && !this.enabled) this.dataGen++
+    if (wasEnabled && !this.enabled) {
+      this.dataGen++
+      this.userTurnedOff = true // 渲染层直写配置把它关掉,同样算用户亲手关的
+    }
     if (excludeChanged) {
       this.dataGen++
       this.resubscribe()
@@ -990,12 +1246,18 @@ export class ComputerHistory {
     }
     if (this.persistError !== null) v.persistError = this.persistError
     if (this.stateError !== null) v.stateError = this.stateError
+    if (this.keyBlocked && this.enabled) v.keyError = this.store.keyError ?? 'key-unavailable'
     return v
   }
 
   /** 设置页读状态。处在失败态时顺手立即重试一次(用户多半刚授完权 / 装完 helper 回来),别让他干等 60s 退避。 */
   get(): ComputerHistoryView {
     this.recheck()
+    // 钥匙拿不到的:用户打开设置页时再试一次(多半刚在钥匙串里点了允许 / 解了锁),别等到下一个整点
+    if (this.keyBlocked && !this.keyLoading && this.now() - this.lastAttemptAt > 2_000) {
+      this.lastAttemptAt = this.now()
+      this.unblockKey()
+    }
     const failing = ['disconnected', 'no_permission', 'helper_missing', 'helper_outdated'].includes(this.state.status)
     if (failing && this.wantRecording() && !this.sub && !this.connecting && this.now() - this.lastAttemptAt > 2_000) {
       this.backoff = BACKOFF_MIN_MS
@@ -1020,6 +1282,7 @@ export class ComputerHistory {
     const pop = ++this.pauseSeq // 开关一拨,旧的暂停作废(关了再开不该还停在上次的暂停里)
     const patch = { computerHistoryEnabled: on, computerHistoryPausedUntil: null }
     if (!on) {
+      if (this.enabled) this.userTurnedOff = true // 开着时被关掉才算(暂停、本来就关着再点一下都不算)
       this.enabled = false
       this.pausedUntil = null
       this.armPauseTimer()
@@ -1048,6 +1311,7 @@ export class ComputerHistory {
       if (this.enabled) await this.enqueue(() => this.store.ensureRoot())
     } finally {
       this.refresh()
+      this.unblockKey() // 用户刚打开:钥匙拿不到的再试一次
     }
     return this.view()
   }
@@ -1264,7 +1528,10 @@ export class ComputerHistory {
     const h = Number.isFinite(hours) ? Math.min(COMPUTER_HISTORY_KEEP_DAYS * 24, Math.max(1 / 60, hours)) : 24
     const now = this.now()
     const to = end !== undefined && Number.isFinite(end) ? Math.min(now, end) : now, from = to - h * 3_600_000
-    const events = [...await this.store.readRange(from, to), ...this.buffer.filter((e) => e.t >= from && e.t <= to)]
+    const read = await this.store.readRange(from, to)
+    // 读失败 ≠ 空:有解不开的行就不画时间线(画出来的「这段时间没有记录」是假的),报给设置页
+    if (read.locked) throw codeError('ch-records-locked', `ch-records-locked: ${read.locked}`)
+    const events = [...read.events, ...this.buffer.filter((e) => e.t >= from && e.t <= to)]
     events.sort((a, b) => a.t - b.t)
     return foldSessions(events).reverse().slice(0, 500)
   }
@@ -1363,6 +1630,10 @@ export class ComputerHistory {
       this.storeFailing = false
       this.refresh()
     }
+    // 落盘之后才踢:引擎重读的就是这批文件,踢早了读到旧的。
+    const t = this.now()
+    if (t - this.lastAppendAt >= SIGNAL_IDLE_MS || batch.some((e) => e.kind === 'app' || e.kind === 'system')) this.d.onSignal?.()
+    this.lastAppendAt = t
   }
 
   // ── 状态 ──
@@ -1371,6 +1642,7 @@ export class ComputerHistory {
     if (!this.supported()) return 'unsupported'
     if (!this.enabled) return 'off'
     if (this.isPaused()) return 'paused'
+    if (this.keyBlocked) return 'disconnected' // 钥匙拿不到:不录(view.keyError 说原因)
     if (this.connStatus === 'recording' && this.storeFailing) return 'disconnected' // 连着但写不进盘:不能说「记录中」
     return this.connStatus
   }
@@ -1378,8 +1650,16 @@ export class ComputerHistory {
   /** 重算状态 → 有变化就写 state.json + 推送;再按「想不想录」开 / 断连接。 */
   private refresh(): void {
     if (!this.started || this.disposed) return
-    if (this.wantRecording()) { if (!this.holds) this.ensureConnected() }
-    else {
+    // 开着就要有钥匙,暂停中也一样:引擎在暂停期间照样能读已有的记录,钥匙得先交过去(不只在「在录」时才取)
+    if (this.enabled && this.supported() && !this.store.hasKey) this.ensureKey()
+    if (this.wantRecording()) {
+      // 先有钥匙再连:连上就有事件进来,而没钥匙的事件不许落盘
+      if (!this.store.hasKey) {
+        this.disconnect()
+        this.connStatus = 'disconnected'
+        this.ensureKey()
+      } else if (!this.holds) this.ensureConnected()
+    } else {
       this.disconnect()
       this.connStatus = 'disconnected' // 下次开录从「未连上」起算,别把上一轮的 recording 带过去
     }
@@ -1388,8 +1668,9 @@ export class ComputerHistory {
     const next: ComputerHistoryState = {
       v: 1, enabled: this.enabled && this.supported(), pausedUntil: this.isPaused() ? this.pausedUntil : null, status,
       since: status === this.state.status ? this.state.since : now, updatedAt: now, platform: this.d.platform, dataGen: this.dataGen,
+      userTurnedOff: this.userTurnedOff,
     }
-    const sig = JSON.stringify([next.enabled, next.pausedUntil, next.status, next.dataGen])
+    const sig = JSON.stringify([next.enabled, next.pausedUntil, next.status, next.dataGen, next.userTurnedOff])
     this.state = next
     if (sig === this.lastSig) return
     this.lastSig = sig
@@ -1404,7 +1685,7 @@ export class ComputerHistory {
    * 不能让它照旧按盘上的 enabled:true / 旧代次放行。删在同一任务里,所以排在后面的清除执行时 state.json 已经不在了。
    */
   private writeStateFile(next: ComputerHistoryState, sig: string): void {
-    if (!next.enabled && !existsSync(this.d.root)) { // 功能从没开过的机器不建目录:引擎把「没有 state.json」当关
+    if (!next.enabled && !next.userTurnedOff && !existsSync(this.d.root)) { // 功能从没开过的机器不建目录:引擎把「没有 state.json」当关
       this.setStateError(null) // 目录都没了(关着)= 盘上就是「关」,没什么可补的
       return
     }

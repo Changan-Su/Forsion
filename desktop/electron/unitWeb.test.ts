@@ -15,7 +15,7 @@ import { join, resolve } from 'node:path'
 import type { AddressInfo } from 'node:net'
 import { IPC } from '@amadeus-shared/ipc'
 import type { VaultFace } from './amadeus/ipc'
-import { newPairStore, startUnitWeb, VAULT_RPC_ALLOW, VAULT_RPC_LOCAL_ONLY, engineRouteAccess, engineTarget, normalizeEnginePath, type PairStore, type PairedDevice, type UnitWebDeps } from './unitWeb'
+import { newPairStore, startUnitWeb, VAULT_RPC_ALLOW, VAULT_RPC_LOCAL_ONLY, engineRouteAccess, engineTarget, normalizeEnginePath, type PairStore, type PairedDevice, type UnitWebDeps, startClipEntrance } from './unitWeb'
 import { ENGINE_ROUTES } from './engineRoutes.generated'
 import { PRODUCT } from './product'
 import { signProxyCaller, type ProxyCaller, type UnitCaller } from './unitCaller'
@@ -247,6 +247,68 @@ describe('unitWeb', () => {
     } finally { b.close() }
   })
 
+  it('Forsion Clip 本机入口:只听回环、只放 Clip 用到的几条路、配对请求只认 Clip 的 Origin,鉴权照正式服务走', async () => {
+    const CLIP = 'chrome-extension://gpajikakdmhjebadgcbmhidkkajclfoi'
+    const code = `tangu:47655:${'ab'.repeat(24)}`
+    const b = await boot(null, undefined, undefined, { browserControlCode: async () => code, meta: { instanceId: 'inst-1', name: '测试机', version: '9.9.9', build: 'dev' } })
+    let target: typeof b.handle | null = b.handle
+    const entrance = await startClipEntrance({ ports: [0], origins: [CLIP], target: () => target })
+    try {
+      expect(entrance).not.toBeNull()
+      const base = `http://127.0.0.1:${entrance!.port}`
+      expect(entrance!.port).toBeGreaterThan(0)
+      const meta = (await (await fetch(`${base}/unit/meta`)).json()) as any
+      expect(meta).toMatchObject({ instanceId: 'inst-1', build: 'dev', pair: true })
+      // 只放 Clip 用到的路:设备页 / 插件 / 主机文件一律 404(正式服务上它们照常)
+      for (const p of ['/unit/plugins', '/unit/config', '/unit/hostfile?path=/ws/ok.md', '/', '/unit%2Fplugins', '/engine/agent/sessions/%2e%2e/%2e%2e/unit/plugins', '/engine/agent/sessionsX']) {
+        expect((await fetch(`${base}${p}`)).status, p).toBe(404)
+      }
+      // 网页 / 没带 Origin:不弹框
+      expect((await fetch(`${base}/unit/pair/request`, { method: 'POST', body: '{}' })).status).toBe(403)
+      expect((await fetch(`${base}/unit/pair/request`, { method: 'POST', body: '{}', headers: { Origin: 'https://evil.example' } })).status).toBe(403)
+      const req = (await (await fetch(`${base}/unit/pair/request`, { method: 'POST', body: '{"name":"Forsion Clip (Chrome)"}', headers: { Origin: CLIP } })).json()) as any
+      expect(req.code).toMatch(/^\d{6}$/)
+      b.approve(true)
+      await tick()
+      const poll = (await (await fetch(`${base}/unit/pair/poll?id=${req.requestId}`)).json()) as any
+      expect(poll.status).toBe('approved')
+      const auth = { Authorization: `Bearer ${poll.token}` }
+      expect((await fetch(`${base}/unit/whoami`)).status).toBe(401)
+      expect((await fetch(`${base}/unit/whoami`, { headers: auth })).status).toBe(200)
+      // 一次配对领 Tangu 连接码:入口是本机套接字 + 局域网配对令牌 → 照样给
+      expect(await (await fetch(`${base}/unit/browser-control`, { headers: auth })).json()).toEqual({ code })
+      expect((await fetch(`${base}/vault/rpc`, { method: 'POST', headers: { ...auth, 'Content-Type': 'application/json' }, body: JSON.stringify({ ch: IPC.listPages, args: [] }) })).status).toBe(200)
+      // 正式服务换服务的空档:503,Clip 按「还在等」处理
+      target = null
+      expect((await fetch(`${base}/unit/meta`)).status).toBe(503)
+    } finally { await entrance?.close(); b.close() }
+  })
+
+  it('Forsion Clip 本机入口:第一个口被占就用下一个,都被占返回 null', async () => {
+    const first = await startClipEntrance({ ports: [0], origins: [], target: () => null })
+    try {
+      const busy = first!.port
+      const second = await startClipEntrance({ ports: [busy, 0], origins: [], target: () => null })
+      expect(second?.port).toBeGreaterThan(0)
+      expect(second?.port).not.toBe(busy)
+      await second?.close()
+      expect(await startClipEntrance({ ports: [busy], origins: [], target: () => null })).toBeNull()
+    } finally { await first?.close() }
+  })
+
+  it('/unit/appearance:未配对 401,没上报过 404,上报过给已配对设备', async () => {
+    let appearance: { skin: string; bg: string; mode: 'light' | 'dark'; locale: 'zh' | 'en' } | null = null
+    const b = await boot(null, undefined, undefined, { appearance: () => appearance })
+    try {
+      expect((await fetch(`${b.base}/unit/appearance`)).status).toBe(401)
+      const token = await pairUp(b)
+      const auth = { Authorization: `Bearer ${token}` }
+      expect((await fetch(`${b.base}/unit/appearance`, { headers: auth })).status).toBe(404)
+      appearance = { skin: 'sage', bg: 'sage', mode: 'dark', locale: 'en' }
+      expect(await (await fetch(`${b.base}/unit/appearance`, { headers: auth })).json()).toEqual({ appearance })
+    } finally { b.close() }
+  })
+
   it('/unit/browser-control:局域网里另一台已配对的设备拿不到(403)', async () => {
     const lan = Object.values(networkInterfaces()).flat().find((i) => i && i.family === 'IPv4' && !i.internal)?.address
     if (!lan) return // 这台机器没有局域网地址:测不了「别的设备」,回环那条已覆盖放行面
@@ -330,6 +392,16 @@ describe('unitWeb', () => {
     } finally { b.close() }
   })
 
+  const lanAddress = Object.values(networkInterfaces()).flat().find((n) => n && n.family === 'IPv4' && !n.internal)?.address
+  it.skipIf(!lanAddress)('绑在具体局域网地址上时,本机隧道仍能用内部密钥进来', async () => {
+    const b = await boot(null, undefined, undefined, undefined, lanAddress)
+    try {
+      const url = `http://${lanAddress}:${b.handle.port}/unit/spaces`
+      expect((await fetch(url, { headers: { 'x-unit-internal': b.handle.internalSecret } })).status).toBe(200)
+      expect((await fetch(url, { headers: { 'x-unit-internal': 'wrong' } })).status).toBe(401)
+    } finally { b.close() }
+  })
+
   it('/unit/spaces:未配对 401;配对后返回 Space 配方清单(设备页 Ribbon 的数据源)', async () => {
     const b = await boot()
     try {
@@ -376,6 +448,8 @@ describe('unitWeb', () => {
       `<html><head><meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self'" /></head><body>shell</body></html>`)
     await mkdir(join(dist, 'assets'))
     await writeFile(join(dist, 'assets', 'app-abc123.js'), 'console.log(1)')
+    await mkdir(join(dist, 'iui-lib', 'd3@7'), { recursive: true })
+    await writeFile(join(dist, 'iui-lib', 'd3@7', 'd3.js'), 'export const d3 = 1')
     const b = await boot(dist)
     try {
       const homeRes = await fetch(`${b.base}/`)
@@ -383,6 +457,10 @@ describe('unitWeb', () => {
       expect(homeRes.headers.get('cache-control')).toBe('no-cache')
       expect((await fetch(`${b.base}/some/route`)).headers.get('cache-control')).toBe('no-cache')
       expect((await fetch(`${b.base}/assets/app-abc123.js`)).headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+      // Intelligent UI 卡的随包库:卡是无源 iframe,module 脚本按 CORS 取 → 必须带 ACAO;assets 之外的文件不带
+      const lib = await fetch(`${b.base}/iui-lib/d3@7/d3.js`)
+      expect([lib.status, lib.headers.get('access-control-allow-origin'), lib.headers.get('content-type')]).toEqual([200, '*', 'text/javascript'])
+      expect((await fetch(`${b.base}/assets/app-abc123.js`)).headers.get('access-control-allow-origin')).toBeNull()
       const home = await homeRes.text()
       expect(home).toContain('__FORSION_UNIT_PAGE__')
       expect(home).toContain('inst-1')
@@ -967,6 +1045,28 @@ describe('unitWeb', () => {
       o.paired.push({ id: 'owner', name: 'owner', tokenHash: createHash('sha256').update(ownerToken).digest('hex'), createdAt: 0 })
       expect((await raw(o.base, 'POST', '/engine/agent/runs', { Authorization: `Bearer ${ownerToken}` })).status).toBe(200)
     } finally { o.close() }
+  })
+
+  it('Unit 接上云账号后:隧道来路不算工作区主人(引擎走允许清单且盖远端标记,不可逆删除只许本机),主人不变', async () => {
+    const ownerToken = 'owner-access-key-relay'
+    const seen: Array<Record<string, unknown>> = []
+    const engine = http.createServer((req, res) => { seen.push({ ...req.headers }); res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{}') })
+    await new Promise<void>((done) => engine.listen(0, '127.0.0.1', done))
+    const o = await boot(null, undefined, undefined, { projection: { mode: 'local', basePath: '/', product: PRODUCT },
+      getEngine: () => ({ url: `http://127.0.0.1:${(engine.address() as AddressInfo).port}`, token: 'k', remoteMark: 'mark' }) })
+    try {
+      o.paired.push({ id: 'owner', name: 'owner', tokenHash: createHash('sha256').update(ownerToken).digest('hex'), createdAt: 0 })
+      const owner = { Authorization: `Bearer ${ownerToken}` }, tunnel = { 'x-unit-internal': o.handle.internalSecret }
+      expect((await raw(o.base, 'POST', '/engine/agent/runs', owner)).status).toBe(200)
+      expect(seen.at(-1)).not.toHaveProperty('x-forsion-remote')
+      expect((await raw(o.base, 'POST', '/engine/agent/runs', tunnel)).status).toBe(403)
+      expect((await raw(o.base, 'GET', '/engine/agent/sessions', tunnel)).status).toBe(200)
+      expect(seen.at(-1)).toMatchObject({ 'x-forsion-remote': 'tunnel', 'x-forsion-remote-mark': 'mark' })
+      const empty = JSON.stringify({ ch: IPC.emptyTrash, args: [] })
+      const rpc = (headers: Record<string, string>) => fetch(`${o.base}/vault/rpc`, { method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: empty })
+      expect((await rpc(tunnel)).status).toBe(403)
+      expect((await rpc(owner)).status).toBe(200)
+    } finally { o.close(); engine.close() }
   })
 
   it('K4 /unit/remote-access:未鉴权 401;只回调用方自己的状态;POST …/request 只为 unit / account 触发;坏断言 403', async () => {

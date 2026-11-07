@@ -13,6 +13,7 @@ registerMessages({
   'gitRemotes.pushHere': { zh: '推送到这里', en: 'Push target' },
   'gitRemotes.noTarget': { zh: '还没定推送到哪个远端。在下面挑一个「以后推送到这里」。', en: 'No push target yet. Pick one below with Push here from now on.' },
   'gitRemotes.authForsion': { zh: '你的 Forsion 账号', en: 'Your Forsion account' },
+  'gitRemotes.authForsionOrg': { zh: '{org}组织', en: '{org} organization' },
   'gitRemotes.authGithub': { zh: '用绑定的 @{login}', en: 'Uses linked @{login}' },
   'gitRemotes.authGithubUnlinked': { zh: '没绑定 GitHub · 用这台电脑自己的凭据', en: 'No GitHub account linked · Uses this computer’s own credentials' },
   'gitRemotes.authLocal': { zh: '用这台电脑自己的凭据', en: 'Uses this computer’s own credentials' },
@@ -25,6 +26,13 @@ registerMessages({
   'gitRemotes.openPage': { zh: '打开仓库网页', en: 'Open repository page' },
   'gitRemotes.copy': { zh: '复制地址', en: 'Copy address' },
 })
+
+/** 推拉这个远端用谁的账号(Git 页的远端卡片与对话里的 Git 卡同一句)。githubLogin:绑定的 GitHub 账号;null = 没绑定;undefined = 不知道。
+ *  Forsion Git 上商业版组织的仓库(引擎认出的 r.org)写组织,不写个人账号。 */
+export const remoteAuthText = (r: GitRemoteInfo, githubLogin: string | null | undefined, t: (k: string, v?: Record<string, unknown>) => string): string =>
+  r.auth === 'forsion' ? (r.org ? t('gitRemotes.authForsionOrg', { org: r.org }) : t('gitRemotes.authForsion'))
+    : r.auth === 'github' ? (githubLogin ? t('gitRemotes.authGithub', { login: githubLogin }) : githubLogin === null ? t('gitRemotes.authGithubUnlinked') : t('gitRemotes.authLocal'))
+      : t('gitRemotes.authLocal')
 
 export const siteName = (r: GitRemoteInfo, t: (k: string) => string): string =>
   r.host === 'forsion' ? 'Forsion Git' : r.host === 'github' ? 'GitHub' : r.hostname ?? t('gitRemotes.local')
@@ -72,10 +80,7 @@ export function ProjectGitRemotes({ remotes, pushRemote, githubLogin, busy, read
     window.addEventListener('blur', close)
     return () => { window.removeEventListener('click', close); window.removeEventListener('contextmenu', close); window.removeEventListener('blur', close) }
   }, [menu])
-  const authText = (r: GitRemoteInfo): string =>
-    r.auth === 'forsion' ? t('gitRemotes.authForsion')
-      : r.auth === 'github' ? (githubLogin ? t('gitRemotes.authGithub', { login: githubLogin }) : githubLogin === null ? t('gitRemotes.authGithubUnlinked') : t('gitRemotes.authLocal'))
-        : t('gitRemotes.authLocal')
+  const authText = (r: GitRemoteInfo): string => remoteAuthText(r, githubLogin, t)
   const single = remotes.length === 1
   const open = remotes.find((r) => r.name === menu?.name)
 

@@ -1,0 +1,53 @@
+{
+  "//": "插件接口层(ctx 的实现)边界清单。方案 A(2026-11-05):还没有进热更新包,只给 hot-update-scope.mjs 分类用 —— 这次改动能不能走热更新。方案页:仓根 docs/ToBeImproved/插件接口层热更新方案_2026-11-04/。layer = 将来随 Tangu 包热更新的文件,宿主别的文件不许在运行时引它们(--verify 核,只许减);needsSplit = 还被宿主在运行时引用、进包前要先拆的;writesUserData = 写用户数据的,进包前写盘那几步要留宿主或按写盘协议复核;types = 只有类型、没有运行时导出,改它不用发版。没列在这里的 amadeus/plugins 文件一律算宿主。Tangu 界面文件(tangu-boundary.json)不许出现在这里。",
+  "layer": [
+    "desktop/frontend/src/amadeus/plugins/blockSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/boardSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/chatBoxSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/dashboardSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/floatingTocSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/markdownEditorSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/markdownSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/markdownSurface.css",
+    "desktop/frontend/src/amadeus/plugins/modelPickerSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/partsSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/pluginParts.css",
+    "desktop/frontend/src/amadeus/plugins/recordSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/recordSurface.css",
+    "desktop/frontend/src/amadeus/plugins/selectionBarSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/settingsPageSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/tableSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/tableSurface.css",
+    "desktop/frontend/src/amadeus/plugins/tableSpec.ts",
+    "desktop/frontend/src/amadeus/plugins/engineRequest.ts",
+    "desktop/frontend/src/amadeus/plugins/guideSpotlight.ts",
+    "desktop/frontend/src/amadeus/plugins/guideSpotlight.css",
+    "desktop/frontend/src/amadeus/plugins/vaultEvents.ts",
+    "desktop/frontend/src/amadeus/plugins/pluginSpaces.tsx",
+    "desktop/frontend/src/amadeus/plugins/pluginAutomation.ts"
+  ],
+  "needsSplit": [
+    "desktop/frontend/src/amadeus/plugins/pluginStore.ts",
+    "desktop/frontend/src/amadeus/plugins/guideTips.ts",
+    "desktop/frontend/src/amadeus/plugins/ribbonAction.ts",
+    "desktop/frontend/src/amadeus/plugins/pluginText.ts",
+    "desktop/frontend/src/amadeus/plugins/contextMenuSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/summaryCards.ts",
+    "desktop/frontend/src/amadeus/plugins/pluginViewModes.ts",
+    "desktop/frontend/src/amadeus/plugins/inboxCards.ts",
+    "desktop/frontend/src/amadeus/plugins/externalPdfSurface.ts",
+    "desktop/frontend/src/amadeus/plugins/viewSurface.tsx",
+    "desktop/frontend/src/amadeus/plugins/listTree.ts",
+    "desktop/shared/chatBox.ts"
+  ],
+  "writesUserData": [
+    "desktop/frontend/src/amadeus/plugins/pluginData.ts",
+    "desktop/frontend/src/amadeus/plugins/pluginDb.ts",
+    "desktop/frontend/src/amadeus/plugins/pluginCalendar.ts",
+    "desktop/frontend/src/amadeus/plugins/pluginCalendarEvents.ts",
+    "desktop/frontend/src/amadeus/plugins/pluginDataSync.ts"
+  ],
+  "types": [
+    "desktop/frontend/src/amadeus/plugins/types.ts"
+  ]
+}

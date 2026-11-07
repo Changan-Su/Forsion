@@ -7,18 +7,19 @@ import { useModelPickerPreferences } from '../../modelPickerPreferences'
  */
 import React, { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from 'react'
 import {
-  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, Users, Sparkles,
+  ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, ChevronRight, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, CircleAlert, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
+import { CallHint, markCallHintSeen } from './CallHint'
 import { claimComposerPrefill, subscribeComposerPrefill } from '../../amadeus/plugins/tanguSeam'
 import { VoiceRecordingBar } from './VoiceRecordingBar'
 import { THINKING_LEVELS } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
 // context 视图已知注入段 key(与引擎 agentLoop ctxMark 调用一一对应);未知 key 显示原样
 import type { AgentConfig, Attachment, CtxInfo, DefaultModelSlot, MessageRecord, ModelInfo, ModelsResponse, NormalAgentDef, SkillInfo } from '../../../../../tangu-agent/src/contracts/clientTypes'
-import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useExitGhost, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { nativeHaptic, nativeSheetPresenter, openNativeSheetMenu, useEdgeNudge, useNativeChromeInstalled, useWorkspace, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { ModelPill, contextRingWindow, type ModelPillGroup } from '../../components/ModelPill'
 import { UltraConfirmDialog, ultraConfirmSkipped } from './UltraConfirmDialog'
 import { registerMessages, useI18n } from '../../i18n'
@@ -38,6 +39,7 @@ import { useUploads } from '../../services/uploads'
 import { addDraftFile, isInWorkspace, previewOf, release, removeDraftFile, uploadIdOf } from './composerUploads'
 import { commandsFor } from '../../commandCatalog'
 import { getCustomCommands, expandCustomCommand, getModelQuota, listAllMessages, type CustomCommandInfo } from '../../services/backendService'
+import { ComposerMenuSurface, ComposerMenuHeader, useComposerLayout } from '../../components/ComposerMenuSurface'
 import { AddContentMenu, type AddContentReference } from './AddContentMenu'
 import { NormalModeItem, normalModeItems } from './NormalModeItem'
 import { mainReferenceKey } from './mainReference'
@@ -47,6 +49,7 @@ import { RefChipView } from './RefChipView'
 import { catOf, moveRefCat, pickerMatches, refCats, type RefCand, type RefCat } from './refPicker'
 import { expandRuns, findRuns, freeRunName, inlineRun, plainRuns, runTouching, trimDraftEnd } from './inlineRefs'
 import { InlineRefMirror } from './InlineRefMirror'
+import { findTokens, tokenTouching } from './composerTokens'
 import { APPREF_EVENT, APPREF_TARGET_ATTR, ensureAppRefCommand, type AppRefDelivery } from './appRefCommand'
 import { appRefToken, type AppRef, type AppRefList } from '../../../../shared/appRefs'
 import { AppRefIcon } from '../../components/appRefs'
@@ -56,11 +59,13 @@ import { ElementTile, PasteTile, QuotePreview, QuoteTile } from './QuoteTile'
 import { ELEMENT_EVENT, ELEMENT_TARGET_ATTR, composeElements, elementImages, formatElementBlock, markComposerUsed, type ElementPick } from './elementPick'
 import { NEW_CHAT_DRAFT, clearDraft, moveDraft, setDraftField, useComposerDrafts, useDraftField } from './composerDrafts'
 import { dropSend, fadeOutDraft, noteSend } from './sendFlight'
+import { announceSend } from './freshLayout'
 import { ContextUsagePop } from './ContextUsagePop'
 import { isDirectModelId } from '../chatModelCatalog'
 import { usePromptSuggest } from './promptSuggest'
 import './composer2.css'
 import { focusTarget, homeTarget, targetForSession, targetKeyOf, useComposerRef } from '../../services/engine/targets'
+import { agentName, agentNames } from '../../agentName'
 import '../../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
 
 registerMessages({
@@ -117,6 +122,7 @@ const TOUCH_TIP_KEYS = [STEER_TIP, 'input.tip.wikiRef']
 registerMessages({
   'input.quote.group': { zh: '引用', en: 'Quotes' },
   'input.tip': { zh: '小贴士：{tip}', en: 'Tip: {tip}' },
+  'input.placeholderCompact': { zh: '输入消息…', en: 'Message…' },
   'input.runningPlaceholder': { zh: '运行中，可继续输入…', en: 'Working… You can keep typing' },
   'input.steer.queuedHint': { zh: '排队项在本轮结束后依次执行 · ↑ 取回编辑', en: 'Queued items run in order after this turn · ↑ to recall' },
   'input.tip.steer': { zh: '运行中也能继续发消息，会在下一步交给 Agent', en: 'You can send while it runs: the agent reads it at the next step' },
@@ -371,8 +377,8 @@ export const Composer2: React.FC<{
   /** 会话的 Ultra 开关(对标 Codex Ultra:max + 主动并行派子代理)。 */
   ultra?: boolean
   /** 会话的 Fast 开关(对标 Codex /fast);药丸只在当前模型目录有 Fast 档时露出。 */
-  fast?: boolean
-  onFastChange?: (fast: boolean) => void
+  fast?: boolean | 'ultra'
+  onFastChange?: (fast: boolean | 'ultra') => void
   defaultModelIds?: Partial<Record<DefaultModelSlot, string>>
   onDefaultModelChange?: (slot: DefaultModelSlot, modelId: string) => void
   /** 模型菜单「上下文上限」:写本机该模型的窗口覆盖(null = 交还默认 272k)。只在本机引擎下传。 */
@@ -407,6 +413,8 @@ export const Composer2: React.FC<{
   /** 对话中切换 Agent(拍板 ⑪:入口 = 模式菜单「普通模式 ›」的二级面板,见 NormalModeItem)。给了才渲染;团队模式 / 引擎会话 / chat 预设不渲染。 */
   onAgentSwitch?: (slug: string) => void
   currentAgentSlug?: string
+  /** 收件人芯片(AgentSelectStrip):工具行里模式芯片右边。宿主按「新对话 / 空会话」门控好再传,不传不画。 */
+  recipientChip?: React.ReactNode
   onNewSession?: () => void
   onBranch?: () => void
   onOpenSettings?: () => void
@@ -472,7 +480,7 @@ export const Composer2: React.FC<{
   verifyCommand, onVerifyCommandChange,
   preset, onPresetChange, planMode, onPlanModeChange, voiceMode, onVoiceModeChange, liveOwner, liveSessionKey, prepareLiveSession, skills,
   groupChat, groupAgents, groupTempAgents, onGroupChange, onAddAgent, onNormalWork,
-  agents, onAgentSwitch, currentAgentSlug, mentionProjects, onNewSession, onBranch, onOpenSettings,
+  agents, onAgentSwitch, currentAgentSlug, recipientChip, mentionProjects, onNewSession, onBranch, onOpenSettings,
   onExecConfigChange, onSend, onStop,
   quotes = NO_QUOTES, quoteNotes, onRemoveQuote, onClearQuote, onBtw, onQuoteNote,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
@@ -504,6 +512,7 @@ export const Composer2: React.FC<{
   const waitTips = (touchUi ? TOUCH_TIP_KEYS : WAIT_TIP_KEYS).filter((k) => !engineId || k !== STEER_TIP)
   const [tipFade, setTipFade] = useState(false)
   const [compactCard, setCompactCard] = useState(false)
+  // 卡宽 ≤ 260(编码侧栏这类窄栏):占位换短句、上下文圆环收进「+」菜单;药丸去 ▾ 在 composer2.css 的 @container (max-width: 260px)。
   // 窄输入框里小贴士折成两行会被一行高裁掉后半句 → 这个 run 里一旦折行就撑到两行并保持到 run 结束(不随每条贴士跳高度)。
   const [tipTall, setTipTall] = useState(false)
   useEffect(() => {
@@ -591,10 +600,14 @@ export const Composer2: React.FC<{
   }, [draftKey])
   const taRef = useRef<HTMLTextAreaElement>(null)
   const cardRef = useRef<HTMLDivElement>(null)
+  const layout = useComposerLayout(cardRef)
+  const addAnchorRef = useRef<HTMLSpanElement>(null)
+  const modeAnchorRef = useRef<HTMLSpanElement>(null)
+  const ctxAnchorRef = useRef<HTMLSpanElement>(null)
   useLayoutEffect(() => {
     const card = cardRef.current
     if (!card) return
-    const observer = new ResizeObserver(([entry]) => setCompactCard(entry.contentRect.width <= 360))
+    const observer = new ResizeObserver(([entry]) => { setCompactCard(entry.contentRect.width <= 360) })
     observer.observe(card)
     return () => observer.disconnect()
   }, [])
@@ -714,17 +727,18 @@ export const Composer2: React.FC<{
   // 存了模型就用它;从没动过这个开关、装了 Forsion Extend 且已登录时默认用云端的通话模型(见 services/realtimeModel.ts)。
   const realtimeStored = useRealtimeConfig()
   const cloudCallModel = useApp((s) => s.modelsResp?.realtimeModel ?? null)
+  const directProviders = useApp((s) => s.modelsResp?.directProviders)
   const forsionSignedIn = useApp((s) => !!s.authInfo?.loggedIn && s.authInfo.tokenValid !== false) && !!window.tangu?.forsionLogin
   const { model: realtimeModel, voice: realtimeVoice } = useMemo(
-    () => resolveRealtimeCall(realtimeStored, { model: cloudCallModel, signedIn: forsionSignedIn }),
-    [realtimeStored, cloudCallModel, forsionSignedIn])
+    () => resolveRealtimeCall(realtimeStored, { model: cloudCallModel, signedIn: forsionSignedIn, providers: directProviders }),
+    [realtimeStored, cloudCallModel, forsionSignedIn, directProviders])
   const [callStarting, setCallStarting] = useState(false)
   const [callError, setCallError] = useState('')
   const phoneCall = !!window.tangu?.mobile // 手机:通话走云网关,通话卡是页面顶上的一条(mini/VoiceCallView 的 VoiceCallBar)
   // 这个会话正在 Mini 里通话 → 纯文字送进电话(见 sendMessage)
   const callSessionId = useSyncExternalStore(subscribeCallPresence, getCallPresence)
   const inCall = !!activeSessionId && callSessionId === activeSessionId
-  // 输入建议(promptSuggest.ts,默认关):一轮结束后猜的下一句,当占位文字显示在空输入框里,Tab 采用。
+  // 输入建议(promptSuggest.ts,默认开):一轮结束后猜的下一句,空输入框里显示,Tab 填入。
   // 只认明确给了 sessionId 的输入框(聊天视图)。和占位文字一样常驻:只有新一轮起跑才作废(appStore subscribeRun),
   // 打字 / Tab 采用都只是因为输入框不空而藏起来,删空了还在。
   const suggestion = usePromptSuggest((st) => (sessionId ? st.bySession[sessionId] : undefined) || '')
@@ -756,6 +770,7 @@ export const Composer2: React.FC<{
   }, [liveOwnerResolved])
   const startVoiceCall = async () => {
     if (callStarting) return
+    markCallHintSeen()
     setCallStarting(true)
     setCallError('')
     try {
@@ -822,11 +837,10 @@ export const Composer2: React.FC<{
   }
   // 视口兜底:这些菜单是 absolute-in-relative + 固定宽度,窄屏时仍可能被边缘夹住。
   // mode 的外层会先占住 224px 最终宽度,避免胶囊展开时 right:0 锚点横移。见 menuAnchor.useEdgeNudge。
-  const modeFix = useEdgeNudge(openMenu === 'mode', { boundary: '.t2-chat-view' })
-  useExitGhost(modeFix.ref, openMenu === 'mode') // 关掉时留替身放 80ms 退场(走查续八 8.4)
+  const modeFix = useEdgeNudge(openMenu === 'mode' && !layout.compact, { boundary: '.t2-chat-view' })
   // 上下文占比的详情浮层:同款 absolute + 固定宽,窄屏也会捅出边缘。
   // 右边缘贴输入卡右边缘,不越出输入卡(走查 5.13):边界 = 输入卡、边距 0。
-  const ctxPopFix = useEdgeNudge(openMenu === 'ctx', { boundary: '.t2c-card', margin: 0 })
+  const ctxPopFix = useEdgeNudge(openMenu === 'ctx' && !layout.compact, { boundary: '.t2c-card', margin: 0 })
 
   useEffect(() => {
     if (!openMenu) return
@@ -836,14 +850,20 @@ export const Composer2: React.FC<{
       setOpenMenu(null)
     }
     // 确认框开着时 Esc 只关确认框(焦点被 Tab 到背景也一样),不连带关菜单
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape' && !document.querySelector('[data-keep-menus]')) setOpenMenu(null) }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || document.querySelector('[data-keep-menus]')) return
+      const surface = openMenu === 'mode' ? modeFix.ref.current : openMenu === 'ctx' ? ctxPopFix.ref.current : null
+      if (!cardRef.current?.contains(document.activeElement) && !surface?.contains(document.activeElement)) return
+      const trigger = openMenu === 'ctx' && layout.tight ? addAnchorRef.current?.querySelector('button') : cardRef.current?.querySelector<HTMLElement>('.t2c-row button[aria-expanded="true"]')
+      setOpenMenu(null); trigger?.focus({ preventScroll: true })
+    }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
     return () => {
       document.removeEventListener('mousedown', onDown)
       document.removeEventListener('keydown', onKey)
     }
-  }, [openMenu])
+  }, [openMenu, layout.tight])
 
   const autoGrow = () => {
     const ta = taRef.current
@@ -881,14 +901,6 @@ export const Composer2: React.FC<{
     const ta = taRef.current
     if (running && !compactCard && !tipTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setTipTall(true)
   }, [running, tipIdx, locale, tipTall, draft, compactCard])
-  // 输入建议同理:末尾带着「⇥ Tab」提示,折行时一行高会把提示裁掉 → 撑到两行(换一句建议重量)。
-  const [suggestTall, setSuggestTall] = useState(false)
-  useLayoutEffect(() => setSuggestTall(false), [suggestion, locale])
-  useLayoutEffect(() => {
-    const ta = taRef.current
-    if (showSuggestion && !suggestTall && ta && !ta.value && ta.scrollHeight > ta.clientHeight + 2) setSuggestTall(true)
-  }, [showSuggestion, suggestion, suggestTall, locale, draft])
-
   // 历史召回:older=true→↑ 取更旧、false→↓ 取更新;越过最新回到暂存草稿。光标置末尾。
   const recallHistory = (older: boolean) => {
     if (older && histPos === 0) histStash.current = draft // 首次进入:暂存当前草稿
@@ -1143,7 +1155,7 @@ export const Composer2: React.FC<{
   const mentionPool = useMemo<NormalAgentDef[]>(() => {
     // 私聊:候选 = 项目(借 NormalAgentDef 的 slug/name/description 三个字段承载,slug = 路径;不进 delegate 池)。
     if (projectMode) return (mentionProjects || []).map((p) => ({ slug: p.path, name: p.name, description: p.path } as NormalAgentDef))
-    if (!inGroup) return agents || []
+    if (!inGroup) return (agents || []).filter((a) => !a.disabled) // 停用的不进 @ 候选
     const saved = (agents || []).filter((a) => groupAgents!.includes(a.slug))
     const seen = new Set(saved.map((a) => a.slug))
     return [...saved, ...(groupTempAgents || []).filter((a) => !seen.has(a.slug))]
@@ -1156,7 +1168,7 @@ export const Composer2: React.FC<{
   const mentionMatches = useMemo<NormalAgentDef[]>(() => {
     if (!mention) return []
     const q = mention.query.toLowerCase()
-    return mentionPool.filter((a) => !q || a.name.toLowerCase().includes(q) || a.slug.toLowerCase().includes(q)).slice(0, 10)
+    return mentionPool.filter((a) => !q || a.slug.toLowerCase().includes(q) || agentNames(a).some((n) => n.toLowerCase().includes(q))).slice(0, 10)
   }, [mention, mentionPool])
   const mentionActive = !!mention && mentionMatches.length > 0
   useEffect(() => { setMentionIndex(0) }, [mention?.start, mention?.query])
@@ -1164,10 +1176,10 @@ export const Composer2: React.FC<{
   const pickMention = (a: NormalAgentDef) => {
     if (!mention) return
     const before = draft.slice(0, mention.start)
-    const insert = `@${a.name} `
+    const insert = `@${agentName(a)} `
     const next = before + insert + draft.slice(cursorPos)
     setDraft(next)
-    if (projectMode) setMentionedProjects((prev) => (prev.some((p) => p.path === a.slug) ? prev : [...prev, { name: a.name, path: a.slug }]))
+    if (projectMode) setMentionedProjects((prev) => (prev.some((p) => p.path === a.slug) ? prev : [...prev, { name: agentName(a), path: a.slug }]))
     else if (inGroup) setMentionedSlug(a.slug)
     else setMentionAgents((prev) => (prev.includes(a.slug) ? prev : [...prev, a.slug]))
     const caret = before.length + insert.length
@@ -1311,6 +1323,13 @@ export const Composer2: React.FC<{
   const rawRefChips = useMemo(() => (autoChip ? [autoChip, ...refChips] : refChips), [autoChip, refChips])
   const runChips = useMemo(() => runChipOwners(refChips), [refChips])
   const inlineRuns = useMemo(() => findRuns(draft, (run) => runChips.has(run)), [draft, runChips])
+  // 认得出的斜杠命令 / 选过的 @ 提及:输入框里画成一枚(InlineRefMirror),退格整枚删(见 ./composerTokens)
+  const slashNames = useMemo(() => new Set(slashItems.map((it) => it.cmd.split(' ')[0])), [slashItems])
+  const pickedMentions = useMemo(() => {
+    const slugs = new Set([...mentionAgents, mentionedSlug].filter(Boolean))
+    return [...mentionPool.filter((a) => slugs.has(a.slug)).map((a) => agentName(a)), ...mentionedProjects.map((p) => p.name)]
+  }, [mentionAgents, mentionedSlug, mentionedProjects, mentionPool])
+  const tokenMarks = useMemo(() => findTokens(draft, slashNames, pickedMentions, inlineRuns), [draft, slashNames, pickedMentions, inlineRuns])
   /** 「已选择」里显示、发送时算数的引用:从 `[[` 选进来的那些,句子里的那段删光了就不算(撤销 / 粘贴回来又算上)。 */
   const allRefChips = useMemo(() => {
     const inText = new Set(inlineRuns.map((r) => runChips.get(r.name)!.token))
@@ -1482,6 +1501,7 @@ export const Composer2: React.FC<{
     const sentKey = draftKey
     const known = sentKey === NEW_CHAT_DRAFT ? new Set(useApp.getState().sessions.map((x) => x.id)) : null
     noteSend(outgoing, taRef.current) // 发送动效:气泡从这一行升上去(sendFlight.ts)
+    announceSend('press', sentKey, taRef.current) // 空对话居中的那一块此刻落底(freshLayout.ts / EmptyState2)
     const sentAtts = attachments.filter((a) => !isLeaving(a))
     const sentWs = wsFiles.filter((a) => !isLeaving(a))
     const toUpload = sentWs.filter((a) => !isInWorkspace(a)) // 已经传进工作区的不再传
@@ -1490,12 +1510,14 @@ export const Composer2: React.FC<{
       if (accepted) release([...sentAtts, ...sentWs])
       if (!accepted) {
         dropSend(outgoing)
+        announceSend('drop', sentKey, taRef.current)
         // 新对话的第一句没发出去,而输入框已经换到刚建的会话上:那份输入跟过去,留在眼前可以重发(那边有草稿就不动)。
         // 只认发送前还不存在的会话 —— 用户途中自己切去了别的会话,就不往那里塞,那份留在新对话里。
         const shown = draftKeyRef.current
         if (known && shown !== sentKey && !known.has(shown)) moveDraft(sentKey, shown)
         return false
       }
+      announceSend('sent', sentKey, taRef.current)
       if (!override && draftKeyRef.current === sentKey) fadeOutDraft(taRef.current) // 输入框里的字上移淡出,再清空
       // 发送途中又加进来的附件不跟着这条清掉(它们不在这次发出去的里面)
       const sent = new Set([...sentAtts, ...sentWs])
@@ -1729,7 +1751,7 @@ export const Composer2: React.FC<{
   const normalProps = {
     active: !planMode && !groupActive && approval === 'auto-edit',
     disabled: running,
-    agents: agents || [],
+    agents: (agents || []).filter((a) => !a.disabled || a.slug === currentAgentSlug),
     currentAgentSlug,
     onNormalWork: onNormalWork || (() => {}),
     onAgentSwitch: !isEngine && !groupActive ? onAgentSwitch : undefined,
@@ -1773,6 +1795,7 @@ export const Composer2: React.FC<{
   }
 
   // 发送 / 停止 / 通话键:桌面在底排末尾,手机在输入框右边(见上)。录音时两处都不出(录音条自带停止和发送)。
+  const inputEmpty = !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pastes.length && !elements.length && !pinnedSkills.length
   const submitKeys = running ? (
     <>
       {(!!draft.trim() || allRefChips.length > 0 || quotedNote || pastes.length > 0 || elements.length > 0) && (
@@ -1780,7 +1803,7 @@ export const Composer2: React.FC<{
       )}
       <button className="t2c-stop" onClick={onStop} title={t('input.stop')} aria-label={t('input.stop')}><Square size={10} /><span className="t2c-stop-label">{t('input.stop')}</span></button>
     </>
-  ) : callable && !draft.trim() && !allRefChips.length && !attachments.length && !wsFiles.length && !quotes.length && !pastes.length && !elements.length && !pinnedSkills.length ? (
+  ) : callable && inputEmpty ? (
     // 照 ChatGPT:输入框空着时发送键就是通话键,打了字变回发送。通话中再按 = 叫回 Mini 卡片(不重拨)。
     <ChatBoxSubmit
       className="t2c-live-control"
@@ -1796,11 +1819,29 @@ export const Composer2: React.FC<{
     <ChatBoxSubmit onClick={send} disabled={disabled || !!uploadGate || (!draft.trim() && !allRefChips.length && !quotedNote && !pastes.length && !elements.length)} title={t('input.send')} aria-label={t('input.send')} />
   )
 
+  const showContext = !isChat && !!ringWindow && ringWindow > 0
+  const contextUsage = (
+    <ContextUsagePop
+      open={openMenu === 'ctx'}
+      contextWindow={ringWindow ?? 0}
+      ctxTokens={ctxTokens}
+      sessionTokens={sessionTokens}
+      runCost={runCost}
+      costLimit={costLimit}
+      ctxInfo={ringCtxInfo}
+      onCompact={onCompact ? () => { onCompact(); setOpenMenu(null) } : undefined}
+      directModel={!isEngine && modelId && isDirectModelId(modelId, models, modelsResponse)
+        // 新对话还没会话:按焦点设备查(新对话就跑在那里,模型目录也来自那里),别固定问本机
+        ? { id: modelId, load: () => getModelQuota(sessionId ? targetForSession(sessionId) : focusTarget(), modelId).then((r) => r.quota) } : undefined}
+                    />
+  )
+
   return (
     <div className="t2c">
+      <CallHint ready={callable && inputEmpty && !running && !inCall} cloud={realtimeModel === cloudCallModel?.id} />
       {groupSetupOpen && (
         <GroupChatSetup
-          agents={agents || []}
+          agents={(agents || []).filter((a) => !a.disabled || !!groupAgents?.includes(a.slug))}
           models={models}
           initialAgents={groupAgents || []}
           initialTempAgents={groupTempAgents}
@@ -1891,17 +1932,18 @@ export const Composer2: React.FC<{
             </div>
           )}
           {((field: React.ReactNode) => phoneCard ? <div className="t2c-field">{field}{!voiceActive && submitKeys}</div> : field)(
-          <><ChatBoxInput
+          <><div className="t2c-input-wrap" data-suggestion={showSuggestion || undefined}><ChatBoxInput
             autoSize={false}
             ref={taRef}
             className="t2c-ta"
             rows={1}
             autoFocus={autoFocus}
             value={draft}
-            placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
+            title={layout.compact ? t('input.placeholder') : undefined}
+            placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(layout.compact ? 'input.placeholderCompact' : touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
             data-suggestion={showSuggestion || undefined}
             data-tip-fade={(running && !compactCard && tipFade) || undefined}
-            data-tip-tall={(running && !compactCard && tipTall) || (showSuggestion && suggestTall) || undefined}
+            data-tip-tall={(running && !compactCard && tipTall) || undefined}
             disabled={disabled}
             onChange={(e) => {
               setDraft(e.target.value)
@@ -1952,6 +1994,26 @@ export const Composer2: React.FC<{
                 const ta = e.currentTarget
                 const run = ta.selectionStart === ta.selectionEnd ? runTouching(inlineRuns, ta.selectionStart, e.key === 'Backspace' ? 'back' : 'fwd') : undefined
                 if (run) { e.preventDefault(); removeRun(run.start, run.end); return }
+              }
+              if ((e.key === 'Backspace' || e.key === 'Delete') && tokenMarks.length && !e.nativeEvent.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
+                const ta = e.currentTarget
+                const tok = ta.selectionStart === ta.selectionEnd ? tokenTouching(tokenMarks, ta.value, ta.selectionStart, e.key === 'Backspace' ? 'back' : 'fwd') : undefined
+                if (tok) {
+                  e.preventDefault()
+                  const word = ta.value.slice(tok.start, tok.end).trim()
+                  removeRun(tok.start, tok.end)
+                  // 整枚删走不经 onChange:删掉的是提及、草稿里也没有别的同名 @ 了,就把它从派遣对象里摘掉(否则照样发给它)
+                  if (word.startsWith('@')) {
+                    const name = word.slice(1)
+                    if (!findTokens(taRef.current?.value ?? '', new Set(), [name]).length) {
+                      const slugs = mentionPool.filter((a) => agentName(a) === name).map((a) => a.slug)
+                      setMentionAgents((prev) => prev.filter((x) => !slugs.includes(x)))
+                      if (slugs.includes(mentionedSlug)) setMentionedSlug('')
+                      setMentionedProjects((prev) => prev.filter((x) => x.name !== name))
+                    }
+                  }
+                  return
+                }
               }
               if (refActive) {
                 const count = refMatches.length
@@ -2020,7 +2082,8 @@ export const Composer2: React.FC<{
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
             }}
           />
-          <InlineRefMirror text={draft} runs={inlineRuns} chipOf={(run) => runChips.get(run)} /></>)}
+          <InlineRefMirror text={draft} runs={inlineRuns} marks={tokenMarks} chipOf={(run) => runChips.get(run)} />
+          {showSuggestion && <div className="t2c-suggestion" aria-hidden="true"><span>{suggestion}</span>{' '}<span className="t2c-suggestion-key">{t('input.suggestionHint')}</span></div>}</div></>)}
           {slashOpen && (
             <div className="t2c-menu">
               {slashMatches.map((it, i) => (
@@ -2048,7 +2111,7 @@ export const Composer2: React.FC<{
                   onMouseEnter={() => setMentionIndex(i)}
                   onClick={() => pickMention(a)}
                 >
-                  <span className="t2c-menu-cmd">@{a.name}</span>
+                  <span className="t2c-menu-cmd">@{agentNames(a).join(' · ')}</span>
                   <span className="t2c-menu-desc">{a.description || a.slug}</span>
                 </button>
               ))}
@@ -2096,8 +2159,17 @@ export const Composer2: React.FC<{
             </div>
           )}
 
-          <ChatBoxToolbar>
+          <ChatBoxToolbar data-compact={layout.compact || undefined} data-tight={layout.tight || undefined}>
             <AddContentMenu
+              triggerRef={addAnchorRef}
+              overflowControls={layout.tight ? <>
+                {showContext && <button type="button" className="menu-item" data-composer-overflow="context" onClick={() => setOpenMenu('ctx')}>
+                  <span className="t2c-overflow-ring" aria-hidden="true" /><span className="grow">{t('input.ctxLabel')}</span>
+                  <span>{Math.min(100, Math.round(((ctxTokens || 0) / ringWindow!) * 100))}%</span><ChevronRight size={13} />
+                </button>}
+                <button type="button" className="menu-item" data-composer-overflow="voice" disabled={disabled || voice.busy || !voice.supported}
+                  onClick={() => { setOpenMenu(null); void voice.toggle() }}><Mic size={14} /><span className="grow">{t('input.micStart')}</span></button>
+              </> : undefined}
               open={openMenu === 'add'}
               disabled={disabled}
               activeSessionId={activeSessionId}
@@ -2113,7 +2185,7 @@ export const Composer2: React.FC<{
               <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} onSend={voiceSend} t={t} />
             ) : (<>
             {showModeChip && !modeMerged && (
-              <span className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
+              <span ref={modeAnchorRef} className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>
                 <button
                   className={`t2c-pill mode-pill-btn${openMenu === 'mode' ? ' is-open' : ''}${planMode && !isChat ? ' active' : ''}`}
                   data-danger={dangerPill || undefined}
@@ -2130,8 +2202,9 @@ export const Composer2: React.FC<{
                   <ChevronDown size={10} />
                 </button>
                 {openMenu === 'mode' && (
-                  <div ref={modeFix.ref} className="composer-menu composer-menu--mode" style={modeFix.style}>
-                    {onNormalWork && !isChat && <NormalModeItem {...normalProps} />}
+                  <ComposerMenuSurface portal={layout.compact} anchorRef={modeAnchorRef} innerRef={el => { modeFix.ref.current = el }} className="composer-menu composer-menu--mode" style={modeFix.style}>
+                    {layout.compact && <ComposerMenuHeader title={t('input.modeSheetTitle')} onClose={() => { setOpenMenu(null); modeAnchorRef.current?.querySelector('button')?.focus() }} />}
+                    {onNormalWork && !isChat && <NormalModeItem {...normalProps} inline={layout.compact} />}
                     {[planSection, groupSection].map((sec) => sec && (
                       <React.Fragment key={sec.items[0].id}>
                         <div className="menu-section">{sec.title}</div>
@@ -2173,10 +2246,11 @@ export const Composer2: React.FC<{
                         )}
                       </>
                     )}
-                  </div>
+                  </ComposerMenuSurface>
                 )}
               </span>
             )}
+            {recipientChip}
             <span className="t2c-grow" />
             {uploadGate && (
               <span className="t2c-upstatus" data-failed={uploadGate === 'failed' || undefined} role="status">
@@ -2184,14 +2258,14 @@ export const Composer2: React.FC<{
                 {t(uploadGate === 'failed' ? 'input.upload.failedGate' : 'input.upload.busyGate')}
               </span>
             )}
-            {!isChat && !!ringWindow && ringWindow > 0 && (() => {
+            {showContext && !layout.tight && (() => {
               const pct = Math.min(100, Math.round(((ctxTokens || 0) / ringWindow) * 100))
               // 预警跟着压缩线走:设置里把自动压缩调到 30% 时,环永远到不了 80%,按窗口判就再也不亮了
               const warn = ringCtxInfo?.compactAt ? (ctxTokens || 0) >= ringCtxInfo.compactAt * 0.8 : pct >= 80
               const R = 9
               const CIRC = 2 * Math.PI * R
               return (
-                <span className={`t2c-ctxring t2c-collapse-on-capsule-open${openMenu === 'ctx' ? ' is-open' : ''}`} data-warn={warn || undefined} data-cmenu>
+                <span ref={ctxAnchorRef} className={`t2c-ctxring t2c-collapse-on-capsule-open${openMenu === 'ctx' ? ' is-open' : ''}`} data-warn={warn || undefined} data-cmenu>
                   <button
                     type="button"
                     className="t2c-ctxring-btn"
@@ -2208,21 +2282,9 @@ export const Composer2: React.FC<{
                     </svg>
                   </button>
                   {/* 点击详情(09-26 对标 Claude 的 Context window 面板):分段条 + 分项 + 登录后的 Forsion 额度,见 ContextUsagePop */}
-                  <span ref={ctxPopFix.ref} className="t2c-ctxring-pop" style={ctxPopFix.style}>
-                    <ContextUsagePop
-                      open={openMenu === 'ctx'}
-                      contextWindow={ringWindow}
-                      ctxTokens={ctxTokens}
-                      sessionTokens={sessionTokens}
-                      runCost={runCost}
-                      costLimit={costLimit}
-                      ctxInfo={ringCtxInfo}
-                      onCompact={onCompact ? () => { onCompact(); setOpenMenu(null) } : undefined}
-                      directModel={!isEngine && modelId && isDirectModelId(modelId, models, modelsResponse)
-                        // 新对话还没会话:按焦点设备查(新对话就跑在那里,模型目录也来自那里),别固定问本机
-                        ? { id: modelId, load: () => getModelQuota(sessionId ? targetForSession(sessionId) : focusTarget(), modelId).then((r) => r.quota) } : undefined}
-                    />
-                  </span>
+                  {!layout.compact && <span ref={ctxPopFix.ref} className="t2c-ctxring-pop" style={ctxPopFix.style}>
+                    {contextUsage}
+                  </span>}
                 </span>
               )
             })()}
@@ -2251,6 +2313,7 @@ export const Composer2: React.FC<{
                 supportedThinking={isEngine ? undefined : models?.find((m) => m.id === modelId)?.thinkingLevels}
                 fast={fast}
                 fastTier={isEngine ? undefined : models?.find((m) => m.id === modelId)?.fastTier}
+                ultrafastTier={isEngine ? undefined : models?.find((m) => m.id === modelId)?.ultrafastTier}
                 onFastChange={isEngine ? undefined : onFastChange}
                 effectiveThinking={
                   // 只在 requested 与当前选档一致时才显示生效档——刚改档还没跑新 run 时,旧 effective 不对应当前选择
@@ -2264,17 +2327,22 @@ export const Composer2: React.FC<{
                 footnote={!isEngine && !isHost && !models?.some((m) => m.source === 'direct') ? t('input.cloudModelHint') : undefined}
               />
             )}
-            <button
+            {!layout.tight && <button
               className={`t2c-iconbtn t2c-mic-control t2c-collapse-on-capsule-open${voice.recording ? ' recording' : ''}`}
               title={voice.busy ? t('input.micBusy') : voice.recording ? t('input.micStop') : voice.error || t('input.micStart')}
               disabled={disabled || voice.busy || !voice.supported}
               onClick={voice.toggle}
             >
               {voice.busy ? <Loader2 size={14} className="spin" /> : <Mic size={14} />}
-            </button>
+            </button>}
             {!phoneCard && submitKeys}
             </>)}
           </ChatBoxToolbar>
+          {layout.compact && openMenu === 'ctx' && showContext && <ComposerMenuSurface portal
+            anchorRef={layout.tight ? addAnchorRef : ctxAnchorRef} innerRef={el => { ctxPopFix.ref.current = el }} className="t2c-ctxring-pop">
+            <ComposerMenuHeader title={t('input.ctxLabel')} onClose={() => { setOpenMenu(null); (layout.tight ? addAnchorRef : ctxAnchorRef).current?.querySelector('button')?.focus() }} />
+            {contextUsage}
+          </ComposerMenuSurface>}
           {voice.error && !voice.recording && !voice.busy && (
             <div className="t2c-hint" style={{ marginTop: 6, marginBottom: 0 }}>{voice.error}</div>
           )}

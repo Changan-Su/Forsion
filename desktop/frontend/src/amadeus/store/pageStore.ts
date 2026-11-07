@@ -21,6 +21,7 @@ import { isDrawingPath } from '@amadeus-shared/excalidraw/format'
 import { patchFmExtraText } from '@amadeus-shared/db/pageFrontmatter'
 import { textFingerprint } from '@amadeus-shared/writeConflict'
 import { amadeus } from '../api'
+import type { VaultInfo } from '@amadeus-shared/ipc'
 import { computeFdChildren, fdDirOf, isNoteMd, nearestFd, noteOfFd } from '../lib/fd'
 import { resolveFileLink, resolveFileName, resolveVaultPath } from '../lib/vaultFiles'
 import { makeUndoStack, type Snap } from '../lib/undoHistory'
@@ -28,12 +29,15 @@ import { useUiStore } from './uiStore'
 import { awaitTypingQuiet, installTypingGuard, noteLocalEdit } from './typingGuard'
 import { flushUnifiedScopes, holdUnifiedPath, pathHit, retireUnifiedPath, unifiedPatchFm } from '../unified/lifecycle'
 import { remapNotePageStylePrefix, remapNoteViewMemory } from '../unified/viewMemory'
+import { remapFileViews } from '../lib/fileViewMemory'
 import { mergeMovedText, toastRenameCopy, toastSaveFailed, writeConflictCopy } from '../unified/writeSafety'
 import { track } from '../../achievements/store'
 import { act } from '../../activity/log'
 import { registerMessages, translate } from '../../i18n'
+import { sharedEntryFor, useSharedVault } from '../../stores/sharedVaultStore'
 
 registerMessages({
+  'amadeus.share.notShared': { zh: '{name} 没有把这一页共享给你', en: "{name} hasn't shared this page with you" },
   'pagestore.error.renameUnsupportedType': { zh: '该文件类型不支持在标题栏改名', en: 'This file type cannot be renamed from the title bar' },
   'pagestore.error.fdNameTaken': { zh: '目标名称已被同名 .fd 文件夹占用', en: 'That name is already taken by a .fd folder' },
   'pagestore.error.moveIntoOwnSubpage': { zh: '不能移动到该笔记自己的子页面里', en: "A note can't be moved into its own subpages" },
@@ -289,6 +293,9 @@ interface PageState {
 
   openVault(): Promise<void>
   restoreVault(): Promise<void>
+  /** 本地侧换到清单里的另一个库 / 新建一个库并打开;失败抛给调用方(菜单弹提示),当前库原样不动。 */
+  switchLocalVault(root: string): Promise<void>
+  createLocalVault(name: string): Promise<void>
   /** Local↔Cloud 全局切活动 vault(树/编辑器/聚合全跟随);仅桌面(window.amadeusSync)。 */
   switchVaultSide(side: 'local' | 'cloud'): Promise<void>
   /** 启动时从主进程取当前侧(lastVault 可能落在云镜像)。 */
@@ -301,8 +308,9 @@ interface PageState {
   createPage(): Promise<void>
   /** Create a new untitled page inside `folder` (vault-relative; '' = vault root) and open it. */
   createPageInFolder(folder: string): Promise<void>
-  /** 统一实例编辑器接管 path:flush 后清空本 scope 快照(防陈旧快照经 reconcile 回写)。 */
-  releasePage(path: string): Promise<void>
+  /** 统一实例编辑器接管 path:flush 后清空本 scope 快照(防陈旧快照经 reconcile 回写)。
+   *  unifiedPath = 面板已判给 unified 的那篇:它的在途装载一并作废,别篇的在途导航不动。 */
+  releasePage(path: string, unifiedPath?: string): Promise<void>
   /** 打开某路径的笔记;不存在则先创建(日记等「打开或新建」语义)。 */
   openOrCreate(path: string): Promise<void>
   renamePage(newName: string): Promise<boolean>
@@ -578,6 +586,31 @@ function makePageStore(opts: PageStoreOptions = {}) {
       })
   }
 
+  /** 换了库根之后的装载(本地切库 / 换侧共用):旧库编辑器状态即刻作废,树 / 图标 / 末次页按新根重来。 */
+  const mountSwitched = async (info: VaultInfo, side: 'local' | 'cloud'): Promise<void> => {
+    set({
+      vaultSide: side,
+      vaultRoot: info.root,
+      pages: info.pages,
+      folders: info.folders ?? [],
+      files: [],
+      filesPendingFor: info.root, // 迟到的文件列表只在库没再换时落进树
+      icons: {}, // 换库必清:图标是 path 键,跨库残留会张冠李戴
+      error: null,
+      // 旧库编辑器状态即刻作废:换根往返窗口里的输入不得再借任何 flush 写进新根
+      activePage: null,
+      pendingPage: null,
+      manifest: null,
+      blocks: {},
+    })
+    resetAllScopeDocs() // 隔壁面板也一起作废,否则它那份旧库笔记随时会写进新根
+    loadFiles(info.root)
+    fetchIcons(info.root)
+    const target = info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
+    if (target) await get().loadPage(target)
+    else set({ activeNotePath: null }) // 空库:清编辑器,防旧库笔记误存新根
+  }
+
   return {
     vaultRoot: null,
     vaultSide: 'local',
@@ -678,17 +711,23 @@ function makePageStore(opts: PageStoreOptions = {}) {
         // 这里的 flush 放在弹目录选择框之前,用户取消了也无害(本来就该落盘)。
         await flushAllScopes(true)
         const info = await amadeus.openVault()
-        if (!info) return
-        resetAllScopeDocs()
-        // files 先清空再异步补齐;迟到的结果只在 vault 未再切换时落盘(防旧库文件列表污染新库的树)。
-        // 用户手选文件夹 = 本地侧(主进程同步记 localVault)。
-        set({ vaultRoot: info.root, vaultSide: 'local', pages: info.pages, folders: info.folders ?? [], files: [], filesPendingFor: info.root, error: null })
-        loadFiles(info.root)
-        fetchIcons(info.root)
-        if (info.pages.length > 0) await get().loadPage(info.pages[0])
+        // 用户手选文件夹 = 本地侧(主进程记进智库清单)。
+        if (info) await mountSwitched(info, 'local')
       } catch (e) {
         set({ error: String(e) })
       }
+    },
+
+    async switchLocalVault(root) {
+      if (!amadeus.switchVault || root === get().vaultRoot) return
+      await flushAllScopes(true) // 同 switchVaultSide:先在【旧根】落盘
+      await mountSwitched(await amadeus.switchVault(root), 'local')
+    },
+
+    async createLocalVault(name) {
+      if (!amadeus.createVault) return
+      await flushAllScopes(true)
+      await mountSwitched(await amadeus.createVault(name), 'local')
     },
 
     async restoreVault() {
@@ -718,28 +757,7 @@ function makePageStore(opts: PageStoreOptions = {}) {
         // **所有面板**都要 flush —— 分屏后隔壁面板各有一份 store 和一个防抖定时器。
         await flushAllScopes(true)
         const info = await api.switchSide(side)
-        if (!info) return
-        set({
-          vaultSide: side,
-          vaultRoot: info.root,
-          pages: info.pages,
-          folders: info.folders ?? [],
-          files: [],
-          filesPendingFor: info.root,
-          icons: {}, // 换库必清:图标是 path 键,跨库残留会张冠李戴
-          error: null,
-          // 旧库编辑器状态即刻作废:switchSide 往返窗口里的输入不得再借任何 flush 写进新根
-          activePage: null,
-          pendingPage: null,
-          manifest: null,
-          blocks: {},
-        })
-        resetAllScopeDocs() // 隔壁面板也一起作废,否则它那份旧库笔记随时会写进新根
-        loadFiles(info.root)
-        fetchIcons(info.root)
-        const target = info.lastPage && info.pages.includes(info.lastPage) ? info.lastPage : info.pages[0]
-        if (target) await get().loadPage(target)
-        else set({ activePage: null, pendingPage: null, manifest: null, blocks: {}, activeNotePath: null }) // 空库(如未登录的云侧):清编辑器,防旧库笔记误存新根
+        if (info) await mountSwitched(info, side)
       } catch (e) {
         set({ error: String(e) })
       }
@@ -837,14 +855,17 @@ function makePageStore(opts: PageStoreOptions = {}) {
       await get().loadPage(path)
     },
 
-    async releasePage(path) {
+    async releasePage(path, unifiedPath) {
       // 统一实例编辑器(UnifiedPage)接管的文件:本 scope 的 v3 快照必须交出去。留着的话,
       // 它订阅的 reconcileExternal 会拿**陈旧内容**跟磁盘做合并回写 —— unified 的保存走
       // 自写账本不进 store,快照只会越来越旧,这条链等于延时毁档。flush 在先防丢待写。
+      // 面板已归 unified 的那篇还在读盘(如读盘途中按后退回到它):作废,否则快照晚到后再没人交。
+      if (unifiedPath && get().pendingPage === unifiedPath) set({ pendingPage: null })
       if (get().activePage !== path) return
       await get().flushSave()
       if (get().activePage !== path) return // flush 间隙已切走
-      set({ activePage: null, pendingPage: null, manifest: null, blocks: {} })
+      // pendingPage 只清这一篇的:在途的别篇导航照常落地。切侧后默认页才判为 unified 时,点开的那篇正在读盘,清掉它 loadPage 就放弃了。
+      set((s) => ({ activePage: null, pendingPage: s.pendingPage === path ? null : s.pendingPage, manifest: null, blocks: {} }))
     },
 
     async renamePage(newName) {
@@ -1061,6 +1082,12 @@ function makePageStore(opts: PageStoreOptions = {}) {
       const vaultHit = resolveVaultPath(wanted, get().files, src) ?? resolveVaultPath(`${wanted}.md`, get().files, src)
       if (vaultHit) {
         window.dispatchEvent(new CustomEvent('amadeus:open-file', { detail: { path: vaultHit, newTab: opts?.newTab, split: opts?.split } }))
+        return
+      }
+      // 共享页里的范围外双链:对方看不到这一页,别问要不要新建。
+      const shared = src ? sharedEntryFor(useSharedVault.getState(), src) : null
+      if (shared) {
+        void import('../../stores/appStore').then(({ useApp }) => useApp.getState().toast(translate('amadeus.share.notShared', { name: shared.ownerName ?? '' })))
         return
       }
       // 未解析:询问而非静默建根。源须是笔记(.db 独立视图等无 .fd 语义 → 走根兜底)。
@@ -1911,6 +1938,7 @@ export function remapScopePaths(oldP: string, newP: string, kind: 'file' | 'pref
   // 只由发起的窗口搬:localStorage 各窗共用,转播过来的窗口再搬一遍会拿自己缓存里的旧条目盖掉刚搬好的新条目。
   if (!relayingRemote) {
     const root = usePageStore.getState().vaultRoot
+    remapFileViews(root, oldP, newP, kind === 'prefix')
     if (kind === 'file') remapNoteViewMemory(root, oldP, newP)
     else remapNotePageStylePrefix(root, oldP, newP)
   }
@@ -2177,9 +2205,12 @@ export const usePageStore = Object.assign(
 // 它收不到就一直是旧内容,而它下一次防抖保存会把陈旧文档写回盘 —— 正是上面这段注释里
 // 已经翻过一次车的那个失败模式,只不过换成了「按面板」维度。reconcileExternal 自己会判
 // 「这条改动是不是我这篇」,喂多了不会误伤。
-amadeus?.onExternalChange?.((p) => {
+amadeus?.onExternalChange?.((p) => reconcileLocalWrite(p))
+
+/** 本窗口绕过编辑器直接写了一篇笔记(如小组件摆进看板)后回灌:writeTextFile 的回灌事件只发给别的窗口。 */
+export function reconcileLocalWrite(p: string): void {
   for (const s of stores.values()) void s.getState().reconcileExternal(p)
-})
+}
 
 /** 笔记改名后的 .fd 跟随改名(pageStore.renamePage 与 noteViewStore.renameNote 共用)。
  *  renameFolder 内部自带 flushSave / activePage 重映射 / refreshStructure / 失败置 error。 */

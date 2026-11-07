@@ -23,6 +23,11 @@ on:
 permissions:
   contents: read
 
+# PR 再推送就取消上一轮;main / tag / 手动运行各按 run_id 自成一组,不排队、不被取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   independent-unit:
     runs-on: ubuntu-latest
@@ -33,6 +38,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
+          cache-dependency-path: |
+            tangu-agent/package-lock.json
+            desktop/package-lock.json
+            web/package-lock.json
+            mobile/package-lock.json
       - name: Check Desktop baseline and commercial exclusions
         run: |
           node unit/check-sync.mjs
@@ -48,11 +59,16 @@ jobs:
           # web 的 tsconfig 经 @mobile 别名拽进 mobile/src,tsc 从那里向上找的是 mobile 自己的 node_modules(同 build-web.yml)
           npm ci --prefix mobile --no-audit --no-fund
       - name: Check shared runtime and Unit lifecycle
+        env:
+          # desktop 的 tsc 吃 ~2.5 GB,压在缺省堆(~2 GB)上会间歇 OOM(exit 134);runner 有 16 GB
+          NODE_OPTIONS: --max-old-space-size=4096
         run: |
           npm run typecheck --prefix tangu-agent
           cd tangu-agent && npx vitest run src/boot/overlay.test.ts && cd ..
           npm run typecheck --prefix desktop
-          npm run typecheck --prefix web
+          # PR 上 build-web 的 typecheck 已跑同一个 tsc 程序(同 tsconfig、同 node 20、触发路径盖住它读到的全部源码与锁文件);
+          # main / tag 上照跑,发版那条路不缺闸
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then npm run typecheck --prefix web; fi
           npm run check:parity --prefix desktop
           cd desktop
           npx vitest run electron/engineHost.test.ts electron/engineUpdates.test.ts electron/backendManager.test.ts electron/unit*.test.ts electron/backendRunner.test.ts electron/basicUnit.test.ts electron/builtinBundles.test.ts frontend/src/services/unitAccount.test.ts frontend/src/services/unitCloudTransport.test.ts frontend/src/features/nativeFeatures.test.ts
@@ -81,7 +97,7 @@ jobs:
       id-token: write # npm trusted publishing(OIDC)
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: forsion-unit-linux-x64
           path: unit-dist

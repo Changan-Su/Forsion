@@ -20,6 +20,7 @@ vi.mock('@llamaindex/liteparse', () => ({
 }));
 
 import { HOST_TOOLS } from '../src/tools/hostExec.js';
+import { readFileLocal } from '../src/tools/fileWorkspace.js';
 
 function crc32(buf: Buffer): number {
   let c = ~0;
@@ -152,5 +153,24 @@ describe('read_document:docx 在没装 LibreOffice 的机器上退回纯文本',
     expect(out).toContain('(2 pages)');
     expect(out).toContain('--- page 2 ---\n\nfrom soffice p2');
     expect(out).not.toContain('指标');
+  });
+});
+
+// 云端 / 沙箱模式的 read_file(worker 走这条):10-27 生产两例模型对 .docx 调 read_file,按 UTF-8 硬解出 NUL →
+// server 写 PG 被 jsonb 拒收(unsupported Unicode escape sequence),整批事件与终稿都没落库。
+describe('read_file(sandbox):二进制不再按文本硬解', () => {
+  it('docx 抽正文;其它二进制报错指路 run_python;纯文本照旧', async () => {
+    writeFileSync(join(dir, 'a.docx'), DOCX);
+    writeFileSync(join(dir, 'b.bin'), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0xff]));
+    writeFileSync(join(dir, 'c.txt'), '第一行\n第二行');
+
+    const docx = await readFileLocal(dir, 'a.docx');
+    expect(docx).not.toContain('\u0000');
+    expect(docx).toContain('| 指标 | 取值 |');
+    await expect(readFileLocal(dir, 'b.bin')).rejects.toThrow(/binary file \(7 bytes\).*run_python/);
+    // 坏 docx(中央目录偏移越界,docxText 会抛 RangeError)也落到同一句指引
+    writeFileSync(join(dir, 'bad.docx'), Buffer.concat([Buffer.from([0]), Buffer.from('PK\x05\x06'), Buffer.alloc(18, 0xff)]));
+    await expect(readFileLocal(dir, 'bad.docx')).rejects.toThrow(/binary file .*run_python/);
+    expect(await readFileLocal(dir, 'c.txt')).toContain('第二行');
   });
 });

@@ -13,7 +13,8 @@
  *
  * 模型上下文窗口:见 modelContextWindowInfo 的优先级链 —— 人填的(env 覆盖 / 用户本机 modelOverrides /
  *    admin 在模型上填的 context_window)> 上游实测的(contextWindowStore 从超长报错里回学)> 手写族表 > 272k 兜底。
- *    run 实际用的是 effectiveContextWindowInfo:自动识别出的窗口再大也封顶 272k,只有人填的覆盖能开更大(09-22)。
+ *    run 实际用的是 effectiveContextWindowInfo:自动识别出的窗口封顶缺省上限(09-22 起 272k;11-06 起 1M 级模型 512k),
+ *    只有人填的覆盖能开更大。
  */
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -56,6 +57,27 @@ export const CONTEXT_WINDOW_TOKENS = (() => {
   const v = Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS);
   return Number.isFinite(v) && v >= 4_000 ? Math.floor(v) : 272_000;
 })();
+
+/** 环境变量是否钉了上限(运维 / 台架):钉了就一律按它,1M 档也不例外 —— 台架靠它把 1M 模型压到小窗口复现。 */
+const CAP_PINNED_BY_ENV = (() => {
+  const v = Number(process.env.TANGU_CONTEXT_WINDOW_TOKENS);
+  return Number.isFinite(v) && v >= 4_000;
+})();
+
+/** 1M 级模型(自动识别窗口 ≥ 它)的缺省上限改用 LONG_CONTEXT_DEFAULT_TOKENS(11-06 用户定)。 */
+export const LONG_CONTEXT_MIN_TOKENS = 1_000_000;
+/** 1M 级模型的缺省上限:512k。触发线 512k − 5% ≈ 486k,离真实窗口还有一半余量。 */
+export const LONG_CONTEXT_DEFAULT_TOKENS = 512_000;
+
+/**
+ * 某个自动识别窗口对应的缺省上限(11-06 用户定):支持 1M 的模型缺省 512k,其余照旧 272k(CONTEXT_WINDOW_TOKENS)。
+ * 按「≥ 1M」判而不是「> 512k」:族表把 GPT-6.1 这类目录报 500k 的仍定 272k,别让它们意外跳档。
+ * env 钉了 TANGU_CONTEXT_WINDOW_TOKENS 时两档都按 env。
+ */
+export function defaultContextWindowCap(autoTokens: number): number {
+  if (CAP_PINNED_BY_ENV) return CONTEXT_WINDOW_TOKENS;
+  return autoTokens >= LONG_CONTEXT_MIN_TOKENS ? LONG_CONTEXT_DEFAULT_TOKENS : CONTEXT_WINDOW_TOKENS;
+}
 
 /** 入站 user 消息:估算超窗口 50% → 拒绝(run 直接失败,消息不落库)。 */
 export const INPUT_HARD_RATIO = 0.5;
@@ -103,7 +125,7 @@ const FAMILY_WINDOWS: Array<[RegExp, number]> = [
   [/claude|sonnet|opus|haiku/i, 200_000],
   [/gemini-[23]/i, 1_000_000], // 只认主线 2.x/3 聊天族;其余 gemini 变体窗口不一,留 128k 保守值
   [/deepseek-v4/i, 1_000_000], // V4 flash/pro 都是 1M;老 chat/reasoner 线窗口小得多,不收
-  [/kimi-k3/i, 1_000_000], // K3 官方 1M(K2 线 256k 以下,不收)
+  [/kimi-k(3|2\.8)/i, 1_000_000], // K3 官方 1M;K2.8 Preview 1M(10-26 百炼实测 prompt_tokens=1000039 返回 200,耗时 466s)。K2.7 及更早 256k,不收
   [/glm-5\.3/i, 1_000_000], // 官方 GLM-5.3 页写 1M(5.3-flash 同族);GLM-5 是 200k,故不扩到整族
   // 百炼「推荐模型」表里 qwen3.8-max = 1M。3.8 的小尺寸变体窗口未核实,故刻意只收 -max:
   // 窗口报大了会跳过折叠、直接撞 provider 溢出,比 128k 默认的早折叠更糟。
@@ -157,7 +179,8 @@ function overrideWindow(modelId?: string | null): number | undefined {
 
 /**
  * run 实际用的窗口(09-22 用户拍板,对标 Codex 模型目录的 context_window 272k / max_context_window 分离):
- * 自动识别出的窗口(模型自报 / 回学 / 族表 / 兜底)一律封顶 CONTEXT_WINDOW_TOKENS —— 1M 族按「窗口 − 预留」
+ * 自动识别出的窗口(模型自报 / 回学 / 族表 / 兜底)一律封顶缺省上限(11-06 起按 defaultContextWindowCap:1M 级 512k,
+ * 其余 272k)—— 1M 族按「窗口 − 预留」
  * 要到 950k 才压缩,生产实报一条会话顶着 387k 逐轮重读(09-20)。人填的覆盖不封顶:那就是「开启更高上下文」的开关
  * (聊天框模型菜单与设置页写的都是 modelOverrides)。max = 自动识别出的窗口(封顶前、不看覆盖),界面据此判断能开多大。
  * 摘要目标仍用 modelContextWindow(未封顶):它问的是摘要模型吃得下多少,不是会话预算。
@@ -168,7 +191,7 @@ export function effectiveContextWindowInfo(modelId?: string | null, modelObj?: a
   const override = overrideWindow(modelId);
   return override
     ? { tokens: override, source: 'override', max: auto.tokens }
-    : { tokens: uncapped ? auto.tokens : Math.min(auto.tokens, CONTEXT_WINDOW_TOKENS), source: auto.source, max: auto.tokens };
+    : { tokens: uncapped ? auto.tokens : Math.min(auto.tokens, defaultContextWindowCap(auto.tokens)), source: auto.source, max: auto.tokens };
 }
 
 /** 覆盖之外的自动识别链:模型自报 > 回学 > 族表 > 兜底。 */
@@ -385,6 +408,55 @@ export function compactContext(msgs: ChatMessage[]): CompactResult {
     }
   }
   return { changed: savedChars > 0, savedChars, breakdown };
+}
+
+const TRIM_MARKER = '[Context trimmed: ';
+const trimMarker = (n: number): ChatMessage => ({
+  role: 'system',
+  content: `${TRIM_MARKER}${n} earlier messages were dropped from this working context because they could not be summarized in time. ` +
+    'They are still in the saved conversation; ask the user or re-read files if you need something from them.]',
+}) as ChatMessage;
+
+/**
+ * 摘要失败、机械折叠也压不下时的最后一道兜底(借 Codex:压缩请求超窗口就从最旧一条起删,直到放得下):
+ * 从最旧处成段丢掉工作上下文,直到估算 ≤ targetTokens。只改 run 内存(DB 原样,下个 run 照常 hydrate)。
+ * 段 = 一条非 tool 消息 + 紧随其后的 tool 结果:工具调用与结果绝不拆开,不产出孤立 role:tool。
+ * 不丢:开头的 system 块(含摘要)、锚定消息、最近一条 user 消息(任务本身)、最后一段(模型正要用的结果)。
+ * isRealUser:哪些 user 算「用户说的」(工具截图 / 恢复提示也是 role:user);缺省全算,没有一条认得上时退回最近的 user。
+ * 丢过就在 system 块末尾留一条标记(再丢只改计数),让模型知道前面有东西没了。
+ * 调用方负责:本 run 不再推进持久检查点(之后的摘要没见过被丢的那几条)。
+ * ponytail: 逐段线性估算,消息上千条时改前缀和。
+ */
+export function trimOldestToFit(msgs: ChatMessage[], targetTokens: number, overheadTokens = 0, isRealUser: (m: ChatMessage) => boolean = () => true): { dropped: number } {
+  let head = 0;
+  while (head < msgs.length && (msgs[head] as any).role === 'system') head++;
+  const segments: Array<{ start: number; end: number }> = [];
+  for (let i = head; i < msgs.length; i++) {
+    if ((msgs[i] as any).role === 'tool' && segments.length) segments[segments.length - 1].end = i + 1;
+    else segments.push({ start: i, end: i + 1 });
+  }
+  const lastUserWhere = (ok: (m: ChatMessage) => boolean) => {
+    for (let i = msgs.length - 1; i >= head; i--) if ((msgs[i] as any).role === 'user' && ok(msgs[i])) return i;
+    return -1;
+  };
+  let lastUser = lastUserWhere(isRealUser);
+  if (lastUser < 0) lastUser = lastUserWhere(() => true);
+  let total = estimateMessagesTokens(msgs) + Math.max(0, overheadTokens);
+  const drop = new Set<number>();
+  for (let s = 0; s < segments.length - 1 && total > targetTokens; s++) {
+    const { start, end } = segments[s];
+    let keep = start <= lastUser && lastUser < end;
+    for (let i = start; i < end && !keep; i++) keep = pinnedMessages.has(msgs[i] as object);
+    if (keep) continue;
+    for (let i = start; i < end; i++) { drop.add(i); total -= estimateMessageTokens(msgs[i]); }
+  }
+  if (!drop.size) return { dropped: 0 };
+  const markerAt = msgs.findIndex((m, i) => i < head && typeof m.content === 'string' && m.content.startsWith(TRIM_MARKER));
+  const before = markerAt >= 0 ? Number(/\d+/.exec(String(msgs[markerAt].content))?.[0]) || 0 : 0;
+  const system = msgs.slice(0, head).filter((_, i) => i !== markerAt);
+  const rest = msgs.slice(head).filter((_, i) => !drop.has(head + i));
+  msgs.splice(0, msgs.length, ...system, trimMarker(before + drop.size), ...rest);
+  return { dropped: drop.size };
 }
 
 /**

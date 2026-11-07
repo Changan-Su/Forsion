@@ -87,22 +87,27 @@ describe('项目级记忆', () => {
     expect(await call('s-alpha', { action: 'update', fact: 'Tests run with "npm run test:unit".', id, expectedVersion: 'stale', scope: 'project' }).catch((e) => String(e))).toMatch(/changed since it was read/);
     const updated = JSON.parse(await call('s-alpha', { action: 'update', fact: 'Tests run with "npm run test:unit".', id, expectedVersion: before.version, scope: 'project' }));
     expect(updated).toMatchObject({ ok: true, scope: 'project', entry: { id, content: 'Tests run with "npm run test:unit".' }, count: 1 });
-    // 同一个 id 拿去 agent 级改 → 找不到(两个库的条目互不相通)
+    // 同一个 id 指定 agent 级 = 跨档挪动,要带它所在那一档的版本:拿 agent 级的版本不算数,什么都不写
     const agentVersion = JSON.parse(await call('s-alpha', { action: 'list', fact: null, scope: 'agent' })).version;
-    expect(await call('s-alpha', { action: 'update', fact: 'x', id, expectedVersion: agentVersion, scope: 'agent' }).catch((e) => String(e))).toMatch(/not found/i);
+    expect(await call('s-alpha', { action: 'update', fact: 'x', id, expectedVersion: agentVersion, scope: 'agent' }).catch((e) => String(e))).toMatch(/^Error: expectedVersion is not current\. Nothing was written/);
+    expect(JSON.parse(await call('s-alpha', { action: 'list', fact: null, scope: 'project' })).project.entries.map((e: any) => e.id)).toContain(id);
     // 塞满
     const filler = (n: number) => `Convention ${n}: ${'this project keeps generated files out of the source tree. '.repeat(4)}`.slice(0, 290);
     let full = '';
     for (let n = 0; n < 60 && !full; n++) { const r = await call('s-alpha', { action: 'add', fact: filler(n), scope: 'project' }); if (r.startsWith('Error:')) full = r; }
     expect(full).toMatch(new RegExp(`^Error: project memory is full \\(\\d+/${PROJECT_MEMORY_CHAR_BUDGET} characters\\)`));
     expect(full).toContain('scope "project"');
-    // 注入有上限:留最新的、说明还有多少没显示
+    // 注入:索引整份常驻(总量 = 注入量),塞满了最老的那条也看得到
     const block = await buildProjectMemoryContext('owner', 's-alpha');
-    expect(block.length).toBeLessThan(2100);
-    expect(block).toMatch(/\(\d+ older entr(y is|ies are) not shown; remember with action "list" returns all of them\.\)$/);
-    expect(block).not.toContain('Convention 0:');
     const after = JSON.parse(await call('s-alpha', { action: 'list', fact: null, scope: 'project' })).project;
+    expect(block).toContain('Convention 0:');
     expect(block).toContain(after.entries.at(-1).content.slice(0, 40));
+    expect(block).not.toMatch(/not shown/);
+    // 手改 MEMORY.md 写超了总量才会截:留最新的、说明还有多少没显示
+    const small = await buildProjectMemoryContext('owner', 's-alpha', 1500);
+    expect(small).toMatch(/\(\d+ older entr(y is|ies are) not shown; remember with action "list" returns all of them\.\)$/);
+    expect(small).not.toContain('Convention 0:');
+    expect(small).toContain(after.entries.at(-1).content.slice(0, 40));
     const gone = JSON.parse(await call('s-alpha', { action: 'forget', fact: null, id, expectedVersion: after.version, scope: 'project' }));
     expect(gone).toMatchObject({ ok: true, action: 'forget', scope: 'project', count: after.entries.length - 1 });
   });

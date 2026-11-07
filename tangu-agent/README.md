@@ -77,7 +77,7 @@
 - **本地 OS 沙箱（可选）**：macOS / Linux 的命令与文件写入隔离、网络开关；默认关闭，配置入口与边界见 [运行取消与本地沙箱](docs/runtime-safety.md)。
 - **看图 / 生成图**：`view_image` 识图、`generate_image` 文生图（行内缩略图）。
 - **联网**：本地浏览器工具（搜索 DuckDuckGo/Bing/Google/Baidu + 读 a11y 树 + 点击/输入/滚动/执行 JS）、`web_search`、`web_fetch`（带 SSRF 防护，拦内网/元数据地址）。
-- **MCP**：连接任意 MCP server（stdio / HTTP / SSE）扩展工具集。
+- **MCP**：连接任意 MCP server（stdio / HTTP / SSE）扩展工具集。工具缺省按需加载：系统提示只列一行目录，模型用 `load_tools` 装上再调；某个 server 要常驻就在配置里写 `"deferLoading": false`。
 - 还有 `todo`、`memory_log`、`get_datetime`、`calculator` 等贴身小工具。
 
 ### 👥 智能体编排

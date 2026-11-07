@@ -33,6 +33,10 @@ export interface AnchorOpts {
   /** 右缘对齐 x(「⋯」按钮下方往左展开的菜单),缺省是左缘对齐 x。 */
   alignEnd?: boolean
   margin?: number
+  /** 横向夹取的左右边界(视口 px),缺省 = 视口。笔记的划线菜单夹在编辑器面板里,不伸到文件树上;
+   *  边界比浮层还窄时退回视口。纵向照旧按视口。 */
+  boundLeft?: number
+  boundRight?: number
 }
 
 /**
@@ -49,8 +53,11 @@ export function clampMenu(
   vh: number,
   opts: AnchorOpts = {},
 ): { left: number; top: number } {
-  const { anchorTop = y, prefer = 'below', center = false, alignEnd = false, margin = 8 } = opts
-  const left = Math.max(margin, Math.min(center ? x - w / 2 : alignEnd ? x - w : x, vw - w - margin))
+  const { anchorTop = y, prefer = 'below', center = false, alignEnd = false, margin = 8, boundLeft, boundRight } = opts
+  let lo = Math.max(0, boundLeft ?? 0)
+  let hi = Math.min(vw, boundRight ?? vw)
+  if (hi - lo < w + 2 * margin) { lo = 0; hi = vw }
+  const left = Math.max(lo + margin, Math.min(center ? x - w / 2 : alignEnd ? x - w : x, hi - w - margin))
   const fits = (t: number): boolean => t >= margin && t + h <= vh - margin
   const below = y
   const above = anchorTop - h
@@ -62,41 +69,57 @@ export function clampMenu(
 
 /** 挂在 fixed 浮层根上:量真实尺寸 → 夹取/翻面 → 反补偿 zoom。useLayoutEffect 在绘制前定位,故无闪。
  *  内容变高(异步加载完、筛选)由 ResizeObserver 兜住 —— 故**不需要**调用方传 deps。 */
-export function useClampedMenu(x: number, y: number, opts: AnchorOpts = {}): {
+export function useClampedMenu(x: number, y: number, opts: AnchorOpts & { boundary?: HTMLElement | null } = {}): {
   ref: RefObject<HTMLDivElement | null>
   style: CSSProperties
 } {
-  const { anchorTop, prefer, center, alignEnd, margin = 8 } = opts
+  const { anchorTop, prefer, center, alignEnd, margin = 8, boundLeft, boundRight, boundary } = opts
   const ref = useRef<HTMLDivElement>(null)
-  const [pos, setPos] = useState({ left: x, top: y, maxWidth: undefined as number | undefined })
+  const [pos, setPos] = useState({ left: x, top: y, maxWidth: undefined as number | undefined, maxHeight: undefined as number | undefined })
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
     const apply = (): void => {
       const z = zoomOf(el)
       // offsetWidth/Height = 未缩放局部 px(且不含 pop-in 的 scale 动画)→ ×z 换到视口 px 再比。
-      const vw = window.innerWidth
-      const wV = el.offsetWidth * z
-      const v = clampMenu(x, y, wV, el.offsetHeight * z, vw, window.innerHeight, { anchorTop, prefer, center, alignEnd, margin })
+      const rect = boundary?.getBoundingClientRect()
+      const left = Math.max(0, rect?.left ?? 0), top = Math.max(0, rect?.top ?? 0)
+      const right = Math.min(window.innerWidth, rect?.right ?? window.innerWidth)
+      const bottom = Math.min(window.innerHeight, rect?.bottom ?? window.innerHeight)
+      const vw = Math.max(0, right - left), vh = Math.max(0, bottom - top)
+      const availableWidth = Math.max(0, vw - 2 * margin)
+      const maxHeight = boundary
+        ? Math.max(0, Math.min(vh - 2 * margin, Math.max((anchorTop ?? y) - top - margin, bottom - y - margin))) / z
+        : undefined
+      const wV = Math.min(el.offsetWidth * z, availableWidth)
+      const hV = Math.min(el.offsetHeight * z, maxHeight === undefined ? Infinity : maxHeight * z)
+      const v = clampMenu(x - left, y - top, wV, hV, vw, vh, { anchorTop: anchorTop === undefined ? undefined : anchorTop - top, prefer, center, alignEnd, margin, boundLeft: boundLeft === undefined ? undefined : boundLeft - left, boundRight: boundRight === undefined ? undefined : boundRight - left })
       // 比视口还宽(窄屏 × 固定宽度浮层):夹取只能贴左边、右边照样被裁 → 给个局部 px 的上限。
-      const maxWidth = wV > vw - 2 * margin ? (vw - 2 * margin) / z : undefined
-      setPos((prev) => {
-        const next = { left: v.left / z, top: v.top / z, maxWidth }
-        return prev.left === next.left && prev.top === next.top && prev.maxWidth === next.maxWidth ? prev : next
-      })
+      const maxWidth = boundary || el.offsetWidth * z > availableWidth ? availableWidth / z : undefined
+      const next = { left: (v.left + left) / z, top: (v.top + top) / z, maxWidth, maxHeight }
+      // 同步写进 DOM:setPos 要等下一次渲染才落到元素上,而父组件的 layout effect 在这之前跑(子先父后)——
+      // 量浮层矩形的调用方(账号卡的液滴从头像流出,DESIGN §3)会量到没夹过的初始位置。下一次渲染写的是同值。
+      el.style.left = `${next.left}px`
+      el.style.top = `${next.top}px`
+      el.style.maxWidth = maxWidth === undefined ? '' : `${maxWidth}px` // 清空那条也要同步写:同一批更新里先有后无,React 前后都是 undefined 不会替你清(Codex 评审 P2)
+      el.style.maxHeight = maxHeight === undefined ? '' : `${maxHeight}px`
+      setPos((prev) => (prev.left === next.left && prev.top === next.top && prev.maxWidth === next.maxWidth && prev.maxHeight === next.maxHeight ? prev : next))
     }
     apply()
     window.addEventListener('resize', apply) // 开着菜单缩窗口时重夹,防跑出屏
     window.addEventListener(UI_ZOOM_EVENT, apply) // 端级 zoom 改了不发 resize,须单独收
     const ro = new ResizeObserver(apply) // 内容异步长高(如共享卡拉到参与者列表)后重新定位
     ro.observe(el)
+    if (boundary) ro.observe(boundary)
+    document.addEventListener('scroll', apply, true)
     return () => {
       window.removeEventListener('resize', apply)
       window.removeEventListener(UI_ZOOM_EVENT, apply)
       ro.disconnect()
+      document.removeEventListener('scroll', apply, true)
     }
-  }, [x, y, anchorTop, prefer, center, alignEnd, margin])
-  return { ref, style: { left: pos.left, top: pos.top, maxWidth: pos.maxWidth } }
+  }, [x, y, anchorTop, prefer, center, alignEnd, margin, boundLeft, boundRight, boundary])
+  return { ref, style: { left: pos.left, top: pos.top, maxWidth: pos.maxWidth, maxHeight: pos.maxHeight } }
 }
 
 /**
@@ -315,6 +338,9 @@ export function OverlayAt({
   center,
   alignEnd,
   margin,
+  boundLeft,
+  boundRight,
+  boundary,
   innerRef,
   className,
   style,
@@ -328,13 +354,16 @@ export function OverlayAt({
   center?: boolean
   alignEnd?: boolean
   margin?: number
+  boundLeft?: number
+  boundRight?: number
+  boundary?: HTMLElement | null
   /** 调用方也要拿这个 DOM(如判定「点在菜单外」)时传进来;内部定位仍用自己的 ref。 */
   innerRef?: (el: HTMLDivElement | null) => void
   className?: string
   style?: CSSProperties
   children?: ReactNode
 } & Omit<HTMLAttributes<HTMLDivElement>, 'style' | 'className' | 'children'>) {
-  const p = useClampedMenu(x, y, { anchorTop, prefer, center, alignEnd, margin })
+  const p = useClampedMenu(x, y, { anchorTop, prefer, center, alignEnd, margin, boundLeft, boundRight, boundary })
   useExitGhost(p.ref)
   return (
     <div
@@ -349,4 +378,23 @@ export function OverlayAt({
       {children}
     </div>
   )
+}
+
+/** DOM-owned popovers share the same exit CSS as OverlayAt. Cleanup runs on the
+ * live surface immediately; only an inert visual copy survives until it fades. */
+export function removeOverlayWithExit(el: HTMLElement): void {
+  if (!el.isConnected) { el.remove(); return }
+  const ghost = el.cloneNode(true) as HTMLElement
+  const inputs = el.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea')
+  ghost.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input, textarea').forEach((g, i) => { g.value = inputs[i]?.value ?? g.value })
+  ghost.removeAttribute('id')
+  ghost.querySelectorAll('[id]').forEach((n) => n.removeAttribute('id'))
+  ghost.setAttribute('aria-hidden', 'true')
+  ghost.dataset.lclExit = ''
+  ghost.inert = true
+  ghost.style.pointerEvents = 'none'
+  el.replaceWith(ghost)
+  const animations = ghost.getAnimations?.() ?? []
+  if (!animations.length) ghost.remove()
+  else void Promise.allSettled(animations.map((a) => a.finished)).then(() => ghost.remove())
 }

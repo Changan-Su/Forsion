@@ -55,6 +55,8 @@ import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
 import { applyHistorianEmoji } from './sessionEmoji.js';
 import { sessionRemoteTainted } from './remoteTaint.js';
 import { judgeTriggerBlock } from './judgeSignals.js';
+import { deviceTagContext, hasLocalPath, textForThisDevice } from './deviceTagContext.js';
+import { tagOf, withTag } from '../contracts/deviceTags.js';
 export { parseRawLines } from './memoryCandidates.js';
 const historianSignal = new AsyncLocalStorage<AbortSignal>();
 
@@ -69,6 +71,8 @@ const RAW_MAX_AGE_DAYS = 7;
 const RAW_MAX_PER_ROUND = 5;
 const HARNESS_RAW_MAX_PER_ROUND = 3;
 const PROJECT_FACTS_MAX_PER_ROUND = 3;
+/** 判官的项目候选里收哪几类(11-03);progress / content 和没标类别的不写进项目记忆。 */
+const PROJECT_FACT_KINDS = new Set(['command', 'location', 'convention', 'landmine', 'request']);
 // 会话级 Historian 互斥(Codex 评审 08-03 Critical):onUserRunDone 是 fire-and-forget,下一 run 的
 // done 可能在上一轮维护(judge/fork/整固)还在飞时到来——everyRounds=1 时必然。并发双跑会重复追加
 // LOG/候选、竞态覆盖标题/摘要。锁忙=直接跳过本轮(维护是尽力而为,下个到点轮自然补),绝不能把
@@ -128,8 +132,16 @@ function judgeFieldSpecs(wantTitle: boolean, wantLog: boolean, wantMemory: boole
     );
     if (wantProject) {
       fields.push(
-        '"project_memory_candidates": an array of NEW facts that hold only inside this project (usually empty): its commands, layout and conventions proven to work here, ' +
-        'landmines found here, what the user asked for in this project. Same gate and same form as memory_candidates; at most 3 entries. ' +
+        // 11-03:笔记库那类项目里,判官把「讲到哪了」和讲义内容记成了项目记忆 —— 光说「别记进度」(上面的负面清单)没拦住。
+        // 改成每条必须先标类别,只收前五类;进度、内容和没标类别的都不写(见下面 PROJECT_FACT_KINDS)。
+        '"project_memory_candidates": an array (usually empty) of NEW facts that hold only inside this project, each an object {"kind": K, "fact": "one sentence"}. ' +
+        'K is one of: "command" (a command or workflow proven to work here), "location" (the path of a file, folder or tool of this project), "convention" (how things are done here), ' +
+        '"landmine" (a trap found here), "request" (what the user wants agents to do or avoid in this project), ' +
+        '"progress" (where a task, lesson, reading or document stands or stopped, what was done or covered, where to continue), ' +
+        '"content" (subject matter itself: what a paper, lecture, note or file says, or which chapter, section or page of a source it corresponds to). ' +
+        'Test each entry: would an agent starting an unrelated task in this project next month need it? A fact about one document, lesson or session is "progress" or "content", never "location". ' +
+        'Label every entry honestly: only the first five kinds are saved; "progress" and "content" entries are dropped, which is the expected outcome for them. ' +
+        'Same gate and same form for "fact" as memory_candidates; at most 3 entries. ' +
         'Skip whatever a [Project memory] block below already says. ' +
         'An entry is saved for every agent working in this project without anyone reviewing it, so include only what this conversation clearly established.',
       );
@@ -447,8 +459,8 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
   void (async () => {
     const cfg = loadSpecialAgentsConfig().historian;
     if (!cfg.enabled) return;
-    const s = (await query<any[]>(`SELECT kind, title FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]))[0];
-    if (!s || (s.kind && s.kind !== 'user')) return;
+    const s = (await query<any[]>(`SELECT kind, title, title_manual FROM chat_sessions WHERE id = ? AND user_id = ? LIMIT 1`, [sessionId, userId]))[0];
+    if (!s || (s.kind && s.kind !== 'user') || s.title_manual) return;
     const n = await query<any[]>(`SELECT COUNT(*) AS n FROM agent_runs WHERE session_id = ? AND status = 'done'`, [sessionId]);
     const round = (Number(n[0]?.n) || 0) + 1;
     if (!isRoundDue(round, cfg.everyRounds, cfg.firstRoundTrigger)) return;
@@ -476,11 +488,14 @@ export function onUserRunStart(sessionId: string, userId: string, message: strin
       const unusable = (t: string) => t.length < 2 || (/\s/.test(t) ? t.split(/\s+/).length > 8 : t.length > 40) || t.toUpperCase() === 'NOTHING';
       let title = cleanTitle(res?.content);
       if (unusable(title)) return false;
-      if (title === current) return true; // 原样保留(含用户手改的标题)不核语言
+      if (title === current) return true; // 原样保留不核语言
       title = cleanTitle(await inConversationLanguage(userId, modelId, title, `${priorT.userText}\n${message.trim()}`));
       if (unusable(title)) return false; // 改写没成 / 改写出来的不像标题 → 交 done 判官兜底(它也过这道核对)
       // CAS:用户这期间手改过标题就不覆盖,也不报「已更新」(query 无 affectedRows,靠 RETURNING 判命中)。
-      const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') = ? RETURNING id`, [title, sessionId, current]);
+      // 起点是 New Chat 时,前端发出第一句后会写占位标题 = 原话前 30 字(tanguSlice renameSession,PATCH 再 trim),
+      // 常落在这次模型调用途中 —— 那不算用户改名,照写(10-29)。起点已有标题的轮次不放宽。
+      const placeholder = !current || current === 'New Chat' ? message.slice(0, 30).trim() : current;
+      const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND COALESCE(title, '') IN (?, ?) AND title_manual = FALSE RETURNING id`, [title, sessionId, current, placeholder]);
       if (!hit.length) return true;
       await logActivity(userId, 'title_updated', title, sessionId);
       log(`首帧标题(第 ${round} 轮,只看用户消息): ${title}`);
@@ -510,7 +525,8 @@ export function historianRoundRemote(sk: { agent_config?: unknown } | undefined,
 /** @param runRemote 刚结束的这条 run 是否来自远端 —— 由 agentLoop 在 run **收尾时**算好传入(input.remote,或远端 steer / 询问 /
  *  截屏 / ui_ 回执给本机 run 打的进程内污点;那张表随 run 收尾清掉,Historian 异步起来时已经查不到)。
  *  @param signals 这一轮攒下的复盘信号(services/judgeSignals.ts;给判官读的英文句子)。有信号时不到点也评一次。 */
-export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, runRemote = false, signals?: readonly string[]): Promise<void> {
+/** signals 可以是 Promise(决策闸还在问):轮次照常在 done 那一刻数、锁照常立刻占,数完轮次才等它 —— 等的工夫里下一轮跑完也不会把这轮的到点挤掉。 */
+export async function onUserRunDone(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, runRemote = false, signals?: readonly string[] | Promise<readonly string[]>): Promise<void> {
   if (!isLocal()) return;
   // 会话级互斥:上一轮维护(judge/fork/整固)还在飞 → 整轮跳过(尽力而为,下个到点轮自然补)。
   // 加锁在首个 await 之前,并发 done 只有一个能进。
@@ -547,7 +563,7 @@ async function runHistorianSlot(sessionId: string, fn: () => Promise<void>): Pro
   }
 }
 
-async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, opts?: { force?: boolean; runRemote?: boolean; signals?: readonly string[] }): Promise<void> {
+async function runHistorianForSession(sessionId: string, userId: string, memScopeSlug?: string, forkSeed?: HistorianForkSeed, opts?: { force?: boolean; runRemote?: boolean; signals?: readonly string[] | Promise<readonly string[]> }): Promise<void> {
   // 解析本 run 的记忆域:优先传入的 memScopeSlug;否则(外部引擎等未做激活的路径)从会话 agent_config.agentSlug
   // 兜底读——那存的是 active slug,须经 resolveMemorySlug 折叠 shareDefaultMemory 才与 run 内记忆读写同域。
   // 重注入 Historian 自己的异步上下文 → deps().brain.memory(动态本地库)读写落到该 agent 的文件夹(fire-and-forget
@@ -587,7 +603,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
   try {
     // 仅用户会话；并发安全：roundN 由 done run 计数推出（幂等）。app_id/model_id/agent_config 供辅助模式讨论用。
     const skRows = await query<any[]>(
-      `SELECT kind, title, summary, emoji, app_id, model_id, agent_config FROM chat_sessions WHERE id = ? LIMIT 1`,
+      `SELECT kind, title, title_manual, summary, emoji, emoji_manual, app_id, model_id, agent_config FROM chat_sessions WHERE id = ? LIMIT 1`,
       [sessionId],
     );
     const sk = skRows[0];
@@ -606,7 +622,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 信号轮(E2):这一轮出了值得复盘的事 → 不到点也评一次,但只评记忆 / 进化记录两类候选;
     // 标题 / 摘要 / 日志 / 图标 / 辅助讨论仍只跟到点轮(cadenceDue)。到点轮带着信号 = 照常评,多一段「为什么现在评」。
     const cadenceDue = !!opts?.force || isRoundDue(roundN, cfg.everyRounds, cfg.firstRoundTrigger);
-    const signals = (opts?.signals ?? []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 4);
+    const signals = ((await opts?.signals) ?? []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 4);
     const signalDue = !cadenceDue && signals.length > 0 && Date.now() - (lastSignalReview.get(sessionId) ?? 0) >= SIGNAL_REVIEW_COOLDOWN_MS;
     const due = cadenceDue || signalDue;
     if (!due) return;
@@ -614,7 +630,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const earlyKey = `${sessionId}:${roundN}`;
     const early = opts?.force ? undefined : earlyTitles.get(earlyKey);
     earlyTitles.delete(earlyKey);
-    const titleDue = cadenceDue && !(early && (await early));
+    const titleDue = cadenceDue && !sk.title_manual && !(early && (await early)); // 用户亲手改过的标题不再动
     // 远程来源的一轮不写长期记忆(09-27 终审 P1 延伸):记忆会注入之后每一次会话(含本机 full-auto),远端 run 自己的
     // remember 已硬拒;Historian 的独立判官(候选 → Dream)与辅助讨论(主 Agent 自己 remember)是同一条旁路。标题 / 摘要照常(会话自有资产)。
     // 日志(LOG)与工作笔记候选同样不写(P1 · M1A,G7):LOG 按日进 Muse 周期提示词的活动摘要、read_log,远端原话经它流进 Muse;
@@ -631,7 +647,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     const memoryDue = due && !remoteRound;
     const logDue = cadenceDue && !remoteRound;
     const summaryDue = cadenceDue; // 摘要与标题同属 Historian 自有资产(非记忆资产):三种模式都由 judge 维护
-    const emojiDue = cadenceDue && cfg.autoEmoji !== false && !String(sk.emoji || '').trim();
+    const emojiDue = cadenceDue && cfg.autoEmoji !== false && !sk.emoji_manual && !String(sk.emoji || '').trim();
 
     // 实质增量地板:自上次维护以来新增内容太少 → 跳过整次判断(避免琐碎轮重复总结 / 反复重写记忆侵蚀)。
     // 带信号的一轮不看这道地板:纠正往往只有一句话,正是地板会筛掉的那种。
@@ -739,10 +755,16 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           .map((c) => redactSecrets(String(c ?? '').replace(/\s*[\r\n]+\s*/g, '; ').trim()).slice(0, 300))
           .filter((c) => c.length >= 4 && c.toUpperCase() !== 'NOTHING')
           .slice(0, max);
-        // 项目那组只在项目会话里收(非项目会话里模型硬给也不认);同一句两组都交了 → 算项目级,不进 agent 级 raw 层。
-        const projectFacts = projectRef && Array.isArray((j as any).project_memory_candidates) ? cleanCands((j as any).project_memory_candidates, PROJECT_FACTS_MAX_PER_ROUND) : [];
-        const candidates = cleanCands(rawCands, RAW_MAX_PER_ROUND + projectFacts.length)
-          .filter((c) => !projectFacts.some((f) => normalizeMemoryFact(f) === normalizeMemoryFact(c)))
+        // 项目那组只在项目会话里收(非项目会话里模型硬给也不认);同一句两组都交了 → 算项目级,不进 agent 级 raw 层(没收的那几条也算)。
+        const projectRaw: unknown[] = projectRef && Array.isArray((j as any).project_memory_candidates) ? (j as any).project_memory_candidates : [];
+        const factOf = (c: unknown): unknown => (c && typeof c === 'object' ? (c as any).fact : c);
+        const projectAll = cleanCands(projectRaw.map(factOf), projectRaw.length); // 排除 agent 级时看全部,写入才封顶(Codex 评审 11-03)
+        // 只收约定类;进度、内容、没标类别的(旧格式的裸字符串)都不写 —— 没标类别就没过这道闸,不能当约定收
+        const projectFacts = cleanCands(projectRaw.filter((c) => !!c && typeof c === 'object' && PROJECT_FACT_KINDS.has(String((c as any).kind))).map(factOf), PROJECT_FACTS_MAX_PER_ROUND);
+        const dropped = projectRaw.filter((c) => !(c && typeof c === 'object' && PROJECT_FACT_KINDS.has(String((c as any).kind))));
+        if (dropped.length) log(`项目记忆候选没收 ${dropped.length} 条(进度 / 内容 / 没标类别):${dropped.map((c) => (c && typeof c === 'object' ? `${String((c as any).kind).slice(0, 20)}:` : 'bare:') + redactSecrets(String(factOf(c) ?? '')).slice(0, 60)).join(' | ')}`);
+        const candidates = cleanCands(rawCands, RAW_MAX_PER_ROUND + projectAll.length)
+          .filter((c) => !projectAll.some((f) => normalizeMemoryFact(f) === normalizeMemoryFact(c)))
           .slice(0, RAW_MAX_PER_ROUND);
         const okShort = (s: string) => !!s && s.toUpperCase() !== 'NOTHING' && s.length >= 2 && s.length <= 400;
         log(`判断: title="${title}" log="${logText.slice(0, 30)}" 候选=${candidates.length} 条`);
@@ -751,9 +773,13 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           ? cleanTitle(await inConversationLanguage(userId, cfg.modelId, title, transcriptSnapshot.userText)) : title;
         if (titleDue && okShort(fixedTitle)) {
           historianSignal.getStore()?.throwIfAborted();
-          await query(`UPDATE chat_sessions SET title = ? WHERE id = ?`, [fixedTitle, sessionId]).catch((e: any) => log(`更新标题失败: ${e?.message || e}`));
-          await logActivity(userId, 'title_updated', fixedTitle, sessionId);
-          log(`已更新标题: ${fixedTitle}`);
+          // 判官跑的这几十秒里用户可能亲手改了标题:带上标记,没写成就不报「已更新」。
+          const hit = await query<any[]>(`UPDATE chat_sessions SET title = ? WHERE id = ? AND title_manual = FALSE RETURNING id`, [fixedTitle, sessionId])
+            .catch((e: any) => { log(`更新标题失败: ${e?.message || e}`); return []; });
+          if (hit.length) {
+            await logActivity(userId, 'title_updated', fixedTitle, sessionId);
+            log(`已更新标题: ${fixedTitle}`);
+          }
         }
         // 会话摘要(人读,chat_sessions.summary):空串=模型裁定旧摘要仍适用,不动。
         // 活动日志只在 UPDATE 真成功后写,否则工作视图会报告不存在的更新(Codex 评审 08-03 Minor)。
@@ -779,6 +805,15 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           historianSignal.getStore()?.throwIfAborted();
           await deps().brain.memory.appendLogEntry(userId, logText, { signal: historianSignal.getStore() });
           await logActivity(userId, 'log_appended', logText, sessionId);
+        }
+        // 带本机绝对路径的候选(11-06,按条标适用范围):不进所有设备共用的 Agent 记忆 —— 路径到了别的电脑上不成立。
+        // 项目会话里转进项目记忆(和判官的项目候选走下面同一道形状闸);没有项目就标上这台的名字(`[MacBook Pro] …`)再进 raw 层。
+        const pathy = judgeMemory ? candidates.filter((c) => hasLocalPath(c)) : [];
+        if (pathy.length) {
+          for (const c of pathy) candidates.splice(candidates.indexOf(c), 1);
+          if (projectRef) projectFacts.push(...pathy.filter((c) => !projectFacts.some((f) => normalizeMemoryFact(f) === normalizeMemoryFact(c))));
+          else { const here = deviceTagContext(); candidates.push(...pathy.map((c) => tagOf(c, here) ? c : withTag(c, here.self, here))); }
+          log(`${pathy.length} 条记忆候选带本机路径,${projectRef ? `转进项目记忆(${projectRef.name})` : '标上这台的名字'}`);
         }
         historianSignal.getStore()?.throwIfAborted();
         if (judgeMemory && stillClean && candidates.length) {
@@ -977,7 +1012,8 @@ async function startAssistDiscussion(opts: {
 
     // 当前记忆/今日日志随开场白注入,主 Agent 据此判断「是否已记过/是否值得记」。
     // 此刻 ALS 已是本会话的记忆域(onUserRunDone 顶部 enterRunContext),直接读即为主 Agent 的文件。
-    const mem = String((await deps().brain.memory.getMemory(userId).catch(() => ({ content: '' })))?.content || '').trim();
+    // 别台的条目折成一行(11-06):主 Agent 在这台上判断记不记,别台的条目它也不该去改
+    const mem = textForThisDevice(String((await deps().brain.memory.getMemory(userId).catch(() => ({ content: '' })))?.content || '').trim(), deviceTagContext(), 'entry');
     const todayLog = String((await deps().brain.memory.getLog(userId).catch(() => ({ content: '' } as any)))?.content || '').trim();
 
     const topics = [opts.wantLog ? 'the daily LOG' : '', opts.wantMemory ? 'the long-term MEMORY' : ''].filter(Boolean).join(' and ');
@@ -999,7 +1035,7 @@ async function startAssistDiscussion(opts: {
       (freshContext ? `[Current conversation]\n${freshContext}\n\n` : '') +
       `[Historian assist] Decide together whether ${topics} should be updated for this conversation (see the context above). ` +
       `Historian speaks first with its assessment; then ${mainDef.name} makes the final call and, if an update is warranted, ` +
-      'performs it ITSELF by calling log_event (one short sentence for what happened today) and/or remember (only what will still be true next month — user facts/preferences, stable environment facts, proven procedures; never progress, deliverables or dated status, those are log_event material, and never an instruction that holds for this conversation only; one present-tense sentence of at most 300 characters per fact; if the memory below already covers it, update that entry instead of adding another). ' +
+      'performs it ITSELF by calling log_event (one short sentence for what happened today) and/or remember (only what will still be true next month — user facts/preferences (facts about the person themself go to its "person" scope when offered), stable environment facts, proven procedures; never progress, deliverables or dated status, those are log_event material, and never an instruction that holds for this conversation only; one present-tense sentence of at most 300 characters per fact; if the memory below already covers it, update that entry instead of adding another). ' +
       'Do not do any other work. Keep it brief — one round is usually enough.\n\n' +
       // 全文注入(受 MEMORY_CHAR_BUDGET 帽):从前只给头 3000 字,最新条目看不见 → 主 Agent 重复记、写追加式「更正旧条目」。
       `[Current long-term MEMORY]\n${(mem || '(empty)').slice(0, MEMORY_CHAR_BUDGET)}\n\n` +

@@ -1,4 +1,4 @@
-/** Chat View 窄栏回归：真 Electron / 真 ChatView、引擎与 Agent 选择、草稿增高、zoom、中英与明暗。
+/** Chat View 窄栏回归：真 Electron / 真 ChatView、引擎与 Agent 选择(工具行里的收件人芯片,11-02 方案 A)、草稿增高、zoom、中英与明暗。
  * npm run build && npm run check:chatlayout
  * 使用临时 userData / TANGU_HOME / Vault 与假后端，不读写用户会话和笔记。
  */
@@ -33,8 +33,11 @@ async function main() {
   fs.mkdirSync(vault)
   fs.writeFileSync(path.join(vault, 'Layout.md'), '# Layout verification\n')
   fs.writeFileSync(path.join(userdata, 'amadeus-config.dev.json'), JSON.stringify({ lastVault: vault, localVault: vault }))
-  const stub = await startStubEngine({ agents, engines, override: ({ path: p, method }) => {
+  const meta = { defaultSlug: 'xyra', order: [] }
+  const stub = await startStubEngine({ agents, engines, override: async ({ path: p, method, body }) => {
     if (p === '/agent/runs' && method === 'GET') return { runs: [] }
+    if (p === '/agent/agents-meta' && method === 'PUT') Object.assign(meta, await body())
+    if (p === '/agent/agents-meta') return meta
   } })
   for (const dir of [userdata, `${userdata}-dev`]) {
     fs.mkdirSync(dir, { recursive: true })
@@ -57,8 +60,8 @@ async function main() {
     }
     const view = win.locator('.t2-chat-view').first()
     await view.waitFor({ timeout: 30000 })
-    await view.locator('.agent-select-strip .agent-pill').first().waitFor({ state: 'attached', timeout: 30000 })
-    // 真 Electron 会沿用系统指针位置；缩宽恰好把 pill 移到指针下时会展开名称，改变内容宽度。
+    await view.locator('.t2c-row .agent-select-strip .compact-chat-picker').waitFor({ timeout: 30000 })
+    // 真 Electron 会沿用系统指针位置；缩宽恰好把指针压在某个控件上会改变它的样子。
     await win.mouse.move(1, 1)
     await win.waitForTimeout(700)
     check('未开始的新会话不挂载 Agent Desk 卡片与侧板', await view.locator('.agent-desk-card, .agent-desk').count() === 0)
@@ -103,77 +106,126 @@ async function main() {
       return g
     }
 
+    // 收件人芯片(方案页 docs/ToBeImproved/主页生成式组件方案_2026-11-02/agent.html A):输入框上方那一行没了,芯片在工具行模式芯片右边,宽窄同一枚。
+    const chip = view.locator('.agent-select-strip .compact-chat-picker')
+    const chipName = () => chip.locator('.compact-chat-picker-name').textContent()
+    // 收起时 OverlayAt 留一个淡出的替身(data-lcl-exit,同类名):只认活的那只
+    const pop = win.locator('.chat-pick-pop:not([data-lcl-exit])')
+    const search = pop.locator('.chat-pick-search input')
+    const row = (id) => win.locator(`.chat-pick-pop:not([data-lcl-exit]) .chat-pick-row[data-pick-id="${id}"], .chat-pick-sheet .chat-pick-row[data-pick-id="${id}"]`)
+    // 选中集 = 浮层里打勾 / 带序号的行(按序号排);调用时浮层须开着
+    const picks = () => pop.locator('.chat-pick-row[aria-selected="true"]').evaluateAll((els) => els
+      .map((el) => ({ id: el.dataset.pickId, at: Number(el.querySelector('.chat-pick-index')?.textContent || 0) }))
+      .sort((x, y) => x.at - y.at).map((x) => x.id.replace(/^engine:/, '')))
+    const openPop = async () => { if (!(await pop.count())) await chip.click(); await pop.waitFor() }
+
     await resize(800, 820)
     const wide = await safe('宽栏')
-    check('宽栏仍在 View 中心', wide.emptyVisible && Math.abs((wide.empty.top + wide.empty.bottom - wide.col.top - wide.col.bottom) / 2) < 2, wide)
-    check('宽栏保留胶囊', wide.compact.length === 0, wide)
-    const more = await view.locator('.agent-select-strip').evaluate((el) => {
-      const scroll = el.querySelector('.engine-picker-scroll')
-      const button = el.querySelector('.engine-picker-more')
-      scroll.scrollLeft = scroll.scrollWidth
-      return { scrollRight: scroll.getBoundingClientRect().right, moreLeft: button?.getBoundingClientRect().left }
+    // 10-25 起(freshLayout)空状态连同输入区整块居中,不再是空状态单独居中(这条断言当时没跟着改)
+    check('宽栏空状态 + 输入区整块在 View 中心', wide.emptyVisible && Math.abs((wide.empty.top + wide.composer.bottom - wide.col.top - wide.col.bottom) / 2) < 2, wide)
+    check('输入框上方不再有 Agent 那一行', await view.locator('.composer-anchor > .newchat-pickers, .engine-picker-bar').count() === 0)
+    const placed = await view.locator('.t2c-row').evaluate((rowEl) => {
+      const kids = [...rowEl.children]
+      const at = (sel) => kids.findIndex((k) => k.matches(sel))
+      const r = (sel) => rowEl.querySelector(sel)?.getBoundingClientRect()
+      return { mode: at('.mode-pill-wrap'), agent: at('.agent-select-strip'), chip: r('.compact-chat-picker'), modeBtn: r('.mode-pill-btn') }
     })
-    check('更多按钮不盖住选项', more.moreLeft >= more.scrollRight, more)
-    const fitsWidth = await view.locator('.agent-select-strip .engine-picker-scroll').evaluate((el) => el.scrollWidth + 16)
-    await resize(fitsWidth, 820)
-    const fit = await view.locator('.agent-select-strip .engine-picker-scroll').evaluate((el) => ({
-      content: el.scrollWidth, viewport: el.clientWidth, bar: el.parentElement.clientWidth,
-      col: el.closest('.t2-chat-col').clientWidth, padding: getComputedStyle(el.parentElement).padding,
-    }))
-    // Composer has a reading-width cap: expanding the column does not necessarily expand its option bar.
-    // Judge overflow against the actual scroll viewport, not the outer column width.
-    check('加宽后更多按钮与实际溢出一致（包含输入区宽度上限）',
-      (await view.locator('.agent-select-strip .engine-picker-more').count() > 0) === (fit.content > fit.viewport + 1), { fitsWidth, ...fit })
+    check('芯片在工具行里、紧挨模式芯片右边', placed.agent >= 0 && placed.agent === placed.mode + 1, placed)
+    check('芯片最宽 160px、与模式芯片等高', placed.chip.width <= 160.5 && Math.abs(placed.chip.height - placed.modeBtn.height) <= 1, placed)
+    check('没选人时芯片写默认 Agent 的名字', (await chipName()) === 'Xyra')
+    check('宽栏只有一枚芯片', wide.compact.length === 1, wide)
 
-    await resize(420, 720)
-    const narrow = await safe('窄栏')
-    // 轨道方案 §4:引擎选择器并入 Agent 选择条,窄栏因此只剩**一个**带名称的入口(原来是引擎 + Agent 两个)。
-    check('窄栏折叠成单个带名称的入口', narrow.compact.length === 1, narrow)
-    // 窄栏芯片点开 = 自绘浮层(方案页 docs/ToBeImproved/窄栏Agent选择器方案_2026-10-23,B+C):行只放名字,简介在底部说明区。
-    const chip = view.locator('.agent-select-strip .compact-chat-picker')
-    const pop = win.locator('.chat-pick-pop')
-    const row = (id) => win.locator(`.chat-pick-row[data-pick-id="${id}"]`)
-    const picks = () => view.locator('.agent-select-strip .agent-pill[aria-pressed="true"]').evaluateAll(
-      (els) => els.map((el) => el.dataset.engineId || `agent:${el.dataset.agentSlug}`))
     await chip.click()
     await pop.waitFor()
+    const popBox = await pop.boundingBox()
+    const chipBox = await chip.boundingBox()
+    check('浮层朝上开、左缘对齐芯片', popBox.y + popBox.height <= chipBox.y + 1 && Math.abs(popBox.x - chipBox.x) <= 2, { popBox, chipBox })
+    check('打开即聚焦搜索框', await search.evaluate((el) => document.activeElement === el))
+    check('搜索框右侧是「换 Agent」的快捷键', /^(⇧⌘A|Ctrl\+Shift\+A)$/.test(await pop.locator('.chat-pick-search kbd').textContent()), await pop.locator('.chat-pick-search kbd').textContent())
+    check('底部说明区默认是状态句', (await pop.locator('.chat-pick-desc').textContent()).includes('Xyra'))
     const rowText = await row('agent:agent-17').locator('.chat-pick-name').textContent()
     check('浮层行只放名字,不带简介', rowText === agents[17].name && !(await row('agent:agent-17').textContent()).includes(agents[17].description), rowText)
+    check('默认 Agent 那一位带「默认」标', (await row('agent:xyra').textContent()).includes('默认'))
+    const scroller = await pop.locator('.ctx-menu-scroll').evaluate((el) => ({
+      h: el.clientHeight, sh: el.scrollHeight, row: el.querySelector('.chat-pick-row').getBoundingClientRect().height,
+    }))
+    check('最多显示 8 行,其余滚动', scroller.h <= scroller.row * 8 + 9 && scroller.sh > scroller.h, scroller)
     await row('agent:agent-17').hover()
-    check('悬停行时说明区显示它的简介', (await pop.locator('.chat-pick-desc').textContent()).includes(agents[17].description))
-    await row('agent:agent-17').click()
+    check('悬停行时说明区换成它的简介', (await pop.locator('.chat-pick-desc').textContent()).includes(agents[17].description))
+    await search.fill('agent-17')
+    check('搜索按 slug / 名字筛', (await pop.locator('.chat-pick-row').count()) === 1)
+    await win.keyboard.press('Enter')
     await win.waitForTimeout(150)
-    check('点 Agent 后浮层不收(好接着组队)', await pop.isVisible())
-    check('选择 Agent 更新当前名称', (await view.locator('.agent-select-strip .compact-chat-picker-name').textContent()) === agents[17].name)
+    check('↵ 选中命中的那位,浮层不收(好接着组队)', await pop.isVisible() && (await chipName()) === agents[17].name)
     check('单选打勾', await row('agent:agent-17').locator('.chat-pick-check').count() === 1)
+    await search.fill('')
     await row('agent:agent-3').click()
     await win.waitForTimeout(150)
-    const idx = (await pop.locator('.chat-pick-row .chat-pick-index').evaluateAll((els) => els.map((el) => `${el.closest('[data-pick-id]').dataset.pickId}=${el.textContent}`)))
-      .sort((x, y) => x.split('=')[1] - y.split('=')[1])
-    check('两人 = 团队,序号按点选顺序', idx.join(',') === 'agent:agent-17=1,agent:agent-3=2', idx.join(','))
-    check('团队芯片:前缀换成团队、名字串两人', /团队|Team/.test(await chip.locator('.compact-chat-picker-kind').textContent())
-      && (await chip.locator('.compact-chat-picker-name').textContent()).includes(agents[3].name))
-    check('团队写进选中集', (await picks()).join(',') === 'agent:agent-17,agent:agent-3', (await picks()).join(','))
+    check('两人 = 团队,序号按点选顺序', (await picks()).join(',') === 'agent:agent-17,agent:agent-3', (await picks()).join(','))
+    check('团队芯片叠头像、写「X 等 N 位」', (await chipName()) === `${agents[17].name} 等 2 位` && await chip.locator('.chat-pick-stack > *').count() === 2, await chipName())
+    check('模式芯片照旧写「团队」', /团队/.test(await view.locator('.mode-pill-btn .t2c-pill-label').textContent()))
+    await search.focus()
+    await win.keyboard.press('ArrowDown')
+    await win.keyboard.press('ArrowDown')
+    check('↑↓ 在行间移动活动行', (await pop.locator('.chat-pick-row[data-active]').getAttribute('data-pick-id')) !== null)
+    // 右键行:私聊 + 设为默认;Esc 先收右键菜单,浮层留着
+    await row('agent:agent-5').click({ button: 'right' })
+    const rowMenu = win.locator('.ctx-menu[role="menu"]')
+    await rowMenu.waitFor()
+    check('右键行 = 私聊 + 设为默认', (await rowMenu.textContent()).includes('私聊') && (await rowMenu.textContent()).includes('设为默认'))
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(120)
+    check('Esc 先收右键菜单,浮层留着', (await rowMenu.count()) === 0 && await pop.isVisible())
+    await row('agent:agent-5').click({ button: 'right' })
+    await rowMenu.locator('button', { hasText: '设为默认' }).click()
+    await win.waitForTimeout(300)
+    check('设为默认写进名册、标随之挪过去', meta.defaultSlug === 'agent-5' && (await row('agent:agent-5').textContent()).includes('默认') && !(await row('agent:xyra').textContent()).includes('默认'), meta)
     await win.keyboard.press('Escape')
     await win.waitForTimeout(150)
     check('Esc 收起浮层', (await pop.count()) === 0)
-    await chip.click()
+    await openPop()
     await row('engine:codex').click()
     await win.waitForTimeout(150)
-    // 「外部引擎与 Agent 互斥」的老意图:以前靠整条 Agent 选择器消失,现在靠选中集只剩引擎那一枚。
+    check('选引擎后浮层收起', (await pop.count()) === 0)
+    await openPop()
+    // 「外部引擎与 Agent 互斥」的老意图:选中集只剩引擎那一枚。
     const enginePicked = await picks()
     check('选外部引擎即清空 Agent(单选互斥)', enginePicked.length === 1 && enginePicked[0] === 'codex', enginePicked.join(','))
-    check('选引擎后浮层收起', (await pop.count()) === 0)
-    await view.locator('.agent-select-strip .agent-pill[data-agent-slug="xyra"]:not([disabled])').waitFor({ state: 'attached', timeout: 30000 })
-    await chip.click()
+    await win.keyboard.press('Escape')
+    await view.locator('.agent-select-strip .compact-chat-picker:not([aria-busy])').waitFor({ timeout: 30000 })
+    await openPop()
     await row('agent:xyra').click()
     await win.waitForTimeout(150)
     const agentPicked = await picks()
     check('再选 Agent 即退掉外部引擎', agentPicked.length === 1 && agentPicked[0] === 'agent:xyra', agentPicked.join(','))
     await row('').click()
     await win.waitForTimeout(150)
-    check('默认 Agent = 清空并收起', (await picks()).length === 0 && (await pop.count()) === 0)
-    // 触屏 = 贴底抽屉:Electron 里假装 pointer: coarse
+    check('默认 Agent = 清空并收起', (await pop.count()) === 0)
+    await openPop()
+    const cleared = await picks()
+    check('清空后什么都没勾,只有「默认 Agent」行打勾', cleared.length === 1 && cleared[0] === '', cleared)
+    await win.keyboard.press('Escape')
+    // ⌘⇧A / 命令面板「换 Agent」
+    await view.locator('.t2c-ta').focus()
+    await win.keyboard.press('Meta+Shift+A')
+    await pop.waitFor()
+    check('⌘⇧A 打开浮层且搜索框聚焦', await search.evaluate((el) => document.activeElement === el))
+    await win.keyboard.press('Meta+Shift+A')
+    await win.waitForTimeout(150)
+    check('再按 ⌘⇧A 收起', (await pop.count()) === 0)
+    await win.keyboard.press('Meta+k')
+    await win.locator('.cmd-input').fill('换 Agent')
+    await win.locator('.cmd-item', { hasText: '换 Agent' }).click()
+    await pop.waitFor()
+    check('命令面板「换 Agent」打开浮层', await pop.isVisible())
+    await win.keyboard.press('Escape')
+    await win.waitForTimeout(150)
+    await view.screenshot({ path: path.join(home, 'wide.png') })
+
+    await resize(420, 720)
+    const narrow = await safe('窄栏')
+    check('窄栏还是工具行里那一枚芯片', narrow.compact.length === 1 && await view.locator('.t2c-row .agent-select-strip').count() === 1, narrow)
+    // 触屏 = 贴底抽屉(10-24 定的,不变):Electron 里假装 pointer: coarse
     await win.evaluate(() => {
       const real = window.matchMedia.bind(window)
       window.__realMatchMedia = real
@@ -191,7 +243,7 @@ async function main() {
 
     await resize(320, 620)
     const small = await safe('极窄栏')
-    check('极窄栏仍只有一个入口且不出列', small.compact.length === 1 && small.compact[0].right <= small.col.right + 1, small)
+    check('极窄栏仍只有一枚芯片且不出列', small.compact.length === 1 && small.compact[0].right <= small.col.right + 1, small)
     await view.screenshot({ path: path.join(home, 'small.png') })
     await resize(420, 360)
     await safe('矮窗口')
@@ -213,7 +265,7 @@ async function main() {
     await win.waitForTimeout(180)
     await resize(420, 720)
     await safe('英文窄栏')
-    check('英文选择条已翻译', await view.locator('.agent-select-strip').getAttribute('aria-label') === 'Pick agents')
+    check('英文芯片已翻译', await view.locator('.agent-select-strip').getAttribute('aria-label') === 'Pick agents')
     await view.screenshot({ path: path.join(home, 'narrow-en.png') })
 
     await win.evaluate(() => window.tangu.openMini({}))

@@ -28,7 +28,8 @@ import { startChildSession } from '../services/childSessions.js';
 import { museDmSessionId } from '../services/museDm.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
-import { listCheckpoints, restoreCodeSince, removeSessionCheckpoints } from '../services/checkpoints.js';
+import { listCheckpoints, restoreCodeSince } from '../services/checkpoints.js';
+import { deleteSessionCascade } from '../services/sessionCleanup.js';
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
 import { isValidSlug } from '../agents/agentRegistry.js';
 import { isDelegateActive } from '../services/delegateTranscript.js';
@@ -137,25 +138,31 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
 // 会话行的「主动发来没看」与「等你」(Muse 私聊方案 B,10-18):桌面全局轮询器每 4s 拉一次,私聊行尾状态与 Tangu 角标靠它。
 //   unread   = Agent 在后台主动发来、用户还没打开过(proactive_at > last_read_at);一轮对话跑完没看的仍由客户端自己记
 //   awaiting = 问句在等回话(awaiting_user),或 Muse 后台有待批的一步(算在 Muse 私聊上 —— 托盘里批完不起轮,awaiting_user 清不掉)
+//   count    = 没读的主动消息条数(行尾红点上的数;11-04 加,老客户端不认它照旧只画点)
+//   at       = 最近一条主动消息的时刻(客户端据此认「又来了一条」去重拉列表;读过之后再来一条,条数可能不变)
 // 只返回有状态的会话,没有就是空表。
 router.get('/agent/sessions/attention', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
     const appId = deps().profile.appId;
     const rows = await query<any[]>(
-      `SELECT id, proactive_at, last_read_at, awaiting_user FROM chat_sessions
+      `SELECT s.id, s.proactive_at, s.last_read_at, s.awaiting_user,
+         (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id AND m.origin LIKE 'proactive%'
+            AND m.timestamp > COALESCE(s.last_read_at, 0)) AS unread_count
+       FROM chat_sessions s
        WHERE user_id = ? AND app_id = ? AND archived = ? AND kind = 'user'
          AND (awaiting_user = TRUE OR (proactive_at IS NOT NULL AND proactive_at > COALESCE(last_read_at, 0)))`,
       [userId, appId, false],
     );
-    const out = new Map<string, { id: string; unread: boolean; awaiting: boolean }>(rows.map((r) => [String(r.id), {
-      id: String(r.id), unread: Number(r.proactive_at || 0) > Number(r.last_read_at || 0), awaiting: !!r.awaiting_user,
-    }]));
+    const out = new Map<string, { id: string; unread: boolean; awaiting: boolean; count: number; at: number }>(rows.map((r) => {
+      const unread = Number(r.proactive_at || 0) > Number(r.last_read_at || 0);
+      return [String(r.id), { id: String(r.id), unread, awaiting: !!r.awaiting_user, count: unread ? Number(r.unread_count) || 0 : 0, at: Number(r.proactive_at) || 0 }];
+    }));
     if (deps().profile.capabilities.hostExec) {
       const [p] = await query<any[]>(
         `SELECT COUNT(*) AS n FROM pending_approvals WHERE user_id = ? AND agent_slug = ? AND status = 'pending'`, [userId, MUSE_AGENT_SLUG]);
       const sid = Number(p?.n) > 0 ? await museDmSessionId(userId, appId) : null;
-      if (sid) out.set(sid, { id: sid, unread: out.get(sid)?.unread ?? false, awaiting: true });
+      if (sid) out.set(sid, { id: sid, unread: out.get(sid)?.unread ?? false, awaiting: true, count: out.get(sid)?.count ?? 0, at: out.get(sid)?.at ?? 0 });
     }
     res.json({ sessions: [...out.values()] });
   } catch (e: any) {
@@ -225,6 +232,8 @@ router.post('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => 
 
 // 从某条消息(含)处分支出新会话:继承到该点为止的历史(区别于 POST /agent/sessions 的空会话)。
 // message_id 为分支点(通常是某条 AI 回复);title 可选(缺省取源会话标题)。
+// fork_message_id 可选:分叉点记在哪条上(缺省 = message_id)。编辑重发 / 重新生成要把「旧的这一版」整份留成一支 ——
+// 复制到最后一条(message_id),分叉点却在被改那条之前的回答上,画布才把旧那支和新主线画成同一张卡下的两个孩子。
 router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
@@ -233,6 +242,7 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
     const messageId = typeof req.body?.message_id === 'string' ? req.body.message_id : '';
     if (!messageId) return res.status(400).json({ detail: 'message_id required' });
     const title = typeof req.body?.title === 'string' ? req.body.title : undefined;
+    const forkMessageId = typeof req.body?.fork_message_id === 'string' && req.body.fork_message_id ? req.body.fork_message_id : messageId;
     // 分支照抄源会话 agent_config(源会话的远程标记随之继承);远端发起的分支自己再记一笔 —— 随建会话的同一条 INSERT
     // (见 BranchSessionInput.configOverlay:先插后补会留一个无标记的窗口,复制失败时就一直无标记)。
     const remote = parseRemoteOrigin(req.headers);
@@ -241,7 +251,7 @@ router.post('/agent/sessions/:id/branch', authMiddleware, async (req: AuthReques
     // 不传标题时叫 New Chat,第一句新问题由 Historian 起名(同源标题的兄弟分支在树里认不出来)。
     const r = await branchSession({
       sourceSessionId: req.params.id, userId, appId: s.app_id, messageId, title: title ?? 'New Chat',
-      parentSessionId: s.fork_message_id && s.parent_session_id ? String(s.parent_session_id) : req.params.id, forkMessageId: messageId,
+      parentSessionId: s.fork_message_id && s.parent_session_id ? String(s.parent_session_id) : req.params.id, forkMessageId,
       ...(remote ? { configOverlay: { remoteOrigin: remoteOriginMarker(remote) } } : {}),
     });
     if (!r) return res.status(404).json({ detail: 'branch source/message not found' });
@@ -298,7 +308,9 @@ router.post('/agent/sessions/:id/children', authMiddleware, async (req: AuthRequ
     if (!message || message.length > 20_000) return res.status(400).json({ detail: 'message required (max 20000 chars)' });
     const title = typeof req.body?.title === 'string' ? req.body.title : '';
     const remote = parseRemoteOrigin(req.headers);
-    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(remote ? { remote } : {}) });
+    // 任务卡的 `agent:` 是模型写的串:认得才用,认不得跟主会话走
+    const agent = typeof req.body?.agent === 'string' ? await getAgent(req.body.agent).catch(() => null) : null;
+    const r = await startChildSession({ parentId: s.id, userId, modelId: s.model_id || '', title, message, ...(agent ? { agentSlug: agent.slug } : {}), ...(remote ? { remote } : {}) });
     res.json({ sessionId: r.sessionId, runId: r.runId, title: r.title });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'start child session failed' });
@@ -346,7 +358,7 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const { title, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
+    const { title, title_source, archived, model_id, emoji, project_path, project_name, projectless } = req.body || {};
     const icon = normalizeSessionEmoji(emoji);
     if (emoji !== undefined && emoji !== null && emoji !== '' && !icon) return res.status(400).json({ detail: 'emoji must be one emoji' });
     // 契约 C8:远端改会话的项目路径同样不许指到根 / 家目录 / 受保护目录(桌面据 project_path 给之后的 run 填 cwd)。
@@ -355,10 +367,17 @@ router.patch('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, res
     if (badCwd) return res.status(400).json(remoteCwdErrorBody(badCwd));
     const sets: string[] = [];
     const params: any[] = [];
-    if (typeof title === 'string') { sets.push('title = ?'); params.push(title.trim().slice(0, 200)); }
+    if (typeof title === 'string') {
+      const nextTitle = title.trim().slice(0, 200);
+      // 只有用户自己的改名入口带 title_source:'user'。手动 = Historian 此后不再动这个标题;用户把标题清空 = 交还给 Historian。
+      // 前端发出第一句后写的占位标题带 'auto':不算手动,也盖不掉手动标题(本机列表可能还没刷到别的设备刚改的名字)。
+      sets.push(title_source === 'auto' ? 'title = CASE WHEN title_manual THEN title ELSE ? END' : 'title = ?'); params.push(nextTitle);
+      if (title_source === 'user') sets.push(`title_manual = ${nextTitle ? 'TRUE' : 'FALSE'}`);
+    }
     if (typeof archived === 'boolean') { sets.push('archived = ?'); params.push(archived); }
     if (typeof model_id === 'string') { sets.push('model_id = ?'); params.push(model_id || null); }
-    if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?'); params.push(icon); }
+    // Historian 写图标不走这里,这条路都是用户动的;清空也算,不然下一轮又被自动填上。
+    if (typeof emoji === 'string' || emoji === null) { sets.push('emoji = ?', 'emoji_manual = TRUE'); params.push(icon); }
     if (typeof project_path === 'string' || project_path === null) { sets.push('project_path = ?'); params.push(project_path ? String(project_path).slice(0, 1000) : null); }
     if (typeof project_name === 'string' || project_name === null) { sets.push('project_name = ?'); params.push(project_name ? String(project_name).slice(0, 255) : null); }
     if (typeof projectless === 'boolean') { sets.push('projectless = ?'); params.push(projectless); }
@@ -402,16 +421,7 @@ router.delete('/agent/sessions/:id', authMiddleware, async (req: AuthRequest, re
     const userId = req.user!.userId;
     const s = await getOwnSession(req.params.id, userId);
     if (!s) return res.status(404).json({ detail: 'Session not found' });
-    const sid = req.params.id;
-    // 显式级联(standalone schema 无外键 CASCADE;顺序:叶 → 根)。
-    await query(`DELETE FROM agent_run_events WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = ?)`, [sid]);
-    await query(`DELETE FROM agent_steps WHERE run_id IN (SELECT id FROM agent_runs WHERE session_id = ?)`, [sid]);
-    await query(`DELETE FROM agent_runs WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_messages WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_asides WHERE session_id = ?`, [sid]);
-    await query(`DELETE FROM chat_sessions WHERE id = ?`, [sid]);
-    bumpHistoryRevision(sid); // 在飞的后台摘要落库前会复核版本 → 丢弃
-    await removeSessionCheckpoints(sid); // 代码快照跟着走,否则 home 无界增长
+    await deleteSessionCascade(req.params.id);
     res.json({ ok: true });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'delete session failed' });

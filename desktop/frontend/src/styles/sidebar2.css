@@ -121,7 +121,7 @@
  * 结果组头上方凭空多 4.5px(行之间只有 .t2s-group-sessions 的 1px gap)= 用户报的「间距不统一」。 */
 :is(.t2s-side, .t2sw-plug) .t2s-group:has(.t2s-folder-row) { margin-top: 0; }
 
-/* Local|Cloud 胶囊滑块(VaultSideSwitch):等宽双选项,滑块弹性平移 + 文字颜色过渡。
+/* Local|Cloud 胶囊滑块(VaultSideSwitch):等宽双选项,滑块两条边拉伸过去 + 文字颜色过渡。
  * 常驻 Amadeus 工作区各子 view 开头(笔记树/全文搜索/标签)。整体 no-drag(Electron 拖窗区兜底)。 */
 .t2s-vaultseg {
   position: relative;
@@ -144,28 +144,34 @@
   position: absolute;
   top: 2px;
   bottom: 2px;
-  left: 2px;
-  /* 格数与当前格由变量驱动(2026-08-20 加第三个消费者:⌘P 快切的四格分类)。
-     ⚠️ 缺省 `--seg-n: 2` 时 `(100% - 4px)/2` 与原来的 `50% - 2px` 逐像素相同,而 `--seg-i` 缺省 0
-     时 translateX(0) 也与原来一致 —— 两个老消费者(本地|云端 / 文档|画布)一个字节都没变,
-     它们照旧靠下面的 `[data-side=…]` 规则平移(属性选择器特异性更高,盖得住这条)。 */
-  width: calc((100% - 4px) / var(--seg-n, 2));
+  /* 格数与当前格由变量驱动(2026-08-20 加第三个消费者:⌘P 快切的四格分类)。滑块按左右两条边定位(水滴复用方案第 4 条,
+     2026-11-05):第 i 格 = 左沿 2 + i·(W−4)/n、右沿离右边 2 + (n−1−i)·(W−4)/n —— 与原来 `left:2px; width:(100%−4px)/n;
+     translateX(i·100%)` 落点逐像素相同。缺省 `--seg-n: 2` / `--seg-i: 0`;两段消费者(本地|云端 / 文档|画布 / Chat|Work)
+     不写变量,靠下面的 `[data-side=…]` 把 --seg-i 设成 1。
+     ⚠️ 别再写 width:left + right + width 三者同时有值时 right 被忽略,后沿就不动了(orbits.css 原来那条四格宽度就是这么删的)。 */
+  left: calc(2px + (100% - 4px) * var(--seg-i, 0) / var(--seg-n, 2));
+  right: calc(2px + (100% - 4px) * (var(--seg-n, 2) - var(--seg-i, 0) - 1) / var(--seg-n, 2));
+  /* 中途改目标时两条边可能交叉(0→3 刚起步就点 2:按上一个目标算方向是「往左」,左沿立刻出发、右沿还停在 0 附近),
+     宽度会被夹成 0、滑块塌成一条缝。保底一格:比一格窄时按 CSS 定位规则忽略 right,滑块按一格宽被左沿推着走,
+     不塌;平时宽度恰好一格或更长,这条不起作用。check:segstretch S2b 钉着。 */
+  min-width: calc((100% - 4px) / var(--seg-n, 2));
   border-radius: var(--radius-pill, 999px);
   background: var(--seg-thumb);
   border: none;
   box-shadow: var(--seg-thumb-shadow);
-  /* 克制的弹性:轻微过冲即收,不弹跳 */
-  transition: transform 0.3s cubic-bezier(0.32, 1.25, 0.5, 1);
-  will-change: transform;
-  transform: translateX(calc(var(--seg-i, 0) * 100%));
+  /* 开关旋钮那套「拉伸」(base.css .settings-switch > span):两条边各走 --seg-edge-duration,后沿晚 --seg-edge-lag 出发 ——
+     离开时拉长、落地回缩,不过冲(原来的 cubic-bezier(0.32, 1.25, 0.5, 1) 会冲过头 3.5–3.9px 再回来)。哪条是后沿看 data-dir:
+     消费者切格时写 `r` / `l`(lcl useSegDir);没写(首帧、外部拼的 DOM)= 两条边一起走,照样不过冲。
+     减少动态效果:base.css 全局规则只留颜色 / 透明度过渡,left / right 直接到位。 */
+  transition: left var(--seg-edge-duration) var(--ease-surface), right var(--seg-edge-duration) var(--ease-surface);
 }
-.t2s-vaultseg-thumb[data-side='cloud'] { transform: translateX(100%); }
-/* 第二个消费者:Amadeus 笔记的「文档 | 画布」模式胶囊(amadeus/unified/UnifiedPage)。
-   右段的语义名不同,滑块方向一样 —— 放在这里而不是那边,是为了让「本组件认哪些 data-side」
-   只有一处答案。 */
-.t2s-vaultseg-thumb[data-side='canvas'] { transform: translateX(100%); }
-/* 第三个双段消费者:侧栏「Chat | Work」;Work 是右段。 */
-.t2s-vaultseg-thumb[data-side='work'] { transform: translateX(100%); }
+/* 两段消费者的右段:第一个是本地|云端;第二个是 Amadeus 笔记的「文档 | 画布」模式胶囊(右段语义名不同,滑块方向一样 ——
+   放在这里而不是那边,是为了让「本组件认哪些 data-side」只有一处答案);第三个是侧栏「Chat | Work」,Work 是右段。 */
+.t2s-vaultseg-thumb:is([data-side='cloud'], [data-side='canvas'], [data-side='work']) { --seg-i: 1; }
+/* 往右走左沿是后沿,往左走右沿是后沿(transition 两项依次对应 left、right)。 */
+.t2s-vaultseg-thumb[data-dir='r'] { transition-delay: var(--seg-edge-lag), 0s; }
+.t2s-vaultseg-thumb[data-dir='l'] { transition-delay: 0s, var(--seg-edge-lag); }
+@media (prefers-reduced-motion: reduce) { .t2s-vaultseg-thumb[data-dir] { transition-delay: 0s; } }
 .t2s-vaultseg button {
   position: relative;
   z-index: 1;
@@ -180,7 +186,8 @@
   letter-spacing: 0.02em;
   color: var(--text-faint, var(--text-muted));
   cursor: pointer;
-  transition: color 0.25s var(--ease-out, ease);
+  /* 字色与滑块前沿同一时长、同一条曲线(DESIGN §3 规矩 3) */
+  transition: color var(--seg-edge-duration) var(--ease-surface);
 }
 .t2s-vaultseg button.on { color: var(--text); }
 .t2s-vaultseg[data-busy] button { cursor: default; }
@@ -227,6 +234,7 @@
 .t2sf-file .t2sf-fic { color: var(--text-faint, var(--text-muted)); }
 .t2sf-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .t2sf-size { flex-shrink: 0; font-size: var(--ui-font-caption, 11px); color: var(--text-faint, var(--text-muted)); }
+.t2sf-tag { flex-shrink: 0; padding: 0 5px; border-radius: 4px; background: var(--overlay-light); font-size: var(--ui-font-caption, 11px); line-height: 16px; color: var(--text-muted); }
 /* 行尾动作(M1B:远端会话「本会话的文件」的下载键)。触屏没有右键 / 悬浮 → 常显;度量与色阶同 .t2s-group-add,
    负外边距把 24px 点击区吃进行的上下内边距,行高不变。 */
 .t2sf-row-act {
@@ -295,6 +303,8 @@
 .t2s-side .t2s-special-ic > svg { width: var(--t2s-icon, 13px); height: var(--t2s-icon, 13px); }
 .t2s-special.active .t2s-special-ic { color: var(--accent-ink); }
 .t2s-special-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.amx-share-meta { flex: 0 0 auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
+.amx-share-meta.is-warn { color: var(--danger); }
 .t2s-special-go { display: inline-flex; color: var(--text-faint, var(--text-muted)); opacity: 0.6; border-radius: var(--radius-sm, 6px); }
 .t2s-special-go:hover { opacity: 1; background: var(--overlay-light, rgba(127, 127, 127, 0.12)); }
 
@@ -422,6 +432,7 @@
    当前是主题色底 + 左侧色条,同时成立时两者叠加也读得出来(与文件树 .t2sf-row.sel 同一档灰)。 */
 .t2s-srow.sel { background: var(--overlay-medium); }
 .t2s-srow.active { background: color-mix(in srgb, var(--accent-ink) 12%, transparent); }
+.t2s-folder-row.active { background: color-mix(in srgb, var(--accent-ink) 12%, transparent); }
 .t2s-srow.active::before {
   content: '';
   position: absolute;
@@ -461,6 +472,12 @@
 }
 .t2s-st.wait::before { width: 7px; height: 7px; background: var(--warning); box-shadow: 0 0 0 3px var(--warning-light); }
 .t2s-st.done::before { width: 6px; height: 6px; background: var(--accent-ink); opacity: 0.5; }
+.t2s-st-count {
+  width: auto; min-width: 16px; height: 16px; padding-inline: 4px; border-radius: var(--radius-pill, 999px);
+  background: var(--danger); color: var(--on-danger);
+  font-size: var(--ui-font-caption, 11px); font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums;
+}
+.t2s-st-count::before { content: none; }
 @keyframes t2s-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .t2s-st.run::before { animation: none; } }
 /* 主会话行尾的子会话个数(点一下收起 / 展开,触屏没有 hover 箭头时靠它) */
@@ -510,6 +527,10 @@
   text-align: left; cursor: pointer; border-radius: var(--radius-sm, 6px);
 }
 .t2s-viewmore:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.08)); color: var(--text); }
+/* 「查看更多 · N」与「收起」并排;第二颗不再带左缩进 */
+.t2s-viewmore-row { display: flex; align-items: center; gap: 1.5px; }
+.t2s-viewmore-row > .t2s-viewmore + .t2s-viewmore { margin-left: 0; }
+.t2s-menu-blank { display: inline-block; width: 13px; height: 13px; }
 
 .t2s-add-ws {
   display: flex; align-items: center; gap: 5.5px;
@@ -700,7 +721,7 @@
 .t2sw .t2s-special-group { gap: 0.65px; }
 
 /* ── 侧栏 Chat/Work 模式胶囊(新对话行右侧):复用 Local/Cloud 的 `.t2s-vaultseg` 正典,
- *    包括凹轨道、凸起的弹性滑块和 `.on` 文字态;这里只规定这一处嵌入行的宽度与间距。 */
+ *    包括凹轨道、凸起的拉伸滑块和 `.on` 文字态;这里只规定这一处嵌入行的宽度与间距。 */
 .t2s-special-row { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .t2s-special-row .t2s-special { flex: 1; min-width: 0; }
 .t2s-side .t2s-vaultseg.t2s-mode {

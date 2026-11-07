@@ -16,6 +16,7 @@ import { LlmError, type AgentModel, type ThinkingLevel, type ToolCall } from '..
 import { parseTextToolCalls } from './textToolCalls.js';
 import { applyThinking, clampThinkingLevel, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
 import { buildGrokBuildHeaders } from './grokBuildCompat.js';
+import { buildOpenCodeHeaders, isOpenCodeHost } from './opencodeGo.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { assertToolDefinitions } from '../tools/toolDefinitionValidation.js';
 import { stringifyWellFormed } from './wellFormedJson.js';
@@ -28,6 +29,9 @@ export const PROTOCOL_MARK = '__tangu_protocol';
 export const ACCOUNT_MARK = '__tangu_account';
 /** run id(BuildPayloadOpts.runId 透传):Responses 客户端据此把粘性路由态按 run 存,绝不跨 run。 */
 export const RUN_MARK = '__tangu_run';
+/** 会话键(BuildPayloadOpts.cacheKey 原值)透传:opencode.ai 据此发 x-opencode-session(见 opencodeGo.ts)。
+ *  与 prompt_cache_key 分开:后者按 agent 取键且只给官方 OpenAI,OpenCode 文档要的是「每段会话」一个。 */
+export const SESSION_MARK = '__tangu_session';
 
 /**
  * 缓存路由键(prompt_cache_key / Codex 的 session_id 头)的取值域闸门。
@@ -54,7 +58,7 @@ export function resolveCacheKey(opts: { cacheKey?: string; agentId?: string; api
  *    严格网关见到未知键直接 400,故本函数是最后一道、也是**不看端点**的那道闸。
  * 2. `reasoning_content` **默认剥掉,只对已知收该字段的族放行**:DeepSeek 现行文档要求带 tools 的续轮
  *    把此前每条 assistant 的 reasoning_content 原样回传,否则 400;GLM(zai)线上形态相同;Qwen 只在
- *    开思考时收。其余端点(OpenAI 官方 / Azure / vLLM 类网关)对未知键没有文档 —— 未知端点绝不发未知字段。
+ *    开思考时收;Kimi K3 系官方同样要求原样回传(能力表 replayReasoning)。其余端点(OpenAI 官方 / Azure / vLLM 类网关)对未知键没有文档 —— 未知端点绝不发未知字段。
  *    该字段只挂在**本 run 内存里**的 assistant 消息上(落库与跨 run 水合都不带),天然「同轮内回灌」。
  */
 export function compatWireMessages(payload: any, target: { baseUrl?: string; provider?: string }): any[] {
@@ -68,6 +72,7 @@ export function compatWireMessages(payload: any, target: { baseUrl?: string; pro
     modelId: String(payload?.model || ''),
   });
   const replay =
+    cap.replayReasoning ||
     cap.format === 'deepseek' || cap.format === 'zai' || (cap.format === 'qwen' && payload?.enable_thinking === true);
   return msgs.map((m) => {
     if (!internal(m)) return m;
@@ -150,6 +155,7 @@ export function buildOpenAiCompatPayload(opts: BuildPayloadOpts): any {
   // run 身份透传(私有标记,发请求前剥掉):Responses 客户端按 run 存粘性路由态。
   const runId = opts.runId;
   if (typeof runId === 'string' && runId) payload[RUN_MARK] = runId;
+  if (typeof cacheKey === 'string' && cacheKey) payload[SESSION_MARK] = cacheKey;
   // 透传直连协议/账号标记,供 streamProviderCompletion 分发到原生订阅客户端。
   const dm = opts.model as any;
   if (dm?.[PROTOCOL_MARK]) payload[PROTOCOL_MARK] = dm[PROTOCOL_MARK];
@@ -268,7 +274,7 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
   const protocol = payload?.[PROTOCOL_MARK];
   const isGrokBuild = protocol === 'grok-build';
   // 剥掉私有标记,再发给 provider。prompt_cache_key 一并摘下,只在官方 host 上补回(见下)。
-  const { [DIRECT_MARK]: _omitDirect, __forsion_model_id: _omitFsn, [PROTOCOL_MARK]: _omitProto, [ACCOUNT_MARK]: _omitAcct, [RUN_MARK]: _omitRun, prompt_cache_key: cacheKeyField, ...clean } = payload as any;
+  const { [DIRECT_MARK]: _omitDirect, __forsion_model_id: _omitFsn, [PROTOCOL_MARK]: _omitProto, [ACCOUNT_MARK]: _omitAcct, [RUN_MARK]: runMark, [SESSION_MARK]: sessionMark, prompt_cache_key: cacheKeyField, ...clean } = payload as any;
   assertToolDefinitions(clean.tools, 'direct request');
   const streamPayload = {
     ...clean,
@@ -288,6 +294,8 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
   if (isGrokBuild) {
     Object.assign(headers, buildGrokBuildHeaders(apiKey, String(streamPayload.model || 'grok-build')));
   }
+  // OpenCode Go 没有这个头一律 400(先于鉴权);后台阶段没传会话键时用 run id 兜底。
+  if (isOpenCodeHost(baseUrl)) Object.assign(headers, buildOpenCodeHeaders(sessionMark || runMark));
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',
@@ -300,9 +308,15 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
   if (!response.ok || !response.body) {
     const errorText = await response.text().catch(() => '');
     let detail = errorText;
+    let resetsAtMs = 0;
+    let code = '';
     try {
       const j = JSON.parse(errorText);
       detail = j.error?.message || j.message || errorText;
+      code = j.error?.code || j.error?.type || ''; // 正文不写「额度」而 code 写着 insufficient_quota 的，接力靠它认
+      // 转发 Codex / 订阅额度的中转也会带重置时刻:同 openaiResponses,写进报错并挂在 err.resetsAt(额度用完接力用)
+      const resetsAt = Number(j.error?.resets_at) || (Number(j.error?.resets_in_seconds) ? Date.now() / 1000 + Number(j.error.resets_in_seconds) : 0);
+      if (resetsAt) { resetsAtMs = resetsAt * 1000; detail += ` (resets at ${new Date(resetsAtMs).toISOString()})`; }
     } catch {
       /* keep raw */
     }
@@ -310,7 +324,7 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
     // 只学不拦:学到与否都照常抛错,失败语义一个字不变。
     learnFromUpstreamError(streamPayload?.model, response.status, detail);
     const status = response.status === 401 || response.status === 403 ? 502 : response.status || 502;
-    throw new LlmError(status, detail || `Upstream error ${response.status}`);
+    throw Object.assign(new LlmError(status, detail || `Upstream error ${response.status}`), code ? { code } : {}, resetsAtMs ? { resetsAt: resetsAtMs } : {});
   }
 
   let content = '';

@@ -10,6 +10,9 @@
   初版仅 desktop/web 可生成；保留原有移动端 HTML 卡禁用规则。原生文档本身没有脚本。
 - `"intelligent-ui.v2"` 与 v1 一起发：引擎据此多发一段 `INTELLIGENT_UI_V2_SECTION`、换两段工具描述（`definitionFor`），
   并接受 `version: 2`。没有 v2 握手的客户端照旧只收 v1，引擎对它们拒收 v2（报错回给模型）。
+- `"widget.v1"`（小组件，10-31）：客户端能按 id 画原件、画得出只发 `edits` 的更新时才上报，引擎对本机 run 才认。两张卡的工具多 `widget` / `summary`（HTML 卡另有 `edits`），
+  多一段 `WIDGET_SECTION` 和按需装载的 `manage_widget`；没有握手的客户端工具定义逐字节不变，带这些参数的调用直接报错。带 `widget` 的调用按写文件过审批。
+  存法见 `src/services/widgetStore.ts` 和方案页 `docs/ToBeImproved/Widget与Dashboard方案_2026-10-30/storage.html`。桌面要等 WidgetHost 接好再上报。
 - HTML 卡 10-20 改名：工具 `sketch` → `intelligent_ui_html`、卡内脚本接口 `window.forsionSketch` → `window.forsionIntelligentUi`、
   笔记交互块 ```` ```forsion-sketch ```` → ```` ```forsion-intelligent-ui-html ````。兼容层（只在模型那头换名）：
   - 引擎与客户端之间（上屏事件、落库的会话记录、卡里的 HTML）仍叫 `sketch` / `forsionSketch`：已发客户端只认这套，而会话会在
@@ -22,6 +25,14 @@
   - 文件名、CSS 类、内部变量（`SketchCard`、`.sketch-*`、`sketchTurnSignalFor`、`sketch-ask` 消息类型）没改。
   已发的客户端（≤ 2.13.4）遇到同步来的 v2 历史只显示「这部分界面未能生成」那行；从本版起，渲染层对比自己新的版本
   显示标题、第一段文字和「这张卡要新版 Forsion 才能显示」。
+- HTML 卡的随包库（10-28，`"intelligent-ui-libs.v1"`，desktop / web 发，手机原生包不发）：客户端随包带 three（含
+  `three/addons/controls/` 两个相机控件）、d3、chart.js/auto、gsap，卡里用 `<script type="module">` 按裸名 import。仍然断网：
+  桌面经 `forsion-iui://lib/…`（`desktop/electron/iuiLibProtocol.ts`，只读库目录里的 `.js`），网页经本站 `/iui-lib/`（nginx 带
+  `Access-Control-Allow-Origin: *`——卡是无源 iframe，module 脚本按 CORS 取）；内层 CSP 只在 `script-src` 多这一个来源，
+  `connect-src` 不变。importmap 在 `sketchWrapper.ts`（`IUI_LIB_IMPORTS`），文件由 `desktop/build/copy-iui-libs.cjs` 从 npm 包现生成、不入库，
+  目录只带大版本（three 带到 0.x 次版本），装到的版本和目录名对不上就构建失败。引擎只在握手里有这一项时把工具描述里「不许用库」那句换掉
+  （`sketch.ts` 的 `WITH_LIBS`）。没握手的客户端（旧版、手机）打开带库的卡：库画的那块是模型留的一行占位字，其余照常。
+  升大版本时旧目录留着、新目录并排，卡里得记一个库代号让历史卡继续指旧目录——第一代没有代号，没代号 = 第一代。
 - 复用 `tool_stream`、`tool_call`、`tool_result` 与现有历史 JSON 存储，不创建另一套 SSE 协议或数据库表。
   `document` 是 JSON 字符串，参数完整落库；工具结果只提供短确认或纠错信息。
 - 服务端及客户端使用同一纯 TypeScript 验证器：`src/contracts/intelligentUi.ts`。渲染入口位于
@@ -184,7 +195,7 @@ cards (a streaming prefix cannot trigger plugin subscriptions or native writes).
 
 Native Calendar and Todo reuse their existing compact Dashboard components and stores.
 Installed plugins opt existing `registerListSource` contributions in with
-`intelligent: { description, viewId }`; full contract: `docs/customization/plugins.md`.
+`intelligent: { description, viewId }`; full contract: `docs/customization/plugin-development.md`.
 Catalogs are normalized at ingress and run assembly, limited to 64 entries, with no user
 records. The renderer resolves current availability again and tears down on disable.
 Displaying a card is not model access to records, nor a save operation. Completed tasks

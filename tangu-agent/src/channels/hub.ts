@@ -9,7 +9,7 @@ import { WechatChannel } from './wechat.js';
 import { TelegramChannel } from './telegram.js';
 import { QQChannel } from './qq.js';
 import { CHANNEL_DIR_NAME, channelHasCredentials, channelSettings, saveChannelSettings } from './config.js';
-import type { ChannelKind, ChannelSettings, PluginChannelSpec, SendResult } from './types.js';
+import type { ChannelKind, ChannelOwner, ChannelSettings, PluginChannelSpec, SendResult } from './types.js';
 import { CHANNEL_KINDS } from './types.js';
 
 class ChannelHub {
@@ -18,6 +18,7 @@ class ChannelHub {
   readonly qqDriver = new QQChannel();
   private readonly services = new Map<ChannelKind, ChannelService>();
   private readonly plugins = new Map<string, PluginChannelSpec>();
+  private readonly owners = new Map<string, ChannelOwner>();
   private started = false;
 
   constructor() {
@@ -70,8 +71,9 @@ class ChannelHub {
   /**
    * 插件贡献一个通道(ctx.registerChannel)。返回撤销函数:停用插件时完全停止该通道(兑现挂起)并移除。
    * 绑定表里的行原样保留 —— 插件再启用、点「连接」或第一条消息到达时照旧接上原会话。
+   * owner 由 bootstrap 按发现目录给,不来自 spec。
    */
-  registerChannel(spec: PluginChannelSpec): () => void {
+  registerChannel(spec: PluginChannelSpec, owner?: ChannelOwner): () => void {
     const kind = String(spec?.driver?.kind || '');
     if (!/^[a-z][a-z0-9-]{1,15}$/.test(kind)) throw new Error(`invalid channel kind "${kind}": lowercase [a-z0-9-], 2-16 chars, starting with a letter`);
     if (this.services.has(kind)) throw new Error(`channel "${kind}" is already registered`);
@@ -80,7 +82,8 @@ class ChannelHub {
     if (Object.values(CHANNEL_DIR_NAME).includes(`${kind}bot`) || kind in Object.prototype) throw new Error(`channel kind "${kind}" is reserved`);
     if (typeof spec.driver.verify !== 'function') throw new Error(`channel "${kind}": driver.verify() is required`);
     this.plugins.set(kind, spec);
-    this.services.set(kind, new ChannelService({ kind, driver: spec.driver, inboxDirName: `${kind}-inbox`, sessionTitle: spec.name.en, name: spec.name }));
+    if (owner) this.owners.set(kind, owner);
+    this.services.set(kind, new ChannelService({ kind, driver: spec.driver, inboxDirName: `${kind}-inbox`, sessionTitle: spec.name.en, name: spec.name, ...(spec.multiPeer === true ? { multiPeer: true, selfConnect: spec.selfConnect === true } : {}) }));
     // 引擎已起(运行期启用 / 重扫)→ 现在就按设置启动;还没起 → startAll 会带上它。
     if (this.started) void this.bootChannel(kind);
     return () => {
@@ -88,6 +91,7 @@ class ChannelHub {
       this.stopChannel(kind);
       this.services.delete(kind);
       this.plugins.delete(kind);
+      this.owners.delete(kind);
     };
   }
 
@@ -208,7 +212,7 @@ class ChannelHub {
         peerBound: !!binding?.peer_id,
         workspace: svc.workspaceDir(),
         // 插件通道:设置卡按它画(名称 / 提示 / 凭据字段);内置通道没有这项。
-        ...(plugin ? { plugin: { name: plugin.name, hint: plugin.hint ?? null, fields: plugin.fields.map((f) => ({ key: f.key, label: f.label, secret: !!f.secret })) } } : {}),
+        ...(plugin ? { plugin: { name: plugin.name, hint: plugin.hint ?? null, fields: plugin.fields.map((f) => ({ key: f.key, label: f.label, secret: !!f.secret })), multiPeer: plugin.multiPeer === true, owner: this.owners.get(kind) ?? null } } : {}),
       });
     }
     return out;
@@ -232,6 +236,11 @@ class ChannelHub {
 
   /** 本会话是否连接着某个通道(有活跃绑定)——工具门禁用(channel_send_* 只在通道会话暴露)。失败 → false。 */
   async isChannelSession(userId: string, sessionId: string): Promise<boolean> {
+    return (await this.channelBinding(userId, sessionId)) === true;
+  }
+
+  /** 同上,但查不出来 → null。隐私边界(画像、human/MEMORY.md 不进通道)用这个:读失败不等于没绑定,按连着算。 */
+  async channelBinding(userId: string, sessionId: string): Promise<boolean | null> {
     if (!this.available()) return false;
     try {
       const rows = await query<any[]>(
@@ -240,7 +249,7 @@ class ChannelHub {
       );
       return rows.length > 0;
     } catch {
-      return false;
+      return null;
     }
   }
 

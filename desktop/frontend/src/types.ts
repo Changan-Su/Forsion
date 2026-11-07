@@ -9,7 +9,7 @@ export type { DesktopPermissionId, DesktopPermissionRequestOptions, DesktopPermi
 // 核心插件化第 2b 步:与 Tangu 共用的数据形状搬进了契约(tangu-agent/src/contracts/clientTypes.ts),这里原样转出,宿主的 import 方不动。
 export type { ThinkingLevel, DefaultModelSlot, VisionMode, TanguDesktopConfig, AgentRunEvent, SubChatSeg, SubChat, SessionRecord, PendingApprovalInfo, HistorianActivityItem, AutomationActionSpec, AutomationWhere, MuseTriggerInfo, AgentScheduleEntry, TeamDef, NormalAgentDef, AgentConfig, ChannelKind, WorkspaceDescriptor, MessageRecord, ModelInfo, ModelsResponse, ProviderQuota, ProjectSettings, ProjectDocInfo, ProjectSkillInfo, ProjectPlanInfo, GitRemoteInfo, GitCommitInfo, GitChangeInfo, GitSummary, GitIdentity, ProjectContext, ProjectMemoryView, SkillInfo, SkillCatalogEntry, ToolsResponse, WorkspaceFileMeta, Attachment, DisplayFile, CtxInfo, ToolEvent, MsgSeg, ApprovalRequest, AnswerBy, ApprovalRemote, ApprovalReason, ApprovalPreviewI18n, InquiryRequest, SketchItem, TodoItem, TeamWork, LiveWait, UiMessage, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 export { THINKING_LEVELS, isHomeSession, SHOW_SYSTEM_PROMPT_KEY, isTeamImageAvatar, isIndependentOrbitConfig, CLOUD_WORKSPACE_KEY, ROOTLESS_WORKSPACE_KEY, DEFAULT_LOCAL_WORKSPACE_KEY, DEFAULT_CLOUD_PROJECT, cloudProjectKey, sessionWorkspaceKey, isProjectIconFile } from '../../../tangu-agent/src/contracts/clientTypes'
-import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
+import type { AgentScheduleEntry, AutomationActionSpec, AutomationWhere, BackendStatusInfo, MuseTriggerInfo, StoredDesktopConfig, UnitInfo } from '../../../tangu-agent/src/contracts/clientTypes'
 
 /** 带时间戳的转写结果(仅在调用方显式要 timestamps 时返回;segments 缺席 = 上游给不了)。 */
 export interface AsrTimedResult { text: string; segments?: Array<{ start: number; end: number; text: string }> }
@@ -55,6 +55,8 @@ export interface HistorianConfig {
   prompt: string
   /** 自进化自动档:判官额外提名「工作笔记候选」进各 Agent 收件箱,/refine 时供其审阅采纳(09-18 起默认开,引擎启动期一次性迁移翻开老配置)。 */
   harnessCandidates: boolean
+  /** 决策闸(beta,开发者选项):「像不像在纠正」改问 Forsion 云端的决策模型,词面兜底。旧引擎没有这个键 = 关。 */
+  decisionGate?: boolean
 }
 export interface MuseConfig {
   enabled: boolean
@@ -77,6 +79,14 @@ export interface MuseConfig {
   notify?: 'immediate' | 'digest'
   /** 难活升级给哪个 agent(slug;空=不指定)。 */
   escalateTo?: string
+  /** 新对话页的 Muse 开场建议(10-25);旧引擎没有这个键,读端按开处理。 */
+  chatStarters?: boolean
+  /** 用户点过「好」、Muse 可以自动标已读的收件箱类别。 */
+  inboxAutoRead?: string[]
+  /** 用户点过「这类以后都别管」的类别。 */
+  inboxIgnored?: string[]
+  /** 一天最多主动找用户几次(0 = 不限)。 */
+  maxDmPerDay?: number
 }
 
 /** GET /agent/special/muse/library 的一项(Library 相对路径;dir=目录)。 */
@@ -95,6 +105,12 @@ export type SpecialConfigResponse =
   | { config: SpecialAgentsConfig; defaults?: { historianPrompt: string }; cloud?: boolean; remote?: undefined }
   | { config: SpecialAgentsSummary; remote: true; defaults?: undefined; cloud?: undefined }
 
+/** GET /agent/special/muse/starters 的一条:用户照原样就能发的一句话;source.label 原样出现在 text 里,桌面把它画成链接。 */
+export interface MuseStarter {
+  id: string
+  text: string
+  source: { kind: 'calendar' | 'note' | 'todo' | 'session' | 'web' | 'muse'; label: string; ref?: string }
+}
 export interface MuseTodo {
   id: string
   title: string
@@ -113,6 +129,8 @@ export interface MuseStatusInfo {
   lastCycleAt: number | null
   lastError?: string | null
   sessionId: string | null
+  /** 主动消息下面的反馈按钮开到这个时刻(磨合期 14 天,epoch ms)。旧引擎 / 还没跑过周期 = 没有。 */
+  feedbackUntil?: number | null
   /** 旧引擎没有下面四个字段(可选,读端兜底)。 */
   mode?: 'ask' | 'agent' | 'auto'
   heartbeatMinutes?: number
@@ -130,6 +148,8 @@ export interface MuseStatusInfo {
  *  actions:数组=设置;null=显式清空(回到 Muse/agentSlug 旧语义);缺席=保留旧值。 */
 export interface MuseTriggerUpsert {
   id?: string
+  /** 打开编辑器时那份规则的 rev:引擎比对,对不上回 409(编辑期间被 Muse / 引擎改过)。不带 = 不比对。 */
+  expectedRev?: string
   /** 谁发起的这次 upsert(引擎按它决定「能不能把停用的规则开回来」):
    *  'plugin-ensure' = 插件每次 setup 的**幂等重放**(不是用户意图)—— 引擎自动停用(排空封顶断环 / 配置错误)
    *  与用户显式停用都不许被它开回来,否则安全闸每次启动自动松开、停用原因还被抹掉;
@@ -138,7 +158,14 @@ export interface MuseTriggerUpsert {
    *  那正是「用户重新启用插件 → setup 再 ensure 一次 → 规则复活」这条既有生命周期,别给它加 actor。 */
   actor?: 'plugin-ensure' | 'user'
   desc: string
-  cond_type: 'file_chars_gte' | 'event_seen' | 'daily_at' | 'at' | 'every' | 'manual' | 'db_changed'
+  cond_type: MuseTriggerInfo['cond']['type']
+  /** 新触发源的参数(按 GET /agent/special/automation/sources 的表)。 */
+  params?: Record<string, string | number>
+  /** 缺席 = 保留:启停开关和编辑保存都不动观察。false = 转成启用,只有用户点的才发。 */
+  observe?: boolean
+  /** 「只在」:undefined=保留,null=清空。 */
+  only?: MuseTriggerInfo['only'] | null
+  max_per_day?: number | null
   path?: string
   n?: number
   match?: string
@@ -160,6 +187,20 @@ export interface MuseTriggerUpsert {
   enabled?: boolean
   actions?: AutomationActionSpec[] | null
 }
+/** GET /agent/special/automation/sources 的一行:触发源注册表投影(类型菜单直接从这里出)。 */
+export interface TriggerSourceInfo {
+  id: string
+  group: 'time' | 'computer' | 'forsion' | 'external' | 'plugin'
+  name: { zh: string; en: string }
+  params: Array<{ key: string; type: 'app' | 'number' | 'text'; name: { zh: string; en: string }; required?: boolean; hidden?: boolean; min?: number; max?: number; default?: string | number }>
+  requires: string[]
+  eventSource: string
+  defaultCooldownHours?: number
+  timed?: boolean
+  available: boolean
+  /** available=false 时的 notice code。 */
+  reason?: string
+}
 /** GET /agent/special/automation/actions 的目录项(tool_call 步骤选择器+参数表单生成)。 */
 export interface AutomationActionCatalogItem {
   name: string
@@ -173,7 +214,7 @@ export interface AutomationExecutionInfo {
   trigger_id: string
   origin: 'auto' | 'manual' | string
   status: string
-  steps: { type: string; tool?: string; ok: boolean; summary: string }[]
+  steps: { type: string; tool?: string; ok: boolean; summary: string; observed?: boolean; target?: string; row?: string }[]
   error: string | null
   created_at: string
 }
@@ -253,6 +294,19 @@ export interface DirectProviderConfig {
   asrModelIds?: string[]
   /** 该 provider 里**没有**多模态的模型(黑名单;默认都算能看图)。命中的模型遇图转交辅助视觉模型。 */
   noVisionModelIds?: string[]
+  /** 推理协议;缺省 OpenAI 兼容 /chat/completions。从 Claude Code / Codex 导入的连接带 anthropic-messages / openai-responses。 */
+  protocol?: 'openai' | 'anthropic-messages' | 'openai-responses'
+}
+
+/** 导入本机配置的一行(主进程给的,不含 key)。 */
+export interface LocalProviderCandidate {
+  id: string
+  source: 'cc-switch' | 'claude-code' | 'codex'
+  name: string
+  host: string
+  keyTail: string
+  models: string[]
+  exists: boolean
 }
 
 /** 「设置 → Git」(引擎 config.json 的 git 段):PROJECT 详情的 git 动作与 agent 自己建分支 / 写提交时都照它。 */
@@ -265,17 +319,9 @@ export interface GitSettings {
   identityEmail: string
 }
 
-// ── 跨生态 agent 资产发现(desktop discovery:scan;~/.claude、~/.codex、~/.hermes)──
+// ── 跨生态 MCP 发现(desktop discovery:scan;~/.claude、~/.codex、~/.hermes)──
 
 export type DiscoveryEcosystem = 'claude-code' | 'codex' | 'hermes'
-
-export interface DiscoveredSkill {
-  ecosystem: DiscoveryEcosystem
-  id: string
-  name: string
-  description: string
-  sourceDir: string
-}
 
 export interface DiscoveredMcp {
   ecosystem: DiscoveryEcosystem
@@ -284,7 +330,6 @@ export interface DiscoveredMcp {
 }
 
 export interface DiscoveryResult {
-  skills: DiscoveredSkill[]
   mcpServers: DiscoveredMcp[]
 }
 
@@ -307,6 +352,7 @@ export interface MirrorTestResult {
 
 /** ~/.tangu/mcp.json 一项。 */
 export interface McpServerConfigEntry {
+  cwd?: string
   command?: string
   args?: string[]
   env?: Record<string, string>
@@ -315,7 +361,28 @@ export interface McpServerConfigEntry {
   headers?: Record<string, string>
   timeoutMs?: number
   enabled?: boolean
+  oauth?: { clientId?: string; scopes?: string[] }
+  /** 从商店连上的连接器:目录 id(宿主同步地址、引擎读 alwaysAsk)。编辑时原样带着,别丢。 */
+  connector?: string
+  /** 按远端工具名收紧:off 不下发、ask 每次都问(连接器设置页写)。编辑时原样带着。 */
+  tools?: Record<string, 'ask' | 'off'>
 }
+
+/** 连接器目录的一条(electron/connectorCatalog.ts 校验过的形状)。 */
+export interface ConnectorEntry {
+  id: string
+  kind: 'remote-mcp' | 'builtin'
+  status: 'published' | 'retired'
+  order: number
+  name: { zh: string; en: string }
+  description: { zh: string; en: string }
+  url?: string
+  oauth?: { clientId?: string; scopes?: string[] }
+  auth?: { type: 'user-key'; applyUrl: string }
+  alwaysAsk?: string[]
+  iconUrl?: string
+}
+export interface ConnectorCatalog { connectors: ConnectorEntry[]; fetchedAt: number | null; offline: boolean }
 
 /** 官网更新动态的一篇(forsion.net/releases;主进程校验过形状)。 */
 export type { WebsiteRelease }
@@ -386,12 +453,19 @@ export interface PluginSandboxState {
   dir?: string
   sessionId?: string
   status?: import('../../../tangu-agent/src/contracts/pluginSandbox').SandboxStatus | null
+  /** 最近一步(start / screenshot / click …)与最近一张截图的时刻(图另向 lastShot 要)。 */
+  lastOp?: { op: string; at: number; target?: string }
+  shotAt?: number
+  /** 没在跑时:上一个沙箱与停下的原因。 */
+  last?: { pluginId: string; name: string; version: string; dir: string; sessionId?: string; reason: 'stopped' | 'idle' | 'exited'; at: number }
 }
 export interface PluginSandboxReport { note: string; sessionId?: string; pluginId: string; name: string }
 export interface PluginSandboxApi {
   /** ui.storage = 本窗的主题键(沙箱首屏照着画);语言由主进程按自己的界面语言给。deadline = 引擎给这次动作的期限(Date.now() 毫秒),排队排过了主进程就不做了。reveal = 用户在界面上点的,起好后把沙箱窗口叫到前面。 */
   exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number; reveal?: boolean; ui?: { storage: Record<string, string> } }): Promise<PluginSandboxResult>
   state(): Promise<PluginSandboxState>
+  /** 最近一张截图;只给发起这个沙箱的对话(别的对话 = null)。 */
+  lastShot(sessionId: string): Promise<{ image: string; at: number } | null>
   show(): Promise<boolean>
   stop(): Promise<void>
   reset(): Promise<PluginSandboxResult>
@@ -415,6 +489,8 @@ declare global {
     tangu?: {
       /** 宿主平台('darwin' | 'win32' | 'linux');静态值,渲染层据此调标题栏留白。 */
       platform?: string
+      /** 整窗重载,由主进程发(打包版里渲染层自己 location.reload() 会被拦下);渲染层统一用 reloadWindow.ts。 */
+      reloadWindow?(): Promise<void>
       /** 只读状态检查:不安装 helper、不触发系统授权。 */
       desktopPermissionsStatus?(): Promise<DesktopPermissionsSnapshot>
       /** 仅由用户点击触发:打开系统授权引导;Computer Use 缺失时安装/启动。 */
@@ -456,6 +532,9 @@ declare global {
       /** Verified Extend renderer is bundled with the mobile host. */
       extendMobile?: boolean
       getConfig(): Promise<StoredDesktopConfig>
+      /** config.json / provider-auth.json 读坏后从 .bak 恢复过:最近一次的时刻与恢复到的版本时刻(epoch ms);没有 = null。 */
+      configRecoveryNotice?(): Promise<{ at: number; version: number } | null>
+      clearConfigRecoveryNotice?(): Promise<void>
       documentTasks?: import('../../shared/documentTasks').DocumentTaskClaimsApi
       setConfig(patch: Partial<StoredDesktopConfig>): Promise<StoredDesktopConfig>
       backendStatus?(): Promise<BackendStatusInfo>
@@ -539,9 +618,14 @@ declare global {
       /** 网页版专用(webShim):协议更新状态 GET /api/auth/terms 与确认 POST /api/auth/terms/agree。
        *  桌面 / Android 走 cloudFetch;网页版不给 cloudFetch(有它会顺带打开只给桌面的成就 / 插件数据同步)。见 components/TermsUpdateDialog。 */
       termsStatus?(): Promise<{ status: number; json?: any }>
+      /** 网页版:公开会员方案列表(会员徽章的配色与中英文名);桌面 / Android 走 cloudFetch */
+      membershipPlans?(): Promise<{ status: number; json?: any }>
       termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>
+      /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程(整形后转给 Extend;只进不出)。
+       *  只有 Extend 注册了 telemetry:get 才有这个键 —— 引导第 7 步「帮助改进」页签据此同步判断本机有没有这一页。 */
+      telemetryReport?(kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void
       /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
       submitFeedback?(input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }>
       appVersion?(): Promise<string>
@@ -632,11 +716,14 @@ declare global {
       readHostFile?(filePath: string): Promise<{ mimeType: string; content: string; size: number; mtimeMs?: number; tooLarge?: boolean }>
       /** 用系统默认应用打开(预览不支持的类型)。 */
       openHostPath?(p: string): Promise<{ ok: boolean; error?: string }>
-      /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome 扩展页;拖拽用 startHostDrag。 */
+      /** Forsion Clip 手动安装(设置 › 浏览器):复制出包的扩展文件夹 / 打开 Chrome / Edge 扩展页;拖拽用 startHostDrag。 */
       clipExtension?: {
         /** update=false 只补缺不动已有副本;用户要(重新)装时传 true 换成随包版本(bundled)。 */
         prepare(update?: boolean): Promise<{ dir: string; version: string; bundled: string } | { error: string }>
-        openChromeExtensions(): Promise<{ ok: true } | { ok: false; copied: true; reason: 'no-chrome' | 'unsupported' }>
+        /** 本机装了哪些(按官方安装位置找);认不出 → []。 */
+        browsers(): Promise<Array<'chrome' | 'edge'>>
+        /** ok = 已停在扩展页(mac);launched = Windows 开了新窗口、地址已复制待粘贴;not-found / unsupported = 只复制了地址。 */
+        openExtensionsPage(browser: 'chrome' | 'edge'): Promise<{ ok: true } | { ok: false; copied: true; reason: 'launched' | 'not-found' | 'unsupported' }>
       }
       /** Coding Space:把工作区目录挂本地静态服务器,返回 origin(iframe 多文件预览)。 */
       codePreviewServe?(rootDir: string): Promise<{ origin: string }>
@@ -644,6 +731,8 @@ declare global {
       codePreviewServePath?(filePath: string): Promise<{ url: string }>
       /** 无本机路径的 HTML(云沙箱/对话内联):把文本挂到令牌根,同样拿到真实源。 */
       codePreviewServeHtml?(html: string): Promise<{ url: string }>
+      /** 网页卡片的缩略图:主进程离屏截一张 http(s) 页面;拍不到 → null。 */
+      pageThumb?(url: string, version?: string): Promise<{ dataUrl: string; title: string } | null>
       codePreviewStop?(): Promise<{ ok: boolean }>
       /** Coding Space 项目根 ~/Forsion/Project(确保存在)。 */
       codeProjectsRoot?(): Promise<string>
@@ -685,6 +774,12 @@ declare global {
       connectUnpublish?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
       connectListingApply?(p: { slug: string; summary: string }): Promise<{ ok: boolean; code?: string; detail?: string; status?: string }>
       connectListingWithdraw?(slug: string): Promise<{ ok: boolean; code?: string; detail?: string }>
+      /** 连接器目录:refresh = 现拉(拉不到回缓存,offline: true);否则只读本机缓存。只在桌面有。 */
+      connectorsList?(refresh?: boolean): Promise<ConnectorCatalog>
+      /** 把目录条目写进 MCP 配置(带 connector 标记);已连着就原样返回。登录 / 填 Key 另走引擎。 */
+      connectorsConnect?(id: string, taken?: string[]): Promise<{ name: string; added: boolean }>
+      /** 断开的最后一步:从 MCP 配置删掉这条(只删带连接器标记的)。 */
+      connectorsRemove?(name: string): Promise<void>
       connectStore?(): Promise<{ ok: boolean; detail?: string; base?: string; items?: Array<{ name: string; summary: string; handle: string; slug: string; url: string; updatedAt?: string }> }>
       /** 写回文本文件(工作区 .md 编辑):原子写;expectedMtimeMs 不符返回 conflict。 */
       writeHostFile?(filePath: string, content: string, expectedMtimeMs?: number, createNew?: boolean): Promise<{ ok?: boolean; conflict?: boolean; mtimeMs: number }>
@@ -730,6 +825,9 @@ declare global {
       }
       listProviders?(): Promise<DirectProviderConfig[]>
       saveProvider?(provider: DirectProviderConfig): Promise<DirectProviderConfig[]>
+      /** 本机 CC Switch / Claude Code / Codex 里能导入的连接(electron/discovery/providers.ts;只有 key 末 4 位)。 */
+      scanLocalProviders?(force?: boolean): Promise<LocalProviderCandidate[]>
+      importLocalProviders?(ids: string[]): Promise<DirectProviderConfig[]>
       deleteProvider?(providerId: string): Promise<DirectProviderConfig[]>
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
       /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */
@@ -772,10 +870,10 @@ declare global {
       asrLocalDownload?(): Promise<{ ok: boolean; ready: boolean }>
       asrLocalRemove?(): Promise<{ ok: boolean }>
       onAsrLocalProgress?(cb: (ev: { received: number; total: number }) => void): () => void
+      importMcpConfig?(cfg: { config: unknown; name?: string; replaceNames?: string[]; expected?: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry>; added: string[]; replaced: string[]; skipped: string[] }>
       readMcpConfig?(): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
-      writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
+      writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry>; base?: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
       discoveryScan?(): Promise<DiscoveryResult>
-      discoveryImportSkills?(ids: string[]): Promise<{ imported: string[] }>
       discoveryImportMcp?(names: string[]): Promise<{ imported: string[]; reserved?: string[] }>
       envCheck?(): Promise<EnvProbeResult[]>
       envRun?(installId: string): Promise<{ exitCode: number }>
@@ -797,18 +895,22 @@ declare global {
       marketUpdateStatus?(): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketSetAutoUpdate?(id: string, on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketCheckUpdates?(): Promise<void>
+      marketSetAutoUpdateAll?(on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
+      marketRollback?(type: string, slug: string, version: string, market?: { id: string; name?: string }): Promise<import('../../shared/marketPluginUpdates').PluginRollbackResult & { path: string; id?: string }>
       onMarketUpdateStatus?(cb: (state: import('../../shared/marketPluginUpdates').MarketPluginUpdates) => void): () => void
       marketInstall?(id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */
       onMarketInstallProgress?(cb: (ev: MarketInstallProgress) => void): () => void
       marketInstalled?(): Promise<Record<string, Array<{ slug: string; version: string | null; id?: string }>>>
       marketUninstall?(type: string, slug: string): Promise<{ ok: boolean; path: string; type: string; id?: string }>
+      /** 卸载走确认框之后撤掉商店的安装记录(文件已经由回收站那条路挪走)。 */
+      marketForget?(type: string, slug: string): Promise<{ ok: boolean }>
       /** 本宿主能装的市场类型(缺省 = 全部)。Android App 没有本机引擎 / 主题目录 / Space 目录,只声明 ['amadeus-plugin'];
        *  MarketModal 只列这些类型,其余在发现页一句话说明去桌面端装。 */
       marketTypes?: readonly string[]
       /** 后端插件卸载:列用户目录已装(manifest id→目录名)/ 按 id 删目录(仅 ~/.tangu/plugins,首方插件删不到)。 */
       pluginsUserInstalled?(): Promise<Array<{ id: string; slug: string }>>
-      pluginsUninstall?(id: string): Promise<{ ok: boolean }>
+      pluginsUninstall?(id: string, movedSlug?: string): Promise<{ ok: boolean }>
       /** 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(数据化布局配方;market type='space' 同目录)。 */
       spacesList?(): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>>
       spacesSave?(slug: string, json: string): Promise<{ ok: boolean }>
@@ -854,8 +956,10 @@ declare global {
       onUiChanged?(cb: (state: import('../../shared/uiSync').UiSyncPayload) => void): () => void
       /** P1-KF:把本窗**生效**界面语言报给主进程(托盘 / 系统通知 / 对话框跟它走)。只有桌面 preload 有;web / 手机 / 设备页缺席 = 不报。 */
       reportUiLocale?(locale: 'zh' | 'en'): void
+      /** 本机外观报给主进程(已配对的 Forsion Clip 经 /unit/appearance 跟随)。只有桌面 preload 有。 */
+      reportUiAppearance?(appearance: { skin: string; bg: string; mode: 'light' | 'dark' }): void
       closeSelf?(): void
-      miniResize?(edge: string | null, start?: boolean, cursor?: { x: number; y: number }): void
+      miniResize?(edge: string | null, start?: boolean, cursor?: { x: number; y: number; radius?: number }): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */
       dragUpdate?(screenX: number, screenY: number, view: { type: string; params?: Record<string, unknown> }): void
       /** 跨窗撕拽:最终落点路由(命中另一 dockview 窗→并入并返回 routed:true;空桌面→建新独立窗;命中源窗→false 不动)。 */
@@ -869,18 +973,23 @@ declare global {
     amadeusCollab?: {
       listVaults(): Promise<Array<{ id: string; name: string; role?: string; ownerName?: string | null }>>
       activeVaultId(): Promise<string>
-      /** 切活动云库(web=localStorage+reload;桌面=切共享镜像)。 */
-      switchVault(id: string): void
+      /** 切活动云库(web=localStorage+reload,带 path 时切完直达这一页;桌面共享走镜像,不切库)。 */
+      switchVault(id: string, path?: string): void
+      /** 文件地址:不含凭据,能不能看由服务端判。 */
+      fileUrl(vaultId: string, path: string): string
       // 同步共享(owner):共享单位 = 页 + 子页面树
       pageShare(path: string): Promise<{ share: AmadeusPageShare | null; quota: AmadeusCollabQuota }>
-      createPageShare(path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null }): Promise<AmadeusPageShare>
-      updatePageShare(id: string, patch: { role?: 'editor' | 'viewer'; password?: string | null; expiresDays?: number | null; rotate?: boolean }): Promise<AmadeusPageShare>
+      createPageShare(path: string, opts: { role?: 'editor' | 'viewer'; expiresDays?: number | null; password?: string | null; attachments?: boolean }): Promise<AmadeusPageShare>
+      updatePageShare(id: string, patch: { role?: 'editor' | 'viewer'; password?: string | null; expiresDays?: number | null; rotate?: boolean }, vaultId?: string): Promise<AmadeusPageShare>
       revokePageShare(id: string): Promise<void>
-      setParticipantRole(id: string, userId: string, role: 'editor' | 'viewer'): Promise<void>
-      removeParticipant(id: string, userId: string): Promise<void>
+      setParticipantRole(id: string, userId: string, role: 'editor' | 'viewer', vaultId?: string): Promise<void>
+      removeParticipant(id: string, userId: string, vaultId?: string): Promise<void>
+      /** 这一页直接引用、不在共享范围里的内容(分享卡「一起共享」)。 */
+      relatedItems?(id: string): Promise<{ items: AmadeusRelatedItem[]; subpages: number }>
+      setShareItem(id: string, path: string, included: boolean): Promise<void>
       // 参与者
-      sharedWithMe(): Promise<Array<{ vaultId: string; path: string; title: string; role: string; ownerName: string | null; localPath?: string }>>
-      leaveShare(id: string): Promise<void>
+      sharedWithMe(): Promise<AmadeusSharedItem[]>
+      leaveShare(id: string, vaultId?: string): Promise<void>
       inviteUrl(token: string): string
       // 发布(公开只读链接)
       publishes(): Promise<{ shares: Array<{ token: string; mode: string; path: string; createdAt: string }>; quota: AmadeusCollabQuota }>
@@ -893,7 +1002,7 @@ declare global {
       /** Public View：跨全部 vault 汇总「我发布的公开链接 + 我创建的页面协作共享」。 */
       listAllShares(): Promise<{
         publishes: Array<{ token: string; mode: string; path: string; createdAt?: string; vaultId: string; vaultName: string }>
-        pageShares: Array<Record<string, unknown>>
+        pageShares: Array<AmadeusPageShare & { vaultId: string; vaultName: string }>
         linkBase: string
       }>
       // presence
@@ -1045,7 +1154,32 @@ export interface AmadeusPageShare {
   inviteRole: 'editor' | 'viewer'
   hasPassword: boolean
   expiresAt: string | null
+  /** 带已到期记录的列表才会出现 true。 */
+  expired?: boolean
+  /** 一起共享的内容(旧服务端没有这一项)。 */
+  items?: string[]
   participants: Array<{ userId: string; username: string | null; role: 'editor' | 'viewer'; since: string }>
+}
+
+export interface AmadeusRelatedItem {
+  path: string
+  title: string
+  kind: 'page' | 'file'
+  included: boolean
+}
+
+export interface AmadeusSharedItem {
+  /** 旧服务端没有这一项,退出共享入口据此隐藏。 */
+  shareId?: string
+  vaultId: string
+  path: string
+  title: string
+  role: string
+  ownerName: string | null
+  expiresAt?: string | null
+  items?: string[]
+  /** 桌面:镜像内路径,点击本地直开。 */
+  localPath?: string
 }
 
 export interface AmadeusCollabQuota {

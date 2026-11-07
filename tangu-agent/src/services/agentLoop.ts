@@ -13,9 +13,10 @@ import { v4 as uuidv4 } from 'uuid';
 import { deps } from '../seams/runtime.js';
 import { resolveProfile } from '../seams/appProfile.js';
 import type { StreamOpts, BuildPayloadOpts } from '../seams/cloudBrain.js';
+import { maskSpans, maskSettings, MASKING_SECTION, staysOnMachine } from '../llm/outboundMask.js';
 import { LlmError, type ThinkingLevel, type ChatMessage, type ToolCall } from '../core/types.js';
 import { clampThinkingLevel, resolveModelCapability } from '../llm/modelCapabilities.js';
-import { PROTOCOL_MARK } from '../llm/openaiCompat.js';
+import { PROTOCOL_MARK, DIRECT_MARK, ACCOUNT_MARK } from '../llm/openaiCompat.js';
 import { realpathSync } from 'node:fs';
 import { publish, drain, cleanup } from './eventBus.js';
 import { makeUiSettingsUpdater } from './uiAck.js';
@@ -24,20 +25,21 @@ import { takeRunThinking } from './sessionSettings.js';
 import { registerLiveRun, unregisterLiveRun, type RunStatus } from './runStatus.js';
 import { makeClientActionRequester } from './clientAck.js';
 import { runHooks, type HookRunContext, type HookVerdict } from '../hooks/index.js';
-import { enterRunContext, currentDisplayAgentSlug, setRunClientTag, setRunCwd } from '../seams/runContext.js';
+import { enterRunContext, currentDisplayAgentSlug, currentRunId, setRunClientTag, setRunCwd, setRunSessionContext } from '../seams/runContext.js';
 import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
-import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
 import { loadSkillLoadout } from './skillLoadout.js';
 import { buildAgentRoster } from './agentRoster.js';
-import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
+import { APP_REF_SECTION, AUTONOMY_SECTION, PERSISTENCE_SECTION, PLUGIN_AWARENESS_SECTION, TOOL_FAILURE_SECTION, ULTRA_SECTION, presetContractSection, responseStyleSection } from '../profiles/promptSections.js';
 import { canonicalToolName, resolveTools, isComputerUseTool, computerUseHiddenNames, computerUseUnavailableReason } from '../tools/toolRegistry.js';
 import { parsePreset, presetOf, type Preset } from '../core/presetTable.js';
+import { WIDGET_SECTION, widgetsEnabledFor } from '../tools/builtin/manageWidget.js';
 import { LEGACY_HTML_CARD_TOOL, SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
@@ -48,22 +50,22 @@ import { resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { listFilesLocal, sanitizeProjectName } from '../tools/fileWorkspace.js';
 import {
   effectiveContextWindowInfo, INPUT_HARD_RATIO, INPUT_WARN_RATIO, compactionThreshold,
-  estimateTokensRough, estimateMessagesTokens, compactContext, capToolResult, capHistoryContent, pinMessage,
+  estimateTokensRough, estimateMessagesTokens, compactContext, trimOldestToFit, capToolResult, capHistoryContent, pinMessage,
   ContextUsageTracker, CompactionAttemptGuard, assistantTurnOf, markLossy, HISTORY_MSG_MAX_CHARS,
 } from './contextBudget.js';
 import {
-  getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage,
+  getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage, idleCompactionDue,
   tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary,
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
-import { isContextOverflowError } from './contextWindowStore.js';
+import { isContextOverflowError, learnFromUpstreamError } from './contextWindowStore.js';
 import { getAgent, isValidSlug, libDirOf, MUSE_AGENT_SLUG, type NormalAgentDef } from '../agents/agentRegistry.js';
 import { loadHarness, shelvedOf, renderHarnessSection, isRefineInvocation, REFINE_DIRECTIVE, consumeHarnessCandidates, renderPendingHarnessCandidates } from '../agents/harnessStore.js';
 import { loadSchedule, entriesOf, upcomingScheduleLines } from './agentSchedule.js';
 import { agentIdentitySection, applyAgentActivation } from './agentActivation.js';
 import { clampApprovalMode, clearRunRemoteTaint, effectiveRemote, remoteApprovalCap, remoteOf, REMOTE_WRITABLE_CONFIG_KEYS } from './remoteOrigin.js';
 import { remoteLocked, remoteLockedBody } from './remoteLock.js'; // P1-K2
-import { isChildBriefRun, isUnattendedRun, registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
+import { isChildBriefRun, isSiblingMessageRun, isUnattendedRun, registerRun, runCategory, unregisterRun, type RunCategory } from './remoteActivity.js'; // P1-K2
 import { requestInquiry } from './inquiries.js';
 import { askUserPayload, formatInquiryResult, isSystemAnswer, normalizeInquiryAnswer } from '../tools/builtin/interaction.js';
 import { loadProjectDocSafe, wrapProjectDoc } from './projectDoc.js';
@@ -74,12 +76,14 @@ import { fitUserImages, normalizeImageAttachments, toImageParts } from './imageA
 import { describeImages, NO_VISION_NOTE, resolveVisionModelId, shouldDescribeImages, whyNoImages, type NoImagesReason } from './visionService.js';
 import { toolImageMessages, type ToolImage } from './toolImages.js';
 import { dropStaleToolImages } from './toolImageWindow.js';
-import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls } from './historyReplay.js';
+import { replayAssistantHistory, stepLlmResponse, loadReplaySteps, dropCoveredCalls, reasoningAccountKey } from './historyReplay.js';
 import { looksLikeToolCallText } from '../llm/textToolCalls.js';
-import { isRetryableLlmError, isAuthExpiredLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
+import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, isForeignReasoningLlmError, withLlmRetry, MODEL_MAX_RETRIES, MODEL_RETRY_BASE_MS, llmRetryBudgetExceeded, sleepOrAbort } from '../llm/retry.js';
+import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
-import { CORRECTION_SIGNAL, NUDGE_SIGNAL, looksLikeCorrection, noteUserStop, takePendingStop, toolLoopSignal } from './judgeSignals.js';
+import { CORRECTION_SIGNAL, NUDGE_SIGNAL, correctionVerdict, looksLikeCorrection, noteUserStop, takePendingStop, toolLoopSignal, verdictLine } from './judgeSignals.js';
+import { loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query } from '../core/db.js';
 import { SELF_OWNER, ownerAlive } from './runOwner.js';
@@ -89,6 +93,8 @@ import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
+import { filterTaggedEntries, filterTaggedText, foldNote } from '../contracts/deviceTags.js';
+import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 import { buildProjectMemoryContext, resolveProjectMemory } from './projectMemory.js';
 import { computerHistoryDigest, computerHistoryRecallHide } from './computerHistory.js';
 import { takeWorkspaceUploads, withUploadRefs } from './workspaceUploads.js';
@@ -106,6 +112,8 @@ const consumeTokenPoints = (userId: string, amount: number) => deps().billing.co
 const calculateCost = (modelId: string, tin: number, tout: number, model?: any, cached?: number) =>
   deps().billing.calculateCost(modelId, tin, tout, model, cached);
 const logApiUsage = (...args: any[]) => (deps().billing.logApiUsage as any)(...args);
+/** 决策闸(beta):Historian 开着、开发者选项里打开了 historian.decisionGate。读配置失败 = 关。 */
+const decisionGateOn = (): boolean => { try { const h = loadSpecialAgentsConfig().historian; return h.enabled && !!h.decisionGate; } catch { return false; } };
 const getUserById = (id: string) => deps().brain.users.getUserById(id);
 
 const abortControllers = new Map<string, AbortController>();
@@ -194,6 +202,9 @@ export function cancelSteer(runId: string, msgId: string): boolean {
  *  用户主动切断的、任务多半没完 —— 否则历史里只有一条无解释的半截助手消息,模型会当它已经收尾,
  *  「打断之后忘记继续之前的任务」的病根就在这。措辞按 Codex 经验保持**告警式**(部分执行风险),
  *  续任务的压力放在系统提示 PERSISTENCE_SECTION 里,标记本身不下指令。 */
+/** 额度用完换了后备模型的 run → 实际模型与落库标记(finalizeAssistantMessage 读;run 结束即删)。 */
+const modelSwaps = new Map<string, { modelId: string; origin: string }>();
+
 export const TURN_INTERRUPTED_MARKER =
   '<turn_interrupted>\n' +
   'The user interrupted this turn on purpose. Any tool calls that were aborted may have partially executed; the task above is likely unfinished.\n' +
@@ -296,11 +307,28 @@ export function enqueueRun(sessionId: string, runId: string): void {
 }
 
 /** 非阻塞启动一个 run（不 await）。AbortController 同步注册，保证早到的 abort 也生效。仅由 enqueueRun/advanceQueue 调用。 */
+async function waitMcpAdmission(ready: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) throw new AbortLikeError();
+  let stop!: () => void;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    stop = () => reject(new AbortLikeError());
+    signal.addEventListener('abort', stop, { once: true });
+  });
+  try { await Promise.race([ready, aborted]); }
+  finally { signal.removeEventListener('abort', stop); }
+}
+
 export function startRun(runId: string): void {
   if (exiting) return; // 进程正在退出:行留在 queued,下次启动按持有者已死认领
+  // Reconcile while the admission barrier still observes idle. Register the controller synchronously
+  // afterwards so early aborts work; dispatch waits for this generation to finish connecting.
+  const mcpReady = deps().mcp?.reloadConfig?.() ?? Promise.resolve();
   const ac = new AbortController();
   abortControllers.set(runId, ac);
-  const task = withTaskProjectQueue(runId, ac.signal, () => dispatchRun(runId, ac)).catch(async (err) => {
+  const task = withTaskProjectQueue(runId, ac.signal, async () => {
+    await waitMcpAdmission(mcpReady, ac.signal);
+    return dispatchRun(runId, ac);
+  }).catch(async (err) => {
     // Preparation precedes the main loop's resource setup. It must publish a real terminal
     // outcome too; otherwise a hydration failure releases the queue but leaves the UI hanging.
     const aborted = !(err instanceof DockerCleanupError) && (ac.signal.aborted || err?.name === 'AbortError' || err instanceof AbortLikeError);
@@ -323,7 +351,9 @@ export function startRun(runId: string): void {
   // 远端 steer 染的色在**所有**收尾路径清掉(准备阶段失败 / 外部引擎分支不经 runLoop 的 finally —— Codex 二轮)。
   // P1-K2:活动登记与中止原因同样在所有收尾路径清掉(dispatchRun 登记,这里是唯一一定会跑到的出口)。
   }).finally(() => {
-    runTasks.delete(runId); clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId);
+    runTasks.delete(runId);
+    if (!exiting) void deps().mcp?.reloadConfig?.().catch(e => console.warn('[mcp] settings reload failed:', e?.message));
+    clearRunRemoteTaint(runId); unregisterRun(runId); abortReasons.delete(runId);
     // 父子会话:子会话这一轮的结果送回主会话 / 主会话收它名下积着的回报(终态已落库、队列已推进)。
     if (!exiting) void onChildRunSettled(runId).catch((e) => console.error('[agent-core] child session report failed:', e?.message || e));
   });
@@ -799,7 +829,7 @@ export function sessionHasActiveRun(sessionId: string): boolean {
  * 首帧;窗口起点每 HYDRATE_BLOCK 行才挪一次,所以约每 5 个 run 才多一次摘要调用(增量,带上一检查点)。
  * 分步回放(agent_steps)与 hydrate 同源,故窗口算术只数 DB 行。无 run 上下文 → 用量台账静默跳过(与手动 /compact 同)。
  */
-async function checkpointRowsOutsideWindow(
+export async function checkpointRowsOutsideWindow(
   sessionId: string, modelId: string, appId: string, settings: CompactionSettings, runThinking: ThinkingLevel,
 ): Promise<void> {
   if (!settings.enabled || !modelId) return;
@@ -837,7 +867,7 @@ export async function hydrateHistory(
   /** 本次 run 的上游模型 + 协议;回放据此判 providerItems 是不是同一个模型、同一个协议下签出来的
    *  (historyReplay 文件头 ①)。protocol 只能取模型上的**静态**标记 —— hydrate 发生在 buildProviderPayload
    *  之前,动态改道(思考开 → Responses)那一档此时还没定,故只会判「不匹配」,不会误判匹配。 */
-  replayFor?: { apiModelId?: string; protocol?: string },
+  replayFor?: { apiModelId?: string; protocol?: string; account?: string },
   /** false = 不等在飞的惰性检查点(旁聊 /btw:一句题外话不值得最多 45s 的等待,窗口外老行少一截可接受)。 */
   waitCheckpoint = true,
 ): Promise<{
@@ -968,6 +998,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const clientTag = typeof input.client === 'string' ? input.client : undefined;
   // 远程污点(契约 C1/C3/C5):只认 input.remote(路由解析 / 派生 run 显式抄写),审批档据此钳到上限。
   const remote = remoteOf(input);
+  setRunSessionContext(sessionId, !!remote || !!input.remoteTainted);
   const remoteCap = remote ? remoteApprovalCap() : undefined;
   // 界面面(set_ui_setting / run_ui_command / list_ui_commands)的能力握手 + 目录快照。
   // 与 clientTag 同源同链;run 内冻结(prompt 缓存纪律,同 mcpTools)。
@@ -1202,7 +1233,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   const modeSessionId = profile.capabilities.hostExec
     // 父子会话的派生轮(start_session / send_to_session 起的子会话轮、回报后自动接着做的主会话轮)也跟本会话现档:中途收紧当场生效(Codex 10-17 #6)。
     // 这两个字段只由引擎内部 createRun 写,POST /agent/runs 按字段名组装 input、客户端塞不进来。
-    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.childReport === true, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
+    ? approvalModeSessionId({ fromClient: input.origin === 'client' || input.fromParent === true || input.childReport === true || !!input.fromSession, sessionId, teamSessionId: verifiedTeamSessionId, followSessionMode: teamMember.followSessionMode === true })
     : undefined;
   // 无人值守的异步审批(Muse ask/agent 档):**只信引擎内部起的 run** —— input.background 由 muse.ts 直接写进
   // createRun 的 input,/agent/runs 路由按字段名组装 input、客户端塞不进来;agentConfig 是请求体可控的,
@@ -1269,6 +1300,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
   // 整个 run 调过的工具名(allToolCalls 在插话边界会清空,这份不清)与本轮攒下的复盘信号(services/judgeSignals.ts)。
   const runToolNames: string[] = [];
   const judgeSignals: string[] = [];
+  let correctionCheck: Promise<void> | null = null; // 决策闸(beta)在问的那一下:收尾照常交给 Historian,它数完轮次再等这个
   /**
    * Tool calls are stored separately from assistant text. Stamp the finalized-text offset at which
    * each call happened so clients can reconstruct interleaving after reload without a DB migration.
@@ -1300,8 +1332,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     await updateRunStatus(runId, 'running');
     await publish(runId, 'status', { state: 'running' });
     // Historian 首帧标题:只看用户消息,与模型回复并行;放在群聊分支前,两条路都覆盖。落库后推事件让侧栏立刻刷新。
-    // 子会话回报那一轮(childReport)的「用户消息」是机器写的 <child_sessions_update>,不拿它起标题
-    if (!input.childReport) onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
+    // 子会话回报那一轮(childReport)/ 会话消息那一轮(fromSession)的「用户消息」是机器写的,不拿它起标题
+    if (!input.childReport && !input.fromSession) onUserRunStart(sessionId, userId, String(input.message || ''), input.userMessageId,
       (title) => { void publish(runId, 'session_title', { sessionId, title }).catch(() => {}); });
     // 经工作区上传进来的附件(手机 / 桌面原生选择器读成工作区附件的文件)落在会话沙箱目录,host 工具的 cwd 是工作区 —— 按桌面本机附件
     // 同一格式(正文第一行的路径 token)把它们的绝对路径拼进**落库**的这条用户消息:模型这一轮与之后每一轮回放都看得见。
@@ -1343,18 +1375,52 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         console.warn(`[agent-core] run=${runId} resolve 瞬时失败,${wait}ms 后重试 ${attempt}/${MODEL_MAX_RETRIES}: ${(err as any)?.message || err}`),
       ac.signal, // 停止后不再空转退避(resolve 接缝本身没有 signal 位,只能在重试层兜)
     );
-    const { model, baseUrl, apiModelId } = resolvedModel;
+    let { model, baseUrl, apiModelId } = resolvedModel; // 额度用完接力会换成后备模型(relayModel)
+    // 本机模型(Ollama 等)不出这台电脑:不遮,界面也别说「遮住了」(outboundMask.staysOnMachine)。接力换了模型就跟着重算(见 relayModel)。
+    let maskSkipped = staysOnMachine((model as any)?.[DIRECT_MARK], baseUrl);
     let apiKey = resolvedModel.apiKey; // 订阅登录的 token 可能在 run 中途过期 → 下面的重试圈会续期后换掉它
     let credsRefreshedAt = 0;
+    // 额度用完接力(llm/quotaRelay.ts):这一轮实际在用的模型。只换一次,换了之后后备也用完就停下报错。
+    let callModelId = modelId;
+    let quotaRelayed = false;
+    // 这一轮已经开始回答(吐过字 / 推理 / 工具调用):之后撞上额度用完也不换,免得一段回答拼了两个模型
+    let turnStarted = false;
+    const relayModel = async (target: string, until?: number): Promise<boolean> => {
+      const r = await resolveModelAndKey(target).catch((e: any) => { console.warn(`[agent-core] run=${runId} 额度用完的后备模型 ${target} 解析失败: ${e?.message || e}`); return null; });
+      if (!r) return false;
+      const from = callModelId;
+      ({ model, baseUrl, apiModelId } = r);
+      maskSkipped = staysOnMachine((model as any)?.[DIRECT_MARK], baseUrl); // 出站包装按每次请求判;这里让界面标注跟上实际发往的模型
+      apiKey = r.apiKey;
+      callModelId = target;
+      quotaRelayed = true;
+      modelSwaps.set(runId, { modelId: target, origin: 'fallback:quota' });
+      console.warn(`[agent-core] run=${runId} ${from} 额度用完${until ? `(到 ${new Date(until).toISOString()})` : ''},这一轮改用 ${target}`);
+      // 与服务端停用模型的提示(phase:model_fallback)同一种事件,界面画同一种「改用了」行;reason 区分原因
+      void publish(runId, 'status', { phase: 'model_fallback', reason: 'quota', from, to: target, toName: (r.model as any)?.name, ...(until ? { resetsAt: until } : {}) });
+      return true;
+    };
+    // 上一轮刚换过、重置时间还没到:直接用后备,省一次必败的请求(「先问我」开着时照旧先试原模型,撞上了再问)。
+    // 「先问我」卡上点了「改用 X」(input.quotaFallbackNow):这一轮直接用后备。
+    {
+      const until = quotaExhaustedUntil(modelId) ?? undefined;
+      const now = input.quotaFallbackNow === true;
+      const rs = until || now ? relaySettings() : null;
+      if (rs?.fallback && rs.fallback !== modelId && (now || !rs.ask)) await relayModel(rs.fallback, until);
+    }
     // 分步落库 / 跨 run 回放共用的模型身份键(两侧必须是**同一个表达式**,否则永远对不上)。
     // apiModelId 缺省时退回内部 modelId —— 只要求稳定可比,不要求是上游真名(同 resolveModelCapability 的口径)。
     const replayModelKey = apiModelId || modelId;
     // protocol 这里是模型上的**静态**标记 = 「下一次请求要走的协议」的读侧口径(hydrate 用它)。
     // 写侧不用它:落库点改用 payload[PROTOCOL_MARK](本轮**实际**发出去的协议,可能被 tune 动态改道)。
+    // 账号指纹(只存哈希):直连才有。Codex 用 account_id(token 会续期、account_id 不变),自带 key 的用 key;托管面没有 → undefined
+    const accountKeyOf = (m: any, key: string | undefined): string | undefined =>
+      (m?.[DIRECT_MARK] ? reasoningAccountKey(m[ACCOUNT_MARK] || key) : undefined);
     const stepItemBinding = {
       apiModelId: replayModelKey,
       provider: model?.provider,
       protocol: typeof (model as any)?.[PROTOCOL_MARK] === 'string' ? (model as any)[PROTOCOL_MARK] : undefined,
+      account: accountKeyOf(model, apiKey),
     };
     /** 一次请求**实际**走的协议:multiBrain.streamProviderCompletion 正是按 payload 上这个标记分发
      *  anthropic-messages / openai-responses / 缺省 chat-completions 的 —— 所以它就是「这组 items 是在
@@ -1365,7 +1431,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 400k 族在 64k 就机械折叠会绞碎上下文+打断前缀缓存,长任务正确率与 token 双输(WB-Bench 取证)。
     // 09-22 起自动识别的窗口封顶 272k,更大的窗口只由人填的覆盖打开(effectiveContextWindowInfo)。
     // Ultra(09-27)不封顶:模型本身能到多大就用多大;人填的覆盖照旧(覆盖可能正是在纠正报大了的目录值)。
-    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(modelId, model, ultraRequested);
+    const { tokens: ctxWindowTokens, source: ctxWindowSource, max: ctxWindowMax } = effectiveContextWindowInfo(callModelId, model, ultraRequested);
 
     // 入站预算闸门(Hermes 式窗口相对预算;2026-06-10 的 77 万 token 事故防线):
     // 估算超窗口 50% 直接失败(消息不落库,会话不被毒化),超 25% 放行但发警告事件。
@@ -1447,7 +1513,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const { messages: history, currentUserIndex, checkpointThrough, contextImages } = await hydrateHistory(
       sessionId, run.assistant_message_id || '', describeUserImages,
       typeof input.userMessageId === 'string' ? input.userMessageId : undefined,
-      { apiModelId: replayModelKey, protocol: stepItemBinding.protocol },
+      { apiModelId: replayModelKey, protocol: stepItemBinding.protocol, account: stepItemBinding.account },
     );
     // 本轮没附件(「坚持合成」这类跟进):edit_image 用模型此刻看得见的那批图 —— hydrate 每轮都把它发给对话模型。
     if (!imageInputs.length && contextImages?.images.length) {
@@ -1463,7 +1529,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 换 CODING_CONTRACT_SECTION。用户显式选择的自定义 agent 不受影响(人格照注,契约叠加)。
     const suppressCompanionPersona = ps.persona === 'suppress' && activeAgentSlug === DEFAULT_AGENT_SLUG;
     const notesApply = execMode === 'host' && !inlineMemberDef && !suppressCompanionPersona;
-    const harnessEntries = notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [];
+    // 按条标适用范围(11-06,contracts/deviceTags.ts):指令、人格、工作笔记、记忆里标了别台 / 别的系统的,这一轮不拼进来,折成一行。
+    // 本机引擎 = 这台电脑;云端 run 不在任何一台电脑上,标了的一律折起来。每个 run 现读(同步页上改了名,下一轮就对得上)。
+    const tagCtx = runTagContext(!!profile.capabilities.hostExec);
+    const harnessTagged = filterTaggedEntries(notesApply ? await loadHarness(activeAgentSlug).catch(() => []) : [], (e) => e.title, tagCtx);
+    // 标题没标、正文里有标了别台的行:正文也按本机挑(Codex 评审 11-06),折掉的算进同一行
+    const harnessEntries = harnessTagged.kept.map((e) => { const b = filterTaggedText(e.body, tagCtx); harnessTagged.skipped.push(...b.skipped); return b.skipped.length ? { ...e, body: b.text } : e; }); // 别台的装备条目也不收起本机的工具
     const shelved = shelvedOf(harnessEntries);
     // 启用技能的装载（渐进式披露:目录进 prompt、全文按需 use_skill）——见 services/skillLoadout.ts。
     const skillLoadout = await loadSkillLoadout(userId, appId, agentConfig, shelved.skills);
@@ -1496,18 +1567,18 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     };
     // 通道会话判定(每 run 一次):channel_send_* 只在「连接着通道的会话」暴露(P0-3),
     // 回复风格段也据此分裁(通道端纯文本渲染)。绑定可中途建立/解除 → 按 run 重查;非 host 恒 false。
-    const channelSession = profile.capabilities.hostExec
-      ? await channelHub.isChannelSession(userId, sessionId)
-      : false;
+    const channelBinding = profile.capabilities.hostExec ? await channelHub.channelBinding(userId, sessionId) : false;
+    const channelSession = channelBinding === true;
+    const channelUnknown = channelBinding === null; // 工具和回复风格照「没连」走,隐私边界按「连着」走
     // 静态指引/环境段按 profile 装载（G4，见 profiles/promptSections.ts）。
     const promptSections = profile.promptSections({ execMode, cwd, extraRoots, channelSession, preset, sandboxExec: profile.features.sandbox });
     // (suppressCompanionPersona 在本 run 开头读工作笔记处已定义:coding 预设 × 默认 agent 时人格与笔记一并跳过。)
     // 系统块按「稳定 → 易变」排布,让记忆改写只失效最短后缀(单 pin 单断点,见末尾 pinMessage)。
     // 1) developer_instructions(config.toml;身份/稳定)
-    if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(String(agentConfig.systemPrompt));
+    if (agentConfig.systemPrompt && !suppressCompanionPersona) systemParts.push(textForThisDevice(String(agentConfig.systemPrompt), tagCtx));
     // 2) SOUL.md 人格(身份/稳定)
     if (agentConfig.soul && String(agentConfig.soul).trim() && !suppressCompanionPersona) {
-      systemParts.push('## Persona\nThe following is your persona; act according to its tone and values, but do not recite it verbatim.\n\n' + String(agentConfig.soul).trim());
+      systemParts.push('## Persona\nThe following is your persona; act according to its tone and values, but do not recite it verbatim.\n\n' + textForThisDevice(String(agentConfig.soul).trim(), tagCtx));
     }
     // 2') 身份段(当前名字 / 简介):人格正文常写死旧名,不注入则改名后模型仍自称旧名(09-18)。随人格一起被 coding 预设抑制。
     if (agentProfile && !suppressCompanionPersona) systemParts.push(agentIdentitySection(agentProfile));
@@ -1529,7 +1600,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     //     随人格一起被 coding 预设抑制。
     //     条目在本 run 开头已读好(harnessEntries,见 loadSkillLoadout 上方)。
     const harnessBlock = renderHarnessSection(harnessEntries);
-    if (harnessBlock) systemParts.push(harnessBlock);
+    const harnessFold = foldNote(harnessTagged.skipped);
+    if (harnessBlock || harnessFold) systemParts.push([harnessBlock || '## My Evolution Record (self-curated)', harnessFold].filter(Boolean).join('\n'));
     ctxMark('harness');
     // HUMAN is collaboration context, including projectless Chat and Coding. It never
     // changes tool permissions. All documents are read anew at each user turn.
@@ -1569,6 +1641,10 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     systemParts.push(TOOL_FAILURE_SECTION, AUTONOMY_SECTION, responseStyleSection(channelSession, ps.noPreamble ? { noPreamble: true } : undefined));
     // 应用 / 窗口引用(`[[app://…]]` / `[[window://…]]`):紧跟输出风格段(它是「标识符进反引号」的例外);通道会话是纯文本,不注入。
     if (!channelSession) systemParts.push(APP_REF_SECTION);
+    // 想到插件:有商店面才说(同 search_marketplace 的门)。计划模式没有这个工具;通道会话画不出插件卡与任务卡。
+    if (deps().brain.marketplace && !planMode && !channelSession) systemParts.push(PLUGIN_AWARENESS_SECTION);
+    // 发给模型前脱敏开着:告诉模型占位符能直接用(否则真模型会拒绝「看不到的 key」,live 台架 10-28 实测)。随设置静态,不碎前缀缓存。
+    { const ms = maskSettings(); if (ms.action === 'mask' && (ms.secrets || ms.personal) && !maskSkipped) systemParts.push(MASKING_SECTION); }
     // 持久化契约:计划模式不注入(只读工具集与「carry through implementation」矛盾,且计划模式有自己的流程段);
     // chat 不注入(PRESET_TABLE.persistence=false:一轮=一次发言,Conversation Contract 反向要求「答完就停」)。
     if (!planMode && ps.persistence) systemParts.push(PERSISTENCE_SECTION);
@@ -1593,6 +1669,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       systemParts.push(SKETCH_SECTION);
       if (nativeUiEnabled) systemParts.push(INTELLIGENT_UI_SECTION);
       if (computedUiEnabled) systemParts.push(INTELLIGENT_UI_V2_SECTION);
+      if (widgetsEnabledFor({ ...visualGate, execMode, clientCapabilities })) systemParts.push(WIDGET_SECTION);
       if (visualsPref === 'less') systemParts.push(SKETCH_LESS_NOTE);
       // 常驻段稳定,但本轮信号按消息正则取 3 种值 → 跟记忆易变段同一落点(B1),别留在稳定前缀里。
       if (sketchTurnSignal && volatilePlacement === 'system') systemParts.push(sketchTurnSignal.section);
@@ -1600,8 +1677,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     ctxMark('guidance');
     // 4) 人的文件夹 human/(所有 agent 可见,半稳定):人写给所有 Agent 的 AGENT.md、人自己写的 MEMORY.md(原 USER.md)、
     //    Agent 们对人的认识 SOUL.md。替换原来那段 USER.md,不并排加(提示词体量)。HUMAN.md 共识走下面协作说明那段。读失败不阻断。
+    //    连着聊天通道的会话(别人也可能在读)不注入人的本子和画像,只留 AGENT.md 那段要求(10-29 画像写入方案 细节 5)。
     try {
-      const aboutHuman = renderAboutHuman();
+      const aboutHuman = renderAboutHuman({ private: channelBinding === false });
       if (aboutHuman) systemParts.push(aboutHuman);
     } catch { /* ignore */ }
     ctxMark('profile');
@@ -1686,7 +1764,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // (P1 · M1A,G7)。run 自己带远程污点时不藏 —— 远端内容回到远端 run 不是洗白。显式的 search_sessions / read_session 另见工具。
       // 远程污点只存在于本机引擎(hostExec):云端 / thin worker 不带这个键,免得 PG 谓词与网关路由为一个恒空的集合跑一遍。
       const hideRemoteSessions = profile.capabilities.hostExec && !effectiveRemote({ remote, runId });
-      const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug,
+      const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug, deviceTags: tagCtx,
         query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
       if (volatilePlacement === 'system') {
         if (memoryContext.content) systemParts.push(MEMORY_BLOCK_HEADER + memoryContext.content);
@@ -1713,7 +1791,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // deferred 工具目录(P0-2,借 pi deferred-tools):defer 工具的定义不进 defs,系统提示只留
     // 一行/工具的目录(列全量、不随解锁状态变——稳定文本护前缀缓存);模型经 load_tools 按需解锁,
     // 解锁只活在本 run(与 use_skill 每-run 按需同模式;hydrate 不带 tool_calls,历史重放无数据源)。
-    // 系统驱动的 run(Muse/自动化)不吃这套:registry 全量可见,目录段也不注入。
+    // 系统驱动的 run(Muse/自动化)的内置工具不吃这套:registry 全量可见;MCP 工具照样按需(11-06,见 toolRegistry.isMcpDeferred)。
     const toolsMode = agentConfig.toolsMode === 'allow' || agentConfig.toolsMode === 'deny' ? agentConfig.toolsMode : undefined;
     const toolsList = Array.isArray(agentConfig.toolsList)
       ? (agentConfig.toolsList as unknown[]).filter((t): t is string => typeof t === 'string').map(canonicalToolName)
@@ -1729,9 +1807,43 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       ? agentConfig.mentionedProjects.map((p: any) => (p && typeof p.path === 'string' ? safeRealpath(p.path) : '')).filter(Boolean).slice(0, 8)
       : [];
     // 会话属于一个本机项目 → remember 露出「项目级」(定义多一段说明和一个参数);别的会话拿到的是精简定义。
-    const projectScoped = profile.capabilities.hostExec ? !!(await resolveProjectMemory(userId, sessionId)) || undefined : undefined;
+    const projectRef = profile.capabilities.hostExec ? await resolveProjectMemory(userId, sessionId) : null;
+    const projectScoped = projectRef ? true : undefined;
+    const projectPath = projectRef?.project;
+    // MCP 工具(deps().mcp 仅 standalone/TUI 装配):run 开始取一次快照、run 内冻结——
+    // server 集/工具集变更只对之后的 run 生效,杜绝 run 中途 defs 漂移打爆前缀缓存。
+    // agent_config.enabledMcpServers(string[],缺省=全部已连接 server)做会话级过滤。
+    // 取在门禁字段之前(11-06):MCP 缺省按需加载,下面拼「Additional Tools」目录时就要知道有哪些 MCP 工具。
+    let mcpTools: Map<string, import('../mcp/toolBridge.js').LoadedMcpTool> | undefined;
+    if (deps().mcp && !planMode && ps.externalTools) {
+      const enabledMcp = Array.isArray(agentConfig.enabledMcpServers) ? agentConfig.enabledMcpServers : undefined;
+      await deps().mcp!.reloadConfig?.();
+      const snapshot = deps().mcp!.toolsForRun(enabledMcp);
+      if (snapshot.size) {
+        mcpTools = snapshot;
+        console.log(`[agent-core] run=${runId} mcp tools: ${[...snapshot.keys()].join(', ')}`);
+      }
+    }
+
+    // 自定义工具（HTTP/JS）：从 custom_tools 表 + 启用技能自带工具加载，喂给 LLM 并在云端执行。
+    // 计划模式下整体跳过(外部副作用不可知,不属于只读集);chat 同(PRESET_TABLE.externalTools=false)。
+    // profile.features.customTools=false 的 app(Connect manifest / admin 覆盖)同样整体跳过:此前该开关无人读。
+    // 同 MCP 取在门禁字段之前(11-06):目录 / defs / load_tools 的撞名判定要看同一份自定义工具名。
+    let customTools: Map<string, LoadedCustomTool> | undefined;
+    if (!planMode && ps.externalTools && profile.features.customTools) {
+      try {
+        const loaded = await loadCustomTools(appId, agentConfig);
+        if (loaded.length) {
+          customTools = new Map(loaded.map((t) => [t.name, t]));
+          console.log(`[agent-core] run=${runId} custom tools: ${loaded.map((t) => `${t.name}(${t.executor})`).join(', ')}`);
+        }
+      } catch (e) {
+        console.warn('[agent-core] loadCustomTools failed:', e);
+      }
+    }
+
     const toolGateCtx = {
-      userId, sessionId, appId, runId, client: clientTag, channelSession, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped,
+      userId, sessionId, appId, runId, client: clientTag, channelSession, channelUnknown, preset, uiCommands, uiSettings, uiCards, clientCapabilities, projectScoped, projectPath,
       visuals: visualsPref, // run 冻结的可视化档位:与上面拼提示用的同一个值,set_ui_setting 中途改了也到下一次 run 才生效
       runOrigin: runCategory(input), // P1-K2:后台进程来源标签取这条 run 自己的来源(channelSession 是会话级旗标)
       dispatchTargets,
@@ -1754,6 +1866,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       inDiscussion: isTeamMember || undefined, // 团队成员不可再起讨论 / 派遣 / 界面动作(防裂变;与旧群聊发言人同款)
       ephemeral: !!inlineMemberDef || undefined, // 临时成员:记忆 / 日志 / 人格 / 工作笔记等持久写面全关(没有自己的文件夹可写)
       computerUseUnavailable: undefined as NoImagesReason | undefined, // 见下
+      customTools, mcpTools, // 目录(listDeferredTools)要列按需加载的 MCP、按自定义工具判撞名;toolCtx 原样展开
     };
     // 这一 run 里确有 Computer Use 工具才等上面那次判定(没有就无事可做,不为它多等)。
     // ponytail: 最多等 2s、可中止 —— 网络卡住时不能让「停止」和首帧陪着等到 HTTP 超时。没等到 = 这一 run 照旧给工具
@@ -1765,16 +1878,13 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         new Promise<''>((res) => { const t = setTimeout(res, 2000, ''); t.unref?.(); ac.signal.addEventListener('abort', () => res(''), { once: true }); }),
       ])) || undefined;
     }
-    const deferredCatalog = deferBypass ? [] : listDeferredTools(toolGateCtx as ToolContext);
+    // Muse / 自动化 run 的内置工具全量可见,目录里只剩按需加载的 MCP(与 getToolDefinitions 的 deferBypass 同一判据)。
+    // canUnlock:下面 toolCtx 一定挂 unlockTools,这里的 toolGateCtx 还没有。
+    const deferredCatalog = listDeferredTools(toolGateCtx as ToolContext, { builtins: !deferBypass, canUnlock: true });
     // 历史里用过的 deferred 工具延续解锁(见 deferredUnlocksFromHistory);目录文本不变,只影响 defs。
     const unlockedTools = deferredUnlocksFromHistory(history, deferredCatalog);
-    if (deferredCatalog.length) {
-      systemParts.push(
-        '## Additional Tools (load on demand)\n' +
-          'These tools exist but are not loaded into context yet. When a task needs one, FIRST call `load_tools` with the exact tool names (one call may load several), wait for its result, then call the loaded tools normally. Do not invent parameters for tools you have not loaded.\n' +
-          deferredCatalog.map((d) => `- ${d.name}: ${d.hint}`).join('\n'),
-      );
-    }
+    const deferSection = deferredCatalogSection(deferredCatalog);
+    if (deferSection) systemParts.push(deferSection);
     // 工具不在工具面里,模型自己只会说「用不了」甚至「请启用插件」—— 把真正的原因和出路写给它,由它告诉用户。
     // 只在这类 run 出现(别的 run 系统提示一个字节不变);列出名字是因为技能 / 用户会按名字提到它们。
     // 名字在这里**重新核一次**:上面那次等待期间 run 可能被远端 steer 染上远程污点、插件可能被停用 —— 那时这组工具是被别的闸
@@ -1927,11 +2037,14 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       throughTs: number; throughRowId?: string; partial: boolean;
       pending?: { summary: string; toolCallId: string; messageId: string };
     } = { throughTs: checkpointThrough.ts, throughRowId: checkpointThrough.rowId, partial: checkpointThrough.partial };
+    // 本 run 兜底裁剪丢过消息(trimOldestToFit):之后的摘要都没见过那几条,边界却可能越过它们 → 本 run 起不再推进
+    // 持久检查点(否则下个 run 的 hydrate 永远跳过那几行,Codex 10-26 #1)。下个 run 从 DB 原样 hydrate,照常落。
+    let trimmedThisRun = false;
     /** 一次成功的 run 内压缩 → 按边界落检查点。返回本次是否已落库(pending 的算未落)。 */
     const recordBoundary = async (summary: string, b?: CompactBoundary): Promise<boolean> => {
       if (!b) return false;
       // 范围里有机械折叠过 / 按硬帽截过的消息:摘要没见过原文,只留在本 run 内存里,不推进持久检查点
-      if (b.lossy) { checkpoint.pending = undefined; return false; }
+      if (b.lossy || trimmedThisRun) { checkpoint.pending = undefined; return false; }
       if (b.pendingToolCallId) {
         checkpoint.pending = { summary, toolCallId: b.pendingToolCallId, messageId: currentAssistantId };
         return false;
@@ -1974,6 +2087,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // protocol 同理必须带上:anthropic-messages 直连的 legacy claude,少了它会报 off 生效而 wire 实发预算。
     const thinkingEffective = clampThinkingLevel(
       resolveModelCapability({
+        thinkingLevels: model?.pluginThinkingLevels,
         baseUrl: (model as any)?.defaultBaseUrl || baseUrl,
         provider: model?.provider,
         modelId: apiModelId || modelId,
@@ -2139,7 +2253,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         const directive =
           '## Mentioned Agents for This Turn\n' +
           'The user @-mentioned the following agents for this message. When their expertise fits the request, involve them and then synthesize the result into your reply. Two ways, pick per the task:\n' +
-          '- `delegate` with the matching `agentSlug` — a quick one-shot subtask (the subagent runs with that agent\'s persona and returns a single report). Use for fetch/search/analysis you just need an answer to.\n' +
+          '- `delegate` with the matching `agentSlug` — a quick subtask (the subagent runs with that agent\'s persona and returns a report). Use for fetch/search/analysis you just need an answer to.\n' +
           '- `start_discussion` with `peer` = the matching slug — a genuine back-and-forth deliberation (a fork of you debates them until both sides are done; collect it with `wait_discussion`). Use when the question benefits from real discussion/disagreement.\n' +
           'Mentioned agents:\n' +
           mentioned.map((a) => `- ${a.name} (slug: \`${a.slug}\`)${a.description ? ` — ${a.description}` : ''}`).join('\n');
@@ -2248,35 +2362,6 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         newAssistantId: currentAssistantId,
       });
     };
-
-    // 自定义工具（HTTP/JS）：从 custom_tools 表 + 启用技能自带工具加载，喂给 LLM 并在云端执行。
-    // 计划模式下整体跳过(外部副作用不可知,不属于只读集);chat 同(PRESET_TABLE.externalTools=false)。
-    // profile.features.customTools=false 的 app(Connect manifest / admin 覆盖)同样整体跳过:此前该开关无人读。
-    let customTools: Map<string, LoadedCustomTool> | undefined;
-    if (!planMode && ps.externalTools && profile.features.customTools) {
-      try {
-        const loaded = await loadCustomTools(appId, agentConfig);
-        if (loaded.length) {
-          customTools = new Map(loaded.map((t) => [t.name, t]));
-          console.log(`[agent-core] run=${runId} custom tools: ${loaded.map((t) => `${t.name}(${t.executor})`).join(', ')}`);
-        }
-      } catch (e) {
-        console.warn('[agent-core] loadCustomTools failed:', e);
-      }
-    }
-
-    // MCP 工具(deps().mcp 仅 standalone/TUI 装配):run 开始取一次快照、run 内冻结——
-    // server 集/工具集变更只对之后的 run 生效,杜绝 run 中途 defs 漂移打爆前缀缓存。
-    // agent_config.enabledMcpServers(string[],缺省=全部已连接 server)做会话级过滤。
-    let mcpTools: Map<string, import('../mcp/toolBridge.js').LoadedMcpTool> | undefined;
-    if (deps().mcp && !planMode && ps.externalTools) {
-      const enabledMcp = Array.isArray(agentConfig.enabledMcpServers) ? agentConfig.enabledMcpServers : undefined;
-      const snapshot = deps().mcp!.toolsForRun(enabledMcp);
-      if (snapshot.size) {
-        mcpTools = snapshot;
-        console.log(`[agent-core] run=${runId} mcp tools: ${[...snapshot.keys()].join(', ')}`);
-      }
-    }
 
     // view_image 等工具产出的图片回流:工具把 data URL 交回这里,本轮工具跑完后物化成一条
     // user 图像消息追加到对话尾部(尾部追加 → 不动前缀,缓存安全;复用 toImageParts)。
@@ -2476,7 +2561,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
 
       // 托盘 run 的 ask_user 也挂起(10-23 方案「待确认卡片」B):问题照发进对话末尾的卡片堆、不等,先给模型占位结果;
       // 用户答了,在迭代边界把答案放回原工具消息 + 一行 <inquiry_update>。子会话 / 无人值守照旧走工具里的当场代答;计划审阅不挂(只读模式下没别的可做)。
-      const ask = approvalTray && effCall.function.name === 'ask_user' && !isChildBriefRun(runId) && !isUnattendedRun(runId)
+      const ask = approvalTray && effCall.function.name === 'ask_user' && !isChildBriefRun(runId) && !isSiblingMessageRun(runId) && !isUnattendedRun(runId)
         ? askUserPayload(safeParse(effCall.function.arguments)) : null;
       if (ask) {
         const entry: ParkedCall = { call, effCall, preview: ask.question, preCtxText, parallelGroup };
@@ -2546,6 +2631,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 在这里分叉:声明了 persistPlaceholder 的工具(read_computer_history)只落占位,全文只进本轮 workingMessages。
       // 出错结果不含数据,照常落库。占位查询不走 ctx 门禁(见 declaredPersistPlaceholder)。
       const stored = (!result.isError && declaredPersistPlaceholder(result.name)) || capped;
+      // 发给模型前会被遮住的值在哪(位置 + 占位符,不含原值):界面在工具组上写「遮住 N 个值」并给这些值垫底色
+      const masked = maskSkipped ? [] : [
+        ...maskSpans(call.function.arguments || '').map((m) => ({ ...m, at: 'args' as const })),
+        ...maskSpans(stored).map((m) => ({ ...m, at: 'result' as const })),
+      ];
       const payload = {
         id: call.id,
         name: wireToolName(result.name), // 执行层回正典名;往外发跟这次调用一样叫线上的名字(HTML 卡叫 sketch)
@@ -2557,6 +2647,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         parallelGroup,
         artifactPath,
         metadata: result.metadata,
+        ...(masked.length ? { masked } : {}),
       };
       await publish(runId, 'tool_result', payload);
 
@@ -2588,6 +2679,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           parallelGroup,
           artifactPath,
           metadata: result.metadata,
+          ...(masked.length ? { masked } : {}),
         },
         toolMessage: { role: 'tool', content: toolMsgContent, tool_call_id: call.id } as ChatMessage,
       };
@@ -2740,8 +2832,17 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     }
 
     // 复盘信号:这一轮开头的话像在纠正上一条回复(前面得真有过回复;系统驱动的 run 的开场白不算用户的话)。
-    if (!deferBypass && workingMessages.some((m) => m.role === 'assistant') && looksLikeCorrection(String(input.message || ''))) {
-      judgeSignals.push(CORRECTION_SIGNAL);
+    // 决策闸(beta,开发者选项;Historian 开着才问)开着:改问云端决策模型、词面兜底(judgeSignals.correctionVerdict)。
+    // 不挡主循环:这里只起请求,run 收尾交给 Historian 之前才等它。远程 run 不问:用户原话不经这条路发出去。
+    if (!deferBypass && workingMessages.some((m) => m.role === 'assistant')) {
+      const decision = !effectiveRemote({ remote, runId }) && decisionGateOn() ? deps().brain.decision : undefined;
+      if (decision) {
+        const prev = [...workingMessages].reverse().find((m) => m.role === 'assistant');
+        correctionCheck = correctionVerdict(decision, prev?.content, String(input.message || '')).then((v) => {
+          try { deps().host.log(`[historian] ${verdictLine(v)}`); } catch { /* 日志不挡信号 */ }
+          if (v.correction) judgeSignals.push(CORRECTION_SIGNAL);
+        });
+      } else if (looksLikeCorrection(String(input.message || ''))) judgeSignals.push(CORRECTION_SIGNAL);
     }
     let usedTools = false; // 本 run 是否真的执行过工具(循环耗尽提示的前提:没用工具的纯聊天/单轮 run 不该报"耗尽")
     let midstreamResumes = 0; // 中流断线恢复次数(整 run 累计上限 MIDSTREAM_MAX_RESUMES,防慢性抖动供应商刷成本)
@@ -2762,6 +2863,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     const compactAt = compactionThreshold(ctxWindowTokens, compactionCfg.reserveTokens, compactionCfg.thresholdPercent, compactionCfg.keepRecentTokens);
     let hookVetoedCompaction = false; // PreCompact hook 否决过 → 不再按估算拦请求,交给 provider 裁决
     let overflowRecovered = false; // 上游报「输入超窗口」后压缩重试:每 run 一次
+    let overBudgetNotified = false; // 压缩后仍超成本封顶、按真实窗口照发:每 run 提示一次
+    let reasoningStripped = false; // 回灌的加密推理被拒后拿掉重发:每 run 一次
     let toolsOverhead = 0; // 本轮工具定义头的粗估 token(只在没有实测基准时计入,见 ContextUsageTracker.estimate)
     // 登记给 GET /agent/sessions/:id/status:必须在 contextUsage / compactAt / toolsOverhead 都初始化之后 —— getRunStatus 读它们,
     // 登记早了,run 还在等记忆 / 计费预检的那段时间里来一次请求就是 ReferenceError(Codex 10-10 #6)。
@@ -2771,7 +2874,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
      * 摘要失败退机械折叠(compactContext,如实标 fallback);成功即按边界落检查点(已落库部分立刻落,
      * 本 run 尚未落库的段等 finalize)。返回本次是否改动了上下文。
      */
-    const runCompaction = async (reason: 'threshold' | 'overflow', beforeTokens: number, iteration: number): Promise<boolean> => {
+    const runCompaction = async (reason: 'threshold' | 'overflow' | 'idle', beforeTokens: number, iteration: number): Promise<boolean> => {
       const pcV = await runHooks('PreCompact', { source: 'auto', session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug }, hookCtx());
       if (pcV.stop) {
         hookVetoedCompaction = true;
@@ -2782,25 +2885,47 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       // 换算比例只认 provider 实测(上游拒收时下界 = 窗口);纯粗估不冒充实测。越线本身已成立,故一律 force。
       const measured = contextUsage.measured(workingMessages);
       const cr = compactionCfg.enabled
-        ? await compactWorkingMessages(workingMessages, modelId, appId, ac.signal, {
-          settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: true,
+        ? await compactWorkingMessages(workingMessages, callModelId, appId, ac.signal, {
+          // idle 不是越线:没有保留段之外的内容就不压(force=false)
+          settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: reason !== 'idle',
           overheadTokens: toolsOverhead,
           measuredTokens: reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured,
         })
         : { ok: false, reason: 'llm compaction disabled' }; // enabled=false:不做摘要,只走下面的机械兜底
       let changed = false;
+      if (reason === 'idle' && !(cr.ok && cr.summary)) {
+        // 按时间压缩只为省缓存未命中,没越线:摘要不成就原样发,不走下面为越线准备的机械折叠 / 裁剪
+        console.warn(`[agent-core] run=${runId} 空闲压缩未成: ${cr.reason}`);
+        return false;
+      }
       if (cr.ok && cr.summary) {
         changed = true;
         contextUsage.invalidate();
         const persisted = await recordBoundary(cr.summary, cr.boundary);
-        void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration });
+        void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration, ...(reason === 'idle' ? { idleMinutes: compactionCfg.idleMinutes } : {}) });
       } else {
+        // 上游拒收时实测的下界 = 窗口(与摘要那边同一口径):估算可能还在触发线下,但 provider 已经说装不下了 → 照裁。
+        const floor = reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured;
+        const rough = estimateMessagesTokens(workingMessages) + toolsOverhead; // 折叠前:与 measured 同一份消息
+        const scale = floor && rough > 0 ? Math.max(1, floor / rough) : 1;
         const r = compactContext(workingMessages);
-        if (r.changed) {
+        if (r.changed) contextUsage.invalidate();
+        // 机械折叠也压不下(最近 20 条受保护、折过的不再折):从最旧处成段丢,直到回到触发线的 70% 以下。
+        // 实测比粗估大(截图按定额估)时目标按比例收紧。没有这一步,摘要一失败就只剩「估算 ≥ 窗口 → 报废」
+        // (10-26 生产:Opus / DeepSeek 两个长会话都是摘要撞输出上限后死在这里)。
+        // ponytail: 70% 是给后续几轮留的余量,不是算出来的最优值。
+        // 「最近一条 user」只认落过库的真消息:工具截图 / 恢复提示也是 role:user,按它保护会把真正的任务裁掉(Codex 10-26 #2)。
+        const trim = reason === 'overflow' || contextUsage.estimate(workingMessages, toolsOverhead) > compactAt
+          ? trimOldestToFit(workingMessages, Math.floor((compactAt * 0.7) / scale), toolsOverhead, (m) => !!messageSource(m))
+          : { dropped: 0 };
+        if (trim.dropped) { contextUsage.invalidate(); trimmedThisRun = true; }
+        if (r.changed || trim.dropped) {
           changed = true;
-          contextUsage.invalidate();
-          // 只在真折叠了才宣告,且带 savedChars:fallback 是机械折叠,不许对用户谎称「已生成摘要」
-          void publish(runId, 'status', { phase: 'compacted', forced: true, fallback: true, reason, savedChars: r.savedChars, iteration });
+          // 只在真改动了才宣告,且带 savedChars / trimmed:fallback 是机械兜底,不许对用户谎称「已生成摘要」
+          void publish(runId, 'status', {
+            phase: 'compacted', forced: true, fallback: true, reason, savedChars: r.savedChars, iteration,
+            ...(trim.dropped ? { trimmed: trim.dropped } : {}),
+          });
         } else {
           console.warn(`[agent-core] run=${runId} 压缩未改动上下文: ${cr.reason}`);
         }
@@ -2810,6 +2935,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       void publish(runId, 'status', { phase: 'compaction_budget', iteration, beforeTokens, afterTokens, changed: afterTokens < beforeTokens });
       return changed;
     };
+    let modelFallbackNoted = false; // 服务端「停用模型已改用 X」的提示,一个 run 只记一次
     for (let iteration = 0; iteration < maxIterations; iteration++) {
       if (ac.signal.aborted) throw new AbortLikeError();
       runStat.iteration = iteration + 1;
@@ -2858,6 +2984,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const estPrompt = contextUsage.estimate(workingMessages, toolsOverhead);
       if (modelId && estPrompt > compactAt && compactionGuard.shouldAttempt(estPrompt, workingMessages)) {
         await runCompaction('threshold', estPrompt, iteration); // enabled=false 时里面只走机械兜底
+      } else if (modelId && iteration === 0 && idleCompactionDue(workingMessages, compactionCfg, estPrompt, Date.now(), input.userMessageId)) {
+        await runCompaction('idle', estPrompt, iteration);
       }
 
       // 最后一轮强制不再调工具，逼模型产出最终文本（避免以 tool_calls 收尾、finalContent 为空）
@@ -2867,8 +2995,15 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const effectiveToolsText = lastIter || !toolDefs?.length ? '' : toolsJson;
       const effectiveToolsBytes = Buffer.byteLength(effectiveToolsText, 'utf8');
       // 末轮说明不在 workingMessages 里,预算检查给它留 ~80 token,别让本该优雅收尾的最后一发撞 provider 输入上限(Codex 09-13 #8)。
-      if (!hookVetoedCompaction && contextUsage.estimate(workingMessages, lastIter ? 0 : toolsOverhead) + (lastIter ? 80 : 0) >= ctxWindowTokens) {
+      // 硬墙在模型**真实**窗口(ctxWindowMax;人填的覆盖更大时取覆盖):272k 是成本封顶(09-22),不是 provider 的上限。
+      // 压缩 + 兜底裁剪之后仍在封顶之上,只剩裁不掉的最新内容 → 照常发请求、提示一次,不在自己设的线上报废(10-26)。
+      const sendTokens = contextUsage.estimate(workingMessages, lastIter ? 0 : toolsOverhead) + (lastIter ? 80 : 0);
+      if (!hookVetoedCompaction && sendTokens >= Math.max(ctxWindowTokens, ctxWindowMax)) {
         throw new Error('Context remains over the model input budget after compaction. Reduce large attachments or use a larger-context model; the original conversation has been preserved.');
+      }
+      if (!hookVetoedCompaction && sendTokens >= ctxWindowTokens && !overBudgetNotified) {
+        overBudgetNotified = true;
+        void publish(runId, 'status', { phase: 'context_over_budget', warning: 'context_over_budget', estTokens: sendTokens, budgetTokens: ctxWindowTokens, windowTokens: ctxWindowMax, iteration });
       }
 
       // attachments 恒传空:图片已由 hydrateHistory 物化进最新 user 消息的 parts(每轮字节一致,
@@ -2891,7 +3026,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         attachments: [],
         thinkingLevel,
         // Fast 档只给主循环:压缩 / Historian / 子代理等后台调用不跟(多数模型的 Fast 额度消耗更快)。
-        fast: agentConfig.fast === true,
+        fast: agentConfig.fast === 'ultra' ? 'ultra' : agentConfig.fast === true,
         stream: true,
         cacheKey: sessionId, // OpenAI prompt_cache_key:同会话粘同机,提升自动前缀缓存命中(P2)
         // B4 两个实验闸的身份载体(缺省档两者都不读它们,行为零变化):
@@ -2959,16 +3094,25 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             payload,
             provider: (model as any)?.provider, // anthropic → 原生 /v1/messages(in-process 面;httpBrain 面由 brain-api 解析)
             signal: sampling.signal,
+            maskScope: sessionId,
+            onMasked: (hits, action) => { void publish(runId, 'status', { phase: 'masked', iteration, action, n: hits.length, kinds: [...new Set(hits.map((h) => h.kind))] }); },
             onResponseStart: () => {
               if (sampling.signal.aborted) return;
               acceptedAt = Date.now();
               void publish(runId, 'status', { phase: 'llm_call', stage: 'accepted', iteration, bytes: requestBytes, uploadMs: acceptedAt - attemptStart });
             },
-            onToken: (d) => { if (sampling.signal.aborted) return; emitted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
-            onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
+            onToken: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); partialText += d; void publish(runId, 'token', { delta: d }); },
+            onReasoning: (d) => { if (sampling.signal.aborted) return; emitted = turnStarted = true; markFrame(); void publish(runId, 'reasoning', { delta: d }); },
+            // 会话钉着的模型已被 admin 停用、服务端改用了别的:记进时间线(诊断导出可见),每个 run 只记一次。
+            onNotice: (n) => {
+              if (n.kind !== 'model_fallback' || modelFallbackNoted) return;
+              modelFallbackNoted = true;
+              console.warn(`[agent-core] run=${runId} 模型 ${n.from} 已停用,服务端改用 ${n.to}`);
+              void publish(runId, 'status', { phase: 'model_fallback', from: n.from, to: n.to, toName: n.toName });
+            },
             onToolCallDelta: (info) => {
               if (sampling.signal.aborted) return;
-              emitted = true;
+              emitted = turnStarted = true;
               markFrame();
               // Stream the raw arg delta so the client can render a live "writing
               // file" preview (it reassembles per tool-call id and extracts path/content).
@@ -2988,6 +3132,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             ...(firstFrameAt ? { ttftMs: firstFrameAt - attemptStart } : {}),
             ...(acceptedAt ? { uploadMs: acceptedAt - attemptStart } : {}),
           };
+          turnStarted = true;
           break;
         } catch (err) {
           if (ac.signal.aborted) throw err;
@@ -3004,10 +3149,11 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           }
           if (err instanceof AbortLikeError) throw err;
           // 输入超出窗口被拒(估算偏小 / 窗口猜大了):强制压缩一次后重进本轮(借 pi 的 overflow
-          // compact-and-retry;每 run 一次,免得估算与上游两边永远对不上时空转)。上游报错里的真实上限
-          // 已由 learnFromUpstreamError 学下来,下个 run 起触发线按真值算。
+          // compact-and-retry;每 run 一次,免得估算与上游两边永远对不上时空转)。上游报错里写明的真实上限在这里学下来,
+          // 键用本轮的模型 id —— 预算按它查(effectiveContextWindowInfo(callModelId));客户端手里只有上游真名(codex/x 发出去是 x),记在那儿查不到。
           if (!emitted && !overflowRecovered && isContextOverflowError(err)) {
             overflowRecovered = true;
+            learnFromUpstreamError(callModelId, (err as LlmError).status, (err as Error).message);
             console.warn(`[agent-core] run=${runId} 上游拒收超长输入,压缩后重试本轮: ${(err as any)?.message || err}`);
             if (await runCompaction('overflow', contextUsage.estimate(workingMessages, toolsOverhead), iteration)) {
               retryIteration = true;
@@ -3015,6 +3161,20 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
               break;
             }
             throw err; // 压不动(hook 否决 / 没有可总结的)→ 照常报错
+          }
+          // 回灌的加密推理被拒(invalid_encrypted_content / 思考签名无效:多半是换了账号,借 magpie #3887):拿掉本 run 里所有
+          // providerItems 重发本轮,只一次。跨 run 的那半由回放的账号绑定挡(historyReplay 文件头 ①);这里兜绑定判不出的(托管面、同 key 换了组织)。
+          // 不论第几次都在这里收口:流里来的被拒是 502,漏到下面会被当网关抖动再重发三次(Codex 评审)。
+          if (!emitted && isForeignReasoningLlmError(err)) {
+            let dropped = 0;
+            if (!reasoningStripped) for (const m of workingMessages) if ((m as any).providerItems) { delete (m as any).providerItems; dropped++; }
+            reasoningStripped = true;
+            if (!dropped) throw err; // 已经拿掉过 / 本来就没带推理:重发一模一样的请求只会再被拒
+            console.warn(`[agent-core] run=${runId} 上游拒收回灌的推理,拿掉 ${dropped} 组后重发本轮: ${(err as any)?.message || err}`);
+            void publish(runId, 'status', { phase: 'reasoning_dropped', dropped, iteration });
+            retryIteration = true;
+            iteration -= 1;
+            break;
           }
           // 中流断线恢复(借 pi 的 session 级重试思想):此前「吐过帧就整 run 报废」对长任务是灾难——
           // 第 40 迭代断一次线,前面全部白跑。改为:已流出的半截正文按「段切分」落库(用户看到的内容
@@ -3049,8 +3209,27 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 凭证失效(xAI 用 502 包装,按状态码看像网络抖动):同一个 token 再试必败。订阅登录的 provider 强制续期一次、
           // 拿到新 token 立刻重试;续不了(API key、托管面、refresh_token 也失效)就直接抛,不白等三轮退避。
           // 一分钟内只续一次:刚续的 token 仍被拒就别再续;跑过下一个有效期的长 run 到时还能再续。
+          // 额度用完(订阅 / 账单配额,几小时才重置):设了后备模型且这一次还没吐字 → 换后备重进本轮;「先问我」开着 → 这一轮停下,
+          // 报错带上后备模型,界面画「等重置 / 改用 X」。只换一次:后备也用完就照常报错,不往下找。秒级限流、凭证失效不走这里。
+          if (!emitted && isQuotaExhaustedLlmError(err)) {
+            if (turnStarted) throw err;
+            const until = noteQuotaExhausted(callModelId, quotaResetAt(err));
+            const rs = quotaRelayed ? null : relaySettings();
+            if (rs?.fallback && rs.fallback !== callModelId) {
+              if (rs.ask) throw Object.assign(new LlmError((err as any).status || 429, `${(err as Error).message}${quotaAskSuffix(rs.fallback)}`), { resetsAt: until });
+              if (await relayModel(rs.fallback, until)) {
+                // 历史是按原模型 hydrate 的:它签出的 providerItems(加密推理 / 原生条目)不能带给后备;之后的分步落库按后备的身份记
+                for (const m of workingMessages) if ((m as any).providerItems) delete (m as any).providerItems;
+                Object.assign(stepItemBinding, { apiModelId: apiModelId || callModelId, provider: model?.provider,
+                  protocol: typeof (model as any)?.[PROTOCOL_MARK] === 'string' ? (model as any)[PROTOCOL_MARK] : undefined,
+                  account: accountKeyOf(model, apiKey) });
+                retryIteration = true; iteration -= 1; break;
+              }
+            }
+            throw err;
+          }
           if (!emitted && isAuthExpiredLlmError(err)) {
-            const fresh = Date.now() - credsRefreshedAt < 60_000 ? null : await deps().brain.llm.refreshModelKey?.(modelId).catch(() => null);
+            const fresh = Date.now() - credsRefreshedAt < 60_000 ? null : await deps().brain.llm.refreshModelKey?.(callModelId).catch(() => null);
             credsRefreshedAt = Date.now();
             if (!fresh || fresh === apiKey) throw err;
             apiKey = fresh;
@@ -3106,7 +3285,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         probe = buildProbe(inputs, probePrevSegments);
         probePrevSegments = probe.segments;
       }
-      const cost = await calculateCost(modelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens);
+      const cost = await calculateCost(callModelId, res.usage.prompt_tokens, res.usage.completion_tokens, undefined, cachedTokens);
       tokensTotal += (res.usage.prompt_tokens || 0) + (res.usage.completion_tokens || 0);
       runStat.llmCalls += 1;
       runStat.prompt += res.usage.prompt_tokens || 0;
@@ -3164,7 +3343,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       }
       const consumed = await consumeTokenPoints(user.id, cost).catch(() => ({ ok: true } as any));
       await logApiUsage(
-        user.username, modelId, model.name, model.provider,
+        user.username, callModelId, model.name, model.provider,
         res.usage.prompt_tokens, res.usage.completion_tokens, true, undefined, appId, cost,
         cachedTokens, clientTag,
       ).catch(() => {});
@@ -3480,7 +3659,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         // 60s 缓存/单次调用,不在热路径上放大开销。
         // 已中止就整段跳过:这里有两三次不吃 run signal 的云请求(目录/解析),中止后还去排队等
         // 60s 会把「停止」拖成肉眼可见的卡顿(2026-07-27 Codex 评审)。
-        const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(modelId, appId, agentConfig.visionMode as string | undefined));
+        const needDescribe = !ac.signal.aborted && (await shouldDescribeImages(callModelId, appId, agentConfig.visionMode as string | undefined));
         const firstToolImageTurn = workingMessages.length;
         // ⚠️ 这一行被 toolImages.test.ts 按源码文本钉住(物化的装配没有可跑的测试路径)。
         let transcribed = false;
@@ -3561,11 +3740,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // MEMORY/LOG 必须与 run 内 remember/log_event 落同一文件夹,否则共用默认记忆的 agent 会被写歪。
     // 上一轮被用户按停留下的信号排最前(那句写的是「上一轮」,其余写的是「这一轮」)。
     if (pendingStop) judgeSignals.unshift(pendingStop);
-    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, !!(remote || effectiveRemote({ runId })), judgeSignals).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
+    const runRemote = !!(remote || effectiveRemote({ runId }));
+    void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, runRemote, correctionCheck ? correctionCheck.then(() => judgeSignals) : judgeSignals).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });
     // 惰性检查点:下个 run 的 hydrate 窗口之外若还有未被摘要覆盖的老行,现在(不占下个 run 首帧)做一份。
     // 登记在飞:下个 run(排队中的可能立刻起跑)hydrate 前先等它,别让窗口起点越过还没落检查点的老行。
     {
-      const task: Promise<void> = checkpointRowsOutsideWindow(sessionId, modelId, appId, compactionCfg, thinkingLevel)
+      const task: Promise<void> = checkpointRowsOutsideWindow(sessionId, callModelId, appId, compactionCfg, thinkingLevel)
         .catch((e) => console.warn(`[agent-core] session=${sessionId} 窗口外老行压缩失败:`, e?.message || e))
         .finally(() => { if (lazyCheckpoints.get(sessionId) === task) lazyCheckpoints.delete(sessionId); });
       lazyCheckpoints.set(sessionId, task);
@@ -3616,6 +3796,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     setApprovalTray(runId, false);
     unregisterLiveRun(runId);
     abortControllers.delete(runId);
+    modelSwaps.delete(runId);
     steerQueue.delete(runId); // 丢弃尚未注入的转向消息(run 已终结)
     immediateSteers.delete(runId);
     steerWakeups.delete(runId);
@@ -3639,9 +3820,12 @@ async function finalizeAssistantMessage(
   toolResults: any[],
   displayFiles?: DisplayFileItem[],
 ): Promise<void> {
+  // 额度用完换了后备:这一轮的回答记实际用的模型,并标 origin(重开会话时界面据此还原「改用了」那一行)
+  const swap = modelSwaps.get(currentRunId() || '');
   await deps().state.finalizeAssistantMessage({
-    messageId, sessionId, modelId, content, reasoning, toolCalls, toolResults, displayFiles,
+    messageId, sessionId, modelId: swap?.modelId ?? modelId, content, reasoning, toolCalls, toolResults, displayFiles,
     agentSlug: currentDisplayAgentSlug(),
+    ...(swap ? { origin: swap.origin } : {}),
   });
 }
 

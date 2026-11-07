@@ -4,8 +4,14 @@
  * 故意全程内联样式 + 读 document.lang:崩溃时主题 CSS/i18n 可能也已坏,兜底界面不能再依赖它们。
  */
 import React from 'react'
+import { noteRenderCrash } from '../coreTangu/load'
+import { reloadWindow } from '../reloadWindow'
 
-type Props = { children: React.ReactNode }
+type Props = {
+  children: React.ReactNode
+  /** 自定义兜底(例:引导某一步坏了只换掉那一步的内容区);reset = 清掉错误、重新挂载 children */
+  fallback?: (error: Error, reset: () => void) => React.ReactNode
+}
 type State = { error: Error | null }
 
 export class ErrorBoundary extends React.Component<Props, State> {
@@ -13,10 +19,12 @@ export class ErrorBoundary extends React.Component<Props, State> {
   static getDerivedStateFromError(error: Error): State { return { error } }
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error('[tangu] render crash:', error, info?.componentStack)
+    noteRenderCrash(error) // 热更新版的 Tangu 界面开头一分钟里崩两次 → 整版退回自带的(coreTangu/load.ts)
   }
   render() {
     const { error } = this.state
     if (!error) return this.props.children
+    if (this.props.fallback) return this.props.fallback(error, () => this.setState({ error: null }))
     const zh = (document.documentElement.lang || '').startsWith('zh')
     const detail = `${error.message}\n\n${error.stack || ''}`.trim()
     return (
@@ -32,7 +40,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button style={{ padding: '6px 12px' }} onClick={() => this.setState({ error: null })}>{zh ? '重试' : 'Retry'}</button>
           <button style={{ padding: '6px 12px' }} onClick={() => { try { void navigator.clipboard.writeText(detail) } catch { /* ignore */ } }}>{zh ? '复制错误' : 'Copy error'}</button>
-          <button style={{ padding: '6px 12px' }} onClick={() => location.reload()}>{zh ? '重新加载' : 'Reload'}</button>
+          <button style={{ padding: '6px 12px' }} onClick={() => reloadWindow()}>{zh ? '重新加载' : 'Reload'}</button>
         </div>
       </div>
     )

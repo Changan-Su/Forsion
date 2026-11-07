@@ -1,10 +1,10 @@
 // `#` 标签补全(评审 2026-09-27 L-14 编辑器侧):正文里打 `#项`,列出库里已有的标签(按使用次数)供选。
 // 与 `[[` / `@` 同一形态:查询串驻留文档,面板只在捕获阶段拦导航键(↑↓/Enter/Tab/Esc),字母照常落进编辑器。
 // 选中 = 把 `#` 后面的查询串换成完整标签 + 一个空格(行首 `#tag` 的落盘转义由 tagEscape.ts 还原,R-25)。
-import { useEffect, useLayoutEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { $prose } from '@milkdown/kit/utils'
 import { Plugin } from '@milkdown/kit/prose/state'
-import { OverlayAt } from '../../lib/clampMenu'
+import { SuggestMenu } from '../../lib/SuggestMenu'
 import { fuzzyScore } from '../../lib/fuzzy'
 import { amadeus } from '../../api'
 import type { TagCount } from '@amadeus-shared/ipc'
@@ -54,10 +54,12 @@ export function tagSuggestPlugin(report: SuggestReport) {
 // 库内标签表的会话缓存:面板每次挂载先显示上一次的表(零等待),再异步刷新。
 let cache: TagCount[] = []
 
-/** 候选排序(纯函数,单测钉):模糊命中优先,同分按使用次数;与查询完全相同的也保留(回车 = 补空格收尾)。 */
+/** 候选排序(纯函数,单测钉):模糊命中优先,同分按使用次数;与查询完全相同的也保留(回车 = 补空格收尾)。
+ *  count 0 的行只作父级存在(标签树要它们),没有哪篇真写过这个标签,不进补全。 */
 export function rankTags(tags: TagCount[], query: string, limit = 8): TagCount[] {
   const scored: Array<{ t: TagCount; s: number }> = []
   for (const t of tags) {
+    if (t.count <= 0) continue
     const s = fuzzyScore(query, t.tag)
     if (s !== null) scored.push({ t, s })
   }
@@ -79,7 +81,6 @@ interface Props {
 
 export function TagSuggest({ query, left, top, anchorTop, onPick, onClose, editorFocused }: Props) {
   const [tags, setTags] = useState<TagCount[]>(cache)
-  const [active, setActive] = useState(0)
   useEffect(() => {
     let live = true
     void amadeus?.listTags?.().then((list) => {
@@ -88,56 +89,18 @@ export function TagSuggest({ query, left, top, anchorTop, onPick, onClose, edito
     }).catch(() => {})
     return () => { live = false }
   }, [])
-  useEffect(() => { setActive(0) }, [query])
   const results = rankTags(tags, query)
-  const total = results.length
-
-  // useLayoutEffect:见 WikiSuggest 同处注释(被动 effect 的 cleanup 晚于 DOM 移除,窗口里的 Enter 会被过期面板吞掉)。
-  useLayoutEffect(() => {
-    if (total === 0) return // 看不见的面板一个键都不许拦
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.isComposing || e.key === 'Process' || e.keyCode === 229) return // 输入法组字放行(L-08 同款)
-      if (editorFocused && !editorFocused()) return
-      if (e.key === 'ArrowDown') {
-        e.preventDefault(); e.stopPropagation()
-        setActive((a) => Math.min(a + 1, total - 1))
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault(); e.stopPropagation()
-        setActive((a) => Math.max(a - 1, 0))
-      } else if (e.key === 'Enter' || e.key === 'Tab') {
-        e.preventDefault(); e.stopPropagation()
-        const hit = results[active]
-        if (hit) onPick(hit.tag)
-      } else if (e.key === 'Escape') {
-        e.preventDefault(); e.stopPropagation()
-        onClose()
-      }
-    }
-    window.addEventListener('keydown', onKey, true)
-    return () => window.removeEventListener('keydown', onKey, true)
-  })
-
-  if (total === 0) return null
-  const reveal = (i: number) => (i === active ? (el: HTMLButtonElement | null) => el?.scrollIntoView({ block: 'nearest' }) : undefined)
   return (
-    <OverlayAt className="wiki-suggest tag-suggest" x={left} y={top} anchorTop={anchorTop} role="menu" onMouseDown={(e) => e.preventDefault()}>
-      {results.map((t, i) => (
-        <button
-          key={t.tag}
-          className="wiki-item"
-          data-active={i === active || undefined}
-          ref={reveal(i)}
-          onMouseEnter={() => setActive(i)}
-          onMouseDown={(e) => {
-            e.preventDefault()
-            onPick(t.tag)
-          }}
-          role="menuitem"
-        >
-          <span className="wiki-item-name">#{t.tag}</span>
-          <span className="wiki-item-hint">{t.count}</span>
-        </button>
-      ))}
-    </OverlayAt>
+    <SuggestMenu
+      className="tag-suggest"
+      resetKey={query}
+      items={results.map((t) => ({ key: t.tag, label: `#${t.tag}`, hint: t.count }))}
+      left={left}
+      top={top}
+      anchorTop={anchorTop}
+      onPick={(i) => onPick(results[i].tag)}
+      onClose={onClose}
+      focused={editorFocused}
+    />
   )
 }

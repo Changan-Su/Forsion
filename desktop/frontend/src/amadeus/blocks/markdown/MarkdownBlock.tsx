@@ -64,6 +64,7 @@ import { $prose } from '@milkdown/kit/utils'
 import type { Ctx, MilkdownPlugin } from '@milkdown/kit/ctx'
 import { DOMParser as PmDOMParser, DOMSerializer, Fragment, Slice, type MarkType, type Node as ProseNode } from '@milkdown/kit/prose/model'
 import { NodeSelection, Plugin, PluginKey, Selection, TextSelection } from '@milkdown/kit/prose/state'
+import { splitBlock } from '@milkdown/kit/prose/commands'
 import { keymap } from '@milkdown/kit/prose/keymap'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { Milkdown, MilkdownProvider, useEditor, useInstance } from '@milkdown/react'
@@ -71,7 +72,7 @@ import { joinRel, toAssetUrl, toDisplayMarkdown, toStoredMarkdown, fromAssetUrl 
 import { ATTACHMENT_CLIP_MIME, recentAttachmentCopy, rememberAttachmentCopy } from '../../lib/attachmentClipboard'
 import { writeImageToClipboard } from '../../../lib/imageClipboard'
 import { tabsToEntities, entitiesToTabs } from '@amadeus-shared/indentIo'
-import { resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from '@amadeus-shared/links'
+import { linkTarget, resolvePageName, unescapeWikiOutsideFences, normalizeUrlLiterals } from '@amadeus-shared/links'
 import { resolveFileLink } from '../../lib/vaultFiles'
 import { wikiFilesEnabled } from '../../lib/wikiFiles'
 import { emptyDb, emptyNoteView, serializeDb } from '@amadeus-shared/db/schema'
@@ -126,7 +127,7 @@ import { ASK_ALT, askString, askStringOrAlt } from '../../components/askString'
 import { hrefKind, linkInputRule, normalizeHref, noteLinkTarget } from './linkHref'
 import { droppedTextMarkdown, isPlainMultiline, plainLinesToParagraphs, singleLinePasteMode } from './plainPaste'
 import { autolinkInputRule, autolinkSerializer } from './autolink'
-import { wikiSafeUrl } from '@amadeus-shared/pdfLink'
+import { parseBlockSubpath, splitLinkInner, wikiSafeUrl } from '@amadeus-shared/pdfLink'
 import { useBlockSelection } from '../../store/blockSelection'
 import { unescapeHighlightAtLineStart, unescapeTagAtLineStart } from './tagEscape' // R-25:行首 #标签落盘不带反斜杠;I-17:行首 ==高亮== 同理
 import { mathLivePreviewPlugin, unescapeMathSource } from './mathLivePreview' // LaTeX 实况预览:公式常驻纯文本,离行才渲染(见该文件）
@@ -151,7 +152,7 @@ registerMessages({
   'mdblock.placeholder': { zh: '输入文字，或按 “/” 选择类型…', en: 'Type something, or press “/” to pick a block…' },
   // slash 菜单 / 移动端块面板的分组名
   'mdblock.group.ai': { zh: 'AI', en: 'AI' },
-  'mdblock.category.basic': { zh: '基本', en: 'Basic' },
+  'mdblock.category.basic': { zh: '基础', en: 'Basic' },
   'mdblock.category.ai': { zh: 'AI', en: 'AI' },
   'mdblock.category.plugin': { zh: '插件', en: 'Plugins' },
   'mdblock.category.label': { zh: '命令分类', en: 'Command categories' },
@@ -533,6 +534,7 @@ export function MilkdownInner({
   onSlashPick,
   readOnly = false,
   unified = false,
+  standalone = false,
   attachmentPagePath,
   extraPlugins,
   onAskTangu,
@@ -570,6 +572,8 @@ export function MilkdownInner({
   /** v4 统一实例模式(UnifiedPage):不挂 softBreakRemark(标准 md 分段落盘),Enter/Shift+Enter/
    *  方向键出块/块重排全部放行 PM 原生 —— 整篇一个实例,没有「邻块」可跳。 */
   unified?: boolean
+  /** 独立编辑器(PlainMarkdownEditor:插件卡片、记录页):没有邻块可切 —— Shift+Enter 就地分段,别把光标后的内容切走交给 no-op 的 insertAfter(丢字)。 */
+  standalone?: boolean
   /** 有值时,整份附件选区会同时写入 OS 原生图片/文件剪贴板。 */
   attachmentPagePath?: string
   /** 宿主追加的 Milkdown 插件(UnifiedPage 的块交互层等)。⚠️ 须传稳定引用:编辑器只建一次。 */
@@ -681,6 +685,7 @@ export function MilkdownInner({
         if (event.shiftKey) {
           // unified:放行 PM 原生 = 段内硬换行(Notion 语义);块世界才是「切块」。
           if (unified) return false
+          if (standalone) return splitBlock(view.state, view.dispatch)
           // 切块,不是「新建空块」:光标后还有内容就把它切到新块去,只有在块尾才是新建空块。
           // splitTail 返回 null = 已在块尾(或结构切不动)→ 退回旧行为。
           keysRef.current.insertAfter(splitTail(view, serialize) ?? undefined)
@@ -1877,6 +1882,8 @@ export function MilkdownInner({
           left={toolbar.left}
           top={toolbar.top}
           bottom={toolbar.bottom}
+          paneLeft={toolbar.paneLeft}
+          paneRight={toolbar.paneRight}
           kind={toolbar.kind}
           active={toolbar.active}
           align={toolbar.align}
@@ -2277,10 +2284,26 @@ export function MarkdownBlock({
  *  双链建议无候选(输入 [[ 仅作纯文本)。资源不做 display/stored 变换 —— 外部文件原文往返无损。
  *  缩进编解码(indentIo)**要**做:它绕过 toDisplay/toStoredMarkdown,不包一层的话行首制表符
  *  段落在悬浮预览/工作区编辑里仍会被 remark 读成缩进代码块。 */
-export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immediate = false }: {
+/** 插件视图里点双链:笔记开在旁边那半屏(⌘/Ctrl → 新标签页),别就地换掉插件那个标签;文件 / PDF / 未解析交 openWikiLink(同样开在旁边)。 */
+function openVaultWiki(name: string, o?: { newTab?: boolean }): void {
+  const ps = usePageStore.getState()
+  const note = resolvePageName(linkTarget(name), ps.pages)
+  if (note) {
+    const where = o?.newTab ? { newTab: true } : { split: true }
+    const { subpath } = splitLinkInner(name)
+    const block = subpath ? parseBlockSubpath(subpath) : null
+    const heading = subpath && !block && !subpath.startsWith('^') ? subpath : null // 同 ChatWikiLink:块锚 → 标题 → 只开笔记
+    void import('../../../amadeusNav').then((m) => block ? m.openNoteAtBlock(note, block, where) : heading ? m.openNoteAtHeading(note, heading, where) : m.openNote(note, where))
+  }
+  else ps.openWikiLink(name, undefined, { newTab: o?.newTab, split: !o?.newTab })
+}
+
+export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immediate = false, vault = false }: {
   initial: string
   onChange: (md: string) => void
   readOnly?: boolean
+  /** 接上当前库的双链:补全页面 / 文件名、点开、未解析黯淡(插件 mountMarkdownEditor 的 vault 选项)。缺省不碰库。 */
+  vault?: boolean
   /** Record peeks may unmount immediately after typing. Persist transactions before listener's 200ms debounce. */
   immediate?: boolean
 }) {
@@ -2341,11 +2364,22 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
           // transaction when an external addToHistory=false update supersedes it.
           onChange={immediate ? noop : (md) => onChange(entitiesToTabs(md))}
           extraPlugins={immediatePlugins}
+          standalone
           keys={keys}
           saveImage={async () => null}
           saveFiles={async () => {}}
-          onOpenWiki={noop}
-          getPageNames={() => []}
+          onOpenWiki={vault ? openVaultWiki : noop}
+          getPageNames={vault ? () => usePageStore.getState().pages : () => []}
+          getFiles={vault ? () => (wikiFilesEnabled() ? usePageStore.getState().files : []) : undefined}
+          isWikiResolved={vault ? (n) => {
+            const { pages, files } = usePageStore.getState()
+            return !!resolvePageName(n, pages) || !!resolveFileLink(n, files)
+          } : undefined}
+          wikiIcon={vault ? (n) => {
+            const { pages, icons } = usePageStore.getState()
+            const p = resolvePageName(n, pages)
+            return p ? icons[p] : undefined
+          } : undefined}
           focusPlace={null}
           onFocused={noop}
           readOnly={readOnly}

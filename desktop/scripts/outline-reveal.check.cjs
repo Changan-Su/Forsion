@@ -282,7 +282,7 @@ async function floatingToc(browser) {
   p.on('pageerror', (e) => console.log('[pageerror]', e.message))
   await p.goto(`${URL}?upage&upane&utoc&useed=${encodeURIComponent(MD)}`, { waitUntil: 'domcontentloaded', timeout: 120000 })
   await p.waitForSelector(PM, { timeout: 120000 })
-  await p.waitForSelector('.lcl-ftoc-item', { state: 'attached', timeout: 20000 })
+  await p.waitForSelector('.lcl-ftoc', { state: 'attached', timeout: 20000 })
   await p.waitForTimeout(400)
   const jump = async (text) => {
     const fb = await (await p.$('.lcl-ftoc')).boundingBox()
@@ -290,9 +290,10 @@ async function floatingToc(browser) {
     await p.waitForTimeout(400)
     await p.click(`.lcl-ftoc-item:has-text("${text}")`)
     await p.waitForTimeout(1200) // smooth 滚动走完
+    const active = await p.evaluate(() => document.querySelector('.lcl-ftoc-item.active')?.textContent ?? null) // 行只在展开时才有
     await p.mouse.move(600, 500)
     const m = await measure(p, H, text)
-    m.active = await p.evaluate(() => document.querySelector('.lcl-ftoc-item.active')?.textContent ?? null)
+    m.active = active
     return m
   }
   const f1 = await jump('小节 4')

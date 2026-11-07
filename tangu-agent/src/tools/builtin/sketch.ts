@@ -2,7 +2,7 @@
  * sketch —— agent 在对话流里画一张可交互的 HTML 卡片(GUI 三端内联渲染)。
  * 载荷走工具**参数**:tool_calls 原样落 JSONB 不截断,前端从持久化参数 back-fill 重建
  * (exit_plan_mode 同款),零 schema 变更零迁移;result 只回短确认(display_file 同款)。
- * 渲染面契约(前端 SketchCard):sandbox iframe 仅 allow-scripts + 内层 CSP default-src 'none'
+ * 渲染面契约(前端 SketchCard):sandbox iframe 仅 allow-scripts allow-forms + 内层 CSP default-src 'none' + form-action 'none' + 中间壳 frame-src 'none'(挡自身导航)
  * —— JS 可跑,无网络、无宿主 API、无导航;描述里必须把这个能力包络讲给模型。
  * 门禁:sketchEnabledFor 按 ctx.client 白名单(desktop|web)+ 排除子代理。CLI/TUI/自动化等无
  * client tag 的 run 不注册(default-deny);通道 run 可能带 Desktop 宿主 tag,故另由 channelSession
@@ -18,6 +18,7 @@ import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 import type { Tool } from '../../core/types.js';
 import { presetOf } from '../../core/presetTable.js';
+import { saveCardWidget, WIDGET_EDITS_PARAM, WIDGET_PARAMS, widgetsEnabledFor } from './manageWidget.js';
 
 /** GUI 客户端面(routes/runs.ts CLIENT_TAG_RE 的子集;移动原生 App 见头注刻意排除)。 */
 const GUI_CLIENT_RE = /^(desktop|web)\//;
@@ -32,6 +33,7 @@ export const LEGACY_HTML_CARD_TOOL = 'sketch';
 const CARD_API = 'forsionIntelligentUi', LEGACY_CARD_API = 'forsionSketch';
 export const isHtmlCardTool = (name: string): boolean => name === HTML_CARD_TOOL || name === LEGACY_HTML_CARD_TOOL;
 type Call = { function: { name: string; arguments: string } };
+const toCardName = (s: unknown): any => typeof s === 'string' ? s.replaceAll(LEGACY_CARD_API, CARD_API) : s;
 const toModel = <C extends Call>(c: C): C => c.function?.name === LEGACY_HTML_CARD_TOOL
   ? { ...c, function: { ...c.function, name: HTML_CARD_TOOL, arguments: String(c.function.arguments ?? '').replaceAll(LEGACY_CARD_API, CARD_API) } } : c;
 /** 模型产出的一次 HTML 卡调用改成线上的样子(原地改):工具名回 sketch,HTML 里的新接口名换成旧名(新渲染层两个名字是同一个对象)。
@@ -257,13 +259,15 @@ const SKETCH_DEFINITION: Tool = {
     // 它们是 SKETCH_SECTION 的正文,而段与工具同门禁(sketchEnabledFor),工具在场 ⟺ 段在场。
     // ponytail: 上限≈1.6KB(10-09 二轮加 PARTS / copy 后靠删 fs-eyebrow / fs-chip / fs-panel / 折叠那句抵回来)。`--fs-*` 变量表与
     //           `fs-*` 类名表留全(§六 P08:SKETCH_SECTION 里没有这两张表,SKETCH_SECTION 反过来让模型「从工具描述取 .fs-* 类」)。
+    //           报了 intelligent-ui-libs.v1 的客户端那份再多 ~420 字符(随包库那句,见下方 WITH_LIBS),知情超过,只发给能用库的客户端。
     description:
       'Draw a visual card inline in the chat from self-contained HTML: charts, diagrams, comparisons, ' +
       'timelines, layouts, small interactive widgets. The "Visual cards" section of your instructions ' +
       'covers when to draw and how to compose.\n' +
       'SANDBOX: JavaScript runs, but there is NO network, host API or navigation. Inline all CSS/JS, ' +
       'embed images as data: URIs, no external scripts/styles/fonts or charting libraries (draw with ' +
-      'inline SVG or divs), no eval/new Function. Links and form submits do nothing.\n' +
+      'inline SVG or divs), no eval/new Function. Links do nothing; <form> fires submit for your script ' +
+      'but never navigates or sends data.\n' +
       'THEME: use the injected CSS variables, never hardcode colors — they track the live theme: ' +
       '--fs-bg (transparent card canvas), --fs-surface, --fs-text, --fs-muted, --fs-faint, --fs-border, ' +
       '--fs-rule (hairline for gridlines/axes), --fs-accent, --fs-accent-soft, --fs-green, --fs-danger, ' +
@@ -295,8 +299,41 @@ const SKETCH_DEFINITION: Tool = {
 };
 const SKETCH_WIDGETS = 'charts, diagrams, comparisons, timelines, layouts, small interactive widgets.';
 const SKETCH_COMPUTED_DEFINITION: Tool = { ...SKETCH_DEFINITION, function: { ...SKETCH_DEFINITION.function, description: SKETCH_DEFINITION.function.description!.replace(SKETCH_WIDGETS, 'charts, diagrams, timelines, layouts, animated simulations and games; calculators, step guides and other cards that only compute from inputs are intelligent_ui documents.') } };
+/** 握手了 widget.v1 的本机客户端(见 manageWidget.ts)多三个参数;别的客户端的定义逐字节不变。 */
+const SKETCH_WIDGET_DEFINITION: Tool = {
+  ...SKETCH_COMPUTED_DEFINITION,
+  function: {
+    ...SKETCH_COMPUTED_DEFINITION.function,
+    description: `${SKETCH_COMPUTED_DEFINITION.function.description}\nWIDGET: with widget this saves a card the user keeps (小组件), or changes one; see the "Widgets" section.`,
+    parameters: {
+      type: 'object',
+      properties: { ...SKETCH_DEFINITION.function.parameters.properties, ...WIDGET_PARAMS, edits: WIDGET_EDITS_PARAM },
+    },
+  },
+};
 /** intelligent-ui.v2 without importing intelligentUi.ts (it imports this file). */
 const intelligentUiComputedFor = (ctx: ToolContext): boolean => !!ctx.clientCapabilities?.includes('intelligent-ui.v1') && !!ctx.clientCapabilities?.includes('intelligent-ui.v2');
+// 随包库(10-28):客户端随包带了 three / d3 / chart.js / gsap(仍然断网;桌面 forsion-iui:,网页本站 /iui-lib/,
+// importmap 在 desktop/frontend/src/components/sketchWrapper.ts,两边列的库要一致)才报这个能力;只换说明里的一句,不加新段落。
+// 占位那句给旧客户端:它们取不到库,那块至少还剩一行字。
+// 「3D 用 three、别手算投影」是 10-28 live 量出来的:只写「use them for 3D」时 7 次里 3 次模型在 canvas / SVG 里自己算投影。
+// 力导图那半句同理:只写「d3 suits force layouts」时 3 次全是 SVG + requestAnimationFrame 手写力模拟。
+// 不再写「canvas/WebGL 颜色用 getComputedStyle 取 --fs-*」:17 次里模型照做的 4 次全没用 three(改走 canvas 2D / SVG),
+// 用了 three 的 13 次一次没照做 —— 只拉偏、没收益。主题色仍由下面 THEME 那句管。
+// 点名两句别合成通则:试过「When one already does the hard part (3D rendering, force physics, treemap…), import it — never
+// re-implement it by hand」,3 次里 3D 掉到 2/3、力导图 1/3(树状图也只 1/3)。按库点名、动词式禁止才压得住。
+export const IUI_LIBS_CAP = 'intelligent-ui-libs.v1';
+const NO_LIBS = 'no external scripts/styles/fonts or charting libraries (draw with inline SVG or divs)';
+const WITH_LIBS = 'no external scripts/styles/fonts. Bundled libraries (still no network): a <script type="module"> may import ' +
+  "three (and 'three/addons/…', e.g. controls/OrbitControls.js), d3, chart.js/auto and gsap. 3D scenes use three — never " +
+  "hand-project 3D into canvas or SVG; force-directed graphs use d3's forceSimulation — never hand-write the physics; " +
+  'chart.js suits dense charts, gsap choreographed motion; simple charts ' +
+  'stay inline SVG or the parts below. Put a one-line text fallback in ' +
+  "a library's container for your script to replace";
+const withLibs = (t: Tool): Tool => ({ ...t, function: { ...t.function, description: t.function.description!.replace(NO_LIBS, WITH_LIBS) } });
+const SKETCH_LIBS_DEFINITION = withLibs(SKETCH_DEFINITION);
+const SKETCH_COMPUTED_LIBS_DEFINITION = withLibs(SKETCH_COMPUTED_DEFINITION);
+const SKETCH_WIDGET_LIBS_DEFINITION = withLibs(SKETCH_WIDGET_DEFINITION);
 
 export const sketchProvider: ToolProvider = {
   id: 'builtin:sketch',
@@ -308,13 +345,28 @@ export const sketchProvider: ToolProvider = {
       capabilities: { sideEffect: 'none', parallel: false, defaultTimeoutMs: 5_000 },
       definition: SKETCH_DEFINITION,
       // A client that renders computed Intelligent UI documents gets calculators routed there.
-      definitionFor: (ctx) => intelligentUiComputedFor(ctx) ? SKETCH_COMPUTED_DEFINITION : SKETCH_DEFINITION,
-      execute: (args): string => {
+      definitionFor: (ctx) => {
+        const libs = !!ctx.clientCapabilities?.includes(IUI_LIBS_CAP);
+        if (!intelligentUiComputedFor(ctx)) return libs ? SKETCH_LIBS_DEFINITION : SKETCH_DEFINITION;
+        if (widgetsEnabledFor(ctx)) return libs ? SKETCH_WIDGET_LIBS_DEFINITION : SKETCH_WIDGET_DEFINITION;
+        return libs ? SKETCH_COMPUTED_LIBS_DEFINITION : SKETCH_COMPUTED_DEFINITION;
+      },
+      execute: (args, ctx): string | Promise<string> => {
         const html = typeof args.html === 'string' ? args.html : '';
+        const wantsWidget = args.widget != null || args.edits != null;
+        // 定义里没有也挡得住:模型可能照着历史或别处的写法自己带上这几个参数
+        if (wantsWidget && !widgetsEnabledFor(ctx)) return 'Error: widgets cannot be saved in this session. Draw the card without widget and edits.';
+        if (args.edits != null) {
+          if (!Array.isArray(args.edits)) return 'Error: edits must be a list of { find, replace }.';
+          if (html.trim()) return 'Error: send edits or html, not both.';
+          // agentLoop 已把参数换成线上旧接口名,原件和模型读到的历史都用新名,find 才对得上
+          return saveCardWidget(args, ctx, { entry: 'widget.html', title: args.title, edits: args.edits.map((e: any) => ({ find: toCardName(e?.find), replace: toCardName(e?.replace) })) });
+        }
         if (!html.trim()) return 'Error: html is required';
         if (html.length > MAX_SKETCH_HTML_CHARS) {
           return `Error: html too large (${html.length} chars, max ${MAX_SKETCH_HTML_CHARS}). Slim the card down or split it into multiple intelligent_ui_html calls.`;
         }
+        if (wantsWidget) return saveCardWidget(args, ctx, { entry: 'widget.html', title: args.title, content: toCardName(html) }).then((r) => r.startsWith('Error') ? r : `HTML card rendered in the conversation. ${r}`);
         // 渲染发生在前端:tool_result 事件(done 且非 Error)触发 SketchCard 从本调用的参数取 HTML 画卡。
         return 'HTML card rendered in the conversation.';
       },

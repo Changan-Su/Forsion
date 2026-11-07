@@ -17,10 +17,12 @@ import { query } from '../src/core/db.js';
 import { createRun, getRun } from '../src/services/runStore.js';
 import { enqueueRun, enqueueSteer, abortRun, TURN_INTERRUPTED_MARKER } from '../src/services/agentLoop.js';
 import { LlmError } from '../src/core/types.js';
+import { learnedWindow } from '../src/services/contextWindowStore.js';
 
 const USER = 'u1';
 const WINDOW = 40_000; // 触发线 = 40000 − max(2048, 5%) = 37952
-const COMPACTION = { reserveTokens: 2_048, keepRecentTokens: 300 };
+// idleMinutes 0:夹具行时间戳是 1970 年的毫秒,不关掉每个 run 开头都会按「空闲太久」先压一次(那一路单独测)
+const COMPACTION = { reserveTokens: 2_048, keepRecentTokens: 300, idleMinutes: 0 };
 let home: string;
 let payloads: any[]; // 主循环 + 摘要调用的 payload(按顺序)
 let script: Array<(payload: any) => any>; // 主循环调用的脚本(摘要调用不消耗)
@@ -276,6 +278,18 @@ describe('触发线与兜底', () => {
     expect(summaries).toHaveLength(1);
     expect((await statusEvents('R1', 'compacted')).map((e: any) => e.reason)).toEqual(['threshold']);
   });
+  it('空闲压缩:上一条历史早于 idleMinutes → 第一轮发请求前先摘要一次(reason=idle),没越线;刚聊过不再压', async () => {
+    await seedHistory(30, 7);
+    script = [reply('FINAL')];
+    expect((await launch('R1', 'A1', 'U1', 'back after lunch', { ...COMPACTION, idleMinutes: 60 })).status).toBe('done');
+    expect(summaries).toHaveLength(1);
+    expect(await statusEvents('R1', 'compacted')).toMatchObject([{ reason: 'idle', idleMinutes: 60 }]);
+    expect(JSON.stringify(lastCtx())).toContain('SUMMARY-1');
+    await tick();
+    script = [reply('FINAL')];
+    expect((await launch('R2', 'A2', 'U2', 'and one more', { ...COMPACTION, idleMinutes: 60 })).status).toBe('done');
+    expect(summaries).toHaveLength(1); // 上一条是 R1 刚落的回复
+  });
   it('摘要调用失败 → 只机械折叠一次(如实标 fallback),不落检查点,不重复尝试', async () => {
     await seedHistory(30, 7);
     summaryFailOnce = true;
@@ -318,6 +332,7 @@ describe('上游拒收超长输入 → 强制压缩一次后重进本轮', () =>
     const run = await launch('R1', 'A1', 'U1', 'CURRENT-ASK');
     expect(run.status).toBe('done');
     expect(overflowed).toBe(1);
+    expect(learnedWindow('m1')).toBe(40000); // 报错里的真实上限按本轮模型 id 学下来(预算按它查)
     expect(summaries).toHaveLength(1);
     const ctx = lastCtx();
     expect(String(ctx[1].content)).toContain('SUMMARY-1');

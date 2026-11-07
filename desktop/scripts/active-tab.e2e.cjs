@@ -93,7 +93,7 @@ async function main() {
         row: [...document.querySelectorAll('.t2s-srow.active')].map((e) => (e.textContent || '').trim()),
         back: !!btns[0] && !btns[0].disabled,
         sideGroup: !!group && !!group.querySelector('.t2s-search'),
-        groups: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-nav-btn')).length,
+        groups: [...document.querySelectorAll('.dv-groupview')].filter((g) => g.querySelector('.dv-new-tab')).length,
       }
     })
     const until = async (pred, ms = 8000) => {

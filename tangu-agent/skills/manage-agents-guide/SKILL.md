@@ -1,7 +1,7 @@
 ---
 name: 配置与管理 Agent
 description: 当用户想新建 / 配置 / 修改 / 删除 Tangu 本地 Agent(Normal Agent),或想把一种好用的角色 / 工作方式沉淀成可复用的 agent 时使用。讲解 manage_agent 工具与 agent 的文件夹结构(config.toml / SOUL.md / MEMORY.md / HARNESS.md 进化记录 / LOG / Library),以及 manage_harness 自进化层与 /refine 复盘。
-version: 1.3.2
+version: 1.4.0
 category: agent 管理
 ---
 
@@ -15,7 +15,7 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 
 `~/.tangu/agents/<slug>/`(slug = 小写字母数字与连字符;实际家目录以系统提示「Your Personal Folder」给的绝对路径为准):
 
-- **config.toml** — 参数 + `developer_instructions`(该 agent「做什么 / 怎么做 / 必读什么」的开发指令)。键:`name`、`description`、`model`(覆盖会话模型,可空)、`tools`(启用的工具 id 白名单,可空=继承)、`model_reasoning_effort`(off/low/medium/high)、`max_iterations`(1~200)、`library_order`(Library 优先阅读顺序)、`avatar`(Library 内头像文件名)。
+- **config.toml** — 参数 + `developer_instructions`(该 agent「做什么 / 怎么做 / 必读什么」的开发指令)。键:`name`(当前显示名)、`name_zh`(中文名)、`name_en`(英文名,不能有汉字)、`name_pref`(`zh` / `en`,固定显示某一个;不写 = 跟随界面语言)、`description`、`model`(覆盖会话模型,可空)、`tools`(启用的工具 id 白名单,可空=继承)、`model_reasoning_effort`(off/low/medium/high)、`max_iterations`(1~200)、`library_order`(Library 优先阅读顺序)、`avatar`(Library 内头像文件名)。
   **审批档只归用户**:agent 的审批档(config.toml 里的 `approval_mode`)只能由用户在设置里改 —— `manage_agent` 不接受 `approval_mode` 参数(传了会报错、什么都不写),
   也不要用文件工具去改它。新建的 agent 没有自己的审批档,跟随会话;`update` 保留用户设的原值。
 - **SOUL.md** — 人格设定:语气、态度、价值观(区别于「做什么」的开发指令,这里塑造「怎么说话、是个怎样的存在」)。
@@ -43,12 +43,16 @@ Agent 也可能来自**插件捆绑包(bundle)播种**:安装带 `agents/` 子�
 { "action": "list" }
 ```
 
+**名字**:每个 agent 可以有中文名和英文名(`name_zh` / `name_en`,界面按语言显示,模型也按 Identity 里写的用)。用户要两个名字就两个都传;只传 `name` 时它进中文名。英文名不能有汉字。**只有中文名时必须给 `slug`**(不转拼音)。
+
 **创建**(`name` 与 `system_prompt` 必填;**`slug` 请总是显式给**(小写字母数字与连字符);其余可省):
 ```json
 {
   "action": "create",
   "slug": "code-reviewer",
   "name": "代码审查员",
+  "name_zh": "代码审查员",
+  "name_en": "Code Reviewer",
   "description": "专注质量、安全与可维护性的代码审查",
   "system_prompt": "你是一位资深代码审查员。聚焦正确性与边界条件、安全漏洞、并发与性能、可读性与命名、错误处理与测试覆盖;按「严重/建议/提示」分级给出可操作修改并解释原因。",
   "soul": "严谨、细心、对事不对人。不空泛表扬,只在确有问题时指出。",

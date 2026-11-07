@@ -1,0 +1,30 @@
+/* 项目文件夹不在原处(ProjectRelink.tsx):左栏的淡名 + 提醒色小标,和「重新指向文件夹…」对话框(壳是现成的 .modal.modal-sm)。 */
+.t2s-group-label.t2s-missing-name { flex: 0 1 auto; opacity: 0.55; }
+.t2s-missing {
+  display: inline-flex; align-items: center; gap: 4px; flex: none; margin: 0 auto 0 6px;
+  color: var(--warning); font: 400 var(--ui-font-caption)/1.2 var(--font-ui); white-space: nowrap;
+}
+.t2s-missing svg { width: 12px; height: 12px; flex: none; }
+
+.relink-backdrop { z-index: 200; } /* 同 What's new / 同步引导:盖住 Dockview 与右键菜单(100) */
+.modal.relink-dialog { height: auto; max-height: 88vh; background: var(--bg-card); }
+.relink-x { display: inline-flex; padding: 2px; border-radius: var(--radius-md); color: var(--text-muted); }
+.relink-x:hover:not(:disabled) { color: var(--text); background: var(--menu-hover); }
+.relink-body { padding: 2px 18px 6px; font: 400 var(--ui-font-body)/1.5 var(--font-ui); color: var(--text); }
+.relink-body code { font-family: var(--font-mono); font-size: var(--ui-font-meta); word-break: break-all; }
+.relink-note { margin: 6px 0; color: var(--text-muted); font-size: var(--ui-font-caption); }
+.relink-opts { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 4px; }
+.relink-opt {
+  display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; cursor: pointer;
+  border-radius: var(--radius-md); background: var(--overlay-light);
+}
+.relink-opt input { margin: 3px 0 0; flex: none; }
+.relink-opt-copy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.relink-opt-copy small { color: var(--text-muted); font-size: var(--ui-font-caption); }
+.relink-pick { display: flex; align-items: center; gap: 10px; margin: 10px 0 4px; min-width: 0; }
+.relink-head { margin-top: 12px; font-size: var(--ui-font-caption); font-weight: 500; }
+.relink-list { margin: 4px 0 0; padding: 0 0 0 16px; color: var(--text-muted); font-size: var(--ui-font-caption); line-height: 1.7; }
+.relink-conflict { display: flex; align-items: center; gap: 6px; margin: 8px 0 4px; color: var(--warning); }
+.relink-conflict svg { flex: none; }
+.relink-err { margin: 8px 0 0; color: var(--danger, var(--warning)); font-size: var(--ui-font-caption); }
+.relink-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 18px 14px; }

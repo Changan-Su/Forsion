@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ agents: [] as Array<Record<string, unknown>>, shared: [] as Array<Record<string, unknown>> }));
-vi.mock('../agents/agentRegistry.js', () => ({ listAgents: async () => h.agents }));
+vi.mock('../agents/agentRegistry.js', () => ({ agentNames: (a: { name: string; nameZh?: string; nameEn?: string }) => [...new Set([a.nameZh, a.nameEn, a.name].filter(Boolean))], listAgents: async () => h.agents }));
 vi.mock('../skills/localSkills.js', () => ({
   SHARED_SKILL_ID_RE: /^local:@([a-z0-9][a-z0-9-]{0,63})\/([^/]+)$/,
   listSharedAgentSkills: async (exclude: string | null) => h.shared.filter((s) => s.ownerSlug !== exclude),
@@ -15,18 +15,23 @@ describe('buildAgentRoster', () => {
       { slug: 'xyra', name: 'Arioso', description: 'default', createdBy: 'user' },
       { slug: 'coding', name: 'Coding', description: 'Build apps', createdBy: 'user' },
       { slug: 'muse', name: 'Muse', description: 'bg', createdBy: 'system' },
-      { slug: 'aria', name: 'Aria', description: '', createdBy: 'user' },
+      { slug: 'aria', name: 'Aria', nameZh: '浣溪沙', nameEn: 'Aria', description: '', createdBy: 'user' },
     ];
     h.shared = [{ id: 'local:@coding/forsion-webapp', name: 'x', ownerSlug: 'coding' }, { id: 'local:@coding/web-debugging', name: 'y', ownerSlug: 'coding' }, { id: 'local:@xyra/mine', name: 'z', ownerSlug: 'xyra' }];
     const r = await buildAgentRoster('xyra');
     const lines = r.split('\n');
     expect(lines[0]).toBe('## Other Agents');
     expect(lines).toContain('- Coding (slug: `coding`) — Build apps · shares skills: forsion-webapp, web-debugging');
-    expect(lines).toContain('- Aria (slug: `aria`)');
+    expect(lines).toContain('- 浣溪沙 / Aria (slug: `aria`)');
     expect(r).not.toContain('Arioso');
     expect(r).not.toContain('muse');
     expect(r).toContain('`delegate`');
     expect(r).toContain('`start_discussion`');
+  });
+  it('停用的 agent 不进名册(模型就不会去 delegate 它)', async () => {
+    h.agents = [{ slug: 'xyra', name: 'Arioso', description: '', createdBy: 'user' }, { slug: 'aria', name: 'Aria', description: '', createdBy: 'user', disabled: true }];
+    h.shared = [];
+    expect(await buildAgentRoster('xyra')).toBe('');
   });
   it('只有自己 / 只剩系统 agent → 空串,不注入', async () => {
     h.agents = [{ slug: 'xyra', name: 'Arioso', description: '', createdBy: 'user' }, { slug: 'muse', name: 'Muse', description: '', createdBy: 'system' }];

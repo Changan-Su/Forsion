@@ -23,8 +23,13 @@ vi.mock('./forsionHome', () => ({
   isDevMode: () => false,
 }))
 vi.mock('./amadeus/settings', () => ({ amadeusConfigPath: () => join(H.dir, 'amadeus-config.json') }))
+vi.mock('./forsionAuth', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./forsionAuth')>()
+  return { ...real, loadTanguCreds: vi.fn(real.loadTanguCreds) }
+})
 
 const { BackendManager, injectEngineLang } = await import('./backendManager')
+const { loadTanguCreds } = await import('./forsionAuth')
 
 const writeAuth = (token: string): void =>
   writeFileSync(join(H.dir, 'auth.json'), JSON.stringify({ token }), 'utf8')
@@ -42,6 +47,17 @@ function envDumpEngine(): { entry: string; dump: () => { local: string | null; c
 }
 
 describe('BackendManager engine credentials (C1 / C2)', () => {
+  it('云端票只从 loadTanguCreds 取:auth.json 坏了时账号层的取值策略在那边,这里另读一份就绕开了', () => {
+    rmSync(join(H.dir, 'auth.json'), { force: true })
+    vi.mocked(loadTanguCreds).mockReturnValueOnce({ token: 'from-account-layer' })
+    expect((new BackendManager() as unknown as { cloudToken(): string | null }).cloudToken()).toBe('from-account-layer')
+  })
+
+  it('auth.json 内容是 JSON null:算没有云端票,不抛(抛了引擎就起不来)', () => {
+    writeFileSync(join(H.dir, 'auth.json'), 'null')
+    expect((new BackendManager() as unknown as { cloudToken(): string | null }).cloudToken()).toBeNull()
+  })
+
   it('spawn 契约:TANGU_LOCAL_TOKEN = getToken()(≠ forsion_token),TANGU_TOKEN = forsion_token,TANGU_REMOTE_MARK_SECRET = remoteMarkSecret()', async () => {
     writeAuth('forsion-jwt-at-spawn')
     const eng = envDumpEngine()
@@ -151,6 +167,51 @@ describe('BackendManager 电脑历史第二道闸', () => {
       await m.stop()
     }
   }, 15_000)
+})
+
+describe('电脑历史钥匙经 stdin 私有通道交给引擎', () => {
+  it('钥匙后到(引导里才打开电脑历史)当场补发、不重起引擎;重新拉起时重发;钥匙不在 env 里;开关 FORSION_HOST_STDIN=1', async () => {
+    const entry = join(H.dir, 'stdin-probe.cjs')
+    const out = join(H.dir, 'stdin-probe.json')
+    writeFileSync(entry, [
+      "const fs = require('node:fs')",
+      `const out = ${JSON.stringify(out)}`,
+      "const st = { pid: process.pid, flag: process.env.FORSION_HOST_STDIN ?? null, envHasKey: Object.values(process.env).some((v) => typeof v === 'string' && v.includes('ab'.repeat(32))), lines: [] }",
+      "const save = () => fs.writeFileSync(out, JSON.stringify(st))",
+      "save()",
+      "let buf = ''",
+      "process.stdin.setEncoding('utf8')",
+      "process.stdin.on('data', (c) => { buf += c; const ls = buf.split('\\n'); buf = ls.pop(); for (const l of ls) st.lines.push(l); save() })",
+      "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
+      "require('node:http').createServer((_q, s) => s.end('{}')).listen(port, '127.0.0.1')",
+    ].join('\n'), 'utf8')
+    vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(entry)
+    process.env.TANGU_NODE_BIN = process.execPath
+    const read = () => JSON.parse(readFileSync(out, 'utf8')) as { pid: number; flag: string | null; envHasKey: boolean; lines: string[] }
+    const waitLines = async (n: number) => { for (let i = 0; i < 100 && read().lines.length < n; i++) await new Promise((r) => setTimeout(r, 30)); return read() }
+    const KEY = 'ab'.repeat(32)
+    const m = new BackendManager()
+    await m.start({ cloudUrl: '', sandbox: 'none' })
+    try {
+      const first = read()
+      expect(first.flag).toBe('1')
+      expect(first.lines).toEqual([])
+      m.setComputerHistoryKey(KEY)
+      const live = await waitLines(1)
+      expect(live.pid).toBe(first.pid) // 同一个引擎进程:没有为交钥匙重起
+      expect(live.lines).toEqual([JSON.stringify({ computerHistoryKey: KEY })])
+      m.setComputerHistoryKey(KEY) // 同一把不重复发
+      await new Promise((r) => setTimeout(r, 100))
+      expect(read().lines).toHaveLength(1)
+      await m.start({ cloudUrl: '', sandbox: 'none' }) // 重新拉起(设置变更 / 崩溃重启)
+      const again = await waitLines(1)
+      expect(again.pid).not.toBe(first.pid)
+      expect(again.lines).toEqual([JSON.stringify({ computerHistoryKey: KEY })])
+      expect(again.envHasKey).toBe(false)
+    } finally {
+      await m.stop()
+    }
+  }, 20_000)
 })
 
 describe('BackendManager startup exits', () => {
@@ -272,8 +333,10 @@ describe('BackendManager 引擎热更新起不来时退回', () => {
     const launcher = join(dir, 'launch.cjs')
     writeFileSync(launcher, [
       "const port = Number(process.argv[process.argv.indexOf('--port') + 1])",
-      "require('node:http').createServer((_q, s) => s.end(JSON.stringify({ version: '0.0.0-test' }))).listen(port, '127.0.0.1')", // = App 版本
+      // 自带引擎的版本,故意和 App 版本(0.0.0-test)不同:桌面与引擎各自编号以后,拿 App 版本比会把退回自带误记成在跑热更新
+      "require('node:http').createServer((_q, s) => s.end(JSON.stringify({ version: '2.13.8' }))).listen(port, '127.0.0.1')",
     ].join('\n'), 'utf8')
+    vi.spyOn(BackendManager, 'bundledEngineVersion').mockReturnValue('2.13.8')
     vi.spyOn(BackendManager, 'resolveEntry').mockReturnValue(launcher)
     vi.spyOn(BackendManager, 'resolveLaunch').mockReturnValue([launcher, 'standalone'])
     process.env.TANGU_NODE_BIN = process.execPath

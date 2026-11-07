@@ -3,6 +3,11 @@ import { clampMenu, edgeNudge, nestedPanelPlacement, nestedPanelTop } from './me
 
 // 视口 1000x800,菜单 200x300,margin 8
 describe('clampMenu', () => {
+  it('横向夹在给定边界里(划线菜单夹在编辑器面板内);边界比浮层窄时退回视口', () => {
+    expect(clampMenu(300, 100, 200, 40, 1000, 800, { center: true, boundLeft: 260, boundRight: 900 }).left).toBe(268)
+    expect(clampMenu(880, 100, 200, 40, 1000, 800, { center: true, boundLeft: 260, boundRight: 900 }).left).toBe(692)
+    expect(clampMenu(300, 100, 200, 40, 1000, 800, { center: true, boundLeft: 260, boundRight: 400 }).left).toBe(200)
+  })
   it('放得下时原样落在锚点', () => {
     expect(clampMenu(100, 100, 200, 300, 1000, 800)).toEqual({ left: 100, top: 100 })
   })

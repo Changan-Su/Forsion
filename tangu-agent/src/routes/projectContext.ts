@@ -2,6 +2,7 @@
  * 项目上下文路由(桌面「PROJECT 详情」;handler 自带 authMiddleware):
  *   GET  /agent/project-context?sessionId=      → ProjectContext(指令文件 / 项目技能 / 计划 / 默认项 / git)
  *   POST /agent/project-context/init            { sessionId }                              → 建 .tangu/ + 骨架
+ *   PATCH  /agent/project-context/memory        { sessionId, id, fact, expectedVersion }   → 改一条项目记忆(≤300 字),返回 { memory }
  *   DELETE /agent/project-context/memory        { sessionId, id, expectedVersion }         → 删一条项目记忆,返回 { memory }(GET 的 context 里带 memory;远端来源不给)
  *   POST /agent/project-context/memory/candidate { sessionId, id, action: adopt|dismiss }  → 对一条待确认的后台候选点头或丢弃,返回 { memory }(远端来源不给)
  *   POST /agent/project-context/memory/restore   { sessionId, id }                          → 把写满压缩时合并 / 去掉的一句原句记回去,返回 { memory }
@@ -9,6 +10,7 @@
  *   GET  /agent/project-context/settings?sessionId=|cwd= → { settings }(桌面建会话前的轻量预取;cwd 形态给没有会话可借的项目)
  *   PUT  /agent/project-context/settings        { sessionId, settings }                    → 用户侧项目默认项
  *   POST /agent/project-context/skills          { sessionId, slug, name, description, content } → 建项目技能
+ *   DELETE /agent/project-context/skills        { sessionId, path }                        → 项目技能整夹进回收站,返回 { trashId }
  *   POST   /agent/project-context/icon          { sessionId, data } | { sessionId, emoji } → 导入图片进 .tangu/ 或设 emoji,返回 { settings }
  *          (图标只经这组端点改;PUT settings 保留 icon 现值)
  *   GET    /agent/project-context/icon?sessionId=|cwd=                                    → 图标图片二进制(settings.icon 是 emoji / 空 → 404)
@@ -18,6 +20,8 @@
  *   GET    /agent/project-context/git/hosting?sessionId=              → { forsionGit: { webUrl, name } | null(这里能不能「发布到 Forsion Git」),
  *                                                                       github: { linked, login?, remote, name } | null(云端开了 GitHub 绑定时:当前用户绑没绑;
  *                                                                       remote = origin 是会用绑定账号推拉的那种远端;name = 「发布到 GitHub」预填的仓库名) }
+ *   GET    /agent/project-context/git/reviews?sessionId=              → { reviews: { items, total, web } | null }(Forsion Git 上等这个人审的合并请求,
+ *                                                                       services/forsionGit.ts reviewRequests;读不到 = null,Git 卡就不显示那一行)
  *   POST   /agent/project-context/git/publish-github { sessionId, name, target?, trust? } → 加一个远端:在绑定的 GitHub 账号下建私有仓库并推送(services/githubPublish.ts)
  *   POST   /agent/project-context/git/remote  { sessionId, url, target?, trust? }  → 加一个远端:连接一个已有的地址(gitActions.gitConnectRemote)
  *   POST   /agent/project-context/git/publish  { sessionId, name, target?, trust? } → 加一个远端:设到 Forsion Git 并推送(services/forsionGitPublish.ts)
@@ -28,6 +32,10 @@
  *          → 用户点的 git 动作(services/gitActions.ts);失败回 400 { detail, error: <code>, info },桌面按 error 出文案。
  *          trust=true = 用户在面板上点了「信任并继续」(仓库自带会执行程序的配置,见 services/gitTrust.ts)
  *   GET|PUT /agent/git-settings                                                          → 「设置 → Git」(config.json 的 git 段)
+ *   GET    /agent/project-context/missing                                    → { missing: 本人会话里出现过、现在不在原处的本地项目路径 }
+ *   GET    /agent/project-context/relink?sessionId=                          → 重新指向对话框要的(会话 / 记忆 / 默认项数目 + 同名文件夹)
+ *   POST   /agent/project-context/relink { sessionId, path, merge? }          → 项目文件夹搬走后重新指向(services/projectRelink.ts);
+ *          新位置已是另一个项目 → { ok: false, error: 'already_project', name, path }(merge=true 再来就合并)。旧路径只从会话行取。
  *
  * 只对本地引擎开放(hostExec):云端 microserver 没有用户磁盘。**cwd 不从客户端收**:请求按 sessionId 绑定,只认本人会话行上的
  * project_path(桌面项目分组键)—— 能写的只有用户已经在里面工作的目录,`hostExec` 说明的是引擎形态,不是路径授权(codex 评审)。
@@ -37,11 +45,12 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
 import {
-  canonicalProjectPath, createProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
+  canonicalProjectPath, createProjectSkill, deleteProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
   saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
-import { forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
+import { editProjectMemory, forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
+import { RelinkError, missingProjectPaths, relinkInfo, relinkProject } from '../services/projectRelink.js';
 import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitConnectRemote, gitPull, gitPush, gitSetPushRemote, gitTrustRepo, readGit, serialized } from '../services/gitActions.js';
 import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
 import { forsionPublishInfo, publishToForsionGit } from '../services/forsionGitPublish.js';
@@ -50,7 +59,7 @@ import { githubRepoName, publishToGithub } from '../services/githubPublish.js';
 import { gitClone, listForsionGitRepos, listGithubRepos } from '../services/gitClone.js';
 import { credentialOrigin } from '../services/gitCredentials.js';
 import { forsionGit } from '../services/forsionGit.js';
-import { forsionIdentity, resolveGitIdentity, type IdentityDefaults } from '../services/gitIdentity.js';
+import { accountIdentityDefaults as identityDefaults, resolveGitIdentity } from '../services/gitIdentity.js';
 
 const router = Router();
 
@@ -86,6 +95,44 @@ async function readableDirOf(req: AuthRequest, res: Response): Promise<string | 
   return projectDirOf(req, res, req.query.sessionId);
 }
 
+// ── 项目文件夹搬走后重新指向(借鉴 magpie 第二轮 9)。只在主机上,手机上的项目来自桌面,入口也只在桌面。
+//    旧路径不从客户端收,只认本人会话行上原样的 project_path(那个目录已经不在了,不能走 projectDirOf 的 realpath)。
+async function relinkSourceOf(req: AuthRequest, res: Response, sessionId: unknown): Promise<string | null> {
+  if (!deps().profile.capabilities.hostExec) { res.status(404).json({ detail: 'Project context is only available on a local engine' }); return null; }
+  if (parseRemoteOrigin(req.headers)) { res.status(403).json({ detail: 'Point the project to its new folder on the host computer.' }); return null; }
+  if (typeof sessionId !== 'string' || !sessionId) { res.status(400).json({ detail: 'sessionId is required' }); return null; }
+  const s = (await query<any[]>('SELECT user_id, project_path, projectless FROM chat_sessions WHERE id = ? LIMIT 1', [sessionId]))[0];
+  if (!s || s.user_id !== req.user!.userId) { res.status(404).json({ detail: 'Session not found' }); return null; }
+  if (!s.project_path || s.projectless) { res.status(400).json({ detail: 'This session does not belong to a local project' }); return null; }
+  return String(s.project_path);
+}
+
+router.get('/agent/project-context/missing', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (!deps().profile.capabilities.hostExec || parseRemoteOrigin(req.headers)) return res.json({ missing: [] });
+    res.json({ missing: await missingProjectPaths(req.user!.userId) });
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'project check failed' }); }
+});
+
+router.get('/agent/project-context/relink', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const from = await relinkSourceOf(req, res, req.query.sessionId);
+    if (!from) return;
+    res.json(await relinkInfo(req.user!.userId, from));
+  } catch (e: any) { res.status(500).json({ detail: e?.message || 'relink lookup failed' }); }
+});
+
+router.post('/agent/project-context/relink', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const from = await relinkSourceOf(req, res, req.body?.sessionId);
+    if (!from) return;
+    res.json(await relinkProject(req.user!.userId, from, req.body?.path, { merge: req.body?.merge === true }));
+  } catch (e: any) {
+    const code = e instanceof RelinkError ? e.code : e?.code;
+    res.status(code === 'not_relinked' ? 500 : code === 'MEMORY_BUSY' ? 409 : 400).json({ detail: e?.message || 'relink failed', error: code, code });
+  }
+});
+
 router.get('/agent/project-context', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const cwd = await projectDirOf(req, res, req.query.sessionId);
@@ -95,6 +142,22 @@ router.get('/agent/project-context', authMiddleware, async (req: AuthRequest, re
     res.json({ ...(await projectContext(cwd)), ...(memory ? { memory } : {}) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'project context failed' });
+  }
+});
+
+// 用户改一条项目记忆(11-03,项目详情 › 设置):同删除的边界,只在主机上;一句话、不超过 300 字(同 remember)。
+router.patch('/agent/project-context/memory', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ detail: 'Open the project on the host computer to edit its memory.' });
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    const { id, fact, expectedVersion } = req.body || {};
+    const text = typeof fact === 'string' ? fact.trim().replace(/\s*\n\s*/g, ' ') : '';
+    if (typeof id !== 'string' || !id || typeof expectedVersion !== 'string' || !expectedVersion || !text) return res.status(400).json({ detail: 'id, fact and expectedVersion are required' });
+    if (text.length > 300) return res.status(400).json({ error: 'MEMORY_TOO_LONG', detail: 'One entry is at most 300 characters.' });
+    res.json({ memory: await editProjectMemory(cwd, id, text, expectedVersion) });
+  } catch (e: any) {
+    memoryFail(res, e, 'edit project memory failed');
   }
 });
 
@@ -192,6 +255,16 @@ router.post('/agent/project-context/skills', authMiddleware, async (req: AuthReq
     res.json({ skill: await createProjectSkill(cwd, req.body || {}) });
   } catch (e: any) {
     fail(res, e, 'create project skill failed');
+  }
+});
+
+router.delete('/agent/project-context/skills', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    res.json(await deleteProjectSkill(cwd, req.body?.path));
+  } catch (e: any) {
+    fail(res, e, 'delete project skill failed');
   }
 });
 
@@ -299,6 +372,12 @@ router.get('/agent/project-context/git/hosting', authMiddleware, async (req: Aut
   }
 });
 
+/** Forsion Git 上等这个人审的合并请求(Git 卡的那一行;人是用户层的,不按项目筛)。只读;读不到 = null。 */
+router.get('/agent/project-context/git/reviews', authMiddleware, async (req: AuthRequest, res) => {
+  if (!(await projectDirOf(req, res, req.query.sessionId))) return;
+  res.json({ reviews: await Promise.resolve(forsionGit()?.reviewRequests() ?? null).catch(() => null) });
+});
+
 /** 待提交清单(提交框完整列出;有已暂存的只列已暂存的)。只读,不排队。 */
 router.post('/agent/project-context/git/pending', authMiddleware, async (req: AuthRequest, res) => {
   try {
@@ -345,15 +424,6 @@ router.get('/agent/git/repos', authMiddleware, async (req: AuthRequest, res) => 
     gitFail(res, e, 'list repositories failed');
   }
 });
-
-/** 由 Forsion 账号推出来的缺省提交身份(services/gitIdentity.ts)。走一趟云端,所以限时:它挡在用户点的「提交」前面。没登录 / 够不着 → null。 */
-async function identityDefaults(userId: string): Promise<IdentityDefaults | null> {
-  const timeout = new Promise<null>((resolve) => { setTimeout(() => resolve(null), 5000).unref(); });
-  const user = await Promise.race([deps().brain.users.getUserById(userId).catch(() => null), timeout]);
-  if (!user || !user.username || user.username === 'local') return null;
-  const site = await forsionGit()?.hosting().catch(() => null);
-  return forsionIdentity(user, site ? new URL(site.origin).hostname : null);
-}
 
 /** 「设置 → Git」的「账号」:推送 / 拉取时用哪个身份、提交署谁的名。只读状态,不取凭据。
  *  forsionGit = 这里有 Forsion Git 且发凭据 → 站点地址(账号跟着 Forsion 账号走,不用绑定);github = 云端开了绑定时,绑没绑;

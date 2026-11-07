@@ -1,3 +1,4 @@
+import { activeRunCount, startRun, abortRun, waitForRunSettlement } from '../src/services/agentLoop.js';
 /**
  * agent 读、改本机设置(app_settings / update_app_settings,方案 9.3 的 S2a):
  *   ① 可见性:只给前台 host run、全 deferred;子代理 / 讨论 / Muse / 自动化 / 临时成员 / 沙箱不可见;通道来的 run 只有读工具;
@@ -14,7 +15,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, readFileSync, existsSync
 import { fileURLToPath } from 'node:url';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { configureTangu } from '../src/seams/runtime.js';
+import { configureTangu, deps } from '../src/seams/runtime.js';
 import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { toSqliteDDL } from '../src/core/dialectDDL.js';
@@ -144,6 +145,27 @@ describe('② 读', () => {
     expect(out).toMatch(/realtimeVoice = "Tina" — .* \[read-only here: /);
     expect(out).toContain('bailian — chat: qwen-max; image: wan-1; read-aloud: cosy-2');
     expect(out).toContain('update_app_settings');
+  });
+
+  it('发起端开得了设置页才教「顺手打开那一页」(GUI + 目录里有 open-settings);别的形态一句不提', async () => {
+    seed();
+    const OPEN = [{ id: 'open-settings', description: 'Open settings' }];
+    const text = async (ctx: ToolContext): Promise<string> => String((await executeTool(call('app_settings', { section: 'tts' }), ctx)).result);
+    const gui = { ...base(), client: 'desktop/1', uiCommands: OPEN };
+    const yes = await text(gui);
+    expect(yes).toContain('"id": "open-settings"');
+    expect(yes).toContain('open-settings "voice"'); // 落点 id 仍在段首,那句指的就是它
+    expect(await text({ ...gui, toolsStrict: true, toolsList: ['app_settings', 'run_ui_command'] })).toContain('"id": "open-settings"');
+    for (const ctx of [
+      { ...gui, toolsStrict: true, toolsList: ['app_settings'] }, // 严格白名单里没有 run_ui_command(Codex 评审)
+      base(), // TUI / 无客户端:没有 run_ui_command
+      { ...base(), client: 'tui/1', uiCommands: OPEN }, // 非 GUI:run_ui_command 不注册
+      { ...gui, uiCommands: [{ id: 'open-note', description: 'x' }] }, // GUI 但这端没有 open-settings
+      { ...gui, planMode: true }, // 计划模式:run_ui_command 不注册
+      { ...gui, channelSession: true }, // 通道会话:同上
+    ] as ToolContext[]) {
+      expect(await text(ctx)).not.toContain('run_ui_command with');
+    }
   });
 
   it('表外的段、段里表外的键、任何密钥和地址,一个字都不出现', () => {
@@ -448,5 +470,39 @@ describe('④ 审批', () => {
     expect(r.result).toContain('Remote sessions cannot change app settings');
     expect(readFileSync(cfgPath(), 'utf8')).toBe(before);
     expect((await executeTool(call('app_settings', { section: 'tts' }), { ...base(), remote } as ToolContext)).result).toContain('can read them but not change them');
+  });
+  it('MCP 管理写入逐次走控制面，读免批，完全放行免批，远程写硬拒', async () => {
+    seed();
+    const mcp = (action: string) => call('manage_mcp', { action, name: 'x', config: { command: 'test', env: { TOKEN: 'SECRET' } }, reason: 'requested' });
+    for (const mode of ['readonly', 'auto-edit']) {
+      const a = await gate(mcp('add'), { approvalMode: mode }, 'approve_always');
+      expect(a.asked.map(x => x.reason?.kind)).toEqual(['control']);
+      expect(a.asked[0].preview).not.toContain('SECRET');
+      expect((await gate(mcp('add'), { approvalMode: mode })).asked).toHaveLength(1);
+      expect((await gate(mcp('list'), { approvalMode: mode })).asked).toEqual([]);
+    }
+    expect((await gate(mcp('add'), { approvalMode: 'full-auto' })).asked).toEqual([]);
+    const denied = await gate(mcp('add'), { approvalMode: 'full-auto', remote: { via: 'lan', marked: false } });
+    expect(denied.d.action).toBe('reject');
+    expect(denied.asked).toEqual([]);
+  });
+
+});
+
+
+describe('MCP run admission barrier', () => {
+  it('starts reconciliation before registering a new run and allows immediate abort while connecting', async () => {
+    let release!: () => void;
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    const counts: number[] = [];
+    configureTangu({ ...deps(), mcp: { reloadConfig: () => { counts.push(activeRunCount()); return ready; } } as any });
+    try {
+      startRun('MCP-admission');
+      expect(counts[0]).toBe(0); // Before the fix, the first reload happened with the new run already counted.
+      expect(activeRunCount()).toBe(1);
+      abortRun('MCP-admission');
+      expect(await waitForRunSettlement('MCP-admission', 1500)).toBe(true);
+      expect(activeRunCount()).toBe(0);
+    } finally { release(); }
   });
 });

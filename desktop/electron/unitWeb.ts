@@ -186,7 +186,10 @@ export interface UnitWebDeps {
   /** 主机目录列表/条目 stat(工作台文件面板/悬停提示):钳制同上,目录类可指根本身;越界=null。 */
   readHostDir: (p: string) => Promise<Array<{ name: string; isDir: boolean; size: number; path: string }> | null>
   readHostStat: (p: string) => Promise<{ isDir: boolean; mtimeMs: number; birthtimeMs: number | null; files?: number; folders?: number } | null>
-  meta: { instanceId: string; name: string; version: string }
+  /** build:安装版 / 开发版 —— 同一台电脑上两份 Forsion 同名同版本,Forsion Clip 靠它分开写(旧版不报)。 */
+  meta: { instanceId: string; name: string; version: string; build?: 'packaged' | 'dev' }
+  /** 这台 Forsion 当前的外观(渲染层上报的主题色 / 背景色 / 明暗 / 语言),给已配对的 Forsion Clip 跟随。缺省 / 还没上报 = 404。 */
+  appearance?: () => UnitAppearance | null
   /** Explicit web publishing only exposes code/layout. Host data keeps the pairing boundary. */
   projection?: { mode: 'public' | 'local'; basePath: string; product: ProductProfile; inheritWebAccount?: boolean; capabilities?: () => object; localCapabilities?: () => { vault: boolean; engine: boolean; host: boolean } }
   /** P2P 应答(方案 §12,可缺省):收 offer SDP 出 answer SDP,DataChannel 开门后由主进程把
@@ -222,6 +225,9 @@ export interface UnitWebHandle {
   proxyCallerKey: string
   close: () => Promise<void>
 }
+
+/** 渲染层上报、经 /unit/appearance 给已配对设备读的外观(只有命名过的颜色;自定义色不下发)。 */
+export interface UnitAppearance { skin: string; bg: string; mode: 'light' | 'dark'; locale: 'zh' | 'en' }
 
 interface PendingPair { id: string; name: string; code: string; ip: string; expires: number; status: 'pending' | 'approved' | 'denied'; token?: string }
 /** 配对请求的在途表。主进程在门铃与正式服务之间传同一份:门铃收下的请求,打开互联后由正式服务把令牌交出去。 */
@@ -270,6 +276,10 @@ export function attachmentDisposition(name: string): string {
 const isLoopback = (addr: string | undefined): boolean =>
   addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
 
+/** 本机连本机:绑在具体局域网地址上时,隧道只能走那个地址,对端不是回环,两端地址相同。 */
+const isSelf = (socket: { remoteAddress?: string; localAddress?: string }): boolean =>
+  isLoopback(socket.remoteAddress) || (!!socket.remoteAddress && socket.remoteAddress === socket.localAddress)
+
 /** 内部密钥头比对(定长比较;缺头 / 多值头 / 长度不符一律不等)。 */
 const secretEq = (got: string | string[] | undefined, want: string): boolean => {
   if (typeof got !== 'string' || !want) return false
@@ -302,10 +312,12 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   const proxyCallerKey = randomBytes(32).toString('hex')
   /** 调用方断言的重放表:派发 id → 过期时刻(gc() 清理)。只记验签全过的,表长 ≤ 合法请求速率 × 120s。 */
   const seenCallerDispatch = new Map<string, number>()
-  /** 便携 Unit 的本地投影(projection local)里,唯一能过鉴权的是工作区主人的访问密钥 —— 那是主人自己的界面,
-   *  不是「另一台设备」:/engine 维持直通、不盖远端标记,不可逆 vault 删除照常可用。桌面(main.ts)从不传 projection,
+  /** 便携 Unit 的本地投影(projection local)里,工作区主人的访问密钥是主人自己的界面,不是「另一台设备」:
+   *  /engine 维持直通、不盖远端标记,不可逆 vault 删除照常可用。Unit 接上云账号后还多一条隧道来路:那是另一台设备,
+   *  照常走允许清单与远端标记(ownerRequest 只认 via=lan)。桌面(main.ts)从不传 projection,
    *  所以桌面的三条远端通路恒走允许清单(unitWeb.test 两个方向都钉住)。 */
   const ownerProjection = deps.projection?.mode === 'local'
+  const ownerRequest = (via: UnitIngress | null): boolean => ownerProjection && via === 'lan'
   const { pending, byIp: pendingByIp } = opts.pairs ?? newPairStore()
   // 短时资源令牌(<img>/EventSource 带不了 Authorization → ?at= 查询串;照 amadeus-cloud 先例)。
   // 记发行者的配对 hash:配对被回收后,它签发过的资源令牌立即失效(Codex P2——否则被回收设备
@@ -325,10 +337,10 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
     gcSeenCallers(seenCallerDispatch, now)
   }
 
-  /** 鉴权:配对令牌(hash 比对)或「loopback + 内部密钥」(隧道 / P2P 各一把,server 已验 owner / 信令来路背书)。
+  /** 鉴权:配对令牌(hash 比对)或「本机连接 + 内部密钥」(隧道 / P2P 各一把,server 已验 owner / 信令来路背书)。
    *  返回来路:via=哪条通路;pairHash=命中的配对记录(回收后再验即失败;隧道与 P2P 为 null)。 */
   const authInfo = (req: http.IncomingMessage): { ok: boolean; pairHash: string | null; via: UnitIngress | null } => {
-    if (isLoopback(req.socket.remoteAddress)) {
+    if (isSelf(req.socket)) {
       if (secretEq(req.headers[UNIT_INTERNAL_HEADER], internalSecret)) return { ok: true, pairHash: null, via: 'tunnel' }
       if (secretEq(req.headers[UNIT_P2P_HEADER], p2pSecret)) return { ok: true, pairHash: null, via: 'p2p' }
     }
@@ -492,6 +504,8 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       // assets/* 带内容 hash,放心长缓存。
       if (norm === 'index.html') h['Cache-Control'] = 'no-cache'
       else if (/^assets[\\/]/.test(norm)) h['Cache-Control'] = 'public, max-age=31536000, immutable'
+      // Intelligent UI 卡的随包库(build/copy-iui-libs.cjs):卡是无源沙箱 iframe,里面的 module 脚本按 CORS 取
+      else if (/^iui-lib[\\/]/.test(norm)) { h['Access-Control-Allow-Origin'] = '*'; h['Cache-Control'] = 'public, max-age=86400' }
       res.writeHead(200, h)
       res.end(buf)
     } catch {
@@ -557,7 +571,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse): Promise<void> => {
     if (opts.doorbell && !DOORBELL_PATHS.has(plainPath(req))) { json(res, 503, HOST_OFF_BODY); return }
     // P1-K2 顶层锁定闸(routeRequest 之前,INTEGRATION §2.3):/engine 与 /vault/rpc 各在分支里按更细的表判,工作区主人不受影响。
-    if (!ownerProjection && lockedNow()) {
+    if (!ownerRequest(authInfo(req).via) && lockedNow()) {
       const p = plainPath(req)
       if (!(p === '/engine' || p.startsWith('/engine/')) && p !== '/vault/rpc' && !lockedRequestAllowed(req.method || 'GET', p)) {
         json(res, 423, REMOTE_LOCKED_BODY)
@@ -659,6 +673,13 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       json(res, 200, { ok: true })
       return
     }
+    if (path === '/unit/appearance' && req.method === 'GET') {
+      if (!authed(req)) { json(res, 401, { detail: 'Not paired', code: 'UNPAIRED' }); return }
+      const appearance = deps.appearance?.() ?? null
+      if (!appearance) { json(res, 404, { detail: 'Appearance is not available', code: 'APPEARANCE_UNAVAILABLE' }); return }
+      json(res, 200, { appearance })
+      return
+    }
     // P2P 信令(方案 §12):A 经隧道/配对面送 offer,这端出 answer。**信任裁决 = T2 权限等价体**:
     // 同账号(隧道 owner 已验)或已配对设备即许,无 B 侧确认框——T1 的 6 位码是给无账号 LAN 配对的,
     // P2P 的身份已由信令来路背书;连上之后的能力面与该来路完全一致(同一个 unitWeb)。
@@ -751,7 +772,7 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
         if (!engineTarget(url.slice('/engine'.length))) { json(res, 400, { detail: 'Ambiguous engine path', code: 'BAD_PATH' }); return }
         json(res, 403, LOCAL_ONLY_BODY); return
       }
-      if (ownerProjection) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null, null); return }
+      if (ownerRequest(info.via)) { proxyEngine(req, res, url.slice('/engine'.length) || '/', null, null); return }
       // default-deny 允许清单:规整后的路径既用来判,也原样转给引擎(query 不动)。判的是**整个请求目标**
       // (url,不是按 `?` 切过的 path):`#` 可能藏在 query 之后,也可能藏在路径里。
       const target = engineTarget(url.slice('/engine'.length))
@@ -776,14 +797,15 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       const assetAuthed = (): boolean => (at !== '' && assetTokenLive(at)) || authed(req)
 
       if (path === '/vault/rpc' && req.method === 'POST') {
-        if (!authed(req)) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
+        const info = authInfo(req)
+        if (!info.ok) { json(res, 401, { detail: '未配对', code: 'UNPAIRED' }); return }
         let body: { ch?: string; args?: unknown[]; client?: unknown }
         // 32MB:附件上传按 b64 膨胀 ~4/3;隧道路径另受 server 信封 10MB 顶(见方案 §9,LAN 不受限)。
         try { body = JSON.parse(await readBody(req, 32 * 1024 * 1024)) } catch { json(res, 400, { detail: 'bad body' }); return }
         const ch = String(body.ch || '')
         if (!VAULT_RPC_ALLOW.has(ch)) { json(res, 400, { detail: `通道不可远程调用: ${ch}`, code: 'VAULT_CH_DENIED' }); return }
-        if (!ownerProjection && VAULT_RPC_LOCAL_ONLY.has(ch)) { json(res, 403, LOCAL_ONLY_BODY); return }
-        if (!ownerProjection && lockedNow() && !VAULT_RPC_READ.has(ch)) { json(res, 423, REMOTE_LOCKED_BODY); return } // P1-K2:锁定只剩只读通道
+        if (!ownerRequest(info.via) && VAULT_RPC_LOCAL_ONLY.has(ch)) { json(res, 403, LOCAL_ONLY_BODY); return }
+        if (!ownerRequest(info.via) && lockedNow() && !VAULT_RPC_READ.has(ch)) { json(res, 423, REMOTE_LOCKED_BODY); return } // P1-K2:锁定只剩只读通道
         // 远端客户端自报 clientId → 事件 origin(回声按 origin 判);走 body 因为隧道信封不带自定义头;限长防注水。
         const origin = String(body.client || '').slice(0, 64) || null
         try {
@@ -898,4 +920,68 @@ export function startUnitWeb(deps: UnitWebDeps, opts: { port: number; bindHost?:
       })
     })
   })
+}
+
+
+// ── Forsion Clip 的本机固定入口 ──
+// 互联口第一次撞口后会退到随机口并一直记着(便于别的设备手输 IP 直连),Clip 却只能到固定口找 Forsion。
+// 所以互联开着、而互联口又不在固定口上时,另在回环上开一个固定口,把 Clip 用得到的那几条路转给正式服务:
+// 只听 127.0.0.1;只放 CLIP_ENTRANCE_PATHS;配对请求必须带 Clip 的 Origin(网页伪造不了,同门铃)。
+// 鉴权、来路判断(via=lan + 本机套接字)都由正式服务照旧做 —— 这里只是同一台机器上的第二个门牌号。
+/** 安装版 / 开发版各自的固定口(先试前一个,被占再试后一个);Clip 四个都探。 */
+export const CLIP_ENTRANCE_PORTS = { packaged: [8791, 8793], dev: [8792, 8794] } as const
+const CLIP_ENTRANCE_EXACT = new Set(['/unit/meta', '/unit/pair/request', '/unit/pair/poll', '/unit/browser-control', '/unit/whoami', '/unit/remote-access', '/unit/appearance', '/vault/rpc', '/engine/agent/models'])
+const CLIP_ENTRANCE_PREFIX = ['/engine/agent/sessions', '/engine/agent/runs']
+/** 入口放行的路径(去掉查询串后比;规整掉重复斜杠、点段与转义,大小写敏感 —— 引擎侧另有一层鉴权)。 */
+export function clipEntranceAllows(rawUrl: string): boolean {
+  let path: string
+  try { path = decodeURIComponent((rawUrl || '/').split('?')[0]) } catch { return false }
+  if (path.includes('\\') || /\/\.{1,2}(\/|$)/.test(path) || path.includes('//')) return false
+  if (CLIP_ENTRANCE_EXACT.has(path)) return true
+  return CLIP_ENTRANCE_PREFIX.some((p) => path === p || path.startsWith(p + '/'))
+}
+
+export interface ClipEntranceHandle { port: number; close: () => Promise<void> }
+
+export function startClipEntrance(opts: {
+  ports: readonly number[]
+  origins: string[]
+  /** 正式服务(换服务期间可能为 null → 503,Clip 那边按「还在等」处理)。 */
+  target: () => UnitWebHandle | null
+  log?: (m: string) => void
+}): Promise<ClipEntranceHandle | null> {
+  const send = (res: http.ServerResponse, status: number, body: unknown): void => {
+    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
+    res.end(JSON.stringify(body))
+  }
+  const server = http.createServer((req, res) => {
+    if (!isLoopback(req.socket.remoteAddress)) { send(res, 403, LOCAL_ONLY_BODY); return }
+    if (!clipEntranceAllows(req.url || '/')) { send(res, 404, { detail: 'Not available on this entrance', code: 'NOT_FOUND' }); return }
+    const path = (req.url || '/').split('?')[0]
+    if (path === '/unit/pair/request' && !opts.origins.includes(String(req.headers.origin || ''))) { send(res, 403, { detail: 'Only Forsion Clip can request pairing here', code: 'ORIGIN_REJECTED' }); return }
+    const target = opts.target()
+    if (!target) { send(res, 503, HOST_OFF_BODY); return }
+    void target.handleRequest(req, res)
+  })
+  server.requestTimeout = 5 * 60 * 1000
+  const sockets = new Set<Duplex>()
+  server.on('connection', (socket) => { sockets.add(socket); socket.once('close', () => sockets.delete(socket)) })
+  const tryListen = (port: number): Promise<boolean> => new Promise((resolve) => {
+    const onError = (): void => { server.off('listening', onListen); resolve(false) }
+    const onListen = (): void => { server.off('error', onError); resolve(true) }
+    server.once('error', onError)
+    server.once('listening', onListen)
+    server.listen(port, '127.0.0.1')
+  })
+  return (async () => {
+    for (const port of opts.ports) {
+      if (await tryListen(port)) {
+        const bound = (server.address() as AddressInfo).port
+        opts.log?.(`[unit-web] Forsion Clip 本机入口:http://127.0.0.1:${bound}`)
+        return { port: bound, close: () => new Promise<void>((r) => { server.close(() => r()); for (const s of sockets) s.destroy() }) }
+      }
+    }
+    opts.log?.(`[unit-web] Forsion Clip 本机入口没开:${opts.ports.join(' / ')} 都被占用`)
+    return null
+  })()
 }

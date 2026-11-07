@@ -34,7 +34,7 @@ export const discussProvider: ToolProvider = {
           description:
             'Spawn a background discussion: a fork of yourself debates a peer agent; each side ends its remark with DONE once it has nothing to add, and when both are done a moderator synthesizes a conclusion. ' +
             'Returns a discussionId immediately and runs in the background (non-blocking) — you can keep working and call wait_discussion later, or call it right away to block until the conclusion is ready. ' +
-            'Use this (instead of delegate) when the task benefits from genuine back-and-forth deliberation with another agent rather than a one-shot subtask. ' +
+            'Use this (instead of delegate) when the task benefits from genuine back-and-forth deliberation with another agent rather than a delegated subtask. ' +
             'Provide peer (a named agent slug, e.g. one the user @-mentioned) OR instructions (to spin up an ad-hoc peer). The topic must be self-contained (the peer cannot see this conversation).',
           parameters: {
             type: 'object',

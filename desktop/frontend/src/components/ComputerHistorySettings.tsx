@@ -164,6 +164,7 @@ export function ComputerHistorySettings({ mode, anchor }: { mode: 'light' | 'dar
       {actionError !== null && <div className="ch-alert" role="alert">{t('computerHistory.actionFailed', { error: actionError })}</div>}
       {view.persistError != null && <div className="ch-alert" role="alert" data-ch-persist-error="">{t('computerHistory.persistError', { error: view.persistError })}</div>}
       {view.stateError != null && <div className="ch-alert" role="alert" data-ch-state-error="">{t('computerHistory.stateError', { error: view.stateError })}</div>}
+      {view.keyError != null && <div className="ch-alert" role="alert" data-ch-key-error="">{t(view.state.platform === 'win32' ? 'computerHistory.win.keyError' : 'computerHistory.keyError', { error: view.keyError })}</div>}
 
       <SettingsPanel
         anchor={anchor}

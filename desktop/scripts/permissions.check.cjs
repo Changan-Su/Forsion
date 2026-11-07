@@ -64,30 +64,25 @@ async function main() {
     const errors = []
     win.on('pageerror', error => errors.push(error.message))
     await win.waitForSelector('.ob-shell', { timeout: 40_000 })
-    // 引导的走法同 onboarding.check.cjs:底栏主按钮 = 下一步,步数随这台机器变,一直点到权限那一步;那一步按分页放(操作电脑 / 电脑历史 / 语音与媒体)。
-    const step = () => win.locator('.ob-flow').getAttribute('data-step')
-    const next = async () => {
-      const from = await step()
-      await win.locator('.ob-footer .btn.primary').click()
-      await win.waitForFunction(previous => document.querySelector('.ob-flow')?.getAttribute('data-step') !== previous, from)
-    }
-    const tab = name => win.locator('.ob-sections button').filter({ hasText: name })
-    for (let i = 0; i < 10 && await step() !== 'permissions'; i++) await next()
-    await win.waitForSelector('[data-permission="computerAccessibility"]')
+    // 11-05 起首启引导里没有设备权限这一步(电脑历史在引导里打开后,结束时才请一次辅助功能);权限页的入口是设置 → 设备权限。
+    await win.getByText('跳过引导', { exact: true }).click()
+    await win.waitForSelector('.ob-shell', { state: 'detached' })
+    await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
+    // 设置画在独立浮窗里(Floating Panel 化 2026-09-20):开窗前先 arm window 事件,面板 locator 一律走浮窗 page。
+    const settingsOpening = running.waitForEvent('window', { predicate: page => page !== win, timeout: 30_000 })
+    await win.keyboard.press('Meta+,')
+    const settings = await settingsOpening
+    await settings.waitForLoadState('domcontentloaded')
+    await settings.locator('.settings-nav-list button').filter({ hasText: '设备权限' }).click()
+    await settings.waitForSelector('[data-permission="computerAccessibility"]')
     // hotkeySubscribe 不是这一页发的:「应用 / 窗口引用」的全局双 ⌘ 在启动时连上已在跑的助手就订阅(appRefHotkey.ts);
     // 助手那头先 AXIsProcessTrusted()(不带弹框)、没授权直接拒,不会弹系统授权框。除它以外只许有读状态的 permissionStatus。
     check('page entry only calls permissionStatus', calls.some(call => call.cmd === 'permissionStatus')
       && calls.every(call => call.cmd === 'permissionStatus' || call.cmd === 'hotkeySubscribe'), calls.map(call => call.cmd))
-    const computerRows = await win.locator('[data-permission]').count()
-    await tab('语音与媒体').click()
-    await win.waitForSelector('[data-permission="microphone"]')
-    const mediaRows = await win.locator('[data-permission]').count()
-    await tab('操作电脑').click()
-    await win.waitForSelector('[data-permission="computerAccessibility"]')
-    check('permission step appears in onboarding with five permission rows across its tabs', computerRows + mediaRows === 5)
-    await win.screenshot({ path: '/tmp/forsion-permissions-onboarding-zh.png', animations: 'disabled' })
-    const guideOpening = running.waitForEvent('window', { predicate: page => page !== win, timeout: 10_000 })
-    await win.locator('[data-permission="computerAccessibility"] button').click()
+    check('settings keeps a permanent permissions entry with five permission rows', await settings.locator('[data-permission]').count() === 5)
+    await settings.screenshot({ path: '/tmp/forsion-permissions-settings-zh.png', animations: 'disabled' })
+    const guideOpening = running.waitForEvent('window', { predicate: page => page !== win && page !== settings, timeout: 10_000 })
+    await settings.locator('[data-permission="computerAccessibility"] button').first().click()
     const guide = await guideOpening
     await guide.waitForSelector('h1')
     check('selected permission requests only accessibility', calls.some(call => call.cmd === 'registerPermissions' && call.kind === 'accessibility') && !calls.some(call => call.cmd === 'checkPermissions'))
@@ -109,19 +104,6 @@ async function main() {
     const guideClosing = guide.waitForEvent('close')
     await guide.locator('a[href$="/return"]').click()
     await guideClosing
-    await next()
-    check('Next advances to the done step without requiring the remaining grants', await step() === 'done')
-    await win.locator('.ob-footer .btn.primary').click()
-    await win.waitForSelector('.dv-groupview', { timeout: 30_000 })
-    // 设置画在独立浮窗里(Floating Panel 化 2026-09-20):开窗前先 arm window 事件,面板 locator 一律走浮窗 page。
-    const settingsOpening = running.waitForEvent('window', { predicate: page => page !== win, timeout: 30_000 })
-    await win.keyboard.press('Meta+,')
-    const settings = await settingsOpening
-    await settings.waitForLoadState('domcontentloaded')
-    await settings.locator('.settings-nav-list button').filter({ hasText: '设备权限' }).click()
-    await settings.waitForSelector('.desktop-permissions')
-    check('settings keeps a permanent permissions entry', await settings.locator('[data-permission]').count() === 5)
-    await settings.screenshot({ path: '/tmp/forsion-permissions-settings-zh.png', animations: 'disabled' })
     // 换英文前必须把浮窗关掉:面板按 id 复用,开着的那个既不会重载成英文,再敲热键也不会有新 window 事件。
     const settingsClosed = settings.waitForEvent('close')
     await settings.close()

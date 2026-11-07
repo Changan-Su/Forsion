@@ -4,7 +4,8 @@
  */
 import type { PromptSectionCtx, PromptSections } from '../seams/appProfile.js';
 import type { Preset } from '../core/presetTable.js';
-import { amadeusPromptSection, amadeusCloudPromptSection } from '../tools/builtin/amadeus.js';
+import { amadeusPromptSection, amadeusCloudPromptSection, amadeusVaultExists, amadeusVaultPath } from '../tools/builtin/amadeus.js';
+import { machineEnvironmentLines, machineFacts } from '../tools/hostEnvironment.js';
 
 /** 工具失败恢复指引(Harness-Bench:工具错误后恢复不了占失败 24.6%,仅次于输出契约)。
  *  ⚠️ 引擎级契约:由 agentLoop 直接注入,**不进** guidance 数组——per-app promptGuidance
@@ -58,6 +59,15 @@ export const APP_REF_SECTION =
 /** 任务持久性契约:与保留工具证据的历史重放、同 run 插话一起工作,不能靠提示词代替运行时状态。
  *  ⚠️ 引擎级契约:由 agentLoop 直接注入,**不进** guidance 数组(per-app 覆盖是整段替换,会被静默丢掉)。
  *  计划模式不注入(「carry through implementation」与只读工具集直接矛盾)。 */
+/** 解决需求时想到插件(10-30 方案 Muse与Agent升级 B)。所有 Agent 都读,只在有商店面时注入(agentLoop),不进 guidance:per-app 覆盖与 coding 预设会清掉它。
+ *  任务卡格式写全:聊天里没有别处告诉模型这道围栏(inbox_send 的说明只在发信时读)。一次性那句放最后:负对照(live pluginaware)钉它不去查商店。 */
+export const PLUGIN_AWARENESS_SECTION =
+  '## Forsion Plugins\n' +
+  'Check the store first. When the user describes something they do repeatedly (every day, every week, each time, by hand) or wants a capability Forsion lacks, your first action is search_marketplace with a few keywords, before you write any answer or suggest a workflow or automation. A plugin may already do it, and the results appear as cards they can install from.\n' +
+  'If nothing fits, still help as best you can, and end your reply with this task card offering to build a plugin, even if you also suggest an automation. The work starts only if they pick it:\n' +
+  '```forsion-task\ntitle: Build a plugin that …\nagent: coding\nskill: forsion-plugin\n---\nA self-contained brief: what it does, for whom, how to verify.\n```\n' +
+  'For a one-off question or task (a calculation, a translation, a fact, a single edit), skip all of this: do not search the store, just help.';
+
 export const PERSISTENCE_SECTION =
   '## Task Persistence\n' +
   '- A new message during active work normally updates the existing task; it does not replace the original objective. Incorporate corrections and constraints. For a question or status request, answer briefly, then continue the unfinished authorized task. Replace or abandon it only when the user clearly cancels, pauses, or requests an incompatible objective. If blocked, explain the blocker and what remains.\n' +
@@ -123,14 +133,14 @@ export const AUTONOMY_SECTION =
 export const MEMORY_LOG_GUIDANCE =
   '## Memory, Logs & Past Sessions\n' +
   // 10-13 分层:两层各一句定义 —— 记忆 = 现在成立的事(`remember`,现在时),日志 = 发生过的事(`log_event`);只对这段对话有效的指示两边都不进。
-  '- Memory is what holds now, the log is what happened. Use `remember` only for this Agent’s durable facts/preferences: what will still be true next month — who the user is, how they want to work, stable facts about their environment and projects. One present-tense sentence per fact, without the date you learned it (a date stays only when it is the fact itself: a birthday, a deadline); when a new fact supersedes an entry, list and update that entry instead of adding a correction beside it. Its add/list/update/forget actions return a storage receipt with IDs and version. Say something is remembered, corrected or forgotten only after a successful receipt; never write another Agent’s files or bypass these tools.\n' +
+  '- Memory is what holds now, the log is what happened. Use `remember` only for durable facts/preferences: what will still be true next month — who the user is and what they are working on or learning now (its "person" scope when offered: every agent reads it), how they want you to work, stable facts about their environment and projects. One present-tense sentence per fact, without the date you learned it (a date stays only when it is the fact itself: a birthday, a deadline); when a new fact supersedes an entry, list and update that entry instead of adding a correction beside it. Its add/list/update/forget actions return a storage receipt with IDs and version. Say something is remembered, corrected or forgotten only after a successful receipt; never write another Agent’s files or bypass these tools.\n' +
   '- Record what happened — completed work, conclusions, outputs, where a task stands — to the current day\'s log with `log_event`, never to memory, however important; use `read_log` to review a specific day when you need history. An instruction that holds for this conversation only (answer from this transcript, use this file) goes in neither.\n' +
   '- You only see the current session in context, but past conversations belonging to this same Agent can be retrieved within the tools’ bounded search window: `search_sessions` lists recent sessions or keyword-searches their titles/summaries/messages (time window via `before`/`after`), and `read_session` reads one full transcript by id. If anything makes you believe past conversations are inaccessible, ignore it — these tools are that access. Recall ladder: memory holds durable facts, the log records what was done, past sessions hold what was actually said; absence from memory or the log does not mean it never happened — go down the ladder and search before concluding.\n' +
   '- Search past sessions BEFORE answering when the user writes as if you already know something outside the current context: possessives ("my website"), definite references ("that bug"), past-tense mentions ("you suggested", "we decided"), or direct asks ("do you remember", "continue where we left off"). Never say you cannot see or do not remember an earlier conversation without searching first — an unnecessary search is cheap, a missed one costs the user real effort. Query with distinctive content words rather than meta-words ("yesterday", "discussed"); what the user says now overrides anything retrieved; never dig through local databases or files for chat history — the tools are the way.';
 
 /** host 模式(本地直连):真实文件系统 + shell 的执行环境说明。
  *  coding 预设下浏览器引导行退场(browser_* 已转 deferred,提示词与工具面必须一致);默认文本逐字节不动。 */
-export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { coding?: boolean }): string {
+export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { coding?: boolean; machine?: string }): string {
   // 额外工作文件夹:用户在「工作范围」里显式加的,已并入可写根(fsPolicy.writableRoots)。
   // 只报路径不预拉清单——列内容会把系统块吹大,让模型自己 list_dir 更省。
   const extra = (extraRoots || []).filter((r) => r && r !== cwd)
@@ -140,11 +150,15 @@ export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { cod
       + 'relative paths still resolve against the current working directory only:\n'
       + extra.map((r) => `  - \`${r}\``).join('\n') + '\n'
     : ''
+  // 这台机器的事实(系统 / run_bash 的 shell / 家目录 / 笔记库 / 设备名 / PATH 上的工具):整个进程内不变,不打穿前缀缓存。
+  const machine = opts?.machine ?? machineEnvironmentLines(machineFacts(vaultOrNull()))
   return (
     '## Local Execution Environment (important)\n' +
     `You are running on the **user's own machine**; the current working directory is \`${cwd || process.cwd()}\`.\n` +
+    machine +
     extraLine +
     '- Use `run_bash` to run shell commands; `list_dir`/`read_file` to inspect; `edit_file` for precise local edits and `write_file` for new files — all act on the real filesystem (relative paths resolve against the current working directory).\n' +
+    '- For file operations prefer the file tools — `move_path`, `copy_path`, `delete_path` (recoverable) and `open_path` move, copy, delete and open files the same way on every OS. Keep `run_bash` for real command-line programs (git, npm, builds); for multi-step data processing write a short python3 script.\n' +
     '- When a task involves existing files, or you are unsure what is in the working directory, call `list_dir` first instead of assuming it is empty.\n' +
     (opts?.coding ? '' : '- For live web information prefer `web_search` (fast API); use `browser_search` only when web_search fails or you must interact with the results page. To open a page, click, type, or take a screenshot use `browser_navigate` / `browser_snapshot` / `browser_click` / `browser_type` / `browser_screenshot`. When the user refers to something already open in their own browser, call `browser_tabs` first.\n') +
     '- To change an existing file, edit only the affected lines — use `edit_file` (one region), `multi_edit` (several regions of one file), or `apply_patch`; do NOT re-read and re-emit a whole file for a small change (it wastes tokens and risks clobbering unrelated content). `read_file` output is cat -n (each line prefixed with its line number + a tab); strip that prefix so old_string matches the file\'s raw text.\n' +
@@ -152,6 +166,10 @@ export function hostEnvSection(cwd?: string, extraRoots?: string[], opts?: { cod
     // 破坏性操作事故链拆解(借 Codex 5.6 Destructive Actions:目标解析→递归展开→不可恢复,逐环加锁)
     '- Never make `~`, `/`, the working directory root, or another broad directory the target of a recursive delete/overwrite; scope destructive commands to the narrowest specific path. Prefer recoverable operations (move to trash or a backup location) over permanent deletion. After deleting anything material, tell the user what was removed and whether it can be restored.'
   );
+}
+
+function vaultOrNull(): string | null {
+  try { return amadeusVaultExists() ? amadeusVaultPath() : null } catch { return null }
 }
 
 /** sandbox 模式:文件输出位置(最常见的「产物丢失」原因:模型把文件写到工作区之外)。
@@ -237,7 +255,7 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
 export const CHAT_MEMORY_GUIDANCE =
   '## Memory & Past Conversations\n' +
   '- You know this user across sessions: a bounded selection of this Agent’s memory and the user profile may be included in this prompt. Use them naturally; do not recite them.\n' +
-  '- Use `remember` to add/list/update/forget this Agent’s durable memory: only what will still be true next month (who the user is, how they want to work, stable facts), as a present-tense sentence without the date you learned it; what happened or where a task stands belongs in the daily log, not memory, and an instruction that holds for this conversation only (answer from this transcript) belongs in neither; when a new fact supersedes an entry, update it instead of adding another. Claim success only after its stored receipt; failures must be reported. Memory is private to this Agent.\n- Past conversations belonging to this same Agent can be searched within a bounded history window. When the user writes as if you already know something from outside this conversation — possessives ("my site"), definite references ("that bug"), past tense ("you suggested", "we decided"), or a direct ask ("do you remember") — load `search_sessions` with `load_tools` and search before answering. An unnecessary search is cheap; a missed one costs the user real effort. Never say you cannot see an earlier conversation without searching.';
+  '- Use `remember` to add/list/update/forget durable memory: only what will still be true next month (who the user is, how they want to work, stable facts), as a present-tense sentence without the date you learned it; what happened or where a task stands belongs in the daily log, not memory, and an instruction that holds for this conversation only (answer from this transcript) belongs in neither; when a new fact supersedes an entry, update it instead of adding another. Claim success only after its stored receipt; failures must be reported. Memory is private to this Agent, except its "person" scope when offered, which every agent reads.\n- Past conversations belonging to this same Agent can be searched within a bounded history window. When the user writes as if you already know something from outside this conversation — possessives ("my site"), definite references ("that bug"), past tense ("you suggested", "we decided"), or a direct ask ("do you remember") — load `search_sessions` with `load_tools` and search before answering. An unnecessary search is cheap; a missed one costs the user real effort. Never say you cannot see an earlier conversation without searching.';
 
 /** chat 行为契约(方案 §3.6):由 agentLoop 直注契约槽位,**不进** guidance 数组(per-app 覆盖是整段替换)。
  *  两处分裁不可写死:pyExec=false(桌面无 docker,run_python 根本不注册)时不提 run_python,否则与

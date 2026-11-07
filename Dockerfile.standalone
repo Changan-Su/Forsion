@@ -4,7 +4,7 @@
 # -----------------------------------------------------
 # 构建上下文 = Forsion-Genesis 仓根（只 COPY tangu-agent/）。入口 = bin `tangu-server` = node dist/standalone/main.js。
 # 连接契约（Tangu Manager 经 -e 注入，见 src/standalone/config.ts）：
-#   TANGU_CLOUD_URL（必填，Forsion brain）/ TANGU_TOKEN（user-scoped）/ TANGU_USER_ID /
+#   TANGU_CLOUD_URL（必填，Forsion brain）/ TANGU_TOKEN（user-scoped）或 TANGU_TOKEN_FILE（每次现读，换发不用重启）/ TANGU_USER_ID /
 #   TANGU_HOST=0.0.0.0 / TANGU_PORT=8787 / TANGU_HOME=/tangu-home（挂 per-user 卷）/
 #   TANGU_SANDBOX=none（容器即沙箱）/ TANGU_WECHAT_ENABLED=true
 # 原生模块 better-sqlite3（内嵌 SQLite，state.db 落 TANGU_HOME 卷）→ build 阶段需工具链。

@@ -26,6 +26,7 @@ import { openSessionFromApproval } from '../../stores/attentionOpen'
 import { openRemoteSession } from '../../stores/deviceSessionsStore' // P1-K7a
 import { runLocationsAvailable } from '../../features/runtime'
 import { hasUnknownRequirement, tierFromAuth, unmetClaimRequirements } from './claimRequirements'
+import { agentName } from '../../agentName'
 import './inboxEmptyMessages'
 import './inbox.css'
 
@@ -142,7 +143,7 @@ export function InboxReaderView({ leaf }: { leaf?: Leaf }) {
             </span>
             <span className="ibx-reader-actions">
               {senderAgent && (
-                <button className="ibx-iconbtn" title={t('inbox.action.chat', { name: senderAgent.name })} onClick={chatWithSender}>
+                <button className="ibx-iconbtn" title={t('inbox.action.chat', { name: agentName(senderAgent) })} onClick={chatWithSender}>
                   <MessageCircle size={14} />
                 </button>
               )}

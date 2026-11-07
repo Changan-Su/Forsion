@@ -135,7 +135,11 @@ const MAX_CLIENT_CAPS = 16;
 export function normalizeClientCapabilities(v: unknown): string[] | undefined {
   if (!Array.isArray(v)) return undefined;
   const out = new Set<string>();
-  for (const x of v.slice(0, MAX_CLIENT_CAPS)) if (typeof x === 'string' && CLIENT_CAP_RE.test(x)) out.add(x);
+  const dropped: unknown[] = [];
+  for (const x of v.slice(0, MAX_CLIENT_CAPS)) if (typeof x === 'string' && CLIENT_CAP_RE.test(x)) out.add(x); else dropped.push(x);
+  // 丢弃仍然静默(不起不了 run),但留一行日志:10-27 原型把能力名写成两个点,被丢了也没人知道,两条腿拿到同一份说明
+  // 值来自客户端:只记有界摘要,不递归序列化(深层嵌套数组会让 JSON.stringify 抛 RangeError → run 起不来)
+  if (dropped.length || v.length > MAX_CLIENT_CAPS) console.warn('[agent-core] client_capabilities dropped:', dropped.slice(0, 8).map((x) => typeof x === 'string' ? JSON.stringify(x.slice(0, 40)) : typeof x).join(', '), v.length > MAX_CLIENT_CAPS ? `(+${v.length - MAX_CLIENT_CAPS} over the cap)` : '');
   return out.size ? [...out].sort() : undefined;
 }
 
@@ -194,7 +198,7 @@ export function normalizeUiValues(v: unknown): Record<string, string> | undefine
 router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
-    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint, ui_cards } = req.body || {};
+    const { session_id, model_id, app_id, message, attachments, agent_config, client, ui_commands, ui_settings, approval_tray, client_capabilities, user_message_id, ephemeral_hint, ui_cards, quota_fallback } = req.body || {};
     if (agent_config != null && (typeof agent_config !== 'object' || Array.isArray(agent_config))) {
       return res.status(400).json({ detail: 'agent_config must be an object' });
     }
@@ -287,6 +291,8 @@ router.post('/agent/runs', authMiddleware, async (req: AuthRequest, res) => {
         // 客户端原生能力(phone.intents 等):只从本路由进 —— 派生 run(团队 / 讨论 / 子代理)自建 input,不继承。
         ...(clientCapsNorm ? { clientCapabilities: clientCapsNorm } : {}),
         ...(voiceHint ? { ephemeralHint: voiceHint } : {}),
+        // 「换之前先问我」卡上点了「改用 X」:这一轮直接用设置里的后备模型(llm/quotaRelay.ts)
+        ...(quota_fallback === true ? { quotaFallbackNow: true } : {}),
         ...(clientCapsNorm?.includes('intelligent-ui.v1') ? { uiCards: normalizeUIAppCards(ui_cards) } : {}),
       },
     });

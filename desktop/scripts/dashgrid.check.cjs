@@ -404,20 +404,20 @@ async function main() {
     }
 
     // ── G24 落格过渡(2026-08-31 用户报「调节太生硬」)───────────────────────────
-    //     在途 resize 的每次落格走 0.16s FLIP 补间,不再瞬跳。采样点 = 跨过一格边界后
-    //     ~40ms:补间在途则 slot 有非恒等 transform(G17 的菜单改档已同款验过 settle 侧)。
+    //     在途 resize 的每次落格走弹簧,不再瞬跳。跨过一格边界后等 React 提交:
+    //     弹簧在途则卡片带着内联高度,瞬跳就等不到(G17 的菜单改档已同款验过 settle 侧)。
     {
       const c = await cardRect(page3, '3')
       const grip = { x: c.left + c.width - 6, y: c.top + c.height - 6 }
       await page3.mouse.move(grip.x, grip.y)
       await page3.mouse.down()
       await page3.mouse.move(grip.x, grip.y + 90, { steps: 2 })
-      await page3.waitForTimeout(40)
-      const mid = await page3.$eval('.dash3-card[data-key="3"]', (el) => getComputedStyle(el.closest('.dash3-card-slot')).transform)
+      const mid = await page3.waitForFunction(() => document.querySelector('.dash3-card[data-key="3"]').style.height, null, { timeout: 400 })
+        .then((h) => h.jsonValue(), () => '')
       await page3.mouse.up()
       await page3.waitForTimeout(450)
       check('G24 把手落格有过渡(跨格瞬间卡片在补间中,不是瞬跳)',
-        mid !== 'none' && !/^matrix\(1, 0, 0, 1, 0, 0\)$/.test(mid), `mid-transform=${mid}`)
+        mid !== '', `mid-height=${mid}`)
       const g24 = cellOf(await fm(page3), '3')
       check('G24 且这笔 resize 真落盘了(4×3 → 4×4;补间没吃掉手势)',
         g24.w === 4 && g24.h === 4, JSON.stringify(g24))
@@ -427,7 +427,7 @@ async function main() {
     //     半宽下界(6,由声明档推导)是首轮的保守值;现视图卡通用下界 = VIEW_MIN 4×3
     //     (≈1/3 宽,与移动端渲染宽度同量级),registry `dashboard.min` 可逐视图覆盖。
     {
-      // ⚠️ 前一格 G24 松手后卡片还在 FLIP 滑翔;用把手元素自身定位(boundingBox 等稳定),
+      // ⚠️ 前一格 G24 松手后卡片还在弹簧上;用把手元素自身定位(boundingBox 等稳定),
       //    别拿卡片矩形角落瞎算 —— 坐标过时会点到罩层,变成一次什么都没发生的拖拽。
       await page3.waitForTimeout(500)
       // ⚠️ 前面的 resize 会把这张卡顶出视口(实证:把手 y=1077 > 视口 900,elementFromPoint=none,
@@ -728,7 +728,7 @@ async function main() {
       )
       await page.waitForTimeout(20)
     }
-    await page.waitForTimeout(380) // 等让位 FLIP 收口再量
+    await page.waitForTimeout(600) // 等停留闸(90ms)和让位弹簧收口再量
     const mid = await snap()
     check('G19 拖动中恰有一张落点占位卡(原卡降透明度,不消失)',
       (await page.locator('.dash3-card[data-dragging]').count()) === 1)
@@ -750,6 +750,8 @@ async function main() {
     }
     check('G19 拖动中让位是**有序重排**,卡片互不叠压(不是满屏乱飞)',
       overlapped.length === 0, overlapped.join(' ') || 'clean')
+    const slots = () => page.$$eval('.dash3-card-slot', (els) => els.map((el) => `${el.querySelector('.dash3-card')?.dataset.key}:${el.style.gridRow}/${el.style.gridColumn}`).sort())
+    const slotsBefore = await slots()
     await page.mouse.up()
     await page.waitForTimeout(650)
     const settledA = await snap()
@@ -759,6 +761,8 @@ async function main() {
       settledA.length === 7 && (await page.locator('.dash3-card--lift').count()) === 0, `cards=${settledA.length}`)
     check('G19 松手后布局收口稳定(没有永不停歇的动画)',
       JSON.stringify(settledA) === JSON.stringify(settledB))
+    check('G19 松手不再重排:每张卡的格子位与松手前一刻逐字一致(换档也算跳变)',
+      JSON.stringify(slotsBefore) === JSON.stringify(await slots()))
     const textAfter = await fm(page)
     check('G19 预览序 = 落盘序(拖到哪就落在哪,零跳变)',
       cellOf(textAfter, '6').order === 6 && cellOf(textAfter, '7').order === 5,

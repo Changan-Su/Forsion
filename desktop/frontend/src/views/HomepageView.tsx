@@ -20,26 +20,27 @@
  * IndexedDB 自定义原图是三个可切换来源;没有图片时也由 Genesis 主题 token 生成可取样的简约舞台。
  * 旧版窗口管理器与账号角仍不搬;浏览器搜索也不再回来。
  */
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import {
-  DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter, pointerWithin,
+  DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter,
   useDraggable, useDroppable, useSensor, useSensors,
-  type CollisionDetection,
   type DragCancelEvent, type DragEndEvent, type DragOverEvent, type DragStartEvent,
 } from '@dnd-kit/core'
 import { SortableContext, rectSortingStrategy, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
 import {
-  ArrowUp, Check, FolderMinus, FolderOpen, FolderPlus, Grid2X2, Image, LogOut,
-  Mic, Pencil, RefreshCw, Upload, X,
+  ArrowUp, Check, FolderMinus, Grid2X2, Image, LogOut,
+  Mic, Pencil, Plus, RefreshCw, Upload, X,
 } from 'lucide-react'
-import { setActiveSpace, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
+import { commandHotkeyText, setActiveSpace, useSpaceStore, useRibbonStore, label, OverlayAt, useNativeChromeSpaces, useNativeSheetMenu, presentNativeChecklist, getDetachApi, WINDOW_SPACE_ID, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
+import { SortableTile, SpaceOrganizer, SWITCH_SPACE_COMMAND, TileVisual, dockCollision, setHomeOrganizerToggle } from './SpaceOrganizer'
 import { shelfAddFolder, shelfMove, shelfMoveIntoFolder, shelfMoveOut, shelfRemoveFolder, shelfRenameFolder, shelfReorderFolder, shelfTiles, type ShelfTile } from './homeShelf'
 import type { SpaceDefinition, RibbonItem, ViewProps } from '@lcl/engine'
+import { RIBBON_ACTION_PREFIX } from '../amadeus/plugins/ribbonAction'
 import { askString } from '@amadeus/components/askString'
-import { readTanguNewChat, type TanguNewChatDispatch } from '../amadeus/plugins/tanguSeam'
+import { readTanguDrafts, readTanguNewChat, type TanguNewChatDispatch } from '../amadeus/plugins/tanguSeam'
 import { registerMessages, useI18n, type Locale } from '../i18n'
 import { formatLongDate, formatTime } from '../format/time'
 import {
@@ -51,6 +52,9 @@ import { HomeWallpaperArt } from './homepageWallpaperArt'
 import { DeskCardStatus, useCardStatus } from './homeCardStatus'
 import { watchAccountName } from '../services/accountName'
 import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, shownHomeCards } from './homeCards'
+import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './homeWidgets'
+import { HomeRail, HomeRow, PartFrame, PartsLibrary, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
+import type { OrganizerTab } from './SpaceOrganizer'
 import './homepage.css'
 
 /** 本视图所在的 Space id(真源在 builtins/homepage.tsx);坞里要把它自己排掉 —— 但**排序时不能排**,见 dropOn。 */
@@ -67,37 +71,7 @@ const FIXED_HOME_ACTIONS = ['rb-market', 'rb-achievements'] as const
 const THEME_PRESETS: HomepageThemePreset[] = ['orbit', 'path', 'paper', 'rings', 'glyph']
 const WALLPAPER_SOURCES: HomepageWallpaperSource[] = ['theme', 'bing', 'image']
 
-/** 指针拖放以「指针真正在谁里面」为准,避免 body zoom 下 active rect 中心偏移选错落点;
- * 键盘拖放没有 pointerCoordinates,回落 closestCenter 保留方向键可访问性。 */
-const dockCollision: CollisionDetection = (args) => {
-  const hits = pointerWithin(args)
-  return hits.length ? hits : closestCenter(args)
-}
-
 type Tile = ShelfTile
-
-function TileVisual({ tile }: { tile: Tile }) {
-  if (tile.kind === 'space') {
-    return (
-      <>
-        <span className="hp-tile-icon">{tile.space.icon && <tile.space.icon size={21} />}</span>
-        <span className="hp-tile-name">{label(tile.space.name)}</span>
-      </>
-    )
-  }
-  return (
-    <>
-      <span className="hp-tile-icon hp-fpreview">
-        {tile.members.slice(0, 4).map((member) => (
-          <span key={member.id} className="hp-fmini">{member.icon && <member.icon size={11} />}</span>
-        ))}
-        {tile.members.length === 0 && <FolderOpen size={19} />}
-      </span>
-      <span className="hp-tile-name">{tile.folder.name}</span>
-      <span className="hp-folder-count">{tile.members.length}</span>
-    </>
-  )
-}
 
 function loadPinnedSpaceIds(): string[] {
   try {
@@ -163,46 +137,6 @@ function PinnedSpaceZone({
       {actions.map((item) => <FixedHomeAction key={item.id} item={item} />)}
       {spaces.map((space) => <PinnedSpaceTile key={space.id} space={space} onLaunch={onLaunch} />)}
     </div>
-  )
-}
-
-function SortableTile({
-  tile, over, open, onOpen, onLaunch, onMenu,
-}: {
-  tile: Tile
-  over: boolean
-  open: boolean
-  onOpen: (event: React.MouseEvent, id: string) => void
-  onLaunch: (spaceId: string) => void
-  onMenu: (event: React.MouseEvent, id: string) => void
-}) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tile.id })
-  const name = tile.kind === 'space' ? label(tile.space.name) : tile.folder.name
-  const style: React.CSSProperties = {
-    transform: DndCSS.Transform.toString(transform),
-    transition: transition ? `${transition}, color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out)` : undefined,
-  }
-  return (
-    <button
-      ref={setNodeRef}
-      type="button"
-      style={style}
-      className={`hp-tile${tile.kind === 'folder' ? ' hp-folder' : ''}${isDragging ? ' dragging' : ''}${open ? ' on' : ''}`}
-      data-id={tile.id}
-      data-over={over || undefined}
-      aria-label={name}
-      title={name}
-      {...attributes}
-      {...listeners}
-      onClick={(event) => {
-        if (isDragging) return
-        if (tile.kind === 'folder') { event.stopPropagation(); onOpen(event, tile.id) }
-        else onLaunch(tile.space.id)
-      }}
-      onContextMenu={tile.kind === 'folder' ? (event) => onMenu(event, tile.id) : undefined}
-    >
-      <TileVisual tile={tile} />
-    </button>
   )
 }
 
@@ -272,9 +206,10 @@ function useDockTiles(): { tiles: Tile[]; topIds: string[] } {
   return shelfTiles(spaces, order, folders, SELF_SPACE)
 }
 
-interface MenuState { x: number; y: number; kind: 'folder' | 'member' | 'cards'; id?: string }
+interface MenuState { x: number; y: number; kind: 'folder' | 'member' | 'cards' | 'blank'; id?: string }
 
 registerMessages({
+  'home.organizeSpaces': { zh: '整理 Space', en: 'Organize Spaces' },
   'home.folderMenu.renameTitle': { zh: '重命名收纳夹', en: 'Rename folder' },
   'home.folderMenu.rename': { zh: '重命名', en: 'Rename' },
   'home.folderMenu.dissolve': { zh: '解散收纳夹', en: 'Dissolve folder' },
@@ -355,6 +290,7 @@ export function HomepageView(_props: ViewProps) {
   const [drag, setDrag] = useState<string | null>(null)
   const [over, setOver] = useState<string | null>(null)
   const [organizerOpen, setOrganizerOpen] = useState(false)
+  const [organizerByKey, setOrganizerByKey] = useState(false)
   const [openFolder, setOpenFolder] = useState<{ id: string; dx: number; dy: number } | null>(null)
   const [menu, setMenu] = useState<MenuState | null>(null)
   const [leaving, setLeaving] = useState(false)
@@ -370,6 +306,29 @@ export function HomepageView(_props: ViewProps) {
   const [wallpaperError, setWallpaperError] = useState('')
   const [bingReload, setBingReload] = useState(0)
   const rootRef = useRef<HTMLDivElement>(null)
+  // 主页第四轮:左中右三栏 + 编辑态(桌面;手机本轮不做,照旧)
+  const homeLayout = useHomeLayout()
+  const [editing, setEditing] = useState(false)
+  const [organizerTab, setOrganizerTab] = useState<OrganizerTab>('spaces')
+  const [homeW, setHomeW] = useState(0)
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el || phone) return
+    const ro = new ResizeObserver(() => setHomeW(el.offsetWidth)) // offsetWidth = 布局 px,门槛按它算(缩放后照样对)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [phone])
+  useEffect(() => (phone ? undefined : setHomeEditHandler(() => setEditing(true))), [phone])
+  useEffect(() => {
+    if (!editing) return
+    const esc = (e: KeyboardEvent): void => {
+      if (e.key !== 'Escape' || document.querySelector('.hp-organizer-stage, .dialog-overlay, .ctx-menu')) return
+      e.preventDefault()
+      setEditing(false)
+    }
+    window.addEventListener('keydown', esc)
+    return () => window.removeEventListener('keydown', esc)
+  }, [editing])
   const fileRef = useRef<HTMLInputElement>(null)
   const leaveTimer = useRef<number | null>(null)
   const pending = useRef<(() => void) | null>(null)
@@ -567,8 +526,8 @@ export function HomepageView(_props: ViewProps) {
     setMenu({ x: e.clientX, y: e.clientY, kind, id })
   }
 
-  const openFolderTile = (e: React.MouseEvent, id: string): void => {
-    const tileRect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+  const openFolderTile = (el: HTMLElement, id: string): void => {
+    const tileRect = el.getBoundingClientRect()
     const rootRect = rootRef.current?.getBoundingClientRect()
     setMenu(null)
     setOrganizerOpen(false)
@@ -604,9 +563,10 @@ export function HomepageView(_props: ViewProps) {
   const pinnedSpaces = pinnedSpaceIds
     .map((id) => spaces.find((space) => space.id === id))
     .filter((space): space is SpaceDefinition => !!space)
-  const fixedHomeActions = FIXED_HOME_ACTIONS
-    .map((id) => ribbonItems.find((item) => item.id === id))
-    .filter((item): item is RibbonItem => !!item)
+  const fixedHomeActions = [
+    ...FIXED_HOME_ACTIONS.map((id) => ribbonItems.find((item) => item.id === id)).filter((item): item is RibbonItem => !!item),
+    ...ribbonItems.filter((item) => item.id.startsWith(RIBBON_ACTION_PREFIX)),
+  ]
   const spaceCount = Math.max(0, spaces.length - (spaces.some((space) => space.id === SELF_SPACE) ? 1 : 0))
 
   const reorderFolderMember = (event: DragEndEvent): void => {
@@ -652,13 +612,19 @@ export function HomepageView(_props: ViewProps) {
     if (phone && !composerFocused) setPillDraft(rootRef.current?.querySelector<HTMLTextAreaElement>('.hp-composer .t2c-ta')?.value.trim() ?? '')
   }, [phone, composerFocused])
 
-  const showOrganizer = (): void => {
+  const showOrganizer = (byKey = false, tab: OrganizerTab = 'spaces'): void => {
+    setOrganizerTab(tab)
+    setOrganizerByKey(byKey)
     exitComposerInputMode()
     setWallpaperOpen(false)
     setOpenFolder(null)
     setMenu(null)
     setOrganizerOpen(true)
   }
+  // 命令「切换 Space」(⌘⇧O)在主页上开合的是这一块:收纳夹弹层、退场动效都在主页这边
+  const toggleOrganizer = useRef(() => {})
+  toggleOrganizer.current = () => (organizerOpen ? setOrganizerOpen(false) : showOrganizer(true))
+  useEffect(() => setHomeOrganizerToggle(() => toggleOrganizer.current()), [])
 
   /** 参考旧桌面的空白右键语义:不弹一枚孤立菜单,直接进入可见、可拖拽的二级收纳层。
    *  控件和壁纸表单有自己的右键语义,必须排除(格子本身都是 <button>,已被首条挡住)。
@@ -676,7 +642,16 @@ export function HomepageView(_props: ViewProps) {
     if (openFolder) setOpenFolder(null)
     else if (organizerOpen) setOrganizerOpen(false)
     else if (wallpaperOpen) setWallpaperOpen(false)
+    // 桌面:「编辑主页 / 换壁纸 / 整理 Space」三个入口收在一个菜单里(主页第二轮);手机照旧直接进收纳
+    else if (!phone) setMenu({ x: event.clientX, y: event.clientY, kind: 'blank' })
     else showOrganizer()
+  }
+  const askAgentForWidget = (): void => {
+    // 经 Tangu 的草稿接缝只填空着的那份:已写了一半的草稿原样留着(新对话草稿的键是 'new')
+    readTanguDrafts()?.fill('new', { text: t('home.lib.askDraft'), pastes: [] })
+    setOrganizerOpen(false)
+    setEditing(false)
+    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLTextAreaElement>('.hp-composer .t2c-ta')?.focus())
   }
 
   /** 收纳夹 / 收纳夹成员菜单的唯一一份条目:Web 浮层与 Android 原生半屏(lcl nativeSheet 可选宿主)都从这里渲染。 */
@@ -686,6 +661,13 @@ export function HomepageView(_props: ViewProps) {
         const on = carded.has(choice.id)
         return { id: choice.id, label: label(choice.space.name), checked: on, icon: <Check size={13} style={{ opacity: on ? 1 : 0 }} />, run: () => toggleDeskCard(choice.id) }
       })
+    }
+    if (m.kind === 'blank') {
+      return [
+        { id: 'edit-home', label: t('home.edit'), icon: <Pencil size={13} />, run: () => { setMenu(null); setEditing(true) } },
+        { id: 'wallpaper', label: t('home.wallpaper.open'), icon: <Image size={13} />, run: () => { setMenu(null); setWallpaperOpen(true) } },
+        { id: 'organize', label: t('home.organizeSpaces'), icon: <Grid2X2 size={13} />, run: () => { setMenu(null); showOrganizer() } },
+      ]
     }
     if (m.kind === 'member') {
       return [{ id: 'move-out', label: t('home.folderMenu.moveOut'), icon: <LogOut size={13} />, run: () => { moveOut(m.id!); setMenu(null); setOpenFolder(null) } }]
@@ -713,45 +695,9 @@ export function HomepageView(_props: ViewProps) {
     return { ...(tile?.kind === 'folder' ? { title: tile.folder.name } : {}), sections: [{ items: menuItems(menu) }] }
   }, () => setMenu(null))
 
-  return (
-    <div
-      ref={rootRef}
-      className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}`}
-      data-wallpaper={photo ? 'true' : undefined}
-      data-theme-preset={wallpaperPrefs.themePreset}
-      data-motion={wallpaperPrefs.motion ? 'on' : 'off'}
-      data-hidden={pageHidden || undefined}
-      data-focus-blur={wallpaperPrefs.focusBlur ? 'true' : 'false'}
-      data-vignette={wallpaperPrefs.vignette ? 'true' : 'false'}
-      onPointerDown={(event) => {
-        if (!(event.target as HTMLElement).closest('.hp-composer')) exitComposerInputMode()
-      }}
-      onContextMenu={showOrganizerFromBlank}
-      onClick={closePops}
-    >
-      <div
-        className="hp-wallpaper"
-        style={wallpaperUrl ? { backgroundImage: `url(${JSON.stringify(wallpaperUrl)})` } : undefined}
-        aria-hidden
-      />
-      <div className="hp-wallpaper-art" aria-hidden>
-        {!photo && <HomeWallpaperArt preset={wallpaperPrefs.themePreset} hour={clock.hour} minute={clock.minute} still={!wallpaperPrefs.motion || reduceMotion || pageHidden} />}
-      </div>
-      <div className="hp-wallpaper-edge" aria-hidden />
-      <div className="hp-wallpaper-tone" aria-hidden />
-      <div className="hp-glow" aria-hidden />
-
-      <button
-        type="button"
-        className={`hp-wallpaper-button${wallpaperOpen ? ' on' : ''}`}
-        aria-label={t('home.wallpaper.open')}
-        title={t('home.wallpaper.open')}
-        onClick={(event) => { event.stopPropagation(); exitComposerInputMode(); setMenu(null); setOpenFolder(null); setOrganizerOpen(false); setWallpaperOpen((open) => !open) }}
-      >
-        <Image size={16} />
-      </button>
-
-      <div className={`hp-stack${leaving ? ' leaving' : ''}`}>
+  // 中间那一列的主页组件:样子原样,只是按摆放的顺序画、能拿掉(时钟 / 坞)。手机照旧固定顺序。
+  const clockNode = (
+    <>
         <div className="hp-title">
           {/* 标志性标题:旧版 SloganCard 的默认文案与字体,原样搬过来。 */}
           <div className="hp-brand">Forsion is All You Need</div>
@@ -764,7 +710,10 @@ export function HomepageView(_props: ViewProps) {
             </>
           ) : <div className="hp-meta">{greetText} · {clock.date}</div>}
         </div>
-
+    </>
+  )
+  const composerNode = (
+    <>
         {newChat && <newChat.Composer onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} liveSpaceId={SELF_SPACE} />}
         {/* 手机:输入区平时收成这一条(完整的那块留在页面里、只是不显示,草稿不丢),点一下展开。 */}
         {phone && hasTangu && (
@@ -778,8 +727,9 @@ export function HomepageView(_props: ViewProps) {
         {/* 手机:大卡片,各带一行近况。默认 = 架子上的头两个 Space + 商店、成就;长按任意一张改成自己要的那几张(见 HomeCards)。
             其余 Space 在 Dock 上,收纳层照旧长按空白处进。 */}
         {phone && <HomeCards tiles={tiles} actions={fixedHomeActions} onLaunch={launchSpace} />}
-
-        {deskCards.length > 0 && (
+    </>
+  )
+  const statusNode = deskCards.length > 0 && (
           <section className="hp-status-cards" style={{ '--hp-card-cols': deskCards.length <= 4 ? deskCards.length : 3, '--hp-card-cols-narrow': Math.min(deskCards.length, 2) } as React.CSSProperties}>
             {deskCards.map(({ id, space }) => (
               <button
@@ -793,8 +743,9 @@ export function HomepageView(_props: ViewProps) {
               </button>
             ))}
           </section>
-        )}
-
+        )
+  const dockNode = (
+    <>
         {/* 收纳架只保留一排摘要;“全部”与空白右键都进入独立二级收纳层。 */}
         {!phone && <section className="hp-spaces" data-total={tiles.length}>
           {/* 不再有标题行(「Spaces · N 个 Space」「新建收纳夹」):新建收纳夹在「全部 Spaces」里(10-02 用户拍板 v8)。 */}
@@ -835,7 +786,7 @@ export function HomepageView(_props: ViewProps) {
                           type="button"
                           className="hp-tile hp-more"
                           onClick={(event) => { event.stopPropagation(); showOrganizer() }}
-                          title={t('home.showAll')}
+                          title={commandHotkeyText(SWITCH_SPACE_COMMAND) ? t('home.showAllKey', { key: commandHotkeyText(SWITCH_SPACE_COMMAND) }) : t('home.showAll')}
                         >
                           <span className="hp-tile-icon"><Grid2X2 size={20} /></span>
                           <span className="hp-tile-name">{t('home.showAllCount', { n: String(hiddenCount) })}</span>
@@ -862,7 +813,88 @@ export function HomepageView(_props: ViewProps) {
             </DragOverlay>
           </DndContext>
         </section>}
+    </>
+  )
+  const modes = railModes(homeW)
+  const shift = phone ? 0 : centerShift(homeW, { mode: modes.left, shown: editing || homeLayout.left.length > 0 }, { mode: modes.right, shown: editing || homeLayout.right.length > 0 })
+  const centerParts: readonly HomePart[] = phone ? HOME_PARTS : homeLayout.center
+  const partNode = (part: HomePart): React.ReactNode => part === 'clock' ? clockNode : part === 'composer' ? composerNode : part === 'dock' ? dockNode
+    : phone ? statusNode : <HomeRow cells={homeLayout.row} editing={editing} status={statusNode} onGrip={(e, id) => dragWidget(e, id, rootRef.current)} />
+
+  return (
+    <div
+      ref={rootRef}
+      className={`hp-root${phone ? ' hp-phone' : ''}${reduceMotion ? ' hp-still' : ''}${composerFocused ? ' hp-composer-focused' : ''}${wallpaperOpen ? ' hp-layer-focused' : ''}${openFolder || organizerOpen ? ' hp-secondary-open' : ''}${editing ? ' hp-editing' : ''}`}
+      data-rails={phone ? undefined : `${modes.left}-${modes.right}`}
+      data-wallpaper={photo ? 'true' : undefined}
+      data-theme-preset={wallpaperPrefs.themePreset}
+      data-motion={wallpaperPrefs.motion ? 'on' : 'off'}
+      data-hidden={pageHidden || undefined}
+      data-focus-blur={wallpaperPrefs.focusBlur ? 'true' : 'false'}
+      data-vignette={wallpaperPrefs.vignette ? 'true' : 'false'}
+      onPointerDown={(event) => {
+        if (!(event.target as HTMLElement).closest('.hp-composer')) exitComposerInputMode()
+      }}
+      onContextMenu={showOrganizerFromBlank}
+      onClick={closePops}
+    >
+      <div
+        className="hp-wallpaper"
+        style={wallpaperUrl ? { backgroundImage: `url(${JSON.stringify(wallpaperUrl)})` } : undefined}
+        aria-hidden
+      />
+      <div className="hp-wallpaper-art" aria-hidden>
+        {!photo && <HomeWallpaperArt preset={wallpaperPrefs.themePreset} hour={clock.hour} minute={clock.minute} still={!wallpaperPrefs.motion || reduceMotion || pageHidden} />}
       </div>
+      <div className="hp-wallpaper-edge" aria-hidden />
+      <div className="hp-wallpaper-tone" aria-hidden />
+      <div className="hp-glow" aria-hidden />
+
+      {!phone && (
+        <button
+          type="button"
+          className={`hp-wallpaper-button hp-edit-button${editing ? ' on' : ''}`}
+          aria-label={t('home.edit')}
+          aria-pressed={editing}
+          title={t('home.edit')}
+          onClick={(event) => { event.stopPropagation(); exitComposerInputMode(); setMenu(null); setWallpaperOpen(false); setEditing((v) => !v) }}
+        >
+          <Pencil size={15} />
+        </button>
+      )}
+      <button
+        type="button"
+        className={`hp-wallpaper-button${wallpaperOpen ? ' on' : ''}`}
+        aria-label={t('home.wallpaper.open')}
+        title={t('home.wallpaper.open')}
+        onClick={(event) => { event.stopPropagation(); exitComposerInputMode(); setMenu(null); setOpenFolder(null); setOrganizerOpen(false); setWallpaperOpen((open) => !open) }}
+      >
+        <Image size={16} />
+      </button>
+
+      <div className={`hp-stack${leaving ? ' leaving' : ''}`} style={shift ? { left: shift } : undefined}>
+        {centerParts.map((part) => (
+          <Fragment key={part}>
+            <PartFrame part={part} editing={editing} onRemove={part === 'clock' || part === 'dock' ? () => removePart(part) : undefined} onGrip={(e, p) => dragPart(e, p, rootRef.current)}>
+              {partNode(part)}
+            </PartFrame>
+          </Fragment>
+        ))}
+      </div>
+
+      {!phone && (
+        <>
+          <HomeRail side="left" ids={homeLayout.left} mode={modes.left} editing={editing} onGrip={(e, id) => dragWidget(e, id, rootRef.current)} />
+          <HomeRail side="right" ids={homeLayout.right} mode={modes.right} editing={editing} onGrip={(e, id) => dragWidget(e, id, rootRef.current)} />
+          {editing && (
+            <div className="hp-edit-bar" role="toolbar" aria-label={t('home.edit')}>
+              <span>{t('home.edit.hint')}</span>
+              <button type="button" onClick={(event) => { event.stopPropagation(); showOrganizer(false, 'widgets') }}><Plus size={14} />{t('home.edit.add')}</button>
+              <button type="button" className="hp-edit-done" onClick={(event) => { event.stopPropagation(); setEditing(false) }}><Check size={14} />{t('home.edit.done')}</button>
+            </div>
+          )}
+        </>
+      )}
 
       <input
         ref={fileRef}
@@ -1048,53 +1080,23 @@ export function HomepageView(_props: ViewProps) {
       {/* 全部 Spaces 不是 Dock 的第二行,而是参考旧 Desktop 的独立应用抽屉。
           同一份 Tile / DnD 回写逻辑保证它仍只是 ribbon 数据的另一种视图。 */}
       {organizerOpen && (
-        <div className="hp-organizer-stage" onClick={() => setOrganizerOpen(false)}>
-          <section className="hp-organizer-panel" aria-label={t('home.organizer.title')} onClick={(event) => event.stopPropagation()}>
-            <header className="hp-organizer-head">
-              <div>
-                <span className="hp-organizer-mark"><Grid2X2 size={16} /></span>
-                <span><strong>{t('home.organizer.title')}</strong><small>{t('home.spaceCount', { n: spaceCount })}</small></span>
-              </div>
-              <button type="button" onClick={() => setOrganizerOpen(false)} aria-label={t('common.close')}><X size={16} /></button>
-            </header>
-            <DndContext
-              sensors={sensors}
-              collisionDetection={dockCollision}
-              onDragStart={dragStart}
-              onDragOver={dragOver}
-              onDragCancel={dragCancel}
-              onDragEnd={dragEnd}
-            >
-              <SortableContext items={tiles.map((tile) => tile.id)} strategy={rectSortingStrategy}>
-                <div className="hp-organizer-grid">
-                  {tiles.map((tile) => (
-                    <SortableTile
-                      key={tile.id}
-                      tile={tile}
-                      over={over === tile.id}
-                      open={false}
-                      onOpen={openFolderTile}
-                      onLaunch={(spaceId) => { setOrganizerOpen(false); launchSpace(spaceId) }}
-                      onMenu={(event, id) => menuAt(event, 'folder', id)}
-                    />
-                  ))}
-                  <button type="button" className="hp-organizer-new" onClick={newFolder}>
-                    <span><FolderPlus size={22} /></span>
-                    <small>{t('home.newFolder')}</small>
-                  </button>
-                </div>
-              </SortableContext>
-              <DragOverlay dropAnimation={null}>
-                {activeTile && (
-                  <div className={`hp-tile hp-drag-overlay${activeTile.kind === 'folder' ? ' hp-folder' : ''}`}>
-                    <TileVisual tile={activeTile} />
-                  </div>
-                )}
-              </DragOverlay>
-            </DndContext>
-            <footer>{t('home.organizer.hint')}</footer>
-          </section>
-        </div>
+        <SpaceOrganizer
+          skip={SELF_SPACE}
+          byKey={organizerByKey}
+          onClose={() => setOrganizerOpen(false)}
+          onLaunch={launchSpace}
+          onOpenFolder={openFolderTile}
+          onFolderMenu={(event, id) => menuAt(event, 'folder', id)}
+          onDragStart={() => setMenu(null)}
+          tabs={phone ? undefined : {
+            tab: organizerTab,
+            onTab: setOrganizerTab,
+            panes: {
+              widgets: { node: <WidgetLibrary layout={homeLayout} onAsk={askAgentForWidget} />, count: homeLayout.left.length + homeLayout.right.length + homeLayout.row.length, footer: t('home.lib.hint') },
+              parts: { node: <PartsLibrary layout={homeLayout} />, count: homeLayout.center.filter((p) => p !== 'row').length, footer: t('home.lib.partsHint') },
+            },
+          }}
+        />
       )}
 
       {/* 收纳夹从点击源放大到中央,形成独立的二级应用层。成员重排仍写 ribbon folder.items。 */}

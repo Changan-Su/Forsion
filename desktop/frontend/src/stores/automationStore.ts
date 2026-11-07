@@ -45,11 +45,16 @@ interface AutomationState {
   actionsCatalog: AutomationActionCatalogItem[]
   sel: AutomationSel | null
   builder: null | { editingId?: string; starter?: Starter }
+  /** 构建器挂进来的离开闸:有没保存的修改时问一句,答「否」= 不切走(D28)。文案在组件层,所以由构建器给。 */
+  leaveGuard: (() => boolean) | null
+  setLeaveGuard(guard: (() => boolean) | null): void
   /** 保存/启停/删除后 bump,右栏 runs 与列表跟着重拉。 */
   refreshNonce: number
   refresh(cfg: TanguDesktopConfig): Promise<void>
   setSel(sel: AutomationSel | null): void
   openBuilder(editingId?: string, starter?: Starter): void
+  /** 从 Automation Space 以外打开一条规则。构建器在 triggers 里找规则,找不到就是空白草稿,保存会把规则盖掉,所以先拉到再开。 */
+  openRule(id: string): Promise<void>
   acceptSaved(trigger: MuseTriggerInfo): void
   closeBuilder(): void
   bump(): void
@@ -65,6 +70,7 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   actionsCatalog: [],
   sel: null,
   builder: null,
+  leaveGuard: null,
   refreshNonce: 0,
 
   async refresh(cfg) {
@@ -90,10 +96,20 @@ export const useAutomation = create<AutomationState>((set, get) => ({
   },
 
   setSel(sel) {
+    if (get().builder && get().leaveGuard?.() === false) return
     set({ sel, builder: null })
   },
   openBuilder(editingId, starter) {
+    if (get().builder && get().leaveGuard?.() === false) return
     set({ builder: { editingId, starter } })
+  },
+  setLeaveGuard(guard) {
+    set({ leaveGuard: guard })
+  },
+  async openRule(id) {
+    if (get().builder && get().leaveGuard?.() === false) return
+    const triggers = get().triggers.some((t) => t.id === id) ? get().triggers : await getMuseTriggers(homeTarget()).catch(() => [])
+    if (triggers.some((t) => t.id === id)) set({ triggers, builder: { editingId: id } })
   },
   acceptSaved(trigger) {
     set((s) => ({ triggers: [...s.triggers.filter((t) => t.id !== trigger.id), trigger],

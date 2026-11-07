@@ -1,7 +1,6 @@
 // calendarDate 存储编码纯逻辑:parse / serialize round-trip / allDay 判定 / 显示格式化。
 import { describe, expect, it } from 'vitest'
-import { parseCalDate, calDateToValue, fmtCalDate } from './calDate'
-import { seedCalendarDb, dbFileSchema } from './schema'
+import { parseCalDate, calDateToValue, fmtCalDate, shiftEnd } from './calDate'
 
 describe('parseCalDate', () => {
   it('全天(仅日期)', () => {
@@ -43,32 +42,26 @@ describe('fmtCalDate', () => {
   it('null → 空串', () => expect(fmtCalDate(null)).toBe(''))
 })
 
-describe('seedCalendarDb', () => {
-  it('过 dbFileSchema(含 calendarDate/todo 自定义 type)', () => {
-    expect(dbFileSchema.safeParse(seedCalendarDb()).success).toBe(true)
+describe('shiftEnd:改开始时结束跟着平移,时长不变', () => {
+  it('一小时的事往后挪三天,结束也挪三天', () => {
+    expect(shiftEnd('2026-11-02T11:00', '2026-11-05T11:00', '2026-11-02T12:00')).toBe('2026-11-05T12:00')
   })
-  it('日期列的值能被 parseCalDate 解析', () => {
-    const db = seedCalendarDb()
-    const dateCol = db.columns.find((c) => c.type === 'calendarDate')!
-    for (const r of db.rows) {
-      const v = r.cells[dateCol.id]
-      if (v != null) expect(parseCalDate(v as string)).not.toBeNull()
-    }
+  it('只改开始时刻,结束同样多挪', () => {
+    expect(shiftEnd('2026-11-02T11:00', '2026-11-02T14:30', '2026-11-02T12:00')).toBe('2026-11-02T15:30')
   })
-  // ⚠️ 种子日期必须相对播种当天算。写死绝对日期 → 过几周全部落进待办视图恒置顶的「逾期」桶,
-  //    用户第一眼看到的就是「逾期 53 天 欢迎使用 Calendar Space」。负对照:把 day(n) 改回
-  //    '2026-07-06' 之类的字面量,这条必须变红。
-  it('种子日期相对播种当天,永远不会一开箱就逾期', () => {
-    const seeded = new Date(2030, 0, 15)
-    const db = seedCalendarDb(seeded)
-    const dateCol = db.columns.find((c) => c.type === 'calendarDate')!
-    const floor = new Date(2030, 0, 15).getTime()
-    for (const r of db.rows) {
-      const v = r.cells[dateCol.id]
-      if (v == null) continue
-      const cd = parseCalDate(v as string)!
-      expect(new Date(cd.start.slice(0, 10)).getTime()).toBeGreaterThanOrEqual(new Date('2030-01-15').getTime())
-      expect(floor).toBeGreaterThan(0)
-    }
+  it('跨午夜的事挪半小时,结束落在第二天', () => {
+    expect(shiftEnd('2026-11-02T23:00', '2026-11-02T23:30', '2026-11-03T01:00')).toBe('2026-11-03T01:30')
+    expect(shiftEnd('2026-11-02T22:00', '2026-11-02T23:30', '2026-11-02T23:00')).toBe('2026-11-03T00:30')
+  })
+  it('全天多日跨月平移', () => {
+    expect(shiftEnd('2026-01-31', '2026-02-01', '2026-02-02')).toBe('2026-02-03')
+    expect(shiftEnd('2026-11-02', '2026-10-30', '2026-11-04')).toBe('2026-11-01')
+  })
+  it('开始加上 / 去掉时刻时,只按天平移,结束时刻原样', () => {
+    expect(shiftEnd('2026-11-02', '2026-11-02T10:00', '2026-11-03')).toBe('2026-11-03')
+    expect(shiftEnd('2026-11-02T10:00', '2026-11-04', '2026-11-02T11:00')).toBe('2026-11-04T11:00')
+  })
+  it('没有结束就没有结束', () => {
+    expect(shiftEnd('2026-11-02', '2026-11-05', undefined)).toBeUndefined()
   })
 })

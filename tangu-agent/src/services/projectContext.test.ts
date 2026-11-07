@@ -147,6 +147,15 @@ describe('createProjectSkill + listProjectSkills', () => {
     const found = (await listProjectSkills(cwd)).sort((a, b) => a.skill.id.localeCompare(b.skill.id));
     expect(found.map((f) => [f.skill.id, f.skill.name, f.legacy])).toEqual([['local:both', 'From tangu', false], ['local:old', 'Old', true]]);
   });
+
+  it('别家 agent 的项目技能 .claude/skills / .agents/skills 原地列出,优先级最低,不算 legacy', async () => {
+    const cwd = mk('others');
+    w('others/.claude/skills/cc/SKILL.md', '---\nname: From claude\n---\nx');
+    w('others/.agents/skills/both/SKILL.md', '---\nname: From agents\n---\nx');
+    w('others/.tangu/skills/both/SKILL.md', '---\nname: From tangu\n---\ny');
+    const found = (await listProjectSkills(cwd)).sort((a, b) => a.skill.id.localeCompare(b.skill.id));
+    expect(found.map((f) => [f.skill.id, f.skill.name, f.legacy])).toEqual([['local:both', 'From tangu', false], ['local:cc', 'From claude', false]]);
+  });
 });
 
 describe('plans', () => {

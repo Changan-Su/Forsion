@@ -1,5 +1,6 @@
 import { MarketPluginCards, isMarketplaceTool } from '../../components/MarketPluginCards'
 import { PluginSandboxCard, isSandboxCardTool } from './PluginSandboxCard'
+import { GitToolCard, gitStatusSuperseded, isGitTool } from './GitToolCard'
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
 import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
@@ -18,14 +19,16 @@ import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, T
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { Markdown } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
+import { leadingCommand } from './composerTokens'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { splitLeadingQuotes } from './quotes'
 import { QuotePreview, QuoteTile, findQuoteSource } from './QuoteTile'
 import { VoiceBubble } from '../../components/VoiceBubble'
 import { InlineFiles } from '../../components/InlineFiles'
-import { IntelligentUi } from '../../components/IntelligentUi'
+import { ChatIntelligentUi } from '../../components/WidgetHost'
 import { SketchCards } from '../../components/SketchCard'
 import { PluginToolCard, useToolCardOf, type ToolCardClaim } from '../../components/PluginToolCard'
+import { HostWebCard, LocalWebCard, isHtmlFile, planWebCards, useSessionCwd, webCardsHere, type WebCardSpec } from './WebCards'
 import { sketchFence } from '../../amadeus/blocks/sketch/format'
 import { streamingArgString } from '../streamingWrite'
 import { SystemPromptBlock } from '../../components/SystemPromptBlock'
@@ -62,6 +65,7 @@ import { playSendFlight } from './sendFlight'
 import { InquiryCard, PlanCard, TodoList } from '../../components/InquiryCard'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
+import { agentName, agentNames } from '../../agentName'
 import { isHtmlCardTool } from '../../tangu/store/tanguSlice'
 import { runResultText, type RunResult } from '../../builtins/runCommand'
 import { SUB_PROVIDER_LABELS } from '../../components/OnboardingWizard'
@@ -72,7 +76,9 @@ import { formatDateTime, formatMessageTime } from '../../format/time'
 
 import { TaskCards, TaskTraces, type TaskLanding } from './TaskCards'
 import { MuseApprovalLine, MuseTodoCards, MuseTodoTraces, ProactiveMark, isProactive } from './MuseDm'
-import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, childIdsOf } from './ChildSessions'
+import { MuseCardLine, MuseFeedbackRow, museCardRef } from './MuseCards'
+import { FallbackLine, FallbackModelName, QuotaChips, QuotaRemindChip, QUOTA_RE, isQuotaText, quotaResetFromError, stripQuotaAsk } from './QuotaRelay'
+import { CHILD_UPDATE_OPEN, ChildUpdateLine, ForkBlock, ForkScope, SESSION_MESSAGE_OPEN, SessionMessageLine, childIdsOf } from './ChildSessions'
 import { APPROVAL_UPDATE_OPEN, INQUIRY_UPDATE_OPEN, approvalForCall, parseApprovalUpdate, parseInquiryUpdate, pickPlanInquiry, type ApprovalOutcome } from './approvalQueue'
 import { isRemoteApprover, wasDecidedHere } from '../../components/ApprovalCard'
 import { answeredByText, approvalPreviewText } from '../../approvalReason'
@@ -93,9 +99,17 @@ export type OrderedToolPart =
   | { t: 'marketplace'; event: ToolEvent }
   | { t: 'sandbox'; event: ToolEvent }
   | { t: 'pluginCard'; event: ToolEvent; claim: ToolCardClaim }
+  | { t: 'web'; event: ToolEvent; spec: WebCardSpec }
+  | { t: 'git'; events: ToolEvent[] }
 
 /** 直播中还没收口的 sketch 调用 → 草稿卡(10-09,对标 ChatGPT Intelligent UI 边生成边渲染):tool_stream 已把参数增量
  *  累进 ev.arguments,这里从半截 JSON 里把 html 解出来。只在**直播**里算(live):历史 / 中断的未完成调用照旧不画幻影卡。 */
+/** 用户气泡的正文:开头的斜杠命令画成一枚(和输入框里同一枚,见 ./composerTokens)。 */
+function UserText({ text }: { text: string }) {
+  const lead = leadingCommand(text)
+  return lead ? <><span className="t2-cmd">{lead.cmd}</span><WikiText text={lead.rest} /></> : <WikiText text={text} />
+}
+
 function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
   if (!isHtmlCardTool(ev.name) || ev.done || !ev.arguments) return undefined
   const html = streamingArgString(ev.arguments, 'html')
@@ -104,17 +118,23 @@ function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
   return { callId: ev.id, html, ...(title ? { title } : {}), draft: true }
 }
 
+const failedIntelligentUi = (ev: ToolEvent): boolean => ev.name === 'intelligent_ui' && ev.done && (!!ev.isError || /^Error[:\s]/i.test(ev.result || ''))
+
 /**
  * 把一个连续工具段按 Sketch 完成点切开。Sketch 的工具行仍留在前一组中,卡片紧跟其后(原生文档的工具行不留,见下)；
  * 后续工具另起一组,于是多个草图与正文都不会再被批量挪到消息末尾。
  * live=消息还在直播:没收口的 sketch 调用也出一张草稿卡(同 callId,终稿到达原地换成正式卡)。
  * cardOf=插件结果卡片的认领(toolResultCards.useToolCardOf):认领了的调用画卡片**代替**通用记录(同原生文档),
  * 前后的工具各成一组;没认领的(运行中、出错、插件停用 / 重载)照旧是通用记录。
+ * webOf=本地网页卡 / 服务卡(WebCards.planWebCards):工具行留着,卡排在这一段工具的最后 —— 不切开工具组,
+ * 卡自己判定不画时(文件在 Vite 项目里、地址还没认出、不是本机会话)不留下两截工具组。
  */
-export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[], live = false, cardOf?: (ev: ToolEvent) => ToolCardClaim | undefined): OrderedToolPart[] {
+export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[], live = false, cardOf?: (ev: ToolEvent) => ToolCardClaim | undefined, webOf?: (ev: ToolEvent) => WebCardSpec | undefined): OrderedToolPart[] {
   const sketchByCall = new Map((sketches || []).map((item) => [item.callId, item]))
   const parts: OrderedToolPart[] = []
+  const webs: OrderedToolPart[] = []
   let tools: ToolEvent[] = []
+  let gitRun: ToolEvent[] = []
   const flushTools = (): void => {
     if (tools.length) parts.push({ t: 'tools', events: tools })
     tools = []
@@ -123,31 +143,38 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     if (ev.name === 'intelligent_ui') {
       // 原生文档就是回答本身(10-13,对标 ChatGPT:整条回答是一棵组件树,没有「工具」这一层):
       // 生成中和成功的调用不在文档上面挂工具行;被拒收的那次留着,错误看得见。
-      const failed = (e: ToolEvent): boolean => e.done && (!!e.isError || /^Error[:\s]/i.test(e.result || ''))
-      if (failed(ev)) tools.push(ev)
+      const failed = failedIntelligentUi(ev)
+      if (failed) tools.push(ev)
       flushTools()
-      // 被拒收之后模型在同一段里重写、并且那一份成功了:残缺的那份不画(否则是一张「内容不完整」的卡下面再跟一张完整的),只留它的工具行。
-      // 重写的那份还在生成、又被拒收或中断时,前一份照旧画着 —— 它可能是这条回答里唯一看得见的内容(Codex 10-13)。
-      const rewritten = failed(ev) && events.slice(i + 1).some((next) => next.name === 'intelligent_ui' && next.done && !failed(next))
-      if (!rewritten) parts.push({ t: 'intelligent', event: ev })
+      // 失败即撤下残缺内容,不等同段重试成功;跨文字段的重绘也只显示新卡。
+      if (!failed) parts.push({ t: 'intelligent', event: ev })
       continue
     }
     const claim = cardOf?.(ev)
     if (claim) { flushTools(); parts.push({ t: 'pluginCard', event: ev, claim }); continue }
     if (isSandboxCardTool(ev)) { flushTools(); parts.push({ t: 'sandbox', event: ev }); continue }
+    // git_* 的工具行留着,连续几步 git 跑完后接一张 Git 卡(GitToolCard;下一个不是 git 调用时收口)
+    if (isGitTool(ev)) {
+      tools.push(ev)
+      if (ev.done) gitRun.push(ev)
+      if (gitRun.length && !(events[i + 1] && isGitTool(events[i + 1]))) { flushTools(); parts.push({ t: 'git', events: gitRun }); gitRun = [] }
+      continue
+    }
     tools.push(ev)
     if (isMarketplaceTool(ev) && ev.done && !ev.isError) { flushTools(); parts.push({ t: 'marketplace', event: ev }); continue }
+    const web = webOf?.(ev)
+    if (web) webs.push({ t: 'web', event: ev, spec: web })
     const sketch = sketchByCall.get(ev.id) ?? (live ? draftSketchOf(ev) : undefined)
     if (!sketch) continue
     flushTools()
     parts.push({ t: 'sketch', item: sketch })
   }
   flushTools()
-  return parts
+  return webs.length ? [...parts, ...webs] : parts
 }
 
 /** 头像回退:无图时取昵称首字(支持 CJK/emoji),对齐 desktop1.0。 */
-function firstChar(s?: string): string {
+export function firstChar(s?: string): string {
   const t = (s || '').trim()
   return t ? Array.from(t)[0].toUpperCase() : '?'
 }
@@ -163,6 +190,9 @@ const ERR_RULES: Array<[RegExp, string]> = [
   // 引擎自家错误码(agentLoop publish 的 error 字段是裸码):精确规则放前面
   [SUB_EXPIRED_RE, 'chat.err.subExpired'], // 比下面通用的 401 更具体,必须排在它前面
   [/token_quota_exceeded/i, 'chat.err.quota'],
+  [/masking_failed/, 'chat.err.maskFailed'], // 引擎 llm/outboundMask.ts:开着却跑不了 → 这一轮不发
+  [/masking_blocked/, 'chat.err.maskBlocked'],
+  [QUOTA_RE, 'chat.err.quotaUsed'], // 订阅额度 / 账单配额用完:几小时才重置,不是限流(必须排在 429 前面)
   [/engine_unavailable_remote/i, 'chat.err.engineRemote'], // 契约 C6:远程污点 run 不进外部引擎
   [/run_cost_exceeded/i, 'chat.err.runCost'],
   [/input_too_large/i, 'chat.err.inputTooLarge'],
@@ -172,12 +202,17 @@ const ERR_RULES: Array<[RegExp, string]> = [
   [/terminated|ECONNRESET|socket hang up|premature close/i, 'chat.err.dropped'],
   [/ETIMEDOUT|timed? ?out/i, 'chat.err.timeout'],
   [/(^|\D)(401|403)(\D|$)|unauthorized|invalid[ _-]?api[ _-]?key/i, 'chat.err.auth'],
-  [/(^|\D)429(\D|$)|rate[ _-]?limit|insufficient[ _-]?quota/i, 'chat.err.rate'],
+  [/(^|\D)429(\D|$)|rate[ _-]?limit|per ?minute|allocated quota exceeded/i, 'chat.err.rate'],
   [/(^|\D)5\d\d(\D|$)|bad gateway|overloaded/i, 'chat.err.server'],
 ]
 export function humanizeRunError(raw: string | undefined, t: (k: string, v?: Record<string, unknown>) => string): string {
   if (!raw) return t('chat.error')
-  const hit = ERR_RULES.find(([re]) => re.test(raw))
+  raw = stripQuotaAsk(raw)
+  const hit = ERR_RULES.find(([re, key]) => re.test(raw) && (key !== 'chat.err.quotaUsed' || isQuotaText(raw)))
+  if (hit?.[1] === 'chat.err.quotaUsed') {
+    const time = quotaResetFromError(raw)
+    return `${t(time ? 'chat.err.quotaUsedAt' : 'chat.err.quotaUsed', { time })}(${raw})`
+  }
   return hit ? `${t(hit[1])}(${raw})` : raw
 }
 
@@ -187,6 +222,8 @@ registerMessages({
     en: 'Your direct-connection sign-in has expired — please sign in again',
   },
   'chat.err.relogin': { zh: '重新登录 {provider}', en: 'Sign in to {provider} again' },
+  'chat.retry': { zh: '重试', en: 'Retry' },
+  'chat.copyError': { zh: '复制错误', en: 'Copy error' },
   'rewind.title': { zh: '回退到这条消息', en: 'Rewind to this message' },
   'rewind.counting': { zh: '正在统计改动…', en: 'Counting changes…' },
   'rewind.codeOnly': { zh: '仅回退代码（{n} 个文件）', en: 'Code only ({n} file(s))' },
@@ -255,6 +292,30 @@ export interface MessageHandlers {
   onInsertNote?: (text: string) => void
   /** 插件结果卡片的 call.quote:挂成这块输入框上方的引用卡(同划线「引用」)。不传 → 退回主对话的输入框。 */
   onQuote?: (text: string) => void
+  /** 回答失败后「重试」:同 /retry(从最后一条用户消息重发)。只读视图不传 → 不出按钮。 */
+  onRetry?: () => void
+}
+
+/** 失败那一行 + 下面「重试 · 复制错误」(走查续六 6.3)。只在会话最后一条、且没在跑时给重试:重试后新一轮接上,按钮自然消失。 */
+function RunErrorRow({ msg, sessionId, modelId, handlers }: { msg: UiMessage; sessionId?: string; modelId?: string; handlers?: MessageHandlers }) {
+  const { t } = useI18n()
+  const canRetry = useApp((s) => !!handlers?.onRetry && !!sessionId && !s.runningBySession[sessionId] && s.messagesBySession[sessionId]?.at(-1)?.id === msg.id)
+  return (
+    <>
+      <div className="t2-tool err">
+        <span className="t2-status-err">✕ {humanizeRunError(msg.error, t)}</span>
+        <ReloginChip error={msg.error} modelId={modelId} />
+        <QuotaRemindChip error={msg.error} sessionId={sessionId} modelId={modelId} />
+        <QuotaChips error={msg.error} messageId={msg.id} sessionId={sessionId} modelId={modelId} />
+      </div>
+      {(canRetry || (handlers?.onCopy && msg.error)) && (
+        <div className="t2-retry-row">
+          {canRetry && <button type="button" className="t2-retry-btn lead" data-testid="msg-retry" onClick={() => handlers!.onRetry!()}><RotateCcw size={13} />{t('chat.retry')}</button>}
+          {handlers?.onCopy && msg.error && <button type="button" className="t2-retry-btn" onClick={() => handlers.onCopy!(msg.error!)}><Copy size={13} />{t('chat.copyError')}</button>}
+        </div>
+      )}
+    </>
+  )
 }
 
 type RewindMode = 'code' | 'conversation' | 'both'
@@ -404,6 +465,8 @@ export const EditorialMessage = memo(EditorialMessageView)
 
 function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, userAvatar, handlers, fileCtx, rootRef, speakState, voice, modelId, showWaitDetails = false, footer, onBringBack, todoInTail = false }: { /** 这条的任务清单画在对话末尾(ChatView 只给最新那份传):这里不再画。 */ todoInTail?: boolean; /** 助手气泡正文末尾的附加行(ChatView 给最后一条助手消息挂 run 统计)。 */ footer?: React.ReactNode; /** 分支里最后一条回答:「带回这里」把它作为引用挂进来源那支的输入框(ChatView 只给这一条传)。 */ onBringBack?: (text: string) => void; msg: UiMessage; avatarUrl?: string; agentNameFallback?: string; userName?: string; userAvatar?: string; handlers?: MessageHandlers; fileCtx?: FileCtx; rootRef?: Ref<HTMLDivElement>; speakState?: 'loading' | 'playing'; voice?: { on: boolean; cfg: TanguDesktopConfig; stored: StoredDesktopConfig | null }; /** 这条消息实际用的模型(仅用于认出订阅直连过期 → 给重登按钮;缺省=不给)。 */ modelId?: string; /** 测试性功能:显示发送上下文 / 等待首帧 / 已等待时间。默认关。 */ showWaitDetails?: boolean }) {
   const forkScope = useContext(ForkScope)
+  // 消息里的 agentName 是收到时的显示名:现取,切语言 / 改名后旧消息也跟着变。重载时名册可能晚到,老记录那时认不出 slug,这里按名字再认一次
+  const speakerName = useApp((s) => agentName(s.agentDefs.find((a) => (msg.agentId ? a.slug === msg.agentId : !!msg.agentName && agentNames(a).includes(msg.agentName)))))
   // shell 代码块「运行」的回传:结果作为用户消息发回**这条消息所在**的会话(run 活着自动变 steer)。
   // cwd 跟会话走(agent 的工作目录),没有就家目录。对象按会话 memo,别每次渲染新造一个(Markdown 是 React.memo)。
   const runSid = fileCtx?.sessionId
@@ -420,8 +483,18 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const { t } = useI18n()
   // 插件结果卡片的认领(订阅渲染器 / 名单:插件晚加载或被停用时这条消息跟着重渲)
   const cardOf = useToolCardOf()
+  // 本地网页卡 / 服务卡(网页卡片第二轮 1):整条消息一起排(多个 HTML 只给入口、挂在最后一次写上)
+  const webCwd = useSessionCwd(runSid)
+  // 引擎不在这台电脑上 / 沙箱会话不排(卡画不出来就别动工具组和附件);同一路径又 display_file 了 → 那张归附件区画
+  const webHere = webCardsHere(runSid, fileCtx?.execMode)
+  const webPlan = useMemo(() => {
+    if (!webHere) return new Map<string, WebCardSpec>()
+    const shown = new Set((msg.displayFiles ?? []).map((f) => f.path).filter(Boolean))
+    return new Map([...planWebCards(msg.toolEvents, webCwd)].filter(([, w]) => w.kind !== 'local' || !shown.has(w.path)))
+  }, [webHere, msg.toolEvents, msg.displayFiles, webCwd])
+  const webOf = useCallback((ev: ToolEvent) => webPlan.get(ev.id), [webPlan])
   // 待办清单的「进行中」只在这一段还在流式、且会话的 run 还活着时转圈:停止 / 出错 / 断流后的孤儿气泡都不转。
-  // ponytail: steer 切段后旧段已 done,run 仍在跑时这份清单也停转;要跟上得在 turn_boundary 把 todos 挪到新段。
+  // steer 切段时 turn_boundary 把清单带进新段,跑着的那份在新段上转;旧段已 done,只留快照。
   const todoLive = useApp((s) => msg.status === 'streaming' && !!msg.todos?.length && (!runSid || !!s.runningBySession[runSid]))
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
@@ -488,6 +561,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     // 输出不在这里(引擎把真结果放回了原工具卡),这一行只说谁批了什么。
     // 子会话结果送回主会话(引擎落库的 <child_sessions_update> user 行):同理画成一行系统行。
     if (msg.content.startsWith(CHILD_UPDATE_OPEN)) return <div ref={rootRef}><ChildUpdateLine content={msg.content} /></div>
+    // 别的会话发来的消息(<session_message>:子会话发给主会话 / 兄弟之间):同理不是用户说的话
+    if (msg.content.startsWith(SESSION_MESSAGE_OPEN)) return <div ref={rootRef}><SessionMessageLine content={msg.content} /></div>
     // 挂起提问的答案回灌(<inquiry_update>,10-23):agent 没停下来等,答案到了这一行标出「它从这里接着用上了」
     if (msg.content.startsWith(INQUIRY_UPDATE_OPEN)) {
       const rows = parseInquiryUpdate(msg.content)
@@ -496,7 +571,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           {rows.map((r) => (
             <div key={r.callId} className="t2-apv-update-row" data-status={r.answered ? 'approved' : 'rejected'}>
               {r.answered ? <CircleCheck size={12} /> : <CircleX size={12} />}
-              <span className="t2-apv-update-what">{t(r.answered ? 'chat.inquiry.updateAnswered' : 'chat.inquiry.updateNone', { q: r.question })}</span>
+              <span className="t2-apv-update-what is-question" title={r.question}>{t(r.answered ? 'chat.inquiry.updateAnswered' : 'chat.inquiry.updateNone', { q: r.question })}</span>
               {r.answered && <span className="t2-apv-update-preview" title={r.answer}>{r.answer}</span>}
             </div>
           ))}
@@ -604,7 +679,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 ))}
               </div>
             )}
-            {lead || quoted ? (body && <WikiText text={body} />) : <WikiText text={msg.content} />}
+            {lead || quoted ? (body && <UserText text={body} />) : <UserText text={msg.content} />}
             </UserFold>
           </div>
           )}
@@ -639,7 +714,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   const museTodo = msg.origin === 'proactive:todo'
   const museApproval = msg.origin === 'proactive:approval'
   const fenceKinds: FenceKind[] = [...(window.tangu?.productsRegister ? ['suggest', 'task', 'creation'] as FenceKind[] : ['suggest', 'task'] as FenceKind[]), ...(museApproval ? ['approval'] as FenceKind[] : [])]
-  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(msg.content, { streaming, kinds: fenceKinds, todo: museTodo })
+  const museCard = msg.origin === 'proactive:card' || msg.origin === 'proactive:notice' ? museCardRef(msg.content) : null
+  const { text: body, items: suggestions, tasks, creations, approvals: museApprovals } = splitSuggestions(museCard ? museCard.text : msg.content, { streaming, kinds: fenceKinds, todo: museTodo })
   const childIds = childIdsOf(msg.toolEvents) // 不用 hook:上面 system / user 两支提前 return 了
   // sketch 卡 → 笔记里的交互块(```forsion-sketch 围栏,嵌入层按同一沙箱渲染);与回答的「插入笔记」同一条写口。
   const sketchActions = handlers?.onInsertNote
@@ -660,7 +736,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     }
   }
   const inlineToolIds = new Set(!voiceMode ? (msg.segments || []).flatMap(seg => seg.t === 'tools' ? seg.ids : []) : [])
-  const trailingIntelligent = (msg.toolEvents || []).filter(ev => ev.name === 'intelligent_ui' && !inlineToolIds.has(ev.id))
+  const trailingIntelligent = (msg.toolEvents || []).filter(ev => ev.name === 'intelligent_ui' && !failedIntelligentUi(ev) && !inlineToolIds.has(ev.id))
   const trailingSketches = (msg.sketches || []).filter((item) => !inlineSketchIds.has(item.callId))
   const trailingCards = (msg.toolEvents || []).flatMap((ev) => {
     const claim = inlineToolIds.has(ev.id) ? undefined : cardOf(ev)
@@ -668,10 +744,12 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   })
 
   return (
+    <>
+    {msg.fallback && <FallbackLine fb={msg.fallback} />}
     <div ref={setAsst} className="t2-asst" id={`tocmsg-${msg.id}`} data-streaming={msg.status === 'streaming' ? '' : undefined}>
-      <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(msg.agentName || agentNameFallback || 'Tangu')}</div>
+      <div className="t2-avatar" style={!avatarUrl && msg.agentColor ? { background: msg.agentColor, color: '#fff' } : undefined}>{avatarUrl ? <img src={avatarUrl} alt="" /> : firstChar(speakerName || msg.agentName || agentNameFallback || 'Tangu')}</div>
       <div className="t2-asst-col">
-        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{msg.agentName || agentNameFallback || 'Tangu'}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
+        <div className="t2-name" style={msg.agentColor ? { color: msg.agentColor } : undefined}>{speakerName || msg.agentName || agentNameFallback || 'Tangu'}{msg.fallback && <FallbackModelName fb={msg.fallback} />}{msg.status === 'streaming' && <span className="t2-dot" />}</div>
         {isProactive(msg) && <ProactiveMark at={msg.timestamp} />}
         {msg.systemPrompt && <SystemPromptBlock content={msg.systemPrompt} />}
         {(() => {
@@ -692,7 +770,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             const firstIdx = msg.segments.findIndex((s2) => s2.t === 'tools' || !!s2.text.trim())
             const evsOf = (ids: string[]) => ids.map((id) => msg.toolEvents?.find((e) => e.id === id)).filter(Boolean) as ToolEvent[]
             const first = msg.segments[firstIdx]
-            const firstParts = first?.t === 'tools' ? partitionToolSegment(evsOf(first.ids), msg.sketches, streaming, cardOf) : []
+            const firstParts = first?.t === 'tools' ? partitionToolSegment(evsOf(first.ids), msg.sketches, streaming, cardOf, webOf) : []
             const headEvents = firstParts[0]?.t === 'tools' ? firstParts[0].events : undefined
             const nodes = msg.segments.map((seg, i) => {
               if (seg.t === 'text') {
@@ -700,39 +778,43 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 fenceState = parsed.state
                 const segBody = parsed.text
                 return segBody
-                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards /></div>
+                  ? <div key={i} className="t2-content"><Markdown content={segBody} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead /></div>
                   : null
               }
               const skip = i === firstIdx && headEvents ? 1 : 0
-              const parts = (i === firstIdx ? firstParts : partitionToolSegment(evsOf(seg.ids), msg.sketches, streaming, cardOf)).slice(skip)
+              const parts = (i === firstIdx ? firstParts : partitionToolSegment(evsOf(seg.ids), msg.sketches, streaming, cardOf, webOf)).slice(skip)
               return parts.length ? (
                 <Fragment key={i}>
                   {parts.map((part, k) => part.t === 'tools'
-                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} />
+                    ? <ToolGroup key={`tools-${part.events.map((ev) => ev.id).join('-')}-${k + skip}`} events={part.events} running={msg.status === 'streaming'} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} />
                     : part.t === 'marketplace'
                       ? <MarketPluginCards key={`market-${part.event.id}`} event={part.event} />
                     : part.t === 'sandbox'
                       ? <PluginSandboxCard key={`sandbox-${part.event.id}`} event={part.event} />
+                    : part.t === 'web'
+                      ? <HostWebCard key={`web-${part.event.id}`} spec={part.spec} sessionId={runSid} onAsk={handlers?.onSuggest} />
+                    : part.t === 'git'
+                      ? (gitStatusSuperseded(part.events, msg.toolEvents) ? null : <GitToolCard key={`git-${part.events[0].id}`} events={part.events} sessionId={runSid} />)
                     : part.t === 'pluginCard'
                       ? <PluginToolCard key={`ptc-${part.event.id}`} event={part.event} claim={part.claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[part.event]} />} />
                     : part.t === 'intelligent'
-                      ? <IntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />
+                      ? <ChatIntelligentUi key={`intelligent-${part.event.id}`} event={part.event} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} />
                     : <SketchCards key={`sketch-${part.item.callId}`} items={[part.item]} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
                 </Fragment>
               ) : null
             })
-            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(nodes.every((n) => n == null))} />
+            const head = (!!msg.reasoning || !!headEvents) && <ToolGroup key="proc-head" events={headEvents || []} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(nodes.every((n) => n == null))} />
             return <>{head}{nodes}</>
           }
           // 老序:插件卡片挪到尾部(trailingCards),不在这一行里再列一遍
-          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} {...think(!body)} />
+          const head = (!!msg.reasoning || !!msg.toolEvents?.length) && <ToolGroup key="proc-head" events={(msg.toolEvents || []).filter((ev) => !cardOf(ev))} running={streaming} approvals={msg.approvals} awaitingAnswer={awaitingAnswer} sessionId={runSid} {...think(!body)} />
           return (
             <>
               {head}
               {body && (
                 voiceMode
                   ? <VoiceBubble text={body} stored={voice!.stored} anchorPrefix={`toc-${msg.id}`} />
-                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards /></div>
+                  : <div className="t2-content"><Markdown content={body} anchorPrefix={`toc-${msg.id}`} run={runCtx} allowRun={!elsewhere} embeds={embeds} linkCards codeHead /></div>
               )}
             </>
           )
@@ -765,12 +847,14 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
             ? <MuseTodoCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />
             : <TaskCards tasks={tasks} ownerId={msg.id} onTask={handlers?.onTask} sessionId={runSid || undefined} createdAt={msg.timestamp || undefined} />)}
         {museApprovals.map((id) => <MuseApprovalLine key={id} id={id} />)}
+        {museCard && <MuseCardLine id={museCard.id} sessionId={runSid || undefined} onJump={handlers?.onJumpDeck} />}
+        {(msg.origin === 'proactive' || museTodo) && !!runSid && <MuseFeedbackRow messageId={msg.id} sessionId={runSid} />}
         {/* 作品卡:把这条对话里做的东西变成「造物」(点了宿主才建文件夹 / 复制)。同样只在 done 上渲染。 */}
         {!!creations.length && msg.status === 'done' && <CreationCards cards={creations} sessionId={runSid} onJump={handlers?.onJumpDeck} createdAt={msg.timestamp || undefined} />}
 
         {/* Agent 自己写了东西:记忆 / 进化记录并成一行回执;协作说明是说给用户听的,单独一张请求卡。 */}
         {fileCtx && <SelfUpdateReceipt events={msg.toolEvents} sessionId={fileCtx.sessionId} agentSlug={msg.agentId} />}
-        {fileCtx && <HumanUpdateCard changes={humanChanges(msg.toolEvents)} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} agentName={msg.agentName || agentNameFallback} onJump={handlers?.onJumpDeck} createdAt={msg.timestamp || undefined} />}
+        {fileCtx && <HumanUpdateCard changes={humanChanges(msg.toolEvents)} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} agentName={speakerName || msg.agentName || agentNameFallback} onJump={handlers?.onJumpDeck} createdAt={msg.timestamp || undefined} />}
 
         {msg.planProposal && (
 
@@ -778,7 +862,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           // 没配上(重载后的历史、或 plan 事件缺失)就只渲染正文,询问仍走下面通用卡兜底。
           <PlanCard key={planInq?.inquiryId || 'plan'} plan={msg.planProposal} req={planInq} />
         )}
-        {!!msg.todos?.length && !todoInTail && <TodoList todos={msg.todos} live={todoLive} folded={!!handlers?.onJumpDeck} />}
+        {!!msg.todos?.length && !todoInTail && <TodoList todos={msg.todos} live={todoLive} stopped={msg.status === 'stopped' || msg.status === 'error'} folded={!!handlers?.onJumpDeck} />}
         {/* 判空看 body 不看 msg.content:刚开始打建议围栏时 content 非空但正文为空,
             看 content 会让整条消息只剩一个署名圆点,连「思考中」都不显示。 */}
         {/* 测试性等待详情:开启时每次调用(含工具轮之后)画「发送 N KB / 等首帧 + 已等秒数」。
@@ -805,12 +889,20 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {msg.teamDone && msg.status !== 'streaming' && (
           <div className="t2-dim t2-team-done" data-team-done="1">✓ {t('chat.team.done')}</div>
         )}
-        {!!msg.displayFiles?.length && fileCtx && (
-          <InlineFiles files={msg.displayFiles} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
-        )}
+        {!!msg.displayFiles?.length && fileCtx && (() => {
+          // 网页卡片第二轮 1:本机会话里展示一个 .html = 本地网页卡,代替文件名小卡(在 Vite 这类项目里退回小卡)
+          const isWeb = (f: NonNullable<UiMessage['displayFiles']>[number]): boolean => webHere && !f.sourceSessionId && isHtmlFile(f.path)
+          const files = (list: NonNullable<UiMessage['displayFiles']>) => <InlineFiles files={list} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} execMode={fileCtx.execMode} onOpenPreview={fileCtx.onOpenPreview} />
+          const rest = msg.displayFiles.filter((f) => !isWeb(f))
+          return <>
+            {!!rest.length && files(rest)}
+            {msg.displayFiles.filter(isWeb).map((f) => <LocalWebCard key={f.path} sessionId={fileCtx.sessionId} path={f.path!} onAsk={handlers?.onSuggest} fallback={files([f])} />)}
+          </>
+        })()}
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {(msg.toolEvents || []).filter(ev => isSandboxCardTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSandboxCard key={`sandbox-${ev.id}`} event={ev} />)}
-        {trailingIntelligent.map(ev => <IntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />)}
+        {(() => { const gitEvs = (msg.toolEvents || []).filter(ev => isGitTool(ev) && ev.done && !inlineToolIds.has(ev.id)); return gitEvs.length ? <GitToolCard key={`git-${gitEvs[0].id}`} events={gitEvs} sessionId={runSid} /> : null })()}
+        {trailingIntelligent.map(ev => <ChatIntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} />)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}
         {/* 审批卡在托盘里批(ApprovalTray);托盘在输入框上方的视图(预览 / 画布)流里留一行指路,对话末尾有卡片堆的不留(卡就在下面)。已兑现的不留痕 —— 结局看工具卡。
@@ -832,12 +924,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         {msg.inquiries?.filter((q) => q !== planInq && q.status !== 'pending').map((q) => (q.status === 'expired' && handlers?.onJumpDeck
           ? <div key={q.inquiryId} className="t2-dim t2-apv-pointer" data-inquiry-expired={q.inquiryId}><CircleX size={12} /><span>{t('chat.inquiry.expiredLine', { q: q.question })}</span></div>
           : <InquiryCard key={q.inquiryId} req={q} onAnswer={() => {}} />))}
-        {msg.status === 'error' && (
-          <div className="t2-tool err">
-            <span className="t2-status-err">✕ {humanizeRunError(msg.error, t)}</span>
-            <ReloginChip error={msg.error} modelId={modelId} />
-          </div>
-        )}
+        {msg.status === 'error' && <RunErrorRow msg={msg} sessionId={runSid} modelId={msg.fallback?.to ?? modelId} handlers={handlers} />}
         {msg.status === 'stopped' && <div className="t2-dim">⏹ {t('chat.aborted')}</div>}
         {/* run 统计行放操作条之前:流式 → 完成时它原地不动,悬停出现的操作条长在下面,不会把它顶走。 */}
         {footer}
@@ -859,6 +946,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         )}
       </div>
     </div>
+    </>
   )
 }
 

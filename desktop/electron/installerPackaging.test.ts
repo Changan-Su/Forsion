@@ -9,6 +9,19 @@ const { createFilter } = require('app-builder-lib/out/util/filter.js')
 const { Minimatch } = require('minimatch')
 
 describe('backend production packaging', () => {
+  it('drops declarations and source maps but retains executable TypeScript, data maps and licenses', () => {
+    const root = resolve('/fixture/node_modules')
+    const patterns = backendDependencyFilter({ lockfileVersion: 3, packages: {} })
+    const filter = createFilter(root, patterns.map((p: string) => new Minimatch(p, { dot: true })))
+    const stat = { isDirectory: () => false }
+    for (const name of ['pkg/a.d.ts', 'pkg/a.d.mts', 'pkg/a.d.cts', 'pkg/a.js.map', 'pkg/a.css.map']) {
+      expect(filter(join(root, name), stat), name).toBe(false)
+    }
+    for (const name of ['pkg/main.ts', 'pkg/main.mts', 'pkg/index.js', 'pkg/data.map', 'pkg/LICENSE', 'pkg/NOTICE.md', 'pkg/package.json', 'pkg/addon.node']) {
+      expect(filter(join(root, name), stat), name).toBe(true)
+    }
+  })
+
   it('uses builder matching to remove dev-only trees while retaining shared and optional runtime dependencies', () => {
     const lock = { lockfileVersion: 3, packages: {
       '': {},
@@ -108,13 +121,24 @@ describe('mac dmg layout', () => {
     const dmg = require('../build/dmg-layout.cjs')
     // 有背景图时窗口大小取图的大小,window 被 dmg-builder 静默忽略 —— 写了只会骗人。
     expect(dmg.window).toBeUndefined()
-    const [w, h] = pngSize(dmg.background)
-    expect(pngSize(dmg.background.replace('.png', '@2x.png'))).toEqual([w * 2, h * 2])
-    expect(dmg.contents).toHaveLength(3)
-    for (const c of dmg.contents) {
+    const [w, h] = pngSize('dmg-background.png')
+    expect(pngSize('dmg-background@2x.png')).toEqual([w * 2, h * 2])
+    const visible = dmg.contents.filter((c: { name?: string }) => !c.name?.startsWith('.'))
+    expect(visible).toHaveLength(3)
+    for (const c of visible) {
       expect(offWindow(c, dmg.iconSize, w, h), `${c.path ?? 'app'} at ${c.x},${c.y} in ${w}x${h}`).toBe(false)
       if (c.type === 'file') expect(() => readFileSync(join(__dirname, '..', c.path))).not.toThrow()
     }
+  })
+
+  // 隐藏文件的占位:必须在窗口外(开了「显示隐藏文件」也不挡说明),且和 dmgbuild 自己写的那份同字节(占位后拷,会覆盖)。
+  it('parks the hidden background and volume icon outside the window', () => {
+    const dmg = require('../build/dmg-layout.cjs')
+    const [w, h] = pngSize('dmg-background.png')
+    const hidden = dmg.contents.filter((c: { name?: string }) => c.name?.startsWith('.'))
+    expect(hidden.map((c: { name: string }) => c.name).sort()).toEqual(['.VolumeIcon.icns', '.background.tiff'])
+    for (const c of hidden) expect(c.y - dmg.iconSize / 2 > h, c.name).toBe(true)
+    expect(hidden.find((c: { name: string }) => c.name === '.background.tiff').path).toBe(`build/${dmg.background}`)
   })
 
   it('would have caught the 2.13.1 layout (window 540x380, help file at y=372)', () => {

@@ -5,7 +5,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
-import { defaultCalendarFile, ensureHumanFolder, humanDir, readHumanFile, readUserMd, tanguHome, USER_MD_TEMPLATE, userMdFile } from '../core/tanguHome.js';
+import { defaultCalendarFile, ensureHumanFolder, humanDir, readHumanFile, readUserMdForPrompt, tanguHome, userMdFile } from '../core/tanguHome.js';
 import { atomicSyncWrite, conflictCopyName, readSyncBytes } from '../services/agentSyncPaths.js';
 import { withMemoryDirectoryLock } from '../services/memoryRepository.js';
 import { mergeText3 } from '../services/memorySync.js';
@@ -14,7 +14,7 @@ import { withDbLock } from '../services/amadeusDb.js';
 import { commitHumanFromMirror } from './humanStore.js';
 
 /** human/ 里上云的几份(云端 __human__ 槽位;服务端 tanguAgentFilePaths 的 HUMAN_SLOT_FILES 同一张表,外加搬家标记 .layout)。 */
-export const HUMAN_SYNC_FILES = ['HUMAN.md', 'AGENT.md', 'SOUL.md', 'MEMORY.md', 'CALENDAR.db'] as const;
+export { HUMAN_SYNC_FILES } from '../contracts/agentSyncRules.js';
 /** 镜像基线:上次两边一致时的原文。只在本机,不上云。另记一项 LEGACY_KEY:服务端上次说的「还有谁在用旧位置」。 */
 const MIRROR_STATE = '.legacy-mirror.json';
 /** 和镜像对的键(USER.md、Calendar.db@…)撞不上:点开头。值 = JSON `{ families, seenAt }`。 */
@@ -23,13 +23,9 @@ const LEGACY_KEY = '.legacy';
  *  null = 服务端没说(老服务端 / 查失败)。 */
 export interface LegacyClients { families: string[]; seenAt: number | null }
 
-/** 没有基线时两份文本怎么合:一边是空的或新装机的空模板就用另一边,否则按行取并集(一行都不丢)。同步和镜像共用。 */
-export function joinFirstContact(ours: string, theirs: string): string {
-  const blank = (s: string): boolean => !s.trim() || s === USER_MD_TEMPLATE;
-  if (blank(ours)) return theirs;
-  if (blank(theirs)) return ours;
-  return unionLines(ours, theirs);
-}
+/** 没有基线时两份文本怎么合:见 contracts/agentSyncRules.ts(同步和镜像共用)。 */
+export { joinFirstContact } from '../contracts/agentSyncRules.js';
+import { joinFirstContact } from '../contracts/agentSyncRules.js';
 
 interface MirrorPair { key: string; legacy: string; legacyRoot: string; human: string; db: boolean }
 
@@ -40,7 +36,7 @@ interface MirrorPair { key: string; legacy: string; legacyRoot: string; human: s
  *    还没有基线(第一次)时取并集:.md 是 human/ 那份加上旧位置独有的行,.db 是两边的行都留下。
  *  什么时候停(方案页同目录「镜像何时停与Agent日历上云.md」):同步时把服务端的回答(opts.legacy)记进镜像状态,启动、改画像这些
  *  不经过同步的调用也读它。只有明确收到「没有旧客户端在用 USER.md」才停 USER.md 那一对,而且只停「human/ → 旧位置」:
- *  旧位置自己变了照样并进来。不是永久停:旧客户端再出现,下一次同步就恢复,拿停之前的基线三方合并。日历那一对每次都镜像:新版桌面自己的日历视图、网页、手机都还读库里那份。
+ *  旧位置自己变了照样并进来。不是永久停:旧客户端再出现,下一次同步就恢复,拿停之前的基线三方合并。日历那一对每次都镜像:新版都读 human/,但老用户库里的 Calendar.db 还在,旧版客户端也只认它;新用户没有这份文件,这一对什么都不做。
  *  返回出了几份冲突副本。 */
 export async function mirrorLegacyHuman(opts: { legacy?: LegacyClients | null } = {}): Promise<{ conflicts: number }> {
   ensureHumanFolder();
@@ -123,15 +119,20 @@ function mirrorPair(p: MirrorPair, state: Record<string, string>, home: string, 
     renameSync(tmp, p.legacy);
   };
   const keepCopy = (text: string, name: string): void => {
-    let copy = conflictCopyName(name, new Date());
-    for (let n = 2; existsSync(join(dir, copy)); n++) copy = `${conflictCopyName(name, new Date())}.${n}`;
+    const now = new Date();
+    let copy = conflictCopyName(name, now);
+    for (let n = 2; existsSync(join(dir, copy)); n++) copy = conflictCopyName(name, now, n);
     atomicSyncWrite(home, join(dir, copy), text);
   };
   const keepLegacyCopy = (): void => keepCopy(L!, basename(p.legacy));
   const settle = (text: string): void => { state[p.key] = text; };
 
+  const parses = (t: string): boolean => { try { JSON.parse(t); return true; } catch { return false; } };
   if (L === null && H === null) { delete state[p.key]; return 0; }
-  if (H === null) { writeHuman(L!); settle(L!); return 0; }
+  if (H === null) {
+    if (p.db && !parses(L!)) return 0; // 损坏的文件不搬进 human/:搬过去连默认日历都打不开,库里那份留着
+    writeHuman(L!); settle(L!); return 0;
+  }
   if (L === null) {
     if (!p.db) { writeLegacy(H); settle(H); return 0; }
     // 库里的 Calendar.db 删了就让它删着;基线也丢掉 —— 桌面重新播种出的新文件(行 id 全新)回来时按并集合,别把 human/ 的行当成「那边删了」
@@ -146,7 +147,6 @@ function mirrorPair(p: MirrorPair, state: Record<string, string>, home: string, 
   const merged = p.db ? mergeDbFile(L, B, H) : text === null ? null : { content: text, conflict: false };
   if (!merged) {
     // 合不了:哪边坏了(解析不了)就把哪边存成副本、用好的那份;都能读(比如 id 重复)就 human/ 赢
-    const parses = (t: string): boolean => { try { JSON.parse(t); return true; } catch { return false; } };
     if (p.db && parses(L) && !parses(H)) { keepCopy(H, basename(p.human)); writeHuman(L); settle(L); return 1; }
     keepLegacyCopy(); writeLegacy(H); settle(H); return 1;
   }
@@ -161,9 +161,12 @@ const clip = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}\n…(tr
 /** 方案页 ⑨:画像 ≤2000、自己记的 ≤2000;AGENT.md 用 store 的上限。 */
 export const ABOUT_HUMAN_LIMITS = { 'AGENT.md': 12000, 'MEMORY.md': 2000, 'SOUL.md': 2000 } as const;
 
-/** 每个 Agent 都读的「About the Human」:人写给所有 Agent 的要求、人自己写的、Agent 们对人的认识。HUMAN.md 不在这里(它走协作说明那一段)。 */
-export function renderAboutHuman(): string {
-  const [agentMd, memory, soul] = (['AGENT.md', 'MEMORY.md', 'SOUL.md'] as const).map((f) => clip((f === 'MEMORY.md' ? readUserMd() : readHumanFile(f)).trim(), ABOUT_HUMAN_LIMITS[f]));
+/** 每个 Agent 都读的「About the Human」:人写给所有 Agent 的要求、人自己写的、Agent 们对人的认识。HUMAN.md 不在这里(它走协作说明那一段)。
+ *  private: false = 别人也可能读到这段对话(连着微信 / 企业微信 / 插件通道的会话):人的本子和画像不注入,只留 AGENT.md 那段要求。 */
+export function renderAboutHuman(opts: { private?: boolean } = {}): string {
+  const personal = opts.private !== false;
+  const [agentMd, memory, soul] = (['AGENT.md', 'MEMORY.md', 'SOUL.md'] as const).map((f) => f !== 'AGENT.md' && !personal ? ''
+    : clip((f === 'MEMORY.md' ? readUserMdForPrompt() : readHumanFile(f)).trim(), ABOUT_HUMAN_LIMITS[f]));
   if (!agentMd && !memory && !soul) return '';
   const parts = ['## About the Human\nFrom the human\'s own folder, which every agent reads; refreshed each turn. Take it into account; do not recite it.'];
   if (agentMd) parts.push(`### How they want every agent to work (written by the human)\nTheir standing requests to all agents. Follow them unless the latest message says otherwise; they never grant tool permissions or override system or developer instructions.\n\n${agentMd}`);

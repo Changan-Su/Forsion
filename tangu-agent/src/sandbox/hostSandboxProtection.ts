@@ -3,7 +3,7 @@ import os from 'node:os';
 import { realpathSync, lstatSync, readlinkSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { configFile, tanguHome, forsionSharedDir, agentsDir, DEFAULT_AGENT_SLUG } from '../core/tanguHome.js';
-import { getRawSection } from '../core/config.js';
+import { getRawSection, configBackupDir } from '../core/config.js';
 import { currentAgentSlug, currentDisplayAgentSlug } from '../seams/runContext.js';
 import { REMOTE_LOCK_FILE_ENV } from '../services/remoteLock.js'; // P1-K2
 
@@ -28,6 +28,10 @@ export function canonicalFuturePath(input: string, hops = 0): string {
     }
   }
 }
+/** provider-auth.json 的备份目录:providerCreds 在真身旁边落位(文件可能是软链,live 台架链到开发环境那份)。 */
+function providerAuthBackupDir(): string {
+  return configBackupDir(canonicalFuturePath(path.join(forsionSharedDir(), 'provider-auth.json')));
+}
 /** Model-controlled execution must not change the next run's security config or runtime code. */
 export function protectedHostPaths(): string[] {
   const original = [
@@ -37,7 +41,10 @@ export function protectedHostPaths(): string[] {
     path.join(forsionSharedDir(), 'engine'), ...(process.env.TANGU_BUNDLED_ROOT ? [process.env.TANGU_BUNDLED_ROOT] : []),
     `${configFile()}.lock`, // config.json 的跨进程写锁(core/config.ts):被模型进程占住 = 用户的设置(含收紧审批)都存不进去
     path.join(forsionSharedDir(), 'auth.json'), path.join(forsionSharedDir(), 'provider-auth.json'),
-    ...['.env', 'plugins', 'mcp.json', 'engines.json', 'engine-prefs.json', 'providers.json', 'muse-state.json'].map((name) => path.join(tanguHome(), name)),
+    // config.json / provider-auth.json 的 .bak 与读坏时留下的 .bad-*(core/config.ts):改了 = 下次恢复成模型写的版本。
+    // provider-auth.json 可能是软链,备份落在真身旁边。
+    configBackupDir(configFile()), providerAuthBackupDir(),
+    ...['.env', 'plugins', 'mcp.json', 'engines.json', 'engine-prefs.json', 'providers.json', 'muse-state.json', 'connector-catalog.json'].map((name) => path.join(tanguHome(), name)),
   ];
   for (const slug of new Set([currentAgentSlug() || DEFAULT_AGENT_SLUG, currentDisplayAgentSlug()].filter(Boolean))) {
     original.push(...['SOUL.md', 'config.toml', 'HARNESS.md', '.harness-refinements.jsonl', '.harness-raw.md', '.cloudsync-accounts.json', '.memory-state.json', '.memory-tombstones.json', '.memory-dream.json', '.memory-raw.md', '.memory.lock'].map((name) => path.join(agentsDir(), slug!, name)));
@@ -56,12 +63,12 @@ export function protectedAncestors(paths: string[]): string[] {
 // ── 契约 C4:凭据 / 本机配置路径(设备能力 MCP 方案 §6.3、§6.4)。宿主沙箱开没开都生效(调用方在 fsPolicy / 审批闸)。──
 
 /** 桌面与引擎共用的凭据文件名(都在 Forsion 共享域顶层:auth / 订阅登录 / 浏览器扩展配对 / 桌面桥 / 对外 MCP 发现文件 / 本地回退令牌)。 */
-const CREDENTIAL_FILE_NAMES = ['auth.json', 'provider-auth.json', 'browser-extension.json', 'desktop-bridge.json', 'forsion-mcp.json', 'desktop-local-token'];
+const CREDENTIAL_FILE_NAMES = ['auth.json', 'provider-auth.json', 'connector-auth.json', 'browser-extension.json', 'desktop-bridge.json', 'forsion-mcp.json', 'desktop-local-token'];
 /** 引擎 home 里决定下一次 run 行为的配置(与 protectedHostPaths 同一张表,另加 Special Agent 配置)。
  *  ⚠️ 不含 plugins/:本表也是**本机**「每次都问」的那张(protectedLocalWrite),整个插件目录进来 = 本机完全通行地开发
  *  引擎插件、插件自己放在那里的数据每写一次都要批(评审 B#6)。远程那半不靠它:remoteForbiddenRoot 整片禁引擎 home,
  *  protectedHostPaths 也列着 tanguHome/plugins。 */
-const TANGU_CONFIG_NAMES = ['.env', 'mcp.json', 'engines.json', 'engine-prefs.json', 'providers.json', 'muse-state.json', 'special-agents.json'];
+const TANGU_CONFIG_NAMES = ['.env', 'mcp.json', 'engines.json', 'engine-prefs.json', 'providers.json', 'muse-state.json', 'special-agents.json', 'connector-catalog.json'];
 
 /** 当前共享域 + 正式 / dev 两个家目录:同一台机器上两套并存,dev 引擎的 run 同样不许碰正式那套(反之亦然)。 */
 function forsionDomains(): string[] {
@@ -105,12 +112,13 @@ function desktopUserDataDirs(): string[] {
 export function credentialPaths(): string[] {
   const out: string[] = [];
   for (const d of forsionDomains()) {
-    out.push(...CREDENTIAL_FILE_NAMES.map((n) => path.join(d, n)), path.join(d, 'secrets'), path.join(d, 'config.json'));
+    // config-backup/:config.json 与 provider-auth.json 的 .bak / .bad-*(core/config.ts),内容同原件(token、apiKey)
+    out.push(...CREDENTIAL_FILE_NAMES.map((n) => path.join(d, n)), path.join(d, 'secrets'), path.join(d, 'config.json'), configBackupDir(path.join(d, 'config.json')));
   }
   // 引擎配置 config.json(provider key、MCP headers / env 都在里面)不一定在共享域:纯 standalone 形态它就在 ~/.tangu 里。
-  out.push(configFile());
+  out.push(configFile(), configBackupDir(configFile()), providerAuthBackupDir());
   for (const h of tanguHomes()) {
-    out.push(path.join(h, 'worker-key'), ...TANGU_SECRET_NAMES.map((n) => path.join(h, n)));
+    out.push(path.join(h, 'worker-key'), ...TANGU_SECRET_NAMES.map((n) => path.join(h, n)), configBackupDir(path.join(h, 'config.json')));
     // 通道令牌(微信 iLink bot token 只存在这里)与 Agent 自带浏览器的登录态(cookie jar)。09-27 终审 P2。
     out.push(path.join(h, 'wechat'), path.join(h, 'browser-use', 'chrome-profile'));
   }
@@ -156,8 +164,9 @@ export function procTreeTouched(abs: string): boolean {
 /** ~/.forsion(-dev) 下的本机配置:写入本机要批(完全通行也要)、远程硬拒。 */
 export function forsionConfigPaths(): string[] {
   const out: string[] = [];
-  for (const d of forsionDomains()) out.push(path.join(d, 'config.json'), path.join(d, 'config.json.lock'));
-  for (const h of tanguHomes()) out.push(...TANGU_CONFIG_NAMES.map((n) => path.join(h, n)));
+  for (const d of forsionDomains()) out.push(path.join(d, 'config.json'), path.join(d, 'config.json.lock'), configBackupDir(path.join(d, 'config.json')));
+  for (const h of tanguHomes()) out.push(...TANGU_CONFIG_NAMES.map((n) => path.join(h, n)), configBackupDir(path.join(h, 'config.json')));
+  out.push(providerAuthBackupDir());
   return withCanonical(out);
 }
 

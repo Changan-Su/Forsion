@@ -13,6 +13,7 @@ import type { MilkdownPlugin } from '@milkdown/kit/ctx'
 import { Plugin, PluginKey, TextSelection } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { Slice, type Fragment, type Node as ProseNode } from '@milkdown/kit/prose/model'
+import { mountLineSelection } from '@lcl/engine/lineSelection'
 
 export interface AiTarget {
   from: number
@@ -55,6 +56,16 @@ export function inlineAiPlugin(opts: {
 }): Plugin<AiTarget | null> {
   return new Plugin<AiTarget | null>({
     key: inlineAiKey,
+    view: (view) => {
+      const paint = mountLineSelection(view.dom, { editable: true, suspended: () => view.composing, retained: () => {
+        const target = inlineAiKey.getState(view.state)
+        if (!target || target.to <= target.from) return null
+        const a = view.domAtPos(target.from), b = view.domAtPos(Math.min(target.to, view.state.doc.content.size))
+        const range = view.dom.ownerDocument.createRange(); range.setStart(a.node, a.offset); range.setEnd(b.node, b.offset)
+        return range
+      } })
+      return { update: paint.refresh, destroy: paint.dispose }
+    },
     state: {
       init: () => null,
       apply(tr, cur) {

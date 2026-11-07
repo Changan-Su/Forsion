@@ -9,7 +9,7 @@ import { createRun, getRun, listEventsFrom } from '../services/runStore.js';
 import { subscribe } from '../services/eventBus.js';
 import { listPrompts } from '../services/pendingPromptIndex.js';
 import { readProjectSettings } from '../services/projectContext.js';
-import { storedApprovalMode } from '../services/approvals.js';
+import { normalizeApprovalMode, storedApprovalMode, type ApprovalMode } from '../services/approvals.js';
 import { getAgent } from '../agents/agentRegistry.js';
 import { isHostSandboxRestricted } from '../sandbox/hostSandboxPolicy.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
@@ -20,6 +20,14 @@ export interface PluginRunStart {
   agentSlug?: string; engineId?: string; engineModelId?: string; planMode?: boolean;
   parentSessionId?: string; sessionId?: string; requestId?: string; title?: string;
   readOnly?: boolean; toolNames?: string[]; resumeSessionId?: string;
+}
+/** Metadata only; a normal session's identity never grants plugin task ownership. */
+export interface PluginRunContext {
+  sessionId: string;
+  cwd: string | null;
+  modelId: string | null;
+  thinkingLevel: string | null;
+  approvalMode: ApprovalMode | null;
 }
 const decode = (x: any): any => typeof x === 'string' ? JSON.parse(x) : x || {};
 const uuid = /^[a-f0-9]{8}-[a-f0-9-]{27,40}$/i;
@@ -47,6 +55,26 @@ export function createPluginRuns(owner: string, alive: () => boolean, own: (off:
     return run;
   };
   return {
+    async context(sessionId: string, userId: string): Promise<PluginRunContext> {
+      check();
+      if (typeof sessionId !== 'string' || !sessionId.trim() || typeof userId !== 'string' || !userId.trim()) throw new Error('Session and authenticated user are required');
+      // Callers supply req.user.userId from an authenticated scoped route, never a body owner.
+      // Deliberately omit messages, title, and all other session data from this query.
+      const rows = await query<Array<{ id: string; project_path: string | null; model_id: string | null; agent_config: unknown }>>(
+        'SELECT id, project_path, model_id, agent_config FROM chat_sessions WHERE id = ? AND user_id = ?', [sessionId, userId],
+      );
+      check();
+      const session = rows[0];
+      if (!session) throw new Error('Session not found');
+      const config = decode(session.agent_config);
+      return {
+        sessionId: session.id,
+        cwd: typeof session.project_path === 'string' && path.isAbsolute(session.project_path) ? session.project_path : null,
+        modelId: typeof session.model_id === 'string' && session.model_id ? session.model_id : null,
+        thinkingLevel: typeof config?.thinkingLevel === 'string' && config.thinkingLevel ? config.thinkingLevel : null,
+        approvalMode: normalizeApprovalMode(config?.approvalMode, `session ${session.id}`) ?? null,
+      };
+    },
     async start(p: PluginRunStart): Promise<{ sessionId: string; runId: string }> {
       check();
       if (!p.userId || !p.prompt?.trim() || p.prompt.length > 100_000 || !path.isAbsolute(p.cwd)) throw new Error('User, prompt and absolute project directory are required');
