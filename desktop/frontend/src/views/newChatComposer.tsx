@@ -1,7 +1,7 @@
 /**
  * 新对话输入区 —— 主页那一整块,从 HomepageView 原样搬出(2026-10-18,主页插件化 S2):内置主页和插件
  * (`ctx.tangu.mountComposer`)挂的是同一份。2e-3 起归 Tangu,经 tanguSeam 的 setTanguNewChat 交给宿主(features/tangu.tsx)。DOM 一个类名都没改(`.hp-composer` / `data-kb-rise` /
- * `.newchat-pickers` / `.hp-projectbar`),主页的样式、手机键盘上抬、台架都还认它。
+ * `.hp-projectbar`),主页的样式、手机键盘上抬、台架都还认它。Agent 选择 11-02 起是输入卡工具行里的收件人芯片(`recipientChip`)。
  * 建会话、切到 Tangu、发送、开通话一律由宿主做(sendFromNewChat / startNewChatCall),插件只决定放在哪。
  */
 import { useEffect, useMemo } from 'react'
@@ -25,7 +25,7 @@ import { Composer2 } from './chat2/Composer2'
 import type { TanguComposerMount, TanguComposerOptions, TanguNewChatDispatch as NewChatDispatch } from '../amadeus/plugins/tanguSeam'
 
 /**
- * 「新对话」输入区(主页那一整块:Agent 条、项目栏、运行位置、额外文件夹、Composer2)。主页只做「新对话」的宿主接线,输入 UI 和交互不复制:字面挂的就是 ChatView 里的 Composer2。
+ * 「新对话」输入区(主页那一整块:项目栏、运行位置、额外文件夹、Composer2 + 收件人芯片)。主页只做「新对话」的宿主接线,输入 UI 和交互不复制:字面挂的就是 ChatView 里的 Composer2。
  * `sessionId={null}` 强制 slash / 引用菜单也按新对话语义跑,不误操作用户上次停留的会话。
  */
 export function NewChatComposer({ onDispatch, onStartCall, onInputModeChange, liveSpaceId }: {
@@ -131,10 +131,6 @@ export function NewChatComposer({ onDispatch, onStartCall, onInputModeChange, li
         }
       }}
     >
-      {/* 主页恒是新对话(sessionId=null):Agent 选择条落在项目栏之上(§11 拍板 ⑦ 的推荐档,接线为零)。 */}
-      <div className="newchat-pickers">
-        <AgentSelectStrip sessionId={null} cfg={config} />
-      </div>
       <div className="hp-projectbar">
         <RunLocationPicker />
         <ProjectSelector
@@ -197,6 +193,7 @@ export function NewChatComposer({ onDispatch, onStartCall, onInputModeChange, li
         skills={s.skillsList}
         agents={s.agentDefs}
         currentAgentSlug={agentSlug} // 草稿没设思考档时药丸显示该 Agent 的缺省(与引擎同源)
+        recipientChip={<AgentSelectStrip sessionId={null} cfg={config} />} // 主页恒是新对话(sessionId=null)
         onOpenSettings={() => s.openSettings('skills')}
         onExecConfigChange={(patch) => s.setExecConfig(patch, null)}
         onSend={(text, attachments, workspaceFiles, skillIds, mentions) => onDispatch(text, attachments, workspaceFiles, skillIds, mentions)}

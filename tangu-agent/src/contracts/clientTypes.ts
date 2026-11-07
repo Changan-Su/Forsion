@@ -483,6 +483,9 @@ export interface ModelInfo {
   /** 自动识别出的模型窗口(封顶前,不看本机覆盖)。contextWindow 是 run 实际用的:自动识别的一律封顶 contextWindowCap,
    *  本机覆盖(modelOverrides)不封顶 —— 模型菜单的「上下文上限」据此露出、写的就是覆盖。老引擎不下发 = 不露。 */
   maxContextWindow?: number
+  /** 这个模型不手动覆盖时的缺省窗口(11-06 起按模型:1M 级 512k,其余 272k,且不超过 maxContextWindow)。
+   *  模型菜单「默认」档显示它;老引擎不下发 → 客户端退回 min(maxContextWindow, contextWindowCap)。 */
+  defaultContextWindow?: number
   /** 能不能直接「看」图。黑名单制:缺省/true=能;false=遇图自动转交「辅助模型 · 图像识别」。 */
   supportsVision?: boolean
   /** 该模型真正支持的思考档(引擎能力表下发;仅 llm)。思考菜单据此把不支持的档标灰。缺省=不知道,全可选。 */
@@ -536,7 +539,7 @@ export interface ModelsResponse {
   ttsModels?: Array<{ id: string; name: string; apiModelId?: string | null }>
   /** Forsion 云端的补全(FIM)模型(设置页「补全」模型槽与插件 ctx.tangu.fim 的候选;只做补全的不在 models 里)。没有 = 云端没配 / 没登录 / 老引擎。 */
   fimModels?: Array<{ id: string; name: string; provider?: string; apiModelId?: string | null }>
-  /** 引擎的缺省上下文上限(272k):自动识别出的窗口超过它就封顶,本机覆盖才开更大。 */
+  /** 引擎的基础缺省上限(272k):自动识别出的窗口超过它就封顶,本机覆盖才开更大。11-06 起 1M 级模型另按 512k,见 ModelInfo.defaultContextWindow。 */
   contextWindowCap?: number
   /** 该引擎能不能写本机模型覆盖(PUT /agent/models/overrides 同一道 hostExec 门)。false / 缺省 = 不露「上下文上限」。 */
   modelOverridesWritable?: boolean
@@ -663,6 +666,8 @@ export interface ProjectContext {
 }
 
 export interface ProjectMemoryView {
+  /** MEMORY.md 的本机路径(「打开记忆文件夹」);还没有记忆 / 老引擎 → 不带。 */
+  file?: string
   version: string | null
   entries: Array<{ id: string; content: string; updatedAt: number }>
   chars: number

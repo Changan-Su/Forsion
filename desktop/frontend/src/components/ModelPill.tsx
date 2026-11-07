@@ -39,6 +39,9 @@ registerMessages({
   'pill.rowContext': { zh: '上下文上限', en: 'Context limit' },
   'pill.ctxDefault': { zh: '默认 · {n}', en: 'Default · {n}' },
   'pill.ctxMax': { zh: '最大 · {n}', en: 'Maximum · {n}' },
+  'pill.ctxCustom': { zh: '自定义', en: 'Custom' },
+  'pill.ctxCustomPlaceholder': { zh: '{min}–{max}，回车确定', en: '{min}–{max}, press Enter' },
+  'pill.ctxCustomInvalid': { zh: '请填 {min} 到 {max} 之间的数（单位 k）', en: 'Enter a number from {min} to {max} (in k)' },
   'pill.ctxHint': { zh: '对本机这个模型的所有会话生效。超过 {n} 后每轮都要重发更多上下文，额度消耗随之上升。', en: 'Applies to every conversation with this model on this device. Past {n}, each turn resends more context, so usage rises with it.' },
   'pill.ctxUltra': { zh: 'Ultra 下自动用满 {n}；关掉 Ultra 后按这里的设置。', en: 'Ultra uses the full {n} automatically. This setting applies again once Ultra is off.' },
   // Ultra 是对标 Codex 的模式专名(同 Chat / Work),中文界面也写 Ultra(i18nCoverage F 已逐键登记)。
@@ -100,20 +103,61 @@ export function contextRingWindow(o: {
   return { window: (ultra ? ultraContextWindow(o.model) : o.model?.contextWindow) || o.contextWindow, stale }
 }
 
-/** 「上下文上限」行:模型本身窗口 > 缺省上限才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。
- *  ultra:行上显示 Ultra 下实际用的窗口;两个选项与勾选仍描述本机存的按模型设置(关掉 Ultra 后照它)。 */
-export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined, ultra = false): { current: number; defaultTokens: number; maxTokens?: number; selected: 'default' | 'max' | null } | null {
+/** 1M 级模型在默认与最大之间多给的一档(老引擎缺省 272k 时);新引擎下它就是 1M 级模型的缺省。 */
+export const CTX_MID_TOKENS = 512_000
+/** 自定义档的下限(k);与设置页手填的下限 4000 token 同量级,再小压缩会一直转。 */
+export const CTX_CUSTOM_MIN_K = 16
+
+/** 「上下文上限」行:模型本身窗口 > 缺省才有得开;已手动覆盖过的也露(好改回默认)。老引擎不下发 max/cap → null。
+ *  缺省 = 引擎按模型下发的 defaultContextWindow(11-06 起 1M 级 512k,其余 272k);老引擎没有它 → min(max, cap)。
+ *  另给一档 alt:缺省低于 512k 而模型超过 512k → 512k(老引擎);缺省是 512k → 272k(想省点的人不用手填)。
+ *  selected=null = 自定义(菜单里手填 / 设置页填的其它值)。
+ *  ultra:行上显示 Ultra 下实际用的窗口;选项与勾选仍描述本机存的按模型设置(关掉 Ultra 后照它)。 */
+export function contextLimitOptions(model: ModelInfo | undefined, cap: number | undefined, ultra = false): { current: number; defaultTokens: number; altTokens?: number; maxTokens?: number; selected: 'default' | 'alt' | 'max' | null } | null {
   const max = model?.maxContextWindow
   if (!model?.contextWindow || !max || !cap) return null
   const overridden = model.contextWindowSource === 'override'
-  if (max <= cap && !overridden) return null
+  const def = Math.min(max, model.defaultContextWindow || cap)
+  if (max <= def && !overridden) return null
+  const alt = max > CTX_MID_TOKENS && def < CTX_MID_TOKENS ? CTX_MID_TOKENS : def > cap ? cap : undefined
   return {
     current: (ultra && ultraContextWindow(model)) || model.contextWindow,
-    defaultTokens: Math.min(max, cap),
-    ...(max > cap ? { maxTokens: max } : {}),
-    // 设置页手填的其它值(如 500000)两档都不打勾,行上照实显示当前值
-    selected: !overridden ? 'default' : max > cap && model.contextWindow === max ? 'max' : null,
+    defaultTokens: def,
+    ...(alt ? { altTokens: alt } : {}),
+    ...(max > def ? { maxTokens: max } : {}),
+    // 手填的其它值(如 500000)算自定义,行上照实显示当前值
+    selected: !overridden ? 'default' : max > def && model.contextWindow === max ? 'max'
+      : alt && model.contextWindow === alt ? 'alt' : null,
   }
+}
+
+/** 「自定义」档:按 k 填(400 = 400k),回车写进本机覆盖;范围 [16k, 模型最大],超过模型真实窗口会直接撞上游。 */
+function ContextCustomRow({ ctx, onPick }: { ctx: { current: number; maxTokens?: number; selected: string | null }; onPick: (tokens: number) => void }): React.ReactElement {
+  const { t } = useI18n()
+  const maxK = Math.floor((ctx.maxTokens || 0) / 1000)
+  const [text, setText] = useState(ctx.selected === null ? String(Math.round(ctx.current / 1000)) : '')
+  const [bad, setBad] = useState(false)
+  const range = { min: `${CTX_CUSTOM_MIN_K}k`, max: `${maxK}k` }
+  const commit = (): void => {
+    const k = Number(text.trim().replace(/k$/i, ''))
+    if (!Number.isFinite(k) || k < CTX_CUSTOM_MIN_K || k > maxK) { setBad(true); return }
+    onPick(Math.round(k * 1000))
+  }
+  return (
+    <>
+      <label className={`model-picker-search cm-ctx-custom${ctx.selected === null ? ' active' : ''}`}>
+        <span className="cm-ctx-custom-k">{t('pill.ctxCustom')}</span>
+        <input
+          inputMode="decimal" aria-label={t('pill.ctxCustom')} aria-invalid={bad || undefined}
+          placeholder={t('pill.ctxCustomPlaceholder', range)} value={text}
+          onChange={(e) => { setText(e.target.value); setBad(false) }}
+          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit() } }}
+        />
+        <span className="mi-check">{ctx.selected === null ? '✓' : ''}</span>
+      </label>
+      {bad && <div className="menu-section cm-foot cm-ctx-custom-bad" role="alert">{t('pill.ctxCustomInvalid', range)}</div>}
+    </>
+  )
 }
 
 /** 原生 range 的 index ↔ 七档映射集中在这里，避免视图和键盘路径各算一套。 */
@@ -463,6 +507,7 @@ export const ModelPill: React.FC<{
     ] })
     if (ctx) fields.push({ id: 'context', label: t('pill.rowContext'), value: ctx.selected || 'custom', groups: [{ label: '', options: [
       { value: 'default', label: t('pill.ctxDefault', { n: fmtWindow(ctx.defaultTokens) }), detail: t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) }) },
+      ...(ctx.altTokens ? [{ value: 'alt', label: fmtWindow(ctx.altTokens) }] : []),
       ...(ctx.maxTokens ? [{ value: 'max', label: t('pill.ctxMax', { n: fmtWindow(ctx.maxTokens) }) }] : []),
     ] }] })
     return fields
@@ -481,7 +526,8 @@ export const ModelPill: React.FC<{
     }
     if ('speed' in changes) onFastChange?.(changes.speed === 'ultra' ? 'ultra' : changes.speed === 'fast')
     for (const { slot } of slotRows) if (slot in changes) onDefaultModelChange?.(slot, changes[slot])
-    if ('context' in changes && !('model' in changes) && modelId) onContextWindowChange?.(modelId, changes.context === 'max' ? ctx?.maxTokens ?? null : null)
+    // 原生菜单填不了数,自定义只在网页面板里;这里只有默认 / 另一档(512k 或 272k)/ 最大
+    if ('context' in changes && !('model' in changes) && modelId) onContextWindowChange?.(modelId, changes.context === 'max' ? ctx?.maxTokens ?? null : changes.context === 'alt' ? ctx?.altTokens ?? null : null)
   }
   /** 合并菜单;条目数超过原生上限时先去掉高级,还放不下返回 null。 */
   const hubMenu = (extra: SheetMenuItem[]): SheetMenu | null => {
@@ -758,12 +804,19 @@ export const ModelPill: React.FC<{
                     <span className="grow">{t('pill.ctxDefault', { n: fmtWindow(ctx.defaultTokens) })}</span>
                     <span className="mi-check">{ctx.selected === 'default' ? '✓' : ''}</span>
                   </button>
+                  {ctx.altTokens && (
+                    <button type="button" className={`menu-item${ctx.selected === 'alt' ? ' active' : ''}`} onClick={() => pickContext(ctx.altTokens!)}>
+                      <span className="grow">{fmtWindow(ctx.altTokens)}</span>
+                      <span className="mi-check">{ctx.selected === 'alt' ? '✓' : ''}</span>
+                    </button>
+                  )}
                   {ctx.maxTokens && (
                     <button type="button" className={`menu-item${ctx.selected === 'max' ? ' active' : ''}`} onClick={() => pickContext(ctx.maxTokens!)}>
                       <span className="grow">{t('pill.ctxMax', { n: fmtWindow(ctx.maxTokens) })}</span>
                       <span className="mi-check">{ctx.selected === 'max' ? '✓' : ''}</span>
                     </button>
                   )}
+                  {ctx.maxTokens && <ContextCustomRow ctx={ctx} onPick={pickContext} />}
                   <div className="menu-section cm-foot">
                     {isUltra && modelsResponse?.ultraUncapped && ctx.selected === 'default' && ctx.maxTokens ? <div>{t('pill.ctxUltra', { n: fmtWindow(ctx.maxTokens) })}</div> : null}
                     {t('pill.ctxHint', { n: fmtWindow(ctx.defaultTokens) })}

@@ -18,6 +18,7 @@
  *   npm run live:harness -- --only musereview [--hand]   # Muse 每周装备巡检:巡检完当场替各 agent 收起(只认巡检名单里的、不出卡片)→ 它下一次 run 就生效;--hand 再在对话里让 Muse 看一遍(改 LOADOUT_REVIEW_PROMPT / review_loadout 报告 / propose 代收那一支后跑)
  *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
  *   npm run live:harness -- --only projmem                  # 记忆分项目级 / 全局级(10-04):落点、同项目不同 agent 共用、跨项目隔离(改 services/projectMemory.ts / remember 的 scope 后跑)
+ *   npm run live:harness -- --only projkind [--projkind-philosophy]   # 判官的项目候选按类别收(11-03):讲课式对话里「讲到哪了」和讲义内容不进项目记忆,沿用符号那类要求照收(只记不判);负对照 = 在没有这次改动的旧代码上跑同一个场景(--kind base),进度 / 内容会进去
  *   npm run live:harness -- --only projcompact              # 项目记忆写满时的压缩(10-05):前台记一条触发压缩 → 现行的留着、带网址的不动、去掉的原句能恢复;后台复盘那条路量到几次记几次(改 services/projectMemoryCompact.ts / remember 写满那条路 / localHistorian 的项目记忆写入后跑);`--compact-rounds N` 前台那条腿另外加跑 N 次、出成功率;引擎环境变量 `TANGU_COMPACT_DEBUG=1` 把模型的原样回答记进 engine.log
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
  *   npm run live:harness -- --only selfmodel --rounds 5 --model xai/grok-4.7   # 主体性探针(10-02):自己的资料库 vs 用户目录 / 提醒真落盘 / 教训落哪个存储 / 自我认知,按轮出通过率;改 Personal Folder 段 / 记忆·协作·工作笔记段后跑
@@ -276,6 +277,7 @@ KEYS.push('import');
 KEYS.push('projmem');
 KEYS.push('skillcreate');
 KEYS.push('projdedupe');
+KEYS.push('projkind');
 KEYS.push('projteam');
 KEYS.push('projcompact');
 KEYS.push('forkcache');
@@ -328,6 +330,7 @@ for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cus
 OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
 OPT_IN.add('layers'); // --only layers:记忆 / 日志分层,每轮 3 个 run + 3 次判官(--rounds);会把 Historian 改成每轮都评,单独跑。
+OPT_IN.add('projkind'); // --only projkind:判官的项目候选按类别收(11-03),讲课式对话里的进度 / 讲义内容不进项目记忆(两个会话 + 两次判官)
 OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复(真模型 + 后台判官,约 20 次调用)
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
 OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(4 个 run + 判官 + 2 次压缩,约 10 次调用);只在动 projectMemoryCompact.ts / remember 写满那条路时才有信息量
@@ -405,6 +408,11 @@ KEYS.push('storeupdate', 'storeupdatechat'); OPT_IN.add('storeupdate'); OPT_IN.a
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
 const SELF_ROUNDS = Number(opt('rounds', 3)); // selfmodel:每轮一个新 agent,出通过率
+// projkind:--projkind-philosophy 给判官换一段自定义「判断哲学」(设置里可填的那一栏),要它记「关键结论、重要产出」——
+// 真实环境里把讲课进度和讲义内容招进项目记忆的就是这种配法;不带 = 内置提示(Luna 在内置提示下本来就不记进度,负对照分不出来)
+const PROJKIND_PHILOSOPHY = argv.includes('--projkind-philosophy')
+  ? '你是 Historian,在后台维护用户的长期记忆。读最近的对话,判断有没有值得长期留下的信息:稳定的事实、关键结论、明确的偏好、重要的产出。有就用简洁的中文概括写进去;只是闲聊或一次性的内容就什么都不写。不要编造。'
+  : '';
 const COMPACT_ROUNDS = Number(opt('compact-rounds', 0)); // projcompact:前台那条腿另外加跑几次(每次一个新项目),给压缩的成功率一个分母
 const SELF_PROBES = new Set(opt('self-probes', 'library,libneg,remind,lesson,self').split(',')); // selfmodel 只跑其中几条(省额度地加轮数)
 { // --only 写错 / 缺上游 → 直接拒,别跑出 0/0 或靠猜答的假绿(Codex 09-12)
@@ -2291,8 +2299,63 @@ try {
     ].join(' | '), output: `【A 之后的项目记忆】\n${a3.entries.map((c) => `- ${c}`).join('\n')}\n【A 等确认】\n${a3.waiting.map((c) => `- ${c}`).join('\n') || '(无)'}\n${b.map((x, i) => `【B${i + 1} 之后与那条分支有关的】\n${(x.extra || []).map((c) => `- ${c}`).join('\n') || '(种子没落成)'}`).join('\n')}`, toolCalls: [...a1.ev.toolCalls, '|', ...a2.ev.toolCalls, '|', ...a3.ev.toolCalls] };
   });
 
+  // ── 项目记忆:判官的候选按类别收(11-03)──
+  //  一个放课堂笔记的项目里讲两节课(像用户在笔记库里那样):每次开头说上次讲到哪、讲完说讲到哪,中间顺带立一条长期要求(沿用笔记里的符号)。
+  //  Agent 被要求不自己调 remember —— 量的是后台判官。硬判:两轮判官都真跑过(有活动行);项目记忆里没有进度(节号 / 讲到哪)、没有讲义内容(笔记里的专名)。
+  //  只记不判:那条「沿用符号」有没有记上(判官可以合理地不提)、待确认清单里有什么、前台有没有违规调 remember。
+  //  负对照 = 在没有这次改动的旧代码上跑同一个场景(archive.mjs --kind base):进度 / 内容会被判官直接写进去。
+  await scenario('projkind', 'projkind 项目记忆:判官只收约定类,讲到哪了和讲义内容不进', async () => {
+    const slug = 'live-pk';
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Tutor', systemPrompt: 'Be concise and respond in Chinese. Never call the remember tool; memory is handled in the background.' }) });
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent', ...(PROJKIND_PHILOSOPHY ? { prompt: PROJKIND_PHILOSOPHY } : {}) } }) });
+    const m = randomUUID().slice(0, 4);
+    const term = `Kessler-${m} 权重`; // 讲义里的专名:出现在项目记忆里 = 记了内容
+    const p = join(workspace, 'pk-notes'); mkdirSync(join(p, 'lectures'), { recursive: true });
+    writeFileSync(join(p, 'README.md'), '# Physics notes\n\nLecture notes for a statistical physics course.\n');
+    writeFileSync(join(p, 'lectures', 'lecture4.md'), [
+      '# Lecture 4', '', '## 2.1.5 Counting microstates', `用 Ω 表示总微观状态数,${term} t({n_i}) 是某个分布的统计权重,Ω = Σ t({n_i})。`, '',
+      '## 2.1.6 The most probable distribution', `在 N 很大时,${term} 在最可几分布处有尖锐极大,用拉格朗日乘子法求 ln t 的极值,得到 Boltzmann 分布 n_i ∝ g_i e^{-βε_i}。`, '',
+      '## 2.2 Partition function', '配分函数 Z = Σ g_i e^{-βε_i},所有热力学量都可以由 ln Z 求出。', '',
+    ].join('\n'));
+    const rowsOf = (sid) => api('/agent/special/historian/activity?limit=100').then((a) => (a.activity || []).filter((r) => r.session_ref === sid));
+    const settled = async (sid, maxMs = 150_000) => {
+      let last = -1, since = Date.now(); const t0 = Date.now();
+      for (;;) {
+        const rows = (await rowsOf(sid)).filter((x) => x.action !== 'title_updated' && x.action !== 'icon_updated');
+        if (rows.length !== last) { last = rows.length; since = Date.now(); }
+        if ((rows.length > 0 && Date.now() - since > 9000) || Date.now() - t0 > maxMs) return rows;
+        await sleep(3000);
+      }
+    };
+    const turn = async (title, text) => {
+      const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: p, agent_config: { agentSlug: slug, execMode: 'host', cwd: p } }) })).session.id;
+      const ev = await run(sid, text, 240_000, { agentSlug: slug, cwd: p, thinkingLevel: 'low' });
+      const acts = (await settled(sid)).map((x) => x.action);
+      const memory = (await api(`/agent/project-context?sessionId=${sid}`)).memory || {};
+      return { ev, acts, entries: (memory.entries || []).map((e) => e.content), waiting: (memory.candidates || []).map((c) => c.content) };
+    };
+    const t1 = await turn('Lecture 4 part 1', '接着讲 lectures/lecture4.md。上次讲到 2.1.5 节,这次把 2.1.5 讲完、讲到 2.1.6 开头就停。另外以后讲这个项目里的笔记,公式符号一律沿用笔记里的写法(比如 Ω 和 t),不要自己换成别的字母。');
+    const t2 = await turn('Lecture 4 part 2', '继续讲 lectures/lecture4.md:上次讲到 2.1.6 开头,这次把 2.1.6 讲完,2.2 下次再讲。');
+    const all = [...t2.entries, ...t2.waiting];
+    const progress = all.filter((c) => /2\.1\.[56]|\b2\.2\b|讲到|讲完|进度|下次|上次/.test(c));
+    const content = all.filter((c) => c.includes(`Kessler-${m}`) || /拉格朗日|配分函数|Boltzmann|最可几/.test(c));
+    const symbols = t2.entries.filter((c) => /符号|Ω|沿用/.test(c));
+    const remembered = [...t1.ev.toolArgs, ...t2.ev.toolArgs].filter((c) => c.name === 'remember').length;
+    const ran = t1.acts.length > 0 && t2.acts.length > 0;
+    const err = t1.ev.error || t2.ev.error;
+    writeFileSync(join(OUT, 'projkind-evidence.json'), JSON.stringify({ ran, acts: [t1.acts, t2.acts], entries: t2.entries, waiting: t2.waiting, progress, content, symbols, remembered, replies: [t1.ev.content, t2.ev.content] }, null, 2));
+    const ok = !err && ran && progress.length === 0 && content.length === 0;
+    return { ok, detail: [
+      `判官 ${ran ? `两轮都跑过(${t1.acts.join('/')} | ${t2.acts.join('/')})` : '⚠ 没跑全'}`,
+      `项目记忆 ${t2.entries.length} 条、待确认 ${t2.waiting.length} 条`,
+      `进度 ${progress.length ? `⚠ ${progress.length} 条` : '0 条'};讲义内容 ${content.length ? `⚠ ${content.length} 条` : '0 条'}`,
+      `沿用符号那条 ${symbols.length ? '记上了' : '没记(只记不判)'};前台 remember ${remembered} 次`,
+      ...(err ? [`⚠ ${err}`] : []),
+    ].join(';'), output: `【项目记忆】\n${t2.entries.map((c) => `- ${c}`).join('\n') || '(空)'}\n【待确认】\n${t2.waiting.map((c) => `- ${c}`).join('\n') || '(无)'}\n【第一节回复】${t1.ev.content}\n【第二节回复】${t2.ev.content}`, toolCalls: [...t1.ev.toolCalls, '|', ...t2.ev.toolCalls] };
+  });
+
   // ── 项目记忆写满时的压缩(10-05 用户定:「参考 claude 和 codex 的做法,记忆满了就让 agent 压缩一下」)──
-  //  种子:直接写这份项目记忆的 MEMORY.md(引擎当成已有内容收下),贴着 8,000 字上限:被后来的说法取代的三对、换了说法的重复两组、
+  //  种子:直接写这份项目记忆的 MEMORY.md(引擎当成已有内容收下),贴着上限(PM_LIMIT):被后来的说法取代的三对、换了说法的重复两组、
   //    现行的命令 / 路径几条、一条带网址的(过不了形状闸 → 压缩不许动它)、其余是早就没用的进度流水。
   //  A 前台:项目会话里让它记一条新规矩(明说「记一下」:随口一提时模型常常不调 remember,这条腿就量不到)→ remember 遇到写满 → 引擎让模型把整份压一遍 → 新规矩记上了。
   //    硬判:回执带 compacted;新规矩在;整份不超过上限七成 + 新规矩;带网址那条一字没动;现行的命令 / 路径 / 端口都还在;
@@ -2302,6 +2365,7 @@ try {
   //    前台没听话自己记了、或判官没提名项目级 → 这条腿没量到,照实写,不算过也不算没过;压缩被引擎拒收(日志里「没压成」)→ 不通过。
   //  负对照 = 把 projectMemoryCompact.ts 的 compactProjectMemory 开头改成直接 return { status: 'skipped', reason: 'failed' } 后重建再跑:
   //    A 回到「memory is full」、回执没有 compacted、新规矩记不上。
+  const PM_LIMIT = 4000; // = PROJECT_MEMORY_CHAR_BUDGET(src/services/projectMemory.ts),改那边要改这里
   await scenario('projcompact', 'projcompact 项目记忆写满 → 压缩一遍再记:现行的留着、带网址的不动、去掉的原句能恢复', async () => {
     const a = 'live-pc-a', b = 'live-pc-b';
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: a, name: 'Cedar', systemPrompt: 'Be concise and respond in Chinese.' }) });
@@ -2330,12 +2394,13 @@ try {
         `The dev server port moved from 5173 to 6240; 5173 now belongs to the docs preview.`,
       ];
       const lines = []; let i = 0;
-      for (const d of durable) lines.push(note(i++), note(i++), d);
-      while (lines.join('\n').length + note(i).length + 1 <= 7985) lines.unshift(note(i++));
-      const gap = 7985 - lines.join('\n').length - 1; // 垫到离上限只剩十几个字:新规矩怎么措辞都放不下
+      for (const d of durable) lines.push(note(i++), d); // 11-03 上限 8000 → 4000:每条现行的前面只垫一条流水
+      while (lines.join('\n').length + note(i).length + 1 <= PM_LIMIT - 15) lines.unshift(note(i++));
+      const gap = PM_LIMIT - 15 - lines.join('\n').length - 1; // 垫到离上限只剩十几个字:新规矩怎么措辞都放不下
       if (gap >= 30) lines.unshift(`${note(i++).slice(0, gap - 1)}.`);
+      // 按老引擎的样子种(旧的哈希目录名 + 标记):引擎打开这个项目时并进新目录 —— 顺带量到「旧目录并进来」这条路
       const dir = join(home, 'project-memory', createHash('sha256').update(realpathSync(p)).digest('hex').slice(0, 32));
-      mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'MEMORY.md'), lines.join('\n'));
+      mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'MEMORY.md'), lines.join('\n')); writeFileSync(join(dir, 'PROJECT.json'), JSON.stringify({ project: realpathSync(p) }));
       return { p, lines, pinned, stale, current: [`test:unit-${m}`, `release/2026.10-${m}`, '6240', 'migrate:up', `stage-${m}`, 'db/migrations', 'openapi/spec-v3.yaml', 'gen:api', 'scripts/sync-vendor.sh'] };
     };
     // 压完的这份记忆对不对:带网址那条原样在、现行的词都在、够小、不在了的原句都进了记录
@@ -2357,7 +2422,7 @@ try {
     const s1 = seed('pc-one');
     const sidA = await mkS(a, s1.p, 'Compaction foreground');
     const before = await memoryOf(sidA);
-    if (before.entries.length !== s1.lines.length || before.chars < 7960) return { ok: false, detail: `种子没落到引擎读的那份记忆:写了 ${s1.lines.length} 条 ${s1.lines.join('\n').length} 字,引擎读到 ${before.entries.length} 条 ${before.chars} 字` };
+    if (before.entries.length !== s1.lines.length || before.chars < PM_LIMIT - 40) return { ok: false, detail: `种子没落到引擎读的那份记忆:写了 ${s1.lines.length} 条 ${s1.lines.join('\n').length} 字,引擎读到 ${before.entries.length} 条 ${before.chars} 字` };
     const env = `preprod-${randomUUID().slice(0, 6)}`;
     const evA = await run(sidA, `记一下,这条只在这个项目里成立:合并之前都要先在预发环境 ${env} 上验一遍,验过了再合。`, 300_000, { agentSlug: a, cwd: s1.p, thinkingLevel: 'low' });
     const receipts = evA.toolResults.filter((r) => r.name === 'remember').map((r) => { try { return JSON.parse(r.full); } catch { return { raw: String(r.full || '').slice(0, 400) }; } });
@@ -5566,11 +5631,11 @@ Then reply with only the command output.`,
     const starters = asList(await api('/agent/special/muse/starters').catch(() => []), 'starters');
     const labelsOk = starters.every((x) => String(x.text || '').includes(String(x.source?.label || '\u0000')));
     const zh = starters.filter((x) => /[\u4e00-\u9fff]/.test(x.text)).length;
-    const ok = calls.length > 0 && starters.length > 0 && labelsOk;
+    const ok = calls.length > 0 && starters.length >= 3 && labelsOk; // 11-03 用户:默认填满三条
     const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
     const detail = [
       `set_chat_starters 调了 ${calls.length} 次${calls.length ? '' : ' ← 红'}`,
-      `新对话页 ${starters.length} 条${starters.length ? '' : ' ← 红'}${labelsOk ? '' : ';有 label 不在句子里 ← 红'}`,
+      `新对话页 ${starters.length} 条${starters.length >= 3 ? '' : '(要满 3 条)← 红'}${labelsOk ? '' : ';有 label 不在句子里 ← 红'}`,
       `中文 ${zh}/${starters.length}(只记)`,
       starters.map((x) => `[${x.source?.kind}「${x.source?.label}」${x.source?.ref ? ` → ${x.source.ref}` : ''}] ${x.text}`).join(' | '),
     ].join(';');

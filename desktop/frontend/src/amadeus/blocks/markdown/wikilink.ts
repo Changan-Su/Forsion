@@ -187,9 +187,16 @@ function buildDecorations(
         (standalone && state.selection instanceof NodeSelection && selFrom === pos && selTo === pos + node.nodeSize)
       )
       const onActiveLine = lineFrom !== -1 && spFrom < lineTo && spTo > lineFrom
-      // 普通双链仍是「光标进入即源码」;图片是难源码编辑块,只有 `</>` 显式开门。
+      // 普通双链:光标**进到这条链接里**才露源码(11-03 用户:输入过程中就该渲染 —— 刚打完 `]]`、同一行接着打字,
+      // 它已经是带右键菜单的链接;此前按「光标所在行」露源码,整行打完、光标离开才渲染)。两端算外面:光标停在 `]]` 后面
+      // 也渲染;←/→ 走进去、右键「编辑」都会落进链接内,照旧露源码。图片是难源码编辑块,只有 `</>` 显式开门。
       // 露出的源码照样着色(目标不存在 → 黯淡),右键照样是文件菜单(props.handleDOMEvents.contextmenu)。
-      if (!img && onActiveLine) {
+      // 选区任一端落在链接里面 = 在编辑它(Shift 扩选从里面拉出来也不收);整条被圈在选区里 = 选中了它,保持渲染。
+      // 空光标停在左缘(`|[[`)也算里面:渲染态下那个位置的 DOM 光标在隐藏源码里,浏览器会把字插到链接**后面**
+      // (实测删掉嵌入的 `!` 再补回,落盘成 `[[x]]!`)。右缘(`]]|`)算外面,刚打完 `]]` 照样当场渲染。
+      const within = (x: number): boolean => x > from && x < to
+      const caretInside = onActiveLine && (selFrom === selTo ? selFrom >= from && selFrom < to : within(selFrom) || within(selTo))
+      if (!img && caretInside) {
         if (!parseAppRefInner(m[1])) {
           const fileLink = isPdfLinkInner(m[1]) || !!parseMediaLinkInner(m[1])
           const sp = fileLink ? null : splitLinkInner(m[1])
@@ -444,6 +451,34 @@ function adjacentPlainWiki(view: EditorView, dir: 'up' | 'down'): number | null 
   return target?.sourceFrom == null ? null : target.sourceFrom + 2
 }
 
+/** ←/→ 贴着一条普通双链:自己走进它的源码一格(`]|]` / `[|[`),不交给浏览器。双链只在光标进到里面时才露源码(11-03),
+ *  渲染态是藏起来的源码 + 部件,原生方向键会把整条当一个字跨过去 —— 不接这一下,键盘就改不了链接。左缘虽然已露源码,
+ *  连按时装饰还没换过来、下一下原生 → 照样跨过,所以两边都接。图片嵌入不管(它只认 `</>` 开门)。
+ *  ⚠️ 光标位置读 DOM 不读 state:连按方向键时 PM 的选区要等异步 selectionchange 才追上(keydown 前的 forceFlush 带不上它),
+ *  读 state 会拿上一格的旧值判边缘,于是整条被跳过(wiki-suggest L-02 连按 6 次实测)。 */
+function stepIntoWiki(view: EditorView, dir: 'left' | 'right'): number | null {
+  const sel = view.state.selection
+  if (!(sel instanceof TextSelection) || !sel.empty) return null
+  let head = sel.head
+  try {
+    const dom = (view.root as Document).getSelection?.()
+    if (dom?.isCollapsed && dom.focusNode && view.dom.contains(dom.focusNode)) head = view.posAtDOM(dom.focusNode, dom.focusOffset)
+  } catch { /* DOM 选区不在编辑器里:按 state */ }
+  const $h = view.state.doc.resolve(head)
+  if (!$h.parent.isTextblock || $h.parent.type.spec.code) return null
+  const s = buildBlockString($h.parent)
+  const off = $h.parentOffset
+  WIKILINK_RE.lastIndex = 0
+  let m: RegExpExecArray | null
+  while ((m = WIKILINK_RE.exec(s))) {
+    if (imageEmbed(m[1], m.index > 0 && s[m.index - 1] === '!')) continue
+    // 只走进一格:之后每按一下仍是逐字,与源码态下的光标序列一致
+    if (dir === 'left' && m.index + m[0].length === off) return head - 1
+    if (dir === 'right' && m.index === off) return head + 1
+  }
+  return null
+}
+
 export function wikilinkPlugin(
   onOpen: WikiOpen,
   isResolved: (name: string) => boolean = () => true,
@@ -472,9 +507,16 @@ export function wikilinkPlugin(
           },
         },
         props: {
-          // 失焦 → 全部渲染成链接;聚焦 → 仅光标所在行露源码(每个 Amadeus 块是独立编辑器)。焦点态读 editorFocus。
+          // 失焦 → 全部渲染成链接;聚焦 → 光标进到链接里才露源码(每个 Amadeus 块是独立编辑器)。焦点态读 editorFocus。
           handleKeyDown: (view, event) => {
-            if ((event.key !== 'ArrowUp' && event.key !== 'ArrowDown') || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false
+            if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return false
+            if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+              const at = stepIntoWiki(view, event.key === 'ArrowLeft' ? 'left' : 'right')
+              if (at == null) return false
+              view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, at)).scrollIntoView())
+              return true
+            }
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return false
             const pos = adjacentPlainWiki(view, event.key === 'ArrowUp' ? 'up' : 'down')
             if (pos == null) return false
             view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).scrollIntoView())

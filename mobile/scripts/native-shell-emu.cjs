@@ -3890,7 +3890,10 @@ const tabCountText = (list) => {
     } catch { /* best effort */ }
   }
 
-  await check('context menu primitive (AgentSelectStrip long-press) opens natively and runs its action', async () => {
+  // SKIP(11-02):这条靠长按输入框上方那排 Agent 胶囊开 ContextMenu;胶囊并进了输入卡工具行的收件人芯片,
+  // 安卓上芯片走原生勾选清单,行右键菜单只在桌面浮层里。换一个手机上够得着的 ContextMenu 入口之前不跑(正文留着好改)。
+  console.log('SKIP context menu primitive — the agent strip it long-pressed was removed (11-02); needs a new phone-reachable ContextMenu trigger')
+  if (false) await check('context menu primitive (AgentSelectStrip long-press) opens natively and runs its action', async () => {
     const pill = await h.waitPage(cdp, "!!document.querySelector('[data-agent-slug=\"e2e-agent\"]')", 12000)
     assert.ok(pill, `agent fixture did not render (stub log: ${stubLog.slice(-12).join(', ')})`)
     // on the phone the strip is part of the composer the Home pill opens (folded away until then)
