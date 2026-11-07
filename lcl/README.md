@@ -26,6 +26,15 @@ Genesis 当前使用这份 LCL。`apps/Archived/Forsion-LCL` 是早期组合引�
 - 插件：`ctx.ui.mountChatBox`；详见 [公共契约](../docs/customization/ui-components.md)。
 - 桌面 / Web 卡内容宽 ≤480px 时，模型显示短名称与档位，模型 / 添加 / 模式入口展开不改变宽度；≤260px 时上下文与语音通过添加菜单访问。窄菜单用同层返回并保留完整模型名、审批说明和额度；原生手机沿用自身布局。`desktop` 的 `check:composernarrow` 与 `check:composernarrow:electron` 覆盖真实组件 / 构建后 ChatView。
 
+## 对象与动作(Objects)
+
+同一个东西(Space、笔记……)在哪儿右键都该是同一份菜单。LCL 原来只按出口登记(Ribbon 图标、命令、视图),动作挂在出口上,离开就没了;现在按对象登记。
+
+- `@lcl/engine` 的 `engine/objects.ts`:`registerObjectType`(它是谁:id 校验、名字图标缓存、怎么打开、执行前怎么核「还是那个」)、`registerObjectAction`(按类型登记一次;分组固定为 打开 → 编辑 → 整理 → 本处 → 分享 → 危险)、`executeAction`(唯一执行口:菜单弹出时冻结目标,执行前重验,确认后再验,防连点,失败交宿主上报)、`openObject`(= 点一下,窗口锁这类规矩写在类型里一次)、`setObjectHost`(宿主给能力 `caps`、确认框、失败上报)。`when` 只管列不列,不是授权。注册都返回 dispose,同 id 先到先得。
+- `engine/objectMenu.tsx`:共用菜单渲染器 `openMenu` / `MenuSurface`(一份 `SheetMenu`,桌面画 `.ctx-menu`,Android 走原生半屏;行为照笔记树菜单:焦点进第一项、↑↓、Esc 还焦点、按外面关),对象接入 `useObjectMenu` / `bindObject` / `objectContextMenuHandler`。界面只给 `refs`、`place` 和本处项 `placeSections`;没有可列的项时不拦右键。
+- `engine/objectFocus.ts`:焦点对象底座(按窗口 / View 范围、owner token 申领释放),第二期给命令面板与快捷键用。
+- 宿主那半(Space、笔记的类型与动作)住应用层,装配期登记。新界面别再手写对象菜单。
+
 ## 划线条(Selection bar)
 
 选中文字后浮出来的那一条,全应用一份。
@@ -77,6 +86,8 @@ Compact desktop/Web Chat Boxes keep trigger widths stable and show a short model
 `OverlayAt` and `useClampedMenu` accept an optional DOM `boundary`. Portalled menus are clamped to its intersection with the viewport, with width/height caps and the existing cumulative zoom compensation. Callers provide scrolling on constrained surfaces. Omit it to retain viewport placement. Resize and scroll observers are removed on unmount.
 
 `engine/lineSelection.ts` provides opt-in `mountLineSelection(root, options)`. It paints continuous visual-line bands outside the content DOM while preserving native Selection, focus and clipboard behavior. Chat and watched plugin readers mount it through ViewSelectionBar; Markdown editors also supply composition suspension and pending AI ranges. Dispose the handle with its owning view. Custom selection layers and coarse pointers keep native paint. Regression: `desktop` → `npm run check:selectionlines` at 100% and 110% zoom after a fresh build.
+
+Objects: `engine/objects.ts` registers object types (identity, cached info, open, execution-time verify) and per-type actions; every action runs through `executeAction` (targets frozen when the menu opens, re-verified before and after confirmation, double-run guarded, failures reported by the host). `engine/objectMenu.tsx` is the shared menu renderer (`openMenu`, web `.ctx-menu` or the Android native sheet) plus `useObjectMenu` / `bindObject`; surfaces pass only `refs`, `place` and place-specific sections. `when` decides listing, not authorization.
 
 Space owns layout; View owns a navigable feature; UI components compose the inside of a View. Amadeus document Blocks and Dashboard Cards have different responsibilities. Use `@lcl/components` for host-independent primitives and application adapters for services. Inputs and callbacks are explicit; a component must not implicitly target the active session. DOM plugins consume `ctx.ui` mounts, with lifecycle cleanup owned by the host. Settings parts (panels, rows, switches, buttons, inputs, meters, steppers, sheets) currently live in the application layer (`components/SettingsPrimitives`, `components/SettingsPage`) because their CSS source of truth is `base.css`; plugins reach them through `ctx.ui.mountSettingsPage` / `mountSettingsItem`. Keep types, documentation, consumers, and lifecycle coverage together when changing public APIs.
 

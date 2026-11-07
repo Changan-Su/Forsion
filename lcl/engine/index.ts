@@ -85,6 +85,20 @@ export type {
   FloatingTocOptions,
   FloatingTocProps,
 } from './FloatingToc'
+/** 对象层:对象类型 + 按类型登记的动作 + 执行层 + 共用菜单(仓根 docs/ToBeImproved/LCL对象动作统一方案_2026-11-07)。 */
+export {
+  registerObjectType, registerObjectAction, getObjectType, getObjectAction, objectInfo, objectActions, objectKey,
+  executeAction, openObject, freezeRefs, buildObjectMenu, menuHasItems, setObjectHost, objectCaps, subscribeObjects,
+  OBJECT_REASON, ACTION_GROUPS,
+} from './objects'
+export type {
+  ObjectRef, ObjectInfo, ObjectIcon, OpenMode, Place, ObjectCaps, ObjectContext, ActionResult, ObjectTypeDefinition,
+  ActionGroup, ConfirmRequest, ObjectAction, ObjectHost, FrozenRef, ObjectMenuRequest,
+} from './objects'
+export { claimObjectFocus, focusedObjects, subscribeObjectFocus } from './objectFocus'
+export type { FocusedObjects, ObjectFocusClaim } from './objectFocus'
+export { MenuSurface, openMenu, closeMenu, menuIsOpen, openObjectMenu, objectContextMenuHandler, useObjectMenu, bindObject } from './objectMenu'
+export type { MenuAt, OpenMenuRequest, ObjectMenuBinding } from './objectMenu'
 export { setDetachApi, getDetachApi } from './detachSeam'
 export type { DetachApi, ViewRef } from './detachSeam'
 
