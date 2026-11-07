@@ -1,5 +1,6 @@
 import { windowKind } from './windowKind'
 import { useApp } from './stores/appStore'
+import { addSpaceToDesktop } from './spaceShortcut'
 /** 桌面多窗接线:把引擎的 detach 缝(detachSeam)接到 window.tangu 多窗 IPC;订阅跨窗拖入(accept-view)
  *  与实时落点预览(drag-preview)。非桌面(web/移动)window.tangu.openDetached 缺省 → 整体 no-op。
  *  三种窗口(主/独立/mini)都调:mini 不是 dockview 落点(主进程 windowAtPoint 已排除),订阅空转无害。 */
@@ -71,6 +72,8 @@ export function installMultiWindow(): void {
       if (windowKind() === 'main' && liveLayoutOwner() === id && useSpaceStore.getState().activeSpaceId === id) useWorkspace.getState().saveNamed(spaceLayoutName(id))
       void t.openDetached?.([], at, { space: id })
     },
+    // 「添加到桌面」:快捷方式双击 = 这个 Space 开在自己的窗口里(spaceShortcut.ts)。宿主没有这条 IPC(旧 preload)就不给菜单项。
+    ...(t.addSpaceToDesktop ? { addSpaceToDesktop: (id: string) => { void addSpaceToDesktop(id) } } : {}),
     dragUpdate: (x, y, view) => t.dragUpdate?.(x, y, view),
     drop: async (x, y, view) => (await t.dropView?.(x, y, view))?.routed ?? false,
   })

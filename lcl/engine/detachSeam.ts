@@ -10,6 +10,8 @@ export interface DetachApi {
   detach(views: ViewRef[], at?: { screenX: number; screenY: number }): void
   /** 把整个 Space 开到它自己的窗口里(一个 Space 一扇,已开着就叫到前面);at 同上。没有 OS 窗口的宿主不提供。 */
   openSpace?(spaceId: string, at?: { screenX: number; screenY: number }): void
+  /** 给这个 Space 在系统桌面放一个快捷方式,双击 = 开在它自己的窗口里(不露出主窗)。能写桌面快捷方式的宿主才提供。 */
+  addSpaceToDesktop?(spaceId: string): void
   /** Windows host avoids the native HTML drag loop for Ribbon Spaces. */
   ribbonPointerDrag?: boolean
   /** Snapshot OS cursor DIP coordinates at release, including mixed-DPI monitors. */
