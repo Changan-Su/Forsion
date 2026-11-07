@@ -32,9 +32,13 @@ const BAND = 44 // 目标又宽又高(正文区)时只圈顶上一条 —— 「
 interface Active { owner: string; finish: (r: SpotlightResult) => void }
 let active: Active | null = null
 
+/** 锚点在插件 View 里(`data-guide-owner` = 插件 id)。`host:` 开头的 owner 是宿主自己的界面(主页 = `host:home`),
+ *  不算插件的 —— 插件 id 里不会有冒号(manifest id 只许小写字母、数字、连字符)。宿主的圈注和宿主提示都只跳过插件 View。 */
+export const inPluginView = (el: Element): boolean => !!el.closest('[data-guide-owner]:not([data-guide-owner^="host:"])')
+
 const findAnchor = (name: string): HTMLElement | null => {
   for (const el of document.querySelectorAll<HTMLElement>(`[data-guide-anchor="${CSS.escape(name)}"]`)) {
-    if (el.closest('[data-guide-owner]')) continue // 插件 View 里同名的锚点不算宿主的(插件抢不走首方圈注)
+    if (inPluginView(el)) continue // 插件 View 里同名的锚点不算宿主的(插件抢不走首方圈注);主页这类 host: owner 里的照样算
     const r = el.getBoundingClientRect()
     if (r.width > 0 && r.height > 0) return el
   }

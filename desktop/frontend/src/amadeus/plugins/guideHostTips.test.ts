@@ -7,8 +7,8 @@
  * 节奏(停手、等弹窗、一天几条)和插件提示同一个 pickTip,纯函数那半在 guideTips.test.ts。
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { closeSpotlight, showTip } from './guideSpotlight'
-import { HOST_TIP_OWNER, hostTipSeen, inPluginView, markHostTipSeen, registerHostTip, tipState } from './guideTips'
+import { closeSpotlight, inPluginView, showSpotlight, showTip } from './guideSpotlight'
+import { HOST_TIP_OWNER, hostTipSeen, markHostTipSeen, registerHostTip, tipState } from './guideTips'
 import { useAchievements } from '../../achievements/store'
 
 const button = (): HTMLElement => {
@@ -79,6 +79,23 @@ describe('which anchors a host tip may use', () => {
     expect(inPluginView(wrap(null))).toBe(false)
     expect(inPluginView(wrap('host:home'))).toBe(false)
     expect(inPluginView(wrap('some-plugin'))).toBe(true)
+  })
+  it('first-party spotlight finds the Home composer under host:home, not a same-named anchor in a plugin view', async () => {
+    const put = (owner: string | null, x: number): HTMLElement => {
+      const box = document.createElement('div'); if (owner) box.dataset.guideOwner = owner
+      const el = document.createElement('div'); el.dataset.guideAnchor = 'chat-composer'
+      el.getBoundingClientRect = () => ({ x, y: 300, left: x, top: 300, width: 400, height: 80, right: x + 400, bottom: 380, toJSON: () => ({}) }) as DOMRect
+      box.appendChild(el); document.body.appendChild(box); return el
+    }
+    put('some-plugin', 10)
+    put('host:home', 500)
+    const done = showSpotlight('forsion-guide', { anchor: 'chat-composer', title: 'T' })
+    await frames()
+    const ring = document.querySelector<HTMLElement>('.guide-spot-ring')
+    expect(ring).not.toBeNull()
+    expect(parseFloat(ring!.style.left)).toBeGreaterThan(400)
+    closeSpotlight()
+    expect(await done).toBe('closed')
   })
 })
 

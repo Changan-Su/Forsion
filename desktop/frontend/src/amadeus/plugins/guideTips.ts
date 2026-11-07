@@ -14,7 +14,7 @@ import type { PluginGuideTip } from '@amadeus-shared/ipc'
 import { useAchievements } from '../../achievements/store'
 import { usePopupQueue } from '../../stores/popupQueue'
 import { currentLocale, registerMessages } from '../../i18n'
-import { closeSpotlight, showTip, spotlightActive } from './guideSpotlight'
+import { closeSpotlight, inPluginView, showTip, spotlightActive } from './guideSpotlight'
 import { sendTelemetry } from '../../telemetrySend'
 import { telemetryPluginRef, type TelemetryPluginLike } from '../../telemetryPluginId'
 
@@ -82,10 +82,6 @@ export function tipState(pluginId: string, tipId: string): 'waiting' | 'seen' | 
   if (!guideEnabled() || muted === undefined || seen === undefined) return 'off'
   return muted ? 'muted' : seen ? 'seen' : 'waiting'
 }
-
-/** 锚点在插件 View 里(`data-guide-owner` = 插件 id)。`host:` 开头的 owner 是宿主自己的界面(主页 = `host:home`),
- *  不算插件的 —— 插件 id 里不会有冒号(manifest id 只许小写字母、数字、连字符)。 */
-export const inPluginView = (el: Element): boolean => !!el.closest('[data-guide-owner]:not([data-guide-owner^="host:"])')
 
 /** 只在这个插件自己的 View 里找,而且要在视口里(看不见的锚点不算「在屏幕上」)。宿主自己的提示找宿主界面里的锚点
  *  (插件 View 里同名的不算,插件抢不走首方提示;主页这类 `host:` owner 里的照样算)。 */
