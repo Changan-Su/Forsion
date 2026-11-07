@@ -50,7 +50,7 @@ import { PluginEmbed } from '../blocks/plugin/PluginEmbed'
 import { amadeus } from '../api'
 import { resolveFileName, isAmbiguousFileRef } from '../lib/vaultFiles'
 import { attachResizeHandle } from '../lib/imageResize'
-import { attachSourceButton } from '../blocks/markdown/sourceToggle'
+import { attachOpenButton, attachSourceButton } from '../blocks/markdown/sourceToggle'
 import { editorFocused } from '../blocks/markdown/editorFocus'
 import { getAttachmentPrefs } from '../lib/attachments'
 import { canOpenAttachment } from '../lib/hostCaps'
@@ -188,6 +188,25 @@ const softSourceKind = (kind: EmbedKind | null): boolean => !!kind && SOFT_SOURC
 /** 这个节点是不是「光标走进来就露源码」的文件引用嵌入段(keyboard.ts 的方向键按它分流)。 */
 export function isSoftSourceEmbed(node: ProseNode | null | undefined): boolean {
   return !!node && node.type.name === 'paragraph' && softSourceKind(classifyEmbed(node))
+}
+
+/**
+ * 右上角「打开」键要开的目标(交给 openWikiLink);不挂这颗键 → null。
+ * 只给文件引用:网页 / 书签 / 按钮 / 文档 Agent / 交互块没有「被引用的文件」可开。
+ *  · 媒体用剥掉 `#t=` 的 base:带时刻锚交给 openWikiLink 会先问本页播放器 —— 被嵌入体自己认领,只就地 seek 不打开;
+ *  · 笔记 / 插件剥掉 `|别名`;宿主打不开附件时,普通文件不出这颗键(同 FileEmbed 的 G2-13 口径,不出点了没反应的键)。
+ */
+export function openTargetOf(kind: EmbedKind): string | null {
+  switch (kind.k) {
+    case 'file':
+      if (kind.fileKind === 'other' && !/\.[a-z0-9]+\.md$/i.test(kind.name) && !canOpenAttachment()) return null
+      return kind.name
+    case 'db': return kind.name
+    case 'draw': return kind.target
+    case 'plugin':
+    case 'note': return kind.target.split('|')[0].trim() || null
+    default: return null
+  }
 }
 
 // ── 桥接组件(只吃字符串 + 回调,不读 activePage —— unified 数据安全禁令)────────────────
@@ -485,7 +504,14 @@ function inPlainTextblock(doc: ProseNode, from: number, to: number): boolean {
   return $from.parent.isTextblock && $from.depth > 0 && $from.sameParent(doc.resolve(to)) && !classifyEmbed($from.parent)
 }
 
-export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush?: () => Promise<void>; alive?: () => boolean }): MilkdownPlugin[] {
+export function createEmbedLayer(opts: {
+  path: string
+  readOnly?: boolean
+  flush?: () => Promise<void>
+  alive?: () => boolean
+  /** 右上角「打开」键的落点(newTab = ⌘/Ctrl+点击)。宿主传本面板 store 的 openWikiLink,与点双链同一口径;缺省走活动面板。 */
+  open?: (target: string, o?: { newTab?: boolean }) => void
+}): MilkdownPlugin[] {
   const plugin = $prose(() => {
     const key = new PluginKey('UNIFIED_EMBED_LAYER')
     const roots = new Map<string, WidgetEntry>() // key → 活 widget(同 key 复用,PM 不重建 DOM)
@@ -689,6 +715,20 @@ export function createEmbedLayer(opts: { path: string; readOnly?: boolean; flush
                 v.focus()
               })
               dom.querySelector('.amx-src-btn')?.classList.add('amx-src-btn--block')
+              // 「打开」键:只给文件引用(soft 那五类);目标点击时现算(源码被改过,闭包里的 kind 已过期)。
+              if (openTargetOf(kind) !== null) {
+                attachOpenButton(dom, view, (newTab) => {
+                  const v = viewRef
+                  const hit = v ? findNth(v) : null
+                  const node = v && hit ? v.state.doc.nodeAt(hit.at) : null
+                  const now = node ? classifyEmbed(node) : kind
+                  const target = now ? openTargetOf(now) : null
+                  if (!target) return
+                  const o = newTab ? { newTab: true } : undefined
+                  if (opts.open) opts.open(target, o)
+                  else usePageStore.getState().openWikiLink(target, opts.path, o)
+                }, true)
+              }
               roots.set(dkey, { root, dom, text: renderedText, render, refs: 1 })
               return dom
             },

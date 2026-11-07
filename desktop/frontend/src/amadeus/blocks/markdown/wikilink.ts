@@ -18,7 +18,7 @@ import { isPdfLinkInner, parseBlockSubpath, parseMediaLinkInner, splitLinkInner 
 import { toAssetUrl } from '@amadeus-shared/assets'
 import { buildBlockString } from './mathLivePreview'
 import { editorFocused } from './editorFocus'
-import { attachSourceButton, revealSource } from './sourceToggle'
+import { attachOpenButton, attachSourceButton, revealSource } from './sourceToggle'
 import { attachResizeHandle } from '../../lib/imageResize'
 import { armImageDrag } from './imageDrag'
 import { watchBrokenImage } from './brokenMedia'
@@ -145,6 +145,7 @@ function buildDecorations(
   onOpen: WikiOpen,
   isResolved: (name: string) => boolean,
   iconOf?: (name: string) => string | undefined,
+  canOpen: () => boolean = () => true,
 ): DecorationSet {
   const focus = editorFocused(state)
   const sourceFrom = wikiKey.getState(state)?.sourceFrom ?? null
@@ -263,6 +264,8 @@ function buildDecorations(
                 view.dispatch(tr)
                 view.focus()
               }) // 悬停 `</>` → 显式进入 `![[…]]` 源码
+              // 悬停「打开」→ 应用内图片视图(⌘/Ctrl+点击新标签页);须挂在 `</>` 之后,见 attachOpenButton。
+              if (canOpen()) attachOpenButton(wrap, view, (newTab) => onOpen(img.name, newTab ? { newTab: true } : undefined))
               return wrap
             },
             // ⚠️ key **不带**选中位:同 key 的 widget DOM 会被 PM 复用,带上 picked 就等于
@@ -483,6 +486,8 @@ export function wikilinkPlugin(
   onOpen: WikiOpen,
   isResolved: (name: string) => boolean = () => true,
   iconOf?: (name: string) => string | undefined,
+  /** onOpen 真能打开东西吗;false = 图片不挂「打开」键(无 vault 的记录正文传的是 noop)。 */
+  canOpen: () => boolean = () => true,
 ) {
   return $prose(
     () =>
@@ -522,7 +527,7 @@ export function wikilinkPlugin(
             view.dispatch(view.state.tr.setSelection(TextSelection.create(view.state.doc, pos)).scrollIntoView())
             return true
           },
-          decorations: (state) => buildDecorations(state, onOpen, isResolved, iconOf),
+          decorations: (state) => buildDecorations(state, onOpen, isResolved, iconOf, canOpen),
           // 编辑中的双链源码右键 = 同一份文件菜单(渲染态部件自己派,见 widget 里的 contextmenu);已在源码态,不给「编辑」。
           handleDOMEvents: {
             contextmenu: (_view, e) => {

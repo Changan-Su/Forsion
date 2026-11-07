@@ -553,7 +553,11 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .am-app .amx-src-btn--inline { top: -9px; right: -4px; height: 16px; padding: 0 4px; font-size: var(--ui-font-caption, 11px); }
 .am-app .amx-src-btn--block { top: 6px; right: 6px; }
 /* 「打开」按钮排在 `</>` 左边(两颗都绝对定位在块右上角,给它右移一个按钮宽 + 间距)。 */
+.am-app .amx-open-btn { right: 40px; padding: 0 5px; }
 .am-app .amx-src-btn--block.amx-open-btn { right: 40px; display: inline-flex; align-items: center; justify-content: center; }
+/* 只读视图没有 `</>`,「打开」独占右上角。 */
+.am-app .amx-open-btn.amx-src-btn--solo { right: 4px; }
+.am-app .amx-src-btn--block.amx-open-btn.amx-src-btn--solo { right: 6px; }
 /* 块公式的复制键:排在 `</>` 左边(同「打开」键的右移量);只读视图没有 `</>`,靠到最右。点完 1.5 秒内是 ✓。 */
 .am-app .amx-src-btn--copy { right: 40px; padding: 0 5px; }
 .am-app .amx-src-btn--copy.amx-src-btn--solo { right: 4px; }
@@ -804,6 +808,11 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   background: var(--overlay-light, rgba(127, 127, 127, 0.05)); font-size: var(--ui-font-meta, 12px);
 }
 .am-app .embed-media-head .embed-file-name { flex: 1 1 auto; }
+/* v4 嵌入右上角悬停的「打开」+ `</>`:标题行常驻给它们留位(悬停才浮现,不留位就压在「收起 / 打开 ↗」上),
+   并把两颗键竖直摆到标题行中线(同多维表的 top: 10px)。只读只有「打开」一颗,留一颗的位。 */
+.am-app .unified-embed.amx-has-src-btn > .unified-embed-body > .embed-media > .embed-media-head { padding-inline-end: 80px; }
+.am-app .unified-embed.amx-has-src-btn:not(:has(> .amx-src-btn:not(.amx-src-btn--solo))) > .unified-embed-body > .embed-media > .embed-media-head { padding-inline-end: 40px; }
+.am-app .unified-embed:has(> .unified-embed-body > .embed-media) > .amx-src-btn--block { top: 10px; }
 .am-app .embed-media-btn {
   flex: 0 0 auto; border: none; background: transparent; color: var(--text-muted); cursor: pointer;
   font: inherit; font-size: var(--ui-font-meta, 12px); padding: 3px 7px; border-radius: var(--radius-sm, 6px);

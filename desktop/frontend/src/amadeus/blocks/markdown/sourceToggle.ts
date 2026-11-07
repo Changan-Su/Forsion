@@ -10,6 +10,8 @@ registerMessages({
   'srctoggle.viewSource': { zh: '查看源码', en: 'View source' },
   'srctoggle.copyTex': { zh: '复制 LaTeX', en: 'Copy LaTeX' },
   'srctoggle.copied': { zh: '已复制', en: 'Copied' },
+  'srctoggle.open': { zh: '打开（⌘/Ctrl+点击在新标签页打开）', en: 'Open (⌘/Ctrl+click to open in a new tab)' },
+  'srctoggle.openAria': { zh: '打开引用的内容', en: 'Open the referenced content' },
 })
 
 const SVG = (inner: string): string =>
@@ -17,6 +19,8 @@ const SVG = (inner: string): string =>
 // lucide copy / check(与 Chat 代码块的复制键同一对图标)
 const COPY_ICON = SVG('<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>')
 const CHECK_ICON = SVG('<path d="M20 6 9 17l-5-5"/>')
+// lucide maximize-2(与 v3 BlockHost 的「打开」键同一枚图标,两代编辑器长一样)
+const OPEN_ICON = SVG('<path d="M15 3h6v6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/><path d="M9 21H3v-6"/>')
 
 /** 把光标送进 srcFrom 处的源码(开定界符之后),该行随即露出字面源码。 */
 export function revealSource(view: EditorView, srcFrom: number): void {
@@ -56,6 +60,36 @@ export function attachSourceButton(host: HTMLElement, view: EditorView, reveal: 
     else revealSource(view, reveal)
   })
   // 键盘按下(Tab 到这颗键再按回车 / 空格)不往上冒:否则 ProseMirror 的键位表拿去改别处的选区(删字、插段),按钮反而没按下去。
+  b.addEventListener('keydown', (e) => e.stopPropagation())
+  host.classList.add('amx-has-src-btn')
+  host.appendChild(b)
+}
+
+/**
+ * 附件 / 文件引用嵌入右上角的「打开」键:排在 `</>` 左边、同一种悬停浮现的按钮。
+ * 点击 = 打开被引用的内容,⌘/Ctrl+点击 = 新标签页(同 v3 BlockHost 的那颗)。
+ * 只读视图照样挂(打开不改文档);那里没有 `</>`,按钮靠到最右(`--solo`)。
+ * **须在 attachSourceButton 之后调用**:台架和外壳的 `querySelector('.amx-src-btn')` 取第一颗当 `</>`,
+ * 视觉位置靠 CSS 的 right 偏移,不靠 DOM 顺序。
+ */
+export function attachOpenButton(host: HTMLElement, view: EditorView, open: (newTab: boolean) => void, block = false): void {
+  const b = document.createElement('button')
+  b.type = 'button'
+  b.className = `amx-src-btn amx-open-btn${block ? ' amx-src-btn--block' : ''}${view.editable ? '' : ' amx-src-btn--solo'}`
+  b.title = translate('srctoggle.open')
+  b.setAttribute('aria-label', translate('srctoggle.openAria'))
+  b.contentEditable = 'false'
+  b.innerHTML = OPEN_ICON
+  // mousedown 吞掉:否则 ProseMirror / 嵌入外壳先拿去改选区(选中整块、露源码)。
+  b.addEventListener('mousedown', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+  })
+  b.addEventListener('click', (e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    open(e.metaKey || e.ctrlKey)
+  })
   b.addEventListener('keydown', (e) => e.stopPropagation())
   host.classList.add('amx-has-src-btn')
   host.appendChild(b)

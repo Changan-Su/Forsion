@@ -163,6 +163,58 @@ async function main() {
   check('S7 光标离开源码后只剩一份嵌入体', (await p.locator('.unified-embed').count()) === 1)
   await p.close()
 
+  // ── v4 附件嵌入的「打开」键(11-07):排在 `</>` 左边、悬停浮现;点 = 与点双链同一口径(文件开在旁边),⌘/Ctrl+点 = 新标签页 ──
+  const spyOpen = (pg) => pg.evaluate(() => {
+    window.__opened = []
+    window.__pageStore.setState({ openWikiLink: (name, src, o) => { window.__opened.push({ name, o: o ?? null }) } })
+  })
+  p = await open(`upage&useed=${encodeURIComponent('前一段\n\n![[report.pdf]]\n\n![[pic.png]]\n\n后一段\n')}`)
+  await p.waitForSelector('.unified-embed')
+  await spyOpen(p)
+  const ob = await p.evaluate(() => {
+    const host = document.querySelector('.unified-embed')
+    const kids = [...host.querySelectorAll(':scope > .amx-src-btn')]
+    return { n: kids.length, first: kids[0]?.textContent, open: !!host.querySelector(':scope > .amx-open-btn.amx-src-btn--block') }
+  })
+  check('S8 PDF 嵌入挂了「打开」+ `</>` 两颗,第一颗仍是 `</>`', ob.n === 2 && ob.first === '</>' && ob.open, JSON.stringify(ob))
+  b = await btnState(p, '.unified-embed > .amx-open-btn')
+  check('S8 「打开」不悬停时不吃点击', !!b && b.pe === 'none', JSON.stringify(b))
+  await p.hover('.unified-embed')
+  await p.waitForTimeout(300)
+  const geo = await p.evaluate(() => {
+    const o = document.querySelector('.unified-embed > .amx-open-btn').getBoundingClientRect()
+    const s = document.querySelector('.unified-embed > .amx-src-btn:not(.amx-open-btn)').getBoundingClientRect()
+    return { oRight: Math.round(o.right), sLeft: Math.round(s.left), sameRow: Math.abs(o.top - s.top) < 1, op: +getComputedStyle(document.querySelector('.unified-embed > .amx-open-btn')).opacity }
+  })
+  check('S8 悬停浮现,排在 `</>` 左边同一行不重叠', geo.op === 1 && geo.sameRow && geo.oRight <= geo.sLeft, JSON.stringify(geo))
+  await p.click('.unified-embed > .amx-open-btn')
+  await p.click('.unified-embed > .amx-open-btn', { modifiers: [process.platform === 'darwin' ? 'Meta' : 'Control'] })
+  let opened8 = await p.evaluate(() => window.__opened)
+  check('S8 点「打开」= 开在旁边;⌘/Ctrl+点 = 新标签页', opened8.length === 2 && opened8[0].name === 'report.pdf' && opened8[0].o?.split === true && opened8[1].o?.newTab === true, JSON.stringify(opened8))
+  const stay = await p.evaluate(() => ({ text: document.querySelector('.unified-body .ProseMirror')?.innerText ?? '' }))
+  check('S8 点「打开」不露源码、不改选区', !stay.text.includes('![[report.pdf]]'), JSON.stringify(stay))
+  await p.evaluate(() => { window.__opened = [] })
+  await p.hover('.wiki-inline-img-wrap')
+  await p.waitForTimeout(300)
+  const imgBtns = await p.evaluate(() => [...document.querySelectorAll('.wiki-inline-img-wrap > .amx-src-btn')].map((x) => x.classList.contains('amx-open-btn') ? 'open' : x.textContent))
+  check('S8 图片也挂「打开」,第一颗仍是 `</>`', imgBtns.length === 2 && imgBtns[0] === '</>' && imgBtns[1] === 'open', JSON.stringify(imgBtns))
+  await p.click('.wiki-inline-img-wrap > .amx-open-btn')
+  opened8 = await p.evaluate(() => window.__opened)
+  check('S8 点图片的「打开」→ openWikiLink(pic.png)', opened8.length === 1 && opened8[0].name === 'pic.png', JSON.stringify(opened8))
+  await p.close()
+
+  // 只读(分享页形态):没有 `</>`,「打开」独占右上角
+  p = await open(`upage&uro&useed=${encodeURIComponent('前一段\n\n![[report.pdf]]\n\n后一段\n')}`)
+  await p.waitForSelector('.unified-embed')
+  const ro = await p.evaluate(() => {
+    const host = document.querySelector('.unified-embed')
+    const kids = [...host.querySelectorAll(':scope > .amx-src-btn')]
+    const o = host.querySelector(':scope > .amx-open-btn')
+    return { n: kids.length, solo: !!o?.classList.contains('amx-src-btn--solo'), gap: o ? Math.round(host.getBoundingClientRect().right - o.getBoundingClientRect().right) : null }
+  })
+  check('S9 只读:只有「打开」一颗、靠最右', ro.n === 1 && ro.solo && ro.gap !== null && ro.gap <= 8, JSON.stringify(ro))
+  await p.close()
+
   const fails = results.filter((r) => !r).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()

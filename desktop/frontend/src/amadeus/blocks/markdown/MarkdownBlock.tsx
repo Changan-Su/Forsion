@@ -521,6 +521,7 @@ export function MilkdownInner({
   saveFiles,
   uploadImage,
   onOpenWiki,
+  wikiOpenable = true,
   getPageNames,
   getFiles,
   isWikiResolved,
@@ -549,6 +550,8 @@ export function MilkdownInner({
   uploadImage?: (file: File) => void
   /** opts.newTab:⌘/Ctrl+点击、中键(L-11)或「在新标签页打开光标处链接」;宿主转给 openWikiLink 的第三参。 */
   onOpenWiki: (name: string, opts?: { newTab?: boolean }) => void
+  /** onOpenWiki 真能打开东西吗(无 vault 的记录正文等传 noop 的宿主给 false):false = 图片不挂右上角「打开」键,不出点了没反应的键。 */
+  wikiOpenable?: boolean
   getPageNames: () => string[]
   /** vault 非笔记文件([[补全的文件候选);缺 = 只补全页面。 */
   getFiles?: () => string[]
@@ -598,6 +601,8 @@ export function MilkdownInner({
   uploadImageRef.current = uploadImage
   const wikiRef = useRef(onOpenWiki)
   wikiRef.current = onOpenWiki
+  const wikiOpenableRef = useRef(wikiOpenable)
+  wikiOpenableRef.current = wikiOpenable
   const pageNamesRef = useRef(getPageNames)
   pageNamesRef.current = getPageNames
   const resolvedRef = useRef<(n: string) => boolean>(() => true)
@@ -1166,7 +1171,7 @@ export function MilkdownInner({
       .use(listener)
       .use(placeholderPlugin(() => translate('mdblock.placeholder')))
       .use(structuralSourcePlugin()) // 当前标题行显示可编辑井号；列表/待办/引用从行首按需进入源码
-      .use(wikilinkPlugin((name, o) => wikiRef.current(name, o), (name) => resolvedRef.current(name), (name) => iconRef.current(name)))
+      .use(wikilinkPlugin((name, o) => wikiRef.current(name, o), (name) => resolvedRef.current(name), (name) => iconRef.current(name), () => wikiOpenableRef.current))
       .use(linkFollowPlugin(openLinkTarget)) // 「打开光标处链接」的记账(命令面板 / 焦点不在正文时用,L-20)
       // 链接的「源笔记」钉在编辑器根上(L-10):全局挂的 WikiHoverPreview 只看得到 DOM,按它就近解析同名笔记 ——
       // 与点击(onOpenWiki 带的 path / embed.owner,即 attachmentPagePath)同一个源,预览 A 打开 B 的错位就没了。
@@ -2369,6 +2374,7 @@ export function PlainMarkdownEditor({ initial, onChange, readOnly = false, immed
           saveImage={async () => null}
           saveFiles={async () => {}}
           onOpenWiki={vault ? openVaultWiki : noop}
+          wikiOpenable={!!vault}
           getPageNames={vault ? () => usePageStore.getState().pages : () => []}
           getFiles={vault ? () => (wikiFilesEnabled() ? usePageStore.getState().files : []) : undefined}
           isWikiResolved={vault ? (n) => {

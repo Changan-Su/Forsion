@@ -1722,6 +1722,8 @@ function UnifiedPageInner({ path, initial, diskRaw, probe, onRenamed, onCanvasMo
         (refs) => { for (const r of refs) pipe.ownedCards.add(r) },
       ),
       ...createEmbedLayer({ path, readOnly,
+        // 「打开」键 = 点双链同一口径:没带修饰键时文件类开在旁边那半屏,笔记就地开(见 MarkdownBlock 的 onOpenWiki)。
+        open: (target, o) => void scoped.getState().openWikiLink(target, path, o ?? { split: true }),
         alive: () => !pipe.dead && !pipe.retired && !pipe.readOnly && !srcRef.current,
         flush: async () => {
           if (pipe.dead || pipe.retired || pipe.readOnly || srcRef.current) throw new Error(translate('documentTask.sourceGone'))
