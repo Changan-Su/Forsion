@@ -21,19 +21,20 @@ const check = (condition, name) => { assert.ok(condition, name); console.log('PA
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
 const sanitized = error => String(error).replace(/https?:\/\/[^\s"'<>]+/g, '[URL redacted]')
 
-async function until(label, read, timeout) {
+async function until(label, read, timeout, interval = 300) {
   const end = Date.now() + timeout
   do {
     const value = await read()
     if (value) return value
-    await sleep(300)
+    await sleep(interval)
   } while (Date.now() < end)
   throw new Error('Timed out: ' + label)
 }
 
-function installSnapshot(exe, installer, oldPid) {
+function installSnapshot(exe, installer, oldPid, readSetup) {
   const source = `
     $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
     $exe = $env:FORSION_UPDATE_TEST_EXE
     $installer = $env:FORSION_UPDATE_TEST_INSTALLER
     $installerName = [IO.Path]::GetFileName($installer)
@@ -44,13 +45,49 @@ function installSnapshot(exe, installer, oldPid) {
       $win = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
       @{pid=$_.ProcessId; parentPid=$_.ParentProcessId; exe=$_.ExecutablePath; old=($_.ProcessId -eq ${oldPid});
         installer=($_.ExecutablePath -eq $installer); updatedFlag=($_.CommandLine -match '--updated'); forceRun=($_.CommandLine -match '--force-run');
-        hasWindow=([long]$win.MainWindowHandle -ne 0); windowTitle=$win.MainWindowTitle; session=$_.SessionId}
+        hasWindow=([long]$win.MainWindowHandle -ne 0); windowTitle=$win.MainWindowTitle; session=$_.SessionId;
+        cpuSeconds=if ($_.ExecutablePath -eq $installer) {[Math]::Floor([double]$win.CPU)} else {$null}}
     })
     $explorerSessions = @($observed | Where-Object Name -eq 'explorer.exe' | Select-Object -ExpandProperty SessionId)
-    @{processes=$processes; explorerSessions=$explorerSessions} | ConvertTo-Json -Depth 5 -Compress
+    $setup = @()
+    if ($env:FORSION_UPDATE_READ_SETUP -eq '1') {
+      $ownedSetup = $processes | Where-Object installer
+      if ($ownedSetup) {
+        Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+        $all = @(Get-CimInstance Win32_Process)
+        $owners = [Collections.Generic.HashSet[int]]::new()
+        $null = $owners.Add([int]$ownedSetup.pid)
+        do {
+          $previous = $owners.Count
+          foreach ($child in $all) {
+            if ($owners.Contains([int]$child.ParentProcessId)) { $null = $owners.Add([int]$child.ProcessId) }
+          }
+        } while ($owners.Count -ne $previous)
+        foreach ($pidValue in $owners) {
+          try {
+            $condition = [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty, $pidValue)
+            $windows = [System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Children, $condition)
+            foreach ($window in $windows) {
+              $nodes = $window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
+              $text = @($window.Current.Name)
+              foreach ($node in $nodes) {
+                if ($node.Current.Name) { $text += $node.Current.Name }
+                $pattern = $null
+                if ($node.TryGetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern, [ref]$pattern)) {
+                  $text += "Progress: $($pattern.Current.Value) / $($pattern.Current.Maximum)"
+                }
+              }
+              $setup += @{pid=$pidValue; window=$window.Current.Name; text=@($text | Select-Object -Unique -Last 45)}
+            }
+          } catch { $setup += @{pid=$pidValue; error=$_.Exception.GetType().Name} }
+        }
+      }
+    }
+    @{processes=$processes; explorerSessions=$explorerSessions; setup=$setup} | ConvertTo-Json -Depth 7 -Compress
   `
   return JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')], {
-    env: { ...process.env, FORSION_UPDATE_TEST_EXE: exe, FORSION_UPDATE_TEST_INSTALLER: installer }, windowsHide: true, encoding: 'utf8', timeout: 12000,
+    env: { ...process.env, FORSION_UPDATE_TEST_EXE: exe, FORSION_UPDATE_TEST_INSTALLER: installer, FORSION_UPDATE_READ_SETUP: readSetup ? '1' : '0' },
+    windowsHide: true, encoding: 'utf8', timeout: 15000,
   }).trim()
   )
 }
@@ -188,12 +225,21 @@ async function main() {
     const write = extra => fs.writeFileSync(path.join(out, 'upgrade-receipt.json'), JSON.stringify({ ...receipt, ...extra }, null, 2))
     write({ phase: 'downloaded' })
     const snapshots = []
+    let lastSetupRead = 0
     const diagnose = () => {
       let version = null
       try { version = JSON.parse(extractFile(asar, 'package.json').toString('utf8')).version } catch {}
       const activity = startupReceipt(newVersion)
-      const { processes, explorerSessions } = installSnapshot(exe, installer, runtime.pid)
-      const state = { oldExit: child.exitCode, oldSignal: child.signalCode, version, activity, processes, explorerSessions }
+      const readSetup = Date.now() - lastSetupRead >= 15000
+      if (readSetup) lastSetupRead = Date.now()
+      let observed
+      try { observed = installSnapshot(exe, installer, runtime.pid, readSetup) } catch (error) {
+        console.log('Restart observation unavailable:', sanitized(error.message))
+        return null
+      }
+      const { processes, explorerSessions, setup } = observed
+      for (const window of setup) if (window.text) window.text = window.text.map(sanitized)
+      const state = { oldExit: child.exitCode, oldSignal: child.signalCode, version, activity, processes, explorerSessions, setup }
       const last = snapshots.at(-1)
       if (!last || JSON.stringify(last.state) !== JSON.stringify(state)) {
         snapshots.push({ at: new Date().toISOString(), state })
@@ -208,7 +254,7 @@ async function main() {
       if (!/closed/i.test(String(error))) throw error
     })
     console.log('Clicked the real Restart & install button')
-    updated = await until('the installer replaces app.asar and launches the new main window', diagnose, 180000)
+    updated = await until('the installer replaces app.asar and launches the new main window', diagnose, 420000, 2000)
     check(updated.pid !== runtime.pid && updated.exe.toLowerCase() === exe.toLowerCase(), 'NSIS replaced the original installation and automatically relaunched 2.13.7')
     write({ phase: 'relaunched', updated })
   } catch (error) {
