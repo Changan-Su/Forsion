@@ -671,18 +671,23 @@
 /* 双链 / 文件引用与 Amadeus 正文同一画法(2026-10-24 用户选 A,对照页 docs/ToBeImproved/Tangu强调色分批方案_2026-10-24/links.html):
    强调色、不画常驻下划线、悬停才出;文件类前面那枚类型图标(ChatWikiLink 的 FileIcon,样式在 base.css .wikilink-ic)。
    单色配色(经典 / 墨色)的强调色自带柔蓝,不会和正文一个色,所以不再靠下划线标「可点」。
-   .citelink = 网页引用(普通 markdown 链接,ChatWebLink):和 Amadeus 正文的网页链接一样是正文色 + 下划线。 */
+   .citelink = 网页引用(普通 markdown 链接,ChatWebLink):2026-11-04 用户定也走强调色,和 Amadeus 正文的网页链接同一画法;
+   常驻一条半透明下划线留着,和双链(悬停才出)分得开。 */
 .t2-content .wikilink, .t2-user .wikilink {
   color: var(--signal);
   cursor: pointer;
   text-decoration: none;
 }
 .t2-content .citelink {
-  color: var(--primary);
+  color: var(--signal);
   cursor: pointer;
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--signal) 45%, transparent);
   text-underline-offset: 2px;
 }
+.t2-content .citelink:hover { text-decoration-color: currentColor; }
+/* 用户气泡开头的斜杠命令:和输入框里那一枚同一画法(composer2.css .t2c-tok) */
+.t2-user .t2-cmd { color: var(--signal); background: color-mix(in srgb, var(--signal) 14%, transparent); border-radius: var(--radius-sm, 6px); padding: 0 0.15em; }
 .t2-content .wikilink:hover, .t2-user .wikilink:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .t2-content .wikilink.wikilink-unresolved, .t2-user .wikilink.wikilink-unresolved {
   color: var(--text-muted);

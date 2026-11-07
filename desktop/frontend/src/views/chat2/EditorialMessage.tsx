@@ -19,6 +19,7 @@ import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, T
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { Markdown } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
+import { leadingCommand } from './composerTokens'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { splitLeadingQuotes } from './quotes'
 import { QuotePreview, QuoteTile, findQuoteSource } from './QuoteTile'
@@ -103,6 +104,12 @@ export type OrderedToolPart =
 
 /** 直播中还没收口的 sketch 调用 → 草稿卡(10-09,对标 ChatGPT Intelligent UI 边生成边渲染):tool_stream 已把参数增量
  *  累进 ev.arguments,这里从半截 JSON 里把 html 解出来。只在**直播**里算(live):历史 / 中断的未完成调用照旧不画幻影卡。 */
+/** 用户气泡的正文:开头的斜杠命令画成一枚(和输入框里同一枚,见 ./composerTokens)。 */
+function UserText({ text }: { text: string }) {
+  const lead = leadingCommand(text)
+  return lead ? <><span className="t2-cmd">{lead.cmd}</span><WikiText text={lead.rest} /></> : <WikiText text={text} />
+}
+
 function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
   if (!isHtmlCardTool(ev.name) || ev.done || !ev.arguments) return undefined
   const html = streamingArgString(ev.arguments, 'html')
@@ -672,7 +679,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 ))}
               </div>
             )}
-            {lead || quoted ? (body && <WikiText text={body} />) : <WikiText text={msg.content} />}
+            {lead || quoted ? (body && <UserText text={body} />) : <UserText text={msg.content} />}
             </UserFold>
           </div>
           )}
