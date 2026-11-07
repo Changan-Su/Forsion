@@ -137,6 +137,9 @@ describe('collectExternalChanges', () => {
     await T.read_file.execute({ path: 'big.txt' }, ctx);
     writeFileSync(f('secret.txt'), 'a\n');
     await T.read_file.execute({ path: 'secret.txt' }, ctx);
+    writeFileSync(f('doc.pdf'), '%PDF-1.7 no NUL in the first bytes\n');
+    await T.read_file.execute({ path: 'doc.pdf' }, ctx);
+    writeFileSync(f('doc.pdf'), '%PDF-1.7 rewritten\n');
     writeFileSync(f('bin.dat'), Buffer.from([1, 0, 9, 9]));
     writeFileSync(f('big.txt'), big + 'more\n');
     writeFileSync(f('secret.txt'), 'b\n');
@@ -144,6 +147,7 @@ describe('collectExternalChanges', () => {
     const by = Object.fromEntries(changes.map((c) => [path.basename(c.abs), c]));
     expect(by['bin.dat']).toMatchObject({ kind: 'modified', note: 'binary' });
     expect(by['bin.dat'].after).toBeUndefined();
+    expect(by['doc.pdf']).toMatchObject({ kind: 'modified', note: 'binary' }); // 按扩展名认二进制容器
     expect(by['big.txt']).toMatchObject({ kind: 'modified', note: 'large' });
     expect(by['secret.txt']).toMatchObject({ kind: 'modified', note: 'withheld' });
     expect(by['secret.txt'].after).toBeUndefined();

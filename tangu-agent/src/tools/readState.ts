@@ -136,8 +136,12 @@ function trimSnapshots(s: SessionState): void {
   }
 }
 
+/** 按扩展名就知道是二进制容器的(read_file 读 PDF / Office 只出乱码):不留快照、不出 diff。 */
+const BINARY_EXT = /\.(pdf|docx?|xlsx?|pptx?|od[tsp]|zip|gz|tgz|7z|rar|png|jpe?g|gif|webp|bmp|ico|mp[34]|mov|wav|sqlite|db3?)$/i;
+
 /** 能留快照的全文;二进制 / 太大 = undefined。 */
-function snapshotOf(data: Buffer | string): string | undefined {
+function snapshotOf(data: Buffer | string, abs?: string): string | undefined {
+  if (abs && BINARY_EXT.test(abs)) return undefined;
   if (typeof data === 'string') {
     if (data.length > SNAPSHOT_FILE_MAX_CHARS || data.slice(0, BINARY_SNIFF).includes('\0')) return undefined;
     return data;
@@ -175,7 +179,7 @@ export function noteRead(ctx: Scope, abs: string, data: Buffer | string): void {
   e.fp = fp;
   e.seen = fp;
   e.stat = undefined; // 读之前没 stat:下次扫描读一遍对上了再记
-  setSnapshots(s, e, snapshotOf(data), undefined); // 整份重新看过了,攒着的外部改动不用再报
+  setSnapshots(s, e, snapshotOf(data, abs), undefined); // 整份重新看过了,攒着的外部改动不用再报
   trimSnapshots(s);
 }
 
@@ -199,14 +203,14 @@ export function noteAgentWrite(ctx: Scope, abs: string, written: string, before?
     if (e.fp === undefined || e.fp === beforeFp) e.fp = fp;
     if (e.seen !== fp && e.seen !== beforeFp) {
       // 新建的条目 seen 先垫成了 fp,不会走到这里;走到这里 = 之前就在看着的文件,写前被外面改过
-      pending = [...(pending ?? []), { before: e.seen === ABSENT ? '' : e.text, after: snapshotOf(before) }].slice(-MAX_PENDING);
+      pending = [...(pending ?? []), { before: e.seen === ABSENT ? '' : e.text, after: snapshotOf(before, abs) }].slice(-MAX_PENDING);
     }
   } else {
     e.fp = fp;
   }
   e.seen = fp;
   e.stat = undefined;
-  setSnapshots(s, e, snapshotOf(written), pending);
+  setSnapshots(s, e, snapshotOf(written, abs), pending);
   trimSnapshots(s);
 }
 
@@ -315,10 +319,10 @@ export async function collectExternalChanges(ctx: Scope, opts: CollectOptions = 
     }
     const kind = e.seen === ABSENT ? 'created' : 'modified';
     const allowed = opts.canRead ? opts.canRead(abs) : true;
-    const after = allowed ? snapshotOf(buf) : undefined;
+    const after = allowed ? snapshotOf(buf, abs) : undefined;
     const change: ExternalChange = { abs, kind, before: kind === 'created' ? '' : e.text, after };
     if (!allowed) { delete change.before; change.note = 'withheld'; }
-    else if (isBinary(buf)) { delete change.before; delete change.after; change.note = 'binary'; }
+    else if (isBinary(buf) || BINARY_EXT.test(abs)) { delete change.before; delete change.after; change.note = 'binary'; }
     else if (after === undefined || change.before === undefined) change.note = 'large';
     out.push(change);
     e.seen = fp;
