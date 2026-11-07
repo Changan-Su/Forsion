@@ -13,6 +13,8 @@ import type { ToolProvider } from '../toolRegistry.js';
 import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
 import { sendInboxMessage, stripTodoHeaders, MUSE_SENDER_ID } from './inboxSend.js';
 import { postMuseDm } from '../../services/museDm.js';
+import { ledger } from '../../services/telemetryLedger.js';
+import { noteMuseProduced } from '../../services/museTelemetry.js';
 
 /** TODO 的收件箱正文 = detail + 末尾一张任务卡(引擎拼,不靠 Muse 自觉;围栏放最后,与审批信同一纪律)。
  *  `todo:` 头让桌面把落点回写这条 TODO(交给 Muse = 批准它去做 / 新会话 = injected / 忽略 = dismissed);
@@ -96,6 +98,8 @@ export const museTodoProvider: ToolProvider = {
             `INSERT INTO muse_todos (id, user_id, title, detail, status, source_session_id) VALUES (?, ?, ?, ?, 'pending', ?)`,
             [id, ctx.userId, title, detail, ctx.sessionId],
           );
+          ledger.inc('daily_muse', 'todoCreated');
+          noteMuseProduced('producedTodos');
           // 私聊投影(10-18 方案 B:待办在等用户点头,不是成品 → 进 Muse 私聊,不管日报档开没开)。失败不影响 TODO 本身;
           // 私聊不可用(没有 Muse 这个 agent 目录等)才退回收件箱。标题沿用模型原文 = 跟随用户语言,不硬编码文案。
           // 正文长度由构造封顶(detail ≤ 4000、标题 ≤ 200、围栏 ≤ 最长反引号串 + 1),照实传上限:截一个字就是半张卡。

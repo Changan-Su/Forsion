@@ -121,41 +121,64 @@ export const LEDGER_RETENTION_DAYS = 35;
 
 let warned = 0;
 function warn(e: unknown): void {
-  if (warned++ >= 3) return; // 表缺失之类会每次都失败:告三次就够了
-  try { deps().host.warn?.('[telemetry-ledger] write failed:', (e as any)?.message || e); } catch { console.warn('[telemetry-ledger] write failed:', (e as any)?.message || e); }
+  try {
+    if (warned++ >= 3) return; // 表缺失之类会每次都失败:告三次就够了
+    let msg: unknown = e;
+    try { msg = (e as any)?.message || e; } catch { msg = 'unknown error'; }
+    try { deps().host.warn('[telemetry-ledger] write failed:', msg); } catch { try { console.warn('[telemetry-ledger] write failed:', msg); } catch { /* 记日志也不许抛 */ } }
+  } catch { /* 同上 */ }
 }
 function localEngine(): boolean {
   try { return !!deps().profile.capabilities.hostExec; } catch { return false; }
 }
 
-function write(mode: 'inc' | 'set', event: LedgerEvent, field: string, n: number, dim: string | undefined, now: number | undefined): void {
+function write(mode: 'inc' | 'set', event: LedgerEvent, field: string, n: unknown, dim: unknown, now: unknown): void {
   try {
-    if (!Number.isSafeInteger(n) || n < 0 || (mode === 'inc' && n === 0)) return;
-    if (!FIELD_SETS[event]?.has(field)) return;
+    if (typeof n !== 'number' || !Number.isSafeInteger(n) || n < 0 || (mode === 'inc' && n === 0)) return;
+    if (typeof field !== 'string' || !FIELD_SETS[event]?.has(field)) return;
     const dims = DIMS[event];
-    if (dims ? !dims.has(String(dim)) : dim !== undefined && dim !== '') return;
+    let dimValue = '';
+    if (dims) {
+      if (typeof dim !== 'string' || !dims.has(dim)) return; // 只认原始字符串:绑定的就是验过的那个值
+      dimValue = dim;
+    } else if (dim !== undefined && dim !== '') return;
     if (!localEngine()) return;
+    const day = utcDay(typeof now === 'number' ? now : Date.now()); // 日子在入队前定:跨午夜排队的那一笔不挪到第二天
     const update = mode === 'inc' ? 'telemetry_ledger.n + excluded.n' : 'excluded.n';
-    void query(
-      `INSERT INTO telemetry_ledger (day, event, dim, field, n) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT (day, event, dim, field) DO UPDATE SET n = ${update}`,
-      [utcDay(now), event, dims ? String(dim) : '', field, n],
-    ).catch(warn);
+    // 推到下一拍再写:本机 SQLite 的 query 在调用时同步执行(锁忙时会等 busy timeout),计数不该卡住调用方那一段同步代码
+    setImmediate(() => {
+      try {
+        void query(
+          `INSERT INTO telemetry_ledger (day, event, dim, field, n) VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT (day, event, dim, field) DO UPDATE SET n = ${update}`,
+          [day, event, dimValue, field, n],
+        ).catch(warn);
+      } catch (e) { warn(e); }
+    });
   } catch (e) {
     warn(e);
   }
 }
 
+type AnyOpts = { n?: unknown; dim?: unknown; now?: unknown } | undefined;
+function readOpts(opts: AnyOpts): { n: unknown; dim: unknown; now: unknown } {
+  return { n: opts?.n, dim: opts?.dim, now: opts?.now };
+}
+
 export const ledger = {
   /** 计数 +n(缺省 1)。绝不抛、不用 await。 */
   inc<E extends LedgerEvent>(event: E, field: LedgerCounter<E>, ...opts: DimOpts<E, IncExtra>): void {
-    const o = (opts[0] ?? {}) as IncExtra & { dim?: string };
-    write('inc', event, field, o.n ?? 1, o.dim, o.now);
+    try {
+      const o = readOpts(opts[0] as AnyOpts);
+      write('inc', event, field, o.n === undefined ? 1 : o.n, o.dim, o.now);
+    } catch (e) { warn(e); }
   },
   /** 快照 = n(g* 字段,以及按日重算的 dmReadIn24h / dmRepliedIn24h)。绝不抛、不用 await。 */
   set<E extends LedgerEvent>(event: E, field: LedgerField<E>, n: number, ...opts: DimOpts<E, SetExtra>): void {
-    const o = (opts[0] ?? {}) as SetExtra & { dim?: string };
-    write('set', event, field, n, o.dim, o.now);
+    try {
+      const o = readOpts(opts[0] as AnyOpts);
+      write('set', event, field, n, o.dim, o.now);
+    } catch (e) { warn(e); }
   },
 };
 

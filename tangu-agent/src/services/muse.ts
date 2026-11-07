@@ -57,6 +57,8 @@ import { launchAutomationTriggers, launchDueSchedules, advanceSelfCursors } from
 import { drainAutomation } from './automationDrain.js';
 import { remoteLocked } from './remoteLock.js'; // P1-K2
 import { noteRemoteEntriesCarried } from './remoteCreated.js'; // P1-K2
+import { ledger } from './telemetryLedger.js';
+import { museCycleStarted, museCycleFinished } from './museTelemetry.js';
 
 let timer: ReturnType<typeof setTimeout> | null = null;
 import { runTagContext, textForThisDevice } from './deviceTagContext.js';
@@ -200,10 +202,11 @@ async function flushJournal(): Promise<void> {
   const pj = pendingJournal;
   if (!pj) return;
   try {
-    const rows = await query<any[]>(`SELECT status, tokens_total, assistant_message_id FROM agent_runs WHERE id = ? LIMIT 1`, [pj.runId]);
+    const rows = await query<any[]>(`SELECT status, tokens_total, assistant_message_id, updated_at FROM agent_runs WHERE id = ? LIMIT 1`, [pj.runId]);
     const run = rows?.[0];
     if (!run || run.status === 'queued' || run.status === 'running') return;
     pendingJournal = null;
+    noteCycleEnd(pj, run);
     let note = '';
     if (run.assistant_message_id) {
       const m = await query<any[]>(`SELECT content FROM chat_messages WHERE id = ? LIMIT 1`, [run.assistant_message_id]).catch(() => []);
@@ -221,6 +224,19 @@ async function flushJournal(): Promise<void> {
   } catch (e: any) {
     log(`flushJournal 失败:${e?.message || e}`);
   }
+}
+
+/** 周期收尾的计数(遥测账本):结果、token、耗时(run 最后一次更新 − 周期开始)、没产出的周期。 */
+function noteCycleEnd(pj: { runId: string; startedAt: number }, run: { status: string; tokens_total: unknown; updated_at: unknown }): void {
+  const status = String(run.status);
+  if (status === 'done') ledger.inc('daily_muse', 'cyclesDone');
+  else if (status === 'failed') ledger.inc('daily_muse', 'cyclesError');
+  else if (status === 'aborted') ledger.inc('daily_muse', 'cyclesAborted');
+  ledger.inc('daily_muse', 'cycleTokens', { n: Math.max(0, Math.floor(Number(run.tokens_total) || 0)) });
+  const u = run.updated_at;
+  const end = u instanceof Date ? u.getTime() : Date.parse(String(u || '').replace(' ', 'T') + (/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(String(u || '')) ? '' : 'Z'));
+  if (Number.isFinite(end) && end >= pj.startedAt) ledger.inc('daily_muse', 'cycleMs', { n: Math.floor(end - pj.startedAt) });
+  if (museCycleFinished(pj.runId) === 0) ledger.inc('daily_muse', 'cyclesSilent');
 }
 
 /** digest 档:进入新的一天后,把前一天的 Journal 作为日报投递一次(标记文件防重发;urgent=走通道)。 */
@@ -241,7 +257,7 @@ async function sendDailyDigestIfDue(cfg: MuseConfig, userId: string): Promise<vo
     const n = Number(marked?.[0]?.n) || 0;
     const line = n ? `\n\nMarked ${n} inbox message${n > 1 ? 's' : ''} as read for you.` : '';
     const r = await sendInboxMessage(userId, { title: `Muse · ${y}`, body: (stripTodoHeaders(body).slice(0, 3900) + line), senderId: MUSE_SENDER_ID, urgent: true });
-    if (r.ok) await fs.writeFile(marker, y, 'utf8'); // 频控/落库失败不标记,下个 tick 重试
+    if (r.ok) { ledger.inc('daily_muse', 'digestSent'); await fs.writeFile(marker, y, 'utf8'); } // 频控/落库失败不标记,下个 tick 重试
   } catch (e: any) {
     log(`日报投递失败:${e?.message || e}`);
   }
@@ -820,6 +836,9 @@ async function startCycle(cfg: MuseConfig, extraKickoff = '', trigger = 'heartbe
   void writeLastCycleAt(lastCycleAt, sessionId); // 落盘:进程重启后不再「开机 15s 必跑一个周期」;活动会话也记下(重启后 status 指回它)
   lastRunning = true;
   pendingJournal = { runId, sessionId, trigger, mode: cfg.mode, startedAt: lastCycleAt };
+  museCycleStarted(runId);
+  ledger.inc('daily_muse', trigger.startsWith('rule:') ? 'cyclesRule' : trigger.startsWith('schedule:') ? 'cyclesSchedule' : 'cyclesHeartbeat');
+  ledger.inc('daily_muse', cfg.mode === 'auto' ? 'cyclesModeAuto' : cfg.mode === 'agent' ? 'cyclesModeAgent' : 'cyclesModeAsk');
   enqueueRun(sessionId, runId);
   return runId;
 }
@@ -874,6 +893,7 @@ async function tick(): Promise<void> {
     let locked = true;
     try { locked = remoteLocked(); } catch { locked = true; }
     if (locked) {
+      ledger.inc('daily_muse', 'skipRemoteLock');
       if (!lockPauseLogged) { lockPauseLogged = true; log('remote lock on — Muse, watch rules and agent schedules paused until it is unlocked on this computer'); }
       await refreshSpaceStampWhenIdle(); // 锁只停后台:本机聊天里改的 Space 照样要让桌面重载
       return;
@@ -935,7 +955,7 @@ async function tick(): Promise<void> {
     if (!cfg.enabled) { lastRunning = false; return; }
     // 模型解析:用户显式配置 > admin 后台默认槽 > 对话默认(未选模型=跟随云端,admin 改动下轮生效)。
     cfg.modelId = await resolveBackgroundModelId(cfg.modelId);
-    if (!cfg.modelId) { lastRunning = false; log('已启用但无可用模型(本地未选且云端无后台默认),跳过'); return; }
+    if (!cfg.modelId) { lastRunning = false; ledger.inc('daily_muse', 'skipNoModel'); log('已启用但无可用模型(本地未选且云端无后台默认),跳过'); return; }
     // 播种/自愈 Muse 系统 agent 文件夹(幂等;首次创建时一次性迁移旧自定义 prompt)。
     await ensureMuseAgent(legacyMusePrompt()).catch((e: any) => log(`播种 muse agent 失败:${e?.message || e}`));
     // 每周装备巡检条目(只播一次);放在读自己到期日程之前,同一个巡检周期就能看到它。失败不挡周期,下个巡检再试。
@@ -949,14 +969,15 @@ async function tick(): Promise<void> {
     if (sleep && (await userActiveSince(userId, sleep.setAt, sleep.minuteLines))) {
       log(`用户回来了,提前结束休眠(原定到 ${localTime(new Date(sleep.until))})`);
       await setMuseSleep(null).catch((e: any) => log(`清休眠失败:${e?.message || e}`));
+      ledger.inc('daily_muse', 'skipSleepCleared');
       sleep = null;
     }
-    if (!isWithinActiveHours(cfg, nowHour())) { log(`不在运行时段(当前 ${nowHour()} 时),跳过`); return; }
+    if (!isWithinActiveHours(cfg, nowHour())) { ledger.inc('daily_muse', 'skipOutsideHours'); log(`不在运行时段(当前 ${nowHour()} 时),跳过`); return; }
 
     await sendDailyDigestIfDue(cfg, userId);
     await postObservedRuleCards(userId).catch((e: any) => log(`观察结果卡发送失败:${e?.message || e}`));
     // 后台让位：用户有进行中的 run → 不与之抢模型账号/速率，本轮跳过（下次巡检再来）。
-    if (await anyUserRunActive()) { lastRunning = false; log('用户有进行中的 run，本轮让位'); return; }
+    if (await anyUserRunActive()) { lastRunning = false; ledger.inc('daily_muse', 'skipUserActive'); log('用户有进行中的 run，本轮让位'); return; }
     // 起周期的三种理由(任一即可;都不豁免 anyMuseRunActive/token/restarts 预算闸——防失控烧穿额度):
     //   ① 盯任务规则命中(museFired)② 自己 CALENDAR.db 的到期条目(自触发/Track)③ 心跳到点(heartbeatHours,0=关)。
     // 2026-09-10 前的「无新用户消息就跳过」降为提示(quietSince 注入 kickoff):用户要的是「默认每 2 小时醒一次」,
@@ -964,7 +985,7 @@ async function tick(): Promise<void> {
     let dueMuse: ScheduleEntry[] = [];
     try { dueMuse = await museDueSchedules(); } catch (e: any) { log(`读自己的日程失败:${e?.message || e}`); }
     const heartbeatDue = heartbeatDecision({ heartbeatMinutes: cfg.heartbeatMinutes, lastCycleAt, now: Date.now(), sleep }) === 'due';
-    if (!museFired.length && !dueMuse.length && !heartbeatDue) { lastRunning = false; return; }
+    if (!museFired.length && !dueMuse.length && !heartbeatDue) { lastRunning = false; ledger.inc('daily_muse', 'skipNothingDue'); return; }
     if (museFired.length) log(`盯任务命中 ${museFired.length} 条:${museFired.map((t) => t.id).join(', ')}`);
     if (dueMuse.length) log(`自己的日程到期 ${dueMuse.length} 条:${dueMuse.map((e) => e.name).join(', ')}`);
     const quietSince = !(await userActiveSince(userId, lastCycleAt));
@@ -972,7 +993,7 @@ async function tick(): Promise<void> {
       : dueMuse.length ? `schedule:${dueMuse.map((e) => e.name).join('+').slice(0, 60)}` : 'heartbeat';
 
     rollWindow(cfg);
-    if (await anyMuseRunActive(userId)) { lastRunning = true; return; }
+    if (await anyMuseRunActive(userId)) { lastRunning = true; ledger.inc('daily_muse', 'skipAlreadyRunning'); return; }
     lastRunning = false;
 
     // token 预算(两道,近 tokenBudgetWindowHours 小时、该用户全部 Muse 会话):任一超限本轮不起新周期。
@@ -984,16 +1005,18 @@ async function tick(): Promise<void> {
     if (cfg.maxTokensPerWindow > 0) {
       spent = await tokensInWindow(userId, cfg.tokenBudgetWindowHours);
       if (spent.billable >= cfg.maxTokensPerWindow) {
+        ledger.inc('daily_muse', 'skipBudgetBillable');
         log(`token 预算用尽(近 ${cfg.tokenBudgetWindowHours}h 计费 ${spent.billable}/${cfg.maxTokensPerWindow},未缓存 prompt+completion),本轮跳过`);
         return;
       }
       if (spent.gross >= grossCap) {
+        ledger.inc('daily_muse', 'skipBudgetGross');
         log(`毛 prompt 预算用尽(近 ${cfg.tokenBudgetWindowHours}h 毛量 ${spent.gross}/${grossCap}),本轮跳过`);
         return;
       }
     }
 
-    if (restartsThisWindow >= cfg.maxRestartsPerWindow) { log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
+    if (restartsThisWindow >= cfg.maxRestartsPerWindow) { ledger.inc('daily_muse', 'skipRestartCap'); log(`本窗口预算用尽(${restartsThisWindow}/${cfg.maxRestartsPerWindow})`); return; }
     restartsThisWindow += 1;
     log(`启动第 ${restartsThisWindow}/${cfg.maxRestartsPerWindow} 个思考周期(模型 ${cfg.modelId},档位 ${cfg.mode},触发 ${trigger},计费 ${spent.billable}/${cfg.maxTokensPerWindow},毛量 ${spent.gross}/${grossCap})`);
     const cycleRunId = await startCycle(cfg, buildTriggerKickoff(museFired) + scheduleKickoff(dueMuse), trigger, quietSince);

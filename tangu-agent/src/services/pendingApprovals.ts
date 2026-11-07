@@ -38,6 +38,7 @@ import { postMuseDm } from './museDm.js';
 import { backgroundClientTag } from '../core/version.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
 import { runTagContext, textForThisDevice } from './deviceTagContext.js';
+import { ledger } from './telemetryLedger.js';
 
 export type ApprovalDeferral = 'queue' | 'agent';
 
@@ -371,6 +372,7 @@ export async function decideApproval(
     return { ok: false, status: st, error: `already ${st}` };
   }
   const agentSlug = row.agent_slug || DEFAULT_AGENT_SLUG;
+  if (by === 'user' && agentSlug === MUSE_AGENT_SLUG) ledger.inc('daily_muse', decision === 'approve' ? 'approvalUserApproved' : 'approvalUserRejected');
   // 单行面(LOG / 回执标题)只用闸门那行摘要:写类行的 preview 带着完整改动(四轮 #1),整段折叠会把文件内容塞进来(复核 #2)
   const summary = deferredSummary(row.tool, row.preview);
   const shownPreview = displayText(summary, 300);
@@ -585,6 +587,7 @@ export async function deferApproval(
           reason ? JSON.stringify(reason) : null, ctx.cwd || null, displayText(v.reason, 1000), null],
       ).catch(() => {});
       await appendAgentLog(agentSlug, userId, `[approval] approved on the user's behalf by the default agent: ${displayText(preview, 300)} — ${displayText(v.reason, 300)}`);
+      if (agentSlug === MUSE_AGENT_SLUG) ledger.inc('daily_muse', 'approvalByAgent');
       return { action: 'approve' };
     }
     note = `declined by the approving agent: ${displayText(v.reason, 300)}`;

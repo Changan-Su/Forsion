@@ -75,6 +75,7 @@ import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
 import { appendMuseFeedback, applyOnboardingIntro, countObservedHits, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
+import { ledger } from '../services/telemetryLedger.js';
 
 const router = Router();
 
@@ -252,6 +253,7 @@ router.patch('/agent/special/muse/todos/:id', authMiddleware, async (req: AuthRe
       from ? [status, req.params.id, userId, from] : [status, req.params.id, userId],
     );
     if (from && !rows?.length) return res.status(409).json({ error: 'todo_not_pending', detail: `todo is not ${from}` });
+    if (rows?.length && status !== 'pending') ledger.inc('daily_muse', status === 'injected' ? 'todoInjected' : status === 'done' ? 'todoDone' : 'todoDismissed');
     if (from === 'pending' && (status === 'injected' || status === 'dismissed')) {
       // 卡片落点(新会话 / 在此 / 忽略)走这里、不走批准路由:此前某次批准若停在「条目已落、状态未改」,那条孤儿条目
       // 这时就该撤掉 —— 否则状态一变 injected,到期闸会放它跑,Muse 与会话各做一遍(Codex 09-11 P1)。
@@ -322,6 +324,7 @@ router.post('/agent/special/muse/todos/:id/approve', authMiddleware, async (req:
         ...(remote.via ? { via: remote.via } : {}), ...(remote.callerUnit ? { callerUnit: remote.callerUnit } : {}),
       }).catch((e: any) => console.warn('[special] remote-created ledger write failed:', e?.message || e));
     }
+    ledger.inc('daily_muse', 'todoApproved');
     void appendMuseFeedback(userId, `[feedback] todo "${title}" approved by user: Muse should carry it out now`);
     kickMuse();
     res.json({ ok: true, entry: r.entry });
@@ -381,7 +384,7 @@ router.post('/agent/special/muse/todos/inject', authMiddleware, async (req: Auth
     await query(
       `UPDATE muse_todos SET status = 'injected', updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id IN (${placeholders})`,
       [userId, ...todoIds],
-    ).catch(() => {});
+    ).then(() => ledger.inc('daily_muse', 'todoInjected', { n: todos.length }), () => {});
     // 反馈闭环:注入即「被采纳」,写进 Muse 的 LOG。
     void appendMuseFeedback(userId, `[feedback] todos injected into a session by user: ${todos.map((t) => `"${String(t.title || '').trim()}"`).join('; ')}`);
 
@@ -503,6 +506,7 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
     // 真正与时序无关的防线是读端 museTriggers.cursorMismatch(游标自证 path/event/vault/cols)。
     const r = await upsertTrigger(v.value, id, { allowPluginCreate: isPlugin, actor });
     if (!r.ok) return res.status(id && !isPlugin ? 404 : 400).json({ detail: r.error });
+    if (r.created && !isPlugin && actor !== 'plugin-ensure') ledger.inc('daily_muse', 'ruleCreatedUser');
     kickMuse(); // 新/改规则尽快被下一次巡检评估
     res.json({ trigger: r.trigger, created: r.created });
   } catch (e: any) {
@@ -718,6 +722,8 @@ router.patch('/agent/special/muse/starters/:id', authMiddleware, async (req: Aut
     const userId = req.user!.userId;
     const text = await markStarter(userId, String(req.params.id), status);
     if (text === null) return res.status(409).json({ detail: 'starter is not active' });
+    ledger.inc('daily_muse', status === 'used' ? 'starterUsed' : 'starterDismissed');
+    if (status === 'dismissed' && req.body?.mute) ledger.inc('daily_muse', 'starterMuted');
     const quoted = `"${text.replace(/\s+/g, ' ').slice(0, 200)}"`;
     void appendMuseFeedback(userId, status === 'used'
       ? `[feedback] chat starter ${quoted} used by user`

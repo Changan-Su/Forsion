@@ -10,6 +10,7 @@
  */
 import type { ToolProvider } from '../toolRegistry.js';
 import { MUSE_SLEEP_MAX_MS, setMuseSleep } from '../../services/museState.js';
+import { ledger } from '../../services/telemetryLedger.js';
 import { activityTs, readUserActivityStamps } from '../../services/userActivity.js';
 
 const pad = (x: number): string => String(x).padStart(2, '0');
@@ -78,6 +79,7 @@ export const museWakeProvider: ToolProvider = {
         const minute = activityTs(new Date(now));
         const stamps = await readUserActivityStamps(1, new Date(now)).catch(() => null);
         await setMuseSleep({ until: at, setAt: now, reason, ...(stamps ? { minuteLines: stamps.filter((t) => t === minute).length } : {}) });
+        ledger.inc('daily_muse', 'sleepSet');
         const d = new Date(at);
         const mins = Math.round((at - now) / 60_000);
         return `OK — heartbeat paused until ${pad(d.getHours())}:${pad(d.getMinutes())} (in ${Math.floor(mins / 60)}h ${mins % 60}m). ` +

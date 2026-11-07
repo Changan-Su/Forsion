@@ -24,7 +24,7 @@ async function setup(opts: { cloud?: boolean; migrate?: boolean } = {}) {
   resetLedgerWarningsForTest();
 }
 /** 写是 fire-and-forget:等一拍让排队的 query 落库。 */
-const settle = () => new Promise((r) => setTimeout(r, 5));
+const settle = () => new Promise((r) => setTimeout(r, 20));
 const rows = () => db.prepare(`SELECT day, event, dim, field, n FROM telemetry_ledger ORDER BY day, event, dim, field`).all() as any[];
 const cell = (event: string, field: string, dim = '', day = utcDay()) =>
   (db.prepare(`SELECT n FROM telemetry_ledger WHERE day = ? AND event = ? AND dim = ? AND field = ?`).get(day, event, dim, field) as any)?.n;
@@ -83,6 +83,16 @@ describe('telemetry ledger', () => {
     expect(isLedgerField('daily_muse_card', 'bogus')).toBe(false);
     expect(isCardKind('rule-observed')).toBe(true);
     expect(isCardKind('note')).toBe(false);
+  });
+
+  it('维度只认原始字符串;读选项时抛错也不传给调用方', async () => {
+    let calls = 0;
+    const sneaky = { toString: () => (calls++ ? 'free text' : 'plugin') };
+    (ledger as any).inc('daily_muse_card', 'created', { dim: sneaky });
+    const boom = { get n(): number { throw new Error('getter'); } };
+    expect(() => (ledger as any).inc('daily_muse', 'cyclesDone', boom)).not.toThrow();
+    await settle();
+    expect(rows()).toEqual([]);
   });
 
   it('按 UTC 日分格:23:59:59.999Z 与次日 00:00:00Z 落在两天', async () => {

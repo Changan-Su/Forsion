@@ -8,6 +8,7 @@ import { MUSE_AGENT_SLUG } from '../../agents/agentRegistry.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import { AUTO_READ_CATEGORIES, NEEDS_USER, inboxCategory, unclaimedAttachment } from '../../services/inboxCategory.js';
 import { loadSpecialAgentsConfig } from '../../services/specialAgentsConfig.js';
+import { ledger } from '../../services/telemetryLedger.js';
 
 const nowUtc = (): string => new Date().toISOString().slice(0, 19).replace('T', ' ');
 const COLS = 'id, title, body, sender_kind, sender_id, thread, attachments, expires_at, read_at, read_by, broadcast_kind, created_at';
@@ -90,6 +91,7 @@ export const museInboxProvider: ToolProvider = {
           }
           done += 1;
         }
+        if (done) ledger.inc('daily_muse', read ? 'inboxMarked' : 'inboxUnmarked', { n: done });
         const missing = ids.length - (rows || []).length;
         return `${read ? 'Marked as read' : 'Back to unread'}: ${done}.${missing ? ` Not found: ${missing}.` : ''}${refused.length ? ` Refused: ${refused.join('; ')}.` : ''}`;
       },

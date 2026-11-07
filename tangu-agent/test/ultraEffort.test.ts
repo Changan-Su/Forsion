@@ -174,6 +174,12 @@ describe('Ultra:模型支持更高的上下文就拉满(09-27,不封顶 272k)', 
     expect(on.compactAt).toBeGreaterThan(off.compactAt);
   });
 
+  it('context_info 带 telemetry:agentRole 枚举 + 召回条数(帮助改进 v2;Extend 用 json_extract 取)', async () => {
+    await setupLoop();
+    const info = await ctxInfo((await runOnce({})).id);
+    expect(info.telemetry).toEqual({ agentRole: 'xyra', recallEntries: 0, recallHistory: 0, recallTruncated: false });
+  });
+
   it('人填的覆盖照旧:本机把这个模型设成 500k,开 Ultra 也是 500k(覆盖可能正是在纠正报大了的目录值)', async () => {
     await setupLoop();
     modelExtra = { context_window: 1_000_000 };

@@ -399,6 +399,16 @@ export function deferredUnlocksFromHistory(
 // 旧工具名别名表(muse_watch → manage_automation)已迁 toolRegistry.ts:共享策略层的
 // isSubAgentDenied 要先归一再判闸,留在本文件会成环(toolRegistry → registry → toolRegistry)。
 
+/** 工具事件上的来源(帮助改进 v2 遥测):MCP 按名字;插件 provider 的工具 → plugin;本 run 的自定义工具和认不出的也当 plugin
+ *  (Extend 不发 plugin 的工具名,认不出来的名字宁可不发);其余是内置。 */
+export function toolSourceOf(name: string, ctx: ToolContext): 'builtin' | 'mcp' | 'plugin' {
+  if (name.startsWith('mcp__') || ctx.mcpTools?.has(name)) return 'mcp';
+  const canonical = canonicalToolName(name);
+  const origins = new Map<string, 'plugin' | 'core'>();
+  if (resolveTools(currentProfile(ctx), ctx, origins).has(canonical)) return origins.get(canonical) === 'plugin' ? 'plugin' : 'builtin';
+  return 'plugin';
+}
+
 /** 执行一个工具调用。先查（按模式/profile 过滤的）内置，再查本 run 的自定义工具；未知工具返回 isError。 */
 export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<ToolResult> {
   ctx.signal?.throwIfAborted();
