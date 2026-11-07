@@ -1,7 +1,7 @@
 /** Dictation transport: mono PCM16 at 16 kHz, Qwen ASR transcript events back. */
 export const VOICE_INPUT_RATE = 16000
 export const VOICE_INPUT_FRAME_LIMIT = 8192
-export type VoiceInputStreamEvent = { type: 'message'; data: string } | { type: 'closed' }
+export type VoiceInputStreamEvent = { type: 'message'; data: string } | { type: 'closed' } | { type: 'supported' }
 export interface VoiceInputConnection {
   write(pcm: ArrayBuffer): void
   finish(): void

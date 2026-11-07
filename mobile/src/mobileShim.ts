@@ -375,6 +375,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
         audioBase64: req.audioBase64, mime: req.mime || 'audio/wav', projectSource: 'tangu',
         ...(req.modelId ? { modelId: req.modelId } : {}), ...(req.language ? { language: req.language } : {}), ...(client ? { client } : {}),
       })
+      if (r.status === 409 && (r.json as { detail?: unknown } | null)?.detail === 'asr_streaming_required') throw new Error('asr_streaming_required')
       if (r.status !== 200) throw new Error(voiceError(r.status))
       const text = (r.json as { text?: unknown } | null)?.text
       return typeof text === 'string' ? text.trim() : ''

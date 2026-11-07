@@ -3947,6 +3947,7 @@ app.whenReady().then(async () => {
     const i = modelId.indexOf('/')
     const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined
     if (provider) {
+      if (qwenVoiceInputUrl(provider.baseUrl, modelId.slice(i + 1))) throw new Error('asr_streaming_required')
       return transcribeViaOpenAI({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId.slice(i + 1), audio, mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
     }
     // 非自带 provider = Forsion 托管模型(或未选,让服务端用 app asr 默认)→ 直连 Forsion 服务端(token 不下发 renderer)。

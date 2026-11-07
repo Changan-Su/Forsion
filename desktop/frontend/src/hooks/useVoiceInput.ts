@@ -22,6 +22,7 @@ registerMessages({
   'voiceinput.noDevice': { zh: '没检测到麦克风设备', en: 'No microphone found' },
   'voiceinput.openFailed': { zh: '麦克风打不开：{e}', en: 'Could not open the microphone: {e}' },
   'voiceinput.interrupted': { zh: '实时转写中断，已保留识别完成的文字', en: 'Live transcription was interrupted. Completed text was kept.' },
+  'voiceinput.streamingRequired': { zh: '所选模型需要实时转写，连接未能建立', en: 'The selected model requires live transcription, but the connection could not be established.' },
   'voiceinput.connectionLost': { zh: '实时转写中断，请再试一次', en: 'Live transcription was interrupted. Try again.' },
   'voiceinput.unclear': { zh: '没听清，再试一次', en: "Didn't catch that — try again" },
 })
@@ -83,6 +84,8 @@ export interface VoiceInputState {
 }
 
 interface Recording {
+  stopped?: true
+  canceled?: true
   recorder?: MediaRecorder
   stream?: MediaStream
   context?: AudioContext
@@ -103,10 +106,11 @@ export function useVoiceInput(onResult: (text: string) => void, scope: string, m
   const [preview, setPreview] = useState<VoicePreview | null>(null)
   const sessionRef = useRef<Recording | null>(null)
 
-  const dispose = useCallback(() => {
+  const dispose = useCallback((keepFinalizing = false) => {
     const session = sessionRef.current
     sessionRef.current = null
-    if (!session) return
+    if (!session || (keepFinalizing && session.stopped)) return
+    session.canceled = true
     session.dictation?.close()
     if (session.recorder) {
       session.recorder.onstop = session.recorder.ondataavailable = session.recorder.onerror = null
@@ -123,10 +127,11 @@ export function useVoiceInput(onResult: (text: string) => void, scope: string, m
     setError(null)
   }, [dispose])
 
-  // A late final result belongs to the recording's original composer, never a different chat.
+  // Drop ongoing capture when leaving a chat, but let an explicit Stop
+  // finish in the original draft. Its callback was captured at recording start.
   useLayoutEffect(() => {
     cancel()
-    return dispose
+    return () => dispose(true)
   }, [scope, cancel, dispose])
 
   const supported = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
@@ -166,36 +171,43 @@ export function useVoiceInput(onResult: (text: string) => void, scope: string, m
       }
       let final: ReturnType<NonNullable<Recording['dictation']>['finish']> | undefined
       const stopCapture = () => {
+        session.stopped = true
         final ??= session.dictation?.finish()
         releaseMicrophone(session)
-        setAnalyser(null)
-        setPhase('busy')
+        if (current()) {
+          setAnalyser(null)
+          setPhase('busy')
+        }
       }
       rec.onstop = async () => {
-        if (!current()) return
+        if (session.canceled) return
         stopCapture()
         try {
           const streaming = await final
-          if (!current()) return
+          if (session.canceled) return
           let text = streaming?.text ?? ''
           if (!streaming && chunks.length) {
             const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' })
             const audioBase64 = await blobToWav16kBase64(blob)
-            if (!current()) return
+            if (session.canceled) return
             text = await transcribe({ audioBase64, mime: 'audio/wav', modelId })
           }
-          if (!current()) return
+          if (session.canceled) return
           if (text.trim()) onResult(text.trim())
+          if (!current()) return
           if (streaming?.interrupted) setError(text.trim() ? translate('voiceinput.interrupted') : translate('voiceinput.connectionLost'))
           else if (!text.trim()) setError(translate('voiceinput.unclear'))
         } catch (e: any) {
-          if (current()) setError(e?.message || String(e))
+          if (current()) {
+            const detail = e?.message || String(e)
+            setError(detail.includes('asr_streaming_required') ? translate('voiceinput.streamingRequired') : detail)
+          }
         } finally {
           if (current()) {
             dispose()
             setPreview(null)
             setPhase('idle')
-          }
+          } else session.dictation?.close()
         }
       }
       rec.start()
@@ -213,9 +225,17 @@ export function useVoiceInput(onResult: (text: string) => void, scope: string, m
         node.smoothingTimeConstant = 0.7
         source.connect(node)
         setAnalyser(node)
-        if (open) session.dictation = startStreamingDictation(source, context, open, modelId, value => {
-          if (current()) setPreview(value)
-        })
+        if (open) {
+          const dictation = startStreamingDictation(source, context, open, modelId, value => {
+            if (current()) setPreview(value)
+          })
+          session.dictation = dictation
+          void dictation.result.then(result => {
+            if (!result?.interrupted || !current() || rec.state !== 'recording') return
+            rec.stop()
+            stopCapture()
+          })
+        }
         void context.resume().catch(() => {})
       } catch { /* A missing waveform or PCM capture does not prevent batch recording. */ }
     } catch (e: any) {
@@ -229,6 +249,7 @@ export function useVoiceInput(onResult: (text: string) => void, scope: string, m
     const session = sessionRef.current
     if (!session) { void start(); return }
     if (session.recorder?.state !== 'recording') return
+    session.stopped = true
     session.recorder.stop()
     // Stop forwarding audio at the click, before MediaRecorder posts its final blob.
     void session.dictation?.finish()

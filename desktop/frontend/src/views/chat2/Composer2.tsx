@@ -705,6 +705,7 @@ export const Composer2: React.FC<{
 
   const voice = useVoiceInput((text) => {
     setDraftField(draftKey, 'text', previous => joinVoiceText(previous, text))
+    if (draftKeyRef.current !== draftKey) return
     setHistPos(0)
     if (!touchUi) requestAnimationFrame(() => {
       const input = taRef.current

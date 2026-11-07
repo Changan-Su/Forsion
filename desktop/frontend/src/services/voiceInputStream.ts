@@ -1,4 +1,4 @@
-import { VOICE_INPUT_RATE, voiceInputCloudUrl, type OpenVoiceInput } from '../../../shared/voiceInputStream'
+import { VOICE_INPUT_RATE, voiceInputCloudUrl, type OpenVoiceInput, type VoiceInputConnection, type VoiceInputStreamEvent } from '../../../shared/voiceInputStream'
 import { REALTIME_BEARER_PROTOCOL } from './backendService'
 
 export interface VoicePreview { text: string; pending: string }
@@ -33,6 +33,7 @@ export function cloudVoiceInput(apiBase: string, token: string, client?: string)
 interface DictationResult { text: string; interrupted?: true }
 
 interface Dictation {
+  result: Promise<DictationResult | null>
   finish(): Promise<DictationResult | null>
   close(): void
 }
@@ -46,11 +47,14 @@ export function startStreamingDictation(
   onPreview: (preview: VoicePreview | null) => void,
 ): Dictation {
   if (context.sampleRate !== VOICE_INPUT_RATE) throw new Error('16 kHz capture unavailable')
-  const process = context.createScriptProcessor(2048, 1, 1)
+  const process = context.createScriptProcessor(1024, 1, 1)
   let finished = false
   let closed = false
   let ready = false
   let sentAudio = false
+  let streamOnly = false
+  let attempt = 0
+  let connection: VoiceInputConnection | null
   let timer: ReturnType<typeof setTimeout>
   const buffered: ArrayBuffer[] = []
   const items = new Map<string, VoicePreview & { done?: true }>()
@@ -75,10 +79,16 @@ export function startStreamingDictation(
   }
   const confirmed = () => textOf([...items.values()].filter(item => item.done))
   const fail = () => {
+    if (closed) return
+    if (streamOnly && !sentAudio && attempt === 1) {
+      connection?.close()
+      connect()
+      return
+    }
     onPreview(null)
     // Once audio has been accepted, a second upload can bill again and cannot
     // recover a streaming-only model. Keep the finished sentences from this run.
-    settle(sentAudio ? { text: confirmed(), interrupted: true } : null)
+    settle(sentAudio || streamOnly ? { text: confirmed(), interrupted: true } : null)
   }
   const write = (pcm: ArrayBuffer) => {
     connection?.write(pcm)
@@ -90,12 +100,13 @@ export function startStreamingDictation(
     connection?.finish()
   }
 
-  const connection = open(modelId, event => queueMicrotask(() => {
-    if (closed) return
+  const receive = (event: VoiceInputStreamEvent) => {
+    if (event.type === 'supported') { acceptCapability(); return }
     if (event.type === 'closed') { fail(); return }
     try {
       const m = JSON.parse(event.data)
-      if (m.type === 'session.updated' && !ready) {
+      if (m.type === 'dictation.supported') acceptCapability()
+      else if (m.type === 'session.updated' && !ready) {
         ready = true
         clearTimeout(timer)
         for (const pcm of buffered) write(pcm)
@@ -103,7 +114,7 @@ export function startStreamingDictation(
         onPreview({ text: '', pending: '' })
         if (finished) flushFinish()
       } else if (m.type === 'session.finished' && finished) {
-        settle({ text: confirmed() })
+        settle(sentAudio ? { text: confirmed() } : null)
       } else if (m.type === 'error' || m.type === 'conversation.item.input_audio_transcription.failed') {
         fail()
       } else if (typeof m.item_id === 'string') {
@@ -125,13 +136,29 @@ export function startStreamingDictation(
         onPreview({ text: pending ? full.slice(0, -pending.length) : full, pending })
       }
     } catch { fail() }
-  }))
-
-  if (!connection) {
-    settle(null)
-    return { finish: () => result, close: () => {} }
   }
-  timer = setTimeout(fail, 4000)
+  const acceptCapability = () => {
+    if (streamOnly || ready) return
+    streamOnly = true
+  }
+  const connect = () => {
+    ready = false
+    const generation = ++attempt
+    clearTimeout(timer)
+    timer = setTimeout(fail, streamOnly ? 8000 : 4000)
+    try {
+      connection = open(modelId, event => queueMicrotask(() => {
+        if (!closed && attempt === generation) receive(event)
+      }))
+      if (!connection) fail()
+    } catch {
+      connection = null
+      fail()
+    }
+  }
+  connect()
+  if (closed) return { result, finish: () => result, close: () => {} }
+
   process.onaudioprocess = ({ inputBuffer }) => {
     const samples = inputBuffer.getChannelData(0)
     const pcm = new Int16Array(samples.length)
@@ -140,13 +167,14 @@ export function startStreamingDictation(
     }
     try {
       if (ready) write(pcm.buffer)
-      else if (buffered.length < 32) buffered.push(pcm.buffer)
+      else if (buffered.length < 256) buffered.push(pcm.buffer)
       else fail()
     } catch { fail() }
   }
   source.connect(process)
   process.connect(context.destination) // The output buffer stays silent.
   return {
+    result,
     finish() {
       if (!closed && !finished) {
         finished = true

@@ -11,6 +11,10 @@ async function main() {
   let batchCalls = 0
   let frames = 0
   let finished = 0
+  let failHandshakeOnce = false
+  let interruptAfterAudio = false
+  let holdFinal = false
+  let releaseFinal
   const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'application/json')
     if (req.method === 'POST' && req.url === '/api/brain/transcribe') {
@@ -27,18 +31,32 @@ async function main() {
     }
     sockets.handleUpgrade(req, socket, head, ws => {
       const send = (type, fields = {}) => ws.send(JSON.stringify({ type, ...fields }))
+      let sessionFrames = 0
+      send('dictation.supported')
+      if (failHandshakeOnce) { failHandshakeOnce = false; ws.close(1011); return }
       send('session.updated')
       ws.on('message', (data, binary) => {
         if (binary) {
           assert.equal(data.length % 2, 0)
-          if (++frames === 1) send('conversation.item.input_audio_transcription.text', { item_id: 'one', text: '', stash: '今天讨论的' })
-          if (frames === 3) send('conversation.item.input_audio_transcription.text', { item_id: 'one', text: '今天', stash: '讨论的三件事' })
+          frames++
+          if (++sessionFrames === 1) send('conversation.item.input_audio_transcription.text', { item_id: 'one', text: '', stash: '今天讨论的' })
+          if (sessionFrames === 3) {
+            send('conversation.item.input_audio_transcription.text', { item_id: 'one', text: '今天', stash: '讨论的三件事' })
+            if (interruptAfterAudio) {
+              send('conversation.item.input_audio_transcription.completed', { item_id: 'one', transcript: '已确认的一句。' })
+              ws.close(1011)
+            }
+          }
           return
         }
         assert.equal(data.toString(), 'finish')
         finished++
-        send('conversation.item.input_audio_transcription.completed', { item_id: 'one', transcript: '今天讨论了三件事。' })
-        send('session.finished')
+        const finalize = () => {
+          send('conversation.item.input_audio_transcription.completed', { item_id: 'one', transcript: '今天讨论了三件事。' })
+          send('session.finished')
+        }
+        if (holdFinal) releaseFinal = finalize
+        else finalize()
       })
     })
   })
@@ -76,6 +94,7 @@ async function main() {
     const screenshot = file => win.screenshot({ path: path.join(shotDir('voice-input'), file), scale: 'css' })
 
     await input.fill('请整理：')
+    failHandshakeOnce = true
     await mic.click()
     await assertValue('请整理：今天讨论的三件事')
     assert.ok(frames >= 3)
@@ -118,6 +137,30 @@ async function main() {
     await win.locator('.t2s-srow').filter({ hasText: 'Probe session one' }).first().click()
     await assertValue('我修改了整段草稿。')
     console.log('PASS: recording cleanup and draft ownership on session change')
+
+    holdFinal = true
+    await mic.click()
+    await assertValue('我修改了整段草稿。今天讨论的三件事')
+    await stop.click()
+    await win.locator('.t2s-srow').filter({ hasText: 'Probe session two' }).first().click()
+    await assertValue('')
+    const until = Date.now() + 3000
+    while (!releaseFinal && Date.now() < until) await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(typeof releaseFinal, 'function')
+    releaseFinal()
+    await win.locator('.t2s-srow').filter({ hasText: 'Probe session one' }).first().click()
+    await assertValue('我修改了整段草稿。今天讨论了三件事。')
+    console.log('PASS: stopping then switching commits only to the original draft')
+
+    holdFinal = false
+    interruptAfterAudio = true
+    await input.fill('原有草稿。')
+    await mic.click()
+    await assertValue('原有草稿。已确认的一句。')
+    assert.equal(await input.isEditable(), true)
+    assert.match(await view.locator('.t2c-hint').textContent(), /中断/)
+    assert.equal(batchCalls, 1)
+    console.log('PASS: connection loss stops capture and keeps the completed transcript')
     console.log('PASS: real Electron, PCM before stop, interim replacement, explicit finish, batch fallback and editable drafts')
   } finally {
     await ctx?.close()

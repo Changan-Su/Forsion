@@ -11,7 +11,8 @@ export interface VoiceInputEndpoint {
 
 /** Only match the documented vendor protocol on vendor hosts. */
 export function qwenVoiceInputUrl(baseUrl: string, model: string): string | null {
-  const url = new URL(baseUrl)
+  let url: URL
+  try { url = new URL(baseUrl) } catch { return null }
   if (url.protocol !== 'https:' || !url.hostname.endsWith('.aliyuncs.com') ||
       !/^qwen3-asr-flash-realtime(?:-\d{4}-\d{2}-\d{2})?$/.test(model)) return null
   return `wss://${url.host}/api-ws/v1/realtime?model=${encodeURIComponent(model)}`
@@ -72,6 +73,7 @@ export function registerVoiceInputStream(
       const endpoint = await resolveEndpoint(modelId)
       if (closed || !endpoint) { connection.close(); return false }
       direct = !!endpoint.direct
+      if (direct) emit({ type: 'supported' })
       socket = new WebSocket(endpoint.url, { headers: { Authorization: `Bearer ${endpoint.token}` }, handshakeTimeout: 5000, maxPayload: 64 * 1024 })
       socket.on('error', () => connection.close(true))
       socket.on('close', () => connection.close(true))
