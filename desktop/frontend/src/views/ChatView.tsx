@@ -81,7 +81,7 @@ import { QuotaAdvisoryBanner } from '../components/QuotaAdvisoryBanner'
 import { TargetHealthNotice, useComposerReady, useTargetComposerPlaceholder } from '../components/TargetHealthNotice'
 import { agentName, agentNames } from '../agentName'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
-import { countTelemetry } from '../telemetrySend'
+import { tanguCount } from '../tangu/telemetry'
 
 const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
@@ -995,7 +995,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           models={visibleModels}
           modelsResponse={s.modelsResp}
           modelId={mvModelId}
-          onModelChange={(id) => { countTelemetry('modelSwitchUser'); s.setSessionModel(id, activeId, !params.childSurface) }}
+          onModelChange={(id) => { tanguCount('modelSwitchUser'); s.setSessionModel(id, activeId, !params.childSurface) }}
           engines={s.engines}
           engineId={mvCfg.engineId}
           engineModels={mvCfg.engineId ? (s.engineCaps[mvCfg.engineId]?.models ?? []) : undefined}
