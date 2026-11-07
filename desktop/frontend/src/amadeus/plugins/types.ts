@@ -1470,6 +1470,7 @@ export type PluginIconName =
   | 'message-circle' | 'folder-open' | 'file-text' | 'star' | 'heart' | 'home' | 'target' | 'zap' | 'globe' | 'music'
   | 'video' | 'terminal' | 'layout-grid' | 'sparkles' | 'boxes' | 'list-tree' | 'list-todo' | 'server' | 'server-cog'
   | 'pencil' | 'trash-2' | 'download' | 'upload' | 'search' | 'check' | 'x' | 'settings' | 'external-link'
+  | 'eraser' | 'hand' | 'highlighter' | 'mouse-pointer-2' | 'pen-line' | 'shapes' | 'sticky-note' | 'type'
 
 /** One row of `ctx.ui.contextMenu`. Before 2026-10-26 the host kept only `label` / `run` / `checked` / `disabled` /
  *  `danger` and silently dropped every other field. */
