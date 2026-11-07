@@ -17,7 +17,7 @@ import { setActiveSpace, useWorkspace } from '@lcl/engine'
 import { HOME_REF, sameRef, targetForSession } from '../../services/engine/targets'
 import type { MuseCardInfo, MuseDismissReason, ToolEvent } from '../../../../../tangu-agent/src/contracts/clientTypes'
 import { MUSE_DISMISS_REASONS } from '../../../../../tangu-agent/src/contracts/clientTypes'
-import { ReasonPrompt, canShareOriginal, sendOriginal } from './FeedbackReasons'
+import { ReasonPrompt, canShareOriginal, sendOriginal, type ShareConsent } from './FeedbackReasons'
 import { MarketPluginCards } from '../../components/MarketPluginCards'
 import { useAutomation } from '../../stores/automationStore'
 import { canObserve, condText, onlyText } from '../automation/lib'
@@ -210,9 +210,9 @@ function cardText(card: MuseCardInfo, t: Tr): string {
 function DismissReasons({ card, sessionId, onCancel }: { card: MuseCardInfo; sessionId?: string; onCancel: () => void }) {
   const { t } = useI18n()
   const { busy, decide } = useDecide(sessionId)
-  const pick = async (reason: MuseDismissReason | null, share: boolean): Promise<void> => {
+  const pick = async (reason: MuseDismissReason | null, share: ShareConsent | null): Promise<void> => {
     const ok = await decide(card, 'dismiss', reason ? { reason } : undefined)
-    if (ok && share) void sendOriginal({ reasonLabel: reason ? t(`museReason.${reason}`) : null, tag: `muse-card:${card.kind}`, body: cardText(card, t) })
+    if (ok && share) void sendOriginal({ reasonLabel: reason ? t(`museReason.${reason}`) : null, tag: `muse-card:${card.kind}`, body: cardText(card, t), consent: share })
   }
   return (
     <ReasonPrompt reasons={MUSE_DISMISS_REASONS.map((id) => ({ id, label: t(`museReason.${id}`) }))}
