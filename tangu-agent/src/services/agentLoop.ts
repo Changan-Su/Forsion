@@ -30,7 +30,7 @@ import path from 'node:path';
 import { agentsDir, DEFAULT_AGENT_SLUG, engineLibDir } from '../core/tanguHome.js';
 import { renderAboutHuman } from '../agents/humanFolder.js';
 import { getRun, updateRunStatus, appendStep, listPendingRunsForRecovery, failStaleRuns } from './runStore.js';
-import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, type ToolContext } from '../tools/registry.js';
+import { getToolDefinitions, executeTool, getToolCapabilities, listDeferredTools, deferredCatalogSection, deferredUnlocksFromHistory, toolSourceOf, type ToolContext } from '../tools/registry.js';
 import { actionDeliveryNudgeNeeded, ACTION_DELIVERY_CHECK } from './actionDeliveryCheck.js';
 import { declaredPersistPlaceholder } from '../tools/toolRegistry.js';
 import type { DisplayFileItem } from '../tools/toolTypes.js';
@@ -82,7 +82,7 @@ import { isRetryableLlmError, isAuthExpiredLlmError, isQuotaExhaustedLlmError, i
 import { relaySettings, noteQuotaExhausted, quotaExhaustedUntil, quotaResetAt, quotaAskSuffix } from '../llm/quotaRelay.js';
 import { runCostCeiling, isOverRunCost } from './runBudget.js';
 import { RepeatedToolFailureGuard, MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
-import { CORRECTION_SIGNAL, NUDGE_SIGNAL, correctionVerdict, looksLikeCorrection, noteUserStop, takePendingStop, toolLoopSignal, verdictLine } from './judgeSignals.js';
+import { CORRECTION_SIGNAL, NUDGE_SIGNAL, correctionVerdict, looksLikeCorrection, noteRunSignals, noteUserStop, takePendingStop, toolLoopSignal, verdictLine } from './judgeSignals.js';
 import { loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { runGroupChat, sanitizeTempAgents, teamMemberSection } from './groupChat.js';
 import { query } from '../core/db.js';
@@ -93,6 +93,7 @@ import { listPluginMetas } from '../plugins/registry.js';
 import { isPluginEnabledSync } from '../plugins/settingsStore.js';
 import { prepareAgentFilesForRun, scheduleAgentFilesSync } from './agentFileSync.js';
 import { buildAgentMemoryContext } from './memoryRecall.js';
+import { agentRoleOf } from './telemetryLedger.js';
 import { filterTaggedEntries, filterTaggedText, foldNote } from '../contracts/deviceTags.js';
 import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 import { buildProjectMemoryContext, resolveProjectMemory } from './projectMemory.js';
@@ -1744,6 +1745,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // B1:§1 存储证据留原位(与查询/会话无关,跨会话同一份);§2/§3 带 [session_id=…] 且按本条消息打分,
     // 卡在系统提示 44% 处 = 每来一条新消息就把后面的技能目录与 13k 工具头一起作废 → 按 volatilePlacement 挪走。
     let volatileMemory = '';
+    // 召回统计(遥测 v2,随 context_info 发):读记忆失败时留空,不编 0。
+    let recallStats: { recallEntries: number; recallHistory: number; recallTruncated: boolean } | null = null;
     // 主模型收不到原图 → Computer Use 不可用(ctx.computerUseUnavailable)。run 起点判一次:resolveTools 是同步的,工具面也不该
     // 在一个 run 中途换。这里先起跑、到 toolGateCtx 才等 —— auto 档下它可能是一次云请求(60s 缓存),与下面装记忆那段并行。
     // 判据与工具图转写同源(whyNoImages;shouldDescribeImages 是它的布尔版):截图会被转成文字的 run,正是不给这组工具的 run。
@@ -1766,6 +1769,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const hideRemoteSessions = profile.capabilities.hostExec && !effectiveRemote({ remote, runId });
       const memoryContext = await buildAgentMemoryContext({ userId, appId, agentSlug: activeAgentSlug, deviceTags: tagCtx,
         query: typeof input.message === 'string' ? input.message : '', excludeSessionId: sessionId, hideSessionsWithTool, hideRemoteSessions, signal: ac.signal });
+      recallStats = { recallEntries: memoryContext.entryIds.length, recallHistory: memoryContext.historyMessageIds.length, recallTruncated: !!memoryContext.truncated };
       if (volatilePlacement === 'system') {
         if (memoryContext.content) systemParts.push(MEMORY_BLOCK_HEADER + memoryContext.content);
       } else {
@@ -2116,6 +2120,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       maxIterationsSource,
       // 事件按什么模型算的:客户端据此丢弃「切模型后 SSE 重放复活的旧 context_info」
       modelId,
+      // 帮助改进 v2:只有枚举和数字(Extend 用 json_extract 取,不把 payload 拉进进程)。自建 Agent 一律 custom,slug 不出现。
+      telemetry: { agentRole: agentRoleOf(activeAgentSlug), ...(recallStats ?? {}) },
     });
 
     // 尾部 user 通道(与下面 /skill、/refine、@ 提及、运行时 git/todo 同一条):把追加文本拼进**最后一条
@@ -2515,11 +2521,21 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const line = text.split('\n').find((l) => /(?:saved|wrote|path|文件|输出).*\/[^ \n]+/i.test(l));
       return line?.match(/(\/[^\s"'<>\\]+)/)?.[1];
     };
+    // 工具事件的 source(builtin / mcp / plugin;遥测 v2,Extend 据此决定发不发工具名)。每个 run 每个名字只解析一次。
+    const toolSources = new Map<string, 'builtin' | 'mcp' | 'plugin'>();
+    const sourceOf = (name: string): 'builtin' | 'mcp' | 'plugin' => {
+      let s = toolSources.get(name);
+      if (!s) {
+        try { s = toolSourceOf(name, toolCtx); } catch { s = 'plugin'; }
+        toolSources.set(name, s);
+      }
+      return s;
+    };
     // 拒绝/拦截时的统一工具结果（用户审批 reject 与 PreToolUse hook block 共用）。
     const mkRejected = async (call: ToolCall, startedAt: number, parallelGroup: string | undefined, msg: string): Promise<ExecutedToolCall> => {
       const elapsedMs = Date.now() - startedAt;
       await publish(runId, 'tool_result', {
-        id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup,
+        id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup, source: sourceOf(call.function.name),
       });
       return {
         toolResult: { tool_call_id: call.id, name: call.function.name, content: msg, isError: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup },
@@ -2535,6 +2551,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         arguments: call.function.arguments,
         startedAt,
         parallelGroup,
+        source: sourceOf(call.function.name),
       };
       await publish(runId, 'tool_call', basePayload);
       // 商店卡片已经画出来了还要 sketch / intelligent_ui = 同一批插件画两遍(10-17 live 6 次里 2 次);标志见 marketplaceCardsShown。
@@ -2577,7 +2594,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         });
         const msg = parkedInquiryResult(ask.question);
         const elapsedMs = Date.now() - startedAt;
-        await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup });
+        await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup, source: sourceOf(call.function.name) });
         return {
           toolResult: { tool_call_id: call.id, name: call.function.name, content: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup },
           toolMessage: { role: 'tool', content: preCtxText ? `${msg}\n\n${preCtxText}` : msg, tool_call_id: call.id } as ChatMessage,
@@ -2601,7 +2618,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         void decision.decided.then((d) => { entry.decision = d; entry.seq = ++parkedSeq; parkedWake?.(); });
         const msg = parkedToolResult(decision.preview);
         const elapsedMs = Date.now() - startedAt;
-        await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup });
+        await publish(runId, 'tool_result', { id: call.id, name: call.function.name, result: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup, source: sourceOf(call.function.name) });
         return {
           toolResult: { tool_call_id: call.id, name: call.function.name, content: msg, isError: false, parked: true, startedAt, elapsedMs, outputChars: msg.length, parallelGroup },
           toolMessage: { role: 'tool', content: preCtxText ? `${msg}\n\n${preCtxText}` : msg, tool_call_id: call.id } as ChatMessage,
@@ -2645,6 +2662,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
         elapsedMs,
         outputChars: capped.length,
         parallelGroup,
+        source: sourceOf(call.function.name),
         artifactPath,
         metadata: result.metadata,
         ...(masked.length ? { masked } : {}),
@@ -2754,7 +2772,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
           // 挂起的 ask_user:答案就是这次调用的结果(同不挂起时的工具结果),放回原位;回灌行里带答案 —— 那是用户自己的话,不是工具输出
           const toolResult = askToolResult(e.call, e.answer, e.parallelGroup);
           const content = toolResult.content as string;
-          await publish(runId, 'tool_result', { id: e.call.id, name: e.call.function.name, result: content, isError: false, startedAt: toolResult.startedAt, elapsedMs: 0, outputChars: content.length, parallelGroup: e.parallelGroup });
+          await publish(runId, 'tool_result', { id: e.call.id, name: e.call.function.name, result: content, isError: false, startedAt: toolResult.startedAt, elapsedMs: 0, outputChars: content.length, parallelGroup: e.parallelGroup, source: sourceOf(e.call.function.name) });
           const inContext = await putBackParkedResult(e.call.id, {
             toolResult,
             toolMessage: { role: 'tool', content: e.preCtxText ? `${content}\n\n${e.preCtxText}` : content, tool_call_id: e.call.id } as ChatMessage,
@@ -3615,9 +3633,9 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
             `Tool call "${call.function.name}" was NOT executed: the response hit the output token limit ` +
             '(finish_reason=length), so its arguments may be silently truncated. Re-issue the call with ' +
             'complete, shorter arguments — e.g. split a large write into several smaller edit/apply_patch calls.';
-          await publish(runId, 'tool_call', { id: call.id, name: call.function.name, arguments: call.function.arguments, startedAt });
+          await publish(runId, 'tool_call', { id: call.id, name: call.function.name, arguments: call.function.arguments, startedAt, source: sourceOf(call.function.name) });
           await publish(runId, 'tool_result', {
-            id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs: 0, outputChars: msg.length,
+            id: call.id, name: call.function.name, result: msg, isError: true, startedAt, elapsedMs: 0, outputChars: msg.length, source: sourceOf(call.function.name),
           });
           truncatedResults.push({ tool_call_id: call.id, name: call.function.name, content: msg, isError: true, startedAt, elapsedMs: 0, outputChars: msg.length });
           workingMessages.push({ role: 'tool', content: msg, tool_call_id: call.id } as ChatMessage);
@@ -3739,6 +3757,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
     // 传 memScopeSlug(记忆域,shareDefaultMemory 已折叠)而非 activeAgentSlug:Historian 读写的
     // MEMORY/LOG 必须与 run 内 remember/log_event 落同一文件夹,否则共用默认记忆的 agent 会被写歪。
     // 上一轮被用户按停留下的信号排最前(那句写的是「上一轮」,其余写的是「这一轮」)。
+    noteRunSignals(judgeSignals, !!correctionCheck);
     if (pendingStop) judgeSignals.unshift(pendingStop);
     const runRemote = !!(remote || effectiveRemote({ runId }));
     void onUserRunDone(sessionId, userId, memScopeSlug, historianSeed, runRemote, correctionCheck ? correctionCheck.then(() => judgeSignals) : judgeSignals).finally(() => { if (!inlineMemberDef) scheduleAgentFilesSync(userId, activeAgentSlug); });

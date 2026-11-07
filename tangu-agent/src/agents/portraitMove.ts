@@ -18,6 +18,7 @@ import { atomicWriteMemoryFile, createMemoryRepository, memoryFactFingerprint, M
 import { parseJson } from '../services/memoryDream.js';
 import { loadSpecialAgentsConfig, resolveBackgroundModelId } from '../services/specialAgentsConfig.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
+import { ledger } from '../services/telemetryLedger.js';
 import { listAgents, resolveMemorySlug } from './agentRegistry.js';
 import { HumanError, readHuman } from './humanStore.js';
 import { isPortraitFactForgotten, mutatePortrait, PERSON_IS, PORTRAIT_LIMIT, PORTRAIT_SCOPE, portraitEntries } from './humanPortrait.js';
@@ -213,6 +214,7 @@ export const readPortraitMove = (userId: string): Promise<PortraitMoveView> => s
 export function startPortraitScan(userId: string): PortraitMoveView {
   const f = readFile(); // 读不懂就在这里报错,别跑完模型才发现
   if (!job) {
+    ledger.inc('daily_human', 'moveScan');
     const running = (job = { done: 0, total: 0 }); scanError = null;
     void scan(userId, running)
       .catch((e) => { scanError = e instanceof HumanError ? e.code : (e instanceof Error ? e.message : String(e)); console.warn('[portrait move] scan failed:', scanError); })

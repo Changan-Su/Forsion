@@ -2,6 +2,7 @@
  * Preload:contextBridge 暴露最小安全 API(配置读写 + 托管后端状态)。
  * agent 调用 renderer 直连 HTTP,不经主进程。
  */
+import type { OpenVoiceInput, VoiceInputStreamEvent } from '../shared/voiceInputStream'
 import type { ActiveWindowSample } from '../shared/activeWindow'
 import type { AppearancePatch, StartupAppearance } from '../shared/startupAppearance'
 import type { DocumentTaskClaimsApi } from '../shared/documentTasks'
@@ -35,6 +36,28 @@ ipcRenderer.on('appearance:changed', (_event, value: StartupAppearance) => {
   currentAppearance = value
   for (const listener of appearanceListeners) listener(value)
 })
+
+const openVoiceInput: OpenVoiceInput = (modelId, listener) => {
+  const id = crypto.randomUUID()
+  let closed = false
+  const receive = (_event: unknown, sessionId: string, message: VoiceInputStreamEvent) => {
+    if (id === sessionId && !closed) listener(message)
+  }
+  ipcRenderer.on('asr:streamEvent', receive)
+  void ipcRenderer.invoke('asr:streamStart', id, modelId).then((ok: boolean) => {
+    if (!ok && !closed) listener({ type: 'closed' })
+  }, () => { if (!closed) listener({ type: 'closed' }) })
+  return {
+    write: pcm => ipcRenderer.send('asr:streamFrame', id, pcm),
+    finish: () => ipcRenderer.send('asr:streamFrame', id, 'finish'),
+    close: () => {
+      if (closed) return
+      closed = true
+      ipcRenderer.removeListener('asr:streamEvent', receive)
+      ipcRenderer.send('asr:streamFrame', id, 'close')
+    },
+  }
+}
 
 const api = {
   /** 宿主平台('darwin' | 'win32' | 'linux');渲染层据此调标题栏/交通灯留白等。 */
@@ -475,6 +498,7 @@ const api = {
     ipcRenderer.invoke('plugin:request-install', appId),
   // ── 桌面级共享语音转写(任意功能复用:聊天框、Amadeus…;主进程本地/自带-key,不经引擎)──
   // timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要的分段时间戳)。
+  openVoiceInput,
   transcribeAudio: (req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
     ipcRenderer.invoke('asr:transcribe', req),
   // 按路径转写:几十 MB 的视频音轨不该走 base64 过 IPC,主进程直接读盘。

@@ -2,9 +2,10 @@
 // 语义(类 Obsidian):已有认领该笔记的编辑器 tab → 激活它;newTab(⌘点击)→ 新开 tab;
 // 一个编辑器都没有(全被关掉)→ 带 notePath 新开;否则在当前(最近活动)编辑器里加载。
 import { activePageScope, pageStoreFor, setActivePageScope, usePageStore } from '@amadeus/store/pageStore'
+import { UNTITLED_RE } from '@amadeus/chrome/pageChrome'
 import { useWorkspace, activeMainPanel, mainOpensBeside } from '@lcl/engine'
 import { amadeus } from '@amadeus/api'
-import { hasUnifiedInstance, unifiedFocusBody, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading, unifiedRevealText, unifiedScopeFor } from '@amadeus/unified/lifecycle'
+import { hasUnifiedInstance, unifiedFocusBody, unifiedFocusTitle, unifiedHeadings, unifiedRevealBlock, unifiedRevealHeading, unifiedRevealText, unifiedScopeFor } from '@amadeus/unified/lifecycle'
 import { findHeadingIndex, isMediaPath } from '@amadeus-shared/pdfLink'
 import { askString } from '@amadeus/components/askString'
 import { askNewDrawing } from '@amadeus/components/askNewDrawing'
@@ -53,7 +54,19 @@ const viewOpts = (o?: OpenWhere): OpenWhere | undefined => (o?.newTab ? { newTab
  *  Obsidian 同)。新建流不传它 —— 新建聚焦标题(requestTitleFocus)才是对的。粗指针不做:手机上点开一篇就弹软键盘。 */
 export async function openNote(path: string, opts?: OpenWhere & { reuseKey?: string; activate?: boolean; focus?: 'body' }): Promise<void> {
   await openNoteInner(path, opts)
-  if (opts?.focus === 'body' && opts.activate !== false && !isCoarsePointer()) await focusBodyWhenReady(path)
+  if (opts?.focus !== 'body' || opts.activate === false || isCoarsePointer()) return
+  // 未命名笔记先落标题(已挂着的实例路径没变、挂载 effect 不重跑,所以这里显式要一次);没有标题可聚焦(画布满铺等)才回正文。
+  if (UNTITLED_RE.test((path.split('/').pop() ?? '').replace(/\.md$/i, '')) && await focusTitleWhenReady(path)) return
+  await focusBodyWhenReady(path)
+}
+
+async function focusTitleWhenReady(path: string): Promise<boolean> {
+  for (let tries = 0; tries < 12; tries++) {
+    const r = unifiedFocusTitle(path)
+    if (r != null) return r
+    await new Promise((res) => setTimeout(res, 150))
+  }
+  return false
 }
 
 /** openNote(focus:'body')的后半段:实例挂上、编辑器建好之后把焦点给正文。节拍同 revealHeadingWhenReady;

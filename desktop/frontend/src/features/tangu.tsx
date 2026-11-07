@@ -45,6 +45,16 @@ const blankNewChat = (): void => {
   ws().openView('chat', { followActive: true, reuseKey: 'primary' }, 'main')
 }
 
+/** 对话被复制 / 搬去别的窗口(标签右键的拆分、在新窗口打开 / 移到新窗口、拖进别的窗口):跟随型的主对话钉住此刻的会话,
+ *  否则副本 / 新窗口会跟随它自己那边的当前会话(口径同下面的 splitChat)。已经钉住的原样带走。 */
+const pinChatCopy = (params: Record<string, unknown>): Record<string, unknown> | null => {
+  if (params.followActive === false) return params
+  const pinned = app().activeId
+  // 新对话还没有会话可钉:钉成「没有会话」的副本发了消息也看不到(Codex 评审)→ 告诉引擎做不出副本,菜单不给拆分 / 在新窗口打开
+  if (!pinned) return null
+  return { ...params, followActive: false, sessionId: pinned, reuseKey: `session:${pinned}` }
+}
+
 const splitChat = (): void => {
   const active = ws().getActiveLeaf()
   if (active?.type !== 'chat') { ws().splitActive('right'); return }
@@ -135,7 +145,7 @@ export function registerTanguViews(): void {
   // workspaceSource: 'orbits' = 自动档翻转的**声明位**(方案 §3.7-7):主区是 chat 时左栏自动落新版会话侧栏,
   // 不动 workspaceMode.ts 的硬规则;右栏恒 files 不受它管。
   // 右栏主视图规则(lcl rightRules.ts):对话做主区前台时右栏 = Tangu 详情 / 文件 / 大纲(大纲对对话是会话目录),不分 Space。
-  registerView({ type: 'chat', kind: 'entity', rightCompanions: CHAT_RIGHT, idParam: 'sessionId', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true, workspaceSource: 'orbits' })
+  registerView({ type: 'chat', kind: 'entity', rightCompanions: CHAT_RIGHT, idParam: 'sessionId', displayName: () => app().tr('workbench.chat'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true, workspaceSource: 'orbits', copyParams: pinChatCopy })
   // 侧栏对话只是 ChatView 的另一个停靠身份:绕开 `chat` singleton 与主区实例冲突,但仍跟随同一
   // activeId / messagesBySession / runningBySession,不创建所谓「Side Chat」会话或第二套 runtime。
   registerView({ type: 'chat-panel', kind: 'aux', displayName: () => translate('tangu.view.chatPanel'), icon: MessageCircle, TabIcon: SessionTabIcon, factory: (props) => <ChatView {...props} />, singleton: true })

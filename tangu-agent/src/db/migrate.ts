@@ -307,6 +307,19 @@ export async function runMigration(): Promise<void> {
   `));
   await query(`CREATE INDEX IF NOT EXISTS idx_chat_asides_session ON chat_asides(session_id, created_at)`);
 
+  // 遥测计数账本(帮助改进 Forsion v2,services/telemetryLedger.ts):按 UTC 日 × 白名单事件 × 维度 × int 字段一格一个非负整数,
+  // 不存任何文本。只有本机形态写(云端建空表零写入,同 muse_todos 纪律);Extend 只读完整的日子。保留 35 天。
+  await query(ddl(`
+    CREATE TABLE IF NOT EXISTS telemetry_ledger (
+      day TEXT NOT NULL,
+      event TEXT NOT NULL,
+      dim TEXT NOT NULL DEFAULT '',
+      field TEXT NOT NULL,
+      n INTEGER NOT NULL,
+      PRIMARY KEY (day, event, dim, field)
+    )
+  `));
+
   // ── 存量库补列(两方言公共段)────────────────────────────────────────────
   // CREATE TABLE IF NOT EXISTS 只管新库;老库(建库时 base schema 还没有这些列)必须显式
   // ALTER 补齐。本清单与 schemaStandalone.ts 同步演进:往 base schema 加列时这里同加一条

@@ -15,6 +15,7 @@ import { agentSlugLocalOnly, logText, mergeAgentSyncContent, serializeTombstones
 import { AgentFileConflictError, type AgentFilesBrain, type AgentFileMeta, type AgentFileContent } from '../seams/cloudBrain.js';
 import { agentSyncDefault, agentSyncPermission, agentSyncScope, captureAgentSyncDefault, captureAgentSyncPermission, agentSyncOperationSignal, agentSyncConsentSignal, agentSyncDefaultSignal, pendingAgentRemovals, clearAgentRemoval } from './cloudSyncAccount.js';
 import { agentSyncDir, assertSyncPath, atomicSyncWrite, conflictCopyName, isConflictCopyPath, isWidgetDataPath, readSyncBytes, validSyncPath, validSyncSlug } from './agentSyncPaths.js';
+import { ledger } from './telemetryLedger.js';
 import { createLocalMemoryStore } from '../adapters/standalone/localMemoryBrain.js';
 import { createMemoryRepository, withMemoryDirectoryLock, type MemoryTombstone } from './memoryRepository.js';
 
@@ -408,6 +409,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     let name = conflictCopyName(p, now);
     for (let n = 2; existsSync(join(dir, name)); n++) name = conflictCopyName(p, now, n);
     atomicSyncWrite(root, join(dir, name), initial, guard); result.conflicts++; archivedAs = name;
+    if (slug === HUMAN_SLOT) ledger.inc('daily_human', 'syncConflictCopies');
   };
   const fetchRemote = async (): Promise<{ file: AgentFileContent; bytes: Buffer }> => {
     guard(); const file = await cloud.getFile(uid, slug, p, { signal }); guard();

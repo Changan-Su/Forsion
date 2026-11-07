@@ -9,6 +9,7 @@ import { getAgent, isValidSlug } from './agentRegistry.js';
 import { canonicalProjectPath, assertSafeChain } from '../services/projectContext.js';
 import { atomicWriteMemoryFile, readMemoryFile, safeMemoryPath, withMemoryDirectoryLock } from '../services/memoryRepository.js';
 import { redactSecrets } from '../core/redact.js';
+import { noteHumanWrite } from '../services/humanTelemetry.js';
 
 /** human/ 里由这家 store 管的四份(带版本号、修改历史、撤销)。CALENDAR.db 不在这里:它是数据库文件,走日历那条路。 */
 export const HUMAN_FILES = ['HUMAN.md', 'AGENT.md', 'SOUL.md', 'MEMORY.md'] as const;
@@ -123,6 +124,7 @@ export async function writeHuman(scope: HumanScope, input: {
 }, actor: 'agent' | 'user', source?: HumanChangeSource): Promise<{ document: HumanDocument; change: HumanChange | null }> {
   if (typeof input.expectedVersion !== 'string') throw new HumanError('HUMAN_VERSION_REQUIRED', 'Read the current document and supply expectedVersion before editing.');
   const loc = await location(scope);
+  let undone: Revision | undefined;
   const commit = (): { document: HumanDocument; change: HumanChange | null } => {
     const before = contentAt(loc), beforeVersion = version(before);
     if (beforeVersion !== input.expectedVersion) throw new HumanError('HUMAN_CONFLICT', 'The collaboration document changed elsewhere. Reload it before applying your edit.');
@@ -133,7 +135,7 @@ export async function writeHuman(scope: HumanScope, input: {
       if (!last || last.id !== input.undoId || last.afterVersion !== beforeVersion || last.undoOf) throw new HumanError('HUMAN_CONFLICT', 'A later change exists. Open the current document to revise it without losing newer work.');
       // 从某个 Agent 记忆里挪来 / 交给所有 Agent 的那一笔:整份退回会让那句话两边都没有(原条目已从记忆里拿掉);挪的那一方自己的补偿撤回带着 source,照常放行
       if (!source && isTransfer(last)) throw new HumanError('HUMAN_UNDO_TRANSFER', 'This change moved an entry out of an agent’s memory; undo it from the chat receipt, or edit the document.');
-      content = last.before ?? ''; summary = `Undo: ${last.summary}`.slice(0, 240); evidence = '';
+      content = last.before ?? ''; summary = `Undo: ${last.summary}`.slice(0, 240); evidence = ''; undone = last;
     }
     assertHumanInput(content, summary, evidence, actor, maxLengthOf(loc.scope), !!source);
     const after = redactSecrets(content);
@@ -153,7 +155,10 @@ export async function writeHuman(scope: HumanScope, input: {
   };
   // Agent 级的 HUMAN.md 参与云同步:同步落盘拿的是 agent 目录锁,这里一并拿上,另一个进程里的同步才插不进「核版本 → 写」之间。
   // human/ 也一样拿目录锁:第 2 步它整个文件夹上云,同步落盘会拿同一把。
-  return withMemoryDirectoryLock(loc.historyDir, () => loc.scope.kind !== 'project' ? withMemoryDirectoryLock(loc.base, commit) : commit());
+  const result = withMemoryDirectoryLock(loc.historyDir, () => loc.scope.kind !== 'project' ? withMemoryDirectoryLock(loc.base, commit) : commit());
+  // 遥测:写成了才计;带来源的撤回是写入方自己的补偿(挪失败退回),不算一笔
+  if (result.change && !(input.undoId && source)) noteHumanWrite(scope, actor, source, undone);
+  return result;
 }
 
 /** 镜像把旧位置(USER.md)的改动写进 human/ 里的一份:和 writeHuman 一样先记修改记录、再换文件,界面里看得到、能撤销

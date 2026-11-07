@@ -108,6 +108,10 @@ export interface ViewDefinition {
    *  只放能进侧栏的视图:主区实体(编辑器 / PDF / 主区对话)会被滤掉;最多 4 项。判定见 rightRules.ts。
    *  只管右栏 —— 左栏是 Space 驱动的,不跟主视图走。 */
   rightCompanions?: import('./layoutPersist').PersistedPanel[]
+  /** 这个 View 被复制一份(标签右键的拆分、在新窗口打开)或搬去别的窗口时带走的参数。跟随型视图在这里把此刻看着的东西钉住
+   *  (主区对话跟着当前会话走:不钉的话副本 / 新窗口会跟随到别的会话)。拿到的是去掉引擎私有键的用户参数;缺省 = 原样带走。
+   *  返回 null = 此刻做不出一份不同的副本(新对话还没有会话可钉):菜单不给拆分 / 在新窗口打开;搬走(移到新窗口 / 拖出)照原参数走。 */
+  copyParams?: (params: Record<string, unknown>) => Record<string, unknown> | null
 }
 
 /**

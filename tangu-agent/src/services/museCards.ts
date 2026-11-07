@@ -20,6 +20,8 @@ import { loadSpecialAgentsConfig, updateMuseConfig, type MuseConfig } from './sp
 import { MUSE_ONBOARDING_MS, ensureMuseOnboarding, patchMuseOnboarding } from './museState.js';
 import { normalizeMemoryFact } from './memoryRepository.js';
 import { AUTO_READ_CATEGORIES, NEEDS_USER, inboxCategory, unclaimedAttachment, type InboxCategory } from './inboxCategory.js';
+import { ledger, isCardKind, isGaugeField, isLedgerField } from './telemetryLedger.js';
+import { noteMuseIntroAnswered, noteMuseProduced } from './museTelemetry.js';
 
 export type { MuseCardInfo, MuseCardKind };
 
@@ -84,7 +86,11 @@ export async function postMuseCard(
     [id, userId, card.kind, card.key ?? null, JSON.stringify(card.payload), Date.now()],
   );
   const dm = await postMuseDm(userId, `${card.text.trim()}\n\n${fence(id)}`, card.uncapped ? 'proactive:notice' : 'proactive:card');
-  if (dm.ok) return { ok: true, id };
+  if (dm.ok) {
+    if (isCardKind(card.kind)) ledger.inc('daily_muse_card', 'created', { dim: card.kind });
+    noteMuseProduced('producedCards');
+    return { ok: true, id };
+  }
   await query(`DELETE FROM muse_cards WHERE id = ?`, [id]).catch(() => {});
   return { ok: false, error: dm.error };
 }
@@ -222,7 +228,9 @@ export const cleanFocusText = (v: unknown): string => (typeof v === 'string' ? v
  * Muse 还没跑过时 onboarding 记录不存在 —— 先建(当新用户),不然 introAt 落不下、第一次醒来又会发卡。
  */
 export async function applyOnboardingIntro(userId: string, a: { when?: string; proactivity?: string; focus?: string[]; focusText?: unknown }, now = Date.now()): Promise<void> {
-  await applyIntro(userId, introAnswers({ when: a.when, focus: a.focus }));
+  const answers = introAnswers({ when: a.when, focus: a.focus });
+  await applyIntro(userId, answers);
+  noteMuseIntroAnswered(answers, !!cleanFocusText(a.focusText));
   const minutes = (INTRO_PROACTIVITY as Record<string, number>)[String(a.proactivity || '')];
   if (minutes) updateMuseConfig(() => ({ heartbeatMinutes: minutes }));
   const text = cleanFocusText(a.focusText);
@@ -307,6 +315,12 @@ export async function postSummaryCard(userId: string, text: string, lines: unkno
   const proposals = await proposalStats(userId, loadSpecialAgentsConfig().muse.mode).catch(() => null);
   const r = await postMuseCard(userId, { kind: 'summary', key: 'summary', payload: { items, lead: text, ...(proposals ? { proposals } : {}) }, text, uncapped: true });
   if (!r.ok) return r.error;
+  ledger.inc('daily_muse', 'summarySent');
+  if (proposals) {
+    ledger.inc('daily_muse', 'summaryProposed', { n: proposals.proposed });
+    ledger.inc('daily_muse', 'summaryAdopted', { n: proposals.adopted });
+    if (proposals.askUpgrade) ledger.inc('daily_muse', 'summaryAskUpgrade');
+  }
   await patchMuseOnboarding({ summaryAt: Date.now() });
   return 'Sent. Each line is now in your memory; the user can correct or delete them, and your memory follows.';
 }
@@ -319,6 +333,7 @@ export async function recordMessageFeedback(userId: string, messageId: string, v
   );
   if (!rows?.[0]) return false;
   const excerpt = String(rows[0].content || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+  ledger.inc('daily_muse', verdict === 'up' ? 'feedbackUp' : 'feedbackDown');
   await appendMuseFeedback(userId, verdict === 'up'
     ? `[feedback] the user found your message useful: "${excerpt}"`
     : `[feedback] the user tapped "less of this" on your message: "${excerpt}". Take it as feedback on that kind of message (reminder, suggestion, finished result or recommendation), not just this one.`);
@@ -366,15 +381,38 @@ async function decideRuleCard(userId: string, card: MuseCardInfo, action: string
     await query(`UPDATE muse_cards SET status = 'pending', result = NULL, decided_at = NULL WHERE id = ?`, [card.id]);
     return { ok: false, status: 409, error: 'rule_not_created', detail: r.error };
   }
+  if (r.created) ledger.inc('daily_muse', 'ruleCreatedMuse'); // Muse 提的、用户点了才建成:算 Muse 带来的规则
   await appendMuseFeedback(userId, `[feedback] proposed automation "${v.value.desc}" ${action === 'edit' ? 'taken to the canvas' : observing ? 'accepted to observe first' : 'accepted'} by user`);
   return { ok: true, card: (await getMuseCard(userId, card.id)) ?? card, trigger: { id: r.trigger.id } };
 }
 
+type DecideOpts = { messageId?: string; answers?: IntroAnswers; index?: number; expected?: string; text?: string; remote?: boolean };
+
 /** 用户点卡。action 按 kind 白名单,认不得 → 400;效果在 CAS 成功之后才做(同一张卡点两次只生效一次)。 */
-export async function decideMuseCard(
-  userId: string, id: string, action: string,
-  opts: { messageId?: string; answers?: IntroAnswers; index?: number; expected?: string; text?: string; remote?: boolean } = {},
-): Promise<DecideResult> {
+export async function decideMuseCard(userId: string, id: string, action: string, opts: DecideOpts = {}): Promise<DecideResult> {
+  const r = await decideCard(userId, id, action, opts);
+  if (r.ok) noteCardDecision(r.card, action, opts);
+  return r;
+}
+
+/** 点卡成功后记账(遥测账本,按 cardKind):动作名 +1(卡已经对不上而被收掉的记 gone)、收卡的决定耗时、手机上点的。
+ *  kind 来自库、action 来自客户端:两样都过白名单才进账本。 */
+function noteCardDecision(card: MuseCardInfo, action: string, opts: DecideOpts): void {
+  if (!isCardKind(card.kind)) return;
+  const dim = card.kind;
+  const field = card.result === 'gone' ? 'gone' : action;
+  if (isLedgerField('daily_muse_card', field) && field !== 'created' && !isGaugeField(field) && field !== 'decideSecTotal' && field !== 'decidedRemote') {
+    ledger.inc('daily_muse_card', field as 'accept', { dim });
+  }
+  if (card.status !== 'pending' && card.decided_at && card.created_at) {
+    ledger.inc('daily_muse_card', 'decideSecTotal', { dim, n: Math.max(0, Math.round((card.decided_at - card.created_at) / 1000)) });
+  }
+  if (opts.remote) ledger.inc('daily_muse_card', 'decidedRemote', { dim });
+  if (card.kind === 'intro' && action === 'answer') noteMuseIntroAnswered(introAnswers(opts.answers));
+  if (card.kind === 'intro' && action === 'skip') ledger.inc('daily_muse', 'introSkipped');
+}
+
+async function decideCard(userId: string, id: string, action: string, opts: DecideOpts): Promise<DecideResult> {
   const card = await getMuseCard(userId, id);
   if (!card) return { ok: false, status: 404, error: 'card_not_found', detail: 'card not found' };
   const bad: DecideResult = { ok: false, status: 400, error: 'bad_action', detail: `${card.kind} card has no action ${action}` };
@@ -409,6 +447,11 @@ export async function decideMuseCard(
       } else if (action === 'open' && card.kind === 'feature') {
         if (!(await settle(userId, id, 'done', 'opened'))) return gone;
         await appendMuseFeedback(userId, `[feedback] recommendation ${card.key} opened by user`);
+      } else if (action === 'installed' && card.kind === 'plugin') {
+        // 宿主在商店装成之后回写(不是用户点的按钮):卡收成 done / installed,能算「推荐 → 真装上」。装插件只在这台电脑上发生,远端不收这个动作。
+        if (opts.remote) return { ok: false, status: 403, error: 'local_only', detail: 'installed is reported by this computer after the store install' };
+        if (!(await settle(userId, id, 'done', 'installed'))) return gone;
+        await appendMuseFeedback(userId, `[feedback] recommendation ${card.key} installed by user`);
       } else return bad;
       break;
     }

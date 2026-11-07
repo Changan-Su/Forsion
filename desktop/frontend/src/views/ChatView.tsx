@@ -1109,7 +1109,7 @@ export function ChatView({ leaf, params }: ViewProps) {
           onSteerNow={activeId ? () => { void s.steerNow(activeId) } : undefined}
         />
         {/* Muse 的开场建议(新对话、没消息时;开场那一行出现的同一组条件):Chat Box 正下方最多三行 */}
-        {openingOn && !studioChat && <MuseStarters draftKey={activeId ?? NEW_CHAT_DRAFT} centered={freshCenter} />}
+        {openingOn && !studioChat && leaf.loc === 'main' && leaf.type !== 'chat-panel' && <MuseStarters draftKey={activeId ?? NEW_CHAT_DRAFT} centered={freshCenter} />}
       </div>
       {/* 右侧车道:摘要栏卡片栈(进度 / 后台 / 产物 / 来源 / 工作范围 / 插件卡 / Agent Desk 卡片态,2026-10-25 多卡片)。
         * 锚在整列(.t2-chat-col,含输入框区);滚动条仍在最右缘(卡片右侧留 --tsum-gut 让 thumb 落位)。

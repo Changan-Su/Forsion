@@ -200,7 +200,8 @@ export function createAcpClient(
           toolNames.set(u.toolCallId, name);
           const args = u.rawInput ? JSON.stringify(u.rawInput) : '{}';
           toolCalls.push({ id: u.toolCallId, type: 'function', function: { name, arguments: args } });
-          ctx.publish('tool_call', { id: u.toolCallId, name, arguments: args, startedAt: Date.now() });
+          // source(遥测契约 §7):外部引擎自己的工具名不归 Tangu,按 plugin 记 —— Extend 不外发 plugin 的工具名
+          ctx.publish('tool_call', { id: u.toolCallId, name, arguments: args, startedAt: Date.now(), source: 'plugin' });
           break;
         }
         case 'tool_call_update': {
@@ -209,7 +210,7 @@ export function createAcpClient(
             const result = toolUpdateText(u.content);
             const isError = u.status === 'failed';
             toolResults.push({ id: u.toolCallId, name, result, isError });
-            ctx.publish('tool_result', { id: u.toolCallId, name, result, isError });
+            ctx.publish('tool_result', { id: u.toolCallId, name, result, isError, source: 'plugin' });
           }
           break;
         }

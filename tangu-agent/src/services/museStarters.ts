@@ -12,6 +12,8 @@ import path from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../core/db.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
+import { ledger } from './telemetryLedger.js';
+import { noteMuseProduced } from './museTelemetry.js';
 
 export const STARTER_KINDS = ['calendar', 'note', 'todo', 'session', 'web', 'muse'] as const;
 export type StarterKind = typeof STARTER_KINDS[number];
@@ -123,6 +125,10 @@ export async function setStarters(userId: string, next: StarterInput[]): Promise
       `INSERT INTO muse_starters (id, user_id, text, source_kind, source_label, source_ref, status) VALUES (?, ?, ?, ?, ?, ?, 'active')`,
       [uuidv4(), userId, s.text, s.source.kind, s.source.label, s.source.ref ?? null],
     );
+  }
+  if (toInsert.length) {
+    ledger.inc('daily_muse', 'starterCreated', { n: toInsert.length });
+    noteMuseProduced('producedStarters', toInsert.length);
   }
   return { shown: await listActiveStarters(userId), refused };
 }

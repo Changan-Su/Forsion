@@ -17,6 +17,8 @@ const SQLITE_PATH_FILES = [
   'src/routes/sessions.ts',
   'src/services/sessionSearch.ts', // 会话检索:桌面 sqlite 与云 PG 同一条 SQL
   'src/agents/agentRegistry.ts',
+  'src/services/telemetryLedger.ts', // 遥测计数账本:桌面 sqlite 与云 PG 同一条 upsert
+  'src/services/telemetrySnapshot.ts',
 ];
 
 /** 去掉块注释与行注释(避免注释里的示范文字误判)。这些文件无 http:// 之类含 `//` 的代码字面量。 */
