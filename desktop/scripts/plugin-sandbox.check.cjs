@@ -71,6 +71,7 @@ function writePlugin(source) {
     layout: { main: [{ type: `plugin:${PLUGIN_ID}:fixture-view` }], left: [], right: [] }, requires: { views: [`plugin:${PLUGIN_ID}:fixture-view`] },
   }))
   fs.writeFileSync(path.join(PLUGIN, 'books.csv'), 'title\nDune\n')
+  fs.writeFileSync(path.join(PLUGIN, 'next-book.csv'), 'title\nNeuromancer\n')
 }
 
 const results = []
@@ -89,13 +90,51 @@ async function until(read, timeout = 20_000) {
 /** 只比文件:用户那份打开对话时自己会在智库里建空的 Sessions/ 目录,与沙箱无关。 */
 const listFiles = (dir) => listTree(dir).filter((p) => fs.statSync(path.join(dir, p)).isFile())
 const listTree = (dir) => { const out = []; const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); out.push(path.relative(dir, p)); if (e.isDirectory()) walk(p) } }; if (fs.existsSync(dir)) walk(dir); return out.sort() }
+const WINDOWS = process.platform === 'win32'
 const FOCUS = process.argv.includes('--focus') && process.platform === 'darwin'
 /** 屏幕上普通层级(0)的大窗口,从前到后的属主 pid(CGWindowList 本来就按前后排;只读层级与尺寸,不要屏幕录制权限)。 */
 const JXA_FRONT = `ObjC.import('CoreGraphics'); function run() { return JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, 0))).filter((w) => w.kCGWindowLayer == 0 && w.kCGWindowBounds.Width > 300 && w.kCGWindowBounds.Height > 200).map((w) => String(w.kCGWindowOwnerPID))) }`
 const frontPids = () => JSON.parse(execFileSync('osascript', ['-l', 'JavaScript', '-e', JXA_FRONT]).toString())
 /** 把某个进程真的变成前台 App(像用户点了它的窗口),再读前台是谁。只排窗口不够:前台 App 不让,后台进程的 focus 会被系统拒掉。 */
 const activatePid = (pid) => execFileSync('osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit'); function run(a) { $.NSRunningApplication.runningApplicationWithProcessIdentifier(Number(a[0])).activateWithOptions($.NSApplicationActivateAllWindows); delay(0.6); return String($.NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier) }`, String(pid)]).toString().trim()
-const sandboxPids = () => { try { return execFileSync('pgrep', ['-f', path.join(SBX, 'userdata')], { encoding: 'utf8' }).trim().split('\n').filter(Boolean) } catch { return [] } }
+const sandboxUserData = path.join(SBX, 'userdata')
+let executable
+function powershell(script, env = process.env) {
+  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], {
+    env, encoding: 'utf8', windowsHide: true, timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim()
+}
+function sandboxPids({ stop = false } = {}) {
+  if (!executable) return []
+  if (WINDOWS) {
+    const script = `$ErrorActionPreference = 'Stop'
+    $profileArg = '(?:^|\\s)' + [regex]::Escape($env:FORSION_SANDBOX_PROFILE_ARG) + '(?:\\s|$)'
+    Get-CimInstance Win32_Process | Where-Object {
+      $_.ExecutablePath -eq $env:FORSION_SANDBOX_EXECUTABLE -and $_.CommandLine -and
+      $_.CommandLine.Replace('"', '') -match $profileArg
+    } | ForEach-Object { ${stop ? `
+      $process = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+      if ($process) {
+        try {
+          [void]$process.Handle
+          if ([Math]::Abs(($process.StartTime - $_.CreationDate).TotalMilliseconds) -lt 1) { $process.Kill() }
+        } catch [InvalidOperationException] {} finally { $process.Dispose() }
+      }` : '$_.ProcessId'} }`
+    return powershell(script, {
+      ...process.env, FORSION_SANDBOX_EXECUTABLE: executable, FORSION_SANDBOX_PROFILE_ARG: `--user-data-dir=${sandboxUserData}`,
+    }).split(/\r?\n/).filter(Boolean)
+  }
+  try {
+    return execFileSync('pgrep', ['-f', sandboxUserData], { encoding: 'utf8' }).trim().split('\n').filter(Boolean)
+  } catch (e) {
+    if (e.status === 1) return []
+    throw e
+  }
+}
+function cleanSandboxProcesses() {
+  if (WINDOWS) sandboxPids({ stop: true })
+  else for (const pid of sandboxPids()) try { process.kill(Number(pid), 'SIGKILL') } catch { /* 已退 */ }
+}
 const saveShot = (name, dataUrl) => { if (SHOT_DIR && dataUrl) { fs.mkdirSync(SHOT_DIR, { recursive: true }); fs.writeFileSync(path.join(SHOT_DIR, name), Buffer.from(dataUrl.split(',')[1], 'base64')) } }
 
 async function main() {
@@ -134,6 +173,7 @@ async function main() {
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
       timeout: 45_000,
     })
+    executable = await app.evaluate(() => process.execPath)
     const win = await app.firstWindow()
     win.setDefaultTimeout(15_000)
     win.on('pageerror', (e) => errs.push(String((e && e.message) || e)))
@@ -236,6 +276,20 @@ async function main() {
     const outside = await act('files', { paths: [path.join(home, 'vault', 'mine.md')] })
     const miss = await act('click', { target: 'No such button anywhere' })
     check('12e 负对照:沙箱外的路径不收;点不存在的东西 → 报找不到,不乱点', /not usable/.test(outside.r.error || '') && /nothing visible says/.test(miss.r.error || ''), JSON.stringify({ outside: outside.r.error, miss: miss.r.error }))
+    if (process.platform === 'win32') {
+      const junction = path.join(PLUGIN, 'external-junction')
+      fs.symlinkSync(VAULT, junction, 'junction')
+      try {
+        const escaped = await act('files', { paths: [path.join(junction, 'mine.md')] })
+        check('12g Windows: a junction cannot bypass the sandbox boundary', /not usable/.test(escaped.r.error || ''))
+        const nextBook = path.join(PLUGIN, 'next-book.csv')
+        const namespaced = await act('files', { paths: [path.toNamespacedPath(nextBook)] })
+        const pickedAgain = await act('click', { target: 'Import file' })
+        check('12h Windows: the extended-length path can pick an in-sandbox file',
+          namespaced.r.ok && !namespaced.r.error && pickedAgain.a?.newLogs?.some((l) => l.text === 'PICKED next-book.csv'),
+          JSON.stringify({ armed: namespaced.r.error || namespaced.a?.did, picked: pickedAgain.r.error || pickedAgain.a?.newLogs }))
+      } finally { fs.unlinkSync(junction) }
+    }
 
     // 改 space.json(换个名字)= 换配方:旧的先注销、活动 Space 会被挪走,重载完要回到它上面(Codex 评审)
     const sj = path.join(PLUGIN, 'spaces', 'fixture-shelf', 'space.json')
@@ -312,6 +366,7 @@ async function main() {
     if (SHOT_DIR && railStopped) await win.locator(railSel).first().screenshot({ path: path.join(SHOT_DIR, 'sandbox-rail-stopped.png') })
     check('13b 停了以后右栏卡变成「已停止」+「重新启动」', railStopped, await win.locator(railSel).first().textContent().catch(() => 'no card'))
     await exec('start', { dir: PLUGIN })
+    check('8b 关主进程之前,实际找到沙箱子进程', sandboxPids().length > 0)
     await app.close(); app = null
     const orphan = await until(() => sandboxPids().length === 0, 15_000)
     check('8b 关掉用户那份 → 沙箱跟着退,不留孤儿', orphan, JSON.stringify(sandboxPids()))
@@ -319,11 +374,10 @@ async function main() {
     check('全程无渲染层异常', errs.length === 0, errs.slice(0, 3).join(' / '))
   } finally {
     if (app) await app.close().catch(() => {})
-    for (const pid of sandboxPids()) try { process.kill(Number(pid), 'SIGKILL') } catch { /* 已退 */ }
-    stub.close()
+    try { cleanSandboxProcesses() } finally { stub.close() }
   }
   const failed = results.filter((r) => !r.ok)
   console.log(`\n${results.length - failed.length}/${results.length} passed`)
   process.exit(failed.length ? 1 : 0)
 }
-main().catch((e) => { console.error(e); for (const pid of sandboxPids()) try { process.kill(Number(pid), 'SIGKILL') } catch { /* */ } process.exit(1) })
+main().catch((e) => { console.error(e); process.exit(1) })

@@ -130,8 +130,12 @@ export const AUTONOMY_SECTION =
  *  read_session,还靠 run_bash 翻本地 state.db 拼列表——提示词必须把这层召回点破。
  *  措辞四件套(信念覆盖/阶梯降级/语言学线索/成本不对称+硬禁令)借 claude.ai past-chats
  *  提示词的蒸馏形,针对的正是「模型不知道自己看得到历史」这一失败模式。 */
+const SCOPED_MEMORY_GUIDANCE =
+  '- When `remember` offers `appliesTo`, put project-only facts in project memory. For an environment fact that applies to one computer or operating system, choose `scope: "agent"` with `appliesTo: "this-computer"` or `"this-os"`, even if the user says "my setup". The portrait (`scope: "person"`) is for personal facts that hold across devices. For example, a Windows-only environment variable belongs in Agent memory with `appliesTo: "this-os"`.\n';
+
 export const MEMORY_LOG_GUIDANCE =
   '## Memory, Logs & Past Sessions\n' +
+  SCOPED_MEMORY_GUIDANCE +
   // 10-13 分层:两层各一句定义 —— 记忆 = 现在成立的事(`remember`,现在时),日志 = 发生过的事(`log_event`);只对这段对话有效的指示两边都不进。
   '- Memory is what holds now, the log is what happened. Use `remember` only for durable facts/preferences: what will still be true next month — who the user is and what they are working on or learning now (its "person" scope when offered: every agent reads it), how they want you to work, stable facts about their environment and projects. One present-tense sentence per fact, without the date you learned it (a date stays only when it is the fact itself: a birthday, a deadline); when a new fact supersedes an entry, list and update that entry instead of adding a correction beside it. Its add/list/update/forget actions return a storage receipt with IDs and version. Say something is remembered, corrected or forgotten only after a successful receipt; never write another Agent’s files or bypass these tools.\n' +
   '- Record what happened — completed work, conclusions, outputs, where a task stands — to the current day\'s log with `log_event`, never to memory, however important; use `read_log` to review a specific day when you need history. An instruction that holds for this conversation only (answer from this transcript, use this file) goes in neither.\n' +
@@ -254,6 +258,7 @@ export function defaultPromptSections(ctx: PromptSectionCtx): PromptSections {
 /** Chat exposes scoped explicit memory; history remains deferred and bounded. */
 export const CHAT_MEMORY_GUIDANCE =
   '## Memory & Past Conversations\n' +
+  SCOPED_MEMORY_GUIDANCE +
   '- You know this user across sessions: a bounded selection of this Agent’s memory and the user profile may be included in this prompt. Use them naturally; do not recite them.\n' +
   '- Use `remember` to add/list/update/forget durable memory: only what will still be true next month (who the user is, how they want to work, stable facts), as a present-tense sentence without the date you learned it; what happened or where a task stands belongs in the daily log, not memory, and an instruction that holds for this conversation only (answer from this transcript) belongs in neither; when a new fact supersedes an entry, update it instead of adding another. Claim success only after its stored receipt; failures must be reported. Memory is private to this Agent, except its "person" scope when offered, which every agent reads.\n- Past conversations belonging to this same Agent can be searched within a bounded history window. When the user writes as if you already know something from outside this conversation — possessives ("my site"), definite references ("that bug"), past tense ("you suggested", "we decided"), or a direct ask ("do you remember") — load `search_sessions` with `load_tools` and search before answering. An unnecessary search is cheap; a missed one costs the user real effort. Never say you cannot see an earlier conversation without searching.';
 

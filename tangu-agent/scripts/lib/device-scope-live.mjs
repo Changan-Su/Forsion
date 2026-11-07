@@ -5,7 +5,7 @@
  * 默认 Agent 的记忆里放四条:所有设备一条、本机一条、别台一条、别的系统一条。
  *   ① 读:问「这台电脑上论文模板在哪」→ 答本机那条的路径,不答别台的;系统提示里没有别台 / 别的系统那两条,有一行折起来的英文提示。
  *   ② 写「只在这台」:说明只是这台电脑的情况 → remember 带 appliesTo=this-computer,磁盘上那一行以 [本机名] 开头(引擎加的,不是模型拼的)。
- *   ③ 写「这个系统」:一条只和系统有关的环境事实(跑脚本前要 ulimit)→ appliesTo=this-os,那一行以 [macOS] / [Windows] 开头。
+ *   ③ 写「这个系统」:一条只和系统有关的环境事实 → appliesTo=this-os,那一行以 [macOS] / [Windows] 开头。
  *   ④ 写「所有设备」:一条对做事方式的要求 → 不带标签(记进画像也算对,画像不分设备)。
  * --devscope-neg:负对照 —— 不写设备表(别台的名字认不出来,`[Windows desktop]` 那条当正文进提示词),① 的「系统提示里没有别台那条」须红。
  */
@@ -62,9 +62,12 @@ export async function deviceScopeLive({ run, api, shared, OUT, argv = [] }) {
   // ③ 这个系统
   // 首跑(11-06)用的是「我所有的 Mac 上都用 Homebrew」:模型按设计记进了画像(person,关于人本身、本来就跨设备),不是 Agent 记忆 ——
   // 这里换成你跑求解脚本时的环境事实(Agent 自己做事要知道的),只和系统有关
-  const r3 = await run(sid('os'), `记住：你在 ${os} 上跑 CFD 求解脚本之前要先执行 ulimit -n 4096，这是 ${os} 系统的限制，我任何一台 ${os} 电脑都一样，别的系统上不用。`, 240_000, cfg);
+  // ulimit does not exist in the Windows shell. Use a Windows-specific tool configuration there.
+  const osFact = win ? '先设置环境变量 CFD_LICENSE_MODE=network' : '先执行 ulimit -n 4096';
+  const factMarker = win ? 'CFD_LICENSE_MODE' : 'ulimit';
+  const r3 = await run(sid('os'), `记住：你在 ${os} 上跑 CFD 求解脚本之前要${osFact}，我的所有 ${os} 电脑都一样，别的系统上不用。`, 240_000, cfg);
   const c3 = remembers(r3);
-  const l3 = lines().find((l) => /ulimit/.test(l)) || '';
+  const l3 = lines().find((l) => l.includes(factMarker)) || '';
   steps.os = {
     ok: !r3.error && c3.some((a) => a.action === 'add' && a.appliesTo === 'this-os') && l3.replace(/^- /, '').startsWith(`[${os}] `),
     line: l3, calls: c3, error: r3.error,

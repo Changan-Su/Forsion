@@ -1,5 +1,6 @@
-import { VOICE_INPUT_RATE, voiceInputCloudUrl, type OpenVoiceInput, type VoiceInputConnection, type VoiceInputStreamEvent } from '../../../shared/voiceInputStream'
-import { REALTIME_BEARER_PROTOCOL } from './backendService'
+// 手机垫片(mobile/src/mobileShim.ts)在 App 启动前就引入本文件:只许取 shared 下的叶子模块,别从 backendService 这类重模块拿东西 ——
+// 11-07 从 backendService 取子协议常量,把整张 App 依赖图(一直到 Excalidraw)带进了垫片,cloudBase.test 的手机垫片用例因此红。
+import { REALTIME_BEARER_PROTOCOL, VOICE_INPUT_RATE, voiceInputCloudUrl, type OpenVoiceInput, type VoiceInputConnection, type VoiceInputStreamEvent } from '../../../shared/voiceInputStream'
 
 export interface VoicePreview { text: string; pending: string }
 

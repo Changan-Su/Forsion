@@ -53,6 +53,7 @@ const getLog = (userId: string, date?: string, signal?: AbortSignal) => deps().b
 function buildRememberDefinition(o: { project: boolean; notes: boolean; person: boolean; device?: boolean }): Tool {
   const several = o.project || o.person; // 不止一份记忆:不再说「当前 Agent 的」
   const scopes = [...(o.project ? ['agent', 'project'] : ['agent']), ...(o.person ? ['person'] : [])];
+  const scopedFacts = o.device ? `${o.project ? 'Project-specific facts use "project" first. ' : ''}Computer- or OS-specific environment facts use "agent" with appliesTo, even when they describe the user’s setup. Reserve "person" for cross-device facts. ` : '';
   return {
     type: 'function',
     function: {
@@ -65,14 +66,14 @@ function buildRememberDefinition(o: { project: boolean; notes: boolean; person: 
         (o.notes ? 'A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). ' : '') +
         // 两级(10-04 用户:「还要区分 Project 级别还是全局级别」):项目级只在本项目注入、项目里的 agent 共用;agent 级照旧。
         (o.project && !o.person ? 'SCOPE: "project" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. "agent" = holds wherever you work with this user (who they are, how they want you to work in general). When unsure, ask yourself whether it would still be true in another project. ' : '') +
-        (o.project && o.person ? `SCOPE: ${PERSON_IS}"project" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. "agent" = yours, wherever you work with this user: corrections to how you work, an identity given to them inside a role-play. When unsure, ask yourself whether it would still be true in another project, or with another agent. ` : '') +
-        (!o.project && o.person ? `SCOPE: ${PERSON_IS}"agent" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. ` : '') +
+        (o.project && o.person ? `SCOPE: ${scopedFacts}${PERSON_IS}"project" = holds only inside the current project (its commands, layout, conventions, decisions, what the user wants done in this project); it is shown to every agent working in this project and nowhere else. "agent" = yours, wherever you work with this user: corrections to how you work, an identity given to them inside a role-play. When unsure, ask yourself whether it would still be true in another project, or with another agent. ` : '') +
+        (!o.project && o.person ? `SCOPE: ${scopedFacts}${PERSON_IS}"agent" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. ` : '') +
         // 10-13 分层:记忆 = 现在成立的事(现在时),日志 = 发生过的事;只对这段对话有效的指示两边都不进。
         // 「answer from this file」那半句对的是真实样本:08–09 月「后续基于这份字幕回答」被记成长期记忆 3 次、被判官提名 4 次。
         'SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. ' +
         'Also what holds for this conversation only (answer from this file, one-off requests). ' +
         'FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ' +
-        (o.device ? `APPLIES TO${several ? ' (your own memory only)' : ''}: a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo "this-computer"${o.project ? ', unless it belongs in the project memory' : ''}; true on every computer with this operating system → "this-os"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ` : '') +
+        (o.device ? 'APPLIES TO (scope "agent"): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo "this-computer"; true on every computer with this operating system → "this-os"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ' : '') +
         (several
           ? `ACTIONS: add saves fact; list returns IDs and versions of ${o.project && o.person ? 'every scope' : 'both scopes'} (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). `
           : 'ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). ') +
@@ -87,7 +88,7 @@ function buildRememberDefinition(o: { project: boolean; notes: boolean; person: 
           id: { type: 'string', description: `An entry ID returned by list${several ? '' : ' for this Agent'}; required for update/forget.` },
           expectedVersion: { type: 'string', description: `Version returned by list${several ? ' for that scope' : ''}; include when modifying an existing entry.` },
           ...(o.project && !o.person ? { scope: { type: 'string', enum: scopes, description: 'Which memory: "agent" = yours, wherever you work; "project" = this project’s, shared by the agents working in it.' } } : {}),
-          ...(o.person ? { scope: { type: 'string', enum: scopes, description: `Which memory this sentence belongs in (see SCOPE)${o.project ? '' : '; default "agent"'}. On update it may differ from where the old entry is listed: a name or other fact about the user goes to "person" even if the old one was in your own memory.` } } : {}),
+          ...(o.person ? { scope: { type: 'string', enum: scopes, description: `Which memory this sentence belongs in (see SCOPE)${o.project ? '' : '; default "agent"'}. On update it may differ from where the old entry is listed: a name or other cross-device fact about the user goes to "person" even if the old one was in your own memory.` } } : {}),
           ...(o.device ? { appliesTo: { type: 'string', enum: [...APPLIES_TO], description: `Where the fact holds${several ? ' (scope "agent" only)' : ''}: "all" (default) = every device; "this-computer" = only this computer; "this-os" = every computer with this operating system. On update, leaving it out keeps the entry’s current one.` } } : {}),
         },
         required: o.project ? ['action', 'fact', 'scope'] : ['action', 'fact'],
@@ -263,7 +264,11 @@ async function applyDeviceScope(i: { appliesTo: unknown; scope: MemoryScope; act
   const given = i.appliesTo === undefined || i.appliesTo === null || i.appliesTo === '' ? null : String(i.appliesTo);
   if (given !== null && !(APPLIES_TO as readonly string[]).includes(given)) return { error: `Error: appliesTo must be one of ${APPLIES_TO.map((a) => `"${a}"`).join(', ')}. Nothing was written.` };
   if (i.scope !== 'agent') {
-    if (given && given !== 'all') return { error: `Error: appliesTo is only for your own memory (scope "agent"); ${i.scope === 'project' ? 'project memory already stays with this project on this computer' : 'the portrait is about the person, on every device'}. Nothing was written; retry without appliesTo.` };
+    if (given && given !== 'all') {
+      return { error: i.scope === 'project'
+        ? 'Error: project memory already stays with this project. Nothing was written; retry with scope "project" and omit appliesTo.'
+        : `Error: the portrait is shared across devices. Nothing was written; retry with scope "agent" and keep appliesTo "${given}".` };
+    }
     return { fact: i.fact };
   }
   const tagCtx = runTagContext(deviceScopesAllowed(i.ctx));
