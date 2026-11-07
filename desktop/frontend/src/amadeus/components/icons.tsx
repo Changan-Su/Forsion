@@ -3,7 +3,7 @@
  *  刻意不装 npm 依赖:渲染层三端共享(desktop/web/mobile),本地文件零外部解析。
  *  增补图标照原样从 @blocksuite/icons 摘录,保持 currentColor 不带死色。 */
 import type { ComponentType, ReactElement, ReactNode, SVGProps } from 'react'
-import {  Activity, Archive, ArchiveRestore, AudioLines, Bell, BookOpen, Bot, Boxes, Briefcase, CalendarDays, Check, Circle, CircleCheck, Clock, Cloud, Coins, Copy, Download, ExternalLink, FileText, FolderOpen, Gauge, Gift, Globe, HardDrive, Heading4, Heading5, Heading6, Heart, Highlighter, Home, Inbox, LayoutGrid, ListChecks, ListTodo, ListTree, Lock, Mail, MailOpen, MessageCircle, MessageSquare, Music, NotebookPen, NotebookText, Package, Pencil, Plug, RefreshCw, Search, Server, ServerCog, Settings, Shield, Sparkles, Star, StickyNote, Strikethrough, Target, Terminal, TextQuote, Trash2, Underline, Upload, User, Video, Workflow, X, Zap, type LucideIcon, type LucideProps  } from 'lucide-react'
+import {  Activity, Archive, ArchiveRestore, AudioLines, Bell, BookOpen, Bot, Boxes, Briefcase, CalendarDays, Check, Circle, CircleCheck, Clock, Cloud, Coins, Copy, Download, Eraser, ExternalLink, FileText, FolderOpen, Gauge, Gift, Globe, Hand, HardDrive, Heading4, Heading5, Heading6, Heart, Highlighter, Home, Inbox, LayoutGrid, ListChecks, ListTodo, ListTree, Lock, Mail, MailOpen, MessageCircle, MessageSquare, MousePointer2, Music, NotebookPen, NotebookText, Package, PenLine, Pencil, Plug, RefreshCw, Search, Server, ServerCog, Settings, Shapes, Shield, Sparkles, Star, StickyNote, Strikethrough, Target, Terminal, TextQuote, Trash2, Type, Underline, Upload, User, Video, Workflow, X, Zap, type LucideIcon, type LucideProps  } from 'lucide-react'
 
 const I = (children: ReactElement) => (props: SVGProps<SVGSVGElement>) => (
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="1em" height="1em" fill="none" aria-hidden {...props}>
@@ -210,6 +210,15 @@ export const PLUGIN_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>
   x: L(X),
   settings: L(Settings),
   'external-link': L(ExternalLink),
+  // 工具岛(ctx.ui.mountToolIsland,2026-11-04):PDF 批注 / 白板一类视图的工具,lucide 原名。highlight / annotate 是旧名,并存
+  hand: L(Hand),
+  'mouse-pointer-2': L(MousePointer2),
+  highlighter: L(Highlighter),
+  'sticky-note': L(StickyNote),
+  type: L(Type),
+  shapes: L(Shapes),
+  'pen-line': L(PenLine),
+  eraser: L(Eraser),
 }
 
 /** 词表键的形状。**未命中词表但长成这样**的字符串 = 插件在叫一个本宿主还不认识的名字。 */

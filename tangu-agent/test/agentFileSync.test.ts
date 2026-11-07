@@ -318,6 +318,8 @@ describe('agentFileSync — size cap', () => {
 describe('agentFileSync — deleting an agent from the app (10-28)', () => {
   const live = (cloud: ReturnType<typeof fakeCloud>, slug: string) => [...cloud._rows].filter(([k, r]) => k.startsWith(`${slug}\0`) && !r.deleted).map(([k]) => k.split('\0')[1]);
   const listed = async (slug: string) => (await listAgents()).some((a) => a.slug === slug);
+  // 11-05 Agent 逐个选:云端有、本机没有的 Agent 不再自动建出来;另一台要先自己开这个 Agent 的同步(目录 + 许可)才拉
+  const optIn = (cloud: ReturnType<typeof fakeCloud>, slug: string) => { mkdirSync(join(agentsDir(), slug), { recursive: true }); setAgentSyncPermission(slug, agentSyncScope(cloud, 'u')!, true); };
 
   for (const [name, del] of [['deleteAgent', (s: string) => deleteAgent(s)], ['trashAgent', async (s: string) => (await trashAgent(s)).ok]] as const) {
     it(`${name}: the cloud copy is deleted and the agent is not pulled back`, async () => {
@@ -364,7 +366,8 @@ describe('agentFileSync — deleting an agent from the app (10-28)', () => {
     const homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
     try {
       process.env.TANGU_HOME = homeB;
-      await runAgentFilesSync(cloud, 'u'); // B 从云端发现并拉下来
+      optIn(cloud, 'tester');
+      await runAgentFilesSync(cloud, 'u'); // B 自己开了这个 Agent,拉下来
       expect(await listed('tester')).toBe(true);
       process.env.TANGU_HOME = homeA;
       await deleteAgent('tester');
@@ -411,6 +414,7 @@ describe('agentFileSync — deleting an agent from the app (10-28)', () => {
     const homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
     try {
       process.env.TANGU_HOME = homeB;
+      optIn(cloud, 'tester');
       await runAgentFilesSync(cloud, 'u');
       writeFileSync(join(agentsDir(), 'tester', 'config.toml'), readFileSync(join(agentsDir(), 'tester', 'config.toml'), 'utf8').replace('Tester', 'Tester edited offline'));
       process.env.TANGU_HOME = homeA;
@@ -459,7 +463,8 @@ describe('agentFileSync — deleting an agent from the app (10-28)', () => {
     expect(existsSync(join(tDir('tester'), 'config.toml'))).toBe(true);
   });
 
-  it('an agent restored on the device that received the delete comes back on the other device too', async () => {
+  // 11-05 起:删掉它的那台(A)本机已经没有目录,不会再自动拉回来——要用的话在 A 上重新开它的同步
+  it('an agent restored on the device that received the delete goes back to the cloud, but not onto the device that deleted it', async () => {
     const homeA = home;
     await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
     const cloud = fakeCloud(['tester']);
@@ -467,6 +472,7 @@ describe('agentFileSync — deleting an agent from the app (10-28)', () => {
     const homeB = mkdtempSync(join(tmpdir(), 'tangu-afs-b-'));
     try {
       process.env.TANGU_HOME = homeB;
+      optIn(cloud, 'tester');
       await runAgentFilesSync(cloud, 'u');
       process.env.TANGU_HOME = homeA;
       await deleteAgent('tester'); await runAgentFilesSync(cloud, 'u');
@@ -478,7 +484,8 @@ describe('agentFileSync — deleting an agent from the app (10-28)', () => {
       expect(live(cloud, 'tester')).toContain('config.toml');
       process.env.TANGU_HOME = homeA;
       await runAgentFilesSync(cloud, 'u');
-      expect(await listed('tester')).toBe(true);
+      expect(await listed('tester')).toBe(false);
+      expect(live(cloud, 'tester')).toContain('config.toml'); // A 不拉,也不把云端那份删掉
     } finally { process.env.TANGU_HOME = homeA; rmSync(homeB, { recursive: true, force: true }); }
   });
 

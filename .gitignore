@@ -67,5 +67,7 @@ Thumbs.db
 # live 台架产物(live-harness --out 指到仓内时;里面有 provider-auth.json 凭据软链,绝不进库)
 /tangu-agent/outputs/
 
+# Tangu 界面半身的构建产物(desktop/scripts/build-tangu-ui.mjs;随引擎包发,不入库)
+/tangu-agent/ui/
 # 引擎 npm 热更新包的暂存与产物(tangu-agent/scripts/pack-engine.mjs)
 .engine-pack/

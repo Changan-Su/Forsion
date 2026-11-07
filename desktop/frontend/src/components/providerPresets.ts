@@ -1,9 +1,12 @@
 /**
  * 设置 → 模型 → 提供方「添加连接」的预设:选一家就填好地址与协议,只剩 key。
- * 清单对齐 server 后台模型管理的 PROVIDER_PRESETS(server/microserver/core-models/admin/panel.js),另加 OpenCode Zen。
+ * 清单对齐 server 后台模型管理的 PROVIDER_PRESETS(server/microserver/core-models/admin/panel.js),另加 OpenCode Zen / Go。
  * baseUrl 的 host 要能命中引擎能力表(tangu-agent/src/llm/modelCapabilities.ts)的规则,否则思考参数只走 prefix 兜底;
  * providerPresets.test.ts 钉住这条。拉模型一律 GET {baseUrl}/models(Anthropic 由引擎按协议换头、翻页)。
- * ponytail: OpenCode Go 没收 —— 它要求每段会话带 x-opencode-session 头,DirectProvider 还没有自定义头字段。
+ * OpenCode Go 是 API key 订阅(opencode.ai/console 复制 key),不是浏览器登录,所以在这里、不在订阅登录(OAUTH_PROVIDERS)里。
+ * 它必需的 x-opencode-session / User-Agent 由引擎按 host 自动加(tangu-agent/src/llm/opencodeGo.ts)。
+ * base 取 /inference/go/v1:文档按协议给的 /inference/go/openai/v1 没有 /models(404),而本表约定拉模型一律
+ * GET {baseUrl}/models;/inference/go/v1 下 /models(文档列出的目录端点)与 /chat/completions 都在(11-05 探针)。
  */
 import { registerMessages } from '../i18n'
 import type { DirectProviderConfig } from '../types'
@@ -44,6 +47,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   { id: 'gemini', name: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', protocol: 'openai' },
   { id: 'xai', name: 'xAI', baseUrl: 'https://api.x.ai/v1', protocol: 'openai' },
   { id: 'opencode', name: 'OpenCode Zen', baseUrl: 'https://opencode.ai/zen/v1', protocol: 'openai' },
+  { id: 'opencode-go', name: 'OpenCode Go', baseUrl: 'https://opencode.ai/inference/go/v1', protocol: 'openai' },
 ]
 
 /** 预设 id 已被占用(同名保存会覆盖那条)时顺延成 id-2、id-3…… */

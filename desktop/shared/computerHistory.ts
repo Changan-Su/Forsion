@@ -5,6 +5,9 @@
  * 单独一个文件是为了不让渲染层 import 到 electron/(那边带 node:net / fs)。
  * 平台:macOS(helper.app,unix socket)与 Windows(windows-bridge.exe 常驻服务,命名管道;见 electron/computerHistoryWin.ts),
  * 线协议逐字节相同;其余平台 status 恒 unsupported。
+ * 静态加密:events/*.jsonl 逐行 AES-256-GCM(格式见 electron/computerHistoryCrypto.ts,引擎镜像在
+ * tangu-agent/src/services/computerHistoryCrypto.ts),钥匙在设备凭据 computerHistoryKey 槽(safeStorage),主进程经 stdin
+ * 私有通道交给引擎。state.json 保持明文(引擎门禁靠它,里面没有活动内容)。
  */
 
 /** helper 推来的一条事件,主进程原样落盘(一行一条 JSON)。 */
@@ -53,6 +56,9 @@ export interface ComputerHistoryState {
   /** 数据代次:每次清除、改排除表、关闭都 +1。读者(引擎工具 / Muse 摘要)读完事件后复核,变了就丢弃结果,
    *  堵「清除 / 关闭与在途读取」的竞态。缺省(老文件)按 0。 */
   dataGen: number
+  /** 用户亲手关过(开着时被关掉:设置页开关,或渲染层直写配置;暂停不算),一旦为真就一直为真(跨重启,「清空数据」才重来)。
+   *  首启引导据此决定要不要给老用户预开电脑历史。老 state.json 没有这个字段时,主进程按「有 state.json 且 enabled:false」推断。 */
+  userTurnedOff: boolean
 }
 
 export interface ComputerHistoryExclude {
@@ -89,6 +95,9 @@ export interface ComputerHistoryView {
   /** state.json 没能写成(写失败;要关门的那份连删也失败时附上删除的错误):主进程按退避重写,盘上跟上最新一份即消失。
    *  这期间引擎读到的记录状态可能是旧的 —— 关闭时靠第二道闸(桌面配置,见 COMPUTER_HISTORY_DESKTOP_CONFIG_*)兜底。 */
   stateError?: string
+  /** 开着却拿不到加密钥匙(系统钥匙串 / DPAPI 这次用不了、设备凭据读不出、新钥匙存不住):为了不写明文,这期间不记录
+   *  (status 落 disconnected)。值是原因码(key-store-failed / os-crypto-unavailable 之类),设置页原样带出。 */
+  keyError?: string
 }
 
 /**

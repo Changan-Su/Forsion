@@ -174,7 +174,24 @@ function sessionEvents(base) {
 
 // ── 磁盘读数 ──────────────────────────────────────────────────────────────────────────────────
 const readJson = (f) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')) } catch { return null } }
-const readLines = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l) } catch { return { __bad: l } } }) } catch { return null } }
+// 日文件逐行加密(electron/computerHistoryCrypto.ts):台架经 TANGU_CH_TEST_KEY 给 dev 主进程一把固定钥匙(打包版无视),
+// 这里用同一把解开再断言。格式:`ch1.<kid>.<base64(iv12 ‖ 密文 ‖ tag16)>`,AES-256-GCM,AAD 固定。
+const CH_TEST_KEY = 'e2'.repeat(32)
+const decryptChLine = (l) => {
+  if (l.startsWith('{')) return l
+  const m = /^ch1\.[0-9a-f]{8}\.([A-Za-z0-9+/]+={0,2})$/.exec(l)
+  if (!m) return null
+  try {
+    const buf = Buffer.from(m[1], 'base64')
+    const d = require('node:crypto').createDecipheriv('aes-256-gcm', Buffer.from(CH_TEST_KEY, 'hex'), buf.subarray(0, 12))
+    d.setAAD(Buffer.from('forsion-computer-history/1'))
+    d.setAuthTag(buf.subarray(buf.length - 16))
+    return Buffer.concat([d.update(buf.subarray(12, buf.length - 16)), d.final()]).toString('utf8')
+  } catch { return null }
+}
+/** 解密后的日文件全文(断言「没落盘」看这个;盘上原始字节另有 T13c 断言全是密文)。 */
+const readPlain = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => decryptChLine(l) ?? l).join('\n') } catch { return '' } }
+const readLines = (f) => { try { return fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(decryptChLine(l) ?? '') } catch { return { __bad: l } } }) } catch { return null } }
 const jsonlFiles = (dir) => { try { return fs.readdirSync(dir).filter((f) => f.endsWith('.jsonl')) } catch { return [] } }
 async function until(fn, timeout = 8_000, step = 150) {
   const end = Date.now() + timeout
@@ -305,7 +322,7 @@ async function shots(sp, tag, parts = ['top', 'preview', 'bottom']) {
 
 // ── 主流程 ────────────────────────────────────────────────────────────────────────────────────
 async function launchApp(home, sock, stubUrl, extraEnv = {}) {
-  const env = { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl, ...extraEnv }
+  const env = { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stubUrl, TANGU_CH_TEST_KEY: CH_TEST_KEY, ...extraEnv }
   if (sock) env.PI_CU_SOCKET_PATH = sock
   else delete env.PI_CU_SOCKET_PATH
   // -ApplePersistenceIgnoreState YES 由 lib/launch-electron.cjs 统一追加(跳过 macOS 崩溃后的「重新打开窗口」模态)。
@@ -452,9 +469,13 @@ async function mainPhase(stub) {
         && ls1.some((l) => l.kind === 'text' && l.app?.bundleId === 'com.microsoft.VSCode'),
       { file: dayFile, n: ls1.length, kinds: [...kinds] })
     check('T12 终端的 app 事件照记(带标题)', ls1.some((l) => l.kind === 'app' && l.app?.name === 'Terminal' && l.title === 'zsh — 80×24'))
-    const rawDay = fs.existsSync(dayFile) ? fs.readFileSync(dayFile, 'utf8') : ''
+    const rawDay = readPlain(dayFile)
     check('T13 终端(默认只记标题)里敲的字没落盘(helper 没过滤,主进程防御纵深挡住)', !!rawDay && !rawDay.includes('E2E_TERMINAL_SECRET'),
       rawDay.split('\n').filter((l) => l.includes('Terminal')).join(' ‖ '))
+    const diskBytes = fs.existsSync(dayFile) ? fs.readFileSync(dayFile, 'utf8') : ''
+    check('T13c 日文件是密文:每行都是 ch1.…,盘上字节里没有标题 / 输入的原文', !!diskBytes
+      && diskBytes.split('\n').filter(Boolean).every((l) => l.startsWith('ch1.')) && !diskBytes.includes('E2E_VSCODE_TEXT') && !diskBytes.includes('example.com'),
+      diskBytes.slice(0, 200))
     let mode = ''
     try { mode = (fs.statSync(dayFile).mode & 0o777).toString(8) } catch { /* 无文件 */ }
     check('T13b 日文件权限 600、目录 700', mode === '600' && (fs.statSync(chRoot).mode & 0o777).toString(8) === '700', { file: mode })
@@ -532,7 +553,7 @@ async function mainPhase(stub) {
     const healthDay = path.join(eventsDir, `${localDay(nowH - 6_000)}.jsonl`)
     const hLine = await until(() => (readLines(healthDay) || []).find((l) => l.app?.bundleId === 'com.apple.Health'), 5_000)
     await sleep(1_300) // 等可能跟在后面的文本那条也落盘(FLUSH_MS=1s)
-    const rawH = fs.existsSync(healthDay) ? fs.readFileSync(healthDay, 'utf8') : ''
+    const rawH = readPlain(healthDay)
     check('T18 被排除 App:只留 {app:{excluded:true}} 切换事实,标题与输入都不落盘', !!hLine && hLine.app.excluded === true && !hLine.title && !rawH.includes('E2E_HEALTH'),
       { line: hLine, leaked: rawH.includes('E2E_HEALTH') })
 
@@ -696,7 +717,8 @@ async function missingPhase(stub) {
   }
   let app, mainLog = [], life = []
   try {
-    ;({ app, mainLog, life } = await launchApp(home, null, stub.url, { HOME: home, PI_COMPUTER_USE_HELPER_APP_PATH: fakeApp }))
+    // 这一段不给 TANGU_CH_TEST_KEY:走真的设备凭据 + safeStorage(Playwright 的 Electron 在 macOS 上用 MockKeychain,不碰真钥匙串)
+    ;({ app, mainLog, life } = await launchApp(home, null, stub.url, { HOME: home, PI_COMPUTER_USE_HELPER_APP_PATH: fakeApp, TANGU_CH_TEST_KEY: '' }))
     const win = await app.firstWindow()
     await win.waitForSelector('#root', { timeout: 40_000 })
     await skipOnboarding(win)
@@ -710,6 +732,12 @@ async function missingPhase(stub) {
     const missing = await waitStatus(sp, 'helper_missing', 12_000)
     const st = readJson(path.join(home, 'computer-history', 'state.json'))
     check('M1 没装 helper(非外部 socket)→ 状态 helper_missing(UI + state.json)', missing && st?.status === 'helper_missing', { ui: await chStatus(sp), state: st })
+    // 走到 helper_missing 说明钥匙已经拿到(没钥匙不连 helper,会停在 disconnected + keyError):钥匙存进了设备凭据,系统加密、不是明文
+    // dev 态 main.ts 给 userData 再挂一个 -dev(打包版没有)
+    const secrets = readJson(path.join(home, 'userdata-dev', 'device-secrets.json')) || readJson(path.join(home, 'userdata', 'device-secrets.json'))
+    const chKey = secrets?.entries?.computerHistoryKey
+    check('M4 开启时铸的数据钥匙存进 device-secrets.json 的 computerHistoryKey 槽,enc=os(safeStorage),盘上没有 64 位 hex 原文',
+      !!chKey && chKey.enc === 'os' && !/[0-9a-f]{64}/.test(JSON.stringify(secrets)), { enc: chKey?.enc, backend: chKey?.backend })
     const card = await sp.locator('.ch-page .ch-permission').first().waitFor({ timeout: 6_000 }).then(() => true, () => false)
     check('M2 helper_missing 时页内挂出辅助功能权限卡', card)
     check('M3 没有在临时 HOME 下凭空拉起 helper(socket 不存在)', !fs.existsSync(sockUnderHome))

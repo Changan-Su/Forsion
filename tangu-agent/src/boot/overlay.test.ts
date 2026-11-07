@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSyn
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ENGINE_ENTRIES, ENGINE_PACKAGE, SCHEMA_FILES, canonicalFiles, checkOverlay, cmpVersion, markBad, readBad, selectOverlay, verifyEngineSignature } from './overlay.js';
+import { ENGINE_ENTRIES, ENGINE_PACKAGE, SCHEMA_FILES, UI_FILES, canonicalFiles, checkOverlay, cmpVersion, markBad, readBad, selectOverlay, verifyEngineSignature, verifySignedBytes } from './overlay.js';
 import { ENGINE_SIGNING_KEY } from './signingKey.js';
 
 const { publicKey, privateKey } = generateKeyPairSync('ed25519');
@@ -23,13 +23,15 @@ const runtimeFiles = (): Record<string, string> => ({
   ...Object.fromEntries(Object.values(ENGINE_ENTRIES).map((rel) => [rel, `// ${rel}\n`])),
   ...Object.fromEntries(SCHEMA_FILES.map((rel) => [rel, `// schema ${rel}\n`])),
 });
+/** 热更新包的界面半身;安装包自带的那份没有 manifest.json(bundled 不带它)。 */
+const uiFiles = (): Record<string, string> => ({ [UI_FILES.main]: '"use strict";\n', [UI_FILES.manifest]: JSON.stringify({ id: 'tangu', main: UI_FILES.main, forDesktop: '2.0.0' }) });
 const pkgJson = (version: string, extra: Record<string, unknown> = {}): string =>
   JSON.stringify({ name: ENGINE_PACKAGE, version, dependencies: DEPS, forsion: { minDesktop: '2.0.0' }, ...extra });
 
 /** 在 engineRoot/<dirName> 放一份新版并签名;mutate 在签名之前改文件表。 */
 function overlay(version: string, opts: { files?: Record<string, string>; key?: typeof privateKey; dirName?: string } = {}): string {
   const dir = path.join(engineRoot, opts.dirName ?? version);
-  const files = { 'package.json': pkgJson(version), ...runtimeFiles(), ...opts.files };
+  const files = { 'package.json': pkgJson(version), ...runtimeFiles(), ...uiFiles(), ...opts.files };
   write(dir, files);
   const hashes = Object.fromEntries(Object.entries(files).map(([rel, data]) => [rel, createHash('sha256').update(data).digest('hex')]));
   const sig = sign(null, Buffer.from(canonicalFiles(hashes), 'utf8'), opts.key ?? privateKey).toString('base64');
@@ -148,12 +150,36 @@ describe('verifyEngineSignature', () => {
     expect(verifyEngineSignature(dir, pub)).toMatch(/package\.json is not covered/);
   });
 
+  it('没带界面半身的包(只热更引擎)照收;带了却没签进去的界面文件不收', () => {
+    const dir = path.join(engineRoot, 'engine-only');
+    const files: Record<string, string> = { 'package.json': pkgJson('2.1.1'), ...runtimeFiles() };
+    write(dir, files);
+    const hashes = Object.fromEntries(Object.entries(files).map(([r, data]) => [r, createHash('sha256').update(data).digest('hex')]));
+    write(dir, { SIGNATURE: JSON.stringify({ alg: 'ed25519', files: hashes, sig: sign(null, Buffer.from(canonicalFiles(hashes)), privateKey).toString('base64') }) });
+    expect(verifyEngineSignature(dir, pub)).toBeNull();
+    write(dir, { [UI_FILES.main]: 'evil' });
+    expect(verifyEngineSignature(dir, pub)).toBe(`${UI_FILES.main} is not covered by SIGNATURE`);
+  });
+
   it('没有 SIGNATURE 或格式不对不过', () => {
     const dir = overlay('2.1.1');
     writeFileSync(path.join(dir, 'SIGNATURE'), '{"alg":"rsa"}');
     expect(verifyEngineSignature(dir, pub)).toMatch(/malformed/);
     rmSync(path.join(dir, 'SIGNATURE'));
     expect(verifyEngineSignature(dir, pub)).toMatch(/no readable SIGNATURE/);
+  });
+});
+
+describe('verifySignedBytes', () => {
+  it('收下签名表里哈希对得上的字节;字节被换、SIGNATURE 连同字节一起被换(别的钥匙)、或不在签名表里都不收', () => {
+    const dir = overlay('2.1.1', { files: { 'ui/main.js': 'UI' } });
+    const sig = readFileSync(path.join(dir, 'SIGNATURE'), 'utf8');
+    expect(verifySignedBytes(sig, { 'ui/main.js': Buffer.from('UI') }, pub)).toBeNull();
+    expect(verifySignedBytes(sig, { 'ui/main.js': Buffer.from('EVIL') }, pub)).toMatch(/does not match its signed hash/);
+    expect(verifySignedBytes(sig, { 'ui/other.js': Buffer.from('UI') }, pub)).toMatch(/not covered/);
+    const forged = overlay('2.1.2', { files: { 'ui/main.js': 'EVIL' }, key: generateKeyPairSync('ed25519').privateKey });
+    expect(verifySignedBytes(readFileSync(path.join(forged, 'SIGNATURE'), 'utf8'), { 'ui/main.js': Buffer.from('EVIL') }, pub)).toMatch(/pinned public key/);
+    expect(verifySignedBytes('not json', {}, pub)).toMatch(/no readable SIGNATURE/);
   });
 });
 

@@ -284,7 +284,9 @@ export interface AgentFilePutBody {
 /** paths = 服务端回带的、它认识的可选路径族('human' = agent 文件夹里的 HUMAN.md;'human-folder' = 人的文件夹 __human__ 整个槽位;'widget-data' = 小组件的记录 WidgetData/<id>/data.db)。老服务端不回带 → 那一族本次不同步(推上去只会 400)。
  *  反方向同理:客户端请求清单时声明自己认识哪些族,服务端只对声明了的客户端列出那些文件(老客户端见到不认识的路径会判整次同步失败)。 */
 /** legacy:这个账号还有谁在用人的资料的旧位置(目前只有 'user-md' = 云端 USER.md);服务端没说 = 不知道。legacySeenAt:最后一次见到旧客户端(毫秒)。 */
-export type AgentManifest = Array<{ slug: string; files: AgentFileMeta[] }> & { paths?: string[]; legacy?: string[]; legacySeenAt?: number | null };
+/** agentArchive:这个账号云端的 Agent 数据进了存档(老账号 B,2026-11-06);有它就不再碰任何 Agent,只同步 human/。
+ *  只有声明了 agent-archive 的客户端拿得到;没声明的旧客户端在已存档账号上整轮收到 410。 */
+export type AgentManifest = Array<{ slug: string; files: AgentFileMeta[] }> & { paths?: string[]; legacy?: string[]; legacySeenAt?: number | null; agentArchive?: { state: string; at: number | null } };
 export interface AgentFilesBrain {
   getManifest(userId: string, opts?: { signal?: AbortSignal }): Promise<AgentManifest>;
   getFile(userId: string, slug: string, relPath: string, opts?: { signal?: AbortSignal }): Promise<AgentFileContent | null>;
@@ -320,7 +322,21 @@ export interface ImageGenRequest {
    *  'xhigh'/'max' 仅 gpt-image-2.5+ 有,档位直接换算成 output_tokens(实测 low 425 → xhigh 1650)。
    *  ⚠️不传就不发这个字段 —— 让上游用自己的缺省,别在这里替用户选贵档。 */
   quality?: string;
+  outputFormat?: 'png' | 'gif';
+  frameCount?: number;
+  frameDurationMs?: number;
+  complexity?: 'low' | 'medium' | 'high';
   signal?: AbortSignal;
+}
+
+/** Fields shared by the hosted JSON, direct JSON and direct multipart image requests. */
+export function imageOutputFields(req: ImageGenRequest) {
+  return {
+    ...(req.outputFormat ? { output_format: req.outputFormat } : {}),
+    ...(req.outputFormat === 'gif' && req.frameCount !== undefined ? { frame_count: req.frameCount } : {}),
+    ...(req.outputFormat === 'gif' && req.frameDurationMs !== undefined ? { frame_duration_ms: req.frameDurationMs } : {}),
+    ...(req.complexity ? { complexity: req.complexity } : {}),
+  };
 }
 export interface ImageGenResult {
   /** `mime` must describe the bytes: Seedream answers JPEG even when everything else is PNG, and edit_image
