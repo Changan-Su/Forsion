@@ -612,6 +612,7 @@ async function main() {
     const away = await floatGeo()
     check('⑥ 切到别的 Space:传输卡跟着藏起来(没关,还在传)', away.cards === 1 && !away.shown, JSON.stringify(away))
     await openCloud(win)
+    await win.keyboard.press('Escape') // openCloud 可能展开了 Ribbon 的「+N」浮层,收掉免得留在后面的截图里
     await win.waitForTimeout(600)
     const backGeo = await floatGeo()
     check('⑥ 切回蓬洲云:传输卡原样出现、云盘还在「我的文件」', backGeo.shown && backGeo.anchor === 'bottom-end' && await win.locator('.pz input[type=file][multiple]:not(.pz-root-upload)').count() > 0, JSON.stringify(backGeo))
