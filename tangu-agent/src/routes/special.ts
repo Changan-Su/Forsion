@@ -248,12 +248,14 @@ router.patch('/agent/special/muse/todos/:id', authMiddleware, async (req: AuthRe
     // 不带 from = 照旧无条件改(MuseView)。
     const from = req.body?.from == null ? '' : String(req.body.from);
     if (from && !TODO_STATUSES.includes(from)) return res.status(400).json({ detail: 'invalid from' });
+    // 遥测只数真的换了状态的(不带 from 的整量改写,done → done 也回一行)
+    const prevStatus = from || (await query<any[]>(`SELECT status FROM muse_todos WHERE id = ? AND user_id = ?`, [req.params.id, userId]).catch(() => []))?.[0]?.status;
     const rows = await query<any[]>(
       `UPDATE muse_todos SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?${from ? ' AND status = ?' : ''} RETURNING title`,
       from ? [status, req.params.id, userId, from] : [status, req.params.id, userId],
     );
     if (from && !rows?.length) return res.status(409).json({ error: 'todo_not_pending', detail: `todo is not ${from}` });
-    if (rows?.length && status !== 'pending') ledger.inc('daily_muse', status === 'injected' ? 'todoInjected' : status === 'done' ? 'todoDone' : 'todoDismissed');
+    if (rows?.length && status !== 'pending' && prevStatus && prevStatus !== status) ledger.inc('daily_muse', status === 'injected' ? 'todoInjected' : status === 'done' ? 'todoDone' : 'todoDismissed');
     if (from === 'pending' && (status === 'injected' || status === 'dismissed')) {
       // 卡片落点(新会话 / 在此 / 忽略)走这里、不走批准路由:此前某次批准若停在「条目已落、状态未改」,那条孤儿条目
       // 这时就该撤掉 —— 否则状态一变 injected,到期闸会放它跑,Muse 与会话各做一遍(Codex 09-11 P1)。

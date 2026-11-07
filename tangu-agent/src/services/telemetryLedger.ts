@@ -77,8 +77,10 @@ export const AGENT_ROLES = ['xyra', 'aria', 'recita', 'coding', 'muse', 'histori
 
 export type LedgerEvent = keyof typeof LEDGER_FIELDS;
 export type LedgerField<E extends LedgerEvent> = (typeof LEDGER_FIELDS)[E][number];
-/** g 开头 = 快照(只能 set);其余是计数(inc)。 */
-export type LedgerCounter<E extends LedgerEvent> = Exclude<LedgerField<E>, `g${string}`>;
+type UpperLetter = 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'I' | 'J' | 'K' | 'L' | 'M' | 'N' | 'O' | 'P' | 'Q' | 'R' | 'S' | 'T' | 'U' | 'V' | 'W' | 'X' | 'Y' | 'Z';
+/** g + 大写字母开头 = 快照(只能 set,比如 gEntries);其余是计数(inc)—— gone 是计数。 */
+export type LedgerCounter<E extends LedgerEvent> = Exclude<LedgerField<E>, `g${UpperLetter}${string}`>;
+export const isGaugeField = (field: string): boolean => /^g[A-Z]/.test(field);
 export type CardKind = (typeof CARD_KINDS)[number];
 export type AgentRole = (typeof AGENT_ROLES)[number];
 type DimOf<E extends LedgerEvent> = E extends 'daily_muse_card' ? CardKind : E extends 'daily_memory' ? AgentRole : never;

@@ -1,7 +1,9 @@
 /**
  * 遥测账本的每日快照与裁剪(契约 §7「快照(g*)」):引擎启动后约一分钟跑第一遍,之后每小时一遍。
  * - 给「今天」写一遍 g* 快照(set 幂等,每小时刷新一次 = 一天里最后一次的值留下;Extend 只读今天以前的日子)。
- * - 给「昨天」算 dmReadIn24h / dmRepliedIn24h(昨天发出的主动消息里,24 小时内被读到 / 被回复的条数)。
+ * - dmReadIn24h / dmRepliedIn24h:**前天**发出的主动消息里,24 小时内被读到 / 被回复的条数,记在**今天**这一格。
+ *   为什么不记在发出的那天:Extend 只读今天以前的日子、读过就不回头;昨天深夜发的消息,它的 24 小时窗口要到今天深夜才关,
+ *   写回昨天那一格会被 Extend 先读走半截。前天的窗口到今天零点已经全部关上,值不会再变。
  * - 删掉 35 天以前的日子。
  * 由引擎自己数,Extend 不碰这些文件和表。每一段单独 try:一段失败不连累别的段。持库的本机进程专用(hostExec)。
  */
@@ -52,12 +54,12 @@ export async function snapshotMuseCards(now = Date.now()): Promise<void> {
 }
 
 /**
- * 昨天(UTC)Muse 发出的主动消息里,24 小时内读到 / 回复的条数。回复 = 同一会话里之后 24 小时内有用户消息;
+ * 前天(UTC)Muse 发出的主动消息里,24 小时内读到 / 回复的条数,记在今天这一格(见文件头注)。回复 = 同一会话里之后 24 小时内有用户消息;
  * 读到 = 会话的 last_read_at 落在发出后 24 小时内,或者回复了。⚠️ 近似:last_read_at 只留最后一次读的时刻,
- * 24 小时内读过、之后又读过的会被记成没读;昨天深夜发出的,写快照时 24 小时可能还没走完。
+ * 24 小时内读过、之后又读过(超过 24 小时)的会被记成没读。
  */
 export async function snapshotMuseDmReads(now = Date.now()): Promise<void> {
-  const dayStart = Date.parse(`${utcDay(now - DAY)}T00:00:00.000Z`);
+  const dayStart = Date.parse(`${utcDay(now - 2 * DAY)}T00:00:00.000Z`);
   const replied = `EXISTS (SELECT 1 FROM chat_messages u WHERE u.session_id = m.session_id AND u.role = 'user' AND u.timestamp > m.timestamp AND u.timestamp <= m.timestamp + ${DAY})`;
   const rows = await query<any[]>(
     `SELECT
@@ -67,9 +69,8 @@ export async function snapshotMuseDmReads(now = Date.now()): Promise<void> {
      WHERE m.agent_slug = ? AND m.origin LIKE 'proactive%' AND m.timestamp >= ? AND m.timestamp < ?`,
     [MUSE_AGENT_SLUG, dayStart, dayStart + DAY],
   );
-  const at = dayStart + DAY / 2; // 记在昨天那一格
-  ledger.set('daily_muse', 'dmReadIn24h', Math.max(0, Number(rows?.[0]?.seen) || 0), { now: at });
-  ledger.set('daily_muse', 'dmRepliedIn24h', Math.max(0, Number(rows?.[0]?.replied) || 0), { now: at });
+  ledger.set('daily_muse', 'dmReadIn24h', Math.max(0, Number(rows?.[0]?.seen) || 0), { now });
+  ledger.set('daily_muse', 'dmRepliedIn24h', Math.max(0, Number(rows?.[0]?.replied) || 0), { now });
 }
 
 /** 一轮:各段单独兜错。 */

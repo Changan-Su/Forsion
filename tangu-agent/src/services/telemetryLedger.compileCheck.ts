@@ -8,6 +8,7 @@ export function ledgerCompileCheck(): void {
   ledger.inc('daily_muse', 'cyclesDone');
   ledger.inc('daily_memory', 'addPerson', { dim: 'custom' });
   ledger.set('daily_muse', 'gEnabled', 1);
+  ledger.inc('daily_muse_card', 'gone', { dim: 'rule-observed' }); // gone 是计数,不是快照
   // @ts-expect-error 拼错的字段名
   ledger.inc('daily_muse', 'cyclesDonee');
   // @ts-expect-error 拼错的事件名

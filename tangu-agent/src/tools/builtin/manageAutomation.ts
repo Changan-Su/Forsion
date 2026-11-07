@@ -245,7 +245,8 @@ export const manageAutomationProvider: ToolProvider = {
         }
         const id = String(args.id || '').trim() || undefined;
         // auto 档 Muse 自己新建的、会动东西的规则一律先观察,传 observe:false 也一样:没有用户看过的规则,不放权。
-        if (ctx.muse && !id && canObserve(v.value.cond) && rewritesThings(v.value) && !v.value.observe) { v.value.observe = true; ledger.inc('daily_muse', 'ruleObserveForced'); }
+        const forcedObserve = !!ctx.muse && !id && canObserve(v.value.cond) && rewritesThings(v.value) && !v.value.observe;
+        if (ctx.muse && !id && canObserve(v.value.cond) && rewritesThings(v.value)) v.value.observe = true;
         // 插件种子规则(plugin:<插件id>:<key>)归插件的 ensure 管:聊天 agent 不能改也不能借它的 id 凭空建(伪插件规则绕 50 条帽)。
         if (id && isPluginTriggerId(id)) return `Error: rule ${id} is managed by a plugin and cannot be changed with this tool.`;
         // 监听列必须是落盘列:公式/引用/投影列的值不落盘,游标恒空 → 规则一次都不触发、零日志、面板正常。
@@ -265,6 +266,7 @@ export const manageAutomationProvider: ToolProvider = {
         const r = await upsertTrigger(v.value, id, { actor: 'user', ...(ctx.muse ? { observeBy: 'muse' as const } : {}) });
         if (!r.ok) return `Error: ${r.error}`;
         if (r.created) ledger.inc('daily_muse', ctx.muse ? 'ruleCreatedMuse' : 'ruleCreatedUser');
+        if (r.created && forcedObserve) ledger.inc('daily_muse', 'ruleObserveForced');
         const c = v.value.cond;
         const note = c.type === 'manual'
           ? ' (never fires on its own; the user runs it by clicking a button block that points at this rule in a note)'

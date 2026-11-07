@@ -9,7 +9,7 @@ import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { executeCustomTool } from './customTools.js';
 import { mcpResultForModel } from '../mcp/toolBridge.js';
-import { registerToolProvider, resolveTools, isDeferredIn, isMcpDeferred, visibleMcpTools, mcpCatalogHint, isSubAgentDenied, canonicalToolName, bindClientActionToTool, computerUseHiddenNames, computerUseUnavailableReason, type ToolDef } from './toolRegistry.js';
+import { registerToolProvider, listToolProviders, resolveTools, isDeferredIn, isMcpDeferred, visibleMcpTools, mcpCatalogHint, isSubAgentDenied, canonicalToolName, bindClientActionToTool, computerUseHiddenNames, computerUseUnavailableReason, type ToolDef } from './toolRegistry.js';
 import { presetOf } from '../core/presetTable.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
 import { datetimeProvider, calculatorProvider } from './builtin/coreUtils.js';
@@ -405,8 +405,13 @@ export function toolSourceOf(name: string, ctx: ToolContext): 'builtin' | 'mcp' 
   if (name.startsWith('mcp__') || ctx.mcpTools?.has(name)) return 'mcp';
   const canonical = canonicalToolName(name);
   const origins = new Map<string, 'plugin' | 'core'>();
-  if (resolveTools(currentProfile(ctx), ctx, origins).has(canonical)) return origins.get(canonical) === 'plugin' ? 'plugin' : 'builtin';
-  return 'plugin';
+  if (!resolveTools(currentProfile(ctx), ctx, origins).has(canonical) || origins.get(canonical) === 'plugin') return 'plugin';
+  // builtin 只认全局注册的核心 provider(引擎自己的代码);profile 注入的 app 工具等一律当 plugin
+  const core = listToolProviders().some((p) => {
+    if (p.origin === 'plugin') return false;
+    try { const list = p.tools(); return Array.isArray(list) && list.some((t) => t?.name === canonical); } catch { return false; }
+  });
+  return core ? 'builtin' : 'plugin';
 }
 
 /** 执行一个工具调用。先查（按模式/profile 过滤的）内置，再查本 run 的自定义工具；未知工具返回 isError。 */

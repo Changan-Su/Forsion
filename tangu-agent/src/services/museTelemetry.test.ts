@@ -61,6 +61,21 @@ describe('daily_muse_card', () => {
     expect(cell('daily_muse_card', 'decidedRemote', 'plugin')).toBeUndefined();
   });
 
+  it('installed 只收本机的回写:远端 403,卡不动', async () => {
+    card('c5', 'plugin');
+    expect(await decideMuseCard('u', 'c5', 'installed', { remote: true })).toMatchObject({ ok: false, status: 403 });
+    expect((db.prepare(`SELECT status FROM muse_cards WHERE id = 'c5'`).get() as any).status).toBe('pending');
+  });
+
+  it('规则已经对不上的观察结果卡:收掉记 gone(gone 是计数,不是快照)', async () => {
+    card('c6', 'rule-observed');
+    const r = await decideMuseCard('u', 'c6', 'enable');
+    expect(r).toMatchObject({ ok: true, card: { status: 'dismissed', result: 'gone' } });
+    await settle();
+    expect(cell('daily_muse_card', 'gone', 'rule-observed')).toBe(1);
+    expect(cell('daily_muse_card', 'enable', 'rule-observed')).toBeUndefined();
+  });
+
   it('installed 只给插件卡;认不得的动作 400、不进账本', async () => {
     card('c2', 'feature');
     const bad = await decideMuseCard('u', 'c2', 'installed');
@@ -130,8 +145,8 @@ describe('每日快照', () => {
     expect(cell('daily_muse_card', 'gPendingOver3d', 'intro')).toBeUndefined();
   });
 
-  it('昨天的主动消息:24 小时内回复 / 读到的条数记在昨天那一格', async () => {
-    const now = Date.UTC(2026, 10, 7, 9);
+  it('前天的主动消息:24 小时内回复 / 读到的条数记在今天那一格(窗口已全部关上)', async () => {
+    const now = Date.UTC(2026, 10, 8, 9);
     const y = Date.UTC(2026, 10, 6, 10);
     db.prepare(`INSERT INTO chat_sessions (id, user_id, app_id, title, kind, last_read_at) VALUES ('s', 'u', 'tangu', 'Muse', 'user', ?)`).run(y + 2 * 3600_000);
     const msg = db.prepare(`INSERT INTO chat_messages (id, session_id, role, content, timestamp, agent_slug, origin) VALUES (?, 's', ?, 'x', ?, ?, ?)`);
@@ -142,8 +157,9 @@ describe('每日快照', () => {
     msg.run('m4', 'model', y - DAY, 'muse', 'proactive'); // 前天的:不算
     await snapshotMuseDmReads(now);
     await settle();
-    expect(cell('daily_muse', 'dmRepliedIn24h', '', '2026-11-06')).toBe(2);
-    expect(cell('daily_muse', 'dmReadIn24h', '', '2026-11-06')).toBe(2);
+    expect(cell('daily_muse', 'dmRepliedIn24h', '', '2026-11-08')).toBe(2);
+    expect(cell('daily_muse', 'dmReadIn24h', '', '2026-11-08')).toBe(2);
+    expect(cell('daily_muse', 'dmReadIn24h', '', '2026-11-06')).toBeUndefined();
   });
 
   it('Muse 设置档位一热编码;没开过的磨合期 = 0', async () => {

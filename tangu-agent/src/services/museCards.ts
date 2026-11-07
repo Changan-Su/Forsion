@@ -20,7 +20,7 @@ import { loadSpecialAgentsConfig, updateMuseConfig, type MuseConfig } from './sp
 import { MUSE_ONBOARDING_MS, ensureMuseOnboarding, patchMuseOnboarding } from './museState.js';
 import { normalizeMemoryFact } from './memoryRepository.js';
 import { AUTO_READ_CATEGORIES, NEEDS_USER, inboxCategory, unclaimedAttachment, type InboxCategory } from './inboxCategory.js';
-import { ledger, isCardKind, isLedgerField } from './telemetryLedger.js';
+import { ledger, isCardKind, isGaugeField, isLedgerField } from './telemetryLedger.js';
 import { noteMuseIntroAnswered, noteMuseProduced } from './museTelemetry.js';
 
 export type { MuseCardInfo, MuseCardKind };
@@ -401,7 +401,7 @@ function noteCardDecision(card: MuseCardInfo, action: string, opts: DecideOpts):
   if (!isCardKind(card.kind)) return;
   const dim = card.kind;
   const field = card.result === 'gone' ? 'gone' : action;
-  if (isLedgerField('daily_muse_card', field) && field !== 'created' && !field.startsWith('g') && field !== 'decideSecTotal' && field !== 'decidedRemote') {
+  if (isLedgerField('daily_muse_card', field) && field !== 'created' && !isGaugeField(field) && field !== 'decideSecTotal' && field !== 'decidedRemote') {
     ledger.inc('daily_muse_card', field as 'accept', { dim });
   }
   if (card.status !== 'pending' && card.decided_at && card.created_at) {
@@ -448,7 +448,8 @@ async function decideCard(userId: string, id: string, action: string, opts: Deci
         if (!(await settle(userId, id, 'done', 'opened'))) return gone;
         await appendMuseFeedback(userId, `[feedback] recommendation ${card.key} opened by user`);
       } else if (action === 'installed' && card.kind === 'plugin') {
-        // 宿主在商店装成之后回写(不是用户点的按钮):卡收成 done / installed,能算「推荐 → 真装上」。
+        // 宿主在商店装成之后回写(不是用户点的按钮):卡收成 done / installed,能算「推荐 → 真装上」。装插件只在这台电脑上发生,远端不收这个动作。
+        if (opts.remote) return { ok: false, status: 403, error: 'local_only', detail: 'installed is reported by this computer after the store install' };
         if (!(await settle(userId, id, 'done', 'installed'))) return gone;
         await appendMuseFeedback(userId, `[feedback] recommendation ${card.key} installed by user`);
       } else return bad;
