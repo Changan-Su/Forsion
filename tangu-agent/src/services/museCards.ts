@@ -506,6 +506,8 @@ async function decideCard(userId: string, id: string, action: string, opts: Deci
       } else if (action === 'dismiss') {
         if (!(await settle(userId, id, 'dismissed', 'dismissed'))) return gone;
         await rememberForMuse(userId, 'The user does not want to connect a chat channel for reminders. Do not suggest it again.');
+        const why = museDismissReason(opts.reason);
+        if (why) await appendMuseFeedback(userId, `[feedback] chat channel suggestion dismissed by user${reasonSuffix(why)}`);
       } else return bad;
       break;
     }

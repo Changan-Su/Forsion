@@ -103,7 +103,9 @@ describe('daily_muse_card', () => {
     card('r1', 'feature');
     card('r2', 'plugin');
     card('r3', 'settings');
+    card('r4', 'channel');
     expect((await decideMuseCard('u', 'r1', 'dismiss', { reason: 'timing' })).ok).toBe(true);
+    expect((await decideMuseCard('u', 'r4', 'dismiss', { reason: 'timing' })).ok).toBe(true);
     expect((await decideMuseCard('u', 'r2', 'dismiss', { reason: 'frequent', remote: true })).ok).toBe(true);
     expect((await decideMuseCard('u', 'r3', 'dismiss', { reason: 'known' })).ok).toBe(true);
     await settle();
@@ -111,6 +113,8 @@ describe('daily_muse_card', () => {
     expect(cell('daily_muse_card', 'dismissTiming', 'feature')).toBe(1);
     expect(cell('daily_muse_card', 'dismissFrequent', 'plugin')).toBe(1);
     expect(cell('daily_muse_card', 'dismissKnown', 'settings')).toBe(1);
+    expect(cell('daily_muse_card', 'dismissTiming', 'channel')).toBe(1);
+    expect(logLines).toContain('[feedback] chat channel suggestion dismissed by user (reason: bad timing)');
     expect(cell('daily_muse_card', 'dismissIrrelevant', 'feature')).toBeUndefined();
     expect(logLines).toContain('[feedback] recommendation feature:x dismissed by user: bad timing');
     expect(logLines).toContain('[feedback] recommendation plugin:x dismissed by user: too many suggestions like this');

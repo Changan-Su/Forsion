@@ -179,6 +179,8 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
   const cloud = !!snapshot?.cloud
   const tagCtx = deviceTagsOf(snapshot)
   const writeDisabled = busy || Boolean(dream?.status.running) || !snapshot || dirty || Boolean(editing)
+  // 理由行开着时,原文草稿改动了 / Dream 开跑了:收起理由行(遗忘成功会用新快照冲掉草稿;原来的遗忘按钮这时本就是禁用的)
+  useEffect(() => { if (dirty || dream?.status.running) setForgetting(null) }, [dirty, dream?.status.running])
   // organized = Agent 详情「成长 › 记忆」:条目是主角,整理 / 原文 / 版本记录收成底部三个折叠块(09-19 前是四个二级标签 —— 窄栏里两排药丸叠在一起,正文被挤到半屏以下)。
   // 另一种(设置里的 Agent 大脑弹窗)保持原样:那边有自己的仪器(agent-memory.check)按现有 DOM 取元素。
   const dreamBody = dream && <>
