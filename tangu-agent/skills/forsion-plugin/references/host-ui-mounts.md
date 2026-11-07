@@ -316,6 +316,24 @@ else isle.row.append(colorDots)                               // the row under t
 - Clicks don't steal focus from your view; keyboard focus stays on the same button across `setActive` / `update`.
 - Overlays `root` without taking it over (static `root` → `relative` while mounted, restored on `dispose()`). Leave ~56 px at the top of your content. Pass the non-scrolling frame as `root`; pointer events on the island bubble to `root`, so skip `e.target.closest('.lcl-isle-layer')` in pan / draw handlers. Wrong shapes throw `TypeError`; the host disposes it on disable / reload.
 
+### Floats: ctx.ui.float (2026-11-07+)
+
+Floating is a layer attribute: say what the thing floats over (`scope`), which corner (`anchor`) and what it is for (`role`); the host owns placement, stacking, enter/exit motion and drag-to-snap. Use it instead of your own `position: fixed` + z-index (transfer cards, "export finished" strips, a recording capsule).
+
+```js
+const f = ctx.ui?.float?.({ scope: 'space', anchor: 'bottom-end', role: 'panel', id: 'transfers', label: zh ? '传输' : 'Transfers' })
+if (!f) drawOwnCard(viewRoot)                                   // older hosts
+else { f.el.append(card); head.dataset.floatDrag = '' }         // content goes in f.el; data-float-drag = drag handle
+// f.close() when done; the host closes all of yours on disable / reload
+```
+
+- `scope`: `'view'` = inside `host` (required, connected; static → `relative`), gone with the view. `'space'` = over the whole Space (all columns, above the splitters), hidden while another Space is open, back as it was; `space` defaults to the current one. `'window'` = over the whole window, kept across Space switches. Windows without a Space area (Mini, floating panels, view windows) show `'space'` at window level. Use the smallest scope that fits.
+- `anchor`: `top-start | top-center | top-end | bottom-start | bottom-center | bottom-end` (default `bottom-end`), 12 px from the edges; the Space layer clears the tab bar (44 px) and the status / phone bottom bar.
+- `role`: `'panel'` (default) stays at its anchor, later panels on top. `'notice'` stacks with other notices at the same anchor (8 px apart, first nearest the corner) and is announced (`role="status"`). Changing numbers (progress) → `'panel'`.
+- `bare: true` = no host card skin. `id` = remember the user's dragged corner on this device (namespaced by plugin id). Drag needs 4 px, ignores buttons / inputs, snaps to the nearest anchor on release; `onAnchorChange(a)` reports it, `f.move(a)` moves it.
+- Never takes focus, never closes itself. Enter/exit use the shared toast motion. Stacking: view floats < Space floats < window floats < menus < guide tips < dialogs < palette — never write literal z-index, use `var(--z-*)`.
+- Wrong shapes throw `TypeError`; a disabled plugin gets a no-op handle. Desktop-level floats (over other apps) and multiple Minis are later phases.
+
 ### Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
 
 For any settings-like page (account, quota, diagnostics, preferences — inside `registerSettingsView`, `registerStoreView` or your own view) describe the page as data and let the host draw it with its own settings parts. Do **not** copy the host's `.settings-*` CSS into your plugin: the copy breaks on phones (blank gaps, controls pushed off the row) and never follows later host changes.
