@@ -303,6 +303,8 @@ export const CLASSIFICATION = {
   'GET /agent/project-context/git/reviews': [D, 'host-only: asks Forsion Git with the signed-in account credentials (merge requests awaiting review)'],
   'POST /agent/project-context/git/pending': [D, 'may run trusted repo filters (trust=true)'],
   'POST /agent/project-context/git/message': [D, 'spends model quota; may run trusted repo filters'],
+  'POST /agent/project-context/git/embedded': [D, 'git repository write (info/exclude, .gitignore, or submodule add that contacts nothing but writes .gitmodules)'],
+  'GET /agent/project-context/git/repo': [D, 'host-only: reads another local repository the project can reach (multi-repo Git)'],
   'POST /agent/git/clone': [D, 'clones a repository onto the host disk with the signed-in account credentials'],
   'GET /agent/git/repos': [D, 'host-only: lists the device owner\'s repositories with the signed-in account credentials'],
   'GET /agent/git-accounts': [D, 'host-only: the device owner\'s Git accounts and commit identity (Settings → Git is desktop-only)'],
