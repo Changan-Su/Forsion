@@ -67,7 +67,7 @@ describe('openFloat', () => {
     expect(h.el.hidden).toBe(true)
   })
 
-  it('View 作用域挂进宿主元素;宿主是 static 就设成 relative;最后一块关掉连层一起收', () => {
+  it('View 作用域挂进宿主元素;宿主是 static 就设成 relative;最后一块关掉、退场替身走了连层一起收', async () => {
     const host = document.createElement('section')
     document.body.appendChild(host)
     const h = openFloat({ scope: 'view', host, anchor: 'top-start' })
@@ -76,7 +76,33 @@ describe('openFloat', () => {
     expect(h.el.parentElement!.parentElement).toBe(host)
     h.close()
     expect(h.closed).toBe(true)
+    await new Promise((r) => setTimeout(r, 0)) // 退场替身摘掉之后才收空层(Codex 11-07:同步收会被替身挡住、空层留下)
     expect(host.querySelector('.lcl-float-layer')).toBeNull()
+  })
+
+  it('View 浮层的宿主被摘下来后 move:留在宿主里,不退到窗口层盖住整个窗口', () => {
+    const host = document.createElement('section')
+    document.body.appendChild(host)
+    const h = openFloat({ scope: 'view', host })
+    host.remove()
+    h.move('top-start')
+    expect(h.el.closest('.lcl-float-layer')!.parentElement).toBe(host)
+    expect(document.querySelector('body > .lcl-float-layer[data-scope="window"] .lcl-float')).toBeNull()
+  })
+
+  it('拖到一半关掉:窗口上的拖动监听一起撤掉,之后的指针移动不再动它', () => {
+    const h = openFloat({ scope: 'window' })
+    const handle = document.createElement('div'); handle.dataset.floatDrag = ''
+    h.el.appendChild(handle)
+    const ev = (type: string, x: number, y: number) => new PointerEvent(type, { bubbles: true, button: 0, clientX: x, clientY: y, pointerId: 1 })
+    handle.dispatchEvent(ev('pointerdown', 100, 100))
+    window.dispatchEvent(ev('pointermove', 140, 100))
+    expect(h.el.style.transform).not.toBe('')
+    h.close()
+    expect(h.el.style.transform).toBe('')
+    window.dispatchEvent(ev('pointermove', 200, 160))
+    expect(h.el.style.transform).toBe('')
+    expect('dragging' in h.el.dataset).toBe(false)
   })
 
   it('move 换锚点;给了 id 时只记用户拖的(move 不记),下次按记住的开', () => {

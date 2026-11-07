@@ -112,7 +112,8 @@ function viewLayerEl(host: HTMLElement): HTMLElement {
   return layer
 }
 function layerFor(rec: Rec): HTMLElement {
-  if (rec.scope === 'view' && rec.host?.isConnected) return viewLayerEl(rec.host)
+  // View 浮层只认自己的宿主(宿主被摘下来也留在它里面,绝不退到窗口层盖住整个窗口);只有 Space 浮层会退到窗口层
+  if (rec.scope === 'view') return viewLayerEl(rec.host!)
   if (rec.scope === 'space' && spaceLayer?.isConnected) return spaceLayer
   return windowLayerEl()
 }
@@ -160,6 +161,7 @@ const NO_DRAG = 'button, a[href], input, textarea, select, [contenteditable=""],
 
 function attachDrag(rec: Rec): () => void {
   const el = rec.el
+  let abort: (() => void) | null = null // 正在拖的那一程:关浮层时一并撤掉窗口上的监听
   const onDown = (e: PointerEvent): void => {
     if (e.button !== 0 || rec.closed) return
     const t = e.target as Element | null
@@ -176,10 +178,14 @@ function attachDrag(rec: Rec): () => void {
       }
       el.style.transform = `translate(${(ev.clientX - sx) / z}px, ${(ev.clientY - sy) / z}px)`
     }
-    const end = (ev: PointerEvent, cancel: boolean): void => {
+    const detach = (): void => {
+      abort = null
       window.removeEventListener('pointermove', move, true)
       window.removeEventListener('pointerup', up, true)
       window.removeEventListener('pointercancel', onCancel, true)
+    }
+    const end = (ev: PointerEvent, cancel: boolean): void => {
+      detach()
       if (!dragging) return
       delete el.dataset.dragging
       el.style.transform = ''
@@ -198,12 +204,20 @@ function attachDrag(rec: Rec): () => void {
     }
     const up = (ev: PointerEvent): void => end(ev, false)
     const onCancel = (ev: PointerEvent): void => end(ev, true)
+    abort?.()
+    abort = () => {
+      detach()
+      if (!dragging) return
+      delete el.dataset.dragging
+      el.style.transform = ''
+      try { el.releasePointerCapture(e.pointerId) } catch { /* 已经放了 */ }
+    }
     window.addEventListener('pointermove', move, true)
     window.addEventListener('pointerup', up, true)
     window.addEventListener('pointercancel', onCancel, true)
   }
   el.addEventListener('pointerdown', onDown)
-  return () => el.removeEventListener('pointerdown', onDown)
+  return () => { el.removeEventListener('pointerdown', onDown); abort?.() }
 }
 
 function setAnchor(rec: Rec, anchor: FloatAnchor, byUser: boolean): void {
@@ -261,9 +275,8 @@ export function openFloat(opts: FloatOptions): FloatHandle {
       recs.delete(rec)
       rec.offDrag()
       const layer = el.parentElement?.closest('.lcl-float-layer') ?? null
-      if (el.hidden || !el.isConnected) el.remove()
-      else removeOverlayWithExit(el)
-      pruneEmpty(layer)
+      if (el.hidden || !el.isConnected) { el.remove(); pruneEmpty(layer) }
+      else void removeOverlayWithExit(el).then(() => pruneEmpty(layer)) // 替身放完退场才摘,空的叠放组 / View 层等它走了再收
     },
   }
 }
