@@ -18,9 +18,12 @@ import { AgentsSpaceView, AgentsRosterView, TanguDetailsView } from '../views/Ag
 import { hasNativeFeature, tanguProbeAvailable } from './runtime'
 import { quoteInChatPanel } from '../views/chat2/chatPanelQuote'
 import { SessionTabIcon } from '../components/SessionIcon'
-import { setTanguChatOutline, setTanguChatViews, setTanguDrafts, setTanguInboxTasks, setTanguIntelligentUi, setTanguNewChat, setTanguPrefs, setTanguShell, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
+import { setTanguChatOutline, setTanguChatViews, setTanguDrafts, setTanguInboxTasks, setTanguIntelligentUi, setTanguMuseStarters, setTanguNewChat, setTanguPrefs, setTanguShell, setTanguSidebarModes, type TanguHost } from '../amadeus/plugins/tanguSeam'
 import { IntelligentUi, NativeDocument } from '../components/IntelligentUi'
 import { inboxTasks } from '../views/chat2/inboxTasks'
+import { dismissStarter, refreshMuseStarters, useMuseStarters } from '../views/chat2/museStarterStore'
+import { fillStarter, openSource } from '../views/chat2/MuseStarters'
+import { usePageStore } from '../amadeus/store/pageStore'
 import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { isPromptSuggestOn, setPromptSuggest } from '../views/chat2/promptSuggest'
 import { NewChatComposer, mountNewChatComposer, sendFromNewChat, startNewChatCall } from '../views/newChatComposer'
@@ -137,6 +140,16 @@ export function registerTanguViews(): void {
       if (d.pastes.length && !cur?.pastes.length) setDraftField(key, 'pastes', d.pastes)
     },
     subscribe: (fn) => useComposerDrafts.subscribe(fn),
+  })
+  // 主页「卜算子·建议」卡(11-07):宿主画行,数据与填进草稿(含引用芯片、发出去才算采纳)留在这边
+  const starterOf = (id: string) => useMuseStarters.getState().list.find((x) => x.id === id)
+  setTanguMuseStarters({
+    list: () => useMuseStarters.getState().list,
+    subscribe: (fn) => useMuseStarters.subscribe(fn),
+    refresh: () => { void refreshMuseStarters() },
+    fill: (key, id) => { const s = starterOf(id); if (s) fillStarter(key, s, usePageStore.getState().vaultRoot) },
+    dismiss: (id) => dismissStarter(id),
+    open: (id) => { const s = starterOf(id); if (!s) return false; openSource(s, usePageStore.getState().vaultRoot); return true },
   })
   setTanguSidebarModes({ Orbits: OrbitsView, Sessions: SessionsView })
   setTanguChatOutline(TocView) // 「大纲」视图在主区是对话时画会话目录

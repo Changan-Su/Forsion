@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.99.0
+  version: 1.100.0
   author: Forsion
   category: Forsion
 ---
@@ -531,6 +531,7 @@ ctx.registerCommand({
 | `ctx.tangu` | 当前模型 / 模型目录 / 当前 Space / 会话用量 / **agent 此刻在干什么**(只读)+ `agents()` 用户的 Agent 名册 + `startChat` 用指定 Agent 开一个可见的新对话 + `mountChat` 把原生对话挂进自己的视图(2026-10-04 起)+ `mountComposer` 把「新对话」输入区整块挂进来、发送归宿主(2026-10-18 起)+ `complete` 一次性文本补全(2026-09-28 起) | ⚠️**非 Tangu 宿主上整个不存在** → 一律 `ctx.tangu?.`;`agentStatus` / `subscribeAgentStatus` / `startChat` 是 2026-09-19 起、`agents` 是 2026-09-20 起的可选方法 → `ctx.tangu?.startChat?.(…)`;见下「当前模型」「Agent 状态」「Agent 名册」「开新对话」 |
 | `ctx.desk` | Tangu 聊天右侧 **Agent Desk** 里挂一块自绘区(`registerCompanion`,典型:跟着 agent 状态做反应的 3D 形象) | 2026-09-19 起;⚠️**只在桌面 Tangu 上存在**(web / 移动端 / 纯 Amadeus 壳整个没有)→ `ctx.desk?.`;两种模式 `idle` / `always`,见下「Agent Desk 伴随面」 |
 | `ctx.summary` | Tangu 聊天右侧**摘要栏**加一张卡(`registerCard`,和进度 / 后台 / 产物 / Agent Desk 同一个栈,用户可折叠、拖动排序) | 2026-10-25 起;⚠️**只在桌面 Tangu 上存在**(同 `ctx.desk`)→ `ctx.summary?.`;见下「摘要栏插件卡」 |
+| `ctx.widgets` | 主页小组件的数据(`provide(id, fn)` 喂行 / `invalidate(id?)` 请宿主重拿);卡声明在 manifest `widgets`,宿主画,只读 | 2026-11-07 起;**所有插件可用**,不用声明能力 → `ctx.widgets?.`;见下「主页小组件」 |
 | `ctx.automation` | 播种多维表自动化规则(`ensure(rules)`);给「当…」加插件自己的事件(`registerTrigger` / `emit`,2026-10-30 起) | 2026-09-02 起;⚠️**非 Tangu 宿主上整个不存在** → `void ctx.automation?.ensure(…)`;id 宿主加 `plugin:<id>:` 前缀;见下「自动化」 |
 | `ctx.calendar` | 把插件种的表登记进 Calendar Space(`ensureMember`,人人有)+ 叠加源与日历设置(`subscribe` / `setColor` / `setHidden` / `setDefault` / `setMember` / `removeMember`)+ .ics 订阅管理(`ics.add` / `importText` / `rename` / `remove` / `refresh`) | `ensureMember` 2026-09-02 起;其余 2026-10-17 起,⚠️**声明 `"calendar"` 才有**(没声明时这几个成员不存在,不是空壳)→ `ctx.calendar?.subscribe`;见下「日历叠加源与设置」 |
 | `ctx.spaces` | Space 列表 / 打开 / 图标 / 近况那一行 + 商店、成就两格 + Ribbon 上区的收纳架(顺序、收纳夹) | 2026-10-18 起;⚠️**声明 `"spaces"` 才存在**(收纳架改的是用户的 Ribbon);见下「Space 与 Ribbon 收纳架」 |
@@ -538,6 +539,7 @@ ctx.registerCommand({
 | `ctx.noteTasks` | 笔记正文里的 `@` 时间任务(`subscribe`)+ 就地勾选 / 改日期(`update`) | 2026-10-16 起;⚠️**声明 `"noteTasks"` 才存在**;同上节 |
 | manifest `events[]` | 自动化(Automation)可订阅的事件 | 纯声明无代码;⚠️目前只有中文 `label`,英文界面下也显示中文 |
 | manifest `onboarding` | 有 `requires` = **闸**(宿主实测,未满足才弹检查卡);没有 = 详情页里折叠的使用说明 | 见下「前置条件:onboarding.requires」;**别 recommends 自家已内嵌的 agent/skill**(会引导去商店重复装);⚠ `recommends` 只在闸的检查卡里渲染,没有 `requires` 就一个字都不显示 |
+| manifest `widgets` | 主页小组件:每张一个目录(`manifest.json`,`layout: "list"`),用户在主页「编辑主页 → 添加组件」的「插件」组里放 | 2026-11-07 起;这一版只开列表型、只读;数据走 `ctx.widgets.provide`;见下「主页小组件」 |
 | manifest `guide` | 上手提示:用户用到某个功能时宿主替你提示一次,用过就不再出 | 2026-11-02 起;不是闸;锚点只认你自己 View 里的 `data-guide-anchor`;「会了」读 `ctx.achievements.track()` 的计数;新功能配**新 id** 的提示,老用户升级后会碰到;见下「上手提示」 |
 
 `ctx.app` 上另有三组:**整库文件读写**、**只读全库查询**、**块表面** —— 各占下面一节。
@@ -867,6 +869,36 @@ ctx.registerToolResultRenderer?.({
 - 能靠界面自己说清的不发提示(「+ 子任务 Tab」那一行、输入框占位里的「支持明天下午3点」)。只给看不见的手势、快捷写法、跨两个 View 的操作发。
 - 自测:命令面板「重置上手提示」+ `ctx.guide.show(id)`;不出时先查元素带没带 `data-guide-anchor`、是不是在你自己的 View 里。台架范本:Genesis `desktop/scripts/guide-tips.check.cjs`。
 - 旧宿主不认 `guide`,什么都不出;`ctx.guide?.`。
+
+### 主页小组件:manifest `widgets` + `ctx.widgets`(2026-11-07 起)
+
+主页左右栏 / 下排能放插件的卡。卡长什么样声明在 manifest(宿主画,和内置「收件箱」「最近笔记」同一套行样式),数据由插件喂;**只读**,点卡头 / 点行打开声明的 Space。不开 DOM 挂载。
+
+```json
+// manifest.json
+"widgets": ["widgets/today", "widgets/todo"]
+// widgets/today/manifest.json(和 Agent 做的小组件同一种目录)
+{ "schemaVersion": 1, "id": "today", "title": "今天", "titleEn": "Today", "summary": "…", "summaryEn": "…", "layout": "list", "icon": "date", "space": "calendar" }
+```
+
+- `id` `^[a-z0-9][a-z0-9-]{0,47}$`,插件内唯一;主页摆放里存 `plugin:<插件 id>/<id>`(摆放只在本机)。`title` 必填,`titleEn` 英文界面用。`layout` 这一版只认 `"list"`(别的整张丢)。
+- `icon` = 插件图标词表里的名字(同 `registerView` 的 `icon`:`date` / `todo` / `cloud` …),没写用插件 icon.png。`space` = 点了打开的 Space id,不写不跳。目录只认插件根里的相对路径,最多 8 张,坏的那张单独丢。
+- 停用 → 卡上留「已停用」占位 + 启用按钮;卸载 / 旧版没声明这张 → 不画、不占位(摆放留着)。
+
+```js
+ctx.widgets?.provide('today', async (_params, { signal }) => ({
+  rows: [{ id, title, time, meta, tone: 'accent' | 'warn' | 'muted', done, now, group }],
+  footer, empty,
+}))
+ctx.widgets?.invalidate('today') // 不给 id = 你的全部卡
+```
+
+- 返回行的数组或 `{ rows, footer?, empty? }`;每行 `title` 必填,`time` 左列,`meta` 右边小字(`tone` 上色),有 `done` 字段就画勾选框(只读,`true` 划线),`now` 实心点,`group` 变了画小标题。最多 50 行;文字按 `ctx.getLocale()` 给好(宿主切语言会重拿)。
+- 宿主什么时候来要:卡挂上、你 `invalidate`、窗口回前台(距上次 ≥30 秒)。同一张同一时刻一次,新的一次 abort 旧的 `signal`;**10 秒没回 / 抛错 = 卡上写「暂时读不到」,不当成空**(数据还没准备好就抛,别回空数组)。
+- `provide` 的 `id` 必须是 manifest 里声明过的,否则忽略并在控制台警告。停用 / 重载宿主统一撤。
+- 卡不在主页上宿主就不来要 → **别在外面常驻轮询**;要按时间变的文字(「还有 1 小时」)就在被要过之后自己定时 `invalidate`,几分钟没被要就停(范本:Forsion-Calendar `src/widgets.ts`)。
+- 台架范本:Genesis `desktop/scripts/home-widgets.check.cjs`(临时家目录装好插件 → 主页右栏、收纳面板、窄窗图标条)。
+- 旧宿主不认 `widgets`、没有 `ctx.widgets`:一律 `?.`,不用抬 `minAppVersion`。
 
 ## Tangu host APIs: read references/tangu-host-apis.md
 

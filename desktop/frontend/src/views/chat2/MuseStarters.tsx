@@ -35,7 +35,7 @@ const vaultRel = (path: string, root: string | null | undefined): string | null 
   return r && p.startsWith(`${r}/`) ? p.slice(r.length + 1) : null
 }
 
-function openSource(s: MuseStarter, vaultRoot: string | null | undefined): void {
+export function openSource(s: MuseStarter, vaultRoot: string | null | undefined): void {
   const ref = s.source.ref
   switch (s.source.kind) {
     // 新标签打开:就地换掉的会是眼前这个新对话
@@ -48,6 +48,27 @@ function openSource(s: MuseStarter, vaultRoot: string | null | undefined): void 
 }
 const linkable = (s: MuseStarter): boolean =>
   s.source.kind === 'calendar' || s.source.kind === 'todo' || (s.source.kind === 'web' ? /^https?:\/\//i.test(s.source.ref || '') : (s.source.kind === 'note' || s.source.kind === 'session') && !!s.source.ref)
+
+/** 点一条建议:整句填进那份草稿(不发;笔记 / 会话同时挂成引用芯片),记下这份草稿来自哪一条 —— 真发出去才回写 used。
+ *  新对话页的三行和主页「卜算子·建议」卡(经 tanguSeam 的 museStarters)共用这一份。 */
+export function fillStarter(draftKey: string, s: MuseStarter, vaultRoot: string | null | undefined): void {
+  setDraftField(draftKey, 'text', s.text)
+  const root = vaultRoot || ''
+  const rel = s.source.kind === 'note' && s.source.ref ? vaultRel(s.source.ref, root) : null
+  const chip: RefChip | null = s.source.kind === 'note' && s.source.ref
+    ? (rel && root ? refChipOf({ kind: 'note', path: rel }, root) : refChipOf({ kind: 'file', path: s.source.ref }, root))
+    : s.source.kind === 'session' && s.source.ref ? refChipOf({ kind: 'session', id: s.source.ref, title: s.source.label }, root) : null
+  // 换一条建议:先摘掉上一条挂的芯片
+  const prevChip = starterChips.get(draftKey)
+  starterChips.delete(draftKey)
+  setDraftField(draftKey, 'refChips', (prev) => {
+    const rest = prev.filter((c) => c.token !== prevChip)
+    if (!chip || rest.some((c) => c.token === chip.token)) return rest
+    starterChips.set(draftKey, chip.token)
+    return [...rest, chip]
+  })
+  noteStarterFilled(draftKey, s.id)
+}
 
 export function MuseStarters({ draftKey, centered }: { draftKey: string; centered: boolean }): React.ReactElement | null {
   const { t } = useI18n()
@@ -76,22 +97,7 @@ export function MuseStarters({ draftKey, centered }: { draftKey: string; centere
   }, [])
 
   const fill = (s: MuseStarter): void => {
-    setDraftField(draftKey, 'text', s.text)
-    const root = vaultRoot || ''
-    const rel = s.source.kind === 'note' && s.source.ref ? vaultRel(s.source.ref, root) : null
-    const chip: RefChip | null = s.source.kind === 'note' && s.source.ref
-      ? (rel && root ? refChipOf({ kind: 'note', path: rel }, root) : refChipOf({ kind: 'file', path: s.source.ref }, root))
-      : s.source.kind === 'session' && s.source.ref ? refChipOf({ kind: 'session', id: s.source.ref, title: s.source.label }, root) : null
-    // 换一条建议:先摘掉上一条挂的芯片
-    const prevChip = starterChips.get(draftKey)
-    starterChips.delete(draftKey)
-    setDraftField(draftKey, 'refChips', (prev) => {
-      const rest = prev.filter((c) => c.token !== prevChip)
-      if (!chip || rest.some((c) => c.token === chip.token)) return rest
-      starterChips.set(draftKey, chip.token)
-      return [...rest, chip]
-    })
-    noteStarterFilled(draftKey, s.id)
+    fillStarter(draftKey, s, vaultRoot)
     requestAnimationFrame(() => {
       const ta = boxRef.current?.closest('.composer-anchor')?.querySelector<HTMLTextAreaElement>('.t2c-ta')
       if (!ta) return

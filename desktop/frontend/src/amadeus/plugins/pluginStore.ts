@@ -74,6 +74,7 @@ import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSyn
 import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { registerGuideTips, requestTip, tipState, unregisterGuideTips } from './guideTips'
+import { invalidatePluginWidget, providePluginWidget, revokePluginWidgets } from './pluginWidgets'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
 import { getAggDb } from '../store/dbAggregateStore'
@@ -813,6 +814,7 @@ function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
     changelog: src.changelog,
     onboarding: src.onboarding,
     guide: src.guide,
+    widgets: src.widgets,
     blocked: src.blocked,
     blockedReason: src.blockedReason,
     isDesktopOnly: src.isDesktopOnly,
@@ -2408,6 +2410,21 @@ export const usePluginStore = create<PluginState>((set, get) => {
     guide: {
       show: (id) => { if (ctxAlive()) requestTip(pluginId, String(id ?? '')) },
       state: (id) => tipState(pluginId, String(id ?? '')),
+    },
+    // 主页小组件(2026-11-07):卡声明在 manifest `widgets`,这里只喂数据(只读,宿主画);登记即记账,关账整插件撤。
+    widgets: {
+      provide: (id, fn) => {
+        const wid = String(id ?? '')
+        if (!ctxAlive() || typeof fn !== 'function') return { dispose: () => {} }
+        if (!get().plugins.find((p) => p.id === pluginId)?.widgets?.some((w) => w.id === wid)) {
+          console.warn(`[amadeus] 插件 ${pluginId} 的 manifest widgets 里没有 "${wid}",ctx.widgets.provide 被忽略`)
+          return { dispose: () => {} }
+        }
+        const off = providePluginWidget(pluginId, wid, fn)
+        scope.ownOnce('widgets', () => revokePluginWidgets(pluginId))
+        return { dispose: () => { if (ctxAlive()) off() } }
+      },
+      invalidate: (id) => { if (ctxAlive()) invalidatePluginWidget(pluginId, id === undefined ? undefined : String(id)) },
     },
     // 收件箱(2026-10-17):只给首方内置包 —— 一封「系统消息」长得和宿主自己发的一样,不能让任意插件往用户面前塞。
     ...(get().plugins.find((p) => p.id === pluginId)?.locked

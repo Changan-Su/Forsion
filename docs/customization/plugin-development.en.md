@@ -215,6 +215,43 @@ The summary panel on the right of a Tangu chat (desktop versions after 2.13.8-be
 ctx.summary?.registerCard({ id, title: { zh, en }, defaultCollapsed, mount(el, host) })
 ```
 
+## Home widgets (since 2026-11-07)
+
+Home has widgets in its left and right columns and in the row under the chat box. A plugin can add its own cards: the plugin declares the card in its manifest and supplies the data, and the host draws it in the same style as the built-in Inbox and Recent notes cards. People add cards from Home → right-click → Edit Home → Add, where plugin cards sit in the Plugins group. When a plugin is turned off, its card shows a placeholder; when it is uninstalled, the card is not drawn (the placement is kept and comes back if the plugin does).
+
+This version supports **list cards** only: each row has a time or a checkbox on the left, a title, and a short note on the right, rows can be grouped (for example "Tomorrow"), and there can be a footer line. Cards are read-only. Clicking the header or a row opens the Space you declare; the first version cannot check items off or write back.
+
+List the card folders in your manifest. Each folder holds a `manifest.json`, the same folder layout as widgets made by agents:
+
+```json
+// manifest.json
+"widgets": ["widgets/today"]
+
+// widgets/today/manifest.json
+{ "schemaVersion": 1, "id": "today", "title": "Today", "titleEn": "Today", "layout": "list", "icon": "date", "space": "calendar" }
+```
+
+- `id` is unique within your plugin (lowercase letters, digits, hyphens) and is stored in the Home layout as `plugin:<plugin id>/<id>`. `title` is required (your canonical name, usually Chinese); `titleEn` is shown in the English UI.
+- `icon` is a name from the plugin icon vocabulary (the same list as `registerView`'s `icon`). Without it, the card uses your icon.png.
+- `space` is the Space id opened when the header or a row is clicked; leave it out to stay on Home. Up to 8 cards; a broken one is dropped on its own.
+
+Supply the data with `ctx.widgets.provide`. The host asks while the card is on Home; return an array of rows or `{ rows, footer, empty }`.
+
+```js
+ctx.widgets?.provide('today', async (_params, { signal }) => ({
+  rows: [{ id: 'e1', time: '10:00', title: 'Book club', meta: 'In 1 h', tone: 'accent', now: true },
+         { id: 'e2', time: '10:00', title: 'Product weekly', group: 'Tomorrow' }],
+  footer: '1 of 3 done today',
+  empty: 'Nothing on today',
+}))
+ctx.widgets?.invalidate('today') // data changed: ask the host to fetch again
+```
+
+- A row can have `title` (required), `time` (left column), `meta` (short note on the right), `tone` (`accent` / `warn` / `muted`), `done` (any value draws a checkbox; `true` strikes the row through), `now` (filled dot) and `group` (a small heading above the row when it changes). Up to 50 rows. Give the text in the language from `ctx.getLocale()`; the host fetches again when the language changes.
+- The host asks when the card mounts, when you call `invalidate`, and when the window comes back to the front (at least 30 seconds after the last time). Only one request per card runs at a time, and a newer one aborts the older `signal`. If you take longer than 10 seconds or throw, the card says it couldn't load. It is never treated as an empty list.
+- The host stops asking when the card is not on Home, so don't poll outside `provide`. For time-based text such as "In 1 h", call `invalidate` on a timer after you've been asked, and stop when you haven't been asked for a few minutes.
+- Older hosts ignore `widgets` and have no `ctx.widgets`, so always use `?.`. API details are in the plugin development skill, section "Home widgets"; the Today and To-dos cards of the core Calendar plugin are the reference.
+
 ## Intelligent UI cards
 
 A plugin can open an existing list source as a native card in chat by adding an `intelligent` declaration to `registerListSource`. The host renders the list; `items` / `subscribe` / `open` remain the single data and navigation implementation (see the sample code below).

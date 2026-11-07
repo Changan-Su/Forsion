@@ -2037,6 +2037,18 @@ export interface PluginContext {
      *  `off` 用户在设置里关了上手提示,或这台设备读不了记账。 */
     state(id: string): 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
   }
+  /** 主页小组件(2026-11-07+):卡声明在 manifest `widgets`(每张一个目录,里面 `manifest.json` 写 `id` / `title` / `titleEn` /
+   *  `layout: "list"` / 可选 `icon`(插件图标词表的名字)/ 可选 `space`),宿主照主页卡的样子画;这里只喂行 —— 只读,不开 DOM 挂载。
+   *  `provide(id, fn)`:卡挂在主页上时宿主调 `fn({}, { signal })`,返回行的数组或 `{ rows, footer?, empty? }`。一行 =
+   *  `{ id?, title, time?, meta?, tone?: 'accent' | 'warn' | 'muted', done?, now?, group? }`:`time` 画在左列,`meta` 右边小字,
+   *  有 `done` 就画勾选框(只读),`now` 实心点,`group` 变了画小标题(如「明天」)。文字按 `ctx.getLocale()` 给好(切语言时宿主会重拿),最多 50 行。
+   *  卡挂上、`invalidate()`、窗口回到前台(距上次 ≥30 秒)时调;同一张同一时刻只有一次在飞,10 秒没回 / 抛错 = 画「读不到」,
+   *  不当成空。`id` 必须是 manifest 里声明过的。停用 / 重载宿主统一收。
+   *  `invalidate(id?)`:数据变了,请宿主重拿(不给 id = 你的全部卡)。旧宿主没有:`ctx.widgets?.provide(…)`。 */
+  widgets?: {
+    provide(id: string, fn: (params: Record<string, never>, opts: { signal: AbortSignal }) => unknown): { dispose(): void }
+    invalidate(id?: string): void
+  }
   /** Tangu 侧的只读探针(2026-08-29+):**当前主区聊天要用的模型** + **模型目录** + **当前 Space id**。
    *  聊天状态住在 Tangu 的 store 里,`ctx.app` 是 Amadeus 的页面/库面 —— 两者不通,所以单开这一截。
    *
@@ -2579,6 +2591,8 @@ export interface AmadeusPlugin {
   onboarding?: PluginOnboardingSpec
   /** First-use tips (manifest `guide`, 2026-11-02+; sanitized by the host). See `PluginGuideApi`. */
   guide?: import('@amadeus-shared/ipc').PluginGuideSpec
+  /** Home widgets (manifest `widgets`, 2026-11-07+; read and sanitized by the host). Data comes from `ctx.widgets.provide`. */
+  widgets?: import('@amadeus-shared/ipc').PluginWidgetSpec[]
   /** Present → gated out by the host: 'api' = apiVersion mismatch, 'minApp' = app too old,
    *  'invalid' = missing/broken manifest or unreadable main (agent Space / dev source, see `blockedReason`),
    *  'dev-fileext' = dev source declaring `fileExtensions` (unprotected outside the installed plugins dir),

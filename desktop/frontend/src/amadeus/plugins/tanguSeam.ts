@@ -19,6 +19,7 @@ import type { SpecialKind } from '@tangu/ui/tangu/store/tanguSlice'
 import type { CtxItem } from '../../components/RightPanel'
 import type { ViewProps } from '@lcl/engine'
 import type { Attachment } from '../../../../../tangu-agent/src/contracts/clientTypes'
+import type { MuseStarter } from '../../types'
 
 export interface TanguModelInfo {
   /** 模型 id(引擎侧标识,如 `claude-opus-5`)。 */
@@ -405,6 +406,40 @@ export function setTanguIntelligentUi(p: TanguIntelligentUi | null): void {
 }
 export function readTanguIntelligentUi(): TanguIntelligentUi | null {
   return intelligentUi
+}
+
+/** Muse 的开场建议(主页「卜算子·建议」卡,11-07 方案 A):数据、填进草稿(连引用芯片)、× 回写都在 Tangu 里,宿主只画行、只管摆。
+ *  没交(Tangu 没激活)→ 宿主当没有建议。**宿主内部接缝**。 */
+export interface TanguMuseStarters {
+  list(): MuseStarter[]
+  subscribe(fn: () => void): () => void
+  /** 后台拉一次(同一分钟内不重复拉)。 */
+  refresh(): void
+  /** 整句填进那份草稿(不发;笔记 / 会话同时挂成引用芯片),真发出去才算采纳。 */
+  fill(draftKey: string, id: string): void
+  /** 不感兴趣:先从眼前拿掉,再告诉 Muse。 */
+  dismiss(id: string): void
+  /** 句子里所指的那个东西(日程 / 笔记 / 会话 / 网页):打开它。打不开的回 false。 */
+  open(id: string): boolean
+}
+let museStarters: TanguMuseStarters | null = null
+let museUnsub: (() => void) | null = null
+const museListeners = new Set<() => void>()
+const museNotify = (): void => { for (const f of [...museListeners]) f() }
+export function setTanguMuseStarters(p: TanguMuseStarters | null): void {
+  museUnsub?.()
+  museUnsub = null
+  museStarters = p
+  if (p) museUnsub = p.subscribe(museNotify)
+  museNotify()
+}
+export function readTanguMuseStarters(): TanguMuseStarters | null {
+  return museStarters
+}
+/** 接缝交出 / 收回、建议列表变了都通知(宿主 useSyncExternalStore 用)。 */
+export function subscribeTanguMuseStarters(fn: () => void): () => void {
+  museListeners.add(fn)
+  return () => { museListeners.delete(fn) }
 }
 
 /** 新对话输入区发出第一句(核心插件化 2e-3)。 */
