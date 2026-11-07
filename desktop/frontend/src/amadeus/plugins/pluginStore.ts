@@ -51,6 +51,7 @@ import { registerSummaryCard, revokeSummaryCards, type SummaryCardContribution, 
 import { currentPlatform } from '../../services/agentRunService'
 import { UI_MODE } from '@lcl/engine/uiMode'
 import { attachTooltip } from '@lcl/engine/hoverSurface'
+import { openFloat, FLOAT_ANCHORS, type FloatOptions } from '@lcl/engine/floatLayer'
 import { defineMessages, hostListSource, isPluginText, pluginText } from './pluginText'
 import { checkPluginIcon, pluginIconElement } from './pluginIcon'
 import { pluginListEmpty, setHostListEmpty } from '../../views/hostListEmpty'
@@ -74,6 +75,7 @@ import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSyn
 import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { registerGuideTips, requestTip, tipState, unregisterGuideTips } from './guideTips'
+import './hostTips' // 宿主自己的上手提示(通话键首次提示等),三端都经 pluginStore 登记
 import { invalidatePluginWidget, providePluginWidget, revokePluginWidgets } from './pluginWidgets'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'
@@ -2193,6 +2195,27 @@ export const usePluginStore = create<PluginState>((set, get) => {
       setViewModes: (el, spec) => {
         if (!ctxAlive()) return { set() {}, update() {}, actions: document.createElement('div'), dispose() {} }
         return setPluginViewModes(el, spec, (d) => scope.own('mount', d, 'viewModes'), (e) => console.error(`[amadeus] plugin "${pluginId}" view mode onChange failed`, e))
+      },
+      // 浮层(LCL 表面规范 2026-11-07,lcl/engine/floatLayer.ts):View / Space / 窗口三档作用域 × 锚点 × 用途。同步可用(模块很小);
+      // id 按插件 id 加前缀(两个插件同名的 id 不串);插件停用 / 重载时统一 close。参数不对同步抛。
+      float: (opts) => {
+        if (!opts || typeof opts !== 'object') throw new TypeError('float needs options')
+        if (!ctxAlive()) {
+          const el = document.createElement('div')
+          return { el, anchor: (FLOAT_ANCHORS as readonly string[]).includes(String(opts.anchor)) ? opts.anchor! : 'bottom-end', closed: true, move() {}, close() {} }
+        }
+        if (opts.scope === 'view' && !(opts.host instanceof HTMLElement && opts.host.isConnected)) throw new TypeError("float scope 'view' needs a connected host element")
+        const onAnchorChange = typeof opts.onAnchorChange === 'function' ? opts.onAnchorChange : undefined
+        const h = openFloat({
+          scope: opts.scope, host: opts.host, anchor: opts.anchor, role: opts.role, bare: !!opts.bare,
+          space: opts.space != null ? String(opts.space) : undefined,
+          id: opts.id != null ? `plugin:${pluginId}:${String(opts.id)}` : undefined,
+          label: opts.label != null ? String(opts.label) : undefined,
+          onAnchorChange: onAnchorChange && ((a) => { if (ctxAlive()) onAnchorChange(a) }),
+        } as FloatOptions)
+        h.el.dataset.floatOwner = pluginId
+        const dispose = scope.own('mount', () => h.close(), 'float')
+        return { el: h.el, get anchor() { return h.anchor }, get closed() { return h.closed }, move: (a) => h.move(a), close: dispose }
       },
       // 提示框:LCL 那一份(hoverSurface.ts),同宿主按钮 / 侧栏行;插件停用 / 重载时统一收掉。同步可用,不走动态 import(很小)。
       attachTooltip: (el, content, opts = {}) => {

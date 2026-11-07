@@ -594,6 +594,28 @@ async function main() {
     check('⑥ 超 50 MB 的当场失败、不发请求,其余照传', /单个文件超过 50 MB/.test(await win.locator('.pz-txcard').textContent().catch(() => '')) && !cloud.st.uploads.some((x) => x.name === '超大.zip'))
     const live = await win.evaluate(() => [...document.querySelectorAll('.pz-txcard .pz-txrow2')].map((r) => r.querySelector('.sub')?.textContent || ''))
     check('⑥ 并发 3:同时在传的不超过 3 个,其余排队', live.filter((x) => /\/s/.test(x)).length <= 3 && live.some((x) => /排队中/.test(x)), live.join(' | '))
+    // ⑥ LCL 表面规范第一期(2026-11-07):宿主有 ctx.ui.float 时传输卡浮在整个蓬洲云 Space 上(Space 作用域、右下),不画在云盘视图里
+    const floatGeo = () => win.evaluate(() => {
+      const cards = document.querySelectorAll('.pz-txcard'), card = cards[0]
+      const float = card?.closest('.lcl-float'), layer = float?.closest('.lcl-float-layer')
+      if (!card || !float || !layer) return { cards: cards.length, float: !!float, layer: !!layer }
+      const r = float.getBoundingClientRect(), lr = layer.getBoundingClientRect()
+      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + 14)
+      return { cards: cards.length, scope: layer.dataset.scope, inShell: !!layer.closest('.shell-host'), inView: !!card.closest('.wb-view, .dv-react-part'),
+        anchor: float.dataset.anchor, role: float.dataset.role, right: Math.round(lr.right - r.right), bottom: Math.round(lr.bottom - r.bottom),
+        onTop: !!hit && float.contains(hit), shown: !float.hidden && float.getClientRects().length > 0 }
+    })
+    const fg = await floatGeo()
+    check('⑥ 传输卡浮在 Space 层右下:只有一张、不在视图里、没被别的盖住', fg.cards === 1 && fg.scope === 'space' && fg.inShell && !fg.inView && fg.anchor === 'bottom-end' && fg.role === 'panel' && fg.right >= 10 && fg.right <= 14 && fg.onTop && fg.shown, JSON.stringify(fg))
+    await win.locator('.rb-top .rb-slot[data-id^="space:"]:not([data-id="space:forsion-penzor"]) button.rb-btn').first().click()
+    await win.waitForTimeout(600)
+    const away = await floatGeo()
+    check('⑥ 切到别的 Space:传输卡跟着藏起来(没关,还在传)', away.cards === 1 && !away.shown, JSON.stringify(away))
+    await openCloud(win)
+    await win.keyboard.press('Escape') // openCloud 可能展开了 Ribbon 的「+N」浮层,收掉免得留在后面的截图里
+    await win.waitForTimeout(600)
+    const backGeo = await floatGeo()
+    check('⑥ 切回蓬洲云:传输卡原样出现、云盘还在「我的文件」', backGeo.shown && backGeo.anchor === 'bottom-end' && await win.locator('.pz input[type=file][multiple]:not(.pz-root-upload)').count() > 0, JSON.stringify(backGeo))
     const ring = await win.evaluate(() => { const r = document.querySelector('.rb .rb-ring'); return r ? r.closest('[aria-label]')?.getAttribute('aria-label') || '?' : '' })
     check('⑥ Ribbon 上蓬洲云图标外有进度环', /^蓬洲云，进行中 \d+%$/.test(ring), ring)
     check('⑥ 表格里正在传进来的行带进度', await win.locator('.pz-table .pz-txrow').count() > 0)
