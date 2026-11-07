@@ -19,6 +19,10 @@ export const WINDOW_SPACE_ID: string | null = (() => {
 })()
 /** 主窗(以及没有多窗口的 web / 移动端)= URL 上没有 `?window=`。只有它记「最近使用的 Space」。 */
 export const IS_MAIN_WINDOW = typeof location === 'undefined' || !new URLSearchParams(location.search).get('window')
+/** 独立视图窗:把一个 View 拖出 / 移到新窗口开出来的那种(`?window=detached`,不带 `space=`)。它只装主区 ——
+ *  没有左右栏、也开不出来(2026-11-07 用户:「floating panel 应当没有左右分栏」,指 chat 这类 View 单独拖出来的窗)。
+ *  底部面板照旧。整个 Space 开到新窗的(WINDOW_SPACE_ID)不算:那扇窗就是那个 Space,左右栏是它的一部分。 */
+export const IS_VIEW_WINDOW = typeof location !== 'undefined' && !WINDOW_SPACE_ID && new URLSearchParams(location.search).get('window') === 'detached'
 
 function read(): UiMode {
   if (IS_MINI_PANEL) return 'desktop'

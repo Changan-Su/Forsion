@@ -13,7 +13,7 @@ import {
   type IDockviewHeaderActionsProps,
   type DockviewTheme,
 } from 'dockview-react'
-import { X, Plus, PanelLeft, PanelRight, PanelBottom, RotateCcwSquare, ArrowLeft, ArrowRight, AppWindow, PictureInPicture2 } from 'lucide-react'
+import { X, Plus, PanelLeft, PanelRight, PanelBottom, RotateCcwSquare, ArrowLeft, ArrowRight, AppWindow, PictureInPicture2, Columns2, Rows2, ListX, ArrowRightToLine, CopyX, SquareArrowOutUpRight } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import 'dockview-react/dist/styles/dockview.css'
 import type { Leaf, ViewDefinition } from './types'
@@ -22,7 +22,8 @@ import { ExtendViewHost } from './ExtendViewHost'
 import { presentInlineExtension, type ExtendViewController } from './extendView'
 import { NativeExtendView } from './nativeExtendView'
 import { allViews, getView, subscribeViews } from './viewRegistry'
-import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, markSelfTitled, dropAllowed } from './dockviewStore'
+import { useWorkspace, tryRestoreLayout, scheduleWorkspaceSave, activeMainPanel, captureSideWidths, presentDockedExtension, markSelfTitled, dropAllowed, keepMainOnly } from './dockviewStore'
+import { IS_VIEW_WINDOW } from './uiMode'
 import { useNav } from './navStore'
 import { useCommandStore, commandHotkeyText } from './commandRegistry'
 import { useEngineI18n } from './i18nSeam'
@@ -44,13 +45,48 @@ function withHotkey(t: (k: string, v?: Record<string, unknown>) => string, text:
   return key ? t('lcl.withHotkey', { label: text, key }) : text
 }
 
-/** 从 Dockview panel.params 造可跨窗重建的 ViewRef({type, 用户 params});剥引擎私有 __loc/__type。 */
+/** 从 Dockview panel.params 造可跨窗重建的 ViewRef({type, 用户 params});剥引擎私有 __loc/__type。
+ *  视图声明了 copyParams(跟随型视图:主区对话跟着当前会话走)就经它钉住此刻看着的东西,否则新窗口会跟随到别处。 */
 function viewRefFromParams(params: Record<string, unknown> | undefined, component?: string): ViewRef | null {
   const raw = (params ?? {}) as Record<string, unknown>
   const { __loc, __type, ...userParams } = raw
   void __loc
   const type = (typeof __type === 'string' && __type) || component || ''
-  return type && type !== '__extend' ? { type, params: userParams } : null
+  return type && type !== '__extend' ? { type, params: copiedParams(type, userParams) } : null
+}
+
+/** 复制 / 搬走一个 View 时带的参数(见 ViewDefinition.copyParams);钩子抛错就原样带走。 */
+function copiedParams(type: string, params: Record<string, unknown>): Record<string, unknown> {
+  const copy = getView(type)?.copyParams
+  if (!copy) return params
+  try { return copy({ ...params }) } catch { return params }
+}
+
+/** 引擎占位视图:不是内容,不给右键菜单、不能拆分 / 搬走。 */
+const PLACEHOLDER_TABS = new Set(['home', 'sidebar-empty'])
+const tabTypeOf = (p: { params?: unknown; api: unknown }): string =>
+  ((p.params ?? {}) as { __type?: string }).__type || (p.api as { component?: string }).component || ''
+
+/** 把这个标签从本窗拿走(移到新窗口 / 拖进别的窗口之后)。固定 View 的「区内最后一个」不许空着:先强关,再按 Space 声明
+ *  补一个新的同类 View 回原处(pinnedViews.ts 的不变量照旧成立)—— 2026-11-07 用户报「每个 Space 的第一个 View 拖不出去」。 */
+function releaseLeaf(id: string): void {
+  const ws = useWorkspace.getState()
+  if (!ws.isPinnedLeaf(id)) { ws.closeLeaf(id); return }
+  ws.closeLeaf(id, true)
+  ws.ensurePinned()
+}
+
+/** 同组里能关的标签(固定 View 的最后一个、占位、声明了不可关的都不算)。 */
+function closableInGroup(panelId: string): { all: string[]; others: string[]; right: string[] } {
+  const ws = useWorkspace.getState()
+  const panels = (ws.api?.getPanel(panelId)?.group?.panels ?? []) as Array<{ id: string; params?: unknown; api: unknown }>
+  const ok = (p: { id: string; params?: unknown; api: unknown }): boolean => {
+    const type = tabTypeOf(p)
+    return !PLACEHOLDER_TABS.has(type) && getView(type)?.closable !== false && !ws.isPinnedLeaf(p.id)
+  }
+  const at = panels.findIndex((p) => p.id === panelId)
+  const all = panels.filter(ok).map((p) => p.id)
+  return { all, others: all.filter((id) => id !== panelId), right: panels.slice(at + 1).filter(ok).map((p) => p.id) }
 }
 
 /** 从 Dockview panel props 造引擎 Leaf。 */
@@ -171,8 +207,34 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   const closable = useWorkspace((s) => !s.isPinnedLeaf(api.id)) && def?.closable !== false
   const loc = (params as { __loc?: string } | undefined)?.__loc
   const iconOnly = loc === 'left' || loc === 'right'
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; closeAll: string[]; others: string[]; right: string[] } | null>(null)
   const { t } = useEngineI18n()
+  // 右键菜单(2026-11-07 用户:「右键标签栏的 view 应该有一堆菜单选项」)。固定 View 也有菜单,只是没有「关闭」。
+  const menuable = !PLACEHOLDER_TABS.has(type) && type !== '__extend'
+  const openMenu = (e: React.MouseEvent): void => {
+    e.preventDefault(); e.stopPropagation()
+    const c = closableInGroup(api.id)
+    setMenu({ x: e.clientX, y: e.clientY, closeAll: c.all, others: c.others, right: c.right })
+  }
+  const run = (fn: () => void) => (): void => { setMenu(null); fn() }
+  const closeMany = (ids: string[]): void => { const ws = useWorkspace.getState(); for (const id of ids) ws.closeLeaf(id) }
+  const split = (dir: 'right' | 'down'): void => {
+    const ws = useWorkspace.getState()
+    ws.activateLeaf(api.id) // splitActive 认活动面板 → 先把它设成活动
+    const { __loc, __type, ...user } = (params ?? {}) as Record<string, unknown>
+    void __loc; void __type
+    ws.splitActive(dir, copiedParams(type, user))
+  }
+  const toWindow = (move: boolean): void => {
+    const ref = viewRefFromParams(params as Record<string, unknown> | undefined, (api as { component?: string }).component)
+    const d = getDetachApi()
+    if (!ref || !d) return
+    d.detach([ref])
+    if (move) releaseLeaf(api.id)
+  }
+  // 单例视图只有声明了 copyParams(知道怎样做出一份不同的副本,如对话钉住会话)才给拆分;否则拆出来的是第二个「唯一」实例。
+  const canSplit = !!def && (def.singleton !== true || !!def.copyParams)
+  const canWindow = !!def && !!getDetachApi() // 占位(视图没注册)不给:对面窗口开不出它、这边又先关了源面板,面板就没了(Codex 3a 评审)
   const tabRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
     if (!menu) return
@@ -197,7 +259,7 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       data-view-type={type} // 台架按类型认标签(标题会被视图自己改成会话名 / 笔记名)
       data-transient={type === '__extend' ? 'true' : undefined}
       draggable={type !== '__extend'}
-      onContextMenu={closable ? (e) => { e.preventDefault(); e.stopPropagation(); setMenu({ x: e.clientX, y: e.clientY }) } : undefined}
+      onContextMenu={menuable ? openMenu : undefined}
     >
       {TabIcon
         ? <TabIcon params={(params ?? {}) as Record<string, unknown>} size={iconOnly ? 15 : 13} />
@@ -219,21 +281,19 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
       )}
       {menu && createPortal(
         <OverlayAt className="ctx-menu" x={menu.x} y={menu.y} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
-          {/* 「移到新窗口」:确定性撕出路径(不依赖跨窗拖拽);仅桌面(getDetachApi 有真身)显示。
-           *  占位(视图没注册)不给:对面窗口开不出它、这边又先关了源面板,面板就没了(Codex 3a 评审)。 */}
-          {type !== '__extend' && def && getDetachApi() && (
-            <button onClick={() => {
-              const ref = viewRefFromParams(params as Record<string, unknown> | undefined, (api as { component?: string }).component)
-              const d = getDetachApi()
-              if (ref && d) { d.detach([ref]); useWorkspace.getState().closeLeaf(api.id) }
-              setMenu(null)
-            }}>
-              <AppWindow size={13} /> {t('lcl.tab.moveToWindow')}
-            </button>
-          )}
-          <button onClick={() => { useWorkspace.getState().closeLeaf(api.id); setMenu(null) }}>
-            <X size={13} /> {t('lcl.tab.close')}
-          </button>
+          {/* 关闭一组 → 拆分一组 → 窗口一组;按当下能不能做逐项出现,一组都没有就不画那条分隔线。 */}
+          {closable && <button data-act="close" onClick={run(() => useWorkspace.getState().closeLeaf(api.id))}><X size={13} /> {t('lcl.tab.close')}</button>}
+          {menu.others.length > 0 && <button data-act="close-others" onClick={run(() => closeMany(menu.others))}><ListX size={13} /> {t('lcl.tab.closeOthers')}</button>}
+          {menu.right.length > 0 && <button data-act="close-right" onClick={run(() => closeMany(menu.right))}><ArrowRightToLine size={13} /> {t('lcl.tab.closeRight')}</button>}
+          {menu.closeAll.length > 1 && <button data-act="close-all" onClick={run(() => closeMany(menu.closeAll))}><CopyX size={13} /> {t('lcl.tab.closeAll')}</button>}
+          {canSplit && (closable || menu.closeAll.length > 0) && <div className="ctx-separator" />}
+          {/* 侧栏只许上下分(与拖放 / splitActive 同一铁律),所以侧栏标签没有「向右拆分」。 */}
+          {canSplit && !iconOnly && <button data-act="split-right" onClick={run(() => split('right'))}><Columns2 size={13} /> {withHotkey(t, t('lcl.tab.splitRight'), 'split-right')}</button>}
+          {canSplit && <button data-act="split-down" onClick={run(() => split('down'))}><Rows2 size={13} /> {t('lcl.tab.splitDown')}</button>}
+          {canWindow && (canSplit || closable || menu.closeAll.length > 0) && <div className="ctx-separator" />}
+          {/* 「移到新窗口」:确定性撕出路径(不依赖跨窗拖拽);仅桌面(getDetachApi 有真身)显示。固定 View 移走后原处补一个新的(releaseLeaf)。 */}
+          {canWindow && <button data-act="open-window" onClick={run(() => toWindow(false))}><SquareArrowOutUpRight size={13} /> {t('lcl.tab.openInWindow')}</button>}
+          {canWindow && <button data-act="move-window" onClick={run(() => toWindow(true))}><AppWindow size={13} /> {t('lcl.tab.moveToWindow')}</button>}
         </OverlayAt>,
         document.body,
       )}
@@ -296,14 +356,16 @@ function makePrefixActions(): React.FC<IDockviewHeaderActionsProps> {
         <button className="dv-nav-btn" data-press="forward" disabled={!canFwd} title={withHotkey(t, t('lcl.nav.forward'), 'nav-forward')} onClick={() => { if (amId) useNav.getState().forward(amId) }}>
           <ArrowRight size={15} />
         </button>
-        <button
-          className={`dv-edge-toggle${leftCollapsed ? '' : ' is-on'}`}
-          aria-pressed={!leftCollapsed}
-          title={withHotkey(t, t('lcl.edge.left'), 'toggle-left')}
-          onClick={() => useWorkspace.getState().toggleSidebar('left')}
-        >
-          <PanelLeft size={15} />
-        </button>
+        {!IS_VIEW_WINDOW && ( // 独立视图窗只装主区,没有左栏可开(见 uiMode.IS_VIEW_WINDOW)
+          <button
+            className={`dv-edge-toggle${leftCollapsed ? '' : ' is-on'}`}
+            aria-pressed={!leftCollapsed}
+            title={withHotkey(t, t('lcl.edge.left'), 'toggle-left')}
+            onClick={() => useWorkspace.getState().toggleSidebar('left')}
+          >
+            <PanelLeft size={15} />
+          </button>
+        )}
       </div>
     )
   }
@@ -606,9 +668,9 @@ export const WorkspaceHost: React.FC<{
       const id = draggingId, view = draggingView
       const d = getDetachApi()
       const outside = e.clientX < 0 || e.clientY < 0 || e.clientX > window.innerWidth || e.clientY > window.innerHeight
-      // 固定 View 不撕出窗口;占位(视图没注册)也不撕:对面开不出它,源面板却会被关掉
-      if (id && view && d?.drop && outside && !useWorkspace.getState().isPinnedLeaf(id) && getView(view.type)) {
-        void d.drop(e.screenX, e.screenY, view).then((routed) => { if (routed) useWorkspace.getState().closeLeaf(id) })
+      // 占位(视图没注册)不撕:对面开不出它,源面板却会被关掉。固定 View 也能撕出去,原处补一个新的(releaseLeaf)。
+      if (id && view && d?.drop && outside && getView(view.type)) {
+        void d.drop(e.screenX, e.screenY, view).then((routed) => { if (routed) releaseLeaf(id) })
       }
       clearDragState()
     }
@@ -684,6 +746,7 @@ export const WorkspaceHost: React.FC<{
       }
       buildDefault?.()
     }
+    if (IS_VIEW_WINDOW && keepMainOnly(e.api)) ws.syncPanelState() // 独立视图窗:老存档里带着的左右栏清掉(这种窗只装主区)
     landOnMainPage() // 冷启动进的是有默认主页的 Space(主页):先看到那一页,不是上次退出时的前台
     // 布局变更:只同步侧栏可见态 + 存盘。跨组变形已由 dropView 显式写 __loc(不再位置反查 reconcile)。
     const syncLayout = (): void => {
@@ -737,14 +800,16 @@ export const WorkspaceHost: React.FC<{
         >
           <PanelBottom size={15} />
         </button>
-        <button
-          className={`dv-edge-toggle dv-edge-right${rightVisible ? ' is-on' : ''}`}
-          aria-pressed={rightVisible}
-          title={withHotkey(t, t('lcl.edge.right'), 'toggle-right')}
-          onClick={() => useWorkspace.getState().toggleSidebar('right')}
-        >
-          <PanelRight size={15} />
-        </button>
+        {!IS_VIEW_WINDOW && (
+          <button
+            className={`dv-edge-toggle dv-edge-right${rightVisible ? ' is-on' : ''}`}
+            aria-pressed={rightVisible}
+            title={withHotkey(t, t('lcl.edge.right'), 'toggle-right')}
+            onClick={() => useWorkspace.getState().toggleSidebar('right')}
+          >
+            <PanelRight size={15} />
+          </button>
+        )}
       </div>
     </>
   )

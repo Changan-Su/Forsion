@@ -41,6 +41,12 @@ export const LCL_MESSAGES: Record<string, { zh: string; en: string }> = {
   // 标签条 / 主区前后缀 / 右上角浮钮组
   'lcl.tab.close': { zh: '关闭', en: 'Close' },
   'lcl.tab.moveToWindow': { zh: '移到新窗口', en: 'Move to new window' },
+  'lcl.tab.openInWindow': { zh: '在新窗口中打开', en: 'Open in new window' },
+  'lcl.tab.closeOthers': { zh: '关闭其他标签', en: 'Close other tabs' },
+  'lcl.tab.closeRight': { zh: '关闭右侧标签', en: 'Close tabs to the right' },
+  'lcl.tab.closeAll': { zh: '关闭全部标签', en: 'Close all tabs' },
+  'lcl.tab.splitRight': { zh: '向右拆分', en: 'Split right' },
+  'lcl.tab.splitDown': { zh: '向下拆分', en: 'Split down' },
   'lcl.tab.new': { zh: '新建标签页', en: 'New tab' },
   'lcl.nav.back': { zh: '后退', en: 'Back' },
   'lcl.nav.forward': { zh: '前进', en: 'Forward' },
