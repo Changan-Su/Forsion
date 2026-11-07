@@ -25,7 +25,7 @@ import { resolveDeskPath } from '../stores/deskPlan'
 import { useDeskAcceptsFiles } from '../amadeus/plugins/deskCompanion'
 import { ToolCardDeskContext, toolCardDeskFor } from '../components/PluginToolCard'
 import { ErrorBoundary } from '../components/ErrorBoundary'
-import { EditorialMessage, type MessageHandlers } from './chat2/EditorialMessage'
+import { EditorialMessage, type MessageHandlers, type PendingSend } from './chat2/EditorialMessage'
 import { EditBubble } from './chat2/EditBubble'
 import { ApprovalTray, DeckPill, type DeckItem } from './chat2/ApprovalTray'
 import { pendingCreationCardsOf, pendingHumanCardsOf, pendingTaskCardsOf, tasksOf, useTaskHandledVersion } from './chat2/pendingTasks'
@@ -50,7 +50,7 @@ import { useChangeTrailDriver } from './chat2/changeTrail'
 import { BgStrip } from './chat2/BackgroundProcs'
 import { useApp, activeChatModelId } from '../stores/appStore'
 import { stickyDefaults, withAmadeusWorkspace, applyPreset } from '../../../../tangu-agent/src/contracts/sessionDefaults'
-import { newSessionPreset, amadeusLandingRoot } from '../tangu/store/tanguSlice'
+import { newSessionPreset, amadeusLandingRoot, type QueueItem } from '../tangu/store/tanguSlice'
 import { settleModes } from '../stores/projectSettings'
 import { currentPlatform } from '../services/agentRunService'
 import { hasChatRef, readChatRefs } from '../components/chatDragRef'
@@ -87,7 +87,7 @@ const EMPTY_MESSAGES: UiMessage[] = []
 const EMPTY_CONFIG: AgentConfig = {}
 const EMPTY_FAILED: FailedSend[] = []
 const EMPTY_USAGE: { ctx: number; base: number; live: number; runCost?: number; costLimit?: number } = { ctx: 0, base: 0, live: 0 }
-const EMPTY_STEER: Array<{ id: string; text: string }> = []
+const EMPTY_STEER: QueueItem[] = []
 const EMPTY_STRS: string[] = []
 /** 列表里不画的消息:团队总结(单独挂尾部)与只有工作占位、没东西可看的成员气泡。 */
 const isHiddenInList = (m: UiMessage): boolean =>
@@ -285,6 +285,22 @@ export function ChatView({ leaf, params }: ViewProps) {
   // 画到流里的那一段(长会话先是末尾几条、空闲时往上补,见 useTailFirst;桌面与网页 10-16 起也这样,原来只有手机);
   // 数据层的判断一律仍看 activeMessages。要跳到某条消息(搜索命中)时整段挂。
   const shownMessages = useTailFirst(activeMessages, activeId || null, s.jumpTarget?.sessionId !== activeId)
+  // 运行中发出、Agent 还没读到的插话:按下 Enter 就画进对话末尾(像 Codex / Claude 那样「发出去了」),不再挂在输入框上方排队。
+  // 引擎读到时 turn_boundary 带回**同一个 id** 的用户消息,插在收尾那段之后 —— 和这里的位置一样,同 key 原地转正、不重挂。
+  // 画布模式没有这条流,等待区照旧留在输入框上方(Composer2 steerInline)。
+  const [recallSteer, setRecallSteer] = useState<string | null>(null)
+  const pendingSend = useMemo(() => {
+    const list = s.steerPending
+    const msgs: UiMessage[] = list.map((p) => ({ id: p.id, role: 'user', content: p.text, attachments: p.attachments, status: 'done', timestamp: 0 }))
+    const props = new Map<string, PendingSend>(list.map((p, i) => [p.id, {
+      local: !!p.localOnly,
+      hint: i === list.length - 1,
+      // 撤回交给输入框做(和 ↑ 同一条路:文字接回草稿前面,不顶掉打了一半的字)
+      onWithdraw: () => setRecallSteer(p.id),
+      onSteerNow: p.localOnly || !activeId ? undefined : () => { void useApp.getState().steerNow(activeId) },
+    }]))
+    return { msgs, props }
+  }, [s.steerPending, activeId])
   // 分支里最后一条做完的回答带「带回这里」:作为引用挂进来源那一支的输入框(由用户发,agent 不往别的支写)
   const bringBackTo = activeSession?.fork_message_id ? (activeSession.fork_session_id || activeSession.parent_session_id || null) : null
   const bringBackMsgId = bringBackTo && !params.childSurface ? [...activeMessages].reverse().find((m) => m.role === 'assistant' && m.status === 'done')?.id : undefined
@@ -590,6 +606,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   const childSurface = !!params.childSurface
   const canInsertNote = amadeusAvailable()
   const handlerCache = useMemo(() => new Map<string, MessageHandlers>(), [activeId, readOnly, childSurface, canInsertNote, ttsEnabled])
+  // 待读插话只有「复制」(撤回 / 立即插话走 PendingSend);编辑 / 回退要等它真的进了对话
+  const pendingHandlers = useMemo<MessageHandlers>(() => ({ onCopy: (text) => handlerEnv.current.copy(text) }), [])
   const handlersFor = (id: string): MessageHandlers => {
     const hit = handlerCache.get(id)
     if (hit) return hit
@@ -792,7 +810,13 @@ export function ChatView({ leaf, params }: ViewProps) {
               // 在里面居中 = 视觉上偏高。骨架屏留在流里 —— 它替代的是消息,本就该从顶部排。
               historyLoading ? <Skeleton variant="chat" /> : null
             ) : (
-              shownMessages.map((m) => {
+              // 待读插话和正文放进同一个数组:读到后同 id 的真消息接替它时 React 认成同一个节点
+              // 已经进了正文的(turn_boundary 抢在 POST 应答前到)不再画一份,免得同 key 两个节点
+              (pendingSend.msgs.length && !canvasOn ? [...shownMessages, ...pendingSend.msgs.filter((p) => !activeMessages.some((x) => x.id === p.id))] : shownMessages).map((m) => {
+                const pend = pendingSend.props.get(m.id)
+                if (pend && !activeMessages.some((x) => x.id === m.id)) {
+                  return <EditorialMessage key={m.id} msg={m} pending={pend} userName={userName} userAvatar={userAvatar} fileCtx={fileCtx} handlers={pendingHandlers} />
+                }
                 if (isHiddenInList(m)) return null
                 if (m.role === 'user' && m.id === editingId) {
                   return <EditBubble key={m.id} original={m.content} value={editText} onChange={setEditText} userName={userName} userAvatar={userAvatar}
@@ -1104,6 +1128,9 @@ export function ChatView({ leaf, params }: ViewProps) {
           onSeedConsumed={() => { if (s.steerRestore && activeId) s.clearSteerRestore(activeId); else if (!params.childSurface) s.setPendingDraft(null) }}
           sentHistory={sentHistory}
           pendingSteer={s.steerPending}
+          steerInline={!canvasOn}
+          withdrawSteerRequest={recallSteer}
+          onWithdrawSteerRequestDone={() => setRecallSteer(null)}
           onCancelSteer={activeId ? (id) => { void s.withdrawSteer(activeId, id) } : undefined}
           onWithdrawSteer={activeId ? (id) => s.withdrawSteer(activeId, id) : undefined}
           onSteerNow={activeId ? () => { void s.steerNow(activeId) } : undefined}

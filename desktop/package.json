@@ -91,6 +91,7 @@
     "e2e:ctxlimit": "node scripts/ctxlimit-menu.e2e.cjs",
     "e2e:livewait": "node scripts/chat-livewait.e2e.cjs",
     "e2e:queue": "node scripts/queued-commands.e2e.cjs",
+    "e2e:steerinline": "node scripts/steer-inline.e2e.cjs",
     "e2e:composerdraft": "node scripts/composer-draft.e2e.cjs",
     "e2e:projectbar": "node scripts/newchat-projectbar.e2e.cjs",
     "e2e:runlocation": "node scripts/run-location.e2e.cjs",

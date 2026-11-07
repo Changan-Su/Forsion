@@ -972,7 +972,8 @@ export interface TanguState {
   /** send 的本体;只给 send 用(send 在外面套了「作品卡挪会话」互斥,直接调它会绕过)。 */
   sendNow(text: string, attachments: Attachment[], workspaceFiles?: Attachment[], skillIds?: string[], mentions?: { priorityAgent?: string; mentionAgents?: string[]; mentionProjects?: Array<{ name: string; path: string }> }, sessionId?: string | null, fromQueue?: boolean, holdFailed?: boolean): Promise<boolean>
   /** 撤回一条等待中的插话(删除/↑取回)。返回消息文本;已注入或来不及则 null(等待区交给事件流收拾)。 */
-  withdrawSteer(sessionId: string, msgId: string): Promise<string | null>
+  /** 撤回一条还没被读到的插话,返回它的文字和附件(撤回方负责放回输入框,附件不能丢);来不及则 null。 */
+  withdrawSteer(sessionId: string, msgId: string): Promise<{ text: string; attachments?: Attachment[] } | null>
   /** 「立即插话」:打断当前 run,把等待区消息按序强发。 */
   steerNow(sessionId?: string | null): Promise<void>
   stop(sessionId?: string | null): Promise<boolean>
@@ -2968,7 +2969,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     }
     set((s) => ({ steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: (s.steerPendingBySession[sessionId] || []).filter((p) => p.id !== msgId) } }))
     tanguCount('chatSteerWithdraw')
-    return item.text
+    return { text: item.text, attachments: item.attachments }
   },
 
   steerNow: async (targetSessionId) => {

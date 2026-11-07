@@ -183,14 +183,11 @@ async function main() {
     await win.locator('.t2c-stop').first().waitFor({ timeout: 10_000 })
     await ta.fill('顺便看下 tokenizer')
     await win.keyboard.press('Enter')
-    const steer = win.locator('.t2c-steer').first()
+    // 11-07 起插话不再浮在正文上(输入框上方那块等待区只剩画布模式用),直接画进对话末尾:透不透的问题随之没了,改钉「在流里」
+    const steer = win.locator('.t2-stream .t2-userwrap--pending').first()
     await steer.waitFor({ timeout: 5000 })
-    await win.addStyleTag({ content: '.ach-toast{display:none!important}' }) // 首条消息的成就浮层会盖住等待区(同 e2e:queue)
-    const steerBg = await steer.evaluate((el) => getComputedStyle(el).backgroundColor)
-    const alpha = (c) => { const m = c.match(/rgba?\(([^)]+)\)/); const p = m ? m[1].split(/[ ,/]+/).filter(Boolean) : []; return p.length > 3 ? parseFloat(p[3]) : m ? 1 : 0 }
-    r.check('5a 插话等待区底色不透明', alpha(steerBg) === 1, steerBg)
-    // 正文滚到等待区底下再拍:透不透一眼可见
-    await win.evaluate(() => { const s = document.querySelector('.t2-stream'); if (s) s.scrollTop = Math.max(0, s.scrollHeight - s.clientHeight - 90) })
+    await win.addStyleTag({ content: '.ach-toast{display:none!important}' }) // 首条消息的成就浮层会盖住输入区一角(同 e2e:queue)
+    r.check('5a 插话画进对话、输入框上方不再浮等待区', (await win.locator('.t2c-steer').count()) === 0)
     await sleep(250)
     await win.screenshot({ path: path.join(dir, 'steer-over-text.png') })
 
