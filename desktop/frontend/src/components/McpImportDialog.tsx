@@ -3,6 +3,8 @@ import { createPortal } from 'react-dom'
 import { registerMessages, useI18n } from '../i18n'
 import { McpInputError, checkMcpNames, parseMcpInput, publicMcpUrl, type McpServerMap } from '../../../shared/mcpConfig'
 import { ipcErrorText } from '../ipcError'
+import { mcpProbe } from '../services/backendService'
+import { homeTarget } from '../services/engine/targets'
 import './McpImportDialog.css'
 
 registerMessages({
@@ -15,6 +17,11 @@ registerMessages({
   'mcpImport.back': { zh: '返回编辑', en: 'Back to editing' },
   'mcpImport.detected': { zh: '已识别 {count} 个服务器', en: '{count} servers detected' },
   'mcpImport.new': { zh: '新增', en: 'New' },
+  'mcpImport.test': { zh: '测试连接', en: 'Test connection' },
+  'mcpImport.testing': { zh: '连接中…', en: 'Connecting…' },
+  'mcpImport.testOk': { zh: '已连通，{count} 个工具', en: 'Connected, {count} tools' },
+  'mcpImport.testLogin': { zh: '能连上，保存后要登录或填 Key', en: 'Reachable. Sign in or add a key after saving' },
+  'mcpImport.testFailed': { zh: '连不上：{error}', en: 'Couldn’t connect: {error}' },
   'mcpImport.skip': { zh: '跳过', en: 'Skip' },
   'mcpImport.replace': { zh: '覆盖现有配置', en: 'Replace existing configuration' },
   'mcpImport.summary': { zh: '{added} 个新增 · {replaced} 个覆盖 · {skipped} 个跳过', en: '{added} new · {replaced} replacements · {skipped} skipped' },
@@ -95,6 +102,15 @@ export function McpImportDialog({ draft, onDraft, pluginNames, onClose, onSaved 
     } catch (e) { showError(e); setBusy(false) }
   }
   const added = preview ? Object.keys(preview.incoming).filter(n => !Object.hasOwn(preview.expected, n)).length : 0
+  // 测试连接(D29):按这份还没保存的配置连一次;结果按服务器名记,回到第一步就清掉
+  const [tests, setTests] = useState<Record<string, string>>({})
+  const test = (name: string): void => {
+    setTests(m => ({ ...m, [name]: t('mcpImport.testing') }))
+    void mcpProbe(homeTarget(), preview?.incoming[name]).then(
+      r => r.ok ? t('mcpImport.testOk', { count: String(r.tools.length) }) : r.needsLogin ? t('mcpImport.testLogin') : t('mcpImport.testFailed', { error: r.error }),
+      e => t('mcpImport.testFailed', { error: ipcErrorText(e) }),
+    ).then(text => setTests(m => ({ ...m, [name]: text })))
+  }
   return createPortal(<div className="modal-overlay mcp-import-overlay" onMouseDown={e => { if (e.target === e.currentTarget && !busy) onClose() }}>
     <div className="modal mcp-import-dialog" ref={dialog} role="dialog" aria-modal="true" aria-labelledby="mcp-import-title" aria-busy={busy}>
       <div className="mcp-import-heading"><h3 id="mcp-import-title">{t('mcpImport.open')}</h3><span>{preview ? '2 / 2' : '1 / 2'}</span></div>
@@ -102,7 +118,8 @@ export function McpImportDialog({ draft, onDraft, pluginNames, onClose, onSaved 
         <p className="hint">{t('mcpImport.detected', { count: Object.keys(preview.incoming).length })}</p>
         <div className="mcp-import-results">{Object.entries(preview.incoming).map(([name, config]) => {
           const exists = Object.hasOwn(preview.expected, name)
-          return <div key={name} className="mcp-import-row"><div><b>{name}</b><small>{config.command || publicMcpUrl(config.url)}</small></div>
+          return <div key={name} className="mcp-import-row"><div><b>{name}</b><small>{config.command || publicMcpUrl(config.url)}</small>{tests[name] && <small role="status">{tests[name]}</small>}</div>
+            <button className="btn ghost sm" disabled={busy || tests[name] === t('mcpImport.testing')} onClick={() => test(name)}>{t('mcpImport.test')}</button>
             {exists ? <label><input type="checkbox" checked={replace.includes(name)} onChange={e => setReplace(list => e.target.checked ? [...list, name] : list.filter(n => n !== name))} disabled={busy} />{t('mcpImport.replace')}</label> : <span className="hint">{t('mcpImport.new')}</span>}
           </div>
         })}</div>
@@ -113,7 +130,7 @@ export function McpImportDialog({ draft, onDraft, pluginNames, onClose, onSaved 
         {(needsName || draft.name) && <div className="field"><label htmlFor="mcp-import-name">{t('mcpImport.name')}</label><input type="text" id="mcp-import-name" value={draft.name} disabled={busy} onChange={e => onDraft({ ...draft, name: e.target.value })} /></div>}
       </>}
       {error && <p className="mcp-import-error" role="alert">{error}</p>}
-      <div className="mcp-import-actions">{preview && <button className="btn ghost sm" disabled={busy} onClick={() => { setPreview(null); setError('') }}>{t('mcpImport.back')}</button>}<button className="btn ghost sm" disabled={busy} onClick={onClose}>{t('settings.btn.cancel')}</button><button className="btn primary sm" disabled={busy || (preview ? added + replace.length === 0 : !draft.json.trim())} onClick={() => void (preview ? save() : check())}>{t(preview ? 'mcpImport.save' : 'mcpImport.check')}</button></div>
+      <div className="mcp-import-actions">{preview && <button className="btn ghost sm" disabled={busy} onClick={() => { setPreview(null); setError(''); setTests({}) }}>{t('mcpImport.back')}</button>}<button className="btn ghost sm" disabled={busy} onClick={onClose}>{t('settings.btn.cancel')}</button><button className="btn primary sm" disabled={busy || (preview ? added + replace.length === 0 : !draft.json.trim())} onClick={() => void (preview ? save() : check())}>{t(preview ? 'mcpImport.save' : 'mcpImport.check')}</button></div>
     </div>
   </div>, document.body)
 }

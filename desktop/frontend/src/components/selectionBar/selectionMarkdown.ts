@@ -116,3 +116,22 @@ function serialize(node: Node, markdown: boolean): string {
   if (['p', 'div', 'table'].includes(tag)) return `\n\n${children().trim()}\n\n`
   return children()
 }
+
+/** ⌘C over rendered KaTeX copies its TeX source; the browser default carries the hidden MathML and the visual layer as two garbled runs. Editable areas keep their own copy. */
+export function installCopyTex(doc: Document = document): () => void {
+  const onCopy = (e: ClipboardEvent): void => {
+    const s = doc.getSelection()
+    if (e.defaultPrevented || !e.clipboardData || !s?.rangeCount || s.isCollapsed) return
+    const range = s.getRangeAt(0)
+    const at = range.commonAncestorContainer
+    const host = at.nodeType === Node.ELEMENT_NODE ? at as Element : at.parentElement
+    if (!host || host.closest('input, textarea, [contenteditable]:not([contenteditable="false"])')) return
+    if (!host.closest('.katex') && !range.cloneContents().querySelector('.katex')) return
+    const content = selectionMarkdown(s, doc.body)
+    if (!content?.text) return
+    e.clipboardData.setData('text/plain', content.text)
+    e.preventDefault()
+  }
+  doc.addEventListener('copy', onCopy)
+  return () => doc.removeEventListener('copy', onCopy)
+}

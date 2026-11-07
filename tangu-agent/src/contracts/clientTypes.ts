@@ -226,6 +226,8 @@ export interface MuseTriggerInfo {
   nextRunAt?: string | null
   /** 规则开着但这会儿不动的原因:`trigger:*` code(桌面翻译)或引擎的暂时性状态文案。 */
   notice?: string
+  /** 内容版本指纹(GET / 保存时现算):构建器保存时原样带回 `expectedRev`,对不上引擎回 409。旧引擎没有。 */
+  rev?: string
 }
 
 /** agent 日程条目(agents/<slug>/SCHEDULE.db;引擎 entriesOf 的结构化输出)。 */
