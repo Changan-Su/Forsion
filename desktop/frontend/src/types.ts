@@ -371,6 +371,8 @@ export interface McpServerConfigEntry {
   oauth?: { clientId?: string; scopes?: string[] }
   /** 从商店连上的连接器:目录 id(宿主同步地址、引擎读 alwaysAsk)。编辑时原样带着,别丢。 */
   connector?: string
+  /** 按远端工具名收紧:off 不下发、ask 每次都问(连接器设置页写)。编辑时原样带着。 */
+  tools?: Record<string, 'ask' | 'off'>
 }
 
 /** 连接器目录的一条(electron/connectorCatalog.ts 校验过的形状)。 */
@@ -487,6 +489,8 @@ declare global {
     tangu?: {
       /** 宿主平台('darwin' | 'win32' | 'linux');静态值,渲染层据此调标题栏留白。 */
       platform?: string
+      /** 整窗重载,由主进程发(打包版里渲染层自己 location.reload() 会被拦下);渲染层统一用 reloadWindow.ts。 */
+      reloadWindow?(): Promise<void>
       /** 只读状态检查:不安装 helper、不触发系统授权。 */
       desktopPermissionsStatus?(): Promise<DesktopPermissionsSnapshot>
       /** 仅由用户点击触发:打开系统授权引导;Computer Use 缺失时安装/启动。 */
@@ -614,6 +618,8 @@ declare global {
       /** 网页版专用(webShim):协议更新状态 GET /api/auth/terms 与确认 POST /api/auth/terms/agree。
        *  桌面 / Android 走 cloudFetch;网页版不给 cloudFetch(有它会顺带打开只给桌面的成就 / 插件数据同步)。见 components/TermsUpdateDialog。 */
       termsStatus?(): Promise<{ status: number; json?: any }>
+      /** 网页版:公开会员方案列表(会员徽章的配色与中英文名);桌面 / Android 走 cloudFetch */
+      membershipPlans?(): Promise<{ status: number; json?: any }>
       termsAgree?(version: string): Promise<{ status: number; json?: any }>
       /** Forsion Extend 渲染半身调它自己主进程半身注册的通道;宿主通道一律拒。没装载 Extend 就没有这个键。 */
       cloudInvoke?(channel: string, ...args: unknown[]): Promise<unknown>
@@ -949,6 +955,8 @@ declare global {
       onUiChanged?(cb: (state: import('../../shared/uiSync').UiSyncPayload) => void): () => void
       /** P1-KF:把本窗**生效**界面语言报给主进程(托盘 / 系统通知 / 对话框跟它走)。只有桌面 preload 有;web / 手机 / 设备页缺席 = 不报。 */
       reportUiLocale?(locale: 'zh' | 'en'): void
+      /** 本机外观报给主进程(已配对的 Forsion Clip 经 /unit/appearance 跟随)。只有桌面 preload 有。 */
+      reportUiAppearance?(appearance: { skin: string; bg: string; mode: 'light' | 'dark' }): void
       closeSelf?(): void
       miniResize?(edge: string | null, start?: boolean, cursor?: { x: number; y: number; radius?: number }): void
       /** 跨窗撕拽:拖拽中实时上报屏幕坐标(主进程命中测试 → 给光标下窗口发落点预览)。节流后调。 */

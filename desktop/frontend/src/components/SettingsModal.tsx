@@ -24,7 +24,7 @@ import { UI_MODE, UI_ZOOM_EVENT, useNativeChromeClaim, useNativeChromeInstalled,
 import { useApp, defaultModelOf } from '../stores/appStore' // Agent Desk 开关改动即时回流(desktopConfig 平时只在 boot/后端就绪时刷新)
 import { testConnection } from '../services/agentRunService'
 import { listClientSurfaces } from '../services/clientSurfaces'
-import { ConnectorSettingsBlock } from './Connectors'
+import { ConnectorSettingsPage } from './Connectors'
 import { connectorsSupported } from '../services/connectorService'
 import {
   fetchProviderModels,
@@ -164,7 +164,7 @@ registerMessages({
   'settings.forsionCloud.sync': { zh: '云端智库', en: 'Cloud vault' },
   // 「Agents 与记忆」的开关搬进蓬洲云「同步」页(云同步开启方案 2026-10-20),这里只留一条指路 + 立即同步
   'settings.forsion.syncManaged': { zh: '开关在蓬洲云 › 同步', en: 'Turn it on or off in Penzor Cloud › Sync' },
-  'settings.forsion.syncManagedHint': { zh: '登录后默认开着；智库、Agents 与记忆、插件数据都在那一页管。', en: 'On by default after you sign in. Notes, agents & memory, and plugin data are all managed on that page.' },
+  'settings.forsion.syncManagedHint': { zh: '登录后笔记和插件默认开着，Agent 逐个选、默认不同步；都在那一页管。', en: 'Notes and plugins are on by default after you sign in; agents are chosen one by one and aren’t synced by default. All managed on that page.' },
   'settings.forsion.openPenzorSync': { zh: '打开', en: 'Open' },
   'settings.forsionCloud.connection': { zh: '连接', en: 'Connection' },
   'settingsmodal.cloudAccountDescription': { zh: 'Forsion 云端 · 管理个人主页、登录资料和账号安全。', en: 'Forsion Cloud · Your profile, sign-in details and account security.' },
@@ -355,7 +355,8 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   model: <Brain size={14} />,
   agents: <Bot size={14} />,
   skills: <Sparkles size={14} />,
-  mcp: <Plug size={14} />,
+  connectors: <Plug size={14} />,
+  mcp: <Server size={14} />,
   hooks: <Webhook size={14} />,
   channels: <MessageCircle size={14} />,
   browser: <Globe2 size={14} />,
@@ -433,6 +434,9 @@ export const SettingsModal: React.FC<{
   // 中分类(标题下那排横向栏目)。只存 key,**有效值在渲染时推导**(见下方 activeSub):
   // 这样换一级页 / 某个中分类因条件消失时自动落回第一项,不需要 effect 复位,也就没有复位竞态。
   const [sub, setSub] = useState(initialTarget.sub ?? '')
+  // 商店「已连接 · 管理」深链到 connectors/conn:<server 名>:只在首次挂载时用一次,之后在导航里点「连接器」落列表
+  const [initialConnector, setInitialConnector] = useState(() => (initialTarget.tab === 'connectors' && initialTarget.sub?.startsWith('conn:') ? initialTarget.sub.slice(5) : undefined))
+  useEffect(() => { if (rawTab !== 'connectors') setInitialConnector(undefined) }, [rawTab])
   /** 模型库当前的类型标签(默认模型页的「在模型库里管理」带着类型跳过来)。 */
   const [libKind, setLibKind] = useState<ModelKind>('llm')
   // 滑入方向:+1 点了右边的栏目,-1 左边,0 换了一级页(纯淡入)。喂给 .settings-sub[data-dir]。
@@ -573,6 +577,7 @@ export const SettingsModal: React.FC<{
     // 技能云端可用:desktop 或 Tangu Web 都显示(保持 desktop 原有顺序:agents→skills→mcp…)。
     ...((isDesktop || cloudWeb) ? ([['skills', t('settings.tab.skills')]] as Array<[Tab, string]>) : []),
     // 统一插件页(amadeus-plugins):Forsion 插件(含捆绑包)+ Tangu 引擎插件两区一页;旧 'plugins' 入口已并入(settingsTarget 的别名表)。
+    ...(isDesktop && connectorsSupported() ? ([['connectors', t('settings.tab.connectors')]] as Array<[Tab, string]>) : []),
     ...(isDesktop ? ([['mcp', t('settingsmodal.tab.mcp')], ['hooks', t('settingsmodal.tab.hooks')], ['channels', t('settings.tab.channels')], ['browser', t('settings.tab.browser')]] as Array<[Tab, string]>) : []),
     // 电脑操作(引擎插件 computer-use)启用且有设置时才有这一页;原先只排在「扩展」组最末尾、和几十个插件混在一起(反馈 0c0cd24f)。
     ...(isDesktop && computerUse ? ([['computer-use', t('settings.tab.computerUse')]] as Array<[Tab, string]>) : []),
@@ -1276,6 +1281,7 @@ export const SettingsModal: React.FC<{
     model: 'settings.page.modelDescription',
     agents: 'settings.page.agentsDescription',
     skills: 'globalSkills.intro',
+    connectors: 'connectors.pageHint',
     mcp: 'settings.page.mcpDescription',
     hooks: 'settings.page.hooksDescription',
     channels: 'settings.page.channelsDescription',
@@ -1406,7 +1412,7 @@ export const SettingsModal: React.FC<{
     { key: 'settings', label: '', groups: [
       { key: 'workspace', label: t('settings.group.workspace'), tabs: ['forsion', 'general', 'spaces', 'notes', 'sync'] },
       { key: 'appearance', label: t('settings.group.appearance'), tabs: ['theme', 'shortcuts', 'notifications', 'statusbar'] },
-      { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'mcp', 'hooks', 'channels', 'browser', 'computer-use'] },
+      { key: 'ai', label: t('settings.group.ai'), tabs: ['model', 'agents', 'skills', 'connectors', 'mcp', 'hooks', 'channels', 'browser', 'computer-use'] },
       { key: 'extensions', label: t('settings.group.extensions'), tabs: ['amadeus-plugins'] },
       { key: 'system', label: t('settings.group.system'), tabs: ['trash', 'permissions', 'units', 'remote-sessions', 'computer-history', 'advanced', 'developer', 'about'] },
     ] },
@@ -2628,10 +2634,19 @@ export const SettingsModal: React.FC<{
                     }} />
                 )}
 
+                {tab === 'connectors' && <ConnectorSettingsPage initialServer={initialConnector} onOpenMcp={() => goTab('mcp')} />}
                 {tab === 'mcp' && (
                   <>
                     {showMcpImport && <McpImportDialog draft={mcpImportDraft} onDraft={setMcpImportDraft} pluginNames={(mcpStatus || []).filter(s => s.origin).map(s => s.server)} onClose={() => setShowMcpImport(false)} onSaved={r => { setMcpServers(r.mcpServers); setMcpMsg(t('mcpImport.saved', { added: r.added.length, replaced: r.replaced.length })); setShowMcpImport(false); setMcpImportDraft({ json: '', name: '' }); refreshMcp() }} />}
-                    {connectorsSupported() && <ConnectorSettingsBlock servers={mcpServers} rows={mcpStatus} onLogin={loginMcp} onMsg={setMcpMsg} onChanged={refreshMcp} />}
+                    {connectorsSupported() && (() => {
+                      const n = Object.values(mcpServers).filter((sc) => typeof sc.connector === 'string').length
+                      return (
+                        <button type="button" className="file-row conn-mcp-entry" data-connector-entry onClick={() => goTab('connectors')}>
+                          <span className="file-name"><Plug size={14} /><b>{t('connectors.mcpEntry', { n })}</b><small>{t('connectors.mcpEntryHint')}</small></span>
+                          <ChevronRight size={14} aria-hidden="true" />
+                        </button>
+                      )
+                    })()}
                     <div className="field">
                       <div className="mcp-settings-heading"><label>{t('settings.mcp.label')}</label>
                       {!editMcp && (

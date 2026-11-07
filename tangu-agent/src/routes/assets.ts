@@ -11,7 +11,8 @@ import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
-import { resolveTools } from '../tools/toolRegistry.js';
+import { resolveTools, isMcpDeferred, mcpCatalogHint } from '../tools/toolRegistry.js';
+import type { LoadedMcpTool } from '../mcp/toolBridge.js';
 import type { ToolContext } from '../tools/toolTypes.js';
 
 import { runWithAgentSlug } from '../seams/runContext.js';
@@ -171,10 +172,17 @@ router.delete('/agent/skills/user/:id', authMiddleware, async (req: AuthRequest,
   }
 });
 
-/** 工具定义每个请求大约占多少 token:名字 + 描述 + 参数 schema 序列化成 JSON,按约 4 字符 = 1 token(不调分词器,界面标「约」)。
- *  MCP 工具今天全量进 defs(getToolDefinitions),没有按需加载的那种 —— 以后给 MCP 加了 deferred,这里要把它们剔掉。 */
+/** 工具定义每个请求大约占多少 token:名字 + 描述 + 参数 schema 序列化成 JSON,按约 4 字符 = 1 token(不调分词器,界面标「约」)。 */
 export function approxToolTokens(defs: unknown[]): number {
   return Math.ceil(defs.reduce<number>((n, d) => n + JSON.stringify(d).length, 0) / 4);
+}
+
+/** MCP server 每次请求的实际开销:常驻的算整份定义;按需加载的(11-06 起缺省)平时只占「Additional Tools」目录里一行
+ *  (与 agentLoop 拼目录同一格式),装上之后那一 run 才多出整份定义。设置页「每次请求约 N token」据此不再虚高。 */
+export function approxMcpServerTokens(live: LoadedMcpTool[]): number {
+  const always = live.filter((t) => !isMcpDeferred(t)).map((t) => t.definition);
+  const catalog = live.filter((t) => isMcpDeferred(t)).reduce<number>((n, t) => n + `- ${t.name}: ${mcpCatalogHint(t)}\n`.length, 0);
+  return approxToolTokens(always) + Math.ceil(catalog / 4);
 }
 
 router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
@@ -211,7 +219,9 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
     const mcpManager = deps().mcp;
     const mcp = mcpManager
       ? mcpManager.listStatus().map((s) => {
-          const tools = [...mcpManager.toolsForRun([s.name]).values()];
+          // 清单连按工具关掉的也给(设置页要列出来、能改回);token 只算真下发的
+          const tools = [...mcpManager.toolsForRun([s.name], { includeOff: true }).values()];
+          const live = [...mcpManager.toolsForRun([s.name]).values()];
           return {
             server: s.name,
             transport: s.transport,
@@ -223,9 +233,10 @@ router.get('/agent/tools', authMiddleware, async (req: AuthRequest, res) => {
             ...(s.origin ? { origin: s.origin } : {}),
             tools: tools.map((t) => ({
               name: t.name,
+              remoteName: t.remoteName, // 远端原名:目录 alwaysAsk 按它记,桥接名经 sanitize 改写过、反推不回来
               description: t.definition.function.description || '',
             })),
-            approxTokens: approxToolTokens(tools.map((t) => t.definition)),
+            approxTokens: approxMcpServerTokens(live),
           };
         })
       : [];

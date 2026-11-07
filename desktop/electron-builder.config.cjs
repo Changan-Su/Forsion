@@ -125,6 +125,8 @@ module.exports = {
           { from: '../tangu-agent/package.json', to: 'tangu-server/package.json' },
           { from: '../tangu-agent/skills', to: 'tangu-server/skills' },
           { from: '../tangu-agent/agent-skills', to: 'tangu-server/agent-skills' },
+          // Tangu 界面半身(scripts/build-tangu-ui.mjs 打的;界面热更新 4b):打包版的界面从这里求值
+          { from: '../tangu-agent/ui', to: 'tangu-server/ui' },
           // 设置页按引擎路径打开随包的 Chrome 扩展，两个发行版都需要。扩展本体是 Forsion Clip(并入了 Tangu 浏览器控制),
           // 来源是 package.json 钉死的 npm 包 @forsion/clip;落点不变,引擎 extensionDir() 与用户已加载的路径都不用动。
           { from: 'node_modules/@forsion/clip/chrome-mv3', to: 'tangu-server/browser-extension' },

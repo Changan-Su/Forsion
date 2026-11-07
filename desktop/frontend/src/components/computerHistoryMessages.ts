@@ -7,8 +7,8 @@ registerMessages({
   'computerHistory.enable': { zh: '记录电脑历史', en: 'Record computer history' },
   'computerHistory.enableConfirm.title': { zh: '开始记录电脑历史？', en: 'Start recording computer history?' },
   'computerHistory.enableConfirm.body': {
-    zh: 'Forsion 会在这台电脑上记录你在各个 App 里的窗口标题、网址和输入的文字，未加密保存 {days} 天。Agent 或 Muse 读取时，片段会发给它们所用的模型，可能是 Forsion 云端，也可能是第三方 Provider。清除历史只删记录本身：已经引用过它的对话和 Muse 自己的笔记与工作日志（Journal）不会随之删除，需要另行删除。详见下方说明。',
-    en: 'Forsion will record window titles, URLs, and text you type across apps on this computer, stored unencrypted for {days} days. When agents or Muse read it, excerpts are sent to their model, which may be Forsion cloud or a third-party provider. Clearing history deletes the records only. Conversations that already quoted them and Muse’s own notes and Journal stay until you delete them separately. Details are below.',
+    zh: 'Forsion 会在这台电脑上记录你在各个 App 里的窗口标题、网址和输入的文字，加密保存 {days} 天。Agent 或 Muse 读取时，片段会发给它们所用的模型，可能是 Forsion 云端，也可能是第三方 Provider。清除历史只删记录本身：已经引用过它的对话和 Muse 自己的笔记与工作日志（Journal）不会随之删除，需要另行删除。详见下方说明。',
+    en: 'Forsion will record window titles, URLs, and text you type across apps on this computer, stored encrypted for {days} days. When agents or Muse read it, excerpts are sent to their model, which may be Forsion cloud or a third-party provider. Clearing history deletes the records only. Conversations that already quoted them and Muse’s own notes and Journal stay until you delete them separately. Details are below.',
   },
   'computerHistory.enableConfirm.confirm': { zh: '开启记录', en: 'Turn on' },
   'computerHistory.loading': { zh: '正在读取电脑历史状态…', en: 'Loading computer history status…' },
@@ -22,6 +22,15 @@ registerMessages({
   'computerHistory.stateError': {
     zh: '电脑历史的状态文件 state.json 没能更新（{error}），正在自动重试。更新成功前，Agent 读到的记录状态可能是旧的；关闭记录后，Agent 仍会以已保存的设置为准。',
     en: 'Couldn’t update the computer history status file, state.json ({error}). Retrying automatically. Until it’s updated, agents may see an outdated recording status. If you turned recording off, agents still follow your saved setting.',
+  },
+  'computerHistory.keyError': {
+    zh: '电脑历史的加密密钥现在取不出来（{error}）。为了不把记录存成明文，已停止记录。重启 Forsion 通常就能恢复；如果一直这样，请检查钥匙串是否拒绝了 Forsion。',
+    en: 'Couldn’t get the encryption key for computer history ({error}), so recording has stopped rather than saving records unencrypted. Restarting Forsion usually fixes this. If it keeps happening, check whether Keychain is blocking Forsion.',
+  },
+  // 主进程抛 `ch-records-locked`(ipcError.ts 套这句):有记录是用这会儿取不到的密钥加密的 —— 读不出 ≠ 没有
+  'computerHistory.recordsLocked': {
+    zh: '有些记录是用这台电脑现在取不到的密钥加密的，读不出来，所以没有显示或清除它们。重启 Forsion 后再试；还不行的话，可以用「清除历史 → 全部」删掉。',
+    en: 'Some records are encrypted with a key Forsion can’t get on this computer right now, so they weren’t shown or cleared. Restart Forsion and try again. If that doesn’t help, use Clear history → All to delete them.',
   },
   'computerHistory.unsupportedPlatform.title': { zh: '目前仅支持 macOS 和 Windows', en: 'macOS and Windows only for now' },
   'computerHistory.unsupportedPlatform.body': {
@@ -79,13 +88,22 @@ registerMessages({
     zh: '前台切换到了哪个 App、窗口标题、浏览器网址、你在输入框里输入的文字、点击的按钮名称，以及 Ctrl+S 这类快捷键。只在 Forsion 运行且未暂停时记录。',
     en: 'Which app is in front, window titles, browser URLs, text you type into focused fields, the names of buttons you click, and keyboard shortcuts such as Ctrl+S. Recording happens only while Forsion is running and not paused.',
   },
+  // 标签是「隐私加密」(about.neverLabel);Windows 没有钥匙串,换成密码管理器
   'computerHistory.win.never': {
-    zh: '原始按键和屏幕截图；密码管理器、密码输入框，以及无痕或隐私浏览窗口里的任何内容。',
-    en: 'Raw keystrokes and screenshots, and anything in password managers, password fields, or private and incognito windows.',
+    zh: '不记原始按键和屏幕截图，也不记密码框、密码管理器和无痕窗口；记录加密存在这台电脑上。除了你让 Agent 读的片段，记录不会离开这台电脑。',
+    en: 'No raw keystrokes or screenshots, and nothing from password fields, password managers, or private windows. Records are stored encrypted on this computer and never leave it, except the excerpts you let agents read.',
   },
   'computerHistory.win.permission': {
     zh: '不需要额外的系统权限。记录由 Forsion 内置的 Computer Use 组件完成，无需另行安装。',
     en: 'No extra system permission is needed. Recording is done by the Computer Use component built into Forsion, so there’s nothing else to install.',
+  },
+  'computerHistory.win.storage': {
+    zh: '保存在这台电脑的 {path}，保留 {days} 天后自动删除。Forsion 不会自行上传或总结这些记录；只有 Agent 或 Muse 读取时，片段才会离开这台电脑。记录逐条加密，密钥由 Windows 数据保护按你的账户保管，拷贝、备份或同步走的文件读不出内容。',
+    en: 'Stored on this computer at {path} and deleted automatically after {days} days. Forsion doesn’t upload or summarize these records on its own; excerpts leave this computer only when an agent or Muse reads them. Each record is encrypted with a key protected by Windows Data Protection for your account, so copied, backed-up, or synced files can’t be read.',
+  },
+  'computerHistory.win.keyError': {
+    zh: '电脑历史的加密密钥现在取不出来（{error}）。为了不把记录存成明文，已停止记录。重启 Forsion 通常就能恢复；如果一直这样，请检查 Windows 数据保护是否拒绝了 Forsion。',
+    en: 'Couldn’t get the encryption key for computer history ({error}), so recording has stopped rather than saving records unencrypted. Restarting Forsion usually fixes this. If it keeps happening, check whether Windows Data Protection is blocking Forsion.',
   },
   'computerHistory.win.reveal': { zh: '在文件资源管理器中显示', en: 'Show in File Explorer' },
   'computerHistory.win.appsHint': {
@@ -111,15 +129,17 @@ registerMessages({
     zh: '前台切换到了哪个 App、窗口标题、浏览器网址、你在输入框里输入的文字、点击的按钮名称，以及按住 ⌘\u00a0或 ⌃\u00a0的快捷键（如 ⌘S）。只在 Forsion 运行且未暂停时记录。',
     en: 'Which app is in front, window titles, browser URLs, text you type into focused fields, the names of buttons you click, and keyboard shortcuts that use ⌘\u00a0or ⌃\u00a0(such as ⌘S). Recording happens only while Forsion is running and not paused.',
   },
-  'computerHistory.about.neverLabel': { zh: '不会记录', en: 'Never recorded' },
+  // 「加密」是真的:events/*.jsonl 逐行 AES-256-GCM,密钥在系统钥匙串 / DPAPI(electron/computerHistoryCrypto.ts)。
+  // 「不会离开这台电脑」是窄说法:Agent / Muse 读到的片段会发给它们的模型(about.access 讲清楚),别改成绝对的「不泄露」。
+  'computerHistory.about.neverLabel': { zh: '隐私加密', en: 'Private and encrypted' },
   'computerHistory.about.never': {
-    zh: '原始按键和屏幕截图；密码管理器、钥匙串、密码输入框，以及无痕或隐私浏览窗口里的任何内容。',
-    en: 'Raw keystrokes and screenshots, and anything in password managers, Keychain, password fields, or private and incognito windows.',
+    zh: '不记原始按键和屏幕截图，也不记密码框、钥匙串和无痕窗口；记录加密存在这台电脑上。除了你让 Agent 读的片段，记录不会离开这台电脑。',
+    en: 'No raw keystrokes or screenshots, and nothing from password fields, Keychain, or private windows. Records are stored encrypted on this computer and never leave it, except the excerpts you let agents read.',
   },
   'computerHistory.about.storageLabel': { zh: '存储', en: 'Storage' },
   'computerHistory.about.storage': {
-    zh: '保存在这台电脑的 {path}，保留 {days} 天后自动删除。Forsion 不会自行上传或总结这些记录；只有 Agent 或 Muse 读取时，片段才会离开这台电脑。记录未加密，以你的账户运行的其他 App 也能读取。',
-    en: 'Stored on this computer at {path} and deleted automatically after {days} days. Forsion doesn’t upload or summarize these records on its own; excerpts leave this computer only when an agent or Muse reads them. Records are stored unencrypted, so other apps running under your account can read them.',
+    zh: '保存在这台电脑的 {path}，保留 {days} 天后自动删除。Forsion 不会自行上传或总结这些记录；只有 Agent 或 Muse 读取时，片段才会离开这台电脑。记录逐条加密，密钥存在你的 macOS 钥匙串里，拷贝、备份或同步走的文件读不出内容。',
+    en: 'Stored on this computer at {path} and deleted automatically after {days} days. Forsion doesn’t upload or summarize these records on its own; excerpts leave this computer only when an agent or Muse reads them. Each record is encrypted with a key kept in your macOS Keychain, so copied, backed-up, or synced files can’t be read.',
   },
   'computerHistory.about.accessLabel': { zh: '谁能读取', en: 'Who can read it' },
   'computerHistory.about.access': {

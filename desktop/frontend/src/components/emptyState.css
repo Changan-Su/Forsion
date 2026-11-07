@@ -50,3 +50,23 @@
 
 /* 手机壳:同一份,只是不居中到正中 —— 往上提,落在拇指够得着、眼睛先看到的那一段。 */
 .mb-shell .empty-state { justify-content: flex-start; padding-top: 10vh; }
+/* 例句(2026-11-02,上手引导 B):一行一条,卡面底色、不描边;点一下通常是填进输入框 */
+.empty-state-examples { display: grid; gap: 4px; width: min(100%, 380px); margin-top: 2px; }
+.empty-state-example {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 34px;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--ui-font-meta);
+  text-align: left;
+  cursor: pointer;
+}
+.empty-state-example:hover { background: var(--menu-hover, var(--overlay-light)); }
+.empty-state-example-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.empty-state-example-note { flex: none; color: var(--text-faint); font-size: var(--ui-font-caption); }

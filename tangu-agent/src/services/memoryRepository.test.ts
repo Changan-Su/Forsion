@@ -305,3 +305,44 @@ describe('shared log transaction safety', () => {
     } finally { rmSync(outside, { recursive: true, force: true }); }
   });
 });
+
+describe('cloud tombstones on disk (content sync projection)', () => {
+  it('takes them in on the next read, filters memory, and settles without new versions', async () => {
+    const { createMemoryRepository } = await import('./memoryRepository.js');
+    const { serializeTombstones } = await import('../contracts/agentSyncRules.js');
+    const dir = mkdtempSync(join(tmpdir(), 'tangu-memory-projection-'));
+    const other = mkdtempSync(join(tmpdir(), 'tangu-memory-projection-other-'));
+    try {
+      const repo = createMemoryRepository(dir); repo.add('- keep'); repo.add('- gone');
+      const peer = createMemoryRepository(other); peer.add('- gone'); peer.forget(peer.snapshot().entries[0].id);
+      writeFileSync(join(dir, '.memory-tombstones.json'), serializeTombstones(peer.snapshot().tombstones));
+      const first = repo.snapshot();
+      expect(first.content).toBe('- keep'); expect(first.tombstones).toHaveLength(1);
+      expect(readFileSync(join(dir, 'MEMORY.md'), 'utf8')).toBe('- keep');
+      expect(repo.snapshot().version).toBe(first.version);
+      // A broken or unreadable projection is ignored, never treated as "no tombstones" or rewritten.
+      writeFileSync(join(dir, '.memory-tombstones.json'), '{broken');
+      expect(repo.snapshot().tombstones).toHaveLength(1);
+      expect(readFileSync(join(dir, '.memory-tombstones.json'), 'utf8')).toBe('{broken');
+      // A newer restoration on the projection reactivates nothing by itself but is kept.
+      const t = { ...first.tombstones[0], restoredAt: first.tombstones[0].forgottenAt + 1 };
+      writeFileSync(join(dir, '.memory-tombstones.json'), serializeTombstones([t]));
+      expect(repo.snapshot().tombstones[0].restoredAt).toBe(t.restoredAt);
+    } finally { rmSync(dir, { recursive: true, force: true }); rmSync(other, { recursive: true, force: true }); }
+  });
+  it('a downloaded restoration is honoured when the downloaded memory that carries the fact is adopted', async () => {
+    const { createMemoryRepository } = await import('./memoryRepository.js');
+    const { serializeTombstones } = await import('../contracts/agentSyncRules.js');
+    const dir = mkdtempSync(join(tmpdir(), 'tangu-memory-restore-'));
+    try {
+      const repo = createMemoryRepository(dir); repo.add('- keep'); repo.add('- cat');
+      repo.forget(repo.snapshot().entries.find(e => e.content.includes('cat'))!.id);
+      const old = repo.snapshot().tombstones[0];
+      // Another device restored "cat"; sync lands its tombstones first, then its MEMORY.md carrying the fact.
+      writeFileSync(join(dir, '.memory-tombstones.json'), serializeTombstones([{ ...old, restoredAt: old.forgottenAt + 1 }]));
+      writeFileSync(join(dir, 'MEMORY.md'), '- keep\n- cat');
+      const snap = repo.snapshot();
+      expect(snap.content).toBe('- keep\n- cat'); expect(snap.tombstones[0].restoredAt).toBe(old.forgottenAt + 1);
+    } finally { rmSync(dir, { recursive: true, force: true }); }
+  });
+});

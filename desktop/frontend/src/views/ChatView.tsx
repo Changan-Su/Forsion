@@ -757,7 +757,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       onPointerDownCapture={(e) => { if (!canvasOn && (e.target as Element).closest?.('[data-testid="chat-canvas-seg"]')) segAnchor.current = { at: performance.now(), a: chatAnchor(chatViewRef.current) } }}
     >
       {raiseTeam && mvCfg.soloAgentSlug && activeId && <TeamEditor
-        agents={s.agentDefs.filter((a) => a.createdBy !== 'system' && !!a.libraryDir)} team={null} initialMembers={[mvCfg.soloAgentSlug]}
+        agents={s.agentDefs.filter((a) => a.createdBy !== 'system' && !!a.libraryDir && (!a.disabled || a.slug === mvCfg.soloAgentSlug))} team={null} initialMembers={[mvCfg.soloAgentSlug]}
         onClose={() => setRaiseTeam(false)} onSaved={(saved) => {
           setRaiseTeam(false)
           const parentId = activeId

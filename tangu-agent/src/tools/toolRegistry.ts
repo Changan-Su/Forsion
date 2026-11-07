@@ -11,8 +11,9 @@ import type { AppProfile } from '../seams/appProfile.js';
 import { presetOf } from '../core/presetTable.js';
 import { isHostSandboxRestricted, isHostSandboxToolAllowed, resolveHostSandboxPolicy } from '../sandbox/hostSandboxPolicy.js';
 import { effectiveRemote } from '../services/remoteOrigin.js';
-import { toolDefinitionIssue, warnInvalidTool } from './toolDefinitionValidation.js';
+import { toolDefinitionIssue, warnInvalidTool, usableToolDefinition } from './toolDefinitionValidation.js';
 import { mcpDeclaredApproval } from '../mcp/connectors.js';
+import type { LoadedMcpTool } from '../mcp/toolBridge.js';
 
 /**
  * 操控整台电脑桌面的工具(Computer Use)。唯一的现成声明是 capabilities.concurrencyKey === 'computer-use' —— 内置捆绑的
@@ -83,6 +84,35 @@ export interface ToolProvider {
 
 // 各 preset 的情境 deferred 集合住 core/presetTable.ts(单源);这里 re-export 保持既有 import 路径。
 export { CODING_PRESET_DEFERRED } from '../core/presetTable.js';
+
+/** MCP 工具是否按需加载(11-06):缺省是 —— 一个连接器的工具定义动辄几十 KB,不用也每次请求都重读。
+ *  server 配置 `deferLoading: false` 的常驻。与 isDeferredIn 分开判:内置工具的判定与工具快照字节一个不动;
+ *  也**不吃** Muse / 自动化的 deferBypass —— 那条豁免是怕系统驱动的 run 找不到内置工具,第三方工具照样按需。 */
+export function isMcpDeferred(t: Pick<LoadedMcpTool, 'deferLoading'>): boolean {
+  return t.deferLoading !== false;
+}
+
+/** 本 run 工具面里看得见的 MCP 工具(外部工具闸、严格名单、定义校验、与内置 / 自定义撞名,全与 defs 同一判定)。
+ *  目录(listDeferredTools)、defs(getToolDefinitions)、解锁(load_tools)三处共用,别各写一份 —— 三处一分叉,
+ *  就会出现「目录里有、装不上」或「装上了、defs 里没有」。taken = 本 ctx 的内置 + 自定义工具名(调用方现算,本层拿不到 profile)。 */
+export function visibleMcpTools(ctx: ToolContext, taken: ReadonlySet<string>): LoadedMcpTool[] {
+  if (!ctx.mcpTools?.size) return [];
+  if (!presetOf(ctx.preset).externalTools || isHostSandboxRestricted(ctx)) return [];
+  const out: LoadedMcpTool[] = [];
+  for (const t of ctx.mcpTools.values()) {
+    if (ctx.toolsStrict && !ctx.toolsList?.includes(t.name)) continue;
+    if (!usableToolDefinition(t?.definition, `mcp:${t?.serverName || '(unknown)'}`, t?.name)) continue;
+    if (taken.has(t.name)) continue; // mcp__ 前缀理论上不冲突,保险跳过
+    out.push(t);
+  }
+  return out;
+}
+
+/** 目录里一行的说明:第三方文本进系统提示,只取首行、去掉控制字符、截 120 字,前面标上 server 名。 */
+export function mcpCatalogHint(t: LoadedMcpTool): string {
+  const first = String(t.definition?.function?.description || '').split('\n')[0].replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ').trim();
+  return `(MCP server ${t.serverName}) ${first}`.slice(0, 120);
+}
 
 /** 工具在本 ctx 下是否按 deferred 处理:静态标记 ∪ 本 preset 的情境集合(PRESET_TABLE.toolFace.deferred)。
  *  目录(listDeferredTools)、defs 过滤(getToolDefinitions)、解锁(load_tools)三处必须

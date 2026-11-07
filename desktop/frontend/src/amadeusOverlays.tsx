@@ -15,6 +15,7 @@ import { DeleteAssetsHost } from '@amadeus/components/askDeleteAssets'
 import { NewDrawingHost } from '@amadeus/components/askNewDrawing'
 import { CloudSyncDialogHost } from './components/CloudSyncDialog'
 import { AutomationBuilderHost } from './amadeusAutomation'
+import { SpaceOrganizerHost } from './views/SpaceOrganizer'
 import { fdDirOf } from '@amadeus/lib/fd'
 import { resolveFileName } from '@amadeus/lib/vaultFiles'
 import { parsePdfLinkInner } from '@amadeus-shared/pdfLink'
@@ -199,6 +200,8 @@ export function AmadeusOverlays() {
       <NewDrawingHost />
       <CloudSyncDialogHost />
       <AutomationBuilderHost />
+      {/* ⌘⇧O(命令「切换 Space」)在主页以外弹出的 Space 收纳;只在主窗口(独立窗 / Mini 卡不切 Space) */}
+      {windowKind() === 'main' && <SpaceOrganizerHost />}
       {toast && (toastDock ? createPortal(<BottomToast key={toast} text={toast} />, toastDock) : <BottomToast key={toast} text={toast} />)}
     </>
   )

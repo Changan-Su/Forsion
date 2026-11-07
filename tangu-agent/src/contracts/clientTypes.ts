@@ -303,6 +303,8 @@ export interface NormalAgentDef {
   libraryDir?: string
   /** 允许读用户活动日志(read_activity 工具);默认 false=仅 Muse 可读。 */
   activityAccess?: boolean
+  /** 停用:侧栏 / @ / 选择器里不列,私聊与记忆都留着;Agents 页里随时打开。默认 Agent 不能停用。 */
+  disabled?: boolean
   /** 内置工具名单:'deny'=toolsList 内禁用(其余可用);'allow'=仅 toolsList 可用;缺省=不限制。 */
   toolsMode?: 'allow' | 'deny'
   toolsList?: string[]
@@ -330,9 +332,11 @@ export interface AgentConfig {
   /** Ultra 档(对标 Codex Ultra):思考恒 max + 主动把可并行的活拆给 delegate 子代理。会话键,与 thinkingLevel 分开存 ——
    *  塞进 thinkingLevel 的话,读回时会被引擎的 normalizeThinkingLevel 归成 max,开关静默消失。只有本机非 chat 会话给入口。 */
   ultra?: boolean
-  /** Fast 档(对标 Codex /fast):请求带 service_tier=priority,换更快的出字速度、多数模型额度消耗更快。会话键,与思考档无关。
+  /** Fast 档(对标 Codex /fast):Codex 订阅带 service_tier=priority(多数模型额度消耗更快);官方 OpenAI / Anthropic API 带
+   *  service_tier=fast / speed=fast(约 2 倍单价)。换更快的出字速度。会话键,与思考档无关。
+   *  'ultra' = 极速档(官方 OpenAI service_tier=ultrafast,约 6 倍单价);模型没有极速档时按 Fast 发。
    *  引擎只在模型目录声明了这一档(ModelInfo.fastTier)时上 wire,其余模型开着也不发;只作用于主循环,后台调用不跟。 */
-  fast?: boolean
+  fast?: boolean | 'ultra'
   enabledSkillIds?: string[]
   /** 本条消息经 /skill 显式点选的技能 id(per-message,加性:并入可用集 + 强制使用;不持久化、不收窄目录)。 */
   requestedSkillIds?: string[]
@@ -481,9 +485,12 @@ export interface ModelInfo {
   supportsVision?: boolean
   /** 该模型真正支持的思考档(引擎能力表下发;仅 llm)。思考菜单据此把不支持的档标灰。缺省=不知道,全可选。 */
   thinkingLevels?: string[]
-  /** 模型目录给的 Fast 档说明原文(Codex `/models` 的 service_tiers,如「1.5x speed」「2x speed, increased usage」)。
+  /** Fast 档说明原文:Codex `/models` 的 service_tiers(如「1.5x speed」「2x speed, increased usage」),
+   *  或官方 API 的单价倍数(「2x price」,见 providerRegistry OFFICIAL_FAST)。
    *  缺席 = 这个模型没有 Fast 档,界面不露开关。 */
   fastTier?: string
+  /** 极速档说明(「6x price」);缺席 = 没有极速档。 */
+  ultrafastTier?: string
 }
 
 /** GET /agent/models/quota 的 quota:直连来源的额度 / 余额(口径见 llm/providerQuota.ts)。 */
@@ -725,7 +732,8 @@ export interface ToolsResponse {
     connector?: string
     /** 插件自带的 server(引擎插件 manifest 的 mcpServers):不在 mcp.json 里,设置页只读展示。 */
     origin?: { pluginId: string; pluginName: string }
-    tools: Array<{ name: string; description: string }>
+    /** remoteName:远端 server 上的原名(name 是桥接名 mcp__x__y)。旧引擎缺省。 */
+    tools: Array<{ name: string; remoteName?: string; description: string }>
     /** 这个 server 的工具定义每个请求约占多少 token(名字 + 描述 + 参数 schema 的 JSON 按 4 字符 = 1 token 估)。旧引擎缺省。 */
     approxTokens?: number
   }>
@@ -1091,7 +1099,7 @@ export interface StoredDesktopConfig extends TanguDesktopConfig {
   /** 上次在 work 会话里停在 Ultra 档(与 lastThinkingLevel='max' 同写;chat 槽没有 Ultra)。 */
   lastUltra?: boolean
   /** 上次的 Fast 开关(新会话照它起步;模型没有 Fast 档时引擎不发,药丸也不显示)。 */
-  lastFast?: boolean
+  lastFast?: boolean | 'ultra'
   backendState?: BackendStatusInfo
   /** 主进程附带的用户主目录(本机模式 cwd 兜底)。 */
   homeDir?: string

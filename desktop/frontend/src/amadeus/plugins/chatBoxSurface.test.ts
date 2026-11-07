@@ -143,6 +143,12 @@ describe('public Chat Box mount', () => {
     await act(async () => { ctx.ui!.mountChatBox!(el, { value: 'Must stay revoked', onSubmit: () => false }); box!.update({ value: 'Too late' }) })
     expect(el.querySelector('textarea')).toBeNull()
   })
+  it('lists the behaviour a handle cannot reveal, so plugins need no proxy API to detect it', async () => {
+    let ctx!: PluginContext
+    await act(async () => { usePluginStore.getState().init([{ id: 'chatbox-caps', name: 'Caps', version: '1', setup(c) { ctx = c } }]) })
+    // Arrays are exercised in 'takes several triggers' below; the upward menu needs layout, which jsdom doesn't have.
+    expect(ctx.ui!.chatBoxCapabilities).toEqual(['suggestMany', 'suggestAbove'])
+  })
 })
 
 describe('public Chat Box slots', () => {
@@ -202,6 +208,17 @@ describe('public Chat Box slots', () => {
     expect(onSubmit).not.toHaveBeenCalled()
     await press('Enter')
     expect(onSubmit).toHaveBeenCalledTimes(1)
+  })
+  it('takes several triggers: the one nearest the caret opens, and the pick replaces that trigger', async () => {
+    const links = { trigger: '[[', mention: true, items: (q: string) => ['评审议程', 'Q4 路线图'].filter(t => t.startsWith(q)).map(t => ({ label: t, value: `[[${t}]]` })) }
+    await act(async () => { box = mountPluginChatBox(el, { submitOn: 'enter', suggest: [tags, links], onSubmit: () => false }) })
+    await typeText('准备评审 #设')
+    expect(rows()).toEqual(['#设计3'])
+    await press('Enter')
+    await typeText('准备评审 #设计 关联[[评')
+    expect(rows()).toEqual(['评审议程'])
+    await press('Enter')
+    expect(input().value).toBe('准备评审 #设计 关联[[评审议程]] ')
   })
   it('replaces only the query when the caret is mid-text', async () => {
     await act(async () => { box = mountPluginChatBox(el, { suggest: tags, onSubmit: () => false }) })

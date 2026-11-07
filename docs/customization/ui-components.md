@@ -58,6 +58,10 @@ ctx.registerView({
 
 @ 提到人这类用法传 `mention: true`：只打 `trigger` 就开（此时 `query` 是空串），`trigger` 紧跟中文也开，只有紧贴拉丁字母或数字时不开（邮箱不会触发）。旧宿主忽略这个选项，仍按上面的规则。
 
+2026-11-02 起 `suggest` 也可以是一组，例如 `#` 标签一份、`[[` 关联一份（后者传 `mention: true`，紧跟中文也开）；光标前同时对上几个时，离光标最近的那个打开。输入框在窗口下半部分时浮层朝上开，放不下再翻到下面。更早的宿主只认单个对象。
+
+传数组前先看 `ctx.ui.chatBoxCapabilities?.includes('suggestMany')`（2026-11-04 起；朝上开对应 `'suggestAbove'`）。没有这个字段的宿主一律当不支持。别拿 `insertText` 或别的接口当暗号：2.13.8-beta.3 有 `insertText`，却不收数组。
+
 ```js
 const box = ctx.ui?.mountChatBox?.(el, {
   modelPicker: false,
@@ -80,7 +84,7 @@ const box = ctx.ui?.mountChatBox?.(el, {
 
 ↑↓ 移动，Enter 或 Tab 选中，Esc 关闭。选中后把「`trigger` + 查询」换成 `value` 加一个空格，这次 Enter 不会提交；浮层开着时 ⌘/Ctrl+Enter 同样是选中。只在用户打字时弹：把光标挪到已有的 `#标签` 后面不弹，输入法组字时不弹，组字结束后再判断。Esc 之后，同一个词继续打字不再弹。
 
-这四项一起加入。旧宿主会忽略三个选项，也没有 `insertText`，所以用 handle 探测：`typeof box.insertText === 'function'`。不支持时自己隐藏 `#` 按钮，或者接受模型药丸照常显示。
+这四项一起加入。旧宿主会忽略三个选项，也没有 `insertText`，所以用 handle 探测：`typeof box.insertText === 'function'`。之后加入、handle 看不出来的行为（数组形式的 `suggest`、浮层朝上）列在 `ctx.ui.chatBoxCapabilities`。不支持时自己隐藏 `#` 按钮，或者接受模型药丸照常显示。
 
 模型目录与聊天共用，主模型只展示 LLM，遵守用户的排序和隐藏设置，不额外按品牌限制。选择停留在此组件，不修改全局默认或当前会话。提交回调拿到的是当次选择；插件必须将它们传给自己的业务流程，不能展示了选择却丢弃它。挂载和编辑不发起模型请求、不自动创建会话。旧宿主必须 feature-detect，不复制内部 CSS 伪装支持。
 
@@ -123,7 +127,7 @@ useNativeChromeExtras({ where: 'list' | 'main', search?: { label, run }, title?:
 `ctx.ui?.mountMarkdownEditor` 挂载原生 Amadeus / Milkdown 编辑器，支持可视编辑、Markdown 源码和发布预览。正文完全由调用方保存，不读写活动智库、不修改当前笔记、不自动请求模型。句法沿用 CommonMark、GFM、CJK 强调、`![[视频链接]]` 与 Obsidian callout；折叠 callout 使用 `> [!note]- 标题`。
 
 ```js
-ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, modes, onChange })
+ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, modes, vault, onChange })
 ```
 
 `modes: false`（2026-10-12 起）不画顶上那排「Amadeus 编辑 / Markdown 源码 / 预览」切换按钮，只留可视编辑器，用在把编辑器放进自己的卡片、单元格或表单项里的场合；缺省三档都在。`update({ modes })` 可以随时开关，关掉的那一刻停在源码或预览档会回到可视编辑器。2.13.2 及更早的宿主不认这个字段、照样画那一排：要兼容它们，就在自己的样式里藏掉那一排当兜底，别的宿主节点不要选。
@@ -133,6 +137,17 @@ ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, modes, onChange })
 ```
 
 `handle.getValue()` 同步取最新事务，保存前必须调用；`update({value})` 切换文档，`insertMarkdown(text)` 追加上传附件或嵌入，`focus()` 聚焦，`dispose()` 幂等清理。插件禁用/重载与主视图卸载也会收回挂载，旧句柄不能再改内容。旧宿主缺少此 API 时应明确要求升级，不能伪装成原生编辑器。不自动保存；编辑器和发布渲染共用同一套 Amadeus Markdown 语义。
+
+`vault: true`（2.13.8 起）让编辑器接上当前打开的笔记库：打 `[[` 补全笔记和文件名，点双链在视图旁边打开那篇笔记（⌘ / Ctrl 点击在新标签页），解析不到的双链显示成灰色。正文照旧归调用方保存，编辑器不往库里写东西；没打开库时双链就是普通文字。缺省关。老宿主不认这个字段，也没法单独检测它：它和下面的 `ctx.ui.mountMarkdown` 同一版到，有 `mountMarkdown` 就说明 `vault` 有效。
+
+### 只读 Markdown ctx.ui.mountMarkdown（2.13.8 起）
+
+```js
+const md = ctx.ui?.mountMarkdown?.(el, { markdown })
+md?.update({ markdown: next }); md?.dispose()
+```
+
+按聊天回答的画法渲染一段 Markdown：GFM、`$公式$` / `$$公式$$`、`[[双链]]`（在视图旁边打开当前库里那篇笔记，解析不到的显示成灰色）。段内单个换行就是换行，和 `mountMarkdownEditor` 写出来的一致。代码块有复制按钮，没有运行按钮；`![[嵌入]]` 只显示成链接，不展开。足够轻，列表里每行挂一个也行。和其它挂载一样，`dispose()` 之后 `el` 立刻归还插件，插件停用时宿主会收回。外层带 `.md-body`，要收紧段距就在自己的容器里覆盖。
 
 ### 插件 Chat Box 选择与总管交接 (2026-09-30)
 
@@ -238,6 +253,34 @@ if (!bar) drawOwnMenu(el)                           // 2.13.3 及更早的宿主
 - 条不往 `root` 里加任何东西,也不接管它(条浮在页面上方),和 `mountFloatingToc` 等别的挂载互不影响。句柄有 `show` / `hide` / `update(opts)` / `dispose()`;插件停用或重载时宿主统一收掉。
 
 往条里加动作用 `ctx.registerSelectionAction`(列在「⋯ → 插件」)。不写 `scope` 时只在笔记里出现,和以前一样;`scope: 'all'` 出现在所有接入了的视图,`'own'` 只在这个插件自己的视图,数组点名视图(`'note'`、`'chat'`、`'<插件 id>:<视图 id>'`)。`when({ view, editable, length })` 返回真才列出,它拿不到选中的文字,文字在用户点了动作之后才经 `run(cx)` 交给插件。`run` 返回的 markdown 进宿主的结果卡:可编辑的笔记里是「替换 / 插入下方 / 复制 / 丢弃」,点了才写;别处只读(「复制 / 关闭」)。`output: 'none'` 表示插件自己处理结果,宿主不出卡。`cx.pagePath` 只在笔记里有。2.13.3 及更早的宿主忽略这些新字段:动作只在笔记里、列在「AI ▾ → 插件」。
+
+### 工具岛 (2026-11-04)
+
+「拿着一件工具干活」的视图(PDF 批注、白板一类)换工具的那颗胶囊。宿主管位置和皮:`root` 顶部居中,`root` 窄于 520px(Mini 卡片、手机、Pad 竖屏)停到底部居中;皮同 Mini 窗顶栏的胶囊(`--bg-card` + 细描边 + 胶囊圆角 + 卡片阴影,不做毛玻璃);当前工具底下是一枚滑过去的底块,按钮右下角的小字母是快捷键。按钮条由 `@lcl/components` 的 `ToolIsland` 维护,布局类在同目录的 `toolIsland.css`。
+
+```js
+const isle = ctx.ui?.mountToolIsland?.(pageArea, {
+  tools: [
+    { id: 'hand', icon: 'hand', title: zh ? '抓手' : 'Hand' }, 'separator',
+    { id: 'select', icon: 'mouse-pointer-2', title: zh ? '选择' : 'Select', key: 'V' }, 'separator',
+    { id: 'highlight', icon: 'highlighter', title: zh ? '高亮' : 'Highlight', key: 'H' },
+    { id: 'ink', icon: 'pen-line', title: zh ? '手写' : 'Draw', key: 'P' },
+  ],
+  active: 'select',
+  onPick: (id) => { setTool(id); isle.setActive(id); isle.showRow(id === 'highlight' || id === 'ink') },
+  slots: { topRight: findButton, bottomLeft: zoomControls, bottomRight: pager },
+})
+if (!isle) drawOwnBar(pageArea)                     // 没有这个接口的旧宿主:保留自己的那条
+else isle.row.append(colorDots)                     // 岛下那一排归插件画
+```
+
+- 选中是受控的:点按钮只调 `onPick`,宿主不自己换;切了工具就调 `setActive(id)`(按住空格临时抓手、松开回原工具也走它)。`key` 只画字母,按键由插件自己绑。
+- `icon` 取插件图标词表里的名字;为此加了 `hand`、`mouse-pointer-2`、`highlighter`、`sticky-note`、`type`、`shapes`、`pen-line`、`eraser`(旧的 `highlight` / `annotate` 照旧可用)。`'separator'` 画一道分组竖线。
+- `row`:岛下那一排(停底部时在岛上方),放当前工具要的东西 —— 色点、笔型、粗细。句柄一返回就能往里放;只放子元素,别换它的 class。`showRow(true/false)` 开合:进 180ms 减速、出 80ms 加速,减少动态效果时不位移。
+- `slots`:四角(离边 12px)放插件自己的元素,宿主只包同一张胶囊皮、定好位置;`update({ slots })` 能换。停到底部时底边两角和岛挤在一条线上,窄的时候少放点。
+- 点按钮不抢焦点(焦点留在视图里,视图的快捷键照样有人听);键盘用户 Tab 进来的焦点在 `setActive` / `update` 之后还在同一颗按钮上。
+- 和 `mountFloatingToc` 一样是叠在 `root` 上的一层,不接管它(`root` 是 static 时挂载期间设成 `relative`,`dispose()` 还原),和别的挂载互不影响。内容顶上留出约 56px 给岛。`root` 传不滚动的那一层框(岛是 `root` 里的一层,传滚动容器它会跟着内容滚走);岛和四角上的指针事件会冒泡到 `root`,自己的拖动 / 落笔处理里跳过 `e.target.closest('.lcl-isle-layer')`。句柄有 `row` / `showRow` / `setActive` / `update(opts)` / `dispose()`;形状不对(没有 `tools` 数组、没有 `onPick`、`slots` 不是元素)同步抛 `TypeError`;插件停用或重载时宿主统一收掉。
+- 白板(Excalidraw)自带的工具岛不换,位置本来就一样。
 
 ### 设置零件 (2026-10-17)
 

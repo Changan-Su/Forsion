@@ -28,6 +28,11 @@ describe('buildAgentRoster', () => {
     expect(r).toContain('`delegate`');
     expect(r).toContain('`start_discussion`');
   });
+  it('停用的 agent 不进名册(模型就不会去 delegate 它)', async () => {
+    h.agents = [{ slug: 'xyra', name: 'Arioso', description: '', createdBy: 'user' }, { slug: 'aria', name: 'Aria', description: '', createdBy: 'user', disabled: true }];
+    h.shared = [];
+    expect(await buildAgentRoster('xyra')).toBe('');
+  });
   it('只有自己 / 只剩系统 agent → 空串,不注入', async () => {
     h.agents = [{ slug: 'xyra', name: 'Arioso', description: '', createdBy: 'user' }, { slug: 'muse', name: 'Muse', description: '', createdBy: 'system' }];
     h.shared = [];

@@ -15,7 +15,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeF
 import { dirname, join } from 'node:path';
 import { LlmError, type ToolCall } from '../core/types.js';
 import type { FimCompletionOpts, LlmBrain, StreamOpts, StreamResult } from '../seams/cloudBrain.js';
-import { DIRECT_MARK } from './openaiCompat.js';
+import { DIRECT_MARK, SESSION_MARK } from './openaiCompat.js';
 import { getRawSection } from '../core/config.js';
 import { tanguHome } from '../core/tanguHome.js';
 
@@ -232,8 +232,9 @@ export function readMaskLog(): MaskLogLine[] {
 }
 
 // ── 出站:整包脱敏 ──────────────────────────────────────────────────────────────────────────────
-/** 不碰的字段:工具定义 / 模型名 / 各种 id / 厂商签过名或加密的内容。签名盖的是厂商写的原文,改一个字就 400。 */
-const SKIP_KEYS = new Set(['tools', 'tool_choice', 'model', 'modelId', 'response_format', 'encrypted_content', 'signature', 'id', 'call_id', 'tool_call_id', 'tool_use_id', 'prompt_cache_key', 'cacheKey']);
+/** 不碰的字段:工具定义 / 模型名 / 各种 id / 厂商签过名或加密的内容。签名盖的是厂商写的原文,改一个字就 400。
+ *  SESSION_MARK 是会话键(只变成 opencode.ai 的请求头,不上 body):会话 UUID 的数字段偶尔凑成合法卡号,不跳过会让「拦截」档把任何直连请求拦下。 */
+const SKIP_KEYS = new Set(['tools', 'tool_choice', 'model', 'modelId', 'response_format', 'encrypted_content', 'signature', 'id', 'call_id', 'tool_call_id', 'tool_use_id', 'prompt_cache_key', 'cacheKey', SESSION_MARK]);
 /** 整串都是 base64 的图片 / 文件(可带 data: 头):随机字节里偶尔能凑出 AKIA… 的样子,不扫。只看开头会被「长前缀 + 密钥」绕过,所以整串核。 */
 const BLOB_RE = /^(?:data:[\w/+.-]{1,80};base64,)?[A-Za-z0-9+/=_-]+$/;
 const isBlob = (s: string) => s.length > 2000 && BLOB_RE.test(s);

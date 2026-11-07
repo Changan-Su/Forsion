@@ -132,4 +132,54 @@ describe('releasePage', () => {
     expect(store.getState().activePage).toBeNull()
     expect(store.getState().manifest).toBeNull()
   })
+
+  /** 让下一次读盘停住,等测试放行。 */
+  const holdNextLoad = (): (() => void) => {
+    let finish!: () => void
+    const gate = new Promise<void>((resolve) => { finish = resolve })
+    const read = loadPage.getMockImplementation()!
+    loadPage.mockImplementationOnce(async (path: string) => { await gate; return read(path) })
+    return finish
+  }
+
+  // 切侧先装默认页,默认页判为 unified 时要交出去;这时点开的那篇正在读盘(本地库侧打开共享页,偶发停在默认页)。
+  it('交出上一篇不作废在途的另一篇导航', async () => {
+    const { usePageStore: store } = await freshStore()
+    store.setState({ vaultRoot: '/v', activePage: 'a.md', status: 'ready' })
+    const finish = holdNextLoad()
+    const nav = store.getState().loadPage('b.md')
+    await vi.waitFor(() => expect(loadPage).toHaveBeenCalledWith('b.md'))
+    await store.getState().releasePage('a.md')
+    expect(store.getState().pendingPage).toBe('b.md')
+    finish()
+    await nav
+    expect(store.getState().activePage).toBe('b.md')
+  })
+
+  // 读盘途中按后退回到 unified 的 b:交出 a 时要连 b 的在途装载一起作废,否则 b 的 v3 快照晚到,接管 effect 不会再跑。
+  it('已判给 unified 的那篇:在途装载作废,快照不回来', async () => {
+    const { usePageStore: store } = await freshStore()
+    store.setState({ vaultRoot: '/v', activePage: 'a.md', status: 'ready' })
+    const finish = holdNextLoad()
+    const nav = store.getState().loadPage('b.md')
+    await vi.waitFor(() => expect(loadPage).toHaveBeenCalledWith('b.md'))
+    await store.getState().releasePage('a.md', 'b.md')
+    finish()
+    await nav
+    expect(store.getState().activePage).toBeNull()
+    expect(store.getState().pendingPage).toBeNull()
+  })
+
+  it('在途重载的正是交出去的这篇:结果作废,快照不回来', async () => {
+    const { usePageStore: store } = await freshStore()
+    store.setState({ vaultRoot: '/v', activePage: 'a.md', status: 'ready' })
+    const finish = holdNextLoad()
+    const nav = store.getState().loadPage('a.md')
+    await vi.waitFor(() => expect(loadPage).toHaveBeenCalledWith('a.md'))
+    await store.getState().releasePage('a.md')
+    finish()
+    await nav
+    expect(store.getState().activePage).toBeNull()
+    expect(store.getState().pendingPage).toBeNull()
+  })
 })

@@ -76,6 +76,7 @@ function EditorSurface({
           onChange={change}
           readOnly={options.readOnly}
           immediate
+          vault={options.vault}
         />
       )}
       {mode === 'source' && (
@@ -152,10 +153,15 @@ export function mountPluginMarkdownEditor(
       }
     },
     focus() {
-      if (alive)
-        el.querySelector<HTMLElement>(
-          '[contenteditable="true"],textarea',
-        )?.focus()
+      // Milkdown 在 React 提交之后才异步建出可编辑区:刚挂上就 focus 时它还不在,等它出现(最多约一秒)
+      let frames = 60
+      const tryFocus = (): void => {
+        if (!alive) return
+        const target = el.querySelector<HTMLElement>('[contenteditable="true"],textarea')
+        if (target) target.focus()
+        else if (frames-- > 0) requestAnimationFrame(tryFocus)
+      }
+      tryFocus()
     },
     dispose: mounted.dispose,
   }

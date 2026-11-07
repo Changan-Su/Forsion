@@ -69,7 +69,9 @@ Create: add \`widget: { name }\` to \`intelligent_ui_html\` or \`intelligent_ui\
 
 Change: never create a second widget to change one. Call the same tool with \`widget: { id, expectedRev }\` and \`summary\`. For HTML send \`edits\` rather than the whole page; for \`intelligent_ui\` send the whole document. Changing a widget keeps its records. If the name is taken, the result gives the existing id: change that one unless the user wants a separate widget. If you lost the id, \`manage_widget\` lists them.
 
-To record an entry for the user (记一笔, or any value they report), call \`manage_widget\` with \`set_record\`, whatever the card looks like. The card holds the layout, not the data: never write a reported value into it, not even as an initial value. Records stay when the card changes.`;
+To record an entry for the user (记一笔, or any value they report), call \`manage_widget\` with \`set_record\`, whatever the card looks like. The card holds the layout, not the data: never write a reported value into it, not even as an initial value. Records stay when the card changes.
+
+In an \`intelligent_ui\` widget, \`records\` is the list of its saved records, each \`{id, <field>: value}\` with the field names you pass to \`set_record\`; read it directly, without declaring it, through each / filter / sum (table rows \`"each(records,'r',[r.item,r.amount])"\`, total \`"sum(each(records,'r',r.amount))"\`). Buttons cannot change it: records are added only with \`manage_widget\` \`set_record\`.`;
 
 /** 存 / 改原件。返回给模型的回执;失败以 Error 开头,什么都没落盘。content 未给 = 只发 edits。
  *  ⚠️不给模型选层级:Luna 在项目会话里自己带上 scope:user(live 10-31),一张项目卡落到了所有 Agent 都看得到的地方。用户级要等搬家(开工顺序的管理页那步)。 */

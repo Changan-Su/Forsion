@@ -41,6 +41,9 @@ function okUrl(v: unknown): v is string {
     return u.protocol === 'https:' || (u.protocol === 'http:' && LOOPBACK.has(u.hostname))
   } catch { return false }
 }
+/** 后台目录里的内嵌图标(服务端按文件头核过类型、解码后 ≤ 48 KB);渲染层只经 <img> 显示,CSP img-src 放行 data:。 */
+const ICON_DATA_RE = /^data:image\/(png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/]+={0,2}$/
+const okIcon = (v: unknown): v is string => typeof v === 'string' && v.length <= 70_000 && ICON_DATA_RE.test(v)
 const strings = (v: unknown, max: number): string[] | undefined =>
   Array.isArray(v) ? v.filter((x): x is string => str(x, 200)).slice(0, max) : undefined
 
@@ -64,7 +67,7 @@ export function sanitizeCatalog(raw: unknown): ConnectorEntry[] {
     if (c.auth?.type === 'user-key' && okUrl(c.auth.applyUrl)) e.auth = { type: 'user-key', applyUrl: c.auth.applyUrl }
     const ask = strings(c.alwaysAsk, 50)
     if (ask?.length) e.alwaysAsk = ask
-    if (okUrl(c.iconUrl)) e.iconUrl = c.iconUrl
+    if (okUrl(c.iconUrl) || okIcon(c.iconUrl)) e.iconUrl = c.iconUrl
     if (str(c.provider, 64)) e.provider = c.provider
     if (str(c.minEngineVersion, 64)) e.minEngineVersion = c.minEngineVersion
     if (str(c.updatedAt, 64)) e.updatedAt = c.updatedAt
