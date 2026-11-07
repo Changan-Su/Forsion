@@ -38,6 +38,10 @@ const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,79}$/
 /** 命令 id:内置命令是静态的 kebab / 点分串;插件命令由渲染层换成 amadeus:<公开插件 id>:<命令> 或 plugin:local。 */
 const COMMAND_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/
 /** 插件清单里提示的 id(shared/amadeus/ipc.ts 的 TIP_ID)。 */
+/** count 的去重 id(工具调用 id 等):短、无空白。 */
+const ONCE_RE = /^[A-Za-z0-9_.:-]{1,128}$/
+/** 主进程记住的去重 id 个数(先进先出):一条运行在几个窗口里 / 重连时整段回放,都在同一个进程里判。 */
+export const ONCE_CAP = 5000
 const TIP_ID_RE = /^[a-z0-9][a-z0-9-]{0,47}$/
 
 const PROCESS_REASONS = ['crashed', 'oom', 'killed', 'abnormal-exit', 'launch-failed', 'integrity-failure'] as const
@@ -180,7 +184,7 @@ const pluginRef = (p: Record<string, unknown>, max = 80): string => publicPlugin
 export type ShapedReport =
   | { event: Exclude<HostEventName, 'perf' | 'update' | 'app_counts' | 'command_use'>; props: Record<string, unknown> }
   | { longTasks: number }
-  | { count: AppCountKey; n: number }
+  | { count: AppCountKey; n: number; once?: string }
   | { command: { id: string; source: string } }
 
 /**
@@ -220,7 +224,9 @@ export function shapeRendererReport(kind: unknown, raw: unknown): ShapedReport |
     case 'count': {
       if (!isAppCountKey(p.key)) return null
       const n = p.n === undefined ? 1 : int(p.n)
-      return n ? { count: p.key, n: Math.min(n, COUNT_STEP_MAX) } : null
+      // once = 引擎事件自己的 id(工具调用 id):只在主进程里去重用,不转发
+      const once = typeof p.once === 'string' && ONCE_RE.test(p.once) ? `${p.key}\n${p.once}` : undefined
+      return n ? { count: p.key, n: Math.min(n, COUNT_STEP_MAX), ...(once ? { once } : {}) } : null
     }
     case 'command': {
       const id = typeof p.id === 'string' && COMMAND_ID_RE.test(p.id) && !looksLikeSecret(p.id) ? p.id : undefined
@@ -347,6 +353,8 @@ export function createTelemetryHost(o: TelemetryHostOptions) {
   let commands = new Map<string, number>()
   /** plugin_load 同一插件同一次启动只报一次;被挡下的(blocked)同一插件同一原因也只报一次。local 不去重(分不出是哪个)。 */
   const loadedOnce = new Set<string>()
+  /** 引擎事件派生的计数已经数过的事件 id(见 ONCE_CAP)。 */
+  const countedOnce = new Set<string>()
   const blockedOnce = new Set<string>()
 
   const deliver = (ev: HostTelemetryEvent): void => {
@@ -408,7 +416,15 @@ export function createTelemetryHost(o: TelemetryHostOptions) {
       const shaped = shapeRendererReport(kind, props)
       if (!shaped) return
       if ('longTasks' in shaped) { longTasks = Math.min(INT_MAX, longTasks + shaped.longTasks); return }
-      if ('count' in shaped) { count(shaped.count, shaped.n); return }
+      if ('count' in shaped) {
+        if (shaped.once) {
+          if (countedOnce.has(shaped.once)) return
+          countedOnce.add(shaped.once)
+          if (countedOnce.size > ONCE_CAP) countedOnce.delete(countedOnce.values().next().value!)
+        }
+        count(shaped.count, shaped.n)
+        return
+      }
       if ('command' in shaped) { command(shaped.command.id, shaped.command.source); return }
       const id = shaped.props.id
       if (shaped.event === 'plugin_load' && id !== 'local') {

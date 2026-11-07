@@ -65,26 +65,17 @@ describe('telemetryCommandId(格式:amadeus:<裸 UUID 或内置 id>:<命令>,超
   })
 })
 
-describe('countTelemetryOnce(引擎事件派生的计数按事件 id 去重,跨窗口)', () => {
-  it('同一个 id 只数一次;最近 200 个封顶;localStorage 坏了照常数', async () => {
+describe('countTelemetryOnce(引擎事件派生的计数:带事件 id 交给主进程去重)', () => {
+  it('每次都发,带上 once;去重在主进程(见 telemetryHost.test)', async () => {
     const { countTelemetryOnce } = await import('./telemetrySend')
     const sent: unknown[] = []
-    const store = new Map<string, string>()
     const g = globalThis as Record<string, unknown>
-    const prev = { window: g.window, localStorage: g.localStorage }
+    const prev = g.window
     g.window = { tangu: { telemetryReport: (kind: string, props: unknown) => sent.push([kind, props]) } }
-    g.localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) } }
     try {
       countTelemetryOnce('achImageGenerate', 'call_1')
       countTelemetryOnce('achImageGenerate', 'call_1')
-      countTelemetryOnce('achComputerUse', 'call_1')
-      expect(sent).toEqual([['count', { key: 'achImageGenerate' }], ['count', { key: 'achComputerUse' }]])
-      for (let i = 0; i < 250; i++) countTelemetryOnce('achComputerUse', `c${i}`)
-      expect(JSON.parse(store.get('forsion_telemetry_seen')!)).toHaveLength(200)
-      g.localStorage = { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('denied') } }
-      sent.length = 0
-      countTelemetryOnce('achImageGenerate', 'call_1')
-      expect(sent).toHaveLength(1)
-    } finally { g.window = prev.window; g.localStorage = prev.localStorage }
+      expect(sent).toEqual([['count', { key: 'achImageGenerate', once: 'call_1' }], ['count', { key: 'achImageGenerate', once: 'call_1' }]])
+    } finally { g.window = prev }
   })
 })

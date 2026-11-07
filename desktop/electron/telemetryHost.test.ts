@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BUFFER_CAP, COMMAND_PAIR_CAP, HOURLY_CAP, RENDERER_REPORT_KINDS, STACK_CAP,
+  BUFFER_CAP, COMMAND_PAIR_CAP, HOURLY_CAP, ONCE_CAP, RENDERER_REPORT_KINDS, STACK_CAP,
   appUpdateProps, coreUpdateProps, createStartupTracker, storeUpdateTelemetry, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, publicPluginId, shapeRendererReport,
   telemetryPackaged, updateProps,
   type HostTelemetryEvent,
@@ -415,5 +415,24 @@ describe('storeUpdateTelemetry(商店插件更新器广播 → update store-plug
     expect(settings).toEqual([['plugins.autoUpdate', false]])
     expect(() => watch(null)).not.toThrow()
     expect(() => watch({ items: 'nope' })).not.toThrow()
+  })
+})
+
+describe('引擎事件派生的计数按事件 id 去重(count.once)', () => {
+  it('同一个 id 只数一次(几个窗口 / 回放都在主进程判);id 不转发;不同键各算各的;记满了先进先出', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    for (let w = 0; w < 3; w++) for (const id of ['call_1', 'call_2']) h.report('count', { key: 'achComputerUse', once: id })
+    h.report('count', { key: 'achImageGenerate', once: 'call_1' })
+    h.report('count', { key: 'achComputerUse', once: 'has space' }) // id 形状不对:当没带,照常数
+    h.flushCounts()
+    expect(got.map((e) => e.props)).toEqual([{ achComputerUse: 3, achImageGenerate: 1 }])
+    expect(JSON.stringify(got)).not.toContain('call_1')
+    for (let i = 0; i <= ONCE_CAP; i++) h.report('count', { key: 'achComputerUse', once: `c${i}` })
+    h.report('count', { key: 'achComputerUse', once: 'c0' }) // 最早那个已经挤出去了
+    h.report('count', { key: 'achComputerUse', once: `c${ONCE_CAP}` })
+    h.flushCounts()
+    expect(got[1].props).toEqual({ achComputerUse: ONCE_CAP + 2 })
   })
 })

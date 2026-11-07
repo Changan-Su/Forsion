@@ -684,7 +684,7 @@ export function Ribbon() {
         return
       }
       setFly(null) // 上一次按开的收纳夹浮层
-      if (e.kind === 'cmd') { noteCommandUse(e.cmd.id, 'ribbon'); e.cmd.run() }
+      if (e.kind === 'cmd') e.cmd.run() // 经 space-slot-N 命令进来的:那条命令已按它的来源记过一次,这里不再记
       else if (e.id.startsWith('space:')) switchSpace(e.id.slice('space:'.length))
       else e.item.onClick?.()
     }

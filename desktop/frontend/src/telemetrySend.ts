@@ -17,19 +17,9 @@ export const telemetryOn = (): boolean => {
 /** app_counts 的一次计数(主进程按小时攒成一条)。 */
 export const countTelemetry = (key: AppCountKey, n = 1): void => sendTelemetry('count', n === 1 ? { key } : { key, n })
 
-/** 引擎事件派生的计数(某个工具被调了):同一条运行会在每个订阅它的窗口里、重连 / 重载时再回放一遍,
- *  按事件自己的 id 去重 —— 记在各窗口共用的 localStorage 里(最近 200 个),读写不了就照常数(宁可偶尔多一次,不挡路)。 */
-const SEEN_KEY = 'forsion_telemetry_seen'
-export function countTelemetryOnce(key: AppCountKey, uniq: string): void {
-  try {
-    const k = `${key}:${uniq}`
-    let seen: string[] = []
-    try { const v = JSON.parse(localStorage.getItem(SEEN_KEY) || '[]'); if (Array.isArray(v)) seen = v.filter((x) => typeof x === 'string') } catch { /* 读不了当没见过 */ }
-    if (seen.includes(k)) return
-    try { localStorage.setItem(SEEN_KEY, JSON.stringify([...seen.slice(-199), k])) } catch { /* 写不进也照常数 */ }
-  } catch { /* ignore */ }
-  countTelemetry(key)
-}
+/** 引擎事件派生的计数(某个工具被调了):同一条运行会在每个订阅它的窗口里、重连 / 重载时整段回放。
+ *  带上事件自己的 id,主进程(一个进程,各窗口共用)按它去重;id 只用来去重,不转发。 */
+export const countTelemetryOnce = (key: AppCountKey, uniq: string): void => sendTelemetry('count', { key, once: uniq })
 /** 一次设置改动:值给原始值,主进程按契约表归档(布尔 → on / off、分钟数 → 分档 …);表外的键直接丢。 */
 export const settingTelemetry = (key: string, value: unknown): void => sendTelemetry('setting', { key, value })
 /** 一次命令使用(主进程按小时按 (id, 来源) 攒成 command_use)。 */
