@@ -663,6 +663,8 @@ export interface ProjectContext {
 }
 
 export interface ProjectMemoryView {
+  /** MEMORY.md 的本机路径(「打开记忆文件夹」);还没有记忆 / 老引擎 → 不带。 */
+  file?: string
   version: string | null
   entries: Array<{ id: string; content: string; updatedAt: number }>
   chars: number
