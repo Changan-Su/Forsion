@@ -589,7 +589,17 @@ const api = {
     ipcRenderer.invoke('window:detachedReady', id),
   openDetached: (views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }> =>
     ipcRenderer.invoke('window:openDetached', views, at, opts),
-  openMini: (opts?: import('../shared/miniPanel').MiniOpenOptions): void => ipcRenderer.send('window:openMini', opts),
+  /** 开 / 叫出一扇 Mini(同一实体复用、满了不开):结果里 ok:false + reason:'limit' 时调用方负责提示用户。 */
+  openMini: (opts?: import('../shared/miniPanel').MiniOpenOptions): Promise<import('../shared/miniPanel').MiniOpenResult | undefined> =>
+    ipcRenderer.invoke('window:openMini', opts),
+  /** Mini 窗报自己现在显示的实体(换了 Space / 会话之后),主进程据此认「同一个再开」。 */
+  miniEntity: (target: import('../shared/miniPanel').MiniOpenOptions): void => ipcRenderer.send('window:miniEntity', target),
+  /** 同一实体被再开一次:这扇被叫到前面,轻跳一下。 */
+  onMiniNudge: (cb: () => void): (() => void) => {
+    const listener = (): void => cb()
+    ipcRenderer.on('window:miniNudge', listener)
+    return () => ipcRenderer.removeListener('window:miniNudge', listener)
+  },
   openFloatingPanel: (opts: import('../shared/floatingPanel').FloatingPanelOpenOptions): Promise<{ id: string } | undefined> =>
     ipcRenderer.invoke('window:openFloating', opts),
   floatingReady: (id: string): Promise<import('../shared/floatingPanel').FloatingPanelOpenOptions | undefined> =>

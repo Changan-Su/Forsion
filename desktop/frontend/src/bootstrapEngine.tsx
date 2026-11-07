@@ -1,3 +1,4 @@
+import { openMiniWindow } from './mini/openMiniWindow'
 import { registerAmadeusViews } from './features/amadeus'
 import { inboxAvailable } from './features/runtime'
 import { registerOperationsViews } from './features/operations'
@@ -477,7 +478,7 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   // Mini 悬浮卡片(全局快捷键 ⌘/Ctrl+⇧+M 亦可):仅桌面(openMini 存在)。
   if (window.tangu?.openMini) addCommand({ id: 'open-mini', title: () => translate('bootengine.cmd.openMini'), keywords: 'mini card floating 悬浮 卡片 迷你 mini', run: () => {
     const space = getActiveSpace(), leaf = ws().getActiveLeaf()
-    window.tangu?.openMini?.(space && supportsMiniPanel(space)
+    void openMiniWindow(space && supportsMiniPanel(space)
       ? { spaceId: space.id, params: leaf?.type === space.mini!.mainView.type ? leaf.params : undefined }
       : { sessionId: app().activeId || undefined })
   } })

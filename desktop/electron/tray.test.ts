@@ -201,6 +201,19 @@ describe('tray 在跑 / 等你段(借鉴 Comma 2.6)', () => {
     expect(en[1].accelerator).toBeUndefined()
   })
 
+  it('全部 Mini:开着才出,每扇一行、点了叫到那扇;没标题写 Mini', () => {
+    const open = vi.fn()
+    const none = trayMenuTemplate({ ...base, minis: { list: () => [], open } }, 'zh')
+    expect(labels(none)).toEqual(['显示 Forsion', '检查更新', '退出 Forsion'])
+    const items = trayMenuTemplate({ ...base, newMini: { open: vi.fn(), accelerator: () => null },
+      minis: { list: () => [{ id: 'm1', title: '日历', visible: true }, { id: 'm2', title: ' ', visible: false }], open } }, 'en', 0, 'darwin')
+    expect(labels(items)).toEqual(['Show Forsion', 'New Mini chat', 'All Mini windows', 'Check for updates', 'Quit Forsion'])
+    const sub = items[2].submenu as Electron.MenuItemConstructorOptions[]
+    expect(sub.map((i) => i.label)).toEqual(['日历', 'Mini'])
+    ;(sub[1].click as () => void)()
+    expect(open).toHaveBeenCalledWith('m2')
+  })
+
   it('清洗:形状不对的行丢掉、重复 id 只留一条、标题压成一行并截短', () => {
     const long = 'x'.repeat(80)
     expect(sanitizeTraySessions([

@@ -12,6 +12,18 @@ import { DockRoot } from './mini/DockRoot'
 import { track } from './achievements/store'
 import { installMiniDockMotion } from './mini/dockMotion'
 import { QuickFind, useQuickFind } from './quickFind'
+import { openMiniWindow, setMiniNoticeSink } from './mini/openMiniWindow'
+import { VOICE_CALL_VIEW } from '../../shared/miniPanel'
+
+/** 这扇 Mini 现在显示的实体(报给主进程认「同一个再开」):直开的视图不报(类型不会变);Tangu 只有钉住的会话才算身份。 */
+function currentSpaceEntity(): MiniOpenOptions | null {
+  const space = getActiveSpace()
+  if (!space || !supportsMiniPanel(space)) return null
+  const leaf = useWorkspace.getState().getActiveLeaf()
+  const params = leaf?.type === space.mini!.view.type ? leaf.params ?? {} : {}
+  const sessionId = space.id === 'tangu' && typeof params.sessionId === 'string' && !params.followActive ? params.sessionId : undefined
+  return { spaceId: space.id, ...(sessionId ? { sessionId } : {}) }
+}
 
 let directMini: MiniOpenOptions | null = null
 /** 侧边拼接面板(DockRoot)也是 direct 形态:它自己定目标,不经 onMiniTarget。 */
@@ -59,13 +71,42 @@ function MiniPanelRoot() {
   const { t } = useI18n()
   useEffect(installMiniDockMotion, [])
   const [direct, setDirect] = useState<MiniOpenOptions | null>(null)
+  const transient = new URLSearchParams(location.search).has('transient')
+  // Mini 多开:同一实体被再开一次 → 轻跳;开满了 → 卡片里一行提示(这扇窗没有通知宿主)
+  const [nudge, setNudge] = useState(0)
+  useEffect(() => window.tangu?.onMiniNudge?.(() => setNudge((n) => n + 1)), [])
+  const [notice, setNotice] = useState<string | null>(null)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const off = setMiniNoticeSink((text) => { setNotice(text); clearTimeout(timer); timer = setTimeout(() => setNotice(null), 4000) })
+    return () => { off(); clearTimeout(timer) }
+  }, [])
   useEffect(() => { useApp.getState().setTr((k, vars) => t(k, vars as Record<string, string | number> | undefined)) }, [t])
   useEffect(() => {
     let ready = false
     let directSeen = false
     const query = new URLSearchParams(location.search)
     let pending: MiniOpenOptions | null = query.get('sessionId') ? { sessionId: query.get('sessionId')! } : null
+    // 等目标落定(没有待办的目标)才报:载入中先报出上次留下的 Space,会让同一实体的第二次打开错开一扇新窗
+    let reported = ''
+    // 应用目标的那几步(切 Space、开视图)会同步触发订阅:中间态(Space 换了、会话还没钉上)不能报出去
+    let applying = false
+    // 主进程随目标发来的代号;报实体时带回去,主进程只认当前这一代之后的报告
+    let appliedGen: number | undefined
+    const report = (): void => {
+      if (!ready || pending || applying || directMini || transient) return
+      const entity = currentSpaceEntity()
+      const sig = entity ? JSON.stringify([entity, appliedGen]) : ''
+      if (!entity || sig === reported) return
+      reported = sig
+      window.tangu?.miniEntity?.({ ...entity, gen: appliedGen } as MiniOpenOptions)
+    }
     const apply = (): void => {
+      if (applying) return
+      applying = true
+      try { applyTarget() } finally { applying = false }
+    }
+    const applyTarget = (): void => {
       if (!ready || !pending) return
       if (pending.view) {
         const directView = pending.view
@@ -76,6 +117,7 @@ function MiniPanelRoot() {
         directSeen = true
         const target = pending
         pending = null
+        appliedGen = (target as { gen?: number }).gen
         directMini = target
         setDirect(target)
         useWorkspace.getState().openView(directView.type, { ...directView.params, ...target.params }, 'main')
@@ -86,6 +128,7 @@ function MiniPanelRoot() {
       if (!space || !supportsMiniPanel(space)) return // async plugin registration can fulfill the target later
       const target = pending
       pending = null
+      appliedGen = (target as { gen?: number }).gen
       directMini = null
       setDirect(null)
       setActiveSpace(space.id)
@@ -94,12 +137,13 @@ function MiniPanelRoot() {
       useWorkspace.getState().openView(space.mini!.view.type, params, 'main')
       if (target.sessionId) useApp.getState().setActiveId(target.sessionId)
     }
-    const off = window.tangu?.onMiniTarget?.((target) => { pending = target; apply() })
+    const off = window.tangu?.onMiniTarget?.((target) => { pending = target; apply(); report() })
     window.tangu?.miniReady?.()
-    const offSpaces = useSpaceStore.subscribe(apply)
+    const offSpaces = useSpaceStore.subscribe(() => { apply(); report() })
     const offViews = subscribeViews(apply)
-    void useApp.getState().boot().finally(() => { ready = true; apply() })
-    return () => { off?.(); offSpaces(); offViews(); ready = false; directMini = null }
+    const offLeaf = useWorkspace.subscribe(report)
+    void useApp.getState().boot().finally(() => { ready = true; apply(); report() })
+    return () => { off?.(); offSpaces(); offViews(); offLeaf(); ready = false; directMini = null }
   }, [])
   useEffect(() => { if (window.amadeus) ensureAmadeusReady() }, [])
   useEffect(() => installFileDropGuard(), [])
@@ -117,13 +161,29 @@ function MiniPanelRoot() {
   // 引导「打开一次 Mini」:open-mini 命令 / 全局快捷键都只经主进程建窗,渲染层能看到的就是这张卡挂载(窗口复用时再显示不重计);
   // Computer Use 的自动观察窗(?transient=1)不算。计数经 localStorage + storage 事件同步回主窗。
   useEffect(() => { if (!new URLSearchParams(location.search).has('transient')) track('mini.open') }, [])
+  // 「复制一扇」:按这扇现在显示的内容再开一扇(直开视图带上当前参数;Space 带上当前视图参数和钉住的会话)。
+  // 语音通话一次只有一通、自动 Mini 是临时观察窗:都不给。
+  const duplicate = (): void => {
+    const leaf = useWorkspace.getState().getActiveLeaf()
+    if (directMini?.view) {
+      // 当前参数只放一处:应用目标时 params 会盖过 view.params,两边都写成现在这份
+      const params = { ...directMini.view.params, ...directMini.params, ...leaf?.params }
+      void openMiniWindow({ ...directMini, params, view: { type: directMini.view.type, params }, duplicate: true })
+      return
+    }
+    const entity = currentSpaceEntity()
+    if (entity) void openMiniWindow({ ...entity, params: { ...leaf?.params }, duplicate: true })
+  }
+  const canDuplicate = !transient && !!window.tangu?.openMini && direct?.view?.type !== VOICE_CALL_VIEW
   // 自动 Mini(?transient=1,Computer Use 的临时观察窗)大小固定;用户自己开的这张可以拖边改大小
   return <>
-    <MiniColumnHost buildDefault={buildMiniPanel} resizable={!!window.tangu?.miniResize && !new URLSearchParams(location.search).has('transient')} direct={direct?.view ? {
+    <MiniColumnHost buildDefault={buildMiniPanel} resizable={!!window.tangu?.miniResize && !transient} direct={direct?.view ? {
       title: direct.title,
       view: direct.view,
       mainView: direct.mainView ?? direct.view,
-    } : null} onSearch={() => useQuickFind.getState().openPalette()} />
+    } : null} onSearch={() => useQuickFind.getState().openPalette()}
+    onDuplicate={canDuplicate ? duplicate : undefined} notice={notice} nudge={nudge}
+    onTitle={(title) => { document.title = title }} />
     <QuickFind />
   </>
 }
