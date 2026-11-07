@@ -14,6 +14,7 @@ export { joinVoiceText } from '../services/voiceInputStream'
 // 且本文件里 `t` 已被 `getTracks().forEach((t) => …)` 占用,别再引入同名绑定。
 registerMessages({
   'voiceinput.silent': { zh: '没采集到声音（输入电平≈0）：检查系统输入设备是否选对、麦克风没被静音', en: 'No audio captured (input level ≈ 0): check that the right input device is selected and that the microphone is not muted' },
+  'voiceinput.unsupported': { zh: '此环境不支持语音输入', en: 'Voice input is not supported in this environment' },
   'voiceinput.denied': { zh: '麦克风权限被拒绝（打开 系统设置 › 隐私与安全 › 麦克风，允许本 App）', en: 'Microphone access was denied (open System Settings › Privacy & Security › Microphone and allow this app)' },
   // 手机(window.tangu.mobile)的说法:没有「输入设备选没选对」,权限在系统的应用设置里。
   'voiceinput.silentPhone': { zh: '没录到声音，再试一次', en: 'No sound was recorded — try again' },
