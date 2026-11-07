@@ -234,10 +234,11 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
 }
 const mib = (n: number): string => (n / (1024 * 1024)).toFixed(1).replace(/\.0$/, '');
 /** where = 同步里的路径(contentPathOf:agents/<slug>/<文件>、human/<文件>),报错带上它:原来只说「超过上限」不说是哪个文件,
- *  引擎日志里每轮一句、用户和后台都找不到是哪一份(11-07)。from = 这份字节从哪来:云端拉的 / 本机要推的 / 合并出来的。 */
+ *  引擎日志里每轮一句、用户和后台都找不到是哪一份(11-07)。from = 这份字节从哪来:云端拉的 / 本机要推的 / 合并出来的。
+ *  路径写在双引号里(JSON.stringify):诊断数据带引擎日志时按引号整段遮,文件名带空格也不会留下半截。 */
 function verifyBytes(file: { hash?: string | null }, bytes: Buffer, where: string, from: 'cloud' | 'local' | 'merged' = 'cloud'): void {
-  if (bytes.length > MAX_FILE_BYTES) throw new Error(`${from} file exceeds sync limit (${mib(bytes.length)} MB > ${mib(MAX_FILE_BYTES)} MB): ${where}`);
-  if (file.hash != null && sha256(bytes) !== file.hash) throw new Error(`cloud file hash mismatch: ${where}`);
+  if (bytes.length > MAX_FILE_BYTES) throw new Error(`${from} file exceeds sync limit (${mib(bytes.length)} MB > ${mib(MAX_FILE_BYTES)} MB): ${JSON.stringify(where)}`);
+  if (file.hash != null && sha256(bytes) !== file.hash) throw new Error(`cloud file hash mismatch: ${JSON.stringify(where)}`);
 }
 async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, scope: string, cats: Set<Category>, manifest: AgentFileMeta[], families: { human: boolean; agentCalendar: boolean; widgetData: boolean }, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
   const dir = agentSyncDir(slug);
@@ -537,7 +538,7 @@ async function reconcileLog(cloud: AgentFilesBrain, uid: string, slug: string, d
       } else if (remoteAdds) {
         content = logText(head.header || `# ${date}`, merged.merged);
         // 并集可能比两边任何一份都大:超限就既不落盘也不上传(传上去之后别的设备每次同步都会在这个文件上失败)
-        if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error(`merged log exceeds sync limit: ${contentPathOf(slug, p)}`);
+        if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error(`merged log exceeds sync limit: ${JSON.stringify(contentPathOf(slug, p))}`);
         store.writeLog(date, content, snapshot.version); result.pulled++;
       } else content = snapshot.content;
     });

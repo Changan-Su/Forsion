@@ -320,7 +320,7 @@ describe('agentFileSync — size cap', () => {
     await cloud.putFile('u', 'tester', 'Library/big.md', { content: big, isBinary: false, size: big.length, mtimeMs: Date.now() });
     const r = await runAgentFilesSync(cloud, 'u');
     expect(r.ok).toBe(false);
-    expect(r.error).toContain('cloud file exceeds sync limit (6 MB > 5 MB): agents/tester/Library/big.md');
+    expect(r.error).toContain('cloud file exceeds sync limit (6 MB > 5 MB): "agents/tester/Library/big.md"');
     expect(existsSync(join(tDir('tester'), 'Library', 'big.md'))).toBe(false);
   });
 });
