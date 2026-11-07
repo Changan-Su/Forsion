@@ -51,7 +51,7 @@ jobs:
         run: |
           node scripts/app-refs-windows.probe.cjs
           exit $LASTEXITCODE
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: windows-app-refs-${{ matrix.os }}
