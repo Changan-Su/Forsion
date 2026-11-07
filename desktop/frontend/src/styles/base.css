@@ -2586,9 +2586,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .quote-preview-body--mono { font-family: var(--font-mono); font-size: var(--ui-font-caption); }
 
 /* agent 在对话区展示的文件(display_file / 生图 / 表情包):图片缩略图(点击放大)+ 文件卡片 */
-.inline-file-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.inline-file-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 2px; }
 .inline-file-img {
-  max-width: 280px;
+  max-width: min(280px, 100%);
   max-height: 280px;
   object-fit: contain;
   border-radius: var(--radius-md, 10px);
@@ -2598,6 +2598,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   transition: filter 0.15s ease, transform 0.15s ease;
 }
 .inline-file-img:hover { filter: brightness(1.04); }
+.inline-file-media { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; max-width: 100%; }
+.inline-file-video, .inline-file-audio { width: 320px; max-width: 100%; }
+.inline-file-video { max-height: 280px; object-fit: contain; border-radius: var(--radius-md); background: var(--overlay-light); }
 .inline-file-card {
   display: inline-flex;
   align-items: center;

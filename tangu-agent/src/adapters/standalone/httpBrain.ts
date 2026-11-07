@@ -11,7 +11,7 @@ import type {
   FimCompletionOpts,
   DecisionResult,
 } from '../../seams/cloudBrain.js';
-import { imageMimeOf, fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
+import { imageMimeOf, imageOutputFields, fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
 import {
   AMADEUS_MAX_FILE_BYTES,
   AgentFileConflictError,
@@ -523,7 +523,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
           '/v1/images/edits',
           { model: req.model, prompt: req.prompt, image: req.images.map(i => `data:${i.mime};base64,${i.b64}`),
-            size: req.size || '1:1', n: req.n || 1, transparent_background: !!req.transparentBackground, output_format: 'png',
+            size: req.size || (req.outputFormat === 'gif' ? 'auto' : '1:1'), n: req.n || 1, transparent_background: !!req.transparentBackground,
+            output_format: 'png', ...imageOutputFields(req),
             ...(req.quality ? { quality: req.quality } : {}) },
           req.signal, IMG_TIMEOUT_MS,
         );
@@ -536,7 +537,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       generate: async (req) => {
         const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
           '/v1/images/generations',
-          { model: req.model, prompt: req.prompt, size: req.size || '1:1', n: req.n || 1, transparent_background: !!req.transparentBackground, output_format: 'png',
+          { model: req.model, prompt: req.prompt, size: req.size || (req.outputFormat === 'gif' ? 'auto' : '1:1'), n: req.n || 1,
+            transparent_background: !!req.transparentBackground, output_format: 'png', ...imageOutputFields(req),
             ...(req.quality ? { quality: req.quality } : {}) },
           req.signal,
           IMG_TIMEOUT_MS, // 生图比 LLM 慢:窗口下限单独放宽,不受通用 60s 基准截断
