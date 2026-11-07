@@ -2,7 +2,7 @@
  * Muse 的遥测落点(契约 §7 daily_muse / daily_muse_card):真 SQLite + 本机 profile,走真的写口,看账本里落了什么。
  * - 点卡:动作名按 cardKind 计;插件卡新动作 installed(宿主装成后回写)= done / installed;认不得的动作不进账本。
  * - 周期产出只算 Muse 周期 run 里的;0 产出的周期在收尾时记 cyclesSilent(muse.ts flushJournal 用 museCycleFinished 判)。
- * - 每日快照:三天以上没人理的卡、昨天主动消息 24 小时内读到 / 回复的条数、Muse 设置档位。
+ * - 每日快照:三天以上没人理的卡、前一天主动消息 24 小时内读到 / 回复的条数(记在今天那一格)、Muse 设置档位。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -145,9 +145,9 @@ describe('每日快照', () => {
     expect(cell('daily_muse_card', 'gPendingOver3d', 'intro')).toBeUndefined();
   });
 
-  it('前天的主动消息:24 小时内回复 / 读到的条数记在今天那一格(窗口已全部关上)', async () => {
-    const now = Date.UTC(2026, 10, 8, 9);
-    const y = Date.UTC(2026, 10, 6, 10);
+  it('前一天的主动消息:截至现在 24 小时内回复 / 读到的条数记在今天那一格,不回写昨天', async () => {
+    const now = Date.UTC(2026, 10, 8, 23);
+    const y = Date.UTC(2026, 10, 7, 10);
     db.prepare(`INSERT INTO chat_sessions (id, user_id, app_id, title, kind, last_read_at) VALUES ('s', 'u', 'tangu', 'Muse', 'user', ?)`).run(y + 2 * 3600_000);
     const msg = db.prepare(`INSERT INTO chat_messages (id, session_id, role, content, timestamp, agent_slug, origin) VALUES (?, 's', ?, 'x', ?, ?, ?)`);
     msg.run('m1', 'model', y, 'muse', 'proactive'); // 2 小时后读到
@@ -155,11 +155,24 @@ describe('每日快照', () => {
     msg.run('u1', 'user', y + 3 * 3600_000, null, null);
     msg.run('m3', 'model', y + 5 * 3600_000, 'muse', 'proactive'); // 回复在它之前、读也在它之前:都不算
     msg.run('m4', 'model', y - DAY, 'muse', 'proactive'); // 前天的:不算
+    msg.run('m5', 'model', y, 'xyra', 'proactive'); // 不是 Muse:不算
     await snapshotMuseDmReads(now);
     await settle();
     expect(cell('daily_muse', 'dmRepliedIn24h', '', '2026-11-08')).toBe(2);
     expect(cell('daily_muse', 'dmReadIn24h', '', '2026-11-08')).toBe(2);
-    expect(cell('daily_muse', 'dmReadIn24h', '', '2026-11-06')).toBeUndefined();
+    expect(cell('daily_muse', 'dmReadIn24h', '', '2026-11-07')).toBeUndefined();
+  });
+
+  it('窗口还没关的:只算到现在为止的(之后一小时再刷新)', async () => {
+    const y = Date.UTC(2026, 10, 7, 22);
+    db.prepare(`INSERT INTO chat_sessions (id, user_id, app_id, title, kind, last_read_at) VALUES ('s2', 'u', 'tangu', 'Muse', 'user', ?)`).run(y + 10 * 3600_000);
+    db.prepare(`INSERT INTO chat_messages (id, session_id, role, content, timestamp, agent_slug, origin) VALUES ('n1', 's2', 'model', 'x', ?, 'muse', 'proactive')`).run(y);
+    await snapshotMuseDmReads(Date.UTC(2026, 10, 8, 1)); // 读在 08:00,这时还没发生
+    await settle();
+    expect(cell('daily_muse', 'dmReadIn24h', '', '2026-11-08')).toBe(0);
+    await snapshotMuseDmReads(Date.UTC(2026, 10, 8, 9));
+    await settle();
+    expect(cell('daily_muse', 'dmReadIn24h', '', '2026-11-08')).toBe(1);
   });
 
   it('Muse 设置档位一热编码;没开过的磨合期 = 0', async () => {
