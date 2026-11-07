@@ -25,6 +25,7 @@
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only mask [--mask-off]          # 发给模型前脱敏(10-28,借鉴 magpie 方案 1):读 .env → run_bash 带 key 的 curl 打台架里的回显服务 → 问模型看到的值是不是 sk-proj- 开头、是不是占位符。
+ *   npm run live:harness -- --only filechange               # 变动感知(11-07):读过的文件被用户改了 → 下一轮开头 / run 内续调前都带 diff 告诉模型,且不拿旧副本覆盖。改 tools/readState.ts / tools/fileChangeNotice.ts / agentLoop 那两处注入后跑;负对照 TANGU_FILE_CHANGE_NOTICE=off(①② 须红)
  *                                                           #   判据:回显服务收到真 key(工具参数换回了)、模型答「不是 sk-proj- 开头 / 是占位符」、engine.log 有 [mask]。--mask-off = 负对照(config 里关掉,须红)。改 llm/outboundMask.ts 后跑
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
@@ -382,6 +383,7 @@ OPT_IN.add('import'); // 从其他 AI 导入(11-03):后台模型拆条 / 归位 
 OPT_IN.add('portraitmove'); // 搬家的后台模型挑得准不准(10-30):不跑对话,只有人点的那几个接口;动了 agents/portraitMove.ts 的提示才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
+OPT_IN.add('filechange'); KEYS.push('filechange'); // 四个 run;只在动 tools/readState.ts 的变动感知 / tools/fileChangeNotice.ts / agentLoop 的两处注入时才有信息量。负对照:TANGU_FILE_CHANGE_NOTICE=off
 OPT_IN.add('streamoverflow'); KEYS.push('streamoverflow'); // 注入:真 Codex 路径上流里回 context_length_exceeded(lib/llm-fault-preload.mjs);只在动流内报错归类 / agentLoop 的超长压缩重试时跑
 OPT_IN.add('foreignreasoning'); KEYS.push('foreignreasoning'); // 注入:回灌的加密推理被拒(400 invalid_encrypted_content);只在动 historyReplay 的推理绑定 / agentLoop 的拿掉重发时跑
 OPT_IN.add('relay'); KEYS.push('relay'); // 假提供方只回 429 usage_limit_reached;只在动 llm/quotaRelay.ts / agentLoop 的接力分支时跑。--relay-mode auto|ask|none
@@ -3102,6 +3104,69 @@ try {
       ok: !a.error && !b.error && realKeySent && sawPlaceholder && maskLine && spans.length > 0,
       detail: a.error || b.error || `回显服务收到真 key:${realKeySent ? '是' : '否'};模型答「${b.content.trim()}」→ ${sawPlaceholder ? '看到的是占位符' : '看到的不是占位符(原值到了模型)'};engine.log [mask]:${maskLine ? '有' : '无'};工具结果标注 ${spans.length} 处`,
       output: `${a.content}\n---\n${b.content}`, tokens: tokensOf(a) + tokensOf(b), toolCalls: [...a.toolCalls, ...b.toolCalls],
+    };
+  });
+
+  // filechange(11-07,Agent 对变动文件的感知):读过的文件被「文件工具之外」改了(用户在编辑器里接着写)→ 下一次调模型前带 diff 告诉它。
+  //   ① 读 notes.md → 台架像用户一样往里加一段(带第二个码)→ 下一轮**不许用工具**问「现在有哪些码」:只有通知里有第二个码,答得出 = 通知到了;
+  //   ② 一个 run 里先跑 sleep 20,台架在它跑的时候再加一段(第三个码)→ 不重读就答:须答出第三个码,engine.log 有这个 run 的 mid-run 行;
+  //   ③ 再加一段(第四个码)后让它只改标题、其余不动 → 盘上四个码与用户写的段都在(不许拿旧副本整篇覆盖)。
+  //   负对照:TANGU_FILE_CHANGE_NOTICE=off(引擎不发通知)→ ①② 须红,③ 靠写闸照样绿。
+  await scenario('filechange', 'filechange 读过的文件被用户改了:下一轮 / run 内都知道,且不覆盖', async () => {
+    const dir = join(workspace, 'filechange-live');
+    mkdirSync(dir, { recursive: true });
+    const file = join(dir, 'notes.md');
+    const tag = () => randomUUID().replace(/-/g, '').slice(0, 6).toUpperCase();
+    const [c1, c2, c3, c4] = [`ALPHA-${tag()}`, `BRAVO-${tag()}`, `CHARLIE-${tag()}`, `DELTA-${tag()}`];
+    writeFileSync(file, `# Trip notes\n\nWe meet at the station at nine.\ncode: ${c1}\n`);
+    const userAppend = (text) => writeFileSync(file, readFileSync(file, 'utf8') + text);
+    const logAt = () => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8').length : 0);
+    const logSince = (n) => (existsSync(engineLog) ? readFileSync(engineLog, 'utf8').slice(n) : '');
+    const sid = `live-filechange-${Date.now()}`;
+    const cfg = { cwd: dir };
+    const a = await run(sid, 'Read the file notes.md with a tool and reply with just the value after "code:".', 180_000, cfg);
+    userAppend(`\n## Added by me\nSecond code: ${c2}\n`); // 像用户在编辑器里接着写
+    let at = logAt();
+    const b = await run(sid, 'Without using any tools: list every code that notes.md contains right now (values shaped like WORD-XXXXXX), one per line, nothing else.', 120_000, cfg);
+    const logB = logSince(at);
+    at = logAt();
+    // 第三段在 run 里写:等命令真跑起来(它先 touch 一个标记)再落盘 → 开头那次扫描已经过了,只能由续调前那次扫描报
+    const flag = join(dir, 'started.flag');
+    rmSync(flag, { force: true });
+    let stopWatch = false;
+    const midEdit = (async () => {
+      const t0 = Date.now();
+      while (!stopWatch && Date.now() - t0 < 230_000) {
+        if (existsSync(flag)) { userAppend(`\nThird code: ${c3}\n`); return true; }
+        await sleep(250);
+      }
+      return false;
+    })();
+    let c;
+    try {
+      c = await run(sid, 'First run this exact shell command with run_bash: `touch started.flag && sleep 20`. After it finishes, do NOT read notes.md again or run any other command: just list every code notes.md contains right now, one per line, nothing else.', 240_000, cfg);
+    } finally { stopWatch = true; }
+    const editedMidRun = await midEdit;
+    const logC = logSince(at);
+    userAppend(`\n## Packing\n- passport (${c4})\n`);
+    const d = await run(sid, 'Change the title line of notes.md to "# Final trip notes". Leave everything else in the file exactly as it is.', 180_000, cfg);
+    const final = readFileSync(file, 'utf8');
+    const turnLine = new RegExp(`\\[filechange\\] run=${b.runId} turn-start: 1 change`).test(logB);
+    const midLine = new RegExp(`\\[filechange\\] run=${c.runId} mid-run: `).test(logC);
+    const bKnows = b.content.includes(c1) && b.content.includes(c2) && b.toolCalls.length === 0;
+    // 除了那条 sleep,任何工具调用(read_file / 带 notes.md 的命令 / 别的命令)都算自己又去看了
+    const reread = c.toolArgs.some((t) => t.name !== 'run_bash' || !/sleep\s+20/.test(t.args) || /notes\.md/.test(t.args));
+    const cKnows = editedMidRun && c.content.includes(c3) && !reread;
+    const kept = [c1, c2, c3, c4, '## Added by me', '## Packing'].every((x) => final.includes(x));
+    const titled = /^# Final trip notes\s*$/m.test(final) && !/^# Trip notes\s*$/m.test(final);
+    const evidence = { codes: [c1, c2, c3, c4], a: a.content, b: b.content, bTools: b.toolCalls, c: c.content, cTools: c.toolArgs.map((t) => ({ name: t.name, args: t.args })), d: d.content, dTools: d.toolArgs.map((t) => ({ name: t.name, args: t.args.slice(0, 300) })), final, editedMidRun, turnLine, midLine, logB: logB.split('\n').filter((l) => l.includes('[filechange]')), logC: logC.split('\n').filter((l) => l.includes('[filechange]')) };
+    writeFileSync(join(OUT, 'filechange-evidence.json'), JSON.stringify(evidence, null, 2));
+    const errs = [a, b, c, d].map((x) => x.error).filter(Boolean);
+    return {
+      ok: !errs.length && a.content.includes(c1) && bKnows && turnLine && cKnows && midLine && kept && titled,
+      detail: errs.join(';') || `① 不用工具答出用户加的码:${bKnows ? '是' : `否(工具 ${b.toolCalls.join(',') || '无'})`};turn-start 行:${turnLine ? '有' : '无'};② run 内改动不重读答出:${cKnows ? '是' : !editedMidRun ? '否(命令没跑起来,台架没改成)' : reread ? '否(重读了)' : '否'};mid-run 行:${midLine ? '有' : '无'};③ 用户写的都在:${kept ? '是' : '否'},标题改了:${titled ? '是' : '否'}(工具 ${d.toolCalls.join(',') || '无'})`,
+      output: `A: ${a.content}\n---\nB: ${b.content}\n---\nC: ${c.content}\n---\nD: ${d.content}\n---\nfinal notes.md:\n${final}`,
+      tokens: [a, b, c, d].reduce((n, x) => n + (tokensOf(x) || 0), 0), toolCalls: [...a.toolCalls, ...b.toolCalls, ...c.toolCalls, ...d.toolCalls],
     };
   });
 

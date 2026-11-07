@@ -43,6 +43,7 @@ import { WIDGET_SECTION, widgetsEnabledFor } from '../tools/builtin/manageWidget
 import { LEGACY_HTML_CARD_TOOL, SKETCH_LESS_NOTE, SKETCH_SECTION, htmlCardToWire, isHtmlCardTool, sketchEnabledFor, sketchTurnSignalFor, visualsPrefOf, withHtmlCardName } from '../tools/builtin/sketch.js';
 import { loadTodos as loadSessionTodos, renderTodos, type TodoItem } from '../tools/builtin/todo.js';
 import { collectGitState, formatRuntimeContext, renderTodoState, runVerifyCommand } from './runtimeContext.js';
+import { fileChangeSection, wrapMidRunFileChanges } from '../tools/fileChangeNotice.js';
 import { loadCustomTools, type LoadedCustomTool } from '../tools/customTools.js';
 import { snapshotSession, refreshSessionWorkspace } from '../sandbox/sessionSandbox.js';
 import { DockerCleanupError } from '../sandbox/dockerLifecycle.js';
@@ -2280,6 +2281,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const rc = formatRuntimeContext([
         renderTodoState(rcTodos),
         execMode === 'host' && ps.hostWorkspace ? await collectGitState(cwd, { cwd, execMode, hostSandbox: runHostSandbox, signal: ac.signal, remote, runId }) : null,
+        // 读过 / 写过的文件被文件工具之外改了(用户在编辑器里写、别的程序、run_bash):带 diff 报一次(tools/fileChangeNotice.ts)
+        execMode === 'host' ? await fileChangeSection({ sessionId, cwd, runId }, 'turn-start') : null,
       ]);
       if (rc) {
         for (let i = workingMessages.length - 1; i >= 0; i--) {
@@ -2959,6 +2962,12 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const steered = drainSteer(runId);
       const outcomes = parked.size ? await settleParkedCalls() : [];
       if (steered.length || outcomes.length) await applySteering([...outcomes, ...steered]);
+      // run 内续调前再扫一遍读过的文件(模型干活时用户可能还在编辑器里写):有改动就在尾部追加一条
+      // 不落库不上屏的 user 消息(同 NO_VISION_NOTE),本 run 之后的调用都看得见。第 0 轮已由开头的 runtime_context 报过。
+      if (iteration > 0 && execMode === 'host') {
+        const fileChanges = await fileChangeSection({ sessionId, cwd, runId }, 'mid-run');
+        if (fileChanges) workingMessages.push({ role: 'user', content: wrapMidRunFileChanges(fileChanges) } as ChatMessage);
+      }
 
       // 每轮前复查配额（多轮 run 可能远超首轮预估）
       const stepPre = await canConsumeTokenPoints(user.id, estCost);
