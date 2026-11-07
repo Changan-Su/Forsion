@@ -145,6 +145,22 @@ async function main() {
       }
     })
 
+    // DICTATION_HOLD=<秒>:停在这里给 computer use 那一轮用(真按快捷键 ⌥⇧F9、真点胶囊上的按钮),每次状态变化打印前台应用;不跑后面的断言。
+    const hold = Number(process.env.DICTATION_HOLD || 0)
+    if (hold > 0) {
+      console.log(`HOLD ${hold}s: press Alt+Shift+F9 in any app (Forsion pid ${electronPid}); capsule clicks are real OS clicks now`)
+      let last = ''
+      const end = Date.now() + hold * 1000
+      while (Date.now() < end) {
+        const s = await ctl('state')
+        const c = await capsuleInfo()
+        const line = `${s.phase}${s.failure ? ':' + s.failure : ''} front=${frontPid()} capsuleVisible=${!!c?.visible} capsuleFocused=${!!c?.focused} forsionFocusedWindow=${await app.evaluate(({ BrowserWindow }) => !!BrowserWindow.getFocusedWindow())}`
+        if (line !== last) { console.log(new Date().toISOString().slice(11, 23), line); last = line }
+        await sleep(150)
+      }
+      return
+    }
+
     // ── 3. Forsion 自己的输入框:胶囊不抢焦点,实时字出现在胶囊上,写进光标处 ──
     await app.evaluate(({ app: a, BrowserWindow }) => {
       a.focus({ steal: true })
