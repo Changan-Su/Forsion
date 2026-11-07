@@ -76,6 +76,10 @@ export interface ThemeEntry {
   manifest: ThemeManifest;
   /** bundle 主题:Vite 资源 URL,走 <link>。 */
   cssUrl?: string;
-  /** 磁盘主题:主进程读回的 CSS 文本,走 <style>(CSP 禁 file://)。 */
+  /** 磁盘主题:主进程读回的 CSS 文本,走 <style>(CSP 禁 file://)。已过动效收口(motionGuard.ts)。 */
   cssText?: string;
+  /** 磁盘主题里被动效收口删掉的动效 token(主题卡下面提示一行;动效归宿主管)。 */
+  motionIgnored?: string[];
+  /** 收口后浏览器再读一遍仍有漏网的(或收口出错):这套主题的样式整套不加载,cssText 为空,主题卡下面说一句。 */
+  cssRejected?: boolean;
 }

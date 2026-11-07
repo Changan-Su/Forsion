@@ -1,4 +1,5 @@
 import './sandbox/seed' // 插件沙箱首屏的语言 / 主题:必须排第一,store 一被 import 就读 localStorage(普通实例 no-op)
+import './styles/layers.css' // 层序:第一份 CSS(seed 不带样式),forsion-guard 最先声明
 import { createRoot } from 'react-dom/client'
 import { MotionConfig } from 'framer-motion'
 import { Root } from './Root'

@@ -53,6 +53,21 @@ description: 设计语言 × 配色 × 明暗模式自由组合,主题可就地�
 - `preview.shape`:`paper` / `glass` / `soft` / `compact`。不写时按 `tags` 推断(含 `glass`、`compact`、`soft` 各取其形),再看 `panelGap > 0`(浮卡布局)推成 `soft`,都没有就是 `paper`;
 - `preview.font`:`sans` / `serif` / `mono`,缩略图里的字形。不写时 `tags` 含 `serif` 画衬线,否则无衬线(`mono` 标签表示单色配色,不会推成等宽)。
 
+## 主题作者:动效归宿主管
+
+主题管样子(颜色之外的结构、字体、圆角、阴影、布局),**动效由 Forsion 统一管理**。磁盘主题与商店主题装进来时,宿主会先把 `theme.css` 过一遍:
+
+- **动效 token 的声明会被删掉**:`--duration-*`、`--ease-*`、`--menu-enter-duration` / `--menu-exit-duration`、`--droplet-duration`、`--collapse-duration`、`--tip-*`、`--hovercard-*`、`--switch-edge-*` 等,写在哪个选择器上都一样;`@property` 注册这些名字的整块也删掉。`theme.json` 的 `settings` 里用这些名字做的可调项同样不生效。设置页会在这套主题下面提示「N 项动效已忽略」。
+- **你自己定义的 `@keyframes` 会被加上前缀** `t-<主题 id>-`,`theme.css` 里 `animation` / `animation-name` 对它们的引用会一起改写,所以照常能用;只是不能再用同名关键帧盖掉宿主的入场。经自定义属性转手的引用(`--a: fade 1s; animation: var(--a)`)不会改写,请直接写在 `animation` 里。
+- **你自己的 `@layer` 名也会加同样的前缀。**
+- **`@import` 一律删掉**:外部样式会绕过上面这些处理。要用谷歌字体,写在 `theme.json` 的 `fonts.google` 里,由 Forsion 自己加载;别的字体请写 `@font-face`。
+- **系统「减少动态效果」永远优先**:宿主把这条规则放在最先声明的层里,主题写 `!important` 也压不过。
+- **处理完以后浏览器会再读一遍**:如果还能读出动效 token、`forsion-guard` 层或没加前缀的关键帧,这套主题的样式整套不加载,设置页会说明。
+
+收口管的是宿主的**节奏**(上面这些 token、关键帧和层)。你在自己的选择器上直接写 `transition` / `animation`(比如按钮悬停时的颜色过渡)仍是主题的地盘,照常生效;系统「减少动态效果」打开时同样管得到它们:动画停下,过渡只剩短暂的颜色 / 透明度变化。
+
+想让界面「动起来不一样」,请等「动效主题」开放后单独提交;别在主题包里改动效。
+
 ## 全局一致
 
 主题作用于整个应用 —— 对话、Amadeus 笔记、各个 Space、弹窗,一套气质贯穿到底;网页版与移动端也用同一套外观设置。

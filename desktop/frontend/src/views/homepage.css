@@ -1178,12 +1178,14 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   .hpw-orbit,
   .hpw-planet,
   .hpw-halo { animation: none; }
-  .hp-stack,
-  .hp-wallpaper,
-  .hp-wallpaper-art,
-  .hp-tile,
-  .hp-tile-icon,
-  .hp-folder-app { transition-duration: 0.01ms !important; }
+  @layer forsion-guard { /* 在护栏层里(styles/layers.css):否则 base.css 的「减少动态效果」(层内 !important)会压过这条「一下到位」 */
+    .hp-stack,
+    .hp-wallpaper,
+    .hp-wallpaper-art,
+    .hp-tile,
+    .hp-tile-icon,
+    .hp-folder-app { transition-duration: 0.01ms !important; }
+  }
   .hp-root[data-focus-blur='true'].hp-composer-focused .hp-wallpaper,
   .hp-root[data-focus-blur='true'].hp-composer-focused .hp-wallpaper-art,
   .hp-root[data-focus-blur='true'].hp-layer-focused .hp-wallpaper,
@@ -1216,9 +1218,11 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
 .hp-still[data-focus-blur='true'].hp-layer-focused .hp-wallpaper,
 .hp-still[data-focus-blur='true'].hp-layer-focused .hp-wallpaper-art,
 .hp-still[data-focus-blur='true'].hp-secondary-open .hp-wallpaper { filter: none; transform: none; }
-.hp-still .hp-tile,
-.hp-still .hp-tile-icon,
-.hp-still .hp-folder-app { transition-duration: 0.01ms !important; }
+@layer forsion-guard { /* 在护栏层里(styles/layers.css):否则 base.css 的「减少动态效果」(层内 !important)会压过这条「一下到位」 */
+  .hp-still .hp-tile,
+  .hp-still .hp-tile-icon,
+  .hp-still .hp-folder-app { transition-duration: 0.01ms !important; }
+}
 
 /* ── 手机(Android 原生外壳画 Dock;HomepageView 在根上挂 .hp-phone)。布局「二」,2026-10-09 用户选定:
  *    问候在上(小字标语 + 一行大字问候 + 日期 · 时刻),四张带一行近况的大卡片与收起的输入条沉到下半屏 —— 拇指够得到的地方。
