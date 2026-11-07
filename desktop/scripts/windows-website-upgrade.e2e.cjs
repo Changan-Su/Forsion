@@ -1,6 +1,7 @@
 /** One-off production updater acceptance on a disposable GitHub-hosted Windows VM. */
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 const { createHash } = require('node:crypto')
 const { execFileSync } = require('node:child_process')
@@ -18,6 +19,7 @@ const website = 'https://forsion.net/api/website'
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 const check = (condition, name) => { assert.ok(condition, name); console.log('PASS ' + name) }
 const readJson = file => JSON.parse(fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, ''))
+const sanitized = error => String(error).replace(/https?:\/\/[^\s"'<>]+/g, '[URL redacted]')
 
 async function until(label, read, timeout) {
   const end = Date.now() + timeout
@@ -33,7 +35,7 @@ function relaunchedProcess(exe, oldPid) {
   const source = `
     $ErrorActionPreference = 'Stop'
     $owner = Get-CimInstance Win32_Process -Filter "Name = 'Forsion.exe'" | Where-Object {
-      $_.ExecutablePath -eq $env:FORSION_UPDATE_TEST_EXE -and $_.ProcessId -ne ${oldPid} -and $_.CommandLine -notmatch '--type='
+      $_.ExecutablePath -eq $env:FORSION_UPDATE_TEST_EXE -and $_.ProcessId -ne ${oldPid} -and $_.CommandLine -match '(?:^| )--updated(?: |$)' -and $_.CommandLine -notmatch '--type='
     } | Where-Object { [long](Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle -ne 0 } | Select-Object -First 1
     if ($owner) { @{pid=$owner.ProcessId; exe=$owner.ExecutablePath} | ConvertTo-Json -Compress }
   `
@@ -41,6 +43,48 @@ function relaunchedProcess(exe, oldPid) {
     env: { ...process.env, FORSION_UPDATE_TEST_EXE: exe }, windowsHide: true, encoding: 'utf8', timeout: 12000,
   }).trim()
   return json ? JSON.parse(json) : null
+}
+
+function startupReceipt(version) {
+  const dir = path.join(os.homedir(), '.forsion', 'activity')
+  if (!fs.existsSync(dir)) return null
+  const suffix = ` app.start v=${version}`
+  for (const file of fs.readdirSync(dir).filter(name => /^\d{4}-\d{2}-\d{2}\.log$/.test(name))) {
+    const line = fs.readFileSync(path.join(dir, file), 'utf8').split(/\r?\n/).find(row => row.endsWith(suffix))
+    if (line) return line
+  }
+  return null
+}
+
+function websiteTransfer(file) {
+  const { events, constants: { logEventTypes: types } } = readJson(file)
+  const route = []
+  let url = website + '/download/windows'
+  for (let hop = 0; hop < 8; hop++) {
+    const index = events.findIndex(event => event.type === types.URL_REQUEST_START_JOB && event.params?.method === 'GET' && event.params.url === url)
+    assert.ok(index >= 0, 'No GET for a route or redirect issued by the website')
+    const id = events[index].source.id
+    const leg = []
+    for (const event of events.slice(index + 1)) {
+      if (event.source.id !== id) continue
+      if (event.type === types.URL_REQUEST_START_JOB && event.params?.url) break
+      leg.push(event)
+    }
+    const headers = leg.find(event => event.type === types.HTTP_TRANSACTION_READ_RESPONSE_HEADERS)?.params?.headers
+    const status = Number(headers?.[0]?.match(/^HTTP\/\S+ (\d+)/)?.[1])
+    const transferred = leg.filter(event => event.type === types.URL_REQUEST_JOB_FILTERED_BYTES_READ)
+      .reduce((sum, event) => sum + event.params.byte_count, 0)
+    route.push({ host: new URL(url).hostname, status, bytes: transferred })
+    if (status === 200) {
+      assert.equal(transferred, bytes, 'Website redirect chain must deliver the complete installer')
+      return route
+    }
+    assert.ok(status >= 300 && status < 400, 'Website download leg must redirect or serve the installer')
+    const location = headers.find(header => /^location:/i.test(header))?.slice('location:'.length).trim()
+    assert.ok(location, 'Website redirect must identify the next request')
+    url = new URL(location, url).href
+  }
+  throw new Error('Website installer redirected too many times')
 }
 
 async function main() {
@@ -51,7 +95,6 @@ async function main() {
   assert.equal(process.env.FORSION_UPDATE_TEST_EXE, exe)
   const out = path.join(root, 'evidence')
   const rawNetLog = path.join(root, 'netlog-private.json')
-  const home = path.join(root, 'profile')
   const asar = path.join(path.dirname(exe), 'resources', 'app.asar')
   const cacheName = /^updaterCacheDirName:\s*['"]?([\w.-]+)['"]?\s*$/m
     .exec(fs.readFileSync(path.join(path.dirname(asar), 'app-update.yml'), 'utf8'))?.[1]
@@ -60,8 +103,10 @@ async function main() {
   check(!fs.existsSync(pending), 'fresh update cache before the installed app starts')
   const config = await fetch(website + '/config', { signal: AbortSignal.timeout(20000) })
   assert.equal(config.status, 200)
-  const meta = (await config.json()).platforms.windows
+  const { available, filename: servedFile, version, size, sha512: checksum } = (await config.json()).platforms.windows
+  const meta = { available, filename: servedFile, version, size, sha512: checksum }
   check(meta.available && meta.filename === filename && meta.version === newVersion && meta.size === bytes && meta.sha512 === sha512, 'live website returns the exact target and its verified SHA-512')
+  check(!startupReceipt(newVersion) && !process.env.TANGU_HOME, 'disposable Windows user has no target-version startup receipt')
 
   let app, win, settings, logging, runtime, statuses = [], updated
   const screenshot = (page, name) => page.screenshot({ path: path.join(out, name), timeout: 10000 })
@@ -70,7 +115,6 @@ async function main() {
     app = await electron.launch({
       executablePath: exe,
       args: ['--lang=en-US'],
-      env: { ...process.env, TANGU_HOME: home, FORSION_WORKSPACE_DIR: path.join(root, 'workspace') },
       timeout: 60000,
     })
     runtime = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), exe: process.execPath, pid: process.pid }))
@@ -78,10 +122,13 @@ async function main() {
     win = await app.firstWindow()
     check(await skipOnboarding(win, 45000), 'old installed app reaches the main UI')
 
-    const opened = app.waitForEvent('window', { timeout: 15000 })
-    await win.locator('.rb-btn[aria-label="Settings"],.rb-btn[aria-label="设置"]').first().click()
-    settings = await opened
-    await settings.getByText(/^(About|关于)$/).first().click()
+    await win.evaluate(() => window.tangu.openFloatingPanel({
+      id: 'settings', title: 'Settings', builtin: 'settings', params: { tab: 'about', nonce: Date.now() },
+    }))
+    settings = await until('Settings → About', async () => {
+      for (const page of app.windows()) if (await page.getByTestId('about-update-source').isVisible().catch(() => false)) return page
+      return null
+    }, 25000)
     const source = settings.getByTestId('about-update-source')
     check(await source.getByRole('button', { name: /^(Auto|Automatic|自动)$/ }).getAttribute('aria-pressed') === 'true', 'fresh install defaults to automatic source')
     await source.getByRole('button', { name: /^(Website|官网)$/ }).click()
@@ -103,7 +150,7 @@ async function main() {
     const restart = settings.getByRole('button', { name: /^(Restart & install|重启并安装)$/ })
     await until('actual website download and validation', async () => {
       const current = await status()
-      if (current.phase === 'error' || current.source === 'github') throw new Error('Website download failed or switched away: ' + JSON.stringify(current))
+      if (current.phase === 'error' || current.source === 'github') throw new Error('Website download failed or switched away: ' + sanitized(current.error ?? current.source))
       return current.phase === 'downloaded' && current.source === 'website' && current.version === newVersion
     }, 480000)
     await restart.waitFor({ timeout: 10000 })
@@ -111,13 +158,13 @@ async function main() {
     check(/Downloaded from|校验通过/i.test(downloadedCaption), 'installed UI reports completed and verified website download')
     await screenshot(settings, 'website-downloaded.png')
     statuses = await settings.evaluate(() => window.__upgradeStatuses)
+    check(!statuses.some(s => s.fallbackFrom || (['downloading', 'downloaded'].includes(s.phase) && s.source !== 'website')), 'download history stays on the website source')
     await app.evaluate(({ netLog }) => netLog.stopLogging())
     logging = false
     // Chromium's private log may contain signed storage URLs. Export only the
     // exact public route and method, never the raw NetLog or redirect URLs.
-    const requests = readJson(rawNetLog).events.filter(event =>
-      event.params?.url === website + '/download/windows' && event.params?.method === 'GET')
-    check(requests.length > 0, 'actual Electron GET used the public website download route')
+    const route = websiteTransfer(rawNetLog)
+    check(route.length > 0, 'the real website GET and its redirect chain delivered the entire installer')
     const cached = readJson(path.join(pending, 'update-info.json'))
     assert.equal(cached.sha512, sha512)
     assert.equal(cached.fileName, filename)
@@ -126,18 +173,22 @@ async function main() {
     assert.equal(fs.statSync(installer).size, bytes)
     for await (const chunk of fs.createReadStream(installer)) { hash512.update(chunk); hash256.update(chunk) }
     check(hash512.digest('base64') === sha512 && hash256.digest('hex') === sha256, 'real downloaded EXE matches the website SHA-512 and official release SHA-256')
-    const receipt = { runtime, meta, availableCaption, downloadedCaption, statuses, download: { method: 'GET', url: website + '/download/windows', requests: requests.length, bytes, sha512, sha256 } }
+    const receipt = { runtime, meta, availableCaption, downloadedCaption, statuses, download: { method: 'GET', url: website + '/download/windows', route, bytes, sha512, sha256 } }
     const write = extra => fs.writeFileSync(path.join(out, 'upgrade-receipt.json'), JSON.stringify({ ...receipt, ...extra }, null, 2))
     write({ phase: 'downloaded' })
-    await restart.click()
+    const oldProcess = app.process()
+    await restart.click().catch(error => {
+      if (!/closed/i.test(String(error))) throw error
+    })
     console.log('Clicked the real Restart & install button')
-    await until('old app exits after requesting installation', () => app.process().exitCode !== null, 60000)
+    await until('old app exits after requesting installation', () => oldProcess.exitCode !== null, 60000)
     updated = await until('the installer replaces app.asar and launches the new main window', () => {
       let version
       try { version = JSON.parse(extractFile(asar, 'package.json').toString('utf8')).version } catch { return null }
       if (version !== newVersion) return null
-      const process = relaunchedProcess(exe, runtime.pid)
-      return process && { ...process, version }
+      const log = startupReceipt(newVersion)
+      const process = log && relaunchedProcess(exe, runtime.pid)
+      return process && { ...process, version, activity: log }
     }, 180000)
     check(updated.pid !== runtime.pid && updated.exe.toLowerCase() === exe.toLowerCase(), 'NSIS replaced the original installation and automatically relaunched 2.13.7')
     write({ phase: 'relaunched', updated })
@@ -146,7 +197,8 @@ async function main() {
     if (page && !page.isClosed()) {
       await screenshot(page, 'failure.png').catch(() => {})
       const current = settings && await status().catch(() => null)
-      fs.writeFileSync(path.join(out, 'failure.json'), JSON.stringify({ runtime, current, error: String(error), statuses }, null, 2))
+      const { phase, source, version, error: reason } = current ?? {}
+      fs.writeFileSync(path.join(out, 'failure.json'), JSON.stringify({ runtime, current: { phase, source, version, reason: reason && sanitized(reason) }, error: sanitized(error), statuses }, null, 2))
     }
     throw error
   } finally {
@@ -155,4 +207,4 @@ async function main() {
   }
 }
 
-main().then(() => process.exit(0), error => { console.error(error); process.exit(1) })
+main().then(() => process.exit(0), error => { console.error(sanitized(error)); process.exit(1) })

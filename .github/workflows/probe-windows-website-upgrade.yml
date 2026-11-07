@@ -1,0 +1,37 @@
+name: probe-windows-website-upgrade
+on:
+  push:
+    branches: [codex/windows-website-update-57]
+    paths:
+      - '.github/workflows/probe-windows-website-upgrade.yml'
+      - 'desktop/scripts/windows-website-upgrade-install.ps1'
+      - 'desktop/scripts/windows-website-upgrade.e2e.cjs'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  website-upgrade:
+    runs-on: windows-2022
+    timeout-minutes: 26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install the automation client
+        timeout-minutes: 3
+        run: |
+          npm install --prefix .probe --no-save --no-audit --no-fund playwright-core@1.61.1 @electron/asar@3.4.1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "NODE_PATH=$PWD\.probe\node_modules" | Add-Content -LiteralPath $env:GITHUB_ENV
+      - name: Install the official older Forsion 2.13.6 NSIS package
+        timeout-minutes: 8
+        run: ./desktop/scripts/windows-website-upgrade-install.ps1
+      - name: Download from the real website and restart to install
+        timeout-minutes: 13
+        run: node desktop/scripts/windows-website-upgrade.e2e.cjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-website-upgrade-evidence
+          path: ${{ runner.temp }}/forsion-website-upgrade/evidence/

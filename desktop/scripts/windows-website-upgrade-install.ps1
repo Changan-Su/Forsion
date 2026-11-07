@@ -11,7 +11,7 @@ $url = 'https://github.com/Changan-Su/Forsion/releases/download/v2.13.6/Forsion-
 $expected = 'a6c57baf807b97ea9a3f42fbc2bd63859cf3a566020ab9194c2658b32b85d8b7'
 if (Test-Path -LiteralPath $root) { throw 'Fixture directory must be fresh' }
 $null = New-Item -ItemType Directory -Path $output
-curl.exe --fail --silent --show-error --location --retry 2 --max-time 480 --output $installer $url
+curl.exe --fail --silent --show-error --location --retry 1 --retry-max-time 200 --max-time 230 --output $installer $url
 if ($LASTEXITCODE) { exit $LASTEXITCODE }
 $hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($hash -ne $expected) { throw 'Official 2.13.6 release asset SHA-256 differs' }
