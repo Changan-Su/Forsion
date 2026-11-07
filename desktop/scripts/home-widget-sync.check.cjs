@@ -5,6 +5,7 @@
  * 查:收纳面板「插件」组里有「同步」;点一下放上主页;卡头「同步 · Forsion 扩展」;没登录时宿主拿到行、画出「未登录 Forsion 账号」
  * (不是「暂时读不到」也不是空);点行打开蓬洲云。已登录的各种状态(在传 / 冲突 / 出错)由 Extend 的单测钉
  * (test/vitest/renderer/syncWidget.test.ts)。截图进 OUT(缺省 ../../outputs/home-widget-sync)。
+ * ⚠️ 没登录时新同步通道和宿主老接缝画的是同一行:台架只证明新通道在主进程里活着(第一条),卡读哪一路由 Extend 单测钉。
  *
  * 用法:先在本检出 npx electron-vite build;Extend 检出里 npm run build && npm run sign(版本要比本检出随包的新,播种才不会换掉它);然后
  *   EXTEND_PLUGIN_DIR=<Forsion-Extend 检出> node ../../.claude/hooks/devlock.cjs run --vehicle=e2e --what="主页同步卡" --eta=2 -- node scripts/home-widget-sync.check.cjs
@@ -76,7 +77,8 @@ async function main() {
     // ── 卡头 + 行:没登录 = 宿主拿到一行提示 ──
     await card().locator('.hp-wl-row').first().waitFor({ timeout: 12_000 }).catch(() => {})
     const text = await card().innerText().catch(() => '')
-    check('卡头「同步 · Forsion 扩展」', /同步/.test(text) && /Forsion 扩展/.test(text), text.split('\n').slice(0, 2).join(' / '))
+    const head = { title: await card().locator('.hp-wcard-title').first().innerText().catch(() => ''), owner: await card().locator('.hp-wcard-owner').first().innerText().catch(() => '') }
+    check('卡头「同步 · Forsion 扩展」', head.title.trim() === '同步' && head.owner.trim() === 'Forsion 扩展', JSON.stringify(head))
     check('没登录:画出「未登录 Forsion 账号」那一行', await card().locator('.hp-wl-row').filter({ hasText: '未登录 Forsion 账号' }).count() === 1, text.replace(/\n/g, ' | '))
     check('不是「暂时读不到」也不是空', !/暂时读不到|暂时没有内容/.test(text), text.replace(/\n/g, ' | '))
     await captureWindow(app, path.join(OUT, 'sync-card.png'))
