@@ -8,6 +8,8 @@ import { useI18n } from '../i18n'
 interface ConnectApp {
   slug: string; name: string; entry: string; status: string; total_bytes: number; updated_at?: string
   listing_status?: string | null; listing_summary?: string | null; listing_note?: string | null
+  /** server 给的规范地址(forsion.app 上线后是 forsion.app/<地址>/<作品>/);老 server 没有 */
+  publicUrl?: string
 }
 interface ListResp { ok: boolean; code?: string; detail?: string; base?: string; apps?: ConnectApp[]; used?: number; limit?: number; tier?: string; handle?: string | null }
 
@@ -178,7 +180,9 @@ export function ConnectPublishDialog(props: {
     } finally { setBusy('') }
   }
 
-  const publicUrl = doneUrl || (published && base && handle ? `${base}/apps/${handle}/${published.slug}/` : null)
+  // 给人打开、分享的地址:刚发布的回包 → 列表这一行的 publicUrl → 老 server 才拼 base + /apps/<地址>/<作品>/
+  const publicUrl = doneUrl || (published?.publicUrl && /^https?:\/\//i.test(published.publicUrl) ? published.publicUrl : null)
+    || (published && base && handle ? `${base}/apps/${handle}/${published.slug}/` : null)
   // ponytail: 内容发布规范暂指向服务条款页（含禁止内容条款）；有独立《内容发布规范》文档后改此一行。
   const guidelinesUrl = base ? `${base}/legal/?slug=terms` : ''
   const slugOk = SLUG_RE.test(slug) && slug.length >= 3
