@@ -29,6 +29,8 @@ export interface GitRemoteInfo {
   /** 仓库网页(https 远端,或 github / Forsion Git 上的 ssh 远端);没有 → null。 */
   web: string | null;
   auth: 'forsion' | 'github' | 'local';
+  /** Forsion Git 上商业版组织的仓库(路径第一段是当前用户所在组织在站上的组织名)→ 组织显示名;个人仓库 / 别的站没有这一项。 */
+  org?: string;
 }
 
 /** 一面板最多列几个远端(每个一次 `git remote get-url`)。 */
@@ -45,8 +47,8 @@ function locate(raw: string): { hostname: string; path: string; https: boolean }
   return { hostname: url.hostname.toLowerCase(), path: decodeURIComponent(url.pathname), https: url.protocol === 'https:' };
 }
 
-/** 一个远端 → 卡片上那一行。forsionOrigin = 这里 Forsion Git 的 `https://主机`(没有 / 读不到 → null)。 */
-export function describeRemote(name: string, rawUrl: string, maskedUrl: string, forsionOrigin: string | null): GitRemoteInfo {
+/** 一个远端 → 卡片上那一行。forsionOrigin = 这里 Forsion Git 的 `https://主机`(没有 / 读不到 → null);orgs = forsionGit.orgs()(站上组织名小写 → 显示名)。 */
+export function describeRemote(name: string, rawUrl: string, maskedUrl: string, forsionOrigin: string | null, orgs?: Map<string, string> | null): GitRemoteInfo {
   const at = locate(rawUrl);
   const forsionHost = forsionOrigin ? new URL(forsionOrigin).hostname.toLowerCase() : null;
   const host = !at ? 'other' : at.hostname === 'github.com' ? 'github' : forsionHost && at.hostname === forsionHost ? 'forsion' : 'other';
@@ -55,7 +57,8 @@ export function describeRemote(name: string, rawUrl: string, maskedUrl: string, 
   const auth = credential && credential === GITHUB_ORIGIN ? 'github' : credential && credential === forsionOrigin ? 'forsion' : 'local';
   // 网页:https 远端照它的地址;ssh 远端只有认得的两个站才拼得出(别的站的网页不一定在同一个主机名上)
   const web = at && repoPath && (at.https || host !== 'other') ? `https://${at.hostname}/${repoPath}` : null;
-  return { name, url: maskedUrl, host, hostname: at?.hostname ?? null, path: repoPath || null, web, auth };
+  const org = host === 'forsion' && repoPath.includes('/') ? orgs?.get(repoPath.split('/')[0].toLowerCase()) : undefined;
+  return { name, url: maskedUrl, host, hostname: at?.hostname ?? null, path: repoPath || null, web, auth, ...(org ? { org } : {}) };
 }
 
 /** gitPush 不点名远端时推去哪个(规则见文件头)。upstreamRemote = 当前分支的 branch.<分支>.remote(没有 → 空串)。 */

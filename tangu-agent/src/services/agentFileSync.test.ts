@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -34,6 +35,53 @@ afterEach(() => {
   if (previousHome === undefined) delete process.env.TANGU_HOME;
   else process.env.TANGU_HOME = previousHome;
   rmSync(home, { recursive: true, force: true });
+});
+
+describe('runAgentFilesSync on an archived account (old accounts B, 11-06)', () => {
+  // 云端那份进了存档、在线那份清空:旧同步看到「影子里有、清单里没有」会当成别处删了,把本机没改过的文件删掉。
+  // 清单带 agentArchive 时一个 Agent 都不碰;负对照:同一份空清单不带标记,本机文件确实会被删(证明这里看得见那条路)。
+  // 带 seq / hash 的清单(现在的服务端):影子记下版本,「清单里没有」才会被当成别处删了
+  const modern: AgentFileMeta[] = metas.map((m) => ({ ...m, seq: 1, hash: createHash('sha256').update(contents[m.relPath]!.content || '').digest('hex') }));
+  const pulled = async (): Promise<{ cloud: AgentFilesBrain; dir: string }> => {
+    const cloud: AgentFilesBrain = {
+      getManifest: async () => [{ slug, files: modern }],
+      getFile: async (_userId, gotSlug, relPath) => { const m = modern.find((x) => x.relPath === relPath); return gotSlug === slug && m ? { ...contents[relPath]!, seq: m.seq, hash: m.hash } : null; },
+      putFile: async (_userId, _slug, _relPath, body) => ({ mtimeMs: body.mtimeMs }),
+      deleteFile: async () => {},
+    };
+    const dir = path.join(home, 'agents', slug);
+    mkdirSync(dir, { recursive: true });
+    setAgentSyncPermission(slug, agentSyncScope(cloud, 'user-1')!, true);
+    expect((await runAgentFilesSync(cloud, 'user-1', { onlySlug: slug })).pulled).toBe(3);
+    return { cloud, dir };
+  };
+  const emptied = (archived: boolean): AgentFilesBrain & { calls: string[] } => {
+    const calls: string[] = [];
+    return {
+      calls,
+      getManifest: async () => Object.assign([], archived ? { agentArchive: { state: 'done', at: 1 } } : {}),
+      getFile: async () => null,
+      putFile: async (_u, s, p, body) => { calls.push(`put ${s}/${p}`); return { mtimeMs: body.mtimeMs }; },
+      deleteFile: async (_u, s, p) => { calls.push(`delete ${s}/${p}`); },
+    };
+  };
+
+  it('leaves every local agent file alone and sends nothing', async () => {
+    const { dir } = await pulled();
+    const cloud = emptied(true);
+    const result = await runAgentFilesSync(cloud, 'user-1');
+    expect(result.ok).toBe(true);
+    expect(cloud.calls).toEqual([]);
+    expect(readFileSync(path.join(dir, 'SOUL.md'), 'utf8')).toBe('云端人格');
+    expect(readFileSync(path.join(dir, 'Library', 'reference.md'), 'utf8')).toContain('已同步');
+  });
+
+  it('negative control: the same empty manifest without the archive mark deletes the unmodified local copy', async () => {
+    const { dir } = await pulled();
+    expect(existsSync(path.join(dir, 'SOUL.md'))).toBe(true);
+    await runAgentFilesSync(emptied(false), 'user-1');
+    expect(existsSync(path.join(dir, 'SOUL.md'))).toBe(false);
+  });
 });
 
 describe('runAgentFilesSync cloud-only bootstrap', () => {

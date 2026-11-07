@@ -73,8 +73,17 @@ let feedSource: UpdateSource | null = null
 /** 我们自己 await 的 checkForUpdates 进行中:它的事件(checking / error)由调用处处理,别广播 */
 let busy = false
 /** 下载进行中:取消令牌、最后一次有进度的时刻、手动要换去的那边 */
-type Download = { token: CancellationToken; lastAt: number; manual: UpdateSource | null }
+type Download = { token: CancellationToken; lastAt: number; manual: UpdateSource | null; dropped?: boolean }
 let dl: Download | null = null
+
+/** 下载失败的常见本机原因换成稳定代码,界面按代码出文案(D27);其余照原文。 */
+export function downloadErrorCode(err: any): string {
+  const code = String(err?.code ?? '')
+  if (code === 'ENOSPC') return 'disk-full'
+  if (code === 'EACCES' || code === 'EPERM') return 'no-permission'
+  if (code === 'EBUSY' || code === 'ETXTBSY') return 'file-busy'
+  return err?.message || String(err)
+}
 
 function broadcast(status: UpdaterStatus): void {
   lastStatus = status
@@ -246,11 +255,15 @@ function ensureWired(): void {
   // 下载中/下载完仍要带着版本号与更新说明:UI 的「更新内容」区在 available/downloaded 两态都渲染,
   // 只发 phase 会让用户一点「下载」说明就整段消失(Codex 评审实证)。
   autoUpdater.on('download-progress', (p) => {
+    if (dl?.dropped) return // 关了测试版、作废中的那份:迟到的进度别把状态翻回 downloading
     if (dl) dl.lastAt = Date.now()
     broadcast({ ...lastStatus, phase: 'downloading', percent: Math.round(p.percent), transferred: p.transferred, total: p.total })
   })
-  autoUpdater.on('update-downloaded', (info) =>
-    broadcast({ ...lastStatus, phase: 'downloaded', version: info.version, source: feedSource ?? undefined, fallbackFrom: undefined, canSwitch: false }))
+  autoUpdater.on('update-downloaded', (info) => {
+    // 取消赶不上收尾(校验 / 改名)时 electron-updater 仍会报完成:作废了的(target 已清 / 版本对不上)不认
+    if (dl?.dropped || !target || info.version !== target.version) return
+    broadcast({ ...lastStatus, phase: 'downloaded', version: info.version, source: feedSource ?? undefined, fallbackFrom: undefined, canSwitch: false })
+  })
   autoUpdater.on('error', (err) => {
     if (busy || dl) return // 调用处自己处理(换源或报错)
     broadcast({ phase: 'error', error: err?.message || String(err) })
@@ -328,11 +341,14 @@ export async function downloadUpdate(): Promise<void> {
       await autoUpdater.downloadUpdate(cur.token)
       return // update-downloaded 事件负责广播
     } catch (err: any) {
+      if (cur.dropped) return // 关了测试版,这份测试包不要了(channelChanged 已重置状态)
       const from = feedSource
       const manual = cur.manual
       const next = manual ?? (autoSwitched ? null : otherSource())
-      if (!next || (await useSource(next)) !== 'ok') {
-        broadcast({ ...lastStatus, phase: 'error', error: err?.message || String(err) })
+      const switched = !!next && (await useSource(next)) === 'ok'
+      if (cur.dropped) return // 换源那一下 await 期间关了测试版
+      if (!switched) {
+        broadcast({ ...lastStatus, phase: 'error', error: downloadErrorCode(err) })
         return
       }
       if (!manual) autoSwitched = true
@@ -345,6 +361,18 @@ export async function downloadUpdate(): Promise<void> {
       dl = null
     }
   }
+}
+
+/**
+ * 关掉测试版时,还在下 / 已下好 / 正提示的测试包作废,回到空闲,调用方随后重查一次正式版(D27)。
+ * 不然 runCheck 见到 downloaded 会原样返回,用户关了测试版还被提示「重启安装」那个测试包。
+ * 打开测试版不动:手上那份正式版照样能装。
+ */
+export function channelChanged(beta: boolean): void {
+  if (beta || !target || !isPrerelease(target.version)) return
+  if (dl) { dl.dropped = true; dl.token.cancel() }
+  target = null
+  broadcast({ phase: 'idle' })
 }
 
 /** 下载中手动换到另一边(底栏的「换 GitHub / 换官网」)。 */

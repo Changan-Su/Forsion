@@ -112,6 +112,7 @@ import { gatePluginManifest, type ExternalPluginSource } from '@amadeus-shared/i
 import { createEffectScope, type EffectRecord, type EffectScope } from './effectScope'
 import { dependentsOf, topoOrder, unmetDependencies, type UnmetDependency } from './pluginDeps'
 import { LIST_CAPABILITIES } from './listTree'
+import { CHAT_BOX_CAPABILITIES } from '../../../../shared/chatBox'
 import { windowKind } from '../../windowKind'
 import { addRibbonAction } from './ribbonAction'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
@@ -2110,6 +2111,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       mountWebCard: uiMountWebCard,
       setViewHead: uiSetViewHead,
       mount: uiMount as NonNullable<PluginContext['ui']>['mount'],
+      chatBoxCapabilities: CHAT_BOX_CAPABILITIES,
       mountChatBox: (el, opts) => {
         if (!ctxAlive()) return { update() {}, focus() {}, insertText() {}, dispose() {} }
         if (!(el instanceof HTMLElement)) throw new TypeError('mountChatBox needs an HTMLElement')
@@ -2241,6 +2243,42 @@ export const usePluginStore = create<PluginState>((set, get) => {
           show(sel) { if (cancelled) return; if (mounted) mounted.show(sel); else shown = sel },
           hide() { shown = null; mounted?.hide() },
           update(patch) { if (!cancelled && patch && typeof patch === 'object') { Object.assign(pending, patch); mounted?.update(patch) } },
+          dispose,
+        }
+      },
+      // 工具岛(见 toolIslandSurface.tsx):和 FloatingToc 一样叠一层、不接管 root,不走 claimHostMount。row 在这里同步建好
+      // (句柄一返回插件就往里画),装好之前的 showRow / setActive / update 攒着。
+      mountToolIsland: (root, opts) => {
+        const row = document.createElement('div')
+        if (!ctxAlive()) return { row, showRow() {}, setActive() {}, update() {}, dispose() {} }
+        if (!(root instanceof HTMLElement)) throw new TypeError('mountToolIsland needs an HTMLElement')
+        if (!opts || typeof opts !== 'object' || !Array.isArray(opts.tools) || typeof opts.onPick !== 'function') throw new TypeError('mountToolIsland needs { tools: [...], onPick(id) }')
+        const checkSlots = (s: unknown): void => {
+          if (s == null) return
+          if (typeof s !== 'object') throw new TypeError('mountToolIsland slots must be an object')
+          for (const v of Object.values(s)) if (v != null && !(v instanceof HTMLElement)) throw new TypeError('mountToolIsland slots must be HTMLElements')
+        }
+        checkSlots(opts.slots)
+        const pending = { ...opts }
+        let open = false
+        let mounted: import('./types').PluginToolIslandHandle | null = null
+        let cancelled = false
+        const dispose = scope.own('mount', () => { cancelled = true; mounted?.dispose(); mounted = null }, 'toolIsland')
+        void import('./toolIslandSurface').then((m) => {
+          if (cancelled) return
+          mounted = m.mountPluginToolIsland(root, pluginId, row, pending)
+          if (open) mounted.showRow(true)
+        }).catch((e) => { console.error(`[amadeus] plugin "${pluginId}" tool island mount failed`, e) })
+        return {
+          row,
+          showRow(o) { if (cancelled) return; open = !!o; mounted?.showRow(open) },
+          setActive(id) { if (cancelled) return; pending.active = id; mounted?.setActive(id) },
+          update(patch) {
+            if (cancelled || !patch || typeof patch !== 'object') return
+            checkSlots(patch.slots)
+            Object.assign(pending, patch)
+            mounted?.update(patch)
+          },
           dispose,
         }
       },

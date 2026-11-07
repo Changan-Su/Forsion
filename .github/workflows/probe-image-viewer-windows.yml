@@ -2,7 +2,9 @@ name: probe-image-viewer-windows
 
 on:
   workflow_dispatch:
-  pull_request:
+  # Windows 探针只在合进 main 后跑(和别的 probe-*windows* 一致),不占 PR 的 Windows runner
+  push:
+    branches: [main]
     paths:
       - '.github/workflows/probe-image-viewer-windows.yml'
       - 'desktop/scripts/chat-image-viewer.check.cjs'

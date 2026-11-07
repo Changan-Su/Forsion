@@ -12,12 +12,17 @@
  *   7 安装到我的 Forsion(确认框在台架里自动点「安装」)→ plugins/<id> 出现,不带 node_modules
  *   8 停止 → 子进程退出;再关父进程不留孤儿
  *   9 负对照:非插件文件夹 → invalid_args,不起进程
+ *  11 (11-03)插件带的 Space 列得出来、启动就落在它上面;Ribbon 上没有内置 Space;沙箱 home 里没播种内置插件
+ *  12 (11-03)在沙箱里动手:read 给出带引用的大纲 → type 填输入框 → click 按钮 → 回执里有插件新写的 console、
+ *     弹出的提示和一张新截图(和上一张不同 = 不是旧帧);press Enter;files 备好路径后点 <input type=file> 直接拿到文件
  *  10 (`--focus`,仅 macOS,会真把窗口叫到前面几秒)「打开沙箱窗口」第一次、以及被别的窗口盖住之后再点一次,
  *     沙箱窗口都排在屏幕最前(读系统窗口列表的前后顺序)
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
  * 跑:node .claude/hooks/devlock.cjs run --vehicle=e2e --what="plugin sandbox" -- npm run check:pluginsandbox
  * `SHOT_DIR=<目录>` 额外落沙箱窗口截图(子进程自己截的那张)与对话卡截图;`-- --focus` 加跑第 10 项(会抢几秒前台)。
+ * computer use 走查:`STAGE_ELECTRON=<单独身份的 Electron 拷贝>/Contents/MacOS/Electron`(gui-verify §4.2)+ `SBX_HOLD=1`:
+ * 右栏卡出来以后停住、打印 HOLD,等 `<临时 home>/kick` 出现(最多 30 分钟)再接着跑。
  */
 const fs = require('fs')
 const os = require('os')
@@ -38,7 +43,19 @@ const SHOT_DIR = process.env.SHOT_DIR ? path.resolve(process.env.SHOT_DIR) : nul
 
 const mainJs = (marker) => `console.log('${marker}')
 console.log('SBX_SKIN ' + document.documentElement.dataset.skin)
-ctx.registerView({ id: 'fixture-view', title: 'Sandbox fixture', mount(el) { const b = document.createElement('h1'); b.textContent = '${marker}'; el.append(b); return () => b.remove() } })
+ctx.registerView({ id: 'fixture-view', title: 'Sandbox fixture', mount(el) {
+  const b = document.createElement('h1'); b.textContent = '${marker}'
+  const input = document.createElement('input'); input.placeholder = 'Book title'
+  const add = document.createElement('button'); add.textContent = 'Add book'
+  const list = document.createElement('ul')
+  const pick = document.createElement('input'); pick.type = 'file'; pick.setAttribute('aria-label', 'Import file')
+  const put = () => { const v = input.value; console.log('ADDED ' + v); const li = document.createElement('li'); li.textContent = v; list.append(li); input.value = ''; ctx.notify && ctx.notify('Added ' + v) }
+  add.onclick = put
+  input.onkeydown = (e) => { if (e.key === 'Enter') put() }
+  pick.onchange = () => console.log('PICKED ' + [...pick.files].map((f) => f.name).join(','))
+  el.append(b, input, add, list, pick)
+  return () => { b.remove(); input.remove(); add.remove(); list.remove(); pick.remove() }
+} })
 ctx.registerCommand({ id: 'fixture-ping', title: 'Fixture ping', run(a) { console.log('FIXTURE_PING ' + JSON.stringify(a || {})) } })
 ctx.registerCommand({ id: 'fixture-report', title: 'Fixture report', run() { window.tangu.sandbox.action('report', 'FIXTURE_NOTE_FROM_SANDBOX') } })
 return () => {}
@@ -48,6 +65,12 @@ function writePlugin(source) {
   fs.writeFileSync(path.join(PLUGIN, 'manifest.json'), JSON.stringify({ id: PLUGIN_ID, name: 'Sandbox fixture', version: '0.0.3', apiVersion: 1, main: 'main.js' }))
   fs.writeFileSync(path.join(PLUGIN, 'node_modules', 'dep', 'index.js'), '1')
   fs.writeFileSync(path.join(PLUGIN, 'main.js'), source)
+  fs.mkdirSync(path.join(PLUGIN, 'spaces', 'fixture-shelf'), { recursive: true })
+  fs.writeFileSync(path.join(PLUGIN, 'spaces', 'fixture-shelf', 'space.json'), JSON.stringify({
+    id: 'fixture-shelf', name: 'Fixture shelf', icon: 'boxes', version: '1.0.0',
+    layout: { main: [{ type: `plugin:${PLUGIN_ID}:fixture-view` }], left: [], right: [] }, requires: { views: [`plugin:${PLUGIN_ID}:fixture-view`] },
+  }))
+  fs.writeFileSync(path.join(PLUGIN, 'books.csv'), 'title\nDune\n')
 }
 
 const results = []
@@ -107,6 +130,7 @@ async function main() {
     app = await electron.launch({
       args: [`--user-data-dir=${UD}`, '--lang=zh-CN', ROOT],
       cwd: ROOT,
+      ...(process.env.STAGE_ELECTRON ? { executablePath: process.env.STAGE_ELECTRON } : {}),
       env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, ELECTRON_DISABLE_SECURITY_WARNINGS: '1' },
       timeout: 45_000,
     })
@@ -181,11 +205,64 @@ async function main() {
     const drafted = await until(async () => (await ta.inputValue().catch(() => '')).includes('FIXTURE_NOTE_FROM_SANDBOX'), 10_000)
     check('4b 沙箱窗口里「报告问题」→ 回到发起的对话,话放进输入框', drafted, await ta.inputValue().catch(() => ''))
 
+    // ── 11 纯净沙箱:插件的 Space 在、落在它上面;Ribbon 上没有内置 Space;没播种内置插件 ──
+    const landed = await until(async () => { const s = await status(); return s && s.spaces.includes('fixture-shelf') && s.activeSpace === 'fixture-shelf' && s }, 20_000)
+    check('11a 插件带的 Space 列出来了,沙箱就落在它上面', !!landed, JSON.stringify(landed || await status()))
+    const outline = await exec('read', {})
+    const outlineText = outline.ok ? JSON.parse(outline.text).action?.outline || '' : ''
+    const builtinSpaces = ['主页', 'Tangu', '笔记', '日历', '收件箱', 'Agents', 'Home', 'Notes', 'Calendar', 'Inbox'].filter((n) => new RegExp(`"${n}"`).test(outlineText))
+    check('11b Ribbon 上只剩插件自己的 Space(大纲里没有内置 Space 的按钮)', outline.ok && /Fixture shelf/.test(outlineText) && builtinSpaces.length === 0, JSON.stringify({ builtinSpaces, head: outlineText.slice(0, 400), err: outline.error }))
+    const seeded = fs.existsSync(path.join(SBX, 'home', 'plugins')) ? fs.readdirSync(path.join(SBX, 'home', 'plugins')).filter((n) => !n.startsWith('.')) : []
+    check('11c 沙箱 home 里没播种内置插件(被测插件没点名要)', seeded.length === 0, JSON.stringify(seeded))
+
+    // ── 12 在沙箱里动手 ──
+    const act = async (op, args) => { const r = await exec(op, args); return { r, a: r.ok && r.text ? JSON.parse(r.text).action : null } }
+    check('12a read:大纲里有带引用的输入框(按 placeholder 叫)和按钮', /\[e\d+\] input "Book title"/.test(outlineText) && /\[e\d+\] button "Add book"/.test(outlineText), outlineText.slice(0, 600))
+    const before = (await exec('screenshot')).image
+    const typed = await act('type', { target: 'css:input[placeholder="Book title"]', text: 'Dune' })
+    const clicked = await act('click', { target: 'Add book' })
+    check('12b type + click:回执里有插件新写的 console(ADDED Dune)和提示,带一张新截图(和点之前那张不同)',
+      typed.r.ok && !typed.r.error && clicked.r.ok && !clicked.r.error && clicked.a?.newLogs?.some((l) => l.text === 'ADDED Dune')
+      && clicked.a?.newNotices?.some((n) => /Added Dune/.test(n)) && /^data:image\/jpeg/.test(clicked.r.image || '') && clicked.r.image !== before,
+      JSON.stringify({ typed: typed.r.error || typed.a?.did, clicked: clicked.r.error || clicked.a, sameShot: clicked.r.image === before }))
+    saveShot('sandbox-after-click.jpg', clicked.r.image)
+    await act('type', { target: 'css:input[placeholder="Book title"]', text: 'Neuromancer' })
+    const pressed = await act('press', { key: 'Enter' })
+    check('12c press Enter:输入框里按回车,插件的 keydown 收到', pressed.a?.newLogs?.some((l) => l.text === 'ADDED Neuromancer'), JSON.stringify(pressed.r.error || pressed.a))
+    const armed = await act('files', { paths: ['books.csv'] })
+    const picked = await act('click', { target: 'Import file' })
+    check('12d files 备好路径 → 点 <input type=file> 不弹系统框,插件直接拿到 books.csv', armed.r.ok && !armed.r.error && picked.a?.newLogs?.some((l) => l.text === 'PICKED books.csv'),
+      JSON.stringify({ armed: armed.r.error || armed.a?.did, picked: picked.r.error || picked.a?.newLogs }))
+    const outside = await act('files', { paths: [path.join(home, 'vault', 'mine.md')] })
+    const miss = await act('click', { target: 'No such button anywhere' })
+    check('12e 负对照:沙箱外的路径不收;点不存在的东西 → 报找不到,不乱点', /not usable/.test(outside.r.error || '') && /nothing visible says/.test(miss.r.error || ''), JSON.stringify({ outside: outside.r.error, miss: miss.r.error }))
+
+    // 改 space.json(换个名字)= 换配方:旧的先注销、活动 Space 会被挪走,重载完要回到它上面(Codex 评审)
+    const sj = path.join(PLUGIN, 'spaces', 'fixture-shelf', 'space.json')
+    fs.writeFileSync(sj, fs.readFileSync(sj, 'utf8').replace('Fixture shelf', 'Fixture shelf 2'))
+    const back = await until(async () => { const s = await status(); const o = await exec('read', {}); return s?.activeSpace === 'fixture-shelf' && o.ok && /Fixture shelf 2/.test(JSON.parse(o.text).action?.outline || '') && s }, 20_000)
+    const sw = await act('space', { space: 'Fixture shelf 2' })
+    check('12f 改了 space.json → 重载后还在这个插件 Space 上;按显示名字也切得过去', !!back && sw.r.ok && !sw.r.error, JSON.stringify({ active: (await status())?.activeSpace, space: sw.r.error || sw.a?.target }))
+
     // ── 6 对话卡 ──
     const card = await until(() => win.locator('[data-sandbox-card]').first().isVisible().catch(() => false), 30_000)
     if (SHOT_DIR && card) await win.locator('[data-sandbox-card]').first().screenshot({ path: path.join(SHOT_DIR, 'sandbox-card.png') })
     const cardText = card ? await win.locator('[data-sandbox-card]').first().textContent() : ''
     check('6 对话卡:工具结果画成沙箱卡,带「打开沙箱窗口」', card && /Sandbox fixture/.test(cardText) && await win.locator('[data-sandbox-card] button.primary').count() === 1, cardText)
+
+    // ── 13 右栏沙箱卡(摘要栏):只在发起的对话里,最近一张截图当缩略图 ──
+    const railSel = '.t2-tsum [data-card="sandbox"]'
+    const rail = await until(() => win.locator(railSel).first().isVisible().catch(() => false), 15_000)
+    const railText = rail ? await win.locator(railSel).first().textContent() : ''
+    const railImg = rail ? await until(() => win.locator(`${railSel} img`).count().then((n) => n === 1), 8_000) : false
+    if (SHOT_DIR && rail) await win.locator(railSel).first().screenshot({ path: path.join(SHOT_DIR, 'sandbox-rail.png') })
+    check('13a 右栏沙箱卡:在发起的对话里出现,带缩略图、运行中、最近一步', rail && railImg && /运行中/.test(railText) && /最近一步/.test(railText), railText)
+    if (process.env.SBX_HOLD) {
+      // 走查的人要的是「刚起好、用户第一次看到」的样子:父窗抬回普通层、排到前面
+      await app.evaluate(({ BrowserWindow }) => { const w = BrowserWindow.getAllWindows().find((x) => !x.isDestroyed() && x.isVisible()); w.setAlwaysOnTop(false); w.show() })
+      console.log(`HOLD ${path.join(home, 'kick')}`)
+      await until(() => fs.existsSync(path.join(home, 'kick')), 30 * 60_000)
+    }
 
     // ── 5 setup 抛错 ──
     writePlugin(`throw new Error('SBX_SETUP_EXPLODED')\n`)
@@ -231,6 +308,9 @@ async function main() {
     const gone = await until(() => sandboxPids().length === 0, 15_000)
     const after = await win.evaluate(() => window.tangu.pluginSandbox.state())
     check('8a 停止 → 子进程退出,状态 running:false', gone && after.running === false, JSON.stringify({ pids: sandboxPids(), after }))
+    const railStopped = await until(async () => /已停止/.test(await win.locator(railSel).first().textContent().catch(() => '')) && /重新启动/.test(await win.locator(railSel).first().textContent().catch(() => '')), 8_000)
+    if (SHOT_DIR && railStopped) await win.locator(railSel).first().screenshot({ path: path.join(SHOT_DIR, 'sandbox-rail-stopped.png') })
+    check('13b 停了以后右栏卡变成「已停止」+「重新启动」', railStopped, await win.locator(railSel).first().textContent().catch(() => 'no card'))
     await exec('start', { dir: PLUGIN })
     await app.close(); app = null
     const orphan = await until(() => sandboxPids().length === 0, 15_000)

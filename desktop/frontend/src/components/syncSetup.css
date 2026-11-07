@@ -32,3 +32,14 @@
 .sync-setup-slug { color: var(--text-faint); font-size: var(--ui-font-meta); white-space: nowrap; }
 .sync-setup-kid.is-locked { cursor: default; color: var(--text-faint); }
 .sync-setup-lk { margin-left: auto; padding-left: 8px; color: var(--text-faint); font-size: var(--ui-font-meta); white-space: nowrap; }
+
+/* 第一次打开问一次(2026-11-06,Agent设备隔离方案 round3):勾了的 Agent 云端已有一份且不一样,卡片里就地三选一,缺省「合在一起」 */
+.sync-setup-asks { display: grid; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: var(--border-width) solid var(--border); max-height: 280px; overflow-y: auto; }
+.sync-setup-ask > b { display: block; font-weight: 600; font-size: var(--ui-font-body); }
+.sync-setup-ask > small { display: block; margin-top: 2px; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.sync-setup-opt { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: 8px; align-items: start; margin-top: 6px; padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer; }
+.sync-setup-opt:hover { background: var(--overlay-light); }
+.sync-setup-opt input { width: 14px; height: 14px; margin: 2px 0 0; }
+.sync-setup-opt b { font-weight: 500; font-size: var(--ui-font-body); }
+.sync-setup-opt em { margin-left: 6px; font-style: normal; color: var(--signal-mark, var(--accent)); font-size: var(--ui-font-meta); }
+.sync-setup-opt small { display: block; color: var(--text-muted); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }

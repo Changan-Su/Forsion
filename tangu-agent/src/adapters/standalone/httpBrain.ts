@@ -11,7 +11,7 @@ import type {
   FimCompletionOpts,
   DecisionResult,
 } from '../../seams/cloudBrain.js';
-import { imageMimeOf, fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
+import { imageMimeOf, imageOutputFields, fimUnsupportedError, FIM_UNSUPPORTED } from '../../seams/cloudBrain.js';
 import {
   AMADEUS_MAX_FILE_BYTES,
   AgentFileConflictError,
@@ -32,6 +32,7 @@ import { engineVersion } from '../../core/version.js';
 import { registerAgentSyncIdentity } from '../../services/cloudSyncAccount.js';
 import { assertToolDefinitions } from '../../tools/toolDefinitionValidation.js';
 import { stringifyWellFormed } from '../../llm/wellFormedJson.js';
+import { hostOriginHeaders } from '../../core/hostOrigin.js';
 
 export interface HttpBrainConfig {
   cloudUrl: string; // 形如 https://host(无尾斜杠)
@@ -76,9 +77,12 @@ const combinedUnsupported = new Set<string>();
 
 export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   const base = cfg.cloudUrl.trim().replace(/\/+$/, '');
+  // 宿主客户端与系统:进程级常量,装配时算一次(见 core/hostOrigin.ts)
+  const origin = hostOriginHeaders();
   const authHeaders = (): Record<string, string> => ({
     Authorization: `Bearer ${typeof cfg.token === 'function' ? cfg.token() : cfg.token}`,
     'Content-Type': 'application/json',
+    ...origin,
   });
 
   /** 云端音色接口:错误保留状态码(409 = 到上限),引擎路由原样转给界面。 */
@@ -515,7 +519,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     realtime: {
       endpoint: (model: string) => ({
         url: `${base.replace(/^http/, 'ws')}/api/brain/realtime?model=${encodeURIComponent(model)}&projectSource=tangu`,
-        headers: { Authorization: authHeaders().Authorization },
+        headers: { Authorization: authHeaders().Authorization, ...origin },
       }),
     },
     images: {
@@ -523,7 +527,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
           '/v1/images/edits',
           { model: req.model, prompt: req.prompt, image: req.images.map(i => `data:${i.mime};base64,${i.b64}`),
-            size: req.size || '1:1', n: req.n || 1, transparent_background: !!req.transparentBackground, output_format: 'png',
+            size: req.size || (req.outputFormat === 'gif' ? 'auto' : '1:1'), n: req.n || 1, transparent_background: !!req.transparentBackground,
+            output_format: 'png', ...imageOutputFields(req),
             ...(req.quality ? { quality: req.quality } : {}) },
           req.signal, IMG_TIMEOUT_MS,
         );
@@ -536,7 +541,8 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
       generate: async (req) => {
         const r = await postJson<{ data?: Array<{ b64_json?: string }> }>(
           '/v1/images/generations',
-          { model: req.model, prompt: req.prompt, size: req.size || '1:1', n: req.n || 1, transparent_background: !!req.transparentBackground, output_format: 'png',
+          { model: req.model, prompt: req.prompt, size: req.size || (req.outputFormat === 'gif' ? 'auto' : '1:1'), n: req.n || 1,
+            transparent_background: !!req.transparentBackground, output_format: 'png', ...imageOutputFields(req),
             ...(req.quality ? { quality: req.quality } : {}) },
           req.signal,
           IMG_TIMEOUT_MS, // 生图比 LLM 慢:窗口下限单独放宽,不受通用 60s 基准截断
@@ -589,10 +595,12 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     agentFiles: {
       getManifest: async (_userId: string, opts?: { signal?: AbortSignal }) => {
         // device / client:服务端按设备记版本,回答这个账号还有没有旧客户端在用 USER.md(新版据此停镜像)
-        const q = `paths=human,human-folder,agent-calendar,widget-data&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
-        const r = await getJson<{ agents: any[]; paths?: string[]; legacy?: string[]; legacySeenAt?: number | null }>(`/api/brain/agents/manifest?${q}`, opts?.signal);
+        // agent-archive:认得老账号存档(11-06)—— 已存档的账号上服务端照回清单 + agentArchive,不声明的旧客户端整轮 410
+        const q = `paths=human,human-folder,agent-calendar,widget-data,agent-archive&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
+        const r = await getJson<{ agents: any[]; paths?: string[]; legacy?: string[]; legacySeenAt?: number | null; agentArchive?: { state?: unknown; at?: unknown } }>(`/api/brain/agents/manifest?${q}`, opts?.signal);
         return Object.assign(r?.agents ?? [], Array.isArray(r?.paths) ? { paths: r.paths } : {},
-          Array.isArray(r?.legacy) ? { legacy: r.legacy.filter((x): x is string => typeof x === 'string'), legacySeenAt: typeof r?.legacySeenAt === 'number' ? r.legacySeenAt : null } : {});
+          Array.isArray(r?.legacy) ? { legacy: r.legacy.filter((x): x is string => typeof x === 'string'), legacySeenAt: typeof r?.legacySeenAt === 'number' ? r.legacySeenAt : null } : {},
+          r?.agentArchive && typeof r.agentArchive === 'object' ? { agentArchive: { state: String(r.agentArchive.state ?? 'done'), at: typeof r.agentArchive.at === 'number' ? r.agentArchive.at : null } } : {});
       },
       getFile: async (_userId: string, slug: string, relPath: string, opts?: { signal?: AbortSignal }) => {
         const r = await postJson<any>('/api/brain/agents/file/get', { slug, relPath }, opts?.signal);
@@ -729,6 +737,28 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
         if (!r.ok) throw new GitHostingError(r.status, typeof j?.code === 'string' ? j.code : '', typeof j?.webUrl === 'string' ? j.webUrl : undefined);
         if (typeof j?.username !== 'string' || !j.username || typeof j?.password !== 'string' || !j.password) throw new GitHostingError(502, 'BAD_RESPONSE');
         return { webUrl: String(j.webUrl || ''), username: j.username, password: j.password };
+      },
+      // 商业版组织 ↔ Forsion Git 组织(对端 microserver/business 的 /api/org/me + microserver/git 的 /api/git/orgs/:id)。
+      // 404 = 旧云端没这个模块 / 不是成员,503 = 没开 Forsion Git:都当没有;别的失败抛,调用方留着上一次读到的
+      orgs: async (opts?: { signal?: AbortSignal }) => {
+        const signal = opts?.signal ? AbortSignal.any([opts.signal, AbortSignal.timeout(GIT_INFO_TIMEOUT_MS)]) : AbortSignal.timeout(GIT_INFO_TIMEOUT_MS);
+        const get = async (path: string): Promise<any> => {
+          const r = await fetch(`${base}${path}`, { headers: authHeaders(), signal }).catch(() => { throw new GitHostingError(0, 'NETWORK'); });
+          if (r.status === 404 || r.status === 503) return null;
+          if (!r.ok) throw new GitHostingError(r.status, '');
+          const j = await r.json().catch(() => undefined);
+          if (!j || typeof j !== 'object') throw new GitHostingError(502, 'BAD_RESPONSE'); // 半截 / 形状不对 = 读不到,不是「没有」
+          return j;
+        };
+        const me = await get('/api/org/me');
+        if (me && !Array.isArray(me.orgs)) throw new GitHostingError(502, 'BAD_RESPONSE');
+        const orgs: any[] = me ? me.orgs.filter((o: any) => typeof o?.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(o.id)) : [];
+        const linked = await Promise.all(orgs.map(async (o) => {
+          const g = await get(`/api/git/orgs/${o.id}`);
+          if (g && typeof g.linked !== 'boolean') throw new GitHostingError(502, 'BAD_RESPONSE');
+          return g?.linked === true && typeof g.name === 'string' && g.name ? { gitName: g.name, name: typeof o.name === 'string' && o.name ? o.name : g.name } : null;
+        }));
+        return linked.filter((x): x is { gitName: string; name: string } => !!x);
       },
     },
     // ── 绑定的 GitHub 账号:绑没绑 + 推拉凭据(对端 server microserver/github/routes/user.ts)。超时与失败的口径同上。

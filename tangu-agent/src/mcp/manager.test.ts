@@ -9,7 +9,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createMcpManager, sessionGone, type McpManager, type McpManagerOptions } from './manager.js';
+import { createMcpManager, redactSecrets, sessionGone, type McpManager, type McpManagerOptions } from './manager.js';
 import type { LoadedMcpTool } from './toolBridge.js';
 import { StreamableHTTPError } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { startHttpServer, RED_DOT_PNG_B64 } from '../../test/fixtures/fake-mcp-server.mjs';
@@ -426,3 +426,55 @@ describe('idle MCP configuration reload', () => {
     expect((await m.callTool(fresh, { text: 'after disabling' })).isError).toBe(true);
   });
 });
+
+describe('D30 配置里的密钥按值遮', () => {
+  it('server 把 env 里的令牌回显进结果:模型看到的是 <redacted>,名字不像密钥的 env 照原样', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const m = await managerFor({ s: { ...stdio('s', 'echo,env'), env: { FAKE_MCP_TAG: 's', FAKE_MCP_TOOLS: 'echo,env', API_TOKEN: 'plainvalue-7f3k2', WORK_ROOT: '/srv/project-root' } } })
+    const env = m.toolsForRun().get('mcp__s__env')!
+    expect((await m.callTool(env, { text: 'API_TOKEN' })).text).not.toContain('plainvalue-7f3k2')
+    expect((await m.callTool(env, { text: 'API_TOKEN' })).text).toContain('<redacted>')
+    expect((await m.callTool(env, { text: 'WORK_ROOT' })).text).toContain('/srv/project-root')
+  }, 20_000)
+
+  it('header 值连带去掉 Bearer 前缀的那段都遮;短开关值不动', () => {
+    const cfg = { headers: { Authorization: 'Bearer abcdefgh12345678' }, env: { SESSION_FLAG: '1' } }
+    expect(redactSecrets('token=abcdefgh12345678 and Bearer abcdefgh12345678', cfg)).toBe('token=<redacted> and <redacted>')
+    expect(redactSecrets('flag 1', cfg)).toBe('flag 1')
+  })
+
+  it('短密码、Cookie 里的每个值都遮;Content-Type 这类普通 header 不动(Codex 评审)', () => {
+    const cfg = { env: { DB_PASSWORD: 'hunter2' }, headers: { Cookie: 'sid=s3ss10nval; theme=dark-mode', 'Content-Type': 'application/json' } }
+    expect(redactSecrets('Authentication failed for hunter2', cfg)).toBe('Authentication failed for <redacted>')
+    expect(redactSecrets('session s3ss10nval', cfg)).toBe('session <redacted>')
+    expect(redactSecrets('{"mimeType":"application/json"}', cfg)).toBe('{"mimeType":"application/json"}')
+  })
+})
+
+describe('D29 测试连接', () => {
+  it('按未保存的配置连一次列出工具,不登记进状态、不占名字', async () => {
+    vi.spyOn(console, 'log').mockImplementation(() => {})
+    const m = await managerFor({})
+    expect(await m.probe(stdio('p'))).toMatchObject({ ok: true, tools: expect.arrayContaining(['echo']) })
+    expect(m.listStatus()).toEqual([])
+  }, 20_000)
+
+  it('测试连接进行中时引擎退出:dispose 关掉那个子进程,不留孤儿(Codex 评审)', async () => {
+    const pidFile = join(dir, 'probe.pid')
+    const m = await managerFor({})
+    const probing = m.probe({ command: process.execPath, args: [FIXTURE], env: { FAKE_MCP_TAG: 'p', FAKE_MCP_PIDFILE: pidFile, FAKE_MCP_INIT_DELAY_MS: '8000' } })
+    expect(await waitFor(() => existsSync(pidFile), 8000)).toBe(true)
+    const pid = Number(readFileSync(pidFile, 'utf8'))
+    await m.dispose()
+    const alive = () => { try { process.kill(pid, 0); return true } catch { return false } }
+    expect(await waitFor(() => !alive(), 4000)).toBe(true)
+    expect((await probing).ok).toBe(false)
+  }, 30_000)
+
+  it('起不来的命令给出原因', async () => {
+    const m = await managerFor({})
+    const r = await m.probe({ command: join(dir, 'no-such-binary') })
+    expect(r.ok).toBe(false)
+    expect(r.ok === false && r.error).toBeTruthy()
+  }, 20_000)
+})
