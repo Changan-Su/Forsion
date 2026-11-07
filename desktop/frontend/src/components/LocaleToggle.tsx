@@ -3,10 +3,13 @@
  */
 import React from 'react'
 import { Languages } from 'lucide-react'
-import { useI18n } from '../i18n'
+import { useI18n, type Locale } from '../i18n'
+import { settingTelemetry } from '../telemetrySend'
 
 export const LocaleToggle: React.FC<{ compact?: boolean }> = ({ compact }) => {
-  const { locale, setLocale, t } = useI18n()
+  const { locale, setLocale: apply, t } = useI18n()
+  // 用户手选界面语言:真变了才报一次设置改动(匿名遥测;跨窗同步 / IP 校正走 setLocaleGlobal,不经这里)
+  const setLocale = (l: Locale): void => { if (l !== locale) settingTelemetry('ui.language', l); apply(l) }
   if (compact) {
     // 紧凑形态:单按钮,点一下在中/英间切换(放侧栏页脚等窄处)。
     return (

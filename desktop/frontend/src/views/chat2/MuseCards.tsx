@@ -430,6 +430,7 @@ function receipt(card: MuseCardInfo, t: Tr): { ok: boolean; text: string } {
   if (card.kind === 'rule') return card.status === 'dismissed' ? { ok: false, text: t('museCard.ruleDeclined') } : { ok: true, text: t(card.result === 'editing' ? 'museCard.ruleEditing' : card.result === 'observing' ? 'museCard.ruleObserving' : 'museCard.ruleDone') }
   if (card.kind === 'rule-observed') return { ok: card.result === 'enable' || card.result === 'extend', text: t(card.result === 'enable' ? 'museCard.observedEnabled' : card.result === 'extend' ? 'museCard.observedExtended' : card.result === 'pause' ? 'museCard.observedPaused' : 'museCard.observedGone') }
   if (card.kind === 'summary') return { ok: true, text: t('museCard.summaryDone') }
+  if (card.kind === 'plugin' && card.result === 'installed') return { ok: true, text: t('market.cardInstalled') } // 从卡上装成后宿主回写的
   if (card.status === 'dismissed') return { ok: false, text: t('museCard.dismissed') }
   if (card.kind === 'inbox-ask') return { ok: card.result === 'yes', text: t(card.result === 'yes' ? 'museCard.askYes' : card.result === 'ignore' ? 'museCard.askIgnore' : 'museCard.askLater') }
   if (card.kind === 'inbox-list') return { ok: true, text: t('museCard.listDone') }
@@ -458,7 +459,9 @@ export function MuseCardLine({ id, sessionId, onJump }: { id: string; sessionId?
     const r = receipt(card, t)
     return <div className={`t2-dim t2-dm-receipt${r.ok ? ' ok' : ''}`} data-muse-card-line={card.status}>{r.ok ? <CircleCheck size={12} /> : <CircleX size={12} />}<span>{r.text}</span></div>
   }
-  if (event) return <MarketPluginCards event={event} onDismiss={() => void decide(card, 'dismiss')} />
+  // 从 Muse 卡装成:回写卡片结果 installed(契约 §7 / §9;算「Muse 推荐 → 真装上」的转化)。老引擎不认这个动作 → 静默忽略,不弹错。
+  if (event) return <MarketPluginCards event={event} entry="muse-card" onDismiss={() => void decide(card, 'dismiss')}
+    onInstalled={() => { if (sessionId) void decideMuseCard(targetForSession(sessionId), card.id, 'installed').then(() => useDecided.getState().bump(), () => {}) }} />
   return (
     <button type="button" className="t2-dim t2-tasktrace t2-tasktrace-jump" data-muse-card-line="pending" onClick={onJump}>
       <Puzzle size={13} /><span>{t('museCard.inDeck', { title: cardTitle(card, t) })}</span><ArrowDown size={12} />

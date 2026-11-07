@@ -17,6 +17,7 @@
 import React, { useSyncExternalStore } from 'react'
 import { MotionConfig } from 'framer-motion'
 import { MOTION_THEME_IDS, type MotionThemeId } from '@lcl/engine/panelMotion'
+import { settingTelemetry } from '../telemetrySend'
 
 export { MOTION_THEME_IDS, type MotionThemeId }
 
@@ -56,6 +57,7 @@ function apply(): void {
 }
 
 export function setMotionTheme(id: MotionThemeId): void {
+  if (id !== getMotionTheme()) settingTelemetry('ui.motionTheme', id) // 匿名遥测:用户换了动效主题(只有设置页调这里)
   chosen = id
   try { localStorage.setItem(THEME_KEY, id) } catch { /* private mode */ }
   apply()

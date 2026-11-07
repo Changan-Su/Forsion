@@ -17,6 +17,7 @@ import { useI18n } from '../../i18n'
 import { agentName } from '../../agentName'
 import { agentDescription } from '../builtinAgentDescriptions'
 import { getAgentsMeta, getSpecialConfig, listAgents, listModels, saveMuseIntro, saveSpecialConfig } from '../../services/backendService'
+import { museSettingTelemetry } from '../../telemetrySend'
 import type { EngineTarget } from '../../services/engine/targets'
 import type { ModelsResponse, NormalAgentDef, SpecialAgentsConfig } from '../../types'
 import { SettingsSwitch } from '../SettingsPrimitives'
@@ -27,6 +28,7 @@ import { hasDesktopPermissions } from '../DesktopPermissions'
 import { INTRO_FOCUS, INTRO_WHEN, FOCUS_TEXT_MAX } from '../onboardingFlow'
 import { useApp } from '../../stores/appStore'
 import '../computerHistoryMessages'
+import { noteOnboarding } from './onboardingTelemetry'
 
 const MUSE_FALLBACK = { name: 'Muse', nameZh: '卜算子', nameEn: 'Muse', slug: 'muse' }
 type When = typeof INTRO_WHEN[number]
@@ -113,6 +115,7 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
     commitRef.current = async () => {
       const s = state.current, b = base.current
       if (!b) return // 没读到现状就不写:读失败 ≠ 缺省
+      noteOnboarding({ museOn: s.museOn, ...(s.chDraft !== null ? { computerHistoryOn: s.chDraft } : {}) }) // 匿名遥测:这一屏的两个开关
       onBusyChange(true)
       const errors: string[] = []
       const tryIt = async (fn: () => Promise<unknown>, onOk: () => void): Promise<void> => {
@@ -124,7 +127,7 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
         if (s.museOn !== b.museEnabled) musePatch.enabled = s.museOn
         if (s.modelId !== b.modelId) musePatch.modelId = s.modelId
         if (Object.keys(musePatch).length) {
-          await tryIt(() => saveSpecialConfig(target, { muse: musePatch }), () => { b.museEnabled = s.museOn; b.modelId = s.modelId })
+          await tryIt(() => saveSpecialConfig(target, { muse: musePatch }), () => { if ('enabled' in musePatch) museSettingTelemetry({ enabled: s.museOn }); b.museEnabled = s.museOn; b.modelId = s.modelId })
         }
         // 只带改过的;一个都没改也发一次(空的):记下「第一次见面已经答过」,私聊里不再弹那张卡,别的什么都不动。
         // 关注那两项写的是记忆:写成过一次的同一份不再重发(重试不重复记)。主动程度不问,不发。

@@ -18,6 +18,7 @@ import { useApp } from '../stores/appStore'
 import { SettingRow } from './AmadeusPluginsTab'
 import { listMarket, installMarket, listInstalled } from '../services/marketService'
 import { afterMarketInstall, canRestartBackend, restartBackend } from '../marketPostInstall'
+import { trackMarketInstall } from '../telemetryInstall'
 import { useVisualTheme as useTheme } from '../stores/themeStore'
 import { requirementKey, type PluginOnboardingRecommend, type PluginRequirement } from '@amadeus-shared/ipc'
 import type { AmadeusPlugin } from '@amadeus/plugins/types'
@@ -51,6 +52,7 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
     if (!card) return
     setState('installing')
     setErr('')
+    const tele = trackMarketInstall('plugin-onboarding', card)
     try {
       const res = await installMarket(card.id)
       // 真类型以主进程实测为准(后端 category 可能把 Forsion 插件误标成引擎 'plugin');据此走对应装后流程。
@@ -59,9 +61,11 @@ const RecommendRow: React.FC<{ rec: PluginOnboardingRecommend; preInstalled: boo
       let postFailed = false
       // 与市场同一套收尾:本窗热重载 + 通知主窗等其余窗口 + 判断要不要重启后端。
       const after = await afterMarketInstall(effType, res, false, (text, error) => { if (error) { postFailed = true; setErr(text) } })
+      tele.done({ type: effType, pluginId: res?.id, restart: after.restart })
       if (after.restart) setRestart('needed')
       setState(postFailed ? 'ready' : 'done')
     } catch (e: any) {
+      tele.fail(e)
       setErr(t('market.installFail', { e: e?.message || String(e) }))
       setState('ready')
     }

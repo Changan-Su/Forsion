@@ -50,7 +50,8 @@ const unwrapIpcError = (e: unknown): never => {
   const msg = ((e as Error)?.message || String(e)).replace(/^Error invoking remote method '[^']+': (?:\w*Error: )?/, '')
   const resolve = /^resolve: (.+)$/.exec(msg)
   // stage='resolve' = 卡在 Forsion 服务器这一步,界面据此不附「开代理 / 开镜像」那条 GitHub 网络指引(那会自相矛盾)。
-  throw resolve ? Object.assign(new Error(translate('marketsvc.resolveFailed', { detail: resolve[1] })), { stage: 'resolve' as const }) : new Error(msg)
+  // raw = 主进程的原因码原文:遥测只拿它归类成枚举(telemetryInstall.ts),不往外发
+  throw resolve ? Object.assign(new Error(translate('marketsvc.resolveFailed', { detail: resolve[1] })), { stage: 'resolve' as const, raw: msg }) : Object.assign(new Error(msg), { raw: msg })
 }
 
 export const installMarket = (id: string, version?: string): Promise<{ ok: boolean; path: string; type: string; slug: string; id?: string }> =>

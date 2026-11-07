@@ -14,6 +14,11 @@ import { rescanPlugins, restoreTrashEntry, uninstallPlugin } from '../services/b
 import { homeTarget } from '../services/engine/targets'
 import { panelToast } from './PanelNotice'
 import { notifyUninstalled } from './UninstallDialog'
+import { sendTelemetry } from '../telemetrySend'
+import { telemetryPluginRef, type TelemetryPluginRef } from '../telemetryPluginId'
+
+/** 匿名遥测 plugin_lifecycle 的卸载那条:商店页知道商店条目 id 就用它,否则按插件记录换(telemetryPluginId.ts)。 */
+const reportUninstall = (ref: TelemetryPluginRef): void => sendTelemetry('plugin_lifecycle', { ...ref, action: 'uninstall' })
 
 /** 不留设置时把内嵌引擎插件的设置(可能有密钥)交给引擎收进回收站,返回条目 id,恢复时连带放回。带 bundle:同 id 的
  *  若不是这个捆绑包里的(用户目录覆盖、首方内置),引擎不动它。引擎不在就收不了,设置留在 config.json。 */
@@ -28,8 +33,9 @@ async function trashBundleEngineSettings(p: AmadeusPlugin): Promise<string[]> {
 
 /** Forsion 插件:文件 + 设置(可留)+ 库里的工作文件夹(勾了才挪)进回收站(主进程挪,restorer=desktop)。
  *  engine = 引擎连着(内嵌引擎插件要先关、卸完重扫);onGone 在文件已经挪走后调(详情页据此退回列表)。返回 false = 没卸成(已提示)。 */
-export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opts: { keepSettings: boolean; moveVault: boolean }, hooks: { engine: boolean; onGone?: () => void; onEngineReload?: () => void }): Promise<boolean> {
+export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opts: { keepSettings: boolean; moveVault: boolean }, hooks: { engine: boolean; onGone?: () => void; onEngineReload?: () => void; storeItemId?: string }): Promise<boolean> {
   const ids = p.bundle?.enginePlugins ?? []
+  const tele = hooks.storeItemId ? { pluginId: hooks.storeItemId, pluginOfficial: true } : telemetryPluginRef(p) // 卸之前算:卸完商店记录就撤了
   // ⚠️这里别写 enabled:false:写进 config.json 的「关」不随目录走,重装后内嵌引擎插件就一直关着。工具靠下面的重扫撤。
   const engineTrash = hooks.engine && !opts.keepSettings ? await trashBundleEngineSettings(p) : []
   const prefs = opts.keepSettings ? {} : pluginPrefs(p.id)
@@ -45,6 +51,7 @@ export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opt
     panelToast(text.startsWith('dev-shadowed') ? translate('settings.amadeusPlugins.devShadowedUninstall') : text, true)
     return false
   }
+  reportUninstall(tele)
   if (!opts.keepSettings && pluginDataSyncOn(p)) void dropPluginCloudData(p.id) // 先于 dropPluginPrefs
   dropPluginPrefs(prefs)
   if (r?.dirName) void window.tangu?.marketForget?.('amadeus-plugin', r.dirName).catch(() => {}) // 商店装的:撤掉安装记录
@@ -69,10 +76,12 @@ export async function uninstallForsionPlugin(p: AmadeusPlugin, name: string, opt
 }
 
 /** 引擎插件:引擎把用户目录里的文件与设置(可留)挪进回收站(?trash=1),主进程撤商店记录;引擎不在时主进程自己挪文件夹,不硬删。 */
-export async function uninstallEnginePlugin(id: string, name: string, opts: { keepSettings: boolean }): Promise<boolean> {
+export async function uninstallEnginePlugin(id: string, name: string, opts: { keepSettings: boolean }, storeItemId?: string): Promise<boolean> {
+  const tele = storeItemId ? { pluginId: storeItemId, pluginOfficial: true } : telemetryPluginRef({ id }, 'plugin')
   try {
     const r = await uninstallPlugin(homeTarget(), id, { trash: true, keepSettings: opts.keepSettings }).catch(() => null)
     await window.tangu?.pluginsUninstall?.(id, r?.dirName)
+    reportUninstall(tele)
     // 10-02 起的引擎在 DELETE 里就把工具 / 路由撤干净了(restartRequired:false);旧引擎或后端不在 → 照旧重启,
     // 重启后 discoverPlugins 不再发现它。
     if (r?.restartRequired !== false) await window.tangu?.backendRestart?.()

@@ -17,6 +17,7 @@ import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 import { saveResponseAs } from './nativeDownload'
 import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
+import { countTelemetry } from '../telemetrySend'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -616,7 +617,16 @@ export const testProviderConnection = (
     method: 'POST',
     body: JSON.stringify(probe),
     signal,
-  }, { timeoutMs: 30000 })
+  }, { timeoutMs: 30000 }).then((r) => {
+    // 匿名遥测(契约 §9 app_counts):只数测试成没成;返回的文字、地址、key 一概不报(被拒的类别只在本机按文字判)
+    countTelemetry(r.success ? 'connTestOk' : AUTH_REJECTED.test(r.message || '') ? 'connTestAuthRejected' : 'connTestFail')
+    return r
+  }, (e) => {
+    if ((e as { name?: string })?.name !== 'AbortError') countTelemetry('connTestFail') // 用户点了取消不算
+    throw e
+  })
+/** 连接测试被上游拒了(密钥不对 / 没权限)的样子。 */
+const AUTH_REJECTED = /\b(401|403)\b|unauthori[sz]ed|forbidden|invalid[ _-]?(api[ _-]?)?key|incorrect api key|authentication/i
 
 /** 后端代拉上游 GET {baseUrl}/models(避 CORS),返回可选模型名列表;软失败回 []。 */
 export const fetchProviderModels = (

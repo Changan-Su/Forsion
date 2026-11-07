@@ -4,6 +4,7 @@
  *  左右栏各最多 3 张。存的是 id:`builtin:status` 或小组件 id(w_…);对不上的画的时候跳过,不替用户补位。 */
 import { useSyncExternalStore } from 'react'
 import { registerMessages } from '../i18n'
+import { countTelemetry } from '../telemetrySend'
 
 // 命令「编辑主页」的标题在启动时就要(bootstrapEngine 注册),所以登记在这里而不是 HomeWidgetParts.tsx
 registerMessages({ 'home.edit': { zh: '编辑主页', en: 'Edit Home' } })
@@ -58,9 +59,20 @@ export function readHomeLayout(): HomeLayout {
   }
   return cached
 }
+/** 一份摆放里有哪些东西(中间那几块 + 各处的组件):匿名遥测只拿它数增 / 删 / 挪了几次,组件 id 不报。 */
+const placed = (l: HomeLayout): string[] => [...l.center.map((p) => `part:${p}`), ...l.row.map((c) => c.id), ...l.left, ...l.right]
+function countLayoutChange(prev: HomeLayout, next: HomeLayout): void {
+  const before = placed(prev), after = placed(next)
+  const added = after.filter((x) => !before.includes(x)).length
+  const removed = before.filter((x) => !after.includes(x)).length
+  if (added) countTelemetry('homeWidgetAdd', added)
+  if (removed) countTelemetry('homeWidgetRemove', removed)
+  if (!added && !removed && JSON.stringify(prev) !== JSON.stringify(next)) countTelemetry('homeWidgetMove') // 换位置 / 改宽度
+}
 export function saveHomeLayout(next: HomeLayout): void {
-  readHomeLayout()
+  const prev = readHomeLayout()
   cached = sanitizeHomeLayout(next)
+  try { countLayoutChange(prev, cached) } catch { /* 遥测不影响摆放 */ }
   if (!readFailed) try { localStorage.setItem(HOME_WIDGETS_KEY, JSON.stringify(cached)) } catch { /* 存不下:这次会话里照样生效 */ }
   notify()
 }

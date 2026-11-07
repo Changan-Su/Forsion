@@ -657,9 +657,10 @@ const api = {
       ? ipcRenderer.invoke(channel, ...args)
       : Promise.reject(new Error(`not a Forsion Extend channel: ${String(channel)}`)),
   /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程,主进程整形后经 CloudHost.telemetry 转给 Extend。
+   *  v2(契约 §9)加了插件安装 / 前置 / 生命周期 / 激活、首启引导、上手提示、计数(count)、命令(command)、设置改动(setting)。
    *  只进不出、没有读接口。键在不在 = Extend 有没有注册 telemetry:get(见下方 CLOUD_KEYS):没有 Extend 遥测就没人收,
-   *  渲染层也拿它做同步判断(引导第 7 步「帮助改进」在本机有没有)。 */
-  telemetryReport: (kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void =>
+   *  渲染层也拿它做同步判断(引导里「帮助改进」那一行在本机有没有)。 */
+  telemetryReport: (kind: import('../shared/telemetryKeys').RendererReportKind, props: Record<string, unknown>): void =>
     ipcRenderer.send('host-telemetry:report', kind, props),
 
   // ── 屏幕共享 ────────────────────────────────────────────────────────────────
