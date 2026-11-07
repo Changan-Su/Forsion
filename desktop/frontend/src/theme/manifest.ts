@@ -24,6 +24,9 @@ export interface ThemeManifest {
    */
   colorScheme?: 'system' | 'light' | 'dark';
   tags?: string[];
+  /** 建议的动效主题(theme/motionTheme.tsx):'genesis' | 'droplet' | 'stretch' | 'glide'。只在用户从没选过动效主题时生效;
+   *  不认识的名字当没写。主题包不能自己定义动效(见 motionGuard.ts),只能在内置几套里挑一套建议。 */
+  motionTheme?: string;
   /** 主题激活时懒加载的 Google Fonts(离线环境会静默失败,主题需有本地字体回退)。 */
   fonts?: { google?: string[] };
   /** 主题自曝的可调参数;渲染在设置→主题里选中卡的下方,值落 :root 内联 CSS 变量。见 ThemeSetting。 */

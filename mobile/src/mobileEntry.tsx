@@ -5,7 +5,7 @@
  */
 import '@/styles/layers.css' // 层序:必须是第一份 CSS(forsion-guard 最先声明,见 styles/layers.css)
 import { createRoot } from 'react-dom/client'
-import { MotionConfig } from 'framer-motion'
+import { HostMotionConfig } from '@/theme/motionTheme'
 import { MobileRoot } from './MobileRoot'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import '@/styles/base.css'
@@ -103,13 +103,13 @@ try {
   recordError('init', err) // 同 desktop main.tsx:被 catch 吞掉的启动错误不派发 window 'error'
 }
 
-// framer 也跟系统「减少动态效果」(走查续八 8.3):位移 / 缩放 / 布局动画停,只留透明度;CSS 那半在 styles/base.css。
+// framer 也跟系统「减少动态效果」(走查续八 8.3)与设置里的「只淡入淡出」:位移 / 缩放 / 布局动画停,只留透明度;CSS 那半在 styles/base.css。
 createRoot(document.getElementById('root')!).render(
   <LocaleProvider>
-    <MotionConfig reducedMotion="user">
+    <HostMotionConfig>
       <ErrorBoundary>
         <MobileRoot />
       </ErrorBoundary>
-    </MotionConfig>
+    </HostMotionConfig>
   </LocaleProvider>,
 )

@@ -369,6 +369,7 @@ describe('i18n 覆盖', () => {
       'websearch.name.deepseek': '搜索服务产品名(DeepSeek 官方叫法)',
       'websearch.key': 'API Key 是服务商控制台里的原词,用户按它去找',
       'settings.theme.visuals': '用户 2026-10-09 指定功能专名 Intelligent UI，中文界面不译',
+      'settings.motionTheme.genesis': '动效主题「Genesis」= 桌面产品名 Genesis 的默认那套(方案 A2 2026-11-06),专名不译',
       'achievements.a.first-login.title': '成就标题,化用论文名的英文梗',
       'achievements.a.first-message.title': '成就标题,英文梗',
       'agentProfile.space': 'Space 名「Agents」(与 Spaces 同为专名)',

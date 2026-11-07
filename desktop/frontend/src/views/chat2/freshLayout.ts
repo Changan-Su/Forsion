@@ -1,3 +1,4 @@
+import { reducedMotion as hostReducedMotion } from '@lcl/engine'
 // 空对话居中 → 首发落底(10-25 用户选,方案页 docs/ToBeImproved/Muse预制提示词方案_2026-10-25/glide.html):
 // 对话列里一条消息都没有时,「空状态 + 输入区整簇(含 Muse 的开场建议)」整块垂直居中;按下发送那一刻输入区落回底部,
 // 和发送动效(sendFlight.ts)同一条曲线、同一时长、同时起 —— 气泡的起点本来就是「按发送时输入框那一行」,于是从中间升起。
@@ -39,4 +40,4 @@ export function onSend(fn: (d: FreshSendDetail) => void): () => void {
   return () => window.removeEventListener(EVENT, h)
 }
 
-export const reducedMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+export const reducedMotion = (): boolean => hostReducedMotion()

@@ -12,6 +12,7 @@ import { modelPickerPresenter, pickerChanges, type ModelPickerRequest, type Mode
 import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, Bot, Search } from 'lucide-react'
 import { nestedPanelPlacement, nestedPanelTop, UI_ZOOM_EVENT, zoomOf, useEdgeNudge, NATIVE_MENU_MAX_ITEMS, nativeSheetPresenter, runNativeSheetMenu } from '@lcl/engine'
+import { useKnobFlow } from '@lcl/engine/segFlow'
 import type { NestedPanelPlacement, SheetMenu, SheetMenuItem } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { THINKING_LEVELS } from '../types'
@@ -713,7 +714,7 @@ export const ModelPill: React.FC<{
               onClick={() => onFastChange!(!fastOn)}
             >
               <span className="cm-fast-text"><span className="cm-row-k">{t('pill.rowFast')}</span><span className="cm-fast-note">{fastText}</span></span>
-              <span className={`settings-switch${fastOn ? ' active' : ''}`} aria-hidden="true"><span /></span>
+              <MenuKnob on={fastOn} />
             </button>
           )}
           {/* 极速:只对有极速档的模型(官方 OpenAI astra / 6.1-sol)露出;开它连带开 Fast,关它退回 Fast,关 Fast 一并关掉。 */}
@@ -726,7 +727,7 @@ export const ModelPill: React.FC<{
               onClick={() => onFastChange!(ultrafastOn ? true : 'ultra')}
             >
               <span className="cm-fast-text"><span className="cm-row-k">{t('pill.rowUltrafast')}</span><span className="cm-fast-note">{ultrafastText}</span></span>
-              <span className={`settings-switch${ultrafastOn ? ' active' : ''}`} aria-hidden="true"><span /></span>
+              <MenuKnob on={ultrafastOn} />
             </button>
           )}
 
@@ -864,4 +865,11 @@ export const ModelPill: React.FC<{
       )}
     </span>
   )
+}
+
+/** 菜单行里的开关样子(整行才是按钮):动效主题是水滴时旋钮流过去,同设置里的 SettingsSwitch。 */
+function MenuKnob({ on }: { on: boolean }): React.ReactElement {
+  const ref = useRef<HTMLSpanElement>(null)
+  useKnobFlow(on, ref)
+  return <span ref={ref} className={`settings-switch${on ? ' active' : ''}`} aria-hidden="true"><span /></span>
 }

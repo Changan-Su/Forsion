@@ -7,6 +7,7 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathOperation
 import kotlin.math.PI
 import kotlin.math.exp
+import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
 
@@ -112,6 +113,56 @@ internal fun DropShape.path(cy: Float): Path {
         close()
     }
     return Path.combine(PathOperation.Union, body, neckPath)
+}
+
+/**
+ * The motion theme (2026-11-06, docs/ToBeImproved/动效开放给主题方案_2026-11-06 round 2, A2): how the selection gets to
+ * another cell. Genesis and Droplet pour it as above. Stretch moves its two ends apart in time: the leading end first,
+ * the trailing one [STRETCH_LAG_MS] later, each over [STRETCH_EDGE_MS] — it stretches out and pulls back in, no
+ * overshoot (the page's segmented capsules do the same, base.css). Glide slides it across as it is.
+ * A finger dragging along the dock: Droplet / Genesis pull a tail (dragShape); Stretch spans from where the tail would be
+ * to the head; Glide is the head alone. Stretch and Glide draw one capsule, cheaper than the droplet's three joined paths.
+ */
+internal enum class DockMotion {
+    POUR, STRETCH, GLIDE;
+    companion object {
+        fun of(theme: String) = when (theme) { "stretch" -> STRETCH; "glide" -> GLIDE; else -> POUR }
+    }
+}
+
+internal const val STRETCH_EDGE_MS = 320f
+internal const val STRETCH_LAG_MS = 90f
+internal const val GLIDE_MS = 300f
+
+/** How long a tap's move takes in this theme. */
+internal fun DockMotion.flowMs(): Float = when (this) {
+    DockMotion.POUR -> DROP_FLOW_MS
+    DockMotion.STRETCH -> STRETCH_EDGE_MS + STRETCH_LAG_MS
+    DockMotion.GLIDE -> GLIDE_MS
+}
+
+/** Stretch, [t] 0..1 of the whole move, from a cell at [x0] (w0 × h0) to one at [x1] (w × h). */
+internal fun stretchShape(t: Float, x0: Float, x1: Float, w0: Float, h0: Float, w: Float, h: Float): DropShape {
+    val ms = t.coerceIn(0f, 1f) * (STRETCH_EDGE_MS + STRETCH_LAG_MS)
+    val lead = DROP_SURFACE.transform((ms / STRETCH_EDGE_MS).coerceIn(0f, 1f))
+    val trail = DROP_SURFACE.transform(((ms - STRETCH_LAG_MS) / STRETCH_EDGE_MS).coerceIn(0f, 1f))
+    val toRight = x1 >= x0
+    val l = lerp(x0 - w0 / 2, x1 - w / 2, if (toRight) trail else lead)
+    val r = lerp(x0 + w0 / 2, x1 + w / 2, if (toRight) lead else trail)
+    return DropShape((l + r) / 2, r - l, lerp(h0, h, lead))
+}
+
+/** Glide, [t] 0..1: the selection slides across as it is. */
+internal fun glideShape(t: Float, x0: Float, x1: Float, w0: Float, h0: Float, w: Float, h: Float): DropShape {
+    val s = DROP_SURFACE.transform(t.coerceIn(0f, 1f))
+    return DropShape(lerp(x0, x1, s), lerp(w0, w, s), lerp(h0, h, s))
+}
+
+/** A drag in Stretch / Glide: one capsule from [tail] to [head] (Glide passes the head twice). */
+internal fun spanShape(head: Float, tail: Float, w: Float, h: Float): DropShape {
+    val l = min(head, tail) - w / 2
+    val r = max(head, tail) + w / 2
+    return DropShape((l + r) / 2, r - l, h)
 }
 
 /** Longest a dock waits for the page to confirm a tap; past that the page refused and the selection goes back. */

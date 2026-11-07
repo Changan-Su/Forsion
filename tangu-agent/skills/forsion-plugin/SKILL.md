@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.98.0
+  version: 1.99.0
   author: Forsion
   category: Forsion
 ---
@@ -145,6 +145,7 @@ Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts
   `line-height`、段间距或 `wb-view-enter` 的时长写死 —— 写死了,用户拨那几个开关就没有反应。
 - 可选 `settings[]`(number/select/boolean/color)让用户在设置页调主题内参数:`key` **就是** CSS 自定义属性名,宿主把值写进 `:root` 内联变量,主题用 `var(--key, 默认值)` 消费。参考本仓内置 `genesis-glass` 主题(`desktop/frontend/src/theme/themes/genesis-glass/`)。
 - **动效归宿主管,主题别碰**:装进来时宿主先过一遍 `theme.css` —— 动效 token(`--duration-*`、`--ease-*`、`--menu-enter/exit-*`、`--droplet-duration`、`--collapse-*`、`--tip-*`、`--hovercard-*`、`--switch-edge-*` 等)的声明在任何选择器上都删掉,`@property` 注册它们的整块也删;`settings[]` 用这些名字的项不生效;主题自己的 `@keyframes` 与 `@layer` 名加前缀 `t-<id>-`(`animation` / `animation-name` 里的引用一起改写,经 `var()` 转手的不改写);`@import` 一律删(谷歌字体写 `theme.json` 的 `fonts.google`);处理完浏览器再读一遍,还漏着就整套样式不加载;系统「减少动态效果」在宿主最先声明的层里,`!important` 也压不过。设置页会提示「N 项动效已忽略」。主题在自己选择器上直接写的 `transition` / `animation` 不在收口范围内,照常生效(减少动态效果下动画停、过渡只剩短的颜色 / 透明度)。
+  动效主题(设置 → 外观,`<html data-motion-theme>` = genesis / droplet / stretch / glide,外加 `data-motion-fade="on"`「只淡入淡出」)归用户:`theme.json` 可写 `"motionTheme": "<四者之一>"` 建议一套,只在用户从没选过时生效;插件不读不写这两个属性,也别写死某一种效果 —— 用宿主的分段胶囊 / 开关 / `ctx.ui` 零件,自动跟着走。
 
 ## Space(samples/forsion-sample-space)
 

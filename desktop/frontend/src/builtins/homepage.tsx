@@ -79,6 +79,7 @@ registerMessages({
   'home.wallpaper.motion': { zh: '动态效果', en: 'Motion' },
   'home.wallpaper.motionHint': { zh: '星轨的行星慢慢公转，日行的日月光晕呼吸，字阵在打字、点空白处时漾开涟漪；素笺、扶桑环不动', en: 'The Orbit planet slowly circles, the Sun path glow breathes, and Glyphs ripple as you type or click empty space; Paper and Forsion rings stay still' },
   'home.wallpaper.motionReduced': { zh: '系统已打开「减弱动态效果」，这里跟着系统', en: 'Reduce motion is on in your system, so this follows it' },
+  'home.wallpaper.motionFadeOnly': { zh: '已打开「只淡入淡出」（设置 → 外观），这里跟着它', en: 'Fade only is on (Settings → Appearance), so this follows it' },
   'home.wallpaper.daily': { zh: '每日自动更新', en: 'Update daily' },
   'home.wallpaper.refresh': { zh: '刷新', en: 'Refresh' },
   'home.wallpaper.loading': { zh: '正在获取必应壁纸…', en: 'Loading Bing wallpapers…' },

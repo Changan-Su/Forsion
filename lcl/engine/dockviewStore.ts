@@ -27,6 +27,7 @@ import { mainOpensBeside, noteBesideTarget } from './openBeside'
 import { useNav } from './navStore'
 import { ribbonActions } from './ribbonRegistry'
 import { engineTr } from './i18nSeam'
+import { reducedMotion } from './spring'
 import {
   LAYOUT_KEY, saveLayout, loadLayout, clearLayout, saveNamedLayout, loadNamedLayout, listNamedLayouts, layoutIsBlank,
   type LayoutEnvelopeV4, type PersistedPanel,
@@ -288,7 +289,7 @@ function addPanelPreservingSides(api: DockviewApi, options: Parameters<DockviewA
 /** rAF 把某组的一个维度(width|height)从 from 平滑补间到 to(ease-out cubic),done 收尾。
  *  无 rAF(测试)时直接收尾。 */
 function tweenGroupSize(group: SizableGroup, key: 'width' | 'height', from: number, to: number, done: () => void, cancelled?: () => boolean): void {
-  if (typeof requestAnimationFrame !== 'function' || (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches)) { if (cancelled?.()) return; try { group.api.setSize({ [key]: to }) } catch { /* ignore */ } done(); return }
+  if (typeof requestAnimationFrame !== 'function' || reducedMotion()) { if (cancelled?.()) return; try { group.api.setSize({ [key]: to }) } catch { /* ignore */ } done(); return }
   const DURATION = 200
   const ease = (k: number): number => 1 - Math.pow(1 - k, 3)
   let startTs = 0

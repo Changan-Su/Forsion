@@ -58,6 +58,7 @@ import { syncSmoothCaretToLayout } from '../../smoothCaret'
 import { noteMemoryId } from './viewMemory'
 import { registerMessages, translate, useI18n } from '../../i18n'
 import { motion } from '../../theme/motionTokens'
+import { reducedMotion } from '@lcl/engine/spring'
 
 registerMessages({
   'canvasstage.textTitle.connector': { zh: '连线标签', en: 'Connector label' },
@@ -611,7 +612,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   const flyTo = useCallback((target: Viewport, duration: number): void => {
     const start = { ...vpRef.current }
     stopFocusMotion()
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+    if (reducedMotion()) {
       vpRef.current = target
       setVp(target)
       return
@@ -648,7 +649,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
   const playArrangeMotion = useCallback((moves: Array<{ anchor: string; x: number; y: number; depth: number }>): void => {
     const host = hostRef.current
     stopArrangeMotion()
-    if (!host || !moves.length || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    if (!host || !moves.length || reducedMotion()) return
     arrangeMotion.current.raf = requestAnimationFrame(() => {
       arrangeMotion.current.raf = 0
       let total = 0
@@ -713,7 +714,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     const host = hostRef.current
     const distance = Math.hypot(move.x, move.y)
     stopArrangeMotion()
-    if (!host || distance < 1 || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    if (!host || distance < 1 || reducedMotion()) return
     arrangeMotion.current.raf = requestAnimationFrame(() => {
       arrangeMotion.current.raf = 0
       const remember = (animation: Animation): void => {
@@ -2406,7 +2407,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
     }
     const playRepelMotion = (anchors: string[], main: boolean, push: { x: number; y: number }, id = 'amx-card-repel'): void => {
       const distance = Math.hypot(push.x, push.y)
-      if (distance < 1 || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+      if (distance < 1 || reducedMotion()) return
       stopRepelMotion()
       // 距离只轻量影响时长：小位移不拖沓，大位移也不慢悠悠。6% 越界 + 1.5% 回摆提供
       // “释放惯性”，18px 空气层足以容纳这点弹性，不会视觉穿回障碍物。
@@ -2460,7 +2461,7 @@ export function CanvasStage({ path, vaultRoot = null, active, getView, main, mai
      *  因而仍逐像素跟手；只有 release → landing 这一小段由 WAAPI 接管。 */
     const playResizeSettleMotion = (key: string, from: ElBox, to: ElBox): void => {
       const distance = Math.max(Math.abs(from.x - to.x), Math.abs(from.y - to.y), Math.abs(from.w - to.w), Math.abs(from.h - to.h))
-      if (distance < 1 || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+      if (distance < 1 || reducedMotion()) return
       stopRepelMotion()
       repelRaf = requestAnimationFrame(() => {
         repelRaf = 0

@@ -10,7 +10,7 @@
  */
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { OverlayAt, accountMenuRows, emergeDroplet, nativeSheetPresenter, runNativeSheetMenu, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, runNativeSheetMenu, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack } from 'lucide-react'
 import type { AuthAccountInfo, AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
@@ -209,7 +209,7 @@ export const AccountCard: React.FC<{
     drop.current?.cancel(); drop.current = null; dropClosing.current = false
     const anchor = anchorRef.current
     const src = anchor?.querySelector<HTMLElement>('.account-avatar') ?? anchor
-    if (src) drop.current = emergeDroplet(src, el)
+    if (src) drop.current = openPanel(src, el) // 按动效主题:液滴 / 拉伸 / 淡入微缩
   }
   // OverlayAt 在自己的 layout effect 里量完定位、同步写进 DOM(useClampedMenu),父组件这一个在它之后跑 —— 量到的就是最终位置
   useLayoutEffect(() => {

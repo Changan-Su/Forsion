@@ -121,6 +121,7 @@ import { resolveSettingsTarget, SETTINGS_TABS } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry } from './settingsSearchIndex'
 import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
+import { MotionThemeSection, MotionFadeRow } from './MotionThemeSection'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
 import { MaskingSettingsSection } from './MaskingSettingsSection'
@@ -2958,6 +2959,10 @@ export const SettingsModal: React.FC<{
                       })()}
                       <div className="hint" style={{ marginTop: 6 }}>{t('settings.theme.dropHint')}</div>
                     </section>
+                    {/* 动效主题(theme/motionTheme.tsx):紧跟设计语言;本机偏好,行自己订阅,不进设置草稿 */}
+                    <MotionThemeSection anchor="motion-theme">
+                      <MotionFadeRow anchor="motion-fade" />
+                    </MotionThemeSection>
                     <section className="settings-panel settings-theme-palette" data-setting-anchor="palette">
                       <div className="settings-panel-head">
                         <span className="settings-panel-icon"><Sparkles size={16} /></span>

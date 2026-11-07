@@ -21,7 +21,7 @@ git clone https://github.com/Changan-Su/tangu-sample-theme
 
 ## 契约速查
 
-- `theme.json` 必填：`id`（=目录名）、`name`、`description`、`version`（商店更新检查读它）、`supportsDarkMode`、`preview.background`（可 light/dark 双值）、`preview.accent`。可选：`author`、`tags`、`panelGap`（>0 时外壳给停靠面板留间距做浮卡）、`fonts.google`（激活时懒加载，务必写本地字体兜底）、`preview.swatches/tagline/title`。
+- `theme.json` 必填：`id`（=目录名）、`name`、`description`、`version`（商店更新检查读它）、`supportsDarkMode`、`preview.background`（可 light/dark 双值）、`preview.accent`。可选：`author`、`tags`、`panelGap`（>0 时外壳给停靠面板留间距做浮卡）、`fonts.google`（激活时懒加载，务必写本地字体兜底）、`motionTheme`（建议一套内置动效主题：`genesis` / `droplet` / `stretch` / `glide`，只在用户从没选过时生效）、`preview.swatches/tagline/title`。
 - `theme.css` 全局注入**不隔离**——每条规则都要挂 `[data-theme='<id>']` 前缀，否则泄漏到其他主题。暗色块用 `.dark[data-theme='<id>']`；建议尊重扁平开关 `[data-theme='<id>'][data-flat='1']`（清空阴影）。
 - **动效归宿主管**：动效 token（`--duration-*`、`--ease-*`、`--menu-enter-duration`、`--droplet-duration`、`--collapse-duration` 等）写了也会在安装时删掉，`settings` 里用这些名字也不生效；自己的 `@keyframes` / `@layer` 名会加前缀 `t-<id>-`（`animation` 里的引用一起改写）；`@import` 一律删（谷歌字体写 `theme.json` 的 `fonts.google`）；系统「减少动态效果」永远优先。直接写在自己选择器上的 `transition` / `animation` 照常生效。
 - 参考实现：应用首启种子的 `~/.forsion/themes/soft/`（渐变舞台 + 浮卡结构的完整案例）。
@@ -34,6 +34,6 @@ git clone https://github.com/Changan-Su/tangu-sample-theme
 
 ## English (short)
 
-A Forsion Desktop disk theme = `theme.json` + `theme.css` in `~/.forsion/themes/<id>/`. Themes are the *structure* axis (radius/font/shadow); colors come from the built-in *skin* axis — consume color tokens, don't define them (or mirror every color var in the `.dark[data-theme=…]` block). Scope every rule under `[data-theme='<id>']`. Motion belongs to Forsion: motion token declarations (`--duration-*`, `--ease-*`, `--menu-enter-duration`, `--droplet-duration`, …) are removed on install, your own `@keyframes` / `@layer` names get the prefix `t-<id>-` (references in `animation` are rewritten), `@import` is always removed (list Google Fonts under `fonts.google` in `theme.json`), and the system's Reduce motion always wins. A `transition` / `animation` written directly on your own selectors still works. Reload live via Settings → Theme → Reload themes.
+A Forsion Desktop disk theme = `theme.json` + `theme.css` in `~/.forsion/themes/<id>/`. Themes are the *structure* axis (radius/font/shadow); colors come from the built-in *skin* axis — consume color tokens, don't define them (or mirror every color var in the `.dark[data-theme=…]` block). Scope every rule under `[data-theme='<id>']`. Motion belongs to Forsion: motion token declarations (`--duration-*`, `--ease-*`, `--menu-enter-duration`, `--droplet-duration`, …) are removed on install, your own `@keyframes` / `@layer` names get the prefix `t-<id>-` (references in `animation` are rewritten), `@import` is always removed (list Google Fonts under `fonts.google` in `theme.json`), and the system's Reduce motion always wins. A `transition` / `animation` written directly on your own selectors still works. `motionTheme` in `theme.json` (`genesis` / `droplet` / `stretch` / `glide`) suggests one of the built-in motion themes, used only until the user picks one. Reload live via Settings → Theme → Reload themes.
 
 MIT © Changan Su

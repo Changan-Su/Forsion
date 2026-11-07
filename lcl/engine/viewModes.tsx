@@ -21,6 +21,7 @@ import { IS_MINI_PANEL, UI_MODE } from './uiMode'
 import { engineTr, useEngineI18n } from './i18nSeam'
 import { OverlayAt } from './menuAnchor'
 import { nativeChromeInstalled } from './nativeChrome'
+import { useSegFlow } from './segFlow'
 import './viewModes.css'
 
 export interface ViewModeOption {
@@ -176,7 +177,10 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
   const dropRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
   // 钩子要在下面两个提前 return 之前调;算格号的式子与下面的 `i` 同一份
-  const dir = useSegDir(spec ? Math.max(0, spec.modes.findIndex((m) => m.value === spec.value)) : 0)
+  const segI = spec ? Math.max(0, spec.modes.findIndex((m) => m.value === spec.value)) : 0
+  const dir = useSegDir(segI)
+  const thumbRef = useRef<HTMLDivElement>(null)
+  useSegFlow(segI, thumbRef) // 动效主题是水滴时滑块流过去(segFlow.ts)
   useEffect(() => {
     if (!menu) return
     const close = (e: Event): void => { if (!menuRef.current?.contains(e.target as Node) && !dropRef.current?.contains(e.target as Node)) setMenu(null) }
@@ -227,7 +231,7 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
       style={{ ['--seg-n' as string]: n, ['--seg-i' as string]: i }}
     >
       <div className="lcl-vmode-pill" role="tablist" aria-label={aria}>
-        <div className="lcl-vmode-thumb" data-value={cur.value} data-dir={dir} />
+        <div ref={thumbRef} className="lcl-vmode-thumb" data-value={cur.value} data-dir={dir} />
         {spec.modes.map((m, k) => {
           const Icon = m.icon
           return (

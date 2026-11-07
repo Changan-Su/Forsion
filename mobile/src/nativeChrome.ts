@@ -10,6 +10,7 @@ import { useApp } from '@/stores/appStore'
 import { attentionIndex, mergeAttention, useAttention } from '@/stores/attentionStore'
 import { useInbox } from '@/stores/inboxStore'
 import { installKeyboardRise, keyboardRise, type ImeRise } from './keyboardRise'
+import { reducedMotion } from '@lcl/engine/spring'
 
 /** Android-only host for the native top bar seam (lcl/engine/nativeChrome.ts). Kotlin: NativeChromePlugin.
  *  Pushes the effective state + live theme + serialized icons; relays bar actions back to the seam.
@@ -185,7 +186,7 @@ export function applyChromeLayout(e: ChromeLayout | null | undefined, doc: Docum
 /** The dock sinks and fades (NativeChromeBar: DOCK_SINK, DOCK_MOTION_MS, DOCK_EASE); the blur under it has to go along. */
 function movePlate(el: HTMLElement, motion: 'in' | 'out', fresh: boolean): void {
   if (typeof el.animate !== 'function') return
-  const quiet = el.ownerDocument.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+  const quiet = reducedMotion()
   const gone = { transform: quiet ? 'none' : `translateY(${dpLength(40)})`, opacity: '0' }
   const here = { transform: 'none', opacity: '1' }
   const style = getComputedStyle(el) // from where it is: it may turn round half way
@@ -320,7 +321,7 @@ export function installNativeChrome(): void {
   void plugin.addListener('ime', keyboardRise).catch(() => {})
   // Skin / mode / custom colour changes repaint the bar (same attributes the model picker watches + inline vars);
   // switching glass off makes the capsules solid.
-  new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-glass', 'style', 'class'] })
+  new MutationObserver(send).observe(document.documentElement, { attributes: true, attributeFilter: ['data-mode', 'data-skin', 'data-bg', 'data-theme', 'data-glass', 'data-motion-theme', 'data-motion-fade', 'style', 'class'] })
   subscribeAccountChip(send) // sign-in / sign-out / a new picture repaints the avatar
   // Badges: the stores change far more often than the answer does (every streamed token touches useApp) → re-send only
   // when the set of dots changed.

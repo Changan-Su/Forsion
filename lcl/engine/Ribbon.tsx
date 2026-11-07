@@ -28,7 +28,8 @@ import { useWorkspace } from './workspaceStore'
 import { getView, subscribeViews } from './viewRegistry'
 import { computeSideWidth } from './sideWidth'
 import { SpacePeek } from './SpacePeek'
-import { emergeDroplet, type Droplet } from './droplet'
+import { type Droplet } from './droplet'
+import { openPanel } from './panelMotion'
 import { PEEK_CLOSE_DELAY, PEEK_OPEN_DELAY, peekShouldClose, peekViews, type PeekZone } from './spacePeekRules'
 import type { PersistedPanel } from './layoutPersist'
 
@@ -182,7 +183,7 @@ export function Ribbon() {
     moreClosing.current = false
     setFly(null)
     const btn = rootRef.current?.querySelector<HTMLElement>(`[data-rb-more="${zone}"]`), el = moreRef.current
-    if (moreFly === zone && btn && el) { droplet.current = emergeDroplet(btn, el); return }
+    if (moreFly === zone && btn && el) { droplet.current = openPanel(btn, el); return }
     setMoreFly(zone)
   }
 
@@ -232,7 +233,8 @@ export function Ribbon() {
     peekDropFor.current = id
     const own = peekSrc.current
     const src = own?.isConnected && own.dataset.spaceId === id ? own : rootRef.current?.querySelector<HTMLElement>(`[data-space-id="${CSS.escape(id)}"]`)
-    if (src) peekDrop.current = emergeDroplet(src, el, { color: getComputedStyle(el, '::before').backgroundColor, settled })
+    // 按动效主题:液滴 / 拉伸 / 淡入微缩(材质在 ::before 上,颜色要传;settled = 换图标不重播)
+    if (src) peekDrop.current = openPanel(src, el, { color: getComputedStyle(el, '::before').backgroundColor, settled })
   }
   const blockHard = !!drag || !!menu || !!iconPick || !!fly || !!moreFly
   // 左面板展开着也弹 —— 弹别的 Space 的(2026-10-14 用户定:悬停本来就是为了呼出别的侧边栏)。
@@ -661,7 +663,7 @@ export function Ribbon() {
     const y = moreFly === 'top' ? Math.max(8, Math.min(b.top - 6, window.innerHeight - h - 8)) : Math.max(8, b.bottom + 6 - h)
     el.style.left = `${((rootRef.current?.getBoundingClientRect().right ?? 44) + 4) / z}px`
     el.style.top = `${y / z}px`
-    if (!droplet.current) droplet.current = emergeDroplet(btn, el)
+    if (!droplet.current) droplet.current = openPanel(btn, el) // 按动效主题:液滴 / 拉伸 / 淡入微缩
   }, [moreFly, moreTail.length]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => () => { droplet.current?.cancel(); droplet.current = null }, [])
   // 藏着的都被拖回条上了(或窗口变高全露出来了):浮层没东西可列,缩回

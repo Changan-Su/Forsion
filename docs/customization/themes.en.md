@@ -38,6 +38,19 @@ Interface, body and monospace fonts can each be set. The interface font covers s
 - "Relaxed text" and "Calm transitions" are on by default: note and chat text gets looser line and paragraph spacing, and switching views is a little slower. Turn either off in Appearance and it behaves exactly as before.
 - "Dim the edges" is off by default. When on, the Ribbon, inactive tabs, the left sidebar and the cards beside a chat are dimmed until the pointer or keyboard focus moves there.
 
+## Motion theme
+
+Settings → Appearance → Motion theme sets how panels that grow from a button, segmented controls and switches move. There are four:
+
+- **Genesis** (default): panels pour out of the button like a droplet, and the selection stretches as it moves. This is how Forsion has always moved.
+- **Droplet**: panels pour out, and selections and switches flow across like a droplet.
+- **Stretch**: a panel's far edge goes first and its sides follow. Selections and switches lead with one edge, and the other arrives a little later.
+- **Glide**: panels fade in, and selections and switches slide straight across.
+
+Menus, tooltips, toasts and collapsing sections open and close hundreds of times a day, so they move the same way in every motion theme. The Space dock at the bottom of the phone follows the same theme.
+The last row of the section is **Fade only**: panels only fade in and out, selections and switches jump into place, and colors still change smoothly. It doesn't change system settings, and it turns on automatically, grayed out, when the system's Reduce motion setting is on.
+The motion theme is stored on this device. It doesn't sync with your account and doesn't change with the Space.
+
 ## Theme packages
 
 You can install more than the built-in themes:
@@ -66,7 +79,7 @@ Themes control how things look (structure beyond color: fonts, radii, shadows, l
 
 This only covers Forsion's own **timing**: the tokens, keyframes and layers above. A `transition` or `animation` you write directly on your own selectors, such as a color change on button hover, is still part of your theme and works as usual. When the system's Reduce motion setting is on, it applies to them too: animations stop, and transitions are limited to quick color and opacity changes.
 
-To make the interface move differently, wait for motion themes to open up and submit one separately. Don't change motion inside a theme package.
+To make the interface move differently, suggest one of the built-in motion themes in `theme.json` with `"motionTheme": "droplet"` (one of `genesis`, `droplet`, `stretch`, `glide`). It only applies while the user has never picked a motion theme; once they pick one, their choice wins. Custom motion recipes will open up separately later. Don't change motion inside a theme package.
 
 ## Everywhere at once
 

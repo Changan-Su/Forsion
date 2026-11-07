@@ -11,6 +11,7 @@ import type { ResolvedPos, Node as PMNode } from '@milkdown/kit/prose/model'
 import { registerMessages, translate } from '../../../i18n'
 import { splitParagraph } from './softBreak'
 import { FOLD_TOKEN } from './blockTriggers'
+import { reducedMotion } from '@lcl/engine/spring'
 
 registerMessages({
   'mdcallout.expand': { zh: '展开', en: 'Expand' },
@@ -311,7 +312,7 @@ function toggleFold(view: EditorView, c: { marker?: string; collapsed: boolean; 
   if (isFold) setTimeout(() => {
     if (view.dom.isConnected)
       view.dispatch(view.state.tr.setMeta(calloutKey, { foldEnd: animationId } satisfies CalloutMeta))
-  }, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 230)
+  }, reducedMotion() ? 0 : 230)
 }
 
 /** PM 的同一文档位置可以落在字号为 0 的令牌末尾，也可以落在可见标题首字前。
