@@ -1,21 +1,21 @@
 /* 插件版本块(11-06 方案 A):详情侧栏 / 设置里插件详情页共用。只用产品 token,不自带颜色。 */
-.pv { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding-top: 12px; border-top: var(--border-width) solid var(--overlay-medium); }
-.pv-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: var(--ui-control-height); font-size: var(--ui-font-body); color: var(--text); }
-.pv-sub { font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); color: var(--text-muted); overflow-wrap: anywhere; }
-.pv-sub.is-error { color: var(--danger); }
-.pv-head { margin-top: 4px; font-size: var(--ui-font-caption); font-weight: 600; color: var(--text-faint); }
-.pv-ver { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.pv-ver > div { min-width: 0; font-size: var(--ui-font-meta); color: var(--text); }
-.pv-ver small { display: block; font-size: var(--ui-font-caption); color: var(--text-faint); }
-.pv .btn, .pv-tools .btn { display: inline-flex; align-items: center; gap: 5px; flex: none; }
-.pv-hint { margin: 0; font-size: var(--ui-font-caption); line-height: var(--ui-line-meta); color: var(--text-faint); }
-.pv-pin { display: flex; align-items: flex-start; gap: 7px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--accent-tint); color: var(--text); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
-.pv-pin svg { margin-top: 2px; flex: none; color: var(--accent-ink); }
-.pv-pin .btn { margin-top: 6px; }
-.pv-tag { display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--overlay-light); color: var(--text-muted); font-size: var(--ui-font-caption); font-weight: 560; line-height: 18px; white-space: nowrap; }
-.pv-tag.is-accent { background: var(--accent-tint); color: var(--accent-ink); }
-.pv-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: var(--radius-lg); background: var(--bg-card); box-shadow: var(--card-shadow); }
-.pv-tools .pv-row { flex: 1; justify-content: flex-start; min-width: 0; }
-.pv-tools .pv-row > div { display: flex; flex-direction: column; min-width: 0; }
-.mk-version-row .pv-tag { margin-left: 6px; vertical-align: 1px; }
-@media (max-width: 560px) { .pv-tools { flex-direction: column; align-items: stretch; } }
+.pvb { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; padding-top: 12px; border-top: var(--border-width) solid var(--overlay-medium); }
+.pvb-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: var(--ui-control-height); font-size: var(--ui-font-body); color: var(--text); }
+.pvb-sub { font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); color: var(--text-muted); overflow-wrap: anywhere; }
+.pvb-sub.is-error { color: var(--danger); }
+.pvb-head { margin-top: 4px; font-size: var(--ui-font-caption); font-weight: 600; color: var(--text-faint); }
+.pvb-ver { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.pvb-ver > div { min-width: 0; font-size: var(--ui-font-meta); color: var(--text); }
+.pvb-ver small { display: block; font-size: var(--ui-font-caption); color: var(--text-faint); }
+.pvb .btn, .pvb-tools .btn { display: inline-flex; align-items: center; gap: 5px; flex: none; }
+.pvb-hint { margin: 0; font-size: var(--ui-font-caption); line-height: var(--ui-line-meta); color: var(--text-faint); }
+.pvb-pin { display: flex; align-items: flex-start; gap: 7px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--accent-tint); color: var(--text); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); }
+.pvb-pin svg { margin-top: 2px; flex: none; color: var(--accent-ink); }
+.pvb-pin .btn { margin-top: 6px; }
+.pvb-tag { display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; border-radius: var(--radius-pill); background: var(--overlay-light); color: var(--text-muted); font-size: var(--ui-font-caption); font-weight: 560; line-height: 18px; white-space: nowrap; }
+.pvb-tag.is-accent { background: var(--accent-tint); color: var(--accent-ink); }
+.pvb-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; border-radius: var(--radius-lg); background: var(--bg-card); box-shadow: var(--card-shadow); }
+.pvb-tools .pvb-row { flex: 1; justify-content: flex-start; min-width: 0; }
+.pvb-tools .pvb-row > div { display: flex; flex-direction: column; min-width: 0; }
+.mk-version-row .pvb-tag { margin-left: 6px; vertical-align: 1px; }
+@media (max-width: 560px) { .pvb-tools { flex-direction: column; align-items: stretch; } }

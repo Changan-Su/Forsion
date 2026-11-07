@@ -155,8 +155,8 @@ export function MarketVersions({ item, appVersion, onInstall, installing, instal
     return <article key={version.version} className="mk-version-row" data-market-version={version.version}>
       <div>
         <strong>v{version.version}</strong>
-        {cmp === 0 && <span className="pv-tag is-accent">{t(pinnedVersion && compareMarketVersions(pinnedVersion, version.version) === 0 ? 'market.pinnedTag' : 'market.installed')}</span>}
-        {local && <span className="pv-tag">{t('market.keptTag')}</span>}
+        {cmp === 0 && <span className="pvb-tag is-accent">{t(pinnedVersion && compareMarketVersions(pinnedVersion, version.version) === 0 ? 'market.pinnedTag' : 'market.installed')}</span>}
+        {local && <span className="pvb-tag">{t('market.keptTag')}</span>}
         {version.version === item.latestVersion && <span className="mk-muted"> · {t('market.currentVersion')}</span>}
         <p>{formatDateTime(version.createdAt)} · Forsion {requirementsText(version)}</p><MarketRequirements item={version} version={appVersion} />
       </div>

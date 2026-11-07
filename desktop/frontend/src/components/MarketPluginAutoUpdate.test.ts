@@ -40,7 +40,7 @@ it('hand-copied plugins show only the kept versions, without a switch', async ()
   await block({ id: undefined, item: undefined, installedVersion: '1.3.0' })
   expect(host.querySelector('[role="switch"]')).toBeNull(); expect(host.querySelectorAll('[data-plugin-rollback]')).toHaveLength(2)
   expect(host.textContent).not.toContain('「版本」页')
-  await block({ id: undefined, item: undefined, kept: [] }); expect(host.querySelector('.pv')).toBeNull()
+  await block({ id: undefined, item: undefined, kept: [] }); expect(host.querySelector('.pvb')).toBeNull()
 })
 it('a failed save keeps the previous state and reports it', async () => {
   window.tangu!.marketSetAutoUpdate = vi.fn(async () => { throw new Error('disk full') })

@@ -84,31 +84,31 @@ export function PluginVersionBlock({ id, item, installedVersion, kept, autoUpdat
   }
   const busy = disabled || saving || !!rolling
   if (!store && !kept.length) return null
-  return <div className="pv" data-plugin-versions={id || ''} onClick={(e) => e.stopPropagation()}>
-    {store && pinned && <div className="pv-pin" data-plugin-pinned={pinned}>
+  return <div className="pvb" data-plugin-versions={id || ''} onClick={(e) => e.stopPropagation()}>
+    {store && pinned && <div className="pvb-pin" data-plugin-pinned={pinned}>
       <Pin size={13} aria-hidden="true" />
       <div>{t('market.pinnedAt', { version: v(pinned) })}<br /><button className="btn sm" disabled={busy} onClick={() => void setAuto(true)}>{t('market.resumeAutoUpdate')}</button></div>
     </div>}
-    {store && <div className="pv-row" title={t('market.autoUpdateHint')}>
+    {store && <div className="pvb-row" title={t('market.autoUpdateHint')}>
       <span>{t('market.autoUpdate')}</span>
       <SettingsSwitch checked={on} disabled={busy} label={t('market.autoUpdate')} data-market-auto-update={id} onChange={(next) => void setAuto(next)} />
     </div>}
-    {store && installed && <div className="pv-sub" role="status">
+    {store && installed && <div className="pvb-sub" role="status">
       {t('market.installedVersion', { version: v(installed) })}
       {item?.pendingVersion ? <> · {t(item.pendingRollback ? 'market.rollbackPending' : 'market.pendingRestart', { version: v(item.pendingVersion) })}</>
         : item?.phase === 'downloading' ? <> · {t('market.autoUpdateDownloading')}</>
           : item?.phase === 'checking' ? <> · {t('market.autoUpdateChecking')}</> : null}
     </div>}
-    {item?.phase === 'error' && <div className="pv-sub is-error" role="alert">{t('market.autoUpdateError', { error: item.error || '' })}</div>}
+    {item?.phase === 'error' && <div className="pvb-sub is-error" role="alert">{t('market.autoUpdateError', { error: item.error || '' })}</div>}
     {!!kept.length && <>
-      <div className="pv-head">{t('market.keptVersions')}</div>
-      {kept.map((k) => <div className="pv-ver" key={k.version} data-kept-version={k.version}>
+      <div className="pvb-head">{t('market.keptVersions')}</div>
+      {kept.map((k) => <div className="pvb-ver" key={k.version} data-kept-version={k.version}>
         <div>{v(k.version)}<small>{!k.compatible ? t('market.keptIncompatible') : k.keptAt ? t('market.keptAt', { date: formatDate(k.keptAt) }) : ''}</small></div>
         <button className="btn sm" disabled={busy || !k.compatible} data-plugin-rollback={k.version} onClick={() => void roll(k.version)}>
           {rolling === k.version ? <RefreshCw size={13} className="mk-spin" /> : <Undo2 size={13} />}{t(isNewer(k.version, installed) ? 'market.switchBack' : 'market.rollback')}
         </button>
       </div>)}
-      <p className="pv-hint">{t('market.rollbackHint')}{store ? ` ${t('market.rollbackHintStore')}` : ''}</p>
+      <p className="pvb-hint">{t('market.rollbackHint')}{store ? ` ${t('market.rollbackHintStore')}` : ''}</p>
     </>}
   </div>
 }
@@ -117,7 +117,7 @@ export function PluginVersionBlock({ id, item, installedVersion, kept, autoUpdat
 export function PinnedChip({ item }: { item?: MarketPluginUpdate }) {
   const { t } = useI18n()
   if (!item?.pinnedVersion) return null
-  return <span className="pv-tag is-accent" data-market-pinned={item.id}><Pin size={11} aria-hidden="true" />{t('market.pinnedChip', { version: v(item.pinnedVersion) })}</span>
+  return <span className="pvb-tag is-accent" data-market-pinned={item.id}><Pin size={11} aria-hidden="true" />{t('market.pinnedChip', { version: v(item.pinnedVersion) })}</span>
 }
 
 /** The global switch on the Updates page, next to "Check plugin updates". */
@@ -132,10 +132,10 @@ export function AutoUpdateAllRow({ state, onError, children }: { state: MarketPl
     catch (e) { onError(t('market.autoUpdateFailed', { error: ipcErrorText(e) })) }
     finally { setSaving(false); setChoice(null) }
   }
-  return <div className="pv-tools" data-market-auto-update-all>
-    <div className="pv-row">
+  return <div className="pvb-tools" data-market-auto-update-all>
+    <div className="pvb-row">
       <SettingsSwitch checked={choice ?? state.autoUpdateAll} disabled={saving} label={t('market.autoUpdateAll')} onChange={(on) => void change(on)} />
-      <div><span>{t('market.autoUpdateAll')}</span><span className="pv-sub">{t('market.autoUpdateAllHint')}</span></div>
+      <div><span>{t('market.autoUpdateAll')}</span><span className="pvb-sub">{t('market.autoUpdateAllHint')}</span></div>
     </div>
     {children}
   </div>
