@@ -1,6 +1,8 @@
 // 目录水滴的帧间隔(真 Electron + 真 GPU 合成,不是无头):展开 / 收起各 12 遍,和同窗口闲置时比。融球滤镜贵在合成,
 // 只有真窗口量得到;窗口被挡住或没聚焦时 rAF 会降频,所以先打印 visibilityState。用法:npm run build && node scripts/floating-toc-fps.probe.cjs
 const U = require('./lib/uiux-electron.cjs')
+const { tmpdir } = require('node:os')
+const { join } = require('node:path')
 const { sleep } = U
 
 const titles = ['同步冲突时按块合并的整体方案说明', '先比对块再比对整篇内容的理由', '离线编辑回到线上后的处理顺序']
@@ -32,7 +34,7 @@ const messages = Array.from({ length: 40 }, (_, i) => ({ id: `m${i}`, role: i % 
     console.log(JSON.stringify(out))
     await win.locator('.lcl-ftoc-hit').click()
     await sleep(210)
-    await win.screenshot({ path: process.env.FTOC_SHOT || '/tmp/ftoc-pour.png' })
+    await win.screenshot({ path: process.env.FTOC_SHOT || join(tmpdir(), 'ftoc-pour.png') })
   } finally {
     await close()
   }

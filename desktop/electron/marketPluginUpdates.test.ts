@@ -1,4 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { mkdtemp, mkdir, writeFile, readFile, rm, rename, symlink, lstat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -165,6 +167,46 @@ it('an applied update keeps the old version; rollback swaps it back, pins, and r
   await next.setAutoUpdateAll(true); await next.check(); expect(f.download).toHaveBeenCalledTimes(1) // the global switch does not unpin
   await next.setAutoUpdate('market-id', true); expect(next.snapshot().items[0].pinnedVersion).toBeUndefined()
   await next.check(); expect(f.download).toHaveBeenCalledTimes(2)
+})
+it.runIf(process.platform === 'win32')('a Windows directory lock defers rollback until startup and keeps the version pinned', async () => {
+  const f = await fixture('plugin')
+  await f.updater.setAutoUpdate(f.item.id, true)
+  await f.updater.check()
+  const installed = createMarketPluginUpdater(f.options)
+  await installed.init()
+  const entry = join(f.target, 'main.js')
+  expect(await readFile(entry, 'utf8')).toBe('new')
+
+  // Windows keeps a directory in use while a process has it as its working directory.
+  const holder = spawn(process.execPath, ['-e', 'process.stdin.resume(); console.log("ready")'], {
+    cwd: f.target, windowsHide: true,
+  })
+  const exited = once(holder, 'exit')
+  try {
+    await Promise.race([
+      once(holder.stdout, 'data'),
+      exited.then(() => { throw new Error('Directory lock process exited before it was ready') }),
+    ])
+    expect(await installed.exclusive(() => installed.rollback('plugin', f.item.installSlug, '1.0.0')))
+      .toMatchObject({ ok: true, deferred: true })
+    expect(await readFile(entry, 'utf8')).toBe('new')
+    const stillBusy = createMarketPluginUpdater(f.options)
+    await stillBusy.init()
+    expect(stillBusy.snapshot().items[0]).toMatchObject({
+      installedVersion: '1.1.0', pendingVersion: '1.0.0', pendingRollback: true, pinnedVersion: '1.0.0',
+    })
+  } finally {
+    holder.stdin.end()
+    await exited
+  }
+
+  const restarted = createMarketPluginUpdater(f.options)
+  await restarted.init()
+  await restarted.check()
+  expect(await readFile(entry, 'utf8')).toBe('old')
+  expect(restarted.snapshot().items[0]).toMatchObject({ installedVersion: '1.0.0', pinnedVersion: '1.0.0', autoUpdate: false })
+  expect(restarted.snapshot().items[0].pendingVersion).toBeUndefined()
+  expect(f.download).toHaveBeenCalledTimes(1)
 })
 it('pinning by installing an older version drops an update staged before it', async () => {
   const f = await catalogFixture(); await f.updater.check()

@@ -84,7 +84,10 @@ export function keyEvents(combo: string, platform: NodeJS.Platform = process.pla
 export function sandboxFilePath(p: string, base: { dir: string; root: string }, mustExist: boolean): string | null {
   if (!p || p.length > 4096) return null
   const abs = isAbsolute(p) ? resolve(p) : resolve(base.dir, p)
-  const real = (x: string): string | null => { try { return realpathSync(x) } catch { return null } }
+  // The Windows native resolver canonicalizes drive case and extended-length paths
+  // while still following junctions before the containment check.
+  const resolveReal = process.platform === 'win32' ? realpathSync.native : realpathSync
+  const real = (x: string): string | null => { try { return resolveReal(x) } catch { return null } }
   // 已经在的(哪怕是软链)一律按它真实指向核:save 到一个指出去的软链 = 写穿到沙箱外面(Codex 评审);只有还不存在的才按父目录核
   const there = (() => { try { lstatSync(abs); return true } catch { return false } })()
   const target = mustExist || there ? real(abs) : (() => { const d = real(dirname(abs)); return d && resolve(d, basename(abs)) })()

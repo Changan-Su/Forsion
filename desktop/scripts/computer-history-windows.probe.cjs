@@ -22,6 +22,18 @@ async function main() {
   assert.ok(fs.existsSync(source), 'Published ComputerUse package contains Windows recorder')
   assert.equal(execFileSync(source, ['recorder-protocol'], { encoding: 'utf8', windowsHide: true }).trim(), '13')
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'forsion-ch-win-'))
+  const events = path.join(home, 'computer-history', 'events')
+  const now = new Date()
+  const day = [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-')
+  const eventFile = path.join(events, `${day}.jsonl`)
+  const legacyTitle = 'Forsion legacy history fixture'
+  fs.mkdirSync(events, { recursive: true })
+  const fixtureApp = { name: 'Fixture', bundleId: 'fixture.exe' }
+  const legacy = [
+    { t: now.getTime(), kind: 'window', app: fixtureApp, title: legacyTitle },
+    { t: now.getTime(), kind: 'text', app: fixtureApp, text: 'Fixture input' },
+  ]
+  fs.writeFileSync(eventFile, legacy.map(row => JSON.stringify(row)).join('\n') + '\n')
   const recorderDir = path.join(home, 'local/tangu-computer-use/recorder')
   const recorderPids = () => JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-Command', `ConvertTo-Json -Compress -InputObject @(Get-Process | Where-Object { $_.Path -and $_.Path.StartsWith('${recorderDir.replace(/'/g, "''")}\\', [StringComparison]::OrdinalIgnoreCase) } | ForEach-Object { $_.Id })`], { encoding: 'utf8', windowsHide: true }))
   // Exclude every current window owner; this probe checks IPC/lifecycle, not personal desktop contents.
@@ -33,11 +45,21 @@ async function main() {
   const check = (name, ok) => { results.push({ name, ok: !!ok }); assert.ok(ok, name); console.log(`PASS ${name}`) }
   try {
     app = await electron.launch({ args: [`--user-data-dir=${path.join(home, 'userdata')}`, '--lang=zh-CN', ROOT], cwd: ROOT,
-      env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, LOCALAPPDATA: path.join(home, 'local'), USERDOMAIN: path.basename(home) } })
+      env: { ...process.env, TANGU_HOME: home, TANGU_BACKEND_URL: stub.url, LOCALAPPDATA: path.join(home, 'local'), USERDOMAIN: path.basename(home), TANGU_CH_TEST_KEY: '' } })
     const win = await app.firstWindow()
     check('Onboarding dismissed', await skipOnboarding(win))
     await win.waitForFunction(() => !document.getElementById('tangu-splash'), null, { timeout: 20000 })
     check('Windows default off', (await win.evaluate(() => window.tangu.computerHistory.get())).state.status === 'off')
+    check('Windows startup migrates the legacy history while recording is off', await until(() => {
+      const disk = fs.readFileSync(eventFile, 'utf8')
+      const rows = disk.trim().split('\n')
+      return rows.length === legacy.length && rows.every(row => row.startsWith('ch1.')) && !fs.readdirSync(events).some(f => f.endsWith('.tmp'))
+    }))
+    const userData = await app.evaluate(({ app }) => app.getPath('userData'))
+    const keyEntry = JSON.parse(fs.readFileSync(path.join(userData, 'device-secrets.json'), 'utf8')).entries.computerHistoryKey
+    check('The actual key is sealed by Windows DPAPI', keyEntry.enc === 'os' && keyEntry.backend === 'dpapi')
+    check('Timeline can still decrypt the migrated window title',
+      await win.evaluate(async title => (await window.tangu.computerHistory.recent(1)).some(x => x.title === title), legacyTitle))
     check('App Dock IPC gated', (await win.evaluate(() => window.tangu.appDockOpen())).error === 'unsupported_platform')
     await win.keyboard.press('Control+k')
     await win.locator('.cmd-input').waitFor()
