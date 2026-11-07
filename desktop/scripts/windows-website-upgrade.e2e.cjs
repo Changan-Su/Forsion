@@ -5,7 +5,7 @@ const os = require('node:os')
 const path = require('node:path')
 const { createHash } = require('node:crypto')
 const { execFileSync } = require('node:child_process')
-const { extractFile } = require('@electron/asar')
+const { extractFile, uncache } = require('@electron/asar')
 const electron = require('./lib/launch-electron.cjs')
 const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
@@ -228,7 +228,11 @@ async function main() {
     let lastSetupRead = 0
     const diagnose = () => {
       let version = null
-      try { version = JSON.parse(extractFile(asar, 'package.json').toString('utf8')).version } catch {}
+      try {
+        // The NSIS updater overwrites the archive at the same path.
+        uncache(asar)
+        version = JSON.parse(extractFile(asar, 'package.json').toString('utf8')).version
+      } catch { /* NSIS is still replacing the archive. */ }
       const activity = startupReceipt(newVersion)
       const readSetup = Date.now() - lastSetupRead >= 15000
       if (readSetup) lastSetupRead = Date.now()
@@ -246,8 +250,8 @@ async function main() {
         fs.writeFileSync(path.join(out, 'restart-diagnostics.json'), JSON.stringify(snapshots, null, 2))
         console.log('Restart state:', JSON.stringify(state))
       }
-      const relaunched = processes.find(p => !p.old && !p.installer && p.hasWindow)
-      return (child.exitCode !== null || child.signalCode !== null) && version === newVersion && activity && relaunched && { ...relaunched, version, activity }
+      const relaunched = processes.find(p => !p.old && !p.installer && p.hasWindow && p.updatedFlag)
+      return child.exitCode === 0 && !processes.some(p => p.installer) && version === newVersion && activity && relaunched && { ...relaunched, version, activity }
     }
     diagnose()
     await restart.click().catch(error => {
