@@ -181,7 +181,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     try {
       consent(); const config = await cloud.getFile(userId, slug, 'config.toml', { signal }); guard(); consent();
       if (!config || config.deleted || config.isBinary || !config.content) continue;
-      verifyBytes(config, Buffer.from(config.content));
+      verifyBytes(config, Buffer.from(config.content), contentPathOf(slug, 'config.toml'));
       const def = parseAgentConfig(slug, config.content, '');
       assertSyncPath(agentsDir(), dir); mkdirSync(agentsDir(), { recursive: true });
       agents.push(def); known.add(slug);
@@ -232,9 +232,12 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     }
   }
 }
-function verifyBytes(file: { hash?: string | null }, bytes: Buffer): void {
-  if (bytes.length > MAX_FILE_BYTES) throw new Error('cloud file exceeds sync limit');
-  if (file.hash != null && sha256(bytes) !== file.hash) throw new Error('cloud file hash mismatch');
+const mib = (n: number): string => (n / (1024 * 1024)).toFixed(1).replace(/\.0$/, '');
+/** where = 同步里的路径(contentPathOf:agents/<slug>/<文件>、human/<文件>),报错带上它:原来只说「超过上限」不说是哪个文件,
+ *  引擎日志里每轮一句、用户和后台都找不到是哪一份(11-07)。from = 这份字节从哪来:云端拉的 / 本机要推的 / 合并出来的。 */
+function verifyBytes(file: { hash?: string | null }, bytes: Buffer, where: string, from: 'cloud' | 'local' | 'merged' = 'cloud'): void {
+  if (bytes.length > MAX_FILE_BYTES) throw new Error(`${from} file exceeds sync limit (${mib(bytes.length)} MB > ${mib(MAX_FILE_BYTES)} MB): ${where}`);
+  if (file.hash != null && sha256(bytes) !== file.hash) throw new Error(`cloud file hash mismatch: ${where}`);
 }
 async function syncBucket(cloud: AgentFilesBrain, uid: string, slug: string, scope: string, cats: Set<Category>, manifest: AgentFileMeta[], families: { human: boolean; agentCalendar: boolean; widgetData: boolean }, signal: AbortSignal, guard: Guard, result: AgentFileSyncResult): Promise<void> {
   const dir = agentSyncDir(slug);
@@ -295,7 +298,7 @@ async function syncTombstones(cloud: AgentFilesBrain, uid: string, slug: string,
     let remote: MemoryTombstone[] = [];
     if (file && !file.deleted) {
       if (file.isBinary) throw new Error('invalid tombstone data');
-      verifyBytes(file, Buffer.from(file.content ?? ''));
+      verifyBytes(file, Buffer.from(file.content ?? ''), contentPathOf(slug, TOMBSTONES));
       const parsed = JSON.parse(file.content ?? '');
       if (parsed.schemaVersion !== 1 || !Array.isArray(parsed.tombstones)) throw new Error('invalid tombstone schema');
       remote = parsed.tombstones;
@@ -415,7 +418,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     guard(); const file = await cloud.getFile(uid, slug, p, { signal }); guard();
     if (!file || file.deleted) throw new Error(`cloud file changed during sync: ${p}`);
     const bytes = file.isBinary ? Buffer.from(file.contentBase64 ?? '', 'base64') : Buffer.from(file.content ?? '');
-    verifyBytes(file, bytes);
+    verifyBytes(file, bytes, contentPathOf(slug, p));
     return { file, bytes };
   };
   const pull = async (conflict: boolean, fetched?: { file: AgentFileContent; bytes: Buffer }): Promise<void> => {
@@ -448,7 +451,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     const merged = fetched.file.isBinary ? null : mergeAgentSyncContent(contentPathOf(slug, p), initial.toString('utf8'), base, fetched.bytes.toString('utf8'), MERGE_DEPS);
     if (!merged) { await pull(true, fetched); return; }
     let out = Buffer.from(merged.content);
-    verifyBytes({}, out);
+    verifyBytes({}, out, contentPathOf(slug, p), 'merged');
     const keepOld = unsure(); // 落了合并结果、影子还没落盘就崩:下次不拿旧原文合
     try {
       withMemoryDirectoryLock(dir, () => {
@@ -493,7 +496,7 @@ async function reconcileFile(cloud: AgentFilesBrain, uid: string, slug: string, 
     result.skipped++; return;
   }
   if (!initial) return;
-  verifyBytes({}, initial); guard(); assertUnchanged();
+  verifyBytes({}, initial, contentPathOf(slug, p), 'local'); guard(); assertUnchanged();
   const isBinary = !opts.text && !TEXT_EXTS.has(extname(p).toLowerCase());
   const keep = unsure(initial);
   try {
@@ -519,7 +522,7 @@ async function reconcileLog(cloud: AgentFilesBrain, uid: string, slug: string, d
     guard(); const file = await cloud.getFile(uid, slug, p, { signal }); guard();
     if (file?.isBinary) throw new Error('invalid binary log');
     const remoteContent = file && !file.deleted ? file.content ?? '' : '';
-    if (file && !file.deleted) verifyBytes(file, Buffer.from(remoteContent));
+    if (file && !file.deleted) verifyBytes(file, Buffer.from(remoteContent), contentPathOf(slug, p));
     const remote = splitLogBlocks(remoteContent);
     let content = '';
     withMemoryDirectoryLock(dir, () => {
@@ -534,7 +537,7 @@ async function reconcileLog(cloud: AgentFilesBrain, uid: string, slug: string, d
       } else if (remoteAdds) {
         content = logText(head.header || `# ${date}`, merged.merged);
         // 并集可能比两边任何一份都大:超限就既不落盘也不上传(传上去之后别的设备每次同步都会在这个文件上失败)
-        if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error(`merged log exceeds sync limit: ${p}`);
+        if (Buffer.byteLength(content) > MAX_FILE_BYTES) throw new Error(`merged log exceeds sync limit: ${contentPathOf(slug, p)}`);
         store.writeLog(date, content, snapshot.version); result.pulled++;
       } else content = snapshot.content;
     });

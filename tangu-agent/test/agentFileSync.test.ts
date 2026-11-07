@@ -313,6 +313,16 @@ describe('agentFileSync — size cap', () => {
     expect(r.skipped).toBeGreaterThan(0);
     expect(await cloud.getFile('u', 'tester', 'Library/big.bin')).toBeNull();
   });
+  it('names the file and its size when a cloud file is over the limit (it was just "cloud file exceeds sync limit")', async () => {
+    await saveAgent({ slug: 'tester', name: 'Tester', systemPrompt: 'x', cloudSync: true });
+    const cloud = fakeCloud(['tester']);
+    const big = 'x'.repeat(6 * 1024 * 1024);
+    await cloud.putFile('u', 'tester', 'Library/big.md', { content: big, isBinary: false, size: big.length, mtimeMs: Date.now() });
+    const r = await runAgentFilesSync(cloud, 'u');
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('cloud file exceeds sync limit (6 MB > 5 MB): agents/tester/Library/big.md');
+    expect(existsSync(join(tDir('tester'), 'Library', 'big.md'))).toBe(false);
+  });
 });
 
 describe('agentFileSync — deleting an agent from the app (10-28)', () => {
