@@ -64,12 +64,12 @@ export function safeShortcutName(name: string, fallbackName?: string): string {
   return cleanStem(name) || cleanStem(fallbackName ?? '') || FALLBACK
 }
 
-/** plist 里的 URL 文本。 */
-const xml = (value: string): string =>
+/** plist 里的文本(URL / 名字)。spaceShortcut 共用。 */
+export const xml = (value: string): string =>
   value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;')
 
 /** Desktop Entry 的 string 值转义(spec §Value types):反斜杠与换行。换行不转义 = 可注入新的 key 行。 */
-const desktopValue = (value: string): string =>
+export const desktopValue = (value: string): string =>
   value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/\r/g, '\\r')
 
 // Exec 的引号参数是**两层**转义:先按引号规则给 " ` $ \ 前置一个反斜杠,再按 string 值规则把反斜杠翻倍
@@ -77,7 +77,7 @@ const desktopValue = (value: string): string =>
 const EXEC_ESCAPE: Record<string, string> = {
   '"': '\\\\"', '`': '\\\\`', $: '\\\\$', '\\': '\\\\\\\\', '\n': '\\n', '\r': '\\r', '%': '%%',
 }
-const execArg = (value: string): string => `"${value.replace(/["`$\\\n\r%]/g, (c) => EXEC_ESCAPE[c])}"`
+export const execArg = (value: string): string => `"${value.replace(/["`$\\\n\r%]/g, (c) => EXEC_ESCAPE[c])}"`
 
 /** content 为 null = 该平台不是「写文件」而是由 writeShortcutLink 生成(Windows .lnk)。 */
 export interface ShortcutFile {
@@ -140,10 +140,10 @@ export interface CreateShortcutDeps {
   writeShortcutLink?: (path: string, options: { target: string; args: string; description?: string; icon?: string; iconIndex?: number }) => boolean
 }
 
-const detailOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
+export const detailOf = (error: unknown): string => (error instanceof Error ? error.message : String(error))
 
 /** 路径上已经有东西(含指向不存在目标的断链)就算被占。 */
-async function taken(target: string): Promise<boolean> {
+export async function taken(target: string): Promise<boolean> {
   try { await fs.lstat(target); return true }
   catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return false; throw e }
 }

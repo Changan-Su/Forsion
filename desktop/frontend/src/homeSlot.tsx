@@ -24,6 +24,7 @@ import { registerMessages, useI18n } from './i18n'
 registerMessages({
   'homeSlot.menuHead': { zh: '主位放哪个 Space', en: 'Space in the home slot' },
   'homeSlot.openInNewWindow': { zh: '在新窗口中打开', en: 'Open in new window' },
+  'homeSlot.addToDesktop': { zh: '添加到桌面', en: 'Add to desktop' },
 })
 
 export const HOME_SLOT_KEY = 'forsion_home_slot_space'
@@ -79,6 +80,9 @@ function HomeSlotButton({ space, expanded }: { space: SpaceDefinition; expanded:
           {/* 与条上别的 Space 图标同一项(宿主能开窗才有);主位槽自己接了右键,Ribbon 的通用菜单到不了这里。 */}
           {getDetachApi()?.openSpace && (
             <button onClick={() => { getDetachApi()?.openSpace?.(space.id); setMenu(null) }}>{t('homeSlot.openInNewWindow')}</button>
+          )}
+          {getDetachApi()?.addSpaceToDesktop && (
+            <button onClick={() => { getDetachApi()?.addSpaceToDesktop?.(space.id); setMenu(null) }}>{t('homeSlot.addToDesktop')}</button>
           )}
           <div className="ctx-head">{t('homeSlot.menuHead')}</div>
           {spaces.map((sp) => (

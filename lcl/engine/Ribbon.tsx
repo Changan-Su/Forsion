@@ -8,7 +8,7 @@
  *  - 左面板收起时,指针停在 Space 图标上 → 右侧浮出那个 Space 的左面板(SpacePeek),可直接操作;移开即收。 */
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, ChevronsLeft, ChevronsRight, CircleMinus, Folder as FolderIcon, FolderMinus, FolderOutput, FolderPlus, LayoutGrid, Pencil, Plus, Shapes, Zap } from 'lucide-react'
+import { AppWindow, ChevronsLeft, ChevronsRight, CircleMinus, Folder as FolderIcon, FolderMinus, FolderOutput, FolderPlus, LayoutGrid, MonitorDown, Pencil, Plus, Shapes, Zap } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useRibbonStore, useDotted, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
@@ -947,13 +947,15 @@ export function Ribbon() {
       ],
     })
   }
-  /** 图标自己的右键项(条上的格子、收纳夹浮层的行、中间的最近使用共用):Space 图标先给「在新窗口中打开」(宿主能开窗才有),
-   *  后面跟条目自带的(RibbonItem.menu,如用户 Space 的删除)。 */
+  /** 图标自己的右键项(条上的格子、收纳夹浮层的行、中间的最近使用共用):Space 图标先给「在新窗口中打开」「添加到桌面」
+   *  (宿主能开窗 / 能写桌面快捷方式才有),后面跟条目自带的(RibbonItem.menu,如用户 Space 的删除)。 */
   const itemMenu = (item: RibbonItem): MenuState['entries'] => {
     const sid = spaceIdOf(item.id)
     const open = getDetachApi()?.openSpace
+    const toDesktop = getDetachApi()?.addSpaceToDesktop
     return [
       ...(sid && open ? [{ label: t('lcl.ribbon.openInNewWindow'), icon: AppWindow, onClick: () => open(sid) }] : []),
+      ...(sid && toDesktop ? [{ label: t('lcl.ribbon.addToDesktop'), icon: MonitorDown, onClick: () => toDesktop(sid) }] : []),
       ...(item.menu?.() ?? []),
     ]
   }

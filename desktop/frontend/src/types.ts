@@ -931,6 +931,8 @@ declare global {
       detachedReady?(id: string): Promise<Array<{ type: string; params?: Record<string, unknown> }>>
       /** 开一个独立窗承载给定视图(右键「移到新窗口」/拖到空桌面);screen 坐标可选(拖出落点)。 */
       openDetached?(views: Array<{ type: string; params?: Record<string, unknown> }>, at?: { screenX: number; screenY: number }, opts?: { space?: string }): Promise<{ id: string }>
+      /** Space「添加到桌面」(仅桌面宿主):快捷方式双击后这个 Space 开在自己的独立窗口里,不露出主窗。 */
+      addSpaceToDesktop?(input: { id: string; name: string; fallbackName?: string; iconPng?: string }): Promise<{ ok: true; path: string } | { ok: false; code: string; detail?: string }>
       cursorScreenPoint?(): { screenX: number; screenY: number }
       /** 开/切换 mini 悬浮卡片。带 sessionId 时定向显示该正式会话,不另建临时会话。 */
       openMini?(opts?: import('../../shared/miniPanel').MiniOpenOptions): void

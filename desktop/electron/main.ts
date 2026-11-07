@@ -33,7 +33,7 @@ import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
 import { clearRecoveryNotice, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
-import { appendFileSync, existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { readSpaceIconDataUrl } from './spaceIcon'
@@ -138,6 +138,7 @@ import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMateria
 import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
 import { isForsionUrl, pushDeepLink, drainDeepLinks, filesFromArgv, pushOpenFile, drainOpenFiles } from './deepLink'
+import { createSpaceShortcut, isSpaceId, spaceAppUserModelId, spaceIconFile, spaceShortcutMetaFile, spaceWindowIdFromUrl, spaceWindowLink } from './spaceShortcut'
 
 /** ~/.tangu(与包内 core/tanguHome.ts 同约定;TANGU_HOME 可整体重定向)。 */
 setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔离(模块装载即定,先于一切路径解析)
@@ -159,8 +160,9 @@ const themesDir = (): string => join(tanguHomeDir(), 'themes')
 // 单实例锁:托盘常驻语义下,再次启动只唤起已开的窗口后立即退出(app.exit 同步,不再往下建二号窗)。
 if (!app.requestSingleInstanceLock()) app.exit(0)
 app.on('second-instance', (_e, argv, cwd) => {
-  showMainWindow()
-  for (const a of argv) if (isForsionUrl(a)) deliverDeepLink(a) // win/linux:二启的 forsion:// 在 argv 里
+  // Space 桌面快捷方式(win/linux 带着 forsion://space/<id>?window=standalone 二启):只开那个 Space 的窗,主窗不出来。
+  if (!argv.some((a) => spaceWindowIdFromUrl(a))) showMainWindow()
+  for (const a of argv) if (isForsionUrl(a) && !routeSpaceWindowLink(a)) deliverDeepLink(a) // win/linux:二启的 forsion:// 在 argv 里
   for (const f of filesFromArgv(argv.slice(1), cwd)) deliverOpenFile(f) // win/linux:已开着时双击文件
 })
 
@@ -170,6 +172,19 @@ app.on('second-instance', (_e, argv, cwd) => {
 if (app.isPackaged && !SANDBOX) app.setAsDefaultProtocolClient('forsion')
 /** 渲染层已 drain 过 → 之后直推;窗口 reload/重建把它翻回 false(Cmd+R 会换掉监听者,推进虚空)。 */
 let deepLinkReady = false
+// ── Space 桌面快捷方式:forsion://space/<id>?window=standalone 在主进程就截下,直接开那个 Space 的独立窗(spaceShortcut.ts)。
+// 不进 deep link 队列:那条路会 showMainWindow 并让主窗渲染层切 Space,用户要的恰恰是「不露出 Forsion 本体」。
+// 启动还没走到恢复独立窗那一步(IPC 没注册全、主窗还没建)之前先排着;冷启动因它而起时,主窗建好也不显示(hideMainOnLaunch)。
+const pendingSpaceWindows: string[] = []
+let spaceWindowsLive = false
+let hideMainOnLaunch = false
+function routeSpaceWindowLink(url: string): boolean {
+  const id = spaceWindowIdFromUrl(url)
+  if (!id) return false
+  if (!spaceWindowsLive) { if (!pendingSpaceWindows.includes(id)) pendingSpaceWindows.push(id) }
+  else createDetachedWindow({ space: id })
+  return true
+}
 function deliverDeepLink(url: string): void {
   pushDeepLink(url)
   if (!app.isReady()) return // 冷启动:窗口未建;whenReady 建窗后渲染层自会来 drain
@@ -180,9 +195,9 @@ function deliverDeepLink(url: string): void {
 }
 // mac:open-url 必须在 whenReady 之前挂上,冷启动经 Dock/浏览器唤起的 URL 才接得到。
 // 沙箱与用户那份同一个 bundle:系统可能把链接 / 文件投给沙箱,转回给用户那份
-app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) { if (SANDBOX) sandboxForward('url', url); else deliverDeepLink(url) } })
+app.on('open-url', (e, url) => { e.preventDefault(); if (isForsionUrl(url)) { if (SANDBOX) sandboxForward('url', url); else if (!routeSpaceWindowLink(url)) deliverDeepLink(url) } })
 // win/linux 首启:URL 直接躺在 process.argv(mac 走 open-url,不经 argv)。
-for (const a of process.argv.slice(1)) if (isForsionUrl(a)) pushDeepLink(a)
+for (const a of process.argv.slice(1)) if (isForsionUrl(a) && !routeSpaceWindowLink(a)) pushDeepLink(a)
 
 // ── 外部文件打开(文件关联见 electron-builder.config.cjs 的 fileAssociations)──────────────────
 // 渲染层落点:库外 → wsfile 临时标签页(预览 / .md 就地编辑写回,不导入笔记库);本地库内 → Amadeus 原生视图。
@@ -1805,6 +1820,8 @@ function createWindow(): void {
   sinkForHarness(mainWindow)
   mainWindow.once('ready-to-show', () => {
     telemetryStartup.firstFrame(process.uptime() * 1000) // 只认第一次(主窗被销毁重建时这里会再来)
+    // 由 Space 桌面快捷方式冷启动:主窗照建(托盘 / 引擎 / Dock 点开都靠它),只是先不显示;之后任何 showMainWindow 照常叫出来。
+    if (hideMainOnLaunch) { hideMainOnLaunch = false; return }
     if (mainWindow && !mainWindow.isDestroyed()) present(mainWindow)
   })
 
@@ -1985,6 +2002,7 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   })
   watchTabTitleBar(win)
   sinkForHarness(win)
+  if (space && process.platform === 'win32') applySpaceTaskbarIdentity(win, space)
   win.once('ready-to-show', () => {
     if (win.isDestroyed()) return
     if (process.platform === 'win32' && opts.bounds) {
@@ -2027,6 +2045,28 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   console.log('[win] detached open', id, space ? `space=${space}` : `views=${opts.views?.map((v) => v.type).join(',')}`)
   loadRendererWith(win, { window: 'detached', id, ui: 'desktop', ...(space ? { space } : {}) })
   return id
+}
+
+/** Space 快捷方式的图标 / 名字存放处(userData,随安装走;dev 是 -dev 那份)。 */
+const spaceShortcutDir = (): string => join(app.getPath('userData'), 'space-shortcuts')
+
+/** Windows:给加过桌面快捷方式的 Space 窗换上它自己的任务栏身份 —— 与 .lnk 同一个 AppUserModelID,任务栏上单独一格、
+ *  显示 Space 图标、固定到任务栏后点开还是这个 Space 窗。没加过快捷方式的 Space 窗照旧归在 Forsion 那一格里。 */
+function applySpaceTaskbarIdentity(win: BrowserWindow, space: string): void {
+  let name: unknown
+  try { name = JSON.parse(readFileSync(spaceShortcutMetaFile(spaceShortcutDir(), space), 'utf8'))?.name } catch { return }
+  if (typeof name !== 'string' || !name) return
+  const ico = spaceIconFile(spaceShortcutDir(), space, 'win32')
+  const hasIcon = !!ico && existsSync(ico)
+  try {
+    win.setAppDetails({
+      appId: spaceAppUserModelId(space),
+      relaunchCommand: `"${process.execPath}" "${spaceWindowLink(space)}"`,
+      relaunchDisplayName: name,
+      ...(hasIcon && ico ? { appIconPath: ico, appIconIndex: 0 } : {}),
+    })
+    if (hasIcon && ico) win.setIcon(ico)
+  } catch (e) { console.warn('[win] space taskbar identity failed:', e) }
 }
 
 async function restoreDetachedWindows(): Promise<void> {
@@ -4574,6 +4614,24 @@ app.whenReady().then(async () => {
     const bounds = at2 ? { x: Math.round(at2.screenX), y: Math.round(at2.screenY), width: space ? 1100 : 900, height: space ? 760 : 680 } : undefined
     return { id: createDetachedWindow(space ? { space, bounds } : { views: list, bounds }) }
   })
+  // Space「添加到桌面」(Ribbon 右键)。渲染层给:Space id、显示名、名字洗空时的本地化兜底名、画好的 1024px PNG 图标(可无)。
+  ipcMain.handle('spaces:addToDesktop', async (e, raw: unknown) => {
+    if (!isTrustedSender(e)) return { ok: false, code: 'error', detail: 'untrusted sender' }
+    const input = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+    if (!isSpaceId(input.id)) return { ok: false, code: 'not_found' }
+    const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
+    const iconUrl = text(input.iconPng, 8 * 1024 * 1024)
+    const src = iconUrl.startsWith('data:image/png;base64,') ? nativeImage.createFromDataURL(iconUrl) : null
+    const iconPng = src && !src.isEmpty()
+      ? (size: number): Buffer | undefined => src.resize({ width: size, height: size, quality: 'best' }).toPNG()
+      : undefined
+    return createSpaceShortcut({ id: input.id, name: text(input.name, 200) }, {
+      isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
+      appImage: process.env.APPIMAGE, fallbackName: text(input.fallbackName, 200),
+      iconDir: spaceShortcutDir(), iconPng,
+      writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
+    })
+  })
   ipcMain.on('window:openMini', (e, raw: unknown) => {
     if (!isTrustedSender(e)) return
     toggleMiniWindow(normalizeMiniOpenOptions(raw))
@@ -4877,9 +4935,15 @@ app.whenReady().then(async () => {
     app.on('browser-window-focus', (_e, w) => { if (w !== autoMiniWindow) lastFocusedWindow = w; miniAutoPanel?.refresh() })
   }
   startupWindowGate = false
+  hideMainOnLaunch = pendingSpaceWindows.length > 0
   createWindow()
   if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
-  void restoreDetachedWindows() // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局)
+  // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局);之后再开排着的 Space 快捷方式窗 —— 上次没关的同一扇
+  // 已经按原位置恢复了,createDetachedWindow 按 sp_<id> 去重,只是叫到前面。
+  void restoreDetachedWindows().catch((e) => console.error('[win] restore detached failed:', e)).finally(() => {
+    spaceWindowsLive = true
+    for (const id of pendingSpaceWindows.splice(0)) createDetachedWindow({ space: id })
+  })
   // 系统托盘 / mac 菜单栏图标:显示窗口 / 检查更新 / 退出。
   const ch = computerHistory
   if (!SANDBOX) createTray({
@@ -4943,7 +5007,7 @@ const pluginSandbox = SANDBOX ? null : createPluginSandbox({
     if (ev.event === 'report') { showMainWindow(); mainWindow?.webContents.send('pluginSandbox:report', ev) }
     else if (ev.event === 'install') void installFromSandbox().catch((e) => console.error('[plugin-sandbox] install failed:', e))
     else if (ev.event === 'reset') void pluginSandbox?.reset().catch((e) => console.error('[plugin-sandbox] reset failed:', e))
-    else if (ev.kind === 'url') { if (isForsionUrl(ev.value)) deliverDeepLink(ev.value) }
+    else if (ev.kind === 'url') { if (isForsionUrl(ev.value) && !routeSpaceWindowLink(ev.value)) deliverDeepLink(ev.value) }
     else deliverOpenFile(ev.value)
   },
   log: (m) => console.log(m),
