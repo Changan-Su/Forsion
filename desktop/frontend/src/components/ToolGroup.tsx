@@ -29,6 +29,7 @@ registerMessages({
   'tool.verb.gitStatus': { zh: '查看 Git 状况', en: 'Checked Git status' },
   'tool.verb.gitCommit': { zh: '提交', en: 'Committed' },
   'tool.verb.gitPush': { zh: '推送', en: 'Pushed' },
+  'tool.verb.gitPublish': { zh: '发布到 Forsion Git', en: 'Publish to Forsion Git' },
   'tool.verb.gitPull': { zh: '拉取', en: 'Pulled' },
   'tool.thought': { zh: '思考过程', en: 'Thought process' },
   'tool.thinkingNow': { zh: '思考中', en: 'Thinking' },
@@ -197,6 +198,8 @@ export function describeTool(ev: ToolEvent, pluginName?: (tool: string) => strin
       return { kind: 'run', verbKey: 'tool.verb.gitPush', target: typeof a.remote === 'string' ? a.remote : '', isFile: false }
     case 'git_pull':
       return { kind: 'run', verbKey: 'tool.verb.gitPull', target: '', isFile: false }
+    case 'git_publish':
+      return { kind: 'run', verbKey: 'tool.verb.gitPublish', target: typeof a.name === 'string' ? a.name : '', isFile: false }
     case COMPUTER_HISTORY_TOOL:
       return { kind: 'read', verbKey: 'tool.verb.readComputerHistory', target: String(a.query ?? a.app ?? ''), isFile: false }
     default:

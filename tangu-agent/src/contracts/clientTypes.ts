@@ -646,6 +646,49 @@ export interface GitSummary {
   trusted?: boolean
   /** 读工作区会跑仓库自带的过滤器且未信任 → 这次没读改动(changes 为空不代表干净)。 */
   changesUnread?: boolean
+  /** 子目录模式(11-07 多仓 Git):项目在一个更大的仓里时 = 项目在仓里的相对路径(posix)。改动只算这里,提交也只收这里;
+   *  分支 / 推送 / 拉取照整个仓。老引擎不带(那时 nested 就是只读)。nested 仍照旧给,老界面据此只读。 */
+  scope?: string
+  /** 仓根(canonical 绝对路径)。老引擎不带。 */
+  root?: string
+  /** 仓里没登记的内嵌仓(未跟踪、里面有 .git 的文件夹,相对仓根、以 / 结尾)。直接提交会被 embedded_repo 拒;
+   *  界面给三个出路(POST git/embedded)。老引擎不带。 */
+  embedded?: string[]
+  /** 还没有任何提交(新仓)。老引擎不带。 */
+  noCommits?: boolean
+}
+
+/**
+ * 这个项目碰得到的一个仓(11-07 多仓 Git,仓根 docs/ToBeImproved/多仓Git方案_2026-11-07,方案 C)。
+ * 引擎按会话的 project_path 往上找它所在的仓、往下扫(≤3 层,跳过 node_modules / 隐藏目录)、再加会话额外文件夹所在的仓;
+ * 清单只由引擎算,写动作带回 id,引擎在同一份清单里认 —— 客户端给不了任意路径。
+ */
+export interface ProjectRepoInfo {
+  /** 引擎认的编号:项目里的 = 仓根相对项目目录的 posix 路径('.' = 项目自己就是仓根,或项目所在的大仓);
+   *  额外文件夹里的 = 仓根的绝对路径。git 写动作 / 工具的 `repo` 参数带它。 */
+  id: string
+  /** 仓根文件夹名。 */
+  name: string
+  /** 显示用的位置:项目里的 = 相对项目目录(项目自己是 '.');额外文件夹的 = 家目录缩写成 ~ 的绝对路径。 */
+  label: string
+  /** 仓根(canonical 绝对路径)。 */
+  root: string
+  /** project = 项目自己 / 项目所在的大仓;inside = 项目文件夹里面的仓;extra = 会话额外文件夹所在的仓。 */
+  group: 'project' | 'inside' | 'extra'
+  /** 子目录模式:项目(或额外文件夹)在仓里的相对路径。 */
+  scope?: string
+  branch?: string
+  detached?: boolean
+  noCommits?: boolean
+  upstream?: string | null
+  ahead?: number
+  behind?: number
+  /** 未提交的改动数(子目录模式只算 scope 里的)。 */
+  changes?: number
+  /** 没经信任读不了改动(changes 不可信)。 */
+  changesUnread?: boolean
+  /** 推送去向所在的站;没有远端 = null。 */
+  remoteHost?: 'forsion' | 'github' | 'other' | null
 }
 
 /** 提交会署的名字和邮箱。source:git = git 配置里本来就有;custom = 「设置 → Git」里填的;forsion = 由 Forsion 账号推出来的;
@@ -661,6 +704,11 @@ export interface ProjectContext {
   plans: ProjectPlanInfo[]
   settings: ProjectSettings | null
   git: GitSummary
+  /** 这个项目碰得到的全部仓(项目自己的排第一;有改动 / 领先落后的在前;额外文件夹的一组排最后)。≥2 个时 Git 页先出清单。
+   *  老引擎不带 = 只有 git 那一个。 */
+  repos?: ProjectRepoInfo[]
+  /** 扫到的仓超过上限(20)时没列出来的个数。 */
+  reposMore?: number
   /** 项目记忆(只在这个项目里成立的事实,本项目的 agent 共用;存本机用户目录,不在项目文件夹里)。老引擎 / 远端来源不带。 */
   memory?: ProjectMemoryView
 }

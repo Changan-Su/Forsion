@@ -43,3 +43,5 @@
 .git-card-reviews { display: grid; gap: 4px; min-width: 0; }
 .git-card-reviews li > button { display: block; width: 100%; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .git-card-reviews li > button:hover, .git-card-reviews li > button:focus-visible { text-decoration: underline; outline: none; }
+/* 多仓 Git:卡标题后面小字写这个仓在哪(仓名在标题里) */
+.git-card-repo-sub { margin-left: 6px; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); font-weight: 400; overflow-wrap: anywhere; }

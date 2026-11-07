@@ -1,6 +1,6 @@
 import { MarketPluginCards, isMarketplaceTool } from '../../components/MarketPluginCards'
 import { PluginSandboxCard, isSandboxCardTool } from './PluginSandboxCard'
-import { GitToolCard, gitStatusSuperseded, isGitTool } from './GitToolCard'
+import { GitToolCard, gitRepoKey, gitStatusSuperseded, isGitTool, splitGitRuns } from './GitToolCard'
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
 import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
@@ -154,8 +154,10 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     const claim = cardOf?.(ev)
     if (claim) { flushTools(); parts.push({ t: 'pluginCard', event: ev, claim }); continue }
     if (isSandboxCardTool(ev)) { flushTools(); parts.push({ t: 'sandbox', event: ev }); continue }
-    // git_* 的工具行留着,连续几步 git 跑完后接一张 Git 卡(GitToolCard;下一个不是 git 调用时收口)
+    // git_* 的工具行留着,连续几步 git 跑完后接一张 Git 卡(GitToolCard;下一个不是 git 调用时收口)。
+    // 多仓 Git:换了仓(结果的 repoInfo / 参数 repo)先把上一个仓的卡收口,再接这一步的工具行 —— 卡跟在自己那几行后面
     if (isGitTool(ev)) {
+      if (ev.done && gitRun.length && gitRepoKey(gitRun[gitRun.length - 1]) !== gitRepoKey(ev)) { flushTools(); parts.push({ t: 'git', events: gitRun }); gitRun = [] }
       tools.push(ev)
       if (ev.done) gitRun.push(ev)
       if (gitRun.length && !(events[i + 1] && isGitTool(events[i + 1]))) { flushTools(); parts.push({ t: 'git', events: gitRun }); gitRun = [] }
@@ -931,7 +933,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
         })()}
         {(msg.toolEvents || []).filter(ev => isMarketplaceTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <MarketPluginCards key={`market-${ev.id}`} event={ev} />)}
         {(msg.toolEvents || []).filter(ev => isSandboxCardTool(ev) && !inlineToolIds.has(ev.id)).map(ev => <PluginSandboxCard key={`sandbox-${ev.id}`} event={ev} />)}
-        {(() => { const gitEvs = (msg.toolEvents || []).filter(ev => isGitTool(ev) && ev.done && !inlineToolIds.has(ev.id)); return gitEvs.length ? <GitToolCard key={`git-${gitEvs[0].id}`} events={gitEvs} sessionId={runSid} /> : null })()}
+        {(() => { const gitEvs = (msg.toolEvents || []).filter(ev => isGitTool(ev) && ev.done && !inlineToolIds.has(ev.id)); return gitEvs.length ? splitGitRuns(gitEvs).map((run) => <GitToolCard key={`git-${run[0].id}`} events={run} sessionId={runSid} />) : null })()}
         {trailingIntelligent.map(ev => <ChatIntelligentUi key={ev.id} event={ev} live={streaming} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} sessionId={runSid} />)}
         {!!trailingSketches.length && <SketchCards items={trailingSketches} actions={sketchActions} stateScope={runSid ? `${runSid}:${msg.id}` : undefined} onAsk={handlers?.onSuggest} />}
         {trailingCards.map(({ ev, claim }) => <PluginToolCard key={`ptc-${ev.id}`} event={ev} claim={claim} onQuote={handlers?.onQuote} fallback={<ToolGroup events={[ev]} />} />)}

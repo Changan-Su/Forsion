@@ -4,7 +4,7 @@
  * 左边按文件夹分组的文件表,右边逐个文件的 diff;每个文件「打开 / 撤销」,底下一句说明命令改的不在前两档里。
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ExternalLink, Terminal, Undo2 } from 'lucide-react'
+import { ExternalLink, Folder, FolderGit2, Terminal, Undo2 } from 'lucide-react'
 import type { ViewProps } from '@lcl/engine'
 import { registerMessages, useI18n } from '../../i18n'
 import { useApp } from '../../stores/appStore'
@@ -13,7 +13,7 @@ import { ChangeNums, FileDiff } from './FileDiff'
 import { FileTags, UndoConfirm, fileIcon, undoable, whyKey } from './ChangeReceipt'
 import {
   canUndoChanges, isProsePath, loadGitChanges, loadWindowDiffs, splitPath, totals, undoChanges, useChangeTrail,
-  type FileChange, type GitChangesInfo, type ReviewScope,
+  type FileChange, type GitChangesInfo, type GitChangesRepo, type ReviewScope,
 } from './changeTrail'
 import { openChangedFile } from './changeNav'
 import './ChangesCard' // 「改动 / 本轮 / 本会话 / 未提交」几个词条在那边登记
@@ -23,6 +23,8 @@ registerMessages({
   'changes.review.head.turn': { zh: '这一轮改了 {n} 个文件', en: 'This turn changed {n} file(s)' },
   'changes.review.head.session': { zh: '这个会话改了 {n} 个文件', en: 'This session changed {n} file(s)' },
   'changes.review.head.git': { zh: '{n} 个文件没提交', en: '{n} uncommitted file(s)' },
+  'changes.review.head.gitRepos': { zh: '{n} 个文件没提交 · {m} 个仓库', en: '{n} uncommitted files · {m} repositories' },
+  'changes.review.extra': { zh: '额外文件夹', en: 'Extra folder' },
   'changes.review.sessionNote': { zh: '几轮里改过同一个文件的，合成一份看；单看某一轮切到「本轮」，或点那条回复下面的回执', en: 'A file changed in several turns shows as one combined diff; to see a single turn, switch to “Turn” or open the receipt under that reply' },
   'changes.review.root': { zh: '工作目录', en: 'Working folder' },
   'changes.undo.session': { zh: '撤销本会话的改动', en: 'Undo this session’s changes' },
@@ -82,16 +84,37 @@ export function ChangesView({ params }: ViewProps) {
   }, [sid, scope, since, trailKey, rev])
 
   const files = data.kind === 'ok' && data.scope === scope && (scope === 'git' || data.since === since) ? data.files : []
-  const groups = useMemo(() => {
-    const m = new Map<string, Array<FileChange & { name: string }>>()
-    for (const f of files) {
-      const p = splitPath(f.path, cwd)
-      const arr = m.get(p.dir) ?? []
-      arr.push({ ...f, name: p.name })
-      m.set(p.dir, arr)
+  const git = data.kind === 'ok' ? data.git : undefined
+  // 多仓 Git(11-07):「未提交」跨好几个仓时先按仓分(文件按各仓 dir 的最长前缀归),仓里再按文件夹;只有一个仓照旧
+  const gitRepos = scope === 'git' && git?.repos && git.repos.length >= 2 ? git.repos : null
+  const sections = useMemo(() => {
+    const byDir = (fs: FileChange[], base?: string): Array<[string, Array<FileChange & { name: string }>]> => {
+      const m = new Map<string, Array<FileChange & { name: string }>>()
+      for (const f of fs) {
+        const p = splitPath(f.path, base)
+        const arr = m.get(p.dir) ?? []
+        arr.push({ ...f, name: p.name })
+        m.set(p.dir, arr)
+      }
+      return [...m.entries()].sort(([a], [b]) => a.localeCompare(b))
     }
-    return [...m.entries()].sort(([a], [b]) => a.localeCompare(b))
-  }, [files, cwd])
+    if (!gitRepos) return [{ repo: undefined as GitChangesRepo | undefined, dirs: byDir(files, cwd) }]
+    const norm = (p: string): string => p.replace(/\\/g, '/').replace(/\/+$/, '')
+    const longestFirst = [...gitRepos].sort((a, b) => norm(b.dir).length - norm(a.dir).length)
+    const buckets = new Map<string, FileChange[]>()
+    const rest: FileChange[] = []
+    for (const f of files) {
+      const p = norm(f.path)
+      const r = longestFirst.find((x) => { const d = norm(x.dir); return p === d || p.startsWith(`${d}/`) })
+      if (r) buckets.set(r.id, [...(buckets.get(r.id) ?? []), f])
+      else rest.push(f)
+    }
+    return [
+      ...gitRepos.filter((r) => buckets.has(r.id)).map((r) => ({ repo: r as GitChangesRepo | undefined, dirs: byDir(buckets.get(r.id)!, r.dir) })),
+      ...(rest.length ? [{ repo: undefined as GitChangesRepo | undefined, dirs: byDir(rest, cwd) }] : []),
+    ]
+  }, [files, cwd, gitRepos])
+  const repoCount = sections.filter((x) => x.repo).length
 
   // 滚到点名的文件(数据到了才滚得到)
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -105,7 +128,6 @@ export function ChangesView({ params }: ViewProps) {
   const canUndo = scope !== 'git' && since != null && canUndoChanges(sid)
   const undoAll = files.filter(undoable)
   const tot = totals(files)
-  const git = data.kind === 'ok' ? data.git : undefined
 
   const emptyText = data.kind === 'error' ? t('changes.loadFailed')
     : scope === 'git' && git && !git.available ? t(`changes.git.${git.reason || 'notrepo'}`)
@@ -115,7 +137,7 @@ export function ChangesView({ params }: ViewProps) {
     <div className="ct-review" data-change-review-page data-scope={scope}>
       <div className="ct-rv-bar">
         {/* 方案 C2:一句话标题(这一轮 / 这个会话改了几个文件)+ 合计在左,档位与整体撤销在右 */}
-        <span className="ttl">{files.length ? t(`changes.review.head.${scope}`, { n: files.length }) : t('changes.title')}</span>
+        <span className="ttl">{files.length ? (gitRepos && repoCount >= 2 ? t('changes.review.head.gitRepos', { n: files.length, m: repoCount }) : t(`changes.review.head.${scope}`, { n: files.length })) : t('changes.title')}</span>
         {files.length > 0 && <ChangeNums adds={tot.adds} dels={tot.dels} />}
         <span className="sp" />
         <span className="ct-seg" role="group" aria-label={t('changes.title')}>
@@ -140,20 +162,28 @@ export function ChangesView({ params }: ViewProps) {
         ) : (
           <div className="ct-rv-body" ref={bodyRef}>
             <nav className="ct-rv-list">
-              {groups.map(([dir, fs]) => (
-                <div key={dir}>
-                  <div className="ct-rv-grp" title={dir}>{dir || t('changes.review.root')}</div>
-                  {fs.map((f) => (
-                    <button key={f.path} type="button" className={`ct-rv-li${focus === f.path ? ' on' : ''}`} title={f.path} onClick={() => setFocus(f.path)}>
-                      {fileIcon(f, 13)}<span className="nm">{f.name}</span>{f.reverted ? <span className="ct-tag">{t('changes.tag.reverted')}</span> : <ChangeNums adds={f.adds} dels={f.dels} />}
-                    </button>
+              {sections.map(({ repo, dirs }) => (
+                <div key={repo?.id ?? '-'} className={repo ? 'ct-rv-reposec' : undefined} data-rv-repo={repo?.id}>
+                  {repo && <div className="ct-rv-repo" title={repo.root}>
+                    {repo.group === 'extra' ? <Folder size={13} /> : <FolderGit2 size={13} />}<span className="nm">{repo.name}</span>
+                    <small>{repo.group === 'extra' ? t('changes.review.extra') : repo.label}</small>
+                  </div>}
+                  {dirs.map(([dir, fs]) => (
+                    <div key={dir}>
+                      <div className="ct-rv-grp" title={dir}>{dir || (repo ? repo.name : t('changes.review.root'))}</div>
+                      {fs.map((f) => (
+                        <button key={f.path} type="button" className={`ct-rv-li${focus === f.path ? ' on' : ''}`} title={f.path} onClick={() => setFocus(f.path)}>
+                          {fileIcon(f, 13)}<span className="nm">{f.name}</span>{f.reverted ? <span className="ct-tag">{t('changes.tag.reverted')}</span> : <ChangeNums adds={f.adds} dels={f.dels} />}
+                        </button>
+                      ))}
+                    </div>
                   ))}
                 </div>
               ))}
               {scope === 'session' && <div className="ct-note ct-rv-listnote">{t('changes.review.sessionNote')}</div>}
             </nav>
             <div>
-              {groups.flatMap(([dir, fs]) => fs.map((f) => (
+              {sections.flatMap(({ repo, dirs }) => dirs.flatMap(([folder, fs]) => { const dir = repo ? (folder ? `${repo.name}/${folder}` : repo.name) : folder; return fs.map((f) => (
                 <section key={f.path} className="ct-rv-file" data-rv-file={f.path}>
                   <div className="ct-rv-fh">
                     {fileIcon(f)}<b>{f.name}</b>{dir && <span className="dir">{dir}</span>}<FileTags f={f} />
@@ -173,7 +203,7 @@ export function ChangesView({ params }: ViewProps) {
                     ? <FileDiff patch={f.patch} prose={isProsePath(f.path)} truncated={f.truncated} createdHead={f.kind === 'created' ? 7 : undefined} />
                     : <div className="ct-note">{t(whyKey(f))}</div>}
                 </section>
-              )))}
+              )) }))}
               <div className="ct-rv-cmd">
                 <Terminal size={14} className="ct-ic" />
                 <span>

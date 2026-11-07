@@ -25,6 +25,8 @@ import { runGit } from './runtimeContext.js';
 import { isRepoTrusted, repoConfigRisks } from './gitTrust.js';
 import { REMOTES_LISTED, describeRemote, pushRemoteOf, type GitRemoteInfo } from './gitRemotes.js';
 import { forsionGit } from './forsionGit.js';
+import { REPOS_LISTED, listProjectRepos, repoCwd, type ProjectRepo } from './gitRepos.js';
+import { cUnquote } from './gitChanges.js';
 import { AVATAR_EXT_MIME, AVATAR_MAX_BYTES } from '../agents/agentRegistry.js';
 import { normalizeApprovalMode } from './approvals.js';
 
@@ -90,6 +92,26 @@ export interface GitSummary {
   trusted?: boolean;
   /** 读工作区会跑仓库自带的过滤器且未信任 → 这次没读改动(changes 为空不代表干净)。 */
   changesUnread?: boolean;
+  /** 子目录模式:cwd 在仓里的相对路径(posix)。改动只算这里;nested 照旧给(老界面据此只读)。 */
+  scope?: string;
+  /** 仓根(realpath)。 */
+  root?: string;
+  /** 没登记的内嵌仓(未跟踪、里面有 .git 的文件夹,相对仓根、以 / 结尾)。 */
+  embedded?: string[];
+  /** 还没有任何提交。 */
+  noCommits?: boolean;
+}
+/** 清单里的一个仓 + 它的一行状态(与 contracts/clientTypes.ts 的 ProjectRepoInfo 同形)。 */
+export interface ProjectRepoInfo extends ProjectRepo {
+  branch?: string;
+  detached?: boolean;
+  noCommits?: boolean;
+  upstream?: string | null;
+  ahead?: number;
+  behind?: number;
+  changes?: number;
+  changesUnread?: boolean;
+  remoteHost?: 'forsion' | 'github' | 'other' | null;
 }
 export interface ProjectContext {
   cwd: string;
@@ -100,6 +122,10 @@ export interface ProjectContext {
   plans: ProjectPlanInfo[];
   settings: ProjectSettings | null;
   git: GitSummary;
+  /** 这个项目碰得到的全部仓(services/gitRepos.ts;排序见 projectRepoInfos)。 */
+  repos?: ProjectRepoInfo[];
+  /** 超过 REPOS_LISTED 没列出来的个数。 */
+  reposMore?: number;
 }
 
 /** 面板里能编辑的指令文件上限:引擎每轮只拼 32KB,再大也只是被截掉;256KB 之外连编辑器都不该装。 */
@@ -548,11 +574,15 @@ export async function gitSummary(cwd: string): Promise<GitSummary> {
   const risk = await repoConfigRisks(cwd).catch(() => null);
   const trusted = risk ? await isRepoTrusted(risk.commonDir) : false;
   const unread = !risk || (!!risk.read.length && !trusted);
-  const [branchR, topR, upstreamR, statusR, logR, remoteR, remotesR] = await Promise.all([
+  const topR = await g(['rev-parse', '--show-toplevel']);
+  const top = topR.code === 0 ? await fs.realpath(topR.stdout.trim()).catch(() => topR.stdout.trim()) : '';
+  const real = await fs.realpath(cwd).catch(() => cwd);
+  // 子目录模式:项目在大仓里时改动只算项目这块(`-- .` 是相对 cwd 的 pathspec;porcelain 的路径照旧相对仓根)
+  const scope = top && top !== real ? path.relative(top, real).split(path.sep).join('/') : '';
+  const [branchR, upstreamR, statusR, logR, remoteR, remotesR] = await Promise.all([
     g(['rev-parse', '--abbrev-ref', 'HEAD']),
-    g(['rev-parse', '--show-toplevel']),
     g(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']),
-    unread ? Promise.resolve({ code: 1, stdout: '', stderr: '' }) : g(['status', '--porcelain', '--untracked-files=normal']),
+    unread ? Promise.resolve({ code: 1, stdout: '', stderr: '' }) : g(['status', '--porcelain', '--untracked-files=normal', ...(scope ? ['--', '.'] : [])]),
     g(['log', `-${GIT_COMMITS_SHOWN}`, '--format=%h%x1f%H%x1f%ct%x1f%s']),
     g(['remote', 'get-url', 'origin']),
     g(['remote']),
@@ -563,11 +593,11 @@ export async function gitSummary(cwd: string): Promise<GitSummary> {
         return { short, sha, at: Number(ct) * 1000, subject: rest.join('\x1f').trim() };
       }).filter((c) => c.sha && Number.isFinite(c.at))
     : [];
-  const rawBranch = branchR.code === 0 ? branchR.stdout.trim() : '';
+  // 还没有提交的新仓:rev-parse --abbrev-ref HEAD 会失败,分支名从 symbolic-ref 读
+  const unborn = branchR.code !== 0 ? await g(['symbolic-ref', '--short', '-q', 'HEAD']) : null;
+  const rawBranch = branchR.code === 0 ? branchR.stdout.trim() : unborn?.code === 0 ? unborn.stdout.trim() : '';
   const detached = rawBranch === 'HEAD';
   const branch = detached ? (commits[0]?.short || 'HEAD') : rawBranch;
-  const top = topR.code === 0 ? await fs.realpath(topR.stdout.trim()).catch(() => topR.stdout.trim()) : '';
-  const real = await fs.realpath(cwd).catch(() => cwd);
   const upstream = upstreamR.code === 0 ? upstreamR.stdout.trim() : null;
   let ahead = 0;
   let behind = 0;
@@ -605,8 +635,18 @@ export async function gitSummary(cwd: string): Promise<GitSummary> {
     if (c.code[0] !== ' ') staged++;
     if (c.code[1] !== ' ') unstaged++;
   }
+  // 没登记的内嵌仓:未跟踪的文件夹里有 .git(直接提交会被 embedded_repo 拒,界面给三个出路)
+  const embedded: string[] = [];
+  for (const c of changes) {
+    if (c.code !== '??' || embedded.length >= 10) continue;
+    // 带空格 / 引号的名字 git 会加 C 风格引号(`?? "My Repo/"`):先解开(Codex 评审)
+    const p = c.path.startsWith('"') ? cUnquote(c.path, 0)?.value ?? '' : c.path;
+    if (!p.endsWith('/')) continue;
+    if (await fs.lstat(path.join(top || real, p, '.git')).then(() => true, () => false)) embedded.push(p);
+  }
   return {
-    available: true, repo: true, nested: !!top && top !== real, branch, detached, upstream, ahead, behind,
+    available: true, repo: true, nested: !!scope, branch, detached, upstream, ahead, behind,
+    ...(scope ? { scope } : {}), ...(top ? { root: top } : {}), ...(embedded.length ? { embedded } : {}), ...(!commits.length && unborn ? { noCommits: true } : {}),
     staged, unstaged, untracked, changes: changes.slice(0, GIT_CHANGES_SHOWN), changesTotal: changes.length, commits,
     remote: remoteR.code === 0 ? maskRemoteUrl(remoteR.stdout) : null,
     remotes: names.length, remoteList, pushRemote: pushRemoteOf(names, upstreamRemote),
@@ -621,16 +661,54 @@ async function projectSkills(cwd: string): Promise<ProjectSkillInfo[]> {
   return found.map(({ skill, dir, legacy }) => ({ id: skill.id, name: skill.name, description: skill.description || '', path: dir, legacy }));
 }
 
-/** 面板一次拉全:各段并行,任何一段失败都不拖垮其余(git 缺席就是 available:false,技能读不了就是空表)。 */
-export async function projectContext(cwd: string): Promise<ProjectContext> {
+/** 一个仓的一行状态(清单用)。读不到的项留空,不让一个坏仓拖垮整张清单。 */
+export async function repoInfo(r: ProjectRepo): Promise<ProjectRepoInfo> {
+  const s = await gitSummary(repoCwd(r)).catch((): GitSummary => ({ available: true, repo: false }));
+  if (!s.repo) return { ...r };
+  const push = s.pushRemote ? s.remoteList?.find((x) => x.name === s.pushRemote) : undefined;
+  return {
+    ...r, branch: s.branch, ...(s.detached ? { detached: true } : {}), ...(s.noCommits ? { noCommits: true } : {}),
+    upstream: s.upstream ?? null, ahead: s.ahead ?? 0, behind: s.behind ?? 0,
+    changes: s.changesTotal ?? s.changes?.length ?? 0, ...(s.changesUnread ? { changesUnread: true } : {}),
+    remoteHost: push ? push.host : s.remoteList?.length ? 'other' : null,
+  };
+}
+
+/** 清单排序:项目自己的第一;然后有改动 / 领先落后的;然后干净的;额外文件夹的一组排最后。组内按名字。 */
+export function sortRepoInfos(list: ProjectRepoInfo[]): ProjectRepoInfo[] {
+  const rank = (r: ProjectRepoInfo): number => (r.group === 'project' ? 0 : r.group === 'inside' ? 1 : 2);
+  const busy = (r: ProjectRepoInfo): number => ((r.changes ?? 0) > 0 || (r.ahead ?? 0) > 0 || (r.behind ?? 0) > 0 || r.changesUnread ? 0 : 1);
+  return [...list].sort((a, b) => rank(a) - rank(b) || busy(a) - busy(b) || a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+}
+
+/** 带状态的清单(并发 4 个仓读)。超过 REPOS_LISTED 的只回个数。 */
+export async function projectRepoInfos(projectDir: string, extraRoots: readonly string[] = []): Promise<{ repos: ProjectRepoInfo[]; more: number }> {
+  const all = await listProjectRepos(projectDir, extraRoots);
+  // 先粗排(project → inside → extra),只给前 REPOS_LISTED 个读状态;额外文件夹的仓数不多,一般都在
+  const pool = [...all.filter((r) => r.group !== 'extra').slice(0, REPOS_LISTED), ...all.filter((r) => r.group === 'extra')].slice(0, REPOS_LISTED);
+  const infos: ProjectRepoInfo[] = new Array(pool.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, pool.length) }, async () => {
+    while (next < pool.length) { const i = next++; infos[i] = await repoInfo(pool[i]); }
+  }));
+  return { repos: sortRepoInfos(infos), more: Math.max(0, all.length - pool.length) };
+}
+
+/** 面板一次拉全:各段并行,任何一段失败都不拖垮其余(git 缺席就是 available:false,技能读不了就是空表)。
+ *  opts.extraRoots = 会话的额外文件夹(只用来找仓;不给 = 只看项目自己和它里面的)。repos:false = 不扫仓库清单(工具 / 审批说明用)。 */
+export async function projectContext(cwd: string, opts: { extraRoots?: readonly string[]; repos?: boolean } = {}): Promise<ProjectContext> {
   const canonical = await canonicalProjectPath(cwd);
-  const [doc, skills, plans, settings, git] = await Promise.all([
+  const [doc, skills, plans, settings, git, repos] = await Promise.all([
     docInfo(canonical),
     projectSkills(canonical),
     listProjectPlans(canonical).catch(() => []),
     readProjectSettings(canonical).catch(() => null),
     gitSummary(canonical).catch((): GitSummary => ({ available: false, repo: false })),
+    opts.repos === false ? Promise.resolve(null) : projectRepoInfos(canonical, opts.extraRoots ?? []).catch(() => null),
   ]);
   if (git.repo && git.remote) void rememberProjectRemote(canonical, git.remote).catch(() => {});
-  return { cwd: canonical, workspaceDir: path.join(canonical, WORKSPACE_DIR_NAME), workspaceDirName: WORKSPACE_DIR_NAME, doc, skills, plans, settings, git };
+  return {
+    cwd: canonical, workspaceDir: path.join(canonical, WORKSPACE_DIR_NAME), workspaceDirName: WORKSPACE_DIR_NAME, doc, skills, plans, settings, git,
+    ...(repos ? { repos: repos.repos, ...(repos.more ? { reposMore: repos.more } : {}) } : {}),
+  };
 }

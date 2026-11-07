@@ -15,7 +15,11 @@
  *          (图标只经这组端点改;PUT settings 保留 icon 现值)
  *   GET    /agent/project-context/icon?sessionId=|cwd=                                    → 图标图片二进制(settings.icon 是 emoji / 空 → 404)
  *   DELETE /agent/project-context/icon?sessionId=                                         → 移除图标(emoji 或图片),返回 { settings }
- *   POST   /agent/project-context/git/{init,trust,commit,branch,push,pull}  { sessionId, message?, name?, trust? } → 写动作 + 新的 context
+ *   POST   /agent/project-context/git/{init,trust,commit,branch,push,pull}  { sessionId, repo?, message?, name?, trust? } → 写动作 + 新的 context
+ *          (11-07 多仓 Git:repo = context.repos 里的 id,在那个仓根上做,回 repoGit = 那个仓的新现场;不给 = 项目自己的仓 / 项目所在的大仓
+ *          —— 后者是子目录模式,提交只收项目这块。init 只对项目自己。repo 认不出 → 400 unknown_repo)
+ *   GET    /agent/project-context/git/repo?sessionId=&repo=               → { repo: ProjectRepoInfo, git: GitSummary }(清单里一个仓的现场)
+ *   POST   /agent/project-context/git/embedded { sessionId, repo?, path, how: exclude|ignore|submodule, trust? } → 内嵌仓的三个出路
  *          (push / pull 的远端有凭据提供方认领时带凭据,见 services/gitCredentials.ts;pull = fetch + 只快进)
  *   GET    /agent/project-context/git/hosting?sessionId=              → { forsionGit: { webUrl, name } | null(这里能不能「发布到 Forsion Git」),
  *                                                                       github: { linked, login?, remote, name } | null(云端开了 GitHub 绑定时:当前用户绑没绑;
@@ -45,13 +49,14 @@ import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
 import { query } from '../core/db.js';
 import {
-  canonicalProjectPath, createProjectSkill, deleteProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
+  canonicalProjectPath, createProjectSkill, deleteProjectSkill, deleteProjectIcon, gitSummary, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings, repoInfo,
   saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
 import { editProjectMemory, forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { RelinkError, missingProjectPaths, relinkInfo, relinkProject } from '../services/projectRelink.js';
-import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitConnectRemote, gitPull, gitPush, gitSetPushRemote, gitTrustRepo, readGit, serialized } from '../services/gitActions.js';
+import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitEmbedded, gitInit, gitPending, gitConnectRemote, gitPull, gitPush, gitSetPushRemote, gitTrustRepo, readGit, serialized } from '../services/gitActions.js';
+import { extraRootsOf, invalidateRepos, repoCwd, resolveRepo, type ProjectRepo } from '../services/gitRepos.js';
 import { DEFAULT_GIT_SETTINGS, gitSettings, updateGitSettings } from '../services/gitSettings.js';
 import { forsionPublishInfo, publishToForsionGit } from '../services/forsionGitPublish.js';
 import { GITHUB_ORIGIN, githubLinkInfo } from '../services/githubGit.js';
@@ -80,6 +85,31 @@ async function projectDirOf(req: AuthRequest, res: Response, sessionId: unknown)
 }
 
 const fail = (res: Response, e: any, fallback: string): void => { res.status(400).json({ detail: e?.message || fallback }); };
+
+/** 会话的额外文件夹(找仓库用;11-07 多仓 Git)。远端设备来的请求不认:同 agentLoop「远程污点 run 没有额外可写根」。 */
+async function extraRootsFor(req: AuthRequest, sessionId: unknown): Promise<string[]> {
+  if (parseRemoteOrigin(req.headers) || typeof sessionId !== 'string' || !sessionId) return [];
+  const rows = await query<any[]>('SELECT user_id, agent_config FROM chat_sessions WHERE id = ? LIMIT 1', [sessionId]).catch(() => []);
+  const s = rows[0];
+  if (!s || s.user_id !== req.user!.userId) return [];
+  let cfg: unknown = s.agent_config;
+  if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg); } catch { cfg = null; } }
+  return extraRootsOf(cfg);
+}
+
+/** 面板要的整份上下文:项目自己的 + 仓库清单(带会话的额外文件夹)。 */
+async function fullContext(req: AuthRequest, cwd: string, sessionId: unknown) {
+  return projectContext(cwd, { extraRoots: await extraRootsFor(req, sessionId) });
+}
+
+/** 请求里的 repo(清单 id)→ 那个仓。不给 = 项目自己的(项目不在仓里 → null,动作照旧在项目目录上报 not_repo)。
+ *  给了却认不出 → 400 unknown_repo(已回复,返回 undefined)。 */
+async function repoFor(req: AuthRequest, res: Response, cwd: string, sessionId: unknown, repo: unknown): Promise<ProjectRepo | null | undefined> {
+  const given = typeof repo === 'string' && repo.trim() && repo.trim() !== '.';
+  const found = await resolveRepo(cwd, given ? await extraRootsFor(req, sessionId) : [], given ? repo : undefined);
+  if (given && !found) { res.status(400).json({ detail: 'This repository is not part of the project', error: 'unknown_repo' }); return undefined; }
+  return found;
+}
 /** 项目记忆的失败:404 = 那一条已经不在了,409 = 别处刚改过(都让界面重载);error 是机器码(桌面 request() 从它取 code)。 */
 const memoryFail = (res: Response, e: any, fallback: string): void => {
   res.status(e?.code === 'MEMORY_NOT_FOUND' ? 404 : e?.code === 'MEMORY_VERSION_CONFLICT' || e?.code === 'MEMORY_BUSY' ? 409 : 400).json({ detail: e?.message || fallback, code: e?.code, error: e?.code });
@@ -139,7 +169,7 @@ router.get('/agent/project-context', authMiddleware, async (req: AuthRequest, re
     if (!cwd) return;
     // 项目记忆(10-04):同协作说明的口径,远端设备来的请求不给看、也不给改(见下面的 DELETE)。
     const memory = parseRemoteOrigin(req.headers) ? undefined : await projectMemoryView(cwd).catch(() => undefined);
-    res.json({ ...(await projectContext(cwd)), ...(memory ? { memory } : {}) });
+    res.json({ ...(await fullContext(req, cwd, req.query.sessionId)), ...(memory ? { memory } : {}) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'project context failed' });
   }
@@ -315,14 +345,25 @@ function gitFail(res: Response, e: any, fallback: string): void {
 
 /** 写动作:同一目录排队;做完连同新的项目上下文一起回,面板一次刷新。上下文在队列里读(不混进下一个动作的状态);
  *  读失败回 context:null —— 动作已经做完,不许报成失败(用户会重试 → 重复提交 / 再跑一遍钩子),桌面见 null 自己重读。 */
-function gitWrite(label: string, action: (cwd: string, body: any, req: AuthRequest) => Promise<object>) {
+function gitWrite(label: string, action: (cwd: string, body: any, req: AuthRequest, scope: string | undefined) => Promise<object>, opts: { projectOnly?: boolean } = {}) {
   return async (req: AuthRequest, res: Response): Promise<void> => {
     try {
-      const cwd = await projectDirOf(req, res, req.body?.sessionId);
-      if (!cwd) return;
+      const project = await projectDirOf(req, res, req.body?.sessionId);
+      if (!project) return;
+      // 11-07 多仓 Git:body.repo = 仓库清单里的 id → 在那个仓根上做(子目录模式另带 scope);不给 = 项目自己的那个
+      // (项目不在任何仓里时照旧是项目目录,init 就在这里建)。建仓只对项目自己。
+      const given = !opts.projectOnly && typeof req.body?.repo === 'string' && req.body.repo.trim() && req.body.repo.trim() !== '.';
+      const repo = opts.projectOnly ? null : await repoFor(req, res, project, req.body?.sessionId, req.body?.repo);
+      if (repo === undefined) return;
+      const cwd = repo ? repo.root : project;
       res.json(await serialized(cwd, async () => {
-        const result = await action(cwd, req.body || {}, req);
-        return { ...result, context: await projectContext(cwd).catch(() => null) };
+        const result = await action(cwd, req.body || {}, req, repo?.scope);
+        invalidateRepos(project);
+        const [context, repoGit] = await Promise.all([
+          fullContext(req, project, req.body?.sessionId).catch(() => null),
+          given && repo ? gitSummary(repoCwd(repo)).catch(() => null) : Promise.resolve(undefined),
+        ]);
+        return { ...result, context, ...(repoGit !== undefined ? { repoGit } : {}) };
       }));
     } catch (e: any) {
       gitFail(res, e, `git ${label} failed`);
@@ -331,14 +372,14 @@ function gitWrite(label: string, action: (cwd: string, body: any, req: AuthReque
 }
 const trusted = (body: any): boolean => body?.trust === true;
 // 路径一律写字面量:desktop/scripts/gen-engine-routes.mjs 静态抽出全部路由给远程访问分类表,模板串抽不出来
-router.post('/agent/project-context/git/init', authMiddleware, gitWrite('init', (cwd) => gitInit(cwd)));
+router.post('/agent/project-context/git/init', authMiddleware, gitWrite('init', (cwd) => gitInit(cwd), { projectOnly: true }));
 router.post('/agent/project-context/git/trust', authMiddleware, gitWrite('trust', (cwd) => gitTrustRepo(cwd)));
 // 面板提交必须带上它刚给用户看过的清单指纹:没有清单 = 用户没过目,不许提交
-router.post('/agent/project-context/git/commit', authMiddleware, gitWrite('commit', async (cwd, body, req) => {
+router.post('/agent/project-context/git/commit', authMiddleware, gitWrite('commit', async (cwd, body, req, scope) => {
   if (typeof body.expect !== 'string' || !body.expect) throw new GitActionError('changes_changed', 'Review the list of changes before committing');
   // 这台电脑的 git 没配名字 / 邮箱时,缺的那一样由「设置 → Git」或 Forsion 账号补上(只进这一次提交的子进程)
   const who = await resolveGitIdentity(() => identityDefaults(req.user!.userId), cwd);
-  return { commit: await gitCommit(cwd, body.message, trusted(body), body.expect, who.env) };
+  return { commit: await gitCommit(cwd, body.message, trusted(body), body.expect, who.env, scope) };
 }));
 router.post('/agent/project-context/git/branch', authMiddleware, gitWrite('branch', (cwd, body) => gitCreateBranch(cwd, body.name, trusted(body))));
 // remote = 「只推送这一次」:推到这个远端的同名分支,不动推送去向;不给 = 推到去向(上游 → origin → 唯一那个)
@@ -352,12 +393,32 @@ router.post('/agent/project-context/git/pull', authMiddleware, gitWrite('pull', 
 router.post('/agent/project-context/git/publish', authMiddleware, gitWrite('publish', async (cwd, body) => ({ publish: await publishToForsionGit(cwd, body.name, trusted(body), body.target !== false) })));
 router.post('/agent/project-context/git/publish-github', authMiddleware, gitWrite('publish-github', async (cwd, body) => ({ publish: await publishToGithub(cwd, body.name, trusted(body), {}, body.target !== false) })));
 router.post('/agent/project-context/git/remote', authMiddleware, gitWrite('remote', async (cwd, body) => ({ remote: await gitConnectRemote(cwd, body.url, trusted(body), body.target !== false) })));
+// 内嵌仓的三个出路(11-07):how = exclude(单独管理,只在这台电脑上不收)| ignore(写进 .gitignore)| submodule(登记成子模块)
+router.post('/agent/project-context/git/embedded', authMiddleware, gitWrite('embedded', async (cwd, body) => ({ embedded: await gitEmbedded(cwd, body.path, body.how, trusted(body)) })));
+
+/** 清单里一个仓的现场(Git 页点进那个仓;对话卡读它的现状)。repo 认不出 → 400 unknown_repo。 */
+router.get('/agent/project-context/git/repo', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const project = await projectDirOf(req, res, req.query.sessionId);
+    if (!project) return;
+    const repo = await repoFor(req, res, project, req.query.sessionId, req.query.repo);
+    if (repo === undefined) return;
+    if (!repo) return res.status(400).json({ detail: 'This project is not in a git repository', error: 'not_repo' });
+    const [info, git] = await Promise.all([repoInfo(repo), gitSummary(repoCwd(repo))]);
+    res.json({ repo: info, git });
+  } catch (e: any) {
+    gitFail(res, e, 'read repository failed');
+  }
+});
 
 /** 这里能不能「发布到 Forsion Git」(登录了 Forsion、云端有 Forsion Git 且发凭据),以及当前用户绑没绑 GitHub。只读状态,不取凭据;读不到就是 null。 */
 router.get('/agent/project-context/git/hosting', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const cwd = await projectDirOf(req, res, req.query.sessionId);
-    if (!cwd) return;
+    const project = await projectDirOf(req, res, req.query.sessionId);
+    if (!project) return;
+    const repo = await repoFor(req, res, project, req.query.sessionId, req.query.repo);
+    if (repo === undefined) return;
+    const cwd = repo ? repo.root : project;
     const [forsionGit, github, origin] = await Promise.all([
       forsionPublishInfo(cwd).catch(() => null), githubLinkInfo().catch(() => null),
       readGit(cwd, ['remote', 'get-url', 'origin'], { timeoutMs: 5000 }).catch(() => null),
@@ -381,10 +442,13 @@ router.get('/agent/project-context/git/reviews', authMiddleware, async (req: Aut
 /** 待提交清单(提交框完整列出;有已暂存的只列已暂存的)。只读,不排队。 */
 router.post('/agent/project-context/git/pending', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const cwd = await projectDirOf(req, res, req.body?.sessionId);
-    if (!cwd) return;
+    const project = await projectDirOf(req, res, req.body?.sessionId);
+    if (!project) return;
+    const repo = await repoFor(req, res, project, req.body?.sessionId, req.body?.repo);
+    if (repo === undefined) return;
+    const cwd = repo ? repo.root : project;
     // identity = 这次提交会署的名字和邮箱(提交框里给用户过目);凑不齐是 null,提交时 git 会报 no_identity
-    const [pending, who] = await Promise.all([gitPending(cwd, trusted(req.body)), resolveGitIdentity(() => identityDefaults(req.user!.userId), cwd).catch(() => null)]);
+    const [pending, who] = await Promise.all([gitPending(cwd, trusted(req.body), repo?.scope), resolveGitIdentity(() => identityDefaults(req.user!.userId), cwd).catch(() => null)]);
     res.json({ ...pending, identity: who?.identity ?? null });
   } catch (e: any) {
     gitFail(res, e, 'list pending changes failed');
@@ -394,10 +458,13 @@ router.post('/agent/project-context/git/pending', authMiddleware, async (req: Au
 /** 用会话自己的模型写一条提交信息(只读,不排队;计费在 generateCommitMessage 里)。 */
 router.post('/agent/project-context/git/message', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const cwd = await projectDirOf(req, res, req.body?.sessionId);
-    if (!cwd) return;
+    const project = await projectDirOf(req, res, req.body?.sessionId);
+    if (!project) return;
+    const repo = await repoFor(req, res, project, req.body?.sessionId, req.body?.repo);
+    if (repo === undefined) return;
+    const cwd = repo ? repo.root : project;
     const rows = await query<any[]>('SELECT model_id, app_id FROM chat_sessions WHERE id = ? LIMIT 1', [req.body.sessionId]);
-    const message = await generateCommitMessage(cwd, { userId: req.user!.userId, modelId: rows[0]?.model_id ?? null, appId: rows[0]?.app_id || 'tangu', trust: trusted(req.body) });
+    const message = await generateCommitMessage(cwd, { userId: req.user!.userId, modelId: rows[0]?.model_id ?? null, appId: rows[0]?.app_id || 'tangu', trust: trusted(req.body), scope: repo?.scope });
     res.json({ message });
   } catch (e: any) {
     gitFail(res, e, 'generate commit message failed');

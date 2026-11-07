@@ -142,3 +142,23 @@
 .project-skill-row:hover .project-skill-del, .project-skill-del:focus-visible { opacity: 1; }
 .project-skill-del:hover { background: var(--overlay-medium); color: var(--danger, #e5484d); }
 @media (hover: none) { .project-skill-del { opacity: 1; } }
+
+/* 多仓 Git(方案 C,11-07):清单 = Agents 页同一套成员卡(仓的标是灰的,不抢强调色);点进去的详情顶上一行「← 全部仓库」、
+ * 不是项目自己的仓多一行仓名 + 位置;内嵌仓三选一;子目录模式的一句说明。都放文件末尾(DESIGN §7.2:同特异性的覆盖块在后)。 */
+.team-member-portrait.project-git-portrait { color: var(--text-muted); }
+.project-git-more { margin: 4px 2px 0; font-size: var(--ui-font-caption, 11px); }
+.team-member-heading.project-git-back { border-bottom: 0; padding-block: 4px 0; }
+.project-git-repohead h3 { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.project-git-repohead h3 > svg { flex-shrink: 0; color: var(--text-muted); }
+.project-git-subnote { margin: 0; font-size: var(--ui-font-caption, 11px); line-height: 1.6; }
+.project-git-emb { display: grid; gap: 6px; padding: 10px; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); }
+.project-git-emb > p { display: flex; align-items: center; gap: 6px; margin: 0; font-size: var(--ui-font-meta, 12px); overflow-wrap: anywhere; }
+.project-git-emb > p > svg { flex-shrink: 0; color: var(--text-muted); }
+.project-git-emb > p.muted { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.project-git-emb-options { display: grid; gap: 4px; }
+.project-git-emb-options > button { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0 8px; align-items: center; justify-items: start; width: 100%; padding: 6px 8px; border: 0; border-radius: var(--radius-sm, 8px); background: var(--bg-card); color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); text-align: left; cursor: pointer; transition: background var(--duration-fast) ease; }
+.project-git-emb-options > button:hover:not(:disabled) { background: var(--overlay-light); }
+.project-git-emb-options > button:disabled { opacity: .45; cursor: default; }
+.project-git-emb-options > button > svg { grid-row: 1 / 3; color: var(--text-muted); }
+.project-git-emb-options > button > small { grid-column: 2; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+@media (prefers-reduced-motion: reduce) { .project-git-emb-options > button { transition: none; } }

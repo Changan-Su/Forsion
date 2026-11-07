@@ -113,7 +113,7 @@ export const ApprovalCard: React.FC<{
   const cmdWideBlank = WIDE_BLANK_RE.test(cmd)
   const resolved = req.status !== 'pending'
   const diff = useMemo(() => (isBash ? null : toolDiffText(req.name, req.arguments)), [isBash, req.name, req.arguments])
-  // git_commit / git_push / git_pull:标题与卡身换成结构化的(提交哪些文件、推到哪个站、用谁的账号,现读);读不到照旧显示引擎写的说明
+  // git_commit / git_push / git_pull / git_publish:标题与卡身换成结构化的(提交哪些文件、推到哪个站、用谁的账号,现读);读不到照旧显示引擎写的说明
   const git = useGitApproval(req.name, req.arguments, sessionId, !resolved && !remote)
 
   // 「总允许」对 escalate / custom-ask / protected 无效(引擎不落),按钮不给 —— 规则见 approvalReason.ts。

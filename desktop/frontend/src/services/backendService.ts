@@ -4,7 +4,7 @@
  */
 import type {
   AgentConfig, AgentScheduleEntry, AgentScheduleEntryUpsert, AgentScheduleInfo, AgentsMeta, AutomationActionCatalogItem, AutomationExecutionInfo, AutomationRunInfo, AutomationSessionInfo, ChannelKind, HistorianActivityItem, MessageRecord, ModelsResponse, ProviderQuota, MuseLibraryEntry, MuseStarter, MuseStatusInfo, MuseTodo, MuseTriggerInfo, MuseTriggerUpsert, PendingApprovalInfo, TriggerSourceInfo,
-  GitIdentity, GitSettings, NormalAgentDef, ProjectContext, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
+  GitIdentity, GitSettings, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectMemoryView, ProjectSettings, ProjectSkillInfo, SessionRecord, SkillInfo, SkillCatalogEntry, SpecialAgentsConfig,
   ToolsResponse, WorkspaceFileMeta, TeamDef } from '../types'
 import { authFetch } from './http'
 import { fetchOpts, type EngineTarget } from './engine/targets'
@@ -399,7 +399,9 @@ export const listChanges = (t: EngineTarget, sessionId: string, bounds?: number[
   ).then((r) => r.windows || [])
 
 /** 会话所在 Git 项目里还没提交的改动(含命令改的、你手改的;只看不撤)。available=false = 不是 Git 仓 / 没装 git / 没有目录。 */
-export interface GitChangesInfo { available: boolean; reason?: 'nogit' | 'notrepo' | 'nocwd' | 'untrusted'; root?: string; files: FileChange[]; truncatedFiles?: boolean }
+/** repos(11-07 多仓 Git)= 这次列了哪些仓(files 是跨这些仓的绝对路径;dir = 列文件的那个文件夹)。老引擎不带。 */
+export interface GitChangesRepo { id: string; name: string; label: string; root: string; group: 'project' | 'inside' | 'extra'; dir: string; reason?: GitChangesInfo['reason']; truncatedFiles?: boolean }
+export interface GitChangesInfo { available: boolean; reason?: 'nogit' | 'notrepo' | 'nocwd' | 'untrusted'; root?: string; files: FileChange[]; truncatedFiles?: boolean; repos?: GitChangesRepo[] }
 export const gitChanges = (t: EngineTarget, sessionId: string) =>
   request<GitChangesInfo>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/changes/git?diff=1`)
 
@@ -1535,6 +1537,9 @@ export const expandCustomCommand = (t: EngineTarget, name: string, args: string)
 /** 形状不对(老引擎 / 桩引擎对未知路由回 200 空对象)按 404 抛:面板显示「只在本地引擎上可用」,而不是拿 undefined.doc 崩掉整个右栏。 */
 const projectContextShape = (r: ProjectContext): ProjectContext => {
   if (!r || typeof r !== 'object' || !r.doc || !r.git || !Array.isArray(r.skills)) throw Object.assign(new Error('Project context unavailable'), { status: 404 })
+  // repos(多仓 Git):只认形状对的;不是数组(老引擎 / 桩)= 不带,Git 页照旧只有 git 那一个
+  if (r.repos !== undefined && !Array.isArray(r.repos)) return { ...r, repos: undefined, reposMore: undefined }
+  if (r.repos) return { ...r, repos: r.repos.filter((x) => x && typeof x.id === 'string' && typeof x.name === 'string' && typeof x.root === 'string') }
   return r
 }
 export const getProjectContext = (t: EngineTarget, sessionId: string) =>
@@ -1548,36 +1553,57 @@ export const getProjectSettings = (t: EngineTarget, ref: { sessionId: string } |
 //    成功一律带回新的项目上下文,面板一次刷新。
 //    context 为 null = 动作做完了、只是随后读上下文失败:调用方照「成功」处理并自己重读,别报成失败(用户会重试 → 重复提交)。
 //    trust=true = 用户刚点了「信任并继续」(仓库自带会执行程序的配置)。
+//    多仓 Git(11-07):ref = 会话 id(老写法,= 项目自己那个仓)或 { sessionId, repo }(repo = ProjectRepoInfo.id,引擎在它算的清单里认)。
+//    写动作另回 repoGit = 那个仓的新摘要;null = 动作做完、只是重读失败(调用方自己重读,别报失败)。
+export type GitRef = string | { sessionId: string; repo?: string }
+/** 请求体里的会话 + 仓:没点名仓就不带 repo 键(老引擎照旧)。 */
+const gitRefBody = (ref: GitRef): { sessionId: string; repo?: string } =>
+  typeof ref === 'string' ? { sessionId: ref } : ref.repo ? { sessionId: ref.sessionId, repo: ref.repo } : { sessionId: ref.sessionId }
+const gitRefQuery = (ref: GitRef): string => {
+  const b = gitRefBody(ref)
+  return `sessionId=${encodeURIComponent(b.sessionId)}${b.repo ? `&repo=${encodeURIComponent(b.repo)}` : ''}`
+}
+type WithRepoGit = { repoGit?: GitSummary | null }
 const withContext = <T extends { context: ProjectContext | null }>(r: T): T => ({ ...r, context: r.context ? projectContextShape(r.context) : null })
 const gitPost = <T,>(t: EngineTarget, action: string, body: object, timeoutMs = 60_000) =>
   request<T>(t, `/agent/project-context/git/${action}`, { method: 'POST', body: JSON.stringify(body) }, { timeoutMs })
 export const gitInitProject = (t: EngineTarget, sessionId: string) =>
   gitPost<{ createdGitignore: boolean; context: ProjectContext | null }>(t, 'init', { sessionId }).then(withContext)
-export const gitTrustProject = (t: EngineTarget, sessionId: string) =>
-  gitPost<{ trusted: boolean; context: ProjectContext | null }>(t, 'trust', { sessionId }).then(withContext)
+/** 一个仓的现场(Git 页点进不是项目自己的那个仓时)。不认得的 id → 400 unknown_repo;老引擎 → 404。 */
+export const getGitRepo = (t: EngineTarget, sessionId: string, repo: string) =>
+  request<{ repo: ProjectRepoInfo; git: GitSummary }>(t, `/agent/project-context/git/repo?${gitRefQuery({ sessionId, repo })}`).then((r) => {
+    if (!r || typeof r !== 'object' || !r.git || typeof r.git !== 'object') throw Object.assign(new Error('Repository unavailable'), { status: 404 })
+    return r
+  })
+/** 仓里没登记的内嵌仓三选一:exclude = 只在这台电脑上不收它(列成独立的仓);ignore = 写进 .gitignore;submodule = 登记成子模块(它得有远端)。
+ *  err.code:not_embedded / no_remote(子模块要内嵌仓有远端)/ 通常的 git 机器码。 */
+export const gitEmbeddedProject = (t: EngineTarget, ref: GitRef, path: string, how: 'exclude' | 'ignore' | 'submodule', trust = false) =>
+  gitPost<{ embedded: { path: string; how: 'exclude' | 'ignore' | 'submodule' }; context: ProjectContext | null } & WithRepoGit>(t, 'embedded', { ...gitRefBody(ref), path, how, trust }).then(withContext)
+export const gitTrustProject = (t: EngineTarget, ref: GitRef) =>
+  gitPost<{ trusted: boolean; context: ProjectContext | null } & WithRepoGit>(t, 'trust', gitRefBody(ref)).then(withContext)
 /** 这次会提交的文件(有已暂存的只列已暂存的,stagedOnly=true)。 */
-export const gitPendingProject = (t: EngineTarget, sessionId: string, trust = false) =>
-  gitPost<{ files: Array<{ code: string; path: string; from?: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean; /** 这次提交会署的名字和邮箱;凑不齐 = null(老引擎不回这一项)。 */ identity?: GitIdentity | null }>(t, 'pending', { sessionId, trust })
+export const gitPendingProject = (t: EngineTarget, ref: GitRef, trust = false) =>
+  gitPost<{ files: Array<{ code: string; path: string; from?: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean; /** 这次提交会署的名字和邮箱;凑不齐 = null(老引擎不回这一项)。 */ identity?: GitIdentity | null }>(t, 'pending', { ...gitRefBody(ref), trust })
 /** 用会话自己的模型写一条提交信息(计入额度)。 */
-export const generateGitCommitMessage = (t: EngineTarget, sessionId: string, trust = false) =>
-  gitPost<{ message: string }>(t, 'message', { sessionId, trust }, 120_000).then((r) => r.message)
+export const generateGitCommitMessage = (t: EngineTarget, ref: GitRef, trust = false) =>
+  gitPost<{ message: string }>(t, 'message', { ...gitRefBody(ref), trust }, 120_000).then((r) => r.message)
 /** expect = 提交框里那份清单的指纹:用户看完之后改动又变了,引擎回 changes_changed,不会悄悄多提交。 */
-export const gitCommitProject = (t: EngineTarget, sessionId: string, message: string, expect: string | undefined, trust = false) =>
-  gitPost<{ commit: { sha: string; subject: string; stagedOnly: boolean }; context: ProjectContext | null }>(t, 'commit', { sessionId, message, trust, ...(expect ? { expect } : {}) }, 120_000).then(withContext)
-export const gitCreateProjectBranch = (t: EngineTarget, sessionId: string, name: string, trust = false) =>
-  gitPost<{ branch: string; context: ProjectContext | null }>(t, 'branch', { sessionId, name, trust }).then(withContext)
+export const gitCommitProject = (t: EngineTarget, ref: GitRef, message: string, expect: string | undefined, trust = false) =>
+  gitPost<{ commit: { sha: string; subject: string; stagedOnly: boolean }; context: ProjectContext | null } & WithRepoGit>(t, 'commit', { ...gitRefBody(ref), message, trust, ...(expect ? { expect } : {}) }, 120_000).then(withContext)
+export const gitCreateProjectBranch = (t: EngineTarget, ref: GitRef, name: string, trust = false) =>
+  gitPost<{ branch: string; context: ProjectContext | null } & WithRepoGit>(t, 'branch', { ...gitRefBody(ref), name, trust }).then(withContext)
 /** remote = 「只推送这一次」:推到这个远端的同名分支,不改推送去向。ownCredentials = 带去的账号被拒、这次照这台电脑自己的 git 凭据推上去的。
  *  带去的账号和电脑自己的都被拒 → err.code 'credential_denied'。 */
-export const gitPushProject = (t: EngineTarget, sessionId: string, trust = false, remote?: string) =>
-  gitPost<{ remote: string; branch: string; target: string; output: string; ownCredentials?: boolean; context: ProjectContext | null }>(t, 'push', { sessionId, trust, ...(remote ? { remote } : {}) }, 180_000).then(withContext)
+export const gitPushProject = (t: EngineTarget, ref: GitRef, trust = false, remote?: string) =>
+  gitPost<{ remote: string; branch: string; target: string; output: string; ownCredentials?: boolean; context: ProjectContext | null } & WithRepoGit>(t, 'push', { ...gitRefBody(ref), trust, ...(remote ? { remote } : {}) }, 180_000).then(withContext)
 /** 「以后推送到这里」:当前分支的上游改成这个远端的同名分支(只写配置,不推)。err.code:no_remote / detached。 */
-export const gitSetPushTargetProject = (t: EngineTarget, sessionId: string, remote: string) =>
-  gitPost<{ pushTarget: { remote: string; branch: string }; context: ProjectContext | null }>(t, 'push-target', { sessionId, remote }).then(withContext)
+export const gitSetPushTargetProject = (t: EngineTarget, ref: GitRef, remote: string) =>
+  gitPost<{ pushTarget: { remote: string; branch: string }; context: ProjectContext | null } & WithRepoGit>(t, 'push-target', { ...gitRefBody(ref), remote }).then(withContext)
 /** 拉取:fetch 当前分支上游所在的远端,然后只做快进。updated=false = 没有要拉的(已经一致,或只是本地领先 ahead 个)。
  *  两边各有新提交 → err.code 'diverged'(只报告,不合并、不变基);没有上游 → 'no_upstream';没提交的改动挡住 → 'dirty_worktree'。
  *  远端是 Forsion Git 且登录了 Forsion 时,引擎自己带凭据(推送同理),这里不用管。 */
-export const gitPullProject = (t: EngineTarget, sessionId: string, trust = false) =>
-  gitPost<{ pull: { remote: string; branch: string; upstream: string; updated: boolean; commits: number; ahead: number; ownCredentials?: boolean }; context: ProjectContext | null }>(t, 'pull', { sessionId, trust }, 450_000).then(withContext)
+export const gitPullProject = (t: EngineTarget, ref: GitRef, trust = false) =>
+  gitPost<{ pull: { remote: string; branch: string; upstream: string; updated: boolean; commits: number; ahead: number; ownCredentials?: boolean }; context: ProjectContext | null } & WithRepoGit>(t, 'pull', { ...gitRefBody(ref), trust }, 450_000).then(withContext)
 /** 项目的 Git 托管状态。
  *  forsionGit = 这里能不能「发布到 Forsion Git」:登录了 Forsion、云端有 Forsion Git 且给人发推拉凭据 → 站点地址 + 由文件夹名整理出来的仓库名
  *  (整理不出来是空串,让用户自己填)。
@@ -1613,8 +1639,8 @@ export const getLinkPreview = (t: EngineTarget, url: string): Promise<LinkPrevie
   request<{ preview?: LinkPreview | null }>(t, `/agent/link-preview?url=${encodeURIComponent(url)}`, undefined, { timeoutMs: 8000 })
     .then((r) => (r.preview && typeof r.preview.title === 'string' && typeof r.preview.repo === 'string' && LINK_STATES.has(r.preview.state) ? r.preview : null))
     .catch(() => null)
-export const getGitHosting = (t: EngineTarget, sessionId: string): Promise<GitHosting | null> =>
-  request<Partial<GitHosting>>(t, `/agent/project-context/git/hosting?sessionId=${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 8000 })
+export const getGitHosting = (t: EngineTarget, ref: GitRef): Promise<GitHosting | null> =>
+  request<Partial<GitHosting>>(t, `/agent/project-context/git/hosting?${gitRefQuery(ref)}`, undefined, { timeoutMs: 8000 })
     .then((r): GitHosting => ({
       forsionGit: r.forsionGit && typeof r.forsionGit.webUrl === 'string' ? r.forsionGit : null,
       github: r.github && typeof r.github.linked === 'boolean' ? { linked: r.github.linked, login: typeof r.github.login === 'string' ? r.github.login : undefined, remote: r.github.remote === true, name: typeof r.github.name === 'string' ? r.github.name : '' } : null,
@@ -1630,18 +1656,18 @@ export const getGitReviews = (t: EngineTarget, sessionId: string): Promise<GitRe
  *  没有远端时它叫 origin;已经有了叫 github(不碰原来的)。target = 以后推送到这里(缺省 true);false = 只推这一次。
  *  err.code:invalid_repo_name / no_commits / github_not_linked / github_relink_required / github_repo_exists(同名的非私有仓库已在,没往里推)
  *  / github_api_failed / github_unreachable。 */
-export const gitPublishGithubProject = (t: EngineTarget, sessionId: string, name: string, trust = false, target = true) =>
-  gitPost<{ publish: { url: string; name: string; remote: string; branch: string; target: string }; context: ProjectContext | null }>(t, 'publish-github', { sessionId, name, trust, target }, 180_000).then(withContext)
+export const gitPublishGithubProject = (t: EngineTarget, ref: GitRef, name: string, trust = false, target = true) =>
+  gitPost<{ publish: { url: string; name: string; remote: string; branch: string; target: string }; context: ProjectContext | null } & WithRepoGit>(t, 'publish-github', { ...gitRefBody(ref), name, trust, target }, 180_000).then(withContext)
 /** 连接已有远端:把 url 加成远端并当场连一次(只列分支)。没有远端时它叫 origin;已经有了按主机名起名。
  *  target = 以后推送到这里(缺省 true:当前分支的上游改成它);upstream = 远端上真有这条分支时的「x/main」。
  *  连不上引擎会把刚加的远端撤掉。err.code:invalid_remote_url / remote_unreachable / github_not_linked …。 */
-export const gitConnectRemoteProject = (t: EngineTarget, sessionId: string, url: string, trust = false, target = true) =>
-  gitPost<{ remote: { remote: string; upstream: string | null; target?: boolean }; context: ProjectContext | null }>(t, 'remote', { sessionId, url, trust, target }, 90_000).then(withContext)
+export const gitConnectRemoteProject = (t: EngineTarget, ref: GitRef, url: string, trust = false, target = true) =>
+  gitPost<{ remote: { remote: string; upstream: string | null; target?: boolean }; context: ProjectContext | null } & WithRepoGit>(t, 'remote', { ...gitRefBody(ref), url, trust, target }, 90_000).then(withContext)
 /** 发布到 Forsion Git:把一个远端设到 `<站点>/<自己的用户名>/<name>.git` 并推送当前分支(站上自动建成私有仓库)。
  *  远端名与 target 同 gitPublishGithubProject(已经有远端时叫 forsion)。没推上去引擎会把刚加的远端撤掉(可以换个名字再来);
  *  err.code:invalid_repo_name / no_commits / forsion_git_*。 */
-export const gitPublishProject = (t: EngineTarget, sessionId: string, name: string, trust = false, target = true) =>
-  gitPost<{ publish: { url: string; name: string; remote: string; branch: string; target: string }; context: ProjectContext | null }>(t, 'publish', { sessionId, name, trust, target }, 180_000).then(withContext)
+export const gitPublishProject = (t: EngineTarget, ref: GitRef, name: string, trust = false, target = true) =>
+  gitPost<{ publish: { url: string; name: string; remote: string; branch: string; target: string }; context: ProjectContext | null } & WithRepoGit>(t, 'publish', { ...gitRefBody(ref), name, trust, target }, 180_000).then(withContext)
 /** 克隆对话框里的「我的仓库」:host = forsion(Forsion Git)| github(绑定的 GitHub 账号),最近更新的在前、最多 50 个。
  *  这里没有那个站(没登录 / 云端没开)→ null;err.code:github_not_linked / github_relink_required / github_unreachable / forsion_git_*。 */
 export interface GitRemoteRepo { fullName: string; private: boolean; cloneUrl: string; updatedAt: string | null }

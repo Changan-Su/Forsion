@@ -13,7 +13,7 @@ import { useEffect } from 'react'
 import { create } from 'zustand'
 import {
   changesDiff, gitChanges, listChanges, restoreCheckpoint,
-  type ChangeWindowInfo, type FileChange, type GitChangesInfo,
+  type ChangeWindowInfo, type FileChange, type GitChangesInfo, type GitChangesRepo,
 } from '../../services/backendService'
 import { targetForSession } from '../../services/engine/targets'
 import { targetCaps } from '../../services/engine/targetCaps'
@@ -21,7 +21,7 @@ import { useApp } from '../../stores/appStore'
 import { registerMessages, translate } from '../../i18n'
 import type { UiMessage } from '../../../../../tangu-agent/src/contracts/clientTypes'
 
-export type { FileChange, GitChangesInfo }
+export type { FileChange, GitChangesInfo, GitChangesRepo }
 
 registerMessages({
   'changes.undo.done': { zh: '已撤销 {n} 个文件', en: 'Undid {n} file(s)' },

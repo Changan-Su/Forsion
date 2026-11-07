@@ -29,7 +29,8 @@ import { museDmSessionId } from '../services/museDm.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
 import { listCheckpoints, restoreCodeSince, listChanges, type ChangeWindow } from '../services/checkpoints.js';
-import { listGitChanges } from '../services/gitChanges.js';
+import { listGitChangesMulti } from '../services/gitChanges.js';
+import { extraRootsOf, listProjectRepos, repoCwd } from '../services/gitRepos.js';
 import { canonicalProjectPath } from '../services/projectContext.js';
 import { deleteSessionCascade } from '../services/sessionCleanup.js';
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
@@ -970,7 +971,11 @@ router.get('/agent/sessions/:id/changes/git', authMiddleware, async (req: AuthRe
     if (!deps().profile.capabilities.hostExec || !s.project_path) return res.json(nocwd);
     let cwd: string;
     try { cwd = await canonicalProjectPath(String(s.project_path)); } catch { return res.json(nocwd); }
-    res.json(await listGitChanges(cwd, { diff, ...(rawPath ? { path: rawPath as string } : {}) }));
+    // 11-07 多仓:项目碰得到的每个仓各列一份(额外文件夹只认本人本地请求,远程来的不带)
+    const cfg = typeof s.agent_config === 'string' ? (() => { try { return JSON.parse(s.agent_config); } catch { return null; } })() : s.agent_config;
+    const extra = parseRemoteOrigin(req.headers) ? [] : extraRootsOf(cfg);
+    const repos = (await listProjectRepos(cwd, extra).catch(() => [])).slice(0, 20).map((r) => ({ id: r.id, name: r.name, label: r.label, root: r.root, group: r.group, dir: repoCwd(r) }));
+    res.json(await listGitChangesMulti(cwd, repos, { diff, ...(rawPath ? { path: rawPath as string } : {}) }));
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'list git changes failed' });
   }

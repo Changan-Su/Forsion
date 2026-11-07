@@ -2,17 +2,17 @@ import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
 import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Pencil, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Trash2, Upload, UserRound, Users, X } from 'lucide-react'
+import { AppWindow, ArrowLeft, Check, ChevronRight, CircleAlert, Copy, Download, ExternalLink, EyeOff, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Pencil, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Trash2, Upload, UserRound, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectSkill, deleteProjectIcon, editProjectMemory, forgetProjectMemory, generateGitCommitMessage, getGitHosting, type GitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
+import { createProjectSkill, deleteProjectSkill, deleteProjectIcon, editProjectMemory, forgetProjectMemory, generateGitCommitMessage, getGitHosting, getGitRepo, type GitHosting, type GitRef, getGitSettings, getProjectContext, gitCommitProject, gitEmbeddedProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
 import { addToCreations } from './chat2/CreationCards'
 import { setActiveSpace } from '@lcl/engine'
-import type { AgentConfig, GitIdentity, NormalAgentDef, ProjectContext, ProjectSettings, SessionRecord, TeamDef } from '../../../../tangu-agent/src/contracts/clientTypes'
+import type { AgentConfig, GitIdentity, GitSummary, NormalAgentDef, ProjectContext, ProjectRepoInfo, ProjectSettings, SessionRecord, TeamDef } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { isTeamImageAvatar, sessionWorkspaceKey, THINKING_LEVELS } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { ProfileModelField, ProfileTextEditor, useSectionNavSlide } from './profileControls'
 import { AvatarStack } from '../components/AvatarStack'
@@ -51,6 +51,8 @@ type Props = {
   recordJump?: RecordJump
   /** 对话里的 Git 卡点「在项目详情中打开」:落到「Git」页(值是一次性令牌,变了就再落一次)。 */
   gitJump?: number
+  /** 跟着 gitJump 落到哪个仓(ProjectRepoInfo.id;多仓 Git)。不给 = 仓库清单(只有一个仓时就是它)。 */
+  gitRepo?: string
   currentSessionId?: string | null
 }
 
@@ -100,7 +102,7 @@ const githubRepoPage = (remote?: string | null): string | null => {
 /** PROJECT 详情:骨架与 TEAM 详情同一套(头部即基本信息 / 滑块导航 / 一个滚动体 / 底部保存栏),内容换成项目的三面:
  *  Agents(谁在这里工作过)/ 配置(指令文件 · 项目技能 · 计划 · 本机默认项)/ Git(现场 + 用户点的建仓 / 提交 / 建分支 / 拉取 / 推送)。数据全部来自引擎的 project-context,
  *  它读到什么就显示什么 —— 这个面板存在的意义就是回答「Tangu 到底看没看见这个项目的约定」。 */
-export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump, recordJump, gitJump }: Props) {
+export function ProjectProfile({ session, config, workspace, renderAgent, renderTeam, currentSessionId, humanJump, recordJump, gitJump, gitRepo }: Props) {
   const { t, locale } = useI18n()
   const s = useApp(useShallow((a) => ({
     cfg: a.cfg, agents: a.agentDefs, avatars: a.agentAvatars, teams: a.teams, teamAvatars: a.teamAvatars, engines: a.engines, models: a.modelsResp?.models,
@@ -116,7 +118,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [tab, setTab] = useState<Tab>(gitJump ? 'git' : humanJump ? 'human' : freshJump(recordJump) ? 'settings' : 'agents')
   const navRef = useSectionNavSlide(tab)
   useEffect(() => { if (humanJump?.at) setTab('human') }, [humanJump?.at])
-  useEffect(() => { if (gitJump) setTab('git') }, [gitJump])
+  // 换仓一律走 pickRepo:提交框、待提交清单、生成中的信息、在飞动作的回包都作废,不然确认时会带着上一个仓的清单和信息写进这个仓(Codex 评审)
+  useEffect(() => { if (gitJump) { setTab('git'); pickRepo(gitRepo ?? null) } }, [gitJump]) // eslint-disable-line react-hooks/exhaustive-deps
   // 落点要等「设置」页连同项目记忆画出来:引擎回来之前 ctx 是 null。已经开着这个项目时手里的 ctx 可能是旧的(后台刚记下的那条还没读到):
   // 令牌一变先重读,读回来的那份才拿来落。点开着的执行者详情会盖住主区,一并收起(同「返回」)。
   const rootRef = useRef<HTMLElement>(null)
@@ -155,6 +158,13 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const [gitErr, setGitErr] = useState<GitErr | null>(null)
   const [pending, setPending] = useState<{ files: Array<{ code: string; path: string; from?: string }>; total: number; stagedOnly: boolean; token: string; tooMany?: boolean; identity?: GitIdentity | null } | null>(null)
   const genSeq = useRef(0)
+  /** 选中的仓每换一次加一:在飞的写动作回来时对不上 → 结果和「信任后重试」都丢掉(重试会对着原来那个仓再写一次,而界面已经换了仓)。 */
+  const selSeq = useRef(0)
+  // 多仓 Git(仓根 docs/ToBeImproved/多仓Git方案_2026-11-07,方案 C):这个项目碰得到 ≥2 个仓 → Git 页先列仓库(同 Agents 页的成员卡),
+  // 点进去是一个仓的详情(就是原来的 Git 页)。repoSel = 点开的那个(null = 清单);只有一个仓时直接是它。
+  // 项目自己的那个仓(group 'project')用上下文里的 git;别的仓现读 git/repo,写动作带回 repoGit。
+  const [repoSel, setRepoSel] = useState<string | null>(gitJump ? gitRepo ?? null : null)
+  const [repoGit, setRepoGit] = useState<{ id: string; git: GitSummary | null; error?: string } | null>(null)
   // 写动作的两处禁区(只读摘要照常):① 默认工作区 —— 所有不在项目里的对话共用、常在笔记库里,建仓 / 整目录提交 = 把整片笔记收进仓
   //   (引擎 gitActions 也拒,这里是第一道);② 编码工作室托管的项目(~/Forsion/Project/<项目>)—— 版本由宿主在「版本」面板里管,
   //   这里再按用户口径提交 / 建分支 = 两个驱动方改同一个仓。
@@ -176,10 +186,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     })()
     return () => { alive = false }
   }, [dir, reloadAt])
-  // ③ 项目是更大仓库的子目录:写动作只在仓库根上做(add -A 会暂存整个父仓),引擎也拒(nested_repo)。
-  const gitReadOnly: 'shared' | 'managed' | 'nested' | null = workspace.isDefault || workspace.system ? 'shared'
+  // ③ 项目是更大仓库的子目录:老引擎只读(add -A 会暂存整个父仓,引擎也拒 nested_repo);新引擎带 scope = 子目录模式,
+  //   提交只收这个文件夹,分支 / 推送 / 拉取照整个仓 —— 可写。
+  // ① 只管项目自己的文件夹:默认工作区里面的仓、额外文件夹的仓照常可写(多仓 Git)。
+  // 在看哪个仓在下面才定下来:这里只给判法,gitReadOnly 跟着 git 一起算
+  const gitReadOnlyOf = (g: GitSummary | undefined, repo: ProjectRepoInfo | undefined): 'shared' | 'managed' | 'nested' | null =>
+    (workspace.isDefault || workspace.system) && (!repo || repo.group === 'project') ? 'shared'
     : (managedRoot && normPath(dir).replace(/\/[^/]*$/, '') === normPath(managedRoot)) || hostVersions ? 'managed'
-    : ctx?.git.nested ? 'nested' : null
+    : g?.nested && !g.scope ? 'nested' : null
   // 加入造物:原地登记(不复制、不移动);默认工作区 / 系统目录不给,已经是造物的给「在造物中查看」
   const canAdopt = !!window.tangu?.productsRegister && inCreations === false && !workspace.isDefault && !workspace.system
   const now = Date.now()
@@ -211,17 +225,46 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   // 问不到 / 没登录 / 老引擎 = null,入口不出现,也不报错。
   //  远端在 GitHub 时也问:绑没绑 GitHub 账号(绑了的推拉直接用它)。绑定在浏览器里的账户中心做,所以窗口回到前台时再问一次。
   //  有「远端」卡片的引擎(remoteList 在,10-14 起)Git 页打开就问:卡片上要写「用绑定的 @x」,「添加远端」对话框也要它。
+  const repos: ProjectRepoInfo[] = ctx?.repos ?? []
+  const ownRepo = repos.find((r) => r.group === 'project')
+  const repoList = repos.length >= 2
+  // 点开的仓:点名的 id 已经不在清单里(刷新后没了)→ 回清单
+  const selRepo: ProjectRepoInfo | undefined = repoList ? repos.find((r) => r.id === repoSel) : repos[0]
+  const selOwn = !selRepo || selRepo.id === ownRepo?.id
+  const selId = selRepo && !selOwn ? selRepo.id : ''
+  const showRepoList = repoList && !selRepo
+  /** Git 页此刻在看的那个仓的摘要(项目自己的 = 上下文里的 git;别的仓 = 现读的那份,没读到 = undefined)。 */
+  const git: GitSummary | undefined = selOwn ? ctx?.git : repoGit?.id === selId ? repoGit.git ?? undefined : undefined
+  /** 写动作带哪个仓:老引擎(没有清单)只带会话。 */
+  const gref: GitRef = selRepo ? { sessionId: session.id, repo: selRepo.id } : session.id
+  /** 「在终端打开 / 显示 / 复制路径」对着哪个文件夹:项目自己的仓 = 项目目录,别的仓 = 它的仓根。 */
+  const gitDir = selRepo && !selOwn ? selRepo.root : dir
+  const gitReadOnly = gitReadOnlyOf(git, selRepo)
+  useEffect(() => {
+    if (!selId || tab !== 'git') return
+    let alive = true
+    void getGitRepo(homeTarget(), session.id, selId).then((r) => { if (alive) setRepoGit({ id: selId, git: r.git }) }, (e: any) => {
+      if (!alive) return
+      // 清单里已经没有它了(挪走 / 删了):回清单,重读上下文
+      if (e?.code === 'unknown_repo') { setRepoSel(null); setRepoGit(null); setReloadAt((n) => n + 1); return }
+      setRepoGit({ id: selId, git: null, error: e?.status === 404 ? t('projectProfile.git.err.unsupported') : String(e?.message || e) })
+    })
+    return () => { alive = false }
+  }, [selId, tab, session.id, reloadAt, s.cfg]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 换了项目:回清单
+  const prevDir = useRef(dir)
+  useEffect(() => { if (prevDir.current === dir) return; prevDir.current = dir; setRepoSel(null); setRepoGit(null) }, [dir])
   const [hosting, setHosting] = useState<GitHosting | null>(null)
   const publishTo = hosting?.forsionGit ?? null
-  const remoteList = ctx?.git?.repo ? ctx.git.remoteList : undefined
-  const noRemote = !!ctx?.git?.repo && (remoteList ? !remoteList.length : !ctx.git.remote && !ctx.git.remotes && !ctx.git.upstream)
-  const githubPage = ctx?.git?.repo && !remoteList ? githubRepoPage(ctx.git.remote) : null
+  const remoteList = git?.repo ? git.remoteList : undefined
+  const noRemote = !!git?.repo && (remoteList ? !remoteList.length : !git.remote && !git.remotes && !git.upstream)
+  const githubPage = git?.repo && !remoteList ? githubRepoPage(git.remote) : null
   const github = (remoteList ? remoteList.some((r) => r.auth === 'github') : githubPage && hosting?.github?.remote) ? hosting?.github ?? null : null
   useEffect(() => {
-    if (tab !== 'git' || !(remoteList ? ctx?.git?.repo : noRemote || githubPage)) { setHosting(null); return }
+    if (tab !== 'git' || !(remoteList ? git?.repo : noRemote || githubPage)) { setHosting(null); return }
     let alive = true
     const read = () => {
-      void getGitHosting(homeTarget(), session.id).then((value) => {
+      void getGitHosting(homeTarget(), gref).then((value) => {
         if (!alive) return
         setHosting(value)
         // 去账户中心绑好回来了:上一次「还没绑定」的那条报错已经过时,不留着和「账号」一行打架
@@ -231,7 +274,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     read()
     if (githubPage || remoteList) window.addEventListener('focus', read)
     return () => { alive = false; window.removeEventListener('focus', read) }
-  }, [tab, noRemote, githubPage, !!remoteList, session.id, reloadAt]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [tab, noRemote, githubPage, !!remoteList, !!git?.repo, session.id, selRepo?.id, reloadAt]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (!settingsDirty) setSettingsDraft(ctx?.settings ?? {}) }, [ctx?.settings, settingsDirty])
 
   const dirty = docDirty || settingsDirty
@@ -295,7 +338,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   }
   const open = (key: string) => { setSelected(key); setOpened((keys) => (keys.includes(key) ? keys : [...keys, key])) }
   const reveal = (p: string) => { void window.tangu?.revealHostPath?.(p) }
-  const copyPath = () => { void navigator.clipboard?.writeText(dir).then(() => { setNotice(t('projectProfile.copied')) }) }
+  const copyPath = (p = dir) => { void navigator.clipboard?.writeText(p).then(() => { setNotice(t('projectProfile.copied')) }) }
   const commitName = async () => {
     const name = nameDraft.trim()
     if (workspace.system || !name || name === workspace.name) { setNameDraft(workspace.name); return }
@@ -403,9 +446,14 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     // 远端是 GitHub、git 自己认证失败、而绑定的账号给不出凭据:出路是去账户中心绑定 / 重新绑定
     if (e?.code === 'github_not_linked' || e?.code === 'github_relink_required') return { message: t(`projectProfile.git.err.${e.code}`), linkGithub: true }
     // 带去的账号和这台电脑自己的凭据都被拒:推送去向在 GitHub 上(引擎替他带绑定账号)时,出路之一是换绑一个有权限的 GitHub 账号
-    if (e?.code === 'credential_denied') return { message: t('projectProfile.git.err.credential_denied'), info: typeof e?.info === 'string' && e.info ? e.info : undefined, linkGithub: remoteList?.find((r) => r.name === ctx?.git?.pushRemote)?.auth === 'github' }
+    if (e?.code === 'credential_denied') return { message: t('projectProfile.git.err.credential_denied'), info: typeof e?.info === 'string' && e.info ? e.info : undefined, linkGithub: remoteList?.find((r) => r.name === git?.pushRemote)?.auth === 'github' }
     // 拉取时已经 fetch 过了才发现两边各有新提交 / 本地改动挡着:领先落后的数变了,重读一次
-    if (e?.code === 'diverged' || e?.code === 'dirty_worktree') setReloadAt((n) => n + 1)
+    if (e?.code === 'diverged' || e?.code === 'dirty_worktree' || e?.code === 'not_embedded') setReloadAt((n) => n + 1)
+    // 内嵌仓挡住提交:Git 卡片上就有三选一那一块(老引擎没有 embedded 清单 → 照旧只说原因);重读一次让那一块出来
+    if (e?.code === 'embedded_repo') {
+      setReloadAt((n) => n + 1)
+      if (git?.embedded?.length) return { message: `${t('projectProfile.git.err.embedded_repo')} ${t('projectProfile.git.emb.pointer')}`, info: typeof e?.info === 'string' && e.info ? e.info : undefined }
+    }
     if (typeof e?.code === 'string') return {
       message: GIT_ERROR_CODES.has(e.code) ? t(`projectProfile.git.err.${e.code}`) : String(e?.message || e),
       info: typeof e?.info === 'string' && e.info ? e.info : undefined,
@@ -419,19 +467,27 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   }
   /** 动作做完但引擎没读出新上下文(context:null)→ 照成功处理,自己重读。 */
   const applyContext = (value: ProjectContext | null) => { if (value) setCtx(value); else setReloadAt((n) => n + 1) }
+  /** 写动作的回包:上下文照旧;点开的是别的仓时用回来的 repoGit,没有(null = 做完了但重读失败)就自己重读。 */
+  const applyResult = (r: { context: ProjectContext | null; repoGit?: GitSummary | null }) => {
+    applyContext(r.context)
+    if (!selId) return
+    if (r.repoGit) setRepoGit({ id: selId, git: r.repoGit })
+    else setReloadAt((n) => n + 1)
+  }
   const gitRun = async <T,>(key: string, action: (trust: boolean) => Promise<T>, done: (value: T) => void, trust = false): Promise<void> => {
     if (busy) return
+    const seq = selSeq.current
     setBusy(key); clear(); setGitErr(null)
-    try { done(await action(trust)) }
-    catch (e: any) { setGitErr(gitErrorOf(e, () => { void gitRun(key, action, done, true) })) }
+    try { const value = await action(trust); if (seq === selSeq.current) done(value); else setReloadAt((n) => n + 1) }
+    catch (e: any) { if (seq === selSeq.current) setGitErr(gitErrorOf(e, () => { void gitRun(key, action, done, true) })); else setReloadAt((n) => n + 1) }
     finally { setBusy('') }
   }
   const gitInit = () => gitRun('git-init', () => gitInitProject(homeTarget(), session.id), (r) => {
     applyContext(r.context)
     setNotice(t(r.createdGitignore ? 'projectProfile.git.initDoneIgnore' : 'projectProfile.git.initDone'))
   })
-  const trustRepo = () => gitRun('git-trust', () => gitTrustProject(homeTarget(), session.id), (r) => {
-    applyContext(r.context)
+  const trustRepo = () => gitRun('git-trust', () => gitTrustProject(homeTarget(), gref), (r) => {
+    applyResult(r)
     setNotice(t('projectProfile.git.trustedNotice'))
   })
   /** 让会话自己的模型写提交信息。关掉提交框 / 再点一次 → 旧的那次回来也不落(genSeq)。 */
@@ -439,7 +495,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     const seq = ++genSeq.current
     setGenerating(true); setGitErr(null)
     try {
-      const message = await generateGitCommitMessage(homeTarget(), session.id, trust)
+      const message = await generateGitCommitMessage(homeTarget(), gref, trust)
       if (seq === genSeq.current) setCommitDraft((d) => (d === null ? d : message))
     } catch (e: any) {
       if (seq === genSeq.current) setGitErr(gitErrorOf(e, () => { void generateMessage(true) }))
@@ -453,11 +509,11 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     const seq = ++genSeq.current
     setGenerating(true)
     try {
-      const list = await gitPendingProject(homeTarget(), session.id, trust)
+      const list = await gitPendingProject(homeTarget(), gref, trust)
       if (seq !== genSeq.current) return
       setPending(list)
       if (!list.total) { setCommitDraft(null); setGitErr({ message: t('projectProfile.git.err.nothing_to_commit') }); return }
-      const message = await generateGitCommitMessage(homeTarget(), session.id, trust)
+      const message = await generateGitCommitMessage(homeTarget(), gref, trust)
       if (seq === genSeq.current) setCommitDraft((d) => (d === null ? d : message))
     } catch (e: any) {
       if (seq === genSeq.current) setGitErr(gitErrorOf(e, () => { void openCommit(true) }))
@@ -469,15 +525,15 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const commit = () => {
     const message = commitDraft?.trim()
     if (!message) return
-    void gitRun('git-commit', (trust) => gitCommitProject(homeTarget(), session.id, message, pending?.token, trust).catch(async (e) => {
+    void gitRun('git-commit', (trust) => gitCommitProject(homeTarget(), gref, message, pending?.token, trust).catch(async (e) => {
       // 看完之后改动又变了:重新列出这次会提交的东西(保留已写好的信息),让用户再过目一次
-      if (e?.code === 'changes_changed') await gitPendingProject(homeTarget(), session.id).then(setPending).catch(() => {})
+      if (e?.code === 'changes_changed') await gitPendingProject(homeTarget(), gref).then(setPending).catch(() => {})
       // 提交可能已经落下(复核不过 / 没法确认 / 超时 / 断连 / 5xx):收起提交框,再点一次 = 重复提交
       const landed = ['hook_changed_commit', 'commit_unverified', 'git_timeout'].includes(e?.code) || !(e?.status && e.status < 500)
       if (landed) { setCommitDraft(null); setPending(null) }
       throw e
     }), (r) => {
-      applyContext(r.context); setCommitDraft(null); setPending(null)
+      applyResult(r); setCommitDraft(null); setPending(null)
       setNotice(t(r.commit.stagedOnly ? 'projectProfile.git.committedStaged' : 'projectProfile.git.committed', { subject: r.commit.subject }))
     })
   }
@@ -486,25 +542,25 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     const prefix = await getGitSettings(homeTarget()).then((r) => r.settings.branchPrefix).catch(() => '')
     const name = (await askString(t('projectProfile.git.newBranchTitle'), prefix, { label: t('projectProfile.git.newBranchLabel'), confirmLabel: t('projectProfile.git.newBranchConfirm') }))?.trim()
     if (!name || name === prefix) return
-    await gitRun('git-branch', (trust) => gitCreateProjectBranch(homeTarget(), session.id, name, trust), (r) => {
-      applyContext(r.context)
+    await gitRun('git-branch', (trust) => gitCreateProjectBranch(homeTarget(), gref, name, trust), (r) => {
+      applyResult(r)
       setNotice(t('projectProfile.git.branched', { branch: r.branch }))
     })
   }
   /** 带去的账号被拒、这次是照这台电脑自己的凭据成的(引擎的凭据回退):结果里写明用的是谁的。 */
   const ownNote = (own?: boolean): string => (own ? ` · ${t('projectProfile.git.ownCredentials')}` : '')
-  const push = () => gitRun('git-push', (trust) => gitPushProject(homeTarget(), session.id, trust), (r) => {
-    applyContext(r.context)
+  const push = () => gitRun('git-push', (trust) => gitPushProject(homeTarget(), gref, trust), (r) => {
+    applyResult(r)
     setNotice(t('projectProfile.git.pushed', { target: r.target }) + ownNote(r.ownCredentials))
   })
   /** 「远端」卡片:只推送这一次(推到那个远端的同名分支,不改推送去向)。 */
-  const pushOnce = (remote: string) => gitRun('git-push', (trust) => gitPushProject(homeTarget(), session.id, trust, remote), (r) => {
-    applyContext(r.context)
+  const pushOnce = (remote: string) => gitRun('git-push', (trust) => gitPushProject(homeTarget(), gref, trust, remote), (r) => {
+    applyResult(r)
     setNotice(t('projectProfile.git.pushed', { target: r.target }) + ownNote(r.ownCredentials))
   })
   /** 「远端」卡片:以后推送到这里(当前分支的上游改成它,只写配置)。 */
-  const setPushTarget = (remote: string) => gitRun('git-push-target', () => gitSetPushTargetProject(homeTarget(), session.id, remote), (r) => {
-    applyContext(r.context)
+  const setPushTarget = (remote: string) => gitRun('git-push-target', () => gitSetPushTargetProject(homeTarget(), gref, remote), (r) => {
+    applyResult(r)
     setNotice(t('projectProfile.git.targetSet', { remote: r.pushTarget.remote }))
   })
   // 项目这一份的「重写」发给这个项目的载体会话(和「生成」同一条路);本机直连、非计划模式才有 manage_human
@@ -515,8 +571,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   } : null
   // 「同时适用」的那几份长期说明:只有载体会话的 Agent 自己那份能从这里重写(别的 Agent 的那份它不该改),其余不出这一项
   const carrierSlug = carrierCfg?.agentSlug || carrierCfg?.soloAgentSlug || s.defaultSlug
-  const pull = () => gitRun('git-pull', (trust) => gitPullProject(homeTarget(), session.id, trust), (r) => {
-    applyContext(r.context)
+  const pull = () => gitRun('git-pull', (trust) => gitPullProject(homeTarget(), gref, trust), (r) => {
+    applyResult(r)
     setNotice((r.pull.updated ? t('projectProfile.git.pulled', { count: r.pull.commits, upstream: r.pull.upstream }) : t('projectProfile.git.pullNothing', { upstream: r.pull.upstream })) + ownNote(r.pull.ownCredentials))
   })
   /** 去账户中心的「账号安全」绑定 GitHub(那里要先确认是账号本人,所以不在桌面端另做一套)。没有这个宿主入口的端(网页)= undefined,按钮不出现,文案里写了去哪。 */
@@ -526,8 +582,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (busy || !publishTo) return
     const name = (await askString(t('projectProfile.git.publishTitle'), publishTo.name, { label: t('projectProfile.git.publishLabel', { site: publishTo.webUrl.replace(/^https:\/\//i, '') }), confirmLabel: t('projectProfile.git.publishConfirm') }))?.trim()
     if (!name) return
-    await gitRun('git-publish', (trust) => gitPublishProject(homeTarget(), session.id, name, trust), (r) => {
-      applyContext(r.context)
+    await gitRun('git-publish', (trust) => gitPublishProject(homeTarget(), gref, name, trust), (r) => {
+      applyResult(r)
       setNotice(t('projectProfile.git.published', { url: r.publish.url }))
     })
   }
@@ -538,8 +594,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (!to.linked) { setGitErr({ message: t('projectProfile.git.publishGithubNeedsLink'), linkGithub: true }); return }
     const name = (await askString(t('projectProfile.git.publishGithubTitle'), to.name, { label: t('projectProfile.git.publishGithubLabel', { login: to.login ?? '' }), confirmLabel: t('projectProfile.git.publishConfirm') }))?.trim()
     if (!name) return
-    await gitRun('git-publish-github', (trust) => gitPublishGithubProject(homeTarget(), session.id, name, trust), (r) => {
-      applyContext(r.context)
+    await gitRun('git-publish-github', (trust) => gitPublishGithubProject(homeTarget(), gref, name, trust), (r) => {
+      applyResult(r)
       setNotice(t('projectProfile.git.published', { url: r.publish.url }))
     })
   }
@@ -548,8 +604,8 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     if (busy) return
     const url = (await askString(t('projectProfile.git.connectRemoteTitle'), '', { label: t('projectProfile.git.connectRemoteLabel'), confirmLabel: t('projectProfile.git.connectRemoteConfirm') }))?.trim()
     if (!url) return
-    await gitRun('git-remote', (trust) => gitConnectRemoteProject(homeTarget(), session.id, url, trust), (r) => {
-      applyContext(r.context)
+    await gitRun('git-remote', (trust) => gitConnectRemoteProject(homeTarget(), gref, url, trust), (r) => {
+      applyResult(r)
       setNotice(r.remote.upstream ? t('projectProfile.git.connectedUpstream', { upstream: r.remote.upstream }) : t('projectProfile.git.connected'))
     })
   }
@@ -558,21 +614,44 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const addRemote = async () => {
     if (busy) return
     const hasRemotes = !!remoteList?.length
-    const choice = await askAddRemote(() => getGitHosting(homeTarget(), session.id).then((h) => ({
+    const choice = await askAddRemote(() => getGitHosting(homeTarget(), gref).then((h) => ({
       forsion: h?.forsionGit ? { name: h.forsionGit.name } : null,
       github: h?.github ? { linked: h.github.linked, login: h.github.login, name: h.github.name } : null,
       connect: !!h?.connect, hasRemotes,
     })))
     if (!choice) return
-    const published = (r: { publish: { url: string }; context: ProjectContext | null }) => { applyContext(r.context); setNotice(t('projectProfile.git.published', { url: r.publish.url })) }
-    if (choice.kind === 'forsion') await gitRun('git-add-remote', (trust) => gitPublishProject(homeTarget(), session.id, choice.value, trust, choice.target), published)
-    else if (choice.kind === 'github') await gitRun('git-add-remote', (trust) => gitPublishGithubProject(homeTarget(), session.id, choice.value, trust, choice.target), published)
-    else await gitRun('git-add-remote', (trust) => gitConnectRemoteProject(homeTarget(), session.id, choice.value, trust, choice.target), (r) => {
-      applyContext(r.context)
+    const published = (r: { publish: { url: string }; context: ProjectContext | null; repoGit?: GitSummary | null }) => { applyResult(r); setNotice(t('projectProfile.git.published', { url: r.publish.url })) }
+    if (choice.kind === 'forsion') await gitRun('git-add-remote', (trust) => gitPublishProject(homeTarget(), gref, choice.value, trust, choice.target), published)
+    else if (choice.kind === 'github') await gitRun('git-add-remote', (trust) => gitPublishGithubProject(homeTarget(), gref, choice.value, trust, choice.target), published)
+    else await gitRun('git-add-remote', (trust) => gitConnectRemoteProject(homeTarget(), gref, choice.value, trust, choice.target), (r) => {
+      applyResult(r)
       setNotice(r.remote.upstream ? t('projectProfile.git.connectedUpstream', { upstream: r.remote.upstream }) : t(r.remote.target === false ? 'projectProfile.git.connected' : 'projectProfile.git.connectedTarget'))
     })
   }
   const copyRemote = (url: string) => { void navigator.clipboard?.writeText(url).then(() => { setNotice(t('projectProfile.git.copiedUrl')) }) }
+  /** 仓里没登记的内嵌仓三选一。子模块要内嵌仓有远端:没有的话引擎回 no_remote,这里换成说清楚的那句(不是「推送不了」)。 */
+  const resolveEmbedded = (path: string, how: 'exclude' | 'ignore' | 'submodule') => gitRun('git-emb', (trust) => gitEmbeddedProject(homeTarget(), gref, path, how, trust).catch((e) => {
+    if (e?.code === 'no_remote' && how === 'submodule') throw Object.assign(new Error(t('projectProfile.git.err.submodule_no_remote', { path })), { status: 400 })
+    throw e
+  }), (r) => {
+    applyResult(r)
+    setNotice(t(`projectProfile.git.emb.done.${how}`, { path: r.embedded?.path || path }))
+  })
+  /** 清单 ↔ 某个仓:手里那个仓的提交框、报错、托管状态一并收起。 */
+  const pickRepo = (id: string | null) => {
+    genSeq.current++; selSeq.current++; setGenerating(false); setCommitDraft(null); setPending(null); setGitErr(null); setHosting(null)
+    setRepoSel(id)
+  }
+  /** 清单上一个仓的状态行:分支 · 改动(或没提交过 / 领先落后 / 与上游一致)· 推去哪个站。 */
+  const repoStatus = (r: ProjectRepoInfo): string => [
+    r.detached ? t('projectProfile.git.detached') : r.branch,
+    r.noCommits ? t('projectProfile.git.noCommits')
+      : r.changesUnread ? t('projectProfile.git.unread')
+      : r.changes ? t('projectProfile.git.changeCount', { count: r.changes })
+      : r.ahead || r.behind ? [r.ahead ? t('projectProfile.git.ahead', { count: r.ahead }) : '', r.behind ? t('projectProfile.git.behind', { count: r.behind }) : ''].filter(Boolean).join(' · ')
+      : r.upstream ? t('projectProfile.git.inSync') : '',
+    r.remoteHost === 'forsion' ? 'Forsion Git' : r.remoteHost === 'github' ? 'GitHub' : r.remoteHost === 'other' ? t('projectProfile.git.otherSite') : r.remoteHost === null ? t('projectProfile.git.noRemoteYet') : '',
+  ].filter(Boolean).join(' · ')
   const generate = () => {
     if (!ctx || sessionRunning) return
     clear()
@@ -634,8 +713,11 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
   const listed = new Set(executors.map((ex) => ex.key))
   const agentCandidates = s.agents.filter((a) => a.createdBy !== 'system' && !listed.has(`agent:${a.slug}`) && `${agentNames(a).join(' ')} ${a.description} ${a.slug}`.toLowerCase().includes(q))
   const teamCandidates = s.teams.filter((team) => !listed.has(`team:${team.slug}`) && team.members.length >= 2 && `${team.name} ${team.description} ${team.slug}`.toLowerCase().includes(q))
-  const git = ctx?.git
+  // 头部(分支芯片 / 图标)说的是项目自己;Git 页说的是点开的那个仓(git)
+  const ownGit = ctx?.git
+  const ownChanges = ownGit?.repo ? ownGit.changesTotal ?? 0 : 0
   const changeCount = git?.repo ? git.changesTotal ?? 0 : 0
+  const subRepoName = git?.scope ? selRepo?.name || (git.root || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '' : ''
   // 「推送」推去哪里(有远端卡片的引擎):按钮上写站名,几个远端都不是 origin、也没上游时不给按钮(卡片里挑一个「以后推送到这里」);
   // 上游写的是网址 / 已删的远端名(不在列表里)→ 照样给按钮,不写站名,悬停看得到去向(引擎照那里推)
   const pushTarget = remoteList?.find((r) => r.name === git?.pushRemote)
@@ -664,7 +746,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
         {/* 图标与 TEAM 头部同一套:点图标导入图片(存进项目的 .tangu/),角上笑脸开 emoji 选择器(内含「移除图标」)。 */}
         <div className="agent-portrait-slot">
           <label className="team-profile-emblem agent-portrait-edit" title={t('projectProfile.iconImageHint', { dir: ctx?.workspaceDirName || '.tangu' })} aria-busy={busy === 'icon' || undefined}>
-            <ProjectIcon path={dir} fallback={git?.repo ? <FolderGit2 size={26} strokeWidth={1.5} /> : <Folder size={26} strokeWidth={1.5} />} />
+            <ProjectIcon path={dir} fallback={ownGit?.repo ? <FolderGit2 size={26} strokeWidth={1.5} /> : <Folder size={26} strokeWidth={1.5} />} />
             <span className="agent-portrait-badge" aria-hidden="true">{busy === 'icon' ? <Loader2 size={10} className="spin" /> : <ImageUp size={10} />}</span>
             <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" aria-label={t('projectProfile.iconChange')} disabled={!!busy || !ctx} onChange={(e) => void pickIconImage(e)} />
           </label>
@@ -677,7 +759,7 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             onChange={(e) => setNameDraft(e.target.value)} onBlur={() => void commitName()} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); else if (e.key === 'Escape') { setNameDraft(workspace.name); e.currentTarget.blur() } }} />
           <span className={`agent-state${running ? ' working' : ''}`}><i />{t(!s.connected ? 'agentProfile.offline' : running ? 'projectProfile.status.working' : 'projectProfile.status.idle')}
             <span>· {t('projectProfile.sessions', { count: executors.reduce((n, ex) => n + ex.sessions.length, 0) })}</span>
-            {git?.repo && <span className="project-branch" title={git.detached ? t('projectProfile.git.detached') : git.branch}><GitBranch size={10} /><span>{git.branch}</span>{changeCount > 0 && <span>*</span>}</span>}
+            {ownGit?.repo && <span className="project-branch" title={ownGit.detached ? t('projectProfile.git.detached') : ownGit.branch}><GitBranch size={10} /><span>{ownGit.branch}</span>{ownChanges > 0 && <span>*</span>}</span>}
           </span></div>
         <button className="profile-expand" title={t('projectProfile.open')} aria-label={t('projectProfile.open')} onClick={() => openSpecial('workspace', workspace.key)}><ExternalLink size={15} /></button>
       </header>
@@ -818,8 +900,32 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
             </select></label>
           </section>
         </div>}
-        {tab === 'git' && ctx && git && <div className="project-section">
-          <section className="project-card" data-project-git>
+        {tab === 'git' && ctx && showRepoList && <div className="project-section" data-project-git-repos={repos.length}>
+          <div className="team-lineup-toolbar"><p className="team-profile-caption">{workspace.isDefault ? t('projectProfile.git.reposCaptionShared', { dir: shortenPath(dir, s.homeDir) }) : t('projectProfile.git.reposCaption')}</p></div>
+          <div className="team-lineup">{repos.map((r) => <article className="team-member project-executor project-git-repo" key={r.id} data-project-git-repo={r.id} data-repo-group={r.group}>
+            <button className="team-member-open" title={r.label} aria-label={t('projectProfile.git.openRepo', { name: r.name })} onClick={() => pickRepo(r.id)}>
+              <span className="team-member-portrait project-git-portrait">{r.group === 'extra' ? <Folder size={22} strokeWidth={1.5} /> : <FolderGit2 size={22} strokeWidth={1.5} />}</span>
+              <strong><span>{r.name}</span>{r.group === 'extra' && <span className="project-executor-tags"><em className="project-executor-tag is-text">{t('projectProfile.git.extra')}</em></span>}</strong>
+              <span className={`team-member-status${r.changes ? ' waiting' : ''}`}>{repoStatus(r)}</span>
+              <ChevronRight size={14} className="team-member-chevron" />
+            </button>
+          </article>)}</div>
+          {!!ctx.reposMore && <p className="agent-profile-muted project-git-more">{t('projectProfile.git.reposMore', { count: ctx.reposMore })}</p>}
+          {/* 项目文件夹自己还不是仓(里面有仓):建仓照旧给,默认工作区 / 系统目录 / 托管项目不给 */}
+          {ctx.git.available && !ctx.git.repo && !gitReadOnlyOf(ctx.git, undefined) && <div className="project-card-actions"><button className="btn sm" data-git-action="init" disabled={!!busy} onClick={() => void gitInit()}>{busy === 'git-init' ? <Loader2 size={13} className="spin" /> : <FolderGit2 size={13} />}{t('projectProfile.git.init')}</button></div>}
+        </div>}
+        {tab === 'git' && ctx && !showRepoList && !git && <div className="project-section">
+          {repoList && <div className="team-member-heading project-git-back"><button type="button" data-git-back onClick={() => pickRepo(null)}><ArrowLeft size={14} />{t('projectProfile.git.allRepos')}</button></div>}
+          {repoGit?.id === selId && repoGit.error
+            ? <p className="agent-profile-error" role="alert">{t('projectProfile.git.repoLoadFailed')} {repoGit.error} <button className="profile-text-action" onClick={() => setReloadAt((n) => n + 1)}>{t('projectProfile.retry')}</button></p>
+            : <p className="agent-profile-muted"><Loader2 size={14} className="spin" /> {t('projectProfile.loading')}</p>}
+        </div>}
+        {tab === 'git' && ctx && !showRepoList && git && <div className="project-section">
+          {repoList && <div className="team-member-heading project-git-back"><button type="button" data-git-back onClick={() => pickRepo(null)}><ArrowLeft size={14} />{t('projectProfile.git.allRepos')}</button></div>}
+          <section className="project-card" data-project-git data-project-git-repo-id={selRepo?.id}>
+            {selRepo && !selOwn && <div className="project-card-head project-git-repohead" data-project-git-repohead>
+              <div><h3><FolderGit2 size={13} />{selRepo.name}</h3><small title={selRepo.root}>{selRepo.group === 'extra' ? `${selRepo.label} · ${t('projectProfile.git.extra')}` : selRepo.label}</small></div>
+            </div>}
             {!git.available ? <p className="agent-profile-muted">{t('projectProfile.git.unavailable')}</p>
               : !git.repo ? <div className="project-git-empty">
                 <p className="agent-profile-muted">{t('projectProfile.git.none')}</p>
@@ -829,9 +935,11 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
                 </>}
               </div>
               : <div className="project-git-summary">
-                <div><span>{t('projectProfile.git.branch')}</span><strong title={git.branch}>{git.branch}</strong>{git.detached && <span className="project-chip">{t('projectProfile.git.detached')}</span>}</div>
+                {git.scope && <div data-project-git-sub="repo"><span>{t('projectProfile.git.subRepo')}</span><strong title={git.root}>{subRepoName}</strong></div>}
+                {git.scope && <div data-project-git-sub="folder"><span>{t('projectProfile.git.subFolder')}</span><strong title={git.scope}>{git.scope}</strong></div>}
+                <div><span>{t('projectProfile.git.branch')}</span><strong title={git.branch}>{git.branch}</strong>{git.detached && <span className="project-chip">{t('projectProfile.git.detached')}</span>}{git.noCommits && <span className="project-chip">{t('projectProfile.git.noCommits')}</span>}</div>
                 <div><span>{t('projectProfile.git.upstream')}</span>{git.upstream ? <><strong title={git.upstream}>{git.upstream}</strong><span className="project-chip">{git.ahead || git.behind ? [git.ahead ? t('projectProfile.git.ahead', { count: git.ahead }) : '', git.behind ? t('projectProfile.git.behind', { count: git.behind }) : ''].filter(Boolean).join(' · ') : t('projectProfile.git.inSync')}</span></> : <strong className="agent-profile-muted">{t('projectProfile.git.noUpstream')}</strong>}</div>
-                <div><span>{t('projectProfile.git.changes')}</span>{git.changesUnread ? <span className="project-chip warn">{t('projectProfile.git.unread')}</span> : changeCount ? <div className="project-chips">{!!git.staged && <span className="project-chip ok">{t('projectProfile.git.staged', { count: git.staged })}</span>}{!!git.unstaged && <span className="project-chip">{t('projectProfile.git.unstaged', { count: git.unstaged })}</span>}{!!git.untracked && <span className="project-chip">{t('projectProfile.git.untracked', { count: git.untracked })}</span>}</div> : <strong className="agent-profile-muted">{t('projectProfile.git.clean')}</strong>}</div>
+                <div><span>{t('projectProfile.git.changes')}</span>{git.changesUnread ? <span className="project-chip warn">{t('projectProfile.git.unread')}</span> : changeCount ? <div className="project-chips">{!!git.staged && <span className="project-chip ok">{t('projectProfile.git.staged', { count: git.staged })}</span>}{!!git.unstaged && <span className="project-chip">{t('projectProfile.git.unstaged', { count: git.unstaged })}</span>}{!!git.untracked && <span className="project-chip">{t('projectProfile.git.untracked', { count: git.untracked })}</span>}{git.scope && <span className="project-chip" data-project-git-sub="only">{t('projectProfile.git.subOnly')}</span>}</div> : <strong className="agent-profile-muted">{t('projectProfile.git.clean')}</strong>}</div>
                 {!remoteList && git.remote && <div><span>{t('projectProfile.git.remote')}</span><strong title={git.remote}>{git.remote}</strong></div>}
                 {!remoteList && github?.linked && github.login && <div data-project-git-account><span>{t('projectProfile.git.account')}</span><strong title={t('projectProfile.git.accountHint')}>{`GitHub · @${github.login}`}</strong></div>}
               </div>}
@@ -844,9 +952,19 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               <p>{t('projectProfile.git.githubLinkNote')}</p>
               {linkGithub && <div className="project-card-actions"><button className="btn primary sm" data-git-action="link-github" onClick={linkGithub}>{t('projectProfile.git.linkGithub')}</button></div>}
             </div>}
+            {git.repo && git.scope && !gitReadOnly && <p className="agent-profile-muted project-git-subnote" data-project-git-subnote>{t('projectProfile.git.subNote', { repo: subRepoName, folder: git.scope, branch: git.branch || 'HEAD' })}</p>}
+            {git.repo && !gitReadOnly && git.embedded?.map((path) => <div className="project-git-emb" key={path} data-project-git-embedded={path}>
+              <p><CircleAlert size={13} />{t('projectProfile.git.emb.title', { path })}</p>
+              <p className="muted">{t('projectProfile.git.emb.body')}</p>
+              <div className="project-git-emb-options">
+                <button type="button" data-git-action="emb-exclude" disabled={!!busy} onClick={() => void resolveEmbedded(path, 'exclude')}><FolderGit2 size={13} /><span>{t('projectProfile.git.emb.exclude')}</span><small>{t('projectProfile.git.emb.excludeHint')}</small></button>
+                <button type="button" data-git-action="emb-ignore" disabled={!!busy} onClick={() => void resolveEmbedded(path, 'ignore')}><EyeOff size={13} /><span>{t('projectProfile.git.emb.ignore')}</span><small>{t('projectProfile.git.emb.ignoreHint')}</small></button>
+                <button type="button" data-git-action="emb-submodule" disabled={!!busy} onClick={() => void resolveEmbedded(path, 'submodule')}><Link2 size={13} /><span>{t('projectProfile.git.emb.submodule')}</span><small>{t('projectProfile.git.emb.submoduleHint')}</small></button>
+              </div>
+            </div>)}
             {git.available && gitReadOnly && <p className="agent-profile-muted" data-project-git-readonly={gitReadOnly}>{t(gitReadOnly === 'shared' ? 'projectProfile.git.sharedNote' : gitReadOnly === 'managed' ? 'projectProfile.git.managedNote' : 'projectProfile.git.nestedNote')}</p>}
             {git.repo && !gitReadOnly && <div className="project-card-actions" data-project-git-write>
-              <button className="btn primary sm" data-git-action="commit" disabled={!!busy || (!changeCount && !git.changesUnread) || commitDraft !== null} onClick={() => void openCommit()}><GitCommitHorizontal size={13} />{t('projectProfile.git.commit')}</button>
+              <button className="btn primary sm" data-git-action="commit" disabled={!!busy || (!changeCount && !git.changesUnread) || commitDraft !== null} onClick={() => void openCommit()}><GitCommitHorizontal size={13} />{t(git.scope ? 'projectProfile.git.subCommit' : 'projectProfile.git.commit')}</button>
               <button className="btn sm" data-git-action="branch" disabled={!!busy} onClick={() => void newBranch()}>{busy === 'git-branch' ? <Loader2 size={13} className="spin" /> : <GitBranchPlus size={13} />}{t('projectProfile.git.newBranch')}</button>
               {git.upstream && <button className="btn sm" data-git-action="pull" disabled={!!busy || !!git.detached} title={git.detached ? t('projectProfile.git.err.detached') : undefined} onClick={() => void pull()}>{busy === 'git-pull' ? <Loader2 size={13} className="spin" /> : <Download size={13} />}{git.behind ? t('projectProfile.git.pullCount', { count: git.behind }) : t('projectProfile.git.pull')}</button>}
               {(remoteList ? !!git.pushRemote : git.upstream || git.remote || !!git.remotes) && <button className="btn sm" data-git-action="push" disabled={!!busy || !!git.detached} title={git.detached ? t('projectProfile.git.err.detached') : remoteList && !pushTarget ? git.pushRemote ?? undefined : undefined} onClick={() => void push()}>{busy === 'git-push' ? <Loader2 size={13} className="spin" /> : <Upload size={13} />}{pushLabel}</button>}
@@ -860,11 +978,12 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
               {gitErr.link && <div className="project-card-actions"><button className="btn sm" data-git-action="open-forsion-git" onClick={() => routeExternalUrl(gitErr.link!)}><ExternalLink size={13} />{t('projectProfile.git.openForsionGit')}</button></div>}
             </div>}
             <div className="project-inline-actions start" data-project-git-actions>
-              <button type="button" onClick={() => openTerminal(dir)}><TerminalSquare size={13} />{t('projectProfile.terminal')}</button>
-              <button type="button" onClick={() => reveal(dir)}><FolderOpen size={13} />{t('projectProfile.reveal')}</button>
-              <button type="button" onClick={copyPath}><Copy size={13} />{t('projectProfile.copyPath')}</button>
+              <button type="button" onClick={() => openTerminal(gitDir)}><TerminalSquare size={13} />{t('projectProfile.terminal')}</button>
+              <button type="button" onClick={() => reveal(gitDir)}><FolderOpen size={13} />{t('projectProfile.reveal')}</button>
+              <button type="button" onClick={() => copyPath(gitDir)}><Copy size={13} />{t('projectProfile.copyPath')}</button>
               <button type="button" onClick={() => setReloadAt((n) => n + 1)}><RefreshCw size={13} />{t('projectProfile.refresh')}</button>
               {githubPage && <button type="button" data-git-open="github" onClick={() => routeExternalUrl(githubPage)}><ExternalLink size={13} />{t('projectProfile.git.openGithub')}</button>}
+              {git.scope && git.root && <button type="button" data-git-open="repo-root" onClick={() => reveal(git.root!)}><FolderGit2 size={13} />{t('projectProfile.git.subOpenRepo')}</button>}
             </div>
           </section>
           {git.repo && !gitReadOnly && commitDraft !== null && <section className="project-card project-git-commit-form" data-project-git-commit-form>

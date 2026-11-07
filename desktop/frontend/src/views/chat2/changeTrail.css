@@ -104,3 +104,9 @@
 .ct-rv-cmd { margin-top: 6px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--overlay-light); font-size: var(--ui-font-meta); color: var(--text-muted); line-height: var(--ui-line-meta); display: flex; gap: 8px; align-items: flex-start; }
 .ct-rv-empty { padding: 40px 22px; color: var(--text-muted); font-size: var(--ui-font-body); }
 @container (max-width: 520px) { .ct-rv-body { grid-template-columns: minmax(0, 1fr); } .ct-rv-list { position: static; } }
+/* 多仓 Git:审阅页「未提交」按仓分组的组头(仓名 + 在哪 / 额外文件夹),仓里的文件夹组往里缩一点 */
+.ct-rv-repo { display: flex; align-items: center; gap: 6px; min-width: 0; margin-top: 6px; padding: 6px 8px 2px; color: var(--text); font-size: var(--ui-font-meta); font-weight: 600; }
+.ct-rv-repo > svg { flex-shrink: 0; color: var(--text-muted); }
+.ct-rv-repo > .nm { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-rv-repo > small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: var(--ui-font-caption); font-weight: 400; }
+.ct-rv-reposec .ct-rv-grp { padding-left: 18px; }

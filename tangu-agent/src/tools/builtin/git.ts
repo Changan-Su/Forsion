@@ -16,14 +16,17 @@
  */
 import type { ToolDef, ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
+import path from 'node:path';
 import { GitActionError, gitCommit, gitPending, gitPull, gitPush, readGit, serialized } from '../../services/gitActions.js';
-import { canonicalProjectPath, gitSummary, maskRemoteUrl, type GitSummary } from '../../services/projectContext.js';
+import { canonicalProjectPath, gitSummary, maskRemoteUrl, projectRepoInfos, type GitSummary } from '../../services/projectContext.js';
+import { invalidateRepos, listProjectRepos, repoCwd, resolveRepo, type ProjectRepo } from '../../services/gitRepos.js';
+import { forsionRepoName, publishToForsionGit } from '../../services/forsionGitPublish.js';
 import { githubLinkInfo } from '../../services/githubGit.js';
 import { forsionGit, type ForsionGitReviews } from '../../services/forsionGit.js';
 import { accountIdentityDefaults, resolveGitIdentity } from '../../services/gitIdentity.js';
 import type { GitRemoteInfo } from '../../services/gitRemotes.js';
 
-export const GIT_TOOL_NAMES = ['git_status', 'git_commit', 'git_push', 'git_pull'] as const;
+export const GIT_TOOL_NAMES = ['git_status', 'git_commit', 'git_push', 'git_pull', 'git_publish'] as const;
 
 const FILES_LISTED = 20;
 const COMMITS_LISTED = 5;
@@ -61,6 +64,19 @@ async function projectDir(ctx: ToolContext): Promise<string> {
   return canonicalProjectPath(ctx.projectPath);
 }
 
+/** 11-07 多仓 Git:`repo` 参数 → 项目碰得到的那个仓(项目自己 / 它所在的大仓 / 它里面的 / 额外文件夹的;清单由引擎算,模型给不了任意路径)。
+ *  不给 = 项目自己的那个;项目不在任何仓里又没给 → not_repo(git_status 另外列出里面的仓)。 */
+async function targetRepo(ctx: ToolContext, args: any): Promise<{ project: string; repo: ProjectRepo }> {
+  const project = await projectDir(ctx);
+  const want = typeof args?.repo === 'string' ? args.repo : undefined;
+  const repo = await resolveRepo(project, ctx.extraRoots ?? [], want);
+  if (repo) return { project, repo };
+  if (want && want.trim() && want.trim() !== '.') throw new GitActionError('unknown_repo', `"${want}" is not one of this project's repositories; call git_status to list them`);
+  throw new GitActionError('not_repo', 'This project folder is not a git repository');
+}
+const repoTag = (r: ProjectRepo) => ({ id: r.id, name: r.name, label: r.label, ...(r.scope ? { scope: r.scope } : {}) });
+const repoParam = { repo: { type: 'string', description: 'Which repository: an id from `repositories` in git_status (for example "Project/my-app" or an absolute path for an extra folder). Leave it out for the project\'s own repository.' } };
+
 /** 排到队里时用户可能已经停了这次 run(卡上的按钮正占着队):轮到了先看一眼,停了就不动手。 */
 const stillWanted = (ctx: ToolContext): void => { ctx.signal?.throwIfAborted(); };
 
@@ -68,8 +84,11 @@ const stillWanted = (ctx: ToolContext): void => { ctx.signal?.throwIfAborted(); 
 export function renderStatus(s: GitSummary, login: string | null | undefined, reviews?: ForsionGitReviews | null): Record<string, unknown> {
   if (!s.available) return { repo: false, note: 'git is not installed on this computer.' };
   if (!s.repo) return { repo: false, note: 'This project folder is not a git repository. The user can create one in the project details (Git tab), or you can run `git init` with run_bash if they ask.' };
-  if (s.nested) return { repo: true, nested: true, note: 'This project folder is inside a larger repository, not at its root; commit / push / pull from here are refused. Use run_bash for this repository.' };
+  if (s.nested && !s.scope) return { repo: true, nested: true, note: 'This project folder is inside a larger repository, not at its root; commit / push / pull from here are refused. Use run_bash for this repository.' };
   const notes: string[] = [];
+  if (s.scope) notes.push(`This project is the folder ${s.scope} inside a larger repository. Changes and git_commit only cover that folder; git_push and git_pull act on the whole branch.`);
+  if (s.embedded?.length) notes.push(`Inner repositories that are not registered: ${s.embedded.join(', ')}. git_commit refuses while they are there; the user can handle them in the project details (Git tab).`);
+  if (s.noCommits) notes.push('No commits yet.');
   if (s.configRisks?.length && !s.trusted) notes.push('This repository has its own git configuration that runs programs. Commit, push and pull are refused until the user trusts it in the project details (Git tab).');
   if (s.changesUnread) notes.push('The list of changes could not be read without running the repository\'s own filters; it is not necessarily clean.');
   if (s.detached) notes.push('HEAD is detached; switch to a branch before committing or pushing.');
@@ -121,32 +140,45 @@ function failure(action: string, e: unknown): string {
  * 审批说明(英文;TUI / 通道 / 收件箱 / 代批判官读它,桌面卡另按参数和现场画结构化卡身)。模型给的参数里没有「提交哪些文件」
  * 「推到哪个站、用谁的账号」,只有闸门读得到 —— approvals.gateToolCall 限时调它,读不到退回参数。不是 git 工具 → null。
  */
-export async function gitApprovalPreview(name: string, args: any, /** 会话所属项目的目录(ctx.projectPath) */ cwd: string | undefined): Promise<string | null> {
+export async function gitApprovalPreview(name: string, args: any, /** 会话所属项目的目录(ctx.projectPath) */ cwd: string | undefined, extraRoots: readonly string[] = []): Promise<string | null> {
   if (!cwd || !(GIT_TOOL_NAMES as readonly string[]).includes(name) || name === 'git_status') return null;
-  const dir = await canonicalProjectPath(cwd);
+  const project = await canonicalProjectPath(cwd);
+  const repo = await resolveRepo(project, extraRoots, typeof args?.repo === 'string' ? args.repo : undefined);
+  if (!repo) return null;
+  const dir = repo.root;
+  // 不是项目自己的那个仓 / 子目录模式:第一行先说在哪个仓
+  // 子目录模式只有提交限在项目文件夹里;推送 / 拉取 / 发布动的是整个分支,说明里不能写成「只有这个文件夹」(Codex 评审)
+  const head = repo.group !== 'project' ? `repository ${repo.name} (${repo.label})` : repo.scope ? `repository ${repo.name}` : '';
+  const where = !head ? '' : !repo.scope ? `${head}\n` : name === 'git_commit' ? `${head}, folder ${repo.scope} only\n` : `${head}: the whole branch, not just this project's folder ${repo.scope}\n`;
+  if (name === 'git_publish') {
+    const want = typeof args?.name === 'string' && args.name.trim() ? args.name.trim() : forsionRepoName(path.basename(dir));
+    const s = await gitSummary(dir);
+    return `${where}publish ${s.branch ?? 'HEAD'} to Forsion Git as a new private repository "${want}"\nwith the user's Forsion account${s.remoteList?.length ? '' : '; it becomes origin'}`;
+  }
   if (name === 'git_commit') {
-    const [s, pending] = await Promise.all([gitSummary(dir), gitPending(dir).catch(() => null)]);
+    const [s, pending] = await Promise.all([gitSummary(repoCwd(repo)), gitPending(dir, undefined, repo.scope).catch(() => null)]);
     const msg = typeof args?.message === 'string' ? args.message.trim() : '';
     const more = pending && pending.total > FILES_LISTED ? `\n  … ${pending.total - FILES_LISTED} more` : '';
     const files = pending
       ? `${pending.total} file${pending.total === 1 ? '' : 's'}${pending.stagedOnly ? ' (staged only)' : ''}:\n${pending.files.slice(0, FILES_LISTED).map((f) => `  ${f.code} ${f.path}`).join('\n')}${more}`
       : 'files: (could not be listed)';
-    return `commit to ${s.branch ?? 'HEAD'}\n${msg}\n${files}`;
+    return `${where}commit to ${s.branch ?? 'HEAD'}\n${msg}\n${files}`;
   }
   const [s, login] = await Promise.all([gitSummary(dir), name === 'git_push' ? githubLogin() : Promise.resolve(undefined)]);
-  if (name === 'git_pull') return `pull ${s.upstream ?? '(no upstream)'} into ${s.branch ?? 'HEAD'} (fast-forward only)`;
+  if (name === 'git_pull') return `${where}pull ${s.upstream ?? '(no upstream)'} into ${s.branch ?? 'HEAD'} (fast-forward only)`;
   const once = typeof args?.remote === 'string' && args.remote.trim() ? args.remote.trim() : null;
   const to = once ?? s.pushRemote ?? null;
   const r = to ? s.remoteList?.find((x) => x.name === to) : undefined;
   const d = r ? describeRemote(r, s.pushRemote, login) : null;
-  const where = d ? `${d.site} ${d.repo ?? r!.url}${d.organization ? ` (organization ${d.organization})` : ''} (${d.name})` : to ? `remote ${to}` : 'the default remote';
+  const dest = d ? `${d.site} ${d.repo ?? r!.url}${d.organization ? ` (organization ${d.organization})` : ''} (${d.name})` : to ? `remote ${to}` : 'the default remote';
+  const repoLine = where;
   // 站点 / 账号按取回地址认;配了单独的推送地址(pushurl / pushInsteadOf)时提交实际去那里 → 以 ⚠ 开头写出来(桌面卡见 ⚠ 就照登这段原文)
   const [fetchUrl, pushUrl] = to && !to.startsWith('-') ? await Promise.all([readGit(dir, ['remote', 'get-url', to]), readGit(dir, ['remote', 'get-url', '--push', to])]) : [];
   const first = (out: string): string => out.split('\n')[0].trim();
   const elsewhere = fetchUrl?.code === 0 && pushUrl?.code === 0 && first(pushUrl.stdout) !== first(fetchUrl.stdout) ? maskRemoteUrl(first(pushUrl.stdout)) : null;
   const warn = elsewhere ? `⚠ ${to} pushes to ${elsewhere}, not to the address the site below is read from\n` : '';
   const ahead = !once && s.upstream ? `\n${s.ahead ?? 0} commit${s.ahead === 1 ? '' : 's'} ahead of ${s.upstream}` : '';
-  return `${warn}push ${s.branch ?? 'HEAD'} to ${where}${d ? `\nwith ${d.account}` : ''}${ahead}${once && s.pushRemote && once !== s.pushRemote ? `\nthis once; the default push target stays ${s.pushRemote}` : ''}`;
+  return `${repoLine}${warn}push ${s.branch ?? 'HEAD'} to ${dest}${d ? `\nwith ${d.account}` : ''}${ahead}${once && s.pushRemote && once !== s.pushRemote ? `\nthis once; the default push target stays ${s.pushRemote}` : ''}`;
 }
 
 const project = {
@@ -169,12 +201,27 @@ export const gitToolsProvider: ToolProvider = {
       "The current project's git state: branch, changes, remotes (Forsion Git / GitHub) and which one pushes, recent commits. Use these git_* tools instead of running git in the shell to check, commit, push or pull.",
       "Read the current project's git state: branch and upstream, how far ahead / behind, the changed files, every remote (site such as Forsion Git or GitHub, repository, and the account used for it) with the one that `git_push` uses by default, and the latest commits. Read-only. " +
         'The user sees the result as a git card in the conversation.',
-      project,
-      async (_args, ctx) => {
+      { type: 'object', properties: { ...repoParam } },
+      async (args, ctx) => {
         try {
-          const cwd = await projectDir(ctx);
-          const [s, login] = await Promise.all([gitSummary(cwd), githubLogin()]);
-          return JSON.stringify({ action: 'status', ...renderStatus(s, login, await reviewRequests(s)) });
+          const project = await projectDir(ctx);
+          const want = typeof args?.repo === 'string' && args.repo.trim() && args.repo.trim() !== '.' ? args.repo : undefined;
+          const repo = await resolveRepo(project, ctx.extraRoots ?? [], want);
+          if (want && !repo) throw new GitActionError('unknown_repo', `"${want}" is not one of this project's repositories`);
+          // 其他碰得到的仓(不点名时一起列出来,模型才知道还能看哪个)
+          const others = want ? null : await projectRepoInfos(project, ctx.extraRoots ?? []).catch(() => null);
+          const repositories = others?.repos.filter((r) => r.id !== repo?.id).map((r) => ({
+            repo: r.id, name: r.name, location: r.label, group: r.group, branch: r.branch ?? null, changes: r.changes ?? 0, ahead: r.ahead ?? 0,
+            ...(r.noCommits ? { noCommits: true } : {}), ...(r.scope ? { scope: r.scope } : {}),
+          }));
+          const listed = repositories?.length ? { repositories, ...(others?.more ? { repositoriesMore: others.more } : {}) } : {};
+          if (!repo) {
+            const s = await gitSummary(project);
+            if (!s.available || !repositories?.length) return JSON.stringify({ action: 'status', ...renderStatus(s, undefined) });
+            return JSON.stringify({ action: 'status', repo: false, note: 'This project folder itself is not a git repository, but it can reach the repositories below. Pass `repo` to git_status / git_commit / git_push / git_pull / git_publish to work in one of them.', ...listed });
+          }
+          const [s, login] = await Promise.all([gitSummary(repoCwd(repo)), githubLogin()]);
+          return JSON.stringify({ action: 'status', repoInfo: repoTag(repo), ...renderStatus(s, login, await reviewRequests(s)), ...listed });
         } catch (e) { return failure('status', e); }
       },
       { capabilities: { sideEffect: 'read' } }),
@@ -183,18 +230,20 @@ export const gitToolsProvider: ToolProvider = {
       'Commit in the current project, like the Commit button in the project details: if some changes are staged, only those are committed; otherwise all changes, including new files, are added and committed. ' +
         "The author is the user's git identity, or the one Forsion fills in from their account. Files that look like credentials and very large files are refused. " +
         'Write the message in the style of the recent commits (see git_status). The user sees the result as a git card.',
-      { type: 'object', properties: { message: { type: 'string', description: 'The commit message: a short subject line, optionally a blank line and a body' } }, required: ['message'] },
+      { type: 'object', properties: { message: { type: 'string', description: 'The commit message: a short subject line, optionally a blank line and a body' }, ...repoParam }, required: ['message'] },
       async (args, ctx) => {
         try {
-          const cwd = await projectDir(ctx);
+          const { project, repo } = await targetRepo(ctx, args);
+          const cwd = repo.root;
           return await serialized(cwd, async () => {
             stillWanted(ctx);
             const who = await resolveGitIdentity(() => accountIdentityDefaults(ctx.userId), cwd);
-            const pending = await gitPending(cwd);
-            const r = await gitCommit(cwd, args?.message, undefined, pending.token, who.env);
+            const pending = await gitPending(cwd, undefined, repo.scope);
+            const r = await gitCommit(cwd, args?.message, undefined, pending.token, who.env, repo.scope);
+            invalidateRepos(project);
             const branch = (await gitSummary(cwd)).branch ?? null;
             return JSON.stringify({
-              action: 'commit', sha: r.sha, short: r.sha.slice(0, 7), subject: r.subject, branch, stagedOnly: r.stagedOnly,
+              action: 'commit', repoInfo: repoTag(repo), sha: r.sha, short: r.sha.slice(0, 7), subject: r.subject, branch, stagedOnly: r.stagedOnly,
               files: pending.total, paths: pending.files.slice(0, FILES_LISTED).map((f) => f.path),
               ...(who.identity ? { author: `${who.identity.name} <${who.identity.email}>` } : {}),
             });
@@ -208,18 +257,20 @@ export const gitToolsProvider: ToolProvider = {
         'With `remote` it pushes the branch to that remote once, without changing where it normally pushes. ' +
         "Credentials: Forsion Git uses the user's Forsion account, GitHub uses their linked GitHub account, other remotes use this computer's own git credentials. Never force-pushes unless the user turned that on in Settings. " +
         'The user sees the result as a git card.',
-      { type: 'object', properties: { remote: { type: 'string', description: 'Name of the remote to push to this once (from git_status `remotes`). Leave it out to use the default push target.' } } },
+      { type: 'object', properties: { remote: { type: 'string', description: 'Name of the remote to push to this once (from git_status `remotes`). Leave it out to use the default push target.' }, ...repoParam } },
       async (args, ctx) => {
         try {
-          const cwd = await projectDir(ctx);
+          const { project, repo } = await targetRepo(ctx, args);
+          const cwd = repo.root;
           const to = typeof args?.remote === 'string' && args.remote.trim() ? args.remote.trim() : undefined;
           return await serialized(cwd, async () => {
             stillWanted(ctx);
             const [before, login] = await Promise.all([gitSummary(cwd), githubLogin()]);
             const r = to ? await gitPush(cwd, undefined, to, { once: true }) : await gitPush(cwd);
+            invalidateRepos(project);
             const info = before.remoteList?.find((x) => x.name === r.remote);
             return JSON.stringify({
-              action: 'push', remote: r.remote, branch: r.branch, target: r.target,
+              action: 'push', repoInfo: repoTag(repo), remote: r.remote, branch: r.branch, target: r.target,
               commits: !to && before.upstream === r.target ? before.ahead ?? null : null,
               ...(info ? { site: describeRemote(info, before.pushRemote, login) } : {}),
               ...(r.ownCredentials ? { ownCredentials: true } : {}),
@@ -232,13 +283,39 @@ export const gitToolsProvider: ToolProvider = {
       "Bring the current project's branch up to date with its upstream (fast-forward only).",
       'Fetch the current branch\'s upstream and fast-forward to it. It never merges or rebases: if both sides have new commits, or uncommitted changes are in the way, nothing changes and the error says why. ' +
         'The user sees the result as a git card.',
-      project,
-      async (_args, ctx) => {
+      { type: 'object', properties: { ...repoParam } },
+      async (args, ctx) => {
         try {
-          const cwd = await projectDir(ctx);
-          return await serialized(cwd, async () => { stillWanted(ctx); return JSON.stringify({ action: 'pull', ...(await gitPull(cwd)) }); });
+          const { project, repo } = await targetRepo(ctx, args);
+          const cwd = repo.root;
+          return await serialized(cwd, async () => {
+            stillWanted(ctx);
+            const r = await gitPull(cwd);
+            invalidateRepos(project);
+            return JSON.stringify({ action: 'pull', repoInfo: repoTag(repo), ...r });
+          });
         } catch (e) { return failure('pull', e); }
       },
       { capabilities: { sideEffect: 'network', approval: 'command' } }),
+    tool('git_publish',
+      "Publish a repository of the current project to the user's Forsion Git: creates a private repository there under their Forsion account and pushes the current branch. Asks the user every time.",
+      "Publish a repository to the user's Forsion Git, like Publish to Forsion Git in the project details: adds a remote pointing at <site>/<their username>/<name>.git (named origin when the repository has no remote yet) and pushes the current branch; the site creates it as a private repository. " +
+        'The repository needs at least one commit (use git_commit first). The user approves every call. If the push fails, the new remote is removed again so a different name can be tried. The user sees the result as a git card.',
+      { type: 'object', properties: { name: { type: 'string', description: 'Repository name on Forsion Git: letters, digits, - _ and . only. Leave it out to use the folder name.' }, ...repoParam } },
+      async (args, ctx) => {
+        try {
+          const { project, repo } = await targetRepo(ctx, args);
+          const cwd = repo.root;
+          const name = typeof args?.name === 'string' && args.name.trim() ? args.name.trim() : forsionRepoName(path.basename(cwd));
+          if (!name) throw new GitActionError('invalid_repo_name', 'The folder name cannot be turned into a repository name; pass `name`');
+          return await serialized(cwd, async () => {
+            stillWanted(ctx);
+            const r = await publishToForsionGit(cwd, name);
+            invalidateRepos(project);
+            return JSON.stringify({ action: 'publish', repoInfo: repoTag(repo), url: r.url, name: r.name, remote: r.remote, branch: r.branch, target: r.target });
+          });
+        } catch (e) { return failure('publish', e); }
+      },
+      { capabilities: { sideEffect: 'network', approval: 'always' } }),
   ],
 };

@@ -238,6 +238,41 @@ registerMessages({
   'projectProfile.git.err.ambiguous_remote': { zh: '配置了多个远端，但没有叫 origin 的，不知道该推到哪里。请先在终端里给当前分支设置上游。', en: 'Several remotes are configured and none is called origin. Set an upstream for this branch in a terminal first.' },
   'projectProfile.git.err.no_model': { zh: '这条会话还没有选定模型，没法生成提交信息。可以直接手写。', en: 'This conversation has no model yet, so no message can be written for you. You can type one yourself.' },
   'projectProfile.git.err.quota_exceeded': { zh: '额度不足，没法生成提交信息。可以直接手写。', en: 'You are out of quota, so no message can be written for you. You can type one yourself.' },
+  // ── 多仓 Git(11-07,方案 C):先列仓库,点进去是一个仓的详情 ──
+  'projectProfile.git.reposCaptionShared': { zh: '{dir} 是默认文件夹，本身不建仓。下面是这里面和额外文件夹里找到的仓库，点开就能提交、推送。', en: '{dir} is the default folder and is not versioned itself. These are the repositories found inside it and in the extra folders; open one to commit or push.' },
+  'projectProfile.git.reposCaption': { zh: '这个项目碰得到的仓库，点开就能提交、推送。', en: 'Repositories this project can reach; open one to commit or push.' },
+  'projectProfile.git.reposMore': { zh: '还有 {count} 个', en: '{count} more' },
+  'projectProfile.git.allRepos': { zh: '全部仓库', en: 'All repositories' },
+  'projectProfile.git.extra': { zh: '额外文件夹', en: 'Extra folders' },
+  'projectProfile.git.openRepo': { zh: '查看仓库 {name}', en: 'Open repository {name}' },
+  'projectProfile.git.noCommits': { zh: '还没提交过', en: 'No commits yet' },
+  'projectProfile.git.noRemoteYet': { zh: '还没有远端', en: 'No remote yet' },
+  'projectProfile.git.otherSite': { zh: '其他站点', en: 'Another site' },
+  'projectProfile.git.repoLoadFailed': { zh: '没读到这个仓库的状态。', en: 'Couldn’t read this repository’s state.' },
+  // 子目录模式:项目在一个更大的仓里,也能只提交本项目这块
+  'projectProfile.git.subRepo': { zh: '仓库', en: 'Repository' },
+  'projectProfile.git.subFolder': { zh: '位置', en: 'Folder' },
+  'projectProfile.git.subOnly': { zh: '只算本项目', en: 'This project only' },
+  'projectProfile.git.subNote': { zh: '这个项目在 {repo} 仓库的 {folder} 里。提交只收这个文件夹里的改动；推送会把 {branch} 上还没推的提交一起推上去，包括别的目录的。', en: 'This project lives in {folder} inside the {repo} repository. Commits only take changes in this folder; pushing sends every unpushed commit on {branch}, including ones from other folders.' },
+  'projectProfile.git.subCommit': { zh: '提交本项目的改动…', en: 'Commit this project’s changes…' },
+  'projectProfile.git.subOpenRepo': { zh: '打开整个仓库', en: 'Open the whole repository' },
+  'projectProfile.git.err.staged_outside': { zh: '这个仓库别的文件夹里有已经暂存的改动，提交本项目时会把它们一起带上，所以没有提交。先在终端里处理那些暂存，再回来提交。', en: 'Other folders of this repository have staged changes that would go into this commit, so nothing was committed. Deal with those staged changes in a terminal first, then commit again.' },
+  // 仓里没登记的内嵌仓:三选一
+  'projectProfile.git.emb.title': { zh: '这里面还有一个仓库：{path}', en: 'There is another repository inside: {path}' },
+  'projectProfile.git.emb.body': { zh: '直接提交会把它记成一个空的子模块，克隆下来是个空文件夹。选一种处理：', en: 'Committing now would record it as an empty submodule that clones as an empty folder. Choose one:' },
+  'projectProfile.git.emb.exclude': { zh: '单独管理', en: 'Manage separately' },
+  'projectProfile.git.emb.excludeHint': { zh: '只在这台电脑上不收它，列成独立的仓', en: 'Ignore it on this computer only and list it as its own repository' },
+  'projectProfile.git.emb.ignore': { zh: '加进 .gitignore', en: 'Add to .gitignore' },
+  'projectProfile.git.emb.ignoreHint': { zh: '写进 .gitignore 一起提交，别人克隆也不收', en: 'Committed with the repository, so every clone ignores it too' },
+  'projectProfile.git.emb.submodule': { zh: '登记成子模块…', en: 'Register as submodule…' },
+  'projectProfile.git.emb.submoduleHint': { zh: '它得先有远端，别人克隆时能拉到', en: 'It needs a remote so other clones can fetch it' },
+  'projectProfile.git.emb.pointer': { zh: '在 Git 卡片里的「这里面还有一个仓库」那一块选一种处理。', en: 'Choose how to handle it in the “There is another repository inside” block on the Git card.' },
+  'projectProfile.git.emb.done.exclude': { zh: '{path} 已改为单独管理', en: '{path} is now managed separately' },
+  'projectProfile.git.emb.done.ignore': { zh: '{path} 已加进 .gitignore', en: '{path} was added to .gitignore' },
+  'projectProfile.git.emb.done.submodule': { zh: '{path} 已登记成子模块', en: '{path} is now registered as a submodule' },
+  'projectProfile.git.err.unknown_repo': { zh: '这个仓库已经不在这个项目能碰到的清单里了（挪走或删掉了），请刷新后再选。', en: 'That repository is no longer in this project’s list (it was moved or deleted). Refresh and pick again.' },
+  'projectProfile.git.err.not_embedded': { zh: '那个文件夹已经不是没登记的内嵌仓库了，状态已刷新。', en: 'That folder is no longer an unregistered repository inside this one; the state has been refreshed.' },
+  'projectProfile.git.err.submodule_no_remote': { zh: '{path} 还没有远端，登记成子模块后别人克隆时拉不到它。先给它加一个远端，或者选「单独管理」。', en: '{path} has no remote yet, so other clones could not fetch it as a submodule. Add a remote to it first, or choose Manage separately.' },
 })
 
 /** 引擎 git 动作的机器码(services/gitActions.ts);有词条的按当前语言说,没有的回落引擎原文。 */
@@ -248,4 +283,5 @@ export const GIT_ERROR_CODES = new Set([
   'no_upstream', 'diverged', 'dirty_worktree', 'untrusted_transport', 'forsion_git_needs_setup', 'forsion_git_rate_limited', 'forsion_git_unavailable',
   'has_remote', 'invalid_repo_name', 'no_commits', 'github_not_linked', 'github_relink_required', 'github_unavailable',
   'github_repo_exists', 'github_api_failed', 'github_unreachable', 'invalid_remote_url', 'remote_unreachable', 'credential_denied',
+  'staged_outside', 'not_embedded', 'unknown_repo',
 ])

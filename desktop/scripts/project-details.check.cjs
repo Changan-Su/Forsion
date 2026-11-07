@@ -867,6 +867,57 @@ async function run(app, win, stub, seen, home, ctx) {
   check('7c6 克隆 → POST git/clone { url, parent, name };对话框收起,在克隆出来的文件夹里开了一个新会话(= 加成了项目,同「添加项目」)', seen.gitClones.length === 2 && seen.gitClones[1].url === 'https://git.forsion.example/dave/notes.git' && seen.gitClones[1].parent === home && seen.gitClones[1].name === 'notes'
     && await cloneDlg.count() === 0 && seen.clonedSession?.project_path === path.join(home, 'notes') && seen.clonedSession?.project_name === 'notes', JSON.stringify({ clones: seen.gitClones, session: seen.clonedSession ?? null }))
 
+  // ── 7d 多仓 Git(11-07,方案 C):碰得到 ≥2 个仓 → 先列仓库;点进去是那个仓的详情(git/repo 现读),写动作带 repo;返回回清单 ──
+  const mrDir = path.join(home, 'Demo Project')
+  ctx.repos = [
+    { id: '.', name: 'Demo Project', label: '.', root: mrDir, group: 'project', branch: ctx.git.branch, upstream: ctx.git.upstream, ahead: 0, changes: 0, remoteHost: 'github' },
+    { id: 'vendor/lib', name: 'lib', label: 'vendor/lib', root: path.join(mrDir, 'vendor', 'lib'), group: 'inside', branch: 'dev', upstream: 'origin/dev', ahead: 1, changes: 2, remoteHost: 'forsion' },
+    { id: path.join(home, 'notes-site'), name: 'notes-site', label: '~/notes-site', root: path.join(home, 'notes-site'), group: 'extra', branch: 'main', upstream: null, changes: 0, noCommits: true, remoteHost: null },
+  ]
+  seen.repoGit = { available: true, repo: true, branch: 'dev', upstream: 'origin/dev', ahead: 1, behind: 0, staged: 0, unstaged: 2, untracked: 0, changesTotal: 2,
+    changes: [{ code: ' M', path: 'src/a.ts' }, { code: ' M', path: 'src/b.ts' }], commits: [], remote: 'https://git.forsion.example/dave/lib.git', remotes: 1 }
+  await openSession(win, 'Demo main', 'pd-main')
+  await details.locator('[data-project-profile]').getByRole('tab', { name: 'Git', exact: true }).click()
+  const repoList = details.locator('[data-project-git-repos]')
+  await repoList.waitFor({ timeout: 10_000 }).catch(() => {})
+  const repoCards = repoList.locator('[data-project-git-repo]')
+  check('7d1 三个仓 → Git 页先列仓库(成员卡同款),额外文件夹的那个带标签;状态行写分支 · 改动 · 站名', await repoCards.count() === 3
+    && /额外文件夹/.test(await repoList.locator('[data-repo-group="extra"]').textContent()) && /dev · 2 处改动 · Forsion Git/.test(await repoList.locator('[data-project-git-repo="vendor/lib"]').textContent()),
+    await repoList.textContent().catch(() => ''))
+  await repoList.locator('[data-project-git-repo="vendor/lib"] button').click()
+  const repoCard = details.locator('[data-project-git][data-project-git-repo-id="vendor/lib"]')
+  await repoCard.waitFor({ timeout: 10_000 }).catch(() => {})
+  check('7d2 点进 lib → GET git/repo?repo=vendor/lib;详情顶上「← 全部仓库」+ 仓名 / 位置,摘要是 lib 的(分支 dev)', seen.repoGets.at(-1) === 'vendor/lib' && await details.locator('[data-git-back]').count() === 1
+    && /lib/.test(await repoCard.locator('[data-project-git-repohead]').textContent()) && /dev/.test(await repoCard.locator('.project-git-summary').textContent()), JSON.stringify({ gets: seen.repoGets }))
+  await details.screenshot({ path: shot('project-git-repo-detail-zh-light') }).catch(() => {})
+  const pushesBeforeRepo = seen.gitPushes.length
+  await repoCard.locator('[data-git-action="push"]').click()
+  await until(async () => seen.gitPushes.length === pushesBeforeRepo + 1)
+  check('7d3 lib 的推送 → POST git/push 带 repo: vendor/lib', seen.gitPushes.at(-1)?.repo === 'vendor/lib' && seen.gitPushes.at(-1)?.sessionId === 'pd-main', JSON.stringify(seen.gitPushes.at(-1)))
+  await details.locator('[data-git-back]').click()
+  await repoList.waitFor({ timeout: 5_000 }).catch(() => {})
+  check('7d4 「← 全部仓库」回清单', await repoCards.count() === 3 && await details.locator('[data-project-git]').count() === 0)
+  await details.screenshot({ path: shot('project-git-repos-zh-light') }).catch(() => {})
+  delete ctx.repos
+
+  // ── 7e 子目录模式 + 内嵌仓(新引擎带 scope / embedded):能写、只算本项目、提交键换说法;内嵌仓给三种处理 ──
+  const gitBefore = ctx.git
+  ctx.git = { ...ctx.git, nested: true, scope: 'apps/demo', root: path.join(home, 'mono'), embedded: ['vendor/inner/'], changesTotal: 2, unstaged: 2, staged: 0, untracked: 0,
+    changes: [{ code: ' M', path: 'src/a.ts' }, { code: ' M', path: 'src/b.ts' }] }
+  await openSession(win, 'Rootless chat', 'pd-rootless') // 换个会话再回来 = 重读项目上下文(同 7d)
+  await openSession(win, 'Demo main', 'pd-main')
+  await details.locator('[data-project-profile]').getByRole('tab', { name: 'Git', exact: true }).click()
+  const subCard = details.locator('[data-project-git]')
+  await subCard.locator('[data-project-git-sub="folder"]').waitFor({ timeout: 10_000 }).catch(() => {})
+  check('7e1 子目录模式:有「仓库 / 位置」两行、改动后标「只算本项目」、提交键是「提交本项目的改动…」,不是只读', await subCard.locator('[data-project-git-sub="folder"]').count() === 1
+    && await subCard.locator('[data-project-git-sub="only"]').count() === 1 && /提交本项目的改动/.test(await subCard.locator('[data-git-action="commit"]').textContent().catch(() => ''))
+    && await subCard.locator('[data-project-git-readonly]').count() === 0, await subCard.textContent().catch(() => ''))
+  check('7e2 内嵌仓 → 列出 vendor/inner/ 并给三种处理', await subCard.locator('[data-project-git-embedded]').count() >= 1 && /vendor\/inner/.test(await subCard.locator('[data-project-git-embedded]').first().textContent().catch(() => '')),
+    await subCard.locator('[data-project-git-embedded]').first().textContent().catch(() => ''))
+  await sleep(600) // 等切标签的过渡走完再拍(不然整块是半透明的)
+  await details.screenshot({ path: shot('project-git-subdir-zh-light') }).catch(() => {})
+  ctx.git = gitBefore
+
   // ── 8 负对照:无根会话仍是 Agent 详情 ───────────────────────────────────
   await openSession(win, 'Rootless chat', 'pd-rootless')
   await details.locator('[data-agent-profile="xyra"]').waitFor()
@@ -1111,7 +1162,7 @@ async function main() {
   for (const dir of [userData, `${userData}-dev`, path.join(vault, 'Sessions'), projectDir]) fs.mkdirSync(dir, { recursive: true })
   const ctx = contextFixture(projectDir)
   const seen = { memoryEdits: [], memoryForgets: [], memoryConflictOnce: false, memoryCandidates: [], memoryCandidateGoneOnce: false, memoryCandidateBusyOnce: false, memoryRestores: [], memoryRestoreGoneOnce: false, compactedActivity: false, candidatesActivity: false, ctxGets: [], init: 0, docPuts: [], settingsPuts: [], skills: [], sessionsCreated: 0, iconPosts: [], iconGets: 0, iconDeletes: [], sessionDeletes: [], agentDeletes: [], agentTrash: {}, trashRestores: [],
-    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [], github: null, pushGithubUnlinkedOnce: false, gitRemotes: [], gitGithubPublishes: [], accountsGets: 0, gitPushTargets: [], pushOwnOnce: false, pushDeniedOnce: false, gitClones: [], cloneExistsOnce: false,
+    gitMessages: [], gitCommits: [], gitBranches: [], gitPushes: [], gitPulls: [], gitInits: [], gitSettingsPuts: [], gitPendings: [], gitTrusts: [], pushGate: false, hostingGets: [], hosting: null, gitPublishes: [], github: null, pushGithubUnlinkedOnce: false, gitRemotes: [], gitGithubPublishes: [], accountsGets: 0, gitPushTargets: [], pushOwnOnce: false, pushDeniedOnce: false, gitClones: [], cloneExistsOnce: false, repoGets: [], repoGit: null,
     repos: { forsion: [{ fullName: 'dave/notes', private: true, cloneUrl: 'https://git.forsion.example/dave/notes.git', updatedAt: '2026-10-10T08:00:00Z' }, { fullName: 'dave/plugin-demo', private: false, cloneUrl: 'https://git.forsion.example/dave/plugin-demo.git', updatedAt: null }], github: 'unlinked' },
     accounts: { forsionGit: { webUrl: 'https://git.forsion.example', username: 'dave' }, github: { linked: false }, identity: { name: 'Dave', email: 'dave@noreply.git.forsion.example', source: 'forsion' } } }
   let gitSettings = { branchPrefix: 'tangu/', commitInstructions: '', forceWithLease: false }
@@ -1151,6 +1202,13 @@ async function main() {
       if (route === '/agent/project-context' && method === 'GET') { seen.ctxGets.push(sid); return ctx }
       // 这里能不能「发布到 Forsion Git」(引擎 forsionPublishInfo):缺省 null = 没登录 Forsion / 站上不发凭据
       if (route === '/agent/project-context/git/hosting' && method === 'GET') { seen.hostingGets.push(sid); return { forsionGit: seen.hosting, github: seen.github, connect: true } }
+      // 多仓 Git:一个仓的现场(引擎 GET git/repo?repo=);清单外的 id → 400 unknown_repo
+      if (route === '/agent/project-context/git/repo' && method === 'GET') {
+        const id = url.searchParams.get('repo'); seen.repoGets.push(id)
+        const info = (ctx.repos || []).find((r) => r.id === id)
+        if (!info) return { __code: 400, body: { detail: 'unknown repository', error: 'unknown_repo' } }
+        return { repo: info, git: id === '.' ? ctx.git : seen.repoGit }
+      }
       if (route === '/agent/project-context/settings' && method === 'GET') return { settings: demoIds.has(sid) ? ctx.settings : null }
       if (route === '/agent/project-context/init' && method === 'POST') { seen.init += 1; ctx.doc = { ...ctx.doc, exists: true, content: TEMPLATE, mtimeMs: 1000, bytes: TEMPLATE.length, sources: [ctx.doc.path] }; return { createdDir: true, createdDoc: true, context: ctx } }
     }

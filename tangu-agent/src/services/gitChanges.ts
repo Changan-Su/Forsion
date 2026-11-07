@@ -26,6 +26,60 @@ export interface GitChanges {
   files: FileChange[];
   /** 文件数超过上限 / git 输出超过上限,清单不全。 */
   truncatedFiles?: boolean;
+  /** 11-07 多仓 Git:这次列到的仓(按 dir 最长前缀把 files 归到各仓;只有一个仓时也给)。 */
+  repos?: GitChangesRepo[];
+}
+
+export interface GitChangesRepo {
+  id: string;
+  name: string;
+  label: string;
+  root: string;
+  group: 'project' | 'inside' | 'extra';
+  /** 这个仓的改动的基准目录(子目录模式 = 仓里的那个子目录)。 */
+  dir: string;
+  /** 这个仓读不了的原因(其他仓照常列)。 */
+  reason?: GitChanges['reason'];
+  truncatedFiles?: boolean;
+}
+
+/**
+ * 多仓版:项目碰得到的每个仓各列一份,合成一张清单(文件路径都是绝对路径,repos 标明各仓的基准目录)。
+ * 项目自己不在仓里、里面也没有仓 → 与 listGitChanges 一样回 notrepo。文件总数照旧封顶。
+ */
+export async function listGitChangesMulti(
+  projectDir: string,
+  repos: ReadonlyArray<{ id: string; name: string; label: string; root: string; group: GitChangesRepo['group']; dir: string }>,
+  opts: { diff?: boolean; path?: string } = {},
+): Promise<GitChanges> {
+  if (!repos.length) return listGitChanges(projectDir, opts);
+  // 只看一个文件:交给基准目录离它最近的那个仓
+  const inDir = (dir: string, p: string) => { const rel = path.relative(dir, p); return !!rel && rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel); };
+  const targets = opts.path !== undefined
+    ? repos.filter((r) => inDir(r.dir, opts.path!)).sort((a, b) => b.dir.length - a.dir.length).slice(0, 1)
+    : repos;
+  const out: GitChanges = { available: false, root: projectDir, files: [], repos: [] };
+  let nogit = false;
+  for (const r of repos) {
+    const meta: GitChangesRepo = { id: r.id, name: r.name, label: r.label, root: r.root, group: r.group, dir: r.dir };
+    out.repos!.push(meta);
+    if (!targets.includes(r)) continue;
+    if (out.files.length >= GIT_CHANGES_MAX_FILES) { out.truncatedFiles = true; meta.truncatedFiles = true; continue; }
+    let one: GitChanges;
+    try { one = await listGitChanges(r.dir, opts); } catch { meta.reason = 'notrepo'; continue; }
+    if (!one.available) { meta.reason = one.reason; if (one.reason === 'nogit') nogit = true; continue; }
+    out.available = true;
+    const room = GIT_CHANGES_MAX_FILES - out.files.length;
+    out.files.push(...one.files.slice(0, room));
+    if (one.truncatedFiles || one.files.length > room) { out.truncatedFiles = true; meta.truncatedFiles = true; }
+  }
+  if (!out.available) {
+    // 全都读不了:沿用单仓的原因(只有一个仓时与以前完全一样)
+    const reasons = out.repos!.map((m) => m.reason).filter(Boolean);
+    out.reason = nogit ? 'nogit' : reasons.length && reasons.every((x) => x === 'untrusted') ? 'untrusted' : reasons[0] ?? 'notrepo';
+    if (opts.path !== undefined && !targets.length) { out.available = true; delete out.reason; }
+  }
+  return out;
 }
 
 const GIT_TIMEOUT_MS = 15_000;
@@ -49,7 +103,7 @@ async function git(cwd: string, args: string[], opts: { maxOutputBytes?: number;
 const zFields = (stdout: string): string[] => stdout.split('\0').slice(0, -1);
 
 /** `"a/x\ty"` 这类 C 风格引号串 → 原文(git 对控制字符 / 引号 / 反斜杠加引号;quotepath=false 时非 ASCII 原样)。 */
-function cUnquote(s: string, from: number): { value: string; end: number } | null {
+export function cUnquote(s: string, from: number): { value: string; end: number } | null {
   if (s[from] !== '"') return null;
   const bytes: number[] = [];
   const simple: Record<string, number> = { a: 7, b: 8, f: 12, n: 10, r: 13, t: 9, v: 11, '"': 34, '\\': 92 };
