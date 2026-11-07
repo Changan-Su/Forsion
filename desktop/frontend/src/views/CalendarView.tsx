@@ -57,6 +57,7 @@ import { MODE_ITEMS, classifyCalKey } from './calendar/calKeys'
 import { agendaOrder, byStart, layoutMonthWeek, layoutTimedEvents } from './calendar/eventLayout'
 import { calendarScope, deleteCalendarRow, rescheduleCalendarRow, undoLastCalendarEdit, redoLastCalendarEdit } from './calendar/eventActions'
 import { TODO_DRAG_MIME, draftRange, draftValue, pickDraftDb } from './calendar/draft'
+import { armLongPress, longPressTarget } from './calendar/longPress'
 import {
   HOURS,
   weekdays,
@@ -973,22 +974,35 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
   const down = (ev: CalEvent, e: ReactPointerEvent, edge?: 'start' | 'end'): void => {
     e.stopPropagation()
     cancelDrag() // 上一次拖动没收尾(松手丢了)就先撤掉它的预览,别留下两份
-    if (ev.readonly || e.button !== 0 || (!DESK && selectedKey !== ev.key)) return
+    if (ev.readonly || e.button !== 0) return
     const el = (e.currentTarget as HTMLElement).closest<HTMLElement>('.amx-cal-event')!
+    // 手机上没选中的事件:长按到点再拖(按下即拖会和滚动打架);选中的照旧按下即拖、两端把手改时长。
+    if (!DESK && selectedKey !== ev.key) {
+      if (e.pointerType !== 'touch' || edge) return
+      const at = { clientX: e.clientX, clientY: e.clientY }
+      armLongPress(e, (pid) => { cancelDrag(); beginDrag(ev, el, pid, at, 'move', false) })
+      return
+    }
     const rect = el.getBoundingClientRect()
     const zoom = zoomOf(el) || 1
     const offY = (e.clientY - rect.top) / zoom
     const hit = Math.min(EDGE, rect.height / zoom / 4)
     const mode: 'move' | 'start' | 'end' = edge ?? (DESK && selectedKey === ev.key ? offY < hit ? 'start' : rect.height / zoom - offY < hit ? 'end' : 'move' : 'move')
+    beginDrag(ev, el, e.pointerId, e, mode, DESK && mode === 'move' && e.altKey && !ev.db.readonly)
+  }
+  const beginDrag = (ev: CalEvent, el: HTMLElement, pid: number, at: { clientX: number; clientY: number }, mode: 'move' | 'start' | 'end', dup: boolean): void => {
+    const rect = el.getBoundingClientRect()
+    const zoom = zoomOf(el) || 1
+    const offY = (at.clientY - rect.top) / zoom
     const box = eventBox(ev.start, ev.end, hourPx)
     const h0 = Math.max(14, box.height - 2 * EV_INSET) // 与渲染时的内缩一致:松手 / 取消时按它还原
     const tEl = el.querySelector('.amx-cal-event-t') as HTMLElement | null
-    el.setPointerCapture(e.pointerId)
+    el.setPointerCapture(pid)
     dragRef.current = {
-      mode, ev, el, tEl, t0: tEl?.textContent ?? '', pid: e.pointerId, x0: e.clientX, y0: e.clientY, zoom, top0: box.top + EV_INSET, h0, grabOffY: offY + EV_INSET, // 按事件起点量,不按内缩后的块顶,否则横拖也会吸到下一刻
+      mode, ev, el, tEl, t0: tEl?.textContent ?? '', pid, x0: at.clientX, y0: at.clientY, zoom, top0: box.top + EV_INSET, h0, grabOffY: offY + EV_INSET, // 按事件起点量,不按内缩后的块顶,否则横拖也会吸到下一刻
       durMin: ev.end ? (ev.end.getTime() - ev.start.getTime()) / 60000 : 60, msDur: ev.end ? ev.end.getTime() - ev.start.getTime() : 0,
       col0: diffDays(startOfDay(ev.start), days[0]), min0: ev.start.getHours() * 60 + ev.start.getMinutes(),
-      dup: DESK && mode === 'move' && e.altKey && !ev.db.readonly, shadow: null,
+      dup, shadow: null,
       dyMin: 0, moved: false, target: null,
     }
   }
@@ -1401,6 +1415,7 @@ const TimeScroll = forwardRef<CalApi, TimeProps>(function TimeScroll({ n, weekSt
                       ? t('calview.a11yEventRange', { title: e.title, start: hhmm(e.start), end: hhmm(e.end) })
                       : t('calview.a11yEvent', { title: e.title, time: hhmm(e.start) })}
                     title={e.title}
+                    ref={DESK ? undefined : longPressTarget}
                     onPointerDown={(pe) => down(e, pe)}
                     onPointerMove={move}
                     onPointerUp={(pe) => up(e, pe)}
@@ -1533,9 +1548,16 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
   const chipDrag = useRef<{ x: number; y: number } | null>(null)
   const chipDown = (ev: CalEvent, e: ReactPointerEvent): void => {
     e.stopPropagation()
-    if (e.button !== 0 || ev.readonly || (!DESK && selectedKey !== ev.key)) return
-    chipDrag.current = { x: e.clientX, y: e.clientY }
-    ;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId)
+    if (e.button !== 0 || ev.readonly) return
+    const el = e.currentTarget as HTMLElement
+    const at = { x: e.clientX, y: e.clientY }
+    // 手机上没选中的芯片:长按到点再拖(同周视图事件块)
+    if (!DESK && selectedKey !== ev.key) {
+      if (e.pointerType === 'touch') armLongPress(e, (pid) => { chipDrag.current = at; el.setPointerCapture(pid) })
+      return
+    }
+    chipDrag.current = at
+    el.setPointerCapture(e.pointerId)
   }
   const chipUp = (ev: CalEvent, e: ReactPointerEvent): void => {
     const drag = chipDrag.current
@@ -1646,6 +1668,7 @@ export const MonthScroll = forwardRef<CalApi, MonthProps>(function MonthScroll({
                       aria-label={!e.allDay && sameDay(e.start, day)
                         ? t('calview.a11yEvent', { title: e.title, time: hhmm(e.start) })
                         : e.title}
+                      ref={DESK ? undefined : longPressTarget}
                       onPointerDown={(pe) => chipDown(e, pe)}
                       onPointerUp={(pe) => chipUp(e, pe)}
                       onPointerCancel={() => { chipDrag.current = null }}

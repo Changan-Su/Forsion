@@ -2130,7 +2130,8 @@ async function main() {
     c11a.stage && JSON.stringify(c11a.cards) === JSON.stringify(['2', '4', '3']) && !c11a.raw && c11a.main, JSON.stringify(c11a))
 
   // 编辑一次:elements(Phase 1 不渲染)必须一个都不丢 —— 不渲染的东西最容易在派生时被顺手吃掉。
-  await p11.click(`${PM} > p`)
+  // 不点段落:主卡顶上有标题(占一行)后,这份真实布局里正文落到 y=56 的卡片底下,点击被卡片截走。直接把焦点给编辑器(选区在文首)。
+  await p11.evaluate(() => window.__upage.probe.view().focus())
   await p11.keyboard.type('改')
   await p11.waitForTimeout(1400)
   const c11b = await p11.evaluate(() => {
@@ -2793,6 +2794,9 @@ async function main() {
     'amadeus_canvas: {"v":1,"mode":"canvas","main":{"x":0,"y":0,"w":600},"cards":[{"ref":"k1","x":40,"y":40,"w":300},{"ref":"k2","x":420,"y":40,"w":300}]}',
     '---', '', '主卡正文。', '', '<!-- a k1 -->', '卡一甲。', '', '卡一乙。', '', '<!-- a k2 -->', '卡二甲。', '',
   ].join('\n')
+  // 同 TWO,但卡片挪到主卡正文下方:画布主卡顶上有标题(占一行,11-02)后,y=40 的卡会盖住主卡正文,
+  // 「点主卡正文」类用例点到的是卡片。这些用例测的是主卡交互,不是重叠布局,换这份。
+  const TWO_LOW = TWO.replace('"x":40,"y":40', '"x":40,"y":120').replace('"x":420,"y":40', '"x":420,"y":120')
   for (const [label, frac, expectAfter] of [['上半 → 落在卡二甲之前', 0.5, false], ['下半 → 落在卡二甲之后', 0.98, true]]) {
     const p27 = await open(browser, TWO)
     await p27.waitForTimeout(400)
@@ -3093,7 +3097,7 @@ async function main() {
   await p31.close()
 
   // ── C32 已选中的卡按住正文拖 = 搬卡,不是选文字；普通点击不编辑，空格才编辑 ─────────────
-  const p32 = await open(browser, TWO)
+  const p32 = await open(browser, TWO_LOW)
   await p32.waitForTimeout(500)
   const at32 = await p32.evaluate(() => {
     const el = [...document.querySelectorAll('.amx-ucard')].find((c) => c.dataset.anchor === 'k1')
@@ -3470,7 +3474,7 @@ async function main() {
 
   // ── C39 主卡完全等同卡片:chrome 圈(padding)选中/拖动(中途 margin 跟手)、落盘、Cmd+Z 还原、
   //    连线到主卡。(2026-08-18 晚:「正文」标题条已按用户拍板移除,手柄=padding 圈,与卡片同款。) ──
-  const p39 = await open(browser, TWO)
+  const p39 = await open(browser, TWO_LOW)
   await p39.waitForTimeout(500)
   const ring39 = await p39.evaluate(() => {
     const pm = document.querySelector('.unified-body .ProseMirror')
@@ -3699,7 +3703,7 @@ async function main() {
   // 「点正文任意处」成了一键选中主卡 —— Delete 的可达面骤宽,这里同时
   // 钉死 removeSel 的免删构造(只认 c:/e: 前缀):选中主卡按 Delete、Cmd+A 全选按 Delete,
   // 正文都必须毫发无损(全选删除只带走卡片/元素)。
-  const p44 = await open(browser, TWO)
+  const p44 = await open(browser, TWO_LOW)
   await p44.waitForTimeout(500)
   const pt44 = await p44.evaluate(() => {
     const p = document.querySelector('.unified-body .ProseMirror > p') // 主卡正文段(顶层,不在卡内)
@@ -3863,7 +3867,7 @@ async function main() {
   // NodeSelection + 块菜单,舞台随后又开画布菜单 = 双菜单,且非编辑态就能对正文做块级删除。
   // 现在:非编辑态右键主卡/卡片正文 = 只开画布菜单(主卡菜单无删除项);编辑态 = 两个菜单都不开
   // (原生文本菜单,headless 断言不了原生,断言「我们的两个菜单都不在」)。
-  const p46 = await open(browser, TWO)
+  const p46 = await open(browser, TWO_LOW)
   await p46.waitForTimeout(500)
   const m46 = await p46.evaluate(() => {
     const p = document.querySelector('.unified-body .ProseMirror > p')
@@ -4572,7 +4576,7 @@ async function main() {
 
   // ── C53 编辑态光标:空格进编辑后只有目标卡切成文字光标 ───────────────────────────────
   // 钉泄漏:编辑 k1 时 k2 与主卡必须仍是 grab(单元素规则,不许通配)。
-  const p53 = await open(browser, TWO)
+  const p53 = await open(browser, TWO_LOW)
   await p53.waitForTimeout(500)
   const cur53 = () => p53.evaluate(() => {
     const c = (a) => getComputedStyle([...document.querySelectorAll('.amx-ucard')].find((x) => x.dataset.anchor === a)).cursor
