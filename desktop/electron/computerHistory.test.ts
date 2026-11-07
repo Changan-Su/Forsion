@@ -79,7 +79,7 @@ async function lockWindowsReplacement(file: string): Promise<() => Promise<void>
   const release = async () => { holder.stdin.destroy(); await exited }
   try {
     await Promise.race([
-      once(holder.stdout, 'data'),
+      once(holder.stdout, 'data', { signal: AbortSignal.timeout(2000) }),
       exited.then(() => { throw new Error('File lock process exited before acquiring its handle') }),
     ])
   } catch (error) {

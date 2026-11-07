@@ -15,6 +15,7 @@ import { createTanguProfile } from '../src/profiles/index.js';
 import { createSqliteHost } from '../src/adapters/standalone/sqliteHost.js';
 import { createLocalMemoryBrain } from '../src/adapters/standalone/localMemoryBrain.js';
 import { saveAgent } from '../src/agents/agentRegistry.js';
+import { readPortrait } from '../src/agents/humanPortrait.js';
 import { runWithAgentSlug } from '../src/seams/runContext.js';
 import { memoryLogProvider } from '../src/tools/builtin/memoryLog.js';
 import agentsRouter from '../src/routes/agents.js';
@@ -87,6 +88,17 @@ describe('remember: appliesTo', () => {
     expect(u2.entry.content).toBe('编译用 latexmk');
     expect(await remember('paper', { action: 'add', fact: 'x', appliesTo: 'somewhere' })).toMatch(/^Error: appliesTo must be one of/);
     expect(memoryOf('paper')).not.toContain('somewhere');
+  });
+  it('keeps OS scope when correcting a rejected portrait write', async () => {
+    const portrait = await readPortrait();
+    const fact = 'The solver uses CFD_LICENSE_MODE=network';
+    const args = { action: 'add', fact, appliesTo: 'this-os' };
+    expect(await remember('paper', { ...args, scope: 'person' }))
+      .toContain('retry with scope "agent" and keep appliesTo "this-os"');
+    expect(await readPortrait()).toEqual(portrait);
+    const saved = JSON.parse(await remember('paper', { ...args, scope: 'agent' }));
+    expect(saved.entry.content).toBe(`[${deviceTagContext().os}] ${fact}`);
+    expect(await readPortrait()).toEqual(portrait);
   });
   it('a remote cloud run has no "this computer"', async () => {
     const tool = memoryLogProvider.tools().find((t) => t.name === 'remember')!;

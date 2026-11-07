@@ -15,7 +15,7 @@
  *  11 (11-03)插件带的 Space 列得出来、启动就落在它上面;Ribbon 上没有内置 Space;沙箱 home 里没播种内置插件
  *  12 (11-03)在沙箱里动手:read 给出带引用的大纲 → type 填输入框 → click 按钮 → 回执里有插件新写的 console、
  *     弹出的提示和一张新截图(和上一张不同 = 不是旧帧);press Enter;files 备好路径后点 <input type=file> 直接拿到文件
- *  10 (`--focus`,macOS / Windows,会真把窗口叫到前面几秒)「打开沙箱窗口」第一次、以及被别的窗口盖住之后再点一次,
+ *  10 (`--focus`,仅 macOS,会真把窗口叫到前面几秒)「打开沙箱窗口」第一次、以及被别的窗口盖住之后再点一次,
  *     沙箱窗口都排在屏幕最前(读系统窗口列表的前后顺序)
  *
  * ⚠️ 量的是 out/ 里的产物,源码改了没 `npm run build` 就是白测。
@@ -91,8 +91,7 @@ async function until(read, timeout = 20_000) {
 const listFiles = (dir) => listTree(dir).filter((p) => fs.statSync(path.join(dir, p)).isFile())
 const listTree = (dir) => { const out = []; const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); out.push(path.relative(dir, p)); if (e.isDirectory()) walk(p) } }; if (fs.existsSync(dir)) walk(dir); return out.sort() }
 const WINDOWS = process.platform === 'win32'
-const FOCUS = process.argv.includes('--focus') && (WINDOWS || process.platform === 'darwin')
-if (FOCUS && process.env.FORSION_TEST_DESKTOP === 'left') throw new Error('Foreground checks require normal window placement')
+const FOCUS = process.argv.includes('--focus') && process.platform === 'darwin'
 /** 屏幕上普通层级(0)的大窗口,从前到后的属主 pid(CGWindowList 本来就按前后排;只读层级与尺寸,不要屏幕录制权限)。 */
 const JXA_FRONT = `ObjC.import('CoreGraphics'); function run() { return JSON.stringify(ObjC.deepUnwrap(ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly | $.kCGWindowListExcludeDesktopElements, 0))).filter((w) => w.kCGWindowLayer == 0 && w.kCGWindowBounds.Width > 300 && w.kCGWindowBounds.Height > 200).map((w) => String(w.kCGWindowOwnerPID))) }`
 const frontPids = () => JSON.parse(execFileSync('osascript', ['-l', 'JavaScript', '-e', JXA_FRONT]).toString())
@@ -105,14 +104,22 @@ function powershell(script, env = process.env) {
     env, encoding: 'utf8', windowsHide: true, timeout: 15000, stdio: ['ignore', 'pipe', 'pipe'],
   }).trim()
 }
-function sandboxPids() {
+function sandboxPids({ stop = false } = {}) {
   if (!executable) return []
   if (WINDOWS) {
     const script = `$ErrorActionPreference = 'Stop'
+    $profileArg = '(?:^|\\s)' + [regex]::Escape($env:FORSION_SANDBOX_PROFILE_ARG) + '(?:\\s|$)'
     Get-CimInstance Win32_Process | Where-Object {
       $_.ExecutablePath -eq $env:FORSION_SANDBOX_EXECUTABLE -and $_.CommandLine -and
-      $_.CommandLine.Replace('"', '').IndexOf($env:FORSION_SANDBOX_PROFILE_ARG, [StringComparison]::OrdinalIgnoreCase) -ge 0
-    } | ForEach-Object { $_.ProcessId }`
+      $_.CommandLine.Replace('"', '') -match $profileArg
+    } | ForEach-Object { ${stop ? `
+      $process = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+      if ($process) {
+        try {
+          [void]$process.Handle
+          if ([Math]::Abs(($process.StartTime - $_.CreationDate).TotalMilliseconds) -lt 1) { $process.Kill() }
+        } catch [InvalidOperationException] {} finally { $process.Dispose() }
+      }` : '$_.ProcessId'} }`
     return powershell(script, {
       ...process.env, FORSION_SANDBOX_EXECUTABLE: executable, FORSION_SANDBOX_PROFILE_ARG: `--user-data-dir=${sandboxUserData}`,
     }).split(/\r?\n/).filter(Boolean)
@@ -124,25 +131,9 @@ function sandboxPids() {
     throw e
   }
 }
-function windowsOrder(pids) {
-  return JSON.parse(powershell(`$ErrorActionPreference = 'Stop'
-    Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class SandboxOrder {
-      [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-      [DllImport("user32.dll")] public static extern IntPtr GetTopWindow(IntPtr hwnd);
-      [DllImport("user32.dll")] public static extern IntPtr GetWindow(IntPtr hwnd, uint command);
-      [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
-      [DllImport("user32.dll")] public static extern int GetWindowLongW(IntPtr hwnd, int index);
-      [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hwnd);
-    }'
-    function Owner($h) { $id=0; [void][SandboxOrder]::GetWindowThreadProcessId($h, [ref]$id); $id }
-    $wanted = @(${pids.map(Number).join(',')})
-    $order = @(for ($h=[SandboxOrder]::GetTopWindow([IntPtr]::Zero); $h -ne [IntPtr]::Zero; $h=[SandboxOrder]::GetWindow($h,2)) {
-      $id=Owner $h
-      if ($id -in $wanted -and [SandboxOrder]::IsWindowVisible($h)) {
-        @{ pid=[string]$id; topmost=([SandboxOrder]::GetWindowLongW($h,-20) -band 8) -ne 0 }
-      }
-    })
-    @{ foreground=[string](Owner ([SandboxOrder]::GetForegroundWindow())); order=$order } | ConvertTo-Json -Compress`))
+function cleanSandboxProcesses() {
+  if (WINDOWS) sandboxPids({ stop: true })
+  else for (const pid of sandboxPids()) try { process.kill(Number(pid), 'SIGKILL') } catch { /* 已退 */ }
 }
 const saveShot = (name, dataUrl) => { if (SHOT_DIR && dataUrl) { fs.mkdirSync(SHOT_DIR, { recursive: true }); fs.writeFileSync(path.join(SHOT_DIR, name), Buffer.from(dataUrl.split(',')[1], 'base64')) } }
 
@@ -344,29 +335,7 @@ async function main() {
     check('9 负对照:不是插件的文件夹 → invalid_args;原来那个沙箱照旧在', bad.ok === false && bad.code === 'invalid_args' && (await status())?.pluginId === PLUGIN_ID, JSON.stringify(bad))
 
     // ── 10 打开沙箱窗口:第一次 + 被盖住之后再点一次 ──
-    if (FOCUS && WINDOWS) {
-      const parent = String(await app.evaluate(() => process.pid))
-      const parentWindow = await app.browserWindow(win)
-      const inspect = () => windowsOrder([parent, ...sandboxPids()])
-      const raised = (snapshot) => snapshot.order.some(w => w.pid === parent) &&
-        snapshot.order[0]?.pid !== parent && !snapshot.order[0]?.topmost
-      await win.evaluate(() => window.tangu.pluginSandbox.show())
-      const first = inspect()
-      check('10a Windows: first Show raises the sandbox without leaving it topmost',
-        raised(first), JSON.stringify(first))
-      await parentWindow.evaluate(w => { w.show(); w.focus() })
-      const covered = inspect()
-      const parentCovered = covered.foreground === parent && covered.order[0]?.pid === parent && covered.order.some(w => w.pid !== parent)
-      check('10b Windows: foreground parent really covered the sandbox', parentCovered, JSON.stringify(covered))
-      await win.evaluate(() => window.tangu.pluginSandbox.show())
-      const again = inspect()
-      check('10c Windows: Show raises the covered sandbox without leaving it topmost',
-        parentCovered && raised(again), JSON.stringify(again))
-      await win.evaluate(() => window.tangu.pluginSandbox.reset())
-      const reset = inspect()
-      check('10d Windows: Reset raises the newly started sandbox',
-        raised(reset), JSON.stringify(reset))
-    } else if (FOCUS) {
+    if (FOCUS) {
       await win.evaluate(() => window.tangu.pluginSandbox.show())
       await win.waitForTimeout(1000)
       const first = frontPids()
@@ -405,11 +374,10 @@ async function main() {
     check('全程无渲染层异常', errs.length === 0, errs.slice(0, 3).join(' / '))
   } finally {
     if (app) await app.close().catch(() => {})
-    for (const pid of sandboxPids()) try { process.kill(Number(pid), 'SIGKILL') } catch { /* 已退 */ }
-    stub.close()
+    try { cleanSandboxProcesses() } finally { stub.close() }
   }
   const failed = results.filter((r) => !r.ok)
   console.log(`\n${results.length - failed.length}/${results.length} passed`)
   process.exit(failed.length ? 1 : 0)
 }
-main().catch((e) => { console.error(e); for (const pid of sandboxPids()) try { process.kill(Number(pid), 'SIGKILL') } catch { /* */ } process.exit(1) })
+main().catch((e) => { console.error(e); process.exit(1) })

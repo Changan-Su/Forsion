@@ -184,7 +184,7 @@ it.runIf(process.platform === 'win32')('a Windows directory lock defers rollback
   const exited = once(holder, 'exit')
   try {
     await Promise.race([
-      once(holder.stdout, 'data'),
+      once(holder.stdout, 'data', { signal: AbortSignal.timeout(2000) }),
       exited.then(() => { throw new Error('Directory lock process exited before it was ready') }),
     ])
     expect(await installed.exclusive(() => installed.rollback('plugin', f.item.installSlug, '1.0.0')))
@@ -196,7 +196,7 @@ it.runIf(process.platform === 'win32')('a Windows directory lock defers rollback
       installedVersion: '1.1.0', pendingVersion: '1.0.0', pendingRollback: true, pinnedVersion: '1.0.0',
     })
   } finally {
-    holder.stdin.end()
+    holder.kill()
     await exited
   }
 
