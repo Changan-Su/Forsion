@@ -76,6 +76,7 @@
     "e2e:chatcanvas": "node scripts/chat-canvas.e2e.cjs",
     "e2e:editbranch": "node scripts/edit-keeps-branch.e2e.cjs",
     "e2e:chatcanvas:kids": "node scripts/chat-canvas-kids.e2e.cjs",
+    "e2e:chatcanvas:runfold": "node scripts/chat-canvas-runfold.e2e.cjs",
     "e2e:musedm": "node scripts/muse-dm.e2e.cjs",
     "e2e:musecards": "node scripts/muse-cards.e2e.cjs",
     "e2e:qfcontent": "node scripts/quickfind-content.e2e.cjs",
