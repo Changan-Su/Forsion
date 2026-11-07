@@ -213,7 +213,19 @@ export function checkWritePath(ctx: ToolContext, abs: string): WritePathVerdict 
   }
   // human/ 文件夹(10-20):每份都带修改历史和撤销,文件工具写进去就绕过了它们
   try {
-    if (pathWithin(resolved, realResolve(humanDir()))) {
+    const humanRoot = realResolve(humanDir());
+    if (pathWithin(resolved, humanRoot)) {
+      // 默认日历(用户的待办也在这张表里)照旧硬拒:锁、旧位置镜像、按行 id 的同步合并都在日历工具那条路上。
+      // 但理由要指向日历工具 —— 旧说法「those files are changed by the human」让模型以为只能请用户自己去加(11-07 实例)。
+      if (foldPath(path.relative(humanRoot, resolved)) === 'calendar.db') {
+        return {
+          ok: false,
+          hardDeny: true,
+          reason: "human/CALENDAR.db is the user's default calendar, and their to-do list lives in it too. Change it with the calendar tools: " +
+            'amadeus_create_event adds an event or a to-do (a to-do needs no date), amadeus_edit_event changes one or ticks it done, ' +
+            'amadeus_delete_event removes one — load them with load_tools if they are not loaded yet. Writing the file directly would bypass its version history, undo and sync merge.',
+        };
+      }
       return { ok: false, hardDeny: true, reason: 'Files in the human folder keep version history and undo. Update the shared HUMAN.md with manage_human (scope shared); the other files there are changed by the human.' };
     }
   } catch { /* humanDir 解析失败 → 不加此判 */ }

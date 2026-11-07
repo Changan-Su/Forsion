@@ -14,6 +14,11 @@
  * 云端 Tangu 读写用户云 vault)。facet 未装配(microserver 进程内/纯本地 sandbox)→ 工具隐藏。
  * .db 读-改-写在云端带 baseSeq 乐观锁,409 冲突用服务端回带的最新内容重放一次。
  * 默认日历 human/CALENDAR.db 两个后端都有:本机是引擎家目录里的文件,云端是 server 的 `__human__`(版本比对写,409 重读重放一次)。
+ *
+ * 待办(11-07):用户的待办列表 = 带勾选列的日历表里的行(desktop TodoListView 收 calendarMembers 里有 checkboxCol 的成员,
+ * 有没有日期都收,没日期的进「未排期」)。所以日历工具同时是待办工具:create 可以不给 start(= 无日期待办,日期格不写),
+ * list 能列出无日期的行,create / edit 的 done 写第一个勾选列。待办是什么、怎么用,写在日历插件的 calendar-todos 技能里;
+ * 这里只改工具定义(用户定:引擎系统提示不加待办段)。
  */
 import { promises as fs, existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -121,6 +126,33 @@ function decodeCalDate(v: CellValue | undefined): { start: string; end?: string;
   if (!DATE_RE.test(start)) return null;
   const cleanEnd = end && DATE_RE.test(end) ? end : undefined;
   return { start, end: cleanEnd, allDay: !start.includes('T') && !(cleanEnd ?? '').includes('T') };
+}
+/** 待办勾选列 = desktop isCheckboxCol(resolveBaseType(type) === 'checkbox'):primitive checkbox + 内置 todo 类型。
+ *  引擎没有渲染端的属性注册表,插件注册的、baseType 为 checkbox 的自定义类型这里认不出(当作没有勾选列)。
+ *  取第一个 = desktop firstCheckboxCol(默认日历和未单独配过的库,待办列表用的就是它)。 */
+const isDoneCol = (c: DbColumn): boolean => c.type === 'checkbox' || c.type === 'todo';
+const doneColOf = (db: DbFile): DbColumn | undefined => db.columns.find(isDoneCol);
+/** 勾上 = true,取消 = 删掉这一格:和 desktop 勾待办的 setAggCell(next ? true : undefined) 同款,读按 `=== true`。 */
+function setDone(cells: Record<string, CellValue>, col: DbColumn, done: boolean): void {
+  if (done) cells[col.id] = true;
+  else delete cells[col.id];
+}
+/** 可选字符串参数:没给 / null = undefined;给了就去掉首尾空白(空串 = 显式清空)。 */
+function optStr(v: unknown): string | undefined {
+  return v == null ? undefined : String(v).trim();
+}
+/** 可选布尔参数:模型偶尔把 true / false 写成字符串。 */
+function optBool(v: unknown): boolean | undefined {
+  if (v === true || v === 'true') return true;
+  if (v === false || v === 'false') return false;
+  return undefined;
+}
+/** 没有勾选列的表不是待办来源:无日期的行在桌面哪儿都不显示(日历没日期,待办列表不收这张表),写进去 = 凭空消失。 */
+function noDoneCol(cal: Cal, what: string): Error {
+  return new Error(
+    `calendar "${cal.db.name}" has no checkbox column, so ${what}: its rows are calendar events only, not to-dos. ` +
+      'Use the default calendar (human://CALENDAR.db) for to-dos, or give the event a start date.',
+  );
 }
 
 // ── 磁盘枚举/读写(host 后端的底层)──────────────────────────────────────────
@@ -437,13 +469,25 @@ function setNamedProps(db: DbFile, cells: Record<string, CellValue>, props?: Rec
     if (col) cells[col.id] = v as CellValue;
   }
 }
-function rowToEvent(cal: Cal, r: DbRow): { calendar: string; id: string; title: string; start: string; end?: string; allDay: boolean; props: Record<string, string> } | null {
+interface CalRow {
+  calendar: string;
+  id: string;
+  title: string;
+  /** null = 没有日期(只有带勾选列的表才列出来:那是一条无日期待办)。 */
+  start: string | null;
+  end?: string;
+  allDay: boolean | null;
+  /** 只在表有勾选列时出现:有它 = 这一行在用户的待办列表里。 */
+  done?: boolean;
+  props: Record<string, string>;
+}
+function rowToEvent(cal: Cal, r: DbRow): CalRow {
   const cd = decodeCalDate(r.cells[cal.cal.id]);
-  if (!cd) return null;
   const nameCol = cal.db.columns[0];
+  const doneCol = doneColOf(cal.db);
   const props: Record<string, string> = {};
   for (const c of cal.db.columns) {
-    if (c.id === nameCol?.id || c.id === cal.cal.id) continue;
+    if (c.id === nameCol?.id || c.id === cal.cal.id || c.id === doneCol?.id) continue;
     const t = cellText(r.cells[c.id]);
     if (t) props[c.name] = t;
   }
@@ -451,9 +495,10 @@ function rowToEvent(cal: Cal, r: DbRow): { calendar: string; id: string; title: 
     calendar: cal.db.name,
     id: r.id,
     title: (nameCol ? cellText(r.cells[nameCol.id]) : '') || '(untitled)',
-    start: cd.start,
-    end: cd.end,
-    allDay: cd.allDay,
+    start: cd ? cd.start : null,
+    end: cd?.end,
+    allDay: cd ? cd.allDay : null,
+    ...(doneCol ? { done: r.cells[doneCol.id] === true } : {}),
     props,
   };
 }
@@ -574,10 +619,12 @@ export const amadeusProvider: ToolProvider = {
       true, // cloudOnly
     ),
 
-    // ── 日历 ──
+    // ── 日历(同时是待办:带勾选列的日历表里的行就是用户的待办)──
     deferCalendar(mk(
       'amadeus_list_calendars',
-      "List the user's calendars (multi-dimensional tables that have a calendarDate column), with their names, paths, event counts and columns.",
+      "List the user's calendars (multi-dimensional tables that have a calendarDate column) with their names, paths, columns and counts. " +
+        'The default calendar (path human://CALENDAR.db) comes first. Every row of a calendar that has a checkbox column is also on the ' +
+        "user's to-do list (the checkbox = done), whether or not it has a date.",
       {},
       [],
       READ_CAPS,
@@ -588,24 +635,34 @@ export const amadeusProvider: ToolProvider = {
         const cals = await calendars(be);
         if (!cals.length) return 'No calendars found (a calendar is a table with a "calendarDate" column).';
         return JSON.stringify(
-          cals.map((c) => ({
-            name: c.db.name,
-            path: c.rel,
-            events: c.db.rows.filter((r) => decodeCalDate(r.cells[c.cal.id])).length,
-            columns: c.db.columns.map((col) => ({ name: col.name, type: col.type })),
-          })),
+          cals.map((c) => {
+            const dated = c.db.rows.filter((r) => decodeCalDate(r.cells[c.cal.id])).length;
+            const doneCol = doneColOf(c.db);
+            return {
+              name: c.db.name,
+              path: c.rel,
+              events: dated,
+              // 有勾选列 = 待办来源:没有日期的那些行只在待办列表里,events 不数它们
+              ...(doneCol ? { todoColumn: doneCol.name, undatedTodos: c.db.rows.length - dated } : {}),
+              columns: c.db.columns.map((col) => ({ name: col.name, type: col.type })),
+            };
+          }),
           null,
           2,
         );
       },
-    ), "List the user's calendars (start here; loads the whole calendar set)."),
+    ), "List the user's calendars, where their events and to-dos live (start here; loads the whole calendar set)."),
     deferCalendar(mk(
       'amadeus_list_events',
-      "List calendar events/schedule. Optionally restrict to one calendar (by name or path) and/or a date range. Returns each event's calendar, id, title, start, end, allDay and other properties.",
+      "List the user's calendar events and to-dos. Every row of a calendar that has a checkbox column is on the user's to-do list: " +
+        '`done` is that checkbox (rows of a calendar without one have no `done`). A to-do may have no date: then `start` is null. ' +
+        'Without from/to, undated to-dos are listed too (after the dated rows); with a range only dated rows in it are, unless include_undated is true. ' +
+        "Returns each row's calendar, id, title, start, end, allDay, done and other properties.",
       {
         calendar: { type: 'string', description: 'Optional calendar name or path to restrict to.' },
         from: { type: 'string', description: 'Optional inclusive start date filter, YYYY-MM-DD.' },
         to: { type: 'string', description: 'Optional inclusive end date filter, YYYY-MM-DD.' },
+        include_undated: { type: 'boolean', description: 'Optional; also list to-dos without a date. Defaults to true when neither from nor to is given, false otherwise.' },
       },
       [],
       READ_CAPS,
@@ -617,63 +674,93 @@ export const amadeusProvider: ToolProvider = {
         if (!all.length) return 'No calendars found.';
         const from = String(args.from ?? '').slice(0, 10);
         const to = String(args.to ?? '').slice(0, 10);
-        const events = [];
+        const undated = optBool(args.include_undated) ?? !(from || to);
+        const dated: Array<CalRow & { path: string }> = [];
+        const todos: Array<CalRow & { path: string }> = [];
         const seen = new Set<string>(); // 默认日历排在前:旧位置还列着时,抄过来的行只算默认日历那条
         for (const cal of all) {
           for (const r of cal.db.rows) {
+            if (seen.has(r.id)) continue;
             const ev = rowToEvent(cal, r);
-            if (!ev || seen.has(ev.id)) continue;
-            seen.add(ev.id);
+            if (ev.start === null) {
+              // 没日期的行只有在带勾选列的表里才是「东西」(待办列表里的未排期);别的表里它哪儿都不显示,不列
+              if (ev.done === undefined) continue;
+              seen.add(r.id);
+              if (undated) todos.push({ ...ev, path: cal.rel });
+              continue;
+            }
+            seen.add(r.id);
             const d = ev.start.slice(0, 10);
             if (from && d < from) continue;
             if (to && d > to) continue;
-            events.push({ ...ev, path: cal.rel });
+            dated.push({ ...ev, path: cal.rel });
           }
         }
-        events.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
-        if (!events.length) return 'No events found for that query.';
+        dated.sort((a, b) => (a.start! < b.start! ? -1 : a.start! > b.start! ? 1 : 0));
+        const events = [...dated, ...todos]; // 未排期沉底,和待办列表同一个排法
+        if (!events.length) return 'No events or to-dos found for that query.';
         return JSON.stringify(events, null, 2);
       },
-    ), 'Read events in a date range from the user\'s calendars.'),
+    ), "Read the user's events and to-dos (to-dos are calendar rows; checkbox = done; they may have no date)."),
     deferCalendar(mk(
       'amadeus_create_event',
-      'Add an event to the user\'s calendar. Times are "YYYY-MM-DD" (all-day) or "YYYY-MM-DDTHH:mm" (with a time).',
+      "Add an event or a to-do to the user's calendar. The user's to-dos are rows in their calendar (the default one unless they name another), " +
+        'not notes. A to-do may have no date: when the user gives no date or time, leave `start` out — do not invent one. ' +
+        'Times are "YYYY-MM-DD" (all-day) or "YYYY-MM-DDTHH:mm" (with a time). One call adds one row.',
       {
-        title: { type: 'string', description: 'Event title.' },
-        start: { type: 'string', description: 'Start, YYYY-MM-DD or YYYY-MM-DDTHH:mm.' },
-        end: { type: 'string', description: 'Optional end, same format as start.' },
+        title: { type: 'string', description: 'Event or to-do title.' },
+        start: { type: 'string', description: 'Optional start, YYYY-MM-DD or YYYY-MM-DDTHH:mm. Leave it out for a to-do without a date.' },
+        end: { type: 'string', description: 'Optional end, same format as start (needs a start).' },
         allDay: { type: 'boolean', description: 'Optional; force all-day (drops any time component).' },
-        calendar: { type: 'string', description: 'Optional calendar name/path; defaults to the first calendar.' },
+        done: { type: 'boolean', description: "Optional; true adds it already ticked (the calendar's checkbox column, e.g. 完成 / Done)." },
+        calendar: { type: 'string', description: 'Optional calendar name/path; defaults to the first calendar (the default one).' },
         props: { type: 'object', description: 'Optional extra column values, keyed by column name.' },
       },
-      ['title', 'start'],
+      ['title'],
       WRITE_CAPS,
       async (args, ctx) => {
         const be = backendFor(ctx);
         if (!be) return noBackend;
         if (!be.exists()) return noVault;
         return mutateCalendar(be, args.calendar ? String(args.calendar) : undefined, (cal) => {
-          const value = encodeCalDate(String(args.start), args.end ? String(args.end) : undefined, args.allDay === true ? true : args.allDay === false ? false : undefined);
+          const start = optStr(args.start);
+          const end = optStr(args.end);
+          const done = optBool(args.done);
+          if (!start && end) throw new Error('an end needs a start: give start too, or leave both out for a to-do without a date.');
+          const doneCol = doneColOf(cal.db);
+          if (!start && !doneCol) throw noDoneCol(cal, 'a row without a date would not show anywhere');
+          if (done === true && !doneCol) throw noDoneCol(cal, 'nothing can be ticked done in it');
+          const value = start ? encodeCalDate(start, end || undefined, optBool(args.allDay)) : null;
           const nameCol = cal.db.columns[0];
-          const cells: Record<string, CellValue> = { [cal.cal.id]: value };
+          const cells: Record<string, CellValue> = {};
+          if (value) cells[cal.cal.id] = value; // 无日期 = 日期格不写(和表格里从没填过日期的行一样)
           if (nameCol && nameCol.id !== cal.cal.id) cells[nameCol.id] = String(args.title ?? '');
           setNamedProps(cal.db, cells, args.props);
+          if (doneCol && done !== undefined) setDone(cells, doneCol, done);
           const id = dbId();
           cal.db.rows.push({ id, cells });
-          return { ok: true, msg: `Created event "${args.title}" (${value}) in "${cal.db.name}". id=${id}` };
+          const ticked = doneCol && cells[doneCol.id] === true ? ', done' : '';
+          return {
+            ok: true,
+            msg: value
+              ? `Created event "${args.title}" (${value}${ticked}) in "${cal.db.name}". id=${id}`
+              : `Created to-do "${args.title}" (no date${ticked}) in "${cal.db.name}"; it shows in the user's to-do list. id=${id}`,
+          };
         });
       },
-    ), 'Add an event to the user\'s calendar.'),
+    ), "Add an event or a to-do to the user's calendar; a to-do may have no date (don't invent one)."),
     deferCalendar(mk(
       'amadeus_edit_event',
-      'Edit an existing calendar event by id. Only the fields you pass are changed.',
+      'Edit an existing event or to-do by id. Only the fields you pass are changed. Tick a to-do with done: true (false unticks it); ' +
+        'start: "" removes the date, leaving a to-do without a date.',
       {
-        calendar: { type: 'string', description: 'Calendar name or path the event is in.' },
-        eventId: { type: 'string', description: 'The event id (from amadeus_list_events).' },
+        calendar: { type: 'string', description: 'Calendar name or path the row is in.' },
+        eventId: { type: 'string', description: 'The event / to-do id (from amadeus_list_events).' },
         title: { type: 'string', description: 'New title.' },
-        start: { type: 'string', description: 'New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm.' },
+        start: { type: 'string', description: 'New start, YYYY-MM-DD or YYYY-MM-DDTHH:mm; empty string removes the date.' },
         end: { type: 'string', description: 'New end, same format; pass empty string to clear.' },
         allDay: { type: 'boolean', description: 'Force all-day (drops time).' },
+        done: { type: 'boolean', description: "true ticks it done (the calendar's checkbox column), false unticks it." },
         props: { type: 'object', description: 'Extra column values to set, keyed by column name.' },
       },
       ['calendar', 'eventId'],
@@ -685,27 +772,37 @@ export const amadeusProvider: ToolProvider = {
         return mutateCalendar(be, String(args.calendar), (cal) => {
           const row = cal.db.rows.find((r) => r.id === String(args.eventId));
           if (!row) return { ok: false, msg: `Error: event ${args.eventId} not found in "${cal.db.name}".` };
+          const doneCol = doneColOf(cal.db);
+          const start = optStr(args.start);
+          const end = optStr(args.end);
+          const done = optBool(args.done);
+          if (start === '' && !doneCol) throw noDoneCol(cal, 'removing the date would make this row disappear');
+          if (done !== undefined && !doneCol) throw noDoneCol(cal, 'nothing can be ticked done in it');
           const nameCol = cal.db.columns[0];
           if (args.title !== undefined && nameCol && nameCol.id !== cal.cal.id) row.cells[nameCol.id] = String(args.title);
-          if (args.start !== undefined) {
+          if (start === '') {
+            delete row.cells[cal.cal.id]; // 去掉日期 = 变回未排期的待办(结束时间一并没了)
+          } else if (start !== undefined) {
             const cur = decodeCalDate(row.cells[cal.cal.id]);
-            const end = args.end !== undefined ? (String(args.end) || undefined) : cur?.end;
-            row.cells[cal.cal.id] = encodeCalDate(String(args.start), end, args.allDay === true ? true : args.allDay === false ? false : undefined);
-          } else if (args.end !== undefined) {
+            const nextEnd = end !== undefined ? (end || undefined) : cur?.end;
+            row.cells[cal.cal.id] = encodeCalDate(start, nextEnd, optBool(args.allDay));
+          } else if (end !== undefined) {
             const cur = decodeCalDate(row.cells[cal.cal.id]);
-            if (cur) row.cells[cal.cal.id] = encodeCalDate(cur.start, String(args.end) || undefined);
+            if (!cur && end) throw new Error(`"${cellText(nameCol ? row.cells[nameCol.id] : '') || args.eventId}" has no date yet: set start to schedule it.`);
+            if (cur) row.cells[cal.cal.id] = encodeCalDate(cur.start, end || undefined);
           }
           setNamedProps(cal.db, row.cells, args.props);
+          if (doneCol && done !== undefined) setDone(row.cells, doneCol, done);
           return { ok: true, msg: `Updated event ${args.eventId} in "${cal.db.name}".` };
         });
       },
-    ), 'Change an event on the user\'s calendar.'),
+    ), "Change an event or a to-do on the user's calendar, or tick a to-do done."),
     deferCalendar(mk(
       'amadeus_delete_event',
-      'Delete a calendar event by id.',
+      'Delete a calendar event or to-do by id.',
       {
-        calendar: { type: 'string', description: 'Calendar name or path the event is in.' },
-        eventId: { type: 'string', description: 'The event id to delete.' },
+        calendar: { type: 'string', description: 'Calendar name or path the row is in.' },
+        eventId: { type: 'string', description: 'The event / to-do id to delete.' },
       },
       ['calendar', 'eventId'],
       WRITE_CAPS,
@@ -720,7 +817,7 @@ export const amadeusProvider: ToolProvider = {
           return { ok: true, msg: `Deleted event ${args.eventId} from "${cal.db.name}".` };
         });
       },
-    ), 'Remove an event from the user\'s calendar.'),
+    ), "Remove an event or a to-do from the user's calendar."),
   ],
 };
 

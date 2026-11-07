@@ -24,6 +24,8 @@
  *   npm run live:harness -- --only selfmodel --rounds 5 --model xai/grok-4.7   # 主体性探针(10-02):自己的资料库 vs 用户目录 / 提醒真落盘 / 教训落哪个存储 / 自我认知,按轮出通过率;改 Personal Folder 段 / 记忆·协作·工作笔记段后跑
  *   npm run live:harness -- --only selfschedule             # 自己的日程 vs 用户的日历(10-02):人设 agent 答应的约定进 SCHEDULE.db、用户日历不动;负对照「记进我的日历」须走 amadeus。改 Personal Folder 段 / 日程·日历工具措辞后跑
  *                                                           #   额度用完时先跑离线接线证据:node scripts/rename-identity.smoke.mjs(假模型端点,截获系统提示词)
+ *   npm run live:harness -- --only caltodo [--calendar-plugin <Calendar 插件检出>] [--rounds 3]   # 用户的待办(11-07):「帮我添加两条待办」几步之内进默认日历、没日期没勾、不写笔记,再列出、勾掉;
+ *                                                           #   --calendar-plugin 放进 calendar-todos 技能(桌面形态)。云端 run 用 --only cloudtodo(同 cloudcal 那样指 server scripts/calendar-local.mts)。改日历 / 待办工具定义后跑
  *   npm run live:harness -- --only chat,tool,muse            # 子集(historian→dream→recall 三连有先后依赖)
  *   npm run live:harness -- --only mask [--mask-off]          # 发给模型前脱敏(10-28,借鉴 magpie 方案 1):读 .env → run_bash 带 key 的 curl 打台架里的回显服务 → 问模型看到的值是不是 sk-proj- 开头、是不是占位符。
  *                                                           #   判据:回显服务收到真 key(工具参数换回了)、模型答「不是 sk-proj- 开头 / 是占位符」、engine.log 有 [mask]。--mask-off = 负对照(config 里关掉,须红)。改 llm/outboundMask.ts 后跑
@@ -229,6 +231,7 @@ import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
 import { webPublishLive, startConnectLocal } from './lib/webpublish-live.mjs';
 import { cloudCalLive } from './lib/cloudcal-live.mjs';
+import { calTodoLive, plantCalendarSkill } from './lib/caltodo-live.mjs';
 import { plantPlugin, pluginDiagLive, registeredViews, STUB_SELFTEST } from './lib/plugin-diag-live.mjs';
 import { plantNotebookPlugin, notebookLive, notebookSelftest } from './lib/notebook-live.mjs';
 import { cuVisionSetup, cuVisionLive, defaultFixture as cuDefaultFixture } from './lib/cu-vision-live.mjs';
@@ -305,6 +308,7 @@ const GIT_PREFIX = 'livetest/'; const GIT_TAG = '[LIVE]';
 const OPT_IN = new Set(['pluginsandbox', 'humandims', 'nested', 'branch', 'musedm', 'realtime', 'remember', 'musewake', 'personas', 'rename', 'selfschedule', 'selfmodel', 'teamapproval', 'parked', 'parkedask', 'cache', 'recall-unprompted', 'deferred', 'churn', 'bigread', 'grant', 'autocompact', 'childchat', 'teamoutputs', 'ttft', 'refine', 'coding', 'btw', 'browsertabs', 'officedoc', 'ultra', 'fast', 'agentapproval', 'computerhistory', 'remoteclamp', 'remotecwd', 'remotemgmt', 'mcp', 'stalewrite', 'inline', 'git', 'gitpush', 'creation', 'human', 'remotecaller', 'estop', 'remotesession', 'remotebash', 'deliver', 'embed', 'browserext', 'selfsettings', 'appsettings', 'control', 'phone']);
 KEYS.push('mcpsettings'); OPT_IN.add('mcpsettings');
 KEYS.push('cloudcal');
+KEYS.push('caltodo', 'cloudtodo');
 KEYS.push('subresume'); OPT_IN.add('subresume'); // --only subresume:改 delegate.resume / 子代理续用后跑(两条腿共五个 run)
 KEYS.push('taskoutcomes'); OPT_IN.add('taskoutcomes'); // --only taskoutcomes: actual hashes / approval identity / duplicate writes, classified separately from model narration.
 OPT_IN.add('bluebird'); // --only bluebird --plugin-src <bundle>: real instruction-following on supplied transcripts
@@ -369,6 +373,7 @@ OPT_IN.add('pluginicon'); // 一个 run;只在动 forsion-plugin 手册「Startu
 OPT_IN.add('storeview'); // 一个 run;只在动 forsion-plugin 手册里 registerStoreView 那行、或商店左栏的插件页接缝时才有信息量。
 OPT_IN.add('skillcreate'); // 四个 run;只在动 manage_skill / use_skill / 随包的 skill-creator 技能时才有信息量。
 OPT_IN.add('account'); // --only account:五个 run;引擎的云端地址指向台架里的假 Forsion 云端 —— 只在显式跑它时才指,别的场景照旧连不上云端。
+OPT_IN.add('caltodo').add('cloudtodo'); // --only caltodo / cloudtodo(11-07):用户的待办 = 带勾选列的日历表里的行,可以没有日期;加两条无日期待办 → 列出 → 勾掉,本机 / 云端各一份。判据与负对照见 lib/caltodo-live.mjs。
 OPT_IN.add('cloudcal'); // --only cloudcal:三个 run;云端 run 的默认日历 × 真路由。要 TANGU_LIVE_CLOUD_URL / TOKEN 指向 server scripts/calendar-local.mts,判据与负对照见 lib/cloudcal-live.mjs。
 OPT_IN.add('webpublish'); // --only webpublish:三个 run,同用 account 那个假云端(Forsion Connect 的列表 / 发布 / 下线也在里面)。
 // --only webpublishreal --connect-server <server 检出> [--extend-pkg <签好的 Extend 包目录>]:同 webpublish 三个 run + 公开链接实开,
@@ -1058,6 +1063,10 @@ if (CU_JEV || CU_WEB_KEYS.some((k) => ONLY.has(k))) cuJevSetup({ bundle: opt('cu
 // 开发机真实的 ~/Forsion/Amadeus —— 负对照那一腿真会往里写事件,所以只在跑这个场景时注入,且一定指进产物目录。
 const SELF_SCHED_VAULT = join(OUT, 'vault');
 const SELF_SCHED_CAL = join(SELF_SCHED_VAULT, 'Calendar.db');
+// caltodo 也要一个隔离的空笔记库:日历工具在本机没有笔记库时直接说「没有 Amadeus」,而缺省那个是开发机真实的 ~/Forsion/Amadeus。
+// 带 --calendar-plugin <Calendar 插件检出> 时把它的 manifest + skills/ 放进隔离共享域的 plugins/forsion-calendar(= 桌面装了插件的样子)。
+if (ONLY.has('caltodo')) mkdirSync(SELF_SCHED_VAULT, { recursive: true });
+const CALTODO_SKILL = ONLY.has('caltodo') ? plantCalendarSkill({ src: opt('calendar-plugin', ''), shared }) : null;
 if (ONLY.has('selfschedule') || ONLY.has('selfmodel')) {
   mkdirSync(SELF_SCHED_VAULT, { recursive: true });
   writeFileSync(SELF_SCHED_CAL, JSON.stringify({ version: 1, name: '我的日历', columns: [{ id: 'c1', name: '名称', type: 'text' }, { id: 'c2', name: '日期', type: 'calendarDate' }], rows: [{ id: 'r1', cells: { c1: '既有会议', c2: '2026-07-08T14:00' } }] }, null, 2));
@@ -1445,7 +1454,7 @@ const child = spawn(process.execPath, [
   ...(ONLY.has('fast') ? { TANGU_LLM_DEBUG: '1' } : {}),
   // cumusic / cusend:Jev 每次请求的图和回答落进产物目录(不含密钥),场景跑完挪进自己的 <key>-evidence/jev/
   ...(CU_JEV ? { TANGU_JEV_EVIDENCE_DIR: join(OUT, JEV_REQUESTS_DIR) } : {}),
-  ...(ONLY.has('selfschedule') || ONLY.has('selfmodel') ? { FORSION_AMADEUS_VAULT: SELF_SCHED_VAULT } : {}),
+  ...(ONLY.has('selfschedule') || ONLY.has('selfmodel') || ONLY.has('caltodo') ? { FORSION_AMADEUS_VAULT: SELF_SCHED_VAULT } : {}),
   // P1-K1 remotecaller:unitWeb 盖章的密钥(桌面主进程每次启动生成,这里随机一枚);只在跑这个场景时注入,别的场景环境不变
   ...(ONLY.has('remotecaller') || ONLY.has('remotesession') ? { TANGU_REMOTE_MARK_SECRET: REMOTE_MARK } : {}),
   // P1-K2 estop:桌面主进程独占的锁文件(隔离 home 下);只在跑这个场景时注入 —— 别的场景的引擎没有桌面锁概念(env 没设 = 未锁)
@@ -7886,6 +7895,14 @@ Then reply with only the command output.`,
   await scenario('account', 'account 「我还剩多少」:账号额度 + 本对话余量,账号动作逐次确认', async () => {
     if (!FAKE_CLOUD) return { ok: false, detail: '给了 TANGU_LIVE_CLOUD_URL:这个场景要用台架自带的假云端(数是已知的),去掉那个环境变量再跑' };
     return accountLive({ run, api, sleep, cloud: FAKE_CLOUD });
+  });
+  // caltodo / cloudtodo(11-07):「帮我添加两条待办」几步之内进默认日历、没日期没勾、不写笔记;再列出、勾掉。判据与负对照见 lib/caltodo-live.mjs。
+  await scenario('caltodo', 'caltodo 用户的待办(本机):加两条无日期待办 → 新会话列出 → 勾掉', async () =>
+    calTodoLive({ run, rounds: Number(opt('rounds', 1)), home, workspace, vault: SELF_SCHED_VAULT, skill: CALTODO_SKILL }));
+  await scenario('cloudtodo', 'cloudtodo 用户的待办(云端 run):加两条无日期待办 → 新会话列出 → 勾掉', async () => {
+    const cloud = process.env.TANGU_LIVE_CLOUD_URL;
+    if (!cloud) return { ok: false, detail: '要 TANGU_LIVE_CLOUD_URL / TANGU_LIVE_CLOUD_TOKEN 指向 server scripts/calendar-local.mts(打印的 url 与 token)' };
+    return calTodoLive({ run, rounds: Number(opt('rounds', 1)), cloud, token: TOKEN });
   });
   // cloudcal(10-30):云端 run(sandbox 形态)经真路由读写默认日历 human/CALENDAR.db。判据与负对照见 lib/cloudcal-live.mjs。
   await scenario('cloudcal', 'cloudcal 云端 Agent 的默认日历:新用户首建、新会话改、老库种子不动不列', async () => {
