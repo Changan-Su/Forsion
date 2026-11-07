@@ -1,6 +1,6 @@
 import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpConfig'
 import { assertMarketplaceRequirements } from '../shared/marketplace'
-import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner,agentContentHooks } from './contentSyncHost'
+import { mergeSyncContent,withContentWriteLock,contentSyncOwnership,agentContentHooks } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
 import { qwenVoiceInputUrl, registerVoiceInputStream } from './voiceInputStream'
 import { voiceInputCloudUrl } from '../shared/voiceInputStream'
@@ -2966,23 +2966,11 @@ app.whenReady().then(async () => {
           return [{prefix:'',root:forsionWorkspaceDir()},{prefix:'agents',root:join(tanguDataDir(),'agents')},
             {prefix:'human',root:join(tanguDataDir(),'human')},{prefix:'Amadeus',root:syncVaultRoot(cfg)??join(forsionWorkspaceDir(),'Amadeus')}] // 切库不换同步根(vaultList.ts)
         },
-        claim: async (owned) => {
-          await ensureBackend()
-          const before=loadTanguCreds(),identity=forsionAccountId(before.cloudUrl||'',before.token||'')
-          const st=backend.getStatus();if(st.state!=='ready'||!st.url){
-            const cfg=await loadConfig();if(cfg.mode!=='external'||!identity)throw new Error('Local engine unavailable')
-            setOfflineContentOwner(tanguDataDir(),identity,owned);if(owned)await stopAmadeusSync?.();else await restartAmadeusSync?.();return
-          }
-          const r=await fetch(st.url.replace(/\/+$/,'')+'/agent/sync/content-owner',{method:'PUT',headers:{Authorization:`Bearer ${backend.getToken()}`,'Content-Type':'application/json'},body:JSON.stringify({enabled:owned}),signal:AbortSignal.timeout(15000)})
-          if(!r.ok)throw new Error(`Content sync ownership failed (${r.status})`)
-          const current=loadTanguCreds();if(forsionAccountId(current.cloudUrl||'',current.token||'')!==identity)throw new Error('account_changed')
-          if(owned)await stopAmadeusSync?.();else await restartAmadeusSync?.()
-        },
-        changed: async () => {
-          const st=backend.getStatus();if(st.state!=='ready'||!st.url)return
-          const r=await fetch(st.url.replace(/\/+$/,'')+'/agent/sync/content-owner',{method:'PUT',headers:{Authorization:`Bearer ${backend.getToken()}`,'Content-Type':'application/json'},body:JSON.stringify({enabled:true}),signal:AbortSignal.timeout(15000)})
-          if(!r.ok)throw new Error('Content sync refresh failed')
-        },
+        ...contentSyncOwnership({
+          accountId: () => { const c = loadTanguCreds(); return forsionAccountId(c.cloudUrl || '', c.token || '') },
+          ensureBackend, loadConfig, backendStatus: () => backend.getStatus(), engineToken: () => backend.getToken(),
+          dataDir: tanguDataDir, stopSync: () => stopAmadeusSync?.(), restartSync: () => restartAmadeusSync?.(),
+        }),
         merge: (path,ours,base,theirs) => mergeSyncContent(path,ours,base,theirs,tanguDataDir()),
         agentFiles: agentContentHooks(tanguDataDir(),()=>{const c=loadTanguCreds();return forsionAccountId(c.cloudUrl||'',c.token||'')}),
         withWriteLock:(path,commit)=>withContentWriteLock(path,tanguDataDir(),commit),
