@@ -120,3 +120,35 @@ export function remarkWiki() {
   }
   return (tree: MdNode) => walk(tree)
 }
+
+/** 普通 Markdown 链接指向文件时的目标(D25):`src/a.ts`、`src/a.ts:12`、`a.ts:12-30`、`a.ts:12:5`(行:列,列不用)、
+ *  `a.ts#L12-L20`、`file:///abs/a.ts`。GPT / Codex 系模型常这样写。网址、`#锚点`、`mailto:` 之类 → null。
+ *  行号写成 0 或解不出来时只丢行号,文件照样打开。 */
+export function parseFileHref(href: string): { path: string; line?: number; end?: number } | null {
+  let s = href.trim()
+  if (!s || s.startsWith('#') || s.includes('?')) return null
+  if (/^file:\/\//i.test(s)) s = s.slice(7)
+  // 带协议的不算文件;Windows 盘符和「文件名.扩展名:行号」长得像协议,放行
+  else if (/^[a-z][a-z0-9+.-]*:/i.test(s) && !/^[a-z]:[\\/]/i.test(s) && !/^[^/\\:]+\.[A-Za-z0-9]{1,10}:\d/.test(s)) return null
+  try { s = decodeURI(s) } catch { /* 留原文 */ }
+  const m = /^(.+?)(?:#L(\d+)(?:-L?(\d+))?|:(\d+)(?:-(\d+)|:\d+)?)?$/i.exec(s)
+  if (!m) return null
+  const path = m[1]
+  const line = Number(m[2] ?? m[4]) || undefined
+  const end = Number(m[3] ?? m[5]) || undefined
+  if (!line && !/\.[A-Za-z0-9]{1,10}$/.test(path)) return null
+  return { path, ...(line ? { line, ...(end && end > line ? { end } : {}) } : {}) }
+}
+
+/** 相对路径按会话工作目录拼成绝对路径,`.` / `..` 就地消掉;已是绝对路径原样返回。 */
+export function resolveAgainst(cwd: string, path: string): string {
+  if (/^\/|^[A-Za-z]:[\\/]/.test(path)) return path
+  const parts = `${cwd}/${path}`.split(/[\\/]+/)
+  const out: string[] = []
+  for (const p of parts) {
+    if (p === '.' || (p === '' && out.length)) continue
+    if (p === '..') { if (out.length > 1) out.pop(); continue }
+    out.push(p)
+  }
+  return out.join('/') || '/'
+}

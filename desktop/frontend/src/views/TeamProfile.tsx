@@ -109,7 +109,7 @@ export function TeamProfile({ session, config, renderMember }: Props) {
       setNotice(t('teamProfile.avatarRemoved'))
     } catch (e: any) { setError(String(e.message || e)) } finally { setAvatarBusy(false) }
   }
-  const candidates = s.agents.filter((a) => a.createdBy !== 'system' && !draft.members.some((m) => m.slug === a.slug) && `${agentNames(a).join(' ')} ${a.description} ${a.slug}`.toLowerCase().includes(query.toLowerCase()))
+  const candidates = s.agents.filter((a) => a.createdBy !== 'system' && !a.disabled && !draft.members.some((m) => m.slug === a.slug) && `${agentNames(a).join(' ')} ${a.description} ${a.slug}`.toLowerCase().includes(query.toLowerCase()))
   const teamAvatar = s.teamAvatarUrl && isTeamImageAvatar(draft.avatar) ? <img src={s.teamAvatarUrl} alt="" /> : (!isTeamImageAvatar(draft.avatar) && draft.avatar) || (draft.members.length
     ? <AvatarStack size={42} items={draft.members.map((member) => {
         const definition = agentFor(member.slug)

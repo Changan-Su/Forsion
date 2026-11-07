@@ -20,6 +20,7 @@ import { tmpdir } from 'node:os'
 import { basename, isAbsolute, join, normalize, relative, sep } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
 import { effectivePluginId } from '../shared/products'
+import { sanitizeRequiresPlugins } from '../shared/amadeus/ipc'
 import { parseSandboxStatus, type SandboxStatus } from '../../tangu-agent/src/contracts/pluginSandbox'
 import { defineMainMessages } from './mainI18n'
 import { DEFAULT_APPEARANCE } from '../shared/startupAppearance'
@@ -34,6 +35,7 @@ export const PLUGIN_SANDBOX_MESSAGES = defineMainMessages({
   },
   'main.pluginSandbox.install': { zh: '安装', en: 'Install' },
   'main.pluginSandbox.cancel': { zh: '取消', en: 'Cancel' },
+  'main.pluginSandbox.windowTitle': { zh: 'Forsion 沙箱 · {name}', en: 'Forsion sandbox · {name}' },
 })
 
 /** 带给沙箱首屏的界面状态:语言 + 父进程渲染层的主题那几把 localStorage 键(子进程只收 forsion_theme* / forsion_glass*)。 */
@@ -97,6 +99,13 @@ export function sandboxEnv(base: NodeJS.ProcessEnv, p: ReturnType<typeof sandbox
   }
 }
 
+/** 沙箱子进程只播种被测插件 requiresPlugins 点名的内置包;清单读不出就一个也不要(沙箱会把它报成拒载)。 */
+export async function sandboxRequiredPlugins(dir: string): Promise<Set<string>> {
+  let m: { id?: unknown; requiresPlugins?: unknown } = {}
+  try { m = JSON.parse(await readFile(join(dir, 'manifest.json'), 'utf8')) } catch { /* 缺 / 坏 */ }
+  return new Set((sanitizeRequiresPlugins(m?.requiresPlugins, typeof m?.id === 'string' ? m.id : undefined) ?? []).map((d) => d.id))
+}
+
 /** 删沙箱目录前的最后一道:只删 <forsionHome>/sandbox/<合法 id>。 */
 export function isSandboxRoot(forsionHome: string, p: string): boolean {
   const base = normalize(join(forsionHome, 'sandbox')) + sep
@@ -139,10 +148,23 @@ export interface SandboxPublicState {
   name?: string
   version?: string
   dir?: string
-  /** 发起这个沙箱的对话(报告问题往那里发)。 */
+  /** 发起这个沙箱的对话(报告问题往那里发;右栏的沙箱卡只在这个对话里出现)。 */
   sessionId?: string
   status?: SandboxStatus | null
+  /** 最近一步(agent 或卡片做的):op = 契约里的动作名,target = 点 / 输入的那个元素(插件的字)。 */
+  lastOp?: { op: string; at: number; target?: string }
+  /** 最近一张截图的时刻;图本身另向 lastShot 要(几百 KB,不跟着每次状态广播走)。 */
+  shotAt?: number
+  /** 没在跑时:上一个沙箱是谁、为什么停的(卡片据此显示「闲置已停」+ 重新启动)。 */
+  last?: SandboxLast
 }
+
+export interface SandboxLast { pluginId: string; name: string; version: string; dir: string; sessionId?: string; reason: 'stopped' | 'idle' | 'exited'; at: number }
+
+/** 只看、不动沙箱界面的动作:不算「最近一步」。 */
+const QUIET_OPS = new Set(['status', 'logs'])
+/** 转给子进程原样做的动作(11-03 起);回来的 action 挂在 text 的 `action` 键上。 */
+const CHILD_OPS = new Set(['read', 'click', 'type', 'press', 'scroll', 'space', 'files'])
 
 export type SandboxChildEvent =
   | { event: 'report'; note: string; sessionId?: string; pluginId: string; name: string }
@@ -166,6 +188,11 @@ interface Child {
   done: Promise<void>
   lastUsed: number
   status: SandboxStatus | null
+  lastOp?: { op: string; at: number; target?: string }
+  shot?: string
+  shotAt?: number
+  /** 起它时被测插件点名的内置包(排好序拼起来):变了 = start 要重起而不是就地重载。 */
+  needs?: string
 }
 
 const HELLO_MS = 45_000
@@ -188,9 +215,20 @@ export function createPluginSandbox(deps: SandboxDeps) {
   const fail = (e: unknown): SandboxResult =>
     ({ ok: false, code: e instanceof SandboxError ? e.code : 'error', error: e instanceof Error ? e.message : String(e) })
 
+  let last: SandboxLast | null = null
+  const remember = (c: Child, reason: SandboxLast['reason']): void => {
+    last = { pluginId: c.manifest.pluginId, name: c.manifest.name, version: c.manifest.version, dir: c.dir, sessionId: c.sessionId, reason, at: Date.now() }
+  }
   const publicState = (): SandboxPublicState => child && !child.exited
-    ? { running: true, pluginId: child.manifest.pluginId, name: child.manifest.name, version: child.manifest.version, dir: child.dir, sessionId: child.sessionId, status: child.status }
-    : { running: false }
+    ? { running: true, pluginId: child.manifest.pluginId, name: child.manifest.name, version: child.manifest.version, dir: child.dir, sessionId: child.sessionId, status: child.status, lastOp: child.lastOp, shotAt: child.shotAt }
+    : { running: false, ...(last ? { last } : {}) }
+  /** 记最近一步与最近一张图(卡片的缩略图 / 「最近一步」行)。 */
+  const note = (c: Child, op: string, r: SandboxResult, target?: string): SandboxResult => {
+    if (!QUIET_OPS.has(op)) c.lastOp = { op, at: Date.now(), ...(target ? { target: target.slice(0, 120) } : {}) }
+    if (r.image) { c.shot = r.image; c.shotAt = Date.now() }
+    if (child === c) changed()
+    return r
+  }
   const changed = (): void => { try { deps.onChange(publicState()) } catch { /* 监听方的错不连累沙箱 */ } }
 
   function request(c: Child, op: string, args: Record<string, unknown> = {}, timeoutMs = REQ_MS): Promise<Record<string, unknown>> {
@@ -222,8 +260,8 @@ export function createPluginSandbox(deps: SandboxDeps) {
     return st
   }
 
-  async function shoot(c: Child, view?: string): Promise<string | undefined> {
-    const r = await request(c, 'screenshot', view ? { view } : {}, 20_000).catch(() => null)
+  async function shoot(c: Child, view?: string, settleFirst = false): Promise<string | undefined> {
+    const r = await request(c, 'screenshot', { ...(view ? { view } : {}), ...(settleFirst ? { settle: true } : {}) }, 20_000).catch(() => null)
     return typeof r?.image === 'string' ? r.image : undefined
   }
 
@@ -270,7 +308,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
     const server = createServer()
     await new Promise<void>((resolve, reject) => { server.once('error', reject); server.listen(sockPath, () => { server.off('error', reject); resolve() }) })
     const ui = deps.ui()
-    const info = JSON.stringify({ pluginId: manifest.pluginId, name: manifest.name, version: manifest.version, dir, ui })
+    const info = JSON.stringify({ pluginId: manifest.pluginId, name: manifest.name, version: manifest.version, dir, vault: paths.vault, root: paths.root, ui })
     const args = [...deps.appArgs, `--user-data-dir=${paths.userData}`, `--lang=${ui.locale === 'en' ? 'en' : 'zh-CN'}`, ...(deps.platform === 'darwin' ? ['-ApplePersistenceIgnoreState', 'YES'] : [])]
     const dropServer = (): void => { server.close(); if (deps.platform !== 'win32') void rm(sockPath, { force: true }) }
     let proc: ChildProcess
@@ -292,7 +330,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
       c.pending.clear()
       dropServer()
       deps.log(`[plugin-sandbox] ${manifest.pluginId} ${why}`)
-      if (child === c) { child = null; changed() }
+      if (child === c) { remember(c, 'exited'); child = null; changed() }
       markDone()
     }
     proc.once('exit', (code) => finish(`exited (${code})`))
@@ -343,9 +381,10 @@ export function createPluginSandbox(deps: SandboxDeps) {
     return c
   }
 
-  async function stop(): Promise<void> {
+  async function stop(reason: SandboxLast['reason'] = 'stopped'): Promise<void> {
     const c = child
     if (!c) return
+    remember(c, reason)
     child = null
     changed()
     if (c.exited) return
@@ -360,16 +399,20 @@ export function createPluginSandbox(deps: SandboxDeps) {
     if (disposed) return { ok: false, code: 'error', error: 'Forsion is quitting' }
     const manifest = await readSandboxManifest(dir)
     let c = child && !child.exited ? child : null
-    if (c && (c.dir !== dir || c.manifest.pluginId !== manifest.pluginId)) { await stop(); c = null }
+    // 改了 requiresPlugins:内置包只在子进程启动时播种,就地重载装不上新点名的那个,得重起(Codex 评审)
+    const needs = [...await sandboxRequiredPlugins(dir)].sort().join(',')
+    if (c && (c.dir !== dir || c.manifest.pluginId !== manifest.pluginId || c.needs !== needs)) { await stop(); c = null }
     if (c) {
       // 同一个插件:就地重载(改过 manifest 也算),不重开窗口
       if (sessionId) c.sessionId = sessionId
       await request(c, 'reload', {}, 30_000)
     } else {
       c = await spawnChild(dir, manifest, sessionId)
+      c.needs = needs
     }
     const st = await settle(c)
-    return ok(st, await shoot(c))
+    // 等界面落定再截:插件的 Space / 视图是装载落定之后才开出来的,马上截只截到一页空白(11-03 台架抓到)
+    return note(c, 'start', ok(st, await shoot(c, undefined, true)))
   }
 
   async function reset(): Promise<SandboxResult> {
@@ -403,11 +446,31 @@ export function createPluginSandbox(deps: SandboxDeps) {
       if (op === 'screenshot') {
         const view = typeof args.view === 'string' ? args.view : undefined
         const image = await shoot(c, view)
-        return ok(await readStatus(c), image, image ? undefined : 'no screenshot')
+        return note(c, op, ok(await readStatus(c), image, image ? undefined : 'no screenshot'))
       }
       if (op === 'command') {
         const r = await request(c, 'command', { command: args.command, args: args.args ?? {} }, 20_000)
-        return ok(await readStatus(c), undefined, typeof r.error === 'string' ? r.error.slice(0, 300) : undefined)
+        // shot:做完顺手截一张(命令多半改了界面,agent 不必再要一次)
+        const image = args.shot === true ? await shoot(c, undefined, true) : undefined
+        return note(c, op, ok(await readStatus(c), image, typeof r.error === 'string' ? r.error.slice(0, 300) : undefined), typeof args.command === 'string' ? args.command : undefined)
+      }
+      if (CHILD_OPS.has(op)) {
+        // 动手的动作排进同一队:两个对话同时 type 会先后把焦点抢走,字打进别的框、回执也串(Codex 评审)
+        return await queued(async () => {
+        if (child !== c || c.exited) return { ok: false, code: 'no_sandbox', error: 'the sandbox stopped meanwhile' }
+        const r = await request(c, op, args, 25_000)
+        const st = await readStatus(c)
+        const base = ok(st, typeof r.image === 'string' ? r.image : undefined, typeof r.error === 'string' ? r.error.slice(0, 500) : undefined)
+        const action = r.action && typeof r.action === 'object' ? { ...(r.action as Record<string, unknown>) } : null
+        if (st && action) {
+          // 状态 + 大纲要一起放进 client_cmd 结果 text 的 48k 帽:超了先削大纲
+          let text = JSON.stringify({ ...st, action })
+          const over = text.length - 46_000
+          if (over > 0 && typeof action.outline === 'string') { action.outline = `${action.outline.slice(0, Math.max(0, action.outline.length - over - 40))}\n… (cut)`; text = JSON.stringify({ ...st, action }) }
+          base.text = text
+        }
+        return note(c, op, base, typeof action?.target === 'string' ? action.target : undefined)
+        })
       }
       return { ok: false, code: 'unsupported', error: `unknown sandbox action "${op}"` }
     } catch (e) {
@@ -486,7 +549,7 @@ export function createPluginSandbox(deps: SandboxDeps) {
       const st = await readStatus(c).catch(() => null)
       if (st?.windowVisible || child !== c) return
       deps.log(`[plugin-sandbox] ${c.manifest.pluginId} idle, stopping`)
-      await stop()
+      await stop('idle')
     })
   }, 60_000)
   idle.unref?.()
@@ -494,12 +557,17 @@ export function createPluginSandbox(deps: SandboxDeps) {
   return {
     exec,
     show,
-    stop: () => serial(stop),
+    stop: () => serial(() => stop()),
     // 直接调的重置都是用户点的(卡片 / Coding Studio / 沙箱窗口自己的按钮);agent 的走 exec
     reset: () => revealed(serial(() => reset().catch(fail)), true),
     install: (expect: { pluginId?: string; dir?: string }) => serial(() => install(expect)),
     state: publicState,
-    dispose: () => { disposed = true; clearInterval(idle); return serial(stop) },
+    /** 最近一张截图(右栏卡的缩略图):只给发起这个沙箱的对话。 */
+    lastShot: (sessionId?: string): { image: string; at: number } | null => {
+      const c = child && !child.exited ? child : null
+      return c?.shot && c.shotAt && sessionId && c.sessionId === sessionId ? { image: c.shot, at: c.shotAt } : null
+    },
+    dispose: () => { disposed = true; clearInterval(idle); return serial(() => stop()) },
   }
 }
 

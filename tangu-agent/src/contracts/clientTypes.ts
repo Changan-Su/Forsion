@@ -226,6 +226,8 @@ export interface MuseTriggerInfo {
   nextRunAt?: string | null
   /** 规则开着但这会儿不动的原因:`trigger:*` code(桌面翻译)或引擎的暂时性状态文案。 */
   notice?: string
+  /** 内容版本指纹(GET / 保存时现算):构建器保存时原样带回 `expectedRev`,对不上引擎回 409。旧引擎没有。 */
+  rev?: string
 }
 
 /** agent 日程条目(agents/<slug>/SCHEDULE.db;引擎 entriesOf 的结构化输出)。 */
@@ -303,6 +305,8 @@ export interface NormalAgentDef {
   libraryDir?: string
   /** 允许读用户活动日志(read_activity 工具);默认 false=仅 Muse 可读。 */
   activityAccess?: boolean
+  /** 停用:侧栏 / @ / 选择器里不列,私聊与记忆都留着;Agents 页里随时打开。默认 Agent 不能停用。 */
+  disabled?: boolean
   /** 内置工具名单:'deny'=toolsList 内禁用(其余可用);'allow'=仅 toolsList 可用;缺省=不限制。 */
   toolsMode?: 'allow' | 'deny'
   toolsList?: string[]
@@ -604,6 +608,8 @@ export interface GitRemoteInfo {
   /** 仓库网页。 */
   web: string | null
   auth: 'forsion' | 'github' | 'local'
+  /** Forsion Git 上商业版组织的仓库 → 组织显示名。 */
+  org?: string
 }
 export interface GitCommitInfo { sha: string; short: string; at: number; subject: string }
 

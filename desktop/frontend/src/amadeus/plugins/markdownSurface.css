@@ -1,0 +1,4 @@
+/* ctx.ui.mountMarkdown:双链和聊天、Amadeus 正文同一画法(强调色,悬停才出下划线);经典 / 墨色配色下 .md-body a 的强调色接近正文色,看不出能点 */
+.amx-plugin-md .wikilink { color: var(--signal); cursor: pointer; text-decoration: none; }
+.amx-plugin-md .wikilink:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+.amx-plugin-md .wikilink.wikilink-unresolved { color: var(--text-muted); opacity: 0.8; text-decoration: none; cursor: default; }

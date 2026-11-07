@@ -1,10 +1,11 @@
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { conflictCopyName, decide, runAgentFilesSync } from './agentFileSync.js';
 import type { AgentFileContent, AgentFileMeta, AgentFilesBrain } from '../seams/cloudBrain.js';
-import { agentSyncPermission, agentSyncScope, setAgentSyncDefault, setAgentSyncPermission } from './cloudSyncAccount.js';
+import { agentSyncScope, setAgentSyncDefault, setAgentSyncPermission } from './cloudSyncAccount.js';
 
 const slug = 'cloud-only';
 const config = 'name = "Cloud Only"\ncloud_sync = true\nlibrary_order = ["reference.md"]\n';
@@ -36,38 +37,97 @@ afterEach(() => {
   rmSync(home, { recursive: true, force: true });
 });
 
+describe('runAgentFilesSync on an archived account (old accounts B, 11-06)', () => {
+  // 云端那份进了存档、在线那份清空:旧同步看到「影子里有、清单里没有」会当成别处删了,把本机没改过的文件删掉。
+  // 清单带 agentArchive 时一个 Agent 都不碰;负对照:同一份空清单不带标记,本机文件确实会被删(证明这里看得见那条路)。
+  // 带 seq / hash 的清单(现在的服务端):影子记下版本,「清单里没有」才会被当成别处删了
+  const modern: AgentFileMeta[] = metas.map((m) => ({ ...m, seq: 1, hash: createHash('sha256').update(contents[m.relPath]!.content || '').digest('hex') }));
+  const pulled = async (): Promise<{ cloud: AgentFilesBrain; dir: string }> => {
+    const cloud: AgentFilesBrain = {
+      getManifest: async () => [{ slug, files: modern }],
+      getFile: async (_userId, gotSlug, relPath) => { const m = modern.find((x) => x.relPath === relPath); return gotSlug === slug && m ? { ...contents[relPath]!, seq: m.seq, hash: m.hash } : null; },
+      putFile: async (_userId, _slug, _relPath, body) => ({ mtimeMs: body.mtimeMs }),
+      deleteFile: async () => {},
+    };
+    const dir = path.join(home, 'agents', slug);
+    mkdirSync(dir, { recursive: true });
+    setAgentSyncPermission(slug, agentSyncScope(cloud, 'user-1')!, true);
+    expect((await runAgentFilesSync(cloud, 'user-1', { onlySlug: slug })).pulled).toBe(3);
+    return { cloud, dir };
+  };
+  const emptied = (archived: boolean): AgentFilesBrain & { calls: string[] } => {
+    const calls: string[] = [];
+    return {
+      calls,
+      getManifest: async () => Object.assign([], archived ? { agentArchive: { state: 'done', at: 1 } } : {}),
+      getFile: async () => null,
+      putFile: async (_u, s, p, body) => { calls.push(`put ${s}/${p}`); return { mtimeMs: body.mtimeMs }; },
+      deleteFile: async (_u, s, p) => { calls.push(`delete ${s}/${p}`); },
+    };
+  };
+
+  it('leaves every local agent file alone and sends nothing', async () => {
+    const { dir } = await pulled();
+    const cloud = emptied(true);
+    const result = await runAgentFilesSync(cloud, 'user-1');
+    expect(result.ok).toBe(true);
+    expect(cloud.calls).toEqual([]);
+    expect(readFileSync(path.join(dir, 'SOUL.md'), 'utf8')).toBe('云端人格');
+    expect(readFileSync(path.join(dir, 'Library', 'reference.md'), 'utf8')).toContain('已同步');
+  });
+
+  it('negative control: the same empty manifest without the archive mark deletes the unmodified local copy', async () => {
+    const { dir } = await pulled();
+    expect(existsSync(path.join(dir, 'SOUL.md'))).toBe(true);
+    await runAgentFilesSync(emptied(false), 'user-1');
+    expect(existsSync(path.join(dir, 'SOUL.md'))).toBe(false);
+  });
+});
+
 describe('runAgentFilesSync cloud-only bootstrap', () => {
-  it('discovers cloud_sync agent from manifest and pulls its Library', async () => {
+  // 11-05 Agent 逐个选:云端有、本机没有的 Agent 不再自动建出来(原来 cloud_sync = true / 账号总闸开着就建,一台设备的选择替所有设备做了)
+  it('does not create a cloud_sync agent this device never picked', async () => {
+    const getFile = vi.fn(async (_userId: string, gotSlug: string, relPath: string) => gotSlug === slug ? contents[relPath] || null : null);
+    const cloud: AgentFilesBrain = {
+      getManifest: async () => [{ slug, files: metas }],
+      getFile,
+      putFile: async (_userId, _slug, _relPath, body) => ({ mtimeMs: body.mtimeMs }),
+      deleteFile: async () => {},
+    };
+    const result = await runAgentFilesSync(cloud, 'user-1', { onlySlug: slug });
+    expect(result.ok).toBe(true);
+    expect(result.agents).toBe(0);
+    expect(getFile).not.toHaveBeenCalled();
+    expect(existsSync(path.join(home, 'agents', slug))).toBe(false);
+  });
+
+  it('does not create a cloud agent even while the account switch is on', async () => {
     const cloud: AgentFilesBrain = {
       getManifest: async () => [{ slug, files: metas }],
       getFile: async (_userId, gotSlug, relPath) => gotSlug === slug ? contents[relPath] || null : null,
       putFile: async (_userId, _slug, _relPath, body) => ({ mtimeMs: body.mtimeMs }),
       deleteFile: async () => {},
     };
+    setAgentSyncDefault(agentSyncScope(cloud, 'user-1')!, true);
+    expect((await runAgentFilesSync(cloud, 'user-1', { onlySlug: slug })).agents).toBe(0);
+    expect(existsSync(path.join(home, 'agents', slug))).toBe(false);
+  });
 
+  it('pulls a cloud agent whose folder and permission this device already has', async () => {
+    const cloud: AgentFilesBrain = {
+      getManifest: async () => [{ slug, files: metas }],
+      getFile: async (_userId, gotSlug, relPath) => gotSlug === slug ? contents[relPath] || null : null,
+      putFile: async (_userId, _slug, _relPath, body) => ({ mtimeMs: body.mtimeMs }),
+      deleteFile: async () => {},
+    };
+    mkdirSync(path.join(home, 'agents', slug), { recursive: true });
+    setAgentSyncPermission(slug, agentSyncScope(cloud, 'user-1')!, true);
     const result = await runAgentFilesSync(cloud, 'user-1', { onlySlug: slug });
-
     expect(result.ok).toBe(true);
     expect(result.agents).toBe(1);
     expect(result.pulled).toBe(3);
     expect(readFileSync(path.join(home, 'agents', slug, 'config.toml'), 'utf8')).toBe(config);
     expect(readFileSync(path.join(home, 'agents', slug, 'Library', 'reference.md'), 'utf8')).toContain('已同步');
-  });
-
-  it('discovers an agent without cloud_sync only while the account switch is on', async () => {
-    const plain = 'name = "Cloud Only"\nlibrary_order = ["reference.md"]\n';
-    const files = { ...contents, 'config.toml': { ...contents['config.toml'], content: plain } };
-    const cloud: AgentFilesBrain = {
-      getManifest: async () => [{ slug, files: metas }],
-      getFile: async (_userId, gotSlug, relPath) => gotSlug === slug ? files[relPath] || null : null,
-      putFile: async (_userId, _slug, _relPath, body) => ({ mtimeMs: body.mtimeMs }),
-      deleteFile: async () => {},
-    };
-    expect((await runAgentFilesSync(cloud, 'user-1', { onlySlug: slug })).agents).toBe(0);
-    setAgentSyncDefault(agentSyncScope(cloud, 'user-1')!, true);
-    const result = await runAgentFilesSync(cloud, 'user-1', { onlySlug: slug });
-    expect(result.agents).toBe(1);
-    expect(readFileSync(path.join(home, 'agents', slug, 'SOUL.md'), 'utf8')).toBe('云端人格');
   });
 
   it('does not upload the previous account’s agent after switching accounts', async () => {
@@ -84,34 +144,6 @@ describe('runAgentFilesSync cloud-only bootstrap', () => {
     await runAgentFilesSync(cloud, 'user-2', { onlySlug: slug });
     expect(putFile).not.toHaveBeenCalled();
     expect(readFileSync(path.join(home, 'agents', slug, 'SOUL.md'), 'utf8')).toBe('云端人格');
-  });
-
-  it('does not claim a local agent created while cloud discovery is awaiting its config', async () => {
-    let started!: () => void;
-    const requested = new Promise<void>((resolve) => { started = resolve; });
-    let finish!: (value: AgentFileContent) => void;
-    const configResponse = new Promise<AgentFileContent>((resolve) => { finish = resolve; });
-    const putFile = vi.fn(async (_uid, _slug, _path, body) => ({ mtimeMs: body.mtimeMs }));
-    const cloud: AgentFilesBrain = {
-      getManifest: async () => [{ slug, files: metas }],
-      getFile: async (_uid, _slug, relPath) => {
-        if (relPath === 'config.toml') { started(); return configResponse; }
-        return contents[relPath] || null;
-      },
-      putFile, deleteFile: async () => {},
-    };
-    const pending = runAgentFilesSync(cloud, 'account-b', { onlySlug: slug });
-    await requested;
-    const dir = path.join(home, 'agents', slug);
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(path.join(dir, 'config.toml'), 'name = "Private local agent"\n');
-    writeFileSync(path.join(dir, 'SOUL.md'), 'Local data without upload consent');
-    finish(contents['config.toml']);
-    const result = await pending;
-    expect(result.agents).toBe(0);
-    expect(putFile).not.toHaveBeenCalled();
-    expect(agentSyncPermission(slug, agentSyncScope(cloud, 'account-b')).enabled).toBe(false);
-    expect(readFileSync(path.join(dir, 'SOUL.md'), 'utf8')).toBe('Local data without upload consent');
   });
 
   it('keeps another account’s deletion baseline out of a newly authorized account', async () => {

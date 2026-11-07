@@ -7,7 +7,7 @@
  *
  * 「Forsion 只是其中一个 provider」即在此体现:Forsion 是兜底的托管面,直连 provider 与其平级。
  */
-import { imageMimeOf, fimUnsupportedError, type FimCompletionOpts, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type StreamResult, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
+import { imageMimeOf, imageOutputFields, fimUnsupportedError, type FimCompletionOpts, type CloudBrainServices, type BuildPayloadOpts, type StreamOpts, type StreamResult, type ImageGenRequest, type ImageEditRequest, type ImageGenResult, type SpeechRequest, type SpeechResult } from '../../seams/cloudBrain.js';
 import type { ProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
 import { isAuthExpiredLlmError, isQuotaExhaustedLlmError } from '../../llm/retry.js';
@@ -28,16 +28,31 @@ const llmDebug = new WeakMap<object, string>();
 const DIRECT_IMG_SIZE: Record<string, string> = {
   '1:1': '1024x1024', '3:2': '1792x1024', '16:9': '1792x1024', '2:3': '1024x1792', '9:16': '1024x1792',
 };
+const GIF_RATIO_SIZE: Record<string, string> = {
+  '1:1': '512x512', '3:2': '576x384', '16:9': '768x432', '2:3': '384x576', '9:16': '432x768',
+};
+
+function gifSize(size?: string): string {
+  return size ? GIF_RATIO_SIZE[size] || size : 'auto';
+}
+
+function checkDirectImageOptions(apiModelId: string, req: ImageGenRequest): void {
+  if ((req.outputFormat === 'gif' || req.complexity !== undefined) && !/^gpt-image-2\.6-(sunburst|flare)(?:$|-)/i.test(apiModelId)) {
+    throw new LlmError(400, 'GIF output and complexity require a GPT Image 2.6 model.');
+  }
+}
 
 /** 直连用户自有 OpenAI 兼容端点生图(BYO-key);返回 b64。 */
 async function generateDirectImage(baseUrl: string, apiKey: string | undefined, apiModelId: string, req: ImageGenRequest): Promise<ImageGenResult> {
+  checkDirectImageOptions(apiModelId, req);
   const raw = req.size || '1:1';
-  const size = DIRECT_IMG_SIZE[raw] || (/^\d+x\d+$/.test(raw) ? raw : '1024x1024');
+  const size = req.outputFormat === 'gif' ? gifSize(req.size)
+    : DIRECT_IMG_SIZE[raw] || (/^\d+x\d+$/.test(raw) ? raw : '1024x1024');
   const r = await fetch(`${baseUrl}/images/generations`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey || ''}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: apiModelId, prompt: req.prompt, n: req.n || 1, size,
-      ...(req.quality ? { quality: req.quality } : {}),
+      ...(req.quality ? { quality: req.quality } : {}), ...imageOutputFields(req),
       // gpt-image-* 拒收 response_format(且恒返回 b64);其余 OpenAI 兼容端点需要它才给字节。
       ...(/^(gpt-image|chatgpt-image)/i.test(apiModelId) ? {} : { response_format: 'b64_json' }) }),
     signal: req.signal ?? AbortSignal.timeout(180_000),
@@ -51,11 +66,14 @@ async function generateDirectImage(baseUrl: string, apiKey: string | undefined, 
 
 /** Multipart edit requests use the same provider routing as generation. */
 async function editDirectImage(baseUrl: string, apiKey: string | undefined, model: string, req: ImageEditRequest): Promise<ImageGenResult> {
+  checkDirectImageOptions(model, req);
   const form = new FormData();
   form.append('model', model); form.append('prompt', req.prompt); form.append('n', String(req.n || 1));
   const sizes: Record<string, string> = { '1:1': '1024x1024', '3:2': '1536x1024', '16:9': '1536x1024', '2:3': '1024x1536', '9:16': '1024x1536' };
-  form.append('size', sizes[req.size || '1:1'] || req.size || '1024x1024');
-  form.append('output_format', 'png');
+  form.append('size', req.outputFormat === 'gif' ? gifSize(req.size) : sizes[req.size || '1:1'] || req.size || '1024x1024');
+  for (const [field, value] of Object.entries({ output_format: 'png', ...imageOutputFields(req) })) {
+    form.append(field, String(value));
+  }
   if (req.quality) form.append('quality', req.quality);
   if (req.transparentBackground) form.append('background', 'transparent');
   req.images.forEach((image, index) => {

@@ -90,7 +90,7 @@ export function AutomationBuilderHost() {
   }
   return (
     <div className="am-app tangu-lovable" style={{ display: 'contents' }}>
-      <DialogOverlay onMouseDown={() => finish(null)}>
+      <DialogOverlay onMouseDown={() => { if (useAutomation.getState().leaveGuard?.() !== false) finish(null) }}>
         <div className="dialog amx-btnblock-dialog" onMouseDown={(e) => e.stopPropagation()}>
           <Suspense fallback={<div className="dialog-msg">{t('amauto.loadingBuilder')}</div>}>
             <AutomationBuilder

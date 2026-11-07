@@ -19,6 +19,8 @@
  *   GET    /agent/project-context/git/hosting?sessionId=              → { forsionGit: { webUrl, name } | null(这里能不能「发布到 Forsion Git」),
  *                                                                       github: { linked, login?, remote, name } | null(云端开了 GitHub 绑定时:当前用户绑没绑;
  *                                                                       remote = origin 是会用绑定账号推拉的那种远端;name = 「发布到 GitHub」预填的仓库名) }
+ *   GET    /agent/project-context/git/reviews?sessionId=              → { reviews: { items, total, web } | null }(Forsion Git 上等这个人审的合并请求,
+ *                                                                       services/forsionGit.ts reviewRequests;读不到 = null,Git 卡就不显示那一行)
  *   POST   /agent/project-context/git/publish-github { sessionId, name, target?, trust? } → 加一个远端:在绑定的 GitHub 账号下建私有仓库并推送(services/githubPublish.ts)
  *   POST   /agent/project-context/git/remote  { sessionId, url, target?, trust? }  → 加一个远端:连接一个已有的地址(gitActions.gitConnectRemote)
  *   POST   /agent/project-context/git/publish  { sessionId, name, target?, trust? } → 加一个远端:设到 Forsion Git 并推送(services/forsionGitPublish.ts)
@@ -351,6 +353,12 @@ router.get('/agent/project-context/git/hosting', authMiddleware, async (req: Aut
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'git hosting lookup failed' });
   }
+});
+
+/** Forsion Git 上等这个人审的合并请求(Git 卡的那一行;人是用户层的,不按项目筛)。只读;读不到 = null。 */
+router.get('/agent/project-context/git/reviews', authMiddleware, async (req: AuthRequest, res) => {
+  if (!(await projectDirOf(req, res, req.query.sessionId))) return;
+  res.json({ reviews: await Promise.resolve(forsionGit()?.reviewRequests() ?? null).catch(() => null) });
 });
 
 /** 待提交清单(提交框完整列出;有已暂存的只列已暂存的)。只读,不排队。 */

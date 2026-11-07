@@ -25,6 +25,7 @@ import path from 'node:path';
 export const PROJECT_DOC_FAMILIES = [
   ['AGENTS.md', '.agents/AGENTS.md'], // OpenAI Codex / 通用约定
   ['CLAUDE.md', '.claude/CLAUDE.md'], // Claude Code
+  ['GEMINI.md'], // Gemini CLI(11-03 原地读)
   ['.tangu/AGENTS.md'], // Tangu 自己的位置(想只给 Tangu 看时用)
 ];
 /** 全部候选名(拍平)。「这个项目的指令文件」的编辑目标仍按这个顺序取首个命中(projectContext.resolveDocTarget)。 */

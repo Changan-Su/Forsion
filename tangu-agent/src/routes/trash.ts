@@ -3,7 +3,7 @@
 import { Router } from 'express';
 import { authMiddleware, AuthRequest } from '../core/http.js';
 import { deps } from '../seams/runtime.js';
-import { emptyTrash, listTrash, purgeTrash, readTrash, TRASH_DAYS } from '../services/trash.js';
+import { emptyTrash, listTrash, purgeTrash, readTrash, restoreTrashItems, TRASH_DAYS } from '../services/trash.js';
 import { restoreAgent } from '../services/agentUninstall.js';
 import { restoreSkill } from '../services/skillUninstall.js';
 import { restoreEnginePlugin } from '../services/pluginUninstall.js';
@@ -31,6 +31,11 @@ router.post('/agent/trash/:id/restore', authMiddleware, async (req: AuthRequest,
     if (entry.kind === 'agent') return res.json({ ok: true, ...(await restoreAgent(req.user!.userId, entry)) });
     if (entry.kind === 'skill') return res.json({ ok: true, ...(await restoreSkill(entry)) });
     if (entry.kind === 'plugin') return res.json({ ok: true, ...(await restoreEnginePlugin(entry, { rescan: req.query.rescan !== '0' })) });
+    if (entry.kind === 'file') {
+      // Agent 删掉的文件:原样放回原处(原名被占用时落到「名字-2」),没有要接回的设置
+      const placed = [...(await restoreTrashItems(entry)).entries()][0];
+      return res.json({ ok: true, path: placed?.[1], renamed: !!placed && placed[0] !== placed[1] });
+    }
     res.status(400).json({ detail: `cannot restore ${entry.kind}` });
   } catch (e: any) {
     if (e?.code === 'plugin_reinstalled') return res.status(409).json({ detail: e.message, error: e.code });

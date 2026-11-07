@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.92.1
+  version: 1.97.0
   author: Forsion
   category: Forsion
 ---
@@ -28,7 +28,7 @@ metadata:
 
 Read the matching `references/` file before using an API listed below or following a section's reference:
 
-- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
+- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(`vault: true` 接当前库双链); 只读 Markdown ctx.ui.mountMarkdown; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
 - [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:section `ctx.agent`
 - [references/plugin-skill-providers.md](references/plugin-skill-providers.md): engine `ctx.registerSkillProvider` for live external skills.
 - [references/plugin-model-providers.md](references/plugin-model-providers.md): engine `ctx.registerModelProvider` for native single-inference sources.
@@ -53,12 +53,12 @@ Then read [references/troubleshooting.md](references/troubleshooting.md): what e
 
 When `plugin_sandbox` is in your tool catalog (the desktop app, a work session on this computer), verify every desktop plugin you write there **before** you tell the user it works, and never install it into their Forsion yourself:
 
-1. `plugin_sandbox` `{"action":"start","path":"<plugin folder with manifest.json>"}` (relative paths resolve against the working folder). You get the load status (registered views, hidden Spaces, setup error, mount errors, the plugin's own console) and a screenshot of the sandbox window, with the plugin's first view open.
+1. `plugin_sandbox` `{"action":"start","path":"<plugin folder with manifest.json>"}` (relative paths resolve against the working folder). You get the load status (registered views, the Space folders it ships and which were shown or hidden and why, setup error, mount errors, the plugin's own console) and a screenshot of the sandbox window, already on the plugin's first Space (or its first view when it ships no Space).
 2. Fix what you see in the files. Saving reloads the sandbox by itself; look again with `plugin_sandbox_inspect` (`status`, `screenshot` with an optional `view` id, `logs`).
-3. Exercise behaviour with `plugin_sandbox_inspect` `{"action":"command","command":"<command id>","args":{...}}`: it runs a command the plugin registered with `ctx.registerCommand`, passing `args` to `run(args)`. Register the actions you need to test as commands.
-4. Tell the user it is running in the sandbox. They can open the window from the sandbox card in the chat, try it, report a problem back to this chat, and install it with **Install in my Forsion**, which asks them first.
+3. Use it like a person would, with `plugin_sandbox_inspect` (2026-11-03+; never computer use on the sandbox window): `read` gives an outline of the screen with `[e12]` references; `click` / `type` / `press` take a `target` (a reference, `css:<selector>`, or a control's visible text), `type` replaces the field's text unless `append` is true, `press` takes keys such as `Enter`, `ArrowDown`, `Mod+K`; `scroll` (`amount` pixels, negative = up) and `space` (switch to one of the plugin's Spaces). Each returns a screenshot after the page settles, plus console lines and toasts that appeared meanwhile. Before clicking something that opens a file picker (`<input type="file">` included), call `files` with `paths` inside the plugin folder (put test fixtures there); a native picker cannot be seen or clicked. Commands still work too: `{"action":"command","command":"<command id>","args":{...},"screenshot":true}` runs one the plugin registered with `ctx.registerCommand`.
+4. Tell the user it is running in the sandbox. They can open the window from the sandbox card in the chat or the sandbox card in the right-hand summary panel, try it, report a problem back to this chat, and install it with **Install in my Forsion**, which asks them first.
 
-What the sandbox is: a separate Forsion with its own empty vault and data, signed out, **without the Tangu engine**, where only this plugin is loaded. So a bundle's engine half (`plugins/`, `agents/`, `skills/`), anything that needs a signed-in account or cloud sync, and plugins that declare `fileExtensions` (blocked for dev copies) cannot be verified there; say so and test those after the user installs. Only one sandbox runs at a time; `reset` wipes its data and starts fresh; `stop` closes it.
+What the sandbox is: a separate Forsion with its own empty vault and data, signed out, **without the Tangu engine**, where only this plugin is loaded, plus the built-in plugins it lists in `requiresPlugins` (others, such as Forsion Extend or Calendar, are not there; declare what you depend on). The Ribbon shows only this plugin's Spaces. So a bundle's engine half (`plugins/`, `agents/`, `skills/`), anything that needs a signed-in account or cloud sync, and plugins that declare `fileExtensions` (blocked for dev copies) cannot be verified there; say so and test those after the user installs. Only one sandbox runs at a time; `reset` wipes its data and starts fresh; `stop` closes it.
 
 No `plugin_sandbox` (mobile, web, cloud sessions, older desktop builds)? Fall back to `tools/check-plugin.mjs` and ask the user to try it. Coding Studio's Sandbox panel also has a **My Forsion** tier: that one loads the dev copy into the user's real app and real notes and is not isolated.
 
@@ -186,6 +186,9 @@ mod+J、布局记忆和移动端抽屉,自造的一样都没有,还和别的 Spa
   拆不开的 DOM 可以整块搬进另一个 view 的 `el`(事件监听跟着走),样式随之注入。
 - ⚠️ **iframe 一搬就重新加载**,而宿主开合底部面板会把主区整列摘下重挂 —— 主区里的 iframe 同样重载。
   靠 postMessage 驱动的预览要在帧**每次**报告就绪时把时间、播放状态补发回去,不能只听第一次(否则画面一直是黑的)。
+- **一个检测只开它自己那一块**:缺哪个能力就只少那一块,别拿一个接口当「新宿主」暗号、整块退回旧版(拿 `setBody` 判底部输入框,
+  会让只缺子任务的宿主连输入框位置也退回去)。选项层面、`?.` 看不出来的查能力清单:`ctx.listCapabilities`、
+  `ctx.ui.chatBoxCapabilities`、`ctx.table.caps`。
 - **先 feature-detect 再依赖**:旧宿主静默忽略 `layout.bottom`;旧桌面宿主把 `openView(id, { location: 'bottom' })`
   当主区打开,会把当前主视图导航走。查 `ctx.viewLocations?.includes('bottom')`(移动端没有底部面板,不含它)。
   主视图让出内容的判据 = 配方传给它的参数(如 `{ "timeline": "bottom" }`)**且** `viewLocations` 含 bottom;任一不满足就在 view 内自绘。
@@ -289,6 +292,8 @@ A bundle can declare stdio MCP servers and observe-only hooks in its manifest: r
 
 **发新版 / 改信息(2026-10-24 起)**:在「投稿」里选中自己的条目。ZIP 拖进新包;GitHub / npm 先在原渠道发新 Release / 新版本,再点「检查新版本」(从没打过 Release 的仓库没有可锁的版本,先发一个 Release)。**版本号只从包里 / 上游读,投稿页没有版本输入框**:manifest 写 `version`,技能写 SKILL.md frontmatter 的 `version` 或 `metadata.version`(两处都认,桌面检查更新用同一条规则),新版要高于商店当前版本。提交前服务端先把包检查一遍(只读、不落库),列出读到的类型、版本、图标、README 和包体提醒,作者确认后才真提交。简介、标签、长描述、版本要求可以在「商店信息 → 编辑」里单独改,不用传包、不升版本。已上架条目的新版本和信息改动都要过审,审核通过前商店照旧发原来的;审核结果发到投稿账号的收件箱。升版号必写 `CHANGELOG.md` 一节(`## x.y.z — YYYY-MM-DD`),宿主会渲染成插件详情页的更新日志。
 
+**用户侧自动更新与回退(桌面 2.13.8 起)**:商店插件**缺省自动更新**(后台下好、下次启动换上;用户可全局或按插件关掉)。换版前旧版本留在本机(`~/.forsion/.plugin-versions/<类型>/<目录名>/<版本>/`,每个插件最近 2 份),用户能一键回退;回退或从「版本」页装旧版 = 固定在那一版,直到用户「恢复自动更新」。⚠️ **回退只换插件文件,数据不回退**(工作文件夹、`plugin-data`、设置原样):改数据格式时让旧版读新数据也不出错(忽略不认识的字段、别把旧数据原地改成旧版读不了的形状),或新格式写新文件。核心插件(Extend / 日历 / Computer Use)跟桌面版本走,不参与。
+
 ### 投稿元数据、版本要求与评论(2026-10-17 起)
 
 - 投稿表单可填:标签(≤8 个,每个 ≤40 字)、长描述(详情页「内容介绍」)、支持平台(`desktop` / `macos` / `windows` / `linux` / `android` / `ios` / `web`)、Forsion 版本范围(`minAppVersion` 含、`maxAppVersion` 不含,语义化版本号)。
@@ -343,12 +348,14 @@ Your Space renders your own status, TODOs, schedule and Library from `ctx.agent`
 | `registerEmbedRenderer` | `![[x]]` 嵌入的自绘渲染 | |
 | `registerToolResultRenderer` | 对话里**你自己引擎半身注册的工具**跑完后的结果卡片(可直接进 Agent Desk) | 2026-10-19 起;别家插件的、核心的工具认领不了(唯一例外:签名的 Forsion Extend 画 `publish_web_page` / `forsion_account`);2026-10-28 起可带 `match({ tool, args })` 按参数收窄;老宿主没有 → `ctx.registerToolResultRenderer?.(…)`。见下「Tool result cards」 |
 | `registerSetting` | 详情页声明式表单(number/boolean/text) | 每键一个字符串,**没有原子性**;同 key 重注册即覆盖 |
-| `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),**不碰笔记库**;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
+| `ctx.ui.mountMarkdownEditor` | 视图内原生 Amadeus Markdown 编辑器 | 正文归调用方(API 草稿等),缺省**不碰笔记库**,`vault: true`(2.13.8+)接上当前库的双链补全 / 跳转;保存前 `getValue()`;`modes: false` 不画「编辑 / 源码 / 预览」那一排;老宿主没有 → 可选链 |
+| `ctx.ui.mountMarkdown` | 只读 Markdown(聊天那套:公式、双链) | 2.13.8+;`update({ markdown })`;列表每行一个也行;有它就说明编辑器的 `vault` 有效 |
 | `ctx.ui.mountFloatingToc` | 视图内原生悬浮目录 | 插件保有正文 DOM,宿主负责扫描 / 滚动高亮 / 跳转 / 主题;正文用 `[data-lcl-ftoc]` + `--lcl-ftoc-gutter` 让出沟(见 references);老宿主没有 → 可选链 |
 | `ctx.ui.setViewModes(el, spec)` | 视图的几种「看法」(转写 / 笔记 / 纪要、文档 / 画布这类同一份东西换摆法) | 2026-10-19 起;宿主把胶囊画在视图头行最左,⌥⌘V、命令面板「看法：X」、窄宽变形、手机顶栏都归宿主;2–4 种,`icon` 用图标词表名;句柄 `actions` = 同一行右边,把自己栏里的按钮挪进去;记忆归你(按记录 / 文件记);老宿主没有 → 可选链,保留自己的标签。见下「View modes」 |
 | `ctx.ui.attachTooltip(el, content, opts?)` | 按钮 / 图标的悬停提示,和宿主自己的按钮同一个 | 2026-10-23 起;300ms 才出、弹着移到相邻触发点直接接力、键盘聚焦立刻出不做动画、按下 / 滚动即收;`content` = 一行或几行(首行标题);`side` 缺省 top、放不下翻面;句柄 `{ update, dispose }`,禁用时宿主统一收;留 `aria-label`、去掉 `title`;老宿主没有 → 可选链,照旧 `title`。见下「Tooltips」 |
 | `ctx.ui.dropIndicator(opts?)` | 自己视图里拖动排序 / 拖进去时的落点线、「放进去」描边,和宿主编辑器 / 侧栏 / 标签条同一个 | 2026-10-24 起;句柄 `{ line, zone, hide, dispose }`,传视口坐标(`line({x,y,w})` 横线 y=上沿、`{axis:'v'}` 竖线、`zone({x,y,w,h})` 描边);换落点原地淡出淡入、颜色 `--signal-line`;给 `key`(行 id)滚动才不算换落点;dragleave / drop 时 `hide()`,禁用时宿主统一收;老宿主没有 → 可选链,照旧自己画。2026-10-25 起句柄多一个 `land?(行或找它的函数, 松手处)`:挪完之后被拖的那一行从松手处滑进新位置(160ms,减少动态效果下直接到位),邻居不让位。见下「Drop indicators」 |
 | `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
+| `ctx.ui.mountToolIsland` | 「拿着工具干活」的视图(PDF 批注一类)换工具的那颗胶囊 | 2026-11-04 起;顶部居中、`root` 窄于 520px 停底部,宿主管位置 / 皮 / 滑过去的选中底块;**选中受控**(`onPick` 里自己 `setActive`),`key` 只画字母不绑键;句柄的 `row` 是岛下那一排、归插件画,`slots` 放四角;老宿主没有 → 可选链,保留自己的那条(见 references「Tool island」) |
 | `ctx.ui.mountSettingsPage` / `ctx.ui.mountSettingsItem` | 设置类页面(账号、额度、诊断、偏好…)用宿主的设置零件画 | 只给 groups / items 数据和回调,宿主按端排版(手机上紧凑控件留右、宽控件换行、选了就执行 → 半屏);**别再抄宿主的设置 CSS**;老宿主没有 → 可选链,保留自己画的那套 |
 | `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
 | `ctx.ui.haptic?.('tick')` | 移动端一次已接受操作的轻触反馈 | 2.13.7+；只有原生触感设备才存在，遵循系统设置。只在用户动作写入被接受后调用一次，撤销／同步不调用；不要拿浏览器震动模拟原生反馈 |
@@ -591,7 +598,7 @@ createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一�
 - `dispose()` 同步摘掉这一层,**之后 `el` 立刻还给你**:清空它、放自己的内容、在同一个 `el` 上再挂,都不用等。
 - dispose 再挂 = 一份全新的实例(输入焦点、排序筛选这些状态不带过来)。只是换数据 / 换参数就用句柄的 `update()`。
 - 一个 `el` 同一时刻只有一份宿主界面:上一份没 dispose 就在同一个 `el` 上再挂,宿主先把上一份完整收掉(等同于你 dispose 了它,句柄此后不再生效),再挂新的;谁后调用谁留下,不看谁先加载完。要并排放两份,就各给一个子节点。
-  `mountFloatingToc` 例外:它是叠在 `shell` 上的一层,不占用 `shell`,不收掉 `shell` 上别的挂载,也不被它们收掉。
+  `mountFloatingToc` / `mountToolIsland` 例外:它们是叠在 `shell` / `root` 上的一层,不占用它,不收掉它上面别的挂载,也不被它们收掉。
 - 别用 `el > .x` 去选宿主渲染的节点,也别假设它是 `el.firstElementChild` —— 中间隔着那一层。
 - 2.12.2 及更早的宿主没有这条保证:dispose 之后那一拍里清空 `el`,宿主的卸载会报一条页面错误,或者再挂之后一片空白。
   要兼容它们,就把宿主内容挂进你自己建的子节点(`const slot = el.appendChild(document.createElement('div'))`),换内容时连子节点一起换掉。
@@ -607,6 +614,7 @@ The full contracts, examples and old-host fallbacks for these mounts live in [re
 - Tooltips and motion tokens: ctx.ui.attachTooltip (2026-10-23+)
 - Drop indicators: ctx.ui.dropIndicator (2026-10-24+)
 - Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
+- Tool island: ctx.ui.mountToolIsland (2026-11-04+)
 - Host parts: dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n (2026-10-26+)
 - Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
 - 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg(2026-10-10 起)
@@ -1033,6 +1041,14 @@ const tags = task.tags                                    // 行里的 #标签(�
 const body = ctx.databases?.readBody?.(db.path, row.id)  // 经典表一行的记录正文;笔记视图 → null
 ctx.databases?.setBody?.(db.path, row.id, next, { body }) // 整份替换;带 expected,正文被别处改过就 false
 const col = ctx.databases?.addColumn?.(db.path, { name: '标签', type: 'multiselect' }) // 返回新列 id,马上能 setCell
+
+// 2026-11-04+:整张表一次改,和表格界面同一条写口;fn 是纯函数,id 在外面先生成
+const viewId = crypto.randomUUID()
+ctx.databases?.mutate?.(db.path, (d) => {
+  d.columns.find((c) => c.id === statusCol)?.options?.push('搁置')
+  d.views = [...(d.views ?? []), { id: viewId, name: '看板', type: 'kanban', groupBy: statusCol }]
+  return d
+})
 ```
 
 - **表的两种 `kind`**:`table` = 经典 .db(行在文件里);`notes` = 笔记视图(一行 = 文件夹里一篇笔记,行 id 就是笔记路径,
@@ -1056,6 +1072,14 @@ const col = ctx.databases?.addColumn?.(db.path, { name: '标签', type: 'multise
 - **加列 `addColumn(path, { name, type })`(2026-11-02+)**:经典表加一列基础类型(`text` / `number` / `checkbox` / `date` / `select` /
   `multiselect` / `url`),返回列 id,之后马上能 `setCell`。⚠️往一张**活表**加列别用 `ctx.app.mutateDb`:那条是磁盘比对交换,看不见还没落盘的行,
   写完一重读就把用户刚加的那一行冲掉了(2026-11-02 实拍)。
+- **整表改 `mutate(path, fn)`(2026-11-04+)**:表格界面自己用的那条写口。`fn` 拿到当前表(含还没落盘的改动)的一份拷贝,返回改好的整张表
+  (原地改完 `return d` 也行),返回 `null` = 不改。改列结构、批量改格、调行序、建 / 改视图都走这里;只改一格仍用 `setCell`(能带 expected)。
+  ⚠️ 落盘撞上别处的新版本时,宿主重读后**在新数据上再跑一次 `fn`** —— `fn` 必须是纯函数:新行 / 新列 / 视图的 id 在外面先生成好,
+  里面别调计数器、别发请求、别读外面会变的状态;按 id 找行和列,别按下标。返回 false = 没这张表 / 笔记视图 / 只读 / 叠加源、`fn` 抛错、
+  返回的不是合法表结构、换掉或删掉了首列(改它的类型也算)、行或列 id 重复、改了 `source`、版本号比宿主认识的新、或者内容上没改动(不排队)。
+  返回 true 之后,重放时结果才不合规(比如别处刚加了同 id 的列)这笔就整笔作废,只在控制台留一条警告 —— 用随机 id 就碰不上。盖章列(自动编号、创建时间、
+  修改时间)的格子归宿主:已有行保持原值,新行由宿主盖,改过的行宿主自己刷新修改时间。删行时别的行指向它的关联格不会自动清,要清就在 `fn` 里一起改。
+  旧宿主没有这个成员:一律 `?.`,缺席时退回 `addColumn` / `setCell` 那几条细写口,别退回 `ctx.app.mutateDb`(见上条)。
 - 两个 `subscribe` 都**立刻回调一次**,插件停用时宿主统一退订(返回的退订函数照样可以自己调)。`ready` 两边同一个意思:库已恢复、**当前这个库**拉过了;换库那一刻翻回 `false`。(2026-10-16 早些的 seams 分支上 noteTasks 在库恢复前会先给 `ready:true` + 空列表,已修。)
 - **声明的能力会写给用户看**:插件详情页在描述下面列一行「这个插件可以：读写你的多维表、读写笔记里的 @ 任务、读取前台窗口」(只列声明了的那几项,`activeWindow` / `calendar` 同理)。只声明真要用的 —— 多写一项,用户在详情页就多看到一项授权。
 - 端到端台架:Genesis `desktop` 的 `npm run check:plugindata`(真 Electron × 外置探针插件 × 预置库,核对注入闸、ready 先假后真、写口落盘、详情页那一行;10-17 起含 `"calendar"` 档的闸、成员快照与 `setColor`)。
@@ -1216,6 +1240,7 @@ Mobile account requests accept API-relative paths such as `/files` or same-origi
 ### API-backed Markdown editor
 
 `ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, onChange })` mounts native Amadeus without using the active vault. The caller owns save/publish. It offers visual/source/publishing preview modes. `getValue()` reads the latest synchronous editor transaction; `update`, `insertMarkdown`, `focus`, and idempotent `dispose` are available; after `dispose` the element is yours again at once. The host revokes it on plugin unload. Feature-detect; absent hosts should ask for an upgrade.
+Pass `vault: true` (2.13.8+) for `[[` completion and links that open the note beside the view; `ctx.ui?.mountMarkdown(el, { markdown })` renders read-only Markdown with math and links (same version, so its presence means `vault` is honoured).
 
 
 ### Whiteboard layer (2026-10-10)

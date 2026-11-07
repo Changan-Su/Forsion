@@ -736,6 +736,23 @@ if (new URLSearchParams(location.search).has('dock')) {
       createRoot(host).render(<div className="am-app"><CommandPalette /><AmadeusOverlays /></div>)
       ;(window as unknown as { __qf: unknown }).__qf = { useQuickFind, useCommandStore, useUiOverlay, usePageStore, useWorkspace }
     })
+} else if (new URLSearchParams(location.search).has('segs')) {
+  // 分段胶囊滑块「拉伸」逐帧仪器(scripts/seg-stretch.check.cjs,水滴复用方案第 4 条):真 LCL 看法胶囊(插件拿到的就是这一颗)
+  // 四格、两格各一颗,切格走真 onClick → 真 useSegDir 写 data-dir。⌘P 那颗 .t2s-vaultseg 走 ?qf。`&dark` 走真主题。
+  const segsDark = new URLSearchParams(location.search).has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), segsDark ? 'dark' : 'light')
+  void import('@lcl/engine').then(({ ViewModeSwitch }) => {
+    function Seg({ id, labels }: { id: string; labels: string[] }): React.ReactElement {
+      const [v, setV] = useState(labels[0])
+      return <ViewModeSwitch testId={id} spec={{ value: v, onChange: setV, modes: labels.map((l) => ({ value: l, label: l })) }} />
+    }
+    createRoot(document.getElementById('root')!).render(
+      <div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0, padding: 32, background: 'var(--bg)', display: 'flex', flexDirection: 'column', gap: 24, alignItems: 'flex-start' }}>
+        <Seg id="seg4" labels={['日', '周', '月', '年']} />
+        <Seg id="seg2" labels={['文档', '画布']} />
+      </div>,
+    )
+  })
 } else if (new URLSearchParams(location.search).has('peek')) {
   // Space 左面板悬停预览(scripts/space-peek.check.cjs):真 Shell(Ribbon + Dockview)+ 真 SpaceButton + 三个替身 Space。
   // a / b 各有左栏(b 两个 View → 卡片头部出页签),c 没有左栏(悬停不弹)。左栏替身里摆齐预览要扛住的几样东西:
@@ -2326,8 +2343,12 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 页面排版选项(C-21)挂壳上,同生产 EditorScope。`&udark` = 暗色壳(截图自查用)。
       const [path, setPath] = useState('Unified.md')
       const pageStyle = useNotePageStyle(null, path)
-      return (
-        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: 'fixed', inset: 0 }}>
+      // `&uwb`:外面再套生产的 View 容器(真类名 `.wb-view`,吃 engine.css 的真规则),错开一个侧栏 + 标签条。
+      //   编辑器的浮层要按祖先判断 fixed 包含块;没有这层祖先,`.wb-view` 的 CSS 一变(10-31 加 container-type),
+      //   落点线整条偏出一个 View 左上角,而台架全绿(11-02)。仪器 unified-page D3。
+      const wb = new URLSearchParams(location.search).has('uwb')
+      const pane = (
+        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: wb ? 'absolute' : 'fixed', inset: 0 }}>
           {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger="Unified.md" />}
           <UPageHost onPath={setPath} />
           {/* `&umbar`:移动端底栏胶囊 + ⋯ sheet(生产同一个 AmxMobileBar),sheet 里只放页面排版那几行(C-21)。 */}
@@ -2345,6 +2366,7 @@ if (new URLSearchParams(location.search).has('dock')) {
           )}
         </div>
       )
+      return wb ? <div className="wb-view wb-view--main" style={{ position: 'fixed', left: 300, top: 40, width: 'calc(100% - 300px)', height: 'calc(100% - 40px)' }}>{pane}</div> : pane
     }
     // 生产的编辑器挂在 LocaleProvider 之下(useI18n 跟界面语言);台架原来没包,useI18n 一律回落中文,英文界面的
     // 断言写不了(评审 §0 台架边界)。包 HostLocaleProvider(不接管 setter、不探 IP),仪器用 `__upage.setLocale` 切。

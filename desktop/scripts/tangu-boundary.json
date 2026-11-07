@@ -139,6 +139,7 @@
       "desktop/frontend/src/components/DiffView.tsx",
       "desktop/frontend/src/components/EngineIcon.tsx",
       "desktop/frontend/src/components/ErrorBoundary.tsx",
+      "desktop/frontend/src/components/ExternalImport.tsx",
       "desktop/frontend/src/components/FloatingPanelFrame.tsx",
       "desktop/frontend/src/components/GitAddRemoteDialog.tsx",
       "desktop/frontend/src/components/ImageViewer.tsx",

@@ -649,6 +649,9 @@ export const mcpLogin = (t: EngineTarget, name: string) =>
 export const mcpSetKey = (t: EngineTarget, name: string, key: string) =>
   request<{ status: string; error?: string }>(t, `/agent/mcp/${encodeURIComponent(name)}/key`, { method: 'POST', body: JSON.stringify({ key }) })
 /** 断开:删掉本机令牌。 */
+/** 「测试连接」:按还没保存的配置连一次、列工具后断开(只在本机引擎)。 */
+export const mcpProbe = (t: EngineTarget, config: unknown) =>
+  request<{ ok: true; tools: string[] } | { ok: false; error: string; needsLogin?: boolean }>(t, '/agent/mcp/probe', { method: 'POST', body: JSON.stringify({ config }) }, { timeoutMs: 45000 })
 export const mcpLogout = (t: EngineTarget, name: string) =>
   request<Record<string, never>>(t, `/agent/mcp/${encodeURIComponent(name)}/logout`, { method: 'POST' })
 
@@ -825,7 +828,7 @@ export const agentUninstallPreview = (t: EngineTarget, slug: string) =>
 
 /** 回收站(引擎 <tanguHome>/trash/,30 天;只在本机)。restorer='desktop' 的(Forsion 插件)走主进程 trashRestore。 */
 export interface TrashEntry {
-  id: string; kind: 'agent' | 'skill' | 'plugin'; ref: string; name: string; deletedAt: number; size: number
+  id: string; kind: 'agent' | 'skill' | 'plugin' | 'file'; ref: string; name: string; deletedAt: number; size: number
   restorer: 'engine' | 'desktop'; items: Array<{ from: string; stored: string; role?: string }>; extra?: Record<string, unknown>
 }
 export const listTrash = (t: EngineTarget) => request<{ entries: TrashEntry[]; days: number }>(t, '/agent/trash')
@@ -876,6 +879,8 @@ export interface AgentMemorySnapshot {
   tombstones: Array<{ id: string; forgottenAt: number }>
   /** 云端(网页 / 手机)= 桌面同步上来的那份:能改(按 version 比对交换),没有版本记录与 Dream。 */
   cloud?: boolean
+  /** 本机名、系统、账号里别台的名字(按条标适用范围,tangu-agent contracts/deviceTags.ts);老引擎 / 云端没有。 */
+  deviceTags?: { self: string | null; os: 'macOS' | 'Windows' | 'Linux' | null; others: string[] }
 }
 export interface AgentMemoryRevision { version: string; createdAt: number; source: AgentMemorySource; content: string }
 export interface AgentMemoryDreamConfig { enabled: boolean; modelId: string; timeoutMs: number; maxOutputTokens: number; intervalHours: number }
@@ -890,7 +895,7 @@ export const getAgentMemory = (t: EngineTarget, slug: string) =>
   getAgentMemorySnapshot(t, slug).then((r) => r.content)
 export const putAgentMemory = (t: EngineTarget, slug: string, content: string, expectedVersion: string) =>
   request<AgentMemorySnapshot>(t, agentMemoryPath(slug), { method: 'PUT', body: JSON.stringify({ content, expectedVersion }) })
-export const mutateAgentMemoryEntry = (t: EngineTarget, slug: string, body: { action: 'add' | 'update' | 'forget'; id?: string; fact?: string; expectedVersion: string }) =>
+export const mutateAgentMemoryEntry = (t: EngineTarget, slug: string, body: { action: 'add' | 'update' | 'forget'; id?: string; fact?: string; expectedVersion: string; /** 不给 = 新的一条是所有设备;改一条沿用原标签 */ appliesTo?: 'all' | 'this-computer' | 'this-os' }) =>
   request<AgentMemorySnapshot>(t, `${agentMemoryPath(slug)}/entries`, { method: 'POST', body: JSON.stringify(body) })
 /** 把一条 Agent 记忆交给所有 Agent:原句追加进 human/AGENT.md,写成后才从这位的记忆里拿掉;409 = 读出之后改过(两边都没动)。只在宿主本机。 */
 export const promoteAgentMemoryEntry = (t: EngineTarget, slug: string, body: { id: string; expectedVersion: string }) =>
@@ -907,6 +912,24 @@ export const getPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t,
 export const scanPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t, '/agent/human/SOUL.md/move/scan', { method: 'POST' })
 export const decidePortraitMove = (t: EngineTarget, id: string, decision: 'move' | 'keep' | 'undo') =>
   request<PortraitMoveView>(t, `/agent/human/SOUL.md/move/items/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ decision }) })
+
+// ── 从其他 AI 导入(11-03,引擎 services/externalImport;只许本机)──
+export type ImportTool = 'claude-code' | 'codex' | 'gemini-cli' | 'hermes' | 'cursor' | 'windsurf' | 'pasted'
+export interface ImportLedger { id: string; at: number; sources: ImportTool[]; counts: Record<'person' | 'agent' | 'project' | 'skill', number>; undoneAt?: number; kept?: string[] }
+export interface ImportScan { tools: Array<{ id: ImportTool; about: number; rules: number; project: number; notes: number; skills: number }>; fresh: number; freshTools: ImportTool[]; last: ImportLedger | null }
+export interface ImportPlanItem { id: string; text: string; dest: 'person' | 'agent' | 'project' | 'past' | 'blocked'; project?: string; sources: ImportTool[]; flags: Array<'merged' | 'sensitive' | 'known' | 'conflict' | 'forgotten'>; conflictWith?: string; checked: boolean; locked: boolean }
+export interface ImportPlanSkill { key: string; tool: ImportTool; name: string; target: string; description: string; scripts: number; files: number; flags: Array<'renamed' | 'mentions-other' | 'too-big'>; checked: boolean; locked: boolean }
+export interface ImportNotice { tool: ImportTool; kind: 'too-many' | 'persona' | 'truncated'; path: string; count?: number; project?: string }
+export interface ImportPlan { id: string; createdAt: number; items: ImportPlanItem[]; skills: ImportPlanSkill[]; notices: ImportNotice[]; missed: number }
+export interface ImportPlanView { state: 'idle' | 'running' | 'done' | 'error'; done: number; total: number; plan: ImportPlan | null; error: string | null }
+export const scanImport = (t: EngineTarget) => request<ImportScan>(t, '/agent/import/scan')
+export const getImportPlan = (t: EngineTarget) => request<ImportPlanView>(t, '/agent/import/plan')
+export const startImportPlan = (t: EngineTarget, body: { tools: ImportTool[]; pasted?: string; lang: 'zh' | 'en' }) =>
+  request<ImportPlanView>(t, '/agent/import/plan', { method: 'POST', body: JSON.stringify(body) })
+export const applyImport = (t: EngineTarget, body: { planId: string; items: Array<{ id: string; text?: string }>; skills: string[] }) =>
+  request<{ ledger: ImportLedger; skipped: number }>(t, '/agent/import/apply', { method: 'POST', body: JSON.stringify(body) })
+export const undoImport = (t: EngineTarget, id: string) => request<ImportLedger>(t, '/agent/import/undo', { method: 'POST', body: JSON.stringify({ id }) })
+export const ignoreImport = (t: EngineTarget) => request<{ ok: true }>(t, '/agent/import/ignore', { method: 'POST' })
 export const listAgentMemoryRevisions = (t: EngineTarget, slug: string) =>
   request<{ revisions: AgentMemoryRevision[] }>(t, `${agentMemoryPath(slug)}/revisions`).then((r) => r.revisions)
 export const restoreAgentMemory = (t: EngineTarget, slug: string, version: string, expectedVersion: string) =>
@@ -1035,6 +1058,10 @@ export const getSpecialConfig = (t: EngineTarget) =>
 
 export const saveSpecialConfig = (t: EngineTarget, patch: { historian?: Partial<SpecialAgentsConfig['historian']>; muse?: Partial<SpecialAgentsConfig['muse']> }) =>
   request<{ config: SpecialAgentsConfig }>(t, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)
+
+/** 首启引导「认识你的 Agents 团队」答的第一次见面(本机专用;写完 introAt,私聊不再发那张卡)。 */
+export const saveMuseIntro = (t: EngineTarget, body: { when?: string; proactivity?: string; focus?: string[]; focusText?: string }) =>
+  request<{ ok: boolean; config: SpecialAgentsConfig }>(t, '/agent/special/muse/intro', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.config)
 
 export interface SessionHistorianStatus {
   running: boolean
@@ -1545,6 +1572,12 @@ export const getGitHosting = (t: EngineTarget, sessionId: string): Promise<GitHo
       github: r.github && typeof r.github.linked === 'boolean' ? { linked: r.github.linked, login: typeof r.github.login === 'string' ? r.github.login : undefined, remote: r.github.remote === true, name: typeof r.github.name === 'string' ? r.github.name : '' } : null,
       connect: r.connect === true,
     })).catch(() => null)
+/** Forsion Git 上等这个人审的合并请求(Git 卡的一行;引擎用 Forsion 发的推拉凭据去问站上)。读不到 / 老引擎没有这条 → null。 */
+export interface GitReviews { items: Array<{ repo: string; number: number; title: string; url: string }>; total: number; web: string }
+export const getGitReviews = (t: EngineTarget, sessionId: string): Promise<GitReviews | null> =>
+  request<{ reviews?: GitReviews | null }>(t, `/agent/project-context/git/reviews?sessionId=${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 8000 })
+    .then((r) => (r.reviews && Array.isArray(r.reviews.items) && typeof r.reviews.web === 'string' ? r.reviews : null))
+    .catch(() => null)
 /** 发布到 GitHub:Forsion 账号绑了 GitHub 时,在那个 GitHub 账号下建一个私有仓库,加成远端并推送当前分支。
  *  没有远端时它叫 origin;已经有了叫 github(不碰原来的)。target = 以后推送到这里(缺省 true);false = 只推这一次。
  *  err.code:invalid_repo_name / no_commits / github_not_linked / github_relink_required / github_repo_exists(同名的非私有仓库已在,没往里推)

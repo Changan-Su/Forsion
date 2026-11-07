@@ -25,6 +25,7 @@ export function mcpSettingsPreview(args: Record<string, any>): string {
     return `MCP ${action}\n${rows.join('\n\n')}${args.reason ? `\nreason: ${String(args.reason).slice(0, 200)}` : ''}`;
   } catch { return `MCP ${action}: ${name || '(invalid configuration; validation will reject it)'}`; }
 }
+const originsOnly = (text: string): string => text.replace(/https?:\/\/[^\s"']+/g, (raw) => { try { return new URL(raw).origin; } catch { return '(invalid URL)'; } });
 export function readMcpSettings(name?: string): string {
   const configs = loadRawMcpServers();
   const manager = deps().mcp;
@@ -42,7 +43,8 @@ export function readMcpSettings(name?: string): string {
       ...(c?.timeoutMs ? { timeoutMs: c.timeoutMs } : {}),
       credentialKeys: { env: Object.keys(c?.env ?? {}), headers: Object.keys(c?.headers ?? {}) },
       toolCount: s?.toolCount ?? 0,
-      ...(s?.status === 'needs-login' ? { note: 'The user must sign in to this server under Settings → MCP servers.' } : s?.error ? { error: 'Connection failed. Open MCP settings for details.' } : {}),
+      // 原因交给模型才能自己改配置(D30):manager 已按值遮过密钥,这里再把地址收成 origin(查询串里常带令牌)
+      ...(s?.status === 'needs-login' ? { note: 'The user must sign in to this server under Settings → MCP servers.' } : s?.error ? { error: `Connection failed: ${originsOnly(s.error).slice(0, 300)}` } : {}),
       ...(s?.origin ? { origin: s.origin } : {}),
     };
   });

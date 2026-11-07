@@ -16,6 +16,7 @@ import { MemoryRepositoryError } from '../services/memoryRepository.js';
 import { agentSyncDefault, agentSyncScope, setAgentSyncDefault, setContentSyncOwner } from '../services/cloudSyncAccount.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { mirrorLegacyHuman } from '../agents/humanFolder.js';
+import { factWithScope, runTagContext } from '../services/deviceTagContext.js';
 
 const router = Router();
 router.put('/agent/sync/content-owner',authMiddleware,async(req:AuthRequest,res)=>{
@@ -54,8 +55,11 @@ router.get('/agent/memory', authMiddleware, async (req: AuthRequest, res) => {
 
 router.post('/agent/memory', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const text = String(req.body?.text ?? '').trim();
-    if (!text) return res.status(400).json({ detail: 'text is required' });
+    const raw = String(req.body?.text ?? '').trim();
+    if (!raw) return res.status(400).json({ detail: 'text is required' });
+    // 适用范围(11-06):本机才有「这台电脑 / 这个系统」;云端给了非 all 的 → 400
+    const text = factWithScope(raw, req.body?.appliesTo, runTagContext(!!deps().profile.capabilities.hostExec));
+    if (text === null) return res.status(400).json({ detail: 'Invalid appliesTo', code: 'MEMORY_INVALID' });
     const append = () => deps().brain.memory.appendMemoryEntry(req.user!.userId, text, { dedup: req.body?.dedup !== false });
     res.json(await inRequestedMemoryScope(req, append));
   } catch (e: any) {
@@ -74,8 +78,11 @@ router.get('/agent/log', authMiddleware, async (req: AuthRequest, res) => {
 
 router.post('/agent/log', authMiddleware, async (req: AuthRequest, res) => {
   try {
-    const text = String(req.body?.text ?? '').trim();
-    if (!text) return res.status(400).json({ detail: 'text is required' });
+    const raw = String(req.body?.text ?? '').trim();
+    if (!raw) return res.status(400).json({ detail: 'text is required' });
+    // 适用范围(11-06):本机才有「这台电脑 / 这个系统」;云端给了非 all 的 → 400
+    const text = factWithScope(raw, req.body?.appliesTo, runTagContext(!!deps().profile.capabilities.hostExec));
+    if (text === null) return res.status(400).json({ detail: 'Invalid appliesTo', code: 'MEMORY_INVALID' });
     res.json(await inRequestedMemoryScope(req, () => deps().brain.memory.appendLogEntry(req.user!.userId, text)));
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'append log failed' });

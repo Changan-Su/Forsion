@@ -37,6 +37,7 @@ import { forwardInboxToChannels } from '../channels/forward.js';
 import { postMuseDm } from './museDm.js';
 import { backgroundClientTag } from '../core/version.js';
 import { publishBackgroundUsage } from './backgroundUsage.js';
+import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 
 export type ApprovalDeferral = 'queue' | 'agent';
 
@@ -417,7 +418,7 @@ export async function judgeApproval(input: {
     let memory = '';
     try {
       const m = await runWithAgentSlug(DEFAULT_AGENT_SLUG, () => deps().brain.memory.getMemory(input.userId));
-      memory = String(m?.content || '').trim().slice(0, 3000);
+      memory = textForThisDevice(String(m?.content || '').trim(), runTagContext(!!deps().profile.capabilities.hostExec), 'entry').slice(0, 3000); // 别台的条目折成一行(11-06)
     } catch { /* 无记忆也能判 */ }
     const userMd = readUserMdForPrompt().trim().slice(0, 2000);
     // 画像(human/SOUL.md,Agent 们对这个人的认识;同 renderAboutHuman 只取前 2000 字):只当背景,不是批准的依据

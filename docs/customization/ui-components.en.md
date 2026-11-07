@@ -60,6 +60,8 @@ For @-style mentions, pass `mention: true`. The menu then opens on the bare `tri
 
 Since 2026-11-02 `suggest` can also be a list, for example one entry for `#` tags and one for `[[` links (the latter with `mention: true` so it opens right after CJK text). When several match before the caret, the one nearest the caret opens. When the box sits in the lower half of the window the menu opens upward, falling back below if it doesn't fit. Earlier hosts accept a single object only.
 
+Before passing a list, check `ctx.ui.chatBoxCapabilities?.includes('suggestMany')` (2026-11-04+; the upward menu is `'suggestAbove'`). Treat a host without that field as supporting neither. Don't infer it from `insertText` or any other API: 2.13.8-beta.3 has `insertText` but takes no list.
+
 ```js
 const box = ctx.ui?.mountChatBox?.(el, {
   modelPicker: false,
@@ -82,7 +84,7 @@ const box = ctx.ui?.mountChatBox?.(el, {
 
 ↑↓ moves, Enter or Tab picks, Esc closes. Picking replaces the trigger and query with `value` plus one space, and that Enter doesn't submit. While the menu is open, ⌘/Ctrl+Enter picks too. The menu opens only while typing: moving the caret to the end of an existing `#tag` doesn't open it, and neither does IME composition, which is checked once it ends. After Esc, the menu stays closed for the rest of that word.
 
-These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. If it's missing, hide your `#` button or accept that the model pill is shown.
+These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. Behaviour added later that the handle can't reveal (a list of `suggest` triggers, the upward menu) is listed in `ctx.ui.chatBoxCapabilities`. If it's missing, hide your `#` button or accept that the model pill is shown.
 
 The model catalog is shared with chat: the main model list shows only LLMs, follows the user's sorting and hiding settings, and adds no brand restrictions. The selection stays in this component and changes neither the global default nor the current conversation. The submit callback receives the choices made for that submission; your plugin must pass them into its own flow rather than showing a choice and discarding it. Mounting and editing never send a model request or create a session. Feature-detect on older hosts; don't copy internal CSS to fake support.
 
@@ -125,7 +127,7 @@ Support for loading external plugins on mobile needs to be confirmed separately;
 `ctx.ui?.mountMarkdownEditor` mounts the native Amadeus / Milkdown editor with visual editing, Markdown source and a publishing preview. The caller owns and saves the document entirely: the editor doesn't read or write the active vault, doesn't modify the current note and never calls a model on its own. The syntax follows CommonMark, GFM, CJK emphasis, `![[video link]]` and Obsidian callouts; a folded callout is written `> [!note]- Title`.
 
 ```js
-ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, modes, onChange })
+ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, modes, vault, onChange })
 ```
 
 `modes: false` (since 2026-10-12) draws no row of "Amadeus editor / Markdown source / Preview" buttons and keeps the visual editor only. Use it when the editor sits inside your own card, cell or form field; by default all three modes are available. `update({ modes })` turns the row off or on at any time; turning it off while the source or preview is showing returns to the visual editor. Hosts up to 2.13.2 ignore the field and always draw the row: to support them, hide that row in your own stylesheet as a fallback and select no other host node.
@@ -135,6 +137,17 @@ ctx.ui?.mountMarkdownEditor(el, { value, label, readOnly, modes, onChange })
 ```
 
 `handle.getValue()` synchronously reads the latest transaction; call it immediately before saving. `update({value})` switches documents, `insertMarkdown(text)` appends uploaded attachments or embeds, `focus()` focuses and `dispose()` cleans up idempotently. Plugin disable/reload and main-view teardown also take the mount back, and old handles can no longer change the content. On older hosts without this API, ask the user to update explicitly; don't fake a native editor. There is no autosave, and the editor and publishing renderer share the same Amadeus Markdown semantics.
+
+`vault: true` (since 2.13.8) connects the editor to the open vault: typing `[[` completes note and file names, clicking a link opens that note beside the view (⌘ / Ctrl+click: a new tab), and links that don't resolve read dimmed. The caller still owns and saves the text, and the editor writes nothing to the vault; with no vault open, links stay plain text. Off by default. Older hosts ignore the field and you can't detect it on its own: it arrived in the same version as `ctx.ui.mountMarkdown` below, so if `mountMarkdown` exists, `vault` is honoured.
+
+### Read-only Markdown: ctx.ui.mountMarkdown (since 2.13.8)
+
+```js
+const md = ctx.ui?.mountMarkdown?.(el, { markdown })
+md?.update({ markdown: next }); md?.dispose()
+```
+
+Renders Markdown the way a chat answer is drawn: GFM, `$math$` / `$$math$$`, and `[[links]]` that open the note from the open vault beside the view (unresolved ones read dimmed). A single newline inside a paragraph is a line break, matching what `mountMarkdownEditor` writes. Code blocks get a copy button but never a run button; `![[embeds]]` show as links and don't expand. It is light enough for one per list row. Like the other mounts, `el` is yours again as soon as `dispose()` returns, and the host takes the mount back when the plugin is disabled. The outer layer carries `.md-body`; override its paragraph spacing inside your own container if you need it tighter.
 
 ### Plugin Chat Box selection and Director hand-off (2026-09-30)
 
@@ -240,6 +253,34 @@ if (!bar) drawOwnMenu(el)                           // hosts up to 2.13.3: keep 
 - The bar adds nothing to `root` and does not take it over (it floats above the page), so it coexists with `mountFloatingToc` and other mounts. The handle has `show`, `hide`, `update(opts)` and `dispose()`; the host disposes it when the plugin is disabled or reloaded.
 
 Add actions with `ctx.registerSelectionAction`; they are listed under "⋯ → Plugins". Without `scope` an action appears in notes only, as before. `scope: 'all'` lists it in every view that has opted in, `'own'` only in the plugin's own views, and an array names views (`'note'`, `'chat'`, `'<pluginId>:<viewId>'`). `when({ view, editable, length })` must return true for the action to be listed; it never receives the selected text, which only reaches the plugin through `run(cx)` after the user picks the action. The markdown `run` returns goes to the host's result card: Replace / Insert below / Copy / Discard in an editable note, where nothing is written until the user clicks, and read-only (Copy / Close) everywhere else. `output: 'none'` means the plugin handles the result and the host shows no card. `cx.pagePath` is only set in notes. Hosts up to 2.13.3 ignore the new fields: the action stays note-only, listed under "AI ▾ → Plugins".
+
+### The tool island (2026-11-04)
+
+The capsule a "hold a tool and work" view (PDF annotation, whiteboard) switches tools with. The host owns placement and skin: centred at the top of `root`, docked at the bottom centre when `root` is narrower than 520 px (Mini card, phone, portrait pad); the skin is the Mini window's top-bar capsule (`--bg-card`, hairline border, pill radius, card shadow, no frosted glass); the current tool sits on a highlight that slides over, and a small letter in each button's corner shows its shortcut. The strip is maintained in `@lcl/components` (`ToolIsland`); the layout classes are in `toolIsland.css` next to it.
+
+```js
+const isle = ctx.ui?.mountToolIsland?.(pageArea, {
+  tools: [
+    { id: 'hand', icon: 'hand', title: zh ? '抓手' : 'Hand' }, 'separator',
+    { id: 'select', icon: 'mouse-pointer-2', title: zh ? '选择' : 'Select', key: 'V' }, 'separator',
+    { id: 'highlight', icon: 'highlighter', title: zh ? '高亮' : 'Highlight', key: 'H' },
+    { id: 'ink', icon: 'pen-line', title: zh ? '手写' : 'Draw', key: 'P' },
+  ],
+  active: 'select',
+  onPick: (id) => { setTool(id); isle.setActive(id); isle.showRow(id === 'highlight' || id === 'ink') },
+  slots: { topRight: findButton, bottomLeft: zoomControls, bottomRight: pager },
+})
+if (!isle) drawOwnBar(pageArea)                     // older hosts without it: keep your own bar
+else isle.row.append(colorDots)                     // the row under the island is yours to fill
+```
+
+- Selection is controlled: a click only calls `onPick`; the host never switches by itself. Call `setActive(id)` when you switch (a temporary hand while Space is held, and back, goes through it too). `key` only draws the letter — bind the key yourself.
+- `icon` is a name from the plugin icon vocabulary, which gained `hand`, `mouse-pointer-2`, `highlighter`, `sticky-note`, `type`, `shapes`, `pen-line` and `eraser` for this (the older `highlight` / `annotate` still work). `'separator'` draws a divider between groups.
+- `row`: the row under the island (above it while docked at the bottom) for what the current tool needs — colour dots, pen types, widths. It is usable as soon as the handle returns; add children, don't replace its class. `showRow(true/false)` opens and closes it: in over 180 ms easing out, out over 80 ms easing in, no slide under reduced motion.
+- `slots`: your own elements for the four corners (12 px from the edges); the host wraps each in the same capsule and positions it, and `update({ slots })` swaps them. Docked at the bottom, the two bottom corners share a line with the island — put less there when narrow.
+- Clicking a button doesn't take focus from your view, so your shortcuts keep working; a keyboard user's focus stays on the same button across `setActive` / `update`.
+- Like `mountFloatingToc` it is a layer over `root` that doesn't take `root` over (a static `root` becomes `relative` while mounted and is restored on `dispose()`), so it coexists with other mounts. Leave about 56 px at the top of your content for it. Pass the frame that doesn't scroll as `root` (the island is a layer inside it, so a scrolling `root` takes it along); pointer events on the island and slots bubble to `root`, so skip `e.target.closest('.lcl-isle-layer')` in your own pan / draw handlers. The handle has `row` / `showRow` / `setActive` / `update(opts)` / `dispose()`; a wrong shape (no `tools` array, no `onPick`, a slot that isn't an element) throws `TypeError` synchronously; the host disposes it on disable / reload.
+- The whiteboard's own (Excalidraw) tool island isn't replaced; it already sits in the same place.
 
 ### Settings parts (2026-10-17)
 

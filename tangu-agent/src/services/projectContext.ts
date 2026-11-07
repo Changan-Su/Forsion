@@ -107,6 +107,8 @@ export const DOC_READ_LIMIT = 256 * 1024;
 export const SKILL_CONTENT_LIMIT = 64 * 1024;
 const GIT_UI_TIMEOUT_MS = 3000;
 const GIT_CHANGES_SHOWN = 20;
+/** 有 Forsion Git 远端时等商业版组织名单(冷缓存)最多多久;之后都读缓存。 */
+const ORGS_WAIT_MS = 1_000;
 const GIT_COMMITS_SHOWN = 8;
 const SAFE_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const THINKING = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
@@ -583,10 +585,15 @@ export async function gitSummary(cwd: string): Promise<GitSummary> {
       .then(([r, m]) => (r.code === 0 && m.code === 0 && m.stdout.trim().startsWith('refs/heads/') ? r.stdout.trim() : '')) : Promise.resolve(''),
     Promise.resolve(forsionGit()?.hosting()).catch(() => null),
   ]);
-  const remoteList = urls.filter((u) => u.r.code === 0).map((u) => {
-    const raw = u.r.stdout.split('\n')[0].trim();
-    return describeRemote(u.name, raw, maskRemoteUrl(raw), site?.origin ?? null);
-  });
+  const raws = urls.filter((u) => u.r.code === 0).map((u) => ({ name: u.name, raw: u.r.stdout.split('\n')[0].trim() }));
+  // 有 Forsion Git 远端才去认组织仓库(商业版组织名单,缓存的;读不到照个人仓库显示)。冷缓存最多等 ORGS_WAIT_MS:
+  // 审批说明(approvals 给 gitApprovalPreview 3 秒)也走这里,不能让名单把推到哪、⚠ 推送地址那几行挤掉;没等到的下次就有了
+  const onForsion = !!site && raws.some((u) => describeRemote(u.name, u.raw, '', site.origin).host === 'forsion');
+  const orgs = onForsion ? await Promise.race([
+    Promise.resolve(forsionGit()?.orgs()).catch(() => null),
+    new Promise<null>((resolve) => { setTimeout(() => resolve(null), ORGS_WAIT_MS).unref(); }),
+  ]) : null;
+  const remoteList = raws.map((u) => describeRemote(u.name, u.raw, maskRemoteUrl(u.raw), site?.origin ?? null, orgs));
   const lines = statusR.code === 0 ? statusR.stdout.split('\n').filter(Boolean) : [];
   const changes = lines.map(parseStatusLine).filter((c): c is GitChangeInfo => !!c);
   let staged = 0;

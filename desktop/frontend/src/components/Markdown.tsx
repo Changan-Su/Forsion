@@ -3,7 +3,7 @@
  * 高亮配色在 base.css 用主题 token 写(.hljs-*),不引第三方主题 CSS。
  */
 import React, { useContext, useEffect, useMemo, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 // 模型最爱写 `**注意：**后面`(CJK 标点贴闭合定界符),CommonMark 判不成立、显示字面 `**`。
 // 只换解析、不落盘;须排在 remarkGfm 之后(删除线那个要压过 gfm 的 `~`)。理由同 amadeus/blocks/markdown/cjkFriendly.ts。
@@ -20,14 +20,18 @@ import { Copy, Check, Play, ImageOff } from 'lucide-react'
 import { registerMessages, useI18n } from '../i18n'
 import { isShellLang, runInTerminal, stripPrompt, type RunResult } from '../builtins/runCommand'
 import { normalizeMath } from '../services/mathNormalize'
-import { remarkWiki } from './wikiChat'
+import { parseFileHref, remarkWiki, resolveAgainst } from './wikiChat'
 import { ChatWebLink, ChatWikiLink } from './ChatWikiLink'
 import { ChatLinkWithCard } from './ChatLinkCard'
 import { ChatEmbed, type EmbedCtx } from './ChatEmbed'
 import { whenNear } from '../lib/nearViewport'
+import { installCopyTex } from './selectionBar/selectionMarkdown'
 
 /** 网页链接的悬停预览卡(ChatLinkCard)。⚠️ 缺省关、只由聊天回答开:本组件还给市场 README / 收件箱 / 更新日志渲第三方文本,
  *  那里的链接不该一悬停就让引擎去问 GitHub。 */
+// Every surface that renders chat Markdown also gets clean ⌘C over formulas (D24).
+if (typeof document !== 'undefined') installCopyTex()
+
 const LinkCardContext = React.createContext(false)
 
 /** 代码块细表头(语言 + 复制,走查续六 6.2 A)。⚠️ 缺省关、只由聊天回答开:别处的代码块各有自己的底色,表头的样式只写在 .t2-content 里。 */
@@ -49,14 +53,31 @@ const LANG_NAMES: Record<string, string> = {
 
 // [[双链]] 经 remarkWiki 变成 #wiki= 链接,在这里拦下渲染;http(s) 走网页引用条(Desk 内置浏览器
 // + 链接文字当引语定位;聊天回答里另带悬停预览卡);其余(mailto/相对/锚点)维持默认 <a>。
+const textOf = (n: React.ReactNode): string => typeof n === 'string' || typeof n === 'number' ? String(n) : Array.isArray(n) ? n.map(textOf).join('') : React.isValidElement(n) ? textOf((n.props as { children?: React.ReactNode }).children) : ''
+
 const WikiAnchor = ({ href, children, node: _node, ...rest }: any) => {
   const cards = useContext(LinkCardContext)
+  const cwd = useContext(RunContext)?.cwd
   if (typeof href === 'string' && href.startsWith('#wiki=')) return <ChatWikiLink inner={decodeURIComponent(href.slice(6))} />
   if (typeof href === 'string' && /^https?:\/\//i.test(href)) {
     return cards ? <ChatLinkWithCard href={href} {...rest}>{children}</ChatLinkWithCard> : <ChatWebLink href={href} {...rest}>{children}</ChatWebLink>
   }
-  return <a href={href} {...rest}>{children}</a>
+  // 指向文件的普通链接(`src/a.ts:42`)→ 走 [[路径#L行]] 那条文件引用:按会话工作目录拼绝对路径,点开跳到那一行(D25)。
+  // 没有工作目录的地方(插件说明、更新说明……)只认绝对路径:相对路径拿去库里找,会打开一篇同名的无关笔记
+  const file = typeof href === 'string' ? parseFileHref(href) : null
+  if (file && (cwd || /^\/|^[A-Za-z]:[\\/]/.test(file.path))) {
+    const path = cwd ? resolveAgainst(cwd, file.path) : file.path
+    const anchor = file.line ? `#L${file.line}${file.end ? `-L${file.end}` : ''}` : ''
+    const label = textOf(children)
+    // 链接文字就是地址本身(模型常这么写)时不当别名,引用条照「文件名:行号」显示
+    return <ChatWikiLink inner={`${path}${anchor}${label && label !== href ? `|${label}` : ''}`} />
+  }
+  // 没转成引用条的照缺省清洗(urlTransform 为文件链接放行过,这里收回去)
+  return <a href={typeof href === 'string' ? defaultUrlTransform(href) : href} {...rest}>{children}</a>
 }
+
+/** react-markdown 缺省会把 `a.ts:42`、`file://`、`C:\…` 当未知协议清空;只对认得出的文件链接放行,其余照缺省。 */
+const urlTransform = (url: string, key: string): string => defaultUrlTransform(url) || (key === 'href' && parseFileHref(url) ? url : '')
 
 /** 代码块「运行」的回传口:聊天消息给 onRun(把结果作为用户消息发回会话);别处(工作区文件预览等)不给 = 只跑不回传。 */
 const RunContext = React.createContext<{ onRun?: (r: RunResult) => void; cwd?: string; allowRun: boolean } | undefined>(undefined)
@@ -245,8 +266,8 @@ const Th = tableCell('th')
  * anchorPrefix:传入时给 h1/h2/h3 渲染稳定 id(`${anchorPrefix}-${第n个标题}`)+ data-toc-level,
  * 供右侧「目录」扫描跳转。不传则零影响(记忆/日志面板等普通渲染)。
  */
-export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean; /** 代码块细表头;缺省关,见 CodeHeadContext。 */ codeHead?: boolean }> = React.memo(
-  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false, codeHead = false }) => {
+export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** shell 代码块「运行」的回传与工作目录(聊天消息给;缺省=只跑不回传)。 */ run?: { onRun?: (r: RunResult) => void; cwd?: string }; /** 只读文档可隐藏运行入口，仍保留复制代码。 */ allowRun?: boolean; /** 开内联嵌入(独占一段的 `![[…]]`);缺省关,见 EmbedContext。 */ embeds?: EmbedCtx; /** 网页链接悬停出预览卡;缺省关,见 LinkCardContext。 */ linkCards?: boolean; /** 代码块细表头;缺省关,见 CodeHeadContext。 */ codeHead?: boolean; /** 段内单个换行就换行(Amadeus 笔记写法);缺省按标准 Markdown 当空格。 */ breaks?: boolean }> = React.memo(
+  ({ content, anchorPrefix, run, allowRun = true, embeds, linkCards = false, codeHead = false, breaks = false }) => {
     const components: Record<string, any> = { pre: CodeBlock, a: WikiAnchor, p: Para, td: Td, th: Th, img: MdImage, div: MathBox }
     if (anchorPrefix) {
       const counter = { i: 0 }
@@ -268,9 +289,10 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
           <LinkCardContext.Provider value={linkCards}>
           <CodeHeadContext.Provider value={codeHead}>
             <ReactMarkdown
-              remarkPlugins={[remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
+              remarkPlugins={breaks ? [remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki, remarkSoftBreaks] : [remarkMath, remarkGfm, remarkCjkFriendly, remarkCjkFriendlyStrikethrough, remarkWiki]}
               rehypePlugins={[[rehypeKatex, { throwOnError: false }], rehypeMathBox]}
               components={components}
+              urlTransform={urlTransform}
             >
               {normalizeMath(content)}
             </ReactMarkdown>
@@ -281,6 +303,18 @@ export const Markdown: React.FC<{ content: string; anchorPrefix?: string; /** sh
     )
   },
 )
+
+/** 段内单个换行就是换行(Amadeus 笔记的写法,见 blocks/markdown/softBreak.ts);标准 Markdown 把它当空格。只动文本节点,代码不受影响。 */
+function remarkSoftBreaks() {
+  const walk = (node: { type: string; value?: string; children?: any[] }): void => {
+    if (!node.children) return
+    node.children = node.children.flatMap((c) => {
+      if (c.type !== 'text' || !c.value.includes('\n')) { walk(c); return [c] }
+      return c.value.split(/\r?\n/).flatMap((value: string, i: number) => (i ? [{ type: 'break' }, { type: 'text', value }] : [{ type: 'text', value }]))
+    })
+  }
+  return walk
+}
 
 /** 代码块与 run 上下文也给 Intelligent UI 的 markdown 用(IntelligentUi.tsx RichText),免得那边再写一份。 */
 export { CodeBlock, RunContext }

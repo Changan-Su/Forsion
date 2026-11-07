@@ -155,3 +155,53 @@ it('beta opt-in selects highest eligible prerelease and can promote back to stab
   answers.set('/website/config', site({ version: '2.13.8' }))
   expect(await checkForUpdates()).toMatchObject({ phase: 'available', version: '2.13.8' })
 })
+
+it('turning beta off drops a downloaded prerelease so the next check offers stable instead of "restart to install"', async () => {
+  updater.beta = true
+  answers.set('/website/config', site({ version: '2.13.3' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  answers.set('/releases?per_page=', [{ tag_name: 'v2.14.0-beta.1', prerelease: true }])
+  updater.download.push(async () => updater.events.get('update-downloaded')!({ version: '2.14.0-beta.1' }))
+  const { checkForUpdates, downloadUpdate, channelChanged } = await import('./updater')
+  expect(await checkForUpdates()).toMatchObject({ phase: 'available', version: '2.14.0-beta.1' })
+  await downloadUpdate()
+  updater.beta = false
+  channelChanged(false)
+  expect(await checkForUpdates()).toMatchObject({ phase: 'not-available' })
+})
+
+it('turning beta off keeps a downloaded stable release', async () => {
+  answers.set('/website/config', site({ version: '2.13.4' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  const { checkForUpdates, downloadUpdate, channelChanged } = await import('./updater')
+  await checkForUpdates()
+  await downloadUpdate()
+  channelChanged(false)
+  expect(await checkForUpdates()).toMatchObject({ phase: 'downloaded', version: '2.13.4' })
+})
+
+it('names common local download failures with stable codes', async () => {
+  const { downloadErrorCode } = await import('./updater')
+  expect(downloadErrorCode(Object.assign(new Error('x'), { code: 'ENOSPC' }))).toBe('disk-full')
+  expect(downloadErrorCode(Object.assign(new Error('x'), { code: 'EPERM' }))).toBe('no-permission')
+  expect(downloadErrorCode(Object.assign(new Error('x'), { code: 'EBUSY' }))).toBe('file-busy')
+  expect(downloadErrorCode(new Error('socket hang up'))).toBe('socket hang up')
+})
+
+it('a late "downloaded" event for a dropped prerelease is ignored (Codex review)', async () => {
+  updater.beta = true
+  answers.set('/website/config', site({ version: '2.13.3' }))
+  answers.set('/auth/region', { country: 'GB', mainland_china: false })
+  answers.set('/releases?per_page=', [{ tag_name: 'v2.14.0-beta.1', prerelease: true }])
+  let finish!: () => void
+  updater.download.push(() => new Promise<void>((resolve) => { finish = resolve }))
+  const { checkForUpdates, downloadUpdate, channelChanged, getUpdaterStatus } = await import('./updater')
+  await checkForUpdates()
+  const downloading = downloadUpdate()
+  await new Promise((r) => setTimeout(r, 0))
+  channelChanged(false)
+  updater.events.get('update-downloaded')!({ version: '2.14.0-beta.1' }) // 取消没赶上收尾
+  finish()
+  await downloading
+  expect(getUpdaterStatus()).toMatchObject({ phase: 'idle' })
+})

@@ -1,0 +1,4 @@
+/* 记忆按条标适用范围(11-06):正文前的小标签 + 记一条时的范围菜单。别台的那条标签退后(这台不用)。 */
+.device-scope-chip { display: inline-block; margin-inline-end: 6px; padding: 0 6px; border-radius: var(--radius-sm, 6px); background: var(--accent-light); color: var(--accent-ink); font-size: var(--ui-font-caption, 11px); line-height: 1.6; white-space: nowrap; vertical-align: 1px; }
+.device-scope-chip[data-scope='other'] { background: var(--overlay-light); color: var(--text-faint); }
+.device-scope-select { max-width: 100%; min-width: 0; height: 26px; padding: 0 6px; border-radius: var(--radius-sm, 6px); font-size: var(--ui-font-meta, 12px); color: var(--text-muted); }
