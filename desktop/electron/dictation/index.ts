@@ -37,7 +37,9 @@ export interface DictationHostDeps {
   userData: string
 }
 
-/** Forsion 自己的窗口:焦点在哪种元素上(主世界里跑;插件能骗它,骗了也只是把字写进 Forsion 自己的窗口)。 */
+/** Forsion 自己的窗口:焦点在哪种元素上。在**焦点所在的那个 frame** 里跑(插件 iframe 里的框也得到真答案);
+ * 只有确认是可写文本框('text')才写 —— 'frame'(焦点在拿不到的子 frame 里)/ 探测失败都当看不清,不写(可能是密码框)。
+ * 主世界里跑,插件能骗它,骗了也只是把字写进 Forsion 自己的窗口。 */
 const FIELD_PROBE = `(() => {
   let a = document.activeElement
   while (a && a.shadowRoot && a.shadowRoot.activeElement) a = a.shadowRoot.activeElement
@@ -57,10 +59,14 @@ async function insertIntoSelf(id: number, text: string): Promise<InsertResult> {
   const focused = webContents.getFocusedWebContents()
   if (!wc || wc.isDestroyed() || !focused || focused.id !== id) return { ok: false, failure: 'target-changed' }
   let field = 'unknown'
-  try { field = String(await wc.executeJavaScript(FIELD_PROBE, true)) } catch { /* 读不到就照常写:insertText 落在焦点处 */ }
+  try {
+    const frame = wc.focusedFrame ?? wc.mainFrame
+    field = String(await frame.executeJavaScript(FIELD_PROBE, true))
+  } catch { /* 看不清 = 不写 */ }
   if (field === 'secure') return { ok: false, failure: 'secure-field' }
-  if (field === 'none') return { ok: false, failure: 'no-field' }
-  wc.insertText(text)
+  if (field !== 'text') return { ok: false, failure: 'no-field' }
+  if (wc.isDestroyed() || webContents.getFocusedWebContents()?.id !== id) return { ok: false, failure: 'target-changed' }
+  try { await wc.insertText(text) } catch { return { ok: false, failure: 'paste-failed' } }
   return { ok: true }
 }
 
@@ -171,6 +177,7 @@ export function registerDictation(h: DictationHostDeps): DictationController | n
     owners.delete(id)
     off()
     controller.detach(id)
+    win?.keepWarm(owners.size > 0)
   }
   ipcMain.handle(DICTATION_CHANNELS.state, (e) => (h.isTrustedSender(e) ? controller.state() : null))
   ipcMain.handle(DICTATION_CHANNELS.attach, (e, on: unknown) => {
@@ -185,6 +192,7 @@ export function registerDictation(h: DictationHostDeps): DictationController | n
       wc.on('did-start-navigation', nav)
       owners.set(id, () => { wc.removeListener('destroyed', gone); wc.removeListener('did-start-navigation', nav) })
       controller.attach(id)
+      win?.keepWarm(true)
     }
     return controller.state()
   })

@@ -188,6 +188,37 @@ describe('dictation controller', () => {
     expect(h.esc).toBeNull()
   })
 
+  it('a write still restoring the clipboard is not overlapped by the next session after detach / re-attach', async () => {
+    let release!: () => void
+    const order: string[] = []
+    let n = 0
+    const h = harness({
+      insert: () => {
+        const k = ++n
+        order.push(`start ${k}`)
+        if (k > 1) { order.push(`end ${k}`); return Promise.resolve({ ok: true }) }
+        return new Promise((r) => { release = () => { order.push(`end ${k}`); r({ ok: true }) } })
+      },
+    })
+    h.c.attach(1)
+    h.c.toggle()
+    const a = h.c.state().sessionId!
+    h.c.capsuleResult(a, 'first')
+    await h.flush()
+    expect(order).toEqual(['start 1'])
+    h.c.detach(1) // the plugin is switched off mid-write: the session ends, the OS transaction does not
+    h.c.attach(1)
+    h.c.toggle()
+    const b = h.c.state().sessionId!
+    expect(b).not.toBe(a)
+    h.c.capsuleResult(b, 'second')
+    await h.flush()
+    expect(order).toEqual(['start 1']) // waits for the first write (and its clipboard restore) to finish
+    release()
+    await h.flush()
+    expect(order).toEqual(['start 1', 'end 1', 'start 2', 'end 2'])
+  })
+
   it('changing the hotkey re-registers; pausing releases both keys', () => {
     const h = harness()
     h.c.attach(1)

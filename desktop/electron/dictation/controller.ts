@@ -107,6 +107,14 @@ export function createDictationController(d: DictationDeps, opts: { hotkey: stri
     d.emit(s)
   }
   const clear = (t: unknown): void => { if (t != null) d.clearTimeout(t) }
+  // 写入 / 复制一次只跑一个,和会话状态无关:撤租约会把会话放回 idle,但上一次写入(含还原用户剪贴板)可能还在跑,
+  // 下一次的快照必须等它还完,否则会把我们写的字当成「用户的剪贴板」抄下来、最后还原成它。
+  let clipChain: Promise<unknown> = Promise.resolve()
+  const serial = <T>(fn: () => Promise<T> | T): Promise<T> => {
+    const run = clipChain.then(fn, fn)
+    clipChain = run.catch(() => {})
+    return run
+  }
   const later = (ms: number, fn: () => void): void => { clear(timer); timer = d.setTimeout(() => { timer = null; fn() }, ms) }
 
   const syncEscape = (): void => {
@@ -183,7 +191,7 @@ export function createDictationController(d: DictationDeps, opts: { hotkey: stri
     if (!t) { fail(d.platform === 'darwin' || d.platform === 'win32' ? 'target-changed' : 'unsupported', said); return }
     if (t.kind === 'external' && !d.accessibility()) { fail('no-permission', said); return }
     let r: InsertResult
-    try { r = await d.insert(t, said) } catch (e) { d.log?.(`[dictation] insert threw: ${e}`); r = { ok: false, failure: 'paste-failed' } }
+    try { r = await serial(() => d.insert(t, said)) } catch (e) { d.log?.(`[dictation] insert threw: ${e}`); r = { ok: false, failure: 'paste-failed' } }
     if (sessionId !== id) return
     if (!r.ok) { fail(r.failure, said); return }
     phase = 'done'
@@ -244,7 +252,7 @@ export function createDictationController(d: DictationDeps, opts: { hotkey: stri
       else if (action === 'allow') d.requestAccessibility()
       else if (action === 'copy' && phase === 'failed' && text) {
         const keep = text
-        void Promise.resolve(d.copy(keep)).then(() => {
+        void serial(() => d.copy(keep)).then(() => {
           if (sessionId !== id || phase !== 'failed') return
           phase = 'done'
           copied = true

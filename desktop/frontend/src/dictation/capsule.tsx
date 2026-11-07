@@ -35,7 +35,7 @@ registerMessages({
   'dictation.fail.secure-field': { zh: '不往密码框里写', en: "Won't type into a password field" },
   'dictation.fail.still-typing': { zh: '键盘一直没停，没有写入', en: 'You kept typing, so nothing was inserted' },
   'dictation.fail.no-permission': { zh: '要写进别的应用，请在辅助功能里允许 Forsion', en: 'Allow Forsion in Accessibility to type into other apps' },
-  'dictation.fail.no-field': { zh: '焦点不在输入框里', en: 'No text field has focus' },
+  'dictation.fail.no-field': { zh: '没认出能写的输入框', en: "Couldn't find a text field to type into" },
   'dictation.fail.paste-failed': { zh: '没能写入', en: "Couldn't insert the text" },
   'dictation.fail.empty': { zh: '没听清', en: "Didn't catch that" },
   'dictation.fail.capture': { zh: '录音没成功', en: 'Recording failed' },
@@ -85,15 +85,16 @@ function Capsule() {
   const phase = state?.phase ?? 'idle'
   const lang = state?.locale ?? 'zh'
   const t = (k: string): string => translateFor(lang, k)
-  // 这一次录音属于哪个会话(录音开始时定下;onResult 晚到也交给它,不交给后来的会话)
+  // 这一次录音属于哪个会话。useVoiceInput 在开始录音时定格回调,所以回调按会话号绑死:上一次的转写晚到(下一次已经开录)
+  // 时 recordingFor 已换成新会话,对不上就丢 —— 绝不当成新会话的结果交上去(主进程会把它写进新会话的目标)。
   const recordingFor = useRef('')
   const delivered = useRef('')
   const onResult = useCallback((text: string) => {
-    const id = recordingFor.current
-    if (!id || delivered.current === id) return
+    const id = sid
+    if (!id || recordingFor.current !== id || delivered.current === id) return
     delivered.current = id
     bridge?.result(id, text)
-  }, [])
+  }, [sid])
   const voice = useVoiceInput(onResult, sid || 'idle')
 
   useEffect(() => bridge?.onState((s) => {

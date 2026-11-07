@@ -2,7 +2,7 @@
  * 真 osascript 跑 MAC_DRIVER_SCRIPT,但只碰**私有命名剪贴板**、不发按键(驱动在命名剪贴板上自己就不发 ⌘V)——
  * 用户的系统剪贴板和此刻在前台的应用都不受影响。只在 macOS 上跑。
  */
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { afterAll, describe, expect, it } from 'vitest'
 import { createMacDriver } from './macDriver'
@@ -67,6 +67,38 @@ describe.skipIf(!mac)('macOS dictation driver (private pasteboard, no keystrokes
     const r = await driver.insert({ text: 'x', pasteboard: board, checks: false, settle: 0.05 })
     expect(r).toEqual({ outcome: 'pasted', restored: 'empty' })
     expect(read()).toEqual([])
+  }, 20_000)
+
+  it('a copy the user makes while the snapshot is read wins: nothing is written over it', async () => {
+    seed()
+    const r = await driver.insert({ text: 'dictated', pasteboard: board, checks: false, settle: 0.05, mutateBeforeWrite: 'copied while we read' })
+    expect(r).toEqual({ outcome: 'paste-failed', detail: 'clipboard changed' })
+    expect(read()).toEqual([{ 'public.utf8-plain-text': 'copied while we read' }])
+  }, 20_000)
+
+  it('a type that never materializes means no paste (restoring the readable part would drop it)', async () => {
+    // A promised type with no provider, declared by a process that stays alive (once it exits the system drops the promise).
+    const holder = spawn('/usr/bin/osascript', ['-l', 'JavaScript', '-e', `ObjC.import('AppKit'); var pb = $.NSPasteboard.pasteboardWithName($(${JSON.stringify(board)}))
+      pb.clearContents; var a = $.NSPasteboardItem.alloc.init; a.setStringForType($('before 剪贴板'), $.NSPasteboardTypeString)
+      var arr = $.NSMutableArray.alloc.init; arr.addObject(a); pb.writeObjects(arr)
+      pb.addTypesOwner($(['com.forsion.test.lazy']), $()); delay(8); ''`], { stdio: 'ignore' })
+    try {
+      const types = (): string[] => JSON.parse(jxa(`JSON.stringify(ObjC.deepUnwrap(pb.types) || [])`))
+      for (let i = 0; i < 40 && !types().includes('com.forsion.test.lazy'); i++) await new Promise((r) => setTimeout(r, 50))
+      expect(types()).toContain('com.forsion.test.lazy')
+      const r = await driver.insert({ text: 'dictated', pasteboard: board, checks: false, settle: 0.05 })
+      expect(r).toEqual({ outcome: 'paste-failed', detail: 'clipboard not fully readable' })
+      expect(types()).toContain('com.forsion.test.lazy')
+      expect(jxa(`ObjC.unwrap(pb.stringForType($.NSPasteboardTypeString))`)).toBe('before 剪贴板')
+    } finally { holder.kill() }
+  }, 20_000)
+
+  it('when the last check before the keystroke fails, the user\'s clipboard is put back', async () => {
+    seed()
+    const before = read()
+    const r = await driver.insert({ text: 'dictated', pasteboard: board, checks: false, settle: 0.05, failBeforePost: true })
+    expect(r).toEqual({ outcome: 'target-changed', detail: 'test' })
+    expect(read()).toEqual(before)
   }, 20_000)
 
   it('writes the exact text, marked transient for clipboard managers', async () => {
