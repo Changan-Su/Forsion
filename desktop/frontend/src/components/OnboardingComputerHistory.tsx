@@ -5,10 +5,11 @@
  * 默认关:只把它摆出来。不拨开关就什么都不写;拨了先弹同意说明(同意那一段 + 完整五条),点「开启记录」才开。
  * macOS 一直画辅助功能那一行(授权状态 + 去授权 / 安装 / 更新助手的入口);Windows 没有要授的权限,只说明一句。
  */
-import React, { useEffect, useRef, useState } from 'react'
-import { ChevronRight, History, Loader2, Play, RefreshCw, X } from 'lucide-react'
+import React, { useEffect, useState } from 'react'
+import { ChevronRight, History, Loader2, Play, RefreshCw } from 'lucide-react'
 import { useI18n } from '../i18n'
 import { ComputerHistoryAbout } from './ComputerHistoryAbout'
+import { ComputerHistoryDialog } from './ComputerHistoryDialog'
 import { DesktopPermissions, hasDesktopPermissions } from './DesktopPermissions'
 import { SettingsSwitch } from './SettingsPrimitives'
 import { statusEntries, statusLine } from './computerHistoryModel'
@@ -29,20 +30,10 @@ export function OnboardingComputerHistory({ mode, onBusyChange, onUnsupported }:
   const { view, busy, unsupported } = history
   /** 不拨开关、只想看完整说明。 */
   const [aboutOpen, setAboutOpen] = useState(false)
-  const dialogRef = useRef<HTMLDialogElement>(null)
   const consent = history.confirmEnable && !view?.state.enabled
   const open = !!view && (consent || aboutOpen)
   const saving = busy === 'enable'
 
-  useEffect(() => {
-    const dialog = dialogRef.current
-    if (!dialog) return
-    if (open && !dialog.open) {
-      dialog.showModal()
-      // 落点放在不做决定的那个按钮上(同意时 = 取消)。
-      dialog.querySelector<HTMLElement>('[data-initial-focus]')?.focus()
-    } else if (!open && dialog.open) dialog.close()
-  }, [open])
   useEffect(() => {
     onBusyChange(saving)
     return () => { if (saving) onBusyChange(false) }
@@ -99,28 +90,7 @@ export function OnboardingComputerHistory({ mode, onBusyChange, onUnsupported }:
         <ComputerHistoryAbout view={view} summary />
         <button type="button" className="ob-history-more" onClick={() => setAboutOpen(true)}>{t('onboarding.history.more')}<ChevronRight size={13} aria-hidden="true" /></button>
       </section>
-      <dialog
-        ref={dialogRef}
-        className="ob-history-dialog"
-        aria-label={t(consent ? 'computerHistory.enableConfirm.title' : 'computerHistory.about.title')}
-        onCancel={(event) => { if (saving) event.preventDefault(); else close() }}
-        onClick={(event) => { if (event.target === event.currentTarget && !saving) close() }}
-      >
-        <div className="ob-changelog-head">
-          <h2>{t(consent ? 'computerHistory.enableConfirm.title' : 'computerHistory.about.title')}</h2>
-          <button type="button" className="icon-btn" aria-label={t('common.close')} disabled={saving} data-initial-focus={consent ? undefined : ''} onClick={close}><X size={18} /></button>
-        </div>
-        <div className="ob-history-dialog-body">
-          {consent && <p className="ob-history-consent">{t('computerHistory.enableConfirm.body', { days: view.keepDays })}</p>}
-          <ComputerHistoryAbout view={view} />
-        </div>
-        {consent && <div className="ob-history-dialog-foot">
-          <button type="button" className="btn ghost" data-initial-focus="" disabled={saving} onClick={() => history.setConfirmEnable(false)}>{t('computerHistory.cancel')}</button>
-          <button type="button" className="btn primary" disabled={!!busy} onClick={() => void history.enable()}>
-            {saving ? <Loader2 size={13} className="spin" aria-hidden="true" /> : <Play size={13} aria-hidden="true" />}{t('computerHistory.enableConfirm.confirm')}
-          </button>
-        </div>}
-      </dialog>
+      <ComputerHistoryDialog history={history} consent={consent} open={open} onClose={close} />
     </div>
   )
 }

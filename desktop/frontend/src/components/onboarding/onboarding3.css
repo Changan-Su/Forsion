@@ -1,7 +1,8 @@
 /* 首启引导四屏(方案 docs/ToBeImproved/首启引导第三轮方案_2026-11-04/revised.html)。
  * 观感:主页那张纸 + 无描边半浮卡片(--bg-card / --radius-lg / --card-shadow-low);选中 = 1px 强调色描边 + 0.5px 外环(DESIGN §5);
  * 分段控件用胶囊凸滑块(--seg-thumb);选项胶囊选中 = 实心(同卜算子私聊里那张第一次见面卡)。只用宿主 token。
- * 外层类名 .ob-shell.ob-flow 与 data-step、按钮 .ob-skip 是台架靠的名字,别改。 */
+ * 外层类名 .ob-shell.ob-flow 与 data-step、按钮 .ob-skip 是台架靠的名字,别改。
+ * 11-06 第四轮(docs/ToBeImproved/首启引导第四轮方案_2026-11-06/):团队屏改成两张等宽卡 + 名单一行;填 Key 的表先选一家只填 Key。 */
 
 @font-face {
   font-family: 'Dancing Script';
@@ -99,11 +100,16 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-prov small { display: block; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ob3-prov.on { background: var(--bg-card); box-shadow: 0 0 0 1px var(--accent-ink); }
 .ob3-prov.on .ob3-mark { color: var(--accent-ink); }
-.ob3-prov.more { background: transparent; box-shadow: inset 0 0 0 1px var(--overlay-medium, rgba(127, 127, 127, .14)); }
 .ob3-form { display: grid; gap: 10px; }
 .ob3-form label { display: grid; gap: 4px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .ob3-form input, .ob3-form select { font: inherit; font-size: var(--ui-font-body, 13px); color: var(--text); background: var(--bg); border: 1px solid var(--overlay-medium, rgba(127, 127, 127, .2)); border-radius: var(--radius-sm); padding: 6px 9px; min-width: 0; }
 .ob3-form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+/* 填 Key 的表:先选一家(胶囊一排),选中后只剩 Key;地址、白名单收进「高级」 */
+.ob3-pick { display: flex; flex-wrap: wrap; gap: 6px; }
+.ob3-keyurl { justify-self: start; }
+.ob3-adv { justify-self: start; display: inline-flex; align-items: center; gap: 4px; padding: 0; border: 0; background: transparent; font: inherit; font-size: var(--ui-font-meta, 12px); color: var(--text-muted); cursor: pointer; }
+.ob3-adv svg { color: var(--text-faint); }
+.ob3-adv[aria-expanded='true'] svg { transform: rotate(90deg); }
 .ob3-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 /* 外观 */
@@ -143,21 +149,17 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-pill[aria-pressed='true'] svg { color: var(--on-action); }
 
 /* 团队 */
-.ob3-team { display: grid; grid-template-columns: minmax(0, 1.18fr) minmax(0, 1fr); gap: 14px; align-items: stretch; }
-.ob3-team > .r { display: grid; gap: 14px; grid-template-rows: auto 1fr; min-width: 0; }
+/* 团队(第四轮 A4):卜算子、电脑历史两张等宽等高的卡;没有电脑历史的机器只剩一张,收窄居中 */
+.ob3-team { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px; align-items: stretch; }
+.ob3-team.solo { grid-template-columns: minmax(0, 600px); justify-content: center; }
 .ob3-muse { display: flex; flex-direction: column; gap: 14px; }
-.ob3-muse .ob3-sep { margin-top: auto; }
+.ob3-muse-foot { margin-top: auto; }
 .ob3-muse-h { display: flex; align-items: flex-start; gap: 12px; }
 .ob3-muse-h > div { flex: 1; min-width: 0; }
 .ob3-muse-h strong { display: block; font-size: var(--ui-font-heading, 14px); font-weight: 600; }
 .ob3-muse-h small { display: block; color: var(--text-muted); margin-top: 2px; font-size: var(--ui-font-meta, 12px); }
 .ob3-ava { width: 34px; height: 34px; flex: none; display: grid; place-items: center; border-radius: var(--radius-pill); background: var(--accent-light); color: var(--accent-ink); }
 .ob3-ava.plain { background: var(--overlay-light); color: var(--text-muted); }
-.ob3-facts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
-.ob3-fact { display: flex; gap: 8px; align-items: flex-start; }
-.ob3-fact svg { flex: none; margin-top: 2px; color: var(--accent-ink); }
-.ob3-fact b { display: block; font-weight: 500; }
-.ob3-fact span { display: block; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
 .ob3-model { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--overlay-light, rgba(127, 127, 127, .06)); }
 .ob3-model.need { background: color-mix(in srgb, var(--warning, #c08a2a) 10%, transparent); }
 .ob3-model > svg { flex: none; color: var(--text-muted); }
@@ -174,20 +176,24 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-own:focus-within { box-shadow: inset 0 0 0 1px var(--accent-ink); }
 .ob3-own svg { flex: none; color: var(--text-faint); }
 .ob3-own input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); padding: 1px 0; }
-.ob3-roster { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; padding: 12px 12px 8px; align-content: start; }
-.ob3-roster h3 { margin: 0 6px 4px; font-size: var(--ui-font-meta, 12px); font-weight: 500; color: var(--text-faint); display: flex; justify-content: space-between; gap: 8px; min-width: 0; }
-.ob3-roster h3 span:last-child { text-align: right; min-width: 0; }
-.ob3-mem { display: flex; align-items: center; gap: 10px; padding: 3px 6px; border-radius: var(--radius-md); }
-.ob3-mem > div { flex: 1; min-width: 0; }
-.ob3-mem strong { font-weight: 500; }
-.ob3-mem small { display: block; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ob3-mem .lk { color: var(--text-faint); display: inline-flex; align-items: center; gap: 3px; font-size: var(--ui-font-caption, 11px); white-space: nowrap; }
-.ob3-av { width: 28px; height: 28px; flex: none; display: grid; place-items: center; border-radius: 50%; overflow: hidden; background: var(--overlay-light, rgba(127, 127, 127, .08)); color: var(--text); font-weight: 600; font-size: var(--ui-font-meta, 12px); }
+.ob3-av { width: 24px; height: 24px; flex: none; display: grid; place-items: center; border-radius: 50%; overflow: hidden; background: var(--overlay-light, rgba(127, 127, 127, .08)); color: var(--text); font-weight: 600; font-size: var(--ui-font-caption, 11px); }
 .ob3-tag { font-style: normal; font-size: var(--ui-font-caption, 11px); line-height: 15px; padding: 0 5px; border-radius: var(--radius-pill); background: var(--overlay-medium, rgba(127, 127, 127, .12)); color: var(--text-muted); margin-left: 4px; vertical-align: 1px; font-weight: 400; }
-.ob3-add { display: flex; align-items: center; gap: 10px; min-width: 0; padding: 7px 6px 3px; border: 0; background: transparent; font: inherit; color: var(--text); text-align: left; cursor: pointer; border-radius: var(--radius-md); }
-.ob3-add .ob3-av { background: transparent; box-shadow: inset 0 0 0 1px var(--overlay-medium, rgba(127, 127, 127, .2)); color: var(--text-muted); }
-.ob3-add small { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); margin-left: 8px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ob3-ch { display: grid; gap: 8px; padding: 14px 18px; grid-template-rows: auto auto 1fr; }
+/* 团队名单:底下一行,只介绍;整行只有「在 Agents 里管理」能点 */
+.ob3-strip { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 16px; padding: 10px 18px; }
+.ob3-strip-k { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+.ob3-member { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.ob3-member .ob3-tag { margin-left: 0; }
+.ob3-manage { margin-left: auto; }
+.ob3-manage[aria-pressed='true'] { color: var(--accent-ink); }
+.ob3-ch { display: grid; gap: 12px; padding: 18px 20px; grid-template-rows: auto auto auto 1fr; }
+/* 「开了之后,比如」:固定的示意文案,不读真记录 */
+.ob3-eg { display: grid; gap: 7px; padding: 12px 14px; border-radius: var(--radius-md); background: var(--overlay-light, rgba(127, 127, 127, .06)); }
+.ob3-eg-k { color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
+.ob3-eg-r { display: flex; align-items: flex-start; gap: 8px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); line-height: 1.5; }
+.ob3-eg-r svg { flex: none; margin-top: 2px; color: var(--text-faint); }
+.ob3-eg-r time { flex: none; width: 38px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.ob3-eg-r.muse { color: var(--text); }
+.ob3-eg-r.muse svg { color: var(--accent-ink); }
 .ob3-ch dl { margin: 0; display: grid; gap: 6px; }
 .ob3-ch dl div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; }
 .ob3-ch dt { font-size: var(--ui-font-meta, 12px); color: var(--text-faint); }
@@ -207,16 +213,7 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-back:disabled { visibility: hidden; }
 .ob3-foot-hint { flex: 1; text-align: center; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
 
-/* 电脑历史「详情」弹窗与某屏崩了时的错误卡(从旧外壳 onboarding.css 搬来,旧样式表只剩电脑历史台架在用) */
-.ob-history-dialog { margin: auto; width: min(640px, calc(100% - 32px)); max-height: calc(100% - 40px); padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card, var(--bg)); color: var(--text); box-shadow: var(--card-shadow); }
-.ob-history-dialog::backdrop { background: var(--overlay-medium); }
-.ob-history-dialog[open] { display: flex; flex-direction: column; }
-.ob-history-dialog .ob-changelog-head { display: flex; align-items: center; justify-content: space-between; padding: 18px 22px; }
-.ob-history-dialog .ob-changelog-head h2 { margin: 0; font-size: var(--ui-font-title, 20px); }
-.ob-history-dialog-body { min-height: 0; overflow: auto; }
-.ob-history-dialog .ob-history-consent { margin: 0 22px 12px; font-size: var(--ui-font-meta, 12px); line-height: 1.6; color: var(--text-light); }
-.ob-history-dialog .ch-about { border-top: var(--border-width) solid var(--border); }
-.ob-history-dialog .ch-about-row, .ob-history-dialog .ch-tip { padding-inline: 22px; }
+/* 某屏崩了时的错误卡(从旧外壳 onboarding.css 搬来)。电脑历史「详情」弹窗的样式在 ../computerHistoryDialog.css,主页那一行也用 */
 .ob3 .ob-step-error { justify-self: center; max-width: 520px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 .ob3 .ob-step-error strong { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 600; }
 .ob3 .ob-step-error strong svg { color: var(--danger); }
@@ -229,7 +226,7 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 @container (max-width: 720px) {
   .ob3-top, [data-platform='mac'] .ob3-top { padding: 14px 16px 0; }
   .ob3-main { place-items: start center; padding: 12px 16px; }
-  .ob3-two, .ob3-team, .ob3-theme, .ob3-facts, .ob3-form-row { grid-template-columns: minmax(0, 1fr); }
+  .ob3-two, .ob3-team, .ob3-theme, .ob3-form-row { grid-template-columns: minmax(0, 1fr); }
   .ob3-head { justify-items: start; text-align: left; }
   .ob3-brand { transform-origin: left bottom; }
   .ob3-foot { padding: 8px 16px 18px; }
