@@ -1,0 +1,106 @@
+/* 文件改动记录(回执行 / 任务概览「改动」卡 / Desk 审阅页);方案页 docs/ToBeImproved/文件改动记录方案_2026-11-06/。
+   颜色只用主题的 --green / --danger(底色按比例混进透明),不自带一套;回执行照 .self-receipt 的画法:无底色、细线分行。 */
+
+/* ── 增减数 ── */
+.ct-nums { display: inline-flex; gap: 6px; align-items: baseline; flex: none; font-family: var(--font-mono); font-size: var(--ui-font-caption); font-variant-numeric: tabular-nums; color: var(--text-faint); }
+.ct-nums .add { color: var(--green); }
+.ct-nums .del { color: var(--danger); }
+
+/* ── diff 表 ── */
+.ct-diff { font-family: var(--font-mono); font-size: var(--ui-font-caption); line-height: 1.7; background: var(--tool-bg); border-radius: var(--radius-md); overflow-x: auto; padding: 4px 0; color: var(--text); }
+.ct-diff table { border-collapse: collapse; width: 100%; }
+.ct-diff td { padding: 0 6px; vertical-align: top; white-space: pre; }
+.ct-diff td.ln { width: 1%; min-width: 22px; color: var(--text-faint); text-align: right; user-select: none; padding: 0 4px; font-variant-numeric: tabular-nums; }
+.ct-diff td.sg { width: 1%; padding: 0 2px 0 4px; color: var(--text-faint); user-select: none; }
+.ct-diff td.cd { width: 100%; }
+.ct-diff tr.add td { background: color-mix(in srgb, var(--green) 17%, transparent); }
+.ct-diff tr.del td { background: color-mix(in srgb, var(--danger) 11%, transparent); }
+.ct-diff tr.add td.sg { color: var(--green); }
+.ct-diff tr.del td.sg { color: var(--danger); }
+.ct-diff tr.add .w { background: color-mix(in srgb, var(--green) 36%, transparent); border-radius: 2px; }
+.ct-diff tr.del .w { background: color-mix(in srgb, var(--danger) 26%, transparent); border-radius: 2px; }
+.ct-diff tr.hunk td { color: var(--text-faint); font-family: var(--font-ui); padding-top: 3px; padding-bottom: 3px; }
+.ct-diff.prose { font-family: var(--font-body); font-size: var(--ui-font-meta); line-height: 1.75; }
+.ct-diff.prose td.cd { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
+.ct-diff.prose td.ln, .ct-diff.prose td.sg { font-family: var(--font-mono); font-size: var(--ui-font-caption); }
+
+/* ── 共用的小块 ── */
+.ct-ic { flex: none; color: var(--text-muted); }
+.ct-act { display: inline-flex; align-items: center; gap: 5px; padding: 2px 0; border: 0; background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-caption); cursor: pointer; white-space: nowrap; }
+.ct-act:hover:not(:disabled), .ct-act:focus-visible { color: var(--accent-ink); }
+.ct-act:disabled { opacity: .5; cursor: default; }
+.ct-act:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: 2px; border-radius: var(--radius-sm); }
+.ct-note { font-size: var(--ui-font-caption); color: var(--text-faint); line-height: var(--ui-line-meta); }
+.ct-tag { color: var(--text-faint); font-size: var(--ui-font-caption); margin-left: 6px; white-space: nowrap; }
+.ct-tag.warn { color: var(--warning); }
+
+/* ── A 回执行 ── */
+.ct-rcpt { max-width: 700px; width: 100%; box-sizing: border-box; font-family: var(--font-ui); font-size: var(--ui-font-meta); line-height: var(--ui-line-meta); color: var(--text-muted); }
+.ct-rcpt-head { display: inline-flex; align-items: center; gap: 6px; padding: 3px 0; border: 0; background: transparent; color: inherit; font: inherit; cursor: pointer; border-radius: var(--radius-sm); }
+.ct-rcpt-head:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: 2px; }
+.ct-rcpt-first { color: var(--text); font-weight: 600; }
+.ct-rcpt-chev { flex: none; transition: transform var(--duration-fast, .15s); }
+.ct-rcpt.open .ct-rcpt-chev { transform: rotate(90deg); }
+.ct-rows { margin-top: 4px; }
+.ct-row { border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.ct-row-head { display: grid; grid-template-columns: minmax(0, 1fr) auto auto 14px; gap: 0 10px; align-items: center; width: 100%; padding: 6px 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
+.ct-row-head:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: 2px; }
+/* 图标 + 文件名(+ 文件夹 + 标记)那一格是按钮:键盘能到、读屏认得;按钮默认样式抹平 */
+.ct-row-main { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
+.ct-row-main:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: 2px; }
+.ct-row-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); font-size: var(--ui-font-body); }
+.ct-row-name .dir { color: var(--text-faint); font-size: var(--ui-font-meta); margin-left: 6px; }
+.ct-row-ops { display: inline-flex; gap: 12px; opacity: 0; transition: opacity var(--duration-fast, .15s); }
+.ct-row:hover .ct-row-ops, .ct-row:focus-within .ct-row-ops, .ct-row.open .ct-row-ops { opacity: 1; }
+@media (hover: none) { .ct-row-ops { opacity: 1; } }
+.ct-row-diff { margin: 2px 0 8px 24px; }
+.ct-row-msg { margin: 2px 0 8px 24px; }
+.ct-rcpt-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0 2px; border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+
+/* ── 手机:贴底抽屉(几何照 compactChatPicker 的 C 抽屉) ── */
+.ct-sheet-scrim { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; justify-content: flex-end; background: rgba(0, 0, 0, .4); -webkit-app-region: no-drag; animation: ct-fade var(--duration-fast) var(--ease-calm); }
+.ct-sheet { position: relative; display: flex; flex-direction: column; max-height: 85%; padding: 6px 14px calc(14px + env(safe-area-inset-bottom)); box-sizing: border-box; border-radius: 16px 16px 0 0; background: var(--bg-card); color: var(--text); box-shadow: var(--card-shadow); animation: ct-up var(--duration-slow) var(--ease-drawer); font-family: var(--font-ui); }
+.ct-sheet-grip { flex: none; width: 40px; height: 4px; margin: 6px auto 8px; border-radius: 2px; background: var(--border); }
+.ct-sheet-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 2px 0 8px; font-size: var(--ui-font-body); font-weight: 600; }
+.ct-sheet-head .sp { flex: 1; }
+.ct-sheet-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.ct-sheet .ct-rcpt { max-width: none; }
+@keyframes ct-fade { from { opacity: 0; } }
+@keyframes ct-up { from { transform: translateY(100%); } }
+@media (prefers-reduced-motion: reduce) { .ct-sheet-scrim, .ct-sheet { animation: none; } }
+
+/* ── C 任务概览「改动」卡 ── */
+.ct-seg { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-pill); background: var(--overlay-light); font-size: var(--ui-font-caption); }
+.ct-seg button { padding: 1px 8px; border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--text-muted); font: inherit; cursor: pointer; }
+.ct-seg button[aria-pressed="true"] { background: var(--bg-card); color: var(--text); box-shadow: 0 1px 2px rgba(0, 0, 0, .06); }
+.ct-seg button:disabled { color: var(--text-faint); opacity: .6; cursor: default; }
+.ct-crow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.ct-crow .t2-tsum-row-tx { flex: 1; min-width: 0; }
+.ct-crow-main { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; border-radius: var(--radius-sm); }
+.ct-crow-main:focus-visible { outline: var(--focus-ring, 2px) solid var(--signal-line); outline-offset: 2px; }
+.ct-crow .ct-crow-undo { display: none; }
+.ct-crow:hover .ct-nums, .ct-crow:focus-within .ct-nums { display: none; }
+.ct-crow:hover .ct-crow-undo, .ct-crow:focus-within .ct-crow-undo { display: inline-flex; }
+.ct-cfoot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 8px 2px; font-size: var(--ui-font-caption); color: var(--text-faint); }
+
+/* ── C Desk 审阅页 ── */
+.ct-review { height: 100%; overflow: auto; font-family: var(--font-ui); color: var(--text); container-type: inline-size; }
+.ct-rv-bar { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 14px 22px 10px; background: var(--bg); }
+.ct-rv-bar .ttl { font-size: var(--ui-font-heading); font-weight: 600; }
+.ct-rv-bar .sp { flex: 1; }
+.ct-rv-body { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 18px; padding: 0 22px 40px; }
+.ct-rv-list { position: sticky; top: 56px; align-self: start; font-size: var(--ui-font-meta); }
+.ct-rv-li { display: flex; align-items: center; gap: 6px; width: 100%; padding: 5px 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-muted); font: inherit; text-align: left; cursor: pointer; }
+.ct-rv-li .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.ct-rv-li:hover, .ct-rv-li.on { background: var(--overlay-light); }
+.ct-rv-listnote { padding: 12px 8px 0; }
+.ct-rv-grp { color: var(--text-faint); font-size: var(--ui-font-caption); padding: 10px 8px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-rv-file { margin-bottom: 18px; scroll-margin-top: 60px; }
+.ct-rv-fh { display: flex; align-items: center; gap: 8px; padding: 0 2px 6px; font-size: var(--ui-font-body); min-width: 0; }
+.ct-rv-fh b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ct-rv-fh .dir { color: var(--text-faint); font-size: var(--ui-font-meta); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.ct-rv-fh .sp { flex: 1; }
+.ct-rv-fh .ct-act { font-size: var(--ui-font-meta); }
+.ct-rv-cmd { margin-top: 6px; padding: 10px 12px; border-radius: var(--radius-md); background: var(--overlay-light); font-size: var(--ui-font-meta); color: var(--text-muted); line-height: var(--ui-line-meta); display: flex; gap: 8px; align-items: flex-start; }
+.ct-rv-empty { padding: 40px 22px; color: var(--text-muted); font-size: var(--ui-font-body); }
+@container (max-width: 520px) { .ct-rv-body { grid-template-columns: minmax(0, 1fr); } .ct-rv-list { position: static; } }

@@ -4,6 +4,7 @@ import { GitToolCard, gitStatusSuperseded, isGitTool } from './GitToolCard'
 import { HumanUpdateCard } from '../../components/HumanUpdateCard'
 import { humanChanges } from '../../services/humanCollaboration'
 import { SelfUpdateReceipt } from '../../components/SelfUpdateReceipt'
+import { ChangeReceipt } from './ChangeReceipt'
 /**
  * 编辑式消息渲染(新视觉):助手在纸面流动(头像 + 安静署名 + 内容 + 悬浮动作),
  * 用户为暖色带尾气泡。子件(思考/工具/待办/审批/反问)以新 t2 风格内联呈现。
@@ -854,6 +855,8 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
 
         {/* Agent 自己写了东西:记忆 / 进化记录并成一行回执;协作说明是说给用户听的,单独一张请求卡。 */}
         {fileCtx && <SelfUpdateReceipt events={msg.toolEvents} sessionId={fileCtx.sessionId} agentSlug={msg.agentId} />}
+        {/* 这一轮改了哪些文件(方案 A):只挂在一轮的最后一条回答上,数据由 ChatView 的 useChangeTrailDriver 拉 */}
+        {!!runSid && <ChangeReceipt sessionId={runSid} msgId={msg.id} />}
         {fileCtx && <HumanUpdateCard changes={humanChanges(msg.toolEvents)} cfg={fileCtx.cfg} sessionId={fileCtx.sessionId} agentName={speakerName || msg.agentName || agentNameFallback} onJump={handlers?.onJumpDeck} createdAt={msg.timestamp || undefined} />}
 
         {msg.planProposal && (

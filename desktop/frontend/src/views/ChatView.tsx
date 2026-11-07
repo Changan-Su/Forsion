@@ -46,6 +46,7 @@ import { MuseStarters } from './chat2/MuseStarters'
 import { NEW_CHAT_DRAFT } from './chat2/composerDrafts'
 import { FloatingToc } from './chat2/FloatingToc'
 import { TaskSummary } from './chat2/TaskSummary'
+import { useChangeTrailDriver } from './chat2/changeTrail'
 import { BgStrip } from './chat2/BackgroundProcs'
 import { useApp, activeChatModelId } from '../stores/appStore'
 import { stickyDefaults, withAmadeusWorkspace, applyPreset } from '../../../../tangu-agent/src/contracts/sessionDefaults'
@@ -296,6 +297,8 @@ export function ChatView({ leaf, params }: ViewProps) {
   }
   const pendingApprovals = useMemo(() => pendingPromptsOf(activeMessages), [activeMessages])
   const running = s.running
+  // 每轮改了哪些文件(回执 / 改动卡共用):这里拉一次,回执只订阅自己那份,流式时不打扰已经 memo 的消息
+  useChangeTrailDriver(activeId, activeMessages, !!running)
   // 对话末尾的卡片堆(10-23 方案「待确认卡片」B):挡着 agent 的在前,还在等你选的任务卡垫底
   const taskHandledV = useTaskHandledVersion()
   // Muse 私聊里它提的待办:引擎确认还 pending 的才进卡片堆

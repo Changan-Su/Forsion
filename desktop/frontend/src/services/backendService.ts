@@ -364,12 +364,50 @@ export const listCheckpoints = (t: EngineTarget, sessionId: string) =>
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
   ).then((r) => r.checkpoints || [])
 
-/** 把代码恢复到 `at` 时刻(该时刻之后所有写工具改动按最早 pre-image 回滚)。 */
-export const restoreCheckpoint = (t: EngineTarget, sessionId: string, at: number) =>
+/** 把代码恢复到 `at` 时刻(该时刻之后所有写工具改动按最早 pre-image 回滚)。
+ *  paths = 只恢复这几个文件(绝对路径);keepEdited = Agent 写完之后又被改过的文件不覆盖,记进 conflicts。 */
+export const restoreCheckpoint = (t: EngineTarget, sessionId: string, at: number, opts?: { paths?: string[]; keepEdited?: boolean }) =>
   requestCap<{ restored: string[]; deleted: string[]; skipped: string[]; conflicts?: string[]; failed: Array<{ path: string; error: string }> }>(
     t, 'checkpointRestore', `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints/restore`,
-    { method: 'POST', body: JSON.stringify({ at }) },
+    { method: 'POST', body: JSON.stringify({ at, ...(opts?.paths ? { paths: opts.paths } : {}), ...(opts?.keepEdited ? { keepEdited: true } : {}) }) },
   )
+
+/** 某段时间里 Agent 用写文件工具改过的一个文件(引擎 services/checkpoints.ts 的 FileChange 镜像)。
+ *  增减按「这段开始前的原样 vs 这段结束时」逐行算;比不了时 adds / dels 为 null,reason 说明为什么。 */
+export interface FileChange {
+  path: string
+  kind: 'created' | 'modified' | 'deleted'
+  adds: number | null
+  dels: number | null
+  reason?: 'binary' | 'toobig' | 'nosnap'
+  /** 改过又回到原样(撤销过 / 建了又删)。 */
+  reverted?: boolean
+  /** 只对还没结束的那段:Agent 写完之后文件又被改过(你手改的、命令改的)。 */
+  editedLater?: boolean
+  runs: number
+  /** 只有 changesDiff 才带:统一 diff 正文(真行号,上下文 2 行,不带 ---/+++ 文件头)。 */
+  patch?: string
+  truncated?: boolean
+}
+export interface ChangeWindowInfo { since: number; until: number | null; files: FileChange[] }
+
+/** 按时间段列改动:bounds = 段的分界(毫秒,升序),段 = [b0,b1)、[b1,b2)…[bn,∞);不给 = 整个会话一段。 */
+export const listChanges = (t: EngineTarget, sessionId: string, bounds?: number[]) =>
+  request<{ windows: ChangeWindowInfo[] }>(
+    t, `/agent/sessions/${encodeURIComponent(sessionId)}/changes${bounds?.length ? `?bounds=${bounds.join(',')}` : ''}`,
+  ).then((r) => r.windows || [])
+
+/** 会话所在 Git 项目里还没提交的改动(含命令改的、你手改的;只看不撤)。available=false = 不是 Git 仓 / 没装 git / 没有目录。 */
+export interface GitChangesInfo { available: boolean; reason?: 'nogit' | 'notrepo' | 'nocwd' | 'untrusted'; root?: string; files: FileChange[]; truncatedFiles?: boolean }
+export const gitChanges = (t: EngineTarget, sessionId: string) =>
+  request<GitChangesInfo>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/changes/git?diff=1`)
+
+/** 某一段的逐文件 diff(path 给了只取那一个)。 */
+export const changesDiff = (t: EngineTarget, sessionId: string, q: { since: number; until: number | null; path?: string }) =>
+  request<{ files: FileChange[] }>(
+    t, `/agent/sessions/${encodeURIComponent(sessionId)}/changes/diff?since=${q.since}&until=${q.until ?? ''}`
+      + (q.path ? `&path=${encodeURIComponent(q.path)}` : ''),
+  ).then((r) => r.files || [])
 
 /** run_background 起的后台进程(引擎 routes/processes.ts,2026-10-25):url = 输出里认出的本机地址(只在跑着时给),last = 最后一行。 */
 export interface EngineProcess {
