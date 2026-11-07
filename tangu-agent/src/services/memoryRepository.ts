@@ -264,6 +264,10 @@ export function filterForgottenMemory(content: string, tombstones: MemoryTombsto
   }).join('\n');
 }
 
+/** 每次落盘成功后的旁听者(遥测计数用,只拿到目录与来源种类);它出错不影响提交。 */
+let commitObserver: ((baseDir: string, kind: MemorySource['kind']) => void) | null = null;
+export function setMemoryCommitObserver(fn: typeof commitObserver): void { commitObserver = fn; }
+
 export function createMemoryRepository(baseDir: string) {
   const stateFile = '.memory-state.json', projectionFile = '.memory-tombstones.json';
   const locked = <T>(fn: () => T): T => withMemoryDirectoryLock(baseDir, fn);
@@ -280,6 +284,7 @@ export function createMemoryRepository(baseDir: string) {
     state.projectionPending = false;
     state.previousProjectionHash = null;
     atomicWriteMemoryFile(baseDir, stateFile, JSON.stringify(state));
+    try { commitObserver?.(baseDir, state.source.kind); } catch { /* 旁听者不挡提交 */ }
     return state;
   }
   function nextState(s: MemoryState, content: string, source: MemorySource, provenance?: MemoryCommit['provenance']): MemoryState {

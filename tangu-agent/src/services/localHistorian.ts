@@ -57,6 +57,7 @@ import { sessionRemoteTainted } from './remoteTaint.js';
 import { judgeTriggerBlock } from './judgeSignals.js';
 import { deviceTagContext, hasLocalPath, textForThisDevice } from './deviceTagContext.js';
 import { tagOf, withTag } from '../contracts/deviceTags.js';
+import { agentRoleOf, ledger } from './telemetryLedger.js';
 export { parseRawLines } from './memoryCandidates.js';
 const historianSignal = new AsyncLocalStorage<AbortSignal>();
 
@@ -410,7 +411,10 @@ async function forkJudge(
   }
 }
 
+/** 遥测:判官更新了会话的标题 / 摘要 / 图标(各自记一笔活动的那一刻)。 */
+const JUDGE_ACTIVITY = { title_updated: 'titleUpdated', summary_updated: 'summaryUpdated', icon_updated: 'iconUpdated' } as const;
 async function logActivity(userId: string, action: string, detail: string, sessionRef: string): Promise<void> {
+  if (Object.hasOwn(JUDGE_ACTIVITY, action)) ledger.inc('daily_judge', JUDGE_ACTIVITY[action as keyof typeof JUDGE_ACTIVITY]);
   try {
     await query(
       `INSERT INTO special_agent_log (id, user_id, agent, action, detail, session_ref) VALUES (?, ?, 'historian', ?, ?, ?)`,
@@ -675,6 +679,9 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
     // 采纳仍要 /refine + 审批,让出写入权的理由套不到它身上。判官这次调用在辅助模式下本来就为标题 / 摘要在跑,多的只是一个字段。
     // 从前挡在 !assistMode 后面 → 辅助模式用户每个会话只有首轮(恒走独立判断)会提名。
     const judgeHarness = due && cfg.harnessCandidates && !chIsolated && !remoteRound;
+    ledger.inc('daily_judge', 'rounds');
+    ledger.inc('daily_judge', assistMode ? 'roundsAssist' : forkMode ? 'roundsFork' : 'roundsIndependent');
+    if (chIsolated) ledger.inc('daily_judge', 'isolationSkips');
     log(`第 ${roundN} 轮触发(${signalDue ? '信号加评,' : ''}${assistMode ? '辅助模式,' : forkMode ? '分身判官,' : ''}模型 ${cfg.modelId}${signals.length ? `;信号 ${signals.length} 条` : ''})`);
 
     const transcriptSnapshot = await recentTranscript(sessionId);
@@ -804,6 +811,8 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           // 采集:候选进 raw 层,正典 MEMORY 只由整固步骤改写(唯一仲裁点)。
           const n = appendRawCandidates(effectiveSlug, sessionId, candidates, { anchorMessageId: transcriptSnapshot.anchorMessageId });
           if (n) {
+            ledger.inc('daily_judge', 'memCandidates', { n });
+            ledger.inc('daily_memory', 'candidatesAdded', { dim: agentRoleOf(effectiveSlug), n });
             await logActivity(userId, 'memory_candidates', candidates.join(' | ').slice(0, 300), sessionId);
             log(`已采集 ${n} 条记忆候选进 raw 层`);
           }
@@ -831,6 +840,8 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
               if (wrote === 'added') added.push(fact);
             } catch (e: any) { log(`写项目记忆失败: ${e?.message || e}`); }
           }
+          if (added.length) ledger.inc('daily_judge', 'projCandidatesAuto', { n: added.length });
+          if (waiting.length) ledger.inc('daily_judge', 'projCandidatesQueued', { n: waiting.length });
           if (added.length) {
             await logActivity(userId, 'project_memory_added', added.join(' | ').slice(0, 300), sessionId);
             log(`已写入 ${added.length} 条项目记忆(${projectRef.name})`);
@@ -887,6 +898,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
                 catch (e: any) { log(`工作笔记提名未能直接采纳,转入候选收件箱: ${e?.message || e}`); queued.push(line); }
               }
               if (adopted.length) {
+                ledger.inc('daily_judge', 'harnessCandidatesAuto', { n: adopted.length });
                 scheduleAgentFilesSync(userId, displaySlug);
                 await logActivity(userId, 'harness_adopted', adopted.join(' | ').slice(0, 300), sessionId);
                 log(`已采纳 ${adopted.length} 条工作笔记提名(${displaySlug})`);
@@ -899,6 +911,7 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
                   return 0;
                 }) : 0;
                 if (!n) continue;
+                ledger.inc('daily_judge', 'harnessCandidatesQueued', { n });
                 await logActivity(userId, action, lines.join(' | ').slice(0, 300), sessionId);
                 log(`已采集 ${n} 条工作笔记候选进收件箱(${displaySlug}${action === 'harness_confirm' ? ',等用户确认' : ''})`);
               }

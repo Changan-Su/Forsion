@@ -16,6 +16,7 @@ import { thinkingHeadroom } from '../llm/openaiCompat.js';
 import { mutatePortrait } from '../agents/humanPortrait.js';
 import { deviceNameKey, rawTagLabel, tagOf, withTag, type DeviceTagContext } from '../contracts/deviceTags.js';
 import { NO_DEVICE, runTagContext } from './deviceTagContext.js';
+import { agentRoleOf, ledger } from './telemetryLedger.js';
 
 export interface MemoryDreamConfig { enabled: boolean; modelId: string; timeoutMs: number; maxOutputTokens: number; intervalHours: number }
 export interface MemoryDreamStatus { state: 'idle' | 'running' | 'cancelling' | 'completed' | 'skipped' | 'failed' | 'cancelled'; running: boolean; startedAt?: string; finishedAt?: string; detail?: string; version?: number | string; calls?: number; candidateCursor?: string }
@@ -164,8 +165,11 @@ async function candidateEvidence(userId: string, slug: string, candidate: Memory
   return evidence || undefined;
 }
 
-/** Starts immediately, returns status. At most two provider jobs; no queued/retrying background swarm. */
-export function startMemoryDream(userId: string, slug: string, opts: { automatic?: boolean; modelId?: string } = {}): MemoryDreamStatus {
+const DREAM_END = { completed: 'dreamCompleted', skipped: 'dreamSkipped', failed: 'dreamFailed', cancelled: 'dreamCancelled' } as const;
+
+/** Starts immediately, returns status. At most two provider jobs; no queued/retrying background swarm.
+ *  trigger 'archive' = 归档会话时顺手跑的(只给遥测分来源,行为同手动)。 */
+export function startMemoryDream(userId: string, slug: string, opts: { automatic?: boolean; modelId?: string; trigger?: 'archive' } = {}): MemoryDreamStatus {
   if (jobs.has(slug)) return jobs.get(slug)!.status;
   const data = readFile(slug);
   if (opts.automatic && (!data.config.enabled || (Date.now() - Date.parse(data.last?.startedAt || '') < data.config.intervalHours * 3_600_000))) return getMemoryDream(slug).status;
@@ -174,6 +178,8 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
   const status: MemoryDreamStatus = { state: 'running', running: true, startedAt: new Date().toISOString(), calls: 0 };
   writePrivateText(slug, FILE, JSON.stringify({ ...data, last: status }, null, 2));
   jobs.set(slug, { controller, status });
+  const dim = agentRoleOf(slug);
+  ledger.inc('daily_memory', opts.automatic ? 'dreamAuto' : opts.trigger === 'archive' ? 'dreamArchive' : 'dreamManual', { dim });
   const timer = setTimeout(() => { controller.abort(new Error('Memory maintenance deadline exceeded')); status.state = 'cancelling'; status.detail = 'Time budget exhausted; waiting for provider cancellation.'; }, data.config.timeoutMs);
   timer.unref?.();
   void runWithUserAgentScope(userId, slug, async () => {
@@ -278,10 +284,12 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
       const compact = { keep: proposal.keep, groups: proposal.groups.filter((g) => !(g.sourceIds.length === 1 && kept.has(g.sourceIds[0]))), discarded: proposal.discarded };
       const verify = (): Promise<any> => complete(portrait ? VERIFY + VERIFY_PERSON : VERIFY, JSON.stringify({ sources, proposal: compact }), Math.floor(data.config.maxOutputTokens * 0.25));
       let verification = await verify();
+      if (verification?.ok !== true) ledger.inc('daily_memory', 'dreamVerifyFail', { dim });
       // 提议要去画像、核验不同意:这几组退回记忆再核一次。整轮作废的话候选留在收件箱,下一轮还是同样的分歧,这个 Agent 的记忆就一直整理不了。
       if (verification?.ok !== true && proposal.groups.some((group) => group.to)) {
         for (const group of proposal.groups) delete group.to;
         check();
+        ledger.inc('daily_memory', 'dreamRetried', { dim });
         verification = await verify();
       }
       if (verification?.ok !== true) throw new Error(`Memory verification rejected: ${String(verification?.reason || 'unsupported change').slice(0, 200)}`);
@@ -308,6 +316,8 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
       committedVersion = committed.version;
       status.state = 'completed'; status.version = committed.version;
       consumeCandidates(slug, new Set(raw.map((c) => c.id)));
+      for (const [field, n] of [['dreamSources', sources.length], ['dreamGroups', proposal.groups.length], ['dreamMerges', proposal.groups.filter((g) => g.sourceIds.length > 1).length],
+        ['dreamDiscarded', proposal.discarded.length], ['dreamToPortrait', inPortrait.size], ['dreamPending', pending], ['dreamDeferred', deferred]] as const) if (n > 0) ledger.inc('daily_memory', field, { dim, n });
       status.detail = `Consolidated ${sources.length} sources; retained ${memoryGroups.length} facts${inPortrait.size ? `; ${inPortrait.size} went to the portrait` : ''}.${pending ? ` ${pending} candidates remain pending source review or blocked by explicit forgetting${deferred ? `; ${deferred} deferred by the input budget` : ''}.` : ''}`;
     } catch (e: any) {
       if (committedVersion) {
@@ -318,6 +328,11 @@ export function startMemoryDream(userId: string, slug: string, opts: { automatic
       }
     } finally {
       clearTimeout(timer); status.running = false; status.finishedAt = new Date().toISOString();
+      const end = DREAM_END[status.state as keyof typeof DREAM_END];
+      if (end) ledger.inc('daily_memory', end, { dim });
+      if (status.calls) ledger.inc('daily_memory', 'dreamCalls', { dim, n: status.calls });
+      const ms = Date.parse(status.finishedAt) - Date.parse(status.startedAt!);
+      if (ms > 0) ledger.inc('daily_memory', 'dreamMs', { dim, n: ms });
       try { withPrivateMemoryLock(slug, () => { const latest = readFile(slug); writePrivateText(slug, FILE, JSON.stringify({ ...latest, last: status }, null, 2)); }); } catch { /* Next read surfaces filesystem errors. */ }
       jobs.delete(slug);
     }

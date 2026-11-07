@@ -137,7 +137,7 @@ router.post('/agent/solo/:kind/:id/rotate', authMiddleware, async (req: AuthRequ
     if (cur && r.kind === 'agent' && r.memSlug) {
       const started = forceHistorianForSession(cur.id, userId, r.memSlug);
       memory = started ? 'queued' : 'skipped';
-      if (started) void started.then((ran) => { if (ran) startMemoryDream(userId, r.memSlug!); }).catch(() => {});
+      if (started) void started.then((ran) => { if (ran) startMemoryDream(userId, r.memSlug!, { trigger: 'archive' }); }).catch(() => {});
     }
     if (cur) await query(`UPDATE chat_sessions SET archived = ? WHERE id = ?`, [true, cur.id]);
     res.json({ session: await createSolo(userId, appId, r), memory });
