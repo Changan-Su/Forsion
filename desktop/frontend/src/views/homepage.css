@@ -52,7 +52,7 @@
   background-position: center;
   background-size: cover;
   transform: scale(1.001);
-  transition: transform 520ms var(--ease-spring), filter 420ms var(--ease-out);
+  transition: transform 520ms var(--ease-surface), filter 420ms var(--ease-surface);
 }
 .hp-root:not([data-wallpaper='true']) .hp-wallpaper,
 .hp-theme-preview {
@@ -72,7 +72,7 @@
   z-index: -4;
   overflow: hidden;
   container-type: size;
-  transition: opacity var(--duration-slow) var(--ease-out), transform 520ms var(--ease-spring), filter 420ms var(--ease-out);
+  transition: opacity var(--duration-slow) var(--ease-surface), transform 520ms var(--ease-surface), filter 420ms var(--ease-surface);
 }
 .hp-root[data-wallpaper='true'] .hp-wallpaper-art { opacity: 0; }
 
@@ -148,7 +148,7 @@ html.dark .hp-root { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mid:
   -webkit-mask-image: radial-gradient(ellipse 74% 76% at center, transparent 39%, rgba(0, 0, 0, 0.58) 74%, #000 100%);
   backdrop-filter: blur(14px) saturate(118%);
   -webkit-backdrop-filter: blur(14px) saturate(118%);
-  transition: opacity var(--duration-slow) var(--ease-out);
+  transition: opacity var(--duration-slow) var(--ease-surface);
 }
 .hp-root[data-wallpaper='true'] .hp-wallpaper-edge {
   opacity: 1;
@@ -167,7 +167,7 @@ html.dark .hp-root { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mid:
     linear-gradient(to bottom, color-mix(in srgb, var(--bg) 24%, transparent), transparent 34%),
     linear-gradient(to right, color-mix(in srgb, var(--bg) 24%, transparent), transparent 15%, transparent 85%, color-mix(in srgb, var(--bg) 24%, transparent)),
     radial-gradient(ellipse at center, transparent 36%, color-mix(in srgb, var(--bg) 64%, transparent) 100%);
-  transition: opacity var(--duration-slow) var(--ease-out);
+  transition: opacity var(--duration-slow) var(--ease-surface);
 }
 .hp-root[data-wallpaper='true'] .hp-wallpaper-tone { opacity: 1; }
 .hp-root[data-wallpaper='true'][data-vignette='false'] .hp-wallpaper-tone { opacity: 0.36; }
@@ -211,7 +211,7 @@ html.dark .hp-root { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mid:
   color: var(--text-muted);
   box-shadow: var(--icon-shadow);
   cursor: pointer;
-  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-spring);
+  transition: color var(--duration-fast) var(--ease-surface), background var(--duration-fast) var(--ease-surface), transform var(--duration-fast) var(--ease-surface);
 }
 .hp-wallpaper-button:hover,
 .hp-wallpaper-button.on { color: var(--text); background: var(--bg-hover); transform: scale(1.05); }
@@ -244,13 +244,13 @@ html.dark .hp-root { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mid:
   flex-direction: column;
   align-items: center;
   gap: 22px;
-  transition: opacity var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-out);
+  transition: opacity var(--duration-fast) var(--ease-surface), transform var(--duration-fast) var(--ease-surface);
 }
 
 .hp-title,
 .hp-composer,
 .hp-status-cards,
-.hp-spaces { transition: opacity 320ms var(--ease-out), transform 360ms var(--ease-spring); }
+.hp-spaces { transition: opacity 320ms var(--ease-surface), transform 360ms var(--ease-surface); }
 .hp-composer-focused .hp-title { opacity: 0.58; transform: translateY(-5px) scale(0.985); }
 .hp-composer-focused .hp-composer { transform: translateY(-2px) scale(1.012); }
 .hp-composer-focused .hp-status-cards,
@@ -269,7 +269,7 @@ html.dark .hp-root { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mid:
 .hp-title,
 .hp-composer,
 .hp-status-cards,
-.hp-spaces { animation: hp-rise var(--duration-slow) var(--ease-out) backwards; }
+.hp-spaces { animation: hp-rise var(--duration-slow) var(--ease-surface) backwards; }
 .hp-composer { animation-delay: 60ms; }
 .hp-status-cards { animation-delay: 90ms; }
 .hp-spaces { animation-delay: 120ms; }
@@ -320,11 +320,11 @@ html.dark .hp-root { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mid:
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: transform var(--duration-fast) var(--ease-spring), background var(--duration-fast) var(--ease-out);
+  transition: transform var(--duration-fast) var(--ease-surface), background var(--duration-fast) var(--ease-surface);
 }
 .hp-status-card:hover { transform: translateY(-2px); background: var(--hp-glass-sheen), color-mix(in srgb, var(--bg-card) 78%, transparent); }
 .hp-status-card:active { transform: scale(0.98); }
-.hp-status-card-icon { display: inline-flex; color: var(--text-muted); transition: color var(--duration-fast) var(--ease-out); }
+.hp-status-card-icon { display: inline-flex; color: var(--text-muted); transition: color var(--duration-fast) var(--ease-surface); }
 .hp-status-card:hover .hp-status-card-icon { color: var(--text); }
 .hp-status-card-icon > svg { width: 17px; height: 17px; }
 .hp-status-card-name,
@@ -450,7 +450,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   overflow-x: auto;
   overscroll-behavior-x: contain;
   border-radius: var(--radius-md);
-  transition: background var(--duration-fast) var(--ease-out), border-color var(--duration-fast) var(--ease-out), box-shadow var(--duration-fast) var(--ease-out);
+  transition: background var(--duration-fast) var(--ease-surface), border-color var(--duration-fast) var(--ease-surface), box-shadow var(--duration-fast) var(--ease-surface);
 }
 .hp-pinned-zone[data-over='true'] {
   background: color-mix(in srgb, var(--accent-light) 68%, transparent);
@@ -510,11 +510,11 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   touch-action: none;
   user-select: none;
   transition:
-    transform var(--duration-fast) var(--ease-spring),
-    color var(--duration-fast) var(--ease-out),
-    background var(--duration-fast) var(--ease-out),
-    border-color var(--duration-fast) var(--ease-out),
-    opacity var(--duration-fast) var(--ease-out);
+    transform var(--duration-fast) var(--ease-surface),
+    color var(--duration-fast) var(--ease-surface),
+    background var(--duration-fast) var(--ease-surface),
+    border-color var(--duration-fast) var(--ease-surface),
+    opacity var(--duration-fast) var(--ease-surface);
 }
 .hp-tile:hover { color: var(--text); background: var(--bg-hover); transform: translateY(-2px); }
 .hp-tile:active { cursor: grabbing; transform: scale(0.97); }
@@ -528,7 +528,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   border-radius: var(--radius-md);
   background: var(--overlay-light, color-mix(in srgb, var(--text) 7%, transparent));
   color: var(--text-light);
-  transition: transform var(--duration-fast) var(--ease-spring), background var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  transition: transform var(--duration-fast) var(--ease-surface), background var(--duration-fast) var(--ease-surface), color var(--duration-fast) var(--ease-surface);
 }
 .hp-tile:hover .hp-tile-icon { background: var(--overlay-medium, var(--bg-hover)); color: var(--text); }
 .hp-tile-name {
@@ -615,7 +615,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   z-index: -1;
   pointer-events: none;
   background: color-mix(in srgb, var(--overlay-scrim) 72%, transparent);
-  animation: hp-stage-in var(--duration-fast) var(--ease-out) both;
+  animation: hp-stage-in var(--duration-fast) var(--ease-surface) both;
 }
 .hp-folder-stage::before,
 .hp-organizer-stage::before { background: color-mix(in srgb, var(--overlay-scrim) 36%, transparent); }
@@ -654,7 +654,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   border: 0;
   background: transparent;
   transform-origin: center;
-  animation: hp-folder-open 360ms var(--ease-spring) backwards;
+  animation: hp-folder-open 360ms var(--ease-surface) backwards;
 }
 .hp-root .hp-wallpaper-sheet {
   border-color: color-mix(in srgb, var(--border) 76%, transparent);
@@ -736,7 +736,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   font-size: var(--ui-font-caption, 11px);
   cursor: grab;
   touch-action: none;
-  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-spring), opacity var(--duration-fast) var(--ease-out);
+  transition: color var(--duration-fast) var(--ease-surface), background var(--duration-fast) var(--ease-surface), transform var(--duration-fast) var(--ease-surface), opacity var(--duration-fast) var(--ease-surface);
 }
 .hp-folder-app:hover { color: var(--text); background: var(--bg-hover); transform: translateY(-3px); }
 .hp-folder-app:active { cursor: grabbing; }
@@ -764,7 +764,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   flex-direction: column;
   align-items: stretch;
   padding: 8px 10px 7px;
-  animation: hp-rise 360ms var(--ease-spring) backwards;
+  animation: hp-rise 360ms var(--ease-surface) backwards;
 }
 .hp-organizer-head {
   min-height: 42px;
@@ -856,7 +856,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   color: var(--text-muted);
   font: inherit;
   cursor: pointer;
-  transition: color var(--duration-fast) var(--ease-out), background var(--duration-fast) var(--ease-out), transform var(--duration-fast) var(--ease-spring);
+  transition: color var(--duration-fast) var(--ease-surface), background var(--duration-fast) var(--ease-surface), transform var(--duration-fast) var(--ease-surface);
 }
 .hp-organizer-new > span { display: grid; place-items: center; border-radius: var(--radius-md); box-shadow: none; }
 .hp-organizer-new small { max-width: 100%; overflow: hidden; font-size: var(--ui-font-caption, 11px); text-overflow: ellipsis; white-space: nowrap; }
@@ -877,7 +877,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   border-radius: calc(var(--radius-lg) + 4px);
   background: var(--bg-card);
   box-shadow: var(--card-shadow);
-  animation: hp-rise var(--duration-slow) var(--ease-out) both;
+  animation: hp-rise var(--duration-slow) var(--ease-surface) both;
 }
 .hp-wallpaper-head > div { min-width: 0; display: flex; flex-direction: column; }
 .hp-wallpaper-head strong { color: var(--text); font-size: var(--ui-font-heading, 14px); }
@@ -942,7 +942,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   font: inherit;
   font-size: var(--ui-font-caption, 11px);
   cursor: pointer;
-  transition: transform var(--duration-fast) var(--ease-spring), border-color var(--duration-fast) var(--ease-out), color var(--duration-fast) var(--ease-out);
+  transition: transform var(--duration-fast) var(--ease-surface), border-color var(--duration-fast) var(--ease-surface), color var(--duration-fast) var(--ease-surface);
 }
 .hp-theme-presets button:hover { color: var(--text); transform: translateY(-2px); }
 .hp-theme-presets button.on { border-color: color-mix(in srgb, var(--accent-ink) 72%, var(--border)); color: var(--text); }
@@ -1014,7 +1014,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   height: 12px;
   border-radius: 50%;
   background: var(--bg-card);
-  transition: transform var(--duration-fast) var(--ease-spring);
+  transition: transform var(--duration-fast) var(--ease-surface);
 }
 .hp-wallpaper-switch.on > span { background: var(--signal-mark); }
 .hp-wallpaper-switch.on > span::after { transform: translateX(11px); }
@@ -1032,7 +1032,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   border-radius: var(--radius-sm);
   background: var(--overlay-light);
   cursor: pointer;
-  transition: transform var(--duration-fast) var(--ease-spring), border-color var(--duration-fast) var(--ease-out);
+  transition: transform var(--duration-fast) var(--ease-surface), border-color var(--duration-fast) var(--ease-surface);
 }
 .hp-wallpaper-grid button:hover { transform: translateY(-2px); }
 .hp-wallpaper-grid button.on { border-color: var(--accent-ink); }
@@ -1106,7 +1106,7 @@ html[data-glass='off'] .hp-root .hp-composer .project-pill::before {
   height: 12px;
   border-radius: 50%;
   background: var(--bg-card);
-  transition: transform var(--duration-fast) var(--ease-spring);
+  transition: transform var(--duration-fast) var(--ease-surface);
 }
 .hp-wallpaper-options button.on i { background: var(--action-fill); }
 .hp-wallpaper-options > button:disabled { opacity: 0.5; cursor: default; }

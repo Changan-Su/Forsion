@@ -11,18 +11,21 @@ import { FileText, Folder, MessageSquare } from 'lucide-react'
 import { AppRefIcon } from '../../components/appRefs'
 import type { RefChip } from './Composer2'
 import { RUN_LEAD, RUN_TAIL, type InlineRun } from './inlineRefs'
+import type { TokenMark } from './composerTokens'
 
 const COPY = ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'wordSpacing', 'textIndent', 'textAlign', 'tabSize',
   'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'direction', 'fontFeatureSettings', 'fontVariantNumeric', 'wordBreak'] as const
 
-export function InlineRefMirror({ text, runs, chipOf }: {
+export function InlineRefMirror({ text, runs, marks = [], chipOf }: {
   text: string
   runs: InlineRun[]
+  /** 认得出的斜杠命令 / @ 提及(./composerTokens):只画底色和字色,没有图标 */
+  marks?: TokenMark[]
   chipOf: (name: string) => RefChip | undefined
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
-  const on = runs.length > 0
+  const on = runs.length > 0 || marks.length > 0
   useLayoutEffect(() => {
     const box = boxRef.current
     const inner = innerRef.current
@@ -50,8 +53,10 @@ export function InlineRefMirror({ text, runs, chipOf }: {
 
   const parts: React.ReactNode[] = []
   let last = 0
-  runs.forEach((r, i) => {
+  const segs: Array<InlineRun | (TokenMark & { name?: undefined })> = [...runs, ...marks].sort((a, b) => a.start - b.start)
+  segs.forEach((r, i) => {
     if (r.start > last) parts.push(text.slice(last, r.start))
+    if (r.name === undefined) { parts.push(<span className="t2c-tok" key={i}>{text.slice(r.start, r.end)}</span>); last = r.end; return }
     const chip = chipOf(r.name)
     parts.push(
       <span className="t2c-inref" key={i}>
