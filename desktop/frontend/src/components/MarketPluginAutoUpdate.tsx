@@ -33,6 +33,7 @@ registerMessages({
   'market.rollbackHintStore': { zh: '更早的版本可在「版本」页从商店重装。', en: 'Install earlier versions from the store on the Versions tab.' },
   'market.rollbackFailed': { zh: '没能回退：{error}', en: 'Could not roll back: {error}' },
   'market.rolledBack': { zh: '{name} 已换成 {version}', en: '{name} is now on {version}' },
+  'market.rollbackRestart': { zh: '重启 Forsion 后生效', en: 'Takes effect after restarting Forsion' },
   'market.rollbackDeferred': { zh: '{name} 的文件正在使用，重启后换成 {version}', en: '{name} is in use. It switches to {version} after a restart' },
 })
 
@@ -148,7 +149,8 @@ export function AutoUpdateAllRow({ state, onError, children }: { state: MarketPl
 export function LocalPluginVersions({ type, pluginId, name, say, onRolledBack }: {
   type: 'plugin' | 'amadeus-plugin'; pluginId: string; name: string
   say: (text: string, error?: boolean) => void
-  onRolledBack: (res: { type: string; id?: string }) => Promise<void> | void
+  /** Reload after the swap; `restart` = the running copy cannot be replaced without a restart (or reloading failed). */
+  onRolledBack: (res: { type: string; id?: string }) => Promise<{ restart?: boolean } | void>
 }) {
   const { t } = useI18n()
   const state = useMarketPluginUpdates()
@@ -157,8 +159,8 @@ export function LocalPluginVersions({ type, pluginId, name, say, onRolledBack }:
   const roll = async (version: string) => {
     try {
       const res = await window.tangu!.marketRollback!(local.type, local.slug, version)
-      await onRolledBack(res)
-      say(t('market.rolledBack', { name, version: v(version) }))
+      const after = await Promise.resolve(onRolledBack(res)).catch(() => ({ restart: true }))
+      say(`${t('market.rolledBack', { name, version: v(version) })}${after?.restart ? ` · ${t('market.rollbackRestart')}` : ''}`)
     } catch (e) { say(t('market.rollbackFailed', { error: ipcErrorText(e) }), true) }
   }
   return <PluginVersionBlock installedVersion={local.version} kept={local.keptVersions} autoUpdateAll={state.autoUpdateAll} onError={(text) => say(text, true)} onRollback={roll} />

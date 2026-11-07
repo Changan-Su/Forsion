@@ -433,7 +433,7 @@ const api = {
   marketSetAutoUpdate: (id: string, on: boolean) => ipcRenderer.invoke('market:setAutoUpdate', id, on),
   marketCheckUpdates: (): Promise<void> => ipcRenderer.invoke('market:checkUpdates'),
   marketSetAutoUpdateAll: (on: boolean): Promise<import('../shared/marketPluginUpdates').MarketPluginUpdates> => ipcRenderer.invoke('market:setAutoUpdateAll', on),
-  marketRollback: (type: string, slug: string, version: string): Promise<import('../shared/marketPluginUpdates').PluginRollbackResult & { path: string; id?: string }> => ipcRenderer.invoke('market:rollback', type, slug, version),
+  marketRollback: (type: string, slug: string, version: string, market?: { id: string; name?: string }): Promise<import('../shared/marketPluginUpdates').PluginRollbackResult & { path: string; id?: string }> => ipcRenderer.invoke('market:rollback', type, slug, version, market),
   onMarketUpdateStatus: (cb: (state: import('../shared/marketPluginUpdates').MarketPluginUpdates) => void): (() => void) => {
     let off = false, received = false
     const listener = (_e: unknown, state: import('../shared/marketPluginUpdates').MarketPluginUpdates): void => { received = true; cb(state) }

@@ -192,7 +192,7 @@ export const PluginsTab: React.FC<{
           </div>
           {p.source === 'folder' && userIds.has(p.id) && (
             <LocalPluginVersions type="plugin" pluginId={p.id} name={nm(p)} say={panelToast}
-              onRolledBack={async () => { await rescanPlugins(homeTarget()).catch(() => null); onReload() }} />
+              onRolledBack={async () => { const r = await rescanPlugins(homeTarget()).catch(() => null); onReload(); return { restart: !r || !!r.needsRestart } }} />
           )}
         </div>
       ))}

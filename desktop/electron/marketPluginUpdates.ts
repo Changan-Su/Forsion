@@ -36,6 +36,9 @@ export const isKeepableVersion = (v: unknown): v is string => typeof v === 'stri
 
 /** Persisted entry. `autoUpdate` is the explicit per-plugin choice (absent = follow the global switch). */
 type Entry = Omit<MarketPluginUpdate, 'autoUpdate' | 'autoUpdateChoice' | 'keptVersions'> & { autoUpdate?: boolean }
+/** Preferences of an uninstalled plugin, so restoring it from the trash does not reset the user's choice. */
+type Removed = { id: string; type: MarketPluginType; slug: string; autoUpdate?: boolean; pinnedVersion?: string; at: number }
+const REMOVED_TTL = 31 * 24 * 3600_000
 type Manifest = { id: string; version: string; apiVersion?: unknown; minAppVersion?: unknown } & MarketplaceRequirements
 
 export function createMarketPluginUpdater(o: {
@@ -53,7 +56,7 @@ export function createMarketPluginUpdater(o: {
   const versionsRoot = join(o.home, '.plugin-versions')
   const platform = o.platform ?? (process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux')
   const disk = createSerialQueue(), exclusive = createSerialQueue()
-  let items: Entry[] = [], autoUpdateAll = true, checking = false, running: Promise<void> | undefined
+  let items: Entry[] = [], removed: Removed[] = [], autoUpdateAll = true, checking = false, running: Promise<void> | undefined
   // A state file that exists but cannot be read is "unknown", not "empty": never rewrite it from defaults.
   let stateReadable = true
   let recheck = false
@@ -104,7 +107,8 @@ export function createMarketPluginUpdater(o: {
   }
   const write = (next: Entry[]) => {
     if (!stateReadable) throw new Error('install: update state unreadable')
-    return writePrivateJson(stateFile, { autoUpdateAll, items: next })
+    removed = removed.filter((r) => Date.now() - r.at < REMOVED_TTL)
+    return writePrivateJson(stateFile, { autoUpdateAll, items: next, ...(removed.length ? { removed } : {}) })
   }
   const patch = (id: string, value: Partial<Entry>) => disk(async () => {
     const next = items.map((x) => x.id === id ? { ...x, ...value } : x)
@@ -228,6 +232,8 @@ export function createMarketPluginUpdater(o: {
       const data = JSON.parse(await readFile(stateFile, 'utf8'))
       if (!Array.isArray(data.items)) throw new Error('Invalid market update state')
       autoUpdateAll = data.autoUpdateAll !== false
+      removed = (Array.isArray(data.removed) ? data.removed : []).filter((r: Removed) => r && typeof r.id === 'string' && pluginType(r.type) && isSafeSlug(r.slug) && typeof r.at === 'number')
+        .map((r: Removed): Removed => ({ id: r.id, type: r.type, slug: r.slug, at: r.at, ...(typeof r.autoUpdate === 'boolean' ? { autoUpdate: r.autoUpdate } : {}), ...(isKeepableVersion(r.pinnedVersion) ? { pinnedVersion: r.pinnedVersion } : {}) }))
       items = data.items.filter((x: Entry) => x && typeof x.id === 'string' && typeof x.name === 'string' && pluginType(x.type) && isSafeSlug(x.slug))
         .map((x: Entry): Entry => ({
           ...x,
@@ -336,6 +342,13 @@ export function createMarketPluginUpdater(o: {
     return snapshot()
   }
 
+  /** The remembered preferences of a plugin that was uninstalled and is now back (restored or reinstalled). */
+  const takeRemoved = (id: string, type: MarketPluginType, slug: string): Removed | undefined => {
+    const r = removed.find((x) => x.id === id || (x.type === type && x.slug === slug))
+    if (r) removed = removed.filter((x) => x !== r)
+    return r
+  }
+
   /** Register store installs that predate this state (default on means every store plugin is a candidate). */
   async function discover(): Promise<void> {
     if (!o.catalog) return
@@ -351,7 +364,12 @@ export function createMarketPluginUpdater(o: {
     }
     if (!found.length) return
     await disk(async () => {
-      const next = [...items, ...found.filter((f) => !items.some((x) => x.id === f.id || (x.type === f.type && x.slug === f.slug)))]
+      const add = found.filter((f) => !items.some((x) => x.id === f.id || (x.type === f.type && x.slug === f.slug))).map((f) => {
+        // Back from the trash: keep the user's choice, and the pin when it is still the installed version.
+        const r = takeRemoved(f.id, f.type, f.slug)
+        return { ...f, ...(r?.autoUpdate !== undefined ? { autoUpdate: r.autoUpdate } : {}), ...(r?.pinnedVersion && compareMarketVersions(r.pinnedVersion, f.installedVersion) === 0 ? { pinnedVersion: r.pinnedVersion } : {}) }
+      })
+      const next = [...items, ...add]
       await write(next); items = next
     })
     await refresh().catch(() => {})
@@ -431,7 +449,9 @@ export function createMarketPluginUpdater(o: {
       let next = items.map((x) => others.includes(x) ? reset(x) : x)
       if (m && !others.length) {
         const before = next.find((x) => x.id === r.id)
+        const back = before ? undefined : takeRemoved(r.id, type, r.slug)
         const entry: Entry = {
+          ...(back?.autoUpdate !== undefined ? { autoUpdate: back.autoUpdate } : {}),
           ...before, id: r.id, name: r.name || before?.name || r.slug, type, slug: r.slug, installedVersion: m.version, phase: 'current',
           pendingVersion: undefined, pendingRollback: undefined, error: undefined,
           // Still pinned after a manual install: the pin follows what is installed until auto-update is resumed.
@@ -447,9 +467,19 @@ export function createMarketPluginUpdater(o: {
   }
 
   /** Swap the installed package with a kept version. Market plugins become pinned at that version. */
-  async function rollback(type: string, slug: string, version: string): Promise<PluginRollbackResult> {
+  async function rollback(type: string, slug: string, version: string, market?: { id: string; name?: string }): Promise<PluginRollbackResult> {
     if (!pluginType(type) || !isSafeSlug(slug) || !isKeepableVersion(version)) throw new Error('rollback: invalid target')
     const target = dest({ type, slug }), store = storeDir(type, slug), stored = join(store, version)
+    // A store plugin the catalog has not matched yet (offline, ambiguous name): register the identity the store page
+    // knows, so the pin is persisted and a later discovery does not update it back.
+    if (market && typeof market.id === 'string' && market.id && !items.some((it) => it.type === type && it.slug === slug) && stateReadable) {
+      const m = await manifest(type, target)
+      await disk(async () => {
+        if (items.some((it) => it.id === market.id || (it.type === type && it.slug === slug))) return
+        const next = [...items, { id: market.id, name: market.name || slug, type, slug, phase: 'idle' as const, installedVersion: m.version }]
+        await write(next); items = next
+      })
+    }
     const x = items.find((it) => it.type === type && it.slug === slug)
     const old = await manifest(type, target)
     if (compareMarketVersions(old.version, version) === 0) throw new Error('rollback: already installed')
@@ -520,6 +550,9 @@ export function createMarketPluginUpdater(o: {
     for (const x of hits) await rm(pending(x), { recursive: true, force: true })
     if (remove && pluginType(type) && isSafeSlug(slug)) await rm(storeDir(type, slug), { recursive: true, force: true })
     if (hits.length && stateReadable) await disk(async () => {
+      if (remove) for (const h of hits) if (h.autoUpdate !== undefined || h.pinnedVersion) {
+        removed = [...removed.filter((r) => r.id !== h.id), { id: h.id, type: h.type, slug: h.slug, at: Date.now(), ...(h.autoUpdate !== undefined ? { autoUpdate: h.autoUpdate } : {}), ...(h.pinnedVersion ? { pinnedVersion: h.pinnedVersion } : {}) }]
+      }
       const next = remove ? items.filter((x) => !hits.some((h) => h.id === x.id)) : items.map((x) => hits.some((h) => h.id === x.id) ? { ...x, pendingVersion: undefined, pendingRollback: undefined, phase: 'idle' as const, error: undefined } : x)
       await write(next); items = next
     })

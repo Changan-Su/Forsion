@@ -4264,8 +4264,9 @@ app.whenReady().then(async () => {
     }
     if (effType === 'plugin' || effType === 'amadeus-plugin') {
       // 从版本页装了比最新版旧的 = 固定在这一版(自动更新对它关掉,「恢复自动更新」解除)。查不到最新版时按用户点名的版本算固定。
+      // 解析失败(网络 / JSON)也不能跳过登记:文件已经覆盖了,登记才会清掉旧的待换版本、按需固定。
       const latest = await fetch(`${await marketBase()}/api/market/items/${encodeURIComponent(id)}`, { headers: { 'User-Agent': MARKET_UA }, signal: AbortSignal.timeout(15_000) })
-        .then((r) => r.ok ? r.json() as Promise<MarketUpdateItem> : null, () => null)
+        .then(async (r) => r.ok ? await r.json() as MarketUpdateItem : null).catch(() => null)
       const pinned = !!version && (compareMarketVersions(version, latest?.latestVersion) ?? -1) < 0
       await marketPluginUpdater.recordInstall({ id, name: latest?.name, type: effType, slug: info.installSlug, pinned })
     } else await marketPluginUpdater.forget(effType, info.installSlug, false)
@@ -4290,9 +4291,11 @@ app.whenReady().then(async () => {
   })
   // 回退到本机留着的旧版本(.plugin-versions):换目录,不联网。商店插件随之固定在这一版。
   // 返回值与 market:install 同形(type / slug / Forsion 插件的装载 id),渲染层走同一条装后重载。
-  ipcMain.handle('market:rollback', async (e, type: string, slug: string, version: string) => marketPluginUpdater.exclusive(async () => {
+  ipcMain.handle('market:rollback', async (e, type: string, slug: string, version: string, market?: { id?: unknown; name?: unknown }) => marketPluginUpdater.exclusive(async () => {
     if (!isTrustedSender(e)) throw new Error('Untrusted sender')
-    const r = await marketPluginUpdater.rollback(type, slug, version)
+    // 商店页知道这一项的商店 ID:还没被目录认领的也先登记上,回退后的固定才落得了盘。
+    const identity = market && typeof market.id === 'string' && /^[a-zA-Z0-9_-]{1,128}$/.test(market.id) ? { id: market.id, name: typeof market.name === 'string' ? market.name.slice(0, 200) : undefined } : undefined
+    const r = await marketPluginUpdater.rollback(type, slug, version, identity)
     const dest = marketItemDir(tanguHomeDir(), r.type, r.slug)!
     const pluginId = r.type === 'amadeus-plugin'
       ? effectivePluginId(r.slug, await readFile(join(dest, 'manifest.json'), 'utf8').then((s) => JSON.parse(s)?.id, () => undefined))

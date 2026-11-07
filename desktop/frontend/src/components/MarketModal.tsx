@@ -339,7 +339,7 @@ export function MarketModal({ onClose, initialQuery, initialItemId, initialDetai
     if (!info || !window.tangu?.marketRollback) return
     setNotice(null)
     try {
-      const res = await window.tangu.marketRollback(info.realType, c.installSlug, version)
+      const res = await window.tangu.marketRollback(info.realType, c.installSlug, version, { id: c.id, name: c.name })
       if (res.deferred) { toast(t('market.rollbackDeferred', { name: c.name, version: `v${version}` })); return }
       const { restart } = await afterMarketInstall(res.type, res, true, toast)
       if (restart) offerRestart(t('market.pluginInstalledRestartHint'))

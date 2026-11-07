@@ -738,7 +738,7 @@ const PluginDetail: React.FC<{
       </div>
       {!p.dev && !p.builtin && !p.preinstalled && !p.locked && !p.agent && (
         <LocalPluginVersions type="amadeus-plugin" pluginId={p.id} name={pluginDisplayName(p, locale)} say={panelToast}
-          onRolledBack={async (res) => { await afterMarketInstall('amadeus-plugin', res, true, panelToast) }} />
+          onRolledBack={async (res) => ({ restart: (await afterMarketInstall('amadeus-plugin', res, true, panelToast)).restart })} />
       )}
       {p.locked && !!window.tangu?.setBundleEnabled && (
         <div className="hint">
