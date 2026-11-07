@@ -186,6 +186,20 @@ it('signed out: the model row shows the default model the engine will use, witho
   expect(api.saveSpecialConfig).not.toHaveBeenCalled()
 })
 
+it('the Background tasks model set in Settings comes first, signed in or not, and is described by who pays', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true } as any)
+  vi.mocked(window.tangu!.getConfig!).mockResolvedValue({ backendUrl: '', token: '', modelId: '', backgroundModelId: 'd1' } as any)
+  vi.mocked(api.listModels).mockResolvedValue({ models: [{ id: 'c1', name: 'Cloud', modelType: 'llm', source: 'forsion' }, { id: 'd1', name: 'Direct', modelType: 'llm', source: 'direct' }], backgroundModelId: 'c1', directProviders: [] } as any)
+  await toTeam()
+  const row = host.querySelector('[data-ob-muse-model]')!
+  expect(row.querySelector('select')!.options[0].textContent).toBe(translate('ob3.muse.modelLocalOption', { model: 'Direct' }))
+  // 登录了也不说「跟随云端 / 独立额度」:引擎先用本机这一格
+  expect(row.textContent).toContain(translate('ob3.muse.modelLocal'))
+  expect(row.textContent).not.toContain(translate('ob3.muse.modelCloud'))
+  await next()
+  expect(api.saveSpecialConfig).not.toHaveBeenCalled()
+})
+
 it('signed out: a default model that is not usable here still asks for a pick', async () => {
   vi.mocked(api.listModels).mockResolvedValue({ models: [{ id: 'm1', name: 'Model one', modelType: 'llm' }], defaultModelId: 'cloud-only', backgroundModelId: 'cloud-bg', directProviders: [] } as any)
   await toTeam()
@@ -393,6 +407,34 @@ it('start: the key form picks a provider first and asks only for its key; a take
   await act(async () => save().click())
   await flush()
   expect(saveProvider).toHaveBeenCalledExactlyOnceWith({ providerId: 'openai-2', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-test', modelIds: undefined })
+})
+
+it('start: the key form will not save by preset until it has read the existing connections (still loading, or the read failed)', async () => {
+  const saveProvider = vi.fn().mockResolvedValue({})
+  Object.assign(window.tangu!, { saveProvider, listProviders: vi.fn().mockReturnValue(new Promise(() => {})) })
+  await render()
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-channel="key"]')!.click())
+  await flush()
+  let form = host.querySelector('[data-ob-keyform]')!
+  await type(form.querySelector('input')!, 'sk-test')
+  const save = () => [...host.querySelector('[data-ob-keyform]')!.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === translate('onboarding.connect.saveAndStart'))!
+  expect(save().disabled).toBe(true)
+  // 读失败 ≠ 没有:照样不许按预设存,说一句;「自己填…」(连接名自己写)还能存
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  vi.mocked(window.tangu!.listProviders!).mockRejectedValue(new Error('read failed'))
+  await render()
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-channel="key"]')!.click())
+  await flush()
+  form = host.querySelector('[data-ob-keyform]')!
+  await type(form.querySelector('input')!, 'sk-test')
+  expect(save().disabled).toBe(true)
+  expect(form.textContent).toContain(translate('ob3.key.listFailed'))
+  await clickText(translate('ob3.key.custom'))
+  const inputs = host.querySelectorAll<HTMLInputElement>('[data-ob-keyform] input')
+  await type(inputs[0], 'my-openai'); await type(inputs[2], 'https://api.example.com/v1')
+  expect(save().disabled).toBe(false)
+  expect(saveProvider).not.toHaveBeenCalled()
 })
 
 it('start: "Custom…" in the key form opens every field', async () => {

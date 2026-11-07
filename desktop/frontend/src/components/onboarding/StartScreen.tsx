@@ -161,7 +161,10 @@ function KeyForm({ local, resolveTarget, onDone }: { local: boolean; resolveTarg
   const [preset, setPreset] = useState(local ? '' : 'openai')
   const chosen = PROVIDER_PRESETS.find((x) => x.id === preset)
   const custom = local || !chosen
-  const [existing, setExisting] = useState<DirectProviderConfig[]>([])
+  /** 已有的连接:null = 还没读到。读到之前不许按预设保存(同名会被主进程整条替换,原来那条的 key 和设置就没了);
+   *  读失败 ≠ 没有:照样不许按预设存,说明一句,「自己填…」(连接名自己写)仍能用。 */
+  const [existing, setExisting] = useState<DirectProviderConfig[] | null>(null)
+  const [listFailed, setListFailed] = useState(false)
   // null = 跟着预设走;在「高级」里改过才用手填的
   const [pidInput, setPidInput] = useState<string | null>(null)
   const [urlInput, setUrlInput] = useState<string | null>(null)
@@ -171,9 +174,14 @@ function KeyForm({ local, resolveTarget, onDone }: { local: boolean; resolveTarg
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
   useEffect(() => {
-    void window.tangu?.listProviders?.().then((items: unknown) => { if (Array.isArray(items)) setExisting(items as DirectProviderConfig[]) }).catch(() => {})
+    let live = true
+    const failed = (): void => { if (live) setListFailed(true) }
+    const list = window.tangu?.listProviders
+    if (!list) failed()
+    else void list().then((items: unknown) => { if (!live) return; if (Array.isArray(items)) setExisting(items as DirectProviderConfig[]); else failed() }).catch(failed)
+    return () => { live = false }
   }, [])
-  const pid = pidInput ?? (chosen ? presetProviderId(chosen.id, existing) : local ? 'ollama' : '')
+  const pid = pidInput ?? (chosen ? presetProviderId(chosen.id, existing ?? []) : local ? 'ollama' : '')
   const url = urlInput ?? (chosen?.baseUrl || (local ? 'http://localhost:11434/v1' : ''))
   const name = chosen ? chosen.name || t(`prov.preset.${chosen.id}`) : ''
   const choose = (id: string): void => { setPreset(id); setPidInput(null); setUrlInput(null); setMsg('') }
@@ -219,10 +227,11 @@ function KeyForm({ local, resolveTarget, onDone }: { local: boolean; resolveTarg
       {advanced && <>{pidField}{urlField}{listField}</>}
     </>}
     <div className="ob3-actions">
-      <button type="button" className="btn primary sm" disabled={busy || !pid || !url || (!custom && !key)} onClick={() => void save()}>{busy ? <Loader2 size={12} className="spin" aria-hidden="true" /> : <Check size={12} aria-hidden="true" />}{t('onboarding.connect.saveAndStart')}</button>
+      <button type="button" className="btn primary sm" disabled={busy || !pid || !url || (!custom && (!key || existing === null))} onClick={() => void save()}>{busy ? <Loader2 size={12} className="spin" aria-hidden="true" /> : <Check size={12} aria-hidden="true" />}{t('onboarding.connect.saveAndStart')}</button>
       <button type="button" className="btn quiet sm" disabled={!url} onClick={test}>{t('onboarding.connect.testConnection')}</button>
       <button type="button" className="ob3-link" style={{ marginLeft: 'auto' }} disabled={busy} onClick={() => onDone(false)}>{t('ob3.channels.back')}</button>
     </div>
+    {!custom && listFailed && <div className="ob3-feedback" role="status">{t('ob3.key.listFailed')}</div>}
     {msg && <div className="ob3-feedback" role="status">{msg}</div>}
   </div>
 }

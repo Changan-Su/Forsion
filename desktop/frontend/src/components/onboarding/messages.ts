@@ -48,6 +48,7 @@ registerMessages({
   'ob3.key.keyFor': { zh: '{name} 的 API Key', en: '{name} API key' },
   'ob3.key.getKey': { zh: '去 {name} 拿 Key', en: 'Get a key from {name}' },
   'ob3.key.advanced': { zh: '高级：连接名、接口地址、模型白名单（选了哪家就已经填好）', en: 'Advanced: connection name, endpoint and model allowlist (already filled in)' },
+  'ob3.key.listFailed': { zh: '读不到这台电脑上已有的连接，先不按预设保存（免得盖掉同名的那条）；可以点「自己填…」自己起名', en: 'Couldn’t read the connections already on this computer, so presets can’t be saved (that could replace one with the same name). Use Custom… and name it yourself' },
   'ob3.sync.agentsWhere': { zh: '哪些 Agent 跨设备，以后在 蓬洲云 › 同步 里逐个选', en: 'Choose which agents sync across devices later, one by one, in Penzor Cloud › Sync' },
   'ob3.channels.noExt': { zh: '这台 Forsion 没装 Forsion Extend：没有账号登录，也不发任何统计', en: 'Forsion Extend isn’t installed here, so there’s no account sign-in and nothing is sent' },
 
@@ -83,6 +84,9 @@ registerMessages({
   'ob3.muse.modelCloudOption': { zh: '跟随云端', en: 'Follow the cloud' },
   'ob3.muse.modelDefault': { zh: '先用你的默认模型，费用算在你接的那家；也可以换一个', en: 'Uses your default model for now, billed by the provider you connected. You can pick another' },
   'ob3.muse.modelDefaultOption': { zh: '{model} · 默认', en: '{model} · default' },
+  'ob3.muse.modelLocalOption': { zh: '{model} · 后台任务', en: '{model} · background tasks' },
+  'ob3.muse.modelLocal': { zh: '用你在 设置 › 模型 里给后台任务选的模型，费用算在你接的那家', en: 'Uses the model you set for background tasks in Settings › Models, billed by the provider you connected' },
+  'ob3.muse.modelLocalMain': { zh: '用你在 设置 › 模型 里给后台任务选的模型，算在主额度里', en: 'Uses the model you set for background tasks in Settings › Models, counted against your main quota' },
   'ob3.muse.modelMain': { zh: '这个模型算在主额度里', en: 'This model counts against your main quota' },
   'ob3.muse.modelBilled': { zh: '费用算在你接的那家', en: 'Billed by the provider you connected' },
   'ob3.muse.proNote': { zh: '主动程度按「普通」（约两小时醒一次），以后在 设置 › Agent › 后台 Agent 里调', en: 'Proactivity stays at Normal (about every two hours). Change it later in Settings › Agents › Background agents' },

@@ -4,7 +4,7 @@
  * - 名字按界面语言只显示一个(agentName:中文界面「卜算子」,英文界面「Muse」)。
  * - 卜算子:开关、一句话说清它做什么、用哪个模型、两问(什么时候能找你 / 最想盯什么 + 自己写一条,60 字)。
  *   主动程度不问(按缺省「普通」,不发 proactivity),卡底写一句去哪改。
- *   模型行只改显示、不替用户写 modelId:没登录时显示引擎实际会用的那个(云端后台模型 → 默认模型,要在可用列表里),
+ *   模型行只改显示、不替用户写 modelId:不选时显示引擎实际会用的那个(本机后台任务那一格 → 云端后台模型 → 默认模型,要在可用列表里),
  *   一个都没有才黄底「选择模型 / 先不醒」;登录了缺省「跟随云端」走独立额度,改选 Forsion 的模型算主额度、直连的算接的那家。
  * - 团队名单:头像字 + 名字,默认 / 后台 / 已停用的标签,没有开关(停用开关在 Agents 页)。「在 Agents 里管理」引导结束后去 Agents。
  * - 电脑历史:新装机预先打开,带着开着的开关点「开始使用」才算数(跳过引导不开,主页之后再问一次);老用户显示现在的值。
@@ -49,6 +49,8 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
   const [agents, setAgents] = useState<NormalAgentDef[]>([])
   const [defaultSlug, setDefaultSlug] = useState('xyra')
   const [models, setModels] = useState<ModelsResponse | null>(null)
+  /** 本机「设置 › 模型 › 后台任务」那一格(config.json models.background):引擎先认它,再认云端(resolveBackgroundModelId)。 */
+  const [localBg, setLocalBg] = useState('')
   // 草稿
   const [museOn, setMuseOn] = useState(true)
   const [modelId, setModelId] = useState('')
@@ -73,7 +75,8 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
     void (async () => {
       try {
         const target = await resolveTarget()
-        const [cfg, list, meta, mdl] = await Promise.all([getSpecialConfig(target), listAgents(target), getAgentsMeta(target), listModels(target).catch(() => null)])
+        const [cfg, list, meta, mdl, host] = await Promise.all([getSpecialConfig(target), listAgents(target), getAgentsMeta(target), listModels(target).catch(() => null),
+          window.tangu?.getConfig?.().catch(() => null)])
         if (!live) return
         // 远程来源只回摘要(这一屏只在本机完整引导里有,走到这里算读不全);桩 / 老引擎回不全也一样:读失败 ≠ 缺省,不写
         if (cfg.remote || !cfg.config?.muse) throw new Error('special config incomplete')
@@ -82,7 +85,7 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
         const w = whenOf(c.muse.activeHours)
         setWhen(w)
         base.current = { museEnabled: c.muse.enabled !== false, modelId: c.muse.modelId || '', when: w, introDone: false, introMemo: JSON.stringify({ focus: [], text: '' }) }
-        setAgents(list); setDefaultSlug(meta.defaultSlug || 'xyra'); setModels(mdl)
+        setAgents(list); setDefaultSlug(meta.defaultSlug || 'xyra'); setModels(mdl); setLocalBg(String((host as { backgroundModelId?: string } | null)?.backgroundModelId || ''))
       } catch (e) { if (live) setLoadError(String((e as Error)?.message || e)) }
     })()
     return () => { live = false }
@@ -160,13 +163,16 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
   if (loadError) return <div className="ob3-col narrow"><div className="ob3-head"><h1 tabIndex={-1} data-ob-title="">{t('ob3.team.title')}</h1></div>
     <div className="ob3-error" role="alert">{t('ob3.muse.loadFailed', { muse: museName, error: loadError })}</div></div>
 
-  // 模型行:没登录时,不选 = 引擎按「云端后台模型 → 默认模型」往下找(resolveBackgroundModelId);只认这台现在真能用的
-  const fallback = signedIn ? '' : [models?.backgroundModelId, models?.defaultModelId].find((id): id is string => !!id && !!modelOf(id)) || ''
+  // 模型行:不选 = 引擎按「本机后台任务那一格 → 云端后台模型 → 默认模型」往下找(resolveBackgroundModelId),只认这台现在真能用的。
+  // 本机那一格设过就先用它(登录了也是,这时不走独立额度);没设过、登录了 = 跟随云端;没登录 = 云端后台 / 默认模型。
+  const localPick = localBg && modelOf(localBg) ? localBg : ''
+  const fallback = localPick || (signedIn ? '' : [models?.backgroundModelId, models?.defaultModelId].find((id): id is string => !!id && !!modelOf(id)) || '')
   const needModel = !signedIn && !modelId && !fallback
   const picked = modelId ? modelOf(modelId) : undefined
+  const mainQuota = (m?: { source?: string }): boolean => signedIn && m?.source === 'forsion'
   const modelHint = needModel ? (llms.length ? 'ob3.muse.modelNeed' : 'ob3.muse.modelNone')
-    : !modelId ? (signedIn ? 'ob3.muse.modelCloud' : 'ob3.muse.modelDefault')
-    : signedIn && picked?.source === 'forsion' ? 'ob3.muse.modelMain' : 'ob3.muse.modelBilled'
+    : !modelId ? (localPick ? (mainQuota(modelOf(localPick)) ? 'ob3.muse.modelLocalMain' : 'ob3.muse.modelLocal') : signedIn ? 'ob3.muse.modelCloud' : 'ob3.muse.modelDefault')
+    : mainQuota(picked) ? 'ob3.muse.modelMain' : 'ob3.muse.modelBilled'
   const pills = <T extends string>(label: string, values: readonly T[], keyOf: (v: T) => string, on: (v: T) => boolean, pick: (v: T) => void, extra?: React.ReactNode): React.ReactNode =>
     <div className="ob3-q"><span>{label}</span><div className="ob3-actions" role="group" aria-label={label}>
       {values.map((v) => <button key={v} type="button" className="ob3-pill" aria-pressed={on(v)} disabled={!museOn} onClick={() => pick(v)}>{t(keyOf(v))}</button>)}{extra}</div></div>
@@ -183,7 +189,8 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onOpenAg
           <Cpu size={16} aria-hidden="true" />
           <div><strong>{t('ob3.muse.model', { muse: museName })}</strong><small>{t(modelHint)}</small></div>
           <select value={modelId} disabled={!museOn || !config} aria-label={t('ob3.muse.model', { muse: museName })} onChange={(e) => setModelId(e.target.value)}>
-            {signedIn ? <option value="">{t('ob3.muse.modelCloudOption')}</option>
+            {localPick ? <option value="">{t('ob3.muse.modelLocalOption', { model: modelOf(localPick)?.name || localPick })}</option>
+              : signedIn ? <option value="">{t('ob3.muse.modelCloudOption')}</option>
               : fallback ? <option value="">{t('ob3.muse.modelDefaultOption', { model: modelOf(fallback)?.name || fallback })}</option>
               : <option value="" disabled>{t('ob3.muse.modelPick')}</option>}
             {modelId && !picked && <option value={modelId}>{modelId}</option>}
