@@ -2343,8 +2343,12 @@ if (new URLSearchParams(location.search).has('dock')) {
       // 页面排版选项(C-21)挂壳上,同生产 EditorScope。`&udark` = 暗色壳(截图自查用)。
       const [path, setPath] = useState('Unified.md')
       const pageStyle = useNotePageStyle(null, path)
-      return (
-        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: 'fixed', inset: 0 }}>
+      // `&uwb`:外面再套生产的 View 容器(真类名 `.wb-view`,吃 engine.css 的真规则),错开一个侧栏 + 标签条。
+      //   编辑器的浮层要按祖先判断 fixed 包含块;没有这层祖先,`.wb-view` 的 CSS 一变(10-31 加 container-type),
+      //   落点线整条偏出一个 View 左上角,而台架全绿(11-02)。仪器 unified-page D3。
+      const wb = new URLSearchParams(location.search).has('uwb')
+      const pane = (
+        <div ref={paneRef} className="am-app tangu-lovable amx-pane amx-editor" data-mode={new URLSearchParams(location.search).has('udark') ? 'dark' : 'light'} data-flat="0" {...pageStyleAttrs(pageStyle)} style={{ position: wb ? 'absolute' : 'fixed', inset: 0 }}>
           {new URLSearchParams(location.search).has('utoc') && <NoteFloatingToc host={paneRef} label="toc" scanTrigger="Unified.md" />}
           <UPageHost onPath={setPath} />
           {/* `&umbar`:移动端底栏胶囊 + ⋯ sheet(生产同一个 AmxMobileBar),sheet 里只放页面排版那几行(C-21)。 */}
@@ -2362,6 +2366,7 @@ if (new URLSearchParams(location.search).has('dock')) {
           )}
         </div>
       )
+      return wb ? <div className="wb-view wb-view--main" style={{ position: 'fixed', left: 300, top: 40, width: 'calc(100% - 300px)', height: 'calc(100% - 40px)' }}>{pane}</div> : pane
     }
     // 生产的编辑器挂在 LocaleProvider 之下(useI18n 跟界面语言);台架原来没包,useI18n 一律回落中文,英文界面的
     // 断言写不了(评审 §0 台架边界)。包 HostLocaleProvider(不接管 setter、不探 IP),仪器用 `__upage.setLocale` 切。

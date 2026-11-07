@@ -1704,7 +1704,8 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
             .filter((m) => !(finalizedId && m.id === finalizedId && !m.content.trim() && !(m.toolEvents?.length) && !keep(m)))
           const additions: UiMessage[] = []
           for (const u of users) if (!have.has(u.id)) additions.push({ id: u.id, role: 'user', content: u.content, attachments: pendAtt.get(u.id), status: 'done', timestamp: Date.now() })
-          if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName })
+          // 任务清单带进新段:最新那份总在当前段上 —— 跑着转圈、停在这段报「已停止」;旧段留它那份快照(已 done,不带状态词)
+          if (newId && !have.has(newId)) additions.push({ id: newId, role: 'assistant', content: '', status: 'streaming', timestamp: Date.now() + 1, agentId: prevSeg?.agentId, agentName: prevSeg?.agentName, ...(prevSeg?.todos?.length ? { todos: prevSeg.todos } : {}) })
           return { messagesBySession: { ...s.messagesBySession, [sessionId]: [...next, ...additions] } }
         })
         if (users.length) set((s) => touchSessionActivity(s, sessionId))
@@ -1868,7 +1869,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
             : Number(pl.trimmed) > 0
               ? get().tr('ctx.compacted.trimmed', { n: Number(pl.trimmed) })
               : pl.forced && !pl.fallback
-                ? get().tr(pl.reason === 'overflow' ? 'ctx.compacted.overflow' : 'ctx.compacted.forced')
+                ? pl.reason === 'idle' ? get().tr('ctx.compacted.idle', { n: Number(pl.idleMinutes) || 60 }) : get().tr(pl.reason === 'overflow' ? 'ctx.compacted.overflow' : 'ctx.compacted.forced')
                 : get().tr('ctx.compacted.auto', { saved: (Number(pl.savedChars) || 0).toLocaleString() })
           set((s) => ({
             messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] || []), {

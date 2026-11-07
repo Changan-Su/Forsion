@@ -13,11 +13,17 @@
  *  (钉「每个图标连文件名在最矮的可视区里也看得全」),再跑 node scripts/dmg-layout-preview.cjs 打一个空壳包在 Finder 里看一眼。 */
 module.exports = {
   // 文件名故意不叫 background.png:那个名字会被 dmg-builder 自动拾取,连没配 dmg 段的单品变体也会套上这张图。
-  background: 'dmg-background.png',
+  // 直接给 tiff(png + @2x 合成,gen-dmg-background.cjs 产出):下面占位要用同一份字节。
+  background: 'dmg-background.tiff',
   iconSize: 80,
   contents: [
     { x: 170, y: 114 },
     { x: 430, y: 114, type: 'link', path: '/Applications' },
     { x: 500, y: 274, type: 'file', path: 'build/打不开？Read me.txt' },
+    // 卷里的 .background.tiff / .VolumeIcon.icns 是隐藏文件,但用户在 Finder 里开了「显示隐藏文件」(⌘⇧.)时
+    // 会被自动排进窗口、压在说明文字上(2.13.8-beta.3 用户报)。dmg-builder 的校验不认 dmgbuild 的 position 类型,
+    // 只好放一份同字节的文件占位、坐标甩到窗口外;dmgbuild 先写背景 / 卷图标、后拷 contents,占位会覆盖它们,所以必须同一份。
+    { x: 150, y: 700, type: 'file', path: 'build/dmg-background.tiff', name: '.background.tiff' },
+    { x: 450, y: 700, type: 'file', path: 'build/icon.icns', name: '.VolumeIcon.icns' },
   ],
 }

@@ -322,7 +322,21 @@ export interface ImageGenRequest {
    *  'xhigh'/'max' 仅 gpt-image-2.5+ 有,档位直接换算成 output_tokens(实测 low 425 → xhigh 1650)。
    *  ⚠️不传就不发这个字段 —— 让上游用自己的缺省,别在这里替用户选贵档。 */
   quality?: string;
+  outputFormat?: 'png' | 'gif';
+  frameCount?: number;
+  frameDurationMs?: number;
+  complexity?: 'low' | 'medium' | 'high';
   signal?: AbortSignal;
+}
+
+/** Fields shared by the hosted JSON, direct JSON and direct multipart image requests. */
+export function imageOutputFields(req: ImageGenRequest) {
+  return {
+    ...(req.outputFormat ? { output_format: req.outputFormat } : {}),
+    ...(req.outputFormat === 'gif' && req.frameCount !== undefined ? { frame_count: req.frameCount } : {}),
+    ...(req.outputFormat === 'gif' && req.frameDurationMs !== undefined ? { frame_duration_ms: req.frameDurationMs } : {}),
+    ...(req.complexity ? { complexity: req.complexity } : {}),
+  };
 }
 export interface ImageGenResult {
   /** `mime` must describe the bytes: Seedream answers JPEG even when everything else is PNG, and edit_image
@@ -489,6 +503,9 @@ export interface GitHostingBrain {
   info(opts?: { signal?: AbortSignal }): Promise<GitHostingInfo>;
   /** 给当前用户发一枚这台设备专用的访问令牌(password)。同一个设备名再要一次,旧的那枚作废;服务端对同一用户限次。 */
   credential(device: string, opts?: { signal?: AbortSignal }): Promise<{ webUrl: string; username: string; password: string }>;
+  /** 当前用户所在、开了 Forsion Git 的商业版组织(`/api/org/me` + `/api/git/orgs/:id`):gitName = 站上的组织名,name = 组织显示名。
+   *  云端没有商业版 / 没开 Forsion Git → [];连不上 / 5xx → 抛 GitHostingError(调用方当作读不到,不是「没有」)。 */
+  orgs?(opts?: { signal?: AbortSignal }): Promise<Array<{ gitName: string; name: string }>>;
 }
 
 // ── 绑定的 GitHub 账号(对端 server microserver/github 的 /api/github/{status,credential};绑定 / 解绑只在账户中心做)──

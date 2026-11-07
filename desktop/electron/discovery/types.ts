@@ -1,20 +1,11 @@
 /**
  * 跨生态 agent 资产发现:扫描本机 ~/.claude(Claude Code)、~/.codex(Codex)、
- * ~/.hermes(Hermes)的技能与 MCP server 配置,供设置面板勾选导入 ~/.tangu。
+ * ~/.hermes(Hermes)的 MCP server 配置,供「从其他 AI 导入」勾选导入。
+ * 技能、记忆、偏好 11-03 起归引擎(tangu-agent services/externalImport):这里原来的技能导入同名会先删再拷。
  * 纯 Node 实现(不依赖 electron),便于 tsx 直跑验证。
  */
 
 export type Ecosystem = 'claude-code' | 'codex' | 'hermes'
-
-export interface DiscoveredSkill {
-  ecosystem: Ecosystem
-  /** 全局唯一(scanAll 层去重);导入时作为 ~/.tangu/skills/<安全化 id>/ 目录名。 */
-  id: string
-  name: string
-  description: string
-  /** 复制源:目录(含 SKILL.md)或单个 .md 文件(导入时包成 <id>/SKILL.md)。 */
-  sourceDir: string
-}
 
 /** 与 Tangu McpServerConfig(src/mcp/config.ts)同形,导入时基本零转换。 */
 export interface DiscoveredMcpConfig {
@@ -34,6 +25,5 @@ export interface DiscoveredMcp {
 }
 
 export interface DiscoveryResult {
-  skills: DiscoveredSkill[]
   mcpServers: DiscoveredMcp[]
 }

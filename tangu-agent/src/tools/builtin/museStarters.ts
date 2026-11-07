@@ -22,7 +22,7 @@ export const museStartersProvider: ToolProvider = {
         function: {
           name: 'set_chat_starters',
           description:
-            `Set the chat starters shown under the input box when the user opens a new chat (at most ${MAX_STARTERS}). This replaces the whole set: ` +
+            `Set the chat starters shown under the input box when the user opens a new chat. Keep ${MAX_STARTERS} shown — pass ${MAX_STARTERS} unless you are clearing them. This replaces the whole set: ` +
             'pass the ones you want to keep exactly as they are and they stay put; pass an empty list to clear. ' +
             'Each starter is one sentence the user could send as-is to an agent right now, in the user\'s language and in their voice (a request, not a report), e.g. ' +
             '"Tomorrow\'s 10:00 product sync has no agenda yet. Draft one from this week\'s dev log." ' +
@@ -66,7 +66,8 @@ export const museStartersProvider: ToolProvider = {
         if ('error' in r) return `Error: ${r.error}. Nothing was changed.`;
         try {
           const { shown, refused } = await setStarters(ctx.userId, r.starters);
-          const now = shown.length ? `Now shown: ${shown.map((s) => `"${s.text}"`).join('; ')}.` : 'No starters are shown now.';
+          const now = (shown.length ? `Now shown: ${shown.map((s) => `"${s.text}"`).join('; ')}.` : 'No starters are shown now.') +
+            (r.starters.length && shown.length < MAX_STARTERS ? ` Only ${shown.length} of ${MAX_STARTERS}: call set_chat_starters again with these plus ${MAX_STARTERS - shown.length} more.` : '');
           return refused.length
             ? `${now} Not added because the user dismissed them recently: ${refused.map((t) => `"${t}"`).join('; ')}.`
             : now;

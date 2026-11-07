@@ -2,12 +2,12 @@ import { HumanCollaborationPanel } from '../components/HumanCollaborationPanel'
 import { humanRewritable, type HumanJump } from '../services/humanCollaboration'
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Trash2, Upload, UserRound, Users, X } from 'lucide-react'
+import { AppWindow, ArrowLeft, Check, ChevronRight, Copy, Download, ExternalLink, FileText, Folder, FolderGit2, FolderInput, FolderOpen, GitBranch, GitBranchPlus, GitCommitHorizontal, ImageUp, Link2, Loader2, MessageSquarePlus, Pencil, Plus, RefreshCw, Search, Settings2, Smile, Sparkles, Star, TerminalSquare, Trash2, Upload, UserRound, Users, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { useApp } from '../stores/appStore'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n } from '../i18n'
-import { createProjectSkill, deleteProjectSkill, deleteProjectIcon, forgetProjectMemory, generateGitCommitMessage, getGitHosting, type GitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
+import { createProjectSkill, deleteProjectSkill, deleteProjectIcon, editProjectMemory, forgetProjectMemory, generateGitCommitMessage, getGitHosting, type GitHosting, getGitSettings, getProjectContext, gitCommitProject, gitCreateProjectBranch, gitInitProject, gitConnectRemoteProject, gitPendingProject, gitPublishGithubProject, gitPublishProject, gitPullProject, gitPushProject, gitSetPushTargetProject, gitTrustProject, initProjectContext, putProjectDoc, putProjectSettings, setProjectIconEmoji, uploadProjectIcon, resolveProjectCandidate, restoreProjectMemoryFact } from '../services/backendService'
 import { askString } from '../amadeus/components/askString'
 import { normPath } from './coding/studioModel'
 import { addToCreations } from './chat2/CreationCards'
@@ -250,6 +250,22 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
     } catch (e: any) {
       if (e?.status === 409 || e?.status === 404) { setReloadAt((n) => n + 1); setError(t('projectProfile.memoryConflict')) }
       else setError(String(e?.message || e))
+    } finally { setBusy('') }
+  }
+  // 项目记忆:原地改一条。回车保存、Esc 放弃;没改动就当放弃。版本取开始改的那一刻的:改的途中界面重载过(别处改了),
+  // 拿新版本去写会把别处的改动盖掉 —— 带旧版本让引擎回 409(Codex 评审 11-03)
+  const [editing, setEditing] = useState<{ id: string; text: string; version: string } | null>(null)
+  const saveMemory = async (): Promise<void> => {
+    if (!editing || !ctx?.memory || busy) return
+    const text = editing.text.trim()
+    if (!text || text === ctx.memory.entries.find((e) => e.id === editing.id)?.content) { setEditing(null); return }
+    clear(); setBusy(`memory:${editing.id}`)
+    try {
+      const memory = await editProjectMemory(homeTarget(), session.id, editing.id, text, editing.version)
+      setCtx((c) => (c ? { ...c, memory } : c)); setEditing(null); setNotice(t('projectProfile.memoryEdited'))
+    } catch (e: any) {
+      if (e?.status === 409 || e?.status === 404) { setEditing(null); setReloadAt((n) => n + 1); setError(t('projectProfile.memoryEditConflict')) }
+      else setError(e?.code === 'MEMORY_FULL' ? t('projectProfile.memoryEditFull') : String(e?.message || e))
     } finally { setBusy('') }
   }
   // 待确认的后台候选(带网址、命令或权限字眼,没有直接记):逐条采纳 / 丢弃。那条已经不在了 → 重载。
@@ -745,10 +761,20 @@ export function ProjectProfile({ session, config, workspace, renderAgent, render
           </section>
           {ctx.memory && <section className="project-card" data-project-memory>
             <div className="project-card-head"><div><h3>{t('projectProfile.memory')}</h3><small>{t('projectProfile.memoryHint')}</small>
-              {ctx.memory.entries.length > 0 && <div className="project-chips"><span className="project-chip">{t('projectProfile.memoryUsage', { count: ctx.memory.entries.length, chars: ctx.memory.chars, limit: ctx.memory.limit })}</span></div>}</div></div>
+              {ctx.memory.entries.length > 0 && <div className="project-chips"><span className="project-chip">{t('projectProfile.memoryUsage', { count: ctx.memory.entries.length, chars: ctx.memory.chars, limit: ctx.memory.limit })}</span></div>}</div>
+              {ctx.memory.file && window.tangu?.revealHostPath && <button type="button" title={t('projectProfile.openMemory')} aria-label={t('projectProfile.openMemory')} onClick={() => reveal(ctx.memory!.file!)}><FolderOpen size={14} /></button>}</div>
             {ctx.memory.entries.length ? <ul className="project-list project-memory-list">{ctx.memory.entries.map((entry) => <li key={entry.id} className="project-memory-row" data-project-memory-entry={entry.id}>
-              <span>{entry.content}</span>
-              <button type="button" title={t('projectProfile.memoryForget')} aria-label={t('projectProfile.memoryForget')} disabled={!!busy} onClick={() => void forgetMemory(entry.id)}>{busy === `memory:${entry.id}` ? <Loader2 size={13} className="spin" /> : <X size={13} />}</button>
+              {editing?.id === entry.id
+                ? <textarea className="project-memory-edit" rows={1} autoFocus maxLength={300} value={editing.text} aria-label={t('projectProfile.memoryEdit')} disabled={!!busy}
+                    onChange={(e) => setEditing({ ...editing, text: e.target.value })}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void saveMemory() } else if (e.key === 'Escape') { e.preventDefault(); setEditing(null) } }} />
+                : <span>{entry.content}</span>}
+              <div className="project-memory-actions">
+                {editing?.id === entry.id
+                  ? <button type="button" title={t('projectProfile.memoryEditSave')} aria-label={t('projectProfile.memoryEditSave')} disabled={!!busy} onClick={() => void saveMemory()}>{busy === `memory:${entry.id}` ? <Loader2 size={13} className="spin" /> : <Check size={13} />}</button>
+                  : <button type="button" title={t('projectProfile.memoryEdit')} aria-label={t('projectProfile.memoryEdit')} disabled={!!busy} onClick={() => { if (ctx.memory?.version) { clear(); setEditing({ id: entry.id, text: entry.content, version: ctx.memory.version }) } }}><Pencil size={13} /></button>}
+                <button type="button" className="danger" title={editing?.id === entry.id ? t('projectProfile.memoryEditCancel') : t('projectProfile.memoryForget')} aria-label={editing?.id === entry.id ? t('projectProfile.memoryEditCancel') : t('projectProfile.memoryForget')} disabled={!!busy} onClick={() => (editing?.id === entry.id ? setEditing(null) : void forgetMemory(entry.id))}>{busy === `memory:${entry.id}` && editing?.id !== entry.id ? <Loader2 size={13} className="spin" /> : <X size={13} />}</button>
+              </div>
             </li>)}</ul> : <p className="agent-profile-muted">{t('projectProfile.memoryEmpty')}</p>}
             {!!ctx.memory.candidates?.length && <div className="project-memory-pending" data-project-memory-candidates={ctx.memory.candidates.length}>
               <strong>{t('projectProfile.memoryCandidates', { count: ctx.memory.candidates.length })}</strong>

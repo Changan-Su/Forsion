@@ -18,6 +18,7 @@
  *   npm run live:harness -- --only musereview [--hand]   # Muse 每周装备巡检:巡检完当场替各 agent 收起(只认巡检名单里的、不出卡片)→ 它下一次 run 就生效;--hand 再在对话里让 Muse 看一遍(改 LOADOUT_REVIEW_PROMPT / review_loadout 报告 / propose 代收那一支后跑)
  *   npm run live:harness -- --only harnessopen --harness-ui   # 工作笔记放开写入 + 真 Electron 里的更新卡与撤销(卡片从真模型的回执还原);先构建 desktop
  *   npm run live:harness -- --only projmem                  # 记忆分项目级 / 全局级(10-04):落点、同项目不同 agent 共用、跨项目隔离(改 services/projectMemory.ts / remember 的 scope 后跑)
+ *   npm run live:harness -- --only projkind [--projkind-philosophy]   # 判官的项目候选按类别收(11-03):讲课式对话里「讲到哪了」和讲义内容不进项目记忆,沿用符号那类要求照收(只记不判);负对照 = 在没有这次改动的旧代码上跑同一个场景(--kind base),进度 / 内容会进去
  *   npm run live:harness -- --only projcompact              # 项目记忆写满时的压缩(10-05):前台记一条触发压缩 → 现行的留着、带网址的不动、去掉的原句能恢复;后台复盘那条路量到几次记几次(改 services/projectMemoryCompact.ts / remember 写满那条路 / localHistorian 的项目记忆写入后跑);`--compact-rounds N` 前台那条腿另外加跑 N 次、出成功率;引擎环境变量 `TANGU_COMPACT_DEBUG=1` 把模型的原样回答记进 engine.log
  *   npm run live:harness -- --only rename                   # 改名即生效:同会话先答旧名,PATCH 改名+改简介后下一轮须用新名(改身份注入/人格组装后跑)
  *   npm run live:harness -- --only selfmodel --rounds 5 --model xai/grok-4.7   # 主体性探针(10-02):自己的资料库 vs 用户目录 / 提醒真落盘 / 教训落哪个存储 / 自我认知,按轮出通过率;改 Personal Folder 段 / 记忆·协作·工作笔记段后跑
@@ -29,7 +30,8 @@
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
- *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
+ *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params、
+ *                                                           #   app_settings 的返回文本后跑)。--settingsnav-no-voice = 负对照(落点清单里没有语音页,开不到 → 必须红)
  *   npm run live:harness -- --only pluginui                  # 改 skills/forsion-plugin 的「Desktop plugin UI」一节 / tools/ui-reinvent.mjs / plugin_sandbox 的界面体检后跑:写一个带 Space 的小插件,下拉 / 菜单 / 确认 / 空状态须用宿主零件
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
@@ -221,6 +223,7 @@ import { realUseLive } from './lib/real-use-live.mjs';
 import { humanRealLive } from './lib/human-real-live.mjs';
 import { humanPortraitLive } from './lib/human-portrait-live.mjs';
 import { portraitMoveLive } from './lib/portrait-move-live.mjs';
+import { importLive } from './lib/import-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
@@ -270,9 +273,11 @@ KEYS.push('realuse');
 KEYS.push('humanreal');
 KEYS.push('humanportrait');
 KEYS.push('portraitmove');
+KEYS.push('import');
 KEYS.push('projmem');
 KEYS.push('skillcreate');
 KEYS.push('projdedupe');
+KEYS.push('projkind');
 KEYS.push('projteam');
 KEYS.push('projcompact');
 KEYS.push('forkcache');
@@ -325,6 +330,7 @@ for (const k of CU_JEV_KEYS) OPT_IN.add(k); // --only cumusic,cusend,cuambig,cus
 OPT_IN.add('cuvision'); // --only cuvision:只能看图的 App,真插件 + 真 helper + 替身 App(一个 run,会动真鼠标;要 --cu-plugin)
 OPT_IN.add('dreamseed');
 OPT_IN.add('layers'); // --only layers:记忆 / 日志分层,每轮 3 个 run + 3 次判官(--rounds);会把 Historian 改成每轮都评,单独跑。
+OPT_IN.add('projkind'); // --only projkind:判官的项目候选按类别收(11-03),讲课式对话里的进度 / 讲义内容不进项目记忆(两个会话 + 两次判官)
 OPT_IN.add('projdedupe'); // --only projdedupe:项目记忆换了说法的重复(真模型 + 后台判官,约 20 次调用)
 OPT_IN.add('projteam'); // --only projteam:项目记忆在团队会话里(三个两人团队各一轮)
 OPT_IN.add('projcompact'); // --only projcompact:项目记忆写满时的压缩(4 个 run + 判官 + 2 次压缩,约 10 次调用);只在动 projectMemoryCompact.ts / remember 写满那条路时才有信息量
@@ -375,6 +381,7 @@ OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanportrait'); // 画像(human/SOUL.md)写没写:每轮 4 个 run + 另一个 agent 读一次;只在动 remember 的 person 档 / 画像注入时才有信息量。
+OPT_IN.add('import'); // 从其他 AI 导入(11-03):后台模型拆条 / 归位 / 拦截;不跑对话。动了 services/externalImport 的提示 / 后处理才有信息量。--import-neg = 负对照
 OPT_IN.add('portraitmove'); // 搬家的后台模型挑得准不准(10-30):不跑对话,只有人点的那几个接口;动了 agents/portraitMove.ts 的提示才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
@@ -401,6 +408,11 @@ KEYS.push('storeupdate', 'storeupdatechat'); OPT_IN.add('storeupdate'); OPT_IN.a
 const ONLY = new Set(opt('only', process.env.TANGU_LIVE_ONLY || KEYS.filter((k) => !OPT_IN.has(k)).join(',')).split(',').map((s) => s.trim()).filter(Boolean));
 const TTFT_ROUNDS = Number(opt('ttft-rounds', process.env.TANGU_LIVE_TTFT_ROUNDS || 5));
 const SELF_ROUNDS = Number(opt('rounds', 3)); // selfmodel:每轮一个新 agent,出通过率
+// projkind:--projkind-philosophy 给判官换一段自定义「判断哲学」(设置里可填的那一栏),要它记「关键结论、重要产出」——
+// 真实环境里把讲课进度和讲义内容招进项目记忆的就是这种配法;不带 = 内置提示(Luna 在内置提示下本来就不记进度,负对照分不出来)
+const PROJKIND_PHILOSOPHY = argv.includes('--projkind-philosophy')
+  ? '你是 Historian,在后台维护用户的长期记忆。读最近的对话,判断有没有值得长期留下的信息:稳定的事实、关键结论、明确的偏好、重要的产出。有就用简洁的中文概括写进去;只是闲聊或一次性的内容就什么都不写。不要编造。'
+  : '';
 const COMPACT_ROUNDS = Number(opt('compact-rounds', 0)); // projcompact:前台那条腿另外加跑几次(每次一个新项目),给压缩的成功率一个分母
 const SELF_PROBES = new Set(opt('self-probes', 'library,libneg,remind,lesson,self').split(',')); // selfmodel 只跑其中几条(省额度地加轮数)
 { // --only 写错 / 缺上游 → 直接拒,别跑出 0/0 或靠猜答的假绿(Codex 09-12)
@@ -1427,6 +1439,8 @@ const child = spawn(process.execPath, [
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
   ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
+  // import:假家目录(场景里种文件,引擎每次扫描现读);负对照关掉 blocked 那段提示和兜底正则
+  ...(ONLY.has('import') ? { TANGU_IMPORT_HOME: join(home, '..', 'import-src'), ...(argv.includes('--import-neg') ? { TANGU_IMPORT_UNGUARDED: '1' } : {}) } : {}),
   // fast:wire 上带没带 service_tier 只有 llm-debug 那行看得见(响应里的 service_tier 恒回 default,判不了)
   ...(ONLY.has('fast') ? { TANGU_LLM_DEBUG: '1' } : {}),
   // cumusic / cusend:Jev 每次请求的图和回答落进产物目录(不含密钥),场景跑完挪进自己的 <key>-evidence/jev/
@@ -2152,6 +2166,10 @@ try {
   await scenario('portraitmove', `portraitmove 搬家:该挑的全挑、对 Agent 的要求和项目的事一条不挑 ×${SELF_ROUNDS} 轮`, () =>
     portraitMoveLive({ api, OUT, MODEL, home, rounds: SELF_ROUNDS }));
 
+  // ── 从其他 AI 导入:拆条 / 归位 / 拦截 / 合并,导入后整次撤销(11-03);设计见 lib/import-live.mjs ──
+  await scenario('import', `import 从其他 AI 导入:注入句不进可勾的去处、偏好进协作说明、项目的事进项目 ×${SELF_ROUNDS} 轮${argv.includes('--import-neg') ? '(负对照)' : ''}`, () =>
+    importLive({ api, OUT, MODEL, home, src: join(home, '..', 'import-src'), rounds: SELF_ROUNDS, neg: argv.includes('--import-neg') }));
+
   // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
   //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目
   //     (10-30 有了 person 档后,关于这个人的习惯归画像、所有 Agent 都读;这里要证 Agent 之间不共用,第二件改成对这位 Agent 的要求)
@@ -2281,8 +2299,63 @@ try {
     ].join(' | '), output: `【A 之后的项目记忆】\n${a3.entries.map((c) => `- ${c}`).join('\n')}\n【A 等确认】\n${a3.waiting.map((c) => `- ${c}`).join('\n') || '(无)'}\n${b.map((x, i) => `【B${i + 1} 之后与那条分支有关的】\n${(x.extra || []).map((c) => `- ${c}`).join('\n') || '(种子没落成)'}`).join('\n')}`, toolCalls: [...a1.ev.toolCalls, '|', ...a2.ev.toolCalls, '|', ...a3.ev.toolCalls] };
   });
 
+  // ── 项目记忆:判官的候选按类别收(11-03)──
+  //  一个放课堂笔记的项目里讲两节课(像用户在笔记库里那样):每次开头说上次讲到哪、讲完说讲到哪,中间顺带立一条长期要求(沿用笔记里的符号)。
+  //  Agent 被要求不自己调 remember —— 量的是后台判官。硬判:两轮判官都真跑过(有活动行);项目记忆里没有进度(节号 / 讲到哪)、没有讲义内容(笔记里的专名)。
+  //  只记不判:那条「沿用符号」有没有记上(判官可以合理地不提)、待确认清单里有什么、前台有没有违规调 remember。
+  //  负对照 = 在没有这次改动的旧代码上跑同一个场景(archive.mjs --kind base):进度 / 内容会被判官直接写进去。
+  await scenario('projkind', 'projkind 项目记忆:判官只收约定类,讲到哪了和讲义内容不进', async () => {
+    const slug = 'live-pk';
+    await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug, name: 'Tutor', systemPrompt: 'Be concise and respond in Chinese. Never call the remember tool; memory is handled in the background.' }) });
+    await api('/agent/special/config', { method: 'POST', body: JSON.stringify({ historian: { enabled: true, modelId: MODEL, everyRounds: 1, firstRoundTrigger: true, mode: 'independent', ...(PROJKIND_PHILOSOPHY ? { prompt: PROJKIND_PHILOSOPHY } : {}) } }) });
+    const m = randomUUID().slice(0, 4);
+    const term = `Kessler-${m} 权重`; // 讲义里的专名:出现在项目记忆里 = 记了内容
+    const p = join(workspace, 'pk-notes'); mkdirSync(join(p, 'lectures'), { recursive: true });
+    writeFileSync(join(p, 'README.md'), '# Physics notes\n\nLecture notes for a statistical physics course.\n');
+    writeFileSync(join(p, 'lectures', 'lecture4.md'), [
+      '# Lecture 4', '', '## 2.1.5 Counting microstates', `用 Ω 表示总微观状态数,${term} t({n_i}) 是某个分布的统计权重,Ω = Σ t({n_i})。`, '',
+      '## 2.1.6 The most probable distribution', `在 N 很大时,${term} 在最可几分布处有尖锐极大,用拉格朗日乘子法求 ln t 的极值,得到 Boltzmann 分布 n_i ∝ g_i e^{-βε_i}。`, '',
+      '## 2.2 Partition function', '配分函数 Z = Σ g_i e^{-βε_i},所有热力学量都可以由 ln Z 求出。', '',
+    ].join('\n'));
+    const rowsOf = (sid) => api('/agent/special/historian/activity?limit=100').then((a) => (a.activity || []).filter((r) => r.session_ref === sid));
+    const settled = async (sid, maxMs = 150_000) => {
+      let last = -1, since = Date.now(); const t0 = Date.now();
+      for (;;) {
+        const rows = (await rowsOf(sid)).filter((x) => x.action !== 'title_updated' && x.action !== 'icon_updated');
+        if (rows.length !== last) { last = rows.length; since = Date.now(); }
+        if ((rows.length > 0 && Date.now() - since > 9000) || Date.now() - t0 > maxMs) return rows;
+        await sleep(3000);
+      }
+    };
+    const turn = async (title, text) => {
+      const sid = (await api('/agent/sessions', { method: 'POST', body: JSON.stringify({ title, model_id: MODEL, project_path: p, agent_config: { agentSlug: slug, execMode: 'host', cwd: p } }) })).session.id;
+      const ev = await run(sid, text, 240_000, { agentSlug: slug, cwd: p, thinkingLevel: 'low' });
+      const acts = (await settled(sid)).map((x) => x.action);
+      const memory = (await api(`/agent/project-context?sessionId=${sid}`)).memory || {};
+      return { ev, acts, entries: (memory.entries || []).map((e) => e.content), waiting: (memory.candidates || []).map((c) => c.content) };
+    };
+    const t1 = await turn('Lecture 4 part 1', '接着讲 lectures/lecture4.md。上次讲到 2.1.5 节,这次把 2.1.5 讲完、讲到 2.1.6 开头就停。另外以后讲这个项目里的笔记,公式符号一律沿用笔记里的写法(比如 Ω 和 t),不要自己换成别的字母。');
+    const t2 = await turn('Lecture 4 part 2', '继续讲 lectures/lecture4.md:上次讲到 2.1.6 开头,这次把 2.1.6 讲完,2.2 下次再讲。');
+    const all = [...t2.entries, ...t2.waiting];
+    const progress = all.filter((c) => /2\.1\.[56]|\b2\.2\b|讲到|讲完|进度|下次|上次/.test(c));
+    const content = all.filter((c) => c.includes(`Kessler-${m}`) || /拉格朗日|配分函数|Boltzmann|最可几/.test(c));
+    const symbols = t2.entries.filter((c) => /符号|Ω|沿用/.test(c));
+    const remembered = [...t1.ev.toolArgs, ...t2.ev.toolArgs].filter((c) => c.name === 'remember').length;
+    const ran = t1.acts.length > 0 && t2.acts.length > 0;
+    const err = t1.ev.error || t2.ev.error;
+    writeFileSync(join(OUT, 'projkind-evidence.json'), JSON.stringify({ ran, acts: [t1.acts, t2.acts], entries: t2.entries, waiting: t2.waiting, progress, content, symbols, remembered, replies: [t1.ev.content, t2.ev.content] }, null, 2));
+    const ok = !err && ran && progress.length === 0 && content.length === 0;
+    return { ok, detail: [
+      `判官 ${ran ? `两轮都跑过(${t1.acts.join('/')} | ${t2.acts.join('/')})` : '⚠ 没跑全'}`,
+      `项目记忆 ${t2.entries.length} 条、待确认 ${t2.waiting.length} 条`,
+      `进度 ${progress.length ? `⚠ ${progress.length} 条` : '0 条'};讲义内容 ${content.length ? `⚠ ${content.length} 条` : '0 条'}`,
+      `沿用符号那条 ${symbols.length ? '记上了' : '没记(只记不判)'};前台 remember ${remembered} 次`,
+      ...(err ? [`⚠ ${err}`] : []),
+    ].join(';'), output: `【项目记忆】\n${t2.entries.map((c) => `- ${c}`).join('\n') || '(空)'}\n【待确认】\n${t2.waiting.map((c) => `- ${c}`).join('\n') || '(无)'}\n【第一节回复】${t1.ev.content}\n【第二节回复】${t2.ev.content}`, toolCalls: [...t1.ev.toolCalls, '|', ...t2.ev.toolCalls] };
+  });
+
   // ── 项目记忆写满时的压缩(10-05 用户定:「参考 claude 和 codex 的做法,记忆满了就让 agent 压缩一下」)──
-  //  种子:直接写这份项目记忆的 MEMORY.md(引擎当成已有内容收下),贴着 8,000 字上限:被后来的说法取代的三对、换了说法的重复两组、
+  //  种子:直接写这份项目记忆的 MEMORY.md(引擎当成已有内容收下),贴着上限(PM_LIMIT):被后来的说法取代的三对、换了说法的重复两组、
   //    现行的命令 / 路径几条、一条带网址的(过不了形状闸 → 压缩不许动它)、其余是早就没用的进度流水。
   //  A 前台:项目会话里让它记一条新规矩(明说「记一下」:随口一提时模型常常不调 remember,这条腿就量不到)→ remember 遇到写满 → 引擎让模型把整份压一遍 → 新规矩记上了。
   //    硬判:回执带 compacted;新规矩在;整份不超过上限七成 + 新规矩;带网址那条一字没动;现行的命令 / 路径 / 端口都还在;
@@ -2292,6 +2365,7 @@ try {
   //    前台没听话自己记了、或判官没提名项目级 → 这条腿没量到,照实写,不算过也不算没过;压缩被引擎拒收(日志里「没压成」)→ 不通过。
   //  负对照 = 把 projectMemoryCompact.ts 的 compactProjectMemory 开头改成直接 return { status: 'skipped', reason: 'failed' } 后重建再跑:
   //    A 回到「memory is full」、回执没有 compacted、新规矩记不上。
+  const PM_LIMIT = 4000; // = PROJECT_MEMORY_CHAR_BUDGET(src/services/projectMemory.ts),改那边要改这里
   await scenario('projcompact', 'projcompact 项目记忆写满 → 压缩一遍再记:现行的留着、带网址的不动、去掉的原句能恢复', async () => {
     const a = 'live-pc-a', b = 'live-pc-b';
     await api('/agent/agents', { method: 'POST', body: JSON.stringify({ slug: a, name: 'Cedar', systemPrompt: 'Be concise and respond in Chinese.' }) });
@@ -2320,12 +2394,13 @@ try {
         `The dev server port moved from 5173 to 6240; 5173 now belongs to the docs preview.`,
       ];
       const lines = []; let i = 0;
-      for (const d of durable) lines.push(note(i++), note(i++), d);
-      while (lines.join('\n').length + note(i).length + 1 <= 7985) lines.unshift(note(i++));
-      const gap = 7985 - lines.join('\n').length - 1; // 垫到离上限只剩十几个字:新规矩怎么措辞都放不下
+      for (const d of durable) lines.push(note(i++), d); // 11-03 上限 8000 → 4000:每条现行的前面只垫一条流水
+      while (lines.join('\n').length + note(i).length + 1 <= PM_LIMIT - 15) lines.unshift(note(i++));
+      const gap = PM_LIMIT - 15 - lines.join('\n').length - 1; // 垫到离上限只剩十几个字:新规矩怎么措辞都放不下
       if (gap >= 30) lines.unshift(`${note(i++).slice(0, gap - 1)}.`);
+      // 按老引擎的样子种(旧的哈希目录名 + 标记):引擎打开这个项目时并进新目录 —— 顺带量到「旧目录并进来」这条路
       const dir = join(home, 'project-memory', createHash('sha256').update(realpathSync(p)).digest('hex').slice(0, 32));
-      mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'MEMORY.md'), lines.join('\n'));
+      mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, 'MEMORY.md'), lines.join('\n')); writeFileSync(join(dir, 'PROJECT.json'), JSON.stringify({ project: realpathSync(p) }));
       return { p, lines, pinned, stale, current: [`test:unit-${m}`, `release/2026.10-${m}`, '6240', 'migrate:up', `stage-${m}`, 'db/migrations', 'openapi/spec-v3.yaml', 'gen:api', 'scripts/sync-vendor.sh'] };
     };
     // 压完的这份记忆对不对:带网址那条原样在、现行的词都在、够小、不在了的原句都进了记录
@@ -2347,7 +2422,7 @@ try {
     const s1 = seed('pc-one');
     const sidA = await mkS(a, s1.p, 'Compaction foreground');
     const before = await memoryOf(sidA);
-    if (before.entries.length !== s1.lines.length || before.chars < 7960) return { ok: false, detail: `种子没落到引擎读的那份记忆:写了 ${s1.lines.length} 条 ${s1.lines.join('\n').length} 字,引擎读到 ${before.entries.length} 条 ${before.chars} 字` };
+    if (before.entries.length !== s1.lines.length || before.chars < PM_LIMIT - 40) return { ok: false, detail: `种子没落到引擎读的那份记忆:写了 ${s1.lines.length} 条 ${s1.lines.join('\n').length} 字,引擎读到 ${before.entries.length} 条 ${before.chars} 字` };
     const env = `preprod-${randomUUID().slice(0, 6)}`;
     const evA = await run(sidA, `记一下,这条只在这个项目里成立:合并之前都要先在预发环境 ${env} 上验一遍,验过了再合。`, 300_000, { agentSlug: a, cwd: s1.p, thinkingLevel: 'low' });
     const receipts = evA.toolResults.filter((r) => r.name === 'remember').map((r) => { try { return JSON.parse(r.full); } catch { return { raw: String(r.full || '').slice(0, 400) }; } });
@@ -4390,31 +4465,40 @@ Then reply with only the command output.`,
   // 10-04 实测 grok-4.7 每次 5–9 次网页请求 → 改 description 后 0–1 次,luna 0 次。检索次数明显回升 = description 被改坏了。
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
+  // 11-06:app_settings(10-05)上线后模型几乎都走 load_tools → app_settings,读完写一句「设置 → 语音」就收尾、页面没打开
+  //    (10-05 起正式跑 23 次只过 1 次)。判据没放宽 —— 场景要的就是「直达」;修在 app_settings 的返回里(发起端开得了设置页时
+  //    写明 run_ui_command open-settings 的调用形状,见 services/appSettings.ts OPEN_SETTINGS_HINT)。
+  //    「打开到语音页」只认**渲染端回了 ok** 的落点:以前按「问过」算,落点被拒也记绿。
+  //    --settingsnav-no-voice = 负对照:清单里删掉 voice、渲染端把它当未知落点拒掉 → 开不到语音页,必须红。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
+    const noVoice = argv.includes('--settingsnav-no-voice');
     const TARGETS = 'Pages: general, forsion, model, connectors, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, connectors, mcp-json, mcp-server, reset-layout, clear-data, language.';
+    // ⚠️ 上面那行字面量的变量名别改:desktop settingsTarget.test.ts 按 `const TARGETS = '…';` 逐字找它。
+    const SHOWN = noVoice ? TARGETS.replace(' voice,', '') : TARGETS;
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
-      params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
+      params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${SHOWN}` } } } };
     const VOICE = new Set(['voice', 'model/m-voice']);
-    const known = new Set(TARGETS.replace(/Pages: |Settings: /g, '').split(/[,.]\s*/).filter(Boolean));
-    const asked = [];
+    const known = new Set(SHOWN.replace(/Pages: |Settings: /g, '').split(/[,.]\s*/).filter(Boolean));
+    const asked = [], opened = [];
     const ev = await run(`live-settingsnav-${Date.now()}`, '怎么设置Forsion的语音模型', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
       ui: { locale: { value: 'zh', allowed: ['zh', 'en'] } }, uiCommands: [ENTRY],
       uiRespond: (p) => {
         if (p.kind !== 'command' || p.id !== 'open-settings') return null;
         const tab = String(p.args?.tab ?? '').trim();
         asked.push(tab || '(default)');
-        if (!tab) return { ok: true, state: 'opened the default page' };
-        if (VOICE.has(tab)) return { ok: true, state: `opened model/m-voice${tab === 'voice' ? ' (covers: 语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation)' : ''}` };
-        if (known.has(tab)) return { ok: true, state: `opened ${tab}` };
+        if (!tab) { opened.push('(default)'); return { ok: true, state: 'opened the default page' }; }
+        if (VOICE.has(tab) && !noVoice) { opened.push(tab); return { ok: true, state: `opened model/m-voice${tab === 'voice' ? ' (covers: 语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation)' : ''}` }; }
+        if (known.has(tab)) { opened.push(tab); return { ok: true, state: `opened ${tab}` }; }
         return { ok: false, error: `command failed: no settings page or setting "${tab}". Valid targets are listed in this command's \`tab\` parameter.` };
       },
     });
-    const hit = asked.some((t) => VOICE.has(t));
+    const hit = opened.some((t) => VOICE.has(t));
+    const rejected = asked.filter((t) => !opened.includes(t));
     const detour = ev.toolCalls.filter((t) => /^(observe_ui|act_ui|find_roots|ensure_app|todo_write)/.test(t));
     const web = ev.toolCalls.filter((t) => /^(web_search|web_fetch|browser_)/.test(t)).length;
     return { ok: !ev.error && ev.done && hit && detour.length === 0,
-      detail: ev.error || `open-settings 落点 ${asked.join(' → ') || '未调用'};${hit ? '打开到语音页' : '没打开到语音页'};电脑操控/待办 ${detour.join(',') || '无'};网页检索 ${web} 次;工具 ${ev.toolCalls.join('→') || '无'}`,
+      detail: ev.error || `${noVoice ? '[负对照:清单无语音页] ' : ''}open-settings 落点 ${asked.join(' → ') || '未调用'}${rejected.length ? `(被拒 ${rejected.join(',')})` : ''};${hit ? '打开到语音页' : '没打开到语音页'};电脑操控/待办 ${detour.join(',') || '无'};网页检索 ${web} 次;工具 ${ev.toolCalls.join('→') || '无'}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
@@ -5547,11 +5631,11 @@ Then reply with only the command output.`,
     const starters = asList(await api('/agent/special/muse/starters').catch(() => []), 'starters');
     const labelsOk = starters.every((x) => String(x.text || '').includes(String(x.source?.label || '\u0000')));
     const zh = starters.filter((x) => /[\u4e00-\u9fff]/.test(x.text)).length;
-    const ok = calls.length > 0 && starters.length > 0 && labelsOk;
+    const ok = calls.length > 0 && starters.length >= 3 && labelsOk; // 11-03 用户:默认填满三条
     const museSays = done.sessionId ? asList(await api(`/agent/sessions/${done.sessionId}/messages`).catch(() => []), 'messages').filter((m) => m.role === 'assistant' || m.role === 'model').map((m) => String(m.content || '')).join('\n---\n') : '';
     const detail = [
       `set_chat_starters 调了 ${calls.length} 次${calls.length ? '' : ' ← 红'}`,
-      `新对话页 ${starters.length} 条${starters.length ? '' : ' ← 红'}${labelsOk ? '' : ';有 label 不在句子里 ← 红'}`,
+      `新对话页 ${starters.length} 条${starters.length >= 3 ? '' : '(要满 3 条)← 红'}${labelsOk ? '' : ';有 label 不在句子里 ← 红'}`,
       `中文 ${zh}/${starters.length}(只记)`,
       starters.map((x) => `[${x.source?.kind}「${x.source?.label}」${x.source?.ref ? ` → ${x.source.ref}` : ''}] ${x.text}`).join(' | '),
     ].join(';');
@@ -7726,6 +7810,24 @@ Then reply with only the command output.`,
       const looked = ev.toolCalls.some((n) => /read_file|grep|list_dir|edit_file|apply_patch|write_file/.test(n));
       const lie = /(跑|运行)(起来了|成功|正常)|没有问题|一切正常|works fine|no (problems|issues)/i.test(ev.content) && !sawErr;
       return { ok: !ev.error && starts(ev).length > 0 && sawErr && !lie, detail: ev.error || `${sum(ev)};${sawErr ? '说了报错' : '✗ 没提报错'};${looked ? '去看了代码' : '没看代码'}${lie ? ';✗ 说跑通了' : ''}`, ...base(ev) };
+    });
+    // ⑤(11-03):在沙箱里动手。台架扮桌面:read 回带引用的大纲,type / click 回执,click 的回执里带一条插件新写的 console 报错。
+    //   判据:用 read 拿引用 / 可见文字去 type + click(不是 computer use、也不是只截图了事),并把点完冒出来的报错如实转述。
+    await scenario('pluginsandbox', 'pluginsandbox ⑤ 在沙箱里动手:read → type → click,转述点完冒出的报错', async () => {
+      const OUTLINE = '[e1] button "Reading log"\nheading "Shelf"\n[e2] input "Book title"\n[e3] button "Add book"\ntext "No books yet"';
+      const act = (op, a) => ({ ok: true, text: JSON.stringify({ ...status(), action: { did: op === 'read' ? 'read 3 element(s)' : op === 'type' ? 'typed 4 character(s)' : op === 'click' ? 'clicked' : op, target: a.target ? `target ${a.target}` : '', outline: op === 'read' ? OUTLINE : '', newLogs: op === 'click' ? [{ level: 'error', text: 'TypeError: books.push is not a function (main.js:14)' }] : [], newNotices: [] } }) });
+      const ev = await run(`live-sbx-act-${Date.now()}`, 'reading-log 插件已经在沙箱里跑着了。帮我在沙箱里试一下:在输入框里填一本书「Dune」,点「Add book」,看看加上没有、控制台有没有报错。先别改代码。', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
+        clientCapabilities: ['plugin.sandbox'],
+        phone: { ns: 'plugin', respond: (b) => (['read', 'type', 'click', 'press', 'scroll', 'space', 'files'].includes(b.op) ? act(b.op, b.args || {}) : b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(status()) }) },
+      });
+      const ops = ev.clientCmds.filter((c) => c.claimed).map((c) => c.op);
+      const typed = ev.clientCmds.find((c) => c.op === 'type' && c.claimed && /Dune/.test(String(c.args?.text || '')));
+      const clicked = ev.clientCmds.find((c) => c.op === 'click' && c.claimed && /e3|Add book/i.test(String(c.args?.target || '')));
+      const cu = ev.toolCalls.filter((n) => /^computer|^mcp__computer|screenshot_app/.test(n));
+      const relays = /books\.push|TypeError|报错|错误|error/i.test(ev.content);
+      const edited = ev.toolCalls.some((n) => /edit_file|write_file|apply_patch/.test(n));
+      return { ok: !ev.error && !!typed && !!clicked && !cu.length && relays && !edited,
+        detail: ev.error || `${sum(ev)};${typed ? '填了 Dune' : '✗ 没 type Dune'};${clicked ? `点了 ${clicked.args.target}` : '✗ 没点 Add book'};${relays ? '转述了报错' : '✗ 没提报错'}${cu.length ? `;✗ 用了 computer use(${cu.join(',')})` : ''}${edited ? ';✗ 动了代码' : ''};动作序列 ${ops.join('→')}`, ...base(ev) };
     });
     await scenario('pluginsandbox', 'pluginsandbox ③ 负对照:没声明能力 → 零 plugin_sandbox,不谎称在沙箱里跑过', async () => {
       const ev = await sbxRun(MSG, { caps: null });

@@ -864,7 +864,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             {/* 对话末尾:任务清单一行 + 等你处理的卡片堆,跟着最新内容走(画布模式下卡片堆回到输入框上方) */}
             {!canvasOn && (tailTodo || deck) && (
               <div className="t2-tail" data-pending-deck>
-                {tailTodo && <TodoList todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} folded />}
+                {tailTodo && <TodoList todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} stopped={tailTodo.status === 'stopped' || tailTodo.status === 'error'} folded />}
                 {deck}
               </div>
             )}
@@ -916,21 +916,12 @@ export function ChatView({ leaf, params }: ViewProps) {
       {/* 空状态优先保持 view 居中;空间不足时按 composer 实高向上避让,小高度逐级精简。 */}
       {!hasMessages && !historyLoading && !canvasOn && <EmptyState2 center={freshCenter} rise={freshRise} compact={!!params.miniSurface} title={params.miniSurface ? t('mini.chatHint') : studioChat ? t('studio.chatTitle') : undefined} subtitle={studioChat ? t(studioRoot ? 'studio.chatHint' : 'studio.chooseProject') : undefined} />}
 
-      {/* 输入区整簇(新对话的两条选择器 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
+      {/* 输入区整簇(新对话的项目栏 + 输入卡)一起悬浮:它们**都在 .composer-anchor 里**,
           正文才能真正铺满整列。留在外面就会各占一段布局,反倒被悬浮的卡盖住。
           新加与输入卡同簇的东西请一并放进来 —— 高度由 anchor 统一量成 --t2-composer-h。 */}
       {/* 聊天里弹的 toast(成就 / 引导任务)挂到这里:输入卡上方 12px、同一条中线(lib/chatToastDock,走查续六 6.5) */}
       <div className="t2-toast-dock" />
       <div className="composer-anchor" data-kb-rise ref={composerRef}>
-        {/* Chat 固定使用创建时的当前默认 Agent，不露选择器；Work 的云会话仍可选 Agent，外部引擎仍 host-only。
-            轨道方案 §4:门控去掉 `!groupChat`(06-25 那道「群聊态无单一主 agent」门的理由随选择条消失 ——
-            **这条就是群聊/团队模式的配置器**),换成轨道身份钉死的三把锁(私聊 / 私聊引擎 / 独立团队)。 */}
-        {!params.miniSurface && !params.childSurface && !hasMessages && mvCfg.preset !== 'chat' && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.teamSlug && (
-          <div className="newchat-pickers">
-            <AgentSelectStrip sessionId={activeId} cfg={mvCfg} />
-          </div>
-        )}
-  
         {/* 输入卡上方那一栏:左边是「在哪运行 / 项目 / 额外文件夹」几枚胶囊,右边是开场那一行;两半各有各的出现条件,栏本身只要有一半在就在。
             开场不再单占一行排在这一栏下面 —— 那样它夹在项目胶囊和输入卡之间(用户 10-13 报丑);一行放不下时整栏朝上折,胶囊始终贴着输入卡。
             ⚠️ 两半在同一个父节点下的固定位置:项目那半随建会话消失时,开场那一行不重挂(重挂 = 当成「看过了」)。 */}
@@ -1051,6 +1042,12 @@ export function ChatView({ leaf, params }: ViewProps) {
           // 拍板 ⑪:对话中可切 Agent,入口先放模式切换菜单;群聊态 / 私聊(钉死)/ 引擎会话不给。
           onAgentSwitch={!params.childSurface && activeId && hasMessages && !mvCfg.groupChat && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.teamSlug && !mvCfg.engineId ? (slug) => s.selectSessionAgent(slug, activeId) : undefined}
           currentAgentSlug={mvCfg.agentSlug || s.defaultAgentSlug}
+          // 收件人芯片(11-02 起在工具行里,方案 A)。Chat 固定使用创建时的当前默认 Agent，不露选择器；Work 的云会话仍可选 Agent，外部引擎仍 host-only。
+          // 轨道方案 §4:门控去掉 `!groupChat`(06-25 那道「群聊态无单一主 agent」门的理由随选择条消失 ——
+          // **这枚就是群聊/团队模式的配置器**),换成轨道身份钉死的三把锁(私聊 / 私聊引擎 / 独立团队)。开聊后收起,会话中换人走模式菜单。
+          recipientChip={!params.miniSurface && !params.childSurface && !hasMessages && mvCfg.preset !== 'chat' && !mvCfg.soloAgentSlug && !mvCfg.soloEngineId && !mvCfg.teamSlug
+            ? <AgentSelectStrip sessionId={activeId} cfg={mvCfg} />
+            : undefined}
           // 私聊(Agent 轨道):@ 候选换成本机项目 → 派遣(方案 §5.4);只有带路径的本地工作区(派遣工具 host-only)。
           mentionProjects={mvCfg.soloAgentSlug ? s.workspaces().filter((w) => w.kind === 'local' && !!w.path).map((w) => ({ name: w.name, path: w.path! })) : undefined}
           onNewSession={params.childSurface ? undefined : () => {

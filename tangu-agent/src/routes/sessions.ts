@@ -138,25 +138,31 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
 // 会话行的「主动发来没看」与「等你」(Muse 私聊方案 B,10-18):桌面全局轮询器每 4s 拉一次,私聊行尾状态与 Tangu 角标靠它。
 //   unread   = Agent 在后台主动发来、用户还没打开过(proactive_at > last_read_at);一轮对话跑完没看的仍由客户端自己记
 //   awaiting = 问句在等回话(awaiting_user),或 Muse 后台有待批的一步(算在 Muse 私聊上 —— 托盘里批完不起轮,awaiting_user 清不掉)
+//   count    = 没读的主动消息条数(行尾红点上的数;11-04 加,老客户端不认它照旧只画点)
+//   at       = 最近一条主动消息的时刻(客户端据此认「又来了一条」去重拉列表;读过之后再来一条,条数可能不变)
 // 只返回有状态的会话,没有就是空表。
 router.get('/agent/sessions/attention', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
     const appId = deps().profile.appId;
     const rows = await query<any[]>(
-      `SELECT id, proactive_at, last_read_at, awaiting_user FROM chat_sessions
+      `SELECT s.id, s.proactive_at, s.last_read_at, s.awaiting_user,
+         (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id AND m.origin LIKE 'proactive%'
+            AND m.timestamp > COALESCE(s.last_read_at, 0)) AS unread_count
+       FROM chat_sessions s
        WHERE user_id = ? AND app_id = ? AND archived = ? AND kind = 'user'
          AND (awaiting_user = TRUE OR (proactive_at IS NOT NULL AND proactive_at > COALESCE(last_read_at, 0)))`,
       [userId, appId, false],
     );
-    const out = new Map<string, { id: string; unread: boolean; awaiting: boolean }>(rows.map((r) => [String(r.id), {
-      id: String(r.id), unread: Number(r.proactive_at || 0) > Number(r.last_read_at || 0), awaiting: !!r.awaiting_user,
-    }]));
+    const out = new Map<string, { id: string; unread: boolean; awaiting: boolean; count: number; at: number }>(rows.map((r) => {
+      const unread = Number(r.proactive_at || 0) > Number(r.last_read_at || 0);
+      return [String(r.id), { id: String(r.id), unread, awaiting: !!r.awaiting_user, count: unread ? Number(r.unread_count) || 0 : 0, at: Number(r.proactive_at) || 0 }];
+    }));
     if (deps().profile.capabilities.hostExec) {
       const [p] = await query<any[]>(
         `SELECT COUNT(*) AS n FROM pending_approvals WHERE user_id = ? AND agent_slug = ? AND status = 'pending'`, [userId, MUSE_AGENT_SLUG]);
       const sid = Number(p?.n) > 0 ? await museDmSessionId(userId, appId) : null;
-      if (sid) out.set(sid, { id: sid, unread: out.get(sid)?.unread ?? false, awaiting: true });
+      if (sid) out.set(sid, { id: sid, unread: out.get(sid)?.unread ?? false, awaiting: true, count: out.get(sid)?.count ?? 0, at: out.get(sid)?.at ?? 0 });
     }
     res.json({ sessions: [...out.values()] });
   } catch (e: any) {

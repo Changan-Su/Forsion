@@ -1,6 +1,6 @@
 /**
  * 对话区内联文件:agent 经 display_file / generate_image / 表情包展示给用户的文件。
- * 图片 = 缩略图,点击放大(复用 WorkspaceFilePreview 灯箱);其它 = 可点击文件卡片(同样开预览,支持各类文件)。
+ * 图片 = 缩略图;音视频 = 内联播放器;其它 = 可点击文件卡片(打开 WorkspaceFilePreview)。
  * 字节来源:dataUrl 直接用;工作区路径 host 会话走「会话所在那台电脑」的 host 文件面(hostFs:本机 = window.tangu.readHostFile,
  * 手机把整端切到我的电脑 = 经 hub 的 /unit/hostfile)、沙箱走 /agent/workspace/read(P1-K6 S2)。
  * 下载(P1-DL):host 文件一律交给同一个 hostFs 的 downloadHostFile —— 本机 = 在文件管理器显示;手机 / 设备页 / 看别的电脑 =
@@ -9,18 +9,16 @@
 import React, { useEffect, useRef, useState } from 'react'
 import type { DisplayFile, TanguDesktopConfig } from '../types'
 import type { PreviewTarget, PreviewData } from './WorkspaceFilePreview'
-import { b64ToBytes, iconForFile } from '../services/fileKinds'
+import { b64ToBytes, iconForFile, mimeForExt, previewKindFor } from '../services/fileKinds'
 import * as api from '../services/backendService'
 import { hostFsForSession } from '../services/engine/hostFs'
 import { notifyApp } from '../stores/notificationStore'
 import { targetForSession } from '../services/engine/targets'
 import { translate } from '../i18n'
 import { viewableProps } from './ImageViewer'
+import { saveResponseAs } from '../services/nativeDownload'
 
 type ExecMode = 'host' | 'sandbox' | undefined
-
-const isImage = (f: DisplayFile): boolean =>
-  (f.mime?.startsWith('image/') ?? false) || /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(f.name)
 
 function decodeDataUrl(u: string): PreviewData {
   const m = u.match(/^data:([^;]+);base64,(.*)$/)
@@ -53,7 +51,12 @@ export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: st
       const r = await api.readWorkspaceFile(targetForSession(sessionId), sessionId, f.path)
       return { mimeType: r.mimeType, bytes: b64ToBytes(r.content), size: r.size }
     },
-    download: f.path
+    download: f.dataUrl ? () => {
+      void (async () => {
+        const data = decodeDataUrl(f.dataUrl!)
+        await saveResponseAs(f.name, new Response(new Blob([data.bytes as BlobPart], { type: data.mimeType })))
+      })().catch(surface)
+    } : f.path
       ? (execMode === 'host'
           // 这端给不了(云端没有 host 文件面)→ undefined 藏掉下载位,免留静默哑弹
           ? (hostDownload ? () => { void hostDownload(f.path!, f.name).catch(surface) } : undefined)
@@ -64,7 +67,7 @@ export function targetFor(f: DisplayFile, cfg: TanguDesktopConfig, sessionId: st
 
 /** 非图片(以及读不出缩略图的图片)的文件卡片:点开预览,预览里有下载位。 */
 const FileCard: React.FC<{ f: DisplayFile; onClick: () => void }> = ({ f, onClick }) => {
-  const Icon = iconForFile(f.mime || '', f.name)
+  const Icon = iconForFile(mimeForExt(f.name) || f.mime || '', f.name)
   return (
     <button className="inline-file-card" title={f.name} onClick={onClick}>
       <Icon size={15} /><span className="inline-file-name">{f.name}</span>
@@ -72,49 +75,59 @@ const FileCard: React.FC<{ f: DisplayFile; onClick: () => void }> = ({ f, onClic
   )
 }
 
-/** 缩略图:dataUrl / 沙箱直链直接用;host 路径异步读字节做 blob URL。
- *  目标不能直链(手机经 hub 打我的电脑:`<img src>` 不带凭据、隧道 cookie 对手机源是跨站)→ 沙箱文件也读字节做 blob。
- *  读不出来(手机上 >4MB 的图 = 隧道预览 tooLarge、对方离线……)→ 退化成文件卡片:图没了下载位也不能跟着没(P1-DL)。 */
-const Thumb: React.FC<{ f: DisplayFile; cfg: TanguDesktopConfig; sessionId: string; execMode: ExecMode; onClick: () => void }> = ({ f, cfg, sessionId, execMode, onClick }) => {
-  sessionId = f.sourceSessionId || sessionId
-  const direct = f.dataUrl || (f.path && execMode !== 'host' ? api.workspaceDownloadUrl(targetForSession(sessionId), sessionId, f.path) : null)
-  const [src, setSrc] = useState<string | null>(direct)
+/** 音视频等进入视口再取字节，避免打开历史对话时并发下载一批大文件。加载或解码失败时保留文件卡片。 */
+const InlineMedia: React.FC<{
+  f: DisplayFile; cfg: TanguDesktopConfig; sessionId: string; execMode: ExecMode
+  kind: 'image' | 'video' | 'audio'; onClick: () => void
+}> = ({ f, cfg, sessionId, execMode, kind, onClick }) => {
+  const sourceId = f.sourceSessionId || sessionId
+  const direct = kind === 'image'
+    ? f.dataUrl || (f.path && execMode !== 'host' ? api.workspaceDownloadUrl(targetForSession(sourceId), sourceId, f.path) : null)
+    : null
+  const [src, setSrc] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
-  const urlRef = useRef<string | null>(null)
+  const [visible, setVisible] = useState(false)
+  const mediaRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
+    if (kind === 'image' || !mediaRef.current) return
+    if (typeof IntersectionObserver === 'undefined') { setVisible(true); return }
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) { setVisible(true); observer.disconnect() }
+    })
+    observer.observe(mediaRef.current)
+    return () => observer.disconnect()
+  }, [kind])
+  useEffect(() => {
+    setSrc(null)
     setFailed(false)
-    if (direct) { setSrc(direct); return }
+    if (direct || (kind !== 'image' && !visible)) return
     let cancelled = false
+    let url: string | undefined
     void (async () => {
-      if (!f.path) return
-      const fs = execMode === 'host' ? hostFsForSession(sessionId) : null
       try {
-        let bytes: Uint8Array | null = null
-        let mime = ''
-        if (fs) {
-          const r = await fs.readHostFile(f.path)
-          if (cancelled) return
-          if (r.tooLarge) { setFailed(true); return }
-          bytes = b64ToBytes(r.content)
-          mime = r.mimeType
-        } else if (execMode !== 'host') {
-          const r = await api.readWorkspaceFile(targetForSession(sessionId), sessionId, f.path)
-          if (cancelled) return
-          bytes = b64ToBytes(r.content)
-          mime = r.mimeType
-        }
-        if (!bytes || cancelled) return
-        const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime || f.mime || 'image/png' }))
-        urlRef.current = url
+        const data = await targetFor(f, cfg, sessionId, execMode).load()
+        if (cancelled) return
+        if (!data || 'tooLarge' in data) { setFailed(true); return }
+        const type = mimeForExt(f.name) || f.mime || data.mimeType
+        url = URL.createObjectURL(new Blob([data.bytes as BlobPart], { type }))
         setSrc(url)
       } catch { if (!cancelled) setFailed(true) }
     })()
-    return () => { cancelled = true; if (urlRef.current) { URL.revokeObjectURL(urlRef.current); urlRef.current = null } }
-  }, [f.path, f.dataUrl]) // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { cancelled = true; if (url) URL.revokeObjectURL(url) }
+  }, [direct, f.path, f.dataUrl, f.name, f.mime, sourceId, execMode, kind, visible]) // eslint-disable-line react-hooks/exhaustive-deps
   if (failed) return <FileCard f={f} onClick={onClick} />
-  if (!src) return null
+  if (kind !== 'image') return (
+    <div className="inline-file-media" ref={mediaRef}>
+      {src && (kind === 'video'
+        ? <video className="inline-file-video" src={src} controls playsInline preload="metadata" aria-label={f.name} onError={() => setFailed(true)} />
+        : <audio className="inline-file-audio" src={src} controls preload="metadata" aria-label={f.name} onError={() => setFailed(true)} />)}
+      <FileCard f={f} onClick={onClick} />
+    </div>
+  )
+  const imageSrc = direct || src
+  if (!imageSrc) return null
   // 点开 = 就地看图(A2);原来的去处(主区文件标签页)挪到看图顶栏的「在标签页打开」
-  return <img className="inline-file-img" src={src} alt={f.name} title={f.name} draggable={false} onError={() => setFailed(true)} {...viewableProps({ name: f.name, alt: { label: translate('viewer.openTab'), run: onClick } })} />
+  return <img className="inline-file-img" src={imageSrc} alt={f.name} title={f.name} draggable={false} onError={() => setFailed(true)} {...viewableProps({ name: f.name, alt: { label: translate('viewer.openTab'), run: onClick } })} />
 }
 
 export const InlineFiles: React.FC<{
@@ -129,7 +142,10 @@ export const InlineFiles: React.FC<{
   return (
     <div className="inline-file-grid">
       {files.map((f, i) => {
-        if (isImage(f)) return <Thumb key={i} f={f} cfg={cfg} sessionId={sessionId} execMode={execMode} onClick={() => open(f)} />
+        const kind = previewKindFor(f.mime || '', f.name)
+        if (kind === 'image' || kind === 'video' || kind === 'audio') {
+          return <InlineMedia key={i} f={f} cfg={cfg} sessionId={sessionId} execMode={execMode} kind={kind} onClick={() => open(f)} />
+        }
         return <FileCard key={i} f={f} onClick={() => open(f)} />
       })}
     </div>

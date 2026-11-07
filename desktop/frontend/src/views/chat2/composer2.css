@@ -88,9 +88,15 @@
 /* 行内引用(句子里的那枚芯片,InlineRefMirror):这一层叠在文本框上、字是透明的,只画底色和图标。
    ⚠️ 这里不许出现任何会改变文字宽度的东西(padding / margin / border / 字号):它的排版必须和文本框一字不差。 */
 .t2c-mirror { position: absolute; z-index: 1; margin: 0; border: 0; box-sizing: border-box; overflow: hidden; pointer-events: none; color: transparent; white-space: pre-wrap; overflow-wrap: break-word; }
-.t2c-inref { border-radius: var(--radius-sm, 6px); background: var(--overlay-medium); box-shadow: 0 0 0 1.5px var(--overlay-medium); -webkit-box-decoration-break: clone; box-decoration-break: clone; }
+/* 行内引用和认得出的斜杠命令 / @ 提及(.t2c-tok)同一枚:强调色浅底 + 强调色字(2026-11-04 用户选方案 B,
+   对照页 docs/ToBeImproved/强调色补全方案_2026-11-04)。字色是这层把同一段字用强调色再描一遍,盖在文本框的原字上。 */
+.t2c-inref, .t2c-tok {
+  --t2c-tok-wash: color-mix(in srgb, var(--signal) 14%, transparent);
+  border-radius: var(--radius-sm, 6px); background: var(--t2c-tok-wash); box-shadow: 0 0 0 1.5px var(--t2c-tok-wash); color: var(--signal);
+  -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
 .t2c-inref-slot { position: relative; }
-.t2c-inref-ico { position: absolute; top: 50%; left: 50%; width: 1em; height: 1em; translate: -50% -50%; object-fit: contain; color: var(--accent-ink); }
+.t2c-inref-ico { position: absolute; top: 50%; left: 50%; width: 1em; height: 1em; translate: -50% -50%; object-fit: contain; color: var(--signal); }
 
 /* 模式 / 模型 药丸(移入卡内底排 .t2c-row) */
 .t2c-pill {

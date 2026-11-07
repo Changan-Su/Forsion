@@ -1,7 +1,7 @@
 import { flushAllScopes } from './amadeus/store/pageStore'
 /** Mini boot connects shared data and a single opt-in Space surface. */
 import { useEffect, useState } from 'react'
-import { MiniColumnHost, getActiveSpace, getView, setActiveSpace, setMiniMainHandler, setMiniViewRouter, showInMainPanel, supportsMiniPanel, subscribeViews, useSpaceStore, useWorkspace } from '@lcl/engine'
+import { MiniColumnHost, getActiveSpace, isMacPlatform, getView, setActiveSpace, setMiniMainHandler, setMiniViewRouter, showInMainPanel, supportsMiniPanel, subscribeViews, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { useI18n } from './i18n'
 import { installFileDropGuard } from './fileDropGuard'
@@ -11,6 +11,7 @@ import type { MiniOpenOptions } from '../../shared/miniPanel'
 import { DockRoot } from './mini/DockRoot'
 import { track } from './achievements/store'
 import { installMiniDockMotion } from './mini/dockMotion'
+import { QuickFind, useQuickFind } from './quickFind'
 
 let directMini: MiniOpenOptions | null = null
 /** 侧边拼接面板(DockRoot)也是 direct 形态:它自己定目标,不经 onMiniTarget。 */
@@ -102,13 +103,27 @@ function MiniPanelRoot() {
   }, [])
   useEffect(() => { if (window.amadeus) ensureAmadeusReady() }, [])
   useEffect(() => installFileDropGuard(), [])
+  // 文件搜索 = 主窗那份快速查找(11-03 用户)。Mini 不装全局热键(installHotkeys 只在 Shell,装了会把主窗专属命令一起武装),
+  // 只认 ⌘P / Ctrl+P 这一个。选中的笔记 / 会话照 setMiniViewRouter 走:本 Space 的视图就地开,别的进主面板。
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key.toLowerCase() !== 'p' || !(isMacPlatform() ? e.metaKey : e.ctrlKey) || e.shiftKey || e.altKey || e.isComposing) return
+      e.preventDefault()
+      useQuickFind.getState().openPalette()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
   // 引导「打开一次 Mini」:open-mini 命令 / 全局快捷键都只经主进程建窗,渲染层能看到的就是这张卡挂载(窗口复用时再显示不重计);
   // Computer Use 的自动观察窗(?transient=1)不算。计数经 localStorage + storage 事件同步回主窗。
   useEffect(() => { if (!new URLSearchParams(location.search).has('transient')) track('mini.open') }, [])
   // 自动 Mini(?transient=1,Computer Use 的临时观察窗)大小固定;用户自己开的这张可以拖边改大小
-  return <MiniColumnHost buildDefault={buildMiniPanel} resizable={!!window.tangu?.miniResize && !new URLSearchParams(location.search).has('transient')} direct={direct?.view ? {
-    title: direct.title,
-    view: direct.view,
-    mainView: direct.mainView ?? direct.view,
-  } : null} />
+  return <>
+    <MiniColumnHost buildDefault={buildMiniPanel} resizable={!!window.tangu?.miniResize && !new URLSearchParams(location.search).has('transient')} direct={direct?.view ? {
+      title: direct.title,
+      view: direct.view,
+      mainView: direct.mainView ?? direct.view,
+    } : null} onSearch={() => useQuickFind.getState().openPalette()} />
+    <QuickFind />
+  </>
 }

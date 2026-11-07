@@ -6,6 +6,8 @@ import { formatDateTime } from '../format/time'
 import { marketAccountRequest, marketPreferences, readMarketResource, setMarketPreference, type MarketComment, type MarketPreferences } from '../services/marketDiscussion'
 import type { MarketDetail } from '../types'
 import { MarketRequirements, requirementsText } from './MarketRequirements'
+import { compareMarketVersions, type KeptPluginVersion } from '../../../shared/marketPluginUpdates'
+import './marketPluginUpdates.css'
 import './MarketUpgrade.css'
 
 registerMessages({
@@ -32,6 +34,11 @@ registerMessages({
   'market.versionEmpty': { zh: '还没有版本记录', en: 'No version history yet' },
   'market.installVersion': { zh: '安装此版本', en: 'Install this version' },
   'market.currentVersion': { zh: '当前上架版本', en: 'Current store version' },
+  'market.thisVersion': { zh: '当前版本', en: 'Current version' },
+  'market.updateToVersion': { zh: '更新到此版本', en: 'Update to this version' },
+  'market.rollbackToVersion': { zh: '回退到此版本', en: 'Roll back to this version' },
+  'market.pinnedTag': { zh: '已固定', en: 'Pinned' },
+  'market.keptTag': { zh: '本机已存', en: 'On this device' },
   'market.copyId': { zh: '复制插件 ID', en: 'Copy plugin ID' },
   'market.tagAll': { zh: '所有标签', en: 'All tags' },
   'market.compatibleOnly': { zh: '只看适配当前版本', en: 'Compatible only' },
@@ -127,14 +134,37 @@ function MarketDiscussionBody({ item }: { item: MarketDetail }) {
   </section>
 }
 
-export function MarketVersions({ item, appVersion, onInstall, installing }: { item: MarketDetail; appVersion: string; onInstall(version: string): void; installing?: boolean }) {
+/**
+ * 版本页(11-06 方案 A3):装着的那行标「已安装 / 已固定」、按钮成「当前版本」;比它新的「更新到此版本」,旧的「回退到此版本」。
+ * 本机版本库里留着的旧版标「本机已存」,点了走本地换目录(不联网);其余从商店重装。不兼容的照旧置灰。
+ */
+export function MarketVersions({ item, appVersion, onInstall, installing, installedVersion, pinnedVersion, kept, onRollback }: {
+  item: MarketDetail; appVersion: string; onInstall(version: string): void; installing?: boolean
+  installedVersion?: string | null; pinnedVersion?: string; kept?: KeptPluginVersion[]; onRollback?(version: string): void
+}) {
   const { t } = useI18n()
   const [versions, setVersions] = useState<Array<MarketDetail & { version: string; createdAt: string }>>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   useEffect(() => { let alive = true; void readMarketResource<{ versions: typeof versions }>(item.id, 'versions').then(r => { if (alive) setVersions(r.versions) }).catch(e => { if (alive) setError(e.message) }).finally(() => { if (alive) setLoading(false) }); return () => { alive = false } }, [item.id])
+  const row = (version: MarketDetail & { version: string; createdAt: string }) => {
+    const cmp = installedVersion ? compareMarketVersions(version.version, installedVersion) : null
+    const local = cmp !== null && cmp < 0 && onRollback ? kept?.find(k => compareMarketVersions(k.version, version.version) === 0) : undefined
+    const blocked = ['version', 'platform'].includes(marketplaceCompatibility(version, appVersion, marketPlatform())) || (!!local && !local.compatible)
+    const label = cmp === 0 ? 'market.thisVersion' : cmp === null ? 'market.installVersion' : cmp > 0 ? 'market.updateToVersion' : 'market.rollbackToVersion'
+    return <article key={version.version} className="mk-version-row" data-market-version={version.version}>
+      <div>
+        <strong>v{version.version}</strong>
+        {cmp === 0 && <span className="pvb-tag is-accent">{t(pinnedVersion && compareMarketVersions(pinnedVersion, version.version) === 0 ? 'market.pinnedTag' : 'market.installed')}</span>}
+        {local && <span className="pvb-tag">{t('market.keptTag')}</span>}
+        {version.version === item.latestVersion && <span className="mk-muted"> · {t('market.currentVersion')}</span>}
+        <p>{formatDateTime(version.createdAt)} · Forsion {requirementsText(version)}</p><MarketRequirements item={version} version={appVersion} />
+      </div>
+      <button className="btn sm" disabled={installing || cmp === 0 || blocked} onClick={() => local ? onRollback!(local.version) : onInstall(version.version)}>{t(label)}</button>
+    </article>
+  }
   return <section className="mk-version-list">{loading && <p role="status">{t('market.loading')}</p>}{error && <p role="alert">{error}</p>}{!loading && !error && !versions.length && <p className="mk-muted">{t('market.versionEmpty')}</p>}
-    {versions.map(version => <article key={version.version} className="mk-version-row"><div><strong>v{version.version}</strong>{version.version === item.latestVersion && <span className="mk-muted"> · {t('market.currentVersion')}</span>}<p>{formatDateTime(version.createdAt)} · Forsion {requirementsText(version)}</p><MarketRequirements item={version} version={appVersion} /></div><button className="btn sm" disabled={installing || ['version', 'platform'].includes(marketplaceCompatibility(version, appVersion, marketPlatform()))} onClick={() => onInstall(version.version)}>{t('market.installVersion')}</button></article>)}
+    {versions.map(row)}
   </section>
 }
 

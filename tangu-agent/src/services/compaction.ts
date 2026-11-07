@@ -154,6 +154,24 @@ export function messageSource(m: unknown): MessageSource | undefined {
   return m && typeof m === 'object' ? sourceTags.get(m) : undefined;
 }
 
+/**
+ * 按时间该不该先压缩(借 Claude Code 的按时间压缩):上一条已落库消息(本轮那条 user 除外)距 now 超过 idleMinutes,
+ * 提示缓存已凉,整段历史本来就要按全价重读。历史不到两倍 keepRecentTokens 不压 —— 摘要那次调用不比直接重读便宜。
+ * ponytail: 2× 是拍的地板,不是算出来的盈亏点。
+ */
+export function idleCompactionDue(
+  msgs: ChatMessage[], settings: Pick<CompactionSettings, 'enabled' | 'idleMinutes' | 'keepRecentTokens'>,
+  estTokens: number, now: number, excludeId?: string,
+): boolean {
+  if (!settings.enabled || !(settings.idleMinutes > 0) || estTokens <= settings.keepRecentTokens * 2) return false;
+  let last = 0;
+  for (const m of msgs) {
+    const src = messageSource(m);
+    if (src && src.id !== excludeId && src.ts > last) last = src.ts;
+  }
+  return last > 0 && now - last > settings.idleMinutes * 60_000;
+}
+
 // ── 检查点 ────────────────────────────────────────────────────────────────────
 export interface Checkpoint {
   id: string;
