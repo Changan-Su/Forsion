@@ -2,6 +2,8 @@ import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpCo
 import { assertMarketplaceRequirements } from '../shared/marketplace'
 import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner,agentContentHooks } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
+import { qwenVoiceInputUrl, registerVoiceInputStream } from './voiceInputStream'
+import { voiceInputCloudUrl } from '../shared/voiceInputStream'
 import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
 import { registerStartupAppearance } from './startupAppearance'
@@ -3945,6 +3947,7 @@ app.whenReady().then(async () => {
     const i = modelId.indexOf('/')
     const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined
     if (provider) {
+      if (qwenVoiceInputUrl(provider.baseUrl, modelId.slice(i + 1))) throw new Error('asr_streaming_required')
       return transcribeViaOpenAI({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId.slice(i + 1), audio, mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
     }
     // 非自带 provider = Forsion 托管模型(或未选,让服务端用 app asr 默认)→ 直连 Forsion 服务端(token 不下发 renderer)。
@@ -3954,6 +3957,22 @@ app.whenReady().then(async () => {
     if (!cloudUrl || !token) throw new Error('未设置语音识别:选一个自带 provider 的语音识别模型 + key,或登录 Forsion 用云端,或下载本地语音模型。')
     return transcribeViaForsion({ cloudUrl, token, modelId, audioB64: audio.toString('base64'), mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
   }
+
+  registerVoiceInputStream(isTrustedSender, async (requestedModel) => {
+    const cfg = await loadConfig()
+    if (asrBackendFor(cfg.asrBackend, undefined, localModelReady()) === 'local') return null
+    const modelId = (requestedModel || cfg.asrModelId || '').trim()
+    const i = modelId.indexOf('/')
+    const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined
+    if (provider) {
+      const url = qwenVoiceInputUrl(provider.baseUrl, modelId.slice(i + 1))
+      return url && provider.apiKey ? { url, token: provider.apiKey, direct: true } : null
+    }
+    const creds = loadTanguCreds()
+    const cloudUrl = cfg.cloudUrl || creds.cloudUrl
+    if (!cloudUrl || !creds.token) return null
+    return { url: voiceInputCloudUrl(cloudUrl.replace(/\/+$/, '') + '/api', modelId, `desktop/${app.getVersion()}`), token: creds.token }
+  })
 
   ipcMain.handle('asr:transcribe', async (_e, req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }) =>
     runTranscribe(Buffer.from(req?.audioBase64 || '', 'base64'), req || {}))

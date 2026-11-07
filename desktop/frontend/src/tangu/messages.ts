@@ -272,6 +272,7 @@ registerMessages({
   'input.addContent': { zh: '添加内容', en: 'Add content' },
   'input.micStart': { zh: '语音输入（点击开始录音）', en: 'Voice input (click to record)' },
   'input.micStop': { zh: '停止并转写', en: 'Stop & transcribe' },
+  'input.micStopRecording': { zh: '停止录音', en: 'Stop recording' },
   'input.micBusy': { zh: '转写中…', en: 'Transcribing…' },
   'input.stop': { zh: '停止', en: 'Stop' },
   'input.slash.verifyUsage': { zh: '用法：/verify <命令>（收尾前自动跑，不绿不许收）· /verify off 关闭 · 当前：{current}', en: 'Usage: /verify <command> (runs before the turn may end; must pass) · /verify off to clear · current: {current}' },
