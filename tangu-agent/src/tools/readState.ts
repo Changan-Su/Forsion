@@ -21,9 +21,10 @@
  *   - agent 自己的写**总是**推 seen(哪怕写闸保持过期)—— 自己的改动永远不会被当成外部改动报回来。
  *     局部改落盘时发现盘上已经不是 seen(模型续调期间用户在改),那段外部改动记成 pending,下次扫描单独报
  *     (「你的改动落在了这一版上」),否则它会被自己的写吞掉、模型永远不知道。
- *   - 预检 = mtime + size:没变就只花一次 stat;变了才读、算指纹(同字节重写 = 不报,只刷新 stat)。stat 只在
- *     「先 stat 后读」里记,且刚改过(2 秒内)的不记 —— 粗粒度 mtime 的文件系统上同一秒内的二次改动会骗过预检,
- *     宁可多算一次指纹。预检只是省事的启发式,写闸仍按内容判。
+ *   - 预检 = mtime + ctime + size + inode:都没变就只花一次 stat;变了才读、算指纹(同字节重写 = 不报,只刷新 stat)。
+ *     ctime 改不回去,所以「保留 mtime 的替换」(cp -p / rsync -t)照样抓得到。stat 只在「先 stat 后读」里记,且刚改过
+ *     (2 秒内)的不记 —— 粗粒度时间戳的文件系统上同一秒内的二次改动会骗过预检,宁可多算一次指纹。预检只是省事的启发式,
+ *     写闸仍按内容判。读也有上限(HASH_MAX_BYTES):stat 之后文件变大也不会整份读进来。
  *   - 读不了(权限 / 非普通文件 / 其它错误)= 不知道,不报也不改记录;ENOENT/ENOTDIR 才算删了(删了报一次,
  *     之后又出现按「重新出现」再报)。
  *   - 快照(出 diff 用的全文)有上限:单文件 SNAPSHOT_FILE_MAX_CHARS、每会话 SNAPSHOT_SESSION_MAX_CHARS、
@@ -55,7 +56,7 @@ const BINARY_SNIFF = 8000;
 /** seen 的「文件不存在」记号(sha1 不会是这个)。 */
 const ABSENT = 'absent';
 
-interface SeenStat { mtimeMs: number; size: number }
+interface SeenStat { mtimeMs: number; ctimeMs: number; size: number; ino: number }
 interface Pending { before?: string; after?: string }
 interface Entry {
   /** 写闸:模型手里整份视图的指纹;undefined = 不设闸(只有 seen 的条目:目前不会出现,留作口径)。 */
@@ -117,12 +118,17 @@ function setSnapshots(s: SessionState, e: Entry, text: string | undefined, pendi
   totalChars += delta;
 }
 
+/** 丢掉一个条目的全部快照文本;攒着的外部改动只丢文本、记号留着(seen 已经越过它们,丢了就再也报不出来)。 */
+function dropText(s: SessionState, e: Entry): void {
+  setSnapshots(s, e, undefined, e.pending?.map(() => ({})));
+}
+
 /** 超了上限就从最久没碰的条目起丢快照(指纹留着)。 */
 function trimSnapshots(s: SessionState): void {
   if (s.chars > SNAPSHOT_SESSION_MAX_CHARS) {
     for (const e of s.entries.values()) {
       if (s.chars <= SNAPSHOT_SESSION_MAX_CHARS) break;
-      if (charsOf(e)) setSnapshots(s, e, undefined, undefined);
+      if (charsOf(e)) dropText(s, e);
     }
   }
   if (totalChars > SNAPSHOT_TOTAL_MAX_CHARS) {
@@ -130,9 +136,26 @@ function trimSnapshots(s: SessionState): void {
       if (totalChars <= SNAPSHOT_TOTAL_MAX_CHARS) break;
       for (const e of other.entries.values()) {
         if (totalChars <= SNAPSHOT_TOTAL_MAX_CHARS) break;
-        if (charsOf(e)) setSnapshots(other, e, undefined, undefined);
+        if (charsOf(e)) dropText(other, e);
       }
     }
+  }
+}
+
+/** 读最多 max 字节;文件比这大 = 'large'(不整份读进来)。 */
+async function readBounded(abs: string, max: number): Promise<Buffer | 'large'> {
+  const fh = await fsp.open(abs, 'r');
+  try {
+    const buf = Buffer.allocUnsafe(max + 1);
+    let len = 0;
+    while (len < buf.length) {
+      const { bytesRead } = await fh.read(buf, len, buf.length - len, len);
+      if (!bytesRead) break;
+      len += bytesRead;
+    }
+    return len > max ? 'large' : buf.subarray(0, len);
+  } finally {
+    await fh.close();
   }
 }
 
@@ -254,13 +277,16 @@ export async function collectExternalChanges(ctx: Scope, opts: CollectOptions = 
   if (!s?.entries.size) return [];
   const now = opts.now ?? Date.now;
   const max = opts.max ?? WATCH_MAX;
+  const key = ctx.sessionId || '';
   const recent = [...s.entries.keys()].slice(-max).reverse();
   const out: ExternalChange[] = [];
   for (const abs of recent) {
+    if (sessions.get(key) !== s) break; // await 期间整个会话被挤出去了:账本已经结过,别再动它
     const e = s.entries.get(abs);
     if (!e) continue;
     const v = e.v;
-    const stale = (): boolean => s.entries.get(abs) !== e || e.v !== v; // await 期间被读 / 写 / 忘掉了:这次的观察作废
+    // await 期间被读 / 写 / 忘掉了,或会话被挤出去了:这次的观察作废
+    const stale = (): boolean => sessions.get(key) !== s || s.entries.get(abs) !== e || e.v !== v;
     if (e.pending?.length) {
       const allowed = opts.canRead ? opts.canRead(abs) : true;
       for (const p of e.pending) {
@@ -283,9 +309,9 @@ export async function collectExternalChanges(ctx: Scope, opts: CollectOptions = 
       continue; // 其它错误 = 不知道
     }
     if (stale() || !st.isFile()) continue;
-    const cur: SeenStat = { mtimeMs: st.mtimeMs, size: st.size };
-    if (e.stat && e.stat.mtimeMs === cur.mtimeMs && e.stat.size === cur.size) continue;
-    const settled = now() - cur.mtimeMs >= RACY_MS;
+    const cur: SeenStat = { mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, size: st.size, ino: st.ino };
+    if (e.stat && e.stat.mtimeMs === cur.mtimeMs && e.stat.ctimeMs === cur.ctimeMs && e.stat.size === cur.size && e.stat.ino === cur.ino) continue;
+    const settled = now() - Math.max(cur.mtimeMs, cur.ctimeMs) >= RACY_MS;
     if (cur.size > HASH_MAX_BYTES) {
       // 太大:不读。第一次见只记基线(读后到第一次扫描之间的改动会漏,大文件接受);之后 stat 变了就报。
       if (e.stat && e.seen !== ABSENT) {
@@ -301,7 +327,17 @@ export async function collectExternalChanges(ctx: Scope, opts: CollectOptions = 
     }
     let buf: Buffer;
     try {
-      buf = await fsp.readFile(abs);
+      const got = await readBounded(abs, HASH_MAX_BYTES);
+      if (got === 'large') {
+        // stat 之后又写大了(stat 时 ≤ 上限、读时超了):内容必然变了。报一次不带 diff,下次扫描按大文件那条路记基线
+        if (stale()) continue;
+        out.push({ abs, kind: e.seen === ABSENT ? 'created' : 'modified', note: 'large' });
+        e.seen = 'large';
+        e.stat = undefined;
+        setSnapshots(s, e, undefined, e.pending);
+        continue;
+      }
+      buf = got;
     } catch (err) {
       if (!stale() && goneCode(err) && e.seen !== ABSENT) {
         out.push({ abs, kind: 'deleted', before: e.text });

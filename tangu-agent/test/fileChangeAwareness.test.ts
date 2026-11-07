@@ -53,17 +53,33 @@ describe('collectExternalChanges', () => {
     expect(await collectExternalChanges(ctx)).toEqual([]);
   });
 
-  it('stat 预检:mtime + size 没变就不读(记下 stat 之后,同大小同 mtime 的改动按设计漏掉)', async () => {
+  it('stat 预检:没变就跳过;保留 mtime 的同大小替换也抓得到(ctime 改不回去)', async () => {
     const ctx = ctxFor(`s${n}`);
+    const later = () => Date.now() + 10_000; // 让刚 touch 过的 stat 也算「稳定」,才会被记下来
     writeFileSync(f('a.txt'), 'aaaa\n');
     age('a.txt');
     await T.read_file.execute({ path: 'a.txt' }, ctx);
-    expect(await collectExternalChanges(ctx)).toEqual([]); // 读后第一次:读一遍对上了,记 stat
+    expect(await collectExternalChanges(ctx, { now: later })).toEqual([]); // 读后第一次:读一遍对上了,记 stat
+    expect(await collectExternalChanges(ctx, { now: later })).toEqual([]); // 预检命中,不读
     writeFileSync(f('a.txt'), 'bbbb\n');
-    age('a.txt'); // 同大小、mtime 拨回同一刻 → 预检认为没变
-    expect(await collectExternalChanges(ctx)).toEqual([]);
-    age('a.txt', new Date(Date.now() - 30_000)); // mtime 一变就读,照样报
-    expect((await collectExternalChanges(ctx)).map((c) => c.kind)).toEqual(['modified']);
+    age('a.txt'); // 同大小、mtime 拨回原样(cp -p / rsync -t 那种)
+    expect((await collectExternalChanges(ctx, { now: later })).map((c) => c.kind)).toEqual(['modified']);
+    expect(await collectExternalChanges(ctx, { now: later })).toEqual([]);
+  });
+
+  it('快照被挤掉时,攒着的「写之前的外部改动」记号还在(照报,只是没 diff)', async () => {
+    const ctx = ctxFor(`s${n}`);
+    writeFileSync(f('doc.md'), 'alpha\n');
+    await T.read_file.execute({ path: 'doc.md' }, ctx);
+    writeFileSync(f('doc.md'), 'alpha\nuser\n');
+    expect(await T.edit_file.execute({ path: 'doc.md', old_string: 'alpha', new_string: 'ALPHA' }, ctx)).toMatch(/^edited /);
+    const size = Math.floor(SNAPSHOT_FILE_MAX_CHARS * 0.9);
+    for (let i = 0; i < Math.ceil(SNAPSHOT_SESSION_MAX_CHARS / size) + 2; i++) {
+      writeFileSync(f(`pad${i}.txt`), 'p'.repeat(size));
+      noteAgentWrite(ctx, f(`pad${i}.txt`), 'p'.repeat(size));
+    }
+    const changes = (await collectExternalChanges(ctx)).filter((c) => c.abs === f('doc.md'));
+    expect(changes).toEqual([{ abs: f('doc.md'), kind: 'beforeWrite', before: undefined, after: undefined, note: 'large' }]);
   });
 
   it('agent 自己的写永不报:write_file / edit_file / multi_edit / apply_patch', async () => {
