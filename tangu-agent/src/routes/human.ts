@@ -9,6 +9,7 @@ import { getAgent, isValidSlug, resolveMemorySlug } from '../agents/agentRegistr
 import { humanProjectScope } from '../services/humanContext.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { scheduleAgentFilesSync } from '../services/agentFileSync.js';
+import { ledger } from '../services/telemetryLedger.js';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { agentsDir, defaultCalendarFile, ensureHumanFolder, humanDir, tanguHome } from '../core/tanguHome.js';
@@ -143,9 +144,12 @@ router.post('/agent/human/SOUL.md/move/scan', authMiddleware, async (req: AuthRe
 router.post('/agent/human/SOUL.md/move/items/:id', authMiddleware, async (req: AuthRequest, res) => {
   if (!humanLocal(req, res)) return;
   try {
-    const act = { move: movePortraitItem, keep: keepPortraitItem, undo: undoPortraitMove }[String(req.body?.decision)];
+    const decision = String(req.body?.decision);
+    const act = { move: movePortraitItem, keep: keepPortraitItem, undo: undoPortraitMove }[decision];
     if (!act) throw new HumanError('HUMAN_INVALID_ACTION', 'decision must be move, keep or undo.');
-    res.json(await act(req.user!.userId, String(req.params.id)));
+    const view = await act(req.user!.userId, String(req.params.id));
+    ledger.inc('daily_human', decision === 'move' ? 'moveMoved' : decision === 'keep' ? 'moveKept' : 'moveUndo');
+    res.json(view);
   } catch (e) { fail(res, e); }
 });
 // 「让所有 Agent 都照做」:把某个 Agent 实际生效记忆里的一条原文挪进 human/AGENT.md 末尾(人点的那一下就是「人开口」,10-20 定稿)。
@@ -180,10 +184,11 @@ router.post('/agent/agents/:slug/memory/promote', authMiddleware, async (req: Au
     catch (e) {
       // 落盘后才抛的:原条目其实已经不在了,撤回 AGENT.md 那一笔就两边都没有 —— 先重读;读不了也不撤
       const now = (() => { try { return repo.snapshot(); } catch { return null; } })();
-      if (now && !now.entries.some((x) => x.id === id)) { scheduleAgentFilesSync(req.user!.userId, slug); return res.json({ agentMd: { version: written.document.version }, memoryVersion: now.version }); }
+      if (now && !now.entries.some((x) => x.id === id)) { ledger.inc('daily_human', 'promoteToAgentMd'); scheduleAgentFilesSync(req.user!.userId, slug); return res.json({ agentMd: { version: written.document.version }, memoryVersion: now.version }); }
       if (written.change && now) { try { await writeHuman(scope, { expectedVersion: written.document.version, undoId: written.change.id }, 'user', source); } catch { /* 撤不回:AGENT.md 里多了这一句,记忆那条也还在,人看得到两处 */ } }
       throw new HumanError('HUMAN_CONFLICT', `The memory changed while moving the entry; nothing was moved. (${e instanceof Error ? e.message : String(e)})`);
     }
+    ledger.inc('daily_human', 'promoteToAgentMd');
     scheduleAgentFilesSync(req.user!.userId, slug); // 记忆少了一条:和记忆视图一样排一次后台同步(没开云同步的是空操作)
     res.json({ agentMd: { version: written.document.version }, memoryVersion: after.version });
   } catch (e) { fail(res, e); }

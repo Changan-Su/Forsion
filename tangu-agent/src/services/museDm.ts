@@ -13,6 +13,15 @@ import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { endsWithQuestion } from './childSessions.js';
 import { isWithinActiveHours, loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { MUSE_ONBOARDING_DAILY_CAP, onboardingActive, readMuseOnboarding } from './museState.js';
+import { ledger } from './telemetryLedger.js';
+import { noteMuseProduced } from './museTelemetry.js';
+
+/** 发出去一条按来源计一次(遥测账本);被每小时 / 每天上限或作息挡下的计 dmSuppressed。 */
+const DM_FIELD = {
+  proactive: 'dmProactive', 'proactive:todo': 'dmTodo', 'proactive:approval': 'dmApproval',
+  'proactive:card': 'dmCard', 'proactive:notice': 'dmNotice', 'proactive:remind': 'dmRemind',
+} as const;
+const suppressed = (r: MuseDmResult): MuseDmResult => { ledger.inc('daily_muse', 'dmSuppressed'); return r; };
 
 /** proactive = message_user;todo / approval = 引擎替 add_muse_todo / 审批入队发的;card = Muse 发起的、要用户点的卡(services/museCards.ts);
  *  notice = 不是 Muse 自己要开口的卡(用户要的设置卡、引擎发的第一次见面 / 小结),不计今天的额度;
@@ -44,21 +53,21 @@ export async function postMuseDm(userId: string, content: string, origin: Proact
       [s.id, now - 3600_000],
     );
     if ((Number(r?.n) || 0) >= MUSE_DM_PER_HOUR) {
-      return { ok: false, error: `Error: you already sent the user ${MUSE_DM_PER_HOUR} messages in the last hour. Fold this into your next message, or write it in your journal.` };
+      return suppressed({ ok: false, error: `Error: you already sent the user ${MUSE_DM_PER_HOUR} messages in the last hour. Fold this into your next message, or write it in your journal.` });
     }
   }
   if (origin === 'proactive' || origin === 'proactive:card') {
     // 一天的上限来自配置(0 = 不限);磨合期再封一道,作息外也不发(周期被规则 / 日程叫醒时会走到这里)
     const muse = loadSpecialAgentsConfig().muse;
     const onboarding = onboardingActive(await readMuseOnboarding().catch(() => null));
-    if (onboarding && !isWithinActiveHours(muse, new Date().getHours())) return { ok: false, error: 'Error: it is outside the user\'s active hours. Keep this for your next cycle.' };
+    if (onboarding && !isWithinActiveHours(muse, new Date().getHours())) return suppressed({ ok: false, error: 'Error: it is outside the user\'s active hours. Keep this for your next cycle.' });
     const cap = onboarding ? Math.min(muse.maxDmPerDay || MUSE_ONBOARDING_DAILY_CAP, MUSE_ONBOARDING_DAILY_CAP) : muse.maxDmPerDay;
     if (cap) {
       const [r] = await query<any[]>(
         `SELECT COUNT(*) AS n FROM chat_messages WHERE session_id = ? AND origin IN ('proactive', 'proactive:card') AND timestamp >= ?`,
         [s.id, now - 86_400_000],
       );
-      if ((Number(r?.n) || 0) >= cap) return { ok: false, error: `Error: you already reached the user ${cap} times in the last 24 hours. Save this for your journal or the next day.` };
+      if ((Number(r?.n) || 0) >= cap) return suppressed({ ok: false, error: `Error: you already reached the user ${cap} times in the last 24 hours. Save this for your journal or the next day.` });
     }
   }
   const id = uuidv4();
@@ -72,6 +81,9 @@ export async function postMuseDm(userId: string, content: string, origin: Proact
     `UPDATE chat_sessions SET updated_at = CURRENT_TIMESTAMP, proactive_at = ?${ask ? ', awaiting_user = TRUE' : ''} WHERE id = ?`,
     [now, s.id],
   );
+  ledger.inc('daily_muse', DM_FIELD[origin]);
+  if (ask) ledger.inc('daily_muse', 'dmAwaitingUser');
+  if (origin === 'proactive') noteMuseProduced('producedDms');
   return { ok: true, sessionId: s.id, messageId: id };
 }
 

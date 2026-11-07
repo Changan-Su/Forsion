@@ -36,6 +36,7 @@ import path from 'node:path';
 import { agentsDir } from '../core/tanguHome.js';
 import { redactSecrets } from '../core/redact.js';
 import { canonicalToolName } from '../tools/toolRegistry.js';
+import { agentRoleOf, ledger } from '../services/telemetryLedger.js';
 
 export const HARNESS_FILE = 'HARNESS.md';
 /** 快照史(dot-file → agentFileSync 自动排除,只留本机)。 */
@@ -217,7 +218,13 @@ async function saveHarness(slug: string, entries: HarnessEntry[]): Promise<void>
 async function appendJournal(slug: string, line: JournalLine): Promise<void> {
   await fs.mkdir(path.dirname(journalPath(slug)), { recursive: true });
   await fs.appendFile(journalPath(slug), JSON.stringify(line) + '\n', 'utf-8');
+  const field = line.action === 'upsert' ? HARNESS_UPSERT_BY[line.by ?? ''] : line.action === 'delete' ? 'harnessDelete' : 'harnessRollback';
+  if (field) ledger.inc('daily_memory', field, { dim: agentRoleOf(slug) });
 }
+/** 遥测:工作笔记的改动按谁写的计(缺省 = Agent 自己)。认不得的代写方不计。 */
+const HARNESS_UPSERT_BY: Record<string, 'harnessUpsertAgent' | 'harnessUpsertHistorian' | 'harnessUpsertMuse' | 'harnessUpsertUser'> = {
+  '': 'harnessUpsertAgent', historian: 'harnessUpsertHistorian', muse: 'harnessUpsertMuse', user: 'harnessUpsertUser',
+};
 
 /** 读快照史(坏行跳过,单条脏数据不毁回滚)。 */
 export async function readJournal(slug: string): Promise<JournalLine[]> {

@@ -65,9 +65,10 @@ describe('createAcpClient — sessionUpdate → Tangu events', () => {
     } as any);
 
     const call = events.find((e) => e.type === 'tool_call')!;
-    expect(call.payload).toMatchObject({ id: 't1', name: 'Bash', arguments: JSON.stringify({ cmd: 'ls' }) });
+    // source = plugin:外部引擎自己的工具名不归 Tangu,遥测不外发(审批事件按 tool_call 的 source 查)
+    expect(call.payload).toMatchObject({ id: 't1', name: 'Bash', arguments: JSON.stringify({ cmd: 'ls' }), source: 'plugin' });
     const res = events.find((e) => e.type === 'tool_result')!;
-    expect(res.payload).toMatchObject({ id: 't1', name: 'Bash', result: 'file.txt', isError: false });
+    expect(res.payload).toMatchObject({ id: 't1', name: 'Bash', result: 'file.txt', isError: false, source: 'plugin' });
     expect(result().toolCalls).toHaveLength(1);
     expect(result().toolResults).toHaveLength(1);
   });

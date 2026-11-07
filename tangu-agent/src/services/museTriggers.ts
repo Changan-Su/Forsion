@@ -25,6 +25,7 @@ import { evalRowFormulas } from './dbFormula.js';
 import { chSignalsVersion, computerHistoryOn, readChSignals, readComputerHistoryState, type ChSignal } from './computerHistory.js';
 import { getTriggerSource, listTriggerSources, NOTICE_COMPUTER_HISTORY_OFF, NOTICE_SOURCE_MISSING, registerTriggerSource, type ParsedCond, type TriggerEvalIo } from './triggerRegistry.js';
 import { CH_LOOKBACK_MS, registerLocalTriggerSources, type CalendarEventHit } from './triggerSources.js';
+import { ledger } from './telemetryLedger.js';
 
 export type MuseTriggerCond =
   | { type: 'file_chars_gte'; path: string; n: number }
@@ -695,6 +696,7 @@ export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { al
       if (goesLive) endObservation(cur);
       else if (v.observe && !cur.observe) startObservation(cur, opts.observeBy);
       await saveTriggers(list);
+      if (goesLive) ledger.inc('daily_muse', 'rulePromoted'); // 面板 / 构建器里把观察中的规则转正
       return { ok: true as const, trigger: cur, created: false };
     }
     if (list.length >= MAX_TRIGGERS) return { ok: false as const, error: `规则已达上限(${MAX_TRIGGERS}),请先删除一些` };
@@ -763,6 +765,7 @@ export async function updateObservation(id: string, op: 'enable' | 'extend' | 'p
       t.disabledBy = 'user';
     } else t.observeReportedAt = new Date().toISOString();
     await saveTriggers(list);
+    if (op !== 'reported') ledger.inc('daily_muse', op === 'enable' ? 'rulePromoted' : op === 'extend' ? 'ruleExtended' : 'rulePaused');
     return true;
   });
 }

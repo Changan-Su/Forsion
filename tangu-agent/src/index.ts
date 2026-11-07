@@ -55,6 +55,7 @@ import { startSessionReaper, stopSessionReaper, reapOrphanSessions } from './san
 import { loadHistorianConfig } from './services/historianConfig.js';
 import { startHistorian, stopHistorian } from './services/historian.js';
 import { startRunEventRetention, stopRunEventRetention } from './services/runEventRetention.js';
+import { startTelemetrySnapshots, stopTelemetrySnapshots } from './services/telemetrySnapshot.js';
 import { startMuseSupervisor, stopMuseSupervisor } from './services/muse.js';
 import { startInboxPull, stopInboxPull } from './services/inboxPull.js';
 import { startChannels, stopChannels } from './channels/hub.js';
@@ -174,6 +175,8 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     if (deps().profile.capabilities.hostExec) startTrashJanitor();
     // 同步页上给这台改了名:把这台写过的 `[旧名]` 标签换成 `[新名]`(启动对一次 + 盯着设备文件;记忆按条标适用范围,11-06)。
     if (deps().profile.capabilities.hostExec) startDeviceRenameWatch();
+    // 遥测计数账本的每日快照(g*)与 35 天裁剪:账本只在本机写。
+    if (deps().profile.capabilities.hostExec) startTelemetrySnapshots();
 
     // 配置驱动 profile:启动 app_profile_overrides 轮询(admin panel 改 → 本进程 ≤刷新窗口收敛)。
     // thin worker 无本地 DB(host.query 抛)→ 传 profilePolling:false,用基线 profile(admin 覆盖暂不下达,后续可经 state-API 取)。
@@ -188,6 +191,7 @@ export function createTanguModule(d: TanguDeps): TanguModule {
     stopSessionReaper();
     stopHistorian();
     stopRunEventRetention();
+    stopTelemetrySnapshots();
     stopMuseSupervisor();
     stopInboxPull();
     stopChannels();

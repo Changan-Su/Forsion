@@ -39,6 +39,7 @@ import { dropCursors } from '../../services/dbCursors.js';
 import { getAgent } from '../../agents/agentRegistry.js';
 import { amadeusVaultPath } from './amadeus.js';
 import { effectiveRemote, remoteManagementDenied } from '../../services/remoteOrigin.js';
+import { ledger } from '../../services/telemetryLedger.js';
 
 const MAX_PENDING_RULE_CARDS = 3;
 
@@ -244,6 +245,7 @@ export const manageAutomationProvider: ToolProvider = {
         }
         const id = String(args.id || '').trim() || undefined;
         // auto 档 Muse 自己新建的、会动东西的规则一律先观察,传 observe:false 也一样:没有用户看过的规则,不放权。
+        const forcedObserve = !!ctx.muse && !id && canObserve(v.value.cond) && rewritesThings(v.value) && !v.value.observe;
         if (ctx.muse && !id && canObserve(v.value.cond) && rewritesThings(v.value)) v.value.observe = true;
         // 插件种子规则(plugin:<插件id>:<key>)归插件的 ensure 管:聊天 agent 不能改也不能借它的 id 凭空建(伪插件规则绕 50 条帽)。
         if (id && isPluginTriggerId(id)) return `Error: rule ${id} is managed by a plugin and cannot be changed with this tool.`;
@@ -263,6 +265,8 @@ export const manageAutomationProvider: ToolProvider = {
         // actor='user':agent 经本工具的启停是**显式**操作(与面板同档),不是插件 ensure 那种幂等重放。
         const r = await upsertTrigger(v.value, id, { actor: 'user', ...(ctx.muse ? { observeBy: 'muse' as const } : {}) });
         if (!r.ok) return `Error: ${r.error}`;
+        if (r.created) ledger.inc('daily_muse', ctx.muse ? 'ruleCreatedMuse' : 'ruleCreatedUser');
+        if (r.created && forcedObserve) ledger.inc('daily_muse', 'ruleObserveForced');
         const c = v.value.cond;
         const note = c.type === 'manual'
           ? ' (never fires on its own; the user runs it by clicking a button block that points at this rule in a note)'

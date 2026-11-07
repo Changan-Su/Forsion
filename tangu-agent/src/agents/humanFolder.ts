@@ -12,6 +12,7 @@ import { mergeText3 } from '../services/memorySync.js';
 import { mergeDbFile, unionLines } from '../services/dbRowMerge.js';
 import { withDbLock } from '../services/amadeusDb.js';
 import { commitHumanFromMirror } from './humanStore.js';
+import { ledger } from '../services/telemetryLedger.js';
 
 /** human/ 里上云的几份(云端 __human__ 槽位;服务端 tanguAgentFilePaths 的 HUMAN_SLOT_FILES 同一张表,外加搬家标记 .layout)。 */
 export { HUMAN_SYNC_FILES } from '../contracts/agentSyncRules.js';
@@ -71,6 +72,7 @@ export async function mirrorLegacyHuman(opts: { legacy?: LegacyClients | null } 
   }));
   const calendarPair = pairs.find((p) => p.db);
   if (calendarPair) await withDbLock(calendarPair.legacy, async () => run()); else run();
+  if (conflicts) ledger.inc('daily_human', 'mirrorConflicts', { n: conflicts });
   return { conflicts };
 }
 

@@ -41,6 +41,7 @@ import { sendInboxMessage } from '../tools/builtin/inboxSend.js';
 import { postMuseDm } from './museDm.js';
 import { backgroundClientTag } from '../core/version.js';
 import type { ToolContext } from '../tools/toolTypes.js';
+import { ledger } from './telemetryLedger.js';
 
 function log(msg: string): void {
   try { deps().host.log(`[automation] ${msg}`); } catch { console.log(`[automation] ${msg}`); }
@@ -493,7 +494,7 @@ async function recordObserved(t: MuseTrigger, ctx?: TriggerContext): Promise<voi
   await query(
     `INSERT INTO automation_executions (id, user_id, trigger_id, origin, status, steps, error) VALUES (?, ?, ?, 'auto', 'observed', ?, NULL)`,
     [uuidv4(), automationUserId(), t.id, JSON.stringify(observedSteps(t, ctx))],
-  ).catch((e: any) => log(`观察记录写入失败(${t.id}):${e?.message || e}`));
+  ).then(() => ledger.inc('daily_muse', 'ruleObservedHits'), (e: any) => log(`观察记录写入失败(${t.id}):${e?.message || e}`));
 }
 
 export async function launchAutomationTriggers(hits: TriggerHit[], io: LaunchIo = { runActions }): Promise<LaunchResult> {
