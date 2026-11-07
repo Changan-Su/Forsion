@@ -147,10 +147,12 @@ function write(mode: 'inc' | 'set', event: LedgerEvent, field: string, n: unknow
     if (!localEngine()) return;
     const day = utcDay(typeof now === 'number' ? now : Date.now()); // 日子在入队前定:跨午夜排队的那一笔不挪到第二天
     const update = mode === 'inc' ? 'telemetry_ledger.n + excluded.n' : 'excluded.n';
-    // 推到下一拍再写:本机 SQLite 的 query 在调用时同步执行(锁忙时会等 busy timeout),计数不该卡住调用方那一段同步代码
+    // 推到下一拍再写:本机 SQLite 的 query 在调用时同步执行(锁忙时会等 busy timeout),计数不该卡住调用方那一段同步代码。
+    // 库在入队时就定下:这一拍可能被推迟很久(只有微任务在转时 setImmediate 一直轮不到),到时候注入的 host 可能已经换了一个
+    const host = deps().host;
     setImmediate(() => {
       try {
-        void query(
+        void host.query(
           `INSERT INTO telemetry_ledger (day, event, dim, field, n) VALUES (?, ?, ?, ?, ?)
            ON CONFLICT (day, event, dim, field) DO UPDATE SET n = ${update}`,
           [day, event, dimValue, field, n],
