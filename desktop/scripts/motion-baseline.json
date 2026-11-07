@@ -1,5 +1,6 @@
 {
   "durations": {
+    "../lcl/components/toolIsland.css": 5,
     "frontend/src/achievements/achievements.css": 14,
     "frontend/src/amadeus/blocks/database/cellFormat.css": 2,
     "frontend/src/amadeus/blocks/database/readOnlyCells.css": 2,
@@ -73,6 +74,7 @@
     "../lcl/engine/dropIndicator.ts": 1
   },
   "layoutTweens": {
+    "../lcl/components/toolIsland.css": 1,
     "frontend/src/achievements/achievements.css": 1,
     "frontend/src/amadeus/styles.css": 5,
     "frontend/src/amadeus-host.css": 3,
@@ -87,6 +89,7 @@
     "../lcl/engine/engine.css": 4
   },
   "deprecatedTokens": {
+    "../lcl/components/toolIsland.css": 1,
     "frontend/src/achievements/achievements.css": 14,
     "frontend/src/amadeus/blocks/database/menuSurface.css": 3,
     "frontend/src/amadeus/lcl/shell.css": 2,
