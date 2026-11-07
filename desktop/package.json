@@ -53,6 +53,7 @@
     "e2e:ribbon": "node scripts/ribbon-dnd.e2e.cjs",
     "e2e:spacewindow": "node scripts/space-window.e2e.cjs",
     "e2e:spaceshortcut": "node scripts/space-shortcut.e2e.cjs",
+    "e2e:lclobjects": "node scripts/lcl-objects.e2e.cjs",
     "e2e:detach": "node scripts/detach-window.e2e.cjs",
     "e2e:spacewindow-input": "node scripts/space-window-input.e2e.cjs",
     "e2e:ribbon-overflow": "node scripts/ribbon-overflow.e2e.cjs",

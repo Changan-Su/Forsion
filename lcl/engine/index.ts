@@ -100,7 +100,7 @@ export type {
 } from './objects'
 export { claimObjectFocus, focusedObjects, subscribeObjectFocus } from './objectFocus'
 export type { FocusedObjects, ObjectFocusClaim } from './objectFocus'
-export { MenuSurface, openMenu, closeMenu, menuIsOpen, openObjectMenu, objectContextMenuHandler, useObjectMenu, bindObject } from './objectMenu'
+export { MenuSurface, MenuRows, openMenu, closeMenu, menuIsOpen, openObjectMenu, objectContextMenuHandler, useObjectMenu, bindObject } from './objectMenu'
 export type { MenuAt, OpenMenuRequest, ObjectMenuBinding } from './objectMenu'
 export { setDetachApi, getDetachApi, spaceOpensElsewhere } from './detachSeam'
 export type { DetachApi, ViewRef } from './detachSeam'

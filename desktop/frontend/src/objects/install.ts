@@ -1,5 +1,5 @@
 /**
- * LCL 对象层的宿主装配:能力、确认框、失败上报 + 各类对象(第一期:Space)。
+ * LCL 对象层的宿主装配:能力、确认框、失败上报 + Space 类对象。库内文件(objects/note.tsx)跟着笔记视图装。
  * 在 bootstrapEngine.installEngine() 里调 —— desktop / web / 手机三个入口都经它,不用各补一份。
  */
 import {
@@ -7,6 +7,7 @@ import {
   OBJECT_REASON, type ActionResult,
 } from '@lcl/engine'
 import { useApp } from '../stores/appStore'
+import { canRevealInFileManager } from '../amadeus/lib/hostCaps'
 import { registerMessages, translate } from '../i18n'
 import { installSpaceObject } from './space'
 
@@ -30,7 +31,7 @@ export function installObjectLayer(): void {
       openWindow: !!getDetachApi()?.openSpace,
       desktopShortcut: !!getDetachApi()?.addSpaceToDesktop,
       pinHome: canPinSpaceToHome(),
-      revealFile: false, // 第一期没有文件类对象;库内文件那个 PR 接
+      revealFile: canRevealInFileManager(), // 库内文件「在文件管理器中显示」(手机本地库桥做不了 = false)
       singleColumn: inSingleColumnShell(),
     }),
     confirm: async (req) => {

@@ -146,7 +146,7 @@ describe('executeAction', () => {
     const frozen = freezeRefs([sp('tangu'), sp('home')])
     world.delete('home')
     const out = await executeAction('del', frozen, CX)
-    expect(run).toHaveBeenCalledWith([sp('tangu')], CX)
+    expect(run).toHaveBeenCalledWith([sp('tangu')], { ...CX, batch: 2 })
     expect(out).toEqual([{ ref: sp('tangu'), ok: true }, { ref: sp('home'), ok: false, reason: 'gone' }])
     expect(reported[0].failures).toEqual([{ ref: sp('home'), ok: false, reason: 'gone' }])
   })
@@ -167,6 +167,16 @@ describe('executeAction', () => {
     registerObjectAction(act({ id: 'go', run }))
     expect((await executeAction('go', [sp('../x')], CX))[0]).toMatchObject({ ok: false, reason: OBJECT_REASON.unavailable })
     expect(run).not.toHaveBeenCalled()
+  })
+})
+
+describe('executeAction 的批量信息', () => {
+  it('滤掉不在了的之后,confirm / run 仍知道当初一共选了几个', async () => {
+    const seen: Array<[number, number | undefined]> = []
+    registerObjectType(spaceType())
+    registerObjectAction(act({ id: 'del', multi: true, confirm: (refs, cx) => { seen.push([refs.length, cx.batch]); return undefined }, run: () => {} }))
+    await executeAction('del', [sp('tangu'), sp('ghost')], CX)
+    expect(seen).toEqual([[1, 2]])
   })
 })
 
