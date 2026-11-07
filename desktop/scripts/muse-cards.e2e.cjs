@@ -3,7 +3,8 @@
  * 一条主动消息、一张插件卡、六张进卡片堆的卡(三问 / 设置变更 / 两周小结 / 功能推荐 / 观察结果 / 规则)。
  * 断言:
  *  R1 主动消息下面有「有用 / 少来点这种」,卡片消息没有;点了发 verdict,按钮变成「记下了：这类少来」,刷新不再出现
- *  R2 插件卡留在消息里,带「不感兴趣」,不进卡片堆;卡片堆 5 张。点「不感兴趣」先在卡下出理由行(不发请求),「取消」回去,选「时机不对」才发 dismiss + reason
+ *  R2 插件卡留在消息里,带「不感兴趣」,不进卡片堆;卡片堆 5 张。点「不感兴趣」先在卡下出理由行(不发请求),「取消」回去,选「时机不对」才发 dismiss + reason;
+ *     R2e 勾「附上这条原文」时登录的是 A,发之前换成了 B → 原文带着 A 去发、被 account-changed 挡下,B 那边一条都没有,提示写明换了账号
  *  R3 围栏不进正文;待处理的卡流里一行指向对话最下面
  *  R4 三问:没选时「好了」不可点;选完发 answers;流里变回执
  *  R5 设置卡:旧值 → 新值;点「改」只传 action;回执「已改成 …」
@@ -40,6 +41,8 @@ const MSGS = [
 const RULE = { desc: '打开 Figma 时提醒我活动一下', cond: { type: 'computer.app_opened', params: { app: 'Figma' } }, cooldownHours: 2, actions: [{ type: 'remind', title: '先活动一下' }], only: { weekdays: [1, 2, 3, 4, 5] }, maxPerDay: 2 }
 const card = (id, kind, payload) => ({ id, kind, key: null, payload, status: 'pending', result: null, created_at: T0, decided_at: null })
 const FEATURE_TITLE = '电脑历史'
+const ACCOUNT_A = 'https://api.forsion.test::u-a'
+const ACCOUNT_B = 'https://api.forsion.test::u-b'
 const ITEM = { id: 'better-pdf', name: 'Better PDF', author: 'Forsion', summary: '批注与对比', type: 'plugin', installSlug: 'better-pdf', latestVersion: '1.0.0', tags: [] }
 
 async function main() {
@@ -103,13 +106,24 @@ async function main() {
     },
   })
   const { win } = ctx
-  // 随账号的反馈通道(Extend 的 feedback:submit)在台架里没有:主进程里接住,只记下收到的正文
-  await ctx.app.evaluate(({ ipcMain }) => {
+  // 随账号的反馈通道(Extend 的 feedback:submit)在台架里没有:主进程里接住,只记下收到的正文。
+  // 账号:auth:status 报一个登录着的账号 A(渲染层 authInfo.accountId 从这来);feedback:submit 照 Extend 的口径认 expectedAccountId ——
+  // 主进程「当前账号」(__account)对不上就回 account-changed、不记。下面 R2e 在引擎调用期间把它换成 B,模拟中途换号。
+  await ctx.app.evaluate(({ ipcMain }, acct) => {
     globalThis.__feedbackSubmits = []
+    globalThis.__feedbackRefused = []
+    globalThis.__account = acct
+    try { ipcMain.removeHandler('auth:status') } catch { /* 没注册过 */ }
+    ipcMain.handle('auth:status', () => ({ loggedIn: true, tokenValid: null, cloudUrl: 'https://api.forsion.test', accountId: acct, username: 'e2e', nickname: null, avatar: null, membershipTier: null, tokenSource: 'tangu-login', backendState: null }))
     try { ipcMain.removeHandler('feedback:submit') } catch { /* 没注册过 */ }
-    ipcMain.handle('feedback:submit', (_e, input) => { globalThis.__feedbackSubmits.push(input); return { ok: true, id: 'fb-1' } })
-  })
+    ipcMain.handle('feedback:submit', (_e, input) => {
+      if (input?.expectedAccountId !== undefined && input.expectedAccountId !== globalThis.__account) { globalThis.__feedbackRefused.push(input); return { ok: false, error: 'account-changed' } }
+      globalThis.__feedbackSubmits.push(input); return { ok: true, id: 'fb-1' }
+    })
+  }, ACCOUNT_A)
   const feedbackSubmits = () => ctx.app.evaluate(() => globalThis.__feedbackSubmits)
+  const feedbackRefused = () => ctx.app.evaluate(() => globalThis.__feedbackRefused)
+  const switchAccount = (id) => ctx.app.evaluate((_m, v) => { globalThis.__account = v }, id)
   const last = () => seen.decide[seen.decide.length - 1] || {}
   /** 请求体按字段比,不按键序(前端拼 body 的顺序不是契约) */
   const sameFields = (a, b) => Object.keys(a).length === Object.keys(b).length && Object.keys(b).every((k) => a[k] === b[k])
@@ -160,9 +174,19 @@ async function main() {
     await win.locator('#tocmsg-c-plugin [data-reason-cancel]').click()
     r.check('R2d 「取消」收起理由行,卡还在、没发请求', await win.locator('#tocmsg-c-plugin [data-reason-prompt]').count() === 0 && seen.decide.length === decidedPlugin)
     await pluginNo.click()
+    // 勾「附上这条原文」时登录的是 A;发出去之前主进程已经换成 B(等同收卡请求在途时换号)→ 原文不能随 B 发出去
+    await win.locator('#tocmsg-c-plugin [data-reason-share]').check()
+    await switchAccount(ACCOUNT_B)
     await win.locator('#tocmsg-c-plugin [data-reason="timing"]').click()
     await win.waitForSelector('#tocmsg-c-plugin [data-muse-card-line="dismissed"]', { timeout: 5000 }).catch(() => {})
     r.check('R2b 选「时机不对」发 dismiss + reason,流里留回执', sameFields(last(), { id: 'plugin', action: 'dismiss', reason: 'timing' }) && await win.locator('#tocmsg-c-plugin [data-muse-card-line="dismissed"]').count() === 1, JSON.stringify(last()))
+    let refused = []
+    for (let i = 0; i < 20 && !refused.length; i++) { refused = await feedbackRefused(); if (!refused.length) await win.waitForTimeout(150) }
+    const changedToast = await win.waitForFunction(() => /勾选之后换了账号|account changed after you ticked/.test(document.body.innerText), null, { timeout: 5000 }).then(() => true).catch(() => false)
+    r.check('R2e 勾选后换了号:原文带着勾选时的账号去发,被拒(account-changed),没有落进新账号,提示写明换了账号',
+      refused.length === 1 && refused[0].expectedAccountId === ACCOUNT_A && /\[muse-card:plugin\]/.test(refused[0].description || '') && (await feedbackSubmits()).length === 0 && changedToast,
+      JSON.stringify({ refused, changedToast }))
+    await switchAccount(ACCOUNT_A)
 
     // ── 三问 ──
     const q = (n) => win.locator(`${inCard('intro')} .t2-musecard-q`).nth(n).locator('button')
@@ -233,7 +257,7 @@ async function main() {
     let fbs = []
     for (let i = 0; i < 20 && !fbs.length; i++) { fbs = await feedbackSubmits(); if (!fbs.length) await win.waitForTimeout(150) }
     const ticket = fbs[0]?.description || ''
-    r.check('R7b 勾了附原文:收卡后随账号发一条,写明卡种、理由和卡上的字', fbs.length === 1 && /\[muse-card:feature\]/.test(ticket) && /我早知道了|Already knew/.test(ticket) && ticket.includes(FEATURE_TITLE), JSON.stringify(fbs))
+    r.check('R7b 勾了附原文:收卡后随账号发一条,写明卡种、理由和卡上的字,带上勾选时的账号', fbs.length === 1 && /\[muse-card:feature\]/.test(ticket) && /我早知道了|Already knew/.test(ticket) && ticket.includes(FEATURE_TITLE) && fbs[0]?.expectedAccountId === ACCOUNT_A, JSON.stringify(fbs))
 
     // ── 观察结果卡 ──
     await win.waitForTimeout(600) // 卡片入场过渡

@@ -210,8 +210,9 @@ const api = {
   accountUseResetCard: (type?: string): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:useResetCard', type),
   accountBgConvert: (percent: number): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgConvert', percent),
   accountBgAutoMain: (enabled: boolean): Promise<{ status: number; json: any }> => ipcRenderer.invoke('account:bgAutoMain', enabled),
-  /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。 */
-  submitFeedback: (input: { description: string; sessionLogJson?: string; sessionLogName?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }> =>
+  /** 提交反馈到 Forsion 反馈中心(会话日志 JSON 随附为附件;token 留主进程)。
+   *  expectedAccountId(auth:status 的 accountId):只用这个账号发,换了号回 account-changed、不发(Extend 2026-11-07 起;老 Extend 不认 = 照旧)。 */
+  submitFeedback: (input: { description: string; sessionLogJson?: string; sessionLogName?: string; expectedAccountId?: string }): Promise<{ ok: boolean; id?: string | null; error?: string; attachmentSkipped?: boolean }> =>
     ipcRenderer.invoke('feedback:submit', input),
   appVersion: (): Promise<string> => ipcRenderer.invoke('app:version'),
   // ── 应用内自动更新(检查 → 下载 → 重启安装;mac 仅检测,引导手动下载)──
