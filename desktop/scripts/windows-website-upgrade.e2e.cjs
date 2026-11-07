@@ -31,18 +31,28 @@ async function until(label, read, timeout) {
   throw new Error('Timed out: ' + label)
 }
 
-function relaunchedProcess(exe, oldPid) {
+function installSnapshot(exe, installer, oldPid) {
   const source = `
     $ErrorActionPreference = 'Stop'
-    $owner = Get-CimInstance Win32_Process -Filter "Name = 'Forsion.exe'" | Where-Object {
-      $_.ExecutablePath -eq $env:FORSION_UPDATE_TEST_EXE -and $_.ProcessId -ne ${oldPid} -and $_.CommandLine -match '(?:^| )--updated(?: |$)' -and $_.CommandLine -notmatch '--type='
-    } | Where-Object { [long](Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue).MainWindowHandle -ne 0 } | Select-Object -First 1
-    if ($owner) { @{pid=$owner.ProcessId; exe=$owner.ExecutablePath} | ConvertTo-Json -Compress }
+    $exe = $env:FORSION_UPDATE_TEST_EXE
+    $installer = $env:FORSION_UPDATE_TEST_INSTALLER
+    $installerName = [IO.Path]::GetFileName($installer)
+    $observed = @(Get-CimInstance Win32_Process -Filter "Name = 'Forsion.exe' OR Name = '$installerName' OR Name = 'explorer.exe'")
+    $processes = @($observed | Where-Object {
+      $_.ExecutablePath -eq $installer -or ($_.ExecutablePath -eq $exe -and $_.CommandLine -notmatch '--type=')
+    } | ForEach-Object {
+      $win = Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue
+      @{pid=$_.ProcessId; parentPid=$_.ParentProcessId; exe=$_.ExecutablePath; old=($_.ProcessId -eq ${oldPid});
+        installer=($_.ExecutablePath -eq $installer); updatedFlag=($_.CommandLine -match '--updated'); forceRun=($_.CommandLine -match '--force-run');
+        hasWindow=([long]$win.MainWindowHandle -ne 0); windowTitle=$win.MainWindowTitle; session=$_.SessionId}
+    })
+    $explorerSessions = @($observed | Where-Object Name -eq 'explorer.exe' | Select-Object -ExpandProperty SessionId)
+    @{processes=$processes; explorerSessions=$explorerSessions} | ConvertTo-Json -Depth 5 -Compress
   `
-  const json = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')], {
-    env: { ...process.env, FORSION_UPDATE_TEST_EXE: exe }, windowsHide: true, encoding: 'utf8', timeout: 12000,
+  return JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(source, 'utf16le').toString('base64')], {
+    env: { ...process.env, FORSION_UPDATE_TEST_EXE: exe, FORSION_UPDATE_TEST_INSTALLER: installer }, windowsHide: true, encoding: 'utf8', timeout: 12000,
   }).trim()
-  return json ? JSON.parse(json) : null
+  )
 }
 
 function startupReceipt(version) {
@@ -108,7 +118,7 @@ async function main() {
   check(meta.available && meta.filename === filename && meta.version === newVersion && meta.size === bytes && meta.sha512 === sha512, 'live website returns the exact target and its verified SHA-512')
   check(!startupReceipt(newVersion) && !process.env.TANGU_HOME, 'disposable Windows user has no target-version startup receipt')
 
-  let app, win, settings, logging, runtime, statuses = [], updated
+  let app, child, win, settings, logging, runtime, statuses = [], updated
   const screenshot = (page, name) => page.screenshot({ path: path.join(out, name), timeout: 10000 })
   const status = () => settings.evaluate(() => window.tangu.getUpdaterStatus())
   try {
@@ -117,6 +127,7 @@ async function main() {
       args: ['--lang=en-US'],
       timeout: 60000,
     })
+    child = app.process()
     runtime = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), exe: process.execPath, pid: process.pid }))
     check(runtime.packaged && runtime.version === oldVersion && path.resolve(runtime.exe).toLowerCase() === exe.toLowerCase(), '2.13.6 is running from the genuine NSIS installation')
     win = await app.firstWindow()
@@ -176,34 +187,47 @@ async function main() {
     const receipt = { runtime, meta, availableCaption, downloadedCaption, statuses, download: { method: 'GET', url: website + '/download/windows', route, bytes, sha512, sha256 } }
     const write = extra => fs.writeFileSync(path.join(out, 'upgrade-receipt.json'), JSON.stringify({ ...receipt, ...extra }, null, 2))
     write({ phase: 'downloaded' })
-    const oldProcess = app.process()
+    const snapshots = []
+    const diagnose = () => {
+      let version = null
+      try { version = JSON.parse(extractFile(asar, 'package.json').toString('utf8')).version } catch {}
+      const activity = startupReceipt(newVersion)
+      const { processes, explorerSessions } = installSnapshot(exe, installer, runtime.pid)
+      const state = { oldExit: child.exitCode, oldSignal: child.signalCode, version, activity, processes, explorerSessions }
+      const last = snapshots.at(-1)
+      if (!last || JSON.stringify(last.state) !== JSON.stringify(state)) {
+        snapshots.push({ at: new Date().toISOString(), state })
+        fs.writeFileSync(path.join(out, 'restart-diagnostics.json'), JSON.stringify(snapshots, null, 2))
+        console.log('Restart state:', JSON.stringify(state))
+      }
+      const relaunched = processes.find(p => !p.old && !p.installer && p.hasWindow)
+      return (child.exitCode !== null || child.signalCode !== null) && version === newVersion && activity && relaunched && { ...relaunched, version, activity }
+    }
+    diagnose()
     await restart.click().catch(error => {
       if (!/closed/i.test(String(error))) throw error
     })
     console.log('Clicked the real Restart & install button')
-    await until('old app exits after requesting installation', () => oldProcess.exitCode !== null, 60000)
-    updated = await until('the installer replaces app.asar and launches the new main window', () => {
-      let version
-      try { version = JSON.parse(extractFile(asar, 'package.json').toString('utf8')).version } catch { return null }
-      if (version !== newVersion) return null
-      const log = startupReceipt(newVersion)
-      const process = log && relaunchedProcess(exe, runtime.pid)
-      return process && { ...process, version, activity: log }
-    }, 180000)
+    updated = await until('the installer replaces app.asar and launches the new main window', diagnose, 180000)
     check(updated.pid !== runtime.pid && updated.exe.toLowerCase() === exe.toLowerCase(), 'NSIS replaced the original installation and automatically relaunched 2.13.7')
     write({ phase: 'relaunched', updated })
   } catch (error) {
     const page = settings ?? win
-    if (page && !page.isClosed()) {
-      await screenshot(page, 'failure.png').catch(() => {})
-      const current = settings && await status().catch(() => null)
-      const { phase, source, version, error: reason } = current ?? {}
-      fs.writeFileSync(path.join(out, 'failure.json'), JSON.stringify({ runtime, current: { phase, source, version, reason: reason && sanitized(reason) }, error: sanitized(error), statuses }, null, 2))
-    }
+    let current
+    try {
+      if (page && !page.isClosed()) {
+        await screenshot(page, 'failure.png')
+        current = settings && await status()
+      }
+    } catch { /* The old target is expected to disappear during restart. */ }
+    const { phase, source, version, error: reason } = current ?? {}
+    fs.writeFileSync(path.join(out, 'failure.json'), JSON.stringify({ runtime, current: { phase, source, version, reason: reason && sanitized(reason) }, error: sanitized(error.stack ?? error), statuses }, null, 2))
     throw error
   } finally {
-    if (logging) await app.evaluate(({ netLog }) => netLog.stopLogging()).catch(() => {})
-    if (app && app.process().exitCode === null) await Promise.race([app.close().catch(() => {}), sleep(10000)])
+    if (app && child?.exitCode === null && child.signalCode === null) {
+      if (logging) await app.evaluate(({ netLog }) => netLog.stopLogging()).catch(() => {})
+      await Promise.race([app.close().catch(() => {}), sleep(10000)])
+    }
   }
 }
 
