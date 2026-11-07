@@ -142,13 +142,21 @@ function trimSnapshots(s: SessionState): void {
   }
 }
 
-/** 读最多 max 字节;文件比这大 = 'large'(不整份读进来)。 */
+/** 读最多 max 字节;文件比这大 = 'large'(不整份读进来)。缓冲按文件现在的大小开,读的途中变大了再按倍数加,封顶 max + 1。 */
 async function readBounded(abs: string, max: number): Promise<Buffer | 'large'> {
   const fh = await fsp.open(abs, 'r');
   try {
-    const buf = Buffer.allocUnsafe(max + 1);
+    const size = (await fh.stat()).size;
+    if (size > max) return 'large';
+    let buf = Buffer.allocUnsafe(Math.min(max + 1, size + 1));
     let len = 0;
-    while (len < buf.length) {
+    for (;;) {
+      if (len === buf.length) {
+        if (buf.length > max) break;
+        const grown = Buffer.allocUnsafe(Math.min(max + 1, buf.length * 2));
+        buf.copy(grown, 0, 0, len);
+        buf = grown;
+      }
       const { bytesRead } = await fh.read(buf, len, buf.length - len, len);
       if (!bytesRead) break;
       len += bytesRead;
