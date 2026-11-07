@@ -83,10 +83,14 @@ describe('渲染', () => {
     await vi.waitFor(() => expect(document.querySelector('.app-ref-card')).toBeNull())
   })
 
-  it('光标进到那一行 → 露出源码;离开 → 又是芯片', () => {
+  it('光标在同一行、但不在引用里 → 仍是芯片(11-03:输入过程中就渲染)', () => {
     caretAt('再看')
-    expect(chips()).toHaveLength(0)
-    expect(b.view.dom.querySelector('.wikilink-src-hidden')).toBeNull()
+    expect(chips()).toHaveLength(2)
+  })
+
+  it('光标进到引用里 → 露出它的源码;离开 → 又是芯片', () => {
+    caretAt('季度计划')
+    expect(chips()).toHaveLength(1)
     b.view.dispatch(b.view.state.tr.setSelection(TextSelection.create(b.view.state.doc, b.view.state.doc.content.size - 1)))
     expect(chips()).toHaveLength(2)
   })

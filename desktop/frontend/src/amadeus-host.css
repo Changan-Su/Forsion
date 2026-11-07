@@ -316,6 +316,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   color: var(--text-muted);
   opacity: 0.8;
 }
+/* 光标所在行露出的 [[源码]](wikilink.ts 的 .wikilink-src 装饰):输入 / 编辑时同色,目标不存在同样黯淡。 */
+.am-app .milkdown .ProseMirror .wikilink-src { color: var(--signal); }
+.am-app .milkdown .ProseMirror .wikilink-src.wikilink-unresolved { color: var(--text-muted); opacity: 0.8; }
 /* 正文 #标签 胶囊(L-14,tagPill.ts):零 schema 装饰,光标所在行不装饰(露字面源码)。只加底色与圆角,
  * 不改字号 / 行高 —— 胶囊与正文同一基线,打字行与非打字行切换时不跳行。 */
 .am-app .milkdown .ProseMirror .amx-tag-pill {
