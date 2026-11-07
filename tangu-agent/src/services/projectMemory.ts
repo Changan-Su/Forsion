@@ -158,6 +158,7 @@ export async function resolveProjectCandidate(project: string, id: string, adopt
     if (adopt) repo.mutate({ action: 'add', fact: item.fact, cap: PROJECT_MEMORY_CHAR_BUDGET, evidenceIds: [`session:${item.sessionId}`], source: { kind: 'manual' } });
     atomicWriteMemoryFile(ref.dir, PENDING, JSON.stringify(adopt ? items.filter((p) => p !== item) : items.map((p) => (p === item ? { ...p, dismissed: true } : p))));
   });
+  ledger.inc('daily_judge', adopt ? 'projAdopted' : 'projDismissed');
   return projectMemoryView(project);
 }
 
@@ -192,8 +193,12 @@ export async function forgetProjectMemory(project: string, id: string, expectedV
   const ref = refOf(project);
   if (!exists(ref)) throw new MemoryRepositoryError('MEMORY_NOT_FOUND', 'This project has no saved memory.');
   (await openProjectMemory(ref)).mutate({ action: 'forget', id, expectedVersion });
+  ledger.inc('daily_judge', 'projForgotten');
   return projectMemoryView(project);
 }
+
+// 遥测(daily_judge 的项目记忆采纳 / 拒绝 / 忘记 / 还原 / 压缩):import 放这里,离开文件头那几行,少和别的改动撞
+import { ledger } from './telemetryLedger.js';
 
 // ── 写满时那次压缩留下的记录(10-05)─────────────────────────────────────────────────────────
 // 压缩本身在 projectMemoryCompact.ts(模型把整份重写一遍,能合的合、被取代的和过时的去掉)。这里只存它的记录:
@@ -223,6 +228,7 @@ export function recordProjectCompaction(ref: ProjectMemoryRef, before: Compactio
     const fresh = removed.map((content) => ({ id: randomUUID().slice(0, 8), content, at }));
     atomicWriteMemoryFile(ref.dir, COMPACTED, JSON.stringify({ at, before, after, removed: [...fresh, ...earlier].slice(0, COMPACTED_KEEP) } satisfies CompactionRecord));
   });
+  ledger.inc('daily_judge', 'projCompacted');
 }
 
 /** 用户在项目详情里把一句被压缩掉的原句「恢复」:以用户的名义记回去(放不下 → MEMORY_FULL,界面提示先删几条),再从记录里拿掉。
@@ -244,6 +250,7 @@ export async function restoreCompactedFact(project: string, id: string): Promise
     else repo.mutate({ action: 'add', fact: item.content, cap: PROJECT_MEMORY_CHAR_BUDGET, source: { kind: 'manual' } });
     atomicWriteMemoryFile(ref.dir, COMPACTED, JSON.stringify({ ...rec, removed: rec.removed.filter((r) => r !== item) } satisfies CompactionRecord));
   });
+  ledger.inc('daily_judge', 'projRestored');
   return projectMemoryView(project);
 }
 

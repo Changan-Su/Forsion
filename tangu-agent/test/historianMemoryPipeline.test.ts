@@ -184,6 +184,10 @@ describe('Historian 记忆两阶段流水线', () => {
 
     const act = await query<any[]>(`SELECT action FROM special_agent_log WHERE agent = 'historian' AND action = 'memory_candidates'`);
     expect(act.length).toBe(1);
+    // 遥测账本(契约 §7):这一轮的模式与候选条数;只有键和次数
+    await new Promise((r) => setTimeout(r, 20));
+    const led = await query<any[]>(`SELECT event, field, n FROM telemetry_ledger WHERE field IN ('rounds', 'roundsIndependent', 'memCandidates', 'candidatesAdded')`);
+    expect(Object.fromEntries(led.map((r) => [`${r.event}.${r.field}`, r.n]))).toEqual({ 'daily_judge.rounds': 1, 'daily_judge.roundsIndependent': 1, 'daily_judge.memCandidates': 2, 'daily_memory.candidatesAdded': 2 });
   });
 
   it('No-op 门:空候选数组 → 不落 raw、不整固', async () => {

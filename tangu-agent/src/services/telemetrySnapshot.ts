@@ -5,17 +5,27 @@
  *   被读到 / 被回复的条数,记在**今天**这一格,绝不回写昨天那一格 —— Extend 过了 UTC 零点第一跳就把昨天整行发走、不回头。
  *   前一天的消息,窗口在今天之内陆续关上:每小时重算一遍、set 覆盖,今天最后一次快照的值留下。
  *   ⚠️ 少算的一角:前一天深夜发的消息,窗口要到今天深夜才关,今天最后一次快照之后(至多一小时)才读到 / 回复的,不计。
+ * - 记忆(按 agentRole)与 human/ 的 g* 快照、今天满 7 天的 Agent 数(冷启动分母)。只数条目 / 行数,原文不出本机。
  * - 删掉 35 天以前的日子。
  * 由引擎自己数,Extend 不碰这些文件和表。每一段单独 try:一段失败不连累别的段。持库的本机进程专用(hostExec)。
  */
 import { query } from '../core/db.js';
-import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
-import { ledger, pruneLedger, isCardKind, utcDay } from './telemetryLedger.js';
+import { listAgents, MUSE_AGENT_SLUG, resolveMemorySlug } from '../agents/agentRegistry.js';
+import { agentRoleOf, ledger, pruneLedger, isCardKind, utcDay, type AgentRole } from './telemetryLedger.js';
 import { loadSpecialAgentsConfig } from './specialAgentsConfig.js';
 import { onboardingActive, readMuseOnboarding } from './museState.js';
 import { loadTriggers } from './museTriggers.js';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { agentsDir, humanDir } from '../core/tanguHome.js';
+import { createMemoryRepository, isMemoryTombstoneActive, MEMORY_CHAR_BUDGET } from './memoryRepository.js';
+import { readCandidates } from './memoryCandidates.js';
+import { loadHarness } from '../agents/harnessStore.js';
+import { portraitEntries } from '../agents/humanPortrait.js';
+import './memoryTelemetry.js'; // 启动时挂上记忆提交的旁听者(daily_memory 的 src* 计数)
 
 const DAY = 86_400_000;
+const WEEK = 7 * DAY;
 export const TELEMETRY_SNAPSHOT_KICKOFF_MS = 60_000;
 export const TELEMETRY_SNAPSHOT_INTERVAL_MS = 3600_000;
 
@@ -74,6 +84,91 @@ export async function snapshotMuseDmReads(now = Date.now()): Promise<void> {
   ledger.set('daily_muse', 'dmRepliedIn24h', Math.max(0, Number(rows?.[0]?.replied) || 0), { now });
 }
 
+// ── 记忆 / human 的快照(daily_memory / daily_human 的 g*)──
+const isItem = (l: string): boolean => /^\s*(?:[-*+]|\d+[.)])\s+\S/.test(l);
+const countItems = (raw: string): number => raw.split('\n').filter(isItem).length;
+/** 没有这个文件 → null;有但读不了 → 抛(读失败 ≠ 空,调用方跳过这一项)。 */
+function readText(file: string): string | null {
+  return existsSync(file) ? readFileSync(file, 'utf8') : null;
+}
+
+/** 每个 Agent 记忆域(共用默认记忆的折叠成一份)按 agentRole 汇总:条目、墓碑、候选积压、工作笔记条目;占预算百分比取这个角色里最满的那份。
+ *  还没有 .memory-state.json 的记忆目录不读(读一次会触发迁移落盘,快照不该替用户写东西)。读不了的那一类整个角色都不写
+ *  (读失败 ≠ 空:少加一份的和数比不写更糟,记成 NaN、最后跳过)。
+ *  记忆走仓库的正常读口(同打开记忆页):盘上有外部改动时,这次读会照常把它提交进仓库。 */
+export async function snapshotMemory(now = Date.now()): Promise<void> {
+  const agents = await listAgents();
+  const seen = new Set<string>();
+  type Acc = { mem?: { entries: number; pct: number; tombstones: number }; cand?: { pending: number; oldest: number }; harness?: number };
+  const acc = new Map<AgentRole, Acc>();
+  for (const def of agents) {
+    const memSlug = resolveMemorySlug(def);
+    const role = agentRoleOf(memSlug);
+    const a: Acc = acc.get(role) ?? {};
+    acc.set(role, a);
+    if (!seen.has(memSlug)) {
+      seen.add(memSlug);
+      const dir = join(agentsDir(), memSlug);
+      if (existsSync(join(dir, '.memory-state.json'))) {
+        try {
+          const s = createMemoryRepository(dir).snapshot();
+          const m = (a.mem ??= { entries: 0, pct: 0, tombstones: 0 });
+          m.entries += s.entries.length;
+          m.pct = Math.max(m.pct, Math.floor((s.content.length * 100) / MEMORY_CHAR_BUDGET));
+          m.tombstones += s.tombstones.filter(isMemoryTombstoneActive).length;
+        } catch { a.mem = { entries: NaN, pct: NaN, tombstones: NaN }; }
+      }
+      try {
+        const list = readCandidates(memSlug);
+        const c = (a.cand ??= { pending: 0, oldest: 0 });
+        c.pending += list.length;
+        for (const x of list) { const t = Date.parse(`${x.date}T00:00:00Z`); if (Number.isFinite(t)) c.oldest = Math.max(c.oldest, Math.floor((now - t) / DAY)); }
+      } catch { a.cand = { pending: NaN, oldest: NaN }; }
+    }
+    try { a.harness = (a.harness ?? 0) + (await loadHarness(def.slug)).length; } catch { a.harness = NaN; }
+  }
+  for (const [dim, a] of acc) {
+    if (a.mem && Number.isFinite(a.mem.entries)) {
+      ledger.set('daily_memory', 'gEntries', a.mem.entries, { dim, now });
+      ledger.set('daily_memory', 'gCharsPct', a.mem.pct, { dim, now });
+      ledger.set('daily_memory', 'gTombstones', a.mem.tombstones, { dim, now });
+    }
+    if (a.cand && Number.isFinite(a.cand.pending)) {
+      ledger.set('daily_memory', 'gCandidatesPending', a.cand.pending, { dim, now });
+      ledger.set('daily_memory', 'gCandidatesOldestDays', a.cand.oldest, { dim, now });
+    }
+    if (a.harness !== undefined && Number.isFinite(a.harness)) ledger.set('daily_memory', 'gHarnessEntries', a.harness, { dim, now });
+  }
+}
+
+/** human/ 那几份的条数、日历行数、有自己 HUMAN.md 的 Agent 数、Agent 总数,以及今天满 7 天的 Agent 数(冷启动的分母)。
+ *  只数条目 / 行数,原文不出本机;某一项读不了就不写那一项。 */
+export async function snapshotHuman(now = Date.now()): Promise<void> {
+  const dir = humanDir();
+  const each = (fn: () => void): void => { try { fn(); } catch { /* 这一项不写 */ } };
+  const item = (file: string, field: 'gHumanMdEntries' | 'gAgentMdEntries' | 'gMemoryEntries'): void => each(() => {
+    const raw = readText(join(dir, file));
+    if (raw !== null) ledger.set('daily_human', field, countItems(raw), { now });
+  });
+  item('HUMAN.md', 'gHumanMdEntries');
+  item('AGENT.md', 'gAgentMdEntries');
+  item('MEMORY.md', 'gMemoryEntries');
+  each(() => {
+    const soul = readText(join(dir, 'SOUL.md'));
+    if (soul !== null) ledger.set('daily_human', 'gPortraitEntries', portraitEntries(soul).length, { now });
+  });
+  each(() => {
+    const cal = readText(join(dir, 'CALENDAR.db'));
+    const db = cal === null ? null : JSON.parse(cal); // 读不懂 ≠ 0 行:抛出去,这一项不写
+    if (Array.isArray(db?.rows)) ledger.set('daily_human', 'gCalendarRows', db.rows.length, { now });
+  });
+  const agents = await listAgents();
+  ledger.set('daily_human', 'gAgentsTotal', agents.length, { now });
+  each(() => ledger.set('daily_human', 'gAgentsWithHumanMd', agents.filter((a) => (readText(join(agentsDir(), a.slug, 'HUMAN.md')) ?? '').trim().length > 0).length, { now }));
+  const turning = utcDay(now - WEEK);
+  ledger.set('daily_human', 'coldstartAgents', agents.filter((a) => { const t = Date.parse(String(a.createdAt || '')); return Number.isFinite(t) && utcDay(t) === turning; }).length, { now });
+}
+
 /** 一轮:各段单独兜错。 */
 export async function runTelemetrySnapshot(now = Date.now()): Promise<void> {
   const steps: Array<[string, () => Promise<void>]> = [
@@ -81,6 +176,8 @@ export async function runTelemetrySnapshot(now = Date.now()): Promise<void> {
     ['muse', () => snapshotMuse(now)],
     ['muse cards', () => snapshotMuseCards(now)],
     ['muse dm reads', () => snapshotMuseDmReads(now)],
+    ['memory', () => snapshotMemory(now)],
+    ['human', () => snapshotHuman(now)],
   ];
   for (const [name, fn] of steps) {
     try { await fn(); } catch (e: any) { log(`${name} failed: ${e?.message || e}`); }

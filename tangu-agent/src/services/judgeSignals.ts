@@ -13,6 +13,7 @@
  */
 import { MAX_REPEATED_TOOL_FAILURES } from './repeatedToolFailure.js';
 import type { DecisionBrain } from '../seams/cloudBrain.js';
+import { ledger } from './telemetryLedger.js';
 
 /** 用户按停时,这一轮至少调过这么多次工具才算「折腾了半天没给答案」。 */
 export const STOP_SIGNAL_MIN_TOOL_CALLS = 3;
@@ -31,8 +32,9 @@ export function toolTally(names: readonly string[]): string {
 export const NUDGE_SIGNAL =
   'In the latest turn the agent said it had done, or was about to do, something without calling any tool, and had to be told to actually do it.';
 export const CORRECTION_SIGNAL = "The user's message that starts the latest turn reads like a correction of the agent's previous reply.";
+const TOOL_LOOP_LEAD = 'In the latest turn the same tool call (';
 export const toolLoopSignal = (names: readonly string[]): string =>
-  `In the latest turn the same tool call (${toolTally(names) || 'a tool'}) failed ${MAX_REPEATED_TOOL_FAILURES} times in a row with unchanged arguments and the same error, so the agent was cut off from tools.`;
+  `${TOOL_LOOP_LEAD}${toolTally(names) || 'a tool'}) failed ${MAX_REPEATED_TOOL_FAILURES} times in a row with unchanged arguments and the same error, so the agent was cut off from tools.`;
 const stopSignal = (names: readonly string[]): string =>
   `The user stopped the previous turn after the agent had made ${names.length} tool calls (${toolTally(names)}) without giving an answer; the latest turn starts with what the user said next.`;
 
@@ -42,6 +44,7 @@ const PENDING_STOPS_MAX = 200; // 按停后再没回来的会话各留一条,封
 
 export function noteUserStop(sessionId: string, toolNames: readonly string[]): void {
   if (toolNames.length < STOP_SIGNAL_MIN_TOOL_CALLS) return;
+  ledger.inc('daily_judge', 'signalStop');
   pendingStops.delete(sessionId); // 重新插入 = 挪到最新
   pendingStops.set(sessionId, stopSignal(toolNames));
   while (pendingStops.size > PENDING_STOPS_MAX) pendingStops.delete(pendingStops.keys().next().value as string);
@@ -100,6 +103,11 @@ export function correctionState(previousReply: unknown, userMessage: string): { 
 }
 
 export async function correctionVerdict(brain: DecisionBrain, previousReply: unknown, userMessage: string, signal?: AbortSignal): Promise<CorrectionVerdict> {
+  const v = await askCorrection(brain, previousReply, userMessage, signal);
+  if (v.correction) ledger.inc('daily_judge', v.by === 'decision' ? 'signalCorrectionDecision' : 'signalCorrectionLexical');
+  return v;
+}
+async function askCorrection(brain: DecisionBrain, previousReply: unknown, userMessage: string, signal?: AbortSignal): Promise<CorrectionVerdict> {
   const lexical = looksLikeCorrection(userMessage);
   try {
     const r = await brain.decide({
@@ -139,6 +147,20 @@ export function judgeTriggerBlock(signals: readonly string[], want: { memory: bo
 }
 
 /** 测试用:清空进程内状态。 */
+/**
+ * 遥测:一个 run 收尾交给判官的信号按种类计次(按停在 noteUserStop 那一刻记;决策闸判的纠正在 correctionVerdict 里记,
+ * decided = 这一轮问过决策闸,纠正信号就不在这里重复记)。
+ */
+export function noteRunSignals(signals: readonly string[], decided: boolean): void {
+  try {
+    const n = (hit: (s: string) => boolean): number => signals.filter(hit).length;
+    const nudge = n((s) => s === NUDGE_SIGNAL), loop = n((s) => s.startsWith(TOOL_LOOP_LEAD)), lexical = decided ? 0 : n((s) => s === CORRECTION_SIGNAL);
+    if (nudge) ledger.inc('daily_judge', 'signalNudge', { n: nudge });
+    if (loop) ledger.inc('daily_judge', 'signalToolLoop', { n: loop });
+    if (lexical) ledger.inc('daily_judge', 'signalCorrectionLexical', { n: lexical });
+  } catch { /* 计数不挡复盘 */ }
+}
+
 export function resetJudgeSignals(): void {
   pendingStops.clear();
 }

@@ -35,6 +35,7 @@ import { renameAgent, AgentRenameError } from '../agents/agentRename.js';
 import { deviceTagContext, factWithScope } from '../services/deviceTagContext.js';
 import type { DeviceTagContext } from '../contracts/deviceTags.js';
 import { parseRemoteOrigin, clampApprovalMode, remoteApprovalCap } from '../services/remoteOrigin.js';
+import { noteUserDocumentEdit, noteUserEntryEdit, noteUserRestore } from '../services/memoryTelemetry.js';
 
 const router = Router();
 
@@ -387,7 +388,11 @@ router.put('/agent/agents/:slug/memory', authMiddleware, async (req: AuthRequest
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
     if (typeof req.body?.expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required; reload memory before saving.' });
     if (typeof req.body?.content !== 'string') return res.status(400).json({ detail: 'content must be a string' });
-    res.json(withDeviceTags(createMemoryRepository(store.baseDir).commit({ expectedVersion: req.body.expectedVersion, content: req.body.content, source: { kind: 'manual' } })));
+    const repo = createMemoryRepository(store.baseDir);
+    const before = repo.snapshot();
+    const after = repo.commit({ expectedVersion: req.body.expectedVersion, content: req.body.content, source: { kind: 'manual' } });
+    noteUserDocumentEdit(req.params.slug, before, after);
+    res.json(withDeviceTags(after));
   } catch (e: any) {
     res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message || 'write memory failed', code: e?.code });
   }
@@ -408,7 +413,12 @@ router.post('/agent/agents/:slug/memory/restore', authMiddleware, async (req: Au
     const store = await storeForAgent(req.params.slug);
     if (!store) return res.status(404).json({ detail: 'Agent not found' });
     if (typeof req.body?.expectedVersion !== 'string') return res.status(428).json({ detail: 'expectedVersion is required' });
-    res.json(withDeviceTags(createMemoryRepository(store.baseDir).restore(String(req.body?.version ?? ''), req.body.expectedVersion)));
+    const repo = createMemoryRepository(store.baseDir);
+    const version = String(req.body?.version ?? '');
+    const before = repo.snapshot(), revisions = repo.revisions();
+    const after = repo.restore(version, req.body.expectedVersion);
+    noteUserRestore(req.params.slug, revisions, version, before, after);
+    res.json(withDeviceTags(after));
   } catch (e: any) { res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message, code: e?.code }); }
 });
 
@@ -430,7 +440,10 @@ router.post('/agent/agents/:slug/memory/entries', authMiddleware, async (req: Au
       if (scoped === null) return res.status(400).json({ detail: 'Invalid appliesTo', code: 'MEMORY_INVALID' });
       fact = scoped;
     }
-    res.json(withDeviceTags(repo.mutate({ action, id, fact, expectedVersion, source: { kind: 'manual' } })));
+    const prior = action === 'add' ? undefined : repo.snapshot().entries.find((e) => e.id === id);
+    const after = repo.mutate({ action, id, fact, expectedVersion, source: { kind: 'manual' } });
+    noteUserEntryEdit(req.params.slug, action, prior);
+    res.json(withDeviceTags(after));
   } catch (e: any) { res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message, code: e?.code }); }
 });
 
