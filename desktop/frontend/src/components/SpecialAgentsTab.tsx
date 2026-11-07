@@ -2,6 +2,7 @@ import { useEffect, useId, useState, type ReactNode } from 'react'
 import { Check, ChevronRight, FolderPlus, History, Loader2, Sparkles, X } from 'lucide-react'
 import { useApp } from '../stores/appStore'
 import { getSpecialConfig, saveSpecialConfig, listModels, listAgents } from '../services/backendService'
+import { museSettingTelemetry } from '../telemetrySend'
 import type { HistorianConfig, ModelInfo, MuseConfig, NormalAgentDef, SpecialAgentsConfig, SpecialAgentsSummary, TanguDesktopConfig } from '../types'
 import { registerMessages, useI18n } from '../i18n'
 import { track } from '../achievements/store'
@@ -152,7 +153,9 @@ export function SpecialAgentsTab({ cfg, localHost = false, initialRole = 'histor
     const next = { historian: { ...conf.historian, prompt: prompt === promptDefault ? '' : prompt }, muse: { ...conf.muse, allowedFolders: [...new Set(folders.split('\n').map((s) => s.trim()).filter(Boolean))] } }
     const diff = <T extends object>(a: T, b: T): Partial<T> => Object.fromEntries(Object.entries(a).filter(([key, value]) => JSON.stringify(value) !== JSON.stringify(b[key as keyof T]))) as Partial<T>
     try {
-      const saved = await saveSpecialConfig(homeTarget(), { historian: diff(next.historian, baseline.historian), muse: diff(next.muse, baseline.muse) })
+      const museDiff = diff(next.muse, baseline.muse)
+      const saved = await saveSpecialConfig(homeTarget(), { historian: diff(next.historian, baseline.historian), muse: museDiff })
+      museSettingTelemetry(museDiff)
       if ((!baseline.historian.enabled && saved.historian.enabled) || (!baseline.muse.enabled && saved.muse.enabled)) track('special.enable')
       setConf(saved); setBaseline(saved); setPrompt(saved.historian.prompt || promptDefault); setFolders(saved.muse.allowedFolders.join('\n')); setNotice(t('specialUi.saved'))
       void useApp.getState().refreshSpecialEnabled(cfg)

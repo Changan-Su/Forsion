@@ -76,6 +76,13 @@ let busy = false
 type Download = { token: CancellationToken; lastAt: number; manual: UpdateSource | null; dropped?: boolean }
 let dl: Download | null = null
 
+/** 阶段变了才回调(匿名遥测的 update 事件:见 telemetryHost.appUpdateProps);下载进度那种同阶段的刷新不回调。返回退订。 */
+const phaseListeners = new Set<(status: UpdaterStatus) => void>()
+export function onUpdaterPhase(cb: (status: UpdaterStatus) => void): () => void {
+  phaseListeners.add(cb)
+  return () => { phaseListeners.delete(cb) }
+}
+
 /** 下载失败的常见本机原因换成稳定代码,界面按代码出文案(D27);其余照原文。 */
 export function downloadErrorCode(err: any): string {
   const code = String(err?.code ?? '')
@@ -86,7 +93,9 @@ export function downloadErrorCode(err: any): string {
 }
 
 function broadcast(status: UpdaterStatus): void {
+  const phaseChanged = status.phase !== lastStatus.phase
   lastStatus = status
+  if (phaseChanged) for (const cb of phaseListeners) { try { cb(status) } catch { /* 遥测不影响更新 */ } }
   for (const w of BrowserWindow.getAllWindows()) {
     if (!w.isDestroyed()) w.webContents.send('updater:status', status)
   }

@@ -824,6 +824,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         seen.add(id)
         out.push({
           id,
+          dir: e.name,
           // manifest 推导的展示 / 门禁字段(名称回落目录名、英文镜像、能力白名单、onboarding / events 消毒、
           // fileExtensions、isDesktopOnly)与 Android App 的插件宿主同一份映射(shared/amadeus/pluginSource.ts)。
           // isDesktopOnly 在桌面只是信息位,照常装载。

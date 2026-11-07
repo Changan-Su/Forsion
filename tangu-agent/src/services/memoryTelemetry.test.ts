@@ -3,7 +3,7 @@
  * 账本里只有枚举键和次数:记忆原文只在本机比一下是不是同一句,比完只记次数。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type Database from 'better-sqlite3';
@@ -218,8 +218,15 @@ describe('daily_memory', () => {
     await saveAgent({ slug: 'fresh', name: 'Fresh', systemPrompt: 'Help.' } as any); // 还没读过记忆(没有状态文件)
     repoOf('helper').add('One');
     repoOf('helper').add('Two');
+    await settle();
+    // 盘上的外部改动:快照只读状态文件,不替用户把它提交成新的一版
+    const state = () => readFileSync(join(agentsDir(), 'helper', '.memory-state.json'), 'utf8');
+    const before = state();
+    writeFileSync(join(agentsDir(), 'helper', 'MEMORY.md'), '- One\n- Two\n- Edited outside\n');
     await snapshotMemory();
     await settle();
+    expect(state()).toBe(before);
+    expect(cell('daily_memory', 'srcExternalEdit', 'custom')).toBeUndefined();
     expect(cell('daily_memory', 'gEntries', 'custom')).toBe(2);
     expect(cell('daily_memory', 'gCandidatesPending', 'custom')).toBe(0);
     expect(cell('daily_memory', 'gHarnessEntries', 'custom')).toBe(0);

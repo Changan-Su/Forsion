@@ -2,6 +2,8 @@ import { applyMcpSnapshot, mergeMcpImport, parseMcpInput } from '../shared/mcpCo
 import { assertMarketplaceRequirements } from '../shared/marketplace'
 import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner,agentContentHooks } from './contentSyncHost'
 import { asrBackendFor } from './asrSelection'
+import { qwenVoiceInputUrl, registerVoiceInputStream } from './voiceInputStream'
+import { voiceInputCloudUrl } from '../shared/voiceInputStream'
 import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
 import { registerStartupAppearance } from './startupAppearance'
@@ -31,7 +33,7 @@ import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
 import { clearRecoveryNotice, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
-import { existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { readSpaceIconDataUrl } from './spaceIcon'
@@ -55,7 +57,8 @@ import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccoun
 import { createAccountCore } from './accountCore'
 import { importMcp, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
-import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, channelChanged } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, onUpdaterPhase, channelChanged } from './updater'
+import type { CorePluginUpdate } from '../shared/corePlugins'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
@@ -81,7 +84,7 @@ import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdat
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
 import { createCoreTangu } from './coreTangu'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
-import { createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, telemetryPackaged } from './telemetryHost'
+import { appUpdateProps, coreUpdateProps, createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, storeUpdateTelemetry, telemetryPackaged, updateProps } from './telemetryHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
 import { extractZipToDir, checkMarketPackage, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
@@ -1642,6 +1645,8 @@ const telemetry = createTelemetryHost({
   channel: () => { refreshTelemetryChannel(); return (telemetryBeta ?? app.getVersion().includes('-')) ? 'beta' : 'stable' },
   coreVersion: () => (PRODUCT.agentBackend ? backend.engineVersion() ?? backend.engineOverlayVersion() : null),
   log: (m) => console.warn(m),
+  // 台架旁路:FORSION_TELEMETRY_TRACE=<文件> 时把交给 Extend 的每条事件(已过白名单整形)追加成一行 JSON(e2e:telemetry 用)
+  ...(process.env.FORSION_TELEMETRY_TRACE ? { tap: (ev) => appendFileSync(process.env.FORSION_TELEMETRY_TRACE!, `${JSON.stringify(ev)}\n`) } : {}),
 })
 refreshTelemetryChannel()
 const uptimeS = (): number => Math.round(process.uptime())
@@ -2664,7 +2669,7 @@ app.whenReady().then(async () => {
       // 钥匙到手就交给引擎(stdin 私有通道;之后每次拉起引擎也会重发)
       onKey: (hex) => backend.setComputerHistoryKey(hex),
     })
-    registerComputerHistoryIpc(computerHistory, isTrustedSender)
+    registerComputerHistoryIpc(computerHistory, isTrustedSender, (on) => telemetry.setting('computerHistory.enabled', on))
   }
   // Windows 系统通知前提(无 AppUserModelId 时 Notification 可能不弹);mac/linux 无副作用。
   app.setAppUserModelId('com.forsion.tangu')
@@ -2788,6 +2793,7 @@ app.whenReady().then(async () => {
   await deviceSecrets.init({ readShell: readShellConfig as () => Promise<Record<string, any>>, writeShell: (s) => writePrivateJson(configPath(), s), queue: configQueue })
   void remoteSessions.init() // P1-K4:迁移 / 读盘(isEnabled 依赖 K5 状态,须在它之后);K5 状态一变就重播视图
   deviceSecrets.onStatusChange(() => remoteSessions.notifyChanged())
+  const storeUpdateTele = storeUpdateTelemetry({ update: (p) => telemetry.emit('update', p), setting: (k, v) => telemetry.setting(k, v) }) // 匿名遥测
   const marketPluginUpdater = createMarketPluginUpdater({
     home: forsionHomeDir(), appVersion: app.getVersion(),
     protectedIds: () => new Set([...builtinPluginIds(), ...BUILTIN_BUNDLES.map((x) => x.id)]),
@@ -2811,6 +2817,7 @@ app.whenReady().then(async () => {
       return buf
     },
     broadcast: (status) => {
+      storeUpdateTele(status)
       for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('market:updateStatus', status)
     },
   })
@@ -2860,7 +2867,13 @@ app.whenReady().then(async () => {
     broadcast: (status) => {
       for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('updater:core-status', status)
     },
-    run: async (onStatus) => {
+    run: async (report) => {
+      // 匿名遥测 update:引擎 npm 热更新 / 内置插件 npm 更新查完的结论(current / staged / incompatible / error;报错原文只拿来归类)
+      const onStatus = (st: CorePluginUpdate): void => {
+        report(st)
+        const props = coreUpdateProps(st, ENGINE_UPDATE_ID)
+        if (props) telemetry.emit('update', props)
+      }
       const stored = await loadConfig()
       const registries = registryOrder(stored.mirror)
       const registryFetch = (url: string, init: { signal: AbortSignal; headers?: Record<string, string> }): Promise<Response> =>
@@ -2887,6 +2900,13 @@ app.whenReady().then(async () => {
   const firstBootPrefetch = app.isPackaged && !SANDBOX
     ? await prefetchOnFirstBoot({ markerFile: join(app.getPath('userData'), 'core-prefetch-version'), version: app.getVersion(), timeoutMs: 10_000, check: corePluginUpdater.check })
     : 'skipped'
+  // 匿名遥测 update(首启预取):超时 / 查到新版这一次就用上(applied)/ 都是最新 / 出错;不是装好后第一次启动(skipped)不报
+  if (firstBootPrefetch !== 'skipped') {
+    const items = corePluginUpdater.snapshot().items
+    const failed = items.find((x) => x.phase === 'error')
+    telemetry.emit('update', updateProps('first-boot-prefetch', firstBootPrefetch === 'timeout' ? 'timeout'
+      : items.some((x) => x.phase === 'staged') ? 'applied' : failed ? 'error' : 'current', { error: failed?.error }))
+  }
   // 全档案都播种 / 装载(2026-09-28 起):Amadeus / basic 单品也跑云同步、penzor、登录态续期,这些都住在 Extend 里;
   // 只在 agent 后端才有意义的包(电脑操作)由清单 requires 挡在 bundleSources 之外。
   {
@@ -3142,11 +3162,12 @@ app.whenReady().then(async () => {
     return coreTangu.load(id)
   })
   // 渲染层自己 location.reload() 是 file: 导航,会被 hardenNav 拦下:重载一律从这里发
+  // 界面热更新被退回(那一版加载失败 / 崩了 → 退回安装包那份并重载):匿名遥测 update { target: ui, outcome: rolled-back }
   ipcMain.handle('coreTangu:failed', (e, reason: unknown) => {
-    if (coreTanguOn && isTrustedSender(e) && coreTangu.failed(e.sender.id, reason)) e.sender.reload()
+    if (coreTanguOn && isTrustedSender(e) && coreTangu.failed(e.sender.id, reason)) { telemetry.emit('update', updateProps('ui', 'rolled-back')); e.sender.reload() }
   })
   ipcMain.handle('coreTangu:crashed', (e, reason: unknown) => {
-    if (coreTanguOn && isTrustedSender(e) && coreTangu.crashed(e.sender.id, reason)) e.sender.reload()
+    if (coreTanguOn && isTrustedSender(e) && coreTangu.crashed(e.sender.id, reason)) { telemetry.emit('update', updateProps('ui', 'rolled-back')); e.sender.reload() }
   })
   // 引擎退回了(或换了版)而界面还是热更新的那一版:拿着它的窗口重载一次,重载后界面跟着引擎走
   backend.onStatus((st) => {
@@ -3900,6 +3921,7 @@ app.whenReady().then(async () => {
       else cur.push(provider)
       return cur
     })
+    telemetry.count('byokSave') // 匿名遥测只数次数:渠道 id、地址、key 一概不报
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend()
     return list
@@ -3917,8 +3939,9 @@ app.whenReady().then(async () => {
     const add = await localProvidersFor(Array.isArray(ids) ? ids : [], await readProvidersFile(), opts)
     localScan = null
     // 选的那几条在原来的应用里刚改过(指纹变了)或已经加过:一条都没取到就如实报,界面重扫一遍让人重选
-    if (!add.length) throw new Error('import_stale')
+    if (!add.length) { telemetry.count('byokImportStale'); throw new Error('import_stale') }
     const list = await updateProvidersFile((cur) => [...cur, ...add.filter((a) => !cur.some((p) => p.providerId === a.providerId))])
+    telemetry.count('byokImport', add.length)
     localScan = null
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend()
@@ -3926,6 +3949,7 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('providers:delete', async (_e, providerId: string) => {
     const list = await updateProvidersFile((cur) => cur.filter((p) => p.providerId !== providerId))
+    telemetry.count('byokDelete')
     const stored = await loadConfig()
     if (stored.mode === 'managed') void ensureBackend()
     return list
@@ -3945,6 +3969,7 @@ app.whenReady().then(async () => {
     const i = modelId.indexOf('/')
     const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined
     if (provider) {
+      if (qwenVoiceInputUrl(provider.baseUrl, modelId.slice(i + 1))) throw new Error('asr_streaming_required')
       return transcribeViaOpenAI({ baseUrl: provider.baseUrl, apiKey: provider.apiKey, model: modelId.slice(i + 1), audio, mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
     }
     // 非自带 provider = Forsion 托管模型(或未选,让服务端用 app asr 默认)→ 直连 Forsion 服务端(token 不下发 renderer)。
@@ -3954,6 +3979,22 @@ app.whenReady().then(async () => {
     if (!cloudUrl || !token) throw new Error('未设置语音识别:选一个自带 provider 的语音识别模型 + key,或登录 Forsion 用云端,或下载本地语音模型。')
     return transcribeViaForsion({ cloudUrl, token, modelId, audioB64: audio.toString('base64'), mime: req?.mime || 'audio/wav', language: req?.language, timestamps: req?.timestamps })
   }
+
+  registerVoiceInputStream(isTrustedSender, async (requestedModel) => {
+    const cfg = await loadConfig()
+    if (asrBackendFor(cfg.asrBackend, undefined, localModelReady()) === 'local') return null
+    const modelId = (requestedModel || cfg.asrModelId || '').trim()
+    const i = modelId.indexOf('/')
+    const provider = i > 0 ? (await readProvidersFile()).find((p) => p.providerId === modelId.slice(0, i)) : undefined
+    if (provider) {
+      const url = qwenVoiceInputUrl(provider.baseUrl, modelId.slice(i + 1))
+      return url && provider.apiKey ? { url, token: provider.apiKey, direct: true } : null
+    }
+    const creds = loadTanguCreds()
+    const cloudUrl = cfg.cloudUrl || creds.cloudUrl
+    if (!cloudUrl || !creds.token) return null
+    return { url: voiceInputCloudUrl(cloudUrl.replace(/\/+$/, '') + '/api', modelId, `desktop/${app.getVersion()}`), token: creds.token }
+  })
 
   ipcMain.handle('asr:transcribe', async (_e, req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }) =>
     runTranscribe(Buffer.from(req?.audioBase64 || '', 'base64'), req || {}))
@@ -4174,8 +4215,11 @@ app.whenReady().then(async () => {
   // 测试版通道开关。落 config.json 的 updater 段;updater.ts 每次检查现读,改完无需重启。
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
-    await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
+    let was: boolean | null = null // 改之前的值:在同一次锁内读改写里取(缺省 = 正式版,同 updater.readUpdaterConfig)
+    await saveHomeSection('updater', (sec: any) => { was = sec?.beta === true; return { ...sec, beta: !!on } })
     channelChanged(!!on)
+    if (was !== null && was !== !!on) telemetry.setting('update.channel', on ? 'beta' : 'stable') // 匿名遥测:更新通道真改了
+    refreshTelemetryChannel()
     return { ok: true }
   })
   // 下载来源:auto(按地区:大陆官网、其他地区 GitHub)/ website / github。同样落 updater 段、每次现读。
@@ -4480,7 +4524,9 @@ app.whenReady().then(async () => {
     const m = await providerOAuthModule()
     const p = m.OAUTH_PROVIDERS?.[id]
     if (!p) throw new Error(`未知 provider: ${id}`)
-    await m.providerOAuthLogin(p) // loopback+PKCE,自动开浏览器,落盘 provider-auth.json
+    // 匿名遥测:订阅登录成没成(只数次数,哪个渠道、报错原文都不报)
+    await m.providerOAuthLogin(p).catch((err: unknown) => { telemetry.count('providerLoginFail'); throw err }) // loopback+PKCE,自动开浏览器,落盘 provider-auth.json
+    telemetry.count('providerLoginOk')
     const stored = await loadConfig()
     // await(不是 void):provider 只在引擎启动时装载一次,IPC 必须等重启完成才返回,
     // 否则渲染层拿到 ok 就去拉模型目录 —— 打的还是正在被杀的旧端口。
@@ -4961,7 +5007,13 @@ function installHostTelemetry(): void {
     })
     backend.onUnexpectedExit(({ code, signal, uptimeMs }) => telemetry.emit('crash', engineExitProps(code, signal, Math.round(uptimeMs / 1000))))
   }
+  // 安装包更新器的阶段 → update(只报有结论的几步;见 telemetryHost.appUpdateProps)
+  onUpdaterPhase((st) => {
+    const props = appUpdateProps(st)
+    if (props) telemetry.emit('update', props)
+  })
   setInterval(() => {
+    telemetry.flushCounts() // 本小时的 app_counts / command_use(先于 takeHour 清上限;这两类本身不受上限)
     const { longTasks } = telemetry.takeHour()
     let rssKb = 0
     try { for (const m of app.getAppMetrics()) rssKb += m.memory?.workingSetSize ?? 0 } catch { /* 拿不到就记 0 */ }
@@ -4972,7 +5024,7 @@ function installHostTelemetry(): void {
       longTasks,
     })
   }, 3_600_000).unref()
-  // preload telemetryReport:渲染层只报 crash / feature / longtasks,整形与封顶在 telemetryHost.shapeRendererReport。只进不出,没有读接口。
+  // preload telemetryReport:渲染层报的种类见 shared/telemetryKeys 的 RENDERER_REPORT_KINDS,整形与封顶在 telemetryHost.shapeRendererReport。只进不出,没有读接口。
   ipcMain.on('host-telemetry:report', (e, kind: unknown, props: unknown) => {
     if (!isTrustedSender(e)) return
     telemetry.report(kind, props)
@@ -4982,6 +5034,7 @@ function installHostTelemetry(): void {
 // 退出收尾链(冲刷新同步 → 停后端 → app.exit)正在走:再按退出只等它,不重复收尾、不提前退(提前退会掐断还在推的改动)
 let exitChain: Promise<void> | null = null
 app.on('before-quit', (e) => {
+  telemetry.flushCounts() // 本小时还没发的计数先交给 Extend(退出被拦下也无妨:之后的照常再攒)
   if (exitChain) { e.preventDefault(); return }
   // 第一件事:有插件说还没做完就拦下问(别先做下面那些收尾 —— 取消的话应用还要接着用)。
   // 托盘「退出」在 app.quit() 之前就把 isQuitting 置了 true:拦下时还原,否则取消后关窗就真关了

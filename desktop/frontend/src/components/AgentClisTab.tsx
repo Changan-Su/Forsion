@@ -18,6 +18,7 @@ import {
 import { EngineIcon } from './EngineIcon'
 import type { TanguDesktopConfig } from '../types'
 import { homeTarget } from '../services/engine/targets'
+import { countTelemetry } from '../telemetrySend'
 
 type EngineStatus = 'available' | 'needs-signin' | 'not-installed'
 type EngineRow = { id: string; name: string; available?: boolean; status?: EngineStatus; defaultModel?: string; setup?: string }
@@ -63,7 +64,7 @@ export const AgentClisTab: React.FC<{ cfg: TanguDesktopConfig }> = ({ cfg }) => 
 
   const onPickModel = (id: string, modelId: string): void => {
     setEngines((list) => (list || []).map((e) => (e.id === id ? { ...e, defaultModel: modelId || undefined } : e)))
-    void setEngineDefaultModel(homeTarget(), id, modelId).catch(() => {})
+    void setEngineDefaultModel(homeTarget(), id, modelId).then(() => countTelemetry('engineDefaultModelSet'), () => {})
   }
 
   const doImport = (engineId: string, kind: 'skill' | 'mcp', name: string): void => {

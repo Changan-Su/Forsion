@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BUFFER_CAP, HOURLY_CAP, STACK_CAP,
-  createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, publicPluginId, shapeRendererReport, telemetryPackaged,
+  BUFFER_CAP, COMMAND_PAIR_CAP, HOURLY_CAP, ONCE_CAP, RENDERER_REPORT_KINDS, STACK_CAP,
+  appUpdateProps, coreUpdateProps, createStartupTracker, storeUpdateTelemetry, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, publicPluginId, shapeRendererReport,
+  telemetryPackaged, updateProps,
   type HostTelemetryEvent,
 } from './telemetryHost'
 
@@ -10,17 +11,22 @@ const host = (packaged = true) => createTelemetryHost({
 })
 
 describe('shapeRendererReport:渲染层上报的整形与校验', () => {
-  it('种类不在 crash / feature / longtasks 里、或 props 不是对象 → 丢', () => {
+  it('种类不在 §9 的清单里、或 props 不是对象 → 丢', () => {
     expect(shapeRendererReport('agent_run', { name: 'x' })).toBeNull()
     expect(shapeRendererReport('perf', { kind: 'startup' })).toBeNull()
+    expect(shapeRendererReport('update', { target: 'app', outcome: 'error' })).toBeNull() // update 只由主进程自己报
+    expect(shapeRendererReport('app_counts', { achChatSend: 3 })).toBeNull() // 计数只能经 count 攒
     expect(shapeRendererReport(undefined, { message: 'x' })).toBeNull()
     expect(shapeRendererReport('crash', 'boom')).toBeNull()
     expect(shapeRendererReport('crash', ['boom'])).toBeNull()
-    expect(shapeRendererReport('feature', { name: 'setting_change', key: 'theme' })).toBeNull() // 这一版不采
+    // setting_change 不许直接当 feature 报(值没归档):只走 setting 种类
+    expect(shapeRendererReport('feature', { name: 'setting_change', key: 'ui.themeMode', value: 'dark' })).toBeNull()
+    expect(RENDERER_REPORT_KINDS).toEqual(['crash', 'feature', 'longtasks', 'plugin_install', 'plugin_deps', 'plugin_lifecycle', 'plugin_load', 'onboarding', 'guide_tip', 'count', 'command', 'setting'])
   })
 
-  it('crash:报错原文不转发,stack 封顶 8000;错误名只留合法字符', () => {
-    const r = shapeRendererReport('crash', { reason: 'rejection', errorName: 'Type Error<script>', message: 'm'.repeat(5000), stack: 's'.repeat(20000), extra: 'dropped' })
+  it('crash:报错原文不转发(栈头那几行也剥掉,只留「at」帧),stack 封顶 8000;错误名只留合法字符', () => {
+    const head = 'Error: open /Users/me/secret "my title"\nsecond line of the message\n'
+    const r = shapeRendererReport('crash', { reason: 'rejection', errorName: 'Type Error<script>', message: 'm'.repeat(5000), stack: head + '    at f (app.js:1:2)\n'.repeat(2000), extra: 'dropped' })
     expect(r).not.toBeNull()
     const props = (r as { props: Record<string, unknown> }).props
     expect(props.process).toBe('renderer')
@@ -28,7 +34,10 @@ describe('shapeRendererReport:渲染层上报的整形与校验', () => {
     expect(props.errorName).toBe('Type-Errorscript')
     expect(props).not.toHaveProperty('message')
     expect((props.stack as string).length).toBe(STACK_CAP)
+    expect(props.stack).toMatch(/^    at f /)
+    expect(props.stack).not.toContain('secret')
     expect(props).not.toHaveProperty('extra')
+    expect(shapeRendererReport('crash', { errorName: 'Error', stack: 'Error: no frames here' })).toEqual({ event: 'crash', props: { process: 'renderer', reason: 'exception', errorName: 'Error' } })
     expect(shapeRendererReport('crash', { message: '' })).toBeNull() // 什么都没有就不报
   })
 
@@ -77,10 +86,12 @@ describe('shapeRendererReport:渲染层上报的整形与校验', () => {
 
 describe('宿主事件的形状', () => {
   it('主进程异常 → crash(main),报错原文不转发', () => {
-    const e = new RangeError('x'.repeat(3000))
+    const e = new RangeError(`bad ${'x'.repeat(3000)} /Users/me/notes.md`)
     const p = crashFromError('main', 'exception', e, { uptimeS: 12 })
     expect(p).toMatchObject({ process: 'main', reason: 'exception', errorName: 'RangeError', uptimeS: 12 })
     expect(p).not.toHaveProperty('message')
+    expect(p.stack).toMatch(/^\s+at /)
+    expect(String(p.stack)).not.toContain('notes.md')
     expect(crashFromError('main', 'rejection', 'plain string')).toEqual({ process: 'main', reason: 'rejection', errorName: 'string' })
   })
 
@@ -194,5 +205,234 @@ describe('createStartupTracker', () => {
     const b = tracker(true)
     b.t.noEngine(); b.t.firstFrame(650)
     expect(b.out).toEqual([{ kind: 'startup', startupMs: 650 }])
+  })
+})
+
+// ── v2(契约 §9)──
+/** 真实值(11-07 取自 api.forsion.net 的商店目录与本仓):商店条目 id 是裸 UUID,新装目录是 market-<UUID>,老条目目录是作者自起名。 */
+const STORE_ID = 'c6ff39fc-e42e-4999-9b2c-23776defd853' // better-pdf 的商店条目 id
+const ev = (r: ReturnType<typeof shapeRendererReport>) => r as { event: string; props: Record<string, unknown> }
+
+describe('v2 渲染层上报的整形', () => {
+  it('plugin_install:字段按白名单过,枚举外的归 other,报错原文 / 多余字段不带;错误类只在 outcome=error 时有', () => {
+    const r = ev(shapeRendererReport('plugin_install', {
+      pluginId: STORE_ID, pluginOfficial: true, entry: 'muse-card', kind: 'amadeus-plugin', source: 'github', stage: 'download',
+      outcome: 'error', errorClass: 'timeout', durationMs: 1234, sizeKb: 88, restart: false, message: 'github.com: timeout', path: '/Users/x',
+    }))
+    expect(r).toEqual({ event: 'plugin_install', props: { id: STORE_ID, entry: 'muse-card', kind: 'amadeus-plugin', source: 'github', stage: 'download', outcome: 'error', errorClass: 'timeout', durationMs: 1234, sizeKb: 88, restart: false } })
+    const ok = ev(shapeRendererReport('plugin_install', { pluginId: STORE_ID, pluginOfficial: true, entry: 'weird', kind: 'x', source: 'echo', stage: 'done', outcome: 'done', errorClass: 'timeout', durationMs: 1.5 }))
+    expect(ok.props).toEqual({ id: STORE_ID, entry: 'other', kind: 'other', source: 'other', stage: 'done', outcome: 'done' })
+    expect(shapeRendererReport('plugin_install', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'maybe' })).toBeNull()
+    expect(shapeRendererReport('plugin_install', { outcome: 'done' })).toBeNull()
+    expect(ev(shapeRendererReport('plugin_install', { pluginId: 'my-private', pluginOfficial: false, outcome: 'done' })).props.id).toBe('local')
+  })
+
+  it('plugin_deps / plugin_lifecycle / plugin_load', () => {
+    expect(ev(shapeRendererReport('plugin_deps', { total: 3, installed: 1, failedAt: 2, outcome: 'failed', names: ['a'] })).props).toEqual({ total: 3, installed: 1, failedAt: 2, outcome: 'failed' })
+    expect(shapeRendererReport('plugin_deps', { total: 3, outcome: 'meh' })).toBeNull()
+    expect(ev(shapeRendererReport('plugin_lifecycle', { pluginId: 'forsion-calendar', pluginOfficial: true, action: 'disable', blockedReason: 'api' })).props).toEqual({ id: 'forsion-calendar', action: 'disable' })
+    expect(ev(shapeRendererReport('plugin_lifecycle', { pluginId: 'x', pluginOfficial: false, action: 'blocked', blockedReason: 'whatever' })).props).toEqual({ id: 'local', action: 'blocked', blockedReason: 'other' })
+    expect(shapeRendererReport('plugin_lifecycle', { pluginId: 'x', pluginOfficial: true, action: 'delete' })).toBeNull()
+    expect(ev(shapeRendererReport('plugin_load', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'error', activateMs: 42 })).props).toEqual({ id: STORE_ID, outcome: 'error', activateMs: 42 })
+    expect(shapeRendererReport('plugin_load', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'slow' })).toBeNull()
+  })
+
+  it('onboarding:只收 int / bool / 枚举字段', () => {
+    const r = ev(shapeRendererReport('onboarding', { mode: 'returning', outcome: 'skip', screens: 2, backJumps: 1, msStart: 900, msTheme: 3000.5, youWritten: true, museOn: 'yes', aboutMe: '我是谁' }))
+    expect(r.props).toEqual({ mode: 'returning', outcome: 'skip', screens: 2, backJumps: 1, msStart: 900, youWritten: true })
+    expect(shapeRendererReport('onboarding', { mode: 'full', outcome: 'quit' })).toBeNull()
+  })
+
+  it('guide_tip:只发公开插件的提示;提示 id 按清单的形状', () => {
+    expect(ev(shapeRendererReport('guide_tip', { pluginId: STORE_ID, pluginOfficial: true, tipId: 'drag-to-reorder', result: 'learned' })).props).toEqual({ pluginId: STORE_ID, tipId: 'drag-to-reorder', result: 'learned' })
+    expect(shapeRendererReport('guide_tip', { pluginId: 'my-side-loaded', pluginOfficial: false, tipId: 'a', result: 'ok' })).toBeNull()
+    expect(shapeRendererReport('guide_tip', { pluginId: STORE_ID, pluginOfficial: true, tipId: 'Has Space', result: 'ok' })).toBeNull()
+    expect(shapeRendererReport('guide_tip', { pluginId: STORE_ID, pluginOfficial: true, tipId: 'a', result: 'shown' })).toBeNull()
+  })
+
+  it('count / command / setting 的形状', () => {
+    expect(shapeRendererReport('count', { key: 'achChatSend' })).toEqual({ count: 'achChatSend', n: 1 })
+    expect(shapeRendererReport('count', { key: 'openNote', n: 5000 })).toEqual({ count: 'openNote', n: 1000 })
+    expect(shapeRendererReport('count', { key: 'plugin:demo:hi' })).toBeNull()
+    expect(shapeRendererReport('count', { key: 'achChatSend', n: -1 })).toBeNull()
+    expect(shapeRendererReport('command', { id: 'open-settings', source: 'hotkey' })).toEqual({ command: { id: 'open-settings', source: 'hotkey' } })
+    expect(shapeRendererReport('command', { id: `amadeus:${STORE_ID}:open-reader`, source: 'nope' })).toEqual({ command: { id: `amadeus:${STORE_ID}:open-reader`, source: 'other' } })
+    // 嵌着 market-<UUID> 的命令 id 会被密钥规则整条丢:这里先挡(渲染层应已换成裸 UUID)
+    expect(shapeRendererReport('command', { id: 'amadeus:market-8f2a49a8-9de7-462d-864b-576c2bf1981d:x', source: 'palette' })).toBeNull()
+    expect(shapeRendererReport('command', { id: 'has space', source: 'palette' })).toBeNull()
+    expect(shapeRendererReport('command', { id: 'x'.repeat(81), source: 'palette' })).toBeNull()
+    expect(ev(shapeRendererReport('setting', { key: 'muse.heartbeat', value: 45 })).props).toEqual({ name: 'setting_change', key: 'muse.heartbeat', value: 'other' })
+    expect(ev(shapeRendererReport('setting', { key: 'computerHistory.enabled', value: true })).props).toEqual({ name: 'setting_change', key: 'computerHistory.enabled', value: 'on' })
+    expect(shapeRendererReport('setting', { key: 'ui.fontFamily', value: 'serif' })).toBeNull() // 表外的键
+    expect(shapeRendererReport('setting', { key: 'ui.themeMode', value: 'sepia' })).toBeNull() // 值不在枚举里
+    expect(shapeRendererReport('setting', { key: 'ui.designLanguage', value: 'My Theme' })).toBeNull()
+  })
+})
+
+describe('v2 宿主的攒与发', () => {
+  it('count 按小时攒成一条 app_counts(只带非零的键);command 按 (id, 来源) 一条 command_use;flush 之后清零', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    h.report('count', { key: 'achChatSend' })
+    h.report('count', { key: 'achChatSend', n: 2 })
+    h.count('byokSave')
+    h.report('command', { id: 'open-settings', source: 'hotkey' })
+    h.report('command', { id: 'open-settings', source: 'hotkey' })
+    h.report('command', { id: 'open-settings', source: 'palette' })
+    expect(got).toHaveLength(0)
+    h.flushCounts()
+    expect(got.map((e) => [e.event, e.props])).toEqual([
+      ['app_counts', { achChatSend: 3, byokSave: 1 }],
+      ['command_use', { id: 'open-settings', source: 'hotkey', n: 2 }],
+      ['command_use', { id: 'open-settings', source: 'palette', n: 1 }],
+    ])
+    h.flushCounts()
+    expect(got).toHaveLength(3) // 没攒到就什么都不发
+    h.count('not-a-key' as never)
+    h.flushCounts()
+    expect(got).toHaveLength(3)
+  })
+
+  it('一小时里不同 (命令, 来源) 的组合有上限:新组合丢、已记下的照常累加', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    for (let i = 0; i < COMMAND_PAIR_CAP + 20; i++) h.report('command', { id: `cmd-${i}`, source: 'palette' })
+    h.report('command', { id: 'cmd-0', source: 'palette' })
+    h.flushCounts()
+    const uses = got.filter((e) => e.event === 'command_use')
+    expect(uses).toHaveLength(COMMAND_PAIR_CAP)
+    expect(uses.find((e) => e.props.id === 'cmd-0')?.props.n).toBe(2)
+  })
+
+  it('每类事件的每小时上限各算各的,takeHour 一并清零;汇总事件不受上限', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    for (let i = 0; i < HOURLY_CAP.plugin_install + 3; i++) h.report('plugin_install', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'done' })
+    for (let i = 0; i < HOURLY_CAP.update + 3; i++) h.emit('update', updateProps('engine', 'current'))
+    expect(got.filter((e) => e.event === 'plugin_install')).toHaveLength(HOURLY_CAP.plugin_install)
+    expect(got.filter((e) => e.event === 'update')).toHaveLength(HOURLY_CAP.update)
+    h.takeHour()
+    h.report('plugin_install', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'done' })
+    expect(got.filter((e) => e.event === 'plugin_install')).toHaveLength(HOURLY_CAP.plugin_install + 1)
+    for (let i = 0; i < 700; i++) h.emit('app_counts', { openNote: 1 })
+    expect(got.filter((e) => e.event === 'app_counts')).toHaveLength(700)
+  })
+
+  it('plugin_load 同一插件同一次启动只报一次;blocked 同一插件同一原因只报一次;local 不去重', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    for (let i = 0; i < 3; i++) h.report('plugin_load', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'ok', activateMs: i })
+    h.report('plugin_load', { pluginId: 'a', pluginOfficial: false, outcome: 'ok' })
+    h.report('plugin_load', { pluginId: 'b', pluginOfficial: false, outcome: 'ok' })
+    expect(got.filter((e) => e.event === 'plugin_load').map((e) => e.props.id)).toEqual([STORE_ID, 'local', 'local'])
+    h.report('plugin_lifecycle', { pluginId: STORE_ID, pluginOfficial: true, action: 'blocked', blockedReason: 'deps' })
+    h.report('plugin_lifecycle', { pluginId: STORE_ID, pluginOfficial: true, action: 'blocked', blockedReason: 'deps' })
+    h.report('plugin_lifecycle', { pluginId: STORE_ID, pluginOfficial: true, action: 'blocked', blockedReason: 'min-app' })
+    h.report('plugin_lifecycle', { pluginId: STORE_ID, pluginOfficial: true, action: 'disable' })
+    h.report('plugin_lifecycle', { pluginId: STORE_ID, pluginOfficial: true, action: 'disable' })
+    expect(got.filter((e) => e.event === 'plugin_lifecycle').map((e) => `${e.props.action}:${e.props.blockedReason ?? ''}`)).toEqual(['blocked:deps', 'blocked:min-app', 'disable:', 'disable:'])
+  })
+
+  it('主进程自己的设置改动同一张表、同一套归档', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    h.setting('update.channel', 'beta')
+    h.setting('computerHistory.enabled', false)
+    h.setting('update.channel', 'nightly')
+    h.setting('secret.key', 'on')
+    expect(got.map((e) => e.props)).toEqual([
+      { name: 'setting_change', key: 'update.channel', value: 'beta' },
+      { name: 'setting_change', key: 'computerHistory.enabled', value: 'off' },
+    ])
+  })
+})
+
+describe('update 的形状', () => {
+  it('引擎 / 内置插件:只报有结论的阶段;报错原文换成 errorClass', () => {
+    expect(coreUpdateProps({ id: 'tangu-engine', phase: 'checking' }, 'tangu-engine')).toBeNull()
+    expect(coreUpdateProps({ id: 'tangu-engine', phase: 'development' }, 'tangu-engine')).toBeNull()
+    expect(coreUpdateProps({ id: 'tangu-engine', phase: 'staged' }, 'tangu-engine')).toEqual({ target: 'engine', outcome: 'staged' })
+    expect(coreUpdateProps({ id: 'tangu-engine', phase: 'error', error: 'integrity mismatch' }, 'tangu-engine')).toEqual({ target: 'engine', outcome: 'error', errorClass: 'integrity' })
+    expect(coreUpdateProps({ id: 'forsion-extend', phase: 'error', error: 'signature: bad file /Users/me/x' }, 'tangu-engine')).toEqual({ target: 'builtin-plugin', id: 'forsion-extend', outcome: 'error', errorClass: 'signature' })
+    expect(coreUpdateProps({ id: 'forsion-extend', phase: 'current' }, 'tangu-engine')).toEqual({ target: 'builtin-plugin', id: 'forsion-extend', outcome: 'current' })
+  })
+  it('安装包:available / not-available / downloaded → staged / error', () => {
+    expect(appUpdateProps({ phase: 'checking' })).toBeNull()
+    expect(appUpdateProps({ phase: 'downloading' })).toBeNull()
+    expect(appUpdateProps({ phase: 'downloaded' })).toEqual({ target: 'app', outcome: 'staged' })
+    expect(appUpdateProps({ phase: 'error', error: 'unreachable' })).toEqual({ target: 'app', outcome: 'error', errorClass: 'network' })
+    expect(appUpdateProps({ phase: 'error', error: 'HttpError: 404 https://github.com/x?token=abc' })).toEqual({ target: 'app', outcome: 'error', errorClass: 'http' })
+  })
+  it('id 不是插件 id 的形状就不带', () => {
+    expect(updateProps('builtin-plugin', 'current', { id: '../x' })).toEqual({ target: 'builtin-plugin', outcome: 'current' })
+  })
+})
+
+describe('插件 id 规则(真实值)', () => {
+  it('商店条目 id(裸 UUID)/ 内置 id / market-<UUID> 目录名原样;别的 local', () => {
+    for (const id of [STORE_ID, 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', 'forsion-extend', 'tangu-computer-use', 'market-8f2a49a8-9de7-462d-864b-576c2bf1981d']) expect(publicPluginId(id, true)).toBe(id)
+    expect(publicPluginId('Better_PDF', true)).toBe('local')
+    expect(publicPluginId(STORE_ID, false)).toBe('local')
+  })
+})
+
+describe('台架旁路 tap', () => {
+  it('抄到每条要交给 Extend 的事件(含启动缓冲里的),不吃缓冲:之后订阅的照样拿到回放;被上限丢的不抄;tap 抛错不影响', () => {
+    const tapped: string[] = []
+    const h = createTelemetryHost({ packaged: true, sessionId: 's', channel: () => 'stable', coreVersion: () => null, tap: (e) => { tapped.push(e.event); if (e.event === 'update') throw new Error('disk full') } })
+    h.emit('perf', { kind: 'startup', startupMs: 10 })
+    h.emit('update', updateProps('engine', 'current'))
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    expect(got.map((e) => e.event)).toEqual(['perf', 'update'])
+    for (let i = 0; i < HOURLY_CAP.onboarding + 2; i++) h.report('onboarding', { mode: 'full', outcome: 'finish' })
+    expect(tapped.filter((e) => e === 'onboarding')).toHaveLength(HOURLY_CAP.onboarding)
+    expect(tapped.slice(0, 2)).toEqual(['perf', 'update'])
+  })
+})
+
+describe('storeUpdateTelemetry(商店插件更新器广播 → update store-plugin / plugins.autoUpdate)', () => {
+  it('第一次广播只记基线;之后阶段变了才报;回退不算;总开关翻了报设置', () => {
+    const updates: unknown[] = [], settings: unknown[] = []
+    const watch = storeUpdateTelemetry({ update: (p) => updates.push(p), setting: (k, v) => settings.push([k, v]) })
+    watch({ autoUpdateAll: true, items: [{ id: STORE_ID, phase: 'staged' }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'idle' }] })
+    expect(updates).toEqual([]) // 启动读回来的 staged 不算
+    watch({ autoUpdateAll: true, items: [{ id: STORE_ID, phase: 'staged' }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'checking' }] })
+    watch({ autoUpdateAll: true, items: [{ id: STORE_ID, phase: 'staged' }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'current' }] })
+    watch({ autoUpdateAll: true, items: [{ id: STORE_ID, phase: 'checking' }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'downloading' }] })
+    watch({ autoUpdateAll: true, items: [{ id: STORE_ID, phase: 'error', error: 'resolve: HTTP 503 https://api.forsion.net/x?token=1' }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'staged' }] })
+    watch({ autoUpdateAll: false, items: [{ id: STORE_ID, phase: 'staged', pendingRollback: true }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'staged' }] })
+    expect(updates).toEqual([
+      { target: 'store-plugin', id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', outcome: 'current' },
+      { target: 'store-plugin', id: STORE_ID, outcome: 'error', errorClass: 'http' },
+      { target: 'store-plugin', id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', outcome: 'staged' },
+    ])
+    expect(settings).toEqual([['plugins.autoUpdate', false]])
+    expect(() => watch(null)).not.toThrow()
+    expect(() => watch({ items: 'nope' })).not.toThrow()
+  })
+})
+
+describe('引擎事件派生的计数按事件 id 去重(count.once)', () => {
+  it('同一个 id 只数一次(几个窗口 / 回放都在主进程判);id 不转发;不同键各算各的;记满了先进先出', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    for (let w = 0; w < 3; w++) for (const id of ['call_1', 'call_2']) h.report('count', { key: 'achComputerUse', once: id })
+    h.report('count', { key: 'achImageGenerate', once: 'call_1' })
+    h.report('count', { key: 'achComputerUse', once: 'has space' }) // id 形状不对:当没带,照常数
+    h.flushCounts()
+    expect(got.map((e) => e.props)).toEqual([{ achComputerUse: 3, achImageGenerate: 1 }])
+    expect(JSON.stringify(got)).not.toContain('call_1')
+    for (let i = 0; i <= ONCE_CAP; i++) h.report('count', { key: 'achComputerUse', once: `c${i}` })
+    h.report('count', { key: 'achComputerUse', once: 'c0' }) // 最早那个已经挤出去了
+    h.report('count', { key: 'achComputerUse', once: `c${ONCE_CAP}` })
+    h.flushCounts()
+    expect(got[1].props).toEqual({ achComputerUse: ONCE_CAP + 2 })
   })
 })

@@ -591,3 +591,8 @@
 .t2c-row[data-tight] > .model-pill-wrap { flex: 1 1 auto; }
 .t2c-overflow-ring { width: 14px; height: 14px; border: 2px solid var(--text-faint); border-radius: 50%; flex: none; }
 .t2c-ctxring-pop.composer-menu--compact { display: flex; flex-direction: column; padding: 8px; width: 320px; }
+
+/* Keep the real textarea value available while the existing mirror paints the provisional suffix. */
+.t2c-ta[data-voice-pending] { color: transparent; caret-color: transparent; }
+.t2c-mirror[data-voice-pending] { color: var(--text); }
+.t2c-voice-pending { color: var(--text-muted); }

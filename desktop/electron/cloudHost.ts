@@ -119,8 +119,14 @@ export interface CloudHost {
     coreVersion(): string | null
   }
 }
-/** CloudHost.telemetry 递出的一条宿主事件;props 字段名按白名单 telemetry-schema.json(crash / perf / feature 三类)。 */
-export type HostTelemetryEvent = { event: 'crash' | 'perf' | 'feature'; ts: string; props: Record<string, unknown> }
+/** CloudHost.telemetry 递出的一条宿主事件;props 字段名按白名单 telemetry-schema.json。
+ *  v1(2.13.8):crash / perf / feature。v2(契约 §9):加插件安装 / 前置 / 生命周期 / 激活、更新、首启引导、上手提示、命令使用、
+ *  计数增量(app_counts)。老 Extend 不认的事件按它自己的白名单丢,宿主照发。 */
+export type HostTelemetryEvent = {
+  event: 'crash' | 'perf' | 'feature' | 'plugin_install' | 'plugin_deps' | 'plugin_lifecycle' | 'plugin_load'
+       | 'update' | 'onboarding' | 'guide_tip' | 'command_use' | 'app_counts'
+  ts: string; props: Record<string, unknown>
+}
 export type RegisterCloud = (host: CloudHost) => void | Promise<void>
 
 export interface LoadDesktopEntriesOpts {

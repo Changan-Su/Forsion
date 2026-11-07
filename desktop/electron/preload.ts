@@ -2,6 +2,7 @@
  * Preload:contextBridge 暴露最小安全 API(配置读写 + 托管后端状态)。
  * agent 调用 renderer 直连 HTTP,不经主进程。
  */
+import type { OpenVoiceInput, VoiceInputStreamEvent } from '../shared/voiceInputStream'
 import type { ActiveWindowSample } from '../shared/activeWindow'
 import type { AppearancePatch, StartupAppearance } from '../shared/startupAppearance'
 import type { DocumentTaskClaimsApi } from '../shared/documentTasks'
@@ -35,6 +36,28 @@ ipcRenderer.on('appearance:changed', (_event, value: StartupAppearance) => {
   currentAppearance = value
   for (const listener of appearanceListeners) listener(value)
 })
+
+const openVoiceInput: OpenVoiceInput = (modelId, listener) => {
+  const id = crypto.randomUUID()
+  let closed = false
+  const receive = (_event: unknown, sessionId: string, message: VoiceInputStreamEvent) => {
+    if (id === sessionId && !closed) listener(message)
+  }
+  ipcRenderer.on('asr:streamEvent', receive)
+  void ipcRenderer.invoke('asr:streamStart', id, modelId).then((ok: boolean) => {
+    if (!ok && !closed) listener({ type: 'closed' })
+  }, () => { if (!closed) listener({ type: 'closed' }) })
+  return {
+    write: pcm => ipcRenderer.send('asr:streamFrame', id, pcm),
+    finish: () => ipcRenderer.send('asr:streamFrame', id, 'finish'),
+    close: () => {
+      if (closed) return
+      closed = true
+      ipcRenderer.removeListener('asr:streamEvent', receive)
+      ipcRenderer.send('asr:streamFrame', id, 'close')
+    },
+  }
+}
 
 const api = {
   /** 宿主平台('darwin' | 'win32' | 'linux');渲染层据此调标题栏/交通灯留白等。 */
@@ -475,6 +498,7 @@ const api = {
     ipcRenderer.invoke('plugin:request-install', appId),
   // ── 桌面级共享语音转写(任意功能复用:聊天框、Amadeus…;主进程本地/自带-key,不经引擎)──
   // timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要的分段时间戳)。
+  openVoiceInput,
   transcribeAudio: (req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
     ipcRenderer.invoke('asr:transcribe', req),
   // 按路径转写:几十 MB 的视频音轨不该走 base64 过 IPC,主进程直接读盘。
@@ -633,9 +657,10 @@ const api = {
       ? ipcRenderer.invoke(channel, ...args)
       : Promise.reject(new Error(`not a Forsion Extend channel: ${String(channel)}`)),
   /** 帮助改进 Forsion(2.13.8 起):渲染层的崩溃 / 功能使用 / 长任务计数报给主进程,主进程整形后经 CloudHost.telemetry 转给 Extend。
+   *  v2(契约 §9)加了插件安装 / 前置 / 生命周期 / 激活、首启引导、上手提示、计数(count)、命令(command)、设置改动(setting)。
    *  只进不出、没有读接口。键在不在 = Extend 有没有注册 telemetry:get(见下方 CLOUD_KEYS):没有 Extend 遥测就没人收,
-   *  渲染层也拿它做同步判断(引导第 7 步「帮助改进」在本机有没有)。 */
-  telemetryReport: (kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void =>
+   *  渲染层也拿它做同步判断(引导里「帮助改进」那一行在本机有没有)。 */
+  telemetryReport: (kind: import('../shared/telemetryKeys').RendererReportKind, props: Record<string, unknown>): void =>
     ipcRenderer.send('host-telemetry:report', kind, props),
 
   // ── 屏幕共享 ────────────────────────────────────────────────────────────────
