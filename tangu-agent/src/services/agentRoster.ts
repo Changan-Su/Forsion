@@ -10,7 +10,7 @@ export const AGENT_ROSTER_HEADER = '## Other Agents';
 
 /** 空串 = 没有别的 agent,不注入。 */
 export async function buildAgentRoster(selfSlug: string): Promise<string> {
-  const others = (await listAgents()).filter((a) => a.slug !== selfSlug && a.createdBy !== 'system');
+  const others = (await listAgents()).filter((a) => a.slug !== selfSlug && a.createdBy !== 'system' && !a.disabled);
   if (!others.length) return '';
   const shared = await listSharedAgentSkills(selfSlug).catch(() => []);
   const lines = others.map((a) => {

@@ -7,7 +7,8 @@
 //      切回来 —— 而按 ← 的时机恰恰是刚按过 →、光标停在最右,左右不对称,用户实报
 //   Q4 第一格再按 ← = 退回正文(全部);右端到头再按 → 停住,不绕圈
 //   Q5 光标在正文中间时 ←/→ 只移光标,分类不动(改错字的路不能被抢)
-//   Q6 滑块有 transform 过渡(= 用户要的切换动画,来自共用的 .t2s-vaultseg)
+//   Q6 滑块有切换动画(来自共用的 .t2s-vaultseg):2026-11-05 起是左右两条边各自过渡(拉伸,水滴复用方案第 4 条),
+//      不再是 transform 平移;逐帧形状(后沿晚出发、不过冲)由 check:segstretch 钉
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
@@ -105,8 +106,8 @@ async function main() {
     const cs = getComputedStyle(t)
     return { prop: cs.transitionProperty, dur: cs.transitionDuration, timing: cs.transitionTimingFunction }
   })
-  record('Q6 滑块有 transform 过渡(切换动画)',
-    /transform/.test(anim.prop) && parseFloat(anim.dur) > 0, JSON.stringify(anim))
+  record('Q6 滑块左右两条边各有过渡(拉伸切换动画)',
+    /\bleft\b/.test(anim.prop) && /\bright\b/.test(anim.prop) && !/transform/.test(anim.prop) && parseFloat(anim.dur) > 0, JSON.stringify(anim))
 
   await browser.close()
   const ok = results.filter(Boolean).length

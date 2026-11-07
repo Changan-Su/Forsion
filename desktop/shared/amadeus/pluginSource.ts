@@ -4,7 +4,7 @@
  * 应用私有目录 plugins/(mobile/src/plugins/pluginHost.ts)共用这一份 —— 两端列出来的插件长同一个样,
  * 新加 manifest 字段只改这里。I/O(读 main / README / 图标、bundle 清点、门禁所需的宿主版本)各端自理。
  */
-import { PLUGIN_CAPABILITIES, sanitizeEvents, sanitizeOnboarding, sanitizeRequiresPlugins, type ExternalPluginSource } from './ipc'
+import { PLUGIN_CAPABILITIES, sanitizeEvents, sanitizeGuide, sanitizeOnboarding, sanitizeRequiresPlugins, type ExternalPluginSource } from './ipc'
 import { parseManifestRequires } from './manifestRequires'
 
 /** manifest.json 里宿主会读的字段(全按 unknown 收:第三方写什么都可能)。 */
@@ -24,6 +24,7 @@ export interface InstalledPluginManifest {
   requires?: unknown
   capabilities?: unknown
   onboarding?: unknown
+  guide?: unknown
   fileExtensions?: unknown
   events?: unknown
   /** Obsidian 式平台旗标:true = 只能在桌面端运行(Android 列出但不装载、市场拒装)。 */
@@ -36,7 +37,7 @@ export interface InstalledPluginManifest {
  *  ⚠️ name / version / description 沿用桌面原有的宽松取值(`m.name || 目录名`),别在这里顺手收紧 —— 两端同时变。 */
 export type InstalledPluginFields = Pick<ExternalPluginSource,
   'name' | 'version' | 'description' | 'nameEn' | 'descriptionEn' | 'apiVersion' | 'minAppVersion' | 'requiresApp' | 'packageId'
-  | 'requiresPlugins' | 'entitlement' | 'capabilities' | 'onboarding' | 'events' | 'fileExtensions' | 'isDesktopOnly' | 'syncData'>
+  | 'requiresPlugins' | 'entitlement' | 'capabilities' | 'onboarding' | 'guide' | 'events' | 'fileExtensions' | 'isDesktopOnly' | 'syncData'>
 
 export function installedPluginFields(m: InstalledPluginManifest, dirName: string, id?: string): InstalledPluginFields {
   return {
@@ -57,6 +58,7 @@ export function installedPluginFields(m: InstalledPluginManifest, dirName: strin
       ? PLUGIN_CAPABILITIES.filter((c) => (m.capabilities as unknown[]).includes(c))
       : undefined,
     onboarding: sanitizeOnboarding(m.onboarding),
+    guide: sanitizeGuide(m.guide),
     events: sanitizeEvents(m.events),
     fileExtensions: Array.isArray(m.fileExtensions)
       ? m.fileExtensions.filter((x): x is string => typeof x === 'string' && !!x).slice(0, 8)

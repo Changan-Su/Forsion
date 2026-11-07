@@ -115,7 +115,9 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
 .mini-card-floating .mini-card-chrome {
   position: absolute;
   inset: 0 0 auto;
-  z-index: 36; /* 压过菜单打开时的透明遮罩(z35),两颗胶囊之间照样能直接切 */
+  /* 压过菜单打开时的透明遮罩(z35),两颗胶囊之间照样能直接切;也压过下拉(z40)和它的液体层(z39,droplet.ts):
+     下拉从胶囊按钮里流出来时胶囊得在液体上面(DESIGN §3「源压在液体层上面」)。胶囊和下拉不重叠(下拉顶 49 > 胶囊底 43)。 */
+  z-index: 41;
   height: auto;
   gap: 6px;
   padding: 7px 7px 0;
@@ -214,17 +216,11 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
   overflow: hidden;
   border: var(--border-width, 1px) solid color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.1)) 78%, transparent);
   border-radius: var(--radius-lg, 14px);
-  background: var(--bg-glass, var(--bg-card, var(--bg, #fff)));
+  /* 不透明卡面(2026-11-05):开合走液滴(MiniColumnHost.tsx 调 emergeDroplet),液滴要求真面板接手时同色,
+     半透明毛玻璃过融球阈值会变成实色、接手那一下变一次底;也合「悬浮在正文之上的块底色一律不透明」(DESIGN §3)。 */
+  background: var(--bg-card, var(--bg, #fff));
   color: var(--text, #111);
   box-shadow: var(--card-shadow, 0 12px 34px rgba(0, 0, 0, 0.2));
-  animation: mini-card-popover-in 0.16s var(--ease-out, ease-out);
-}
-@supports (backdrop-filter: blur(1px)) {
-  .mini-card-popover { backdrop-filter: blur(18px) saturate(130%); }
-}
-@keyframes mini-card-popover-in {
-  from { opacity: 0; transform: translateY(-4px) scale(0.985); }
-  to { opacity: 1; transform: none; }
 }
 .mini-card-popover-title {
   flex: 0 0 auto;

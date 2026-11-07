@@ -12,8 +12,15 @@
  *  - 下载失败默认中止;只有显式 FORSION_ALLOW_INCOMPLETE_DEV_BUILD=1 可降级。Linux 始终用系统 Git。
  *    **下载成功但冒烟失败 = 硬报错**:坏的内置 git 会被放到 PATH 上(mac 还是前置),比没有更糟。
  *  - 许可:git 是 GPLv2。MinGit 自带 LICENSE.txt;mac 另取对应 tag 的 COPYING;两边都写 SOURCE.txt 指向源码。
+ *  - Windows 的 bash(11-05,Agent 设备隔离 U1):引擎 run_bash 在 Windows 上要跑真 bash。MinGit 其实已经带了 ——
+ *    usr/bin/sh.exe 和 Git for Windows 的 bash.exe 逐字节相同(2.56.0.windows.4 实测),只是叫 sh 时进 POSIX 模式;
+ *    这里原样拷一份叫 bash.exe(+2.4MB)。MinGit 不带的几样常用小工具(du / stat / tee / sleep / which …,BASH_TOOLS)
+ *    从**同一个发行版**的完整 tar.bz2(runtime-manifest 的 gitbash,定死 sha256)只按名字解出来(+2.9MB),和 MinGit 的
+ *    msys-2.0.dll 同版本。没选 busybox-w32:模型写的是 bash 不是 ash(没有花括号展开、数组),而且它没有可钉 sha256 的
+ *    GitHub 发行资产。也没选整份 PortableGit:7z 自解压包 bsdtar 解不开,解开 360MB。
+ *    许可同 MinGit 本就带的那些 MSYS2 程序(bash / coreutils 为 GPLv3,unzip 的许可原文一并带上),SOURCE.txt 写明来源。
  */
-const { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } = require('node:fs');
+const { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } = require('node:fs');
 const { execFileSync, spawnSync } = require('node:child_process');
 const os = require('node:os');
 const path = require('node:path');
@@ -123,6 +130,73 @@ function smokeGit(root, platformName = process.platform) {
   }
 }
 
+/** MinGit 不带、Agent 常用的 MSYS2 小工具(usr/bin/<名>.exe)。依赖只有 MinGit 已有的 msys-*.dll,unzip 另要 msys-bz2。 */
+const BASH_TOOLS = ['du', 'df', 'stat', 'tee', 'which', 'sleep', 'seq', 'chmod', 'ln', 'realpath', 'md5sum', 'sha1sum',
+  'sha256sum', 'base64', 'id', 'whoami', 'hostname', 'nproc', 'timeout', 'tac', 'paste', 'od', 'printenv', 'truncate', 'yes',
+  'tar', 'gzip', 'unzip', 'cygpath', 'iconv', 'nohup', 'fold', 'fmt', 'nl', 'split', 'join', 'dd', 'tty', 'install'];
+const BASH_EXTRA = ['usr/bin/msys-bz2-1.dll', 'usr/bin/gunzip', 'usr/bin/zcat', 'usr/bin/egrep', 'usr/bin/fgrep', 'usr/share/licenses/unzip/LICENSE'];
+const bashMembers = () => [...BASH_TOOLS.map((t) => `usr/bin/${t}.exe`), ...BASH_EXTRA];
+
+/** 引擎 hostShell.ts 的 BASH_EVAL_ARGS 原样(命令走环境变量,argv 是固定字面量):冒烟用同一种调用方式,
+ *  Windows 命令行转义 / MSYS 自己的通配展开在这里就能现形。改一边必须改另一边。 */
+const BASH_EVAL = ['-c', '__tangu_cmd=$TANGU_RUN_BASH_COMMAND; unset TANGU_RUN_BASH_COMMAND; eval "$__tangu_cmd"'];
+
+/** Windows:sh.exe → bash.exe,再从同版本完整包里解出 BASH_TOOLS。下载 / 解压失败按 git 同一口径(必需时抛)。 */
+async function addBash(dest, platformName, archName) {
+  const usrBin = path.join(dest, 'usr', 'bin');
+  const sh = path.join(usrBin, 'sh.exe');
+  if (!existsSync(sh)) throw new Error(`[fetch-git] MinGit 里没有 usr/bin/sh.exe,bash 无从而来`);
+  copyFileSync(sh, path.join(usrBin, 'bash.exe'));
+  const item = pinnedRuntime('gitbash', platformName, archName);
+  console.log(`[fetch-git] bash 小工具 ← ${item.name}`);
+  const buf = verifyArchive(await download(item.url), item);
+  const tmp = mkdtempSync(path.join(os.tmpdir(), 'forsion-gitbash-'));
+  try {
+    const archive = path.join(tmp, item.name);
+    writeFileSync(archive, buf);
+    const out = path.join(tmp, 'x');
+    mkdirSync(out);
+    execFileSync('tar', ['-xjf', archive, '-C', out, ...bashMembers()], { stdio: 'inherit' });
+    for (const rel of bashMembers()) {
+      const from = path.join(out, rel);
+      const to = path.join(dest, rel);
+      if (!existsSync(from)) throw new Error(`[fetch-git] ${item.name} 里没有 ${rel}`);
+      if (existsSync(to)) continue; // MinGit 自己带的不覆盖
+      mkdirSync(path.dirname(to), { recursive: true });
+      copyFileSync(from, to);
+    }
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Windows 内置 bash 冒烟:用引擎同款调用跑一段真实脚本 —— sort / find 必须是 GNU 的(usr/bin 排在 System32 前)、
+ * /c/ 盘符映射(MinGit 的 /etc/fstab)、管道、BASH_TOOLS 每个都起得来(缺 DLL 时退出码 127 / ≥126)。
+ * fetch 后与 afterPack(对打包产物)各跑一次;Windows 探针对安装后的产物再跑一次。
+ */
+function smokeBash(root) {
+  const usrBin = path.join(path.resolve(root), 'usr', 'bin');
+  const bash = path.join(usrBin, 'bash.exe');
+  const script = [
+    'set -e',
+    'cd "$(mktemp -d)"',
+    "printf 'b\\na\\n' > f.txt",
+    'test "$(sort f.txt | head -1)" = a',
+    'test "$(find . -name f.txt | wc -l)" = 1',
+    String.raw`test "$(cygpath -u 'C:\')" = /c/`,
+    'ls -t | head -1 >/dev/null; du -sk . >/dev/null; stat -c %s f.txt >/dev/null; echo x | tee g.txt >/dev/null; sleep 0',
+    `for t in ${BASH_TOOLS.join(' ')}; do s=0; "$t" --version </dev/null >/dev/null 2>&1 || s=$?; if [ "$s" -ge 126 ]; then echo "bash-gate: $t broken ($s)"; exit 1; fi; done`,
+    'echo "bash-gate ok $BASH_VERSION"',
+  ].join('\n');
+  const pathKey = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') || 'Path';
+  const env = { ...process.env, [pathKey]: `${usrBin};${process.env[pathKey] || ''}`, TANGU_RUN_BASH_COMMAND: script };
+  const r = spawnSync(bash, BASH_EVAL, { env, encoding: 'utf8', timeout: 120_000, windowsHide: true });
+  if (r.error) throw new Error(`[bash-gate] 起不来 ${bash}: ${r.error.message}`);
+  if (r.status !== 0 || !/bash-gate ok 5\./.test(r.stdout)) throw new Error(`[bash-gate] → ${r.status}: ${(r.stdout + r.stderr).trim()}`);
+  console.log(`[bash-gate] ${r.stdout.trim()} ✓`);
+}
+
 function degrade(dest, reason, warn = true) {
   if (warn) console.warn(`[fetch-git] ⚠ 未打包内置 git(运行时回落系统 git):${reason}`);
   else console.log(`[fetch-git] 不打包内置 git:${reason}`);
@@ -159,7 +233,12 @@ async function fetchGit({ platformName, archName }) {
       writeFileSync(path.join(dest, 'COPYING'), await download(`https://raw.githubusercontent.com/git/git/v${ver}/COPYING`));
       writeFileSync(path.join(dest, 'SOURCE.txt'), `Git ${ver} (GPLv2, see COPYING).\nSource: https://github.com/git/git/tree/v${ver}\nBuild: https://github.com/${src.repo}/releases/tag/${rel.tag_name}\n`);
     } else {
-      writeFileSync(path.join(dest, 'SOURCE.txt'), `MinGit (GPLv2, see LICENSE.txt).\nSource and build: https://github.com/${src.repo}/releases/tag/${rel.tag_name}\n`);
+      await addBash(dest, platformName, archName);
+      writeFileSync(path.join(dest, 'SOURCE.txt'), `MinGit (GPLv2, see LICENSE.txt).\nSource and build: https://github.com/${src.repo}/releases/tag/${rel.tag_name}\n` +
+        `usr/bin/bash.exe is MinGit's own usr/bin/sh.exe under the name bash (same binary). usr/bin also carries ${BASH_TOOLS.join(', ')}, ` +
+        `gunzip, zcat, egrep, fgrep and msys-bz2-1.dll from the same release's Git-*.tar.bz2: GNU bash / coreutils / tar / gzip / ` +
+        `which / libiconv under GPLv3 or LGPL, msys2-runtime tools under GPLv3, Info-ZIP unzip under usr/share/licenses/unzip/LICENSE.\n` +
+        `Sources: https://github.com/git-for-windows/MSYS2-packages and https://github.com/msys2/MSYS2-packages\n`);
     }
     if (!existsSync(gitBin(dest, platformName))) throw new Error(`解压后 ${dest} 无 git 可执行文件`);
     console.log(`[fetch-git] ✓ ${dest} (${rel.tag_name})`);
@@ -168,11 +247,14 @@ async function fetchGit({ platformName, archName }) {
     return degrade(dest, e.message || String(e));
   }
   // 冒烟在 try 外:下载到了却跑不起来 = 硬错(见文件头)。跨架构打包本机跑不了,留给 afterPack 对产物跑。
-  if (platformName === process.platform && archName === process.arch) smokeGit(dest, platformName);
+  if (platformName === process.platform && archName === process.arch) {
+    smokeGit(dest, platformName);
+    if (platformName === 'win32') smokeBash(dest);
+  }
   return dest;
 }
 
-module.exports = { fetchGit, gitDir, smokeGit, gitBin, WRAPPER };
+module.exports = { fetchGit, gitDir, smokeGit, smokeBash, gitBin, WRAPPER, BASH_TOOLS, BASH_EVAL };
 
 // CLI:node build/fetch-git.cjs [platform] [arch](缺省=本机)
 if (require.main === module) {

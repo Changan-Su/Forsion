@@ -31,7 +31,11 @@ const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/; // 和 isWidgetDataPath 的 id 段�
 const NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 const FIELD_RE = /^[\p{L}\p{N}_ -]{1,64}$/u;
 
-export class WidgetError extends Error {}
+/** code / unreadable 给路由分状态码用;给模型看的只有 message。 */
+export type WidgetErrorCode = 'INVALID_ID' | 'NOT_FOUND' | 'TWO_COPIES';
+export class WidgetError extends Error {
+  constructor(message: string, readonly code?: WidgetErrorCode, readonly unreadable?: number) { super(message); }
+}
 
 export type WidgetScope = 'project' | 'agent' | 'user';
 export type WidgetEntry = 'widget.html' | 'widget.json';
@@ -43,17 +47,23 @@ export interface WidgetManifest {
 export interface WidgetPlace { agentSlug: string; projectDir?: string | null }
 export interface WidgetInfo { scope: WidgetScope; dir: string; manifest: WidgetManifest }
 
-interface Level { scope: WidgetScope; root: string; defs: string; lock: string }
+interface Level { scope: WidgetScope; root: string; defs: string; lock: string; slug?: string }
 interface Located extends WidgetInfo { level: Level }
 
-const agentLevel = (slug: string): Level => { const dir = join(agentsDir(), slug); return { scope: 'agent', root: agentsDir(), defs: join(dir, 'Library', 'Widgets'), lock: dir }; };
+const agentLevel = (slug: string): Level => { const dir = join(agentsDir(), slug); return { scope: 'agent', root: agentsDir(), defs: join(dir, 'Library', 'Widgets'), lock: dir, slug }; };
 const userLevel = (): Level => ({ scope: 'user', root: tanguHome(), defs: join(humanDir(), 'Widgets'), lock: humanDir() });
+const projectLevel = (projectDir: string): Level => { const defs = join(projectDir, WORKSPACE_DIR_NAME, 'widgets'); return { scope: 'project', root: projectDir, defs, lock: defs }; };
 /** 就近优先:项目 → Agent → 用户,和项目技能压过全局同一个方向。 */
 function levels(place: WidgetPlace): Level[] {
   const out: Level[] = [];
-  if (place.projectDir) { const defs = join(place.projectDir, WORKSPACE_DIR_NAME, 'widgets'); out.push({ scope: 'project', root: place.projectDir, defs, lock: defs }); }
+  if (place.projectDir) out.push(projectLevel(place.projectDir));
   if (validSyncSlug(place.agentSlug)) out.push(agentLevel(place.agentSlug));
   return [...out, userLevel()];
+}
+/** 每个 Agent 的文件夹(和过期清理同一个口径);agents/ 读不了就抛,不当「没有 Agent」。 */
+function agentSlugs(): string[] {
+  try { return readdirSync(agentsDir(), { withFileTypes: true }).filter((e) => !e.isFile() && validSyncSlug(e.name)).map((e) => e.name); }
+  catch (e) { if ((e as NodeJS.ErrnoException).code === 'ENOENT') return []; throw e; }
 }
 
 const nowIso = (now = Date.now()): string => new Date(now).toISOString();
@@ -89,22 +99,51 @@ export function listWidgets(place: WidgetPlace): WidgetListing {
   }
   return out;
 }
+
+/** 没有会话时(仪表盘、卡片区、主页)看得到的全部:每个 Agent、用户级,给了项目才看项目级。
+ *  一层的文件夹整个读不了记成一条 name 为空的 unreadable,不拖垮别的层。 */
+export type AnyWidgetInfo = WidgetInfo & { agentSlug?: string };
+export interface AnyWidgetListing { widgets: AnyWidgetInfo[]; unreadable: Array<{ scope: WidgetScope; agentSlug?: string; name: string; error: string }> }
+export function listAllWidgets(opts: { projectDir?: string | null } = {}): AnyWidgetListing {
+  const out: AnyWidgetListing = { widgets: [], unreadable: [] };
+  const all = [...(opts.projectDir ? [projectLevel(opts.projectDir)] : []), ...agentSlugs().map(agentLevel), userLevel()];
+  for (const level of all) {
+    const slug = level.slug ? { agentSlug: level.slug } : {};
+    let list: string[];
+    try { list = names(level); } catch (e) { out.unreadable.push({ scope: level.scope, ...slug, name: '', error: (e as Error).message }); continue; }
+    for (const name of list) {
+      try { const w = load(level, name); if (w) out.widgets.push({ ...w, ...slug } as Located & AnyWidgetInfo); }
+      catch (e) { out.unreadable.push({ scope: level.scope, ...slug, name, error: (e as Error).message }); }
+    }
+  }
+  return out;
+}
 export function findWidgetByName(place: WidgetPlace, name: string): WidgetInfo | null {
   if (!NAME_RE.test(name)) throw new WidgetError(`invalid widget name "${name}"`);
   for (const level of levels(place)) { const w = load(level, name); if (w) return w; }
   return null;
 }
-/** 同一个 id 出现在两层(搬家断在半路,或仓库里带来一份同 id 的定义):拒绝,不猜该用哪份、也不让它读写另一份的记录。 */
-function locate(place: WidgetPlace, id: string): Located {
-  if (!ID_RE.test(id)) throw new WidgetError(`invalid widget id "${id}"`);
-  const { widgets, unreadable } = listWidgets(place);
-  const hits = widgets.filter((w) => w.manifest.id === id) as Located[];
-  if (hits.length > 1) throw new WidgetError(`widget ${id} has two copies (${hits.map((w) => w.scope).join(', ')}); resolve that before changing it`);
+/** 同一个 id 出现在两层(搬家断在半路,或仓库里带来一份同 id 的定义):拒绝,不猜该用哪份、也不让它读写另一份的记录。
+ *  找不到但有读不了的文件夹:可能就是它,照实说,不当「没有」。 */
+function pick<T extends WidgetInfo>(id: string, { widgets, unreadable }: { widgets: T[]; unreadable: Array<{ name: string }> }): T {
+  const hits = widgets.filter((w) => w.manifest.id === id);
+  if (hits.length > 1) throw new WidgetError(`widget ${id} has two copies (${hits.map((w) => w.scope).join(', ')}); resolve that before changing it`, 'TWO_COPIES');
   if (hits[0]) return hits[0];
-  if (unreadable.length) throw new WidgetError(`widget ${id} not found, and ${unreadable.length} widget folder(s) could not be read: ${unreadable.map((u) => u.name).join(', ')}`);
-  throw new WidgetError(`widget ${id} not found`);
+  if (unreadable.length) throw new WidgetError(`widget ${id} not found, and ${unreadable.length} widget folder(s) could not be read: ${unreadable.map((u) => u.name || '(whole folder)').join(', ')}`, 'NOT_FOUND', unreadable.length);
+  throw new WidgetError(`widget ${id} not found`, 'NOT_FOUND', 0);
+}
+const checkId = (id: string): void => { if (!ID_RE.test(id)) throw new WidgetError(`invalid widget id "${id}"`, 'INVALID_ID'); };
+function locate(place: WidgetPlace, id: string): Located {
+  checkId(id);
+  return pick(id, listWidgets(place)) as Located;
 }
 export const readWidget = (place: WidgetPlace, id: string): WidgetInfo => locate(place, id);
+/** 按 id 找,不要会话:所有 Agent + 用户级 + 给了才看项目级。规则和 locate 一样(两份拒绝、读不了的照实说)。
+ *  给 routes/widgets.ts 读原件、恢复用;记录的写入不走这里(只认会话里的 manage_widget)。 */
+export function locateWidgetAnywhere(id: string, opts: { projectDir?: string | null } = {}): AnyWidgetInfo {
+  checkId(id);
+  return pick(id, listAllWidgets(opts));
+}
 export function readWidgetContent(w: WidgetInfo): string {
   const level = (w as Located).level;
   const bytes = readSyncBytes(level.root, join(w.dir, w.manifest.entry));
@@ -268,8 +307,15 @@ export async function softDeleteWidget(place: WidgetPlace, id: string): Promise<
 /** 恢复时给每份同步的文件都改一个字节(行尾空行,内容不变):离线的另一台设备过了 30 天、还没拉到这次恢复就清掉了本地文件,
  *  它的删除要撞上这里新的版本才会输(两条同步都是编辑胜删除);不改的话没动过的正文和记录会被它从云端删掉。
  *  ponytail: 恢复的这台没有 data.db 就改不了字节,记录挡不住那次过期清理;要等清理改成先看云端(软删除状态)才算全堵上。 */
-export async function restoreWidget(place: WidgetPlace, id: string): Promise<WidgetInfo> {
-  const w = locate(place, id);
+export async function restoreWidget(place: WidgetPlace, id: string): Promise<WidgetInfo> { return restoreLocated(locate(place, id)); }
+/** 占位卡上的「恢复」(没有会话):先按 id 在所有层里找(两份照样拒绝),再走同一套恢复。 */
+export async function restoreWidgetAnywhere(id: string, opts: { projectDir?: string | null } = {}): Promise<AnyWidgetInfo> {
+  const w = locateWidgetAnywhere(id, opts);
+  const slug = w.agentSlug ? { agentSlug: w.agentSlug } : {};
+  return { ...(await restoreLocated(w as Located)), ...slug };
+}
+async function restoreLocated(w: Located): Promise<WidgetInfo> {
+  const id = w.manifest.id;
   if (!w.manifest.deletedAt) return w;
   const data = dataOf(w);
   await withMemoryDirectoryLockRetry(data.lock, () => {

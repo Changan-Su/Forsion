@@ -1,6 +1,5 @@
 import { registerAmadeusViews } from './features/amadeus'
 import { inboxAvailable } from './features/runtime'
-import { activateTangu } from '@tangu/ui/features/tangu'
 import { registerOperationsViews } from './features/operations'
 import { amadeusAvailable } from './features/runtime'
 import { registerMiniViews } from './mini/miniViews'
@@ -8,6 +7,8 @@ import { registerMiniViews } from './mini/miniViews'
 import { Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, Store, Settings, FileText, ListTree, Search, Inbox, Mail, PanelLeft, PanelRight, PanelBottom, Code2, Trophy, Activity, AppWindow, Sun, TextCursorInput } from 'lucide-react'
 import type { LucideIcon, LucideProps } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
+import { toggleSpaceOrganizer } from './views/SpaceOrganizer'
+import { requestHomeEdit } from './views/homeWidgets'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -21,6 +22,7 @@ import { planChatRestore, planSpaceSwitch } from './sessionOpenPlan'
 import { registerSpaces, LAST_EXIT_SPACE, startupSpacePref, resolveStartupTarget, awaitedStartupSpace } from './spaces'
 import { loadUserSpaces, settleAsyncStartupSpace, parkOnStartupFallback, saveCurrentAsSpace, createBlankSpace } from './userSpaces'
 import { installAmadeusPlugins } from './amadeusPlugins'
+import { resetGuide } from '@amadeus/plugins/guideTips'
 import { installTanguProbe } from './tanguProbe'
 import { installBuiltins } from './builtins'
 import { AccountCard } from './components/AccountCard'
@@ -46,6 +48,7 @@ import { syncDevCommands } from './devCommands'
 import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
 import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './amadeus/plugins/pluginStore'
 import { moveModeLastOnce } from './amadeus/plugins/ribbonAction'
+import type { TanguHost } from './amadeus/plugins/tanguSeam'
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
@@ -90,7 +93,10 @@ const ThemeModeIcon = ((props: LucideProps) => {
 
 let installed = false
 
-export function installEngine(): void {
+/** activateTangu = Tangu 唯一的入口(features/tangu.tsx 导出的那个):静态 import 进来的(dev / 网页 / 手机),
+ *  或者打包版从界面包里取出来的(coreTangu/load.ts,界面热更新 4b)。这里不静态引它:一引,打包版的主产物里
+ *  就多了一份 Tangu 的模块状态,和运行时加载的那份各管各的。 */
+export function installEngine(activateTangu: (host: TanguHost) => void): void {
   if (installed) return
   installed = true
 
@@ -493,6 +499,7 @@ export function installEngine(): void {
   // 商店/成就此前**只有 ribbon 图标一个入口**,⌘K 搜不到 —— 这是「用户发现不了」的一半根因。
   if (window.tangu?.marketList) addCommand({ id: 'open-market', icon: Store, title: () => app().tr('market.title'), keywords: 'store market marketplace plugin theme skill agent space 商店 应用市场 应用商店 市场 商店 插件 主题 技能 扩展', run: () => app().openMarket() })
   addCommand({ id: 'open-achievements', icon: Trophy, title: () => app().tr('achievements.title'), keywords: 'achievement trophy badge medal 成就 勋章 徽章', run: () => app().openAchievements() })
+  addCommand({ id: 'guide-reset', title: () => app().tr('guideTips.command'), keywords: 'tips guide onboarding hint reset 上手 提示 引导 重置', run: () => { resetGuide(); app().toast(app().tr('guideTips.resetDone')) } })
   if (window.tangu?.submitFeedback) addCommand({ id: 'open-feedback', icon: MessageSquare, title: () => app().tr('feedback.title'), keywords: 'feedback bug report 反馈 问题 建议 报错', run: () => { app().openFeedback() } })
   addCommand({ id: 'open-settings', icon: Settings, title: () => app().tr('settings.title'), keywords: 'settings 设置 preferences', hotkey: 'mod+,', run: () => app().openSettings() , invoke: {
     // ⚠️ ≤300 字符(引擎 normalizeUiCommands 的截断上限)。「not documented on the web」那半句是真模型台架量出来的:
@@ -564,11 +571,23 @@ export function installEngine(): void {
       },
     },
   })
+  // 主页编辑态(主页第四轮):摆小组件、挪时钟 / 输入框 / 坞。只给人用,不进 Agent 的命令面。
+  addCommand({
+    id: 'edit-home',
+    title: () => translate('home.edit'),
+    keywords: 'home edit widgets layout 主页 编辑 小组件 摆放',
+    run: () => {
+      if (useSpaceStore.getState().activeSpaceId !== 'home') setActiveSpace('home')
+      requestHomeEdit()
+    },
+  })
   addCommand({
     id: 'set-active-space',
     title: () => translate('bootengine.cmd.setActiveSpace'),
-    keywords: 'space switch 空间 切换',
-    run: () => { /* 人类走 ribbon / 底部条,这条只作 agent 面载体 */ },
+    keywords: 'space switch 空间 切换 收纳 organizer',
+    // 人用的那一半:开合 Space 收纳(主页上开主页那块,别处开外层那块,见 views/SpaceOrganizer)。agent 走下面的 invoke。
+    hotkey: 'mod+shift+o',
+    run: toggleSpaceOrganizer,
     invoke: {
       description:
         'Switch the window the user is talking to you from to another Space (workspace layout). '

@@ -238,7 +238,8 @@ function PluginEmpty({ o, guard }: { o: PluginEmptyState; guard: Guard }): React
   return (
     <EmptyState icon={Icon as never} title={pluginText(o.title)} line={o.line ? pluginText(o.line) : undefined}
       action={act ? { label: pluginText(act.label), icon: vocabIcon(act.icon) as never, onClick: () => guard(() => act.run()) } : null}
-      secondary={o.secondary ? <button type="button" className="btn ghost sm" onClick={() => guard(() => o.secondary!.run())}>{pluginText(o.secondary.label)}</button> : undefined} />
+      secondary={o.secondary ? <button type="button" className="btn ghost sm" onClick={() => guard(() => o.secondary!.run())}>{pluginText(o.secondary.label)}</button> : undefined}
+      examples={(o.examples ?? []).filter((x) => x && typeof x.run === 'function').slice(0, 3).map((x) => ({ label: pluginText(x.label), note: x.note ? pluginText(x.note) : undefined, onClick: () => guard(() => x.run()) }))} />
   )
 }
 

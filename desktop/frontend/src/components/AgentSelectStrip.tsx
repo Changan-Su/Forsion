@@ -116,7 +116,8 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   const warming = engineId && !s.engineCaps[engineId] ? engineId : ''
 
   const items = useMemo<Candidate[]>(() => {
-    const roster: Candidate[] = s.agentDefs.map((a) => ({
+    // Keep disabled agents visible when the current session still uses them.
+    const roster: Candidate[] = s.agentDefs.filter((a) => !a.disabled || a.slug === cfg.agentSlug || !!cfg.groupAgents?.includes(a.slug)).map((a) => ({
       id: agentId(a.slug), kind: 'agent', slug: a.slug, name: agentName(a), names: agentNames(a), description: a.description, system: a.createdBy === 'system',
     }))
     const known = (slug: string): boolean => roster.some((i) => i.id === agentId(slug))

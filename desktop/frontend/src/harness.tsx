@@ -736,6 +736,23 @@ if (new URLSearchParams(location.search).has('dock')) {
       createRoot(host).render(<div className="am-app"><CommandPalette /><AmadeusOverlays /></div>)
       ;(window as unknown as { __qf: unknown }).__qf = { useQuickFind, useCommandStore, useUiOverlay, usePageStore, useWorkspace }
     })
+} else if (new URLSearchParams(location.search).has('segs')) {
+  // 分段胶囊滑块「拉伸」逐帧仪器(scripts/seg-stretch.check.cjs,水滴复用方案第 4 条):真 LCL 看法胶囊(插件拿到的就是这一颗)
+  // 四格、两格各一颗,切格走真 onClick → 真 useSegDir 写 data-dir。⌘P 那颗 .t2s-vaultseg 走 ?qf。`&dark` 走真主题。
+  const segsDark = new URLSearchParams(location.search).has('dark')
+  applyRealTheme(resolveInitialLang(), resolveInitialSkin(), resolveInitialBg(), segsDark ? 'dark' : 'light')
+  void import('@lcl/engine').then(({ ViewModeSwitch }) => {
+    function Seg({ id, labels }: { id: string; labels: string[] }): React.ReactElement {
+      const [v, setV] = useState(labels[0])
+      return <ViewModeSwitch testId={id} spec={{ value: v, onChange: setV, modes: labels.map((l) => ({ value: l, label: l })) }} />
+    }
+    createRoot(document.getElementById('root')!).render(
+      <div className="am-app tangu-lovable" style={{ position: 'fixed', inset: 0, padding: 32, background: 'var(--bg)', display: 'flex', flexDirection: 'column', gap: 24, alignItems: 'flex-start' }}>
+        <Seg id="seg4" labels={['日', '周', '月', '年']} />
+        <Seg id="seg2" labels={['文档', '画布']} />
+      </div>,
+    )
+  })
 } else if (new URLSearchParams(location.search).has('peek')) {
   // Space 左面板悬停预览(scripts/space-peek.check.cjs):真 Shell(Ribbon + Dockview)+ 真 SpaceButton + 三个替身 Space。
   // a / b 各有左栏(b 两个 View → 卡片头部出页签),c 没有左栏(悬停不弹)。左栏替身里摆齐预览要扛住的几样东西:
@@ -981,9 +998,9 @@ if (new URLSearchParams(location.search).has('dock')) {
     // ?running 起步就在跑;右下角「运行」按钮来回切,看流星渐快 / 渐慢
     const [running, setRunning] = useState(modelPillParams.has('running'))
     const [defaults, setDefaults] = useState({ backgroundModelId: '', imageModelId: '', visionModelId: '' })
-    // ?fast[=<目录说明>] 露出 Fast 行(缺省扮「2x speed, increased usage」那一类),?fast&faston 起步就开着
-    const [fast, setFast] = useState(modelPillParams.has('faston'))
-    const fastProps = modelPillParams.has('fast') ? { fast, fastTier: modelPillParams.get('fast') || '2x speed, increased usage', onFastChange: setFast } : {}
+    // ?fast[=<目录说明>] 露出 Fast 行(缺省扮「2x speed, increased usage」那一类),?fast&faston 起步就开着;?ultrafast[=<说明>] 再露极速行(缺省「6x price」)
+    const [fast, setFast] = useState<boolean | 'ultra'>(modelPillParams.has('faston'))
+    const fastProps = modelPillParams.has('fast') ? { fast, fastTier: modelPillParams.get('fast') || '2x speed, increased usage', ...(modelPillParams.has('ultrafast') ? { ultrafastTier: modelPillParams.get('ultrafast') || '6x price' } : {}), onFastChange: setFast } : {}
     // 「上下文上限」行:GLM-4.7 扮 1M 模型(缺省封在 272k);选「最大」= 本机覆盖成 1M(与真 store 同形)
     const [ctxOverride, setCtxOverride] = useState<number | null>(new URLSearchParams(location.search).has('ctxmax') ? 1_000_000 : null)
     const modelsResponse = {

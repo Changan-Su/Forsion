@@ -1,0 +1,130 @@
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { HOST_FILE_OP_TOOLS, openPathKnownSafe } from './hostFileOps.js';
+import { listTrash, restoreTrashItems, trashDir } from '../services/trash.js';
+import type { ToolContext } from './toolTypes.js';
+
+const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'tangu-fileops-')));
+const shared = path.join(root, 'forsion');
+const ws = path.join(root, 'ws');
+const prevHome = process.env.TANGU_HOME;
+const ctx = { cwd: ws, execMode: 'host' } as ToolContext;
+const call = (name: string, args: Record<string, unknown>) => Promise.resolve(HOST_FILE_OP_TOOLS[name].execute(args, ctx)).then(String);
+const put = (rel: string, text = rel) => { const p = path.join(ws, rel); mkdirSync(path.dirname(p), { recursive: true }); writeFileSync(p, text); return p; };
+
+beforeAll(() => {
+  mkdirSync(path.join(shared, 'tangu'), { recursive: true });
+  mkdirSync(ws, { recursive: true });
+  process.env.TANGU_HOME = path.join(shared, 'tangu'); // credentials and trash live under this Forsion home
+});
+afterAll(() => {
+  if (prevHome === undefined) delete process.env.TANGU_HOME; else process.env.TANGU_HOME = prevHome;
+  rmSync(root, { recursive: true, force: true });
+});
+
+describe('move_path', () => {
+  it('renames, moves into an existing folder, and refuses to clobber or merge', async () => {
+    put('a.txt', 'A');
+    expect(await call('move_path', { from: 'a.txt', to: 'b.txt' })).toBe('Moved a.txt → b.txt.');
+    mkdirSync(path.join(ws, 'box'));
+    expect(await call('move_path', { from: 'b.txt', to: 'box' })).toBe(`Moved b.txt → ${path.join('box', 'b.txt')}.`);
+    expect(readFileSync(path.join(ws, 'box', 'b.txt'), 'utf8')).toBe('A');
+    put('c.txt', 'C');
+    expect(await call('move_path', { from: 'c.txt', to: 'box/b.txt' })).toMatch(/already exists\. Pass overwrite/);
+    expect(await call('move_path', { from: 'c.txt', to: 'box/b.txt', overwrite: true })).toMatch(/^Moved/);
+    expect(readFileSync(path.join(ws, 'box', 'b.txt'), 'utf8')).toBe('C');
+    put('d/box/x.txt');
+    expect(await call('move_path', { from: 'd/box', to: '.' })).toMatch(/already exists and is a folder/);
+    expect(await call('move_path', { from: 'box', to: 'box/inner' })).toMatch(/into itself/);
+  });
+
+  it('overwrite puts the replaced file in the Trash, and brings it back when the move fails', async () => {
+    put('ow/new.txt', 'NEW');
+    put('ow/old.txt', 'OLD');
+    expect(await call('move_path', { from: 'ow/new.txt', to: 'ow/old.txt', overwrite: true })).toMatch(/replaced is in the Forsion Trash/);
+    expect(readFileSync(path.join(ws, 'ow', 'old.txt'), 'utf8')).toBe('NEW');
+    expect((await listTrash()).some((e) => e.kind === 'file' && e.name === 'old.txt')).toBe(true);
+    // The source's folder is read-only: the rename fails after the destination was set aside → it comes back.
+    put('locked/src.txt', 'SRC');
+    put('keep.txt', 'KEEP');
+    chmodSync(path.join(ws, 'locked'), 0o555);
+    try {
+      expect(await call('move_path', { from: 'locked/src.txt', to: 'keep.txt', overwrite: true })).toMatch(/^Error: .*back in place/);
+      expect(readFileSync(path.join(ws, 'keep.txt'), 'utf8')).toBe('KEEP');
+      expect(readFileSync(path.join(ws, 'locked', 'src.txt'), 'utf8')).toBe('SRC');
+    } finally {
+      chmodSync(path.join(ws, 'locked'), 0o755);
+    }
+  });
+
+  it('a link to a folder is that folder: the item goes inside', async () => {
+    mkdirSync(path.join(ws, 'real-dir'));
+    symlinkSync(path.join(ws, 'real-dir'), path.join(ws, 'dir-link'));
+    put('n.txt', 'N');
+    expect(await call('move_path', { from: 'n.txt', to: 'dir-link' })).toMatch(/^Moved/);
+    expect(readFileSync(path.join(ws, 'real-dir', 'n.txt'), 'utf8')).toBe('N');
+  });
+
+  it('never moves the home folder or a folder holding credentials, and stays out of protected paths', async () => {
+    expect(await call('move_path', { from: os.homedir(), to: 'h' })).toMatch(/home folder/);
+    writeFileSync(path.join(shared, 'auth.json'), '{}');
+    expect(await call('move_path', { from: shared, to: 'stolen' })).toMatch(/credential/);
+    expect(await call('copy_path', { from: path.join(shared, 'auth.json'), to: 'x.json' })).toMatch(/credential/);
+  });
+});
+
+describe('copy_path', () => {
+  it('copies files and folders, skipping credential files reached through a symlink', async () => {
+    put('src/one.md', '1');
+    put('src/sub/two.md', '2');
+    symlinkSync(path.join(shared, 'auth.json'), path.join(ws, 'src', 'innocent.md'));
+    const r = await call('copy_path', { from: 'src', to: 'dst' });
+    expect(r).toMatch(/^Copied src → dst \(folder\); skipped 1 protected credential file/);
+    expect(readFileSync(path.join(ws, 'dst', 'sub', 'two.md'), 'utf8')).toBe('2');
+    expect(existsSync(path.join(ws, 'dst', 'innocent.md'))).toBe(false);
+    expect(await call('copy_path', { from: 'src/one.md', to: 'dst/one.md' })).toMatch(/already exists/);
+    expect(await call('copy_path', { from: 'src', to: 'src/inside' })).toMatch(/into itself/);
+  });
+});
+
+describe('delete_path', () => {
+  it('moves to the Forsion Trash by default (restorable there); permanent only when asked', async () => {
+    put('old/notes.md', 'keep me');
+    const r = await call('delete_path', { path: 'old' });
+    expect(r).toBe('Moved folder old to the Forsion Trash. The user can restore it from Settings › Trash for 30 days.');
+    expect(existsSync(path.join(ws, 'old'))).toBe(false);
+    const [entry] = await listTrash();
+    expect(entry).toMatchObject({ kind: 'file', name: 'old', restorer: 'engine' });
+    expect(readFileSync(path.join(trashDir(), entry.id, entry.items[0].stored, 'notes.md'), 'utf8')).toBe('keep me');
+    await restoreTrashItems(entry);
+    expect(readFileSync(path.join(ws, 'old', 'notes.md'), 'utf8')).toBe('keep me');
+    put('tmp.log');
+    expect(await call('delete_path', { path: 'tmp.log', permanent: true })).toBe('Permanently deleted file tmp.log.');
+    expect(existsSync(path.join(ws, 'tmp.log'))).toBe(false);
+  });
+
+  it('refuses roots, home, credentials and the trash itself', async () => {
+    expect(await call('delete_path', { path: path.parse(ws).root })).toMatch(/filesystem root/);
+    expect(await call('delete_path', { path: os.homedir() })).toMatch(/home folder/);
+    expect(await call('delete_path', { path: path.join(shared, 'auth.json') })).toMatch(/credential/);
+    expect(await call('delete_path', { path: 'missing.txt' })).toMatch(/does not exist/);
+  });
+});
+
+describe('open_path approval', () => {
+  it('plain documents and ordinary folders open without asking; apps, scripts and disguised links ask', () => {
+    put('report.pdf');
+    put('run.sh');
+    mkdirSync(path.join(ws, 'Tool.app'), { recursive: true });
+    symlinkSync(path.join(ws, 'run.sh'), path.join(ws, 'looks.pdf'));
+    expect(openPathKnownSafe('report.pdf', ws)).toBe(true);
+    expect(openPathKnownSafe('box', ws)).toBe(true);
+    expect(openPathKnownSafe('run.sh', ws)).toBe(false);
+    expect(openPathKnownSafe('Tool.app', ws)).toBe(false);
+    expect(openPathKnownSafe('looks.pdf', ws)).toBe(false);
+    expect(openPathKnownSafe('nothing.pdf', ws)).toBe(false);
+    expect(openPathKnownSafe('//attacker/share/report.pdf', ws)).toBe(false); // UNC: never even looked at
+  });
+});

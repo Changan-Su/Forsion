@@ -105,18 +105,22 @@
 .t2c-pill-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* 模式胶囊与 ModelPill 共用同一展开契约:224px、三列居中、菜单右缘对齐。
-   模式胶囊在底栏左侧:打开时外层先占住最终宽度,菜单锚点不动;按钮开合直接到位、只换底色(走查续八 8.4)。 */
+   模式胶囊在底栏左侧:打开时外层先占住最终宽度,菜单锚点不动。
+   开合补宽度、跟菜单同一只表(11-02 撤回走查续八 8.4 的「直接到位」,注释见 base.css .model-pill-btn):
+   收起 = 菜单退场时长 / 曲线(写在基础规则),展开 = 菜单进场(写在 .is-open)。 */
 .mode-pill-wrap { position: relative; display: inline-flex; }
 .t2c-pill.mode-pill-btn {
   min-width: 0;
+  interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast, 0.15s); /* 开合不补宽度,同「+」(走查续八 8.4) */
+  transition: background var(--duration-fast, 0.15s), width var(--menu-exit-duration) var(--ease-exit);
 }
 .t2c-pill.mode-pill-btn.is-open {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: 224px;
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  transition: background var(--duration-fast, 0.15s), width var(--menu-enter-duration) var(--menu-enter-ease);
 }
 .mode-pill-wrap.is-open { width: 224px; flex-shrink: 0; }
 .mode-pill-btn.is-open > svg { justify-self: center; }
@@ -136,8 +140,10 @@
   padding: 0;
   overflow: hidden;
   color: var(--text-muted);
-  /* 开合只换底色和字色、不补尺寸(走查续八 8.4,规矩 3):以前宽度 / 列宽 / 内边距补 180ms,菜单早没了药丸还在收。 */
-  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s);
+  /* 开合补尺寸、跟菜单同一只表(11-02 撤回走查续八 8.4,同模式 / 模型胶囊):收起走菜单退场,展开走菜单进场。 */
+  --pill-size-motion: var(--menu-exit-duration) var(--ease-exit);
+  transition: background var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s),
+    width var(--pill-size-motion), grid-template-columns var(--pill-size-motion), gap var(--pill-size-motion), padding var(--pill-size-motion);
 }
 .t2c-pill.add-pill-btn.is-open {
   grid-template-columns: 16px minmax(0, 1fr) 16px;
@@ -147,6 +153,7 @@
   padding: 4px 9px;
   color: var(--text);
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  --pill-size-motion: var(--menu-enter-duration) var(--menu-enter-ease);
 }
 .add-pill-plus { justify-self: center; transition: transform 0.2s var(--ease-spring); }
 .add-pill-btn.is-open .add-pill-plus { transform: rotate(45deg); }

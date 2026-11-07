@@ -147,6 +147,20 @@ export function installViewModeCommands(): () => void {
 }
 
 // ── 胶囊 ──
+/**
+ * 分段胶囊滑块往哪边走(水滴复用方案第 4 条,2026-11-05)。传当前格号,格号一变就记下方向,写进滑块的 `data-dir`;
+ * CSS(.lcl-vmode-thumb / 宿主 .t2s-vaultseg-thumb)据此让后沿晚 --seg-edge-lag 出发 —— 离开时拉长、落地回缩。
+ * 首帧与格号没变过 = undefined(两条边一起走)。方向一直留到下一次换格:别的状态重渲染不会把它抹掉(抹掉会让在途的
+ * 过渡下一次换格用错延迟)。用「渲染期按上一份 state 推导」的写法而不是 ref,StrictMode 双渲染、被丢弃的渲染都不会记错。
+ */
+export function useSegDir(i: number): 'r' | 'l' | undefined {
+  const [s, setS] = useState<{ i: number; dir?: 'r' | 'l' }>({ i })
+  if (s.i === i) return s.dir
+  const dir = i > s.i ? 'r' : 'l'
+  setS({ i, dir })
+  return dir
+}
+
 /** compact:恒只留图标(每种都给了图标时),给本来就窄的地方(Agent Desk 胶囊)用。 */
 type SwitchProps = { className?: string; testId?: string; compact?: boolean } & (
   | { leafId: string | null | undefined; spec?: undefined; inTopbar?: boolean }
@@ -161,6 +175,8 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null)
   const dropRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  // 钩子要在下面两个提前 return 之前调;算格号的式子与下面的 `i` 同一份
+  const dir = useSegDir(spec ? Math.max(0, spec.modes.findIndex((m) => m.value === spec.value)) : 0)
   useEffect(() => {
     if (!menu) return
     const close = (e: Event): void => { if (!menuRef.current?.contains(e.target as Node) && !dropRef.current?.contains(e.target as Node)) setMenu(null) }
@@ -211,7 +227,7 @@ export function ViewModeSwitch(props: SwitchProps): React.ReactElement | null {
       style={{ ['--seg-n' as string]: n, ['--seg-i' as string]: i }}
     >
       <div className="lcl-vmode-pill" role="tablist" aria-label={aria}>
-        <div className="lcl-vmode-thumb" data-value={cur.value} />
+        <div className="lcl-vmode-thumb" data-value={cur.value} data-dir={dir} />
         {spec.modes.map((m, k) => {
           const Icon = m.icon
           return (

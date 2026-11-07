@@ -2006,18 +2006,25 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 /* 打开时药丸撑到与菜单同宽、右缘对齐。
    ⚠️ 走 min-width 不走 width:width:auto → 224px 不可插值,动画不会跑;0 → 224px 才行。
    .is-open 三段选择器是为了压过 .t2c-row .composer-chip{min-width:0}(窄屏收缩用)。 */
-/* 开合直接到位、只换底色(走查续八 8.4,规矩 3:颜色和位移同一时长、同一条曲线):以前宽度补 180ms,菜单 80ms 就退完了、
-   药丸还在收。别把 width 过渡加回来;scripts/model-menu.check.cjs 的 B 钉着「开 / 收都不补宽度」。 */
+/* 开合补宽度,跟菜单同一只表(11-02 用户:「胶囊展开关闭动画全都没了」,撤回走查续八 8.4 的「直接到位」):
+   展开 = 菜单进场 --menu-enter-duration × --menu-enter-ease,收起 = 菜单退场替身 --menu-exit-duration × --ease-exit,
+   两边一起到、一起停(8.4 当时的毛病是药丸收 180ms、菜单一帧就没)。收起的时长写在基础规则、展开的写在 .is-open:
+   过渡取「目标状态」那条规则的值。
+   ⚠️ 动的是 width 且**必须**配 interpolate-size:allow-keywords —— 没有它 fit-content → 224px 不可插值,过渡不跑。
+   ⚠️ 别改成 min-width 0 → 224px:可见区间只有 [自然宽, 224],收的时候几乎瞬变。scripts/model-menu.check.cjs 的 B 钉着。
+   ponytail: Safari 尚不支持 interpolate-size,那边降级为直接到位。 */
 .composer-chip.model-pill-btn {
   min-width: 0;
+  interpolate-size: allow-keywords;
   width: fit-content;
-  transition: background var(--duration-fast);
+  transition: background var(--duration-fast), width var(--menu-exit-duration) var(--ease-exit);
 }
 .composer-chip.model-pill-btn.is-open {
   display: grid;
   grid-template-columns: 16px minmax(0, 1fr) 16px;
   width: var(--menu-select-width);
   background: var(--overlay-medium, rgba(127, 127, 127, 0.18));
+  transition: background var(--duration-fast), width var(--menu-enter-duration) var(--menu-enter-ease);
 }
 .composer-chip.model-pill-btn.is-max {
   color: color-mix(in srgb, #a77bff 78%, var(--text));
@@ -2543,9 +2550,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .quote-preview-body--mono { font-family: var(--font-mono); font-size: var(--ui-font-caption); }
 
 /* agent 在对话区展示的文件(display_file / 生图 / 表情包):图片缩略图(点击放大)+ 文件卡片 */
-.inline-file-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.inline-file-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 2px; }
 .inline-file-img {
-  max-width: 280px;
+  max-width: min(280px, 100%);
   max-height: 280px;
   object-fit: contain;
   border-radius: var(--radius-md, 10px);
@@ -2555,6 +2562,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   transition: filter 0.15s ease, transform 0.15s ease;
 }
 .inline-file-img:hover { filter: brightness(1.04); }
+.inline-file-media { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; max-width: 100%; }
+.inline-file-video, .inline-file-audio { width: 320px; max-width: 100%; }
+.inline-file-video { max-height: 280px; object-fit: contain; border-radius: var(--radius-md); background: var(--overlay-light); }
 .inline-file-card {
   display: inline-flex;
   align-items: center;
@@ -4640,7 +4650,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   border: var(--border-width) solid var(--border);
   border-radius: var(--radius-md);
   box-shadow: var(--card-shadow);
-  animation: fade-up var(--duration-fast) var(--ease-out);
+  /* 不在菜单进 / 退名单里:开合走液滴(2026-11-05,AccountCard.tsx 调 emergeDroplet,从头像里流出、倒放缩回) */
 }
 .account-pop .ap-head {
   display: flex;
@@ -5492,6 +5502,8 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --canvas-switch-hud: 160ms; /* 进场:胶囊 / 说明淡入多久;空白处说明被卡盖住时让开 */
   --switch-edge-duration: 120ms; /* 开关旋钮左右两条边各自的时长 */
   --switch-edge-lag: 30ms; /* 开关旋钮后沿晚出发多久(离开时拉长、落地时回缩) */
+  --seg-edge-duration: 280ms; /* 分段胶囊滑块左右两条边各自的时长(sidebar2.css .t2s-vaultseg-thumb / LCL .lcl-vmode-thumb;水滴复用方案第 4 条,11-05) */
+  --seg-edge-lag: 80ms; /* 分段胶囊滑块后沿晚出发多久:离开时拉长、落地回缩,不过冲 */
   --toast-enter-duration: 180ms; /* 两种吐司进场:从贴着的那条边 6px 滑进 + 淡入(走查续八 8.5 A;右上通知卡在 NotificationHost 同值) */
   --toast-exit-duration: 140ms; /* 底部吐司退场;右上通知卡 160ms 右移 16px(NotificationHost) */
   --draw-duration: 600ms; /* 描线 */
@@ -5510,7 +5522,7 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 /* 名单 = 所有「弹出来的菜单」;10-02 去掉匹配不到任何元素的 .add-menu,补上 Chat 的 / @ 菜单、账户菜单、仪表盘添加菜单。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar) {
+  .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar) {
   animation: ui-menu-enter var(--menu-enter-duration) var(--menu-enter-ease);
   transform-origin: top left;
 }
@@ -5518,20 +5530,20 @@ html:root :is(.project-menu, .composer-menu, .t2c-menu) { transform-origin: bott
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
     .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
-    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar) { animation: none; }
+    .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar) { animation: none; }
 }
 /* 退场:与上面的进场是**同一张名单**(check:motion 钉着)。OverlayAt 卸载时留下的替身(data-lcl-exit,见 menuAnchor.tsx
    useExitGhost)缩到 0.99、淡出、加速离开;不加模糊(filter 会让菜单成为 fixed 后代的包含块,DESIGN §4)。
    不在 OverlayAt 里的菜单关掉照旧立刻消失。减少动态效果时只淡出。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
+  .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
   animation: ui-menu-exit var(--menu-exit-duration) var(--ease-exit) forwards;
 }
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
     .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
-    .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
+    .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
     animation-name: ui-fade-out;
   }
 }
@@ -5541,7 +5553,7 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
    不写成 html:root :is(…) 开头:那是 check:motion 读进场 / 退场名单的格式。 */
 [data-lcl-exit]:not(.lcl-ftoc-rail, .ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
   .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
-  .rb-menu, .rb-iconpick, .t2c-menu, .account-pop, .dash-add-menu, .inline-toolbar,
+  .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar,
   .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, [data-motion~='toast']) { animation: none !important; }
 /* 替身里的子元素不重放自己的进场(命令面板 / ⌘P / 确认框的面板本身除外:它跟着遮罩一起退,见 engine.css / amadeus styles.css)。 */
 [data-lcl-exit] :not(.cmd-panel, .amx-qf, .dialog) { animation: none !important; }

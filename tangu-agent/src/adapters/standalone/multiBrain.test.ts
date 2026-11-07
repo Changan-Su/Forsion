@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { pcmToWav, createMultiBrain } from './multiBrain.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { pcmToWav, createMultiBrain, downgradeSpeedTier } from './multiBrain.js';
 import { createProviderRegistry } from '../../llm/providerRegistry.js';
 import { freshOAuthCred } from '../../llm/providerOAuth.js';
+import { openaiToAnthropicBody } from '../../llm/anthropicMessages.js';
 
 vi.mock('../../llm/providerOAuth.js', () => ({ freshOAuthCred: vi.fn() }));
 // 假 WebSocket:只记有没有被建出来(真的会连百炼)。
@@ -118,6 +119,29 @@ describe('订阅登录的凭证:生图 / 改图 / 朗读也在调用前续期,�
     expect(freshOAuthCred).toHaveBeenCalledWith('xai', false);
     expect(freshOAuthCred).not.toHaveBeenCalledWith('xai', true);
     expect(registry.list().find((p) => p.providerId === 'xai')!.apiKey).toBe('fresh');
+  });
+
+  it('requests native GIF over both direct image endpoints and identifies the returned bytes', async () => {
+    const { brain: b } = make();
+    const gif = { ok: true, json: async () => ({ data: [{ b64_json: 'R0lGODlh' }] }) };
+    const f = stubFetch(gif, gif);
+    const options = { model: 'openai/gpt-image-2.6-flare', prompt: 'A ball bounces', outputFormat: 'gif', frameCount: 5, frameDurationMs: 120, complexity: 'low' } as const;
+    const gen = await b.images!.generate(options);
+    const edit = await b.images!.edit!({ ...options, images: [{ b64: 'iVBORw0KGgo=', mime: 'image/png' }] });
+    const fields = { model: 'gpt-image-2.6-flare', output_format: 'gif', size: 'auto', complexity: 'low' };
+    expect(JSON.parse(f.mock.calls[0][1].body)).toMatchObject({ ...fields, frame_count: 5, frame_duration_ms: 120 });
+    expect(Object.fromEntries(f.mock.calls[1][1].body)).toMatchObject({ ...fields, frame_count: '5', frame_duration_ms: '120' });
+    expect(gen.images[0].mime).toBe('image/gif');
+    expect(edit.images[0].mime).toBe('image/gif');
+  });
+
+  it('rejects GIF options before a direct still-image model can bill for a still', async () => {
+    const { brain: b } = make();
+    const f = stubFetch(png);
+    const req = { model: 'openai/gpt-image-1', prompt: 'A ball bounces', outputFormat: 'gif' } as const;
+    await expect(b.images!.generate(req)).rejects.toThrow('require a GPT Image 2.6 model');
+    await expect(b.images!.edit!({ ...req, images: [{ b64: 'iVBORw0KGgo=', mime: 'image/png' }] })).rejects.toThrow('require a GPT Image 2.6 model');
+    expect(f).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -292,10 +316,99 @@ describe('Fast 档:只在 Codex 订阅且目录列了这一档时发 service_tie
     expect((await payloadFor()).service_tier).toBe('priority');
   });
 
-  it('没开、目录里没有这个模型、或不是 Codex 订阅 → 不发', async () => {
+  it('没开、目录里没有这个模型、或 provider 没声明这个模型 → 不发', async () => {
     expect((await build(false, 'codex/gpt-6-luna')).service_tier).toBeUndefined();
     expect((await build(undefined, 'codex/gpt-6-luna')).service_tier).toBeUndefined();
     expect((await build(true, 'codex/gpt-5.5')).service_tier).toBeUndefined();
-    expect((await build(true, 'openai/gpt-6-luna')).service_tier).toBeUndefined();
+    expect((await build(true, 'openai/gpt-6-luna')).service_tier).toBeUndefined(); // 官方 host 但 modelIds 没列 → 没有 fastTiers
+  });
+});
+
+describe('Fast 档:官方 OpenAI / Anthropic API(BYOK)', () => {
+  const providers = [
+    { providerId: 'openai', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk', modelIds: ['gpt-6-luna', 'gpt-5.5', 'gpt-5-nano', 'gpt-6-sol-2026-09-01', 'gpt-6.1-sol'] },
+    { providerId: 'gw', baseUrl: 'https://api.openai.com.evil.tld/v1', apiKey: 'sk', modelIds: ['gpt-6-luna'] },
+    { providerId: 'anthropic', baseUrl: 'https://api.anthropic.com/v1', apiKey: 'sk', protocol: 'anthropic-messages', modelIds: ['claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5'] },
+  ];
+  const registry = createProviderRegistry(providers as any);
+  const build = (modelId: string, fast: boolean | 'ultra' = true) => {
+    const brain = createMultiBrain({ llm: {}, assets: {} } as any, registry);
+    const r = registry.resolve(modelId)!;
+    return brain.llm.buildProviderPayload({ model: r.model, apiModelId: r.apiModelId, messages: [{ role: 'user', content: 'hi' }], thinkingLevel: 'low', fast });
+  };
+
+  it('模型表按官方价目给单价倍数;仿冒 host、价表外的模型、研究预览的 Opus 都没有', () => {
+    const tiers = Object.fromEntries(registry.list().map((p) => [p.providerId, p.fastTiers]));
+    expect(tiers.openai).toEqual({ 'gpt-6-luna': '2x price', 'gpt-5.5': '2.5x price', 'gpt-6-sol-2026-09-01': '2x price', 'gpt-6.1-sol': '2x price' });
+    expect(registry.list().find((p) => p.providerId === 'openai')!.ultrafastTiers).toEqual({ 'gpt-6.1-sol': '6x price' });
+    expect(registry.list().find((p) => p.providerId === 'anthropic')!.ultrafastTiers).toBeUndefined();
+    expect(tiers.gw).toBeUndefined();
+    expect(tiers.anthropic).toEqual({ 'claude-opus-5-5': '2x price' });
+  });
+
+  it('OpenAI 发 service_tier "fast";Anthropic 发 speed "fast";不支持的模型 / 没开都不发', async () => {
+    expect((await build('openai/gpt-6-luna')).service_tier).toBe('fast');
+    expect((await build('openai/gpt-5-nano')).service_tier).toBeUndefined();
+    expect((await build('gw/gpt-6-luna')).service_tier).toBeUndefined();
+    expect((await build('openai/gpt-6-luna', false)).service_tier).toBeUndefined();
+    const opus = await build('anthropic/claude-opus-5-5');
+    expect(opus.speed).toBe('fast');
+    expect(opus.service_tier).toBeUndefined();
+    expect(openaiToAnthropicBody(opus).speed).toBe('fast');
+    expect((await build('anthropic/claude-opus-5')).speed).toBeUndefined();
+    expect((await build('anthropic/claude-sonnet-5-5')).speed).toBeUndefined();
+    expect(openaiToAnthropicBody(await build('anthropic/claude-opus-5-5', false)).speed).toBeUndefined();
+  });
+
+  it('极速档:有极速档的模型发 ultrafast 并改道 Responses;没有的按 Fast;Anthropic 按 Fast', async () => {
+    const sol = await build('openai/gpt-6.1-sol', 'ultra');
+    expect(sol.service_tier).toBe('ultrafast');
+    expect(sol.__tangu_protocol).toBe('openai-responses');
+    expect((await build('openai/gpt-6-luna', 'ultra')).service_tier).toBe('fast');
+    expect((await build('openai/gpt-6.1-sol', true)).service_tier).toBe('fast');
+    expect((await build('anthropic/claude-opus-5-5', 'ultra')).speed).toBe('fast');
+  });
+
+  it('降档顺序:极速 → 快速 → 标准;Anthropic fast → 标准', () => {
+    const p: any = { service_tier: 'ultrafast' };
+    expect(downgradeSpeedTier(p)).toBe(true); expect(p.service_tier).toBe('fast');
+    expect(downgradeSpeedTier(p)).toBe(true); expect(p.service_tier).toBeUndefined();
+    expect(downgradeSpeedTier(p)).toBe(false);
+    const a: any = { speed: 'fast' };
+    expect(downgradeSpeedTier(a)).toBe(true); expect(a.speed).toBeUndefined();
+  });
+
+  describe('快档被限流(429)就降一档重发', () => {
+    const err = (status: number, message: string) => new Response(JSON.stringify({ error: { type: 'rate_limit_error', message } }), { status, headers: { 'content-type': 'application/json' } });
+    const sse = () => new Response('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    const send = async (modelId: string) => {
+      const brain = createMultiBrain({ llm: {}, assets: {} } as any, registry);
+      const r = registry.resolve(modelId)!;
+      const payload = await brain.llm.buildProviderPayload({ model: r.model, apiModelId: r.apiModelId, messages: [{ role: 'user', content: 'hi' }], thinkingLevel: 'off', fast: true });
+      return brain.llm.streamProviderCompletion({ apiKey: r.apiKey, baseUrl: r.baseUrl, payload, provider: 'x', onToken() {} } as any);
+    };
+    const bodies = (f: any) => f.mock.calls.map((c: any[]) => JSON.parse(c[1].body));
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('OpenAI fast 429 → 去掉 service_tier 再发一次', async () => {
+      const f = vi.fn().mockResolvedValueOnce(err(429, 'Rate limit reached for fast tier')).mockResolvedValueOnce(sse());
+      vi.stubGlobal('fetch', f);
+      expect((await send('openai/gpt-6-luna')).content).toBe('ok');
+      expect(bodies(f).map((b: any) => b.service_tier)).toEqual(['fast', undefined]);
+    });
+
+    it('Anthropic fast 429 → 去掉 speed 再发一次', async () => {
+      const f = vi.fn().mockResolvedValueOnce(err(429, 'exceed your rate limit of 0 fast mode input tokens per minute')).mockResolvedValueOnce(err(400, 'stop here'));
+      vi.stubGlobal('fetch', f);
+      await expect(send('anthropic/claude-opus-5-5')).rejects.toThrow('stop here');
+      expect(bodies(f).map((b: any) => b.speed)).toEqual(['fast', undefined]);
+    });
+
+    it('额度用完的 429 不降档(那是账单问题,降了也没用)', async () => {
+      const f = vi.fn().mockResolvedValueOnce(err(429, 'You exceeded your current quota'));
+      vi.stubGlobal('fetch', f);
+      await expect(send('openai/gpt-6-luna')).rejects.toThrow();
+      expect(f).toHaveBeenCalledTimes(1);
+    });
   });
 });

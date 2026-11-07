@@ -81,6 +81,7 @@ const GATE_FILES = [
 const SKIP = {
   SyncSetupHost: '首登同步卡片管的是本地库远程同步(window.remoteSync,桌面专属);手机没有同步引擎、直接读云端(云同步开启方案 2026-10-20 第六节)',
   // —— 启动序列 ——
+  loadTanguEntry: 'Tangu 界面热更新只做桌面(落地计划 §2):桌面 / 网页经它在界面包与编进宿主的那份之间挑;手机照旧静态编进 APK,mobileEntry 直接静态 import activateTangu 交给 installEngine',
   installMultiWindow: '移动端无卫星窗;实现本身对非 electron 天然 no-op',
   installTabTitleBar: 'Windows Electron 主窗与独立窗的原生窗口按钮叠加;手机无桌面标题栏,其余平台在模块入口 no-op',
   installAccountTransition: 'Electron 多窗口切号前保存握手;web/mobile 通过登录跳转和整页重载清理账号缓存,没有 auth:will-change IPC',

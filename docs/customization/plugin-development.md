@@ -104,7 +104,7 @@ ctx.ui.mountWebCard(el, { name, status, address, note, thumbnail, actions, menu 
 
 插件也可以不创建完整 Space，直接用 `ctx.openMiniPanel?.(viewId, options)` 打开已注册的紧凑视图；`mainViewId` 指定“在主面板显示”的去向。需要宽屏独立工具页时用 `ctx.openFloatingPanel?.(viewId, options)`。宿主自动添加插件命名空间并负责窗口生命周期。见 [Floating Panel 开发](./floating-panel-development.md)。
 
-View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`，在光标处插入文字用 `insertText`。见 [可复用 UI 组件](./ui-components.md)。
+View 内需要输入框和模型选择时，使用 `ctx.ui.mountChatBox`；它复用宿主组件，并由插件显式处理提交。不要模型选择时传 `modelPicker: false`；底排工具栏用 `toolbar`，`#` 这类补全用 `suggest`（2026-11-02 起可以传一组，例如 `#` 与 `[[` 各一份，传之前先看 `ctx.ui.chatBoxCapabilities` 里有没有 `'suggestMany'`；输入框在窗口下半部分时候选朝上开），在光标处插入文字用 `insertText`。见 [可复用 UI 组件](./ui-components.md)。
 
 设置类页面（账号、额度与积分、诊断、偏好）用 `ctx.ui.mountSettingsPage(el, { groups })` 交一份整页描述：每组有图标、标题、说明、右上角按钮和若干项（开关、数值、按钮、输入框、分段、下拉、「选了就执行」、步进器、代码 + 复制、额度条、空 / 加载 / 出错、自定义块），插件只给文字、值和回调，宿主用自己的设置零件画并按端排版——手机上开关、数值、单个按钮留在右边，输入框、步进器、两个以上的按钮换到下一行，「选了就执行」换成一枚按钮 + 半屏。清单外的内容放进 `custom` 块，块里用 `ctx.ui.mountSettingsItem` 挂单件。别再抄宿主的设置 CSS；2026-10-17 之前的宿主没有这两个接口，先探测，保留自己画的那套。见 [可复用界面组件](./ui-components.md)。
 
@@ -143,9 +143,11 @@ ctx.registerSelectionAction({ id, title, run })
 ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 ```
 
+「拿着一件工具干活」的视图(PDF 批注一类)换工具用宿主的工具岛:`ctx.ui?.mountToolIsland?.(root, { tools, active, onPick, slots })` 顶部居中(窄于 520px 停底部),选中受控(`onPick` 里自己 `setActive`),句柄的 `row` 是岛下那一排、归插件画。旧宿主没有就画自己的那条。详见[可复用界面组件](./ui-components.md)「工具岛」。
+
 ## 读写多维表与笔记任务
 
-日历、待办、习惯这类插件需要读写你库里的多维表，以及笔记里带 `@` 时间的任务（`- [ ] 交周报 @2026-10-20`）。插件必须在说明文件里声明 `databases`（多维表）或 `noteTasks`（笔记任务）才拿得到；没声明的插件看不到这些数据。拿到之后，插件改一格、勾一项，和你在表格里、笔记里亲手改是同一条路：打开着的表格立即跟着变，笔记视图的属性写进那篇笔记。插件删经典表的一行可以撤销；笔记视图的一行是一篇笔记，插件只能把它移进回收站。插件声明了哪些，插件详情页会列成一行「这个插件可以：……」给你看（读取前台窗口的 `activeWindow` 也列在这一行）。接口细节见插件开发技能「全库多维表与笔记任务」一节。
+日历、待办、习惯这类插件需要读写你库里的多维表，以及笔记里带 `@` 时间的任务（`- [ ] 交周报 @2026-10-20`）。插件必须在说明文件里声明 `databases`（多维表）或 `noteTasks`（笔记任务）才拿得到；没声明的插件看不到这些数据。拿到之后，插件改一格、勾一项，和你在表格里、笔记里亲手改是同一条路：打开着的表格立即跟着变，笔记视图的属性写进那篇笔记。插件删经典表的一行可以撤销；笔记视图的一行是一篇笔记，插件只能把它移进回收站。插件声明了哪些，插件详情页会列成一行「这个插件可以：……」给你看（读取前台窗口的 `activeWindow` 也列在这一行）。2026-11-02 起，笔记里缩进在带 `@` 的任务下面的 `- [ ]` 会作为它的子任务交给插件（最多两层，没写 `@` 的子任务不会单独出现在待办里），每条任务也带上行里的 `#标签`；插件还能读写表格一行的记录正文（与「打开记录」同一份，改之前核对内容没被别处改过），以及给表格加一列（例如第一次用标签时加一列多选「标签」）。2026-11-04 起，插件还能一次改好整张表（改列名、加选项、调行的顺序、建视图），走的是表格界面自己的那条写口：打开着的表格立即跟着变，还没存盘的改动不会被冲掉；首列、自动编号与创建 / 修改时间仍由宿主管，不合规的改动整笔不收。接口细节见插件开发技能「全库多维表与笔记任务」一节。
 
 ### 日历叠加源与日历设置
 
@@ -159,7 +161,7 @@ ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 
 ## 插件自带的 MCP、hooks 与文件事件
 
-插件可以随包带上自己的 MCP server(只限在本机跑的那种),装好、启用之后 Tangu 就多了这些工具,停用插件就一起停掉。设置 → MCP 里会列出它们,写着来自哪个插件;要关掉,在插件设置里停用这个插件。插件也可以带 hook,在会话开始、工具跑完、一次回答结束时收到通知,用来做审计、归档这类事;这种 hook 只能看,拦不住任何操作,也不能往对话里加内容。设置 → Hooks 里同样列出它们,标着「只观察」。
+插件可以随包带上自己的 MCP server(只限在本机跑的那种),装好、启用之后 Tangu 就多了这些工具,停用插件就一起停掉。设置 → MCP 里会列出它们,写着来自哪个插件;要关掉,在插件设置里停用这个插件。这些工具和用户自己接的 MCP 一样缺省按需加载:每次请求只带一行目录(工具名 + 描述第一行),AI 要用时先装上再调,所以描述第一行要能单独说清这个工具做什么;每轮都要用的 server 在声明里写 `"deferLoading": false` 就一直带着。插件也可以带 hook,在会话开始、工具跑完、一次回答结束时收到通知,用来做审计、归档这类事;这种 hook 只能看,拦不住任何操作,也不能往对话里加内容。设置 → Hooks 里同样列出它们,标着「只观察」。
 
 插件还能收到笔记库里的文件事件:新建、删除、在 Forsion 里改名或移动、被别的程序或 Tangu 改动,以及换库。反链、自动整理这类插件靠它跟上库里的变化,不用一遍遍重新扫描。接口细节见插件开发技能的「插件自带的 MCP server 与 hooks」和「库级文件事件」两节;插件命令给 Tangu 交回查询结果的写法在「`invoke`:把一条命令开给 agent」一节。
 
@@ -294,6 +296,62 @@ const turn = ctx.app.queuePopup?.()
 if (turn) await turn.ready
 showMyDialog({ onClose: () => turn?.done() })
 ```
+
+### 上手提示（2026-11-02 起）
+
+用户用到你插件的某个功能时，宿主替你提示一次怎么用；用过了就不再出。提示声明在 manifest，出不出由宿主定，你不用自己记「看过没有」。
+
+```json
+"guide": {
+  "tips": [
+    {
+      "id": "drag-to-calendar",
+      "at": "todo-row",
+      "style": "ring",
+      "platform": "desktop",
+      "when": { "visible": ["calendar-grid"] },
+      "done": ["todo.schedule"],
+      "title": "拖到日历上排时间",
+      "text": "按住这条待办拖进日历的时间格，就排成那半小时。",
+      "en": { "title": "Drag onto the calendar to schedule", "text": "Drop it on a time slot to book half an hour." }
+    }
+  ]
+}
+```
+
+- `at`：你自己 View 里某个元素的 `data-guide-anchor="<名字>"`。宿主只在你的 View 里找，名字不会和别的插件撞。这个元素在屏幕上，提示才可能出。
+- `style`：`line` 在锚点上沿贴一行（适合输入框）；`ring` 圈住锚点、旁边一张小卡，要写 `title`。
+- `when` 只取一种：`{ "open": "<View id>", "times": 1 }` 这个 View 打开过几次；`{ "count": "<事件>", "atLeast": 3 }` 某个计数到了；`{ "visible": ["<锚点>", …] }` 这几个锚点同时在屏幕上。不写 `when` = 只在你调 `ctx.guide.show(id)` 时出。
+- `done`：任一计数 ≥ 1 就算「会了」，这条永远不再出。计数就是 `ctx.achievements.track('<事件>')`：用户真做了那件事时报一次。裸名是你自己 track 的；`app:` 开头读宿主的官方事件（如 `app:note.wikilink`）。
+- `platform`：`desktop` / `mobile`，不写 = 都出。拖动、悬停、快捷键这类，手机上没有对应手势的写 `desktop`。
+- 文案：中文 `title` / `text` + `en` 镜像。**英文界面缺 `en` 的那条不出**，不回落中文。标题尽量 16 个字以内，正文 40 个字以内。
+- id 用小写字母、数字和 `-`，最多 12 条。坏掉的那条宿主丢掉，其余照常。
+
+宿主管的节奏：全应用同一时刻只有一处提示（和使用指南的圈注共用）；一天最多 3 条；锚点出现 2 秒后、用户停手 1.5 秒后才出；一个 View 打开一次最多出一条；有弹窗在排或开着、首启向导开着时等着。用户点「知道了」/ × / Esc 算看过，「不再提示」关掉你这个插件的全部提示，设置 → 通知 →「上手提示」可以整体关掉或重置。看过和关掉只记在这台设备上。
+
+**新版本加了功能**：给它加一条**新 id** 的提示。记账按「插件 id + 提示 id」算，老用户升级后用到时会看到这条，已经看过的旧提示不会再出。别改旧提示的 id（等于让所有人重看一遍）。
+
+运行时：
+
+```js
+inputEl.dataset.guideAnchor = 'todo-input'   // 标锚点
+ctx.achievements.track('todo.tag')            // 用户真做了那件事
+ctx.guide?.show('tags')                        // 条件写不进 manifest 时自己叫(仍走节奏和记账)
+ctx.guide?.state('tags')                       // 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
+```
+
+**空着的时候给例句**：`ctx.ui.mountEmptyState` 多了 `examples`（最多 3 条），点一下通常是把这句填进你的输入框，让用户看着它被认出来、自己按发送，别直接替用户建东西：
+
+```js
+ctx.ui.mountEmptyState(el, {
+  icon: 'list-todo', title: '还没有待办', line: '在下面写一句就行。',
+  examples: [{ label: '明天下午3点 交周报 #工作', note: '日期、标签直接打', run: () => box.insertText('明天下午3点 交周报 #工作') }],
+})
+```
+
+开发时想重看：命令面板「重置上手提示」，或设置 → 通知 →「上手提示」→ 重置；再配合 `ctx.guide.show(id)` 就能当场看到某一条。锚点 2 秒找不到、条件一直不成立时，提示就是不出，先在开发者工具里确认元素带着 `data-guide-anchor`、在你自己的 View 里。
+
+和前置条件闸（manifest `onboarding.requires`）的分工：闸 = 不做插件就用不了；提示 = 能用，告诉用户一个窍门。旧宿主不认 `guide`，什么都不出；`ctx.guide` 一律 `?.`。
 
 ## 按需展开原生主区伴随视图
 

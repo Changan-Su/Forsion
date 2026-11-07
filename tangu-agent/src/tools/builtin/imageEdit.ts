@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { deps } from '../../seams/runtime.js';
+import type { ImageGenRequest } from '../../seams/cloudBrain.js';
 import type { ToolProvider } from '../toolRegistry.js';
 import type { ToolContext } from '../toolTypes.js';
 
@@ -10,6 +11,39 @@ export const IMAGE_QUALITY_TIERS = ['low', 'medium', 'high', 'xhigh', 'max', 'au
 export function imageQuality(value: unknown): string | undefined {
   const tier = String(value ?? '').trim().toLowerCase();
   return (IMAGE_QUALITY_TIERS as readonly string[]).includes(tier) ? tier : undefined;
+}
+
+export const imageOutputSchema = {
+  output_format: { type: 'string', enum: ['png', 'gif'], description: 'Use gif when the user asks for animation. Requires a GPT Image 2.6 model. Omit for a still image.' },
+  frame_count: { type: 'integer', minimum: 2, maximum: 16, description: 'GIF only. Number of frames (default 9).' },
+  frame_duration_ms: { type: 'integer', minimum: 20, maximum: 2000, description: 'GIF only. Delay per frame in milliseconds (default 200).' },
+  complexity: { type: 'string', enum: ['low', 'medium', 'high'], description: 'GPT Image 2.6 planning effort. Omit unless the user requests it.' },
+};
+
+export function imageOutputOptions(args: Record<string, unknown>): Pick<ImageGenRequest, 'outputFormat' | 'frameCount' | 'frameDurationMs' | 'complexity'> {
+  const { output_format: format, frame_count: count, frame_duration_ms: delay, complexity } = args;
+  if (format !== undefined && format !== 'png' && format !== 'gif') throw new Error('output_format must be png or gif.');
+  if (complexity !== undefined && complexity !== 'low' && complexity !== 'medium' && complexity !== 'high') throw new Error('complexity must be low, medium or high.');
+  if (format !== 'gif' && (count !== undefined || delay !== undefined)) throw new Error('Frame options require output_format: gif.');
+  if (format === 'gif' && args.transparent_background) throw new Error('Transparent background output requires PNG.');
+  if (count !== undefined && (typeof count !== 'number' || !Number.isInteger(count) || count < 2 || count > 16)) throw new Error('frame_count must be an integer from 2 to 16.');
+  if (delay !== undefined && (typeof delay !== 'number' || !Number.isInteger(delay) || delay < 20 || delay > 2000)) throw new Error('frame_duration_ms must be an integer from 20 to 2000.');
+  return {
+    ...(format === undefined ? {} : { outputFormat: format }),
+    ...(count === undefined ? {} : { frameCount: count }),
+    ...(delay === undefined ? {} : { frameDurationMs: delay }),
+    ...(complexity === undefined ? {} : { complexity }),
+  };
+}
+
+export function imageOutputExtension(mime: string): string {
+  return mime === 'image/jpeg' ? 'jpg' : mime === 'image/webp' ? 'webp' : mime === 'image/gif' ? 'gif' : 'png';
+}
+
+export function assertImageOutputFormat(format: ImageGenRequest['outputFormat'], images: Array<{ mime: string }>) {
+  if (format === 'gif' && images.some(image => image.mime !== 'image/gif')) {
+    throw new Error('The image provider did not return GIF output. Select a GPT Image 2.6 model with GIF access.');
+  }
 }
 
 /** 改图只收两种图:模型此刻看得见的图(本轮附件,没有就是上下文里最新那条带图消息的原图,压缩盖掉后就没了)
@@ -83,9 +117,10 @@ export function makeImageEditTool(pickModel: PickModel): ReturnType<ToolProvider
         prompt: { type: 'string', description: 'Desired edit and details to preserve.' },
         image_indices: { type: 'array', items: { type: 'integer' }, description: '1-based indices into the visible attached images. Defaults to all of them when previous_outputs is omitted or empty, and to none when it lists files. At most 8 source images in total.' },
         previous_outputs: { type: 'array', items: { type: 'string' }, description: 'File names of images generated earlier in this conversation (e.g. "edit-3f2a.png"), as reported by generate_image or edit_image.' },
-        size: { type: 'string', enum: ['1:1', '2:3', '3:2', '16:9', '9:16'] },
+        size: { type: 'string', enum: ['1:1', '2:3', '3:2', '16:9', '9:16'], description: 'Omit for square still images or automatic GIF sizing.' },
         n: { type: 'integer', minimum: 1, maximum: 4 },
         transparent_background: { type: 'boolean' },
+        ...imageOutputSchema,
         quality: {
           type: 'string',
           enum: ['low', 'medium', 'high', 'xhigh', 'max', 'auto'],
@@ -101,6 +136,7 @@ export function makeImageEditTool(pickModel: PickModel): ReturnType<ToolProvider
         if (!ctx.displayFile) throw new Error('This environment cannot display edited images.');
         const brain = deps().brain;
         if (!brain.images?.edit) throw new Error('Image editing is unavailable in this environment.');
+        const options = imageOutputOptions(args);
         const outputs = await previousOutputs(args.previous_outputs, ctx);
         const visible = ctx.getImageInputs?.() || [];
         const images = editInputs(visible, args.image_indices, outputs);
@@ -112,17 +148,18 @@ export function makeImageEditTool(pickModel: PickModel): ReturnType<ToolProvider
         ].join(' and ');
         const model = String(args.model || ctx.imageModelId || '').trim() || (await pickModel(ctx.appId)).id;
         if (!model) throw new Error('No image model is available. Check your account connection and image model settings.');
-        const size = String(args.size || '1:1');
-        if (!['1:1', '2:3', '3:2', '16:9', '9:16'].includes(size)) throw new Error('Unsupported aspect ratio.');
+        const size = String(args.size || (options.outputFormat === 'gif' ? 'auto' : '1:1'));
+        if (!['1:1', '2:3', '3:2', '16:9', '9:16'].includes(size) && !(size === 'auto' && options.outputFormat === 'gif')) throw new Error('Unsupported aspect ratio.');
         const n = args.n === undefined ? 1 : Number(args.n);
         if (!Number.isInteger(n) || n < 1 || n > 4) throw new Error('n must be an integer from 1 to 4.');
         ctx.signal?.throwIfAborted();
-        const result = await brain.images.edit({ model, prompt, images, size, n, transparentBackground: !!args.transparent_background, quality: imageQuality(args.quality), signal: ctx.signal });
+        const result = await brain.images.edit({ model, prompt, images, size, n, transparentBackground: !!args.transparent_background, quality: imageQuality(args.quality), signal: ctx.signal, ...options });
         ctx.signal?.throwIfAborted();
         if (!result.images?.length) throw new Error('The model returned no edited images.');
+        assertImageOutputFormat(options.outputFormat, result.images);
         const names: string[] = [];
         for (const image of result.images) {
-          const extension = image.mime === 'image/jpeg' ? 'jpg' : image.mime === 'image/webp' ? 'webp' : 'png';
+          const extension = imageOutputExtension(image.mime);
           const name = `edit-${randomUUID()}.${extension}`;
           if (ctx.execMode === 'host' && ctx.cwd) {
             const file = path.resolve(ctx.cwd, 'generated', name);
@@ -134,7 +171,8 @@ export function makeImageEditTool(pickModel: PickModel): ReturnType<ToolProvider
           names.push(name);
         }
         const saved = ctx.execMode === 'host' && ctx.cwd ? 'saved to the generated/ folder as' : 'saved as';
-        return `Edited ${result.images.length} image(s) using ${sources}. Results are displayed and ${saved} ${names.join(', ')}; to edit one again, pass its file name in previous_outputs. ` +
+        const reuse = result.images.every(image => image.mime === 'image/gif') ? '' : '; to edit one again, pass its file name in previous_outputs';
+        return `Edited ${result.images.length} image(s) using ${sources}. Results are displayed and ${saved} ${names.join(', ')}${reuse}. ` +
           `Give a brief caption${sentAt ? " that mentions you used the images from the user's earlier message" : ''}; do not call display_file.`;
       } catch (error) {
         if (ctx.signal?.aborted) throw error;

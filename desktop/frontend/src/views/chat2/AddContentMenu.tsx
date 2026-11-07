@@ -123,8 +123,7 @@ export const AddContentMenu: React.FC<{
   const fileInputRef = useRef<HTMLInputElement>(null)
   const menuFix = useEdgeNudge(open && !compact, { boundary: '.t2-chat-view' })
   const subFix = useEdgeNudge(pane && !compact ? `${pane}:${placement}` : '', { boundary: '.t2-chat-view' })
-  // 关掉时留替身放 80ms 退场(走查续八 8.4;.composer-menu 在 base.css 的退场名单上)。
-  useExitGhost(menuRef, open)
+  // 一级菜单的退场替身由 ComposerMenuSurface 留(这里再挂一份会叠两张,11-02 实测);二级面板不经它,自己留。
   useExitGhost(subRef, open && !!pane)
 
   const sessions = useApp((s) => s.sessions)

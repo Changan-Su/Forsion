@@ -6,7 +6,7 @@
  * deferGroup 连坐:解锁组内任一成员即整组解锁(如 start/wait_discussion),防"解锁了开头没解锁收尾"。
  */
 import type { ToolProvider, ToolDef } from '../toolRegistry.js';
-import { resolveTools, isDeferredIn, computerUseHiddenNames, computerUseUnavailableReason } from '../toolRegistry.js';
+import { resolveTools, isDeferredIn, isMcpDeferred, visibleMcpTools, computerUseHiddenNames, computerUseUnavailableReason } from '../toolRegistry.js';
 import { deps } from '../../seams/runtime.js';
 
 export const loadToolsProvider: ToolProvider = {
@@ -44,10 +44,18 @@ export const loadToolsProvider: ToolProvider = {
         const visible = resolveTools(profile, ctx);
         const available = new Map<string, ToolDef>();
         for (const [n, t] of visible) if (isDeferredIn(ctx, n, t.deferred)) available.set(n, t);
+        // MCP 工具(11-06 起缺省按需加载):与目录 / defs 同一判定(visibleMcpTools + isMcpDeferred)。
+        // 按需的进解锁集合(不连坐:一个连接器的工具整组装上就白省了);配了常驻的报「已可用」。
+        const owned = new Set<string>([...visible.keys(), ...(ctx.customTools?.keys() ?? [])]);
+        const mcpDeferred = new Set<string>();
+        const mcpReady = new Set<string>();
+        for (const t of visibleMcpTools(ctx, owned)) (isMcpDeferred(t) ? mcpDeferred : mcpReady).add(t.name);
         const toUnlock = new Set<string>();
         const ready = new Set<string>();
         const unknown: string[] = [];
         for (const n of names) {
+          if (mcpReady.has(n)) { ready.add(n); continue; }
+          if (mcpDeferred.has(n)) { toUnlock.add(n); continue; }
           if (visible.has(n) && !available.has(n)) { ready.add(n); continue; }
           const t = available.get(n);
           if (!t) { unknown.push(n); continue; }

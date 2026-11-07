@@ -247,6 +247,75 @@ export function sanitizeOnboarding(raw: unknown): PluginOnboardingSpec | undefin
   return out.intro || out.steps || out.settings || out.recommends || out.requires ? out : undefined
 }
 
+/** One first-use tip a plugin declares (manifest `guide.tips`, 2026-11-02+). The host decides when it shows:
+ *  its anchor (`data-guide-anchor` inside the plugin's own view) is on screen, `when` holds, the user hasn't done
+ *  the thing yet (`done`), hasn't dismissed it, and the host's pacing allows. Plain hint, never a gate. */
+export interface PluginGuideTip {
+  id: string
+  /** `data-guide-anchor` name inside the plugin's own views. */
+  at: string
+  /** `line` = one quiet line on the anchor's top edge; `ring` = ring around it + a small card (needs `title`). */
+  style: 'line' | 'ring'
+  /** Only one of these; absent = shows only when the plugin calls `ctx.guide.show(id)`. */
+  when?: { open: string; times: number } | { count: string; atLeast: number } | { visible: string[] }
+  /** Any of these counters ≥ 1 = learned, never shows again. Bare = the plugin's own `achievements.track()` name;
+   *  `app:` prefix = an official host event. */
+  done?: string[]
+  platform?: 'desktop' | 'mobile'
+  title?: string
+  text: string
+  en?: { title?: string; text?: string }
+}
+export interface PluginGuideSpec { tips: PluginGuideTip[] }
+
+const TIP_ID = /^[a-z0-9][a-z0-9-]{0,47}$/
+const EVENT_NAME = /^(app:)?[A-Za-z0-9][A-Za-z0-9_.:-]{0,79}$/
+
+/** Validate + cap a raw manifest `guide` value. A malformed tip drops on its own; the rest of the plugin is untouched.
+ *  Counts up to 12 valid, distinct tips (same rule as `requires`: junk early in the list can't eat real tips). */
+export function sanitizeGuide(raw: unknown): PluginGuideSpec | undefined {
+  const list = raw && typeof raw === 'object' ? (raw as Record<string, unknown>).tips : undefined
+  if (!Array.isArray(list)) return undefined
+  const tips: PluginGuideTip[] = []
+  const seen = new Set<string>()
+  for (const it of list.slice(0, 64)) {
+    if (tips.length >= 12) break
+    const o = it as Record<string, unknown>
+    if (!o || typeof o !== 'object' || typeof o.id !== 'string' || !TIP_ID.test(o.id) || seen.has(o.id)) continue
+    if (typeof o.at !== 'string' || !REQ_ID.test(o.at)) continue
+    const style = o.style === 'ring' ? 'ring' : o.style === 'line' ? 'line' : null
+    const text = str(o.text, 160)
+    const title = str(o.title, 60)
+    if (!style || !text || (style === 'ring' && !title)) continue
+    const w = o.when as Record<string, unknown> | undefined
+    let when: PluginGuideTip['when']
+    if (w && typeof w === 'object') {
+      if (typeof w.open === 'string' && REQ_ID.test(w.open)) when = { open: w.open, times: Math.max(1, Math.min(99, Math.floor(Number(w.times) || 1))) }
+      else if (typeof w.count === 'string' && EVENT_NAME.test(w.count)) when = { count: w.count, atLeast: Math.max(1, Math.min(9999, Math.floor(Number(w.atLeast) || 1))) }
+      else if (Array.isArray(w.visible)) {
+        const names = w.visible.filter((n): n is string => typeof n === 'string' && REQ_ID.test(n)).slice(0, 4)
+        if (names.length) when = { visible: names }
+      }
+      if (!when) continue // 写了 when 但一样都认不出:丢这条,别把它降级成「只能手动叫」
+    }
+    const tip: PluginGuideTip = { id: o.id, at: o.at, style, text }
+    if (when) tip.when = when
+    if (title) tip.title = title
+    if (Array.isArray(o.done)) {
+      const done = o.done.filter((e): e is string => typeof e === 'string' && EVENT_NAME.test(e)).slice(0, 4)
+      if (done.length) tip.done = done
+    }
+    if (o.platform === 'desktop' || o.platform === 'mobile') tip.platform = o.platform
+    const en = o.en as Record<string, unknown> | undefined
+    const enText = str(en?.text, 160)
+    const enTitle = str(en?.title, 60)
+    if (enText) tip.en = enTitle ? { title: enTitle, text: enText } : { text: enText }
+    seen.add(o.id)
+    tips.push(tip)
+  }
+  return tips.length ? { tips } : undefined
+}
+
 /** An activity event a plugin declares it emits (manifest `events`), for the automation builder's
  *  event catalog. Names are relative — the host prefixes `plugin:<id>:` everywhere they surface. */
 export interface PluginEventDecl {
@@ -369,6 +438,8 @@ export interface ExternalPluginSource {
   changelog?: string
   /** Declarative first-run setup card (manifest `onboarding`, sanitized by the main process). */
   onboarding?: PluginOnboardingSpec
+  /** First-use tips (manifest `guide`, 2026-11-02+; sanitized by `sanitizeGuide`). */
+  guide?: PluginGuideSpec
   /** Activity events the plugin declares it emits (manifest `events`, sanitized) — automation builder catalog. */
   events?: PluginEventDecl[]
   /** File suffixes this plugin claims as a custom file type (manifest `fileExtensions`, e.g. ['.mindmap.md']).

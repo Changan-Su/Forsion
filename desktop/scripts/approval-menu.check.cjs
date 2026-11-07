@@ -108,12 +108,12 @@ const html = `<!doctype html><html><head><meta charset="utf-8"><style>
   const opening = await trace(true)
   const openW = opening.at(-1)[1]
   const mids = (frames) => frames.filter(([t, w]) => t > 35 && t < 155 && w > closedW + 8 && w < openW - 8).length
-  check('宽栏模式胶囊展开直接到位，不补宽度', mids(opening) === 0, `${closedW.toFixed(1)} → ${openW.toFixed(1)},中间帧 ${mids(opening)}`)
+  check('宽栏模式胶囊展开补宽度，跟菜单进场同一只表(11-02 撤回走查续八 8.4)', mids(opening) > 0, `${closedW.toFixed(1)} → ${openW.toFixed(1)},中间帧 ${mids(opening)}`)
   const menuXs = opening.map((frame) => frame[2])
   const menuDrift = Math.max(...menuXs) - Math.min(...menuXs)
   check('胶囊展开时菜单锚点不横移（只从下方向上弹）', menuDrift < 8, `横向漂移 ${menuDrift.toFixed(1)}px`)
   const closing = await trace(false)
-  check('宽栏模式胶囊收回直接到位，不补宽度', mids(closing) === 0, `${openW.toFixed(1)} → ${closedW.toFixed(1)},中间帧 ${mids(closing)}`)
+  check('宽栏模式胶囊收回补宽度，跟菜单退场同一只表', mids(closing) > 0, `${openW.toFixed(1)} → ${closedW.toFixed(1)},中间帧 ${mids(closing)}`)
   await page.evaluate(() => {
     document.querySelector('.mode-pill-wrap').classList.add('is-open')
     document.querySelector('.mode-pill-btn').classList.add('is-open')

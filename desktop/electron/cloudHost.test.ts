@@ -50,6 +50,7 @@ const host: CloudHost = {
   setUnitHubFactory: () => {},
   diagnosticLogs: () => ({ engine: { state: null, lastError: null, lines: [] } }),
   addQuitGuard: () => () => {},
+  addFlushHook: () => () => {},
 }
 const imported: string[] = []
 const load = () => loadBuiltinDesktopEntries({

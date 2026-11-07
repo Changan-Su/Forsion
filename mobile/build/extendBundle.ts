@@ -5,29 +5,20 @@ import { resolve } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import type { Plugin } from 'vite'
 import bundles from '../../desktop/electron/builtinBundles.json'
-import { canonicalFiles, type BundleSignature } from '../../desktop/electron/bundleSignature'
+import { assertMobileExtendManifest, safePackagePath as safe, verifyExtendFiles as verifySigned } from '../../desktop/shared/extendSignature'
 import { stripTopDir, untar } from '../../desktop/electron/minitar'
 
 const ID = 'virtual:forsion-mobile-extend'
 const LOCK = resolve(import.meta.dirname, '../../desktop/package-lock.json')
 const CACHE = resolve(import.meta.dirname, '../.extend-cache')
 const trusted = bundles.find((b) => b.id === 'forsion-extend')!
-const safe = (p: string): boolean => !!p && !p.includes('\\') && !p.includes('\0') && !p.startsWith('/') && p.split('/').every((s) => s !== '.' && s !== '..' && !!s)
 
-export function verifyExtendFiles(files: Map<string, Buffer>, key = trusted.desktop!.signingKey): void {
-  const signature = JSON.parse(files.get('SIGNATURE')?.toString() || 'null') as BundleSignature | null
-  if (!signature || signature.alg !== 'ed25519' || !signature.files || typeof signature.sig !== 'string') throw new Error('Extend SIGNATURE is missing or malformed')
-  const entries = Object.entries(signature.files)
-  if (!entries.length || entries.length > 5000) throw new Error('Extend SIGNATURE file count is invalid')
-  if (!verify(null, Buffer.from(canonicalFiles(signature.files)), key, Buffer.from(signature.sig, 'base64'))) throw new Error('Extend signature does not match the pinned public key')
-  for (const required of ['manifest.json', 'package.json', 'dist/main.js']) if (!(required in signature.files)) throw new Error(`Extend ${required} is unsigned`)
-  for (const [p, digest] of entries) {
-    if (!safe(p) || p === 'SIGNATURE' || !/^[0-9a-f]{64}$/.test(digest)) throw new Error('Extend SIGNATURE has an unsafe entry')
-    const data = files.get(p)
-    if (!data || createHash('sha256').update(data).digest('hex') !== digest) throw new Error(`Extend ${p} does not match its signed hash`)
-  }
-  // Only signed bytes may reach the virtual module (extra package files are ignored).
-  for (const p of files.keys()) if (p !== 'SIGNATURE' && !(p in signature.files)) files.delete(p)
+/** Same rules as the runtime npm updater (desktop/shared/extendSignature.ts), with node:crypto. */
+export async function verifyExtendFiles(files: Map<string, Buffer>, key = trusted.desktop!.signingKey): Promise<void> {
+  await verifySigned(files, key, {
+    sha256Hex: (data) => createHash('sha256').update(data).digest('hex'),
+    verify: (message, signature, pem) => verify(null, message, pem, signature),
+  })
 }
 
 export async function loadExtendBundle(opts: { mode: string; testRoot?: string; packagePath?: string; packageIntegrity?: string; fetch?: typeof fetch; cacheDir?: string }) {
@@ -70,7 +61,7 @@ export async function loadExtendBundle(opts: { mode: string; testRoot?: string; 
     const entries = stripTopDir(untar(gunzipSync(tarball!, { maxOutputLength: 64 * 1024 * 1024 })))
     if (entries.some((e) => !safe(e.path)) || new Set(entries.map((e) => e.path)).size !== entries.length) throw new Error('Extend archive has unsafe or duplicate entries')
     files = new Map(entries.map((e) => [e.path, e.data]))
-    verifyExtendFiles(files)
+    await verifyExtendFiles(files)
     const pkg = JSON.parse(files.get('package.json')!.toString())
     const manifestVersion = JSON.parse(files.get('manifest.json')!.toString()).version
     const version = local ? (opts.packagePath ? manifestVersion : staged!.version) : lock.version
@@ -78,8 +69,8 @@ export async function loadExtendBundle(opts: { mode: string; testRoot?: string; 
   }
   const read = (p: string): string => files.get(p)?.toString('utf8') || ''
   const manifest = JSON.parse(read('manifest.json'))
-  if (manifest.mobileHostApi !== 1) throw new Error('Extend package is missing mobileHostApi:1; stage the signed mobile-compatible package before building')
-  if (manifest.id !== trusted.id || manifest.main !== 'dist/main.js' || !read(manifest.main)) throw new Error('Extend manifest identity or entry is invalid')
+  assertMobileExtendManifest(manifest, trusted.id)
+  if (!read(manifest.main)) throw new Error('Extend manifest identity or entry is invalid')
   const recipes = [...files.keys()].filter((p) => /^spaces\/[^/]+\/space.json$/.test(p)).map((p) => ({ slug: p.split('/')[1], json: read(p), plugin: manifest.id }))
   return { manifest, code: read(manifest.main), readme: read('README.md'), changelog: read('CHANGELOG.md'), recipes, testOnly: !!opts.testRoot }
 }

@@ -48,7 +48,7 @@ function ImprovePane() {
   return <OnboardingImprove view={view} onChange={setView} onBusyChange={() => {}} />
 }
 const view = (): ComputerHistoryView => ({
-  state: { v: 1, enabled, pausedUntil, status: current, since: now - 95 * MIN, updatedAt: now, platform, dataGen: 0 },
+  state: { v: 1, enabled, pausedUntil, status: current, since: now - 95 * MIN, updatedAt: now, platform, dataGen: 0, userTurnedOff: false },
   exclude: { apps: [...exclude.apps], domains: [...exclude.domains] },
   root: '/Users/me/.forsion-dev/computer-history',
   keepDays: 7,
