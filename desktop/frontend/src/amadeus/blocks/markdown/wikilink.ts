@@ -38,6 +38,21 @@ function fileIconEl(kind: keyof typeof FILE_ICON): SVGSVGElement {
 /** 与 prosemirror-keymap / unified/keyboard 判「Mod 是 Cmd 还是 Ctrl」同一口径;mac 上 Ctrl+点击是右键手势。 */
 export const IS_MAC_PLATFORM = typeof navigator !== 'undefined' && /Mac|iP(hone|[oa]d)/.test(navigator.platform)
 
+/** 小图门槛(显示宽度,px):夹在字里的图标 / 缩略图只留一颗缩小版 `</>`,两颗键比图还宽时会压到左边的字(11-07 用户选 5A)。 */
+const TINY_IMG_PX = 80
+/** 按图片**实际显示宽度**打 `amx-img-tiny`(改 `|宽度`、拖把手、换图都会变,所以盯尺寸而不是只看 load)。加载失败的不算。 */
+function watchTinyImage(wrap: HTMLElement, img: HTMLImageElement): void {
+  const mark = (): void => {
+    const w = img.getBoundingClientRect().width
+    wrap.classList.toggle('amx-img-tiny', img.naturalWidth > 0 && w > 0 && w < TINY_IMG_PX)
+  }
+  img.addEventListener('load', mark)
+  const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(mark) : null
+  ro?.observe(img)
+  // widget 销毁时由装饰的 destroy 调(见图片 widget 的 spec)
+  ;(wrap as HTMLElement & { __tinyStop?: () => void }).__tinyStop = () => { ro?.disconnect(); img.removeEventListener('load', mark) }
+}
+
 /** 打开双链的回调:newTab = ⌘/Ctrl+点击、中键(L-11),或「在新标签页打开光标处链接」命令。 */
 export type WikiOpen = (name: string, opts?: { newTab?: boolean }) => void
 
@@ -266,6 +281,7 @@ function buildDecorations(
               }) // 悬停 `</>` → 显式进入 `![[…]]` 源码
               // 悬停「打开」→ 应用内图片视图(⌘/Ctrl+点击新标签页);须挂在 `</>` 之后,见 attachOpenButton。
               if (canOpen()) attachOpenButton(wrap, view, (newTab) => onOpen(img.name, newTab ? { newTab: true } : undefined))
+              watchTinyImage(wrap, el)
               return wrap
             },
             // ⚠️ key **不带**选中位:同 key 的 widget DOM 会被 PM 复用,带上 picked 就等于
@@ -275,7 +291,10 @@ function buildDecorations(
             // 选中态改由 syncPicked 在 view.update 里就地打/摘属性,DOM 全程同一个节点。
             // key 也不带位置(P-04):带 from 的话上方打一个字,下游每张图都换 DOM、重新加载;standalone 进 key ——
             // 它决定点击选段落还是选源码,闭包里捕获的是构建那一刻的值。
-            { side: -1, ignoreSelection: true, key: `i:${standalone ? 1 : 0}:${m![0]}` },
+            {
+              side: -1, ignoreSelection: true, key: `i:${standalone ? 1 : 0}:${m![0]}`,
+              destroy: (node) => (node as HTMLElement & { __tinyStop?: () => void }).__tinyStop?.(),
+            },
           ),
         )
         continue

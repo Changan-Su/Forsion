@@ -215,6 +215,95 @@ async function main() {
   check('S9 只读:只有「打开」一颗、靠最右', ro.n === 1 && ro.solo && ro.gap !== null && ro.gap <= 8, JSON.stringify(ro))
   await p.close()
 
+  // ── 11-07 后续五条(方案页 docs/ToBeImproved/附件嵌入打开键方案_2026-11-07,用户「都按建议做」)──
+  const IMGURL = 'data:image/svg+xml;base64,' + Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><rect width="200" height="120" fill="#8fa9c9"/></svg>').toString('base64')
+  {
+    const pg = await browser.newPage({ locale: 'zh-CN', viewport: { width: 900, height: 900 } })
+    pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+    // 只给图片换成能加载的图(PDF 走原路径,别被当成图)
+    await pg.addInitScript((img) => {
+      let v
+      Object.defineProperty(window, '__assets', { configurable: true, get: () => v, set: (n) => { v = n; n.setUrlBuilder((ref, exact) => /\.(png|jpe?g|gif|webp|svg)$/i.test(ref) ? img : 'about:blank') } })
+    }, IMGURL)
+    const seed = '前一段\n\n![[report.pdf]]\n\n![[archive.zip]]\n\n![[https://example.com/a]]\n\n图标 ![[dot.png|22]] 和大图 ![[big.png|200]] 在这里\n\n后一段\n'
+    await pg.goto(`${URL}?upage&useed=${encodeURIComponent(seed)}`, { waitUntil: 'domcontentloaded' })
+    await pg.waitForSelector('.unified-embed .embed-file')
+    await pg.waitForTimeout(800)
+    await pg.evaluate(() => {
+      const st = window.__pageStore.getState()
+      window.__pageStore.setState({ files: [...new Set([...(st.files || []), 'report.pdf', 'archive.zip'])] })
+      window.__opened = []
+      window.__pageStore.setState({ openWikiLink: (name, src, o) => { window.__opened.push({ name, o: o ?? null }) } })
+    })
+    const hosts = '.unified-body .unified-embed'
+    // 1A:卡里不再有「打开 ↗」;文件卡整张点击 = 同一个打开
+    const inline = await pg.evaluate(() => ({
+      head: [...document.querySelectorAll('.embed-media-head .embed-media-btn')].map((b) => b.textContent),
+      cardOpen: !!document.querySelector('.embed-file .embed-file-open'),
+    }))
+    check('S10 PDF 标题行只剩「收起」,文件卡不写「打开 ↗」', inline.head.length === 1 && !inline.cardOpen, JSON.stringify(inline))
+    await pg.click('.unified-embed .embed-file')
+    let op = await pg.evaluate(() => window.__opened.splice(0))
+    check('S10 点文件卡 = 和「打开」键同一条路(开在旁边)', op.length === 1 && op[0].name === 'archive.zip' && op[0].o?.split === true, JSON.stringify(op))
+    // 2A:外壳收到卡片宽,两颗键在卡片右端、竖直居中、不压文件名
+    await pg.hover('.unified-embed .embed-file')
+    await pg.waitForTimeout(300)
+    const g = await pg.evaluate(() => {
+      const card = document.querySelector('.unified-embed .embed-file')
+      const host = card.closest('.unified-embed')
+      const r = (e) => e.getBoundingClientRect()
+      const c = r(card), h = r(host), o = r(host.querySelector(':scope > .amx-open-btn')), sb = r(host.querySelector(':scope > .amx-src-btn:not(.amx-open-btn)')), n = r(card.querySelector('.embed-file-name'))
+      return { hostVsCard: Math.round(h.width - c.width), inside: o.left >= c.left && sb.right <= c.right + 0.5, mid: Math.abs((o.top + o.bottom) / 2 - (c.top + c.bottom) / 2) < 1.5, nameClear: n.right <= o.left }
+    })
+    check('S11 小文件卡:外壳=卡宽,键在卡里右端竖直居中、不压文件名', g.hostVsCard <= 1 && g.inside && g.mid && g.nameClear, JSON.stringify(g))
+    // 3A:右键文件卡 = 链接菜单(含复制路径、编辑链接);块层不弹块菜单
+    await pg.click('.unified-embed .embed-file', { button: 'right' })
+    await pg.waitForTimeout(300)
+    const m1 = await pg.evaluate(() => [...document.querySelectorAll('.amx-link-menu button')].map((b) => b.dataset.act))
+    check('S12 右键文件卡弹链接菜单(复制路径 + 编辑链接)', m1.includes('copypath') && m1.includes('edit'), JSON.stringify(m1))
+    await pg.click('.amx-link-menu [data-act="edit"]')
+    await pg.waitForTimeout(300)
+    const srcShown = await pg.evaluate(() => document.querySelector('.unified-body .ProseMirror').innerText.includes('![[archive.zip]]'))
+    check('S12 菜单「编辑链接」= 露源码', srcShown)
+    await pg.locator('.unified-body .ProseMirror > p').last().click()
+    await pg.waitForTimeout(300)
+    // 4A:网页嵌入有「在浏览器中打开」;外链箭头不挂在卡上 / 藏起来的源码链接上
+    const web = await pg.evaluate((sel) => {
+      const h = [...document.querySelectorAll(sel)].find((x) => x.querySelector('.amx-web'))
+      const ob = h?.querySelector(':scope > .amx-open-btn')
+      const after = (el) => el ? getComputedStyle(el, '::after').content : null
+      const hidden = h?.closest('p')?.querySelector('a:has(> .wikilink-src-hidden)')
+      return { open: ob?.title ?? null, card: after(h?.querySelector('a.amx-bm')), hidden: after(hidden), hasHidden: !!hidden }
+    }, hosts)
+    check('S13 网页嵌入挂「在浏览器中打开」,卡与隐藏源码链接都不挂 ↗', web.open === '在浏览器中打开' && web.card === 'none' && (!web.hasHidden || web.hidden === 'none'), JSON.stringify(web))
+    await pg.evaluate((sel) => { [...document.querySelectorAll(sel)].find((x) => x.querySelector('.amx-web')).querySelector(':scope > .amx-open-btn').click() }, hosts)
+    op = await pg.evaluate(() => window.__opened.splice(0))
+    check('S13 点它 → openWikiLink(网址)', op.length === 1 && op[0].name === 'https://example.com/a', JSON.stringify(op))
+    const wb = await pg.evaluate((sel) => [...document.querySelectorAll(sel)].find((x) => x.querySelector('.amx-web')).getBoundingClientRect().toJSON(), hosts)
+    await pg.mouse.click(wb.right - 60, wb.top + 30, { button: 'right' })
+    await pg.waitForTimeout(300)
+    const m2 = await pg.evaluate(() => [...document.querySelectorAll('.amx-link-menu button')].map((b) => b.dataset.act))
+    check('S13 右键网页嵌入:浏览器 / 复制链接 / 编辑链接', m2.join(',') === 'browser,copylink,edit', JSON.stringify(m2))
+    await pg.keyboard.press('Escape')
+    // 附件丢了:嵌入的右键菜单不给「创建笔记」(否则建出一篇叫 `gone.zip` 的笔记),只剩「编辑链接」
+    await pg.evaluate(() => { const st = window.__pageStore.getState(); window.__pageStore.setState({ files: st.files.filter((f) => f !== 'archive.zip') }) })
+    await pg.click('.unified-embed .embed-file', { button: 'right' })
+    await pg.waitForTimeout(300)
+    const m3 = await pg.evaluate(() => [...document.querySelectorAll('.amx-link-menu button')].map((b) => b.dataset.act))
+    check('S13b 附件丢了:嵌入菜单只有「编辑链接」,没有「创建笔记」', m3.join(',') === 'edit', JSON.stringify(m3))
+    await pg.keyboard.press('Escape')
+    // 5A:显示宽 < 80px 的图只留缩小版 `</>`;大图两颗都在
+    const tiny = await pg.evaluate(() => [...document.querySelectorAll('.wiki-inline-img-wrap')].map((w) => ({
+      w: Math.round(w.querySelector('img').getBoundingClientRect().width),
+      tiny: w.classList.contains('amx-img-tiny'),
+      open: getComputedStyle(w.querySelector('.amx-open-btn')).display,
+      srcH: Math.round(w.querySelector('.amx-src-btn:not(.amx-open-btn)').getBoundingClientRect().height),
+    })))
+    const small = tiny.find((x) => x.w === 22), big = tiny.find((x) => x.w === 200)
+    check('S14 22px 图只留 16px 高的 `</>`,200px 图两颗都在', !!small && small.tiny && small.open === 'none' && small.srcH === 16 && !!big && !big.tiny && big.open !== 'none', JSON.stringify(tiny))
+    await pg.close()
+  }
+
   const fails = results.filter((r) => !r).length
   console.log(`\n${results.length - fails}/${results.length} passed, ${fails} failed`)
   await browser.close()

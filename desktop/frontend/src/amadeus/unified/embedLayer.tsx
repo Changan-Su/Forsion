@@ -57,10 +57,7 @@ import { canOpenAttachment } from '../lib/hostCaps'
 import { HostLocaleProvider, registerMessages, subscribeLocale, translate } from '../../i18n'
 
 registerMessages({
-  'uembed.openInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
-  'uembed.openWithSystem': { zh: '用系统默认程序打开', en: 'Open with the system default app' },
-  'uembed.openPdfInTab': { zh: '在 Forsion 标签页中打开', en: 'Open in a Forsion tab' },
-  'uembed.open': { zh: '打开 ↗', en: 'Open ↗' },
+  'uembed.openBrowser': { zh: '在浏览器中打开', en: 'Open in browser' },
   'uembed.startAt': { zh: '起播时刻', en: 'Start time' },
   'uembed.badAnchor': { zh: '锚点无效 · 从 0 秒起播', en: 'Invalid anchor · playing from 0:00' },
   'uembed.badAnchorTip': {
@@ -192,7 +189,7 @@ export function isSoftSourceEmbed(node: ProseNode | null | undefined): boolean {
 
 /**
  * 右上角「打开」键要开的目标(交给 openWikiLink);不挂这颗键 → null。
- * 只给文件引用:网页 / 书签 / 按钮 / 文档 Agent / 交互块没有「被引用的文件」可开。
+ * 给文件引用与网页嵌入;书签卡本身就是链接,按钮 / 文档 Agent / 交互块没有可开的目标。
  *  · 媒体用剥掉 `#t=` 的 base:带时刻锚交给 openWikiLink 会先问本页播放器 —— 被嵌入体自己认领,只就地 seek 不打开;
  *  · 笔记 / 插件剥掉 `|别名`;宿主打不开附件时,普通文件不出这颗键(同 FileEmbed 的 G2-13 口径,不出点了没反应的键)。
  */
@@ -205,14 +202,17 @@ export function openTargetOf(kind: EmbedKind): string | null {
     case 'draw': return kind.target
     case 'plugin':
     case 'note': return kind.target.split('|')[0].trim() || null
+    case 'web': return kind.url // openWikiLink 认 http(s) → 系统浏览器
     default: return null
   }
 }
 
 // ── 桥接组件(只吃字符串 + 回调,不读 activePage —— unified 数据安全禁令)────────────────
 
-function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
+function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter, onOpen }: {
   name: string
+  /** 卡片整张点击 = 右上角「打开」同一个动作(11-07 用户定:只留右上角那颗,卡里不再写「打开 ↗」)。 */
+  onOpen?: (newTab: boolean) => void
   fileKind: 'pdf' | 'video' | 'audio' | 'other'
   pagePath: string
   loc?: MediaLoc | null
@@ -222,13 +222,12 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
 }): ReactElement {
   const t = useT()
   const files = usePageStore((s) => s.files)
-  const openWikiLink = usePageStore((s) => s.openWikiLink)
   const [open, setOpen] = useState(true)
   const pdfVaultPath = fileKind === 'pdf' ? resolveFileName(name, files, pagePath) : null
   if (fileKind === 'other') {
     const sub = /\.[a-z0-9]+\.md$/i.test(name) // 插件文件类型:应用内开,不经系统程序
     // 宿主打不开附件(移动本地库,评审 G2-13):只是一张名片,不是一颗点了没反应的按钮。
-    if (!sub && !canOpenAttachment()) {
+    if (!onOpen || (!sub && !canOpenAttachment())) {
       return (
         <div className="embed-file">
           <span className="embed-file-ic" aria-hidden>📄</span>
@@ -237,17 +236,9 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
       )
     }
     return (
-      <button
-        className="embed-file"
-        onClick={() => {
-          if (/\.[a-z0-9]+\.md$/i.test(name)) openWikiLink(name, pagePath)
-          else void amadeus.openAttachment(pagePath, name)
-        }}
-        title={/\.[a-z0-9]+\.md$/i.test(name) ? t('uembed.openInTab') : t('uembed.openWithSystem')}
-      >
+      <button className="embed-file" onClick={(e) => onOpen(e.metaKey || e.ctrlKey)} title={t('srctoggle.open')}>
         <span className="embed-file-ic" aria-hidden>📄</span>
         <span className="embed-file-name">{name}</span>
-        <span className="embed-file-open">{t('uembed.open')}</span>
       </button>
     )
   }
@@ -264,17 +255,7 @@ function FileEmbed({ name, fileKind, pagePath, loc, badAnchor, insertAfter }: {
           <span className="embed-media-warn" title={t('uembed.badAnchorTip')}>{t('uembed.badAnchor')}</span>
         )}
         <button className="embed-media-btn" onClick={() => setOpen((o) => !o)}>{open ? t('uembed.collapse') : t('uembed.expand')}</button>
-        {/* PDF 走应用内阅读器,恒可开;视频 / 音频走系统程序,宿主打不开就不出这颗键(G2-13)。 */}
-        {(fileKind === 'pdf' || canOpenAttachment()) && <button
-          className="embed-media-btn"
-          title={fileKind === 'pdf' ? t('uembed.openPdfInTab') : t('uembed.openWithSystem')}
-          onClick={() => {
-            if (fileKind === 'pdf') openWikiLink(name, pagePath)
-            else void amadeus.openAttachment(pagePath, name)
-          }}
-        >
-          {t('uembed.open')}
-        </button>}
+        {/* 「打开」只在右上角(11-07 用户定),标题行不再放第二颗。 */}
       </div>
       {open && fileKind === 'pdf' && (
         pdfVaultPath ? (
@@ -370,9 +351,11 @@ function CrossNoteEmbed({ target, pagePath, readOnly }: { target: string; pagePa
   )
 }
 
-function EmbedBody({ kind, pagePath, replaceText, insertAfter, startTask, readOnly = false }: {
+function EmbedBody({ kind, pagePath, replaceText, insertAfter, startTask, onOpen, readOnly = false }: {
   kind: EmbedKind
   pagePath: string
+  /** 与右上角「打开」键同一个动作(文件卡整张点击用);缺 = 这类嵌入不给打开。 */
+  onOpen?: (newTab: boolean) => void
   startTask: (spec: DocAgentSpec, mode: 'task' | 'prompt') => Promise<{ sessionId?: string }>
   /** 组件要求改写源文本(书签改 URL / db 换视图 / 按钮改配置)→ 单事务替换节点内文。 */
   replaceText: (next: string) => void
@@ -405,7 +388,7 @@ function EmbedBody({ kind, pagePath, replaceText, insertAfter, startTask, readOn
     case 'file':
       return (
         <FileEmbed
-          name={kind.name} fileKind={kind.fileKind} pagePath={pagePath}
+          name={kind.name} fileKind={kind.fileKind} pagePath={pagePath} onOpen={onOpen}
           loc={kind.loc} badAnchor={kind.badAnchor} insertAfter={readOnly ? () => {} : insertAfter}
         />
       )
@@ -630,6 +613,29 @@ export function createEmbedLayer(opts: {
                   attachResizeHandle(dom, dom, (width) => replaceText(`![[${withEmbedWidth(inner, width)}]]`))
                 }
               }
+              /** 「打开」:右上角键、文件卡整张、右键菜单共用。目标点击时现算(源码被改过,闭包里的 kind 已过期)。 */
+              const openNow = (newTab: boolean): void => {
+                const v = viewRef
+                const hit = v ? findNth(v) : null
+                const node = v && hit ? v.state.doc.nodeAt(hit.at) : null
+                const now = node ? classifyEmbed(node) : kind
+                const target = now ? openTargetOf(now) : null
+                if (!target) return
+                const o = newTab ? { newTab: true } : undefined
+                if (opts.open) opts.open(target, o)
+                else usePageStore.getState().openWikiLink(target, opts.path, o)
+              }
+              /** 显式露源码(`</>` 与右键菜单的「编辑链接」)。 */
+              const revealSrc = (): void => {
+                const v = viewRef
+                if (!v) return
+                const hit = findNth(v)
+                if (!hit) return
+                const tr = v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(hit.at + 1)))
+                tr.setMeta(key, { sourcePos: hit.at })
+                v.dispatch(tr)
+                v.focus()
+              }
               const root = createRoot(host)
               // 独立根跨不过 LocaleProvider:子组件(书签卡/媒体/网页/按钮/多维表/画板/跨笔记编辑器)全走 useI18n,
               // 不包就恒回落中文(评审 R-15)。HostLocaleProvider 只订 currentLocale,切语言整棵树跟着重渲。
@@ -638,6 +644,7 @@ export function createEmbedLayer(opts: {
                 <EmbedBody
                   kind={nextKind}
                   pagePath={opts.path}
+                  onOpen={openTargetOf(nextKind) !== null ? openNow : undefined}
                   readOnly={!!opts.readOnly}
                   insertAfter={(md) => {
                     // 本层的语法(`![[x]]` / `[[x#t=95|01:35]]`)都是**段落里的纯文本**,所以插入
@@ -704,31 +711,40 @@ export function createEmbedLayer(opts: {
                 </HostLocaleProvider>,
               )
               render(kind)
-              attachSourceButton(dom, view, () => {
-                const v = viewRef
-                if (!v) return
-                const hit = findNth(v)
-                if (!hit) return
-                const tr = v.state.tr.setSelection(TextSelection.near(v.state.doc.resolve(hit.at + 1)))
-                tr.setMeta(key, { sourcePos: hit.at })
-                v.dispatch(tr)
-                v.focus()
-              })
+              attachSourceButton(dom, view, revealSrc)
               dom.querySelector('.amx-src-btn')?.classList.add('amx-src-btn--block')
-              // 「打开」键:只给文件引用(soft 那五类);目标点击时现算(源码被改过,闭包里的 kind 已过期)。
+              // 「打开」键:文件引用(soft 那五类)+ 网页嵌入(系统浏览器)。
               if (openTargetOf(kind) !== null) {
-                attachOpenButton(dom, view, (newTab) => {
-                  const v = viewRef
-                  const hit = v ? findNth(v) : null
-                  const node = v && hit ? v.state.doc.nodeAt(hit.at) : null
-                  const now = node ? classifyEmbed(node) : kind
-                  const target = now ? openTargetOf(now) : null
-                  if (!target) return
-                  const o = newTab ? { newTab: true } : undefined
-                  if (opts.open) opts.open(target, o)
-                  else usePageStore.getState().openWikiLink(target, opts.path, o)
-                }, true)
+                attachOpenButton(dom, view, openNow, true, kind.k === 'web' ? translate('uembed.openBrowser') : undefined)
               }
+              // 右键 = 这份文件 / 这个网页的菜单(同右键一条双链,amadeusLinkMenu 接);块菜单仍走 ⠿ 把手。
+              // 只认这一块自己的外壳、卡片、标题行、网页卡、右上角键:PDF 阅读区 / 视频 / 多维表格子 / 插件 / 嵌入笔记正文里
+              // 各有各的右键;里层自己弹了菜单(多维表视图标签等 preventDefault 过)也不抢。
+              dom.addEventListener('contextmenu', (e) => {
+                if (e.defaultPrevented) return
+                const t = e.target as HTMLElement
+                // 嵌入笔记里还有一个编辑器(它的图片键、它自己的嵌入):那是里面那份的事,不归外层这一块
+                const pm = t.closest('.ProseMirror')
+                if (pm && pm !== viewRef?.dom) return
+                const btn = t.closest('.amx-src-btn')
+                const area = t.closest('.embed-file, .embed-media-head, .embed-head, .amx-db-head, .amx-web, .amx-bm-video')
+                const zone = t === dom || t.parentElement === dom || btn?.parentElement === dom || (!!area && area.closest('.unified-embed') === dom)
+                if (!zone) return
+                const v = viewRef
+                const hit = v ? findNth(v) : null
+                const node = v && hit ? v.state.doc.nodeAt(hit.at) : null
+                const now = node ? classifyEmbed(node) : kind
+                const inner = now ? openTargetOf(now) : null
+                if (!inner) return
+                const edit = v?.editable ? revealSrc : undefined
+                const taken = !dom.dispatchEvent(new CustomEvent('amadeus:wikilink-menu', {
+                  // attachment:非笔记嵌入(附件 / 多维表 / 画板 / 插件文件 / 网页)—— 丢了也不给「创建笔记」
+                  bubbles: true, cancelable: true, detail: { inner, x: e.clientX, y: e.clientY, edit, embed: true, attachment: now?.k !== 'note' },
+                }))
+                if (!taken) return // 没挂菜单宿主:照旧交给块层(块菜单)
+                e.preventDefault()
+                e.stopPropagation()
+              })
               roots.set(dkey, { root, dom, text: renderedText, render, refs: 1 })
               return dom
             },

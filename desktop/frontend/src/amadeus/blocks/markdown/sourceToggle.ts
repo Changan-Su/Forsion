@@ -72,12 +72,12 @@ export function attachSourceButton(host: HTMLElement, view: EditorView, reveal: 
  * **须在 attachSourceButton 之后调用**:台架和外壳的 `querySelector('.amx-src-btn')` 取第一颗当 `</>`,
  * 视觉位置靠 CSS 的 right 偏移,不靠 DOM 顺序。
  */
-export function attachOpenButton(host: HTMLElement, view: EditorView, open: (newTab: boolean) => void, block = false): void {
+export function attachOpenButton(host: HTMLElement, view: EditorView, open: (newTab: boolean) => void, block = false, title?: string): void {
   const b = document.createElement('button')
   b.type = 'button'
   b.className = `amx-src-btn amx-open-btn${block ? ' amx-src-btn--block' : ''}${view.editable ? '' : ' amx-src-btn--solo'}`
-  b.title = translate('srctoggle.open')
-  b.setAttribute('aria-label', translate('srctoggle.openAria'))
+  b.title = title ?? translate('srctoggle.open')
+  b.setAttribute('aria-label', title ?? translate('srctoggle.openAria'))
   b.contentEditable = 'false'
   b.innerHTML = OPEN_ICON
   // mousedown 吞掉:否则 ProseMirror / 嵌入外壳先拿去改选区(选中整块、露源码)。

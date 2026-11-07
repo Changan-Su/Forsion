@@ -387,10 +387,12 @@ a { color: var(--accent-ink); text-decoration: none; }
 a:hover { color: var(--accent-ink); }
 /* 外链 ↗(2026-11-04 用户定,借 Obsidian):网页链接和双链同为强调色后,靠末尾这枚小箭头认出「会离开应用」。
    聊天 .citelink、.md-body(更新日志 / 技能说明等)与 Amadeus 正文链接共用这一条;只认 http(s),相对路径 / 笔记链接不挂;包图片的链接不挂。
-   用 mask + currentColor 跟随链接色;inline-block 让它不吃链接的下划线。 */
+   用 mask + currentColor 跟随链接色;inline-block 让它不吃链接的下划线。
+   Amadeus 里两处不挂(11-07):藏起来的源码链接(网页嵌入那一段,渲染体之外多出一枚孤零零的 ↗)、
+   书签卡 / 网页嵌入卡自己(整张卡就是链接,箭头落在卡尾、压在右上角 `</>` 上)。 */
 .t2-content a.citelink[href^="http"]::after,
 .md-body a[href^="http"]:not(:has(img))::after,
-.am-app .milkdown .ProseMirror a[href^="http"]:not(:has(img))::after {
+.am-app .milkdown .ProseMirror a[href^="http"]:not(:has(img, .wikilink-src-hidden)):not(.amx-bm, .amx-web a)::after {
   content: '';
   display: inline-block;
   width: 0.62em;

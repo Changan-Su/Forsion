@@ -275,7 +275,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .am-app .embed-image-body { padding: 2px 4px; }
 .am-app .embed-image { display: block; max-width: 100%; height: auto; border-radius: var(--radius-sm, 6px); }
 
-/* 非图片文件卡片 `![[report.pdf]]`:图标 + 文件名 + 打开(点击 openAttachment)。
+/* 非图片文件卡片 `![[archive.zip]]`:图标 + 文件名;整张可点(v4 走右上角「打开」同一个动作,v3 交系统程序)。
    与 Chat 浮卡同一配方(c3):细描边 + 统一淡阴影 + 浮层圆角;左侧那道 2px 深色竖条去掉。 */
 .am-app .embed-file {
   display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
@@ -288,6 +288,12 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .am-app .embed-file-ic { flex: 0 0 auto; font-size: var(--ui-font-heading, 14px); }
 .am-app .embed-file-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .am-app .embed-file-open { flex: 0 0 auto; font-size: var(--ui-font-caption, 11px); color: var(--text-muted); }
+/* v4 嵌入里的小文件卡(11-07 用户选 2A):外壳收到卡片那么宽,右上角两颗键落进卡片右端、竖直居中,
+   卡片常驻给它们留位(悬停才浮现,不留位就压文件名)。一颗键(只读只有「打开」/ 打不开只有 `</>`)留一颗的位。 */
+.am-app .unified-embed:has(> .unified-embed-body > .embed-file) { width: fit-content; max-width: 100%; }
+.am-app .unified-embed:has(> .unified-embed-body > .embed-file) > .amx-src-btn--block { top: 50%; transform: translateY(-50%); }
+.am-app .unified-embed.amx-has-src-btn > .unified-embed-body > .embed-file { padding-inline-end: 44px; }
+.am-app .unified-embed:has(> .amx-open-btn:not(.amx-src-btn--solo)) > .unified-embed-body > .embed-file { padding-inline-end: 76px; }
 
 /* 拖入文件反馈:不再给整篇文档画虚线框(视觉像调试态,而且状态残留时会长期围住正文)。
  * 文档模式只在顶部留一枚短 accent 光条;画布模式由 .amx-stage.amx-dropzone 自己反馈,避免双层提示。 */
@@ -559,6 +565,9 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .am-app .amx-open-btn.amx-src-btn--solo { right: 4px; }
 .am-app .amx-src-btn--block.amx-open-btn.amx-src-btn--solo { right: 6px; }
 /* 块公式的复制键:排在 `</>` 左边(同「打开」键的右移量);只读视图没有 `</>`,靠到最右。点完 1.5 秒内是 ✓。 */
+/* 小图(显示宽 < 80px,wikilink.ts 打 amx-img-tiny):只留缩小版 `</>`,挂右上角外沿(行内公式那一档);打开走双击看大图。 */
+.am-app .wiki-inline-img-wrap.amx-img-tiny > .amx-open-btn { display: none; }
+.am-app .wiki-inline-img-wrap.amx-img-tiny > .amx-src-btn { top: -11px; right: -6px; height: 16px; padding: 0 4px; }
 .am-app .amx-src-btn--copy { right: 40px; padding: 0 5px; }
 .am-app .amx-src-btn--copy.amx-src-btn--solo { right: 4px; }
 .am-app .amx-src-btn--copy.is-copied { opacity: 1; color: var(--accent-ink, var(--accent)); }
@@ -808,7 +817,7 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
   background: var(--overlay-light, rgba(127, 127, 127, 0.05)); font-size: var(--ui-font-meta, 12px);
 }
 .am-app .embed-media-head .embed-file-name { flex: 1 1 auto; }
-/* v4 嵌入右上角悬停的「打开」+ `</>`:标题行常驻给它们留位(悬停才浮现,不留位就压在「收起 / 打开 ↗」上),
+/* v4 嵌入右上角悬停的「打开」+ `</>`:标题行常驻给它们留位(悬停才浮现,不留位就压在「收起」上),
    并把两颗键竖直摆到标题行中线(同多维表的 top: 10px)。只读只有「打开」一颗,留一颗的位。 */
 .am-app .unified-embed.amx-has-src-btn > .unified-embed-body > .embed-media > .embed-media-head { padding-inline-end: 80px; }
 .am-app .unified-embed.amx-has-src-btn:not(:has(> .amx-src-btn:not(.amx-src-btn--solo))) > .unified-embed-body > .embed-media > .embed-media-head { padding-inline-end: 40px; }
