@@ -297,6 +297,9 @@ export interface TelemetryHostOptions {
   coreVersion: () => string | null
   now?: () => number
   log?: (m: string) => void
+  /** 台架用的旁路:每条过了上限、要交给 Extend 的事件(含还在缓冲里的)抄一份,不占订阅、不吃启动缓冲。
+   *  main.ts 只在设了 FORSION_TELEMETRY_TRACE 时接上(e2e:telemetry 用它在宿主 → Extend 这一侧断言)。 */
+  tap?: (ev: HostTelemetryEvent) => void
 }
 
 export function createTelemetryHost(o: TelemetryHostOptions) {
@@ -325,6 +328,7 @@ export function createTelemetryHost(o: TelemetryHostOptions) {
       sent[event] = n + 1
     }
     const ev: HostTelemetryEvent = { event, ts: new Date(now()).toISOString(), props }
+    if (o.tap) try { o.tap(ev) } catch { /* 旁路出错不影响上报 */ }
     if (buffer) { if (buffer.length < BUFFER_CAP) buffer.push(ev); return } // 留最早的:启动耗时 / 启动期崩溃最要紧
     deliver(ev)
   }

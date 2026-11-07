@@ -374,3 +374,18 @@ describe('插件 id 规则(真实值)', () => {
     expect(publicPluginId(STORE_ID, false)).toBe('local')
   })
 })
+
+describe('台架旁路 tap', () => {
+  it('抄到每条要交给 Extend 的事件(含启动缓冲里的),不吃缓冲:之后订阅的照样拿到回放;被上限丢的不抄;tap 抛错不影响', () => {
+    const tapped: string[] = []
+    const h = createTelemetryHost({ packaged: true, sessionId: 's', channel: () => 'stable', coreVersion: () => null, tap: (e) => { tapped.push(e.event); if (e.event === 'update') throw new Error('disk full') } })
+    h.emit('perf', { kind: 'startup', startupMs: 10 })
+    h.emit('update', updateProps('engine', 'current'))
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    expect(got.map((e) => e.event)).toEqual(['perf', 'update'])
+    for (let i = 0; i < HOURLY_CAP.onboarding + 2; i++) h.report('onboarding', { mode: 'full', outcome: 'finish' })
+    expect(tapped.filter((e) => e === 'onboarding')).toHaveLength(HOURLY_CAP.onboarding)
+    expect(tapped.slice(0, 2)).toEqual(['perf', 'update'])
+  })
+})

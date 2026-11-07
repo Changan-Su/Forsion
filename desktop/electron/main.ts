@@ -31,7 +31,7 @@ import { pathToFileURL } from 'url'
 import { readFile, writeFile, mkdir, readdir, stat, lstat, rename, cp, rm } from 'fs/promises'
 import { writeHostTextFile } from './hostTextWrite'
 import { clearRecoveryNotice, createSerialQueue, lockedUpdateJson, readJsonRecovering, readRecoveryNotice, writePrivateJson } from './configWrite'
-import { existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
+import { appendFileSync, existsSync, mkdirSync, realpathSync, writeFileSync, renameSync, rmSync, watch as fsWatch } from 'fs'
 import { ensureCliInstalled } from './cliInstall'
 import { PRODUCT } from './product'
 import { readSpaceIconDataUrl } from './spaceIcon'
@@ -1625,6 +1625,8 @@ const telemetry = createTelemetryHost({
   channel: () => { refreshTelemetryChannel(); return (telemetryBeta ?? app.getVersion().includes('-')) ? 'beta' : 'stable' },
   coreVersion: () => (PRODUCT.agentBackend ? backend.engineVersion() ?? backend.engineOverlayVersion() : null),
   log: (m) => console.warn(m),
+  // 台架旁路:FORSION_TELEMETRY_TRACE=<文件> 时把交给 Extend 的每条事件(已过白名单整形)追加成一行 JSON(e2e:telemetry 用)
+  ...(process.env.FORSION_TELEMETRY_TRACE ? { tap: (ev) => appendFileSync(process.env.FORSION_TELEMETRY_TRACE!, `${JSON.stringify(ev)}\n`) } : {}),
 })
 refreshTelemetryChannel()
 const uptimeS = (): number => Math.round(process.uptime())
