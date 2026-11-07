@@ -135,13 +135,22 @@ export function noteUserDocumentEdit(slug: string, before: MemorySnapshot, after
     if (added) ledger.inc('daily_memory', 'userAdd', { dim, n: added });
   } catch { /* 同上 */ }
 }
-/** 还原到某一版:要是这一版之后有过 Dream 整理,还原回来的条目 = 被 Dream 退役、又被用户要回来的。 */
-export function noteUserRestore(slug: string, revisions: Array<{ version: string; source: MemorySource }>, version: string, before: MemorySnapshot, after: MemorySnapshot): void {
+/** 还原到某一版:要回来的条目里,有哪些是这一版之后被某次 Dream 整理拿掉的(按 Dream 前后两版的条目比,归一原文)。
+ *  revisions = repo.revisions()(新的在前,第 0 条是当前这一版)。 */
+export function noteUserRestore(slug: string, revisions: Array<{ version: string; source: MemorySource; entries: Array<{ content: string }> }>, version: string, before: MemorySnapshot, after: MemorySnapshot): void {
   try {
-    const at = revisions.findIndex((r) => r.version === version); // 新的在前
-    if (at <= 0 || !revisions.slice(0, at).some((r) => r.source?.kind === 'dream')) return;
-    const had = new Set(before.entries.map((e) => normalizeMemoryFact(e.content)));
-    const back = after.entries.filter((e) => !had.has(normalizeMemoryFact(e.content))).length;
+    const at = revisions.findIndex((r) => r.version === version);
+    if (at <= 0) return;
+    const facts = (r: { entries: Array<{ content: string }> }): Set<string> => new Set(r.entries.map((e) => normalizeMemoryFact(e.content)));
+    const retired = new Set<string>();
+    for (let i = 0; i < at; i++) { // revisions[i] 由 revisions[i + 1] 变来
+      if (revisions[i].source?.kind !== 'dream') continue;
+      const kept = facts(revisions[i]);
+      for (const f of facts(revisions[i + 1])) if (!kept.has(f)) retired.add(f);
+    }
+    if (!retired.size) return;
+    const had = facts(before);
+    const back = after.entries.filter((e) => { const f = normalizeMemoryFact(e.content); return !had.has(f) && retired.has(f); }).length;
     if (back) ledger.inc('daily_memory', 'userRestoreDreamRetired', { dim: agentRoleOf(slug), n: back });
   } catch { /* 同上 */ }
 }

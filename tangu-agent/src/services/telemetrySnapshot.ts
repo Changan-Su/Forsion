@@ -163,6 +163,8 @@ export async function snapshotHuman(now = Date.now()): Promise<void> {
     if (Array.isArray(db?.rows)) ledger.set('daily_human', 'gCalendarRows', db.rows.length, { now });
   });
   const agents = await listAgents();
+  // listAgents 读不了目录时回空清单;装好的引擎至少有内置那几位 —— 空 = 不知道,这三项不写(不当 0)
+  if (!agents.length) return;
   ledger.set('daily_human', 'gAgentsTotal', agents.length, { now });
   each(() => ledger.set('daily_human', 'gAgentsWithHumanMd', agents.filter((a) => (readText(join(agentsDir(), a.slug, 'HUMAN.md')) ?? '').trim().length > 0).length, { now }));
   const turning = utcDay(now - WEEK);

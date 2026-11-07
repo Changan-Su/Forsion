@@ -138,9 +138,15 @@ describe('daily_memory', () => {
     noteUserEntryEdit('xyra', 'add', undefined);
     const snap = (entries: any[]) => ({ entries } as MemorySnapshot);
     noteUserDocumentEdit('xyra', snap([recent, old, mine]), snap([old, { id: 'd', content: 'w' }]));
-    const revisions = [{ version: 'v3', source: { kind: 'manual' } }, { version: 'v2', source: { kind: 'dream' } }, { version: 'v1', source: { kind: 'explicit' } }] as any;
-    noteUserRestore('xyra', revisions, 'v1', snap([{ id: 'k', content: 'kept' }]), snap([{ id: 'k', content: 'kept' }, { id: 'r', content: 'retired by dream' }]));
-    noteUserRestore('xyra', revisions, 'v2', snap([]), snap([{ id: 'q', content: 'q' }])); // 之后没有 Dream
+    // v1 → v2(Dream 拿掉了 retired)→ v3(用户整份编辑拿掉了 manual-gone);还原 v1 只算 Dream 拿掉的那条
+    const e = (content: string) => ({ content });
+    const revisions = [
+      { version: 'v3', source: { kind: 'manual' }, entries: [e('kept')] },
+      { version: 'v2', source: { kind: 'dream' }, entries: [e('kept'), e('manual-gone')] },
+      { version: 'v1', source: { kind: 'explicit' }, entries: [e('kept'), e('manual-gone'), e('retired by dream')] },
+    ] as any;
+    noteUserRestore('xyra', revisions, 'v1', snap([{ id: 'k', content: 'kept' }]), snap([{ id: 'k', content: 'kept' }, { id: 'm', content: 'manual-gone' }, { id: 'r', content: 'retired by dream' }]));
+    noteUserRestore('xyra', revisions, 'v2', snap([{ id: 'k', content: 'kept' }]), snap([{ id: 'k', content: 'kept' }, { id: 'm', content: 'manual-gone' }])); // 之后没有 Dream
     await settle();
     expect(cell('daily_memory', 'userEdit', 'xyra')).toBe(1);
     expect(cell('daily_memory', 'userEditAgentWritten7d', 'xyra')).toBe(1);
@@ -255,6 +261,11 @@ describe('daily_human', () => {
     await settle();
     expect(cell('daily_human', 'gHumanMdEntries')).toBe(2);
     expect(cell('daily_human', 'gCalendarRows')).toBeUndefined();
-    expect(cell('daily_human', 'gAgentsTotal')).toBeGreaterThanOrEqual(0);
+    expect(cell('daily_human', 'gAgentsTotal')).toBeUndefined(); // 一个 Agent 都读不到 = 不知道,不写 0
+    await saveAgent({ slug: 'helper', name: 'Helper', systemPrompt: 'Help.' } as any);
+    await snapshotHuman();
+    await settle();
+    expect(cell('daily_human', 'gAgentsTotal')).toBe(1);
+    expect(cell('daily_human', 'coldstartAgents')).toBe(0);
   });
 });
