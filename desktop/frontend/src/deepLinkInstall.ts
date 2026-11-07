@@ -4,7 +4,7 @@
  * 安全(方案 §4.3):只导航不执行;view 白名单 default-deny——注册表在场 = 已启用(插件禁用即反注册),
  * browser/terminal 明确拒(任意网页可唤起 = 现成钓鱼面);aux 类无独立打开意义,拒。
  */
-import { getView, useWorkspace, openObject, useSpaceStore } from '@lcl/engine'
+import { getView, useWorkspace, openObject, spaceOpensElsewhere, useSpaceStore } from '@lcl/engine'
 import type { ViewDefinition } from '@lcl/engine'
 import { useApp } from './stores/appStore'
 import { usePageStore } from '@amadeus/store/pageStore'
@@ -65,12 +65,15 @@ export function whenWorkspaceReady(timeoutMs = 8000): Promise<void> {
   })
 }
 
-function switchSpace(id: string): boolean {
+/** 走对象层的打开(认 Space 窗口锁)。'here' = 本窗口已经换到它(同步换好);'elsewhere' = 本窗口锁在别的 Space 上,
+ *  开到了它自己的窗口;null = 不认识 / 没打开。同 id no-op。 */
+function switchSpace(id: string): 'here' | 'elsewhere' | null {
   const st = useSpaceStore.getState()
-  if (!st.spaces.some((s) => s.id === id)) return false
-  // 走对象层的打开(同步换好,后面接着开 view 不赛跑;认 Space 窗口锁)。同 id no-op;未注册在上面已拒
+  if (!st.spaces.some((s) => s.id === id)) return null
+  const elsewhere = spaceOpensElsewhere(id)
   void openObject({ type: 'space', id }, 'here', { kind: 'deeplink' })
-  return true
+  if (elsewhere) return 'elsewhere'
+  return useSpaceStore.getState().activeSpaceId === id ? 'here' : null
 }
 
 export async function resolveDeepLink(intent: DeepLinkIntent): Promise<boolean> {
@@ -97,7 +100,7 @@ export async function resolveDeepLink(intent: DeepLinkIntent): Promise<boolean> 
       openSession(intent.ref!)
       return true
     case 'space':
-      return switchSpace(intent.ref!)
+      return switchSpace(intent.ref!) !== null
     case 'agent': {
       const app = useApp.getState()
       // 列表已加载且查无此 agent → 拒;列表未加载(冷启动竞态)放行,引擎侧有 defaultAgent 兜底。
@@ -118,7 +121,8 @@ export async function resolveDeepLink(intent: DeepLinkIntent): Promise<boolean> 
       // 主窗拽去别的 Space —— deep link 是任意网页可达的输入,这种「附带位移」白给骚扰面。
       const custom = openers.get(type)
       if (custom) return custom(intent.params)
-      if (intent.space && !switchSpace(intent.space)) return false
+      // 后面的 view 开在本窗口:目标 Space 要么本窗口换过去,要么不开(锁在别的 Space 上的窗口不替别的窗口开 view)
+      if (intent.space && (spaceOpensElsewhere(intent.space) || switchSpace(intent.space) !== 'here')) return false
       const go = (): void => { useWorkspace.getState().openView(type, intent.params, 'main') }
       // setActiveSpace 同步换整个布局(applyNamed/resetLayout);同 tick 开 view 会跟布局应用赛跑 → 推一帧。
       if (intent.space) requestAnimationFrame(go)

@@ -437,10 +437,10 @@ export function HomepageView(_props: ViewProps) {
     else leaveThen(() => { void openObject(spaceRef(spaceId)) })
   }
   /** Space 的右键:LCL 对象菜单(和 Ribbon 上右键同一份)+ 本处那一节;先收掉主页自己的菜单与收纳夹弹层。 */
-  const spaceMenuAt = (event: React.MouseEvent, spaceId: string, place: Place, sections: () => SheetMenuSection[] = () => []): void => {
+  const spaceMenuAt = (event: React.MouseEvent, spaceId: string, place: Place, sections: () => SheetMenuSection[] = () => [], className?: string): void => {
     setMenu(null)
     setOpenFolder(null)
-    objectContextMenuHandler(() => ({ refs: [spaceRef(spaceId)], place, placeSections: sections }))(event)
+    objectContextMenuHandler(() => ({ refs: [spaceRef(spaceId)], place, placeSections: sections, ...(className ? { className } : {}) }))(event)
   }
 
   const hasTangu = spaces.some((s) => s.id === 'tangu')
@@ -743,7 +743,7 @@ export function HomepageView(_props: ViewProps) {
               <button
                 key={id} type="button" className="hp-status-card" data-space-id={space.id}
                 onClick={(event) => { event.stopPropagation(); launchSpace(space.id) }}
-                onContextMenu={(event) => spaceMenuAt(event, space.id, { kind: 'home-card' }, () => [{ title: t('home.cards.editTitle'), items: menuItems({ x: 0, y: 0, kind: 'cards' }) }])}
+                onContextMenu={(event) => spaceMenuAt(event, space.id, { kind: 'home-card' }, () => [{ title: t('home.cards.editTitle'), items: menuItems({ x: 0, y: 0, kind: 'cards' }) }], 'hp-cards-menu')}
               >
                 <span className="hp-status-card-icon">{space.icon && <space.icon />}</span>
                 <span className="hp-status-card-name">{label(space.name)}</span>

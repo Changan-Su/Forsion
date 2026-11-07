@@ -621,20 +621,20 @@ export function Ribbon() {
     const over = el.getBoundingClientRect().bottom - (window.innerHeight - 8)
     if (over > 0) setFly({ ...fly, top: Math.max(8, fly.top - over) })
   }, [fly?.key, flyFolder?.items.length]) // eslint-disable-line react-hooks/exhaustive-deps
-  // 右键 / ＋ 菜单与图标选择器:Esc 关。捕获阶段先接住并截停 —— 一次 Esc 只关最上面这层菜单,
-  // 不顺带收掉它底下的收纳夹浮层 /「…」展开(那两层各自在冒泡阶段听 Esc)。
-  const overlayOpen = !!menu || !!iconPick
+  // 图标选择器:Esc 关。捕获阶段先接住并截停 —— 一次 Esc 只关最上面这层,不顺带收掉它底下的收纳夹浮层 /「…」展开
+  // (那两层各自在冒泡阶段听 Esc)。右键 / ＋ 菜单的 Esc 归共用渲染器(objectMenu:同样截停,还把焦点还给发起处),
+  // 这里别再抢 —— window 捕获先于它,抢了焦点就落回 body。
+  const pickOpen = !!iconPick
   useEffect(() => {
-    if (!overlayOpen) return
+    if (!pickOpen) return
     const onKey = (e: KeyboardEvent): void => {
       if (e.key !== 'Escape') return
       e.stopPropagation()
-      setMenu(null)
       setIconPick(null)
     }
     window.addEventListener('keydown', onKey, true)
     return () => window.removeEventListener('keydown', onKey, true)
-  }, [overlayOpen])
+  }, [pickOpen])
   // 键盘开的浮层没有「鼠标移开」这条退路(scheduleClose 只挂在 mouseleave)→ 补 Esc / 点别处关。
   const flyOpen = !!fly
   useEffect(() => {

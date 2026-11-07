@@ -10,7 +10,7 @@
  */
 import { AppWindow, ArrowUpRight, MonitorDown, Trash2 } from 'lucide-react'
 import {
-  getDetachApi, label, openObject, pinSpaceToHome, registerObjectAction, registerObjectType, setActiveSpace, switchSpace, useSpaceStore, WINDOW_SPACE_ID,
+  getDetachApi, label, openObject, pinSpaceToHome, spaceOpensElsewhere, registerObjectAction, registerObjectType, setActiveSpace, switchSpace, useSpaceStore, WINDOW_SPACE_ID,
   OBJECT_REASON, type ActionResult, type ObjectRef, type OpenMode,
 } from '@lcl/engine'
 import { SPACE_ID_RE } from '../../../shared/spaceAppearance'
@@ -35,10 +35,8 @@ export const isSpaceId = (id: string): boolean => SPACE_ID_RE.test(id)
 
 const spaceDef = (id: string) => useSpaceStore.getState().spaces.find((s) => s.id === id)
 
-/** 这个 Space 点一下会开到它自己的窗口去(本窗口是锁在别的 Space 上的 Space 窗口)。主页据此决定要不要先放离场动效。 */
-export function spaceOpensElsewhere(id: string): boolean {
-  return !!WINDOW_SPACE_ID && WINDOW_SPACE_ID !== id && !!getDetachApi()?.openSpace
-}
+/** 这个 Space 点一下会开到它自己的窗口去(判据在引擎 detachSeam,深链等不引本模块的入口也用它)。主页据此决定要不要先放离场动效。 */
+export { spaceOpensElsewhere }
 
 /** 点一下 = 进这个 Space;Space 窗口锁在自己的 Space 上切不走,改成把它开到它自己的窗口(原 launchSpace 的口径)。
  *  `animate`:人在菜单里点的「打开」走带推移动效的 switchSpace;程序入口(openObject:插件、Agent、深链、主页磁贴)

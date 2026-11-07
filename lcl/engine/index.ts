@@ -99,7 +99,7 @@ export { claimObjectFocus, focusedObjects, subscribeObjectFocus } from './object
 export type { FocusedObjects, ObjectFocusClaim } from './objectFocus'
 export { MenuSurface, openMenu, closeMenu, menuIsOpen, openObjectMenu, objectContextMenuHandler, useObjectMenu, bindObject } from './objectMenu'
 export type { MenuAt, OpenMenuRequest, ObjectMenuBinding } from './objectMenu'
-export { setDetachApi, getDetachApi } from './detachSeam'
+export { setDetachApi, getDetachApi, spaceOpensElsewhere } from './detachSeam'
 export type { DetachApi, ViewRef } from './detachSeam'
 
 export type { ExtendViewController, ExtendViewOptions, ExtendViewHandle, ExtendViewSide, ExtendViewCloseReason } from './extendView'
