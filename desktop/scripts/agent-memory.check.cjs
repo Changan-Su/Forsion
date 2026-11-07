@@ -31,10 +31,10 @@ async function main() {
     fs.writeFileSync(path.join(dir, 'tangu-desktop-config.json'), JSON.stringify({ mode: 'managed' }))
   }
   const [{ configureTangu }, { createTanguProfile }, { createSqliteHost }, { STANDALONE_SCHEMA }, { toSqliteDDL },
-    { createLocalMemoryBrain }, registry, { createMemoryRepository }, { configureMemoryDream }, { default: agentsRouter }, { default: dreamRouter }] = await Promise.all([
+    { createLocalMemoryBrain }, registry, { createMemoryRepository }, { configureMemoryDream }, { default: agentsRouter }, { default: dreamRouter }, { runMigration }] = await Promise.all([
     load('seams/runtime.js'), load('profiles/index.js'), load('adapters/standalone/sqliteHost.js'), load('db/schemaStandalone.js'), load('core/dialectDDL.js'),
     load('adapters/standalone/localMemoryBrain.js'), load('agents/agentRegistry.js'), load('services/memoryRepository.js'), load('services/memoryDream.js'),
-    load('routes/agents.js'), load('routes/memoryMaintenance.js'),
+    load('routes/agents.js'), load('routes/memoryMaintenance.js'), load('db/migrate.js'),
   ])
   const { host, db } = createSqliteHost({ dataDir: 'memory', localToken: 'e2e', userId: 'memory-instrument' })
   db.exec(toSqliteDDL(STANDALONE_SCHEMA))
@@ -47,6 +47,8 @@ async function main() {
         : { ok: true }), toolCalls: [], usage: { prompt_tokens: 1, completion_tokens: 1 } }),
     }, users: { getUserById: async () => ({ id: 'memory-instrument' }) },
   } })
+  await runMigration() // 遥测账本表(telemetry_ledger)在迁移里建:遗忘理由要落得进去才看得到
+  const ledgerCell = (field, dim) => db.prepare('SELECT SUM(n) AS n FROM telemetry_ledger WHERE event = ? AND field = ? AND dim = ?').get('daily_memory', field, dim)?.n || 0
   for (const slug of ['alpha', 'beta']) {
     await registry.saveAgent({ slug, name: `Memory ${slug}`, description: 'Isolated memory instrument', systemPrompt: 'Test agent', createdBy: 'user' })
     configureMemoryDream(slug, { modelId: 'instrument' })
@@ -166,9 +168,20 @@ async function main() {
     await wait(() => alpha.snapshot().content === initialAlpha.content, 'revision restored')
     check('Revision restore uses the current version', alpha.snapshot().version !== initialAlpha.version)
     const initialEntry = panel.locator('[data-memory-entry-id]').filter({ hasText: 'Alpha 私有事实' }).first()
+    // 遗忘先问理由(帮助改进 P3):点了不马上生效;「取消」回去;选了理由才遗忘,理由进本机遥测账本(自建 Agent 记 custom)
     await initialEntry.getByRole('button', { name: '遗忘', exact: true }).click()
+    await initialEntry.locator('[data-reason-prompt]').waitFor({ timeout: 5000 })
+    check('Forget first offers optional reasons and does not act yet', alpha.snapshot().entries.length === 1 && await initialEntry.locator('[data-reason]').count() === 5)
+    await panel.screenshot({ path: path.join(SHOTS, 'memory-forget-reasons.png') })
+    await initialEntry.locator('[data-reason-cancel]').click()
+    check('Cancel puts the entry actions back without forgetting', alpha.snapshot().entries.length === 1 && await initialEntry.locator('[data-reason-prompt]').count() === 0)
+    await initialEntry.getByRole('button', { name: '遗忘', exact: true }).click()
+    await initialEntry.locator('[data-reason="stale"]').click()
     await wait(() => alpha.snapshot().entries.length === 0, 'entry forgotten')
     check('Forget removes active memory and records its tombstone', alpha.snapshot().tombstones.length > 0)
+    await wait(() => ledgerCell('userForgetStale', 'custom') === 1, 'forget reason counted')
+    check('The chosen reason lands in the local telemetry ledger as an enum count only', ledgerCell('userForget', 'custom') === 1 && ledgerCell('userForgetStale', 'custom') === 1
+      && db.prepare("SELECT COUNT(*) AS n FROM telemetry_ledger WHERE dim NOT IN ('', 'custom') OR field LIKE '%Alpha%'").get().n === 0)
     await restoreInitial()
     await wait(() => panel.getByRole('button', { name: '刷新', exact: true }).first().isEnabled(), 'restore settled')
     check('Restoring an old revision does not resurrect forgotten memory', alpha.snapshot().content === '')

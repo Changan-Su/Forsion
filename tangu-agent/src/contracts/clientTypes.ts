@@ -136,6 +136,14 @@ export interface MuseCardInfo {
   decided_at: number | null
 }
 
+/** 拒绝 Muse 卡片时可选的理由(帮助改进 P3):POST …/muse/cards/:id/decide 的 `reason`,只跟 dismiss 一起收。
+ *  引擎按这张表认,认不得的当没给;计进遥测账本(daily_muse_card.dismiss*),也写进 Muse 的 [feedback] 行。 */
+export const MUSE_DISMISS_REASONS = ['irrelevant', 'timing', 'frequent', 'known'] as const
+export type MuseDismissReason = (typeof MUSE_DISMISS_REASONS)[number]
+/** 遗忘一条 Agent 记忆时可选的理由:POST …/memory/entries 的 `reason`,只跟 forget 一起收;计进 daily_memory.userForget*。 */
+export const MEMORY_FORGET_REASONS = ['wrong', 'stale', 'unwanted', 'duplicate'] as const
+export type MemoryForgetReason = (typeof MEMORY_FORGET_REASONS)[number]
+
 export interface PendingApprovalInfo {
   id: string
   session_id: string

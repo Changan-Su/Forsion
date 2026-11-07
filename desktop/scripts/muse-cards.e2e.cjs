@@ -3,12 +3,12 @@
  * 一条主动消息、一张插件卡、六张进卡片堆的卡(三问 / 设置变更 / 两周小结 / 功能推荐 / 观察结果 / 规则)。
  * 断言:
  *  R1 主动消息下面有「有用 / 少来点这种」,卡片消息没有;点了发 verdict,按钮变成「记下了：这类少来」,刷新不再出现
- *  R2 插件卡留在消息里,带「不感兴趣」,不进卡片堆;卡片堆 5 张
+ *  R2 插件卡留在消息里,带「不感兴趣」,不进卡片堆;卡片堆 5 张。点「不感兴趣」先在卡下出理由行(不发请求),「取消」回去,选「时机不对」才发 dismiss + reason
  *  R3 围栏不进正文;待处理的卡流里一行指向对话最下面
  *  R4 三问:没选时「好了」不可点;选完发 answers;流里变回执
  *  R5 设置卡:旧值 → 新值;点「改」只传 action;回执「已改成 …」
  *  R6 小结:提议采纳行 + 升档问句,「去设置」落到 Muse 设置页、不写卡;改一条(index + text)、删一条、「都对」,记忆跟着动由引擎单测钉
- *  R7 功能卡点「不感兴趣」发 dismiss
+ *  R7 功能卡点「不感兴趣」:动作行原地换成理由行;勾「附上这条原文」+ 选「我早知道了」→ 发 dismiss + reason,收卡之后随账号的反馈通道收到这张卡上的字
  *  R8 规则卡写清当 · 只在 · 做;点「改一下」发 edit,打开画布定位到建好的规则;卡片堆清空
  *  R9 观察结果卡写清天数和命中;「再看 7 天」发 extend,流里变回执
  * 量的是 out/ 产物:改了源码先 `npx electron-vite build`。
@@ -39,6 +39,7 @@ const MSGS = [
 ]
 const RULE = { desc: '打开 Figma 时提醒我活动一下', cond: { type: 'computer.app_opened', params: { app: 'Figma' } }, cooldownHours: 2, actions: [{ type: 'remind', title: '先活动一下' }], only: { weekdays: [1, 2, 3, 4, 5] }, maxPerDay: 2 }
 const card = (id, kind, payload) => ({ id, kind, key: null, payload, status: 'pending', result: null, created_at: T0, decided_at: null })
+const FEATURE_TITLE = '电脑历史'
 const ITEM = { id: 'better-pdf', name: 'Better PDF', author: 'Forsion', summary: '批注与对比', type: 'plugin', installSlug: 'better-pdf', latestVersion: '1.0.0', tags: [] }
 
 async function main() {
@@ -49,7 +50,7 @@ async function main() {
     card('intro', 'intro', {}),
     card('settings', 'settings', { patch: { activeHours: { start: 9, end: 23 } }, changes: [{ field: 'activeHours', from: null, to: { start: 9, end: 23 } }, { field: 'notify', from: 'immediate', to: 'digest' }] }),
     card('summary', 'summary', { lead: '两周下来，我记住了这几条。', items: ['晚上十点以后别提工作', '日报只要三条', '论文先给提纲再给全文'], proposals: { proposed: 11, adopted: 8, askUpgrade: true } }),
-    card('feature', 'feature', { feature: 'computer-history', title: '电脑历史', why: '打开后我能回答「昨天看过什么」。' }),
+    card('feature', 'feature', { feature: 'computer-history', title: FEATURE_TITLE, why: '打开后我能回答「昨天看过什么」。' }),
     card('rule-observed', 'rule-observed', { triggerId: 'w-paper', desc: '新论文入库后写摘要', hits: 4, days: 7 }),
     card('rule', 'rule', { rule: RULE }),
   ]
@@ -102,7 +103,16 @@ async function main() {
     },
   })
   const { win } = ctx
+  // 随账号的反馈通道(Extend 的 feedback:submit)在台架里没有:主进程里接住,只记下收到的正文
+  await ctx.app.evaluate(({ ipcMain }) => {
+    globalThis.__feedbackSubmits = []
+    try { ipcMain.removeHandler('feedback:submit') } catch { /* 没注册过 */ }
+    ipcMain.handle('feedback:submit', (_e, input) => { globalThis.__feedbackSubmits.push(input); return { ok: true, id: 'fb-1' } })
+  })
+  const feedbackSubmits = () => ctx.app.evaluate(() => globalThis.__feedbackSubmits)
   const last = () => seen.decide[seen.decide.length - 1] || {}
+  /** 请求体按字段比,不按键序(前端拼 body 的顺序不是契约) */
+  const sameFields = (a, b) => Object.keys(a).length === Object.keys(b).length && Object.keys(b).every((k) => a[k] === b[k])
   const inCard = (kind) => `[data-pending-deck] .t2c-apv [data-muse-card="${kind}"]`
   try {
     await boot(ctx.app, win, { space: 'tangu', width: 1440, height: 900 })
@@ -141,9 +151,18 @@ async function main() {
     r.check('R1b 点「少来点这种」发 down,按钮变回执', seen.feedback[0]?.id === 'p1' && seen.feedback[0]?.verdict === 'down' && /记下了：这类少来|fewer of these/.test(s1.fbText), JSON.stringify({ s1, f: seen.feedback }))
 
     // ── 插件卡 ──
-    await win.locator('#tocmsg-c-plugin .mk-chat-card-actions button', { hasText: /不感兴趣|Not interested/ }).click()
+    const pluginNo = win.locator('#tocmsg-c-plugin .mk-chat-card-actions button', { hasText: /不感兴趣|Not interested/ })
+    const decidedPlugin = seen.decide.length
+    await pluginNo.click()
+    await win.waitForSelector('#tocmsg-c-plugin [data-reason-prompt]', { timeout: 5000 }).catch(() => {})
+    const pluginReasons = await win.locator('#tocmsg-c-plugin [data-reason-prompt] [data-reason]').count()
+    r.check('R2c 插件卡「不感兴趣」先出理由行(4 个理由 + 直接关掉),还没发请求', pluginReasons === 5 && seen.decide.length === decidedPlugin, `理由按钮 ${pluginReasons};decide ${decidedPlugin}→${seen.decide.length}`)
+    await win.locator('#tocmsg-c-plugin [data-reason-cancel]').click()
+    r.check('R2d 「取消」收起理由行,卡还在、没发请求', await win.locator('#tocmsg-c-plugin [data-reason-prompt]').count() === 0 && seen.decide.length === decidedPlugin)
+    await pluginNo.click()
+    await win.locator('#tocmsg-c-plugin [data-reason="timing"]').click()
     await win.waitForSelector('#tocmsg-c-plugin [data-muse-card-line="dismissed"]', { timeout: 5000 }).catch(() => {})
-    r.check('R2b 插件卡「不感兴趣」发 dismiss,流里留回执', last().id === 'plugin' && last().action === 'dismiss' && await win.locator('#tocmsg-c-plugin [data-muse-card-line="dismissed"]').count() === 1, JSON.stringify(last()))
+    r.check('R2b 选「时机不对」发 dismiss + reason,流里留回执', sameFields(last(), { id: 'plugin', action: 'dismiss', reason: 'timing' }) && await win.locator('#tocmsg-c-plugin [data-muse-card-line="dismissed"]').count() === 1, JSON.stringify(last()))
 
     // ── 三问 ──
     const q = (n) => win.locator(`${inCard('intro')} .t2-musecard-q`).nth(n).locator('button')
@@ -201,9 +220,20 @@ async function main() {
     // ── 功能卡 ──
     await win.waitForTimeout(600) // 卡片入场过渡
     await win.screenshot({ path: path.join(dir, 'feature.png') })
+    const decidedFeature = seen.decide.length
     await win.locator(`${inCard('feature')} button`).nth(1).click()
+    await win.waitForSelector(`${inCard('feature')} [data-reason-prompt]`, { timeout: 5000 }).catch(() => {})
+    r.check('R7a 功能卡「不感兴趣」:动作行原地换成理由行,带「附上这条原文」,还没发请求',
+      await win.locator(`${inCard('feature')} > .t2-taskcard-actions`).count() === 0 && await win.locator(`${inCard('feature')} [data-reason-share]`).count() === 1 && seen.decide.length === decidedFeature)
+    await win.locator(`${inCard('feature')} [data-reason-share]`).check()
+    await win.screenshot({ path: path.join(dir, 'feature-reasons.png') })
+    await win.locator(`${inCard('feature')} [data-reason="known"]`).click()
     await win.waitForSelector(inCard('rule-observed'), { timeout: 5000 }).catch(() => {})
-    r.check('R7 功能卡「不感兴趣」发 dismiss', last().id === 'feature' && last().action === 'dismiss', JSON.stringify(last()))
+    r.check('R7 选「我早知道了」发 dismiss + reason', sameFields(last(), { id: 'feature', action: 'dismiss', reason: 'known' }), JSON.stringify(last()))
+    let fbs = []
+    for (let i = 0; i < 20 && !fbs.length; i++) { fbs = await feedbackSubmits(); if (!fbs.length) await win.waitForTimeout(150) }
+    const ticket = fbs[0]?.description || ''
+    r.check('R7b 勾了附原文:收卡后随账号发一条,写明卡种、理由和卡上的字', fbs.length === 1 && /\[muse-card:feature\]/.test(ticket) && /我早知道了|Already knew/.test(ticket) && ticket.includes(FEATURE_TITLE), JSON.stringify(fbs))
 
     // ── 观察结果卡 ──
     await win.waitForTimeout(600) // 卡片入场过渡

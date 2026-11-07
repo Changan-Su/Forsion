@@ -933,7 +933,7 @@ export const getAgentMemory = (t: EngineTarget, slug: string) =>
   getAgentMemorySnapshot(t, slug).then((r) => r.content)
 export const putAgentMemory = (t: EngineTarget, slug: string, content: string, expectedVersion: string) =>
   request<AgentMemorySnapshot>(t, agentMemoryPath(slug), { method: 'PUT', body: JSON.stringify({ content, expectedVersion }) })
-export const mutateAgentMemoryEntry = (t: EngineTarget, slug: string, body: { action: 'add' | 'update' | 'forget'; id?: string; fact?: string; expectedVersion: string; /** 不给 = 新的一条是所有设备;改一条沿用原标签 */ appliesTo?: 'all' | 'this-computer' | 'this-os' }) =>
+export const mutateAgentMemoryEntry = (t: EngineTarget, slug: string, body: { action: 'add' | 'update' | 'forget'; id?: string; fact?: string; expectedVersion: string; /** 不给 = 新的一条是所有设备;改一条沿用原标签 */ appliesTo?: 'all' | 'this-computer' | 'this-os'; /** 只跟 forget 走:遗忘理由(帮助改进 P3,枚举) */ reason?: 'wrong' | 'stale' | 'unwanted' | 'duplicate' }) =>
   request<AgentMemorySnapshot>(t, `${agentMemoryPath(slug)}/entries`, { method: 'POST', body: JSON.stringify(body) })
 /** 把一条 Agent 记忆交给所有 Agent:原句追加进 human/AGENT.md,写成后才从这位的记忆里拿掉;409 = 读出之后改过(两边都没动)。只在宿主本机。 */
 export const promoteAgentMemoryEntry = (t: EngineTarget, slug: string, body: { id: string; expectedVersion: string }) =>

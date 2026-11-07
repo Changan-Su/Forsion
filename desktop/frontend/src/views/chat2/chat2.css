@@ -1837,6 +1837,8 @@ html[data-chat-avatars='off'] .t2-username { display: none; }
 .t2-musefb { display: flex; align-items: center; gap: 12px; margin-top: 4px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
 .t2-musefb button { border: none; background: transparent; padding: 0; color: inherit; font: inherit; cursor: pointer; }
 .t2-musefb button:hover { color: var(--text); }
+/* 插件卡点了「不感兴趣」:理由行(FeedbackReasons.tsx)挂在卡下面 */
+.t2-musecard-reasons { margin: 6px 0 4px; }
 
 /* 编辑重发:提问原地变可改的气泡(EditBubble.tsx,方案 编辑重发分支与编辑框方案_2026-10-28 A)。同气泡底色 / 圆角 / 字号,
    宽度撑到提问最大宽、不随字缩;高 12 行后内部滚;不加描边、不加焦点框。放文件末尾:要压过上面 520px 断点里的 .t2-user-col。 */

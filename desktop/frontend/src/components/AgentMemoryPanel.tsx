@@ -11,6 +11,8 @@ import type { TanguDesktopConfig } from '../types'
 import { homeTarget, connectionKey } from '../services/engine/targets'
 import { AppliesToSelect, deviceTagsOf, ScopedText, splitScoped } from './DeviceScope'
 import type { AppliesTo } from '../../../../tangu-agent/src/contracts/deviceTags'
+import { MEMORY_FORGET_REASONS, type MemoryForgetReason } from '../../../../tangu-agent/src/contracts/clientTypes'
+import { ReasonPrompt, canShareOriginal, sendOriginal } from './FeedbackReasons'
 
 registerMessages({
   'agentMemory.search': { zh: '搜索记忆', en: 'Search memory' },
@@ -77,6 +79,9 @@ const row: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 8
 const hint: React.CSSProperties = { color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.5, overflowWrap: 'anywhere' }
 const section: React.CSSProperties = { borderTop: 'var(--border-width) solid var(--border)', paddingTop: 12, marginTop: 12 }
 const sourceText = (source: AgentMemoryRevision['source'], label: string) => [label, source.sessionId, source.messageId, source.runId].filter(Boolean).join(' · ')
+/** 附原文的反馈单里只写 Agent 的角色:内置的原样,用户自建的一律 custom(名字和 slug 是用户起的,不在「这条原文」的同意范围里)。 */
+const BUILTIN_AGENTS = new Set(['xyra', 'aria', 'recita', 'coding', 'muse'])
+const agentRole = (slug: string): string => (BUILTIN_AGENTS.has(slug) ? slug : 'custom')
 
 /** Changing backend, account, or Agent remounts all state; an old request can never paint into a new identity. */
 const validDream = (d: AgentMemoryDream | null | undefined): AgentMemoryDream | null => (d?.status && d.config ? d : null)
@@ -95,6 +100,8 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
   const [newFact, setNewFact] = useState('')
   const [newScope, setNewScope] = useState<AppliesTo>('all')
   const [editing, setEditing] = useState<{ id: string; text: string; version: string } | null>(null)
+  // 点了「遗忘」的那一条:动作行原地换成理由行(帮助改进 P3),选了理由或「直接遗忘」才真的遗忘
+  const [forgetting, setForgetting] = useState<string | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -151,8 +158,18 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
   const update = async (fn: () => Promise<AgentMemorySnapshot>) => {
     const next = await fn()
     if (!alive.current) return
-    applySnapshot(next, true); ++revisionRequest.current; setRevisions(null); setEditing(null); setNewFact(''); setNewScope('all'); setNotice(t('agentMemory.saved'))
+    applySnapshot(next, true); ++revisionRequest.current; setRevisions(null); setEditing(null); setForgetting(null); setNewFact(''); setNewScope('all'); setNotice(t('agentMemory.saved'))
   }
+  /** 遗忘一条:理由跟着这一次写走;勾了「附上原文」,遗忘成功之后再随账号发这条的正文(不带设备标记)。 */
+  const forget = (entry: AgentMemorySnapshot['entries'][number], version: string, reason: MemoryForgetReason | null, share: boolean) => void action(async () => {
+    await update(() => mutateAgentMemoryEntry(homeTarget(), slug, { action: 'forget', id: entry.id, expectedVersion: version, ...(reason ? { reason } : {}) }))
+    if (share) void sendOriginal({ title: t('reason.ticketMemory'), reasonLabel: reason ? t(`reason.memory.${reason}`) : null,
+      tag: `memory:${agentRole(slug)}:${entry.source.kind}`, body: splitScoped(entry.content, deviceTagsOf(snapshot)).body })
+  })
+  const forgetPrompt = (entry: AgentMemorySnapshot['entries'][number], version: string) => (
+    <ReasonPrompt question={t('reason.memoryQuestion')} reasons={MEMORY_FORGET_REASONS.map((id) => ({ id, label: t(`reason.memory.${id}`) }))}
+      skipLabel={t('reason.memorySkip')} busy={busy} shareable={canShareOriginal()} onPick={(r, s) => forget(entry, version, r, s)} onCancel={() => setForgetting(null)} />
+  )
   const loadRevisions = () => {
     const request = ++revisionRequest.current
     void listAgentMemoryRevisions(homeTarget(), slug).then((items) => {
@@ -235,21 +252,19 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
               { action: 'update', id: entry.id, fact: editing.text, expectedVersion: editing.version }))) }>{t('common.save')}</button>
               <button className="btn sm" disabled={busy} onClick={() => setEditing(null)}>{t('common.cancel')}</button></div></div>
             : <p style={organized ? undefined : { margin: '0 0 8px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}><ScopedText content={entry.content} ctx={tagCtx} /></p>}
-          {organized ? <div className="memory-entry-meta">
+          {forgetting === entry.id ? forgetPrompt(entry, snapshot.version) : organized ? <div className="memory-entry-meta">
             {/* 来源直接写在折叠标题上(对话提取 / 明确记住 / 记忆整理…),展开才是会话与证据 id —— 一眼要看的是「这条怎么来的」,不是「来源与证据」四个字 */}
             <details><summary>{t(`agentMemory.source.${entry.source.kind}`)}</summary>
               <div>{sourceText(entry.source, '')}</div><code>{entry.id}</code>
               {entry.evidenceIds.length > 0 && <div>{entry.evidenceIds.join(' · ')}</div>}</details>
-            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.edit')} aria-label={t('agentMemory.edit')} onClick={() => setEditing({ id: entry.id, text: splitScoped(entry.content, tagCtx).body, version: snapshot.version })}><Pencil size={13} /></button>
-            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.forget')} aria-label={t('agentMemory.forget')} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
-              { action: 'forget', id: entry.id, expectedVersion: snapshot.version }))) }><Eraser size={13} /></button>
+            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.edit')} aria-label={t('agentMemory.edit')} onClick={() => { setForgetting(null); setEditing({ id: entry.id, text: splitScoped(entry.content, tagCtx).body, version: snapshot.version }) }}><Pencil size={13} /></button>
+            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.forget')} aria-label={t('agentMemory.forget')} onClick={() => setForgetting(entry.id)}><Eraser size={13} /></button>
           </div> : <div style={{ ...row, justifyContent: 'space-between' }}>
             <details style={{ ...hint, flex: 1 }}><summary>{t('agentMemory.source')}</summary>
               <div>{sourceText(entry.source, t(`agentMemory.source.${entry.source.kind}`))}</div><code>{entry.id}</code>
               {entry.evidenceIds.length > 0 && <div>{entry.evidenceIds.join(' · ')}</div>}</details>
-            <button className="btn sm" disabled={writeDisabled} onClick={() => setEditing({ id: entry.id, text: splitScoped(entry.content, tagCtx).body, version: snapshot.version })}>{t('agentMemory.edit')}</button>
-            <button className="btn danger sm" disabled={writeDisabled} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
-              { action: 'forget', id: entry.id, expectedVersion: snapshot.version }))) }>{t('agentMemory.forget')}</button>
+            <button className="btn sm" disabled={writeDisabled} onClick={() => { setForgetting(null); setEditing({ id: entry.id, text: splitScoped(entry.content, tagCtx).body, version: snapshot.version }) }}>{t('agentMemory.edit')}</button>
+            <button className="btn danger sm" disabled={writeDisabled} onClick={() => setForgetting(entry.id)}>{t('agentMemory.forget')}</button>
           </div>}
         </li>)}
       </ul>
