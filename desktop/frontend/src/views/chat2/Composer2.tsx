@@ -470,6 +470,11 @@ export const Composer2: React.FC<{
   onWithdrawSteer?: (msgId: string) => Promise<string | null>
   /** 「立即插话」:打断当前 run,把等待区消息强发。 */
   onSteerNow?: () => void
+  /** 等待中的插话已经画在对话里(ChatView 流尾的待读气泡):输入框上方不再摆等待区。画布模式没有那条流,传 false。 */
+  steerInline?: boolean
+  /** 对话里那条待读气泡点了「撤回」:把这条取回草稿(同 ↑ 撤回),做完回调清掉请求。 */
+  withdrawSteerRequest?: string | null
+  onWithdrawSteerRequestDone?: () => void
 }> = ({
   sessionId, advisory, approvalTray, autoFocus, disabled, disabledPlaceholder, running, execConfig, teamApproval,
   models, modelsResponse, modelId, onModelChange, engines, engineId,
@@ -485,7 +490,7 @@ export const Composer2: React.FC<{
   quotes = NO_QUOTES, quoteNotes, onRemoveQuote, onClearQuote, onBtw, onQuoteNote,
   contextWindow, ctxTokens, sessionTokens, runCost, costLimit, ctxInfo, onCompact,
   seedText, onSeedConsumed, seedShare, takeSeedShare, appendRefs, onAppendRefsConsumed, autoRefFromMain, appRef, sentHistory,
-  pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow,
+  pendingSteer, onCancelSteer, onWithdrawSteer, onSteerNow, steerInline = false, withdrawSteerRequest, onWithdrawSteerRequestDone,
 }) => {
   const { t, locale } = useI18n()
   const storeActiveSessionId = useApp((s) => s.activeId)
@@ -915,6 +920,25 @@ export const Composer2: React.FC<{
       autoGrow()
     })
   }
+
+  // 取回一条等待中的插话:prepend 进草稿(不顶掉打了一半的字),光标停在取回那段末尾。↑ 和对话里待读气泡的「撤回」共用。
+  const withdrawIntoDraft = (id: string): Promise<void> => {
+    if (!onWithdrawSteer) return Promise.resolve()
+    return onWithdrawSteer(id).then((text) => {
+      if (!text) return // 来不及(已注入/run 已收尾):等待区由事件流收拾,这里不动草稿
+      setDraft((d) => (d.trim() ? `${text}\n\n${d}` : text))
+      requestAnimationFrame(() => {
+        const ta = taRef.current
+        if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = text.length; setCursorPos(text.length) }
+        autoGrow()
+      })
+    })
+  }
+  useEffect(() => {
+    if (!withdrawSteerRequest) return
+    void withdrawIntoDraft(withdrawSteerRequest).finally(() => onWithdrawSteerRequestDone?.())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [withdrawSteerRequest])
 
   // 外部 via-chat 入口预填草稿:seedText 非空 → 写入输入框(覆盖当前)+ 聚焦 + 回调清空,只消费一次。
   useEffect(() => {
@@ -1857,7 +1881,7 @@ export const Composer2: React.FC<{
       <div className="t2c-inner">
         {/* steer 等待区:run 跑动中发出的消息在这里排队,引擎注入(turn_boundary)即上屏。
           * 每条可删(文本仍留在 ↑ 历史);「立即插话」=打断当前 run 强发;↑ 撤回最新一条回输入框。 */}
-        {!!pendingSteer?.length && (
+        {!steerInline && !!pendingSteer?.length && (
           <div className="t2c-steer" role="status" aria-label={t('input.steer.waiting')}>
             {pendingSteer.map((p) => (
               <div className="t2c-steer-item" key={p.id}>
@@ -2063,16 +2087,7 @@ export const Composer2: React.FC<{
                 && e.currentTarget.selectionStart === e.currentTarget.selectionEnd
                 && draft.slice(0, e.currentTarget.selectionStart).indexOf('\n') === -1) {
                 e.preventDefault()
-                const last = pendingSteer[pendingSteer.length - 1]
-                void onWithdrawSteer(last.id).then((text) => {
-                  if (!text) return // 来不及(已注入/run 已收尾):等待区由事件流收拾,这里不动草稿
-                  setDraft((d) => (d.trim() ? `${text}\n\n${d}` : text))
-                  requestAnimationFrame(() => {
-                    const ta = taRef.current
-                    if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = text.length; setCursorPos(text.length) }
-                    autoGrow()
-                  })
-                })
+                withdrawIntoDraft(pendingSteer[pendingSteer.length - 1].id)
                 return
               }
               // 历史召回:走到这里说明无浮层消费方向键(菜单激活时已 return)。空/首行 ↑ 取更旧、末行 ↓ 取更新。
