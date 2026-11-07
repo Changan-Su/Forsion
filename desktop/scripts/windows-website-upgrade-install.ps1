@@ -1,0 +1,30 @@
+$ErrorActionPreference = 'Stop'
+if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted' -or !$env:RUNNER_TEMP) {
+  throw 'An isolated GitHub-hosted Windows runner is required'
+}
+$root = Join-Path $env:RUNNER_TEMP 'forsion-website-upgrade'
+$installDir = Join-Path $root 'application'
+$output = Join-Path $root 'evidence'
+$exe = Join-Path $installDir 'Forsion.exe'
+$installer = Join-Path $root 'Forsion-2.13.6-x64.exe'
+$url = 'https://github.com/Changan-Su/Forsion/releases/download/v2.13.6/Forsion-2.13.6-x64.exe'
+$expected = 'a6c57baf807b97ea9a3f42fbc2bd63859cf3a566020ab9194c2658b32b85d8b7'
+if (Test-Path -LiteralPath $root) { throw 'Fixture directory must be fresh' }
+$null = New-Item -ItemType Directory -Path $output
+curl.exe --fail --silent --show-error --location --retry 2 --max-time 480 --output $installer $url
+if ($LASTEXITCODE) { exit $LASTEXITCODE }
+$hash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($hash -ne $expected) { throw 'Official 2.13.6 release asset SHA-256 differs' }
+$process = Start-Process -FilePath $installer -ArgumentList "/S /currentuser /D=$installDir" -PassThru -WindowStyle Hidden
+$null = $process.Handle
+if (!$process.WaitForExit(180000)) { Stop-Process -Id $process.Id; throw '2.13.6 installation timed out' }
+if ($process.ExitCode -ne 0 -or !(Test-Path -LiteralPath $exe)) { throw '2.13.6 NSIS installation failed' }
+# If this installer launched the app, stop only the owned fixture executable before attaching Playwright.
+foreach ($child in @(Get-CimInstance Win32_Process -Filter "Name = 'Forsion.exe'" | Where-Object { $_.ExecutablePath -eq $exe })) {
+  Stop-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
+}
+@{ name = 'Forsion-2.13.6-x64.exe'; url = $url; sha256 = $hash; installerExit = $process.ExitCode } |
+  ConvertTo-Json | Set-Content -LiteralPath (Join-Path $output 'old-installer.json') -Encoding utf8
+"FORSION_UPDATE_TEST_EXE=$exe" | Add-Content -LiteralPath $env:GITHUB_ENV
+"FORSION_UPDATE_TEST_ROOT=$root" | Add-Content -LiteralPath $env:GITHUB_ENV
+Write-Host 'PASS Official 2.13.6 standard Windows installer matches GitHub SHA-256 and completed per-user NSIS installation'
