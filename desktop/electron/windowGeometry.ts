@@ -80,3 +80,43 @@ export function resizeFromEdge(start: Rect, edge: string, dx: number, dy: number
     width, height,
   }
 }
+
+/** 两个矩形有没有面积上的重叠(只碰边不算)。 */
+export function rectsOverlap(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+}
+
+/** 新开的 Mini 落在哪(LCL 表面规范第二期,多开):沿工作区右缘从上往下找第一块不压着别的 Mini 的空位,
+ *  这一列排满就往左换一列;所有列都满了,从右上角往左下错开(不叠在同一处)。按已开那些窗的**当前**位置算,
+ *  用户拖走的那扇空出来的位置会被重新用上。离边 inset(> 贴边阈值 12),所以新窗不会一放下就被判成贴边折起来。 */
+export function stackPosition(size: { width: number; height: number }, work: Rect, occupied: readonly Rect[], inset = 24, gap = 12): { x: number; y: number } {
+  const right = work.x + work.width - inset, bottom = work.y + work.height - inset
+  for (let col = 0; ; col++) {
+    const x = right - size.width - col * (size.width + gap)
+    if (col > 0 && x < work.x + inset) break
+    let y = work.y + inset
+    while (y + size.height <= bottom || (y === work.y + inset && col === 0)) {
+      const slot = { x, y, ...size }
+      const hits = occupied.filter((o) => rectsOverlap(slot, o))
+      if (!hits.length) return { x, y }
+      const next = Math.max(...hits.map((o) => o.y + o.height)) + gap
+      if (next <= y) break // 防御:不前进就换列
+      y = next
+    }
+    if (x - size.width - gap < work.x + inset) break
+  }
+  const step = 24 * (occupied.length % 8)
+  return {
+    x: Math.max(work.x + inset, right - size.width - step),
+    y: Math.min(Math.max(work.y + inset, bottom - size.height), work.y + inset + step),
+  }
+}
+
+/** 记住的位置还能不能用:至少有一块 80×40 露在某块屏的工作区里(拔掉的显示器 / 换了分辨率 = 不能用,重新排)。 */
+export function mostlyOnScreen(r: Rect, workAreas: readonly Rect[]): boolean {
+  return workAreas.some((w) => {
+    const ix = Math.min(r.x + r.width, w.x + w.width) - Math.max(r.x, w.x)
+    const iy = Math.min(r.y + r.height, w.y + w.height) - Math.max(r.y, w.y)
+    return ix >= Math.min(80, r.width) && iy >= Math.min(40, r.height)
+  })
+}

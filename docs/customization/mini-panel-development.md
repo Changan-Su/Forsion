@@ -18,7 +18,7 @@ Space 的 `mini` 是显式能力声明。`SpaceDefinition.mini` 与 `space.json.
 
 两种视图类型必须不同且均已注册。缺省不适配；缺失可选 Mini 视图时完整 Space 仍可加载。不要在 `requires.views` 强制依赖可选 Mini 类型。Mini 挂专用视图，不运行 `Space.build()`，不恢复桌面/移动布局，不提供标签页、Ribbon 全局操作或移动端抽屉。链接到其他完整视图时交给主面板。
 
-默认窗口为 320×420；用户可以拖卡片的四条边和四个角，在 260×160 到 640×900 之间改大小，关掉再开沿用上次的大小（本次运行内）。视图的布局要跟随容器：窄到 260、矮到 160 时内容自己滚动或省略，不要按 320×420 写死尺寸。Computer Use 自动弹出的临时 Mini 仍固定 320×420。适配器复用业务数据与编辑能力，专门设计快捷交互。使用语义主题变量，提供中英文本，避免品牌欢迎页、全局设置和重复导航占据面板。宿主负责 Space 切换、主面板定位和关闭。
+默认窗口为 320×420；用户可以拖卡片的四条边和四个角，在 260×160 到 640×900 之间改大小。位置和大小按实体各记各的：同一个实体关掉再开回到上次的位置和大小（本次运行内），新的实体用缺省大小。视图的布局要跟随容器：窄到 260、矮到 160 时内容自己滚动或省略，不要按 320×420 写死尺寸。Computer Use 自动弹出的临时 Mini 仍固定 320×420。适配器复用业务数据与编辑能力，专门设计快捷交互。使用语义主题变量，提供中英文本，避免品牌欢迎页、全局设置和重复导航占据面板。宿主负责 Space 切换、主面板定位和关闭。
 
 插件不必为了一个快捷卡片创建完整 Space。注册视图后可直接打开 Mini：
 
@@ -32,6 +32,32 @@ ctx.openMiniPanel?.('quick', {
 ```
 
 `viewId` 和 `mainViewId` 都是当前插件内的相对 id；宿主自动补 `plugin:<pluginId>:`。省略 `mainViewId` 时，主面板打开同一个视图。旧版宿主和 Web/mobile 可能没有此原生窗口接口，必须使用可选调用并保留 `ctx.openView()` 回退。
+
+## 多开（2.13.8 起）
+
+桌面上可以同时开几扇 Mini，每扇是一个独立的窗口。宿主按「实体」认窗口：同一个实体再开一次，叫出已经开着的那扇（更新参数、轻跳一下），不会再开一扇；不同的实体各开一扇，沿屏幕右缘从上往下排，这一列排满就往左换一列。
+
+| 打开方式 | 实体 |
+| --- | --- |
+| `ctx.openMiniPanel(viewId, opts)` | 当前插件的 `viewId`，加上 `opts.key`（有的话） |
+| Space 的 `mini` 适配 | Space id；Tangu 对话还要加上会话 |
+| 语音通话 | 只有一扇，再拨一通也用这一扇 |
+
+不带 `key` 时，同一个 `viewId` 只有一扇，和旧宿主上每次调用的效果一样（换参数、不新开）。要让不同内容各占一扇（比如每篇笔记一扇），传 `key`：
+
+```js
+ctx.openMiniPanel?.('note', {
+  key: notePath,
+  params: { notePath },
+  title: noteTitle,
+})
+```
+
+`key` 写稳定的实体标识（同一个东西每次都一样），不要放时间戳或随机数，否则每次都会多开一扇。旧宿主忽略 `key`。
+
+用户在 Mini 里换 Space 或换会话后，这扇窗按它现在显示的实体来认。用户想要同一个实体的第二扇，用胶囊左边下拉里的「复制一扇」（Duplicate window）；插件不用自己做这个入口。
+
+普通 Mini 最多同时开 6 扇（藏起来的也算，语音通话那扇不算）。满了宿主不开新窗，自己提示用户先关掉一扇；调用不会抛错，插件不用处理。⌘⇧M 开合最近用过的那扇；托盘菜单「全部 Mini」列出开着的每一扇。
 
 ## 插件上下文
 
@@ -53,7 +79,7 @@ macOS helper 在真实 HID 输入收口写入与 socket 同目录的 `foreground
 
 Electron 在应用启动后每 60ms 读信号，不依赖手动 Mini 窗口存在。主渲染器通过 `window:miniSession` 仅上报当前 `sessionId/runId`；主进程只接受主窗口顶层来源。有效前台租约、Forsion 无焦点、当前会话有运行三项同时成立才启动临时会话窗口。调用间隙保留同一轮运行的观察窗口；运行结束、换会话或焦点回到 Forsion 时收起。**运行结束且用户期间没回过 Forsion** 时，主进程把焦点还给自动 Mini 开场前最后获焦的 Forsion 窗口（期间被用户隐藏的不强拉；回焦、⌘⇧M 接管、退出一律不还）。后台调用和普通失焦不会自行启动窗口。
 
-临时窗口使用 `window=mini&transient=1`，定向 Tangu 会话视图，收到实际 Chat 挂载后的 `miniSessionReady` 且条件仍成立时才 `showInactive`。它停在光标所在显示器工作区的右上角（内边距 24px），不跟随光标；开窗不抢焦点，且不写手动 Mini 的 Space/布局持久化数据。窗口可聚焦并 `acceptFirstMouse`，头部拖拽区第一下就能拖走；这一下会激活 Forsion（macOS 下 `type:'panel'` 也挡不住，已用真实鼠标验证），但焦点落在卡片自身，`hasForsionFocus` 把自动 Mini 排除在外，所以拖动不算「回到 Forsion」。手动 Mini 优先，隐藏的手动窗口也不复用或覆盖；快捷键可将临时会话接到手动 Mini。插件无需新增接口或自行监听前台信号。
+临时窗口使用 `window=mini&transient=1`，定向 Tangu 会话视图，收到实际 Chat 挂载后的 `miniSessionReady` 且条件仍成立时才 `showInactive`。它停在光标所在显示器工作区的右上角（内边距 24px），不跟随光标；开窗不抢焦点，且不写手动 Mini 的 Space/布局持久化数据。窗口可聚焦并 `acceptFirstMouse`，头部拖拽区第一下就能拖走；这一下会激活 Forsion（macOS 下 `type:'panel'` 也挡不住，已用真实鼠标验证），但焦点落在卡片自身，`hasForsionFocus` 把自动 Mini 排除在外，所以拖动不算「回到 Forsion」。手动 Mini 优先，隐藏的手动窗口也不复用或覆盖；快捷键可将临时会话接到手动 Mini（多开后是那个会话自己的一扇，别的手动 Mini 原样留着）。插件无需新增接口或自行监听前台信号。
 
 Computer Use 期间（临时 Mini 全程；手动 Mini 在 `following()` 为真时）每 50ms 按指针位置切换鼠标穿透：指针不在卡片上 → 穿透，点击落到被操控的 App；指针在卡片上 → 可交互，用户可以拖走。只在状态变化时调用 `setIgnoreMouseEvents`。已知上限：CU 的 moveMouse 悬停恰好停在卡片上时，同一点的下一次点击会落在卡片上；若实际撞上，再改为按工具调用事件逐次穿透。
 
@@ -67,10 +93,11 @@ Genesis 与 `tangu-computer-use` 是独立仓库，交付时需要配套更新�
 npm run typecheck
 npm run check:parity
 npm run check:cssvar
-npm run build && npm run check:minicard && npm run check:miniauto
+npm run build && npm run check:minicard && npm run check:miniauto && npm run check:minimulti
 ```
 
-- 单测：`miniAutoPanel.test.ts`、`miniForeground.test.ts`、`lcl/spaces/miniPanel.test.ts`、Space 注册表及国际化覆盖测试。
+- 单测：`miniAutoPanel.test.ts`、`miniForeground.test.ts`、`lcl/spaces/miniPanel.test.ts`、`shared/miniPanel.test.ts`（实体键）、`windowGeometry.test.ts`（右缘排位）、`tray.test.ts`（全部 Mini）、Space 注册表及国际化覆盖测试。
+- `check:minimulti`：多开的真 Electron 台架。同一实体复用并轻跳、不同实体各开一扇且沿右缘排开不重叠、插件 `key`、第 7 扇被拒且主窗与 Mini 卡片里都有提示、语音通话自己一扇且不占名额、关一扇别的不受影响、「复制一扇」落在空出的位置、窗里换 Space 后按新实体认、⌘⇧M 开合最近那扇；最后打出每扇 Mini 渲染进程的内存与首开耗时。
 - Computer Use 插件：`npm run check:helper-refresh`、`npm run check:helper-signal`、`npm run check:mini-foreground`；完整 Swift 类型检查覆盖新增文件与所有原生源文件。
 - Electron 测试使用临时后端、Vault、磁盘插件和前台信号，验证真实 BrowserWindow 位置不动、穿透切换及截图；不向用户应用发送物理输入。真实 HID 到信号由 native reporter 测试与收口接线检查覆盖。
 - `npm run check:mininative` 使用已安装并授权的真实 macOS helper，只操作隔离 Electron 测试窗口：通过实际 `act` 移动鼠标激活前台，验证原生信号、自动会话窗口、不抢焦点、调用间隙持续显示、真实鼠标移动时卡片原地不动、结束收起并把焦点还给主窗口。无需真实模型；会话 SSE 使用夹具。它不注入 `foreground.json` 或覆盖光标 API，防止源码/模拟信号全绿但交付的旧 helper 根本不发信号。

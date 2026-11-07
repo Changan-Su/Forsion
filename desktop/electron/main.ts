@@ -19,7 +19,7 @@ import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
 import { createPluginSandbox, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
 import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
-import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
+import { MINI_WINDOW_LIMIT, VOICE_CALL_VIEW, miniEntityKey, normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MiniOpenResult, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
 import { normalizeUiAppearance, normalizeUiSync, UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync'
 /**
@@ -133,7 +133,7 @@ import { BROWSER_PARTITION, GUEST_ALLOWED_PERMISSIONS } from '../shared/browser'
 import { registerPtyIpc } from './pty'
 import { registerAssetSchemes as registerAmadeusAssetSchemes, registerAssetProtocol as registerAmadeusAssetProtocol } from './amadeus/assetProtocol'
 import { registerIuiLibProtocol } from './iuiLibProtocol'
-import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
+import { nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, stackPosition, mostlyOnScreen, rectsOverlap, type Rect, type Edge } from './windowGeometry'
 import { applyWindowMaterial, parseWindowMaterialRequest } from './windowMaterial'
 import { tabTitleBarOptions, parseTabTitleBar, watchTabTitleBar } from './tabTitleBar'
 import { createMiniDockMotion, miniDockFrame } from './miniDockMotion'
@@ -2119,7 +2119,6 @@ function openFloatingPanel(raw: unknown): { id: string } | undefined {
 let pendingMainPanelTarget: MainPanelTarget | null = null
 let mainPanelReady = false
 
-let miniWindow: BrowserWindow | null = null
 let miniSession: MiniSessionContext = { sessionId: null, runId: null }
 let miniAutoPanel: ReturnType<typeof startMiniAutoPanel> | null = null
 /** 电脑历史控制器(只在带 agent 后端的形态建;见 electron/computerHistory.ts)。 */
@@ -2177,38 +2176,84 @@ let appRefHelperAsked = false
 let appRefHelperOutdated = false
 let pendingAppRefHotkey: { ref: AppRef; at: number } | null = null
 let autoMiniReturnTo: BrowserWindow | null = null
-let stopMiniPassThrough: (() => void) | null = null
-/** Mini 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
-let miniTarget: MiniOpenOptions | undefined
 /** 贴边吸附态:edge=贴哪条边,expanded=当前是否展开。null=未贴边(自由浮动)。 */
 type MiniDockState = { edge: Edge; expanded: boolean; displayId: number; workArea: Rect }
-let miniDock: MiniDockState | null = null
-let miniDockMotion: ReturnType<typeof createMiniDockMotion> | null = null
-let suppressMiniMoved = false // 抑制程序化 setBounds 触发的 moved(否则折叠/展开自激)
-let miniDragging = false // 用户正在拖窗(moved 连发中);其间不吸附/不轮询,避免和拖拽对打(修「拖不出来」)
-let miniSettleTimer: NodeJS.Timeout | null = null
-let miniMovedTimer: NodeJS.Timeout | null = null
-let miniPollTimer: NodeJS.Timeout | null = null
+
+/** 一扇手开的 Mini(LCL 表面规范第二期 · Mini 多开)。原来这些全是模块级单例(只有一扇);现在每扇各一份,互不干扰。
+ *  自动 Mini(Computer Use 观察窗)和 App Dock 面板不在这里,各自仍是一扇。 */
+interface MiniEntry {
+  id: string
+  win: BrowserWindow
+  /** 实体键(shared/miniPanel 的 miniEntityKey):同一个再开 = 叫出这扇。窗里换了 Space / 会话,渲染层报上来改写(window:miniEntity)。 */
+  key: string
+  /** 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
+  target: MiniOpenOptions | undefined
+  /** 目标的代号:每发一次新目标 +1,随目标发给渲染层;渲染层报实体时带回它应用过的代号,旧代号的报告不认(防它覆盖刚发出的目标)。 */
+  gen: number
+  dock: MiniDockState | null
+  dockMotion: ReturnType<typeof createMiniDockMotion> | null
+  suppressMoved: boolean // 抑制程序化 setBounds 触发的 moved(否则折叠/展开自激)
+  dragging: boolean // 用户正在拖窗(moved 连发中);其间不吸附/不轮询,避免和拖拽对打(修「拖不出来」)
+  settleTimer: NodeJS.Timeout | null
+  movedTimer: NodeJS.Timeout | null
+  pollTimer: NodeJS.Timeout | null
+  /** 正在拖缩放边:起手时的窗口与光标;null = 没在拖。 */
+  resizeFrom: { bounds: Rect; cursor: Electron.Point; radius: number } | null
+  resizeDock: MiniDockState | null
+  resizeMaskActive: boolean
+  resizeUpdates: ReturnType<typeof createMiniResizeQueue>
+  stopPassThrough: (() => void) | null
+}
+const minis = new Map<string, MiniEntry>()
+/** 最近用过的在前(获焦 / 叫到前面都算):⌘⇧M 开合的是第一扇。 */
+let miniOrder: string[] = []
+let miniSeq = 0
+/** 位置和大小按实体键各记各的。只记在本次运行里(同原来的 miniSize);ponytail: 要跨重启记住时照 detached-windows.json 落盘。 */
+const miniLayouts = new Map<string, Rect>()
+const MINI_LAYOUT_KEEP = 64
 
 const MINI_CARD_WIDTH = 320
 const MINI_CARD_HEIGHT = 420
 const MINI_MIN = { width: 260, height: 160 }
 const MINI_MAX = { width: 640, height: 900 }
-/** 用户拉过的尺寸:关掉再开沿用(只记在本次运行里)。ponytail: 不落盘,要跨重启记住时照 detached-windows.json 的写法加。 */
-let miniSize = { width: MINI_CARD_WIDTH, height: MINI_CARD_HEIGHT }
-/** 正在拖缩放边:起手时的窗口与光标;null = 没在拖。 */
-let miniResizeFrom: { bounds: Rect; cursor: Electron.Point; radius: number } | null = null
-let miniResizeDock: MiniDockState | null = null
-let miniResizeMaskActive = false
-const miniResizeUpdates = createMiniResizeQueue(bounds => setMiniBounds(bounds, false))
-function clearIdleMiniResizeMask(): void {
-  if (!miniResizeMaskActive || miniResizeFrom || miniDock || !miniWindow || miniWindow.isDestroyed()) return
-  miniResizeMaskActive = false
-  miniWindow.setShape([])
-}
 const MINI_PEEK = 14 // 折叠后露出可辨识的把手宽度,避免 8px 细线难发现
 const MINI_TRIGGER_PAD = 6 // 悬停触发容差(薄条外扩,好点中)
 const MINI_HYSTERESIS = 28 // 展开后离开迟滞(出界超此才折叠,修「一动就弹回」)
+
+function liveMinis(): MiniEntry[] { return [...minis.values()].filter((m) => !m.win.isDestroyed()) }
+function miniWindows(): BrowserWindow[] { return liveMinis().map((m) => m.win) }
+function isMiniWindow(w: BrowserWindow | null | undefined): boolean { return !!w && liveMinis().some((m) => m.win === w) }
+function miniBySender(sender: Electron.WebContents): MiniEntry | undefined {
+  return liveMinis().find((m) => !m.win.webContents.isDestroyed() && m.win.webContents === sender)
+}
+function touchMini(m: MiniEntry): void { miniOrder = [m.id, ...miniOrder.filter((id) => id !== m.id && minis.has(id))] }
+function recentMini(): MiniEntry | undefined {
+  for (const id of miniOrder) { const m = minis.get(id); if (m && !m.win.isDestroyed()) return m }
+  return liveMinis().pop()
+}
+/** 同一实体可能有几扇(「复制一扇」开出来的):取最近用过的那扇。 */
+function findMini(key: string): MiniEntry | undefined {
+  const all = liveMinis().filter((m) => m.key === key)
+  return all.sort((a, b) => rank(a) - rank(b))[0]
+  function rank(m: MiniEntry): number { const i = miniOrder.indexOf(m.id); return i < 0 ? Number.MAX_SAFE_INTEGER : i }
+}
+function presentMini(m: MiniEntry): void { touchMini(m); present(m.win) }
+/** 记下这扇的位置和大小(按实体键)。正拉缩放边时不记;贴边时框被挪出了屏,只记大小(位置留用户放下时那次)。
+ *  sizeOnly:缩放刚结束,即使贴着边也要记下新大小。 */
+function rememberMiniLayout(m: MiniEntry, sizeOnly = false): void {
+  if (m.win.isDestroyed() || m.resizeFrom) return
+  const b = miniBounds(m), prev = miniLayouts.get(m.key)
+  if (m.dock && !sizeOnly && !prev) return
+  const next = m.dock ? { ...(prev ?? b), width: b.width, height: b.height } : b
+  miniLayouts.delete(m.key)
+  miniLayouts.set(m.key, next)
+  while (miniLayouts.size > MINI_LAYOUT_KEEP) miniLayouts.delete(miniLayouts.keys().next().value!)
+}
+function clearIdleMiniResizeMask(m: MiniEntry): void {
+  if (!m.resizeMaskActive || m.resizeFrom || m.dock || m.win.isDestroyed()) return
+  m.resizeMaskActive = false
+  m.win.setShape([])
+}
 
 function closeAutoMini(restore = false): void {
   const win = autoMiniWindow, back = autoMiniReturnTo
@@ -2249,15 +2294,21 @@ function openAutoMini(sessionId: string): void {
   loadRendererWith(win, { window: 'mini', transient: '1', sessionId })
 }
 
-function createMiniWindow(opts?: MiniOpenOptions): void {
-  miniTarget = opts
+function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniEntry {
   const wa = screen.getPrimaryDisplay().workArea
-  // 记住的大小也要放得进这块屏(四周留 24px):伸出工作区的卡片一挪就会被判成贴边、折起来
-  const width = Math.min(miniSize.width, wa.width - 48), height = Math.min(miniSize.height, wa.height - 48)
-  miniWindow = new BrowserWindow({
+  // 位置和大小按实体键各记各的;新实体用缺省大小。记住的大小也要放得进这块屏(四周留 24px):伸出工作区的卡片一挪就会被判成贴边、折起来
+  const remembered = miniLayouts.get(key)
+  const width = Math.min(remembered?.width ?? MINI_CARD_WIDTH, wa.width - 48), height = Math.min(remembered?.height ?? MINI_CARD_HEIGHT, wa.height - 48)
+  // 藏起来的也占位:再叫出来时不能和新开的叠在一处
+  const occupied = liveMinis().map(miniBounds)
+  const back = remembered && { x: remembered.x, y: remembered.y, width, height }
+  const pos = back && mostlyOnScreen(back, screen.getAllDisplays().map((d) => d.workArea)) && !occupied.some((o) => rectsOverlap(o, back))
+    ? back : stackPosition({ width, height }, wa, occupied)
+  const id = `m${++miniSeq}`
+  const win = new BrowserWindow({
     width, height,
-    x: wa.x + wa.width - width - 24,
-    y: wa.y + 24,
+    x: pos.x,
+    y: pos.y,
     frame: false,
     transparent: true,
     // 系统缩放边不开:透明窗在 Windows 上没有(Electron 去掉了 WS_THICKFRAME)。大小由卡片自绘的缩放边改,见 window:miniResize。
@@ -2270,48 +2321,64 @@ function createMiniWindow(opts?: MiniOpenOptions): void {
     show: !QUIET_WINDOWS,
     webPreferences: satelliteWebPreferences(),
   })
+  const m: MiniEntry = {
+    id, win, key, target: opts, gen: 0, dock: null, dockMotion: null, suppressMoved: false, dragging: false,
+    settleTimer: null, movedTimer: null, pollTimer: null, resizeFrom: null, resizeDock: null, resizeMaskActive: false,
+    resizeUpdates: createMiniResizeQueue((bounds) => setMiniBounds(m, bounds, false)), stopPassThrough: null,
+  }
+  minis.set(id, m)
+  touchMini(m)
   // The transparent Windows HWND can start a few DIP larger than constructor
   // width/height at fractional DPI. Restore the remembered CONTENT rect after
   // native creation, just as the resize path does, before the renderer paints.
-  if (process.platform === 'win32') miniWindow.setContentBounds({ x: wa.x + wa.width - width - 24, y: wa.y + 24, width, height })
-  if (QUIET_WINDOWS) miniWindow.showInactive()
-  miniWindow.setAlwaysOnTop(true, 'floating')
-  miniWindow.webContents.setWindowOpenHandler(openUrlHandler(miniWindow.webContents))
-  hardenNav(miniWindow.webContents)
-  miniWindow.webContents.on('did-finish-load', () => {
-    miniResizeUpdates.cancel()
-    miniResizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
-    miniResizeDock = null
-    if (miniTarget && miniWindow && !miniWindow.isDestroyed()) miniWindow.webContents.send('window:miniTarget', miniTarget)
+  if (process.platform === 'win32') win.setContentBounds({ x: pos.x, y: pos.y, width, height })
+  if (QUIET_WINDOWS) win.showInactive()
+  win.setAlwaysOnTop(true, 'floating')
+  win.webContents.setWindowOpenHandler(openUrlHandler(win.webContents))
+  hardenNav(win.webContents)
+  win.webContents.on('did-finish-load', () => {
+    m.resizeUpdates.cancel()
+    m.resizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
+    m.resizeDock = null
+    if (m.target && !win.isDestroyed()) win.webContents.send('window:miniTarget', { ...m.target, gen: m.gen })
   })
-  stopMiniPassThrough = startMiniPassThrough(miniWindow, {
+  m.stopPassThrough = startMiniPassThrough(win, {
     active: () => miniAutoPanel?.following() ?? false,
     cursor: () => screen.getCursorScreenPoint(),
   })
-  if (process.platform === 'win32') miniDockMotion = createMiniDockMotion(miniWindow)
-  miniWindow.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+  if (process.platform === 'win32') m.dockMotion = createMiniDockMotion(win)
+  win.webContents.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
     if (!isMainFrame || isInPlace) return // SketchCard/media iframe loads are not Mini reloads
-    miniResizeUpdates.cancel(); miniResizeFrom = null; miniResizeDock = null
-    if (miniDock && !miniDockMotion) setMiniBounds(expandedBounds(miniBounds(), miniDock.edge, miniDock.workArea), false)
-    miniDockMotion?.reset(false); miniDock = null; stopMiniPoll()
+    m.resizeUpdates.cancel(); m.resizeFrom = null; m.resizeDock = null
+    if (m.dock && !m.dockMotion) setMiniBounds(m, expandedBounds(miniBounds(m), m.dock.edge, m.dock.workArea), false)
+    m.dockMotion?.reset(false); m.dock = null; stopMiniPoll(m)
   })
-  miniWindow.on('move', onMiniMoved)
+  win.on('move', () => onMiniMoved(m))
   // Chromium stores this region in physical pixels. Drop it BEFORE ordinary
   // native dragging can cross to a monitor with another scale.
-  miniWindow.on('will-move', clearIdleMiniResizeMask)
-  miniWindow.on('resize', clearIdleMiniResizeMask)
-  miniWindow.on('closed', () => {
-    miniResizeUpdates.cancel()
-    miniResizeMaskActive = false
-    console.log('[win] mini closed'); stopMiniPassThrough?.(); stopMiniPassThrough = null
-    miniDockMotion?.stop(); miniDockMotion = null
-    if (miniSettleTimer) clearTimeout(miniSettleTimer)
-    if (miniMovedTimer) clearTimeout(miniMovedTimer)
-    suppressMiniMoved = false; miniDragging = false
-    miniWindow = null; miniTarget = undefined; miniDock = null; miniResizeFrom = null; miniResizeDock = null; stopMiniPoll()
+  win.on('will-move', () => clearIdleMiniResizeMask(m))
+  win.on('resize', () => clearIdleMiniResizeMask(m))
+  win.on('focus', () => touchMini(m))
+  // 托盘「全部 Mini」按窗口标题列出(渲染层把胶囊上的名字写进 document.title)
+  win.on('page-title-updated', () => refreshTrayMenu())
+  win.on('close', () => rememberMiniLayout(m))
+  win.on('closed', () => {
+    m.resizeUpdates.cancel()
+    m.resizeMaskActive = false
+    console.log('[win] mini closed', id, key); m.stopPassThrough?.(); m.stopPassThrough = null
+    m.dockMotion?.stop(); m.dockMotion = null
+    if (m.settleTimer) clearTimeout(m.settleTimer)
+    if (m.movedTimer) clearTimeout(m.movedTimer)
+    m.suppressMoved = false; m.dragging = false
+    m.target = undefined; m.dock = null; m.resizeFrom = null; m.resizeDock = null; stopMiniPoll(m)
+    minis.delete(id)
+    miniOrder = miniOrder.filter((x) => x !== id)
+    refreshTrayMenu()
   })
-  console.log('[win] mini open')
-  loadRendererWith(miniWindow, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
+  console.log('[win] mini open', id, key)
+  loadRendererWith(win, { window: 'mini', ...(opts?.sessionId ? { sessionId: opts.sessionId } : {}) })
+  refreshTrayMenu()
+  return m
 }
 
 // ══ 侧边拼接(App Dock):对话面板贴在别的 App 窗口旁边,像一个窗口那样一起动(跟随见 electron/appDock.ts)══
@@ -2404,117 +2471,157 @@ function dockSender(e: Electron.IpcMainInvokeEvent): boolean {
   return isTrustedSender(e) && !!dockWindow && !dockWindow.isDestroyed() && e.sender === dockWindow.webContents
 }
 
-function toggleMiniWindow(opts?: MiniOpenOptions): void {
+/** 打开 / 叫出一扇 Mini(LCL 表面规范第二期 · Mini 多开)。
+ *  - 不带目标(⌘⇧M / 托盘):开合最近用过的那扇;一扇都没有才新开。
+ *  - 带目标:同一实体(miniEntityKey)已开着 → 叫到前面、只更新目标、轻跳一下;没开 → 新开一扇。
+ *  - duplicate(「复制一扇」):不找已开的,直接再开一扇。
+ *  - 普通 Mini 满 MINI_WINDOW_LIMIT 扇就不开,结果交回调用方去提示(不静默失败);语音通话那扇不占名额。 */
+function openMiniWindow(opts?: MiniOpenOptions): MiniOpenResult {
   if (!opts && autoMiniSessionId) opts = { sessionId: autoMiniSessionId }
   miniAutoPanel?.dismiss()
-  if (miniWindow && !miniWindow.isDestroyed()) {
-    // 带目标是「把这条正式会话拿到 Mini 继续」:已显示也只更新+聚焦,不能反而把窗口藏掉。
-    if (opts?.sessionId || opts?.spaceId || opts?.view) {
-      miniTarget = opts
-      if (!miniWindow.webContents.isLoadingMainFrame()) miniWindow.webContents.send('window:miniTarget', opts)
-      present(miniWindow)
-    } else if (miniWindow.isVisible()) miniWindow.hide()
-    else present(miniWindow)
-  } else createMiniWindow(opts)
+  if (!opts) {
+    const m = recentMini()
+    if (!m) return createMini(undefined, miniEntityKey(undefined))
+    if (m.win.isVisible()) m.win.hide()
+    else presentMini(m)
+    return { ok: true, reused: true }
+  }
+  const { duplicate, ...target } = opts
+  const key = miniEntityKey(target)
+  // 通话一次只有一通:duplicate 也叫出那一扇(否则绕过「一扇」和名额豁免)
+  const open = duplicate && key !== VOICE_CALL_VIEW ? undefined : findMini(key)
+  if (!open) return createMini(target, key)
+  // 带目标是「把这个拿到 Mini 继续」:已显示也只更新 + 聚焦,不能反而把窗口藏掉。
+  open.target = target
+  open.gen++
+  if (!open.win.webContents.isLoadingMainFrame()) {
+    open.win.webContents.send('window:miniTarget', { ...target, gen: open.gen })
+    open.win.webContents.send('window:miniNudge')
+  }
+  presentMini(open)
+  return { ok: true, reused: true }
+}
+
+/** ⌘⇧M / 托盘这类主进程自己发起的打开:没有渲染层替它提示,满了用系统通知说一声(不静默失败)。 */
+function openMiniFromShell(): void {
+  const r = openMiniWindow()
+  if (!r.ok) notifyMiniLimit(r.limit)
+}
+function notifyMiniLimit(limit: number): void {
+  if (!Notification.isSupported()) return
+  try { new Notification({ title: 'Forsion', body: mt('main.mini.limit', { n: limit }) }).show() } catch { /* 通知不可用 */ }
+}
+
+function createMini(target: MiniOpenOptions | undefined, key: string): MiniOpenResult {
+  if (key !== VOICE_CALL_VIEW && liveMinis().filter((m) => m.key !== VOICE_CALL_VIEW).length >= MINI_WINDOW_LIMIT) {
+    console.log('[win] mini limit reached', MINI_WINDOW_LIMIT, key)
+    return { ok: false, reason: 'limit', limit: MINI_WINDOW_LIMIT }
+  }
+  createMiniWindow(target, key)
+  return { ok: true, reused: false }
 }
 
 /** Windows getBounds encloses fractional-DPI rounding; content bounds match the painted card. */
-function miniBounds(): Rect {
-  return process.platform === 'win32' ? miniWindow!.getContentBounds() : miniWindow!.getBounds()
+function miniBounds(m: MiniEntry): Rect {
+  return process.platform === 'win32' ? m.win.getContentBounds() : m.win.getBounds()
 }
 
 /** Native geometry changes only for snap/drag/resize. Windows docking animation stays in the renderer. */
-function setMiniBounds(r: Rect, animate = true): void {
-  if (!miniWindow || miniWindow.isDestroyed()) return
-  const previous = miniBounds()
+function setMiniBounds(m: MiniEntry, r: Rect, animate = true): void {
+  if (m.win.isDestroyed()) return
+  const win = m.win
+  const previous = miniBounds(m)
   const changed: Partial<Rect> = {}
   for (const key of ['x', 'y', 'width', 'height'] as const) if (r[key] !== previous[key]) changed[key] = r[key]
   if (Object.keys(changed).length === 0) return
-  suppressMiniMoved = true
+  m.suppressMoved = true
   // Partial setBounds reuses the rounded OUTER size on Windows, growing it on each move
   // at 125% DPI. Write the complete CONTENT rect instead; its size remains stable.
   if (process.platform === 'win32') {
     // Keep BOTH the old and new HWND extents rounded between the native calls.
     // Growing a rounded region before its HWND would clip halfway down the old
     // height and briefly expose square corners, just like shrinking stale paint.
-    if (miniResizeFrom) miniWindow.setShape(miniResizeShape(Math.min(previous.width, r.width), Math.min(previous.height, r.height), miniResizeFrom.radius))
-    miniWindow.setContentBounds(r)
-    if (miniResizeFrom) {
-      miniWindow.setShape(miniResizeShape(r.width, r.height, miniResizeFrom.radius))
-      miniResizeMaskActive = true
+    if (m.resizeFrom) win.setShape(miniResizeShape(Math.min(previous.width, r.width), Math.min(previous.height, r.height), m.resizeFrom.radius))
+    win.setContentBounds(r)
+    if (m.resizeFrom) {
+      win.setShape(miniResizeShape(r.width, r.height, m.resizeFrom.radius))
+      m.resizeMaskActive = true
     }
   }
-  else miniWindow.setBounds(changed, animate && process.platform === 'darwin')
+  else win.setBounds(changed, animate && process.platform === 'darwin')
   // 单个定时器:连发(拖缩放边)时后一次顺延,前一次的定时器不会提前放开抑制
-  if (miniMovedTimer) clearTimeout(miniMovedTimer)
-  miniMovedTimer = setTimeout(() => { suppressMiniMoved = false }, animate && process.platform === 'darwin' ? 320 : 60)
+  if (m.movedTimer) clearTimeout(m.movedTimer)
+  m.movedTimer = setTimeout(() => { m.suppressMoved = false }, animate && process.platform === 'darwin' ? 320 : 60)
 }
 
 // moved 连发 = 用户在拖窗;只在**停稳 200ms 后**才判贴边(拖拽过程中绝不折叠 → 能自由拖出)。
-function onMiniMoved(): void {
-  if (!miniWindow || suppressMiniMoved || miniResizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
-  clearIdleMiniResizeMask()
-  if (miniDock) { miniDockMotion?.reset(); miniDock = null; stopMiniPoll() }
-  miniDragging = true
-  if (miniSettleTimer) clearTimeout(miniSettleTimer)
-  miniSettleTimer = setTimeout(onMiniSettled, 200)
+function onMiniMoved(m: MiniEntry): void {
+  if (m.win.isDestroyed() || m.suppressMoved || m.resizeFrom) return // 程序化移动 / 拖缩放边不算用户拖窗
+  clearIdleMiniResizeMask(m)
+  if (m.dock) { m.dockMotion?.reset(); m.dock = null; stopMiniPoll(m) }
+  m.dragging = true
+  if (m.settleTimer) clearTimeout(m.settleTimer)
+  m.settleTimer = setTimeout(() => onMiniSettled(m), 200)
 }
 
-function onMiniSettled(): void {
-  miniDragging = false
-  if (!miniWindow || miniWindow.isDestroyed()) return
-  const b = miniBounds()
+function onMiniSettled(m: MiniEntry): void {
+  m.dragging = false
+  if (m.win.isDestroyed()) return
+  const b = miniBounds(m)
   const display = screen.getDisplayMatching(b), wa = display.workArea
   const edge = nearestEdge(b, wa)
   if (edge) {
-    miniDock = { edge, expanded: false, displayId: display.id, workArea: wa }
-    if (miniDockMotion) {
-      setMiniBounds(expandedBounds(b, edge, wa), false)
-      miniDockMotion.set(edge, true, MINI_PEEK)
-    } else setMiniBounds(collapsedBounds(b, edge, wa, MINI_PEEK))
-    ensureMiniPoll()
+    rememberMiniLayout(m) // 折起来之前记下用户放下的位置
+    m.dock = { edge, expanded: false, displayId: display.id, workArea: wa }
+    if (m.dockMotion) {
+      setMiniBounds(m, expandedBounds(b, edge, wa), false)
+      m.dockMotion.set(edge, true, MINI_PEEK)
+    } else setMiniBounds(m, collapsedBounds(b, edge, wa, MINI_PEEK))
+    ensureMiniPoll(m)
   } else {
-    miniDock = null // 拖离边 → 解除吸附
-    stopMiniPoll()
+    m.dock = null // 拖离边 → 解除吸附
+    stopMiniPoll(m)
+    rememberMiniLayout(m)
   }
 }
 
 // 贴边时轮询光标(替掉 frameless 透明窗上不可靠的 DOM mouseenter/leave):折叠态触到薄条→展开,展开态离开(超迟滞)→折叠。
-function ensureMiniPoll(): void {
-  if (miniPollTimer) return
-  miniPollTimer = setInterval(pollMiniCursor, 90)
+function ensureMiniPoll(m: MiniEntry): void {
+  if (m.pollTimer) return
+  m.pollTimer = setInterval(() => pollMiniCursor(m), 90)
 }
-function stopMiniPoll(): void {
-  if (miniPollTimer) { clearInterval(miniPollTimer); miniPollTimer = null }
+function stopMiniPoll(m: MiniEntry): void {
+  if (m.pollTimer) { clearInterval(m.pollTimer); m.pollTimer = null }
 }
-function pollMiniCursor(): void {
-  if (!miniWindow || miniWindow.isDestroyed() || !miniWindow.isVisible() || !miniDock || miniDragging || suppressMiniMoved || miniResizeFrom || miniDockMotion?.pending()) return
+function pollMiniCursor(m: MiniEntry): void {
+  const dock = m.dock
+  if (m.win.isDestroyed() || !m.win.isVisible() || !dock || m.dragging || m.suppressMoved || m.resizeFrom || m.dockMotion?.pending()) return
   const pt = screen.getCursorScreenPoint()
-  const b = miniBounds()
+  const b = miniBounds(m)
   // Never infer ownership from a tucked window: most of it can overlap the next monitor.
-  const display = screen.getAllDisplays().find((d) => d.id === miniDock!.displayId)
-  if (!display || JSON.stringify(display.workArea) !== JSON.stringify(miniDock.workArea)) {
-    miniDockMotion?.reset(); miniDock = null; stopMiniPoll()
+  const display = screen.getAllDisplays().find((d) => d.id === dock.displayId)
+  if (!display || JSON.stringify(display.workArea) !== JSON.stringify(dock.workArea)) {
+    m.dockMotion?.reset(); m.dock = null; stopMiniPoll(m)
     const area = screen.getDisplayNearestPoint(pt).workArea
-    setMiniBounds({ ...b, x: Math.max(area.x, Math.min(b.x, area.x + area.width - b.width)), y: Math.max(area.y, Math.min(b.y, area.y + area.height - b.height)) }, false)
+    setMiniBounds(m, { ...b, x: Math.max(area.x, Math.min(b.x, area.x + area.width - b.width)), y: Math.max(area.y, Math.min(b.y, area.y + area.height - b.height)) }, false)
     return
   }
-  const wa = miniDock.workArea
-  if (!miniDock.expanded) {
+  const wa = dock.workArea
+  if (!dock.expanded) {
     // 折叠:光标触到薄条(可见交集 + 容差)→ 展开
-    const clip = miniDockMotion ? miniDockFrame(b, miniDock.edge, MINI_PEEK).clip : null
+    const clip = m.dockMotion ? miniDockFrame(b, dock.edge, MINI_PEEK).clip : null
     const visible = clip ? { ...clip, x: b.x + clip.x, y: b.y + clip.y } : visibleRect(b, wa)
     if (pointInRect(pt.x, pt.y, growRect(visible, MINI_TRIGGER_PAD))) {
-      miniDock.expanded = true
-      if (miniDockMotion) miniDockMotion.set(miniDock.edge, false, MINI_PEEK)
-      else setMiniBounds(expandedBounds(b, miniDock.edge, wa))
+      dock.expanded = true
+      if (m.dockMotion) m.dockMotion.set(dock.edge, false, MINI_PEEK)
+      else setMiniBounds(m, expandedBounds(b, dock.edge, wa))
     }
   } else {
     // 展开:光标离开窗口 + 迟滞边距 → 折叠(小幅移动不触发,修「一动就弹回」)
     if (!pointInRect(pt.x, pt.y, growRect(b, MINI_HYSTERESIS))) {
-      miniDock.expanded = false
-      if (miniDockMotion) miniDockMotion.set(miniDock.edge, true, MINI_PEEK)
-      else setMiniBounds(collapsedBounds(b, miniDock.edge, wa, MINI_PEEK))
+      dock.expanded = false
+      if (m.dockMotion) m.dockMotion.set(dock.edge, true, MINI_PEEK)
+      else setMiniBounds(m, collapsedBounds(b, dock.edge, wa, MINI_PEEK))
     }
   }
 }
@@ -2847,7 +2954,7 @@ app.whenReady().then(async () => {
     loadConfig,
     ensureBackend,
     refreshUnitHost,
-    renderers: () => [mainWindow, miniWindow, ...detachedWindows.values()]
+    renderers: () => [mainWindow, ...miniWindows(), ...detachedWindows.values()]
       .filter((w): w is BrowserWindow => !!w && !w.isDestroyed())
       .map((w) => w.webContents)
       .filter((wc) => !wc.isDestroyed() && !!wc.getURL() && !wc.isLoadingMainFrame()),
@@ -3850,7 +3957,7 @@ app.whenReady().then(async () => {
     const request = parseWindowMaterialRequest(input)
     if (!request) return { ok: false }
     const win = BrowserWindow.fromWebContents(e.sender)
-    applyWindowMaterial(win, request, process.platform, !!win && (win === miniWindow || win === autoMiniWindow || win === dockWindow))
+    applyWindowMaterial(win, request, process.platform, !!win && (isMiniWindow(win) || win === autoMiniWindow || win === dockWindow))
     return { ok: true }
   })
   ipcMain.handle('window:setTabTitleBar', (e, input: unknown) => {
@@ -4104,7 +4211,7 @@ app.whenReady().then(async () => {
       if (!QUIET_WINDOWS) app.focus({ steal: true })
       // 送到用户最后在用的那个 Forsion 窗口,只认放得下输入框的(独立窗 / Mini / App Dock);设置浮窗之类回主窗
       const w = lastFocusedWindow
-      const last = w && !w.isDestroyed() && (w === miniWindow || w === dockWindow || [...detachedWindows.values()].includes(w)) ? w : null
+      const last = w && !w.isDestroyed() && (isMiniWindow(w) || w === dockWindow || [...detachedWindows.values()].includes(w)) ? w : null
       if (last) {
         if (last.isMinimized()) last.restore()
         present(last)
@@ -4567,9 +4674,30 @@ app.whenReady().then(async () => {
     const bounds = at2 ? { x: Math.round(at2.screenX), y: Math.round(at2.screenY), width: space ? 1100 : 900, height: space ? 760 : 680 } : undefined
     return { id: createDetachedWindow(space ? { space, bounds } : { views: list, bounds }) }
   })
-  ipcMain.on('window:openMini', (e, raw: unknown) => {
-    if (!isTrustedSender(e)) return
-    toggleMiniWindow(normalizeMiniOpenOptions(raw))
+  // invoke:结果交回调用方(满了由它提示用户,不静默失败)。
+  ipcMain.handle('window:openMini', (e, raw: unknown): MiniOpenResult | undefined => {
+    if (!isTrustedSender(e)) return undefined
+    const r = openMiniWindow(normalizeMiniOpenOptions(raw))
+    // 主窗和 Mini 自己会提示(通知 / 卡片里);独立窗、浮动面板里没有通知宿主,由这里用系统通知说
+    if (!r.ok && e.sender !== mainWindow?.webContents && !miniBySender(e.sender)) notifyMiniLimit(r.limit)
+    return r
+  })
+  // 渲染层报这扇 Mini 现在显示的是哪个实体(窗里换了 Space / 会话):改写实体键,之后再开同一个就叫出这扇。
+  // 只认 Space 目标、只认本来就是 Space 的那几扇:直开的视图(插件 / 语音通话)不会被改成别的,名额也就不会被绕过。
+  ipcMain.on('window:miniEntity', (e, raw: unknown) => {
+    const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
+    const target = normalizeMiniOpenOptions(raw)
+    if (!m || !target || target.view || m.key === VOICE_CALL_VIEW || m.key.startsWith('view:')) return
+    // 报的是哪一代目标之后的样子:不是当前这一代(新目标刚发出、渲染层还没应用)就不认
+    const gen = (raw as { gen?: unknown }).gen
+    if (m.target && gen !== m.gen) return
+    // 还在同一个 Space 里:打开时带的显式 key 留着(渲染层不知道它)
+    const keep = m.target && !m.target.view && m.target.spaceId === target.spaceId ? m.target.key : undefined
+    const entity: MiniOpenOptions = { spaceId: target.spaceId, sessionId: target.sessionId, ...(keep ? { key: keep } : {}) }
+    const key = miniEntityKey(entity)
+    if (key === m.key) return // 还是原来那个:留着打开时带的参数
+    m.key = key
+    m.target = entity // 页面重载(崩溃自愈)回到现在显示的,而不是最初打开的那个
   })
   ipcMain.handle('window:openFloating', (e, raw: unknown) => {
     if (!isTrustedSender(e)) return undefined
@@ -4582,51 +4710,54 @@ app.whenReady().then(async () => {
     return win?.webContents === e.sender ? floatingTargets.get(id) : undefined
   })
   ipcMain.on('window:miniReady', (e) => {
-    if (isTrustedSender(e) && e.sender === miniWindow?.webContents && miniTarget) e.sender.send('window:miniTarget', miniTarget)
+    const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
+    if (m?.target) e.sender.send('window:miniTarget', { ...m.target, gen: m.gen })
     if (isTrustedSender(e) && e.sender === autoMiniWindow?.webContents && autoMiniSessionId) e.sender.send('window:miniTarget', { sessionId: autoMiniSessionId })
   })
   ipcMain.on('window:miniDockMotionDone', (e, id: unknown) => {
-    if (isTrustedSender(e) && e.sender === miniWindow?.webContents && typeof id === 'number' && Number.isSafeInteger(id)) miniDockMotion?.finish(id)
+    const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
+    if (m && typeof id === 'number' && Number.isSafeInteger(id)) m.dockMotion?.finish(id)
   })
   // 屏幕坐标不受界面缩放影响;保留读光标的兼容路径。edge 不合法 = 松手。
   ipcMain.on('window:miniResize', (e, edge: unknown, start: unknown, point: unknown) => {
-    if (!isTrustedSender(e) || !miniWindow || miniWindow.isDestroyed() || e.sender !== miniWindow.webContents) return
+    const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
+    if (!m) return
     if (typeof edge !== 'string' || !/^(?=.)[ns]?[ew]?$/.test(edge)) {
-      miniResizeUpdates.flush()
-      const dock = miniResizeDock
-      miniResizeFrom = null
-      miniResizeDock = null
+      m.resizeUpdates.flush()
+      const dock = m.resizeDock
+      m.resizeFrom = null
+      m.resizeDock = null
       if (dock) {
         const display = screen.getAllDisplays().find(d => d.id === dock.displayId)
         // Resizing an expanded docked card pauses docking only for the gesture.
         // Keep it docked if its original edge and monitor still match afterwards.
-        if (display && JSON.stringify(display.workArea) === JSON.stringify(dock.workArea) && nearestEdge(miniBounds(), dock.workArea) === dock.edge) {
-          miniDock = { ...dock, expanded: true }
-          setMiniBounds(expandedBounds(miniBounds(), dock.edge, dock.workArea), false)
-          ensureMiniPoll()
+        if (display && JSON.stringify(display.workArea) === JSON.stringify(dock.workArea) && nearestEdge(miniBounds(m), dock.workArea) === dock.edge) {
+          m.dock = { ...dock, expanded: true }
+          setMiniBounds(m, expandedBounds(miniBounds(m), dock.edge, dock.workArea), false)
+          ensureMiniPoll(m)
         }
       }
-      if (process.platform === 'darwin') miniWindow.invalidateShadow() // 透明窗的投影按新轮廓重算(长大时新露出的那块在重绘前是透明的)
+      rememberMiniLayout(m, true)
+      if (process.platform === 'darwin') m.win.invalidateShadow() // 透明窗的投影按新轮廓重算(长大时新露出的那块在重绘前是透明的)
       return
     }
-    if (miniDock && !miniDock.expanded) return // 折叠在屏幕边上时不改大小:缩窄会把露在屏内的那条把手也带出去
+    if (m.dock && !m.dock.expanded) return // 折叠在屏幕边上时不改大小:缩窄会把露在屏内的那条把手也带出去
     const p = point as (Partial<Electron.Point> & { radius?: number }) | null
     const cursor = p && Number.isFinite(p.x) && Number.isFinite(p.y)
       ? { x: Math.round(p.x!), y: Math.round(p.y!) } : screen.getCursorScreenPoint()
-    if (start === true || !miniResizeFrom) {
-      miniResizeUpdates.flush()
+    if (start === true || !m.resizeFrom) {
+      m.resizeUpdates.flush()
       // 刚拖到边上、还没判贴边就开始拉:那次判定作废,免得拉到一半被折叠
-      if (miniSettleTimer) { clearTimeout(miniSettleTimer); miniSettleTimer = null }
-      miniDragging = false
-      miniResizeDock = miniDock ? { ...miniDock } : null
-      miniDockMotion?.reset(); miniDock = null; stopMiniPoll()
-      miniResizeFrom = { bounds: miniBounds(), cursor, radius: p && Number.isFinite(p.radius) ? Math.max(0, Math.min(64, p.radius!)) : 16 }
+      if (m.settleTimer) { clearTimeout(m.settleTimer); m.settleTimer = null }
+      m.dragging = false
+      m.resizeDock = m.dock ? { ...m.dock } : null
+      m.dockMotion?.reset(); m.dock = null; stopMiniPoll(m)
+      m.resizeFrom = { bounds: miniBounds(m), cursor, radius: p && Number.isFinite(p.radius) ? Math.max(0, Math.min(64, p.radius!)) : 16 }
     }
-    const from = miniResizeFrom
+    const from = m.resizeFrom
     const next = resizeFromEdge(from.bounds, edge, cursor.x - from.cursor.x, cursor.y - from.cursor.y, MINI_MIN, MINI_MAX,
       screen.getDisplayMatching(from.bounds).workArea)
-    miniSize = { width: next.width, height: next.height }
-    miniResizeUpdates.push(next)
+    m.resizeUpdates.push(next)
   })
   ipcMain.on('window:miniSession', (e, raw: unknown) => {
     if (!isTrustedSender(e) || e.sender !== mainWindow?.webContents) return
@@ -4666,7 +4797,7 @@ app.whenReady().then(async () => {
     const deliver = (): void => {
       // extensions-changed 也要到两扇 mini(手开的 / 自动弹的):它们和分离窗一样各握一份插件实例(见 amadeusPlugins.ts)。
       const recipients = req.action === 'skills-changed' || req.action === 'agents-changed' || req.action === 'extensions-changed'
-        ? [mainWindow, miniWindow, autoMiniWindow, ...detachedWindows.values(), ...floatingWindows.values()]
+        ? [mainWindow, ...miniWindows(), autoMiniWindow, ...detachedWindows.values(), ...floatingWindows.values()]
         : [mainWindow]
       for (const win of recipients) if (win && !win.isDestroyed() && !win.webContents.isDestroyed() && win.webContents !== e.sender) {
         win.webContents.send('window:mainAction', req.action, req.payload)
@@ -4684,7 +4815,7 @@ app.whenReady().then(async () => {
     if (!state) return
     // An idle resize mask belongs to the old CSS radius/zoom. No HWND resize is
     // pending now, so let the card paint the new theme's corners itself.
-    clearIdleMiniResizeMask()
+    for (const m of liveMinis()) clearIdleMiniResizeMask(m)
     // ⚠️ 不从 prefs['tangu_locale'] 取主进程语言(P1-KF):那是手选键,任何字体 / 缩放广播都带着它的 null → 曾把中文界面的主进程文案重置成系统英文。
     // 语言走下面的 ui:locale(发方窗口自己切语言时 i18n.tsx 会报;收方重放后也会再报一次同值,主进程同值不动)。
     for (const w of BrowserWindow.getAllWindows()) {
@@ -4840,7 +4971,7 @@ app.whenReady().then(async () => {
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
   const MINI_ACCEL = MINI_ACCELERATOR // 托盘菜单「新建 Mini 对话」显示的是同一个
-  const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, () => toggleMiniWindow()) } catch { /* 快捷键冲突 */ } }
+  const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, openMiniFromShell) } catch { /* 快捷键冲突 */ } }
   if (!SANDBOX) registerMiniShortcut()
   if (!SANDBOX) globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
   if (PRODUCT.agentBackend && !SANDBOX) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
@@ -4863,7 +4994,7 @@ app.whenReady().then(async () => {
       readForeground: readComputerUseForeground,
       // 用户按住自动 Mini 拖走时焦点落在它自己身上 —— 不算「回到 Forsion」,否则一拖就收起。
       hasForsionFocus: () => { const w = BrowserWindow.getFocusedWindow(); return !!w && w !== autoMiniWindow },
-      manualMiniVisible: () => !!miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible(),
+      manualMiniVisible: () => liveMinis().some((m) => m.win.isVisible()),
       session: () => miniSession,
       open: openAutoMini, close: closeAutoMini,
     })
@@ -4892,8 +5023,13 @@ app.whenReady().then(async () => {
     } : undefined,
     // 「随处说一句」= Mini 窗:已经开着就提到前面(热键是开合切换,菜单项不该把开着的 Mini 藏掉)
     newMini: {
-      open: () => { if (miniWindow && !miniWindow.isDestroyed() && miniWindow.isVisible()) present(miniWindow); else toggleMiniWindow() },
+      open: () => { const m = recentMini(); if (m?.win.isVisible()) presentMini(m); else openMiniFromShell() },
       accelerator: () => (globalShortcut.isRegistered(MINI_ACCEL) ? MINI_ACCEL : null),
+    },
+    // 「全部 Mini」:开着的每一扇(藏起来的也在),点一行叫到前面。名字是窗口标题(渲染层写胶囊上的名字)。
+    minis: {
+      list: () => liveMinis().map((m) => ({ id: m.id, title: m.win.getTitle(), visible: m.win.isVisible() })),
+      open: (id) => { const m = minis.get(id); if (m && !m.win.isDestroyed()) presentMini(m) },
     },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。

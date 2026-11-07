@@ -40,6 +40,11 @@ export interface TrayHandlers {
     open: () => void
     accelerator: () => string | null
   }
+  /** 「全部 Mini」(LCL 表面规范第二期 · Mini 多开):开着的每一扇(藏起来的也列),点一行 = 叫到前面。没有开着的就不出这一项。 */
+  minis?: {
+    list: () => readonly TrayMiniRow[]
+    open: (id: string) => void
+  }
   /** P1-K2 远程活动 / 急停(可选:无 agent 后端的产品形态不传)。文案走 main.remoteSafety.tray.*,不进 COPY 表(R-23)。 */
   remote?: {
     view: () => RemoteTrayView
@@ -50,6 +55,8 @@ export interface TrayHandlers {
 }
 void REMOTE_SAFETY_MESSAGES // 片段随 import 登记(mtFor 取得到)
 
+/** 一扇开着的 Mini:title = 窗口标题(渲染层写的胶囊名字),空 = 「Mini」。 */
+export interface TrayMiniRow { id: string; title: string; visible: boolean }
 /** 渲染层报上来的一条会话(标题已按界面语言显示好)。 */
 export interface TraySessionRow { id: string; title: string; state: 'run' | 'wait' }
 /** 菜单顶上最多列几条(等你的排前)。 */
@@ -80,7 +87,7 @@ let handlers: TrayHandlers | null = null
 
 const COPY = {
   zh: {
-    show: '显示 Forsion', checkUpdates: '检查更新', quit: '退出 Forsion', newMini: '新建 Mini 对话',
+    show: '显示 Forsion', checkUpdates: '检查更新', quit: '退出 Forsion', newMini: '新建 Mini 对话', allMinis: '全部 Mini',
     sessWait: '等你 · {n}', sessRun: '在跑 · {n}', sessMore: '还有 {n} 个…', sessUntitled: '未命名会话',
     chPause: '暂停电脑历史 1 小时', chResume: '恢复电脑历史',
     chRecording: '电脑历史：记录中', chPausedUntil: '电脑历史：已暂停至 {time}',
@@ -88,7 +95,7 @@ const COPY = {
     chHelperMissing: '电脑历史：未安装辅助程序', chHelperOutdated: '电脑历史：辅助程序需要更新',
   },
   en: {
-    show: 'Show Forsion', checkUpdates: 'Check for updates', quit: 'Quit Forsion', newMini: 'New Mini chat',
+    show: 'Show Forsion', checkUpdates: 'Check for updates', quit: 'Quit Forsion', newMini: 'New Mini chat', allMinis: 'All Mini windows',
     sessWait: 'Needs you · {n}', sessRun: 'Running · {n}', sessMore: '{n} more…', sessUntitled: 'Untitled session',
     chPause: 'Pause computer history for 1 hour', chResume: 'Resume computer history',
     chRecording: 'Computer history: recording', chPausedUntil: 'Computer history: paused until {time}',
@@ -187,6 +194,18 @@ export function traySessionItems(s: NonNullable<TrayHandlers['sessions']>, show:
   return [...items, { type: 'separator' }]
 }
 
+/** 「全部 Mini」子菜单:每扇一行,按打开的先后;标题压成一行、截短。没有开着的 = 不出。 */
+export function trayMiniItems(m: NonNullable<TrayHandlers['minis']>, lang: TrayLang, platform: NodeJS.Platform = process.platform): Electron.MenuItemConstructorOptions[] {
+  let rows: readonly TrayMiniRow[]
+  try { rows = m.list() } catch { return [] }
+  if (!rows.length) return []
+  const title = (r: TrayMiniRow): string => {
+    const one = r.title.replace(/\s+/g, ' ').trim() || 'Mini'
+    return menuText(one.length > 48 ? `${one.slice(0, 47)}…` : one, platform)
+  }
+  return [{ label: COPY[lang].allMinis, submenu: rows.map((r) => ({ label: title(r), click: () => m.open(r.id) })) }]
+}
+
 function newMiniItem(m: NonNullable<TrayHandlers['newMini']>, label: string): Electron.MenuItemConstructorOptions {
   let acc: string | null = null
   try { acc = m.accelerator() } catch { /* 当没注册 */ }
@@ -206,6 +225,7 @@ export function trayMenuTemplate(h: TrayHandlers, lang: TrayLang, now = Date.now
     ...(h.remote ? remoteTrayItems(h.remote, lang) : []), // P1-K2
     { label: t.show, click: () => h.show() },
     ...(h.newMini ? [newMiniItem(h.newMini, t.newMini)] : []),
+    ...(h.minis ? trayMiniItems(h.minis, lang, platform) : []),
     { label: t.checkUpdates, click: () => h.checkUpdates() },
   ]
   const ch = h.computerHistory

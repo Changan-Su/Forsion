@@ -3,6 +3,7 @@
 // themes) that the UI subscribes to. Built-in plugins are registered on init(); external
 // (Forsion) plugins are discovered from ~/.forsion/plugins/ and evaluated here.
 //
+import { openMiniWindow } from '../../mini/openMiniWindow'
 import { leaseAccountResponse } from './accountResponse'
 import { pushMobileBack } from '../lib/mobileBack'
 import { desktopAccount } from './desktopAccount'
@@ -1909,7 +1910,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
         const def = get().views.find((item) => item.pluginId === pluginId && item.item.id === viewId)?.item
         if (!def || !ctxAlive()) return
         const mainType = `plugin:${pluginId}:${opts?.mainViewId || viewId}`
-        hostTangu()?.openMini?.({ title: opts?.title || pluginText(def.title), params: opts?.params,
+        // 2.13.8 起多开:同一 viewId(+ key)再开 = 叫出已开的那扇;满了由 openMiniWindow 提示用户
+        const key = typeof opts?.key === 'string' ? opts.key.trim().slice(0, 128) || undefined : undefined
+        void openMiniWindow({ title: opts?.title || pluginText(def.title), params: opts?.params, key,
           view: { type, params: opts?.params }, mainView: { type: mainType, params: opts?.mainViewParams } })
       },
     } : {}),

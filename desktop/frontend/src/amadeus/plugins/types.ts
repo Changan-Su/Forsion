@@ -739,6 +739,10 @@ export interface PluginMiniPanelOptions {
   /** Relative id of this plugin's full-size destination; defaults to viewId. */
   mainViewId?: string
   mainViewParams?: Record<string, unknown>
+  /** Identity of the thing shown (2.13.8+). Several Mini windows can be open at once: calling again with the
+   *  same viewId and key focuses the open window and updates its params; a different key opens another window.
+   *  Without key there is one window per viewId (what older hosts did with every call). Older hosts ignore it. */
+  key?: string
 }
 
 /** One row in a plugin list source. The list stays a flat array; hierarchy is optional and expressed
@@ -1746,7 +1750,9 @@ export interface PluginContext {
    *  Desktop uses a native window; Web uses an overlay. Feature-detect on older hosts/mobile. */
   openFloatingPanel?(viewId: string, opts?: PluginFloatingPanelOptions): void
   /** Open one of this plugin's registered views in the compact native Mini Panel.
-   *  Desktop-only; feature-detect on older hosts and Web/mobile. */
+   *  Desktop-only; feature-detect on older hosts and Web/mobile. 2.13.8+: Mini windows can be open side by side —
+   *  the same viewId (+ `key`) reuses its window, other views / keys open their own, up to the host's limit
+   *  (the host tells the user when it is reached; the call never throws). */
   openMiniPanel?(viewId: string, opts?: PluginMiniPanelOptions): void
   /** Contribute a list source to the unified workspace sidebar (2026-08-25+). Old hosts lack it:
    *  always call as `ctx.registerListSource?.(…)`. See ListSourceContribution. */

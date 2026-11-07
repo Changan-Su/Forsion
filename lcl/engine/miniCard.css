@@ -317,3 +317,28 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
 @media (prefers-reduced-transparency: reduce) {
   .mini-card-popover { background-color: var(--bg-card, var(--bg, #fff)); backdrop-filter: none; }
 }
+
+/* Mini 多开(LCL 表面规范第二期):左胶囊下拉里「复制一扇」那行前的分隔,和卡片里的一行提示(Mini 窗没有通知宿主)。 */
+.mini-card-popover-sep {
+  height: var(--border-width, 1px);
+  margin: 4px 6px;
+  background: color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.1)) 78%, transparent);
+}
+.mini-card-notice {
+  position: absolute;
+  top: 50px;
+  left: 14px;
+  right: 14px;
+  z-index: var(--z-view-float, 20);
+  width: fit-content;
+  margin-inline: auto;
+  padding: 6px 11px;
+  border: var(--border-width, 1px) solid color-mix(in srgb, var(--border, rgba(0, 0, 0, 0.1)) 78%, transparent);
+  border-radius: var(--radius-md, 10px);
+  background: var(--bg-card, var(--bg, #fff));
+  color: var(--text, #111);
+  box-shadow: var(--card-shadow, 0 8px 24px rgba(0, 0, 0, 0.16));
+  font: var(--ui-font-caption, 11px)/1.35 var(--font-ui, sans-serif);
+  text-align: center;
+  pointer-events: none;
+}

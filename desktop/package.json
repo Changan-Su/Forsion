@@ -275,6 +275,7 @@
     "check:tabtitlebar": "node scripts/tab-titlebar.e2e.cjs",
     "check:tabinput": "node scripts/tab-titlebar.e2e.cjs --parked-only",
     "check:minicard": "node scripts/mini-card.check.cjs",
+    "check:minimulti": "node scripts/mini-multi.check.cjs",
     "check:minidock": "node scripts/mini-dock.e2e.cjs",
     "check:floatingpanel": "node scripts/floating-panel.check.cjs",
     "check:quietfocus": "node scripts/quiet-focus.check.cjs",

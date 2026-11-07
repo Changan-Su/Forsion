@@ -18,7 +18,7 @@ A Space's `mini` is an explicit capability declaration. Both `SpaceDefinition.mi
 
 The two view types must differ and both must be registered. Mini is opt-in; if an optional Mini view is missing, the full Space still loads. Do not make an optional Mini type a hard dependency in `requires.views`. Mini mounts a dedicated view: it does not run `Space.build()`, does not restore the desktop/mobile layout, and provides no tabs, global Ribbon actions or mobile drawer. Links to other full views are handed to the main panel.
 
-The window opens at 320×420. The user can drag the card's four edges and four corners to resize it between 260×160 and 640×900, and reopening it keeps the last size (within the current run). Lay the view out against its container: at 260 wide or 160 tall the content should scroll or truncate on its own, so don't hard-code a 320×420 size. The temporary Mini that Computer Use opens automatically stays fixed at 320×420. Adapters reuse the domain data and editing capabilities and get purpose-built quick interactions. Use semantic theme variables, provide Chinese and English text, and don't fill the panel with branded welcome pages, global settings or duplicate navigation. The host owns Space switching, locating content in the main panel, and closing.
+The window opens at 320×420. The user can drag the card's four edges and four corners to resize it between 260×160 and 640×900. Position and size are remembered per entity: reopening the same entity brings it back where it was, at the same size (within the current run); a new entity starts at the default size. Lay the view out against its container: at 260 wide or 160 tall the content should scroll or truncate on its own, so don't hard-code a 320×420 size. The temporary Mini that Computer Use opens automatically stays fixed at 320×420. Adapters reuse the domain data and editing capabilities and get purpose-built quick interactions. Use semantic theme variables, provide Chinese and English text, and don't fill the panel with branded welcome pages, global settings or duplicate navigation. The host owns Space switching, locating content in the main panel, and closing.
 
 A plugin doesn't need a full Space for one quick card. After registering a view, open Mini directly:
 
@@ -32,6 +32,32 @@ ctx.openMiniPanel?.('quick', {
 ```
 
 `viewId` and `mainViewId` are both ids relative to the current plugin; the host adds `plugin:<pluginId>:` automatically. If you omit `mainViewId`, the main panel opens the same view. Older hosts and Web/mobile may not have this native window API, so call it optionally and keep a `ctx.openView()` fallback.
+
+## Several Mini windows (2.13.8+)
+
+On desktop several Mini windows can be open at once, each one a separate window. The host tells them apart by "entity": opening the same entity again brings up the window that is already open (updates its params and gives it a small bounce) instead of opening another; different entities each get a window, stacked down the right edge of the screen from the top, moving one column left when a column is full.
+
+| Opened through | Entity |
+| --- | --- |
+| `ctx.openMiniPanel(viewId, opts)` | This plugin's `viewId`, plus `opts.key` if given |
+| A Space's `mini` adapter | The Space id; for Tangu chat, the session too |
+| Voice call | Always one window; another call reuses it |
+
+Without `key` there is one window per `viewId`, which is what every call did on older hosts (new params, no new window). To give different content its own window (say one per note), pass `key`:
+
+```js
+ctx.openMiniPanel?.('note', {
+  key: notePath,
+  params: { notePath },
+  title: noteTitle,
+})
+```
+
+Make `key` a stable identity (the same thing always gives the same key). A timestamp or random value opens a new window on every call. Older hosts ignore `key`.
+
+After the user switches Space or session inside a Mini, the window counts as whatever it shows now. When the user wants a second window for the same entity they use "Duplicate window" in the left capsule's dropdown; plugins don't need to build that.
+
+At most 6 ordinary Mini windows can be open at once (hidden ones count, the voice call window doesn't). When that's reached the host opens nothing and tells the user to close one first; the call never throws and the plugin has nothing to handle. ⌘⇧M shows or hides the most recently used one; the tray menu's "All Mini windows" lists every open one.
 
 ## Plugin context
 
@@ -53,7 +79,7 @@ At the point where real HID input is posted, the macOS helper writes `foreground
 
 Electron reads the signal every 60ms after the app starts, without depending on a manual Mini window. The main renderer reports only the current `sessionId/runId` through `window:miniSession`; the main process accepts it only from the main window's top-level frame. A temporary session window starts only when all three hold: a valid foreground lease, Forsion not focused, and a run in the current session. The observer window stays up between calls within the same run, and hides when the run ends, the session changes or focus returns to Forsion. **When the run ends and the user never came back to Forsion in the meantime**, the main process returns focus to the Forsion window that was focused last before the automatic Mini opened (a window the user hid meanwhile isn't forced back; returning focus, taking over with ⌘⇧M, or quitting never trigger the hand-back). Background calls and ordinary focus loss never open the window on their own.
 
-The temporary window uses `window=mini&transient=1` and targets the Tangu session view. It calls `showInactive` only after it receives `miniSessionReady` from the actual Chat mount and the conditions still hold. It sits at the top-right of the work area of the display under the cursor (24px inset) and does not follow the cursor; opening it does not steal focus, and it does not write the manual Mini's Space/layout persistence. The window is focusable with `acceptFirstMouse`, so the header drag area can be dragged on the first press. That press activates Forsion (on macOS `type:'panel'` doesn't prevent it either, verified with a real mouse), but focus lands on the card itself and `hasForsionFocus` excludes the automatic Mini, so dragging doesn't count as "returning to Forsion". A manual Mini takes priority, and a hidden manual window is neither reused nor overwritten; a shortcut can hand the temporary session over to a manual Mini. Plugins need no new APIs and don't listen for the foreground signal themselves.
+The temporary window uses `window=mini&transient=1` and targets the Tangu session view. It calls `showInactive` only after it receives `miniSessionReady` from the actual Chat mount and the conditions still hold. It sits at the top-right of the work area of the display under the cursor (24px inset) and does not follow the cursor; opening it does not steal focus, and it does not write the manual Mini's Space/layout persistence. The window is focusable with `acceptFirstMouse`, so the header drag area can be dragged on the first press. That press activates Forsion (on macOS `type:'panel'` doesn't prevent it either, verified with a real mouse), but focus lands on the card itself and `hasForsionFocus` excludes the automatic Mini, so dragging doesn't count as "returning to Forsion". A manual Mini takes priority, and a hidden manual window is neither reused nor overwritten; a shortcut can hand the temporary session over to a manual Mini (with several Mini windows, that session's own window; other manual Minis stay as they are). Plugins need no new APIs and don't listen for the foreground signal themselves.
 
 During Computer Use (throughout for the temporary Mini; for a manual Mini while `following()` is true), mouse pass-through is switched every 50ms by pointer position: pointer off the card → pass-through, so clicks land on the app being controlled; pointer on the card → interactive, so the user can drag it away. `setIgnoreMouseEvents` is called only when the state changes. Known limit: if CU's moveMouse hover happens to stop on the card, the next click at the same point lands on the card; if that actually happens, switch to per-tool-call pass-through.
 
@@ -67,10 +93,11 @@ Genesis and `tangu-computer-use` are separate repositories; delivery needs match
 npm run typecheck
 npm run check:parity
 npm run check:cssvar
-npm run build && npm run check:minicard && npm run check:miniauto
+npm run build && npm run check:minicard && npm run check:miniauto && npm run check:minimulti
 ```
 
-- Unit tests: `miniAutoPanel.test.ts`, `miniForeground.test.ts`, `lcl/spaces/miniPanel.test.ts`, plus the Space registry and i18n coverage tests.
+- Unit tests: `miniAutoPanel.test.ts`, `miniForeground.test.ts`, `lcl/spaces/miniPanel.test.ts`, `shared/miniPanel.test.ts` (entity keys), `windowGeometry.test.ts` (right-edge stacking), `tray.test.ts` (All Mini windows), plus the Space registry and i18n coverage tests.
+- `check:minimulti`: the real Electron harness for several Mini windows. Same entity reuses its window and bounces; different entities each open one, stacked down the right edge without overlap; plugin `key`; the 7th is refused with a notice in both the main window and the Mini card; the voice call has its own window and doesn't count toward the limit; closing one leaves the others alone; "Duplicate window" lands in the freed slot; after a Space switch inside, the window counts as the new entity; ⌘⇧M toggles the most recent one. It prints each Mini renderer's memory and the first-open time.
 - Computer Use plugin: `npm run check:helper-refresh`, `npm run check:helper-signal`, `npm run check:mini-foreground`; the full Swift type check covers new files and all native sources.
 - Electron tests use a temporary backend, Vault, on-disk plugins and a foreground signal to verify that the real BrowserWindow position stays put, pass-through switches, and screenshots; they send no physical input to the user's apps. Real HID-to-signal is covered by the native reporter tests and the input-path wiring check.
 - `npm run check:mininative` uses the installed, authorized real macOS helper and operates only an isolated Electron test window: it moves the mouse through a real `act` to activate the foreground, then verifies the native signal, the automatic session window, no focus stealing, staying visible between calls, the card staying put while the real mouse moves, and hiding at the end with focus returned to the main window. No real model is needed; session SSE uses fixtures. It doesn't inject `foreground.json` or override cursor APIs, so source or simulated signals can't go all green while a shipped old helper sends no signal at all.
