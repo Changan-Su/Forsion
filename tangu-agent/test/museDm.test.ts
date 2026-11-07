@@ -69,12 +69,12 @@ describe('Muse 主动发私聊', () => {
     const msgs = (await api(`/agent/sessions/${sid}/messages`)).messages;
     expect(msgs[0].origin).toBe('proactive');
 
-    expect((await api('/agent/sessions/attention')).sessions).toEqual([{ id: sid, unread: true, awaiting: true }]);
+    expect((await api('/agent/sessions/attention')).sessions).toMatchObject([{ id: sid, unread: true, awaiting: true, count: 1 }]);
     expect(await api(`/agent/sessions/${sid}/read`, { method: 'POST' })).toEqual({ ok: true, awaiting: false });
     expect((await api('/agent/sessions/attention')).sessions).toEqual([]);
     await query(`UPDATE chat_sessions SET awaiting_user = TRUE, report_run_id = 'rr' WHERE id = ?`, [sid]); // 回报没送回的子会话:读了也留着
     expect(await api(`/agent/sessions/${sid}/read`, { method: 'POST' })).toEqual({ ok: true, awaiting: true });
-    expect((await api('/agent/sessions/attention')).sessions).toEqual([{ id: sid, unread: false, awaiting: true }]);
+    expect((await api('/agent/sessions/attention')).sessions).toMatchObject([{ id: sid, unread: false, awaiting: true, count: 0 }]);
     await onRunStart(sid, { origin: 'client' }, 'r1');
     expect((await api('/agent/sessions/attention')).sessions).toEqual([]);
   });
@@ -82,7 +82,7 @@ describe('Muse 主动发私聊', () => {
   it('陈述句只算未读,不算等你', async () => {
     await send.execute({ text: '今天的待办整理好了,放在 Library 里。' }, cycle);
     const sid = await dmId();
-    expect((await api('/agent/sessions/attention')).sessions).toEqual([{ id: sid, unread: true, awaiting: false }]);
+    expect((await api('/agent/sessions/attention')).sessions).toMatchObject([{ id: sid, unread: true, awaiting: false, count: 1 }]);
   });
 
   it('每小时 3 条只算 message_user;add_muse_todo 进私聊、不发信(日报档也一样),不占这 3 条', async () => {
@@ -126,7 +126,7 @@ describe('Muse 主动发私聊', () => {
     const sid = await dmId();
     await api(`/agent/sessions/${sid}/read`, { method: 'POST' });
     await query(`INSERT INTO pending_approvals (id, user_id, session_id, run_id, agent_slug, tool, args, preview, status) VALUES ('a1', 'u1', 'cycle', 'r', 'muse', 'write_file', '{}', 'write x', 'pending')`);
-    expect((await api('/agent/sessions/attention')).sessions).toEqual([{ id: sid, unread: false, awaiting: true }]);
+    expect((await api('/agent/sessions/attention')).sessions).toMatchObject([{ id: sid, unread: false, awaiting: true, count: 0 }]);
     await query(`UPDATE pending_approvals SET status = 'approved' WHERE id = 'a1'`);
     expect((await api('/agent/sessions/attention')).sessions).toEqual([]);
   });

@@ -1869,7 +1869,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
             : Number(pl.trimmed) > 0
               ? get().tr('ctx.compacted.trimmed', { n: Number(pl.trimmed) })
               : pl.forced && !pl.fallback
-                ? get().tr(pl.reason === 'overflow' ? 'ctx.compacted.overflow' : 'ctx.compacted.forced')
+                ? pl.reason === 'idle' ? get().tr('ctx.compacted.idle', { n: Number(pl.idleMinutes) || 60 }) : get().tr(pl.reason === 'overflow' ? 'ctx.compacted.overflow' : 'ctx.compacted.forced')
                 : get().tr('ctx.compacted.auto', { saved: (Number(pl.savedChars) || 0).toLocaleString() })
           set((s) => ({
             messagesBySession: { ...s.messagesBySession, [sessionId]: [...(s.messagesBySession[sessionId] || []), {
