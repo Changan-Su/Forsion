@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { rectUnderPoint, nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, type Rect, type Edge } from './windowGeometry'
+import { rectUnderPoint, nearestEdge, collapsedBounds, expandedBounds, visibleRect, pointInRect, growRect, resizeFromEdge, stackPosition, mostlyOnScreen, rectsOverlap, type Rect, type Edge } from './windowGeometry'
 
 const WA: Rect = { x: 0, y: 0, width: 1440, height: 900 }
 
@@ -127,5 +127,47 @@ describe('resizeFromEdge (mini card resize edges)', () => {
     const far: Rect = { ...start, x: 1300 } // 右边已经伸出工作区:只拖下边不动宽度
     expect(resizeFromEdge(far, 's', 0, 50, MIN, MAX, wa).width).toBe(320)
     expect(resizeFromEdge(far, 'e', 500, 0, MIN, MAX, wa).width).toBe(260) // 没有余地时也不小于最小值
+  })
+})
+
+describe('stackPosition (Mini 多开:沿右缘往下排)', () => {
+  const size = { width: 320, height: 420 }
+  it('first Mini sits top-right, 24px in (same as the single Mini before)', () => {
+    expect(stackPosition(size, WA, [])).toEqual({ x: 1440 - 24 - 320, y: 24 })
+  })
+  it('next one goes below the first, then a new column when the edge is full', () => {
+    const first = { x: 1096, y: 24, ...size }
+    const second = stackPosition(size, WA, [first])
+    expect(second).toEqual({ x: 1096, y: 24 + 420 + 12 })
+    const third = stackPosition(size, WA, [first, { ...second, ...size }])
+    expect(third).toEqual({ x: 1096 - 320 - 12, y: 24 })
+  })
+  it('reuses the slot a dragged-away Mini left behind', () => {
+    const lower = { x: 1096, y: 456, ...size }
+    expect(stackPosition(size, WA, [lower, { x: 100, y: 100, ...size }])).toEqual({ x: 1096, y: 24 })
+  })
+  it('never lands on an open Mini, whatever the layout', () => {
+    const open: Rect[] = []
+    for (let i = 0; i < 6; i++) {
+      const p = stackPosition(size, WA, open)
+      const r = { ...p, ...size }
+      expect(open.some((o) => rectsOverlap(o, r))).toBe(false)
+      expect(nearestEdge(r, WA)).toBeNull() // 放下就判贴边会被折起来
+      open.push(r)
+    }
+  })
+  it('a full screen cascades instead of stacking on the same spot', () => {
+    const small: Rect = { x: 0, y: 0, width: 400, height: 500 }
+    const a = stackPosition(size, small, [])
+    const b = stackPosition(size, small, [{ ...a, ...size }])
+    expect(b).not.toEqual(a)
+    expect(b.x).toBeGreaterThanOrEqual(24)
+  })
+})
+
+describe('mostlyOnScreen', () => {
+  it('rejects a remembered spot on an unplugged display', () => {
+    expect(mostlyOnScreen({ x: 2000, y: 100, width: 320, height: 420 }, [WA])).toBe(false)
+    expect(mostlyOnScreen({ x: 1300, y: 100, width: 320, height: 420 }, [WA])).toBe(true)
   })
 })
