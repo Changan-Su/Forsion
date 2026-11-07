@@ -23,20 +23,28 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Compare actual runner and production region classifications
+        if: startsWith(matrix.scenario, 'auto-') || matrix.scenario == 'region-probe'
+        run: node desktop/scripts/lib/windows-update-region.cjs
       - name: Install the automation client
+        if: matrix.scenario != 'region-probe'
         timeout-minutes: 3
         run: |
           npm install --prefix .probe --no-save --no-audit --no-fund playwright-core@1.61.1 @electron/asar@3.4.1
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
           "NODE_PATH=$PWD\.probe\node_modules" | Add-Content -LiteralPath $env:GITHUB_ENV
       - name: Install the official older Forsion 2.13.6 NSIS package
+        if: matrix.scenario != 'region-probe'
         timeout-minutes: 8
         run: ./desktop/scripts/windows-website-upgrade-install.ps1
       - name: Download from the real website and restart to install
+        if: matrix.scenario != 'region-probe'
         timeout-minutes: 17
         run: node desktop/scripts/windows-website-upgrade.e2e.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: windows-website-upgrade-${{ matrix.scenario }}
-          path: ${{ runner.temp }}/forsion-website-upgrade/evidence/
+          path: |
+            ${{ runner.temp }}/forsion-website-upgrade/evidence/
+            ${{ runner.temp }}/forsion-update-region.json

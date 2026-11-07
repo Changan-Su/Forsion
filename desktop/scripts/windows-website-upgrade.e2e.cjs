@@ -28,7 +28,8 @@ const siteDownload = website + '/download/windows'
 const scenario = process.env.FORSION_UPDATE_CASE
 const scenarios = {
   'auto-overseas': { pref: 'auto', first: 'github', last: 'github', region: false },
-  'auto-mainland': { pref: 'auto', first: 'website', last: 'website', region: true },
+  'auto-overseas-contract': { pref: 'auto', first: 'github', last: 'github', region: false, replayRegion: true },
+  'auto-mainland': { pref: 'auto', first: 'website', last: 'website', region: true, replayRegion: true },
   'manual-website-github': { pref: 'website', first: 'website', last: 'github', action: 'throttle' },
   'manual-github-website': { pref: 'github', first: 'github', last: 'website', action: 'throttle' },
   'drop-website-github': { pref: 'website', first: 'website', last: 'github', action: 'drop' },
@@ -123,41 +124,65 @@ function startupReceipt(version) {
   return null
 }
 
-function installerTransfer(file, startUrl, bytes) {
+function installerTransfer(file, startUrl, bytes, partial = false) {
   const { events, constants: { logEventTypes: types } } = readJson(file)
-  const route = []
-  let url = startUrl
-  for (let hop = 0; hop < 8; hop++) {
-    const index = events.findIndex(event => event.type === types.URL_REQUEST_START_JOB && event.params?.method === 'GET' && event.params.url === url)
-    assert.ok(index >= 0, 'No GET for the installer route or one of its redirects')
-    const id = events[index].source.id
-    const leg = []
-    for (const event of events.slice(index + 1)) {
-      if (event.source.id !== id) continue
-      if (event.type === types.URL_REQUEST_START_JOB && event.params?.url) break
-      leg.push(event)
+  const active = new Map()
+  const legs = new Map()
+  events.forEach((event, index) => {
+    const id = event.source.id
+    if (event.type === types.URL_REQUEST_START_JOB && event.params?.method === 'GET' && event.params.url) {
+      const url = new URL(event.params.url).href
+      const leg = { url, index, bytes: 0 }
+      active.set(id, leg)
+      if (!legs.has(url)) legs.set(url, [])
+      legs.get(url).push(leg)
+      return
     }
-    const headers = leg.find(event => event.type === types.HTTP_TRANSACTION_READ_RESPONSE_HEADERS)?.params?.headers
-    const status = Number(headers?.[0]?.match(/^HTTP\/\S+ (\d+)/)?.[1])
-    const transferred = leg.filter(event => event.type === types.URL_REQUEST_JOB_FILTERED_BYTES_READ)
-      .reduce((sum, event) => sum + event.params.byte_count, 0)
-    route.push({ host: new URL(url).hostname, status, bytes: transferred })
-    if (status === 200) {
-      assert.equal(transferred, bytes, 'Selected route must deliver the complete installer')
-      return route
+    const leg = active.get(id)
+    if (!leg) return
+    if (event.type === types.HTTP_TRANSACTION_READ_RESPONSE_HEADERS && !leg.headers) {
+      leg.headers = event.params.headers
+      leg.responseIndex = index
     }
-    assert.ok(status >= 300 && status < 400, 'Download leg must redirect or serve the installer')
-    const location = headers.find(header => /^location:/i.test(header))?.slice('location:'.length).trim()
-    assert.ok(location, 'Redirect must identify the next request')
-    url = new URL(location, url).href
+    if (event.type === types.URL_REQUEST_JOB_FILTERED_BYTES_READ) leg.bytes += event.params.byte_count
+  })
+  function follow(leg, remaining) {
+    const status = Number(leg.headers?.[0]?.match(/^HTTP\/\S+ (\d+)/)?.[1])
+    const receipt = { host: new URL(leg.url).hostname, status, bytes: leg.bytes }
+    if (partial ? (status === 200 || status === 206) && leg.bytes > 0 && leg.bytes < bytes : status === 200 && leg.bytes === bytes) return [receipt]
+    if (!remaining || !(status >= 300 && status < 400)) return null
+    const location = leg.headers.find(header => /^location:/i.test(header))?.slice('location:'.length).trim()
+    if (!location) return null
+    for (const next of legs.get(new URL(location, leg.url).href) ?? []) {
+      if (next.index <= leg.responseIndex) continue
+      const tail = follow(next, remaining - 1)
+      if (tail) return [receipt, ...tail]
+    }
+    return null
   }
-  throw new Error('Installer redirected too many times')
+  const candidates = legs.get(startUrl) ?? []
+  for (const leg of candidates) {
+    const route = follow(leg, 7)
+    if (route) return route
+  }
+  throw new Error(`No ${partial ? 'partial' : 'complete'} transfer followed the expected installer route (starts: ${candidates.map(l => l.headers?.[0] ?? 'no response').join(', ')})`)
+}
+
+async function deadline(task, label, timeout) {
+  let timer
+  try {
+    return await Promise.race([task, new Promise((_resolve, reject) => { timer = setTimeout(() => reject(new Error('Timed out: ' + label)), timeout) })])
+  } finally { clearTimeout(timer) }
 }
 
 async function main() {
   assert.ok(process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_ENVIRONMENT === 'github-hosted')
   const spec = scenarios[scenario]
   assert.ok(spec, 'Select an installed-app matrix scenario')
+  const regionFile = path.join(process.env.RUNNER_TEMP, 'forsion-update-region.json')
+  const regionReceipt = fs.existsSync(regionFile) ? readJson(regionFile) : null
+  const regionResponse = spec.replayRegion ? (spec.region ? { country: 'CN', mainland_china: true }
+    : { country: regionReceipt?.backend?.mainland_china === false && regionReceipt.backend.country || 'US', mainland_china: false }) : null
   const { filename, bytes, sha512, sha256 } = spec.noExtend ? noExtend : standard
   const root = path.join(process.env.RUNNER_TEMP, 'forsion-website-upgrade')
   const exe = path.join(root, 'application', 'Forsion.exe')
@@ -192,14 +217,14 @@ async function main() {
       timeout: 60000,
     })
     child = app.process()
-    if (spec.region === true || spec.offline) await app.evaluate((_, options) => {
+    if (regionResponse || spec.offline) await app.evaluate((_, options) => {
       const realFetch = globalThis.fetch
-      const network = globalThis.__upgradeNetwork = { offline: options.offline, attempted: [], mainlandResponses: 0 }
+      const network = globalThis.__upgradeNetwork = { offline: options.offline, attempted: [], regionResponses: 0 }
       globalThis.fetch = (input, init) => {
         const url = typeof input === 'string' ? input : String(input?.url ?? input)
-        if (options.mainland && url === 'https://forsion.net/api/auth/region') {
-          network.mainlandResponses++
-          return Promise.resolve(Response.json({ country: 'CN', mainland_china: true }))
+        if (options.regionResponse && url === 'https://forsion.net/api/auth/region') {
+          network.regionResponses++
+          return Promise.resolve(Response.json(options.regionResponse))
         }
         if (network.offline && [options.siteConfig, options.githubLatest].includes(url)) {
           network.attempted.push(url)
@@ -208,7 +233,7 @@ async function main() {
         return realFetch(input, init)
       }
     }, {
-      mainland: spec.region === true, offline: spec.offline === true, siteConfig: website + '/config',
+      regionResponse, offline: spec.offline === true, siteConfig: website + '/config',
       githubLatest: 'https://api.github.com/repos/Changan-Su/Forsion/releases/latest',
     })
     runtime = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), exe: process.execPath, pid: process.pid }))
@@ -233,7 +258,7 @@ async function main() {
       const regionText = region ? /currently detected in mainland China|识别为中国大陆/ : /currently detected outside mainland China|识别为海外/
       await source.getByText(regionText).waitFor({ timeout: 15000 })
       check(true, 'About shows the detected region while Auto is selected')
-      if (region) check(await app.evaluate(() => globalThis.__upgradeNetwork.mainlandResponses) > 0, 'only the captured mainland region response was replayed')
+      if (regionResponse) check(await app.evaluate(() => globalThis.__upgradeNetwork.regionResponses) > 0, 'only the region response was replayed')
     }
     if (spec.pref !== 'auto') {
       await source.getByRole('button', { name: spec.pref === 'website' ? /^(Website|官网)$/ : /^GitHub$/ }).click()
@@ -243,7 +268,7 @@ async function main() {
       proxy = await startUpdateProxy(spec.first, spec.action)
       await app.evaluate(async ({ session }, url) => {
         const updater = session.fromPartition('electron-updater', { cache: false })
-        await updater.setProxy({ mode: 'fixed_servers', proxyRules: url })
+        await updater.setProxy({ mode: 'fixed_servers', proxyRules: url, proxyBypassRules: '<-loopback>' })
         await updater.closeAllConnections()
       }, proxy.url)
     }
@@ -255,7 +280,7 @@ async function main() {
       window.tangu.onUpdaterStatus(s => window.__upgradeStatuses.push({ at: Date.now(), phase: s.phase, source: s.source, version: s.version, transferred: s.transferred, fallbackFrom: s.fallbackFrom }))
     })
     const checkStarted = Date.now()
-    await checkUpdates()
+    await deadline(checkUpdates(), 'check for updates', 25000)
     if (spec.offline) {
       const state = await status()
       check(state.phase === 'error' && state.error === 'unreachable' && Date.now() - checkStarted < 25000, 'both update checks unavailable gives a bounded error')
@@ -266,7 +291,7 @@ async function main() {
         return [...new Set(globalThis.__upgradeNetwork.attempted)]
       })
       check(attempted.length === 2, 'real updater tried website metadata and GitHub release metadata')
-      await checkUpdates()
+      await deadline(checkUpdates(), 'recover update check', 25000)
       const recovered = await status()
       check(recovered.phase === 'available' && recovered.version === newVersion, 'installed updater recovers after network restoration')
       fs.writeFileSync(path.join(out, 'upgrade-receipt.json'), JSON.stringify({ scenario, phase: 'recovered', runtime, attempted, recovered: { phase: recovered.phase, source: recovered.source, version: recovered.version } }, null, 2))
@@ -286,7 +311,11 @@ async function main() {
       await until('primary really transfers installer bytes', async () =>
         (await history()).some(s => s.phase === 'downloading' && s.source === spec.first && s.transferred > 0), 60000)
       if (spec.action === 'throttle') {
-        const switchButton = settings.getByRole('button', { name: spec.last === 'github' ? /Use GitHub instead|换 GitHub/ : /Use the website instead|换官网/ })
+        const popup = win.locator('.wn-modal')
+        if (!await popup.isVisible()) await settings.getByTestId('about-whats-new').click()
+        const switchButton = popup.getByRole('button', { name: spec.last === 'github' ? /Use GitHub instead|换 GitHub/ : /Use the website instead|换官网/ })
+        await switchButton.waitFor({ timeout: 10000 })
+        await screenshot(win, 'manual-switch.png')
         switchedAt = Date.now()
         await switchButton.click()
       } else {
@@ -319,7 +348,10 @@ async function main() {
     const fault = proxy?.events.find(event => event.action === spec.action)
     if (spec.action === 'drop' || spec.action === 'stall') {
       check(fault && from?.fallbackFrom === spec.first && from.transferred === 0 && from.at >= fault.at, 'fault caused one automatic switch that restarted at zero')
-      if (spec.action === 'stall') check(from.at - fault.at >= 28000 && from.at - fault.at <= 60000, 'real no-progress watchdog waited about 30 seconds')
+      if (spec.action === 'stall') {
+        const close = proxy.events.find(event => event.action === 'stalled-client-closed' && event.tunnel === fault.tunnel)
+        check(close && close.at - fault.at >= 28000 && close.at <= from.at + 5000 && from.at - fault.at <= 60000, 'the updater canceled the held-open tunnel after about 30 seconds')
+      }
     } else {
       check(!progress.some(s => s.fallbackFrom), 'no automatic fallback in this scenario')
       if (spec.action) check(from?.at >= switchedAt && from.transferred === 0, 'switch button restarts the alternate source at zero')
@@ -331,6 +363,12 @@ async function main() {
     const startUrl = spec.last === 'website' ? siteDownload : releases + '/' + filename
     const route = installerTransfer(rawNetLog, startUrl, bytes)
     check(route.length > 0, 'the real selected-source GET and its redirect chain delivered the entire installer')
+    let partialRoute
+    if (spec.action) {
+      const primaryUrl = spec.first === 'website' ? siteDownload : releases + '/' + filename
+      partialRoute = installerTransfer(rawNetLog, primaryUrl, bytes, true)
+      check(proxy.events.some(event => event.action === 'throttled' && (!switchedAt || event.at < switchedAt)), 'the primary installer route was paced and transferred real bytes before switching')
+    }
     if (spec.noExtend) {
       const urls = readJson(rawNetLog).events.map(e => e.params?.url).filter(url => typeof url === 'string')
       check(urls.some(url => url.startsWith(releases + '/latest-no-extend.yml')) &&
@@ -345,7 +383,7 @@ async function main() {
     assert.equal(fs.statSync(installer).size, bytes)
     for await (const chunk of fs.createReadStream(installer)) { hash512.update(chunk); hash256.update(chunk) }
     check(hash512.digest('base64') === sha512 && hash256.digest('hex') === sha256, 'downloaded EXE matches the selected official artifact digests')
-    const receipt = { scenario, runtime, meta, region, replayedRegion: spec.region === true, availableCaption, downloadedCaption, fallbackCaption, statuses, sourceSequence, fault, download: { method: 'GET', url: startUrl, route, bytes, sha512, sha256 } }
+    const receipt = { scenario, runtime, meta, region, regionResponse, regionReceipt, availableCaption, downloadedCaption, fallbackCaption, statuses, sourceSequence, fault, partialRoute, download: { method: 'GET', url: startUrl, route, bytes, sha512, sha256 } }
     const write = extra => fs.writeFileSync(path.join(out, 'upgrade-receipt.json'), JSON.stringify({ ...receipt, ...extra }, null, 2))
     write({ phase: 'downloaded' })
     const snapshots = []
@@ -391,10 +429,11 @@ async function main() {
       if (page && !page.isClosed()) {
         await screenshot(page, 'failure.png')
         current = settings && await status()
+        statuses = settings && await settings.evaluate(() => window.__upgradeStatuses ?? []) || []
       }
     } catch { /* The old target is expected to disappear during restart. */ }
     const { phase, source, version, error: reason } = current ?? {}
-    fs.writeFileSync(path.join(out, 'failure.json'), JSON.stringify({ runtime, current: { phase, source, version, reason: reason && sanitized(reason) }, error: sanitized(error.stack ?? error), statuses }, null, 2))
+    fs.writeFileSync(path.join(out, 'failure.json'), JSON.stringify({ runtime, current: { phase, source, version, reason: reason && sanitized(reason) }, error: sanitized(error.stack ?? error), statuses, proxy: proxy?.events }, null, 2))
     throw error
   } finally {
     proxy?.close()
