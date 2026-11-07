@@ -90,6 +90,7 @@ import { extractZipToDir, checkMarketPackage, detectMarketType, MARKET_SUBDIR, M
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
 import { createCodeStudioProjectWatcher, createCodeStudioSnapshot, listCodeStudioSnapshots, restoreCodeStudioSnapshot } from './codeStudioProjects'
 import { installPreviewPersistence, previewOriginFor, registerProductsIpc } from './productsIpc'
+import { externalCreationFor } from './productTrust'
 import { transcribeViaOpenAI, transcribeViaForsion } from './asr'
 import { localModelReady, localModelSize, downloadLocalModel, removeLocalModel, transcribeLocal } from './asrLocal'
 import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, HelperLink } from './computerUse'
@@ -2925,6 +2926,8 @@ app.whenReady().then(async () => {
       log: (m) => console.log(m),
       // ── Forsion Connect(0.2 起):项目根、与预览同一份转译器 / MIME 表、codePreview 的 Forsion 挂钩 ──
       projectsRoot: () => join(forsionWorkspaceDir(), 'Project'),
+      // 「原地加入造物」的外部文件夹也能发布(和预览、造物列表同一份登记,按目录身份认);读不了登记表就当不是
+      isAdoptedCreation: (realDir) => { try { return !!externalCreationFor(forsionHomeDir(), realDir) } catch { return false } },
       transpileForServe,
       mimeOf: (ext) => MIME[ext],
       setPreviewHooks: setForsionPreviewHooks,

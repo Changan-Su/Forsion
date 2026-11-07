@@ -135,7 +135,7 @@ registerMessages({
   'studio.checkAccess': { zh: '键盘操作与颜色对比可用', en: 'Keyboard access and text contrast are usable' },
   'studio.askVerify': { zh: '让 AI 帮我检查', en: 'Ask AI to check' },
   'studio.publishStaticOnly': { zh: '当前使用开发服务，请先构建可发布的静态页面。', en: 'This project uses a dev server. Build a static page before publishing.' },
-  'studio.publishImported': { zh: '发布前请将项目复制到 Forsion 的 Project 文件夹。', en: 'Copy this project into the Forsion Project folder before publishing.' },
+  'studio.publishImported': { zh: '发布前请将项目复制到 Forsion 的 Project 文件夹，或先加入造物。', en: 'To publish, copy this project into the Forsion Project folder or add it to Creations first.' },
   'studio.streaming': { zh: '正在写入 · {file}', en: 'Writing · {file}' },
   'studio.watchError': { zh: '文件监听不可用，可手动刷新。{error}', en: 'File watching is unavailable. Reload manually. {error}' },
   // —— 版本（git）——：版本由宿主产生，AI 从不跑 git；本机没装 git 就整块换成安装引导。
