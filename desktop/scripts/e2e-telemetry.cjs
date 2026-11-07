@@ -10,7 +10,8 @@
  *   ④ 同一个 home 再起一次(仍登录、告知已看过):startup 第一跳就到(头一次那条在看过告知之前,本就不收)。
  * 负对照(都要实跑):
  *   NEG=1         开发版(不带 FORSION_TELEMETRY=force):登录了、看过告知,收件桩照样一批都收不到。
- *   NEG=signedout 从头到尾不登录(带 force):引导里开关一直灰着、详情不弹;设置页开关灰着;收件桩一批都收不到。
+ *   NEG=signedout 从头到尾不登录(带 force):引导里开关一直灰着、详情不弹;之后把告知直接记成看过、只留「没登录」这一道闸;
+ *                 设置页开关灰着;收件桩一批都收不到。
  *
  *   EXTEND=<Forsion-Extend 检出(已 build + sign)> [OUT=<截图目录>] [NEG=1|signedout] npm run e2e:telemetry
  *   先在 DESK 里 npx electron-vite build;跑的时候占 GUI 锁(node ../../.claude/hooks/devlock.cjs run --vehicle=e2e -- npm run e2e:telemetry)。
@@ -127,6 +128,13 @@ async function main() {
     const next = () => move(win.locator('[data-ob-primary]'))
     const back = () => move(win.locator('.ob3-back'))
     const telemetryView = () => win.evaluate(() => window.tangu.cloudInvoke('telemetry:get'))
+    /** telemetry:set 是异步落盘的:轮询 telemetry:get 直到满足(最多 10 s),别拿弹窗露出来当「已经记上」。 */
+    const viewUntil = async (pred, what) => {
+      const end = Date.now() + 10_000
+      let v
+      while (Date.now() < end) { v = await telemetryView(); if (pred(v)) return v; await win.waitForTimeout(200) }
+      throw new Error(`${what}: ${JSON.stringify(v)}`)
+    }
     const row = win.locator('[data-ob-improve]')
     const sw = row.locator('[role="switch"]')
     const pop = row.locator('.ob3-pop')
@@ -159,9 +167,8 @@ async function main() {
       assert.ok((await pop.innerText()).includes('发送崩溃报告和使用统计'), 'details popup: title')
       assert.ok(!(await pop.innerText()).includes('不会发送'), 'details popup: no "never sent" block')
       await shot(win, 'start-signed-in-notice')
-      view = await telemetryView()
+      view = await viewUntil((v) => v.noticeSeen === true, 'Extend: auto-opened details count as notice seen')
       assert.equal(view.signedIn, true, 'Extend: signed in')
-      assert.equal(view.noticeSeen, true, 'Extend: auto-opened details count as notice seen')
       assert.equal(view.enabled, true, 'Extend: on by default')
       // 只弹一次:关掉,去下一屏再回来,不再弹
       await win.keyboard.press('Escape')
@@ -172,6 +179,10 @@ async function main() {
       await win.waitForTimeout(800)
       assert.equal(await pop.count(), 0, 'notice seen: details not auto-opened again')
       assert.equal(await sw.getAttribute('aria-checked'), 'true', 'still on after coming back')
+    } else {
+      // 只留「没登录」这一道闸:告知记成看过(开关缺省开)。不这样的话负对照分不出拦住发送的是登录还是告知。
+      await win.evaluate(() => window.tangu.cloudInvoke('telemetry:set', { noticeSeen: true }))
+      await viewUntil((v) => v.noticeSeen === true, 'signed out: notice marked seen')
     }
 
     // ③ 走完四屏:团队屏把电脑历史关掉(不碰这台机器的助手)再「开始使用」
@@ -208,6 +219,11 @@ async function main() {
     await settings.mouse.move(1000, 700); await settings.waitForTimeout(400); await shot(settings, 'settings-privacy')
     await page.getByRole('button', { name: '具体收集什么' }).click()
     await settings.waitForTimeout(300); await shot(settings, 'settings-privacy-open')
+    // 发送前先核闸:正向四道全开;两个负对照各只关一道(开发版 = 不是正式包;signedout = 没登录),其余三道都开着
+    view = await telemetryView()
+    const gates = { signedIn: view.signedIn, enabled: view.enabled, noticeSeen: view.noticeSeen, packaged: view.packaged, active: view.active }
+    const expected = { signedIn: SIGN_IN, enabled: true, noticeSeen: true, packaged: !DEV_BUILD, active: !NEG }
+    assert.deepEqual(gates, expected, 'telemetry gates before sending')
     // 等 Extend 的第一跳(启动后 60 s)把队列发出去
     const deadline = Date.now() + 120_000
     while (!cloud.batches.length && Date.now() < deadline) await win.waitForTimeout(2000)

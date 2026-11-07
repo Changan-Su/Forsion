@@ -8,7 +8,7 @@
  *  - 取消 / Esc → 弹窗关、仍是关、那一行还在;确认 → 开、弹窗关、那一行收起、本机记号变 dismissed;开成后 macOS 接着请辅助功能,Windows 不请;
  *  - 「开启记录」写失败 → 弹窗里报错、不关、仍是关、记号不动;关掉再开,上次的错不留;
  *  - ✕ → 那一行收起、记号 dismissed;电脑历史开着 / 动过(dataGen > 0)→ 那一行不出;
- *  - 只看说明(团队屏「详情」):五条都在、没有开启按钮、落点在关闭钮、Esc / 点遮罩都能关、关了还能再开;
+ *  - 只看说明(团队屏「详情」):五条都在、没有开启按钮、落点在关闭钮、打开它不写电脑历史(setEnabled 零次)、Esc / 点遮罩都能关、关了还能再开;
  *  - 无页面错误。
  * Run: npm run check:onboardinghistory   (worktree 里自己起 npx vite frontend --port <空闲口>,再带 HARNESS_URL=http://localhost:<port>/harness.html;
  *      截图在 os.tmpdir()/forsion-onboarding-history,或 SHOT_DIR)
@@ -144,6 +144,8 @@ async function main() {
       await page.screenshot({ path: path.join(out, `details-${name}-${size.join('x')}.png`) })
       check(`${tag} 五条 + 建议都在、没有开启按钮和同意段、弹窗在窗内、落点在关闭钮`,
         d.open && d.inside && !d.hScroll && d.rows === 5 && d.tip && !d.foot && !d.consent && d.focus === 'close', d)
+      const writes = await page.evaluate(() => window.__chSetEnabled || 0)
+      check(`${tag} 打开说明不写电脑历史:一次 setEnabled 都没有、开关照旧`, writes === 0 && await enabledNow() === /status=recording/.test(query), { writes })
     }
   }
   const before = await enabledNow()

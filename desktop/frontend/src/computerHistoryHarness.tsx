@@ -81,13 +81,14 @@ const fakeIcon = (color: string): string =>
   `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect x="2" y="2" width="28" height="28" rx="7" fill="${color}"/></svg>`)}`
 const FAKE_ICONS: Record<string, string> = { 'com.microsoft.VSCode': fakeIcon('#2f80ed'), 'com.google.Chrome': fakeIcon('#e8453c') }
 
-const harnessWindow = window as unknown as { __chGets?: number; __permissionRequests?: string[] }
+const harnessWindow = window as unknown as { __chGets?: number; __chSetEnabled?: number; __permissionRequests?: string[] }
 const listeners = new Set<(v: ComputerHistoryView) => void>()
 const push = (): ComputerHistoryView => { const v = view(); for (const cb of listeners) cb(v); return v }
 const computerHistory: ComputerHistoryApi = {
   // 读了几次:台架等「读回来了、那一行仍没出」时靠它,不靠干等
   get: async () => { harnessWindow.__chGets = (harnessWindow.__chGets || 0) + 1; return view() },
   setEnabled: async (on) => {
+    harnessWindow.__chSetEnabled = (harnessWindow.__chSetEnabled || 0) + 1 // 只看说明不该写:台架核它为 0
     if (on && failEnable) throw new Error('simulated write failure')
     enabled = on; pausedUntil = null; current = on ? (status === 'off' ? 'recording' : status) : 'off'; return push() },
   pause: async (until) => { pausedUntil = until === 'tomorrow' ? new Date(now).setHours(24, 0, 0, 0) : Date.now() + until; current = 'paused'; return push() },
