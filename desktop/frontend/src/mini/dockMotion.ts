@@ -1,4 +1,5 @@
 import type { MiniDockMotion } from '../../../shared/miniDock'
+import { reducedMotion } from '@lcl/engine/spring'
 
 /** One compositor animation, independent of React commits or main-process timer cadence. */
 export function installMiniDockMotion(): () => void {
@@ -18,7 +19,7 @@ export function installMiniDockMotion(): () => void {
       if (target === 'none') shell.style.removeProperty('transform') // restore fixed descendants' containing block
       window.tangu?.miniDockMotionDone?.(request.id)
     }
-    if (!request.animate || matchMedia('(prefers-reduced-motion: reduce)').matches) { done(); return }
+    if (!request.animate || reducedMotion()) { done(); return }
     animation = shell.animate([{ transform: from }, { transform: target }], { duration: 220, easing: 'cubic-bezier(.22, .8, .25, 1)' })
     void animation.finished.then(done, () => {})
   })

@@ -34,7 +34,10 @@
 .project-memory-row:hover { background: var(--overlay-medium); }
 .project-memory-row span { min-width: 0; overflow-wrap: anywhere; }
 .project-memory-row button { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 0; border-radius: var(--radius-sm, 8px); background: transparent; color: var(--text-muted); cursor: pointer; }
-.project-memory-row button:hover:not(:disabled) { background: var(--overlay-strong, var(--overlay-medium)); color: var(--danger); }
+.project-memory-row button:hover:not(:disabled) { background: var(--overlay-strong, var(--overlay-medium)); color: var(--text); }
+.project-memory-row button.danger:hover:not(:disabled) { color: var(--danger); }
+.project-memory-actions { display: inline-flex; gap: 2px; }
+.project-memory-edit { width: 100%; min-width: 0; padding: 2px 6px; font: inherit; font-size: var(--ui-font-meta, 12px); line-height: 1.55; resize: none; field-sizing: content; }
 .project-memory-row button:disabled { opacity: .5; cursor: default; }
 /* 待确认候选(后台没有直接记的那几条):同一张卡里另起一组,正文下面一行两个文字键 */
 .project-memory-pending { display: grid; gap: 6px; margin-top: 6px; }

@@ -2826,7 +2826,7 @@ function AmadeusEditorViewInner({ leaf }: ViewProps) {
     // `activePage ?? activeNotePath` 全线取到上一篇(A=v3 → B=v4 直接切、或后退再前进都能复现;
     // Codex 评审 high)。占着谁交谁,releasePage 内部照旧先 flush 再清。
     const held = myPs().activePage
-    void myPs().releasePage(held ?? notePath)
+    void myPs().releasePage(held ?? notePath, notePath)
   }, [unifiedRoute, notePath]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 恢复的 tab 一挂载就有笔记名(不必等激活)。

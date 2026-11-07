@@ -277,7 +277,7 @@ html[data-window='mini'], html[data-window='mini'] body, html[data-window='mini'
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.mini-card-shell .newchat-pickers { display: none; }
+.mini-card-shell .agent-select-strip { display: none; }
 .mini-card-shell .newchat-projectbar { max-width: none; padding: 0 8px 2px; }
 .mini-card-shell .newchat-projectbar-inner { padding-top: 0; }
 .mini-card-shell .project-pill {

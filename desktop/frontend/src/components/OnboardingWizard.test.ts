@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-/** 首启引导四屏(11-05 定稿)的流程:真组件 + 假宿主 / 假接口。真应用里走一遍的是 scripts/onboarding.check.cjs(check:first-run)。 */
+/** 首启引导四屏(11-05 定稿,11-06 第四轮 A4)的流程:真组件 + 假宿主 / 假接口。真应用里走一遍的是 scripts/onboarding.check.cjs(check:first-run)。 */
 import React, { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -13,7 +13,7 @@ vi.mock('../services/backendService', () => ({
 }))
 vi.mock('../services/humanCollaboration', () => ({ getHumanDocument: vi.fn(), saveHumanDocument: vi.fn() }))
 vi.mock('../services/syncSetup', () => ({ applySyncChoices: vi.fn() }))
-vi.mock('../views/agentProfileNav', () => ({ openAgentCreation: vi.fn() }))
+vi.mock('../views/agentProfileNav', () => ({ openAgentsSpace: vi.fn() }))
 vi.mock('../achievements/store', () => ({ track: vi.fn() }))
 vi.mock('../stores/themeStore', () => ({ useTheme: (pick: any) => pick({ bg: 'cream', bgSeed: '', setBg: vi.fn(), setBgSeedValue: vi.fn() }) }))
 const store = vi.hoisted(() => ({ onboardingUpdate: false, refreshAgents: () => {} }))
@@ -32,7 +32,8 @@ const { OnboardingWizard, ONBOARDING_DISMISS_KEY, ONBOARDING_VERSION_KEY } = awa
 const api = await import('../services/backendService')
 const human = await import('../services/humanCollaboration')
 const { PRODUCT } = await import('../product')
-const { openAgentCreation } = await import('../views/agentProfileNav')
+const { openAgentsSpace } = await import('../views/agentProfileNav')
+const { CH_ASK_KEY } = await import('./computerHistoryAskMark')
 
 let host: HTMLDivElement
 let root: Root
@@ -147,25 +148,64 @@ it('desktop: four screens in order; Continue saves About you, Get started writes
   expect(host.querySelector('[data-ob-muse]')?.textContent).toContain('卜算子')
   expect(host.querySelector('[data-ob-muse]')?.textContent).not.toContain('Muse')
   expect(host.querySelector('[data-ob-muse-model]')?.classList.contains('need')).toBe(true)
-  // 默认 Agent 锁定为开;史官在名单里
-  expect(sw('Xyra').disabled).toBe(true)
+  // 名单一行只介绍:没有开关(停用在 Agents 页);史官在名单里,卜算子不在
+  expect(host.querySelectorAll('[data-ob-roster] [role="switch"]')).toHaveLength(0)
   expect(host.querySelector('[data-agent="historian"]')).not.toBeNull()
+  expect(host.querySelector('[data-agent="coder"]')).not.toBeNull()
   expect(host.querySelector('[data-agent="muse"]')).toBeNull()
+  // 两问:主动程度不问
+  expect(host.querySelectorAll('[data-ob-muse] .ob3-q')).toHaveLength(2)
+  expect(host.querySelector('[data-ob-muse]')?.textContent).toContain(translate('ob3.muse.proNote'))
   await type(host.querySelector<HTMLSelectElement>('[data-ob-muse-model] select')!, 'm1')
-  await clickText(translate('ob3.pro.high'))
   await clickText(translate('ob3.focus.study'))
   await type(host.querySelector<HTMLInputElement>('.ob3-own input')!, ' my thesis ')
-  await act(async () => sw('Coder').click())
   expect(primary().textContent).toBe(translate('ob3.getStarted'))
   expect(api.saveMuseIntro).not.toHaveBeenCalled()
   await next()
   expect(api.saveSpecialConfig).toHaveBeenCalledExactlyOnceWith(expect.anything(), { muse: { modelId: 'm1' } })
-  // 只带改过的:「什么时候能找你」没动 → 不带
-  expect(api.saveMuseIntro).toHaveBeenCalledExactlyOnceWith(expect.anything(), { proactivity: 'high', focus: ['study'], focusText: 'my thesis' })
-  expect(api.saveAgentDef).toHaveBeenCalledExactlyOnceWith(expect.anything(), { disabled: true }, 'coder')
+  // 只带改过的:「什么时候能找你」没动 → 不带;不发 proactivity
+  expect(api.saveMuseIntro).toHaveBeenCalledExactlyOnceWith(expect.anything(), { focus: ['study'], focusText: 'my thesis' })
+  expect(api.saveAgentDef).not.toHaveBeenCalled()
   expect(props.onFinish).toHaveBeenCalledTimes(1)
   expect(localStorage.getItem(ONBOARDING_DISMISS_KEY)).toBe('1')
   expect(localStorage.getItem(ONBOARDING_VERSION_KEY)).toBe('2.14.0')
+  // 走完了:电脑历史已经在团队屏问过,主页不再问
+  expect(localStorage.getItem(CH_ASK_KEY)).toBeNull()
+})
+
+it('signed out: the model row shows the default model the engine will use, without writing it', async () => {
+  vi.mocked(api.listModels).mockResolvedValue({ models: [{ id: 'm1', name: 'Model one', modelType: 'llm', source: 'direct' }], defaultModelId: 'm1', directProviders: [] } as any)
+  await toTeam()
+  const row = host.querySelector('[data-ob-muse-model]')!
+  const select = row.querySelector('select')!
+  expect(row.classList.contains('need')).toBe(false)
+  expect(select.value).toBe('')
+  expect(select.options[0].textContent).toBe(translate('ob3.muse.modelDefaultOption', { model: 'Model one' }))
+  expect(row.textContent).toContain(translate('ob3.muse.modelDefault'))
+  await next()
+  expect(api.saveSpecialConfig).not.toHaveBeenCalled()
+})
+
+it('the Background tasks model set in Settings comes first, signed in or not, and is described by who pays', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true } as any)
+  vi.mocked(window.tangu!.getConfig!).mockResolvedValue({ backendUrl: '', token: '', modelId: '', backgroundModelId: 'd1' } as any)
+  vi.mocked(api.listModels).mockResolvedValue({ models: [{ id: 'c1', name: 'Cloud', modelType: 'llm', source: 'forsion' }, { id: 'd1', name: 'Direct', modelType: 'llm', source: 'direct' }], backgroundModelId: 'c1', directProviders: [] } as any)
+  await toTeam()
+  const row = host.querySelector('[data-ob-muse-model]')!
+  expect(row.querySelector('select')!.options[0].textContent).toBe(translate('ob3.muse.modelLocalOption', { model: 'Direct' }))
+  // 登录了也不说「跟随云端 / 独立额度」:引擎先用本机这一格
+  expect(row.textContent).toContain(translate('ob3.muse.modelLocal'))
+  expect(row.textContent).not.toContain(translate('ob3.muse.modelCloud'))
+  await next()
+  expect(api.saveSpecialConfig).not.toHaveBeenCalled()
+})
+
+it('signed out: a default model that is not usable here still asks for a pick', async () => {
+  vi.mocked(api.listModels).mockResolvedValue({ models: [{ id: 'm1', name: 'Model one', modelType: 'llm' }], defaultModelId: 'cloud-only', backgroundModelId: 'cloud-bg', directProviders: [] } as any)
+  await toTeam()
+  const row = host.querySelector('[data-ob-muse-model]')!
+  expect(row.classList.contains('need')).toBe(true)
+  expect(row.textContent).toContain(translate('ob3.muse.modelNeed'))
 })
 
 it('signed in: Muse follows the cloud model by default and nothing is written for untouched choices', async () => {
@@ -175,6 +215,7 @@ it('signed in: Muse follows the cloud model by default and nothing is written fo
   expect(select.value).toBe('')
   expect(select.options[0].textContent).toBe(translate('ob3.muse.modelCloudOption'))
   expect(host.querySelector('[data-ob-muse-model]')?.classList.contains('need')).toBe(false)
+  expect(host.querySelector('[data-ob-muse-model]')?.textContent).toContain(translate('ob3.muse.modelCloud'))
   await next()
   expect(api.saveSpecialConfig).not.toHaveBeenCalled()
   expect(api.saveAgentDef).not.toHaveBeenCalled()
@@ -220,14 +261,39 @@ it('team: a failed write keeps the screen with the error and does not finish', a
   expect(props.onFinish).toHaveBeenCalledTimes(1)
 })
 
-it('team: "Add an agent" opens the creation form after the guide closes', async () => {
+it('signed in: another Forsion model counts against the main quota; a direct one is billed by its provider', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true } as any)
+  vi.mocked(api.listModels).mockResolvedValue({ models: [{ id: 'c1', name: 'Cloud', modelType: 'llm', source: 'forsion' }, { id: 'd1', name: 'Direct', modelType: 'llm', source: 'direct' }], directProviders: [] } as any)
   await toTeam()
-  await clickText(`${translate('ob3.roster.add')}${translate('ob3.roster.addHint')}`)
-  expect(openAgentCreation).not.toHaveBeenCalled()
+  const row = host.querySelector('[data-ob-muse-model]')!
+  await type(row.querySelector('select')!, 'c1')
+  expect(row.textContent).toContain(translate('ob3.muse.modelMain'))
+  await type(row.querySelector('select')!, 'd1')
+  expect(row.textContent).toContain(translate('ob3.muse.modelBilled'))
+})
+
+it('team: "Manage in Agents" opens the Agents space after the guide closes', async () => {
+  await toTeam()
+  const manage = host.querySelector<HTMLButtonElement>('[data-ob-manage]')!
+  expect(manage.textContent).toBe(translate('ob3.roster.manage'))
+  await act(async () => manage.click())
+  expect(manage.getAttribute('aria-pressed')).toBe('true')
+  expect(manage.textContent).toBe(translate('ob3.roster.manageQueued'))
+  expect(openAgentsSpace).not.toHaveBeenCalled()
   await next()
   expect(props.onFinish).toHaveBeenCalledTimes(1)
   await flush()
-  expect(openAgentCreation).toHaveBeenCalledTimes(1)
+  expect(openAgentsSpace).toHaveBeenCalledTimes(1)
+})
+
+it('team: an agent turned off earlier is still listed, marked off, with no switch', async () => {
+  vi.mocked(api.listAgents).mockResolvedValue([...agents.slice(0, 2), { ...agents[2], disabled: true }] as any)
+  await toTeam()
+  const coder = host.querySelector('[data-agent="coder"]')!
+  expect(coder.textContent).toContain(translate('ob3.roster.off'))
+  expect(coder.querySelector('[role="switch"]')).toBeNull()
+  await next()
+  expect(api.saveAgentDef).not.toHaveBeenCalled()
 })
 
 it('computer history: pre-switched on for a fresh install and applied only on Get started, then asks for Accessibility', async () => {
@@ -235,6 +301,9 @@ it('computer history: pre-switched on for a fresh install and applied only on Ge
   await toTeam()
   expect(host.querySelector('[data-ob-history]')?.getAttribute('data-ch-draft')).toBe('on')
   expect(sw(translate('ob3.ch.title')).getAttribute('aria-checked')).toBe('true')
+  expect(host.querySelector('[data-ob-history]')?.textContent).toContain(translate('ob3.ch.lead', { muse: '卜算子' }))
+  // 「开了之后,比如」:固定的示意文案
+  expect(host.querySelector('[data-ob-ch-example]')?.textContent).toContain(translate('ob3.ch.eg3', { muse: '卜算子' }))
   // 卡片两行 = 同意摘要,「隐私加密」那行与设置页同一个词条
   expect(host.querySelector('[data-ob-history]')?.textContent).toContain(translate('computerHistory.about.neverLabel'))
   expect(ch.setEnabled).not.toHaveBeenCalled()
@@ -243,12 +312,34 @@ it('computer history: pre-switched on for a fresh install and applied only on Ge
   expect(window.tangu!.desktopPermissionRequest).toHaveBeenCalledWith('computerAccessibility', expect.objectContaining({ locale: 'zh' }))
 })
 
-it('computer history: skipping the guide leaves it off', async () => {
+it('computer history: skipping the guide leaves it off and asks again on Home later', async () => {
   const ch = withHistory()
   await toTeam()
   await clickText(translate('onboarding.nav.skip'))
   expect(props.onFinish).toHaveBeenCalledTimes(1)
   expect(ch.setEnabled).not.toHaveBeenCalled()
+  expect(localStorage.getItem(CH_ASK_KEY)).toBe('pending')
+})
+
+it('computer history: "don\'t remind me" on Home survives skipping the guide again', async () => {
+  localStorage.setItem(CH_ASK_KEY, 'dismissed')
+  await render()
+  await clickText(translate('onboarding.nav.skip'))
+  expect(localStorage.getItem(CH_ASK_KEY)).toBe('dismissed')
+})
+
+it('computer history: finishing the guide clears a pending ask from an earlier skip', async () => {
+  localStorage.setItem(CH_ASK_KEY, 'pending')
+  await toTeam()
+  await next()
+  expect(localStorage.getItem(CH_ASK_KEY)).toBeNull()
+})
+
+it('web / phone: skipping or finishing the appearance-only guide never sets the Home ask', async () => {
+  delete (window.tangu as any).envCheck
+  await render()
+  await next()
+  expect(localStorage.getItem(CH_ASK_KEY)).toBeNull()
 })
 
 it('computer history: someone who turned it off before is not switched back on', async () => {
@@ -263,35 +354,105 @@ it('computer history: an install whose recorder was ever turned off or cleared (
   const ch = withHistory({ dataGen: 2 })
   await toTeam()
   expect(sw(translate('ob3.ch.title')).getAttribute('aria-checked')).toBe('false')
+  // 没替他预开,卡上就不说「默认开启」
+  expect(host.querySelector('[data-ob-history]')?.textContent).toContain(translate('ob3.ch.leadOff', { muse: '卜算子' }))
   await next()
   expect(ch.setEnabled).not.toHaveBeenCalled()
 })
 
 it('team: after a partial failure, a choice changed back is still written on retry', async () => {
-  vi.mocked(api.saveAgentDef).mockRejectedValueOnce(new Error('agent write failed'))
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true } as any)
+  vi.mocked(api.saveMuseIntro).mockRejectedValueOnce(new Error('intro write failed'))
   await toTeam()
-  await act(async () => sw('卜算子').click())
-  await act(async () => sw('Coder').click())
+  await type(host.querySelector<HTMLSelectElement>('[data-ob-muse-model] select')!, 'm1')
   await next()
-  expect(api.saveSpecialConfig).toHaveBeenLastCalledWith(expect.anything(), { muse: { enabled: false } })
+  expect(api.saveSpecialConfig).toHaveBeenLastCalledWith(expect.anything(), { muse: { modelId: 'm1' } })
   expect(stepNow()).toBe('team')
-  // 用户把卜算子改回开:盘上已经是关,重试时要把「开」写回去
-  await act(async () => sw('卜算子').click())
+  // 用户改回「跟随云端」:盘上已经是 m1,重试时要把空的写回去
+  await type(host.querySelector<HTMLSelectElement>('[data-ob-muse-model] select')!, '')
   await next()
-  expect(api.saveSpecialConfig).toHaveBeenLastCalledWith(expect.anything(), { muse: { enabled: true } })
-  expect(api.saveAgentDef).toHaveBeenLastCalledWith(expect.anything(), { disabled: true }, 'coder')
+  expect(api.saveSpecialConfig).toHaveBeenLastCalledWith(expect.anything(), { muse: { modelId: '' } })
+  expect(api.saveMuseIntro).toHaveBeenLastCalledWith(expect.anything(), {})
   expect(props.onFinish).toHaveBeenCalledTimes(1)
 })
 
 it('team: the focus memory is not written twice when a retry follows a partial failure', async () => {
-  vi.mocked(api.saveAgentDef).mockRejectedValueOnce(new Error('agent write failed'))
+  vi.mocked(api.saveSpecialConfig).mockRejectedValueOnce(new Error('config write failed'))
   await toTeam()
+  await type(host.querySelector<HTMLSelectElement>('[data-ob-muse-model] select')!, 'm1')
   await clickText(translate('ob3.focus.study'))
-  await act(async () => sw('Coder').click())
   await next()
+  expect(stepNow()).toBe('team')
   await next()
   expect(vi.mocked(api.saveMuseIntro).mock.calls.map((c) => c[1])).toEqual([{ focus: ['study'] }])
+  expect(api.saveSpecialConfig).toHaveBeenCalledTimes(2)
   expect(props.onFinish).toHaveBeenCalledTimes(1)
+})
+
+it('start: the key form picks a provider first and asks only for its key; a taken connection name is not overwritten', async () => {
+  const saveProvider = vi.fn().mockResolvedValue({})
+  Object.assign(window.tangu!, { saveProvider, listProviders: vi.fn().mockResolvedValue([{ providerId: 'openai' }]), openExternal: vi.fn() })
+  await render()
+  expect(host.querySelector('[data-channel="more"]')).toBeNull()
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-channel="key"]')!.click())
+  await flush()
+  const form = () => host.querySelector('[data-ob-keyform]')!
+  expect(form().getAttribute('data-preset')).toBe('openai')
+  expect(form().querySelectorAll('input')).toHaveLength(1)
+  const save = () => [...form().querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === translate('onboarding.connect.saveAndStart'))!
+  expect(save().disabled).toBe(true)
+  await clickText(translate('ob3.key.getKey', { name: 'OpenAI' }), form())
+  expect(window.tangu!.openExternal).toHaveBeenCalledWith('https://platform.openai.com/api-keys')
+  await type(form().querySelector('input')!, 'sk-test')
+  await act(async () => save().click())
+  await flush()
+  expect(saveProvider).toHaveBeenCalledExactlyOnceWith({ providerId: 'openai-2', baseUrl: 'https://api.openai.com/v1', apiKey: 'sk-test', modelIds: undefined })
+})
+
+it('start: the key form will not save by preset until it has read the existing connections (still loading, or the read failed)', async () => {
+  const saveProvider = vi.fn().mockResolvedValue({})
+  Object.assign(window.tangu!, { saveProvider, listProviders: vi.fn().mockReturnValue(new Promise(() => {})) })
+  await render()
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-channel="key"]')!.click())
+  await flush()
+  let form = host.querySelector('[data-ob-keyform]')!
+  await type(form.querySelector('input')!, 'sk-test')
+  const save = () => [...host.querySelector('[data-ob-keyform]')!.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === translate('onboarding.connect.saveAndStart'))!
+  expect(save().disabled).toBe(true)
+  // 读失败 ≠ 没有:照样不许按预设存,说一句;「自己填…」(连接名自己写)还能存
+  await act(async () => root.unmount())
+  root = createRoot(host)
+  vi.mocked(window.tangu!.listProviders!).mockRejectedValue(new Error('read failed'))
+  await render()
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-channel="key"]')!.click())
+  await flush()
+  form = host.querySelector('[data-ob-keyform]')!
+  await type(form.querySelector('input')!, 'sk-test')
+  expect(save().disabled).toBe(true)
+  expect(form.textContent).toContain(translate('ob3.key.listFailed'))
+  await clickText(translate('ob3.key.custom'))
+  const inputs = host.querySelectorAll<HTMLInputElement>('[data-ob-keyform] input')
+  await type(inputs[0], 'my-openai'); await type(inputs[2], 'https://api.example.com/v1')
+  expect(save().disabled).toBe(false)
+  expect(saveProvider).not.toHaveBeenCalled()
+})
+
+it('start: "Custom…" in the key form opens every field', async () => {
+  await render()
+  await act(async () => host.querySelector<HTMLButtonElement>('[data-channel="key"]')!.click())
+  await flush()
+  await clickText(translate('ob3.key.custom'))
+  const form = host.querySelector('[data-ob-keyform]')!
+  expect(form.getAttribute('data-preset')).toBe('custom')
+  expect(form.querySelectorAll('input')).toHaveLength(4)
+})
+
+it('start: signed in, the sync choices no longer offer an Agents box and point to Penzor Cloud › Sync instead', async () => {
+  vi.mocked(window.tangu!.authStatus!).mockResolvedValue({ loggedIn: true, nickname: 'Q' } as any)
+  await render()
+  const account = host.querySelector('[data-ob-account]')!
+  expect(account.textContent).not.toContain(translate('onboarding.connect.sync.agents'))
+  expect(account.querySelector('[data-ob-sync-agents]')?.textContent).toBe(translate('ob3.sync.agentsWhere'))
 })
 
 it('team: failing to reach the engine on Get started reports it and leaves the buttons usable', async () => {

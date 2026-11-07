@@ -1,6 +1,7 @@
 import './sandbox/seed' // 插件沙箱首屏的语言 / 主题:必须排第一,store 一被 import 就读 localStorage(普通实例 no-op)
+import './styles/layers.css' // 层序:第一份 CSS(seed 不带样式),forsion-guard 最先声明
 import { createRoot } from 'react-dom/client'
-import { MotionConfig } from 'framer-motion'
+import { HostMotionConfig } from './theme/motionTheme'
 import { Root } from './Root'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import './styles/base.css'
@@ -107,14 +108,14 @@ function boot(activateTangu: Parameters<typeof installEngine>[0]): void {
   }
 
   // 不用 React.StrictMode:其开发期 double-invoke 会重复初始化 Amadeus Space 的 Milkdown 编辑器。
-  // framer 也跟系统「减少动态效果」(走查续八 8.3):位移 / 缩放 / 布局动画停,只留透明度;CSS 那半在 styles/base.css。
+  // framer 也跟系统「减少动态效果」(走查续八 8.3)与设置里的「只淡入淡出」:位移 / 缩放 / 布局动画停,只留透明度;CSS 那半在 styles/base.css。
   createRoot(document.getElementById('root')!).render(
     <LocaleProvider>
-      <MotionConfig reducedMotion="user">
+      <HostMotionConfig>
         <ErrorBoundary>
           {isPreview ? <PreviewChat /> : kind === 'mini' ? <MiniRoot /> : kind === 'floating' ? <FloatingRoot /> : kind === 'detached' ? <DetachedRoot /> : <Root />}
         </ErrorBoundary>
-      </MotionConfig>
+      </HostMotionConfig>
     </LocaleProvider>,
   )
 }

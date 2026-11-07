@@ -14,7 +14,7 @@ import { BrowserExtensionPanel } from './BrowserExtensionPanel'
  * 在 Desktop 主界面内替换 Chat/Inspector 区域，而不是覆盖式弹窗。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick } from 'lucide-react'
+import { X, Droplets, Shapes, ArrowLeft, Undo2, ChevronRight, Loader2, RefreshCw, Sun, Moon, MonitorCog, RotateCcw, LogIn, LogOut, KeyRound, Plus, Trash2, Plug, Search, Download, Sparkles, Wrench, Check, Copy, Globe2, FolderOpen, Trophy, FileDown, Settings2, NotebookPen, Puzzle, LayoutGrid, Palette, Keyboard, Bug, Info, Brain, Bot, Webhook, MessageCircle, Blocks, Bell, PanelBottom, Image as ImageIcon, Server, Type, Layers3, MousePointer2, CircleUserRound, Scaling, Coffee, MonitorCheck, History, MonitorSmartphone, Laptop, Cloud, SunDim, AlignLeft, Wind, TextSelect, MousePointerClick, FolderInput } from 'lucide-react'
 import { ThemeCard } from './ThemeCard'
 import { ThemeSettingsPanel } from './ThemeSettingsPanel'
 import { StartupAppearanceSettings } from './StartupAppearanceSettings'
@@ -37,7 +37,7 @@ import { ChannelsTab } from './ChannelsTab'
 import { DecisionGateField, disableDecisionGate } from './DecisionGateField'
 import { buildSessionLogPayload, sessionLogFilename } from '../services/sessionLog'
 import type {
-  AmadeusSyncStatus, AuthStatusInfo, BackendStatusInfo, DirectProviderConfig, DiscoveryResult, McpServerConfigEntry, MirrorTestResult, ModelsResponse,
+  AmadeusSyncStatus, AuthStatusInfo, BackendStatusInfo, DirectProviderConfig, McpServerConfigEntry, MirrorTestResult, ModelsResponse,
   NormalAgentDef, SessionRecord, StoredDesktopConfig, TanguDesktopConfig, ToolsResponse, UpdaterStatusInfo,
 } from '../types'
 import { SHOW_SYSTEM_PROMPT_KEY } from '../types'
@@ -68,6 +68,7 @@ import { catalogByKind, FETCH_ENABLE_LIMIT, guessProviderModelKind, mergeFetched
 import { realtimeCandidates } from './RealtimeVoiceSettings'
 import { AgentSettingsOverview } from './AgentSettingsOverview'
 import { GlobalSkillsLibrary } from './GlobalSkillsLibrary'
+import { ExternalImportSheet } from './ExternalImport'
 import { openAgentProfile } from '../views/agentProfileNav'
 import { SpecialAgentsTab } from './SpecialAgentsTab'
 import { ShortcutsTab } from './ShortcutsTab'
@@ -120,6 +121,7 @@ import { resolveSettingsTarget, SETTINGS_TABS } from './settingsTarget'
 import { SETTINGS_SEARCH_INDEX, matchesSettingsQuery, type SettingsSearchEntry } from './settingsSearchIndex'
 import { dropCommittedEdits, hasDirtyEdits, mergeEdits, pickEdits, withoutKeys, type SettingsEdits } from './settingsDraft'
 import { onRadioGroupKeyDown, radioTabIndex } from './radioGroupKeys'
+import { MotionThemeSection, MotionFadeRow } from './MotionThemeSection'
 import { SettingsSaveBar } from './SettingsSaveBar'
 import { SecretStorageNotice } from './SecretStorageNotice' // P1-K5
 import { MaskingSettingsSection } from './MaskingSettingsSection'
@@ -192,6 +194,14 @@ registerMessages({
     zh: '会话运行期间阻止电脑因闲置自动休眠，全部结束后恢复；屏幕仍会熄灭。合盖、手动睡眠照常生效；Windows 笔记本用电池时，系统仍可能按电源策略休眠。',
     en: 'Keeps your computer from sleeping when idle while sessions are running, and restores normal sleep when they finish. The display can still turn off. Closing the lid or choosing Sleep still works, and Windows laptops on battery may still sleep per power policy.',
   },
+  'settingsmodal.closeAction.title': { zh: '关闭窗口时', en: 'When closing the window' },
+  'settingsmodal.closeAction.description': {
+    zh: '点主窗口的关闭按钮后做什么。在后台运行时会话、Muse 和同步不中断，可从托盘图标重新打开。',
+    en: 'What the main window\'s close button does. In the background, sessions, Muse and sync keep running; reopen Forsion from the tray icon.',
+  },
+  'settingsmodal.closeAction.ask': { zh: '每次询问', en: 'Ask every time' },
+  'settingsmodal.closeAction.tray': { zh: '在后台运行', en: 'Keep running in background' },
+  'settingsmodal.closeAction.quit': { zh: '退出 Forsion', en: 'Quit Forsion' },
   'modelsettings.title': { zh: '模型', en: 'Models' },
   'modelsettings.defaults': { zh: '默认模型', en: 'Default models' },
   'modelsettings.display': { zh: '模型库', en: 'Model library' },
@@ -305,6 +315,11 @@ registerMessages({
   'settingsmodal.status.connErr': { zh: '连接失败', en: 'Connection failed' },
 })
 
+/** 更新服务回来的稳定错误代码 → 文案键;其余是原文,照样显示。 */
+const UPDATE_ERROR_KEYS: Record<string, string> = {
+  unreachable: 'about.update.unreachable', 'disk-full': 'about.update.diskFull', 'no-permission': 'about.update.noPermission', 'file-busy': 'about.update.fileBusy',
+}
+
 type StaticTab = typeof SETTINGS_TABS[number]
 // 动态插件设置页用 `plugin:<id>`(Tangu 引擎插件)/ `fplugin:<id>`(Forsion 插件),都是 Obsidian 式一级入口。
 // ⚠️ 两套 id 空间会重名(deutschland-reiseglueck 引擎侧与 Forsion 侧各有一份),前缀必须分开。
@@ -355,12 +370,6 @@ const TAB_ICONS: Partial<Record<Tab, React.ReactNode>> = {
   browser: <Globe2 size={14} />,
   'computer-use': <MousePointerClick size={14} />,
   plugins: <Blocks size={14} />,
-}
-
-const ECO_LABEL: Record<string, string> = {
-  'claude-code': 'Claude Code',
-  codex: 'Codex',
-  hermes: 'Hermes',
 }
 
 const BACKEND_STATE_LABEL: Record<string, string> = {
@@ -979,62 +988,7 @@ export const SettingsModal: React.FC<{
   }
 
   // 跨生态资产发现/导入(高级页;扫 ~/.claude、~/.codex、~/.hermes)
-  const [disc, setDisc] = useState<DiscoveryResult | null>(null)
-  const [discScanning, setDiscScanning] = useState(false)
-  const [discImporting, setDiscImporting] = useState(false)
-  const [discSelSkills, setDiscSelSkills] = useState<Set<string>>(new Set())
-  const [discSelMcp, setDiscSelMcp] = useState<Set<string>>(new Set())
-  const [discMsg, setDiscMsg] = useState('')
-
-  const toggleSel = (setter: React.Dispatch<React.SetStateAction<Set<string>>>, key: string): void => {
-    setter((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-  }
-
-  const doDiscScan = async (): Promise<void> => {
-    if (!window.tangu?.discoveryScan) return
-    setDiscScanning(true)
-    setDiscMsg('')
-    setDiscSelSkills(new Set())
-    setDiscSelMcp(new Set())
-    try {
-      setDisc(await window.tangu.discoveryScan())
-    } catch (e: any) {
-      setDisc(null)
-      setDiscMsg(`${t('settings.discovery.scanFailed')}${e?.message || e}`)
-    } finally {
-      setDiscScanning(false)
-    }
-  }
-
-  const doDiscImport = async (): Promise<void> => {
-    setDiscImporting(true)
-    setDiscMsg('')
-    try {
-      const skillIds = [...discSelSkills]
-      // MCP 勾选 key 为 `生态:名称`,导入按名称(去重)
-      const mcpNames = [...new Set([...discSelMcp].map((k) => k.slice(k.indexOf(':') + 1)))]
-      const r1 = skillIds.length ? await window.tangu!.discoveryImportSkills!(skillIds) : { imported: [] }
-      const r2 = mcpNames.length ? await window.tangu!.discoveryImportMcp!(mcpNames) : { imported: [] }
-      setDiscSelSkills(new Set())
-      setDiscSelMcp(new Set())
-      if (r1.imported.length) {
-        window.dispatchEvent(new Event('forsion:skills-changed'))
-        window.tangu?.requestMainAction?.('skills-changed')
-      }
-      if (r2.imported.length) refreshMcp() // MCP 页同步看到导入项(未启用)
-      const reserved = 'reserved' in r2 && r2.reserved?.length ? ` ${t('settings.discovery.mcpReserved', { names: r2.reserved.join(', ') })}` : ''
-      setDiscMsg(t('settings.discovery.importOk', { skills: r1.imported.length, mcp: r2.imported.length }) + reserved)
-    } catch (e: any) {
-      setDiscMsg(`${t('settings.discovery.importFailed')}${e?.message || e}`)
-    } finally {
-      setDiscImporting(false)
-    }
-  }
+  const [aiImportOpen, setAiImportOpen] = useState(false)
 
   useEffect(() => {
     if (p.open) {
@@ -1345,7 +1299,7 @@ export const SettingsModal: React.FC<{
     ],
     skills: [
       ['k-library', t('globalSkills.title')],
-      ...(isDesktop && !!window.tangu?.discoveryScan ? [['k-discovery', t('settings.discovery.label')] as [string, string]] : []),
+      ...(isDesktop ? [['k-discovery', t('settings.discovery.label')] as [string, string]] : []),
     ],
     forsion: [
       // Extend 渲染半身自绘的子页(账号 / 额度与积分 / 安全 / 用量记录 / 反馈),随 Extend 的 npm 版本更新
@@ -1826,6 +1780,23 @@ export const SettingsModal: React.FC<{
                         actions={<SettingsSwitch checked={!!stored.keepAwakeWhileRunning} onChange={(on) => void window.tangu!.setConfig({ keepAwakeWhileRunning: on }).then(setStored)} label={t('settingsmodal.keepAwake.title')} />}
                       />
                     </div>
+                    <SettingsPanel
+                      anchor="close-action"
+                      icon={<LogOut size={16} />}
+                      title={t('settingsmodal.closeAction.title')}
+                      description={t('settingsmodal.closeAction.description')}
+                      actions={
+                        <select
+                          aria-label={t('settingsmodal.closeAction.title')}
+                          value={stored.closeAction || 'ask'}
+                          onChange={(e) => void window.tangu!.setConfig({ closeAction: e.target.value as 'ask' | 'tray' | 'quit' }).then(setStored)}
+                        >
+                          <option value="ask">{t('settingsmodal.closeAction.ask')}</option>
+                          <option value="tray">{t('settingsmodal.closeAction.tray')}</option>
+                          <option value="quit">{t('settingsmodal.closeAction.quit')}</option>
+                        </select>
+                      }
+                    />
                   </>
                 )}
                 {tab === 'general' && activeSub === 'g-conn' && (
@@ -2998,13 +2969,27 @@ export const SettingsModal: React.FC<{
                           />
                         ))}
                       </div>
-                      {/* 选中主题自曝的可调参数(有才渲染);key 带 lang 使换主题时重挂,存值副本跟着重取。 */}
+                      {/* 选中主题自曝的可调参数(有才渲染);key 带 lang 使换主题时重挂,存值副本跟着重取。
+                          磁盘主题里写了动效 token 的,收口时已删掉(theme/motionGuard.ts),这里说一句。 */}
                       {(() => {
                         const cur = listLanguages().find((th) => th.manifest.id === p.themeLang)
-                        return cur ? <ThemeSettingsPanel key={p.themeLang} entry={cur} /> : null
+                        if (!cur) return null
+                        const ignored = cur.motionIgnored?.length ?? 0
+                        return (
+                          <>
+                            <ThemeSettingsPanel key={p.themeLang} entry={cur} />
+                            {cur.cssRejected
+                              ? <div className="hint" data-theme-motion-rejected="" style={{ marginTop: 6 }}>{t('settings.theme.motionRejected')}</div>
+                              : ignored > 0 && <div className="hint" data-theme-motion-ignored={ignored} style={{ marginTop: 6 }}>{t('settings.theme.motionIgnored', { n: ignored })}</div>}
+                          </>
+                        )
                       })()}
                       <div className="hint" style={{ marginTop: 6 }}>{t('settings.theme.dropHint')}</div>
                     </section>
+                    {/* 动效主题(theme/motionTheme.tsx):紧跟设计语言;本机偏好,行自己订阅,不进设置草稿 */}
+                    <MotionThemeSection anchor="motion-theme">
+                      <MotionFadeRow anchor="motion-fade" />
+                    </MotionThemeSection>
                     <section className="settings-panel settings-theme-palette" data-setting-anchor="palette">
                       <div className="settings-panel-head">
                         <span className="settings-panel-icon"><Sparkles size={16} /></span>
@@ -3321,6 +3306,7 @@ export const SettingsModal: React.FC<{
                   </>
                 )}
 
+                {aiImportOpen && <ExternalImportSheet engine={homeTarget()} onClose={() => setAiImportOpen(false)} />}
                 {tab === 'shortcuts' && <ShortcutsTab />}
 
                 {tab === 'skills' && activeSub === 'k-library' && (
@@ -3328,94 +3314,15 @@ export const SettingsModal: React.FC<{
                     cfg={p.cfg}
                     localHost={!!(isDesktop && stored?.mode === 'managed')}
                     initialSkillKey={p.initialSkillKey}
-                    onImportCli={isDesktop && !!window.tangu?.discoveryScan ? () => setSub('k-discovery') : undefined}
+                    onImportCli={isDesktop ? () => setAiImportOpen(true) : undefined}
                     onBrowseMarket={() => useApp.getState().openMarket()}
                   />
                 )}
 
-                {tab === 'skills' && activeSub === 'k-discovery' && (
-                  <>
-                    {isDesktop && !!window.tangu?.discoveryScan && (
-                      <div className="field">
-                        <label>{t('settings.discovery.sources')}</label>
-                        <div className="hint" style={{ marginBottom: 8 }}>
-                          {t('settings.discovery.hint')}
-                        </div>
-                        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
-                          <button className="btn ghost sm" disabled={discScanning} onClick={() => void doDiscScan()}>
-                            {discScanning ? <Loader2 size={12} className="spin" /> : <Search size={12} />} {t('settings.discovery.scan')}
-                          </button>
-                          {disc && (
-                            <button
-                              className="btn primary sm"
-                              disabled={discImporting || (discSelSkills.size === 0 && discSelMcp.size === 0)}
-                              onClick={() => void doDiscImport()}
-                            >
-                              {discImporting ? <Loader2 size={12} className="spin" /> : <Download size={12} />}
-                              {t('settings.discovery.importSelected', { count: discSelSkills.size + discSelMcp.size })}
-                            </button>
-                          )}
-                        </div>
-
-                        {disc && disc.skills.length === 0 && disc.mcpServers.length === 0 && (
-                          <div className="hint">{t('settings.discovery.nothingFound')}</div>
-                        )}
-
-                        {disc && disc.skills.length > 0 && (
-                          <div className="field">
-                            <label>{t('settings.discovery.skillsCount', { count: disc.skills.length })}</label>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                              {disc.skills.map((s) => (
-                                <label key={`${s.ecosystem}:${s.id}`} className="file-row" style={{ cursor: 'pointer' }}>
-                                  <input
-                                    type="checkbox"
-                                    checked={discSelSkills.has(s.id)}
-                                    onChange={() => toggleSel(setDiscSelSkills, s.id)}
-                                  />
-                                  <span className="file-name">
-                                    <b>{s.name}</b>
-                                    <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
-                                      {s.description.length > 80 ? `${s.description.slice(0, 80)}…` : s.description}
-                                    </span>
-                                  </span>
-                                  <span className="file-size">{ECO_LABEL[s.ecosystem] || s.ecosystem}</span>
-                                </label>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {disc && disc.mcpServers.length > 0 && (
-                          <div className="field">
-                            <label>{t('settings.discovery.mcpCount', { count: disc.mcpServers.length })}</label>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                              {disc.mcpServers.map((m) => {
-                                const key = `${m.ecosystem}:${m.name}`
-                                return (
-                                  <label key={key} className="file-row" style={{ cursor: 'pointer' }}>
-                                    <input
-                                      type="checkbox"
-                                      checked={discSelMcp.has(key)}
-                                      onChange={() => toggleSel(setDiscSelMcp, key)}
-                                    />
-                                    <span className="file-name">
-                                      <b>{m.name}</b>
-                                      <span style={{ color: 'var(--text-muted)', marginLeft: 8, fontSize: 'var(--ui-font-meta, 12px)' }}>
-                                        {m.config.command ? `${m.config.command} ${(m.config.args || []).join(' ')}` : m.config.url}
-                                      </span>
-                                    </span>
-                                    <span className="file-size">{ECO_LABEL[m.ecosystem] || m.ecosystem}</span>
-                                  </label>
-                                )
-                              })}
-                            </div>
-                          </div>
-                        )}
-
-                        {discMsg && <div className="hint" style={{ marginTop: 6 }}>{discMsg}</div>}
-                      </div>
-                    )}
-                  </>
+                {tab === 'skills' && activeSub === 'k-discovery' && isDesktop && (
+                  <div className="field">
+                    <button type="button" className="btn primary sm" onClick={() => setAiImportOpen(true)}><FolderInput size={13} /> {t('settings.discovery.open')}</button>
+                  </div>
                 )}
 
                 {tab === 'advanced' && activeSub === 'a-mcp' && (
@@ -3811,7 +3718,7 @@ export const SettingsModal: React.FC<{
                       </div>
                     )}
                     {upd.phase === 'error' && upd.error ? (
-                      <div className="field"><div className="hint" style={{ color: 'var(--danger)' }}>{t('about.update.error', { error: upd.error === 'unreachable' ? t('about.update.unreachable') : upd.error })}</div></div>
+                      <div className="field"><div className="hint" style={{ color: 'var(--danger)' }}>{t('about.update.error', { error: UPDATE_ERROR_KEYS[upd.error] ? t(UPDATE_ERROR_KEYS[upd.error]) : upd.error })}</div></div>
                     ) : null}
                     {window.tangu?.setUpdateBeta ? (
                       <div className="field">

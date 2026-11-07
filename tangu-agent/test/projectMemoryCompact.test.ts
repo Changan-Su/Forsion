@@ -357,7 +357,7 @@ describe('压一遍(compactProjectMemory)', () => {
   it('门槛按真正写下去的内容量:条目带着很长的行首列表符号时,校验里那份(去了符号)过了也不算', async () => {
     const { ref, sessionId } = await fresh();
     const repo = await openProjectMemory(ref);
-    for (let i = 1; i <= 22; i++) repo.mutate({ action: 'add', fact: `-${' '.repeat(260)}Fact ${i}.`, cap: PROJECT_MEMORY_CHAR_BUDGET, source: { kind: 'historian', sessionId } });
+    for (let i = 1; repo.snapshot().content.length + 272 <= PROJECT_MEMORY_CHAR_BUDGET; i++) repo.mutate({ action: 'add', fact: `-${' '.repeat(260)}Fact ${i}.`, cap: PROJECT_MEMORY_CHAR_BUDGET, source: { kind: 'historian', sessionId } });
     const version = repo.snapshot().version;
     expect(repo.snapshot().content.length).toBeGreaterThan(COMPACT_ACCEPT_CHARS);
     answer = (input) => ({ keep: input.entries.map((e) => e.id), groups: [], discarded: [] });
@@ -577,7 +577,7 @@ describe('前台 remember 写满时', () => {
     await fill(ref, sessionId);
     answer = () => 'no';
     const out = await call(sessionId, { action: 'add', fact: NEW, scope: 'project' });
-    expect(out).toMatch(/^Error: project memory is full \(\d+\/8000 characters\)\. Forget or shorten stale entries/);
+    expect(out).toMatch(new RegExp(`^Error: project memory is full \\(\\d+/${PROJECT_MEMORY_CHAR_BUDGET} characters\\)\\. Forget or shorten stale entries`));
     expect(out).toContain('Current entries:');
     expect((await openProjectMemory(ref)).snapshot().entries.map((e) => e.content)).not.toContain(NEW);
     expect(database.prepare(`SELECT id FROM special_agent_log WHERE action = 'project_memory_compacted' AND session_ref = ?`).all(sessionId)).toEqual([]);

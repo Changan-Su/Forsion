@@ -83,7 +83,7 @@ export function EmptyState2({ title, subtitle, compact = false, center = false, 
     place()
 
     // 空状态 + 输入区上方 / 下方那几条:落底时淡出,没发出去再淡回来
-    const fadeTargets = (): HTMLElement[] => [empty, ...composer.querySelectorAll<HTMLElement>(':scope > .newchat-pickers, :scope > .newchat-projectbar, :scope > .t2-starters')]
+    const fadeTargets = (): HTMLElement[] => [empty, ...composer.querySelectorAll<HTMLElement>(':scope > .newchat-projectbar, :scope > .t2-starters')]
     const fadeOut = (): void => {
       leaving = true
       fades = fadeTargets().map((el) => (still || typeof el.animate !== 'function')

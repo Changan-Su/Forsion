@@ -148,6 +148,8 @@ export interface MuseStatusInfo {
  *  actions:数组=设置;null=显式清空(回到 Muse/agentSlug 旧语义);缺席=保留旧值。 */
 export interface MuseTriggerUpsert {
   id?: string
+  /** 打开编辑器时那份规则的 rev:引擎比对,对不上回 409(编辑期间被 Muse / 引擎改过)。不带 = 不比对。 */
+  expectedRev?: string
   /** 谁发起的这次 upsert(引擎按它决定「能不能把停用的规则开回来」):
    *  'plugin-ensure' = 插件每次 setup 的**幂等重放**(不是用户意图)—— 引擎自动停用(排空封顶断环 / 配置错误)
    *  与用户显式停用都不许被它开回来,否则安全闸每次启动自动松开、停用原因还被抹掉;
@@ -317,17 +319,9 @@ export interface GitSettings {
   identityEmail: string
 }
 
-// ── 跨生态 agent 资产发现(desktop discovery:scan;~/.claude、~/.codex、~/.hermes)──
+// ── 跨生态 MCP 发现(desktop discovery:scan;~/.claude、~/.codex、~/.hermes)──
 
 export type DiscoveryEcosystem = 'claude-code' | 'codex' | 'hermes'
-
-export interface DiscoveredSkill {
-  ecosystem: DiscoveryEcosystem
-  id: string
-  name: string
-  description: string
-  sourceDir: string
-}
 
 export interface DiscoveredMcp {
   ecosystem: DiscoveryEcosystem
@@ -336,7 +330,6 @@ export interface DiscoveredMcp {
 }
 
 export interface DiscoveryResult {
-  skills: DiscoveredSkill[]
   mcpServers: DiscoveredMcp[]
 }
 
@@ -460,12 +453,19 @@ export interface PluginSandboxState {
   dir?: string
   sessionId?: string
   status?: import('../../../tangu-agent/src/contracts/pluginSandbox').SandboxStatus | null
+  /** 最近一步(start / screenshot / click …)与最近一张截图的时刻(图另向 lastShot 要)。 */
+  lastOp?: { op: string; at: number; target?: string }
+  shotAt?: number
+  /** 没在跑时:上一个沙箱与停下的原因。 */
+  last?: { pluginId: string; name: string; version: string; dir: string; sessionId?: string; reason: 'stopped' | 'idle' | 'exited'; at: number }
 }
 export interface PluginSandboxReport { note: string; sessionId?: string; pluginId: string; name: string }
 export interface PluginSandboxApi {
   /** ui.storage = 本窗的主题键(沙箱首屏照着画);语言由主进程按自己的界面语言给。deadline = 引擎给这次动作的期限(Date.now() 毫秒),排队排过了主进程就不做了。reveal = 用户在界面上点的,起好后把沙箱窗口叫到前面。 */
   exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number; reveal?: boolean; ui?: { storage: Record<string, string> } }): Promise<PluginSandboxResult>
   state(): Promise<PluginSandboxState>
+  /** 最近一张截图;只给发起这个沙箱的对话(别的对话 = null)。 */
+  lastShot(sessionId: string): Promise<{ image: string; at: number } | null>
   show(): Promise<boolean>
   stop(): Promise<void>
   reset(): Promise<PluginSandboxResult>
@@ -874,7 +874,6 @@ declare global {
       readMcpConfig?(): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
       writeMcpConfig?(cfg: { mcpServers: Record<string, McpServerConfigEntry>; base?: Record<string, McpServerConfigEntry> }): Promise<{ mcpServers: Record<string, McpServerConfigEntry> }>
       discoveryScan?(): Promise<DiscoveryResult>
-      discoveryImportSkills?(ids: string[]): Promise<{ imported: string[] }>
       discoveryImportMcp?(names: string[]): Promise<{ imported: string[]; reserved?: string[] }>
       envCheck?(): Promise<EnvProbeResult[]>
       envRun?(installId: string): Promise<{ exitCode: number }>
@@ -896,6 +895,8 @@ declare global {
       marketUpdateStatus?(): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketSetAutoUpdate?(id: string, on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
       marketCheckUpdates?(): Promise<void>
+      marketSetAutoUpdateAll?(on: boolean): Promise<import('../../shared/marketPluginUpdates').MarketPluginUpdates>
+      marketRollback?(type: string, slug: string, version: string, market?: { id: string; name?: string }): Promise<import('../../shared/marketPluginUpdates').PluginRollbackResult & { path: string; id?: string }>
       onMarketUpdateStatus?(cb: (state: import('../../shared/marketPluginUpdates').MarketPluginUpdates) => void): () => void
       marketInstall?(id: string, version?: string): Promise<{ ok: boolean; path: string; files: number; type: string; slug: string; id?: string }>
       /** 安装进度订阅(主进程只推给发起窗口);返回退订函数。 */

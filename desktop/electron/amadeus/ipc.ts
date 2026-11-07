@@ -167,6 +167,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
   restartSync: () => Promise<void>
   stopSync: () => Promise<void>
   readExternalPlugins: () => Promise<ExternalPluginSource[]>
+  devPluginRoots: () => Promise<Array<{ id: string; dir: string }>>
   vaultFace: VaultFace
 } {
   const vault = new VaultManager({
@@ -1054,6 +1055,9 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     restartSync: () => cloud?.restartAllSync() ?? Promise.resolve(),
     stopSync: () => cloud?.stopAllSync() ?? Promise.resolve(),
     readExternalPlugins,
+    /** 开发副本(插件沙箱 / 开发态加载)的根目录:Space 清单据此收它们带的 spaces/,并遮住同 id 的安装版。拒载的不算。 */
+    devPluginRoots: async (): Promise<Array<{ id: string; dir: string }>> =>
+      (await readDevPlugins(new Set())).flatMap((s) => (!s.blocked && s.devRoot ? [{ id: s.id, dir: s.devRoot }] : [])),
     // Unit 设备页的本地 vault 面(unitWeb /vault/*):白名单在 unitWeb.ts(default-deny),这里只管派发。
     vaultFace: {
       call: async (channel, args, origin) => {

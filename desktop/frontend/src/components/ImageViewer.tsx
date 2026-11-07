@@ -21,6 +21,7 @@ import { pushMobileBack } from '../amadeus/lib/mobileBack'
 import { useApp } from '../stores/appStore'
 import './imageViewer.css'
 import { motion } from '../theme/motionTokens'
+import { reducedMotion } from '@lcl/engine/spring'
 
 registerMessages({
   'viewer.open': { zh: '查看图片 {name}', en: 'View image {name}' },
@@ -95,7 +96,7 @@ export function openImageViewer(from: HTMLImageElement): void {
   root.render(<Viewer items={items} start={items.findIndex((it) => it.el === from)} onDone={done} />)
 }
 
-const reduced = (): boolean => window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+const reduced = (): boolean => reducedMotion()
 
 async function copyImage(src: string): Promise<void> {
   try {

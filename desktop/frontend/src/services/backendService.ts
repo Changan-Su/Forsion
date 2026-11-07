@@ -365,12 +365,50 @@ export const listCheckpoints = (t: EngineTarget, sessionId: string) =>
     t, `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints`,
   ).then((r) => r.checkpoints || [])
 
-/** 把代码恢复到 `at` 时刻(该时刻之后所有写工具改动按最早 pre-image 回滚)。 */
-export const restoreCheckpoint = (t: EngineTarget, sessionId: string, at: number) =>
+/** 把代码恢复到 `at` 时刻(该时刻之后所有写工具改动按最早 pre-image 回滚)。
+ *  paths = 只恢复这几个文件(绝对路径);keepEdited = Agent 写完之后又被改过的文件不覆盖,记进 conflicts。 */
+export const restoreCheckpoint = (t: EngineTarget, sessionId: string, at: number, opts?: { paths?: string[]; keepEdited?: boolean }) =>
   requestCap<{ restored: string[]; deleted: string[]; skipped: string[]; conflicts?: string[]; failed: Array<{ path: string; error: string }> }>(
     t, 'checkpointRestore', `/agent/sessions/${encodeURIComponent(sessionId)}/checkpoints/restore`,
-    { method: 'POST', body: JSON.stringify({ at }) },
+    { method: 'POST', body: JSON.stringify({ at, ...(opts?.paths ? { paths: opts.paths } : {}), ...(opts?.keepEdited ? { keepEdited: true } : {}) }) },
   )
+
+/** 某段时间里 Agent 用写文件工具改过的一个文件(引擎 services/checkpoints.ts 的 FileChange 镜像)。
+ *  增减按「这段开始前的原样 vs 这段结束时」逐行算;比不了时 adds / dels 为 null,reason 说明为什么。 */
+export interface FileChange {
+  path: string
+  kind: 'created' | 'modified' | 'deleted'
+  adds: number | null
+  dels: number | null
+  reason?: 'binary' | 'toobig' | 'nosnap'
+  /** 改过又回到原样(撤销过 / 建了又删)。 */
+  reverted?: boolean
+  /** 只对还没结束的那段:Agent 写完之后文件又被改过(你手改的、命令改的)。 */
+  editedLater?: boolean
+  runs: number
+  /** 只有 changesDiff 才带:统一 diff 正文(真行号,上下文 2 行,不带 ---/+++ 文件头)。 */
+  patch?: string
+  truncated?: boolean
+}
+export interface ChangeWindowInfo { since: number; until: number | null; files: FileChange[] }
+
+/** 按时间段列改动:bounds = 段的分界(毫秒,升序),段 = [b0,b1)、[b1,b2)…[bn,∞);不给 = 整个会话一段。 */
+export const listChanges = (t: EngineTarget, sessionId: string, bounds?: number[]) =>
+  request<{ windows: ChangeWindowInfo[] }>(
+    t, `/agent/sessions/${encodeURIComponent(sessionId)}/changes${bounds?.length ? `?bounds=${bounds.join(',')}` : ''}`,
+  ).then((r) => r.windows || [])
+
+/** 会话所在 Git 项目里还没提交的改动(含命令改的、你手改的;只看不撤)。available=false = 不是 Git 仓 / 没装 git / 没有目录。 */
+export interface GitChangesInfo { available: boolean; reason?: 'nogit' | 'notrepo' | 'nocwd' | 'untrusted'; root?: string; files: FileChange[]; truncatedFiles?: boolean }
+export const gitChanges = (t: EngineTarget, sessionId: string) =>
+  request<GitChangesInfo>(t, `/agent/sessions/${encodeURIComponent(sessionId)}/changes/git?diff=1`)
+
+/** 某一段的逐文件 diff(path 给了只取那一个)。 */
+export const changesDiff = (t: EngineTarget, sessionId: string, q: { since: number; until: number | null; path?: string }) =>
+  request<{ files: FileChange[] }>(
+    t, `/agent/sessions/${encodeURIComponent(sessionId)}/changes/diff?since=${q.since}&until=${q.until ?? ''}`
+      + (q.path ? `&path=${encodeURIComponent(q.path)}` : ''),
+  ).then((r) => r.files || [])
 
 /** run_background 起的后台进程(引擎 routes/processes.ts,2026-10-25):url = 输出里认出的本机地址(只在跑着时给),last = 最后一行。 */
 export interface EngineProcess {
@@ -659,6 +697,9 @@ export const mcpLogin = (t: EngineTarget, name: string) =>
 export const mcpSetKey = (t: EngineTarget, name: string, key: string) =>
   request<{ status: string; error?: string }>(t, `/agent/mcp/${encodeURIComponent(name)}/key`, { method: 'POST', body: JSON.stringify({ key }) })
 /** 断开:删掉本机令牌。 */
+/** 「测试连接」:按还没保存的配置连一次、列工具后断开(只在本机引擎)。 */
+export const mcpProbe = (t: EngineTarget, config: unknown) =>
+  request<{ ok: true; tools: string[] } | { ok: false; error: string; needsLogin?: boolean }>(t, '/agent/mcp/probe', { method: 'POST', body: JSON.stringify({ config }) }, { timeoutMs: 45000 })
 export const mcpLogout = (t: EngineTarget, name: string) =>
   request<Record<string, never>>(t, `/agent/mcp/${encodeURIComponent(name)}/logout`, { method: 'POST' })
 
@@ -919,6 +960,24 @@ export const getPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t,
 export const scanPortraitMove = (t: EngineTarget) => request<PortraitMoveView>(t, '/agent/human/SOUL.md/move/scan', { method: 'POST' })
 export const decidePortraitMove = (t: EngineTarget, id: string, decision: 'move' | 'keep' | 'undo') =>
   request<PortraitMoveView>(t, `/agent/human/SOUL.md/move/items/${encodeURIComponent(id)}`, { method: 'POST', body: JSON.stringify({ decision }) })
+
+// ── 从其他 AI 导入(11-03,引擎 services/externalImport;只许本机)──
+export type ImportTool = 'claude-code' | 'codex' | 'gemini-cli' | 'hermes' | 'cursor' | 'windsurf' | 'pasted'
+export interface ImportLedger { id: string; at: number; sources: ImportTool[]; counts: Record<'person' | 'agent' | 'project' | 'skill', number>; undoneAt?: number; kept?: string[] }
+export interface ImportScan { tools: Array<{ id: ImportTool; about: number; rules: number; project: number; notes: number; skills: number }>; fresh: number; freshTools: ImportTool[]; last: ImportLedger | null }
+export interface ImportPlanItem { id: string; text: string; dest: 'person' | 'agent' | 'project' | 'past' | 'blocked'; project?: string; sources: ImportTool[]; flags: Array<'merged' | 'sensitive' | 'known' | 'conflict' | 'forgotten'>; conflictWith?: string; checked: boolean; locked: boolean }
+export interface ImportPlanSkill { key: string; tool: ImportTool; name: string; target: string; description: string; scripts: number; files: number; flags: Array<'renamed' | 'mentions-other' | 'too-big'>; checked: boolean; locked: boolean }
+export interface ImportNotice { tool: ImportTool; kind: 'too-many' | 'persona' | 'truncated'; path: string; count?: number; project?: string }
+export interface ImportPlan { id: string; createdAt: number; items: ImportPlanItem[]; skills: ImportPlanSkill[]; notices: ImportNotice[]; missed: number }
+export interface ImportPlanView { state: 'idle' | 'running' | 'done' | 'error'; done: number; total: number; plan: ImportPlan | null; error: string | null }
+export const scanImport = (t: EngineTarget) => request<ImportScan>(t, '/agent/import/scan')
+export const getImportPlan = (t: EngineTarget) => request<ImportPlanView>(t, '/agent/import/plan')
+export const startImportPlan = (t: EngineTarget, body: { tools: ImportTool[]; pasted?: string; lang: 'zh' | 'en' }) =>
+  request<ImportPlanView>(t, '/agent/import/plan', { method: 'POST', body: JSON.stringify(body) })
+export const applyImport = (t: EngineTarget, body: { planId: string; items: Array<{ id: string; text?: string }>; skills: string[] }) =>
+  request<{ ledger: ImportLedger; skipped: number }>(t, '/agent/import/apply', { method: 'POST', body: JSON.stringify(body) })
+export const undoImport = (t: EngineTarget, id: string) => request<ImportLedger>(t, '/agent/import/undo', { method: 'POST', body: JSON.stringify({ id }) })
+export const ignoreImport = (t: EngineTarget) => request<{ ok: true }>(t, '/agent/import/ignore', { method: 'POST' })
 export const listAgentMemoryRevisions = (t: EngineTarget, slug: string) =>
   request<{ revisions: AgentMemoryRevision[] }>(t, `${agentMemoryPath(slug)}/revisions`).then((r) => r.revisions)
 export const restoreAgentMemory = (t: EngineTarget, slug: string, version: string, expectedVersion: string) =>
@@ -1561,6 +1620,12 @@ export const getGitHosting = (t: EngineTarget, sessionId: string): Promise<GitHo
       github: r.github && typeof r.github.linked === 'boolean' ? { linked: r.github.linked, login: typeof r.github.login === 'string' ? r.github.login : undefined, remote: r.github.remote === true, name: typeof r.github.name === 'string' ? r.github.name : '' } : null,
       connect: r.connect === true,
     })).catch(() => null)
+/** Forsion Git 上等这个人审的合并请求(Git 卡的一行;引擎用 Forsion 发的推拉凭据去问站上)。读不到 / 老引擎没有这条 → null。 */
+export interface GitReviews { items: Array<{ repo: string; number: number; title: string; url: string }>; total: number; web: string }
+export const getGitReviews = (t: EngineTarget, sessionId: string): Promise<GitReviews | null> =>
+  request<{ reviews?: GitReviews | null }>(t, `/agent/project-context/git/reviews?sessionId=${encodeURIComponent(sessionId)}`, undefined, { timeoutMs: 8000 })
+    .then((r) => (r.reviews && Array.isArray(r.reviews.items) && typeof r.reviews.web === 'string' ? r.reviews : null))
+    .catch(() => null)
 /** 发布到 GitHub:Forsion 账号绑了 GitHub 时,在那个 GitHub 账号下建一个私有仓库,加成远端并推送当前分支。
  *  没有远端时它叫 origin;已经有了叫 github(不碰原来的)。target = 以后推送到这里(缺省 true);false = 只推这一次。
  *  err.code:invalid_repo_name / no_commits / github_not_linked / github_relink_required / github_repo_exists(同名的非私有仓库已在,没往里推)
@@ -1618,6 +1683,9 @@ export const addMaskAllow = (t: EngineTarget, value: string, kind: string) =>
 export const removeMaskAllow = (t: EngineTarget, hash: string) =>
   request<{ allow: MaskAllowEntry[] }>(t, `/agent/masking/allow/${encodeURIComponent(hash)}`, { method: 'DELETE' }).then((r) => r.allow)
 export const getMaskLog = (t: EngineTarget) => request<{ lines: MaskLogLine[] }>(t, '/agent/masking/log').then((r) => r.lines)
+/** 改一条项目记忆(一句话,≤300 字)。409 = 读出之后被别处改过(没有改);放不下 → err.code 'MEMORY_FULL'。 */
+export const editProjectMemory = (t: EngineTarget, sessionId: string, id: string, fact: string, expectedVersion: string) =>
+  request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory', { method: 'PATCH', body: JSON.stringify({ sessionId, id, fact, expectedVersion }) }).then((r) => r.memory)
 /** 删一条项目记忆。409 = 记忆在读出之后被别处改过(没有删除);调用方重载后再删。 */
 export const forgetProjectMemory = (t: EngineTarget, sessionId: string, id: string, expectedVersion: string) =>
   request<{ memory: ProjectMemoryView }>(t, '/agent/project-context/memory', { method: 'DELETE', body: JSON.stringify({ sessionId, id, expectedVersion }) }).then((r) => r.memory)

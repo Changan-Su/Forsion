@@ -389,8 +389,6 @@ const api = {
     ipcRenderer.invoke('mcp:write', cfg),
   // ── 跨生态 agent 资产发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu)──
   discoveryScan: (): Promise<any> => ipcRenderer.invoke('discovery:scan'),
-  discoveryImportSkills: (ids: string[]): Promise<{ imported: string[] }> =>
-    ipcRenderer.invoke('discovery:importSkills', ids),
   discoveryImportMcp: (names: string[]): Promise<{ imported: string[]; reserved?: string[] }> =>
     ipcRenderer.invoke('discovery:importMcp', names),
   // ── 拖入式主题(~/.tangu/themes/;主进程读盘成字符串,渲染端 <style> 注入)──
@@ -432,6 +430,8 @@ const api = {
   marketUpdateStatus: () => ipcRenderer.invoke('market:updateStatus'),
   marketSetAutoUpdate: (id: string, on: boolean) => ipcRenderer.invoke('market:setAutoUpdate', id, on),
   marketCheckUpdates: (): Promise<void> => ipcRenderer.invoke('market:checkUpdates'),
+  marketSetAutoUpdateAll: (on: boolean): Promise<import('../shared/marketPluginUpdates').MarketPluginUpdates> => ipcRenderer.invoke('market:setAutoUpdateAll', on),
+  marketRollback: (type: string, slug: string, version: string, market?: { id: string; name?: string }): Promise<import('../shared/marketPluginUpdates').PluginRollbackResult & { path: string; id?: string }> => ipcRenderer.invoke('market:rollback', type, slug, version, market),
   onMarketUpdateStatus: (cb: (state: import('../shared/marketPluginUpdates').MarketPluginUpdates) => void): (() => void) => {
     let off = false, received = false
     const listener = (_e: unknown, state: import('../shared/marketPluginUpdates').MarketPluginUpdates): void => { received = true; cb(state) }
@@ -714,7 +714,7 @@ const AGENT_KEYS = [
   'listProviders', 'saveProvider', 'deleteProvider', 'scanLocalProviders', 'importLocalProviders',
   'readMcpConfig', 'writeMcpConfig', 'importMcpConfig',
   'connectorsList', 'connectorsConnect', 'connectorsRemove',
-  'discoveryScan', 'discoveryImportSkills', 'discoveryImportMcp',
+  'discoveryScan', 'discoveryImportMcp',
   'openAgentDir', 'openSkillsDir',
   'envCheck', 'envRun', 'onEnvOutput',
   'pluginsUserInstalled', 'pluginsUninstall',
@@ -732,7 +732,7 @@ const AGENT_KEYS = [
   'remoteSafety', // 急停 / 远程锁定管的是本机引擎上的远程 / 通道 / 无人值守 run
 ] as const
 if (!PRODUCT.agentBackend) for (const k of AGENT_KEYS) delete (api as Record<string, unknown>)[k]
-if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketForget', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
+if (!PRODUCT.market) for (const k of ['marketList', 'marketRead', 'marketDetail', 'marketInstall', 'onMarketInstallProgress', 'marketInstalled', 'marketUninstall', 'marketForget', 'marketUpdateStatus', 'marketSetAutoUpdate', 'marketSetAutoUpdateAll', 'marketRollback', 'marketCheckUpdates', 'onMarketUpdateStatus'] as const) delete (api as Record<string, unknown>)[k]
 // 云端账号面(个人中心 / 会员页 / 额度与重置卡 / 反馈 / cloud:fetch)由内置包 Forsion Extend 的主进程半身提供
 // (electron/cloudHost.ts);没装载(验签失败 / 单品变体 / 没捆)就删键 —— 调了会 reject "No handler registered",
 // 删掉键渲染层按同一套 window.tangu?.X 门控自动隐藏。主进程在开窗前就答好 cloud:present(Extend 实际注册的通道名),
@@ -772,6 +772,7 @@ if (sandboxSelf) {
   (api as Record<string, unknown>).pluginSandbox = {
     exec: (op: string, args: Record<string, unknown>, origin: unknown) => ipcRenderer.invoke('pluginSandbox:exec', op, args, origin),
     state: () => ipcRenderer.invoke('pluginSandbox:state'),
+    lastShot: (sessionId: string) => ipcRenderer.invoke('pluginSandbox:lastShot', sessionId),
     show: () => ipcRenderer.invoke('pluginSandbox:show'),
     stop: () => ipcRenderer.invoke('pluginSandbox:stop'),
     reset: () => ipcRenderer.invoke('pluginSandbox:reset'),

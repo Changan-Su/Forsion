@@ -1,3 +1,4 @@
+@layer forsion-guard; /* 层序兜底:入口已先 import styles/layers.css;单独引 base.css 的页面(分享页等)也由这里最先声明 */
 /**
  * Tangu Desktop 基础样式:token 契约缺省值(=素纸亮色,FOUC 兜底)+ 重置 + 组件语义类。
  * 组件只引用语义 CSS 变量,主题文件([data-theme=…])整块替换 token —— 即全部换肤面。
@@ -250,10 +251,13 @@
   }
 }
 
-/* 主题切换瞬间抑制全树过渡(loader.ts 挂/摘) */
-.theme-no-transition,
-.theme-no-transition * {
-  transition: none !important;
+/* 主题切换瞬间抑制全树过渡(loader.ts 挂/摘)。在护栏层里:否则下面「减少动态效果」那条(层内 !important)
+   会压过它,开着减少动态效果的人切主题时颜色要淡 150ms 而不是一下到位;同一层里按权重,(0,1,0) 照旧赢。 */
+@layer forsion-guard {
+  .theme-no-transition,
+  .theme-no-transition * {
+    transition: none !important;
+  }
 }
 
 /* 明暗切换的整页交叉淡入(themeStore.setMode 用 startViewTransition 触发) */
@@ -381,6 +385,23 @@ a { color: var(--accent-ink); text-decoration: none; }
 .wikilink-nb { white-space: nowrap; }
 .wikilink-ic { display: inline-block; width: 0.95em; height: 0.95em; vertical-align: -0.15em; margin-right: 0.25em; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 a:hover { color: var(--accent-ink); }
+/* 外链 ↗(2026-11-04 用户定,借 Obsidian):网页链接和双链同为强调色后,靠末尾这枚小箭头认出「会离开应用」。
+   聊天 .citelink、.md-body(更新日志 / 技能说明等)与 Amadeus 正文链接共用这一条;只认 http(s),相对路径 / 笔记链接不挂;包图片的链接不挂。
+   用 mask + currentColor 跟随链接色;inline-block 让它不吃链接的下划线。 */
+.t2-content a.citelink[href^="http"]::after,
+.md-body a[href^="http"]:not(:has(img))::after,
+.am-app .milkdown .ProseMirror a[href^="http"]:not(:has(img))::after {
+  content: '';
+  display: inline-block;
+  width: 0.62em;
+  height: 0.62em;
+  margin-left: 0.12em;
+  vertical-align: 0.12em;
+  background: currentColor;
+  opacity: 0.75;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17 17 7M8 7h9v9'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17 17 7M8 7h9v9'/%3E%3C/svg%3E") center / contain no-repeat;
+}
 
 /* ⚠️ 全局**不要**写 `::-webkit-scrollbar` 自定义样式(2026-08-13 起)。
    Blink 里只要匹配到任意一条滚动条伪元素规则,就从系统滚动条切成 custom scrollbar,
@@ -407,9 +428,22 @@ a:hover { color: var(--accent-ink); }
 
 /* 无障碍:尊重系统「减少动态效果」(DESIGN §3 规矩 8「留反馈,去点缀」,走查续八 8.3):关键帧一律压掉(转圈、骨架屏闪光照旧停);
    过渡只留颜色 / 底色 / 边色 / 透明度 / 阴影,时长 --duration-fast —— 位移、缩放、尺寸不动,拨开关底色仍渐变过去。
-   framer-motion 由 Root / MobileRoot 根上的 <MotionConfig reducedMotion="user"> 跟系统(只留透明度)。 */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+   framer-motion 由 Root / MobileRoot 根上的 <MotionConfig reducedMotion="user"> 跟系统(只留透明度)。
+   放在 @layer forsion-guard(styles/layers.css 最先声明):层内 !important 压过任何不分层的 !important,
+   主题 / 插件写 `animation-duration: 2s !important` 也压不过它(动效收口,check:motiontheme 带负对照)。 */
+@layer forsion-guard {
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.001ms !important;
+      animation-iteration-count: 1 !important;
+      transition-property: color, background-color, border-color, opacity, box-shadow !important;
+      transition-duration: var(--duration-fast) !important;
+      scroll-behavior: auto !important;
+    }
+  }
+  /* 设置 → 外观 → 动效主题 →「只淡入淡出」(theme/motionTheme.tsx):和上面同一套,只是由用户在应用里打开;
+     面板在 JS 里只淡入 150 / 淡出 80ms(LCL reducedMotion() 认 data-motion-fade),framer 由 HostMotionConfig 切到 always。 */
+  :root[data-motion-fade='on'] *, :root[data-motion-fade='on'] *::before, :root[data-motion-fade='on'] *::after {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-property: color, background-color, border-color, opacity, box-shadow !important;
@@ -1409,6 +1443,18 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .tool-card-body .wsfile-diff .d2h-file-wrapper, .approval-card .wsfile-diff .d2h-file-wrapper { margin-bottom: 4px; border-color: var(--border); }
 /* diff2html 自带的英文 CHANGED/ADDED 角标不过 t(),聊天面藏掉(文件预览面保留) */
 .tool-card-body .wsfile-diff .d2h-tag, .approval-card .wsfile-diff .d2h-tag { display: none; }
+/* 工具行 / 审批卡的 diff 颜色跟主题的 --green / --danger 走(文件改动记录方案 11-06,和回执的 .ct-diff 同一套比例),
+   不用 diff2html 自带的亮绿亮黄;改的是它读的变量,亮暗两套一起换 */
+.tool-card-body .wsfile-diff, .approval-card .wsfile-diff {
+  --d2h-ins-bg-color: color-mix(in srgb, var(--green) 17%, transparent); --d2h-dark-ins-bg-color: color-mix(in srgb, var(--green) 17%, transparent);
+  --d2h-del-bg-color: color-mix(in srgb, var(--danger) 11%, transparent); --d2h-dark-del-bg-color: color-mix(in srgb, var(--danger) 11%, transparent);
+  --d2h-ins-highlight-bg-color: color-mix(in srgb, var(--green) 36%, transparent); --d2h-dark-ins-highlight-bg-color: color-mix(in srgb, var(--green) 36%, transparent);
+  --d2h-del-highlight-bg-color: color-mix(in srgb, var(--danger) 26%, transparent); --d2h-dark-del-highlight-bg-color: color-mix(in srgb, var(--danger) 26%, transparent);
+  --d2h-change-ins-color: var(--d2h-ins-bg-color); --d2h-dark-change-ins-color: var(--d2h-ins-bg-color);
+  --d2h-change-del-color: var(--d2h-del-bg-color); --d2h-dark-change-del-color: var(--d2h-del-bg-color);
+  --d2h-ins-border-color: transparent; --d2h-dark-ins-border-color: transparent; --d2h-del-border-color: transparent; --d2h-dark-del-border-color: transparent;
+  --d2h-ins-label-color: var(--green); --d2h-dark-ins-label-color: var(--green); --d2h-del-label-color: var(--danger); --d2h-dark-del-label-color: var(--danger);
+}
 .wsfile-diff-raw { font-family: var(--font-mono); font-size: var(--ui-font-caption, 11px); white-space: pre-wrap; word-break: break-word; margin: 4px 0; }
 .tool-raw-args summary { color: var(--text-faint); font-size: var(--ui-font-caption, 11px); margin: 6px 0 2px; cursor: pointer; user-select: none; }
 .approval-card .approval-diff { max-height: 320px; overflow-y: auto; margin-top: 8px; }
@@ -2408,32 +2454,6 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .cm-sub .menu-item { white-space: nowrap; }
 .cm-sub .menu-item .grow { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
-/* ── 新会话「运行引擎」选择条(EnginePicker,参考 AionUI 的 agent pill bar) ── */
-/* ⚠️ margin 横向不能 auto:flex 列容器里横向 auto margin 会盖掉 stretch、把自己打回 fit-content,
-   于是 max-width:100% 参照的是「被内容撑开后的宽度」= 夹不住任何东西 → 选择条撑破聊天区、⋯ 永不出现。
-   居中已由父级 .newchat-pickers 的 align-items:center 负责。(scripts/pillbar-overflow.check.cjs 钉住) */
-.engine-picker { display: flex; flex-direction: column; align-items: center; gap: 7px; margin: 0 0 6px; animation: engine-picker-in 0.35s cubic-bezier(0.2, 0.8, 0.3, 1); max-width: 100%; }
-@keyframes engine-picker-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
-/* bar = 外框(圆角/底色/边框);内层 .engine-picker-scroll 才是滚动容器,「⋯」钉在外框上不随内容滚。
-   ⚠️ max-width:100% 是「放不下」的前提:bar 原本 inline-flex 按内容自适应 → scrollWidth 恒等于 clientWidth,溢出永远测不出来。 */
-.engine-picker-bar { position: relative; display: inline-flex; align-items: center; padding: 6px; border-radius: var(--radius-lg, 16px); background: var(--bg-card); border: var(--border-width) solid var(--border); max-width: 100%; min-width: 0; }
-.engine-picker-scroll { display: flex; align-items: center; min-width: 0; gap: 4px; overflow-x: auto; scrollbar-width: none; }
-.engine-picker-scroll::-webkit-scrollbar { display: none; }
-/* 「⋯」独占空间,末尾选项滚到边缘后仍完整可见、可点。 */
-.engine-picker-more { flex: 0 0 32px; margin-left: 4px; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: var(--radius-lg, 16px); color: var(--text-muted); background: var(--overlay-light); transition: color 0.2s ease; }
-.engine-picker-more:hover { color: var(--text); }
-/* flex-shrink:0 —— 默认可压缩会让 pill 在放不下时被挤扁(内容宽 = 容器宽 → 永远不溢出、⋯ 永不出现),
-   要的是保持原尺寸然后横向溢出去翻页。 */
-/* 选中 / 悬停一个时长、一条曲线(走查续八 8.6):以前五个时长(200 / 250 / 500 / 600 / 400ms),标签 max-width 补到 160px 前 30% 就展开完、
-   后面在空转。标签按实际宽展开(interpolate-size 补 width 0 → auto,上限仍 160px),选中那一下最多鼓 4%、落回 1。 */
-.engine-pill { display: inline-flex; align-items: center; flex-shrink: 0; cursor: pointer; white-space: nowrap; overflow: hidden; opacity: 0.6; padding: 7px; border-radius: var(--radius-lg, 16px); color: var(--text-muted); transition: opacity var(--pill-select-duration) var(--ease-surface), background-color var(--pill-select-duration) var(--ease-surface), color var(--pill-select-duration) var(--ease-surface), padding var(--pill-select-duration) var(--ease-surface); }
-.engine-pill:hover { opacity: 1; }
-.engine-pill:disabled { cursor: default; }
-.engine-pill .engine-pill-icon { display: inline-flex; flex-shrink: 0; }
-.engine-pill .engine-pill-label { interpolate-size: allow-keywords; width: 0; max-width: 160px; opacity: 0; overflow: hidden; font-size: var(--ui-font-body, 13px); transition: width var(--pill-select-duration) var(--ease-surface), opacity var(--pill-select-duration) var(--ease-surface), margin var(--pill-select-duration) var(--ease-surface); }
-.engine-pill:hover .engine-pill-label { width: auto; opacity: 1; margin-left: 6px; }
-/* 触屏长按 = 打开菜单,不该同时选中药丸里的字(Android WebView 会选中并留下选区手柄)。 */
-@media (pointer: coarse) { .engine-pill { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; } }
 /* ── 触屏按压反馈(2026-10-02 真机录屏打回:「点哪儿都有蓝色遮罩」)。
    蓝块 = Android WebView 缺省的点按高亮(一个直角矩形,不跟圆角,约 0.2s 淡出),整份样式从没关过它。
    关掉后必须补一层按压态,否则会话行 / Agent 卡片这类原本只靠它反馈的元素按下去毫无动静:
@@ -2447,21 +2467,11 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   :is(button, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option']) { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
   :root:not([data-ripple]) :is(button, a, summary, [role='button'], [role='tab'], [role='menuitem'], [role='option']):not(:disabled):active { box-shadow: inset 0 0 0 100vmax rgba(128, 128, 128, 0.2); }
 }
-.engine-pill.selected { opacity: 1; padding: 7px 13px; background: var(--overlay-light); color: var(--text); animation: agentSelectPop var(--pill-select-duration) var(--ease-surface); }
-.engine-pill.selected .engine-pill-label { width: auto; opacity: 1; margin-left: 6px; font-weight: 600; }
-@keyframes agentSelectPop { 0% { transform: scale(1); } 40% { transform: scale(1.04); } 100% { transform: scale(1); } }
-.engine-picker-hint { font-size: var(--ui-font-caption, 11px); color: var(--text-faint); }
-/* Agent 选择器复用 engine-picker 形态;icon 槽放圆形头像或首字母 */
+/* Agent 头像槽(收件人芯片 / 浮层行 / 模式菜单的 Agent 面板):圆形头像或首字 */
 .agent-pill-avatar { width: 18px; height: 18px; border-radius: 50%; object-fit: cover; display: block; }
 .agent-pill-initial { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 50%; background: var(--overlay-light); font-size: var(--ui-font-caption, 11px); font-weight: 600; line-height: 1; }
-.agent-picker .engine-pill.selected .agent-pill-initial { background: var(--bg-card); }
-/* 系统(后台)agent 徽章:pill 内仅选中态显示(未选中 pill 只剩头像,徽章跟随 label 隐藏) */
+/* 系统(后台)agent 徽章:缺省不显示,用到的地方(浮层行)自己放开 */
 .agent-badge-system { display: none; font-size: var(--ui-font-caption, 11px); padding: 1px 5px; border-radius: var(--radius-pill, 999px); background: var(--overlay-light); color: var(--text-muted); margin-left: 5px; line-height: 1.4; flex-shrink: 0; }
-.engine-pill.selected .agent-badge-system { display: inline-block; }
-/* 引擎(上)+ Agent(下)选择器成一组,出现在欢迎区下方、输入框上方 */
-/* 同上:横向 auto margin 会让本行退回 fit-content,底下的 max-width 链就全失效了。 */
-.newchat-pickers { display: flex; flex-direction: column; align-items: center; gap: 2px; margin: 0 0 8px; }
-.newchat-pickers .engine-picker { margin-bottom: 0; }
 
 .composer-hint { font-size: var(--ui-font-caption, 11px); color: var(--text-ghost); }
 .attach-chip {
@@ -2586,9 +2596,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .quote-preview-body--mono { font-family: var(--font-mono); font-size: var(--ui-font-caption); }
 
 /* agent 在对话区展示的文件(display_file / 生图 / 表情包):图片缩略图(点击放大)+ 文件卡片 */
-.inline-file-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.inline-file-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 2px; }
 .inline-file-img {
-  max-width: 280px;
+  max-width: min(280px, 100%);
   max-height: 280px;
   object-fit: contain;
   border-radius: var(--radius-md, 10px);
@@ -2598,6 +2608,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   transition: filter 0.15s ease, transform 0.15s ease;
 }
 .inline-file-img:hover { filter: brightness(1.04); }
+.inline-file-media { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; max-width: 100%; }
+.inline-file-video, .inline-file-audio { width: 320px; max-width: 100%; }
+.inline-file-video { max-height: 280px; object-fit: contain; border-radius: var(--radius-md); background: var(--overlay-light); }
 .inline-file-card {
   display: inline-flex;
   align-items: center;
@@ -4029,7 +4042,16 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .md-body li { margin: 0 0 3px; }
 .md-body li:last-child { margin-bottom: 0; }
 .md-body li > ul, .md-body li > ol { margin-top: 3px; margin-bottom: 0; }
-.md-body a { color: var(--accent-ink); }
+.md-body a {
+  /* 2026-11-04 用户定:更新日志 / 技能说明 / 商店说明里的链接和聊天、Amadeus 同一画法(强调色 + 淡下划线 + ↗),双链不画下划线 */
+  color: var(--signal);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--signal) 45%, transparent);
+  text-underline-offset: 2px;
+}
+.md-body a:hover { color: var(--signal); text-decoration-color: currentColor; }
+.md-body a.wikilink { text-decoration: none; cursor: pointer; }
+.md-body a.wikilink:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .md-body code {
   font-family: var(--font-mono);
   font-size: 0.88em;
@@ -5537,12 +5559,20 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
   --switch-edge-lag: 30ms; /* 开关旋钮后沿晚出发多久(离开时拉长、落地时回缩) */
   --seg-edge-duration: 280ms; /* 分段胶囊滑块左右两条边各自的时长(sidebar2.css .t2s-vaultseg-thumb / LCL .lcl-vmode-thumb;水滴复用方案第 4 条,11-05) */
   --seg-edge-lag: 80ms; /* 分段胶囊滑块后沿晚出发多久:离开时拉长、落地回缩,不过冲 */
-  --pill-select-duration: 200ms; /* 新对话 Agent / 引擎药丸选中、标签展开(走查续八 8.6) */
   --toast-enter-duration: 180ms; /* 两种吐司进场:从贴着的那条边 6px 滑进 + 淡入(走查续八 8.5 A;右上通知卡在 NotificationHost 同值) */
   --toast-exit-duration: 140ms; /* 底部吐司退场;右上通知卡 160ms 右移 16px(NotificationHost) */
   --draw-duration: 600ms; /* 描线 */
   --land-duration: 160ms; /* 拖动排序松手落位:被拖的那一个从松手处滑进新位置(LCL land(),曲线同落点线 --lcl-drop-ease) */
+  --stretch-open-duration: 380ms; /* 动效主题「拉伸」的面板展开(lcl/engine/panelMotion.ts stretchOpen):远端那条边 0–0.78 倍、侧边 0.2–1 倍;收起 0.7 倍倒放 */
 }
+/* 动效主题(theme/motionTheme.tsx,方案 A2 2026-11-06):分段胶囊的选中块与开关旋钮按 <html data-motion-theme> 分派。
+ * Genesis / 拉伸 = 两条边各走、后沿晚出发(离开时拉长、落地回缩;就是上面两对 token,今天的样子);
+ * 平移 = 后沿不晚,整块平移、不拉伸;
+ * 水滴 = 选中块自己的过渡关掉、一换格就在终点,由 lcl/engine/segFlow.ts 在它身后流过去。旋钮的过渡留着:
+ *   流的时候它藏着,自己 150ms 早就走完(悬停时前沿探 2px 也还要这条过渡)。
+ * 面板(openPanel)在 JS 里按同一个属性分派。菜单 / 提示 / 吐司 / 折叠不跟动效主题。 */
+:root[data-motion-theme='glide'] { --seg-edge-lag: 0ms; --switch-edge-lag: 0ms; }
+:root[data-motion-theme='droplet'] :is(.t2s-vaultseg-thumb, .lcl-vmode-thumb) { transition: none; }
 @keyframes ui-menu-enter {
   from { opacity: 0; scale: 0.985; }
   to { opacity: 1; scale: 1; }
@@ -5555,28 +5585,28 @@ body:has(.mb-shell[data-native-chrome]):has(.vc-bar) .ntf-wrap { top: calc(var(-
 }
 /* 名单 = 所有「弹出来的菜单」;10-02 去掉匹配不到任何元素的 .add-menu,补上 Chat 的 / @ 菜单、账户菜单、仪表盘添加菜单。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
-  .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+  .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
   .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar) {
   animation: ui-menu-enter var(--menu-enter-duration) var(--menu-enter-ease);
   transform-origin: top left;
 }
-html:root :is(.project-menu, .composer-menu, .engine-picker, .t2c-menu) { transform-origin: bottom left; }
+html:root :is(.project-menu, .composer-menu, .t2c-menu) { transform-origin: bottom left; }
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
-    .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+    .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
     .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar) { animation: none; }
 }
 /* 退场:与上面的进场是**同一张名单**(check:motion 钉着)。OverlayAt 卸载时留下的替身(data-lcl-exit,见 menuAnchor.tsx
    useExitGhost)缩到 0.99、淡出、加速离开;不加模糊(filter 会让菜单成为 fixed 后代的包含块,DESIGN §4)。
    不在 OverlayAt 里的菜单关掉照旧立刻消失。减少动态效果时只淡出。 */
 html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
-  .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+  .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
   .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
   animation: ui-menu-exit var(--menu-exit-duration) var(--ease-exit) forwards;
 }
 @media (prefers-reduced-motion: reduce) {
   html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
-    .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+    .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
     .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar)[data-lcl-exit] {
     animation-name: ui-fade-out;
   }
@@ -5586,7 +5616,7 @@ html:root :is(.ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .
    8.4 补的几处);新加退场规则必须加进来,否则退场被这条吃掉。check:motion 钉着。
    不写成 html:root :is(…) 开头:那是 check:motion 读进场 / 退场名单的格式。 */
 [data-lcl-exit]:not(.lcl-ftoc-rail, .ctx-menu, .ui-popover, .amx-db-pop, .slash-menu, .wiki-suggest, .paste-as-menu,
-  .project-menu, .composer-menu, .cm-sub, .engine-picker, .add-menu-sub, .unitsw-menu,
+  .project-menu, .composer-menu, .cm-sub, .add-menu-sub, .unitsw-menu,
   .rb-menu, .rb-iconpick, .t2c-menu, .dash-add-menu, .inline-toolbar,
   .cmd-overlay, .amx-qf-scrim, .dialog-overlay, .amx-cal-cardwrap, [data-motion~='toast']) { animation: none !important; }
 /* 替身里的子元素不重放自己的进场(命令面板 / ⌘P / 确认框的面板本身除外:它跟着遮罩一起退,见 engine.css / amadeus styles.css)。 */

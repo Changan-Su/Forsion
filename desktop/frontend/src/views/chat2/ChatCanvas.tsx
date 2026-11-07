@@ -35,7 +35,7 @@ import {
   CanvasChrome, CanvasMiniMap, fitViewport, gridLayerStyle, hostSize, recallViewport, rememberViewport, useCanvasGestures, useCanvasViewport, zoomAt,
   type Box, type CanvasViewportApi, type Viewport,
 } from '../../amadeus/unified/canvasKit'
-import { OverlayAt } from '@lcl/engine'
+import { OverlayAt, reducedMotion } from '@lcl/engine'
 import { EditorialMessage, type FileCtx, type MessageHandlers } from './EditorialMessage'
 import { openBtw } from './btwStore'
 import { ForkBlock, ForkScope, childIdsOf, type ForkScopeValue } from './ChildSessions'
@@ -275,7 +275,7 @@ function answerLead(c: { answers: UiMessage[]; user?: UiMessage }): string {
   return [...s].length > 16 ? `${[...s].slice(0, 16).join('')}…` : s
 }
 // 卡里:「从这里分出」不画在消息里(会被折起的正文裁掉),画在卡底,分支不列(已经是卡);阅读栏:照常画在消息里,分支不列
-const reduceMotion = (): boolean => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
+const reduceMotion = (): boolean => reducedMotion()
 /** 「跳到某处」那条曲线:快出、落点带一点点过冲(约 1.5%),同 Amadeus 画布聚焦 */
 const settleCurve = (t: number): number => { const u = t - 1; return 1 + 1.5 * u ** 3 + 0.5 * u ** 2 }
 

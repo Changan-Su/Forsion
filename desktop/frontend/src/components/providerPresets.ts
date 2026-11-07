@@ -33,21 +33,23 @@ export interface ProviderPreset {
   name?: string
   baseUrl: string
   protocol: 'openai' | 'anthropic-messages'
+  /** 去哪拿 Key(首启引导填 Key 的表上那一行链接;11-06 逐个打开核过,要登录的会先落到登录页)。 */
+  keyUrl?: string
 }
 
 export const PROVIDER_PRESETS: ProviderPreset[] = [
-  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', protocol: 'openai' },
-  { id: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', protocol: 'anthropic-messages' },
-  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', protocol: 'openai' },
-  { id: 'bailian', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'openai' },
-  { id: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', protocol: 'openai' },
-  { id: 'moonshot', baseUrl: 'https://api.moonshot.cn/v1', protocol: 'openai' },
-  { id: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', protocol: 'openai' },
-  { id: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', protocol: 'openai' },
-  { id: 'gemini', name: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', protocol: 'openai' },
-  { id: 'xai', name: 'xAI', baseUrl: 'https://api.x.ai/v1', protocol: 'openai' },
-  { id: 'opencode', name: 'OpenCode Zen', baseUrl: 'https://opencode.ai/zen/v1', protocol: 'openai' },
-  { id: 'opencode-go', name: 'OpenCode Go', baseUrl: 'https://opencode.ai/inference/go/v1', protocol: 'openai' },
+  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', protocol: 'openai', keyUrl: 'https://platform.openai.com/api-keys' },
+  { id: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', protocol: 'anthropic-messages', keyUrl: 'https://platform.claude.com/settings/keys' },
+  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', protocol: 'openai', keyUrl: 'https://platform.deepseek.com/api_keys' },
+  { id: 'bailian', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'openai', keyUrl: 'https://bailian.console.aliyun.com/' },
+  { id: 'siliconflow', baseUrl: 'https://api.siliconflow.cn/v1', protocol: 'openai', keyUrl: 'https://cloud.siliconflow.cn/account/ak' },
+  { id: 'moonshot', baseUrl: 'https://api.moonshot.cn/v1', protocol: 'openai', keyUrl: 'https://platform.moonshot.cn/console/api-keys' },
+  { id: 'zhipu', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', protocol: 'openai', keyUrl: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys' },
+  { id: 'openrouter', name: 'OpenRouter', baseUrl: 'https://openrouter.ai/api/v1', protocol: 'openai', keyUrl: 'https://openrouter.ai/keys' },
+  { id: 'gemini', name: 'Google Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', protocol: 'openai', keyUrl: 'https://aistudio.google.com/apikey' },
+  { id: 'xai', name: 'xAI', baseUrl: 'https://api.x.ai/v1', protocol: 'openai', keyUrl: 'https://console.x.ai/' },
+  { id: 'opencode', name: 'OpenCode Zen', baseUrl: 'https://opencode.ai/zen/v1', protocol: 'openai', keyUrl: 'https://opencode.ai/console' },
+  { id: 'opencode-go', name: 'OpenCode Go', baseUrl: 'https://opencode.ai/inference/go/v1', protocol: 'openai', keyUrl: 'https://opencode.ai/console' },
 ]
 
 /** 预设 id 已被占用(同名保存会覆盖那条)时顺延成 id-2、id-3…… */

@@ -29,8 +29,12 @@ describe('provider presets', () => {
   it('OpenCode Go is a key preset whose base serves both /models and /chat/completions', () => {
     // /inference/go/openai/v1/models 是 404(11-05 探针):拉模型只拼 {baseUrl}/models,base 必须是 /inference/go/v1
     expect(PROVIDER_PRESETS.find((p) => p.id === 'opencode-go')).toEqual({
-      id: 'opencode-go', name: 'OpenCode Go', baseUrl: 'https://opencode.ai/inference/go/v1', protocol: 'openai',
+      id: 'opencode-go', name: 'OpenCode Go', baseUrl: 'https://opencode.ai/inference/go/v1', protocol: 'openai', keyUrl: 'https://opencode.ai/console',
     })
+  })
+
+  it('every preset says where to get a key, over https (the first-run key form links to it)', () => {
+    for (const p of PROVIDER_PRESETS) expect(p.keyUrl, p.id).toMatch(/^https:\/\//)
   })
 
   it('Anthropic uses the native Messages protocol', () => {

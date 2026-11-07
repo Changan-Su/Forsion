@@ -8,6 +8,7 @@ import { projectBasename, STUDIO_CAPABILITIES, STUDIO_TEMPLATES, validateProject
 import { useLaunchNavigation } from './launchpadNavigation'
 import './launchpadMessages'
 import './launchpad.css'
+import { reducedMotion } from '@lcl/engine/spring'
 
 export interface ProjectLaunchpadProps {
   root: string | null
@@ -116,7 +117,7 @@ export function ProjectLaunchpad({ root, recentProjects, onOpen, onCreate }: Pro
     setNameTouched(false); setErrorKey(null)
     showCreate()
     ideaInput.current?.focus({ preventScroll: true })
-    ideaInput.current?.scrollIntoView?.({ block: 'nearest', behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth' })
+    ideaInput.current?.scrollIntoView?.({ block: 'nearest', behavior: reducedMotion() ? 'instant' : 'smooth' })
   }
 
   function toggleCapability(capability: StudioCapability) {

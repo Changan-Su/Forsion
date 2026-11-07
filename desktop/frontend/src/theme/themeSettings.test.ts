@@ -64,6 +64,13 @@ describe('usableSettings — 坏项丢弃而非拖垮整个主题', () => {
     expect(usableSettings(entry([num()]))).toHaveLength(1);
   });
 
+  it('动效 token 不许做成就地调参(动效收口:动效归宿主管)', () => {
+    expect(usableSettings(entry([num({ key: '--droplet-duration', min: 0, max: 5000, default: 420, unit: 'ms' })]))).toHaveLength(0);
+    expect(usableSettings(entry([num({ key: '--menu-enter-duration' })]))).toHaveLength(0);
+    // 液滴的影子是样子不是动效,照留
+    expect(usableSettings(entry([{ key: '--droplet-shadow', label: 's', type: 'select', default: 'none', options: [{ value: 'none', label: 'none' }] }]))).toHaveLength(1);
+  });
+
   it('未知类型 / 缺字段丢弃,合法项照留', () => {
     expect(usableSettings(entry([
       { key: '--a', label: 'a', type: 'range', default: 1 },   // 未知类型

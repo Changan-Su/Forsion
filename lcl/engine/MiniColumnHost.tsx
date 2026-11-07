@@ -1,6 +1,6 @@
 /** One dedicated Space surface; no desktop layout, tabs, ribbon or mobile chrome. */
 import { Suspense, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
-import { Check, ChevronDown, ExternalLink, Plus, X } from 'lucide-react'
+import { Check, ChevronDown, ExternalLink, Plus, Search, X } from 'lucide-react'
 import { getActiveSpace, setActiveSpace, setActiveSpaceCold, useSpaceStore } from './spaceRegistry'
 import { getView, subscribeViews } from './viewRegistry'
 import { label } from './types'
@@ -10,7 +10,8 @@ import { ViewErrorBoundary } from './Skeleton'
 import './miniCard.css'
 import { useEngineI18n } from './i18nSeam'
 import { currentMiniChrome, useMiniChromeSlot } from './miniChrome'
-import { emergeDroplet, type Droplet } from './droplet'
+import { type Droplet } from './droplet'
+import { openPanel } from './panelMotion'
 
 interface DirectMiniViewTarget { type: string; params?: Record<string, unknown> }
 
@@ -39,7 +40,9 @@ export const MiniColumnHost: React.FC<{
   direct?: { title?: string; view: DirectMiniViewTarget; mainView: DirectMiniViewTarget } | null
   /** 用户可拖边改卡片大小(只有宿主认这扇窗时才真的动)。 */
   resizable?: boolean
-}> = ({ buildDefault, direct, resizable }) => {
+  /** 右胶囊最前的搜索钮(宿主给快速查找;不给就不画)。 */
+  onSearch?: () => void
+}> = ({ buildDefault, direct, resizable, onSearch }) => {
   const registered = useSpaceStore((s) => s.spaces)
   const activeId = useSpaceStore((s) => s.activeSpaceId)
   const [, refreshViews] = useReducer((n) => n + 1, 0)
@@ -69,11 +72,12 @@ export const MiniColumnHost: React.FC<{
     drop.current?.cancel(); drop.current = null; dropClosing.current = false
     const el = popRef.current
     const src = capRef.current?.querySelector<HTMLElement>(openMenu === 'space' ? '.mini-card-space' : '.mini-card-picker')
-    if (openMenu && el && src) drop.current = emergeDroplet(src, el)
+    if (openMenu && el && src) drop.current = openPanel(src, el) // 按动效主题:液滴 / 拉伸 / 淡入微缩
   }
-  // 再点同一颗 = 收;正倒放着又点它 = 重新流出来(同悬浮目录)
+  // 再点同一颗 = 收;正倒放着又点它 = 从这一帧掉头、停在打开(同悬浮目录)
   const toggleMenu = (which: 'space' | 'picker'): void => {
     if (openMenu !== which) setMenu(which)
+    else if (dropClosing.current && drop.current?.reopen?.()) dropClosing.current = false
     else if (dropClosing.current) pour()
     else dismissMenu()
   }
@@ -139,6 +143,8 @@ export const MiniColumnHost: React.FC<{
         </div>
         <div className="mini-card-drag-title" />
         <div className="mini-card-cap">
+          {onSearch && <button className="mini-card-action" aria-label={t('lcl.mini.search')} title={t('lcl.mini.search')}
+            onClick={onSearch}><Search size={15} /></button>}
           {picker?.create && <button className="mini-card-action" aria-label={picker.create.label} title={picker.create.label}
             disabled={picker.create.disabled} onClick={() => currentMiniChrome()?.create?.onCreate()}><Plus size={15} /></button>}
           <button className="mini-card-action" aria-label={t('lcl.mini.showMain')}

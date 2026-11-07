@@ -73,6 +73,24 @@ const MediaSeek: React.FC<{ src: string; kind: 'video' | 'audio'; seek: { t: num
   return kind === 'video' ? <video {...common} /> : <audio {...common} />
 }
 
+type KeptScroll = { cls: string; top: number; left: number }
+/** 正文里滚过的那个容器,按它的首个 class 记;编辑器重挂后按 class 找回同一个位置。 */
+function readScroll(root: HTMLElement | null): KeptScroll | null {
+  if (!root) return null
+  for (const el of [root, ...Array.from(root.querySelectorAll<HTMLElement>('*'))]) {
+    if ((el.scrollTop > 0 || el.scrollLeft > 0) && el.classList[0]) return { cls: el.classList[0], top: el.scrollTop, left: el.scrollLeft }
+  }
+  return null
+}
+/** 已经在原位 → true;不在就写一次、返回 false(下一帧再看它站没站住)。 */
+function writeScroll(root: HTMLElement | null, kept: KeptScroll): boolean {
+  const el = root?.getElementsByClassName(kept.cls)[0] as HTMLElement | undefined
+  if (!el) return false
+  if (Math.abs(el.scrollTop - kept.top) < 2 && Math.abs(el.scrollLeft - kept.left) < 2) return true
+  el.scrollTop = kept.top; el.scrollLeft = kept.left
+  return false
+}
+
 /** 本机 .md 编辑器:frontmatter 原样保留(剥离喂 Milkdown、保存拼回);800ms debounce 原子写回;
  *  mtime 冲突(外部修改)→ 横幅问「重新加载 / 覆盖写入」,绝不静默覆盖;
  *  卸载冲刷失败/冲突 → 另存旁路文件 + toast(绝不静默丢弃)。
@@ -233,12 +251,20 @@ export function WsFileView({ leaf }: ViewProps) {
   const kind: PreviewKind = data ? previewKindFor(data.mimeType, name) : 'binary'
   const Icon = iconForFile(data?.mimeType || '', name)
 
+  // 同一个文件刷新(⟳、外部改动后重载):文本类不先清空,留着屏上内容,读完回到原来的滚动位置(D26)
+  const hostRef = useRef<HTMLDivElement | null>(null)
+  const loadedRef = useRef<typeof target>(null)
+  const keptScroll = useRef<KeptScroll | null>(null)
+  // 编辑器按「读完了几次」重挂,不按点了几次刷新:刷新读回来之前旧编辑器留着,滚动位置才读得到;mtime 没变也换上新内容
+  const [loadGen, setLoadGen] = useState(0)
   useEffect(() => {
     if (!target) { setLoading(false); return }
     let cancelled = false
     let createdUrl: string | null = null
-    setLoading(true); setError(null); setData(null); setTooLarge(null); setBlobUrl(null)
-    setImgView({ s: 1, x: 0, y: 0 })
+    const keep = loadedRef.current === target && !!data && TEXT_KINDS.has(kind)
+    keptScroll.current = keep ? readScroll(hostRef.current) : null
+    setLoading(!keep); setError(null)
+    if (!keep) { setData(null); setTooLarge(null); setBlobUrl(null); setImgView({ s: 1, x: 0, y: 0 }) }
     void (async () => {
       try {
         const r = await target.load()
@@ -250,13 +276,31 @@ export function WsFileView({ leaf }: ViewProps) {
           createdUrl = URL.createObjectURL(new Blob([r.bytes as BlobPart], { type }))
           setBlobUrl(createdUrl)
         }
-        setData(r); setLoading(false)
+        loadedRef.current = target
+        setData(r); setLoading(false); setLoadGen((g) => g + 1)
       } catch (e: any) {
         if (!cancelled) { setError(e?.message || 'error'); setLoading(false) }
       }
     })()
     return () => { cancelled = true; if (createdUrl) URL.revokeObjectURL(createdUrl) }
   }, [target, reloadNonce]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const kept = keptScroll.current
+    if (!kept || !data) return
+    keptScroll.current = null
+    // 编辑器重挂是异步的,内容撑开前写不进去;CodeMirror 换整篇内容后下一帧 measure 还会把滚动锚点拉回顶部。
+    // 所以逐帧写到连续 3 帧都站在原位才停,最多约 30 帧(文件变短就停在能到的最底处)
+    let frames = 0
+    let held = 0
+    let raf = 0
+    const apply = (): void => {
+      held = writeScroll(hostRef.current, kept) ? held + 1 : 0
+      if (held < 3 && ++frames < 30) raf = requestAnimationFrame(apply)
+    }
+    apply()
+    return () => cancelAnimationFrame(raf)
+  }, [data])
 
   const text = useMemo(
     () => (data && TEXT_KINDS.has(kind) ? new TextDecoder('utf-8', { fatal: false }).decode(data.bytes) : ''),
@@ -342,7 +386,7 @@ export function WsFileView({ leaf }: ViewProps) {
   else if (kind === 'markdown') {
     if (mdEditable) body = (
       <MdFileEditor
-        key={`${path}:${data.mtimeMs ?? 0}:${reloadNonce}`}
+        key={`${path}:${data.mtimeMs ?? 0}:${loadGen}`}
         path={path!}
         text={text}
         mtimeMs={data.mtimeMs}
@@ -473,7 +517,7 @@ export function WsFileView({ leaf }: ViewProps) {
     return (
       <div className="wsfile-tab in-desk">
         {desk.slot && createPortal(controls, desk.slot)}
-        <div className="wsfile-body">{body}</div>
+        <div className="wsfile-body" ref={hostRef}>{body}</div>
       </div>
     )
   }
@@ -493,7 +537,7 @@ export function WsFileView({ leaf }: ViewProps) {
         {target?.download && <button className="icon-btn" title={path ? t('panel.action.revealInFileManager') : t('preview.download')} onClick={target.download}><Download size={14} /></button>}
         <button className="icon-btn" title={t('preview.reload')} onClick={() => setReloadNonce((n) => n + 1)}><RefreshCw size={14} /></button>
       </div>
-      <div className="wsfile-body">{body}</div>
+      <div className="wsfile-body" ref={hostRef}>{body}</div>
     </div>
   )
 }

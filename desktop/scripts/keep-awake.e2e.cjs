@@ -178,6 +178,7 @@ async function main() {
     check('T4 开着时新 run → 持有', lines.length > 0)
 
     // T5 关窗口 = 藏进托盘,渲染层还活着 → 继续拦
+    await win.evaluate(() => window.tangu.setConfig({ closeAction: 'tray' })) // 缺省先弹「退出 / 后台运行」框,台架里没人答
     await app.evaluate(({ BrowserWindow }) => { BrowserWindow.getAllWindows().forEach((w) => w.close()) })
     await new Promise((r) => setTimeout(r, 1500))
     const visible = await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().map((w) => w.isVisible()))

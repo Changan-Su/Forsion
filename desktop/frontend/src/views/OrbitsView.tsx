@@ -13,17 +13,17 @@
  *
  * 样式全在 `chat2/orbits.css`(`.t2o-` 前缀,不改 `sidebar2.css` 本体);几何见该文件头注。
  */
-import React, { useEffect, useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { Archive, Info, MoreHorizontal, Pencil, Pin, PinOff, Plus, Settings, SquarePen, Trash2, UserPlus, Users, UsersRound, FolderPlus, MessageSquarePlus } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
-import { OverlayAt, setActiveSpace, useCommandStore, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSegDir, useSpaceStore, type SheetMenuItem } from '@lcl/engine'
+import { OverlayAt, setActiveSpace, useCommandStore, useListFirst, useNativeChromeExtras, useNativeSheetMenu, useSegDir, useSpaceStore, useSegFlow, type SheetMenuItem } from '@lcl/engine'
 import { CtxMenuButtons } from '../components/CtxMenuButtons'
 import { SidebarPane, sessionActivityAt } from './chat2/SidebarPane'
 import { SidebarRow } from '../components/SidebarRow'
 import { ListChips, ListFab, ListHint } from '../components/phoneList'
 import { EngineIcon } from '../components/EngineIcon'
 import { useApp } from '../stores/appStore'
-import { useSessionAttention, useSoloStatus } from '../stores/attentionStore' // P1-K3
+import { useAttention, useSessionAttention, useSoloStatus } from '../stores/attentionStore' // P1-K3
 import { StatusMark } from './chat2/AttentionDot'
 import type { RowStatus } from './chat2/sessionTree'
 import { openSpecial } from './SpecialViews'
@@ -279,6 +279,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
     const v = soloStatus.get(soloSession.get(ident) || '') || ''
     return v === 'run' ? '' : v
   }
+  const dmAttention = useAttention((st) => st.dm)
+  /** 它主动发来、还没读的条数(行尾红点上的数;老引擎不报 = 0,照旧只画点)。 */
+  const soloCount = (ident: string): number => dmAttention[soloSession.get(ident) || '']?.count || 0
   /** 有活跃 run 的私聊 agent(按运行中的 run 反查,O(running) 不是 O(会话×agent))。 */
   const runningSolo = useMemo(() => {
     const out = new Set<string>()
@@ -337,9 +340,9 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const orbitRow = (o: {
     rowKey: string; entryKey: string; kind: RowMenu['kind']; slug: string; active: boolean; gone?: boolean
     tip: Record<string, unknown>; leadClass?: string; lead: React.ReactNode; name: string; badge?: string; sub: string; at: number; onOpen: () => void
-    status?: RowStatus
+    status?: RowStatus; count?: number
   }): React.ReactElement => {
-    const mark = o.status ? <StatusMark status={o.status} title={o.status === 'done' ? t('orbits.st.new') : undefined} /> : null
+    const mark = o.status ? <StatusMark status={o.status} count={o.count} title={o.status === 'done' ? t('orbits.st.new') : undefined} /> : null
     const pinned = isOrbitPinned(pinnedEntries, o.entryKey)
     const open = (): void => { activatePinned(o.entryKey); o.onOpen() }
     if (phone) {
@@ -400,7 +403,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       rowKey: `agent:${slug}`, entryKey, kind: 'agent', slug, active,
       tip: rowTip(name || slug, isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct', `agent:${slug}`),
       name: name || slug, sub: t(isMuse ? 'orbits.badge.proactive' : 'agentSelect.direct'), at: activityByIdent.get(`agent:${slug}`) || 0,
-      status: soloMark(`agent:${slug}`),
+      status: soloMark(`agent:${slug}`), count: soloCount(`agent:${slug}`),
       onOpen: () => {
         if (museSpaceOnly) openMuse()
         else if (cloud) { openNewChat(); useApp.getState().selectNewChatAgent(slug) }
@@ -543,6 +546,8 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
   const filterAt = FILTERS.indexOf(filter)
   /** 筛选胶囊滑块往哪边拉(写进 data-dir,后沿晚出发;见 sidebar2.css .t2s-vaultseg-thumb)。 */
   const filterDir = useSegDir(filterAt)
+  const filterThumb = useRef<HTMLDivElement>(null)
+  useSegFlow(filterAt, filterThumb) // 动效主题是水滴时滑块流过去
   const pickFilter = (kind: typeof filter): void => { setFilter(kind); localStorage.setItem('forsion_orbits_filter', kind) }
   const newSession = (): void => { s.setSessionMode('work'); openNewChat() }
   const primaryCreate = {
@@ -559,7 +564,7 @@ export function OrbitsView({ sideFilter }: { sideFilter?: 'local' | 'cloud' } = 
       {/* 格数 / 当前格走 --seg-n / --seg-i(同 ⌘P 四格),滑块按左右两条边定位 —— 别在滑块上写 transform / width。 */}
       {!phone && <div className="t2o-filters t2s-vaultseg" role="tablist" aria-label={t('orbits.filter.label')}
         style={{ '--seg-n': FILTERS.length, '--seg-i': filterAt } as React.CSSProperties}>
-        <div className="t2s-vaultseg-thumb" data-dir={filterDir} />
+        <div ref={filterThumb} className="t2s-vaultseg-thumb" data-dir={filterDir} />
         {FILTERS.map((kind) => <button key={kind} role="tab" type="button"
           data-filter={kind} aria-selected={filter === kind} className={filter === kind ? 'on' : undefined}
           onClick={() => pickFilter(kind)}>{t(`orbits.filter.${kind}`)}</button>)}

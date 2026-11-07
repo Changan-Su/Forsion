@@ -67,7 +67,7 @@ export type { AnchorOpts } from './menuAnchor'
 export { emergeDroplet } from './droplet'
 export type { Droplet, DropletOptions } from './droplet'
 /** 落点提示(拖动时的落点线 / 放进去的描边):换落点原地淡出淡入。见 dropIndicator.ts 顶注。 */
-export { createDropIndicator, dropRetarget, dropHide, DROP_IN_MS, DROP_OUT_MS, land, landCancel, landWhenMoved, landOffset, dragGrab, releasePoint, LAND_MS } from './dropIndicator'
+export { createDropIndicator, createsFixedContainingBlock, dropRetarget, dropHide,DROP_IN_MS, DROP_OUT_MS, land, landCancel, landWhenMoved, landOffset, dragGrab, releasePoint, LAND_MS } from './dropIndicator'
 export type { DropIndicator, DropRect, DropShape, DropRetargetOptions, LandPoint, LandOptions } from './dropIndicator'
 export { setEngineI18n, useEngineI18n, engineTr } from './i18nSeam'
 /** 输入法组字守卫:面板输入框的 onKeyDown 第一行问它,组字中的 Enter/↑↓/Esc 归输入法(评审 G4-02)。 */
@@ -97,6 +97,8 @@ export type { LineSelectionOptions, LineSelectionHandle } from './lineSelection'
 
 export { switchSpace, setSpaceBarOrder, spaceSwitchDirection, type SpaceSwitchMotion } from './spaceTransition'
 export { SPRING_PAGE, SPRING_ROW, reducedMotion, springAt, springEasing, springMotion, type Spring } from './spring'
+export { openPanel, stretchOpen, fadeScaleOpen, motionTheme, MOTION_THEME_IDS, type MotionThemeId } from './panelMotion'
+export { flowThumb, useSegFlow, useKnobFlow } from './segFlow'
 
 /** Optional native presentation hosts (Android Compose). Absent host ⇒ callers keep their web UI. */
 export {

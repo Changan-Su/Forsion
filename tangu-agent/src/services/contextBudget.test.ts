@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterAll } from 'vitest';
 import {
   CONTEXT_WINDOW_TOKENS,
+  LONG_CONTEXT_DEFAULT_TOKENS,
+  defaultContextWindowCap,
   INPUT_HARD_RATIO,
   INPUT_WARN_RATIO,
   compactionThreshold,
@@ -60,8 +62,11 @@ describe('modelContextWindowInfo 来源标注', () => {
 
 describe('effectiveContextWindowInfo — 自动识别的窗口封顶 272k,人填的覆盖才开更大(09-22,对标 Codex)', () => {
   it('族表 / admin 自报的大窗口封顶到缺省上限,max 留住模型本身的窗口;小于上限的原样', () => {
-    expect(effectiveContextWindowInfo('claude-opus-5')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'family', max: 1_000_000 })
-    expect(effectiveContextWindowInfo('pr-glm', { context_window: 1_000_000 })).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'model', max: 1_000_000 })
+    // 11-06:支持 1M 的模型缺省 512k,其余(含 400k / 500k 级)仍 272k
+    expect(effectiveContextWindowInfo('claude-opus-5')).toEqual({ tokens: LONG_CONTEXT_DEFAULT_TOKENS, source: 'family', max: 1_000_000 })
+    expect(effectiveContextWindowInfo('pr-glm', { context_window: 1_000_000 })).toEqual({ tokens: LONG_CONTEXT_DEFAULT_TOKENS, source: 'model', max: 1_000_000 })
+    expect(effectiveContextWindowInfo('pr-big', { context_window: 1_048_576 })).toEqual({ tokens: LONG_CONTEXT_DEFAULT_TOKENS, source: 'model', max: 1_048_576 })
+    expect(effectiveContextWindowInfo('pr-mid', { context_window: 500_000 })).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'model', max: 500_000 })
     expect(effectiveContextWindowInfo('claude-haiku-4-5')).toEqual({ tokens: 200_000, source: 'family', max: 200_000 })
     expect(effectiveContextWindowInfo('whatever')).toEqual({ tokens: CONTEXT_WINDOW_TOKENS, source: 'default', max: CONTEXT_WINDOW_TOKENS })
   })
@@ -184,6 +189,9 @@ describe('contextBudget constants', () => {
     // CI 不设 TANGU_CONTEXT_WINDOW_TOKENS
     if (!process.env.TANGU_CONTEXT_WINDOW_TOKENS) {
       expect(CONTEXT_WINDOW_TOKENS).toBe(272_000);
+      expect(LONG_CONTEXT_DEFAULT_TOKENS).toBe(512_000);
+      expect(defaultContextWindowCap(1_000_000)).toBe(512_000);
+      expect(defaultContextWindowCap(999_999)).toBe(272_000);
     }
     expect(CONTEXT_WINDOW_TOKENS).toBeGreaterThanOrEqual(4_000);
   });

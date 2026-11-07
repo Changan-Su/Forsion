@@ -12,7 +12,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ViewProps } from '@lcl/engine'
 import { Skeleton } from '@lcl/engine'
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
+import { AnimatePresence, motion } from 'framer-motion'
+import { useReducedMotionPref } from '../theme/motionTheme'
 import { PageScopeCtx, disposePageScope, usePageStore, useScopedPageStore } from '@amadeus/store/pageStore'
 import { readDash2Layout } from '@amadeus-shared/dashboard'
 import { readDash3Layout, readDashMode } from '@amadeus-shared/dashboard3'
@@ -41,7 +42,7 @@ function DashboardRouter(props: ViewProps) {
   const activePage = usePageStore((s) => s.activePage)
   const loadError = usePageStore((s) => s.error)
   const fmExtra = usePageStore((s) => s.manifest?.fmExtra ?? '')
-  const reduceMotion = useReducedMotion()
+  const reduceMotion = useReducedMotionPref()
   /** ⚠️ vaultRoot 必须进 deps:启动时 vault 是**懒引导 + 异步**的,而本视图一挂载就读盘 ——
    *  库还没打开那一发 loadPage 必失败(主进程 requireRoot 抛),activePage 永远落不了地,
    *  于是下面那句 Skeleton 就成了**永久骨架屏**(用户实报:一进 ERP Space 就一直显示在加载)。

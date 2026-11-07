@@ -21,6 +21,7 @@
  * 旧版窗口管理器与账号角仍不搬;浏览器搜索也不再回来。
  */
 import { Fragment, useEffect, useRef, useState } from 'react'
+import { useMotionPrefs } from '../theme/motionTheme'
 import { flushSync } from 'react-dom'
 import {
   DndContext, DragOverlay, KeyboardSensor, PointerSensor, closestCenter,
@@ -55,6 +56,7 @@ import { DESKTOP_HOME_CARDS_KEY, HOME_CARDS_MAX, loadHomeCards, saveHomeCards, s
 import { HOME_PARTS, setHomeEditHandler, useHomeLayout, type HomePart } from './homeWidgets'
 import { HomeRail, HomeRow, PartFrame, PartsLibrary, WidgetLibrary, centerShift, dragPart, dragWidget, railModes, removePart } from './HomeWidgetParts'
 import type { OrganizerTab } from './SpaceOrganizer'
+import { ComputerHistoryAsk } from '../components/ComputerHistoryAsk'
 import './homepage.css'
 
 /** 本视图所在的 Space id(真源在 builtins/homepage.tsx);坞里要把它自己排掉 —— 但**排序时不能排**,见 dropOn。 */
@@ -332,8 +334,9 @@ export function HomepageView(_props: ViewProps) {
   const fileRef = useRef<HTMLInputElement>(null)
   const leaveTimer = useRef<number | null>(null)
   const pending = useRef<(() => void) | null>(null)
-  // 跟着系统实时变:壁纸面板里的「动态效果」在系统「减弱动态效果」关掉后要恢复成用户原来的选择。
-  const [reduceMotion, setReduceMotion] = useState(() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false } })
+  // 跟着系统与「只淡入淡出」实时变:壁纸面板里的「动态效果」在两者都关掉后要恢复成用户原来的选择。
+  const { fadeChosen, systemReduce } = useMotionPrefs()
+  const reduceMotion = fadeChosen || systemReduce
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
@@ -349,10 +352,7 @@ export function HomepageView(_props: ViewProps) {
   useEffect(() => {
     const onVisibility = (): void => setPageHidden(document.hidden)
     document.addEventListener('visibilitychange', onVisibility)
-    let mq: MediaQueryList | null = null
-    const onMotion = (): void => setReduceMotion(!!mq?.matches)
-    try { mq = window.matchMedia('(prefers-reduced-motion: reduce)'); mq.addEventListener('change', onMotion) } catch { /* 没有 matchMedia 就当不减弱 */ }
-    return () => { document.removeEventListener('visibilitychange', onVisibility); mq?.removeEventListener('change', onMotion) }
+    return () => { document.removeEventListener('visibilitychange', onVisibility) }
   }, [])
   useEffect(() => {
     try { localStorage.setItem(PINNED_SPACES_KEY, JSON.stringify(pinnedSpaceIds)) } catch { /* ignore */ }
@@ -715,6 +715,7 @@ export function HomepageView(_props: ViewProps) {
   const composerNode = (
     <>
         {newChat && <newChat.Composer onDispatch={dispatchChat} onStartCall={startCallSession} onInputModeChange={setComposerFocused} liveSpaceId={SELF_SPACE} />}
+        {!phone && <ComputerHistoryAsk />}
         {/* 手机:输入区平时收成这一条(完整的那块留在页面里、只是不显示,草稿不丢),点一下展开。 */}
         {phone && hasTangu && (
           <button type="button" className="hp-pill" data-act="home-pill" onClick={(event) => { event.stopPropagation(); openComposer(!!(event.target as Element).closest('.hp-pill-mic')) }}>
@@ -1049,7 +1050,7 @@ export function HomepageView(_props: ViewProps) {
                 disabled={reduceMotion}
                 onClick={() => patchWallpaperPrefs({ motion: !wallpaperPrefs.motion })}
               >
-                <span><strong>{t('home.wallpaper.motion')}</strong><small>{t(reduceMotion ? 'home.wallpaper.motionReduced' : 'home.wallpaper.motionHint')}</small></span>
+                <span><strong>{t('home.wallpaper.motion')}</strong><small>{t(systemReduce ? 'home.wallpaper.motionReduced' : fadeChosen ? 'home.wallpaper.motionFadeOnly' : 'home.wallpaper.motionHint')}</small></span>
                 <i aria-hidden />
               </button>
               <button

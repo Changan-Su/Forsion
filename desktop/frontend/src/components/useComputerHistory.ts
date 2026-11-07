@@ -1,5 +1,5 @@
 /**
- * 电脑历史的读写与开关逻辑,设置页(ComputerHistorySettings)和首次引导(OnboardingComputerHistory)共用这一份。
+ * 电脑历史的读写与开关逻辑,设置页(ComputerHistorySettings)、首次引导(团队屏 / OnboardingComputerHistory)和主页那一行(ComputerHistoryAsk)共用这一份。
  * 落盘 / 保留 / 清除 / 暂停 / 连 helper 全在主进程(electron/computerHistory.ts),这里经 window.tangu.computerHistory
  * (shared/computerHistory.ts 的 ComputerHistoryApi)读写,每个写操作回最新 View 直接替换。
  * 状态实时性:onChanged 推送 + 窗口回到前台时 get() 一次(从系统设置授权回来,不必等主进程的重试)。
@@ -109,8 +109,11 @@ export function useComputerHistory() {
     setConfirmEnable(false)
     void act('enable', (a) => a.setEnabled(on))
   }
-  const enable = async (): Promise<void> => {
-    if (await act('enable', (a) => a.setEnabled(true))) setConfirmEnable(false)
+  /** 同意之后开:写成了收起同意说明,回 true(主页那一行接着在 macOS 上请辅助功能)。 */
+  const enable = async (): Promise<boolean> => {
+    const ok = await act('enable', (a) => a.setEnabled(true))
+    if (ok) setConfirmEnable(false)
+    return ok
   }
   /** 刷新状态:get() 在失败态会让主进程立刻重连 —— 助手更新 / 重启进行中不许点(见文件头 ⚠️)。 */
   const refreshStatus = async (): Promise<void> => {

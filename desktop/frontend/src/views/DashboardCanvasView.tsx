@@ -49,6 +49,7 @@ import { EMBED_DENY, ViewCard, ensureChartView, pickSpecOf } from './dashboardVi
 import '@amadeus/blocks'
 import './dashCanvas.css'
 import { useVaultRelParam } from './vaultRelParam'
+import { reducedMotion } from '@lcl/engine/spring'
 
 registerMessages({
   'dashcanvas.add.text': { zh: '文本块', en: 'Text block' },
@@ -351,7 +352,7 @@ function CanvasInner({ leaf }: ViewProps) {
   }
   useEffect(() => stopSettle, []) // eslint-disable-line react-hooks/exhaustive-deps
   const playSettle = (from: Map<string, Box>, to: Map<string, Box>, kind: 'snap' | 'repel'): void => {
-    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return
+    if (reducedMotion()) return
     stopSettle()
     settleRaf.current = requestAnimationFrame(() => {
       settleRaf.current = 0

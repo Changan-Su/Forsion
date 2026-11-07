@@ -28,7 +28,9 @@ import { startChildSession } from '../services/childSessions.js';
 import { museDmSessionId } from '../services/museDm.js';
 import { getAgent, MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { branchSession } from '../services/sessionBranch.js';
-import { listCheckpoints, restoreCodeSince } from '../services/checkpoints.js';
+import { listCheckpoints, restoreCodeSince, listChanges, type ChangeWindow } from '../services/checkpoints.js';
+import { listGitChanges } from '../services/gitChanges.js';
+import { canonicalProjectPath } from '../services/projectContext.js';
 import { deleteSessionCascade } from '../services/sessionCleanup.js';
 import { searchSessions, splitTerms, dayArg, fmtDate } from '../services/sessionSearch.js';
 import { isValidSlug } from '../agents/agentRegistry.js';
@@ -138,25 +140,31 @@ router.get('/agent/sessions', authMiddleware, async (req: AuthRequest, res) => {
 // 会话行的「主动发来没看」与「等你」(Muse 私聊方案 B,10-18):桌面全局轮询器每 4s 拉一次,私聊行尾状态与 Tangu 角标靠它。
 //   unread   = Agent 在后台主动发来、用户还没打开过(proactive_at > last_read_at);一轮对话跑完没看的仍由客户端自己记
 //   awaiting = 问句在等回话(awaiting_user),或 Muse 后台有待批的一步(算在 Muse 私聊上 —— 托盘里批完不起轮,awaiting_user 清不掉)
+//   count    = 没读的主动消息条数(行尾红点上的数;11-04 加,老客户端不认它照旧只画点)
+//   at       = 最近一条主动消息的时刻(客户端据此认「又来了一条」去重拉列表;读过之后再来一条,条数可能不变)
 // 只返回有状态的会话,没有就是空表。
 router.get('/agent/sessions/attention', authMiddleware, async (req: AuthRequest, res) => {
   try {
     const userId = req.user!.userId;
     const appId = deps().profile.appId;
     const rows = await query<any[]>(
-      `SELECT id, proactive_at, last_read_at, awaiting_user FROM chat_sessions
+      `SELECT s.id, s.proactive_at, s.last_read_at, s.awaiting_user,
+         (SELECT COUNT(*) FROM chat_messages m WHERE m.session_id = s.id AND m.origin LIKE 'proactive%'
+            AND m.timestamp > COALESCE(s.last_read_at, 0)) AS unread_count
+       FROM chat_sessions s
        WHERE user_id = ? AND app_id = ? AND archived = ? AND kind = 'user'
          AND (awaiting_user = TRUE OR (proactive_at IS NOT NULL AND proactive_at > COALESCE(last_read_at, 0)))`,
       [userId, appId, false],
     );
-    const out = new Map<string, { id: string; unread: boolean; awaiting: boolean }>(rows.map((r) => [String(r.id), {
-      id: String(r.id), unread: Number(r.proactive_at || 0) > Number(r.last_read_at || 0), awaiting: !!r.awaiting_user,
-    }]));
+    const out = new Map<string, { id: string; unread: boolean; awaiting: boolean; count: number; at: number }>(rows.map((r) => {
+      const unread = Number(r.proactive_at || 0) > Number(r.last_read_at || 0);
+      return [String(r.id), { id: String(r.id), unread, awaiting: !!r.awaiting_user, count: unread ? Number(r.unread_count) || 0 : 0, at: Number(r.proactive_at) || 0 }];
+    }));
     if (deps().profile.capabilities.hostExec) {
       const [p] = await query<any[]>(
         `SELECT COUNT(*) AS n FROM pending_approvals WHERE user_id = ? AND agent_slug = ? AND status = 'pending'`, [userId, MUSE_AGENT_SLUG]);
       const sid = Number(p?.n) > 0 ? await museDmSessionId(userId, appId) : null;
-      if (sid) out.set(sid, { id: sid, unread: out.get(sid)?.unread ?? false, awaiting: true });
+      if (sid) out.set(sid, { id: sid, unread: out.get(sid)?.unread ?? false, awaiting: true, count: out.get(sid)?.count ?? 0, at: out.get(sid)?.at ?? 0 });
     }
     res.json({ sessions: [...out.values()] });
   } catch (e: any) {
@@ -894,6 +902,80 @@ router.get('/agent/sessions/search', authMiddleware, async (req: AuthRequest, re
   }
 });
 
+// 文件改动记录:按时间窗(每轮回复一个窗)从检查点算「改了哪些文件 / 加减多少行」,只读。
+//   GET changes?bounds=a,b,c   → 窗口 [a,b),[b,c),[c,∞);不带 bounds = 整个会话 [0,∞)
+//   GET changes/diff?since=&until=&path=   → 单个窗口,带 patch(until 空 = 到现在;path 可选)
+const MAX_CHANGE_ITEMS = 500;
+/** 毫秒时间戳:非负安全整数,否则 null。 */
+function msArg(v: unknown): number | null {
+  if (typeof v !== 'string' || !/^\d{1,16}$/.test(v.trim())) return null;
+  const n = Number(v.trim());
+  return Number.isSafeInteger(n) ? n : null;
+}
+
+router.get('/agent/sessions/:id/changes', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const s = await getOwnSession(req.params.id, req.user!.userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const raw = req.query.bounds;
+    if (raw !== undefined && typeof raw !== 'string') return res.status(400).json({ detail: 'bounds must be a comma-separated list' });
+    let windows: ChangeWindow[] = [{ since: 0, until: null }];
+    if (raw && raw.trim()) {
+      const parts = raw.split(',');
+      if (parts.length > MAX_CHANGE_ITEMS) return res.status(400).json({ detail: `at most ${MAX_CHANGE_ITEMS} bounds` });
+      const nums = parts.map(msArg);
+      if (nums.some((n, i) => n === null || (i > 0 && n < (nums[i - 1] as number)))) {
+        return res.status(400).json({ detail: 'bounds must be ascending non-negative integer ms timestamps' });
+      }
+      windows = (nums as number[]).map((since, i) => ({ since, until: i + 1 < nums.length ? (nums[i + 1] as number) : null }));
+    }
+    const lists = await listChanges(req.params.id, windows);
+    res.json({ windows: windows.map((w, i) => ({ since: w.since, until: w.until, files: lists[i] })) });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'list changes failed' });
+  }
+});
+
+router.get('/agent/sessions/:id/changes/diff', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const s = await getOwnSession(req.params.id, req.user!.userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const since = msArg(req.query.since);
+    if (since === null) return res.status(400).json({ detail: 'since (ms timestamp) is required' });
+    const rawUntil = req.query.until;
+    let until: number | null = null;
+    if (rawUntil !== undefined && rawUntil !== '') {
+      until = msArg(rawUntil);
+      if (until === null || until < since) return res.status(400).json({ detail: 'until must be an ms timestamp >= since, or empty' });
+    }
+    const rawPath = req.query.path;
+    if (rawPath !== undefined && (typeof rawPath !== 'string' || !rawPath)) return res.status(400).json({ detail: 'path must be a non-empty string' });
+    const [files] = await listChanges(req.params.id, [{ since, until }], { diff: true, ...(rawPath ? { path: rawPath as string } : {}) });
+    res.json({ files });
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'diff changes failed' });
+  }
+});
+
+// 审阅页「未提交(Git)」范围:会话所属项目目录(与 git 工具同口径:会话存档的 project_path,不认客户端给的目录)
+// 相对 HEAD 的改动 + 未跟踪文件。只读;不在本机引擎 / 不是项目会话 / 目录没了 → available:false, reason:'nocwd'。
+router.get('/agent/sessions/:id/changes/git', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    const s = await getOwnSession(req.params.id, req.user!.userId);
+    if (!s) return res.status(404).json({ detail: 'Session not found' });
+    const rawPath = req.query.path;
+    if (rawPath !== undefined && (typeof rawPath !== 'string' || !rawPath)) return res.status(400).json({ detail: 'path must be a non-empty string' });
+    const diff = req.query.diff === '1' || req.query.diff === 'true';
+    const nocwd = { available: false, reason: 'nocwd', files: [] };
+    if (!deps().profile.capabilities.hostExec || !s.project_path) return res.json(nocwd);
+    let cwd: string;
+    try { cwd = await canonicalProjectPath(String(s.project_path)); } catch { return res.json(nocwd); }
+    res.json(await listGitChanges(cwd, { diff, ...(rawPath ? { path: rawPath as string } : {}) }));
+  } catch (e: any) {
+    res.status(500).json({ detail: e?.message || 'list git changes failed' });
+  }
+});
+
 // 代码检查点(rewind):列出本会话的写工具快照 / 把代码恢复到某时刻。
 // 对话侧回退复用 messages/delete;两者由客户端按用户选的档位分别调用(仅代码/仅对话/两者)。
 router.get('/agent/sessions/:id/checkpoints', authMiddleware, async (req: AuthRequest, res) => {
@@ -912,13 +994,25 @@ router.post('/agent/sessions/:id/checkpoints/restore', authMiddleware, async (re
     if (!s) return res.status(404).json({ detail: 'Session not found' });
     const at = Number(req.body?.at);
     if (!Number.isFinite(at) || at <= 0) return res.status(400).json({ detail: 'at (ms timestamp) is required' });
+    // 单文件撤销:paths 只恢复这些路径。只有「没传」才是全部 —— null / [] 一律 400,
+    // 免得前端一个空值把整段代码都回退了。
+    const rawPaths = req.body?.paths;
+    if (rawPaths !== undefined && (!Array.isArray(rawPaths) || !rawPaths.length || rawPaths.length > MAX_CHANGE_ITEMS
+      || !rawPaths.every((p: unknown) => typeof p === 'string' && p.length > 0))) {
+      return res.status(400).json({ detail: `paths must be 1-${MAX_CHANGE_ITEMS} non-empty strings` });
+    }
+    const keepEdited = req.body?.keepEdited;
+    if (keepEdited !== undefined && typeof keepEdited !== 'boolean') return res.status(400).json({ detail: 'keepEdited must be a boolean' });
     // 与 messages/delete 同款闸:在飞 run 正在改文件,恢复会与它对写。
     const inflight = await query<any[]>(
       `SELECT 1 FROM agent_runs WHERE session_id = ? AND status IN ('queued','running') LIMIT 1`,
       [req.params.id],
     );
     if (inflight.length || isDelegateActive(req.params.id)) return res.status(409).json({ detail: 'run in progress' });
-    res.json(await restoreCodeSince(req.params.id, at));
+    const opts: { paths?: string[]; keepEdited?: boolean } = {};
+    if (rawPaths !== undefined) opts.paths = rawPaths as string[];
+    if (keepEdited !== undefined) opts.keepEdited = keepEdited;
+    res.json(await restoreCodeSince(req.params.id, at, opts));
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'restore checkpoint failed' });
   }

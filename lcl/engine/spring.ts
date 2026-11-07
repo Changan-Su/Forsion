@@ -27,9 +27,13 @@ export function springAt(t: number, v0: number, { response, damping }: Spring): 
   return 1 + Math.exp(-damping * w * t) * (((v0 - damping * w) / wd) * Math.sin(wd * t) - Math.cos(wd * t))
 }
 
-/** The system's "remove animations" (Android: accessibility → remove animations). */
+/** The system's "remove animations" (Android: accessibility → remove animations), or the host's Fade only
+ *  (<html data-motion-fade="on">, the last row of the Motion theme section). Desktop code asks this, not matchMedia. */
 export function reducedMotion(): boolean {
-  try { return !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches } catch { return false }
+  try {
+    if (typeof document !== 'undefined' && document.documentElement.dataset.motionFade === 'on') return true
+    return !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  } catch { return false }
 }
 
 let supported: boolean | undefined

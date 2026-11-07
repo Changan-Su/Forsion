@@ -5,8 +5,9 @@
  * 2026-10-05:手机(amadeusVaultMode 桥)同样让位 —— 两行住进「Forsion Unit 切换」弹层的「智库」一段
  * (mobile/src/UnitsSheet.tsx);那张弹层没上架(无 unitsList 桥)时才留原胶囊。样式在 styles/sidebar2.css。
  */
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { useSegDir } from '@lcl/engine'
+import { useSegFlow } from '@lcl/engine/segFlow'
 import { usePageStore } from '../amadeus/store/pageStore'
 import { useI18n } from '../i18n'
 import type { AmadeusSyncStatus } from '../types'
@@ -19,6 +20,8 @@ export function VaultSideSwitch(): React.ReactElement | null {
   const [sync, setSync] = useState<AmadeusSyncStatus | null>(null)
   /** 滑块往哪边拉(写进 data-dir,后沿晚出发;见 sidebar2.css .t2s-vaultseg-thumb)。两个分支共用,钩子放在提前 return 之前。 */
   const dir = useSegDir(side === 'cloud' ? 1 : 0)
+  const thumbRef = useRef<HTMLDivElement>(null)
+  useSegFlow(side === 'cloud' ? 1 : 0, thumbRef) // 动效主题是水滴时滑块流过去
 
   useEffect(() => {
     const api = window.amadeusSync
@@ -46,7 +49,7 @@ export function VaultSideSwitch(): React.ReactElement | null {
     }
     return (
       <div className="t2s-vaultseg" role="tablist" aria-label="vault side" data-busy={busy || undefined}>
-        <div className="t2s-vaultseg-thumb" data-side={side} data-dir={dir} />
+        <div ref={thumbRef} className="t2s-vaultseg-thumb" data-side={side} data-dir={dir} />
         <button role="tab" aria-selected={side === 'local'} className={side === 'local' ? 'on' : ''} onClick={() => pickMobile('local')}>
           {t('notes.cloud.local')}
         </button>
@@ -84,7 +87,7 @@ export function VaultSideSwitch(): React.ReactElement | null {
   return (
     <>
       <div className="t2s-vaultseg" role="tablist" aria-label="vault side" data-busy={busy || undefined}>
-        <div className="t2s-vaultseg-thumb" data-side={side} data-dir={dir} />
+        <div ref={thumbRef} className="t2s-vaultseg-thumb" data-side={side} data-dir={dir} />
         <button role="tab" aria-selected={side === 'local'} className={side === 'local' ? 'on' : ''} onClick={() => pick('local')}>
           {t('notes.cloud.local')}
         </button>

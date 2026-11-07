@@ -54,7 +54,7 @@ import {
   ContextUsageTracker, CompactionAttemptGuard, assistantTurnOf, markLossy, HISTORY_MSG_MAX_CHARS,
 } from './contextBudget.js';
 import {
-  getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage,
+  getLatestSummary, compactWorkingMessages, compactSession, summaryMessage, rowCoverage, idleCompactionDue,
   tagMessageSource, messageSource, persistCheckpoint, messageTimestamp, type CompactBoundary,
 } from './compaction.js';
 import { compactionSettingsFor, type CompactionSettings } from './compactionSettings.js';
@@ -2874,7 +2874,7 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
      * 摘要失败退机械折叠(compactContext,如实标 fallback);成功即按边界落检查点(已落库部分立刻落,
      * 本 run 尚未落库的段等 finalize)。返回本次是否改动了上下文。
      */
-    const runCompaction = async (reason: 'threshold' | 'overflow', beforeTokens: number, iteration: number): Promise<boolean> => {
+    const runCompaction = async (reason: 'threshold' | 'overflow' | 'idle', beforeTokens: number, iteration: number): Promise<boolean> => {
       const pcV = await runHooks('PreCompact', { source: 'auto', session_id: sessionId, run_id: runId, cwd, agent_slug: activeAgentSlug }, hookCtx());
       if (pcV.stop) {
         hookVetoedCompaction = true;
@@ -2886,17 +2886,23 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const measured = contextUsage.measured(workingMessages);
       const cr = compactionCfg.enabled
         ? await compactWorkingMessages(workingMessages, callModelId, appId, ac.signal, {
-          settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: true,
+          // idle 不是越线:没有保留段之外的内容就不压(force=false)
+          settings: compactionCfg, runThinking: thinkingLevel, windowTokens: ctxWindowTokens, force: reason !== 'idle',
           overheadTokens: toolsOverhead,
           measuredTokens: reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured,
         })
         : { ok: false, reason: 'llm compaction disabled' }; // enabled=false:不做摘要,只走下面的机械兜底
       let changed = false;
+      if (reason === 'idle' && !(cr.ok && cr.summary)) {
+        // 按时间压缩只为省缓存未命中,没越线:摘要不成就原样发,不走下面为越线准备的机械折叠 / 裁剪
+        console.warn(`[agent-core] run=${runId} 空闲压缩未成: ${cr.reason}`);
+        return false;
+      }
       if (cr.ok && cr.summary) {
         changed = true;
         contextUsage.invalidate();
         const persisted = await recordBoundary(cr.summary, cr.boundary);
-        void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration });
+        void publish(runId, 'status', { phase: 'compacted', forced: true, reason, persisted, summarized: cr.summarizedCount, iteration, ...(reason === 'idle' ? { idleMinutes: compactionCfg.idleMinutes } : {}) });
       } else {
         // 上游拒收时实测的下界 = 窗口(与摘要那边同一口径):估算可能还在触发线下,但 provider 已经说装不下了 → 照裁。
         const floor = reason === 'overflow' ? Math.max(measured ?? 0, ctxWindowTokens) : measured;
@@ -2978,6 +2984,8 @@ async function runLoop(runId: string, ac: AbortController): Promise<void> {
       const estPrompt = contextUsage.estimate(workingMessages, toolsOverhead);
       if (modelId && estPrompt > compactAt && compactionGuard.shouldAttempt(estPrompt, workingMessages)) {
         await runCompaction('threshold', estPrompt, iteration); // enabled=false 时里面只走机械兜底
+      } else if (modelId && iteration === 0 && idleCompactionDue(workingMessages, compactionCfg, estPrompt, Date.now(), input.userMessageId)) {
+        await runCompaction('idle', estPrompt, iteration);
       }
 
       // 最后一轮强制不再调工具，逼模型产出最终文本（避免以 tool_calls 收尾、finalContent 为空）

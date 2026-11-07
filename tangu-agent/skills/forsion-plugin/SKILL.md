@@ -2,7 +2,7 @@
 name: forsion-extension-development
 description: 当用户要给 Forsion / Tangu 做插件、主题、Space、智能体(agent)或捆绑包(bundle)——或要把某个能力做成可分发/可上架商店的扩展——时使用;已装的插件 / Space / 视图不出现、加载失败、更新后不工作要排查时也用(带一份插件体检脚本 tools/check-plugin.mjs)。内置五类官方模板(samples/),讲清各自的格式基线与硬约束(尤其两种"插件"是完全不同的系统),照抄模板改比从零写靠谱。
 metadata:
-  version: 1.96.0
+  version: 1.99.0
   author: Forsion
   category: Forsion
 ---
@@ -53,12 +53,12 @@ Then read [references/troubleshooting.md](references/troubleshooting.md): what e
 
 When `plugin_sandbox` is in your tool catalog (the desktop app, a work session on this computer), verify every desktop plugin you write there **before** you tell the user it works, and never install it into their Forsion yourself:
 
-1. `plugin_sandbox` `{"action":"start","path":"<plugin folder with manifest.json>"}` (relative paths resolve against the working folder). You get the load status (registered views, hidden Spaces, setup error, mount errors, the plugin's own console) and a screenshot of the sandbox window, with the plugin's first view open.
+1. `plugin_sandbox` `{"action":"start","path":"<plugin folder with manifest.json>"}` (relative paths resolve against the working folder). You get the load status (registered views, the Space folders it ships and which were shown or hidden and why, setup error, mount errors, the plugin's own console) and a screenshot of the sandbox window, already on the plugin's first Space (or its first view when it ships no Space).
 2. Fix what you see in the files. Saving reloads the sandbox by itself; look again with `plugin_sandbox_inspect` (`status`, `screenshot` with an optional `view` id, `logs`).
-3. Exercise behaviour with `plugin_sandbox_inspect` `{"action":"command","command":"<command id>","args":{...}}`: it runs a command the plugin registered with `ctx.registerCommand`, passing `args` to `run(args)`. Register the actions you need to test as commands.
-4. Tell the user it is running in the sandbox. They can open the window from the sandbox card in the chat, try it, report a problem back to this chat, and install it with **Install in my Forsion**, which asks them first.
+3. Use it like a person would, with `plugin_sandbox_inspect` (2026-11-03+; never computer use on the sandbox window): `read` gives an outline of the screen with `[e12]` references; `click` / `type` / `press` take a `target` (a reference, `css:<selector>`, or a control's visible text), `type` replaces the field's text unless `append` is true, `press` takes keys such as `Enter`, `ArrowDown`, `Mod+K`; `scroll` (`amount` pixels, negative = up) and `space` (switch to one of the plugin's Spaces). Each returns a screenshot after the page settles, plus console lines and toasts that appeared meanwhile. Before clicking something that opens a file picker (`<input type="file">` included), call `files` with `paths` inside the plugin folder (put test fixtures there); a native picker cannot be seen or clicked. Commands still work too: `{"action":"command","command":"<command id>","args":{...},"screenshot":true}` runs one the plugin registered with `ctx.registerCommand`.
+4. Tell the user it is running in the sandbox. They can open the window from the sandbox card in the chat or the sandbox card in the right-hand summary panel, try it, report a problem back to this chat, and install it with **Install in my Forsion**, which asks them first.
 
-What the sandbox is: a separate Forsion with its own empty vault and data, signed out, **without the Tangu engine**, where only this plugin is loaded. So a bundle's engine half (`plugins/`, `agents/`, `skills/`), anything that needs a signed-in account or cloud sync, and plugins that declare `fileExtensions` (blocked for dev copies) cannot be verified there; say so and test those after the user installs. Only one sandbox runs at a time; `reset` wipes its data and starts fresh; `stop` closes it.
+What the sandbox is: a separate Forsion with its own empty vault and data, signed out, **without the Tangu engine**, where only this plugin is loaded, plus the built-in plugins it lists in `requiresPlugins` (others, such as Forsion Extend or Calendar, are not there; declare what you depend on). The Ribbon shows only this plugin's Spaces. So a bundle's engine half (`plugins/`, `agents/`, `skills/`), anything that needs a signed-in account or cloud sync, and plugins that declare `fileExtensions` (blocked for dev copies) cannot be verified there; say so and test those after the user installs. Only one sandbox runs at a time; `reset` wipes its data and starts fresh; `stop` closes it.
 
 No `plugin_sandbox` (mobile, web, cloud sessions, older desktop builds)? Fall back to `tools/check-plugin.mjs` and ask the user to try it. Coding Studio's Sandbox panel also has a **My Forsion** tier: that one loads the dev copy into the user's real app and real notes and is not isolated.
 
@@ -144,6 +144,8 @@ Signatures and details: [references/host-ui-mounts.md](references/host-ui-mounts
 - **正文行距、段距和切视图的时长归用户的外观开关管**(见下文「外观开关:跟着宿主走」):主题别用更高权重的规则把笔记 / 对话正文的
   `line-height`、段间距或 `wb-view-enter` 的时长写死 —— 写死了,用户拨那几个开关就没有反应。
 - 可选 `settings[]`(number/select/boolean/color)让用户在设置页调主题内参数:`key` **就是** CSS 自定义属性名,宿主把值写进 `:root` 内联变量,主题用 `var(--key, 默认值)` 消费。参考本仓内置 `genesis-glass` 主题(`desktop/frontend/src/theme/themes/genesis-glass/`)。
+- **动效归宿主管,主题别碰**:装进来时宿主先过一遍 `theme.css` —— 动效 token(`--duration-*`、`--ease-*`、`--menu-enter/exit-*`、`--droplet-duration`、`--collapse-*`、`--tip-*`、`--hovercard-*`、`--switch-edge-*` 等)的声明在任何选择器上都删掉,`@property` 注册它们的整块也删;`settings[]` 用这些名字的项不生效;主题自己的 `@keyframes` 与 `@layer` 名加前缀 `t-<id>-`(`animation` / `animation-name` 里的引用一起改写,经 `var()` 转手的不改写);`@import` 一律删(谷歌字体写 `theme.json` 的 `fonts.google`);处理完浏览器再读一遍,还漏着就整套样式不加载;系统「减少动态效果」在宿主最先声明的层里,`!important` 也压不过。设置页会提示「N 项动效已忽略」。主题在自己选择器上直接写的 `transition` / `animation` 不在收口范围内,照常生效(减少动态效果下动画停、过渡只剩短的颜色 / 透明度)。
+  动效主题(设置 → 外观,`<html data-motion-theme>` = genesis / droplet / stretch / glide,外加 `data-motion-fade="on"`「只淡入淡出」)归用户:`theme.json` 可写 `"motionTheme": "<四者之一>"` 建议一套,只在用户从没选过时生效;插件不读不写这两个属性,也别写死某一种效果 —— 用宿主的分段胶囊 / 开关 / `ctx.ui` 零件,自动跟着走。
 
 ## Space(samples/forsion-sample-space)
 
@@ -291,6 +293,8 @@ A bundle can declare stdio MCP servers and observe-only hooks in its manifest: r
 推成独立 GitHub 公开仓库(引擎插件记得含 `dist/`)→ 商店 → 投稿 选对应类型给仓库链接或传 zip(zip 内容放根或单层文件夹,两层路径装不了)。捆绑包(默认形态)按 **amadeus-plugin** 类投稿(桌面按包内 manifest 实测路由,自然落进 `~/.forsion/plugins/`)。GitHub 来源会**锁定过审时的 release tag**,发新版需重新过审。
 
 **发新版 / 改信息(2026-10-24 起)**:在「投稿」里选中自己的条目。ZIP 拖进新包;GitHub / npm 先在原渠道发新 Release / 新版本,再点「检查新版本」(从没打过 Release 的仓库没有可锁的版本,先发一个 Release)。**版本号只从包里 / 上游读,投稿页没有版本输入框**:manifest 写 `version`,技能写 SKILL.md frontmatter 的 `version` 或 `metadata.version`(两处都认,桌面检查更新用同一条规则),新版要高于商店当前版本。提交前服务端先把包检查一遍(只读、不落库),列出读到的类型、版本、图标、README 和包体提醒,作者确认后才真提交。简介、标签、长描述、版本要求可以在「商店信息 → 编辑」里单独改,不用传包、不升版本。已上架条目的新版本和信息改动都要过审,审核通过前商店照旧发原来的;审核结果发到投稿账号的收件箱。升版号必写 `CHANGELOG.md` 一节(`## x.y.z — YYYY-MM-DD`),宿主会渲染成插件详情页的更新日志。
+
+**用户侧自动更新与回退(桌面 2.13.8 起)**:商店插件**缺省自动更新**(后台下好、下次启动换上;用户可全局或按插件关掉)。换版前旧版本留在本机(`~/.forsion/.plugin-versions/<类型>/<目录名>/<版本>/`,每个插件最近 2 份),用户能一键回退;回退或从「版本」页装旧版 = 固定在那一版,直到用户「恢复自动更新」。⚠️ **回退只换插件文件,数据不回退**(工作文件夹、`plugin-data`、设置原样):改数据格式时让旧版读新数据也不出错(忽略不认识的字段、别把旧数据原地改成旧版读不了的形状),或新格式写新文件。核心插件(Extend / 日历 / Computer Use)跟桌面版本走,不参与。
 
 ### 投稿元数据、版本要求与评论(2026-10-17 起)
 

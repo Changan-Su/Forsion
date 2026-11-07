@@ -20,6 +20,8 @@ import { useSpaceStore } from '@lcl/engine/spaceRegistry'
 import { useSpaceAppearance, receiveSpaceAppearance, setSpaceAppearance } from './spaceAppearanceStore'
 import { resolveSpaceAppearance } from '../theme/spaceAppearance'
 import '../theme/calm' // 「呼吸感」三个外观开关:落 <html data-calm-*>,每个窗口加载一次(见该文件)
+import { suggestMotionTheme } from '../theme/motionTheme' // 动效主题:落 <html data-motion-theme>,每个窗口加载一次(见该文件)
+import { reducedMotion } from '@lcl/engine/spring'
 
 type Mode = 'light' | 'dark'
 type ModePref = 'light' | 'dark' | 'system'
@@ -53,7 +55,7 @@ function persistPref(pref: ModePref): void {
  */
 function withModeTransition(fn: () => void): Promise<void> {
   const doc = document as Document & { startViewTransition?: (cb: () => void) => { ready?: Promise<void> } | undefined }
-  const reduce = (() => { try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches } catch { return false } })()
+  const reduce = reducedMotion()
   if (typeof doc.startViewTransition === 'function' && !reduce) {
     return new Promise<void>((resolve, reject) => {
       const vt = doc.startViewTransition!(() => { try { fn(); resolve() } catch (e) { reject(e); throw e } })
@@ -169,6 +171,8 @@ export const useTheme = create<ThemeState>((set, get) => {
       else localStorage.removeItem('forsion_theme_forced_scheme')
     } catch { /* private mode */ }
     set({ lang, skin, bg, mode, modePref: userPref, modeLocked: forced !== undefined, seed })
+    // 全局设计语言建议的动效主题(用户从没选过时才生效;Space 外观不参与)
+    suggestMotionTheme(getLanguage(lang)?.manifest.motionTheme)
   }
   /**
    * 把本窗的主题态吼给其余窗口。**只在用户显式动作里调**(与 persistPref / track 同一条线):

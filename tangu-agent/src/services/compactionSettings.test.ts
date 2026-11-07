@@ -3,7 +3,7 @@ import { DEFAULT_COMPACTION_SETTINGS, normalizeCompactionLayer, resolveCompactio
 
 describe('compactionSettings — 三层取值 + 逐字段归一化', () => {
   it('缺省值与 pi 对齐(reserve 16384 / keepRecent 20000),thinking 缺省 off 保持改前 wire', () => {
-    expect(DEFAULT_COMPACTION_SETTINGS).toEqual({ enabled: true, reserveTokens: 16_384, thresholdPercent: 95, keepRecentTokens: 20_000, summaryMaxTokens: 6_144, thinking: 'off' });
+    expect(DEFAULT_COMPACTION_SETTINGS).toEqual({ enabled: true, reserveTokens: 16_384, thresholdPercent: 95, keepRecentTokens: 20_000, idleMinutes: 60, summaryMaxTokens: 6_144, thinking: 'off' });
     expect(resolveCompactionSettings()).toEqual(DEFAULT_COMPACTION_SETTINGS);
   });
   it('非法字段各自丢弃而不是整层作废;数值钳区间;文本裁长', () => {

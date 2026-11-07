@@ -13,9 +13,9 @@
  * (t2-chat-view row → t2-chat-col → t2-chat-body → t2-stream + t2-rail)。
  *
  * 2026-09-19 追加两组:
- *  ⑤ 新会话草稿不挂载 Desk:欢迎区 / Agent 选择条 / 输入卡 / 正文四条中线必须重合并居中整列,
+ *  ⑤ 新会话草稿不挂载 Desk:欢迎区 / 项目条 / 输入卡 / 正文四条中线必须重合并居中整列,
  *     会话开始后的卡片让位仍由负对照检查
- *     (草稿页另注入 compactChatPicker.css + composer2.css,pickers 按真实结构放进 .composer-anchor);
+ *     (草稿页另注入 composer2.css,项目条按真实结构放进 .composer-anchor;原来量的 Agent 选择条 11-02 并进了输入卡工具行);
  *  ⑥ 伴随面撑满:卡片正文挂 .companion 后 zoom 归 1(文件末尾的覆盖块压过 0.75 缩镜),
  *     伴随面挂载槽(DeskCompanionHost 的行内布局)铺满正文;另跑一次不带 .companion 的负对照。
  *
@@ -52,7 +52,6 @@ function check(name, ok, detail) {
 const ROOT = path.resolve(__dirname, '..')
 const BASE_CSS = fs.readFileSync(path.join(ROOT, 'frontend/src/styles/base.css'), 'utf8')
 const CHAT_CSS = fs.readFileSync(path.join(ROOT, 'frontend/src/views/chat2/chat2.css'), 'utf8')
-const PICKER_CSS = fs.readFileSync(path.join(ROOT, 'frontend/src/components/compactChatPicker.css'), 'utf8')
 const COMPOSER_CSS = fs.readFileSync(path.join(ROOT, 'frontend/src/views/chat2/composer2.css'), 'utf8')
 
 /** 复刻 ChatView 真实层级:view(row) → col(column,容器,relative) → body(t2-stream) + composer + t2-rail。
@@ -134,13 +133,11 @@ async function companionFill(p, withClass) {
 }
 
 /** ⑤ 草稿态页面:按 ChatView 真实结构 —— .t2-empty 与 .composer-anchor 都是 .t2-chat-col 的直接子,
- *  .newchat-pickers / .newchat-projectbar 在 anchor 里、输入卡之上;概览无 .show(草稿无事实)。 */
-const PILLS = Array.from({ length: 6 }, (_, i) => `<button class="engine-pill${i === 0 ? ' selected' : ''}"><span class="engine-pill-icon"><span class="agent-pill-initial">A</span></span><span class="engine-pill-label">Agent ${i}</span></button>`).join('')
+ *  .newchat-projectbar 在 anchor 里、输入卡之上;概览无 .show(草稿无事实)。 */
 const DRAFT_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
   html,body { margin:0; height:100%; }
   ${BASE_CSS}
   ${CHAT_CSS}
-  ${PICKER_CSS}
   ${COMPOSER_CSS}
 </style></head><body>
   <div class="t2-chat-view" id="view" style="flex:1;min-height:0;display:flex;flex-direction:row;min-width:0;height:100vh;width:1400px">
@@ -148,8 +145,7 @@ const DRAFT_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>
       <div class="t2-chat-body"><div class="t2-stream" id="stream"><div class="t2-stream-inner" id="inner"></div></div></div>
       <div class="t2-empty" id="empty" style="top:200px"><div class="t2-empty-title">欢迎标题</div></div>
       <div class="composer-anchor" id="anchor">
-        <div class="newchat-pickers" id="pickers"><div class="engine-picker agent-picker"><div class="engine-picker-bar" id="bar"><div class="engine-picker-scroll">${PILLS}</div></div></div></div>
-        <div class="newchat-projectbar"><div class="newchat-projectbar-inner" id="proj"><div style="width:120px;height:24px"></div></div></div>
+        <div class="newchat-projectbar" id="projbar"><div class="newchat-projectbar-inner" id="proj"><div style="width:120px;height:24px"></div></div></div>
         <div class="t2c"><div class="t2c-inner" id="t2cinner"><div class="t2-composer" style="height:80px"></div></div></div>
       </div>
       <div class="t2-rail" id="rail">
@@ -169,12 +165,12 @@ async function draftAt(p, width) {
     const card = document.getElementById('card') ? r('card') : null
     const hit = (x) => !(x.right <= card.left || x.left >= card.right || x.bottom <= card.top || x.top >= card.bottom)
     const overlaps = []
-    for (const [name, id] of [['bar', 'bar'], ['empty', 'empty'], ['projectbar', 'proj'], ['composer', 't2cinner']]) {
+    for (const [name, id] of [['empty', 'empty'], ['projectbar', 'proj'], ['composer', 't2cinner']]) {
       if (shown('card') && hit(r(id))) overlaps.push(name)
     }
     return {
       cardShown: shown('card'), tsumShown: shown('tsum'), colCx: cx(r('col')),
-      barCx: cx(r('bar')), emptyCx: cx(r('empty')), composerCx: cx(r('t2cinner')), streamCx: cx(r('inner')),
+      barCx: cx(r('projbar')), emptyCx: cx(r('empty')), composerCx: cx(r('t2cinner')), streamCx: cx(r('inner')),
       overlaps,
     }
   })
@@ -256,20 +252,20 @@ async function at(p, width, tsumCls, cardCls = 't2-card agent-desk-card', cardOp
     const d = await draftAt(p, width)
     check(`⚠️草稿态不显示卡片 @${width}`, !d.cardShown && !d.tsumShown, `card=${d.cardShown} tsum=${d.tsumShown}`)
     const xs = [d.barCx, d.emptyCx, d.composerCx, d.streamCx]
-    check(`⚠️草稿态四条中线重合(选择条/欢迎区/输入卡/正文) @${width}`, Math.max(...xs) - Math.min(...xs) <= 1,
+    check(`⚠️草稿态四条中线重合(项目条/欢迎区/输入卡/正文) @${width}`, Math.max(...xs) - Math.min(...xs) <= 1,
       `bar=${d.barCx} empty=${d.emptyCx} composer=${d.composerCx} stream=${d.streamCx}`)
-    check(`⚠️草稿态选择条/欢迎区/项目条/输入卡不压卡片 @${width}`, d.overlaps.length === 0, d.overlaps.join(',') || 'none')
+    check(`⚠️草稿态欢迎区/项目条/输入卡不压卡片 @${width}`, d.overlaps.length === 0, d.overlaps.join(',') || 'none')
     check(`⚠️草稿态不为 Desk 让位 @${width}`, Math.abs(d.composerCx - d.colCx) <= 1,
       `composer=${d.composerCx} col=${d.colCx}`)
   }
-  // 负对照:把 pickers 挪回 anchor 外(07-27 当时的结构)—— 拿不到让位,中线必须分叉,否则上面那组没有分辨力
+  // 负对照:把输入卡上方那一栏挪到 anchor 外(07-27 选择条当时的结构)—— 拿不到让位,中线必须分叉,否则上面那组没有分辨力
   await p.evaluate(() => {
     document.getElementById('tsum').insertAdjacentHTML('beforeend', '<details class="t2-card agent-desk-card" id="card" open><summary class="t2-card-head">Agent Desk</summary><div class="t2-card-body agent-desk-card-frame"><div class="agent-desk-card-body"></div></div></details>')
-    const pk = document.getElementById('pickers')
+    const pk = document.getElementById('projbar')
     document.getElementById('col').insertBefore(pk, document.getElementById('anchor'))
   })
   const old = await draftAt(p, 1400)
-  check('负对照:pickers 在 anchor 外时中线分叉(本组断言有分辨力)', Math.abs(old.barCx - old.composerCx) > 50,
+  check('负对照:项目条在 anchor 外时中线分叉(本组断言有分辨力)', Math.abs(old.barCx - old.composerCx) > 50,
     `bar=${old.barCx} composer=${old.composerCx}`)
 
   await browser.close()

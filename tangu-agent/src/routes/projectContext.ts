@@ -2,6 +2,7 @@
  * 项目上下文路由(桌面「PROJECT 详情」;handler 自带 authMiddleware):
  *   GET  /agent/project-context?sessionId=      → ProjectContext(指令文件 / 项目技能 / 计划 / 默认项 / git)
  *   POST /agent/project-context/init            { sessionId }                              → 建 .tangu/ + 骨架
+ *   PATCH  /agent/project-context/memory        { sessionId, id, fact, expectedVersion }   → 改一条项目记忆(≤300 字),返回 { memory }
  *   DELETE /agent/project-context/memory        { sessionId, id, expectedVersion }         → 删一条项目记忆,返回 { memory }(GET 的 context 里带 memory;远端来源不给)
  *   POST /agent/project-context/memory/candidate { sessionId, id, action: adopt|dismiss }  → 对一条待确认的后台候选点头或丢弃,返回 { memory }(远端来源不给)
  *   POST /agent/project-context/memory/restore   { sessionId, id }                          → 把写满压缩时合并 / 去掉的一句原句记回去,返回 { memory }
@@ -19,6 +20,8 @@
  *   GET    /agent/project-context/git/hosting?sessionId=              → { forsionGit: { webUrl, name } | null(这里能不能「发布到 Forsion Git」),
  *                                                                       github: { linked, login?, remote, name } | null(云端开了 GitHub 绑定时:当前用户绑没绑;
  *                                                                       remote = origin 是会用绑定账号推拉的那种远端;name = 「发布到 GitHub」预填的仓库名) }
+ *   GET    /agent/project-context/git/reviews?sessionId=              → { reviews: { items, total, web } | null }(Forsion Git 上等这个人审的合并请求,
+ *                                                                       services/forsionGit.ts reviewRequests;读不到 = null,Git 卡就不显示那一行)
  *   POST   /agent/project-context/git/publish-github { sessionId, name, target?, trust? } → 加一个远端:在绑定的 GitHub 账号下建私有仓库并推送(services/githubPublish.ts)
  *   POST   /agent/project-context/git/remote  { sessionId, url, target?, trust? }  → 加一个远端:连接一个已有的地址(gitActions.gitConnectRemote)
  *   POST   /agent/project-context/git/publish  { sessionId, name, target?, trust? } → 加一个远端:设到 Forsion Git 并推送(services/forsionGitPublish.ts)
@@ -45,7 +48,7 @@ import {
   canonicalProjectPath, createProjectSkill, deleteProjectSkill, deleteProjectIcon, initProjectWorkspace, projectContext, readProjectIcon, readProjectSettings,
   saveProjectIcon, setProjectIconEmoji, writeProjectDoc, writeProjectSettings,
 } from '../services/projectContext.js';
-import { forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
+import { editProjectMemory, forgetProjectMemory, projectMemoryView, resolveProjectCandidate, restoreCompactedFact } from '../services/projectMemory.js';
 import { parseRemoteOrigin } from '../services/remoteOrigin.js';
 import { RelinkError, missingProjectPaths, relinkInfo, relinkProject } from '../services/projectRelink.js';
 import { GitActionError, generateCommitMessage, gitCommit, gitCreateBranch, gitInit, gitPending, gitConnectRemote, gitPull, gitPush, gitSetPushRemote, gitTrustRepo, readGit, serialized } from '../services/gitActions.js';
@@ -139,6 +142,22 @@ router.get('/agent/project-context', authMiddleware, async (req: AuthRequest, re
     res.json({ ...(await projectContext(cwd)), ...(memory ? { memory } : {}) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'project context failed' });
+  }
+});
+
+// 用户改一条项目记忆(11-03,项目详情 › 设置):同删除的边界,只在主机上;一句话、不超过 300 字(同 remember)。
+router.patch('/agent/project-context/memory', authMiddleware, async (req: AuthRequest, res) => {
+  try {
+    if (parseRemoteOrigin(req.headers)) return res.status(403).json({ detail: 'Open the project on the host computer to edit its memory.' });
+    const cwd = await projectDirOf(req, res, req.body?.sessionId);
+    if (!cwd) return;
+    const { id, fact, expectedVersion } = req.body || {};
+    const text = typeof fact === 'string' ? fact.trim().replace(/\s*\n\s*/g, ' ') : '';
+    if (typeof id !== 'string' || !id || typeof expectedVersion !== 'string' || !expectedVersion || !text) return res.status(400).json({ detail: 'id, fact and expectedVersion are required' });
+    if (text.length > 300) return res.status(400).json({ error: 'MEMORY_TOO_LONG', detail: 'One entry is at most 300 characters.' });
+    res.json({ memory: await editProjectMemory(cwd, id, text, expectedVersion) });
+  } catch (e: any) {
+    memoryFail(res, e, 'edit project memory failed');
   }
 });
 
@@ -351,6 +370,12 @@ router.get('/agent/project-context/git/hosting', authMiddleware, async (req: Aut
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'git hosting lookup failed' });
   }
+});
+
+/** Forsion Git 上等这个人审的合并请求(Git 卡的那一行;人是用户层的,不按项目筛)。只读;读不到 = null。 */
+router.get('/agent/project-context/git/reviews', authMiddleware, async (req: AuthRequest, res) => {
+  if (!(await projectDirOf(req, res, req.query.sessionId))) return;
+  res.json({ reviews: await Promise.resolve(forsionGit()?.reviewRequests() ?? null).catch(() => null) });
 });
 
 /** 待提交清单(提交框完整列出;有已暂存的只列已暂存的)。只读,不排队。 */

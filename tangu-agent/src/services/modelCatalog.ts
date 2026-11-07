@@ -7,7 +7,7 @@
  */
 import { deps } from '../seams/runtime.js';
 import type { AppProfile } from '../seams/appProfile.js';
-import { effectiveContextWindowInfo, type CtxWindowSource } from './contextBudget.js';
+import { defaultContextWindowCap, effectiveContextWindowInfo, type CtxWindowSource } from './contextBudget.js';
 import { clampThinkingLevel, modelSupportsVision, resolveModelCapability, supportedThinkingLevels, type ModelCapability, type ThinkingLevel } from '../llm/modelCapabilities.js';
 
 export interface CatalogModel {
@@ -19,6 +19,8 @@ export interface CatalogModel {
   contextWindow: number;
   contextWindowSource: CtxWindowSource;
   maxContextWindow?: number;
+  /** 不手动覆盖时的缺省窗口(11-06:1M 级 512k,其余 272k,不超过模型自身)。 */
+  defaultContextWindow?: number;
   supportsVision: boolean;
   thinkingLevels?: ThinkingLevel[];
   /** Fast 档说明原文(只有 Codex 订阅目录给);缺席 = 没有 Fast 档。 */
@@ -110,7 +112,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
     const mType = m.modelType === 'image_gen' || m.modelType === 'asr' ? m.modelType : 'llm';
     const win = effectiveContextWindowInfo(m.id, m);
     // 思考档能力表按上游模型名匹配(目录导入的 id 是 pr-<hash>);与 agentLoop 里 clamp 用的 `apiModelId || modelId` 同口径。
-    models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: mType, groupId: m.groupId, groupName: m.groupName, groupSortOrder: m.groupSortOrder, sortOrder: m.sortOrder, tags: m.tags, multiplier: m.multiplier, contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(m.id, visionOverrideOf(m.supportsVision)), ...(mType === 'llm' ? { thinkingLevels: thinkLv(m.provider, m.apiModelId || m.id, m.defaultBaseUrl ?? m.default_base_url ?? undefined) } : {}) });
+    models.push({ id: m.id, name: m.name || m.id, provider: m.provider || 'forsion', source: 'forsion', modelType: mType, groupId: m.groupId, groupName: m.groupName, groupSortOrder: m.groupSortOrder, sortOrder: m.sortOrder, tags: m.tags, multiplier: m.multiplier, contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, defaultContextWindow: Math.min(win.max, defaultContextWindowCap(win.max)), supportsVision: modelSupportsVision(m.id, visionOverrideOf(m.supportsVision)), ...(mType === 'llm' ? { thinkingLevels: thinkLv(m.provider, m.apiModelId || m.id, m.defaultBaseUrl ?? m.default_base_url ?? undefined) } : {}) });
   }
 
   // 直连模型暴露为 `<providerId>/<模型>`:裸模型名与云端托管同名时曾被下方去重吞掉 —— 前缀化后永不相撞;
@@ -121,7 +123,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
     for (const mid of p.modelIds ?? []) {
       const id = `${p.providerId}/${mid}`;
       const win = effectiveContextWindowInfo(id);
-      models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl), ...(p.fastTiers?.[mid] ? { fastTier: p.fastTiers[mid] } : {}), ...(p.ultrafastTiers?.[mid] ? { ultrafastTier: p.ultrafastTiers[mid] } : {}) });
+      models.push({ id, name: mid, provider: p.providerId, source: 'direct', modelType: 'llm', contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, defaultContextWindow: Math.min(win.max, defaultContextWindowCap(win.max)), supportsVision: modelSupportsVision(mid, noVision.has(mid) ? false : undefined), thinkingLevels: thinkLv(p.providerId, mid, p.baseUrl), ...(p.fastTiers?.[mid] ? { fastTier: p.fastTiers[mid] } : {}), ...(p.ultrafastTiers?.[mid] ? { ultrafastTier: p.ultrafastTiers[mid] } : {}) });
     }
     for (const mid of p.imageModelIds ?? []) {
       models.push({ id: `${p.providerId}/${mid}`, name: mid, provider: p.providerId, source: 'direct', modelType: 'image_gen', contextWindow: 0, contextWindowSource: 'default', supportsVision: false });
@@ -131,7 +133,7 @@ export async function listModelCatalog(profile: AppProfile): Promise<ModelCatalo
   for (const m of await deps().brain.models.listPluginModels?.() ?? []) {
     const win = effectiveContextWindowInfo(m.id, m);
     models.push({ id: m.id, name: m.name, provider: m.provider, source: 'direct', modelType: 'llm',
-      contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max,
+      contextWindow: win.tokens, contextWindowSource: win.source, maxContextWindow: win.max, defaultContextWindow: Math.min(win.max, defaultContextWindowCap(win.max)),
       supportsVision: m.supportsVision === true,
       thinkingLevels: m.pluginThinkingLevels ?? thinkLv(m.provider, m.apiModelId || m.id),
     });

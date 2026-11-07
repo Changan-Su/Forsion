@@ -37,6 +37,7 @@ export interface SettingsSearchEntry {
 export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'workspace-dir', tab: 'general', sub: 'g-basic', anchor: 'workspace-dir', labelKey: 'settings.workspace.label', keywords: '工作目录 工作区 目录 workspace folder directory', needs: ['stored'] },
   { id: 'keep-awake', tab: 'general', sub: 'g-basic', anchor: 'keep-awake', labelKey: 'settingsmodal.keepAwake.title', keywords: '休眠 睡眠 唤醒 sleep awake', needs: ['stored'] },
+  { id: 'close-action', tab: 'general', sub: 'g-basic', anchor: 'close-action', labelKey: 'settingsmodal.closeAction.title', keywords: '关闭 退出 托盘 后台 close quit tray background', needs: ['stored'] },
   { id: 'backend-mode', tab: 'general', sub: 'g-conn', anchor: 'backend-mode', labelKey: 'settings.backend.modeLabel', keywords: '后端 托管 外部 backend managed external', needs: ['desktop'] },
   { id: 'sandbox', tab: 'general', sub: 'g-runtime', anchor: 'sandbox', labelKey: 'settings.sandbox.label', keywords: '沙箱 docker sandbox', needs: ['stored', 'managed'] },
   { id: 'python', tab: 'general', sub: 'g-runtime', anchor: 'python', labelKey: 'settings.python.label', keywords: 'python 解释器 interpreter', needs: ['stored', 'managed'] },
@@ -69,6 +70,8 @@ export const SETTINGS_SEARCH_INDEX: readonly SettingsSearchEntry[] = [
   { id: 'calm-dim', tab: 'theme', anchor: 'calm-dim', labelKey: 'settings.theme.calmDim', keywords: '外围淡出 呼吸感 变淡 退后 侧栏 标签 dim fade quiet calm surroundings sidebar ribbon', needs: ['hover'] },
   { id: 'calm-reading', tab: 'theme', anchor: 'calm-reading', labelKey: 'settings.theme.calmReading', keywords: '宽松正文 呼吸感 行距 段距 行高 阅读宽度 line height spacing reading relaxed calm' },
   { id: 'calm-motion', tab: 'theme', anchor: 'calm-motion', labelKey: 'settings.theme.calmMotion', keywords: '舒缓过渡 呼吸感 动画 节奏 慢 transition animation motion gentle calm' },
+  { id: 'motion-theme', tab: 'theme', anchor: 'motion-theme', labelKey: 'settings.motionTheme.title', keywords: '动效主题 动画 动效 水滴 拉伸 平移 液滴 风格 motion theme animation droplet stretch glide genesis' },
+  { id: 'motion-fade', tab: 'theme', anchor: 'motion-fade', labelKey: 'settings.motionTheme.fadeOnly', keywords: '只淡入淡出 减少动态效果 淡入 淡出 晕动 无障碍 fade only reduce motion accessibility' },
   { id: 'ribbon-auto-home', tab: 'theme', anchor: 'ribbon-auto-home', labelKey: 'settings.theme.ribbonAutoHome', keywords: '归位 Ribbon 滚动 复位 滚轮 scroll reset', needs: ['wide'] },
   { id: 'fonts', tab: 'theme', anchor: 'fonts', labelKey: 'settings.theme.typographyTitle', keywords: '字体 font typography' },
   { id: 'notes-attachments', tab: 'notes', anchor: 'notes-attachments', labelKey: 'settings.notes.modeLabel', keywords: '附件 图片 attachment image', needs: ['stored'] },

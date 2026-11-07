@@ -17,7 +17,8 @@ import {
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from 'react'
-import { curve, emergeDroplet, ms, type Droplet } from './droplet'
+import { curve, ms, type Droplet } from './droplet'
+import { openPanel } from './panelMotion'
 import { useExitGhost, zoomOf } from './menuAnchor'
 import { reducedMotion } from './spring'
 import './floatingToc.css'
@@ -426,6 +427,8 @@ export function FloatingToc({
     const nav = navRef.current, panel = panelRef.current, source = sourceRef.current
     const scroller = resolveElement(scrollContainer)
     if (!nav || !panel || !source || !scroller) return
+    // Reopened while it was retracting: turn around from the current frame (panel stays where it was).
+    if (droplet.current?.reopen?.()) return
     droplet.current?.cancel()
     const z = zoomOf(nav)
     const box = scroller.getBoundingClientRect()
@@ -445,7 +448,7 @@ export function FloatingToc({
     panel.style.top = `${clampTop(tick - (rowMiddle - scroll)) - navTop}px`
     panel.style.height = `${height}px`
     panel.scrollTop = scroll
-    droplet.current = emergeDroplet(source, panel)
+    droplet.current = openPanel(source, panel) // 按动效主题:液滴 / 拉伸 / 淡入微缩
   }, [phase]) // eslint-disable-line react-hooks/exhaustive-deps -- placed once per opening
 
   // A click anywhere else closes it (touch has no leave), and so does leaving the window.

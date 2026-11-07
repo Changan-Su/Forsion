@@ -24,6 +24,11 @@ internal data class SheetTheme(
     val dark: Boolean, val background: Int, val surface: Int, val text: Int, val muted: Int,
     val border: Int, val accent: Int, val onAccent: Int, val danger: Int,
     val warning: Int = danger,
+    /** The page's motion theme (Settings → Appearance → Motion theme): "genesis" | "droplet" | "stretch" | "glide".
+     *  Only the dock's selection follows it here (DockMotion). Pages older than this field send nothing = genesis. */
+    val motion: String = "genesis",
+    /** "Fade only" on the page: the dock moves nothing, as with the system's "remove animations". */
+    val motionFade: Boolean = false,
 )
 
 internal data class MenuTrailingSpec(val id: String, val label: String, val icon: NativeIconSpec?)
@@ -271,7 +276,11 @@ internal object NativeJson {
         muted = color(obj, "muted"), border = color(obj, "border"), accent = color(obj, "accent"),
         onAccent = color(obj, "onAccent"), danger = color(obj, "danger"),
         warning = color(obj, if (obj.has("warning")) "warning" else "danger"),
+        motion = obj.optString("motionTheme", "genesis").takeIf { it in MOTION_THEMES } ?: "genesis",
+        motionFade = obj.optBoolean("motionFade", false),
     )
+
+    private val MOTION_THEMES = setOf("genesis", "droplet", "stretch", "glide")
 
     fun number(array: JSONArray, index: Int): Float {
         val value = array.get(index)

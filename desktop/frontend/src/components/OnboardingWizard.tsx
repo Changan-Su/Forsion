@@ -2,13 +2,15 @@
  * 首启引导(11-05 定稿,方案 docs/ToBeImproved/首启引导第三轮方案_2026-11-04/revised.html):
  * 开始 → 外观 → 关于你 → 认识你的 Agents 团队,四屏。网页 / 手机只有外观(账号跟着主机走;human/ 与卜算子设置只接受本机写)。
  * - 每屏自己管草稿;「继续」时调用那一屏挂上来的 commitRef(关于你写 human/MEMORY.md),写失败停在这一屏报错。
- *   开始 / 外观即点即生效;团队那一屏在「开始使用」时一起写。「跳过引导」不写当前这一屏。
+ *   开始 / 外观即点即生效;团队那一屏在「开始使用」时一起写。「跳过引导」不写当前这一屏,并记下「电脑历史没问到」,
+ *   主页输入框下面之后再问一次(computerHistoryAskMark.ts;走完引导清掉)。
  * - 上次看引导记下的版本早于 2.13.8(或没记录)= 完整走一遍,原来走过的叫「欢迎回来」;之后的升级只看「已更新到 X」+ 这一版新增的屏。
  * 台架靠的名字:.ob-shell.ob-flow、data-step、data-mode、.ob-skip(「跳过引导」)。
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, CircleAlert, Loader2, RotateCcw } from 'lucide-react'
 import { useI18n } from '../i18n'
+import { useReducedMotionPref } from '../theme/motionTheme'
 import { PRODUCT } from '../product'
 import { APP_VERSION } from '../changelog'
 import { ChangelogEntries } from '../views/ChangelogView'
@@ -21,7 +23,8 @@ import { StartScreen, ImproveRow } from './onboarding/StartScreen'
 import { ThemeScreen } from './onboarding/ThemeScreen'
 import { YouScreen } from './onboarding/YouScreen'
 import { TeamScreen } from './onboarding/TeamScreen'
-import { openAgentCreation } from '../views/agentProfileNav'
+import { openAgentsSpace } from '../views/agentProfileNav'
+import { clearChAskOnFinish, markChAskSkipped } from './computerHistoryAskMark'
 import { useApp } from '../stores/appStore'
 import { connectionTarget } from '../services/engine/targets'
 import { applySyncChoices, type SyncKind } from '../services/syncSetup'
@@ -95,11 +98,13 @@ export const OnboardingWizard: React.FC<{
   useEffect(() => { void window.tangu?.authStatus?.().then((a) => setSignedIn(!!a?.loggedIn)).catch(() => {}) }, [])
   const [connected, setConnected] = useState(false)
   // 登录后的同步三个勾(10-20):真露出来过才在结束时按勾的开,没看到不替用户开(留给首登卡片问)。
-  // Agents 那个勾在旧同步里是账号总闸(= 所有 Agent),11-05 Agent 逐个选定案后缺省不勾(新同步里它不起作用,逐个选在蓬洲云 › 同步)
+  // Agents 那个勾在旧同步里是账号总闸(= 所有 Agent);11-05 Agent 逐个选定案后它在新同步里不起作用,11-06 第四轮从界面拿掉,
+  // 换成一行「在 蓬洲云 › 同步 里逐个选」。这里恒为 false,照旧传给 applySyncChoices(不替用户开旧总闸)。
   const [syncPick, setSyncPick] = useState<Record<SyncKind, boolean>>({ notes: true, agents: false, plugins: true })
   const syncSeen = useRef(false)
   const onSyncSeen = useCallback(() => { syncSeen.current = true }, [])
-  const addAgent = useRef(false)
+  /** 团队屏「在 Agents 里管理」:引导盖在最上面,点了先记下,引导关掉之后再去 Agents。 */
+  const openAgents = useRef(false)
   // 升级短引导:登录了、还没看过「帮助改进」的告知 → 「更新了什么」那屏底下补一行(挂载时读一次定死,看过之后不收起)
   const [improveNotice, setImproveNotice] = useState(false)
   useEffect(() => {
@@ -122,10 +127,15 @@ export const OnboardingWizard: React.FC<{
 
   // 结束只走一次:退场动效那半秒里引导还挂着,再按一次回车 / 再点一次按钮不能重复收尾。
   const finished = useRef(false)
-  const close = (reason: 'finish' | 'skip' = 'finish'): void => {
+  /** @param skipped 「跳过引导」(或最后一屏崩了点跳过):团队屏没写,电脑历史没问到 → 主页之后再问一次。
+   *  @param viaError 最后一屏崩了点的跳过:匿名遥测记 error-skip,不记成「跳过引导」。 */
+  const close = (skipped: boolean, viaError = false): void => {
     if (finished.current) return
     finished.current = true
-    tele.finish(reason, { signedIn, sync: signedIn && syncSeen.current ? syncPick : null, addedAgent: addAgent.current })
+    tele.finish(skipped && !viaError ? 'skip' : 'finish', { signedIn, sync: signedIn && syncSeen.current ? syncPick : null, addedAgent: openAgents.current })
+    if (order.includes('team')) {
+      if (skipped) markChAskSkipped(); else clearChAskOnFinish()
+    }
     try {
       localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
       localStorage.setItem(ONBOARDING_VERSION_KEY, version)
@@ -133,7 +143,7 @@ export const OnboardingWizard: React.FC<{
     // 后台去开,不挡收尾(第二台电脑要用户定的,蓬洲云「同步」页会挂着等)
     if (signedIn && syncSeen.current && window.remoteSync) void applySyncChoices(syncPick)
     onFinish()
-    if (addAgent.current) setTimeout(() => openAgentCreation(), 0)
+    if (openAgents.current) setTimeout(() => openAgentsSpace(), 0)
   }
   /** 写这一屏挂上来的选择;没写上就停在这一屏。 */
   const commit = async (): Promise<boolean> => {
@@ -153,7 +163,7 @@ export const OnboardingWizard: React.FC<{
   const forward = async (): Promise<void> => {
     if (saving || finished.current) return
     if (!(await commit())) return
-    if (last) close(); else go(idx + 1)
+    if (last) close(false); else go(idx + 1)
   }
   /** 点进度点跳回到过的屏:往前跳时先存当前这一屏,和点「继续」一样。 */
   const jump = async (target: number): Promise<void> => {
@@ -182,14 +192,14 @@ export const OnboardingWizard: React.FC<{
   const onConnected = useCallback((v: boolean) => setConnected(v), [])
   const onSignedIn = useCallback((v: boolean) => setSignedIn(v), [])
   const onBusyChange = useCallback((v: boolean) => setScreenBusy(v), [])
-  const onAddAgent = useCallback((v: boolean) => { addAgent.current = v }, [])
+  const onOpenAgents = useCallback((v: boolean) => { openAgents.current = v }, [])
 
   const primaryLabel = last
     ? t(brief ? (order.length === 1 ? 'onboarding.update.continue' : 'onboarding.update.finish') : 'ob3.getStarted')
     : step === 'start' && !connected ? t('ob3.skipConnect') : t('ob3.next')
   const hint = step === 'start' ? t('ob3.changeLater') : step === 'theme' ? t('ob3.theme.fontHint')
     : step === 'you' ? t('ob3.you.skipHint') : step === 'team' ? t('ob3.team.skipHint') : ''
-  const reduceMotion = typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+  const reduceMotion = useReducedMotionPref()
 
   const screen = (): React.ReactNode => {
     switch (step) {
@@ -206,7 +216,7 @@ export const OnboardingWizard: React.FC<{
         onThemeChange={onThemeChange} onSeedChange={onSeedChange} />
       case 'you': return <YouScreen resolveTarget={onboardingTarget} commitRef={commitRef} />
       case 'team': return <TeamScreen resolveTarget={onboardingTarget} commitRef={commitRef} signedIn={signedIn} fresh={!returning && !brief}
-        onAddAgent={onAddAgent} onBusyChange={onBusyChange} />
+        onOpenAgents={onOpenAgents} onBusyChange={onBusyChange} />
     }
   }
 
@@ -219,12 +229,12 @@ export const OnboardingWizard: React.FC<{
           disabled={locked || i === idx || i > furthest} onClick={() => void jump(i)} />)}
       </nav> : <span />}
       <div className="ob3-top-r"><LocaleToggle compact />
-        {order.length > 1 && <button type="button" className="ob-skip" disabled={locked} onClick={() => close('skip')}>{t('onboarding.nav.skip')}</button>}</div>
+        {order.length > 1 && <button type="button" className="ob-skip" disabled={locked} onClick={() => close(true)}>{t('onboarding.nav.skip')}</button>}</div>
     </header>
     <main className="ob3-main" ref={mainRef} key={step}>
       {/* 每屏各自兜底:某一屏渲染出错只换掉这一块,顶栏和底栏照常(走查续六 6.19) */}
       <ErrorBoundary fallback={(error, retry) => <StepErrorCard step={step} error={error} onRetry={retry}
-        onSkip={() => { tele.errorSkipped(); commitRef.current = null; if (last) close(); else go(idx + 1) }} />}>
+        onSkip={() => { tele.errorSkipped(); commitRef.current = null; if (last) close(true, true); else go(idx + 1) }} />}>
         {screen()}
       </ErrorBoundary>
     </main>

@@ -12,6 +12,7 @@ registerMessages({
   'sidebar.st.run': { zh: '正在运行', en: 'Running' },
   'sidebar.st.wait': { zh: '在等你回复', en: 'Waiting for your reply' },
   'sidebar.st.done': { zh: '做完了，还没看', en: 'Finished, not viewed yet' },
+  'sidebar.st.newCount': { zh: '{n} 条新消息', en: '{n} new messages' },
 })
 
 export const AttentionDot: React.FC<{ n: number; localOnly?: boolean }> = ({ n, localOnly }) => {
@@ -21,8 +22,12 @@ export const AttentionDot: React.FC<{ n: number; localOnly?: boolean }> = ({ n, 
 
 /** 会话行尾的状态(10-17 起状态从图标角挪到行尾):在跑 = 转圈;等你 = 警示色点带一圈淡晕;做完了没看 = 主题色淡点;看过了 = 不画。
  *  「等你」有两个来源:审批 / 询问(上面的 AttentionDot,带个数)和模型说它在等用户回答(awaiting_user)。 */
-export const StatusMark: React.FC<{ status: RowStatus; title?: string }> = ({ status, title }) => {
+export const StatusMark: React.FC<{ status: RowStatus; title?: string; count?: number }> = ({ status, title, count }) => {
   const { t } = useI18n()
   if (!status) return null
+  // Agent 主动发来没看的条数(私聊行):红色小胶囊带数,代替淡点
+  if (status === 'done' && count && count > 0) {
+    return <span className="t2s-st t2s-st-count" title={t('sidebar.st.newCount', { n: count })}>{count > 99 ? '99+' : count}</span>
+  }
   return <span className={`t2s-st ${status}`} title={title || t(`sidebar.st.${status}`)} />
 }

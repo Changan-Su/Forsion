@@ -116,7 +116,9 @@ export class FileSearchWorker {
       if (message.error) pending?.reject(new Error(message.error));
       else pending?.resolve(message.value);
     });
-    this.worker.on('error', (error) => { void this.stop(error); });
+    this.worker.on('error', (error) => {
+      void this.stop(error instanceof Error ? error : new Error(String(error)));
+    });
     this.worker.on('exit', (code) => {
       if (!this.stopped) void this.stop(new Error(`Search worker exited unexpectedly (${code})`));
     });
