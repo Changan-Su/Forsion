@@ -2494,6 +2494,13 @@ function openMiniWindow(opts?: MiniOpenOptions): MiniOpenResult {
   return { ok: true, reused: true }
 }
 
+/** ⌘⇧M / 托盘这类主进程自己发起的打开:没有渲染层替它提示,满了用系统通知说一声(不静默失败)。 */
+function openMiniFromShell(): void {
+  const r = openMiniWindow()
+  if (r.ok || !Notification.isSupported()) return
+  try { new Notification({ title: 'Forsion', body: mt('main.mini.limit', { n: r.limit }) }).show() } catch { /* 通知不可用 */ }
+}
+
 function createMini(target: MiniOpenOptions | undefined, key: string): MiniOpenResult {
   if (key !== VOICE_CALL_VIEW && liveMinis().filter((m) => m.key !== VOICE_CALL_VIEW).length >= MINI_WINDOW_LIMIT) {
     console.log('[win] mini limit reached', MINI_WINDOW_LIMIT, key)
@@ -4945,7 +4952,7 @@ app.whenReady().then(async () => {
   })
   // mini 全局快捷键(默认 ⌘/Ctrl+⇧+M;register 返回 false=被占用,吞掉不阻塞启动)。
   const MINI_ACCEL = MINI_ACCELERATOR // 托盘菜单「新建 Mini 对话」显示的是同一个
-  const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, () => { openMiniWindow() }) } catch { /* 快捷键冲突 */ } }
+  const registerMiniShortcut = (): void => { try { globalShortcut.register(MINI_ACCEL, openMiniFromShell) } catch { /* 快捷键冲突 */ } }
   if (!SANDBOX) registerMiniShortcut()
   if (!SANDBOX) globalHotkeyPause.add({ pause: () => globalShortcut.unregister(MINI_ACCEL), resume: registerMiniShortcut })
   if (PRODUCT.agentBackend && !SANDBOX) approvalDelivery.start() // P1-K3:订阅本机引擎待批流(引擎未就绪时 idle,ready 后自连)
@@ -4997,7 +5004,7 @@ app.whenReady().then(async () => {
     } : undefined,
     // 「随处说一句」= Mini 窗:已经开着就提到前面(热键是开合切换,菜单项不该把开着的 Mini 藏掉)
     newMini: {
-      open: () => { const m = recentMini(); if (m?.win.isVisible()) presentMini(m); else openMiniWindow() },
+      open: () => { const m = recentMini(); if (m?.win.isVisible()) presentMini(m); else openMiniFromShell() },
       accelerator: () => (globalShortcut.isRegistered(MINI_ACCEL) ? MINI_ACCEL : null),
     },
     // 「全部 Mini」:开着的每一扇(藏起来的也在),点一行叫到前面。名字是窗口标题(渲染层写胶囊上的名字)。
