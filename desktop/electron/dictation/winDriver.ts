@@ -109,7 +109,7 @@ function Invoke-Insert($req) {
   $bad = Test-Target $req; if ($bad) { return $bad }
   $mine = $null
   $data = New-Object System.Windows.Forms.DataObject
-  $data.SetData([System.Windows.Forms.DataFormats]::UnicodeText, $false, [string]$req.text)
+  $data.SetText([string]$req.text)
   # keep it out of Win+V history / cloud clipboard
   $data.SetData('CanIncludeInClipboardHistory', $false, (New-Object System.IO.MemoryStream (, [byte[]](0, 0, 0, 0))))
   $data.SetData('CanUploadToCloudClipboard', $false, (New-Object System.IO.MemoryStream (, [byte[]](0, 0, 0, 0))))
