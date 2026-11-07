@@ -832,6 +832,14 @@ declare global {
       /** 桌面级共享语音转写:音频(base64)→ 文本。任意功能复用;主进程本地/自带-key,不经引擎。 */
       /** timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要分段时间戳)。 */
       openVoiceInput?: import('../../shared/voiceInputStream').OpenVoiceInput
+      /** 全局语音输入的窄接口(官方「语音输入」插件用;macOS / Windows 桌面才有)。没有一条能往别的应用写字。 */
+      dictation?: {
+        state(): Promise<import('../../shared/dictation').DictationState>
+        attach(on: boolean): Promise<import('../../shared/dictation').DictationState>
+        setHotkey(hotkey: string): Promise<import('../../shared/dictation').DictationState>
+        allowAccessibility(): Promise<import('../../shared/dictation').DictationState>
+        onChange(cb: (s: import('../../shared/dictation').DictationState) => void): () => void
+      }
       transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string }): Promise<string>
       transcribeAudio?(req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps: true }): Promise<AsrTimedResult>
       /** 按路径转写(几十 MB 音轨不走 base64;主进程直接读盘)。 */

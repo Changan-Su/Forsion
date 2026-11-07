@@ -2617,6 +2617,9 @@ export interface AmadeusPlugin {
   iconUrl?: string
   /** Built-in plugins ship with the app and can't be uninstalled (only disabled). */
   builtin?: boolean
+  /** In-code built-ins only: switched off the first time a device sees the plugin (the user turns it on in Settings → Plugins);
+   *  after that the user's own on / off choice stands. For built-ins that claim something system-wide (a global shortcut). */
+  defaultOff?: boolean
   /** External source that the app seeds itself (electron/builtinPlugins.ts): shown as 「内置」, no uninstall,
    *  but still an external source for load/reload purposes (never set `builtin` for these). */
   preinstalled?: boolean

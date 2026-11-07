@@ -4,6 +4,7 @@ import { mergeSyncContent,withContentWriteLock,setOfflineContentOwner,agentConte
 import { asrBackendFor } from './asrSelection'
 import { qwenVoiceInputUrl, registerVoiceInputStream } from './voiceInputStream'
 import { voiceInputCloudUrl } from '../shared/voiceInputStream'
+import { registerDictation } from './dictation'
 import { installAmbientPalette } from './ambientPalette'
 import { unitConfigFace } from './unitConfigFace'
 import { registerStartupAppearance } from './startupAppearance'
@@ -4102,6 +4103,8 @@ app.whenReady().then(async () => {
     if (!cloudUrl || !creds.token) return null
     return { url: voiceInputCloudUrl(cloudUrl.replace(/\/+$/, '') + '/api', modelId, `desktop/${app.getVersion()}`), token: creds.token }
   })
+  // 全局语音输入(LCL 表面规范第四期):快捷键、语音胶囊(桌面作用域浮层)、往别的应用写字都在 electron/dictation/,这里只接线。
+  registerDictation({ isTrustedSender, globalHotkeyPause, sandbox: !!SANDBOX, dirname: __dirname, rendererUrl: process.env.ELECTRON_RENDERER_URL, userData: app.getPath('userData') })
 
   ipcMain.handle('asr:transcribe', async (_e, req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }) =>
     runTranscribe(Buffer.from(req?.audioBase64 || '', 'base64'), req || {}))

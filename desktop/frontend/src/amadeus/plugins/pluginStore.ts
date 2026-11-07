@@ -739,6 +739,29 @@ function writeDisabled(ids: string[]): void {
   }
 }
 
+/** 代码内注册的内置插件里 defaultOff 的那几个(全局语音输入这类会占系统级快捷键的):这台设备**第一次见到**时记成关,之后用户怎么拨就怎么算。
+ *  记「见过」而不是每次都关 —— 用户打开以后不能被下一次启动关回去。「见过」的清单读不出来 = 不知道:这次按关算,但什么都不写回。 */
+const DEFAULT_OFF_SEEN_KEY = 'amadeus.plugins.defaultOffSeen'
+export function seedDefaultOff(plugins: readonly AmadeusPlugin[], disabled: string[]): string[] {
+  const candidates = plugins.filter((p) => p.builtin && p.defaultOff).map((p) => p.id)
+  if (!candidates.length) return disabled
+  let seen: string[]
+  try {
+    const raw = localStorage.getItem(DEFAULT_OFF_SEEN_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : []
+    if (!Array.isArray(parsed)) throw new Error('bad')
+    seen = parsed.filter((x): x is string => typeof x === 'string')
+  } catch {
+    return [...disabled, ...candidates.filter((id) => !disabled.includes(id))]
+  }
+  const fresh = candidates.filter((id) => !seen.includes(id))
+  if (!fresh.length) return disabled
+  const next = [...disabled, ...fresh.filter((id) => !disabled.includes(id))]
+  writeDisabled(next)
+  try { localStorage.setItem(DEFAULT_OFF_SEEN_KEY, JSON.stringify([...seen, ...fresh])) } catch { /* ignore */ }
+  return next
+}
+
 /** 读持久化的禁用插件 id(直读 localStorage,不依赖 store 是否已 init)。
  *  供 userSpaces 在启动装载时过滤「被禁用插件的内嵌 Space」——那一刻插件宿主可能还没装配。 */
 function readOwed(key = OWED_KEY): Set<string> {
@@ -3072,7 +3095,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
 
     init(plugins = BUILTIN_PLUGINS) {
       if (get().initialized) return
-      set({ plugins: [...plugins], disabledIds: readDisabled(), initialized: true })
+      set({ plugins: [...plugins], disabledIds: seedDefaultOff(plugins, readDisabled()), initialized: true })
       reconcile()
     },
 
