@@ -161,7 +161,7 @@ async function main() {
     assert.equal(await sw('ui-zip').getAttribute('aria-checked'), 'false')
     await panel.waitForTimeout(300); await panel.screenshot({ path: path.join(OUT, `${lang}-detail-pinned-dark.png`), animations: 'disabled' })
     await panel.locator('.mk-detail-sidebar').screenshot({ path: path.join(OUT, `${lang}-sidebar-pinned-dark.png`), animations: 'disabled' })
-    await panel.getByRole('button', { name: labels.versions, exact: true }).click(); await panel.locator('[data-market-version="1.0.0"] .pv-tag').waitFor()
+    await panel.getByRole('button', { name: labels.versions, exact: true }).click(); await panel.locator('[data-market-version="1.0.0"] .pvb-tag').waitFor()
     assert.equal(await panel.locator('[data-market-version="1.0.0"] button').isDisabled(), true)
     await panel.waitForTimeout(300); await panel.screenshot({ path: path.join(OUT, `${lang}-versions-pinned-dark.png`), animations: 'disabled' })
     const before = downloads['ui-zip']
