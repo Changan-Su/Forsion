@@ -10,6 +10,8 @@
  */
 import { create } from 'zustand'
 import { OFFICIAL_SERIES, type AchievementDef, type SeriesDef } from './definitions'
+import { achievementCountKey } from '../../../shared/telemetryKeys'
+import { countTelemetry } from '../telemetrySend'
 
 const KEY = 'forsion_tangu_achievements'
 const COUNTER_CAP = 999_999
@@ -122,6 +124,9 @@ export function findAchievement(id: string): { a: AchievementDef; series: Series
 export function track(event: string, n = 1): void {
   try {
     if (!event || !(n > 0)) return
+    // 匿名遥测 app_counts(契约 §9):只有官方计数名单里的(plugin:* 不发),主进程按小时攒成一条。在封顶判断之前报:成就计数封顶了,用量照样在
+    const key = achievementCountKey(event)
+    if (key && n >= 1) countTelemetry(key, Math.floor(n))
     const s = useAchievements.getState()
     const before = s.counters[event] || 0
     const after = Math.min(before + Math.floor(n), COUNTER_CAP)

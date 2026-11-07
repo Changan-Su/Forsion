@@ -20,6 +20,7 @@ import { track } from './achievements/store'
 import { openLocalHtml } from './builtins'
 import { registerMessages, translate } from './i18n'
 import { isCoarsePointer } from './touch'
+import { countTelemetry } from './telemetrySend'
 
 // 本文件自己的文案(命名空间 `amnav.*`,勿与 i18n.tsx 的 `amadeus.*` 基础词条混用)。
 registerMessages({
@@ -51,6 +52,7 @@ const viewOpts = (o?: OpenWhere): OpenWhere | undefined => (o?.newTab ? { newTab
 /** focus:'body' = 打开后把焦点给正文(评审 G4-06:从快速查找 / 日记进入**已有**笔记后直接打字;
  *  Obsidian 同)。新建流不传它 —— 新建聚焦标题(requestTitleFocus)才是对的。粗指针不做:手机上点开一篇就弹软键盘。 */
 export async function openNote(path: string, opts?: OpenWhere & { reuseKey?: string; activate?: boolean; focus?: 'body' }): Promise<void> {
+  countTelemetry('openNote') // 匿名遥测只数「开了哪类文件」,路径不报
   await openNoteInner(path, opts)
   if (opts?.focus === 'body' && opts.activate !== false && !isCoarsePointer()) await focusBodyWhenReady(path)
 }
@@ -239,6 +241,7 @@ export async function revealLineWhenReady(path: string, line: { text: string; nt
 /** 打开独立 .db 数据库视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openNote 的简版)。 */
 export function openDb(dbPath: string, opts?: OpenWhere): void {
   actThrottled('view.open', { f: dbPath }, `view.open|${dbPath}`)
+  countTelemetry('openDatabase')
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-db' && p.params?.dbPath === dbPath)
@@ -252,6 +255,7 @@ export function openDb(dbPath: string, opts?: OpenWhere): void {
 /** 打开内置 PDF 阅读器(只读):已有认领该文件的 tab → 激活(带页号则广播跳页);否则主区打开。page = 1-based。 */
 export function openPdf(pdfPath: string, page?: number, opts?: OpenWhere & { quote?: string }): void {
   actThrottled('view.open', { f: pdfPath }, `view.open|${pdfPath}`)
+  countTelemetry('openPdf')
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-pdf' && p.params?.pdfPath === pdfPath)
@@ -270,6 +274,7 @@ export function openPdf(pdfPath: string, page?: number, opts?: OpenWhere & { quo
 /** 打开独立图片视图:已有认领该文件的 tab → 激活;否则主区打开(语义同 openPdf 的简版,无批注)。 */
 export function openImage(imagePath: string, opts?: { newTab?: boolean }): void {
   actThrottled('view.open', { f: imagePath }, `view.open|${imagePath}`)
+  countTelemetry('openOther')
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-image' && p.params?.imagePath === imagePath)
@@ -286,6 +291,7 @@ export function openImage(imagePath: string, opts?: { newTab?: boolean }): void 
  *  库外绝对路径的媒体请走 wsFileNav.openWsFile(见 ChatWikiLink 的 openMediaCitation 注释)。 */
 export function openMedia(vaultRel: string, loc?: { at: number; to?: number }, opts?: OpenWhere): void {
   actThrottled('view.open', { f: vaultRel }, `view.open|${vaultRel}`)
+  countTelemetry('openOther')
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-media' && p.params?.path === vaultRel)
@@ -315,6 +321,7 @@ export function openMedia(vaultRel: string, loc?: { at: number; to?: number }, o
 /** 打开独立白板视图(.excalidraw.md 画布,兼容 Obsidian Excalidraw 插件):已有认领该文件的 tab → 激活;否则主区打开。 */
 export function openDrawing(drawingPath: string, opts?: OpenWhere): void {
   actThrottled('view.open', { f: drawingPath }, `view.open|${drawingPath}`)
+  countTelemetry('openBoard')
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => p.params?.__type === 'amadeus-drawing' && p.params?.drawingPath === drawingPath)
@@ -330,6 +337,7 @@ export function openDrawing(drawingPath: string, opts?: OpenWhere): void {
  *  `unlocked` 只在「刚建好」时给 —— 新建完直接能摆,不必先点一下解锁。 */
 export function openDashboard(dashPath: string, opts?: OpenWhere & { unlocked?: boolean }): void {
   actThrottled('view.open', { f: dashPath }, `view.open|${dashPath}`)
+  countTelemetry('openDashboard')
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api
   const hit = api?.panels.find((p) => (p.params?.__type === 'dashboard' || p.params?.__type === 'amadeus-dashboard') && p.params?.dashPath === dashPath)
@@ -427,12 +435,14 @@ export function openFile(path: string, opts?: OpenWhere & { page?: number; quote
   if (/\.html?$/i.test(path)) {
     const ps0 = usePageStore.getState()
     const root = ps0.vaultSide === 'local' ? ps0.vaultRoot : null
-    if (root && openLocalHtml(`${root.replace(/\/+$/, '')}/${path.replace(/\\/g, '/').replace(/^\/+/, '')}`)) return
+    if (root && openLocalHtml(`${root.replace(/\/+$/, '')}/${path.replace(/\\/g, '/').replace(/^\/+/, '')}`)) { countTelemetry('openOther'); return }
   }
   if (!matchFileType(path)) {
+    countTelemetry('openOther')
     void amadeus.openVaultFile(path).catch(() => {})
     return
   }
+  countTelemetry('openPluginFile')
   const ps = usePageStore.getState()
   const norm = path.replace(/\\/g, '/')
   const known =

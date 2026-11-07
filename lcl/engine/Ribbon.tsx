@@ -12,7 +12,7 @@ import { AppWindow, ChevronsLeft, ChevronsRight, CircleMinus, Folder as FolderIc
 import type { LucideIcon } from 'lucide-react'
 import { useRibbonStore, useDotted, rankIds, reorderBase, unionOrder, moveTo, slotIndexAt, ribbonActions, isRibbonAutoHome, recentRoom, type RibbonZone, type RibbonFolder } from './ribbonRegistry'
 import { RIBBON_ICON_NAMES, iconByName } from './ribbonIcons'
-import { useCommandStore, openCommandPicker, addCommand, removeCommand } from './commandRegistry'
+import { useCommandStore, openCommandPicker, addCommand, removeCommand, runWithCommandSource } from './commandRegistry'
 import { useSpaceStore } from './spaceRegistry'
 import { setSpaceBarOrder, switchSpace } from './spaceTransition'
 import { openMainBesideThisTask } from './openBeside'
@@ -90,7 +90,7 @@ function CmdItemView({ cmd, expanded, overrideIcon }: { cmd: Command; expanded: 
       onMouseEnter={cmd.checked ? recheck : undefined}
       onMouseLeave={cmd.checked ? recheck : undefined}
       onClick={() => {
-        const r = cmd.run()
+        const r = runWithCommandSource('ribbon', () => cmd.run())
         if (!cmd.checked) return
         recheck()
         if (r && typeof (r as Promise<void>).then === 'function') void (r as Promise<void>).then(recheck, recheck)
@@ -674,7 +674,7 @@ export function Ribbon() {
         return
       }
       setFly(null) // 上一次按开的收纳夹浮层
-      if (e.kind === 'cmd') e.cmd.run()
+      if (e.kind === 'cmd') runWithCommandSource('ribbon', () => e.cmd.run())
       else if (e.id.startsWith('space:')) switchSpace(e.id.slice('space:'.length))
       else e.item.onClick?.()
     }

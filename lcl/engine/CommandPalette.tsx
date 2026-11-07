@@ -1,7 +1,7 @@
 /** 命令面板(Cmd/Ctrl+K):跑 commandRegistry 里的命令。移植自 Amadeus,改读引擎 store。 */
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useExitGhost } from './menuAnchor'
-import { commandHotkeyText, useCommandStore } from './commandRegistry'
+import { commandHotkeyText, runWithCommandSource, useCommandStore } from './commandRegistry'
 import { effectiveHotkey, formatHotkey, isMacPlatform, isPairHotkey } from './shortcutStore'
 import { fuzzyRank } from './fuzzy'
 import { label } from './types'
@@ -38,7 +38,7 @@ export function CommandPalette() {
     close() // 选取模式:close 会清 pickCb,故用 render 捕获的引用
     if (!c) return
     if (pickCb) pickCb(c.id)
-    else c.run()
+    else runWithCommandSource('palette', () => c.run())
   }
 
   const onKeyDown = (e: KeyboardEvent): void => {

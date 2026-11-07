@@ -9,6 +9,7 @@ import { Lock, Plus } from 'lucide-react'
 import { useI18n } from '../../i18n'
 import { getHumanDocument, saveHumanDocument, type HumanDocument } from '../../services/humanCollaboration'
 import type { EngineTarget } from '../../services/engine/targets'
+import { noteOnboarding } from './onboardingTelemetry'
 
 const TARGET = { kind: 'human', file: 'MEMORY.md' } as const
 
@@ -37,10 +38,11 @@ export function YouScreen({ resolveTarget, commitRef }: {
   useEffect(() => {
     commitRef.current = async () => {
       const { doc: d, text: next } = state.current
-      if (!d || next === d.content) return
+      if (!d || next === d.content) { if (d) noteOnboarding({ youWritten: false }); return }
       try {
         const r = await saveHumanDocument(await resolveTarget(), TARGET, next, d.version, 'Onboarding: About me')
         setDoc(r.document)
+        noteOnboarding({ youWritten: true }) // 匿名遥测只记写没写,内容不碰
       } catch (e) {
         if ((e as { status?: number }).status === 409) { await load(); setNote(t('ob3.you.conflict')) }
         throw e

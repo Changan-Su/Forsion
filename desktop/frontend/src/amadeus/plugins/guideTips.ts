@@ -15,6 +15,8 @@ import { useAchievements } from '../../achievements/store'
 import { usePopupQueue } from '../../stores/popupQueue'
 import { currentLocale, registerMessages } from '../../i18n'
 import { closeSpotlight, showTip, spotlightActive } from './guideSpotlight'
+import { sendTelemetry } from '../../telemetrySend'
+import { telemetryPluginRef, type TelemetryPluginLike } from '../../telemetryPluginId'
 
 export const GUIDE_DAILY_MAX = 3 // 全应用一天最多出几条
 export const OPEN_DELAY_MS = 2000 // 锚点出现后至少这么久才出(刚打开 View 时别抢)
@@ -206,6 +208,7 @@ function present(c: GuideCandidate): void {
     dock: isMobile(),
   }).then((r) => {
     if (current?.tip === tip) current = null
+    reportTip(pluginId, tip, r)
     if (r === 'ok') write(K.seen(pluginId, tip.id), today())
     else if (r === 'mute') write(K.muted(pluginId), today())
     // gone / replaced / closed / missing:不记,下回条件满足再出(受当天条数限制)
@@ -226,14 +229,28 @@ function ensureRunning(): void {
   timer = setInterval(tick, 1000)
 }
 
-/** 插件启用时登记(manifest 里消毒过的 tips);停用 / 重载时撤。 */
-export function registerGuideTips(pluginId: string, tips: PluginGuideTip[] | undefined): void {
+/** 匿名遥测 guide_tip(契约 §9):提示收起的结果;提示出着时用户做了那件事 → learned。只发公开插件(内置 / 商店)的提示,
+ *  插件 id 换成公开 id(侧载的整条不发,主进程再核一遍)。 */
+const pluginOf = new Map<string, TelemetryPluginLike>()
+function reportTip(pluginId: string, tip: PluginGuideTip, r: string): void {
+  try {
+    const ref = telemetryPluginRef(pluginOf.get(pluginId))
+    if (!ref.pluginOfficial) return
+    const result = r === 'closed' && learned(pluginId, tip) ? 'learned' : r
+    sendTelemetry('guide_tip', { ...ref, tipId: tip.id, result })
+  } catch { /* 遥测不影响提示 */ }
+}
+
+/** 插件启用时登记(manifest 里消毒过的 tips);停用 / 重载时撤。plugin = 插件记录(遥测换公开 id 用)。 */
+export function registerGuideTips(pluginId: string, tips: PluginGuideTip[] | undefined, plugin?: TelemetryPluginLike): void {
   if (!tips?.length) return unregisterGuideTips(pluginId)
   tipsOf.set(pluginId, tips)
+  if (plugin) pluginOf.set(pluginId, plugin)
   ensureRunning()
 }
 export function unregisterGuideTips(pluginId: string): void {
   tipsOf.delete(pluginId)
+  pluginOf.delete(pluginId)
   for (const k of [...requested]) if (k.startsWith(`${pluginId}\n`)) requested.delete(k)
   if (current?.pluginId === pluginId) current = null
 }

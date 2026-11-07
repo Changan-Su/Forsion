@@ -17,12 +17,42 @@ interface CommandState {
   setPaletteOpen(open: boolean): void
 }
 
+/** 命令是从哪儿被用户触发的(宿主遥测用:命令面板 / 快捷键 / Ribbon / Agent;别处一律 other)。 */
+export type CommandSource = 'palette' | 'hotkey' | 'ribbon' | 'agent' | 'other'
+let commandObserver: ((id: string, source: CommandSource) => void) | null = null
+let pendingSource: CommandSource | null = null
+/** 宿主挂一个观察者(Forsion 桌面的匿名遥测):用户从带来源的入口跑了一条命令时回调 (命令 id, 来源)。传 null 撤掉。
+ *  观察者抛错吞掉,绝不影响命令本身。 */
+export function setCommandObserver(fn: ((id: string, source: CommandSource) => void) | null): void { commandObserver = fn }
+/** 带着来源同步调用 fn:fn 里第一条被执行的已注册命令记这个来源(命令里再调别的命令不重复记)。没有来源的调用(代码里直接 run)不记。 */
+export function runWithCommandSource<T>(source: CommandSource, fn: () => T): T {
+  const prev = pendingSource
+  pendingSource = source
+  try { return fn() } finally { pendingSource = prev }
+}
+function noteRun(id: string): void {
+  const source = pendingSource
+  if (!source) return
+  pendingSource = null
+  try { commandObserver?.(id, source) } catch { /* 观察者出错不影响命令 */ }
+}
+/** 注册时把 run / invoke.run 包一层:被带来源的入口调到时先报给观察者,再照原样执行(this 照旧指向命令 / invoke 对象)。 */
+function observed(cmd: Command): Command {
+  const { id, run } = cmd
+  const invokeRun = cmd.invoke?.run
+  return {
+    ...cmd,
+    run(args) { noteRun(id); return run.call(this, args) },
+    ...(cmd.invoke && invokeRun ? { invoke: { ...cmd.invoke, run(args: Record<string, unknown>) { noteRun(id); return invokeRun.call(this, args) } } } : {}),
+  }
+}
+
 export const useCommandStore = create<CommandState>((set, get) => ({
   commands: [],
   paletteOpen: false,
   pickCb: null,
   addCommand: (cmd) =>
-    set((s) => ({ commands: [...s.commands.filter((c) => c.id !== cmd.id), cmd] })),
+    set((s) => ({ commands: [...s.commands.filter((c) => c.id !== cmd.id), observed(cmd)] })),
   removeCommand: (id) => set((s) => ({ commands: s.commands.filter((c) => c.id !== id) })),
   run: (id, args) => {
     const cmd = get().commands.find((c) => c.id === id)
@@ -94,7 +124,7 @@ export function installHotkeys(): () => void {
       const hk = effectiveHotkey(cmd) // 用户覆盖优先;'' = 已解绑
       if (hk && hotkeyMatches(hk, e)) {
         e.preventDefault()
-        cmd.run()
+        runWithCommandSource('hotkey', () => cmd.run())
         return
       }
     }

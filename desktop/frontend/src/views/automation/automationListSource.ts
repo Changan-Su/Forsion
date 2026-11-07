@@ -10,7 +10,7 @@ import { notifyApp } from '../../stores/notificationStore'
 import { windowKind } from '../../windowKind'
 import { useAutomation, type AutomationSel } from '../../stores/automationStore'
 import type { MuseTriggerInfo } from '../../types'
-import { deleteMuseTrigger, saveMuseTrigger, saveSpecialConfig, deleteAgentScheduleEntry, saveAgentScheduleEntry } from '../../services/backendService'
+import { deleteMuseTrigger, saveMuseTrigger, saveSpecialConfig, deleteAgentScheduleEntry, saveAgentScheduleEntry, museSettingTelemetry } from '../../services/backendService'
 import { actionsText, condText, isFinishedTrigger, ruleState, triggerToUpsert, type RuleState } from './lib'
 import './messages'
 import { homeTarget } from '../../services/engine/targets'
@@ -137,7 +137,7 @@ export const automationListSource: HostListSource = {
     }
     const config = state.specialCfg?.[sel.kind]
     return config ? [{ id: 'toggle', label: t(config.enabled ? 'automation.ux.pause' : 'automation.ux.enable'),
-      run() { void mutate(() => saveSpecialConfig(homeTarget(), { [sel.kind]: { ...config, enabled: !config.enabled } })) } }] : []
+      run() { void mutate(() => saveSpecialConfig(homeTarget(), { [sel.kind]: { ...config, enabled: !config.enabled } }).then((r) => { if (sel.kind === 'muse') museSettingTelemetry({ enabled: !config.enabled }); return r })) } }] : []
   },
 }
 

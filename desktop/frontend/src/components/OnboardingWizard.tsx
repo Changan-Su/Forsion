@@ -25,6 +25,7 @@ import { openAgentCreation } from '../views/agentProfileNav'
 import { useApp } from '../stores/appStore'
 import { connectionTarget } from '../services/engine/targets'
 import { applySyncChoices, type SyncKind } from '../services/syncSetup'
+import { createOnboardingTracker, onboardingMode } from './onboarding/onboardingTelemetry'
 import './onboardingMessages'
 import './onboarding/messages'
 import '../views/homepage.css'
@@ -73,6 +74,8 @@ export const OnboardingWizard: React.FC<{
   })
   /** 升级短引导(第一屏是「已更新到 X」)。早于 2.13.8 的老用户虽然也是升级进来,走的是完整引导。 */
   const brief = order[0] === 'welcome'
+  // 匿名遥测:每屏停留、往回跳、收尾方式,关掉时发一条(onboarding/onboardingTelemetry.ts)
+  const [tele] = useState(() => createOnboardingTracker(onboardingMode({ brief, updateMode, returning })))
   const [step, setStep] = useState<Step>(order[0])
   const [furthest, setFurthest] = useState(0)
   const idx = order.indexOf(step)
@@ -108,6 +111,7 @@ export const OnboardingWizard: React.FC<{
 
   // 换屏:清掉上一屏的错误,焦点落在这一屏的标题上(读屏器从标题读起)
   useEffect(() => {
+    tele.enter(step, order.indexOf(step))
     setSaveError('')
     const id = requestAnimationFrame(() => {
       mainRef.current?.querySelector<HTMLElement>('[data-ob-title]')?.focus({ preventScroll: true })
@@ -118,9 +122,10 @@ export const OnboardingWizard: React.FC<{
 
   // 结束只走一次:退场动效那半秒里引导还挂着,再按一次回车 / 再点一次按钮不能重复收尾。
   const finished = useRef(false)
-  const close = (): void => {
+  const close = (reason: 'finish' | 'skip' = 'finish'): void => {
     if (finished.current) return
     finished.current = true
+    tele.finish(reason, { signedIn, sync: signedIn && syncSeen.current ? syncPick : null, addedAgent: addAgent.current })
     try {
       localStorage.setItem(ONBOARDING_DISMISS_KEY, '1')
       localStorage.setItem(ONBOARDING_VERSION_KEY, version)
@@ -214,12 +219,12 @@ export const OnboardingWizard: React.FC<{
           disabled={locked || i === idx || i > furthest} onClick={() => void jump(i)} />)}
       </nav> : <span />}
       <div className="ob3-top-r"><LocaleToggle compact />
-        {order.length > 1 && <button type="button" className="ob-skip" disabled={locked} onClick={close}>{t('onboarding.nav.skip')}</button>}</div>
+        {order.length > 1 && <button type="button" className="ob-skip" disabled={locked} onClick={() => close('skip')}>{t('onboarding.nav.skip')}</button>}</div>
     </header>
     <main className="ob3-main" ref={mainRef} key={step}>
       {/* 每屏各自兜底:某一屏渲染出错只换掉这一块,顶栏和底栏照常(走查续六 6.19) */}
       <ErrorBoundary fallback={(error, retry) => <StepErrorCard step={step} error={error} onRetry={retry}
-        onSkip={() => { commitRef.current = null; if (last) close(); else go(idx + 1) }} />}>
+        onSkip={() => { tele.errorSkipped(); commitRef.current = null; if (last) close(); else go(idx + 1) }} />}>
         {screen()}
       </ErrorBoundary>
     </main>

@@ -126,6 +126,7 @@ import { MaskingSettingsSection } from './MaskingSettingsSection'
 import './settingsModal.css'
 import { LocalProviderImport } from './LocalProviderImport'
 import { connectionTarget, homeTarget, HOME_REF } from '../services/engine/targets'
+import { countTelemetry } from '../telemetrySend'
 
 // 本文件自带的文案片段(命名空间 `settingsmodal.*`,不与 i18n.generated.ts 的 `settings.*` 相交)。
 registerMessages({
@@ -1231,6 +1232,7 @@ export const SettingsModal: React.FC<{
     if (connCfgPending) return
     setTesting(true)
     const r = await testConnection(connectionTarget({ ...draft, ...connForm }))
+    countTelemetry(r.ok ? 'connTestOk' : r.authRejected ? 'connTestAuthRejected' : 'connTestFail') // 匿名遥测只数结果,文字与地址不报
     setTestResult(r.message)
     setTesting(false)
   }

@@ -13,7 +13,7 @@ import { ChevronRight, Clock, Cpu, History, ListChecks, Lock, PenLine, Plus, Shi
 import { useI18n } from '../../i18n'
 import { agentName } from '../../agentName'
 import { agentDescription } from '../builtinAgentDescriptions'
-import { getAgentsMeta, getSpecialConfig, listAgents, listModels, saveAgentDef, saveMuseIntro, saveSpecialConfig } from '../../services/backendService'
+import { getAgentsMeta, getSpecialConfig, listAgents, listModels, museSettingTelemetry, saveAgentDef, saveMuseIntro, saveSpecialConfig } from '../../services/backendService'
 import type { EngineTarget } from '../../services/engine/targets'
 import type { ModelsResponse, NormalAgentDef, SpecialAgentsConfig } from '../../types'
 import { SettingsSwitch } from '../SettingsPrimitives'
@@ -23,6 +23,7 @@ import { hasDesktopPermissions } from '../DesktopPermissions'
 import { INTRO_FOCUS, INTRO_WHEN, PROACTIVITY, FOCUS_TEXT_MAX, type Proactivity } from '../onboardingFlow'
 import { useApp } from '../../stores/appStore'
 import '../computerHistoryMessages'
+import { noteOnboarding } from './onboardingTelemetry'
 
 const MUSE_FALLBACK = { name: 'Muse', nameZh: '卜算子', nameEn: 'Muse', slug: 'muse' }
 type When = typeof INTRO_WHEN[number]
@@ -118,6 +119,7 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
     commitRef.current = async () => {
       const s = state.current, b = base.current
       if (!b) return // 没读到现状就不写:读失败 ≠ 缺省
+      noteOnboarding({ museOn: s.museOn, ...(s.chDraft !== null ? { computerHistoryOn: s.chDraft } : {}) }) // 匿名遥测:这一屏的两个开关
       onBusyChange(true)
       const errors: string[] = []
       const tryIt = async (fn: () => Promise<unknown>, onOk: () => void): Promise<void> => {
@@ -131,7 +133,7 @@ export function TeamScreen({ resolveTarget, commitRef, signedIn, fresh, onAddAge
         const hist = s.historianOn !== b.historian
         if (Object.keys(musePatch).length || hist) {
           await tryIt(() => saveSpecialConfig(target, { ...(Object.keys(musePatch).length ? { muse: musePatch } : {}), ...(hist ? { historian: { enabled: s.historianOn } } : {}) }),
-            () => { b.museEnabled = s.museOn; b.modelId = s.modelId; b.historian = s.historianOn })
+            () => { if ('enabled' in musePatch) museSettingTelemetry({ enabled: s.museOn }); b.museEnabled = s.museOn; b.modelId = s.modelId; b.historian = s.historianOn })
         }
         // 只带改过的;一个都没改也发一次(空的):记下「第一次见面已经答过」,私聊里不再弹那张卡,别的什么都不动。
         // 关注那两项写的是记忆:写成过一次的同一份不再重发(重试不重复记)。

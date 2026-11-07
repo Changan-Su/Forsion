@@ -10,6 +10,7 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useS
 import { broadcastPrefs } from './uiPrefsBus'
 import { LOCALE_KEY as LS_KEY } from './types'
 import { cloudApiBaseOf } from './services/engine/cloudBase'
+import { settingTelemetry } from './telemetrySend'
 
 export type Locale = 'zh' | 'en'
 
@@ -3792,7 +3793,12 @@ const I18nContext = createContext<I18nValue | null>(null)
 // 模块级出口:供非组件代码(如引擎 ribbon 的 onClick)切换语言。Provider 挂载时登记其 setLocale。
 let _locale: Locale = resolveInitialLocale()
 let _setLocale: ((l: Locale) => void) | null = null
-export function cycleLocale(): void { _setLocale?.(_locale === 'zh' ? 'en' : 'zh') }
+export function cycleLocale(): void {
+  if (!_setLocale) return
+  const next: Locale = _locale === 'zh' ? 'en' : 'zh'
+  settingTelemetry('ui.language', next) // 命令面板 / Ribbon 的「切换语言」= 用户手选(匿名遥测设置改动)
+  _setLocale(next)
+}
 /** 当前语言(模块级快照):供非组件代码(如用户 Space 的 name 懒求值)读取。 */
 export function currentLocale(): Locale { return _locale }
 

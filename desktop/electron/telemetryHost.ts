@@ -9,23 +9,36 @@
  */
 
 import type { CloudHost, HostTelemetryEvent } from './cloudHost'
+import { COMMAND_SOURCES, classifyUpdateError, isAppCountKey, settingChange, type AppCountKey } from '../shared/telemetryKeys'
 
 export type { HostTelemetryEvent }
 /** CloudHost.telemetry 接缝本身(声明在 cloudHost.ts,Extend host.d.ts 镜像那一份)。 */
 export type HostTelemetry = NonNullable<CloudHost['telemetry']>
+type HostEventName = HostTelemetryEvent['event']
 
-/** 渲染层经 preload telemetryReport 报上来的种类;别的一律丢。 */
-export type RendererReportKind = 'crash' | 'feature' | 'longtasks'
+export { RENDERER_REPORT_KINDS, type RendererReportKind } from '../shared/telemetryKeys'
 
 export const BUFFER_CAP = 50
 /** 跨 IPC 的原文封顶(Extend 再按白名单截到 300 / 4000)。 */
 export const STACK_CAP = 8000
-/** 每小时每类事件的上限:渲染层报错死循环 / 来回切 View 不能把队列灌满。超出的直接丢。 */
-export const HOURLY_CAP: Record<'crash' | 'feature', number> = { crash: 60, feature: 600 }
+/** 汇总事件(perf / app_counts / command_use)本身按小时一条,不设上限;其余每小时每类的上限:渲染层报错死循环 / 来回切 View 不能把队列灌满。超出的直接丢。 */
+type CappedEvent = Exclude<HostEventName, 'perf' | 'app_counts' | 'command_use'>
+export const HOURLY_CAP: Record<CappedEvent, number> = {
+  crash: 60, feature: 600, plugin_install: 120, plugin_deps: 60, plugin_lifecycle: 200, plugin_load: 200, update: 60, onboarding: 10, guide_tip: 60,
+}
+/** 一小时里最多攒多少个不同的 (命令 id, 来源):超出的新组合这一小时不记(已记下的照常累加)。 */
+export const COMMAND_PAIR_CAP = 300
+/** 渲染层一次 count 最多加多少(成就 track 可以一次加 n)。 */
+const COUNT_STEP_MAX = 1000
 const INT_MAX = 2147483647
 /** 白名单 id 类型:^[A-Za-z0-9._:/@+-]{1,max}$。 */
 const ID_RE = /^[A-Za-z0-9._:/@+-]+$/
+/** 能原样发的插件 id:内置插件 id、商店条目 id(UUID)、market-<UUID> 目录名都是 kebab 小写。 */
 const PLUGIN_ID_RE = /^[a-z0-9][a-z0-9-]{0,79}$/
+/** 命令 id:内置命令是静态的 kebab / 点分串;插件命令由渲染层换成 amadeus:<公开插件 id>:<命令> 或 plugin:local。 */
+const COMMAND_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,79}$/
+/** 插件清单里提示的 id(shared/amadeus/ipc.ts 的 TIP_ID)。 */
+const TIP_ID_RE = /^[a-z0-9][a-z0-9-]{0,47}$/
 
 const PROCESS_REASONS = ['crashed', 'oom', 'killed', 'abnormal-exit', 'launch-failed', 'integrity-failure'] as const
 
@@ -44,13 +57,15 @@ function errorName(v: unknown): string | undefined {
 }
 const compact = (o: Record<string, unknown>): Record<string, unknown> =>
   Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined))
+const oneOf = <T extends string>(v: unknown, values: readonly T[]): T | undefined => (typeof v === 'string' && (values as readonly string[]).includes(v) ? v as T : undefined)
+const bool = (v: unknown): boolean | undefined => (typeof v === 'boolean' ? v : undefined)
 
 /**
- * 插件 id 能不能原样发:只有内置 / 商店的才行(渲染层按插件记录判,official = builtin / preinstalled / market-<uuid> 且不是开发副本),
- * 侧载的、看不出来源的、长得不合白名单的一律 `local` —— 用户自己的插件名本身就可能是隐私。
+ * 插件 id 能不能原样发(契约 §9):渲染层先按插件记录换好 —— 商店装的(market-<UUID> 目录或作者自起名的老条目)换成**商店条目 id**,
+ * 内置 / 预装的给插件 id,开发副本 / 沙箱 / 本地路径给 local —— 并带 official = true。这里再核一遍:official 必须是 true 本身、
+ * 形状必须是 kebab 小写短串(商店条目 id 是 UUID 也合),否则一律 `local` —— 用户自己的插件名本身就可能是隐私。
  */
 export function publicPluginId(id: unknown, official: unknown, max = 80): string {
-  // 插件 id 的形状比白名单的 id 类型更窄(kebab-case,同 shared/products.ts 的 SAFE_PLUGIN_ID;market-<uuid> 也合)
   return official === true && typeof id === 'string' && id.length <= max && PLUGIN_ID_RE.test(id) ? id : 'local'
 }
 
@@ -94,59 +109,178 @@ export function processGoneProps(proc: 'renderer' | 'other', details: { reason?:
   return compact({ process: proc, reason, exitCode: int(details.exitCode), errorName: errorName(details.type), uptimeS: int(uptimeS) })
 }
 
+// ── update(契约 §9):安装包、引擎 npm 热更新、界面热更新退回、内置插件 npm 更新、首启预取。报错原文只拿来归类,不转发 ──
+export type UpdateTarget = 'app' | 'engine' | 'ui' | 'builtin-plugin' | 'store-plugin' | 'first-boot-prefetch'
+/** 内置插件的 id 也走插件 id 的形状;引擎那条不带 id。 */
+export function updateProps(target: UpdateTarget, outcome: string, o: { id?: string; error?: unknown } = {}): Record<string, unknown> {
+  return compact({
+    target,
+    id: o.id !== undefined && PLUGIN_ID_RE.test(o.id) ? o.id : undefined,
+    outcome,
+    errorClass: outcome === 'error' ? classifyUpdateError(o.error) : undefined,
+  })
+}
+/** 引擎 / 内置插件那一路(shared/corePlugins 的 CorePluginUpdate)的状态 → update props;中间态(checking / downloading)与 dev 不报。 */
+export function coreUpdateProps(st: { id: string; phase: string; error?: string }, engineId: string): Record<string, unknown> | null {
+  const outcome = st.phase === 'current' ? 'current' : st.phase === 'staged' ? 'staged' : st.phase === 'incompatible' ? 'incompatible' : st.phase === 'error' ? 'error' : null
+  if (!outcome) return null
+  return st.id === engineId ? updateProps('engine', outcome, { error: st.error }) : updateProps('builtin-plugin', outcome, { id: st.id, error: st.error })
+}
+/** 安装包更新器(updater.ts)的阶段 → update props:只报有结论的几步。 */
+export function appUpdateProps(st: { phase: string; error?: string }): Record<string, unknown> | null {
+  const outcome = st.phase === 'available' ? 'available' : st.phase === 'not-available' ? 'not-available' : st.phase === 'downloaded' ? 'staged' : st.phase === 'error' ? 'error' : null
+  return outcome ? updateProps('app', outcome, { error: st.error }) : null
+}
+
+const INSTALL_ENTRIES = ['store', 'chat-card', 'muse-card', 'plugin-onboarding', 'deps', 'other'] as const
+const INSTALL_KINDS = ['plugin', 'skill', 'agent', 'space', 'theme', 'amadeus-plugin', 'other'] as const
+const INSTALL_SOURCES = ['github', 'npm', 'zip', 'other'] as const
+const INSTALL_STAGES = ['resolve', 'download', 'install', 'activate', 'done'] as const
+const INSTALL_ERRORS = ['timeout', 'network', 'http', 'too-large', 'not-zip', 'integrity', 'identity', 'version', 'min-app', 'platform', 'deps', 'builtin', 'activate', 'disk', 'other'] as const
+const BLOCKED_REASONS = ['min-app', 'api', 'invalid', 'dev-fileext', 'deps', 'other'] as const
+const ONBOARDING_BOOLS = ['signedIn', 'syncNotes', 'syncAgents', 'syncPlugins', 'addedAgent', 'museOn', 'computerHistoryOn', 'youWritten'] as const
+const ONBOARDING_INTS = ['screens', 'backJumps', 'msStart', 'msTheme', 'msYou', 'msTeam', 'msWelcome'] as const
+
+/** 渲染层报来的插件引用(pluginId + pluginOfficial,渲染层已按 §9 换成商店条目 id / 内置 id)→ 能发的 id。 */
+const pluginRef = (p: Record<string, unknown>, max = 80): string => publicPluginId(p.pluginId, p.pluginOfficial, max)
+
+export type ShapedReport =
+  | { event: Exclude<HostEventName, 'perf' | 'update' | 'app_counts' | 'command_use'>; props: Record<string, unknown> }
+  | { longTasks: number }
+  | { count: AppCountKey; n: number }
+  | { command: { id: string; source: string } }
+
 /**
  * 渲染层报上来的一条 → 契约形状。返回:
  *  - `{ event, props }`:要转发的事件;
  *  - `{ longTasks }`:长任务计数,由宿主攒进本小时的 perf;
+ *  - `{ count, n }` / `{ command }`:计数,由宿主按小时攒成 app_counts / command_use;
  *  - `null`:种类不对 / 形状不对,丢掉。
- * 渲染层是受信的(isTrustedSender 先挡过),这里防的是无界输入和 id 外泄,不防恶意。
+ * 渲染层是受信的(isTrustedSender 先挡过),这里防的是无界输入和 id 外泄,不防恶意。每个字段按白名单的类型过,多出来的字段一律不带。
  */
-export function shapeRendererReport(kind: unknown, raw: unknown):
-  | { event: 'crash' | 'feature'; props: Record<string, unknown> }
-  | { longTasks: number }
-  | null {
+export function shapeRendererReport(kind: unknown, raw: unknown): ShapedReport | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const p = raw as Record<string, unknown>
-  if (kind === 'longtasks') {
-    const n = int(p.count)
-    return n ? { longTasks: n } : null
-  }
-  if (kind === 'crash') {
-    const reason = p.reason === 'rejection' ? 'rejection' : 'exception'
-    const props = compact({
-      process: 'renderer',
-      reason,
-      errorName: errorName(p.errorName),
-      stack: cap(p.stack, STACK_CAP), // 报错原文不转发,同 crashFromError
-      // 插件宿主分得出是哪个插件时才带;同样只给内置 / 商店的 id
-      pluginId: p.pluginId === undefined ? undefined : publicPluginId(p.pluginId, p.pluginOfficial, 64),
-    })
-    return props.stack || props.errorName ? { event: 'crash', props } : null
-  }
-  if (kind === 'feature') {
-    if (p.name === 'space_open') {
-      // origin 由渲染层判(内置 / 插件 / 用户自建 Space 的账只有它有):用户自建的连 id 都不发
-      if (p.origin === 'user') return { event: 'feature', props: { name: 'space_open', kind: 'custom' } }
-      if (p.origin === 'plugin') return { event: 'feature', props: { name: 'space_open', kind: 'plugin', id: publicPluginId(p.pluginId, p.pluginOfficial) } }
-      if (p.origin === 'builtin') {
-        const space = safeId(p.space, 60)
-        return space ? { event: 'feature', props: { name: 'space_open', kind: space } } : null
+  switch (kind) {
+    case 'longtasks': {
+      const n = int(p.count)
+      return n ? { longTasks: n } : null
+    }
+    case 'crash': {
+      const reason = p.reason === 'rejection' ? 'rejection' : 'exception'
+      const props = compact({
+        process: 'renderer',
+        reason,
+        errorName: errorName(p.errorName),
+        stack: cap(p.stack, STACK_CAP), // 报错原文不转发,同 crashFromError
+        // 插件宿主分得出是哪个插件时才带;同样只给内置 / 商店的 id
+        pluginId: p.pluginId === undefined ? undefined : pluginRef(p, 64),
+      })
+      return props.stack || props.errorName ? { event: 'crash', props } : null
+    }
+    case 'feature': return shapeFeature(p)
+    case 'setting': {
+      // 设置改动:键不在契约 §9 的表里、值归不了档,整条丢
+      const c = settingChange(p.key, p.value)
+      return c ? { event: 'feature', props: { name: 'setting_change', key: c.key, value: c.value } } : null
+    }
+    case 'count': {
+      if (!isAppCountKey(p.key)) return null
+      const n = p.n === undefined ? 1 : int(p.n)
+      return n ? { count: p.key, n: Math.min(n, COUNT_STEP_MAX) } : null
+    }
+    case 'command': {
+      const id = typeof p.id === 'string' && COMMAND_ID_RE.test(p.id) && !looksLikeSecret(p.id) ? p.id : undefined
+      return id ? { command: { id, source: oneOf(p.source, COMMAND_SOURCES) ?? 'other' } } : null
+    }
+    case 'plugin_install': {
+      const outcome = oneOf(p.outcome, ['done', 'error', 'canceled'] as const)
+      if (!outcome || p.pluginId === undefined) return null
+      return {
+        event: 'plugin_install',
+        props: compact({
+          id: pluginRef(p),
+          entry: oneOf(p.entry, INSTALL_ENTRIES) ?? 'other',
+          kind: oneOf(p.kind, INSTALL_KINDS) ?? 'other',
+          source: oneOf(p.source, INSTALL_SOURCES) ?? 'other',
+          stage: oneOf(p.stage, INSTALL_STAGES),
+          outcome,
+          errorClass: outcome === 'error' ? oneOf(p.errorClass, INSTALL_ERRORS) ?? 'other' : undefined,
+          durationMs: int(p.durationMs),
+          sizeKb: int(p.sizeKb),
+          restart: bool(p.restart),
+        }),
       }
-      return null
     }
-    if (p.name === 'view_open') {
-      const view = safeId(p.view, 60)
-      if (!view) return null
-      // 插件视图的类型是 plugin:<插件 id>:<视图 id>,原样发就漏了侧栏插件的 id:只记 plugin,插件本身走 plugin_open
-      return { event: 'feature', props: { name: 'view_open', kind: view.startsWith('plugin:') ? 'plugin' : view } }
+    case 'plugin_deps': {
+      const outcome = oneOf(p.outcome, ['ready', 'not-ready', 'not-running', 'failed'] as const)
+      return outcome ? { event: 'plugin_deps', props: compact({ total: int(p.total), installed: int(p.installed), failedAt: int(p.failedAt), outcome }) } : null
     }
-    if (p.name === 'plugin_open') {
-      if (p.pluginId === undefined) return null
-      return { event: 'feature', props: { name: 'plugin_open', id: publicPluginId(p.pluginId, p.pluginOfficial) } }
+    case 'plugin_lifecycle': {
+      const action = oneOf(p.action, ['uninstall', 'enable', 'disable', 'blocked'] as const)
+      if (!action || p.pluginId === undefined) return null
+      return {
+        event: 'plugin_lifecycle',
+        props: compact({
+          id: pluginRef(p),
+          action,
+          blockedReason: action === 'blocked' ? oneOf(p.blockedReason, BLOCKED_REASONS) ?? 'other' : undefined,
+          daysSinceInstall: int(p.daysSinceInstall),
+        }),
+      }
+    }
+    case 'plugin_load': {
+      const outcome = oneOf(p.outcome, ['ok', 'error'] as const)
+      if (!outcome || p.pluginId === undefined) return null
+      return { event: 'plugin_load', props: compact({ id: pluginRef(p), outcome, activateMs: int(p.activateMs) }) }
+    }
+    case 'onboarding': {
+      const outcome = oneOf(p.outcome, ['finish', 'skip', 'error-skip'] as const)
+      const mode = oneOf(p.mode, ['full', 'returning', 'brief', 'update'] as const)
+      if (!outcome || !mode) return null
+      const props: Record<string, unknown> = { mode, outcome }
+      for (const k of ONBOARDING_INTS) props[k] = int(p[k])
+      for (const k of ONBOARDING_BOOLS) props[k] = bool(p[k])
+      return { event: 'onboarding', props: compact(props) }
+    }
+    case 'guide_tip': {
+      // 只发公开插件(内置 / 商店)的提示:侧载插件的提示 id 是作者私起的
+      const pluginId = pluginRef(p)
+      const tipId = typeof p.tipId === 'string' && TIP_ID_RE.test(p.tipId) ? p.tipId : undefined
+      const result = oneOf(p.result, ['ok', 'learned', 'mute', 'gone', 'missing', 'replaced', 'closed'] as const)
+      return pluginId !== 'local' && tipId && result ? { event: 'guide_tip', props: { pluginId, tipId, result } } : null
+    }
+    default: return null
+  }
+}
+
+/** 长得像密钥 / 一长串十六进制的 id 不收(Extend 与 server 照样会丢,这里先挡,免得占掉每小时的配额)。 */
+function looksLikeSecret(v: string): boolean {
+  return /[0-9a-f]{32,}/i.test(v) || /[A-Za-z0-9_-]{40,}/.test(v) || /sk-[A-Za-z0-9_-]{10,}/.test(v)
+}
+
+function shapeFeature(p: Record<string, unknown>): ShapedReport | null {
+  if (p.name === 'space_open') {
+    // origin 由渲染层判(内置 / 插件 / 用户自建 Space 的账只有它有):用户自建的连 id 都不发
+    if (p.origin === 'user') return { event: 'feature', props: { name: 'space_open', kind: 'custom' } }
+    if (p.origin === 'plugin') return { event: 'feature', props: { name: 'space_open', kind: 'plugin', id: pluginRef(p) } }
+    if (p.origin === 'builtin') {
+      const space = safeId(p.space, 60)
+      return space ? { event: 'feature', props: { name: 'space_open', kind: space } } : null
     }
     return null
   }
-  return null
+  if (p.name === 'view_open') {
+    const view = safeId(p.view, 60)
+    if (!view) return null
+    // 插件视图的类型是 plugin:<插件 id>:<视图 id>,原样发就漏了侧栏插件的 id:只记 plugin,插件本身走 plugin_open
+    return { event: 'feature', props: { name: 'view_open', kind: view.startsWith('plugin:') ? 'plugin' : view } }
+  }
+  if (p.name === 'plugin_open') {
+    if (p.pluginId === undefined) return null
+    return { event: 'feature', props: { name: 'plugin_open', id: pluginRef(p) } }
+  }
+  return null // setting_change 走 setting 种类(值要先归档)
 }
 
 /** FORSION_TELEMETRY:force 让 dev / 台架也算正式版(本机联调);off 永远不算;其余只认「打包版且不是台架 / 插件沙箱」。 */
@@ -170,21 +304,38 @@ export function createTelemetryHost(o: TelemetryHostOptions) {
   const subscribers = new Set<(ev: HostTelemetryEvent) => void>()
   let buffer: HostTelemetryEvent[] | null = []
   let longTasks = 0
-  const sent = { crash: 0, feature: 0 }
+  const sent: Partial<Record<CappedEvent, number>> = {}
+  /** 本小时的 app_counts 增量(只有非零的键)。 */
+  let counts = new Map<AppCountKey, number>()
+  /** 本小时的命令使用:`<来源>\n<id>` → 次数。 */
+  let commands = new Map<string, number>()
+  /** plugin_load 同一插件同一次启动只报一次;被挡下的(blocked)同一插件同一原因也只报一次。local 不去重(分不出是哪个)。 */
+  const loadedOnce = new Set<string>()
+  const blockedOnce = new Set<string>()
 
   const deliver = (ev: HostTelemetryEvent): void => {
     for (const cb of subscribers) {
       try { cb(ev) } catch (e) { o.log?.(`[telemetry] subscriber threw: ${(e as Error)?.message || e}`) }
     }
   }
-  const emit = (event: HostTelemetryEvent['event'], props: Record<string, unknown>): void => {
-    if (event !== 'perf') {
-      if (sent[event] >= HOURLY_CAP[event]) return
-      sent[event]++
+  const emit = (event: HostEventName, props: Record<string, unknown>): void => {
+    if (event !== 'perf' && event !== 'app_counts' && event !== 'command_use') {
+      const n = sent[event] ?? 0
+      if (n >= HOURLY_CAP[event]) return
+      sent[event] = n + 1
     }
     const ev: HostTelemetryEvent = { event, ts: new Date(now()).toISOString(), props }
     if (buffer) { if (buffer.length < BUFFER_CAP) buffer.push(ev); return } // 留最早的:启动耗时 / 启动期崩溃最要紧
     deliver(ev)
+  }
+  const count = (key: AppCountKey, n = 1): void => {
+    counts.set(key, Math.min(INT_MAX, (counts.get(key) ?? 0) + n))
+  }
+  const command = (id: string, source: string): void => {
+    const k = `${source}\n${id}`
+    const cur = commands.get(k)
+    if (cur === undefined && commands.size >= COMMAND_PAIR_CAP) return
+    commands.set(k, Math.min(INT_MAX, (cur ?? 0) + 1))
   }
 
   const seam: HostTelemetry = {
@@ -208,19 +359,47 @@ export function createTelemetryHost(o: TelemetryHostOptions) {
   return {
     seam,
     emit,
+    /** 主进程自己的计数(订阅登录、自带 key 增删等落在 IPC 里的);和渲染层报的 count 攒在一起。 */
+    count(key: AppCountKey, n = 1): void { if (isAppCountKey(key) && Number.isInteger(n) && n > 0) count(key, Math.min(n, COUNT_STEP_MAX)) },
+    /** 主进程这边的设置改动(电脑历史开关、更新通道):同渲染层 setting 一样只收契约表里的键、值先归档。 */
+    setting(key: string, value: unknown): void {
+      const c = settingChange(key, value)
+      if (c) emit('feature', { name: 'setting_change', key: c.key, value: c.value })
+    },
     /** preload telemetryReport 的落点(调用方先过 isTrustedSender)。 */
     report(kind: unknown, props: unknown): void {
       const shaped = shapeRendererReport(kind, props)
       if (!shaped) return
-      if ('longTasks' in shaped) longTasks = Math.min(INT_MAX, longTasks + shaped.longTasks)
-      else emit(shaped.event, shaped.props)
+      if ('longTasks' in shaped) { longTasks = Math.min(INT_MAX, longTasks + shaped.longTasks); return }
+      if ('count' in shaped) { count(shaped.count, shaped.n); return }
+      if ('command' in shaped) { command(shaped.command.id, shaped.command.source); return }
+      const id = shaped.props.id
+      if (shaped.event === 'plugin_load' && id !== 'local') {
+        if (loadedOnce.has(String(id))) return
+        loadedOnce.add(String(id))
+      }
+      if (shaped.event === 'plugin_lifecycle' && shaped.props.action === 'blocked' && id !== 'local') {
+        const k = `${id}\n${shaped.props.blockedReason}`
+        if (blockedOnce.has(k)) return
+        blockedOnce.add(k)
+      }
+      emit(shaped.event, shaped.props)
+    },
+    /** 把本小时攒下的计数发出去:一条 app_counts(只带非零的键)+ 每个 (命令, 来源) 一条 command_use。整点与退出前各调一次;没攒到就什么都不发。 */
+    flushCounts(): void {
+      if (counts.size) emit('app_counts', Object.fromEntries(counts))
+      for (const [k, n] of commands) {
+        const i = k.indexOf('\n')
+        emit('command_use', { id: k.slice(i + 1), source: k.slice(0, i), n })
+      }
+      counts = new Map()
+      commands = new Map()
     },
     /** 每小时一次:读走本小时的长任务数并清零,同时重置每小时的事件上限。 */
     takeHour(): { longTasks: number } {
       const n = longTasks
       longTasks = 0
-      sent.crash = 0
-      sent.feature = 0
+      for (const k of Object.keys(sent) as CappedEvent[]) sent[k] = 0
       return { longTasks: n }
     },
   }

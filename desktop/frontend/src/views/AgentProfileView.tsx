@@ -33,6 +33,7 @@ import { homeTarget } from '../services/engine/targets'
 import { track } from '../achievements/store'
 import { agentName, hasHan } from '../agentName'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
+import { countTelemetry } from '../telemetrySend'
 
 type Section = 'config' | 'skills' | 'mcp' | 'growth' | 'schedule' | 'human'
 // 成长 = Agent 随时间积累的两层:记忆(它知道什么)+ 进化(HARNESS 工作笔记:它怎么做事)。09-19 从两个一级标签并成一个,
@@ -598,7 +599,7 @@ function AgentProfile({ agent, compact = false, sessionId, rewriteSessionId, evo
       <div className="profile-section-enter">
       {section === 'config' && <>
         {s.session && <section className="agent-current-session"><small>{t('agentProfile.session')}</small><strong>{s.session.title}</strong>{(s.session.project_name || s.config?.cwd) && <span>{s.session.project_name || s.config?.cwd}</span>}
-          <ProfileModelField models={s.models || []} value={s.session.model_id || ''} label={t('agentProfile.sessionModel')} onChange={(model) => useApp.getState().setSessionModel(model, sessionId, false)} />
+          <ProfileModelField models={s.models || []} value={s.session.model_id || ''} label={t('agentProfile.sessionModel')} onChange={(model) => { countTelemetry('modelSwitchUser'); useApp.getState().setSessionModel(model, sessionId, false) }} />
           <small>{t('agentProfile.sessionModelHint')}</small>
         </section>}
         <ProfileGroup title={t('agentProfile.quickSettings')} hint={t('agentProfile.defaultsHint')}>{runSettings}</ProfileGroup>

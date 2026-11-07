@@ -4,36 +4,33 @@
  *  - 崩溃:window error / unhandledrejection(原文照报,Extend 先 sanitize;主进程封顶长度)。
  *  - 卡顿:>200 ms 的长任务计数,攒着每 10 分钟报一次(主进程按小时汇总进 perf hourly)。
  *  - 功能使用:换 Space(space_open)、主区前台换成另一种 View(view_open;插件视图记 plugin_open)。只在主窗 / 独立窗记。
- * 插件 / Space 的 id 只有内置与商店的原样报:侧载的记 local、用户自建的 Space 记 custom(主进程再按同一条规则核一遍)。
+ *  - 命令使用(v2):LCL 命令注册表的观察者,每个窗口都接。其余 v2 事件(插件、引导、提示、计数、设置)在各自的落点直接调 telemetrySend。
+ * 插件 / Space 的 id 只有内置与商店的报公开 id(商店条目 id / 内置 id):侧载的记 local、用户自建的 Space 记 custom(主进程再按同一条规则核一遍)。
  * 没有 telemetryReport 键(web / 手机 / 没有带遥测的 Extend)整段 no-op。
  */
-import { useSpaceStore, useWorkspace } from '@lcl/engine'
+import { setCommandObserver, useSpaceStore, useWorkspace } from '@lcl/engine'
 import { usePluginStore } from '@amadeus/plugins/pluginStore'
-import { MARKET_ITEM_ID } from '../../shared/products'
 import { pluginSpaceOwner } from './stores/spaceProgress'
 import { isUserSpace } from './userSpaces'
 import { windowKind } from './windowKind'
+import { commandTelemetry, sendTelemetry } from './telemetrySend'
+import { telemetryCommandId, telemetryPluginRef, type TelemetryPluginRef } from './telemetryPluginId'
 
-/** 这个插件 id 能不能原样报:内置(代码内置 / 随包播种)或商店新装(market-<uuid>),且不是开发副本。 */
-export function isOfficialPlugin(plugin: { id: string; builtin?: boolean; preinstalled?: boolean; dev?: boolean } | undefined): boolean {
-  return !!plugin && !plugin.dev && (!!plugin.builtin || !!plugin.preinstalled || MARKET_ITEM_ID.test(plugin.id))
-}
-const officialPluginId = (id: string): boolean => isOfficialPlugin(usePluginStore.getState().plugins.find((p) => p.id === id))
+const pluginById = (id: string) => usePluginStore.getState().plugins.find((p) => p.id === id)
+/** 按插件 id 换成遥测里的引用(商店条目 id / 内置 id / local,规则见 telemetryPluginId.ts)。 */
+const refOf = (id: string): TelemetryPluginRef => telemetryPluginRef(pluginById(id))
 
 /** 一次换 Space → feature 载荷。origin 只有渲染层分得出:插件 Space 的主人在 pluginSpaceOwner、用户自建的在 userSpaces。 */
-export function spaceOpenPayload(id: string, deps: { pluginOf: (id: string) => string | undefined; isUser: (id: string) => boolean; official: (pluginId: string) => boolean }): Record<string, unknown> {
+export function spaceOpenPayload(id: string, deps: { pluginOf: (id: string) => string | undefined; isUser: (id: string) => boolean; ref: (pluginId: string) => TelemetryPluginRef }): Record<string, unknown> {
   const owner = deps.pluginOf(id)
-  if (owner) return { name: 'space_open', origin: 'plugin', pluginId: owner, pluginOfficial: deps.official(owner) }
+  if (owner) return { name: 'space_open', origin: 'plugin', ...deps.ref(owner) }
   if (deps.isUser(id)) return { name: 'space_open', origin: 'user' }
   return { name: 'space_open', origin: 'builtin', space: id }
 }
 
 /** 主区前台的 View 类型 → feature 载荷;插件视图(plugin:<插件 id>:<视图 id>)只报插件。 */
-export function viewOpenPayload(type: string, official: (pluginId: string) => boolean): Record<string, unknown> {
-  if (type.startsWith('plugin:')) {
-    const pluginId = type.split(':')[1] ?? ''
-    return { name: 'plugin_open', pluginId, pluginOfficial: official(pluginId) }
-  }
+export function viewOpenPayload(type: string, ref: (pluginId: string) => TelemetryPluginRef): Record<string, unknown> {
+  if (type.startsWith('plugin:')) return { name: 'plugin_open', ...ref(type.split(':')[1] ?? '') }
   return { name: 'view_open', view: type }
 }
 
@@ -45,9 +42,10 @@ export function installTelemetryReport(): void {
   const report = window.tangu?.telemetryReport
   if (!report || installed) return
   installed = true
-  const send = (kind: 'crash' | 'feature' | 'longtasks', props: Record<string, unknown>): void => {
-    try { report(kind, props) } catch { /* 上报失败不影响任何事 */ }
-  }
+  const send = sendTelemetry
+  // 命令使用(契约 §9):LCL 命令注册表在面板 / 快捷键 / Ribbon / Agent 触发时回调;插件命令的插件 id 换成公开 id 或 plugin:local。
+  // 每个窗口都接(Mini、独立窗里也能跑命令),主进程按小时按 (id, 来源) 攒成 command_use。
+  setCommandObserver((id, source) => commandTelemetry(telemetryCommandId(id, pluginById), source))
   const crash = (reason: 'exception' | 'rejection', err: unknown, fallback?: string): void => {
     const e = err && typeof err === 'object' ? err as { name?: unknown; message?: unknown; stack?: unknown } : null
     const message = typeof e?.message === 'string' ? e.message : fallback ?? (err === undefined ? '' : String(err))
@@ -84,7 +82,7 @@ export function installTelemetryReport(): void {
       if (s.activeSpaceId === p.activeSpaceId) return
       viewQuietUntil = Date.now() + 1500
       if (Date.now() <= bootQuietUntil) return
-      send('feature', spaceOpenPayload(s.activeSpaceId, { pluginOf: (id) => pluginSpaceOwner.get(id), isUser: isUserSpace, official: officialPluginId }))
+      send('feature', spaceOpenPayload(s.activeSpaceId, { pluginOf: (id) => pluginSpaceOwner.get(id), isUser: isUserSpace, ref: refOf }))
     })
   }
   let lastView: string | null = null
@@ -94,6 +92,6 @@ export function installTelemetryReport(): void {
     if (!front || front.type === lastView) return
     lastView = front.type
     if (Date.now() <= bootQuietUntil || Date.now() <= viewQuietUntil) return
-    send('feature', viewOpenPayload(front.type, officialPluginId))
+    send('feature', viewOpenPayload(front.type, refOf))
   })
 }

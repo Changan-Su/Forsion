@@ -118,6 +118,8 @@ import { addRibbonAction } from './ribbonAction'
 import { compileDashboardRecipe } from '@amadeus-shared/dashboardRecipe'
 import { openWebFloatingPanel } from '../../pluginPanelSeam'
 import { connectionTarget, homeTarget } from '../../services/engine/targets'
+import { sendTelemetry } from '../../telemetrySend'
+import { telemetryPluginRef } from '../../telemetryPluginId'
 
 // 宿主自己产出的用户可见文案(插件贡献的文案由插件自己带双语,见 display.ts 的语言解析单点)。
 // 命名空间 `pluginhost.*` 是本文件专属,别处不要复用。
@@ -894,6 +896,23 @@ export function isPagePipelinePath(p: string): boolean {
 
 /** 每个正在运行的插件一本副作用账(effectScope.ts);teardown 关账。模块级:视图宿主组件也要往里记。 */
 const liveScopes = new Map<string, EffectScope>()
+/** 匿名遥测 plugin_load:这个窗口里已经报过激活结果的插件(同一插件同一次启动只报一次;主进程按公开 id 再去重一遍)。 */
+const loadReported = new Set<string>()
+/** 匿名遥测 plugin_lifecycle 的 blocked:门禁挡下(接口版本 / 最低版本 / 清单坏 / 开发源声明文件扩展名)或用户想开但前置没齐的插件,
+ *  同一插件同一原因这个窗口只报一次(主进程再去重)。 */
+const blockedReported = new Set<string>()
+const BLOCKED_REASON: Record<NonNullable<AmadeusPlugin['blocked']>, string> = { api: 'api', minApp: 'min-app', invalid: 'invalid', 'dev-fileext': 'dev-fileext', desktopOnly: 'other' }
+function reportBlocked(s: Pick<PluginState, 'plugins' | 'activeIds' | 'disabledIds'>): void {
+  try {
+    for (const p of s.plugins) {
+      const reason = p.blocked ? BLOCKED_REASON[p.blocked] ?? 'other'
+        : !s.activeIds.includes(p.id) && pluginWanted(p, s.disabledIds) && unmetPluginDeps(p, s).length ? 'deps' : null
+      if (!reason || blockedReported.has(`${p.id}:${reason}`)) continue
+      blockedReported.add(`${p.id}:${reason}`)
+      sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(p), action: 'blocked', blockedReason: reason })
+    }
+  } catch { /* 遥测不拖累装载 */ }
+}
 
 /** 视图级页表面(viewSurface)的吊销登记:插件禁用时 fileTypes 切片一变,React 重渲 → effect
  *  cleanup 会把视图表面收掉,但那是**异步**的 —— 记在插件当前那本账上,teardown 关账时同步吊销,才封死
@@ -2833,13 +2852,27 @@ export const usePluginStore = create<PluginState>((set, get) => {
    *  reject 且这一代还活着 → 与同步抛错同一条回滚,再对齐一轮(依赖它的跟着停)。过期那一代的结果一律不认。 */
   const start = (plugin: AmadeusPlugin): boolean => {
     const id = plugin.id
+    // 匿名遥测 plugin_load(契约 §9):给 setup 计时(async setup 到落定),同步 / 异步失败都算 error;只在主窗报,同一插件这个窗口只报一次。
+    const t0 = performance.now()
+    const loaded = (outcome: 'ok' | 'error', e?: unknown): void => {
+      if (windowKind() !== 'main' || loadReported.has(id)) return
+      loadReported.add(id)
+      const ref = telemetryPluginRef(plugin)
+      sendTelemetry('plugin_load', { ...ref, outcome, activateMs: Math.round(performance.now() - t0) })
+      // 激活失败也补进崩溃事件(带 pluginId):报错原文不发,只给错误名与调用栈帧(主进程 / Extend 再剥栈头)
+      if (outcome === 'error') {
+        const err = e && typeof e === 'object' ? e as { name?: unknown; stack?: unknown } : null
+        sendTelemetry('crash', { reason: 'exception', errorName: err?.name ?? typeof e, stack: err?.stack, ...ref })
+      }
+    }
     // 标准设置行:每个插件自动获得「工作文件夹」(ctx.app.workFolder() 的数据源;
     // 插件在 setup 里自注册同 key 会覆盖本行,见 registerSetting 的去重)。拆 / 失败按 pluginId 一并收走。
     set((s) => ({ settings: [...s.settings, { pluginId: id, item: workFolderSetting(id) }] }))
     const ctx = makeContext(id)
     const scope = liveScopes.get(id)!
-    registerGuideTips(id, plugin.guide?.tips) // 上手提示(manifest guide):teardown 里撤
+    registerGuideTips(id, plugin.guide?.tips, plugin) // 上手提示(manifest guide):teardown 里撤
     const fail = (e: unknown): void => {
+      loaded('error', e)
       console.error(`[amadeus] plugin "${id}" setup failed`, e)
       useUiStore.getState().notify(translate('pluginhost.setupFailed', { name: plugin.name }))
       teardown(id)
@@ -2856,6 +2889,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     }
     if (r && typeof (r as PromiseLike<unknown>).then === 'function') {
       void Promise.resolve(r).then((d) => {
+        if (scope.alive()) loaded('ok')
         if (typeof d !== 'function') return
         if (scope.alive()) set((s) => ({ disposers: { ...s.disposers, [id]: d } }))
         else try { d() } catch (e) { console.error(`[amadeus] plugin "${id}" stale disposer failed`, e) }
@@ -2866,6 +2900,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         reconcile()
       })
     }
+    else loaded('ok')
     set((s) => ({
       activeIds: [...s.activeIds, id],
       disposers: { ...s.disposers, [id]: typeof r === 'function' ? r : undefined },
@@ -2933,7 +2968,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       const src = sources.find((x) => x.id === cur.id)
       if (keep(cur, src)) {
         next.push({ ...pluginMeta(src), setup: cur.setup })
-        if (s0.activeIds.includes(cur.id)) registerGuideTips(cur.id, src.guide?.tips) // 只改了 manifest 的更新:新加的提示不等重启
+        if (s0.activeIds.includes(cur.id)) registerGuideTips(cur.id, src.guide?.tips, cur) // 只改了 manifest 的更新:新加的提示不等重启
         continue
       }
       reset.push(cur.id)
@@ -3002,6 +3037,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
       if (unmetPluginDeps(plugin).length) return // 前置没齐:装着但开不了(设置页给原因与「安装 / 启用前置」入口)
       // 注:DISABLED_KEY 是按 id 的单一全局列表;listPlugins 已按 vault 优先去重,每 id 只有一实例,一位开关即正确。
       noteExplicitEnable(id) // 用户重开 = 重试
+      if (get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'enable' })
       try {
         localStorage.setItem(PLUGIN_ENABLE_STAMP_KEY, JSON.stringify({ id, t: Date.now() })) // 先于偏好:别的窗口先收到戳
       } catch {
@@ -3015,6 +3051,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
     disable(id) {
       const plugin = get().plugins.find((p) => p.id === id)
       const wasOn = !!plugin && (get().activeIds.includes(id) || pluginWanted(plugin))
+      if (plugin && !get().disabledIds.includes(id)) sendTelemetry('plugin_lifecycle', { ...telemetryPluginRef(plugin), action: 'disable' })
       if (!get().disabledIds.includes(id)) set((s) => ({ disabledIds: [...s.disabledIds, id] }))
       writeDisabled(get().disabledIds)
       const before = get().activeIds
@@ -3052,6 +3089,7 @@ export const usePluginStore = create<PluginState>((set, get) => {
         return // 读不到来源 ≠ 来源都没了:保持现状
       }
       applySources(sources)
+      if (windowKind() === 'main') reportBlocked(get())
       // 上次运行没关成的规则(走到这里在跑的都已被 start 销账)
       if (windowKind() === 'main' && automationHost()) {
         for (const id of readOwed(RULES_OWED_KEY)) {

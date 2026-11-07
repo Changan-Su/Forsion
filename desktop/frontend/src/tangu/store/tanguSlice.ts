@@ -24,6 +24,7 @@ import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { openWsFile } from '../../views/wsFileNav'
 import { effectiveSessionMode } from '../../views/sessionMode'
 import { track } from '../../achievements/store'
+import { countTelemetry, settingTelemetry } from '../../telemetrySend'
 import { finishRunStats, stepRunStats, type RunStats } from '../../stores/runStats'
 import { AGENT_WRITE_TOOLS, DESK_EDIT_TOOLS, DESK_PERSIST_KEY, agentWriteChecks, deskItemFor, extractStreamingString, isDuplicateShow, packDeskMap, replaceTop, resolveDeskPath, unpackDeskMap, type DeskItem } from '../../stores/deskPlan'
 import { deskAcceptsFiles } from '../../amadeus/plugins/deskCompanion'
@@ -2965,6 +2966,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
       if (!r.ok) return null
     }
     set((s) => ({ steerPendingBySession: { ...s.steerPendingBySession, [sessionId]: (s.steerPendingBySession[sessionId] || []).filter((p) => p.id !== msgId) } }))
+    countTelemetry('chatSteerWithdraw')
     return item.text
   },
 
@@ -2973,6 +2975,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (!sid) return
     const runId = get().runningBySession[sid]
     if (!runId || !(get().steerPendingBySession[sid] || []).some((p) => !p.localOnly) || get().stoppingBySession[sid]) return
+    countTelemetry('chatSteer')
     try {
       const result = await expediteSteer(targetForSession(sid), runId)
       if (result.ok && get().runningBySession[sid] === runId) get().toast(translate('appstore.steerQueued'))
@@ -2989,6 +2992,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (!runId) return Promise.resolve(true)
     const pending = stopRequests.get(runId)
     if (pending) return pending
+    countTelemetry('chatStop')
     stoppedRuns.add(runId)
     planAutoStart.delete(runId)
     set((s) => ({ stoppingBySession: { ...s.stoppingBySession, [sid]: runId } }))
@@ -3031,6 +3035,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const list = get().messagesBySession[sid] || []
     if (fromIndex < 0 || fromIndex >= list.length) return false
     const removed = list.slice(fromIndex)
+    countTelemetry('chatTruncateResend') // 截断重发真正落下的次数(重试 / 改了再发 / 重新生成都走这里;各自的入口另计)
     // 编辑重发 / 重新生成 / retry:删之前把整份对话复制成一支「旧版本」分支(方案 docs/ToBeImproved/编辑重发分支与编辑框方案_2026-10-28 ①),
     // 新的这一版就是主线。复制到最后一条落库的,分叉点在被改那条之前落库的那条(改第一句时就是它自己 —— 旧那支在画布上成并排的第二棵)。
     // 哪些落了库以引擎为准(本地有停掉的空占位、失败后还原回来的已删条、失败但落了半截的回答,都猜不准):先读最新一页。
@@ -3071,6 +3076,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   retry: async (targetSessionId, fromQueue) => {
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return false
+    if (!fromQueue) countTelemetry('chatRetry') // 用户那一下;排队轮到时的再次进入不重复计
     // 一律经队列派发:空闲时当场出队,但带派发闸 —— 删消息与重发之间不许 /compact 或别的发送插进来并发
     if (!fromQueue || get().runningBySession[sid]) {
       queueAfterRun(set, sid, { text: '/retry', kind: 'retry' })
@@ -3090,6 +3096,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const list = get().messagesBySession[sid] || []
     const idx = list.findIndex((m) => m.id === messageId)
     if (idx < 0 || list[idx].role !== 'user') return
+    countTelemetry('chatEditResend')
     void get().truncateAndResend(idx, newText, list[idx].attachments || [], sid)
   },
 
@@ -3103,6 +3110,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     let u = idx - 1
     while (u >= 0 && list[u].role !== 'user') u--
     if (u < 0) { get().toast(t('app.regenNoUser'), true); return }
+    countTelemetry('chatRegenerate')
     if (opts?.quotaFallback) quotaFallbackNext.set(sid, Date.now())
     void get().truncateAndResend(u, list[u].content, list[u].attachments || [], sid)
   },
@@ -3117,6 +3125,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     if (idx < 0) return
     const at = list[idx].timestamp
     if (!at) { get().toast(t('rewind.noTime'), true); return }
+    countTelemetry('chatRewind')
     // 代码先回滚:失败就整体中止 —— 对话删了没法重来,而代码没回滚的话「回退」是假的。
     if (mode !== 'conversation') {
       try {
@@ -3164,6 +3173,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     let id = messageId
     if (!id) { for (let i = list.length - 1; i >= 0; i--) { if (list[i].role === 'assistant') { id = list[i].id; break } } }
     if (!id) { get().toast(t('chat.branchEmpty'), true); return null }
+    countTelemetry('chatBranch')
     try {
       // 不带标题:引擎记成 New Chat,第一句新问题由 Historian 起名(兄弟分支同叫「X（分支）」在树里认不出来)
       const branched = await api.branchSession(targetForSession(sid), sid, id)
@@ -3182,6 +3192,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) return
     if (get().compactingBySession[sid] !== undefined) return // 压缩中,别叠第二次
+    if (!fromQueue) countTelemetry('chatCompact') // 手动压缩那一下;排队轮到时不重复计
     // 运行中 / 队里有东西 / 排队消息在途:排进等待区,轮到再压(引擎不许与在途 run 并发,直发只会 409)
     if (get().runningBySession[sid] || (!fromQueue && queueBusy(get(), sid))) {
       const text = instructions ? `/compact ${instructions}` : '/compact'
@@ -3264,7 +3275,11 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   },
 
   setExecConfig: (patch, targetSessionId) => {
-    if (patch.approvalMode) rememberDefaults({ lastApprovalMode: patch.approvalMode })
+    if (patch.approvalMode) {
+      // 审批档 = 新会话的起步档(lastApprovalMode):真变了才算一次设置改动(匿名遥测 setting_change,键 approval.defaultMode)
+      if (patch.approvalMode !== (get().desktopConfig as StoredDesktopConfig | null | undefined)?.lastApprovalMode) settingTelemetry('approval.defaultMode', patch.approvalMode)
+      rememberDefaults({ lastApprovalMode: patch.approvalMode })
+    }
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     if (!sid) { set((s) => ({ newChatCfg: { ...s.newChatCfg, ...patch } })); return } // 空态:落新会话草稿
     const prev = get().configBySession[sid]
@@ -3302,6 +3317,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
     const sid = targetSessionId === undefined ? get().activeId : targetSessionId
     // 在会话里换模型 = 也换掉全局默认(新会话延续);cfg.modelId 本来就是「新会话用哪个模型」的真源。
     if (remember) {
+      countTelemetry('modelSwitchRemember') // 换的同时记成新会话默认(Agent 预设带来的切换传 remember=false,不计);用户手动换的次数在药丸那几处另计
       // S2:会话在「我的电脑」上时记在那台设备名下(那台的模型表不是这台手机的;别把手机自己的缺省模型改成那边的)。
       // S4:按会话所在的位置记(空白新对话 = 焦点),不再一律看焦点。
       const where = sid ? refForSession(sid) : focusRef()
@@ -3578,6 +3594,7 @@ const tanguMembers = (set: StoreApi<AppState>['setState'], get: StoreApi<AppStat
   retryFailed: async (sessionId, id) => {
     const item = (get().failedBySession[sessionId] || []).find((f) => f.id === id)
     if (!item || retrying.has(id)) return
+    countTelemetry('chatRetryFailed')
     retrying.add(id)
     try {
       if (item.reason === 'offline') {
