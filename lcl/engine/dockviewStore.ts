@@ -22,7 +22,7 @@ import { shouldRecordSideWidth } from './sideCapture'
 import { locOf, type DropTarget } from './dropModel'
 import { isLastPinned, isPinned, missingPinned, type PanelRef, type PinnedViews } from './pinnedViews'
 import { arrangeRight, planRight, rightGroupFor, RULE_PARAM, RULE_TAG, type RightRef } from './rightRules'
-import { IS_MAIN_WINDOW, IS_MINI_PANEL, WINDOW_SPACE_ID } from './uiMode'
+import { IS_MAIN_WINDOW, IS_MINI_PANEL, IS_VIEW_WINDOW, WINDOW_SPACE_ID } from './uiMode'
 import { mainOpensBeside, noteBesideTarget } from './openBeside'
 import { useNav } from './navStore'
 import { ribbonActions } from './ribbonRegistry'
@@ -193,6 +193,15 @@ function settleBottomHeight(api: DockviewApi): void {
 
 /** 记住「可自由拖宽」侧栏的当前宽度(WorkspaceHost 在布局变更时调):用户拖动 sash 后即被捕获 +
  *  写 localStorage,下次 pinSides/展开都用它 → 拖宽持久。动画期间跳过(避免记下补间中间值)。 */
+/** 独立视图窗(uiMode.IS_VIEW_WINDOW)只装主区:还原出来的老存档里带着左右栏(此前这种窗能开左右栏)→ 关掉,暂存一并清空。
+ *  主区里有的都留着;返回关掉了几个。 */
+export function keepMainOnly(api: DockviewApi): number {
+  const side = [...panelsAt(api, 'left'), ...panelsAt(api, 'right')]
+  for (const p of side) { try { p.api.close() } catch { /* 已经没了 */ } }
+  useWorkspace.setState((s) => ({ stash: { ...s.stash, left: [], right: [] }, leftVisible: false, rightVisible: false }))
+  return side.length
+}
+
 export function captureSideWidths(api: DockviewApi): void {
   const st = useWorkspace.getState()
   if (!st.sideProfileKey) return
@@ -1135,6 +1144,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   showSideView: (side, type) => {
     const api = get().api
     if (!api) return
+    if (IS_VIEW_WINDOW && side !== 'bottom') return // 独立视图窗没有左右栏(同 openView)
     const visible = get()[visKeyOf(side)]
     // 已显示该视图时再点 = 收起该侧(开合切换);否则展开(若收起)并激活该视图。
     if (visible) {
@@ -1338,6 +1348,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   openView(type, params = {}, loc = 'main', opts) {
     const api = get().api
     if (!api) return null
+    // 独立视图窗只装主区:视图自己往侧栏开东西(Agent 资料页挂载时开名册、对话的「在项目详情中打开」)一律不开,
+    // 否则左右栏又长出来、开关钮还藏着收不回去(Codex 评审)。见 uiMode.IS_VIEW_WINDOW。
+    if (IS_VIEW_WINDOW && (loc === 'left' || loc === 'right')) return null
     const def = getView(type)
     // 「开在当前标签旁边」那一档(见 openBeside.ts)先于单例复用:单例带 reuseKey:'primary' 时复用会把参数并进已开着的那份 ——
     // 主区开着 Agent A 的资料页,卡里点 Agent B,A 就地变成 B(Codex 评审实证)。这一档只认参数一致的那份。
@@ -1458,6 +1471,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   toggleSidebar(side) {
     const api = get().api
     if (!api) return
+    if (IS_VIEW_WINDOW && side !== 'bottom') return // 独立视图窗只装主区:左右栏开不出来(见 uiMode.IS_VIEW_WINDOW)
     const beforeToggle = captureRegionTree(api)
     // 唯一的轴向差异集中在这几行:左右量宽 / 底部量高。其余(暂存、还原、补间、沉降)两轴共用一份。
     const vert = side === 'bottom'

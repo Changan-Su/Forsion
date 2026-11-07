@@ -52,6 +52,7 @@
     "e2e:filelink": "node scripts/file-wikilink.e2e.cjs",
     "e2e:ribbon": "node scripts/ribbon-dnd.e2e.cjs",
     "e2e:spacewindow": "node scripts/space-window.e2e.cjs",
+    "e2e:detach": "node scripts/detach-window.e2e.cjs",
     "e2e:spacewindow-input": "node scripts/space-window-input.e2e.cjs",
     "e2e:ribbon-overflow": "node scripts/ribbon-overflow.e2e.cjs",
     "e2e:droplet-reuse": "node scripts/droplet-reuse.e2e.cjs",
