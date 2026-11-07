@@ -141,3 +141,19 @@ it('新同步:老 Extend 没有 setup 通道时退回「选择同步范围」', 
   await openContent()
   expect(btn('选择同步范围')).toBeTruthy()
 })
+
+it('新同步:勾的 Agent 云端已有一份且不一样,卡片里问一次(缺省合在一起),选择随开始同步交给 Extend(11-06)', async () => {
+  const at = new Date(2026, 10, 3, 14, 2).getTime()
+  const invoke = content((p) => ({ ok: true, value: { token: 't-ask', upload: 1, download: 1, bytes: 10,
+    ...((p.agentSlugs as string[]).includes('research') ? { agentAsks: [{ slug: 'research', namespace: 'default', cloudFiles: 3, localFiles: 2, differ: 1, cloudMtime: at, localMtime: at + 86_400_000 }] } : {}) } }))
+  await openContent()
+  expect(host.querySelector('[data-testid="sync-setup-asks"]')).toBeNull() // 没勾的不问
+  await act(async () => { host.querySelector<HTMLInputElement>('.sync-setup-kid[data-agent="research"] input')!.click() })
+  const ask = host.querySelector<HTMLElement>('[data-testid="sync-setup-asks"]')!
+  expect(ask.textContent).toContain('论文助手 在云端已经有一份'); expect(ask.textContent).toContain('回收在 agents/.removed，能找回')
+  const radios = () => [...ask.querySelectorAll<HTMLInputElement>('.sync-setup-opt input')]
+  expect(radios().map((r) => r.checked)).toEqual([true, false, false])
+  await act(async () => { radios()[2]!.click() })
+  await act(async () => { btn('开始同步').click() })
+  expect(invoke).toHaveBeenCalledWith('penzor:sync:apply', 't-ask', { research: 'local' })
+})

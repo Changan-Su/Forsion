@@ -140,6 +140,10 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   const humanFolder = manifest.paths?.includes('human-folder') === true;
   const agentCalendar = manifest.paths?.includes('agent-calendar') === true;
   const widgetData = manifest.paths?.includes('widget-data') === true;
+  // 老账号存档(11-06,方案页 Agent设备隔离方案 round3「老账号:B」):云端的 Agent 数据进了存档、在线那份清空了。
+  // 旧同步从此不碰任何 Agent —— 不删云端、不发现、不推不拉(云端没有 ≠ 别处删了,本机一个文件都不动);
+  // 只同步 human/。想同步哪个 Agent,到同步页逐个开(新同步)。
+  const archived = manifest.agentArchive != null;
   const bySlug = new Map<string, AgentFileMeta[]>();
   for (const item of manifest) {
     if (item.slug !== '__user__' && item.slug !== HUMAN_SLOT && !validSyncSlug(item.slug)) { fail(result, new Error('invalid cloud manifest slug')); continue; }
@@ -151,7 +155,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
   // 不管本地又有没有同名目录都先删:删完又新建的那个没有影子,先清云端它才是 pushCreate,不会被旧的盖掉。
   // 没删干净(断网、CAS 撞上别的设备刚写的一份)就留着记录,这一轮不拉它、不同步它,下次再来。
   const removing = new Set<string>();
-  for (const slug of pendingAgentRemovals(scope)) {
+  for (const slug of archived ? [] : pendingAgentRemovals(scope)) {
     if (onlySlug && slug !== onlySlug) continue;
     try {
       for (const f of bySlug.get(slug) ?? []) {
@@ -163,7 +167,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     } catch (e) { fail(result, e); guard(); removing.add(slug); known.add(slug); }
   }
   for (const [slug, files] of bySlug) {
-    if (!validSyncSlug(slug) || agentSlugLocalOnly(slug) || (onlySlug && slug !== onlySlug) || known.has(slug)) continue;
+    if (archived || !validSyncSlug(slug) || agentSlugLocalOnly(slug) || (onlySlug && slug !== onlySlug) || known.has(slug)) continue;
     const dir = agentSyncDir(slug);
     // 11-05 Agent 逐个选:云端有、本机没有的 Agent 不再自动建出来开同步(原来 config.toml 带 cloud_sync = true 或账号总闸开着就建,
     // 等于一台设备的选择替所有设备做了;每个 Agent 的许可存在它自己的目录里,本机没有目录就不可能是这台选的)。
@@ -198,7 +202,7 @@ async function syncAccount(cloud: AgentFilesBrain, userId: string, scope: string
     else if (agentSyncPermission(agent.slug, scope).shared) add(memSlug, 'MEM', captureAgentSyncPermission(agent.slug, scope, true));
     if (agentSyncPermission(agent.slug, scope).shared) shared.push(captureAgentSyncPermission(agent.slug, scope, true));
   }
-  for (const [slug, bucket] of buckets) {
+  for (const [slug, bucket] of archived ? [] : buckets) {
     if (removing.has(slug)) continue;
     const check = (): void => { guard(); for (const consent of bucket.guards) consent(); agentSyncDir(slug); };
     check();

@@ -589,10 +589,12 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     agentFiles: {
       getManifest: async (_userId: string, opts?: { signal?: AbortSignal }) => {
         // device / client:服务端按设备记版本,回答这个账号还有没有旧客户端在用 USER.md(新版据此停镜像)
-        const q = `paths=human,human-folder,agent-calendar,widget-data&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
-        const r = await getJson<{ agents: any[]; paths?: string[]; legacy?: string[]; legacySeenAt?: number | null }>(`/api/brain/agents/manifest?${q}`, opts?.signal);
+        // agent-archive:认得老账号存档(11-06)—— 已存档的账号上服务端照回清单 + agentArchive,不声明的旧客户端整轮 410
+        const q = `paths=human,human-folder,agent-calendar,widget-data,agent-archive&device=${encodeURIComponent(getDeviceId())}&client=${encodeURIComponent(`tangu/${engineVersion()}`)}`;
+        const r = await getJson<{ agents: any[]; paths?: string[]; legacy?: string[]; legacySeenAt?: number | null; agentArchive?: { state?: unknown; at?: unknown } }>(`/api/brain/agents/manifest?${q}`, opts?.signal);
         return Object.assign(r?.agents ?? [], Array.isArray(r?.paths) ? { paths: r.paths } : {},
-          Array.isArray(r?.legacy) ? { legacy: r.legacy.filter((x): x is string => typeof x === 'string'), legacySeenAt: typeof r?.legacySeenAt === 'number' ? r.legacySeenAt : null } : {});
+          Array.isArray(r?.legacy) ? { legacy: r.legacy.filter((x): x is string => typeof x === 'string'), legacySeenAt: typeof r?.legacySeenAt === 'number' ? r.legacySeenAt : null } : {},
+          r?.agentArchive && typeof r.agentArchive === 'object' ? { agentArchive: { state: String(r.agentArchive.state ?? 'done'), at: typeof r.agentArchive.at === 'number' ? r.agentArchive.at : null } } : {});
       },
       getFile: async (_userId: string, slug: string, relPath: string, opts?: { signal?: AbortSignal }) => {
         const r = await postJson<any>('/api/brain/agents/file/get', { slug, relPath }, opts?.signal);
