@@ -1,5 +1,7 @@
 /**
  * 电脑历史(Computer History)只读侧 —— `<forsionHome>/computer-history/`(state.json + events/<本地日期>.jsonl)。
+ * 日文件逐行加密(computerHistoryCrypto.ts;钥匙由桌面经 stdin 私有通道交来),老的明文行照样认;解不开的行 = 未知,
+ * 工具 / 摘要 / 信号都不把它当「没有活动」。
  *
  * 写者只有桌面主进程(desktop/electron/computerHistory.ts,采集在 CU helper 的 recordSubscribe);**引擎绝不写**。
  * 格式正典在 desktop/shared/computerHistory.ts(helper / 主进程 / 引擎三处同步改);引擎 rootDir 不含 desktop/,
@@ -18,6 +20,7 @@
 import { promises as fs, readFileSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
 import { forsionSharedDir } from '../core/tanguHome.js';
+import { computerHistoryKey, readChLine } from './computerHistoryCrypto.js';
 import { effectiveRemote } from './remoteOrigin.js';
 import type { AppProfile } from '../seams/appProfile.js';
 import type { ToolContext } from '../tools/toolTypes.js';
@@ -54,6 +57,8 @@ export interface ChState {
   platform: string;
   /** 数据代次:桌面每次清除 / 改排除表 / 关闭都 +1(缺省 = 0)。读者读完事件后复核,变了就丢弃结果。 */
   dataGen?: number;
+  /** 用户亲手关过(桌面首启引导用;引擎不看)。 */
+  userTurnedOff?: boolean;
 }
 
 /** 代次口径:缺省 / 非数 = 0(老 state.json 没这个字段)。 */
@@ -258,6 +263,25 @@ function validEvent(o: any): o is ChEvent {
 }
 
 /**
+ * 一行 → 事件 | 'locked' | null。行是明文(老格式 / 迁移前)或密文(computerHistoryCrypto);
+ * 'locked' = 密文但这会儿没有钥匙 / 不是这把钥匙加的 —— **未知**,调用方计数并如实说「读不出来」,绝不当成没有活动;
+ * null = 残行(半截写入、坏 JSON),与以前同一口径丢掉。
+ */
+function decodeLine(line: string): ChEvent | 'locked' | null {
+  const r = readChLine(line, computerHistoryKey());
+  if (r.kind === 'locked') return 'locked';
+  if (r.kind === 'broken') return null;
+  let o: unknown;
+  try { o = JSON.parse(r.text); } catch { return null; }
+  return validEvent(o) ? o : null;
+}
+
+/** 有读不出来的记录时,工具 / 状态行的说法(钥匙由桌面经私有通道交来;没交到 = 引擎不是桌面拉起的,或桌面这次拿不到系统钥匙串)。 */
+export const CH_LOCKED_NOTICE =
+  'Some computer history records are encrypted with a key this engine does not have right now, so they could not be read. ' +
+  'This is not the same as no activity. Restarting Forsion usually fixes it; if it keeps happening, the system keychain may be refusing Forsion access.';
+
+/**
  * 逐行流式读一个日文件(readLines:块与块之间回到事件循环 —— 引擎同一个事件循环还在给别的会话推 SSE,
  * 一口气同步 JSON.parse 几十 MB 会把它们卡住)。超上限只读尾部并丢掉被切开的首行。无文件 = 当日没录,静默。
  */
@@ -290,8 +314,10 @@ export interface ChReadOpts {
  * 读 [from, to] 内的事件(按 t 升序)。按本地日历日逐个文件(setDate 步进,夏令时那天不漏不重),从新到旧;
  * 坏行/残尾丢弃。partial = 传了 newest、凑够后没再解析更早的日文件,而那些文件确实存在(条数只是下限)。
  */
-export async function readComputerHistoryEvents(from: number, to: number, opts: ChReadOpts = {}): Promise<{ events: ChEvent[]; partial: boolean }> {
+export async function readComputerHistoryEvents(from: number, to: number, opts: ChReadOpts = {}): Promise<{ events: ChEvent[]; partial: boolean; locked: number }> {
   const out: ChEvent[] = [];
+  /** 读到的日文件里解不开的行数(时间也在密文里,按整个文件算,不按区间筛)。 */
+  let locked = 0;
   const end = new Date(to);
   const day = new Date(end.getFullYear(), end.getMonth(), end.getDate(), 12);
   const firstDay = localDateStr(new Date(from));
@@ -307,15 +333,15 @@ export async function readComputerHistoryEvents(from: number, to: number, opts: 
     } else {
       await forEachLine(fileOf(name), (line) => {
         if (!line.trim()) return;
-        let o: unknown;
-        try { o = JSON.parse(line); } catch { return; }
-        if (validEvent(o) && o.t >= from && o.t <= to && (!opts.match || opts.match(o))) out.push(o);
+        const o = decodeLine(line);
+        if (o === 'locked') { locked++; return; }
+        if (o && o.t >= from && o.t <= to && (!opts.match || opts.match(o))) out.push(o);
       });
       if (opts.newest && out.length >= opts.newest) stopped = true;
     }
     day.setDate(day.getDate() - 1);
   }
-  return { events: out.sort((a, b) => a.t - b.t), partial };
+  return { events: out.sort((a, b) => a.t - b.t), partial, locked };
 }
 
 /**
@@ -342,9 +368,10 @@ export async function readChSignals(from: number, to: number): Promise<ChSignal[
   const before = readComputerHistoryState();
   // 暂停 / 断开时盘上是一段空白:「还在用 X」「离开了很久」都判不了,不是没发生,这段时间整组不命中。
   if (!computerHistoryOn(before) || before?.status !== 'recording') return null;
-  const { events } = await readComputerHistoryEvents(from, to);
+  const { events, locked } = await readComputerHistoryEvents(from, to);
   await chTestSeams.afterEventsRead?.();
-  if (changedSince(before)) return null;
+  // 有读不出来的行 = 这段时间的信号残缺:「离开了很久」「还在用 X」都可能判错,整组不命中(同暂停)
+  if (locked || changedSince(before)) return null;
   const out: ChSignal[] = [];
   for (const e of events) {
     if (e.origin === 'agent') continue;
@@ -359,8 +386,10 @@ export async function readChSignals(from: number, to: number): Promise<ChSignal[
   return out;
 }
 
-/** 最近一条事件的时刻(今天/昨天的日文件尾部 8KB 里找),状态行判「数据新不新鲜」用。没有 → null。 */
-export async function latestEventTime(now: number): Promise<number | null> {
+/** 最近一条事件的时刻(今天/昨天的日文件尾部 8KB 里找),状态行判「数据新不新鲜」用。没有 → null;
+ *  尾部只有读不出来的密文行 → 'locked'(不说成「还没有」)。 */
+export async function latestEventTime(now: number): Promise<number | null | 'locked'> {
+  let sawLocked = false;
   for (let i = 0; i < 2; i++) {
     const d = new Date(now);
     const file = join(computerHistoryDir(), 'events', `${localDateStr(new Date(d.getFullYear(), d.getMonth(), d.getDate() - i, 12))}.jsonl`);
@@ -373,10 +402,10 @@ export async function latestEventTime(now: number): Promise<number | null> {
       await fh.read(buf, 0, n, size - n);
       let best: number | null = null;
       for (const line of buf.toString('utf8').split('\n')) {
-        try {
-          const o = JSON.parse(line);
-          if (validEvent(o) && (best === null || o.t > best)) best = o.t;
-        } catch { /* 被切开的首行 */ }
+        if (!line) continue;
+        const o = decodeLine(line); // 被切开的首行 = 残行
+        if (o === 'locked') sawLocked = true;
+        else if (o && (best === null || o.t > best)) best = o.t;
       }
       if (best !== null) return best;
     } catch {
@@ -385,7 +414,7 @@ export async function latestEventTime(now: number): Promise<number | null> {
       await fh?.close().catch(() => {});
     }
   }
-  return null;
+  return sawLocked ? 'locked' : null;
 }
 
 // ── 折叠 ──────────────────────────────────────────────────────────────────
@@ -775,13 +804,16 @@ export async function readComputerHistory(args: ReadComputerHistoryArgs, now = D
   const latest = await latestEventTime(now);
   const head =
     `[computer-history:observed] Status: ${statusText(state)} · raw events kept ${CH_KEEP_DAYS} days` +
-    ` · latest event ${latest === null ? 'none yet' : stamp(latest)}`;
+    ` · latest event ${latest === null ? 'none yet' : latest === 'locked' ? 'unreadable (encrypted)' : stamp(latest)}`;
 
   let lines: string[];
   let what: string;
   let partial = false;
+  let locked = 0;
   if (detail === 'sessions') {
-    const { events } = await readComputerHistoryEvents(range.from - FOLD_LOOKBACK_MS, range.to);
+    const read = await readComputerHistoryEvents(range.from - FOLD_LOOKBACK_MS, range.to);
+    const events = read.events;
+    locked = read.locked;
     const openEnd = state?.status === 'recording' && now - range.to < MIN;
     let items = foldComputerHistory(events, range, openEnd);
     if (appNeedle) items = items.filter((it) => it.kind === 'span' && spanMatchesApp(it, appNeedle));
@@ -793,12 +825,16 @@ export async function readComputerHistory(args: ReadComputerHistoryArgs, now = D
       : undefined;
     const read = await readComputerHistoryEvents(range.from, range.to, { match, newest: limit });
     partial = read.partial;
+    locked = read.locked;
     lines = read.events.map(formatEvent);
     what = query ? `events matching "${cleanObserved(query, 60)}"` : 'events (oldest first)';
   }
   // 全部读盘之后、任何返回之前复核:读的过程中被清除 / 关闭 / 改排除表 → 整份丢弃
   await chTestSeams.afterEventsRead?.();
   if (changedSince(state)) return CH_CHANGED_NOTICE;
+  // 解不开的记录:一条都没读出来就整份说「读不出来」(不是「这段时间没有活动」);读出了一部分就照给,并注明缺了多少
+  if (locked && !lines.length) return `${head}\n${CH_LOCKED_NOTICE}`;
+  const lockedLine = locked ? `\n(${locked} encrypted record${locked === 1 ? '' : 's'} on these days could not be read and are missing below. ${CH_LOCKED_NOTICE})` : '';
   const total = lines.length;
   const capped = keepNewest(lines.slice(-limit), BODY_CHARS_CAP);
   const omitted = total - capped.lines.length;
@@ -810,7 +846,7 @@ export async function readComputerHistory(args: ReadComputerHistoryArgs, now = D
   if (!total) {
     return `${head}\n${rangeLine}\n(no activity recorded in this range — widen it, e.g. from: "-1d", or check the status above)`;
   }
-  return `${head}\n${rangeLine}\n${fence(capped.lines)}`;
+  return `${head}\n${rangeLine}${lockedLine}\n${fence(capped.lines)}`;
 }
 
 /** Muse 周期摘要的整块上限(含说明与围栏)。10-13 从 1500 放到 3000:说明句占掉约 500,剩下的只够十来段,
@@ -827,9 +863,11 @@ export async function computerHistoryDigest(now = Date.now(), maxChars = COMPUTE
     const state = readComputerHistoryState();
     if (!computerHistoryOn(state)) return '';
     const range = { from: now - 3 * HOUR, to: now };
-    const { events } = await readComputerHistoryEvents(range.from - FOLD_LOOKBACK_MS, range.to);
+    const { events, locked } = await readComputerHistoryEvents(range.from - FOLD_LOOKBACK_MS, range.to);
     await chTestSeams.afterEventsRead?.();
     if (changedSince(state)) return ''; // 读的过程中被清除 / 关闭 / 改排除表:这一周期不给摘要
+    // 有解不开的行:这一周期不给摘要(给残缺的摘要会让 Muse 把「读不出来」当成「这几个小时没干什么」)
+    if (locked) return '';
     const items = foldComputerHistory(events, range, state?.status === 'recording');
     if (!items.length) return '';
     const header =

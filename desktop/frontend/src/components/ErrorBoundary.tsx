@@ -4,6 +4,8 @@
  * 故意全程内联样式 + 读 document.lang:崩溃时主题 CSS/i18n 可能也已坏,兜底界面不能再依赖它们。
  */
 import React from 'react'
+import { noteRenderCrash } from '../coreTangu/load'
+import { reloadWindow } from '../reloadWindow'
 
 type Props = {
   children: React.ReactNode
@@ -17,6 +19,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
   static getDerivedStateFromError(error: Error): State { return { error } }
   componentDidCatch(error: Error, info: React.ErrorInfo) {
     console.error('[tangu] render crash:', error, info?.componentStack)
+    noteRenderCrash(error) // 热更新版的 Tangu 界面开头一分钟里崩两次 → 整版退回自带的(coreTangu/load.ts)
   }
   render() {
     const { error } = this.state
@@ -37,7 +40,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
         <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
           <button style={{ padding: '6px 12px' }} onClick={() => this.setState({ error: null })}>{zh ? '重试' : 'Retry'}</button>
           <button style={{ padding: '6px 12px' }} onClick={() => { try { void navigator.clipboard.writeText(detail) } catch { /* ignore */ } }}>{zh ? '复制错误' : 'Copy error'}</button>
-          <button style={{ padding: '6px 12px' }} onClick={() => location.reload()}>{zh ? '重新加载' : 'Reload'}</button>
+          <button style={{ padding: '6px 12px' }} onClick={() => reloadWindow()}>{zh ? '重新加载' : 'Reload'}</button>
         </div>
       </div>
     )

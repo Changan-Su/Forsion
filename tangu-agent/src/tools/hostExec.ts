@@ -10,8 +10,9 @@
  */
 import { spawnHostShell, hostSandboxEnabled, remoteShellSeatbeltApplies } from '../sandbox/hostSandbox.js';
 import { RemoteShellProtectionError, remoteShellNotes } from '../sandbox/remoteShellSeatbelt.js';
-import { hostShellName, hostShellQuoting } from './shellPrompt.js';
+import { fromShellPath, hostShell, hostShellName, hostShellQuoting } from './hostShell.js';
 import { pinSystemFindstr } from './cmdReadOnly.js';
+import { HOST_FILE_OP_TOOLS } from './hostFileOps.js';
 import { hostSandboxFs, parseHostDocument } from '../sandbox/hostSandboxFs.js';
 import { promises as fs } from 'node:fs';
 import os from 'node:os';
@@ -99,7 +100,8 @@ function imageMimeForPath(p: string): string | null {
 /** 把工具路径解析为绝对路径：相对路径相对 cwd，绝对路径原样。 */
 export function resolvePath(ctx: ToolContext, p: string): string {
   const cwd = ctx.cwd || process.cwd();
-  return path.resolve(cwd, String(p || ''));
+  // Windows 上 bash 打印的是 /c/Users/… 这种写法,模型会原样递给文件工具(hostShell.fromShellPath)。
+  return path.resolve(cwd, fromShellPath(String(p || '')));
 }
 
 /** 相对 cwd 的展示路径（让结果更可读，绝对路径回退原样）。 */
@@ -242,6 +244,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
           `Run a single shell command (${hostShellName()}) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. ` +
           hostShellQuoting() +
           'To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. ' +
+          'To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. ' +
           'Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. ' +
           'For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.',
         parameters: {
@@ -261,7 +264,8 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
       const timeout = Number.isFinite(Number(args.timeout_ms)) && Number(args.timeout_ms) > 0 ? Number(args.timeout_ms) : BASH_TIMEOUT_MS;
       const started = Date.now();
       const wrapped = remoteShellSeatbeltApplies(ctx); // 与 spawnHostShell 同一判定(同一时刻现查 steer 染色)
-      const prepared = process.platform === 'win32' ? pinSystemFindstr(command) : command;
+      // findstr 定死到 System32 只对 cmd.exe 有意义;bash 下命令原样交给 bash(hostShell.ts)。
+      const prepared = process.platform === 'win32' && hostShell().kind === 'cmd' ? pinSystemFindstr(command) : command;
       const r = await runBash(prepared, cwd, ctx.signal, timeout, ctx);
       if (r.refused) return `Error: ${r.refused}`;
       let out = '';
@@ -771,7 +775,7 @@ export const HOST_TOOLS: Record<string, ToolImpl> = {
 export const hostExecProvider: ToolProvider = {
   id: 'builtin:host-exec',
   tools: () =>
-    Object.entries(HOST_TOOLS).map(([name, t]) => ({
+    Object.entries({ ...HOST_TOOLS, ...HOST_FILE_OP_TOOLS }).map(([name, t]) => ({
       name,
       ...t,
       isEnabledFor: (profile) => profile.capabilities.hostExec,

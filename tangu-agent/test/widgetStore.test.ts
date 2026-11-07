@@ -19,7 +19,7 @@ vi.mock('../src/services/agentSyncPaths.js', async (orig) => {
 });
 
 import { agentsDir, humanDir } from '../src/core/tanguHome.js';
-import { applyEdits, createWidget, deleteRecord, findWidgetByName, listWidgets, purgeExpiredWidgets, readRecords, readWidget, readWidgetContent, restoreWidget, setRecord, softDeleteWidget, updateWidget, WIDGET_DEF_MAX_BYTES, WidgetError, type WidgetPlace } from '../src/services/widgetStore.js';
+import { applyEdits, createWidget, deleteRecord, findWidgetByName, listAllWidgets, listWidgets, locateWidgetAnywhere, purgeExpiredWidgets, readRecords, readWidget, readWidgetContent, restoreWidget, setRecord, softDeleteWidget, updateWidget, WIDGET_DEF_MAX_BYTES, WidgetError, type WidgetPlace } from '../src/services/widgetStore.js';
 import { manageWidgetProvider, widgetsEnabledFor } from '../src/tools/builtin/manageWidget.js';
 import { sketchProvider } from '../src/tools/builtin/sketch.js';
 import { gateToolCall, resolveApproval, toolNeedsApproval, widgetWrite } from '../src/services/approvals.js';
@@ -194,6 +194,58 @@ describe('records', () => {
     await expect(setRecord(place(), id, { x: 1 }, 'r_missing')).rejects.toThrow(/not found/);
     await expect(setRecord(place(), id, { nested: { a: 1 } })).rejects.toThrow(/must be text/);
     await expect(setRecord(place(), id, JSON.parse('{"__proto__": 1}'))).rejects.toThrow(/invalid field/);
+  });
+});
+
+// 仪表盘 / 卡片区 / 主页没有会话:按 id 在所有 Agent、用户级里找,给了项目才看项目级。规矩和会话里一样。
+describe('without a session', () => {
+  const thrown = (fn: () => unknown): WidgetError => { try { fn(); } catch (e) { return e as WidgetError; } throw new Error('did not throw'); };
+  it('finds a widget of any agent and of the user, and a project widget only when the project is given', async () => {
+    const theirs = (await make({ name: 'theirs' }, { agentSlug: 'someone-else' })).widget;
+    const user = (await make({ name: 'everyone', scope: 'user' })).widget;
+    const inP = (await make({ name: 'in-project' }, inProject())).widget;
+    expect(locateWidgetAnywhere(theirs.manifest.id)).toMatchObject({ scope: 'agent', agentSlug: 'someone-else', manifest: { name: 'theirs' } });
+    expect(locateWidgetAnywhere(user.manifest.id)).toMatchObject({ scope: 'user' });
+    expect(locateWidgetAnywhere(user.manifest.id).agentSlug).toBeUndefined();
+    expect(thrown(() => locateWidgetAnywhere(inP.manifest.id))).toMatchObject({ code: 'NOT_FOUND', unreadable: 0 });
+    const found = locateWidgetAnywhere(inP.manifest.id, { projectDir: project });
+    expect(found.scope).toBe('project');
+    await setRecord(inProject(), inP.manifest.id, { note: 'a' });
+    expect(readRecords(found).rows.map((r) => r.cells.note)).toEqual(['a']); // 找到的能接着读原件和记录
+    expect(readWidgetContent(locateWidgetAnywhere(theirs.manifest.id))).toBe(html);
+    const all = listAllWidgets({ projectDir: project });
+    expect(all.widgets.map((w) => [w.scope, w.agentSlug, w.manifest.name]).sort()).toEqual([['agent', 'someone-else', 'theirs'], ['project', undefined, 'in-project'], ['user', undefined, 'everyone']]);
+    expect(listAllWidgets().widgets.map((w) => w.manifest.name).sort()).toEqual(['everyone', 'theirs']);
+    expect(thrown(() => locateWidgetAnywhere('../x'))).toMatchObject({ code: 'INVALID_ID' });
+  });
+
+  it('refuses two copies across agents, and lists soft-deleted ones', async () => {
+    const { widget } = await make();
+    const copy = join(agentsDir(), 'other', 'Library', 'Widgets', 'ledger');
+    mkdirSync(copy, { recursive: true });
+    writeFileSync(join(copy, 'widget.html'), html);
+    writeFileSync(join(copy, 'manifest.json'), readFileSync(join(widget.dir, 'manifest.json')));
+    expect(thrown(() => locateWidgetAnywhere(widget.manifest.id))).toMatchObject({ code: 'TWO_COPIES', message: expect.stringMatching(/two copies/) });
+    rmSync(copy, { recursive: true });
+    await softDeleteWidget(place(), widget.manifest.id);
+    expect(listAllWidgets().widgets[0].manifest.deletedAt).toBeTruthy();
+    expect(locateWidgetAnywhere(widget.manifest.id).manifest.deletedAt).toBeTruthy();
+  });
+
+  it('a folder it cannot read is reported, never read as empty', async () => {
+    const { widget } = await make();
+    const bad = join(agentsDir(), 'other', 'Library', 'Widgets', 'broken');
+    mkdirSync(bad, { recursive: true });
+    writeFileSync(join(bad, 'manifest.json'), '{ not json');
+    mkdirSync(join(agentsDir(), 'third', 'Library'), { recursive: true });
+    writeFileSync(join(agentsDir(), 'third', 'Library', 'Widgets'), 'not a folder');
+    const all = listAllWidgets();
+    expect(all.widgets.map((w) => w.manifest.id)).toEqual([widget.manifest.id]);
+    expect(all.unreadable.map((u) => [u.scope, u.agentSlug, u.name])).toEqual([['agent', 'other', 'broken'], ['agent', 'third', '']]);
+    expect(locateWidgetAnywhere(widget.manifest.id).manifest.id).toBe(widget.manifest.id); // 找到了就是它
+    const missing = thrown(() => locateWidgetAnywhere('w_missing'));
+    expect(missing).toMatchObject({ code: 'NOT_FOUND', unreadable: 2 });
+    expect(missing.message).toMatch(/2 widget folder\(s\) could not be read: broken, \(whole folder\)/);
   });
 });
 

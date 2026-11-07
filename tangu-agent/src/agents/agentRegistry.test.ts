@@ -81,6 +81,16 @@ describe('serializeAgent ↔ parseAgentFile round-trip', () => {
   });
 });
 
+describe('停用(disabled)', () => {
+  it('config.toml 里 disabled = true 才算停用,往返保留', () => {
+    const def = parseAgentConfig('aria', 'name = "Aria"\ndisabled = true\n', '');
+    expect(def.disabled).toBe(true);
+    expect(serializeAgentConfig(def)).toMatch(/^disabled = true$/m);
+    expect(parseAgentConfig('aria', 'name = "Aria"\ndisabled = "yes"\n', '').disabled).toBeUndefined();
+    expect(serializeAgentConfig(parseAgentConfig('aria', 'name = "Aria"\n', ''))).not.toMatch(/disabled/);
+  });
+});
+
 describe('config.toml apps tag (per-app 标签)', () => {
   it('parses + normalizes apps array (小写/去空格)', () => {
     expect(parseAgentConfig('x', 'name = "X"\napps = ["Echo", " tangu "]\n', '').apps).toEqual(['echo', 'tangu']);

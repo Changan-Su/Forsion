@@ -126,6 +126,23 @@ export async function recoverPluginDirs(fs: PluginFs): Promise<void> {
   }
 }
 
+/** 暂存目录(写完整的新版)换进 plugins/<slug>:旧 → 备份、暂存 → 正式、删备份。调用方必须持有 withPluginDirLock。
+ *  Android 的 rename 不覆盖已存在的目标,所以旧版必须先挪开;改名失败 / 进程被杀 → recoverPluginDirs 把旧版挪回去
+ *  (这里当场做一次,下次清点 / 安装时还会再做)。市场安装与核心插件更新(coreUpdates.ts)共用。 */
+export async function commitStagedDir(fs: PluginFs, slug: string): Promise<void> {
+  const dir = `${PLUGINS_DIR}/${slug}`
+  const backup = backupDirOf(slug)
+  try {
+    if (await fs.stat(dir)) await fs.rename(dir, backup)
+    await fs.rename(stagingDirOf(slug), dir)
+  } catch (e) {
+    await recoverPluginDirs(fs).catch(() => {})
+    throw e
+  }
+  // 新版已就位。备份删不掉不算失败:recoverPluginDirs 看到「备份在、正式在、暂存不在」会补删。
+  await fs.removeDir(backup).catch(() => {})
+}
+
 /** manifest 里的 main(缺省 main.js)→ 包内安全相对路径;越界 / 绝对路径 → null(当作读不到 main)。 */
 export function mainRelOf(main: unknown): string | null {
   if (main === undefined || main === null || main === '') return 'main.js'

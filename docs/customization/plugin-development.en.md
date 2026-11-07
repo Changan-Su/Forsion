@@ -104,7 +104,7 @@ A Space inside a plugin can declare a dedicated Mini view that offers only quick
 
 A plugin can also skip the full Space and open a registered compact view directly with `ctx.openMiniPanel?.(viewId, options)`; `mainViewId` sets where "Show in main panel" goes. For a wide standalone tool page, use `ctx.openFloatingPanel?.(viewId, options)`. The host adds the plugin namespace automatically and owns the window lifecycle. See [Floating Panel development](./floating-panel-development.md).
 
-When a View needs an input box with model selection, use `ctx.ui.mountChatBox`; it reuses the host component, and the plugin handles submission explicitly. Pass `modelPicker: false` to drop the model selection, `toolbar` for controls in the bottom row, `suggest` for completion such as `#`, and call `insertText` to insert at the caret. See [Reusable UI components](./ui-components.md).
+When a View needs an input box with model selection, use `ctx.ui.mountChatBox`; it reuses the host component, and the plugin handles submission explicitly. Pass `modelPicker: false` to drop the model selection, `toolbar` for controls in the bottom row, `suggest` for completion such as `#` (since 2026-11-02 it can be a list, for example one for `#` and one for `[[`; pass a list only when `ctx.ui.chatBoxCapabilities` includes `'suggestMany'`; when the box sits in the lower half of the window the suggestions open upward), and call `insertText` to insert at the caret. See [Reusable UI components](./ui-components.md).
 
 Settings-like pages (account, quota and credits, diagnostics, preferences) hand the host a description of the whole page through `ctx.ui.mountSettingsPage(el, { groups })`: each group has an icon, title, description, top-right buttons and items (switch, value, buttons, input, segmented, select, pick-to-run choice, stepper, code with copy, usage meters, empty / loading / error, custom block). The plugin supplies only the text, values and callbacks; the host draws them with its own settings parts and lays them out per device — on phones switches, values and single buttons stay at the right, inputs, steppers and two or more buttons move to the next line, and a pick-to-run choice becomes one button and a half sheet. Put anything outside that list in a `custom` block and mount single parts there with `ctx.ui.mountSettingsItem`. Stop copying the host's settings CSS; hosts before 2026-10-17 lack both methods, so feature-detect and keep your own page there. See [Reusable UI components](./ui-components.md).
 
@@ -143,9 +143,11 @@ ctx.registerSelectionAction({ id, title, run })
 ctx.ui?.mountSelectionBar?.(root, { tools, source, ask, watch })
 ```
 
+A "hold a tool and work" view (PDF annotation and the like) switches tools with the host's tool island: `ctx.ui?.mountToolIsland?.(root, { tools, active, onPick, slots })` sits centred at the top (docked at the bottom below 520 px), selection is controlled (call `setActive` from `onPick`), and the handle's `row` is the row under the island for you to fill. On older hosts draw your own bar. See "The tool island" in [Reusable UI components](./ui-components.en.md).
+
 ## Tables and note tasks
 
-Calendar, to-do and habit plugins need to read and edit the tables in your vault and the dated tasks in your notes (`- [ ] Send report @2026-10-20`). A plugin gets them only if its manifest declares `databases` (tables) or `noteTasks` (note tasks); plugins that do not declare them cannot see this data. Once granted, a plugin changing a cell or ticking a task goes the same way as your own edit in the table or the note: open tables update at once, and note-view properties are written into that note. A plugin can undo deleting a row from a classic table; a note-view row is a note, so a plugin can only move it to the recycle bin. The plugin's detail page lists what it declared in one line, "This plugin can: …" (reading the front window through `activeWindow` is listed there too). API details are in the `ctx.databases` / `ctx.noteTasks` section of the plugin development skill.
+Calendar, to-do and habit plugins need to read and edit the tables in your vault and the dated tasks in your notes (`- [ ] Send report @2026-10-20`). A plugin gets them only if its manifest declares `databases` (tables) or `noteTasks` (note tasks); plugins that do not declare them cannot see this data. Once granted, a plugin changing a cell or ticking a task goes the same way as your own edit in the table or the note: open tables update at once, and note-view properties are written into that note. A plugin can undo deleting a row from a classic table; a note-view row is a note, so a plugin can only move it to the recycle bin. The plugin's detail page lists what it declared in one line, "This plugin can: …" (reading the front window through `activeWindow` is listed there too). Since 2026-11-02, `- [ ]` lines indented under a task with an `@` date reach plugins as its subtasks (up to two levels; a subtask without its own `@` never shows up as a separate task), and every task carries the `#tags` on its line. Plugins can also read and write a table row's record body (the same text as "Open record", checked against what is there before writing) and add a column to a table (for example a multi-select "Tags" column the first time tags are used). Since 2026-11-04 a plugin can also change a whole table in one go (rename columns, add options, reorder rows, create views) through the same write path the table itself uses: open tables update at once and edits not yet saved are kept. The first column, autonumbers and created / edited times stay with the host, and a change that breaks the rules is refused as a whole. API details are in the `ctx.databases` / `ctx.noteTasks` section of the plugin development skill.
 
 ### Calendar overlays and calendar settings
 
@@ -159,7 +161,7 @@ Three smaller pieces: plugins can read the signed-in name (`ctx.app.watchAccount
 
 ## Bundled MCP servers, hooks and file events
 
-A plugin can ship its own MCP servers (only ones that run on this computer). Once it is installed and enabled, Tangu gains those tools; disabling the plugin stops them. Settings → MCP lists them with the plugin they come from; to turn them off, disable the plugin in plugin settings. A plugin can also ship hooks that are notified when a session starts, when a tool has run and when an answer ends, for auditing or archiving. These hooks only watch: they cannot block anything or add to the conversation. Settings → Hooks lists them too, marked "Observe only".
+A plugin can ship its own MCP servers (only ones that run on this computer). Once it is installed and enabled, Tangu gains those tools; disabling the plugin stops them. Settings → MCP lists them with the plugin they come from; to turn them off, disable the plugin in plugin settings. Like MCP servers the user adds, these tools load on demand by default: each request carries one catalog line per tool (its name and the first line of its description), and the AI loads a tool before calling it. Make the first line of each description say on its own what the tool does. For a server needed on every turn, set `"deferLoading": false` in its declaration to keep its tools loaded. A plugin can also ship hooks that are notified when a session starts, when a tool has run and when an answer ends, for auditing or archiving. These hooks only watch: they cannot block anything or add to the conversation. Settings → Hooks lists them too, marked "Observe only".
 
 Plugins can also receive file events in your vault: files created, deleted, renamed or moved in Forsion, changed by another program or by Tangu, and switching vaults. Backlink and tidy-up plugins use this to keep up with changes without rescanning the vault again and again. For the API, see the plugin development skill's sections on bundled MCP servers and hooks and on vault file events (`ctx.app.onVaultEvent`); how a plugin command hands query results back to Tangu is in the "`invoke`" section.
 
@@ -294,6 +296,62 @@ const turn = ctx.app.queuePopup?.()
 if (turn) await turn.ready
 showMyDialog({ onClose: () => turn?.done() })
 ```
+
+### First-use tips (since 2026-11-02)
+
+When someone reaches a feature of your plugin, the host shows a one-time tip on how to use it, and stops once they have used it. You declare tips in the manifest; the host decides when they show, so you don't track "seen" yourself.
+
+```json
+"guide": {
+  "tips": [
+    {
+      "id": "drag-to-calendar",
+      "at": "todo-row",
+      "style": "ring",
+      "platform": "desktop",
+      "when": { "visible": ["calendar-grid"] },
+      "done": ["todo.schedule"],
+      "title": "拖到日历上排时间",
+      "text": "按住这条待办拖进日历的时间格，就排成那半小时。",
+      "en": { "title": "Drag onto the calendar to schedule", "text": "Drop it on a time slot to book half an hour." }
+    }
+  ]
+}
+```
+
+- `at`: the `data-guide-anchor="<name>"` of an element in one of your own views. The host only looks inside your views, so names can't clash with other plugins. A tip can only show while that element is on screen.
+- `style`: `line` puts one line on the anchor's top edge (good for inputs); `ring` rings the anchor with a small card beside it and needs a `title`.
+- `when`, one of: `{ "open": "<view id>", "times": 1 }` how often that view has been opened; `{ "count": "<event>", "atLeast": 3 }` a counter reached a number; `{ "visible": ["<anchor>", …] }` these anchors are on screen together. No `when` = it only shows when you call `ctx.guide.show(id)`.
+- `done`: once any of these counters is ≥ 1 the tip counts as learned and never shows again. Counters are `ctx.achievements.track('<event>')`: report it once when the user actually does the thing. Bare names are your own tracked events; an `app:` prefix reads an official host event (for example `app:note.wikilink`).
+- `platform`: `desktop` / `mobile`; leave it out for both. Dragging, hovering and shortcuts have no phone equivalent, so mark those `desktop`.
+- Text: Chinese `title` / `text` plus the `en` mirror. **In an English interface a tip without `en` doesn't show** rather than falling back to Chinese. Keep titles to about 16 Chinese characters and bodies to about 40.
+- Ids use lowercase letters, digits and `-`; up to 12 tips. A malformed tip is dropped on its own and the rest still work.
+
+The host sets the pace: one tip at a time across the whole app (shared with the user guide's spotlight); at most 3 a day; a tip waits 2 seconds after its anchor appears and 1.5 seconds after the user stops typing; at most one per view opening; it waits while a popup is queued or open, or while first-run onboarding is open. Got it / × / Esc marks a tip as seen; "Don't show again" turns off all of your plugin's tips; Settings → Notifications → Tips turns tips off or resets them. Seen and turned-off state is stored on this device only.
+
+**When a new version adds a feature**, give it a tip with a **new id**. Tips are recorded per plugin id + tip id, so people who upgrade see the new one when they get there, while old tips they have seen stay hidden. Don't rename an existing tip's id; that makes everyone see it again.
+
+At runtime:
+
+```js
+inputEl.dataset.guideAnchor = 'todo-input'   // mark an anchor
+ctx.achievements.track('todo.tag')            // the user really did the thing
+ctx.guide?.show('tags')                        // ask for a tip when its condition can't be written in the manifest (pace and records still apply)
+ctx.guide?.state('tags')                       // 'waiting' | 'seen' | 'learned' | 'muted' | 'off'
+```
+
+**Examples in an empty state**: `ctx.ui.mountEmptyState` now takes `examples` (up to 3). Clicking one should usually put that sentence into your input so people watch it get recognised and send it themselves, rather than creating something for them:
+
+```js
+ctx.ui.mountEmptyState(el, {
+  icon: 'list-todo', title: 'No to-dos yet', line: 'Just type one below.',
+  examples: [{ label: 'Tomorrow 3pm send weekly report #work', note: 'Dates and tags work as you type', run: () => box.insertText('Tomorrow 3pm send weekly report #work') }],
+})
+```
+
+To see tips again while developing, run "Reset tips" from the command palette or use Settings → Notifications → Tips → Reset, then call `ctx.guide.show(id)` to bring up a specific tip. If a tip never shows, check in the developer tools that the element carries `data-guide-anchor` and sits inside your own view, and that its condition actually holds.
+
+How this differs from the requirement gate (manifest `onboarding.requires`): a gate means the plugin can't work until something is done; a tip means it works and here is a trick. Older hosts ignore `guide` and show nothing; always call `ctx.guide` with `?.`.
 
 ## On-demand native main companions
 

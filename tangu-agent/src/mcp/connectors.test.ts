@@ -211,3 +211,59 @@ describe('alwaysAsk(目录条目里的「每次都问」)', () => {
     await expect(gateToolCall('ca4', call('mcp__didi__echo'), { ...ctx, approvalDeferral: 'queue' })).resolves.toMatchObject({ action: 'reject' });
   });
 });
+
+describe('按工具设置(mcp.json 的 tools:连接器设置页的审批下拉)', () => {
+  it('off 不下发、调用也拒;ask 每次都问(没连接器标记的条目也认);只改 tools 不重连', async () => {
+    writeFileSync(connectorCatalogFile(), JSON.stringify({ fetchedAt: 1, connectors: [{ id: 'didi', kind: 'remote-mcp', status: 'published', alwaysAsk: ['echo'] }] }));
+    const mcp = await startHttpServer({ tag: 't' });
+    stops.push(() => mcp.stop());
+    const servers = { didi: { url: mcp.url, connector: 'didi', tools: { pid: 'off', image: 'ask', echo: 'off' } }, mine: { url: mcp.url, tools: { echo: 'ask' } } };
+    const m = await manager(servers);
+    expect(m.toolsForRun().has('mcp__didi__pid')).toBe(false);
+    expect(m.toolsForRun().has('mcp__didi__inject')).toBe(true);
+    const all = m.toolsForRun(undefined, { includeOff: true });
+    expect(all.has('mcp__didi__pid')).toBe(true);
+    expect(declaredApproval('mcp__didi__image')).toBe('always');
+    expect(declaredApproval('mcp__mine__echo')).toBe('always');
+    expect(declaredApproval('mcp__mine__pid')).toBeUndefined();
+    expect(declaredApproval('mcp__didi__inject')).toBeUndefined();
+    await expect(m.callTool(all.get('mcp__didi__pid')!, {})).resolves.toMatchObject({ isError: true, text: expect.stringMatching(/turned off/) });
+
+    // 放开:只改 tools → 原地生效,连接不断(桥接出来的工具对象还是同一批)
+    const before = m.toolsForRun().get('mcp__didi__inject');
+    writeFileSync(join(dir, 'mcp.json'), JSON.stringify({ mcpServers: { ...servers, didi: { url: mcp.url, connector: 'didi' } } }));
+    await m.reloadConfig();
+    expect(statusOf(m, 'didi').status).toBe('connected');
+    expect(m.toolsForRun().get('mcp__didi__inject')).toBe(before);
+    expect(m.toolsForRun().has('mcp__didi__pid')).toBe(true);
+    expect(declaredApproval('mcp__didi__image')).toBeUndefined();
+    expect(declaredApproval('mcp__didi__echo')).toBe('always'); // 目录的 alwaysAsk 照样在,放不开
+    await expect(m.callTool(tool(m, 'mcp__didi__pid'), {})).resolves.toMatchObject({ isError: false });
+  });
+});
+
+describe('按工具设置:不等空闲、Agent 改不了', () => {
+  it('有 run 在跑(不许重载连接)时,改 tools 照样立刻生效', async () => {
+    const mcp = await startHttpServer({ tag: 'b' });
+    stops.push(() => mcp.stop());
+    const file = join(dir, 'mcp.json');
+    writeFileSync(file, JSON.stringify({ mcpServers: { mine: { url: mcp.url } } }));
+    let idle = true;
+    const m = createMcpManager(file, { ...FAST, canReload: () => idle });
+    managers.push(m);
+    await m.start();
+    const pid = tool(m, 'mcp__mine__pid');
+    idle = false; // 模拟有 run 在跑
+    writeFileSync(file, JSON.stringify({ mcpServers: { mine: { url: mcp.url, tools: { pid: 'off', echo: 'ask' } } } }));
+    await m.reloadConfig();
+    await expect(m.callTool(pid, {})).resolves.toMatchObject({ isError: true, text: expect.stringMatching(/turned off/) });
+    expect(declaredApproval('mcp__mine__echo')).toBe('always');
+  });
+
+  it('manage_mcp update 不能碰 tools(删掉 = 自己放开限制)', async () => {
+    const { writeMcpSettings } = await import('../services/mcpSettings.js');
+    for (const tools of [null, {}, { pid: 'ask' }]) {
+      expect(() => writeMcpSettings('update', { name: 'mine', config: { tools } }, () => {})).toThrow(/Settings → Connectors/);
+    }
+  });
+});

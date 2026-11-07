@@ -40,11 +40,19 @@ function entries(storage: Storage): Entry[] {
 export function readUIState(key: string, storage?: Storage): UIUserState {
   try { return stateOf(entries(storage ?? localStorage).find(e => e.key === key)?.state) } catch { return emptyUIState() }
 }
-export function writeUIState(key: string, state: UIUserState, storage?: Storage): void {
+// One saved widget can be on screen in several places (chat, card rail, dashboard) under one key.
+// A write tells the others to re-read, so none of them writes its stale snapshot back over it.
+const readers = new Set<(key: string, from: unknown) => void>()
+export function subscribeUIState(fn: (key: string, from: unknown) => void): () => void {
+  readers.add(fn)
+  return () => { readers.delete(fn) }
+}
+export function writeUIState(key: string, state: UIUserState, storage?: Storage, from?: unknown): void {
   try {
     if (new TextEncoder().encode(JSON.stringify(state)).length > MAX_STATE) return
     const target = storage ?? localStorage
     target.setItem(STORAGE, JSON.stringify([...entries(target).filter(e => e.key !== key).slice(-47), { key, state }]))
+    queueMicrotask(() => { for (const f of readers) f(key, from) })
   } catch { /* Storage denied/full: in-memory interactions remain available. */ }
 }
 export function inputValues(doc: UIDocument, state: UIUserState): Record<string, string | number> {

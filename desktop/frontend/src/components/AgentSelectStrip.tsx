@@ -99,7 +99,8 @@ export function AgentSelectStrip({ sessionId, cfg }: { sessionId: string | null;
   const warming = engineId && !s.engineCaps[engineId] ? engineId : ''
 
   const items = useMemo<Candidate[]>(() => {
-    const list: Candidate[] = s.agentDefs.map((a) => ({
+    // 停用的 Agent 不列;当前会话正在用的 / 群里已有的照列(否则会话里看不到、也移不掉)
+    const list: Candidate[] = s.agentDefs.filter((a) => !a.disabled || a.slug === cfg.agentSlug || !!cfg.groupAgents?.includes(a.slug)).map((a) => ({
       id: agentId(a.slug), kind: 'agent', slug: a.slug, name: agentName(a), description: a.description, system: a.createdBy === 'system',
     }))
     // 老群聊会话里的临时 / 已删 agent 也要能显示与移除 —— 过滤掉等于下一次写入时静默丢成员。

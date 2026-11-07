@@ -2,10 +2,10 @@
  *  DTO 刻意不复用宿主内部的 AggDb / MdMark:内部结构以后要改,不该牵动插件 API(同 PluginSearchHit 的口径)。
  *  写口与内置日历 / 待办走同一组函数(setAggCell / addAggRow / patchMark …),所以和打开着的界面一致。 */
 import { isRealDate, parseCalDate } from '@amadeus-shared/db/calDate'
-import type { CellValue } from '@amadeus-shared/db/schema'
+import { COLUMN_TYPES, DB_VERSION, dbFileSchema, dbId, type CellValue, type ColumnType, type DbFile } from '@amadeus-shared/db/schema'
 import type { MdMark } from '@amadeus-shared/mdMarks'
-import { isStamped, resolveBaseType } from '../blocks/database/propertyTypes'
-import { addAggRow, deleteAggRow, duplicateAggRow, getAggDb, restoreAggRow, setAggCell, setAggName, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
+import { isStamped, newRowCells, resolveBaseType } from '../blocks/database/propertyTypes'
+import { addAggRow, deleteAggRow, duplicateAggRow, getAggDb, restoreAggRow, setAggBody, setAggCell, setAggName, watchAllDatabases, type AggDb } from '../store/dbAggregateStore'
 import { findMdMark, markKey, patchMark, watchMdMarks } from '../store/mdMarkStore'
 import { HUMAN_CAL } from '../store/humanCalendarIo'
 import { watchHumanCal } from '../store/calendarMembers'
@@ -32,6 +32,7 @@ export const toDb = (db: AggDb): PluginDatabase => ({
 const toTask = (m: MdMark): PluginNoteTask => ({
   id: markKey(m), path: m.path, title: m.title, heading: m.heading, text: m.text,
   isTask: m.isTask, checked: m.checked, due: m.due, ...(m.remind ? { remind: m.remind } : {}),
+  ...(m.parentId ? { parentId: m.parentId } : {}), tags: [...(m.tags ?? [])],
 })
 
 /** 插件给的值是不是一个合法的单元格值(信任边界:插件代码不一定是 TS)。 */
@@ -47,6 +48,38 @@ const isDue = (s: string): boolean => {
   const [a, b, ...rest] = s.split('/')
   const c = parseCalDate(s)
   return !!c && !rest.length && isRealDate(a) && (b === undefined || (c.end === b && isRealDate(b)))
+}
+
+/** 插件对一张表的一次改动(ctx.databases.mutate)。null = 不收:回调抛错、结构不对、动了只有宿主能定的东西。
+ *  回调拿的是拷贝,原地改不到宿主的快照;结果过 dbFileSchema(读写盘用的同一份,所以不会多丢字段)。
+ *  宿主定的:经典表 / 笔记视图不能互换、首列(身份列)还是原来那一列、行 id 与列 id 不重复、盖章列的值
+ *  (已有行留原值,新行由宿主盖 —— 插件伪造不了编号与创建时间;修改时间由 dbStore.mutate 统一盖)。 */
+export function pluginDbStep(d: DbFile, fn: (db: DbFile) => DbFile | null): DbFile | null {
+  if (d.source) return null // 重放时表可能已被别处改成笔记视图:输入也要核
+  let out: unknown
+  try { out = fn(structuredClone(d)) } catch (e) { console.error('[amadeus] ctx.databases.mutate 回调抛错', e); return null }
+  if (out === null) return d
+  const parsed = dbFileSchema.safeParse(out)
+  if (!parsed.success) { console.warn('[amadeus] ctx.databases.mutate:返回的不是有效的表结构', parsed.error.issues[0]); return null }
+  const next = parsed.data as DbFile
+  const unique = (ids: string[]): boolean => new Set(ids).size === ids.length
+  if (next.source || next.version > DB_VERSION || !unique(next.rows.map((r) => r.id)) || !unique(next.columns.map((c) => c.id))) return null
+  // 首列 = 标识列:id 和类型都不许动(改成「修改时间」会让 stampUpdatedRows 把标题盖成时间戳;界面也不让改它的类型)
+  if (d.columns.length && (next.columns[0]?.id !== d.columns[0].id || next.columns[0].type !== d.columns[0].type)) return null // 首列是卡片标题、别的表关联芯片上的字
+  const stamped = next.columns.filter((c) => isStamped(c.type)).map((c) => c.id)
+  const before = new Map(d.rows.map((r) => [r.id, r]))
+  const rows = next.rows.map((r) => {
+    if (!stamped.length) return r
+    const old = before.get(r.id), cells = { ...r.cells }
+    for (const id of stamped) { if (old && Object.hasOwn(old.cells, id)) cells[id] = old.cells[id]; else delete cells[id] }
+    return { ...r, cells }
+  })
+  // 新行逐条盖章:每次都看已经盖好的那些行,编号才不撞
+  rows.forEach((r, i) => { if (!before.has(r.id)) rows[i] = { ...r, cells: { ...newRowCells({ ...next, rows }), ...r.cells } } })
+  const result: DbFile = { ...next, version: Math.max(d.version, next.version), rows }
+  // 内容上没变(克隆 + 解析总是新对象)就原样返回 d:不排队,免得重放时在别人的新数据上做了调用时没做的事
+  const norm = dbFileSchema.safeParse(d)
+  return norm.success && JSON.stringify(norm.data) === JSON.stringify(result) ? d : result
 }
 
 const vaultKey = (): string => { const s = usePageStore.getState(); return `${s.vaultSide}:${s.vaultRoot}` }
@@ -102,6 +135,52 @@ export function createDatabasesApi(scope: DataScope, includeHumanCalendar = fals
       const db = scope.alive() ? table(path) : null
       if (!db) return null
       return addAggRow(db, cellsOf(db, cells), typeof name === 'string' ? name : '', scope.alive).catch(() => null)
+    },
+    addColumn: (path, spec) => {
+      const db = scope.alive() ? table(path) : null
+      // 经典表才加(笔记视图的列是 frontmatter 键,另一套);走 dbStore.mutate,和行的写入同一条防抖写穿 —— 不走磁盘比对交换,
+      // 那条看不见还没落盘的新行,重读会把它冲掉(11-02 实拍:刚加的待办随「第一次加标签列」消失)
+      if (!db || db.isNoteView || db.readonly || db.writeCell || !spec || typeof spec !== 'object') return null
+      const name = typeof spec.name === 'string' ? spec.name.trim() : ''
+      if (!name || !COLUMN_TYPES.includes(spec.type as ColumnType)) return null
+      const id = dbId() // 回调外定 id,重放才是确定的(同表格的「添加列」)
+      useDbStore.getState().mutate(db.path, (d) => d.columns.some((c) => c.id === id) ? d : { ...d, columns: [...d.columns, { id, name, type: spec.type as ColumnType }] })
+      return id
+    },
+    mutate: (path, fn) => {
+      const db = scope.alive() ? table(path) : null
+      // 同 addColumn:只改可写的经典表(笔记视图的行在笔记里;只读源 / 可编辑投影没有自己的行)
+      if (!db || db.isNoteView || db.readonly || db.writeCell || typeof fn !== 'function') return false
+      const cur = useDbStore.getState().entries[db.path]?.data
+      if (!cur) return false
+      // 先在当前快照上试一次:抛错 / 结构不对当场回 false,不等落盘时才悄悄丢掉
+      const tried = pluginDbStep(cur, fn)
+      if (!tried || tried === cur) return false
+      // 和表格界面同一个写口:防抖写穿,撞上别人的新版本时按顺序重放(所以 fn 必须是纯函数)
+      useDbStore.getState().mutate(db.path, (d) => {
+      const out = pluginDbStep(d, fn)
+      // ponytail: 重放时不合规只能整笔作废(套用旧结果会盖掉别人的改动),只留一条警告;要回报给插件再加回调
+      if (!out) console.warn('[amadeus] ctx.databases.mutate:落盘重放时结果不合规,这笔改动作废', db.path)
+      return out ?? d
+    })
+      return true
+    },
+    readBody: (path, rowId) => {
+      const db = scope.alive() ? table(path) : null
+      const row = db && !db.isNoteView ? db.rows.find((r) => r.rowId === rowId) : undefined
+      return row ? row.body ?? '' : null
+    },
+    setBody: (path, rowId, body, expected) => {
+      const db = scope.alive() ? table(path) : null
+      const row = db?.rows.find((r) => r.rowId === rowId)
+      // 只写经典表(笔记视图的正文是笔记文件;只读源 / 可编辑投影没有正文),同 mountRecord({ body })
+      if (!db || !row || db.isNoteView || db.readonly || db.writeCell || typeof body !== 'string') return false
+      if (expected !== undefined) {
+        if (!expected || typeof expected !== 'object' || typeof expected.body !== 'string') return false
+        if ((row.body ?? '') !== expected.body) return false
+      }
+      setAggBody(db, row.rowId, body, expected ? { body: expected.body } : undefined)
+      return true
     },
     duplicateRow: async (path, rowId) => {
       const db = scope.alive() ? table(path) : null

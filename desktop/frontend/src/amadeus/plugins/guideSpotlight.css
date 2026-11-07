@@ -30,3 +30,35 @@
 .guide-spot-act { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .guide-spot-mute { padding: 0; border: 0; background: transparent; color: var(--text-faint); font: inherit; font-size: var(--ui-font-meta); cursor: pointer; }
 .guide-spot-mute:hover { color: var(--text-muted); }
+
+/* 插件的上手提示(guideTips.ts,2026-11-02)。
+   line = 贴在目标上沿的一行:只垫一层主题色淡底、不描边(DESIGN 卡片描边纪律),宽同目标,× / Esc = 知道了。 */
+.guide-tip-line {
+  position: fixed;
+  z-index: 141;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 12px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--accent-ink) 10%, var(--bg-card));
+  box-shadow: var(--card-shadow);
+  color: var(--text-muted);
+  font-family: var(--font-ui);
+  font-size: var(--ui-font-meta);
+  line-height: var(--ui-line-meta);
+}
+.guide-tip-text { flex: 1; min-width: 0; }
+.guide-tip-x { flex: none; display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--text-faint); cursor: pointer; }
+.guide-tip-x:hover { color: var(--text-muted); background: var(--overlay-light); }
+/* 手机:圈注的小卡贴到底部输入区 / Dock 上方成一条,不浮在小目标旁边(圈照画)。
+   ponytail: 固定离底 84px,够让开各外壳的底部条;哪个外壳被盖住了,给它设 --guide-dock-bottom。 */
+.guide-spot-card[data-side='dock'] {
+  left: 12px;
+  right: 12px;
+  width: auto;
+  top: auto;
+  bottom: calc(env(safe-area-inset-bottom) + var(--guide-dock-bottom, 84px));
+}
+.guide-spot-card[data-side='dock']::before { display: none; }

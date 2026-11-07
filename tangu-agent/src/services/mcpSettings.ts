@@ -54,6 +54,8 @@ export function writeMcpSettings(action: string, args: Record<string, any>, guar
   const name = typeof args.name === 'string' ? args.name : '';
   if (!['add', 'update', 'enable', 'disable', 'delete'].includes(action)) throw new Error('Unknown MCP action');
   if (action !== 'add') validateMcpName(name);
+  // 按工具的审批 / 关闭是用户在连接器设置里定的:Agent 改不了(删掉就等于自己放开限制,完全通行档下还不弹卡)。新加的条目带着只会更严,照收
+  if (action === 'update' && args.config && typeof args.config === 'object' && Object.hasOwn(args.config, 'tools')) throw new Error('Per-tool approval settings can only be changed by the user in Settings → Connectors.');
   const incoming = action === 'add' ? parseMcpInput(args.config, name) : undefined;
   const pluginNames = new Set((deps().mcp?.listStatus() ?? []).filter(s => s.origin).map(s => s.name));
   const names = incoming ? Object.keys(incoming) : [name];

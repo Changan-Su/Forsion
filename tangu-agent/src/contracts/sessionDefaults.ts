@@ -24,7 +24,7 @@ export function stickyDefaults(dc: StoredDesktopConfig | null, host: boolean, pr
   // Ultra 只延续到本机 work 会话(delegate 只在本机引擎有;云端 / chat 会话带上它药丸也显示不出来),且只跟 max 同在。
   if (host && preset !== 'chat' && dc?.lastUltra && out.thinkingLevel === 'max') out.ultra = true
   // Fast 不分槽:它是「这台机器上我要快」,chat / work 都一样;没有 Fast 档的模型由引擎不发。
-  if (dc?.lastFast) out.fast = true
+  if (dc?.lastFast) out.fast = dc.lastFast === 'ultra' ? 'ultra' : true
   return out
 }
 

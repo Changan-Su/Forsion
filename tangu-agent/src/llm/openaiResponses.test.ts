@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { openaiToResponsesBody, streamOpenAiResponses, stableSessionUuid } from './openaiResponses.js';
-import { ACCOUNT_MARK, RUN_MARK } from './openaiCompat.js';
+import { ACCOUNT_MARK, RUN_MARK, SESSION_MARK } from './openaiCompat.js';
+import { openCodeSessionId } from './opencodeGo.js';
 
 describe('openaiToResponsesBody', () => {
   it('maps system→instructions, messages→input, tools flattened, tool result→function_call_output', () => {
@@ -322,6 +323,21 @@ describe('streamOpenAiResponses SSE parse', () => {
     expect(seen[0]['chatgpt-account-id']).toBeUndefined();
     expect(seen[1]['OpenAI-Beta']).toBe('responses=experimental');
     expect(seen[1]['chatgpt-account-id']).toBe('acct_1');
+  });
+
+  it('OpenCode Go 的 /responses(导入的 Codex 配置):带会话头;官方 OpenAI 不带', async () => {
+    const sse = 'data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1}}}\n';
+    const seen: Array<Record<string, string>> = [];
+    vi.stubGlobal('fetch', (_url: any, init: any) => {
+      seen.push(init.headers);
+      return Promise.resolve({ ok: true, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(sse)); c.close(); } }) });
+    });
+    await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://opencode.ai/inference/go/openai/v1', payload: { model: 'gpt-6-luna', messages: [], [SESSION_MARK]: 'sess-1' } } as any);
+    await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://opencode.ai/inference/go/openai/v1', payload: { model: 'gpt-6-luna', messages: [], [RUN_MARK]: 'run-1' } } as any);
+    await streamOpenAiResponses({ apiKey: 'x', baseUrl: 'https://api.openai.com/v1', payload: { model: 'gpt-6-luna', messages: [], [SESSION_MARK]: 'sess-1' } } as any);
+    expect(seen[0]['x-opencode-session']).toBe(openCodeSessionId('sess-1'));
+    expect(seen[1]['x-opencode-session']).toBe(openCodeSessionId('run-1'));
+    expect(seen[2]['x-opencode-session']).toBeUndefined();
   });
 
   it('response.incomplete(输出截断)归一化为 finishReason=length——半截函数参数不得伪装成 tool_calls 被执行', async () => {

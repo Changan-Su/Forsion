@@ -30,7 +30,7 @@ window.__narrow = { set() {}, sent: [], stopped: 0 }
 function Harness() {
   const [state, set] = useState(initial)
   const [level, setLevel] = useState<NonNullable<AgentConfig['thinkingLevel']>>('medium')
-  const [fast, setFast] = useState(false)
+  const [fast, setFast] = useState<boolean | 'ultra'>(false)
   const [prompt, setPrompt] = useState('')
   const [selection, setSelection] = useState({ modelId: 'gpt-6-luna', thinkingLevel: 'medium' as NonNullable<AgentConfig['thinkingLevel']> })
   window.__narrow.set = patch => set(prev => ({ ...prev, ...patch }))

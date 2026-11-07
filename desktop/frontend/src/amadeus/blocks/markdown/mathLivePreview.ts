@@ -10,7 +10,7 @@ import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/
 import type { Node as PMNode } from '@milkdown/kit/prose/model'
 import katex from 'katex'
 import 'katex/dist/katex.min.css'
-import { attachSourceButton, revealSource } from './sourceToggle'
+import { attachCopyButton, attachSourceButton, revealSource } from './sourceToggle'
 import { editorFocusKey, editorFocused } from './editorFocus'
 import { registerMessages, translate } from '../../../i18n'
 
@@ -127,6 +127,8 @@ function renderMath(view: EditorView, latex: string, display: boolean, srcFrom: 
   el.className = display ? 'math-rendered math-rendered--block' : 'math-rendered'
   el.contentEditable = 'false'
   katexInto(el, latex, display)
+  // 块公式:`</>` 左边再挂一颗复制键(只读视图也有)
+  if (display) attachCopyButton(el, view, latex)
   // 悬停浮现的 `</>`:点它进源码(点公式本身同样进,这只是看得见的入口)
   attachSourceButton(el, view, () => { const at = srcFrom(); if (at != null) revealSource(view, at) }, !display)
   // 点渲染结果 → 把光标塞进源码(srcFrom+1,即开 `$` 之后)并置焦,该行随即露出源码可编辑。

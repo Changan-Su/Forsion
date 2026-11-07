@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { openaiToAnthropicBody, streamAnthropicMessages } from './anthropicMessages.js';
-import { tuneOpenAiDirectPayload, PROTOCOL_MARK as PROTOCOL } from './openaiCompat.js';
+import { tuneOpenAiDirectPayload, PROTOCOL_MARK as PROTOCOL, SESSION_MARK } from './openaiCompat.js';
+import { openCodeSessionId } from './opencodeGo.js';
 
 describe('openaiToAnthropicBody', () => {
   // 能力表 → wire 端到端:Opus 5.5 思考常开(disabled 是 400),display 缺省 omitted 会让工具间旁白静默。
@@ -113,6 +114,19 @@ describe('用户自有 API key 路径', () => {
     }
     expect(seen[0]).toMatchObject({ 'x-api-key': 'sk-relay-1', authorization: 'Bearer sk-relay-1' });
     expect(seen[1].authorization).toBeUndefined();
+  });
+
+  it('OpenCode Go 的 /anthropic/v1:带会话头;别的中转不带', async () => {
+    const seen: any[] = [];
+    vi.stubGlobal('fetch', (_u: string, init: any) => {
+      seen.push(init.headers);
+      return Promise.resolve({ ok: false, status: 401, body: null, json: () => Promise.resolve({ error: { message: 'x' } }) });
+    });
+    for (const baseUrl of ['https://opencode.ai/inference/go/anthropic/v1', 'https://relay.example.com']) {
+      await streamAnthropicMessages({ apiKey: 'k', baseUrl, payload: { model: 'qwen3.8-max', messages: [], [SESSION_MARK]: 'sess-1' } } as any).catch(() => {});
+    }
+    expect(seen[0]['x-opencode-session']).toBe(openCodeSessionId('sess-1'));
+    expect(seen[1]).not.toHaveProperty('x-opencode-session');
   });
 });
 

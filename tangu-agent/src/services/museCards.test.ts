@@ -13,6 +13,7 @@ const h = vi.hoisted(() => ({
   mutations: [] as any[],
   muse: { inboxAutoRead: [] as string[], inboxIgnored: [] as string[] } as any,
   onboarding: {} as any,
+  ensured: 0,
   valid: true,
   upsert: { ok: true, trigger: { id: 'w-1' } } as any,
   upserts: [] as any[],
@@ -51,14 +52,14 @@ vi.mock('./specialAgentsConfig.js', () => ({
   loadSpecialAgentsConfig: () => ({ muse: h.muse }),
   updateMuseConfig: (fn: any) => { if (h.configFails) throw new Error('config lock timeout'); const patch = fn(h.muse); Object.assign(h.muse, patch); return { muse: h.muse }; },
 }));
-vi.mock('./museState.js', () => ({ MUSE_ONBOARDING_MS: 14 * 86_400_000, patchMuseOnboarding: async (p: any) => { Object.assign(h.onboarding, p); } }));
+vi.mock('./museState.js', () => ({ MUSE_ONBOARDING_MS: 14 * 86_400_000, patchMuseOnboarding: async (p: any) => { Object.assign(h.onboarding, p); }, ensureMuseOnboarding: async () => { h.ensured = (h.ensured || 0) + 1; return h.onboarding; } }));
 vi.mock('../tools/builtin/amadeus.js', () => ({ amadeusVaultPath: () => '' }));
 vi.mock('./museTriggers.js', () => ({
   validateTriggerInput: (input: any, opts: any) => { h.cwds.push(opts?.cwd); return h.valid ? { ok: true, value: { desc: 'r', enabled: input.enabled } } : { ok: false, error: 'bad' }; },
   upsertTrigger: async (v: any, _id: unknown, opts: any) => { if (h.upsert instanceof Error) throw h.upsert; h.upserts.push({ v, opts }); return h.upsert; },
 }));
 
-import { decideMuseCard, getMuseCard, inboxAskBlocked, inboxListBlocked, inboxHint, listMuseCards, pickMuseSettings, postIntroCard, postMuseCard, postSummaryCard, proposalStats, recommendBlocked, recommendHint, recordMessageFeedback } from './museCards.js';
+import { applyOnboardingIntro, cleanFocusText, decideMuseCard, getMuseCard, inboxAskBlocked, inboxListBlocked, inboxHint, listMuseCards, pickMuseSettings, postIntroCard, postMuseCard, postSummaryCard, proposalStats, recommendBlocked, recommendHint, recordMessageFeedback } from './museCards.js';
 
 const DAY = 86_400_000;
 const plugin = (id = 'better-pdf') => ({ kind: 'plugin' as const, key: `plugin:${id}`, payload: { item: { id, name: 'Better PDF' } }, text: '你这周开了 9 份 PDF。' });
@@ -271,6 +272,31 @@ describe('写配置失败', () => {
     await decideMuseCard('u', card.id, 'dismiss');
     expect(await decideMuseCard('u', card.id, 'apply')).toMatchObject({ ok: false, status: 409 });
     expect(h.muse.notify).toBe('immediate');
+  });
+});
+
+describe('引导里答的第一次见面(applyOnboardingIntro)', () => {
+  it('主动程度改醒来间隔,作息照旧映射,自己写的一条进记忆,记 introAt', async () => {
+    Object.assign(h.muse, { activeHours: null, heartbeatMinutes: 120 });
+    await applyOnboardingIntro('u', { when: 'daytime', proactivity: 'high', focus: ['schedule', 'bogus'], focusText: 'Lumen 的\n App Store   评论' }, 1234);
+    expect(h.muse.activeHours).toEqual({ start: 9, end: 21 });
+    expect(h.muse.heartbeatMinutes).toBe(60);
+    expect(h.memory.join('\n')).toMatch(/schedule/);
+    expect(h.memory.join('\n')).not.toMatch(/bogus/);
+    expect(h.memory.join('\n')).toMatch(/keep an eye on: Lumen 的 App Store 评论$/m);
+    expect(h.onboarding.introAt).toBe(1234);
+  });
+  it('一般 = 3 小时;不认识的档不动间隔', async () => {
+    Object.assign(h.muse, { heartbeatMinutes: 120 });
+    await applyOnboardingIntro('u', { proactivity: 'low' });
+    expect(h.muse.heartbeatMinutes).toBe(180);
+    await applyOnboardingIntro('u', { proactivity: 'turbo' });
+    expect(h.muse.heartbeatMinutes).toBe(180);
+  });
+  it('自己写的那条:单行、最多 60 字,空白不记', () => {
+    expect(cleanFocusText('  a\n\tb  ')).toBe('a b');
+    expect(cleanFocusText('x'.repeat(80))).toHaveLength(60);
+    expect(cleanFocusText(42)).toBe('');
   });
 });
 

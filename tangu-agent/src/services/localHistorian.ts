@@ -55,6 +55,8 @@ import { HISTORIAN_EMOJI_FIELD } from '../core/sessionEmoji.js';
 import { applyHistorianEmoji } from './sessionEmoji.js';
 import { sessionRemoteTainted } from './remoteTaint.js';
 import { judgeTriggerBlock } from './judgeSignals.js';
+import { deviceTagContext, hasLocalPath, textForThisDevice } from './deviceTagContext.js';
+import { tagOf, withTag } from '../contracts/deviceTags.js';
 export { parseRawLines } from './memoryCandidates.js';
 const historianSignal = new AsyncLocalStorage<AbortSignal>();
 
@@ -788,6 +790,15 @@ async function runHistorianForSession(sessionId: string, userId: string, memScop
           await deps().brain.memory.appendLogEntry(userId, logText, { signal: historianSignal.getStore() });
           await logActivity(userId, 'log_appended', logText, sessionId);
         }
+        // 带本机绝对路径的候选(11-06,按条标适用范围):不进所有设备共用的 Agent 记忆 —— 路径到了别的电脑上不成立。
+        // 项目会话里转进项目记忆(和判官的项目候选走下面同一道形状闸);没有项目就标上这台的名字(`[MacBook Pro] …`)再进 raw 层。
+        const pathy = judgeMemory ? candidates.filter((c) => hasLocalPath(c)) : [];
+        if (pathy.length) {
+          for (const c of pathy) candidates.splice(candidates.indexOf(c), 1);
+          if (projectRef) projectFacts.push(...pathy.filter((c) => !projectFacts.some((f) => normalizeMemoryFact(f) === normalizeMemoryFact(c))));
+          else { const here = deviceTagContext(); candidates.push(...pathy.map((c) => tagOf(c, here) ? c : withTag(c, here.self, here))); }
+          log(`${pathy.length} 条记忆候选带本机路径,${projectRef ? `转进项目记忆(${projectRef.name})` : '标上这台的名字'}`);
+        }
         historianSignal.getStore()?.throwIfAborted();
         if (judgeMemory && stillClean && candidates.length) {
           // 采集:候选进 raw 层,正典 MEMORY 只由整固步骤改写(唯一仲裁点)。
@@ -985,7 +996,8 @@ async function startAssistDiscussion(opts: {
 
     // 当前记忆/今日日志随开场白注入,主 Agent 据此判断「是否已记过/是否值得记」。
     // 此刻 ALS 已是本会话的记忆域(onUserRunDone 顶部 enterRunContext),直接读即为主 Agent 的文件。
-    const mem = String((await deps().brain.memory.getMemory(userId).catch(() => ({ content: '' })))?.content || '').trim();
+    // 别台的条目折成一行(11-06):主 Agent 在这台上判断记不记,别台的条目它也不该去改
+    const mem = textForThisDevice(String((await deps().brain.memory.getMemory(userId).catch(() => ({ content: '' })))?.content || '').trim(), deviceTagContext(), 'entry');
     const todayLog = String((await deps().brain.memory.getLog(userId).catch(() => ({ content: '' } as any)))?.content || '').trim();
 
     const topics = [opts.wantLog ? 'the daily LOG' : '', opts.wantMemory ? 'the long-term MEMORY' : ''].filter(Boolean).join(' and ');
