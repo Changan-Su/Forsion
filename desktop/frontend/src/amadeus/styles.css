@@ -1310,11 +1310,14 @@ body.amx-marquee-active * {
   border-radius: var(--radius-pill, 999px);
   padding: 1px 6px;
 }
+/* 网页链接(2026-11-04 用户定):强调色 + 半透明常驻下划线,和聊天 .citelink 同一画法;双链不画常驻下划线,靠这条分开。 */
 .am-app .milkdown .ProseMirror a {
-  color: var(--primary);
+  color: var(--signal);
   text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--signal) 45%, transparent);
   text-underline-offset: 2px;
 }
+.am-app .milkdown .ProseMirror a:hover { text-decoration-color: currentColor; }
 .am-app .milkdown .ProseMirror img {
   max-width: 100%;
   border-radius: var(--radius-sm);

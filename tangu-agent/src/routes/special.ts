@@ -2,6 +2,7 @@
  * Special Agent（Historian / Muse）配置 + 工作视图数据 + Muse TODO 操作。handler 自带 authMiddleware。
  *   GET/POST /agent/special/config                     读/写 ~/.tangu/special-agents.json
  *   GET      /agent/special/historian/activity?limit=  Historian 活动流（special_agent_log）
+ *   POST     /agent/special/muse/intro                 首启引导答的第一次见面(作息 / 主动程度 / 关注),本机专用
  *   GET      /agent/special/muse/todos?status=         Muse TODO 列表
  *   GET      /agent/special/muse/todos/:id             单条 TODO(收件箱任务卡按真状态决定给不给按钮)
  *   PATCH    /agent/special/muse/todos/:id { status, from? }  改 TODO 状态(带 from = CAS,不符 409)
@@ -56,7 +57,7 @@ import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PRO
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
 import { listActiveStarters, markStarter } from '../services/museStarters.js';
-import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
+import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, triggerRev, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
 import { getTriggerSource, listTriggerSources } from '../services/triggerRegistry.js';
 import { emitPluginTrigger, registerPluginTrigger, unregisterPluginTrigger } from '../plugins/automation.js';
 import { readDbOrNull } from '../services/amadeusDb.js';
@@ -71,7 +72,7 @@ import { listApprovals, decideApproval, getApproval } from '../services/pendingA
 import { APPROVAL_LOCAL_ONLY_BODY } from '../services/approvals.js';
 import { museLibraryDir } from '../services/muse.js';
 import { recordRemoteCreated } from '../services/remoteCreated.js'; // P1-K2
-import { appendMuseFeedback, countObservedHits, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
+import { appendMuseFeedback, applyOnboardingIntro, countObservedHits, decideMuseCard, getMuseCard, listMuseCards, recordMessageFeedback } from '../services/museCards.js';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
@@ -151,6 +152,26 @@ router.post('/agent/special/config', authMiddleware, async (req: AuthRequest, re
     res.json({ config });
   } catch (e: any) {
     res.status(400).json({ detail: e?.message || 'save config failed' });
+  }
+});
+
+/** 首启引导「认识你的 Agents 团队」答的第一次见面:什么时候能找你 / 主动程度 / 盯什么(+ 自己写的一条)。
+ *  本机专用:远程来源 403(自由文本会进 Muse 记忆)。写完记 introAt,私聊里不再发「第一次见面」卡。 */
+router.post('/agent/special/muse/intro', authMiddleware, async (req: AuthRequest, res) => {
+  if (!ensureLocal(res)) return;
+  if (parseRemoteOrigin(req.headers)) return void res.status(403).json({ detail: 'Only on this computer' });
+  try {
+    const b = req.body && typeof req.body === 'object' ? req.body : {};
+    await ensureMuseAgent().catch(() => {});
+    await applyOnboardingIntro(req.user!.userId, {
+      when: typeof b.when === 'string' ? b.when : undefined,
+      proactivity: typeof b.proactivity === 'string' ? b.proactivity : undefined,
+      focus: Array.isArray(b.focus) ? b.focus.filter((f: unknown) => typeof f === 'string') : undefined,
+      focusText: b.focusText,
+    });
+    res.json({ ok: true, config: loadSpecialAgentsConfig() });
+  } catch (e: any) {
+    res.status(400).json({ detail: e?.message || 'save intro failed' });
   }
 });
 
@@ -411,7 +432,7 @@ router.get('/agent/special/muse/triggers', authMiddleware, async (_req: AuthRequ
     const observed = new Map(await Promise.all(list.filter((t) => t.observe).map(async (t) => [t.id, await countObservedHits(t.id, t.observeSince)] as const)));
     res.json({ triggers: list.map((t) => {
       const notice = (t.enabled ? triggerUnmet(t) : null) ?? notices[t.id];
-      return { ...t, nextRunAt: nextRunAt(t), ...(notice ? { notice } : {}), ...(observed.has(t.id) ? { observeHits: observed.get(t.id) } : {}) };
+      return { ...t, rev: triggerRev(t), nextRunAt: nextRunAt(t), ...(notice ? { notice } : {}), ...(observed.has(t.id) ? { observeHits: observed.get(t.id) } : {}) };
     }) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'triggers failed' });
@@ -480,10 +501,12 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
     // 这里从前还有一份「保存后再 dropCursors」的双保险 —— 顺序是反的(规则先上线、游标后清,中间任何一次
     // evaluate 都会把积压打出去),而且它兜不住换表那类身份变化(drain 的 setCursors 会把删掉的键合并写回)。
     // 真正与时序无关的防线是读端 museTriggers.cursorMismatch(游标自证 path/event/vault/cols)。
-    const r = await upsertTrigger(v.value, id, { allowPluginCreate: isPlugin, actor });
+    const expectedRev = typeof body.expectedRev === 'string' && body.expectedRev ? body.expectedRev : undefined;
+    const r = await upsertTrigger(v.value, id, { allowPluginCreate: isPlugin, actor, expectedRev });
+    if (!r.ok && r.conflict) return res.status(409).json({ detail: r.error, trigger: { ...r.conflict, rev: triggerRev(r.conflict) } });
     if (!r.ok) return res.status(id && !isPlugin ? 404 : 400).json({ detail: r.error });
     kickMuse(); // 新/改规则尽快被下一次巡检评估
-    res.json({ trigger: r.trigger, created: r.created });
+    res.json({ trigger: { ...r.trigger, rev: triggerRev(r.trigger) }, created: r.created });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'save trigger failed' });
   }

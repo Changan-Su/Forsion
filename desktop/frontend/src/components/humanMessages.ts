@@ -78,6 +78,7 @@ registerMessages({
   'human.source.move': { zh: '从 {agent} 的记忆挪来', en: "Moved from {agent}'s memory" },
   'human.source.promote': { zh: '从 {agent} 的记忆交给所有 Agent', en: "From {agent}'s memory, now asked of every agent" },
   'human.source.user': { zh: '你从回执撤销', en: 'You undid it from a chat receipt' },
+  'human.source.import': { zh: '从其他 AI 导入', en: 'Imported from other AIs' },
   // 搬家卡(「我 › 画像」)
   'human.move.start': { zh: '把各 Agent 记住的关于你的事整理进来', en: 'Bring in what your agents remember about you' },
   'human.move.resume': { zh: '继续整理（还有 {n} 件）', en: 'Keep sorting ({n} left)' },

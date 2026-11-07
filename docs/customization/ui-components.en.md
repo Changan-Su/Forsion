@@ -60,6 +60,8 @@ For @-style mentions, pass `mention: true`. The menu then opens on the bare `tri
 
 Since 2026-11-02 `suggest` can also be a list, for example one entry for `#` tags and one for `[[` links (the latter with `mention: true` so it opens right after CJK text). When several match before the caret, the one nearest the caret opens. When the box sits in the lower half of the window the menu opens upward, falling back below if it doesn't fit. Earlier hosts accept a single object only.
 
+Before passing a list, check `ctx.ui.chatBoxCapabilities?.includes('suggestMany')` (2026-11-04+; the upward menu is `'suggestAbove'`). Treat a host without that field as supporting neither. Don't infer it from `insertText` or any other API: 2.13.8-beta.3 has `insertText` but takes no list.
+
 ```js
 const box = ctx.ui?.mountChatBox?.(el, {
   modelPicker: false,
@@ -82,7 +84,7 @@ const box = ctx.ui?.mountChatBox?.(el, {
 
 ↑↓ moves, Enter or Tab picks, Esc closes. Picking replaces the trigger and query with `value` plus one space, and that Enter doesn't submit. While the menu is open, ⌘/Ctrl+Enter picks too. The menu opens only while typing: moving the caret to the end of an existing `#tag` doesn't open it, and neither does IME composition, which is checked once it ends. After Esc, the menu stays closed for the rest of that word.
 
-These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. If it's missing, hide your `#` button or accept that the model pill is shown.
+These four arrived together. Older hosts ignore the three options and have no `insertText`, so detect them on the handle with `typeof box.insertText === 'function'`. Behaviour added later that the handle can't reveal (a list of `suggest` triggers, the upward menu) is listed in `ctx.ui.chatBoxCapabilities`. If it's missing, hide your `#` button or accept that the model pill is shown.
 
 The model catalog is shared with chat: the main model list shows only LLMs, follows the user's sorting and hiding settings, and adds no brand restrictions. The selection stays in this component and changes neither the global default nor the current conversation. The submit callback receives the choices made for that submission; your plugin must pass them into its own flow rather than showing a choice and discarding it. Mounting and editing never send a model request or create a session. Feature-detect on older hosts; don't copy internal CSS to fake support.
 
@@ -251,6 +253,34 @@ if (!bar) drawOwnMenu(el)                           // hosts up to 2.13.3: keep 
 - The bar adds nothing to `root` and does not take it over (it floats above the page), so it coexists with `mountFloatingToc` and other mounts. The handle has `show`, `hide`, `update(opts)` and `dispose()`; the host disposes it when the plugin is disabled or reloaded.
 
 Add actions with `ctx.registerSelectionAction`; they are listed under "⋯ → Plugins". Without `scope` an action appears in notes only, as before. `scope: 'all'` lists it in every view that has opted in, `'own'` only in the plugin's own views, and an array names views (`'note'`, `'chat'`, `'<pluginId>:<viewId>'`). `when({ view, editable, length })` must return true for the action to be listed; it never receives the selected text, which only reaches the plugin through `run(cx)` after the user picks the action. The markdown `run` returns goes to the host's result card: Replace / Insert below / Copy / Discard in an editable note, where nothing is written until the user clicks, and read-only (Copy / Close) everywhere else. `output: 'none'` means the plugin handles the result and the host shows no card. `cx.pagePath` is only set in notes. Hosts up to 2.13.3 ignore the new fields: the action stays note-only, listed under "AI ▾ → Plugins".
+
+### The tool island (2026-11-04)
+
+The capsule a "hold a tool and work" view (PDF annotation, whiteboard) switches tools with. The host owns placement and skin: centred at the top of `root`, docked at the bottom centre when `root` is narrower than 520 px (Mini card, phone, portrait pad); the skin is the Mini window's top-bar capsule (`--bg-card`, hairline border, pill radius, card shadow, no frosted glass); the current tool sits on a highlight that slides over, and a small letter in each button's corner shows its shortcut. The strip is maintained in `@lcl/components` (`ToolIsland`); the layout classes are in `toolIsland.css` next to it.
+
+```js
+const isle = ctx.ui?.mountToolIsland?.(pageArea, {
+  tools: [
+    { id: 'hand', icon: 'hand', title: zh ? '抓手' : 'Hand' }, 'separator',
+    { id: 'select', icon: 'mouse-pointer-2', title: zh ? '选择' : 'Select', key: 'V' }, 'separator',
+    { id: 'highlight', icon: 'highlighter', title: zh ? '高亮' : 'Highlight', key: 'H' },
+    { id: 'ink', icon: 'pen-line', title: zh ? '手写' : 'Draw', key: 'P' },
+  ],
+  active: 'select',
+  onPick: (id) => { setTool(id); isle.setActive(id); isle.showRow(id === 'highlight' || id === 'ink') },
+  slots: { topRight: findButton, bottomLeft: zoomControls, bottomRight: pager },
+})
+if (!isle) drawOwnBar(pageArea)                     // older hosts without it: keep your own bar
+else isle.row.append(colorDots)                     // the row under the island is yours to fill
+```
+
+- Selection is controlled: a click only calls `onPick`; the host never switches by itself. Call `setActive(id)` when you switch (a temporary hand while Space is held, and back, goes through it too). `key` only draws the letter — bind the key yourself.
+- `icon` is a name from the plugin icon vocabulary, which gained `hand`, `mouse-pointer-2`, `highlighter`, `sticky-note`, `type`, `shapes`, `pen-line` and `eraser` for this (the older `highlight` / `annotate` still work). `'separator'` draws a divider between groups.
+- `row`: the row under the island (above it while docked at the bottom) for what the current tool needs — colour dots, pen types, widths. It is usable as soon as the handle returns; add children, don't replace its class. `showRow(true/false)` opens and closes it: in over 180 ms easing out, out over 80 ms easing in, no slide under reduced motion.
+- `slots`: your own elements for the four corners (12 px from the edges); the host wraps each in the same capsule and positions it, and `update({ slots })` swaps them. Docked at the bottom, the two bottom corners share a line with the island — put less there when narrow.
+- Clicking a button doesn't take focus from your view, so your shortcuts keep working; a keyboard user's focus stays on the same button across `setActive` / `update`.
+- Like `mountFloatingToc` it is a layer over `root` that doesn't take `root` over (a static `root` becomes `relative` while mounted and is restored on `dispose()`), so it coexists with other mounts. Leave about 56 px at the top of your content for it. Pass the frame that doesn't scroll as `root` (the island is a layer inside it, so a scrolling `root` takes it along); pointer events on the island and slots bubble to `root`, so skip `e.target.closest('.lcl-isle-layer')` in your own pan / draw handlers. The handle has `row` / `showRow` / `setActive` / `update(opts)` / `dispose()`; a wrong shape (no `tools` array, no `onPick`, a slot that isn't an element) throws `TypeError` synchronously; the host disposes it on disable / reload.
+- The whiteboard's own (Excalidraw) tool island isn't replaced; it already sits in the same place.
 
 ### Settings parts (2026-10-17)
 

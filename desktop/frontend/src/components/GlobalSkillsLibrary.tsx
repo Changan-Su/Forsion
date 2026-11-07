@@ -31,7 +31,7 @@ registerMessages({
   'globalSkills.add': { zh: '添加技能', en: 'Add skill' },
   'globalSkills.create': { zh: '新建技能', en: 'Create skill' },
   'globalSkills.import': { zh: '导入文件夹', en: 'Import folder' },
-  'globalSkills.importCli': { zh: '从 Agent CLI 导入', en: 'Import from Agent CLI' },
+  'globalSkills.importCli': { zh: '从其他 AI 导入', en: 'Import from other AIs' },
   'globalSkills.browseMarket': { zh: '浏览商店', en: 'Browse store' },
   'globalSkills.refresh': { zh: '刷新技能库', en: 'Refresh skill library' },
   'globalSkills.openFolder': { zh: '打开本机技能目录', en: 'Open host skills folder' },

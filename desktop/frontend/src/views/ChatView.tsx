@@ -760,7 +760,7 @@ export function ChatView({ leaf, params }: ViewProps) {
       onPointerDownCapture={(e) => { if (!canvasOn && (e.target as Element).closest?.('[data-testid="chat-canvas-seg"]')) segAnchor.current = { at: performance.now(), a: chatAnchor(chatViewRef.current) } }}
     >
       {raiseTeam && mvCfg.soloAgentSlug && activeId && <TeamEditor
-        agents={s.agentDefs.filter((a) => a.createdBy !== 'system' && !!a.libraryDir)} team={null} initialMembers={[mvCfg.soloAgentSlug]}
+        agents={s.agentDefs.filter((a) => a.createdBy !== 'system' && !!a.libraryDir && (!a.disabled || a.slug === mvCfg.soloAgentSlug))} team={null} initialMembers={[mvCfg.soloAgentSlug]}
         onClose={() => setRaiseTeam(false)} onSaved={(saved) => {
           setRaiseTeam(false)
           const parentId = activeId
@@ -867,7 +867,7 @@ export function ChatView({ leaf, params }: ViewProps) {
             {/* 对话末尾:任务清单一行 + 等你处理的卡片堆,跟着最新内容走(画布模式下卡片堆回到输入框上方) */}
             {!canvasOn && (tailTodo || deck) && (
               <div className="t2-tail" data-pending-deck>
-                {tailTodo && <TodoList todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} folded />}
+                {tailTodo && <TodoList todos={tailTodo.todos!} live={tailTodo.status === 'streaming' && running} stopped={tailTodo.status === 'stopped' || tailTodo.status === 'error'} folded />}
                 {deck}
               </div>
             )}

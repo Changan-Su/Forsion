@@ -14,7 +14,8 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { StreamOpts, StreamResult } from '../seams/cloudBrain.js';
 import { LlmError } from '../core/types.js';
 import { isStreamContextOverflow } from '../services/contextWindowStore.js';
-import { ACCOUNT_MARK, RUN_MARK } from './openaiCompat.js';
+import { ACCOUNT_MARK, RUN_MARK, SESSION_MARK } from './openaiCompat.js';
+import { buildOpenCodeHeaders, isOpenCodeHost } from './opencodeGo.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { stringifyWellFormed } from './wellFormedJson.js';
 
@@ -176,6 +177,8 @@ async function runOpenAiResponsesStream(opts: StreamOpts, guard: StreamIdleGuard
     const prevTurnState = turnStateOn && runId ? turnStateByRun.get(runId) : undefined;
     if (prevTurnState) headers[TURN_STATE_HEADER] = prevTurnState;
   }
+  // OpenCode Go 的 /responses 同样要求会话头(缺了 400,见 opencodeGo.ts):导入的 Codex 配置可能把它挂成 openai-responses。
+  if (isOpenCodeHost(baseUrl)) Object.assign(headers, buildOpenCodeHeaders((payload as any)?.[SESSION_MARK] || runId));
 
   const response = await fetch(`${baseUrl}/responses`, {
     method: 'POST',

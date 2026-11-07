@@ -121,6 +121,29 @@ describe('订阅登录的凭证:生图 / 改图 / 朗读也在调用前续期,�
     expect(registry.list().find((p) => p.providerId === 'xai')!.apiKey).toBe('fresh');
   });
 
+  it('requests native GIF over both direct image endpoints and identifies the returned bytes', async () => {
+    const { brain: b } = make();
+    const gif = { ok: true, json: async () => ({ data: [{ b64_json: 'R0lGODlh' }] }) };
+    const f = stubFetch(gif, gif);
+    const options = { model: 'openai/gpt-image-2.6-flare', prompt: 'A ball bounces', outputFormat: 'gif', frameCount: 5, frameDurationMs: 120, complexity: 'low' } as const;
+    const gen = await b.images!.generate(options);
+    const edit = await b.images!.edit!({ ...options, images: [{ b64: 'iVBORw0KGgo=', mime: 'image/png' }] });
+    const fields = { model: 'gpt-image-2.6-flare', output_format: 'gif', size: 'auto', complexity: 'low' };
+    expect(JSON.parse(f.mock.calls[0][1].body)).toMatchObject({ ...fields, frame_count: 5, frame_duration_ms: 120 });
+    expect(Object.fromEntries(f.mock.calls[1][1].body)).toMatchObject({ ...fields, frame_count: '5', frame_duration_ms: '120' });
+    expect(gen.images[0].mime).toBe('image/gif');
+    expect(edit.images[0].mime).toBe('image/gif');
+  });
+
+  it('rejects GIF options before a direct still-image model can bill for a still', async () => {
+    const { brain: b } = make();
+    const f = stubFetch(png);
+    const req = { model: 'openai/gpt-image-1', prompt: 'A ball bounces', outputFormat: 'gif' } as const;
+    await expect(b.images!.generate(req)).rejects.toThrow('require a GPT Image 2.6 model');
+    await expect(b.images!.edit!({ ...req, images: [{ b64: 'iVBORw0KGgo=', mime: 'image/png' }] })).rejects.toThrow('require a GPT Image 2.6 model');
+    expect(f).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['401', fail(401, 'unauthorized')],
     ['网关用 502 包着的「凭证失效」', fail(502, 'Invalid or expired credentials')],

@@ -12,13 +12,15 @@ import { deps } from '../seams/runtime.js';
 import { loadLocalWebSearchConfig, redactedLocalConfig, testLocalSearch, normalizeOrder, isConnected } from '../adapters/standalone/localSearch.js';
 import { saveSection } from '../core/config.js';
 import { anthropicMessagesUrl } from '../llm/anthropicMessages.js';
+import { buildOpenCodeHeaders, isOpenCodeHost } from '../llm/opencodeGo.js';
 
 const router = Router();
 
 /** 探测请求头:Anthropic 原生协议用 x-api-key + anthropic-version(官方 host 不多发 Bearer,同 anthropicMessages.ts);其余 Bearer。
  *  版本头与有没有 key 无关:本地代理自己注入上游凭证时也要它。 */
 function probeHeaders(apiKey: string, protocol: string, baseUrl: string): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  // OpenCode Go 不带会话头一律 400 MissingSessionID(先于鉴权),错 key 会被报成「缺会话」—— 探测也带上(每次探测一个新会话)。
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', ...(isOpenCodeHost(baseUrl) ? buildOpenCodeHeaders() : {}) };
   if (protocol !== 'anthropic-messages') return apiKey ? { ...headers, Authorization: `Bearer ${apiKey}` } : headers;
   headers['anthropic-version'] = '2023-06-01';
   if (!apiKey) return headers;

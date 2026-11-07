@@ -24,7 +24,7 @@ import { Fragment } from '@milkdown/kit/prose/model'
 import type { Node as ProseNode, ResolvedPos } from '@milkdown/kit/prose/model'
 import { createDropIndicatorPlugin } from 'prosemirror-drop-indicator'
 import { unfoldCalloutsForInsert } from '../blocks/markdown/callout'
-import { zoomOf, dropRetarget, dropHide } from '@lcl/engine'
+import { zoomOf, dropRetarget, dropHide, createsFixedContainingBlock } from '@lcl/engine'
 import { runEndOf } from './canvasEdit'
 import { tabIndent, tabOutdent, type TabFoldHooks } from '../blocks/markdown/tabIndent'
 import { blockDragViews, imageDragParagraph, visualBlockElement } from '../blocks/markdown/imageDrag'
@@ -128,22 +128,11 @@ function visualScale(el: HTMLElement): number {
   return Math.abs(k - z) < 0.01 ? z : k
 }
 
-/** 这个元素会不会给后代的 `position: fixed` 当包含块(css-position-3 §containing block +
- *  css-contain:layout/paint containment)。⚠️不止 transform —— will-change 预告同样属性、
- *  contain: layout/paint/strict/content、container-type、backdrop-filter、content-visibility
- *  全都会建立包含块(Codex 评审 P1:漏一项 = 浮层整体偏一个容器位)。 */
-function createsFixedCB(cs: CSSStyleDeclaration): boolean {
-  if (cs.transform !== 'none' || cs.perspective !== 'none' || cs.filter !== 'none') return true
-  if (cs.backdropFilter && cs.backdropFilter !== 'none') return true
-  if (cs.containerType && cs.containerType !== 'normal') return true
-  if (/\b(layout|paint|strict|content)\b/.test(cs.contain ?? '')) return true
-  if (cs.contentVisibility === 'auto' || cs.contentVisibility === 'hidden') return true
-  return /\b(transform|perspective|filter|backdrop-filter|contain)\b/.test(cs.willChange ?? '')
-}
-
 /** 包含块的**padding box** 原点(视口 px):写进 style 的坐标是相对它算的,先减掉。
  *  - `position: absolute` → offsetParent(最近的定位祖先,编辑器里是 .milkdown);
- *  - `position: fixed` → 最近的 createsFixedCB 祖先,没有则视口({0,0})。
+ *  - `position: fixed` → 最近的 createsFixedContainingBlock 祖先,没有则视口({0,0})。
+ *    判定用 LCL 那唯一一份,别在这里再抄:这里原来自己抄了一份还把 container-type 算进去,
+ *    `.wb-view` 一加 container-type,落点线整条偏出一个 View 左上角(2.13.8 beta3,仪器 unified-page D3)。
  *  边框要单独减:包含块是 padding box,而 rect 给的是 border box(卡片带 1px 描边就差 1px)。 */
 function overlayOrigin(el: HTMLElement): { x: number; y: number } {
   const originOf = (host: HTMLElement): { x: number; y: number } => {
@@ -158,12 +147,12 @@ function overlayOrigin(el: HTMLElement): { x: number; y: number } {
     let cb = el.offsetParent as HTMLElement | null
     for (let p = el.parentElement; !cb && p; p = p.parentElement) {
       const cs = getComputedStyle(p)
-      if (cs.position !== 'static' || createsFixedCB(cs)) cb = p
+      if (cs.position !== 'static' || createsFixedContainingBlock(cs)) cb = p
     }
     return cb ? originOf(cb) : { x: 0, y: 0 }
   }
   for (let p = el.parentElement; p; p = p.parentElement) {
-    if (createsFixedCB(getComputedStyle(p))) return originOf(p)
+    if (createsFixedContainingBlock(getComputedStyle(p))) return originOf(p)
   }
   return { x: 0, y: 0 }
 }

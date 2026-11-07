@@ -20,6 +20,7 @@ import type { UiMessage, TanguDesktopConfig, AgentConfig, StoredDesktopConfig, T
 import type { PreviewTarget } from '../../components/WorkspaceFilePreview'
 import { Markdown } from '../../components/Markdown'
 import { ChatWikiLink, WikiText } from '../../components/ChatWikiLink'
+import { leadingCommand } from './composerTokens'
 import { RefChipView, splitLeadingRefs } from './RefChipView'
 import { splitLeadingQuotes } from './quotes'
 import { QuotePreview, QuoteTile, findQuoteSource } from './QuoteTile'
@@ -104,6 +105,12 @@ export type OrderedToolPart =
 
 /** 直播中还没收口的 sketch 调用 → 草稿卡(10-09,对标 ChatGPT Intelligent UI 边生成边渲染):tool_stream 已把参数增量
  *  累进 ev.arguments,这里从半截 JSON 里把 html 解出来。只在**直播**里算(live):历史 / 中断的未完成调用照旧不画幻影卡。 */
+/** 用户气泡的正文:开头的斜杠命令画成一枚(和输入框里同一枚,见 ./composerTokens)。 */
+function UserText({ text }: { text: string }) {
+  const lead = leadingCommand(text)
+  return lead ? <><span className="t2-cmd">{lead.cmd}</span><WikiText text={lead.rest} /></> : <WikiText text={text} />
+}
+
 function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
   if (!isHtmlCardTool(ev.name) || ev.done || !ev.arguments) return undefined
   const html = streamingArgString(ev.arguments, 'html')
@@ -488,7 +495,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
   }, [webHere, msg.toolEvents, msg.displayFiles, webCwd])
   const webOf = useCallback((ev: ToolEvent) => webPlan.get(ev.id), [webPlan])
   // 待办清单的「进行中」只在这一段还在流式、且会话的 run 还活着时转圈:停止 / 出错 / 断流后的孤儿气泡都不转。
-  // ponytail: steer 切段后旧段已 done,run 仍在跑时这份清单也停转;要跟上得在 turn_boundary 把 todos 挪到新段。
+  // steer 切段时 turn_boundary 把清单带进新段,跑着的那份在新段上转;旧段已 done,只留快照。
   const todoLive = useApp((s) => msg.status === 'streaming' && !!msg.todos?.length && (!runSid || !!s.runningBySession[runSid]))
   msg = useSpeechReveal(msg)
   // 建议芯片是一次性的:点了就等于用户按了回车,整排随即失效 —— 不然双击会把同一句排两遍。
@@ -565,7 +572,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           {rows.map((r) => (
             <div key={r.callId} className="t2-apv-update-row" data-status={r.answered ? 'approved' : 'rejected'}>
               {r.answered ? <CircleCheck size={12} /> : <CircleX size={12} />}
-              <span className="t2-apv-update-what">{t(r.answered ? 'chat.inquiry.updateAnswered' : 'chat.inquiry.updateNone', { q: r.question })}</span>
+              <span className="t2-apv-update-what is-question" title={r.question}>{t(r.answered ? 'chat.inquiry.updateAnswered' : 'chat.inquiry.updateNone', { q: r.question })}</span>
               {r.answered && <span className="t2-apv-update-preview" title={r.answer}>{r.answer}</span>}
             </div>
           ))}
@@ -673,7 +680,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
                 ))}
               </div>
             )}
-            {lead || quoted ? (body && <WikiText text={body} />) : <WikiText text={msg.content} />}
+            {lead || quoted ? (body && <UserText text={body} />) : <UserText text={msg.content} />}
             </UserFold>
           </div>
           )}
@@ -858,7 +865,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
           // 没配上(重载后的历史、或 plan 事件缺失)就只渲染正文,询问仍走下面通用卡兜底。
           <PlanCard key={planInq?.inquiryId || 'plan'} plan={msg.planProposal} req={planInq} />
         )}
-        {!!msg.todos?.length && !todoInTail && <TodoList todos={msg.todos} live={todoLive} folded={!!handlers?.onJumpDeck} />}
+        {!!msg.todos?.length && !todoInTail && <TodoList todos={msg.todos} live={todoLive} stopped={msg.status === 'stopped' || msg.status === 'error'} folded={!!handlers?.onJumpDeck} />}
         {/* 判空看 body 不看 msg.content:刚开始打建议围栏时 content 非空但正文为空,
             看 content 会让整条消息只剩一个署名圆点,连「思考中」都不显示。 */}
         {/* 测试性等待详情:开启时每次调用(含工具轮之后)画「发送 N KB / 等首帧 + 已等秒数」。
