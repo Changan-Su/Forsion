@@ -8,8 +8,11 @@ afterEach(() => setMarketIdsForTest(null))
 
 describe('telemetryPluginRef', () => {
   it('作者自起名的老目录:更新器状态里认得 → 商店条目 id;认不得 → local', () => {
-    setMarketIdsForTest([{ id: STORE_ID, type: 'amadeus-plugin', slug: 'better-pdf' }])
+    setMarketIdsForTest([{ id: STORE_ID, type: 'amadeus-plugin', slug: 'better-pdf' }, { id: NEW_DIR_UUID, type: 'amadeus-plugin', slug: 'pdf-notes-old' }])
     expect(telemetryPluginRef({ id: 'better-pdf' })).toEqual({ pluginId: STORE_ID, pluginOfficial: true })
+    // 清单 id 和安装目录名不同:按主进程扫出来的目录名认(不是 bundle 才有)
+    expect(telemetryPluginRef({ id: 'pdf-notes', dir: 'pdf-notes-old' })).toEqual({ pluginId: NEW_DIR_UUID, pluginOfficial: true })
+    expect(telemetryPluginRef({ id: 'pdf-notes' })).toEqual({ pluginId: 'local', pluginOfficial: false })
     expect(telemetryPluginRef({ id: 'better-pdf' }, 'plugin')).toEqual({ pluginId: 'local', pluginOfficial: false }) // 类型不同不串
     expect(telemetryPluginRef({ id: 'my-private-tool' })).toEqual({ pluginId: 'local', pluginOfficial: false })
   })
@@ -41,6 +44,17 @@ describe('telemetryCommandId(格式:amadeus:<裸 UUID 或内置 id>:<命令>,超
     expect(telemetryCommandId('amadeus:side-loaded:anything', of)).toBe('plugin:local')
     expect(telemetryCommandId('amadeus:unknown:x', of)).toBe('plugin:local')
   })
+  it('命令名空着 / 缺段:侧载的照样 plugin:local(绝不原样放过去),公开的记 other', () => {
+    expect(telemetryCommandId('amadeus:side-loaded:', of)).toBe('plugin:local')
+    expect(telemetryCommandId('amadeus:side-loaded', of)).toBe('plugin:local')
+    expect(telemetryCommandId('amadeus:', of)).toBe('plugin:local')
+    expect(telemetryCommandId('amadeus:forsion-calendar:', of)).toBe('amadeus:forsion-calendar:other')
+    expect(telemetryCommandId('amadeus:forsion-calendar', of)).toBe('amadeus:forsion-calendar:other')
+  })
+  it('切视图模式的命令:值由视图 / 插件起名 → 收成 view-mode:pick', () => {
+    expect(telemetryCommandId('view-mode:my-private-mode', of)).toBe('view-mode:pick')
+    expect(telemetryCommandId('view-mode-next', of)).toBe('view-mode-next')
+  })
   it('拼起来超 80 字符或命令名不合规 → 命令名记 other', () => {
     const long = `amadeus:pdf-reader:${'a'.repeat(50)}`
     expect(telemetryCommandId(long, of)).toBe(`amadeus:${NEW_DIR_UUID}:other`)
@@ -48,5 +62,29 @@ describe('telemetryCommandId(格式:amadeus:<裸 UUID 或内置 id>:<命令>,超
     expect(telemetryCommandId('amadeus:forsion-calendar:sk-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789abcd', of)).toBe('amadeus:forsion-calendar:other')
     expect(telemetryCommandId(`amadeus:forsion-calendar:${'0123456789abcdef'.repeat(2)}`, of)).toBe('amadeus:forsion-calendar:other')
     for (const id of [long, 'amadeus:pdf-reader:open-reader']) expect(telemetryCommandId(id, of).length).toBeLessThanOrEqual(COMMAND_ID_MAX)
+  })
+})
+
+describe('countTelemetryOnce(引擎事件派生的计数按事件 id 去重,跨窗口)', () => {
+  it('同一个 id 只数一次;最近 200 个封顶;localStorage 坏了照常数', async () => {
+    const { countTelemetryOnce } = await import('./telemetrySend')
+    const sent: unknown[] = []
+    const store = new Map<string, string>()
+    const g = globalThis as Record<string, unknown>
+    const prev = { window: g.window, localStorage: g.localStorage }
+    g.window = { tangu: { telemetryReport: (kind: string, props: unknown) => sent.push([kind, props]) } }
+    g.localStorage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) } }
+    try {
+      countTelemetryOnce('achImageGenerate', 'call_1')
+      countTelemetryOnce('achImageGenerate', 'call_1')
+      countTelemetryOnce('achComputerUse', 'call_1')
+      expect(sent).toEqual([['count', { key: 'achImageGenerate' }], ['count', { key: 'achComputerUse' }]])
+      for (let i = 0; i < 250; i++) countTelemetryOnce('achComputerUse', `c${i}`)
+      expect(JSON.parse(store.get('forsion_telemetry_seen')!)).toHaveLength(200)
+      g.localStorage = { getItem: () => { throw new Error('denied') }, setItem: () => { throw new Error('denied') } }
+      sent.length = 0
+      countTelemetryOnce('achImageGenerate', 'call_1')
+      expect(sent).toHaveLength(1)
+    } finally { g.window = prev.window; g.localStorage = prev.localStorage }
   })
 })

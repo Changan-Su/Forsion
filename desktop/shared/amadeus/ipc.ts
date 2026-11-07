@@ -405,6 +405,9 @@ export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = ['activeWindow',
 /** A user (Forsion) plugin discovered under ~/.forsion/plugins/. */
 export interface ExternalPluginSource {
   id: string
+  /** 安装目录名(`plugins/<dir>/`)。商店老条目按 install_slug 落目录,可以和插件 id 不同;匿名遥测靠它把已装插件认回商店条目。
+   *  只有本机装好的来源带(开发副本 / 远端宿主 / 旧主进程不带)。 */
+  dir?: string
   packageId?: string
   /** Canonical display name. Used to reconnect historical display-name folders only;
    *  new default folders use the effective ASCII plugin ID. English display text goes in `nameEn`. */

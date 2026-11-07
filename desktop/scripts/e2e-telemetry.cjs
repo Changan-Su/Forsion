@@ -152,6 +152,7 @@ async function main() {
     assert.ok(crash, 'renderer crash handed to Extend')
     const hostRaw = fs.readFileSync(trace, 'utf8')
     assert.ok(!hostRaw.includes('e2e-telemetry-fake-token') && !hostRaw.includes(sink.url), 'no token / cloud url in host events')
+    assert.ok(!hostRaw.includes('boom') && !hostRaw.includes('my title') && !hostRaw.includes('sk-abcdef'), 'host hands over stack frames only (no message head)')
     console.log(`host → Extend (launch 1): ${JSON.stringify(readJsonl(trace).map((e) => e.event))}`)
 
     // ⑥ 等 Extend 第一跳(启动后 60 s)

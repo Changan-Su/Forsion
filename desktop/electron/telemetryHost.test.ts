@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   BUFFER_CAP, COMMAND_PAIR_CAP, HOURLY_CAP, RENDERER_REPORT_KINDS, STACK_CAP,
-  appUpdateProps, coreUpdateProps, createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, publicPluginId, shapeRendererReport,
+  appUpdateProps, coreUpdateProps, createStartupTracker, storeUpdateTelemetry, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, publicPluginId, shapeRendererReport,
   telemetryPackaged, updateProps,
   type HostTelemetryEvent,
 } from './telemetryHost'
@@ -24,8 +24,9 @@ describe('shapeRendererReport:渲染层上报的整形与校验', () => {
     expect(RENDERER_REPORT_KINDS).toEqual(['crash', 'feature', 'longtasks', 'plugin_install', 'plugin_deps', 'plugin_lifecycle', 'plugin_load', 'onboarding', 'guide_tip', 'count', 'command', 'setting'])
   })
 
-  it('crash:报错原文不转发,stack 封顶 8000;错误名只留合法字符', () => {
-    const r = shapeRendererReport('crash', { reason: 'rejection', errorName: 'Type Error<script>', message: 'm'.repeat(5000), stack: 's'.repeat(20000), extra: 'dropped' })
+  it('crash:报错原文不转发(栈头那几行也剥掉,只留「at」帧),stack 封顶 8000;错误名只留合法字符', () => {
+    const head = 'Error: open /Users/me/secret "my title"\nsecond line of the message\n'
+    const r = shapeRendererReport('crash', { reason: 'rejection', errorName: 'Type Error<script>', message: 'm'.repeat(5000), stack: head + '    at f (app.js:1:2)\n'.repeat(2000), extra: 'dropped' })
     expect(r).not.toBeNull()
     const props = (r as { props: Record<string, unknown> }).props
     expect(props.process).toBe('renderer')
@@ -33,7 +34,10 @@ describe('shapeRendererReport:渲染层上报的整形与校验', () => {
     expect(props.errorName).toBe('Type-Errorscript')
     expect(props).not.toHaveProperty('message')
     expect((props.stack as string).length).toBe(STACK_CAP)
+    expect(props.stack).toMatch(/^    at f /)
+    expect(props.stack).not.toContain('secret')
     expect(props).not.toHaveProperty('extra')
+    expect(shapeRendererReport('crash', { errorName: 'Error', stack: 'Error: no frames here' })).toEqual({ event: 'crash', props: { process: 'renderer', reason: 'exception', errorName: 'Error' } })
     expect(shapeRendererReport('crash', { message: '' })).toBeNull() // 什么都没有就不报
   })
 
@@ -82,10 +86,12 @@ describe('shapeRendererReport:渲染层上报的整形与校验', () => {
 
 describe('宿主事件的形状', () => {
   it('主进程异常 → crash(main),报错原文不转发', () => {
-    const e = new RangeError('x'.repeat(3000))
+    const e = new RangeError(`bad ${'x'.repeat(3000)} /Users/me/notes.md`)
     const p = crashFromError('main', 'exception', e, { uptimeS: 12 })
     expect(p).toMatchObject({ process: 'main', reason: 'exception', errorName: 'RangeError', uptimeS: 12 })
     expect(p).not.toHaveProperty('message')
+    expect(p.stack).toMatch(/^\s+at /)
+    expect(String(p.stack)).not.toContain('notes.md')
     expect(crashFromError('main', 'rejection', 'plain string')).toEqual({ process: 'main', reason: 'rejection', errorName: 'string' })
   })
 
@@ -387,5 +393,27 @@ describe('台架旁路 tap', () => {
     for (let i = 0; i < HOURLY_CAP.onboarding + 2; i++) h.report('onboarding', { mode: 'full', outcome: 'finish' })
     expect(tapped.filter((e) => e === 'onboarding')).toHaveLength(HOURLY_CAP.onboarding)
     expect(tapped.slice(0, 2)).toEqual(['perf', 'update'])
+  })
+})
+
+describe('storeUpdateTelemetry(商店插件更新器广播 → update store-plugin / plugins.autoUpdate)', () => {
+  it('第一次广播只记基线;之后阶段变了才报;回退不算;总开关翻了报设置', () => {
+    const updates: unknown[] = [], settings: unknown[] = []
+    const watch = storeUpdateTelemetry({ update: (p) => updates.push(p), setting: (k, v) => settings.push([k, v]) })
+    watch({ autoUpdateAll: true, items: [{ id: STORE_ID, phase: 'staged' }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'idle' }] })
+    expect(updates).toEqual([]) // 启动读回来的 staged 不算
+    watch({ autoUpdateAll: true, items: [{ id: STORE_ID, phase: 'staged' }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'checking' }] })
+    watch({ autoUpdateAll: true, items: [{ id: STORE_ID, phase: 'staged' }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'current' }] })
+    watch({ autoUpdateAll: true, items: [{ id: STORE_ID, phase: 'checking' }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'downloading' }] })
+    watch({ autoUpdateAll: true, items: [{ id: STORE_ID, phase: 'error', error: 'resolve: HTTP 503 https://api.forsion.net/x?token=1' }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'staged' }] })
+    watch({ autoUpdateAll: false, items: [{ id: STORE_ID, phase: 'staged', pendingRollback: true }, { id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', phase: 'staged' }] })
+    expect(updates).toEqual([
+      { target: 'store-plugin', id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', outcome: 'current' },
+      { target: 'store-plugin', id: STORE_ID, outcome: 'error', errorClass: 'http' },
+      { target: 'store-plugin', id: 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', outcome: 'staged' },
+    ])
+    expect(settings).toEqual([['plugins.autoUpdate', false]])
+    expect(() => watch(null)).not.toThrow()
+    expect(() => watch({ items: 'nope' })).not.toThrow()
   })
 })

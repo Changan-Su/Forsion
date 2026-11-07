@@ -24,7 +24,7 @@ import { listFonts } from './fontPresets'
 import { getUiZoom, setUiZoom, resetUiZoom } from './uiZoom'
 import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
 import { getVisualsPref, setVisualsPref, VISUALS_VALUES, type VisualsPref } from './visualsPref'
-import { runWithCommandSource, useCommandStore } from '@lcl/engine/commandRegistry'
+import { noteCommandUse, useCommandStore } from '@lcl/engine/commandRegistry'
 import { settingTelemetry } from './telemetrySend'
 
 export interface UiActionResult {
@@ -272,10 +272,9 @@ export async function runAgentCommand(id: unknown, args?: Record<string, unknown
   if (bad) return { ok: false, error: bad }
   let receipt: unknown
   try {
-    // 来源记成 agent(宿主遥测的命令使用;LCL 注册表包过的 run 读这个来源)
-    const invokeRun = cmd.invoke.run
-    if (invokeRun) receipt = await runWithCommandSource('agent', () => invokeRun(args || {}))
-    else await runWithCommandSource('agent', () => cmd.run(args))
+    noteCommandUse(cmd.id, 'agent') // 宿主遥测的命令使用:来源 agent
+    if (cmd.invoke.run) receipt = await cmd.invoke.run(args || {})
+    else await cmd.run(args)
   } catch (e) {
     return { ok: false, error: `command failed: ${String((e as Error)?.message || e)}` }
   }

@@ -77,6 +77,9 @@ describe('settingChange', () => {
     expect(settingChange('update.channel', 'nightly')).toBeNull()
     expect(settingChange('toString', 'x')).toBeNull() // 原型链上的键不算
     expect(settingChange('ui.fontFamily', 'serif')).toBeNull()
+    expect(settingChange('ui.motionTheme', 'droplet')).toEqual({ key: 'ui.motionTheme', value: 'droplet' })
+    expect(settingChange('ui.motionTheme', 'bouncy')).toBeNull()
+    expect(settingChange('plugins.autoUpdate', false)).toEqual({ key: 'plugins.autoUpdate', value: 'off' })
   })
 })
 

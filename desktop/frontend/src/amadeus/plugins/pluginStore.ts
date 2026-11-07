@@ -793,6 +793,7 @@ const loadedCode = new Map<string, string>()
 function pluginMeta(src: ExternalPluginSource): Omit<AmadeusPlugin, 'setup'> {
   return {
     id: src.id,
+    dir: src.dir,
     packageId: src.packageId,
     name: src.name,
     nameEn: src.nameEn,
@@ -2859,8 +2860,9 @@ export const usePluginStore = create<PluginState>((set, get) => {
       loadReported.add(id)
       const ref = telemetryPluginRef(plugin)
       sendTelemetry('plugin_load', { ...ref, outcome, activateMs: Math.round(performance.now() - t0) })
-      // 激活失败也补进崩溃事件(带 pluginId):报错原文不发,只给错误名与调用栈帧(主进程 / Extend 再剥栈头)
-      if (outcome === 'error') {
+      // 激活失败也补进崩溃事件(带 pluginId):只给公开插件(内置 / 商店)补 —— 侧载 / 开发副本的栈帧可能带它的路径与名字。
+      // 报错原文不发,只给错误名与调用栈帧(主进程只留「at」帧,Extend 再剥一遍)
+      if (outcome === 'error' && ref.pluginOfficial) {
         const err = e && typeof e === 'object' ? e as { name?: unknown; stack?: unknown } : null
         sendTelemetry('crash', { reason: 'exception', errorName: err?.name ?? typeof e, stack: err?.stack, ...ref })
       }

@@ -31,14 +31,14 @@ export function setMarketIdsForTest(entries: Array<{ id: string; type: string; s
   marketIds = entries ? new Map(entries.map((x) => [`${x.type}:${x.slug}`, x.id])) : null
 }
 
-export interface TelemetryPluginLike { id: string; builtin?: boolean; preinstalled?: boolean; dev?: boolean; bundle?: { dir?: string } }
+export interface TelemetryPluginLike { id: string; dir?: string; builtin?: boolean; preinstalled?: boolean; dev?: boolean; bundle?: { dir?: string } }
 export interface TelemetryPluginRef { pluginId: string; pluginOfficial: boolean }
 const LOCAL: TelemetryPluginRef = { pluginId: 'local', pluginOfficial: false }
 
 /** 一个插件 → 遥测里的 { pluginId, pluginOfficial }。type = 它装在哪个插件目录(Forsion 插件 / 引擎插件)。 */
 export function telemetryPluginRef(p: TelemetryPluginLike | undefined, type: 'amadeus-plugin' | 'plugin' = 'amadeus-plugin'): TelemetryPluginRef {
   if (!p || p.dev) return LOCAL
-  const dir = p.bundle?.dir || p.id
+  const dir = p.dir || p.bundle?.dir || p.id // 安装目录名(老商店条目按 install_slug 落目录,可以和插件 id 不同)
   const mapped = (telemetryOn() || marketIds ? ensureMarketIds() : null)?.get(`${type}:${dir}`)
   if (mapped) return { pluginId: mapped, pluginOfficial: true }
   const marketDir = [dir, p.id].find((x) => MARKET_ITEM_ID.test(x))
@@ -59,13 +59,20 @@ const cleanCmdPart = (v: string): boolean => CMD_PART.test(v) && !/[A-Za-z0-9_-]
  *    market-<UUID> 有 43 位连续 [A-Za-z0-9_-],会被密钥规则整条丢掉),内置插件是插件 id;
  *    命令名不合规或拼起来超过 80 字符 → 命令名记成 `other`(`amadeus:<id>:other`);
  *  - 侧载 / 开发 / 认不出的插件:整条 `plugin:local`;
+ *  - `amadeus:` 开头的一律当插件命令(amadeusPlugins.ts 桥接的就是 `amadeus:<插件 id>:<命令>`;命令名空着 / 缺段也照此判,
+ *    绝不原样放过去 —— 原样就把侧载插件的名字带出去了);
+ *  - `view-mode:<值>`(viewModes.tsx 的「切到某个视图模式」)的值由视图 / 插件自己起名 → 收成 `view-mode:pick`;
  *  - 其余(宿主内置命令)原样(静态 id)。
  */
 export function telemetryCommandId(id: string, pluginOf: (pluginId: string) => TelemetryPluginLike | undefined): string {
-  const m = /^amadeus:([^:]+):(.+)$/.exec(id)
-  if (!m) return id
-  const ref = telemetryPluginRef(pluginOf(m[1]))
+  if (id.startsWith('view-mode:')) return 'view-mode:pick'
+  if (!id.startsWith('amadeus:')) return id
+  const rest = id.slice('amadeus:'.length)
+  const cut = rest.indexOf(':')
+  const pluginId = cut < 0 ? rest : rest.slice(0, cut)
+  const cmd = cut < 0 ? '' : rest.slice(cut + 1)
+  const ref = telemetryPluginRef(pluginId ? pluginOf(pluginId) : undefined)
   if (!ref.pluginOfficial) return 'plugin:local'
-  const full = `amadeus:${ref.pluginId}:${m[2]}`
-  return full.length <= COMMAND_ID_MAX && cleanCmdPart(m[2]) ? full : `amadeus:${ref.pluginId}:other`
+  const full = `amadeus:${ref.pluginId}:${cmd}`
+  return full.length <= COMMAND_ID_MAX && cleanCmdPart(cmd) ? full : `amadeus:${ref.pluginId}:other`
 }

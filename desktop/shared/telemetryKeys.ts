@@ -67,13 +67,14 @@ const dmBucket = (v: unknown): string | undefined => {
   return n <= 1 ? String(n) : n <= 3 ? '2-3' : n <= 5 ? '4-5' : n <= 10 ? '6-10' : '11+'
 }
 
-/** 契约 §9 的设置键表。代码里找不到对应设置的键不在这里(sync.* 在 Extend 的同步页、ui.motionTheme / plugins.autoUpdate 见交付说明)。 */
+/** 契约 §9 的设置键表。代码里找不到对应设置的键不在这里(sync.* 在 Extend 的同步页,由 Extend 自己报)。 */
 export const SETTING_KEYS: Readonly<Record<string, (v: unknown) => string | undefined>> = {
   'ui.themeMode': oneOf(['light', 'dark', 'system']),
   'ui.language': oneOf(['zh', 'en']),
   'ui.designLanguage': themeId,
   'ui.skin': themeId,
   'ui.bg': themeId,
+  'ui.motionTheme': oneOf(['genesis', 'droplet', 'stretch', 'glide']), // = lcl/engine/panelMotion MOTION_THEME_IDS
   'ui.scale': scaleBucket,
   'muse.enabled': onOff,
   'muse.mode': oneOf(['ask', 'agent', 'auto']),
@@ -81,6 +82,7 @@ export const SETTING_KEYS: Readonly<Record<string, (v: unknown) => string | unde
   'muse.heartbeat': heartbeatBucket,
   'muse.maxDmPerDay': dmBucket,
   'computerHistory.enabled': onOff,
+  'plugins.autoUpdate': onOff,
   'update.channel': oneOf(['stable', 'beta']),
   'approval.defaultMode': oneOf(['readonly', 'auto-edit', 'full-auto', 'custom']),
 }

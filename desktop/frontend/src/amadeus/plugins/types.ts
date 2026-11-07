@@ -2536,6 +2536,8 @@ export interface PluginAutomationRule {
 
 export interface AmadeusPlugin {
   id: string
+  /** 安装目录名(外置插件,主进程扫出来的;见 ExternalPluginSource.dir)。 */
+  dir?: string
   packageId?: string
   /** Canonical display name, retained to recognize historical folders. New default folders use the ID.
    *  For display, go through `pluginDisplayName(p, locale)`. */

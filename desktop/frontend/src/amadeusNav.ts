@@ -52,7 +52,6 @@ const viewOpts = (o?: OpenWhere): OpenWhere | undefined => (o?.newTab ? { newTab
 /** focus:'body' = 打开后把焦点给正文(评审 G4-06:从快速查找 / 日记进入**已有**笔记后直接打字;
  *  Obsidian 同)。新建流不传它 —— 新建聚焦标题(requestTitleFocus)才是对的。粗指针不做:手机上点开一篇就弹软键盘。 */
 export async function openNote(path: string, opts?: OpenWhere & { reuseKey?: string; activate?: boolean; focus?: 'body' }): Promise<void> {
-  countTelemetry('openNote') // 匿名遥测只数「开了哪类文件」,路径不报
   await openNoteInner(path, opts)
   if (opts?.focus === 'body' && opts.activate !== false && !isCoarsePointer()) await focusBodyWhenReady(path)
 }
@@ -83,6 +82,7 @@ async function openNoteInner(path: string, opts?: OpenWhere & { reuseKey?: strin
     openFile(path, viewOpts(opts))
     return
   }
+  countTelemetry('openNote') // 匿名遥测只数「开了哪类文件」,路径不报;改道白板 / 仪表盘 / 插件文件的由它们自己数
   actThrottled('view.open', { f: path }, `view.open|${path}`)
   const ws = useWorkspace.getState()
   const api = (ws as unknown as { api?: { panels: PanelLike[] } }).api

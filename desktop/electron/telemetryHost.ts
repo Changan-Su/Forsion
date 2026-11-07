@@ -49,6 +49,12 @@ export function safeId(v: unknown, max: number): string | undefined {
 const int = (v: unknown): number | undefined =>
   typeof v === 'number' && Number.isInteger(v) && v >= 0 && v <= INT_MAX ? v : undefined
 const cap = (v: unknown, max: number): string | undefined => (typeof v === 'string' && v ? v.slice(0, max) : undefined)
+/** 调用栈只留「    at …」帧:V8 的栈头是 `名字: 报错原文`(可能多行),原文不交给 Extend(Extend 那边同样再剥一遍)。 */
+const frames = (v: unknown, max: number): string | undefined => {
+  if (typeof v !== 'string') return undefined
+  const i = v.search(/^\s+at /m)
+  return i < 0 ? undefined : cap(v.slice(i), max)
+}
 /** 错误名(TypeError / AbortError …):挑出合法字符再截 60;剩不下就不带。 */
 function errorName(v: unknown): string | undefined {
   if (typeof v !== 'string') return undefined
@@ -84,7 +90,7 @@ export function crashFromError(proc: string, reason: 'exception' | 'rejection', 
     process: proc,
     reason,
     errorName: errorName(isObj ? e!.name : typeof err),
-    stack: cap(isObj ? e!.stack : undefined, STACK_CAP),
+    stack: frames(isObj ? e!.stack : undefined, STACK_CAP),
     ...extra,
   })
 }
@@ -119,6 +125,33 @@ export function updateProps(target: UpdateTarget, outcome: string, o: { id?: str
     outcome,
     errorClass: outcome === 'error' ? classifyUpdateError(o.error) : undefined,
   })
+}
+/**
+ * 商店插件更新器(marketPluginUpdates)每次广播的整份状态 → update{ target: 'store-plugin' } 与设置改动 plugins.autoUpdate。
+ * 第一次广播只记基线(启动时读回来的不算);之后某一项的阶段变了才报:检查完没新版(checking → current)/ 新版下好待换(→ staged)/ 出错(→ error)。
+ * 用户点的回退(pendingRollback)不算更新;id 是商店条目 id(公开的)。报错原文只拿来归类。
+ */
+export function storeUpdateTelemetry(report: { update: (props: Record<string, unknown>) => void; setting: (key: string, value: unknown) => void }) {
+  let autoAll: boolean | null = null
+  const phases = new Map<string, string>()
+  return (st: unknown): void => {
+    try {
+      const s = st as { autoUpdateAll?: unknown; items?: unknown } | null
+      if (!s || typeof s !== 'object') return
+      if (typeof s.autoUpdateAll === 'boolean') {
+        if (autoAll !== null && s.autoUpdateAll !== autoAll) report.setting('plugins.autoUpdate', s.autoUpdateAll)
+        autoAll = s.autoUpdateAll
+      }
+      for (const x of Array.isArray(s.items) ? s.items as Array<{ id?: unknown; phase?: unknown; error?: unknown; pendingRollback?: unknown }> : []) {
+        if (typeof x?.id !== 'string' || typeof x.phase !== 'string') continue
+        const prev = phases.get(x.id)
+        phases.set(x.id, x.phase)
+        if (prev === undefined || prev === x.phase || x.pendingRollback) continue
+        const outcome = x.phase === 'staged' ? 'staged' : x.phase === 'error' ? 'error' : x.phase === 'current' && prev === 'checking' ? 'current' : null
+        if (outcome) report.update(updateProps('store-plugin', outcome, { id: x.id, error: x.error }))
+      }
+    } catch { /* 遥测不影响更新器 */ }
+  }
 }
 /** 引擎 / 内置插件那一路(shared/corePlugins 的 CorePluginUpdate)的状态 → update props;中间态(checking / downloading)与 dev 不报。 */
 export function coreUpdateProps(st: { id: string; phase: string; error?: string }, engineId: string): Record<string, unknown> | null {
@@ -172,7 +205,7 @@ export function shapeRendererReport(kind: unknown, raw: unknown): ShapedReport |
         process: 'renderer',
         reason,
         errorName: errorName(p.errorName),
-        stack: cap(p.stack, STACK_CAP), // 报错原文不转发,同 crashFromError
+        stack: frames(p.stack, STACK_CAP), // 报错原文不转发,同 crashFromError
         // 插件宿主分得出是哪个插件时才带;同样只给内置 / 商店的 id
         pluginId: p.pluginId === undefined ? undefined : pluginRef(p, 64),
       })

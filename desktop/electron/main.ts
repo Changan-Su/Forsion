@@ -82,7 +82,7 @@ import { checkBuiltinUpdates, NPM_OFFICIAL, registryOrder } from './builtinUpdat
 import { checkEngineUpdate, setupEngineOverlay, ENGINE_PACKAGE, ENGINE_UPDATE_ID, type EngineOverlayHandle } from './engineUpdates'
 import { createCoreTangu } from './coreTangu'
 import { loadBuiltinDesktopEntries, type CloudHost } from './cloudHost'
-import { appUpdateProps, coreUpdateProps, createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, telemetryPackaged, updateProps } from './telemetryHost'
+import { appUpdateProps, coreUpdateProps, createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, storeUpdateTelemetry, telemetryPackaged, updateProps } from './telemetryHost'
 import { npmDownloadCandidates, npmTarballToZip, type NpmInstallSnapshot } from './npmMarketInstall'
 import { extractZipToDir, checkMarketPackage, detectMarketType, MARKET_SUBDIR, MARKET_MANIFEST, isSafeSlug, readInstalledVersion, readInstalledPluginId, readUserPluginDirs, marketItemDir, downloadCandidates, downloadZip, GZIP_MAGIC, ZIP_MAGIC, type DownloadProgress } from './marketInstall'
 import { servePathRoot, serveInlineHtml, stopCodePreview, setForsionPreviewHooks, transpileForServe, MIME } from './codePreview'
@@ -2791,6 +2791,7 @@ app.whenReady().then(async () => {
   await deviceSecrets.init({ readShell: readShellConfig as () => Promise<Record<string, any>>, writeShell: (s) => writePrivateJson(configPath(), s), queue: configQueue })
   void remoteSessions.init() // P1-K4:迁移 / 读盘(isEnabled 依赖 K5 状态,须在它之后);K5 状态一变就重播视图
   deviceSecrets.onStatusChange(() => remoteSessions.notifyChanged())
+  const storeUpdateTele = storeUpdateTelemetry({ update: (p) => telemetry.emit('update', p), setting: (k, v) => telemetry.setting(k, v) }) // 匿名遥测
   const marketPluginUpdater = createMarketPluginUpdater({
     home: forsionHomeDir(), appVersion: app.getVersion(),
     protectedIds: () => new Set([...builtinPluginIds(), ...BUILTIN_BUNDLES.map((x) => x.id)]),
@@ -2814,6 +2815,7 @@ app.whenReady().then(async () => {
       return buf
     },
     broadcast: (status) => {
+      storeUpdateTele(status)
       for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.send('market:updateStatus', status)
     },
   })
@@ -4194,10 +4196,10 @@ app.whenReady().then(async () => {
   // 测试版通道开关。落 config.json 的 updater 段;updater.ts 每次检查现读,改完无需重启。
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
-    const was = await betaChannelOn().catch(() => null)
-    await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
+    let was: boolean | null = null // 改之前的值:在同一次锁内读改写里取(缺省 = 正式版,同 updater.readUpdaterConfig)
+    await saveHomeSection('updater', (sec: any) => { was = sec?.beta === true; return { ...sec, beta: !!on } })
     channelChanged(!!on)
-    if (was !== null && was !== !!on) telemetry.setting('update.channel', on ? 'beta' : 'stable') // 匿名遥测:更新通道改了
+    if (was !== null && was !== !!on) telemetry.setting('update.channel', on ? 'beta' : 'stable') // 匿名遥测:更新通道真改了
     refreshTelemetryChannel()
     return { ok: true }
   })
