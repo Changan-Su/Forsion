@@ -89,15 +89,24 @@ function MiniPanelRoot() {
     let pending: MiniOpenOptions | null = query.get('sessionId') ? { sessionId: query.get('sessionId')! } : null
     // 等目标落定(没有待办的目标)才报:载入中先报出上次留下的 Space,会让同一实体的第二次打开错开一扇新窗
     let reported = ''
+    // 应用目标的那几步(切 Space、开视图)会同步触发订阅:中间态(Space 换了、会话还没钉上)不能报出去
+    let applying = false
+    // 主进程随目标发来的代号;报实体时带回去,主进程只认当前这一代之后的报告
+    let appliedGen: number | undefined
     const report = (): void => {
-      if (!ready || pending || directMini || transient) return
+      if (!ready || pending || applying || directMini || transient) return
       const entity = currentSpaceEntity()
-      const sig = entity ? JSON.stringify(entity) : ''
+      const sig = entity ? JSON.stringify([entity, appliedGen]) : ''
       if (!entity || sig === reported) return
       reported = sig
-      window.tangu?.miniEntity?.(entity)
+      window.tangu?.miniEntity?.({ ...entity, gen: appliedGen } as MiniOpenOptions)
     }
     const apply = (): void => {
+      if (applying) return
+      applying = true
+      try { applyTarget() } finally { applying = false }
+    }
+    const applyTarget = (): void => {
       if (!ready || !pending) return
       if (pending.view) {
         const directView = pending.view
@@ -108,6 +117,7 @@ function MiniPanelRoot() {
         directSeen = true
         const target = pending
         pending = null
+        appliedGen = (target as { gen?: number }).gen
         directMini = target
         setDirect(target)
         useWorkspace.getState().openView(directView.type, { ...directView.params, ...target.params }, 'main')
@@ -118,6 +128,7 @@ function MiniPanelRoot() {
       if (!space || !supportsMiniPanel(space)) return // async plugin registration can fulfill the target later
       const target = pending
       pending = null
+      appliedGen = (target as { gen?: number }).gen
       directMini = null
       setDirect(null)
       setActiveSpace(space.id)
@@ -155,7 +166,9 @@ function MiniPanelRoot() {
   const duplicate = (): void => {
     const leaf = useWorkspace.getState().getActiveLeaf()
     if (directMini?.view) {
-      void openMiniWindow({ ...directMini, view: { type: directMini.view.type, params: { ...directMini.view.params, ...leaf?.params } }, duplicate: true })
+      // 当前参数只放一处:应用目标时 params 会盖过 view.params,两边都写成现在这份
+      const params = { ...directMini.view.params, ...directMini.params, ...leaf?.params }
+      void openMiniWindow({ ...directMini, params, view: { type: directMini.view.type, params }, duplicate: true })
       return
     }
     const entity = currentSpaceEntity()

@@ -124,8 +124,8 @@ async function main() {
     await calendar.screenshot({ path: path.join(shots, 'limit-notice-mini.png') })
 
     // 7. 语音通话:自己一扇,不占名额,不顶掉别的 Mini;再拨一通 = 同一扇
-    const call = (sid) => open({ view: { type: 'voice-call', params: { sessionId: sid, model: 'stub/realtime', title: '语音通话' } },
-      mainView: { type: 'chat', params: { sessionId: sid } }, title: '语音通话' })
+    const call = (sid, duplicate) => open({ view: { type: 'voice-call', params: { sessionId: sid, model: 'stub/realtime', title: '语音通话' } },
+      mainView: { type: 'chat', params: { sessionId: sid } }, title: '语音通话', ...(duplicate ? { duplicate: true } : {}) })
     const rc = await call('s-a')
     const voice = await findMini('.mini-card-shell[data-space="direct"] .mini-panel-view[data-view="voice-call"]')
     list = await waitCount(LIMIT + 1)
@@ -135,6 +135,9 @@ async function main() {
     const rc2 = await call('s-b')
     await pause(400)
     check('a second call reuses the voice window', rc2?.reused === true && (await native()).length === LIMIT + 1)
+    const rc3 = await call('s-b', true)
+    await pause(300)
+    check('even duplicate: true cannot open a second voice window', rc3?.reused === true && (await native()).length === LIMIT + 1, JSON.stringify(rc3))
     check('the voice window offers no duplicate', await voice.locator('.mini-card-space').isDisabled())
     await voice.screenshot({ path: path.join(shots, 'voice.png') })
 

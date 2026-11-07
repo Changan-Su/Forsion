@@ -2188,6 +2188,8 @@ interface MiniEntry {
   key: string
   /** 尚在载入时也保留最后一次定向,`did-finish-load` 后补发,避免快速连续打开丢第二个目标。 */
   target: MiniOpenOptions | undefined
+  /** 目标的代号:每发一次新目标 +1,随目标发给渲染层;渲染层报实体时带回它应用过的代号,旧代号的报告不认(防它覆盖刚发出的目标)。 */
+  gen: number
   dock: MiniDockState | null
   dockMotion: ReturnType<typeof createMiniDockMotion> | null
   suppressMoved: boolean // 抑制程序化 setBounds 触发的 moved(否则折叠/展开自激)
@@ -2236,11 +2238,15 @@ function findMini(key: string): MiniEntry | undefined {
   function rank(m: MiniEntry): number { const i = miniOrder.indexOf(m.id); return i < 0 ? Number.MAX_SAFE_INTEGER : i }
 }
 function presentMini(m: MiniEntry): void { touchMini(m); present(m.win) }
-/** 记下这扇的位置和大小(按实体键)。贴边折着 / 正拉缩放边时不记:那时的框不是用户摆的位置。 */
-function rememberMiniLayout(m: MiniEntry): void {
-  if (m.win.isDestroyed() || m.dock || m.resizeFrom) return
+/** 记下这扇的位置和大小(按实体键)。正拉缩放边时不记;贴边时框被挪出了屏,只记大小(位置留用户放下时那次)。
+ *  sizeOnly:缩放刚结束,即使贴着边也要记下新大小。 */
+function rememberMiniLayout(m: MiniEntry, sizeOnly = false): void {
+  if (m.win.isDestroyed() || m.resizeFrom) return
+  const b = miniBounds(m), prev = miniLayouts.get(m.key)
+  if (m.dock && !sizeOnly && !prev) return
+  const next = m.dock ? { ...(prev ?? b), width: b.width, height: b.height } : b
   miniLayouts.delete(m.key)
-  miniLayouts.set(m.key, miniBounds(m))
+  miniLayouts.set(m.key, next)
   while (miniLayouts.size > MINI_LAYOUT_KEEP) miniLayouts.delete(miniLayouts.keys().next().value!)
 }
 function clearIdleMiniResizeMask(m: MiniEntry): void {
@@ -2316,7 +2322,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniE
     webPreferences: satelliteWebPreferences(),
   })
   const m: MiniEntry = {
-    id, win, key, target: opts, dock: null, dockMotion: null, suppressMoved: false, dragging: false,
+    id, win, key, target: opts, gen: 0, dock: null, dockMotion: null, suppressMoved: false, dragging: false,
     settleTimer: null, movedTimer: null, pollTimer: null, resizeFrom: null, resizeDock: null, resizeMaskActive: false,
     resizeUpdates: createMiniResizeQueue((bounds) => setMiniBounds(m, bounds, false)), stopPassThrough: null,
   }
@@ -2334,7 +2340,7 @@ function createMiniWindow(opts: MiniOpenOptions | undefined, key: string): MiniE
     m.resizeUpdates.cancel()
     m.resizeFrom = null // 拖到一半页面重载:收不到松手,这里收场
     m.resizeDock = null
-    if (m.target && !win.isDestroyed()) win.webContents.send('window:miniTarget', m.target)
+    if (m.target && !win.isDestroyed()) win.webContents.send('window:miniTarget', { ...m.target, gen: m.gen })
   })
   m.stopPassThrough = startMiniPassThrough(win, {
     active: () => miniAutoPanel?.following() ?? false,
@@ -2482,12 +2488,14 @@ function openMiniWindow(opts?: MiniOpenOptions): MiniOpenResult {
   }
   const { duplicate, ...target } = opts
   const key = miniEntityKey(target)
-  const open = duplicate ? undefined : findMini(key)
+  // 通话一次只有一通:duplicate 也叫出那一扇(否则绕过「一扇」和名额豁免)
+  const open = duplicate && key !== VOICE_CALL_VIEW ? undefined : findMini(key)
   if (!open) return createMini(target, key)
   // 带目标是「把这个拿到 Mini 继续」:已显示也只更新 + 聚焦,不能反而把窗口藏掉。
   open.target = target
+  open.gen++
   if (!open.win.webContents.isLoadingMainFrame()) {
-    open.win.webContents.send('window:miniTarget', target)
+    open.win.webContents.send('window:miniTarget', { ...target, gen: open.gen })
     open.win.webContents.send('window:miniNudge')
   }
   presentMini(open)
@@ -2497,8 +2505,11 @@ function openMiniWindow(opts?: MiniOpenOptions): MiniOpenResult {
 /** ⌘⇧M / 托盘这类主进程自己发起的打开:没有渲染层替它提示,满了用系统通知说一声(不静默失败)。 */
 function openMiniFromShell(): void {
   const r = openMiniWindow()
-  if (r.ok || !Notification.isSupported()) return
-  try { new Notification({ title: 'Forsion', body: mt('main.mini.limit', { n: r.limit }) }).show() } catch { /* 通知不可用 */ }
+  if (!r.ok) notifyMiniLimit(r.limit)
+}
+function notifyMiniLimit(limit: number): void {
+  if (!Notification.isSupported()) return
+  try { new Notification({ title: 'Forsion', body: mt('main.mini.limit', { n: limit }) }).show() } catch { /* 通知不可用 */ }
 }
 
 function createMini(target: MiniOpenOptions | undefined, key: string): MiniOpenResult {
@@ -4666,7 +4677,10 @@ app.whenReady().then(async () => {
   // invoke:结果交回调用方(满了由它提示用户,不静默失败)。
   ipcMain.handle('window:openMini', (e, raw: unknown): MiniOpenResult | undefined => {
     if (!isTrustedSender(e)) return undefined
-    return openMiniWindow(normalizeMiniOpenOptions(raw))
+    const r = openMiniWindow(normalizeMiniOpenOptions(raw))
+    // 主窗和 Mini 自己会提示(通知 / 卡片里);独立窗、浮动面板里没有通知宿主,由这里用系统通知说
+    if (!r.ok && e.sender !== mainWindow?.webContents && !miniBySender(e.sender)) notifyMiniLimit(r.limit)
+    return r
   })
   // 渲染层报这扇 Mini 现在显示的是哪个实体(窗里换了 Space / 会话):改写实体键,之后再开同一个就叫出这扇。
   // 只认 Space 目标、只认本来就是 Space 的那几扇:直开的视图(插件 / 语音通话)不会被改成别的,名额也就不会被绕过。
@@ -4674,7 +4688,12 @@ app.whenReady().then(async () => {
     const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
     const target = normalizeMiniOpenOptions(raw)
     if (!m || !target || target.view || m.key === VOICE_CALL_VIEW || m.key.startsWith('view:')) return
-    const entity: MiniOpenOptions = { spaceId: target.spaceId, sessionId: target.sessionId }
+    // 报的是哪一代目标之后的样子:不是当前这一代(新目标刚发出、渲染层还没应用)就不认
+    const gen = (raw as { gen?: unknown }).gen
+    if (m.target && gen !== m.gen) return
+    // 还在同一个 Space 里:打开时带的显式 key 留着(渲染层不知道它)
+    const keep = m.target && !m.target.view && m.target.spaceId === target.spaceId ? m.target.key : undefined
+    const entity: MiniOpenOptions = { spaceId: target.spaceId, sessionId: target.sessionId, ...(keep ? { key: keep } : {}) }
     const key = miniEntityKey(entity)
     if (key === m.key) return // 还是原来那个:留着打开时带的参数
     m.key = key
@@ -4692,7 +4711,7 @@ app.whenReady().then(async () => {
   })
   ipcMain.on('window:miniReady', (e) => {
     const m = isTrustedSender(e) ? miniBySender(e.sender) : undefined
-    if (m?.target) e.sender.send('window:miniTarget', m.target)
+    if (m?.target) e.sender.send('window:miniTarget', { ...m.target, gen: m.gen })
     if (isTrustedSender(e) && e.sender === autoMiniWindow?.webContents && autoMiniSessionId) e.sender.send('window:miniTarget', { sessionId: autoMiniSessionId })
   })
   ipcMain.on('window:miniDockMotionDone', (e, id: unknown) => {
@@ -4718,7 +4737,7 @@ app.whenReady().then(async () => {
           ensureMiniPoll(m)
         }
       }
-      if (!m.dock) rememberMiniLayout(m)
+      rememberMiniLayout(m, true)
       if (process.platform === 'darwin') m.win.invalidateShadow() // 透明窗的投影按新轮廓重算(长大时新露出的那块在重绘前是透明的)
       return
     }
