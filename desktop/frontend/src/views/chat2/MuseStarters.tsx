@@ -49,9 +49,39 @@ export function openSource(s: MuseStarter, vaultRoot: string | null | undefined)
 const linkable = (s: MuseStarter): boolean =>
   s.source.kind === 'calendar' || s.source.kind === 'todo' || (s.source.kind === 'web' ? /^https?:\/\//i.test(s.source.ref || '') : (s.source.kind === 'note' || s.source.kind === 'session') && !!s.source.ref)
 
+/** 草稿 key → 上一次填进去的那句(没改过的话再换一条可以直接顶掉;改过 / 自己写的不能)。 */
+const starterTexts = new Map<string, string>()
+
+/** 输入框里有用户自己写的字(不是上一条建议原样填进去的那句)。主页卡在这时不能填,否则把人写到一半的话冲掉。 */
+export function hasOwnDraftText(draftKey: string): boolean {
+  const text = useComposerDrafts.getState()[draftKey]?.text.trim() ?? ''
+  return !!text && text !== (starterTexts.get(draftKey) ?? '').trim()
+}
+
+/** 建议挂上的引用芯片是这条建议的一部分:文字删空(或发出去)就一起摘掉。放在草稿层而不是新对话页组件里 ——
+ *  主页卡填进去时新对话页的三行根本没挂着,摘芯片那一下就没人做,旧引用会跟着下一条不相干的消息发出去。 */
+let chipWatch: (() => void) | null = null
+function watchStarterDrafts(): void {
+  if (chipWatch) return
+  chipWatch = useComposerDrafts.subscribe((all) => {
+    for (const key of [...new Set([...starterChips.keys(), ...starterTexts.keys()])]) {
+      if (all[key]?.text.trim()) continue
+      starterTexts.delete(key)
+      const token = starterChips.get(key)
+      if (!token) continue
+      starterChips.delete(key)
+      if (all[key]?.refChips.some((c) => c.token === token)) setDraftField(key, 'refChips', (prev) => prev.filter((c) => c.token !== token))
+    }
+  })
+}
+
 /** 点一条建议:整句填进那份草稿(不发;笔记 / 会话同时挂成引用芯片),记下这份草稿来自哪一条 —— 真发出去才回写 used。
- *  新对话页的三行和主页「卜算子·建议」卡(经 tanguSeam 的 museStarters)共用这一份。 */
-export function fillStarter(draftKey: string, s: MuseStarter, vaultRoot: string | null | undefined): void {
+ *  新对话页的三行和主页「卜算子·建议」卡(经 tanguSeam 的 museStarters)共用这一份。
+ *  输入框里有用户自己写的字 → 不填,回 false(新对话页那三行有草稿时本来就收起了,只有主页卡会碰到)。 */
+export function fillStarter(draftKey: string, s: MuseStarter, vaultRoot: string | null | undefined): boolean {
+  if (hasOwnDraftText(draftKey)) return false
+  watchStarterDrafts()
+  starterTexts.set(draftKey, s.text)
   setDraftField(draftKey, 'text', s.text)
   const root = vaultRoot || ''
   const rel = s.source.kind === 'note' && s.source.ref ? vaultRel(s.source.ref, root) : null
@@ -68,24 +98,19 @@ export function fillStarter(draftKey: string, s: MuseStarter, vaultRoot: string 
     return [...rest, chip]
   })
   noteStarterFilled(draftKey, s.id)
+  return true
 }
 
 export function MuseStarters({ draftKey, centered }: { draftKey: string; centered: boolean }): React.ReactElement | null {
   const { t } = useI18n()
   const list = useMuseStarters((st) => st.list)
   const vaultRoot = usePageStore((st) => st.vaultRoot)
-  // 点行时挂上的那枚引用芯片是这条建议的一部分:不算「用户在写」,文字删空时一起摘掉(三行才回得来)
+  // 点行时挂上的那枚引用芯片是这条建议的一部分:不算「用户在写」,文字删空时一起摘掉(watchStarterDrafts,三行才回得来)
   const ownChip = starterChips.get(draftKey)
-  const text = useComposerDrafts((all) => all[draftKey]?.text ?? '')
   const drafting = useComposerDrafts((all) => {
     const d = all[draftKey]
     return !!d && (!!d.text.trim() || d.attachments.length > 0 || d.wsFiles.length > 0 || d.pastes.length > 0 || d.elements.length > 0 || d.refChips.some((c) => c.token !== ownChip))
   })
-  useEffect(() => {
-    if (text.trim() || !ownChip) return
-    starterChips.delete(draftKey)
-    setDraftField(draftKey, 'refChips', (prev) => prev.filter((c) => c.token !== ownChip))
-  }, [text, ownChip, draftKey])
   const boxRef = useRef<HTMLDivElement>(null)
   const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null)
 

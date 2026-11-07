@@ -415,8 +415,9 @@ export interface TanguMuseStarters {
   subscribe(fn: () => void): () => void
   /** 后台拉一次(同一分钟内不重复拉)。 */
   refresh(): void
-  /** 整句填进那份草稿(不发;笔记 / 会话同时挂成引用芯片),真发出去才算采纳。 */
-  fill(draftKey: string, id: string): void
+  /** 整句填进那份草稿(不发;笔记 / 会话同时挂成引用芯片),真发出去才算采纳。
+   *  输入框里有用户自己写的字时不填、回 false(不冲掉人写到一半的话)。 */
+  fill(draftKey: string, id: string): boolean
   /** 不感兴趣:先从眼前拿掉,再告诉 Muse。 */
   dismiss(id: string): void
   /** 句子里所指的那个东西(日程 / 笔记 / 会话 / 网页):打开它。打不开的回 false。 */

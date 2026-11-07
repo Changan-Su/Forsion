@@ -37,6 +37,7 @@ export type PluginWidgetData =
 const ROWS_MAX = 50
 const TIMEOUT_MS = 10_000
 const FOCUS_STALE_MS = 30_000
+const REMOUNT_STALE_MS = 5_000
 
 const key = (pluginId: string, widgetId: string): string => `${pluginId}/${widgetId}`
 const providers = new Map<string, PluginWidgetProvider>()
@@ -86,12 +87,12 @@ function run(k: string): void {
   const list = prev && prev.status !== 'none' ? prev.list : undefined
   data.set(k, { status: 'loading', list })
   emit()
-  const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS)
-  Promise.resolve()
-    .then(() => fn({}, { signal: ctl.signal }))
+  // 超时自己结算:插件回一个永远不结束、也不理 signal 的 Promise 时,光 abort() 不会让下面的 catch 跑,卡会一直转
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => { timer = setTimeout(() => { ctl.abort(); reject(new Error('timed out')) }, TIMEOUT_MS) })
+  Promise.race([Promise.resolve().then(() => fn({}, { signal: ctl.signal })), timeout])
     .then((raw) => {
-      if (ctl.signal.aborted && inflight.get(k) !== ctl) return
-      if (ctl.signal.aborted) throw new Error('timed out')
+      if (inflight.get(k) !== ctl) return // 被更新的一次顶掉了 / 已撤销:迟到的结果不要
       data.set(k, { status: 'ok', list: normalizeWidgetList(raw) })
     })
     .catch((e: unknown) => {
@@ -163,8 +164,10 @@ export function usePluginWidgetData(pluginId: string, widgetId: string): PluginW
   const k = key(pluginId, widgetId)
   useEffect(() => {
     wire()
+    const first = !watching.get(k)
     watching.set(k, (watching.get(k) ?? 0) + 1)
-    if (providers.has(k) && !data.has(k)) run(k)
+    // 卡挂上就重拿(浮卡收起再打开、离开主页再回来):缓存只在重拿期间先垫着;几秒内反复挂卸(换断点)不重复拿
+    if (providers.has(k) && (!data.has(k) || (first && Date.now() - (lastRun.get(k) ?? 0) >= REMOUNT_STALE_MS))) run(k)
     return () => {
       const n = (watching.get(k) ?? 1) - 1
       if (n > 0) watching.set(k, n)

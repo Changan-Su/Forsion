@@ -6,6 +6,7 @@ import { CalendarDays, Check, FileText, Globe, Inbox, LayoutGrid, ListTodo, Mess
 import { setActiveSpace } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
 import { WidgetHost, useWidgetTitle } from '../components/WidgetHost'
+import { panelToast } from '../components/PanelNotice'
 import { useApp } from '../stores/appStore'
 import { useInbox, senderOf } from '../stores/inboxStore'
 import { useAmadeusPrefs } from '../amadeusPrefs'
@@ -29,6 +30,7 @@ registerMessages({
   'home.w.sessions': { zh: '最近对话', en: 'Recent chats' },
   'home.w.use': { zh: '用这句', en: 'Use this' },
   'home.w.next': { zh: '换一条', en: 'Next' },
+  'home.w.museBusy': { zh: '输入框里还有没发的话，先发出去或清空再用这句', en: 'There is an unsent message in the input. Send or clear it first' },
   'home.w.museEmpty': { zh: '卜算子还没有建议', en: 'No suggestions from Muse yet' },
   'home.w.unread': { zh: '条未读', en: 'unread' },
   'home.w.notesEmpty': { zh: '还没打开过笔记', en: 'No notes opened yet' },
@@ -177,7 +179,12 @@ function MuseBody({ wide }: { wide: boolean }): React.JSX.Element {
   const env = useContext(HomeWidgetEnv)
   const list = useMuseStarterList()
   const [at, setAt] = useState(0)
-  const use = (s: MuseStarter): void => { readTanguMuseStarters()?.fill(NEW_CHAT_DRAFT, s.id); env.openComposer() }
+  // 输入框里有自己写的字:不冲掉,打开输入框让人看到那份草稿,并说一句为什么没填
+  const use = (s: MuseStarter): void => {
+    const filled = readTanguMuseStarters()?.fill(NEW_CHAT_DRAFT, s.id)
+    if (filled === false) panelToast(t('home.w.museBusy'))
+    env.openComposer()
+  }
   const open = (e: React.MouseEvent, s: MuseStarter): void => { e.stopPropagation(); readTanguMuseStarters()?.open(s.id) }
   if (!list.length) return <div className="hp-wl-empty">{t('home.w.museEmpty')}</div>
   const text = (s: MuseStarter): React.ReactNode => {

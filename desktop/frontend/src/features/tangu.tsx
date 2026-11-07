@@ -147,7 +147,7 @@ export function registerTanguViews(): void {
     list: () => useMuseStarters.getState().list,
     subscribe: (fn) => useMuseStarters.subscribe(fn),
     refresh: () => { void refreshMuseStarters() },
-    fill: (key, id) => { const s = starterOf(id); if (s) fillStarter(key, s, usePageStore.getState().vaultRoot) },
+    fill: (key, id) => { const s = starterOf(id); return s ? fillStarter(key, s, usePageStore.getState().vaultRoot) : false },
     dismiss: (id) => dismissStarter(id),
     open: (id) => { const s = starterOf(id); if (!s) return false; openSource(s, usePageStore.getState().vaultRoot); return true },
   })
