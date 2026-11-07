@@ -36,9 +36,14 @@ describe('startRun client tag', () => {
     expect(body.client).toMatch(new RegExp(`^${prefix.replace('/', '\\/')}`))
   })
 
-  it('desktop/web 声明原生 Intelligent UI 渲染能力', async () => {
+  it('desktop 声明原生 Intelligent UI 渲染能力与小组件', async () => {
     const body = await sentBody()
     expect(body.client_capabilities).toEqual(['marketplace-cards.v1', 'intelligent-ui.v1', 'intelligent-ui.v2', 'intelligent-ui-libs.v1', 'widget.v1'])
+  })
+
+  it('web 有 Intelligent UI、没有小组件(引擎在云端,没有 agents/ 文件夹)', async () => {
+    vi.stubGlobal('window', { tangu: { cloudWeb: true } })
+    expect((await sentBody()).client_capabilities).toEqual(['marketplace-cards.v1', 'intelligent-ui.v1', 'intelligent-ui.v2', 'intelligent-ui-libs.v1'])
   })
 
   it('移动端保持独立能力门禁', async () => {
