@@ -12,7 +12,7 @@ import type { SecretStorageStatus } from '../shared/secretStorage' // P1-K5
 import type { RemoteSessionsApi, RemoteSessionsView } from '../shared/remoteSessions' // P1-K4
 import type { RemoteSafetyApi, RemoteSafetyState } from '../shared/remoteSafety' // P1-K2
 import { APPROVAL_OPEN_CHANNEL, type ApprovalOpenPayload } from '../shared/approvalOpen' // P1-K3
-import { UI_LOCALE_CHANNEL } from '../shared/uiSync' // P1-KF
+import { UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync' // P1-KF
 import { PRODUCT } from './product'
 import { cloudPresent } from './cloudPresent'
 import './amadeus/preload' // Amadeus Space:暴露 window.amadeus(vault IPC 桥),副作用导入
@@ -39,6 +39,17 @@ ipcRenderer.on('appearance:changed', (_event, value: StartupAppearance) => {
 const api = {
   /** 宿主平台('darwin' | 'win32' | 'linux');渲染层据此调标题栏/交通灯留白等。 */
   platform: process.platform as string,
+  /** Tangu 界面半身(界面热更新 4b;electron/coreTangu.ts):这次用哪份界面(null = 用编进宿主的那份),以及报告界面坏了。 */
+  coreTangu: {
+    load: (): Promise<{ source: 'overlay' | 'bundled'; version: string; code: string } | null> => ipcRenderer.invoke('coreTangu:load'),
+    /** 这个窗口拿到的那份求值 / 激活失败:热更新版整版记坏,自带的改走编进宿主的那份;主进程随后重载这个窗口
+     *  (渲染层自己 reload 会被 hardenNav 拦下)。哪一份由主进程按自己的记录认,不传版本号。 */
+    failed: (reason: string): Promise<void> => ipcRenderer.invoke('coreTangu:failed', reason),
+    /** 开头一分钟里被 ErrorBoundary 接住一次(栈里有这份包):主进程跨重载累计,够数了同 failed。 */
+    crashed: (reason: string): Promise<void> => ipcRenderer.invoke('coreTangu:crashed', reason),
+  },
+  /** 整窗重载,由主进程发(渲染层自己 location.reload() 在打包版的 file: 页面上会被 hardenNav 拦下)。渲染层用 reloadWindow.ts。 */
+  reloadWindow: (): Promise<void> => ipcRenderer.invoke('app:reloadWindow'),
   desktopPermissionsStatus: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:status'),
   desktopPermissionRequest: (id: DesktopPermissionId, options?: DesktopPermissionRequestOptions): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:request', id, options),
   desktopPermissionsVerify: (): Promise<DesktopPermissionsSnapshot> => ipcRenderer.invoke('permissions:verify'),
@@ -582,6 +593,8 @@ const api = {
   },
   // P1-KF:本窗**生效**界面语言(i18n.tsx 四级链的结论)→ 主进程文案(托盘 / 系统通知 / 对话框)。单向,主进程只认 zh/en。
   reportUiLocale: (locale: 'zh' | 'en'): void => ipcRenderer.send(UI_LOCALE_CHANNEL, locale),
+  /** 本机外观(主题色 / 背景色 / 明暗)→ 主进程,给已配对的 Forsion Clip 跟随。单向。 */
+  reportUiAppearance: (a: { skin: string; bg: string; mode: 'light' | 'dark' }): void => ipcRenderer.send(UI_APPEARANCE_CHANNEL, a),
   closeSelf: (): void => ipcRenderer.send('window:closeSelf'),
   /** Mini 卡片自绘缩放边:edge = n / s / e / w 的组合;start = 起手;null = 松手。位移由主进程读光标算。 */
   miniResize: (edge: string | null, start?: boolean, cursor?: { x: number; y: number; radius?: number }): void => ipcRenderer.send('window:miniResize', edge, start === true, cursor),

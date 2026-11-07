@@ -1,6 +1,6 @@
 import { agentDescription, isStockAgent } from '../components/builtinAgentDescriptions'
 import { useEffect, useId, useMemo, useRef, useState, type ChangeEvent } from 'react'
-import { BookOpen, Bot, CalendarClock, Check, ChevronDown, ChevronRight, ExternalLink, ArrowUp, ArrowDown, ImageUp, Loader2, MoreHorizontal, Plus, Plug, ScrollText, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
+import { BookOpen, Bot, CalendarClock, Check, ChevronDown, ChevronRight, ExternalLink, ArrowUp, ArrowDown, Eye, EyeOff, ImageUp, Loader2, MoreHorizontal, Plus, Plug, ScrollText, Search, Settings2, Sparkles, Sprout, Star, Trash2, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { activeMainPanel, startOpenDrag, useListFirst, useWorkspace, ViewErrorBoundary } from '@lcl/engine'
 import { ListFab } from '../components/phoneList'
@@ -210,6 +210,15 @@ export function AgentsRosterView() {
       emitAgentsChange()
     } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false); setDragSlug(null) }
   }
+  // 停用 / 启用:从侧栏、@、选择器里收起或放回,文件与私聊都留着。默认 Agent、Muse 不给停(引擎同样拒)。
+  const toggleDisabled = async (a: NormalAgentDef) => {
+    setRosterBusy(true); setRosterError('')
+    try {
+      const saved = await saveAgentDef(homeTarget(), { disabled: !a.disabled }, a.slug)
+      useApp.setState((s) => ({ agentDefs: s.agentDefs.map((x) => (x.slug === a.slug ? { ...x, disabled: !!saved.disabled } : x)) }))
+      emitAgentsChange()
+    } catch (error: any) { setRosterError(String(error?.message || error)) } finally { setRosterBusy(false) }
+  }
   // 删除走与侧栏同一个卸载确认框(逐项写去向、进回收站);删掉的是正在看的那个 → 换到名册第一个
   const [removing, setRemoving] = useState<NormalAgentDef | null>(null)
   return <aside className="agents-roster">
@@ -224,12 +233,13 @@ export function AgentsRosterView() {
         onDragStart={(e) => { setDragSlug(a.slug); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', a.slug); startOpenDrag(e.dataTransfer, { open: () => selectAgent(a.slug) }) }} onDragEnd={() => setDragSlug(null)}
         onDragOver={(e) => { if (dragSlug && dragSlug !== a.slug) e.preventDefault() }} onDrop={(e) => { e.preventDefault(); if (dragSlug) void reorder(dragSlug, a.slug) }}>
         <button type="button" className={`agents-roster-item${viewing(a.slug) ? ' selected' : ''}`} onClick={() => selectAgent(a.slug)} aria-pressed={viewing(a.slug)}>
-          <span className="agent-portrait small"><AgentAvatar name={agentName(a)} url={avatars[a.slug]} siblings={rosterNames} fill /></span><span><strong>{agentName(a)}{a.slug === defaultSlug && <Star size={12} aria-label={t('agentProfile.isDefault')} fill="currentColor" />}</strong><small>{agentDescription(a, t) || a.slug}</small></span>
+          <span className="agent-portrait small"><AgentAvatar name={agentName(a)} url={avatars[a.slug]} siblings={rosterNames} fill /></span><span><strong>{agentName(a)}{a.slug === defaultSlug && <Star size={12} aria-label={t('agentProfile.isDefault')} fill="currentColor" />}{a.disabled && <em className="agents-roster-off">{t('agentProfile.disabledTag')}</em>}</strong><small>{agentDescription(a, t) || a.slug}</small></span>
         </button>
         <CapabilityMenu label={t('agentProfile.actionsFor', { name: agentName(a) })} className="agents-roster-more" items={[
           { id: 'up', label: t('agentProfile.moveUp'), icon: <ArrowUp size={14} />, disabled: rosterBusy || agents[0]?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) - 1]?.slug || a.slug) },
           { id: 'down', label: t('agentProfile.moveDown'), icon: <ArrowDown size={14} />, disabled: rosterBusy || agents.at(-1)?.slug === a.slug, onSelect: () => void reorder(a.slug, agents[agents.indexOf(a) + 1]?.slug || a.slug, true) },
-          { id: 'default', label: t('agentProfile.makeDefault'), icon: <Star size={14} />, disabled: rosterBusy || a.slug === defaultSlug, onSelect: () => void setDefault(a.slug) },
+          { id: 'default', label: t('agentProfile.makeDefault'), icon: <Star size={14} />, disabled: rosterBusy || a.slug === defaultSlug || !!a.disabled, onSelect: () => void setDefault(a.slug) },
+          { id: 'disable', label: t(a.disabled ? 'agentProfile.enable' : 'agentProfile.disable'), icon: a.disabled ? <Eye size={14} /> : <EyeOff size={14} />, disabled: rosterBusy || (!a.disabled && (a.slug === 'xyra' || a.slug === defaultSlug || a.slug === 'muse')), onSelect: () => void toggleDisabled(a) },
           { id: 'delete', label: t('agentProfile.delete'), icon: <Trash2 size={14} />, danger: true, disabled: rosterBusy || a.slug === 'xyra' || a.slug === defaultSlug, onSelect: () => { setRosterError(''); setRemoving(a) } },
         ]}><MoreHorizontal size={15} /></CapabilityMenu>
       </div>)}{!filtered.length && <p className="agent-profile-muted">{t('agentProfile.noResults')}</p>}</div>

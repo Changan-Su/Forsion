@@ -159,6 +159,8 @@ export async function afterRestore(kind: TrashEntry['kind'], desktopExtra?: Reco
     window.tangu?.requestMainAction?.('agents-changed')
   } else if (kind === 'skill') {
     window.tangu?.requestMainAction?.('skills-changed')
+  } else if (kind === 'file') {
+    // Agent 删掉的文件(delete_path):放回原处就完了,没有要重扫 / 接回的东西
   } else if (desktopExtra?.engine) {
     // 引擎插件(引擎不在时主进程挪的那份):文件夹回来了,让引擎重扫。
     const { rescanPlugins } = await import('../services/backendService')
@@ -191,7 +193,9 @@ export async function restoreFromTrash(entry: Pick<TrashEntry, 'id' | 'kind' | '
   }
   const r = await restoreTrashEntry(homeTarget(), entry.id)
   await afterRestore(entry.kind)
-  return r.renamed && r.slug ? { renamedTo: r.slug } : {}
+  // 文件(Agent 删掉的)按落回的完整路径报,看得出放到了哪
+  const renamedTo = r.renamed ? (r.slug ?? r.path) : undefined
+  return renamedTo ? { renamedTo } : {}
 }
 
 /** 恢复失败说人话:重装过的插件、原处上级被换成软链各有一句,其余带原因。 */

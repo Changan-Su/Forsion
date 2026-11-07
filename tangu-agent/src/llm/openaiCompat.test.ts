@@ -8,7 +8,10 @@ import {
   thinkingHeadroom,
   PROTOCOL_MARK,
   ACCOUNT_MARK,
+  RUN_MARK,
+  SESSION_MARK,
 } from './openaiCompat.js';
+import { openCodeSessionId, OPENCODE_USER_AGENT } from './opencodeGo.js';
 import { openaiToResponsesBody } from './openaiResponses.js';
 import { createProviderRegistry } from './providerRegistry.js';
 import { GROK_BUILD_CLIENT_IDENTIFIER, GROK_BUILD_CLIENT_MODE, GROK_BUILD_CLIENT_VERSION } from './grokBuildCompat.js';
@@ -402,5 +405,56 @@ describe('streamOpenAiCompat(usage 解析 / wire 面)', () => {
       'x-grok-model-override': 'grok-build',
     });
     expect(JSON.parse(calledInit.body)).not.toHaveProperty('stream_options');
+  });
+});
+
+// OpenCode Go 不带 x-opencode-session 一律 400 MissingSessionID(11-05 探针);别家绝不多发这两个头。
+describe('streamOpenAiCompat(OpenCode 会话头)', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  const capture = async (baseUrl: string, payload: any) => {
+    const seen: Array<{ url: string; headers: any; body: any }> = [];
+    vi.stubGlobal('fetch', (u: any, init: any) => {
+      seen.push({ url: String(u), headers: init.headers, body: JSON.parse(init.body) });
+      return Promise.resolve({
+        ok: true,
+        body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('data: [DONE]\n')); c.close(); } }),
+      });
+    });
+    await streamOpenAiCompat({ apiKey: 'k', baseUrl, payload: { model: 'glm-5.3', messages: [], ...payload } } as any);
+    return seen[0];
+  };
+
+  it('buildOpenAiCompatPayload 把会话键原值挂在私有标记上(不受 agent 取键影响)', () => {
+    const p = buildOpenAiCompatPayload({ apiModelId: 'glm-5.3', messages: [], cacheKey: 'sess-1', agentId: 'coding', model: { provider: 'opencode-go' } } as any);
+    expect(p[SESSION_MARK]).toBe('sess-1');
+    expect(p).not.toHaveProperty('prompt_cache_key'); // 非 openai provider 不发,和以前一样
+    expect(buildOpenAiCompatPayload({ apiModelId: 'x', messages: [] } as any)).not.toHaveProperty(SESSION_MARK);
+  });
+
+  it('opencode.ai:带会话头 + 自报 UA,同一会话两次请求同一个值;私有标记不上 wire body', async () => {
+    const one = await capture('https://opencode.ai/inference/go/v1', { [SESSION_MARK]: 'sess-1', [RUN_MARK]: 'run-1' });
+    const two = await capture('https://opencode.ai/inference/go/v1', { [SESSION_MARK]: 'sess-1', [RUN_MARK]: 'run-2' });
+    expect(one.url).toBe('https://opencode.ai/inference/go/v1/chat/completions');
+    expect(one.headers).toMatchObject({ Authorization: 'Bearer k', 'x-opencode-session': openCodeSessionId('sess-1'), 'User-Agent': OPENCODE_USER_AGENT });
+    expect(two.headers['x-opencode-session']).toBe(one.headers['x-opencode-session']);
+    expect(one.body).not.toHaveProperty(SESSION_MARK);
+    expect(one.body).not.toHaveProperty(RUN_MARK);
+  });
+
+  it('没有会话键(后台阶段)用 run id 兜底;两样都没有也照样带头', async () => {
+    const byRun = await capture('https://opencode.ai/zen/v1', { [RUN_MARK]: 'run-9' });
+    expect(byRun.headers['x-opencode-session']).toBe(openCodeSessionId('run-9'));
+    const bare = await capture('https://opencode.ai/inference/go/v1', {});
+    expect(bare.headers['x-opencode-session']).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('别的 host(含子域伪装)不发这两个头,私有标记照样剥掉', async () => {
+    for (const baseUrl of ['https://api.deepseek.com/v1', 'https://opencode.ai.evil.tld/v1']) {
+      const r = await capture(baseUrl, { [SESSION_MARK]: 'sess-1' });
+      expect(r.headers).not.toHaveProperty('x-opencode-session');
+      expect(r.headers).not.toHaveProperty('User-Agent');
+      expect(r.body).not.toHaveProperty(SESSION_MARK);
+    }
   });
 });

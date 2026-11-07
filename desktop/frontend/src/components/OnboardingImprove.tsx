@@ -13,11 +13,14 @@ import { SettingsSwitch } from './SettingsPrimitives'
 import './computerHistory.css' // .ch-alert
 
 /** Extend telemetry:get 的视图(只取引导用得到的几项)。 */
-export interface TelemetryView { available: true; enabled: boolean; noticeSeen: boolean }
+/** signedIn:新版 Extend 起,帮助改进只在登录 Forsion 后发送(11-05 用户定),Extend 在视图里报这一项;老版本没有 = 不知道。 */
+export interface TelemetryView { available: true; enabled: boolean; noticeSeen: boolean; signedIn?: boolean }
 
-const asView = (v: unknown): TelemetryView | null => {
-  const o = v as { available?: unknown; enabled?: unknown; noticeSeen?: unknown } | null
-  return o && typeof o === 'object' && o.available === true ? { available: true, enabled: o.enabled !== false, noticeSeen: o.noticeSeen === true } : null
+export const asTelemetryView = (v: unknown): TelemetryView | null => {
+  const o = v as { available?: unknown; enabled?: unknown; noticeSeen?: unknown; signedIn?: unknown } | null
+  return o && typeof o === 'object' && o.available === true
+    ? { available: true, enabled: o.enabled !== false, noticeSeen: o.noticeSeen === true, ...(typeof o.signedIn === 'boolean' ? { signedIn: o.signedIn } : {}) }
+    : null
 }
 
 /** 同步判断:本机的 Extend 有没有遥测通道(preload 只在 Extend 注册了 telemetry:get 时留 telemetryReport 键)。
@@ -27,7 +30,7 @@ export const improveOnThisHost = (): boolean => typeof window.tangu?.telemetryRe
 /** 读一次;没有通道 / 拒了 / 没答 available → null(页签不出现)。 */
 export async function readTelemetry(): Promise<TelemetryView | null> {
   if (!improveOnThisHost()) return null
-  try { return asView(await window.tangu!.cloudInvoke!('telemetry:get')) } catch { return null }
+  try { return asTelemetryView(await window.tangu!.cloudInvoke!('telemetry:get')) } catch { return null }
 }
 
 const ROWS: Array<[LucideIcon, string, string]> = [
@@ -55,7 +58,7 @@ export function OnboardingImprove({ view, onChange, onBusyChange }: {
   const live = useRef(true)
   const set = (patch: { enabled?: boolean; noticeSeen?: true }): Promise<void> => {
     const run = chain.current.then(async () => {
-      const next = asView(await window.tangu?.cloudInvoke?.('telemetry:set', patch))
+      const next = asTelemetryView(await window.tangu?.cloudInvoke?.('telemetry:set', patch))
       if (next) onChange(next) // 页签切走了也要回写:完成页的「开 / 关」读的是引导那份
     })
     chain.current = run.catch(() => {})

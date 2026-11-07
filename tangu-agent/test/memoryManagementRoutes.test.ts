@@ -173,6 +173,9 @@ describe('versioned Agent memory management', () => {
     expect(scoped.parameters.properties.scope.enum).toEqual(['agent', 'project', 'person']);
     expect((tool as any).definitionFor({ projectScoped: true, execMode: 'host', channelSession: true }).function.parameters.properties.scope.enum).toEqual(['agent', 'project']);
     expect((tool as any).definitionFor({ execMode: 'sandbox', channelSession: true })).toBe(tool.definition);
+    // 11-06 适用范围:本机会话多一个 appliesTo(同 person 那道门);通道 / 云端 / 子代理拿到的精简定义逐字不变
+    expect(scoped.parameters.properties.appliesTo.enum).toEqual(['all', 'this-computer', 'this-os']);
+    expect((tool.definition as any).function.parameters.properties.appliesTo).toBeUndefined();
     expect((tool as any).definitionFor({ projectScoped: true, execMode: 'host' })).toBe((tool as any).definitionFor({ projectScoped: true, execMode: 'host' })); // 同一份对象:逐轮字节一致
     const ctx = { userId: 'fixture-user', sessionId: 'name-session', runId: 'name-run', appId: 'tangu' };
     const run = (args: any) => runWithAgentSlug('name-fixture', () => tool.execute(args, ctx)) as Promise<string>;

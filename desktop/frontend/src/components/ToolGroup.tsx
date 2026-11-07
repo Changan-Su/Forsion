@@ -126,6 +126,13 @@ export function describeTool(ev: ToolEvent, pluginName?: (tool: string) => strin
       const names = views.map((v: any) => baseName(String(v?.path || ''))).filter(Boolean).join(', ')
       return { kind: 'read', verbKey: 'tool.verb.presented', target: names || 'Agent Desk', isFile: true }
     }
+    // 跨平台文件操作(引擎 tools/hostFileOps.ts):挪 / 复制写成「原名 → 新名」,删除默认进 Forsion 回收站
+    case 'move_path': case 'copy_path':
+      return { kind: 'edit', verbKey: ev.name === 'move_path' ? 'tool.verb.moved' : 'tool.verb.copied', target: `${baseName(String(a.from ?? ''))} → ${baseName(String(a.to ?? ''))}`, isFile: true }
+    case 'delete_path':
+      return { kind: 'edit', verbKey: 'tool.verb.deleted', target: baseName(path), isFile: true }
+    case 'open_path':
+      return { kind: 'other', verbKey: 'tool.verb.opened', target: baseName(path), isFile: true }
     case 'list_dir': case 'list_files':
       return { kind: 'read', verbKey: 'tool.verb.listed', target: baseName(path || '.'), isFile: true }
     case 'search_files': case 'glob_files':

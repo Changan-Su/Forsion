@@ -111,6 +111,8 @@ function draftSketchOf(ev: ToolEvent): SketchItem | undefined {
   return { callId: ev.id, html, ...(title ? { title } : {}), draft: true }
 }
 
+const failedIntelligentUi = (ev: ToolEvent): boolean => ev.name === 'intelligent_ui' && ev.done && (!!ev.isError || /^Error[:\s]/i.test(ev.result || ''))
+
 /**
  * 把一个连续工具段按 Sketch 完成点切开。Sketch 的工具行仍留在前一组中,卡片紧跟其后(原生文档的工具行不留,见下)；
  * 后续工具另起一组,于是多个草图与正文都不会再被批量挪到消息末尾。
@@ -134,13 +136,11 @@ export function partitionToolSegment(events: ToolEvent[], sketches?: SketchItem[
     if (ev.name === 'intelligent_ui') {
       // 原生文档就是回答本身(10-13,对标 ChatGPT:整条回答是一棵组件树,没有「工具」这一层):
       // 生成中和成功的调用不在文档上面挂工具行;被拒收的那次留着,错误看得见。
-      const failed = (e: ToolEvent): boolean => e.done && (!!e.isError || /^Error[:\s]/i.test(e.result || ''))
-      if (failed(ev)) tools.push(ev)
+      const failed = failedIntelligentUi(ev)
+      if (failed) tools.push(ev)
       flushTools()
-      // 被拒收之后模型在同一段里重写、并且那一份成功了:残缺的那份不画(否则是一张「内容不完整」的卡下面再跟一张完整的),只留它的工具行。
-      // 重写的那份还在生成、又被拒收或中断时,前一份照旧画着 —— 它可能是这条回答里唯一看得见的内容(Codex 10-13)。
-      const rewritten = failed(ev) && events.slice(i + 1).some((next) => next.name === 'intelligent_ui' && next.done && !failed(next))
-      if (!rewritten) parts.push({ t: 'intelligent', event: ev })
+      // 失败即撤下残缺内容,不等同段重试成功;跨文字段的重绘也只显示新卡。
+      if (!failed) parts.push({ t: 'intelligent', event: ev })
       continue
     }
     const claim = cardOf?.(ev)
@@ -729,7 +729,7 @@ function EditorialMessageView({ msg, avatarUrl, agentNameFallback, userName, use
     }
   }
   const inlineToolIds = new Set(!voiceMode ? (msg.segments || []).flatMap(seg => seg.t === 'tools' ? seg.ids : []) : [])
-  const trailingIntelligent = (msg.toolEvents || []).filter(ev => ev.name === 'intelligent_ui' && !inlineToolIds.has(ev.id))
+  const trailingIntelligent = (msg.toolEvents || []).filter(ev => ev.name === 'intelligent_ui' && !failedIntelligentUi(ev) && !inlineToolIds.has(ev.id))
   const trailingSketches = (msg.sketches || []).filter((item) => !inlineSketchIds.has(item.callId))
   const trailingCards = (msg.toolEvents || []).flatMap((ev) => {
     const claim = inlineToolIds.has(ev.id) ? undefined : cardOf(ev)

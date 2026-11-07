@@ -1363,7 +1363,7 @@ button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover)
   gap: 12px;
   min-height: 0;
   pointer-events: none;
-  transition: opacity var(--duration-fast) var(--ease-out);
+  transition: opacity var(--duration-fast) var(--ease-surface);
 }
 .hp-rail > * { pointer-events: auto; }
 .hp-rail-left { left: 16px; }

@@ -1,0 +1,36 @@
+name: hot-update-scope
+
+# 这次改动能不能走热更新 —— 只提示、不拦(插件接口层热更新方案 A,2026-11-05)。结论写进这个检查的摘要和 notice。
+#   能走热更新           = 只动了引擎和 Tangu 界面(规则同发布门禁 engine-release-gate.mjs 的 packageScope)
+#   接口层进包以后能走   = 另外只动了插件接口层(desktop/scripts/plugin-ctx-boundary.json)
+#   只能随安装包         = 动了别的宿主文件,或建表 / 依赖
+# 一个月后量比例:node desktop/scripts/hot-update-scope.mjs --history --since 2026-11-05
+# 纯 node + git,不装依赖。
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hot-update-scope-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scope:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+        with:
+          fetch-depth: 0 # 要算这个 PR 和 base 的分叉点
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Self-test
+        run: node desktop/scripts/hot-update-scope.mjs --selftest
+      - name: Interface layer list (hint only)
+        run: node desktop/scripts/hot-update-scope.mjs --verify
+      - name: Hot-update scope of this PR (hint only)
+        run: node desktop/scripts/hot-update-scope.mjs --base "${{ github.event.pull_request.base.sha }}" --head "${{ github.event.pull_request.head.sha }}"

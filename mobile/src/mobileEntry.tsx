@@ -16,6 +16,7 @@ import { useApp } from '@/stores/appStore'
 import { LocaleProvider, resolveInitialLocale, translate } from '@/i18n'
 import '@/i18n.generated'
 import { installEngine } from '@/bootstrapEngine'
+import { activateTangu } from '@tangu/ui/features/tangu' // 手机照旧静态编进 APK(界面热更新只做桌面)
 import { installSmoothCaret } from '@/smoothCaret'
 import { installViewportLock } from '@/viewportLock'
 import { applyUiFonts } from '@/uiFont'
@@ -55,7 +56,7 @@ try {
   // 那一刻的 displayName 是裸键且被快照进标签标题(desktop 实测:主页标签写着 `space.home`)。
   // ⚠️check:parity 抓不到这条(`setTr(translate)` 不是「导入名直接调用」那种形态,属它已登记的假阴性)。
   useApp.getState().setTr(translate)
-  installEngine()
+  installEngine(activateTangu)
   installNativeModelPicker()
   // Android 原生半屏(菜单 / 输入 / 确认)与原生顶栏:都是可选宿主,非 Android 或插件缺席时整段早退。
   // 顶栏必须在首次渲染前装上,单列壳首帧就不画 Web 胶囊顶栏(否则先闪一下再消失)。

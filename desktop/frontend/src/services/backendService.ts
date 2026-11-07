@@ -825,7 +825,7 @@ export const agentUninstallPreview = (t: EngineTarget, slug: string) =>
 
 /** 回收站(引擎 <tanguHome>/trash/,30 天;只在本机)。restorer='desktop' 的(Forsion 插件)走主进程 trashRestore。 */
 export interface TrashEntry {
-  id: string; kind: 'agent' | 'skill' | 'plugin'; ref: string; name: string; deletedAt: number; size: number
+  id: string; kind: 'agent' | 'skill' | 'plugin' | 'file'; ref: string; name: string; deletedAt: number; size: number
   restorer: 'engine' | 'desktop'; items: Array<{ from: string; stored: string; role?: string }>; extra?: Record<string, unknown>
 }
 export const listTrash = (t: EngineTarget) => request<{ entries: TrashEntry[]; days: number }>(t, '/agent/trash')
@@ -876,6 +876,8 @@ export interface AgentMemorySnapshot {
   tombstones: Array<{ id: string; forgottenAt: number }>
   /** 云端(网页 / 手机)= 桌面同步上来的那份:能改(按 version 比对交换),没有版本记录与 Dream。 */
   cloud?: boolean
+  /** 本机名、系统、账号里别台的名字(按条标适用范围,tangu-agent contracts/deviceTags.ts);老引擎 / 云端没有。 */
+  deviceTags?: { self: string | null; os: 'macOS' | 'Windows' | 'Linux' | null; others: string[] }
 }
 export interface AgentMemoryRevision { version: string; createdAt: number; source: AgentMemorySource; content: string }
 export interface AgentMemoryDreamConfig { enabled: boolean; modelId: string; timeoutMs: number; maxOutputTokens: number; intervalHours: number }
@@ -890,7 +892,7 @@ export const getAgentMemory = (t: EngineTarget, slug: string) =>
   getAgentMemorySnapshot(t, slug).then((r) => r.content)
 export const putAgentMemory = (t: EngineTarget, slug: string, content: string, expectedVersion: string) =>
   request<AgentMemorySnapshot>(t, agentMemoryPath(slug), { method: 'PUT', body: JSON.stringify({ content, expectedVersion }) })
-export const mutateAgentMemoryEntry = (t: EngineTarget, slug: string, body: { action: 'add' | 'update' | 'forget'; id?: string; fact?: string; expectedVersion: string }) =>
+export const mutateAgentMemoryEntry = (t: EngineTarget, slug: string, body: { action: 'add' | 'update' | 'forget'; id?: string; fact?: string; expectedVersion: string; /** 不给 = 新的一条是所有设备;改一条沿用原标签 */ appliesTo?: 'all' | 'this-computer' | 'this-os' }) =>
   request<AgentMemorySnapshot>(t, `${agentMemoryPath(slug)}/entries`, { method: 'POST', body: JSON.stringify(body) })
 /** 把一条 Agent 记忆交给所有 Agent:原句追加进 human/AGENT.md,写成后才从这位的记忆里拿掉;409 = 读出之后改过(两边都没动)。只在宿主本机。 */
 export const promoteAgentMemoryEntry = (t: EngineTarget, slug: string, body: { id: string; expectedVersion: string }) =>
@@ -1035,6 +1037,10 @@ export const getSpecialConfig = (t: EngineTarget) =>
 
 export const saveSpecialConfig = (t: EngineTarget, patch: { historian?: Partial<SpecialAgentsConfig['historian']>; muse?: Partial<SpecialAgentsConfig['muse']> }) =>
   request<{ config: SpecialAgentsConfig }>(t, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)
+
+/** 首启引导「认识你的 Agents 团队」答的第一次见面(本机专用;写完 introAt,私聊不再发那张卡)。 */
+export const saveMuseIntro = (t: EngineTarget, body: { when?: string; proactivity?: string; focus?: string[]; focusText?: string }) =>
+  request<{ ok: boolean; config: SpecialAgentsConfig }>(t, '/agent/special/muse/intro', { method: 'POST', body: JSON.stringify(body) }).then((r) => r.config)
 
 export interface SessionHistorianStatus {
   running: boolean

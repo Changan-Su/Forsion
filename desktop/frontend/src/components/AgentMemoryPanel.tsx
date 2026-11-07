@@ -9,6 +9,8 @@ import { registerMessages, useI18n } from '../i18n'
 import { formatDateTime } from '../format/time'
 import type { TanguDesktopConfig } from '../types'
 import { homeTarget, connectionKey } from '../services/engine/targets'
+import { AppliesToSelect, deviceTagsOf, ScopedText, splitScoped } from './DeviceScope'
+import type { AppliesTo } from '../../../../tangu-agent/src/contracts/deviceTags'
 
 registerMessages({
   'agentMemory.search': { zh: '搜索记忆', en: 'Search memory' },
@@ -91,6 +93,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
   const [draft, setDraft] = useState('')
   const [editorBase, setEditorBase] = useState({ version: '', content: '' })
   const [newFact, setNewFact] = useState('')
+  const [newScope, setNewScope] = useState<AppliesTo>('all')
   const [editing, setEditing] = useState<{ id: string; text: string; version: string } | null>(null)
   const [busy, setBusy] = useState(true)
   const [error, setError] = useState('')
@@ -148,7 +151,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
   const update = async (fn: () => Promise<AgentMemorySnapshot>) => {
     const next = await fn()
     if (!alive.current) return
-    applySnapshot(next, true); ++revisionRequest.current; setRevisions(null); setEditing(null); setNewFact(''); setNotice(t('agentMemory.saved'))
+    applySnapshot(next, true); ++revisionRequest.current; setRevisions(null); setEditing(null); setNewFact(''); setNewScope('all'); setNotice(t('agentMemory.saved'))
   }
   const loadRevisions = () => {
     const request = ++revisionRequest.current
@@ -157,6 +160,7 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
     }).catch(fail)
   }
   const cloud = !!snapshot?.cloud
+  const tagCtx = deviceTagsOf(snapshot)
   const writeDisabled = busy || Boolean(dream?.status.running) || !snapshot || dirty || Boolean(editing)
   // organized = Agent 详情「成长 › 记忆」:条目是主角,整理 / 原文 / 版本记录收成底部三个折叠块(09-19 前是四个二级标签 —— 窄栏里两排药丸叠在一起,正文被挤到半屏以下)。
   // 另一种(设置里的 Agent 大脑弹窗)保持原样:那边有自己的仪器(agent-memory.check)按现有 DOM 取元素。
@@ -220,8 +224,9 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
       {!organized && <p style={{ ...hint, marginTop: 12 }}>{t('agentMemory.forgetHint')}</p>}
       <details className={organized ? 'memory-add' : undefined} style={organized ? undefined : section}><summary>{organized && <Plus size={13} />}{t('agentMemory.add')}</summary><div className="field" style={{ marginTop: 8 }}>
         <textarea aria-label={t('agentMemory.fact')} rows={2} value={newFact} disabled={writeDisabled} onChange={(e) => setNewFact(e.target.value)} />
+        <div style={row}><AppliesToSelect value={newScope} onChange={setNewScope} ctx={tagCtx} disabled={writeDisabled} />
         <button className="btn sm" disabled={writeDisabled || !newFact.trim()} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
-          { action: 'add', fact: newFact, expectedVersion: snapshot.version }))) }>{t('agentMemory.add')}</button></div></details>
+          { action: 'add', fact: newFact, expectedVersion: snapshot.version, ...(newScope !== 'all' ? { appliesTo: newScope } : {}) }))) }>{t('agentMemory.add')}</button></div></div></details>
       <ul className={organized ? 'harness-entries' : undefined} style={organized ? undefined : { listStyle: 'none', padding: 0, margin: 0 }}>
         {shown.map((entry) => <li key={entry.id} data-memory-entry-id={entry.id} className={organized ? 'harness-entry memory-entry' : undefined} style={organized ? undefined : section}>
           {editing?.id === entry.id ? <div className="field"><textarea aria-label={t('agentMemory.fact')} value={editing.text} disabled={busy} rows={3}
@@ -229,20 +234,20 @@ const AgentMemoryPanelBody: React.FC<Props> = ({ cfg, slug, shareDefaultMemory, 
             <div style={row}><button className="btn primary sm" disabled={busy || !editing.text.trim()} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
               { action: 'update', id: entry.id, fact: editing.text, expectedVersion: editing.version }))) }>{t('common.save')}</button>
               <button className="btn sm" disabled={busy} onClick={() => setEditing(null)}>{t('common.cancel')}</button></div></div>
-            : <p style={organized ? undefined : { margin: '0 0 8px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{entry.content}</p>}
+            : <p style={organized ? undefined : { margin: '0 0 8px', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}><ScopedText content={entry.content} ctx={tagCtx} /></p>}
           {organized ? <div className="memory-entry-meta">
             {/* 来源直接写在折叠标题上(对话提取 / 明确记住 / 记忆整理…),展开才是会话与证据 id —— 一眼要看的是「这条怎么来的」,不是「来源与证据」四个字 */}
             <details><summary>{t(`agentMemory.source.${entry.source.kind}`)}</summary>
               <div>{sourceText(entry.source, '')}</div><code>{entry.id}</code>
               {entry.evidenceIds.length > 0 && <div>{entry.evidenceIds.join(' · ')}</div>}</details>
-            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.edit')} aria-label={t('agentMemory.edit')} onClick={() => setEditing({ id: entry.id, text: entry.content, version: snapshot.version })}><Pencil size={13} /></button>
+            <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.edit')} aria-label={t('agentMemory.edit')} onClick={() => setEditing({ id: entry.id, text: splitScoped(entry.content, tagCtx).body, version: snapshot.version })}><Pencil size={13} /></button>
             <button type="button" className="harness-undo" disabled={writeDisabled} title={t('agentMemory.forget')} aria-label={t('agentMemory.forget')} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
               { action: 'forget', id: entry.id, expectedVersion: snapshot.version }))) }><Eraser size={13} /></button>
           </div> : <div style={{ ...row, justifyContent: 'space-between' }}>
             <details style={{ ...hint, flex: 1 }}><summary>{t('agentMemory.source')}</summary>
               <div>{sourceText(entry.source, t(`agentMemory.source.${entry.source.kind}`))}</div><code>{entry.id}</code>
               {entry.evidenceIds.length > 0 && <div>{entry.evidenceIds.join(' · ')}</div>}</details>
-            <button className="btn sm" disabled={writeDisabled} onClick={() => setEditing({ id: entry.id, text: entry.content, version: snapshot.version })}>{t('agentMemory.edit')}</button>
+            <button className="btn sm" disabled={writeDisabled} onClick={() => setEditing({ id: entry.id, text: splitScoped(entry.content, tagCtx).body, version: snapshot.version })}>{t('agentMemory.edit')}</button>
             <button className="btn danger sm" disabled={writeDisabled} onClick={() => void action(() => update(() => mutateAgentMemoryEntry(homeTarget(), slug,
               { action: 'forget', id: entry.id, expectedVersion: snapshot.version }))) }>{t('agentMemory.forget')}</button>
           </div>}

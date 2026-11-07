@@ -36,12 +36,14 @@ export interface RenamePropagationResult {
 
 /** 旧 → 新(vault 相对、含 .md;文件夹操作 = 树下每页一对)+ 操作前页表 → 逐页重写。
  *  `opts.folder` = 挪 / 改名的是文件夹时的 `[旧, 新]`:夹里的附件跟着换了位置,图片 / 附件引用据此重算;
- *  夹里一篇笔记都没有(只装附件)也照样扫 —— 别的笔记里指向它的引用要跟着改。 */
+ *  夹里一篇笔记都没有(只装附件)也照样扫 —— 别的笔记里指向它的引用要跟着改。
+ *  `opts.only` = 宿主预筛过的候选(操作后路径):只扫这些 + 挪了位置的页本身(自链接 / 页相对引用)。必须是超集 ——
+ *  漏一篇就是那篇断链且不提示;给不出可信超集就别传(全库扫)。 */
 export async function propagateNoteRenames(
   io: RenamePropagationIO,
   pairsIn: Record<string, string>,
   pagesBefore: readonly string[],
-  opts: { concurrency?: number; attempts?: number; folder?: readonly [string, string] } = {},
+  opts: { concurrency?: number; attempts?: number; folder?: readonly [string, string]; only?: ReadonlySet<string> } = {},
 ): Promise<RenamePropagationResult> {
   const out: RenamePropagationResult = { rewritten: [], failed: [] }
   const norm = (p: string): string => p.replace(/\\/g, '/')
@@ -91,7 +93,7 @@ export async function propagateNoteRenames(
   }
 
   // 有界并发:web 端每篇一个往返,全库串行会把改名拖到秒级以上;并发封顶免得一次改名打满连接。
-  const queue = [...after]
+  const queue = opts.only ? after.filter((p) => opts.only!.has(p) || backMap.has(p)) : [...after]
   const workers = Array.from({ length: Math.max(1, Math.min(opts.concurrency ?? 6, queue.length)) }, async () => {
     for (let p = queue.shift(); p !== undefined; p = queue.shift()) await one(p)
   })

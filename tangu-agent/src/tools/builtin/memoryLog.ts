@@ -14,6 +14,8 @@ import { mutatePortrait, PERSON_IS, portraitEntries, PortraitFullError, PORTRAIT
 import { HumanError, type HumanChangeSource, type HumanDocument } from '../../agents/humanStore.js';
 import { currentDisplayAgentSlug } from '../../seams/runContext.js';
 import { DEFAULT_AGENT_SLUG } from '../../core/tanguHome.js';
+import { APPLIES_TO, labelFor, tagOf, withTag } from '../../contracts/deviceTags.js';
+import { runTagContext } from '../../services/deviceTagContext.js';
 
 /** 单条上限与 Historian 候选采集同口径(localHistorian `.slice(0, 300)`)。显式路径此前无闸:09-22 一份终端用户导出里
  *  41 条显式条目最长 1,477 字、21 条带日期、9 条是追加式「更正旧条目」——记忆被日志灌满,而候选路径 12 天只出 8 条一句话。 */
@@ -45,7 +47,9 @@ const getLog = (userId: string, date?: string, signal?: AbortSignal) => deps().b
 // 档名不叫 human:10-20 live 两次,叫 human 时模型把写明只在本项目的事也塞进共识。分法照 manage_human 的 WHERE_IT_GOES「挂在谁身上」。
 // 10-30 live:「你以后改完先自己跑一遍」两轮被当成偏好写进画像;「这几周在学…」被 next-month 那条挡掉没记。第二轮只写「对你的要求归 agent」,
 // 又把「叫我阿青」也算成了对 agent 的要求(两轮留在 agent 记忆):称呼和语言要单独说死
-function buildRememberDefinition(o: { project: boolean; notes: boolean; person: boolean }): Tool {
+// 11-06 适用范围(device):本机引擎(hostExec)那几份多一个 appliesTo —— 只在这台电脑 / 只在这个系统成立的事实,引擎按本机名 / 系统名加
+// 行首标签(`[MacBook Pro] …` / `[Windows] …`,contracts/deviceTags.ts),拼提示词时别台的折起来。Agent 不自己拼名字。云端那几份逐字没变。
+function buildRememberDefinition(o: { project: boolean; notes: boolean; person: boolean; device?: boolean }): Tool {
   const several = o.project || o.person; // 不止一份记忆:不再说「当前 Agent 的」
   const scopes = [...(o.project ? ['agent', 'project'] : ['agent']), ...(o.person ? ['person'] : [])];
   return {
@@ -67,6 +71,7 @@ function buildRememberDefinition(o: { project: boolean; notes: boolean; person: 
         'SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. ' +
         'Also what holds for this conversation only (answer from this file, one-off requests). ' +
         'FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ' +
+        (o.device ? `APPLIES TO${several ? ' (your own memory only)' : ''}: a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo "this-computer"${o.project ? ', unless it belongs in the project memory' : ''}; true on every computer with this operating system → "this-os"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ` : '') +
         (several
           ? `ACTIONS: add saves fact; list returns IDs and versions of ${o.project && o.person ? 'every scope' : 'both scopes'} (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). `
           : 'ACTIONS: add saves fact; list returns IDs and version (fact: null); update replaces a listed entry and MUST include the new fact, id and expectedVersion; forget removes one and blocks automatic replay (fact: null). ') +
@@ -82,22 +87,22 @@ function buildRememberDefinition(o: { project: boolean; notes: boolean; person: 
           expectedVersion: { type: 'string', description: `Version returned by list${several ? ' for that scope' : ''}; include when modifying an existing entry.` },
           ...(o.project && !o.person ? { scope: { type: 'string', enum: scopes, description: 'Which memory: "agent" = yours, wherever you work; "project" = this project’s, shared by the agents working in it.' } } : {}),
           ...(o.person ? { scope: { type: 'string', enum: scopes, description: `Which memory this sentence belongs in (see SCOPE)${o.project ? '' : '; default "agent"'}. On update it may differ from where the old entry is listed: a name or other fact about the user goes to "person" even if the old one was in your own memory.` } } : {}),
+          ...(o.device ? { appliesTo: { type: 'string', enum: [...APPLIES_TO], description: `Where the fact holds${several ? ' (scope "agent" only)' : ''}: "all" (default) = every device; "this-computer" = only this computer; "this-os" = every computer with this operating system. On update, leaving it out keeps the entry’s current one.` } } : {}),
         },
         required: o.project ? ['action', 'fact', 'scope'] : ['action', 'fact'],
       },
     },
   };
 }
-const REMEMBER = {
-  base: buildRememberDefinition({ project: false, notes: false, person: false }),
-  notes: buildRememberDefinition({ project: false, notes: true, person: false }),
-  project: buildRememberDefinition({ project: true, notes: false, person: false }),
-  projectNotes: buildRememberDefinition({ project: true, notes: true, person: false }),
-  person: buildRememberDefinition({ project: false, notes: false, person: true }),
-  personNotes: buildRememberDefinition({ project: false, notes: true, person: true }),
-  personProject: buildRememberDefinition({ project: true, notes: false, person: true }),
-  personProjectNotes: buildRememberDefinition({ project: true, notes: true, person: true }),
-};
+const REMEMBER_BASE = buildRememberDefinition({ project: false, notes: false, person: false });
+/** 预先建好的各份(是否项目会话 × 是否有工作笔记 × 能不能写画像 × 是不是在一台电脑上),按上下文取;同一组合恒是同一个对象(前缀缓存)。 */
+const rememberVariants = new Map<string, Tool>([['0000', REMEMBER_BASE]]);
+function rememberVariant(o: { project: boolean; notes: boolean; person: boolean; device: boolean }): Tool {
+  const key = [o.project, o.notes, o.person, o.device].map(Number).join('');
+  let def = rememberVariants.get(key);
+  if (!def) rememberVariants.set(key, def = buildRememberDefinition(o));
+  return def;
+}
 /** 能不能写画像(person 档):本机引擎、不连远端、不是临时成员 / 子代理、不是连着聊天通道的会话(别人也可能在读)。
  *  定义和执行同一个判定:定义里没有 person 时,执行收到 person 明确报错,绝不降级记进 Agent 自己的记忆。 */
 export function personAllowed(ctx: ToolContext): boolean {
@@ -112,8 +117,14 @@ function rememberDefinitionFor(ctx: ToolContext): Tool {
   const builtins = profile?.toolLoadout?.builtins;
   const notes = ctx.execMode === 'host' && ctx.preset !== 'chat' && !!profile?.capabilities?.hostExec
     && (builtins === 'all' || (Array.isArray(builtins) && builtins.includes('manage_harness')));
-  if (personAllowed(ctx)) return ctx.projectScoped ? (notes ? REMEMBER.personProjectNotes : REMEMBER.personProject) : (notes ? REMEMBER.personNotes : REMEMBER.person);
-  return ctx.projectScoped ? (notes ? REMEMBER.projectNotes : REMEMBER.project) : (notes ? REMEMBER.notes : REMEMBER.base);
+  // appliesTo 和 person 同一道门(本机、不连通道、不是子代理 / 临时成员 / 远端):那几处拿到的精简定义逐字不变。
+  // 执行侧不看这道门,只看是不是本机引擎(deviceScopesAllowed):定义里没有也照样认,云端明确报错。
+  const local = personAllowed(ctx);
+  return rememberVariant({ project: !!ctx.projectScoped, notes, person: local, device: local });
+}
+/** 能不能按「这台电脑 / 这个系统」记:本机引擎(run 就跑在这台电脑上)。云端 / worker 没有「这台」。 */
+export function deviceScopesAllowed(ctx: ToolContext): boolean {
+  return !!(ctx.profile ?? deps().profile)?.capabilities?.hostExec;
 }
 
 // ── person 档(画像)与跨档挪 ──
@@ -243,6 +254,30 @@ async function moveMemoryEntry(i: { from: MemoryScope; scope: MemoryScope; id: s
   return done();
 }
 
+/** remember 的 appliesTo → 写进记忆的那句话(带不带行首标签)。
+ *  - 给了 "this-computer" / "this-os" → 换上本机名 / 本机系统的标签;"all" → 去掉认得的标签。
+ *  - 没给:add 照原样(模型自己写了认得的标签就留着);update 沿用旧条目的标签 —— 改个措辞不能把 `[Windows]` 改没了。
+ *  - 只对 Agent 自己的记忆:项目记忆本来就只在这台的这个项目里,画像说的是人本身;给了非 "all" 明确报错,不悄悄忽略。 */
+async function applyDeviceScope(i: { appliesTo: unknown; scope: MemoryScope; action: string; fact: string; id?: string; ctx: ToolContext }): Promise<{ fact: string; error?: undefined } | { error: string; fact?: undefined }> {
+  const given = i.appliesTo === undefined || i.appliesTo === null || i.appliesTo === '' ? null : String(i.appliesTo);
+  if (given !== null && !(APPLIES_TO as readonly string[]).includes(given)) return { error: `Error: appliesTo must be one of ${APPLIES_TO.map((a) => `"${a}"`).join(', ')}. Nothing was written.` };
+  if (i.scope !== 'agent') {
+    if (given && given !== 'all') return { error: `Error: appliesTo is only for your own memory (scope "agent"); ${i.scope === 'project' ? 'project memory already stays with this project on this computer' : 'the portrait is about the person, on every device'}. Nothing was written; retry without appliesTo.` };
+    return { fact: i.fact };
+  }
+  const tagCtx = runTagContext(deviceScopesAllowed(i.ctx));
+  if (given === 'this-computer' || given === 'this-os') {
+    const label = labelFor(given, tagCtx);
+    if (!label) return { error: `Error: appliesTo "${given}" needs this run to be on one of the user’s computers, and it is not. Nothing was written; retry without appliesTo.` };
+    return { fact: withTag(i.fact, label, tagCtx) };
+  }
+  if (given === 'all') return { fact: withTag(i.fact, null, tagCtx) };
+  if (i.action !== 'update' || tagOf(i.fact, tagCtx) || !i.id) return { fact: i.fact };
+  const old = (await deps().brain.memory.getMemorySnapshot?.(i.ctx.userId).catch(() => null))?.entries.find((e) => e.id === i.id);
+  const label = old ? tagOf(old.content, tagCtx) : null;
+  return { fact: label ? withTag(i.fact, label, tagCtx) : i.fact };
+}
+
 export const memoryLogProvider: ToolProvider = {
   id: 'builtin:memory-log',
   tools: () => [
@@ -251,7 +286,7 @@ export const memoryLogProvider: ToolProvider = {
       // 临时成员(团队 / 讨论里现写的一次性人设)不给:它没有自己的身份,不该留下记忆,更不该往项目记忆里写。
       // 以前照给,agent 级的一写就落在 agents/<临时名>/ 里。(读的那几条路仍会建出这个空目录,那是原有行为,这里没动。)
       isEnabledFor: (profile, ctx) => profile.capabilities.memory && !ctx.ephemeral,
-      definition: REMEMBER.base,
+      definition: REMEMBER_BASE,
       definitionFor: rememberDefinitionFor,
       execute: async (args, ctx) => {
         ctx.signal?.throwIfAborted();
@@ -279,7 +314,7 @@ export const memoryLogProvider: ToolProvider = {
         if (scope === 'project' && !projectRef) {
           return 'Error: this session has no project, so there is no project memory. Use scope "agent", and name the project in the sentence if the fact is about one. Nothing was written.';
         }
-        const fact = typeof args.fact === 'string' ? args.fact.trim() : '';
+        let fact = typeof args.fact === 'string' ? args.fact.trim() : '';
         if (action !== 'forget' && !fact) {
           const example = action === 'update'
             ? { action, fact: '<replacement durable sentence>', id: args.id, expectedVersion: args.expectedVersion }
@@ -296,6 +331,12 @@ export const memoryLogProvider: ToolProvider = {
         // 跨档取代:模型只说新句子归哪一档,旧条目在哪一档由 id 查(10-30 live:单独的 from 参数被写反,报错又把它引回原档改)
         const from = action === 'update' ? await scopeHolding(String(args.id), scope, ctx, projectRef) : scope;
         if (!args.scope) scope = from; // 没说归哪一档 = 就地改:缺省的 agent 不能把画像里的条目挪进私有记忆
+        // 适用范围(11-06):只管 Agent 自己的记忆;引擎按本机名 / 系统名加行首标签,模型不自己拼名字
+        if (action !== 'forget') {
+          const tagged = await applyDeviceScope({ appliesTo: args.appliesTo, scope, action, fact, id: args.id ? String(args.id) : undefined, ctx });
+          if (tagged.error !== undefined) return tagged.error;
+          fact = tagged.fact!;
+        }
         if (from !== scope) return moveMemoryEntry({ from, scope, id: String(args.id), expectedVersion: String(args.expectedVersion), fact, ctx, projectRef });
         if (scope === 'person') return rememberPerson(action as 'add' | 'update' | 'forget', fact, args, ctx);
         if (brain.mutateMemory || scope === 'project') {

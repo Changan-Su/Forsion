@@ -5,7 +5,7 @@
  */
 import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Bot, Loader2, Puzzle, RotateCcw, Sparkles } from 'lucide-react'
+import { Bot, FileText, Loader2, Puzzle, RotateCcw, Sparkles } from 'lucide-react'
 import { ConfirmDialog } from '@amadeus/components/Dialogs'
 import { registerMessages, useI18n } from '../i18n'
 import { useApp } from '../stores/appStore'
@@ -17,8 +17,8 @@ import './pluginManagement.css'
 registerMessages({
   'trash.tab': { zh: '回收站', en: 'Trash' },
   'trash.page': {
-    zh: '删掉的 Agent、技能、插件先放这里，30 天后自动清掉。恢复会把它放回原处、接上原来的设置。回收站只在这台设备上，不同步。',
-    en: 'Deleted agents, skills and plugins wait here for 30 days, then are cleared. Restore puts them back with their settings. The Trash stays on this device and does not sync.',
+    zh: '删掉的 Agent、技能、插件，以及 Agent 替你删掉的文件，先放这里，30 天后自动清掉。恢复会把它放回原处、接上原来的设置。回收站只在这台设备上，不同步。',
+    en: 'Deleted agents, skills and plugins, and files an agent deleted for you, wait here for 30 days, then are cleared. Restore puts them back with their settings. The Trash stays on this device and does not sync.',
   },
   'trash.empty': { zh: '回收站是空的', en: 'The Trash is empty' },
   'trash.today': { zh: '今天', en: 'Today' },
@@ -26,6 +26,7 @@ registerMessages({
   'trash.kind.agent': { zh: 'Agent', en: 'Agent' },
   'trash.kind.skill': { zh: '技能', en: 'Skill' },
   'trash.kind.plugin': { zh: '插件', en: 'Plugin' },
+  'trash.kind.file': { zh: '文件', en: 'File' },
   'trash.daysLeft': { zh: '还剩 {n} 天', en: '{n} days left' },
   'trash.lastDay': { zh: '今天到期', en: 'Expires today' },
   'trash.restore': { zh: '恢复', en: 'Restore' },
@@ -92,7 +93,7 @@ export function TrashSettings() {
       {g.rows.map((e) => {
         const left = Math.max(0, Math.ceil((e.deletedAt + days * DAY - Date.now()) / DAY))
         return <div key={e.id} className="plugin-card trash-item" data-trash-entry={e.id}>
-          <span className="trash-ico">{e.kind === 'agent' ? <Bot {...ic} /> : e.kind === 'skill' ? <Sparkles {...ic} /> : <Puzzle {...ic} />}</span>
+          <span className="trash-ico">{e.kind === 'agent' ? <Bot {...ic} /> : e.kind === 'skill' ? <Sparkles {...ic} /> : e.kind === 'file' ? <FileText {...ic} /> : <Puzzle {...ic} />}</span>
           <div className="trash-copy"><b>{e.name} · {t(`trash.kind.${e.kind}`)}</b><div className="trash-meta">{detail(e, t)}</div></div>
           <span className="trash-left">{left > 0 ? t('trash.daysLeft', { n: left }) : t('trash.lastDay')}</span>
           <button className="btn sm" disabled={!!busy} onClick={() => void restore(e)}>{busy === e.id ? <Loader2 size={13} className="spin" /> : <RotateCcw size={13} />}{t('trash.restore')}</button>

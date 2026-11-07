@@ -16,7 +16,7 @@ const MIN = 60_000
 let revSeq = 0
 function makeView(state: Partial<ComputerHistoryState> = {}, exclude: Partial<ComputerHistoryExclude> = {}): ComputerHistoryView {
   return {
-    state: { v: 1, enabled: true, pausedUntil: null, status: 'recording', since: NOW - 30 * MIN, updatedAt: NOW, platform: 'darwin', dataGen: 0, ...state },
+    state: { v: 1, enabled: true, pausedUntil: null, status: 'recording', since: NOW - 30 * MIN, updatedAt: NOW, platform: 'darwin', dataGen: 0, userTurnedOff: false, ...state },
     exclude: { apps: [], domains: [], ...exclude },
     root: '/Users/me/.forsion-dev/computer-history',
     keepDays: 7,
@@ -177,7 +177,8 @@ describe('ComputerHistorySettings', () => {
     await flip()
     expect(api.setEnabled).not.toHaveBeenCalled()
     expect(text()).toContain('开始记录电脑历史？')
-    expect(text()).toContain('未加密保存 7 天')
+    expect(text()).toContain('加密保存 7 天')
+    expect(text()).not.toContain('未加密')
     expect(text()).toContain('Forsion 云端')
     expect(text()).toContain('工作日志（Journal）不会随之删除') // 清除只删记录:引用过它的对话与 Muse 的笔记要另删
     await click('取消')
