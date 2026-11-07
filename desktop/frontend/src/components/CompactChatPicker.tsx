@@ -1,14 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown, MessageCircle } from 'lucide-react'
+import { Check, ChevronDown, MessageCircle, Search } from 'lucide-react'
 import { OverlayAt, UI_ZOOM_EVENT } from '@lcl/engine'
-import { registerMessages } from '../i18n'
+import { registerMessages, useI18n } from '../i18n'
 import './compactChatPicker.css'
 
 registerMessages({
-  'chatPicker.engine': { zh: '引擎', en: 'Engine' },
-  'chatPicker.agent': { zh: 'Agent', en: 'Agent' },
-  'chatPicker.team': { zh: '团队', en: 'Team' },
   'chatPicker.engines': { zh: '外部引擎', en: 'External engines' },
   'chatPicker.done': { zh: '完成', en: 'Done' },
 })
@@ -29,20 +26,20 @@ export interface ChatPickItem {
   direct?: boolean
   /** 本行下面画一条分隔线(「默认」与具体候选之间)。 */
   separatorAfter?: boolean
+  /** 搜索时名字之外也认的词(slug、另一种语言的名字)。 */
+  keywords?: string[]
 }
 
 /**
- * 窄栏(≤520px 容器查询)里选择条折成的单枚芯片。点开:
+ * 输入框工具行里的收件人芯片(.t2c-pill;宽窄同一枚,方案页 docs/ToBeImproved/主页生成式组件方案_2026-11-02/agent.html A)。点开:
  *  - 调用方 `onNative` 接管(安卓原生外壳的勾选清单 / 菜单)→ 不画网页面;
- *  - 触屏(pointer: coarse)→ 贴底抽屉;否则 → 芯片上方的浮层(.ctx-menu 外壳)。
- * 两种网页面共用同一份行:头像 + 名字 + 勾 / 序号,简介不进行。点行切换,`closeOnPick` 说了算才收起
- * (多选的 Agent 条点一下不收,和宽栏头像条同一套「再点取消、点第二个组队」)。
+ *  - 触屏(pointer: coarse)→ 贴底抽屉;否则 → 芯片上方的浮层(.ctx-menu 外壳,顶上一行搜索,打开即聚焦)。
+ * 两种网页面共用同一份行:头像 + 名字 + 标 + 勾 / 序号,简介不进行(浮层在底部说明区,抽屉在长按卡片)。
+ * 点行切换,`closeOnPick` 说了算才收起(多选的 Agent 点一下不收,好接着组队)。
  */
 export function CompactChatPicker({
-  label, title, icon, name, status, items, onPick, closeOnPick, onDirect, directLabel, onNative, busy = false,
+  title, icon, name, status, items, onPick, closeOnPick, onDirect, directLabel, onNative, onRowMenu, searchLabel, hotkeyHint, busy = false,
 }: {
-  /** 芯片前缀(Agent / 团队 / 引擎)。 */
-  label: string
   /** 浮层 / 抽屉的标题,也是芯片的可访问名。 */
   title: string
   icon: ReactNode
@@ -56,26 +53,38 @@ export function CompactChatPicker({
   directLabel?: string
   /** 返回 true = 已由原生面接管;接管失败时调 `fallback` 换回网页面。 */
   onNative?: (fallback: () => void) => boolean
+  /** 浮层里右键一行:调用方自己画 ContextMenu;`close` 收起浮层(菜单项要离开这里时用)。 */
+  onRowMenu?: (id: string, at: { x: number; y: number }, close: () => void) => void
+  /** 浮层搜索框的占位(抽屉不放搜索)。 */
+  searchLabel?: string
+  /** 搜索框右侧的快捷键提示(如 ⌘⇧A)。 */
+  hotkeyHint?: string
   busy?: boolean
 }) {
+  const { t } = useI18n()
+  const listId = useId()
+  const optId = (id: string): string => `${listId}-${id || 'default'}`
   const chipRef = useRef<HTMLButtonElement>(null)
   const surfaceRef = useRef<HTMLDivElement | null>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState<null | 'popover' | 'sheet'>(null)
-  const [hover, setHover] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
+  // 浮层的活动行(悬停 / ↑↓):焦点一直留在搜索框里,边打边筛,同 Composer2 的 @ 菜单
+  const [active, setActive] = useState<string | null>(null)
   const [held, setHeld] = useState<{ id: string; top: number; bottom: number } | null>(null)
   const heldRef = useRef<HTMLDivElement>(null)
   const [heldBelow, setHeldBelow] = useState(false)
   const [anchor, setAnchor] = useState({ x: 0, y: 0, top: 0 })
 
   const openWeb = (): void => setOpen(window.matchMedia?.('(pointer: coarse)').matches ? 'sheet' : 'popover')
+  const close = (refocus = false): void => {
+    setOpen(null); setActive(null); setHeld(null); setQuery('')
+    if (refocus) chipRef.current?.focus()
+  }
   const toggleOpen = (): void => {
-    if (open) { setOpen(null); return }
+    if (open) { close(true); return } // ⌘⇧A 再按一次收起:焦点回芯片,不掉到 body
     if (onNative?.(openWeb)) return
     openWeb()
-  }
-  const close = (refocus = false): void => {
-    setOpen(null); setHover(null); setHeld(null)
-    if (refocus) chipRef.current?.focus()
   }
   const pick = (item: ChatPickItem): void => {
     if (item.disabled) return
@@ -83,14 +92,13 @@ export function CompactChatPicker({
     if (closeOnPick?.(item.id)) close(open === 'popover')
   }
 
-  // 浮层贴芯片上方、右对齐;芯片随输入区移动(窗口缩放 / 滚动 / 界面缩放)时跟着走。
+  // 浮层贴芯片上方、左对齐(芯片在工具行左半);芯片随输入区移动(窗口缩放 / 滚动 / 界面缩放)时跟着走。
   useLayoutEffect(() => {
     if (open !== 'popover') return
     const update = (): void => {
       const r = chipRef.current?.getBoundingClientRect()
       if (!r) return
-      const w = surfaceRef.current?.offsetWidth || 252
-      const next = { x: r.right - w, y: r.bottom + 6, top: r.top - 6 }
+      const next = { x: r.left, y: r.bottom + 6, top: r.top - 6 }
       setAnchor((p) => (p.x === next.x && p.y === next.y && p.top === next.top ? p : next))
     }
     update()
@@ -106,16 +114,20 @@ export function CompactChatPicker({
 
   useEffect(() => {
     if (!open) return
+    // 行的右键菜单(调用方画的 ContextMenu)开着时:点它不算点外面,Esc 先归它收
+    const rowMenu = (): Element | null => document.querySelector('.ctx-menu[role="menu"]')
     const onDown = (e: PointerEvent): void => {
       const t = e.target as Node
-      if (!chipRef.current?.contains(t) && !surfaceRef.current?.contains(t)) close()
+      if (!chipRef.current?.contains(t) && !surfaceRef.current?.contains(t) && !rowMenu()?.contains(t)) close()
     }
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') { e.stopPropagation(); close(true) } }
+    // 输入法选字时的 Esc 是取消选字,归输入法
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !e.isComposing && !rowMenu()) { e.stopPropagation(); close(true) } }
     document.addEventListener('pointerdown', onDown, true)
     document.addEventListener('keydown', onKey, true)
-    // 打开时焦点落到已选的第一项(没有就第一项),键盘直接上下挑
-    const first = surfaceRef.current?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]:not(:disabled)')
-      ?? surfaceRef.current?.querySelector<HTMLElement>('[role="option"]:not(:disabled)')
+    // 浮层:焦点进搜索框(⌘⇧A 打开即可打字);抽屉:落到已选的第一项(没有就第一项),键盘直接上下挑
+    const first = open === 'popover' ? searchRef.current
+      : surfaceRef.current?.querySelector<HTMLElement>('[role="option"][aria-selected="true"]:not(:disabled)')
+        ?? surfaceRef.current?.querySelector<HTMLElement>('[role="option"]:not(:disabled)')
     first?.focus({ preventScroll: true })
     return () => {
       document.removeEventListener('pointerdown', onDown, true)
@@ -134,12 +146,37 @@ export function CompactChatPicker({
     opts[next].focus()
   }
 
-  const describedId = hover ?? items.find((i) => i.mark)?.id
-  const described = items.find((i) => i.id === describedId && i.description)
-  const hasDescriptions = items.some((i) => i.description)
+  // 搜索只在浮层里:名字 + 调用方给的别名(slug、另一种语言的名字)里含就算
+  const q = open === 'popover' ? query.trim().toLowerCase() : ''
+  const shown = q ? items.filter((i) => [i.name, ...(i.keywords ?? [])].some((w) => w.toLowerCase().includes(q))) : items
+  const enabled = shown.filter((i) => !i.disabled)
+  // 打了字还没挪过活动行:默认第一个命中,↵ 直接选它
+  const activeId = enabled.some((i) => i.id === active) ? active : q ? enabled[0]?.id ?? null : null
+  useEffect(() => {
+    if (open === 'popover') surfaceRef.current?.querySelector('.chat-pick-row[data-active]')?.scrollIntoView({ block: 'nearest' })
+  }, [open, activeId])
+  const onSearchKey = (e: ReactKeyboardEvent<HTMLInputElement>): void => {
+    if (e.nativeEvent.isComposing) return // 输入法选字的 ↵ / ↑↓ 归输入法
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const item = enabled.find((i) => i.id === activeId)
+      if (item) pick(item)
+      return
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
+    e.preventDefault()
+    if (!enabled.length) return
+    const at = enabled.findIndex((i) => i.id === activeId)
+    const next = e.key === 'ArrowDown' ? (at + 1) % enabled.length : at < 0 ? enabled.length - 1 : (at - 1 + enabled.length) % enabled.length
+    setActive(enabled[next].id)
+  }
 
-  const rows = (sheet: boolean): ReactNode => items.map((item, i) => {
-    const head = item.section && item.section !== items[i - 1]?.section
+  // 底部说明区:活动行有简介就讲它,否则是状态句(谁会接这条消息)
+  const described = open === 'popover' ? items.find((i) => i.id === activeId && i.description) : undefined
+  const footer = described ? <><b>{described.name}</b>{described.description}</> : status
+
+  const rows = (list: ChatPickItem[], sheet: boolean): ReactNode => list.map((item, i) => {
+    const head = item.section && item.section !== list[i - 1]?.section
     return [
       head && <div key={`h:${item.section}`} className="chat-pick-section">{item.section}</div>,
       <button
@@ -148,18 +185,25 @@ export function CompactChatPicker({
         role="option"
         aria-selected={!!item.mark}
         disabled={item.disabled}
+        tabIndex={sheet ? undefined : -1}
+        id={sheet ? undefined : optId(item.id)}
         className={`chat-pick-row${item.mark ? ' is-picked' : ''}${held?.id === item.id ? ' is-held' : ''}`}
         data-pick-id={item.id}
+        data-active={(!sheet && item.id === activeId) || undefined}
         title={sheet ? undefined : item.description}
         onClick={() => { if (!held) pick(item) }} // 卡片开着时点哪都只是收卡片(列表上的 onClick 收)
-        onPointerEnter={sheet ? undefined : () => setHover(item.id)}
-        onFocus={sheet ? undefined : () => setHover(item.id)}
-        // 触屏长按在 Chromium 上发 contextmenu:抽屉里 = 简介 + 私聊卡片
-        onContextMenu={sheet && (item.description || (item.direct && onDirect)) ? (e) => {
+        onMouseDown={sheet ? undefined : (e) => e.preventDefault()} // 焦点留在搜索框
+        onPointerEnter={sheet ? undefined : () => setActive(item.id)}
+        // 触屏长按在 Chromium 上发 contextmenu:抽屉里 = 简介 + 私聊卡片;浮层右键 = 调用方的行菜单
+        onContextMenu={sheet ? (item.description || (item.direct && onDirect) ? (e) => {
           e.preventDefault()
           const sheetTop = surfaceRef.current?.getBoundingClientRect().top ?? 0
           const r = e.currentTarget.getBoundingClientRect()
           setHeld({ id: item.id, top: r.top - sheetTop, bottom: r.bottom - sheetTop })
+        } : undefined) : onRowMenu && item.id ? (e) => {
+          e.preventDefault()
+          setActive(item.id)
+          onRowMenu(item.id, { x: e.clientX, y: e.clientY }, () => close())
         } : undefined}
       >
         <span className="chat-pick-icon">{item.icon}</span>
@@ -196,7 +240,7 @@ export function CompactChatPicker({
       <button
         ref={chipRef}
         type="button"
-        className="compact-chat-picker"
+        className={`t2c-pill compact-chat-picker${open ? ' is-open' : ''}`}
         aria-busy={busy || undefined}
         aria-haspopup="listbox"
         aria-expanded={!!open}
@@ -205,10 +249,9 @@ export function CompactChatPicker({
         onClick={toggleOpen}
         onKeyDown={(e) => { if (e.key === 'ArrowDown' && !open) { e.preventDefault(); toggleOpen() } }}
       >
-        <span className="compact-chat-picker-kind">{label}</span>
         <span className="compact-chat-picker-icon">{icon}</span>
-        <span className="compact-chat-picker-name">{name}</span>
-        <ChevronDown size={13} />
+        <span className="t2c-pill-label compact-chat-picker-name">{name}</span>
+        <ChevronDown size={10} />
       </button>
       {open === 'popover' && createPortal(
         <div className="ui-popover-backdrop" style={{ pointerEvents: 'none' }} data-cmenu>
@@ -217,18 +260,38 @@ export function CompactChatPicker({
             innerRef={(el) => { surfaceRef.current = el }}
             className="ctx-menu chat-pick-pop"
             style={{ pointerEvents: 'auto' }}
-            role="listbox" aria-multiselectable aria-label={title}
-            onKeyDown={onListKey}
-            onPointerLeave={() => setHover(null)}
+            onPointerLeave={() => setActive(null)}
           >
-            {status && <div className="chat-pick-status">{status}</div>}
-            <div className="ctx-menu-scroll">{rows(false)}</div>
-            {hasDescriptions && (
+            {searchLabel && (
+              <label className="chat-pick-search">
+                <Search size={14} aria-hidden="true" />
+                <input
+                  ref={searchRef}
+                  type="text"
+                  value={query}
+                  placeholder={searchLabel}
+                  aria-label={searchLabel}
+                  // 焦点留在框里,活动行靠 aria-activedescendant 报给读屏(combobox 模式,同 @ 菜单的行为)
+                  role="combobox"
+                  aria-expanded
+                  aria-controls={listId}
+                  aria-activedescendant={activeId !== null ? optId(activeId) : undefined}
+                  spellCheck={false}
+                  autoComplete="off"
+                  onChange={(e) => { setQuery(e.target.value); setActive(null) }}
+                  onKeyDown={onSearchKey}
+                />
+                {hotkeyHint && <kbd aria-hidden="true">{hotkeyHint}</kbd>}
+              </label>
+            )}
+            <div className="ctx-menu-scroll" id={listId} role="listbox" aria-multiselectable aria-label={title}>
+              {rows(shown, false)}
+              {!shown.length && <div className="chat-pick-empty">{t('addMenu.noMatches')}</div>}
+            </div>
+            {footer && (
               <>
                 <div className="ctx-separator" />
-                <div className="chat-pick-desc" aria-live="polite">
-                  {described && <><b>{described.name}</b>{described.description}</>}
-                </div>
+                <div className="chat-pick-desc" aria-live="polite">{footer}</div>
               </>
             )}
           </OverlayAt>
@@ -240,7 +303,7 @@ export function CompactChatPicker({
           <div ref={(el) => { surfaceRef.current = el }} className="chat-pick-sheet" role="listbox" aria-multiselectable aria-label={title} onKeyDown={onListKey}>
             <div className="chat-pick-grip" aria-hidden="true" />
             <div className="chat-pick-head"><b>{title}</b>{status && <span>{status}</span>}</div>
-            <div className="chat-pick-list" onClick={() => setHeld(null)}>{rows(true)}</div>
+            <div className="chat-pick-list" onClick={() => setHeld(null)}>{rows(items, true)}</div>
             {heldItem && (
               <div
                 ref={heldRef} className={`chat-pick-held${heldBelow ? ' is-below' : ''}`} role="dialog" aria-label={heldItem.name}

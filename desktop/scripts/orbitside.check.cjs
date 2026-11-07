@@ -386,7 +386,8 @@ async function run(app, win) {
   const cloudRows = await win.locator('.t2o .t2o-row', { hasText: 'Cloud One' }).count()
   if (cloudRows) await win.locator('.t2o .t2o-row', { hasText: 'Cloud One' }).first().click()
   await sleep(600)
-  const pickedPills = await win.locator('.agent-pill.selected').allTextContents()
+  // 新对话的收件人芯片(输入卡工具行,11-02 起)写的就是选中的那位
+  const pickedPills = await win.locator('.agent-select-strip .compact-chat-picker-name').allTextContents()
   check('3h 云端 agent(无 libraryDir)行在场;点击开新对话并选中它,不打 /agent/solo',
     cloudRows === 1 && SOLO_HITS.length === soloBefore && pickedPills.some((x) => x.includes('Cloud One')),
     JSON.stringify({ cloudRows, solo: SOLO_HITS.slice(soloBefore), pickedPills }))

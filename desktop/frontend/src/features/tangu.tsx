@@ -23,6 +23,7 @@ import { inboxTasks } from '../views/chat2/inboxTasks'
 import { isChatAvatarsOn, setChatAvatarsOn } from '../views/chat2/chatAvatars'
 import { isPromptSuggestOn, setPromptSuggest } from '../views/chat2/promptSuggest'
 import { NewChatComposer, mountNewChatComposer, sendFromNewChat, startNewChatCall } from '../views/newChatComposer'
+import { openAgentPicker } from '../components/AgentSelectStrip'
 import { OrbitsView } from '../views/OrbitsView'
 import { SessionsView } from '../views/SessionsView'
 import '../tangu/messages' // Tangu 自己的文案片段(核心插件化 2c)
@@ -94,6 +95,8 @@ export function registerTanguCommands(): void {
     openBtw({ sessionId: s.activeId, title: activeSession?.title, modelId: activeChatModelId({ ...s, activeSession }) || undefined })
   } })
   addCommand({ id: 'split-right', title: () => app().tr('command.splitRight'), keywords: 'split 分屏', hotkey: 'mod+\\', run: splitChat })
+  // 换 Agent(⌘⇧A;⌘J 已是底部面板):点开新对话 / 空会话输入卡里的收件人芯片,搜索框即聚焦。没有芯片(已开聊)时不做事。
+  addCommand({ id: 'switch-agent', icon: Users, title: () => translate('agentSelect.switch'), keywords: 'agent switch recipient team 换 Agent 选择 收件人 团队', hotkey: 'mod+shift+a', run: openAgentPicker })
   addCommand({
     id: 'show-chat-panel',
     icon: MessageCircle,
