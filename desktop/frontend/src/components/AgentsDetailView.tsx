@@ -84,7 +84,7 @@ export const AgentsDetailView: React.FC<{
           </div>
         )}
 
-        {/* Muse 完整工作区(自带标题/状态 pill/轮询;注入后跳转目标会话) */}
+        {/* Muse 面板(自带标题 / 状态行 / 轮询;注入后跳转目标会话) */}
         <div style={{ marginTop: 18 }}>
           <MuseView cfg={cfg} sessions={sessions} onInjected={onOpenSession} />
         </div>
