@@ -29,7 +29,8 @@
  *   npm run live:harness -- --only chat,tool,loop            # loop = 轮数耗尽末轮收尾(改 agentLoop 末轮/收尾提示后跑)
  *   npm run live:harness -- --only imageedit                 # edit_image 图源(10-19,改图跨轮取图方案 B1 + B2):同会话三轮 —— 附两张图先别动 → 不带附件让它合成 → 改刚合成的那张;假生图后端核上传的是哪几张。改 imageEdit.ts / hydrate 的带图消息 / 展示文件 source 后跑
  *   npm run live:harness -- --only skillpick,settingsnav     # 反馈 6a239e58(10-04):指定技能清单只列目录、正文经 use_skill 取(改 services/skillLoadout.ts 后跑);
- *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params 后跑)
+ *                                                           #   「语音在哪设置」经界面命令直达设置页、不用电脑操控,网页检索次数只计数(改 desktop open-settings 的 description / params、
+ *                                                           #   app_settings 的返回文本后跑)。--settingsnav-no-voice = 负对照(落点清单里没有语音页,开不到 → 必须红)
  *   npm run live:harness -- --only pluginui                  # 改 skills/forsion-plugin 的「Desktop plugin UI」一节 / tools/ui-reinvent.mjs / plugin_sandbox 的界面体检后跑:写一个带 Space 的小插件,下拉 / 菜单 / 确认 / 空状态须用宿主零件
  *   npm run live:harness -- --only pluginlook                # 改 skills/forsion-plugin 的「外观开关:跟着宿主走」一节后跑:须经 use_skill 取回正文并答出那一节的三样
  *   npm run live:harness -- --only plugindiag --plugin-src <插件目录> [--plugin-data <plugins-data 里那份 json>] [--plugindiag-hint] [--plugindiag-host auto|"<宿主报的运行态>"]   # 装着的桌面插件 Space 不出现(10-10):
@@ -221,6 +222,7 @@ import { realUseLive } from './lib/real-use-live.mjs';
 import { humanRealLive } from './lib/human-real-live.mjs';
 import { humanPortraitLive } from './lib/human-portrait-live.mjs';
 import { portraitMoveLive } from './lib/portrait-move-live.mjs';
+import { importLive } from './lib/import-live.mjs';
 import { dreamSeedLive } from './lib/dream-seed-live.mjs';
 import { layersLive } from './lib/layers-live.mjs';
 import { accountLive, startFakeCloud } from './lib/account-live.mjs';
@@ -270,6 +272,7 @@ KEYS.push('realuse');
 KEYS.push('humanreal');
 KEYS.push('humanportrait');
 KEYS.push('portraitmove');
+KEYS.push('import');
 KEYS.push('projmem');
 KEYS.push('skillcreate');
 KEYS.push('projdedupe');
@@ -375,6 +378,7 @@ OPT_IN.add('webcardsreal'); KEYS.push('webcardsreal');
 OPT_IN.add('realuse'); // 真实使用模拟:每轮 12 个 run(--rounds),--usage-db 再加一个 Muse 周期;单独跑。
 OPT_IN.add('suggest'); // 三个 run + 三次建议调用;只在动 services/promptSuggestion.ts(提示词 / 前缀对齐)或主循环收尾处的快照时才有信息量。
 OPT_IN.add('humanportrait'); // 画像(human/SOUL.md)写没写:每轮 4 个 run + 另一个 agent 读一次;只在动 remember 的 person 档 / 画像注入时才有信息量。
+OPT_IN.add('import'); // 从其他 AI 导入(11-03):后台模型拆条 / 归位 / 拦截;不跑对话。动了 services/externalImport 的提示 / 后处理才有信息量。--import-neg = 负对照
 OPT_IN.add('portraitmove'); // 搬家的后台模型挑得准不准(10-30):不跑对话,只有人点的那几个接口;动了 agents/portraitMove.ts 的提示才有信息量。
 OPT_IN.add('humanreal'); // 协作说明写成什么样:每轮 6 个 run + 1 次判官(--rounds);只在动 HUMAN_GUIDANCE / manage_human 时才有信息量。
 OPT_IN.add('mask'); KEYS.push('mask'); // 两个 run + 本地回显服务;只在动 llm/outboundMask.ts(发给模型前脱敏)时才有信息量。
@@ -1427,6 +1431,8 @@ const child = spawn(process.execPath, [
   // --window:只钉台架模型的窗口(contextBudget 的 env 覆盖表,最高优先级),别的模型不受影响
   ...(WINDOW ? { TANGU_MODEL_CONTEXT_WINDOWS: JSON.stringify({ [MODEL]: WINDOW }) } : {}),
   ...(ONLY.has('officedoc') ? { TANGU_OFFICE_KIT: OFFICE_KIT } : {}),
+  // import:假家目录(场景里种文件,引擎每次扫描现读);负对照关掉 blocked 那段提示和兜底正则
+  ...(ONLY.has('import') ? { TANGU_IMPORT_HOME: join(home, '..', 'import-src'), ...(argv.includes('--import-neg') ? { TANGU_IMPORT_UNGUARDED: '1' } : {}) } : {}),
   // fast:wire 上带没带 service_tier 只有 llm-debug 那行看得见(响应里的 service_tier 恒回 default,判不了)
   ...(ONLY.has('fast') ? { TANGU_LLM_DEBUG: '1' } : {}),
   // cumusic / cusend:Jev 每次请求的图和回答落进产物目录(不含密钥),场景跑完挪进自己的 <key>-evidence/jev/
@@ -2151,6 +2157,10 @@ try {
   // ── 搬家:后台模型从 agent 记忆里挑「关于这个人」的条目、写成第二人称(10-30);设计见 lib/portrait-move-live.mjs ──
   await scenario('portraitmove', `portraitmove 搬家:该挑的全挑、对 Agent 的要求和项目的事一条不挑 ×${SELF_ROUNDS} 轮`, () =>
     portraitMoveLive({ api, OUT, MODEL, home, rounds: SELF_ROUNDS }));
+
+  // ── 从其他 AI 导入:拆条 / 归位 / 拦截 / 合并,导入后整次撤销(11-03);设计见 lib/import-live.mjs ──
+  await scenario('import', `import 从其他 AI 导入:注入句不进可勾的去处、偏好进协作说明、项目的事进项目 ×${SELF_ROUNDS} 轮${argv.includes('--import-neg') ? '(负对照)' : ''}`, () =>
+    importLive({ api, OUT, MODEL, home, src: join(home, '..', 'import-src'), rounds: SELF_ROUNDS, neg: argv.includes('--import-neg') }));
 
   // ── 记忆分项目级 / 全局级(10-04 用户第二次裁决「还要区分 Project 级别还是全局级别」)──
   //  ① 在项目一的会话里告诉 agent A 两件事(不提工具、不提「级别」):一件只在这个项目成立,一件不分项目
@@ -4390,31 +4400,40 @@ Then reply with only the command output.`,
   // 10-04 实测 grok-4.7 每次 5–9 次网页请求 → 改 description 后 0–1 次,luna 0 次。检索次数明显回升 = description 被改坏了。
   // ⚠️ ENTRY 与 desktop/frontend/src/bootstrapEngine.tsx 的 open-settings 目录项同文(description + params);TARGETS 那一行由
   //    desktop 的 settingsTarget.test.ts 逐字钉住(设置页 / 搜索索引一改,那条单测就红,照它的输出改这里)。
+  // 11-06:app_settings(10-05)上线后模型几乎都走 load_tools → app_settings,读完写一句「设置 → 语音」就收尾、页面没打开
+  //    (10-05 起正式跑 23 次只过 1 次)。判据没放宽 —— 场景要的就是「直达」;修在 app_settings 的返回里(发起端开得了设置页时
+  //    写明 run_ui_command open-settings 的调用形状,见 services/appSettings.ts OPEN_SETTINGS_HINT)。
+  //    「打开到语音页」只认**渲染端回了 ok** 的落点:以前按「问过」算,落点被拒也记绿。
+  //    --settingsnav-no-voice = 负对照:清单里删掉 voice、渲染端把它当未知落点拒掉 → 开不到语音页,必须红。
   await scenario('settingsnav', 'settingsnav 「语音在哪设置」:界面命令直达设置页,不用电脑操控', async () => {
+    const noVoice = argv.includes('--settingsnav-no-voice');
     const TARGETS = 'Pages: general, forsion, model, connectors, mcp, hooks, skills, agents, amadeus-plugins, browser, computer-use, channels, notes, sync, spaces, theme, shortcuts, notifications, statusbar, trash, permissions, units, remote-sessions, computer-history, advanced, developer, about. Settings: workspace-dir, keep-awake, backend-mode, sandbox, python, mirror, external-backend, forsion-account, forsion-submissions, cloud-url, memory-sync, inbox-notify, default-models, model-providers, masking, web-search, voice, theme-language, startup-appearance, palette, color-mode, ui-zoom, glass, home-motion, ambient, visuals, smooth-caret, selection-bar, prompt-suggest, chat-avatars, calm-dim, calm-reading, calm-motion, ribbon-auto-home, fonts, notes-attachments, daily-notes, agent-browser, strict-background, jev, units-switch, units-host, remote-sessions-switch, remote-approval-cap, remote-trusted-devices, remote-safety, computer-history, connectors, mcp-json, mcp-server, reset-layout, clear-data, language.';
+    // ⚠️ 上面那行字面量的变量名别改:desktop settingsTarget.test.ts 按 `const TARGETS = '…';` 逐字找它。
+    const SHOWN = noVoice ? TARGETS.replace(' voice,', '') : TARGETS;
     const ENTRY = { id: 'open-settings',
       description: "Open Forsion's settings window, optionally at one page or at the page holding one specific setting. To answer 'where/how do I set X', open that page and say which page you opened; these settings are not documented on the web, so do not search for them. Unknown targets are rejected.",
-      params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${TARGETS}` } } } };
+      params: { type: 'object', properties: { tab: { type: 'string', description: `A page id or a setting id. Omit for the default page. ${SHOWN}` } } } };
     const VOICE = new Set(['voice', 'model/m-voice']);
-    const known = new Set(TARGETS.replace(/Pages: |Settings: /g, '').split(/[,.]\s*/).filter(Boolean));
-    const asked = [];
+    const known = new Set(SHOWN.replace(/Pages: |Settings: /g, '').split(/[,.]\s*/).filter(Boolean));
+    const asked = [], opened = [];
     const ev = await run(`live-settingsnav-${Date.now()}`, '怎么设置Forsion的语音模型', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
       ui: { locale: { value: 'zh', allowed: ['zh', 'en'] } }, uiCommands: [ENTRY],
       uiRespond: (p) => {
         if (p.kind !== 'command' || p.id !== 'open-settings') return null;
         const tab = String(p.args?.tab ?? '').trim();
         asked.push(tab || '(default)');
-        if (!tab) return { ok: true, state: 'opened the default page' };
-        if (VOICE.has(tab)) return { ok: true, state: `opened model/m-voice${tab === 'voice' ? ' (covers: 语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation)' : ''}` };
-        if (known.has(tab)) return { ok: true, state: `opened ${tab}` };
+        if (!tab) { opened.push('(default)'); return { ok: true, state: 'opened the default page' }; }
+        if (VOICE.has(tab) && !noVoice) { opened.push(tab); return { ok: true, state: `opened model/m-voice${tab === 'voice' ? ' (covers: 语音 朗读 音色 通话 打电话 听写 voice tts speech call realtime dictation)' : ''}` }; }
+        if (known.has(tab)) { opened.push(tab); return { ok: true, state: `opened ${tab}` }; }
         return { ok: false, error: `command failed: no settings page or setting "${tab}". Valid targets are listed in this command's \`tab\` parameter.` };
       },
     });
-    const hit = asked.some((t) => VOICE.has(t));
+    const hit = opened.some((t) => VOICE.has(t));
+    const rejected = asked.filter((t) => !opened.includes(t));
     const detour = ev.toolCalls.filter((t) => /^(observe_ui|act_ui|find_roots|ensure_app|todo_write)/.test(t));
     const web = ev.toolCalls.filter((t) => /^(web_search|web_fetch|browser_)/.test(t)).length;
     return { ok: !ev.error && ev.done && hit && detour.length === 0,
-      detail: ev.error || `open-settings 落点 ${asked.join(' → ') || '未调用'};${hit ? '打开到语音页' : '没打开到语音页'};电脑操控/待办 ${detour.join(',') || '无'};网页检索 ${web} 次;工具 ${ev.toolCalls.join('→') || '无'}`,
+      detail: ev.error || `${noVoice ? '[负对照:清单无语音页] ' : ''}open-settings 落点 ${asked.join(' → ') || '未调用'}${rejected.length ? `(被拒 ${rejected.join(',')})` : ''};${hit ? '打开到语音页' : '没打开到语音页'};电脑操控/待办 ${detour.join(',') || '无'};网页检索 ${web} 次;工具 ${ev.toolCalls.join('→') || '无'}`,
       output: ev.content, ttftMs: ttft(ev), tokens: tokensOf(ev), toolCalls: ev.toolCalls };
   });
 
@@ -7726,6 +7745,24 @@ Then reply with only the command output.`,
       const looked = ev.toolCalls.some((n) => /read_file|grep|list_dir|edit_file|apply_patch|write_file/.test(n));
       const lie = /(跑|运行)(起来了|成功|正常)|没有问题|一切正常|works fine|no (problems|issues)/i.test(ev.content) && !sawErr;
       return { ok: !ev.error && starts(ev).length > 0 && sawErr && !lie, detail: ev.error || `${sum(ev)};${sawErr ? '说了报错' : '✗ 没提报错'};${looked ? '去看了代码' : '没看代码'}${lie ? ';✗ 说跑通了' : ''}`, ...base(ev) };
+    });
+    // ⑤(11-03):在沙箱里动手。台架扮桌面:read 回带引用的大纲,type / click 回执,click 的回执里带一条插件新写的 console 报错。
+    //   判据:用 read 拿引用 / 可见文字去 type + click(不是 computer use、也不是只截图了事),并把点完冒出来的报错如实转述。
+    await scenario('pluginsandbox', 'pluginsandbox ⑤ 在沙箱里动手:read → type → click,转述点完冒出的报错', async () => {
+      const OUTLINE = '[e1] button "Reading log"\nheading "Shelf"\n[e2] input "Book title"\n[e3] button "Add book"\ntext "No books yet"';
+      const act = (op, a) => ({ ok: true, text: JSON.stringify({ ...status(), action: { did: op === 'read' ? 'read 3 element(s)' : op === 'type' ? 'typed 4 character(s)' : op === 'click' ? 'clicked' : op, target: a.target ? `target ${a.target}` : '', outline: op === 'read' ? OUTLINE : '', newLogs: op === 'click' ? [{ level: 'error', text: 'TypeError: books.push is not a function (main.js:14)' }] : [], newNotices: [] } }) });
+      const ev = await run(`live-sbx-act-${Date.now()}`, 'reading-log 插件已经在沙箱里跑着了。帮我在沙箱里试一下:在输入框里填一本书「Dune」,点「Add book」,看看加上没有、控制台有没有报错。先别改代码。', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
+        clientCapabilities: ['plugin.sandbox'],
+        phone: { ns: 'plugin', respond: (b) => (['read', 'type', 'click', 'press', 'scroll', 'space', 'files'].includes(b.op) ? act(b.op, b.args || {}) : b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(status()) }) },
+      });
+      const ops = ev.clientCmds.filter((c) => c.claimed).map((c) => c.op);
+      const typed = ev.clientCmds.find((c) => c.op === 'type' && c.claimed && /Dune/.test(String(c.args?.text || '')));
+      const clicked = ev.clientCmds.find((c) => c.op === 'click' && c.claimed && /e3|Add book/i.test(String(c.args?.target || '')));
+      const cu = ev.toolCalls.filter((n) => /^computer|^mcp__computer|screenshot_app/.test(n));
+      const relays = /books\.push|TypeError|报错|错误|error/i.test(ev.content);
+      const edited = ev.toolCalls.some((n) => /edit_file|write_file|apply_patch/.test(n));
+      return { ok: !ev.error && !!typed && !!clicked && !cu.length && relays && !edited,
+        detail: ev.error || `${sum(ev)};${typed ? '填了 Dune' : '✗ 没 type Dune'};${clicked ? `点了 ${clicked.args.target}` : '✗ 没点 Add book'};${relays ? '转述了报错' : '✗ 没提报错'}${cu.length ? `;✗ 用了 computer use(${cu.join(',')})` : ''}${edited ? ';✗ 动了代码' : ''};动作序列 ${ops.join('→')}`, ...base(ev) };
     });
     await scenario('pluginsandbox', 'pluginsandbox ③ 负对照:没声明能力 → 零 plugin_sandbox,不谎称在沙箱里跑过', async () => {
       const ev = await sbxRun(MSG, { caps: null });

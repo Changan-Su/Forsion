@@ -57,7 +57,7 @@ import { loadSpecialAgentsConfig, saveSpecialAgentsConfig, DEFAULT_HISTORIAN_PRO
 import { loadUserHistorianConfig, saveUserHistorianConfig, type UserHistorianConfig } from '../services/historianConfig.js';
 import { museStatus, kickMuse, getAutomationNotices } from '../services/muse.js';
 import { listActiveStarters, markStarter } from '../services/museStarters.js';
-import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
+import { loadTriggers, removeTrigger, validateTriggerInput, upsertTrigger, nextRunAt, isPluginTriggerId, precheckWatchCols, needsWatchColPrecheck, triggerUnmet, triggerRev, type DbLike, type MuseTrigger } from '../services/museTriggers.js';
 import { getTriggerSource, listTriggerSources } from '../services/triggerRegistry.js';
 import { emitPluginTrigger, registerPluginTrigger, unregisterPluginTrigger } from '../plugins/automation.js';
 import { readDbOrNull } from '../services/amadeusDb.js';
@@ -432,7 +432,7 @@ router.get('/agent/special/muse/triggers', authMiddleware, async (_req: AuthRequ
     const observed = new Map(await Promise.all(list.filter((t) => t.observe).map(async (t) => [t.id, await countObservedHits(t.id, t.observeSince)] as const)));
     res.json({ triggers: list.map((t) => {
       const notice = (t.enabled ? triggerUnmet(t) : null) ?? notices[t.id];
-      return { ...t, nextRunAt: nextRunAt(t), ...(notice ? { notice } : {}), ...(observed.has(t.id) ? { observeHits: observed.get(t.id) } : {}) };
+      return { ...t, rev: triggerRev(t), nextRunAt: nextRunAt(t), ...(notice ? { notice } : {}), ...(observed.has(t.id) ? { observeHits: observed.get(t.id) } : {}) };
     }) });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'triggers failed' });
@@ -501,10 +501,12 @@ router.post('/agent/special/muse/triggers', authMiddleware, async (req: AuthRequ
     // 这里从前还有一份「保存后再 dropCursors」的双保险 —— 顺序是反的(规则先上线、游标后清,中间任何一次
     // evaluate 都会把积压打出去),而且它兜不住换表那类身份变化(drain 的 setCursors 会把删掉的键合并写回)。
     // 真正与时序无关的防线是读端 museTriggers.cursorMismatch(游标自证 path/event/vault/cols)。
-    const r = await upsertTrigger(v.value, id, { allowPluginCreate: isPlugin, actor });
+    const expectedRev = typeof body.expectedRev === 'string' && body.expectedRev ? body.expectedRev : undefined;
+    const r = await upsertTrigger(v.value, id, { allowPluginCreate: isPlugin, actor, expectedRev });
+    if (!r.ok && r.conflict) return res.status(409).json({ detail: r.error, trigger: { ...r.conflict, rev: triggerRev(r.conflict) } });
     if (!r.ok) return res.status(id && !isPlugin ? 404 : 400).json({ detail: r.error });
     kickMuse(); // 新/改规则尽快被下一次巡检评估
-    res.json({ trigger: r.trigger, created: r.created });
+    res.json({ trigger: { ...r.trigger, rev: triggerRev(r.trigger) }, created: r.created });
   } catch (e: any) {
     res.status(500).json({ detail: e?.message || 'save trigger failed' });
   }

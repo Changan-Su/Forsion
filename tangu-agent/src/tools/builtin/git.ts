@@ -19,6 +19,7 @@ import type { ToolContext } from '../toolTypes.js';
 import { GitActionError, gitCommit, gitPending, gitPull, gitPush, readGit, serialized } from '../../services/gitActions.js';
 import { canonicalProjectPath, gitSummary, maskRemoteUrl, type GitSummary } from '../../services/projectContext.js';
 import { githubLinkInfo } from '../../services/githubGit.js';
+import { forsionGit, type ForsionGitReviews } from '../../services/forsionGit.js';
 import { accountIdentityDefaults, resolveGitIdentity } from '../../services/gitIdentity.js';
 import type { GitRemoteInfo } from '../../services/gitRemotes.js';
 
@@ -26,6 +27,7 @@ export const GIT_TOOL_NAMES = ['git_status', 'git_commit', 'git_push', 'git_pull
 
 const FILES_LISTED = 20;
 const COMMITS_LISTED = 5;
+const REVIEWS_LISTED = 5;
 
 function enabledFor(_p: unknown, ctx: ToolContext): boolean {
   return !!ctx.projectPath;
@@ -39,13 +41,20 @@ async function githubLogin(): Promise<string | null | undefined> {
   return info.linked ? info.login ?? undefined : null;
 }
 
+/** 有 Forsion Git 远端时,站上等这个人审的合并请求(个人仓库也算)。限时;读不到 / 没有远端 → null。 */
+async function reviewRequests(s: GitSummary): Promise<ForsionGitReviews | null> {
+  if (!s.remoteList?.some((r) => r.host === 'forsion')) return null;
+  const timeout = new Promise<null>((resolve) => { setTimeout(() => resolve(null), 4000).unref(); });
+  return Promise.race([Promise.resolve(forsionGit()?.reviewRequests() ?? null).catch(() => null), timeout]);
+}
+
 /** 远端 → 给模型 / 卡片看的一行:哪个站、哪个仓库、推拉用谁的账号。站名与 desktop ProjectGitRemotes.siteName 同口径。 */
 export function describeRemote(r: GitRemoteInfo, pushRemote: string | null | undefined, login: string | null | undefined) {
   const site = r.host === 'forsion' ? 'Forsion Git' : r.host === 'github' ? 'GitHub' : r.hostname ?? 'local path';
   const account = r.auth === 'forsion' ? "the user's Forsion account"
     : r.auth === 'github' ? (login ? `linked GitHub account @${login}` : login === null ? "this computer's own git credentials (no GitHub account linked)" : 'the linked GitHub account')
       : "this computer's own git credentials";
-  return { name: r.name, site, host: r.host, auth: r.auth, repo: r.path, web: r.web, account, ...(login && r.auth === 'github' ? { login } : {}), ...(r.name === pushRemote ? { pushTarget: true } : {}) };
+  return { name: r.name, site, host: r.host, auth: r.auth, repo: r.path, web: r.web, account, ...(r.org ? { organization: r.org } : {}), ...(login && r.auth === 'github' ? { login } : {}), ...(r.name === pushRemote ? { pushTarget: true } : {}) };
 }
 
 async function projectDir(ctx: ToolContext): Promise<string> {
@@ -55,8 +64,8 @@ async function projectDir(ctx: ToolContext): Promise<string> {
 /** 排到队里时用户可能已经停了这次 run(卡上的按钮正占着队):轮到了先看一眼,停了就不动手。 */
 const stillWanted = (ctx: ToolContext): void => { ctx.signal?.throwIfAborted(); };
 
-/** git_status 的结果:分支、上下游、改动清单、远端(全部列出,标出推送去向)、最近几个提交。 */
-export function renderStatus(s: GitSummary, login: string | null | undefined): Record<string, unknown> {
+/** git_status 的结果:分支、上下游、改动清单、远端(全部列出,标出推送去向)、最近几个提交、Forsion Git 上等你审的合并请求。 */
+export function renderStatus(s: GitSummary, login: string | null | undefined, reviews?: ForsionGitReviews | null): Record<string, unknown> {
   if (!s.available) return { repo: false, note: 'git is not installed on this computer.' };
   if (!s.repo) return { repo: false, note: 'This project folder is not a git repository. The user can create one in the project details (Git tab), or you can run `git init` with run_bash if they ask.' };
   if (s.nested) return { repo: true, nested: true, note: 'This project folder is inside a larger repository, not at its root; commit / push / pull from here are refused. Use run_bash for this repository.' };
@@ -80,6 +89,7 @@ export function renderStatus(s: GitSummary, login: string | null | undefined): R
     remotes: (s.remoteList ?? []).map((r) => describeRemote(r, s.pushRemote, login)),
     pushTarget: s.pushRemote ?? null,
     recentCommits: (s.commits ?? []).slice(0, COMMITS_LISTED).map((c) => ({ sha: c.short, subject: c.subject })),
+    ...(reviews?.total ? { reviewRequests: { total: reviews.total, items: reviews.items.slice(0, REVIEWS_LISTED), web: reviews.web } } : {}),
     ...(notes.length ? { notes } : {}),
   };
 }
@@ -129,7 +139,7 @@ export async function gitApprovalPreview(name: string, args: any, /** 会话所�
   const to = once ?? s.pushRemote ?? null;
   const r = to ? s.remoteList?.find((x) => x.name === to) : undefined;
   const d = r ? describeRemote(r, s.pushRemote, login) : null;
-  const where = d ? `${d.site} ${d.repo ?? r!.url} (${d.name})` : to ? `remote ${to}` : 'the default remote';
+  const where = d ? `${d.site} ${d.repo ?? r!.url}${d.organization ? ` (organization ${d.organization})` : ''} (${d.name})` : to ? `remote ${to}` : 'the default remote';
   // 站点 / 账号按取回地址认;配了单独的推送地址(pushurl / pushInsteadOf)时提交实际去那里 → 以 ⚠ 开头写出来(桌面卡见 ⚠ 就照登这段原文)
   const [fetchUrl, pushUrl] = to && !to.startsWith('-') ? await Promise.all([readGit(dir, ['remote', 'get-url', to]), readGit(dir, ['remote', 'get-url', '--push', to])]) : [];
   const first = (out: string): string => out.split('\n')[0].trim();
@@ -164,7 +174,7 @@ export const gitToolsProvider: ToolProvider = {
         try {
           const cwd = await projectDir(ctx);
           const [s, login] = await Promise.all([gitSummary(cwd), githubLogin()]);
-          return JSON.stringify({ action: 'status', ...renderStatus(s, login) });
+          return JSON.stringify({ action: 'status', ...renderStatus(s, login, await reviewRequests(s)) });
         } catch (e) { return failure('status', e); }
       },
       { capabilities: { sideEffect: 'read' } }),
