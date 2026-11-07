@@ -55,6 +55,9 @@ export interface CloudHost {
   // ── 0.2 起(Forsion Connect 用)。新成员一律只增不改:Extend 用 hasXxxHost 探测,老宿主缺了就跳过那一块并 log ──
   /** Coding Space 项目根(~/Forsion/Project;dev = ~/Forsion-Dev/Project)。 */
   projectsRoot(): string
+  /** 2.13.8 起(可选):realDir(调用方已 realpath)是不是本机「原地加入造物」登记过、此刻目录身份还对得上的外部造物。
+   *  connect:publish 据此放行 projectsRoot 之外的造物;老宿主没有 → Extend 照旧只认 projectsRoot。读登记表失败 = false(按拒绝)。 */
+  isAdoptedCreation?(realDir: string): boolean
   /** 与预览完全相同的转译器(发布产物 = 预览所见);不能转译的扩展名返回 null。 */
   transpileForServe(code: string, ext: string, filePath?: string): string | null
   /** 预览服务器的 MIME 表(按小写扩展名,含点);未知返回 undefined。 */
