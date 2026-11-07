@@ -442,7 +442,7 @@ router.post('/agent/agents/:slug/memory/entries', authMiddleware, async (req: Au
     }
     const prior = action === 'add' ? undefined : repo.snapshot().entries.find((e) => e.id === id);
     const after = repo.mutate({ action, id, fact, expectedVersion, source: { kind: 'manual' } });
-    noteUserEntryEdit(req.params.slug, action, prior);
+    noteUserEntryEdit(req.params.slug, action, prior, action === 'forget' ? req.body?.reason : undefined); // 遗忘理由只是枚举,过表才计数
     res.json(withDeviceTags(after));
   } catch (e: any) { res.status(e?.code === 'MEMORY_VERSION_CONFLICT' ? 409 : 400).json({ detail: e?.message, code: e?.code }); }
 });

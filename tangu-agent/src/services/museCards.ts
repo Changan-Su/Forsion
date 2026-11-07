@@ -15,7 +15,7 @@ import { MUSE_AGENT_SLUG } from '../agents/agentRegistry.js';
 import { postMuseDm } from './museDm.js';
 import { ObservationEnableRefused, loadTriggers, updateObservation, upsertTrigger, validateTriggerInput, type MuseTrigger, type TriggerInput } from './museTriggers.js';
 import { amadeusVaultPath } from '../tools/builtin/amadeus.js';
-import type { MuseCardInfo, MuseCardKind } from '../contracts/clientTypes.js';
+import { MUSE_DISMISS_REASONS, type MuseCardInfo, type MuseCardKind, type MuseDismissReason } from '../contracts/clientTypes.js';
 import { loadSpecialAgentsConfig, updateMuseConfig, type MuseConfig } from './specialAgentsConfig.js';
 import { MUSE_ONBOARDING_MS, ensureMuseOnboarding, patchMuseOnboarding } from './museState.js';
 import { normalizeMemoryFact } from './memoryRepository.js';
@@ -255,6 +255,21 @@ const dismissedFact = (card: MuseCardInfo): string => {
   return `The user is not interested in ${what}. Do not recommend it again.`;
 };
 
+/** 客户端传来的拒绝理由:只认表里的四个,别的(含非字符串)当没给。 */
+export function museDismissReason(x: unknown): MuseDismissReason | undefined {
+  return typeof x === 'string' && (MUSE_DISMISS_REASONS as readonly string[]).includes(x) ? (x as MuseDismissReason) : undefined;
+}
+/** 理由 → 账本字段(daily_muse_card,按 cardKind)。 */
+const DISMISS_REASON_FIELD = { irrelevant: 'dismissIrrelevant', timing: 'dismissTiming', frequent: 'dismissFrequent', known: 'dismissKnown' } as const satisfies Record<MuseDismissReason, string>;
+/** 理由写进 Muse 的 [feedback] 行时的说法(英文:下周期 read_log 喂给模型)。 */
+const DISMISS_REASON_TEXT: Record<MuseDismissReason, string> = {
+  irrelevant: 'not relevant to them',
+  timing: 'bad timing',
+  frequent: 'too many suggestions like this',
+  known: 'they already knew about it',
+};
+const reasonSuffix = (reason?: MuseDismissReason): string => (reason ? ` (reason: ${DISMISS_REASON_TEXT[reason]})` : '');
+
 /** 这一段观察命中了几次。账本的 user_id 是自动化自己的口径,规则 id 本机唯一,不按用户筛。 */
 export async function countObservedHits(triggerId: string, since: string | undefined): Promise<number> {
   const from = new Date(since || 0).toISOString().slice(0, 19).replace('T', ' ');
@@ -365,10 +380,10 @@ async function settleThen(userId: string, id: string, status: 'done' | 'dismisse
 
 /** 规则卡四个按钮:好 = 建好开着;先观察 = 建好只记录;改一下 = 建成暂停的,客户端打开画布;不用 = 不建,写进反馈让 Muse 别再提。
  *  入参在工具入口校验过,这里按当前环境再校验一次(卡可能放了几天)。建失败(比如到 50 条上限)把卡退回待处理,别让用户以为建上了。 */
-async function decideRuleCard(userId: string, card: MuseCardInfo, action: string, gone: DecideResult, bad: DecideResult): Promise<DecideResult> {
+async function decideRuleCard(userId: string, card: MuseCardInfo, action: string, gone: DecideResult, bad: DecideResult, reason?: MuseDismissReason): Promise<DecideResult> {
   if (action === 'dismiss') {
     if (!(await settle(userId, card.id, 'dismissed', 'dismissed'))) return gone;
-    await appendMuseFeedback(userId, `[feedback] proposed automation "${card.payload?.rule?.desc}" declined by user`);
+    await appendMuseFeedback(userId, `[feedback] proposed automation "${card.payload?.rule?.desc}" declined by user${reasonSuffix(reason)}`);
     return { ok: true, card: (await getMuseCard(userId, card.id)) ?? card };
   }
   if (action !== 'accept' && action !== 'edit' && action !== 'observe') return bad;
@@ -386,7 +401,7 @@ async function decideRuleCard(userId: string, card: MuseCardInfo, action: string
   return { ok: true, card: (await getMuseCard(userId, card.id)) ?? card, trigger: { id: r.trigger.id } };
 }
 
-type DecideOpts = { messageId?: string; answers?: IntroAnswers; index?: number; expected?: string; text?: string; remote?: boolean };
+type DecideOpts = { messageId?: string; answers?: IntroAnswers; index?: number; expected?: string; text?: string; remote?: boolean; /** 只跟 dismiss 一起收;先过 museDismissReason */ reason?: MuseDismissReason };
 
 /** 用户点卡。action 按 kind 白名单,认不得 → 400;效果在 CAS 成功之后才做(同一张卡点两次只生效一次)。 */
 export async function decideMuseCard(userId: string, id: string, action: string, opts: DecideOpts = {}): Promise<DecideResult> {
@@ -408,6 +423,9 @@ function noteCardDecision(card: MuseCardInfo, action: string, opts: DecideOpts):
     ledger.inc('daily_muse_card', 'decideSecTotal', { dim, n: Math.max(0, Math.round((card.decided_at - card.created_at) / 1000)) });
   }
   if (opts.remote) ledger.inc('daily_muse_card', 'decidedRemote', { dim });
+  // 拒绝理由:只算真由这一下拒掉的(卡已对不上被收成 gone 的不算);理由过表才映射成字段,客户端的字符串不当字段名用
+  const reason = museDismissReason(opts.reason);
+  if (action === 'dismiss' && reason && card.status === 'dismissed' && card.result !== 'gone') ledger.inc('daily_muse_card', DISMISS_REASON_FIELD[reason], { dim });
   if (card.kind === 'intro' && action === 'answer') noteMuseIntroAnswered(introAnswers(opts.answers));
   if (card.kind === 'intro' && action === 'skip') ledger.inc('daily_muse', 'introSkipped');
 }
@@ -443,7 +461,8 @@ async function decideCard(userId: string, id: string, action: string, opts: Deci
       if (action === 'dismiss') {
         if (!(await settle(userId, id, 'dismissed', 'dismissed'))) return gone;
         await rememberForMuse(userId, dismissedFact(card));
-        await appendMuseFeedback(userId, `[feedback] recommendation ${card.key} dismissed by user: not interested`);
+        const why = museDismissReason(opts.reason);
+        await appendMuseFeedback(userId, `[feedback] recommendation ${card.key} dismissed by user: ${why ? DISMISS_REASON_TEXT[why] : 'not interested'}`);
       } else if (action === 'open' && card.kind === 'feature') {
         if (!(await settle(userId, id, 'done', 'opened'))) return gone;
         await appendMuseFeedback(userId, `[feedback] recommendation ${card.key} opened by user`);
@@ -487,6 +506,8 @@ async function decideCard(userId: string, id: string, action: string, opts: Deci
       } else if (action === 'dismiss') {
         if (!(await settle(userId, id, 'dismissed', 'dismissed'))) return gone;
         await rememberForMuse(userId, 'The user does not want to connect a chat channel for reminders. Do not suggest it again.');
+        const why = museDismissReason(opts.reason);
+        if (why) await appendMuseFeedback(userId, `[feedback] chat channel suggestion dismissed by user${reasonSuffix(why)}`);
       } else return bad;
       break;
     }
@@ -498,7 +519,7 @@ async function decideCard(userId: string, id: string, action: string, opts: Deci
         await appendMuseFeedback(userId, `[feedback] settings change applied by user: ${wanted.changes.map((c) => `${c.field} → ${JSON.stringify(c.to)}`).join(', ') || 'already in place'}`);
       } else if (action === 'dismiss') {
         if (!(await settle(userId, id, 'dismissed', 'dismissed'))) return gone;
-        await appendMuseFeedback(userId, '[feedback] settings change turned down by user: keep things as they are');
+        await appendMuseFeedback(userId, `[feedback] settings change turned down by user: keep things as they are${reasonSuffix(museDismissReason(opts.reason))}`);
       } else return bad;
       break;
     }
@@ -537,7 +558,7 @@ async function decideCard(userId: string, id: string, action: string, opts: Deci
       await appendMuseFeedback(userId, `[feedback] user ${action === 'edit' ? 'corrected' : 'removed'} a line of your two-week summary: "${items[at].slice(0, 120)}"${text ? ` → "${text.slice(0, 120)}"` : ''}`);
       break;
     }
-    case 'rule': return decideRuleCard(userId, card, action, gone, bad);
+    case 'rule': return decideRuleCard(userId, card, action, gone, bad, museDismissReason(opts.reason));
     default: return bad;
   }
   return { ok: true, card: (await getMuseCard(userId, id)) ?? card };

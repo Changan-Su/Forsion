@@ -26,6 +26,8 @@ const DAY = 86_400_000;
 let db: Database.Database;
 let home: string;
 let prevHome: string | undefined;
+/** Muse 的 LOG / 记忆写口的替身:收下 [feedback] 行,看理由有没有写进去。 */
+let logLines: string[] = [];
 
 beforeEach(async () => {
   prevHome = process.env.TANGU_HOME;
@@ -34,7 +36,9 @@ beforeEach(async () => {
   const made = createSqliteHost({ dataDir: 'memory', localToken: 't', userId: 'u' });
   db = made.db;
   db.exec(toSqliteDDL(STANDALONE_SCHEMA));
-  configureTangu({ host: { ...made.host, log: () => {}, warn: () => {} }, brain: {} as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'none' }) });
+  logLines = [];
+  const brain = { memory: { appendLogEntry: async (_u: string, line: string) => { logLines.push(line); }, appendMemoryEntry: async () => {} } };
+  configureTangu({ host: { ...made.host, log: () => {}, warn: () => {} }, brain: brain as any, billing: {} as any, profile: createTanguProfile({ sandboxMode: 'none' }) });
   await runMigration();
 });
 afterEach(() => {
@@ -93,6 +97,55 @@ describe('daily_muse_card', () => {
     await settle();
     expect(cell('daily_muse_card', 'open', 'channel')).toBe(1);
     expect(cell('daily_muse_card', 'decidedRemote', 'channel')).toBe(1);
+  });
+
+  it('拒绝理由(P3):dismiss 带理由按 cardKind 计,理由也写进 Muse 的 [feedback] 行', async () => {
+    card('r1', 'feature');
+    card('r2', 'plugin');
+    card('r3', 'settings');
+    card('r4', 'channel');
+    expect((await decideMuseCard('u', 'r1', 'dismiss', { reason: 'timing' })).ok).toBe(true);
+    expect((await decideMuseCard('u', 'r4', 'dismiss', { reason: 'timing' })).ok).toBe(true);
+    expect((await decideMuseCard('u', 'r2', 'dismiss', { reason: 'frequent', remote: true })).ok).toBe(true);
+    expect((await decideMuseCard('u', 'r3', 'dismiss', { reason: 'known' })).ok).toBe(true);
+    await settle();
+    expect(cell('daily_muse_card', 'dismiss', 'feature')).toBe(1);
+    expect(cell('daily_muse_card', 'dismissTiming', 'feature')).toBe(1);
+    expect(cell('daily_muse_card', 'dismissFrequent', 'plugin')).toBe(1);
+    expect(cell('daily_muse_card', 'dismissKnown', 'settings')).toBe(1);
+    expect(cell('daily_muse_card', 'dismissTiming', 'channel')).toBe(1);
+    expect(logLines).toContain('[feedback] chat channel suggestion dismissed by user (reason: bad timing)');
+    expect(cell('daily_muse_card', 'dismissIrrelevant', 'feature')).toBeUndefined();
+    expect(logLines).toContain('[feedback] recommendation feature:x dismissed by user: bad timing');
+    expect(logLines).toContain('[feedback] recommendation plugin:x dismissed by user: too many suggestions like this');
+    expect(logLines).toContain('[feedback] settings change turned down by user: keep things as they are (reason: they already knew about it)');
+  });
+
+  it('拒绝理由:不给 / 认不得的当没给(只记 dismiss,LOG 照旧);别的动作带理由不计;第二下 409 不重复记', async () => {
+    card('r4', 'feature');
+    card('r5', 'channel');
+    card('r6', 'feature');
+    expect((await decideMuseCard('u', 'r4', 'dismiss', { reason: 'the user is allergic to nuts' as any })).ok).toBe(true);
+    expect((await decideMuseCard('u', 'r5', 'open', { reason: 'irrelevant' })).ok).toBe(true);
+    expect((await decideMuseCard('u', 'r6', 'dismiss')).ok).toBe(true);
+    expect((await decideMuseCard('u', 'r6', 'dismiss', { reason: 'irrelevant' })).ok).toBe(false);
+    await settle();
+    expect(cell('daily_muse_card', 'dismiss', 'feature')).toBe(2);
+    expect(cell('daily_muse_card', 'open', 'channel')).toBe(1);
+    const fields = (db.prepare(`SELECT DISTINCT field FROM telemetry_ledger`).all() as any[]).map((r) => r.field);
+    expect(fields.filter((f) => f.startsWith('dismiss') && f !== 'dismiss')).toEqual([]);
+    expect(fields.some((f) => /allergic|nuts/.test(f))).toBe(false);
+    expect(logLines.filter((l) => l.includes('feature:x dismissed by user: not interested'))).toHaveLength(2);
+    expect(logLines.join('\n')).not.toMatch(/allergic/);
+  });
+
+  it('规则卡「不用」带理由:理由进账本和 LOG 行', async () => {
+    db.prepare(`INSERT INTO muse_cards (id, user_id, kind, target_key, payload, status, created_at) VALUES ('r7', 'u', 'rule', 'rule:x', ?, 'pending', ?)`)
+      .run(JSON.stringify({ rule: { desc: 'Remind me before standup' } }), Date.now() - 1000);
+    expect((await decideMuseCard('u', 'r7', 'dismiss', { reason: 'irrelevant' })).ok).toBe(true);
+    await settle();
+    expect(cell('daily_muse_card', 'dismissIrrelevant', 'rule')).toBe(1);
+    expect(logLines).toContain('[feedback] proposed automation "Remind me before standup" declined by user (reason: not relevant to them)');
   });
 
   it('第一次见面:答案按枚举拆开计;卡上没有自由文本可进账本', async () => {
