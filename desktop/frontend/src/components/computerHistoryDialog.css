@@ -1,4 +1,4 @@
-/* 电脑历史说明 / 同意弹窗(ComputerHistoryDialog):首启引导、主页那一行、旧引导页共用。原在 onboarding3.css,主页也要用就搬出来。
+/* 电脑历史说明 / 同意弹窗(ComputerHistoryDialog):首启引导团队屏、主页那一行共用。原在 onboarding3.css,主页也要用就搬出来。
  * margin: auto —— base.css 的全局 * { margin: 0 } 把 <dialog> 自带的居中清掉了,不写回来弹窗会贴在左上角。 */
 .ob-history-dialog { margin: auto; width: min(640px, calc(100% - 32px)); max-height: calc(100% - 40px); padding: 0; border: 1px solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card, var(--bg)); color: var(--text); box-shadow: var(--card-shadow); font-family: var(--font-ui); font-size: var(--ui-font-body, 13px); }
 .ob-history-dialog::backdrop { background: var(--overlay-medium); }
