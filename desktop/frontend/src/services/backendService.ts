@@ -17,7 +17,7 @@ import { registerMessages, translate } from '../i18n'
 import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './localOnly'
 import { saveResponseAs } from './nativeDownload'
 import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
-import { countTelemetry, settingTelemetry } from '../telemetrySend'
+import { countTelemetry } from '../telemetrySend'
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -1047,14 +1047,6 @@ export const getSpecialConfig = (t: EngineTarget) =>
 
 export const saveSpecialConfig = (t: EngineTarget, patch: { historian?: Partial<SpecialAgentsConfig['historian']>; muse?: Partial<SpecialAgentsConfig['muse']> }) =>
   request<{ config: SpecialAgentsConfig }>(t, '/agent/special/config', { method: 'POST', body: JSON.stringify(patch) }).then((r) => r.config)
-
-/** 匿名遥测 setting_change(契约 §9):用户真改了的 Muse 设置各报一条(值由主进程归档:开关 → on/off、心跳分钟 / 每天私信数 → 分档)。
- *  调用方只传**变了的**字段(保存成功之后):整份配置原样回写的地方(自动化列表的开关)只传它翻的那一项。 */
-export function museSettingTelemetry(changed: Partial<Pick<SpecialAgentsConfig['muse'], 'enabled' | 'mode' | 'notify' | 'heartbeatMinutes' | 'maxDmPerDay'>> | undefined): void {
-  if (!changed) return
-  const keys: Record<string, string> = { enabled: 'muse.enabled', mode: 'muse.mode', notify: 'muse.notify', heartbeatMinutes: 'muse.heartbeat', maxDmPerDay: 'muse.maxDmPerDay' }
-  for (const [field, key] of Object.entries(keys)) if (Object.hasOwn(changed, field)) settingTelemetry(key, (changed as Record<string, unknown>)[field])
-}
 
 /** 首启引导「认识你的 Agents 团队」答的第一次见面(本机专用;写完 introAt,私聊不再发那张卡)。 */
 export const saveMuseIntro = (t: EngineTarget, body: { when?: string; proactivity?: string; focus?: string[]; focusText?: string }) =>

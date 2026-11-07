@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
-  BUFFER_CAP, HOURLY_CAP, STACK_CAP,
-  createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, publicPluginId, shapeRendererReport, telemetryPackaged,
+  BUFFER_CAP, COMMAND_PAIR_CAP, HOURLY_CAP, RENDERER_REPORT_KINDS, STACK_CAP,
+  appUpdateProps, coreUpdateProps, createStartupTracker, createTelemetryHost, crashFromError, engineExitProps, processGoneProps, publicPluginId, shapeRendererReport,
+  telemetryPackaged, updateProps,
   type HostTelemetryEvent,
 } from './telemetryHost'
 
@@ -10,13 +11,17 @@ const host = (packaged = true) => createTelemetryHost({
 })
 
 describe('shapeRendererReport:渲染层上报的整形与校验', () => {
-  it('种类不在 crash / feature / longtasks 里、或 props 不是对象 → 丢', () => {
+  it('种类不在 §9 的清单里、或 props 不是对象 → 丢', () => {
     expect(shapeRendererReport('agent_run', { name: 'x' })).toBeNull()
     expect(shapeRendererReport('perf', { kind: 'startup' })).toBeNull()
+    expect(shapeRendererReport('update', { target: 'app', outcome: 'error' })).toBeNull() // update 只由主进程自己报
+    expect(shapeRendererReport('app_counts', { achChatSend: 3 })).toBeNull() // 计数只能经 count 攒
     expect(shapeRendererReport(undefined, { message: 'x' })).toBeNull()
     expect(shapeRendererReport('crash', 'boom')).toBeNull()
     expect(shapeRendererReport('crash', ['boom'])).toBeNull()
-    expect(shapeRendererReport('feature', { name: 'setting_change', key: 'theme' })).toBeNull() // 这一版不采
+    // setting_change 不许直接当 feature 报(值没归档):只走 setting 种类
+    expect(shapeRendererReport('feature', { name: 'setting_change', key: 'ui.themeMode', value: 'dark' })).toBeNull()
+    expect(RENDERER_REPORT_KINDS).toEqual(['crash', 'feature', 'longtasks', 'plugin_install', 'plugin_deps', 'plugin_lifecycle', 'plugin_load', 'onboarding', 'guide_tip', 'count', 'command', 'setting'])
   })
 
   it('crash:报错原文不转发,stack 封顶 8000;错误名只留合法字符', () => {
@@ -194,5 +199,178 @@ describe('createStartupTracker', () => {
     const b = tracker(true)
     b.t.noEngine(); b.t.firstFrame(650)
     expect(b.out).toEqual([{ kind: 'startup', startupMs: 650 }])
+  })
+})
+
+// ── v2(契约 §9)──
+/** 真实值(11-07 取自 api.forsion.net 的商店目录与本仓):商店条目 id 是裸 UUID,新装目录是 market-<UUID>,老条目目录是作者自起名。 */
+const STORE_ID = 'c6ff39fc-e42e-4999-9b2c-23776defd853' // better-pdf 的商店条目 id
+const ev = (r: ReturnType<typeof shapeRendererReport>) => r as { event: string; props: Record<string, unknown> }
+
+describe('v2 渲染层上报的整形', () => {
+  it('plugin_install:字段按白名单过,枚举外的归 other,报错原文 / 多余字段不带;错误类只在 outcome=error 时有', () => {
+    const r = ev(shapeRendererReport('plugin_install', {
+      pluginId: STORE_ID, pluginOfficial: true, entry: 'muse-card', kind: 'amadeus-plugin', source: 'github', stage: 'download',
+      outcome: 'error', errorClass: 'timeout', durationMs: 1234, sizeKb: 88, restart: false, message: 'github.com: timeout', path: '/Users/x',
+    }))
+    expect(r).toEqual({ event: 'plugin_install', props: { id: STORE_ID, entry: 'muse-card', kind: 'amadeus-plugin', source: 'github', stage: 'download', outcome: 'error', errorClass: 'timeout', durationMs: 1234, sizeKb: 88, restart: false } })
+    const ok = ev(shapeRendererReport('plugin_install', { pluginId: STORE_ID, pluginOfficial: true, entry: 'weird', kind: 'x', source: 'echo', stage: 'done', outcome: 'done', errorClass: 'timeout', durationMs: 1.5 }))
+    expect(ok.props).toEqual({ id: STORE_ID, entry: 'other', kind: 'other', source: 'other', stage: 'done', outcome: 'done' })
+    expect(shapeRendererReport('plugin_install', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'maybe' })).toBeNull()
+    expect(shapeRendererReport('plugin_install', { outcome: 'done' })).toBeNull()
+    expect(ev(shapeRendererReport('plugin_install', { pluginId: 'my-private', pluginOfficial: false, outcome: 'done' })).props.id).toBe('local')
+  })
+
+  it('plugin_deps / plugin_lifecycle / plugin_load', () => {
+    expect(ev(shapeRendererReport('plugin_deps', { total: 3, installed: 1, failedAt: 2, outcome: 'failed', names: ['a'] })).props).toEqual({ total: 3, installed: 1, failedAt: 2, outcome: 'failed' })
+    expect(shapeRendererReport('plugin_deps', { total: 3, outcome: 'meh' })).toBeNull()
+    expect(ev(shapeRendererReport('plugin_lifecycle', { pluginId: 'forsion-calendar', pluginOfficial: true, action: 'disable', blockedReason: 'api' })).props).toEqual({ id: 'forsion-calendar', action: 'disable' })
+    expect(ev(shapeRendererReport('plugin_lifecycle', { pluginId: 'x', pluginOfficial: false, action: 'blocked', blockedReason: 'whatever' })).props).toEqual({ id: 'local', action: 'blocked', blockedReason: 'other' })
+    expect(shapeRendererReport('plugin_lifecycle', { pluginId: 'x', pluginOfficial: true, action: 'delete' })).toBeNull()
+    expect(ev(shapeRendererReport('plugin_load', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'error', activateMs: 42 })).props).toEqual({ id: STORE_ID, outcome: 'error', activateMs: 42 })
+    expect(shapeRendererReport('plugin_load', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'slow' })).toBeNull()
+  })
+
+  it('onboarding:只收 int / bool / 枚举字段', () => {
+    const r = ev(shapeRendererReport('onboarding', { mode: 'returning', outcome: 'skip', screens: 2, backJumps: 1, msStart: 900, msTheme: 3000.5, youWritten: true, museOn: 'yes', aboutMe: '我是谁' }))
+    expect(r.props).toEqual({ mode: 'returning', outcome: 'skip', screens: 2, backJumps: 1, msStart: 900, youWritten: true })
+    expect(shapeRendererReport('onboarding', { mode: 'full', outcome: 'quit' })).toBeNull()
+  })
+
+  it('guide_tip:只发公开插件的提示;提示 id 按清单的形状', () => {
+    expect(ev(shapeRendererReport('guide_tip', { pluginId: STORE_ID, pluginOfficial: true, tipId: 'drag-to-reorder', result: 'learned' })).props).toEqual({ pluginId: STORE_ID, tipId: 'drag-to-reorder', result: 'learned' })
+    expect(shapeRendererReport('guide_tip', { pluginId: 'my-side-loaded', pluginOfficial: false, tipId: 'a', result: 'ok' })).toBeNull()
+    expect(shapeRendererReport('guide_tip', { pluginId: STORE_ID, pluginOfficial: true, tipId: 'Has Space', result: 'ok' })).toBeNull()
+    expect(shapeRendererReport('guide_tip', { pluginId: STORE_ID, pluginOfficial: true, tipId: 'a', result: 'shown' })).toBeNull()
+  })
+
+  it('count / command / setting 的形状', () => {
+    expect(shapeRendererReport('count', { key: 'achChatSend' })).toEqual({ count: 'achChatSend', n: 1 })
+    expect(shapeRendererReport('count', { key: 'openNote', n: 5000 })).toEqual({ count: 'openNote', n: 1000 })
+    expect(shapeRendererReport('count', { key: 'plugin:demo:hi' })).toBeNull()
+    expect(shapeRendererReport('count', { key: 'achChatSend', n: -1 })).toBeNull()
+    expect(shapeRendererReport('command', { id: 'open-settings', source: 'hotkey' })).toEqual({ command: { id: 'open-settings', source: 'hotkey' } })
+    expect(shapeRendererReport('command', { id: `amadeus:${STORE_ID}:open-reader`, source: 'nope' })).toEqual({ command: { id: `amadeus:${STORE_ID}:open-reader`, source: 'other' } })
+    // 嵌着 market-<UUID> 的命令 id 会被密钥规则整条丢:这里先挡(渲染层应已换成裸 UUID)
+    expect(shapeRendererReport('command', { id: 'amadeus:market-8f2a49a8-9de7-462d-864b-576c2bf1981d:x', source: 'palette' })).toBeNull()
+    expect(shapeRendererReport('command', { id: 'has space', source: 'palette' })).toBeNull()
+    expect(shapeRendererReport('command', { id: 'x'.repeat(81), source: 'palette' })).toBeNull()
+    expect(ev(shapeRendererReport('setting', { key: 'muse.heartbeat', value: 45 })).props).toEqual({ name: 'setting_change', key: 'muse.heartbeat', value: 'other' })
+    expect(ev(shapeRendererReport('setting', { key: 'computerHistory.enabled', value: true })).props).toEqual({ name: 'setting_change', key: 'computerHistory.enabled', value: 'on' })
+    expect(shapeRendererReport('setting', { key: 'ui.fontFamily', value: 'serif' })).toBeNull() // 表外的键
+    expect(shapeRendererReport('setting', { key: 'ui.themeMode', value: 'sepia' })).toBeNull() // 值不在枚举里
+    expect(shapeRendererReport('setting', { key: 'ui.designLanguage', value: 'My Theme' })).toBeNull()
+  })
+})
+
+describe('v2 宿主的攒与发', () => {
+  it('count 按小时攒成一条 app_counts(只带非零的键);command 按 (id, 来源) 一条 command_use;flush 之后清零', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    h.report('count', { key: 'achChatSend' })
+    h.report('count', { key: 'achChatSend', n: 2 })
+    h.count('byokSave')
+    h.report('command', { id: 'open-settings', source: 'hotkey' })
+    h.report('command', { id: 'open-settings', source: 'hotkey' })
+    h.report('command', { id: 'open-settings', source: 'palette' })
+    expect(got).toHaveLength(0)
+    h.flushCounts()
+    expect(got.map((e) => [e.event, e.props])).toEqual([
+      ['app_counts', { achChatSend: 3, byokSave: 1 }],
+      ['command_use', { id: 'open-settings', source: 'hotkey', n: 2 }],
+      ['command_use', { id: 'open-settings', source: 'palette', n: 1 }],
+    ])
+    h.flushCounts()
+    expect(got).toHaveLength(3) // 没攒到就什么都不发
+    h.count('not-a-key' as never)
+    h.flushCounts()
+    expect(got).toHaveLength(3)
+  })
+
+  it('一小时里不同 (命令, 来源) 的组合有上限:新组合丢、已记下的照常累加', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    for (let i = 0; i < COMMAND_PAIR_CAP + 20; i++) h.report('command', { id: `cmd-${i}`, source: 'palette' })
+    h.report('command', { id: 'cmd-0', source: 'palette' })
+    h.flushCounts()
+    const uses = got.filter((e) => e.event === 'command_use')
+    expect(uses).toHaveLength(COMMAND_PAIR_CAP)
+    expect(uses.find((e) => e.props.id === 'cmd-0')?.props.n).toBe(2)
+  })
+
+  it('每类事件的每小时上限各算各的,takeHour 一并清零;汇总事件不受上限', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    for (let i = 0; i < HOURLY_CAP.plugin_install + 3; i++) h.report('plugin_install', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'done' })
+    for (let i = 0; i < HOURLY_CAP.update + 3; i++) h.emit('update', updateProps('engine', 'current'))
+    expect(got.filter((e) => e.event === 'plugin_install')).toHaveLength(HOURLY_CAP.plugin_install)
+    expect(got.filter((e) => e.event === 'update')).toHaveLength(HOURLY_CAP.update)
+    h.takeHour()
+    h.report('plugin_install', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'done' })
+    expect(got.filter((e) => e.event === 'plugin_install')).toHaveLength(HOURLY_CAP.plugin_install + 1)
+    for (let i = 0; i < 700; i++) h.emit('app_counts', { openNote: 1 })
+    expect(got.filter((e) => e.event === 'app_counts')).toHaveLength(700)
+  })
+
+  it('plugin_load 同一插件同一次启动只报一次;blocked 同一插件同一原因只报一次;local 不去重', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    for (let i = 0; i < 3; i++) h.report('plugin_load', { pluginId: STORE_ID, pluginOfficial: true, outcome: 'ok', activateMs: i })
+    h.report('plugin_load', { pluginId: 'a', pluginOfficial: false, outcome: 'ok' })
+    h.report('plugin_load', { pluginId: 'b', pluginOfficial: false, outcome: 'ok' })
+    expect(got.filter((e) => e.event === 'plugin_load').map((e) => e.props.id)).toEqual([STORE_ID, 'local', 'local'])
+    h.report('plugin_lifecycle', { pluginId: STORE_ID, pluginOfficial: true, action: 'blocked', blockedReason: 'deps' })
+    h.report('plugin_lifecycle', { pluginId: STORE_ID, pluginOfficial: true, action: 'blocked', blockedReason: 'deps' })
+    h.report('plugin_lifecycle', { pluginId: STORE_ID, pluginOfficial: true, action: 'blocked', blockedReason: 'min-app' })
+    h.report('plugin_lifecycle', { pluginId: STORE_ID, pluginOfficial: true, action: 'disable' })
+    h.report('plugin_lifecycle', { pluginId: STORE_ID, pluginOfficial: true, action: 'disable' })
+    expect(got.filter((e) => e.event === 'plugin_lifecycle').map((e) => `${e.props.action}:${e.props.blockedReason ?? ''}`)).toEqual(['blocked:deps', 'blocked:min-app', 'disable:', 'disable:'])
+  })
+
+  it('主进程自己的设置改动同一张表、同一套归档', () => {
+    const h = host()
+    const got: HostTelemetryEvent[] = []
+    h.seam.subscribe((e) => got.push(e))
+    h.setting('update.channel', 'beta')
+    h.setting('computerHistory.enabled', false)
+    h.setting('update.channel', 'nightly')
+    h.setting('secret.key', 'on')
+    expect(got.map((e) => e.props)).toEqual([
+      { name: 'setting_change', key: 'update.channel', value: 'beta' },
+      { name: 'setting_change', key: 'computerHistory.enabled', value: 'off' },
+    ])
+  })
+})
+
+describe('update 的形状', () => {
+  it('引擎 / 内置插件:只报有结论的阶段;报错原文换成 errorClass', () => {
+    expect(coreUpdateProps({ id: 'tangu-engine', phase: 'checking' }, 'tangu-engine')).toBeNull()
+    expect(coreUpdateProps({ id: 'tangu-engine', phase: 'development' }, 'tangu-engine')).toBeNull()
+    expect(coreUpdateProps({ id: 'tangu-engine', phase: 'staged' }, 'tangu-engine')).toEqual({ target: 'engine', outcome: 'staged' })
+    expect(coreUpdateProps({ id: 'tangu-engine', phase: 'error', error: 'integrity mismatch' }, 'tangu-engine')).toEqual({ target: 'engine', outcome: 'error', errorClass: 'integrity' })
+    expect(coreUpdateProps({ id: 'forsion-extend', phase: 'error', error: 'signature: bad file /Users/me/x' }, 'tangu-engine')).toEqual({ target: 'builtin-plugin', id: 'forsion-extend', outcome: 'error', errorClass: 'signature' })
+    expect(coreUpdateProps({ id: 'forsion-extend', phase: 'current' }, 'tangu-engine')).toEqual({ target: 'builtin-plugin', id: 'forsion-extend', outcome: 'current' })
+  })
+  it('安装包:available / not-available / downloaded → staged / error', () => {
+    expect(appUpdateProps({ phase: 'checking' })).toBeNull()
+    expect(appUpdateProps({ phase: 'downloading' })).toBeNull()
+    expect(appUpdateProps({ phase: 'downloaded' })).toEqual({ target: 'app', outcome: 'staged' })
+    expect(appUpdateProps({ phase: 'error', error: 'unreachable' })).toEqual({ target: 'app', outcome: 'error', errorClass: 'network' })
+    expect(appUpdateProps({ phase: 'error', error: 'HttpError: 404 https://github.com/x?token=abc' })).toEqual({ target: 'app', outcome: 'error', errorClass: 'http' })
+  })
+  it('id 不是插件 id 的形状就不带', () => {
+    expect(updateProps('builtin-plugin', 'current', { id: '../x' })).toEqual({ target: 'builtin-plugin', outcome: 'current' })
+  })
+})
+
+describe('插件 id 规则(真实值)', () => {
+  it('商店条目 id(裸 UUID)/ 内置 id / market-<UUID> 目录名原样;别的 local', () => {
+    for (const id of [STORE_ID, 'bbed7431-5f4f-4063-960d-9d308b0c8ce7', 'forsion-extend', 'tangu-computer-use', 'market-8f2a49a8-9de7-462d-864b-576c2bf1981d']) expect(publicPluginId(id, true)).toBe(id)
+    expect(publicPluginId('Better_PDF', true)).toBe('local')
+    expect(publicPluginId(STORE_ID, false)).toBe('local')
   })
 })

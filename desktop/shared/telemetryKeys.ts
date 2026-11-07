@@ -99,8 +99,9 @@ export type InstallStage = 'resolve' | 'download' | 'install'
 export type InstallErrorClass = 'timeout' | 'network' | 'http' | 'too-large' | 'not-zip' | 'integrity' | 'identity' | 'version' | 'min-app'
   | 'platform' | 'deps' | 'builtin' | 'activate' | 'disk' | 'other'
 
-/** DownloadFailed 的原文:`<主机>: <原因码>` 用 ` · ` 连起来(electron/marketInstall.ts)。 */
-const DOWNLOAD_PART = /^[a-z0-9][a-z0-9.-]*(?::\d+)?: \S/i
+/** DownloadFailed 的原文:`<主机>: <原因码>` 用 ` · ` 连起来(electron/marketInstall.ts)。主机必须带点,
+ *  否则 Node 的 `EACCES: permission denied, …` 这类也会被当成「主机: 原因」。 */
+const DOWNLOAD_PART = /^(?:[a-z0-9-]+\.)+[a-z0-9-]+(?::\d+)?: \S/i
 function downloadClass(reasons: string[]): InstallErrorClass {
   if (reasons.some((r) => /too large/i.test(r))) return 'too-large'
   if (reasons.some((r) => /not a zip|unexpected content/i.test(r))) return 'not-zip'
