@@ -16,6 +16,7 @@ import { PanelLeft, PanelRight, X, MoreHorizontal, Plus, Zap, SlidersHorizontal 
 import { useSpaceStore, setActiveSpace, getActiveSpace, redirectOpenFromOnePage, landOnMainPage } from './spaceRegistry'
 import { objectContextMenuHandler, openObjectMenu } from './objectMenu'
 import { switchSpace } from './spaceTransition'
+import { SpaceFloatLayer } from './SpaceFloatLayer'
 import { useDotted, useRibbonStore } from './ribbonRegistry'
 import { useCommandStore } from './commandRegistry'
 import { accountMenuItems, moreCommandGroups, moreCommandOn, moreCommandTitle, moreItems, moreRowLabel, presentedCommand } from './moreSheet'
@@ -1175,6 +1176,8 @@ export const SingleColumnHost: React.FC<{ dark?: boolean; soft?: boolean; buildD
         </main>
         <div className={`mb-push-dim${pushed || (wide && rightVisible) ? ' on' : ''}`} onClick={closeDrawers} />
         <Drawer side="right" />
+        {/* Space 作用域的浮层(floatLayer.ts):贴在内容区上,底部锚点让开原生外壳的底栏。 */}
+        <SpaceFloatLayer />
       </div>
 
       {tabsOpen && <TabSheet onClose={() => setTabsOpen(false)} />}

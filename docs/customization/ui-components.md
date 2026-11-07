@@ -282,6 +282,32 @@ else isle.row.append(colorDots)                     // 岛下那一排归插件�
 - 和 `mountFloatingToc` 一样是叠在 `root` 上的一层,不接管它(`root` 是 static 时挂载期间设成 `relative`,`dispose()` 还原),和别的挂载互不影响。内容顶上留出约 56px 给岛。`root` 传不滚动的那一层框(岛是 `root` 里的一层,传滚动容器它会跟着内容滚走);岛和四角上的指针事件会冒泡到 `root`,自己的拖动 / 落笔处理里跳过 `e.target.closest('.lcl-isle-layer')`。句柄有 `row` / `showRow` / `setActive` / `update(opts)` / `dispose()`;形状不对(没有 `tools` 数组、没有 `onPick`、`slots` 不是元素)同步抛 `TypeError`;插件停用或重载时宿主统一收掉。
 - 白板(Excalidraw)自带的工具岛不换,位置本来就一样。
 
+### 浮层 ctx.ui.float (2026-11-07,2.13.8 起)
+
+「浮」是层级属性,不是一种窗口:一块东西浮起来时说清浮在谁之上(`scope`)、停在哪个角(`anchor`)、算什么用途(`role`),位置、层级、入场退场和拖动吸附归宿主。传输进度卡、导出完成的小条、录音时的计时胶囊都用它,别再自己写 `position: fixed` + 一个 z-index。
+
+```js
+const f = ctx.ui?.float?.({
+  scope: 'space',              // 'view' | 'space' | 'window'
+  anchor: 'bottom-end',        // 四角 + 'top-center' / 'bottom-center',缺省 bottom-end
+  role: 'panel',               // 'panel'(缺省)| 'notice'
+  id: 'transfers',             // 给了 id:用户拖到哪个角,本机记住
+  label: zh ? '传输' : 'Transfers',
+})
+if (!f) drawOwnCard(viewRoot)  // 没有这个接口的旧宿主:保留自己画的
+else { f.el.append(card); card.querySelector('.head').dataset.floatDrag = '' }
+// 不要了:f.close()(淡出再摘);插件停用 / 重载时宿主统一收掉
+```
+
+- **作用域**:`'view'` 浮在你给的 `host` 里(通常是视图根,static 时设成 `relative`),视图没了它就没了;`'space'` 浮在整个 Space 的三栏之上(盖得住分隔条),用户切到别的 Space 时藏起来、回来原样出现,`space` 缺省 = 调用时所在的 Space;`'window'` 浮在整个窗口之上,切 Space 也留着。没有 Space 区的窗口(Mini、设置这类浮窗、拆出的视图窗)里 `'space'` 退到窗口层。能用小的就别用大的:只和一个视图有关的用 `'view'`。
+- **用途**:`'panel'` 停在锚点,和别的面板重叠时后开的在上;`'notice'` 和同一层同一锚点的其他通知竖着叠放(间距 8px,第一条离角最近),读屏会念(`role="status"`)。内容一直在变的(进度数字)用 `'panel'`,免得读屏一直念。
+- **皮**:缺省是宿主的卡面(`--bg-card`、圆角、细描边、卡片阴影);`bare: true` 不给皮,内容自己画。离边 12px;Space 层顶上让开标签栏(44px),底下让开状态栏和手机的底栏。
+- **拖动**:`f.el` 里带 `data-float-drag` 的元素是把手(按在按钮、输入框上不算),拖过 4px 才开始,松手吸到最近的锚点、从松手处滑过去;给了 `id` 的记在本机(按插件 id 分开,读不到当没记过)。`onAnchorChange(anchor)` 告诉你换了角;`f.move(anchor)` 自己换。
+- 浮层不抢焦点,也不自己关;`f.anchor` / `f.closed` 可读。入场退场走宿主的统一动效(`data-motion="toast"`),减少动态效果时不位移。
+- 层级只有一张表(DESIGN §3「浮层与层级」):视图内浮层 < Space 浮层(在 Space 区那一层里,只比分隔条高)< 窗口浮层 < 菜单 / 弹出 < 上手提示 < 弹窗 < 命令面板。别写字面 z-index,要用就用 `var(--z-*)`。
+- 形状不对(`scope` 不认识、`'view'` 没给挂在文档里的 `host`、`anchor` / `role` 不认识)同步抛 `TypeError`。插件已停用时返回一个什么都不做的句柄。
+- 桌面级浮层(盖在别的应用之上的胶囊)和多开的 Mini 不在这一期,先别自己开系统窗口做。
+
 ### 设置零件 (2026-10-17)
 
 设置页、商店页用的那批小零件（分组面板、设置行、开关、按钮、输入框、分段、下拉，以及新加的数值、额度条、步进器、代码 + 复制、半屏选择 / 确认、空 / 加载 / 出错）对插件开放。主接法是 `ctx.ui.mountSettingsPage(el, schema)`：插件交一份整页描述（有哪些组、每组有哪些项、值和回调），宿主按端去画；`ctx.ui.mountSettingsItem(el, item)` 一次挂一件，用来补位（例如放进 `custom` 块里）。宿主自己的「设置 → 通知」用的是同一份画法。类型真源：`desktop/shared/settingsPage.ts`；渲染在应用层的 `components/SettingsPage`。

@@ -282,6 +282,32 @@ else isle.row.append(colorDots)                     // the row under the island 
 - Like `mountFloatingToc` it is a layer over `root` that doesn't take `root` over (a static `root` becomes `relative` while mounted and is restored on `dispose()`), so it coexists with other mounts. Leave about 56 px at the top of your content for it. Pass the frame that doesn't scroll as `root` (the island is a layer inside it, so a scrolling `root` takes it along); pointer events on the island and slots bubble to `root`, so skip `e.target.closest('.lcl-isle-layer')` in your own pan / draw handlers. The handle has `row` / `showRow` / `setActive` / `update(opts)` / `dispose()`; a wrong shape (no `tools` array, no `onPick`, a slot that isn't an element) throws `TypeError` synchronously; the host disposes it on disable / reload.
 - The whiteboard's own (Excalidraw) tool island isn't replaced; it already sits in the same place.
 
+### Floats: ctx.ui.float (2026-11-07, since 2.13.8)
+
+Floating is a layer attribute, not a kind of window: when something floats, say what it floats over (`scope`), which corner it sits in (`anchor`) and what it is for (`role`); the host owns placement, stacking, enter/exit motion and drag-to-snap. Use it for transfer progress cards, "export finished" strips, a recording timer capsule — don't hand-roll `position: fixed` plus a z-index.
+
+```js
+const f = ctx.ui?.float?.({
+  scope: 'space',              // 'view' | 'space' | 'window'
+  anchor: 'bottom-end',        // four corners + 'top-center' / 'bottom-center'; default bottom-end
+  role: 'panel',               // 'panel' (default) | 'notice'
+  id: 'transfers',             // with an id, the corner the user drags it to is remembered on this device
+  label: zh ? '传输' : 'Transfers',
+})
+if (!f) drawOwnCard(viewRoot)  // older hosts without it: keep drawing your own
+else { f.el.append(card); card.querySelector('.head').dataset.floatDrag = '' }
+// done with it: f.close() (fades out, then removed); the host closes all of yours on disable / reload
+```
+
+- **Scope**: `'view'` floats inside the `host` you pass (normally your view root; set to `relative` if static) and is gone with the view. `'space'` floats over the whole Space — all three columns, above the splitters — hides while the user is in another Space and comes back as it was; `space` defaults to the Space open when you call it. `'window'` floats over the whole window and stays across Space switches. In windows without a Space area (Mini, floating panels like Settings, torn-off view windows) `'space'` falls back to the window layer. Pick the smallest scope that fits: if it only concerns one view, use `'view'`.
+- **Role**: `'panel'` stays at its anchor; when panels overlap, the later one is on top. `'notice'` stacks with the other notices at the same anchor in the same layer (8 px apart, the first nearest the corner) and is announced (`role="status"`). Content that keeps changing (progress numbers) should be a `'panel'` so screen readers don't keep reading it.
+- **Skin**: the host card by default (`--bg-card`, radius, hairline border, card shadow); `bare: true` gives you no skin. 12 px from the edges; the Space layer clears the tab bar at the top (44 px) and the status bar / phone bottom bar at the bottom.
+- **Dragging**: any element in `f.el` with `data-float-drag` is a handle (not when pressing a button or input). Past 4 px it drags; on release it snaps to the nearest anchor, sliding from where it was let go. With an `id` the choice is remembered on this device (namespaced by your plugin id; an unreadable store counts as nothing remembered). `onAnchorChange(anchor)` tells you; `f.move(anchor)` moves it yourself.
+- A float never takes focus and never closes itself; `f.anchor` / `f.closed` are readable. Enter and exit use the host's shared motion (`data-motion="toast"`); no movement under reduced motion.
+- There is one stacking table (DESIGN §3, floats and layers): view floats < Space floats (inside the Space area, only above its splitters) < window floats < menus / popovers < guide tips < dialogs < command palette. Don't write literal z-index values; use `var(--z-*)` if you must.
+- Wrong shapes (unknown `scope`, `'view'` without a connected `host`, unknown `anchor` / `role`) throw `TypeError` synchronously. A disabled plugin gets a handle that does nothing.
+- Desktop-level floats (a capsule over other apps) and multiple Mini windows are not in this phase; don't open OS windows of your own for them yet.
+
 ### Settings parts (2026-10-17)
 
 The small parts used by settings and store pages are open to plugins: group panels, setting rows, switches, buttons, inputs, segmented controls and selects, plus the new values, usage meters, steppers, code with copy, half-sheet choices and confirmations, and empty / loading / error states. The main entry is `ctx.ui.mountSettingsPage(el, schema)`: the plugin hands over a description of the whole page (which groups, which items in each group, values and callbacks) and the host draws it per device. `ctx.ui.mountSettingsItem(el, item)` mounts one part at a time to fill gaps (for example inside a `custom` block). The host's own Settings → Notifications page uses the same renderer. Canonical types: `desktop/shared/settingsPage.ts`; the renderer is the app-level `components/SettingsPage`.

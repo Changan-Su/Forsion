@@ -28,7 +28,7 @@ metadata:
 
 Read the matching `references/` file before using an API listed below or following a section's reference:
 
-- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(`vault: true` 接当前库双链); 只读 Markdown ctx.ui.mountMarkdown; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
+- [references/host-ui-mounts.md](references/host-ui-mounts.md): 可复用 UI 组件：ctx.ui.mountChatBox; 原生 Markdown 编辑器 ctx.ui.mountMarkdownEditor(`vault: true` 接当前库双链); 只读 Markdown ctx.ui.mountMarkdown; 原生悬浮目录 ctx.ui.mountFloatingToc; View modes: ctx.ui.setViewModes; Tooltips and motion tokens: ctx.ui.attachTooltip; Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes; Tool island: ctx.ui.mountToolIsland; Floats: ctx.ui.float; Host parts (dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n, bare elements, failed mount card): ctx.ui.confirm / openDialog / mountControl / contextMenu / popover / mountEmptyState / mountWebCard / icon / setViewHead / mount, ctx.addStyle, ctx.i18n.define; Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem; 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg; 仪表盘 ctx.dashboard; 原生多维表 ctx.table.mount
 - [references/tangu-host-apis.md](references/tangu-host-apis.md): 当前模型与当前 Space:ctx.tangu; Agent 状态:agentStatus / subscribeAgentStatus; Agent 名册:agents; 开新对话:startChat; 把对话挂进自己的视图:mountChat; 新对话输入区:mountComposer; 正文 AI:ctx.tangu.complete 与 registerSelectionAction; 翻译:ctx.tangu.translate; 行内补全:ctx.tangu.fim; Agent Desk 伴随面:ctx.desk; 摘要栏插件卡:ctx.summary; 自动化规则播种:ctx.automation; agent 自建 Space 的数据:section `ctx.agent`
 - [references/plugin-skill-providers.md](references/plugin-skill-providers.md): engine `ctx.registerSkillProvider` for live external skills.
 - [references/plugin-model-providers.md](references/plugin-model-providers.md): engine `ctx.registerModelProvider` for native single-inference sources.
@@ -358,6 +358,7 @@ Your Space renders your own status, TODOs, schedule and Library from `ctx.agent`
 | `ctx.ui.dropIndicator(opts?)` | 自己视图里拖动排序 / 拖进去时的落点线、「放进去」描边,和宿主编辑器 / 侧栏 / 标签条同一个 | 2026-10-24 起;句柄 `{ line, zone, hide, dispose }`,传视口坐标(`line({x,y,w})` 横线 y=上沿、`{axis:'v'}` 竖线、`zone({x,y,w,h})` 描边);换落点原地淡出淡入、颜色 `--signal-line`;给 `key`(行 id)滚动才不算换落点;dragleave / drop 时 `hide()`,禁用时宿主统一收;老宿主没有 → 可选链,照旧自己画。2026-10-25 起句柄多一个 `land?(行或找它的函数, 松手处)`:挪完之后被拖的那一行从松手处滑进新位置(160ms,减少动态效果下直接到位),邻居不让位。见下「Drop indicators」 |
 | `ctx.ui.mountSelectionBar` | 自己的视图里选中文字后浮出宿主的划线条 | 宿主给「问 Tangu / 翻译 / ⋯」,你声明自己的工具(图标钮 / 颜色点);不接就什么都不出;老宿主没有 → 可选链,保留自己的菜单 |
 | `ctx.ui.mountToolIsland` | 「拿着工具干活」的视图(PDF 批注一类)换工具的那颗胶囊 | 2026-11-04 起;顶部居中、`root` 窄于 520px 停底部,宿主管位置 / 皮 / 滑过去的选中底块;**选中受控**(`onPick` 里自己 `setActive`),`key` 只画字母不绑键;句柄的 `row` 是岛下那一排、归插件画,`slots` 放四角;老宿主没有 → 可选链,保留自己的那条(见 references「Tool island」) |
+| `ctx.ui.float(opts)` | 浮起来的一块:传输进度卡、导出完成的小条、录音计时胶囊这类 | 2026-11-07 起;`scope` 说浮在谁之上(`view` 自己的视图里 / `space` 整个 Space、切走就藏 / `window` 整个窗口),`anchor` 四角 + 上下居中,`role` `panel` 停在角上、`notice` 同角叠放并读屏;宿主管位置、层级、入场退场、拖动吸附(`data-float-drag` 把手,给 `id` 记住角);**别再自己写 fixed + z-index**;老宿主没有 → 可选链,保留自己画的(见 references「Floats」) |
 | `ctx.ui.mountSettingsPage` / `ctx.ui.mountSettingsItem` | 设置类页面(账号、额度、诊断、偏好…)用宿主的设置零件画 | 只给 groups / items 数据和回调,宿主按端排版(手机上紧凑控件留右、宽控件换行、选了就执行 → 半屏);**别再抄宿主的设置 CSS**;老宿主没有 → 可选链,保留自己画的那套 |
 | `ctx.ui.mountRecord` | 自己的卡片里挂宿主的「一行记录」编辑字段(标题 / 时间 / 属性,和内置日历的事件浮卡同一份) | 2026-10-17 起;⚠️**声明 `"databases"` 才有**;写口同 `ctx.databases.setCell`,外框 / 关闭 / 打开 / 删除归你;见下「日历 / 待办类插件的其余入口」 |
 | `ctx.ui.haptic?.('tick')` | 移动端一次已接受操作的轻触反馈 | 2.13.7+；只有原生触感设备才存在，遵循系统设置。只在用户动作写入被接受后调用一次，撤销／同步不调用；不要拿浏览器震动模拟原生反馈 |
@@ -603,6 +604,7 @@ createPage / listPages / listFiles / searchVault / reveal / trash`)都要求一�
 - dispose 再挂 = 一份全新的实例(输入焦点、排序筛选这些状态不带过来)。只是换数据 / 换参数就用句柄的 `update()`。
 - 一个 `el` 同一时刻只有一份宿主界面:上一份没 dispose 就在同一个 `el` 上再挂,宿主先把上一份完整收掉(等同于你 dispose 了它,句柄此后不再生效),再挂新的;谁后调用谁留下,不看谁先加载完。要并排放两份,就各给一个子节点。
   `mountFloatingToc` / `mountToolIsland` 例外:它们是叠在 `shell` / `root` 上的一层,不占用它,不收掉它上面别的挂载,也不被它们收掉。
+  `ctx.ui.float` 不挂在你的元素上:它自己建一块浮层、内容放进句柄的 `el`;`close()` 收掉,停用 / 重载时宿主统一收。
 - 别用 `el > .x` 去选宿主渲染的节点,也别假设它是 `el.firstElementChild` —— 中间隔着那一层。
 - 2.12.2 及更早的宿主没有这条保证:dispose 之后那一拍里清空 `el`,宿主的卸载会报一条页面错误,或者再挂之后一片空白。
   要兼容它们,就把宿主内容挂进你自己建的子节点(`const slot = el.appendChild(document.createElement('div'))`),换内容时连子节点一起换掉。
@@ -619,6 +621,7 @@ The full contracts, examples and old-host fallbacks for these mounts live in [re
 - Drop indicators: ctx.ui.dropIndicator (2026-10-24+)
 - Selection bar: ctx.ui.mountSelectionBar and registerSelectionAction scopes (2026-10-13+)
 - Tool island: ctx.ui.mountToolIsland (2026-11-04+)
+- Floats: ctx.ui.float (2026-11-07+)
 - Host parts: dialogs, toolbar controls, menus, popovers, empty states, icons, view head, i18n (2026-10-26+)
 - Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
 - 白板层 ctx.ui.mountBoard / ctx.ui.boardToSvg(2026-10-10 起)

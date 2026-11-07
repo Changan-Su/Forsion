@@ -1,0 +1,55 @@
+/* 浮层宿主(floatLayer.ts,LCL 表面规范第一期)。层级值是 base.css :root 的 --z-* 那张表,这里只写同值兜底。
+   层本身不接指针;浮层自己接。锚点用 inset + margin auto 居中,不用 translate(统一入场的动画在动 translate)。 */
+.lcl-float-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  --lcl-float-gap: 8px;
+  --lcl-float-inset-x: 12px;
+  --lcl-float-inset-top: 12px;
+  --lcl-float-inset-bottom: 12px;
+}
+.lcl-float-layer[data-scope='view'] { z-index: var(--z-view-float, 20); }
+.lcl-float-layer[data-scope='space'] { z-index: var(--z-space-float, 100); --lcl-float-inset-top: 44px; /* 让开标签栏和右上角的浮钮组 */ }
+.lcl-float-layer[data-scope='window'] { position: fixed; z-index: var(--z-window-float, 90); }
+/* 桌面状态栏(.sb)悬在 .shell-work 右下;底部锚点让开它。手机按原生外壳报的底部占位让。 */
+.shell-work:has(> .sb) > .lcl-float-layer[data-scope='space'] { --lcl-float-inset-bottom: calc(var(--sb-h, 18px) + 12px); }
+.mb-body > .lcl-float-layer[data-scope='space'] { --lcl-float-inset-bottom: calc(12px + var(--mb-bottom, 0px)); --lcl-float-inset-top: calc(var(--mb-top, 12px) + 4px); }
+
+.lcl-float-stack,
+.lcl-float[data-role='panel'] {
+  position: absolute;
+  max-width: calc(100% - 2 * var(--lcl-float-inset-x));
+  max-height: calc(100% - var(--lcl-float-inset-top) - var(--lcl-float-inset-bottom));
+}
+.lcl-float-stack { display: flex; flex-direction: column; gap: var(--lcl-float-gap); }
+.lcl-float-stack[data-anchor^='bottom'] { flex-direction: column-reverse; } /* 先开的贴角,后开的往外叠 */
+.lcl-float-stack[data-anchor$='start'] { align-items: flex-start; }
+.lcl-float-stack[data-anchor$='center'] { align-items: center; }
+.lcl-float-stack[data-anchor$='end'] { align-items: flex-end; }
+
+:is(.lcl-float-stack, .lcl-float[data-role='panel'])[data-anchor^='top'] { top: var(--lcl-float-inset-top); }
+:is(.lcl-float-stack, .lcl-float[data-role='panel'])[data-anchor^='bottom'] { bottom: var(--lcl-float-inset-bottom); }
+:is(.lcl-float-stack, .lcl-float[data-role='panel'])[data-anchor$='start'] { left: var(--lcl-float-inset-x); }
+:is(.lcl-float-stack, .lcl-float[data-role='panel'])[data-anchor$='end'] { right: var(--lcl-float-inset-x); }
+:is(.lcl-float-stack, .lcl-float[data-role='panel'])[data-anchor$='center'] { left: 0; right: 0; margin-inline: auto; width: max-content; }
+
+.lcl-float {
+  pointer-events: auto;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+}
+.lcl-float[hidden] { display: none; }
+/* 卡面:同 .ui-popover 的材质(底色、细描边、卡片阴影、中圆角);bare 的内容自己画。 */
+.lcl-float:not([data-bare]) {
+  background: var(--bg-card, #fff);
+  color: var(--text);
+  border: var(--border-width, 1px) solid var(--border, transparent);
+  border-radius: var(--radius-md, 12px);
+  box-shadow: var(--card-shadow, 0 8px 24px rgba(0, 0, 0, 0.12));
+  overflow: auto;
+}
+.lcl-float [data-float-drag] { cursor: grab; touch-action: none; }
+.lcl-float[data-dragging] { cursor: grabbing; transition: none; z-index: 1; }
+.lcl-float[data-dragging] [data-float-drag] { cursor: grabbing; }
