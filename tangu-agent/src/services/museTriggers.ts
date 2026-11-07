@@ -599,6 +599,19 @@ export function effectiveDisabledBy(t: Pick<MuseTrigger, 'disabledBy' | 'disable
 export const PLUGIN_TRIGGER_ID_RE = /^plugin:[a-z0-9-]+:[a-z0-9-]+$/;
 export const isPluginTriggerId = (id: string): boolean => id.startsWith('plugin:');
 
+const canonical = (v: unknown): string => Array.isArray(v) ? `[${v.map(canonical).join(',')}]`
+  : v && typeof v === 'object' ? `{${Object.keys(v).filter((k) => (v as Record<string, unknown>)[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`).join(',')}}`
+  : JSON.stringify(v ?? null);
+
+/**
+ * 规则内容的版本指纹(D28):构建器打开时拿到、保存时带回,这期间 Muse、引擎自动停用或另一个窗口改过就对不上。
+ * 只算可编辑的内容和启停状态;lastFiredAt、游标、观察计数这类运行时簿记不算 —— 规则照常触发不会让编辑器报冲突。
+ */
+export function triggerRev(t: MuseTrigger): string {
+  const { desc, cond, prompt, cooldownHours, enabled, observe, agentSlug, actions, only, maxPerDay, disabledReason } = t;
+  return createHash('sha1').update(canonical({ desc, cond, prompt, cooldownHours, enabled, observe: !!observe, agentSlug, actions, only, maxPerDay, disabledReason })).digest('hex').slice(0, 16);
+}
+
 /**
  * upsert:带 id=更新(**保留 lastFiredAt/createdAt**,否则改个描述就重置 cooldown);无 id=新建(50 条帽)。
  * 例外:cond 实质变化=触发语义换了 → 重置触发状态(createdAt=now/lastFiredAt=null/游标清)——
@@ -608,11 +621,13 @@ export const isPluginTriggerId = (id: string): boolean => id.startsWith('plugin:
  * **只有 HTTP 路由传 true**;manage_automation 工具不传——否则聊天 agent 能凭空造出伪装成插件的规则,
  * 还绕过 50 条帽(这条路照样过 MAX_TRIGGERS)。
  */
-export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { allowPluginCreate?: boolean; actor?: UpsertActor; observeBy?: 'muse' } = {}):
-  Promise<{ ok: true; trigger: MuseTrigger; created: boolean } | { ok: false; error: string }> {
+export async function upsertTrigger(v: ValidatedTrigger, id?: string, opts: { allowPluginCreate?: boolean; actor?: UpsertActor; observeBy?: 'muse'; expectedRev?: string } = {}):
+  Promise<{ ok: true; trigger: MuseTrigger; created: boolean } | { ok: false; error: string; conflict?: MuseTrigger }> {
   return withTriggersLock(async () => {
     const list = await loadTriggers();
     const cur = id ? list.find((t) => t.id === id) : undefined;
+    // 构建器带回的版本对不上 = 编辑期间别人改过:整条拒掉,把现在那份交回去让用户决定(比对在锁内,和写盘同一步)
+    if (cur && opts.expectedRev && triggerRev(cur) !== opts.expectedRev) return { ok: false as const, error: 'trigger:conflict', conflict: cur };
     if (id && !cur) {
       if (!opts.allowPluginCreate || !isPluginTriggerId(id)) return { ok: false as const, error: `未找到规则 ${id}` };
       if (!PLUGIN_TRIGGER_ID_RE.test(id)) return { ok: false as const, error: `插件规则 id 形态须为 plugin:<插件id>:<key>(小写字母/数字/连字符):${id}` };

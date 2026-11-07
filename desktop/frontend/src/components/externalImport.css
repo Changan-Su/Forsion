@@ -1,0 +1,43 @@
+/* 从其他 AI 导入(ExternalImport.tsx):审阅单 + 画像页顶上的提示行 / 完成条。平卡不描边(DESIGN §卡片描边纪律)。 */
+.imp-sheet.modal { --modal-w: 600px; height: min(742px, 92vh); display: flex; flex-direction: column; }
+.imp-sum { margin: 2px 18px 0; color: var(--text-muted); font-size: var(--ui-font-caption); }
+.imp-sum.imp-error { color: var(--danger, var(--text)); }
+.imp-body { flex: 1; min-height: 0; overflow: auto; padding: 0 18px 4px; }
+.imp-sec { margin: 14px 0 4px; display: flex; align-items: baseline; gap: 8px; font-size: var(--ui-font-meta); font-weight: 600; color: var(--text); }
+.imp-sec small { font-weight: 400; color: var(--text-muted); font-size: var(--ui-font-caption); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.imp-sec > span:first-child, .imp-sec > small:last-child { flex: none; white-space: nowrap; }
+.imp-sec .grow { flex: 1; }
+.imp-row { display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: var(--border-width) solid var(--border); }
+.imp-row:last-child { border-bottom: 0; }
+.imp-row > input { margin-top: 3px; flex: none; }
+.imp-row.is-off { opacity: .5; }
+.imp-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: var(--ui-font-body); line-height: 1.45; }
+.imp-copy small { color: var(--text-muted); font-size: var(--ui-font-caption); overflow-wrap: anywhere; }
+.imp-text { all: unset; cursor: text; overflow-wrap: anywhere; border-radius: 4px; }
+.imp-text:hover { background: var(--overlay-light); }
+.imp-text:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.imp-edit { font: inherit; color: inherit; width: 100%; resize: vertical; border: 0; border-radius: var(--radius-sm, 6px); background: var(--overlay-light); padding: 4px 6px; outline: none; }
+.imp-tags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.imp-chip { font-size: var(--ui-font-caption); color: var(--text-muted); background: var(--overlay-light); border-radius: var(--radius-pill); padding: 1px 7px; white-space: nowrap; line-height: 1.5; }
+.imp-flag { font-size: var(--ui-font-caption); color: var(--accent-ink); background: var(--accent-light); border-radius: var(--radius-pill); padding: 1px 7px; line-height: 1.5; }
+.imp-tool { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: var(--border-width) solid var(--border); cursor: pointer; }
+.imp-tool:last-of-type { border-bottom: 0; }
+.imp-tool b { font-weight: 600; }
+.imp-paste { margin-top: 6px; width: 100%; min-height: 86px; resize: vertical; border: 0; border-radius: var(--radius-md); background: var(--overlay-light); padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--ui-font-meta); line-height: 1.55; color: var(--text); outline: none; }
+.imp-paste::placeholder { color: var(--text-faint); font-family: inherit; font-size: var(--ui-font-meta); }
+.imp-step { display: flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--text-muted); font-size: var(--ui-font-meta); }
+.imp-step .grow { flex: 1; }
+.imp-ais { color: var(--text-muted); font-size: var(--ui-font-caption); }
+.imp-foot { display: flex; align-items: center; gap: 8px; padding: 12px 18px 16px; border-top: var(--border-width) solid var(--border); }
+.imp-foot .grow { flex: 1; color: var(--text-muted); font-size: var(--ui-font-caption); }
+.imp-prog { display: flex; align-items: center; gap: 10px; padding: 9px 0; font-size: var(--ui-font-body); }
+.imp-prog .ok { color: var(--accent-ink); flex: none; }
+.imp-prog small { color: var(--text-muted); font-size: var(--ui-font-caption); margin-left: auto; }
+.imp-prog.is-quiet { opacity: .5; }
+.imp-hint, .imp-done { display: flex; align-items: center; gap: 10px; margin: 10px 0 14px; padding: 10px 12px; border-radius: var(--radius-md); font-size: var(--ui-font-meta); color: var(--text); }
+.imp-hint { background: var(--bg-card); box-shadow: var(--card-shadow); }
+.imp-done { background: var(--accent-light); }
+.imp-hint .grow, .imp-done .grow { flex: 1; min-width: 0; }
+.imp-hint small, .imp-done small { display: block; color: var(--text-muted); font-size: var(--ui-font-caption); margin-top: 2px; }
+.imp-hint > svg, .imp-done > svg { flex: none; }
+.imp-body .imp-done { margin-top: 14px; }

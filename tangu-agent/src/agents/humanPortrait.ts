@@ -140,6 +140,8 @@ export interface PortraitMutation {
   source: HumanChangeSource;
   /** Dream:这一句被忘过(墓碑)就不写。显式 add 反过来撤掉墓碑。 */
   skipForgotten?: boolean;
+  /** 撤销一次导入:回到导入前,不算人删过,不记墓碑(否则再导入同一句会被标成「删过」默认不勾)。 */
+  noTombstone?: boolean;
 }
 export interface PortraitResult {
   document: HumanDocument; change: HumanChange | null;
@@ -186,7 +188,7 @@ async function mutateOnce(m: PortraitMutation): Promise<PortraitResult> {
   const now = portraitEntries(written);
   const entry = m.action === 'forget' ? undefined
     : now.find((e) => e.id === portraitEntryId(redactSecrets(fact))) ?? now.find((e) => !entries.some((x) => x.id === e.id));
-  if (m.action !== 'add' && removed) {
+  if (m.action !== 'add' && removed && !m.noTombstone) {
     const gone = removed.content;
     // 改写 / 删掉的原句记墓碑(同记忆:update 也挡住旧说法被自动写回);新句子要是被忘过,显式写入撤掉它
     if (!now.some((e) => normalizeMemoryFact(e.content) === normalizeMemoryFact(gone))) {

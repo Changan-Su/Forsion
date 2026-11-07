@@ -15,8 +15,8 @@ import { createMiniResizeQueue } from './miniResizeQueue'
 import { miniResizeShape } from './miniResizeShape'
 import { protectWindowsAudioClock } from './windowsAudioClock'
 import { startMiniAutoPanel } from './miniAutoPanel'
-import { createPluginSandbox, type PluginSandboxUiSeed } from './pluginSandbox'
-import { sandboxSelf, startSandboxChild, sandboxForward } from './sandboxChild'
+import { createPluginSandbox, sandboxRequiredPlugins, type PluginSandboxUiSeed } from './pluginSandbox'
+import { sandboxSelf, startSandboxChild, sandboxForward, SANDBOX_SWITCHES } from './sandboxChild'
 import { normalizeMiniOpenOptions, normalizeMiniSessionContext, type MiniSessionContext, type MiniOpenOptions, type MainPanelTarget } from '../shared/miniPanel'
 import { normalizeFloatingPanelOpenOptions, normalizeMainAction, type FloatingPanelOpenOptions } from '../shared/floatingPanel'
 import { normalizeUiAppearance, normalizeUiSync, UI_APPEARANCE_CHANNEL, UI_LOCALE_CHANNEL } from '../shared/uiSync'
@@ -53,9 +53,9 @@ import { createMcpLifecycle, startForsionMcp } from './mcpServer'
 import { randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
-import { importMcp, importSkills, scanAll } from './discovery'
+import { importMcp, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
-import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller } from './updater'
+import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, channelChanged } from './updater'
 import { parseSourcePref } from '../shared/updateSource'
 import { fetchWebsiteReleases } from './websiteReleases'
 import { createRestartGuard, readRestartActivity } from './restartGuard'
@@ -140,6 +140,7 @@ setDevMode(!app.isPackaged) // dev 数据目录 ~/.forsion-dev,与正式版隔�
 /** 本进程是插件沙箱(用户那份 Forsion 按需另起的,见 pluginSandbox.ts)。沙箱不碰整机共享的东西:协议注册、托盘、全局快捷键、
  *  CLI、MCP 固定端口、更新检查、自动 Mini;关窗即退出。数据目录由父进程经 --user-data-dir / TANGU_HOME / FORSION_WORKSPACE_DIR 指进去。 */
 const SANDBOX = sandboxSelf()
+if (SANDBOX) for (const sw of SANDBOX_SWITCHES) app.commandLine.appendSwitch(sw) // 压在底下的沙箱窗口照样出新帧(截图不截到旧画面)
 // dev 与安装版的 Electron userData 默认共用同一目录 appData/forsion-desktop(app.getName() 取 package.json
 // name="forsion-desktop";electron-builder 的 productName 只改 .app 包名/CFBundleName「Forsion」,不动 userData)。
 // → 二者抢同一把 userData/SingletonLock,后启者 requestSingleInstanceLock() 返 false 被下方 app.exit(0)(即
@@ -1036,6 +1037,7 @@ const clipEntranceOn = (): boolean => process.env.FORSION_CLIP_ENTRANCE !== '0'
 /** 配对在途表:门铃收下的请求,打开互联后由正式服务交出令牌(两者共用这一份)。 */
 const unitPairStore = newPairStore()
 let amadeusReadPlugins: (() => Promise<ExternalPluginSource[]>) | null = null // registerAmadeusIpc 返回时赋上
+let amadeusDevPluginRoots: (() => Promise<Array<{ id: string; dir: string }>>) | null = null
 let amadeusVaultFace: import('./amadeus/ipc').VaultFace | null = null // 同上;unitWeb /vault/* 的本地库面
 // 登录成功后踢一次 Amadeus 云同步引擎(值由 registerAmadeusIpc 返回时赋上)。否则引擎状态卡在
 // auth-required:云端登录提示不消失 + 双向同步不启动(引擎凭据只有 restart 会重读,登录路径原本不触发)。
@@ -1116,7 +1118,7 @@ function unitLanUrl(): string | null {
  *  ~/.tangu/spaces/<slug>/space.json + 插件捆绑包内嵌 plugins/<id>/spaces/<slug>/space.json。
  *  设备页(B 端渲染)没有这份数据就装不出插件 Space → Ribbon 上一个插件图标都没有(2026-08-24 实测),
  *  而方案 §拍板口径是「A 看到 B 的完整 Forsion(含 Ribbon/Space)」。 */
-async function readSpacesList(): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> {
+async function readSpacesList(opts: { dev?: boolean } = {}): Promise<Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }>> {
   const out: Array<{ slug: string; json: string; plugin?: string; iconUrl?: string }> = []
   // 自绘图标(space.json 的 iconFile)在这里读成 data URL 随清单带回去:设备页同源拿到,渲染层不必再开一条 IPC。
   // ponytail: 每枚 ≤256KB 的 base64 直接进清单;插件多到拖慢 loadUserSpaces 再改走 amadeus-asset: 协议按需取。
@@ -1125,12 +1127,26 @@ async function readSpacesList(): Promise<Array<{ slug: string; json: string; plu
     const iconUrl = await readSpaceIconDataUrl(json, plugin ? [dir, plugin.dir] : [dir])
     out.push({ slug, json, ...(plugin ? { plugin: plugin.id } : {}), ...(iconUrl ? { iconUrl } : {}) })
   }
+  const bundled = async (id: string, pdir: string): Promise<void> => {
+    try {
+      const sroot = join(pdir, 'spaces')
+      for (const e of (await readdir(sroot, { withFileTypes: true })).filter((x) => x.isDirectory())) {
+        try { await entry(e.name, join(sroot, e.name), { id, dir: pdir }) } catch { /* 无 space.json 跳过 */ }
+      }
+    } catch { /* 无 spaces/ 子目录 */ }
+  }
   try {
     const base = join(tanguHomeDir(), 'spaces')
     for (const e of (await readdir(base, { withFileTypes: true })).filter((x) => x.isDirectory())) {
       try { await entry(e.name, join(base, e.name)) } catch { /* 无 manifest 跳过 */ }
     }
   } catch { /* 目录不存在 = 空 */ }
+  // 开发副本(插件沙箱 / 开发态加载)排在安装版前面、遮住同 id 的安装版:与 readExternalPlugins 同一口径。
+  // 以前这里只扫安装目录,沙箱里插件带的 Space 永远列不出来(11-03 反馈)。设备页(unitWeb)不带开发来源。
+  const shadowed = new Set<string>()
+  if (opts.dev && amadeusDevPluginRoots) {
+    for (const p of await amadeusDevPluginRoots().catch(() => [])) { shadowed.add(p.id); await bundled(p.id, p.dir) }
+  }
   try {
     const proot = join(tanguHomeDir(), 'plugins')
     const SAFE_PID = /^[a-z0-9][a-z0-9-]{0,63}$/ // 与 amadeus/ipc.ts pluginIdOf 同一门禁(归属 id 须两侧一致)
@@ -1142,12 +1158,8 @@ async function readSpacesList(): Promise<Array<{ slug: string; json: string; plu
         if (!SAFE_PID.test(cand)) continue // manifest id 与目录名皆非法 → 与拒载口径一致
         pid = cand
       } catch { continue } // 无 manifest.json = 非插件目录,跳过
-      try {
-        const sroot = join(proot, p.name, 'spaces')
-        for (const e of (await readdir(sroot, { withFileTypes: true })).filter((x) => x.isDirectory())) {
-          try { await entry(e.name, join(sroot, e.name), { id: pid, dir: join(proot, p.name) }) } catch { /* 无 space.json 跳过 */ }
-        }
-      } catch { /* 无 spaces/ 子目录 */ }
+      if (shadowed.has(pid)) continue
+      await bundled(pid, join(proot, p.name))
     }
   } catch { /* plugins 目录不存在 = 无捆绑包 */ }
   return out
@@ -2797,7 +2809,12 @@ app.whenReady().then(async () => {
   await seedDefaultThemes(themesDir()) // 首次运行种入 soft 示例主题(themes/ 已存在则跳过;内部吞错不阻塞启动)
   // 内置插件捆绑包(电脑操作 / Forsion Extend)播种进 <home>/plugins/:须在 ensureBackend 之前 await 完 —— 引擎只在启动时扫一次
   // bundle 根;随包版本更新才替换,不降级;逐包吞错不阻塞启动(见 builtinPlugins.ts)。单品变体不捆内置包 → 不播。
-  const bundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), agentBackend: PRODUCT.agentBackend, spaces: PRODUCT.spaces })
+  const allBundleSources = builtinBundleSources({ isPackaged: app.isPackaged, resourcesPath: process.resourcesPath, appPath: app.getAppPath(), agentBackend: PRODUCT.agentBackend, spaces: PRODUCT.spaces })
+  // 插件沙箱只装被测插件 requiresPlugins 点名的内置包:别的(Extend / 日历 / 电脑操作)会把自己的 Space、Ribbon 图标带进来,
+  // 沙箱里看到的就不是「只有这一个插件」(11-03 反馈)。旧版沙箱播种过的也撤掉 —— 删的是沙箱自己的 home。
+  const sandboxNeeds = SANDBOX ? await sandboxRequiredPlugins(SANDBOX.dir) : null
+  if (sandboxNeeds && /[\\/]sandbox[\\/][a-z0-9-]+[\\/]home$/.test(forsionHomeDir())) for (const s of allBundleSources) if (!sandboxNeeds.has(s.id)) await rm(join(forsionHomeDir(), 'plugins', s.id), { recursive: true, force: true }).catch(() => {})
+  const bundleSources = sandboxNeeds ? allBundleSources.filter((s) => sandboxNeeds.has(s.id)) : allBundleSources
   // 云端账号面(个人中心 / 会员 / 额度 / 反馈 / cloud:fetch)住在 Forsion Extend 的主进程半身里(cloudHost.ts):播种后、开窗前
   // 验签装载;缺席 / 验签失败就没有这一面,preload 按 `cloud:present` 删键,渲染层门控自动隐藏。
   // 记下 Extend 实际注册的通道:preload 只保留有人接的桥键(账号面 / Connect 各自独立,Extend 版本与宿主接缝不同步时不会留下悬空键)。
@@ -3837,12 +3854,9 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
 
-  // ── 跨生态 agent 资产发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu)──
-  // 导入的 MCP 一律 enabled:false(绝不自动运行外来命令),故**不**触发后端重启;
-  // 技能落盘 ~/.tangu/skills/ 后由后端按 mtime 重扫即时生效。
+  // ── 跨生态 MCP 发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu;记忆 / 偏好 / 技能走引擎 /agent/import)──
+  // 导入的 MCP 一律 enabled:false(绝不自动运行外来命令),故**不**触发后端重启。
   ipcMain.handle('discovery:scan', () => scanAll())
-  ipcMain.handle('discovery:importSkills', (_e, ids: string[]) =>
-    importSkills(Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : [], tanguDataDir()))
   // 两次导入并发会在同一个 legacy mcp.json 上互相覆盖 → 整段串行(不能用 configQueue:里面要 saveHomeSection,会自等死锁)
   const importMcpQueue = createSerialQueue()
   ipcMain.handle('discovery:importMcp', (_e, names: string[]) => importMcpQueue(async () => {
@@ -4150,6 +4164,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('updater:getBeta', () => betaChannelOn())
   ipcMain.handle('updater:setBeta', async (_e, on: boolean) => {
     await saveHomeSection('updater', (sec: any) => ({ ...sec, beta: !!on }))
+    channelChanged(!!on)
     return { ok: true }
   })
   // 下载来源:auto(按地区:大陆官网、其他地区 GitHub)/ website / github。同样落 updater 段、每次现读。
@@ -4354,7 +4369,7 @@ app.whenReady().then(async () => {
   // ── 用户自定义 Space:~/.tangu/spaces/<slug>/space.json(纯数据布局配方;market type='space' 装到同目录)──
   // 另汇入 Forsion 插件捆绑包内嵌的 Space(plugins/<id>/spaces/<slug>/space.json,带 plugin=manifest id):
   // 用户目录条目在前(同 spec id 先到先得,用户版本胜);渲染层按插件启停显隐、不提供单独删除。
-  ipcMain.handle('spaces:list', () => readSpacesList())
+  ipcMain.handle('spaces:list', () => readSpacesList({ dev: true }))
   ipcMain.handle('spaces:save', async (_e, slug: string, json: string) => {
     if (!isSafeSlug(slug)) throw new Error('invalid-space-id') // 原因码,渲染层 ipcErrorText 译
     JSON.parse(json) // 落盘前校验合法 JSON,防写入损坏配方
@@ -4804,8 +4819,9 @@ app.whenReady().then(async () => {
     },
   })
   // Amadeus Space:装载 vault IPC(暴露给 window.amadeus)+ 资产协议(指向当前 vault 根)。
-  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
+  const { getVaultRoot, resolveSharedAsset, restartSync, stopSync, readExternalPlugins, devPluginRoots, vaultFace } = registerAmadeusIpc(() => mainWindow, amadeusSyncFactory)
   amadeusReadPlugins = readExternalPlugins
+  amadeusDevPluginRoots = devPluginRoots
   amadeusVaultFace = vaultFace
   void refreshUnitHost() // 「允许其他设备连接本机」开着就恢复出站通道
   restartAmadeusSync = restartSync
@@ -4884,6 +4900,7 @@ if (pluginSandbox) {
     })
   })
   ipcMain.handle('pluginSandbox:state', (e) => (isTrustedSender(e) ? pluginSandbox.state() : { running: false }))
+  ipcMain.handle('pluginSandbox:lastShot', (e, sessionId: unknown) => (isTrustedSender(e) && typeof sessionId === 'string' ? pluginSandbox.lastShot(sessionId) : null))
   ipcMain.handle('pluginSandbox:show', (e) => (isTrustedSender(e) ? pluginSandbox.show() : false))
   ipcMain.handle('pluginSandbox:stop', (e) => (isTrustedSender(e) ? pluginSandbox.stop() : undefined))
   ipcMain.handle('pluginSandbox:reset', (e) => (isTrustedSender(e) ? pluginSandbox.reset() : { ok: false }))

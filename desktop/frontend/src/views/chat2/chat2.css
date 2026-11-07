@@ -1461,6 +1461,10 @@ button.t2-bg-url:hover { background: var(--overlay-light, rgba(127, 127, 127, 0.
 .t2-apv-update-row:not([data-status='approved']) svg { color: var(--danger); }
 .t2-apv-update-what { flex-shrink: 0; color: var(--text-muted); }
 .t2-apv-update-preview { min-width: 0; font-family: var(--font-mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 询问回灌那行装的是整句问题(可能几百字):和工具名不同,得让它收缩并单行省略,否则撑出对话栏(11-05)。全文在 title 里。 */
+.t2-apv-update-row > svg { flex: none; }
+.t2-apv-update-what.is-question { flex-shrink: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.t2-apv-update-what.is-question + .t2-apv-update-preview { flex: 0 1 auto; max-width: 40%; }
 /* 别处答的(执行的电脑本机 / 另一台设备 / 通道):结局行下一行说明「在哪批的」(M1B)。字号随 .t2-sys,只降一级颜色 */
 .t2-apv-update-by { max-width: 100%; color: var(--text-faint, var(--text-muted)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 

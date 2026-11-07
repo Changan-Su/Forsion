@@ -7,3 +7,17 @@
 .sbx-fact.ok > svg { color: var(--accent-ink, var(--accent)); }
 .sbx-fact.warn > svg { color: var(--warning); }
 .sbx-fact.bad > svg { color: var(--danger); }
+
+/* 摘要栏的沙箱卡(SandboxRailCard.tsx;外壳是 .t2-card):缩略图 = 最近一张截图,点它打开沙箱窗口 */
+.sbx-rail-head { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.sbx-rail-head .t2-card-hint { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sbx-rail-shot { display: block; width: 100%; padding: 0; margin: 2px 0 6px; border: 0; background: none; cursor: pointer; border-radius: var(--radius-sm, 6px); }
+.sbx-rail-shot:disabled { cursor: default; }
+.sbx-rail-shot img {
+  display: block; width: 100%; height: 132px; object-fit: cover; object-position: top left;
+  border-radius: var(--radius-sm, 6px); box-shadow: 0 0 0 1px var(--border-light, rgba(127, 127, 127, 0.18));
+}
+.sbx-rail-shot[data-off] img { opacity: 0.45; filter: grayscale(1); }
+.sbx-rail-shot:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.sbx-rail-fact { font-size: var(--ui-font-caption, 12px); gap: 9px; padding: 3px 0; }
+.sbx-rail-note { font-size: var(--ui-font-caption, 12px); color: var(--text-muted); padding: 4px 0 2px; overflow-wrap: anywhere; }

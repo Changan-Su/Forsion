@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { beforeEach, describe, expect, it } from 'vitest'
 import katex from 'katex'
-import { selectionMarkdown } from './selectionMarkdown'
+import { installCopyTex, selectionMarkdown } from './selectionMarkdown'
 
 let root: HTMLDivElement
 beforeEach(() => { document.body.innerHTML = ''; root = document.createElement('div'); document.body.append(root) })
@@ -64,5 +64,34 @@ $$`)
     expect(result).toContain(String.raw`$\vert s,m\rangle+\text{a\textbar b}$`)
     expect(result).toContain('` a \\| b `')
     expect(() => katex.renderToString(String.raw`\vert s,m\rangle+\text{a\textbar b}`)).not.toThrow()
+  })
+})
+
+describe('copy over rendered math', () => {
+  const copy = (): { event: Event; data: Record<string, string> } => {
+    const data: Record<string, string> = {}
+    const event = new Event('copy', { bubbles: true, cancelable: true }) as Event & { clipboardData: unknown }
+    Object.defineProperty(event, 'clipboardData', { value: { setData: (k: string, v: string) => { data[k] = v } } })
+    document.dispatchEvent(event)
+    return { event, data }
+  }
+  it('puts TeX source on the clipboard instead of the doubled MathML and layout text', () => {
+    const off = installCopyTex()
+    root.innerHTML = `<p>Area ${math(String.raw`\frac{a}{b}`)} here</p>`
+    select(root)
+    const { event, data } = copy()
+    off()
+    expect(event.defaultPrevented).toBe(true)
+    expect(data['text/plain']).toBe(String.raw`Area $\frac{a}{b}$ here`)
+  })
+  it('leaves prose-only selections and editable areas to the default copy', () => {
+    const off = installCopyTex()
+    root.innerHTML = '<p>plain words</p>'
+    select(root)
+    expect(copy().event.defaultPrevented).toBe(false)
+    root.innerHTML = `<div contenteditable="true">${math('x')}</div>`
+    select(root.firstChild!)
+    expect(copy().event.defaultPrevented).toBe(false)
+    off()
   })
 })
