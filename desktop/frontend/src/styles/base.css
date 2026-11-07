@@ -62,6 +62,17 @@
   --ui-control-height: 28px;
   --ui-control-pad-block: 4px;
   --radius-pill: 999px;
+  /* 层级表(2026-11-07,LCL 表面规范方案 B,docs/ToBeImproved/LCL表面规范方案_2026-11-07/ 第 5 节;DESIGN §3「浮层与层级」):
+     作用域是带 —— View 内 < Space 内 < 窗口内。Space 层在 Shell 封箱(.shell-host isolation)里,封箱外的一切天然在它之上;
+     带内「从谁里面开就盖在谁上」(挂进对方的容器),其余后开的在上 —— 不靠比数字。值照搬今天实际的次序,只是起了名字;
+     新代码只用 token,写死的数字由 check:zindex 棘轮挡住。 */
+  --z-view-float: 20;    /* 视图纸面里的浮层:悬浮目录、View 作用域浮层 */
+  --z-space-float: 100;  /* Shell 封箱里:Dockview 分隔条(99)之上、分隔条刻度(200)之下 */
+  --z-window-float: 90;  /* body 一层的浮层与吐司;提示框 95、菜单 100 在它之上 */
+  --z-menu: 100;         /* 菜单、弹出、划线条、右上通知 */
+  --z-hint: 140;         /* 圈注与上手提示(卡片 +1) */
+  --z-dialog: 200;       /* 弹窗与遮罩(popupQueue 那几张) */
+  --z-palette: 1000;     /* 命令面板 */
   /* 分段控件选中滑块(5.11 A,10-25 用户定):凸起 —— 浅色卡面色 + 软阴影,暗色比轨道亮一档(:root.dark 那块)。
    * 侧栏胶囊 .t2s-vaultseg、LCL 看法胶囊 .lcl-vmode、Agent 标签条 .agent-section-nav 共用。 */
   --seg-thumb: var(--bg-card);
@@ -171,7 +182,7 @@
 .ui-popover-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 100; /* Same layer as .ctx-menu, above Dockview's sash (99). */
+  z-index: var(--z-menu); /* Same layer as .ctx-menu, above Dockview's sash (99). */
   -webkit-app-region: no-drag;
 }
 .ui-popover {
@@ -974,7 +985,7 @@ a:hover { color: var(--accent-ink); }
 /* 上下文菜单(会话操作) */
 .ctx-menu {
   position: fixed;
-  z-index: 100;
+  z-index: var(--z-menu);
   width: max-content;
   min-width: var(--menu-action-min);
   max-width: min(var(--menu-action-max), calc(100vw - 16px));

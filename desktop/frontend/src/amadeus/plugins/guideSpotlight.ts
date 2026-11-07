@@ -32,9 +32,13 @@ const BAND = 44 // 目标又宽又高(正文区)时只圈顶上一条 —— 「
 interface Active { owner: string; finish: (r: SpotlightResult) => void }
 let active: Active | null = null
 
+/** 锚点在插件 View 里(`data-guide-owner` = 插件 id)。`host:` 开头的 owner 是宿主自己的界面(主页 = `host:home`),
+ *  不算插件的 —— 插件 id 里不会有冒号(manifest id 只许小写字母、数字、连字符)。宿主的圈注和宿主提示都只跳过插件 View。 */
+export const inPluginView = (el: Element): boolean => !!el.closest('[data-guide-owner]:not([data-guide-owner^="host:"])')
+
 const findAnchor = (name: string): HTMLElement | null => {
   for (const el of document.querySelectorAll<HTMLElement>(`[data-guide-anchor="${CSS.escape(name)}"]`)) {
-    if (el.closest('[data-guide-owner]')) continue // 插件 View 里同名的锚点不算宿主的(插件抢不走首方圈注)
+    if (inPluginView(el)) continue // 插件 View 里同名的锚点不算宿主的(插件抢不走首方圈注);主页这类 host: owner 里的照样算
     const r = el.getBoundingClientRect()
     if (r.width > 0 && r.height > 0) return el
   }
@@ -55,14 +59,16 @@ export function showSpotlight(owner: string, opts: SpotlightOptions): Promise<Sp
 /** 插件的上手提示(guideTips.ts 驱动,2026-11-02):目标元素由调用方找(只在那个插件自己的 View 里找),不查 GUIDE_ANCHORS。
  *  `ring` 同上面的圈注;`line` 不画圈,只在目标上沿贴一行(同宽,× / Esc = 知道了)。`dock`(手机)时圈注的小卡贴到底部
  *  输入区 / Dock 上方成一条,不浮在小目标旁边。和 showSpotlight 共用同一个槽:同一时刻全应用只有一处。 */
-export function showTip(owner: string, opts: { find: () => HTMLElement | null; style: 'ring' | 'line'; title?: string; body: string; dock: boolean }): Promise<SpotlightResult> {
+export function showTip(owner: string, opts: { find: () => HTMLElement | null; style: 'ring' | 'line'; title?: string; body: string; dock: boolean; extra?: TipExtra }): Promise<SpotlightResult> {
   return present({ owner, ...opts })
 }
 
 /** 当前有没有圈注 / 提示在出(上手提示的调度看它:有就不出新的)。 */
 export const spotlightActive = (): boolean => active != null
 
-interface Present { owner: string; find: () => HTMLElement | null; side?: 'left' | 'right'; style: 'ring' | 'line'; title?: string; body?: string; step?: string; dock: boolean }
+/** 宿主提示的额外动作(如通话提示的「换个音色」):占「不再提示」的位置;点了先收提示(记看过)再执行。 */
+export interface TipExtra { label: string; run: () => void }
+interface Present { owner: string; find: () => HTMLElement | null; side?: 'left' | 'right'; style: 'ring' | 'line'; title?: string; body?: string; step?: string; dock: boolean; extra?: TipExtra }
 
 function present(o: Present): Promise<SpotlightResult> {
   closeSpotlight(undefined, 'replaced')
@@ -95,7 +101,10 @@ function present(o: Present): Promise<SpotlightResult> {
       } else {
         add('guide-spot-step', o.step); add('guide-spot-title', o.title); add('guide-spot-body', o.body)
         const act = document.createElement('div'); act.className = 'guide-spot-act'
-        const mute = document.createElement('button'); mute.type = 'button'; mute.className = 'guide-spot-mute'; mute.textContent = translate('guideSpot.mute'); mute.onclick = () => finish('mute')
+        const mute = document.createElement('button'); mute.type = 'button'; mute.className = 'guide-spot-mute'
+        const extra = o.extra
+        if (extra) { mute.textContent = extra.label; mute.onclick = () => { finish('ok'); try { extra.run() } catch (e) { console.error('[guide] tip action failed', e) } } }
+        else { mute.textContent = translate('guideSpot.mute'); mute.onclick = () => finish('mute') }
         const ok = document.createElement('button'); ok.type = 'button'; ok.className = 'btn sm'; ok.textContent = translate('guideSpot.ok'); ok.onclick = () => finish('ok')
         act.append(mute, ok); card.appendChild(act)
       }
