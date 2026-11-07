@@ -147,11 +147,13 @@ function optBool(v: unknown): boolean | undefined {
   if (v === false || v === 'false') return false;
   return undefined;
 }
-/** 没有勾选列的表不是待办来源:无日期的行在桌面哪儿都不显示(日历没日期,待办列表不收这张表),写进去 = 凭空消失。 */
+/** 没有勾选列的表不是待办来源:无日期的行在桌面哪儿都不显示(日历没日期,待办列表不收这张表),写进去 = 凭空消失。
+ *  ⚠️别建议「那就给个日期」:带日期的行只上日历,照样进不了待办列表(Codex 评审);默认日历自己也可能没有勾选列(网页上收编来的旧日历)。 */
 function noDoneCol(cal: Cal, what: string): Error {
   return new Error(
-    `calendar "${cal.db.name}" has no checkbox column, so ${what}: its rows are calendar events only, not to-dos. ` +
-      'Use the default calendar (human://CALENDAR.db) for to-dos, or give the event a start date.',
+    `calendar "${cal.db.name}" has no checkbox column, so ${what}: it holds calendar events, not to-dos. ` +
+      'Put to-dos in a calendar whose amadeus_list_calendars entry has a todoColumn (normally the default one, human://CALENDAR.db). ' +
+      'If none has one, tell the user: a dated row in a calendar without a checkbox column shows on the calendar but never in the to-do list.',
   );
 }
 
