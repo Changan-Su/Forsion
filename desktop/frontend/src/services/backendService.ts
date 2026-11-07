@@ -18,6 +18,7 @@ import { LOCAL_ONLY_CODE, localOnlyMessage, remoteRefusalMessage } from './local
 import { saveResponseAs } from './nativeDownload'
 import type { MuseCardInfo, RelinkInfo, RelinkResult } from '../../../../tangu-agent/src/contracts/clientTypes'
 import { countTelemetry } from '../telemetrySend'
+import { REALTIME_BEARER_PROTOCOL } from '../../../shared/voiceInputStream' // 引擎握手认的子协议名,和听写共用一份
 
 registerMessages({
   'backendsvc.downloadFailed': { zh: '下载失败 ({status})', en: 'Download failed ({status})' },
@@ -129,8 +130,6 @@ export const deleteCloudVoice = (t: EngineTarget, id: string) =>
   request<{ ok: boolean }>(t, '/agent/tts/cloud-voices/delete', { method: 'POST', body: JSON.stringify({ id }) })
 export const cloudVoiceSample = (t: EngineTarget, id: string) =>
   request<{ data: string; mime: string }>(t, '/agent/tts/cloud-voices/sample', { method: 'POST', body: JSON.stringify({ id }) })
-/** 引擎握手时认的子协议名(tangu-agent services/realtimeVoice.ts 的 REALTIME_BEARER_PROTOCOL)。 */
-export const REALTIME_BEARER_PROTOCOL = 'forsion.bearer'
 /**
  * 实时语音通话的 WebSocket(引擎 ws /agent/realtime)。浏览器的 WebSocket 设不了 Authorization 头,令牌有两种带法:
  *   - 本机引擎(桌面):放 query —— 只在回环上走;
