@@ -32,6 +32,7 @@ import { engineVersion } from '../../core/version.js';
 import { registerAgentSyncIdentity } from '../../services/cloudSyncAccount.js';
 import { assertToolDefinitions } from '../../tools/toolDefinitionValidation.js';
 import { stringifyWellFormed } from '../../llm/wellFormedJson.js';
+import { hostOriginHeaders } from '../../core/hostOrigin.js';
 
 export interface HttpBrainConfig {
   cloudUrl: string; // 形如 https://host(无尾斜杠)
@@ -76,9 +77,12 @@ const combinedUnsupported = new Set<string>();
 
 export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
   const base = cfg.cloudUrl.trim().replace(/\/+$/, '');
+  // 宿主客户端与系统:进程级常量,装配时算一次(见 core/hostOrigin.ts)
+  const origin = hostOriginHeaders();
   const authHeaders = (): Record<string, string> => ({
     Authorization: `Bearer ${typeof cfg.token === 'function' ? cfg.token() : cfg.token}`,
     'Content-Type': 'application/json',
+    ...origin,
   });
 
   /** 云端音色接口:错误保留状态码(409 = 到上限),引擎路由原样转给界面。 */
@@ -515,7 +519,7 @@ export function createHttpBrain(cfg: HttpBrainConfig): CloudBrainServices {
     realtime: {
       endpoint: (model: string) => ({
         url: `${base.replace(/^http/, 'ws')}/api/brain/realtime?model=${encodeURIComponent(model)}&projectSource=tangu`,
-        headers: { Authorization: authHeaders().Authorization },
+        headers: { Authorization: authHeaders().Authorization, ...origin },
       }),
     },
     images: {
