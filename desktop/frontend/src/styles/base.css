@@ -381,6 +381,23 @@ a { color: var(--accent-ink); text-decoration: none; }
 .wikilink-nb { white-space: nowrap; }
 .wikilink-ic { display: inline-block; width: 0.95em; height: 0.95em; vertical-align: -0.15em; margin-right: 0.25em; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 a:hover { color: var(--accent-ink); }
+/* 外链 ↗(2026-11-04 用户定,借 Obsidian):网页链接和双链同为强调色后,靠末尾这枚小箭头认出「会离开应用」。
+   聊天 .citelink、.md-body(更新日志 / 技能说明等)与 Amadeus 正文链接共用这一条;只认 http(s),相对路径 / 笔记链接不挂;包图片的链接不挂。
+   用 mask + currentColor 跟随链接色;inline-block 让它不吃链接的下划线。 */
+.t2-content a.citelink[href^="http"]::after,
+.md-body a[href^="http"]:not(:has(img))::after,
+.am-app .milkdown .ProseMirror a[href^="http"]:not(:has(img))::after {
+  content: '';
+  display: inline-block;
+  width: 0.62em;
+  height: 0.62em;
+  margin-left: 0.12em;
+  vertical-align: 0.12em;
+  background: currentColor;
+  opacity: 0.75;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17 17 7M8 7h9v9'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 17 17 7M8 7h9v9'/%3E%3C/svg%3E") center / contain no-repeat;
+}
 
 /* ⚠️ 全局**不要**写 `::-webkit-scrollbar` 自定义样式(2026-08-13 起)。
    Blink 里只要匹配到任意一条滚动条伪元素规则,就从系统滚动条切成 custom scrollbar,
@@ -2586,9 +2603,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .quote-preview-body--mono { font-family: var(--font-mono); font-size: var(--ui-font-caption); }
 
 /* agent 在对话区展示的文件(display_file / 生图 / 表情包):图片缩略图(点击放大)+ 文件卡片 */
-.inline-file-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 2px; }
+.inline-file-grid { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px; margin-top: 2px; }
 .inline-file-img {
-  max-width: 280px;
+  max-width: min(280px, 100%);
   max-height: 280px;
   object-fit: contain;
   border-radius: var(--radius-md, 10px);
@@ -2598,6 +2615,9 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
   transition: filter 0.15s ease, transform 0.15s ease;
 }
 .inline-file-img:hover { filter: brightness(1.04); }
+.inline-file-media { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; max-width: 100%; }
+.inline-file-video, .inline-file-audio { width: 320px; max-width: 100%; }
+.inline-file-video { max-height: 280px; object-fit: contain; border-radius: var(--radius-md); background: var(--overlay-light); }
 .inline-file-card {
   display: inline-flex;
   align-items: center;
@@ -4029,7 +4049,16 @@ html.sc-on .milkdown .ProseMirror textarea { caret-color: auto; }
 .md-body li { margin: 0 0 3px; }
 .md-body li:last-child { margin-bottom: 0; }
 .md-body li > ul, .md-body li > ol { margin-top: 3px; margin-bottom: 0; }
-.md-body a { color: var(--accent-ink); }
+.md-body a {
+  /* 2026-11-04 用户定:更新日志 / 技能说明 / 商店说明里的链接和聊天、Amadeus 同一画法(强调色 + 淡下划线 + ↗),双链不画下划线 */
+  color: var(--signal);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--signal) 45%, transparent);
+  text-underline-offset: 2px;
+}
+.md-body a:hover { color: var(--signal); text-decoration-color: currentColor; }
+.md-body a.wikilink { text-decoration: none; cursor: pointer; }
+.md-body a.wikilink:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .md-body code {
   font-family: var(--font-mono);
   font-size: 0.88em;

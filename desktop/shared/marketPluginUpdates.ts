@@ -1,16 +1,29 @@
 export type MarketPluginType = 'plugin' | 'amadeus-plugin'
+/** A package copy kept under ~/.forsion/.plugin-versions/<type>/<slug>/<version>/, most recently kept first. */
+export interface KeptPluginVersion { version: string; compatible: boolean; keptAt?: number }
 export interface MarketPluginUpdate {
   id: string
   name: string
   type: MarketPluginType
   slug: string
+  /** Effective: not pinned and (the plugin's own choice, else the global switch). */
   autoUpdate: boolean
+  /** The user's explicit per-plugin choice; undefined follows the global switch. */
+  autoUpdateChoice?: boolean
+  /** Set by a rollback or by installing an older store version; auto-update stays off until cleared. */
+  pinnedVersion?: string
   phase: 'idle' | 'checking' | 'downloading' | 'staged' | 'current' | 'error'
   installedVersion?: string
   pendingVersion?: string
+  /** The staged package is an older version (a rollback that could not swap while files were in use). */
+  pendingRollback?: boolean
+  keptVersions?: KeptPluginVersion[]
   error?: string
 }
-export interface MarketPluginUpdates { checking: boolean; items: MarketPluginUpdate[] }
+/** A plugin folder that is not a marketplace install (copied in by hand). Old versions are kept, never updated. */
+export interface LocalPluginVersions { type: MarketPluginType; slug: string; id: string; version: string; keptVersions: KeptPluginVersion[]; pendingVersion?: string }
+export interface MarketPluginUpdates { checking: boolean; autoUpdateAll: boolean; items: MarketPluginUpdate[]; local: LocalPluginVersions[] }
+export interface PluginRollbackResult { ok: true; type: MarketPluginType; slug: string; version: string; deferred?: boolean }
 
 /** Unknown/malformed versions never authorize an unattended replacement. */
 export function compareMarketVersions(a: string | null | undefined, b: string | null | undefined): number | null {

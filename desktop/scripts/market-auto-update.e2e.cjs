@@ -6,7 +6,7 @@ const { execFileSync } = require('child_process'), { createHash } = require('cry
 const electron = require('./lib/launch-electron.cjs')
 const ROOT = path.join(__dirname, '..'), OUT = path.join(ROOT, 'outputs', 'market-auto-update')
 const lang = process.argv.includes('--en') ? 'en' : 'zh'
-const labels = lang === 'zh' ? { installed: '已安装', option: '自动更新', restart: '重启更新', later: '稍后重启', dark: '切换明暗模式' } : { installed: 'Installed', option: 'Auto-update', restart: 'Restart to update', later: 'Restart later', dark: 'Toggle light/dark mode' }
+const labels = lang === 'zh' ? { installed: '已安装', updates: '可更新', versions: '版本', resume: '恢复自动更新', option: '自动更新', restart: '重启更新', later: '稍后重启', dark: '切换明暗模式' } : { installed: 'Installed', updates: 'Updates', versions: 'Versions', resume: 'Resume auto-update', option: 'Auto-update', restart: 'Restart to update', later: 'Restart later', dark: 'Toggle light/dark mode' }
 async function until(check, description) {
   const deadline = Date.now() + 45000
   while (!await check()) { assert.ok(Date.now() < deadline, `Timed out: ${description}`); await new Promise((r) => setTimeout(r, 100)) }
@@ -44,6 +44,8 @@ async function main() {
     const u = new URL(req.url, 'http://fixture')
     const send = (status, body, type = 'application/json') => { res.writeHead(status, { 'Content-Type': type }); res.end(type === 'application/json' ? JSON.stringify(body) : body) }
     if (u.pathname === '/api/market/items') return send(200, { items: items.filter((x) => !u.searchParams.get('type') || x.type === u.searchParams.get('type')) })
+    const ver = /^\/api\/market\/items\/([^/]+)\/versions$/.exec(u.pathname)
+    if (ver) return send(200, { versions: ['1.1.0', '1.0.0'].filter((v) => v <= (items.find((x) => x.id === ver[1])?.latestVersion || '')).map((version, i) => ({ version, createdAt: new Date(Date.UTC(2026, 10, 6 - i)).toISOString() })) })
     const match = /^\/api\/market\/items\/([^/]+)(\/install)?$/.exec(u.pathname)
     if (match) {
       const item = items.find((x) => x.id === match[1]); if (!item) return send(404, {})
@@ -72,21 +74,26 @@ async function main() {
   async function openMarket() {
     await win.evaluate(() => window.tangu.openFloatingPanel({ id: 'market', title: 'Market', builtin: 'market', params: { n: Date.now() } }))
     await until(async () => { panel = app.windows().find((w) => w.url().includes('window=floating') && !w.isClosed()); return !!panel && await panel.locator('.mk-body').count() }, 'market panel')
-    panel.setDefaultTimeout(15000); await panel.getByRole('button', { name: labels.installed, exact: true }).click(); await panel.locator('[data-market-auto-update="ui-zip"] input').waitFor()
+    panel.setDefaultTimeout(15000); await panel.getByRole('button', { name: labels.installed, exact: true }).click(); await panel.locator('.mk-card-title', { hasText: 'ZIP Plugin' }).waitFor()
     await panel.evaluate(() => document.fonts.ready)
   }
   try {
     await launch(); await openMarket()
-    assert.equal(await panel.locator('[data-market-auto-update] input:checked').count(), 0)
+    const status = () => win.evaluate(() => window.tangu.marketUpdateStatus())
+    const sw = (id) => panel.locator(`[data-market-auto-update="${id}"]`)
+    const openDetail = async (name) => { await panel.locator('.mk-card-title', { hasText: name }).click(); await panel.locator('.mk-detail-sidebar').waitFor() }
+    // 11-06: auto-update is on by default. Cards carry no switch; store installs from before the state file are found via the catalog.
+    assert.equal(await panel.locator('.mk-card [data-market-auto-update]').count(), 0)
     await win.evaluate(() => window.tangu.marketCheckUpdates()); assert.deepEqual(downloads, {})
-    for (const item of items) await panel.locator(`[data-market-auto-update="${item.id}"] input`).check()
-    await until(async () => (await win.evaluate(() => window.tangu.marketUpdateStatus())).items.filter((x) => x.autoUpdate).length === 3, 'preferences persist')
-    await panel.locator('[data-market-auto-update="ui-zip"] input').uncheck()
-    await until(async () => !(await win.evaluate(() => window.tangu.marketUpdateStatus())).items.find((x) => x.id === 'ui-zip').autoUpdate, 'unchecked preference')
-    await panel.locator('[data-market-auto-update="ui-zip"] input').check()
-    await until(async () => !(await win.evaluate(() => window.tangu.marketUpdateStatus())).checking, 'initial check completes')
-    await panel.locator('.mk-card-title', { hasText: 'ZIP Plugin' }).click(); await panel.locator('.mk-detail-sidebar').waitFor()
-    assert.equal(await panel.locator('[data-market-auto-update="ui-zip"] input:checked').count(), 1)
+    await until(async () => (await status()).items.filter((x) => x.autoUpdate && x.autoUpdateChoice === undefined).length === 3, 'default-on discovery')
+    await openDetail('ZIP Plugin'); assert.equal(await sw('ui-zip').getAttribute('aria-checked'), 'true')
+    await sw('ui-zip').click()
+    await until(async () => (await status()).items.find((x) => x.id === 'ui-zip').autoUpdateChoice === false, 'explicit off')
+    await sw('ui-zip').click()
+    await until(async () => (await status()).items.find((x) => x.id === 'ui-zip').autoUpdate, 'back on')
+    await until(async () => !(await status()).checking, 'initial check completes')
+    await panel.locator('.mk-detail-back').click()
+    await panel.getByRole('button', { name: labels.updates, exact: true }).click(); await panel.locator('[data-market-auto-update-all] [role="switch"][aria-checked="true"]').waitFor()
     await panel.close(); panel = null
     for (const item of items) { item.latestVersion = '1.1.0'; archives[item.id] = await archive(home, item, '1.1.0') }
     await win.evaluate(() => window.tangu.marketCheckUpdates())
@@ -101,10 +108,11 @@ async function main() {
     await win.locator('.ntf').filter({ hasText: 'ZIP Plugin 1.1.0' }).waitFor()
     await win.evaluate(() => window.tangu.marketCheckUpdates()); assert.equal(Object.values(downloads).reduce((a,b) => a+b, 0), 3)
     assert.equal(await win.locator('.ntf').filter({ hasText: 'ZIP Plugin 1.1.0' }).count(), 1)
-    await openMarket(); assert.equal(await panel.locator('[data-market-auto-update] input:checked').count(), 3)
+    await openMarket(); assert.equal(await panel.locator('.mk-card [data-market-auto-update]').count(), 0)
     await panel.waitForTimeout(400); await panel.screenshot({ path: path.join(OUT, `${lang}-installed-light.png`), animations: 'disabled' })
     await panel.locator('.mk-card-title', { hasText: 'ZIP Plugin' }).click(); await panel.locator('.mk-detail-sidebar').waitFor()
     await panel.screenshot({ path: path.join(OUT, `${lang}-detail-light.png`), animations: 'disabled' })
+    await panel.locator('.mk-detail-sidebar').screenshot({ path: path.join(OUT, `${lang}-sidebar-staged-light.png`), animations: 'disabled' })
     await panel.locator('.mk-detail-back').click()
     await win.getByRole('button', { name: labels.dark, exact: true }).click()
     await panel.waitForFunction(() => document.documentElement.dataset.mode === 'dark')
@@ -143,11 +151,31 @@ async function main() {
     assert.equal((await route.json()).version, '1.1.0')
     assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'plugins-data/ui-zip.json'))).preference, 'kept')
     assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'config.json'))).plugins.global['engine-github'].custom, 'kept')
-    await openMarket(); assert.equal(await panel.locator('[data-market-auto-update] input:checked').count(), 3)
-    await panel.locator('[data-market-auto-update="ui-zip"] input').uncheck()
+    // The replaced 1.0.0 packages are kept on this device; roll ZIP back from the detail page (local swap, no download).
+    for (const item of items) assert.ok(fs.existsSync(path.join(home, '.plugin-versions', item.type, item.installSlug, '1.0.0')), `kept ${item.id}`)
+    await openMarket(); await openDetail('ZIP Plugin')
+    await panel.locator('[data-plugin-rollback="1.0.0"]').click()
+    await until(async () => (await status()).items.find((x) => x.id === 'ui-zip').pinnedVersion === '1.0.0', 'pinned after rollback')
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'plugins/ui-zip/manifest.json'))).version, '1.0.0')
+    await panel.locator('[data-plugin-pinned="1.0.0"]').waitFor(); await panel.locator('[data-kept-version="1.1.0"]').waitFor()
+    assert.equal(await sw('ui-zip').getAttribute('aria-checked'), 'false')
+    await panel.waitForTimeout(300); await panel.screenshot({ path: path.join(OUT, `${lang}-detail-pinned-dark.png`), animations: 'disabled' })
+    await panel.locator('.mk-detail-sidebar').screenshot({ path: path.join(OUT, `${lang}-sidebar-pinned-dark.png`), animations: 'disabled' })
+    await panel.getByRole('button', { name: labels.versions, exact: true }).click(); await panel.locator('[data-market-version="1.0.0"] .pvb-tag').waitFor()
+    assert.equal(await panel.locator('[data-market-version="1.0.0"] button').isDisabled(), true)
+    await panel.waitForTimeout(300); await panel.screenshot({ path: path.join(OUT, `${lang}-versions-pinned-dark.png`), animations: 'disabled' })
+    const before = downloads['ui-zip']
+    await win.evaluate(() => window.tangu.marketCheckUpdates()); assert.equal(downloads['ui-zip'], before, 'a pinned plugin is not updated')
+    await panel.locator('.mk-detail-back').click(); await panel.locator('[data-market-pinned="ui-zip"]').waitFor()
+    await panel.waitForTimeout(300); await panel.screenshot({ path: path.join(OUT, `${lang}-installed-pinned-dark.png`), animations: 'disabled' })
+    await openDetail('ZIP Plugin'); await panel.getByRole('button', { name: labels.resume, exact: true }).click()
+    await until(async () => { const x = (await status()).items.find((x) => x.id === 'ui-zip'); return !x.pinnedVersion && x.pendingVersion === '1.1.0' }, 'resume re-stages the latest version')
+    await sw('ui-zip').click()
+    await until(async () => (await status()).items.find((x) => x.id === 'ui-zip').autoUpdateChoice === false, 'switched off')
     await win.evaluate(() => window.tangu.marketUninstall('amadeus-plugin', 'ui-npm'))
-    assert.equal((await win.evaluate(() => window.tangu.marketUpdateStatus())).items.some((x) => x.id === 'ui-npm'), false)
-    console.log(`PASS ${lang}: per-plugin opt-in/card/detail, real zip/GitHub/npm download + integrity pipeline, closed-market staging, notification dedupe, task cancellation/force, restart activation, real engine route, persisted choices and preserved data; ${OUT}`)
+    assert.equal((await status()).items.some((x) => x.id === 'ui-npm'), false)
+    assert.equal(fs.existsSync(path.join(home, '.plugin-versions', 'amadeus-plugin', 'ui-npm')), false)
+    console.log(`PASS ${lang}: default-on discovery, per-plugin choice, global switch, version store + rollback + pin + resume, real zip/GitHub/npm download + integrity pipeline, closed-market staging, notification dedupe, task cancellation/force, restart activation, real engine route, persisted choices and preserved data; ${OUT}`)
   } catch (error) {
     console.log('Update state:', await win?.evaluate(() => window.tangu.marketUpdateStatus()).catch(() => null))
     if (panel) await panel.screenshot({ path: path.join(OUT, `${lang}-failure.png`) }).catch(() => {})

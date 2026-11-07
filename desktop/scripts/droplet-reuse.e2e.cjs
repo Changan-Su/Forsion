@@ -5,6 +5,9 @@
  *   · 预览已开着时换图标:卡不重挂、不重播液滴,之后收起缩回的是新图标;
  *   · 反复开合不空屏(内容不透明度 1);倒放到一半又悬停 / 又点源按钮 = 重新流出来、停在打开(同悬浮目录)。
  *  --neg 负对照:倾倒期让面板自己上底色,上面那条必须报红(退出码非 0 = 负对照成立)。
+ *  动效第三轮(11-06)加:开到 60 / 150ms 就收,内容只淡不先蹦出来(三处 + Ribbon「+N」);「+N」倒放到一半又点 = 重新流出来。
+ *  账号卡还没流完就变高又马上收:按新矩形重建要从同一个进度接着(不先跳成长满、内容不蹦到 1)。
+ *  这三条的负对照 = 拿没修的构建跑(倒放从 1 淡出、「+N」吞掉那一下点击、重建用 settled),必须报红。
  *  用法:npm run build && node scripts/droplet-reuse.e2e.cjs [--neg]   截图 → outputs/droplet-reuse/ */
 const fs = require('fs'), os = require('os'), path = require('path')
 const electron = require('./lib/launch-electron.cjs')
@@ -37,6 +40,15 @@ const sample = (page, sel, { ms = 650, act = null, key = null } = {}) => page.ev
       bg: cs?.backgroundColor, beforeShown: !!before && before.content !== 'none' && +before.opacity > 0 && !/rgba\(0, 0, 0, 0\)|transparent/.test(before.backgroundColor),
       layer: !!layer && getComputedStyle(layer).display !== 'none', clip: cs?.clipPath, vis: cs?.visibility,
       kids: p ? [...p.children].map((k) => +getComputedStyle(k).opacity) : [], mark: p?.dataset.probe ?? null, hole: !!layer && 'hole' in layer.dataset,
+      bc: cs?.borderTopColor,
+      // 面板此刻露出的面积(%):按 clip-path 的 inset 算(Chrome 按 margin 简写序列化,1–4 个值都要认);没裁 = 100,藏起 / 不在 = 0
+      area: (() => {
+        if (!p || cs.visibility === 'hidden') return 0
+        const iv = /inset\(([^)]*)\)/.exec(cs.clipPath)?.[1].split(' round ')[0].trim().split(/\s+/).map(parseFloat)
+        if (!iv) return 100
+        const [t, r = t, b = t, l = r] = iv, W = p.offsetWidth, H = p.offsetHeight
+        return Math.round(100 * Math.max(0, W - r - l) * Math.max(0, H - t - b) / (W * H))
+      })(),
       // 液体本体(第二个 <i>,按面板矩形摆)与面板此刻矩形的最大偏差:液滴量到的若是面板定位前的矩形,这里会差出一截
       geo: (() => { const b = layer?.querySelectorAll('i')[1]; if (!b || !p) return null; const x = b.getBoundingClientRect(), y = p.getBoundingClientRect(); return Math.round(Math.max(Math.abs(x.left - y.left), Math.abs(x.top - y.top), Math.abs(x.width - y.width), Math.abs(x.height - y.height))) })(),
       drop: (() => { const i = layer?.querySelector('i'); if (!i) return null; const r = i.getBoundingClientRect(); return { cx: r.x + r.width / 2, cy: r.y + r.height / 2 } })() })
@@ -53,6 +65,9 @@ function verifyPour(frames, name) {
   check(`${name}: 液体长成的就是面板最终的位置(偏差 ≤ 2px)`, mid.every((f) => f.geo !== null && f.geo <= 2), JSON.stringify(mid.map((f) => f.geo)))
   const end = frames.at(-1)
   check(`${name}: 0.9D 后真面板接手`, end.exists && !end.pouring && !end.layer && end.clip === 'none' && end.kids.every((o) => o === 1), JSON.stringify(end))
+  // 接手那一帧描边不整条一帧出现:从透明淡进来(11-06 动效第三轮,用户选的观感)
+  const li = frames.findIndex((f) => f.exists && !f.pouring && f.t > 50)
+  if (end.bc && !/rgba\(0, 0, 0, 0\)|transparent/.test(end.bc)) check(`${name}: 接手后描边从透明淡进来`, li > 0 && frames[li].bc !== end.bc, JSON.stringify({ land: frames[li]?.bc, end: end.bc }))
 }
 function verifyRetract(frames, name) {
   check(`${name}: 收起倒放(液体重新出现)`, frames.some((f) => f.exists && f.layer && f.pouring), JSON.stringify(frames.slice(0, 2)))
@@ -79,6 +94,9 @@ async function freezeShot(page, file, clip) {
 function verifyRepour(frames, name) {
   const end = frames.at(-1)
   check(`${name}: 倒放中途再触发 = 重新流出、停在打开`, frames.every((f) => f.exists) && !end.pouring && !end.layer && end.vis !== 'hidden' && end.kids.every((o) => o === 1), JSON.stringify(frames.find((f) => !f.exists) ?? end))
+  // 从这一帧掉头往前放,不撤掉从一滴重来(11-06 动效第三轮,用户选的观感):再触发后面板露出的面积不塌回一滴
+  const a = frames.filter((f) => f.t < 200).map((f) => f.area)
+  check(`${name}: 倒放中途再触发 = 从这一帧掉头(不塌回一滴)`, a.length > 3 && Math.min(...a) >= 40, JSON.stringify(a.slice(0, 8)))
 }
 /** 重新流出之后源还压在液体上:旧那滴倒放的收尾晚一拍才到,不许把新那滴给源抬的 z-index 撤掉(Codex 评审 P2)。 */
 const srcStillRaised = async (page, src, name) => {
@@ -86,6 +104,58 @@ const srcStillRaised = async (page, src, name) => {
   check(`${name}: 重新流出后源的层级没被旧倒放撤掉`, !!z, `zIndex=${JSON.stringify(z)}`)
 }
 const midRetract = (page, sel) => page.waitForFunction((sel) => document.querySelector(sel)?.classList.contains('lcl-droplet-pouring'), sel, { timeout: 2000, polling: 'raf' })
+/** 开到 t 毫秒就收(动效第三轮,11-06):收的那一刻起内容透明度只降不升。原来倒放一律从 1 淡出,
+ *  淡入还没开始(0.22D 之前)就收 = 内容在缩回去的液体里先蹦到 0.9 再淡掉(探针 motion-r3.probe.cjs 量到)。
+ *  open:页内点哪个(null = 页外已经在开,等面板挂上);close:'key:Escape' 或要点的选择器。 */
+const earlyRetract = (page, sel, { open = null, close, t }) => page.evaluate(async ({ sel, open, close, t }) => {
+  const raf = () => new Promise(requestAnimationFrame)
+  // 收完到卸载之间面板 visibility: hidden(那一帧内容透明度已回 1),算 0
+  const kids = () => { const p = document.querySelector(sel); if (!p) return null; const cs = getComputedStyle(p); return cs.visibility === 'hidden' ? 0 : +cs.opacity * Math.min(1, ...[...p.children].map((k) => +getComputedStyle(k).opacity)) }
+  if (open) document.querySelector(open)?.click()
+  const w0 = performance.now()
+  while (!document.querySelector(sel) && performance.now() - w0 < 1500) await raf()
+  const t0 = performance.now()
+  while (performance.now() - t0 < t) await raf()
+  const before = kids()
+  if (close.startsWith('key:')) window.dispatchEvent(new KeyboardEvent('keydown', { key: close.slice(4), bubbles: true }))
+  else document.querySelector(close)?.click()
+  const seq = [before]
+  const t1 = performance.now()
+  while (performance.now() - t1 < 500) { await raf(); const k = kids(); if (k === null) break; seq.push(k) }
+  let rise = 0
+  for (let i = 1; i < seq.length; i++) rise = Math.max(rise, seq[i] - seq[i - 1])
+  return { rise: Math.round(rise * 100) / 100, seq: seq.slice(0, 6).map((x) => Math.round(x * 100) / 100), gone: !document.querySelector(sel) }
+}, { sel, open, close, t })
+/** 还没流完就变了尺寸、又马上收(账号卡刚开、账号列表就长出来,紧接着 Esc):retract 按新矩形重建那一份要从同一个进度接着,
+ *  不能先跳成长满(液体一下子变大)、内容推到 1 再淡(第三轮 Codex 评审 P2)。记收的那一刻前后的内容透明度与液体裁切面积。 */
+const growThenClose = (page, sel, { open, close, growAt = 60, closeAt = 110 }) => page.evaluate(async ({ sel, open, close, growAt, closeAt }) => {
+  const raf = () => new Promise(requestAnimationFrame)
+  const read = () => {
+    const p = document.querySelector(sel); if (!p) return null
+    const cs = getComputedStyle(p)
+    // inset() 按 margin 简写序列化:左右相等时只写三个值,所以按 1–4 个值展开,别只认四个值的写法
+    const iv = /inset\(([^)]*)\)/.exec(cs.clipPath)?.[1].split(' round ')[0].trim().split(/\s+/).map(parseFloat)
+    const m = iv && [null, iv[0], iv[1] ?? iv[0], iv[2] ?? iv[0], iv[3] ?? iv[1] ?? iv[0]], W = p.offsetWidth, H = p.offsetHeight
+    return { kids: cs.visibility === 'hidden' ? 0 : Math.min(1, ...[...p.children].map((k) => +getComputedStyle(k).opacity)), area: m ? Math.round(100 * Math.max(0, W - +m[2] - +m[4]) * Math.max(0, H - +m[1] - +m[3]) / (W * H)) : (cs.visibility === 'hidden' ? 0 : 100) }
+  }
+  document.querySelector(open)?.click()
+  const w0 = performance.now(); while (!document.querySelector(sel) && performance.now() - w0 < 1500) await raf()
+  const t0 = performance.now(); let grown = false
+  while (performance.now() - t0 < closeAt) { await raf(); if (!grown && performance.now() - t0 >= growAt) { const x = document.createElement('div'); x.style.height = '60px'; document.querySelector(sel).appendChild(x); grown = true } }
+  const before = read()
+  if (close.startsWith('key:')) window.dispatchEvent(new KeyboardEvent('keydown', { key: close.slice(4), bubbles: true })); else document.querySelector(close)?.click()
+  const seq = [before]
+  const t1 = performance.now()
+  while (performance.now() - t1 < 600) { await raf(); const r = read(); if (!r) break; seq.push(r) }
+  return { seq: seq.slice(0, 6), gone: !document.querySelector(sel) }
+}, { sel, open, close, growAt, closeAt })
+const checkGrowClose = (r, name) => {
+  const k = r.seq.map((f) => f.kids), a = r.seq.map((f) => f.area)
+  let rise = 0, jump = 0
+  for (let i = 1; i < k.length; i++) { rise = Math.max(rise, k[i] - k[i - 1]); jump = Math.max(jump, a[i] - a[i - 1]) }
+  check(`${name}: 没流完就变高又收,内容不先蹦出来、液体不先跳成长满`, rise <= 0.05 && jump <= 8 && r.gone, JSON.stringify(r))
+}
+const checkEarly = (r, name) => check(`${name}: 开到一半就收,内容只淡不先蹦出来(升 ≤ 0.05)`, r.rise <= 0.05 && r.gone, JSON.stringify(r))
 const NEG_CSS = `.lcl-droplet-pouring.account-pop, .lcl-droplet-pouring.mini-card-popover { background-color: #c33 !important }
   .rb-peek.lcl-droplet-pouring::before { opacity: 1 !important }`
 
@@ -128,6 +198,7 @@ async function main() {
     await win.mouse.move(pb.x, pb.y, { steps: 3 })
     const sw = await sample(win, '.rb-peek', { ms: 300 })
     check('悬停预览: 换图标不重挂、不重播液滴', sw.every((f) => f.exists && f.mark === 'same-card' && !f.layer && !f.pouring), JSON.stringify(sw.find((f) => f.layer || f.mark !== 'same-card')))
+    check('悬停预览: 换图标时描边不重新淡入(一直在)', sw.every((f) => f.bc === sw.at(-1).bc), JSON.stringify([...new Set(sw.map((f) => f.bc))]))
     await away()
     const rb = await sample(win, '.rb-peek', { ms: 700 })
     verifyRetract(rb, '悬停预览(移开)')
@@ -152,6 +223,11 @@ async function main() {
     await win.evaluate(() => window.dispatchEvent(new Event('resize')))
     await win.waitForTimeout(600)
     check('悬停预览: 倒放中改窗口 = 收完', await win.evaluate(() => !document.querySelector('.rb-peek')))
+    for (const t of [60, 150]) {
+      await away(); await waitNoDrop(win); await win.waitForTimeout(250); pa = await center(iconA); await win.mouse.move(pa.x, pa.y, { steps: 3 })
+      checkEarly(await earlyRetract(win, '.rb-peek', { close: 'key:Escape', t }), `悬停预览(${t}ms 收)`)
+    }
+    await away(); await waitNoDrop(win); await win.waitForTimeout(200)
     // 截图:亮 / 暗各一张倾倒中段 + 接手后
     for (const m of ['light', 'dark']) {
       await setMode(m); await away(); await waitNoDrop(win); await win.waitForTimeout(400)
@@ -192,6 +268,26 @@ async function main() {
     check('账号卡: 开着时变高,倒放按现在的矩形(偏差 ≤ 2px)', gl.length >= 3 && gl.every((f) => f.geo !== null && f.geo <= 2), JSON.stringify(gl.length ? gl.map((f) => f.geo) : grown.slice(0, 4).map(({ kids, ...f }) => f)))
     check('账号卡: 变高后照样倒放完卸载', !grown.at(-1).exists)
     await win.waitForTimeout(300)
+    for (const t of [60, 150]) {
+      await waitNoDrop(win); await win.waitForTimeout(150)
+      checkEarly(await earlyRetract(win, '.account-pop', { open: avatarBtn, close: avatarBtn, t }), `账号卡(${t}ms 收)`)
+    }
+    await waitNoDrop(win); await win.waitForTimeout(150)
+    checkGrowClose(await growThenClose(win, '.account-pop', { open: avatarBtn, close: 'key:Escape' }), '账号卡')
+    // Ribbon「+N」(底区):倒放到一半又点它 = 重新流出来、停在打开(11-06 第三轮,原来这一下被吞掉、照样收完);开到一半就收同上
+    const more = '.rb-bottom .rb-more', moreFly = '.rb-more-fly'
+    await waitNoDrop(win); await win.waitForTimeout(150)
+    await sample(win, moreFly, { act: more, ms: 520 })
+    await win.evaluate((s) => document.querySelector(s).click(), more); await midRetract(win, moreFly); await win.waitForTimeout(60)
+    verifyRepour(await sample(win, moreFly, { act: more, ms: 700 }), 'Ribbon「+N」')
+    await srcStillRaised(win, more, 'Ribbon「+N」')
+    verifyRetract(await sample(win, moreFly, { act: more, ms: 600 }), 'Ribbon「+N」(重新流出后再点)')
+    const closeMoreFly = async () => { if (await win.$(moreFly)) { await win.keyboard.press('Escape'); await win.waitForTimeout(500) } } // 没修的构建上状态会乱:兜底收掉,让后面照样报红而不是超时
+    for (const t of [60, 150]) {
+      await closeMoreFly(); await waitNoDrop(win); await win.waitForTimeout(150)
+      checkEarly(await earlyRetract(win, moreFly, { open: more, close: more, t }), `Ribbon「+N」(${t}ms 收)`)
+    }
+    await closeMoreFly()
     for (const m of ['light', 'dark']) {
       await setMode(m); await waitNoDrop(win); await win.waitForTimeout(200)
       await armFreeze(win, 150); await win.evaluate((s) => document.querySelector(s).click(), avatarBtn)
@@ -234,6 +330,12 @@ async function main() {
     await mini.evaluate((s) => document.querySelector(s).click(), miniSrc); await midRetract(mini, '.mini-card-popover'); await mini.waitForTimeout(60)
     verifyRepour(await sample(mini, '.mini-card-popover', { act: miniSrc, ms: 700 }), 'Mini 下拉')
     await srcStillRaised(mini, miniSrc, 'Mini 下拉')
+    await mini.keyboard.press('Escape'); await waitNoDrop(mini); await mini.waitForTimeout(150)
+    for (const t of [60, 150]) {
+      await waitNoDrop(mini); await mini.waitForTimeout(150)
+      checkEarly(await earlyRetract(mini, '.mini-card-popover', { open: miniSrc, close: miniSrc, t }), `Mini 下拉(${t}ms 收)`)
+    }
+    await waitNoDrop(mini); await sample(mini, '.mini-card-popover', { act: miniSrc, ms: 520 })
     await mini.keyboard.press('Escape'); await mini.waitForTimeout(600)
     const box = await mini.evaluate(() => { const r = document.querySelector('.mini-card-shell').getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: Math.min(r.height, 300) } })
     for (const m of ['light', 'dark']) {

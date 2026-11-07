@@ -3055,6 +3055,49 @@ async function main() {
         !!g && g.hh > 200 && Math.abs(g.top) <= 2 && Math.abs(g.bottom) <= 2, JSON.stringify(g))
       await pg.close()
     }
+    // D3 落点线贴目标块边:编辑器住在生产的 View 容器里(&uwb:真 .wb-view,错开侧栏 + 标签条),界面缩放 1 / 1.1。
+    //    2.13.8 beta3:.wb-view 加了 container-type,blockLayer 把它误当 fixed 包含块,线整条偏出一个 View 左上角
+    //    (真机 1400×900:dx -310 / dy -32)。别的拖拽断言都在没有这层祖先的壳里跑,对这类回归全是假绿。
+    for (const z of [1, 1.1]) {
+      const pg = await browser.newPage({ locale: 'zh-CN', viewport: { width: 1400, height: 900 } })
+      pg.on('pageerror', (e) => console.log('[pageerror]', e.message))
+      await pg.goto(`${URL}?upage&upane&uwb&useed=${encodeURIComponent('段一。\n\n段二。\n\n段三。\n')}`, { waitUntil: 'domcontentloaded' })
+      await pg.waitForSelector(PM, { timeout: 20000 })
+      // 同 uiZoom.apply:写 body zoom 再发约定事件(改 zoom 不发 resize)。
+      await pg.evaluate((z) => { document.body.style.zoom = z === 1 ? '' : String(z); window.dispatchEvent(new Event('forsion:uizoom')) }, z)
+      await pg.waitForTimeout(400)
+      const c = await pg.evaluate((s) => { const r = document.querySelector(`${s} > p`).getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } }, PM)
+      await pg.mouse.move(c.x, c.y)
+      await pg.waitForTimeout(350)
+      await pg.evaluate((s) => {
+        const md = (type, el, init) => el.dispatchEvent(new DragEvent(type, { bubbles: true, cancelable: true, composed: true, ...init }))
+        const gutter = document.querySelector('.unified-gutter')
+        gutter.querySelector('.drag-handle').dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+        const dt = new DataTransfer()
+        md('dragstart', gutter, { dataTransfer: dt })
+        const pm = document.querySelector(s)
+        const r = [...pm.querySelectorAll(':scope > p')].find((x) => x.textContent === '段三。').getBoundingClientRect()
+        window.__d3 = { clientX: r.left + 40, clientY: r.bottom - 2, dataTransfer: dt }
+        md('dragover', pm, window.__d3); md('dragover', pm, window.__d3)
+      }, PM)
+      await pg.waitForTimeout(250) // 淡入在动 scale(130ms),量早了宽度不对
+      const d3 = await pg.evaluate((s) => {
+        const lines = [...document.querySelectorAll('.unified-drop-line')].filter((l) => getComputedStyle(l).display !== 'none')
+        const t = [...document.querySelectorAll(`${s} > p`)].find((x) => x.textContent === '段三。').getBoundingClientRect()
+        const wb = document.querySelector('.wb-view--main')
+        const l = lines[0]?.getBoundingClientRect()
+        document.querySelector('.unified-gutter').dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: window.__d3.dataTransfer }))
+        const wr = wb?.getBoundingClientRect()
+        // 场景本身也要断:复用了不认 &uwb 的旧 vite 时编辑器没有这层祖先,旧代码照样对得上(Codex P2 假绿面)。
+        const scene = !!wb && wb.contains(document.querySelector(s)) && !!lines[0] && wb.contains(lines[0])
+          && getComputedStyle(wb).containerType === 'inline-size' && wr.left >= 100 && wr.top >= 20
+        return { scene, n: lines.length, dx: l ? +(l.left - t.left).toFixed(1) : null, dy: l ? +(l.top + l.height / 2 - t.bottom).toFixed(1) : null,
+          wb: wr ? `${Math.round(wr.left)},${Math.round(wr.top)} ${getComputedStyle(wb).containerType}` : null }
+      }, PM)
+      record(`D3 zoom=${z} 生产 View 容器里拖块:落点线贴目标块下沿与左缘(±2px)`,
+        d3.scene && d3.n === 1 && Math.abs(d3.dx) <= 2 && Math.abs(d3.dy) <= 2, JSON.stringify(d3))
+      await pg.close()
+    }
   }
 
   // ── C 系列(代码块工具条):行号 / 折叠八行 / 语言最近使用。三者都是会话视图态,零写盘。──

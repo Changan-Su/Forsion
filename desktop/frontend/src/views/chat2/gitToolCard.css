@@ -39,3 +39,7 @@
 .git-apv { display: grid; gap: 8px; margin: 6px 0 2px; font-size: var(--ui-font-meta, 12px); }
 .git-apv-msg { padding: 7px 9px; border-radius: var(--radius-sm, 8px); background: var(--overlay-medium); white-space: pre-wrap; line-height: 1.6; overflow-wrap: anywhere; }
 .git-apv-msg b { font-weight: 600; }
+/* 等你审的合并请求:一条一行,整行是打开站上那个合并请求的链接 */
+.git-card-reviews { display: grid; gap: 4px; min-width: 0; }
+.git-card-reviews li > button { display: block; width: 100%; min-width: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.git-card-reviews li > button:hover, .git-card-reviews li > button:focus-visible { text-decoration: underline; outline: none; }

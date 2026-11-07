@@ -262,8 +262,9 @@ export const PlanDecision: React.FC<{
 
 /** 任务清单(todo 事件;对齐 Claude TodoWrite 的实时显示)。 */
 /** live = 这份清单所在的 run 还在跑:只有这时「进行中」才转圈;停了 / 出错 / 后面的轮次里,停在进行中的那项画成静态的点。 */
+/** stopped = 清单所在那段真被打断 / 出错:只有这时折叠条才说「已停止」。同一 run 被 steer 切出的旧段是 done、run 还在跑,不带状态词,只写当时那一项。 */
 /** folded:收成一行(进度 + 当前那项),点开才是整张清单 —— 对话末尾那份、以及流里更早的几份都这样画(方案「待确认卡片」B)。 */
-export const TodoList: React.FC<{ todos: TodoItem[]; live?: boolean; folded?: boolean }> = ({ todos, live = false, folded = false }) => {
+export const TodoList: React.FC<{ todos: TodoItem[]; live?: boolean; stopped?: boolean; folded?: boolean }> = ({ todos, live = false, stopped = false, folded = false }) => {
   const { t: tr } = useI18n()
   const [open, setOpen] = useState(false)
   const [motion, touch] = useEnterMotion() // 挂上 / 恢复时直接出现,点开 / 收起换出来的那一版淡入上来
@@ -276,7 +277,7 @@ export const TodoList: React.FC<{ todos: TodoItem[]; live?: boolean; folded?: bo
         {live && cur ? <Loader2 size={13} className="spin" /> : cur ? <SquareDot size={13} /> : <CheckSquare size={13} />}
         <b>{tr('inquiry.todoList')} {done}/{todos.length}</b>
         <span className="todo-strip-bar"><i style={{ width: `${Math.round((done / todos.length) * 100)}%` }} /></span>
-        <span className="todo-strip-text">{!cur ? tr('inquiry.todoAllDone') : tr(live ? 'inquiry.todoNow' : 'inquiry.todoStopped', { text: cur.content })}</span>
+        <span className="todo-strip-text">{!cur ? tr('inquiry.todoAllDone') : live || stopped ? tr(live ? 'inquiry.todoNow' : 'inquiry.todoStopped', { text: cur.content }) : cur.content}</span>
         <ChevronUp size={13} className="todo-strip-chev" />
       </button>
     )
