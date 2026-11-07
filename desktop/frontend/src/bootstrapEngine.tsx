@@ -47,7 +47,7 @@ import { initUiZoom } from './uiZoom'
 import { syncDevCommands } from './devCommands'
 import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
 import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './amadeus/plugins/pluginStore'
-import { moveModeLastOnce } from './amadeus/plugins/ribbonAction'
+import { moveModeLastOnce, reorderCommandsOnce } from './amadeus/plugins/ribbonAction'
 import type { TanguHost } from './amadeus/plugins/tanguSeam'
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
@@ -348,14 +348,15 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
   })
 
   // Ribbon：主位 + 5 个 Space；命令区常驻后 5 项，头像与 pinned 控件另计。
-  // 默认命令顺序：成就 → 设备互联 → 反馈 → 商店 →(活动)→ 命令面板 → 设置 → 明暗(2026-11-02 用户定:活动常驻在明暗原来的位置,明暗挪到最后)。
-  // 下区只露最后 5 格:有活动时露 商店 / 活动 / 命令面板 / 设置 / 明暗,前面三格进「…」。
+  // 默认命令顺序(上 → 下):成就 → 设备互联 → 明暗 →(活动)→ 商店 → 反馈 → 命令面板 → 设置
+  // (2026-11-07 用户定,从下往上读是 设置 / 命令面板 / 反馈 / 商店 / 活动 / 明暗 / 设备;取代 11-02 的「明暗最后」)。
+  // 下区只露最后 5 格:有活动时露 活动 / 商店 / 反馈 / 命令面板 / 设置,成就 / 设备 / 明暗进「…」。
   // 无持久顺序时注册序即上下序；已有自定义排序不覆盖。移动端设备入口仍在 head。
   // 红点 = 有「已达成未领取」的成就(本机 + 已登录时的云端;收进「更多」时红点挂到「更多」上,见 RibbonItem.dot)。
   initCloudAchievements() // 云端成就:有 cloudFetch 桥(桌面装了 Extend / Android)才启动,首拉延后几秒,登录状态变化重拉
   addRibbonIcon({ id: 'rb-achievements', side: 'bottom', icon: Trophy, tooltip: () => app().tr('achievements.title'), onClick: () => app().openAchievements(), dot: { get: () => hasClaimable(), subscribe: (cb) => useAchievements.subscribe(cb), label: () => translate('achievements.claimable') } }) // label 在渲染期求值(读屏):app().tr 要等父组件 effect 才换语言,会晚一拍
   // Unit 切换器(设备互联):吸收原「本地|云端」胶囊,列表式切换 本地/云端/其他设备。
-  // 默认顺序为成就 → 设备互联 → 反馈；用户保存的自定义顺序仍优先。
+  // 默认顺序为成就 → 设备互联 → 明暗；用户保存的自定义顺序仍优先。
   // 桌面 = preload 的 unitsList IPC;mobile 垫片也有 unitsList(UnitsSheet 数据面)→ 移动端照旧挂 head:
   // SingleColumnHost 的「⋯」sheet 只渲染 side=bottom 的项,挂 bottom 会和移动端自己的入口(rb-units-mobile)重复。
   // webShim / unitShim 无此方法 → 不注册;vault 切换仍走 VaultSideSwitch 的 mobile 分支/云端固定形态。
@@ -367,6 +368,9 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
     const singleColumn = UI_MODE === 'mobile' || !!window.tangu?.mobile
     addRibbonIcon({ id: 'rb-unit', side: singleColumn ? 'head' : 'bottom', component: UnitSwitcher })
   }
+  // 主题锁定明暗时 toggleMode 静默无效 → tooltip 改说明「由主题决定」,悬停即知为何点不动(codex Low-2)。
+  addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: ThemeModeIcon, tooltip: () => useVisualTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => toggleVisibleMode() })
+  if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   if (window.tangu?.submitFeedback) {
     addRibbonIcon({ id: 'rb-feedback', side: 'bottom', icon: MessageSquare, tooltip: () => app().tr('feedback.title'), onClick: () => { app().openFeedback() } })
     // 老存档(用户动过底部区)的 bottomOrder 里,rb-feedback 要么还停在 08-31 前的旧位(明暗与命令之间),要么缺席
@@ -380,20 +384,18 @@ export function installEngine(activateTangu: (host: TanguHost) => void): void {
       try { localStorage.setItem(MOVED_KEY, '1') } catch { /* ignore */ }
     }
   }
-  if (window.tangu?.marketList) addRibbonIcon({ id: 'rb-market', side: 'bottom', icon: Store, tooltip: () => app().tr('market.title'), onClick: () => app().openMarket() })
   // 单列壳(手机)的「⋯」里也叫「命令面板」(末尾的 ⌘K 由 moreRowLabel 剥掉)。10-05 改叫过「搜索」+ 放大镜:
   // 排在一串插件命令上面读不出是命令面板,用户自己都没认出来 → 2026-10-13 改回,别再另起名字。
   addRibbonIcon({ id: 'rb-cmd', side: 'bottom', icon: CommandIcon, tooltip: () => app().tr('command.palette'), onClick: openCommandPalette })
-  // 底部常驻(side:'bottom'),无持久顺序时注册序即上下序:命令 → 设置 → 明暗 → 账号(账号钉死最底)。
+  // 底部常驻(side:'bottom'),无持久顺序时注册序即上下序:… → 命令 → 设置 → 账号(账号钉死最底)。
   // 用户拖过底部区后 bottomOrder 非空,新注册项按 rankIds 排到区末尾(反馈那条由注册处的一次性迁移兜住)。
   // ⚠️快速查找/语言**刻意不在条上**(2026-08-31):下区是杂物抽屉,八个同色图标一列谁也认不出,
   //   商店与成就被埋没。两者都是低频动作 → 只留命令面板(想要的人可从 ⌘K 钉回命令区)。
-  //   反馈当时一并撤下,2026-09-17 按用户要求放回,排在商店之上。
+  //   反馈当时一并撤下,2026-09-17 按用户要求放回,排在商店之上;2026-11-07 用户改到商店之下、命令面板之上。
   // 账号卡复用 AccountCard,随 ribbon 展开切换「完整卡 / 紧凑头像」;原聊天列表底部那份已移除,避免重复。
   addRibbonIcon({ id: 'rb-settings', side: 'bottom', icon: Settings, tooltip: () => app().tr('settings.title'), onClick: () => app().openSettings() })
-  // 主题锁定明暗时 toggleMode 静默无效 → tooltip 改说明「由主题决定」,悬停即知为何点不动(codex Low-2)。
-  addRibbonIcon({ id: 'rb-mode', side: 'bottom', icon: ThemeModeIcon, tooltip: () => useVisualTheme.getState().modeLocked ? app().tr('settings.theme.modeLocked') : app().tr('theme.changeMode'), onClick: () => toggleVisibleMode() })
-  moveModeLastOnce() // 老存档里明暗还在旧默认位(紧跟商店)→ 挪到最后,只一次
+  moveModeLastOnce() // 老存档里明暗还在旧默认位(紧跟商店)→ 挪到最后,只一次(11-02 那版默认;下一行再接着换成 11-07 的)
+  reorderCommandsOnce() // 老存档还是 11-02 默认(反馈在商店上、明暗最后)→ 换成 11-07 默认,只一次
   if (window.tangu?.restartForUpdate) addRibbonIcon({ id: 'rb-restart-update', side: 'bottom', pinned: true, component: RestartUpdateButton })
   // 账号卡随 Forsion Extend 出现:登录 / 登出 / 切号 / 状态那五个通道都住在 Extend(authStatus 是它们的桥键);
   // 没装 Extend(验签失败 / 缺包)连卡都不画,引擎重启入口仍在设置 → 连接。Unit 网页投射装了账号提供方时照旧(tangu.account)。
