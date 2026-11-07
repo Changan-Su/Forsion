@@ -8,7 +8,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { closeSpotlight, showTip } from './guideSpotlight'
-import { HOST_TIP_OWNER, hostTipSeen, markHostTipSeen, registerHostTip, tipState } from './guideTips'
+import { HOST_TIP_OWNER, hostTipSeen, inPluginView, markHostTipSeen, registerHostTip, tipState } from './guideTips'
+import { useAchievements } from '../../achievements/store'
 
 const button = (): HTMLElement => {
   const el = document.createElement('button')
@@ -58,3 +59,26 @@ describe('host tips bookkeeping', () => {
     try { expect(hostTipSeen('never-written')).toBeUndefined() } finally { get.mockRestore() }
   })
 })
+
+describe('voice-call host tip (hostTips.ts)', () => {
+  it('registers at chat-call; making a call (chat.voiceCall) = learned', async () => {
+    await import('./hostTips')
+    expect(tipState(HOST_TIP_OWNER, 'voice-call')).toBe('waiting')
+    useAchievements.setState((s) => ({ counters: { ...s.counters, 'chat.voiceCall': 1 } }))
+    expect(tipState(HOST_TIP_OWNER, 'voice-call')).toBe('learned')
+    useAchievements.setState((s) => { const { ['chat.voiceCall']: _, ...rest } = s.counters; return { counters: rest } })
+  })
+})
+
+describe('which anchors a host tip may use', () => {
+  it('skips plugin views but not first-party host: owners (Home wraps its content in host:home)', () => {
+    const wrap = (owner: string | null): HTMLElement => {
+      const box = document.createElement('div'); if (owner) box.dataset.guideOwner = owner
+      const el = document.createElement('button'); box.appendChild(el); document.body.appendChild(box); return el
+    }
+    expect(inPluginView(wrap(null))).toBe(false)
+    expect(inPluginView(wrap('host:home'))).toBe(false)
+    expect(inPluginView(wrap('some-plugin'))).toBe(true)
+  })
+})
+

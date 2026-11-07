@@ -75,6 +75,7 @@ import { getSync, markSyncDecided, refreshSync, resolveNotes, runSyncNow, setSyn
 import { POPUP_PRIORITY, queuePopup, releasePopupsOf } from '../../stores/popupQueue'
 import { closeSpotlight, showSpotlight } from './guideSpotlight'
 import { registerGuideTips, requestTip, tipState, unregisterGuideTips } from './guideTips'
+import './hostTips' // 宿主自己的上手提示(通话键首次提示等),三端都经 pluginStore 登记
 import { invalidatePluginWidget, providePluginWidget, revokePluginWidgets } from './pluginWidgets'
 import { watchAccountName } from '../../services/accountName'
 import { fetchBingWallpapers } from '../../views/homepageWallpaper'

@@ -83,13 +83,17 @@ export function tipState(pluginId: string, tipId: string): 'waiting' | 'seen' | 
   return muted ? 'muted' : seen ? 'seen' : 'waiting'
 }
 
+/** 锚点在插件 View 里(`data-guide-owner` = 插件 id)。`host:` 开头的 owner 是宿主自己的界面(主页 = `host:home`),
+ *  不算插件的 —— 插件 id 里不会有冒号(manifest id 只许小写字母、数字、连字符)。 */
+export const inPluginView = (el: Element): boolean => !!el.closest('[data-guide-owner]:not([data-guide-owner^="host:"])')
+
 /** 只在这个插件自己的 View 里找,而且要在视口里(看不见的锚点不算「在屏幕上」)。宿主自己的提示找宿主界面里的锚点
- *  (插件 View 里同名的不算,插件抢不走首方提示)。 */
+ *  (插件 View 里同名的不算,插件抢不走首方提示;主页这类 `host:` owner 里的照样算)。 */
 function anchor(pluginId: string, name: string): HTMLElement | null {
   const host = pluginId === HOST_TIP_OWNER
   const sel = host ? `[data-guide-anchor="${CSS.escape(name)}"]` : `[data-guide-owner="${CSS.escape(pluginId)}"] [data-guide-anchor="${CSS.escape(name)}"]`
   for (const el of document.querySelectorAll<HTMLElement>(sel)) {
-    if (host && el.closest('[data-guide-owner]')) continue
+    if (host && inPluginView(el)) continue
     const r = el.getBoundingClientRect()
     if (r.width > 0 && r.height > 0 && r.bottom > 0 && r.right > 0 && r.top < innerHeight && r.left < innerWidth) return el
   }
@@ -131,7 +135,8 @@ export interface HostTip {
   /** 成就计数(`app:` 前缀 = 宿主事件)≥1 = 会了。 */
   done?: string[]
   platform?: 'desktop' | 'mobile'
-  resolve(): { title?: string; body: string }
+  /** 出的时候再算文案;拿到的是此刻的锚点元素(可以从它的 data-* 读当下的状态)。 */
+  resolve(anchor: HTMLElement | null): { title?: string; body: string }
   extra?: { label(): string; run(): void }
 }
 const hostTips = new Map<string, HostTip>()
@@ -240,14 +245,15 @@ function tick(): void {
 
 function present(c: GuideCandidate): void {
   const { pluginId, tip } = c
-  const host = tipHost(anchor(pluginId, tip.at))
+  const at = anchor(pluginId, tip.at)
+  const host = tipHost(at)
   if (host) shownHosts.add(host)
   write(K.day, JSON.stringify({ d: today(), n: (dayCount() ?? 0) + 1 }))
   requested.delete(rk(pluginId, tip.id))
   current = { pluginId, tip }
   const en = currentLocale() === 'en'
   const own = pluginId === HOST_TIP_OWNER ? hostTips.get(tip.id) : undefined
-  const words = own ? own.resolve() : { title: en ? tip.en?.title : tip.title, body: en ? tip.en!.text! : tip.text }
+  const words = own ? own.resolve(at) : { title: en ? tip.en?.title : tip.title, body: en ? tip.en!.text! : tip.text }
   void showTip(pluginId, {
     find: () => anchor(pluginId, tip.at),
     style: tip.style,
