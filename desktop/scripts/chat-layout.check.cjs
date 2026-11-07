@@ -8,6 +8,7 @@ const path = require('path')
 const assert = require('node:assert/strict')
 const electron = require('./lib/launch-electron.cjs')
 const { startStubEngine } = require('./lib/stub-engine.cjs')
+const { skipOnboarding } = require('./lib/skip-onboarding.cjs')
 
 const ROOT = path.resolve(__dirname, '..')
 const APP_ROOT = process.env.FORSION_APP_ROOT || ROOT
@@ -54,10 +55,8 @@ async function main() {
     await win.waitForSelector('#root')
     await win.evaluate(() => localStorage.setItem('forsion_default_space', 'tangu'))
     await win.reload({ waitUntil: 'domcontentloaded' })
-    for (const label of ['跳过引导', 'Skip']) {
-      const button = win.locator(`button:text-is("${label}")`).first()
-      if (await button.isVisible().catch(() => false)) { await button.click(); break }
-    }
+    // 引导是两条 IPC 回来后才异步挂上的:当场看一眼会漏(main 加了首启新一屏后就漏了),走共用的等待版
+    check('首启引导已跳过', await skipOnboarding(win))
     const view = win.locator('.t2-chat-view').first()
     await view.waitFor({ timeout: 30000 })
     await view.locator('.t2c-row .agent-select-strip .compact-chat-picker').waitFor({ timeout: 30000 })
