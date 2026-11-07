@@ -149,7 +149,8 @@ export function Ribbon() {
   // 滚轮翻看(10-02 用户要求,类 Agent 选择条):各区露出的那一窗往后挪了几格。不持久化,越界在 cut() 里夹回。
   const [scrollOff, setScrollOff] = useState<Record<RibbonZone, number>>({ top: 0, bottom: 0 })
   // 「+N」溢出浮层(2026-10-30 用户定,取代 10-02 的「本区铺满整条」):条右侧列出藏着的那几项,条本身一格不动。
-  // 开合走液滴(droplet.ts):开 = 从「+N」里流出来,收 = 倒放缩回;closing 期间再点不重开。
+  // 开合走液滴(droplet.ts):开 = 从「+N」里流出来,收 = 倒放缩回;倒放到一半又点同一颗 = 从它重新流出来、停在打开
+  // (DESIGN §3,同悬浮目录 / 悬停预览 / 账号卡 / Mini;11-06 动效第三轮补上,原来这一下点击被吞掉、照样收完)。
   const [moreFly, setMoreFly] = useState<RibbonZone | null>(null)
   const moreRef = useRef<HTMLDivElement>(null)
   const droplet = useRef<Droplet | null>(null)
@@ -166,17 +167,22 @@ export function Ribbon() {
     if (!d) { setMoreFly(null); return }
     moreClosing.current = true
     void d.retract().then(() => {
+      if (droplet.current !== d) return // 倒放途中又点开了(同一颗重新流出来 / 换了一区 / 窗口变了直接撤):那边已接管
       moreClosing.current = false
-      if (droplet.current === d) droplet.current = null
+      droplet.current = null
       setMoreFly(null)
     })
   }
   const toggleMore = (zone: RibbonZone): void => {
-    if (moreClosing.current) return
-    if (moreFly === zone) { closeMore(); return }
-    droplet.current?.cancel() // 开着另一区的:直接让位,不叠两滴
+    if (moreFly === zone && !moreClosing.current) { closeMore(); return }
+    // 倒放到一半又点同一区:从这一帧掉头、停在打开(不撤掉从一滴重来)
+    if (moreFly === zone && droplet.current?.reopen?.()) { moreClosing.current = false; return }
+    droplet.current?.cancel() // 开着另一区的:直接让位,不叠两滴;倒放到一半又点:撤掉在途那滴
     droplet.current = null
+    moreClosing.current = false
     setFly(null)
+    const btn = rootRef.current?.querySelector<HTMLElement>(`[data-rb-more="${zone}"]`), el = moreRef.current
+    if (moreFly === zone && btn && el) { droplet.current = emergeDroplet(btn, el); return }
     setMoreFly(zone)
   }
 
@@ -263,9 +269,10 @@ export function Ribbon() {
     peekFor.current = id
     if (!id) return
     if (blockHard) return
-    if (peek?.spaceId === id) { // 从卡里回到它自己的图标;正倒放着收 = 重新从这枚图标流出来(同悬浮目录)
+    if (peek?.spaceId === id) { // 从卡里回到它自己的图标;正倒放着收 = 从这一帧掉头(同悬浮目录),掉不了头再从这枚图标流出来
       cancelPeekClose()
-      if (peekClosing.current && peekRef.current) pourPeek(peekRef.current, id, false)
+      if (peekClosing.current && peekDropFor.current === id && peekDrop.current?.reopen?.()) peekClosing.current = false
+      else if (peekClosing.current && peekRef.current) pourPeek(peekRef.current, id, false)
     }
     else if (peek) openPeek(id) // 已经弹着:换图标不再等
     else peekOpenTimer.current = window.setTimeout(() => { if (peekFor.current === id) openPeek(id) }, PEEK_OPEN_DELAY)
@@ -628,7 +635,7 @@ export function Ribbon() {
     }
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') closeMore() }
     // 窗口 / 缩放变了:按钮已挪走,浮层和液滴的几何都是旧的,倒放只会从旧位置飞一下 → 直接撤
-    const onLayout = (): void => { droplet.current?.cancel(); droplet.current = null; setMoreFly(null) }
+    const onLayout = (): void => { droplet.current?.cancel(); droplet.current = null; moreClosing.current = false; setMoreFly(null) }
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('keydown', onKey)
     window.addEventListener('blur', closeMore)
