@@ -1,6 +1,5 @@
 import { registerAmadeusViews } from './features/amadeus'
 import { inboxAvailable } from './features/runtime'
-import { activateTangu } from '@tangu/ui/features/tangu'
 import { registerOperationsViews } from './features/operations'
 import { amadeusAvailable } from './features/runtime'
 import { registerMiniViews } from './mini/miniViews'
@@ -9,6 +8,7 @@ import { Folder, Plus, Command as CommandIcon, Moon, Languages, MessageSquare, S
 import type { LucideIcon, LucideProps } from 'lucide-react'
 import { registerView, addCommand, addRibbonIcon, useRibbonStore, moveTo, openCommandPalette, useWorkspace, useSpaceStore, getActiveSpace, setActiveSpaceCold, setActiveSpace, openRedirectType, adoptSpaceLayoutCold, seedSpaceWindowLayout, BOOT_ACTIVE_SPACE_ID, getView, label, recordNav, useNav, activeMainPanel, setEngineI18n, setRibbonActions, UI_MODE, WINDOW_SPACE_ID, supportsMiniPanel, LCL_MESSAGES, installViewModeCommands } from '@lcl/engine'
 import { toggleSpaceOrganizer } from './views/SpaceOrganizer'
+import { requestHomeEdit } from './views/homeWidgets'
 import type { ViewProps } from '@lcl/engine'
 import { useEffect } from 'react'
 import { windowKind } from './windowKind'
@@ -48,6 +48,7 @@ import { syncDevCommands } from './devCommands'
 import { isSmoothCaretOn, setSmoothCaret } from './smoothCaret'
 import { matchFileType, fileTypeBaseName, setResetCardCeremonyHandler } from './amadeus/plugins/pluginStore'
 import { moveModeLastOnce } from './amadeus/plugins/ribbonAction'
+import type { TanguHost } from './amadeus/plugins/tanguSeam'
 import { ActivityLogView } from './views/ActivityLogView'
 import { ActiveWindowView } from './views/ActiveWindowView'
 import { ActivityDashboardCard, InboxDashboardCard } from './views/DashboardCompactViews'
@@ -92,7 +93,10 @@ const ThemeModeIcon = ((props: LucideProps) => {
 
 let installed = false
 
-export function installEngine(): void {
+/** activateTangu = Tangu 唯一的入口(features/tangu.tsx 导出的那个):静态 import 进来的(dev / 网页 / 手机),
+ *  或者打包版从界面包里取出来的(coreTangu/load.ts,界面热更新 4b)。这里不静态引它:一引,打包版的主产物里
+ *  就多了一份 Tangu 的模块状态,和运行时加载的那份各管各的。 */
+export function installEngine(activateTangu: (host: TanguHost) => void): void {
   if (installed) return
   installed = true
 
@@ -565,6 +569,16 @@ export function installEngine(): void {
         else if (/\.md$/i.test(norm)) await nav.openNote(norm, newTab)
         else nav.openFile(norm, newTab)
       },
+    },
+  })
+  // 主页编辑态(主页第四轮):摆小组件、挪时钟 / 输入框 / 坞。只给人用,不进 Agent 的命令面。
+  addCommand({
+    id: 'edit-home',
+    title: () => translate('home.edit'),
+    keywords: 'home edit widgets layout 主页 编辑 小组件 摆放',
+    run: () => {
+      if (useSpaceStore.getState().activeSpaceId !== 'home') setActiveSpace('home')
+      requestHomeEdit()
     },
   })
   addCommand({

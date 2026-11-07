@@ -20,3 +20,7 @@ export type { DropIndicator, DropRect, DropShape, DropRetargetOptions, LandPoint
  *  插件不用 React 就直接写 data-motion="collapse" + data-open,箭头写 data-motion="chevron"。 */
 export { AnimatedCollapse } from './Collapse'
 export { UploadRing, UploadBar, createUploadRing, createUploadBar } from './UploadProgress'
+/** 工具岛:视图顶上居中(窄了停底部)换工具的那颗胶囊,选中底块滑过去。按钮条 + toolIsland.css 的布局类;
+ *  插件走 ctx.ui.mountToolIsland(宿主摆位置、那一排、四角)。 */
+export { ToolIsland } from './ToolIsland'
+export type { ToolIslandTool, ToolIslandItem } from './ToolIsland'

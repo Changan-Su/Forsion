@@ -1,0 +1,41 @@
+/* 小组件:对话卡头第二行 + 卡片区 / 仪表盘 / 主页里的卡身。颜色、圆角一律走产品 token。 */
+.intelligent-ui .wgt-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin: -4px 0 10px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.wgt-meta .wgt-dot, .wgt-old .wgt-dot { opacity: .5; }
+.wgt-meta .wgt-acts { margin-left: auto; display: flex; gap: 4px; }
+.wgt-meta .wgt-note { color: var(--text-muted); }
+.intelligent-ui .wgt-meta .wgt-btn, .wgt-ph .wgt-btn, .wgt-old .wgt-link {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 0 9px; border: 0; border-radius: var(--radius-sm, 8px);
+  background: transparent; color: var(--text-muted); font: inherit; font-size: var(--ui-font-meta, 12px); cursor: pointer; white-space: nowrap;
+}
+.intelligent-ui .wgt-meta .wgt-btn:hover { background: var(--overlay-light, rgba(0, 0, 0, .04)); color: var(--text); }
+.intelligent-ui .wgt-meta .wgt-btn.on { color: var(--accent-ink); }
+.intelligent-ui .wgt-meta .wgt-btn[aria-disabled] { opacity: .45; cursor: default; background: transparent; color: var(--text-muted); }
+.intelligent-ui .wgt-meta .wgt-more { padding: 0 6px; }
+
+/* 旧版本那次调用:压成一行 */
+.wgt-old { margin: 8px 0; }
+.wgt-old-line { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.wgt-old .wgt-link { height: 22px; padding: 0 6px; color: var(--accent-ink); }
+.wgt-old .wgt-link:hover { background: var(--overlay-light, rgba(0, 0, 0, .04)); }
+.wgt-peek { margin-top: 8px; padding: 12px 14px; border-radius: var(--radius-md, 12px); background: var(--bg-card); box-shadow: var(--card-shadow); }
+
+/* 各处的卡身:原生文档去掉自己的卡面与标题(卡头由所在处画) */
+.wgt-host .intelligent-ui { margin: 0; padding: 0; max-width: none; background: none; box-shadow: none; border: 0; }
+.wgt-host:not(.wgt-titled) .intelligent-ui > .iui-title { display: none; }
+/* ⚠️ 写成 `.dash-widget.wgt-dash-body`(0,2,0):`.dash-widget` 是居中的 flex 列,同级时按源码顺序赢,
+   小组件正文就被压成一个字宽的竖条(截图实证)。逐项压掉它的居中语汇,正文按块排。 */
+.dash-widget.wgt-dash-body { display: block; align-items: stretch; justify-content: flex-start; text-align: start; height: 100%; min-width: 0; padding: 4px 12px 12px; overflow: auto; }
+.wgt-host.wgt-loading { min-height: 48px; }
+.wgt-host > .wgt-note, .wgt-ph .wgt-note { margin-top: 6px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.wgt-ph { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; padding: 4px 0 2px; color: var(--text-muted); font-size: var(--ui-font-body, 13px); }
+.wgt-ph b { color: var(--text); font-weight: 500; }
+.wgt-ph .wgt-ph-acts { display: flex; gap: 6px; }
+.wgt-ph .wgt-btn.wgt-solid { background: var(--overlay-light, rgba(0, 0, 0, .04)); color: var(--text); }
+.wgt-ph .wgt-btn.wgt-solid:hover { background: var(--overlay-medium, rgba(0, 0, 0, .07)); }
+
+/* 窄处(卡片区 296 宽、主页侧栏 256 宽):三个数一大两小,表格压字号 —— .intelligent-ui 自己就是尺寸容器 */
+@container (max-width: 320px) {
+  .wgt-host .iui-stats { display: grid !important; grid-template-columns: 1fr 1fr !important; gap: 6px 12px; }
+  .wgt-host .iui-stats > div:first-child { grid-column: 1 / -1; }
+  .wgt-host .iui-table { font-size: var(--ui-font-meta, 12px); }
+}

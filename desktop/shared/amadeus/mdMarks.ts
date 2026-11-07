@@ -28,6 +28,7 @@
 
 /** 一条带 `@` 标记的行。 */
 import { isRealDate } from './db/calDate'
+import { parseTags } from './links'
 
 export interface MdMark {
   /** vault 相对路径 */
@@ -53,9 +54,18 @@ export interface MdMark {
   /** 本行原文在清洗文本里是第几次出现(0-based)。同一篇里两行逐字相同时靠它区分。
    *  ⚠️ 主进程回写扫描必须**同口径地跳过** frontmatter 与注释块,否则名额被算错 = 静默改错行。 */
   occ: number
+  /** 2026-11-02+:这一行是某条带 `@` 的任务缩进在下面的子任务(`- [ ]`,最多两层)→ 父行的 `路径:行号`
+   *  (与 mdMarkStore.markKey 同一格式)。子任务自己没写 `@` 时 `due` 为 `''` —— 它不是独立的待办,
+   *  宿主自己的待办 / 日历视图照旧不收(useMdMarks 滤掉),只经 ctx.noteTasks 给插件画父项里的子任务。 */
+  parentId?: string
+  /** 这一行文本里的 `#标签`(口径 = links.parseTags / TAG_RE);没有就不带这个字段。 */
+  tags?: string[]
 }
 
 const HEADING_RE = /^ {0,3}(#{1,6})\s+(.*\S)\s*$/
+/** 子任务最多两层(子 / 孙),再深就是该开笔记了(方案 2026-11-02)。 */
+const MAX_SUB_DEPTH = 2
+const indentOf = (s: string): number => { let n = 0; for (const c of s) { if (c === ' ') n++; else if (c === '\t') n += 4; else break } return n }
 const TASK_RE = /^(\s*)[-*+]\s+\[([ xX])\]\s+(.*)$/
 /** 开/闭围栏:整串栅栏 + 其后的 info string。⚠️ 必须捕获**长度** —— 四反引号开的块可以合法地
  *  包住三反引号(CommonMark:闭围栏字符相同且不短于开围栏、且不带 info),只认固定三个会被内部
@@ -186,10 +196,14 @@ export function parseMdMarks(text: string, path: string, title: string): MdMark[
   // 「清洗文本的第 occ 条同文行」在磁盘文件里找的,那边只会跳过 frontmatter 与注释(= stripForIndex
   // 剥掉的那两样)。这里少数一行,两边名额就错位,轻则改不动、重则**静默改错行**。
   const seen = new Map<string, number>()
-  const push = (m: Marks, body: string, isTask: boolean, checked: boolean, line: number, raw: string, occ: number): void => {
-    if (!hasContent(body)) return
-    out.push({ path, title, heading, text: body, isTask, checked, due: m.due, remind: m.remind, line, raw, occ })
+  const push = (m: Marks, body: string, isTask: boolean, checked: boolean, line: number, raw: string, occ: number, parentId?: string): boolean => {
+    if (!hasContent(body)) return false
+    const tags = parseTags(body)
+    out.push({ path, title, heading, text: body, isTask, checked, due: m.due, remind: m.remind, line, raw, occ, ...(parentId ? { parentId } : {}), ...(tags.length ? { tags } : {}) })
+    return true
   }
+  /** 当前所在的「带 @ 的任务」块:从根任务往下的缩进链。标题、比根任务不深的正文行结束它;空行不结束。 */
+  let chain: Array<{ indent: number; line: number; depth: number }> = []
   for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]
     const occ = seen.get(raw) ?? 0
@@ -204,6 +218,7 @@ export function parseMdMarks(text: string, path: string, title: string): MdMark[
     if (fence !== null) continue
     const h = HEADING_RE.exec(raw)
     if (h) {
+      chain = []
       const m = extractMarks(h[2])
       // 标题自己带标记时,它归属的仍是**上一级**标题上下文;换 heading 在这之后。
       if (m) push(m, m.rest, false, false, i + 1, raw, occ)
@@ -213,9 +228,17 @@ export function parseMdMarks(text: string, path: string, title: string): MdMark[
     const t = TASK_RE.exec(raw)
     if (t) {
       const m = extractMarks(t[3])
-      if (m) push(m, m.rest, true, t[2].toLowerCase() === 'x', i + 1, raw, occ)
+      const indent = indentOf(t[1])
+      while (chain.length && chain[chain.length - 1].indent >= indent) chain.pop()
+      const up = chain[chain.length - 1]
+      if (up && up.depth < MAX_SUB_DEPTH) {
+        // 子任务:没写 @ 也算(父项是待办就够了),日期就是空串
+        const sub = m ?? { due: '', rest: t[3].replace(/\s+/g, ' ').trim() }
+        if (push(sub, sub.rest, true, t[2].toLowerCase() === 'x', i + 1, raw, occ, `${path}:${up.line}`)) chain.push({ indent, line: i + 1, depth: up.depth + 1 })
+      } else if (m && push(m, m.rest, true, t[2].toLowerCase() === 'x', i + 1, raw, occ) && !up) chain = [{ indent, line: i + 1, depth: 0 }]
       continue
     }
+    if (raw.trim() && chain.length && indentOf(raw) <= chain[0].indent) chain = []
     const m = extractMarks(raw)
     if (m) push(m, m.rest.replace(LEAD_RE, '').trim(), false, false, i + 1, raw, occ)
   }

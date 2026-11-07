@@ -553,6 +553,10 @@ textarea.amx-title-input { display: block; resize: none; overflow: hidden; white
 .am-app .amx-src-btn--block { top: 6px; right: 6px; }
 /* 「打开」按钮排在 `</>` 左边(两颗都绝对定位在块右上角,给它右移一个按钮宽 + 间距)。 */
 .am-app .amx-src-btn--block.amx-open-btn { right: 40px; display: inline-flex; align-items: center; justify-content: center; }
+/* 块公式的复制键:排在 `</>` 左边(同「打开」键的右移量);只读视图没有 `</>`,靠到最右。点完 1.5 秒内是 ✓。 */
+.am-app .amx-src-btn--copy { right: 40px; padding: 0 5px; }
+.am-app .amx-src-btn--copy.amx-src-btn--solo { right: 4px; }
+.am-app .amx-src-btn--copy.is-copied { opacity: 1; color: var(--accent-ink, var(--accent)); }
 
 /* 行内图片嵌入的包裹层(为了给 `</>` 一个定位父级);图片本身的尺寸样式仍在 .wiki-inline-img */
 /* user-select:none —— 双击图片时浏览器的原生「选词」会把选区铺到相邻块上(mousedown 的

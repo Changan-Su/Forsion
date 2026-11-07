@@ -40,6 +40,7 @@ import { agentsDir, readHumanFile, readUserMdForPrompt } from '../core/tanguHome
 import { createMemoryRepository } from './memoryRepository.js';
 import { runWithUserAgentScope } from '../seams/runContext.js';
 import { wellFormed } from '../llm/wellFormedJson.js';
+import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 
 export const REALTIME_PATH = '/agent/realtime';
 /** 子协议鉴权:客户端 new WebSocket(url, [REALTIME_BEARER_PROTOCOL, token]);握手里必须把这个名字回给它,否则浏览器当握手失败。 */
@@ -108,7 +109,7 @@ export async function buildVoiceInstructions(sessionId: string, agentSlug: strin
   if (user) sections.push(`## About the user\n${clip(user, 2000)}`);
   const portrait = own ? readHumanFile('SOUL.md').trim() : ''; // 画像:Agent 们对这个人的认识,同 renderAboutHuman 只取前 2000 字
   if (portrait) sections.push(`## How agents see the human\n${clip(portrait, 2000)}`);
-  if (memory.trim()) sections.push(`## Your memory\n${clip(memory.trim(), 3000)}`);
+  if (memory.trim()) sections.push(`## Your memory\n${clip(textForThisDevice(memory.trim(), runTagContext(!!deps().profile.capabilities.hostExec), 'entry'), 3000)}`); // 别台的条目折成一行(11-06)
   if (history) sections.push(`## Recent messages in this chat\n${history}`);
   return sections.join('\n\n');
 }

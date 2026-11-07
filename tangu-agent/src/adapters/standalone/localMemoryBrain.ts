@@ -19,6 +19,7 @@ import { currentAgentSlug } from '../../seams/runContext.js';
 import { getDeviceId } from '../../core/deviceId.js';
 import type { MemoryBrain } from '../../seams/cloudBrain.js';
 import { createMemoryRepository, withMemoryDirectoryLock, readMemoryFile, atomicWriteMemoryFile, safeMemoryPath, memoryContentVersion, memoryVersionConflict, MemoryRepositoryError, normalizeMemoryFact, MEMORY_CHAR_BUDGET, type MemorySnapshot } from '../../services/memoryRepository.js';
+import { deviceTagContext } from '../../services/deviceTagContext.js';
 
 export const MEMORY_SOFT_CAP = MEMORY_CHAR_BUDGET;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -168,7 +169,7 @@ export interface LocalMemoryBrain extends MemoryBrain {
 }
 
 /** 构造本地 MemoryBrain(userId 忽略——本地库单用户/per-install)。 */
-export function createLocalMemoryBrain(opts?: { baseDir?: string; deviceId?: string }): LocalMemoryBrain {
+export function createLocalMemoryBrain(opts?: { baseDir?: string; deviceId?: string; /** 日志块标题上的设备名;缺省 = 同步页上这台的名字。null = 不写(测试) */ deviceName?: string | null }): LocalMemoryBrain {
   const store = createLocalMemoryStore(opts?.baseDir);
   const deviceId = opts?.deviceId ?? getDeviceId();
 
@@ -212,7 +213,9 @@ export function createLocalMemoryBrain(opts?: { baseDir?: string; deviceId?: str
       const time = o?.time ?? nowHHMM();
       if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new MemoryRepositoryError('MEMORY_INVALID', 'Invalid time; use HH:MM.');
       // 条目格式:heading `### HH:MM`(服务端兼容)+ 正文首行 `@<deviceId> <text>`(打标且可合并去重)。
-      const entry = `### ${time}\n@${deviceId} ${trimmed}\n`;
+      // 11-06:标题尾巴带上这台的名字(`### 09:30 · MacBook Pro`),界面上显示设备名而不是设备号;合并去重不看这条尾巴(contentMerge.blockKey)。
+      const name = opts?.deviceName === undefined ? deviceTagContext().self : opts.deviceName;
+      const entry = `### ${time}${name ? ` · ${name.replace(/\s+/g, ' ').trim()}` : ''}\n@${deviceId} ${trimmed}\n`;
       return withMemoryDirectoryLock(store.baseDir, () => {
       const existing = store.readLog(date);
       const next = existing

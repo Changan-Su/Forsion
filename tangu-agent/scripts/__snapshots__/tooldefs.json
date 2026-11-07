@@ -2116,7 +2116,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (your own memory only): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2152,6 +2152,15 @@
                 "person"
               ],
               "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            },
+            "appliesTo": {
+              "type": "string",
+              "enum": [
+                "all",
+                "this-computer",
+                "this-os"
+              ],
+              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
             }
           },
           "required": [
@@ -2918,7 +2927,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (your own memory only): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -2954,6 +2963,15 @@
                 "person"
               ],
               "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            },
+            "appliesTo": {
+              "type": "string",
+              "enum": [
+                "all",
+                "this-computer",
+                "this-os"
+              ],
+              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
             }
           },
           "required": [
@@ -3739,7 +3757,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (your own memory only): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -3775,6 +3793,15 @@
                 "person"
               ],
               "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            },
+            "appliesTo": {
+              "type": "string",
+              "enum": [
+                "all",
+                "this-computer",
+                "this-os"
+              ],
+              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
             }
           },
           "required": [
@@ -3847,7 +3874,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4015,6 +4042,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [
@@ -4904,7 +5010,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (your own memory only): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -4940,6 +5046,15 @@
                 "person"
               ],
               "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            },
+            "appliesTo": {
+              "type": "string",
+              "enum": [
+                "all",
+                "this-computer",
+                "this-os"
+              ],
+              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
             }
           },
           "required": [
@@ -5031,7 +5146,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -5199,6 +5314,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [
@@ -6088,7 +6282,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (your own memory only): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6124,6 +6318,15 @@
                 "person"
               ],
               "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            },
+            "appliesTo": {
+              "type": "string",
+              "enum": [
+                "all",
+                "this-computer",
+                "this-os"
+              ],
+              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
             }
           },
           "required": [
@@ -6849,7 +7052,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, proven procedures or landmines. SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (your own memory only): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -6885,6 +7088,15 @@
                 "person"
               ],
               "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            },
+            "appliesTo": {
+              "type": "string",
+              "enum": [
+                "all",
+                "this-computer",
+                "this-os"
+              ],
+              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
             }
           },
           "required": [
@@ -7629,7 +7841,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (your own memory only): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7665,6 +7877,15 @@
                 "person"
               ],
               "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            },
+            "appliesTo": {
+              "type": "string",
+              "enum": [
+                "all",
+                "this-computer",
+                "this-os"
+              ],
+              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
             }
           },
           "required": [
@@ -7737,7 +7958,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -7905,6 +8126,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [
@@ -8794,7 +9094,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (your own memory only): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -8830,6 +9130,15 @@
                 "person"
               ],
               "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            },
+            "appliesTo": {
+              "type": "string",
+              "enum": [
+                "all",
+                "this-computer",
+                "this-os"
+              ],
+              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
             }
           },
           "required": [
@@ -8921,7 +9230,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -9089,6 +9398,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [
@@ -9978,7 +10366,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (your own memory only): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10014,6 +10402,15 @@
                 "person"
               ],
               "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            },
+            "appliesTo": {
+              "type": "string",
+              "enum": [
+                "all",
+                "this-computer",
+                "this-os"
+              ],
+              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
             }
           },
           "required": [
@@ -10086,7 +10483,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -10254,6 +10651,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [
@@ -12445,7 +12921,7 @@
       "type": "function",
       "function": {
         "name": "remember",
-        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
+        "description": "Save one durable fact to long-term memory, injected into future sessions. Keep it small and high-signal. WHEN: facts about the user themself, corrections of how you work, environment (OS, paths, tools, quirks), standing conventions, commands and workflows proven to work here, landmines. A working method you worked out yourself is not a memory: it goes in your evolution record (manage_harness). SCOPE: \"person\" = about the user themself and their life, true with any agent and in any project (what to call them, language, background, what they are working on or learning now — a few weeks counts, their tastes and habits); every agent reads it, and so does the user: write it to them (\"you …\"), one fact per sentence, in their language. What they ask of you about the work itself (how to test, report or structure answers) is \"agent\", even when phrased as their preference; what to call them and their language stay \"person\". \"agent\" (the default) = yours: corrections to how you work, an identity given to them inside a role-play, facts about one project. SKIP: what happened or where a task stands (progress, completed work, versions, dated status): use log_event. Also what holds for this conversation only (answer from this file, one-off requests). FORMAT: one present-tense sentence of at most 300 characters in the user’s language; longer facts are rejected. APPLIES TO (your own memory only): a fact true only on this computer (a program installed here, a local path, a setting of this machine) → appliesTo \"this-computer\"; true on every computer with this operating system → \"this-os\"; otherwise leave it out (all devices). The computer or system label is added for you: never write one yourself. ACTIONS: add saves fact; list returns IDs and versions of both scopes (fact: null); update replaces a listed entry and MUST include the new fact, id, expectedVersion and the scope it was listed under; forget removes one and blocks automatic replay (fact: null). Always supply action and fact. To supersede an entry: list, then update with the replacement sentence (scope = where the new sentence belongs; if the entry is listed elsewhere, e.g. an old name in your own memory, it moves); never add a correction beside it. Forget only when the user asks; if full, forget or shorten stale entries first.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12481,6 +12957,15 @@
                 "person"
               ],
               "description": "Which memory this sentence belongs in (see SCOPE); default \"agent\". On update it may differ from where the old entry is listed: a name or other fact about the user goes to \"person\" even if the old one was in your own memory."
+            },
+            "appliesTo": {
+              "type": "string",
+              "enum": [
+                "all",
+                "this-computer",
+                "this-os"
+              ],
+              "description": "Where the fact holds (scope \"agent\" only): \"all\" (default) = every device; \"this-computer\" = only this computer; \"this-os\" = every computer with this operating system. On update, leaving it out keeps the entry’s current one."
             }
           },
           "required": [
@@ -12553,7 +13038,7 @@
       "type": "function",
       "function": {
         "name": "run_bash",
-        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
+        "description": "Run a single shell command (/bin/sh -c) on the user's machine for builds/tests, git, package managers and other CLI work; returns stdout/stderr/exit_code, with the current session cwd as working directory. To inspect files or directories, prefer read_file / list_dir / search_files over cat/ls/grep — structured output, no shell quoting pitfalls. To move, copy, delete or open files prefer move_path / copy_path / delete_path / open_path — they work the same on every OS; keep run_bash for real command-line programs (git, npm, builds) and for multi-step processing write a short python3 script. Verbose output is truncated head+tail, but the captured output (up to a per-stream cap) is saved to a temp file whose path appears in the result — read/grep that file instead of re-running the command. For long-running processes (dev servers, watchers) use run_background instead. Destructive commands may require user approval.",
         "parameters": {
           "type": "object",
           "properties": {
@@ -12721,6 +13206,85 @@
             "path": {
               "type": "string",
               "description": "Image file path (relative to cwd or absolute)"
+            }
+          },
+          "required": [
+            "path"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "move_path",
+        "description": "Move or rename a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of mv / move). If `to` is an existing folder, the item goes inside it. Refuses to replace an existing file unless overwrite is true, and never merges folders.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "Path to move (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "New path, or an existing folder to move it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace an existing file at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "copy_path",
+        "description": "Copy a file or a whole folder on the machine; works the same on macOS, Windows and Linux (use it instead of cp / copy / xcopy). If `to` is an existing folder, the copy goes inside it. Refuses to replace existing files unless overwrite is true.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string",
+              "description": "File or folder to copy (relative to the current working directory, or absolute)"
+            },
+            "to": {
+              "type": "string",
+              "description": "Path of the copy, or an existing folder to copy it into (relative to the current working directory, or absolute)"
+            },
+            "overwrite": {
+              "type": "boolean",
+              "description": "Replace existing files at the destination (default false)"
+            }
+          },
+          "required": [
+            "from",
+            "to"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "delete_path",
+        "description": "Delete a file or folder on the machine; works the same on macOS, Windows and Linux (use it instead of rm / del / rmdir). Recoverable by default: the item goes to the Forsion Trash, where the user can restore it (Settings › Trash) for 30 days. Pass permanent: true only when the user asked for permanent deletion. Never deletes a filesystem root or the home folder.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "path": {
+              "type": "string",
+              "description": "File or folder to delete (relative to the current working directory, or absolute)"
+            },
+            "permanent": {
+              "type": "boolean",
+              "description": "Delete for good instead of moving to the trash (default false)"
             }
           },
           "required": [

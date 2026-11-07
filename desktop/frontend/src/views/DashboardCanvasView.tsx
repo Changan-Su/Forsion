@@ -29,6 +29,8 @@ import {
   migrateGridToCanvas, parseWidget, readDash2Layout, readDashLayout, reconcileCanvas, setDash2InFm,
   webviewUrlAllowed, widgetSource, type DashLayout, type Rect,
 } from '@amadeus-shared/dashboard'
+import { parseWidgetRef } from '@amadeus-shared/widgetBoard'
+import { WidgetHost } from '../components/WidgetHost'
 import { migrateCanvasToGrid, readDash3Layout, setDash3InFm, setDashModeInFm } from '@amadeus-shared/dashboard3'
 import {
   CanvasChrome, CanvasMiniMap, hostSize, snapGrid, useCanvasGestures, useCanvasViewport, zoomAt,
@@ -576,6 +578,8 @@ function CanvasInner({ leaf }: ViewProps) {
     : ids
 
   const renderBody = (id: string): ReactNode => {
+    const ref = parseWidgetRef(blocks[id]?.content ?? '')
+    if (ref) return <div className="dash-widget wgt-dash-body"><WidgetHost id={ref.id} titled onRemove={() => removeCard(id)} /></div>
     const widget = parseWidget(blocks[id]?.content ?? '')
     if (widget?.kind === 'view') {
       const vt = widget.opts.type ?? ''

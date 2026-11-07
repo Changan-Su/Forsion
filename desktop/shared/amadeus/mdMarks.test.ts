@@ -201,3 +201,47 @@ describe('resolveMark(撤销 / 迟到的回写找回原来那一条)', () => {
   it('同名不止一条、原行号上也有一条 → 照样不猜', () => expect(resolveMark([mk(3, 'A'), mk(9, 'A')], mk(3, 'A'))).toBeUndefined())
   it('别的笔记里的同名任务不算', () => expect(resolveMark([mk(3, 'A', 'other.md')], mk(3, 'A'))).toBeUndefined())
 })
+
+describe('parseMdMarks · 子任务与标签(2026-11-02)', () => {
+  const md = [
+    `- [ ] 复习 物理 @${D} #学习`,
+    '  - [x] 第 1 节',
+    '  - [ ] 第 2 节 #难',
+    '    - [ ] 习题 1–12',
+    '      - [ ] 第三层不收',
+    '  说明文字(缩进,不结束块)',
+    '',
+    '  - [ ] 空行后照样是子任务',
+    '- [ ] 无标记的同级任务不算',
+    '  - [ ] 它的子项也不算',
+    `- [ ] 另一条 @${D}`,
+    '正文顶格一行结束块',
+    '  - [ ] 不再是子任务',
+  ].join('\n')
+  const r = parse(md)
+  it('缩进在带 @ 任务下的 - [ ] 收成子任务,最多两层;没写 @ 的日期为空串', () => {
+    expect(r.map((m) => [m.text, m.line, m.parentId ?? null, m.due])).toEqual([
+      ['复习 物理 #学习', 1, null, D],
+      ['第 1 节', 2, `${P}:1`, ''],
+      ['第 2 节 #难', 3, `${P}:1`, ''],
+      ['习题 1–12', 4, `${P}:3`, ''],
+      ['空行后照样是子任务', 8, `${P}:1`, ''],
+      ['另一条', 11, null, D],
+    ])
+    expect(r[1].checked).toBe(true)
+  })
+  it('标签口径同 parseTags,文本里原样保留(text 是回写的身份,不能剥)', () => {
+    expect(r[0].tags).toEqual(['学习'])
+    expect(r[2].tags).toEqual(['难'])
+    expect(r[1].tags).toBeUndefined()
+  })
+  it('多收子任务不挪 occ:子任务行能按 raw+occ 在原文里找回(回写走同一把尺子)', () => {
+    const twice = `- [ ] A @${D}\n  - [ ] x\n- [ ] B @${D}\n  - [ ] x`
+    const subs = parse(twice).filter((m) => m.parentId)
+    expect(subs.map((m) => [m.occ, findMarkLine(twice, m.raw, m.occ)])).toEqual([[0, 1], [1, 3]])
+    expect(withChecked(subs[1].raw, true)).toBe('  - [x] x')
+  })
+  it('标题结束块', () => {
+    expect(parse(`- [ ] A @${D}\n# H\n  - [ ] x`).filter((m) => m.parentId)).toEqual([])
+  })
+})

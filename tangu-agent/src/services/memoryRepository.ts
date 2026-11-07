@@ -2,6 +2,7 @@
 import { constants, closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { isMemoryTombstoneActive as tombstoneActive, mergeTombstoneLists, normalizeMemoryFact, parseTombstones, sameTombstones } from '../contracts/agentSyncRules.js';
 
 export interface MemorySource {
   kind: 'explicit' | 'historian' | 'dream' | 'sync' | 'manual' | 'restore' | 'migration' | 'external-edit';
@@ -82,14 +83,13 @@ export function memoryContentVersion(content: string | null): string {
 }
 /** One Agent's whole memory, as written through the explicit tools (characters). Dream commits are bounded separately. */
 export const MEMORY_CHAR_BUDGET = 20_000;
-export function normalizeMemoryFact(fact: string): string {
-  return fact.trim().replace(/^[-*+]\s+/, '').replace(/\s+/g, ' ').toLowerCase();
-}
+// 事实行身份 / 墓碑生效与云同步宿主共用一份(contracts/agentSyncRules.ts),两边滤出来的才一样
+export { normalizeMemoryFact };
 export function memoryFactFingerprint(fact: string): string {
   return createHash('sha256').update(normalizeMemoryFact(fact)).digest('hex');
 }
 export function isMemoryTombstoneActive(tombstone: MemoryTombstone): boolean {
-  return tombstone.forgottenAt >= (tombstone.restoredAt ?? 0);
+  return tombstoneActive(tombstone);
 }
 function checkAbort(signal?: AbortSignal): void { signal?.throwIfAborted(); }
 function isMissing(e: unknown): boolean { return (e as NodeJS.ErrnoException)?.code === 'ENOENT'; }
@@ -265,7 +265,7 @@ export function filterForgottenMemory(content: string, tombstones: MemoryTombsto
 }
 
 export function createMemoryRepository(baseDir: string) {
-  const stateFile = '.memory-state.json';
+  const stateFile = '.memory-state.json', projectionFile = '.memory-tombstones.json';
   const locked = <T>(fn: () => T): T => withMemoryDirectoryLock(baseDir, fn);
   function persist(state: MemoryState, oldProjection: string | null): MemoryState {
     // Editors outside this process do not participate in our lock. Detect an edit
@@ -289,7 +289,28 @@ export function createMemoryRepository(baseDir: string) {
       revisions: [...s.revisions, { version: s.version, content: s.content, entries: s.entries, createdAt: s.updatedAt, source: s.source }].slice(-100),
     };
   }
-  function load(): MemoryState {
+  /**
+   * 云同步落到盘上的墓碑(新同步下载 / 宿主投影的 .memory-tombstones.json):仓库里没有的并进来,记忆跟着滤(2026-11-05,
+   * 新同步不再经引擎提交,别的设备忘掉的事实靠这里进仓库)。读不到 / 读不懂当没有这份:只会少滤,不会多删,也不改写那个文件。
+   */
+  function withProjection(tombstones: MemoryTombstone[]): MemoryTombstone[] {
+    let raw: string | null;
+    try { raw = readMemoryFile(baseDir, projectionFile); } catch { return tombstones; }
+    const wire = raw === null ? null : parseTombstones(raw);
+    if (!wire?.length) return tombstones;
+    let incoming: MemoryTombstone[];
+    try { incoming = validateMemoryTombstones(wire); } catch { return tombstones; }
+    const merged = mergeTombstoneLists(tombstones, incoming) as MemoryTombstone[];
+    return sameTombstones(merged, tombstones) ? tombstones : merged;
+  }
+  function importProjection(s: MemoryState): MemoryState {
+    const merged = withProjection(s.tombstones);
+    if (merged === s.tombstones) return s;
+    s.tombstones = merged;
+    return persist(nextState(s, filterForgottenMemory(s.content, merged), { kind: 'sync' }), s.content);
+  }
+  function load(): MemoryState { return importProjection(loadState()); }
+  function loadState(): MemoryState {
     const raw = readMemoryFile(baseDir, stateFile);
     const markdown = readMemoryFile(baseDir, 'MEMORY.md');
     if (raw === null) {
@@ -310,6 +331,8 @@ export function createMemoryRepository(baseDir: string) {
     }
     if (markdown === null) fail('MEMORY.md disappeared while metadata exists; refusing to treat this as empty memory.');
     if (markdown !== s.content) {
+      // 外部改的(多半是同步刚落下的那份)先按并上盘上墓碑之后的口径滤:别的设备「恢复」了的事实不能被本机旧的「忘掉」滤掉
+      s.tombstones = withProjection(s.tombstones);
       const filtered = filterForgottenMemory(markdown, s.tombstones);
       return persist(nextState(s, filtered, { kind: 'external-edit' }), markdown);
     }

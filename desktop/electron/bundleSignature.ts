@@ -28,8 +28,9 @@ export interface BundleSignature {
   sig: string
 }
 
-export const canonicalFiles = (files: Record<string, string>): string =>
-  JSON.stringify(Object.fromEntries(Object.entries(files).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))))
+import { canonicalFiles } from '../shared/extendSignature'
+
+export { canonicalFiles }
 
 export type SignatureVerdict = { ok: true; files: string[]; digests: Record<string, string> } | { ok: false; reason: string }
 

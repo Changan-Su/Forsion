@@ -3,8 +3,9 @@
  * 纯类型,两侧共用一份。
  */
 
-/** 槽:本机设备配对(unitHostId + unitHostSecret)、external 模式连外部 tangu-server 的 token、P2 预留的调用方凭据。 */
-export type SecretSlot = 'unitPairing' | 'externalToken' | 'unitCallerSecret'
+/** 槽:本机设备配对(unitHostId + unitHostSecret)、external 模式连外部 tangu-server 的 token、P2 预留的调用方凭据、
+ *  电脑历史的数据钥匙(只有主进程用,不出现在渲染层的锁定列表里)。 */
+export type SecretSlot = 'unitPairing' | 'externalToken' | 'unitCallerSecret' | 'computerHistoryKey'
 
 /**
  * 'os' = 静态存放的秘密绑定到 OS 登录会话(Keychain / DPAPI / libsecret / kwallet);

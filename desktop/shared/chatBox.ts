@@ -36,8 +36,12 @@ export interface PluginChatBoxOptions {
    *  a later update() passes a different function. Exceptions from either are logged and contained. */
   toolbar?(el: HTMLElement): void | (() => void)
   /** Host menu next to the caret. Same look and keys as the editor's `#` completion: ↑↓ Enter Tab Esc; opens only while
-   *  typing, never during IME composition; Enter on a highlighted row picks it and does not submit. */
-  suggest?: PluginChatBoxSuggest
+   *  typing, never during IME composition; Enter on a highlighted row picks it and does not submit.
+   *  2026-11-02+: when the box sits in the lower half of the window the menu opens upward (falling back below if it doesn't fit).
+   *  2026-11-02+: an array gives several triggers (e.g. `#` tags and `[[` links); the one nearest the caret wins.
+   *  Older hosts take a single object only. Pass an array only when `ctx.ui.chatBoxCapabilities?.includes('suggestMany')`:
+   *  `insertText` is not enough, 2.13.8-beta.3 has it but not arrays. */
+  suggest?: PluginChatBoxSuggest | PluginChatBoxSuggest[]
   onChange?(draft: ChatBoxSubmission): void
   /** true clears the submitted text; false/rejection keeps it for retry. No automatic AI run. */
   onSubmit(draft: ChatBoxSubmission): boolean | Promise<boolean>
@@ -51,6 +55,12 @@ export interface PluginChatBoxHandle {
   /** Idempotent. Afterwards the element is the plugin's again at once: clear it, or mount on it again. */
   dispose(): void
 }
+
+/** Chat Box behaviour a plugin can't feature-detect with `?.`, because hosts that lack it ignore the option instead of
+ *  rejecting it. Exposed as `ctx.ui.chatBoxCapabilities` (2026-11-04+); a host without that field has none of these.
+ *  `suggestMany`: `suggest` takes an array. `suggestAbove`: the menu opens upward in the lower half of the window. */
+export const CHAT_BOX_CAPABILITIES = ['suggestMany', 'suggestAbove'] as const
+export type ChatBoxCapability = (typeof CHAT_BOX_CAPABILITIES)[number]
 
 export interface ChatBoxSuggestMatch {
   query: string

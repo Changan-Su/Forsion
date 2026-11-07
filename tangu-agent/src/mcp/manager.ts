@@ -129,7 +129,8 @@ export interface McpManager {
   /** Reconcile saved user settings only while the host has no active runs. Never rebind an old tool snapshot. */
   reloadConfig(): Promise<void>;
   /** 本 run 的工具快照(已按 server 名过滤;Map 键=桥接名)。run 开始取一次,run 内不变。 */
-  toolsForRun(enabledServerNames?: string[]): Map<string, LoadedMcpTool>;
+  /** includeOff:连 mcp.json 里按工具关掉的也给(只给设置页列清单,别拿去下发)。 */
+  toolsForRun(enabledServerNames?: string[], opts?: { includeOff?: boolean }): Map<string, LoadedMcpTool>;
   callTool(bridged: LoadedMcpTool, args: Record<string, any>, signal?: AbortSignal): Promise<McpCallResult>;
   listStatus(): McpServerStatus[];
   /** 连接(启动时调用一次;失败的 server 记错误不阻断其他,转后台重试)。 */
@@ -207,8 +208,12 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
   const unregisterApproval = setMcpApprovalLookup((bridged) => {
     const serverName = owner.get(bridged);
     const entry = serverName === undefined ? undefined : servers.find((s) => s.name === serverName && !s.origin);
-    if (!entry?.cfg.connector) return undefined;
-    return connectorToolAlwaysAsk(entry.cfg.connector, entry.boundRemote.get(bridged)) ? 'always' : undefined;
+    if (!entry) return undefined;
+    const remotes = entry.boundRemote.get(bridged);
+    // 用户按工具设的「每次都问」:任一指过的远端名被设了就算(只收紧);目录的 alwaysAsk 照样在下面兜着
+    if (remotes && [...remotes].some((r) => entry.cfg.tools?.[r] === 'ask')) return 'always';
+    if (!entry.cfg.connector) return undefined;
+    return connectorToolAlwaysAsk(entry.cfg.connector, remotes) ? 'always' : undefined;
   });
 
   function newEntry(name: string, c: McpServerConfig, origin?: ServerEntry['origin']): ServerEntry {
@@ -452,12 +457,20 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
 
     reloadConfig() {
       if (reloading) return reloading;
-      if (disposed || !started || (opts.canReload && !opts.canReload())) return Promise.resolve();
+      if (disposed || !started) return Promise.resolve();
       const raw = loadRawMcpServers(configFile);
+      // 按工具的限制不等空闲:有 run 在跑也立刻换上(关 = 这一刻起调用就拒;ask 下一次调用就问)。只换 tools,不动连接
+      for (const s of servers) {
+        if (!s.origin && raw[s.name] && JSON.stringify(raw[s.name].tools) !== JSON.stringify(s.cfg.tools)) s.cfg = { ...s.cfg, tools: raw[s.name].tools };
+      }
+      if (opts.canReload && !opts.canReload()) return Promise.resolve();
       const fingerprint = JSON.stringify(raw);
       if (fingerprint === configSnapshot) return Promise.resolve();
       configSnapshot = fingerprint;
-      const gone = servers.filter(s => !s.origin && (!raw[s.name] || raw[s.name].enabled === false || JSON.stringify(raw[s.name]) !== JSON.stringify(s.cfg)));
+      // 只改了按工具设置(tools)的不算变:原地换 cfg,不断线重连(登录态、在跑的连接都留着)
+      const sansTools = (c: McpServerConfig): string => JSON.stringify({ ...c, tools: undefined });
+      const gone = servers.filter(s => !s.origin && (!raw[s.name] || raw[s.name].enabled === false || sansTools(raw[s.name]) !== sansTools(s.cfg)));
+      for (const s of servers) if (!s.origin && raw[s.name] && !gone.includes(s)) s.cfg = raw[s.name];
       const added = Object.entries(raw).filter(([name, c]) => c.enabled !== false && !servers.some(s => !s.origin && s.name === name && !gone.includes(s)));
       // Remove before awaiting close. A stale run snapshot must fail, never dispatch to a replacement endpoint.
       for (const s of gone) { servers.splice(servers.indexOf(s), 1); s.configError = true; }
@@ -493,14 +506,20 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       try { await p; } finally { closing.delete(p); }
     },
 
-    toolsForRun(enabledServerNames?: string[]) {
+    toolsForRun(enabledServerNames?: string[], opts?: { includeOff?: boolean }) {
       // 只给桥接名的持有者(owner 表):持有者掉线 / 被 enabledServerNames 滤掉时,这个名字本 run 就没有,
       // 绝不改指别的 server。start() 首批认领之前(没有 run 会在这时开始)一律为空 —— fail closed。
       const out = new Map<string, LoadedMcpTool>();
       for (const s of servers) {
         if (s.status !== 'connected') continue;
         if (enabledServerNames && !enabledServerNames.includes(s.name)) continue;
-        for (const t of s.tools) if (owner.get(t.name) === s.name) { snapshotEntries.set(t, s); out.set(t.name, t); }
+        for (const t of s.tools) {
+          if (owner.get(t.name) !== s.name) continue;
+          if (!opts?.includeOff && s.cfg.tools?.[t.remoteName] === 'off') continue; // 用户在连接器设置里关掉的:Agent 看不到
+          // 配置 deferLoading:false → 本 run 快照里的这一份标成常驻(副本也要登记归属,callTool 按对象认 server)
+          const v: LoadedMcpTool = s.cfg.deferLoading === false ? { ...t, deferLoading: false } : t;
+          snapshotEntries.set(v, s); out.set(t.name, v);
+        }
       }
       return out;
     },
@@ -512,6 +531,10 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
       if (bound && !servers.includes(bound)) return { text: 'Error: MCP settings changed. Start a new run to use the new configuration.', isError: true };
       if (!entry) return { text: `Error: MCP server "${bridged.serverName}" is not configured`, isError: true };
       if (signal?.aborted) return ABORTED;
+      // run 开始后才被关掉的工具:快照里还有,调用这一刻照样拒(关 = 立刻生效,不等下一轮);等完重连再查一次
+      const turnedOff = () => entry.cfg.tools?.[bridged.remoteName] === 'off';
+      const offResult = { text: `Error: the user turned off the MCP tool "${bridged.remoteName}" in settings`, isError: true };
+      if (turnedOff()) return offResult;
       if (entry.needsLogin) return needsLoginResult(entry.name, isUserKeyUrl(entry.cfg.url));
       // 懒重连:server 断线 / 初次没连上时,调用前按冷却(15s)尝试重连一次(后台重试正在连就搭它的车)——
       // 避免「server 挂了不重连、工具一直 hang 到 timeout」。冷却防对死 server 每调必连。
@@ -525,6 +548,7 @@ export function createMcpManager(configFile?: string, opts: McpManagerOptions = 
           return { text: `Error: MCP server "${bridged.serverName}" is not connected`, isError: true };
         }
       }
+      if (turnedOff()) return offResult;
       const timeoutMs = entry.cfg.timeoutMs && entry.cfg.timeoutMs > 0 ? entry.cfg.timeoutMs : DEFAULT_CALL_TIMEOUT_MS;
       const invoke = (c: Client) => c.callTool(
         { name: bridged.remoteName, arguments: args },

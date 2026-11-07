@@ -16,6 +16,7 @@ import { LlmError, type AgentModel, type ThinkingLevel, type ToolCall } from '..
 import { parseTextToolCalls } from './textToolCalls.js';
 import { applyThinking, clampThinkingLevel, normalizeThinkingLevel, resolveModelCapability } from './modelCapabilities.js';
 import { buildGrokBuildHeaders } from './grokBuildCompat.js';
+import { buildOpenCodeHeaders, isOpenCodeHost } from './opencodeGo.js';
 import { withStreamIdle, type StreamIdleGuard } from './streamIdle.js';
 import { assertToolDefinitions } from '../tools/toolDefinitionValidation.js';
 import { stringifyWellFormed } from './wellFormedJson.js';
@@ -28,6 +29,9 @@ export const PROTOCOL_MARK = '__tangu_protocol';
 export const ACCOUNT_MARK = '__tangu_account';
 /** run id(BuildPayloadOpts.runId 透传):Responses 客户端据此把粘性路由态按 run 存,绝不跨 run。 */
 export const RUN_MARK = '__tangu_run';
+/** 会话键(BuildPayloadOpts.cacheKey 原值)透传:opencode.ai 据此发 x-opencode-session(见 opencodeGo.ts)。
+ *  与 prompt_cache_key 分开:后者按 agent 取键且只给官方 OpenAI,OpenCode 文档要的是「每段会话」一个。 */
+export const SESSION_MARK = '__tangu_session';
 
 /**
  * 缓存路由键(prompt_cache_key / Codex 的 session_id 头)的取值域闸门。
@@ -151,6 +155,7 @@ export function buildOpenAiCompatPayload(opts: BuildPayloadOpts): any {
   // run 身份透传(私有标记,发请求前剥掉):Responses 客户端按 run 存粘性路由态。
   const runId = opts.runId;
   if (typeof runId === 'string' && runId) payload[RUN_MARK] = runId;
+  if (typeof cacheKey === 'string' && cacheKey) payload[SESSION_MARK] = cacheKey;
   // 透传直连协议/账号标记,供 streamProviderCompletion 分发到原生订阅客户端。
   const dm = opts.model as any;
   if (dm?.[PROTOCOL_MARK]) payload[PROTOCOL_MARK] = dm[PROTOCOL_MARK];
@@ -269,7 +274,7 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
   const protocol = payload?.[PROTOCOL_MARK];
   const isGrokBuild = protocol === 'grok-build';
   // 剥掉私有标记,再发给 provider。prompt_cache_key 一并摘下,只在官方 host 上补回(见下)。
-  const { [DIRECT_MARK]: _omitDirect, __forsion_model_id: _omitFsn, [PROTOCOL_MARK]: _omitProto, [ACCOUNT_MARK]: _omitAcct, [RUN_MARK]: _omitRun, prompt_cache_key: cacheKeyField, ...clean } = payload as any;
+  const { [DIRECT_MARK]: _omitDirect, __forsion_model_id: _omitFsn, [PROTOCOL_MARK]: _omitProto, [ACCOUNT_MARK]: _omitAcct, [RUN_MARK]: runMark, [SESSION_MARK]: sessionMark, prompt_cache_key: cacheKeyField, ...clean } = payload as any;
   assertToolDefinitions(clean.tools, 'direct request');
   const streamPayload = {
     ...clean,
@@ -289,6 +294,8 @@ async function runOpenAiCompatStream(opts: StreamOpts, guard: StreamIdleGuard): 
   if (isGrokBuild) {
     Object.assign(headers, buildGrokBuildHeaders(apiKey, String(streamPayload.model || 'grok-build')));
   }
+  // OpenCode Go 没有这个头一律 400(先于鉴权);后台阶段没传会话键时用 run id 兜底。
+  if (isOpenCodeHost(baseUrl)) Object.assign(headers, buildOpenCodeHeaders(sessionMark || runMark));
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: 'POST',

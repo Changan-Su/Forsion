@@ -59,6 +59,7 @@ import { remoteLocked } from './remoteLock.js'; // P1-K2
 import { noteRemoteEntriesCarried } from './remoteCreated.js'; // P1-K2
 
 let timer: ReturnType<typeof setTimeout> | null = null;
+import { runTagContext, textForThisDevice } from './deviceTagContext.js';
 let kickTimer: ReturnType<typeof setTimeout> | null = null;
 let windowStartMs = 0;
 let restartsThisWindow = 0;
@@ -579,7 +580,7 @@ export async function recentSessionTitles(userId: string): Promise<string> {
 async function userMemoryHint(userId: string): Promise<string> {
   try {
     const m = await runWithAgentSlug(DEFAULT_AGENT_SLUG, () => deps().brain.memory.getMemory(userId));
-    const content = String(m?.content || '').trim().slice(0, 3000);
+    const content = textForThisDevice(String(m?.content || '').trim(), runTagContext(!!deps().profile.capabilities.hostExec), 'entry').slice(0, 3000); // 别台的条目折成一行(11-06)
     return content ? `\n\n[User's long-term memory]\n${content}` : '';
   } catch {
     return '';

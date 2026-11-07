@@ -88,6 +88,9 @@ for (const dir of resources) {
   check(host.version === expectedVersion, `Engine host version ${host.version} != desktop ${expectedVersion}`)
   // 引擎的 npm 热更新:桌面与终端都经安装包里的启动器拉起引擎,由它在自带的 dist 与下载的新版之间挑。启动器或它的判定
   // 模块没进包 = 这条通道在这一版里静默不存在;验新版用的公钥编在 signingKey.js 里,必须是一把能解析的 ed25519 公钥。
+  // Tangu 界面半身(界面热更新 4b):打包版从这里求值,缺了它就只能落到编进宿主的那份(最后一道兜底),热更新的界面也不会被换上
+  const ui = path.join(dir, 'tangu-server', 'ui', 'main.js')
+  check(fs.existsSync(ui) && /\/\/# sourceURL=forsion-core:\/\/tangu\/main\.js\s*$/.test(fs.readFileSync(ui, 'utf8')), 'Tangu UI bundle missing or truncated: tangu-server/ui/main.js')
   const boot = path.join(dir, 'tangu-server', 'dist', 'boot')
   for (const file of ['launch.js', 'overlay.js', 'signingKey.js']) {
     check(fs.existsSync(path.join(boot, file)), `Engine launcher file missing: tangu-server/dist/boot/${file}`)

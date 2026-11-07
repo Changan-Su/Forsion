@@ -17,6 +17,7 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 - `modelPicker: false`：不画模型和思考档，也不解析默认模型。`draft.modelId` 是传入值（没传是 `''`），`draft.thinkingLevel` 没传是 `'medium'`。
 - `toolbar(el)`：往卡片底排左侧（模型药丸前）放自己的 DOM，可返回清理函数；dispose 时调用，update 换函数时先清理再重挂，抛错由宿主隔离。`el` 在宿主挂载层里，不吃插件视图基础样式，按钮写 `.btn.sm`。
 - `suggest: { trigger, items(query), mention? }`：`mention: true` 时只打 `trigger` 就开（`query` 为空串），紧跟中文也开，紧贴拉丁字母或数字不开。宿主补全浮层，外观和键盘与笔记 `#` 补全一致（↑↓ / Enter / Tab / Esc，输入法组字时不弹，Enter 选中不提交）。`items` 回数组或 Promise，每项 `{ label, hint?, value }`，最多显示 8 项；选中把 trigger + 查询换成 `value` 加一个空格。
+- `suggest` 也可以是数组（2026-11-02+）：几种触发各给一份（例如 `#` 标签 + `[[` 关联），离光标最近的那个打开；更早的宿主只认单个对象。传数组前看 `ctx.ui.chatBoxCapabilities?.includes('suggestMany')`（2026-11-04+，没有这个字段 = 不支持）；别拿 `insertText`、`setBody` 这类别的接口当暗号（2.13.8-beta.3 有 `insertText` 却不收数组）。输入卡在窗口下半部分时浮层朝上开（放不下再翻到下面）。
 - `insertText(text)`：在光标处插入（有选区则替换）并聚焦，给「#」按钮、语音转写用。
 旧宿主忽略这三个选项，也没有 `insertText`，用 `typeof box.insertText === 'function'` 探测，四项同时到位。
 插件主动在 View 卸载时 dispose（之后 `el` 立刻归还，见上「dispose 契约」）；宿主仍会在插件禁用/重载/setup 失败时统一回收，卸载后晚到的异步结果无效。
@@ -35,6 +36,12 @@ Space 管布局，View 管独立功能面，**UI component** 是 View 内可组�
 **正文与持久化归调用方**:不读写活动库、不改当前笔记、不自动保存、不调模型。保存前必须同步调 `getValue()`(含最新一笔编辑事务)。
 `update({ value })` 换文档,`insertMarkdown` 追加附件/嵌入(只读时无效),`dispose()` 幂等(之后 `el` 立刻归还,见上「dispose 契约」);宿主在插件禁用/重载/setup 失败时统一回收,旧句柄不再改内容。
 老宿主没有此方法时明确提示升级,不要拿 textarea 冒充原生编辑器。完整契约:`docs/customization/ui-components.md`;类型真源:`desktop/shared/markdownEditor.ts`。
+**`vault: true`(2.13.8 起)接上当前库**:`[[` 补全笔记 / 文件名,点双链在视图旁边打开那篇笔记(⌘ / Ctrl 点击 = 新标签页),解析不到的显示成灰色;正文仍归调用方,编辑器不往库里写。缺省关;老宿主不认、也没法单独检测 —— 它和 `ctx.ui.mountMarkdown` 同版到,有 `mountMarkdown` 就说明 `vault` 有效。
+
+### 只读 Markdown ctx.ui.mountMarkdown(2.13.8 起)
+
+`ctx.ui?.mountMarkdown?.(el, { markdown })` → `{ update({ markdown }), dispose() }`:按聊天回答的画法渲染(GFM、`$公式$` / `$$公式$$`、`[[双链]]` 点开当前库那篇笔记)。
+段内单个换行就是换行(和编辑器写出来的一致);代码块只有复制、没有运行;`![[嵌入]]` 只显示成链接。够轻,列表每行挂一个也行;外层带 `.md-body`,要收紧段距在自己容器里覆盖。dispose 契约同上。
 
 ### 原生悬浮目录 ctx.ui.mountFloatingToc(2026-09-07 起)
 
@@ -283,6 +290,31 @@ ctx.registerSelectionAction({
   ignores the return value. Report failures yourself or throw: the host shows a toast with the error message.
 - Hosts up to 2.13.3 ignore the new fields: the action stays note-only, sits under "AI ▾ → Plugins", and `cx`
   has only `text` / `markdown` / `pagePath`. Write `run` so it works with just those.
+
+### Tool island: ctx.ui.mountToolIsland (2026-11-04+)
+
+The capsule a "hold a tool and work" view (PDF annotation and the like) switches tools with — the same skin as the Mini window's top bar, a highlight that slides to the current tool, the shortcut letter in each button's corner. Centred at the top of `root`; docked at the bottom centre when `root` is narrower than 520 px.
+
+```js
+const isle = ctx.ui?.mountToolIsland?.(pageArea, {
+  tools: [
+    { id: 'hand', icon: 'hand', title: zh ? '抓手' : 'Hand' }, 'separator',
+    { id: 'select', icon: 'mouse-pointer-2', title: zh ? '选择' : 'Select', key: 'V' }, 'separator',
+    { id: 'highlight', icon: 'highlighter', title: zh ? '高亮' : 'Highlight', key: 'H' },
+  ],
+  active: 'select',
+  onPick: (id) => { setTool(id); isle.setActive(id); isle.showRow(id === 'highlight') },
+  slots: { topRight: findButton, bottomRight: pager },      // your own elements; the host wraps and places them
+})
+if (!isle) drawOwnBar(pageArea)                               // older hosts
+else isle.row.append(colorDots)                               // the row under the island is yours
+```
+
+- Controlled: a click only calls `onPick`; call `setActive(id)` yourself (also for a temporary Space-held hand). `key` is display only — bind keys yourself.
+- `icon` names: `hand`, `mouse-pointer-2`, `highlighter`, `underline`, `sticky-note`, `type`, `shapes`, `pen-line`, `eraser` (plus the rest of the vocabulary). `'separator'` draws a divider.
+- `row` is usable at once; add children, don't replace its class. `showRow(open)`: in 180 ms, out 80 ms, no slide under reduced motion. It sits above the island while docked at the bottom.
+- Clicks don't steal focus from your view; keyboard focus stays on the same button across `setActive` / `update`.
+- Overlays `root` without taking it over (static `root` → `relative` while mounted, restored on `dispose()`). Leave ~56 px at the top of your content. Pass the non-scrolling frame as `root`; pointer events on the island bubble to `root`, so skip `e.target.closest('.lcl-isle-layer')` in pan / draw handlers. Wrong shapes throw `TypeError`; the host disposes it on disable / reload.
 
 ### Settings parts: ctx.ui.mountSettingsPage / mountSettingsItem (2026-10-17+)
 

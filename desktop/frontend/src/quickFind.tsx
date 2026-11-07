@@ -23,7 +23,7 @@ import { useApp } from './stores/appStore'
 import { openNote, openDb, openFile } from './amadeusNav'
 import { registerMessages, useI18n } from './i18n'
 import { pageKey } from '@amadeus-shared/links'
-import { isImeKeyEvent, isMacPlatform, useExitGhost, useNativeChromeClaim, useNativeChromeInstalled, type NativeChromeClaim } from '@lcl/engine'
+import { isImeKeyEvent, isMacPlatform, useExitGhost, useNativeChromeClaim, useNativeChromeInstalled, useSegDir, type NativeChromeClaim } from '@lcl/engine'
 import { listMessages, searchSessions, type SessionSearchHit } from './services/backendService'
 import { homeTarget, targetForSession } from './services/engine/targets'
 import type { MessageRecord } from './types'
@@ -228,6 +228,8 @@ function QuickFindInner() {
   // 光标在这条线上的位置:-1 = 正文(= 全部),0.. = 分类格。每次唤起都从 -1 起(面板关掉即卸载)。
   const [pos, setPos] = useState(-1)
   const cat = catAt(pos)
+  /** 分类胶囊滑块往哪边拉(写进 data-dir,后沿晚出发;见 sidebar2.css .t2s-vaultseg-thumb)。 */
+  const segDir = useSegDir(pos + 1)
   const [q, setQ] = useState('')
   const [sel, setSel] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -379,7 +381,7 @@ function QuickFindInner() {
             onMouseUp={() => setPos(-1)}
           />
         </div>
-        {/* 分类胶囊:复用「本地|云端」「文档|画布」那颗 `.t2s-vaultseg`(凹轨道 + 滑块弹性平移),
+        {/* 分类胶囊:复用「本地|云端」「文档|画布」那颗 `.t2s-vaultseg`(凹轨道 + 滑块两条边拉伸过去),
             只是从两格变成四格 —— 格数与当前格走 CSS 变量(见 sidebar2.css)。
             ⚠️ 整条 mousedown preventDefault:点格子不夺焦点,点完还能接着打字。 */}
         {!pick && <div
@@ -388,7 +390,7 @@ function QuickFindInner() {
           aria-label={t('quickfind.scopeLabel')}
           style={{ '--seg-n': SEGS.length, '--seg-i': pos + 1 } as React.CSSProperties}
         >
-          <div className="t2s-vaultseg-thumb" />
+          <div className="t2s-vaultseg-thumb" data-dir={segDir} />
           {SEGS.map((c, i) => (
             <button
               key={c.id}
