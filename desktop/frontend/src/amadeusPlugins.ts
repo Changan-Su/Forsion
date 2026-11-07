@@ -7,6 +7,7 @@ import { amadeusAvailable } from './features/runtime'
 import { applyPluginEnableStamp, FILE_OPENERS_KEY, PLUGIN_ENABLE_STAMP_KEY, syncFileOpeners, usePluginStore } from '@amadeus/plugins/pluginStore'
 import type { AmadeusPlugin } from '@amadeus/plugins/types'
 import { calloutBlocks, wordCount } from '@amadeus/plugins/builtins'
+import { voiceInputPlugin } from './dictation/voiceInputPlugin'
 import { usePageStore } from '@amadeus/store/pageStore'
 import { useUiStore } from '@amadeus/store/uiStore'
 import { useQuickFind } from './quickFind'
@@ -82,7 +83,8 @@ export function installAmadeusPlugins(): void {
     },
   })
   const store = usePluginStore.getState()
-  store.init(amadeusAvailable() ? [calloutBlocks, wordCount] : [])
+  // 官方「语音输入」(全局听写):只在主进程给了 window.tangu.dictation 的桌面(macOS / Windows)注册,与 Amadeus 在不在无关。
+  store.init([...(amadeusAvailable() ? [calloutBlocks, wordCount] : []), ...(window.tangu?.dictation ? [voiceInputPlugin] : [])])
   pluginsReady = enqueueReconcile(() => store.loadExternal()).then(() => {
     // 捆绑包内嵌的 Space 引用插件自己的视图,必须等插件装完(视图已注册)才过得了 parseSpaceJson 的
     // isViewRegistered 闸 —— bootstrapEngine 那次 loadUserSpaces 跑在插件之前,注定被「未注册视图」跳过。

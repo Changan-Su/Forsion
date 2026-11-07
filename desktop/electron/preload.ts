@@ -3,6 +3,7 @@
  * agent 调用 renderer 直连 HTTP,不经主进程。
  */
 import type { OpenVoiceInput, VoiceInputStreamEvent } from '../shared/voiceInputStream'
+import { DICTATION_CHANNELS, type DictationState } from '../shared/dictation'
 import type { ActiveWindowSample } from '../shared/activeWindow'
 import type { AppearancePatch, StartupAppearance } from '../shared/startupAppearance'
 import type { DocumentTaskClaimsApi } from '../shared/documentTasks'
@@ -499,6 +500,23 @@ const api = {
   // ── 桌面级共享语音转写(任意功能复用:聊天框、Amadeus…;主进程本地/自带-key,不经引擎)──
   // timestamps 不传 = 回纯文本(语音输入);传 true = 回 { text, segments }(视频转录要的分段时间戳)。
   openVoiceInput,
+  /** 全局语音输入(官方「语音输入」插件用的窄接口;主进程 electron/dictation/)。只能开关服务、换快捷键、读状态、请辅助功能授权 ——
+   *  没有一条能往别的应用写字:写字只发生在用户按快捷键开出来的那次听写里,文字只认胶囊交回来的。macOS / Windows 才有。 */
+  ...(process.platform === 'darwin' || process.platform === 'win32' ? {
+    dictation: {
+      state: (): Promise<DictationState> => ipcRenderer.invoke(DICTATION_CHANNELS.state),
+      /** 挂租约:本窗口在,服务就开着;本窗口关 / 重载 / 再调一次 attach(false) 就撤。 */
+      attach: (on: boolean): Promise<DictationState> => ipcRenderer.invoke(DICTATION_CHANNELS.attach, on === true),
+      setHotkey: (hotkey: string): Promise<DictationState> => ipcRenderer.invoke(DICTATION_CHANNELS.setHotkey, String(hotkey).slice(0, 64)),
+      /** macOS:弹系统的辅助功能授权提示(往别的应用粘贴要它)。 */
+      allowAccessibility: (): Promise<DictationState> => ipcRenderer.invoke(DICTATION_CHANNELS.allow),
+      onChange: (cb: (s: DictationState) => void): (() => void) => {
+        const h = (_e: unknown, s: DictationState) => cb(s)
+        ipcRenderer.on(DICTATION_CHANNELS.changed, h)
+        return () => { ipcRenderer.removeListener(DICTATION_CHANNELS.changed, h) }
+      },
+    },
+  } : {}),
   transcribeAudio: (req: { audioBase64: string; mime?: string; modelId?: string; backend?: 'local' | 'cloud'; language?: string; timestamps?: boolean }): Promise<string | { text: string; segments?: Array<{ start: number; end: number; text: string }> }> =>
     ipcRenderer.invoke('asr:transcribe', req),
   // 按路径转写:几十 MB 的视频音轨不该走 base64 过 IPC,主进程直接读盘。

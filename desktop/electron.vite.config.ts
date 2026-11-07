@@ -27,7 +27,7 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     // p2pPreload = 扶桑根 P2P 隐藏窗专用(RTCPeerConnection 住 renderer 侧,主进程没有);
     // 多入口下产物名跟 entry 键走:out/preload/preload.mjs + out/preload/p2pPreload.mjs。
-    build: { lib: { entry: { preload: resolve('electron/preload.ts'), p2pPreload: resolve('electron/p2pPreload.ts') } } },
+    build: { lib: { entry: { preload: resolve('electron/preload.ts'), p2pPreload: resolve('electron/p2pPreload.ts'), dictationPreload: resolve('electron/dictationPreload.ts') } } },
     resolve: { alias: { '@amadeus-shared': resolve('shared/amadeus') } },
   },
   renderer: {
@@ -40,7 +40,8 @@ export default defineConfig({
     // 端口避开 Amadeus(5173)/老 desktop dev。
     server: { port: 5273, strictPort: false, fs: { allow: [resolve('.'), resolve('../lcl')] } },
     build: {
-      rollupOptions: { input: resolve('frontend/index.html') },
+      // dictation.html = 语音输入胶囊(桌面作用域浮层)的轻量入口:不起引擎、不装插件(electron/dictation/capsuleWindow.ts)。
+      rollupOptions: { input: { index: resolve('frontend/index.html'), dictation: resolve('frontend/dictation.html') } },
     },
     resolve: {
       // lcl 是直接链进源码的 workspace 目录。独立 worktree 下 Vite/Rollup 可能把宿主与
