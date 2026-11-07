@@ -1,10 +1,17 @@
 /**
- * 首次引导「权限与数据」里的电脑历史一页:真组件 + 生产 CSS,Chromium 里把真 Electron 台架(check:first-run)到不了的状态都摆一遍。
- * (那边连的是真主进程 + 假 socket,只出得来「关」和「连不上」;这里用桩把 记录中 / 待授权 / 助手过旧 / Windows 都摆出来。)
- * 覆盖:各状态 × 深浅色 × zh/en × 1280×800 / 900×640 / 818×582(= 900×640 配 110% 界面缩放)不整页滚动、无横向溢出、底栏在窗内;
- *   默认关时拨开关 → 弹同意说明(同意那一段 + 五条都在、弹窗在窗内、开关仍是关)→ 取消仍关 → 确认才开;
- *   macOS 一直有辅助功能那一行,Windows 没有、换成一句说明;只看说明的入口不动开关。
- * Run: npm run check:onboardinghistory   (worktree 里加 HARNESS_URL=http://localhost:<port>/harness.html;截图在 os.tmpdir()/forsion-onboarding-history)
+ * 电脑历史的说明 / 同意弹窗(ComputerHistoryDialog:首启引导团队屏「详情」与主页输入框下面那一行共用)+ 主页那一行(ComputerHistoryAsk):
+ * 真组件 + 生产 CSS,在 Chromium 里把各种情形摆一遍(computer-history-harness 的 ?ask / ?dialog,桩 window.tangu.computerHistory,不连 helper)。
+ * 真应用里的流程(跳过引导 → 主页出现那一行、团队屏「详情」)在 check:first-run;设置页的开关与同意条在 check:computerhistory。
+ * 覆盖:
+ *  - 主页那一行 × 深浅色 × zh/en × macOS / Windows × 1280×800 / 900×640 / 818×582(= 900×640 配 110% 界面缩放):无横向溢出、整行在窗内;
+ *  - 「开启…」→ 同意说明:同意那一段 + 五条 + 建议都在,弹窗和两个按钮都在窗内,落点在「取消」;弹着时电脑历史仍是关;
+ *  - 取消 / Esc → 弹窗关、仍是关、那一行还在;确认 → 开、弹窗关、那一行收起、本机记号变 dismissed;开成后 macOS 接着请辅助功能,Windows 不请;
+ *  - 「开启记录」写失败 → 弹窗里报错、不关、仍是关、记号不动;关掉再开,上次的错不留;
+ *  - ✕ → 那一行收起、记号 dismissed;电脑历史开着 / 动过(dataGen > 0)→ 那一行不出;
+ *  - 只看说明(团队屏「详情」):五条都在、没有开启按钮、落点在关闭钮、Esc / 点遮罩都能关、关了还能再开;
+ *  - 无页面错误。
+ * Run: npm run check:onboardinghistory   (worktree 里自己起 npx vite frontend --port <空闲口>,再带 HARNESS_URL=http://localhost:<port>/harness.html;
+ *      截图在 os.tmpdir()/forsion-onboarding-history,或 SHOT_DIR)
  */
 const fs = require('fs')
 const os = require('os')
@@ -25,86 +32,129 @@ async function main() {
   const errors = []
   page.on('pageerror', (e) => errors.push(String(e)))
   page.on('console', (m) => { if (m.type() === 'error' && !/404/.test(m.text())) errors.push(m.text()) })
-  const open = async (query, [width, height]) => {
+  const finishAnimations = () => page.evaluate(() => document.getAnimations().forEach((a) => { try { a.finish() } catch { /* infinite */ } }))
+  /** 打开台架;ready = 等哪个元素出来(缺省 = 不等,调用方自己等)。 */
+  const open = async (query, [width, height], ready) => {
     await page.setViewportSize({ width, height })
-    await page.goto(`${baseUrl}?onboarding&${query}`)
-    await page.locator('.ob-history').waitFor({ timeout: 20_000 })
-    if (!/platform=win32/.test(query)) await page.locator('.ob-history [data-permission="computerAccessibility"]').waitFor()
-    await page.waitForTimeout(250)
-    // 入场动效收尾再量(循环播放的状态点收不了尾,跳过)
-    await page.evaluate(() => document.getAnimations().forEach((a) => { try { a.finish() } catch { /* infinite */ } }))
+    await page.goto(`${baseUrl}?${query}`)
+    await page.waitForFunction(() => (window.__chGets || 0) > 0, null, { timeout: 20_000 })
+    if (ready) await page.locator(ready).first().waitFor({ timeout: 20_000 })
+    await page.waitForTimeout(150)
+    await finishAnimations()
   }
-  const geometry = () => page.evaluate(() => {
-    const content = document.querySelector('.ob-content'), footer = document.querySelector('.ob-footer').getBoundingClientRect()
-    return { contentH: content.clientHeight, scrollH: content.scrollHeight, contentW: content.clientWidth, scrollW: content.scrollWidth,
-      footerVisible: footer.bottom <= innerHeight + 1, docW: document.documentElement.scrollWidth, vw: innerWidth }
+  const row = page.locator('[data-ch-ask]')
+  const dialog = page.locator('.ob-history-dialog')
+  const dialogOpen = () => dialog.evaluate((el) => el.open).catch(() => false)
+  /** 桩里电脑历史此刻开没开(读真 API,不看界面)。 */
+  const enabledNow = () => page.evaluate(async () => (await window.tangu.computerHistory.get()).state.enabled)
+  const mark = () => page.evaluate(() => localStorage.getItem('forsion_ch_ask'))
+  const permissionRequests = () => page.evaluate(() => [...(window.__permissionRequests || [])])
+  /** 弹窗开着时量:在窗内、底部按钮在弹窗内、五条 + 建议、同意那一段、落点。 */
+  const measureDialog = () => dialog.evaluate((el) => {
+    const r = el.getBoundingClientRect(), foot = el.querySelector('.ob-history-dialog-foot')?.getBoundingClientRect()
+    const focus = document.activeElement
+    return { open: el.open, inside: r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight && r.right <= innerWidth,
+      footInside: foot ? foot.bottom <= r.bottom + 1 && foot.top >= r.top : null, foot: !!foot,
+      rows: el.querySelectorAll('.ch-about-row').length, consent: !!el.querySelector('.ob-history-consent')?.textContent.trim(), tip: !!el.querySelector('.ch-tip'),
+      focus: focus?.closest('.ob-history-dialog-foot') ? `foot:${focus.className}` : focus?.classList.contains('icon-btn') ? 'close' : focus?.tagName,
+      hScroll: el.scrollWidth > el.clientWidth + 1 }
   })
   const SIZES = [[1280, 800], [900, 640], [818, 582]]
+
+  // ── 主页那一行 + 同意说明:几何(各语言 × 深浅色 × 平台 × 尺寸)──
   for (const [name, query] of [
-    ['off', 'status=off'], ['off-dark', 'status=off&dark'], ['off-en', 'status=off&lang=en'],
-    ['recording', 'status=recording'], ['recording-dark-en', 'status=recording&dark&lang=en'],
-    ['no-permission', 'status=no_permission'], ['no-permission-dark', 'status=no_permission&dark'],
-    ['helper-missing', 'status=helper_missing'], ['helper-outdated-dark-en', 'status=helper_outdated&dark&lang=en'],
-    ['paused', 'status=paused'], ['disconnected-en', 'status=disconnected&lang=en'],
-    ['win-off', 'status=off&platform=win32'], ['win-helper-missing-dark-en', 'status=helper_missing&platform=win32&dark&lang=en'],
+    ['zh', 'ask&status=off'], ['zh-dark', 'ask&status=off&dark'], ['en', 'ask&status=off&lang=en'],
+    ['en-dark-win', 'ask&status=off&dark&lang=en&platform=win32'], ['zh-win-teal', 'ask&status=off&platform=win32&skin=teal'],
   ]) {
     for (const size of SIZES) {
-      await open(query, size)
-      const g = await geometry()
-      await page.screenshot({ path: path.join(out, `${name}-${size.join('x')}.png`) })
-      check(`${name} ${size.join('×')} 不整页滚动、无横向溢出、底栏在窗内`,
-        g.scrollH <= g.contentH + 1 && g.scrollW <= g.contentW + 1 && g.footerVisible && g.docW <= g.vw, g)
-    }
-  }
-
-  // ── 同意流程(默认关)──
-  const sw = page.getByRole('switch')
-  const dialog = page.locator('.ob-history-dialog')
-  for (const [name, query] of [['zh', 'status=off'], ['en-dark', 'status=off&dark&lang=en']]) {
-    for (const size of SIZES) {
-      await open(query, size)
-      check(`[${name} ${size.join('×')}] 默认关`, await sw.getAttribute('aria-checked') === 'false')
-      await sw.click()
-      await dialog.locator('.ch-about-row').first().waitFor()
-      await page.evaluate(() => document.getAnimations().forEach((a) => { try { a.finish() } catch { /* infinite */ } }))
-      const d = await dialog.evaluate((el) => {
-        const r = el.getBoundingClientRect(), foot = el.querySelector('.ob-history-dialog-foot').getBoundingClientRect()
-        return { open: el.open, inside: r.top >= 0 && r.left >= 0 && r.bottom <= innerHeight && r.right <= innerWidth, footInside: foot.bottom <= r.bottom + 1,
-          rows: el.querySelectorAll('.ch-about-row').length, consent: !!el.querySelector('.ob-history-consent')?.textContent.trim(), tip: !!el.querySelector('.ch-tip') }
+      const tag = `[${name} ${size.join('×')}]`
+      await open(query, size, '[data-ch-ask]')
+      const g = await row.evaluate((el) => {
+        const r = el.getBoundingClientRect()
+        return { inside: r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight, rowOverflow: el.scrollWidth > el.clientWidth + 1,
+          docW: document.documentElement.scrollWidth, vw: innerWidth, buttons: el.querySelectorAll('[data-ch-ask-enable], [data-ch-ask-dismiss]').length }
       })
+      await page.screenshot({ path: path.join(out, `ask-${name}-${size.join('x')}.png`) })
+      check(`${tag} 那一行在窗内、无横向溢出、「开启…」和 ✕ 都在`, g.inside && !g.rowOverflow && g.docW <= g.vw && g.buttons === 2, g)
+
+      await page.locator('[data-ch-ask-enable]').click()
+      await dialog.locator('.ch-about-row').first().waitFor()
+      await finishAnimations()
+      const d = await measureDialog()
       await page.screenshot({ path: path.join(out, `consent-${name}-${size.join('x')}.png`) })
-      check(`[${name} ${size.join('×')}] 拨开关弹同意说明:同意那一段 + 五条 + 建议都在,弹窗和两个按钮都在窗内`,
-        d.open && d.inside && d.footInside && d.rows === 5 && d.consent && d.tip, d)
-      check(`[${name} ${size.join('×')}] 弹着同意说明时开关仍是关`, await sw.getAttribute('aria-checked') === 'false')
+      check(`${tag} 「开启…」弹同意说明:同意那一段 + 五条 + 建议,弹窗和两个按钮都在窗内,落点在「取消」`,
+        d.open && d.inside && d.footInside && !d.hScroll && d.rows === 5 && d.consent && d.tip && /^foot:.*ghost/.test(d.focus || ''), d)
+      check(`${tag} 弹着同意说明时仍是关`, !(await enabledNow()))
       await dialog.locator('.ob-history-dialog-foot .btn.ghost').click()
-      check(`[${name} ${size.join('×')}] 取消 → 弹窗关、仍是关`, !(await dialog.evaluate((el) => el.open)) && await sw.getAttribute('aria-checked') === 'false')
+      check(`${tag} 取消 → 弹窗关、仍是关、那一行还在`, !(await dialogOpen()) && !(await enabledNow()) && await row.count() === 1)
     }
   }
-  await open('status=off', [1280, 800])
-  await sw.click()
-  await dialog.locator('.ob-history-dialog-foot .btn.primary').click()
-  await page.locator('.ob-history[data-ch-status="recording"]').waitFor()
-  check('确认 → 开、状态行变成「记录中」', await sw.getAttribute('aria-checked') === 'true' && !(await dialog.evaluate((el) => el.open)))
-  await sw.click()
-  await page.locator('.ob-history[data-ch-status="off"]').waitFor()
-  check('再拨一次直接关,不再确认', await sw.getAttribute('aria-checked') === 'false' && !(await dialog.evaluate((el) => el.open)))
-  // 只看说明:不动开关,没有「开启记录」
-  await page.locator('.ob-history-more').click()
-  await dialog.locator('.ch-about-row').first().waitFor()
-  const readOnly = await dialog.evaluate((el) => ({ rows: el.querySelectorAll('.ch-about-row').length, foot: !!el.querySelector('.ob-history-dialog-foot') }))
-  check('「完整说明」入口:五条都在、没有开启按钮、开关不动', readOnly.rows === 5 && !readOnly.foot && await sw.getAttribute('aria-checked') === 'false', readOnly)
-  await page.keyboard.press('Escape')
-  check('Esc 关掉说明', !(await dialog.evaluate((el) => el.open)))
 
-  // ── 平台差异 ──
-  await open('status=off', [1280, 800])
-  check('macOS:没开开关也画辅助功能那一行(授权状态 + 入口)', await page.locator('.ob-history [data-permission="computerAccessibility"] .btn, .ob-history [data-permission="computerAccessibility"] .desktop-permissions-state').count() >= 1)
-  await open('status=off&platform=win32', [1280, 800])
-  check('Windows:没有辅助功能那一行,换成一句不需要授权的说明',
-    await page.locator('.ob-history [data-permission]').count() === 0 && await page.locator('.ob-history-note').count() === 1)
-  await open('status=helper_outdated', [1280, 800])
-  check('助手过旧:状态行照实写,不显示成在录', await page.locator('.ob-history').getAttribute('data-ch-status') === 'helper_outdated'
-    && await page.locator('.ob-history .settings-status-dot.warn').count() === 1)
+  // ── 同意流程 ──
+  for (const [platform, query] of [['macOS', 'ask&status=off'], ['Windows', 'ask&status=off&platform=win32']]) {
+    await open(query, [1280, 800], '[data-ch-ask]')
+    await page.locator('[data-ch-ask-enable]').click()
+    await dialog.locator('.ch-about-row').first().waitFor()
+    await page.keyboard.press('Escape')
+    check(`[${platform}] Esc 关掉同意说明,仍是关`, !(await dialogOpen()) && !(await enabledNow()) && await row.count() === 1)
+    await page.locator('[data-ch-ask-enable]').click()
+    await dialog.locator('.ob-history-dialog-foot .btn.primary').click()
+    await row.waitFor({ state: 'detached' })
+    const requests = await permissionRequests()
+    check(`[${platform}] 确认 → 开、弹窗关、那一行收起、记号 dismissed`,
+      await enabledNow() && !(await dialogOpen()) && await mark() === 'dismissed', { mark: await mark() })
+    check(`[${platform}] 开成后${platform === 'macOS' ? '接着请辅助功能' : '不请权限'}`,
+      JSON.stringify(requests) === JSON.stringify(platform === 'macOS' ? ['computerAccessibility'] : []), requests)
+  }
+
+  // 写失败:弹窗里报错、不关、仍是关;关掉再开,上次的错不留
+  await open('ask&status=off&failEnable', [1280, 800], '[data-ch-ask]')
+  await page.locator('[data-ch-ask-enable]').click()
+  await dialog.locator('.ob-history-dialog-foot .btn.primary').click()
+  await dialog.locator('.ob-history-dialog-error').waitFor()
+  const failed = await dialog.evaluate((el) => ({ open: el.open, error: el.querySelector('.ob-history-dialog-error')?.textContent || '' }))
+  await page.screenshot({ path: path.join(out, 'consent-write-failed.png') })
+  check('写失败 → 弹窗里报错、不关、仍是关、记号不动、没请权限',
+    failed.open && /simulated write failure/.test(failed.error) && !(await enabledNow()) && await mark() === 'pending' && (await permissionRequests()).length === 0, failed)
+  await dialog.locator('.ob-history-dialog-foot .btn.ghost').click()
+  await page.locator('[data-ch-ask-enable]').click()
+  await dialog.locator('.ch-about-row').first().waitFor()
+  check('关掉再开,上次的错不留', await dialog.locator('.ob-history-dialog-error').count() === 0)
+  await page.keyboard.press('Escape')
+
+  // ✕ = 不再提醒
+  await open('ask&status=off', [1280, 800], '[data-ch-ask]')
+  await page.locator('[data-ch-ask-dismiss]').click()
+  await row.waitFor({ state: 'detached' })
+  check('✕ → 那一行收起、记号 dismissed、电脑历史不动', await mark() === 'dismissed' && !(await enabledNow()))
+
+  // 不该出现的情形:开着的、动过的(读回来了也不出)
+  for (const [name, query] of [['开着', 'ask&status=recording'], ['动过(dataGen 1)', 'ask&status=off&touched']]) {
+    await open(query, [1280, 800])
+    await page.waitForTimeout(300)
+    check(`${name} → 那一行不出`, await row.count() === 0)
+  }
+
+  // ── 只看说明(团队屏「详情」)──
+  for (const [name, query] of [['zh', 'dialog&status=off'], ['en-dark', 'dialog&status=off&dark&lang=en'], ['zh-recording-win', 'dialog&status=recording&platform=win32']]) {
+    for (const size of SIZES) {
+      const tag = `[details ${name} ${size.join('×')}]`
+      await open(query, size, '.ob-history-dialog[open] .ch-about-row')
+      const d = await measureDialog()
+      await page.screenshot({ path: path.join(out, `details-${name}-${size.join('x')}.png`) })
+      check(`${tag} 五条 + 建议都在、没有开启按钮和同意段、弹窗在窗内、落点在关闭钮`,
+        d.open && d.inside && !d.hScroll && d.rows === 5 && d.tip && !d.foot && !d.consent && d.focus === 'close', d)
+    }
+  }
+  const before = await enabledNow()
+  await page.keyboard.press('Escape')
+  check('只看说明:Esc 关,电脑历史不动', !(await dialogOpen()) && await enabledNow() === before)
+  await page.locator('[data-open-details]').click()
+  await dialog.locator('.ch-about-row').first().waitFor()
+  check('关了还能再开', await dialogOpen())
+  await page.mouse.click(4, 4) // 遮罩(弹窗外)
+  await page.waitForTimeout(100)
+  check('点遮罩关', !(await dialogOpen()))
 
   check('无页面错误', errors.length === 0, errors.slice(0, 5))
   await browser.close()

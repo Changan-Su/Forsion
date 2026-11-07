@@ -213,7 +213,7 @@ html.dark .ob3-paper { --hpw-grain-blend: screen; --hpw-halo: 16%; --hpw-halo-mi
 .ob3-back:disabled { visibility: hidden; }
 .ob3-foot-hint { flex: 1; text-align: center; color: var(--text-faint); font-size: var(--ui-font-meta, 12px); }
 
-/* 某屏崩了时的错误卡(从旧外壳 onboarding.css 搬来)。电脑历史「详情」弹窗的样式在 ../computerHistoryDialog.css,主页那一行也用 */
+/* 某屏崩了时的错误卡(原在旧外壳 onboarding.css,那份已删)。电脑历史「详情」弹窗的样式在 ../computerHistoryDialog.css,主页那一行也用 */
 .ob3 .ob-step-error { justify-self: center; max-width: 520px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; }
 .ob3 .ob-step-error strong { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: var(--ui-font-heading, 14px); font-weight: 600; }
 .ob3 .ob-step-error strong svg { color: var(--danger); }
