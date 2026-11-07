@@ -303,11 +303,15 @@ export function startSandboxChild(self: SandboxSelf, opts: { getWindow(): Browse
       case 'reload': await hook('reload()', 30_000); return {}
       case 'show': {
         const w = win()
-        // 沙箱是后台进程,叫不动前台:Windows 有前台锁(只有前台进程能 SetForegroundWindow,别人调 focus 只闪任务栏),
-        // macOS 是协作式激活。临时置顶再放下只改 z 序、不要前台权,窗口一定排到最前,也顺带把静默模式压到 -1 层
-        // (main.ts sinkForHarness)的窗口抬回普通层;能不能顺带拿到键盘焦点看系统
         if (w) {
+          if (process.platform === 'win32') {
+            // The foreground parent hands focus to this window after verifying the HWND belongs to us.
+            if (!w.isVisible() && !w.isMinimized()) w.showInactive()
+            const handle = w.getNativeWindowHandle()
+            return { hwnd: handle.length === 8 ? Number(handle.readBigUInt64LE()) : handle.readUInt32LE() }
+          }
           if (w.isMinimized()) w.restore()
+          // Also restores the normal level for the macOS quiet harness (main.ts sinkForHarness).
           w.setAlwaysOnTop(true); w.show(); w.focus(); w.setAlwaysOnTop(false)
           if (process.platform === 'darwin') app.focus({ steal: true })
         }

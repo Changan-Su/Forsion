@@ -70,7 +70,11 @@ describe('子进程环境与目录', () => {
   it('父进程自己的 TANGU_HOME / 工作区 / 电脑操作 socket 一律换成沙箱的', () => {
     const p = sandboxPaths('/h', 'reading-log')
     const env = sandboxEnv({ TANGU_HOME: '/real', FORSION_WORKSPACE_DIR: '/real-ws', PI_CU_SOCKET_PATH: '/real.sock', PATH: '/bin' }, p, { dir: '/p', sock: '/s', token: 't', info: '{}' })
-    expect(env).toMatchObject({ TANGU_HOME: '/h/sandbox/reading-log/home', FORSION_WORKSPACE_DIR: '/h/sandbox/reading-log/workspace', FORSION_SANDBOX: '1', PATH: '/bin' })
+    expect(env).toMatchObject({
+      TANGU_HOME: join('/h', 'sandbox', 'reading-log', 'home'),
+      FORSION_WORKSPACE_DIR: join('/h', 'sandbox', 'reading-log', 'workspace'),
+      FORSION_SANDBOX: '1', PATH: '/bin',
+    })
     expect(env.PI_CU_SOCKET_PATH).not.toBe('/real.sock')
     expect(env.TANGU_BACKEND_URL).toBe('http://127.0.0.1:1')
   })

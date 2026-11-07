@@ -96,7 +96,7 @@ import { computerUseLiveView, helperSocketPath, askHelper, ensureHelperRunning, 
 import { createAppRefs } from './appRefs'
 import { createAppRefHotkey, frontToAppRef, hotkeyToAccelerator, HOTKEY_GESTURES } from './appRefHotkey'
 import { normalizeAppRef, type AppRef } from '../shared/appRefs'
-import { winAppIdOf } from './appRefsWin'
+import { focusWinWindowFromOwner, winAppIdOf, type WinRunOpts } from './appRefsWin'
 import { appIconDataUrls } from './appIcons'
 import { chooseSide, makeRoom, panelRectFor, startDockFollow, DOCK_PANEL_WIDTH, DOCK_PANEL_MIN_WIDTH, DOCK_PANEL_MIN_HEIGHT, normalizeProbe } from './appDock'
 import { normalizeDockCandidates, normalizeDockSelection, normalizeDockWindow, type DockState, type DockWindow } from '../shared/appDock'
@@ -4059,14 +4059,7 @@ app.whenReady().then(async () => {
     ask: (payload) => askHelper(helperSocketPath(), payload, 5_000),
     // 助手被这里拉起来之后,顺手让全局快捷键那条订阅现在就连(它自己从不拉起助手)
     ensureHelper: () => ensureHelperRunning().then((v) => { appRefHotkey.poke(); return v }),
-    // 台架把 mdfind / open 换成夹具(FORSION_APPREF_BIN_DIR 下的同名脚本):不然测「点击打开」会真的把这台电脑上的应用拉起来。
-    // opts 只有 Windows 那一半传(数据经环境变量进 PowerShell);windowsHide:不然每问一次状态就闪一个控制台窗口。
-    run: (file, args, opts) => new Promise<string>((resolve, reject) => {
-      const fixtures = app.isPackaged ? '' : process.env.FORSION_APPREF_BIN_DIR?.trim() // 安装版不认:不给环境变量换掉系统命令的口子
-      execFile(fixtures ? join(fixtures, basename(file)) : file, args,
-        { timeout: opts?.timeoutMs ?? 8_000, maxBuffer: 4 << 20, windowsHide: true, ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}) },
-        (err, stdout) => (err ? reject(err) : resolve(String(stdout)))).stdin?.end() // 这些命令都不读 stdin:关掉,免得谁等它
-    }),
+    run: runAppRefCommand,
     // Windows 的图标:exe 自带的那枚(macOS 上 getFileIcon 只给通用图标,走下面的 appIconDataUrls)
     fileIcon: (exePath) => app.getFileIcon(exePath, { size: 'normal' }).then((img) => (img.isEmpty() ? null : img.toDataURL())),
   })
@@ -4930,6 +4923,15 @@ app.whenReady().then(async () => {
 ipcMain.on('pluginSandbox:self', (e) => { e.returnValue = SANDBOX ? { ...SANDBOX, appVersion: app.getVersion() } : null })
 /** 父进程渲染层最近一次带来的主题键(起沙箱时随 exec 报上来)。 */
 let sandboxStorage: Record<string, string> = {}
+/** 开发夹具可替换系统命令。Windows PowerShell 走环境变量传参，隐藏控制台。 */
+function runAppRefCommand(file: string, args: string[], opts?: WinRunOpts): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fixtures = app.isPackaged ? '' : process.env.FORSION_APPREF_BIN_DIR?.trim()
+    execFile(fixtures ? join(fixtures, basename(file)) : file, args,
+      { timeout: opts?.timeoutMs ?? 8_000, maxBuffer: 4 << 20, windowsHide: true, ...(opts?.env ? { env: { ...process.env, ...opts.env } } : {}) },
+      (err, stdout) => (err ? reject(err) : resolve(String(stdout)))).stdin?.end()
+  })
+}
 const pluginSandbox = SANDBOX ? null : createPluginSandbox({
   forsionHome: forsionHomeDir,
   // dev:同一个 electron 二进制 + app 路径(ELECTRON_RENDERER_URL 随环境带过去,沙箱也吃 vite 热更新);打包态:应用本体
@@ -4937,6 +4939,9 @@ const pluginSandbox = SANDBOX ? null : createPluginSandbox({
   appArgs: app.isPackaged ? [] : [app.getAppPath()],
   platform: process.platform,
   pid: process.pid,
+  ...(process.platform === 'win32' ? {
+    focusWindow: (hwnd, pid) => focusWinWindowFromOwner({ ownPid: process.pid, run: runAppRefCommand }, hwnd, pid),
+  } : {}),
   ui: (): PluginSandboxUiSeed => ({ locale: mainLocale(), storage: sandboxStorage }),
   onChange: (st) => { for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed() && !w.webContents.isDestroyed()) w.webContents.send('pluginSandbox:changed', st) },
   onChildEvent: (ev) => {
