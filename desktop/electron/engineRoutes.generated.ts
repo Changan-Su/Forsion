@@ -170,6 +170,7 @@ export const ENGINE_ROUTES: readonly EngineRoute[] = [
   { method: 'POST', path: '/agent/project-context/icon', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'project icon write' },
   { method: 'POST', path: '/agent/project-context/init', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'project instruction write (design appendix C)' },
   { method: 'DELETE', path: '/agent/project-context/memory', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'project memory delete (host-only store; the route itself also refuses remote origin)' },
+  { method: 'PATCH', path: '/agent/project-context/memory', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'project memory edit (host-only store; the route itself also refuses remote origin)' },
   { method: 'POST', path: '/agent/project-context/memory/candidate', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'adopt / dismiss one pending project-memory candidate (host-only store; the route itself also refuses remote origin)' },
   { method: 'POST', path: '/agent/project-context/memory/restore', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'put back one sentence removed by a project-memory compaction (host-only store; the route itself also refuses remote origin)' },
   { method: 'GET', path: '/agent/project-context/missing', access: 'deny-remote', src: 'routes/projectContext.ts', why: 'which local project folders are gone: stats host paths (host-only; the route answers an empty list to remote origins)' },

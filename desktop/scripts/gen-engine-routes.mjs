@@ -270,6 +270,7 @@ export const CLASSIFICATION = {
   'POST /agent/project-context/icon': [D, 'project icon write'],
   'GET /agent/project-context/icon': [A, 'project icon'],
   'DELETE /agent/project-context/icon': [D, 'project icon write'],
+  'PATCH /agent/project-context/memory': [D, 'project memory edit (host-only store; the route itself also refuses remote origin)'],
   'DELETE /agent/project-context/memory': [D, 'project memory delete (host-only store; the route itself also refuses remote origin)'],
   'POST /agent/project-context/memory/candidate': [D, 'adopt / dismiss one pending project-memory candidate (host-only store; the route itself also refuses remote origin)'],
   'POST /agent/project-context/memory/restore': [D, 'put back one sentence removed by a project-memory compaction (host-only store; the route itself also refuses remote origin)'],
