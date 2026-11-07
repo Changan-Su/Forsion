@@ -1,7 +1,9 @@
 /** 桌面主页的组件摆放(主页第四轮,11-02 定):左栏 / 中间 / 下排 / 右栏,只存摆放,记在本机 —— 和近况卡一样桌面手机各摆各的,
  *  手机这轮不做。中间是主页组件(时钟、输入框、下排、Space 坞)的上下顺序:时钟和坞能拿掉(回收纳的「主页组件」),输入框只能挪。
  *  下排 4 格,一张卡占 1 或 2 格;近况卡是内置的一张,占满 4 格 —— 老用户什么都不改看到的就是今天的主页。
- *  左右栏各最多 3 张。存的是 id:`builtin:status` 或小组件 id(w_…);对不上的画的时候跳过,不替用户补位。 */
+ *  左右栏各最多 3 张。存的是 id:`builtin:status`(近况卡)、`builtin:<种类>`(宿主内置卡)、`plugin:<插件 id>/<卡 id>`(插件卡)
+ *  或 Agent 做的小组件 id(w_…);对不上的画的时候跳过,不替用户补位。
+ *  从没存过的(新装 / 没动过主页的老用户)= 方案 A(11-07 定):右栏 今天 / 待办 / 卜算子·建议;用户动过一次就照存的来。 */
 import { useSyncExternalStore } from 'react'
 import { registerMessages } from '../i18n'
 import { countTelemetry } from '../telemetrySend'
@@ -14,13 +16,29 @@ export type HomePart = 'clock' | 'composer' | 'row' | 'dock'
 export const HOME_PARTS: readonly HomePart[] = ['clock', 'composer', 'row', 'dock']
 export const REMOVABLE_PARTS: readonly HomePart[] = ['clock', 'dock']
 export const STATUS_CARD = 'builtin:status'
+/** 宿主内置的四张(数据就在宿主里):卜算子·建议 / 收件箱 / 最近笔记 / 最近对话。 */
+export const BUILTIN_WIDGETS = ['builtin:muse', 'builtin:inbox', 'builtin:notes', 'builtin:sessions'] as const
+export type BuiltinWidget = (typeof BUILTIN_WIDGETS)[number]
+export const MUSE_CARD: BuiltinWidget = 'builtin:muse'
+export const SESSIONS_CARD: BuiltinWidget = 'builtin:sessions'
+/** 插件卡的 id:`plugin:<插件 id>/<卡 id>`(卡 id 是插件 manifest `widgets` 里那一张自己的 id)。 */
+const PLUGIN_ID = /^plugin:([a-z0-9][a-z0-9-]{0,63})\/([a-z0-9][a-z0-9-]{0,47})$/
+export const pluginWidgetId = (pluginId: string, widgetId: string): string => `plugin:${pluginId}/${widgetId}`
+export function parsePluginWidgetId(id: string): { pluginId: string; widgetId: string } | null {
+  const m = PLUGIN_ID.exec(id)
+  return m ? { pluginId: m[1], widgetId: m[2] } : null
+}
+export const isBuiltinWidget = (id: string): id is BuiltinWidget => (BUILTIN_WIDGETS as readonly string[]).includes(id)
 export const ROW_CELLS = 4
 export const RAIL_MAX = 3
 export interface RowCell { id: string; w: 1 | 2 | 4 }
 export interface HomeLayout { left: string[]; center: HomePart[]; row: RowCell[]; right: string[] }
-export const DEFAULT_HOME_LAYOUT: HomeLayout = { left: [], center: [...HOME_PARTS], row: [{ id: STATUS_CARD, w: 4 }], right: [] }
+/** 日历插件(随 App 带的核心插件)给的两张。没装 / 旧版没声明 → 画的时候跳过,右栏只剩卜算子·建议。 */
+export const CALENDAR_TODAY = pluginWidgetId('forsion-calendar', 'today')
+export const CALENDAR_TODO = pluginWidgetId('forsion-calendar', 'todo')
+export const DEFAULT_HOME_LAYOUT: HomeLayout = { left: [], center: [...HOME_PARTS], row: [{ id: STATUS_CARD, w: 4 }], right: [CALENDAR_TODAY, CALENDAR_TODO, MUSE_CARD] }
 
-const isId = (x: unknown): x is string => typeof x === 'string' && (x === STATUS_CARD || /^w_[A-Za-z0-9_-]{1,64}$/.test(x))
+const isId = (x: unknown): x is string => typeof x === 'string' && (x === STATUS_CARD || isBuiltinWidget(x) || PLUGIN_ID.test(x) || /^w_[A-Za-z0-9_-]{1,64}$/.test(x))
 
 /** 存的那份 → 合法的一份:去重、限量、composer 必在。读不懂 = 缺省(ponytail: 本机摆放坏了没法救,缺省就是今天的主页)。 */
 export function sanitizeHomeLayout(raw: unknown): HomeLayout {
@@ -85,12 +103,13 @@ export const useHomeLayout = (): HomeLayout => useSyncExternalStore((f) => { sub
 const rowUsed = (l: HomeLayout): number => l.row.reduce((s, c) => s + c.w, 0)
 export const isOnHome = (l: HomeLayout, id: string): boolean => l.row.some((c) => c.id === id) || l.left.includes(id) || l.right.includes(id)
 
-/** 放到第一个空位:先下排(放得下 2 格就占 2 格),再右栏。都满了回 null。 */
+/** 放到第一个空位:先下排(放得下 2 格就占 2 格),再右栏,再左栏(缺省右栏已摆满)。都满了回 null。 */
 export function placeOnHome(l: HomeLayout, id: string): HomeLayout | null {
   if (isOnHome(l, id)) return l
   const free = ROW_CELLS - rowUsed(l)
   if (free > 0) return { ...l, row: [...l.row, { id, w: free >= 2 ? 2 : 1 }] }
   if (l.right.length < RAIL_MAX) return { ...l, right: [...l.right, id] }
+  if (l.left.length < RAIL_MAX) return { ...l, left: [...l.left, id] }
   return null
 }
 export function removeFromHome(l: HomeLayout, id: string): HomeLayout {

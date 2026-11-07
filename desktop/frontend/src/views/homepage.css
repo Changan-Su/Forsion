@@ -1549,3 +1549,59 @@ button.hp-organizer-mark:hover { color: var(--text); background: var(--bg-hover)
 .hp-lib-name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--ui-font-body, 13px); font-weight: 500; }
 .hp-lib-sub { display: inline-flex; align-items: center; gap: 3px; max-width: 100%; overflow: hidden; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); white-space: nowrap; }
 .hp-lib-note { padding: 8px 10px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+
+/* ── 主页卡的种类(11-07 方案 A):内置四张与插件卡同一套行样式;Agent 做的小组件照旧是原生文档 ── */
+.hp-wcard-pic { flex: none; border-radius: 3px; object-fit: cover; }
+.hp-wcard-go { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.hp-wcard-go:hover { text-decoration: underline; text-underline-offset: 3px; text-decoration-color: color-mix(in srgb, var(--text) 30%, transparent); }
+.hp-wcard-body.hp-wbody { display: flex; flex-direction: column; font-size: var(--ui-font-body, 13px); line-height: 1.45; }
+/* 列表:一行 = 左标(点 / 勾选框 / 小图标)· 时间 · 标题 · 右边小字;分组名变了画小标题 */
+.hp-wl { display: flex; flex-direction: column; gap: 1px; margin: 0 -6px; }
+.hp-wl-group { margin: 4px 6px 0; color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }
+.hp-wl-row { display: flex; align-items: center; gap: 7px; min-width: 0; width: 100%; padding: 3px 6px; border: 0; border-radius: var(--radius-sm, 6px); background: transparent; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.hp-wl-row:hover:not(:disabled) { background: var(--bg-hover); }
+.hp-wl-row:disabled { cursor: default; }
+.hp-wl-lead { flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 14px; color: var(--text-muted); }
+.hp-wl-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--overlay-medium); }
+.hp-wl-dot.on { background: var(--accent-ink); }
+.hp-wl-row.now .hp-wl-title { font-weight: 600; }
+.hp-wl-box { display: grid; place-items: center; width: 14px; height: 14px; border-radius: 4px; box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--text-muted) 55%, transparent); color: var(--bg-card, #fff); }
+.hp-wl-box.on { background: var(--accent-ink); box-shadow: none; }
+.hp-wl-row.done .hp-wl-title { color: var(--text-muted); text-decoration: line-through; }
+.hp-wl-time { flex: none; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.hp-wl-title { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-wl-meta { flex: none; padding-left: 6px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); white-space: nowrap; }
+.hp-wl-meta[data-tone="accent"] { color: var(--accent-ink); }
+.hp-wl-meta[data-tone="warn"] { color: var(--danger); }
+.hp-wl-ini { display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--overlay-medium); color: var(--text); font-size: var(--ui-font-caption, 11px); font-weight: 600; }
+.hp-wl-foot { display: flex; align-items: center; gap: 6px; margin-top: 6px; padding: 0 6px; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.hp-wl-empty { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.hp-wl-loading { min-height: 54px; border-radius: var(--radius-sm, 6px); background: var(--overlay-light); }
+/* 小按钮 */
+.hp-wbtn { display: inline-flex; align-items: center; gap: 4px; height: 24px; padding: 0 10px; border: 0; border-radius: var(--radius-pill, 999px); background: var(--overlay-medium); color: var(--text); font: inherit; font-size: var(--ui-font-meta, 12px); font-weight: 500; white-space: nowrap; cursor: pointer; }
+.hp-wbtn:hover { background: var(--bg-hover); }
+.hp-wbtn.ghost { padding: 0 6px; background: transparent; color: var(--text-muted); }
+.hp-wbtn.ghost:hover { color: var(--text); }
+/* 卜算子·建议的「一签」 */
+.hp-wcard[data-widget-id="builtin:muse"] .hp-wcard-h > svg { color: var(--accent-ink); }
+.hp-wsign { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.hp-wsign-src { display: flex; align-items: center; gap: 5px; min-width: 0; color: var(--accent-ink); font-size: var(--ui-font-meta, 12px); font-weight: 500; }
+.hp-wsign-src > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hp-wsign-t { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; padding: 0; border: 0; background: none; color: var(--text); font: inherit; line-height: 1.55; text-align: left; cursor: pointer; }
+.hp-row-cell .hp-wsign-t { -webkit-line-clamp: 2; }
+.hp-wsign-link { color: var(--accent-ink); font-weight: 500; cursor: pointer; }
+.hp-wsign-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.hp-wsign .hp-wl-foot { margin-top: 2px; padding: 0; }
+.hp-wdots { display: inline-flex; gap: 4px; margin-left: auto; }
+.hp-wdots > i { width: 5px; height: 5px; border-radius: 50%; background: var(--overlay-medium); }
+.hp-wdots > i.on { background: var(--accent-ink); }
+/* 收件箱:大数字 + 最新一封 */
+.hp-wstat { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 0; border: 0; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.hp-wbig { display: flex; align-items: baseline; gap: 5px; }
+.hp-wbig > b { font-size: calc(var(--ui-font-display, 20px) * 1.5); font-weight: 300; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+.hp-wbig > span { color: var(--text-muted); font-size: var(--ui-font-meta, 12px); }
+.hp-wsub { overflow: hidden; color: var(--text-muted); font-size: var(--ui-font-meta, 12px); text-overflow: ellipsis; white-space: nowrap; }
+/* 收纳面板的三组 */
+.hp-lib-h { display: flex; align-items: baseline; gap: 8px; padding: 8px 8px 2px; }
+.hp-lib-h > b { font-size: var(--ui-font-meta, 12px); font-weight: 600; }
+.hp-lib-h > span { color: var(--text-muted); font-size: var(--ui-font-caption, 11px); }

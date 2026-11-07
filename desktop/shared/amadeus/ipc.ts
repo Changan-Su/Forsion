@@ -323,6 +323,58 @@ export interface PluginEventDecl {
   label?: string
 }
 
+/** 插件声明的一张主页小组件(manifest `widgets`,2026-11-07+)。和 Agent 做的小组件同一种目录,这一版只开「列表」型:
+ *  `<目录>/manifest.json` 写 `layout: "list"`,数据由插件经只读的 `ctx.widgets.provide(id, fn)` 喂行,宿主照主页卡的样子画。不开 DOM 挂载。 */
+export interface PluginWidgetSpec {
+  /** 插件内唯一;主页摆放里存成 `plugin:<插件 id>/<这个 id>`。 */
+  id: string
+  title: string
+  titleEn?: string
+  summary?: string
+  summaryEn?: string
+  layout: 'list'
+  /** 卡头 / 收起成条时的图标:插件图标词表里的名字(同 `registerView` 的 icon,如 `date` / `todo`);缺省用插件的 icon.png。 */
+  icon?: string
+  /** 点卡头 / 点行打开的 Space id(缺省 = 不跳)。 */
+  space?: string
+}
+export const PLUGIN_WIDGET_ID = /^[a-z0-9][a-z0-9-]{0,47}$/
+export const PLUGIN_WIDGETS_MAX = 8
+
+/** manifest `widgets` → 要读的目录(相对插件根)。只认插件根里的相对路径;最多 8 个,重复的只留一个。 */
+export function pluginWidgetDirs(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const v of raw.slice(0, 32)) {
+    if (out.length >= PLUGIN_WIDGETS_MAX) break
+    if (typeof v !== 'string') continue
+    const rel = v.trim().replace(/\\/g, '/').replace(/\/+$/, '')
+    if (!rel || rel.length > 120 || rel.startsWith('/') || /^[A-Za-z]:/.test(rel) || rel.split('/').some((seg) => !seg || seg === '.' || seg === '..' || seg.startsWith('.'))) continue
+    if (!out.includes(rel)) out.push(rel)
+  }
+  return out
+}
+
+/** 一张小组件目录里的 manifest.json → 宿主认的那份;不合格回 null(只丢这一张,插件别的照常)。 */
+export function sanitizePluginWidget(manifest: unknown): PluginWidgetSpec | null {
+  const m = manifest && typeof manifest === 'object' && !Array.isArray(manifest) ? (manifest as Record<string, unknown>) : null
+  if (!m || typeof m.id !== 'string' || !PLUGIN_WIDGET_ID.test(m.id) || m.layout !== 'list') return null
+  const title = str(m.title, 60)
+  if (!title) return null
+  const space = typeof m.space === 'string' && REQ_ID.test(m.space) ? m.space : undefined
+  const icon = typeof m.icon === 'string' && /^[a-z0-9][a-z0-9-]{0,39}$/.test(m.icon) ? m.icon : undefined
+  return {
+    id: m.id,
+    title,
+    titleEn: str(m.titleEn, 60),
+    summary: str(m.summary, 200),
+    summaryEn: str(m.summaryEn, 200),
+    layout: 'list',
+    ...(icon ? { icon } : {}),
+    ...(space ? { space } : {}),
+  }
+}
+
 /** Validate + cap a raw manifest `events` value. Malformed entries drop silently, never block the plugin. */
 export function sanitizeEvents(raw: unknown): PluginEventDecl[] | undefined {
   if (!Array.isArray(raw)) return undefined
@@ -443,6 +495,8 @@ export interface ExternalPluginSource {
   onboarding?: PluginOnboardingSpec
   /** First-use tips (manifest `guide`, 2026-11-02+; sanitized by `sanitizeGuide`). */
   guide?: PluginGuideSpec
+  /** Home widgets (manifest `widgets`, 2026-11-07+): read from each widget folder by the main process (`pluginWidgetDirs` + `sanitizePluginWidget`). */
+  widgets?: PluginWidgetSpec[]
   /** Activity events the plugin declares it emits (manifest `events`, sanitized) — automation builder catalog. */
   events?: PluginEventDecl[]
   /** File suffixes this plugin claims as a custom file type (manifest `fileExtensions`, e.g. ['.mindmap.md']).

@@ -8,6 +8,7 @@ import { promisify } from 'node:util'
 import { app, BrowserWindow, clipboard, dialog, ipcMain, nativeImage, shell } from 'electron'
 import { IPC, gatePluginManifest, sanitizeGuide, sanitizeOnboarding, sanitizeEvents, sanitizeRequiresPlugins, PLUGIN_CAPABILITIES, type ExternalPluginSource, type PluginBundleInfo } from '@amadeus-shared/ipc'
 import { installedPluginFields, type InstalledPluginManifest } from '@amadeus-shared/pluginSource'
+import { readPluginWidgets } from './pluginWidgets'
 import { isSafePluginExt } from '@amadeus-shared/pluginFiles'
 import { VaultManager } from './fs/vaultManager'
 import { trashSeedCalendar } from './fs/seedCalendar'
@@ -683,7 +684,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
     type DevManifest = {
       id?: unknown; name?: unknown; nameEn?: unknown; version?: unknown; description?: unknown; descriptionEn?: unknown
       main?: unknown; apiVersion?: unknown; minAppVersion?: unknown; requiresApp?: unknown; requiresPlugins?: unknown
-      capabilities?: unknown; onboarding?: unknown; guide?: unknown; events?: unknown; fileExtensions?: unknown
+      capabilities?: unknown; onboarding?: unknown; guide?: unknown; events?: unknown; fileExtensions?: unknown; widgets?: unknown
     }
     for (const product of products) {
       const pdir = product.root
@@ -727,10 +728,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
           blocked = 'invalid'
         }
       }
-      const [readme, changelog, iconUrl] = await Promise.all([
+      const [readme, changelog, iconUrl, widgets] = await Promise.all([
         fs.readFile(path.join(pdir, 'README.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
         fs.readFile(path.join(pdir, 'CHANGELOG.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
         readPluginIconDataUrl(pdir),
+        blocked ? undefined : readPluginWidgets(pdir, m?.widgets),
       ])
       seen.add(id)
       out.push({
@@ -753,6 +755,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
         changelog,
         onboarding: sanitizeOnboarding(m?.onboarding),
         guide: sanitizeGuide(m?.guide),
+        widgets,
         events: sanitizeEvents(m?.events),
         // fileExtensions 刻意不透出:声明了就已经 blocked,再把它传下去只会让下游误以为这套后缀受保护。
         blocked: blocked ?? undefined,
@@ -816,10 +819,11 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
           }
         }
         // README 给设置详情页;blocked 也读(无害,帮用户了解这插件是什么)。CHANGELOG 同款,渲染成「更新日志」段。
-        const [readme, changelog, iconUrl] = await Promise.all([
+        const [readme, changelog, iconUrl, widgets] = await Promise.all([
           fs.readFile(path.join(pdir, 'README.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
           fs.readFile(path.join(pdir, 'CHANGELOG.md'), 'utf8').then((s) => s.slice(0, 65536), () => undefined),
           readPluginIconDataUrl(pdir),
+          blocked ? undefined : readPluginWidgets(pdir, (m as { widgets?: unknown }).widgets),
         ])
         seen.add(id)
         out.push({
@@ -833,6 +837,7 @@ export function registerIpc(getWindow: () => BrowserWindow | null, cloudFactory:
           code,
           readme,
           changelog,
+          widgets,
           blocked: blocked ?? undefined,
           bundle,
           preinstalled: builtinPluginIds().has(id) || undefined, // 随 App 播种的捆绑包(electron/builtinPlugins.ts)

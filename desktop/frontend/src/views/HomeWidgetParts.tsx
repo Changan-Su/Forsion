@@ -5,14 +5,17 @@ import { useEffect, useRef, useState } from 'react'
 import { Check, GripVertical, LayoutGrid, Minus, Plus, Sparkles } from 'lucide-react'
 import { createDropIndicator, land } from '@lcl/engine'
 import { registerMessages, useI18n } from '../i18n'
-import { WidgetHost, useWidgetTitle } from '../components/WidgetHost'
 import { panelToast } from '../components/PanelNotice'
 import { listWidgets, useWidgetListGen, type WidgetListItem } from '../services/widgetClient'
 import { useWidgetOwner } from '../components/WidgetHost'
+import { usePluginStore } from '../amadeus/plugins/pluginStore'
+import { pluginDisplayName } from '../amadeus/plugins/display'
+import { registerGuideTips } from '../amadeus/plugins/guideTips'
 import {
-  STATUS_CARD, ROW_CELLS, RAIL_MAX, addCenterPart, isOnHome, moveCenterPart, moveOnHome, placeOnHome, readHomeLayout,
-  removeCenterPart, removeFromHome, resizeRowCell, saveHomeLayout, type HomeLayout, type HomePart, type HomeSlot,
+  BUILTIN_WIDGETS, STATUS_CARD, ROW_CELLS, RAIL_MAX, addCenterPart, isOnHome, moveCenterPart, moveOnHome, placeOnHome, pluginWidgetId, readHomeLayout,
+  removeCenterPart, removeFromHome, resizeRowCell, saveHomeLayout, useHomeLayout, type HomeLayout, type HomePart, type HomeSlot,
 } from './homeWidgets'
+import { BUILTIN_ICON, HomeWidgetBody, useHomeWidgetHead, useShowableIds, useShownWidgetId } from './homeWidgetKinds'
 
 registerMessages({
   'home.edit.hint': { zh: '拖动调整位置；Esc 退出', en: 'Drag to rearrange. Esc to exit' },
@@ -23,7 +26,7 @@ registerMessages({
   'home.edit.drag': { zh: '拖动', en: 'Drag' },
   'home.edit.empty': { zh: '空位', en: 'Empty' },
   'home.edit.dropHere': { zh: '松手放在这里', en: 'Drop here' },
-  'home.edit.full': { zh: '下排和右栏都满了', en: 'The row and side column are full' },
+  'home.edit.full': { zh: '下排和两栏都满了', en: 'The row and both side columns are full' },
   'home.edit.rail.left': { zh: '左栏', en: 'Left' },
   'home.edit.rail.right': { zh: '右栏', en: 'Right' },
   'home.part.clock': { zh: '时钟', en: 'Clock' },
@@ -35,7 +38,13 @@ registerMessages({
   'home.lib.builtin': { zh: '内置', en: 'Built-in' },
   'home.lib.ask': { zh: '让 Agent 做一个', en: 'Ask an agent to make one' },
   'home.lib.askDraft': { zh: '帮我做一个小组件：', en: 'Make me a widget: ' },
-  'home.lib.hint': { zh: '点一下放进第一个空位（先下排后右栏）', en: 'Click to fill the first empty slot (row first, then the side column)' },
+  'home.lib.hint': { zh: '点一下放进第一个空位（先下排，再右栏、左栏）', en: 'Click to fill the first empty slot (the row, then the right and left columns)' },
+  'home.lib.group.builtin': { zh: '内置', en: 'Built-in' },
+  'home.lib.group.builtinNote': { zh: '装好就有', en: 'Always available' },
+  'home.lib.group.plugin': { zh: '插件', en: 'Plugins' },
+  'home.lib.group.pluginNote': { zh: '插件开着才有；停用了卡上留占位', en: 'Live while the plugin is on. If it is off, the card shows a placeholder' },
+  'home.lib.group.agent': { zh: 'Agent 做的', en: 'Made by agents' },
+  'home.lib.group.agentNote': { zh: '在对话里让 Agent 做', en: 'Ask an agent in a chat' },
   'home.lib.partsHint': { zh: '拿掉的主页组件在这里，点一下放回', en: 'Removed Home parts wait here. Click one to put it back' },
   'home.lib.loadFailed': { zh: '小组件读不到：{msg}', en: "Couldn't read widgets: {msg}" },
   'home.lib.empty': { zh: '还没有小组件。在对话里让 Agent 做一个。', en: 'No widgets yet. Ask an agent in a chat.' },
@@ -59,15 +68,22 @@ export function centerShift(width: number, left: { mode: RailMode; shown: boolea
 }
 
 // ── 卡 ──
-function WidgetCard({ id, editing, compact, onRemove, extra, grip }: { id: string; editing: boolean; compact?: boolean; onRemove: () => void; extra?: React.ReactNode; grip?: (e: React.PointerEvent) => void }): React.JSX.Element {
-  const { title, owner } = useWidgetTitle(id)
+/** 一张卡:卡头(图标 / 标题 / 归属,点标题去它的 Space)+ 卡身。卜算子·建议没有建议时这一格画最近对话(见 useShownWidgetId)。 */
+function WidgetCard({ id, editing, compact, wide, onRemove, extra, grip }: { id: string; editing: boolean; compact?: boolean; wide?: boolean; onRemove: () => void; extra?: React.ReactNode; grip?: (e: React.PointerEvent) => void }): React.JSX.Element {
+  const layout = useHomeLayout()
+  const shown = useShownWidgetId(id, (x) => isOnHome(layout, x))
+  const { title, owner, icon, open } = useHomeWidgetHead(shown)
   return (
-    <section className={`hp-wcard${compact ? ' hp-wcard-compact' : ''}`} data-widget-id={id}>
+    <section className={`hp-wcard${compact ? ' hp-wcard-compact' : ''}`} data-widget-id={shown}>
       <header className="hp-wcard-h" onPointerDown={editing ? grip : undefined}>
-        <LayoutGrid size={13} /><span className="hp-wcard-title">{title}</span>{owner && <span className="hp-wcard-owner">{owner}</span>}
+        {icon}
+        {open && !editing
+          ? <button type="button" className="hp-wcard-title hp-wcard-go" onClick={open}>{title}</button>
+          : <span className="hp-wcard-title">{title}</span>}
+        {owner && <span className="hp-wcard-owner">{owner}</span>}
         {editing && <EditCtrls onRemove={onRemove} extra={extra} />}
       </header>
-      <div className="hp-wcard-body"><WidgetHost id={id} onRemove={onRemove} /></div>
+      <div className={`hp-wcard-body${shown.startsWith('w_') ? '' : ' hp-wbody'}`}><HomeWidgetBody id={shown} wide={wide} onRemove={onRemove} /></div>
     </section>
   )
 }
@@ -96,8 +112,11 @@ export function PartFrame({ part, editing, children, onRemove, onGrip }: { part:
 }
 
 // ── 侧栏 ──
-export function HomeRail({ side, ids, mode, editing, onGrip }: { side: 'left' | 'right'; ids: string[]; mode: RailMode; editing: boolean; onGrip: (e: React.PointerEvent, id: string) => void }): React.JSX.Element | null {
+export function HomeRail({ side, ids: stored, mode, editing, onGrip }: { side: 'left' | 'right'; ids: string[]; mode: RailMode; editing: boolean; onGrip: (e: React.PointerEvent, id: string) => void }): React.JSX.Element | null {
   const { t } = useI18n()
+  // 插件没装 / 旧版没声明的那张:平时不画、不占位(摆放原样留着,装上了就回来);编辑态画成占位,看得见、拿得掉
+  const showable = useShowableIds(stored)
+  const ids = editing ? stored : showable
   const [pop, setPop] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -122,39 +141,42 @@ export function HomeRail({ side, ids, mode, editing, onGrip }: { side: 'left' | 
   return (
     <div className={`hp-rail hp-rail-${side}${mode === 'strip' ? ' hp-rail-overlay' : ''}`} data-home-area={side} aria-label={t(`home.edit.rail.${side}`)}>
       {ids.map((id, i) => (
-        <div key={id} className="hp-slot" data-home-slot={`${side}:${i}`} data-home-id={id}>
+        <div key={id} className="hp-slot" data-home-slot={`${side}:${stored.indexOf(id)}`} data-home-id={id} data-guide-anchor={i === 0 ? 'home-widgets' : undefined}>
           <WidgetCard id={id} editing={editing} onRemove={() => remove(id)} grip={(e) => onGrip(e, id)} />
         </div>
       ))}
-      {editing && ids.length < RAIL_MAX && <div className="hp-slot hp-slot-empty" data-home-slot={`${side}:${ids.length}`}>{t('home.edit.empty')}</div>}
+      {editing && stored.length < RAIL_MAX && <div className="hp-slot hp-slot-empty" data-home-slot={`${side}:${stored.length}`}>{t('home.edit.empty')}</div>}
     </div>
   )
 }
 
 function StripIcon({ id, on, onClick }: { id: string; on: boolean; onClick: () => void }): React.JSX.Element {
-  const { title } = useWidgetTitle(id)
-  return <button type="button" className={`hp-strip-btn${on ? ' on' : ''}`} title={title} aria-label={title} aria-expanded={on} onClick={onClick}><LayoutGrid size={16} /></button>
+  const layout = useHomeLayout()
+  const { title, icon } = useHomeWidgetHead(useShownWidgetId(id, (x) => isOnHome(layout, x)), 16)
+  return <button type="button" className={`hp-strip-btn${on ? ' on' : ''}`} title={title} aria-label={title} aria-expanded={on} onClick={onClick}>{icon}</button>
 }
 
 // ── 下排 ──
-export function HomeRow({ cells, editing, status, onGrip }: { cells: HomeLayout['row']; editing: boolean; status: React.ReactNode; onGrip: (e: React.PointerEvent, id: string) => void }): React.JSX.Element | null {
+export function HomeRow({ cells: stored, editing, status, onGrip }: { cells: HomeLayout['row']; editing: boolean; status: React.ReactNode; onGrip: (e: React.PointerEvent, id: string) => void }): React.JSX.Element | null {
   const { t } = useI18n()
-  const used = cells.reduce((s, c) => s + c.w, 0)
+  const showable = new Set(useShowableIds(stored.map((c) => c.id)))
+  const cells = editing ? stored : stored.filter((c) => showable.has(c.id))
+  const used = stored.reduce((s, c) => s + c.w, 0)
   if (!cells.length && !editing) return null
   // 没动过的老用户:下排就是近况卡那一排,DOM 和今天一模一样
   if (!editing && cells.length === 1 && cells[0].id === STATUS_CARD) return <>{status}</>
   const remove = (id: string): void => saveHomeLayout(removeFromHome(readHomeLayout(), id))
   return (
     <div className="hp-row" data-home-area="row">
-      {cells.map((c, i) => (
-        <div key={c.id} className="hp-slot hp-row-cell" style={{ gridColumn: `span ${c.w}` }} data-home-slot={`row:${i}`} data-home-id={c.id}>
+      {cells.map((c) => (
+        <div key={c.id} className="hp-slot hp-row-cell" style={{ gridColumn: `span ${c.w}` }} data-home-slot={`row:${stored.indexOf(c)}`} data-home-id={c.id}>
           {c.id === STATUS_CARD
             ? <div className="hp-row-status">{editing && <div className="hp-row-status-tab" onPointerDown={(e) => onGrip(e, c.id)}><span className="hp-wcard-title">{t('home.widget.status')}</span><EditCtrls onRemove={() => remove(c.id)} /></div>}<div className={editing ? 'hp-part-inert' : undefined}>{status}</div></div>
-            : <WidgetCard id={c.id} editing={editing} compact onRemove={() => remove(c.id)} grip={(e) => onGrip(e, c.id)}
+            : <WidgetCard id={c.id} editing={editing} compact wide={c.w === 2} onRemove={() => remove(c.id)} grip={(e) => onGrip(e, c.id)}
                 extra={<button type="button" className="hp-edit-btn hp-edit-w" onClick={(e) => { e.stopPropagation(); saveHomeLayout(resizeRowCell(readHomeLayout(), c.id)) }}>{t('home.edit.width', { n: c.w })}</button>} />}
         </div>
       ))}
-      {editing && used < ROW_CELLS && <div className="hp-slot hp-slot-empty" style={{ gridColumn: `span ${ROW_CELLS - used}` }} data-home-slot={`row:${cells.length}`}>{t('home.edit.empty')}</div>}
+      {editing && used < ROW_CELLS && <div className="hp-slot hp-slot-empty" style={{ gridColumn: `span ${ROW_CELLS - used}` }} data-home-slot={`row:${stored.length}`}>{t('home.edit.empty')}</div>}
     </div>
   )
 }
@@ -253,21 +275,36 @@ export function placeWidgetOnHome(id: string, t: (k: string) => string): void {
   saveHomeLayout(next)
 }
 
+/** 收纳面板「小组件」页:内置 / 插件 / Agent 做的 三组,点一下放进第一个空位。 */
 export function WidgetLibrary({ layout, onAsk }: { layout: HomeLayout; onAsk: () => void }): React.JSX.Element {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const gen = useWidgetListGen()
   const [items, setItems] = useState<WidgetListItem[] | null>(null)
   const [error, setError] = useState('')
+  const plugins = usePluginStore((s) => s.plugins)
   useEffect(() => {
     let alive = true
     listWidgets().then((w) => { if (alive) { setItems(w.filter((x) => x.entry === 'widget.json')); setError('') } }).catch((e) => { if (alive) setError(String(e instanceof Error ? e.message : e)) })
     return () => { alive = false }
   }, [gen])
+  const pluginTiles = plugins.filter((p) => !p.blocked).flatMap((p) => (p.widgets ?? []).map((w) => ({ p, w, id: pluginWidgetId(p.id, w.id) })))
+  const head = (k: string): React.JSX.Element => <div className="hp-lib-h"><b>{t(`home.lib.group.${k}`)}</b><span>{t(`home.lib.group.${k}Note`)}</span></div>
   return (
     <div className="hp-lib">
+      {head('builtin')}
       <div className="hp-lib-grid">
-        <LibTile icon={<LayoutGrid size={18} />} name={t('home.widget.status')} sub={t('home.lib.builtin')} on={isOnHome(layout, STATUS_CARD)}
+        {BUILTIN_WIDGETS.map((id) => <BuiltinLibTile key={id} id={id} on={isOnHome(layout, id)} onClick={() => placeWidgetOnHome(id, t)} />)}
+        <LibTile icon={<LayoutGrid size={18} />} name={t('home.widget.status')} on={isOnHome(layout, STATUS_CARD)}
           onClick={() => { const next = moveOnHome(readHomeLayout(), STATUS_CARD, { area: 'row', index: 0 }); if (next) saveHomeLayout(next); else panelToast(t('home.edit.full'), true) }} />
+      </div>
+      {pluginTiles.length > 0 && <>
+        {head('plugin')}
+        <div className="hp-lib-grid">
+          {pluginTiles.map(({ p, w, id }) => <PluginLibTile key={id} id={id} sub={pluginDisplayName(p, locale)} on={isOnHome(layout, id)} onClick={() => placeWidgetOnHome(id, t)} />)}
+        </div>
+      </>}
+      {head('agent')}
+      <div className="hp-lib-grid">
         {(items ?? []).map((w) => <WidgetLibTile key={w.id} w={w} on={isOnHome(layout, w.id)} onClick={() => placeWidgetOnHome(w.id, t)} />)}
         <LibTile icon={<Sparkles size={18} />} name={t('home.lib.ask')} on={false} onClick={onAsk} />
       </div>
@@ -275,6 +312,17 @@ export function WidgetLibrary({ layout, onAsk }: { layout: HomeLayout; onAsk: ()
       {items && !items.length && !error && <div className="hp-lib-note">{t('home.lib.empty')}</div>}
     </div>
   )
+}
+
+function PluginLibTile({ id, sub, on, onClick }: { id: string; sub: string; on: boolean; onClick: () => void }): React.JSX.Element {
+  const { title, icon } = useHomeWidgetHead(id, 18)
+  return <LibTile icon={icon} name={title} sub={sub} on={on} onClick={onClick} />
+}
+
+function BuiltinLibTile({ id, on, onClick }: { id: string; on: boolean; onClick: () => void }): React.JSX.Element {
+  const { title } = useHomeWidgetHead(id)
+  const Icon = BUILTIN_ICON[id as keyof typeof BUILTIN_ICON] ?? LayoutGrid
+  return <LibTile icon={<Icon size={18} />} name={title} on={on} onClick={onClick} />
 }
 
 function WidgetLibTile({ w, on, onClick }: { w: WidgetListItem; on: boolean; onClick: () => void }): React.JSX.Element {
@@ -309,3 +357,12 @@ export function PartsLibrary({ layout }: { layout: HomeLayout }): React.JSX.Elem
 }
 
 export const removePart = (part: HomePart): void => saveHomeLayout(removeCenterPart(readHomeLayout(), part))
+
+// 第一次出现时的提示(方案 A):右栏第一张卡旁一条,复用插件上手提示的系统(同一个槽、同一套节奏与记账);
+// 进过一次编辑态(计数 home.edit)就算会了。锚点 = 栏里第一格的 data-guide-anchor,外面包 data-guide-owner。
+export const HOME_GUIDE_OWNER = 'host:home'
+registerGuideTips(HOME_GUIDE_OWNER, [{
+  id: 'widgets', at: 'home-widgets', style: 'ring', when: { visible: ['home-widgets'] }, done: ['app:home.edit'],
+  platform: 'desktop', title: '主页能放小组件了', text: '右键主页 → 编辑主页，换卡、挪位置。',
+  en: { title: 'Home now has widgets', text: 'Right-click Home → Edit Home to swap or move cards.' },
+}])
