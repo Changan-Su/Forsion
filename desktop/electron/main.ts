@@ -178,6 +178,8 @@ let deepLinkReady = false
 const pendingSpaceWindows: string[] = []
 let spaceWindowsLive = false
 let hideMainOnLaunch = false
+/** 启动以来有没有人明确要过主窗(showMainWindow 置位)。 */
+let mainRequested = false
 function routeSpaceWindowLink(url: string): boolean {
   const id = spaceWindowIdFromUrl(url)
   if (!id) return false
@@ -1915,6 +1917,9 @@ function loadRendererWith(win: BrowserWindow, params: Record<string, string>): v
 let startupWindowGate = true
 /** 召回主窗:隐藏则显示、最小化则还原、销毁则重建。托盘/通知/单实例/activate 共用。 */
 function showMainWindow(): void {
+  // 有人明确要主窗(正常二启 / 托盘 / 通知……):Space 快捷方式冷启动的「先不显示主窗」作废,启动途中来的也算(Codex 评审)。
+  mainRequested = true
+  hideMainOnLaunch = false
   if (!mainWindow || mainWindow.isDestroyed()) { if (!startupWindowGate) createWindow(); return }
   if (mainWindow.isMinimized()) mainWindow.restore()
   present(mainWindow)
@@ -1981,6 +1986,8 @@ function createDetachedWindow(opts: { id?: string; views?: ViewDesc[]; bounds?: 
   const id = opts.id || (space ? `sp_${space}` : nextDetachedId())
   const open = detachedWindows.get(id)
   if (open && !open.isDestroyed()) {
+    // 先开着窗、后加的快捷方式:从快捷方式再叫它时补上任务栏身份(Codex 评审)。
+    if (space && process.platform === 'win32') applySpaceTaskbarIdentity(open, space)
     if (open.isMinimized()) open.restore()
     if (readyDetachedWindows.has(open)) present(open)
     return id
@@ -4621,16 +4628,24 @@ app.whenReady().then(async () => {
     if (!isSpaceId(input.id)) return { ok: false, code: 'not_found' }
     const text = (v: unknown, max: number): string => (typeof v === 'string' ? v.slice(0, max) : '')
     const iconUrl = text(input.iconPng, 8 * 1024 * 1024)
-    const src = iconUrl.startsWith('data:image/png;base64,') ? nativeImage.createFromDataURL(iconUrl) : null
+    // 解码前先读 PNG 头里的宽高:压缩后 1 MB 的图可以解出上 GB 的像素,主进程会被拖死(Codex 评审)。渲染层只画 1024。
+    const iconBuf = iconUrl.startsWith('data:image/png;base64,') ? Buffer.from(iconUrl.slice('data:image/png;base64,'.length), 'base64') : null
+    const sane = !!iconBuf && iconBuf.length > 24 && iconBuf.readUInt32BE(0) === 0x89504e47 && iconBuf.toString('ascii', 12, 16) === 'IHDR'
+      && iconBuf.readUInt32BE(16) <= 2048 && iconBuf.readUInt32BE(20) <= 2048
+    const src = sane && iconBuf ? nativeImage.createFromBuffer(iconBuf) : null
     const iconPng = src && !src.isEmpty()
       ? (size: number): Buffer | undefined => src.resize({ width: size, height: size, quality: 'best' }).toPNG()
       : undefined
-    return createSpaceShortcut({ id: input.id, name: text(input.name, 200) }, {
+    const result = await createSpaceShortcut({ id: input.id, name: text(input.name, 200) }, {
       isPackaged: app.isPackaged, desktopDir: app.getPath('desktop'), execPath: process.execPath,
       appImage: process.env.APPIMAGE, fallbackName: text(input.fallbackName, 200),
       iconDir: spaceShortcutDir(), iconPng,
       writeShortcutLink: process.platform === 'win32' ? (p, o) => shell.writeShortcutLink(p, 'create', o) : undefined,
     })
+    // 这个 Space 的窗此刻开着的话,当场换上任务栏身份(Windows)。
+    const live = detachedWindows.get(`sp_${input.id}`)
+    if (result.ok && live && !live.isDestroyed() && process.platform === 'win32') applySpaceTaskbarIdentity(live, input.id)
+    return result
   })
   ipcMain.on('window:openMini', (e, raw: unknown) => {
     if (!isTrustedSender(e)) return
@@ -4935,7 +4950,7 @@ app.whenReady().then(async () => {
     app.on('browser-window-focus', (_e, w) => { if (w !== autoMiniWindow) lastFocusedWindow = w; miniAutoPanel?.refresh() })
   }
   startupWindowGate = false
-  hideMainOnLaunch = pendingSpaceWindows.length > 0
+  hideMainOnLaunch = pendingSpaceWindows.length > 0 && !mainRequested
   createWindow()
   if (SANDBOX) startSandboxChild(SANDBOX, { getWindow: () => mainWindow, quit: () => { isQuitting = true; app.quit() }, log: (m) => console.log(m) })
   // 恢复上次退出时的独立窗(位置/尺寸 + 各窗自恢复布局);之后再开排着的 Space 快捷方式窗 —— 上次没关的同一扇

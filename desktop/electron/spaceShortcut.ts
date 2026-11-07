@@ -255,7 +255,15 @@ async function writeIconFile(file: string | null, data: Buffer | undefined): Pro
  * 在系统桌面创建 Space 快捷方式。同名绝不覆盖,改用 `名字 (1)`、`(2)`……
  * dev 下恒拒:未打包时 execPath 是裸 electron,forsion:// 也只在安装版注册。
  */
-export async function createSpaceShortcut(space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<ShortcutResult> {
+/** 一次只建一个:Windows 那条是「先查名字没占、再写 .lnk」(writeShortcutLink 会覆盖),两个同名 Space 并发会写到同一个文件上(Codex 评审)。 */
+let queue: Promise<unknown> = Promise.resolve()
+export function createSpaceShortcut(space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<ShortcutResult> {
+  const run = queue.then(() => createSpaceShortcutNow(space, deps))
+  queue = run.catch(() => {})
+  return run
+}
+
+async function createSpaceShortcutNow(space: { id: string; name: string }, deps: CreateSpaceShortcutDeps): Promise<ShortcutResult> {
   if (!deps.isPackaged) return { ok: false, code: 'unpackaged' }
   const platform = deps.platform ?? process.platform
   if (!isSpaceId(space.id)) return { ok: false, code: 'not_found' }

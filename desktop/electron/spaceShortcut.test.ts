@@ -181,3 +181,18 @@ describe('createSpaceShortcut', () => {
     expect(await onDesktop()).toEqual([])
   })
 })
+
+describe('createSpaceShortcut concurrency', () => {
+  it('windows: two same-named Spaces at once get two shortcuts, not one overwritten', async () => {
+    const written: string[] = []
+    // 真 writeShortcutLink 是同步落盘;这里同样同步写一个占位文件,让下一次 taken() 看得见。
+    const writer = vi.fn<Writer>((p) => { written.push(p); require('node:fs').writeFileSync(p, 'lnk'); return true })
+    const d = deps({ platform: 'win32', writeShortcutLink: writer })
+    const [a, b] = await Promise.all([
+      createSpaceShortcut({ id: 'one', name: 'Notes' }, d),
+      createSpaceShortcut({ id: 'two', name: 'Notes' }, d),
+    ])
+    expect([a, b].map((r) => r.ok && path.basename(r.path)).sort()).toEqual(['Notes (1).lnk', 'Notes.lnk'])
+    expect(new Set(written).size).toBe(2)
+  })
+})
