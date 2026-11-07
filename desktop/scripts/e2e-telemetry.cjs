@@ -153,7 +153,12 @@ async function main() {
     const hostRaw = fs.readFileSync(trace, 'utf8')
     assert.ok(!hostRaw.includes('e2e-telemetry-fake-token') && !hostRaw.includes(sink.url), 'no token / cloud url in host events')
     assert.ok(!hostRaw.includes('boom') && !hostRaw.includes('my title') && !hostRaw.includes('sk-abcdef'), 'host hands over stack frames only (no message head)')
-    console.log(`host → Extend (launch 1): ${JSON.stringify(readJsonl(trace).map((e) => e.event))}`)
+    const features = traced('feature').map((e) => e.props.name === 'setting_change' ? `setting_change:${e.props.key}=${e.props.value}` : e.props.name)
+    // 启动 / 跨窗同步不许冒出 setting_change(只有用户真改了才报)。唯一允许的一条:新装机团队那屏电脑历史预先开着,
+    // 点「开始使用」= 用户确认打开(异步落下,可能赶不上这一刻)
+    const changes = features.filter((f) => f.startsWith('setting_change:'))
+    assert.ok(changes.every((f) => f === 'setting_change:computerHistory.enabled=on'), `only user-confirmed setting changes: ${JSON.stringify(changes)}`)
+    console.log(`host → Extend (launch 1): ${JSON.stringify(readJsonl(trace).map((e) => e.event))}; features ${JSON.stringify(features)}`)
 
     // ⑥ 等 Extend 第一跳(启动后 60 s)
     const deadline = Date.now() + 120_000
