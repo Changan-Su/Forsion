@@ -5,6 +5,9 @@
  * 点哪个都只发**一次**引擎调用,理由跟着那一次走(引擎按枚举表认,计进本机遥测账本,走匿名改进数据)。
  * 「附上这条原文」是另一条路:勾了,动作成功之后才随账号经反馈通道(window.tangu.submitFeedback)发这一条;
  * 勾选不记住、每条重新问(一条一同意)。宿主没有反馈通道(网页 / 手机)就不画这个勾。
+ *
+ * 这份给记忆面板(宿主模块)。Muse 卡片在 Tangu 界面包里,用 views/chat2/FeedbackReasons.tsx 那份:Tangu 会热更新到老宿主上,
+ * 不能 require 宿主新加的模块(check:tanguboundary)。改交互时两份一起改,data-reason* 钩子保持一致。
  */
 import { useEffect, useRef, useState } from 'react'
 import { registerMessages, translate, useI18n } from '../i18n'
@@ -12,24 +15,17 @@ import { useApp } from '../stores/appStore'
 import './feedbackReasons.css'
 
 registerMessages({
-  'reason.museQuestion': { zh: '为什么不需要？', en: 'Why not?' },
   'reason.memoryQuestion': { zh: '为什么遗忘这条？', en: 'Why forget this?' },
-  'reason.muse.irrelevant': { zh: '不相关', en: 'Not relevant' },
-  'reason.muse.timing': { zh: '时机不对', en: 'Bad timing' },
-  'reason.muse.frequent': { zh: '太频繁', en: 'Too often' },
-  'reason.muse.known': { zh: '我早知道了', en: 'Already knew' },
   'reason.memory.wrong': { zh: '记错了', en: 'It’s wrong' },
   'reason.memory.stale': { zh: '过时了', en: 'Out of date' },
   'reason.memory.unwanted': { zh: '不该记', en: 'Shouldn’t be saved' },
   'reason.memory.duplicate': { zh: '重复了', en: 'Duplicate' },
-  'reason.museSkip': { zh: '直接关掉', en: 'Just dismiss' },
   'reason.memorySkip': { zh: '直接遗忘', en: 'Just forget' },
   'reason.cancel': { zh: '取消', en: 'Cancel' },
   'reason.share': { zh: '附上这条原文，随账号发给 Forsion', en: 'Also send this text to Forsion with my account' },
   'reason.shared': { zh: '原文已发给 Forsion，可在「反馈」里查看', en: 'Sent to Forsion. You can find it in Feedback.' },
   'reason.shareFailed': { zh: '原文没发出去：{e}', en: 'Couldn’t send the text: {e}' },
   'reason.notSignedIn': { zh: '没登录 Forsion 账号', en: 'not signed in to a Forsion account' },
-  'reason.ticketMuse': { zh: 'Muse 卡片反馈', en: 'Muse card feedback' },
   'reason.ticketMemory': { zh: '记忆反馈', en: 'Memory feedback' },
   'reason.noReason': { zh: '没选原因', en: 'No reason given' },
 })
