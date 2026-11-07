@@ -62,6 +62,7 @@ import { createRestartGuard, readRestartActivity } from './restartGuard'
 import { createTray, MINI_ACCELERATOR, mergeTrayReports, refreshTrayMenu, sanitizeTraySessions, setTrayIndicator, setTraySessions, traySessions, trayLang } from './tray'
 import { initMainLocale, mainLocale, mt } from './mainI18n'
 import { createQuitGuards } from './quitGuard'
+import { closeDialogOptions, closeDialogPick, storedCloseAction, type CloseAction } from './closeAction'
 import { createContentFlush } from './contentSyncFlush'
 import { createUiLocaleSync, UI_LOCALE_FILE } from './uiLocaleSync' // P1-KF:主进程文案跟渲染层的生效语言
 import { createApprovalDelivery, engineFromBackend } from './approvalDelivery' // P1-K3
@@ -530,6 +531,8 @@ interface TanguStoredConfig {
   activeWindowEnabled: boolean
   /** 有会话运行时阻止电脑闲置休眠(electron/keepAwake.ts)。默认关。 */
   keepAwakeWhileRunning: boolean
+  /** 点主窗 X 时:'ask' 先问(缺省)/ 'tray' 隐藏到托盘 / 'quit' 真退出(electron/closeAction.ts)。 */
+  closeAction: CloseAction
   /** Agent Desk 演出面板:聊天右侧 agent 展示区(编辑自动上台 + desk_present/desk_screenshot 工具)。
    *  2026-07-26 转正,默认**开**——只有显式关过的人才有 false 落盘(saveConfig 只写 patch 里出现的键,
    *  没碰过开关的装机读的是这里的默认值,改默认即生效,不需要迁移)。 */
@@ -606,6 +609,7 @@ const DEFAULT_CONFIG: TanguStoredConfig = {
   mcpEnabled: false,
   activeWindowEnabled: false,
   keepAwakeWhileRunning: false,
+  closeAction: 'ask',
   agentDeskEnabled: true,
   summaryOpenIn: 'tab',
   disabledBundles: [],
@@ -645,6 +649,7 @@ const SHELL_KEYS: Array<keyof TanguStoredConfig> = [
   'mcpEnabled', // 桌面专属(对外 MCP 端点由 main 起停)
   'activeWindowEnabled', // 桌面专属(前台窗口采样由 main 探)
   'keepAwakeWhileRunning', // 桌面专属(powerSaveBlocker 由 main 持有)
+  'closeAction', // 桌面专属(主窗关闭钮由 main 拦)
   'agentDeskEnabled', // 桌面专属(Agent Desk 演出面板开关,纯渲染层 UI)
   'summaryOpenIn', // 桌面专属(任务概览的文件打开去处,纯渲染层 UI)
   'disabledBundles', // 桌面专属(内置包主进程半身由 main 开机装载)
@@ -1829,15 +1834,42 @@ function createWindow(): void {
     if (isMainFrame && code !== -3) recoverRenderer(`did-fail-load:${code} ${desc}`) // -3=ERR_ABORTED(外链 deny),忽略
   })
 
-  // 关闭窗口 = 最小化到托盘(App 常驻后台,后端/Muse 不中断);真正退出走托盘「退出」/before-quit(置 isQuitting)。
+  // 关闭窗口按 config.closeAction(electron/closeAction.ts):缺省先问「退出 / 在后台运行 / 取消」;
+  // 隐藏 = 常驻托盘(后端/Muse 不中断);退出走和托盘「退出」同一条路(before-quit 的退出前确认、停后端照旧)。
   mainWindow.on('close', (e) => {
     if (isQuitting) return
     if (SANDBOX) { isQuitting = true; app.quit(); return } // 沙箱不进托盘:关窗就停
     e.preventDefault()
-    mainWindow?.hide()
+    void onMainWindowClose()
   })
 
   loadRenderer(mainWindow)
+}
+
+let closeAsking = false
+async function onMainWindowClose(): Promise<void> {
+  if (closeAsking) return // 框开着时又点了一次 X:不叠第二个框
+  closeAsking = true
+  try {
+    let stored: TanguStoredConfig | null = null
+    try { stored = await loadConfig() } catch { /* 读不到 = 不知道 → 问 */ }
+    let action = storedCloseAction(stored?.closeAction)
+    if (action === 'ask') {
+      // 同 quitGuards:必须挂父窗(无父的 showMessageBox 在 mac 上冻主循环);任务栏「关闭窗口」时主窗可能最小化着,先拉出来
+      showMainWindow()
+      const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+      if (!win) return
+      const r = await dialog.showMessageBox(win, closeDialogOptions())
+      const pick = closeDialogPick(r.response, r.checkboxChecked)
+      if (!pick.action) return
+      if (pick.remember) await saveConfig({ closeAction: pick.action }).catch((err) => console.warn('[close] 记住选择失败:', err))
+      action = pick.action
+    }
+    if (isQuitting) return // 框开着时已经从别处(⌘Q / 托盘)退出了
+    if (action === 'quit') { isQuitting = true; app.quit() } else if (mainWindow && !mainWindow.isDestroyed()) mainWindow.hide()
+  } finally {
+    closeAsking = false
+  }
 }
 
 function loadRenderer(win: BrowserWindow): void {
