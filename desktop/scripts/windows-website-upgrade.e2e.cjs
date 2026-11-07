@@ -124,7 +124,7 @@ function startupReceipt(version) {
   return null
 }
 
-function installerTransfer(file, startUrl, bytes, partial = false) {
+function installerTransfer(file, startUrl, bytes, partial = false, mustCancel = false) {
   const { events, constants: { logEventTypes: types } } = readJson(file)
   const active = new Map()
   const legs = new Map()
@@ -145,11 +145,12 @@ function installerTransfer(file, startUrl, bytes, partial = false) {
       leg.responseIndex = index
     }
     if (event.type === types.URL_REQUEST_JOB_FILTERED_BYTES_READ) leg.bytes += event.params.byte_count
+    if (event.type === types.CANCELLED) leg.canceled = true
   })
   function follow(leg, remaining) {
     const status = Number(leg.headers?.[0]?.match(/^HTTP\/\S+ (\d+)/)?.[1])
-    const receipt = { host: new URL(leg.url).hostname, status, bytes: leg.bytes }
-    if (partial ? (status === 200 || status === 206) && leg.bytes > 0 && leg.bytes < bytes : status === 200 && leg.bytes === bytes) return [receipt]
+    const receipt = { host: new URL(leg.url).hostname, status, bytes: leg.bytes, canceled: leg.canceled === true }
+    if (partial ? (status === 200 || status === 206) && leg.bytes > 0 && leg.bytes < bytes && (!mustCancel || leg.canceled) : status === 200 && leg.bytes === bytes) return [receipt]
     if (!remaining || !(status >= 300 && status < 400)) return null
     const location = leg.headers.find(header => /^location:/i.test(header))?.slice('location:'.length).trim()
     if (!location) return null
@@ -350,7 +351,8 @@ async function main() {
       check(fault && from?.fallbackFrom === spec.first && from.transferred === 0 && from.at >= fault.at, 'fault caused one automatic switch that restarted at zero')
       if (spec.action === 'stall') {
         const close = proxy.events.find(event => event.action === 'stalled-client-closed' && event.tunnel === fault.tunnel)
-        check(close && close.at - fault.at >= 28000 && close.at <= from.at + 5000 && from.at - fault.at <= 60000, 'the updater canceled the held-open tunnel after about 30 seconds')
+        check((!close || close.at - fault.at >= 28000) && from.at - fault.at >= 28000 && from.at - fault.at <= 60000,
+          'the updater waited about 30 seconds without the proxy disconnecting it')
       }
     } else {
       check(!progress.some(s => s.fallbackFrom), 'no automatic fallback in this scenario')
@@ -366,7 +368,7 @@ async function main() {
     let partialRoute
     if (spec.action) {
       const primaryUrl = spec.first === 'website' ? siteDownload : releases + '/' + filename
-      partialRoute = installerTransfer(rawNetLog, primaryUrl, bytes, true)
+      partialRoute = installerTransfer(rawNetLog, primaryUrl, bytes, true, spec.action === 'stall')
       check(proxy.events.some(event => event.action === 'throttled' && (!switchedAt || event.at < switchedAt)), 'the primary installer route was paced and transferred real bytes before switching')
     }
     if (spec.noExtend) {
