@@ -1088,52 +1088,16 @@ registerMessages({
     "en": "Other"
   },
   "settings.discovery.label": {
-    "zh": "从其他 Agent 导入",
-    "en": "Import from other agents"
+    "zh": "从其他 AI 导入",
+    "en": "Import from other AIs"
   },
   "settings.discovery.pageDescription": {
-    "zh": "扫描这台电脑上 Claude Code、Codex、Hermes 的技能和 MCP 配置，勾选后导入。",
-    "en": "Scan Claude Code, Codex and Hermes on this computer for skills and MCP settings, then pick what to import."
+    "zh": "把 Claude Code、Codex、Hermes、Gemini CLI 和 ChatGPT 这类网页 AI 里的记忆、偏好、技能和 MCP 搬过来。先整理成一张单，你勾过才写，导入后可以整次撤销。",
+    "en": "Bring memories, preferences, skills and MCP servers over from Claude Code, Codex, Hermes, Gemini CLI and web AIs like ChatGPT. They are sorted into a list first, nothing is saved until you tick it, and the whole import can be undone."
   },
-  "settings.discovery.sources": {
-    "zh": "来源：Claude Code · Codex · Hermes",
-    "en": "Sources: Claude Code · Codex · Hermes"
-  },
-  "settings.discovery.hint": {
-    "zh": "扫描 ~/.claude、~/.codex、~/.hermes 里的技能和 MCP 配置，勾选后导入。导入的 MCP 默认停用，不会自动运行外来命令。",
-    "en": "Looks in ~/.claude, ~/.codex and ~/.hermes for skills and MCP settings, then imports what you pick. Imported MCP servers start turned off and never run outside commands on their own."
-  },
-  "settings.discovery.scan": {
-    "zh": "扫描本机",
-    "en": "Scan local machine"
-  },
-  "settings.discovery.scanFailed": {
-    "zh": "扫描失败：",
-    "en": "Scan failed: "
-  },
-  "settings.discovery.importSelected": {
-    "zh": "导入所选（{count}）",
-    "en": "Import selected ({count})"
-  },
-  "settings.discovery.importOk": {
-    "zh": "已导入技能 {skills} 个、MCP {mcp} 个。技能即时生效（后端按 mtime 重扫）；MCP 默认停用，请到 MCP 页启用。",
-    "en": "Imported {skills} skill(s) and {mcp} MCP server(s). Skills take effect immediately (the backend rescans by mtime); MCP servers are disabled by default — enable them on the MCP page."
-  },
-  "settings.discovery.importFailed": {
-    "zh": "导入失败：",
-    "en": "Import failed: "
-  },
-  "settings.discovery.nothingFound": {
-    "zh": "未发现可导入的技能或 MCP 配置。",
-    "en": "No importable skills or MCP configs found."
-  },
-  "settings.discovery.skillsCount": {
-    "zh": "技能（{count}）",
-    "en": "Skills ({count})"
-  },
-  "settings.discovery.mcpCount": {
-    "zh": "MCP 服务器（{count}）",
-    "en": "MCP servers ({count})"
+  "settings.discovery.open": {
+    "zh": "开始导入…",
+    "en": "Start importing…"
   },
   "settings.advanced.note": {
     "zh": "会话级配置（技能 / 工具启用、执行环境、审批档）在右侧面板与输入栏调整。",

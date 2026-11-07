@@ -6,8 +6,8 @@
  *  5.1 收件箱 / 界面与会话 / 关于 / 外观 / 内置功能 / Hooks:页面上没有原生复选框,二态设置是 .settings-switch;外观页没有旧的 button.switch;
  *      点收件箱那颗开关 aria-checked 会翻。
  *  5.2 常规 › 基本、技能库工具栏:同一行的输入框 / 下拉 / 按钮一样高(34),刷新键 34 × 34。
- *  5.3 技能库:「这里还没有技能。」只出现一次;一个技能都没有时右栏是公共空态(还没有技能 + 添加技能 + 从其他 Agent 导入);
- *      导入子页标题 = 「从其他 Agent 导入」,左栏那一项一行放得下。
+ *  5.3 技能库:「这里还没有技能。」只出现一次;一个技能都没有时右栏是公共空态(还没有技能 + 添加技能 + 从其他 AI 导入);
+ *      导入子页标题 = 「从其他 AI 导入」,左栏那一项一行放得下。
  *  5.4 Hooks:页头一张卡,协议说明用代码样式,「新建 Hook」左对齐、在卡里。
  * 截图(亮 / 暗、英文)落 SHOT_DIR(缺省系统临时目录 forsion-settingscontrols-shots),DESIGN §8:断言全绿 ≠ 看起来对,自己看。
  *
@@ -123,16 +123,16 @@ async function main() {
     check('5.3 技能库:「这里还没有技能。」只说一次', emptyLines === 1, `n=${emptyLines}`)
     const empty = f.locator('[data-gsk-empty]')
     check('5.3 技能库:一个技能都没有 → 右栏公共空态', await empty.count() === 1 && (await empty.locator('.empty-state-title').textContent()) === '还没有技能')
-    check('5.3 空态:「添加技能」+「从其他 Agent 导入」', await empty.locator('.empty-state-action').textContent().then((s) => s.trim()) === '添加技能'
-      && await empty.locator('button', { hasText: '从其他 Agent 导入' }).count() === 1)
+    check('5.3 空态:「添加技能」+「从其他 AI 导入」', await empty.locator('.empty-state-action').textContent().then((s) => s.trim()) === '添加技能'
+      && await empty.locator('button', { hasText: '从其他 AI 导入' }).count() === 1)
     check('5.3 空态:不再写「选择一项技能」', await f.locator('.gsk-placeholder').count() === 0)
     const nav = await f.evaluate(() => {
-      const leaf = [...document.querySelectorAll('.settings-page *')].find((e) => !e.children.length && (e.textContent || '').trim() === '从其他 Agent 导入' && e.getBoundingClientRect().height > 0 && !e.closest('.settings-body'))
+      const leaf = [...document.querySelectorAll('.settings-page *')].find((e) => !e.children.length && (e.textContent || '').trim() === '从其他 AI 导入' && e.getBoundingClientRect().height > 0 && !e.closest('.settings-body'))
       if (!leaf) return null
       const range = document.createRange(); range.selectNodeContents(leaf)
       return { tag: leaf.tagName, cls: leaf.className, lines: new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size }
     })
-    check('5.3 左栏:「从其他 Agent 导入」一行', !!nav && nav.lines === 1, JSON.stringify(nav))
+    check('5.3 左栏:「从其他 AI 导入」一行', !!nav && nav.lines === 1, JSON.stringify(nav))
     await capture('skills-light')
     await f.evaluate(() => { const r = document.documentElement; r.dataset.mode = 'dark'; r.classList.add('dark') }); await sleep(250)
     await capture('skills-dark')
@@ -141,8 +141,8 @@ async function main() {
     check('5.3 空态「添加技能」打开新建表单', await f.locator('.gsk-form').count() === 1)
 
     f = await open('skills/k-discovery')
-    check('5.3 导入子页:标题 = 从其他 Agent 导入', (await f.locator('.settings-main-title').textContent().catch(() => '')).trim() === '从其他 Agent 导入')
-    check('5.3 导入子页:副标题说清扫描什么', /扫描这台电脑上/.test(await f.locator('.settings-main-copy p').textContent().catch(() => '')))
+    check('5.3 导入子页:标题 = 从其他 AI 导入', (await f.locator('.settings-main-title').textContent().catch(() => '')).trim() === '从其他 AI 导入')
+    check('5.3 导入子页:副标题说清搬什么', /记忆、偏好、技能/.test(await f.locator('.settings-main-copy p').textContent().catch(() => '')))
     await capture('discovery-light')
 
     // ── 5.4 Hooks ──
@@ -168,8 +168,8 @@ async function main() {
     await capture('hooks-dark-en')
     f = await open('skills/k-library')
     await f.locator('[data-gsk-empty]').waitFor({ timeout: 10_000 }).catch(() => {})
-    check('5.3 技能库 · 英文:No skills yet / Import from other agents', (await f.locator('[data-gsk-empty] .empty-state-title').textContent().catch(() => '')) === 'No skills yet'
-      && await f.locator('[data-gsk-empty] button', { hasText: 'Import from other agents' }).count() === 1)
+    check('5.3 技能库 · 英文:No skills yet / Import from other AIs', (await f.locator('[data-gsk-empty] .empty-state-title').textContent().catch(() => '')) === 'No skills yet'
+      && await f.locator('[data-gsk-empty] button', { hasText: 'Import from other AIs' }).count() === 1)
     await capture('skills-en')
     f = await open('about')
     note('About(英文)截图', 'beta 开关行只在宿主有 setUpdateBeta 时出现')

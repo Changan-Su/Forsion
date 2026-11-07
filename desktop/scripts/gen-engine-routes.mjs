@@ -93,6 +93,13 @@ export const CLASSIFICATION = {
   'GET /agent/human/SOUL.md/move': [D, 'host portrait move card (the route itself also refuses remote origin)'],
   'POST /agent/human/SOUL.md/move/scan': [D, 'starts the user-requested scan of Agent memories (the route itself also refuses remote origin)'],
   'POST /agent/human/SOUL.md/move/items/:id': [D, 'moves or keeps one Agent memory entry for the portrait (the route itself also refuses remote origin)'],
+  // 从其他 AI 导入(services/externalImport):读这台电脑上别家 AI 的文件、写画像 / 协作说明 / 项目记忆 / 技能;路由自己也拒远端
+  'GET /agent/import/scan': [D, 'lists other AI tools found in local files (the route itself also refuses remote origin)'],
+  'GET /agent/import/plan': [D, 'reads the sorted import list built from local files (the route itself also refuses remote origin)'],
+  'POST /agent/import/plan': [D, 'starts sorting local files and pasted text with the background model (the route itself also refuses remote origin)'],
+  'POST /agent/import/apply': [D, 'writes ticked items into the portrait, AGENT.md, project memory and skills (the route itself also refuses remote origin)'],
+  'POST /agent/import/undo': [D, 'undoes one import (the route itself also refuses remote origin)'],
+  'POST /agent/import/ignore': [D, 'marks what was found as seen (the route itself also refuses remote origin)'],
   'POST /agent/agents/:slug/memory/promote': [D, 'moves an Agent memory entry into host human/AGENT.md (the route itself also refuses remote origin)'],
 
   // ── widgets.ts:小组件原件和记录是本机文件,和 human/ 同一个边界 ──

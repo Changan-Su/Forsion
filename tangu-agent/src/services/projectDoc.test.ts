@@ -124,6 +124,12 @@ describe('沿途收集', () => {
     expect(doc.truncated).toBe(false);
   });
 
+  it('Gemini CLI 的 GEMINI.md 也读(11-03),和 AGENTS.md / CLAUDE.md 并列', () => {
+    w('gem/.git/HEAD', 'ref: refs/heads/main');
+    w('gem/GEMINI.md', 'Gemini 那份');
+    expect(projectDocPaths(path.join(root, 'gem'))).toEqual([path.join(root, 'gem/GEMINI.md')]);
+  });
+
   it('没有任何一份 → null(不产生空段)', () => {
     mkdirSync(path.join(root, 'bare/.git'), { recursive: true });
     expect(loadProjectDoc(path.join(root, 'bare'))).toBeNull();

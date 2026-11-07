@@ -53,7 +53,7 @@ import { createMcpLifecycle, startForsionMcp } from './mcpServer'
 import { randomBytes } from 'node:crypto'
 import { loadTanguCreds, saveTanguCreds, assertTanguCredsWritable, forsionAccountId, loadAccountCloudSettings, saveAccountCloudSettings } from './forsionAuth'
 import { createAccountCore } from './accountCore'
-import { importMcp, importSkills, scanAll } from './discovery'
+import { importMcp, scanAll } from './discovery'
 import { localProvidersFor, scanLocalProviders, type LocalProviderCandidate } from './discovery/providers'
 import { checkForUpdates, downloadUpdate, installUpdate, canInstallUpdate, betaChannelOn, getUpdaterStatus, updateSourcePref, detectMainland, switchUpdateSource, openUpdateInstaller, channelChanged } from './updater'
 import { parseSourcePref } from '../shared/updateSource'
@@ -3805,12 +3805,9 @@ app.whenReady().then(async () => {
     return { ok: true }
   })
 
-  // ── 跨生态 agent 资产发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu)──
-  // 导入的 MCP 一律 enabled:false(绝不自动运行外来命令),故**不**触发后端重启;
-  // 技能落盘 ~/.tangu/skills/ 后由后端按 mtime 重扫即时生效。
+  // ── 跨生态 MCP 发现/导入(~/.claude、~/.codex、~/.hermes → ~/.tangu;记忆 / 偏好 / 技能走引擎 /agent/import)──
+  // 导入的 MCP 一律 enabled:false(绝不自动运行外来命令),故**不**触发后端重启。
   ipcMain.handle('discovery:scan', () => scanAll())
-  ipcMain.handle('discovery:importSkills', (_e, ids: string[]) =>
-    importSkills(Array.isArray(ids) ? ids.filter((x) => typeof x === 'string') : [], tanguDataDir()))
   // 两次导入并发会在同一个 legacy mcp.json 上互相覆盖 → 整段串行(不能用 configQueue:里面要 saveHomeSection,会自等死锁)
   const importMcpQueue = createSerialQueue()
   ipcMain.handle('discovery:importMcp', (_e, names: string[]) => importMcpQueue(async () => {
