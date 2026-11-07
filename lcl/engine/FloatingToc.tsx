@@ -427,6 +427,8 @@ export function FloatingToc({
     const nav = navRef.current, panel = panelRef.current, source = sourceRef.current
     const scroller = resolveElement(scrollContainer)
     if (!nav || !panel || !source || !scroller) return
+    // Reopened while it was retracting: turn around from the current frame (panel stays where it was).
+    if (droplet.current?.reopen?.()) return
     droplet.current?.cancel()
     const z = zoomOf(nav)
     const box = scroller.getBoundingClientRect()

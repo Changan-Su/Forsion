@@ -1,5 +1,5 @@
 /** One dedicated Space surface; no desktop layout, tabs, ribbon or mobile chrome. */
-import { Suspense, useEffect, useReducer, useRef, useState } from 'react'
+import { Suspense, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import { Check, ChevronDown, ExternalLink, Plus, X } from 'lucide-react'
 import { getActiveSpace, setActiveSpace, setActiveSpaceCold, useSpaceStore } from './spaceRegistry'
 import { getView, subscribeViews } from './viewRegistry'
@@ -10,6 +10,8 @@ import { ViewErrorBoundary } from './Skeleton'
 import './miniCard.css'
 import { useEngineI18n } from './i18nSeam'
 import { currentMiniChrome, useMiniChromeSlot } from './miniChrome'
+import { type Droplet } from './droplet'
+import { openPanel } from './panelMotion'
 
 interface DirectMiniViewTarget { type: string; params?: Record<string, unknown> }
 
@@ -51,6 +53,36 @@ export const MiniColumnHost: React.FC<{
   // 换了视图(外部 openMini、切 Space)就收起菜单;picker 被撤掉时不留一层没有菜单的遮罩(Codex 评审 P2)
   useEffect(() => setMenu(null), [active?.id, active?.type])
   const openMenu = menu === 'picker' && !picker ? null : menu
+  // 液滴(2026-11-05 水滴复用第一批,DESIGN §3):下拉从按下的那颗胶囊按钮里流出来;再点它 / 点遮罩 / Esc = 倒放缩回。
+  // 点一行(换 Space、选会话)和换视图照旧直接收:马上有别的事要发生。两颗按钮之间直接切 = 旧的让位、新的流出。
+  const popRef = useRef<HTMLElement | null>(null)
+  const capRef = useRef<HTMLDivElement | null>(null)
+  const drop = useRef<Droplet | null>(null)
+  const dropClosing = useRef(false)
+  const dismissMenu = (): void => {
+    const d = drop.current
+    if (!d) { setMenu(null); return }
+    if (dropClosing.current) return
+    dropClosing.current = true
+    void d.retract().then(() => { if (drop.current === d) setMenu(null) })
+  }
+  const pour = (): void => {
+    drop.current?.cancel(); drop.current = null; dropClosing.current = false
+    const el = popRef.current
+    const src = capRef.current?.querySelector<HTMLElement>(openMenu === 'space' ? '.mini-card-space' : '.mini-card-picker')
+    if (openMenu && el && src) drop.current = openPanel(src, el) // 按动效主题:液滴 / 拉伸 / 淡入微缩
+  }
+  // 再点同一颗 = 收;正倒放着又点它 = 从这一帧掉头、停在打开(同悬浮目录)
+  const toggleMenu = (which: 'space' | 'picker'): void => {
+    if (openMenu !== which) setMenu(which)
+    else if (dropClosing.current && drop.current?.reopen?.()) dropClosing.current = false
+    else if (dropClosing.current) pour()
+    else dismissMenu()
+  }
+  useLayoutEffect(pour, [openMenu]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { drop.current?.cancel() }, [])
+  const dismissRef = useRef(dismissMenu)
+  dismissRef.current = dismissMenu
   const { t } = useEngineI18n()
   const Icon = space?.icon
   const directDef = direct ? getView(direct.view.type) : undefined
@@ -73,7 +105,7 @@ export const MiniColumnHost: React.FC<{
     // Registry changes include plugin enable/disable and removal of an adapter view.
   }, [registered, activeId, space, buildDefault, direct])
   useEffect(() => {
-    const escape = (e: KeyboardEvent): void => { if (e.key === 'Escape') setMenu(null) }
+    const escape = (e: KeyboardEvent): void => { if (e.key === 'Escape') dismissRef.current() }
     window.addEventListener('keydown', escape)
     return () => window.removeEventListener('keydown', escape)
   }, [])
@@ -94,15 +126,15 @@ export const MiniColumnHost: React.FC<{
     <div className="mini-card-shell mini-card-floating" data-space={direct ? 'direct' : space?.id} data-resizable={resizable || undefined}>
       {/* 顶栏浮在内容之上、收成两颗胶囊(手机 .mb-cap 同款,10-17 方案 A);胶囊之外的透明条是拖拽区。 */}
       <header className="mini-card-chrome">
-        <div className="mini-card-cap">
+        <div className="mini-card-cap" ref={capRef}>
           <button className="mini-card-space" aria-label={t('lcl.mini.switchSpace')} aria-expanded={openMenu === 'space'}
-            disabled={!!direct || spaces.length < 2} onClick={() => setMenu(openMenu === 'space' ? null : 'space')}>
+            disabled={!!direct || spaces.length < 2} onClick={() => toggleMenu('space')}>
             {!direct && Icon && <Icon size={15} />}{(direct || !picker) && <span>{name}</span>}{!direct && spaces.length > 1 && <ChevronDown size={12} />}
           </button>
           {picker && <>
             <span className="mini-card-cap-div" />
             <button className="mini-card-picker" aria-label={picker.label} aria-expanded={openMenu === 'picker'}
-              onClick={() => setMenu(openMenu === 'picker' ? null : 'picker')}>
+              onClick={() => toggleMenu('picker')}>
               <span>{picker.items.find((i) => i.id === picker.value)?.label || picker.placeholder}</span><ChevronDown size={12} />
             </button>
           </>}
@@ -123,8 +155,8 @@ export const MiniColumnHost: React.FC<{
         </div> : <div className="mini-panel-empty">{t('lcl.mini.empty')}</div>}
       </main>
       {openMenu && <>
-        <button className="mini-card-dismiss" aria-label={t('lcl.mini.closeMenu')} onClick={() => setMenu(null)} />
-        {openMenu === 'space' && <section className="mini-card-popover" aria-label={t('lcl.mini.switchSpace')}>
+        <button className="mini-card-dismiss" aria-label={t('lcl.mini.closeMenu')} onClick={dismissMenu} />
+        {openMenu === 'space' && <section ref={popRef} className="mini-card-popover" aria-label={t('lcl.mini.switchSpace')}>
           <div className="mini-card-popover-list">{spaces.map((item) => {
             const ItemIcon = item.icon
             return <button key={item.id} className={`mini-card-row${item.id === activeId ? ' active' : ''}`}
@@ -133,7 +165,7 @@ export const MiniColumnHost: React.FC<{
             </button>
           })}</div>
         </section>}
-        {openMenu === 'picker' && picker && <section className="mini-card-popover mini-card-popover--picker" aria-label={picker.label}>
+        {openMenu === 'picker' && picker && <section ref={popRef} className="mini-card-popover mini-card-popover--picker" aria-label={picker.label}>
           <div className="mini-card-popover-title">{picker.label}</div>
           <div className="mini-card-popover-list">
             {picker.create && <button className="mini-card-row mini-card-row-new" disabled={picker.create.disabled}

@@ -7,7 +7,7 @@
  *  面板前面插一层兄弟节点画同形状的「底」,影子(--droplet-shadow)由这层带着形状走 —— clip-path 会裁掉面板自己的投影。
  *  平移:淡入 + 0.985→1 微缩(菜单那一对,--menu-enter-*),收起淡出 + 0.99(--menu-exit-duration、--ease-exit)。
  *  减少动态效果 / 「只淡入淡出」(reducedMotion())三种都只淡入 / 淡出。 */
-import { emergeDroplet, ms, curve, type Droplet } from './droplet'
+import { emergeDroplet, ms, curve, splitAlpha, type Droplet, type DropletOptions } from './droplet'
 import { zoomOf } from './menuAnchor'
 import { reducedMotion } from './spring'
 
@@ -22,42 +22,93 @@ export function motionTheme(): MotionThemeId {
 
 const POURING = 'lcl-droplet-pouring'
 
-function fadeOnly(panel: HTMLElement): Droplet {
+function fadeOnly(panel: HTMLElement, settled = false): Droplet {
   const fade = (from: number, to: number, duration: number): Animation =>
     panel.animate([{ opacity: from }, { opacity: to }], { duration, easing: curve('--ease-calm', 'ease') })
   panel.style.visibility = ''
-  fade(0, 1, ms('--duration-fast', 150))
+  let enter = settled ? null : fade(0, 1, ms('--duration-fast', 150))
+  let exit: Animation | null = null
   let closing: Promise<void> | null = null
+  let gen = 0 // 掉头(reopen)后旧那次淡出的收尾作废
   return {
-    retract: () => (closing ??= fade(1, 0, ms('--menu-exit-duration', 80)).finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined)),
+    retract() {
+      if (closing) return closing
+      // 淡入还没走完就收:从此刻的透明度接着淡出,不先跳回 1(动效第三轮,同 droplet.ts)
+      const o = +getComputedStyle(panel).opacity
+      enter?.cancel()
+      const ex = (exit = fade(o, 0, ms('--menu-exit-duration', 80)))
+      const g = ++gen
+      closing = new Promise<void>((resolve) => {
+        ex.finished.then(() => { if (g !== gen) return; panel.style.visibility = 'hidden'; resolve() }, () => { if (g === gen) resolve() })
+      })
+      return closing
+    },
     cancel: () => { panel.getAnimations().forEach((a) => a.cancel()); panel.style.visibility = '' },
+    // 淡出途中又要开:从此刻的透明度淡回来(同 droplet.ts 的 reopen)
+    reopen() {
+      if (!closing || !exit || exit.playState !== 'running') return false
+      gen++
+      closing = null
+      const o = +getComputedStyle(panel).opacity
+      exit.cancel()
+      exit = null
+      enter = fade(o, 1, ms('--duration-fast', 150))
+      return true
+    },
   }
 }
 
 /** 平移:菜单那一对淡入微缩。缩放朝源那一侧收(transform-origin),用独立的 scale 属性,不碰调用方写的 transform。 */
-export function fadeScaleOpen(source: HTMLElement, panel: HTMLElement): Droplet {
-  if (reducedMotion() || typeof panel.animate !== 'function') return fadeOnly(panel)
+export function fadeScaleOpen(source: HTMLElement, panel: HTMLElement, opts: DropletOptions = {}): Droplet {
+  if (reducedMotion() || typeof panel.animate !== 'function') return fadeOnly(panel, opts.settled)
   const s = source.getBoundingClientRect(), p = panel.getBoundingClientRect()
   const ox = p.left >= s.right - 1 ? 'left' : p.right <= s.left + 1 ? 'right' : 'center'
   const oy = p.top >= s.bottom - 1 ? 'top' : p.bottom <= s.top + 1 ? 'bottom' : 'center'
   const origin = panel.style.transformOrigin
   panel.style.transformOrigin = `${ox} ${oy}`
   panel.style.visibility = ''
-  const enter = panel.animate([{ opacity: 0, scale: '0.985' }, { opacity: 1, scale: '1' }],
+  const enterTo = (o: number, sc: string): Animation => panel.animate([{ opacity: o, scale: sc }, { opacity: 1, scale: '1' }],
     { duration: ms('--menu-enter-duration', 180), easing: curve('--menu-enter-ease', 'cubic-bezier(0.2, 0, 0.2, 1)') })
+  let enter = enterTo(0, '0.985')
+  if (opts.settled) enter.finish() // 面板开着只是换了源(悬停预览换图标):不重播
+  let exit: Animation | null = null
   let closing: Promise<void> | null = null
   let dead = false // cancel 之后旧的收尾不再碰面板(马上重开时面板已归新的那一次)
+  let gen = 0 // 掉头(reopen)后旧那次退场的收尾作废
+  const now = (): { o: number; sc: string } => { const cs = getComputedStyle(panel); return { o: +cs.opacity, sc: cs.scale === 'none' ? '1' : cs.scale } }
   return {
     retract() {
       if (closing) return closing
+      // 进场还没走完就收:从此刻的透明度 / 缩放接着退,不先跳回 1(动效第三轮)
+      const { o, sc } = now()
       enter.cancel()
       // 不用 fill: forwards(理由同 droplet.ts 的倒放):收完由这里把面板藏起来
-      const exit = panel.animate([{ opacity: 1, scale: '1' }, { opacity: 0, scale: '0.99' }],
-        { duration: ms('--menu-exit-duration', 80), easing: curve('--ease-exit', 'cubic-bezier(0.4, 0, 1, 1)') })
-      closing = exit.finished.then(() => { panel.style.visibility = 'hidden' }, () => undefined).finally(() => { if (!dead) panel.style.transformOrigin = origin })
+      const ex = (exit = panel.animate([{ opacity: o, scale: sc }, { opacity: 0, scale: '0.99' }],
+        { duration: ms('--menu-exit-duration', 80), easing: curve('--ease-exit', 'cubic-bezier(0.4, 0, 1, 1)') }))
+      const g = ++gen
+      closing = new Promise<void>((resolve) => {
+        const done = (hide: boolean): void => {
+          if (g !== gen) return
+          if (hide) panel.style.visibility = 'hidden'
+          if (!dead) panel.style.transformOrigin = origin
+          resolve()
+        }
+        ex.finished.then(() => done(true), () => done(false))
+      })
       return closing
     },
     cancel() { dead = true; panel.getAnimations().forEach((a) => a.cancel()); panel.style.visibility = ''; panel.style.transformOrigin = origin },
+    // 退场途中又要开:从此刻的透明度 / 缩放往回进场,不从 0 重来(同 droplet.ts 的 reopen)
+    reopen() {
+      if (!closing || !exit || exit.playState !== 'running') return false
+      gen++
+      closing = null
+      const { o, sc } = now()
+      exit.cancel()
+      exit = null
+      enter = enterTo(o, sc)
+      return true
+    },
   }
 }
 
@@ -85,8 +136,8 @@ export function easeOf(css: string): (x: number) => number {
 }
 
 /** 拉伸展开。缝(源与面板之间)和液滴一样要 ≤ 12px,远了看着就不是从按钮里长出来的。 */
-export function stretchOpen(source: HTMLElement, panel: HTMLElement): Droplet {
-  if (reducedMotion() || typeof panel.animate !== 'function' || !panel.parentElement) return fadeOnly(panel)
+export function stretchOpen(source: HTMLElement, panel: HTMLElement, opts: DropletOptions & { /** 内部用(收起前按新矩形重建):从这一毫秒接着 */ at?: number } = {}): Droplet {
+  if (reducedMotion() || typeof panel.animate !== 'function' || !panel.parentElement) return fadeOnly(panel, opts.settled)
   panel.style.visibility = ''
   const D = ms('--stretch-open-duration', 380)
   const ez = easeOf(curve('--ease-surface', 'cubic-bezier(0.22, 1, 0.36, 1)'))
@@ -140,63 +191,135 @@ export function stretchOpen(source: HTMLElement, panel: HTMLElement): Droplet {
     layer.style.left = `${(2 * ux - at.left) / z}px`
     layer.style.top = `${(2 * uy - at.top) / z}px`
   }
+  // 底色:缺省读面板自身;材质画在 ::before 上的面板(悬停预览)由调用方传(同 emergeDroplet 的 color)。
+  // 半透明拆成「不透明色 + 整层透明度」,和液滴同一种画法:形状边上不出两层叠色
+  const fill = splitAlpha(opts.color ?? pcs.backgroundColor)
+  if (fill.alpha < 1) layer.style.opacity = String(fill.alpha)
   const body = document.createElement('i')
-  Object.assign(body.style, { left: `${PAD / z}px`, top: `${PAD / z}px`, width: `${p.w / z}px`, height: `${p.h / z}px`, background: pcs.backgroundColor })
+  Object.assign(body.style, { left: `${PAD / z}px`, top: `${PAD / z}px`, width: `${p.w / z}px`, height: `${p.h / z}px`, background: fill.rgb })
   layer.appendChild(body)
 
-  const opts: KeyframeAnimationOptions = { duration: D, fill: 'both' }
-  const grow = body.animate(frames(z, p), opts)
+  const kf: KeyframeAnimationOptions = { duration: D, fill: 'both' }
+  const grow = body.animate(frames(z, p), kf)
   panel.classList.add(POURING)
-  let clip: Animation | null = panel.animate(frames(pz, p), opts)
+  let clip: Animation | null = panel.animate(frames(pz, p), kf)
   const kids = (): HTMLElement[] => Array.from(panel.children) as HTMLElement[]
   const surface = curve('--ease-surface', 'cubic-bezier(0.22, 1, 0.36, 1)')
-  const shows = kids().map((k) => k.animate([{ opacity: 0 }, { opacity: 1 }], { delay: D * 0.3, duration: D * 0.3, easing: surface, fill: 'backwards' }))
-  // 形状长满 → 真面板接手:去掉 pouring、撤掉裁切(fill 留着会把阴影也裁掉)、底层藏起来留给倒放
-  grow.finished.then(() => {
-    if (closing || dead) return
+  let shows = kids().map((k) => k.animate([{ opacity: 0 }, { opacity: 1 }], { delay: D * 0.3, duration: D * 0.3, easing: surface, fill: 'backwards' }))
+  let outs: Animation[] = [] // 倒放时内容的淡出(掉头时只撤它们)
+  let closing: Promise<void> | null = null
+  // cancel 之后旧的收尾不再碰面板:收到一半又重开时,新的一次已经给面板挂上 pouring,旧 promise 的 finally 晚一拍才跑
+  let dead = false
+  let rebuilt: Droplet | null = null
+  let gen = 0 // 每次倒放 / 掉头 +1:掉头后 grow.finished 还是同一个 Promise,旧那次收尾按它作废
+  let landed = false
+  // 形状长满 → 真面板接手:去掉 pouring、撤掉裁切(fill 留着会把阴影也裁掉)、底层藏起来留给倒放。
+  // 描边从透明淡进来(同 droplet.ts);edge = false 只给 settled:面板本来就开着
+  const land = (edge = true): void => {
+    if (closing || dead || landed) return
+    landed = true
     panel.classList.remove(POURING)
     clip?.cancel()
     clip = null
     layer.style.display = 'none'
-  }, () => {})
+    if (edge) panel.animate([{ borderColor: 'transparent' }, {}], { duration: ms('--duration-fast', 150), easing: curve('--ease-calm', 'ease') })
+  }
+  grow.finished.then(() => land(), () => {})
+  if (opts.settled) {
+    // 面板开着只是换了源(悬停预览换图标):同一帧放到底再接手,之后收起缩回新的源
+    for (const a of [grow, ...shows]) a.finish()
+    clip?.finish()
+    land(false)
+  } else if (opts.at !== undefined) {
+    // 重建:停在原来那一份此刻的进度(形状、内容透明度都接得上),紧接着的 retract() 从这里倒放
+    for (const a of [grow, ...shows]) a.currentTime = Math.min(opts.at, D)
+    if (clip) clip.currentTime = Math.min(opts.at, D)
+  }
 
-  let closing: Promise<void> | null = null
-  // cancel 之后旧的收尾不再碰面板:收到一半又重开时,新的一次已经给面板挂上 pouring,旧 promise 的 finally 晚一拍才跑
-  let dead = false
+  const cancelSelf = (): void => {
+    dead = true
+    for (const a of [grow, ...shows]) a.cancel()
+    clip?.cancel()
+    panel.getAnimations({ subtree: true }).forEach((a) => a.cancel())
+    panel.classList.remove(POURING)
+    panel.style.visibility = ''
+    layer.remove()
+  }
   return {
     retract() {
       if (closing) return closing
+      if (rebuilt) return (closing = rebuilt.retract())
+      // 开着期间面板换了位置 / 尺寸(账号卡展开额度、账号列表异步长高)或源挪了:形状还按展开时的矩形,
+      // 倒放会先跳回旧位置。按现在的矩形重建一份(直接停在接手后)再倒放它(同 droplet.ts)
+      const pn = panel.getBoundingClientRect(), sn = source.getBoundingClientRect()
+      const off = (a: DOMRect, b: { left: number; top: number; width: number; height: number }): boolean =>
+        Math.max(Math.abs(a.left - b.left), Math.abs(a.top - b.top), Math.abs(a.width - b.width), Math.abs(a.height - b.height)) > 1
+      if (off(pn, pr) || off(sn, s)) {
+        // 还没长满就变了尺寸又收:从同一个进度重建,别先跳成长满、内容推到 1 再倒放(同 droplet.ts)
+        const at = grow.playState === 'finished' ? undefined : Math.min(D, Number(grow.currentTime ?? D))
+        cancelSelf()
+        rebuilt = stretchOpen(source, panel, at === undefined ? { ...opts, settled: true } : { ...opts, settled: false, at })
+        return (closing = rebuilt.retract())
+      }
+      // 内容此刻的透明度:开到一半就收时淡入还没走完,从这里接着淡(动效第三轮,同 droplet.ts)
+      const from = kids().map((k) => +getComputedStyle(k).opacity)
       shows.forEach((a) => a.cancel())
+      outs.forEach((a) => a.cancel())
+      landed = false
       const t = Math.min(D, Number(grow.currentTime ?? D))
       layer.style.display = ''
       panel.classList.add(POURING)
       clip?.cancel()
-      clip = panel.animate(frames(pz, p), opts)
+      clip = panel.animate(frames(pz, p), kf)
       grow.currentTime = t
       clip.currentTime = t
       // 不用 fill: forwards(理由同 droplet.ts):收完由下面藏起面板
-      kids().forEach((k) => k.animate([{ opacity: 1 }, { opacity: 0, offset: 0.3 }, { opacity: 0 }], { duration: D * 0.7 }))
+      outs = kids().map((k, i) => k.animate([{ opacity: from[i] ?? 1 }, { opacity: 0, offset: 0.3 }, { opacity: 0 }], { duration: D * 0.7 }))
       const rate = -1 / 0.7
       for (const a of [grow, clip]) { a.updatePlaybackRate(rate); a.play() }
-      closing = grow.finished.then(() => { if (!dead) panel.style.visibility = 'hidden' }, () => undefined).finally(() => { layer.remove(); if (dead) return; clip?.cancel(); panel.classList.remove(POURING) })
+      // 掉头(reopen)后 grow 往前放到底、grow.finished 照样 resolve:按 gen 认出这次收起已作废 —— 不藏、不收尾、不 resolve
+      const g = ++gen
+      closing = new Promise<void>((resolve) => {
+        const done = (hide: boolean): void => {
+          if (g !== gen) return
+          if (hide && !dead) panel.style.visibility = 'hidden'
+          layer.remove()
+          if (!dead) { clip?.cancel(); panel.classList.remove(POURING) }
+          resolve()
+        }
+        grow.finished.then(() => done(true), () => done(false))
+      })
       return closing
     },
-    cancel() {
-      dead = true
-      for (const a of [grow, ...shows]) a.cancel()
-      clip?.cancel()
-      panel.getAnimations({ subtree: true }).forEach((a) => a.cancel())
-      panel.classList.remove(POURING)
-      panel.style.visibility = ''
-      layer.remove()
+    cancel() { rebuilt?.cancel(); cancelSelf() },
+    // 倒放途中又要开:从这一帧往前放、停在打开(同 droplet.ts 的 reopen)
+    reopen() {
+      if (rebuilt) {
+        if (!closing || !rebuilt.reopen?.()) return false
+        closing = null
+        return true
+      }
+      if (!closing || !clip || dead || grow.playState !== 'running') return false
+      const g = ++gen
+      closing = null
+      const t = Math.min(D, Number(grow.currentTime ?? 0))
+      const from = kids().map((k) => +getComputedStyle(k).opacity)
+      outs.forEach((a) => a.cancel())
+      outs = []
+      // 内容从此刻的透明度回到 1,不早于 0.3D 露出(同展开)
+      shows = kids().map((k, i) => k.animate([{ opacity: from[i] ?? 0 }, { opacity: 1 }], { delay: Math.max(0, D * 0.3 - t), duration: D * 0.3, easing: surface, fill: 'backwards' }))
+      // 只改速率、不 play():同一帧刚 retract() 时还停在终点,play() 会倒回 0 重放(Codex 评审 P3,同 droplet.ts)
+      for (const a of [grow, clip]) { a.updatePlaybackRate(1); if (a.playState === 'paused') a.play() }
+      grow.finished.then(() => { if (g === gen) land() }, () => {})
+      return true
     },
   }
 }
 
 /** 按当前动效主题展开面板。用法同 emergeDroplet:面板挂上、定好位之后调,收时 `await d.retract()` 再卸载,卸载时 `d.cancel()`。 */
-export function openPanel(source: HTMLElement, panel: HTMLElement): Droplet {
+export function openPanel(source: HTMLElement, panel: HTMLElement, opts: DropletOptions = {}): Droplet {
   const theme = motionTheme()
-  if (theme === 'stretch') return stretchOpen(source, panel)
-  if (theme === 'glide') return fadeScaleOpen(source, panel)
-  return emergeDroplet(source, panel)
+  if (theme === 'stretch') return stretchOpen(source, panel, opts)
+  if (theme === 'glide') return fadeScaleOpen(source, panel, opts)
+  return emergeDroplet(source, panel, opts)
 }

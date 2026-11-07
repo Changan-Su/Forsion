@@ -150,7 +150,8 @@ export function Ribbon() {
   // 滚轮翻看(10-02 用户要求,类 Agent 选择条):各区露出的那一窗往后挪了几格。不持久化,越界在 cut() 里夹回。
   const [scrollOff, setScrollOff] = useState<Record<RibbonZone, number>>({ top: 0, bottom: 0 })
   // 「+N」溢出浮层(2026-10-30 用户定,取代 10-02 的「本区铺满整条」):条右侧列出藏着的那几项,条本身一格不动。
-  // 开合走液滴(droplet.ts):开 = 从「+N」里流出来,收 = 倒放缩回;closing 期间再点不重开。
+  // 开合走液滴(droplet.ts):开 = 从「+N」里流出来,收 = 倒放缩回;倒放到一半又点同一颗 = 从它重新流出来、停在打开
+  // (DESIGN §3,同悬浮目录 / 悬停预览 / 账号卡 / Mini;11-06 动效第三轮补上,原来这一下点击被吞掉、照样收完)。
   const [moreFly, setMoreFly] = useState<RibbonZone | null>(null)
   const moreRef = useRef<HTMLDivElement>(null)
   const droplet = useRef<Droplet | null>(null)
@@ -167,17 +168,22 @@ export function Ribbon() {
     if (!d) { setMoreFly(null); return }
     moreClosing.current = true
     void d.retract().then(() => {
+      if (droplet.current !== d) return // 倒放途中又点开了(同一颗重新流出来 / 换了一区 / 窗口变了直接撤):那边已接管
       moreClosing.current = false
-      if (droplet.current === d) droplet.current = null
+      droplet.current = null
       setMoreFly(null)
     })
   }
   const toggleMore = (zone: RibbonZone): void => {
-    if (moreClosing.current) return
-    if (moreFly === zone) { closeMore(); return }
-    droplet.current?.cancel() // 开着另一区的:直接让位,不叠两滴
+    if (moreFly === zone && !moreClosing.current) { closeMore(); return }
+    // 倒放到一半又点同一区:从这一帧掉头、停在打开(不撤掉从一滴重来)
+    if (moreFly === zone && droplet.current?.reopen?.()) { moreClosing.current = false; return }
+    droplet.current?.cancel() // 开着另一区的:直接让位,不叠两滴;倒放到一半又点:撤掉在途那滴
     droplet.current = null
+    moreClosing.current = false
     setFly(null)
+    const btn = rootRef.current?.querySelector<HTMLElement>(`[data-rb-more="${zone}"]`), el = moreRef.current
+    if (moreFly === zone && btn && el) { droplet.current = openPanel(btn, el); return }
     setMoreFly(zone)
   }
 
@@ -196,6 +202,12 @@ export function Ribbon() {
   const peekOpenTimer = useRef<number | undefined>(undefined)
   const peekCloseTimer = useRef<number | undefined>(undefined)
   const peekCtx = useRef<Event | null>(null) // 从卡里(含它挂到 body 的菜单)冒上来的那次右键
+  // 液滴(2026-11-05 水滴复用第一批,DESIGN §3):卡从停着的那颗图标里流出来,移开 / Esc / 点别处倒放缩回。
+  // 已经弹着时换图标只换内容(外面那张卡不重挂),液滴换成「已接手」的新源 —— 之后收起缩回的是眼前这颗。
+  const peekSrc = useRef<HTMLElement | null>(null) // 指针最后停着的 Space 图标(液滴的源)
+  const peekDrop = useRef<Droplet | null>(null)
+  const peekDropFor = useRef<string | null>(null)
+  const peekClosing = useRef(false)
   // 没有自己菜单项的图标(内置命令、设置……)右键会冒到区 / 整条菜单:记下是哪一格、哪一次右键,让那一格照样亮(Codex 评审 P2)。
   const ctxOpener = useRef<{ ev: Event; key: string } | null>(null)
   const [, relayPeek] = useReducer((n: number) => n + 1, 0) // 窗口大小 / 缩放变了:重算卡片几何
@@ -204,6 +216,25 @@ export function Ribbon() {
     window.clearTimeout(peekOpenTimer.current)
     cancelPeekClose()
     setPeek(null)
+  }
+  /** 倒放收起(移开、Esc、点应用别处);要立刻让位的(菜单 / 拖动挡住、点 Space 图标进去、View 被注销)仍走 closePeek。 */
+  const retractPeek = (): void => {
+    window.clearTimeout(peekOpenTimer.current)
+    cancelPeekClose()
+    const d = peekDrop.current
+    if (!d) { setPeek(null); return }
+    if (peekClosing.current) return
+    peekClosing.current = true
+    void d.retract().then(() => { if (peekDrop.current === d) setPeek(null) })
+  }
+  /** 从 Space 图标往卡里倒(撤掉在途那滴);settled = 直接停在接手后的样子。 */
+  const pourPeek = (el: HTMLElement, id: string, settled: boolean): void => {
+    peekDrop.current?.cancel(); peekDrop.current = null; peekClosing.current = false
+    peekDropFor.current = id
+    const own = peekSrc.current
+    const src = own?.isConnected && own.dataset.spaceId === id ? own : rootRef.current?.querySelector<HTMLElement>(`[data-space-id="${CSS.escape(id)}"]`)
+    // 按动效主题:液滴 / 拉伸 / 淡入微缩(材质在 ::before 上,颜色要传;settled = 换图标不重播)
+    if (src) peekDrop.current = openPanel(src, el, { color: getComputedStyle(el, '::before').backgroundColor, settled })
   }
   const blockHard = !!drag || !!menu || !!iconPick || !!fly || !!moreFly
   // 左面板展开着也弹 —— 弹别的 Space 的(2026-10-14 用户定:悬停本来就是为了呼出别的侧边栏)。
@@ -232,13 +263,19 @@ export function Ribbon() {
     setPeek(views.length ? { spaceId: id, views } : null)
   }
   const onPeekOver = (e: React.MouseEvent): void => {
-    const id = ((e.target as Element).closest('[data-space-id]') as HTMLElement | null)?.dataset.spaceId ?? null
+    const srcEl = (e.target as Element).closest('[data-space-id]') as HTMLElement | null
+    const id = srcEl?.dataset.spaceId ?? null
+    if (srcEl) peekSrc.current = srcEl
     if (id === peekFor.current) return
     window.clearTimeout(peekOpenTimer.current)
     peekFor.current = id
     if (!id) return
     if (blockHard) return
-    if (peek?.spaceId === id) cancelPeekClose() // 从卡里回到它自己的图标
+    if (peek?.spaceId === id) { // 从卡里回到它自己的图标;正倒放着收 = 从这一帧掉头(同悬浮目录),掉不了头再从这枚图标流出来
+      cancelPeekClose()
+      if (peekClosing.current && peekDropFor.current === id && peekDrop.current?.reopen?.()) peekClosing.current = false
+      else if (peekClosing.current && peekRef.current) pourPeek(peekRef.current, id, false)
+    }
     else if (peek) openPeek(id) // 已经弹着:换图标不再等
     else peekOpenTimer.current = window.setTimeout(() => { if (peekFor.current === id) openPeek(id) }, PEEK_OPEN_DELAY)
   }
@@ -265,22 +302,29 @@ export function Ribbon() {
     const judge = (target: EventTarget | null, buttons: number): void => {
       const zone = zoneOf(target)
       if (!peekShouldClose({ zone, buttons, typing: zone === 'shell' && typing() })) cancelPeekClose()
-      else if (peekCloseTimer.current === undefined) peekCloseTimer.current = window.setTimeout(closePeek, PEEK_CLOSE_DELAY)
+      else if (peekCloseTimer.current === undefined) peekCloseTimer.current = window.setTimeout(retractPeek, PEEK_CLOSE_DELAY)
     }
     const onMove = (e: MouseEvent): void => { lastTarget = e.target; judge(e.target, e.buttons) }
     // 「不收」的两个理由消失时指针可能正停着不动(拖出去松了键 / 改名回车、输入框失焦):各补一次重判。
     const onFocusOut = (): void => { window.setTimeout(() => judge(lastTarget, 0), 0) }
     // 点应用界面别处 / 点 Space 图标(要进那个 Space 了)= 立刻收;点卡里弹出来的菜单不算。
-    const onDown = (e: MouseEvent): void => { const z = zoneOf(e.target); if (z === 'shell' || z === 'trigger') closePeek() }
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !typing()) closePeek() } // 输入框里的 Esc 归输入框
+    // 点别处倒放缩回;点 Space 图标是要进那个 Space 了,卡立刻让位
+    const onDown = (e: MouseEvent): void => { const z = zoneOf(e.target); if (z === 'shell') retractPeek(); else if (z === 'trigger') closePeek() }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape' && !typing()) retractPeek() } // 输入框里的 Esc 归输入框
+    // 窗口 / 缩放变了:液滴的几何是旧的,撤掉(之后收起直接没,同「+N」)
+    // 正在倒放收起时改了窗口:直接收完(撤掉液滴会把卡还原成可见、旧收尾又认不出这滴,卡就留在那了;Codex 评审 P2)
+    const onRelayout = (): void => {
+      if (peekClosing.current) { closePeek(); return }
+      peekDrop.current?.cancel(); peekDrop.current = null; relayPeek()
+    }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseover', onMove)
     document.addEventListener('mouseup', onMove)
     document.addEventListener('focusout', onFocusOut)
     document.addEventListener('mousedown', onDown, true)
     window.addEventListener('keydown', onKey)
-    window.addEventListener('resize', relayPeek)
-    window.addEventListener(UI_ZOOM_EVENT, relayPeek)
+    window.addEventListener('resize', onRelayout)
+    window.addEventListener(UI_ZOOM_EVENT, onRelayout)
     return () => {
       document.removeEventListener('mousemove', onMove)
       document.removeEventListener('mouseover', onMove)
@@ -288,10 +332,20 @@ export function Ribbon() {
       document.removeEventListener('focusout', onFocusOut)
       document.removeEventListener('mousedown', onDown, true)
       window.removeEventListener('keydown', onKey)
-      window.removeEventListener('resize', relayPeek)
-      window.removeEventListener(UI_ZOOM_EVENT, relayPeek)
+      window.removeEventListener('resize', onRelayout)
+      window.removeEventListener(UI_ZOOM_EVENT, onRelayout)
     }
   }, [peekOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 液滴:卡挂上(peekStyle 已在渲染时定好位)就从图标流出;换了 Space(卡没重挂)= 换源、不重播;卡卸了就清场。
+  // 液体颜色读 ::before —— .rb-peek 自身不上色(见 engine.css)。
+  useLayoutEffect(() => {
+    const el = peekRef.current
+    if (!peek || !el) { peekDrop.current?.cancel(); peekDrop.current = null; peekDropFor.current = null; peekClosing.current = false; return }
+    if (peekDropFor.current === peek.spaceId) return
+    // 开着换图标 = 换源不重播;倒放收到一半换了图标 = 重新流
+    pourPeek(el, peek.spaceId, peekDropFor.current !== null && !peekClosing.current)
+  }, [peek?.spaceId, peekSpace]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => () => { peekDrop.current?.cancel() }, [])
   /** 卡片几何(视口 px → 按 zoom 折算,同 .rb-fly):贴 Ribbon 右沿,从标签条下沿到工作区底。
    *  让开标签条 —— 左栏的展开钮就在它最左边,盖住了就没法从预览直接「固定」成常驻左栏。
    *  左面板展开着时(弹的是别的 Space):卡片照着眼前这块左栏的位置盖上去 —— 原地换成另一个 Space 的侧边栏,四边不露底下那块;
@@ -583,7 +637,7 @@ export function Ribbon() {
     }
     const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') closeMore() }
     // 窗口 / 缩放变了:按钮已挪走,浮层和液滴的几何都是旧的,倒放只会从旧位置飞一下 → 直接撤
-    const onLayout = (): void => { droplet.current?.cancel(); droplet.current = null; setMoreFly(null) }
+    const onLayout = (): void => { droplet.current?.cancel(); droplet.current = null; moreClosing.current = false; setMoreFly(null) }
     window.addEventListener('pointerdown', onDown, true)
     window.addEventListener('keydown', onKey)
     window.addEventListener('blur', closeMore)

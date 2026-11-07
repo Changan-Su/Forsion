@@ -8,9 +8,9 @@
  *  - 未登录:头像占位 + 「登录 / 注册」+ 副标题「点击登录」;不登录 Tangu 也能正常用。
  * 自管 authStatus(挂载即拉 + 监听 auth:device 推登录链接);登录/登出后回调 onAuthChange 让上层重连。
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { OverlayAt, accountMenuRows, nativeSheetPresenter, runNativeSheetMenu, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
+import { OverlayAt, accountMenuRows, openPanel, nativeSheetPresenter, runNativeSheetMenu, type Droplet, type SheetMenuItem, type SheetMenuSection } from '@lcl/engine'
 import { LogIn, LogOut, Loader2, Gauge, ChevronDown, ChevronRight, RotateCcw, ExternalLink, Backpack } from 'lucide-react'
 import type { AuthAccountInfo, AuthStatusInfo } from '../types'
 import { registerMessages, useI18n } from '../i18n'
@@ -192,19 +192,46 @@ export const AccountCard: React.FC<{
       })
       .catch(() => { if (request === quotaRequest.current) setQuotaErr(true) })
   }
+  // 液滴(2026-11-05 水滴复用第一批,DESIGN §3):卡片从头像里流出来;点别处 / Esc / 失焦 / 再点头像 = 倒放缩回。
+  // 登录、退出、用卡这些动作照旧直接 setMenu(null)(马上有别的事要发生),液滴在下面的 layout effect 里清场。
+  const popRef = useRef<HTMLDivElement | null>(null)
+  const drop = useRef<Droplet | null>(null)
+  const dropClosing = useRef(false)
+  const dismissMenu = (): void => {
+    const d = drop.current
+    if (!d) { setMenu(null); return }
+    if (dropClosing.current) return
+    dropClosing.current = true
+    void d.retract().then(() => { if (drop.current === d) setMenu(null) })
+  }
+  const menuOpen = !!menu
+  const pour = (el: HTMLElement): void => {
+    drop.current?.cancel(); drop.current = null; dropClosing.current = false
+    const anchor = anchorRef.current
+    const src = anchor?.querySelector<HTMLElement>('.account-avatar') ?? anchor
+    if (src) drop.current = openPanel(src, el) // 按动效主题:液滴 / 拉伸 / 淡入微缩
+  }
+  // OverlayAt 在自己的 layout effect 里量完定位、同步写进 DOM(useClampedMenu),父组件这一个在它之后跑 —— 量到的就是最终位置
+  useLayoutEffect(() => {
+    const el = popRef.current
+    if (!menuOpen || !el) { drop.current?.cancel(); drop.current = null; dropClosing.current = false; return }
+    if (!drop.current) pour(el)
+  }, [menuOpen])
+  useEffect(() => () => { drop.current?.cancel() }, [])
   useEffect(() => {
     if (!menu) return
-    const close = (): void => setMenu(null)
-    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') close() }
-    window.addEventListener('pointerdown', close)
+    // 按在头像上不算「点别处」:那一下的 click 自己会收(见 activate)
+    const onDown = (e: PointerEvent): void => { if (!(e.target instanceof Node && anchorRef.current?.contains(e.target))) dismissMenu() }
+    const onKey = (e: KeyboardEvent): void => { if (e.key === 'Escape') dismissMenu() }
+    window.addEventListener('pointerdown', onDown)
     window.addEventListener('keydown', onKey)
-    window.addEventListener('blur', close)
+    window.addEventListener('blur', dismissMenu)
     return () => {
-      window.removeEventListener('pointerdown', close)
+      window.removeEventListener('pointerdown', onDown)
       window.removeEventListener('keydown', onKey)
-      window.removeEventListener('blur', close)
+      window.removeEventListener('blur', dismissMenu)
     }
-  }, [menu])
+  }, [menu]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 两击确认(防误耗);成功就关菜单、弹用卡动画。失败不一定没核销(服务端先核销再读额度,回包可能丢)→ 关菜单,
   // 下次打开重拉张数,免得照旧张数再点一次多用一张。在途期间 usingCard 一直锁着按钮(关掉再开菜单也锁着),
@@ -312,7 +339,13 @@ export const AccountCard: React.FC<{
     if (window.tangu?.accountQuota || window.tangu?.forsionLogin) showMenu(el)
     else if (hasCloudPages) openCloudPage('account')
   }
-  const activate = (e: React.MouseEvent | React.KeyboardEvent): void => activateOn(e.currentTarget as HTMLElement)
+  // 菜单开着时再点头像 = 收起(倒放);正倒放着又点 = 从这一帧掉头、停在打开(同悬浮目录)
+  const activate = (e: React.MouseEvent | React.KeyboardEvent): void => {
+    if (!menu) { activateOn(e.currentTarget as HTMLElement); return }
+    if (dropClosing.current && drop.current?.reopen?.()) dropClosing.current = false
+    else if (dropClosing.current && popRef.current) pour(popRef.current)
+    else dismissMenu()
+  }
   const stateClass = engineDown ? ' engine-down' : expired ? ' expired' : ''
   const subText = engineDown ? t('sidebar.account.engineDown')
     : engineStarting ? t('sidebar.account.engineStarting')
@@ -344,6 +377,7 @@ export const AccountCard: React.FC<{
   const menuEl = menu ? createPortal(
     <OverlayAt
       className="account-pop"
+      innerRef={(el) => { popRef.current = el }}
       x={menu.x}
       y={menu.y}
       anchorTop={menu.anchorTop}
