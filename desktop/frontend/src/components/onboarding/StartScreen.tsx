@@ -240,7 +240,8 @@ const IMPROVE_ROWS: Array<[typeof Bug, string]> = [[Bug, 'onboarding.improve.cra
 
 /**
  * 「帮助改进 Forsion」:开关 + 很小的 ⓘ。只在登录后能开(Extend 视图带 signedIn 时以它为准,老 Extend 用登录状态顶)。
- * 登录后、还没看过告知:详情自动弹一次,弹出来就记 noticeSeen(契约 §5:露出才算看过;不列「不会发送」)。
+ * 登录后、还没看过告知:这一行能开的样子露出来就记 noticeSeen(11-07 用户定:详情不自动弹,点 ⓘ 才展开;
+ * 收集什么写在隐私政策里)。
  * 本机的 Extend 没有遥测通道 → 整行不出现。
  */
 export function ImproveRow({ signedIn }: { signedIn: boolean }): React.ReactNode {
@@ -268,9 +269,26 @@ export function ImproveRow({ signedIn }: { signedIn: boolean }): React.ReactNode
     return run
   }
   const can = !!view && (view.signedIn ?? signedIn)
-  // 登录了、还没看过告知:自动弹一次
-  useEffect(() => { if (can && view && !view.noticeSeen) setOpen(true) }, [can, view])
-  useEffect(() => { if (open && view && !view.noticeSeen) void set({ noticeSeen: true }).catch(() => {}) }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+  // 登录了、还没看过告知:这一行能开的样子**进了可视区**才算看过(窗口矮 / 放大时它可能在滚动区外),只记一次;
+  // 记不上下次露面再记。没有 IntersectionObserver 的环境(测试)当作看得见。
+  const [onScreen, setOnScreen] = useState(false)
+  const pending = !!view && !view.noticeSeen
+  useEffect(() => {
+    const el = rowRef.current
+    if (!el || onScreen || !pending) return
+    if (typeof IntersectionObserver === 'undefined') { setOnScreen(true); return }
+    const io = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) { setOnScreen(true); io.disconnect() }
+    }, { threshold: 0.6 })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [onScreen, pending])
+  const marking = useRef(false)
+  useEffect(() => {
+    if (!can || !onScreen || !view || view.noticeSeen || marking.current) return
+    marking.current = true
+    void set({ noticeSeen: true }).catch(() => {}).finally(() => { marking.current = false })
+  }, [can, onScreen, view]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!open) return
     const onDown = (e: MouseEvent): void => { if (!rowRef.current?.contains(e.target as Node)) setOpen(false) }

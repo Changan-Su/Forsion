@@ -97,7 +97,9 @@ async function main() {
     const improve = win.locator('[data-ob-improve] [role="switch"]')
     await improve.waitFor({ timeout: 20000 })
     await win.waitForFunction(() => document.querySelector('[data-ob-improve] [role="switch"]')?.getAttribute('aria-checked') === 'true', null, { timeout: 20000 })
-    await win.locator('.ob3-pop').waitFor({ timeout: 10000 }) // 登录了、没看过告知 → 自动弹一次(= noticeSeen)
+    // 登录了、没看过告知:这一行露出来就记 noticeSeen,详情不自动弹(11-07);后面能发出去就证明记上了
+    await win.waitForTimeout(800)
+    assert.equal(await win.locator('.ob3-pop').count(), 0, 'help-improve details do not open on their own')
     await shot(win, 'onboarding-start-improve')
     const seen = []
     for (let i = 0; i < 6; i++) {
