@@ -92,6 +92,14 @@ async function main() {
       check('D4 ⌘/ 也开不出左栏', afterKey.length === 1, afterKey)
       await sat.close().catch(() => {})
     }
+    // D5:视图自己往侧栏开东西(Agent 资料页挂载时开左栏名册)在独立视图窗里也开不出来(Codex 评审 P2)
+    const sat2 = await expectWindow(() => win.evaluate(() => window.tangu.openDetached([{ type: 'agent-profile', params: {} }])))
+    if (sat2) {
+      await settle(sat2)
+      const g2 = await groupsOf(sat2)
+      check('D5 Agent 资料页拖出来:左栏名册没有长出来', g2.length === 1 && !g2[0].icon && g2[0].types.includes('agent-profile'), g2)
+      await sat2.close().catch(() => {})
+    } else check('D5 Agent 资料页拖出来:开出了窗', false)
 
     if (process.env.DETACH_ONLY_D) return
     // 后面几段在 Tangu Space 里做:主区第一个 View(固定的主对话)+ 左栏工作区
@@ -105,9 +113,10 @@ async function main() {
     const items = await win.$$eval('.ctx-menu button', (els) => els.map((e) => e.getAttribute('data-act')))
     console.log('   pinned tab menu:', JSON.stringify(items))
     if (SHOTS) await win.screenshot({ path: path.join(SHOTS, 'menu-pinned.png') })
-    check('M1 固定 View 右键有菜单', items.length >= 4, items)
+    check('M1 固定 View 右键有菜单', items.length >= 1, items)
     check('M2 固定 View 菜单里没有「关闭」', !items.includes('close'), items)
-    check('M3 有拆分与新窗口两类', ['split-right', 'split-down', 'open-window', 'move-window'].every((k) => items.includes(k)), items)
+    // 新配置没有会话:主对话是空的新对话,钉不出副本 → 不给拆分 / 在新窗口打开,只给「移到新窗口」(Codex 评审 P1)
+    check('M3 空的新对话:只有「移到新窗口」,没有拆分 / 复制', items.includes('move-window') && !['split-right', 'split-down', 'open-window'].some((k) => items.includes(k)), items)
     await win.keyboard.press('Escape')
     await win.mouse.click(5, 400)
     await win.waitForTimeout(300)
@@ -138,20 +147,26 @@ async function main() {
     const after = await mainTypes()
     check('M5 关闭其他标签:只剩固定的对话', after.length === 1 && after[0] === 'chat', { before, after })
 
-    // 向右拆分:主区多一组,原标签还在
-    await win.locator('.dv-groupview .wb-tab[data-view-type="chat"]').first().click({ button: 'right' })
+    // 向右拆分(拿新建标签页做:非单例、能复制):主区多一组
+    await win.locator('.dv-new-tab').first().click()
+    await win.waitForTimeout(500)
+    await win.locator('.dv-groupview .wb-tab[data-view-type="launcher"]').first().click({ button: 'right' })
     await win.waitForTimeout(300)
+    const launcherItems = await win.$$eval('.ctx-menu button', (els) => els.map((e) => e.getAttribute('data-act')))
+    // 同组另一个是固定的对话(关不掉)→ 没有「关闭其他」;其余齐全
+    check('M6 普通标签菜单齐全', ['close', 'split-right', 'split-down', 'open-window', 'move-window'].every((k) => launcherItems.includes(k)) && !launcherItems.includes('close-others'), launcherItems)
     await win.locator('.ctx-menu button[data-act="split-right"]').click()
     await win.waitForTimeout(800)
     const mainGroups = (await groupsOf(win)).filter((g) => !g.icon)
-    check('M6 向右拆分:主区变两组、两边都是对话', mainGroups.length === 2 && mainGroups.every((g) => g.types.includes('chat')), mainGroups)
-    // 收回:关掉右边那个拆分出来的
-    const rightmost = mainGroups.sort((a, b) => b.x - a.x)[0]
-    if (rightmost) {
-      await win.locator('.dv-groupview').filter({ has: win.locator('.wb-tab[data-view-type="chat"]') }).last().locator('.wb-tab').first().click({ button: 'right' })
+    check('M7 向右拆分:主区变两组', mainGroups.length === 2, mainGroups)
+    // 收回:右边那组(拆出来的启动页)关掉,再关掉留在左组的那个启动页
+    for (let i = 0; i < 3; i++) {
+      const tab = win.locator('.dv-groupview .wb-tab[data-view-type="launcher"]').last()
+      if (!(await tab.count())) break
+      await tab.click({ button: 'right' })
       await win.waitForTimeout(300)
       await win.locator('.ctx-menu button[data-act="close"]').click().catch(() => {})
-      await win.waitForTimeout(600)
+      await win.waitForTimeout(500)
     }
 
     // ── P:固定 View 移到新窗口 ──

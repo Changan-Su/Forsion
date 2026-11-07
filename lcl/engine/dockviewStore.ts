@@ -1143,6 +1143,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   showSideView: (side, type) => {
     const api = get().api
     if (!api) return
+    if (IS_VIEW_WINDOW && side !== 'bottom') return // 独立视图窗没有左右栏(同 openView)
     const visible = get()[visKeyOf(side)]
     // 已显示该视图时再点 = 收起该侧(开合切换);否则展开(若收起)并激活该视图。
     if (visible) {
@@ -1346,6 +1347,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   openView(type, params = {}, loc = 'main', opts) {
     const api = get().api
     if (!api) return null
+    // 独立视图窗只装主区:视图自己往侧栏开东西(Agent 资料页挂载时开名册、对话的「在项目详情中打开」)一律不开,
+    // 否则左右栏又长出来、开关钮还藏着收不回去(Codex 评审)。见 uiMode.IS_VIEW_WINDOW。
+    if (IS_VIEW_WINDOW && (loc === 'left' || loc === 'right')) return null
     const def = getView(type)
     // 「开在当前标签旁边」那一档(见 openBeside.ts)先于单例复用:单例带 reuseKey:'primary' 时复用会把参数并进已开着的那份 ——
     // 主区开着 Agent A 的资料页,卡里点 Agent B,A 就地变成 B(Codex 评审实证)。这一档只认参数一致的那份。

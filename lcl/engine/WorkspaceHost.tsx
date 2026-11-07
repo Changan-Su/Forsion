@@ -52,11 +52,11 @@ function viewRefFromParams(params: Record<string, unknown> | undefined, componen
   const { __loc, __type, ...userParams } = raw
   void __loc
   const type = (typeof __type === 'string' && __type) || component || ''
-  return type && type !== '__extend' ? { type, params: copiedParams(type, userParams) } : null
+  return type && type !== '__extend' ? { type, params: copiedParams(type, userParams) ?? userParams } : null
 }
 
-/** 复制 / 搬走一个 View 时带的参数(见 ViewDefinition.copyParams);钩子抛错就原样带走。 */
-function copiedParams(type: string, params: Record<string, unknown>): Record<string, unknown> {
+/** 复制 / 搬走一个 View 时带的参数(见 ViewDefinition.copyParams);null = 此刻做不出不同的副本。钩子抛错就原样带走。 */
+function copiedParams(type: string, params: Record<string, unknown>): Record<string, unknown> | null {
   const copy = getView(type)?.copyParams
   if (!copy) return params
   try { return copy({ ...params }) } catch { return params }
@@ -207,33 +207,35 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
   const closable = useWorkspace((s) => !s.isPinnedLeaf(api.id)) && def?.closable !== false
   const loc = (params as { __loc?: string } | undefined)?.__loc
   const iconOnly = loc === 'left' || loc === 'right'
-  const [menu, setMenu] = useState<{ x: number; y: number; closeAll: string[]; others: string[]; right: string[] } | null>(null)
+  const [menu, setMenu] = useState<{ x: number; y: number; closeAll: string[]; others: string[]; right: string[]; copy: Record<string, unknown> | null } | null>(null)
   const { t } = useEngineI18n()
   // 右键菜单(2026-11-07 用户:「右键标签栏的 view 应该有一堆菜单选项」)。固定 View 也有菜单,只是没有「关闭」。
   const menuable = !PLACEHOLDER_TABS.has(type) && type !== '__extend'
   const openMenu = (e: React.MouseEvent): void => {
     e.preventDefault(); e.stopPropagation()
     const c = closableInGroup(api.id)
-    setMenu({ x: e.clientX, y: e.clientY, closeAll: c.all, others: c.others, right: c.right })
+    const { __loc, __type, ...user } = (params ?? {}) as Record<string, unknown>
+    void __loc; void __type
+    // 副本参数在右键这一刻算:跟随型视图(主对话)钉的是此刻的会话;算不出(新对话还没会话)就不给拆分 / 在新窗口打开。
+    setMenu({ x: e.clientX, y: e.clientY, closeAll: c.all, others: c.others, right: c.right, copy: copiedParams(type, user) })
   }
   const run = (fn: () => void) => (): void => { setMenu(null); fn() }
   const closeMany = (ids: string[]): void => { const ws = useWorkspace.getState(); for (const id of ids) ws.closeLeaf(id) }
-  const split = (dir: 'right' | 'down'): void => {
+  const split = (dir: 'right' | 'down', copy: Record<string, unknown>): void => {
     const ws = useWorkspace.getState()
     ws.activateLeaf(api.id) // splitActive 认活动面板 → 先把它设成活动
-    const { __loc, __type, ...user } = (params ?? {}) as Record<string, unknown>
-    void __loc; void __type
-    ws.splitActive(dir, copiedParams(type, user))
+    ws.splitActive(dir, copy)
   }
-  const toWindow = (move: boolean): void => {
+  const toWindow = (move: boolean, copy: Record<string, unknown> | null): void => {
     const ref = viewRefFromParams(params as Record<string, unknown> | undefined, (api as { component?: string }).component)
     const d = getDetachApi()
     if (!ref || !d) return
-    d.detach([ref])
+    d.detach([copy && !move ? { type: ref.type, params: copy } : ref])
     if (move) releaseLeaf(api.id)
   }
   // 单例视图只有声明了 copyParams(知道怎样做出一份不同的副本,如对话钉住会话)才给拆分;否则拆出来的是第二个「唯一」实例。
   const canSplit = !!def && (def.singleton !== true || !!def.copyParams)
+  const copy = menu?.copy ?? null
   const canWindow = !!def && !!getDetachApi() // 占位(视图没注册)不给:对面窗口开不出它、这边又先关了源面板,面板就没了(Codex 3a 评审)
   const tabRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -286,14 +288,14 @@ const WbTab: React.FC<IDockviewPanelHeaderProps> = ({ api, params }) => {
           {menu.others.length > 0 && <button data-act="close-others" onClick={run(() => closeMany(menu.others))}><ListX size={13} /> {t('lcl.tab.closeOthers')}</button>}
           {menu.right.length > 0 && <button data-act="close-right" onClick={run(() => closeMany(menu.right))}><ArrowRightToLine size={13} /> {t('lcl.tab.closeRight')}</button>}
           {menu.closeAll.length > 1 && <button data-act="close-all" onClick={run(() => closeMany(menu.closeAll))}><CopyX size={13} /> {t('lcl.tab.closeAll')}</button>}
-          {canSplit && (closable || menu.closeAll.length > 0) && <div className="ctx-separator" />}
+          {copy && canSplit && (closable || menu.closeAll.length > 0) && <div className="ctx-separator" />}
           {/* 侧栏只许上下分(与拖放 / splitActive 同一铁律),所以侧栏标签没有「向右拆分」。 */}
-          {canSplit && !iconOnly && <button data-act="split-right" onClick={run(() => split('right'))}><Columns2 size={13} /> {withHotkey(t, t('lcl.tab.splitRight'), 'split-right')}</button>}
-          {canSplit && <button data-act="split-down" onClick={run(() => split('down'))}><Rows2 size={13} /> {t('lcl.tab.splitDown')}</button>}
-          {canWindow && (canSplit || closable || menu.closeAll.length > 0) && <div className="ctx-separator" />}
+          {copy && canSplit && !iconOnly && <button data-act="split-right" onClick={run(() => split('right', copy))}><Columns2 size={13} /> {withHotkey(t, t('lcl.tab.splitRight'), 'split-right')}</button>}
+          {copy && canSplit && <button data-act="split-down" onClick={run(() => split('down', copy))}><Rows2 size={13} /> {t('lcl.tab.splitDown')}</button>}
+          {canWindow && ((copy && canSplit) || closable || menu.closeAll.length > 0) && <div className="ctx-separator" />}
           {/* 「移到新窗口」:确定性撕出路径(不依赖跨窗拖拽);仅桌面(getDetachApi 有真身)显示。固定 View 移走后原处补一个新的(releaseLeaf)。 */}
-          {canWindow && <button data-act="open-window" onClick={run(() => toWindow(false))}><SquareArrowOutUpRight size={13} /> {t('lcl.tab.openInWindow')}</button>}
-          {canWindow && <button data-act="move-window" onClick={run(() => toWindow(true))}><AppWindow size={13} /> {t('lcl.tab.moveToWindow')}</button>}
+          {canWindow && copy && <button data-act="open-window" onClick={run(() => toWindow(false, copy))}><SquareArrowOutUpRight size={13} /> {t('lcl.tab.openInWindow')}</button>}
+          {canWindow && <button data-act="move-window" onClick={run(() => toWindow(true, copy))}><AppWindow size={13} /> {t('lcl.tab.moveToWindow')}</button>}
         </OverlayAt>,
         document.body,
       )}

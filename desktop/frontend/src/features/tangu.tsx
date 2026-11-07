@@ -45,10 +45,12 @@ const blankNewChat = (): void => {
 
 /** 对话被复制 / 搬去别的窗口(标签右键的拆分、在新窗口打开 / 移到新窗口、拖进别的窗口):跟随型的主对话钉住此刻的会话,
  *  否则副本 / 新窗口会跟随它自己那边的当前会话(口径同下面的 splitChat)。已经钉住的原样带走。 */
-const pinChatCopy = (params: Record<string, unknown>): Record<string, unknown> => {
+const pinChatCopy = (params: Record<string, unknown>): Record<string, unknown> | null => {
   if (params.followActive === false) return params
   const pinned = app().activeId
-  return { ...params, followActive: false, sessionId: pinned || undefined, reuseKey: `session:${pinned || 'new'}` }
+  // 新对话还没有会话可钉:钉成「没有会话」的副本发了消息也看不到(Codex 评审)→ 告诉引擎做不出副本,菜单不给拆分 / 在新窗口打开
+  if (!pinned) return null
+  return { ...params, followActive: false, sessionId: pinned, reuseKey: `session:${pinned}` }
 }
 
 const splitChat = (): void => {
