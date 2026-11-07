@@ -65,12 +65,12 @@ async function main() {
         return destination.stream
       }
     })
-    const view = win.locator('.t2-chat-view').first()
+    const view = win.locator('.t2-chat-view:visible').first()
     const input = view.locator('.t2c-ta')
     const mic = view.locator('.t2c-mic-control')
     const stop = view.locator('.t2c-voicestop')
     const assertValue = value => win.waitForFunction(
-      text => document.querySelector('.t2-chat-view .t2c-ta')?.value === text,
+      text => Array.from(document.querySelectorAll('.t2-chat-view .t2c-ta')).some(input => input.checkVisibility() && input.value === text),
       value, { timeout: 5000 },
     )
     const screenshot = file => win.screenshot({ path: path.join(shotDir('voice-input'), file), scale: 'css' })
@@ -109,6 +109,15 @@ async function main() {
     assert.equal(await input.isEditable(), true)
     await input.fill('我修改了整段草稿。')
     await assertValue('我修改了整段草稿。')
+    allowStream = true
+    await mic.click()
+    await stop.waitFor()
+    await win.locator('.t2s-srow').filter({ hasText: 'Probe session two' }).first().click()
+    await assertValue('')
+    assert.equal(await view.locator('.t2c-voicestop').count(), 0)
+    await win.locator('.t2s-srow').filter({ hasText: 'Probe session one' }).first().click()
+    await assertValue('我修改了整段草稿。')
+    console.log('PASS: recording cleanup and draft ownership on session change')
     console.log('PASS: real Electron, PCM before stop, interim replacement, explicit finish, batch fallback and editable drafts')
   } finally {
     await ctx?.close()

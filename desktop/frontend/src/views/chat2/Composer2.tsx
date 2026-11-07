@@ -9,8 +9,7 @@ import React, { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, 
 import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, ChevronRight, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, CircleAlert, type LucideIcon } from 'lucide-react'
-import { useVoiceInput } from '../../hooks/useVoiceInput'
-import { joinVoiceText } from '../../services/voiceInputStream'
+import { joinVoiceText, useVoiceInput } from '../../hooks/useVoiceInput'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
 import { CallHint, markCallHintSeen } from './CallHint'

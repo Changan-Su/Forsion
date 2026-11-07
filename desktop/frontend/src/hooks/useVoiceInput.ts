@@ -8,6 +8,7 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { registerMessages, translate } from '../i18n'
 import { VOICE_INPUT_RATE } from '../../../shared/voiceInputStream'
 import { startStreamingDictation, type VoicePreview } from '../services/voiceInputStream'
+export { joinVoiceText } from '../services/voiceInputStream'
 
 // 文案在**报错发生时**解析(translate 而非 useI18n):这些串都进 state 当错误信息用,
 // 且本文件里 `t` 已被 `getTracks().forEach((t) => …)` 占用,别再引入同名绑定。
