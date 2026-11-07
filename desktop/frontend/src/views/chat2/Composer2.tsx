@@ -10,6 +10,7 @@ import {
   ArrowUp, Square, Mic, X, ClipboardList, Check, ChevronDown, ChevronRight, Users, Sparkles,
   Hand, ShieldCheck, ShieldAlert, Settings2, SlidersHorizontal, MessageSquare, Loader2, Clock, Zap, AudioLines, CircleAlert, type LucideIcon } from 'lucide-react'
 import { useVoiceInput } from '../../hooks/useVoiceInput'
+import { joinVoiceText } from '../../services/voiceInputStream'
 import { CALL_TEXT_MAX, getCallPresence, onCallEvent, openCallLayer, sendTextToCall, subscribeCallPresence, useRealtimeConfig } from '../../services/realtimeCall'
 import { resolveRealtimeCall } from '../../services/realtimeModel'
 import { CallHint, markCallHintSeen } from './CallHint'
@@ -703,22 +704,19 @@ export const Composer2: React.FC<{
     setTimeout(() => URL.revokeObjectURL(a.href), 1000)
   }
 
-  // 桌面级共享语音输入 hook:转写文本追加进草稿(不绑聊天,Amadeus 等可复用同一 hook)。
   const voice = useVoiceInput((text) => {
-    setDraft((d) => (d ? trimDraftEnd(d) + ' ' + text : text))
+    setDraftField(draftKey, 'text', previous => joinVoiceText(previous, text))
     setHistPos(0)
-    requestAnimationFrame(autoGrow)
-  })
+    if (!touchUi) requestAnimationFrame(() => {
+      const input = taRef.current
+      if (!input || draftKeyRef.current !== draftKey) return
+      input.focus({ preventScroll: true })
+      input.setSelectionRange(input.value.length, input.value.length)
+    })
+  }, draftKey)
   const voiceActive = voice.recording || voice.busy
-  // 录音条上点 ↑:先停止转写(文字落草稿),转写结束后自动发送(用户选「转写并立即发送」)。
-  const sendAfterVoiceRef = useRef(false)
-  const voiceSend = () => { sendAfterVoiceRef.current = true; voice.toggle() }
-  useEffect(() => {
-    if (!sendAfterVoiceRef.current || voice.recording || voice.busy) return
-    sendAfterVoiceRef.current = false
-    if (draft.trim()) send()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [voice.recording, voice.busy])
+  const pendingVoice = voice.preview?.pending || ''
+  const shownDraft = joinVoiceText(draft, (voice.preview?.text || '') + pendingVoice)
 
   const composerRef = useComposerRef(activeSessionId)
   // 语音通话(对标 GPT Live):电话键只把会话与委派参数算好,通话本体跑在 Mini 卡片里(mini/VoiceCallView)。
@@ -742,7 +740,7 @@ export const Composer2: React.FC<{
   // 只认明确给了 sessionId 的输入框(聊天视图)。和占位文字一样常驻:只有新一轮起跑才作废(appStore subscribeRun),
   // 打字 / Tab 采用都只是因为输入框不空而藏起来,删空了还在。
   const suggestion = usePromptSuggest((st) => (sessionId ? st.bySession[sessionId] : undefined) || '')
-  const showSuggestion = !!suggestion && !draft && !running && !disabled && !inCall && !touchUi
+  const showSuggestion = !voiceActive && !!suggestion && !draft && !running && !disabled && !inCall && !touchUi
   // Mini 那边:有新话 / 代跑 run → 拉一次本会话;改了 Effort → 同步本窗缓存(否则下一条打字消息还按旧档跑)。
   useEffect(() => {
     if (!liveOwnerResolved) return
@@ -894,7 +892,10 @@ export const Composer2: React.FC<{
 
   // 草稿变化后同步高度(含发送清空后回缩):useLayoutEffect 在 React 把新值提交到 DOM 之后、绘制之前跑,
   // 量到的是当前文本;此前散落的 rAF(autoGrow) 会早于提交跑而量到旧文本 → 发送长文后输入框不回缩(本次修的 bug)。
-  useLayoutEffect(autoGrow, [draft]) // eslint-disable-line react-hooks/exhaustive-deps
+  useLayoutEffect(() => {
+    autoGrow()
+    if (voice.preview && taRef.current) taRef.current.scrollTop = taRef.current.scrollHeight
+  }, [shownDraft, voice.preview]) // eslint-disable-line react-hooks/exhaustive-deps
   // 空输入框里占位折行时 Chromium 的 scrollHeight 会算上它(实测 46 vs 一行 25)—— 据此判小贴士是否被裁。
   // 换条 / 换语言后重量;宽度中途变了等下一条换上时再量。
   useLayoutEffect(() => {
@@ -1145,7 +1146,7 @@ export const Composer2: React.FC<{
   }, [slash, slashItems, models, modelId])
   // 只有真弹出来的菜单才压住 @ / [[ ——「有个斜杠词」还不够:敲 `/Users/me/[[` 时命令词一直在,
   // 但一条都匹配不上,此时该让文件引用菜单出来。
-  const slashOpen = !!slash && slashMatches.length > 0
+  const slashOpen = !voiceActive && !!slash && slashMatches.length > 0
   // 换了个命令词(或改了过滤词)→ 高亮回第一条,与 @ 提及同规矩;光标挪到别处的 `/` 上也不会带着旧下标。
   useEffect(() => { setSlashIndex(0) }, [slash?.start, slash?.token])
 
@@ -1170,7 +1171,7 @@ export const Composer2: React.FC<{
     const q = mention.query.toLowerCase()
     return mentionPool.filter((a) => !q || a.slug.toLowerCase().includes(q) || agentNames(a).some((n) => n.toLowerCase().includes(q))).slice(0, 10)
   }, [mention, mentionPool])
-  const mentionActive = !!mention && mentionMatches.length > 0
+  const mentionActive = !voiceActive && !!mention && mentionMatches.length > 0
   useEffect(() => { setMentionIndex(0) }, [mention?.start, mention?.query])
 
   const pickMention = (a: NormalAgentDef) => {
@@ -1274,7 +1275,7 @@ export const Composer2: React.FC<{
   // 文件名前缀命中 > 文件名包含 > 仅路径包含;不够 10 条再拿模糊命中补位(见 ./refRank)。
   const refMatches = useMemo<RefCand[]>(() => (fileRefCtx ? pickerMatches(refCands, fileRefCtx.query, refCatNow) : []), [fileRefCtx, refCands, refCatNow])
   // 菜单开不开看「全部」里有没有;当前分类空着时菜单留着(显示没有匹配项),不然切到空分类菜单就没了
-  const refActive = useMemo(() => !!fileRefCtx && (refMatches.length > 0 || pickerMatches(refCands, fileRefCtx.query, 'all').length > 0), [fileRefCtx, refCands, refMatches])
+  const refActive = useMemo(() => !voiceActive && !!fileRefCtx && (refMatches.length > 0 || pickerMatches(refCands, fileRefCtx.query, 'all').length > 0), [fileRefCtx, refCands, refMatches, voiceActive])
   const refCapRef = useCapsuleSlide<HTMLDivElement>(refActive ? refCatNow : '', refActive ? refCatList.join() : '')
   useEffect(() => { setRefIndex(0) }, [fileRefCtx?.start, fileRefCtx?.query, refCatNow])
 
@@ -1360,6 +1361,7 @@ export const Composer2: React.FC<{
 
   /** override = 实时对话直接发的转写文本(不读也不清草稿)。返回这次发送的 promise(accepted);没发出去返回 undefined。 */
   const sendMessage = (override?: string): Promise<boolean> | undefined => {
+    if (voiceActive && override === undefined) return
     // 行内引用段先换成 token 再 trim:段两头的边界空格属于空白字符,先 trim 会把开头 / 结尾那一段拆坏。
     // override(实时转写)不读草稿,草稿里的段不算。
     const inlined = override == null
@@ -1938,7 +1940,9 @@ export const Composer2: React.FC<{
             className="t2c-ta"
             rows={1}
             autoFocus={autoFocus}
-            value={draft}
+            value={shownDraft}
+            readOnly={voiceActive}
+            data-voice-pending={pendingVoice ? true : undefined}
             title={layout.compact ? t('input.placeholder') : undefined}
             placeholder={showSuggestion ? t('input.suggestionTab', { text: suggestion }) : disabled ? disabledPlaceholder || t('input.placeholderDisabled') : inCall ? t('livecall.typeHint') : running ? compactCard ? t('input.runningPlaceholder') : t('input.tip', { tip: t(waitTips[tipIdx % waitTips.length]) }) : t(layout.compact ? 'input.placeholderCompact' : touchUi ? 'input.placeholderTouch' : 'input.placeholder')}
             data-suggestion={showSuggestion || undefined}
@@ -1989,6 +1993,7 @@ export const Composer2: React.FC<{
               if (leftover.length) { const dt = new DataTransfer(); leftover.forEach((f) => dt.items.add(f)); void pickWsFiles(dt.files) }
             }}
             onKeyDown={(e) => {
+              if (voiceActive) return
               // 退格 / Delete 挨着一段行内引用:整段一起删(不然会剩下半截边界空格)
               if ((e.key === 'Backspace' || e.key === 'Delete') && inlineRuns.length && !e.nativeEvent.isComposing && !e.metaKey && !e.ctrlKey && !e.altKey) {
                 const ta = e.currentTarget
@@ -2082,7 +2087,7 @@ export const Composer2: React.FC<{
               if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send() }
             }}
           />
-          <InlineRefMirror text={draft} runs={inlineRuns} marks={tokenMarks} chipOf={(run) => runChips.get(run)} />
+          <InlineRefMirror text={shownDraft} pending={pendingVoice} runs={inlineRuns} marks={tokenMarks} chipOf={(run) => runChips.get(run)} />
           {showSuggestion && <div className="t2c-suggestion" aria-hidden="true"><span>{suggestion}</span>{' '}<span className="t2c-suggestion-key">{t('input.suggestionHint')}</span></div>}</div></>)}
           {slashOpen && (
             <div className="t2c-menu">
@@ -2182,7 +2187,7 @@ export const Composer2: React.FC<{
               onAddReference={addContentReference}
             />
             {voiceActive ? (
-              <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} onSend={voiceSend} t={t} />
+              <VoiceRecordingBar analyser={voice.analyser} recording={voice.recording} busy={voice.busy} onStop={voice.toggle} stopTitle={voice.preview ? t('input.micStopRecording') : undefined} t={t} />
             ) : (<>
             {showModeChip && !modeMerged && (
               <span ref={modeAnchorRef} className={`mode-pill-wrap t2c-capsule-peer${openMenu === 'mode' ? ' is-open' : ''}`} data-cmenu>

@@ -16,8 +16,9 @@ import type { TokenMark } from './composerTokens'
 const COPY = ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'wordSpacing', 'textIndent', 'textAlign', 'tabSize',
   'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'direction', 'fontFeatureSettings', 'fontVariantNumeric', 'wordBreak'] as const
 
-export function InlineRefMirror({ text, runs, marks = [], chipOf }: {
+export function InlineRefMirror({ text, runs, marks = [], pending = '', chipOf }: {
   text: string
+  pending?: string
   runs: InlineRun[]
   /** 认得出的斜杠命令 / @ 提及(./composerTokens):只画底色和字色,没有图标 */
   marks?: TokenMark[]
@@ -25,7 +26,7 @@ export function InlineRefMirror({ text, runs, marks = [], chipOf }: {
 }) {
   const boxRef = useRef<HTMLDivElement>(null)
   const innerRef = useRef<HTMLDivElement>(null)
-  const on = runs.length > 0 || marks.length > 0
+  const on = !!pending || runs.length > 0 || marks.length > 0
   useLayoutEffect(() => {
     const box = boxRef.current
     const inner = innerRef.current
@@ -73,6 +74,8 @@ export function InlineRefMirror({ text, runs, marks = [], chipOf }: {
     last = r.end
   })
   // 文本框以换行结尾时最后那个空行也占高度,镜像层补一个零宽字符才对得上
-  parts.push(text.slice(last) + (text.endsWith('\n') ? '​' : ''))
-  return <div ref={boxRef} className="t2c-mirror" aria-hidden><div ref={innerRef}>{parts}</div></div>
+  parts.push(text.slice(last, text.length - pending.length))
+  return <div ref={boxRef} className="t2c-mirror" data-voice-pending={pending ? true : undefined} aria-hidden>
+    <div ref={innerRef}>{parts}{pending && <span className="t2c-voice-pending">{pending}</span>}{text.endsWith('\n') && '\u200b'}</div>
+  </div>
 }

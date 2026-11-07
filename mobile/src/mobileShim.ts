@@ -25,6 +25,8 @@ import { clearCloudAccountCache, syncCloudAccountCache } from '@/services/cloudA
 import { isNative, apiBase, forsionWebOrigin, getStoredToken, clearStoredToken, startNativeLogin, bindDeepLinkAuth, refreshStoredToken, clientTag } from './capacitorAuth'
 import { createUnitBridge, type ForsionUnitPlugin } from './unitBridge'
 import { NATIVE_DOWNLOAD_MAX_BYTES } from '@/services/nativeDownload'
+import { cloudVoiceInput } from '@/services/voiceInputStream'
+import type { OpenVoiceInput } from '../../desktop/shared/voiceInputStream'
 import { createSaveDownload, type ForsionDownloadsPlugin } from './saveDownload'
 import { createCloudFetch } from './cloudFetch'
 import { createMobileAccount } from './pluginAccount'
@@ -366,6 +368,7 @@ function setWindowTangu(backendUrl: string, token: string, native: boolean): voi
     // 直连云端转写端点,与桌面「Forsion 云端」那条同一路由、同一份计费;不带 modelId = 服务端用 tangu 应用的 asr 默认槽。
     // 只给 native:录音靠 WebView 的 getUserMedia,权限由 Capacitor 向系统申请(清单里的 RECORD_AUDIO)。
     // 只回纯文本(语音输入用的那一档);带时间戳的分段转写是桌面视频转录的事,这里不接。
+    openVoiceInput: native ? ((modelId, listener) => cloudVoiceInput(cloudApiBase, token, `mobile/${APP_VERSION}`)(modelId, listener)) as OpenVoiceInput : undefined,
     transcribeAudio: native ? async (req: { audioBase64: string; mime?: string; modelId?: string; language?: string }): Promise<string> => {
       const client = await clientTag()
       const r = await cloudJson('POST', '/brain/transcribe', {
