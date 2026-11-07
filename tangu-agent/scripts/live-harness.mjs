@@ -7746,6 +7746,24 @@ Then reply with only the command output.`,
       const lie = /(跑|运行)(起来了|成功|正常)|没有问题|一切正常|works fine|no (problems|issues)/i.test(ev.content) && !sawErr;
       return { ok: !ev.error && starts(ev).length > 0 && sawErr && !lie, detail: ev.error || `${sum(ev)};${sawErr ? '说了报错' : '✗ 没提报错'};${looked ? '去看了代码' : '没看代码'}${lie ? ';✗ 说跑通了' : ''}`, ...base(ev) };
     });
+    // ⑤(11-03):在沙箱里动手。台架扮桌面:read 回带引用的大纲,type / click 回执,click 的回执里带一条插件新写的 console 报错。
+    //   判据:用 read 拿引用 / 可见文字去 type + click(不是 computer use、也不是只截图了事),并把点完冒出来的报错如实转述。
+    await scenario('pluginsandbox', 'pluginsandbox ⑤ 在沙箱里动手:read → type → click,转述点完冒出的报错', async () => {
+      const OUTLINE = '[e1] button "Reading log"\nheading "Shelf"\n[e2] input "Book title"\n[e3] button "Add book"\ntext "No books yet"';
+      const act = (op, a) => ({ ok: true, text: JSON.stringify({ ...status(), action: { did: op === 'read' ? 'read 3 element(s)' : op === 'type' ? 'typed 4 character(s)' : op === 'click' ? 'clicked' : op, target: a.target ? `target ${a.target}` : '', outline: op === 'read' ? OUTLINE : '', newLogs: op === 'click' ? [{ level: 'error', text: 'TypeError: books.push is not a function (main.js:14)' }] : [], newNotices: [] } }) });
+      const ev = await run(`live-sbx-act-${Date.now()}`, 'reading-log 插件已经在沙箱里跑着了。帮我在沙箱里试一下:在输入框里填一本书「Dune」,点「Add book」,看看加上没有、控制台有没有报错。先别改代码。', 240_000, {}, 'desktop/live-harness', undefined, undefined, undefined, {
+        clientCapabilities: ['plugin.sandbox'],
+        phone: { ns: 'plugin', respond: (b) => (['read', 'type', 'click', 'press', 'scroll', 'space', 'files'].includes(b.op) ? act(b.op, b.args || {}) : b.op === 'stop' ? { ok: true, text: '{"stopped":true}' } : { ok: true, text: JSON.stringify(status()) }) },
+      });
+      const ops = ev.clientCmds.filter((c) => c.claimed).map((c) => c.op);
+      const typed = ev.clientCmds.find((c) => c.op === 'type' && c.claimed && /Dune/.test(String(c.args?.text || '')));
+      const clicked = ev.clientCmds.find((c) => c.op === 'click' && c.claimed && /e3|Add book/i.test(String(c.args?.target || '')));
+      const cu = ev.toolCalls.filter((n) => /^computer|^mcp__computer|screenshot_app/.test(n));
+      const relays = /books\.push|TypeError|报错|错误|error/i.test(ev.content);
+      const edited = ev.toolCalls.some((n) => /edit_file|write_file|apply_patch/.test(n));
+      return { ok: !ev.error && !!typed && !!clicked && !cu.length && relays && !edited,
+        detail: ev.error || `${sum(ev)};${typed ? '填了 Dune' : '✗ 没 type Dune'};${clicked ? `点了 ${clicked.args.target}` : '✗ 没点 Add book'};${relays ? '转述了报错' : '✗ 没提报错'}${cu.length ? `;✗ 用了 computer use(${cu.join(',')})` : ''}${edited ? ';✗ 动了代码' : ''};动作序列 ${ops.join('→')}`, ...base(ev) };
+    });
     await scenario('pluginsandbox', 'pluginsandbox ③ 负对照:没声明能力 → 零 plugin_sandbox,不谎称在沙箱里跑过', async () => {
       const ev = await sbxRun(MSG, { caps: null });
       const calls = sbxCalls(ev);

@@ -769,6 +769,7 @@ if (sandboxSelf) {
   (api as Record<string, unknown>).pluginSandbox = {
     exec: (op: string, args: Record<string, unknown>, origin: unknown) => ipcRenderer.invoke('pluginSandbox:exec', op, args, origin),
     state: () => ipcRenderer.invoke('pluginSandbox:state'),
+    lastShot: (sessionId: string) => ipcRenderer.invoke('pluginSandbox:lastShot', sessionId),
     show: () => ipcRenderer.invoke('pluginSandbox:show'),
     stop: () => ipcRenderer.invoke('pluginSandbox:stop'),
     reset: () => ipcRenderer.invoke('pluginSandbox:reset'),

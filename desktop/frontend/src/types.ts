@@ -453,12 +453,19 @@ export interface PluginSandboxState {
   dir?: string
   sessionId?: string
   status?: import('../../../tangu-agent/src/contracts/pluginSandbox').SandboxStatus | null
+  /** 最近一步(start / screenshot / click …)与最近一张截图的时刻(图另向 lastShot 要)。 */
+  lastOp?: { op: string; at: number; target?: string }
+  shotAt?: number
+  /** 没在跑时:上一个沙箱与停下的原因。 */
+  last?: { pluginId: string; name: string; version: string; dir: string; sessionId?: string; reason: 'stopped' | 'idle' | 'exited'; at: number }
 }
 export interface PluginSandboxReport { note: string; sessionId?: string; pluginId: string; name: string }
 export interface PluginSandboxApi {
   /** ui.storage = 本窗的主题键(沙箱首屏照着画);语言由主进程按自己的界面语言给。deadline = 引擎给这次动作的期限(Date.now() 毫秒),排队排过了主进程就不做了。reveal = 用户在界面上点的,起好后把沙箱窗口叫到前面。 */
   exec(op: string, args: Record<string, unknown>, origin: { sessionId?: string; deadline?: number; reveal?: boolean; ui?: { storage: Record<string, string> } }): Promise<PluginSandboxResult>
   state(): Promise<PluginSandboxState>
+  /** 最近一张截图;只给发起这个沙箱的对话(别的对话 = null)。 */
+  lastShot(sessionId: string): Promise<{ image: string; at: number } | null>
   show(): Promise<boolean>
   stop(): Promise<void>
   reset(): Promise<PluginSandboxResult>

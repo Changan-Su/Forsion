@@ -5,7 +5,7 @@ import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync } from 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChildProcess } from 'node:child_process'
-import { createPluginSandbox, isSandboxRoot, readSandboxManifest, sandboxEnv, sandboxPaths } from './pluginSandbox'
+import { createPluginSandbox, isSandboxRoot, readSandboxManifest, sandboxEnv, sandboxPaths, sandboxRequiredPlugins } from './pluginSandbox'
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'sbx-'))
 function pluginDir(id = 'reading-log'): string {
@@ -45,7 +45,10 @@ function fakeSpawn(opts: { token?: (real: string) => string; states?: string[] }
         ops.push(msg.op)
         if (msg.op === 'quit') { sock.end(); exit(); continue }
         const reply = msg.op === 'status' ? { status: status({ state: states.length > 1 ? states.shift() : states[0] }) }
-          : msg.op === 'screenshot' ? { image: 'data:image/jpeg;base64,AAAA' } : {}
+          : msg.op === 'screenshot' ? { image: 'data:image/jpeg;base64,AAAA' }
+            : msg.op === 'click' ? { action: { did: 'clicked', target: 'button "Add"', outline: '', newLogs: [], newNotices: [] }, image: 'data:image/jpeg;base64,BBBB' }
+              : msg.op === 'read' ? { action: { did: 'read 1 element(s)', target: '', outline: 'x'.repeat(60_000), newLogs: [], newNotices: [] } }
+                : {}
         sock.write(JSON.stringify({ id: msg.id, ...reply }) + '\n')
       }
     })
@@ -113,6 +116,18 @@ describe('控制通道', () => {
     await sbx.dispose()
   })
 
+  it('改了 requiresPlugins 再 start → 重起(内置包只在启动时播种),没改就地重载', async () => {
+    const f = fakeSpawn({ states: ['running'] })
+    const sbx = sandbox(tmp(), f); const dir = pluginDir()
+    await sbx.exec('start', { dir })
+    writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ id: 'reading-log', name: 'Reading log', version: '0.1.0', main: 'main.js', apiVersion: 1, requiresPlugins: ['forsion-calendar'] }))
+    await sbx.exec('start', { dir })
+    expect(f.seen).toHaveLength(2)
+    await sbx.exec('start', { dir })
+    expect(f.seen).toHaveLength(2)
+    await sbx.dispose()
+  })
+
   it('负对照:令牌不对 → 不收这个连接,start 报没起来', async () => {
     const f = fakeSpawn({ token: () => 'wrong' })
     const sbx = createPluginSandbox({
@@ -136,7 +151,40 @@ describe('控制通道', () => {
       await sbx.exec('start', { dir: pluginDir() })
       vi.advanceTimersByTime(61_000) // 61s 没人用、窗口不在前台(假子进程的状态 windowVisible:false)
       await vi.waitFor(() => expect(f.ops).toContain('quit'), { timeout: 5_000 })
+      await vi.waitFor(() => expect(sbx.state()).toMatchObject({ running: false, last: { reason: 'idle' } }), { timeout: 5_000 })
     } finally { vi.useRealTimers() }
+  })
+
+  it('动手(click / read):转给子进程,回执挂在 text 的 action 上;最近一步 + 截图记下来,只给发起的对话;大纲太长先削它', async () => {
+    const f = fakeSpawn({ states: ['running'] })
+    const sbx = sandbox(tmp(), f)
+    await sbx.exec('start', { dir: pluginDir() }, { sessionId: 's1' })
+    const info = JSON.parse(f.seen[0].env.FORSION_SANDBOX_INFO!)
+    expect(info.vault).toMatch(/sandbox[\\/]reading-log[\\/]vault$/)
+    expect(info.root).toMatch(/sandbox[\\/]reading-log$/)
+    const r = await sbx.exec('click', { target: 'e1' })
+    expect(f.ops).toContain('click')
+    expect(JSON.parse(r.text!)).toMatchObject({ state: 'running', action: { did: 'clicked' } })
+    expect(r.image).toBe('data:image/jpeg;base64,BBBB')
+    expect(sbx.state()).toMatchObject({ lastOp: { op: 'click', target: 'button "Add"' }, shotAt: expect.any(Number) })
+    expect(sbx.lastShot('s1')?.image).toBe('data:image/jpeg;base64,BBBB')
+    expect(sbx.lastShot('s2')).toBeNull()
+    const read = await sbx.exec('read', {})
+    expect(read.text!.length).toBeLessThanOrEqual(46_000)
+    expect(JSON.parse(read.text!).action.outline).toMatch(/… \(cut\)$/)
+    await sbx.exec('status', {})
+    expect(sbx.state().lastOp?.op).toBe('read') // 看状态不算一步
+    await sbx.stop()
+    expect(sbx.state()).toMatchObject({ running: false, last: { pluginId: 'reading-log', reason: 'stopped', sessionId: 's1' } })
+  })
+
+  it('沙箱只播种被测插件点名的内置包:requiresPlugins 两种写法都认;清单坏 / 没有 = 一个也不要', async () => {
+    const d = pluginDir()
+    writeFileSync(join(d, 'manifest.json'), JSON.stringify({ id: 'reading-log', requiresPlugins: ['forsion-extend', { id: 'forsion-calendar', minVersion: '0.1.0' }, 'reading-log'] }))
+    expect([...await sandboxRequiredPlugins(d)].sort()).toEqual(['forsion-calendar', 'forsion-extend'])
+    writeFileSync(join(d, 'manifest.json'), '{ broken')
+    expect(await sandboxRequiredPlugins(d)).toEqual(new Set())
+    expect(await sandboxRequiredPlugins(join(d, 'missing'))).toEqual(new Set())
   })
 
   it('没在跑时看状态 → no_sandbox', async () => {

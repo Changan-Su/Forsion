@@ -13,8 +13,10 @@ export const PLUGIN_SANDBOX_NS = 'plugin'
 
 /** plugin_sandbox(起停,要审批)的动作。 */
 export const SANDBOX_CONTROL_OPS = ['start', 'stop', 'reset'] as const
-/** plugin_sandbox_inspect(只看 / 在沙箱里点,不审批)的动作。 */
-export const SANDBOX_INSPECT_OPS = ['status', 'screenshot', 'logs', 'command'] as const
+/** plugin_sandbox_inspect(只看 / 在沙箱里点,不审批)的动作。read 之后的几个(11-03 起)老桌面不认,回 unknown。 */
+export const SANDBOX_INSPECT_OPS = ['status', 'screenshot', 'logs', 'command', 'read', 'click', 'type', 'press', 'scroll', 'space', 'files'] as const
+/** 会动沙箱界面的那几个:做完等界面落定、截一张,带上这期间插件新写的 console 与弹出的提示。 */
+export const SANDBOX_INPUT_OPS = ['click', 'type', 'press', 'scroll', 'space'] as const
 export type SandboxOp = (typeof SANDBOX_CONTROL_OPS)[number] | (typeof SANDBOX_INSPECT_OPS)[number]
 export const isSandboxOp = (v: unknown): v is SandboxOp =>
   (SANDBOX_CONTROL_OPS as readonly string[]).includes(v as string) || (SANDBOX_INSPECT_OPS as readonly string[]).includes(v as string)
@@ -48,11 +50,40 @@ export interface SandboxStatus {
   loads: number
   /** 用户此刻正在用沙箱窗口(它在前台)。窗口平时压在普通窗口之下,看得见不算。 */
   windowVisible: boolean
+  // ── 11-03 起(老桌面不报:解析成空值)──
+  /** 沙箱自己的智库(桌面本机的绝对路径);插件读写笔记落在这里。 */
+  vault: string
+  /** 沙箱窗口此刻在哪个 Space。 */
+  activeSpace: string | null
+  /** 最近弹出的提示(toast),旧的在前。 */
+  notices: Array<{ level: string; text: string }>
+  /** 正开着的原生对话框(文件选择 / 消息框):它挡着界面,截图里看不见。 */
+  dialog: { kind: 'open' | 'save' | 'message'; title: string } | null
+  /** 下一个文件对话框已经备好的答案(files 动作):paths = 备了路径,cancel = 会当用户点了取消。 */
+  filesArmed: 'paths' | 'cancel' | null
+}
+
+/** 动作做完的回执(read / click / type / press / scroll / space / files),挂在桌面回来的 text 的 `action` 键上。 */
+export interface SandboxActionReport {
+  /** 宿主的话(英文):做了什么。 */
+  did: string
+  /** 点 / 输入的那个元素在页面上叫什么(插件的字)。 */
+  target: string
+  /** read:页面大纲,每行一个元素,`[e12]` 是之后 click / type 能用的引用(插件的字)。 */
+  outline: string
+  /** 动作期间插件新写的 console。 */
+  newLogs: Array<{ level: SandboxLogLevel; text: string }>
+  /** 动作期间弹出的提示。 */
+  newNotices: string[]
 }
 
 const LEVELS: readonly SandboxLogLevel[] = ['log', 'info', 'warn', 'error', 'debug']
 const STATES: readonly SandboxState[] = ['starting', 'running', 'failed', 'blocked', 'stopped']
-export const SANDBOX_LIMITS = { name: 120, dir: 1024, item: 120, list: 40, text: 2000, logs: 40, logText: 500, reason: 400 } as const
+export const SANDBOX_LIMITS = { name: 120, dir: 1024, item: 120, list: 40, text: 2000, logs: 40, logText: 500, reason: 400, notices: 8 } as const
+/** read 的大纲上限:和状态(≤ SANDBOX_STATUS_BUDGET)一起放进 client_cmd 结果 text 的 48k 帽。 */
+export const SANDBOX_OUTLINE_BUDGET = 16_000
+const DIALOG_KINDS = ['open', 'save', 'message'] as const
+const ARMED = ['paths', 'cancel'] as const
 /** 整份状态(按 embedSandboxStatus 的转义后长度算)的上限:要在 client_cmd 结果 text 的 48k 帽、和工具结果的 48k 帽里都放得下。 */
 export const SANDBOX_STATUS_BUDGET = 24_000
 
@@ -101,14 +132,49 @@ export function parseSandboxStatus(raw: unknown): SandboxStatus | null {
     errorCount: n(o.errorCount),
     loads: n(o.loads),
     windowVisible: o.windowVisible === true,
+    vault: s(o.vault, SANDBOX_LIMITS.dir),
+    activeSpace: typeof o.activeSpace === 'string' && o.activeSpace ? s(o.activeSpace, SANDBOX_LIMITS.item) : null,
+    notices: Array.isArray(o.notices)
+      ? o.notices.slice(-SANDBOX_LIMITS.notices).flatMap((x) => {
+        const r = x && typeof x === 'object' ? (x as Record<string, unknown>) : null
+        return r && typeof r.text === 'string' ? [{ level: s(r.level, 16) || 'info', text: s(r.text, SANDBOX_LIMITS.logText) }] : []
+      })
+      : [],
+    dialog: dialogOf(o.dialog),
+    filesArmed: (ARMED as readonly string[]).includes(o.filesArmed as string) ? (o.filesArmed as SandboxStatus['filesArmed']) : null,
   })
+}
+
+function dialogOf(v: unknown): SandboxStatus['dialog'] {
+  const r = v && typeof v === 'object' ? (v as Record<string, unknown>) : null
+  return r && (DIALOG_KINDS as readonly string[]).includes(r.kind as string) ? { kind: r.kind as 'open' | 'save' | 'message', title: s(r.title, SANDBOX_LIMITS.reason) } : null
+}
+
+/** 桌面回来的 text 里 `action` 那一段 → 规整后的回执;没有 / 不像就回 null。 */
+export function parseSandboxAction(raw: unknown): SandboxActionReport | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const o = raw as Record<string, unknown>
+  if (typeof o.did !== 'string' || !o.did) return null
+  const logs = Array.isArray(o.newLogs)
+    ? o.newLogs.slice(-SANDBOX_LIMITS.logs).flatMap((x) => {
+      const r = x && typeof x === 'object' ? (x as Record<string, unknown>) : null
+      return r && typeof r.text === 'string' ? [{ level: LEVELS.includes(r.level as SandboxLogLevel) ? (r.level as SandboxLogLevel) : 'log', text: s(r.text, SANDBOX_LIMITS.logText) }] : []
+    })
+    : []
+  return {
+    did: s(o.did, SANDBOX_LIMITS.reason),
+    target: s(o.target, SANDBOX_LIMITS.reason),
+    outline: s(o.outline, SANDBOX_OUTLINE_BUDGET),
+    newLogs: logs,
+    newNotices: Array.isArray(o.newNotices) ? o.newNotices.filter((x): x is string => typeof x === 'string').slice(-SANDBOX_LIMITS.notices).map((x) => x.slice(0, SANDBOX_LIMITS.logText)) : [],
+  }
 }
 
 /** 超预算就轮流丢最早的 console 与最后的挂载报错,还不够再丢别的列表尾巴:截断 JSON 会让整份状态解析不出来,宁可少几条。 */
 function fitSandboxStatus(st: SandboxStatus): SandboxStatus {
   const over = (): boolean => embedSandboxStatus(st).length > SANDBOX_STATUS_BUDGET
   // ponytail: 每丢一轮重算一次(O(n²),n ≤ 40),只在超预算时才走到
-  while (over() && (st.logs.length || st.mountErrors.length)) { st.logs.shift(); st.mountErrors.pop() }
+  while (over() && (st.logs.length || st.mountErrors.length || st.notices.length)) { st.logs.shift(); st.mountErrors.pop(); st.notices.shift() }
   for (const list of [st.hiddenSpaces, st.views, st.spaces] as unknown[][]) while (over() && list.length) list.pop()
   return st
 }
