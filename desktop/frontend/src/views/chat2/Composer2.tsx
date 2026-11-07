@@ -466,8 +466,8 @@ export const Composer2: React.FC<{
   pendingSteer?: Array<{ id: string; text: string; localOnly?: boolean }>
   /** 删除一条等待中的插话(文本仍留在 ↑ 历史)。 */
   onCancelSteer?: (msgId: string) => void
-  /** ↑ 撤回:取回最新一条等待中的插话放回输入框。返回文本;来不及则 null。 */
-  onWithdrawSteer?: (msgId: string) => Promise<string | null>
+  /** ↑ 撤回:取回最新一条等待中的插话放回输入框。返回文字和附件;来不及则 null。 */
+  onWithdrawSteer?: (msgId: string) => Promise<{ text: string; attachments?: Attachment[] } | null>
   /** 「立即插话」:打断当前 run,把等待区消息强发。 */
   onSteerNow?: () => void
   /** 等待中的插话已经画在对话里(ChatView 流尾的待读气泡):输入框上方不再摆等待区。画布模式没有那条流,传 false。 */
@@ -924,9 +924,12 @@ export const Composer2: React.FC<{
   // 取回一条等待中的插话:prepend 进草稿(不顶掉打了一半的字),光标停在取回那段末尾。↑ 和对话里待读气泡的「撤回」共用。
   const withdrawIntoDraft = (id: string): Promise<void> => {
     if (!onWithdrawSteer) return Promise.resolve()
-    return onWithdrawSteer(id).then((text) => {
-      if (!text) return // 来不及(已注入/run 已收尾):等待区由事件流收拾,这里不动草稿
+    return onWithdrawSteer(id).then((item) => {
+      if (!item) return // 来不及(已注入/run 已收尾):等待区由事件流收拾,这里不动草稿
+      const { text } = item
       setDraft((d) => (d.trim() ? `${text}\n\n${d}` : text))
+      // 附件跟着回来(撤回 = 整条取回,只还文字会把截图悄悄丢掉)
+      if (item.attachments?.length) setAttachments((prev) => [...item.attachments!, ...prev])
       requestAnimationFrame(() => {
         const ta = taRef.current
         if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = text.length; setCursorPos(text.length) }

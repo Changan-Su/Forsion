@@ -505,8 +505,12 @@
   .t2-pending-acts { opacity: 1; pointer-events: auto; }
   .t2-userwrap--pending:hover .t2-pending-cap { opacity: 1; }
   .t2-pending-tip { display: none; }
-  .t2-pending[data-native-menu] .t2-pending-acts { display: none; }
-  .t2-pending[data-native-menu] .t2-pending-tip { display: inline; }
+  /* 原生宿主走长按菜单:按钮「看不见」不是「没有」(同文件末尾 data-native-chrome 那条):读屏 / 外接键盘照样够得着;
+     菜单弹不出来过(.t2-userwrap--inline)就整排还回来,提示也不再说长按 */
+  .t2-userwrap:not(.t2-userwrap--inline) .t2-pending[data-native-menu] .t2-pending-btn:not(:focus-visible) {
+    position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%);
+  }
+  .t2-userwrap:not(.t2-userwrap--inline) .t2-pending[data-native-menu] .t2-pending-tip { display: inline; }
 }
 @media (prefers-reduced-motion: reduce) { .t2-pending > * { transition: none; } }
 /* 划线后的那一条不在这里了:全应用共用 lcl/components/selectionBar.css(外壳 .ui-popover.selbar,挂在 body 下)。 */
