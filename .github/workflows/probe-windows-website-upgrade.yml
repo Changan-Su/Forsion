@@ -1,18 +1,23 @@
 name: probe-windows-website-upgrade
 on:
-  push:
-    branches: [codex/windows-website-update-57]
-    paths:
-      - '.github/workflows/probe-windows-website-upgrade.yml'
-      - 'desktop/scripts/windows-website-upgrade-install.ps1'
-      - 'desktop/scripts/windows-website-upgrade.e2e.cjs'
   workflow_dispatch:
+    inputs:
+      cases:
+        description: JSON array of installed-app cases
+        default: '["auto-overseas","auto-mainland","manual-website-github","manual-github-website","drop-website-github","stall-github-website","no-extend","offline-check"]'
+        type: string
 permissions:
   contents: read
 jobs:
   website-upgrade:
     runs-on: windows-2022
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: ${{ fromJSON(inputs.cases) }}
+    env:
+      FORSION_UPDATE_CASE: ${{ matrix.scenario }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -33,5 +38,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: windows-website-upgrade-evidence
+          name: windows-website-upgrade-${{ matrix.scenario }}
           path: ${{ runner.temp }}/forsion-website-upgrade/evidence/
